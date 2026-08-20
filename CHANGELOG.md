@@ -24,8 +24,8 @@ this project uses semantic versioning once a crate is published.
   `krb5-admin` ACL-enforced kadmind
   equivalent, persist+stash, kpasswd (kvno bump + multi-kvno),
   FAST `PA-FX-FAST` CHOICE + armor/cookie/strengthen, SPAKE2-P256 (`w` from the password),
-  PKINIT ECDH P-256 inside CMS SignedData with a self-signed P-256
-  certificate and ECDSA-SHA256, PAC with NDR logon-info,
+  PKINIT ECDH P-256 inside CMS SignedData with a test CA (`pkinit_anchors`
+  FILE PEM) and ECDSA-SHA256, PAC with NDR logon-info,
   S4U2Self/S4U2Proxy/U2U, cross-realm referrals/transited, ktadd of
   all kvnos, kprop dump/load, weak etypes behind `allow_weak_crypto`.
 

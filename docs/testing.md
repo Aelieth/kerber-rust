@@ -52,6 +52,11 @@ and runs an out-of-process MIT `libgssapi_krb5` initiator (`scripts/gss-mit-clie
 that wraps `hello-from-mit-gss`. The Rust acceptor must unwrap that
 plaintext.
 
+PKINIT: `scripts/pkinit-gate.sh` exports a `FILE:` CA PEM from the Rust
+KDC. The current MIT image has no `pkinit.so`; the gate still requires
+the PEM. Rebuild the harness with `libssl-dev` (now in `harness/Dockerfile`)
+to grow the plugin.
+
 ## MIT 1.22.2 harness
 
 | Item | Value |

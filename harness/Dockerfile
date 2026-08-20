@@ -16,6 +16,7 @@ RUN apt-get update \
         bison \
         byacc \
         ca-certificates \
+        libssl-dev \
         wget \
         python3 \
     && rm -rf /var/lib/apt/lists/*

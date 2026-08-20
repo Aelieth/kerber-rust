@@ -124,6 +124,51 @@ fn tcp_worker_cap_drops_excess_connections() {
 }
 
 #[test]
+fn listener_chaos_udp_garbage_then_valid() {
+    use std::sync::atomic::AtomicBool;
+
+    use krb5_kdc::{serve_until, ListenLimits};
+
+    let (store, _) = bootstrap_documented().unwrap();
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let addr = udp.local_addr().unwrap();
+    let tcp = std::net::TcpListener::bind(addr).unwrap();
+    let flag = Arc::new(AtomicBool::new(false));
+    let store = Arc::new(store);
+    let f2 = Arc::clone(&flag);
+    thread::spawn(move || {
+        let _ = serve_until(
+            store,
+            udp,
+            tcp,
+            f2,
+            ListenLimits {
+                max_tcp_workers: 4,
+                max_tcp_request: 4096,
+                io_timeout: Duration::from_millis(200),
+            },
+        );
+    });
+    thread::sleep(Duration::from_millis(40));
+    let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+    sock.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    for junk in [&[][..], &[0xff; 8], &[0x00; 256], &[0x6a, 0x01]] {
+        let _ = sock.send_to(junk, addr);
+        let mut buf = [0u8; 4096];
+        let _ = sock.recv(&mut buf);
+    }
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let req = as_req(cname, TEST_REALM, 1, None);
+    let bytes = encode(&req).unwrap();
+    sock.send_to(&bytes, addr).unwrap();
+    let mut buf = [0u8; 4096];
+    let n = sock.recv(&mut buf).unwrap();
+    let e: krb5_types::KrbError = decode(&buf[..n]).unwrap();
+    assert_eq!(e.error_code, err::PREAUTH_REQUIRED);
+    flag.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[test]
 fn bounded_stress_handle_request() {
     let (store, _) = bootstrap_documented().unwrap();
     let store = Arc::new(store);
