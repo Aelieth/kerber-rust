@@ -5,7 +5,8 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    decrypt, p256_generate, spake_w, string_to_key, EncryptionType, KeyUsage, ProtocolKey,
+    decrypt, dh_generate, dh_shared, octetstring2key, p256_generate, spake_w, string_to_key,
+    EncryptionType, KeyUsage, ProtocolKey, OAKLEY_2048,
 };
 use krb5_kdc::{
     as_req, bootstrap_documented, decrypt_ticket_part, documented_admin_id, documented_host,
@@ -15,7 +16,8 @@ use krb5_kdc::{
 };
 use krb5_protocol::{
     apply_strengthen, armor_key, attach_fast, build_fast_armor, pa_for_user, pa_pk_as_req,
-    pa_spake_response, pa_spake_support, pkinit_reply_key, tgs_req_ex, unwrap_fast_rep,
+    pa_pk_as_req_spki, pa_spake_response, pa_spake_support, pkinit_reply_key, tgs_req_ex,
+    unwrap_fast_rep,
 };
 use krb5_types::{
     ascii, err, flag_bit, ku, pa, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart,
@@ -191,7 +193,10 @@ fn spake_challenge_then_as_rep() {
         .find(|p| p.padata_type == pa::FX_COOKIE)
         .expect("cookie");
     let msg: krb5_types::spake::PaSpake = decode(spa.padata_value.as_ref()).expect("PaSpake");
-    let chal = msg.challenge.expect("challenge");
+    let chal = match msg {
+        krb5_types::spake::PaSpake::Challenge(c) => c,
+        other => panic!("expected SPAKE challenge, got {other:?}"),
+    };
     let w = spake_w(key.as_bytes(), &cname.default_salt(TEST_REALM));
     let (resp, spake_key) = pa_spake_response(&w, chal.pubkey.as_ref(), key.etype()).expect("resp");
     let req2 = as_req(
@@ -215,6 +220,44 @@ fn spake_challenge_then_as_rep() {
 }
 
 #[test]
+fn pkinit_advertised_in_method_data_when_ca_enabled() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    store.enable_pkinit_ca().expect("PKINIT CA");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let req = as_req(cname, TEST_REALM, 400, None);
+    let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
+    let e_data = match err {
+        Error::PreauthRequired { e_data } => e_data,
+        other => panic!("expected PreauthRequired, got {other:?}"),
+    };
+    let method: MethodData = decode(&e_data).expect("METHOD-DATA");
+    assert!(
+        method.iter().any(|p| p.padata_type == pa::PK_AS_REQ),
+        "PA-PK-AS-REQ must be advertised when the CA is provisioned: {method:?}"
+    );
+    assert!(method.iter().any(|p| p.padata_type == pa::ENC_TIMESTAMP));
+    assert!(method.iter().any(|p| p.padata_type == pa::ETYPE_INFO2));
+}
+
+#[test]
+fn pkinit_not_advertised_without_ca() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    assert!(store.pkinit_ca.is_none());
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let req = as_req(cname, TEST_REALM, 399, None);
+    let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
+    let e_data = match err {
+        Error::PreauthRequired { e_data } => e_data,
+        other => panic!("expected PreauthRequired, got {other:?}"),
+    };
+    let method: MethodData = decode(&e_data).expect("METHOD-DATA");
+    assert!(
+        method.iter().all(|p| p.padata_type != pa::PK_AS_REQ),
+        "PA-PK-AS-REQ must not be advertised without a CA"
+    );
+}
+
+#[test]
 fn pkinit_ecdh_reply_key() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     store.enable_pkinit_ca().expect("PKINIT CA");
@@ -232,6 +275,43 @@ fn pkinit_ecdh_reply_key() {
     let plain = decrypt(&reply, usage, issued.rep.0.enc_part.cipher.as_ref()).expect("enc");
     let enc = decode_enc_part(&plain);
     assert_eq!(enc.nonce, 401);
+}
+
+#[test]
+fn pkinit_modp14_reply_key() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    store.enable_pkinit_ca().expect("PKINIT CA");
+    let ca = store.pkinit_ca.as_ref().expect("CA").clone();
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let kp = dh_generate(&OAKLEY_2048).expect("client DH");
+    let spki = krb5_types::pkinit::encode_dh_spki(&OAKLEY_2048.prime_bytes(), &kp.public);
+    let pa = pa_pk_as_req_spki(&spki, &ca).expect("PA-PK-AS-REQ");
+    let req = as_req(cname, TEST_REALM, 404, Some(vec![pa]));
+    let issued = krb5_kdc::issue_as(&store, &req).expect("PKINIT DH AS");
+    let kdc_y = kdc_dh_public_from_rep(issued.rep.0.padata.as_deref(), &ca.ca_cert);
+    let shared = dh_shared(&OAKLEY_2048, &kp.secret, &kdc_y).expect("DH");
+    let et = EncryptionType::Aes256CtsHmacSha196;
+    let reply = octetstring2key(et, &shared).expect("o2k");
+    assert_eq!(reply.as_bytes(), issued.as_rep_key.as_bytes());
+    let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
+    let plain = decrypt(&reply, usage, issued.rep.0.enc_part.cipher.as_ref()).expect("enc");
+    let enc = decode_enc_part(&plain);
+    assert_eq!(enc.nonce, 404);
+}
+
+fn kdc_dh_public_from_rep(padata: Option<&[krb5_types::PaData]>, trust: &[u8]) -> Vec<u8> {
+    let raw = padata
+        .and_then(|v| v.iter().find(|p| p.padata_type == pa::PK_AS_REP))
+        .expect("PA-PK-AS-REP");
+    let rep: krb5_types::pkinit::PaPkAsRep = decode(raw.padata_value.as_ref()).expect("rep");
+    let info = match rep {
+        krb5_types::pkinit::PaPkAsRep::DhInfo(i) => i,
+        krb5_types::pkinit::PaPkAsRep::EncKeyPack(_) => panic!("encKeyPack"),
+    };
+    let inner =
+        krb5_types::pkinit::cms_verify(info.dh_signed_data.as_ref(), trust).expect("KDC CMS");
+    let payload = krb5_types::pkinit::decode_kdc_dh_point(&inner).expect("KdcDHKeyInfo");
+    krb5_types::pkinit::der_integer_unsigned(&payload).expect("DH INTEGER")
 }
 
 #[test]
@@ -537,6 +617,57 @@ fn pac_logon_info_is_ndr() {
     let (c, r) = krb5_types::pac::parse_logon_info(&logon.data).expect("NDR");
     assert_eq!(c, TEST_USER);
     assert_eq!(r, TEST_REALM);
+}
+
+#[test]
+fn tgs_canonicalize_issues_cross_realm_krbtgt() {
+    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
+    store
+        .create_interrealm(
+            &acl,
+            &documented_admin_id(),
+            "OTHER.TEST",
+            b"interrealm-secret",
+        )
+        .expect("interrealm");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 61);
+    let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "svc.other.test"]);
+    let tgs = tgs_req_ex(
+        tgt.rep.0.ticket.clone(),
+        &tgt.session_key,
+        TEST_REALM,
+        &cname,
+        host,
+        "OTHER.TEST",
+        62,
+        KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true),
+        None,
+        Vec::new(),
+    )
+    .expect("cross-realm TGS-REQ");
+    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("referral TGS");
+    assert_eq!(
+        out.rep.0.ticket.sname.components_joined(),
+        "krbtgt/OTHER.TEST"
+    );
+}
+
+#[test]
+fn password_principal_has_rfc8009_keys() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let user = store
+        .get_name(&PrincipalName::new(
+            PrincipalName::NT_PRINCIPAL,
+            [TEST_USER],
+        ))
+        .expect("user");
+    assert!(user
+        .key_for(EncryptionType::Aes256CtsHmacSha384192)
+        .is_some());
+    assert!(user
+        .key_for(EncryptionType::Aes128CtsHmacSha256128)
+        .is_some());
 }
 
 #[test]

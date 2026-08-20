@@ -17,7 +17,8 @@ use krb5_types::{
 use crate::ad::{s4u2proxy_client, s4u2self_client, ticket_authz, u2u_session};
 use crate::error::Error;
 use crate::preauth::{
-    fast_finished, process_pkinit, process_spake, unwrap_fast, wrap_fast_rep, SpakeStep,
+    fast_finished, process_pkinit, process_spake, unwrap_fast, unwrap_fast_padata, wrap_fast_rep,
+    SpakeStep,
 };
 use crate::store::{random_key, s2k_params, Principal, PrincipalStore};
 
@@ -89,7 +90,7 @@ fn handle_inner(store: &PrincipalStore, raw: &[u8]) -> Result<Vec<u8>, Error> {
             Err(_) => Ok(encode_krb_error(store, err::GENERIC, Some("asn1"), None)),
         },
         0x6c => match decode::<TgsReq>(raw) {
-            Ok(req) => tgs_reply(store, &req),
+            Ok(req) => tgs_reply(store, &req, raw),
             Err(_) => Ok(encode_krb_error(store, err::GENERIC, Some("asn1"), None)),
         },
         _ => Ok(encode_krb_error(
@@ -110,8 +111,8 @@ fn as_reply(store: &PrincipalStore, req: &AsReq) -> Result<Vec<u8>, Error> {
             None,
             Some(e_data),
         )),
-        Err(Error::Protocol { code, text }) => {
-            Ok(encode_krb_error(store, code, text.as_deref(), None))
+        Err(Error::Protocol { code, text, e_data }) => {
+            Ok(encode_krb_error(store, code, text.as_deref(), e_data))
         }
         Err(Error::Crypto(_)) => Ok(encode_krb_error(
             store,
@@ -129,11 +130,11 @@ fn as_reply(store: &PrincipalStore, req: &AsReq) -> Result<Vec<u8>, Error> {
     }
 }
 
-fn tgs_reply(store: &PrincipalStore, req: &TgsReq) -> Result<Vec<u8>, Error> {
-    match issue_tgs(store, req) {
+fn tgs_reply(store: &PrincipalStore, req: &TgsReq, raw: &[u8]) -> Result<Vec<u8>, Error> {
+    match issue_tgs_from(store, req, Some(raw)) {
         Ok(issued) => Ok(encode(&issued.rep)?),
-        Err(Error::Protocol { code, text }) => {
-            Ok(encode_krb_error(store, code, text.as_deref(), None))
+        Err(Error::Protocol { code, text, e_data }) => {
+            Ok(encode_krb_error(store, code, text.as_deref(), e_data))
         }
         Err(Error::Crypto(_)) => Ok(encode_krb_error(
             store,
@@ -207,7 +208,7 @@ pub fn issue_as(store: &PrincipalStore, req: &AsReq) -> Result<IssuedAs, Error> 
     }
     if client.requires_preauth && !skip_timestamp {
         match extract_enc_timestamp(work_padata.as_deref()) {
-            None => return Err(preauth_required(client)),
+            None => return Err(preauth_required(store, client)),
             Some(blob) => verify_enc_timestamp(store, client, &ckey.key, blob.as_ref())?,
         }
     }
@@ -318,11 +319,33 @@ pub fn issue_as(store: &PrincipalStore, req: &AsReq) -> Result<IssuedAs, Error> 
 ///
 /// Bad authenticator, unknown server, or crypto/DER failures.
 pub fn issue_tgs(store: &PrincipalStore, req: &TgsReq) -> Result<IssuedTgs, Error> {
+    issue_tgs_from(store, req, None)
+}
+
+fn issue_tgs_from(
+    store: &PrincipalStore,
+    req: &TgsReq,
+    raw: Option<&[u8]>,
+) -> Result<IssuedTgs, Error> {
     let body = &req.0.req_body;
     if body.kdc_options.unsupported_bits() != 0 {
         return Err(proto(err::BADOPTION, "unsupported KDCOptions"));
     }
-    let ap_raw = extract_pa_tgs(req.0.padata.as_deref())
+    let encoded_body;
+    let body_der: &[u8] = if let Some(slice) = raw.and_then(kdc_req_body_der) {
+        slice
+    } else {
+        encoded_body = encode(body)?;
+        &encoded_body
+    };
+    let tgs_fast = unwrap_fast_padata(store, req.0.padata.as_deref(), body_der)?;
+    let tgs_padata = if let Some(ref f) = tgs_fast {
+        Some(f.inner_padata.as_slice())
+    } else {
+        req.0.padata.as_deref()
+    };
+    let ap_raw = extract_pa_tgs(tgs_padata)
+        .or_else(|| extract_pa_tgs(req.0.padata.as_deref()))
         .ok_or_else(|| proto(err::PREAUTH_FAILED, "no PA-TGS-REQ"))?;
     let ap: krb5_types::ApReq = decode(ap_raw.as_ref())?;
     if !ap.ticket.sname.is_krbtgt_for(store.realm()) {
@@ -345,10 +368,9 @@ pub fn issue_tgs(store: &PrincipalStore, req: &TgsReq) -> Result<IssuedTgs, Erro
     if authenticator.cname != enc_tkt.cname {
         return Err(proto(err::BAD_INTEGRITY, "TGS authenticator mismatch"));
     }
-    let body_der = encode(body)?;
     if let Some(ck) = &authenticator.cksum {
         let ck_usage = KeyUsage::new(ku::TGS_REQ_AUTH_CKSUM)?;
-        verify_checksum(&tgt_session, ck_usage, &body_der, ck.checksum.as_ref())
+        verify_checksum(&tgt_session, ck_usage, body_der, ck.checksum.as_ref())
             .map_err(|_| proto(err::INAPP_CKSUM, "TGS req-body checksum"))?;
     } else {
         return Err(proto(
@@ -370,10 +392,18 @@ pub fn issue_tgs(store: &PrincipalStore, req: &TgsReq) -> Result<IssuedTgs, Erro
     if store.tgs_replay.check_and_store(rkey) {
         return Err(proto(err::REPEAT, "TGS authenticator replay"));
     }
-    let sname = body
+    let mut sname = body
         .sname
         .clone()
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no sname"))?;
+    let req_realm = utf8_realm(&body.realm).to_owned();
+    if store.get_name(&sname).is_none() && req_realm != store.realm() {
+        let referral =
+            PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", req_realm.as_str()]);
+        if store.get_name(&referral).is_some() {
+            sname = referral;
+        }
+    }
     let server = store
         .get_name(&sname)
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "unknown server"))?;
@@ -382,7 +412,7 @@ pub fn issue_tgs(store: &PrincipalStore, req: &TgsReq) -> Result<IssuedTgs, Erro
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no server key"))?;
     let mut ticket_cname = enc_tkt.cname.clone();
     let mut ticket_crealm = utf8_realm(&enc_tkt.crealm).to_owned();
-    if let Some((user, realm)) = s4u2self_client(&tgt_session, req.0.padata.as_deref())? {
+    if let Some((user, realm)) = s4u2self_client(&tgt_session, tgs_padata)? {
         ticket_cname = user;
         ticket_crealm = realm;
     } else if let Some(cn) = s4u2proxy_client(store, req, &enc_tkt.cname)? {
@@ -416,6 +446,7 @@ pub fn issue_tgs(store: &PrincipalStore, req: &TgsReq) -> Result<IssuedTgs, Erro
         }
     }
     let mut flags = TicketFlags::none();
+    flags = flags.with_bit(flag_bit::TRANSITED_POLICY_CHECKED, true);
     if enc_tkt.flags.pre_authent() {
         flags = flags.with_bit(flag_bit::PRE_AUTHENT, true);
     }
@@ -466,10 +497,22 @@ pub fn issue_tgs(store: &PrincipalStore, req: &TgsReq) -> Result<IssuedTgs, Erro
     };
     let usage = KeyUsage::new(enc_usage)?;
     let cipher = encrypt(&enc_key, usage, &enc_der)?;
+    let padata = if let Some(f) = tgs_fast {
+        let finished = fast_finished(&f.armor_key, &ticket, &ticket_cname, &ticket_crealm)?;
+        Some(vec![wrap_fast_rep(
+            &f.armor_key,
+            Vec::new(),
+            None,
+            body.nonce,
+            Some(finished),
+        )?])
+    } else {
+        None
+    };
     let rep = TgsRep(krb5_types::KdcRep {
         pvno: krb5_types::KdcRep::PVNO,
         msg_type: krb5_types::KdcRep::MSG_TGS_REP,
-        padata: None,
+        padata,
         crealm: ks(&ticket_crealm)?,
         cname: ticket_cname,
         ticket,
@@ -707,7 +750,7 @@ fn verify_enc_timestamp(
     Ok(())
 }
 
-fn preauth_required(client: &Principal) -> Error {
+fn preauth_required(store: &PrincipalStore, client: &Principal) -> Error {
     let salt =
         krb5_types::KerberosString::try_from(String::from_utf8_lossy(&client.salt).as_ref()).ok();
     let mut info: EtypeInfo2 = Vec::new();
@@ -715,20 +758,29 @@ fn preauth_required(client: &Principal) -> Error {
         info.push(EtypeInfo2Entry {
             etype: k.etype.to_iana(),
             salt: salt.clone(),
-            s2kparams: Some(s2k_params().into()),
+            s2kparams: Some(s2k_params(k.etype).into()),
         });
     }
     let etype_info = PaData {
         padata_type: pa::ETYPE_INFO2,
         padata_value: encode(&info).map(Into::into).unwrap_or_default(),
     };
-    let method: MethodData = vec![
-        PaData {
-            padata_type: pa::ENC_TIMESTAMP,
+    let mut method: MethodData = Vec::new();
+    if store.pkinit_ca.is_some() {
+        method.push(PaData {
+            padata_type: pa::PK_AS_REQ,
             padata_value: OctetString::from(Vec::<u8>::new()),
-        },
-        etype_info,
-    ];
+        });
+        method.push(PaData {
+            padata_type: pa::TD_DH_PARAMETERS,
+            padata_value: krb5_types::pkinit::encode_td_dh_p256().into(),
+        });
+    }
+    method.push(PaData {
+        padata_type: pa::ENC_TIMESTAMP,
+        padata_value: OctetString::from(Vec::<u8>::new()),
+    });
+    method.push(etype_info);
     let e_data = encode(&method).unwrap_or_default();
     Error::PreauthRequired { e_data }
 }
@@ -788,10 +840,50 @@ fn renew_till_for(
     now.add_seconds(life).ok()
 }
 
+/// Wire KDC-REQ-BODY (EXPLICIT [4] contents) from an AS-REQ/TGS-REQ PDU.
+/// FAST and TGS authenticator checksums must cover MIT's original DER.
+fn kdc_req_body_der(raw: &[u8]) -> Option<&[u8]> {
+    let (tag, app, _) = take_der(raw)?;
+    if tag != 0x6a && tag != 0x6c {
+        return None;
+    }
+    let (t, seq, _) = take_der(app)?;
+    let body = if t == 0x30 { seq } else { app };
+    let mut cur = body;
+    while !cur.is_empty() {
+        let (tag, inner, rest) = take_der(cur)?;
+        if tag == 0xa4 {
+            return Some(inner);
+        }
+        cur = rest;
+    }
+    None
+}
+
+fn take_der(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
+    let tag = *input.first()?;
+    let first = *input.get(1)?;
+    let (hlen, ln) = if first < 128 {
+        (1usize, usize::from(first))
+    } else if first == 0x81 && input.len() >= 3 {
+        (2, usize::from(input[2]))
+    } else if first == 0x82 && input.len() >= 4 {
+        (3, usize::from(u16::from_be_bytes([input[2], input[3]])))
+    } else {
+        return None;
+    };
+    let start = 1 + hlen;
+    let end = start.checked_add(ln)?;
+    let inner = input.get(start..end)?;
+    let rest = input.get(end..)?;
+    Some((tag, inner, rest))
+}
+
 fn proto(code: i32, text: &str) -> Error {
     Error::Protocol {
         code,
         text: Some(text.to_owned()),
+        e_data: None,
     }
 }
 

@@ -152,6 +152,14 @@ impl PrincipalStore {
         crate::persist::save_store(self, db, stash).map_err(|e| Error::Crypto(e.to_string()))
     }
 
+    /// Apply `kdc.conf` ticket policy.
+    pub fn apply_kdc_conf(&mut self, conf: &krb5_config::KdcConf) {
+        self.policy.max_life = conf.max_life;
+        self.policy.max_renewable_life = conf.max_renewable_life;
+        self.policy.allow_weak_crypto = conf.allow_weak_crypto;
+        self.policy.requires_preauth = conf.requires_preauth;
+    }
+
     /// Provision a PKINIT test CA. Off by default so a KDC without an
     /// operator-supplied trust anchor does not mint untrusted CMS.
     ///
@@ -293,7 +301,6 @@ impl PrincipalStore {
             .max()
             .unwrap_or(0)
             .saturating_add(1);
-        let params = S2K_ITERS.to_be_bytes();
         let mut new_keys = Vec::new();
         for etype in [
             EncryptionType::Aes256CtsHmacSha196,
@@ -301,6 +308,7 @@ impl PrincipalStore {
             EncryptionType::Aes256CtsHmacSha384192,
             EncryptionType::Aes128CtsHmacSha256128,
         ] {
+            let params = s2k_params(etype);
             let key = string_to_key(etype, password, &salt, Some(&params))?;
             new_keys.push(KeyEntry {
                 etype,
@@ -407,7 +415,6 @@ impl PrincipalStore {
 
     fn insert_password(&mut self, name: &PrincipalName, password: &[u8]) -> Result<(), Error> {
         let salt = name.default_salt(&self.realm);
-        let params = S2K_ITERS.to_be_bytes();
         let mut keys = Vec::new();
         for etype in [
             EncryptionType::Aes256CtsHmacSha196,
@@ -415,6 +422,7 @@ impl PrincipalStore {
             EncryptionType::Aes256CtsHmacSha384192,
             EncryptionType::Aes128CtsHmacSha256128,
         ] {
+            let params = s2k_params(etype);
             let key = string_to_key(etype, password, &salt, Some(&params))?;
             keys.push(KeyEntry {
                 etype,
@@ -508,8 +516,11 @@ pub fn random_key(etype: EncryptionType) -> Result<ProtocolKey, Error> {
     ProtocolKey::from_bytes(etype, &buf).map_err(Error::from)
 }
 
-/// s2kparams (4-byte big-endian iteration count) used in ETYPE-INFO2.
+/// s2kparams (4-byte big-endian iteration count) for `etype`.
+///
+/// RFC 3962 default 4096; RFC 8009 default 32768. MIT 1.22 rejects the
+/// SHA-1 count on SHA-2 etypes (`KRB5_ERR_BAD_S2K_PARAMS`).
 #[must_use]
-pub fn s2k_params() -> Vec<u8> {
-    S2K_ITERS.to_be_bytes().to_vec()
+pub fn s2k_params(etype: EncryptionType) -> Vec<u8> {
+    etype.default_iterations().to_be_bytes().to_vec()
 }

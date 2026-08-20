@@ -55,6 +55,15 @@ fn main() {
         eprintln!("krb5-kdc: pass --test-realm or set KRB5_KDC_DB and KRB5_KDC_STASH");
         std::process::exit(2);
     };
+    if let Ok(profile) = std::env::var("KRB5_KDC_PROFILE") {
+        match krb5_config::KdcConf::load_file(&profile) {
+            Ok(conf) => store.apply_kdc_conf(&conf),
+            Err(e) => {
+                eprintln!("krb5-kdc: kdc.conf: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
     let enable_pkinit =
         export_pkinit.is_some() || std::env::var("KRB5_ENABLE_PKINIT").ok().as_deref() == Some("1");
     if enable_pkinit {

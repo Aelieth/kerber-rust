@@ -15,6 +15,8 @@ pub enum Error {
         code: i32,
         /// Optional text.
         text: Option<String>,
+        /// Optional KRB-ERROR `e-data` (METHOD-DATA / TD-DH-PARAMETERS).
+        e_data: Option<Vec<u8>>,
     },
     /// Actor is not permitted this admin operation.
     AclDenied,
@@ -38,7 +40,7 @@ impl fmt::Display for Error {
         match self {
             Self::Crypto(s) => write!(f, "crypto: {s}"),
             Self::Asn1(s) => write!(f, "asn1: {s}"),
-            Self::Protocol { code, text } => match text {
+            Self::Protocol { code, text, .. } => match text {
                 Some(t) => write!(f, "KDC error {code}: {t}"),
                 None => write!(f, "KDC error {code}"),
             },
@@ -69,7 +71,11 @@ impl From<krb5_asn1::Error> for Error {
 impl From<krb5_protocol::Error> for Error {
     fn from(e: krb5_protocol::Error) -> Self {
         match e {
-            krb5_protocol::Error::KrbError { code, text } => Self::Protocol { code, text },
+            krb5_protocol::Error::KrbError { code, text } => Self::Protocol {
+                code,
+                text,
+                e_data: None,
+            },
             other => Self::Crypto(other.to_string()),
         }
     }

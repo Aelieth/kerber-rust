@@ -2,9 +2,9 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    checksum, decrypt, encrypt, key_from_shared, krb_fx_cf2, octetstring2key, p256_generate,
-    p256_shared, spake_finish, spake_public, spake_w, verify_checksum, EncryptionType, KeyUsage,
-    ProtocolKey,
+    checksum, decrypt, dh_generate, dh_group_for_prime, dh_shared, encrypt, key_from_shared,
+    krb_fx_cf2, octetstring2key, p256_generate, p256_shared, spake_finish, spake_public, spake_w,
+    verify_checksum, EncryptionType, KeyUsage, ProtocolKey,
 };
 use krb5_types::{
     err, ku, pa, AsReq, EncryptedData, EncryptionKey, KerberosTime, MethodData, Microseconds,
@@ -21,7 +21,17 @@ pub(crate) struct FastOk {
 
 /// Unwrap PA-FX-FAST from an AS-REQ.
 pub(crate) fn unwrap_fast(store: &PrincipalStore, req: &AsReq) -> Result<Option<FastOk>, Error> {
-    let Some(raw) = find_pa(req.0.padata.as_deref(), pa::FX_FAST) else {
+    let body_der = encode(&req.0.req_body)?;
+    unwrap_fast_padata(store, req.0.padata.as_deref(), &body_der)
+}
+
+/// Unwrap PA-FX-FAST from AS or TGS padata.
+pub(crate) fn unwrap_fast_padata(
+    store: &PrincipalStore,
+    padata: Option<&[PaData]>,
+    body_der: &[u8],
+) -> Result<Option<FastOk>, Error> {
+    let Some(raw) = find_pa(padata, pa::FX_FAST) else {
         return Ok(None);
     };
     let armored = if let Ok(krb5_types::fast::PaFxFast::ArmoredData(w)) =
@@ -31,13 +41,14 @@ pub(crate) fn unwrap_fast(store: &PrincipalStore, req: &AsReq) -> Result<Option<
     } else {
         decode::<krb5_types::fast::KrbFastArmoredReq>(raw)?
     };
-    let armor_key = armor_key_from(store, &armored)?;
-    let body_der = encode(&req.0.req_body)?;
+    let armor_key = armor_key_from(store, &armored, padata)?;
     let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM)?;
+    // AS: RFC 6113 checksums KDC-REQ-BODY. TGS (MIT 1.22): PA-TGS-REQ AP-REQ.
+    let ck_data = find_pa(padata, pa::TGS_REQ).unwrap_or(body_der);
     verify_checksum(
         &armor_key,
         ck_usage,
-        &body_der,
+        ck_data,
         armored.req_checksum.checksum.as_ref(),
     )
     .map_err(|_| proto(err::INAPP_CKSUM, "FAST req-checksum"))?;
@@ -53,15 +64,26 @@ pub(crate) fn unwrap_fast(store: &PrincipalStore, req: &AsReq) -> Result<Option<
 fn armor_key_from(
     store: &PrincipalStore,
     armored: &krb5_types::fast::KrbFastArmoredReq,
+    outer_padata: Option<&[PaData]>,
 ) -> Result<ProtocolKey, Error> {
-    let armor = armored
-        .armor
-        .as_ref()
-        .ok_or_else(|| proto(err::PREAUTH_FAILED, "FAST armor required"))?;
-    if armor.armor_type != krb5_types::fast::ARMOR_AP_REQUEST {
-        return Err(proto(err::PREAUTH_FAILED, "unsupported FAST armor"));
+    if let Some(armor) = armored.armor.as_ref() {
+        if armor.armor_type != krb5_types::fast::ARMOR_AP_REQUEST {
+            return Err(proto(err::PREAUTH_FAILED, "unsupported FAST armor"));
+        }
+        return armor_key_from_ap(store, armor.armor_value.as_ref(), ku::AP_REQ_AUTHENTICATOR);
     }
-    let ap: krb5_types::ApReq = decode(armor.armor_value.as_ref())?;
+    // RFC 6113 TGS: armor may be omitted; PA-TGS-REQ is the armor (usage 7).
+    let ap_raw = find_pa(outer_padata, pa::TGS_REQ)
+        .ok_or_else(|| proto(err::PREAUTH_FAILED, "FAST armor required"))?;
+    armor_key_from_ap(store, ap_raw, ku::TGS_REQ_AUTHENTICATOR)
+}
+
+fn armor_key_from_ap(
+    store: &PrincipalStore,
+    ap_raw: &[u8],
+    authenticator_usage: u32,
+) -> Result<ProtocolKey, Error> {
+    let ap: krb5_types::ApReq = decode(ap_raw)?;
     let krbtgt = store
         .krbtgt()
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
@@ -75,7 +97,7 @@ fn armor_key_from(
         .or_else(|_| EncryptionType::known(enc_tkt.key.keytype))?;
     let session = ProtocolKey::from_bytes(etype, enc_tkt.key.keyvalue.as_ref())?;
     if let Some(sub) = {
-        let auth_usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)?;
+        let auth_usage = KeyUsage::new(authenticator_usage)?;
         let auth_plain = decrypt(&session, auth_usage, ap.authenticator.cipher.as_ref())?;
         let authenticator: krb5_types::Authenticator = decode(&auth_plain)?;
         authenticator.subkey
@@ -159,7 +181,7 @@ pub(crate) fn process_spake(
         return Ok(None);
     };
     let msg: krb5_types::spake::PaSpake = decode(raw)?;
-    if let Some(resp) = msg.response.as_ref() {
+    if let krb5_types::spake::PaSpake::Response(resp) = &msg {
         let cookie = find_pa(padata, pa::FX_COOKIE)
             .ok_or_else(|| proto(err::PREAUTH_FAILED, "SPAKE cookie"))?;
         let secret = open_cookie(store, cookie)?;
@@ -176,24 +198,19 @@ pub(crate) fn process_spake(
             .map_err(|_| proto(err::PREAUTH_FAILED, "SPAKE factor"))?;
         return Ok(Some(SpakeStep::Done(key)));
     }
-    if msg.support.is_some() {
+    if matches!(msg, krb5_types::spake::PaSpake::Support(_)) {
         let kp = krb5_crypto::p256_generate()?;
         let w = spake_w_from_client(client);
         let pub_y = spake_public(&w, &kp.secret, true)?;
         let cookie = make_cookie(store, &kp.secret)?;
-        let challenge = krb5_types::spake::PaSpake {
-            support: None,
-            challenge: Some(krb5_types::spake::SpakeChallenge {
-                group: krb5_types::spake::GROUP_P256,
-                pubkey: pub_y.into(),
-                factors: vec![krb5_types::spake::SpakeSecondFactor {
-                    factor_type: 1,
-                    data: None,
-                }],
-            }),
-            response: None,
-            enc_data: None,
-        };
+        let challenge = krb5_types::spake::PaSpake::Challenge(krb5_types::spake::SpakeChallenge {
+            group: krb5_types::spake::GROUP_P256,
+            pubkey: pub_y.into(),
+            factors: vec![krb5_types::spake::SpakeSecondFactor {
+                factor_type: 1,
+                data: None,
+            }],
+        });
         let method: MethodData = vec![
             PaData {
                 padata_type: pa::SPAKE,
@@ -228,30 +245,84 @@ pub(crate) fn process_pkinit(
     let Some(raw) = find_pa(padata, pa::PK_AS_REQ) else {
         return Ok(None);
     };
-    let req: krb5_types::pkinit::PaPkAsReq = decode(raw)?;
+    let cms = match decode::<krb5_types::pkinit::PaPkAsReq>(raw) {
+        Ok(req) => req.signed_auth_pack.as_ref().to_vec(),
+        Err(_) => krb5_types::pkinit::parse_pa_pk_as_req_cms(raw)
+            .ok_or_else(|| proto(err::PREAUTH_FAILED, "PKINIT PA-PK-AS-REQ"))?,
+    };
     let ca = store
         .pkinit_ca
         .as_ref()
         .ok_or_else(|| proto(err::PREAUTH_FAILED, "PKINIT not configured"))?;
-    let inner = krb5_types::pkinit::cms_verify(req.signed_auth_pack.as_ref(), &ca.ca_cert)
-        .map_err(|_| proto(err::PREAUTH_FAILED, "PKINIT CMS"))?;
-    let pack: krb5_types::pkinit::AuthPack = decode(&inner)?;
-    let Some(client_pub) = pack.client_public_value else {
-        return Err(proto(err::PREAUTH_FAILED, "PKINIT missing public"));
+    let inner = krb5_types::pkinit::cms_verify(&cms, &ca.ca_cert).map_err(|e| {
+        tracing::error!(
+            event = "kdc.pkinit",
+            component = "krb5-kdc",
+            outcome = "error",
+            error = e,
+            cms_len = cms.len()
+        );
+        proto(err::PREAUTH_FAILED, "PKINIT CMS")
+    })?;
+    let (nonce, spki) = krb5_types::pkinit::parse_authpack(&inner).ok_or_else(|| {
+        tracing::error!(
+            event = "kdc.pkinit",
+            component = "krb5-kdc",
+            outcome = "error",
+            error = "AuthPack",
+            inner_len = inner.len(),
+            inner_tag = inner.first().copied().unwrap_or(0)
+        );
+        proto(err::PREAUTH_FAILED, "PKINIT AuthPack")
+    })?;
+    let (reply_key, info) = if let Some(peer) = krb5_types::pkinit::decode_ec_spki(&spki) {
+        let kp = p256_generate()?;
+        let shared = p256_shared(&kp.secret, &peer)?;
+        let reply_key = octetstring2key(etype, &shared)?;
+        let info = krb5_types::pkinit::encode_kdc_dh_key_info(&kp.public, nonce);
+        (reply_key, info)
+    } else if let Some((p, y)) = krb5_types::pkinit::parse_dh_spki(&spki) {
+        let group = dh_group_for_prime(&p).ok_or_else(|| {
+            tracing::error!(
+                event = "kdc.pkinit",
+                component = "krb5-kdc",
+                outcome = "error",
+                error = "unknown DH prime",
+                p_len = p.len()
+            );
+            dh_params_not_accepted()
+        })?;
+        tracing::info!(
+            event = "kdc.pkinit",
+            component = "krb5-kdc",
+            outcome = "ok",
+            group = group.name,
+            bits = group.bits
+        );
+        let kp = dh_generate(group)?;
+        let shared = dh_shared(group, &kp.secret, &y)
+            .map_err(|_| proto(err::DH_KEY_PARAMETERS_NOT_ACCEPTED, "PKINIT DH peer"))?;
+        let reply_key = octetstring2key(etype, &shared)?;
+        let info = krb5_types::pkinit::encode_kdc_dh_key_info(&kp.public_der, nonce);
+        (reply_key, info)
+    } else {
+        tracing::error!(
+            event = "kdc.pkinit",
+            component = "krb5-kdc",
+            outcome = "error",
+            error = "SPKI",
+            spki_len = spki.len(),
+            spki_tag = spki.first().copied().unwrap_or(0)
+        );
+        return Err(dh_params_not_accepted());
     };
-    let kp = p256_generate()?;
-    let shared = p256_shared(&kp.secret, client_pub.as_ref())?;
-    let reply_key = octetstring2key(etype, &shared)?;
     let wrapped_pub = ca
-        .sign_cms(&kp.public, "krbtgt")
+        .sign_cms_typed(&info, "krbtgt", krb5_types::pkinit::ECONTENT_DHKEY)
         .ok_or_else(|| proto(err::PREAUTH_FAILED, "PKINIT CMS wrap"))?;
-    let rep = krb5_types::pkinit::PaPkAsRep {
-        dh_info: Some(krb5_types::pkinit::DhRepInfo {
-            dh_signed_data: wrapped_pub.into(),
-            server_dh_nonce: None,
-        }),
-        enc_key_pack: None,
-    };
+    let rep = krb5_types::pkinit::PaPkAsRep::DhInfo(krb5_types::pkinit::DhRepInfo {
+        dh_signed_data: wrapped_pub.into(),
+        server_dh_nonce: None,
+    });
     let pa = PaData {
         padata_type: pa::PK_AS_REP,
         padata_value: encode(&rep)?.into(),
@@ -273,6 +344,27 @@ pub(crate) fn proto(code: i32, text: &str) -> Error {
     Error::Protocol {
         code,
         text: Some(text.to_owned()),
+        e_data: None,
+    }
+}
+
+fn dh_params_not_accepted() -> Error {
+    let method: MethodData = vec![PaData {
+        padata_type: pa::TD_DH_PARAMETERS,
+        padata_value: krb5_types::pkinit::encode_td_dh_p256().into(),
+    }];
+    proto_e(
+        err::DH_KEY_PARAMETERS_NOT_ACCEPTED,
+        "PKINIT SPKI",
+        encode(&method).unwrap_or_default(),
+    )
+}
+
+pub(crate) fn proto_e(code: i32, text: &str, e_data: Vec<u8>) -> Error {
+    Error::Protocol {
+        code,
+        text: Some(text.to_owned()),
+        e_data: Some(e_data),
     }
 }
 

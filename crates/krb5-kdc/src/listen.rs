@@ -116,7 +116,7 @@ pub fn drop_privileges_to(username: &str) -> io::Result<bool> {
             correlation_id = krb5_log::current_correlation_id(),
             component = "krb5-kdc",
             outcome = "ok",
-            error = "privilege drop skipped (not root)",
+            detail = "privilege drop skipped (not root)",
         );
         return Ok(false);
     }
@@ -130,7 +130,7 @@ pub fn drop_privileges_to(username: &str) -> io::Result<bool> {
         correlation_id = krb5_log::current_correlation_id(),
         component = "krb5-kdc",
         outcome = "ok",
-        error = "dropped privileges",
+        detail = "dropped privileges",
     );
     Ok(true)
 }
