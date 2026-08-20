@@ -126,9 +126,13 @@ pub struct GssContext {
     send_seq: u64,
     recv_seq: u64,
     recv_seen: bool,
+    recv_window: std::collections::HashSet<u64>,
     initiator: bool,
     replay: ReplayCache,
 }
+
+/// Per-message sequence window (RFC 4121 replay detection).
+const SEQ_WINDOW: u64 = 32;
 
 impl GssContext {
     /// Initiator: wrap a service ticket as a GSS initial token (AP-REQ).
@@ -179,6 +183,7 @@ impl GssContext {
                 send_seq: 0,
                 recv_seq: 0,
                 recv_seen: false,
+                recv_window: std::collections::HashSet::new(),
                 initiator: true,
                 replay: ReplayCache::new(),
             },
@@ -212,6 +217,7 @@ impl GssContext {
             send_seq: 0,
             recv_seq: 0,
             recv_seen: false,
+            recv_window: std::collections::HashSet::new(),
             initiator: false,
             replay: ReplayCache::new(),
         };
@@ -243,11 +249,13 @@ impl GssContext {
                 ok.ticket_part.key.keyvalue.as_ref(),
             )?
         };
+        let base = ok.authenticator.seq_number.unwrap_or(0);
         let out = Self {
             session: sess,
             send_seq: 0,
-            recv_seq: 0,
+            recv_seq: u64::from(base),
             recv_seen: false,
+            recv_window: std::collections::HashSet::new(),
             initiator: false,
             replay: ctx.replay,
         };
@@ -291,13 +299,7 @@ impl GssContext {
         let mut header = [0u8; 16];
         header.copy_from_slice(&inner[..16]);
         let seq = u64::from_be_bytes(header[8..16].try_into().map_err(|_| Error::Truncated)?);
-        if self.recv_seen {
-            if seq != self.recv_seq {
-                return Err(Error::Sequence);
-            }
-        } else {
-            self.recv_seen = true;
-        }
+        self.accept_seq(seq)?;
         let rrc = u16::from_be_bytes(header[6..8].try_into().map_err(|_| Error::Truncated)?);
         let cipher = rotate_rrc(&inner[16..], rrc);
         let usage = seal_usage(!self.initiator);
@@ -312,7 +314,6 @@ impl GssContext {
         if trail != expected {
             return Err(Error::Integrity);
         }
-        self.recv_seq = seq.wrapping_add(1);
         Ok(msg.to_vec())
     }
 
@@ -345,18 +346,11 @@ impl GssContext {
             return Err(Error::Truncated);
         }
         let seq = u64::from_be_bytes(inner[8..16].try_into().map_err(|_| Error::Truncated)?);
-        if self.recv_seen {
-            if seq != self.recv_seq {
-                return Err(Error::Sequence);
-            }
-        } else {
-            self.recv_seen = true;
-        }
+        self.accept_seq(seq)?;
         let usage = sign_usage(!self.initiator);
         let mut buf = data.to_vec();
         buf.extend_from_slice(&inner[..16]);
         verify_checksum(&self.session, usage, &buf, &inner[16..]).map_err(|_| Error::Integrity)?;
-        self.recv_seq = seq.wrapping_add(1);
         Ok(())
     }
 
@@ -364,6 +358,44 @@ impl GssContext {
     #[must_use]
     pub fn session_key(&self) -> &ProtocolKey {
         &self.session
+    }
+
+    /// Wrap with a non-zero RRC (self-test of rotate direction). Production
+    /// `wrap` still emits RRC=0; send-side RRC≠0 vs SSPI is AD-round pending.
+    ///
+    /// # Errors
+    ///
+    /// Crypto failures.
+    pub fn wrap_with_rrc(&mut self, plaintext: &[u8], rrc: u16) -> Result<Vec<u8>, Error> {
+        let mut tok = self.wrap(plaintext)?;
+        apply_send_rrc(&mut tok, rrc)?;
+        Ok(tok)
+    }
+
+    fn accept_seq(&mut self, seq: u64) -> Result<(), Error> {
+        if self.recv_window.contains(&seq) {
+            return Err(Error::Sequence);
+        }
+        if !self.recv_seen {
+            if seq != self.recv_seq {
+                return Err(Error::Sequence);
+            }
+            self.recv_seen = true;
+            self.recv_window.insert(seq);
+            self.recv_seq = seq.wrapping_add(1);
+            return Ok(());
+        }
+        let next = self.recv_seq;
+        let too_old = seq.wrapping_add(SEQ_WINDOW) < next;
+        let too_new = seq >= next.wrapping_add(SEQ_WINDOW);
+        if too_old || too_new {
+            return Err(Error::Sequence);
+        }
+        self.recv_window.insert(seq);
+        if seq >= next {
+            self.recv_seq = seq.wrapping_add(1);
+        }
+        Ok(())
     }
 }
 
@@ -425,6 +457,24 @@ fn rotate_rrc(cipher: &[u8], rrc: u16) -> Vec<u8> {
     out.extend_from_slice(&cipher[split..]);
     out.extend_from_slice(&cipher[..split]);
     out
+}
+
+fn apply_send_rrc(tok: &mut [u8], rrc: u16) -> Result<(), Error> {
+    if tok.len() < 16 {
+        return Err(Error::Truncated);
+    }
+    tok[6..8].copy_from_slice(&rrc.to_be_bytes());
+    let n = usize::from(rrc);
+    if n == 0 || n >= tok.len() - 16 {
+        return Ok(());
+    }
+    let cipher = tok[16..].to_vec();
+    // Inverse of [`rotate_rrc`]: left-rotate by `rrc` so recv right-rotates back.
+    let mut rotated = Vec::with_capacity(cipher.len());
+    rotated.extend_from_slice(&cipher[n..]);
+    rotated.extend_from_slice(&cipher[..n]);
+    tok[16..].copy_from_slice(&rotated);
+    Ok(())
 }
 
 fn wrap_header(initiator: bool, sealed: bool, seq: u64) -> [u8; 16] {
@@ -879,5 +929,37 @@ mod tests {
             .is_ok(),
             "matching service"
         );
+    }
+
+    #[test]
+    fn first_seq_must_match_authenticator_base() {
+        let (init, mut acc) = contexts();
+        let bad = mit_shaped_wrap(init.session_key(), true, 5, b"skip").unwrap();
+        assert!(matches!(acc.unwrap(&bad), Err(Error::Sequence)));
+        let good = mit_shaped_wrap(init.session_key(), true, 0, b"ok").unwrap();
+        assert_eq!(acc.unwrap(&good).unwrap(), b"ok");
+    }
+
+    #[test]
+    fn wrap_mic_replay_inside_window_is_rejected() {
+        let (mut init, mut acc) = contexts();
+        let w = init.wrap(b"one").unwrap();
+        acc.unwrap(&w).unwrap();
+        // Gap inside the window is accepted (seq 0 then seq 2).
+        let gap = mit_shaped_wrap(init.session_key(), true, 2, b"gap").unwrap();
+        assert_eq!(acc.unwrap(&gap).unwrap(), b"gap");
+        assert!(matches!(acc.unwrap(&w), Err(Error::Sequence)));
+        let mic = init.get_mic(b"one").unwrap();
+        acc.verify_mic(b"one", &mic).unwrap();
+        assert!(matches!(acc.verify_mic(b"one", &mic), Err(Error::Sequence)));
+    }
+
+    #[test]
+    fn rrc_nonzero_round_trip_pins_rotate_direction() {
+        let (mut init, mut acc) = contexts();
+        let tok = init.wrap_with_rrc(b"rrc-payload", 16).unwrap();
+        assert_ne!(&tok[6..8], &[0, 0], "RRC field must be non-zero");
+        let plain = acc.unwrap(&tok).unwrap();
+        assert_eq!(plain, b"rrc-payload");
     }
 }
