@@ -15,13 +15,14 @@ this project uses semantic versioning once a crate is published.
   yields a KRB-ERROR; AS-REP enc-part APPLICATION 25; TGS checksum,
   replay, TGT check, `KDC_ERR_ETYPE_NOSUPP` (14).
 - Keytab/ccache atomic 0600 writes; AP-REQ skew/expiry/server-name;
-  bounded shared replay caches; UDP `connect()`; configurable bind
-  (no silent `0.0.0.0`); `--test-realm` vs persistent DB.
+  bounded shared replay caches; UDP `send_to`/`recv_from` with source
+  filter; configurable bind (no silent `0.0.0.0`); `--test-realm` vs
+  persistent DB.
 - `krb5-config` (`krb5.conf`/`kdc.conf`/env/SRV), ccache reader,
   keytab v1/merge, AP-REP / KRB-SAFE / PRIV / CRED, PRF/PRF+,
   `krb5-gss` wrap/unwrap/MIC, `krb5-admin` ACL-enforced kadmind
   equivalent, persist+stash, kpasswd (kvno bump + multi-kvno),
-  FAST armor/cookie/strengthen, SPAKE2-P256 (`w` from the password),
+  FAST `PA-FX-FAST` CHOICE + armor/cookie/strengthen, SPAKE2-P256 (`w` from the password),
   PKINIT ECDH P-256 inside CMS SignedData, PAC with NDR logon-info,
   S4U2Self/S4U2Proxy/U2U, cross-realm referrals/transited, ktadd of
   all kvnos, kprop dump/load, weak etypes behind `allow_weak_crypto`.
@@ -31,6 +32,14 @@ this project uses semantic versioning once a crate is published.
 - Hostile/non-ASCII/`i32::MIN` keytab no longer panics.
 - Wrong password answers `KDC_ERR_PREAUTH_FAILED` instead of dropping.
 - Layering: KDC no longer depends on the client crate for keytabs.
+- Client UDP no longer uses `connect()` (MIT TGS replies were dropped);
+  AS-REP enc-part is decoded as RFC APPLICATION 25, with MIT tag 26
+  only when the plaintext starts with `0x7a`.
+
+### Changed
+
+- `clippy::pedantic` is a workspace deny; noisy lints (rasn bindings,
+  rustdoc RFC vocabulary, long issue/TGS functions) stay allowed.
 
 ## [0.1.0] - 2026-08-19
 

@@ -40,7 +40,8 @@ AP-REQ build/verify.
 **`krb5-client`** is `kinit`, MIT FILE ccache v4, and keytab v2.
 
 **`krb5-protocol`** runs AS/TGS/AP/SAFE/PRIV/CRED, plus MIT keytab and
-FILE ccache (so the KDC does not depend on the client crate).
+FILE ccache (so the KDC does not depend on the client crate). UDP uses
+`send_to`/`recv_from` and ignores off-path source addresses.
 
 **`krb5-client`** is `kinit` (password from env/stdin, never argv).
 

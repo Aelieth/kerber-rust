@@ -35,9 +35,10 @@ TGT, structured logs include `correlation_id`.
 Stage 3: `scripts/client-gate.sh` copies the Rust `krb5-kinit` binary
 into the MIT 1.22.2 container (same network namespace as the KDC),
 obtains a TGT and a `host/testhost.kerber.test` service ticket, and
-runs MIT `klist` on the FILE ccache. Host Docker UDP/TCP publish to
-port 88 is unreliable; the gate therefore talks to `127.0.0.1:88`
-*inside* the container.
+runs MIT `klist` on the FILE ccache. The client uses unconnected UDP
+(`send_to`/`recv_from`) and ignores off-path source addresses. Host
+Docker UDP/TCP publish to port 88 is unreliable; the gate therefore
+talks to `127.0.0.1:88` *inside* the container.
 
 Stage 5: `scripts/kdc-gate.sh` copies the Rust `krb5-kdc` binary into a
 client-only MIT 1.22.2 container, binds 127.0.0.1:88 (fallback 8888),
