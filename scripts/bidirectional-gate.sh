@@ -10,6 +10,8 @@ TMP="${TMPDIR:-/tmp}/kerber-bidir-$$"
 mkdir -p "$TMP"
 trap 'rm -rf "$TMP"; kill $KDC_PID 2>/dev/null || true' EXIT
 
+export KRB5_TEST_USER_PASSWORD="${KRB5_TEST_USER_PASSWORD:-userpassword}"
+export KRB5_TEST_ADMIN_PASSWORD="${KRB5_TEST_ADMIN_PASSWORD:-adminpassword}"
 ./target/debug/krb5-kdc --test-realm 127.0.0.1:8889 >"$TMP/kdc.log" 2>&1 &
 KDC_PID=$!
 ok=0

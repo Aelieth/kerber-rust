@@ -35,6 +35,12 @@ RUN wget -O krb5.tar.gz "${KRB5_URL}" \
         --disable-nls \
     && make -j"$(nproc)" \
     && make install \
+    && plugin="$(find /usr -name pkinit.so 2>/dev/null | head -1)" \
+    && if [ -z "$plugin" ]; then \
+           echo "ERROR: MIT PKINIT preauth plugin (pkinit.so) was not built; OpenSSL/libssl-dev must be present at configure time" >&2; \
+           exit 1; \
+       fi \
+    && echo "MIT PKINIT plugin present: $plugin" \
     && cd / \
     && rm -rf /tmp/build
 

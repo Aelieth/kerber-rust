@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # MIT pkinit vs Rust KDC using FILE trust anchors from the test CA.
-# If this MIT image was built without the pkinit plugin, the gate records
-# that and still asserts the Rust CA PEM + cms_verify path.
+# Fails if MIT pkinit.so is missing or MIT kinit PKINIT does not succeed.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -34,7 +33,10 @@ trap cleanup EXIT
 
 docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc
 docker exec "$NAME" chmod +x /tmp/krb5-kdc
-docker exec -d "$NAME" sh -c '/tmp/krb5-kdc --test-realm --export-pkinit /tmp/pkinit 127.0.0.1:88 >/tmp/kdc.log 2>&1 || /tmp/krb5-kdc --test-realm --export-pkinit /tmp/pkinit 127.0.0.1:8888 >/tmp/kdc.log 2>&1'
+docker exec -d \
+    -e KRB5_TEST_USER_PASSWORD=userpassword \
+    -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
+    "$NAME" sh -c '/tmp/krb5-kdc --test-realm --export-pkinit /tmp/pkinit 127.0.0.1:88 >/tmp/kdc.log 2>&1 || /tmp/krb5-kdc --test-realm --export-pkinit /tmp/pkinit 127.0.0.1:8888 >/tmp/kdc.log 2>&1'
 
 ok=0
 for _ in $(seq 1 40); do
@@ -60,8 +62,8 @@ docker exec "$NAME" grep -q 'BEGIN EC PRIVATE KEY' /tmp/pkinit/user.pem
 PLUGIN="$(docker exec "$NAME" sh -c 'find /usr -name pkinit.so 2>/dev/null | head -1' || true)"
 if [ -z "$PLUGIN" ]; then
     echo "MIT pkinit plugin not present (image built without OpenSSL PKINIT)"
-    log "pkinit.gate" "ok" ',"mode":"rust-ca-pem","mit_plugin":"absent"'
-    exit 0
+    log "pkinit.gate" "error" ',"error":"pkinit.so absent"'
+    exit 1
 fi
 
 LISTEN="$(docker exec "$NAME" grep '^listening ' /tmp/kdc.log | tail -1)"
@@ -93,5 +95,6 @@ if [ "$rc" -eq 0 ]; then
     log "pkinit.gate" "ok" ',"mode":"mit-kinit","mit_plugin":"present"'
     exit 0
 fi
-echo "MIT kinit with FILE identity failed (rc=$rc); CA PEM still verified"
-log "pkinit.gate" "ok" ',"mode":"rust-ca-pem","mit_kinit":"failed"'
+echo "MIT kinit with FILE identity failed (rc=$rc)"
+log "pkinit.gate" "error" ',"error":"mit kinit pkinit failed","rc":'"$rc"
+exit 1

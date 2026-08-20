@@ -6,12 +6,14 @@ wire compatibility with [MIT Kerberos](https://web.mit.edu/kerberos/)
 tree.
 
 This is an early-stage project targeting MIT 1.22.2 wire compatibility.
-Stages 1–8 of `working/plan-initial-audit-0819-2122.md` are in tree at
-library depth (AS/TGS KDC+client, GSS wrap/MIC, admin ACL, persist,
-kpasswd, FAST armor, SPAKE2-P256, PKINIT CMS+ECDH, NDR PAC, S4U/U2U,
-cross-realm referrals). Long soaks
-and live Heimdal/AD/SSPI remain environment-dependent. See
-[docs/stages.md](docs/stages.md).
+**Content-asserting MIT 1.22.2 gates exist for** AS/TGS (`client-gate`,
+`kdc-gate`) and GSS wrap (`gss-gate`). PKINIT, PAC, SPAKE, FAST,
+Camellia, cross-realm, and kadmind are in tree and **self-tested**
+(Rust-vs-Rust); they are not MIT-verified until their gates assert
+external oracle output. `krb5-config` parses `krb5.conf` / DNS SRV but
+is **not wired** into the KDC bind or client KDC discovery (kinit still
+takes the KDC host on argv). Long soaks and live Heimdal/AD/SSPI remain
+environment-dependent. See [docs/stages.md](docs/stages.md).
 
 **License:** [Apache-2.0](LICENSE-APACHE) OR [MIT](LICENSE-MIT), at your
 option. This tree contains cryptographic software. Export from the

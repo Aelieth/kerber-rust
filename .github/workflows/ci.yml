@@ -43,7 +43,6 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: cargo-deny
         uses: EmbarkStudios/cargo-deny-action@v2
-        continue-on-error: true
 
   harness:
     runs-on: ubuntu-latest
@@ -66,5 +65,5 @@ jobs:
         run: ./scripts/bidirectional-gate.sh
       - name: gss-gate (MIT libgssapi vs krb5-gss)
         run: ./scripts/gss-gate.sh
-      - name: pkinit-gate (CA PEM / MIT plugin if present)
+      - name: pkinit-gate (MIT pkinit.so vs Rust KDC)
         run: ./scripts/pkinit-gate.sh

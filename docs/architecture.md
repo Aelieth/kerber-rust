@@ -52,9 +52,15 @@ TCP workers are capped (`MAX_TCP_WORKERS`); SIGTERM/SIGINT stop
 `serve`. `--test-realm` bootstraps documented principals; otherwise
 `KRB5_KDC_DB` + stash.
 
-**`krb5-gss`** / **`krb5-admin`** / **`krb5-config`** provide GSS wrap
-(RFC 4121 tokens + SPNEGO), ACL-enforced admin, and `krb5.conf`
-parsing. MIT GSS remains out-of-process (`scripts/gss-gate.sh`).
+**`krb5-gss`** provides RFC 4121 wrap/MIC (MIT `libgssapi_krb5` is
+out-of-process; `scripts/gss-gate.sh`). The acceptor binds
+`expected_server` / `expected_realm` from the keytab.
+
+**`krb5-admin`** is an in-process ACL session (no kadmind RPC, no
+RFC 3244 kpasswd socket, no kprop stream).
+
+**`krb5-config`** parses `krb5.conf` / `kdc.conf` and DNS SRV. It is
+**not** wired into KDC listen policy or client KDC discovery.
 
 ## Security invariants
 

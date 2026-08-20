@@ -6,6 +6,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 export CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
+export KRB5_TEST_USER_PASSWORD="${KRB5_TEST_USER_PASSWORD:-userpassword}"
+export KRB5_TEST_ADMIN_PASSWORD="${KRB5_TEST_ADMIN_PASSWORD:-adminpassword}"
 
 echo "{\"event\":\"kdc.launch\",\"correlation_id\":\"${CORRELATION_ID}\",\"component\":\"krb5-kdc\",\"outcome\":\"ok\",\"realm\":\"KERBER.TEST\"}"
 

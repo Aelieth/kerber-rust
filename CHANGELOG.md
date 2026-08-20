@@ -6,6 +6,18 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased]
 
+### Security
+
+- PKINIT `cms_verify` is mandatory against a provisioned CA; forged CMS
+  is `PREAUTH_FAILED` (no `cms_unwrap` fallback). The PKINIT CA is
+  opt-in, not auto-generated.
+- GSS OID length is bound-checked (hostile tokens return Truncated).
+- GSS acceptor requires `expected_server` / `expected_realm`.
+- TCP workers use an RAII slot plus `catch_unwind`.
+- Request-path realms use `try_ascii` (non-ASCII → KRB-ERROR).
+- `--test-realm` reads passwords from `KRB5_TEST_*_PASSWORD` (not
+  compiled into the binary). Network crates deny `unwrap`/`expect`/`panic`.
+
 ### Added
 
 - Phase 0–8 audit work: honest CI oracles (`client-gate`, `kdc-gate`,
@@ -45,6 +57,15 @@ this project uses semantic versioning once a crate is published.
 
 - `clippy::pedantic` is a workspace deny; noisy lints (rasn bindings,
   rustdoc RFC vocabulary, long issue/TGS functions) stay allowed.
+- PRF+ prepends the RFC 6113 counter; RFC 8009 PRF emits the full
+  SHA-2 output; Camellia uses the `camellia`+`cmac` crates; RC4 uses
+  the RFC 4757 usage map; PAC checksums use usage 17; SPAKE P-256
+  group id is 2.
+- Docs mark PKINIT/PAC/SPAKE/FAST/Camellia/cross-realm/kadmind as
+  self-tested, not MIT-verified; `krb5-config` is not wired.
+- `pkinit-gate.sh` fails when MIT PKINIT interop fails; `cargo-deny`
+  is blocking in CI.
+- `KERBER_CAPTURE_DIR` writes raw PDUs for golden DER.
 
 ## [0.1.0] - 2026-08-19
 
