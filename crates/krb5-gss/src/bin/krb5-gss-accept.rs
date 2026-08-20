@@ -3,6 +3,8 @@
 //! Speaks the MIT `gss-sample` TCP framing: 4-byte length prefix then token.
 //! Usage: `krb5-gss-accept --keytab PATH [--listen HOST:PORT]`
 
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 use std::io::{Read, Write};
 use std::net::TcpListener;
 
@@ -64,11 +66,13 @@ fn main() {
         std::process::exit(1);
     });
     let inner = krb5_gss::spnego_inner(&tok).map_or_else(|_| tok.clone(), Vec::from);
-    let (mut ctx, ap_rep) = GssContext::accept_sec_context(&inner, &service_key, None)
-        .unwrap_or_else(|e| {
-            eprintln!("accept_sec_context: {e}");
-            std::process::exit(1);
-        });
+    let realm = std::str::from_utf8(ent.realm.as_bytes()).unwrap_or("");
+    let (mut ctx, ap_rep) =
+        GssContext::accept_sec_context(&inner, &service_key, None, Some(&ent.name), Some(realm))
+            .unwrap_or_else(|e| {
+                eprintln!("accept_sec_context: {e}");
+                std::process::exit(1);
+            });
     if let Some(rep) = ap_rep {
         write_token(&mut stream, &rep).unwrap_or_else(|e| {
             eprintln!("write AP-REP: {e}");

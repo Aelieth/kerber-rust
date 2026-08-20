@@ -4,11 +4,12 @@
 //! never links C libraries.
 
 #![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use krb5_asn1::encode;
 use krb5_crypto::{checksum, decrypt, encrypt, verify_checksum, KeyUsage, ProtocolKey};
-use krb5_protocol::{build_ap_rep, build_ap_req_with_cksum, verify_ap_req, ReplayCache};
+use krb5_protocol::{build_ap_rep, build_ap_req_with_cksum, ReplayCache};
 use krb5_types::{ku, ApOptions, Checksum, PrincipalName, Realm, Ticket};
 use thiserror::Error;
 
@@ -187,6 +188,10 @@ impl GssContext {
 
     /// Acceptor: verify the initial token with the service key.
     ///
+    /// `expected_server` / `expected_realm` bind the ticket sname. Passing
+    /// `None` accepts any principal the key decrypts; production acceptors
+    /// must pass the keytab principal.
+    ///
     /// # Errors
     ///
     /// AP-REQ verify failures or channel-binding mismatch.
@@ -194,6 +199,8 @@ impl GssContext {
         token: &[u8],
         service_key: &ProtocolKey,
         channel_bindings: Option<&ChannelBindings>,
+        expected_server: Option<&PrincipalName>,
+        expected_realm: Option<&str>,
     ) -> Result<(Self, Option<Vec<u8>>), Error> {
         let inner = gss_unwrap_app(token)?;
         if inner.len() < 2 || inner[..2] != TOK_AP_REQ {
@@ -207,7 +214,12 @@ impl GssContext {
             initiator: false,
             replay: ReplayCache::new(),
         };
-        let ok = verify_ap_req(&inner[2..], service_key, &ctx.replay)?;
+        let params = krb5_protocol::ApVerifyParams {
+            expected_server,
+            expected_realm,
+            ..krb5_protocol::ApVerifyParams::single_key(service_key)
+        };
+        let ok = krb5_protocol::verify_ap_req_ex(&inner[2..], &params, &ctx.replay, None)?;
         if let Some(ck) = &ok.authenticator.cksum {
             if ck.cksumtype == GSS_CHECKSUM_TYPE {
                 check_channel_bindings(ck.checksum.as_ref(), channel_bindings)?;
@@ -381,21 +393,19 @@ fn check_channel_bindings(cksum: &[u8], local: Option<&ChannelBindings>) -> Resu
 }
 
 fn seal_usage(initiator: bool) -> KeyUsage {
-    KeyUsage::new(if initiator {
+    KeyUsage::from_rfc(if initiator {
         ku::GSS_INITIATOR_SEAL
     } else {
         ku::GSS_ACCEPTOR_SEAL
     })
-    .expect("usage")
 }
 
 fn sign_usage(initiator: bool) -> KeyUsage {
-    KeyUsage::new(if initiator {
+    KeyUsage::from_rfc(if initiator {
         ku::GSS_INITIATOR_SIGN
     } else {
         ku::GSS_ACCEPTOR_SIGN
     })
-    .expect("usage")
 }
 
 fn wrap_header(initiator: bool, sealed: bool, seq: u64) -> [u8; 16] {
@@ -454,11 +464,11 @@ fn gss_unwrap_app(token: &[u8]) -> Result<Vec<u8>, Error> {
         return Err(Error::Truncated);
     }
     let body = &token[start..start + blen];
-    if body.len() < 2 + KRB5_OID.len() + 2 || body[0] != 0x06 {
+    if body.len() < 2 || body[0] != 0x06 {
         return Err(Error::Truncated);
     }
     let oid_len = usize::from(body[1]);
-    let rest = &body[2 + oid_len..];
+    let rest = body.get(2 + oid_len..).ok_or(Error::Truncated)?;
     Ok(rest.to_vec())
 }
 
@@ -651,7 +661,14 @@ mod tests {
         .unwrap();
         let host = store.get_name(&documented_host()).unwrap();
         let skey = &host.best_key().unwrap().key;
-        let (acc, _) = GssContext::accept_sec_context(&token, skey, None).unwrap();
+        let (acc, _) = GssContext::accept_sec_context(
+            &token,
+            skey,
+            None,
+            Some(&documented_host()),
+            Some(TEST_REALM),
+        )
+        .unwrap();
         (init, acc)
     }
 
@@ -720,12 +737,25 @@ mod tests {
         .unwrap();
         let host = store.get_name(&documented_host()).unwrap();
         let skey = &host.best_key().unwrap().key;
-        GssContext::accept_sec_context(&token, skey, Some(&cb)).unwrap();
+        GssContext::accept_sec_context(
+            &token,
+            skey,
+            Some(&cb),
+            Some(&documented_host()),
+            Some(TEST_REALM),
+        )
+        .unwrap();
         let other = ChannelBindings {
             application_data: b"other".to_vec(),
             ..ChannelBindings::default()
         };
-        match GssContext::accept_sec_context(&token, skey, Some(&other)) {
+        match GssContext::accept_sec_context(
+            &token,
+            skey,
+            Some(&other),
+            Some(&documented_host()),
+            Some(TEST_REALM),
+        ) {
             Err(Error::ChannelBindings) => {}
             Err(e) => panic!("expected channel bindings error, got {e}"),
             Ok(_) => panic!("expected channel bindings error"),
@@ -749,5 +779,82 @@ mod tests {
         assert_eq!(inner, krb.as_slice());
         let raw = der_tlv(0x60, &[der_tlv(0x06, KRB5_OID), vec![0x01, 0x00]].concat());
         assert_eq!(spnego_inner(&raw).unwrap(), raw.as_slice());
+    }
+
+    #[test]
+    fn hostile_gss_oid_length_is_truncated_not_panic() {
+        // APPLICATION 0 wrapping OID with attacker-controlled length 255.
+        let mut tok = vec![0x60, 13, 0x06, 255];
+        tok.extend_from_slice(&[0u8; 11]);
+        let r = std::panic::catch_unwind(|| gss_unwrap_app(&tok));
+        assert!(r.is_ok(), "hostile OID length must not panic");
+        assert!(matches!(r.unwrap(), Err(Error::Truncated)));
+        assert!(gss_unwrap_app(&[0x60, 2, 0x06, 0xff]).is_err());
+    }
+
+    #[test]
+    fn acceptor_rejects_wrong_service_name() {
+        let (store, _) = bootstrap_documented().unwrap();
+        let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+        let key = string_to_key(
+            EncryptionType::Aes256CtsHmacSha196,
+            TEST_USER_PASSWORD,
+            cname.default_salt(TEST_REALM),
+            Some(&S2K_ITERS.to_be_bytes()),
+        )
+        .unwrap();
+        let req = as_req(
+            cname.clone(),
+            TEST_REALM,
+            9,
+            Some(vec![pa_enc_timestamp(&key).unwrap()]),
+        );
+        let as_out = krb5_kdc::issue_as(&store, &req).unwrap();
+        let tgs = tgs_req(
+            as_out.rep.0.ticket.clone(),
+            &as_out.session_key,
+            TEST_REALM,
+            &cname,
+            documented_host(),
+            TEST_REALM,
+            10,
+        )
+        .unwrap();
+        let tgs_out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
+        let (_init, token) = GssContext::init_sec_context(
+            tgs_out.rep.0.ticket.clone(),
+            &tgs_out.session_key,
+            &ascii(TEST_REALM),
+            &cname,
+            false,
+            None,
+        )
+        .unwrap();
+        let host = store.get_name(&documented_host()).unwrap();
+        let skey = &host.best_key().unwrap().key;
+        let wrong = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "other.example"]);
+        let Err(err) =
+            GssContext::accept_sec_context(&token, skey, None, Some(&wrong), Some(TEST_REALM))
+        else {
+            panic!("wrong service accepted")
+        };
+        assert!(
+            err.to_string().contains("NOT_US")
+                || err.to_string().contains("sname")
+                || err.to_string().contains("35")
+                || err.to_string().contains("does not match"),
+            "got {err}"
+        );
+        assert!(
+            GssContext::accept_sec_context(
+                &token,
+                skey,
+                None,
+                Some(&documented_host()),
+                Some(TEST_REALM),
+            )
+            .is_ok(),
+            "matching service"
+        );
     }
 }
