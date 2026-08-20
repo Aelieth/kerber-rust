@@ -5,8 +5,8 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    decrypt, dh_generate, dh_shared, octetstring2key, p256_generate, spake_w, string_to_key,
-    EncryptionType, KeyUsage, ProtocolKey, OAKLEY_2048,
+    decrypt, dh_generate, dh_shared, octetstring2key, p256_generate, string_to_key, EncryptionType,
+    KeyUsage, ProtocolKey, OAKLEY_2048,
 };
 use krb5_kdc::{
     as_req, bootstrap_documented, decrypt_ticket_part, documented_admin_id, documented_host,
@@ -171,15 +171,22 @@ fn fast_as_exchange_strengthen_and_finished() {
 fn spake_challenge_then_as_rep() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let key = user_key();
-    let req1 = as_req(
-        cname.clone(),
-        TEST_REALM,
-        301,
-        Some(vec![pa_spake_support()]),
-    );
+    let key = store
+        .get_name(&cname)
+        .expect("user")
+        .key_for(EncryptionType::Aes256CtsHmacSha196)
+        .expect("aes256-sha1 key")
+        .key
+        .clone();
+    let support = pa_spake_support();
+    let req1 = as_req(cname.clone(), TEST_REALM, 301, Some(vec![support.clone()]));
     let err = krb5_kdc::issue_as(&store, &req1).unwrap_err();
     let e_data = match err {
+        Error::Protocol {
+            code,
+            e_data: Some(e_data),
+            ..
+        } if code == err::MORE_PREAUTH_DATA_REQUIRED => e_data,
         Error::PreauthRequired { e_data } => e_data,
         other => panic!("expected SPAKE challenge, got {other:?}"),
     };
@@ -197,20 +204,23 @@ fn spake_challenge_then_as_rep() {
         krb5_types::spake::PaSpake::Challenge(c) => c,
         other => panic!("expected SPAKE challenge, got {other:?}"),
     };
-    let w = spake_w(key.as_bytes(), &cname.default_salt(TEST_REALM));
-    let (resp, spake_key) = pa_spake_response(&w, chal.pubkey.as_ref(), key.etype()).expect("resp");
-    let req2 = as_req(
-        cname,
-        TEST_REALM,
-        302,
-        Some(vec![
-            resp,
-            krb5_types::PaData {
-                padata_type: pa::FX_COOKIE,
-                padata_value: cookie.padata_value.clone(),
-            },
-        ]),
-    );
+    let mut req2 = as_req(cname, TEST_REALM, 302, None);
+    let body_der = encode(&req2.0.req_body).expect("body");
+    let (resp, spake_key) = pa_spake_response(
+        &key,
+        support.padata_value.as_ref(),
+        spa.padata_value.as_ref(),
+        chal.pubkey.as_ref(),
+        &body_der,
+    )
+    .expect("resp");
+    req2.0.padata = Some(vec![
+        resp,
+        krb5_types::PaData {
+            padata_type: pa::FX_COOKIE,
+            padata_value: cookie.padata_value.clone(),
+        },
+    ]);
     let issued = krb5_kdc::issue_as(&store, &req2).expect("SPAKE AS");
     assert_eq!(issued.as_rep_key.as_bytes(), spake_key.as_bytes());
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();

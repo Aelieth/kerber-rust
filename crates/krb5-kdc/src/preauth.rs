@@ -2,9 +2,10 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    checksum, decrypt, dh_generate, dh_group_for_prime, dh_shared, encrypt, key_from_shared,
-    krb_fx_cf2, octetstring2key, p256_generate, p256_shared, spake_finish, spake_public, spake_w,
-    verify_checksum, EncryptionType, KeyUsage, ProtocolKey,
+    checksum, decrypt, dh_generate, dh_group_for_prime, dh_shared, encrypt, krb_fx_cf2,
+    octetstring2key, p256_generate, p256_shared, spake_derive_key, spake_kdc_keygen,
+    spake_result_wbytes, spake_thash_update, spake_w, spake_wbytes, verify_checksum,
+    EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256,
 };
 use krb5_types::{
     err, ku, pa, AsReq, EncryptedData, EncryptionKey, KerberosTime, MethodData, Microseconds,
@@ -84,15 +85,18 @@ fn armor_key_from_ap(
     authenticator_usage: u32,
 ) -> Result<ProtocolKey, Error> {
     let ap: krb5_types::ApReq = decode(ap_raw)?;
-    let krbtgt = store
-        .krbtgt()
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
-    let tgt_key = krbtgt
-        .best_key()
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt key"))?;
     let tkt_usage = KeyUsage::new(ku::TICKET)?;
-    let tkt_plain = decrypt(&tgt_key.key, tkt_usage, ap.ticket.enc_part.cipher.as_ref())?;
-    let enc_tkt: krb5_types::EncTicketPart = decode(&tkt_plain)?;
+    let cipher = ap.ticket.enc_part.cipher.as_ref();
+    let mut enc_tkt: Option<krb5_types::EncTicketPart> = None;
+    for key in store.krbtgt_keys() {
+        if let Ok(plain) = decrypt(key, tkt_usage, cipher) {
+            if let Ok(part) = decode::<krb5_types::EncTicketPart>(&plain) {
+                enc_tkt = Some(part);
+                break;
+            }
+        }
+    }
+    let enc_tkt = enc_tkt.ok_or_else(|| proto(err::BAD_INTEGRITY, "FAST armor TGT"))?;
     let etype = EncryptionType::from_iana(enc_tkt.key.keytype)
         .or_else(|_| EncryptionType::known(enc_tkt.key.keytype))?;
     let session = ProtocolKey::from_bytes(etype, enc_tkt.key.keyvalue.as_ref())?;
@@ -173,61 +177,99 @@ pub(crate) enum SpakeStep {
 
 pub(crate) fn process_spake(
     store: &PrincipalStore,
-    client: &Principal,
+    _client: &Principal,
     padata: Option<&[PaData]>,
-    etype: EncryptionType,
+    ikey: &ProtocolKey,
+    body_der: &[u8],
 ) -> Result<Option<SpakeStep>, Error> {
     let Some(raw) = find_pa(padata, pa::SPAKE) else {
         return Ok(None);
     };
+    if raw.is_empty() {
+        return send_spake_challenge(store, ikey, &[]);
+    }
     let msg: krb5_types::spake::PaSpake = decode(raw)?;
     if let krb5_types::spake::PaSpake::Response(resp) = &msg {
         let cookie = find_pa(padata, pa::FX_COOKIE)
             .ok_or_else(|| proto(err::PREAUTH_FAILED, "SPAKE cookie"))?;
         let secret = open_cookie(store, cookie)?;
-        if secret.len() != 32 {
+        if secret.len() != 64 {
             return Err(proto(err::PREAUTH_FAILED, "SPAKE cookie"));
         }
         let mut sec = [0u8; 32];
-        sec.copy_from_slice(&secret);
-        let w = spake_w_from_client(client);
-        let shared = spake_finish(&w, &sec, resp.pubkey.as_ref(), true)?;
-        let key = key_from_shared(etype, &shared)?;
-        let usage = KeyUsage::new(ku::PA_ENC_TIMESTAMP)?;
-        decrypt(&key, usage, resp.factor.cipher.as_ref())
+        sec.copy_from_slice(&secret[..32]);
+        let mut thash = [0u8; 32];
+        thash.copy_from_slice(&secret[32..]);
+        let wbytes = spake_wbytes(ikey, SPAKE_GROUP_P256)?;
+        let result = spake_result_wbytes(&wbytes, &sec, resp.pubkey.as_ref(), true)?;
+        let thash = spake_thash_update(&thash, resp.pubkey.as_ref(), &[]);
+        let k1 = spake_derive_key(
+            ikey,
+            SPAKE_GROUP_P256,
+            &wbytes,
+            &result,
+            &thash,
+            body_der,
+            1,
+        )?;
+        let usage = KeyUsage::new(ku::SPAKE)?;
+        let factor_der = decrypt(&k1, usage, resp.factor.cipher.as_ref())
             .map_err(|_| proto(err::PREAUTH_FAILED, "SPAKE factor"))?;
-        return Ok(Some(SpakeStep::Done(key)));
+        let factor = decode::<krb5_types::spake::SpakeSecondFactor>(&factor_der)
+            .map_err(|_| proto(err::PREAUTH_FAILED, "SPAKE factor der"))?;
+        if factor.factor_type != 1 {
+            return Err(proto(err::PREAUTH_FAILED, "SPAKE factor type"));
+        }
+        let k0 = spake_derive_key(
+            ikey,
+            SPAKE_GROUP_P256,
+            &wbytes,
+            &result,
+            &thash,
+            body_der,
+            0,
+        )?;
+        return Ok(Some(SpakeStep::Done(k0)));
     }
     if matches!(msg, krb5_types::spake::PaSpake::Support(_)) {
-        let kp = krb5_crypto::p256_generate()?;
-        let w = spake_w_from_client(client);
-        let pub_y = spake_public(&w, &kp.secret, true)?;
-        let cookie = make_cookie(store, &kp.secret)?;
-        let challenge = krb5_types::spake::PaSpake::Challenge(krb5_types::spake::SpakeChallenge {
-            group: krb5_types::spake::GROUP_P256,
-            pubkey: pub_y.into(),
-            factors: vec![krb5_types::spake::SpakeSecondFactor {
-                factor_type: 1,
-                data: None,
-            }],
-        });
-        let method: MethodData = vec![
-            PaData {
-                padata_type: pa::SPAKE,
-                padata_value: encode(&challenge)?.into(),
-            },
-            PaData {
-                padata_type: pa::FX_COOKIE,
-                padata_value: cookie.into(),
-            },
-        ];
-        return Ok(Some(SpakeStep::Challenge(encode(&method)?)));
+        return send_spake_challenge(store, ikey, raw);
     }
     Ok(None)
 }
 
-fn spake_w_from_client(client: &Principal) -> [u8; 32] {
-    client.spake_w
+fn send_spake_challenge(
+    store: &PrincipalStore,
+    ikey: &ProtocolKey,
+    support_der: &[u8],
+) -> Result<Option<SpakeStep>, Error> {
+    let wbytes = spake_wbytes(ikey, SPAKE_GROUP_P256)?;
+    let (secret, pub_y) = spake_kdc_keygen(&wbytes)?;
+    let challenge = krb5_types::spake::PaSpake::Challenge(krb5_types::spake::SpakeChallenge {
+        group: krb5_types::spake::GROUP_P256,
+        pubkey: pub_y.into(),
+        factors: vec![krb5_types::spake::SpakeSecondFactor {
+            factor_type: 1,
+            data: None,
+        }],
+    });
+    let chal_der = encode(&challenge)?;
+    let z = [0u8; 32];
+    let thash = spake_thash_update(&z, support_der, &chal_der);
+    let mut cookie_pt = Vec::with_capacity(64);
+    cookie_pt.extend_from_slice(&secret);
+    cookie_pt.extend_from_slice(&thash);
+    let cookie = make_cookie(store, &cookie_pt)?;
+    let method: MethodData = vec![
+        PaData {
+            padata_type: pa::SPAKE,
+            padata_value: chal_der.into(),
+        },
+        PaData {
+            padata_type: pa::FX_COOKIE,
+            padata_value: cookie.into(),
+        },
+    ];
+    Ok(Some(SpakeStep::Challenge(encode(&method)?)))
 }
 
 /// Client-side SPAKE `w` matching the KDC: SHA-256 of the long-term key bytes and salt.

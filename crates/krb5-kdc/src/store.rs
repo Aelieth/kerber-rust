@@ -243,6 +243,25 @@ impl PrincipalStore {
         self.get_name(&PrincipalName::krbtgt(&self.realm))
     }
 
+    /// Local TGT keys plus inter-realm `krbtgt/FOREIGN` keys (incoming referrals).
+    #[must_use]
+    pub fn krbtgt_keys(&self) -> Vec<&ProtocolKey> {
+        let mut out = Vec::new();
+        if let Some(p) = self.krbtgt() {
+            for k in &p.keys {
+                out.push(&k.key);
+            }
+        }
+        for p in self.map.values() {
+            if p.name.is_krbtgt() && !p.name.is_krbtgt_for(&self.realm) {
+                for k in &p.keys {
+                    out.push(&k.key);
+                }
+            }
+        }
+        out
+    }
+
     /// ACL-gated create of a password principal.
     ///
     /// # Errors
@@ -345,6 +364,46 @@ impl PrincipalStore {
         if let Some(p) = self.map.get_mut(&id) {
             p.requires_preauth = false;
         }
+        self.save_if_configured()
+    }
+
+    /// Inter-realm `krbtgt/FOREIGN` with an explicit shared key (same bytes
+    /// on both KDCs; default salts would diverge).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AclDenied`] or [`Error::AlreadyExists`].
+    pub fn create_interrealm_key(
+        &mut self,
+        acl: &Acl,
+        actor: &str,
+        foreign_realm: &str,
+        key: ProtocolKey,
+    ) -> Result<(), Error> {
+        acl.check(actor, AdminOp::Create)?;
+        let name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", foreign_realm]);
+        let id = format!("{}@{}", name.components_joined(), self.realm);
+        if self.map.contains_key(&id) {
+            return Err(Error::AlreadyExists);
+        }
+        let salt = name.default_salt(&self.realm);
+        let w = spake_w(key.as_bytes(), &salt);
+        let p = Principal {
+            name,
+            realm: self.realm.clone(),
+            keys: vec![KeyEntry {
+                etype: key.etype(),
+                key,
+                kvno: 1,
+            }],
+            salt,
+            requires_preauth: false,
+            max_life: 0,
+            locked: false,
+            pw_expire: 0,
+            spake_w: w,
+        };
+        self.map.insert(id, p);
         self.save_if_configured()
     }
 
@@ -523,4 +582,31 @@ pub fn random_key(etype: EncryptionType) -> Result<ProtocolKey, Error> {
 #[must_use]
 pub fn s2k_params(etype: EncryptionType) -> Vec<u8> {
     etype.default_iterations().to_be_bytes().to_vec()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_kdc_conf_sets_ticket_policy() {
+        let mut store = PrincipalStore::new("KERBER.TEST");
+        let conf = krb5_config::KdcConf::parse(
+            r"
+[realms]
+    KERBER.TEST = {
+        max_life = 1h 30m
+        max_renewable_life = 2d 0h 0m 0s
+        requires_preauth = no
+        allow_weak_crypto = yes
+    }
+",
+        )
+        .unwrap();
+        store.apply_kdc_conf(&conf);
+        assert_eq!(store.policy.max_life, 5400);
+        assert_eq!(store.policy.max_renewable_life, 2 * 86400);
+        assert!(!store.policy.requires_preauth);
+        assert!(store.policy.allow_weak_crypto);
+    }
 }

@@ -86,7 +86,7 @@ fn handle_inner(store: &PrincipalStore, raw: &[u8]) -> Result<Vec<u8>, Error> {
     }
     match raw[0] {
         0x6a => match decode::<AsReq>(raw) {
-            Ok(req) => as_reply(store, &req),
+            Ok(req) => as_reply(store, &req, raw),
             Err(_) => Ok(encode_krb_error(store, err::GENERIC, Some("asn1"), None)),
         },
         0x6c => match decode::<TgsReq>(raw) {
@@ -102,8 +102,8 @@ fn handle_inner(store: &PrincipalStore, raw: &[u8]) -> Result<Vec<u8>, Error> {
     }
 }
 
-fn as_reply(store: &PrincipalStore, req: &AsReq) -> Result<Vec<u8>, Error> {
-    match issue_as(store, req) {
+fn as_reply(store: &PrincipalStore, req: &AsReq, raw: &[u8]) -> Result<Vec<u8>, Error> {
+    match issue_as_from(store, req, Some(raw)) {
         Ok(issued) => Ok(encode(&issued.rep)?),
         Err(Error::PreauthRequired { e_data }) => Ok(encode_krb_error(
             store,
@@ -158,6 +158,14 @@ fn tgs_reply(store: &PrincipalStore, req: &TgsReq, raw: &[u8]) -> Result<Vec<u8>
 ///
 /// Unknown client, bad preauth, or crypto/DER failures.
 pub fn issue_as(store: &PrincipalStore, req: &AsReq) -> Result<IssuedAs, Error> {
+    issue_as_from(store, req, None)
+}
+
+fn issue_as_from(
+    store: &PrincipalStore,
+    req: &AsReq,
+    raw: Option<&[u8]>,
+) -> Result<IssuedAs, Error> {
     let body = &req.0.req_body;
     if utf8_realm(&body.realm) != store.realm() {
         return Err(proto(err::WRONG_REALM, store.realm()));
@@ -179,6 +187,13 @@ pub fn issue_as(store: &PrincipalStore, req: &AsReq) -> Result<IssuedAs, Error> 
     let ckey = client
         .key_for(etype)
         .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, "no client key"))?;
+    let encoded_body;
+    let body_der: &[u8] = if let Some(slice) = raw.and_then(kdc_req_body_der) {
+        slice
+    } else {
+        encoded_body = encode(body)?;
+        &encoded_body
+    };
 
     let fast = unwrap_fast(store, req)?;
     let work_padata = if let Some(ref f) = fast {
@@ -197,9 +212,17 @@ pub fn issue_as(store: &PrincipalStore, req: &AsReq) -> Result<IssuedAs, Error> 
         as_rep_key = rk;
         extra_padata.push(pa_pk);
         skip_timestamp = true;
-    } else if let Some(step) = process_spake(store, client, work_padata.as_deref(), etype)? {
+    } else if let Some(step) =
+        process_spake(store, client, work_padata.as_deref(), &ckey.key, body_der)?
+    {
         match step {
-            SpakeStep::Challenge(e_data) => return Err(Error::PreauthRequired { e_data }),
+            SpakeStep::Challenge(e_data) => {
+                return Err(Error::Protocol {
+                    code: err::MORE_PREAUTH_DATA_REQUIRED,
+                    text: Some("SPAKE challenge".into()),
+                    e_data: Some(e_data),
+                });
+            }
             SpakeStep::Done(k) => {
                 as_rep_key = k;
                 skip_timestamp = true;
@@ -559,16 +582,9 @@ fn decrypt_presented_tgt(
                 candidates.push(&k.key);
             }
         }
-        for k in &p.keys {
-            candidates.push(&k.key);
-        }
     }
-    for p in store.debug_principals() {
-        if p.name.is_krbtgt() && !p.name.is_krbtgt_for(store.realm()) {
-            for k in &p.keys {
-                candidates.push(&k.key);
-            }
-        }
+    for key in store.krbtgt_keys() {
+        candidates.push(key);
     }
     let mut last = proto(err::BAD_INTEGRITY, "TGT decrypt");
     for key in candidates {
@@ -766,6 +782,10 @@ fn preauth_required(store: &PrincipalStore, client: &Principal) -> Error {
         padata_value: encode(&info).map(Into::into).unwrap_or_default(),
     };
     let mut method: MethodData = Vec::new();
+    method.push(PaData {
+        padata_type: pa::SPAKE,
+        padata_value: OctetString::from(Vec::<u8>::new()),
+    });
     if store.pkinit_ca.is_some() {
         method.push(PaData {
             padata_type: pa::PK_AS_REQ,
