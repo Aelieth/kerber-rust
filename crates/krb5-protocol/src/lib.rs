@@ -47,5 +47,5 @@ pub use safe_priv::{
     unwrap_krb_safe,
 };
 pub use secret_file::write_secret_file;
-pub use tgs::{tgs_exchange, TgsOutcome};
+pub use tgs::{referral_hop_realm, tgs_exchange, TgsOutcome};
 pub use transport::{exchange, exchange_with_failover, KdcAddr, KDC_PORT};

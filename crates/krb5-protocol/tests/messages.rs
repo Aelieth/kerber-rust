@@ -161,6 +161,90 @@ fn exchange_tcp_and_udp_round_trip_local_kdc() {
 }
 
 #[test]
+fn referral_hop_realm_uses_foreign_sname() {
+    let sname = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "OTHER.TEST"]);
+    assert_eq!(
+        krb5_protocol::referral_hop_realm(&sname).as_deref(),
+        Some("OTHER.TEST")
+    );
+    let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "svc"]);
+    assert!(krb5_protocol::referral_hop_realm(&host).is_none());
+}
+
+#[test]
+fn non_ascii_realm_as_exchange_is_err() {
+    let err = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
+        cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+        realm: "KÉRBER.TEST",
+        password: b"x",
+        kdc: &krb5_protocol::KdcAddr {
+            host: "127.0.0.1".into(),
+            port: 1,
+        },
+    });
+    assert!(err.is_err(), "non-ASCII realm must not panic");
+}
+
+#[test]
+fn first_bare_as_req_skew_is_retried() {
+    use std::net::UdpSocket;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::Duration;
+
+    use krb5_types::{ascii, err, KerberosTime, KrbError, Microseconds, PrincipalName};
+
+    let hits = Arc::new(AtomicUsize::new(0));
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = udp.local_addr().unwrap().port();
+    let hits2 = hits.clone();
+    thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        for _ in 0..4 {
+            let Ok((n, src)) = udp.recv_from(&mut buf) else {
+                break;
+            };
+            if n == 0 {
+                break;
+            }
+            hits2.fetch_add(1, Ordering::SeqCst);
+            let reply = encode(&KrbError {
+                pvno: KrbError::PVNO,
+                msg_type: KrbError::MSG_TYPE,
+                ctime: None,
+                cusec: None,
+                stime: KerberosTime::now(),
+                susec: Microseconds::ZERO,
+                error_code: err::SKEW,
+                crealm: None,
+                cname: None,
+                realm: ascii("KERBER.TEST"),
+                sname: PrincipalName::krbtgt("KERBER.TEST"),
+                e_text: None,
+                e_data: None,
+            })
+            .unwrap();
+            let _ = udp.send_to(&reply, src);
+        }
+    });
+    thread::sleep(Duration::from_millis(20));
+    let _ = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
+        cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+        realm: "KERBER.TEST",
+        password: b"userpassword",
+        kdc: &krb5_protocol::KdcAddr {
+            host: "127.0.0.1".into(),
+            port,
+        },
+    });
+    assert!(
+        hits.load(Ordering::SeqCst) >= 2,
+        "first bare SKEW must resync/retry, not fail on the first PDU"
+    );
+}
+
+#[test]
 fn golden_application_tags() {
     use krb5_types::*;
     let t = Ticket {

@@ -115,7 +115,7 @@ pub fn build_ap_req_with_cksum(
         cusec: usec,
         ctime: now,
         subkey,
-        seq_number: None,
+        seq_number: Some(0),
         authorization_data: None,
     };
     let der = encode(&authenticator)?;

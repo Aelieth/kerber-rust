@@ -7,7 +7,7 @@ use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256,
 };
 use krb5_types::{
-    ascii, ku, pa, ApOptions, ApReq, AsReq, Authenticator, Checksum, EncryptedData, EncryptionKey,
+    ku, pa, ApOptions, ApReq, AsReq, Authenticator, Checksum, EncryptedData, EncryptionKey,
     KerberosTime, Microseconds, PaData, PrincipalName, Realm, Ticket,
 };
 
@@ -349,12 +349,14 @@ pub fn pa_for_user(
     let mic = checksum(session, usage, &data)?;
     let for_user = krb5_types::s4u::PaForUser {
         user_name: user,
-        user_realm: ascii(realm),
+        user_realm: krb5_types::try_ascii(realm)
+            .map_err(|e| Error::ReplyMismatch(e.to_string()))?,
         cksum: Checksum {
             cksumtype: session.etype().checksum_type(),
             checksum: mic.into(),
         },
-        auth_package: ascii(pkg),
+        auth_package: krb5_types::try_ascii(pkg)
+            .map_err(|e| Error::ReplyMismatch(e.to_string()))?,
     };
     Ok(PaData {
         padata_type: pa::FOR_USER,

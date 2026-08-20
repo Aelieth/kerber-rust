@@ -5,9 +5,9 @@ use std::time::Instant;
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{decrypt, encrypt, string_to_key, EncryptionType, KeyUsage, ProtocolKey};
 use krb5_types::{
-    ascii, err, ku, pa, AsRep, AsReq, EncAsRepPart, EncKdcRepPart, EncryptedData, EtypeInfo,
-    EtypeInfo2, KdcOptions, KdcReq, KdcReqBody, KerberosTime, KrbError, MethodData, PaData,
-    PaEncTsEnc, PrincipalName,
+    err, ku, pa, AsRep, AsReq, EncAsRepPart, EncKdcRepPart, EncryptedData, EtypeInfo, EtypeInfo2,
+    KdcOptions, KdcReq, KdcReqBody, KerberosTime, KrbError, MethodData, PaData, PaEncTsEnc,
+    PrincipalName,
 };
 
 use crate::error::Error;
@@ -63,6 +63,7 @@ pub fn as_exchange(req: &AsRequest<'_>) -> Result<AsOutcome, Error> {
 }
 
 fn as_exchange_inner(req: &AsRequest<'_>) -> Result<AsOutcome, Error> {
+    let _ = krb5_types::try_ascii(req.realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?;
     let etypes: Vec<i32> = EncryptionType::preferred()
         .iter()
         .map(|e| e.to_iana())
@@ -72,25 +73,75 @@ fn as_exchange_inner(req: &AsRequest<'_>) -> Result<AsOutcome, Error> {
         .add_hours(10)
         .unwrap_or_else(|_| KerberosTime::now());
 
-    let first = build_as_req(&req.cname, req.realm, nonce, till.clone(), None, &etypes);
+    let first = build_as_req(&req.cname, req.realm, nonce, till.clone(), None, &etypes)?;
     let wire = encode(&first)?;
     let reply = exchange(req.kdc, &wire)?;
 
     match classify(&reply)? {
         KdcMsg::AsRep(rep) => finish_as_rep(rep, nonce, None, req.password, &req.cname, req.realm),
+        KdcMsg::Error(e) if e.error_code == err::SKEW => {
+            // First-reply SKEW: resync from KDC stime and retry the bare AS-REQ.
+            let skew_time = e.stime.clone();
+            let first = build_as_req(&req.cname, req.realm, nonce, till.clone(), None, &etypes)?;
+            let wire = encode(&first)?;
+            let reply = exchange(req.kdc, &wire)?;
+            match classify(&reply)? {
+                KdcMsg::AsRep(rep) => {
+                    finish_as_rep(rep, nonce, None, req.password, &req.cname, req.realm)
+                }
+                KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
+                    continue_preauth(req, nonce, till, &etypes, &e, Some(&skew_time))
+                }
+                KdcMsg::Error(e) => classify_kdc_error(&e),
+                KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
+            }
+        }
         KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
-            let (etype, salt, params) = select_s2k(&e, &req.cname, req.realm)?;
-            let client_key = string_to_key(etype, req.password, &salt, params.as_deref())?;
-            let padata = vec![pa_enc_timestamp(&client_key)?];
-            let second = build_as_req(
-                &req.cname,
-                req.realm,
-                nonce,
-                till.clone(),
-                Some(padata),
-                &etypes,
-            );
-            let wire = encode(&second)?;
+            continue_preauth(req, nonce, till, &etypes, &e, None)
+        }
+        KdcMsg::Error(e) => classify_kdc_error(&e),
+        KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
+    }
+}
+
+fn continue_preauth(
+    req: &AsRequest<'_>,
+    nonce: u32,
+    till: KerberosTime,
+    etypes: &[i32],
+    preauth_err: &KrbError,
+    skew_hint: Option<&KerberosTime>,
+) -> Result<AsOutcome, Error> {
+    let (etype, salt, params) = select_s2k(preauth_err, &req.cname, req.realm)?;
+    let client_key = string_to_key(etype, req.password, &salt, params.as_deref())?;
+    let padata = vec![match skew_hint {
+        Some(t) => pa_enc_timestamp_at(&client_key, t)?,
+        None => pa_enc_timestamp(&client_key)?,
+    }];
+    let second = build_as_req(
+        &req.cname,
+        req.realm,
+        nonce,
+        till.clone(),
+        Some(padata),
+        etypes,
+    )?;
+    let wire = encode(&second)?;
+    let reply = exchange(req.kdc, &wire)?;
+    match classify(&reply)? {
+        KdcMsg::AsRep(rep) => finish_as_rep(
+            rep,
+            nonce,
+            Some(client_key),
+            req.password,
+            &req.cname,
+            req.realm,
+        ),
+        KdcMsg::Error(e) if e.error_code == err::SKEW => {
+            let skew_time = e.stime.clone();
+            let padata = vec![pa_enc_timestamp_at(&client_key, &skew_time)?];
+            let third = build_as_req(&req.cname, req.realm, nonce, till, Some(padata), etypes)?;
+            let wire = encode(&third)?;
             let reply = exchange(req.kdc, &wire)?;
             match classify(&reply)? {
                 KdcMsg::AsRep(rep) => finish_as_rep(
@@ -101,46 +152,25 @@ fn as_exchange_inner(req: &AsRequest<'_>) -> Result<AsOutcome, Error> {
                     &req.cname,
                     req.realm,
                 ),
-                KdcMsg::Error(e) if e.error_code == err::SKEW => {
-                    let skew_time = e.stime.clone();
-                    let padata = vec![pa_enc_timestamp_at(&client_key, &skew_time)?];
-                    let third =
-                        build_as_req(&req.cname, req.realm, nonce, till, Some(padata), &etypes);
-                    let wire = encode(&third)?;
-                    let reply = exchange(req.kdc, &wire)?;
-                    match classify(&reply)? {
-                        KdcMsg::AsRep(rep) => finish_as_rep(
-                            rep,
-                            nonce,
-                            Some(client_key),
-                            req.password,
-                            &req.cname,
-                            req.realm,
-                        ),
-                        KdcMsg::Error(e) => classify_kdc_error(&e),
-                        KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
-                    }
-                }
-                KdcMsg::Error(e) if e.error_code == err::ETYPE_NOSUPP => {
-                    let etypes = vec![EncryptionType::Aes256CtsHmacSha196.to_iana()];
-                    let padata = vec![pa_enc_timestamp(&client_key)?];
-                    let retry =
-                        build_as_req(&req.cname, req.realm, nonce, till, Some(padata), &etypes);
-                    let wire = encode(&retry)?;
-                    let reply = exchange(req.kdc, &wire)?;
-                    match classify(&reply)? {
-                        KdcMsg::AsRep(rep) => finish_as_rep(
-                            rep,
-                            nonce,
-                            Some(client_key),
-                            req.password,
-                            &req.cname,
-                            req.realm,
-                        ),
-                        KdcMsg::Error(e) => classify_kdc_error(&e),
-                        KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
-                    }
-                }
+                KdcMsg::Error(e) => classify_kdc_error(&e),
+                KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
+            }
+        }
+        KdcMsg::Error(e) if e.error_code == err::ETYPE_NOSUPP => {
+            let etypes = vec![EncryptionType::Aes256CtsHmacSha196.to_iana()];
+            let padata = vec![pa_enc_timestamp(&client_key)?];
+            let retry = build_as_req(&req.cname, req.realm, nonce, till, Some(padata), &etypes)?;
+            let wire = encode(&retry)?;
+            let reply = exchange(req.kdc, &wire)?;
+            match classify(&reply)? {
+                KdcMsg::AsRep(rep) => finish_as_rep(
+                    rep,
+                    nonce,
+                    Some(client_key),
+                    req.password,
+                    &req.cname,
+                    req.realm,
+                ),
                 KdcMsg::Error(e) => classify_kdc_error(&e),
                 KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
             }
@@ -258,16 +288,7 @@ fn finish_as_rep(
         }
     }
     let now = i64::from(KerberosTime::now().unix_seconds());
-    let skew = 300i64;
-    let end = i64::from(enc_part.endtime.unix_seconds());
-    if end + skew < now {
-        return Err(Error::ReplyMismatch("AS-REP ticket expired".into()));
-    }
-    if let Some(st) = &enc_part.starttime {
-        if i64::from(st.unix_seconds()) > now + skew {
-            return Err(Error::ReplyMismatch("AS-REP ticket not yet valid".into()));
-        }
-    }
+    check_as_rep_times(&enc_part, now, 300)?;
     if !enc_part.sname.is_krbtgt_for(realm) {
         return Err(Error::ReplyMismatch("AS-REP sname is not krbtgt".into()));
     }
@@ -289,6 +310,27 @@ fn finish_as_rep(
         cname: inner.cname,
         crealm: inner.crealm,
     })
+}
+
+pub(crate) fn check_as_rep_times(
+    enc_part: &EncKdcRepPart,
+    now: i64,
+    skew: i64,
+) -> Result<(), Error> {
+    let end = i64::from(enc_part.endtime.unix_seconds());
+    let auth = i64::from(enc_part.authtime.unix_seconds());
+    if (auth - now).abs() > skew {
+        return Err(Error::ReplyMismatch("AS-REP authtime outside skew".into()));
+    }
+    if end + skew < now {
+        return Err(Error::ReplyMismatch("AS-REP ticket expired".into()));
+    }
+    if let Some(st) = &enc_part.starttime {
+        if i64::from(st.unix_seconds()) > now + skew {
+            return Err(Error::ReplyMismatch("AS-REP ticket not yet valid".into()));
+        }
+    }
+    Ok(())
 }
 
 fn decode_enc_as(plain: &[u8]) -> Result<EncKdcRepPart, Error> {
@@ -320,15 +362,16 @@ fn build_as_req(
     till: KerberosTime,
     padata: Option<Vec<PaData>>,
     etypes: &[i32],
-) -> AsReq {
-    AsReq(KdcReq {
+) -> Result<AsReq, Error> {
+    let realm_s = krb5_types::try_ascii(realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?;
+    Ok(AsReq(KdcReq {
         pvno: KdcReq::PVNO,
         msg_type: KdcReq::MSG_AS_REQ,
         padata,
         req_body: KdcReqBody {
             kdc_options: KdcOptions::forwardable(),
             cname: Some(cname.clone()),
-            realm: ascii(realm),
+            realm: realm_s,
             sname: Some(PrincipalName::krbtgt(realm)),
             from: None,
             till,
@@ -339,7 +382,7 @@ fn build_as_req(
             enc_authorization_data: None,
             additional_tickets: None,
         },
-    })
+    }))
 }
 
 fn pa_enc_timestamp(key: &ProtocolKey) -> Result<PaData, Error> {
@@ -460,7 +503,7 @@ fn emit(event: &'static str, correlation_id: &str, started: Instant, err: Option
 mod decode_enc_as_tests {
     use super::*;
     use krb5_types::{
-        kerberos_time_from_utc_z, EncTgsRepPart, EncryptionKey, OctetString, TicketFlags,
+        ascii, kerberos_time_from_utc_z, EncTgsRepPart, EncryptionKey, OctetString, TicketFlags,
     };
 
     fn sample_part() -> EncKdcRepPart {
@@ -501,5 +544,17 @@ mod decode_enc_as_tests {
         assert_eq!(decode_enc_as(&der).expect("MIT 26 fallback"), part);
         let other = [0x62, 0x03, 0x02, 0x01, 0x00];
         assert!(decode_enc_as(&other).is_err());
+    }
+
+    #[test]
+    fn authtime_outside_skew_is_rejected() {
+        let mut part = sample_part();
+        let now_t = KerberosTime::now();
+        let now = i64::from(now_t.unix_seconds());
+        part.authtime = now_t.clone();
+        part.endtime = now_t.add_hours(10).unwrap_or(now_t);
+        super::check_as_rep_times(&part, now, 300).unwrap();
+        part.authtime = kerberos_time_from_utc_z("20000101000000Z").expect("old");
+        assert!(super::check_as_rep_times(&part, now, 300).is_err());
     }
 }

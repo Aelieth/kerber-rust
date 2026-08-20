@@ -151,7 +151,7 @@ pub fn tgs_req_ex(
     let body = KdcReqBody {
         kdc_options,
         cname: None,
-        realm: ascii(realm),
+        realm: krb5_types::try_ascii(realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?,
         sname: Some(sname),
         from: None,
         till,
@@ -168,7 +168,7 @@ pub fn tgs_req_ex(
     let now = KerberosTime::now();
     let authenticator = Authenticator {
         authenticator_vno: Authenticator::VNO,
-        crealm: ascii(crealm),
+        crealm: krb5_types::try_ascii(crealm).map_err(|e| Error::ReplyMismatch(e.to_string()))?,
         cname: cname.clone(),
         cksum: Some(Checksum {
             cksumtype: session.etype().checksum_type(),

@@ -78,9 +78,13 @@ fn kinit_inner(
     let mut tgs_out = None;
     let mut tgs_err: Option<String> = None;
     if let Some(svc) = service {
-        let parts: Vec<&str> = svc.split('/').collect();
+        let (svc_name, svc_realm) = match svc.rsplit_once('@') {
+            Some((n, r)) => (n, r.to_owned()),
+            None => (svc, realm_s.clone()),
+        };
+        let parts: Vec<&str> = svc_name.split('/').collect();
         let sname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, parts);
-        match tgs_exchange(&resolved, &as_out, sname, &realm_s) {
+        match tgs_exchange(&resolved, &as_out, sname, &svc_realm) {
             Ok(tgs) => {
                 creds.push(tgt_cred(
                     &as_out.crealm,

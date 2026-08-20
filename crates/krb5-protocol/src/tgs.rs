@@ -5,9 +5,9 @@ use std::time::Instant;
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{checksum, decrypt, encrypt, EncryptionType, KeyUsage, ProtocolKey};
 use krb5_types::{
-    ascii, flag_bit, ku, pa, ApOptions, ApReq, Authenticator, Checksum, EncKdcRepPart,
-    EncTgsRepPart, EncryptedData, KdcOptions, KdcReq, KdcReqBody, KerberosTime, PaData,
-    PrincipalName, TgsRep, TgsReq, Ticket,
+    flag_bit, ku, pa, ApOptions, ApReq, Authenticator, Checksum, EncKdcRepPart, EncTgsRepPart,
+    EncryptedData, KdcOptions, KdcReq, KdcReqBody, KerberosTime, PaData, PrincipalName, TgsRep,
+    TgsReq, Ticket,
 };
 
 use crate::as_ex::AsOutcome;
@@ -71,19 +71,16 @@ fn tgs_inner(
 ) -> Result<TgsOutcome, Error> {
     let mut cur_kdc = kdc.clone();
     let mut cur_tgt = tgt.clone();
+    let mut hop_realm = realm.to_owned();
     for _ in 0..8 {
-        let out = tgs_once(&cur_kdc, &cur_tgt, sname.clone(), realm)?;
+        let out = tgs_once(&cur_kdc, &cur_tgt, sname.clone(), &hop_realm)?;
+        authenticate_srealm(&out)?;
         if out.ticket.sname.is_krbtgt() && out.ticket.sname != *sname {
-            let foreign = out
-                .ticket
-                .sname
-                .name_string
-                .get(1)
-                .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
-                .unwrap_or_default();
-            if foreign.is_empty() || foreign == realm {
+            let foreign = referral_hop_realm(&out.ticket.sname).ok_or(Error::Referral)?;
+            if foreign.is_empty() || foreign == hop_realm {
                 return Err(Error::Referral);
             }
+            hop_realm.clone_from(&foreign);
             cur_kdc = kdc_for_realm(&foreign, kdc);
             cur_tgt = AsOutcome {
                 ticket: out.ticket,
@@ -98,6 +95,27 @@ fn tgs_inner(
         return Ok(out);
     }
     Err(Error::Referral)
+}
+
+/// Next TGS-REQ `realm` after a referral TGT `krbtgt/FOREIGN`.
+#[must_use]
+pub fn referral_hop_realm(sname: &PrincipalName) -> Option<String> {
+    if !sname.is_krbtgt() {
+        return None;
+    }
+    sname
+        .name_string
+        .get(1)
+        .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
+}
+
+fn authenticate_srealm(out: &TgsOutcome) -> Result<(), Error> {
+    if out.enc_part.srealm.as_bytes() != out.ticket.realm.as_bytes() {
+        return Err(Error::ReplyMismatch(
+            "TGS-REP srealm does not match ticket realm".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn kdc_for_realm(realm: &str, fallback: &KdcAddr) -> KdcAddr {
@@ -139,7 +157,7 @@ fn tgs_once(
     let body = KdcReqBody {
         kdc_options: KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true),
         cname: None,
-        realm: ascii(realm),
+        realm: krb5_types::try_ascii(realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?,
         sname: Some(sname),
         from: None,
         till,
