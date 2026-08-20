@@ -21,9 +21,10 @@ this project uses semantic versioning once a crate is published.
   keytab v1/merge, AP-REP / KRB-SAFE / PRIV / CRED, PRF/PRF+,
   `krb5-gss` wrap/unwrap/MIC, `krb5-admin` ACL-enforced kadmind
   equivalent, persist+stash, kpasswd (kvno bump + multi-kvno),
-  FAST armor/cookie/strengthen, SPAKE2-P256, PKINIT ECDH P-256,
-  PAC sign/verify on issued tickets, S4U2Self/S4U2Proxy/U2U,
-  weak etypes behind `allow_weak_crypto`.
+  FAST armor/cookie/strengthen, SPAKE2-P256 (`w` from the password),
+  PKINIT ECDH P-256 inside CMS SignedData, PAC with NDR logon-info,
+  S4U2Self/S4U2Proxy/U2U, cross-realm referrals/transited, ktadd of
+  all kvnos, kprop dump/load, weak etypes behind `allow_weak_crypto`.
 
 ### Fixed
 

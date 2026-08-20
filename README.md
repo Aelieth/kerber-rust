@@ -8,7 +8,8 @@ tree.
 This is an early-stage project targeting MIT 1.22.2 wire compatibility.
 Stages 1–8 of `working/plan-initial-audit-0819-2122.md` are in tree at
 library depth (AS/TGS KDC+client, GSS wrap/MIC, admin ACL, persist,
-kpasswd, FAST armor, SPAKE2-P256, PKINIT ECDH, PAC/S4U/U2U). Long soaks
+kpasswd, FAST armor, SPAKE2-P256, PKINIT CMS+ECDH, NDR PAC, S4U/U2U,
+cross-realm referrals). Long soaks
 and live Heimdal/AD/SSPI remain environment-dependent. See
 [docs/stages.md](docs/stages.md).
 
