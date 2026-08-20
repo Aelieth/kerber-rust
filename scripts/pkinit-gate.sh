@@ -39,12 +39,12 @@ docker exec -d \
     "$NAME" sh -c '/tmp/krb5-kdc --test-realm --export-pkinit /tmp/pkinit 127.0.0.1:88 >/tmp/kdc.log 2>&1 || /tmp/krb5-kdc --test-realm --export-pkinit /tmp/pkinit 127.0.0.1:8888 >/tmp/kdc.log 2>&1'
 
 ok=0
-for _ in $(seq 1 40); do
+for _ in $(seq 1 80); do
     if docker exec "$NAME" grep -q '^listening ' /tmp/kdc.log 2>/dev/null; then
         ok=1
         break
     fi
-    sleep 0.2
+    sleep 0.25
 done
 echo "==== rust KDC log ===="
 docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
@@ -71,17 +71,21 @@ PORT=88
 case "$LISTEN" in
     *:8888*) PORT=8888 ;;
 esac
-docker exec "$NAME" sh -c "cat >> /etc/krb5.conf <<'EOF'
+docker exec "$NAME" sh -c "cat >> /etc/krb5.conf <<EOF
+
+[libdefaults]
+    pkinit_eku_checking = none
+    pkinit_kdc_hostname = kerber.test
+    pkinit_dh_min_bits = 3072
 
 [realms]
     KERBER.TEST = {
         kdc = 127.0.0.1:${PORT}
         pkinit_anchors = FILE:/tmp/pkinit/ca.pem
         pkinit_eku_checking = none
+        pkinit_kdc_hostname = kerber.test
     }
 EOF"
-# krb5.conf already has a realms section; append libdefaults override
-docker exec "$NAME" sh -c 'printf "\n[libdefaults]\n pkinit_eku_checking = none\n" >> /etc/krb5.conf'
 
 echo "==== MIT kinit PKINIT ===="
 set +e
@@ -96,5 +100,7 @@ if [ "$rc" -eq 0 ]; then
     exit 0
 fi
 echo "MIT kinit with FILE identity failed (rc=$rc)"
+echo "==== rust KDC log after kinit ===="
+docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
 log "pkinit.gate" "error" ',"error":"mit kinit pkinit failed","rc":'"$rc"
 exit 1

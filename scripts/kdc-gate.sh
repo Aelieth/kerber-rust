@@ -41,24 +41,27 @@ fi
 docker exec "$NAME" chmod +x /tmp/krb5-kdc
 
 # Bind 88 inside the container (root). Fall back to 8888 via the binary.
+docker exec "$NAME" mkdir -p /tmp/traces
+docker exec "$NAME" chmod 0777 /tmp/traces
 docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
     -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
+    -e KERBER_CAPTURE_DIR=/tmp/traces \
     "$NAME" sh -c '/tmp/krb5-kdc --test-realm 127.0.0.1:88 >/tmp/kdc.log 2>&1 || /tmp/krb5-kdc --test-realm 127.0.0.1:8888 >/tmp/kdc.log 2>&1'
 
 ok=0
-for _ in $(seq 1 30); do
+for _ in $(seq 1 80); do
     if docker exec "$NAME" grep -q '^listening ' /tmp/kdc.log 2>/dev/null; then
         ok=1
         break
     fi
-    # Binary may have failed to exec (glibc).
-    if docker exec "$NAME" sh -c 'test -s /tmp/kdc.log' 2>/dev/null; then
-        if docker exec "$NAME" grep -qiE 'not found|glibc|error|bind failed' /tmp/kdc.log 2>/dev/null; then
+    # Do not match JSON "error" fields on the success path (privilege drop).
+    if docker exec "$NAME" grep -qiE 'bind failed|privilege drop:|not found|glibc' /tmp/kdc.log 2>/dev/null; then
+        if ! docker exec "$NAME" grep -q '^listening ' /tmp/kdc.log 2>/dev/null; then
             break
         fi
     fi
-    sleep 0.2
+    sleep 0.25
 done
 
 echo "==== rust KDC log ===="
@@ -91,14 +94,20 @@ echo "$KLIST1" | grep -q 'user@KERBER.TEST'
 echo "$KLIST1" | grep -Ei 'Flags:|flags:' || echo "$KLIST1" | grep -q krbtgt
 
 echo "==== MIT kvno host/testhost.kerber.test ===="
-if ! docker exec "$NAME" kvno host/testhost.kerber.test; then
+if ! docker exec -e KRB5_TRACE=/dev/stderr "$NAME" kvno host/testhost.kerber.test; then
     log "kdc.gate" "error" ',"error":"MIT kvno failed"'
     docker exec "$NAME" klist || true
+    echo "==== rust KDC log after kvno ===="
+    docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
     exit 1
 fi
 KLIST2="$(docker exec "$NAME" klist)"
 echo "$KLIST2"
 echo "$KLIST2" | grep -q 'user@KERBER.TEST'
 echo "$KLIST2" | grep -q 'host/testhost.kerber.test'
+
+TRACE_DST="${KERBER_TRACE_DST:-$ROOT/tests/traces}"
+mkdir -p "$TRACE_DST"
+docker cp "$NAME":/tmp/traces/. "$TRACE_DST/" 2>/dev/null || true
 
 log "kdc.gate" "ok" ",\"principal\":\"user@KERBER.TEST\",\"service\":\"host/testhost.kerber.test\""

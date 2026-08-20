@@ -6,5 +6,16 @@ KRB-CRED).
 
 Set `KERBER_CAPTURE_DIR` to this directory (or a temp dir) when running
 the KDC or client: each raw PDU is written as `{kdc,client}-{req,rep}-<nonce>.der`
-at the Rust socket boundary (no packet sniffer required). Copy MIT 1.22.2
-captures here when a content-asserting gate is added for that PDU.
+at the Rust socket boundary (no packet sniffer required). `scripts/kdc-gate.sh`
+copies MIT 1.22.2 captures here (`KERBER_TRACE_DST` override).
+
+Checked-in MIT 1.22.2 PDUs from `kdc-gate.sh` (APPLICATION tags):
+
+| File | Tag | PDU |
+| --- | --- | --- |
+| `mit-as-req.der` | `0x6a` | AS-REQ |
+| `mit-as-req-preauth.der` | `0x6a` | AS-REQ with PA-ENC-TIMESTAMP |
+| `mit-krb-error-preauth.der` | `0x7e` | PREAUTH_REQUIRED |
+| `mit-as-rep.der` | `0x6b` | AS-REP |
+| `mit-tgs-req.der` | `0x6c` | TGS-REQ (FAST) |
+| `mit-tgs-rep.der` | `0x6d` | TGS-REP |

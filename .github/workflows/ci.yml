@@ -67,3 +67,9 @@ jobs:
         run: ./scripts/gss-gate.sh
       - name: pkinit-gate (MIT pkinit.so vs Rust KDC)
         run: ./scripts/pkinit-gate.sh
+      - name: cross-realm-gate
+        run: ./scripts/cross-realm-gate.sh
+      - name: spake-gate
+        run: ./scripts/spake-gate.sh
+      - name: sha2-gate
+        run: ./scripts/sha2-gate.sh
