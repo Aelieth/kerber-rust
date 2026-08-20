@@ -2,8 +2,9 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    checksum, decrypt, encrypt, key_from_shared, krb_fx_cf2, octetstring2key, p256_generate,
-    p256_shared, spake_finish, spake_public, EncryptionType, KeyUsage, ProtocolKey,
+    checksum, decrypt, encrypt, krb_fx_cf2, octetstring2key, p256_generate, p256_shared,
+    spake_derive_key, spake_public_wbytes, spake_result_wbytes, spake_thash_update, spake_wbytes,
+    EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256,
 };
 use krb5_types::{
     ascii, ku, pa, ApOptions, ApReq, AsReq, Authenticator, Checksum, EncryptedData, EncryptionKey,
@@ -193,28 +194,58 @@ pub fn pa_spake_support() -> PaData {
     }
 }
 
-/// Build a PA-SPAKE response from a KDC challenge public share.
+/// Build a PA-SPAKE response matching MIT 1.22.2 (`K'[0]` reply key).
 ///
-/// Returns the padata and the SPAKE-derived reply key.
+/// `support_der` is the client's PA-SPAKE support encoding (empty if none).
+/// `challenge_der` is the KDC PA-SPAKE challenge encoding. `body_der` is
+/// the KDC-REQ-BODY of the response AS-REQ.
 ///
 /// # Errors
 ///
-/// Curve or encrypt failures.
+/// Curve, PRF, or encrypt failures.
 pub fn pa_spake_response(
-    w: &[u8; 32],
+    ikey: &ProtocolKey,
+    support_der: &[u8],
+    challenge_der: &[u8],
     challenge_pubkey: &[u8],
-    etype: EncryptionType,
+    body_der: &[u8],
 ) -> Result<(PaData, ProtocolKey), Error> {
+    let wbytes = spake_wbytes(ikey, SPAKE_GROUP_P256)?;
     let kp = p256_generate()?;
-    let pub_x = spake_public(w, &kp.secret, false)?;
-    let shared = spake_finish(w, &kp.secret, challenge_pubkey, false)?;
-    let key = key_from_shared(etype, &shared)?;
-    let usage = KeyUsage::new(ku::PA_ENC_TIMESTAMP)?;
-    let factor_ct = encrypt(&key, usage, &[1u8])?;
+    let pub_x = spake_public_wbytes(&wbytes, &kp.secret, false)?;
+    let result = spake_result_wbytes(&wbytes, &kp.secret, challenge_pubkey, false)?;
+    let z = [0u8; 32];
+    let thash = spake_thash_update(&z, support_der, challenge_der);
+    let thash = spake_thash_update(&thash, &pub_x, &[]);
+    let k0 = spake_derive_key(
+        ikey,
+        SPAKE_GROUP_P256,
+        &wbytes,
+        &result,
+        &thash,
+        body_der,
+        0,
+    )?;
+    let k1 = spake_derive_key(
+        ikey,
+        SPAKE_GROUP_P256,
+        &wbytes,
+        &result,
+        &thash,
+        body_der,
+        1,
+    )?;
+    let factor = krb5_types::spake::SpakeSecondFactor {
+        factor_type: 1,
+        data: None,
+    };
+    let factor_der = encode(&factor)?;
+    let usage = KeyUsage::new(ku::SPAKE)?;
+    let factor_ct = encrypt(&k1, usage, &factor_der)?;
     let msg = krb5_types::spake::PaSpake::Response(krb5_types::spake::SpakeResponse {
         pubkey: pub_x.into(),
         factor: EncryptedData {
-            etype: etype.to_iana(),
+            etype: ikey.etype().to_iana(),
             kvno: None,
             cipher: factor_ct.into(),
         },
@@ -224,7 +255,7 @@ pub fn pa_spake_response(
             padata_type: pa::SPAKE,
             padata_value: encode(&msg)?.into(),
         },
-        key,
+        k0,
     ))
 }
 
