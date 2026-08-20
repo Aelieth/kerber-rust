@@ -31,6 +31,7 @@ pub struct TgsOutcome {
 /// # Errors
 ///
 /// Returns transport, crypto, or `KRB-ERROR` failures.
+#[allow(clippy::needless_pass_by_value)]
 pub fn tgs_exchange(
     kdc: &KdcAddr,
     tgt: &AsOutcome,
@@ -40,7 +41,7 @@ pub fn tgs_exchange(
     let correlation_id = krb5_log::new_correlation_id();
     let _g = krb5_log::enter_correlation(correlation_id.clone());
     let started = Instant::now();
-    let result = tgs_inner(kdc, tgt, sname, realm);
+    let result = tgs_inner(kdc, tgt, &sname, realm);
     let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
     match &result {
         Ok(_) => tracing::info!(
@@ -63,6 +64,71 @@ pub fn tgs_exchange(
 }
 
 fn tgs_inner(
+    kdc: &KdcAddr,
+    tgt: &AsOutcome,
+    sname: &PrincipalName,
+    realm: &str,
+) -> Result<TgsOutcome, Error> {
+    let mut cur_kdc = kdc.clone();
+    let mut cur_tgt = tgt.clone();
+    for _ in 0..8 {
+        let out = tgs_once(&cur_kdc, &cur_tgt, sname.clone(), realm)?;
+        if out.ticket.sname.is_krbtgt() && out.ticket.sname != *sname {
+            let foreign = out
+                .ticket
+                .sname
+                .name_string
+                .get(1)
+                .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
+                .unwrap_or_default();
+            if foreign.is_empty() || foreign == realm {
+                return Err(Error::Referral);
+            }
+            cur_kdc = kdc_for_realm(&foreign, kdc);
+            cur_tgt = AsOutcome {
+                ticket: out.ticket,
+                enc_part: out.enc_part,
+                client_key: cur_tgt.client_key.clone(),
+                session_key: out.session_key,
+                cname: cur_tgt.cname.clone(),
+                crealm: cur_tgt.crealm.clone(),
+            };
+            continue;
+        }
+        return Ok(out);
+    }
+    Err(Error::Referral)
+}
+
+fn kdc_for_realm(realm: &str, fallback: &KdcAddr) -> KdcAddr {
+    let env_key = format!("KRB5_KDC_{}", realm.replace('.', "_"));
+    if let Ok(v) = std::env::var(env_key) {
+        if let Some((h, p)) = v.rsplit_once(':') {
+            if let Ok(port) = p.parse() {
+                return KdcAddr {
+                    host: h.to_owned(),
+                    port,
+                };
+            }
+        }
+        return KdcAddr::new(v);
+    }
+    if let Ok(path) = std::env::var("KRB5_CONFIG") {
+        if let Ok(conf) = krb5_config::Krb5Conf::load_file(path) {
+            if let Ok(list) = conf.kdcs_for(realm) {
+                if let Some(ep) = list.first() {
+                    return KdcAddr {
+                        host: ep.host.clone(),
+                        port: ep.port,
+                    };
+                }
+            }
+        }
+    }
+    fallback.clone()
+}
+
+fn tgs_once(
     kdc: &KdcAddr,
     tgt: &AsOutcome,
     sname: PrincipalName,

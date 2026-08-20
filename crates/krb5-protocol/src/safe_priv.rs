@@ -29,7 +29,7 @@ pub fn build_krb_safe(session: &ProtocolKey, user_data: &[u8]) -> Result<KrbSafe
         usec: Some(Microseconds::from_subsec_micros(
             now.0.timestamp_subsec_micros(),
         )),
-        seq_number: None,
+        seq_number: Some(1),
         s_address: local_addr(),
         r_address: None,
     };
@@ -57,7 +57,23 @@ pub fn unwrap_krb_safe(session: &ProtocolKey, raw: &[u8]) -> Result<Vec<u8>, Err
     let body_der = encode(&msg.safe_body)?;
     let usage = KeyUsage::new(ku::KRB_SAFE_CKSUM)?;
     verify_checksum(session, usage, &body_der, msg.cksum.checksum.as_ref())?;
+    check_safe_priv_window(msg.safe_body.timestamp.as_ref(), msg.safe_body.seq_number)?;
     Ok(msg.safe_body.user_data.to_vec())
+}
+
+fn check_safe_priv_window(ts: Option<&KerberosTime>, seq: Option<u32>) -> Result<(), Error> {
+    let Some(t) = ts else {
+        return Err(Error::ReplyMismatch("SAFE/PRIV missing timestamp".into()));
+    };
+    let now = i64::from(KerberosTime::now().unix_seconds());
+    let then = i64::from(t.unix_seconds());
+    if (now - then).abs() > 300 {
+        return Err(Error::ReplyMismatch("SAFE/PRIV timestamp window".into()));
+    }
+    if seq == Some(0) {
+        return Err(Error::ReplyMismatch("SAFE/PRIV seq 0".into()));
+    }
+    Ok(())
 }
 
 /// Build a KRB-PRIV (encrypted).
@@ -73,7 +89,7 @@ pub fn build_krb_priv(session: &ProtocolKey, user_data: &[u8]) -> Result<KrbPriv
         usec: Some(Microseconds::from_subsec_micros(
             now.0.timestamp_subsec_micros(),
         )),
-        seq_number: None,
+        seq_number: Some(1),
         s_address: local_addr(),
         r_address: None,
     };
@@ -101,6 +117,7 @@ pub fn unwrap_krb_priv(session: &ProtocolKey, raw: &[u8]) -> Result<Vec<u8>, Err
     let usage = KeyUsage::new(ku::KRB_PRIV_ENC_PART)?;
     let plain = decrypt(session, usage, msg.enc_part.cipher.as_ref())?;
     let part: EncKrbPrivPart = decode(&plain)?;
+    check_safe_priv_window(part.timestamp.as_ref(), part.seq_number)?;
     Ok(part.user_data.to_vec())
 }
 

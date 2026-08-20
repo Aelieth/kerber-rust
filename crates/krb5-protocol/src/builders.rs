@@ -66,7 +66,15 @@ pub fn as_req_sname(
 ///
 /// Returns crypto or DER failures.
 pub fn pa_enc_timestamp(key: &ProtocolKey) -> Result<PaData, Error> {
-    let now = KerberosTime::now();
+    pa_enc_timestamp_at(key, &KerberosTime::now())
+}
+
+/// PA-ENC-TIMESTAMP with an explicit client time (SKEW retry).
+///
+/// # Errors
+///
+/// Returns crypto or DER failures.
+pub fn pa_enc_timestamp_at(key: &ProtocolKey, now: &KerberosTime) -> Result<PaData, Error> {
     let ts = PaEncTsEnc {
         patimestamp: now.clone(),
         pausec: Some(Microseconds::from_subsec_micros(

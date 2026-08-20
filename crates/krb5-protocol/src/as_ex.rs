@@ -82,7 +82,14 @@ fn as_exchange_inner(req: &AsRequest<'_>) -> Result<AsOutcome, Error> {
             let (etype, salt, params) = select_s2k(&e, &req.cname, req.realm)?;
             let client_key = string_to_key(etype, req.password, &salt, params.as_deref())?;
             let padata = vec![pa_enc_timestamp(&client_key)?];
-            let second = build_as_req(&req.cname, req.realm, nonce, till, Some(padata), &etypes);
+            let second = build_as_req(
+                &req.cname,
+                req.realm,
+                nonce,
+                till.clone(),
+                Some(padata),
+                &etypes,
+            );
             let wire = encode(&second)?;
             let reply = exchange(req.kdc, &wire)?;
             match classify(&reply)? {
@@ -94,6 +101,46 @@ fn as_exchange_inner(req: &AsRequest<'_>) -> Result<AsOutcome, Error> {
                     &req.cname,
                     req.realm,
                 ),
+                KdcMsg::Error(e) if e.error_code == err::SKEW => {
+                    let skew_time = e.stime.clone();
+                    let padata = vec![pa_enc_timestamp_at(&client_key, &skew_time)?];
+                    let third =
+                        build_as_req(&req.cname, req.realm, nonce, till, Some(padata), &etypes);
+                    let wire = encode(&third)?;
+                    let reply = exchange(req.kdc, &wire)?;
+                    match classify(&reply)? {
+                        KdcMsg::AsRep(rep) => finish_as_rep(
+                            rep,
+                            nonce,
+                            Some(client_key),
+                            req.password,
+                            &req.cname,
+                            req.realm,
+                        ),
+                        KdcMsg::Error(e) => classify_kdc_error(&e),
+                        KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
+                    }
+                }
+                KdcMsg::Error(e) if e.error_code == err::ETYPE_NOSUPP => {
+                    let etypes = vec![EncryptionType::Aes256CtsHmacSha196.to_iana()];
+                    let padata = vec![pa_enc_timestamp(&client_key)?];
+                    let retry =
+                        build_as_req(&req.cname, req.realm, nonce, till, Some(padata), &etypes);
+                    let wire = encode(&retry)?;
+                    let reply = exchange(req.kdc, &wire)?;
+                    match classify(&reply)? {
+                        KdcMsg::AsRep(rep) => finish_as_rep(
+                            rep,
+                            nonce,
+                            Some(client_key),
+                            req.password,
+                            &req.cname,
+                            req.realm,
+                        ),
+                        KdcMsg::Error(e) => classify_kdc_error(&e),
+                        KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
+                    }
+                }
                 KdcMsg::Error(e) => classify_kdc_error(&e),
                 KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
             }
@@ -224,6 +271,13 @@ fn finish_as_rep(
     if !enc_part.sname.is_krbtgt_for(realm) {
         return Err(Error::ReplyMismatch("AS-REP sname is not krbtgt".into()));
     }
+    let requested: Vec<i32> = EncryptionType::preferred()
+        .iter()
+        .map(|e| e.to_iana())
+        .collect();
+    if !requested.contains(&enc_part.key.keytype) && !requested.contains(&inner.enc_part.etype) {
+        return Err(Error::ReplyMismatch("AS-REP etype not in request".into()));
+    }
     let session_etype = EncryptionType::from_iana(enc_part.key.keytype)
         .or_else(|_| EncryptionType::known(enc_part.key.keytype))?;
     let session_key = ProtocolKey::from_bytes(session_etype, enc_part.key.keyvalue.as_ref())?;
@@ -289,10 +343,13 @@ fn build_as_req(
 }
 
 fn pa_enc_timestamp(key: &ProtocolKey) -> Result<PaData, Error> {
-    let now = KerberosTime::now();
+    pa_enc_timestamp_at(key, &KerberosTime::now())
+}
+
+fn pa_enc_timestamp_at(key: &ProtocolKey, now: &KerberosTime) -> Result<PaData, Error> {
     let usec = now.0.timestamp_subsec_micros() % 1_000_000;
     let ts = PaEncTsEnc {
-        patimestamp: now,
+        patimestamp: now.clone(),
         pausec: Some(krb5_types::Microseconds::from_subsec_micros(usec)),
     };
     let der = encode(&ts)?;

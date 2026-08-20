@@ -184,14 +184,9 @@ pub fn apply_strengthen(
 /// PA-SPAKE support advertisement (P-256).
 #[must_use]
 pub fn pa_spake_support() -> PaData {
-    let msg = krb5_types::spake::PaSpake {
-        support: Some(krb5_types::spake::SpakeSupport {
-            groups: vec![krb5_types::spake::GROUP_P256],
-        }),
-        challenge: None,
-        response: None,
-        enc_data: None,
-    };
+    let msg = krb5_types::spake::PaSpake::Support(krb5_types::spake::SpakeSupport {
+        groups: vec![krb5_types::spake::GROUP_P256],
+    });
     PaData {
         padata_type: pa::SPAKE,
         padata_value: encode(&msg).unwrap_or_default().into(),
@@ -216,19 +211,14 @@ pub fn pa_spake_response(
     let key = key_from_shared(etype, &shared)?;
     let usage = KeyUsage::new(ku::PA_ENC_TIMESTAMP)?;
     let factor_ct = encrypt(&key, usage, &[1u8])?;
-    let msg = krb5_types::spake::PaSpake {
-        support: None,
-        challenge: None,
-        response: Some(krb5_types::spake::SpakeResponse {
-            pubkey: pub_x.into(),
-            factor: EncryptedData {
-                etype: etype.to_iana(),
-                kvno: None,
-                cipher: factor_ct.into(),
-            },
-        }),
-        enc_data: None,
-    };
+    let msg = krb5_types::spake::PaSpake::Response(krb5_types::spake::SpakeResponse {
+        pubkey: pub_x.into(),
+        factor: EncryptedData {
+            etype: etype.to_iana(),
+            kvno: None,
+            cipher: factor_ct.into(),
+        },
+    });
     Ok((
         PaData {
             padata_type: pa::SPAKE,
@@ -247,6 +237,16 @@ pub fn pa_pk_as_req(
     client_public: &[u8],
     ca: &krb5_types::pkinit::PkinitCa,
 ) -> Result<PaData, Error> {
+    pa_pk_as_req_spki(&krb5_types::pkinit::encode_ec_spki(client_public), ca)
+}
+
+/// PA-PK-AS-REQ whose `clientPublicValue` is an already-encoded SPKI
+/// (ECDH P-256 or MODP DH).
+///
+/// # Errors
+///
+/// DER or CMS wrap failures.
+pub fn pa_pk_as_req_spki(spki: &[u8], ca: &krb5_types::pkinit::PkinitCa) -> Result<PaData, Error> {
     let pack = krb5_types::pkinit::AuthPack {
         pk_authenticator: krb5_types::pkinit::PkAuthenticator {
             cusec: Microseconds::ZERO,
@@ -254,7 +254,7 @@ pub fn pa_pk_as_req(
             nonce: 1,
             pa_checksum: None,
         },
-        client_public_value: Some(client_public.to_vec().into()),
+        client_public_value: Some(spki.to_vec().into()),
         supported_cms_types: None,
     };
     let inner = encode(&pack)?;
@@ -287,12 +287,17 @@ pub fn pkinit_reply_key(
         .and_then(|v| v.iter().find(|p| p.padata_type == pa::PK_AS_REP))
         .ok_or_else(|| Error::ReplyMismatch("missing PA-PK-AS-REP".into()))?;
     let rep: krb5_types::pkinit::PaPkAsRep = decode(raw.padata_value.as_ref())?;
-    let pub_kdc = rep
-        .dh_info
-        .as_ref()
-        .ok_or_else(|| Error::ReplyMismatch("PKINIT missing dhInfo".into()))?;
-    let kdc_pub = krb5_types::pkinit::cms_verify(pub_kdc.dh_signed_data.as_ref(), kdc_trust_anchor)
+    let pub_kdc = match &rep {
+        krb5_types::pkinit::PaPkAsRep::DhInfo(info) => info,
+        krb5_types::pkinit::PaPkAsRep::EncKeyPack(_) => {
+            return Err(Error::ReplyMismatch("PKINIT encKeyPack unsupported".into()));
+        }
+    };
+    let inner = krb5_types::pkinit::cms_verify(pub_kdc.dh_signed_data.as_ref(), kdc_trust_anchor)
         .map_err(|e| Error::ReplyMismatch(format!("PKINIT KDC CMS: {e}")))?;
+    let kdc_pub = krb5_types::pkinit::decode_kdc_dh_point(&inner)
+        .or_else(|| krb5_types::pkinit::decode_ec_spki(&inner))
+        .unwrap_or(inner);
     let shared = p256_shared(client_secret, &kdc_pub)?;
     octetstring2key(etype, &shared).map_err(Into::into)
 }

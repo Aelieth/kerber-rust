@@ -205,7 +205,7 @@ fn verify_inner(
     }
     let ap: ApReq = decode(raw)?;
     if let Some(exp) = params.expected_server {
-        if ap.ticket.sname != *exp {
+        if ap.ticket.sname.components_joined() != exp.components_joined() {
             return Err(Error::KrbError {
                 code: err::NOT_US,
                 text: Some("ticket sname does not match expected server".into()),

@@ -61,11 +61,12 @@ fn kinit_inner(
     service: Option<&str>,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
     let (cname, realm_s) = parse_principal(principal)?;
+    let resolved = resolve_kdc(&realm_s, kdc);
     let as_out = as_exchange(&AsRequest {
         cname,
         realm: &realm_s,
         password,
-        kdc,
+        kdc: &resolved,
     })?;
     let mut creds = vec![tgt_cred(
         &as_out.crealm,
@@ -79,7 +80,7 @@ fn kinit_inner(
     if let Some(svc) = service {
         let parts: Vec<&str> = svc.split('/').collect();
         let sname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, parts);
-        match tgs_exchange(kdc, &as_out, sname, &realm_s) {
+        match tgs_exchange(&resolved, &as_out, sname, &realm_s) {
             Ok(tgs) => {
                 creds.push(tgt_cred(
                     &as_out.crealm,
@@ -108,4 +109,20 @@ fn kinit_inner(
         return Err(e.into());
     }
     Ok(KinitResult { as_out, tgs_out })
+}
+
+fn resolve_kdc(realm: &str, argv: &KdcAddr) -> KdcAddr {
+    let Ok(path) = std::env::var("KRB5_CONFIG") else {
+        return argv.clone();
+    };
+    let Ok(conf) = krb5_config::Krb5Conf::load_file(path) else {
+        return argv.clone();
+    };
+    match conf.kdcs_for(realm) {
+        Ok(list) if !list.is_empty() => KdcAddr {
+            host: list[0].host.clone(),
+            port: list[0].port,
+        },
+        _ => argv.clone(),
+    }
 }
