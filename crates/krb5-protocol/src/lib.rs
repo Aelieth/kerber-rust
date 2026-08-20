@@ -23,8 +23,8 @@ mod transport;
 
 pub use ap_rep::{build_ap_rep, verify_ap_rep};
 pub use ap_req::{
-    build_ap_req, build_ap_req_opts, verify_ap_req, verify_ap_req_ex, ApVerifyOk, ApVerifyParams,
-    DEFAULT_SKEW,
+    build_ap_req, build_ap_req_opts, build_ap_req_with_cksum, verify_ap_req, verify_ap_req_ex,
+    ApVerifyOk, ApVerifyParams, DEFAULT_SKEW,
 };
 pub use as_ex::{as_exchange, AsOutcome, AsRequest};
 pub use builders::{as_req, as_req_sname, pa_enc_timestamp, tgs_req, tgs_req_ex};

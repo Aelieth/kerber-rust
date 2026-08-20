@@ -78,8 +78,6 @@ pub fn build_ap_req_opts(
     ap_options: ApOptions,
     cksum_data: Option<&[u8]>,
 ) -> Result<ApReq, Error> {
-    let now = KerberosTime::now();
-    let usec = krb5_types::Microseconds::from_subsec_micros(now.0.timestamp_subsec_micros());
     let cksum = if let Some(data) = cksum_data {
         let usage = KeyUsage::new(ku::AP_REQ_AUTH_CKSUM)?;
         let mic = checksum(session_key, usage, data)?;
@@ -90,6 +88,25 @@ pub fn build_ap_req_opts(
     } else {
         None
     };
+    build_ap_req_with_cksum(ticket, session_key, crealm, cname, ap_options, cksum, None)
+}
+
+/// Build an AP-REQ with a caller-supplied authenticator checksum (GSS 0x8003).
+///
+/// # Errors
+///
+/// Returns crypto or DER failures.
+pub fn build_ap_req_with_cksum(
+    ticket: Ticket,
+    session_key: &ProtocolKey,
+    crealm: &Realm,
+    cname: &PrincipalName,
+    ap_options: ApOptions,
+    cksum: Option<krb5_types::Checksum>,
+    subkey: Option<krb5_types::EncryptionKey>,
+) -> Result<ApReq, Error> {
+    let now = KerberosTime::now();
+    let usec = krb5_types::Microseconds::from_subsec_micros(now.0.timestamp_subsec_micros());
     let authenticator = Authenticator {
         authenticator_vno: Authenticator::VNO,
         crealm: crealm.clone(),
@@ -97,7 +114,7 @@ pub fn build_ap_req_opts(
         cksum,
         cusec: usec,
         ctime: now,
-        subkey: None,
+        subkey,
         seq_number: None,
         authorization_data: None,
     };

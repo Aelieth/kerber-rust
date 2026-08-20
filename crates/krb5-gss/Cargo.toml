@@ -8,14 +8,21 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[[bin]]
+name = "krb5-gss-accept"
+path = "src/bin/krb5-gss-accept.rs"
+
 [dependencies]
 krb5-asn1.workspace = true
 krb5-crypto.workspace = true
 krb5-log.workspace = true
 krb5-protocol.workspace = true
 krb5-types.workspace = true
+getrandom.workspace = true
+md-5.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [dev-dependencies]
 krb5-kdc.workspace = true
