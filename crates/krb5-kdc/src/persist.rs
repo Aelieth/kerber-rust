@@ -103,6 +103,7 @@ fn serialize_plain(store: &PrincipalStore) -> Vec<u8> {
             out.extend_from_slice(&k.kvno.to_be_bytes());
             put_bytes(&mut out, k.key.as_bytes());
         }
+        put_bytes(&mut out, &p.spake_w);
     }
     out
 }
@@ -133,6 +134,12 @@ fn parse_plain(plain: &[u8], _master: &ProtocolKey) -> Result<PrincipalStore, Pe
         let parts: Vec<&str> = name_s.split('/').collect();
         let name = PrincipalName::try_new(ntype, parts)
             .map_err(|e| PersistError::Format(e.to_string()))?;
+        let mut spake_w = [0u8; 32];
+        if i < plain.len() {
+            let sw = take_bytes(plain, &mut i)?;
+            let n = sw.len().min(32);
+            spake_w[..n].copy_from_slice(&sw[..n]);
+        }
         let p = Principal {
             name,
             realm: store.realm().to_owned(),
@@ -142,6 +149,7 @@ fn parse_plain(plain: &[u8], _master: &ProtocolKey) -> Result<PrincipalStore, Pe
             max_life,
             locked: false,
             pw_expire: 0,
+            spake_w,
         };
         store_insert(&mut store, p);
         let _ = S2K_ITERS;

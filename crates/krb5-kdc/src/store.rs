@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use krb5_crypto::{string_to_key, EncryptionType, ProtocolKey};
+use krb5_crypto::{spake_w, string_to_key, EncryptionType, ProtocolKey};
 use krb5_protocol::{Keytab, KeytabEntry, ReplayCache};
 use krb5_types::PrincipalName;
 
@@ -43,6 +43,8 @@ pub struct Principal {
     pub locked: bool,
     /// Password expiry unix seconds (0 = none).
     pub pw_expire: u32,
+    /// SPAKE2 `w` derived from the password (or key bytes for random-key principals).
+    pub spake_w: [u8; 32],
 }
 
 /// Realm-wide ticket policy.
@@ -58,6 +60,8 @@ pub struct Policy {
     pub allow_weak_crypto: bool,
     /// Default requires_preauth for new principals.
     pub requires_preauth: bool,
+    /// Cross-realm transited realms that are rejected (`KDC_ERR_PATH_NOT_ACCEPTED`).
+    pub transited_reject: Vec<String>,
 }
 
 impl Default for Policy {
@@ -68,6 +72,7 @@ impl Default for Policy {
             skew: 300,
             allow_weak_crypto: false,
             requires_preauth: true,
+            transited_reject: Vec::new(),
         }
     }
 }
@@ -258,8 +263,35 @@ impl PrincipalStore {
                 kvno: next_kvno,
             });
         }
+        let w = spake_w(password, &salt);
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         p.keys.extend(new_keys);
+        p.spake_w = w;
+        Ok(())
+    }
+
+    /// ACL-gated inter-realm `krbtgt/FOREIGN` (shared key with the foreign KDC).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AclDenied`] or [`Error::AlreadyExists`].
+    pub fn create_interrealm(
+        &mut self,
+        acl: &Acl,
+        actor: &str,
+        foreign_realm: &str,
+        password: &[u8],
+    ) -> Result<(), Error> {
+        acl.check(actor, AdminOp::Create)?;
+        let name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", foreign_realm]);
+        let id = format!("{}@{}", name.components_joined(), self.realm);
+        if self.map.contains_key(&id) {
+            return Err(Error::AlreadyExists);
+        }
+        self.insert_password(&name, password)?;
+        if let Some(p) = self.map.get_mut(&id) {
+            p.requires_preauth = false;
+        }
         Ok(())
     }
 
@@ -304,17 +336,25 @@ impl PrincipalStore {
     ) -> Result<Keytab, Error> {
         acl.check(actor, AdminOp::Ktadd)?;
         let p = self.get_name(name).ok_or(Error::NotFound)?;
-        let key = p.best_key().ok_or(Error::NotFound)?;
+        if p.keys.is_empty() {
+            return Err(Error::NotFound);
+        }
+        let ts = krb5_types::KerberosTime::now().unix_seconds();
+        let entries = p
+            .keys
+            .iter()
+            .map(|key| KeytabEntry {
+                realm: krb5_types::ascii(&p.realm),
+                name: p.name.clone(),
+                timestamp: ts,
+                kvno: key.kvno,
+                key: key.key.clone(),
+            })
+            .collect();
         Ok(Keytab {
             version: 0x0502,
             skipped_unknown_etype: 0,
-            entries: vec![KeytabEntry {
-                realm: krb5_types::ascii(&p.realm),
-                name: p.name.clone(),
-                timestamp: krb5_types::KerberosTime::now().unix_seconds(),
-                kvno: key.kvno,
-                key: key.key.clone(),
-            }],
+            entries,
         })
     }
 
@@ -333,6 +373,7 @@ impl PrincipalStore {
                 kvno: 1,
             });
         }
+        let w = spake_w(password, &salt);
         let p = Principal {
             name: name.clone(),
             realm: self.realm.clone(),
@@ -342,6 +383,7 @@ impl PrincipalStore {
             max_life: 0,
             locked: false,
             pw_expire: 0,
+            spake_w: w,
         };
         self.map.insert(p.id(), p);
         Ok(())
@@ -360,15 +402,21 @@ impl PrincipalStore {
                 kvno: 1,
             });
         }
+        let salt = name.default_salt(&self.realm);
+        let w = keys
+            .first()
+            .map(|k| spake_w(k.key.as_bytes(), &salt))
+            .unwrap_or_else(|| spake_w(&salt, &salt));
         let p = Principal {
             name: name.clone(),
             realm: self.realm.clone(),
             keys,
-            salt: name.default_salt(&self.realm),
+            salt,
             requires_preauth: false,
             max_life: 0,
             locked: false,
             pw_expire: 0,
+            spake_w: w,
         };
         self.map.insert(p.id(), p);
         Ok(())

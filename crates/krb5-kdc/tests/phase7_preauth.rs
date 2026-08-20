@@ -4,10 +4,12 @@
 //! points from a bootstrapped realm. They fail if those paths are type-only.
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{decrypt, p256_generate, string_to_key, EncryptionType, KeyUsage, ProtocolKey};
+use krb5_crypto::{
+    decrypt, p256_generate, spake_w, string_to_key, EncryptionType, KeyUsage, ProtocolKey,
+};
 use krb5_kdc::{
-    as_req, bootstrap_documented, decrypt_ticket_part, documented_host, pa_enc_timestamp,
-    pac_from_ticket_part, sign_pac, spake_w_from_key, tgs_req, verify_pac, Acl, AdminOp, Error,
+    as_req, bootstrap_documented, decrypt_ticket_part, documented_admin_id, documented_host,
+    pa_enc_timestamp, pac_from_ticket_part, sign_pac, tgs_req, verify_pac, Acl, AdminOp, Error,
     PrincipalStore, S2K_ITERS, TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER,
     TEST_USER_PASSWORD,
 };
@@ -188,7 +190,7 @@ fn spake_challenge_then_as_rep() {
         .expect("cookie");
     let msg: krb5_types::spake::PaSpake = decode(spa.padata_value.as_ref()).expect("PaSpake");
     let chal = msg.challenge.expect("challenge");
-    let w = spake_w_from_key(&key, &cname.default_salt(TEST_REALM));
+    let w = spake_w(TEST_USER_PASSWORD, &cname.default_salt(TEST_REALM));
     let (resp, spake_key) = pa_spake_response(&w, chal.pubkey.as_ref(), key.etype()).expect("resp");
     let req2 = as_req(
         cname,
@@ -408,4 +410,90 @@ fn s4u2self_bad_checksum_rejected() {
     let bytes = krb5_kdc::handle_request(&store, &encode(&tgs).expect("der")).expect("reply");
     let e: krb5_types::KrbError = decode(&bytes).expect("KRB-ERROR");
     assert_eq!(e.error_code, err::INAPP_CKSUM);
+}
+
+#[test]
+fn as_wrong_realm_is_chaseable() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let mut req = as_req(cname, TEST_REALM, 50, None);
+    req.0.req_body.realm = ascii("OTHER.TEST");
+    let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
+    let e: krb5_types::KrbError = decode(&bytes).expect("KRB-ERROR");
+    assert_eq!(e.error_code, err::WRONG_REALM);
+    assert_eq!(std::str::from_utf8(e.realm.as_bytes()).unwrap(), TEST_REALM);
+}
+
+#[test]
+fn tgs_referral_uses_interrealm_key_and_transited() {
+    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
+    store
+        .create_interrealm(
+            &acl,
+            &documented_admin_id(),
+            "OTHER.TEST",
+            b"interrealm-secret",
+        )
+        .expect("interrealm");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 51);
+    let other = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "OTHER.TEST"]);
+    let tgs = tgs_req(
+        tgt.rep.0.ticket.clone(),
+        &tgt.session_key,
+        TEST_REALM,
+        &cname,
+        other.clone(),
+        TEST_REALM,
+        52,
+    )
+    .expect("referral TGS-REQ");
+    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("referral");
+    assert_eq!(out.rep.0.ticket.sname, other);
+    let ir = store.get_name(&other).unwrap().best_key().unwrap();
+    let part = decrypt_ticket_part(&ir.key, &out.rep.0.ticket).expect("inter-realm enc");
+    assert!(
+        part.transited.realms().iter().any(|r| r == TEST_REALM),
+        "transited must name the issuing realm"
+    );
+}
+
+#[test]
+fn as_rep_advertises_supported_enctypes() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 53);
+    let pa = issued.rep.0.padata.as_ref().expect("padata");
+    assert!(pa.iter().any(|p| p.padata_type == pa::SUPPORTED_ENCTYPES));
+}
+
+#[test]
+fn pac_logon_info_is_ndr() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 54);
+    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
+    let part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("TGT");
+    let pac = pac_from_ticket_part(&part).expect("PAC");
+    let parsed = krb5_types::pac::Pac::parse(&pac).expect("parse");
+    let logon = parsed
+        .buffers
+        .iter()
+        .find(|b| b.kind == krb5_types::pac::PAC_LOGON_INFO)
+        .expect("logon");
+    let (c, r) = krb5_types::pac::parse_logon_info(&logon.data).expect("NDR");
+    assert_eq!(c, TEST_USER);
+    assert_eq!(r, TEST_REALM);
+}
+
+#[test]
+fn ktadd_exports_all_kvnos_after_kpasswd() {
+    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    store
+        .change_password(&acl, &documented_admin_id(), &cname, b"second-pass")
+        .expect("cpw");
+    let kt = store
+        .export_keytab(&acl, &documented_admin_id(), &cname)
+        .expect("ktadd");
+    let kvnos: Vec<u32> = kt.entries.iter().map(|e| e.kvno).collect();
+    assert!(kvnos.contains(&1) && kvnos.iter().any(|v| *v > 1));
 }

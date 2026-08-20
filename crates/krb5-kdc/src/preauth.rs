@@ -203,12 +203,7 @@ pub(crate) fn process_spake(
 }
 
 fn spake_w_from_client(client: &Principal) -> [u8; 32] {
-    // w from current AES-256 key bytes so the KDC does not store the password.
-    if let Some(k) = client.best_key() {
-        spake_w(k.key.as_bytes(), &client.salt)
-    } else {
-        spake_w(&client.salt, &client.salt)
-    }
+    client.spake_w
 }
 
 /// Client-side SPAKE `w` matching the KDC: SHA-256 of the long-term key bytes and salt.
@@ -226,16 +221,18 @@ pub(crate) fn process_pkinit(
         return Ok(None);
     };
     let req: krb5_types::pkinit::PaPkAsReq = decode(raw)?;
-    let pack: krb5_types::pkinit::AuthPack = decode(req.signed_auth_pack.as_ref())?;
+    let inner = krb5_types::pkinit::cms_unwrap(req.signed_auth_pack.as_ref());
+    let pack: krb5_types::pkinit::AuthPack = decode(&inner)?;
     let Some(client_pub) = pack.client_public_value else {
         return Err(proto(err::PREAUTH_FAILED, "PKINIT missing public"));
     };
     let kp = p256_generate()?;
     let shared = p256_shared(&kp.secret, client_pub.as_ref())?;
     let reply_key = key_from_shared(etype, &shared)?;
+    let wrapped_pub = krb5_types::pkinit::cms_wrap(&kp.public);
     let rep = krb5_types::pkinit::PaPkAsRep {
         dh_info: Some(krb5_types::pkinit::DhRepInfo {
-            dh_signed_data: kp.public.clone().into(),
+            dh_signed_data: wrapped_pub.into(),
             server_dh_nonce: None,
         }),
         enc_key_pack: None,

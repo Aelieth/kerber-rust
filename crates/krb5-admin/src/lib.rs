@@ -250,4 +250,49 @@ mod tests {
         let new_max = after.keys.iter().map(|k| k.kvno).max().unwrap();
         assert!(new_max > old_max);
     }
+
+    #[test]
+    fn kprop_replica_issues_with_same_krbtgt() {
+        let dir = std::env::temp_dir().join(format!("kprop-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let db = dir.join("principal");
+        let stash = dir.join("stash");
+        let (store, _) = bootstrap_documented().unwrap();
+        let before = store
+            .krbtgt()
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .as_bytes()
+            .to_vec();
+        propagate(&store, &db, &stash).unwrap();
+        let replica = receive_propagate(&db, &stash).unwrap();
+        let after = replica
+            .krbtgt()
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .as_bytes()
+            .to_vec();
+        assert_eq!(before, after);
+        let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+        let salt = cname.default_salt("KERBER.TEST");
+        let key = krb5_crypto::string_to_key(
+            krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
+            b"userpassword",
+            &salt,
+            Some(&krb5_kdc::S2K_ITERS.to_be_bytes()),
+        )
+        .unwrap();
+        let req = krb5_kdc::as_req(
+            cname,
+            "KERBER.TEST",
+            9,
+            Some(vec![krb5_kdc::pa_enc_timestamp(&key).unwrap()]),
+        );
+        krb5_kdc::issue_as(&replica, &req).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

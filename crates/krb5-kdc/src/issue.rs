@@ -154,6 +154,9 @@ fn tgs_reply(store: &PrincipalStore, req: &TgsReq) -> Result<Vec<u8>, Error> {
 /// Unknown client, bad preauth, or crypto/DER failures.
 pub fn issue_as(store: &PrincipalStore, req: &AsReq) -> Result<IssuedAs, Error> {
     let body = &req.0.req_body;
+    if utf8_realm(&body.realm) != store.realm() {
+        return Err(proto(err::WRONG_REALM, store.realm()));
+    }
     if body.kdc_options.unsupported_bits() != 0 {
         return Err(proto(err::BADOPTION, "unsupported KDCOptions"));
     }
@@ -179,7 +182,10 @@ pub fn issue_as(store: &PrincipalStore, req: &AsReq) -> Result<IssuedAs, Error> 
         req.0.padata.clone()
     };
 
-    let mut extra_padata: Vec<PaData> = Vec::new();
+    let mut extra_padata: Vec<PaData> = vec![PaData {
+        padata_type: pa::SUPPORTED_ENCTYPES,
+        padata_value: 0x18u32.to_le_bytes().to_vec().into(),
+    }];
     let mut as_rep_key = ckey.key.clone();
     let mut skip_timestamp = false;
     if let Some((rk, pa_pk)) = process_pkinit(&work_padata, etype)? {
@@ -240,6 +246,7 @@ pub fn issue_as(store: &PrincipalStore, req: &AsReq) -> Result<IssuedAs, Error> 
         &end,
         flags.clone(),
         authz,
+        TransitedEncoding::empty(),
     )?;
     let enc_part = enc_rep_part(
         &session,
@@ -314,19 +321,9 @@ pub fn issue_tgs(store: &PrincipalStore, req: &TgsReq) -> Result<IssuedTgs, Erro
     if !ap.ticket.sname.is_krbtgt_for(store.realm()) {
         return Err(proto(err::NO_TGT, "presented ticket is not a TGT"));
     }
-    let krbtgt = store
-        .krbtgt()
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
     let tkt_etype = EncryptionType::from_iana(ap.ticket.enc_part.etype)
         .or_else(|_| EncryptionType::known(ap.ticket.enc_part.etype))?;
-    let tgt_key = match ap.ticket.enc_part.kvno {
-        Some(v) => krbtgt.key_for_kvno(tkt_etype, v),
-        None => krbtgt.best_key(),
-    }
-    .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt key"))?;
-    let tkt_usage = KeyUsage::new(ku::TICKET)?;
-    let tkt_plain = decrypt(&tgt_key.key, tkt_usage, ap.ticket.enc_part.cipher.as_ref())?;
-    let enc_tkt: EncTicketPart = decode(&tkt_plain)?;
+    let enc_tkt = decrypt_presented_tgt(store, &ap, tkt_etype)?;
     check_ticket_times(store, &enc_tkt)?;
     let sess_etype = EncryptionType::from_iana(enc_tkt.key.keytype)
         .or_else(|_| EncryptionType::known(enc_tkt.key.keytype))?;
@@ -384,11 +381,24 @@ pub fn issue_tgs(store: &PrincipalStore, req: &TgsReq) -> Result<IssuedTgs, Erro
     } else if let Some(cn) = s4u2proxy_client(store, req, &enc_tkt.cname)? {
         ticket_cname = cn;
     }
+    if utf8_realm(&enc_tkt.crealm) != store.realm() {
+        for r in enc_tkt.transited.realms() {
+            if store.policy.transited_reject.iter().any(|d| d == &r) {
+                return Err(proto(err::PATH_NOT_ACCEPTED, &r));
+            }
+        }
+    }
     let (tkt_key, tkt_kvno, tkt_etype) = if let Some((k, kv, et)) = u2u_session(store, req)? {
         (k, kv, et)
     } else {
         (skey.key.clone(), skey.kvno, skey.etype)
     };
+    let mut transited = enc_tkt.transited.clone();
+    if (sname.is_krbtgt() && !sname.is_krbtgt_for(store.realm()))
+        || utf8_realm(&enc_tkt.crealm) != store.realm()
+    {
+        transited = transited.with_realm(store.realm());
+    }
     let session = random_key(skey.etype)?;
     let now = KerberosTime::now();
     let mut end = enc_tkt.endtime.clone();
@@ -422,6 +432,7 @@ pub fn issue_tgs(store: &PrincipalStore, req: &TgsReq) -> Result<IssuedTgs, Erro
         &end,
         flags.clone(),
         authz,
+        transited,
     )?;
     let enc_part = enc_rep_part(
         &session,
@@ -470,6 +481,46 @@ fn requested_life(store: &PrincipalStore, princ: &Principal, body: &krb5_types::
     }
 }
 
+fn decrypt_presented_tgt(
+    store: &PrincipalStore,
+    ap: &krb5_types::ApReq,
+    tkt_etype: EncryptionType,
+) -> Result<EncTicketPart, Error> {
+    let usage = KeyUsage::new(ku::TICKET)?;
+    let cipher = ap.ticket.enc_part.cipher.as_ref();
+    let kvno = ap.ticket.enc_part.kvno;
+    let mut candidates: Vec<&krb5_crypto::ProtocolKey> = Vec::new();
+    if let Some(p) = store.krbtgt() {
+        if let Some(v) = kvno {
+            if let Some(k) = p.key_for_kvno(tkt_etype, v) {
+                candidates.push(&k.key);
+            }
+        }
+        for k in &p.keys {
+            candidates.push(&k.key);
+        }
+    }
+    for p in store.debug_principals() {
+        if p.name.is_krbtgt() && !p.name.is_krbtgt_for(store.realm()) {
+            for k in &p.keys {
+                candidates.push(&k.key);
+            }
+        }
+    }
+    let mut last = proto(err::BAD_INTEGRITY, "TGT decrypt");
+    for key in candidates {
+        match decrypt(key, usage, cipher) {
+            Ok(plain) => {
+                if let Ok(part) = decode::<EncTicketPart>(&plain) {
+                    return Ok(part);
+                }
+            }
+            Err(e) => last = Error::from(e),
+        }
+    }
+    Err(last)
+}
+
 fn check_ticket_times(store: &PrincipalStore, tkt: &EncTicketPart) -> Result<(), Error> {
     let now = KerberosTime::now();
     let skew = store.policy.skew;
@@ -501,13 +552,14 @@ fn mint_ticket(
     endtime: &KerberosTime,
     flags: TicketFlags,
     authorization_data: Option<AuthorizationData>,
+    transited: TransitedEncoding,
 ) -> Result<Ticket, Error> {
     let part = EncTicketPart {
         flags,
         key: encryption_key(session),
         crealm: ascii(crealm),
         cname: cname.clone(),
-        transited: TransitedEncoding::empty(),
+        transited,
         authtime: authtime.clone(),
         starttime: Some(authtime.clone()),
         endtime: endtime.clone(),
