@@ -152,8 +152,10 @@ pub mod ku {
     pub const KRB_CRED_ENC_PART: u32 = 14;
     /// KRB-SAFE checksum.
     pub const KRB_SAFE_CKSUM: u32 = 15;
-    /// PA-FOR-USER checksum (S4U2Self).
+    /// PA-FOR-USER checksum (S4U2Self). Same number as KERB_NON_KERB_CKSUM_SALT.
     pub const PA_FOR_USER: u32 = 17;
+    /// PAC checksum key usage (MS-PAC `KERB_NON_KERB_CKSUM_SALT`).
+    pub const KERB_NON_KERB_CKSUM_SALT: u32 = 17;
     /// GSS acceptor seal (RFC 4121).
     pub const GSS_ACCEPTOR_SEAL: u32 = 22;
     /// GSS acceptor sign (RFC 4121).

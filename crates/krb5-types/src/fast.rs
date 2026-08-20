@@ -96,18 +96,20 @@ pub struct KrbFastArmoredRep {
 
 /// PA-FX-FAST ::= CHOICE { armored-data [0] KrbFastArmoredReq }
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
-pub struct PaFxFast {
+#[rasn(choice)]
+pub enum PaFxFast {
     /// Armored FAST request.
     #[rasn(tag(explicit(0)))]
-    pub armored_data: KrbFastArmoredReq,
+    ArmoredData(KrbFastArmoredReq),
 }
 
 /// PA-FX-FAST reply ::= CHOICE { armored-data [0] KrbFastArmoredRep }
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
-pub struct PaFxFastRep {
+#[rasn(choice)]
+pub enum PaFxFastRep {
     /// Armored FAST reply.
     #[rasn(tag(explicit(0)))]
-    pub armored_data: KrbFastArmoredRep,
+    ArmoredData(KrbFastArmoredRep),
 }
 
 /// Empty FAST options (32 zero bits).

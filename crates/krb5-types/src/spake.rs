@@ -4,10 +4,10 @@ use rasn::prelude::*;
 
 use crate::EncryptedData;
 
-/// SPAKE group: P-256 (encoded as 1 in this implementation).
-pub const GROUP_P256: i32 = 1;
-/// SPAKE group: edwards25519 (encoded as 2).
-pub const GROUP_EDWARDS25519: i32 = 2;
+/// SPAKE group: edwards25519 (draft-ietf-kitten-krb-spake-preauth).
+pub const GROUP_EDWARDS25519: i32 = 1;
+/// SPAKE group: P-256.
+pub const GROUP_P256: i32 = 2;
 
 /// SPAKESecondFactor ::= SEQUENCE { type, data, replacement }
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]

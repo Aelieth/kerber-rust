@@ -1037,25 +1037,37 @@ mod tests {
     #[test]
     fn pkinit_cms_wrap_unwrap() {
         let inner = b"authpack-bytes";
-        let wrapped = pkinit::cms_wrap(inner);
+        let ca = pkinit::PkinitCa::generate().expect("CA");
+        let wrapped = pkinit::cms_wrap(inner, &ca).expect("wrap");
         assert_ne!(wrapped, inner);
         assert_eq!(pkinit::cms_unwrap(&wrapped), inner);
         assert_eq!(pkinit::cms_unwrap(inner), inner);
         assert_eq!(
-            pkinit::cms_verify(&wrapped).expect("cert-backed ECDSA"),
+            pkinit::cms_verify(&wrapped, &ca.ca_cert).expect("cert-backed ECDSA"),
             inner
         );
         let mut bad = wrapped.clone();
         if let Some(b) = bad.last_mut() {
             *b ^= 0x01;
         }
-        assert!(pkinit::cms_verify(&bad).is_err());
-        let ca = pkinit::PkinitCa::generate().expect("CA");
+        assert!(pkinit::cms_verify(&bad, &ca.ca_cert).is_err());
         assert!(ca.cert_pem().contains("BEGIN CERTIFICATE"));
         let id = ca.user_identity_pem("user@KERBER.TEST").expect("user pem");
         assert!(id.contains("BEGIN CERTIFICATE"));
         assert!(id.contains("BEGIN EC PRIVATE KEY"));
         let wrapped2 = ca.sign_cms(inner, "kdc").expect("ca cms");
-        assert_eq!(pkinit::cms_verify(&wrapped2).expect("ca-backed"), inner);
+        assert_eq!(
+            pkinit::cms_verify(&wrapped2, &ca.ca_cert).expect("ca-backed"),
+            inner
+        );
+        let other = pkinit::PkinitCa::generate().expect("other CA");
+        assert!(
+            pkinit::cms_verify(&wrapped, &other.ca_cert).is_err(),
+            "forged / wrong-anchor CMS must not authenticate"
+        );
+        assert!(
+            pkinit::cms_verify(inner, &ca.ca_cert).is_err(),
+            "unwrapped plaintext is not a valid CMS"
+        );
     }
 }

@@ -300,15 +300,16 @@ fn der_take_len(b: &[u8]) -> Option<(usize, usize)> {
     None
 }
 
-/// Wrap `e_content` in CMS SignedData under the process-wide test CA.
+/// Wrap `e_content` in CMS SignedData under `ca`.
 ///
-/// The SignerInfo signature is ECDSA-SHA256 over `e_content`. MIT pkinit
-/// trusts this CA when `pkinit_anchors` points at [`PkinitCa::cert_pem`].
-#[must_use]
-pub fn cms_wrap(e_content: &[u8]) -> Vec<u8> {
-    default_ca()
-        .and_then(|ca| ca.sign_cms(e_content, "pkinit-test"))
-        .unwrap_or_else(|| e_content.to_vec())
+/// The SignerInfo signature is ECDSA-SHA256 over `e_content`. Never
+/// falls back to plaintext: a CA/signing failure is an error.
+///
+/// # Errors
+///
+/// Returns `"cms wrap"` when a leaf cannot be issued or signed.
+pub fn cms_wrap(e_content: &[u8], ca: &PkinitCa) -> Result<Vec<u8>, &'static str> {
+    ca.sign_cms(e_content, "pkinit-test").ok_or("cms wrap")
 }
 
 /// CMS SignedData with an explicit certificate and ECDSA signature.
@@ -344,7 +345,10 @@ pub fn cms_wrap_signed(e_content: &[u8], cert_der: &[u8], signature: &[u8], ski:
     tlv(0x30, &[signed_data, tlv(0xa0, &sd)].concat())
 }
 
-/// Extract eContent from [`cms_wrap`], or return `der` unchanged if it is not CMS.
+/// Extract eContent from CMS SignedData, or return `der` unchanged.
+///
+/// This does **not** authenticate the content. PKINIT must call
+/// [`cms_verify`] against a provisioned trust anchor.
 #[must_use]
 pub fn cms_unwrap(der: &[u8]) -> Vec<u8> {
     if let Ok(ci) = rasn::der::decode::<CmsContentInfo>(der) {
@@ -358,18 +362,57 @@ pub fn cms_unwrap(der: &[u8]) -> Vec<u8> {
     der.to_vec()
 }
 
-/// Verify a cert-backed CMS SignedData and return eContent.
+/// Verify CMS SignedData against `trust_anchor` (CA certificate DER).
+///
+/// The embedded leaf must be issued by the trust anchor; the SignerInfo
+/// ECDSA-SHA256 signature is then checked with the leaf public key.
+/// There is no unverified fallback.
 ///
 /// # Errors
 ///
-/// Missing certificate, missing signature, or ECDSA failure.
-pub fn cms_verify(der: &[u8]) -> Result<Vec<u8>, &'static str> {
+/// Missing CMS fields, untrusted certificate, or ECDSA failure.
+pub fn cms_verify(der: &[u8], trust_anchor: &[u8]) -> Result<Vec<u8>, &'static str> {
     let p = cms_parts(der)?;
+    if !cert_issued_by(&p.cert, trust_anchor) {
+        return Err("cms trust");
+    }
     let public = spki_uncompressed(&p.cert).ok_or("cms spki")?;
     if !p256_verify(&public, &p.e_content, &p.signature) {
         return Err("cms ecdsa");
     }
     Ok(p.e_content)
+}
+
+fn cert_tbs_sig(cert: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    let (tag, body, _) = take_tlv(cert)?;
+    if tag != 0x30 {
+        return None;
+    }
+    let (t, tbs_body, rest) = take_tlv(body)?;
+    let tbs = tlv(t, tbs_body);
+    let (_, _, rest) = take_tlv(rest)?;
+    let (t, sig_bit, _) = take_tlv(rest)?;
+    if t != 0x03 {
+        return None;
+    }
+    let sig = if sig_bit.first() == Some(&0) {
+        sig_bit.get(1..)?.to_vec()
+    } else {
+        sig_bit.to_vec()
+    };
+    Some((tbs, sig))
+}
+
+/// True when `leaf` is signed by the public key in `ca` (including a
+/// self-signed CA used as both leaf and anchor).
+fn cert_issued_by(leaf: &[u8], ca: &[u8]) -> bool {
+    let Some(ca_pub) = spki_uncompressed(ca) else {
+        return false;
+    };
+    let Some((tbs, sig)) = cert_tbs_sig(leaf) else {
+        return false;
+    };
+    p256_verify(&ca_pub, &tbs, &sig)
 }
 
 struct CmsParts {
@@ -512,11 +555,6 @@ fn pem_ec_key(secret: &[u8; 32], public: &[u8]) -> String {
     ]
     .concat();
     pem("EC PRIVATE KEY", &tlv(0x30, &body))
-}
-
-fn default_ca() -> Option<&'static PkinitCa> {
-    static CA: std::sync::OnceLock<Option<PkinitCa>> = std::sync::OnceLock::new();
-    CA.get_or_init(PkinitCa::generate).as_ref()
 }
 
 /// Test CA used as a MIT `pkinit_anchors` FILE trust anchor.
