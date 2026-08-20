@@ -385,10 +385,68 @@ fn rfc6803_camellia_cts_cmac() {
         checksum(&ck_key, KeyUsage::new(7).unwrap(), b"abcdefghijk").unwrap(),
         hex("1178e6c5c47a8c1ae0c4b9c7d4eb7b6b")
     );
-    let usage2 = KeyUsage::new(2).unwrap();
-    let pt = b"camellia-plain";
-    let ct = encrypt(&ck_key, usage2, pt).unwrap();
-    assert_eq!(decrypt(&ck_key, usage2, &ct).unwrap(), pt);
+
+    // RFC 6803 §10 sample encryptions (MIT t_decrypt.c). The empty / "1" /
+    // "9 bytesss" / … cases use key-usage 0, 1, 2, … matching the plaintext
+    // index; usage 0 is invalid on the wire (RFC 3961) but is the published
+    // empty-plaintext sample.
+    let cam128: &[(u32, &str, &[u8], &str, &str)] = &[
+        (
+            0,
+            "1dc46a8d763f4f93742bcba3387576c3",
+            b"",
+            "b69822a19a6b09c0ebc8557d1f1b6c0a",
+            "c466f1871069921edb7c6fde244a52db0ba10edc197bdb8006658ca3ccce6eb8",
+        ),
+        (
+            1,
+            "5027bc231d0f3a9d23333f1ca6fdbe7c",
+            b"1",
+            "6f2fc3c2a166fd8898967a83de9596d9",
+            "842d21fd950311c0dd464a3f4be8d6da88a56d559c9b47d3f9a85067af661559b8",
+        ),
+        (
+            2,
+            "a1bb61e805f9ba6dde8fdbddc05cdea0",
+            b"9 bytesss",
+            "a5b4a71e077aeef93c8763c18fdb1f10",
+            "619ff072e36286ff0a28deb3a352ec0d0edf5c5160d663c901758ccf9d1ed33d71db8f23aabf8348a0",
+        ),
+        (
+            3,
+            "2ca27a5faf5532244506434e1cef6676",
+            b"13 bytes byte",
+            "19fee40d810c524b5b22f01874c693da",
+            "b8eca3167ae6315512e59f98a7c500205e5f63ff3bb389af1c41a21d640d8615c9ed3fbeb05ab6acb67689b5ea",
+        ),
+    ];
+    for (usage, key_hex, pt, conf, ct) in cam128 {
+        let key =
+            ProtocolKey::from_bytes(EncryptionType::Camellia128CtsCmac, &hex(key_hex)).unwrap();
+        let u = KeyUsage::from_rfc(*usage);
+        let got = encrypt_with_confounder(&key, u, &hex(conf), pt).unwrap();
+        assert_eq!(got, hex(ct), "camellia128 usage {usage} encrypt");
+        assert_eq!(decrypt(&key, u, &got).unwrap(), *pt);
+    }
+
+    let cam256_empty = ProtocolKey::from_bytes(
+        EncryptionType::Camellia256CtsCmac,
+        &hex("b61c86cc4e5d2757545ad423399fb7031ecab913cbb900bd7a3c6dd8bf92015b"),
+    )
+    .unwrap();
+    let u0 = KeyUsage::from_rfc(0);
+    let got256 = encrypt_with_confounder(
+        &cam256_empty,
+        u0,
+        &hex("3cbbd2b45917941067f96599bb98926c"),
+        b"",
+    )
+    .unwrap();
+    assert_eq!(
+        got256,
+        hex("03886d03310b47a6d8f06d7b94d1dd837ecce315ef652aff620859d94a259266")
+    );
+    assert_eq!(decrypt(&cam256_empty, u0, &got256).unwrap(), b"");
 }
 
 /// RFC 8009 appendix A PRF, plus RFC 6113 PRF+ counter-prepend.
