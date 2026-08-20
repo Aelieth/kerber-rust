@@ -86,6 +86,16 @@ impl PrincipalName {
         Self::new(Self::NT_SRV_INST, ["krbtgt", realm])
     }
 
+    /// Name-string components joined with `/` (`user`, `host/foo`).
+    #[must_use]
+    pub fn components_joined(&self) -> String {
+        self.name_string
+            .iter()
+            .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+
     /// RFC 4120 default salt: realm concatenated with name components.
     #[must_use]
     pub fn default_salt(&self, realm: &str) -> Vec<u8> {
@@ -182,6 +192,15 @@ impl TicketFlags {
     #[must_use]
     pub fn none() -> Self {
         Self(KerberosFlags::repeat(false, 32))
+    }
+
+    /// INITIAL (bit 8) and PRE-AUTHENT (bit 9) as issued after PA-ENC-TIMESTAMP.
+    #[must_use]
+    pub fn initial_preauth() -> Self {
+        let mut bits = KerberosFlags::repeat(false, 32);
+        bits.set(8, true);
+        bits.set(9, true);
+        Self(bits)
     }
 }
 
@@ -420,6 +439,13 @@ impl KerberosTime {
     pub fn unix_seconds(&self) -> u32 {
         u32::try_from(self.0.timestamp().max(0)).unwrap_or(u32::MAX)
     }
+
+    /// Add whole hours, keeping RFC 4120 unfractional encoding.
+    #[must_use]
+    pub fn add_hours(&self, hours: i64) -> Self {
+        let dt = self.0 + chrono::Duration::hours(hours);
+        Self(dt.with_nanosecond(0).unwrap_or(dt))
+    }
 }
 
 /// RFC 4120 PA-DATA type numbers used in Stage 3.
@@ -438,10 +464,20 @@ pub mod pa {
 
 /// RFC 4120 error codes used in Stage 3.
 pub mod err {
+    /// KDC_ERR_C_PRINCIPAL_UNKNOWN
+    pub const C_PRINCIPAL_UNKNOWN: i32 = 6;
+    /// KDC_ERR_S_PRINCIPAL_UNKNOWN
+    pub const S_PRINCIPAL_UNKNOWN: i32 = 7;
     /// KDC_ERR_PREAUTH_FAILED
     pub const PREAUTH_FAILED: i32 = 24;
     /// KDC_ERR_PREAUTH_REQUIRED
     pub const PREAUTH_REQUIRED: i32 = 25;
+    /// KRB_AP_ERR_BAD_INTEGRITY
+    pub const BAD_INTEGRITY: i32 = 31;
+    /// KRB_AP_ERR_REPEAT
+    pub const REPEAT: i32 = 34;
+    /// KRB_AP_ERR_SKEW
+    pub const SKEW: i32 = 37;
     /// KRB_ERR_RESPONSE_TOO_BIG
     pub const RESPONSE_TOO_BIG: i32 = 52;
 }
@@ -450,6 +486,8 @@ pub mod err {
 pub mod ku {
     /// AS-REQ PA-ENC-TIMESTAMP.
     pub const PA_ENC_TIMESTAMP: u32 = 1;
+    /// Ticket enc-part (service long-term key).
+    pub const TICKET: u32 = 2;
     /// AS-REP encrypted part (client long-term key).
     pub const AS_REP_ENC_PART: u32 = 3;
     /// TGS-REQ authenticator checksum.
@@ -458,6 +496,10 @@ pub mod ku {
     pub const TGS_REQ_AUTHENTICATOR: u32 = 7;
     /// TGS-REP encrypted part (TGT session key).
     pub const TGS_REP_ENC_PART: u32 = 8;
+    /// AP-REQ authenticator checksum.
+    pub const AP_REQ_AUTH_CKSUM: u32 = 10;
+    /// AP-REQ authenticator.
+    pub const AP_REQ_AUTHENTICATOR: u32 = 11;
 }
 
 /// PA-ENC-TS-ENC ::= SEQUENCE { patimestamp, pausec OPTIONAL }
@@ -583,3 +625,51 @@ pub struct TgsReq(pub KdcReq);
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 #[rasn(tag(explicit(application, 13)), delegate)]
 pub struct TgsRep(pub KdcRep);
+
+/// TransitedEncoding ::= SEQUENCE { tr-type, contents }
+#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+pub struct TransitedEncoding {
+    #[rasn(tag(explicit(0)))]
+    pub tr_type: i32,
+    #[rasn(tag(explicit(1)))]
+    pub contents: OctetString,
+}
+
+impl TransitedEncoding {
+    /// Empty DOMAIN-X500-COMPRESS encoding (type 0, no realms).
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            tr_type: 0,
+            contents: OctetString::from(Vec::<u8>::new()),
+        }
+    }
+}
+
+/// EncTicketPart ::= [APPLICATION 3] SEQUENCE { flags, key, crealm, ... }
+#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+#[rasn(tag(explicit(application, 3)))]
+pub struct EncTicketPart {
+    #[rasn(tag(explicit(0)))]
+    pub flags: TicketFlags,
+    #[rasn(tag(explicit(1)))]
+    pub key: EncryptionKey,
+    #[rasn(tag(explicit(2)))]
+    pub crealm: Realm,
+    #[rasn(tag(explicit(3)))]
+    pub cname: PrincipalName,
+    #[rasn(tag(explicit(4)))]
+    pub transited: TransitedEncoding,
+    #[rasn(tag(explicit(5)))]
+    pub authtime: KerberosTime,
+    #[rasn(tag(explicit(6)))]
+    pub starttime: Option<KerberosTime>,
+    #[rasn(tag(explicit(7)))]
+    pub endtime: KerberosTime,
+    #[rasn(tag(explicit(8)))]
+    pub renew_till: Option<KerberosTime>,
+    #[rasn(tag(explicit(9)))]
+    pub caddr: Option<HostAddresses>,
+    #[rasn(tag(explicit(10)))]
+    pub authorization_data: Option<AuthorizationData>,
+}

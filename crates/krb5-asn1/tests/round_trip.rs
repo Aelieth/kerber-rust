@@ -161,6 +161,28 @@ fn round_trip_core_types() {
     assert_round_trip(&sample_enc_kdc_rep());
     assert_round_trip(&krb5_types::AsReq(sample_kdc_req()));
     assert_round_trip(&krb5_types::EncAsRepPart(sample_enc_kdc_rep()));
+    assert_round_trip(&sample_enc_ticket_part());
+    let enc_tkt = encode(&sample_enc_ticket_part()).unwrap();
+    assert_eq!(enc_tkt[0], 0x63, "EncTicketPart is APPLICATION 3");
+}
+
+fn sample_enc_ticket_part() -> krb5_types::EncTicketPart {
+    krb5_types::EncTicketPart {
+        flags: krb5_types::TicketFlags::none(),
+        key: krb5_types::EncryptionKey {
+            keytype: 18,
+            keyvalue: OctetString::from(vec![2u8; 32]),
+        },
+        crealm: realm("KERBER.TEST"),
+        cname: sample_principal(),
+        transited: krb5_types::TransitedEncoding::empty(),
+        authtime: sample_time(),
+        starttime: None,
+        endtime: sample_time(),
+        renew_till: None,
+        caddr: None,
+        authorization_data: None,
+    }
 }
 
 #[test]

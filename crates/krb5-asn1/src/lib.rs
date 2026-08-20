@@ -11,8 +11,8 @@ use rasn::{Decode, Encode};
 
 pub use krb5_types as types;
 pub use krb5_types::{
-    ApReq, AsRep, AsReq, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncryptedData, KdcRep, KdcReq,
-    KerberosTime, KrbError, PrincipalName, Realm, TgsRep, TgsReq, Ticket,
+    ApReq, AsRep, AsReq, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, EncryptedData,
+    KdcRep, KdcReq, KerberosTime, KrbError, PrincipalName, Realm, TgsRep, TgsReq, Ticket,
 };
 
 /// Codec failure. Malformed and truncated input both surface here.

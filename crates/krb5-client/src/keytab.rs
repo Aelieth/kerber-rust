@@ -9,6 +9,7 @@ use krb5_crypto::ProtocolKey;
 use krb5_types::{PrincipalName, Realm};
 
 /// One keytab entry.
+#[derive(Debug)]
 pub struct KeytabEntry {
     /// Realm.
     pub realm: Realm,
@@ -23,6 +24,7 @@ pub struct KeytabEntry {
 }
 
 /// Version 0x0502 keytab.
+#[derive(Debug)]
 pub struct Keytab {
     /// Entries in file order.
     pub entries: Vec<KeytabEntry>,

@@ -48,6 +48,12 @@ pub mod events {
     pub const PROTOCOL_TGS: &str = "protocol.tgs";
     /// KDC returned KRB-ERROR.
     pub const PROTOCOL_KRB_ERROR: &str = "protocol.krb_error";
+    /// KDC handled an AS or TGS request.
+    pub const KDC_ISSUE: &str = "kdc.issue";
+    /// Admin ACL decision.
+    pub const KDC_ACL: &str = "kdc.acl";
+    /// AP-REQ verified or rejected.
+    pub const PROTOCOL_AP: &str = "protocol.ap";
 }
 
 /// Tracing field name for the correlation ID.
