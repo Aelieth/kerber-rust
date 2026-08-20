@@ -49,6 +49,8 @@ RUN mkdir -p /var/lib/krb5kdc /etc/krb5kdc /var/kerberos/krb5kdc
 COPY harness/krb5.conf /etc/krb5.conf
 COPY harness/kdc.conf /etc/krb5kdc/kdc.conf
 COPY harness/kadm5.acl /var/kerberos/krb5kdc/kadm5.acl
+# SHA-2-only client profile used by scripts/sha2-gate.sh (etype 20 only).
+COPY harness/krb5-sha2.conf /etc/krb5-sha2.conf
 COPY harness/entrypoint.sh /usr/local/bin/harness-entrypoint.sh
 RUN chmod +x /usr/local/bin/harness-entrypoint.sh
 
