@@ -4,6 +4,7 @@ use aes::{
     cipher::{generic_array::GenericArray, BlockDecrypt, BlockEncrypt, KeyInit},
     Aes128, Aes256,
 };
+use camellia::{Camellia128, Camellia256};
 
 use crate::error::Error;
 
@@ -35,6 +36,65 @@ pub(crate) fn encrypt_block(key: &[u8], block: &[u8; BLOCK]) -> Result<[u8; BLOC
         }
         32 => {
             let cipher = Aes256::new(GenericArray::from_slice(key));
+            cipher.encrypt_block(GenericArray::from_mut_slice(&mut out));
+        }
+        _ => return Err(Error::InvalidKeyLength),
+    }
+    Ok(out)
+}
+
+pub(crate) fn camellia_encrypt(
+    key: &[u8],
+    iv: &[u8; BLOCK],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, Error> {
+    match key.len() {
+        16 => encrypt_with(
+            Camellia128::new(GenericArray::from_slice(key)),
+            iv,
+            plaintext,
+        ),
+        32 => encrypt_with(
+            Camellia256::new(GenericArray::from_slice(key)),
+            iv,
+            plaintext,
+        ),
+        _ => Err(Error::InvalidKeyLength),
+    }
+}
+
+pub(crate) fn camellia_decrypt(
+    key: &[u8],
+    iv: &[u8; BLOCK],
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, Error> {
+    match key.len() {
+        16 => decrypt_with(
+            Camellia128::new(GenericArray::from_slice(key)),
+            iv,
+            ciphertext,
+        ),
+        32 => decrypt_with(
+            Camellia256::new(GenericArray::from_slice(key)),
+            iv,
+            ciphertext,
+        ),
+        _ => Err(Error::InvalidKeyLength),
+    }
+}
+
+pub(crate) fn camellia_encrypt_block(
+    key: &[u8],
+    block: &[u8; BLOCK],
+) -> Result<[u8; BLOCK], Error> {
+    let mut out = *block;
+    match key.len() {
+        16 => {
+            let cipher = Camellia128::new(GenericArray::from_slice(key));
+            cipher.encrypt_block(GenericArray::from_mut_slice(&mut out));
+        }
+        32 => {
+            let cipher = Camellia256::new(GenericArray::from_slice(key));
             cipher.encrypt_block(GenericArray::from_mut_slice(&mut out));
         }
         _ => return Err(Error::InvalidKeyLength),

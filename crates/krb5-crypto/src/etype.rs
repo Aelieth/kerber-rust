@@ -19,6 +19,12 @@ impl KeyUsage {
         Ok(Self(n))
     }
 
+    /// Compile-time RFC usage constant. `n` must be non-zero.
+    #[must_use]
+    pub const fn from_rfc(n: u32) -> Self {
+        Self(n)
+    }
+
     /// Numeric usage value.
     #[must_use]
     pub const fn get(self) -> u32 {
@@ -174,10 +180,10 @@ impl EncryptionType {
     #[must_use]
     pub const fn preferred() -> [Self; 4] {
         [
-            Self::Aes256CtsHmacSha384192,
-            Self::Aes128CtsHmacSha256128,
             Self::Aes256CtsHmacSha196,
             Self::Aes128CtsHmacSha196,
+            Self::Aes256CtsHmacSha384192,
+            Self::Aes128CtsHmacSha256128,
         ]
     }
 

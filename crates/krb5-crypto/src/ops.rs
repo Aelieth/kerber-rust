@@ -108,6 +108,19 @@ fn string_to_key_inner(
     } else if etype == EncryptionType::Rc4Hmac {
         tkey.zeroize();
         crate::weak::rc4_string_to_key(password)
+    } else if etype == EncryptionType::Des3CbcSha1 {
+        tkey.zeroize();
+        crate::weak::des3_string_to_key(password, salt)
+    } else if matches!(
+        etype,
+        EncryptionType::Camellia128CtsCmac | EncryptionType::Camellia256CtsCmac
+    ) {
+        pbkdf2_hmac::<Sha1>(password, salt, iter, &mut tkey);
+        let mut base = crate::weak::dk_camellia(&tkey, b"kerberos")?;
+        tkey.zeroize();
+        let key = ProtocolKey::from_bytes(etype, &base);
+        base.zeroize();
+        key
     } else {
         pbkdf2_hmac::<Sha1>(password, salt, iter, &mut tkey);
         let mut base = derive::dk_rfc3961(&tkey, b"kerberos")?;

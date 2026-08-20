@@ -1,6 +1,7 @@
 //! RFC 6113 KRB-FX-CF2 and P-256 ECDH used by FAST, SPAKE, and PKINIT.
 
-use sha2::{Digest, Sha256};
+use sha1::{Digest as Sha1Digest, Sha1};
+use sha2::{Digest as Sha2Digest, Sha256};
 use zeroize::Zeroize;
 
 use crate::error::Error;
@@ -40,9 +41,9 @@ pub fn key_from_shared(etype: EncryptionType, bytes: &[u8]) -> Result<ProtocolKe
     if bytes.len() >= n {
         return ProtocolKey::from_bytes(etype, &bytes[..n]);
     }
-    let mut h = Sha256::new();
-    h.update(bytes);
-    let out = h.finalize();
+    let mut h = <Sha256 as Sha2Digest>::new();
+    Sha2Digest::update(&mut h, bytes);
+    let out = Sha2Digest::finalize(h);
     let mut buf = vec![0u8; n];
     for (i, b) in buf.iter_mut().enumerate() {
         *b = out[i % out.len()];
@@ -153,11 +154,11 @@ fn scalar_from_bytes32(b: &[u8; 32]) -> Result<p256::Scalar, Error> {
 /// SPAKE2-P256: password scalar `w`.
 #[must_use]
 pub fn spake_w(password: &[u8], salt: &[u8]) -> [u8; 32] {
-    let mut h = Sha256::new();
-    h.update(b"SPAKE2-P256-w");
-    h.update(password);
-    h.update(salt);
-    let out = h.finalize();
+    let mut h = <Sha256 as Sha2Digest>::new();
+    Sha2Digest::update(&mut h, b"SPAKE2-P256-w");
+    Sha2Digest::update(&mut h, password);
+    Sha2Digest::update(&mut h, salt);
+    let out = Sha2Digest::finalize(h);
     let mut w = [0u8; 32];
     w.copy_from_slice(&out);
     w[0] &= 0x7f;
@@ -165,6 +166,8 @@ pub fn spake_w(password: &[u8], salt: &[u8]) -> [u8; 32] {
 }
 
 /// SPAKE2 public share: `secret*G + w*M` (client) or `+ w*N` (server).
+///
+/// M and N are the draft-ietf-kitten-krb-spake-preauth P-256 seeds.
 ///
 /// # Errors
 ///
@@ -174,11 +177,7 @@ pub fn spake_public(w: &[u8; 32], secret: &[u8; 32], server: bool) -> Result<Vec
     use p256::{AffinePoint, ProjectivePoint};
     let ws = scalar_from_bytes32(w)?;
     let xs = scalar_from_bytes32(secret)?;
-    let mn = if server {
-        hash_to_point(b"SPAKE2-P256-N")
-    } else {
-        hash_to_point(b"SPAKE2-P256-M")
-    };
+    let mn = if server { spake_n()? } else { spake_m()? };
     let p = ProjectivePoint::GENERATOR * xs + mn * ws;
     Ok(AffinePoint::from(p)
         .to_encoded_point(false)
@@ -207,9 +206,9 @@ pub fn spake_finish(
     let peer = Option::<AffinePoint>::from(AffinePoint::from_encoded_point(&ep))
         .ok_or(Error::Integrity)?;
     let mn = if we_are_server {
-        hash_to_point(b"SPAKE2-P256-M")
+        spake_m()?
     } else {
-        hash_to_point(b"SPAKE2-P256-N")
+        spake_n()?
     };
     let adjusted = ProjectivePoint::from(peer) - mn * ws;
     let shared = adjusted * xs;
@@ -223,27 +222,57 @@ pub fn spake_finish(
     Ok(x)
 }
 
-fn hash_to_point(label: &[u8]) -> p256::ProjectivePoint {
+/// Compressed P-256 M from draft-ietf-kitten-krb-spake-preauth.
+const SPAKE_M: [u8; 33] = [
+    0x02, 0x88, 0x6e, 0x2f, 0x97, 0xac, 0xe4, 0x6e, 0x55, 0xba, 0x9d, 0xd7, 0x24, 0x25, 0x79, 0xf2,
+    0x99, 0x3b, 0x64, 0xe1, 0x6e, 0xf3, 0xdc, 0xab, 0x95, 0xaf, 0xd4, 0x97, 0x33, 0x3d, 0x8f, 0xa1,
+    0x2f,
+];
+/// Compressed P-256 N from draft-ietf-kitten-krb-spake-preauth.
+const SPAKE_N: [u8; 33] = [
+    0x03, 0xd8, 0xbb, 0xd6, 0xc6, 0x39, 0xc6, 0x29, 0x37, 0xb0, 0x4d, 0x99, 0x7f, 0x38, 0xc3, 0x77,
+    0x07, 0x19, 0xc6, 0x29, 0xd7, 0x01, 0x4d, 0x49, 0xa2, 0x4b, 0x4f, 0x98, 0xba, 0xa1, 0x29, 0x2b,
+    0x49,
+];
+
+fn spake_m() -> Result<p256::ProjectivePoint, Error> {
+    decode_compressed(&SPAKE_M)
+}
+
+fn spake_n() -> Result<p256::ProjectivePoint, Error> {
+    decode_compressed(&SPAKE_N)
+}
+
+fn decode_compressed(bytes: &[u8; 33]) -> Result<p256::ProjectivePoint, Error> {
     use p256::elliptic_curve::sec1::FromEncodedPoint;
     use p256::{AffinePoint, EncodedPoint, ProjectivePoint};
-    for ctr in 0u8..=255 {
-        let mut h = Sha256::new();
-        h.update(label);
-        h.update([ctr]);
-        let x = h.finalize();
-        for tag in [0x02u8, 0x03] {
-            let mut buf = [0u8; 33];
-            buf[0] = tag;
-            buf[1..].copy_from_slice(&x);
-            if let Ok(ep) = EncodedPoint::from_bytes(buf) {
-                if let Some(aff) = Option::<AffinePoint>::from(AffinePoint::from_encoded_point(&ep))
-                {
-                    return ProjectivePoint::from(aff);
-                }
-            }
+    let ep = EncodedPoint::from_bytes(bytes).map_err(|_| Error::Integrity)?;
+    let aff = Option::<AffinePoint>::from(AffinePoint::from_encoded_point(&ep))
+        .ok_or(Error::Integrity)?;
+    Ok(ProjectivePoint::from(aff))
+}
+
+/// RFC 4556 `octetstring2key`: K-truncate of concatenated SHA-1(n || x).
+///
+/// # Errors
+///
+/// Key-length failures.
+pub fn octetstring2key(etype: EncryptionType, x: &[u8]) -> Result<ProtocolKey, Error> {
+    let n = etype.key_len();
+    let mut buf = Vec::with_capacity(n + 20);
+    let mut i = 0u8;
+    while buf.len() < n {
+        let mut h = <Sha1 as Sha1Digest>::new();
+        Sha1Digest::update(&mut h, [i]);
+        Sha1Digest::update(&mut h, x);
+        buf.extend_from_slice(&Sha1Digest::finalize(h));
+        i = i.saturating_add(1);
+        if i == 0 {
+            break;
         }
     }
-    ProjectivePoint::GENERATOR
+    buf.truncate(n);
+    ProtocolKey::from_bytes(etype, &buf)
 }
 
 #[cfg(test)]
@@ -284,6 +313,21 @@ mod tests {
         let k1 = key_from_shared(et, &c).unwrap();
         let k2 = key_from_shared(et, &s).unwrap();
         assert_eq!(k1.as_bytes(), k2.as_bytes());
+    }
+
+    #[test]
+    fn camellia_cts_cmac_round_trips() {
+        let key = crate::ops::string_to_key(
+            EncryptionType::Camellia256CtsCmac,
+            b"password",
+            b"SALT",
+            None,
+        )
+        .unwrap();
+        let usage = crate::etype::KeyUsage::new(2).unwrap();
+        let c = crate::ops::encrypt(&key, usage, b"camellia-plain").unwrap();
+        let p = crate::ops::decrypt(&key, usage, &c).unwrap();
+        assert_eq!(p, b"camellia-plain");
     }
 
     #[test]

@@ -1,7 +1,6 @@
-//! RFC 3961 §5.3 PRF and RFC 4402 PRF+.
+//! RFC 3961 §5.3 PRF and RFC 6113 PRF+.
 
 use sha1::{Digest, Sha1};
-use sha2::{Sha256, Sha384};
 use zeroize::Zeroize;
 
 use crate::cts::{self, BLOCK};
@@ -31,7 +30,10 @@ pub fn prf(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
     }
 }
 
-/// RFC 4402 PRF+: concatenate `PRF(K, S | i)` until `len` octets.
+/// RFC 6113 PRF+: concatenate `PRF(K, i || S)` until `len` octets.
+///
+/// The counter is a single octet **prepended** to the seed (RFC 6113 §5.1,
+/// not RFC 4402's append).
 ///
 /// # Errors
 ///
@@ -43,9 +45,9 @@ pub fn prf_plus(key: &ProtocolKey, seed: &[u8], len: usize) -> Result<Vec<u8>, E
     let mut out = Vec::with_capacity(len);
     let mut i = 1u8;
     while out.len() < len {
-        let mut input = Vec::with_capacity(seed.len() + 1);
-        input.extend_from_slice(seed);
+        let mut input = Vec::with_capacity(1 + seed.len());
         input.push(i);
+        input.extend_from_slice(seed);
         let block = prf(key, &input)?;
         input.zeroize();
         let need = (len - out.len()).min(block.len());
@@ -65,35 +67,73 @@ fn prf_aes_sha1(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
     let mut hasher = Sha1::new();
     hasher.update(input);
     let tmp1 = hasher.finalize();
-    let mut dk = dk_rfc3961(key.as_bytes(), b"prf")?;
-    let out = if key.etype().key_len() == 24 {
-        let mut padded = tmp1.to_vec();
-        while padded.len() % 8 != 0 {
-            padded.push(0);
-        }
-        let iv8 = [0u8; 8];
-        crate::weak::des3_cbc_encrypt(&dk, iv8, &padded)
+    // RFC 3961 §5.3 / MIT `prf_dk.c`: truncate the hash to the closest
+    // multiple of the cipher block size, then encrypt.
+    let out = if key.etype() == EncryptionType::Des3CbcSha1 {
+        let mut dk = crate::weak::dk_des3(key.as_bytes(), b"prf")?;
+        let trunc = (tmp1.len() / 8) * 8;
+        let c = crate::weak::des3_cbc_encrypt(&dk, [0u8; 8], &tmp1[..trunc])?;
+        dk.zeroize();
+        Ok(c)
     } else {
-        let iv = [0u8; BLOCK];
-        cts::encrypt(&dk, &iv, &tmp1)
+        let mut dk = dk_rfc3961(key.as_bytes(), b"prf")?;
+        let trunc = (tmp1.len() / BLOCK) * BLOCK;
+        let mut block = [0u8; BLOCK];
+        block.copy_from_slice(&tmp1[..trunc]);
+        let enc = cts::encrypt_block(&dk, &block)?;
+        dk.zeroize();
+        Ok(enc.to_vec())
     };
-    dk.zeroize();
     out
 }
 
 fn prf_rfc8009(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
-    let (hash_out, k_bits) = match key.etype() {
-        EncryptionType::Aes128CtsHmacSha256128 => {
-            let mut h = Sha256::new();
-            h.update(input);
-            (h.finalize().to_vec(), 128u32)
-        }
-        EncryptionType::Aes256CtsHmacSha384192 => {
-            let mut h = Sha384::new();
-            h.update(input);
-            (h.finalize().to_vec(), 192u32)
-        }
+    // RFC 8009 §5: PRF = KDF-HMAC-SHA2(key, "prf", octet-string, k)
+    // with k = 256 (aes128-sha2) or 384 (aes256-sha2). The octet-string
+    // is the KDF context; it is not pre-hashed.
+    let k_bits = match key.etype() {
+        EncryptionType::Aes128CtsHmacSha256128 => 256u32,
+        EncryptionType::Aes256CtsHmacSha384192 => 384u32,
         _ => return Err(Error::UnsupportedEtype(key.etype().to_iana())),
     };
-    kdf_hmac_sha2(key.etype(), key.as_bytes(), b"prf", Some(&hash_out), k_bits)
+    kdf_hmac_sha2(key.etype(), key.as_bytes(), b"prf", Some(input), k_bits)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::key::ProtocolKey;
+
+    #[test]
+    fn aes_sha1_prf_is_one_block() {
+        let key =
+            ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x11u8; 32]).unwrap();
+        let out = prf(&key, b"seed").unwrap();
+        assert_eq!(out.len(), 16, "AES-SHA1 PRF truncates to the AES block");
+    }
+
+    #[test]
+    fn rfc8009_prf_is_full_hash() {
+        let k128 =
+            ProtocolKey::from_bytes(EncryptionType::Aes128CtsHmacSha256128, &[0x22u8; 16]).unwrap();
+        assert_eq!(prf(&k128, b"x").unwrap().len(), 32);
+        let k256 =
+            ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha384192, &[0x33u8; 32]).unwrap();
+        assert_eq!(prf(&k256, b"x").unwrap().len(), 48);
+    }
+
+    #[test]
+    fn prf_plus_prepends_counter() {
+        let key =
+            ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x44u8; 32]).unwrap();
+        let mut seed1 = vec![1u8];
+        seed1.extend_from_slice(b"pepper");
+        let first = prf(&key, &seed1).unwrap();
+        let plus = prf_plus(&key, b"pepper", first.len()).unwrap();
+        assert_eq!(plus, first);
+        let mut appended = b"pepper".to_vec();
+        appended.push(1);
+        let wrong = prf(&key, &appended).unwrap();
+        assert_ne!(plus, wrong, "counter must be prepended, not appended");
+    }
 }

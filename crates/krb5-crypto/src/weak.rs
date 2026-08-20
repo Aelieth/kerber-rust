@@ -37,7 +37,7 @@ pub(crate) fn rc4_encrypt_with_conf(
     if confounder.len() != 8 {
         return Err(Error::InvalidConfounder);
     }
-    let mut kusage = hmac_md5(key.as_bytes(), &usage.get().to_le_bytes())?;
+    let mut kusage = hmac_md5(key.as_bytes(), &rc4_usage(usage).to_le_bytes())?;
     let mut data = Vec::with_capacity(8 + plaintext.len());
     data.extend_from_slice(confounder);
     data.extend_from_slice(plaintext);
@@ -61,7 +61,7 @@ pub(crate) fn rc4_decrypt(
         return Err(Error::CiphertextTooShort);
     }
     let (checksum, ed) = ciphertext.split_at(16);
-    let mut kusage = hmac_md5(key.as_bytes(), &usage.get().to_le_bytes())?;
+    let mut kusage = hmac_md5(key.as_bytes(), &rc4_usage(usage).to_le_bytes())?;
     let mut kcrypt = hmac_md5(&kusage, checksum)?;
     let mut data = ed.to_vec();
     apply_rc4(&kcrypt, &mut data)?;
@@ -82,6 +82,15 @@ fn hmac_md5(key: &[u8], data: &[u8]) -> Result<Vec<u8>, Error> {
     let mut mac = <Hmac<Md5> as Mac>::new_from_slice(key).map_err(|_| Error::InvalidKeyLength)?;
     mac.update(data);
     Ok(mac.finalize().into_bytes().to_vec())
+}
+
+/// RFC 4757 usage translation (MIT `map_arcfour_gss`).
+fn rc4_usage(usage: KeyUsage) -> u32 {
+    match usage.get() {
+        3 | 9 => 8,
+        23 => 13,
+        n => n,
+    }
 }
 
 fn apply_rc4(key: &[u8], data: &mut [u8]) -> Result<(), Error> {
@@ -194,23 +203,66 @@ fn hmac_sha1_trunc(key: &[u8], data: &[u8], n: usize) -> Result<Vec<u8>, Error> 
     Ok(v)
 }
 
-/// Camellia-CTS-CMAC: AES-CTS-shaped encrypt using Camellia and HMAC-SHA1 MIC.
-/// RFC 6803 uses CMAC for KDF; this path is a compatible-enough profile for
-/// known-but-refused tests and local `allow_weak_crypto` interop with itself.
+/// RFC 3961 §6.3 3DES string-to-key: n-fold(password||salt, 24) + odd parity + DK.
+pub(crate) fn des3_string_to_key(password: &[u8], salt: &[u8]) -> Result<ProtocolKey, Error> {
+    let mut seed = Vec::with_capacity(password.len() + salt.len());
+    seed.extend_from_slice(password);
+    seed.extend_from_slice(salt);
+    if seed.is_empty() {
+        seed.push(0);
+    }
+    let mut raw = crate::nfold::nfold(&seed, 24)?;
+    for chunk in raw.chunks_mut(8) {
+        odd_parity(chunk);
+    }
+    let dk = dk_des3(&raw, b"kerberos")?;
+    raw.zeroize();
+    ProtocolKey::from_bytes(EncryptionType::Des3CbcSha1, &dk)
+}
+
+fn odd_parity(block: &mut [u8]) {
+    for b in block {
+        let mut x = *b & 0xfe;
+        if x.count_ones() % 2 == 0 {
+            x |= 1;
+        }
+        *b = x;
+    }
+}
+
+/// RFC 3961 DR/DK for 3DES (8-byte blocks).
+pub(crate) fn dk_des3(key: &[u8], constant: &[u8]) -> Result<Vec<u8>, Error> {
+    let folded = crate::nfold::nfold(constant, DES_BLOCK)?;
+    let mut block = [0u8; DES_BLOCK];
+    block.copy_from_slice(&folded);
+    let mut out = Vec::with_capacity(24);
+    while out.len() < 24 {
+        let c = des3_cbc_encrypt(key, [0u8; DES_BLOCK], &block)?;
+        if c.len() != DES_BLOCK {
+            return Err(Error::InvalidKeyLength);
+        }
+        block.copy_from_slice(&c);
+        out.extend_from_slice(&c);
+    }
+    out.truncate(24);
+    Ok(out)
+}
+
+/// RFC 6803 Camellia-CTS-CMAC (simplified profile with Camellia + CMAC).
 pub(crate) fn camellia_encrypt(
     key: &ProtocolKey,
     usage: KeyUsage,
     plaintext: &[u8],
 ) -> Result<Vec<u8>, Error> {
-    let ke = crate::derive::dk_rfc3961(key.as_bytes(), &usage.derivation_constant(0xAA))?;
-    let ki = crate::derive::dk_rfc3961(key.as_bytes(), &usage.derivation_constant(0x55))?;
+    let ke = dk_camellia(key.as_bytes(), &usage.derivation_constant(0xAA))?;
+    let ki = dk_camellia(key.as_bytes(), &usage.derivation_constant(0x55))?;
     let mut conf = [0u8; 16];
     getrandom::getrandom(&mut conf).map_err(|_| Error::Rng)?;
     let mut data = Vec::with_capacity(16 + plaintext.len());
     data.extend_from_slice(&conf);
     data.extend_from_slice(plaintext);
-    let c = crate::cts::encrypt(&ke, &[0u8; 16], &data)?;
-    let h = hmac_sha1_trunc(&ki, &data, 16)?;
+    let c = crate::cts::camellia_encrypt(&ke, &[0u8; 16], &data)?;
+    let h = cmac_camellia(&ki, &data)?;
     let mut out = c;
     out.extend_from_slice(&h);
     Ok(out)
@@ -225,13 +277,51 @@ pub(crate) fn camellia_decrypt(
         return Err(Error::CiphertextTooShort);
     }
     let (c, mac) = ciphertext.split_at(ciphertext.len() - 16);
-    let ke = crate::derive::dk_rfc3961(key.as_bytes(), &usage.derivation_constant(0xAA))?;
-    let ki = crate::derive::dk_rfc3961(key.as_bytes(), &usage.derivation_constant(0x55))?;
-    let p = crate::cts::decrypt(&ke, &[0u8; 16], c)?;
-    let expected = hmac_sha1_trunc(&ki, &p, 16)?;
+    let ke = dk_camellia(key.as_bytes(), &usage.derivation_constant(0xAA))?;
+    let ki = dk_camellia(key.as_bytes(), &usage.derivation_constant(0x55))?;
+    let p = crate::cts::camellia_decrypt(&ke, &[0u8; 16], c)?;
+    let expected = cmac_camellia(&ki, &p)?;
     crate::derive::mac_verify(mac, &expected)?;
     if p.len() < 16 {
         return Err(Error::CiphertextTooShort);
     }
     Ok(p[16..].to_vec())
+}
+
+pub(crate) fn dk_camellia(key: &[u8], constant: &[u8]) -> Result<Vec<u8>, Error> {
+    let k = key.len();
+    let folded = if constant.len() == 16 {
+        constant.to_vec()
+    } else {
+        crate::nfold::nfold(constant, 16)?
+    };
+    let mut block = [0u8; 16];
+    block.copy_from_slice(&folded);
+    let mut out = Vec::with_capacity(k);
+    while out.len() < k {
+        block = crate::cts::camellia_encrypt_block(key, &block)?;
+        let need = (k - out.len()).min(16);
+        out.extend_from_slice(&block[..need]);
+    }
+    Ok(out)
+}
+
+fn cmac_camellia(key: &[u8], data: &[u8]) -> Result<Vec<u8>, Error> {
+    use camellia::{Camellia128, Camellia256};
+    use cmac::{Cmac, Mac};
+    match key.len() {
+        16 => {
+            let mut mac = <Cmac<Camellia128> as Mac>::new_from_slice(key)
+                .map_err(|_| Error::InvalidKeyLength)?;
+            mac.update(data);
+            Ok(mac.finalize().into_bytes().to_vec())
+        }
+        32 => {
+            let mut mac = <Cmac<Camellia256> as Mac>::new_from_slice(key)
+                .map_err(|_| Error::InvalidKeyLength)?;
+            mac.update(data);
+            Ok(mac.finalize().into_bytes().to_vec())
+        }
+        _ => Err(Error::InvalidKeyLength),
+    }
 }
