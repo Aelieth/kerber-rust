@@ -1,0 +1,26 @@
+[package]
+name = "krb5-client"
+description = "Minimal Kerberos V5 client: kinit, FILE ccache, keytab"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "krb5-kinit"
+path = "src/bin/krb5-kinit.rs"
+
+[dependencies]
+krb5-asn1.workspace = true
+krb5-crypto.workspace = true
+krb5-log.workspace = true
+krb5-protocol.workspace = true
+krb5-types.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+zeroize.workspace = true
+
+[lints]
+workspace = true

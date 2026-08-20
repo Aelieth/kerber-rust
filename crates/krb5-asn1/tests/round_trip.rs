@@ -90,6 +90,34 @@ fn sample_ap_req() -> ApReq {
     }
 }
 
+fn sample_pa_enc_ts() -> krb5_types::PaEncTsEnc {
+    krb5_types::PaEncTsEnc {
+        patimestamp: sample_time(),
+        pausec: Some(123_456),
+    }
+}
+
+fn sample_enc_kdc_rep() -> krb5_types::EncKdcRepPart {
+    krb5_types::EncKdcRepPart {
+        key: krb5_types::EncryptionKey {
+            keytype: 18,
+            keyvalue: OctetString::from(vec![1u8; 32]),
+        },
+        last_req: vec![],
+        nonce: 7,
+        key_expiration: None,
+        flags: krb5_types::TicketFlags::none(),
+        authtime: sample_time(),
+        starttime: None,
+        endtime: sample_time(),
+        renew_till: None,
+        srealm: realm("KERBER.TEST"),
+        sname: PrincipalName::krbtgt("KERBER.TEST"),
+        caddr: None,
+        encrypted_pa_data: None,
+    }
+}
+
 fn sample_krb_error() -> KrbError {
     KrbError {
         pvno: KrbError::PVNO,
@@ -129,6 +157,10 @@ fn round_trip_core_types() {
     assert_round_trip(&sample_kdc_rep());
     assert_round_trip(&sample_ap_req());
     assert_round_trip(&sample_krb_error());
+    assert_round_trip(&sample_pa_enc_ts());
+    assert_round_trip(&sample_enc_kdc_rep());
+    assert_round_trip(&krb5_types::AsReq(sample_kdc_req()));
+    assert_round_trip(&krb5_types::EncAsRepPart(sample_enc_kdc_rep()));
 }
 
 #[test]

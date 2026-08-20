@@ -8,7 +8,7 @@ logs. Unit tests alone do not promote a stage.
 | --- | --- | --- |
 | 1 | Foundation, inventory, MIT 1.22.2 harness, logging schema | **In tree** |
 | 2 | Crypto primitives + ASN.1/DER core, KATs, parser negative tests | **In tree** (etypes 17–20, RFC 4120 core PDUs) |
-| 3 | Protocol library + minimal client (AS/TGS), ccache/keytab, first live MIT production gate | Not started |
+| 3 | Protocol library + minimal client (AS/TGS), ccache/keytab, first live MIT production gate | **In tree** (`krb5-protocol`, `krb5-client`; gate: `scripts/client-gate.sh`) |
 | 4 | Higher-level client, GSS-API/SPNEGO (RFC 4121) | Not started |
 | 5 | KDC core (AS+TGS) + database backend, bidirectional interop | Not started |
 | 6 | Admin tools, plugins, propagation, remaining parity | Not started |

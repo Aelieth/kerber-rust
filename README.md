@@ -5,9 +5,9 @@ wire compatibility with [MIT Kerberos](https://web.mit.edu/kerberos/)
 **1.22.2**, Heimdal, and Active Directory. There is no C FFI in this
 tree.
 
-This is an early-stage project. Stage 1–2 (workspace, crypto, ASN.1, MIT
-reference harness) is in place. A full client, GSS-API, and KDC are
-later stages; see [docs/stages.md](docs/stages.md).
+This is an early-stage project. Stages 1–3 (workspace, crypto, ASN.1,
+MIT harness, AS/TGS client + FILE ccache) are in tree. GSS-API and a
+Rust KDC are later; see [docs/stages.md](docs/stages.md).
 
 **License:** [Apache-2.0](LICENSE-APACHE) OR [MIT](LICENSE-MIT), at your
 option. Cryptographic software may be subject to export-control rules in
@@ -23,6 +23,8 @@ Focused crates under `crates/`:
 | `krb5-crypto` | RFC 3961/3962/8009 etypes 17–20 |
 | `krb5-types` | RFC 4120 owned protocol values |
 | `krb5-asn1` | DER encode/decode of those values |
+| `krb5-protocol` | AS/TGS over UDP (TCP fallback) |
+| `krb5-client` | `kinit`, MIT FILE ccache v4, keytab v2 |
 
 See [docs/architecture.md](docs/architecture.md) and
 [docs/rfc-mapping.md](docs/rfc-mapping.md).
@@ -35,9 +37,11 @@ See [docs/architecture.md](docs/architecture.md) and
 - DER round-trip for `PrincipalName`, `Realm`, `EncryptedData`, `Ticket`,
   `KDC-REQ`, `KDC-REP`, `AP-REQ`, `KRB-ERROR`. Truncated/malformed input
   returns an error (no panic).
-- Containerized MIT Kerberos **1.22.2** KDC harness for later interop.
+- Containerized MIT Kerberos **1.22.2** KDC harness.
+- Pure-Rust `kinit` (AS + TGS) writes a FILE ccache that MIT 1.22.2
+  `klist` can read. Gate: `scripts/client-gate.sh`.
 
-Not yet: AS/TGS client, ccache/keytab, GSS-API, KDC server.
+Not yet: GSS-API/SPNEGO, KDC server, Heimdal/AD interop.
 
 ## Build and test
 
@@ -59,6 +63,7 @@ and runs `kinit` for `user@KERBER.TEST`.
 
 ```bash
 ./scripts/run-harness.sh
+./scripts/client-gate.sh    # Rust kinit + MIT klist of the ccache
 ./scripts/stop-harness.sh
 ```
 

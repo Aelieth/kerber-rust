@@ -28,9 +28,15 @@ Active Directory / SSPI are later stages.
 
 ## Production-gate
 
-Not yet applicable to a Rust client. The harness itself is the Stage 1
-gate: start twice, port 88 reachable, `kinit` obtains a TGT, structured
-logs include `correlation_id`.
+Stage 1: harness starts twice, port 88 reachable, MIT `kinit` obtains a
+TGT, structured logs include `correlation_id`.
+
+Stage 3: `scripts/client-gate.sh` copies the Rust `krb5-kinit` binary
+into the MIT 1.22.2 container (same network namespace as the KDC),
+obtains a TGT and a `host/testhost.kerber.test` service ticket, and
+runs MIT `klist` on the FILE ccache. Host Docker UDP/TCP publish to
+port 88 is unreliable; the gate therefore talks to `127.0.0.1:88`
+*inside* the container.
 
 ## MIT 1.22.2 harness
 
@@ -38,8 +44,8 @@ logs include `correlation_id`.
 | --- | --- |
 | Realm | `KERBER.TEST` |
 | KDC ports | UDP/TCP 88 |
-| Principal | `user@KERBER.TEST` |
-| Password | `userpassword` |
+| Principal | `user@KERBER.TEST` / password `userpassword` |
+| Service | `host/testhost.kerber.test` (randkey) |
 | Image | `harness/Dockerfile`, `KRB5_VERSION=1.22.2` |
 
 ```bash

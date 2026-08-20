@@ -5,6 +5,8 @@ members = [
     "crates/krb5-crypto",
     "crates/krb5-types",
     "crates/krb5-asn1",
+    "crates/krb5-protocol",
+    "crates/krb5-client",
     "examples/consumer",
 ]
 
@@ -23,8 +25,10 @@ krb5-log = { path = "crates/krb5-log" }
 krb5-crypto = { path = "crates/krb5-crypto" }
 krb5-types = { path = "crates/krb5-types" }
 krb5-asn1 = { path = "crates/krb5-asn1" }
+krb5-protocol = { path = "crates/krb5-protocol" }
+krb5-client = { path = "crates/krb5-client" }
 aes = "0.8"
-chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+chrono = { version = "0.4", default-features = false, features = ["alloc", "clock", "std"] }
 cipher = "0.4"
 getrandom = "0.2"
 hmac = "0.12"

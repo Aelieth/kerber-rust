@@ -42,6 +42,12 @@ pub mod events {
     pub const HARNESS_KDC_READY: &str = "harness.kdc.ready";
     /// In-harness `kinit` finished.
     pub const HARNESS_KINIT: &str = "harness.kinit";
+    /// AS-REQ sent or AS-REP processed.
+    pub const PROTOCOL_AS: &str = "protocol.as";
+    /// TGS-REQ sent or TGS-REP processed.
+    pub const PROTOCOL_TGS: &str = "protocol.tgs";
+    /// KDC returned KRB-ERROR.
+    pub const PROTOCOL_KRB_ERROR: &str = "protocol.krb_error";
 }
 
 /// Tracing field name for the correlation ID.

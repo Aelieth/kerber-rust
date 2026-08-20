@@ -8,9 +8,9 @@ examples/consumer
         │
         ├──────────────► krb5-asn1 ──► krb5-types
         │                     │
-        └──────────────► krb5-crypto ──► krb5-log
-                              │
-                              └────────► krb5-log
+        ├──────────────► krb5-client ──► krb5-protocol ──► krb5-crypto
+        │                      │                │
+        └──────────────► krb5-crypto            └──► krb5-asn1
 ```
 
 ## Crate responsibilities
@@ -31,9 +31,11 @@ it does not catch codec errors.
 **`krb5-asn1`** is the DER boundary: `encode` / `decode` return
 `Result`, never panic, and emit log events for success and failure.
 
-Later crates (`krb5-protocol`, `krb5-client`, `krb5-gss`, `krb5-kdc`,
-`krb5-admin`) are intentionally absent until the layers they need are
-stable.
+**`krb5-protocol`** runs AS and TGS over UDP with TCP fallback.
+**`krb5-client`** is `kinit`, MIT FILE ccache v4, and keytab v2.
+
+Later crates (`krb5-gss`, `krb5-kdc`, `krb5-admin`) wait until these
+layers are stable.
 
 ## Security invariants
 

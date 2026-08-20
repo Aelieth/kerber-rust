@@ -17,3 +17,6 @@ this project uses semantic versioning once a crate is published.
 - DER encode/decode for RFC 4120 `PrincipalName`, `Realm`,
   `EncryptedData`, `Ticket`, `KDC-REQ`, `KDC-REP`, `AP-REQ`, `KRB-ERROR`.
 - Containerized MIT Kerberos 1.22.2 KDC harness and launch scripts.
+- Stage 3: `krb5-protocol` AS/TGS over UDP/TCP and `krb5-client` kinit
+  writing MIT FILE ccache v4 plus keytab v2. Live gate:
+  `scripts/client-gate.sh` (Rust TGT + service ticket; MIT `klist`).

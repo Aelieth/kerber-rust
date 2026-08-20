@@ -100,6 +100,28 @@ impl EncryptionType {
         }
     }
 
+    /// Associated keyed checksum type (RFC 3962 / RFC 8009).
+    #[must_use]
+    pub const fn checksum_type(self) -> i32 {
+        match self {
+            Self::Aes128CtsHmacSha196 => 15,
+            Self::Aes256CtsHmacSha196 => 16,
+            Self::Aes128CtsHmacSha256128 => 19,
+            Self::Aes256CtsHmacSha384192 => 20,
+        }
+    }
+
+    /// Preference order for AS/TGS etype lists (strongest first).
+    #[must_use]
+    pub const fn preferred() -> [Self; 4] {
+        [
+            Self::Aes256CtsHmacSha384192,
+            Self::Aes128CtsHmacSha256128,
+            Self::Aes256CtsHmacSha196,
+            Self::Aes128CtsHmacSha196,
+        ]
+    }
+
     /// Whether this etype uses the RFC 8009 profile (HMAC over IV||ciphertext)
     /// rather than the RFC 3961 simplified profile.
     #[must_use]
