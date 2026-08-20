@@ -4,6 +4,8 @@
 //!
 //! Password is read from `KRB5_PASSWORD` or stdin. Never from argv.
 
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 use krb5_client::kinit;
 use krb5_config::env_password;
 use krb5_protocol::KdcAddr;
