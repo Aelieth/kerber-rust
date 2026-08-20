@@ -1041,5 +1041,14 @@ mod tests {
         assert_ne!(wrapped, inner);
         assert_eq!(pkinit::cms_unwrap(&wrapped), inner);
         assert_eq!(pkinit::cms_unwrap(inner), inner);
+        assert_eq!(
+            pkinit::cms_verify(&wrapped).expect("cert-backed ECDSA"),
+            inner
+        );
+        let mut bad = wrapped.clone();
+        if let Some(b) = bad.last_mut() {
+            *b ^= 0x01;
+        }
+        assert!(pkinit::cms_verify(&bad).is_err());
     }
 }

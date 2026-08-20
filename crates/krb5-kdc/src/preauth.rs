@@ -228,7 +228,8 @@ pub(crate) fn process_pkinit(
         return Ok(None);
     };
     let req: krb5_types::pkinit::PaPkAsReq = decode(raw)?;
-    let inner = krb5_types::pkinit::cms_unwrap(req.signed_auth_pack.as_ref());
+    let inner = krb5_types::pkinit::cms_verify(req.signed_auth_pack.as_ref())
+        .unwrap_or_else(|_| krb5_types::pkinit::cms_unwrap(req.signed_auth_pack.as_ref()));
     let pack: krb5_types::pkinit::AuthPack = decode(&inner)?;
     let Some(client_pub) = pack.client_public_value else {
         return Err(proto(err::PREAUTH_FAILED, "PKINIT missing public"));

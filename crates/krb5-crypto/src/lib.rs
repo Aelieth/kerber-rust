@@ -30,8 +30,8 @@ pub(crate) mod weak;
 pub(crate) mod cts;
 
 pub use cf2::{
-    key_from_shared, krb_fx_cf2, p256_generate, p256_shared, spake_finish, spake_public, spake_w,
-    P256Keypair,
+    key_from_shared, krb_fx_cf2, p256_ecdsa_sign, p256_ecdsa_verify, p256_generate, p256_shared,
+    spake_finish, spake_public, spake_w, P256Keypair,
 };
 pub use derive::{derive_keys, DerivedKeys};
 pub use error::Error;

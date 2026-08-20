@@ -10,6 +10,8 @@ publish.workspace = true
 
 [dependencies]
 chrono.workspace = true
+getrandom.workspace = true
+p256.workspace = true
 rasn.workspace = true
 sha2.workspace = true
 subtle.workspace = true

@@ -102,6 +102,32 @@ pub fn p256_shared(secret: &[u8; 32], peer_public: &[u8]) -> Result<[u8; 32], Er
     Ok(x)
 }
 
+/// ECDSA-SHA256 over `message` with a P-256 secret. Signature is DER `SEQUENCE { r, s }`.
+///
+/// # Errors
+///
+/// Invalid scalar or signing failure.
+pub fn p256_ecdsa_sign(secret: &[u8; 32], message: &[u8]) -> Result<Vec<u8>, Error> {
+    use p256::ecdsa::signature::Signer;
+    use p256::ecdsa::{Signature, SigningKey};
+    let sk = SigningKey::from_bytes(secret.into()).map_err(|_| Error::Integrity)?;
+    let sig: Signature = sk.sign(message);
+    Ok(sig.to_der().as_bytes().to_vec())
+}
+
+/// Verify ECDSA-SHA256 (`message` is hashed with SHA-256 by the verifier).
+///
+/// # Errors
+///
+/// Invalid public key, signature, or verify failure.
+pub fn p256_ecdsa_verify(public: &[u8], message: &[u8], der_sig: &[u8]) -> Result<(), Error> {
+    use p256::ecdsa::signature::Verifier;
+    use p256::ecdsa::{Signature, VerifyingKey};
+    let vk = VerifyingKey::from_sec1_bytes(public).map_err(|_| Error::Integrity)?;
+    let sig = Signature::from_der(der_sig).map_err(|_| Error::Integrity)?;
+    vk.verify(message, &sig).map_err(|_| Error::Integrity)
+}
+
 fn random_scalar() -> Result<p256::Scalar, Error> {
     let mut b = [0u8; 32];
     for _ in 0..16 {
@@ -233,6 +259,15 @@ mod tests {
         let ab = p256_shared(&a.secret, &b.public).unwrap();
         let ba = p256_shared(&b.secret, &a.public).unwrap();
         assert_eq!(ab, ba);
+    }
+
+    #[test]
+    fn p256_ecdsa_sign_verify() {
+        let kp = p256_generate().unwrap();
+        let msg = b"pkinit-authpack";
+        let sig = p256_ecdsa_sign(&kp.secret, msg).unwrap();
+        p256_ecdsa_verify(&kp.public, msg, &sig).unwrap();
+        assert!(p256_ecdsa_verify(&kp.public, b"other", &sig).is_err());
     }
 
     #[test]
