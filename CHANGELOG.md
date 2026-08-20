@@ -20,7 +20,9 @@ this project uses semantic versioning once a crate is published.
 - `krb5-config` (`krb5.conf`/`kdc.conf`/env/SRV), ccache reader,
   keytab v1/merge, AP-REP / KRB-SAFE / PRIV / CRED, PRF/PRF+,
   `krb5-gss` wrap/unwrap/MIC, `krb5-admin` ACL-enforced kadmind
-  equivalent, persist+stash, FAST/SPAKE/PKINIT types, PAC parse,
+  equivalent, persist+stash, kpasswd (kvno bump + multi-kvno),
+  FAST armor/cookie/strengthen, SPAKE2-P256, PKINIT ECDH P-256,
+  PAC sign/verify on issued tickets, S4U2Self/S4U2Proxy/U2U,
   weak etypes behind `allow_weak_crypto`.
 
 ### Fixed

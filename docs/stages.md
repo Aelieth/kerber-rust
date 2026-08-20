@@ -11,8 +11,8 @@ logs. Unit tests alone do not promote a stage.
 | 3 | Protocol library + minimal client (AS/TGS), ccache/keytab, first live MIT production gate | **In tree** (`krb5-protocol`, `krb5-client`; gate: `scripts/client-gate.sh`) |
 | 4 | Higher-level client, GSS-API/SPNEGO (RFC 4121) | **In tree** (`krb5-gss` wrap/unwrap/MIC, SPNEGO framing; MIT GSS is out-of-process) |
 | 5 | KDC core (AS+TGS) + database backend, bidirectional interop | **In tree** (in-memory + optional persist/stash; ACL; AP-REQ; gates: `kdc-gate.sh`, `bidirectional-gate.sh`). Not a full MIT KDB. |
-| 6 | Admin tools, plugins, propagation, remaining parity | **In tree** (`krb5-admin` ACL-enforced session, ktadd, kprop-equivalent dump/load). Not MIT RPC ABI. |
-| 7–8 | Hardening, stress, chaos, adversarial, observability, final gates | Partial (DER-strictness, listener negatives, bounded stress, `cargo audit`; long soak is not in this tree) |
+| 6 | Admin tools, plugins, propagation, remaining parity | **In tree** (`krb5-admin` ACL-enforced session, ktadd, kpasswd with kvno rotation, kprop-equivalent dump/load). Not MIT RPC ABI. |
+| 7–8 | Hardening, stress, chaos, adversarial, observability, final gates | **In tree** at library depth: FAST/SPAKE/PKINIT/PAC/S4U/U2U with in-crate tests; DER-strictness, listener negatives, bounded stress, `cargo audit`. Long soak and live Heimdal/AD/SSPI are environment fallbacks. |
 
 Stage 2 production-gate of a *Rust client* is Stage 3. This repository
 currently gates crypto/ASN.1 on known-answer tests, malformed-input
