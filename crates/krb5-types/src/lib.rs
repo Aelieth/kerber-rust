@@ -1050,5 +1050,12 @@ mod tests {
             *b ^= 0x01;
         }
         assert!(pkinit::cms_verify(&bad).is_err());
+        let ca = pkinit::PkinitCa::generate().expect("CA");
+        assert!(ca.cert_pem().contains("BEGIN CERTIFICATE"));
+        let id = ca.user_identity_pem("user@KERBER.TEST").expect("user pem");
+        assert!(id.contains("BEGIN CERTIFICATE"));
+        assert!(id.contains("BEGIN EC PRIVATE KEY"));
+        let wrapped2 = ca.sign_cms(inner, "kdc").expect("ca cms");
+        assert_eq!(pkinit::cms_verify(&wrapped2).expect("ca-backed"), inner);
     }
 }

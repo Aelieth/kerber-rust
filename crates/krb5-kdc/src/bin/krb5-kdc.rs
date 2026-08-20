@@ -23,6 +23,19 @@ fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let test_realm = args.iter().any(|a| a == "--test-realm");
     args.retain(|a| a != "--test-realm");
+    let mut export_pkinit: Option<String> = None;
+    let mut i = 0usize;
+    while i < args.len() {
+        if args[i] == "--export-pkinit" {
+            export_pkinit = args.get(i + 1).cloned();
+            args.remove(i);
+            if i < args.len() {
+                args.remove(i);
+            }
+            continue;
+        }
+        i += 1;
+    }
 
     let store = if test_realm {
         bootstrap_documented()
@@ -40,6 +53,17 @@ fn main() {
         eprintln!("krb5-kdc: pass --test-realm or set KRB5_KDC_DB and KRB5_KDC_STASH");
         std::process::exit(2);
     };
+    if let Some(dir) = export_pkinit.as_ref() {
+        let _ = std::fs::create_dir_all(dir);
+        if let Some(pem) = store.pkinit_anchor_pem() {
+            let _ = std::fs::write(format!("{dir}/ca.pem"), pem);
+            println!("pkinit-ca {dir}/ca.pem");
+        }
+        if let Some(pem) = store.pkinit_user_pem("user@KERBER.TEST") {
+            let _ = std::fs::write(format!("{dir}/user.pem"), pem);
+            println!("pkinit-user {dir}/user.pem");
+        }
+    }
     let store = Arc::new(store);
 
     let pinned: Option<String> = args

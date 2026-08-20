@@ -188,7 +188,7 @@ pub fn issue_as(store: &PrincipalStore, req: &AsReq) -> Result<IssuedAs, Error> 
     }];
     let mut as_rep_key = ckey.key.clone();
     let mut skip_timestamp = false;
-    if let Some((rk, pa_pk)) = process_pkinit(work_padata.as_deref(), etype)? {
+    if let Some((rk, pa_pk)) = process_pkinit(store, work_padata.as_deref(), etype)? {
         as_rep_key = rk;
         extra_padata.push(pa_pk);
         skip_timestamp = true;

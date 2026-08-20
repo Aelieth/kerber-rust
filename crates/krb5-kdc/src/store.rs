@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use krb5_crypto::{spake_w, string_to_key, EncryptionType, ProtocolKey};
 use krb5_protocol::{Keytab, KeytabEntry, ReplayCache};
+use krb5_types::pkinit::PkinitCa;
 use krb5_types::PrincipalName;
 
 use crate::acl::{Acl, AdminOp};
@@ -123,6 +124,8 @@ pub struct PrincipalStore {
     pub tgs_replay: ReplayCache,
     /// PA-ENC-TIMESTAMP replay cache.
     pub pa_replay: ReplayCache,
+    /// PKINIT test CA (`pkinit_anchors` FILE).
+    pub pkinit_ca: Option<PkinitCa>,
 }
 
 impl PrincipalStore {
@@ -135,6 +138,7 @@ impl PrincipalStore {
             policy: Policy::default(),
             tgs_replay: ReplayCache::with_limits(50_000, Duration::from_secs(300)),
             pa_replay: ReplayCache::with_limits(50_000, Duration::from_secs(300)),
+            pkinit_ca: PkinitCa::generate(),
         }
     }
 
@@ -184,6 +188,20 @@ impl PrincipalStore {
     pub fn get_name(&self, name: &PrincipalName) -> Option<&Principal> {
         self.map
             .get(&format!("{}@{}", name.components_joined(), self.realm))
+    }
+
+    /// PEM of the PKINIT test CA for MIT `pkinit_anchors = FILE:`.
+    #[must_use]
+    pub fn pkinit_anchor_pem(&self) -> Option<String> {
+        self.pkinit_ca.as_ref().map(PkinitCa::cert_pem)
+    }
+
+    /// User identity PEM (cert+key) for MIT `X509_user_identity=FILE:`.
+    #[must_use]
+    pub fn pkinit_user_pem(&self, cn: &str) -> Option<String> {
+        self.pkinit_ca
+            .as_ref()
+            .and_then(|c| c.user_identity_pem(cn))
     }
 
     /// `krbtgt/REALM@REALM`.

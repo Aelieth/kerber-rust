@@ -221,6 +221,7 @@ pub fn spake_w_from_key(key: &ProtocolKey, salt: &[u8]) -> [u8; 32] {
 
 /// PKINIT: ECDH reply key from PA-PK-AS-REQ.
 pub(crate) fn process_pkinit(
+    store: &PrincipalStore,
     padata: Option<&[PaData]>,
     etype: EncryptionType,
 ) -> Result<Option<(ProtocolKey, PaData)>, Error> {
@@ -237,7 +238,11 @@ pub(crate) fn process_pkinit(
     let kp = p256_generate()?;
     let shared = p256_shared(&kp.secret, client_pub.as_ref())?;
     let reply_key = key_from_shared(etype, &shared)?;
-    let wrapped_pub = krb5_types::pkinit::cms_wrap(&kp.public);
+    let wrapped_pub = store
+        .pkinit_ca
+        .as_ref()
+        .and_then(|ca| ca.sign_cms(&kp.public, "krbtgt"))
+        .unwrap_or_else(|| krb5_types::pkinit::cms_wrap(&kp.public));
     let rep = krb5_types::pkinit::PaPkAsRep {
         dh_info: Some(krb5_types::pkinit::DhRepInfo {
             dh_signed_data: wrapped_pub.into(),

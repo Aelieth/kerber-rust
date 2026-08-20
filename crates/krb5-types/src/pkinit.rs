@@ -211,48 +211,60 @@ fn generate_p256() -> Option<([u8; 32], Vec<u8>)> {
     None
 }
 
-/// Minimal X.509 v3 self-signed P-256 certificate (test CA).
-fn self_signed_p256_cert(cn: &str, secret: &[u8; 32], public: &[u8]) -> Option<Vec<u8>> {
+fn directory_name(cn: &str) -> Vec<u8> {
     let cn_atv = tlv(
         0x30,
         &[oid_der(&[0x55, 0x04, 0x03]), tlv(0x0c, cn.as_bytes())].concat(),
     );
-    let name = tlv(0x30, &tlv(0x31, &cn_atv));
+    tlv(0x30, &tlv(0x31, &cn_atv))
+}
+
+fn p256_cert(
+    serial: u8,
+    issuer_cn: &str,
+    subject_cn: &str,
+    subject_public: &[u8],
+    signer_secret: &[u8; 32],
+) -> Option<Vec<u8>> {
+    let issuer = directory_name(issuer_cn);
+    let subject = directory_name(subject_cn);
     let alg_id = tlv(
         0x30,
-        &[
-            oid_der(&[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02]), // ecdsa-with-SHA256
-        ]
-        .concat(),
+        &oid_der(&[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02]),
     );
     let spki_alg = tlv(
         0x30,
         &[
-            oid_der(&[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01]), // id-ecPublicKey
-            oid_der(&[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07]), // secp256r1
+            oid_der(&[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01]),
+            oid_der(&[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07]),
         ]
         .concat(),
     );
     let mut bit = vec![0u8];
-    bit.extend_from_slice(public);
+    bit.extend_from_slice(subject_public);
     let spki = tlv(0x30, &[spki_alg, tlv(0x03, &bit)].concat());
     let validity = tlv(
         0x30,
         &[tlv(0x17, b"250101000000Z"), tlv(0x17, b"360101000000Z")].concat(),
     );
     let mut tbs_body = Vec::new();
-    tbs_body.extend(tlv(0xa0, &tlv(0x02, &[0x02]))); // version v3
-    tbs_body.extend(tlv(0x02, &[0x01])); // serial 1
+    tbs_body.extend(tlv(0xa0, &tlv(0x02, &[0x02])));
+    tbs_body.extend(tlv(0x02, &[serial]));
     tbs_body.extend_from_slice(&alg_id);
-    tbs_body.extend_from_slice(&name);
+    tbs_body.extend_from_slice(&issuer);
     tbs_body.extend_from_slice(&validity);
-    tbs_body.extend_from_slice(&name);
+    tbs_body.extend_from_slice(&subject);
     tbs_body.extend_from_slice(&spki);
     let tbs = tlv(0x30, &tbs_body);
-    let sig = p256_sign(secret, &tbs)?;
+    let sig = p256_sign(signer_secret, &tbs)?;
     let mut sig_bit = vec![0u8];
     sig_bit.extend_from_slice(&sig);
     Some(tlv(0x30, &[tbs, alg_id, tlv(0x03, &sig_bit)].concat()))
+}
+
+/// Minimal X.509 v3 self-signed P-256 certificate (test CA).
+fn self_signed_p256_cert(cn: &str, secret: &[u8; 32], public: &[u8]) -> Option<Vec<u8>> {
+    p256_cert(1, cn, cn, public, secret)
 }
 
 fn spki_uncompressed(cert: &[u8]) -> Option<Vec<u8>> {
@@ -288,22 +300,15 @@ fn der_take_len(b: &[u8]) -> Option<(usize, usize)> {
     None
 }
 
-/// Wrap `e_content` in CMS SignedData with a self-signed P-256 certificate.
+/// Wrap `e_content` in CMS SignedData under the process-wide test CA.
 ///
 /// The SignerInfo signature is ECDSA-SHA256 over `e_content`. MIT pkinit
-/// still needs a configured trust anchor to accept the test CA.
+/// trusts this CA when `pkinit_anchors` points at [`PkinitCa::cert_pem`].
 #[must_use]
 pub fn cms_wrap(e_content: &[u8]) -> Vec<u8> {
-    let Some((secret, public)) = generate_p256() else {
-        return e_content.to_vec();
-    };
-    let Some(cert) = self_signed_p256_cert("pkinit-test", &secret, &public) else {
-        return e_content.to_vec();
-    };
-    let Some(signature) = p256_sign(&secret, e_content) else {
-        return e_content.to_vec();
-    };
-    cms_wrap_signed(e_content, &cert, &signature, &sha256_bytes(&public))
+    default_ca()
+        .and_then(|ca| ca.sign_cms(e_content, "pkinit-test"))
+        .unwrap_or_else(|| e_content.to_vec())
 }
 
 /// CMS SignedData with an explicit certificate and ECDSA signature.
@@ -430,6 +435,9 @@ fn cms_parts(der: &[u8]) -> Result<CmsParts, &'static str> {
     s = take_tlv(s).ok_or("sver")?.2;
     s = take_tlv(s).ok_or("sid")?.2;
     s = take_tlv(s).ok_or("dalg")?.2;
+    if s.first() == Some(&0xa0) {
+        s = take_tlv(s).ok_or("sattr")?.2;
+    }
     s = take_tlv(s).ok_or("salg")?.2;
     let (t, sig, _) = take_tlv(s).ok_or("sig")?;
     if t != 0x04 {
@@ -449,4 +457,132 @@ fn take_tlv(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
     let body = input.get(start..start + ln)?;
     let rest = input.get(start + ln..)?;
     Some((tag, body, rest))
+}
+
+fn pem(kind: &str, der: &[u8]) -> String {
+    let b = base64(der);
+    let mut out = format!("-----BEGIN {kind}-----\n");
+    for chunk in b.as_bytes().chunks(64) {
+        out.push_str(std::str::from_utf8(chunk).unwrap_or(""));
+        out.push('\n');
+    }
+    out.push_str("-----END ");
+    out.push_str(kind);
+    out.push_str("-----\n");
+    out
+}
+
+fn base64(data: &[u8]) -> String {
+    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    let mut i = 0usize;
+    while i < data.len() {
+        let b0 = data[i];
+        let b1 = data.get(i + 1).copied();
+        let b2 = data.get(i + 2).copied();
+        out.push(T[(b0 >> 2) as usize] as char);
+        out.push(T[(((b0 & 0x03) << 4) | (b1.unwrap_or(0) >> 4)) as usize] as char);
+        if b1.is_none() {
+            out.push('=');
+            out.push('=');
+        } else {
+            out.push(
+                T[(((b1.unwrap_or(0) & 0x0f) << 2) | (b2.unwrap_or(0) >> 6)) as usize] as char,
+            );
+            if b2.is_none() {
+                out.push('=');
+            } else {
+                out.push(T[(b2.unwrap_or(0) & 0x3f) as usize] as char);
+            }
+        }
+        i += 3;
+    }
+    out
+}
+
+fn pem_ec_key(secret: &[u8; 32], public: &[u8]) -> String {
+    let oid = oid_der(&[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07]);
+    let mut bit = vec![0u8];
+    bit.extend_from_slice(public);
+    let body = [
+        tlv(0x02, &[0x01]),
+        tlv(0x04, secret),
+        tlv(0xa0, &oid),
+        tlv(0xa1, &tlv(0x03, &bit)),
+    ]
+    .concat();
+    pem("EC PRIVATE KEY", &tlv(0x30, &body))
+}
+
+fn default_ca() -> Option<&'static PkinitCa> {
+    static CA: std::sync::OnceLock<Option<PkinitCa>> = std::sync::OnceLock::new();
+    CA.get_or_init(PkinitCa::generate).as_ref()
+}
+
+/// Test CA used as a MIT `pkinit_anchors` FILE trust anchor.
+#[derive(Clone, Debug)]
+pub struct PkinitCa {
+    /// CA private scalar.
+    pub ca_secret: [u8; 32],
+    /// CA certificate (DER).
+    pub ca_cert: Vec<u8>,
+    /// Uncompressed P-256 public key.
+    pub ca_public: Vec<u8>,
+}
+
+impl PkinitCa {
+    /// Generate a self-signed P-256 test CA.
+    #[must_use]
+    pub fn generate() -> Option<Self> {
+        let (ca_secret, ca_public) = generate_p256()?;
+        let ca_cert = self_signed_p256_cert("Kerber Test CA", &ca_secret, &ca_public)?;
+        Some(Self {
+            ca_secret,
+            ca_cert,
+            ca_public,
+        })
+    }
+
+    /// PEM of the CA certificate (`pkinit_anchors = FILE:`).
+    #[must_use]
+    pub fn cert_pem(&self) -> String {
+        pem("CERTIFICATE", &self.ca_cert)
+    }
+
+    /// Issue a leaf certificate signed by this CA.
+    #[must_use]
+    pub fn issue_leaf(
+        &self,
+        cn: &str,
+        _leaf_secret: &[u8; 32],
+        leaf_public: &[u8],
+    ) -> Option<Vec<u8>> {
+        p256_cert(2, "Kerber Test CA", cn, leaf_public, &self.ca_secret)
+    }
+
+    /// CMS-sign `e_content` with a fresh leaf under this CA.
+    #[must_use]
+    pub fn sign_cms(&self, e_content: &[u8], leaf_cn: &str) -> Option<Vec<u8>> {
+        let (ls, lp) = generate_p256()?;
+        let leaf = self.issue_leaf(leaf_cn, &ls, &lp)?;
+        let signature = p256_sign(&ls, e_content)?;
+        Some(cms_wrap_signed(
+            e_content,
+            &leaf,
+            &signature,
+            &sha256_bytes(&lp),
+        ))
+    }
+
+    /// User identity PEM (certificate + EC key) for MIT `X509_user_identity=FILE:`.
+    #[must_use]
+    pub fn user_identity_pem(&self, cn: &str) -> Option<String> {
+        let (s, p) = generate_p256()?;
+        let cert = self.issue_leaf(cn, &s, &p)?;
+        Some(format!(
+            "{}{}",
+            pem("CERTIFICATE", &cert),
+            pem_ec_key(&s, &p)
+        ))
+    }
 }
