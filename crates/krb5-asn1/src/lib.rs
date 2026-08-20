@@ -4,6 +4,7 @@
 //! malformed encodings return [`Error`]; they never panic.
 
 #![forbid(unsafe_code)]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use std::time::Instant;
 
@@ -64,7 +65,7 @@ pub fn round_trip<T: Encode + Decode>(value: &T) -> Result<T, Error> {
 }
 
 fn encode_named<T: Encode>(value: &T, pdu: &str) -> Result<Vec<u8>, Error> {
-    let correlation_id = krb5_log::new_correlation_id();
+    let correlation_id = krb5_log::current_correlation_id();
     let started = Instant::now();
     match rasn::der::encode(value) {
         Ok(bytes) => {
@@ -94,7 +95,7 @@ fn encode_named<T: Encode>(value: &T, pdu: &str) -> Result<Vec<u8>, Error> {
 }
 
 fn decode_named<T: Decode>(bytes: &[u8], pdu: &str) -> Result<T, Error> {
-    let correlation_id = krb5_log::new_correlation_id();
+    let correlation_id = krb5_log::current_correlation_id();
     let started = Instant::now();
     match rasn::der::decode(bytes) {
         Ok(v) => {

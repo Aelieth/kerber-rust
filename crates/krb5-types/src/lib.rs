@@ -9,22 +9,61 @@
 //! presence).
 
 #![forbid(unsafe_code)]
-#![allow(missing_docs)]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use chrono::{FixedOffset, NaiveDateTime, TimeZone, Timelike, Utc};
 use rasn::prelude::*;
+use zeroize::Zeroize;
 
 pub use rasn::types::{BitString, GeneralizedTime, OctetString};
+
+mod constants;
+pub mod extra;
+pub mod fast;
+mod name_error;
+pub mod pac;
+pub mod pkinit;
+pub mod spake;
+
+pub use constants::{ap_bit, err, flag_bit, ku, pa};
+pub use extra::{
+    ApRep, EncApRepPart, EncKrbCredPart, EncKrbPrivPart, KrbCred, KrbCredInfo, KrbPriv, KrbSafe,
+    KrbSafeBody,
+};
+pub use name_error::{NameError, TimeError};
 
 /// Construct a [`KerberosString`] from ASCII / GeneralString text.
 ///
 /// # Panics
 ///
 /// Panics if `s` contains characters outside the GeneralString alphabet.
-/// Callers that take untrusted input should use [`KerberosString::try_from`].
+/// Callers that take untrusted input must use [`try_ascii`].
 #[must_use]
+#[allow(clippy::expect_used)]
 pub fn ascii(s: &str) -> KerberosString {
     KerberosString::try_from(s).expect("KerberosString requires the GeneralString alphabet")
+}
+
+/// Fallible [`KerberosString`] from untrusted text.
+///
+/// # Errors
+///
+/// Returns [`NameError`] when `s` is not a GeneralString.
+pub fn try_ascii(s: &str) -> Result<KerberosString, NameError> {
+    if !s.is_ascii() {
+        return Err(NameError::NotGeneralString);
+    }
+    KerberosString::try_from(s).map_err(|_| NameError::NotGeneralString)
+}
+
+/// Fallible [`KerberosString`] from untrusted bytes (keytab/ccache/wire).
+///
+/// # Errors
+///
+/// Returns [`NameError`] when the bytes are not UTF-8 GeneralString.
+pub fn kerberos_string_from_bytes(bytes: &[u8]) -> Result<KerberosString, NameError> {
+    let s = std::str::from_utf8(bytes).map_err(|_| NameError::NotUtf8)?;
+    try_ascii(s)
 }
 
 /// KerberosString ::= GeneralString (IA5String in RFC 4120).
@@ -40,7 +79,53 @@ pub type MethodData = SequenceOf<PaData>;
 /// KerberosFlags ::= BIT STRING (SIZE (32..MAX))
 pub type KerberosFlags = BitString;
 /// Microseconds ::= INTEGER (0..999999)
-pub type Microseconds = u32;
+#[derive(AsnType, Clone, Copy, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+#[rasn(delegate)]
+pub struct Microseconds(pub u32);
+
+impl Microseconds {
+    /// Inclusive lower bound.
+    pub const MIN: u32 = 0;
+    /// Inclusive upper bound (RFC 4120).
+    pub const MAX: u32 = 999_999;
+    /// Zero microseconds.
+    pub const ZERO: Self = Self(0);
+
+    /// Construct a constrained microseconds value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TimeError::MicrosecondsOutOfRange`] when `n > 999999`.
+    pub fn new(n: u32) -> Result<Self, TimeError> {
+        if n > Self::MAX {
+            Err(TimeError::MicrosecondsOutOfRange(n))
+        } else {
+            Ok(Self(n))
+        }
+    }
+
+    /// Reduce `n` into `0..1000000` (subsecond micros from a clock).
+    #[must_use]
+    pub fn from_subsec_micros(n: u32) -> Self {
+        Self(n % 1_000_000)
+    }
+
+    /// Numeric value.
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+
+    /// Reject out-of-range values decoded from the wire.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TimeError::MicrosecondsOutOfRange`] when the stored integer
+    /// is greater than 999999.
+    pub fn validate(self) -> Result<Self, TimeError> {
+        Self::new(self.0)
+    }
+}
 
 /// RFC 4120 `KerberosTime` (GeneralizedTime, UTC, no fractions).
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
@@ -60,6 +145,8 @@ pub struct PrincipalName {
 }
 
 impl PrincipalName {
+    /// NT-UNKNOWN (0).
+    pub const NT_UNKNOWN: i32 = 0;
     /// NT-PRINCIPAL (1).
     pub const NT_PRINCIPAL: i32 = 1;
     /// NT-SRV-INST (2).
@@ -72,12 +159,49 @@ impl PrincipalName {
     /// # Panics
     ///
     /// Panics if a component is outside the GeneralString alphabet.
+    /// Untrusted input must use [`Self::try_new`].
     #[must_use]
+    #[allow(clippy::expect_used)]
     pub fn new(name_type: i32, parts: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
-        Self {
-            name_type,
-            name_string: parts.into_iter().map(|p| ascii(p.as_ref())).collect(),
+        Self::try_new(name_type, parts).expect("KerberosString requires the GeneralString alphabet")
+    }
+
+    /// Fallible principal constructor for untrusted components.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NameError`] when a component is not a GeneralString.
+    pub fn try_new(
+        name_type: i32,
+        parts: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> Result<Self, NameError> {
+        let mut name_string = SequenceOf::new();
+        for p in parts {
+            name_string.push(try_ascii(p.as_ref())?);
         }
+        Ok(Self {
+            name_type,
+            name_string,
+        })
+    }
+
+    /// Fallible constructor from untrusted UTF-8 / GeneralString bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NameError`] when a component is not UTF-8 GeneralString.
+    pub fn try_from_bytes(
+        name_type: i32,
+        parts: impl IntoIterator<Item = impl AsRef<[u8]>>,
+    ) -> Result<Self, NameError> {
+        let mut name_string = SequenceOf::new();
+        for p in parts {
+            name_string.push(kerberos_string_from_bytes(p.as_ref())?);
+        }
+        Ok(Self {
+            name_type,
+            name_string,
+        })
     }
 
     /// `krbtgt/REALM` as NT-SRV-INST.
@@ -104,6 +228,22 @@ impl PrincipalName {
             salt.extend_from_slice(part.as_bytes());
         }
         salt
+    }
+
+    /// Whether this name is `krbtgt/SOMETHING` (TGT / referral TGT).
+    #[must_use]
+    pub fn is_krbtgt(&self) -> bool {
+        self.name_string
+            .first()
+            .is_some_and(|p| p.as_bytes() == b"krbtgt")
+    }
+
+    /// Whether this is `krbtgt/{realm}` for `realm`.
+    #[must_use]
+    pub fn is_krbtgt_for(&self, realm: &str) -> bool {
+        self.name_string.len() == 2
+            && self.name_string[0].as_bytes() == b"krbtgt"
+            && self.name_string[1].as_bytes() == realm.as_bytes()
     }
 }
 
@@ -148,10 +288,20 @@ pub struct EncryptedData {
 /// EncryptionKey ::= SEQUENCE { keytype, keyvalue }
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct EncryptionKey {
+    /// IANA etype of [`Self::keyvalue`].
     #[rasn(tag(explicit(0)))]
     pub keytype: i32,
+    /// Protocol key octets. Wiped on drop when the buffer is uniquely owned.
     #[rasn(tag(explicit(1)))]
     pub keyvalue: OctetString,
+}
+
+impl Drop for EncryptionKey {
+    fn drop(&mut self) {
+        let mut v = self.keyvalue.to_vec();
+        v.zeroize();
+        self.keyvalue = OctetString::from(Vec::<u8>::new());
+    }
 }
 
 /// Checksum ::= SEQUENCE { cksumtype, checksum }
@@ -194,13 +344,72 @@ impl TicketFlags {
         Self(KerberosFlags::repeat(false, 32))
     }
 
-    /// INITIAL (bit 8) and PRE-AUTHENT (bit 9) as issued after PA-ENC-TIMESTAMP.
+    /// INITIAL (bit 9) and PRE-AUTHENT (bit 10) as issued after PA-ENC-TIMESTAMP.
+    ///
+    /// RFC 4120 §5.3: renewable is bit 8, initial is bit 9, pre-authent is bit 10.
     #[must_use]
     pub fn initial_preauth() -> Self {
         let mut bits = KerberosFlags::repeat(false, 32);
-        bits.set(8, true);
-        bits.set(9, true);
+        bits.set(flag_bit::INITIAL, true);
+        bits.set(flag_bit::PRE_AUTHENT, true);
         Self(bits)
+    }
+
+    /// Construct flags from a MIT-packed 32-bit integer (MSB is RFC bit 0).
+    #[must_use]
+    pub fn from_u32(v: u32) -> Self {
+        let mut bits = KerberosFlags::repeat(false, 32);
+        for i in 0..32 {
+            if v & (1u32 << (31 - i)) != 0 {
+                bits.set(i, true);
+            }
+        }
+        Self(bits)
+    }
+
+    /// Whether RFC bit `n` is set.
+    #[must_use]
+    pub fn bit(&self, n: usize) -> bool {
+        n < self.0.len() && self.0[n]
+    }
+
+    /// RFC 4120 `initial` (bit 9).
+    #[must_use]
+    pub fn initial(&self) -> bool {
+        self.bit(flag_bit::INITIAL)
+    }
+
+    /// RFC 4120 `pre-authent` (bit 10).
+    #[must_use]
+    pub fn pre_authent(&self) -> bool {
+        self.bit(flag_bit::PRE_AUTHENT)
+    }
+
+    /// RFC 4120 `renewable` (bit 8).
+    #[must_use]
+    pub fn renewable(&self) -> bool {
+        self.bit(flag_bit::RENEWABLE)
+    }
+
+    /// RFC 4120 `forwardable` (bit 1).
+    #[must_use]
+    pub fn forwardable(&self) -> bool {
+        self.bit(flag_bit::FORWARDABLE)
+    }
+
+    /// RFC 4120 `invalid` (bit 7).
+    #[must_use]
+    pub fn invalid(&self) -> bool {
+        self.bit(flag_bit::INVALID)
+    }
+
+    /// Set RFC bit `n`.
+    #[must_use]
+    pub fn with_bit(mut self, n: usize, on: bool) -> Self {
+        if n < self.0.len() {
+            self.0.set(n, on);
+        }
+        self
     }
 }
 
@@ -219,9 +428,48 @@ impl KdcOptions {
     /// Set RFC 4120 bit 1 (forwardable).
     #[must_use]
     pub fn forwardable() -> Self {
-        let mut bits = KerberosFlags::repeat(false, 32);
-        bits.set(1, true);
-        Self(bits)
+        Self::none().with_bit(flag_bit::FORWARDABLE, true)
+    }
+
+    /// Whether RFC bit `n` is set.
+    #[must_use]
+    pub fn bit(&self, n: usize) -> bool {
+        n < self.0.len() && self.0[n]
+    }
+
+    /// Set RFC bit `n`.
+    #[must_use]
+    pub fn with_bit(mut self, n: usize, on: bool) -> Self {
+        if n < self.0.len() {
+            self.0.set(n, on);
+        }
+        self
+    }
+
+    /// Packed MIT integer (MSB is RFC bit 0).
+    #[must_use]
+    pub fn to_u32(&self) -> u32 {
+        flags_to_u32(&self.0)
+    }
+
+    /// Bits that this implementation honors on AS/TGS requests.
+    #[must_use]
+    pub fn unsupported_bits(&self) -> u32 {
+        let supported = (1u32 << (31 - flag_bit::FORWARDABLE))
+            | (1u32 << (31 - flag_bit::FORWARDED))
+            | (1u32 << (31 - flag_bit::PROXIABLE))
+            | (1u32 << (31 - flag_bit::PROXY))
+            | (1u32 << (31 - flag_bit::MAY_POSTDATE))
+            | (1u32 << (31 - flag_bit::POSTDATED))
+            | (1u32 << (31 - flag_bit::RENEWABLE))
+            | (1u32 << (31 - flag_bit::CNAME_IN_ADDL_TKT))
+            | (1u32 << (31 - flag_bit::CANONICALIZE))
+            | (1u32 << (31 - flag_bit::DISABLE_TRANSITED_CHECK))
+            | (1u32 << (31 - flag_bit::RENEWABLE_OK))
+            | (1u32 << (31 - flag_bit::ENC_TKT_IN_SKEY))
+            | (1u32 << (31 - flag_bit::RENEW))
+            | (1u32 << (31 - flag_bit::VALIDATE));
+        self.to_u32() & !supported
     }
 }
 
@@ -367,6 +615,32 @@ impl ApOptions {
     pub fn none() -> Self {
         Self(KerberosFlags::repeat(false, 32))
     }
+
+    /// MUTUAL-REQUIRED (RFC 4120 bit 2).
+    #[must_use]
+    pub fn mutual_required() -> Self {
+        let mut bits = KerberosFlags::repeat(false, 32);
+        bits.set(ap_bit::MUTUAL_REQUIRED, true);
+        Self(bits)
+    }
+
+    /// Whether RFC bit `n` is set.
+    #[must_use]
+    pub fn bit(&self, n: usize) -> bool {
+        n < self.0.len() && self.0[n]
+    }
+
+    /// Whether `mutual-required` is set.
+    #[must_use]
+    pub fn wants_mutual(&self) -> bool {
+        self.bit(ap_bit::MUTUAL_REQUIRED)
+    }
+
+    /// Whether `use-session-key` is set (user-to-user).
+    #[must_use]
+    pub fn use_session_key(&self) -> bool {
+        self.bit(ap_bit::USE_SESSION_KEY)
+    }
 }
 
 /// KRB-ERROR ::= [APPLICATION 30] SEQUENCE { ... }
@@ -412,13 +686,14 @@ impl KrbError {
 ///
 /// # Errors
 ///
-/// Returns a string description when `s` is not that form.
-pub fn kerberos_time_from_utc_z(s: &str) -> Result<KerberosTime, String> {
+/// Returns [`TimeError::Parse`] when `s` is not that form.
+pub fn kerberos_time_from_utc_z(s: &str) -> Result<KerberosTime, TimeError> {
     let body = s
         .strip_suffix('Z')
-        .ok_or_else(|| format!("missing Z: {s}"))?;
-    let naive = NaiveDateTime::parse_from_str(body, "%Y%m%d%H%M%S").map_err(|e| e.to_string())?;
-    let tz = FixedOffset::east_opt(0).ok_or_else(|| "UTC offset".to_owned())?;
+        .ok_or_else(|| TimeError::Parse(format!("missing Z: {s}")))?;
+    let naive = NaiveDateTime::parse_from_str(body, "%Y%m%d%H%M%S")
+        .map_err(|e| TimeError::Parse(e.to_string()))?;
+    let tz = FixedOffset::east_opt(0).ok_or_else(|| TimeError::Parse("UTC offset".into()))?;
     Ok(KerberosTime(tz.from_utc_datetime(&naive)))
 }
 
@@ -428,6 +703,7 @@ impl KerberosTime {
     /// RFC 4120 forbids fractional seconds; nanoseconds are zeroed so DER
     /// encoding is `YYYYMMDDHHMMSSZ`.
     #[must_use]
+    #[allow(clippy::expect_used)]
     pub fn now() -> Self {
         let tz = FixedOffset::east_opt(0).expect("UTC offset 0 is valid");
         let dt = Utc::now().with_timezone(&tz);
@@ -440,66 +716,35 @@ impl KerberosTime {
         u32::try_from(self.0.timestamp().max(0)).unwrap_or(u32::MAX)
     }
 
-    /// Add whole hours, keeping RFC 4120 unfractional encoding.
-    #[must_use]
-    pub fn add_hours(&self, hours: i64) -> Self {
-        let dt = self.0 + chrono::Duration::hours(hours);
-        Self(dt.with_nanosecond(0).unwrap_or(dt))
+    /// Add whole hours without panicking on overflow.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TimeError::Overflow`] when the calendar cannot represent
+    /// the result.
+    pub fn add_hours(&self, hours: i64) -> Result<Self, TimeError> {
+        let dur = chrono::TimeDelta::try_hours(hours).ok_or(TimeError::Overflow)?;
+        let dt = self.0.checked_add_signed(dur).ok_or(TimeError::Overflow)?;
+        Ok(Self(dt.with_nanosecond(0).unwrap_or(dt)))
     }
-}
 
-/// RFC 4120 PA-DATA type numbers used in Stage 3.
-pub mod pa {
-    /// PA-TGS-REQ (AP-REQ in TGS-REQ padata).
-    pub const TGS_REQ: i32 = 1;
-    /// PA-ENC-TIMESTAMP.
-    pub const ENC_TIMESTAMP: i32 = 2;
-    /// PA-PW-SALT.
-    pub const PW_SALT: i32 = 3;
-    /// PA-ETYPE-INFO.
-    pub const ETYPE_INFO: i32 = 11;
-    /// PA-ETYPE-INFO2.
-    pub const ETYPE_INFO2: i32 = 19;
-}
+    /// Add whole seconds without panicking.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TimeError::Overflow`] when the calendar cannot represent
+    /// the result.
+    pub fn add_seconds(&self, seconds: i64) -> Result<Self, TimeError> {
+        let dur = chrono::TimeDelta::try_seconds(seconds).ok_or(TimeError::Overflow)?;
+        let dt = self.0.checked_add_signed(dur).ok_or(TimeError::Overflow)?;
+        Ok(Self(dt.with_nanosecond(0).unwrap_or(dt)))
+    }
 
-/// RFC 4120 error codes used in Stage 3.
-pub mod err {
-    /// KDC_ERR_C_PRINCIPAL_UNKNOWN
-    pub const C_PRINCIPAL_UNKNOWN: i32 = 6;
-    /// KDC_ERR_S_PRINCIPAL_UNKNOWN
-    pub const S_PRINCIPAL_UNKNOWN: i32 = 7;
-    /// KDC_ERR_PREAUTH_FAILED
-    pub const PREAUTH_FAILED: i32 = 24;
-    /// KDC_ERR_PREAUTH_REQUIRED
-    pub const PREAUTH_REQUIRED: i32 = 25;
-    /// KRB_AP_ERR_BAD_INTEGRITY
-    pub const BAD_INTEGRITY: i32 = 31;
-    /// KRB_AP_ERR_REPEAT
-    pub const REPEAT: i32 = 34;
-    /// KRB_AP_ERR_SKEW
-    pub const SKEW: i32 = 37;
-    /// KRB_ERR_RESPONSE_TOO_BIG
-    pub const RESPONSE_TOO_BIG: i32 = 52;
-}
-
-/// RFC 4120 key-usage numbers used in Stage 3.
-pub mod ku {
-    /// AS-REQ PA-ENC-TIMESTAMP.
-    pub const PA_ENC_TIMESTAMP: u32 = 1;
-    /// Ticket enc-part (service long-term key).
-    pub const TICKET: u32 = 2;
-    /// AS-REP encrypted part (client long-term key).
-    pub const AS_REP_ENC_PART: u32 = 3;
-    /// TGS-REQ authenticator checksum.
-    pub const TGS_REQ_AUTH_CKSUM: u32 = 6;
-    /// TGS-REQ authenticator.
-    pub const TGS_REQ_AUTHENTICATOR: u32 = 7;
-    /// TGS-REP encrypted part (TGT session key).
-    pub const TGS_REP_ENC_PART: u32 = 8;
-    /// AP-REQ authenticator checksum.
-    pub const AP_REQ_AUTH_CKSUM: u32 = 10;
-    /// AP-REQ authenticator.
-    pub const AP_REQ_AUTHENTICATOR: u32 = 11;
+    /// Difference in seconds (`self - other`) as i64, saturating.
+    #[must_use]
+    pub fn delta_seconds(&self, other: &Self) -> i64 {
+        self.0.timestamp().saturating_sub(other.0.timestamp())
+    }
 }
 
 /// PA-ENC-TS-ENC ::= SEQUENCE { patimestamp, pausec OPTIONAL }
@@ -672,4 +917,67 @@ pub struct EncTicketPart {
     pub caddr: Option<HostAddresses>,
     #[rasn(tag(explicit(10)))]
     pub authorization_data: Option<AuthorizationData>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ticket_flags_initial_preauth_is_rfc_bits_9_and_10() {
+        let f = TicketFlags::initial_preauth();
+        assert!(f.initial(), "bit 9 initial");
+        assert!(f.pre_authent(), "bit 10 pre-authent");
+        assert!(!f.renewable(), "must not set renewable (bit 8)");
+        // MIT packed: bit 9 => 1<<22, bit 10 => 1<<21
+        assert_eq!(f.to_u32(), 0x0060_0000);
+        let round = TicketFlags::from_u32(0x0060_0000);
+        assert!(round.initial() && round.pre_authent() && !round.renewable());
+    }
+
+    #[test]
+    fn microseconds_rejects_out_of_range() {
+        assert!(Microseconds::new(0).is_ok());
+        assert!(Microseconds::new(999_999).is_ok());
+        assert_eq!(
+            Microseconds::new(1_000_000).unwrap_err(),
+            TimeError::MicrosecondsOutOfRange(1_000_000)
+        );
+        assert_eq!(Microseconds::from_subsec_micros(1_000_042).get(), 42);
+        assert!(Microseconds(1_000_001).validate().is_err());
+    }
+
+    #[test]
+    fn add_hours_does_not_panic_on_overflow() {
+        let t = kerberos_time_from_utc_z("99991231235959Z").expect("max");
+        assert_eq!(t.add_hours(i64::MAX).unwrap_err(), TimeError::Overflow);
+        let now = KerberosTime::now();
+        assert!(now.add_hours(10).is_ok());
+    }
+
+    #[test]
+    fn try_new_rejects_non_ascii_principal() {
+        let err = PrincipalName::try_new(1, ["usér"]).unwrap_err();
+        assert_eq!(err, NameError::NotGeneralString);
+        let err = kerberos_string_from_bytes(&[0x80, 0x81]).unwrap_err();
+        assert_eq!(err, NameError::NotUtf8);
+    }
+
+    #[test]
+    fn ap_options_mutual_required_is_bit_2() {
+        let o = ApOptions::mutual_required();
+        assert!(o.wants_mutual());
+        assert!(!o.use_session_key());
+        assert!(!ApOptions::none().wants_mutual());
+    }
+
+    #[test]
+    fn krbtgt_name_helpers() {
+        let t = PrincipalName::krbtgt("KERBER.TEST");
+        assert!(t.is_krbtgt());
+        assert!(t.is_krbtgt_for("KERBER.TEST"));
+        assert!(!t.is_krbtgt_for("OTHER.TEST"));
+        let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "x"]);
+        assert!(!host.is_krbtgt());
+    }
 }

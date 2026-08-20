@@ -93,7 +93,7 @@ fn sample_ap_req() -> ApReq {
 fn sample_pa_enc_ts() -> krb5_types::PaEncTsEnc {
     krb5_types::PaEncTsEnc {
         patimestamp: sample_time(),
-        pausec: Some(123_456),
+        pausec: Some(krb5_types::Microseconds::from_subsec_micros(123_456)),
     }
 }
 
@@ -125,7 +125,7 @@ fn sample_krb_error() -> KrbError {
         ctime: None,
         cusec: None,
         stime: sample_time(),
-        susec: 0,
+        susec: krb5_types::Microseconds::ZERO,
         error_code: 6, // KDC_ERR_C_PRINCIPAL_UNKNOWN
         crealm: Some(realm("KERBER.TEST")),
         cname: Some(sample_principal()),

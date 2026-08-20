@@ -19,7 +19,9 @@
 //! ASN.1 operations emit `pdu` (type name) and `byte_len`.
 
 #![forbid(unsafe_code)]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+use std::cell::RefCell;
 use std::fmt::Write as _;
 
 /// Canonical `event` field values.
@@ -54,6 +56,20 @@ pub mod events {
     pub const KDC_ACL: &str = "kdc.acl";
     /// AP-REQ verified or rejected.
     pub const PROTOCOL_AP: &str = "protocol.ap";
+    /// AP-REP processed.
+    pub const PROTOCOL_AP_REP: &str = "protocol.ap_rep";
+    /// KDC UDP/TCP listener.
+    pub const KDC_LISTEN: &str = "kdc.listen";
+    /// KDC transport event (datagram/connection).
+    pub const KDC_TRANSPORT: &str = "kdc.transport";
+    /// Client transport (UDP/TCP exchange).
+    pub const PROTOCOL_TRANSPORT: &str = "protocol.transport";
+    /// GSS wrap/unwrap/MIC.
+    pub const GSS: &str = "gss";
+    /// Admin protocol (kadmind / kpasswd / kprop).
+    pub const ADMIN: &str = "admin";
+    /// Config / discovery.
+    pub const CONFIG: &str = "config";
 }
 
 /// Tracing field name for the correlation ID.
@@ -76,6 +92,43 @@ pub const FIELD_ERROR: &str = "error";
 pub const FIELD_PDU: &str = "pdu";
 /// Tracing field name for encoded/decoded byte length.
 pub const FIELD_BYTE_LEN: &str = "byte_len";
+
+thread_local! {
+    static CURRENT: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Restores the previous correlation ID when dropped.
+pub struct CorrelationGuard {
+    prev: Option<String>,
+}
+
+impl Drop for CorrelationGuard {
+    fn drop(&mut self) {
+        CURRENT.with(|c| {
+            *c.borrow_mut() = self.prev.take();
+        });
+    }
+}
+
+/// Set the parent correlation ID for this thread until the guard is dropped.
+///
+/// Crypto and ASN.1 log using [`current_correlation_id`] so one KDC exchange
+/// keeps a single ID.
+pub fn enter_correlation(id: impl Into<String>) -> CorrelationGuard {
+    let id = id.into();
+    CURRENT.with(|c| {
+        let prev = c.replace(Some(id));
+        CorrelationGuard { prev }
+    })
+}
+
+/// Correlation ID for the current exchange, or `"none"` if unset.
+///
+/// Crypto and ASN.1 must not mint a new ID per operation.
+#[must_use]
+pub fn current_correlation_id() -> String {
+    CURRENT.with(|c| c.borrow().clone().unwrap_or_else(|| "none".into()))
+}
 
 /// Allocate a 128-bit correlation ID encoded as 32 lowercase hex characters.
 ///
@@ -109,5 +162,16 @@ mod tests {
         let id = new_correlation_id();
         assert_eq!(id.len(), 32);
         assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn parent_correlation_is_visible_until_guard_drops() {
+        assert_eq!(current_correlation_id(), "none");
+        let id = new_correlation_id();
+        {
+            let _g = enter_correlation(id.clone());
+            assert_eq!(current_correlation_id(), id);
+        }
+        assert_eq!(current_correlation_id(), "none");
     }
 }
