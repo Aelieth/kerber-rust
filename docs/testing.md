@@ -57,6 +57,16 @@ present and MIT `kinit -X X509_user_identity=FILE:` succeeds against
 the Rust KDC. Set `KERBER_CAPTURE_DIR` to write raw PDUs under
 `tests/traces/`.
 
+SPAKE: `scripts/spake-gate.sh` runs MIT `kinit` against the Rust KDC
+with `preferred_preauth_types = 151` and `spake_preauth_groups = P-256`.
+It fails unless TRACE contains `SPAKE` and `klist` shows
+`user@KERBER.TEST`.
+
+Cross-realm: `scripts/cross-realm-gate.sh` starts two Rust KDCs
+(KERBER.TEST:88, OTHER.TEST:89) sharing `KRB5_TEST_INTERREALM_KEY`,
+then MIT `kinit` + `kvno host/svc.other.test@OTHER.TEST`. It fails
+unless `klist` contains `krbtgt/OTHER.TEST` and the host ticket.
+
 ## MIT 1.22.2 harness
 
 | Item | Value |

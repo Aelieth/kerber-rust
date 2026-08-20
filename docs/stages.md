@@ -12,7 +12,7 @@ logs. Unit tests alone do not promote a stage.
 | 4 | Higher-level client, GSS-API/SPNEGO (RFC 4121) | **In tree** (`krb5-gss` wrap/unwrap/MIC, SPNEGO framing; MIT GSS is out-of-process) |
 | 5 | KDC core (AS+TGS) + database backend, bidirectional interop | **In tree** (in-memory + optional persist/stash; ACL; AP-REQ; gates: `kdc-gate.sh`, `bidirectional-gate.sh`). Not a full MIT KDB. |
 | 6 | Admin tools, plugins, propagation, remaining parity | **In tree** (`krb5-admin` ACL-enforced session, ktadd of all kvnos, kpasswd with kvno rotation, kprop dump/load, inter-realm krbtgt + transited). Not MIT RPC ABI. |
-| 7–8 | Hardening, stress, chaos, adversarial, observability, final gates | **Partial.** MIT-oracle gates exist for AS/TGS, FAST TGS `kvno`, GSS wrap, and PKINIT `kinit`. PAC/SPAKE/Camellia/cross-realm are unit-gated. Long soak and live Heimdal/AD/SSPI are environment fallbacks. |
+| 7–8 | Hardening, stress, chaos, adversarial, observability, final gates | **Partial.** MIT-oracle gates exist for AS/TGS, FAST TGS `kvno`, GSS wrap, PKINIT `kinit`, SPAKE `kinit`, and two-realm `kvno`. PAC/Camellia are unit-gated. Long soak and live Heimdal/AD/SSPI are environment fallbacks. |
 
 Stage 2 production-gate of a *Rust client* is Stage 3. This repository
 currently gates crypto/ASN.1 on known-answer tests, malformed-input

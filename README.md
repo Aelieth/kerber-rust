@@ -7,15 +7,16 @@ tree.
 
 This is an early-stage project targeting MIT 1.22.2 wire compatibility.
 **Content-asserting MIT 1.22.2 gates exist for** AS/TGS (`client-gate`,
-`kdc-gate`, including FAST TGS `kvno`), GSS wrap (`gss-gate`), and
-PKINIT `kinit` (`pkinit-gate.sh`, hard-fail without `pkinit.so`).
-PAC, SPAKE, Camellia, and cross-realm referral issuance are in tree
-and **unit-gated** (Rust-vs-Rust plus `scripts/spake-gate.sh` /
-`cross-realm-gate.sh`); they are not MIT-client verified. kadmind MIT
-RPC is not implemented. `krb5-config` is consumed when `KRB5_CONFIG`
-/`KRB5_KDC_PROFILE` are set (argv remains the kinit fallback). Long
-soaks and live Heimdal/AD/SSPI remain environment-dependent. See
-[docs/stages.md](docs/stages.md).
+`kdc-gate`, including FAST TGS `kvno`), GSS wrap (`gss-gate`), PKINIT
+`kinit` (`pkinit-gate.sh`, hard-fail without `pkinit.so`), SPAKE
+`kinit` (`spake-gate.sh`, `pa_type` 151 / group 2), and two-realm
+`kvno` (`cross-realm-gate.sh`, `host/svc.other.test@OTHER.TEST`).
+PAC and Camellia remain **unit-gated**. kadmind MIT RPC is not
+implemented. `krb5-config` is consumed: the KDC applies `kdc.conf`
+ticket policy (and non-test listen/db paths); `kinit` / TGS referral
+chase use `KRB5_CONFIG` then `/etc/krb5.conf` `[realms]` (argv is the
+fallback). Long soaks and live Heimdal/AD/SSPI remain
+environment-dependent. See [docs/stages.md](docs/stages.md).
 
 **License:** [Apache-2.0](LICENSE-APACHE) OR [MIT](LICENSE-MIT), at your
 option. This tree contains cryptographic software. Export from the

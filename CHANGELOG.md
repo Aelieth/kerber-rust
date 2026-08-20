@@ -35,7 +35,7 @@ this project uses semantic versioning once a crate is published.
   `krb5-gss` RFC 4121 wrap/unwrap/MIC with channel bindings,
   `krb5-admin` ACL-enforced kadmind
   equivalent, persist+stash, kpasswd (kvno bump + multi-kvno),
-  FAST `PA-FX-FAST` CHOICE + armor/cookie/strengthen, SPAKE2-P256 (`w` from the password),
+  FAST `PA-FX-FAST` CHOICE + armor/cookie/strengthen, SPAKE2-P256 (MIT `wbytes` / K'[n] / group 2),
   PKINIT Oakley MODP 2048/4096 + ECDH P-256 inside CMS SignedData with a
   test CA (`pkinit_anchors` FILE PEM) and ECDSA-SHA256, PAC with NDR logon-info,
   S4U2Self/S4U2Proxy/U2U, cross-realm referrals/transited, ktadd of
@@ -61,9 +61,10 @@ this project uses semantic versioning once a crate is published.
   SHA-2 output; Camellia uses the `camellia`+`cmac` crates; RC4 uses
   the RFC 4757 usage map; PAC checksums use usage 17; SPAKE P-256
   group id is 2.
-- Docs: MIT `kinit` PKINIT and FAST TGS `kvno` are gated; PAC/SPAKE/
-  Camellia/cross-realm remain unit-gated; kadmind RPC is not
-  implemented. `KRB5_CONFIG` / `KRB5_KDC_PROFILE` are consumed when set.
+- Docs: MIT `kinit` PKINIT, SPAKE (`pa_type` 151), FAST TGS `kvno`, and
+  two-realm `kvno` are gated; PAC/Camellia remain unit-gated; kadmind
+  RPC is not implemented. `KRB5_CONFIG` / `KRB5_KDC_PROFILE` /
+  `/etc/krb5.conf` / `/etc/krb5kdc/kdc.conf` are consumed when present.
 - `pkinit-gate.sh` fails when MIT PKINIT interop fails; `cargo-deny`
   is blocking in CI.
 - `KERBER_CAPTURE_DIR` writes raw PDUs for golden DER.

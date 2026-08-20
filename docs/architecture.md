@@ -60,8 +60,11 @@ out-of-process; `scripts/gss-gate.sh`). The acceptor binds
 RFC 3244 kpasswd socket, no kprop stream).
 
 **`krb5-config`** parses `krb5.conf` / `kdc.conf` and DNS SRV. The KDC
-applies `KRB5_KDC_PROFILE` ticket policy; `kinit` uses `KRB5_CONFIG`
-`[realms]` KDCs when set (argv remains the fallback).
+applies `kdc.conf` ticket policy from `KRB5_KDC_PROFILE` /
+`KRB5_KDC_CONF` / `/etc/krb5kdc/kdc.conf`; without `--test-realm` it
+also takes `database_name` / `key_stash_file` / listen ports from that
+file. `kinit` and TGS referral chase call `discover_kdc` (`KRB5_CONFIG`
+then `/etc/krb5.conf`); argv remains the fallback.
 
 ## Security invariants
 
