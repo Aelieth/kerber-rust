@@ -5,12 +5,14 @@
 //! the KDC does not depend on the client crate. There is no C FFI.
 
 #![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod ap_rep;
 mod ap_req;
 mod as_ex;
 mod builders;
+mod capture;
 mod ccache;
 mod error;
 mod keytab;
@@ -28,6 +30,7 @@ pub use ap_req::{
 };
 pub use as_ex::{as_exchange, AsOutcome, AsRequest};
 pub use builders::{as_req, as_req_sname, pa_enc_timestamp, tgs_req, tgs_req_ex};
+pub use capture::capture_pdu;
 pub use ccache::{parse_principal, realm, tgt_cred, CcacheCred, FileCcache};
 pub use error::Error;
 pub use keytab::{Keytab, KeytabEntry};

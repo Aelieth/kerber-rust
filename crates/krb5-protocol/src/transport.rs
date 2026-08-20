@@ -64,7 +64,8 @@ pub fn exchange_with_failover(addrs: &[KdcAddr], request: &[u8]) -> Result<Vec<u
 }
 
 fn exchange_one(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
-    match exchange_udp(addr, request) {
+    crate::capture_pdu("client-req", request);
+    let reply = match exchange_udp(addr, request) {
         Ok(reply) if is_response_too_big(&reply) => {
             tracing::info!(
                 event = krb5_log::events::PROTOCOL_TRANSPORT,
@@ -101,7 +102,11 @@ fn exchange_one(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
                 }
             }
         },
+    };
+    if let Ok(bytes) = &reply {
+        crate::capture_pdu("client-rep", bytes);
     }
+    reply
 }
 
 fn is_response_too_big(bytes: &[u8]) -> bool {

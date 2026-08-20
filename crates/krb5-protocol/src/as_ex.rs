@@ -210,6 +210,20 @@ fn finish_as_rep(
             return Err(Error::ReplyMismatch("AS-REP missing PRE-AUTHENT".into()));
         }
     }
+    let now = i64::from(KerberosTime::now().unix_seconds());
+    let skew = 300i64;
+    let end = i64::from(enc_part.endtime.unix_seconds());
+    if end + skew < now {
+        return Err(Error::ReplyMismatch("AS-REP ticket expired".into()));
+    }
+    if let Some(st) = &enc_part.starttime {
+        if i64::from(st.unix_seconds()) > now + skew {
+            return Err(Error::ReplyMismatch("AS-REP ticket not yet valid".into()));
+        }
+    }
+    if !enc_part.sname.is_krbtgt_for(realm) {
+        return Err(Error::ReplyMismatch("AS-REP sname is not krbtgt".into()));
+    }
     let session_etype = EncryptionType::from_iana(enc_part.key.keytype)
         .or_else(|_| EncryptionType::known(enc_part.key.keytype))?;
     let session_key = ProtocolKey::from_bytes(session_etype, enc_part.key.keyvalue.as_ref())?;

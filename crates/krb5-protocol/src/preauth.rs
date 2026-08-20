@@ -2,8 +2,8 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    checksum, decrypt, encrypt, key_from_shared, krb_fx_cf2, p256_generate, p256_shared,
-    spake_finish, spake_public, EncryptionType, KeyUsage, ProtocolKey,
+    checksum, decrypt, encrypt, key_from_shared, krb_fx_cf2, octetstring2key, p256_generate,
+    p256_shared, spake_finish, spake_public, EncryptionType, KeyUsage, ProtocolKey,
 };
 use krb5_types::{
     ascii, ku, pa, ApOptions, ApReq, AsReq, Authenticator, Checksum, EncryptedData, EncryptionKey,
@@ -137,10 +137,7 @@ pub fn fx_fast_padata(
     };
     Ok(PaData {
         padata_type: pa::FX_FAST,
-        padata_value: encode(&krb5_types::fast::PaFxFast {
-            armored_data: armored,
-        })?
-        .into(),
+        padata_value: encode(&krb5_types::fast::PaFxFast::ArmoredData(armored))?.into(),
     })
 }
 
@@ -157,9 +154,10 @@ pub fn unwrap_fast_rep(
         .as_ref()
         .and_then(|v| v.iter().find(|p| p.padata_type == pa::FX_FAST))
         .ok_or_else(|| Error::ReplyMismatch("missing PA-FX-FAST".into()))?;
-    let armored = if let Ok(w) = decode::<krb5_types::fast::PaFxFastRep>(raw.padata_value.as_ref())
+    let armored = if let Ok(krb5_types::fast::PaFxFastRep::ArmoredData(w)) =
+        decode::<krb5_types::fast::PaFxFastRep>(raw.padata_value.as_ref())
     {
-        w.armored_data
+        w
     } else {
         decode::<krb5_types::fast::KrbFastArmoredRep>(raw.padata_value.as_ref())?
     };
@@ -245,7 +243,10 @@ pub fn pa_spake_response(
 /// # Errors
 ///
 /// DER failures.
-pub fn pa_pk_as_req(client_public: &[u8]) -> Result<PaData, Error> {
+pub fn pa_pk_as_req(
+    client_public: &[u8],
+    ca: &krb5_types::pkinit::PkinitCa,
+) -> Result<PaData, Error> {
     let pack = krb5_types::pkinit::AuthPack {
         pk_authenticator: krb5_types::pkinit::PkAuthenticator {
             cusec: Microseconds::ZERO,
@@ -257,8 +258,10 @@ pub fn pa_pk_as_req(client_public: &[u8]) -> Result<PaData, Error> {
         supported_cms_types: None,
     };
     let inner = encode(&pack)?;
+    let signed = krb5_types::pkinit::cms_wrap(&inner, ca)
+        .map_err(|e| Error::ReplyMismatch(format!("PKINIT CMS wrap: {e}")))?;
     let req = krb5_types::pkinit::PaPkAsReq {
-        signed_auth_pack: krb5_types::pkinit::cms_wrap(&inner).into(),
+        signed_auth_pack: signed.into(),
         trusted_certifiers: None,
         kdc_pk_id: None,
     };
@@ -277,6 +280,7 @@ pub fn pkinit_reply_key(
     client_secret: &[u8; 32],
     padata: &Option<Vec<PaData>>,
     etype: EncryptionType,
+    kdc_trust_anchor: &[u8],
 ) -> Result<ProtocolKey, Error> {
     let raw = padata
         .as_ref()
@@ -287,9 +291,10 @@ pub fn pkinit_reply_key(
         .dh_info
         .as_ref()
         .ok_or_else(|| Error::ReplyMismatch("PKINIT missing dhInfo".into()))?;
-    let kdc_pub = krb5_types::pkinit::cms_unwrap(pub_kdc.dh_signed_data.as_ref());
+    let kdc_pub = krb5_types::pkinit::cms_verify(pub_kdc.dh_signed_data.as_ref(), kdc_trust_anchor)
+        .map_err(|e| Error::ReplyMismatch(format!("PKINIT KDC CMS: {e}")))?;
     let shared = p256_shared(client_secret, &kdc_pub)?;
-    key_from_shared(etype, &shared).map_err(Into::into)
+    octetstring2key(etype, &shared).map_err(Into::into)
 }
 
 /// PA-FOR-USER (S4U2Self) checksummed with the TGT session key (usage 17).
