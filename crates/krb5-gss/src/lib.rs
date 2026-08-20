@@ -197,17 +197,18 @@ impl GssContext {
     /// AP-REQ verify failures or channel-binding mismatch.
     pub fn accept_sec_context(
         token: &[u8],
-        service_key: &ProtocolKey,
+        service_keys: &[ProtocolKey],
         channel_bindings: Option<&ChannelBindings>,
         expected_server: Option<&PrincipalName>,
         expected_realm: Option<&str>,
     ) -> Result<(Self, Option<Vec<u8>>), Error> {
+        let first = service_keys.first().ok_or(Error::Truncated)?;
         let inner = gss_unwrap_app(token)?;
         if inner.len() < 2 || inner[..2] != TOK_AP_REQ {
             return Err(Error::Truncated);
         }
         let ctx = Self {
-            session: service_key.clone(),
+            session: first.clone(),
             send_seq: 0,
             recv_seq: 0,
             recv_seen: false,
@@ -217,7 +218,11 @@ impl GssContext {
         let params = krb5_protocol::ApVerifyParams {
             expected_server,
             expected_realm,
-            ..krb5_protocol::ApVerifyParams::single_key(service_key)
+            keys: service_keys,
+            kvno: None,
+            skew: krb5_protocol::DEFAULT_SKEW,
+            addresses: None,
+            now: None,
         };
         let ok = krb5_protocol::verify_ap_req_ex(&inner[2..], &params, &ctx.replay, None)?;
         if let Some(ck) = &ok.authenticator.cksum {
@@ -293,8 +298,10 @@ impl GssContext {
         } else {
             self.recv_seen = true;
         }
+        let rrc = u16::from_be_bytes(header[6..8].try_into().map_err(|_| Error::Truncated)?);
+        let cipher = rotate_rrc(&inner[16..], rrc);
         let usage = seal_usage(!self.initiator);
-        let plain = decrypt(&self.session, usage, &inner[16..])?;
+        let plain = decrypt(&self.session, usage, &cipher)?;
         if plain.len() < 16 {
             return Err(Error::Truncated);
         }
@@ -406,6 +413,18 @@ fn sign_usage(initiator: bool) -> KeyUsage {
     } else {
         ku::GSS_ACCEPTOR_SIGN
     })
+}
+
+fn rotate_rrc(cipher: &[u8], rrc: u16) -> Vec<u8> {
+    let n = usize::from(rrc);
+    if n == 0 || n >= cipher.len() {
+        return cipher.to_vec();
+    }
+    let split = cipher.len() - n;
+    let mut out = Vec::with_capacity(cipher.len());
+    out.extend_from_slice(&cipher[split..]);
+    out.extend_from_slice(&cipher[..split]);
+    out
 }
 
 fn wrap_header(initiator: bool, sealed: bool, seq: u64) -> [u8; 16] {
@@ -663,7 +682,7 @@ mod tests {
         let skey = &host.best_key().unwrap().key;
         let (acc, _) = GssContext::accept_sec_context(
             &token,
-            skey,
+            std::slice::from_ref(skey),
             None,
             Some(&documented_host()),
             Some(TEST_REALM),
@@ -739,7 +758,7 @@ mod tests {
         let skey = &host.best_key().unwrap().key;
         GssContext::accept_sec_context(
             &token,
-            skey,
+            std::slice::from_ref(skey),
             Some(&cb),
             Some(&documented_host()),
             Some(TEST_REALM),
@@ -751,7 +770,7 @@ mod tests {
         };
         match GssContext::accept_sec_context(
             &token,
-            skey,
+            std::slice::from_ref(skey),
             Some(&other),
             Some(&documented_host()),
             Some(TEST_REALM),
@@ -833,9 +852,13 @@ mod tests {
         let host = store.get_name(&documented_host()).unwrap();
         let skey = &host.best_key().unwrap().key;
         let wrong = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "other.example"]);
-        let Err(err) =
-            GssContext::accept_sec_context(&token, skey, None, Some(&wrong), Some(TEST_REALM))
-        else {
+        let Err(err) = GssContext::accept_sec_context(
+            &token,
+            std::slice::from_ref(skey),
+            None,
+            Some(&wrong),
+            Some(TEST_REALM),
+        ) else {
             panic!("wrong service accepted")
         };
         assert!(
@@ -848,7 +871,7 @@ mod tests {
         assert!(
             GssContext::accept_sec_context(
                 &token,
-                skey,
+                std::slice::from_ref(skey),
                 None,
                 Some(&documented_host()),
                 Some(TEST_REALM),

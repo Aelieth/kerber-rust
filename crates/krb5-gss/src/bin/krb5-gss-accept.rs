@@ -50,7 +50,12 @@ fn main() {
         eprintln!("empty keytab");
         std::process::exit(1);
     };
-    let service_key = ent.key.clone();
+    let service_keys: Vec<_> = kt.entries.iter().map(|e| e.key.clone()).collect();
+    eprintln!(
+        "gss-accept keytab entries={} principal={}",
+        service_keys.len(),
+        ent.name.components_joined()
+    );
 
     let listener = TcpListener::bind(&listen).unwrap_or_else(|e| {
         eprintln!("bind {listen}: {e}");
@@ -68,7 +73,7 @@ fn main() {
     let inner = krb5_gss::spnego_inner(&tok).map_or_else(|_| tok.clone(), Vec::from);
     let realm = std::str::from_utf8(ent.realm.as_bytes()).unwrap_or("");
     let (mut ctx, ap_rep) =
-        GssContext::accept_sec_context(&inner, &service_key, None, Some(&ent.name), Some(realm))
+        GssContext::accept_sec_context(&inner, &service_keys, None, Some(&ent.name), Some(realm))
             .unwrap_or_else(|e| {
                 eprintln!("accept_sec_context: {e}");
                 std::process::exit(1);
