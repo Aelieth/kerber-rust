@@ -10,11 +10,16 @@ publish.workspace = true
 
 [dependencies]
 aes.workspace = true
-cipher.workspace = true
+camellia.workspace = true
+cmac.workspace = true
+des.workspace = true
 getrandom.workspace = true
 hmac.workspace = true
 krb5-log.workspace = true
+md-5.workspace = true
+md4.workspace = true
 pbkdf2.workspace = true
+rc4.workspace = true
 sha1.workspace = true
 sha2.workspace = true
 subtle.workspace = true

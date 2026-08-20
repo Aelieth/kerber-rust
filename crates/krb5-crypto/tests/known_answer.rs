@@ -1,8 +1,8 @@
 //! Published known-answer tests. These call the public RFC 3961 API only.
 
 use krb5_crypto::{
-    checksum, decrypt, encrypt, encrypt_with_confounder, string_to_key, EncryptionType, Error,
-    KeyUsage, ProtocolKey,
+    checksum, decrypt, derive_keys, encrypt, encrypt_with_confounder, string_to_key,
+    EncryptionType, Error, KeyUsage, ProtocolKey,
 };
 
 fn hex(s: &str) -> Vec<u8> {
@@ -270,6 +270,30 @@ fn rfc3962_encrypt_decrypt_round_trip() {
     .unwrap();
     let ct = encrypt(&key256, usage, pt).unwrap();
     assert_eq!(decrypt(&key256, usage, &ct).unwrap(), pt);
+}
+
+/// MIT `t_derive.c` Kc/Ke/Ki for AES-128 usage 2.
+#[test]
+fn mit_t_derive_aes128_usage_2() {
+    let key = ProtocolKey::from_bytes(
+        EncryptionType::Aes128CtsHmacSha196,
+        &hex("42263c6e89f4fc28b8df68ee09799f15"),
+    )
+    .unwrap();
+    let d = derive_keys(&key, KeyUsage::new(2).unwrap()).unwrap();
+    assert_eq!(d.kc, hex("34280a382bc92769b2da2f9ef066854b"));
+    assert_eq!(d.ke, hex("5b14fc4e250e14ddf9dccf1af6674f53"));
+    assert_eq!(d.ki, hex("4ed31063621684f09ae8d89991af3e8f"));
+}
+
+#[test]
+fn weak_etype_refused_unless_allowed() {
+    assert!(matches!(
+        EncryptionType::from_iana(23),
+        Err(Error::WeakEtypeRefused(23))
+    ));
+    assert!(EncryptionType::from_iana_policy(23, true).is_ok());
+    assert!(EncryptionType::from_iana(18).is_ok());
 }
 
 #[test]

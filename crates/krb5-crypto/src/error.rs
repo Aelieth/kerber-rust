@@ -7,8 +7,10 @@ use std::fmt;
 /// raw MAC bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
-    /// IANA etype number is not implemented (only 17–20 in this crate).
+    /// IANA etype number is not implemented.
     UnsupportedEtype(i32),
+    /// Etype is known (legacy/AD) but refused because `allow_weak_crypto` is off.
+    WeakEtypeRefused(i32),
     /// Protocol key length does not match the etype.
     InvalidKeyLength,
     /// RFC 3961 forbids key usage 0.
@@ -32,6 +34,12 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnsupportedEtype(n) => write!(f, "unsupported encryption type {n}"),
+            Self::WeakEtypeRefused(n) => {
+                write!(
+                    f,
+                    "encryption type {n} is known but refused (allow_weak_crypto is false)"
+                )
+            }
             Self::InvalidKeyLength => write!(f, "protocol key length does not match etype"),
             Self::InvalidKeyUsage => write!(f, "key usage 0 is not permitted (RFC 3961)"),
             Self::InvalidParams => write!(f, "invalid string-to-key parameters"),

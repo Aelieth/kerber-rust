@@ -18,7 +18,7 @@ pub(crate) fn dk_rfc3961(key: &[u8], constant: &[u8]) -> Result<Vec<u8>, Error> 
     let folded = if constant.len() == BLOCK {
         constant.to_vec()
     } else {
-        nfold(constant, BLOCK)
+        nfold(constant, BLOCK)?
     };
     let mut block = [0u8; BLOCK];
     block.copy_from_slice(&folded);
@@ -50,7 +50,10 @@ pub(crate) fn kdf_hmac_sha2(
     msg.extend_from_slice(&k_bits.to_be_bytes());
 
     let mut mac = hmac_digest(etype, key, &msg)?;
-    mac.truncate(k_len);
+    if mac.len() > k_len {
+        let mut tail = mac.split_off(k_len);
+        tail.zeroize();
+    }
     Ok(mac)
 }
 
@@ -77,6 +80,10 @@ pub(crate) fn hmac_digest(
             mac.update(data);
             Ok(mac.finalize().into_bytes().to_vec())
         }
+        EncryptionType::Des3CbcSha1
+        | EncryptionType::Rc4Hmac
+        | EncryptionType::Camellia128CtsCmac
+        | EncryptionType::Camellia256CtsCmac => Err(Error::UnsupportedEtype(etype.to_iana())),
     }
 }
 
@@ -86,7 +93,11 @@ pub(crate) fn hmac_truncated(
     data: &[u8],
 ) -> Result<Vec<u8>, Error> {
     let mut mac = hmac_digest(etype, key, data)?;
-    mac.truncate(etype.hmac_output_len());
+    let n = etype.hmac_output_len();
+    if mac.len() > n {
+        let mut tail = mac.split_off(n);
+        tail.zeroize();
+    }
     Ok(mac)
 }
 
@@ -98,18 +109,35 @@ pub(crate) fn mac_verify(got: &[u8], expected: &[u8]) -> Result<(), Error> {
 }
 
 /// Three keys derived for one usage: Kc, Ke, Ki.
-pub(crate) struct UsageKeys {
+pub struct DerivedKeys {
+    /// Checksum key.
     pub kc: Vec<u8>,
+    /// Encryption key.
     pub ke: Vec<u8>,
+    /// Integrity key.
     pub ki: Vec<u8>,
 }
 
-impl Drop for UsageKeys {
+pub(crate) type UsageKeys = DerivedKeys;
+
+impl Drop for DerivedKeys {
     fn drop(&mut self) {
         self.kc.zeroize();
         self.ke.zeroize();
         self.ki.zeroize();
     }
+}
+
+/// Derive Kc, Ke, and Ki for `usage` from a protocol key (MIT t_derive KATs).
+///
+/// # Errors
+///
+/// Returns derivation failures.
+pub fn derive_keys(
+    key: &crate::key::ProtocolKey,
+    usage: crate::etype::KeyUsage,
+) -> Result<DerivedKeys, Error> {
+    derive_usage_keys(key.etype(), key.as_bytes(), usage)
 }
 
 pub(crate) fn derive_usage_keys(

@@ -15,6 +15,7 @@
 //! rejected as a local DoS control.
 
 #![forbid(unsafe_code)]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod derive;
 mod error;
@@ -22,10 +23,17 @@ mod etype;
 mod key;
 mod nfold;
 mod ops;
+mod prf;
+pub(crate) mod weak;
 
 pub(crate) mod cts;
 
+pub use derive::{derive_keys, DerivedKeys};
 pub use error::Error;
 pub use etype::{EncryptionType, KeyUsage};
 pub use key::ProtocolKey;
-pub use ops::{checksum, decrypt, encrypt, encrypt_with_confounder, string_to_key};
+pub use ops::{
+    checksum, decrypt, decrypt_with_state, encrypt, encrypt_with_confounder, encrypt_with_state,
+    string_to_key, verify_checksum, CipherState,
+};
+pub use prf::{prf, prf_plus};

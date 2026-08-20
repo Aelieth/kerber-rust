@@ -34,10 +34,12 @@ impl KeyUsage {
     }
 }
 
-/// Encryption types 17–20 (AES-CTS with HMAC-SHA-1 or HMAC-SHA-2).
+/// Encryption types implemented or recognized by this crate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(i32)]
 pub enum EncryptionType {
+    /// des3-cbc-sha1 (RFC 3961 etype 16). Weak; see [`Self::is_weak`].
+    Des3CbcSha1 = 16,
     /// aes128-cts-hmac-sha1-96 (RFC 3962).
     Aes128CtsHmacSha196 = 17,
     /// aes256-cts-hmac-sha1-96 (RFC 3962).
@@ -46,22 +48,64 @@ pub enum EncryptionType {
     Aes128CtsHmacSha256128 = 19,
     /// aes256-cts-hmac-sha384-192 (RFC 8009).
     Aes256CtsHmacSha384192 = 20,
+    /// rc4-hmac (etype 23). Weak; see [`Self::is_weak`].
+    Rc4Hmac = 23,
+    /// camellia128-cts-cmac (RFC 6803 etype 25). Weak unless locally allowed.
+    Camellia128CtsCmac = 25,
+    /// camellia256-cts-cmac (RFC 6803 etype 26). Weak unless locally allowed.
+    Camellia256CtsCmac = 26,
 }
 
 impl EncryptionType {
-    /// Parse an IANA etype number.
+    /// Parse an IANA etype number. Weak etypes are refused.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::UnsupportedEtype`] when `n` is not 17–20.
+    /// Returns [`Error::UnsupportedEtype`] or [`Error::WeakEtypeRefused`].
     pub fn from_iana(n: i32) -> Result<Self, Error> {
+        Self::from_iana_policy(n, false)
+    }
+
+    /// Parse an IANA etype, optionally allowing legacy/AD enctypes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnsupportedEtype`] when `n` is unknown, or
+    /// [`Error::WeakEtypeRefused`] when it is known-but-disabled.
+    pub fn from_iana_policy(n: i32, allow_weak: bool) -> Result<Self, Error> {
+        let e = Self::known(n)?;
+        if e.is_weak() && !allow_weak {
+            return Err(Error::WeakEtypeRefused(n));
+        }
+        Ok(e)
+    }
+
+    /// Recognize an etype without applying the weak-crypto policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnsupportedEtype`] when `n` is not implemented.
+    pub fn known(n: i32) -> Result<Self, Error> {
         match n {
+            16 => Ok(Self::Des3CbcSha1),
             17 => Ok(Self::Aes128CtsHmacSha196),
             18 => Ok(Self::Aes256CtsHmacSha196),
             19 => Ok(Self::Aes128CtsHmacSha256128),
             20 => Ok(Self::Aes256CtsHmacSha384192),
+            23 => Ok(Self::Rc4Hmac),
+            25 => Ok(Self::Camellia128CtsCmac),
+            26 => Ok(Self::Camellia256CtsCmac),
             other => Err(Error::UnsupportedEtype(other)),
         }
+    }
+
+    /// DES3, RC4, and Camellia are behind `allow_weak_crypto`.
+    #[must_use]
+    pub const fn is_weak(self) -> bool {
+        matches!(
+            self,
+            Self::Des3CbcSha1 | Self::Rc4Hmac | Self::Camellia128CtsCmac | Self::Camellia256CtsCmac
+        )
     }
 
     /// IANA etype number.
@@ -70,22 +114,31 @@ impl EncryptionType {
         self as i32
     }
 
-    /// AES key length in octets (16 or 32).
+    /// Protocol key length in octets.
     #[must_use]
     pub const fn key_len(self) -> usize {
         match self {
-            Self::Aes128CtsHmacSha196 | Self::Aes128CtsHmacSha256128 => 16,
-            Self::Aes256CtsHmacSha196 | Self::Aes256CtsHmacSha384192 => 32,
+            Self::Aes128CtsHmacSha196
+            | Self::Aes128CtsHmacSha256128
+            | Self::Camellia128CtsCmac
+            | Self::Rc4Hmac => 16,
+            Self::Aes256CtsHmacSha196 | Self::Aes256CtsHmacSha384192 | Self::Camellia256CtsCmac => {
+                32
+            }
+            Self::Des3CbcSha1 => 24,
         }
     }
 
-    /// Truncated HMAC length in octets.
+    /// Truncated HMAC / CMAC length in octets.
     #[must_use]
     pub const fn hmac_output_len(self) -> usize {
         match self {
             Self::Aes128CtsHmacSha196 | Self::Aes256CtsHmacSha196 => 12,
             Self::Aes128CtsHmacSha256128 => 16,
             Self::Aes256CtsHmacSha384192 => 24,
+            Self::Des3CbcSha1 => 20,
+            Self::Rc4Hmac => 16,
+            Self::Camellia128CtsCmac | Self::Camellia256CtsCmac => 16,
         }
     }
 
@@ -97,10 +150,14 @@ impl EncryptionType {
             Self::Aes128CtsHmacSha196 | Self::Aes256CtsHmacSha196 => self.key_len(),
             Self::Aes128CtsHmacSha256128 => 16,
             Self::Aes256CtsHmacSha384192 => 24,
+            Self::Des3CbcSha1 => 24,
+            Self::Rc4Hmac => 16,
+            Self::Camellia128CtsCmac => 16,
+            Self::Camellia256CtsCmac => 32,
         }
     }
 
-    /// Associated keyed checksum type (RFC 3962 / RFC 8009).
+    /// Associated keyed checksum type (RFC 3962 / RFC 8009 / RFC 4757).
     #[must_use]
     pub const fn checksum_type(self) -> i32 {
         match self {
@@ -108,6 +165,10 @@ impl EncryptionType {
             Self::Aes256CtsHmacSha196 => 16,
             Self::Aes128CtsHmacSha256128 => 19,
             Self::Aes256CtsHmacSha384192 => 20,
+            Self::Des3CbcSha1 => 12,
+            Self::Rc4Hmac => -138,
+            Self::Camellia128CtsCmac => 17,
+            Self::Camellia256CtsCmac => 18,
         }
     }
 
@@ -132,6 +193,18 @@ impl EncryptionType {
         )
     }
 
+    /// AES-CTS etypes 17–20.
+    #[must_use]
+    pub const fn is_aes(self) -> bool {
+        matches!(
+            self,
+            Self::Aes128CtsHmacSha196
+                | Self::Aes256CtsHmacSha196
+                | Self::Aes128CtsHmacSha256128
+                | Self::Aes256CtsHmacSha384192
+        )
+    }
+
     /// Default PBKDF2 iteration count when string-to-key params are omitted.
     #[must_use]
     pub const fn default_iterations(self) -> u32 {
@@ -148,7 +221,12 @@ impl EncryptionType {
         match self {
             Self::Aes128CtsHmacSha256128 => Some("aes128-cts-hmac-sha256-128"),
             Self::Aes256CtsHmacSha384192 => Some("aes256-cts-hmac-sha384-192"),
-            Self::Aes128CtsHmacSha196 | Self::Aes256CtsHmacSha196 => None,
+            Self::Aes128CtsHmacSha196
+            | Self::Aes256CtsHmacSha196
+            | Self::Des3CbcSha1
+            | Self::Rc4Hmac
+            | Self::Camellia128CtsCmac
+            | Self::Camellia256CtsCmac => None,
         }
     }
 }
