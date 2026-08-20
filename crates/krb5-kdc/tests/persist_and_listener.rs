@@ -76,6 +76,54 @@ fn udp_listener_answers_wrong_password() {
 }
 
 #[test]
+fn tcp_worker_cap_drops_excess_connections() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::sync::atomic::AtomicBool;
+
+    use krb5_kdc::{serve_until, ListenLimits};
+
+    let (store, _) = bootstrap_documented().unwrap();
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let addr = udp.local_addr().unwrap();
+    let tcp = std::net::TcpListener::bind(addr).unwrap();
+    let flag = Arc::new(AtomicBool::new(false));
+    let store = Arc::new(store);
+    let f2 = Arc::clone(&flag);
+    thread::spawn(move || {
+        let _ = serve_until(
+            store,
+            udp,
+            tcp,
+            f2,
+            ListenLimits {
+                max_tcp_workers: 1,
+                max_tcp_request: 4096,
+                io_timeout: Duration::from_secs(2),
+            },
+        );
+    });
+    thread::sleep(Duration::from_millis(40));
+    let hold = TcpStream::connect(addr).unwrap();
+    hold.set_read_timeout(Some(Duration::from_millis(300)))
+        .unwrap();
+    thread::sleep(Duration::from_millis(40));
+    let mut extra = TcpStream::connect(addr).unwrap();
+    extra
+        .set_read_timeout(Some(Duration::from_millis(400)))
+        .unwrap();
+    extra.write_all(&4u32.to_be_bytes()).unwrap();
+    extra.write_all(&[0x6a, 0x02, 0x01, 0x00]).unwrap();
+    let mut hdr = [0u8; 4];
+    assert!(
+        extra.read_exact(&mut hdr).is_err(),
+        "worker cap must drop the extra TCP body"
+    );
+    drop(hold);
+    flag.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[test]
 fn bounded_stress_handle_request() {
     let (store, _) = bootstrap_documented().unwrap();
     let store = Arc::new(store);

@@ -7,7 +7,9 @@
 
 use std::sync::Arc;
 
-use krb5_kdc::{bind_preferred, bootstrap_documented, load_store, serve, BIND_CANDIDATES};
+use krb5_kdc::{
+    bind_preferred, bootstrap_documented, drop_privileges, load_store, serve, BIND_CANDIDATES,
+};
 
 fn main() {
     let _ = tracing_subscriber::fmt()
@@ -56,6 +58,14 @@ fn main() {
         eprintln!("krb5-kdc: bind failed: {e}");
         std::process::exit(1);
     });
+    match drop_privileges() {
+        Ok(true) => eprintln!("krb5-kdc: dropped privileges"),
+        Ok(false) => {}
+        Err(e) => {
+            eprintln!("krb5-kdc: privilege drop: {e}");
+            std::process::exit(1);
+        }
+    }
     println!("listening {addr}");
     serve(store, udp, tcp).expect("serve");
 }
