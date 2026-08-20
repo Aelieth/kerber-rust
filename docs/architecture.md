@@ -59,8 +59,9 @@ out-of-process; `scripts/gss-gate.sh`). The acceptor binds
 **`krb5-admin`** is an in-process ACL session (no kadmind RPC, no
 RFC 3244 kpasswd socket, no kprop stream).
 
-**`krb5-config`** parses `krb5.conf` / `kdc.conf` and DNS SRV. It is
-**not** wired into KDC listen policy or client KDC discovery.
+**`krb5-config`** parses `krb5.conf` / `kdc.conf` and DNS SRV. The KDC
+applies `KRB5_KDC_PROFILE` ticket policy; `kinit` uses `KRB5_CONFIG`
+`[realms]` KDCs when set (argv remains the fallback).
 
 ## Security invariants
 

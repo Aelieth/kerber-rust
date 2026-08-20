@@ -11,8 +11,8 @@ primary implementation oracle. Existing Rust crates (`rasn-kerberos`,
 | [3962](https://www.rfc-editor.org/rfc/rfc3962) | AES Encryption for Kerberos 5 | Etypes 17, 18 (`aes128/256-cts-hmac-sha1-96`). |
 | [8009](https://www.rfc-editor.org/rfc/rfc8009) | AES Encryption with HMAC-SHA2 | Etypes 19, 20 (`aes128-cts-hmac-sha256-128`, `aes256-cts-hmac-sha384-192`). |
 | [4121](https://www.rfc-editor.org/rfc/rfc4121) | GSS-API Kerberos V5 Mechanism | `krb5-gss` wrap/unwrap/MIC with 16-byte tokens, sequence numbers, and 0x8003 channel bindings. MIT `libgssapi_krb5` interop is out-of-process (`scripts/gss-gate.sh`). |
-| [4556](https://www.rfc-editor.org/rfc/rfc4556) | PKINIT | ECDH P-256 + CMS SignedData. `cms_verify` is **mandatory** against a provisioned CA (no unverified fallback). The CA is **opt-in** (`--export-pkinit` / `KRB5_ENABLE_PKINIT=1`). Reply key uses RFC 4556 `octetstring2key`. `scripts/pkinit-gate.sh` **fails** if MIT `pkinit.so` is missing or MIT `kinit` PKINIT fails. Remaining gaps vs MIT: SPKI `clientPublicValue`, `signedAttrs`, cert EKU. |
-| [6113](https://www.rfc-editor.org/rfc/rfc6113) | FAST | `PA-FX-FAST` rasn CHOICE `{ armored-data [0] }`, armor AP-REQ, cookie, KrbFastReq/Rep, CF2 strengthen on AS. **Self-tested, not MIT-gated.** TGS FAST is not sent (MIT FIND_FAST vs PA-TGS-REQ usage 7). PRF+ counter is prepended per RFC 6113 §5.1. |
+| [4556](https://www.rfc-editor.org/rfc/rfc4556) | PKINIT | Oakley MODP 2048/4096 (RFC 3526) plus ECDH P-256. CMS SignedData is **mandatory** against a provisioned CA (no unverified fallback). CA is **opt-in** (`--export-pkinit` / `KRB5_ENABLE_PKINIT=1`). Reply key is RFC 4556 `octetstring2key`. `clientPublicValue` is SPKI; KDC CMS uses `signedAttrs` + issuerAndSerialNumber. `scripts/pkinit-gate.sh` **fails** if MIT `pkinit.so` is missing or MIT `kinit` PKINIT fails (MIT 1.22.2 `kinit` with FILE identity **passes**). RFC 8636 KDF is not selected; MIT falls back to `octetstring2key`. |
+| [6113](https://www.rfc-editor.org/rfc/rfc6113) | FAST | `PA-FX-FAST` rasn CHOICE `{ armored-data [0] }`. AS armor is explicit AP-REQ; TGS FAST uses implicit PA-TGS-REQ armor (usage 7) and checksums the AP-REQ bytes (MIT 1.22.2). Exercised by `kdc-gate.sh` MIT `kvno`. PRF+ counter is prepended per RFC 6113 §5.1. |
 | [3244](https://www.rfc-editor.org/rfc/rfc3244) | kpasswd | `PrincipalStore::set_password` bumps kvno and keeps prior keys; ACL `c` plus self-service. |
 | [4120] transited / referrals | Cross-realm | `krbtgt/FOREIGN` keys; TGS referral tickets; comma-separated transited (tr-type 1, not X.500 compress); AS `WRONG_REALM`. |
 | [4120] §7.2.1 / UDP-TCP 88 | KDC protocol | Harness and `krb5-kdc` listen on 127.0.0.1:88 (fallback 8888). |
@@ -22,5 +22,6 @@ primary implementation oracle. Existing Rust crates (`rasn-kerberos`,
 crates; RC4 applies the RFC 4757 usage map; 3DES uses RFC 3961 §6.3
 s2k). Single-DES is not implemented. These paths are **self-tested**.
 
-`krb5-config` parses `krb5.conf`/`kdc.conf` and DNS SRV but is **not**
-the KDC/client resolver: kinit still takes the KDC host as argv.
+`krb5-config` parses `krb5.conf`/`kdc.conf` and DNS SRV. The KDC applies
+`KRB5_KDC_PROFILE` ticket policy; `kinit` uses `KRB5_CONFIG` `[realms]`
+KDCs when set (argv remains the fallback).
