@@ -84,6 +84,8 @@ pub mod err {
     pub const MSG_TYPE: i32 = 40;
     /// KRB_AP_ERR_MODIFIED
     pub const MODIFIED: i32 = 41;
+    /// KDC_ERR_MORE_PREAUTH_DATA_REQUIRED (RFC 6113; IANA 91)
+    pub const MORE_PREAUTH_DATA_REQUIRED: i32 = 91;
     /// KRB_AP_ERR_BADORDER
     pub const BADORDER: i32 = 42;
     /// KRB_AP_ERR_BADKEYVER
@@ -176,6 +178,8 @@ pub mod ku {
     pub const FAST_FINISHED: u32 = 53;
     /// Cookie encrypted under the krbtgt key (local helper, not an RFC number).
     pub const FAST_COOKIE: u32 = 54;
+    /// SPAKE factor encryption (MIT `KRB5_KEYUSAGE_SPAKE`).
+    pub const SPAKE: u32 = 65;
 }
 
 /// RFC 4120 / 6113 / 4556 PA-DATA type numbers.
