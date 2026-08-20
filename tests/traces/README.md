@@ -6,8 +6,9 @@ KRB-CRED).
 
 Set `KERBER_CAPTURE_DIR` to this directory (or a temp dir) when running
 the KDC or client: each raw PDU is written as `{kdc,client}-{req,rep}-<nonce>.der`
-at the Rust socket boundary (no packet sniffer required). `scripts/kdc-gate.sh`
-copies MIT 1.22.2 captures here (`KERBER_TRACE_DST` override).
+at the Rust socket boundary (no packet sniffer required). Those hash-named
+files are gitignored. `scripts/kdc-gate.sh` copies MIT 1.22.2 captures here
+as `mit-*.der` (`KERBER_TRACE_DST` override).
 
 Checked-in MIT 1.22.2 PDUs from `kdc-gate.sh` (APPLICATION tags):
 

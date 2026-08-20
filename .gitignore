@@ -10,3 +10,6 @@
 *.pcap
 *.pcapng
 core
+# Socket-boundary captures (golden MIT PDUs are tests/traces/mit-*.der)
+/tests/traces/kdc-*.der
+/tests/traces/client-*.der
