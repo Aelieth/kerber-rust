@@ -1,0 +1,75 @@
+[package]
+name = "krb5-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+krb5-asn1 = { path = "../crates/krb5-asn1" }
+krb5-crypto = { path = "../crates/krb5-crypto" }
+krb5-gss = { path = "../crates/krb5-gss" }
+krb5-protocol = { path = "../crates/krb5-protocol" }
+krb5-types = { path = "../crates/krb5-types" }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "der_decode"
+path = "fuzz_targets/der_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "as_tgs_ap"
+path = "fuzz_targets/as_tgs_ap.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "keytab_ccache"
+path = "fuzz_targets/keytab_ccache.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pkinit_cms"
+path = "fuzz_targets/pkinit_cms.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pac_ndr"
+path = "fuzz_targets/pac_ndr.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "spake_point"
+path = "fuzz_targets/spake_point.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "oakley_dh"
+path = "fuzz_targets/oakley_dh.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gss_token"
+path = "fuzz_targets/gss_token.rs"
+test = false
+doc = false
+bench = false
