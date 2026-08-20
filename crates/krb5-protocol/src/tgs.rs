@@ -113,19 +113,13 @@ fn kdc_for_realm(realm: &str, fallback: &KdcAddr) -> KdcAddr {
         }
         return KdcAddr::new(v);
     }
-    if let Ok(path) = std::env::var("KRB5_CONFIG") {
-        if let Ok(conf) = krb5_config::Krb5Conf::load_file(path) {
-            if let Ok(list) = conf.kdcs_for(realm) {
-                if let Some(ep) = list.first() {
-                    return KdcAddr {
-                        host: ep.host.clone(),
-                        port: ep.port,
-                    };
-                }
-            }
-        }
-    }
-    fallback.clone()
+    krb5_config::discover_kdc(realm).map_or_else(
+        || fallback.clone(),
+        |ep| KdcAddr {
+            host: ep.host,
+            port: ep.port,
+        },
+    )
 }
 
 fn tgs_once(

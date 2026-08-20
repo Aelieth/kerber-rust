@@ -112,17 +112,51 @@ fn kinit_inner(
 }
 
 fn resolve_kdc(realm: &str, argv: &KdcAddr) -> KdcAddr {
-    let Ok(path) = std::env::var("KRB5_CONFIG") else {
-        return argv.clone();
-    };
-    let Ok(conf) = krb5_config::Krb5Conf::load_file(path) else {
-        return argv.clone();
-    };
-    match conf.kdcs_for(realm) {
-        Ok(list) if !list.is_empty() => KdcAddr {
-            host: list[0].host.clone(),
-            port: list[0].port,
+    krb5_config::discover_kdc(realm).map_or_else(
+        || argv.clone(),
+        |ep| KdcAddr {
+            host: ep.host,
+            port: ep.port,
         },
-        _ => argv.clone(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discover_kdc_prefers_krb5_conf_over_argv() {
+        let path = std::env::temp_dir().join(format!(
+            "kerber-client-krb5-{}-{}.conf",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(
+            &path,
+            r"
+[realms]
+    KERBER.TEST = {
+        kdc = 192.0.2.10:8888
+    }
+",
+        )
+        .unwrap();
+        let argv = KdcAddr {
+            host: "127.0.0.1".into(),
+            port: 88,
+        };
+        let ep = krb5_config::discover_kdc_in([&path], "KERBER.TEST").unwrap();
+        let resolved = KdcAddr {
+            host: ep.host,
+            port: ep.port,
+        };
+        assert_eq!(resolved.host, "192.0.2.10");
+        assert_eq!(resolved.port, 8888);
+        assert_eq!(argv.port, 88);
+        let _ = std::fs::remove_file(&path);
     }
 }

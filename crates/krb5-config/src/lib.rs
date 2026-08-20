@@ -388,7 +388,7 @@ fn parse_duration_secs(v: &str) -> Option<u64> {
             num = num
                 .saturating_mul(10)
                 .saturating_add(u64::from(c as u8 - b'0'));
-        } else {
+        } else if !c.is_whitespace() {
             let mul = match c {
                 's' | 'S' => 1,
                 'm' | 'M' => 60,
@@ -437,6 +437,51 @@ pub fn env_kdc_config() -> Option<PathBuf> {
     std::env::var_os("KRB5_KDC_PROFILE")
         .or_else(|| std::env::var_os("KRB5_KDC_CONF"))
         .map(PathBuf::from)
+}
+
+/// `KRB5_CONFIG` then `/etc/krb5.conf`.
+#[must_use]
+pub fn krb5_conf_paths() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Some(p) = env_krb5_config() {
+        out.push(p);
+    }
+    out.push(PathBuf::from("/etc/krb5.conf"));
+    out
+}
+
+/// First KDC for `realm` from the given `krb5.conf` paths.
+#[must_use]
+pub fn discover_kdc_in<P: AsRef<Path>>(
+    paths: impl IntoIterator<Item = P>,
+    realm: &str,
+) -> Option<Endpoint> {
+    for path in paths {
+        if let Ok(conf) = Krb5Conf::load_file(path) {
+            if let Ok(list) = conf.kdcs_for(realm) {
+                if let Some(ep) = list.into_iter().next() {
+                    return Some(ep);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// First KDC for `realm` from [`krb5_conf_paths`].
+#[must_use]
+pub fn discover_kdc(realm: &str) -> Option<Endpoint> {
+    discover_kdc_in(krb5_conf_paths(), realm)
+}
+
+/// `KRB5_KDC_PROFILE` / `KRB5_KDC_CONF` / `/etc/krb5kdc/kdc.conf` if present.
+#[must_use]
+pub fn kdc_conf_path() -> Option<PathBuf> {
+    if let Some(p) = env_kdc_config() {
+        return Some(p);
+    }
+    let p = PathBuf::from("/etc/krb5kdc/kdc.conf");
+    p.is_file().then_some(p)
 }
 
 /// `KRB5_PASSWORD` (never from argv).
@@ -622,6 +667,9 @@ mod tests {
         assert_eq!(c.clockskew, 300);
         assert_eq!(c.kdcs["KERBER.TEST"][0].host, "127.0.0.1");
         assert_eq!(c.kdcs["KERBER.TEST"][0].port, 88);
+        let discovered = c.kdcs_for("KERBER.TEST").unwrap();
+        assert_eq!(discovered[0].host, "127.0.0.1");
+        assert_eq!(discovered[0].port, 88);
         assert_eq!(c.domain_realm[".kerber.test"], "KERBER.TEST");
     }
 
@@ -646,6 +694,24 @@ mod tests {
         assert_eq!(c.max_renewable_life, 7 * 86400);
         assert!(c.requires_preauth);
         assert_eq!(c.kdc_listen[0], "127.0.0.1:88");
+        let mit = KdcConf::parse(
+            r"
+[realms]
+    KERBER.TEST = {
+        max_life = 10h 0m 0s
+        max_renewable_life = 7d 0h 0m 0s
+        database_name = /var/lib/krb5kdc/principal
+        key_stash_file = /var/lib/krb5kdc/.k5.KERBER.TEST
+    }
+",
+        )
+        .unwrap();
+        assert_eq!(mit.max_life, 36000);
+        assert_eq!(mit.max_renewable_life, 7 * 86400);
+        assert_eq!(
+            mit.database_name.as_deref(),
+            Some(std::path::Path::new("/var/lib/krb5kdc/principal"))
+        );
     }
 
     #[test]
@@ -653,5 +719,35 @@ mod tests {
         assert_eq!(parse_duration_secs("10h"), Some(36000));
         assert_eq!(parse_duration_secs("7d"), Some(604_800));
         assert_eq!(parse_duration_secs("300"), Some(300));
+        assert_eq!(parse_duration_secs("10h 0m 0s"), Some(36000));
+        assert_eq!(parse_duration_secs("1h 30m"), Some(5400));
+        assert_eq!(parse_duration_secs("7d 0h 0m 0s"), Some(604_800));
+    }
+
+    #[test]
+    fn discover_kdc_in_reads_realms_stanza() {
+        let path = std::env::temp_dir().join(format!(
+            "kerber-krb5-conf-{}-{}.conf",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(
+            &path,
+            r"
+[realms]
+    KERBER.TEST = {
+        kdc = 10.9.8.7:1088
+    }
+",
+        )
+        .unwrap();
+        let ep = discover_kdc_in([&path], "KERBER.TEST").unwrap();
+        assert_eq!(ep.host, "10.9.8.7");
+        assert_eq!(ep.port, 1088);
+        assert!(discover_kdc_in([&path], "OTHER.TEST").is_none());
+        let _ = std::fs::remove_file(&path);
     }
 }
