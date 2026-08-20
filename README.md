@@ -5,14 +5,19 @@ wire compatibility with [MIT Kerberos](https://web.mit.edu/kerberos/)
 **1.22.2**, Heimdal, and Active Directory. There is no C FFI in this
 tree.
 
-This is an early-stage project. Stages 1–3 (workspace, crypto, ASN.1,
-MIT harness, AS/TGS client + FILE ccache) and a Rust KDC (AS+TGS, ACL
-admin, host keytab, AP-REQ verify) are in tree. GSS-API is later; see
-[docs/stages.md](docs/stages.md).
+This is an early-stage project targeting MIT 1.22.2 wire compatibility.
+Stages 1–8 of `working/plan-initial-audit-0819-2122.md` are in tree at
+library depth (AS/TGS KDC+client, GSS wrap/MIC, admin ACL, persist,
+FAST/SPAKE/PKINIT types, PAC). Long soaks and live Heimdal/AD/SSPI
+remain environment-dependent. See [docs/stages.md](docs/stages.md).
 
 **License:** [Apache-2.0](LICENSE-APACHE) OR [MIT](LICENSE-MIT), at your
-option. Cryptographic software may be subject to export-control rules in
-some jurisdictions.
+option. This tree contains cryptographic software. Export from the
+United States (and some other jurisdictions) may require a license;
+review local export-control rules before distributing binaries. Supply
+chain: `cargo audit` in CI; `deny.toml` for licenses/advisories. The
+product itself is `forbid(unsafe_code)`; some dependencies contain
+`unsafe` (RustCrypto, getrandom, nix).
 
 ## Architecture
 
@@ -24,9 +29,12 @@ Focused crates under `crates/`:
 | `krb5-crypto` | RFC 3961/3962/8009 etypes 17–20 |
 | `krb5-types` | RFC 4120 owned protocol values |
 | `krb5-asn1` | DER encode/decode of those values |
-| `krb5-protocol` | AS/TGS over UDP (TCP fallback) |
-| `krb5-client` | `kinit`, MIT FILE ccache v4, keytab v2 |
-| `krb5-kdc` | AS/TGS issue, kadm5.acl-style admin, keytab export, UDP/TCP listener |
+| `krb5-config` | `krb5.conf` / `kdc.conf`, env, DNS SRV |
+| `krb5-protocol` | AS/TGS/AP/SAFE/PRIV/CRED, keytab, FILE ccache |
+| `krb5-client` | `kinit` (password env/stdin), MIT FILE ccache v4, keytab v1/v2 |
+| `krb5-kdc` | AS/TGS issue, persist/stash, ACL, UDP/TCP listener |
+| `krb5-gss` | GSS wrap/unwrap/MIC, SPNEGO framing (no C FFI) |
+| `krb5-admin` | kadmind-equivalent ACL session, ktadd, kprop dump/load |
 
 See [docs/architecture.md](docs/architecture.md) and
 [docs/rfc-mapping.md](docs/rfc-mapping.md).
@@ -48,7 +56,10 @@ See [docs/architecture.md](docs/architecture.md) and
   verify (truncated / wrong-key / replay rejected). Gate:
   `scripts/kdc-gate.sh`.
 
-Not yet: GSS-API/SPNEGO, Heimdal/AD interop, kadmind RPC.
+GSS-API is `krb5-gss` (library wrap/MIC; MIT `libgssapi_krb5` is
+out-of-process only). kadmind MIT RPC ABI is not implemented;
+`krb5-admin` enforces the ACL over a library/session API. Weak etypes
+(16/23/25/26) are known but refused unless `allow_weak_crypto`.
 
 ## Build and test
 
@@ -82,9 +93,10 @@ See [docs/testing.md](docs/testing.md) for the realm layout.
 
 ## Rust KDC
 
-The documented Rust KDC entry point is `scripts/run-rust-kdc.sh`. It
-bootstraps realm `KERBER.TEST` and listens on UDP/TCP **88**, falling
-back to **8888** if the privileged port cannot be bound.
+The documented Rust KDC entry point is `scripts/run-rust-kdc.sh`
+(`krb5-kdc --test-realm`). It bootstraps realm `KERBER.TEST` and listens
+on **127.0.0.1:88**, falling back to **127.0.0.1:8888** if the privileged
+port cannot be bound. It does not silently bind `0.0.0.0`.
 
 | Item | Value |
 | --- | --- |

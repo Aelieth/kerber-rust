@@ -192,7 +192,7 @@ mod tests {
             ctime: None,
             cusec: None,
             stime: kerberos_time_from_utc_z("20260819120000Z").unwrap(),
-            susec: 1,
+            susec: krb5_types::Microseconds(1),
             error_code: 6,
             crealm: None,
             cname: None,

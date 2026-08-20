@@ -8,7 +8,7 @@ never install a subscriber. Tests and the harness do.
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `event` | yes | Stable name (`crypto.encrypt`, `asn1.decode`, `harness.kinit`, …) |
-| `correlation_id` | yes | 32 hex chars; one ID per operation |
+| `correlation_id` | yes | 32 hex chars; one ID per *exchange* (crypto/ASN.1 inherit the parent via `enter_correlation`; they do not mint a new ID per op) |
 | `component` | yes | `krb5-crypto`, `krb5-asn1`, `krb5-kdc`, or `harness` |
 | `outcome` | yes | `ok` or `error` |
 | `duration_us` | crypto/asn1 | Wall time of the operation |

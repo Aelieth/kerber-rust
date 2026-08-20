@@ -18,8 +18,9 @@ DER inside the test.
 - Decrypt of a truncated ciphertext or a flipped HMAC bit must fail.
 - Key usage 0 is rejected.
 
-Fuzzing of the DER parser is expected as the suite grows (`cargo fuzz`
-harness not yet wired).
+DER-strictness negatives live in `crates/krb5-asn1/tests/der_strict.rs`.
+`cargo fuzz` is optional; when it cannot run, those negatives are the
+sub-bar.
 
 ## Interop
 

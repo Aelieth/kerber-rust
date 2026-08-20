@@ -68,8 +68,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         &cname,
     )?;
     let raw = encode(&ap)?;
-    let mut replay = ReplayCache::new();
-    verify_ap_req(&raw, &parsed.entries[0].key, &mut replay)?;
+    let replay = ReplayCache::new();
+    verify_ap_req(&raw, &parsed.entries[0].key, &replay)?;
 
     println!("user={TEST_USER}@{TEST_REALM}");
     println!("password_len={}", TEST_USER_PASSWORD.len());
@@ -174,7 +174,7 @@ mod tests {
         )
         .unwrap();
         let raw = encode(&ap).unwrap();
-        let mut replay = ReplayCache::new();
-        verify_ap_req(&raw, &parsed.entries[0].key, &mut replay).unwrap();
+        let replay = ReplayCache::new();
+        verify_ap_req(&raw, &parsed.entries[0].key, &replay).unwrap();
     }
 }

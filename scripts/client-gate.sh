@@ -12,8 +12,11 @@ fi
 cargo build -p krb5-client --bin krb5-kinit
 docker cp target/debug/krb5-kinit "$NAME":/tmp/krb5-kinit
 docker exec "$NAME" chmod +x /tmp/krb5-kinit
-docker exec "$NAME" /tmp/krb5-kinit \
-    127.0.0.1 user@KERBER.TEST userpassword /tmp/krb5cc_rust \
+docker exec -e KRB5_PASSWORD=userpassword "$NAME" /tmp/krb5-kinit \
+    127.0.0.1 user@KERBER.TEST /tmp/krb5cc_rust \
     host/testhost.kerber.test
 echo "==== MIT klist of Rust FILE ccache ===="
-docker exec "$NAME" klist -c /tmp/krb5cc_rust
+KLIST="$(docker exec "$NAME" klist -c /tmp/krb5cc_rust)"
+echo "$KLIST"
+echo "$KLIST" | grep -q 'user@KERBER.TEST'
+echo "$KLIST" | grep -q 'host/testhost.kerber.test'

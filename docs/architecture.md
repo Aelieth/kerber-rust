@@ -8,7 +8,10 @@ examples/consumer, examples/kdc-consumer
         │
         ├──────────────► krb5-asn1 ──► krb5-types
         │                     │
-        ├──────────────► krb5-kdc ──► krb5-client ──► krb5-protocol ──► krb5-crypto
+        ├──────────────► krb5-kdc / krb5-admin / krb5-gss
+        │                      │
+        ├──────────────► krb5-client ──► krb5-protocol ──► krb5-crypto
+        │                      │                └──► krb5-config
         │                      │                │
         └──────────────► krb5-crypto            └──► krb5-asn1
 ```
@@ -36,13 +39,18 @@ AP-REQ build/verify.
 
 **`krb5-client`** is `kinit`, MIT FILE ccache v4, and keytab v2.
 
-**`krb5-kdc`** issues AS/TGS tickets from an in-memory principal store,
-gates admin create/delete/ktadd with a kadm5.acl-style ACL, and listens
-on UDP/TCP 88 (fallback 8888). Issue, ACL, and keytab export are pure
-functions; the listener is thin.
+**`krb5-protocol`** runs AS/TGS/AP/SAFE/PRIV/CRED, plus MIT keytab and
+FILE ccache (so the KDC does not depend on the client crate).
 
-Later crates (`krb5-gss`, `krb5-admin` RPC) wait until these layers are
-stable.
+**`krb5-client`** is `kinit` (password from env/stdin, never argv).
+
+**`krb5-kdc`** issues AS/TGS from an in-memory store with optional
+persist/stash. Default bind is `127.0.0.1` (not `0.0.0.0`). `--test-realm`
+bootstraps documented principals; otherwise `KRB5_KDC_DB` + stash.
+
+**`krb5-gss`** / **`krb5-admin`** / **`krb5-config`** provide GSS wrap,
+ACL-enforced admin, and `krb5.conf` parsing. MIT GSS remains
+out-of-process.
 
 ## Security invariants
 

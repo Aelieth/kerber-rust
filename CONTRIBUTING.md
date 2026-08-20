@@ -58,7 +58,14 @@ rustdoc.
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo test --workspace --release
+cargo doc --workspace --no-deps
 ```
+
+Live MIT oracles (when Docker is available): `scripts/client-gate.sh`,
+`scripts/kdc-gate.sh` (assert `klist` principal/service), 
+`scripts/bidirectional-gate.sh`. Set `KERBER_LIVE=1` so live tests fail
+instead of skip.
 
 Never add C FFI. `unsafe` is forbidden unless a future exception is
 audited, minimized, and documented in the PR.

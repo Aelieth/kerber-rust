@@ -41,7 +41,7 @@ fi
 docker exec "$NAME" chmod +x /tmp/krb5-kdc
 
 # Bind 88 inside the container (root). Fall back to 8888 via the binary.
-docker exec -d "$NAME" sh -c '/tmp/krb5-kdc 127.0.0.1:88 >/tmp/kdc.log 2>&1 || /tmp/krb5-kdc 127.0.0.1:8888 >/tmp/kdc.log 2>&1'
+docker exec -d "$NAME" sh -c '/tmp/krb5-kdc --test-realm 127.0.0.1:88 >/tmp/kdc.log 2>&1 || /tmp/krb5-kdc --test-realm 127.0.0.1:8888 >/tmp/kdc.log 2>&1'
 
 ok=0
 for _ in $(seq 1 30); do
@@ -82,7 +82,10 @@ if ! docker exec -e KRB5_TRACE=/dev/stderr "$NAME" sh -c 'printf "userpassword\n
     docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
     exit 1
 fi
-docker exec "$NAME" klist
+KLIST1="$(docker exec "$NAME" klist)"
+echo "$KLIST1"
+echo "$KLIST1" | grep -q 'user@KERBER.TEST'
+echo "$KLIST1" | grep -Ei 'Flags:|flags:' || echo "$KLIST1" | grep -q krbtgt
 
 echo "==== MIT kvno host/testhost.kerber.test ===="
 if ! docker exec "$NAME" kvno host/testhost.kerber.test; then
@@ -90,6 +93,9 @@ if ! docker exec "$NAME" kvno host/testhost.kerber.test; then
     docker exec "$NAME" klist || true
     exit 1
 fi
-docker exec "$NAME" klist
+KLIST2="$(docker exec "$NAME" klist)"
+echo "$KLIST2"
+echo "$KLIST2" | grep -q 'user@KERBER.TEST'
+echo "$KLIST2" | grep -q 'host/testhost.kerber.test'
 
 log "kdc.gate" "ok" ",\"principal\":\"user@KERBER.TEST\",\"service\":\"host/testhost.kerber.test\""

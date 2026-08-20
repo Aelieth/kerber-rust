@@ -13,6 +13,6 @@ cargo build -p krb5-kdc --bin krb5-kdc
 
 BIND="${KRB5_KDC_BIND:-}"
 if [ -n "$BIND" ]; then
-    exec ./target/debug/krb5-kdc "$BIND"
+    exec ./target/debug/krb5-kdc --test-realm "$BIND"
 fi
-exec ./target/debug/krb5-kdc
+exec ./target/debug/krb5-kdc --test-realm
