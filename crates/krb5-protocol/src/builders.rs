@@ -120,6 +120,10 @@ pub fn tgs_req(
         KdcOptions::forwardable(),
         None,
         Vec::new(),
+        EncryptionType::preferred()
+            .iter()
+            .map(|e| e.to_iana())
+            .collect(),
     )
 }
 
@@ -140,11 +144,8 @@ pub fn tgs_req_ex(
     kdc_options: KdcOptions,
     additional_tickets: Option<Vec<Ticket>>,
     extra_padata: Vec<PaData>,
+    etypes: Vec<i32>,
 ) -> Result<TgsReq, Error> {
-    let etypes: Vec<i32> = EncryptionType::preferred()
-        .iter()
-        .map(|e| e.to_iana())
-        .collect();
     let till = KerberosTime::now()
         .add_hours(10)
         .unwrap_or_else(|_| KerberosTime::now());

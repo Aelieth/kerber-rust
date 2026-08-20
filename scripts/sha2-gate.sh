@@ -93,14 +93,30 @@ fi
 KLIST="$(docker exec -e KRB5_CONFIG=/etc/krb5-sha2.conf "$NAME" klist -e 2>/dev/null || true)"
 echo "$KLIST"
 echo "$KLIST" | grep -q 'user@KERBER.TEST'
+echo "$KLIST" | grep -q 'krbtgt/KERBER.TEST'
 echo "$KLIST" | grep -q 'host/testhost.kerber.test'
-COMBINED="$TRACE
-$KVNO
-$KLIST"
-if ! echo "$COMBINED" | grep -Eq 'aes256-cts-hmac-sha384-192|aes256-sha2'; then
-    log "sha2.gate" "error" ',"error":"sha2 etype not named in kinit/kvno/klist"'
-    exit 1
-fi
-echo "$KVNO" | grep -q 'kvno = 1' || echo "$KVNO" | grep -q 'kvno=1' || true
-log "sha2.gate" "ok" ',"etype":"aes256-cts-hmac-sha384-192","principal":"user@KERBER.TEST"'
+
+# MIT `klist -e` prints one `Etype (skey, tkt):` line after each principal.
+# Both session key and ticket encryption must be RFC 8009 etype 20.
+assert_klist_sha2() {
+    local princ="$1"
+    local pair
+    pair="$(printf '%s\n' "$KLIST" | awk -v p="$princ" '
+        index($0, p) && $0 !~ /Etype/ { getline; print; exit }
+    ')"
+    echo "==== klist -e $princ ===="
+    echo "$pair"
+    if ! echo "$pair" | grep -Fq 'aes256-cts-hmac-sha384-192, aes256-cts-hmac-sha384-192'; then
+        log "sha2.gate" "error" ",\"error\":\"$princ skey/tkt must both be aes256-cts-hmac-sha384-192\",\"got\":\"$(echo "$pair" | tr '\n' ' ')\""
+        exit 1
+    fi
+    if echo "$pair" | grep -q 'sha1-96'; then
+        log "sha2.gate" "error" ",\"error\":\"$princ still names a SHA-1 etype\""
+        exit 1
+    fi
+}
+assert_klist_sha2 'krbtgt/KERBER.TEST'
+assert_klist_sha2 'host/testhost.kerber.test'
+
+log "sha2.gate" "ok" ',"etype":"aes256-cts-hmac-sha384-192","principal":"user@KERBER.TEST","tkt":"aes256-cts-hmac-sha384-192"'
 exit 0

@@ -15,9 +15,9 @@ use krb5_kdc::{
     TEST_USER_PASSWORD,
 };
 use krb5_protocol::{
-    apply_strengthen, armor_key, attach_fast, build_fast_armor, pa_for_user, pa_pk_as_req,
-    pa_pk_as_req_spki, pa_spake_response, pa_spake_support, pkinit_reply_key, tgs_req_ex,
-    unwrap_fast_rep,
+    apply_strengthen, armor_key, as_req_sname, attach_fast, build_fast_armor, pa_for_user,
+    pa_pk_as_req, pa_pk_as_req_spki, pa_spake_response, pa_spake_support, pkinit_reply_key,
+    tgs_req_ex, unwrap_fast_rep,
 };
 use krb5_types::{
     ascii, err, flag_bit, ku, pa, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart,
@@ -48,6 +48,13 @@ fn decode_enc_part(plain: &[u8]) -> EncKdcRepPart {
         return p;
     }
     decode::<EncKdcRepPart>(plain).expect("enc-part")
+}
+
+fn pref_etypes() -> Vec<i32> {
+    EncryptionType::preferred()
+        .iter()
+        .map(|e| e.to_iana())
+        .collect()
 }
 
 fn issue_tgt(
@@ -432,6 +439,7 @@ fn s4u2self_impersonates_user() {
         KdcOptions::forwardable(),
         None,
         vec![pa],
+        pref_etypes(),
     )
     .expect("S4U TGS-REQ");
     let out = krb5_kdc::issue_tgs(&store, &tgs).expect("S4U2Self");
@@ -478,6 +486,7 @@ fn s4u2proxy_takes_cname_from_evidence() {
         opts,
         Some(vec![evidence.rep.0.ticket.clone()]),
         Vec::new(),
+        pref_etypes(),
     )
     .expect("S4U2Proxy TGS-REQ");
     let out = krb5_kdc::issue_tgs(&store, &tgs).expect("S4U2Proxy");
@@ -509,6 +518,7 @@ fn u2u_encrypts_ticket_in_additional_tgt_session() {
         opts,
         Some(vec![admin_tgt.rep.0.ticket.clone()]),
         Vec::new(),
+        pref_etypes(),
     )
     .expect("U2U TGS-REQ");
     let out = krb5_kdc::issue_tgs(&store, &tgs).expect("U2U");
@@ -550,6 +560,7 @@ fn s4u2self_bad_checksum_rejected() {
         KdcOptions::forwardable(),
         None,
         vec![pa],
+        pref_etypes(),
     )
     .expect("TGS-REQ");
     let bytes = krb5_kdc::handle_request(&store, &encode(&tgs).expect("der")).expect("reply");
@@ -654,6 +665,7 @@ fn tgs_canonicalize_issues_cross_realm_krbtgt() {
         KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true),
         None,
         Vec::new(),
+        pref_etypes(),
     )
     .expect("cross-realm TGS-REQ");
     let out = krb5_kdc::issue_tgs(&store, &tgs).expect("referral TGS");
@@ -691,6 +703,56 @@ fn krbtgt_and_host_have_rfc8009_keys() {
     assert!(host
         .key_for(EncryptionType::Aes256CtsHmacSha384192)
         .is_some());
+}
+
+#[test]
+fn issue_as_and_tgs_with_etype_20_mint_sha2_tickets() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let sha2 = EncryptionType::Aes256CtsHmacSha384192;
+    let key = string_to_key(
+        sha2,
+        TEST_USER_PASSWORD,
+        cname.default_salt(TEST_REALM),
+        Some(&krb5_kdc::s2k_params(sha2)),
+    )
+    .expect("sha2 s2k");
+    let req = as_req_sname(
+        cname.clone(),
+        TEST_REALM,
+        80,
+        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
+        PrincipalName::krbtgt(TEST_REALM),
+        vec![sha2.to_iana()],
+    );
+    let as_out = krb5_kdc::issue_as(&store, &req).expect("AS etype 20");
+    assert_eq!(as_out.session_key.etype(), sha2);
+    assert_eq!(
+        as_out.rep.0.ticket.enc_part.etype,
+        sha2.to_iana(),
+        "TGT EncryptedData.etype must be 20, not best_key() SHA-1"
+    );
+    let tgs = tgs_req_ex(
+        as_out.rep.0.ticket.clone(),
+        &as_out.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        81,
+        KdcOptions::forwardable(),
+        None,
+        Vec::new(),
+        vec![sha2.to_iana()],
+    )
+    .expect("TGS etype 20");
+    let tgs_out = krb5_kdc::issue_tgs(&store, &tgs).expect("TGS etype 20");
+    assert_eq!(tgs_out.session_key.etype(), sha2);
+    assert_eq!(
+        tgs_out.rep.0.ticket.enc_part.etype,
+        sha2.to_iana(),
+        "host ticket EncryptedData.etype must be 20"
+    );
 }
 
 #[test]
