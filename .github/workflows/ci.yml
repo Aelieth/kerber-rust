@@ -66,3 +66,5 @@ jobs:
         run: ./scripts/bidirectional-gate.sh
       - name: gss-gate (MIT libgssapi vs krb5-gss)
         run: ./scripts/gss-gate.sh
+      - name: pkinit-gate (CA PEM / MIT plugin if present)
+        run: ./scripts/pkinit-gate.sh
