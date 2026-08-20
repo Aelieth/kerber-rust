@@ -882,13 +882,44 @@ pub struct TransitedEncoding {
 }
 
 impl TransitedEncoding {
-    /// Empty DOMAIN-X500-COMPRESS encoding (type 0, no realms).
+    /// Empty encoding (type 0, no realms).
     #[must_use]
     pub fn empty() -> Self {
         Self {
             tr_type: 0,
             contents: OctetString::from(Vec::<u8>::new()),
         }
+    }
+
+    /// Local profile: `tr-type` 1, comma-separated realm names (not X.500 compress).
+    #[must_use]
+    pub fn from_realms(realms: &[&str]) -> Self {
+        let s = realms.join(",");
+        Self {
+            tr_type: 1,
+            contents: OctetString::from(s.into_bytes()),
+        }
+    }
+
+    /// Realm names encoded in [`Self::from_realms`].
+    #[must_use]
+    pub fn realms(&self) -> Vec<String> {
+        let s = String::from_utf8_lossy(self.contents.as_ref());
+        s.split(',')
+            .filter(|r| !r.is_empty())
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// Append `realm` if it is not already present.
+    #[must_use]
+    pub fn with_realm(&self, realm: &str) -> Self {
+        let mut rs = self.realms();
+        if !rs.iter().any(|r| r == realm) {
+            rs.push(realm.to_owned());
+        }
+        let refs: Vec<&str> = rs.iter().map(String::as_str).collect();
+        Self::from_realms(&refs)
     }
 }
 
@@ -980,5 +1011,31 @@ mod tests {
         assert!(!t.is_krbtgt_for("OTHER.TEST"));
         let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "x"]);
         assert!(!host.is_krbtgt());
+    }
+
+    #[test]
+    fn transited_csv_round_trip() {
+        let t = TransitedEncoding::empty()
+            .with_realm("A.TEST")
+            .with_realm("B.TEST");
+        assert_eq!(t.realms(), vec!["A.TEST".to_string(), "B.TEST".to_string()]);
+        assert_eq!(t.with_realm("A.TEST").realms().len(), 2);
+    }
+
+    #[test]
+    fn pac_ndr_logon_info_round_trip() {
+        let raw = pac::logon_info_buffer("user", "KERBER.TEST");
+        let (c, r) = pac::parse_logon_info(&raw).expect("NDR parse");
+        assert_eq!(c, "user");
+        assert_eq!(r, "KERBER.TEST");
+    }
+
+    #[test]
+    fn pkinit_cms_wrap_unwrap() {
+        let inner = b"authpack-bytes";
+        let wrapped = pkinit::cms_wrap(inner);
+        assert_ne!(wrapped, inner);
+        assert_eq!(pkinit::cms_unwrap(&wrapped), inner);
+        assert_eq!(pkinit::cms_unwrap(inner), inner);
     }
 }

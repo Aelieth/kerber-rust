@@ -231,25 +231,120 @@ pub fn client_info_buffer(authtime_unix: u32, name: &str) -> Vec<u8> {
     v
 }
 
-/// Minimal logon-info placeholder: UTF-8 client principal + realm.
+/// NDR32 `KERB_VALIDATION_INFO` (MS-PAC PAC_LOGON_INFO) for `client` / `realm`.
+///
+/// Layout is NDR32 with a type-serialization v1 header. Strings are
+/// UTF-16LE `RPC_UNICODE_STRING`. This is not a full NDR64 / all-optional
+/// Windows field set (ExtraSids / resource groups are empty).
 #[must_use]
 pub fn logon_info_buffer(client: &str, realm: &str) -> Vec<u8> {
-    let mut v = Vec::new();
-    let c = client.as_bytes();
-    let r = realm.as_bytes();
-    v.extend_from_slice(&(c.len() as u32).to_le_bytes());
-    v.extend_from_slice(c);
-    v.extend_from_slice(&(r.len() as u32).to_le_bytes());
-    v.extend_from_slice(r);
-    v
+    ndr_kerb_validation_info(client, realm, 1104, 513)
 }
 
-/// Parse the placeholder logon-info written by [`logon_info_buffer`].
+fn ndr_kerb_validation_info(client: &str, realm: &str, user_rid: u32, primary: u32) -> Vec<u8> {
+    let name = utf16le(client);
+    let dom = utf16le(realm);
+    let mut body = Vec::new();
+    for _ in 0..6 {
+        body.extend_from_slice(&0u64.to_le_bytes());
+    }
+    let mut deferred: Vec<Vec<u8>> = Vec::new();
+    push_rpc_unicode(&mut body, &mut deferred, &name);
+    for _ in 0..5 {
+        push_rpc_unicode(&mut body, &mut deferred, &[]);
+    }
+    body.extend_from_slice(&1u16.to_le_bytes());
+    body.extend_from_slice(&0u16.to_le_bytes());
+    body.extend_from_slice(&user_rid.to_le_bytes());
+    body.extend_from_slice(&primary.to_le_bytes());
+    body.extend_from_slice(&1u32.to_le_bytes());
+    body.extend_from_slice(&0x0002_0004u32.to_le_bytes());
+    body.extend_from_slice(&0u32.to_le_bytes());
+    body.extend_from_slice(&[0u8; 16]);
+    push_rpc_unicode(&mut body, &mut deferred, &[]);
+    push_rpc_unicode(&mut body, &mut deferred, &dom);
+    body.extend_from_slice(&0x0002_0008u32.to_le_bytes());
+    body.extend_from_slice(&0u32.to_le_bytes());
+    body.extend_from_slice(&0u32.to_le_bytes());
+    body.extend_from_slice(&0x10u32.to_le_bytes());
+    body.extend_from_slice(&0u32.to_le_bytes());
+    body.extend_from_slice(&0u64.to_le_bytes());
+    body.extend_from_slice(&0u64.to_le_bytes());
+    body.extend_from_slice(&0u32.to_le_bytes());
+    body.extend_from_slice(&0u32.to_le_bytes());
+    body.extend_from_slice(&0u32.to_le_bytes());
+    body.extend_from_slice(&0u32.to_le_bytes());
+    body.extend_from_slice(&0u32.to_le_bytes());
+    body.extend_from_slice(&0u32.to_le_bytes());
+    body.extend_from_slice(&0u32.to_le_bytes());
+    for s in deferred {
+        ndr_conformant_string(&mut body, &s);
+    }
+    body.extend_from_slice(&1u32.to_le_bytes());
+    body.extend_from_slice(&0u32.to_le_bytes());
+    body.extend_from_slice(&1u32.to_le_bytes());
+    body.extend_from_slice(&primary.to_le_bytes());
+    body.extend_from_slice(&7u32.to_le_bytes());
+    // SID S-1-5-21-1-2-3
+    body.extend_from_slice(&4u32.to_le_bytes());
+    body.push(1);
+    body.push(4);
+    body.extend_from_slice(&[0, 0, 0, 0, 0, 5]);
+    body.extend_from_slice(&21u32.to_le_bytes());
+    body.extend_from_slice(&1u32.to_le_bytes());
+    body.extend_from_slice(&2u32.to_le_bytes());
+    body.extend_from_slice(&3u32.to_le_bytes());
+
+    let mut out = Vec::new();
+    out.extend_from_slice(&[1, 0x10, 8, 0]);
+    out.extend_from_slice(&0xcccc_ccceu32.to_le_bytes());
+    out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out.extend_from_slice(&0x0002_0000u32.to_le_bytes());
+    out.extend_from_slice(&body);
+    out
+}
+
+fn utf16le(s: &str) -> Vec<u8> {
+    s.encode_utf16().flat_map(u16::to_le_bytes).collect()
+}
+
+fn push_rpc_unicode(body: &mut Vec<u8>, deferred: &mut Vec<Vec<u8>>, utf16: &[u8]) {
+    let n = u16::try_from(utf16.len()).unwrap_or(u16::MAX);
+    body.extend_from_slice(&n.to_le_bytes());
+    body.extend_from_slice(&n.saturating_add(2).to_le_bytes());
+    if utf16.is_empty() {
+        body.extend_from_slice(&0u32.to_le_bytes());
+    } else {
+        let id = 0x0002_0000u32 + u32::try_from(deferred.len()).unwrap_or(0) * 4;
+        body.extend_from_slice(&id.to_le_bytes());
+        deferred.push(utf16.to_vec());
+    }
+}
+
+fn ndr_conformant_string(out: &mut Vec<u8>, utf16: &[u8]) {
+    let chars = u32::try_from(utf16.len() / 2).unwrap_or(0);
+    out.extend_from_slice(&chars.to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out.extend_from_slice(&chars.to_le_bytes());
+    out.extend_from_slice(utf16);
+    let pad = (4 - (utf16.len() % 4)) % 4;
+    out.extend(std::iter::repeat_n(0u8, pad));
+}
+
+/// Parse [`logon_info_buffer`] (NDR) or the legacy UTF-8 placeholder.
 ///
 /// # Errors
 ///
 /// Returns [`PacError::Truncated`] when the buffer is too short.
 pub fn parse_logon_info(data: &[u8]) -> Result<(String, String), PacError> {
+    if let Ok(v) = parse_ndr_logon_info(data) {
+        return Ok(v);
+    }
+    parse_legacy_utf8_logon(data)
+}
+
+fn parse_legacy_utf8_logon(data: &[u8]) -> Result<(String, String), PacError> {
     if data.len() < 4 {
         return Err(PacError::Truncated);
     }
@@ -265,4 +360,52 @@ pub fn parse_logon_info(data: &[u8]) -> Result<(String, String), PacError> {
     }
     let realm = std::str::from_utf8(&rest[4..4 + m]).map_err(|_| PacError::Truncated)?;
     Ok((client.to_owned(), realm.to_owned()))
+}
+
+/// Type-serialization v1 header + unique pointer (8 + 8 + 4).
+const NDR_TYPE_HEADER: usize = 20;
+/// Fixed KERB_VALIDATION_INFO NDR32 size before deferred pointers (see encoder).
+const NDR_LOGON_STRUCT: usize = 216;
+
+fn parse_ndr_logon_info(data: &[u8]) -> Result<(String, String), PacError> {
+    if data.len() < NDR_TYPE_HEADER + NDR_LOGON_STRUCT || data[0] != 1 || data[1] != 0x10 {
+        return Err(PacError::Truncated);
+    }
+    let body = &data[NDR_TYPE_HEADER..];
+    let user_rid = u32::from_le_bytes(body[100..104].try_into().map_err(|_| PacError::Truncated)?);
+    if user_rid == 0 {
+        return Err(PacError::Truncated);
+    }
+    let strings = ndr_conformant_strings(&body[NDR_LOGON_STRUCT..])?;
+    let client = strings.first().cloned().ok_or(PacError::Truncated)?;
+    let realm = strings.get(1).cloned().unwrap_or_default();
+    if client.is_empty() {
+        return Err(PacError::Truncated);
+    }
+    Ok((client, realm))
+}
+
+fn ndr_conformant_strings(mut b: &[u8]) -> Result<Vec<String>, PacError> {
+    let mut out = Vec::new();
+    while b.len() >= 12 && out.len() < 2 {
+        let max = u32::from_le_bytes(b[0..4].try_into().map_err(|_| PacError::Truncated)?) as usize;
+        let actual =
+            u32::from_le_bytes(b[8..12].try_into().map_err(|_| PacError::Truncated)?) as usize;
+        if actual > max || actual > 256 {
+            break;
+        }
+        let nbytes = actual.saturating_mul(2);
+        if 12 + nbytes > b.len() {
+            break;
+        }
+        let mut u16s = Vec::with_capacity(actual);
+        for k in 0..actual {
+            let o = 12 + k * 2;
+            u16s.push(u16::from_le_bytes([b[o], b[o + 1]]));
+        }
+        out.push(String::from_utf16(&u16s).map_err(|_| PacError::Truncated)?);
+        let pad = (4 - (nbytes % 4)) % 4;
+        b = &b[12 + nbytes + pad..];
+    }
+    Ok(out)
 }
