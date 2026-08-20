@@ -12,9 +12,14 @@ fi
 cargo build -p krb5-client --bin krb5-kinit
 docker cp target/debug/krb5-kinit "$NAME":/tmp/krb5-kinit
 docker exec "$NAME" chmod +x /tmp/krb5-kinit
-docker exec -e KRB5_PASSWORD=userpassword "$NAME" /tmp/krb5-kinit \
+docker exec "$NAME" mkdir -p /tmp/client-traces
+docker exec -e KRB5_PASSWORD=userpassword -e KERBER_CAPTURE_DIR=/tmp/client-traces \
+    "$NAME" /tmp/krb5-kinit \
     127.0.0.1 user@KERBER.TEST /tmp/krb5cc_rust \
     host/testhost.kerber.test
+TRACE_DST="${KERBER_TRACE_DST:-$ROOT/tests/traces}"
+mkdir -p "$TRACE_DST"
+docker cp "$NAME":/tmp/client-traces/. "$TRACE_DST/" 2>/dev/null || true
 echo "==== MIT klist of Rust FILE ccache ===="
 KLIST="$(docker exec "$NAME" klist -c /tmp/krb5cc_rust)"
 echo "$KLIST"

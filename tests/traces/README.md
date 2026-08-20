@@ -1,22 +1,26 @@
 # Golden DER / traces
 
-In-crate tests assert RFC 4120 APPLICATION tags against the shipped
-encoder (`0x61` Ticket, `0x79` EncASRepPart, `0x7e` KRB-ERROR, `0x76`
-KRB-CRED).
+In-crate tests (`crates/krb5-protocol/tests/golden_traces.rs`) decode each
+`mit-*.der` with the shipped rasn encoder/decoder and field-diff a
+re-encode. A divergence fails the unit `test` CI job.
 
 Set `KERBER_CAPTURE_DIR` to this directory (or a temp dir) when running
 the KDC or client: each raw PDU is written as `{kdc,client}-{req,rep}-<nonce>.der`
 at the Rust socket boundary (no packet sniffer required). Those hash-named
-files are gitignored. `scripts/kdc-gate.sh` copies MIT 1.22.2 captures here
-as `mit-*.der` (`KERBER_TRACE_DST` override).
+files are gitignored.
 
-Checked-in MIT 1.22.2 PDUs from `kdc-gate.sh` (APPLICATION tags):
+## Provenance
 
-| File | Tag | PDU |
+| File | Tag | Origin |
 | --- | --- | --- |
-| `mit-as-req.der` | `0x6a` | AS-REQ |
-| `mit-as-req-preauth.der` | `0x6a` | AS-REQ with PA-ENC-TIMESTAMP |
-| `mit-krb-error-preauth.der` | `0x7e` | PREAUTH_REQUIRED |
-| `mit-as-rep.der` | `0x6b` | AS-REP |
-| `mit-tgs-req.der` | `0x6c` | TGS-REQ (FAST) |
-| `mit-tgs-rep.der` | `0x6d` | TGS-REP |
+| `mit-as-req.der` | `0x6a` | MIT 1.22.2 client AS-REQ (`kdc-gate.sh` capture of MIT bytes) |
+| `mit-as-req-preauth.der` | `0x6a` | MIT AS-REQ with PA-ENC-TIMESTAMP |
+| `mit-krb-error-preauth.der` | `0x7e` | PREAUTH_REQUIRED (Rust KDC reply to MIT; KRB-ERROR we emit) |
+| `mit-as-rep.der` | `0x6b` | MIT 1.22.2 KDC AS-REP (`client-gate.sh` `client-rep-*.der`) |
+| `mit-tgs-req.der` | `0x6c` | MIT TGS-REQ (FAST) |
+| `mit-tgs-rep.der` | `0x6d` | MIT 1.22.2 KDC TGS-REP (`client-gate.sh` `client-rep-*.der`) |
+
+Reply goldens must be MIT-KDC bytes from the Rust client socket
+(`client-rep-*.der`), not Rust-KDC socket dumps (`kdc-rep-*.der`).
+`scripts/client-gate.sh` copies captures here (`KERBER_TRACE_DST` override).
+`scripts/kdc-gate.sh` copies MIT *request* PDUs as `mit-*-req.der`.
