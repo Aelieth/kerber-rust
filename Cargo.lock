@@ -358,6 +358,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "krb5-kdc"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.2.17",
+ "krb5-asn1",
+ "krb5-client",
+ "krb5-crypto",
+ "krb5-log",
+ "krb5-protocol",
+ "krb5-types",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "krb5-kdc-consumer"
+version = "0.1.0"
+dependencies = [
+ "krb5-asn1",
+ "krb5-client",
+ "krb5-crypto",
+ "krb5-kdc",
+ "krb5-protocol",
+ "krb5-types",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "krb5-log"
 version = "0.1.0"
 dependencies = [

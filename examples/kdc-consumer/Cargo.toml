@@ -1,0 +1,22 @@
+[package]
+name = "krb5-kdc-consumer"
+description = "In-repo consumer of krb5-kdc issue, keytab export, and AP-REQ verify"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+krb5-asn1.workspace = true
+krb5-client.workspace = true
+krb5-crypto.workspace = true
+krb5-kdc.workspace = true
+krb5-protocol.workspace = true
+krb5-types.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

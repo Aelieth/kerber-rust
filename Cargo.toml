@@ -7,7 +7,9 @@ members = [
     "crates/krb5-asn1",
     "crates/krb5-protocol",
     "crates/krb5-client",
+    "crates/krb5-kdc",
     "examples/consumer",
+    "examples/kdc-consumer",
 ]
 
 [workspace.package]
@@ -27,6 +29,7 @@ krb5-types = { path = "crates/krb5-types" }
 krb5-asn1 = { path = "crates/krb5-asn1" }
 krb5-protocol = { path = "crates/krb5-protocol" }
 krb5-client = { path = "crates/krb5-client" }
+krb5-kdc = { path = "crates/krb5-kdc" }
 aes = "0.8"
 chrono = { version = "0.4", default-features = false, features = ["alloc", "clock", "std"] }
 cipher = "0.4"
