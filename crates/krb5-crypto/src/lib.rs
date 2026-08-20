@@ -17,6 +17,7 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+mod cf2;
 mod derive;
 mod error;
 mod etype;
@@ -28,6 +29,10 @@ pub(crate) mod weak;
 
 pub(crate) mod cts;
 
+pub use cf2::{
+    key_from_shared, krb_fx_cf2, p256_generate, p256_shared, spake_finish, spake_public, spake_w,
+    P256Keypair,
+};
 pub use derive::{derive_keys, DerivedKeys};
 pub use error::Error;
 pub use etype::{EncryptionType, KeyUsage};

@@ -18,6 +18,7 @@ hmac.workspace = true
 krb5-log.workspace = true
 md-5.workspace = true
 md4.workspace = true
+p256.workspace = true
 pbkdf2.workspace = true
 rc4.workspace = true
 sha1.workspace = true
