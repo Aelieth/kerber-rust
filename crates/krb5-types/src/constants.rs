@@ -162,16 +162,16 @@ pub mod ku {
     pub const GSS_INITIATOR_SEAL: u32 = 24;
     /// GSS initiator sign (RFC 4121).
     pub const GSS_INITIATOR_SIGN: u32 = 25;
-    /// FAST armor key (RFC 6113).
-    pub const FAST_ARMOR: u32 = 1024;
-    /// FAST finished checksum.
-    pub const FAST_FINISHED: u32 = 1025;
-    /// FAST enc-fast-req.
-    pub const FAST_ENC: u32 = 1026;
-    /// FAST rep.
-    pub const FAST_REP: u32 = 1027;
-    /// FAST finished in AS-REP.
-    pub const FAST_FINISHED_AS: u32 = 1028;
+    /// RFC 6113 FAST request checksum.
+    pub const FAST_REQ_CHKSUM: u32 = 50;
+    /// RFC 6113 FAST encrypted request.
+    pub const FAST_ENC: u32 = 51;
+    /// RFC 6113 FAST response.
+    pub const FAST_REP: u32 = 52;
+    /// RFC 6113 FAST finished.
+    pub const FAST_FINISHED: u32 = 53;
+    /// Cookie encrypted under the krbtgt key (local helper, not an RFC number).
+    pub const FAST_COOKIE: u32 = 54;
 }
 
 /// RFC 4120 / 6113 / 4556 PA-DATA type numbers.

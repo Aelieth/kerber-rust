@@ -23,6 +23,7 @@ pub mod fast;
 mod name_error;
 pub mod pac;
 pub mod pkinit;
+pub mod s4u;
 pub mod spake;
 
 pub use constants::{ap_bit, err, flag_bit, ku, pa};
