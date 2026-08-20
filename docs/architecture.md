@@ -4,11 +4,11 @@ kerber-rust is a Cargo workspace of small crates. Dependencies flow
 downward only:
 
 ```
-examples/consumer
+examples/consumer, examples/kdc-consumer
         │
         ├──────────────► krb5-asn1 ──► krb5-types
         │                     │
-        ├──────────────► krb5-client ──► krb5-protocol ──► krb5-crypto
+        ├──────────────► krb5-kdc ──► krb5-client ──► krb5-protocol ──► krb5-crypto
         │                      │                │
         └──────────────► krb5-crypto            └──► krb5-asn1
 ```
@@ -31,11 +31,18 @@ it does not catch codec errors.
 **`krb5-asn1`** is the DER boundary: `encode` / `decode` return
 `Result`, never panic, and emit log events for success and failure.
 
-**`krb5-protocol`** runs AS and TGS over UDP with TCP fallback.
+**`krb5-protocol`** runs AS and TGS over UDP with TCP fallback, plus
+AP-REQ build/verify.
+
 **`krb5-client`** is `kinit`, MIT FILE ccache v4, and keytab v2.
 
-Later crates (`krb5-gss`, `krb5-kdc`, `krb5-admin`) wait until these
-layers are stable.
+**`krb5-kdc`** issues AS/TGS tickets from an in-memory principal store,
+gates admin create/delete/ktadd with a kadm5.acl-style ACL, and listens
+on UDP/TCP 88 (fallback 8888). Issue, ACL, and keytab export are pure
+functions; the listener is thin.
+
+Later crates (`krb5-gss`, `krb5-admin` RPC) wait until these layers are
+stable.
 
 ## Security invariants
 

@@ -9,7 +9,7 @@ never install a subscriber. Tests and the harness do.
 | --- | --- | --- |
 | `event` | yes | Stable name (`crypto.encrypt`, `asn1.decode`, `harness.kinit`, …) |
 | `correlation_id` | yes | 32 hex chars; one ID per operation |
-| `component` | yes | `krb5-crypto`, `krb5-asn1`, or `harness` |
+| `component` | yes | `krb5-crypto`, `krb5-asn1`, `krb5-kdc`, or `harness` |
 | `outcome` | yes | `ok` or `error` |
 | `duration_us` | crypto/asn1 | Wall time of the operation |
 | `etype` | crypto | IANA encryption-type number |

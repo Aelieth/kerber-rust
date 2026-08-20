@@ -20,3 +20,6 @@ this project uses semantic versioning once a crate is published.
 - Stage 3: `krb5-protocol` AS/TGS over UDP/TCP and `krb5-client` kinit
   writing MIT FILE ccache v4 plus keytab v2. Live gate:
   `scripts/client-gate.sh` (Rust TGT + service ticket; MIT `klist`).
+- Stage 5: `krb5-kdc` AS/TGS issue, kadm5.acl-style admin, MIT keytab
+  v2 export, AP-REQ verify, UDP/TCP 88 listener. Gate:
+  `scripts/kdc-gate.sh` (MIT `kinit` + `kvno` against the Rust KDC).

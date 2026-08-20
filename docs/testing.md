@@ -38,6 +38,12 @@ runs MIT `klist` on the FILE ccache. Host Docker UDP/TCP publish to
 port 88 is unreliable; the gate therefore talks to `127.0.0.1:88`
 *inside* the container.
 
+Stage 5: `scripts/kdc-gate.sh` copies the Rust `krb5-kdc` binary into a
+client-only MIT 1.22.2 container, binds 127.0.0.1:88 (fallback 8888),
+and runs MIT `kinit user@KERBER.TEST` plus `kvno host/testhost.kerber.test`.
+In-crate tests drive `issue_as` / `issue_tgs` / `Acl::check` /
+`verify_ap_req` without a socket.
+
 ## MIT 1.22.2 harness
 
 | Item | Value |
