@@ -1,0 +1,12 @@
+services:
+  mit-kdc:
+    build:
+      context: ..
+      dockerfile: harness/Dockerfile
+    image: kerber-rust-mit-kdc:1.22.2
+    container_name: kerber-rust-mit-kdc
+    ports:
+      - "88:88/tcp"
+      - "88:88/udp"
+    environment:
+      CORRELATION_ID: ${CORRELATION_ID:-}

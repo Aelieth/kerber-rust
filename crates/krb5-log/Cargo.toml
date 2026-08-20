@@ -1,0 +1,15 @@
+[package]
+name = "krb5-log"
+description = "Structured logging schema (correlation IDs, crypto timing, error paths) for kerber-rust"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+getrandom.workspace = true
+
+[lints]
+workspace = true

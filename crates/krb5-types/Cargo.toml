@@ -1,0 +1,16 @@
+[package]
+name = "krb5-types"
+description = "RFC 4120 Kerberos V5 protocol types (owned values, rasn derives)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+chrono.workspace = true
+rasn.workspace = true
+
+[lints]
+workspace = true

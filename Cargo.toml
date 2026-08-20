@@ -1,0 +1,46 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/krb5-log",
+    "crates/krb5-crypto",
+    "crates/krb5-types",
+    "crates/krb5-asn1",
+    "examples/consumer",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/Aelieth/kerber-rust"
+homepage = "https://github.com/Aelieth/kerber-rust"
+authors = ["Aelieth"]
+publish = false
+
+[workspace.dependencies]
+krb5-log = { path = "crates/krb5-log" }
+krb5-crypto = { path = "crates/krb5-crypto" }
+krb5-types = { path = "crates/krb5-types" }
+krb5-asn1 = { path = "crates/krb5-asn1" }
+aes = "0.8"
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+cipher = "0.4"
+getrandom = "0.2"
+hmac = "0.12"
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+rasn = "0.27"
+sha1 = "0.10"
+sha2 = "0.10"
+subtle = "2.6"
+thiserror = "2"
+tracing = { version = "0.1", default-features = false, features = ["std", "attributes"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+zeroize = { version = "1.8", features = ["derive", "alloc"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }

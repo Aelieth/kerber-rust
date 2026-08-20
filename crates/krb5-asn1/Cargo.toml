@@ -1,0 +1,21 @@
+[package]
+name = "krb5-asn1"
+description = "DER encode/decode for RFC 4120 Kerberos V5 core types"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+krb5-log.workspace = true
+krb5-types.workspace = true
+rasn.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

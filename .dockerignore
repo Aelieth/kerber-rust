@@ -1,0 +1,7 @@
+target
+.git
+working
+**/*.md
+!README.md
+examples
+.github

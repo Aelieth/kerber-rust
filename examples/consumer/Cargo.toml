@@ -1,0 +1,20 @@
+[package]
+name = "krb5-consumer"
+description = "In-repo consumer of krb5-crypto and krb5-asn1 (not a production CLI)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+krb5-asn1.workspace = true
+krb5-crypto.workspace = true
+krb5-log.workspace = true
+krb5-types.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true
