@@ -1,9 +1,10 @@
 //! In-memory principal database and ACL-gated mutations.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
-use krb5_client::{Keytab, KeytabEntry};
 use krb5_crypto::{string_to_key, EncryptionType, ProtocolKey};
+use krb5_protocol::{Keytab, KeytabEntry, ReplayCache};
 use krb5_types::PrincipalName;
 
 use crate::acl::{Acl, AdminOp};
@@ -30,10 +31,45 @@ pub struct Principal {
     pub name: PrincipalName,
     /// Realm.
     pub realm: String,
-    /// Keys by etype.
+    /// Keys by etype (may include multiple kvnos).
     pub keys: Vec<KeyEntry>,
     /// Salt used for password-derived keys.
     pub salt: Vec<u8>,
+    /// Whether AS requires PA-ENC-TIMESTAMP.
+    pub requires_preauth: bool,
+    /// Max ticket life in seconds (0 = use realm policy).
+    pub max_life: u64,
+    /// Locked out.
+    pub locked: bool,
+    /// Password expiry unix seconds (0 = none).
+    pub pw_expire: u32,
+}
+
+/// Realm-wide ticket policy.
+#[derive(Clone, Debug)]
+pub struct Policy {
+    /// Max ticket lifetime seconds.
+    pub max_life: u64,
+    /// Max renewable lifetime seconds.
+    pub max_renewable_life: u64,
+    /// Clock skew seconds.
+    pub skew: i64,
+    /// Allow weak etypes.
+    pub allow_weak_crypto: bool,
+    /// Default requires_preauth for new principals.
+    pub requires_preauth: bool,
+}
+
+impl Default for Policy {
+    fn default() -> Self {
+        Self {
+            max_life: 10 * 3600,
+            max_renewable_life: 7 * 24 * 3600,
+            skew: 300,
+            allow_weak_crypto: false,
+            requires_preauth: true,
+        }
+    }
 }
 
 impl Principal {
@@ -43,10 +79,22 @@ impl Principal {
         format!("{}@{}", self.name.components_joined(), self.realm)
     }
 
-    /// First key of `etype`, if present.
+    /// First key of `etype`, if present (highest kvno preferred).
     #[must_use]
     pub fn key_for(&self, etype: EncryptionType) -> Option<&KeyEntry> {
-        self.keys.iter().find(|k| k.etype == etype)
+        self.keys
+            .iter()
+            .filter(|k| k.etype == etype)
+            .max_by_key(|k| k.kvno)
+    }
+
+    /// Key matching `etype` and `kvno`.
+    #[must_use]
+    pub fn key_for_kvno(&self, etype: EncryptionType, kvno: u32) -> Option<&KeyEntry> {
+        self.keys
+            .iter()
+            .find(|k| k.etype == etype && k.kvno == kvno)
+            .or_else(|| self.key_for(etype))
     }
 
     /// Preferred stored key (highest etype in [`EncryptionType::preferred`]).
@@ -64,6 +112,12 @@ impl Principal {
 pub struct PrincipalStore {
     realm: String,
     map: HashMap<String, Principal>,
+    /// Ticket policy.
+    pub policy: Policy,
+    /// TGS authenticator replay cache.
+    pub tgs_replay: ReplayCache,
+    /// PA-ENC-TIMESTAMP replay cache.
+    pub pa_replay: ReplayCache,
 }
 
 impl PrincipalStore {
@@ -73,6 +127,9 @@ impl PrincipalStore {
         Self {
             realm: realm.into(),
             map: HashMap::new(),
+            policy: Policy::default(),
+            tgs_replay: ReplayCache::with_limits(50_000, Duration::from_secs(300)),
+            pa_replay: ReplayCache::with_limits(50_000, Duration::from_secs(300)),
         }
     }
 
@@ -169,6 +226,20 @@ impl PrincipalStore {
         self.insert_randkey(&name, &[EncryptionType::Aes256CtsHmacSha196])
     }
 
+    /// Replace password-derived keys (kpasswd).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] when the principal is missing.
+    pub fn set_password(&mut self, name: &PrincipalName, password: &[u8]) -> Result<(), Error> {
+        let id = format!("{}@{}", name.components_joined(), self.realm);
+        if !self.map.contains_key(&id) {
+            return Err(Error::NotFound);
+        }
+        self.map.remove(&id);
+        self.insert_password(name, password)
+    }
+
     /// ACL-gated delete.
     ///
     /// # Errors
@@ -196,6 +267,8 @@ impl PrincipalStore {
         let p = self.get_name(name).ok_or(Error::NotFound)?;
         let key = p.best_key().ok_or(Error::NotFound)?;
         Ok(Keytab {
+            version: 0x0502,
+            skipped_unknown_etype: 0,
             entries: vec![KeytabEntry {
                 realm: krb5_types::ascii(&p.realm),
                 name: p.name.clone(),
@@ -226,6 +299,10 @@ impl PrincipalStore {
             realm: self.realm.clone(),
             keys,
             salt,
+            requires_preauth: self.policy.requires_preauth,
+            max_life: 0,
+            locked: false,
+            pw_expire: 0,
         };
         self.map.insert(p.id(), p);
         Ok(())
@@ -249,9 +326,38 @@ impl PrincipalStore {
             realm: self.realm.clone(),
             keys,
             salt: name.default_salt(&self.realm),
+            requires_preauth: false,
+            max_life: 0,
+            locked: false,
+            pw_expire: 0,
         };
         self.map.insert(p.id(), p);
         Ok(())
+    }
+
+    /// Key of `etype` at `kvno` for principal `name`.
+    #[must_use]
+    pub fn key_kvno(
+        &self,
+        name: &PrincipalName,
+        etype: EncryptionType,
+        kvno: Option<u32>,
+    ) -> Option<&KeyEntry> {
+        let p = self.get_name(name)?;
+        match kvno {
+            Some(v) => p.key_for_kvno(etype, v),
+            None => p.key_for(etype),
+        }
+    }
+
+    /// Iterate principals (persistence).
+    pub(crate) fn debug_principals(&self) -> impl Iterator<Item = &Principal> {
+        self.map.values()
+    }
+
+    /// Insert a fully-formed principal (persistence).
+    pub(crate) fn debug_insert(&mut self, p: Principal) {
+        self.map.insert(p.id(), p);
     }
 }
 

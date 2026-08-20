@@ -1,14 +1,16 @@
 //! Gating tests: ACL allow/deny, AS/TGS issue, AP-REQ verify negatives.
 
 use krb5_asn1::{decode, encode};
-use krb5_client::Keytab;
 use krb5_crypto::{decrypt, string_to_key, EncryptionType, KeyUsage, ProtocolKey};
 use krb5_kdc::{
     as_req, bootstrap_documented, documented_admin_id, documented_host, pa_enc_timestamp, tgs_req,
     Acl, AdminOp, Error, PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
 };
+use krb5_protocol::Keytab;
 use krb5_protocol::{build_ap_req, verify_ap_req, ReplayCache};
-use krb5_types::{ascii, err, ku, EncKdcRepPart, EncTgsRepPart, EncTicketPart, PrincipalName};
+use krb5_types::{
+    ascii, err, ku, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, PrincipalName,
+};
 
 fn client_key() -> ProtocolKey {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -23,6 +25,9 @@ fn client_key() -> ProtocolKey {
 }
 
 fn decode_enc_part(plain: &[u8]) -> EncKdcRepPart {
+    if let Ok(EncAsRepPart(p)) = decode::<EncAsRepPart>(plain) {
+        return p;
+    }
     if let Ok(EncTgsRepPart(p)) = decode::<EncTgsRepPart>(plain) {
         return p;
     }
@@ -188,22 +193,22 @@ fn ap_req_valid_truncated_wrong_key_replay() {
         .expect("ktadd");
     let service_key = &kt.entries[0].key;
 
-    let mut replay = ReplayCache::new();
-    verify_ap_req(&raw, service_key, &mut replay).expect("valid AP-REQ");
+    let replay = ReplayCache::new();
+    verify_ap_req(&raw, service_key, &replay).expect("valid AP-REQ");
 
     let truncated = &raw[..raw.len() / 2];
-    assert!(verify_ap_req(truncated, service_key, &mut ReplayCache::new()).is_err());
+    assert!(verify_ap_req(truncated, service_key, &ReplayCache::new()).is_err());
 
     let wrong = ProtocolKey::from_bytes(
         service_key.etype(),
         &vec![0x11u8; service_key.as_bytes().len()],
     )
     .expect("wrong key");
-    assert!(verify_ap_req(&raw, &wrong, &mut ReplayCache::new()).is_err());
+    assert!(verify_ap_req(&raw, &wrong, &ReplayCache::new()).is_err());
 
-    let mut replay2 = ReplayCache::new();
-    verify_ap_req(&raw, service_key, &mut replay2).expect("first");
-    let replay_err = verify_ap_req(&raw, service_key, &mut replay2).unwrap_err();
+    let replay2 = ReplayCache::new();
+    verify_ap_req(&raw, service_key, &replay2).expect("first");
+    let replay_err = verify_ap_req(&raw, service_key, &replay2).unwrap_err();
     match replay_err {
         krb5_protocol::Error::KrbError { code, .. } => assert_eq!(code, err::REPEAT),
         other => panic!("expected REPEAT, got {other}"),
@@ -213,7 +218,126 @@ fn ap_req_valid_truncated_wrong_key_replay() {
 #[test]
 fn handle_request_empty_is_error() {
     let store = PrincipalStore::new(TEST_REALM);
-    assert!(krb5_kdc::handle_request(&store, &[]).is_err());
+    let reply = krb5_kdc::handle_request(&store, &[]).expect("always a byte reply");
+    assert!(!reply.is_empty());
+    let e: krb5_types::KrbError = decode(&reply).expect("KRB-ERROR");
+    assert_eq!(e.error_code, err::GENERIC);
+}
+
+#[test]
+fn as_rep_flags_are_initial_and_preauth_not_renewable() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = client_key();
+    let req = as_req(
+        cname,
+        TEST_REALM,
+        42,
+        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
+    );
+    let issued = krb5_kdc::issue_as(&store, &req).expect("AS");
+    let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
+    let plain = decrypt(&key, usage, issued.rep.0.enc_part.cipher.as_ref()).expect("dec");
+    assert_eq!(
+        plain.first().copied(),
+        Some(0x79),
+        "APPLICATION 25 EncASRepPart"
+    );
+    let enc = decode_enc_part(&plain);
+    assert!(enc.flags.initial());
+    assert!(enc.flags.pre_authent());
+    assert!(!enc.flags.renewable());
+}
+
+#[test]
+fn wrong_password_yields_preauth_failed_bytes() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let wrong = krb5_crypto::string_to_key(
+        krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
+        b"not-the-password",
+        &cname.default_salt(TEST_REALM),
+        Some(&S2K_ITERS.to_be_bytes()),
+    )
+    .expect("s2k");
+    let req = as_req(
+        cname,
+        TEST_REALM,
+        5,
+        Some(vec![pa_enc_timestamp(&wrong).expect("pa")]),
+    );
+    let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
+    assert!(!bytes.is_empty());
+    let e: krb5_types::KrbError = decode(&bytes).expect("KRB-ERROR");
+    assert_eq!(e.error_code, err::PREAUTH_FAILED);
+}
+
+#[test]
+fn no_common_etype_is_etype_nosupp() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = client_key();
+    let mut req = as_req(
+        cname,
+        TEST_REALM,
+        6,
+        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
+    );
+    req.0.req_body.etype = vec![23]; // rc4, not in store unless allow_weak
+    let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
+    let e: krb5_types::KrbError = decode(&bytes).expect("KRB-ERROR");
+    assert_eq!(e.error_code, err::ETYPE_NOSUPP);
+}
+
+#[test]
+fn tgs_bad_checksum_is_error() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = client_key();
+    let req = as_req(
+        cname.clone(),
+        TEST_REALM,
+        8,
+        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
+    );
+    let as_out = krb5_kdc::issue_as(&store, &req).expect("AS");
+    let mut tgs = tgs_req(
+        as_out.rep.0.ticket.clone(),
+        &as_out.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        9,
+    )
+    .expect("tgs");
+    tgs.0.req_body.nonce = 99; // body no longer matches authenticator checksum
+    let bytes = krb5_kdc::handle_request(&store, &encode(&tgs).expect("der")).expect("reply");
+    let e: krb5_types::KrbError = decode(&bytes).expect("KRB-ERROR");
+    assert_eq!(e.error_code, err::INAPP_CKSUM);
+}
+
+#[test]
+fn hostile_keytab_does_not_panic() {
+    use std::panic::catch_unwind;
+    let min_hole = {
+        let mut v = vec![0x05, 0x02];
+        v.extend_from_slice(&i32::MIN.to_be_bytes());
+        v
+    };
+    let r = catch_unwind(|| krb5_protocol::Keytab::parse(&min_hole));
+    assert!(r.is_ok());
+    assert!(r.unwrap().is_err());
+    let non_ascii = {
+        let mut v = vec![0x05, 0x02];
+        // size 8, then garbage including 0x80
+        v.extend_from_slice(&8i32.to_be_bytes());
+        v.extend_from_slice(&[0x00, 0x01, 0x00, 0x01, 0x80, 0x00, 0x00, 0x00]);
+        v
+    };
+    let r = catch_unwind(|| krb5_protocol::Keytab::parse(&non_ascii));
+    assert!(r.is_ok());
+    assert!(r.unwrap().is_err());
 }
 
 #[test]

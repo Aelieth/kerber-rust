@@ -1,14 +1,17 @@
-//! AS and TGS ticket issuance as pure functions over the principal store.
+//! AS and TGS ticket issuance as functions over the principal store.
 
 use std::time::Instant;
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{decrypt, encrypt, EncryptionType, KeyUsage, ProtocolKey};
+use krb5_crypto::{
+    checksum, decrypt, encrypt, verify_checksum, EncryptionType, KeyUsage, ProtocolKey,
+};
+use krb5_protocol::{ReplayCache, ReplayKey};
 use krb5_types::{
-    ascii, err, ku, pa, AsRep, AsReq, EncKdcRepPart, EncTgsRepPart, EncTicketPart, EncryptedData,
-    EncryptionKey, EtypeInfo2, EtypeInfo2Entry, KerberosTime, KrbError, LastReqValue, MethodData,
-    OctetString, PaData, PaEncTsEnc, PrincipalName, TgsRep, TgsReq, Ticket, TicketFlags,
-    TransitedEncoding,
+    ascii, err, flag_bit, ku, pa, AsRep, AsReq, EncAsRepPart, EncKdcRepPart, EncTgsRepPart,
+    EncTicketPart, EncryptedData, EncryptionKey, EtypeInfo2, EtypeInfo2Entry, KerberosTime,
+    KrbError, LastReqValue, MethodData, Microseconds, OctetString, PaData, PaEncTsEnc,
+    PrincipalName, TgsRep, TgsReq, Ticket, TicketFlags, TransitedEncoding,
 };
 
 use crate::error::Error;
@@ -34,28 +37,29 @@ pub struct IssuedTgs {
 
 /// Dispatch one UDP/TCP payload (AS-REQ or TGS-REQ) to the issue path.
 ///
-/// On [`Error::PreauthRequired`] this returns a well-formed KRB-ERROR PDU
-/// rather than bubbling the error, so a listener can write it as-is.
+/// Every request yields a byte reply: success PDU or KRB-ERROR. Crypto and
+/// ASN.1 failures become `KDC_ERR_PREAUTH_FAILED` / generic KRB-ERROR.
 ///
 /// # Errors
 ///
-/// Returns protocol or crypto failures other than preauth-required.
+/// Only store-programming failures that cannot be encoded as KRB-ERROR.
 pub fn handle_request(store: &PrincipalStore, raw: &[u8]) -> Result<Vec<u8>, Error> {
-    let correlation_id = krb5_log::new_correlation_id();
+    let id = krb5_log::new_correlation_id();
+    let _g = krb5_log::enter_correlation(id);
     let started = Instant::now();
     let result = handle_inner(store, raw);
     let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
     match &result {
         Ok(_) => tracing::info!(
             event = krb5_log::events::KDC_ISSUE,
-            correlation_id,
+            correlation_id = krb5_log::current_correlation_id(),
             component = "krb5-kdc",
             duration_us,
             outcome = "ok",
         ),
         Err(e) => tracing::error!(
             event = krb5_log::events::KDC_ISSUE,
-            correlation_id,
+            correlation_id = krb5_log::current_correlation_id(),
             component = "krb5-kdc",
             duration_us,
             outcome = "error",
@@ -67,18 +71,23 @@ pub fn handle_request(store: &PrincipalStore, raw: &[u8]) -> Result<Vec<u8>, Err
 
 fn handle_inner(store: &PrincipalStore, raw: &[u8]) -> Result<Vec<u8>, Error> {
     if raw.is_empty() {
-        return Err(Error::UnexpectedPdu);
+        return Ok(encode_krb_error(store, err::GENERIC, Some("empty"), None));
     }
     match raw[0] {
-        0x6a => {
-            let req: AsReq = decode(raw)?;
-            as_reply(store, &req)
-        }
-        0x6c => {
-            let req: TgsReq = decode(raw)?;
-            tgs_reply(store, &req)
-        }
-        _ => Err(Error::UnexpectedPdu),
+        0x6a => match decode::<AsReq>(raw) {
+            Ok(req) => as_reply(store, &req),
+            Err(_) => Ok(encode_krb_error(store, err::GENERIC, Some("asn1"), None)),
+        },
+        0x6c => match decode::<TgsReq>(raw) {
+            Ok(req) => tgs_reply(store, &req),
+            Err(_) => Ok(encode_krb_error(store, err::GENERIC, Some("asn1"), None)),
+        },
+        _ => Ok(encode_krb_error(
+            store,
+            err::BAD_PVNO,
+            Some("unexpected PDU"),
+            None,
+        )),
     }
 }
 
@@ -94,7 +103,19 @@ fn as_reply(store: &PrincipalStore, req: &AsReq) -> Result<Vec<u8>, Error> {
         Err(Error::Protocol { code, text }) => {
             Ok(encode_krb_error(store, code, text.as_deref(), None))
         }
-        Err(e) => Err(e),
+        Err(Error::Crypto(_)) => Ok(encode_krb_error(
+            store,
+            err::PREAUTH_FAILED,
+            Some("preauth"),
+            None,
+        )),
+        Err(Error::Asn1(_)) => Ok(encode_krb_error(store, err::GENERIC, Some("asn1"), None)),
+        Err(e) => Ok(encode_krb_error(
+            store,
+            err::GENERIC,
+            Some(&e.to_string()),
+            None,
+        )),
     }
 }
 
@@ -104,7 +125,19 @@ fn tgs_reply(store: &PrincipalStore, req: &TgsReq) -> Result<Vec<u8>, Error> {
         Err(Error::Protocol { code, text }) => {
             Ok(encode_krb_error(store, code, text.as_deref(), None))
         }
-        Err(e) => Err(e),
+        Err(Error::Crypto(_)) => Ok(encode_krb_error(
+            store,
+            err::BAD_INTEGRITY,
+            Some("integrity"),
+            None,
+        )),
+        Err(Error::Asn1(_)) => Ok(encode_krb_error(store, err::GENERIC, Some("asn1"), None)),
+        Err(e) => Ok(encode_krb_error(
+            store,
+            err::GENERIC,
+            Some(&e.to_string()),
+            None,
+        )),
     }
 }
 
@@ -115,6 +148,9 @@ fn tgs_reply(store: &PrincipalStore, req: &TgsReq) -> Result<Vec<u8>, Error> {
 /// Unknown client, bad preauth, or crypto/DER failures.
 pub fn issue_as(store: &PrincipalStore, req: &AsReq) -> Result<IssuedAs, Error> {
     let body = &req.0.req_body;
+    if body.kdc_options.unsupported_bits() != 0 {
+        return Err(proto(err::BADOPTION, "unsupported KDCOptions"));
+    }
     let cname = body
         .cname
         .clone()
@@ -122,30 +158,49 @@ pub fn issue_as(store: &PrincipalStore, req: &AsReq) -> Result<IssuedAs, Error> 
     let client = store
         .get_name(&cname)
         .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, "unknown client"))?;
-    let etype = select_etype(&body.etype, client)?;
+    if client.locked {
+        return Err(proto(err::CLIENT_REVOKED, "locked"));
+    }
+    let etype = select_etype(&body.etype, client, store.policy.allow_weak_crypto)?;
     let ckey = client
         .key_for(etype)
         .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, "no client key"))?;
 
-    match extract_enc_timestamp(&req.0.padata) {
-        None => return Err(preauth_required(client)),
-        Some(blob) => verify_enc_timestamp(&ckey.key, blob.as_ref())?,
+    if client.requires_preauth {
+        match extract_enc_timestamp(&req.0.padata) {
+            None => return Err(preauth_required(client)),
+            Some(blob) => verify_enc_timestamp(store, client, &ckey.key, blob.as_ref())?,
+        }
     }
 
-    let krbtgt = store
-        .krbtgt()
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
-    let tgt_key = krbtgt
+    let sname = body
+        .sname
+        .clone()
+        .unwrap_or_else(|| PrincipalName::krbtgt(store.realm()));
+    let server = store
+        .get_name(&sname)
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "unknown server"))?;
+    let skey = server
         .best_key()
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt key"))?;
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no server key"))?;
     let session = random_key(etype)?;
     let now = KerberosTime::now();
-    let end = now.add_hours(10);
-    let sname = PrincipalName::krbtgt(store.realm());
+    let life = requested_life(store, client, body);
+    let end = now
+        .add_seconds(life as i64)
+        .or_else(|_| now.add_hours(10))
+        .map_err(|_| proto(err::NEVER_VALID, "endtime"))?;
+    let mut flags = TicketFlags::initial_preauth();
+    if body.kdc_options.bit(flag_bit::FORWARDABLE) {
+        flags = flags.with_bit(flag_bit::FORWARDABLE, true);
+    }
+    if body.kdc_options.bit(flag_bit::RENEWABLE) {
+        flags = flags.with_bit(flag_bit::RENEWABLE, true);
+    }
     let ticket = mint_ticket(
-        &tgt_key.key,
-        tgt_key.kvno,
-        tgt_key.etype,
+        &skey.key,
+        skey.kvno,
+        skey.etype,
         &session,
         store.realm(),
         &sname,
@@ -153,7 +208,7 @@ pub fn issue_as(store: &PrincipalStore, req: &AsReq) -> Result<IssuedAs, Error> 
         &cname,
         &now,
         &end,
-        TicketFlags::initial_preauth(),
+        flags.clone(),
     )?;
     let enc_part = enc_rep_part(
         &session,
@@ -162,11 +217,9 @@ pub fn issue_as(store: &PrincipalStore, req: &AsReq) -> Result<IssuedAs, Error> 
         &end,
         store.realm(),
         &sname,
-        TicketFlags::initial_preauth(),
+        flags,
     );
-    // MIT 1.22.2 kinit decodes AS-REP enc-part as APPLICATION 26
-    // (EncTGSRepPart). RFC 4120 assigns APPLICATION 25 to EncASRepPart.
-    let enc_der = encode(&EncTgsRepPart(enc_part))?;
+    let enc_der = encode(&EncAsRepPart(enc_part))?;
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART)?;
     let cipher = encrypt(&ckey.key, usage, &enc_der)?;
     let rep = AsRep(krb5_types::KdcRep {
@@ -195,25 +248,67 @@ pub fn issue_as(store: &PrincipalStore, req: &AsReq) -> Result<IssuedAs, Error> 
 /// Bad authenticator, unknown server, or crypto/DER failures.
 pub fn issue_tgs(store: &PrincipalStore, req: &TgsReq) -> Result<IssuedTgs, Error> {
     let body = &req.0.req_body;
+    if body.kdc_options.unsupported_bits() != 0 {
+        return Err(proto(err::BADOPTION, "unsupported KDCOptions"));
+    }
     let ap_raw =
         extract_pa_tgs(&req.0.padata).ok_or_else(|| proto(err::PREAUTH_FAILED, "no PA-TGS-REQ"))?;
     let ap: krb5_types::ApReq = decode(ap_raw.as_ref())?;
+    if !ap.ticket.sname.is_krbtgt_for(store.realm()) {
+        return Err(proto(err::NO_TGT, "presented ticket is not a TGT"));
+    }
     let krbtgt = store
         .krbtgt()
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
-    let tgt_key = krbtgt
-        .best_key()
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt key"))?;
+    let tkt_etype = EncryptionType::from_iana(ap.ticket.enc_part.etype)
+        .or_else(|_| EncryptionType::known(ap.ticket.enc_part.etype))?;
+    let tgt_key = match ap.ticket.enc_part.kvno {
+        Some(v) => krbtgt.key_for_kvno(tkt_etype, v),
+        None => krbtgt.best_key(),
+    }
+    .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt key"))?;
     let tkt_usage = KeyUsage::new(ku::TICKET)?;
     let tkt_plain = decrypt(&tgt_key.key, tkt_usage, ap.ticket.enc_part.cipher.as_ref())?;
     let enc_tkt: EncTicketPart = decode(&tkt_plain)?;
-    let sess_etype = EncryptionType::from_iana(enc_tkt.key.keytype)?;
+    check_ticket_times(store, &enc_tkt)?;
+    let sess_etype = EncryptionType::from_iana(enc_tkt.key.keytype)
+        .or_else(|_| EncryptionType::known(enc_tkt.key.keytype))?;
     let tgt_session = ProtocolKey::from_bytes(sess_etype, enc_tkt.key.keyvalue.as_ref())?;
     let auth_usage = KeyUsage::new(ku::TGS_REQ_AUTHENTICATOR)?;
     let auth_plain = decrypt(&tgt_session, auth_usage, ap.authenticator.cipher.as_ref())?;
     let authenticator: krb5_types::Authenticator = decode(&auth_plain)?;
+    authenticator
+        .cusec
+        .validate()
+        .map_err(|_| proto(err::GENERIC, "cusec"))?;
     if authenticator.cname != enc_tkt.cname {
         return Err(proto(err::BAD_INTEGRITY, "TGS authenticator mismatch"));
+    }
+    let body_der = encode(body)?;
+    if let Some(ck) = &authenticator.cksum {
+        let ck_usage = KeyUsage::new(ku::TGS_REQ_AUTH_CKSUM)?;
+        verify_checksum(&tgt_session, ck_usage, &body_der, ck.checksum.as_ref())
+            .map_err(|_| proto(err::INAPP_CKSUM, "TGS req-body checksum"))?;
+    } else {
+        return Err(proto(
+            err::INAPP_CKSUM,
+            "TGS authenticator missing checksum",
+        ));
+    }
+    let _ = checksum;
+    let rkey = ReplayKey {
+        client: format!(
+            "{}@{}",
+            authenticator.cname.components_joined(),
+            utf8_realm(&enc_tkt.crealm)
+        ),
+        server: format!("krbtgt/{}@{}", store.realm(), store.realm()),
+        ctime: authenticator.ctime.unix_seconds(),
+        cusec: authenticator.cusec.get(),
+        auth_hash: ReplayCache::hash_authenticator(ap.authenticator.cipher.as_ref()),
+    };
+    if store.tgs_replay.check_and_store(rkey) {
+        return Err(proto(err::REPEAT, "TGS authenticator replay"));
     }
     let sname = body
         .sname
@@ -227,7 +322,23 @@ pub fn issue_tgs(store: &PrincipalStore, req: &TgsReq) -> Result<IssuedTgs, Erro
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no server key"))?;
     let session = random_key(skey.etype)?;
     let now = KerberosTime::now();
-    let end = enc_tkt.endtime.clone();
+    let mut end = enc_tkt.endtime.clone();
+    let life = requested_life(store, server, body);
+    if let Ok(capped) = now.add_seconds(life as i64) {
+        if capped.unix_seconds() < end.unix_seconds() {
+            end = capped;
+        }
+    }
+    let mut flags = TicketFlags::none();
+    if enc_tkt.flags.pre_authent() {
+        flags = flags.with_bit(flag_bit::PRE_AUTHENT, true);
+    }
+    if body.kdc_options.bit(flag_bit::FORWARDABLE) && enc_tkt.flags.forwardable() {
+        flags = flags.with_bit(flag_bit::FORWARDABLE, true);
+    }
+    if body.kdc_options.bit(flag_bit::RENEWABLE) && enc_tkt.flags.renewable() {
+        flags = flags.with_bit(flag_bit::RENEWABLE, true);
+    }
     let ticket = mint_ticket(
         &skey.key,
         skey.kvno,
@@ -239,7 +350,7 @@ pub fn issue_tgs(store: &PrincipalStore, req: &TgsReq) -> Result<IssuedTgs, Erro
         &enc_tkt.cname,
         &now,
         &end,
-        TicketFlags::none(),
+        flags.clone(),
     )?;
     let enc_part = enc_rep_part(
         &session,
@@ -248,7 +359,7 @@ pub fn issue_tgs(store: &PrincipalStore, req: &TgsReq) -> Result<IssuedTgs, Erro
         &end,
         store.realm(),
         &sname,
-        TicketFlags::none(),
+        flags,
     );
     let enc_der = encode(&EncTgsRepPart(enc_part))?;
     let usage = KeyUsage::new(ku::TGS_REP_ENC_PART)?;
@@ -270,6 +381,39 @@ pub fn issue_tgs(store: &PrincipalStore, req: &TgsReq) -> Result<IssuedTgs, Erro
         rep,
         session_key: session,
     })
+}
+
+fn requested_life(store: &PrincipalStore, princ: &Principal, body: &krb5_types::KdcReqBody) -> u64 {
+    let till = u64::from(body.till.unix_seconds());
+    let now = u64::from(KerberosTime::now().unix_seconds());
+    let want = till.saturating_sub(now);
+    let cap = if princ.max_life > 0 {
+        princ.max_life.min(store.policy.max_life)
+    } else {
+        store.policy.max_life
+    };
+    if want == 0 {
+        cap
+    } else {
+        want.min(cap)
+    }
+}
+
+fn check_ticket_times(store: &PrincipalStore, tkt: &EncTicketPart) -> Result<(), Error> {
+    let now = KerberosTime::now();
+    let skew = store.policy.skew;
+    if tkt.flags.invalid() {
+        return Err(proto(err::TKT_NYV, "INVALID"));
+    }
+    if let Some(start) = &tkt.starttime {
+        if now.delta_seconds(start) < -skew {
+            return Err(proto(err::TKT_NYV, "not yet valid"));
+        }
+    }
+    if tkt.endtime.delta_seconds(&now) < -skew {
+        return Err(proto(err::TKT_EXPIRED, "expired"));
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -350,18 +494,19 @@ fn encryption_key(key: &ProtocolKey) -> EncryptionKey {
     }
 }
 
-fn select_etype(requested: &[i32], princ: &Principal) -> Result<EncryptionType, Error> {
+fn select_etype(
+    requested: &[i32],
+    princ: &Principal,
+    allow_weak: bool,
+) -> Result<EncryptionType, Error> {
     for n in requested {
-        if let Ok(e) = EncryptionType::from_iana(*n) {
+        if let Ok(e) = EncryptionType::from_iana_policy(*n, allow_weak) {
             if princ.key_for(e).is_some() {
                 return Ok(e);
             }
         }
     }
-    princ
-        .best_key()
-        .map(|k| k.etype)
-        .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, "no etype"))
+    Err(proto(err::ETYPE_NOSUPP, "no common etype"))
 }
 
 fn extract_enc_timestamp(padata: &Option<Vec<PaData>>) -> Option<&OctetString> {
@@ -384,15 +529,33 @@ fn extract_pa_tgs(padata: &Option<Vec<PaData>>) -> Option<&OctetString> {
     })
 }
 
-fn verify_enc_timestamp(key: &ProtocolKey, blob: &[u8]) -> Result<(), Error> {
+fn verify_enc_timestamp(
+    store: &PrincipalStore,
+    client: &Principal,
+    key: &ProtocolKey,
+    blob: &[u8],
+) -> Result<(), Error> {
     let enc: EncryptedData = decode(blob)?;
     let usage = KeyUsage::new(ku::PA_ENC_TIMESTAMP)?;
     let plain = decrypt(key, usage, enc.cipher.as_ref())?;
     let ts: PaEncTsEnc = decode(&plain)?;
-    let now = KerberosTime::now().unix_seconds() as i64;
+    if let Some(u) = ts.pausec {
+        u.validate().map_err(|_| proto(err::GENERIC, "pausec"))?;
+    }
+    let now = i64::from(KerberosTime::now().unix_seconds());
     let then = i64::from(ts.patimestamp.unix_seconds());
-    if (now - then).abs() > 300 {
+    if (now - then).abs() > store.policy.skew {
         return Err(proto(err::SKEW, "PA-ENC-TIMESTAMP skew"));
+    }
+    let rkey = ReplayKey {
+        client: client.id(),
+        server: format!("krbtgt/{}@{}", store.realm(), store.realm()),
+        ctime: ts.patimestamp.unix_seconds(),
+        cusec: ts.pausec.map(Microseconds::get).unwrap_or(0),
+        auth_hash: ReplayCache::hash_authenticator(blob),
+    };
+    if store.pa_replay.check_and_store(rkey) {
+        return Err(proto(err::REPEAT, "PA-ENC-TIMESTAMP replay"));
     }
     Ok(())
 }
@@ -412,8 +575,6 @@ fn preauth_required(client: &Principal) -> Error {
         padata_type: pa::ETYPE_INFO2,
         padata_value: encode(&info).map(Into::into).unwrap_or_default(),
     };
-    // MIT kinit only attempts encrypted timestamp when PA-ENC-TIMESTAMP
-    // appears in METHOD-DATA (empty value is the hint).
     let method: MethodData = vec![
         PaData {
             padata_type: pa::ENC_TIMESTAMP,
@@ -437,7 +598,7 @@ fn encode_krb_error(
         ctime: None,
         cusec: None,
         stime: KerberosTime::now(),
-        susec: 0,
+        susec: Microseconds::ZERO,
         error_code: code,
         crealm: None,
         cname: None,

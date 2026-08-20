@@ -10,12 +10,10 @@ use crate::issue::handle_request;
 use crate::store::PrincipalStore;
 
 /// Addresses tried when the caller does not pin a bind address.
-pub const BIND_CANDIDATES: &[&str] = &[
-    "0.0.0.0:88",
-    "127.0.0.1:88",
-    "0.0.0.0:8888",
-    "127.0.0.1:8888",
-];
+/// Addresses tried when the caller does not pin a bind address.
+/// Never includes `0.0.0.0` — the daemon must be given an explicit bind
+/// to listen on all interfaces.
+pub const BIND_CANDIDATES: &[&str] = &["127.0.0.1:88", "127.0.0.1:8888"];
 
 /// Bind UDP and TCP on the same `addr`.
 ///
@@ -47,8 +45,8 @@ pub fn bind_preferred(candidates: &[&str]) -> io::Result<(SocketAddr, UdpSocket,
             Ok((udp, tcp)) => {
                 let local = udp.local_addr().unwrap_or(addr);
                 tracing::info!(
-                    event = "kdc.listen",
-                    correlation_id = krb5_log::new_correlation_id(),
+                    event = krb5_log::events::KDC_LISTEN,
+                    correlation_id = krb5_log::current_correlation_id(),
                     component = "krb5-kdc",
                     outcome = "ok",
                     bind = %local,
@@ -80,24 +78,39 @@ fn udp_loop(store: &PrincipalStore, sock: UdpSocket) {
     let mut buf = vec![0u8; 65_535];
     loop {
         match sock.recv_from(&mut buf) {
-            Ok((n, peer)) => match handle_request(store, &buf[..n]) {
-                Ok(reply) => {
-                    if let Err(e) = sock.send_to(&reply, peer) {
-                        tracing::error!(
-                            event = krb5_log::events::KDC_ISSUE,
-                            component = "krb5-kdc",
-                            outcome = "error",
-                            error = %e,
-                        );
+            Ok((n, peer)) => {
+                let payload = buf[..n].to_vec();
+                let reply = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_request(store, &payload)
+                }));
+                match reply {
+                    Ok(Ok(reply)) => {
+                        if let Err(e) = sock.send_to(&reply, peer) {
+                            tracing::error!(
+                                event = krb5_log::events::KDC_TRANSPORT,
+                                correlation_id = krb5_log::current_correlation_id(),
+                                component = "krb5-kdc",
+                                outcome = "error",
+                                error = %e,
+                            );
+                        }
                     }
+                    Ok(Err(e)) => tracing::error!(
+                        event = krb5_log::events::KDC_ISSUE,
+                        correlation_id = krb5_log::current_correlation_id(),
+                        component = "krb5-kdc",
+                        outcome = "error",
+                        error = %e,
+                    ),
+                    Err(_) => tracing::error!(
+                        event = krb5_log::events::KDC_TRANSPORT,
+                        correlation_id = krb5_log::current_correlation_id(),
+                        component = "krb5-kdc",
+                        outcome = "error",
+                        error = "request panic isolated",
+                    ),
                 }
-                Err(e) => tracing::error!(
-                    event = krb5_log::events::KDC_ISSUE,
-                    component = "krb5-kdc",
-                    outcome = "error",
-                    error = %e,
-                ),
-            },
+            }
             Err(e) => {
                 tracing::error!(
                     event = krb5_log::events::KDC_ISSUE,

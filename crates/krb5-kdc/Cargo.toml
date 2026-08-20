@@ -15,13 +15,16 @@ path = "src/bin/krb5-kdc.rs"
 [dependencies]
 getrandom.workspace = true
 krb5-asn1.workspace = true
-krb5-client.workspace = true
+krb5-config.workspace = true
 krb5-crypto.workspace = true
 krb5-log.workspace = true
 krb5-protocol.workspace = true
 krb5-types.workspace = true
+nix.workspace = true
+thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true

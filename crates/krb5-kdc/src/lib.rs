@@ -5,20 +5,22 @@
 //! [`handle_request`]. There is no C FFI.
 
 #![forbid(unsafe_code)]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod acl;
 mod error;
 mod issue;
 mod listen;
-mod pdu;
+mod persist;
 mod store;
 
 pub use acl::{Acl, AclEntry, AdminOp};
 pub use error::Error;
 pub use issue::{handle_request, issue_as, issue_tgs, IssuedAs, IssuedTgs};
+pub use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 pub use listen::{bind_preferred, bind_udp_tcp, serve, BIND_CANDIDATES};
-pub use pdu::{as_req, pa_enc_timestamp, tgs_req};
-pub use store::{random_key, s2k_params, KeyEntry, Principal, PrincipalStore, S2K_ITERS};
+pub use persist::{load_store, save_store, PersistError};
+pub use store::{random_key, s2k_params, KeyEntry, Policy, Principal, PrincipalStore, S2K_ITERS};
 
 use krb5_types::PrincipalName;
 
