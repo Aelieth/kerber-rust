@@ -151,7 +151,7 @@ impl Krb5Conf {
                     continue;
                 }
                 if let Some(r) = realm.as_ref() {
-                    parse_realm_line(&mut conf, r, line)?;
+                    parse_realm_line(&mut conf, r, line);
                 }
                 continue;
             }
@@ -223,7 +223,8 @@ impl KdcConf {
                         .trim_end_matches('=')
                         .trim();
                     if !name.is_empty() {
-                        conf.realm = name.to_owned();
+                        conf.realm.clear();
+                        conf.realm.push_str(name);
                     }
                     in_realm = true;
                     continue;
@@ -261,15 +262,19 @@ fn parse_libdefaults(conf: &mut Krb5Conf, line: &str) {
     match k.to_ascii_lowercase().as_str() {
         "default_realm" => conf.default_realm = Some(v),
         "allow_weak_crypto" => conf.allow_weak_crypto = truthy(&v),
-        "clockskew" => conf.clockskew = parse_duration_secs(&v).unwrap_or(300) as u32,
+        "clockskew" => {
+            conf.clockskew = parse_duration_secs(&v)
+                .and_then(|s| u32::try_from(s).ok())
+                .unwrap_or(300);
+        }
         "dns_lookup_kdc" => conf.dns_lookup_kdc = truthy(&v),
         _ => {}
     }
 }
 
-fn parse_realm_line(conf: &mut Krb5Conf, realm: &str, line: &str) -> Result<(), Error> {
+fn parse_realm_line(conf: &mut Krb5Conf, realm: &str, line: &str) {
     let Some((k, v)) = split_kv(line) else {
-        return Ok(());
+        return;
     };
     let ep = parse_endpoint(&v);
     match k.to_ascii_lowercase().as_str() {
@@ -292,7 +297,6 @@ fn parse_realm_line(conf: &mut Krb5Conf, realm: &str, line: &str) -> Result<(), 
             }),
         _ => {}
     }
-    Ok(())
 }
 
 fn parse_kdcdefaults(conf: &mut KdcConf, line: &str) {
@@ -647,7 +651,7 @@ mod tests {
     #[test]
     fn duration_parser() {
         assert_eq!(parse_duration_secs("10h"), Some(36000));
-        assert_eq!(parse_duration_secs("7d"), Some(604800));
+        assert_eq!(parse_duration_secs("7d"), Some(604_800));
         assert_eq!(parse_duration_secs("300"), Some(300));
     }
 }

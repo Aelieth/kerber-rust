@@ -67,6 +67,6 @@ pub fn bootstrap_documented() -> Result<(PrincipalStore, Acl), Error> {
         TEST_ADMIN_PASSWORD,
     )?;
     let acl = Acl::allow_admin(documented_admin_id());
-    store.create_host(&acl, &documented_admin_id(), documented_host())?;
+    store.create_host(&acl, &documented_admin_id(), &documented_host())?;
     Ok((store, acl))
 }

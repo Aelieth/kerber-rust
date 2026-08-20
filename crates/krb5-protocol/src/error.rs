@@ -132,6 +132,7 @@ impl Error {
 
     /// Wrap an I/O error, classifying retryable kinds.
     #[must_use]
+    #[allow(clippy::needless_pass_by_value)] // owns the `io::Error` from `map_err`
     pub fn from_io(e: io::Error) -> Self {
         let kind = e.kind();
         let retryable = matches!(

@@ -10,7 +10,6 @@ use crate::issue::handle_request;
 use crate::store::PrincipalStore;
 
 /// Addresses tried when the caller does not pin a bind address.
-/// Addresses tried when the caller does not pin a bind address.
 /// Never includes `0.0.0.0` — the daemon must be given an explicit bind
 /// to listen on all interfaces.
 pub const BIND_CANDIDATES: &[&str] = &["127.0.0.1:88", "127.0.0.1:8888"];
@@ -74,6 +73,7 @@ pub fn serve(store: Arc<PrincipalStore>, udp: UdpSocket, tcp: TcpListener) -> io
     Ok(())
 }
 
+#[allow(clippy::needless_pass_by_value)] // UDP socket is owned by the worker thread
 fn udp_loop(store: &PrincipalStore, sock: UdpSocket) {
     let mut buf = vec![0u8; 65_535];
     loop {
@@ -124,6 +124,7 @@ fn udp_loop(store: &PrincipalStore, sock: UdpSocket) {
     }
 }
 
+#[allow(clippy::needless_pass_by_value)] // TCP listener is owned by the worker thread
 fn tcp_loop(store: &Arc<PrincipalStore>, listener: TcpListener) {
     loop {
         match listener.accept() {

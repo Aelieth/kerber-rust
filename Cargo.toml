@@ -64,10 +64,19 @@ missing_docs = "allow"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
-pedantic = { level = "allow", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
 unwrap_used = "allow"
 expect_used = "allow"
 panic = "allow"
 todo = "deny"
 unimplemented = "deny"
 needless_borrows_for_generic_args = "allow"
+# Pedantic noise that is not useful in this tree: rasn field bindings,
+# RFC vocabulary in rustdoc, long AS/TGS/issue functions, ACL flag
+# structs, and Kerberos names (cname/crealm, KAT single-letter vars).
+no_effect_underscore_binding = "allow"
+doc_markdown = "allow"
+too_many_lines = "allow"
+struct_excessive_bools = "allow"
+similar_names = "allow"
+many_single_char_names = "allow"

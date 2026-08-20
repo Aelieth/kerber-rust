@@ -100,7 +100,7 @@ fn string_to_key_inner(
             }
         }
         let mut base =
-            derive::kdf_hmac_sha2(etype, &tkey, b"kerberos", None, (key_len * 8) as u32)?;
+            derive::kdf_hmac_sha2(etype, &tkey, b"kerberos", None, derive::bits_u32(key_len))?;
         tkey.zeroize();
         let key = ProtocolKey::from_bytes(etype, &base);
         base.zeroize();

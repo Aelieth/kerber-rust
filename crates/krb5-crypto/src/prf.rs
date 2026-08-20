@@ -17,18 +17,16 @@ use crate::key::ProtocolKey;
 /// Returns crypto failures from key derivation or the underlying HMAC/cipher.
 pub fn prf(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
     match key.etype() {
-        EncryptionType::Aes128CtsHmacSha196 | EncryptionType::Aes256CtsHmacSha196 => {
-            prf_aes_sha1(key, input)
-        }
+        EncryptionType::Aes128CtsHmacSha196
+        | EncryptionType::Aes256CtsHmacSha196
+        | EncryptionType::Des3CbcSha1
+        | EncryptionType::Camellia128CtsCmac
+        | EncryptionType::Camellia256CtsCmac => prf_aes_sha1(key, input),
         EncryptionType::Aes128CtsHmacSha256128 | EncryptionType::Aes256CtsHmacSha384192 => {
             prf_rfc8009(key, input)
         }
-        EncryptionType::Des3CbcSha1 => prf_aes_sha1(key, input),
         EncryptionType::Rc4Hmac => {
             hmac_digest(EncryptionType::Aes128CtsHmacSha196, key.as_bytes(), input)
-        }
-        EncryptionType::Camellia128CtsCmac | EncryptionType::Camellia256CtsCmac => {
-            prf_aes_sha1(key, input)
         }
     }
 }
@@ -74,7 +72,7 @@ fn prf_aes_sha1(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
             padded.push(0);
         }
         let iv8 = [0u8; 8];
-        crate::weak::des3_cbc_encrypt(&dk, &iv8, &padded)
+        crate::weak::des3_cbc_encrypt(&dk, iv8, &padded)
     } else {
         let iv = [0u8; BLOCK];
         cts::encrypt(&dk, &iv, &tmp1)

@@ -11,6 +11,11 @@ use crate::error::Error;
 use crate::etype::EncryptionType;
 use crate::nfold::nfold;
 
+/// Output length in bits for RFC 8009 KDF-HMAC-SHA2 (`L`).
+pub(crate) fn bits_u32(nbytes: usize) -> u32 {
+    u32::try_from(nbytes.saturating_mul(8)).unwrap_or(u32::MAX)
+}
+
 /// RFC 3961 DR: encrypt the n-folded constant in a loop until `out_len` bytes
 /// are produced. AES random-to-key is the identity, so DK = DR for these etypes.
 pub(crate) fn dk_rfc3961(key: &[u8], constant: &[u8]) -> Result<Vec<u8>, Error> {
@@ -151,21 +156,21 @@ pub(crate) fn derive_usage_keys(
             base,
             &usage.derivation_constant(0x99),
             None,
-            (etype.mac_key_len() * 8) as u32,
+            bits_u32(etype.mac_key_len()),
         )?;
         let ke = kdf_hmac_sha2(
             etype,
             base,
             &usage.derivation_constant(0xAA),
             None,
-            (etype.key_len() * 8) as u32,
+            bits_u32(etype.key_len()),
         )?;
         let ki = kdf_hmac_sha2(
             etype,
             base,
             &usage.derivation_constant(0x55),
             None,
-            (etype.mac_key_len() * 8) as u32,
+            bits_u32(etype.mac_key_len()),
         )?;
         Ok(UsageKeys { kc, ke, ki })
     } else {

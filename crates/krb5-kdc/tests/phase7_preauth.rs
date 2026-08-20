@@ -102,11 +102,13 @@ fn kpasswd_bumps_kvno_keeps_old_keys_and_switches_password() {
         Some(vec![pa_enc_timestamp(&user_key()).expect("pa")]),
     );
     match krb5_kdc::issue_as(&store, &old) {
-        Err(Error::Crypto(_))
-        | Err(Error::Protocol {
-            code: err::PREAUTH_FAILED,
-            ..
-        }) => {}
+        Err(
+            Error::Crypto(_)
+            | Error::Protocol {
+                code: err::PREAUTH_FAILED,
+                ..
+            },
+        ) => {}
         other => panic!("old password must fail AS, got {other:?}"),
     }
 }

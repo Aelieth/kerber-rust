@@ -261,15 +261,17 @@ fn gss_unwrap_app(token: &[u8]) -> Result<Vec<u8>, Error> {
 }
 
 fn der_len(out: &mut Vec<u8>, n: usize) {
-    if n < 128 {
-        out.push(n as u8);
-    } else if n < 256 {
-        out.push(0x81);
-        out.push(n as u8);
-    } else {
-        out.push(0x82);
-        out.extend_from_slice(&(n as u16).to_be_bytes());
+    if let Ok(b) = u8::try_from(n) {
+        if b < 128 {
+            out.push(b);
+        } else {
+            out.push(0x81);
+            out.push(b);
+        }
+        return;
     }
+    out.push(0x82);
+    out.extend_from_slice(&(u16::try_from(n).unwrap_or(u16::MAX)).to_be_bytes());
 }
 
 fn der_len_decode(b: &[u8]) -> Result<(usize, usize), Error> {

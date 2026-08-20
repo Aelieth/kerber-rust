@@ -134,11 +134,12 @@ impl EncryptionType {
     pub const fn hmac_output_len(self) -> usize {
         match self {
             Self::Aes128CtsHmacSha196 | Self::Aes256CtsHmacSha196 => 12,
-            Self::Aes128CtsHmacSha256128 => 16,
+            Self::Aes128CtsHmacSha256128
+            | Self::Rc4Hmac
+            | Self::Camellia128CtsCmac
+            | Self::Camellia256CtsCmac => 16,
             Self::Aes256CtsHmacSha384192 => 24,
             Self::Des3CbcSha1 => 20,
-            Self::Rc4Hmac => 16,
-            Self::Camellia128CtsCmac | Self::Camellia256CtsCmac => 16,
         }
     }
 
@@ -148,11 +149,8 @@ impl EncryptionType {
     pub const fn mac_key_len(self) -> usize {
         match self {
             Self::Aes128CtsHmacSha196 | Self::Aes256CtsHmacSha196 => self.key_len(),
-            Self::Aes128CtsHmacSha256128 => 16,
-            Self::Aes256CtsHmacSha384192 => 24,
-            Self::Des3CbcSha1 => 24,
-            Self::Rc4Hmac => 16,
-            Self::Camellia128CtsCmac => 16,
+            Self::Aes128CtsHmacSha256128 | Self::Rc4Hmac | Self::Camellia128CtsCmac => 16,
+            Self::Aes256CtsHmacSha384192 | Self::Des3CbcSha1 => 24,
             Self::Camellia256CtsCmac => 32,
         }
     }

@@ -73,6 +73,7 @@ impl ReplayCache {
     /// Insert `key` if it has not been seen inside the window.
     ///
     /// Returns `true` if this is a replay (already present).
+    #[must_use]
     pub fn check_and_store(&self, key: ReplayKey) -> bool {
         let Ok(mut g) = self.inner.lock() else {
             return true;

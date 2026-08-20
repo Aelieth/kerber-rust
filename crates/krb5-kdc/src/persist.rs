@@ -202,7 +202,7 @@ fn take_u32(b: &[u8], i: &mut usize) -> Result<u32, PersistError> {
 }
 
 fn take_i32(b: &[u8], i: &mut usize) -> Result<i32, PersistError> {
-    Ok(take_u32(b, i)? as i32)
+    Ok(i32::from_be_bytes(take_u32(b, i)?.to_be_bytes()))
 }
 
 fn take_u64(b: &[u8], i: &mut usize) -> Result<u64, PersistError> {

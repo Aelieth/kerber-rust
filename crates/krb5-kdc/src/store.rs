@@ -201,7 +201,7 @@ impl PrincipalStore {
         &mut self,
         acl: &Acl,
         actor: &str,
-        name: PrincipalName,
+        name: &PrincipalName,
         password: &[u8],
     ) -> Result<(), Error> {
         acl.check(actor, AdminOp::Create)?;
@@ -209,7 +209,7 @@ impl PrincipalStore {
         if self.map.contains_key(&id) {
             return Err(Error::AlreadyExists);
         }
-        self.insert_password(&name, password)
+        self.insert_password(name, password)
     }
 
     /// ACL-gated create of a random-key host (or other) principal.
@@ -221,14 +221,14 @@ impl PrincipalStore {
         &mut self,
         acl: &Acl,
         actor: &str,
-        name: PrincipalName,
+        name: &PrincipalName,
     ) -> Result<(), Error> {
         acl.check(actor, AdminOp::Create)?;
         let id = format!("{}@{}", name.components_joined(), self.realm);
         if self.map.contains_key(&id) {
             return Err(Error::AlreadyExists);
         }
-        self.insert_randkey(&name, &[EncryptionType::Aes256CtsHmacSha196])
+        self.insert_randkey(name, &[EncryptionType::Aes256CtsHmacSha196])
     }
 
     /// Replace password-derived keys (kpasswd): bump kvno, keep prior keys
@@ -403,10 +403,10 @@ impl PrincipalStore {
             });
         }
         let salt = name.default_salt(&self.realm);
-        let w = keys
-            .first()
-            .map(|k| spake_w(k.key.as_bytes(), &salt))
-            .unwrap_or_else(|| spake_w(&salt, &salt));
+        let w = keys.first().map_or_else(
+            || spake_w(&salt, &salt),
+            |k| spake_w(k.key.as_bytes(), &salt),
+        );
         let p = Principal {
             name: name.clone(),
             realm: self.realm.clone(),

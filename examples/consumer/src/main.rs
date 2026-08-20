@@ -7,7 +7,12 @@ use krb5_asn1::{decode, encode, PrincipalName};
 use krb5_crypto::{decrypt, encrypt_with_confounder, EncryptionType, KeyUsage, ProtocolKey};
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    use std::fmt::Write;
+    let mut s = String::with_capacity(bytes.len().saturating_mul(2));
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
 }
 
 fn from_hex(s: &str) -> Vec<u8> {

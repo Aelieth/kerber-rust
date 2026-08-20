@@ -703,6 +703,10 @@ impl KerberosTime {
     ///
     /// RFC 4120 forbids fractional seconds; nanoseconds are zeroed so DER
     /// encoding is `YYYYMMDDHHMMSSZ`.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if chrono rejects UTC offset 0 (it does not).
     #[must_use]
     #[allow(clippy::expect_used)]
     pub fn now() -> Self {

@@ -3,7 +3,7 @@
 use des::cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
 use des::TdesEde3;
 use hmac::{Hmac, Mac};
-use md4::Md4;
+use md4::{Digest, Md4};
 use md5::Md5;
 use rc4::{KeyInit as Rc4KeyInit, StreamCipher};
 use sha1::Sha1;
@@ -22,7 +22,6 @@ pub(crate) fn rc4_string_to_key(password: &[u8]) -> Result<ProtocolKey, Error> {
         .encode_utf16()
         .flat_map(u16::to_le_bytes)
         .collect();
-    use md4::Digest;
     let mut h = Md4::new();
     h.update(&utf16);
     let out = h.finalize();
@@ -110,7 +109,7 @@ pub(crate) fn des3_encrypt(
         data.push(0);
     }
     let iv = [0u8; DES_BLOCK];
-    let c = des3_cbc_encrypt(&derived, &iv, &data)?;
+    let c = des3_cbc_encrypt(&derived, iv, &data)?;
     let h = hmac_sha1_trunc(&ki, &data, 20)?;
     let mut out = c;
     out.extend_from_slice(&h);
@@ -129,7 +128,7 @@ pub(crate) fn des3_decrypt(
     let derived = crate::derive::dk_rfc3961(key.as_bytes(), &usage.derivation_constant(0xAA))?;
     let ki = crate::derive::dk_rfc3961(key.as_bytes(), &usage.derivation_constant(0x55))?;
     let iv = [0u8; DES_BLOCK];
-    let p = des3_cbc_decrypt(&derived, &iv, c)?;
+    let p = des3_cbc_decrypt(&derived, iv, c)?;
     let expected = hmac_sha1_trunc(&ki, &p, 20)?;
     crate::derive::mac_verify(mac, &expected)?;
     if p.len() < DES_BLOCK {
@@ -140,14 +139,14 @@ pub(crate) fn des3_decrypt(
 
 pub(crate) fn des3_cbc_encrypt(
     key: &[u8],
-    iv: &[u8; DES_BLOCK],
+    iv: [u8; DES_BLOCK],
     plain: &[u8],
 ) -> Result<Vec<u8>, Error> {
     if key.len() != 24 || plain.len() % DES_BLOCK != 0 {
         return Err(Error::InvalidKeyLength);
     }
     let cipher = <TdesEde3 as KeyInit>::new_from_slice(key).map_err(|_| Error::InvalidKeyLength)?;
-    let mut prev = *iv;
+    let mut prev = iv;
     let mut out = vec![0u8; plain.len()];
     for (i, chunk) in plain.chunks(DES_BLOCK).enumerate() {
         let mut block = [0u8; DES_BLOCK];
@@ -162,16 +161,12 @@ pub(crate) fn des3_cbc_encrypt(
     Ok(out)
 }
 
-fn des3_cbc_decrypt(
-    key: &[u8],
-    iv: &[u8; DES_BLOCK],
-    cipher_text: &[u8],
-) -> Result<Vec<u8>, Error> {
+fn des3_cbc_decrypt(key: &[u8], iv: [u8; DES_BLOCK], cipher_text: &[u8]) -> Result<Vec<u8>, Error> {
     if key.len() != 24 || cipher_text.len() % DES_BLOCK != 0 {
         return Err(Error::InvalidKeyLength);
     }
     let cipher = <TdesEde3 as KeyInit>::new_from_slice(key).map_err(|_| Error::InvalidKeyLength)?;
-    let mut prev = *iv;
+    let mut prev = iv;
     let mut out = vec![0u8; cipher_text.len()];
     for (i, chunk) in cipher_text.chunks(DES_BLOCK).enumerate() {
         let mut block = [0u8; DES_BLOCK];

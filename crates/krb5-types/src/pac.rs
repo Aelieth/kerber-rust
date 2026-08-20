@@ -17,8 +17,8 @@ pub const PAC_CLIENT_CLAIMS: u32 = 19;
 /// PAC buffer type: device info.
 pub const PAC_DEVICE_INFO: u32 = 20;
 
-/// Signature type HMAC-MD5 (RC4).
-pub const CKSUM_HMAC_MD5: i32 = 0xFFFFFF76_u32 as i32;
+/// Signature type HMAC-MD5 (RC4). RFC 4757 cksumtype -138.
+pub const CKSUM_HMAC_MD5: i32 = -138;
 /// Signature type HMAC-SHA1-96-AES128.
 pub const CKSUM_HMAC_SHA1_96_AES128: i32 = 15;
 /// Signature type HMAC-SHA1-96-AES256.
@@ -89,22 +89,20 @@ impl Pac {
                     .try_into()
                     .map_err(|_| PacError::Truncated)?,
             );
-            let size = u32::from_le_bytes(
+            let size = usize::try_from(u32::from_le_bytes(
                 bytes[off + 4..off + 8]
                     .try_into()
                     .map_err(|_| PacError::Truncated)?,
-            ) as usize;
-            let offset = u64::from_le_bytes(
+            ))
+            .map_err(|_| PacError::Truncated)?;
+            let offset = usize::try_from(u64::from_le_bytes(
                 bytes[off + 8..off + 16]
                     .try_into()
                     .map_err(|_| PacError::Truncated)?,
-            ) as usize;
+            ))
+            .map_err(|_| PacError::Truncated)?;
             off += 16;
-            if offset
-                .checked_add(size)
-                .map(|e| e > bytes.len())
-                .unwrap_or(true)
-            {
+            if offset.checked_add(size).is_none_or(|e| e > bytes.len()) {
                 return Err(PacError::Truncated);
             }
             buffers.push(PacBuffer {
@@ -298,7 +296,7 @@ fn ndr_kerb_validation_info(client: &str, realm: &str, user_rid: u32, primary: u
     let mut out = Vec::new();
     out.extend_from_slice(&[1, 0x10, 8, 0]);
     out.extend_from_slice(&0xcccc_ccceu32.to_le_bytes());
-    out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(u32::try_from(body.len()).unwrap_or(u32::MAX)).to_le_bytes());
     out.extend_from_slice(&0u32.to_le_bytes());
     out.extend_from_slice(&0x0002_0000u32.to_le_bytes());
     out.extend_from_slice(&body);

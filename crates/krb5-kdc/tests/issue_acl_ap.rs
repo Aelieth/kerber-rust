@@ -39,7 +39,7 @@ fn acl_allow_admin_create_and_ktadd() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     let extra = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "extra.kerber.test"]);
     store
-        .create_host(&acl, &documented_admin_id(), extra.clone())
+        .create_host(&acl, &documented_admin_id(), &extra)
         .expect("admin create");
     let kt = store
         .export_keytab(&acl, &documented_admin_id(), &extra)
@@ -59,7 +59,7 @@ fn acl_deny_non_admin_create_delete_ktadd() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     let user = format!("{TEST_USER}@{TEST_REALM}");
     let extra = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "denied.kerber.test"]);
-    let err = store.create_host(&acl, &user, extra.clone()).unwrap_err();
+    let err = store.create_host(&acl, &user, &extra).unwrap_err();
     assert_eq!(err, Error::AclDenied);
     let err = store
         .export_keytab(&acl, &user, &documented_host())

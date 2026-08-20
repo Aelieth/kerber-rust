@@ -275,8 +275,9 @@ fn verify_inner(
             text: Some("authenticator/ticket client mismatch".into()),
         });
     }
-    let skew_delta = now.delta_seconds(&authenticator.ctime).unsigned_abs() as i64;
-    if skew_delta > skew {
+    let skew_delta = now.delta_seconds(&authenticator.ctime).unsigned_abs();
+    let skew_limit = u64::try_from(skew.max(0)).unwrap_or(u64::MAX);
+    if skew_delta > skew_limit {
         return Err(Error::KrbError {
             code: err::SKEW,
             text: Some("authenticator clock skew".into()),

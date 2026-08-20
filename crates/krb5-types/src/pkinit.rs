@@ -152,7 +152,7 @@ pub struct CmsContentInfo {
 }
 
 fn oid_signed_data() -> ObjectIdentifier {
-    ObjectIdentifier::new(&[1, 2, 840, 113549, 1, 7, 2]).expect("id-signedData")
+    ObjectIdentifier::new(&[1, 2, 840, 113_549, 1, 7, 2]).expect("id-signedData")
 }
 
 fn oid_pkinit_authdata() -> ObjectIdentifier {

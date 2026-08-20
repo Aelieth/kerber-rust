@@ -95,7 +95,7 @@ impl<'a> AdminSession<'a> {
     /// # Errors
     ///
     /// [`Error::AclDenied`] when the actor is not permitted.
-    pub fn create_password(&mut self, name: PrincipalName, password: &[u8]) -> Result<(), Error> {
+    pub fn create_password(&mut self, name: &PrincipalName, password: &[u8]) -> Result<(), Error> {
         self.store
             .create_password(self.acl, &self.actor, name, password)
             .map_err(Error::from)
@@ -131,16 +131,14 @@ impl<'a> AdminSession<'a> {
     /// # Errors
     ///
     /// ACL denied or principal missing.
-    pub fn change_password(&mut self, name: PrincipalName, password: &[u8]) -> Result<(), Error> {
+    pub fn change_password(&mut self, name: &PrincipalName, password: &[u8]) -> Result<(), Error> {
         let target = format!("{}@{}", name.components_joined(), self.store.realm());
         if self.actor != target {
             self.acl
                 .check(&self.actor, AdminOp::ChangePassword)
                 .map_err(Error::from)?;
         }
-        self.store
-            .set_password(&name, password)
-            .map_err(Error::from)
+        self.store.set_password(name, password).map_err(Error::from)
     }
 }
 
@@ -155,7 +153,7 @@ pub fn kpasswd_set(
     service_key: &krb5_crypto::ProtocolKey,
     ap_req: &[u8],
     replay: &ReplayCache,
-    name: PrincipalName,
+    name: &PrincipalName,
     new_password: &[u8],
 ) -> Result<(), Error> {
     let mut sess = AdminSession::from_ap_req(store, acl, service_key, ap_req, replay)?;
@@ -200,9 +198,7 @@ mod tests {
             PrincipalName::NT_SRV_HST,
             ["host", "admin-extra.kerber.test"],
         );
-        admin
-            .create_password(extra.clone(), b"secret-pass")
-            .unwrap();
+        admin.create_password(&extra, b"secret-pass").unwrap();
         let kt = admin.ktadd(&extra).unwrap();
         assert_eq!(&kt.to_bytes()[..2], &[0x05, 0x02]);
     }
@@ -213,7 +209,7 @@ mod tests {
         let mut user = AdminSession::local(&mut store, &acl, "user@KERBER.TEST");
         let extra = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "nope.kerber.test"]);
         assert_eq!(
-            user.create_password(extra, b"x").unwrap_err(),
+            user.create_password(&extra, b"x").unwrap_err(),
             Error::AclDenied
         );
         assert_eq!(
@@ -229,11 +225,9 @@ mod tests {
         let admin_name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["admin"]);
         {
             let mut user = AdminSession::local(&mut store, &acl, "user@KERBER.TEST");
-            user.change_password(user_name.clone(), b"new-user-pass")
-                .unwrap();
+            user.change_password(&user_name, b"new-user-pass").unwrap();
             assert_eq!(
-                user.change_password(admin_name.clone(), b"nope")
-                    .unwrap_err(),
+                user.change_password(&admin_name, b"nope").unwrap_err(),
                 Error::AclDenied
             );
         }
@@ -243,7 +237,7 @@ mod tests {
         {
             let mut admin = AdminSession::local(&mut store, &acl, documented_admin_id());
             admin
-                .change_password(user_name.clone(), b"admin-set-pass")
+                .change_password(&user_name, b"admin-set-pass")
                 .unwrap();
         }
         let after = store.get_name(&user_name).unwrap();
