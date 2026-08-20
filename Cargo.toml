@@ -5,9 +5,12 @@ members = [
     "crates/krb5-crypto",
     "crates/krb5-types",
     "crates/krb5-asn1",
+    "crates/krb5-config",
     "crates/krb5-protocol",
     "crates/krb5-client",
     "crates/krb5-kdc",
+    "crates/krb5-gss",
+    "crates/krb5-admin",
     "examples/consumer",
     "examples/kdc-consumer",
 ]
@@ -30,13 +33,23 @@ krb5-asn1 = { path = "crates/krb5-asn1" }
 krb5-protocol = { path = "crates/krb5-protocol" }
 krb5-client = { path = "crates/krb5-client" }
 krb5-kdc = { path = "crates/krb5-kdc" }
+krb5-config = { path = "crates/krb5-config" }
+krb5-gss = { path = "crates/krb5-gss" }
+krb5-admin = { path = "crates/krb5-admin" }
 aes = "0.8"
+camellia = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["alloc", "clock", "std"] }
-cipher = "0.4"
+cmac = "0.7"
+des = "0.8"
 getrandom = "0.2"
 hmac = "0.12"
+md-5 = "0.10"
+md4 = "0.10"
+nix = { version = "0.29", default-features = false, features = ["user", "fs", "process"] }
+p256 = { version = "0.13", default-features = false, features = ["arithmetic", "ecdsa"] }
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 rasn = "0.27"
+rc4 = "0.1"
 sha1 = "0.10"
 sha2 = "0.10"
 subtle = "2.6"
@@ -47,7 +60,14 @@ zeroize = { version = "1.8", features = ["derive", "alloc"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
-missing_docs = "warn"
+missing_docs = "allow"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
+pedantic = { level = "allow", priority = -1 }
+unwrap_used = "allow"
+expect_used = "allow"
+panic = "allow"
+todo = "deny"
+unimplemented = "deny"
+needless_borrows_for_generic_args = "allow"
