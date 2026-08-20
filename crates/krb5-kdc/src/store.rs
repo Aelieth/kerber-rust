@@ -226,18 +226,57 @@ impl PrincipalStore {
         self.insert_randkey(&name, &[EncryptionType::Aes256CtsHmacSha196])
     }
 
-    /// Replace password-derived keys (kpasswd).
+    /// Replace password-derived keys (kpasswd): bump kvno, keep prior keys
+    /// and principal policy.
     ///
     /// # Errors
     ///
     /// [`Error::NotFound`] when the principal is missing.
     pub fn set_password(&mut self, name: &PrincipalName, password: &[u8]) -> Result<(), Error> {
         let id = format!("{}@{}", name.components_joined(), self.realm);
-        if !self.map.contains_key(&id) {
+        let Some(existing) = self.map.get(&id) else {
             return Err(Error::NotFound);
+        };
+        let salt = existing.salt.clone();
+        let next_kvno = existing
+            .keys
+            .iter()
+            .map(|k| k.kvno)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+        let params = S2K_ITERS.to_be_bytes();
+        let mut new_keys = Vec::new();
+        for etype in [
+            EncryptionType::Aes256CtsHmacSha196,
+            EncryptionType::Aes128CtsHmacSha196,
+        ] {
+            let key = string_to_key(etype, password, &salt, Some(&params))?;
+            new_keys.push(KeyEntry {
+                etype,
+                key,
+                kvno: next_kvno,
+            });
         }
-        self.map.remove(&id);
-        self.insert_password(name, password)
+        let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+        p.keys.extend(new_keys);
+        Ok(())
+    }
+
+    /// ACL-gated password change (admin `c` / `*`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AclDenied`] or [`Error::NotFound`].
+    pub fn change_password(
+        &mut self,
+        acl: &Acl,
+        actor: &str,
+        name: &PrincipalName,
+        password: &[u8],
+    ) -> Result<(), Error> {
+        acl.check(actor, AdminOp::ChangePassword)?;
+        self.set_password(name, password)
     }
 
     /// ACL-gated delete.

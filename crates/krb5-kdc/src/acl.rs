@@ -11,6 +11,8 @@ pub enum AdminOp {
     Delete,
     /// Export a keytab (`ktadd`).
     Ktadd,
+    /// Change a password (`kpasswd` / kadm5 `c`).
+    ChangePassword,
 }
 
 /// One ACL line: a principal pattern and permission flags.
@@ -24,6 +26,8 @@ pub struct AclEntry {
     pub delete: bool,
     /// `i` (inquire / extract) / `*`
     pub inquire: bool,
+    /// `c` (changepw) / `*`
+    pub changepw: bool,
 }
 
 /// Ordered ACL; first matching principal wins. Unlisted principals are denied.
@@ -59,6 +63,7 @@ impl Acl {
                 add: all || perms.contains('a'),
                 delete: all || perms.contains('d'),
                 inquire: all || perms.contains('i'),
+                changepw: all || perms.contains('c'),
             });
         }
         Self { entries }
@@ -73,6 +78,7 @@ impl Acl {
                 add: true,
                 delete: true,
                 inquire: true,
+                changepw: true,
             }],
         }
     }
@@ -91,6 +97,7 @@ impl Acl {
                 AdminOp::Create => e.add,
                 AdminOp::Delete => e.delete,
                 AdminOp::Ktadd => e.inquire,
+                AdminOp::ChangePassword => e.changepw,
             };
             if ok {
                 tracing::info!(
@@ -121,6 +128,7 @@ fn op_name(op: AdminOp) -> &'static str {
         AdminOp::Create => "create",
         AdminOp::Delete => "delete",
         AdminOp::Ktadd => "ktadd",
+        AdminOp::ChangePassword => "cpw",
     }
 }
 

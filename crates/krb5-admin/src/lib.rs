@@ -123,15 +123,21 @@ impl<'a> AdminSession<'a> {
             .map_err(Error::from)
     }
 
-    /// Change password (kpasswd). Requires create/add permission in this increment.
+    /// Change password (kpasswd / RFC 3244).
+    ///
+    /// The actor may always change their own password. Changing another
+    /// principal requires ACL `c` / `*`.
     ///
     /// # Errors
     ///
-    /// ACL denied.
+    /// ACL denied or principal missing.
     pub fn change_password(&mut self, name: PrincipalName, password: &[u8]) -> Result<(), Error> {
-        self.acl
-            .check(&self.actor, AdminOp::Create)
-            .map_err(Error::from)?;
+        let target = format!("{}@{}", name.components_joined(), self.store.realm());
+        if self.actor != target {
+            self.acl
+                .check(&self.actor, AdminOp::ChangePassword)
+                .map_err(Error::from)?;
+        }
         self.store
             .set_password(&name, password)
             .map_err(Error::from)
@@ -214,5 +220,34 @@ mod tests {
             user.ktadd(&documented_host()).unwrap_err(),
             Error::AclDenied
         );
+    }
+
+    #[test]
+    fn kpasswd_self_service_and_admin_acl() {
+        let (mut store, acl) = bootstrap_documented().unwrap();
+        let user_name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+        let admin_name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["admin"]);
+        {
+            let mut user = AdminSession::local(&mut store, &acl, "user@KERBER.TEST");
+            user.change_password(user_name.clone(), b"new-user-pass")
+                .unwrap();
+            assert_eq!(
+                user.change_password(admin_name.clone(), b"nope")
+                    .unwrap_err(),
+                Error::AclDenied
+            );
+        }
+        let after = store.get_name(&user_name).unwrap();
+        let old_max = after.keys.iter().map(|k| k.kvno).max().unwrap();
+        assert!(old_max > 1, "self-service kpasswd must bump kvno");
+        {
+            let mut admin = AdminSession::local(&mut store, &acl, documented_admin_id());
+            admin
+                .change_password(user_name.clone(), b"admin-set-pass")
+                .unwrap();
+        }
+        let after = store.get_name(&user_name).unwrap();
+        let new_max = after.keys.iter().map(|k| k.kvno).max().unwrap();
+        assert!(new_max > old_max);
     }
 }
