@@ -19,9 +19,10 @@ primary implementation oracle. Existing Rust crates (`rasn-kerberos`,
 | [4120] §7.2.1 / UDP-TCP 88 | KDC protocol | Harness and `krb5-kdc` listen on 127.0.0.1:88 (fallback 8888). |
 
 3DES (16), RC4 (23), and Camellia (25/26) exist behind
-`allow_weak_crypto` (Camellia-CTS-CMAC uses the `camellia`+`cmac`
-crates; RC4 applies the RFC 4757 usage map; 3DES uses RFC 3961 §6.3
-s2k). Single-DES is not implemented. These paths are **self-tested**.
+`allow_weak_crypto` (Camellia-CTS-CMAC uses RFC 6803 KDF-FEEDBACK-CMAC
+plus the `camellia`+`cmac` crates, with §10 s2k/DK/checksum KATs; RC4
+applies the RFC 4757 usage map; 3DES uses RFC 3961 §6.3 s2k with
+appendix A.4 output). Single-DES is not implemented.
 
 `krb5-config` parses `krb5.conf`/`kdc.conf` and DNS SRV. The KDC applies
 `kdc.conf` ticket policy (and non-test listen/db paths). `kinit` and TGS

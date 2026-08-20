@@ -5,7 +5,9 @@ Testing is continuous. Categories grow with the stages.
 ## Normal / baseline
 
 - Known-answer tests in `crates/krb5-crypto/tests/known_answer.rs`
-  (RFC 3962, RFC 8009, MIT `t_derive.c` / `t_cksums.c`).
+  (RFC 3961 3DES s2k, RFC 3962, RFC 6803 Camellia-CTS-CMAC, RFC 8009
+  PRF, RFC 4556 `octetstring2key`, SPAKE IANA M/N, MIT `t_derive.c` /
+  `t_cksums.c`).
 - DER round-trip in `crates/krb5-asn1/tests/round_trip.rs`.
 - Downstream consumer tests in `examples/consumer`.
 
@@ -19,8 +21,9 @@ DER inside the test.
 - Key usage 0 is rejected.
 
 DER-strictness negatives live in `crates/krb5-asn1/tests/der_strict.rs`.
-`cargo fuzz` is optional; when it cannot run, those negatives are the
-sub-bar.
+`fuzz/` has ≥6 cargo-fuzz targets (DER, AS/TGS/AP, keytab/ccache,
+PKINIT CMS, PAC NDR, SPAKE points, Oakley DH, GSS tokens) seeded from
+`tests/traces/`. CI smokes each target ~60s (`.github/workflows/fuzz.yml`).
 
 ## Interop
 
@@ -59,8 +62,13 @@ the Rust KDC. Set `KERBER_CAPTURE_DIR` to write raw PDUs under
 
 SPAKE: `scripts/spake-gate.sh` runs MIT `kinit` against the Rust KDC
 with `preferred_preauth_types = 151` and `spake_preauth_groups = P-256`.
-It fails unless TRACE contains `SPAKE` and `klist` shows
-`user@KERBER.TEST`.
+It fails unless TRACE contains `pa_type` 151 and group 2, and `klist`
+shows `user@KERBER.TEST`.
+
+SHA-2: `scripts/sha2-gate.sh` is a live MIT 1.22.2 gate. It copies the
+Rust KDC into the MIT image, points `KRB5_CONFIG` at `/etc/krb5-sha2.conf`
+(etype 20 only), and requires `kinit`/`kvno`/`klist -e` to name
+`aes256-cts-hmac-sha384-192`. It hard-fails without Docker.
 
 Cross-realm: `scripts/cross-realm-gate.sh` starts two Rust KDCs
 (KERBER.TEST:88, OTHER.TEST:89) sharing `KRB5_TEST_INTERREALM_KEY`,
@@ -89,5 +97,8 @@ Host-side `kinit` (if you have MIT clients installed):
 KRB5_CONFIG="$PWD/harness/client-krb5.conf" kinit user@KERBER.TEST
 ```
 
-Golden traces will live under `tests/traces/` once Stage 3 captures
-them. Do not commit `/working`.
+Golden traces under `tests/traces/mit-*.der` are decoded and
+field-diffed in `crates/krb5-protocol/tests/golden_traces.rs` (unit CI).
+Reply goldens are MIT-KDC bytes from `client-gate.sh`. Do not commit
+`/working`. `bidirectional-gate.sh` is a Rust-client↔Rust-KDC check,
+not a live MIT oracle.

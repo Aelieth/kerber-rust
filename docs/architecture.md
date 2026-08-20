@@ -46,7 +46,9 @@ FILE ccache (so the KDC does not depend on the client crate). UDP uses
 **`krb5-client`** is `kinit` (password from env/stdin, never argv).
 
 **`krb5-kdc`** issues AS/TGS from an in-memory store with optional
-persist/stash. Default bind is `127.0.0.1` (not `0.0.0.0`). After a
+persist/stash. Persistence is **embed-only**: the daemon holds
+`Arc<PrincipalStore>` and cannot mutate/persist at runtime until an
+admin path exists. Default bind is `127.0.0.1` (not `0.0.0.0`). After a
 privileged bind the daemon drops to `KRB5_KDC_USER` (default `nobody`).
 TCP workers are capped (`MAX_TCP_WORKERS`); SIGTERM/SIGINT stop
 `serve`. `--test-realm` bootstraps documented principals; otherwise
@@ -54,7 +56,10 @@ TCP workers are capped (`MAX_TCP_WORKERS`); SIGTERM/SIGINT stop
 
 **`krb5-gss`** provides RFC 4121 wrap/MIC (MIT `libgssapi_krb5` is
 out-of-process; `scripts/gss-gate.sh`). The acceptor binds
-`expected_server` / `expected_realm` from the keytab.
+`expected_server` / `expected_realm` from the keytab. First wrap/MIC
+seq is checked against the AP-REQ authenticator seq; wrap/MIC use a
+windowed replay cache. Send-side RRC≠0 emission and SSPI proof are
+deferred to the AD round.
 
 **`krb5-admin`** is an in-process ACL session (no kadmind RPC, no
 RFC 3244 kpasswd socket, no kprop stream).

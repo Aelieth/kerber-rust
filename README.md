@@ -9,10 +9,12 @@ This is an early-stage project targeting MIT 1.22.2 wire compatibility.
 **Content-asserting MIT 1.22.2 gates exist for** AS/TGS (`client-gate`,
 `kdc-gate`, including FAST TGS `kvno`), GSS wrap (`gss-gate`), PKINIT
 `kinit` (`pkinit-gate.sh`, hard-fail without `pkinit.so`), SPAKE
-`kinit` (`spake-gate.sh`, `pa_type` 151 / group 2), and two-realm
-`kvno` (`cross-realm-gate.sh`, `host/svc.other.test@OTHER.TEST`).
-PAC and Camellia remain **unit-gated**. kadmind MIT RPC is not
-implemented. `krb5-config` is consumed: the KDC applies `kdc.conf`
+`kinit` (`spake-gate.sh`, `pa_type` 151 / group 2), two-realm
+`kvno` (`cross-realm-gate.sh`, `host/svc.other.test@OTHER.TEST`), and
+RFC 8009 SHA-2 (`sha2-gate.sh`, MIT `kinit`/`kvno` with
+`aes256-cts-hmac-sha384-192`). PAC remains **unit-gated**. kadmind MIT
+RPC is not implemented. Persistence is embed-only. `bidirectional-gate`
+is Rust↔Rust, not a MIT oracle. `krb5-config` is consumed: the KDC applies `kdc.conf`
 ticket policy (and non-test listen/db paths); `kinit` / TGS referral
 chase use `KRB5_CONFIG` then `/etc/krb5.conf` `[realms]` (argv is the
 fallback). Long soaks and live Heimdal/AD/SSPI remain
@@ -49,8 +51,11 @@ See [docs/architecture.md](docs/architecture.md) and
 ## Current status
 
 - AES-CTS-HMAC etypes 17–20: string-to-key, key-usage derivation,
-  encrypt/decrypt, keyed checksum. Known-answer tests against RFC 3962,
-  RFC 8009, and MIT `t_derive`/`t_cksums`.
+  encrypt/decrypt, keyed checksum. Known-answer tests against RFC 3961
+  3DES s2k, RFC 3962, RFC 6803 Camellia-CTS-CMAC, RFC 8009 PRF, RFC 4556
+  `octetstring2key`, SPAKE IANA M/N, and MIT `t_derive`/`t_cksums`.
+  Golden MIT DER in `tests/traces/mit-*.der` is decoded and compared in
+  unit CI.
 - DER round-trip for `PrincipalName`, `Realm`, `EncryptedData`, `Ticket`,
   `KDC-REQ`, `KDC-REP`, `AP-REQ`, `KRB-ERROR`. Truncated/malformed input
   returns an error (no panic).
@@ -110,8 +115,8 @@ port cannot be bound. It does not silently bind `0.0.0.0`.
 | Realm | `KERBER.TEST` |
 | User | `user@KERBER.TEST` / `userpassword` |
 | Admin | `admin@KERBER.TEST` (ACL `*`: create, delete, ktadd) |
-| Host | `host/testhost.kerber.test` (random AES-256 key) |
-| Default etype | 18 (`aes256-cts-hmac-sha1-96`), s2kparams 4096 |
+| Host | `host/testhost.kerber.test` (random keys, etypes 17–20) |
+| Default etype | 18 (`aes256-cts-hmac-sha1-96`) preferred; krbtgt/host also hold RFC 8009 19/20 |
 
 ```bash
 ./scripts/run-rust-kdc.sh

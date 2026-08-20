@@ -69,7 +69,20 @@ this project uses semantic versioning once a crate is published.
   `/etc/krb5.conf` / `/etc/krb5kdc/kdc.conf` are consumed when present.
 - `pkinit-gate.sh` fails when MIT PKINIT interop fails; `cargo-deny`
   is blocking in CI.
-- `KERBER_CAPTURE_DIR` writes raw PDUs for golden DER.
+- `KERBER_CAPTURE_DIR` writes raw PDUs. Checked-in `tests/traces/mit-*.der`
+  are decoded and field-diffed against the shipped encoder in unit CI
+  (`golden_traces.rs`). Reply goldens are MIT-KDC bytes from
+  `client-gate.sh`.
+- RFC 6803 Camellia uses KDF-FEEDBACK-CMAC (not RFC 3961 n-fold DK).
+  RFC 3961 3DES s2k uses 168-fold + random-to-key. Published KATs live
+  in `krb5-crypto/tests/known_answer.rs`.
+- `cargo fuzz` targets under `fuzz/` (CI smoke ~60s each).
+- `krb5-config` / `krb5-types` / `krb5-crypto` deny `unwrap`/`expect`/`panic`.
+- krbtgt and host principals carry RFC 8009 keys; `sha2-gate.sh` is a
+  live MIT `kinit`/`kvno` forcing aes256-cts-hmac-sha384-192.
+- Persistence is embed-only (the daemon cannot mutate `Arc<PrincipalStore>`
+  at runtime). GSS first-seq matches the AP-REQ authenticator; wrap/MIC
+  use a windowed replay cache. Send-side RRC≠0 / SSPI is AD-round pending.
 
 ## [0.1.0] - 2026-08-19
 
