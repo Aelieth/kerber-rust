@@ -342,6 +342,24 @@ impl PrincipalStore {
         self.save_if_configured()
     }
 
+    /// Set lockout and password-expiry, then persist when `persist_paths` is set.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] when the principal is missing, or persist I/O.
+    pub fn set_status(
+        &mut self,
+        name: &PrincipalName,
+        locked: bool,
+        pw_expire: u32,
+    ) -> Result<(), Error> {
+        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+        p.locked = locked;
+        p.pw_expire = pw_expire;
+        self.save_if_configured()
+    }
+
     /// ACL-gated inter-realm `krbtgt/FOREIGN` (shared key with the foreign KDC).
     ///
     /// # Errors

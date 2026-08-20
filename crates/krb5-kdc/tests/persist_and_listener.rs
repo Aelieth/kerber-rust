@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use krb5_asn1::{decode, encode};
 use krb5_kdc::{
-    as_req, bootstrap_documented, handle_request, load_store, save_store, serve, TEST_REALM,
-    TEST_USER,
+    as_req, bootstrap_documented, documented_admin_id, handle_request, load_store, save_store,
+    serve, TEST_REALM, TEST_USER,
 };
 use krb5_types::{err, PrincipalName};
 
@@ -38,6 +38,51 @@ fn persist_survives_restart_without_key_regen() {
         .as_bytes()
         .to_vec();
     assert_eq!(krbtgt_before, krbtgt_after);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn persist_paths_saves_password_lock_and_expiry() {
+    let dir = std::env::temp_dir().join(format!(
+        "krb5-persist-status-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::create_dir_all(&dir);
+    let db = dir.join("principal");
+    let stash = dir.join("stash");
+    let (store, acl) = bootstrap_documented().unwrap();
+    save_store(&store, &db, &stash).unwrap();
+    let mut store = load_store(&db, &stash).unwrap();
+    assert!(
+        store.persist_paths.is_some(),
+        "load_store must wire persist_paths so mutations save"
+    );
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let kvno_before = store
+        .get_name(&user)
+        .unwrap()
+        .keys
+        .iter()
+        .map(|k| k.kvno)
+        .max()
+        .unwrap();
+    store
+        .change_password(&acl, &documented_admin_id(), &user, b"rotated-secret")
+        .unwrap();
+    store.set_status(&user, true, 1_700_000_123).unwrap();
+    let loaded = load_store(&db, &stash).unwrap();
+    let p = loaded.get_name(&user).unwrap();
+    let kvno_after = p.keys.iter().map(|k| k.kvno).max().unwrap();
+    assert!(
+        kvno_after > kvno_before,
+        "change_password must persist a kvno bump via save_if_configured"
+    );
+    assert!(p.locked, "locked must round-trip through KDB2");
+    assert_eq!(p.pw_expire, 1_700_000_123);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
