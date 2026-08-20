@@ -18,9 +18,10 @@ pub fn prf(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
     match key.etype() {
         EncryptionType::Aes128CtsHmacSha196
         | EncryptionType::Aes256CtsHmacSha196
-        | EncryptionType::Des3CbcSha1
-        | EncryptionType::Camellia128CtsCmac
-        | EncryptionType::Camellia256CtsCmac => prf_aes_sha1(key, input),
+        | EncryptionType::Des3CbcSha1 => prf_aes_sha1(key, input),
+        EncryptionType::Camellia128CtsCmac | EncryptionType::Camellia256CtsCmac => {
+            prf_camellia(key, input)
+        }
         EncryptionType::Aes128CtsHmacSha256128 | EncryptionType::Aes256CtsHmacSha384192 => {
             prf_rfc8009(key, input)
         }
@@ -87,6 +88,19 @@ fn prf_aes_sha1(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
     out
 }
 
+fn prf_camellia(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
+    let mut hasher = Sha1::new();
+    hasher.update(input);
+    let tmp1 = hasher.finalize();
+    let mut dk = crate::weak::dk_camellia(key.as_bytes(), b"prf")?;
+    let trunc = (tmp1.len() / BLOCK) * BLOCK;
+    let mut block = [0u8; BLOCK];
+    block.copy_from_slice(&tmp1[..trunc]);
+    let enc = cts::camellia_encrypt_block(&dk, &block)?;
+    dk.zeroize();
+    Ok(enc.to_vec())
+}
+
 fn prf_rfc8009(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
     // RFC 8009 §5: PRF = KDF-HMAC-SHA2(key, "prf", octet-string, k)
     // with k = 256 (aes128-sha2) or 384 (aes256-sha2). The octet-string
@@ -135,5 +149,20 @@ mod tests {
         appended.push(1);
         let wrong = prf(&key, &appended).unwrap();
         assert_ne!(plus, wrong, "counter must be prepended, not appended");
+    }
+
+    #[test]
+    fn camellia_prf_uses_camellia_not_aes() {
+        let bytes = [0x5au8; 16];
+        let aes = ProtocolKey::from_bytes(EncryptionType::Aes128CtsHmacSha196, &bytes).unwrap();
+        let cam = ProtocolKey::from_bytes(EncryptionType::Camellia128CtsCmac, &bytes).unwrap();
+        let a = prf(&aes, b"seed").unwrap();
+        let c = prf(&cam, b"seed").unwrap();
+        assert_eq!(a.len(), 16);
+        assert_eq!(c.len(), 16);
+        assert_ne!(
+            a, c,
+            "Camellia PRF must not share AES ECB with aes128-cts-hmac-sha1-96"
+        );
     }
 }
