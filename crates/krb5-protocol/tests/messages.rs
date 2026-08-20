@@ -81,10 +81,11 @@ fn ap_rep_mutual_and_safe_priv() {
     verify_ap_rep(&ap_rep_raw, &tgs_out.session_key, &ok.authenticator).unwrap();
 
     let safe = build_krb_safe(&tgs_out.session_key, b"safe-payload").unwrap();
-    let got = unwrap_krb_safe(&tgs_out.session_key, &encode(&safe).unwrap()).unwrap();
+    let replay = ReplayCache::new();
+    let got = unwrap_krb_safe(&tgs_out.session_key, &encode(&safe).unwrap(), &replay).unwrap();
     assert_eq!(got, b"safe-payload");
     let privm = build_krb_priv(&tgs_out.session_key, b"priv-payload").unwrap();
-    let got = unwrap_krb_priv(&tgs_out.session_key, &encode(&privm).unwrap()).unwrap();
+    let got = unwrap_krb_priv(&tgs_out.session_key, &encode(&privm).unwrap(), &replay).unwrap();
     assert_eq!(got, b"priv-payload");
 
     let cred = build_krb_cred(
