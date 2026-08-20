@@ -63,6 +63,13 @@ pub fn exchange_with_failover(addrs: &[KdcAddr], request: &[u8]) -> Result<Vec<u
 }
 
 fn exchange_one(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
+    // TGS-REQ with a PAC-bearing TGT often exceeds a safe UDP payload; prefer
+    // TCP so MIT does not drop a large reply without KRB_ERR_RESPONSE_TOO_BIG.
+    if request.len() > 600 {
+        if let Ok(reply) = exchange_tcp(addr, request) {
+            return Ok(reply);
+        }
+    }
     match exchange_udp(addr, request) {
         Ok(reply) if is_response_too_big(&reply) => {
             tracing::info!(
@@ -75,10 +82,10 @@ fn exchange_one(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
             exchange_tcp(addr, request)
         }
         Ok(reply) => Ok(reply),
-        Err(Error::Io {
-            retryable: true, ..
-        }) => exchange_tcp(addr, request),
-        Err(e) => Err(e),
+        Err(udp_err) => match exchange_tcp(addr, request) {
+            Ok(reply) => Ok(reply),
+            Err(_) => Err(udp_err),
+        },
     }
 }
 

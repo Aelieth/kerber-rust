@@ -108,6 +108,7 @@ fn kinit_inner(
             outcome = "error",
             error = e.as_str(),
         );
+        return Err(e.into());
     }
     Ok(KinitResult { as_out, tgs_out })
 }

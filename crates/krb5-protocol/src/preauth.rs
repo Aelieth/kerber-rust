@@ -207,7 +207,7 @@ pub fn pa_spake_response(
     ))
 }
 
-/// PA-PK-AS-REQ with a raw P-256 public key in AuthPack (not CMS).
+/// PA-PK-AS-REQ: AuthPack inside CMS SignedData (`signedAuthPack`).
 ///
 /// # Errors
 ///
@@ -223,8 +223,9 @@ pub fn pa_pk_as_req(client_public: &[u8]) -> Result<PaData, Error> {
         client_public_value: Some(client_public.to_vec().into()),
         supported_cms_types: None,
     };
+    let inner = encode(&pack)?;
     let req = krb5_types::pkinit::PaPkAsReq {
-        signed_auth_pack: encode(&pack)?.into(),
+        signed_auth_pack: krb5_types::pkinit::cms_wrap(&inner).into(),
         trusted_certifiers: None,
         kdc_pk_id: None,
     };
@@ -234,7 +235,7 @@ pub fn pa_pk_as_req(client_public: &[u8]) -> Result<PaData, Error> {
     })
 }
 
-/// Derive the PKINIT reply key from PA-PK-AS-REP `dh_signed_data` (raw P-256).
+/// Derive the PKINIT reply key from PA-PK-AS-REP `dh_signed_data` (CMS or raw P-256).
 ///
 /// # Errors
 ///
@@ -253,7 +254,8 @@ pub fn pkinit_reply_key(
         .dh_info
         .as_ref()
         .ok_or_else(|| Error::ReplyMismatch("PKINIT missing dhInfo".into()))?;
-    let shared = p256_shared(client_secret, pub_kdc.dh_signed_data.as_ref())?;
+    let kdc_pub = krb5_types::pkinit::cms_unwrap(pub_kdc.dh_signed_data.as_ref());
+    let shared = p256_shared(client_secret, &kdc_pub)?;
     key_from_shared(etype, &shared).map_err(Into::into)
 }
 
