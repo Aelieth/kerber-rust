@@ -20,10 +20,14 @@ pub(crate) struct FastOk {
 
 /// Unwrap PA-FX-FAST from an AS-REQ.
 pub(crate) fn unwrap_fast(store: &PrincipalStore, req: &AsReq) -> Result<Option<FastOk>, Error> {
-    let Some(raw) = find_pa(&req.0.padata, pa::FX_FAST) else {
+    let Some(raw) = find_pa(req.0.padata.as_deref(), pa::FX_FAST) else {
         return Ok(None);
     };
-    let armored: krb5_types::fast::KrbFastArmoredReq = decode(raw)?;
+    let armored = if let Ok(w) = decode::<krb5_types::fast::PaFxFast>(raw) {
+        w.armored_data
+    } else {
+        decode::<krb5_types::fast::KrbFastArmoredReq>(raw)?
+    };
     let armor_key = armor_key_from(store, &armored)?;
     let body_der = encode(&req.0.req_body)?;
     let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM)?;
@@ -130,7 +134,10 @@ pub(crate) fn wrap_fast_rep(
     };
     Ok(PaData {
         padata_type: pa::FX_FAST,
-        padata_value: encode(&armored)?.into(),
+        padata_value: encode(&krb5_types::fast::PaFxFastRep {
+            armored_data: armored,
+        })?
+        .into(),
     })
 }
 
@@ -145,7 +152,7 @@ pub(crate) enum SpakeStep {
 pub(crate) fn process_spake(
     store: &PrincipalStore,
     client: &Principal,
-    padata: &Option<Vec<PaData>>,
+    padata: Option<&[PaData]>,
     etype: EncryptionType,
 ) -> Result<Option<SpakeStep>, Error> {
     let Some(raw) = find_pa(padata, pa::SPAKE) else {
@@ -214,7 +221,7 @@ pub fn spake_w_from_key(key: &ProtocolKey, salt: &[u8]) -> [u8; 32] {
 
 /// PKINIT: ECDH reply key from PA-PK-AS-REQ.
 pub(crate) fn process_pkinit(
-    padata: &Option<Vec<PaData>>,
+    padata: Option<&[PaData]>,
     etype: EncryptionType,
 ) -> Result<Option<(ProtocolKey, PaData)>, Error> {
     let Some(raw) = find_pa(padata, pa::PK_AS_REQ) else {
@@ -244,8 +251,8 @@ pub(crate) fn process_pkinit(
     Ok(Some((reply_key, pa)))
 }
 
-pub(crate) fn find_pa(padata: &Option<Vec<PaData>>, ty: i32) -> Option<&[u8]> {
-    padata.as_ref()?.iter().find_map(|p| {
+pub(crate) fn find_pa(padata: Option<&[PaData]>, ty: i32) -> Option<&[u8]> {
+    padata?.iter().find_map(|p| {
         if p.padata_type == ty {
             Some(p.padata_value.as_ref())
         } else {

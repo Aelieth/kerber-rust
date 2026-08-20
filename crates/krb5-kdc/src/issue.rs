@@ -188,11 +188,11 @@ pub fn issue_as(store: &PrincipalStore, req: &AsReq) -> Result<IssuedAs, Error> 
     }];
     let mut as_rep_key = ckey.key.clone();
     let mut skip_timestamp = false;
-    if let Some((rk, pa_pk)) = process_pkinit(&work_padata, etype)? {
+    if let Some((rk, pa_pk)) = process_pkinit(work_padata.as_deref(), etype)? {
         as_rep_key = rk;
         extra_padata.push(pa_pk);
         skip_timestamp = true;
-    } else if let Some(step) = process_spake(store, client, &work_padata, etype)? {
+    } else if let Some(step) = process_spake(store, client, work_padata.as_deref(), etype)? {
         match step {
             SpakeStep::Challenge(e_data) => return Err(Error::PreauthRequired { e_data }),
             SpakeStep::Done(k) => {
@@ -202,7 +202,7 @@ pub fn issue_as(store: &PrincipalStore, req: &AsReq) -> Result<IssuedAs, Error> 
         }
     }
     if client.requires_preauth && !skip_timestamp {
-        match extract_enc_timestamp(&work_padata) {
+        match extract_enc_timestamp(work_padata.as_deref()) {
             None => return Err(preauth_required(client)),
             Some(blob) => verify_enc_timestamp(store, client, &ckey.key, blob.as_ref())?,
         }
@@ -222,7 +222,7 @@ pub fn issue_as(store: &PrincipalStore, req: &AsReq) -> Result<IssuedAs, Error> 
     let now = KerberosTime::now();
     let life = requested_life(store, client, body);
     let end = now
-        .add_seconds(life as i64)
+        .add_seconds(i64::try_from(life).unwrap_or(i64::MAX))
         .or_else(|_| now.add_hours(10))
         .map_err(|_| proto(err::NEVER_VALID, "endtime"))?;
     let mut flags = TicketFlags::initial_preauth();
@@ -315,8 +315,8 @@ pub fn issue_tgs(store: &PrincipalStore, req: &TgsReq) -> Result<IssuedTgs, Erro
     if body.kdc_options.unsupported_bits() != 0 {
         return Err(proto(err::BADOPTION, "unsupported KDCOptions"));
     }
-    let ap_raw =
-        extract_pa_tgs(&req.0.padata).ok_or_else(|| proto(err::PREAUTH_FAILED, "no PA-TGS-REQ"))?;
+    let ap_raw = extract_pa_tgs(req.0.padata.as_deref())
+        .ok_or_else(|| proto(err::PREAUTH_FAILED, "no PA-TGS-REQ"))?;
     let ap: krb5_types::ApReq = decode(ap_raw.as_ref())?;
     if !ap.ticket.sname.is_krbtgt_for(store.realm()) {
         return Err(proto(err::NO_TGT, "presented ticket is not a TGT"));
@@ -375,7 +375,7 @@ pub fn issue_tgs(store: &PrincipalStore, req: &TgsReq) -> Result<IssuedTgs, Erro
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no server key"))?;
     let mut ticket_cname = enc_tkt.cname.clone();
     let mut ticket_crealm = utf8_realm(&enc_tkt.crealm).to_owned();
-    if let Some((user, realm)) = s4u2self_client(&tgt_session, &req.0.padata)? {
+    if let Some((user, realm)) = s4u2self_client(&tgt_session, req.0.padata.as_deref())? {
         ticket_cname = user;
         ticket_crealm = realm;
     } else if let Some(cn) = s4u2proxy_client(store, req, &enc_tkt.cname)? {
@@ -403,7 +403,7 @@ pub fn issue_tgs(store: &PrincipalStore, req: &TgsReq) -> Result<IssuedTgs, Erro
     let now = KerberosTime::now();
     let mut end = enc_tkt.endtime.clone();
     let life = requested_life(store, server, body);
-    if let Ok(capped) = now.add_seconds(life as i64) {
+    if let Ok(capped) = now.add_seconds(i64::try_from(life).unwrap_or(i64::MAX)) {
         if capped.unix_seconds() < end.unix_seconds() {
             end = capped;
         }
@@ -633,8 +633,8 @@ fn select_etype(
     Err(proto(err::ETYPE_NOSUPP, "no common etype"))
 }
 
-fn extract_enc_timestamp(padata: &Option<Vec<PaData>>) -> Option<&OctetString> {
-    padata.as_ref()?.iter().find_map(|p| {
+fn extract_enc_timestamp(padata: Option<&[PaData]>) -> Option<&OctetString> {
+    padata?.iter().find_map(|p| {
         if p.padata_type == pa::ENC_TIMESTAMP {
             Some(&p.padata_value)
         } else {
@@ -643,8 +643,8 @@ fn extract_enc_timestamp(padata: &Option<Vec<PaData>>) -> Option<&OctetString> {
     })
 }
 
-fn extract_pa_tgs(padata: &Option<Vec<PaData>>) -> Option<&OctetString> {
-    padata.as_ref()?.iter().find_map(|p| {
+fn extract_pa_tgs(padata: Option<&[PaData]>) -> Option<&OctetString> {
+    padata?.iter().find_map(|p| {
         if p.padata_type == pa::TGS_REQ {
             Some(&p.padata_value)
         } else {
@@ -675,7 +675,7 @@ fn verify_enc_timestamp(
         client: client.id(),
         server: format!("krbtgt/{}@{}", store.realm(), store.realm()),
         ctime: ts.patimestamp.unix_seconds(),
-        cusec: ts.pausec.map(Microseconds::get).unwrap_or(0),
+        cusec: ts.pausec.map_or(0, Microseconds::get),
         auth_hash: ReplayCache::hash_authenticator(blob),
     };
     if store.pa_replay.check_and_store(rkey) {

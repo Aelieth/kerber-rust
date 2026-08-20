@@ -48,7 +48,7 @@ pub struct AsRequest<'a> {
 /// # Errors
 ///
 /// Returns transport, crypto, or `KRB-ERROR` failures.
-pub fn as_exchange(req: AsRequest<'_>) -> Result<AsOutcome, Error> {
+pub fn as_exchange(req: &AsRequest<'_>) -> Result<AsOutcome, Error> {
     let correlation_id = krb5_log::new_correlation_id();
     let _g = krb5_log::enter_correlation(correlation_id.clone());
     let started = Instant::now();
@@ -62,7 +62,7 @@ pub fn as_exchange(req: AsRequest<'_>) -> Result<AsOutcome, Error> {
     result
 }
 
-fn as_exchange_inner(req: AsRequest<'_>) -> Result<AsOutcome, Error> {
+fn as_exchange_inner(req: &AsRequest<'_>) -> Result<AsOutcome, Error> {
     let etypes: Vec<i32> = EncryptionType::preferred()
         .iter()
         .map(|e| e.to_iana())
@@ -94,16 +94,16 @@ fn as_exchange_inner(req: AsRequest<'_>) -> Result<AsOutcome, Error> {
                     &req.cname,
                     req.realm,
                 ),
-                KdcMsg::Error(e) => classify_kdc_error(e),
+                KdcMsg::Error(e) => classify_kdc_error(&e),
                 KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
             }
         }
-        KdcMsg::Error(e) => classify_kdc_error(e),
+        KdcMsg::Error(e) => classify_kdc_error(&e),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
     }
 }
 
-fn classify_kdc_error(e: KrbError) -> Result<AsOutcome, Error> {
+fn classify_kdc_error(e: &KrbError) -> Result<AsOutcome, Error> {
     match e.error_code {
         err::SKEW => Err(Error::KrbError {
             code: err::SKEW,
@@ -148,7 +148,7 @@ fn classify(bytes: &[u8]) -> Result<KdcMsg, Error> {
     }
 }
 
-fn krb_err(e: KrbError) -> Result<AsOutcome, Error> {
+fn krb_err(e: &KrbError) -> Result<AsOutcome, Error> {
     let text = e
         .e_text
         .as_ref()
@@ -178,12 +178,11 @@ fn finish_as_rep(
     let inner = rep.0;
     let had_preauth = client_key.is_some();
     let etype = EncryptionType::from_iana(inner.enc_part.etype)?;
-    let key = match client_key {
-        Some(k) => k,
-        None => {
-            let salt = cname.default_salt(realm);
-            string_to_key(etype, password, &salt, None)?
-        }
+    let key = if let Some(k) = client_key {
+        k
+    } else {
+        let salt = cname.default_salt(realm);
+        string_to_key(etype, password, &salt, None)?
     };
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART)?;
     let plain = decrypt(&key, usage, inner.enc_part.cipher.as_ref())?;
@@ -225,14 +224,16 @@ fn finish_as_rep(
 }
 
 fn decode_enc_as(plain: &[u8]) -> Result<EncKdcRepPart, Error> {
-    // RFC 4120 assigns APPLICATION 25 to EncASRepPart and 26 to EncTGSRepPart.
-    // MIT 1.22.2 has been observed emitting APPLICATION 26 inside AS-REP
-    // enc-part as well; accept both, then the untagged SEQUENCE.
+    // RFC 4120 §5.4.2: EncASRepPart is APPLICATION 25 (0x79). MIT 1.22.2
+    // kdc still wraps the AS enc-part as APPLICATION 26; accept that only
+    // as a documented interop fallback, then the untagged SEQUENCE.
     if let Ok(EncAsRepPart(part)) = decode::<EncAsRepPart>(plain) {
         return Ok(part);
     }
-    if let Ok(krb5_types::EncTgsRepPart(part)) = decode::<krb5_types::EncTgsRepPart>(plain) {
-        return Ok(part);
+    if plain.first() == Some(&0x7a) {
+        if let Ok(krb5_types::EncTgsRepPart(part)) = decode::<krb5_types::EncTgsRepPart>(plain) {
+            return Ok(part);
+        }
     }
     if let Ok(part) = decode::<EncKdcRepPart>(plain) {
         return Ok(part);
@@ -334,8 +335,7 @@ fn pick_info2(info: &EtypeInfo2, default_salt: &[u8]) -> Option<S2kMaterial> {
             let salt = ent
                 .salt
                 .as_ref()
-                .map(|s| s.as_bytes().to_vec())
-                .unwrap_or_else(|| default_salt.to_vec());
+                .map_or_else(|| default_salt.to_vec(), |s| s.as_bytes().to_vec());
             let params = ent.s2kparams.as_ref().map(|p| p.as_ref().to_vec());
             return Some((wanted, salt, params));
         }
@@ -349,8 +349,7 @@ fn pick_info(info: &EtypeInfo, default_salt: &[u8]) -> Option<S2kMaterial> {
             let salt = ent
                 .salt
                 .as_ref()
-                .map(|s| s.as_ref().to_vec())
-                .unwrap_or_else(|| default_salt.to_vec());
+                .map_or_else(|| default_salt.to_vec(), |s| s.as_ref().to_vec());
             return Some((wanted, salt, None));
         }
     }
@@ -360,7 +359,7 @@ fn pick_info(info: &EtypeInfo, default_salt: &[u8]) -> Option<S2kMaterial> {
 fn random_nonce() -> Result<u32, Error> {
     let mut b = [0u8; 4];
     getrandom::getrandom(&mut b).map_err(|e| Error::transport_msg(e.to_string()))?;
-    let n = u32::from_be_bytes(b);
+    let n = u32::from_be_bytes(b) & 0x7fff_ffff;
     Ok(if n == 0 { 1 } else { n })
 }
 
@@ -383,5 +382,53 @@ fn emit(event: &'static str, correlation_id: &str, started: Instant, err: Option
             duration_us,
             outcome = "ok",
         );
+    }
+}
+
+#[cfg(test)]
+mod decode_enc_as_tests {
+    use super::*;
+    use krb5_types::{
+        kerberos_time_from_utc_z, EncTgsRepPart, EncryptionKey, OctetString, TicketFlags,
+    };
+
+    fn sample_part() -> EncKdcRepPart {
+        let t = kerberos_time_from_utc_z("20260819120000Z").expect("sample time");
+        EncKdcRepPart {
+            key: EncryptionKey {
+                keytype: 18,
+                keyvalue: OctetString::from(vec![1u8; 32]),
+            },
+            last_req: vec![],
+            nonce: 7,
+            key_expiration: None,
+            flags: TicketFlags::none(),
+            authtime: t.clone(),
+            starttime: None,
+            endtime: t,
+            renew_till: None,
+            srealm: ascii("KERBER.TEST"),
+            sname: PrincipalName::krbtgt("KERBER.TEST"),
+            caddr: None,
+            encrypted_pa_data: None,
+        }
+    }
+
+    #[test]
+    fn prefers_rfc_application_25() {
+        let part = sample_part();
+        let der = encode(&EncAsRepPart(part.clone())).expect("encode 25");
+        assert_eq!(der.first().copied(), Some(0x79), "APPLICATION 25");
+        assert_eq!(decode_enc_as(&der).expect("decode 25"), part);
+    }
+
+    #[test]
+    fn mit_application_26_only_when_tag_is_7a() {
+        let part = sample_part();
+        let der = encode(&EncTgsRepPart(part.clone())).expect("encode 26");
+        assert_eq!(der.first().copied(), Some(0x7a), "APPLICATION 26");
+        assert_eq!(decode_enc_as(&der).expect("MIT 26 fallback"), part);
+        let other = [0x62, 0x03, 0x02, 0x01, 0x00];
+        assert!(decode_enc_as(&other).is_err());
     }
 }

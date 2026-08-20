@@ -1,6 +1,7 @@
 //! UDP and TCP exchanges with a KDC (RFC 4120 §7.2).
 
-use std::net::{TcpStream, ToSocketAddrs, UdpSocket};
+use std::io::{Read, Write};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
 use std::time::Duration;
 
 use krb5_asn1::decode;
@@ -12,7 +13,7 @@ use crate::error::Error;
 pub const KDC_PORT: u16 = 88;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
-const UDP_MAX: usize = 65535;
+const UDP_MAX: usize = 64 * 1024;
 
 /// KDC socket address.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -35,8 +36,8 @@ impl KdcAddr {
 }
 
 /// Send `request` to the KDC. Prefers UDP; retries on TCP if the KDC asks
-/// (`KRB_ERR_RESPONSE_TOO_BIG`) or UDP fails. UDP uses `connect()` so an
-/// off-path first datagram is not accepted.
+/// (`KRB_ERR_RESPONSE_TOO_BIG`) or UDP fails. UDP replies are accepted only
+/// from the destination we sent to (off-path datagrams are ignored).
 ///
 /// # Errors
 ///
@@ -45,7 +46,7 @@ pub fn exchange(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
     exchange_with_failover(std::slice::from_ref(addr), request)
 }
 
-/// Try each KDC in order with UDP retransmit/backoff (1s, 2s, 4s).
+/// Try each KDC in order with UDP retransmit/backoff (1s, 2s) then TCP.
 ///
 /// # Errors
 ///
@@ -63,13 +64,6 @@ pub fn exchange_with_failover(addrs: &[KdcAddr], request: &[u8]) -> Result<Vec<u
 }
 
 fn exchange_one(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
-    // TGS-REQ with a PAC-bearing TGT often exceeds a safe UDP payload; prefer
-    // TCP so MIT does not drop a large reply without KRB_ERR_RESPONSE_TOO_BIG.
-    if request.len() > 600 {
-        if let Ok(reply) = exchange_tcp(addr, request) {
-            return Ok(reply);
-        }
-    }
     match exchange_udp(addr, request) {
         Ok(reply) if is_response_too_big(&reply) => {
             tracing::info!(
@@ -84,7 +78,28 @@ fn exchange_one(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
         Ok(reply) => Ok(reply),
         Err(udp_err) => match exchange_tcp(addr, request) {
             Ok(reply) => Ok(reply),
-            Err(_) => Err(udp_err),
+            Err(tcp_err) => {
+                tracing::error!(
+                    event = krb5_log::events::PROTOCOL_TRANSPORT,
+                    correlation_id = krb5_log::current_correlation_id(),
+                    component = "krb5-protocol",
+                    outcome = "error",
+                    error = %tcp_err,
+                );
+                // Prefer the TCP error when UDP timed out: TGS replies with a
+                // PAC often never fit UDP, and the TCP failure is actionable.
+                if matches!(
+                    &udp_err,
+                    Error::Io {
+                        kind: std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut,
+                        ..
+                    }
+                ) {
+                    Err(tcp_err)
+                } else {
+                    Err(udp_err)
+                }
+            }
         },
     }
 }
@@ -96,6 +111,20 @@ fn is_response_too_big(bytes: &[u8]) -> bool {
             .unwrap_or(false)
 }
 
+fn dest_addr(addr: &KdcAddr) -> Result<SocketAddr, Error> {
+    if addr.host == "127.0.0.1" || addr.host == "localhost" {
+        return Ok(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), addr.port));
+    }
+    if let Ok(ip) = addr.host.parse::<IpAddr>() {
+        return Ok(SocketAddr::new(ip, addr.port));
+    }
+    let dest = format!("{}:{}", addr.host, addr.port);
+    dest.to_socket_addrs()
+        .map_err(|e| Error::transport_msg(e.to_string()))?
+        .next()
+        .ok_or_else(|| Error::transport_msg("no KDC address"))
+}
+
 fn exchange_udp(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
     // Bind loopback when the KDC is loopback so replies stay on lo (Docker
     // bridge + 0.0.0.0 ephemeral ports drop UDP replies).
@@ -105,33 +134,48 @@ fn exchange_udp(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
         "0.0.0.0:0"
     };
     let sock = UdpSocket::bind(bind).map_err(|e| Error::transport_msg(format!("udp bind: {e}")))?;
-    sock.set_read_timeout(Some(TIMEOUT))
-        .map_err(|e| Error::transport_msg(e.to_string()))?;
     sock.set_write_timeout(Some(TIMEOUT))
         .map_err(|e| Error::transport_msg(e.to_string()))?;
-    let dest = format!("{}:{}", addr.host, addr.port);
-    sock.connect(dest.as_str()).map_err(Error::from_io)?;
+    let dest = dest_addr(addr)?;
+    // send_to/recv_from (not connect): some stacks drop connected-UDP replies
+    // when the KDC answers from a different local address. Source is still
+    // checked so an off-path first datagram is not accepted.
     let backoffs = [
+        Duration::from_millis(500),
         Duration::from_secs(1),
         Duration::from_secs(2),
-        Duration::from_secs(4),
     ];
     let mut last = Error::transport_msg("udp timeout");
-    for (i, bo) in backoffs.iter().enumerate() {
-        sock.set_read_timeout(Some(*bo)).map_err(Error::from_io)?;
-        if let Err(e) = sock.send(request) {
+    for bo in backoffs {
+        sock.set_read_timeout(Some(bo)).map_err(Error::from_io)?;
+        if let Err(e) = sock.send_to(request, dest) {
             last = Error::from_io(e);
             continue;
         }
-        let mut buf = vec![0u8; UDP_MAX];
-        match sock.recv(&mut buf) {
-            Ok(n) => {
-                buf.truncate(n);
-                return Ok(buf);
-            }
-            Err(e) => {
-                last = Error::from_io(e);
-                if i + 1 == backoffs.len() {
+        let deadline = std::time::Instant::now() + bo;
+        loop {
+            let mut buf = vec![0u8; UDP_MAX];
+            match sock.recv_from(&mut buf) {
+                Ok((n, src)) => {
+                    if src.ip() != dest.ip() || src.port() != dest.port() {
+                        tracing::info!(
+                            event = krb5_log::events::PROTOCOL_TRANSPORT,
+                            correlation_id = krb5_log::current_correlation_id(),
+                            component = "krb5-protocol",
+                            outcome = "ok",
+                            error = "ignored off-path UDP datagram",
+                        );
+                        if std::time::Instant::now() >= deadline {
+                            last = Error::transport_msg("udp timeout");
+                            break;
+                        }
+                        continue;
+                    }
+                    buf.truncate(n);
+                    return Ok(buf);
+                }
+                Err(e) => {
+                    last = Error::from_io(e);
                     break;
                 }
             }
@@ -141,15 +185,12 @@ fn exchange_udp(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
 }
 
 fn exchange_tcp(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
-    let dest = format!("{}:{}", addr.host, addr.port);
-    let mut addrs = dest
-        .to_socket_addrs()
-        .map_err(|e| Error::transport_msg(e.to_string()))?;
-    let sa = addrs
-        .next()
-        .ok_or_else(|| Error::transport_msg("no KDC address"))?;
+    let sa = dest_addr(addr)?;
     let mut stream = TcpStream::connect_timeout(&sa, TIMEOUT)
-        .map_err(|e| Error::transport_msg(format!("tcp connect {dest}: {e}")))?;
+        .map_err(|e| Error::transport_msg(format!("tcp connect {sa}: {e}")))?;
+    stream
+        .set_nodelay(true)
+        .map_err(|e| Error::transport_msg(e.to_string()))?;
     stream
         .set_read_timeout(Some(TIMEOUT))
         .map_err(|e| Error::transport_msg(e.to_string()))?;
@@ -158,20 +199,19 @@ fn exchange_tcp(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
         .map_err(|e| Error::transport_msg(e.to_string()))?;
     let len =
         u32::try_from(request.len()).map_err(|_| Error::transport_msg("request too large"))?;
-    use std::io::{Read, Write};
+    let mut out = Vec::with_capacity(4 + request.len());
+    out.extend_from_slice(&len.to_be_bytes());
+    out.extend_from_slice(request);
     stream
-        .write_all(&len.to_be_bytes())
-        .map_err(|e| Error::transport_msg(e.to_string()))?;
-    stream
-        .write_all(request)
-        .map_err(|e| Error::transport_msg(e.to_string()))?;
+        .write_all(&out)
+        .map_err(|e| Error::transport_msg(format!("tcp write: {e}")))?;
     stream
         .flush()
         .map_err(|e| Error::transport_msg(e.to_string()))?;
     let mut hdr = [0u8; 4];
     stream
         .read_exact(&mut hdr)
-        .map_err(|e| Error::transport_msg(e.to_string()))?;
+        .map_err(|e| Error::transport_msg(format!("tcp read header: {e}")))?;
     let n = u32::from_be_bytes(hdr) as usize;
     if n == 0 || n > 1024 * 1024 {
         return Err(Error::transport_msg(format!("invalid TCP length {n}")));
@@ -179,6 +219,6 @@ fn exchange_tcp(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
     let mut buf = vec![0u8; n];
     stream
         .read_exact(&mut buf)
-        .map_err(|e| Error::transport_msg(e.to_string()))?;
+        .map_err(|e| Error::transport_msg(format!("tcp read body: {e}")))?;
     Ok(buf)
 }

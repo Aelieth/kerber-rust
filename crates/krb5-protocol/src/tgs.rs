@@ -5,13 +5,14 @@ use std::time::Instant;
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{checksum, decrypt, encrypt, EncryptionType, KeyUsage, ProtocolKey};
 use krb5_types::{
-    ascii, ku, pa, ApOptions, ApReq, Authenticator, Checksum, EncKdcRepPart, EncTgsRepPart,
-    EncryptedData, KdcOptions, KdcReq, KdcReqBody, KerberosTime, PaData, PrincipalName, TgsRep,
-    TgsReq, Ticket,
+    ascii, flag_bit, ku, pa, ApOptions, ApReq, Authenticator, Checksum, EncKdcRepPart,
+    EncTgsRepPart, EncryptedData, KdcOptions, KdcReq, KdcReqBody, KerberosTime, PaData,
+    PrincipalName, TgsRep, TgsReq, Ticket,
 };
 
 use crate::as_ex::AsOutcome;
 use crate::error::Error;
+
 use crate::transport::{exchange, KdcAddr};
 
 /// Successful TGS exchange.
@@ -67,16 +68,7 @@ fn tgs_inner(
     sname: PrincipalName,
     realm: &str,
 ) -> Result<TgsOutcome, Error> {
-    let nonce = {
-        let mut b = [0u8; 4];
-        getrandom::getrandom(&mut b).map_err(|e| Error::transport_msg(e.to_string()))?;
-        let n = u32::from_be_bytes(b);
-        if n == 0 {
-            1
-        } else {
-            n
-        }
-    };
+    let nonce = random_nonce31()?;
     let till = KerberosTime(tgt.enc_part.endtime.0);
     let etypes: Vec<i32> = EncryptionType::preferred()
         .iter()
@@ -85,7 +77,7 @@ fn tgs_inner(
 
     let requested = sname.clone();
     let body = KdcReqBody {
-        kdc_options: KdcOptions::forwardable(),
+        kdc_options: KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true),
         cname: None,
         realm: ascii(realm),
         sname: Some(sname),
@@ -131,6 +123,8 @@ fn tgs_inner(
             cipher: auth_cipher.into(),
         },
     };
+    // FAST armor AP-REQ uses key-usage 11; PA-TGS-REQ uses usage 7. MIT
+    // FIND_FAST fails if the armor AP-REQ is the TGS authenticator.
     let padata = vec![PaData {
         padata_type: pa::TGS_REQ,
         padata_value: encode(&ap_req)?.into(),
@@ -186,4 +180,11 @@ fn tgs_inner(
         enc_part,
         session_key,
     })
+}
+
+fn random_nonce31() -> Result<u32, Error> {
+    let mut b = [0u8; 4];
+    getrandom::getrandom(&mut b).map_err(|e| Error::transport_msg(e.to_string()))?;
+    let n = u32::from_be_bytes(b) & 0x7fff_ffff;
+    Ok(if n == 0 { 1 } else { n })
 }

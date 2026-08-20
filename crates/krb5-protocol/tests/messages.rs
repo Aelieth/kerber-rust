@@ -97,6 +97,69 @@ fn ap_rep_mutual_and_safe_priv() {
 }
 
 #[test]
+fn exchange_tcp_and_udp_round_trip_local_kdc() {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, UdpSocket};
+    use std::thread;
+    use std::time::Duration;
+
+    use krb5_protocol::{exchange, KdcAddr};
+    use krb5_types::{ascii, err, KerberosTime, KrbError, Microseconds, PrincipalName};
+
+    let reply = encode(&KrbError {
+        pvno: KrbError::PVNO,
+        msg_type: KrbError::MSG_TYPE,
+        ctime: None,
+        cusec: None,
+        stime: KerberosTime::now(),
+        susec: Microseconds::ZERO,
+        error_code: err::PREAUTH_REQUIRED,
+        crealm: None,
+        cname: None,
+        realm: ascii("KERBER.TEST"),
+        sname: PrincipalName::krbtgt("KERBER.TEST"),
+        e_text: None,
+        e_data: None,
+    })
+    .unwrap();
+
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let udp_port = udp.local_addr().unwrap().port();
+    let tcp = TcpListener::bind(("127.0.0.1", udp_port)).unwrap();
+    let reply_u = reply.clone();
+    thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        let (n, src) = udp.recv_from(&mut buf).unwrap();
+        assert!(n > 0);
+        udp.send_to(&reply_u, src).unwrap();
+    });
+    let reply_t = reply.clone();
+    thread::spawn(move || {
+        let (mut s, _) = tcp.accept().unwrap();
+        let mut hdr = [0u8; 4];
+        s.read_exact(&mut hdr).unwrap();
+        let n = u32::from_be_bytes(hdr) as usize;
+        let mut body = vec![0u8; n];
+        s.read_exact(&mut body).unwrap();
+        s.write_all(&(u32::try_from(reply_t.len()).unwrap().to_be_bytes()))
+            .unwrap();
+        s.write_all(&reply_t).unwrap();
+    });
+    thread::sleep(Duration::from_millis(20));
+    let got = exchange(
+        &KdcAddr {
+            host: "127.0.0.1".into(),
+            port: udp_port,
+        },
+        b"\x6a\x03\x02\x01",
+    )
+    .expect("local exchange");
+    assert_eq!(got[0], 0x7e);
+    let e: KrbError = decode(&got).unwrap();
+    assert_eq!(e.error_code, err::PREAUTH_REQUIRED);
+}
+
+#[test]
 fn golden_application_tags() {
     use krb5_types::*;
     let t = Ticket {

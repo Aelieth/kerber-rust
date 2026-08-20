@@ -32,8 +32,8 @@ pub use ccache::{parse_principal, realm, tgt_cred, CcacheCred, FileCcache};
 pub use error::Error;
 pub use keytab::{Keytab, KeytabEntry};
 pub use preauth::{
-    apply_strengthen, armor_key, attach_fast, build_fast_armor, pa_for_user, pa_pk_as_req,
-    pa_spake_response, pa_spake_support, pkinit_reply_key, unwrap_fast_rep,
+    apply_strengthen, armor_key, attach_fast, build_fast_armor, fx_fast_padata, pa_for_user,
+    pa_pk_as_req, pa_spake_response, pa_spake_support, pkinit_reply_key, unwrap_fast_rep,
 };
 pub use replay::{ReplayCache, ReplayKey};
 pub use safe_priv::{

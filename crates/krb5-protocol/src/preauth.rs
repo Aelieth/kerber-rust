@@ -83,22 +83,48 @@ pub fn attach_fast(
     armor_key: &ProtocolKey,
     inner_padata: Vec<PaData>,
 ) -> Result<(), Error> {
-    let body_der = encode(&req.0.req_body)?;
+    req.0.padata = Some(vec![fx_fast_padata(
+        Some(armor),
+        armor_key,
+        &req.0.req_body,
+        inner_padata,
+    )?]);
+    Ok(())
+}
+
+/// PA-FX-FAST wrapping `inner_padata` and a copy of `req_body`.
+///
+/// TGS FAST omits `armor` when PA-TGS-REQ is present (RFC 6113).
+///
+/// # Errors
+///
+/// Crypto or DER failures.
+pub fn fx_fast_padata(
+    armor: Option<&ApReq>,
+    armor_key: &ProtocolKey,
+    req_body: &krb5_types::KdcReqBody,
+    inner_padata: Vec<PaData>,
+) -> Result<PaData, Error> {
+    let body_der = encode(req_body)?;
     let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM)?;
     let mic = checksum(armor_key, ck_usage, &body_der)?;
     let inner = krb5_types::fast::KrbFastReq {
         fast_options: krb5_types::fast::fast_options_none(),
         padata: inner_padata,
-        req_body: req.0.req_body.clone(),
+        req_body: req_body.clone(),
     };
     let inner_der = encode(&inner)?;
     let enc_usage = KeyUsage::new(ku::FAST_ENC)?;
     let cipher = encrypt(armor_key, enc_usage, &inner_der)?;
-    let armored = krb5_types::fast::KrbFastArmoredReq {
-        armor: Some(krb5_types::fast::KrbFastArmor {
+    let armor_seq = match armor {
+        Some(ap) => Some(krb5_types::fast::KrbFastArmor {
             armor_type: krb5_types::fast::ARMOR_AP_REQUEST,
-            armor_value: encode(armor)?.into(),
+            armor_value: encode(ap)?.into(),
         }),
+        None => None,
+    };
+    let armored = krb5_types::fast::KrbFastArmoredReq {
+        armor: armor_seq,
         req_checksum: Checksum {
             cksumtype: armor_key.etype().checksum_type(),
             checksum: mic.into(),
@@ -109,11 +135,13 @@ pub fn attach_fast(
             cipher: cipher.into(),
         },
     };
-    req.0.padata = Some(vec![PaData {
+    Ok(PaData {
         padata_type: pa::FX_FAST,
-        padata_value: encode(&armored)?.into(),
-    }]);
-    Ok(())
+        padata_value: encode(&krb5_types::fast::PaFxFast {
+            armored_data: armored,
+        })?
+        .into(),
+    })
 }
 
 /// Decrypt PA-FX-FAST on an AS-REP into [`krb5_types::fast::KrbFastResponse`].
@@ -129,7 +157,12 @@ pub fn unwrap_fast_rep(
         .as_ref()
         .and_then(|v| v.iter().find(|p| p.padata_type == pa::FX_FAST))
         .ok_or_else(|| Error::ReplyMismatch("missing PA-FX-FAST".into()))?;
-    let armored: krb5_types::fast::KrbFastArmoredRep = decode(raw.padata_value.as_ref())?;
+    let armored = if let Ok(w) = decode::<krb5_types::fast::PaFxFastRep>(raw.padata_value.as_ref())
+    {
+        w.armored_data
+    } else {
+        decode::<krb5_types::fast::KrbFastArmoredRep>(raw.padata_value.as_ref())?
+    };
     let usage = KeyUsage::new(ku::FAST_REP)?;
     let plain = decrypt(armor_key, usage, armored.enc_fast_rep.cipher.as_ref())?;
     decode(&plain).map_err(Error::from)

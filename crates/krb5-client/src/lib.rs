@@ -60,7 +60,7 @@ fn kinit_inner(
     service: Option<&str>,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
     let (cname, realm_s) = parse_principal(principal)?;
-    let as_out = as_exchange(AsRequest {
+    let as_out = as_exchange(&AsRequest {
         cname,
         realm: &realm_s,
         password,
@@ -77,11 +77,7 @@ fn kinit_inner(
     let mut tgs_err: Option<String> = None;
     if let Some(svc) = service {
         let parts: Vec<&str> = svc.split('/').collect();
-        let sname = if parts.len() > 1 {
-            PrincipalName::new(PrincipalName::NT_SRV_HST, parts)
-        } else {
-            PrincipalName::new(PrincipalName::NT_PRINCIPAL, parts)
-        };
+        let sname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, parts);
         match tgs_exchange(kdc, &as_out, sname, &realm_s) {
             Ok(tgs) => {
                 creds.push(tgt_cred(

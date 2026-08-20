@@ -41,6 +41,10 @@ pub(crate) fn ticket_authz(
 }
 
 /// Sign a PAC with service then KDC checksums (key usage 2 as a keyed checksum).
+///
+/// # Errors
+///
+/// Crypto or DER failures while building checksums.
 pub fn sign_pac(
     cname: &PrincipalName,
     crealm: &str,
@@ -133,7 +137,7 @@ pub fn pac_from_ticket_part(part: &EncTicketPart) -> Option<Vec<u8>> {
 /// S4U2Self: PA-FOR-USER impersonation.
 pub(crate) fn s4u2self_client(
     tgt_session: &ProtocolKey,
-    padata: &Option<Vec<PaData>>,
+    padata: Option<&[PaData]>,
 ) -> Result<Option<(PrincipalName, String)>, Error> {
     let Some(raw) = find_pa(padata, pa::FOR_USER) else {
         return Ok(None);
@@ -227,6 +231,10 @@ fn utf8(s: &krb5_types::KerberosString) -> &str {
 }
 
 /// Decrypt a service ticket for PAC extraction in tests.
+///
+/// # Errors
+///
+/// Decrypt or DER failures.
 pub fn decrypt_ticket_part(key: &ProtocolKey, ticket: &Ticket) -> Result<EncTicketPart, Error> {
     let usage = KeyUsage::new(ku::TICKET)?;
     let plain = decrypt(key, usage, ticket.enc_part.cipher.as_ref())?;

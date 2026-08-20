@@ -94,6 +94,22 @@ pub struct KrbFastArmoredRep {
     pub enc_fast_rep: EncryptedData,
 }
 
+/// PA-FX-FAST ::= CHOICE { armored-data [0] KrbFastArmoredReq }
+#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+pub struct PaFxFast {
+    /// Armored FAST request.
+    #[rasn(tag(explicit(0)))]
+    pub armored_data: KrbFastArmoredReq,
+}
+
+/// PA-FX-FAST reply ::= CHOICE { armored-data [0] KrbFastArmoredRep }
+#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+pub struct PaFxFastRep {
+    /// Armored FAST reply.
+    #[rasn(tag(explicit(0)))]
+    pub armored_data: KrbFastArmoredRep,
+}
+
 /// Empty FAST options (32 zero bits).
 #[must_use]
 pub fn fast_options_none() -> FastOptions {
