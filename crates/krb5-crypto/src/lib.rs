@@ -26,13 +26,14 @@ mod modp;
 mod nfold;
 mod ops;
 mod prf;
+mod spake;
 pub(crate) mod weak;
 
 pub(crate) mod cts;
 
 pub use cf2::{
     key_from_shared, krb_fx_cf2, octetstring2key, p256_ecdsa_sign, p256_ecdsa_verify,
-    p256_generate, p256_shared, spake_finish, spake_public, spake_w, P256Keypair,
+    p256_generate, p256_shared, P256Keypair,
 };
 pub use derive::{derive_keys, DerivedKeys};
 pub use error::Error;
@@ -46,3 +47,7 @@ pub use ops::{
     string_to_key, verify_checksum, CipherState,
 };
 pub use prf::{prf, prf_plus};
+pub use spake::{
+    spake_derive_key, spake_finish, spake_kdc_keygen, spake_public, spake_public_wbytes,
+    spake_result_wbytes, spake_thash_update, spake_w, spake_wbytes, SPAKE_GROUP_P256,
+};
