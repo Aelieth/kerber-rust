@@ -4,17 +4,21 @@ use std::time::Instant;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    checksum, decrypt, encrypt, verify_checksum, EncryptionType, KeyUsage, ProtocolKey,
+    decrypt, encrypt, krb_fx_cf2, verify_checksum, EncryptionType, KeyUsage, ProtocolKey,
 };
 use krb5_protocol::{ReplayCache, ReplayKey};
 use krb5_types::{
-    ascii, err, flag_bit, ku, pa, AsRep, AsReq, EncAsRepPart, EncKdcRepPart, EncTgsRepPart,
-    EncTicketPart, EncryptedData, EncryptionKey, EtypeInfo2, EtypeInfo2Entry, KerberosTime,
-    KrbError, LastReqValue, MethodData, Microseconds, OctetString, PaData, PaEncTsEnc,
-    PrincipalName, TgsRep, TgsReq, Ticket, TicketFlags, TransitedEncoding,
+    ascii, err, flag_bit, ku, pa, AsRep, AsReq, AuthorizationData, EncAsRepPart, EncKdcRepPart,
+    EncTgsRepPart, EncTicketPart, EncryptedData, EncryptionKey, EtypeInfo2, EtypeInfo2Entry,
+    KerberosTime, KrbError, LastReqValue, MethodData, Microseconds, OctetString, PaData,
+    PaEncTsEnc, PrincipalName, TgsRep, TgsReq, Ticket, TicketFlags, TransitedEncoding,
 };
 
+use crate::ad::{s4u2proxy_client, s4u2self_client, ticket_authz, u2u_session};
 use crate::error::Error;
+use crate::preauth::{
+    fast_finished, process_pkinit, process_spake, unwrap_fast, wrap_fast_rep, SpakeStep,
+};
 use crate::store::{random_key, s2k_params, Principal, PrincipalStore};
 
 /// Issued AS-REP plus the session key (for tests that decrypt the TGT).
@@ -24,6 +28,8 @@ pub struct IssuedAs {
     pub rep: AsRep,
     /// Session key placed in the ticket and EncKDCRepPart.
     pub session_key: ProtocolKey,
+    /// Key that encrypted the AS-REP enc-part (long-term, SPAKE, PKINIT, or FAST-strengthened).
+    pub as_rep_key: ProtocolKey,
 }
 
 /// Issued TGS-REP plus the service session key.
@@ -166,8 +172,31 @@ pub fn issue_as(store: &PrincipalStore, req: &AsReq) -> Result<IssuedAs, Error> 
         .key_for(etype)
         .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, "no client key"))?;
 
-    if client.requires_preauth {
-        match extract_enc_timestamp(&req.0.padata) {
+    let fast = unwrap_fast(store, req)?;
+    let work_padata = if let Some(ref f) = fast {
+        Some(f.inner_padata.clone())
+    } else {
+        req.0.padata.clone()
+    };
+
+    let mut extra_padata: Vec<PaData> = Vec::new();
+    let mut as_rep_key = ckey.key.clone();
+    let mut skip_timestamp = false;
+    if let Some((rk, pa_pk)) = process_pkinit(&work_padata, etype)? {
+        as_rep_key = rk;
+        extra_padata.push(pa_pk);
+        skip_timestamp = true;
+    } else if let Some(step) = process_spake(store, client, &work_padata, etype)? {
+        match step {
+            SpakeStep::Challenge(e_data) => return Err(Error::PreauthRequired { e_data }),
+            SpakeStep::Done(k) => {
+                as_rep_key = k;
+                skip_timestamp = true;
+            }
+        }
+    }
+    if client.requires_preauth && !skip_timestamp {
+        match extract_enc_timestamp(&work_padata) {
             None => return Err(preauth_required(client)),
             Some(blob) => verify_enc_timestamp(store, client, &ckey.key, blob.as_ref())?,
         }
@@ -197,6 +226,7 @@ pub fn issue_as(store: &PrincipalStore, req: &AsReq) -> Result<IssuedAs, Error> 
     if body.kdc_options.bit(flag_bit::RENEWABLE) {
         flags = flags.with_bit(flag_bit::RENEWABLE, true);
     }
+    let authz = ticket_authz(store, &cname, store.realm(), &now, &skey.key)?;
     let ticket = mint_ticket(
         &skey.key,
         skey.kvno,
@@ -209,6 +239,7 @@ pub fn issue_as(store: &PrincipalStore, req: &AsReq) -> Result<IssuedAs, Error> 
         &now,
         &end,
         flags.clone(),
+        authz,
     )?;
     let enc_part = enc_rep_part(
         &session,
@@ -219,25 +250,51 @@ pub fn issue_as(store: &PrincipalStore, req: &AsReq) -> Result<IssuedAs, Error> 
         &sname,
         flags,
     );
+    let mut reply_key = as_rep_key.clone();
+    let mut outer_padata = extra_padata;
+    if let Some(f) = fast {
+        let sk = random_key(etype)?;
+        reply_key = krb_fx_cf2(&sk, &as_rep_key, b"strengthenkey", b"replykey")?;
+        let finished = fast_finished(&f.armor_key, &ticket, &cname, store.realm())?;
+        let inner = std::mem::take(&mut outer_padata);
+        outer_padata = vec![wrap_fast_rep(
+            &f.armor_key,
+            inner,
+            Some(&sk),
+            body.nonce,
+            Some(finished),
+        )?];
+    }
     let enc_der = encode(&EncAsRepPart(enc_part))?;
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART)?;
-    let cipher = encrypt(&ckey.key, usage, &enc_der)?;
+    let cipher = encrypt(&reply_key, usage, &enc_der)?;
+    let kvno = if skip_timestamp {
+        None
+    } else {
+        Some(ckey.kvno)
+    };
+    let padata = if outer_padata.is_empty() {
+        None
+    } else {
+        Some(outer_padata)
+    };
     let rep = AsRep(krb5_types::KdcRep {
         pvno: krb5_types::KdcRep::PVNO,
         msg_type: krb5_types::KdcRep::MSG_AS_REP,
-        padata: None,
+        padata,
         crealm: ascii(store.realm()),
         cname,
         ticket,
         enc_part: EncryptedData {
-            etype: ckey.etype.to_iana(),
-            kvno: Some(ckey.kvno),
+            etype: reply_key.etype().to_iana(),
+            kvno,
             cipher: cipher.into(),
         },
     });
     Ok(IssuedAs {
         rep,
         session_key: session,
+        as_rep_key: reply_key,
     })
 }
 
@@ -295,7 +352,6 @@ pub fn issue_tgs(store: &PrincipalStore, req: &TgsReq) -> Result<IssuedTgs, Erro
             "TGS authenticator missing checksum",
         ));
     }
-    let _ = checksum;
     let rkey = ReplayKey {
         client: format!(
             "{}@{}",
@@ -320,6 +376,19 @@ pub fn issue_tgs(store: &PrincipalStore, req: &TgsReq) -> Result<IssuedTgs, Erro
     let skey = server
         .best_key()
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no server key"))?;
+    let mut ticket_cname = enc_tkt.cname.clone();
+    let mut ticket_crealm = utf8_realm(&enc_tkt.crealm).to_owned();
+    if let Some((user, realm)) = s4u2self_client(&tgt_session, &req.0.padata)? {
+        ticket_cname = user;
+        ticket_crealm = realm;
+    } else if let Some(cn) = s4u2proxy_client(store, req, &enc_tkt.cname)? {
+        ticket_cname = cn;
+    }
+    let (tkt_key, tkt_kvno, tkt_etype) = if let Some((k, kv, et)) = u2u_session(store, req)? {
+        (k, kv, et)
+    } else {
+        (skey.key.clone(), skey.kvno, skey.etype)
+    };
     let session = random_key(skey.etype)?;
     let now = KerberosTime::now();
     let mut end = enc_tkt.endtime.clone();
@@ -339,18 +408,20 @@ pub fn issue_tgs(store: &PrincipalStore, req: &TgsReq) -> Result<IssuedTgs, Erro
     if body.kdc_options.bit(flag_bit::RENEWABLE) && enc_tkt.flags.renewable() {
         flags = flags.with_bit(flag_bit::RENEWABLE, true);
     }
+    let authz = ticket_authz(store, &ticket_cname, &ticket_crealm, &now, &tkt_key)?;
     let ticket = mint_ticket(
-        &skey.key,
-        skey.kvno,
-        skey.etype,
+        &tkt_key,
+        tkt_kvno,
+        tkt_etype,
         &session,
         store.realm(),
         &sname,
-        utf8_realm(&enc_tkt.crealm),
-        &enc_tkt.cname,
+        &ticket_crealm,
+        &ticket_cname,
         &now,
         &end,
         flags.clone(),
+        authz,
     )?;
     let enc_part = enc_rep_part(
         &session,
@@ -368,8 +439,8 @@ pub fn issue_tgs(store: &PrincipalStore, req: &TgsReq) -> Result<IssuedTgs, Erro
         pvno: krb5_types::KdcRep::PVNO,
         msg_type: krb5_types::KdcRep::MSG_TGS_REP,
         padata: None,
-        crealm: enc_tkt.crealm,
-        cname: enc_tkt.cname,
+        crealm: ascii(&ticket_crealm),
+        cname: ticket_cname,
         ticket,
         enc_part: EncryptedData {
             etype: tgt_session.etype().to_iana(),
@@ -429,6 +500,7 @@ fn mint_ticket(
     authtime: &KerberosTime,
     endtime: &KerberosTime,
     flags: TicketFlags,
+    authorization_data: Option<AuthorizationData>,
 ) -> Result<Ticket, Error> {
     let part = EncTicketPart {
         flags,
@@ -441,7 +513,7 @@ fn mint_ticket(
         endtime: endtime.clone(),
         renew_till: None,
         caddr: None,
-        authorization_data: None,
+        authorization_data,
     };
     let der = encode(&part)?;
     let usage = KeyUsage::new(ku::TICKET)?;

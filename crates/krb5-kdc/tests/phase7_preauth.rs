@@ -1,0 +1,411 @@
+//! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
+//!
+//! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry
+//! points from a bootstrapped realm. They fail if those paths are type-only.
+
+use krb5_asn1::{decode, encode};
+use krb5_crypto::{decrypt, p256_generate, string_to_key, EncryptionType, KeyUsage, ProtocolKey};
+use krb5_kdc::{
+    as_req, bootstrap_documented, decrypt_ticket_part, documented_host, pa_enc_timestamp,
+    pac_from_ticket_part, sign_pac, spake_w_from_key, tgs_req, verify_pac, Acl, AdminOp, Error,
+    PrincipalStore, S2K_ITERS, TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER,
+    TEST_USER_PASSWORD,
+};
+use krb5_protocol::{
+    apply_strengthen, armor_key, attach_fast, build_fast_armor, pa_for_user, pa_pk_as_req,
+    pa_spake_response, pa_spake_support, pkinit_reply_key, tgs_req_ex, unwrap_fast_rep,
+};
+use krb5_types::{
+    ascii, err, flag_bit, ku, pa, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart,
+    KdcOptions, MethodData, PrincipalName,
+};
+
+fn password_key(name: &str, password: &[u8]) -> ProtocolKey {
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]);
+    let salt = cname.default_salt(TEST_REALM);
+    string_to_key(
+        EncryptionType::Aes256CtsHmacSha196,
+        password,
+        &salt,
+        Some(&S2K_ITERS.to_be_bytes()),
+    )
+    .expect("s2k")
+}
+
+fn user_key() -> ProtocolKey {
+    password_key(TEST_USER, TEST_USER_PASSWORD)
+}
+
+fn decode_enc_part(plain: &[u8]) -> EncKdcRepPart {
+    if let Ok(EncAsRepPart(p)) = decode::<EncAsRepPart>(plain) {
+        return p;
+    }
+    if let Ok(EncTgsRepPart(p)) = decode::<EncTgsRepPart>(plain) {
+        return p;
+    }
+    decode::<EncKdcRepPart>(plain).expect("enc-part")
+}
+
+fn issue_tgt(
+    store: &PrincipalStore,
+    name: &str,
+    password: &[u8],
+    nonce: u32,
+) -> krb5_kdc::IssuedAs {
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]);
+    let key = password_key(name, password);
+    let req = as_req(
+        cname,
+        TEST_REALM,
+        nonce,
+        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
+    );
+    krb5_kdc::issue_as(store, &req).expect("AS")
+}
+
+#[test]
+fn kpasswd_bumps_kvno_keeps_old_keys_and_switches_password() {
+    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let before = store.get_name(&cname).expect("user");
+    let old_kvno = before.keys.iter().map(|k| k.kvno).max().expect("kvno");
+    let old_count = before.keys.len();
+    store
+        .change_password(
+            &acl,
+            &format!("{TEST_ADMIN}@{TEST_REALM}"),
+            &cname,
+            b"brand-new-pass",
+        )
+        .expect("cpw");
+    let after = store.get_name(&cname).expect("user");
+    let new_kvno = after.keys.iter().map(|k| k.kvno).max().expect("kvno");
+    assert_eq!(new_kvno, old_kvno + 1);
+    assert!(after.keys.len() > old_count, "prior kvnos must remain");
+    assert!(after.keys.iter().any(|k| k.kvno == old_kvno));
+
+    let new_key = password_key(TEST_USER, b"brand-new-pass");
+    let ok = as_req(
+        cname.clone(),
+        TEST_REALM,
+        101,
+        Some(vec![pa_enc_timestamp(&new_key).expect("pa")]),
+    );
+    krb5_kdc::issue_as(&store, &ok).expect("AS with new password");
+
+    let old = as_req(
+        cname,
+        TEST_REALM,
+        102,
+        Some(vec![pa_enc_timestamp(&user_key()).expect("pa")]),
+    );
+    match krb5_kdc::issue_as(&store, &old) {
+        Err(Error::Crypto(_))
+        | Err(Error::Protocol {
+            code: err::PREAUTH_FAILED,
+            ..
+        }) => {}
+        other => panic!("old password must fail AS, got {other:?}"),
+    }
+}
+
+#[test]
+fn kpasswd_denied_without_changepw_acl() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let acl = Acl::parse("admin@KERBER.TEST a\n");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let err = store
+        .change_password(&acl, "admin@KERBER.TEST", &cname, b"x")
+        .unwrap_err();
+    assert_eq!(err, Error::AclDenied);
+    assert!(acl
+        .check("admin@KERBER.TEST", AdminOp::ChangePassword)
+        .is_err());
+    let acl_c = Acl::parse("admin@KERBER.TEST c\n");
+    store
+        .change_password(&acl_c, "admin@KERBER.TEST", &cname, b"ok-pass")
+        .expect("c bit allows cpw");
+}
+
+#[test]
+fn fast_as_exchange_strengthen_and_finished() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = user_key();
+    let armor_as = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 201);
+    let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x42u8; 32])
+        .expect("subkey");
+    let armor_ap = build_fast_armor(
+        armor_as.rep.0.ticket.clone(),
+        &armor_as.session_key,
+        &ascii(TEST_REALM),
+        &cname,
+        Some(&sub),
+    )
+    .expect("armor AP-REQ");
+    let akey = armor_key(&armor_as.session_key, Some(&sub)).expect("armor key");
+    let inner = vec![pa_enc_timestamp(&key).expect("pa")];
+    let mut req = as_req(cname.clone(), TEST_REALM, 202, None);
+    attach_fast(&mut req, &armor_ap, &akey, inner).expect("FAST wrap");
+    let issued = krb5_kdc::issue_as(&store, &req).expect("FAST AS");
+    let fast = unwrap_fast_rep(&akey, &issued.rep.0.padata).expect("FAST rep");
+    assert!(fast.finished.is_some(), "FAST finished required on AS-REP");
+    let sk = fast.strengthen_key.expect("strengthen-key");
+    let reply = apply_strengthen(&sk, &key).expect("CF2");
+    assert_eq!(reply.as_bytes(), issued.as_rep_key.as_bytes());
+    let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
+    let plain = decrypt(&reply, usage, issued.rep.0.enc_part.cipher.as_ref()).expect("AS enc");
+    assert_eq!(plain.first().copied(), Some(0x79));
+    let enc = decode_enc_part(&plain);
+    assert_eq!(enc.nonce, 202);
+    assert!(enc.flags.pre_authent());
+}
+
+#[test]
+fn spake_challenge_then_as_rep() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = user_key();
+    let req1 = as_req(
+        cname.clone(),
+        TEST_REALM,
+        301,
+        Some(vec![pa_spake_support()]),
+    );
+    let err = krb5_kdc::issue_as(&store, &req1).unwrap_err();
+    let e_data = match err {
+        Error::PreauthRequired { e_data } => e_data,
+        other => panic!("expected SPAKE challenge, got {other:?}"),
+    };
+    let method: MethodData = decode(&e_data).expect("METHOD-DATA");
+    let spa = method
+        .iter()
+        .find(|p| p.padata_type == pa::SPAKE)
+        .expect("PA-SPAKE");
+    let cookie = method
+        .iter()
+        .find(|p| p.padata_type == pa::FX_COOKIE)
+        .expect("cookie");
+    let msg: krb5_types::spake::PaSpake = decode(spa.padata_value.as_ref()).expect("PaSpake");
+    let chal = msg.challenge.expect("challenge");
+    let w = spake_w_from_key(&key, &cname.default_salt(TEST_REALM));
+    let (resp, spake_key) = pa_spake_response(&w, chal.pubkey.as_ref(), key.etype()).expect("resp");
+    let req2 = as_req(
+        cname,
+        TEST_REALM,
+        302,
+        Some(vec![
+            resp,
+            krb5_types::PaData {
+                padata_type: pa::FX_COOKIE,
+                padata_value: cookie.padata_value.clone(),
+            },
+        ]),
+    );
+    let issued = krb5_kdc::issue_as(&store, &req2).expect("SPAKE AS");
+    assert_eq!(issued.as_rep_key.as_bytes(), spake_key.as_bytes());
+    let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
+    let plain = decrypt(&spake_key, usage, issued.rep.0.enc_part.cipher.as_ref()).expect("enc");
+    let enc = decode_enc_part(&plain);
+    assert_eq!(enc.nonce, 302);
+}
+
+#[test]
+fn pkinit_ecdh_reply_key() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let kp = p256_generate().expect("client ECDH");
+    let pa = pa_pk_as_req(&kp.public).expect("PA-PK-AS-REQ");
+    let req = as_req(cname, TEST_REALM, 401, Some(vec![pa]));
+    let issued = krb5_kdc::issue_as(&store, &req).expect("PKINIT AS");
+    let et = EncryptionType::Aes256CtsHmacSha196;
+    let reply = pkinit_reply_key(&kp.secret, &issued.rep.0.padata, et).expect("ECDH key");
+    assert_eq!(reply.as_bytes(), issued.as_rep_key.as_bytes());
+    let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
+    let plain = decrypt(&reply, usage, issued.rep.0.enc_part.cipher.as_ref()).expect("enc");
+    let enc = decode_enc_part(&plain);
+    assert_eq!(enc.nonce, 401);
+}
+
+#[test]
+fn as_and_tgs_tickets_carry_verifiable_pac() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 501);
+    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
+    let tgt_part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("TGT");
+    let pac = pac_from_ticket_part(&tgt_part).expect("PAC on TGT");
+    verify_pac(&pac, &krbtgt.key, &krbtgt.key).expect("TGT PAC");
+
+    let tgs = tgs_req(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        502,
+    )
+    .expect("TGS-REQ");
+    let tgs_out = krb5_kdc::issue_tgs(&store, &tgs).expect("TGS");
+    let host = store
+        .get_name(&documented_host())
+        .unwrap()
+        .best_key()
+        .unwrap();
+    let svc = decrypt_ticket_part(&host.key, &tgs_out.rep.0.ticket).expect("svc");
+    let pac = pac_from_ticket_part(&svc).expect("PAC on service ticket");
+    verify_pac(&pac, &host.key, &krbtgt.key).expect("service PAC");
+    let signed = sign_pac(
+        &cname,
+        TEST_REALM,
+        tgt_part.authtime.unix_seconds(),
+        &host.key,
+        &krbtgt.key,
+    )
+    .expect("sign");
+    verify_pac(&signed, &host.key, &krbtgt.key).expect("re-sign");
+}
+
+#[test]
+fn s4u2self_impersonates_user() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
+    let tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 601);
+    let pa = pa_for_user(&tgt.session_key, admin.clone(), TEST_REALM).expect("PA-FOR-USER");
+    let tgs = tgs_req_ex(
+        tgt.rep.0.ticket.clone(),
+        &tgt.session_key,
+        TEST_REALM,
+        &user,
+        documented_host(),
+        TEST_REALM,
+        602,
+        KdcOptions::forwardable(),
+        None,
+        vec![pa],
+    )
+    .expect("S4U TGS-REQ");
+    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("S4U2Self");
+    assert_eq!(out.rep.0.cname.components_joined(), TEST_ADMIN);
+    let host = store
+        .get_name(&documented_host())
+        .unwrap()
+        .best_key()
+        .unwrap();
+    let part: EncTicketPart = decrypt_ticket_part(&host.key, &out.rep.0.ticket).expect("enc");
+    assert_eq!(part.cname.components_joined(), TEST_ADMIN);
+    let pac = pac_from_ticket_part(&part).expect("PAC");
+    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
+    verify_pac(&pac, &host.key, &krbtgt.key).expect("S4U PAC");
+}
+
+#[test]
+fn s4u2proxy_takes_cname_from_evidence() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
+    let admin_tgt = issue_tgt(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 701);
+    let evidence_tgs = tgs_req(
+        admin_tgt.rep.0.ticket.clone(),
+        &admin_tgt.session_key,
+        TEST_REALM,
+        &admin,
+        user.clone(),
+        TEST_REALM,
+        702,
+    )
+    .expect("evidence TGS-REQ");
+    let evidence = krb5_kdc::issue_tgs(&store, &evidence_tgs).expect("evidence");
+    let user_tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 703);
+    let opts = KdcOptions::forwardable().with_bit(flag_bit::CNAME_IN_ADDL_TKT, true);
+    let tgs = tgs_req_ex(
+        user_tgt.rep.0.ticket.clone(),
+        &user_tgt.session_key,
+        TEST_REALM,
+        &user,
+        documented_host(),
+        TEST_REALM,
+        704,
+        opts,
+        Some(vec![evidence.rep.0.ticket.clone()]),
+        Vec::new(),
+    )
+    .expect("S4U2Proxy TGS-REQ");
+    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("S4U2Proxy");
+    assert_eq!(out.rep.0.cname.components_joined(), TEST_ADMIN);
+    let host = store
+        .get_name(&documented_host())
+        .unwrap()
+        .best_key()
+        .unwrap();
+    let part = decrypt_ticket_part(&host.key, &out.rep.0.ticket).expect("enc");
+    assert_eq!(part.cname.components_joined(), TEST_ADMIN);
+}
+
+#[test]
+fn u2u_encrypts_ticket_in_additional_tgt_session() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let user_tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 801);
+    let admin_tgt = issue_tgt(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 802);
+    let opts = KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true);
+    let tgs = tgs_req_ex(
+        user_tgt.rep.0.ticket.clone(),
+        &user_tgt.session_key,
+        TEST_REALM,
+        &user,
+        documented_host(),
+        TEST_REALM,
+        803,
+        opts,
+        Some(vec![admin_tgt.rep.0.ticket.clone()]),
+        Vec::new(),
+    )
+    .expect("U2U TGS-REQ");
+    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("U2U");
+    let host = store
+        .get_name(&documented_host())
+        .unwrap()
+        .best_key()
+        .unwrap();
+    assert!(
+        decrypt_ticket_part(&host.key, &out.rep.0.ticket).is_err(),
+        "U2U ticket must not use the service long-term key"
+    );
+    let part = decrypt_ticket_part(&admin_tgt.session_key, &out.rep.0.ticket).expect("U2U enc");
+    assert_eq!(part.cname.components_joined(), TEST_USER);
+    assert_eq!(part.key.keyvalue.as_ref(), out.session_key.as_bytes());
+}
+
+#[test]
+fn s4u2self_bad_checksum_rejected() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
+    let tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 901);
+    let mut pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).expect("PA-FOR-USER");
+    let mut for_user: krb5_types::s4u::PaForUser =
+        decode(pa.padata_value.as_ref()).expect("PaForUser");
+    let mut ck = for_user.cksum.checksum.to_vec();
+    ck[0] ^= 0xff;
+    for_user.cksum.checksum = ck.into();
+    pa.padata_value = encode(&for_user).expect("re-encode").into();
+    let tgs = tgs_req_ex(
+        tgt.rep.0.ticket.clone(),
+        &tgt.session_key,
+        TEST_REALM,
+        &user,
+        documented_host(),
+        TEST_REALM,
+        902,
+        KdcOptions::forwardable(),
+        None,
+        vec![pa],
+    )
+    .expect("TGS-REQ");
+    let bytes = krb5_kdc::handle_request(&store, &encode(&tgs).expect("der")).expect("reply");
+    let e: krb5_types::KrbError = decode(&bytes).expect("KRB-ERROR");
+    assert_eq!(e.error_code, err::INAPP_CKSUM);
+}

@@ -8,18 +8,22 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod acl;
+mod ad;
 mod error;
 mod issue;
 mod listen;
 mod persist;
+mod preauth;
 mod store;
 
 pub use acl::{Acl, AclEntry, AdminOp};
+pub use ad::{decrypt_ticket_part, pac_from_ticket_part, sign_pac, verify_pac};
 pub use error::Error;
 pub use issue::{handle_request, issue_as, issue_tgs, IssuedAs, IssuedTgs};
 pub use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 pub use listen::{bind_preferred, bind_udp_tcp, serve, BIND_CANDIDATES};
 pub use persist::{load_store, save_store, PersistError};
+pub use preauth::spake_w_from_key;
 pub use store::{random_key, s2k_params, KeyEntry, Policy, Principal, PrincipalStore, S2K_ITERS};
 
 use krb5_types::PrincipalName;
