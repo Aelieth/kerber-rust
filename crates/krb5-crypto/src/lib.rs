@@ -22,6 +22,7 @@ mod derive;
 mod error;
 mod etype;
 mod key;
+mod modp;
 mod nfold;
 mod ops;
 mod prf;
@@ -37,6 +38,9 @@ pub use derive::{derive_keys, DerivedKeys};
 pub use error::Error;
 pub use etype::{EncryptionType, KeyUsage};
 pub use key::ProtocolKey;
+pub use modp::{
+    dh_generate, dh_group_for_prime, dh_shared, DhGroup, DhKeypair, OAKLEY_2048, OAKLEY_4096,
+};
 pub use ops::{
     checksum, decrypt, decrypt_with_state, encrypt, encrypt_with_confounder, encrypt_with_state,
     string_to_key, verify_checksum, CipherState,

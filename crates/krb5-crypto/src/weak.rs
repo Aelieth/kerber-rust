@@ -109,8 +109,8 @@ pub(crate) fn des3_encrypt(
 ) -> Result<Vec<u8>, Error> {
     let mut conf = [0u8; DES_BLOCK];
     getrandom::getrandom(&mut conf).map_err(|_| Error::Rng)?;
-    let derived = crate::derive::dk_rfc3961(key.as_bytes(), &usage.derivation_constant(0xAA))?;
-    let ki = crate::derive::dk_rfc3961(key.as_bytes(), &usage.derivation_constant(0x55))?;
+    let derived = dk_des3(key.as_bytes(), &usage.derivation_constant(0xAA))?;
+    let ki = dk_des3(key.as_bytes(), &usage.derivation_constant(0x55))?;
     let mut data = Vec::with_capacity(DES_BLOCK + plaintext.len());
     data.extend_from_slice(&conf);
     data.extend_from_slice(plaintext);
@@ -134,8 +134,8 @@ pub(crate) fn des3_decrypt(
         return Err(Error::CiphertextTooShort);
     }
     let (c, mac) = ciphertext.split_at(ciphertext.len() - 20);
-    let derived = crate::derive::dk_rfc3961(key.as_bytes(), &usage.derivation_constant(0xAA))?;
-    let ki = crate::derive::dk_rfc3961(key.as_bytes(), &usage.derivation_constant(0x55))?;
+    let derived = dk_des3(key.as_bytes(), &usage.derivation_constant(0xAA))?;
+    let ki = dk_des3(key.as_bytes(), &usage.derivation_constant(0x55))?;
     let iv = [0u8; DES_BLOCK];
     let p = des3_cbc_decrypt(&derived, iv, c)?;
     let expected = hmac_sha1_trunc(&ki, &p, 20)?;

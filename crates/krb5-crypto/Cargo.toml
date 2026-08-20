@@ -16,6 +16,7 @@ des.workspace = true
 getrandom.workspace = true
 hmac.workspace = true
 krb5-log.workspace = true
+num-bigint.workspace = true
 md-5.workspace = true
 md4.workspace = true
 p256.workspace = true

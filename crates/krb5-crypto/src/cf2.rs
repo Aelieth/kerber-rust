@@ -341,4 +341,50 @@ mod tests {
         assert_eq!(a.as_bytes(), b.as_bytes());
         assert_ne!(a.as_bytes(), c.as_bytes());
     }
+
+    #[test]
+    fn des3_s2k_round_trips() {
+        let k = crate::ops::string_to_key(
+            EncryptionType::Des3CbcSha1,
+            b"password",
+            b"ATHENA.MIT.EDUraeburn",
+            None,
+        )
+        .unwrap();
+        assert_eq!(k.as_bytes().len(), 24);
+        let usage = crate::etype::KeyUsage::new(2).unwrap();
+        let c = crate::ops::encrypt(&k, usage, b"des3pln!").unwrap();
+        let p = crate::ops::decrypt(&k, usage, &c).unwrap();
+        assert_eq!(&p[..8], b"des3pln!");
+    }
+
+    #[test]
+    fn rc4_usage_3_matches_usage_8() {
+        let k = crate::ops::string_to_key(EncryptionType::Rc4Hmac, b"password", b"", None).unwrap();
+        let u3 = crate::etype::KeyUsage::new(3).unwrap();
+        let u8 = crate::etype::KeyUsage::new(8).unwrap();
+        let conf = [9u8; 8];
+        let a = crate::weak::rc4_encrypt_with_conf(&k, u3, &conf, b"x").unwrap();
+        let b = crate::weak::rc4_encrypt_with_conf(&k, u8, &conf, b"x").unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn camellia_ciphertext_differs_from_aes() {
+        let cam = crate::ops::string_to_key(
+            EncryptionType::Camellia128CtsCmac,
+            b"password",
+            b"SALT",
+            None,
+        )
+        .unwrap();
+        let aes = crate::ops::string_to_key(
+            EncryptionType::Aes128CtsHmacSha196,
+            b"password",
+            b"SALT",
+            None,
+        )
+        .unwrap();
+        assert_ne!(cam.as_bytes(), aes.as_bytes());
+    }
 }
