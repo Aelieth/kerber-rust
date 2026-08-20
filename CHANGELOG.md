@@ -20,10 +20,12 @@ this project uses semantic versioning once a crate is published.
   persistent DB.
 - `krb5-config` (`krb5.conf`/`kdc.conf`/env/SRV), ccache reader,
   keytab v1/merge, AP-REP / KRB-SAFE / PRIV / CRED, PRF/PRF+,
-  `krb5-gss` wrap/unwrap/MIC, `krb5-admin` ACL-enforced kadmind
+  `krb5-gss` RFC 4121 wrap/unwrap/MIC with channel bindings,
+  `krb5-admin` ACL-enforced kadmind
   equivalent, persist+stash, kpasswd (kvno bump + multi-kvno),
   FAST `PA-FX-FAST` CHOICE + armor/cookie/strengthen, SPAKE2-P256 (`w` from the password),
-  PKINIT ECDH P-256 inside CMS SignedData, PAC with NDR logon-info,
+  PKINIT ECDH P-256 inside CMS SignedData with a self-signed P-256
+  certificate and ECDSA-SHA256, PAC with NDR logon-info,
   S4U2Self/S4U2Proxy/U2U, cross-realm referrals/transited, ktadd of
   all kvnos, kprop dump/load, weak etypes behind `allow_weak_crypto`.
 
@@ -35,6 +37,9 @@ this project uses semantic versioning once a crate is published.
 - Client UDP no longer uses `connect()` (MIT TGS replies were dropped);
   AS-REP enc-part is decoded as RFC APPLICATION 25, with MIT tag 26
   only when the plaintext starts with `0x7a`.
+- KDC TCP worker cap, privilege drop after bind :88, and SIGTERM/SIGINT
+  shutdown. GSS wrap tokens use the RFC 4121 16-byte header; SPNEGO
+  uses long-form DER length. PKINIT CMS includes an X.509 test cert.
 
 ### Changed
 

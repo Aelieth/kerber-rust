@@ -46,6 +46,12 @@ and runs MIT `kinit user@KERBER.TEST` plus `kvno host/testhost.kerber.test`.
 In-crate tests drive `issue_as` / `issue_tgs` / `Acl::check` /
 `verify_ap_req` without a socket.
 
+Stage 4/5 GSS: `scripts/gss-gate.sh` copies `krb5-gss-accept` into the
+MIT 1.22.2 container, exports `host/testhost.kerber.test` to a keytab,
+and runs an out-of-process MIT `libgssapi_krb5` initiator (`scripts/gss-mit-client.c`)
+that wraps `hello-from-mit-gss`. The Rust acceptor must unwrap that
+plaintext.
+
 ## MIT 1.22.2 harness
 
 | Item | Value |

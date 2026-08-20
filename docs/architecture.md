@@ -46,12 +46,15 @@ FILE ccache (so the KDC does not depend on the client crate). UDP uses
 **`krb5-client`** is `kinit` (password from env/stdin, never argv).
 
 **`krb5-kdc`** issues AS/TGS from an in-memory store with optional
-persist/stash. Default bind is `127.0.0.1` (not `0.0.0.0`). `--test-realm`
-bootstraps documented principals; otherwise `KRB5_KDC_DB` + stash.
+persist/stash. Default bind is `127.0.0.1` (not `0.0.0.0`). After a
+privileged bind the daemon drops to `KRB5_KDC_USER` (default `nobody`).
+TCP workers are capped (`MAX_TCP_WORKERS`); SIGTERM/SIGINT stop
+`serve`. `--test-realm` bootstraps documented principals; otherwise
+`KRB5_KDC_DB` + stash.
 
-**`krb5-gss`** / **`krb5-admin`** / **`krb5-config`** provide GSS wrap,
-ACL-enforced admin, and `krb5.conf` parsing. MIT GSS remains
-out-of-process.
+**`krb5-gss`** / **`krb5-admin`** / **`krb5-config`** provide GSS wrap
+(RFC 4121 tokens + SPNEGO), ACL-enforced admin, and `krb5.conf`
+parsing. MIT GSS remains out-of-process (`scripts/gss-gate.sh`).
 
 ## Security invariants
 

@@ -64,3 +64,5 @@ jobs:
         run: ./scripts/kdc-gate.sh
       - name: bidirectional Rust client vs Rust KDC
         run: ./scripts/bidirectional-gate.sh
+      - name: gss-gate (MIT libgssapi vs krb5-gss)
+        run: ./scripts/gss-gate.sh

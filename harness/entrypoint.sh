@@ -26,7 +26,7 @@ if [ ! -f /var/lib/krb5kdc/principal ]; then
     kdb5_util create -s -P "$MASTER_PW"
     kadmin.local -q "addprinc -pw ${PASSWORD} user"
     kadmin.local -q "addprinc -randkey host/testhost.kerber.test"
-    kadmin.local -q "ktadd -k /etc/krb5kdc/testhost.keytab host/testhost.kerber.test" >/dev/null 2>&1 || true
+    kadmin.local -q "ktadd -k /etc/krb5kdc/testhost.keytab host/testhost.kerber.test@KERBER.TEST"
     kadmin.local -q "ktadd -k /etc/krb5kdc/kdc.keytab kadmin/admin" >/dev/null 2>&1 || true
 fi
 
