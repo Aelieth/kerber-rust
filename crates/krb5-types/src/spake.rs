@@ -53,19 +53,20 @@ pub struct SpakeResponse {
     pub factor: EncryptedData,
 }
 
-/// PA-SPAKE CHOICE arms as a tagged sequence of optionals (one set).
+/// PA-SPAKE ::= CHOICE { support[0], challenge[1], response[2], encData[3] }
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
-pub struct PaSpake {
+#[rasn(choice)]
+pub enum PaSpake {
     /// Client support advertisement.
     #[rasn(tag(explicit(0)))]
-    pub support: Option<SpakeSupport>,
+    Support(SpakeSupport),
     /// KDC challenge.
     #[rasn(tag(explicit(1)))]
-    pub challenge: Option<SpakeChallenge>,
+    Challenge(SpakeChallenge),
     /// Client response.
     #[rasn(tag(explicit(2)))]
-    pub response: Option<SpakeResponse>,
+    Response(SpakeResponse),
     /// Encrypted data after the SPAKE key is established.
     #[rasn(tag(explicit(3)))]
-    pub enc_data: Option<EncryptedData>,
+    EncData(EncryptedData),
 }

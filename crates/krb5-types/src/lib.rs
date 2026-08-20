@@ -460,16 +460,12 @@ impl KdcOptions {
             | (1u32 << (31 - flag_bit::FORWARDED))
             | (1u32 << (31 - flag_bit::PROXIABLE))
             | (1u32 << (31 - flag_bit::PROXY))
-            | (1u32 << (31 - flag_bit::MAY_POSTDATE))
-            | (1u32 << (31 - flag_bit::POSTDATED))
             | (1u32 << (31 - flag_bit::RENEWABLE))
             | (1u32 << (31 - flag_bit::CNAME_IN_ADDL_TKT))
             | (1u32 << (31 - flag_bit::CANONICALIZE))
             | (1u32 << (31 - flag_bit::DISABLE_TRANSITED_CHECK))
             | (1u32 << (31 - flag_bit::RENEWABLE_OK))
-            | (1u32 << (31 - flag_bit::ENC_TKT_IN_SKEY))
-            | (1u32 << (31 - flag_bit::RENEW))
-            | (1u32 << (31 - flag_bit::VALIDATE));
+            | (1u32 << (31 - flag_bit::ENC_TKT_IN_SKEY));
         self.to_u32() & !supported
     }
 }
@@ -895,10 +891,15 @@ impl TransitedEncoding {
         }
     }
 
-    /// Local profile: `tr-type` 1, comma-separated realm names (not X.500 compress).
+    /// DOMAIN-X500-COMPRESS (`tr-type` 1): comma-separated DNS realms with a
+    /// trailing comma, matching MIT `krb5_domain_x500_encode` for domain-style
+    /// names (no X.500 RDN compression).
     #[must_use]
     pub fn from_realms(realms: &[&str]) -> Self {
-        let s = realms.join(",");
+        let mut s = realms.join(",");
+        if !s.is_empty() {
+            s.push(',');
+        }
         Self {
             tr_type: 1,
             contents: OctetString::from(s.into_bytes()),
@@ -1069,5 +1070,72 @@ mod tests {
             pkinit::cms_verify(inner, &ca.ca_cert).is_err(),
             "unwrapped plaintext is not a valid CMS"
         );
+    }
+
+    #[test]
+    fn pa_pk_as_rep_is_choice_dhinfo() {
+        let rep = pkinit::PaPkAsRep::DhInfo(pkinit::DhRepInfo {
+            dh_signed_data: vec![1, 2, 3].into(),
+            server_dh_nonce: None,
+        });
+        let der = rasn::der::encode(&rep).expect("CHOICE");
+        assert_eq!(
+            der.first().copied(),
+            Some(0xa0),
+            "PA-PK-AS-REP dhInfo is [0] EXPLICIT, not a SEQUENCE"
+        );
+        let back = rasn::der::decode::<pkinit::PaPkAsRep>(&der).expect("round-trip");
+        match back {
+            pkinit::PaPkAsRep::DhInfo(info) => assert_eq!(info.dh_signed_data.as_ref(), &[1, 2, 3]),
+            pkinit::PaPkAsRep::EncKeyPack(_) => panic!("expected DhInfo"),
+        }
+    }
+
+    #[test]
+    fn pa_pk_as_req_signed_auth_pack_is_implicit() {
+        let req = pkinit::PaPkAsReq {
+            signed_auth_pack: vec![9, 9, 9].into(),
+            trusted_certifiers: None,
+            kdc_pk_id: None,
+        };
+        let der = rasn::der::encode(&req).expect("req");
+        assert_eq!(der.first().copied(), Some(0x30));
+        let body = rasn::der::decode::<pkinit::PaPkAsReq>(&der).expect("round-trip");
+        assert_eq!(body.signed_auth_pack.as_ref(), &[9, 9, 9]);
+        let cms = pkinit::parse_pa_pk_as_req_cms(&der).expect("implicit 0x80");
+        assert_eq!(cms, vec![9, 9, 9]);
+        assert_eq!(
+            der.get(2).copied(),
+            Some(0x80),
+            "signedAuthPack is [0] IMPLICIT OCTET STRING"
+        );
+    }
+
+    #[test]
+    fn parse_authpack_accepts_spki_sequence() {
+        let spki = pkinit::encode_ec_spki(&[0x04u8; 65]);
+        // AuthPack SEQUENCE { [0] empty-ish, [1] EXPLICIT SPKI }
+        // Minimal: SEQUENCE { [1] EXPLICIT SPKI } is enough for parse_authpack.
+        let mut inner = vec![0xa1];
+        let spki_len = u8::try_from(spki.len()).expect("spki");
+        inner.push(spki_len);
+        inner.extend_from_slice(&spki);
+        let mut seq = vec![0x30, 0];
+        seq.extend_from_slice(&inner);
+        seq[1] = u8::try_from(inner.len()).expect("seq");
+        let (nonce, got) = pkinit::parse_authpack(&seq).expect("parse");
+        assert_eq!(nonce, 0);
+        assert_eq!(got, spki);
+    }
+
+    #[test]
+    fn parse_dh_spki_round_trips_p_and_y() {
+        let p = vec![0xff, 0xff, 0xff, 0xfd];
+        let y = vec![0x03];
+        let spki = pkinit::encode_dh_spki(&p, &y);
+        let (got_p, got_y) = pkinit::parse_dh_spki(&spki).expect("DH SPKI");
+        assert_eq!(got_p, p);
+        assert_eq!(got_y, y);
+        assert!(pkinit::decode_ec_spki(&spki).is_none());
     }
 }

@@ -256,12 +256,16 @@ fn ndr_kerb_validation_info(client: &str, realm: &str, user_rid: u32, primary: u
     body.extend_from_slice(&user_rid.to_le_bytes());
     body.extend_from_slice(&primary.to_le_bytes());
     body.extend_from_slice(&1u32.to_le_bytes());
-    body.extend_from_slice(&0x0002_0004u32.to_le_bytes());
+    let groups_id = 0x0002_0000u32 + u32::try_from(deferred.len()).unwrap_or(0) * 4;
+    body.extend_from_slice(&groups_id.to_le_bytes());
+    deferred.push(ndr_group_membership(primary));
     body.extend_from_slice(&0u32.to_le_bytes());
     body.extend_from_slice(&[0u8; 16]);
     push_rpc_unicode(&mut body, &mut deferred, &[]);
     push_rpc_unicode(&mut body, &mut deferred, &dom);
-    body.extend_from_slice(&0x0002_0008u32.to_le_bytes());
+    let sid_id = 0x0002_0000u32 + u32::try_from(deferred.len()).unwrap_or(0) * 4;
+    body.extend_from_slice(&sid_id.to_le_bytes());
+    deferred.push(ndr_sid_s1_5_21());
     body.extend_from_slice(&0u32.to_le_bytes());
     body.extend_from_slice(&0u32.to_le_bytes());
     body.extend_from_slice(&0x10u32.to_le_bytes());
@@ -276,22 +280,8 @@ fn ndr_kerb_validation_info(client: &str, realm: &str, user_rid: u32, primary: u
     body.extend_from_slice(&0u32.to_le_bytes());
     body.extend_from_slice(&0u32.to_le_bytes());
     for s in deferred {
-        ndr_conformant_string(&mut body, &s);
+        body.extend_from_slice(&s);
     }
-    body.extend_from_slice(&1u32.to_le_bytes());
-    body.extend_from_slice(&0u32.to_le_bytes());
-    body.extend_from_slice(&1u32.to_le_bytes());
-    body.extend_from_slice(&primary.to_le_bytes());
-    body.extend_from_slice(&7u32.to_le_bytes());
-    // SID S-1-5-21-1-2-3
-    body.extend_from_slice(&4u32.to_le_bytes());
-    body.push(1);
-    body.push(4);
-    body.extend_from_slice(&[0, 0, 0, 0, 0, 5]);
-    body.extend_from_slice(&21u32.to_le_bytes());
-    body.extend_from_slice(&1u32.to_le_bytes());
-    body.extend_from_slice(&2u32.to_le_bytes());
-    body.extend_from_slice(&3u32.to_le_bytes());
 
     let mut out = Vec::new();
     out.extend_from_slice(&[1, 0x10, 8, 0]);
@@ -316,8 +306,33 @@ fn push_rpc_unicode(body: &mut Vec<u8>, deferred: &mut Vec<Vec<u8>>, utf16: &[u8
     } else {
         let id = 0x0002_0000u32 + u32::try_from(deferred.len()).unwrap_or(0) * 4;
         body.extend_from_slice(&id.to_le_bytes());
-        deferred.push(utf16.to_vec());
+        let mut blob = Vec::new();
+        ndr_conformant_string(&mut blob, utf16);
+        deferred.push(blob);
     }
+}
+
+fn ndr_group_membership(primary: u32) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(&1u32.to_le_bytes());
+    v.extend_from_slice(&0u32.to_le_bytes());
+    v.extend_from_slice(&1u32.to_le_bytes());
+    v.extend_from_slice(&primary.to_le_bytes());
+    v.extend_from_slice(&7u32.to_le_bytes());
+    v
+}
+
+fn ndr_sid_s1_5_21() -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(&4u32.to_le_bytes());
+    v.push(1);
+    v.push(4);
+    v.extend_from_slice(&[0, 0, 0, 0, 0, 5]);
+    v.extend_from_slice(&21u32.to_le_bytes());
+    v.extend_from_slice(&1u32.to_le_bytes());
+    v.extend_from_slice(&2u32.to_le_bytes());
+    v.extend_from_slice(&3u32.to_le_bytes());
+    v
 }
 
 fn ndr_conformant_string(out: &mut Vec<u8>, utf16: &[u8]) {
@@ -374,15 +389,49 @@ fn parse_ndr_logon_info(data: &[u8]) -> Result<(String, String), PacError> {
     if user_rid == 0 {
         return Err(PacError::Truncated);
     }
-    let strings = ndr_conformant_strings(&body[NDR_LOGON_STRUCT..])?;
-    let client = strings.first().cloned().ok_or(PacError::Truncated)?;
-    let realm = strings.get(1).cloned().unwrap_or_default();
+    let mut tail = &body[NDR_LOGON_STRUCT..];
+    let (client, rest) = take_conformant_string(tail)?;
+    tail = rest;
+    if tail.len() >= 20 {
+        let max = u32::from_le_bytes(tail[0..4].try_into().map_err(|_| PacError::Truncated)?);
+        let actual = u32::from_le_bytes(tail[8..12].try_into().map_err(|_| PacError::Truncated)?);
+        if max == 1 && actual == 1 {
+            tail = &tail[20..];
+        }
+    }
+    let realm = take_conformant_string(tail)
+        .map(|(s, _)| s)
+        .unwrap_or_default();
     if client.is_empty() {
         return Err(PacError::Truncated);
     }
     Ok((client, realm))
 }
 
+fn take_conformant_string(b: &[u8]) -> Result<(String, &[u8]), PacError> {
+    if b.len() < 12 {
+        return Err(PacError::Truncated);
+    }
+    let max = u32::from_le_bytes(b[0..4].try_into().map_err(|_| PacError::Truncated)?) as usize;
+    let actual = u32::from_le_bytes(b[8..12].try_into().map_err(|_| PacError::Truncated)?) as usize;
+    if actual > max || actual > 256 {
+        return Err(PacError::Truncated);
+    }
+    let nbytes = actual.saturating_mul(2);
+    if 12 + nbytes > b.len() {
+        return Err(PacError::Truncated);
+    }
+    let mut u16s = Vec::with_capacity(actual);
+    for k in 0..actual {
+        let o = 12 + k * 2;
+        u16s.push(u16::from_le_bytes([b[o], b[o + 1]]));
+    }
+    let s = String::from_utf16(&u16s).map_err(|_| PacError::Truncated)?;
+    let pad = (4 - (nbytes % 4)) % 4;
+    Ok((s, &b[12 + nbytes + pad..]))
+}
+
+#[allow(dead_code)]
 fn ndr_conformant_strings(mut b: &[u8]) -> Result<Vec<String>, PacError> {
     let mut out = Vec::new();
     while b.len() >= 12 && out.len() < 2 {

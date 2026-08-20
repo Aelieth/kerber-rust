@@ -5,16 +5,19 @@ use rasn::prelude::*;
 use crate::{Checksum, KerberosTime, Microseconds, OctetString};
 
 /// PA-PK-AS-REQ ::= SEQUENCE { signedAuthPack, trustedCertifiers, kdcPkId }
+///
+/// RFC 4556 uses EXPLICIT TAGS with `signedAuthPack` / `kdcPkId` **IMPLICIT**
+/// OCTET STRING (wire tag `0x80` / `0x82`).
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct PaPkAsReq {
     /// CMS SignedData wrapping [`AuthPack`] (DER).
-    #[rasn(tag(explicit(0)))]
+    #[rasn(tag(0))]
     pub signed_auth_pack: OctetString,
     /// Optional trusted certifiers (opaque DER).
     #[rasn(tag(explicit(1)))]
     pub trusted_certifiers: Option<SequenceOf<OctetString>>,
     /// Optional KDC public-key identifier.
-    #[rasn(tag(explicit(2)))]
+    #[rasn(tag(2))]
     pub kdc_pk_id: Option<OctetString>,
 }
 
@@ -53,24 +56,23 @@ pub struct AuthPack {
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct DhRepInfo {
     /// CMS SignedData wrapping ReplyKeyPack / server DH public.
-    #[rasn(tag(explicit(0)))]
+    #[rasn(tag(0))]
     pub dh_signed_data: OctetString,
-    /// Optional server DH nonce.
+    /// Optional server DH nonce (`DHNonce` = OCTET STRING, EXPLICIT [1]).
     #[rasn(tag(explicit(1)))]
     pub server_dh_nonce: Option<OctetString>,
 }
 
-/// PA-PK-AS-REP ::= CHOICE { dhInfo[0], encKeyPack[1] }
-///
-/// Encoded as a context-tagged wrapper; this struct holds the dhInfo arm.
+/// PA-PK-AS-REP ::= CHOICE { dhInfo [0] DHRepInfo, encKeyPack [1] IMPLICIT OCTET STRING }
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
-pub struct PaPkAsRep {
-    /// DH reply info.
+#[rasn(choice)]
+pub enum PaPkAsRep {
+    /// Diffie-Hellman (or ECDH) reply.
     #[rasn(tag(explicit(0)))]
-    pub dh_info: Option<DhRepInfo>,
-    /// Encrypted key pack (CMS EnvelopedData) when DH is not used.
-    #[rasn(tag(explicit(1)))]
-    pub enc_key_pack: Option<OctetString>,
+    DhInfo(DhRepInfo),
+    /// CMS EnvelopedData key pack.
+    #[rasn(tag(1))]
+    EncKeyPack(OctetString),
 }
 
 /// ReplyKeyPack ::= SEQUENCE { replyKey, asChecksum }
@@ -82,6 +84,294 @@ pub struct ReplyKeyPack {
     /// Checksum of the corresponding AS-REQ.
     #[rasn(tag(explicit(1)))]
     pub as_checksum: Checksum,
+}
+
+/// KdcDHKeyInfo ::= SEQUENCE { subjectPublicKey, nonce, dhKeyExpiration }
+#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+pub struct KdcDHKeyInfo {
+    /// Server ECDH public key (BIT STRING of the uncompressed point).
+    #[rasn(tag(explicit(0)))]
+    pub subject_public_key: OctetString,
+    /// Nonce.
+    #[rasn(tag(explicit(1)))]
+    pub nonce: u32,
+    /// Optional DH key expiration.
+    #[rasn(tag(explicit(2)))]
+    pub dh_key_expiration: Option<KerberosTime>,
+}
+
+/// id-pkinit-authData 1.3.6.1.5.2.3.1 (OID body).
+pub const ECONTENT_AUTHDATA: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x02, 0x03, 0x01];
+/// id-pkinit-DHKeyData 1.3.6.1.5.2.3.2 (OID body).
+pub const ECONTENT_DHKEY: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x02, 0x03, 0x02];
+
+/// SubjectPublicKeyInfo for an uncompressed P-256 point (RFC 5480).
+#[must_use]
+pub fn encode_ec_spki(uncompressed: &[u8]) -> Vec<u8> {
+    let spki_alg = tlv(
+        0x30,
+        &[
+            oid_der(&[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01]),
+            oid_der(&[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07]),
+        ]
+        .concat(),
+    );
+    let mut bit = vec![0u8];
+    bit.extend_from_slice(uncompressed);
+    tlv(0x30, &[spki_alg, tlv(0x03, &bit)].concat())
+}
+
+/// Decode [`encode_ec_spki`] or accept a raw uncompressed SEC1 point.
+#[must_use]
+pub fn decode_ec_spki(der: &[u8]) -> Option<Vec<u8>> {
+    if der.first() == Some(&0x04) && der.len() == 65 {
+        return Some(der.to_vec());
+    }
+    let (t, body, _) = take_tlv(der)?;
+    if t != 0x30 {
+        return None;
+    }
+    let (_, _, rest) = take_tlv(body)?;
+    let (t, bit, _) = take_tlv(rest)?;
+    if t != 0x03 {
+        return None;
+    }
+    let pt = if bit.first() == Some(&0) {
+        bit.get(1..)?.to_vec()
+    } else {
+        bit.to_vec()
+    };
+    if pt.first() == Some(&0x04) && pt.len() == 65 {
+        Some(pt)
+    } else {
+        None
+    }
+}
+
+/// dhpublicnumber 1.2.840.10046.2.1 (RFC 3279 DomainParameters).
+const OID_DHPUBLICNUMBER: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3e, 0x02, 0x01];
+/// PKCS#3 dhKeyAgreement 1.2.840.113549.1.3.1.
+const OID_DHKEYAGREEMENT: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x03, 0x01];
+
+fn is_dh_oid(oid_body: &[u8]) -> bool {
+    oid_body == OID_DHPUBLICNUMBER || oid_body == OID_DHKEYAGREEMENT
+}
+
+fn strip_leading_zeros(n: &[u8]) -> Vec<u8> {
+    let skip = n.iter().take_while(|b| **b == 0).count();
+    if skip == n.len() {
+        vec![0]
+    } else {
+        n[skip..].to_vec()
+    }
+}
+
+fn der_unsigned(be: &[u8]) -> Vec<u8> {
+    let mut n = strip_leading_zeros(be);
+    if n.first().copied().unwrap_or(0) & 0x80 != 0 {
+        n.insert(0, 0);
+    }
+    tlv(0x02, &n)
+}
+
+/// RFC 3279 DH `SubjectPublicKeyInfo` (`DomainParameters` + `DHPublicKey`).
+#[must_use]
+pub fn encode_dh_spki(p: &[u8], y: &[u8]) -> Vec<u8> {
+    let params = tlv(0x30, &[der_unsigned(p), der_unsigned(&[2])].concat());
+    let alg = tlv(0x30, &[oid_der(OID_DHPUBLICNUMBER), params].concat());
+    let mut bit = vec![0u8];
+    bit.extend(der_unsigned(y));
+    tlv(0x30, &[alg, tlv(0x03, &bit)].concat())
+}
+
+/// Parse a MODP DH SPKI: `(p, y)` as unsigned big-endian integers.
+///
+/// Accepts RFC 3279 `dhpublicnumber` and PKCS#3 `dhKeyAgreement`. `y` may
+/// be a DER `INTEGER` inside the BIT STRING (MIT / OpenSSL) or raw bytes.
+#[must_use]
+pub fn parse_dh_spki(der: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    let (t, body, _) = take_tlv(der)?;
+    if t != 0x30 {
+        return None;
+    }
+    let (t, alg, rest) = take_tlv(body)?;
+    if t != 0x30 {
+        return None;
+    }
+    let (t, oid, params) = take_tlv(alg)?;
+    if t != 0x06 || !is_dh_oid(oid) {
+        return None;
+    }
+    let (t, pbody, _) = take_tlv(params)?;
+    if t != 0x30 {
+        return None;
+    }
+    let (t, p_int, _) = take_tlv(pbody)?;
+    if t != 0x02 {
+        return None;
+    }
+    let p = strip_leading_zeros(p_int);
+    let (t, bit, _) = take_tlv(rest)?;
+    if t != 0x03 {
+        return None;
+    }
+    let payload = if bit.first() == Some(&0) {
+        bit.get(1..)?
+    } else {
+        bit
+    };
+    let y = if payload.first() == Some(&0x02) {
+        let (_, yb, _) = take_tlv(payload)?;
+        strip_leading_zeros(yb)
+    } else {
+        strip_leading_zeros(payload)
+    };
+    Some((p, y))
+}
+
+/// Unsigned integer from a DER `INTEGER` (or already-unsigned bytes).
+#[must_use]
+pub fn der_integer_unsigned(der: &[u8]) -> Option<Vec<u8>> {
+    if der.first() == Some(&0x02) {
+        let (_, body, _) = take_tlv(der)?;
+        return Some(strip_leading_zeros(body));
+    }
+    Some(strip_leading_zeros(der))
+}
+
+/// RFC 4556 `KdcDHKeyInfo` DER wrapping a BIT STRING payload.
+///
+/// For ECDH the payload is an uncompressed P-256 point; for MODP DH it is
+/// the DER `INTEGER` of `y` (RFC 4556 `DHPublicKey`).
+#[must_use]
+pub fn encode_kdc_dh_key_info(uncompressed: &[u8], nonce: u32) -> Vec<u8> {
+    let mut bit = vec![0u8];
+    bit.extend_from_slice(uncompressed);
+    let spk = tlv(0xa0, &tlv(0x03, &bit));
+    let mut n = nonce.to_be_bytes().to_vec();
+    while n.len() > 1 && n.first() == Some(&0) {
+        n.remove(0);
+    }
+    if n.first().copied().unwrap_or(0) & 0x80 != 0 {
+        n.insert(0, 0);
+    }
+    let ni = tlv(0xa1, &tlv(0x02, &n));
+    tlv(0x30, &[spk, ni].concat())
+}
+
+/// Parse RFC 4556 `AuthPack` for `(nonce, clientPublicValue)`.
+///
+/// Accepts MIT's EXPLICIT [1] `SubjectPublicKeyInfo` SEQUENCE and this
+/// crate's rasn `OCTET STRING` wrapping of the same SPKI. Extra fields
+/// (`supportedKDFs`, …) are ignored so MIT 1.22.2 AuthPack decodes.
+#[must_use]
+pub fn parse_authpack(der: &[u8]) -> Option<(u32, Vec<u8>)> {
+    let (t, body, _) = take_tlv(der)?;
+    if t != 0x30 {
+        return None;
+    }
+    let mut nonce = 0u32;
+    let mut spki: Option<Vec<u8>> = None;
+    let mut cur = body;
+    while !cur.is_empty() {
+        let (tag, inner, rest) = take_tlv(cur)?;
+        if tag == 0xa0 {
+            let seq = unwrap_explicit_seq(inner);
+            if let Some(n) = pkauth_nonce(seq) {
+                nonce = n;
+            }
+        } else if tag == 0xa1 {
+            spki = Some(unwrap_spki_field(inner));
+        }
+        cur = rest;
+    }
+    Some((nonce, spki?))
+}
+
+fn unwrap_explicit_seq(inner: &[u8]) -> &[u8] {
+    if inner.first() == Some(&0x30) {
+        take_tlv(inner).map_or(inner, |(_, b, _)| b)
+    } else {
+        inner
+    }
+}
+
+fn unwrap_spki_field(inner: &[u8]) -> Vec<u8> {
+    if inner.first() == Some(&0x04) {
+        if let Some((_, body, _)) = take_tlv(inner) {
+            return body.to_vec();
+        }
+    }
+    inner.to_vec()
+}
+
+fn pkauth_nonce(seq_body: &[u8]) -> Option<u32> {
+    let mut cur = seq_body;
+    while !cur.is_empty() {
+        let (tag, inner, rest) = take_tlv(cur)?;
+        if tag == 0xa2 {
+            let intb = if inner.first() == Some(&0x02) {
+                take_tlv(inner)?.1
+            } else {
+                inner
+            };
+            return Some(der_uint(intb));
+        }
+        cur = rest;
+    }
+    None
+}
+
+fn der_uint(bytes: &[u8]) -> u32 {
+    bytes.iter().fold(0u32, |acc, &b| {
+        acc.saturating_mul(256).saturating_add(u32::from(b))
+    })
+}
+
+/// Extract the uncompressed point from [`encode_kdc_dh_key_info`].
+#[must_use]
+pub fn decode_kdc_dh_point(der: &[u8]) -> Option<Vec<u8>> {
+    let (t, body, _) = take_tlv(der)?;
+    if t != 0x30 {
+        return None;
+    }
+    let (t, expl, _) = take_tlv(body)?;
+    if t != 0xa0 {
+        return None;
+    }
+    let (t, bit, _) = take_tlv(expl)?;
+    if t != 0x03 {
+        return None;
+    }
+    if bit.first() == Some(&0) {
+        Some(bit.get(1..)?.to_vec())
+    } else {
+        Some(bit.to_vec())
+    }
+}
+
+/// First field of PA-PK-AS-REQ: CMS `signedAuthPack` (IMPLICIT or EXPLICIT).
+#[must_use]
+pub fn parse_pa_pk_as_req_cms(der: &[u8]) -> Option<Vec<u8>> {
+    let (t, body, _) = take_tlv(der)?;
+    if t != 0x30 {
+        return None;
+    }
+    let (tag, inner, _) = take_tlv(body)?;
+    match tag {
+        0xa0 if inner.first() == Some(&0x04) => take_tlv(inner).map(|(_, b, _)| b.to_vec()),
+        0x80 | 0xa0 => Some(inner.to_vec()),
+        _ => None,
+    }
+}
+
+/// RFC 4556 `TD-DH-PARAMETERS` advertising ECDH P-256 (`id-ecPublicKey` + secp256r1).
+#[must_use]
+pub fn encode_td_dh_p256() -> Vec<u8> {
+    let ec = oid_der(&[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01]);
+    let p256 = oid_der(&[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07]);
+    let alg = tlv(0x30, &[ec, p256].concat());
+    tlv(0x30, &alg)
 }
 
 /// Anonymous PKINIT well-known client name (`WELLKNOWN/ANONYMOUS`).
@@ -219,12 +509,20 @@ fn directory_name(cn: &str) -> Vec<u8> {
     tlv(0x30, &tlv(0x31, &cn_atv))
 }
 
+#[derive(Clone, Copy)]
+enum CertKind {
+    Ca,
+    Kdc,
+    Client,
+}
+
 fn p256_cert(
     serial: u8,
     issuer_cn: &str,
     subject_cn: &str,
     subject_public: &[u8],
     signer_secret: &[u8; 32],
+    kind: CertKind,
 ) -> Option<Vec<u8>> {
     let issuer = directory_name(issuer_cn);
     let subject = directory_name(subject_cn);
@@ -255,6 +553,7 @@ fn p256_cert(
     tbs_body.extend_from_slice(&validity);
     tbs_body.extend_from_slice(&subject);
     tbs_body.extend_from_slice(&spki);
+    tbs_body.extend_from_slice(&cert_extensions(kind));
     let tbs = tlv(0x30, &tbs_body);
     let sig = p256_sign(signer_secret, &tbs)?;
     let mut sig_bit = vec![0u8];
@@ -264,7 +563,60 @@ fn p256_cert(
 
 /// Minimal X.509 v3 self-signed P-256 certificate (test CA).
 fn self_signed_p256_cert(cn: &str, secret: &[u8; 32], public: &[u8]) -> Option<Vec<u8>> {
-    p256_cert(1, cn, cn, public, secret)
+    p256_cert(1, cn, cn, public, secret, CertKind::Ca)
+}
+
+fn cert_extensions(kind: CertKind) -> Vec<u8> {
+    let is_ca = matches!(kind, CertKind::Ca);
+    let bc_oid = oid_der(&[0x55, 0x1d, 0x13]);
+    let bc_val = if is_ca {
+        tlv(0x30, &tlv(0x01, &[0xff]))
+    } else {
+        tlv(0x30, &[])
+    };
+    let bc = tlv(
+        0x30,
+        &[bc_oid, tlv(0x01, &[0xff]), tlv(0x04, &bc_val)].concat(),
+    );
+    let ku_oid = oid_der(&[0x55, 0x1d, 0x0f]);
+    let ku_bits = if is_ca {
+        tlv(0x03, &[0x01, 0b0000_0110])
+    } else {
+        tlv(0x03, &[0x07, 0b1000_0000])
+    };
+    let ku = tlv(
+        0x30,
+        &[ku_oid, tlv(0x01, &[0xff]), tlv(0x04, &ku_bits)].concat(),
+    );
+    let mut ext_body = [bc, ku].concat();
+    match kind {
+        CertKind::Kdc => {
+            ext_body.extend(san_dns("kerber.test"));
+            ext_body.extend(eku(&[0x2b, 0x06, 0x01, 0x05, 0x02, 0x03, 0x05]));
+        }
+        CertKind::Client => {
+            ext_body.extend(eku(&[0x2b, 0x06, 0x01, 0x05, 0x02, 0x03, 0x04]));
+        }
+        CertKind::Ca => {}
+    }
+    tlv(0xa3, &tlv(0x30, &ext_body))
+}
+
+fn san_dns(dns: &str) -> Vec<u8> {
+    let gn = tlv(0x82, dns.as_bytes());
+    let gns = tlv(0x30, &gn);
+    tlv(
+        0x30,
+        &[oid_der(&[0x55, 0x1d, 0x11]), tlv(0x04, &gns)].concat(),
+    )
+}
+
+fn eku(oid_body: &[u8]) -> Vec<u8> {
+    let seq = tlv(0x30, &oid_der(oid_body));
+    tlv(
+        0x30,
+        &[oid_der(&[0x55, 0x1d, 0x25]), tlv(0x04, &seq)].concat(),
+    )
 }
 
 fn spki_uncompressed(cert: &[u8]) -> Option<Vec<u8>> {
@@ -315,34 +667,55 @@ pub fn cms_wrap(e_content: &[u8], ca: &PkinitCa) -> Result<Vec<u8>, &'static str
 /// CMS SignedData with an explicit certificate and ECDSA signature.
 ///
 /// Encoded by hand so the Certificate SET uses IMPLICIT `[0]` (RFC 5652).
+/// SignerInfo uses **issuerAndSerialNumber** (CMS version 1), matching MIT
+/// OpenSSL `PKCS7_SIGNER_INFO`. `signed_attrs` if present is the
+/// `[0] IMPLICIT SET` encoding; the signature is over the corresponding
+/// `SET` (tag 0x31).
 #[must_use]
-pub fn cms_wrap_signed(e_content: &[u8], cert_der: &[u8], signature: &[u8], ski: &[u8]) -> Vec<u8> {
+pub fn cms_wrap_signed(
+    e_content: &[u8],
+    cert_der: &[u8],
+    signature: &[u8],
+    issuer: &[u8],
+    serial: &[u8],
+    econtent_oid: &[u8],
+    signed_attrs: Option<&[u8]>,
+) -> Vec<u8> {
     let sha256 = oid_der(&[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01]);
     let ecdsa = oid_der(&[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02]);
     let signed_data = oid_der(&[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x02]);
-    let pkinit_ad = oid_der(&[0x2b, 0x06, 0x01, 0x05, 0x02, 0x03, 0x01]);
-    let digest_algs = tlv(0x31, &tlv(0x30, &sha256));
+    let ectype = oid_der(econtent_oid);
+    let sha256_alg = tlv(0x30, &[sha256.clone(), tlv(0x05, &[])].concat());
+    let ecdsa_alg = tlv(0x30, &ecdsa);
+    let digest_algs = tlv(0x31, &sha256_alg);
     let econt = tlv(0xa0, &tlv(0x04, e_content));
-    let encap = tlv(0x30, &[pkinit_ad, econt].concat());
-    let certs = tlv(0xa0, cert_der); // [0] IMPLICIT SET OF Certificate: single SEQUENCE
-    let sid = tlv(0x80, ski);
-    let signer = tlv(
-        0x30,
-        &[
-            tlv(0x02, &[0x03]),
-            sid,
-            tlv(0x30, &sha256),
-            tlv(0x30, &ecdsa),
-            tlv(0x04, signature),
-        ]
-        .concat(),
-    );
+    let encap = tlv(0x30, &[ectype, econt].concat());
+    let certs = tlv(0xa0, cert_der);
+    let mut ias_body = issuer.to_vec();
+    ias_body.extend(tlv(0x02, serial));
+    let ias = tlv(0x30, &ias_body);
+    let mut signer_body = vec![tlv(0x02, &[0x01]), ias, sha256_alg];
+    if let Some(sa) = signed_attrs {
+        signer_body.push(sa.to_vec());
+    }
+    signer_body.push(ecdsa_alg);
+    signer_body.push(tlv(0x04, signature));
+    let signer = tlv(0x30, &signer_body.concat());
     let signers = tlv(0x31, &signer);
     let sd = tlv(
         0x30,
         &[tlv(0x02, &[0x03]), digest_algs, encap, certs, signers].concat(),
     );
     tlv(0x30, &[signed_data, tlv(0xa0, &sd)].concat())
+}
+
+fn signed_attrs_set(econtent_oid: &[u8], e_content: &[u8]) -> Vec<u8> {
+    let digest = sha256_bytes(e_content);
+    let ct_oid = oid_der(&[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x03]);
+    let md_oid = oid_der(&[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x04]);
+    let ct = tlv(0x30, &[ct_oid, tlv(0x31, &oid_der(econtent_oid))].concat());
+    let md = tlv(0x30, &[md_oid, tlv(0x31, &tlv(0x04, &digest))].concat());
+    tlv(0x31, &[ct, md].concat())
 }
 
 /// Extract eContent from CMS SignedData, or return `der` unchanged.
@@ -377,10 +750,52 @@ pub fn cms_verify(der: &[u8], trust_anchor: &[u8]) -> Result<Vec<u8>, &'static s
         return Err("cms trust");
     }
     let public = spki_uncompressed(&p.cert).ok_or("cms spki")?;
-    if !p256_verify(&public, &p.e_content, &p.signature) {
+    if let Some(sa) = &p.signed_attrs {
+        let mut set = sa.clone();
+        if set.first() == Some(&0xa0) {
+            set[0] = 0x31;
+        }
+        if !p256_verify(&public, &set, &p.signature) {
+            return Err("cms ecdsa attrs");
+        }
+        let expect = sha256_bytes(&p.e_content);
+        if !signed_attrs_digest_ok(sa, &expect) {
+            return Err("cms message-digest");
+        }
+    } else if !p256_verify(&public, &p.e_content, &p.signature) {
         return Err("cms ecdsa");
     }
     Ok(p.e_content)
+}
+
+fn signed_attrs_digest_ok(sattrs: &[u8], expect: &[u8]) -> bool {
+    let body = if sattrs.first() == Some(&0xa0) || sattrs.first() == Some(&0x31) {
+        take_tlv(sattrs).map_or(sattrs, |(_, b, _)| b)
+    } else {
+        sattrs
+    };
+    let mut cur = body;
+    while let Some((_, attr, rest)) = take_tlv(cur) {
+        if let Some((_, oid, after)) = take_tlv(attr) {
+            if oid == [0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x04]
+                || (oid.first() == Some(&0x06)
+                    && oid.get(2..)
+                        == Some([0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x04].as_slice()))
+            {
+                if let Some((_, set, _)) = take_tlv(after) {
+                    if let Some((t, oct, _)) = take_tlv(set) {
+                        let d = if t == 0x04 { oct } else { set };
+                        return d == expect;
+                    }
+                }
+            }
+        }
+        cur = rest;
+        if rest.is_empty() {
+            break;
+        }
+    }
+    false
 }
 
 fn cert_tbs_sig(cert: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
@@ -419,6 +834,7 @@ struct CmsParts {
     e_content: Vec<u8>,
     cert: Vec<u8>,
     signature: Vec<u8>,
+    signed_attrs: Option<Vec<u8>>,
 }
 
 fn cms_parts(der: &[u8]) -> Result<CmsParts, &'static str> {
@@ -478,9 +894,13 @@ fn cms_parts(der: &[u8]) -> Result<CmsParts, &'static str> {
     s = take_tlv(s).ok_or("sver")?.2;
     s = take_tlv(s).ok_or("sid")?.2;
     s = take_tlv(s).ok_or("dalg")?.2;
-    if s.first() == Some(&0xa0) {
-        s = take_tlv(s).ok_or("sattr")?.2;
-    }
+    let signed_attrs = if s.first() == Some(&0xa0) {
+        let (t, body, rest) = take_tlv(s).ok_or("sattr")?;
+        s = rest;
+        Some(tlv(t, body))
+    } else {
+        None
+    };
     s = take_tlv(s).ok_or("salg")?.2;
     let (t, sig, _) = take_tlv(s).ok_or("sig")?;
     if t != 0x04 {
@@ -490,6 +910,7 @@ fn cms_parts(der: &[u8]) -> Result<CmsParts, &'static str> {
         e_content,
         cert,
         signature: sig.to_vec(),
+        signed_attrs,
     })
 }
 
@@ -595,20 +1016,52 @@ impl PkinitCa {
         _leaf_secret: &[u8; 32],
         leaf_public: &[u8],
     ) -> Option<Vec<u8>> {
-        p256_cert(2, "Kerber Test CA", cn, leaf_public, &self.ca_secret)
+        p256_cert(
+            2,
+            "Kerber Test CA",
+            cn,
+            leaf_public,
+            &self.ca_secret,
+            CertKind::Client,
+        )
     }
 
-    /// CMS-sign `e_content` with a fresh leaf under this CA.
+    /// CMS-sign `e_content` with a fresh leaf under this CA (`id-pkinit-authData`).
     #[must_use]
     pub fn sign_cms(&self, e_content: &[u8], leaf_cn: &str) -> Option<Vec<u8>> {
+        self.sign_cms_typed(e_content, leaf_cn, ECONTENT_AUTHDATA)
+    }
+
+    /// CMS-sign `e_content` with `econtent_oid` and RFC 5652 signedAttrs.
+    #[must_use]
+    pub fn sign_cms_typed(
+        &self,
+        e_content: &[u8],
+        leaf_cn: &str,
+        econtent_oid: &[u8],
+    ) -> Option<Vec<u8>> {
         let (ls, lp) = generate_p256()?;
-        let leaf = self.issue_leaf(leaf_cn, &ls, &lp)?;
-        let signature = p256_sign(&ls, e_content)?;
+        let kind = if econtent_oid == ECONTENT_DHKEY {
+            CertKind::Kdc
+        } else {
+            CertKind::Client
+        };
+        let leaf = p256_cert(2, "Kerber Test CA", leaf_cn, &lp, &self.ca_secret, kind)?;
+        let sattrs = signed_attrs_set(econtent_oid, e_content);
+        let signature = p256_sign(&ls, &sattrs)?;
+        let mut implicit = sattrs;
+        if implicit.first() == Some(&0x31) {
+            implicit[0] = 0xa0;
+        }
+        let issuer = directory_name("Kerber Test CA");
         Some(cms_wrap_signed(
             e_content,
             &leaf,
             &signature,
-            &sha256_bytes(&lp),
+            &issuer,
+            &[2],
+            econtent_oid,
+            Some(&implicit),
         ))
     }
 

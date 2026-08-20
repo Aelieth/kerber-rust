@@ -112,6 +112,8 @@ pub mod err {
     pub const CLIENT_NOT_TRUSTED: i32 = 62;
     /// KDC_ERR_INVALID_SIG
     pub const INVALID_SIG: i32 = 64;
+    /// KDC_ERR_DH_KEY_PARAMETERS_NOT_ACCEPTED (PKINIT)
+    pub const DH_KEY_PARAMETERS_NOT_ACCEPTED: i32 = 65;
     /// KRB_AP_ERR_NO_TGT
     pub const NO_TGT: i32 = 67;
     /// KDC_ERR_WRONG_REALM
@@ -208,6 +210,8 @@ pub mod pa {
     pub const PK_AS_REP: i32 = 17;
     /// PA-ETYPE-INFO2.
     pub const ETYPE_INFO2: i32 = 19;
+    /// TD-DH-PARAMETERS (PKINIT RFC 4556).
+    pub const TD_DH_PARAMETERS: i32 = 109;
     /// PA-SVR-REFERRAL-INFO.
     pub const SVR_REFERRAL_INFO: i32 = 20;
     /// PA-PAC-REQUEST.
