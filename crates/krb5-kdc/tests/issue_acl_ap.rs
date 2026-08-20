@@ -47,7 +47,15 @@ fn acl_allow_admin_create_and_ktadd() {
     let bytes = kt.to_bytes();
     assert_eq!(&bytes[..2], &[0x05, 0x02]);
     let parsed = Keytab::parse(&bytes).expect("keytab v2");
-    assert_eq!(parsed.entries.len(), 1);
+    assert_eq!(
+        parsed.entries.len(),
+        4,
+        "host randkeys include etypes 17–20"
+    );
+    assert!(parsed
+        .entries
+        .iter()
+        .any(|e| e.key.etype() == EncryptionType::Aes256CtsHmacSha384192));
     assert_eq!(
         parsed.entries[0].name.components_joined(),
         "host/extra.kerber.test"

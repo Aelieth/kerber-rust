@@ -160,7 +160,10 @@ mod tests {
             .export_keytab(&acl, &documented_admin_id(), &documented_host())
             .unwrap();
         let parsed = Keytab::parse(&kt.to_bytes()).unwrap();
-        assert_eq!(parsed.entries.len(), 1);
+        assert!(
+            parsed.entries.len() >= 4,
+            "host randkeys include RFC 8009 etypes"
+        );
         assert!(parsed.entries[0]
             .name
             .components_joined()

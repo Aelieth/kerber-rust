@@ -81,7 +81,7 @@ fn persist_paths_saves_password_lock_and_expiry() {
         kvno_after > kvno_before,
         "change_password must persist a kvno bump via save_if_configured"
     );
-    assert!(p.locked, "locked must round-trip through KDB2");
+    assert!(p.locked, "locked must round-trip through KDB3");
     assert_eq!(p.pw_expire, 1_700_000_123);
     let _ = std::fs::remove_dir_all(&dir);
 }

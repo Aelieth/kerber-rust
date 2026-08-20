@@ -4,8 +4,8 @@ use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     checksum, decrypt, dh_generate, dh_group_for_prime, dh_shared, encrypt, krb_fx_cf2,
     octetstring2key, p256_generate, p256_shared, spake_derive_key, spake_kdc_keygen,
-    spake_result_wbytes, spake_thash_update, spake_w, spake_wbytes, verify_checksum,
-    EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256,
+    spake_result_wbytes, spake_thash_update, spake_wbytes, verify_checksum, EncryptionType,
+    KeyUsage, ProtocolKey, SPAKE_GROUP_P256,
 };
 use krb5_types::{
     err, ku, pa, AsReq, EncryptedData, EncryptionKey, KerberosTime, MethodData, Microseconds,
@@ -270,12 +270,6 @@ fn send_spake_challenge(
         },
     ];
     Ok(Some(SpakeStep::Challenge(encode(&method)?)))
-}
-
-/// Client-side SPAKE `w` matching the KDC: SHA-256 of the long-term key bytes and salt.
-#[must_use]
-pub fn spake_w_from_key(key: &ProtocolKey, salt: &[u8]) -> [u8; 32] {
-    spake_w(key.as_bytes(), salt)
 }
 
 /// PKINIT: ECDH reply key from PA-PK-AS-REQ.

@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use krb5_crypto::{spake_w, string_to_key, EncryptionType, ProtocolKey};
+use krb5_crypto::{string_to_key, EncryptionType, ProtocolKey};
 use krb5_protocol::{Keytab, KeytabEntry, ReplayCache};
 use krb5_types::pkinit::PkinitCa;
 use krb5_types::PrincipalName;
@@ -44,8 +44,6 @@ pub struct Principal {
     pub locked: bool,
     /// Password expiry unix seconds (0 = none).
     pub pw_expire: u32,
-    /// SPAKE2 `w` derived from the password (or key bytes for random-key principals).
-    pub spake_w: [u8; 32],
 }
 
 /// Realm-wide ticket policy.
@@ -195,10 +193,7 @@ impl PrincipalStore {
         admin_password: &[u8],
     ) -> Result<Self, Error> {
         let mut store = Self::new(realm);
-        store.insert_randkey(
-            &PrincipalName::krbtgt(realm),
-            &[EncryptionType::Aes256CtsHmacSha196],
-        )?;
+        store.insert_randkey(&PrincipalName::krbtgt(realm), &randkey_etypes())?;
         store.insert_password(
             &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [user]),
             user_password,
@@ -298,7 +293,7 @@ impl PrincipalStore {
         if self.map.contains_key(&id) {
             return Err(Error::AlreadyExists);
         }
-        self.insert_randkey(name, &[EncryptionType::Aes256CtsHmacSha196])
+        self.insert_randkey(name, &randkey_etypes())
     }
 
     /// Replace password-derived keys (kpasswd): bump kvno, keep prior keys
@@ -335,10 +330,8 @@ impl PrincipalStore {
                 kvno: next_kvno,
             });
         }
-        let w = spake_w(new_keys[0].key.as_bytes(), &salt);
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         p.keys.extend(new_keys);
-        p.spake_w = w;
         self.save_if_configured()
     }
 
@@ -405,7 +398,6 @@ impl PrincipalStore {
             return Err(Error::AlreadyExists);
         }
         let salt = name.default_salt(&self.realm);
-        let w = spake_w(key.as_bytes(), &salt);
         let p = Principal {
             name,
             realm: self.realm.clone(),
@@ -419,7 +411,6 @@ impl PrincipalStore {
             max_life: 0,
             locked: false,
             pw_expire: 0,
-            spake_w: w,
         };
         self.map.insert(id, p);
         self.save_if_configured()
@@ -507,7 +498,6 @@ impl PrincipalStore {
                 kvno: 1,
             });
         }
-        let w = spake_w(keys[0].key.as_bytes(), &salt);
         let p = Principal {
             name: name.clone(),
             realm: self.realm.clone(),
@@ -517,7 +507,6 @@ impl PrincipalStore {
             max_life: 0,
             locked: false,
             pw_expire: 0,
-            spake_w: w,
         };
         self.map.insert(p.id(), p);
         self.save_if_configured()
@@ -537,10 +526,6 @@ impl PrincipalStore {
             });
         }
         let salt = name.default_salt(&self.realm);
-        let w = keys.first().map_or_else(
-            || spake_w(&salt, &salt),
-            |k| spake_w(k.key.as_bytes(), &salt),
-        );
         let p = Principal {
             name: name.clone(),
             realm: self.realm.clone(),
@@ -550,7 +535,6 @@ impl PrincipalStore {
             max_life: 0,
             locked: false,
             pw_expire: 0,
-            spake_w: w,
         };
         self.map.insert(p.id(), p);
         self.save_if_configured()
@@ -591,6 +575,15 @@ pub fn random_key(etype: EncryptionType) -> Result<ProtocolKey, Error> {
     let mut buf = vec![0u8; etype.key_len()];
     getrandom::getrandom(&mut buf).map_err(|_| Error::Rng)?;
     ProtocolKey::from_bytes(etype, &buf).map_err(Error::from)
+}
+
+fn randkey_etypes() -> [EncryptionType; 4] {
+    [
+        EncryptionType::Aes256CtsHmacSha196,
+        EncryptionType::Aes128CtsHmacSha196,
+        EncryptionType::Aes256CtsHmacSha384192,
+        EncryptionType::Aes128CtsHmacSha256128,
+    ]
 }
 
 /// s2kparams (4-byte big-endian iteration count) for `etype`.

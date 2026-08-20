@@ -681,6 +681,46 @@ fn password_principal_has_rfc8009_keys() {
 }
 
 #[test]
+fn krbtgt_and_host_have_rfc8009_keys() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let tgt = store.krbtgt().expect("krbtgt");
+    assert!(tgt
+        .key_for(EncryptionType::Aes256CtsHmacSha384192)
+        .is_some());
+    let host = store.get_name(&documented_host()).expect("host");
+    assert!(host
+        .key_for(EncryptionType::Aes256CtsHmacSha384192)
+        .is_some());
+}
+
+#[test]
+fn same_realm_ticket_omits_transited_policy_checked() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 70);
+    let tgt = tgs_req(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]),
+        documented_host(),
+        TEST_REALM,
+        71,
+    )
+    .expect("tgs");
+    let out = krb5_kdc::issue_tgs(&store, &tgt).expect("issue");
+    let host = store
+        .get_name(&documented_host())
+        .unwrap()
+        .best_key()
+        .unwrap();
+    let part = decrypt_ticket_part(&host.key, &out.rep.0.ticket).expect("enc");
+    assert!(
+        !part.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED),
+        "same-realm ticket must not set TRANSITED-POLICY-CHECKED"
+    );
+}
+
+#[test]
 fn ktadd_exports_all_kvnos_after_kpasswd() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);

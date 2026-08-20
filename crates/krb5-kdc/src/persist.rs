@@ -37,14 +37,19 @@ impl From<Error> for PersistError {
 pub fn load_store(db_path: &Path, stash_path: &Path) -> Result<PrincipalStore, PersistError> {
     let master = load_stash(stash_path)?;
     let blob = fs::read(db_path)?;
-    if blob.len() < 4 || (&blob[..4] != b"KDB1" && &blob[..4] != b"KDB2") {
-        return Err(PersistError::Format("missing KDB1/KDB2 magic".into()));
+    if blob.len() < 4 {
+        return Err(PersistError::Format("missing KDB magic".into()));
     }
-    let v2 = &blob[..4] == b"KDB2";
+    let magic = &blob[..4];
+    let v2 = magic == b"KDB2";
+    let v3 = magic == b"KDB3";
+    if !v2 && !v3 && magic != b"KDB1" {
+        return Err(PersistError::Format("missing KDB1/KDB2/KDB3 magic".into()));
+    }
     let usage = KeyUsage::new(2).map_err(|e| PersistError::Crypto(e.to_string()))?;
     let plain =
         decrypt(&master, usage, &blob[4..]).map_err(|e| PersistError::Crypto(e.to_string()))?;
-    let mut store = parse_plain(&plain, v2)?;
+    let mut store = parse_plain(&plain, v2, v3)?;
     store.persist_paths = Some((db_path.to_path_buf(), stash_path.to_path_buf()));
     Ok(store)
 }
@@ -70,7 +75,7 @@ pub fn save_store(
     let usage = KeyUsage::new(2).map_err(|e| PersistError::Crypto(e.to_string()))?;
     let cipher =
         encrypt(&master, usage, &plain).map_err(|e| PersistError::Crypto(e.to_string()))?;
-    let mut out = b"KDB2".to_vec();
+    let mut out = b"KDB3".to_vec();
     out.extend_from_slice(&cipher);
     write_secret_file(db_path, &out)?;
     Ok(())
@@ -106,14 +111,13 @@ fn serialize_plain(store: &PrincipalStore) -> Vec<u8> {
             out.extend_from_slice(&k.kvno.to_be_bytes());
             put_bytes(&mut out, k.key.as_bytes());
         }
-        put_bytes(&mut out, &p.spake_w);
         out.push(u8::from(p.locked));
         out.extend_from_slice(&p.pw_expire.to_be_bytes());
     }
     out
 }
 
-fn parse_plain(plain: &[u8], v2: bool) -> Result<PrincipalStore, PersistError> {
+fn parse_plain(plain: &[u8], v2: bool, v3: bool) -> Result<PrincipalStore, PersistError> {
     let mut i = 0;
     let realm = take_str(plain, &mut i)?;
     let mut store = PrincipalStore::new(realm);
@@ -139,13 +143,11 @@ fn parse_plain(plain: &[u8], v2: bool) -> Result<PrincipalStore, PersistError> {
         let parts: Vec<&str> = name_s.split('/').collect();
         let name = PrincipalName::try_new(ntype, parts)
             .map_err(|e| PersistError::Format(e.to_string()))?;
-        let mut spake_w = [0u8; 32];
-        if i < plain.len() {
-            let sw = take_bytes(plain, &mut i)?;
-            let n = sw.len().min(32);
-            spake_w[..n].copy_from_slice(&sw[..n]);
+        if v2 && i < plain.len() {
+            // KDB2 stored a unused SPAKE `w`; skip the length-prefixed blob.
+            let _ = take_bytes(plain, &mut i)?;
         }
-        let (locked, pw_expire) = if v2 {
+        let (locked, pw_expire) = if v2 || v3 {
             (take_u8(plain, &mut i)? != 0, take_u32(plain, &mut i)?)
         } else {
             (false, 0)
@@ -159,7 +161,6 @@ fn parse_plain(plain: &[u8], v2: bool) -> Result<PrincipalStore, PersistError> {
             max_life,
             locked,
             pw_expire,
-            spake_w,
         };
         store_insert(&mut store, p);
         let _ = S2K_ITERS;

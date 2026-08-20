@@ -27,7 +27,6 @@ pub use listen::{
     ListenLimits, BIND_CANDIDATES, MAX_TCP_REQUEST, MAX_TCP_WORKERS,
 };
 pub use persist::{load_store, save_store, PersistError};
-pub use preauth::spake_w_from_key;
 pub use store::{random_key, s2k_params, KeyEntry, Policy, Principal, PrincipalStore, S2K_ITERS};
 
 use krb5_types::PrincipalName;

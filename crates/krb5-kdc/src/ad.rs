@@ -40,7 +40,7 @@ pub(crate) fn ticket_authz(
     }]))
 }
 
-/// Sign a PAC with service then KDC checksums (key usage 2 as a keyed checksum).
+/// Sign a PAC with service then KDC checksums (key usage 17).
 ///
 /// # Errors
 ///

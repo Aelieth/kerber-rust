@@ -244,7 +244,8 @@ fn issue_as_from(
         .get_name(&sname)
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "unknown server"))?;
     let skey = server
-        .best_key()
+        .key_for(etype)
+        .or_else(|| server.best_key())
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no server key"))?;
     let session = random_key(etype)?;
     let now = KerberosTime::now();
@@ -430,8 +431,13 @@ fn issue_tgs_from(
     let server = store
         .get_name(&sname)
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "unknown server"))?;
-    let skey = server
-        .best_key()
+    let want = body
+        .etype
+        .iter()
+        .find_map(|n| EncryptionType::from_iana_policy(*n, store.policy.allow_weak_crypto).ok());
+    let skey = want
+        .and_then(|e| server.key_for(e))
+        .or_else(|| server.best_key())
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no server key"))?;
     let mut ticket_cname = enc_tkt.cname.clone();
     let mut ticket_crealm = utf8_realm(&enc_tkt.crealm).to_owned();
@@ -454,9 +460,9 @@ fn issue_tgs_from(
         (skey.key.clone(), skey.kvno, skey.etype)
     };
     let mut transited = enc_tkt.transited.clone();
-    if (sname.is_krbtgt() && !sname.is_krbtgt_for(store.realm()))
-        || utf8_realm(&enc_tkt.crealm) != store.realm()
-    {
+    let cross_realm = (sname.is_krbtgt() && !sname.is_krbtgt_for(store.realm()))
+        || utf8_realm(&enc_tkt.crealm) != store.realm();
+    if cross_realm {
         transited = transited.with_realm(store.realm());
     }
     let session = random_key(skey.etype)?;
@@ -469,7 +475,9 @@ fn issue_tgs_from(
         }
     }
     let mut flags = TicketFlags::none();
-    flags = flags.with_bit(flag_bit::TRANSITED_POLICY_CHECKED, true);
+    if cross_realm {
+        flags = flags.with_bit(flag_bit::TRANSITED_POLICY_CHECKED, true);
+    }
     if enc_tkt.flags.pre_authent() {
         flags = flags.with_bit(flag_bit::PRE_AUTHENT, true);
     }
