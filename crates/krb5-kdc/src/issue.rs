@@ -8,7 +8,7 @@ use krb5_crypto::{
 };
 use krb5_protocol::{ReplayCache, ReplayKey};
 use krb5_types::{
-    ascii, err, flag_bit, ku, pa, AsRep, AsReq, AuthorizationData, EncAsRepPart, EncKdcRepPart,
+    err, flag_bit, ku, pa, AsRep, AsReq, AuthorizationData, EncAsRepPart, EncKdcRepPart,
     EncTgsRepPart, EncTicketPart, EncryptedData, EncryptionKey, EtypeInfo2, EtypeInfo2Entry,
     KerberosTime, KrbError, LastReqValue, MethodData, Microseconds, OctetString, PaData,
     PaEncTsEnc, PrincipalName, TgsRep, TgsReq, Ticket, TicketFlags, TransitedEncoding,
@@ -53,7 +53,11 @@ pub fn handle_request(store: &PrincipalStore, raw: &[u8]) -> Result<Vec<u8>, Err
     let id = krb5_log::new_correlation_id();
     let _g = krb5_log::enter_correlation(id);
     let started = Instant::now();
+    krb5_protocol::capture_pdu("kdc-req", raw);
     let result = handle_inner(store, raw);
+    if let Ok(bytes) = &result {
+        krb5_protocol::capture_pdu("kdc-rep", bytes);
+    }
     let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
     match &result {
         Ok(_) => tracing::info!(
@@ -247,7 +251,9 @@ pub fn issue_as(store: &PrincipalStore, req: &AsReq) -> Result<IssuedAs, Error> 
         flags.clone(),
         authz,
         TransitedEncoding::empty(),
+        renew_till_for(store, &now, &flags),
     )?;
+    let renew_till = renew_till_for(store, &now, &flags);
     let enc_part = enc_rep_part(
         &session,
         body.nonce,
@@ -256,7 +262,8 @@ pub fn issue_as(store: &PrincipalStore, req: &AsReq) -> Result<IssuedAs, Error> 
         store.realm(),
         &sname,
         flags,
-    );
+        renew_till,
+    )?;
     let mut reply_key = as_rep_key.clone();
     let mut outer_padata = extra_padata;
     if let Some(f) = fast {
@@ -289,7 +296,7 @@ pub fn issue_as(store: &PrincipalStore, req: &AsReq) -> Result<IssuedAs, Error> 
         pvno: krb5_types::KdcRep::PVNO,
         msg_type: krb5_types::KdcRep::MSG_AS_REP,
         padata,
-        crealm: ascii(store.realm()),
+        crealm: ks(store.realm())?,
         cname,
         ticket,
         enc_part: EncryptedData {
@@ -433,7 +440,9 @@ pub fn issue_tgs(store: &PrincipalStore, req: &TgsReq) -> Result<IssuedTgs, Erro
         flags.clone(),
         authz,
         transited,
+        renew_till_for(store, &now, &flags),
     )?;
+    let renew_till = renew_till_for(store, &now, &flags);
     let enc_part = enc_rep_part(
         &session,
         body.nonce,
@@ -442,19 +451,30 @@ pub fn issue_tgs(store: &PrincipalStore, req: &TgsReq) -> Result<IssuedTgs, Erro
         store.realm(),
         &sname,
         flags,
-    );
+        renew_till,
+    )?;
     let enc_der = encode(&EncTgsRepPart(enc_part))?;
-    let usage = KeyUsage::new(ku::TGS_REP_ENC_PART)?;
-    let cipher = encrypt(&tgt_session, usage, &enc_der)?;
+    let (enc_key, enc_usage) = if let Some(sub) = authenticator.subkey {
+        let st = EncryptionType::from_iana(sub.keytype)
+            .or_else(|_| EncryptionType::known(sub.keytype))?;
+        (
+            ProtocolKey::from_bytes(st, sub.keyvalue.as_ref())?,
+            ku::TGS_REP_ENC_PART_SUBKEY,
+        )
+    } else {
+        (tgt_session.clone(), ku::TGS_REP_ENC_PART)
+    };
+    let usage = KeyUsage::new(enc_usage)?;
+    let cipher = encrypt(&enc_key, usage, &enc_der)?;
     let rep = TgsRep(krb5_types::KdcRep {
         pvno: krb5_types::KdcRep::PVNO,
         msg_type: krb5_types::KdcRep::MSG_TGS_REP,
         padata: None,
-        crealm: ascii(&ticket_crealm),
+        crealm: ks(&ticket_crealm)?,
         cname: ticket_cname,
         ticket,
         enc_part: EncryptedData {
-            etype: tgt_session.etype().to_iana(),
+            etype: enc_key.etype().to_iana(),
             kvno: None,
             cipher: cipher.into(),
         },
@@ -553,17 +573,18 @@ fn mint_ticket(
     flags: TicketFlags,
     authorization_data: Option<AuthorizationData>,
     transited: TransitedEncoding,
+    renew_till: Option<KerberosTime>,
 ) -> Result<Ticket, Error> {
     let part = EncTicketPart {
         flags,
         key: encryption_key(session),
-        crealm: ascii(crealm),
+        crealm: ks(crealm)?,
         cname: cname.clone(),
         transited,
         authtime: authtime.clone(),
         starttime: Some(authtime.clone()),
         endtime: endtime.clone(),
-        renew_till: None,
+        renew_till,
         caddr: None,
         authorization_data,
     };
@@ -572,7 +593,7 @@ fn mint_ticket(
     let cipher = encrypt(service_key, usage, &der)?;
     Ok(Ticket {
         tkt_vno: Ticket::VNO,
-        realm: ascii(srealm),
+        realm: ks(srealm)?,
         sname: sname.clone(),
         enc_part: EncryptedData {
             etype: service_etype.to_iana(),
@@ -582,6 +603,7 @@ fn mint_ticket(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn enc_rep_part(
     session: &ProtocolKey,
     nonce: u32,
@@ -590,8 +612,9 @@ fn enc_rep_part(
     realm: &str,
     sname: &PrincipalName,
     flags: TicketFlags,
-) -> EncKdcRepPart {
-    EncKdcRepPart {
+    renew_till: Option<KerberosTime>,
+) -> Result<EncKdcRepPart, Error> {
+    Ok(EncKdcRepPart {
         key: encryption_key(session),
         last_req: vec![LastReqValue {
             lr_type: 0,
@@ -603,12 +626,12 @@ fn enc_rep_part(
         authtime: now.clone(),
         starttime: Some(now.clone()),
         endtime: end.clone(),
-        renew_till: None,
-        srealm: ascii(realm),
+        renew_till,
+        srealm: ks(realm)?,
         sname: sname.clone(),
         caddr: None,
         encrypted_pa_data: None,
-    }
+    })
 }
 
 fn encryption_key(key: &ProtocolKey) -> EncryptionKey {
@@ -716,6 +739,21 @@ fn encode_krb_error(
     text: Option<&str>,
     e_data: Option<Vec<u8>>,
 ) -> Vec<u8> {
+    let realm = match krb5_types::try_ascii(store.realm()) {
+        Ok(r) => r,
+        Err(_) => match krb5_types::try_ascii("INVALID") {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        },
+    };
+    let sname = match PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", store.realm()])
+    {
+        Ok(n) => n,
+        Err(_) => match PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", "INVALID"]) {
+            Ok(n) => n,
+            Err(_) => return Vec::new(),
+        },
+    };
     let pdu = KrbError {
         pvno: KrbError::PVNO,
         msg_type: KrbError::MSG_TYPE,
@@ -726,12 +764,28 @@ fn encode_krb_error(
         error_code: code,
         crealm: None,
         cname: None,
-        realm: ascii(store.realm()),
-        sname: PrincipalName::krbtgt(store.realm()),
-        e_text: text.map(ascii),
+        realm,
+        sname,
+        e_text: text.and_then(|t| krb5_types::try_ascii(t).ok()),
         e_data: e_data.map(Into::into),
     };
     encode(&pdu).unwrap_or_default()
+}
+
+fn ks(s: &str) -> Result<krb5_types::KerberosString, Error> {
+    krb5_types::try_ascii(s).map_err(|_| proto(err::GENERIC, "non-ascii realm"))
+}
+
+fn renew_till_for(
+    store: &PrincipalStore,
+    now: &KerberosTime,
+    flags: &TicketFlags,
+) -> Option<KerberosTime> {
+    if !flags.renewable() {
+        return None;
+    }
+    let life = i64::try_from(store.policy.max_renewable_life).unwrap_or(i64::MAX);
+    now.add_seconds(life).ok()
 }
 
 fn proto(code: i32, text: &str) -> Error {

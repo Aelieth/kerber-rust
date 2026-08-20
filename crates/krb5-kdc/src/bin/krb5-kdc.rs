@@ -4,11 +4,15 @@
 //!
 //! `--test-realm` bootstraps the documented KERBER.TEST principals. Without
 //! it the daemon loads `KRB5_KDC_DB` + `KRB5_KDC_STASH` (see kdc.conf).
+//! Passwords come from `KRB5_TEST_USER_PASSWORD` / `KRB5_TEST_ADMIN_PASSWORD`.
+
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::sync::Arc;
 
 use krb5_kdc::{
-    bind_preferred, bootstrap_documented, drop_privileges, load_store, serve, BIND_CANDIDATES,
+    bind_preferred, documented_admin_id, documented_host, drop_privileges, load_store, serve, Acl,
+    PrincipalStore, BIND_CANDIDATES, TEST_ADMIN, TEST_REALM, TEST_USER,
 };
 
 fn main() {
@@ -37,10 +41,8 @@ fn main() {
         i += 1;
     }
 
-    let store = if test_realm {
-        bootstrap_documented()
-            .expect("bootstrap documented realm")
-            .0
+    let mut store = if test_realm {
+        bootstrap_test_realm()
     } else if let (Ok(db), Ok(stash)) = (
         std::env::var("KRB5_KDC_DB"),
         std::env::var("KRB5_KDC_STASH"),
@@ -53,6 +55,14 @@ fn main() {
         eprintln!("krb5-kdc: pass --test-realm or set KRB5_KDC_DB and KRB5_KDC_STASH");
         std::process::exit(2);
     };
+    let enable_pkinit =
+        export_pkinit.is_some() || std::env::var("KRB5_ENABLE_PKINIT").ok().as_deref() == Some("1");
+    if enable_pkinit {
+        if let Err(e) = store.enable_pkinit_ca() {
+            eprintln!("krb5-kdc: PKINIT CA: {e}");
+            std::process::exit(1);
+        }
+    }
     if let Some(dir) = export_pkinit.as_ref() {
         let _ = std::fs::create_dir_all(dir);
         if let Some(pem) = store.pkinit_anchor_pem() {
@@ -91,5 +101,38 @@ fn main() {
         }
     }
     println!("listening {addr}");
-    serve(store, udp, tcp).expect("serve");
+    if let Err(e) = serve(store, udp, tcp) {
+        eprintln!("krb5-kdc: serve: {e}");
+        std::process::exit(1);
+    }
+}
+
+fn bootstrap_test_realm() -> PrincipalStore {
+    let user_pw = std::env::var("KRB5_TEST_USER_PASSWORD").unwrap_or_else(|_| {
+        eprintln!(
+            "krb5-kdc: --test-realm requires KRB5_TEST_USER_PASSWORD (do not compile passwords in)"
+        );
+        std::process::exit(2);
+    });
+    let admin_pw = std::env::var("KRB5_TEST_ADMIN_PASSWORD").unwrap_or_else(|_| {
+        eprintln!("krb5-kdc: --test-realm requires KRB5_TEST_ADMIN_PASSWORD");
+        std::process::exit(2);
+    });
+    let mut store = PrincipalStore::bootstrap(
+        TEST_REALM,
+        TEST_USER,
+        user_pw.as_bytes(),
+        TEST_ADMIN,
+        admin_pw.as_bytes(),
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("krb5-kdc: bootstrap: {e}");
+        std::process::exit(1);
+    });
+    let acl = Acl::allow_admin(documented_admin_id());
+    if let Err(e) = store.create_host(&acl, &documented_admin_id(), &documented_host()) {
+        eprintln!("krb5-kdc: host principal: {e}");
+        std::process::exit(1);
+    }
+    store
 }

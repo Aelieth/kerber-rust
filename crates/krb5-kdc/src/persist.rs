@@ -37,13 +37,16 @@ impl From<Error> for PersistError {
 pub fn load_store(db_path: &Path, stash_path: &Path) -> Result<PrincipalStore, PersistError> {
     let master = load_stash(stash_path)?;
     let blob = fs::read(db_path)?;
-    if blob.len() < 4 || &blob[..4] != b"KDB1" {
-        return Err(PersistError::Format("missing KDB1 magic".into()));
+    if blob.len() < 4 || (&blob[..4] != b"KDB1" && &blob[..4] != b"KDB2") {
+        return Err(PersistError::Format("missing KDB1/KDB2 magic".into()));
     }
+    let v2 = &blob[..4] == b"KDB2";
     let usage = KeyUsage::new(2).map_err(|e| PersistError::Crypto(e.to_string()))?;
     let plain =
         decrypt(&master, usage, &blob[4..]).map_err(|e| PersistError::Crypto(e.to_string()))?;
-    parse_plain(&plain, &master)
+    let mut store = parse_plain(&plain, v2)?;
+    store.persist_paths = Some((db_path.to_path_buf(), stash_path.to_path_buf()));
+    Ok(store)
 }
 
 /// Save `store` to `db_path`, creating `stash_path` if needed.
@@ -67,7 +70,7 @@ pub fn save_store(
     let usage = KeyUsage::new(2).map_err(|e| PersistError::Crypto(e.to_string()))?;
     let cipher =
         encrypt(&master, usage, &plain).map_err(|e| PersistError::Crypto(e.to_string()))?;
-    let mut out = b"KDB1".to_vec();
+    let mut out = b"KDB2".to_vec();
     out.extend_from_slice(&cipher);
     write_secret_file(db_path, &out)?;
     Ok(())
@@ -104,11 +107,13 @@ fn serialize_plain(store: &PrincipalStore) -> Vec<u8> {
             put_bytes(&mut out, k.key.as_bytes());
         }
         put_bytes(&mut out, &p.spake_w);
+        out.push(u8::from(p.locked));
+        out.extend_from_slice(&p.pw_expire.to_be_bytes());
     }
     out
 }
 
-fn parse_plain(plain: &[u8], _master: &ProtocolKey) -> Result<PrincipalStore, PersistError> {
+fn parse_plain(plain: &[u8], v2: bool) -> Result<PrincipalStore, PersistError> {
     let mut i = 0;
     let realm = take_str(plain, &mut i)?;
     let mut store = PrincipalStore::new(realm);
@@ -140,6 +145,11 @@ fn parse_plain(plain: &[u8], _master: &ProtocolKey) -> Result<PrincipalStore, Pe
             let n = sw.len().min(32);
             spake_w[..n].copy_from_slice(&sw[..n]);
         }
+        let (locked, pw_expire) = if v2 {
+            (take_u8(plain, &mut i)? != 0, take_u32(plain, &mut i)?)
+        } else {
+            (false, 0)
+        };
         let p = Principal {
             name,
             realm: store.realm().to_owned(),
@@ -147,8 +157,8 @@ fn parse_plain(plain: &[u8], _master: &ProtocolKey) -> Result<PrincipalStore, Pe
             salt,
             requires_preauth,
             max_life,
-            locked: false,
-            pw_expire: 0,
+            locked,
+            pw_expire,
             spake_w,
         };
         store_insert(&mut store, p);

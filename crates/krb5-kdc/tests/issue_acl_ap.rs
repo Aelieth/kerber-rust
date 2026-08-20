@@ -225,6 +225,16 @@ fn handle_request_empty_is_error() {
 }
 
 #[test]
+fn non_ascii_realm_is_krb_error_not_panic() {
+    let store = PrincipalStore::new("CAFÉ.TEST");
+    let r = std::panic::catch_unwind(|| krb5_kdc::handle_request(&store, &[]));
+    assert!(r.is_ok(), "untrusted realm must not panic ascii()");
+    let reply = r.unwrap().expect("always a byte reply");
+    let e: krb5_types::KrbError = decode(&reply).expect("KRB-ERROR");
+    assert_eq!(e.error_code, err::GENERIC);
+}
+
+#[test]
 fn as_rep_flags_are_initial_and_preauth_not_renewable() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -247,6 +257,7 @@ fn as_rep_flags_are_initial_and_preauth_not_renewable() {
     assert!(enc.flags.initial());
     assert!(enc.flags.pre_authent());
     assert!(!enc.flags.renewable());
+    assert!(enc.renew_till.is_none());
 }
 
 #[test]

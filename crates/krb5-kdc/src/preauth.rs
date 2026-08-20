@@ -2,8 +2,9 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    checksum, decrypt, encrypt, key_from_shared, krb_fx_cf2, p256_generate, p256_shared,
-    spake_finish, spake_public, spake_w, verify_checksum, EncryptionType, KeyUsage, ProtocolKey,
+    checksum, decrypt, encrypt, key_from_shared, krb_fx_cf2, octetstring2key, p256_generate,
+    p256_shared, spake_finish, spake_public, spake_w, verify_checksum, EncryptionType, KeyUsage,
+    ProtocolKey,
 };
 use krb5_types::{
     err, ku, pa, AsReq, EncryptedData, EncryptionKey, KerberosTime, MethodData, Microseconds,
@@ -23,8 +24,10 @@ pub(crate) fn unwrap_fast(store: &PrincipalStore, req: &AsReq) -> Result<Option<
     let Some(raw) = find_pa(req.0.padata.as_deref(), pa::FX_FAST) else {
         return Ok(None);
     };
-    let armored = if let Ok(w) = decode::<krb5_types::fast::PaFxFast>(raw) {
-        w.armored_data
+    let armored = if let Ok(krb5_types::fast::PaFxFast::ArmoredData(w)) =
+        decode::<krb5_types::fast::PaFxFast>(raw)
+    {
+        w
     } else {
         decode::<krb5_types::fast::KrbFastArmoredReq>(raw)?
     };
@@ -134,10 +137,7 @@ pub(crate) fn wrap_fast_rep(
     };
     Ok(PaData {
         padata_type: pa::FX_FAST,
-        padata_value: encode(&krb5_types::fast::PaFxFastRep {
-            armored_data: armored,
-        })?
-        .into(),
+        padata_value: encode(&krb5_types::fast::PaFxFastRep::ArmoredData(armored))?.into(),
     })
 }
 
@@ -229,20 +229,22 @@ pub(crate) fn process_pkinit(
         return Ok(None);
     };
     let req: krb5_types::pkinit::PaPkAsReq = decode(raw)?;
-    let inner = krb5_types::pkinit::cms_verify(req.signed_auth_pack.as_ref())
-        .unwrap_or_else(|_| krb5_types::pkinit::cms_unwrap(req.signed_auth_pack.as_ref()));
+    let ca = store
+        .pkinit_ca
+        .as_ref()
+        .ok_or_else(|| proto(err::PREAUTH_FAILED, "PKINIT not configured"))?;
+    let inner = krb5_types::pkinit::cms_verify(req.signed_auth_pack.as_ref(), &ca.ca_cert)
+        .map_err(|_| proto(err::PREAUTH_FAILED, "PKINIT CMS"))?;
     let pack: krb5_types::pkinit::AuthPack = decode(&inner)?;
     let Some(client_pub) = pack.client_public_value else {
         return Err(proto(err::PREAUTH_FAILED, "PKINIT missing public"));
     };
     let kp = p256_generate()?;
     let shared = p256_shared(&kp.secret, client_pub.as_ref())?;
-    let reply_key = key_from_shared(etype, &shared)?;
-    let wrapped_pub = store
-        .pkinit_ca
-        .as_ref()
-        .and_then(|ca| ca.sign_cms(&kp.public, "krbtgt"))
-        .unwrap_or_else(|| krb5_types::pkinit::cms_wrap(&kp.public));
+    let reply_key = octetstring2key(etype, &shared)?;
+    let wrapped_pub = ca
+        .sign_cms(&kp.public, "krbtgt")
+        .ok_or_else(|| proto(err::PREAUTH_FAILED, "PKINIT CMS wrap"))?;
     let rep = krb5_types::pkinit::PaPkAsRep {
         dh_info: Some(krb5_types::pkinit::DhRepInfo {
             dh_signed_data: wrapped_pub.into(),
@@ -287,7 +289,8 @@ pub(crate) fn fast_finished(
     Ok(krb5_types::fast::KrbFastFinished {
         timestamp: KerberosTime::now(),
         usec: Microseconds::ZERO,
-        crealm: krb5_types::ascii(crealm),
+        crealm: krb5_types::try_ascii(crealm)
+            .map_err(|_| proto(err::GENERIC, "non-ascii realm"))?,
         cname: cname.clone(),
         ticket_checksum: krb5_types::Checksum {
             cksumtype: armor_key.etype().checksum_type(),

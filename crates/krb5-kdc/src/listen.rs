@@ -262,15 +262,25 @@ fn tcp_loop(
                 let max_body = limits.max_tcp_request;
                 let timeout = limits.io_timeout;
                 thread::spawn(move || {
-                    if let Err(e) = handle_tcp(&store, stream, max_body, timeout) {
-                        tracing::error!(
+                    let _guard = WorkerGuard(workers_g);
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        handle_tcp(&store, stream, max_body, timeout)
+                    }));
+                    match result {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => tracing::error!(
                             event = krb5_log::events::KDC_ISSUE,
                             component = "krb5-kdc",
                             outcome = "error",
                             error = %e,
-                        );
+                        ),
+                        Err(_) => tracing::error!(
+                            event = krb5_log::events::KDC_TRANSPORT,
+                            component = "krb5-kdc",
+                            outcome = "error",
+                            error = "tcp worker panic isolated",
+                        ),
                     }
-                    workers_g.fetch_sub(1, Ordering::SeqCst);
                 });
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
@@ -309,14 +319,32 @@ fn handle_tcp(
     }
     let mut req = vec![0u8; n];
     stream.read_exact(&mut req)?;
-    let reply = handle_request(store, &req)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+    let reply = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        handle_request(store, &req)
+    })) {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, e.to_string()));
+        }
+        Err(_) => {
+            return Err(io::Error::other("request panic isolated"));
+        }
+    };
     let len = u32::try_from(reply.len())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "reply too large"))?;
     stream.write_all(&len.to_be_bytes())?;
     stream.write_all(&reply)?;
     stream.flush()?;
     Ok(())
+}
+
+/// Decrements the TCP worker counter on drop, including unwind.
+struct WorkerGuard(Arc<AtomicUsize>);
+
+impl Drop for WorkerGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 #[cfg(test)]
@@ -384,5 +412,17 @@ mod tests {
         assert_eq!(e.error_code, err::PREAUTH_REQUIRED);
         flag.store(true, Ordering::SeqCst);
         h.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn tcp_worker_guard_releases_slot_on_panic() {
+        let n = Arc::new(AtomicUsize::new(0));
+        n.fetch_add(1, Ordering::SeqCst);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = WorkerGuard(Arc::clone(&n));
+            panic!("isolated");
+        }));
+        assert!(r.is_err());
+        assert_eq!(n.load(Ordering::SeqCst), 0);
     }
 }

@@ -126,6 +126,8 @@ pub struct PrincipalStore {
     pub pa_replay: ReplayCache,
     /// PKINIT test CA (`pkinit_anchors` FILE).
     pub pkinit_ca: Option<PkinitCa>,
+    /// Optional `(db, stash)` paths; mutations write through when set.
+    pub persist_paths: Option<(std::path::PathBuf, std::path::PathBuf)>,
 }
 
 impl PrincipalStore {
@@ -138,8 +140,31 @@ impl PrincipalStore {
             policy: Policy::default(),
             tgs_replay: ReplayCache::with_limits(50_000, Duration::from_secs(300)),
             pa_replay: ReplayCache::with_limits(50_000, Duration::from_secs(300)),
-            pkinit_ca: PkinitCa::generate(),
+            pkinit_ca: None,
+            persist_paths: None,
         }
+    }
+
+    fn save_if_configured(&self) -> Result<(), Error> {
+        let Some((db, stash)) = &self.persist_paths else {
+            return Ok(());
+        };
+        crate::persist::save_store(self, db, stash).map_err(|e| Error::Crypto(e.to_string()))
+    }
+
+    /// Provision a PKINIT test CA. Off by default so a KDC without an
+    /// operator-supplied trust anchor does not mint untrusted CMS.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Crypto`] when P-256 key generation fails.
+    pub fn enable_pkinit_ca(&mut self) -> Result<&PkinitCa, Error> {
+        if self.pkinit_ca.is_none() {
+            self.pkinit_ca = PkinitCa::generate();
+        }
+        self.pkinit_ca
+            .as_ref()
+            .ok_or_else(|| Error::Crypto("pkinit CA generate failed".into()))
     }
 
     /// Realm name.
@@ -273,6 +298,8 @@ impl PrincipalStore {
         for etype in [
             EncryptionType::Aes256CtsHmacSha196,
             EncryptionType::Aes128CtsHmacSha196,
+            EncryptionType::Aes256CtsHmacSha384192,
+            EncryptionType::Aes128CtsHmacSha256128,
         ] {
             let key = string_to_key(etype, password, &salt, Some(&params))?;
             new_keys.push(KeyEntry {
@@ -281,11 +308,11 @@ impl PrincipalStore {
                 kvno: next_kvno,
             });
         }
-        let w = spake_w(password, &salt);
+        let w = spake_w(new_keys[0].key.as_bytes(), &salt);
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         p.keys.extend(new_keys);
         p.spake_w = w;
-        Ok(())
+        self.save_if_configured()
     }
 
     /// ACL-gated inter-realm `krbtgt/FOREIGN` (shared key with the foreign KDC).
@@ -310,7 +337,7 @@ impl PrincipalStore {
         if let Some(p) = self.map.get_mut(&id) {
             p.requires_preauth = false;
         }
-        Ok(())
+        self.save_if_configured()
     }
 
     /// ACL-gated password change (admin `c` / `*`).
@@ -338,7 +365,7 @@ impl PrincipalStore {
         acl.check(actor, AdminOp::Delete)?;
         let id = format!("{}@{}", name.components_joined(), self.realm);
         self.map.remove(&id).ok_or(Error::NotFound)?;
-        Ok(())
+        self.save_if_configured()
     }
 
     /// ACL-gated keytab export using the existing v2 writer.
@@ -358,11 +385,13 @@ impl PrincipalStore {
             return Err(Error::NotFound);
         }
         let ts = krb5_types::KerberosTime::now().unix_seconds();
+        let realm =
+            krb5_types::try_ascii(&p.realm).map_err(|_| Error::Crypto("non-ascii realm".into()))?;
         let entries = p
             .keys
             .iter()
             .map(|key| KeytabEntry {
-                realm: krb5_types::ascii(&p.realm),
+                realm: realm.clone(),
                 name: p.name.clone(),
                 timestamp: ts,
                 kvno: key.kvno,
@@ -383,6 +412,8 @@ impl PrincipalStore {
         for etype in [
             EncryptionType::Aes256CtsHmacSha196,
             EncryptionType::Aes128CtsHmacSha196,
+            EncryptionType::Aes256CtsHmacSha384192,
+            EncryptionType::Aes128CtsHmacSha256128,
         ] {
             let key = string_to_key(etype, password, &salt, Some(&params))?;
             keys.push(KeyEntry {
@@ -391,7 +422,7 @@ impl PrincipalStore {
                 kvno: 1,
             });
         }
-        let w = spake_w(password, &salt);
+        let w = spake_w(keys[0].key.as_bytes(), &salt);
         let p = Principal {
             name: name.clone(),
             realm: self.realm.clone(),
@@ -404,7 +435,7 @@ impl PrincipalStore {
             spake_w: w,
         };
         self.map.insert(p.id(), p);
-        Ok(())
+        self.save_if_configured()
     }
 
     fn insert_randkey(
@@ -437,7 +468,7 @@ impl PrincipalStore {
             spake_w: w,
         };
         self.map.insert(p.id(), p);
-        Ok(())
+        self.save_if_configured()
     }
 
     /// Key of `etype` at `kvno` for principal `name`.

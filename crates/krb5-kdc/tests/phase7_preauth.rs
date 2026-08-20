@@ -192,7 +192,7 @@ fn spake_challenge_then_as_rep() {
         .expect("cookie");
     let msg: krb5_types::spake::PaSpake = decode(spa.padata_value.as_ref()).expect("PaSpake");
     let chal = msg.challenge.expect("challenge");
-    let w = spake_w(TEST_USER_PASSWORD, &cname.default_salt(TEST_REALM));
+    let w = spake_w(key.as_bytes(), &cname.default_salt(TEST_REALM));
     let (resp, spake_key) = pa_spake_response(&w, chal.pubkey.as_ref(), key.etype()).expect("resp");
     let req2 = as_req(
         cname,
@@ -216,19 +216,72 @@ fn spake_challenge_then_as_rep() {
 
 #[test]
 fn pkinit_ecdh_reply_key() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    store.enable_pkinit_ca().expect("PKINIT CA");
+    let ca = store.pkinit_ca.as_ref().expect("CA").clone();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let kp = p256_generate().expect("client ECDH");
-    let pa = pa_pk_as_req(&kp.public).expect("PA-PK-AS-REQ");
+    let pa = pa_pk_as_req(&kp.public, &ca).expect("PA-PK-AS-REQ");
     let req = as_req(cname, TEST_REALM, 401, Some(vec![pa]));
     let issued = krb5_kdc::issue_as(&store, &req).expect("PKINIT AS");
     let et = EncryptionType::Aes256CtsHmacSha196;
-    let reply = pkinit_reply_key(&kp.secret, &issued.rep.0.padata, et).expect("ECDH key");
+    let reply =
+        pkinit_reply_key(&kp.secret, &issued.rep.0.padata, et, &ca.ca_cert).expect("ECDH key");
     assert_eq!(reply.as_bytes(), issued.as_rep_key.as_bytes());
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
     let plain = decrypt(&reply, usage, issued.rep.0.enc_part.cipher.as_ref()).expect("enc");
     let enc = decode_enc_part(&plain);
     assert_eq!(enc.nonce, 401);
+}
+
+#[test]
+fn pkinit_forged_cms_is_rejected() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    store.enable_pkinit_ca().expect("PKINIT CA");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let kp = p256_generate().expect("client ECDH");
+    let pack = krb5_types::pkinit::AuthPack {
+        pk_authenticator: krb5_types::pkinit::PkAuthenticator {
+            cusec: krb5_types::Microseconds::ZERO,
+            ctime: krb5_types::KerberosTime::now(),
+            nonce: 1,
+            pa_checksum: None,
+        },
+        client_public_value: Some(kp.public.clone().into()),
+        supported_cms_types: None,
+    };
+    let inner = encode(&pack).expect("authpack");
+    let req_body = krb5_types::pkinit::PaPkAsReq {
+        signed_auth_pack: inner.into(),
+        trusted_certifiers: None,
+        kdc_pk_id: None,
+    };
+    let pa = krb5_types::PaData {
+        padata_type: pa::PK_AS_REQ,
+        padata_value: encode(&req_body).expect("pa").into(),
+    };
+    let req = as_req(cname, TEST_REALM, 402, Some(vec![pa]));
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("forged CMS");
+    match err {
+        Error::Protocol { code, .. } => assert_eq!(code, err::PREAUTH_FAILED),
+        other => panic!("expected PREAUTH_FAILED, got {other}"),
+    }
+}
+
+#[test]
+fn pkinit_without_provisioned_ca_is_rejected() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    assert!(store.pkinit_ca.is_none());
+    let ca = krb5_types::pkinit::PkinitCa::generate().expect("unrelated CA");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let kp = p256_generate().expect("client ECDH");
+    let pa = pa_pk_as_req(&kp.public, &ca).expect("PA-PK-AS-REQ");
+    let req = as_req(cname, TEST_REALM, 403, Some(vec![pa]));
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("PKINIT off");
+    match err {
+        Error::Protocol { code, .. } => assert_eq!(code, err::PREAUTH_FAILED),
+        other => panic!("expected PREAUTH_FAILED, got {other}"),
+    }
 }
 
 #[test]

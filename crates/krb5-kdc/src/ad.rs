@@ -76,7 +76,7 @@ pub fn sign_pac(
             },
         ],
     };
-    let usage = KeyUsage::new(ku::TICKET)?;
+    let usage = KeyUsage::new(ku::KERB_NON_KERB_CKSUM_SALT)?;
     let zeroed = pac.bytes_for_checksum();
     let server_mac = checksum(server, usage, &zeroed)?;
     let kdc_mac = checksum(kdc, usage, &server_mac)?;
@@ -99,7 +99,7 @@ pub fn sign_pac(
 pub fn verify_pac(pac_bytes: &[u8], server: &ProtocolKey, kdc: &ProtocolKey) -> Result<(), Error> {
     let pac = krb5_types::pac::Pac::parse(pac_bytes)
         .map_err(|e| proto(err::BAD_INTEGRITY, &format!("PAC parse: {e}")))?;
-    let usage = KeyUsage::new(ku::TICKET)?;
+    let usage = KeyUsage::new(ku::KERB_NON_KERB_CKSUM_SALT)?;
     let zeroed = pac.bytes_for_checksum();
     let server_mac = checksum(server, usage, &zeroed)?;
     krb5_types::pac::verify_server_checksum(&pac, &server_mac)
