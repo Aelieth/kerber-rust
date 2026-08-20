@@ -5,11 +5,13 @@
 
 #![forbid(unsafe_code)]
 
+mod ap_req;
 mod as_ex;
 mod error;
 mod tgs;
 mod transport;
 
+pub use ap_req::{build_ap_req, verify_ap_req, ApVerifyOk, ReplayCache};
 pub use as_ex::{as_exchange, AsOutcome, AsRequest};
 pub use error::Error;
 pub use tgs::{tgs_exchange, TgsOutcome};
