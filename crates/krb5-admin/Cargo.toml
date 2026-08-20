@@ -1,0 +1,23 @@
+[package]
+name = "krb5-admin"
+description = "kadmind, kadmin.local, kdb5_util, kpasswd, and kprop equivalents"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+krb5-asn1.workspace = true
+krb5-config.workspace = true
+krb5-crypto.workspace = true
+krb5-kdc.workspace = true
+krb5-log.workspace = true
+krb5-protocol.workspace = true
+krb5-types.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true
