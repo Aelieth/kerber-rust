@@ -14,6 +14,7 @@ mod builders;
 mod ccache;
 mod error;
 mod keytab;
+mod preauth;
 mod replay;
 mod safe_priv;
 mod secret_file;
@@ -26,10 +27,14 @@ pub use ap_req::{
     DEFAULT_SKEW,
 };
 pub use as_ex::{as_exchange, AsOutcome, AsRequest};
-pub use builders::{as_req, pa_enc_timestamp, tgs_req};
+pub use builders::{as_req, as_req_sname, pa_enc_timestamp, tgs_req, tgs_req_ex};
 pub use ccache::{parse_principal, realm, tgt_cred, CcacheCred, FileCcache};
 pub use error::Error;
 pub use keytab::{Keytab, KeytabEntry};
+pub use preauth::{
+    apply_strengthen, armor_key, attach_fast, build_fast_armor, pa_for_user, pa_pk_as_req,
+    pa_spake_response, pa_spake_support, pkinit_reply_key, unwrap_fast_rep,
+};
 pub use replay::{ReplayCache, ReplayKey};
 pub use safe_priv::{
     build_krb_cred, build_krb_priv, build_krb_safe, unwrap_krb_cred, unwrap_krb_priv,

@@ -101,6 +101,38 @@ pub fn tgs_req(
     realm: &str,
     nonce: u32,
 ) -> Result<TgsReq, Error> {
+    tgs_req_ex(
+        ticket,
+        session,
+        crealm,
+        cname,
+        sname,
+        realm,
+        nonce,
+        KdcOptions::forwardable(),
+        None,
+        Vec::new(),
+    )
+}
+
+/// TGS-REQ with explicit KDCOptions, additional-tickets, and extra padata.
+///
+/// # Errors
+///
+/// Returns crypto or DER failures.
+#[allow(clippy::too_many_arguments)]
+pub fn tgs_req_ex(
+    ticket: Ticket,
+    session: &ProtocolKey,
+    crealm: &str,
+    cname: &PrincipalName,
+    sname: PrincipalName,
+    realm: &str,
+    nonce: u32,
+    kdc_options: KdcOptions,
+    additional_tickets: Option<Vec<Ticket>>,
+    extra_padata: Vec<PaData>,
+) -> Result<TgsReq, Error> {
     let etypes: Vec<i32> = EncryptionType::preferred()
         .iter()
         .map(|e| e.to_iana())
@@ -109,7 +141,7 @@ pub fn tgs_req(
         .add_hours(10)
         .unwrap_or_else(|_| KerberosTime::now());
     let body = KdcReqBody {
-        kdc_options: KdcOptions::forwardable(),
+        kdc_options,
         cname: None,
         realm: ascii(realm),
         sname: Some(sname),
@@ -120,7 +152,7 @@ pub fn tgs_req(
         etype: etypes,
         addresses: None,
         enc_authorization_data: None,
-        additional_tickets: None,
+        additional_tickets,
     };
     let body_der = encode(&body)?;
     let cksum_usage = KeyUsage::new(ku::TGS_REQ_AUTH_CKSUM)?;
@@ -154,13 +186,15 @@ pub fn tgs_req(
             cipher: auth_cipher.into(),
         },
     };
+    let mut padata = vec![PaData {
+        padata_type: pa::TGS_REQ,
+        padata_value: encode(&ap)?.into(),
+    }];
+    padata.extend(extra_padata);
     Ok(TgsReq(KdcReq {
         pvno: KdcReq::PVNO,
         msg_type: KdcReq::MSG_TGS_REQ,
-        padata: Some(vec![PaData {
-            padata_type: pa::TGS_REQ,
-            padata_value: encode(&ap)?.into(),
-        }]),
+        padata: Some(padata),
         req_body: body,
     }))
 }
