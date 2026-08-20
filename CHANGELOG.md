@@ -58,9 +58,11 @@ this project uses semantic versioning once a crate is published.
 - `clippy::pedantic` is a workspace deny; noisy lints (rasn bindings,
   rustdoc RFC vocabulary, long issue/TGS functions) stay allowed.
 - PRF+ prepends the RFC 6113 counter; RFC 8009 PRF emits the full
-  SHA-2 output; Camellia uses the `camellia`+`cmac` crates; RC4 uses
-  the RFC 4757 usage map; PAC checksums use usage 17; SPAKE P-256
-  group id is 2.
+  SHA-2 output; Camellia uses the `camellia`+`cmac` crates and Camellia
+  ECB for PRF (not AES); RC4 uses the RFC 4757 usage map; PAC checksums
+  use usage 17; SPAKE P-256 group id is 2.
+- KRB-SAFE/PRIV/CRED unwrap consults `ReplayCache` and a 300s timestamp
+  window; SAFE/PRIV builders increment `seq_number`.
 - Docs: MIT `kinit` PKINIT, SPAKE (`pa_type` 151), FAST TGS `kvno`, and
   two-realm `kvno` are gated; PAC/Camellia remain unit-gated; kadmind
   RPC is not implemented. `KRB5_CONFIG` / `KRB5_KDC_PROFILE` /
