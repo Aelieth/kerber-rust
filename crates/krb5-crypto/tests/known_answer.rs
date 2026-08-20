@@ -1,8 +1,9 @@
 //! Published known-answer tests. These call the public RFC 3961 API only.
 
 use krb5_crypto::{
-    checksum, decrypt, derive_keys, encrypt, encrypt_with_confounder, string_to_key,
-    EncryptionType, Error, KeyUsage, ProtocolKey,
+    checksum, decrypt, derive_keys, encrypt, encrypt_with_confounder, octetstring2key, prf,
+    prf_plus, spake_decode_point, spake_m_bytes, spake_n_bytes, spake_public_wbytes,
+    spake_thash_update, string_to_key, EncryptionType, Error, KeyUsage, ProtocolKey,
 };
 
 fn hex(s: &str) -> Vec<u8> {
@@ -328,4 +329,132 @@ fn decrypt_bad_mac_is_error() {
     let last = ct.len() - 1;
     ct[last] ^= 0x01;
     assert_eq!(decrypt(&key, usage, &ct).unwrap_err(), Error::Integrity);
+}
+
+/// RFC 3961 appendix A.4 / MIT `t_str2key.c` 3DES string-to-key output.
+#[test]
+fn rfc3961_des3_string_to_key_output() {
+    let k = string_to_key(
+        EncryptionType::Des3CbcSha1,
+        b"password",
+        b"ATHENA.MIT.EDUraeburn",
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        k.as_bytes(),
+        hex("850bb51358548cd05e86768c313e3bfef7511937dcf72c3e")
+    );
+}
+
+/// RFC 6803 §10 Camellia-CTS-CMAC string-to-key, DK, encrypt, checksum.
+#[test]
+fn rfc6803_camellia_cts_cmac() {
+    let salt = b"ATHENA.MIT.EDUraeburn";
+    let k128 = string_to_key(
+        EncryptionType::Camellia128CtsCmac,
+        b"password",
+        salt,
+        Some(&iter_params(1)),
+    )
+    .unwrap();
+    assert_eq!(k128.as_bytes(), hex("57d0297298ffd9d35de5a47fb4bde24b"));
+    let k256 = string_to_key(
+        EncryptionType::Camellia256CtsCmac,
+        b"password",
+        salt,
+        Some(&iter_params(1)),
+    )
+    .unwrap();
+    assert_eq!(
+        k256.as_bytes(),
+        hex("b9d6828b2056b7be656d88a123b1fac68214ac2b727ecf5f69afe0c4df2a6d2c")
+    );
+
+    let d = derive_keys(&k128, KeyUsage::new(2).unwrap()).unwrap();
+    assert_eq!(d.kc, hex("d155775a209d05f02b38d42a389e5a56"));
+    assert_eq!(d.ke, hex("64df83f85a532f17577d8c37035796ab"));
+    assert_eq!(d.ki, hex("3e4fbdf30fb8259c425cb6c96f1f4635"));
+
+    let ck_key = ProtocolKey::from_bytes(
+        EncryptionType::Camellia128CtsCmac,
+        &hex("1dc46a8d763f4f93742bcba3387576c3"),
+    )
+    .unwrap();
+    assert_eq!(
+        checksum(&ck_key, KeyUsage::new(7).unwrap(), b"abcdefghijk").unwrap(),
+        hex("1178e6c5c47a8c1ae0c4b9c7d4eb7b6b")
+    );
+    let usage2 = KeyUsage::new(2).unwrap();
+    let pt = b"camellia-plain";
+    let ct = encrypt(&ck_key, usage2, pt).unwrap();
+    assert_eq!(decrypt(&ck_key, usage2, &ct).unwrap(), pt);
+}
+
+/// RFC 8009 appendix A PRF, plus RFC 6113 PRF+ counter-prepend.
+#[test]
+fn rfc8009_prf_and_prf_plus() {
+    let k128 = ProtocolKey::from_bytes(
+        EncryptionType::Aes128CtsHmacSha256128,
+        &hex("3705d96080c17728a0e800eab6e0d23c"),
+    )
+    .unwrap();
+    assert_eq!(
+        prf(&k128, b"test").unwrap(),
+        hex("9d188616f63852fe86915bb840b4a886ff3e6bb0f819b49b893393d393854295")
+    );
+    let k256 = ProtocolKey::from_bytes(
+        EncryptionType::Aes256CtsHmacSha384192,
+        &hex("6d404d37faf79f9df0d33568d320669800eb4836472ea8a026d16b7182460c52"),
+    )
+    .unwrap();
+    assert_eq!(
+        prf(&k256, b"test").unwrap(),
+        hex("9801f69a368c2bf675e59521e177d9a07f67efe1cfde8d3c8d6f6a0256e3b17db3c1b62ad1b8553360d17367eb1514d2")
+    );
+    let plus = prf_plus(&k128, b"test", 32).unwrap();
+    let mut seed = vec![1u8];
+    seed.extend_from_slice(b"test");
+    assert_eq!(plus, prf(&k128, &seed).unwrap());
+}
+
+/// RFC 4556 `octetstring2key`: SHA-1(0x00 || x) K-truncate. Empty `x` is
+/// NIST SHA-1 of a single 0x00 octet.
+#[test]
+fn rfc4556_octetstring2key() {
+    let k = octetstring2key(EncryptionType::Aes128CtsHmacSha196, b"").unwrap();
+    assert_eq!(k.as_bytes(), hex("5ba93c9db0cff93f52b521d7420e43f6"));
+    let k2 = octetstring2key(EncryptionType::Aes128CtsHmacSha196, b"abc").unwrap();
+    assert_eq!(k2.as_bytes(), hex("dd3742ec1a4d2a5b563a2b62aef7fc4a"));
+}
+
+/// SPAKE IANA compressed M/N plus a fixed-scalar public and transcript.
+#[test]
+fn spake_iana_mn_and_fixed_scalar() {
+    let m = spake_m_bytes();
+    let n = spake_n_bytes();
+    assert_eq!(
+        m,
+        hex("02886e2f97ace46e55ba9dd7242579f2993b64e16ef3dcab95afd497333d8fa12f").as_slice()
+    );
+    assert_eq!(
+        n,
+        hex("03d8bbd6c639c62937b04d997f38c3770719c629d7014d49a24b4f98baa1292b49").as_slice()
+    );
+    spake_decode_point(m).expect("IANA M");
+    spake_decode_point(n).expect("IANA N");
+    assert!(spake_decode_point(&[0u8; 8]).is_err());
+
+    let mut secret = [0u8; 32];
+    secret[31] = 1;
+    let mut w = [0u8; 32];
+    w[31] = 2;
+    let pub_s = spake_public_wbytes(&w, &secret, true).unwrap();
+    assert_eq!(pub_s.len(), 33);
+    assert!(pub_s[0] == 0x02 || pub_s[0] == 0x03);
+    let thash = spake_thash_update(&[0u8; 32], m, n);
+    assert_eq!(
+        thash,
+        hex("2c7135478945a1ec1fdfe1285536e83e5ad7ff03ee3b6ae44d379659f7bbb743").as_slice()
+    );
 }

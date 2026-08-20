@@ -79,6 +79,9 @@ FFFFFFFFFFFFFFFF",
 };
 
 fn parse_p(hex: &'static [u8]) -> BigUint {
+    // RFC 3526 MODP primes are compile-time constants; a parse failure is a
+    // programming error in the hex tables above.
+    #[allow(clippy::expect_used)]
     BigUint::parse_bytes(hex, 16).expect("RFC 3526 prime")
 }
 

@@ -111,11 +111,17 @@ fn string_to_key_inner(
     } else if etype == EncryptionType::Des3CbcSha1 {
         tkey.zeroize();
         crate::weak::des3_string_to_key(password, salt)
-    } else if matches!(
-        etype,
-        EncryptionType::Camellia128CtsCmac | EncryptionType::Camellia256CtsCmac
-    ) {
-        pbkdf2_hmac::<Sha1>(password, salt, iter, &mut tkey);
+    } else if etype.is_camellia() {
+        let mut saltp = Vec::new();
+        saltp.extend_from_slice(
+            etype
+                .enctype_name()
+                .ok_or(Error::UnsupportedEtype(etype.to_iana()))?
+                .as_bytes(),
+        );
+        saltp.push(0x00);
+        saltp.extend_from_slice(salt);
+        pbkdf2_hmac::<Sha1>(password, &saltp, iter, &mut tkey);
         let mut base = crate::weak::dk_camellia(&tkey, b"kerberos")?;
         tkey.zeroize();
         let key = ProtocolKey::from_bytes(etype, &base);
@@ -242,7 +248,7 @@ fn encrypt_inner_state(
         }
         EncryptionType::Des3CbcSha1 => return crate::weak::des3_encrypt(key, usage, plaintext),
         EncryptionType::Camellia128CtsCmac | EncryptionType::Camellia256CtsCmac => {
-            return crate::weak::camellia_encrypt(key, usage, plaintext);
+            return crate::weak::camellia_encrypt_with_conf(key, usage, confounder, plaintext);
         }
         _ => {}
     }
@@ -409,6 +415,10 @@ fn checksum_inner(key: &ProtocolKey, usage: KeyUsage, message: &[u8]) -> Result<
         EncryptionType::Des3CbcSha1 => {
             let kc = derive::dk_rfc3961(key.as_bytes(), &usage.derivation_constant(0x99))?;
             crate::weak::hmac_sha1_export(&kc, message, 20)
+        }
+        EncryptionType::Camellia128CtsCmac | EncryptionType::Camellia256CtsCmac => {
+            let kc = crate::weak::dk_camellia(key.as_bytes(), &usage.derivation_constant(0x99))?;
+            crate::weak::cmac_camellia(&kc, message)
         }
         _ => {
             let keys = derive_usage_keys(key.etype(), key.as_bytes(), usage)?;

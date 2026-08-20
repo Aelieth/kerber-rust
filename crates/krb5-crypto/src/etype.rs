@@ -212,25 +212,32 @@ impl EncryptionType {
     /// Default PBKDF2 iteration count when string-to-key params are omitted.
     #[must_use]
     pub const fn default_iterations(self) -> u32 {
-        if self.is_rfc8009() {
+        if self.is_rfc8009() || self.is_camellia() {
             32_768
         } else {
             4_096
         }
     }
 
-    /// RFC 8009 `enctype-name` prepended to the salt, or `None` for RFC 3962.
+    /// RFC 6803 Camellia-CTS-CMAC.
+    #[must_use]
+    pub const fn is_camellia(self) -> bool {
+        matches!(self, Self::Camellia128CtsCmac | Self::Camellia256CtsCmac)
+    }
+
+    /// RFC 8009 / RFC 6803 `enctype-name` prepended to the salt, or `None`
+    /// for RFC 3962 AES-SHA-1.
     #[must_use]
     pub const fn enctype_name(self) -> Option<&'static str> {
         match self {
             Self::Aes128CtsHmacSha256128 => Some("aes128-cts-hmac-sha256-128"),
             Self::Aes256CtsHmacSha384192 => Some("aes256-cts-hmac-sha384-192"),
+            Self::Camellia128CtsCmac => Some("camellia128-cts-cmac"),
+            Self::Camellia256CtsCmac => Some("camellia256-cts-cmac"),
             Self::Aes128CtsHmacSha196
             | Self::Aes256CtsHmacSha196
             | Self::Des3CbcSha1
-            | Self::Rc4Hmac
-            | Self::Camellia128CtsCmac
-            | Self::Camellia256CtsCmac => None,
+            | Self::Rc4Hmac => None,
         }
     }
 }

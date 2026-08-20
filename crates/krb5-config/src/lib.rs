@@ -3,6 +3,7 @@
 //! There is no C FFI. DNS SRV is a minimal RFC 2782 UDP client.
 
 #![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use std::collections::BTreeMap;

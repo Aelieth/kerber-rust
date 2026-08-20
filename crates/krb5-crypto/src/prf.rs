@@ -89,16 +89,11 @@ fn prf_aes_sha1(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
 }
 
 fn prf_camellia(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
-    let mut hasher = Sha1::new();
-    hasher.update(input);
-    let tmp1 = hasher.finalize();
-    let mut dk = crate::weak::dk_camellia(key.as_bytes(), b"prf")?;
-    let trunc = (tmp1.len() / BLOCK) * BLOCK;
-    let mut block = [0u8; BLOCK];
-    block.copy_from_slice(&tmp1[..trunc]);
-    let enc = cts::camellia_encrypt_block(&dk, &block)?;
-    dk.zeroize();
-    Ok(enc.to_vec())
+    // RFC 6803 §6: Kp = KDF-FEEDBACK-CMAC(protocol-key, "prf"); PRF = CMAC(Kp, octet-string).
+    let mut kp = crate::weak::dk_camellia(key.as_bytes(), b"prf")?;
+    let out = crate::weak::cmac_camellia(&kp, input)?;
+    kp.zeroize();
+    Ok(out)
 }
 
 fn prf_rfc8009(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {

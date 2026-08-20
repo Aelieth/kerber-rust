@@ -203,7 +203,7 @@ fn hmac_sha1_trunc(key: &[u8], data: &[u8], n: usize) -> Result<Vec<u8>, Error> 
     Ok(v)
 }
 
-/// RFC 3961 §6.3 3DES string-to-key: n-fold(password||salt, 24) + odd parity + DK.
+/// RFC 3961 §6.3 3DES string-to-key: n-fold to 168 bits, random-to-key, DK("kerberos").
 pub(crate) fn des3_string_to_key(password: &[u8], salt: &[u8]) -> Result<ProtocolKey, Error> {
     let mut seed = Vec::with_capacity(password.len() + salt.len());
     seed.extend_from_slice(password);
@@ -211,13 +211,70 @@ pub(crate) fn des3_string_to_key(password: &[u8], salt: &[u8]) -> Result<Protoco
     if seed.is_empty() {
         seed.push(0);
     }
-    let mut raw = crate::nfold::nfold(&seed, 24)?;
-    for chunk in raw.chunks_mut(8) {
-        odd_parity(chunk);
-    }
+    let mut raw21 = crate::nfold::nfold(&seed, 21)?;
+    let mut raw = des3_random_to_key(&raw21);
+    raw21.zeroize();
     let dk = dk_des3(&raw, b"kerberos")?;
     raw.zeroize();
     ProtocolKey::from_bytes(EncryptionType::Des3CbcSha1, &dk)
+}
+
+/// RFC 3961 §6.3.1 DES3random-to-key: three 56-bit groups, last output
+/// byte collects input LSBs in reverse order, then odd parity (+ weak-key
+/// correction as in §6.2).
+fn des3_random_to_key(raw21: &[u8]) -> [u8; 24] {
+    let mut out = [0u8; 24];
+    for i in 0..3 {
+        let p = &raw21[i * 7..i * 7 + 7];
+        let k = &mut out[i * 8..i * 8 + 8];
+        for (j, b) in p.iter().enumerate() {
+            k[j] = b & 0xfe;
+        }
+        k[7] = (p[6] & 1) << 7
+            | (p[5] & 1) << 6
+            | (p[4] & 1) << 5
+            | (p[3] & 1) << 4
+            | (p[2] & 1) << 3
+            | (p[1] & 1) << 2
+            | (p[0] & 1) << 1;
+        des_key_correction(k);
+    }
+    out
+}
+
+fn des_key_correction(key: &mut [u8]) {
+    odd_parity(key);
+    if des_is_weak(key) {
+        key[7] ^= 0xf0;
+        odd_parity(key);
+    }
+}
+
+fn des_is_weak(key: &[u8]) -> bool {
+    // DES weak and semi-weak keys (NIST), compared after parity is set.
+    const WEAK: [[u8; 8]; 16] = [
+        [0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01],
+        [0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe],
+        [0xe0, 0xe0, 0xe0, 0xe0, 0xf1, 0xf1, 0xf1, 0xf1],
+        [0x1f, 0x1f, 0x1f, 0x1f, 0x0e, 0x0e, 0x0e, 0x0e],
+        [0x01, 0xfe, 0x01, 0xfe, 0x01, 0xfe, 0x01, 0xfe],
+        [0xfe, 0x01, 0xfe, 0x01, 0xfe, 0x01, 0xfe, 0x01],
+        [0x1f, 0xe0, 0x1f, 0xe0, 0x0e, 0xf1, 0x0e, 0xf1],
+        [0xe0, 0x1f, 0xe0, 0x1f, 0xf1, 0x0e, 0xf1, 0x0e],
+        [0x01, 0xe0, 0x01, 0xe0, 0x01, 0xf1, 0x01, 0xf1],
+        [0xe0, 0x01, 0xe0, 0x01, 0xf1, 0x01, 0xf1, 0x01],
+        [0x1f, 0xfe, 0x1f, 0xfe, 0x0e, 0xfe, 0x0e, 0xfe],
+        [0xfe, 0x1f, 0xfe, 0x1f, 0xfe, 0x0e, 0xfe, 0x0e],
+        [0x01, 0x1f, 0x01, 0x1f, 0x01, 0x0e, 0x01, 0x0e],
+        [0x1f, 0x01, 0x1f, 0x01, 0x0e, 0x01, 0x0e, 0x01],
+        [0xe0, 0xfe, 0xe0, 0xfe, 0xf1, 0xfe, 0xf1, 0xfe],
+        [0xfe, 0xe0, 0xfe, 0xe0, 0xfe, 0xf1, 0xfe, 0xf1],
+    ];
+    WEAK.iter().any(|w| {
+        w.iter()
+            .zip(key.iter())
+            .all(|(a, b)| (*a & 0xfe) == (*b & 0xfe))
+    })
 }
 
 fn odd_parity(block: &mut [u8]) {
@@ -230,36 +287,37 @@ fn odd_parity(block: &mut [u8]) {
     }
 }
 
-/// RFC 3961 DR/DK for 3DES (8-byte blocks).
+/// RFC 3961 DR/DK for 3DES: DR to 168 bits, then [`des3_random_to_key`].
 pub(crate) fn dk_des3(key: &[u8], constant: &[u8]) -> Result<Vec<u8>, Error> {
     let folded = crate::nfold::nfold(constant, DES_BLOCK)?;
     let mut block = [0u8; DES_BLOCK];
     block.copy_from_slice(&folded);
-    let mut out = Vec::with_capacity(24);
-    while out.len() < 24 {
+    let mut dr = Vec::with_capacity(24);
+    while dr.len() < 21 {
         let c = des3_cbc_encrypt(key, [0u8; DES_BLOCK], &block)?;
         if c.len() != DES_BLOCK {
             return Err(Error::InvalidKeyLength);
         }
         block.copy_from_slice(&c);
-        out.extend_from_slice(&c);
+        dr.extend_from_slice(&c);
     }
-    out.truncate(24);
-    Ok(out)
+    dr.truncate(21);
+    Ok(des3_random_to_key(&dr).to_vec())
 }
 
-/// RFC 6803 Camellia-CTS-CMAC (simplified profile with Camellia + CMAC).
-pub(crate) fn camellia_encrypt(
+pub(crate) fn camellia_encrypt_with_conf(
     key: &ProtocolKey,
     usage: KeyUsage,
+    confounder: &[u8],
     plaintext: &[u8],
 ) -> Result<Vec<u8>, Error> {
+    if confounder.len() != 16 {
+        return Err(Error::InvalidConfounder);
+    }
     let ke = dk_camellia(key.as_bytes(), &usage.derivation_constant(0xAA))?;
     let ki = dk_camellia(key.as_bytes(), &usage.derivation_constant(0x55))?;
-    let mut conf = [0u8; 16];
-    getrandom::getrandom(&mut conf).map_err(|_| Error::Rng)?;
     let mut data = Vec::with_capacity(16 + plaintext.len());
-    data.extend_from_slice(&conf);
+    data.extend_from_slice(confounder);
     data.extend_from_slice(plaintext);
     let c = crate::cts::camellia_encrypt(&ke, &[0u8; 16], &data)?;
     let h = cmac_camellia(&ki, &data)?;
@@ -288,25 +346,40 @@ pub(crate) fn camellia_decrypt(
     Ok(p[16..].to_vec())
 }
 
+/// RFC 6803 §3 KDF-FEEDBACK-CMAC. `key` is the protocol key (16 or 32 octets).
 pub(crate) fn dk_camellia(key: &[u8], constant: &[u8]) -> Result<Vec<u8>, Error> {
-    let k = key.len();
-    let folded = if constant.len() == 16 {
-        constant.to_vec()
-    } else {
-        crate::nfold::nfold(constant, 16)?
-    };
-    let mut block = [0u8; 16];
-    block.copy_from_slice(&folded);
-    let mut out = Vec::with_capacity(k);
-    while out.len() < k {
-        block = crate::cts::camellia_encrypt_block(key, &block)?;
-        let need = (k - out.len()).min(16);
-        out.extend_from_slice(&block[..need]);
+    kdf_feedback_cmac(key, constant)
+}
+
+/// RFC 6803: `K(i) = CMAC(key, K(i-1) | i | constant | 0x00 | k)` with
+/// `k` the output length in bits (big-endian 4 octets) and `i` a 4-octet
+/// counter. Output is truncated to `key.len()` octets.
+pub(crate) fn kdf_feedback_cmac(key: &[u8], constant: &[u8]) -> Result<Vec<u8>, Error> {
+    let out_len = key.len();
+    if out_len != 16 && out_len != 32 {
+        return Err(Error::InvalidKeyLength);
     }
+    let k_bits = u32::try_from(out_len.saturating_mul(8)).unwrap_or(u32::MAX);
+    let n = out_len.div_ceil(16);
+    let mut k_prev = vec![0u8; 16];
+    let mut out = Vec::with_capacity(n * 16);
+    for i in 1..=n {
+        let i32 = u32::try_from(i).unwrap_or(u32::MAX);
+        let mut input = Vec::with_capacity(16 + 4 + constant.len() + 1 + 4);
+        input.extend_from_slice(&k_prev);
+        input.extend_from_slice(&i32.to_be_bytes());
+        input.extend_from_slice(constant);
+        input.push(0x00);
+        input.extend_from_slice(&k_bits.to_be_bytes());
+        let ki = cmac_camellia(key, &input)?;
+        k_prev.clone_from(&ki);
+        out.extend_from_slice(&ki);
+    }
+    out.truncate(out_len);
     Ok(out)
 }
 
-fn cmac_camellia(key: &[u8], data: &[u8]) -> Result<Vec<u8>, Error> {
+pub(crate) fn cmac_camellia(key: &[u8], data: &[u8]) -> Result<Vec<u8>, Error> {
     use camellia::{Camellia128, Camellia256};
     use cmac::{Cmac, Mac};
     match key.len() {

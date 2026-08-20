@@ -83,6 +83,7 @@ pub(crate) fn camellia_decrypt(
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn camellia_encrypt_block(
     key: &[u8],
     block: &[u8; BLOCK],

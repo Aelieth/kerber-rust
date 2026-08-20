@@ -12,13 +12,13 @@ use crate::{krb_fx_cf2, p256_generate};
 pub const SPAKE_GROUP_P256: i32 = 2;
 
 /// Compressed P-256 M from the SPAKE IANA registry (MIT `iana.c`).
-const SPAKE_M: [u8; 33] = [
+pub const SPAKE_M: [u8; 33] = [
     0x02, 0x88, 0x6e, 0x2f, 0x97, 0xac, 0xe4, 0x6e, 0x55, 0xba, 0x9d, 0xd7, 0x24, 0x25, 0x79, 0xf2,
     0x99, 0x3b, 0x64, 0xe1, 0x6e, 0xf3, 0xdc, 0xab, 0x95, 0xaf, 0xd4, 0x97, 0x33, 0x3d, 0x8f, 0xa1,
     0x2f,
 ];
 /// Compressed P-256 N from the SPAKE IANA registry.
-const SPAKE_N: [u8; 33] = [
+pub const SPAKE_N: [u8; 33] = [
     0x03, 0xd8, 0xbb, 0xd6, 0xc6, 0x39, 0xc6, 0x29, 0x37, 0xb0, 0x4d, 0x99, 0x7f, 0x38, 0xc3, 0x77,
     0x07, 0x19, 0xc6, 0x29, 0xd7, 0x01, 0x4d, 0x49, 0xa2, 0x4b, 0x4f, 0x98, 0xba, 0xa1, 0x29, 0x2b,
     0x49,
@@ -35,18 +35,25 @@ pub fn spake_wbytes(ikey: &ProtocolKey, group: i32) -> Result<Vec<u8>, Error> {
     prf_plus(ikey, &seed, 32)
 }
 
-/// SPAKE2-P256 password scalar `w` (legacy helper; MIT uses [`spake_wbytes`]).
+/// IANA compressed M (33 octets).
 #[must_use]
-pub fn spake_w(password: &[u8], salt: &[u8]) -> [u8; 32] {
-    let mut h = <Sha256 as Sha2Digest>::new();
-    Sha2Digest::update(&mut h, b"SPAKE2-P256-w");
-    Sha2Digest::update(&mut h, password);
-    Sha2Digest::update(&mut h, salt);
-    let out = Sha2Digest::finalize(h);
-    let mut w = [0u8; 32];
-    w.copy_from_slice(&out);
-    w[0] &= 0x7f;
-    w
+pub fn spake_m_bytes() -> &'static [u8] {
+    &SPAKE_M
+}
+
+/// IANA compressed N (33 octets).
+#[must_use]
+pub fn spake_n_bytes() -> &'static [u8] {
+    &SPAKE_N
+}
+
+/// Decode a compressed P-256 SPAKE element. Hostile input returns [`Error::Integrity`].
+///
+/// # Errors
+///
+/// Invalid encoding or a point not on the curve.
+pub fn spake_decode_point(bytes: &[u8]) -> Result<(), Error> {
+    decode_compressed(bytes).map(|_| ())
 }
 
 fn scalar_from_bytes32(b: &[u8; 32]) -> Result<p256::Scalar, Error> {

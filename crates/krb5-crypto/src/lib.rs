@@ -15,6 +15,7 @@
 //! rejected as a local DoS control.
 
 #![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod cf2;
@@ -48,6 +49,7 @@ pub use ops::{
 };
 pub use prf::{prf, prf_plus};
 pub use spake::{
-    spake_derive_key, spake_finish, spake_kdc_keygen, spake_public, spake_public_wbytes,
-    spake_result_wbytes, spake_thash_update, spake_w, spake_wbytes, SPAKE_GROUP_P256,
+    spake_decode_point, spake_derive_key, spake_finish, spake_kdc_keygen, spake_m_bytes,
+    spake_n_bytes, spake_public, spake_public_wbytes, spake_result_wbytes, spake_thash_update,
+    spake_wbytes, SPAKE_GROUP_P256,
 };

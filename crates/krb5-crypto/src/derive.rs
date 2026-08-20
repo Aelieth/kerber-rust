@@ -173,6 +173,11 @@ pub(crate) fn derive_usage_keys(
             bits_u32(etype.mac_key_len()),
         )?;
         Ok(UsageKeys { kc, ke, ki })
+    } else if etype.is_camellia() {
+        let kc = crate::weak::dk_camellia(base, &usage.derivation_constant(0x99))?;
+        let ke = crate::weak::dk_camellia(base, &usage.derivation_constant(0xAA))?;
+        let ki = crate::weak::dk_camellia(base, &usage.derivation_constant(0x55))?;
+        Ok(UsageKeys { kc, ke, ki })
     } else {
         let kc = dk_rfc3961(base, &usage.derivation_constant(0x99))?;
         let ke = dk_rfc3961(base, &usage.derivation_constant(0xAA))?;
