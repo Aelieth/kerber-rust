@@ -37,6 +37,7 @@ pub fn tgs_exchange(
     realm: &str,
 ) -> Result<TgsOutcome, Error> {
     let correlation_id = krb5_log::new_correlation_id();
+    let _g = krb5_log::enter_correlation(correlation_id.clone());
     let started = Instant::now();
     let result = tgs_inner(kdc, tgt, sname, realm);
     let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
@@ -68,7 +69,7 @@ fn tgs_inner(
 ) -> Result<TgsOutcome, Error> {
     let nonce = {
         let mut b = [0u8; 4];
-        getrandom::getrandom(&mut b).map_err(|e| Error::Io(e.to_string()))?;
+        getrandom::getrandom(&mut b).map_err(|e| Error::transport_msg(e.to_string()))?;
         let n = u32::from_be_bytes(b);
         if n == 0 {
             1
@@ -82,6 +83,7 @@ fn tgs_inner(
         .map(|e| e.to_iana())
         .collect();
 
+    let requested = sname.clone();
     let body = KdcReqBody {
         kdc_options: KdcOptions::forwardable(),
         cname: None,
@@ -109,7 +111,7 @@ fn tgs_inner(
             cksumtype: tgt.session_key.etype().checksum_type(),
             checksum: mic.into(),
         }),
-        cusec: usec,
+        cusec: krb5_types::Microseconds::from_subsec_micros(usec),
         ctime: now,
         subkey: None,
         seq_number: None,
@@ -170,7 +172,14 @@ fn tgs_inner(
     if enc_part.nonce != nonce {
         return Err(Error::NonceMismatch);
     }
-    let session_etype = EncryptionType::from_iana(enc_part.key.keytype)?;
+    if inner.ticket.sname != requested && enc_part.sname != requested {
+        if inner.ticket.sname.is_krbtgt() {
+            return Err(Error::Referral);
+        }
+        return Err(Error::ReplyMismatch("TGS-REP sname mismatch".into()));
+    }
+    let session_etype = EncryptionType::from_iana(enc_part.key.keytype)
+        .or_else(|_| EncryptionType::known(enc_part.key.keytype))?;
     let session_key = ProtocolKey::from_bytes(session_etype, enc_part.key.keyvalue.as_ref())?;
     Ok(TgsOutcome {
         ticket: inner.ticket,

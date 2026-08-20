@@ -14,6 +14,7 @@ path = "src/bin/krb5-kinit.rs"
 
 [dependencies]
 krb5-asn1.workspace = true
+krb5-config.workspace = true
 krb5-crypto.workspace = true
 krb5-log.workspace = true
 krb5-protocol.workspace = true

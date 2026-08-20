@@ -12,12 +12,17 @@ publish.workspace = true
 chrono.workspace = true
 getrandom.workspace = true
 krb5-asn1.workspace = true
+krb5-config.workspace = true
 krb5-crypto.workspace = true
 krb5-log.workspace = true
 krb5-types.workspace = true
+sha1.workspace = true
+thiserror.workspace = true
 tracing.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
+krb5-kdc.workspace = true
 tracing-subscriber.workspace = true
 
 [lints]

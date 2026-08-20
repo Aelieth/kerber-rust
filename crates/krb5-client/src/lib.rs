@@ -4,9 +4,7 @@
 //! service ticket. There is no C FFI.
 
 #![forbid(unsafe_code)]
-
-pub mod ccache;
-pub mod keytab;
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use std::path::Path;
 
@@ -14,9 +12,18 @@ use krb5_protocol::{as_exchange, tgs_exchange, AsOutcome, AsRequest, KdcAddr, Tg
 use krb5_types::PrincipalName;
 use zeroize::Zeroize;
 
-pub use ccache::{parse_principal, realm, CcacheCred, FileCcache};
-pub use keytab::{Keytab, KeytabEntry};
+pub use krb5_protocol::{
+    parse_principal, realm, tgt_cred, CcacheCred, FileCcache, Keytab, KeytabEntry,
+};
 pub use krb5_protocol::{Error as ProtocolError, KDC_PORT};
+
+pub mod ccache {
+    pub use krb5_protocol::{parse_principal, realm, tgt_cred, CcacheCred, FileCcache};
+}
+
+pub mod keytab {
+    pub use krb5_protocol::{Keytab, KeytabEntry};
+}
 
 /// Result of [`kinit`].
 pub struct KinitResult {
@@ -59,7 +66,7 @@ fn kinit_inner(
         password,
         kdc,
     })?;
-    let mut creds = vec![ccache::tgt_cred(
+    let mut creds = vec![tgt_cred(
         &as_out.crealm,
         &as_out.cname,
         &as_out.ticket,
@@ -77,7 +84,7 @@ fn kinit_inner(
         };
         match tgs_exchange(kdc, &as_out, sname, &realm_s) {
             Ok(tgs) => {
-                creds.push(ccache::tgt_cred(
+                creds.push(tgt_cred(
                     &as_out.crealm,
                     &as_out.cname,
                     &tgs.ticket,

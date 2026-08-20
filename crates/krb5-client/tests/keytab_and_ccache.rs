@@ -44,7 +44,8 @@ fn parse_principal_splits_realm() {
 
 #[test]
 fn truncated_keytab_is_error() {
-    assert!(Keytab::parse(&[0x05, 0x01]).is_err());
+    assert!(Keytab::parse(&[0x05, 0x03]).is_err());
+    assert!(Keytab::parse(&[0x05, 0x01]).is_ok()); // empty v1 is valid
     let mut truncated = vec![0x05, 0x02];
     truncated.extend_from_slice(&20i32.to_be_bytes());
     truncated.push(0);

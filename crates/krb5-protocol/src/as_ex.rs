@@ -50,6 +50,7 @@ pub struct AsRequest<'a> {
 /// Returns transport, crypto, or `KRB-ERROR` failures.
 pub fn as_exchange(req: AsRequest<'_>) -> Result<AsOutcome, Error> {
     let correlation_id = krb5_log::new_correlation_id();
+    let _g = krb5_log::enter_correlation(correlation_id.clone());
     let started = Instant::now();
     let result = as_exchange_inner(req);
     emit(
@@ -67,9 +68,9 @@ fn as_exchange_inner(req: AsRequest<'_>) -> Result<AsOutcome, Error> {
         .map(|e| e.to_iana())
         .collect();
     let nonce = random_nonce()?;
-    let till = KerberosTime::now();
-    // Request a 10-hour ticket by setting till 10h in the future.
-    let till = add_hours(&till, 10);
+    let till = KerberosTime::now()
+        .add_hours(10)
+        .unwrap_or_else(|_| KerberosTime::now());
 
     let first = build_as_req(&req.cname, req.realm, nonce, till.clone(), None, &etypes);
     let wire = encode(&first)?;
@@ -93,12 +94,36 @@ fn as_exchange_inner(req: AsRequest<'_>) -> Result<AsOutcome, Error> {
                     &req.cname,
                     req.realm,
                 ),
-                KdcMsg::Error(e) => krb_err(e),
+                KdcMsg::Error(e) => classify_kdc_error(e),
                 KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
             }
         }
-        KdcMsg::Error(e) => krb_err(e),
+        KdcMsg::Error(e) => classify_kdc_error(e),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
+    }
+}
+
+fn classify_kdc_error(e: KrbError) -> Result<AsOutcome, Error> {
+    match e.error_code {
+        err::SKEW => Err(Error::KrbError {
+            code: err::SKEW,
+            text: Some("clock skew; resync local clock and retry".into()),
+        }),
+        err::ETYPE_NOSUPP => Err(Error::KrbError {
+            code: err::ETYPE_NOSUPP,
+            text: Some("no common etype".into()),
+        }),
+        err::WRONG_REALM => {
+            let realm = e.realm.as_bytes().to_vec();
+            Err(Error::KrbError {
+                code: err::WRONG_REALM,
+                text: Some(format!(
+                    "wrong realm; chase {}",
+                    String::from_utf8_lossy(&realm)
+                )),
+            })
+        }
+        _ => krb_err(e),
     }
 }
 
@@ -151,6 +176,7 @@ fn finish_as_rep(
     realm: &str,
 ) -> Result<AsOutcome, Error> {
     let inner = rep.0;
+    let had_preauth = client_key.is_some();
     let etype = EncryptionType::from_iana(inner.enc_part.etype)?;
     let key = match client_key {
         Some(k) => k,
@@ -165,7 +191,28 @@ fn finish_as_rep(
     if enc_part.nonce != nonce {
         return Err(Error::NonceMismatch);
     }
-    let session_etype = EncryptionType::from_iana(enc_part.key.keytype)?;
+    if inner.cname != *cname {
+        return Err(Error::ReplyMismatch("AS-REP cname mismatch".into()));
+    }
+    if inner.crealm.as_bytes() != realm.as_bytes() {
+        return Err(Error::ReplyMismatch("AS-REP crealm mismatch".into()));
+    }
+    if enc_part.sname.components_joined() != inner.ticket.sname.components_joined() {
+        return Err(Error::ReplyMismatch("AS-REP sname/ticket mismatch".into()));
+    }
+    if inner.enc_part.etype != key.etype().to_iana() && inner.enc_part.etype != enc_part.key.keytype
+    {
+        return Err(Error::ReplyMismatch("AS-REP etype mismatch".into()));
+    }
+    if !enc_part.flags.initial() || !enc_part.flags.pre_authent() {
+        // Some KDCs omit INITIAL on service-ticket AS; require pre-authent when
+        // we sent PA-ENC-TIMESTAMP (client_key is Some).
+        if had_preauth && !enc_part.flags.pre_authent() {
+            return Err(Error::ReplyMismatch("AS-REP missing PRE-AUTHENT".into()));
+        }
+    }
+    let session_etype = EncryptionType::from_iana(enc_part.key.keytype)
+        .or_else(|_| EncryptionType::known(enc_part.key.keytype))?;
     let session_key = ProtocolKey::from_bytes(session_etype, enc_part.key.keyvalue.as_ref())?;
     Ok(AsOutcome {
         ticket: inner.ticket,
@@ -190,9 +237,8 @@ fn decode_enc_as(plain: &[u8]) -> Result<EncKdcRepPart, Error> {
     if let Ok(part) = decode::<EncKdcRepPart>(plain) {
         return Ok(part);
     }
-    let head: String = plain.iter().take(24).map(|b| format!("{b:02x}")).collect();
     Err(Error::Asn1(format!(
-        "enc-part der tag={:02x} len={} head={head}",
+        "enc-part der tag={:02x} len={} (plaintext omitted)",
         plain.first().copied().unwrap_or(0),
         plain.len()
     )))
@@ -232,7 +278,7 @@ fn pa_enc_timestamp(key: &ProtocolKey) -> Result<PaData, Error> {
     let usec = now.0.timestamp_subsec_micros() % 1_000_000;
     let ts = PaEncTsEnc {
         patimestamp: now,
-        pausec: Some(usec),
+        pausec: Some(krb5_types::Microseconds::from_subsec_micros(usec)),
     };
     let der = encode(&ts)?;
     let usage = KeyUsage::new(ku::PA_ENC_TIMESTAMP)?;
@@ -313,15 +359,9 @@ fn pick_info(info: &EtypeInfo, default_salt: &[u8]) -> Option<S2kMaterial> {
 
 fn random_nonce() -> Result<u32, Error> {
     let mut b = [0u8; 4];
-    getrandom::getrandom(&mut b).map_err(|e| Error::Io(e.to_string()))?;
+    getrandom::getrandom(&mut b).map_err(|e| Error::transport_msg(e.to_string()))?;
     let n = u32::from_be_bytes(b);
     Ok(if n == 0 { 1 } else { n })
-}
-
-fn add_hours(t: &KerberosTime, hours: i64) -> KerberosTime {
-    use chrono::Timelike;
-    let dt = t.0 + chrono::Duration::hours(hours);
-    KerberosTime(dt.with_nanosecond(0).unwrap_or(dt))
 }
 
 fn emit(event: &'static str, correlation_id: &str, started: Instant, err: Option<&Error>) {

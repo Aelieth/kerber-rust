@@ -18,8 +18,12 @@ fn kdc_up() -> bool {
 
 #[test]
 fn kinit_obtains_tgt_from_mit_kdc() {
+    let live = std::env::var("KERBER_LIVE").ok().as_deref() == Some("1");
     if !kdc_up() {
-        eprintln!("skipping live kinit: 127.0.0.1:88 not reachable");
+        if live {
+            panic!("KERBER_LIVE=1 but 127.0.0.1:88 is not reachable");
+        }
+        eprintln!("skipping live kinit: 127.0.0.1:88 not reachable (set KERBER_LIVE=1 to fail)");
         return;
     }
     let dir = std::env::temp_dir();
@@ -45,6 +49,9 @@ fn kinit_obtains_tgt_from_mit_kdc() {
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("transport") {
+                if live {
+                    panic!("KERBER_LIVE=1 transport failure: {e}");
+                }
                 eprintln!("skipping host-network live kinit ({msg}); use scripts/client-gate.sh");
                 return;
             }

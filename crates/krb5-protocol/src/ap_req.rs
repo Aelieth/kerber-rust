@@ -1,34 +1,57 @@
-//! AP-REQ construction (RFC 4120 §5.5.1) and keytab-side verification.
+//! AP-REQ construction (RFC 4120 §5.5.1) and service-side verification.
 
-use std::collections::HashSet;
 use std::time::Instant;
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{decrypt, encrypt, EncryptionType, KeyUsage, ProtocolKey};
+use krb5_crypto::{
+    checksum, decrypt, encrypt, verify_checksum, EncryptionType, KeyUsage, ProtocolKey,
+};
 use krb5_types::{
-    ku, ApOptions, ApReq, Authenticator, EncTicketPart, EncryptedData, KerberosTime, PrincipalName,
-    Realm, Ticket,
+    err, ku, ApOptions, ApReq, Authenticator, EncTicketPart, EncryptedData, HostAddresses,
+    KerberosTime, PrincipalName, Realm, Ticket,
 };
 
 use crate::error::Error;
+use crate::replay::{ReplayCache, ReplayKey};
 
-/// Replay detector: (client, ctime unix seconds, cusec) must be unique.
-#[derive(Clone, Debug, Default)]
-pub struct ReplayCache {
-    seen: HashSet<(String, u32, u32)>,
+/// Clock-skew window (seconds) used when the caller does not specify one.
+pub const DEFAULT_SKEW: i64 = 300;
+
+/// Parameters for [`verify_ap_req`].
+pub struct ApVerifyParams<'a> {
+    /// Long-term keys available (keytab entries); kvno selects.
+    pub keys: &'a [ProtocolKey],
+    /// Optional kvno hint from the ticket.
+    pub kvno: Option<u32>,
+    /// Expected server name; ticket sname must match.
+    pub expected_server: Option<&'a PrincipalName>,
+    /// Expected server realm.
+    pub expected_realm: Option<&'a str>,
+    /// Clock skew in seconds.
+    pub skew: i64,
+    /// Optional client addresses to check against ticket caddr.
+    pub addresses: Option<&'a HostAddresses>,
+    /// Now (for tests); default wall clock.
+    pub now: Option<KerberosTime>,
 }
 
-impl ReplayCache {
-    /// Empty cache.
+impl<'a> ApVerifyParams<'a> {
+    /// Single service key, 300s skew, no name check.
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub fn single_key(key: &'a ProtocolKey) -> Self {
+        Self {
+            keys: std::slice::from_ref(key),
+            kvno: None,
+            expected_server: None,
+            expected_realm: None,
+            skew: DEFAULT_SKEW,
+            addresses: None,
+            now: None,
+        }
     }
 }
 
 /// Build an AP-REQ from a service ticket and its session key.
-///
-/// Authenticator is encrypted with key usage 11.
 ///
 /// # Errors
 ///
@@ -39,13 +62,39 @@ pub fn build_ap_req(
     crealm: &Realm,
     cname: &PrincipalName,
 ) -> Result<ApReq, Error> {
+    build_ap_req_opts(ticket, session_key, crealm, cname, ApOptions::none(), None)
+}
+
+/// Build an AP-REQ with explicit `ap_options` and optional checksum over app data.
+///
+/// # Errors
+///
+/// Returns crypto or DER failures.
+pub fn build_ap_req_opts(
+    ticket: Ticket,
+    session_key: &ProtocolKey,
+    crealm: &Realm,
+    cname: &PrincipalName,
+    ap_options: ApOptions,
+    cksum_data: Option<&[u8]>,
+) -> Result<ApReq, Error> {
     let now = KerberosTime::now();
-    let usec = now.0.timestamp_subsec_micros() % 1_000_000;
+    let usec = krb5_types::Microseconds::from_subsec_micros(now.0.timestamp_subsec_micros());
+    let cksum = if let Some(data) = cksum_data {
+        let usage = KeyUsage::new(ku::AP_REQ_AUTH_CKSUM)?;
+        let mic = checksum(session_key, usage, data)?;
+        Some(krb5_types::Checksum {
+            cksumtype: session_key.etype().checksum_type(),
+            checksum: mic.into(),
+        })
+    } else {
+        None
+    };
     let authenticator = Authenticator {
         authenticator_vno: Authenticator::VNO,
         crealm: crealm.clone(),
         cname: cname.clone(),
-        cksum: None,
+        cksum,
         cusec: usec,
         ctime: now,
         subkey: None,
@@ -58,7 +107,7 @@ pub fn build_ap_req(
     Ok(ApReq {
         pvno: ApReq::PVNO,
         msg_type: ApReq::MSG_TYPE,
-        ap_options: ApOptions::none(),
+        ap_options,
         ticket,
         authenticator: EncryptedData {
             etype: session_key.etype().to_iana(),
@@ -75,36 +124,50 @@ pub struct ApVerifyOk {
     pub ticket_part: EncTicketPart,
     /// Decrypted authenticator.
     pub authenticator: Authenticator,
+    /// Whether the initiator requested mutual authentication.
+    pub mutual_required: bool,
 }
 
-/// Verify an AP-REQ using the service long-term key (typically from a keytab).
-///
-/// Rejects truncated encodings, HMAC failure (wrong key), and a repeated
-/// authenticator `(cname, ctime, cusec)`.
+/// Verify an AP-REQ using a single service key (tests / simple hosts).
 ///
 /// # Errors
 ///
-/// Returns [`Error`] on any of those failures. Does not panic.
+/// Returns [`Error`] on truncated input, HMAC failure, replay, skew, expiry,
+/// or server-name mismatch.
 pub fn verify_ap_req(
     raw: &[u8],
     service_key: &ProtocolKey,
-    replay: &mut ReplayCache,
+    replay: &ReplayCache,
 ) -> Result<ApVerifyOk, Error> {
-    let correlation_id = krb5_log::new_correlation_id();
+    verify_ap_req_ex(raw, &ApVerifyParams::single_key(service_key), replay, None)
+}
+
+/// Full AP-REQ verify.
+///
+/// # Errors
+///
+/// See [`verify_ap_req`].
+pub fn verify_ap_req_ex(
+    raw: &[u8],
+    params: &ApVerifyParams<'_>,
+    replay: &ReplayCache,
+    app_cksum: Option<&[u8]>,
+) -> Result<ApVerifyOk, Error> {
+    let _g = krb5_log::enter_correlation(krb5_log::new_correlation_id());
     let started = Instant::now();
-    let result = verify_inner(raw, service_key, replay);
+    let result = verify_inner(raw, params, replay, app_cksum);
     let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
     match &result {
         Ok(_) => tracing::info!(
             event = krb5_log::events::PROTOCOL_AP,
-            correlation_id,
+            correlation_id = krb5_log::current_correlation_id(),
             component = "krb5-protocol",
             duration_us,
             outcome = "ok",
         ),
         Err(e) => tracing::error!(
             event = krb5_log::events::PROTOCOL_AP,
-            correlation_id,
+            correlation_id = krb5_log::current_correlation_id(),
             component = "krb5-protocol",
             duration_us,
             outcome = "error",
@@ -116,45 +179,141 @@ pub fn verify_ap_req(
 
 fn verify_inner(
     raw: &[u8],
-    service_key: &ProtocolKey,
-    replay: &mut ReplayCache,
+    params: &ApVerifyParams<'_>,
+    replay: &ReplayCache,
+    app_cksum: Option<&[u8]>,
 ) -> Result<ApVerifyOk, Error> {
     if raw.is_empty() {
         return Err(Error::TruncatedReply);
     }
     let ap: ApReq = decode(raw)?;
+    if let Some(exp) = params.expected_server {
+        if ap.ticket.sname != *exp {
+            return Err(Error::KrbError {
+                code: err::NOT_US,
+                text: Some("ticket sname does not match expected server".into()),
+            });
+        }
+    }
+    if let Some(r) = params.expected_realm {
+        if ap.ticket.realm.as_bytes() != r.as_bytes() {
+            return Err(Error::KrbError {
+                code: err::NOT_US,
+                text: Some("ticket realm does not match".into()),
+            });
+        }
+    }
     let tkt_usage = KeyUsage::new(ku::TICKET)?;
-    let tkt_plain = decrypt(service_key, tkt_usage, ap.ticket.enc_part.cipher.as_ref())?;
-    let ticket_part: EncTicketPart = decode(&tkt_plain)?;
-    let session_etype = EncryptionType::from_iana(ticket_part.key.keytype)?;
+    let mut last_err = Error::KrbError {
+        code: err::NOKEY,
+        text: Some("no matching service key".into()),
+    };
+    let mut ticket_part: Option<EncTicketPart> = None;
+    let want_kvno = ap.ticket.enc_part.kvno.or(params.kvno);
+    for (i, key) in params.keys.iter().enumerate() {
+        if let Some(v) = want_kvno {
+            // Prefer matching kvno when the caller packed kvno into key order.
+            let _ = (v, i);
+        }
+        match decrypt(key, tkt_usage, ap.ticket.enc_part.cipher.as_ref()) {
+            Ok(tkt_plain) => match decode::<EncTicketPart>(&tkt_plain) {
+                Ok(p) => {
+                    ticket_part = Some(p);
+                    break;
+                }
+                Err(e) => last_err = e.into(),
+            },
+            Err(e) => last_err = e.into(),
+        }
+    }
+    let ticket_part = ticket_part.ok_or(last_err)?;
+    if ticket_part.flags.invalid() {
+        return Err(Error::KrbError {
+            code: err::TKT_NYV,
+            text: Some("INVALID flag".into()),
+        });
+    }
+    let now = params.now.clone().unwrap_or_else(KerberosTime::now);
+    let skew = params.skew.max(0);
+    if let Some(start) = &ticket_part.starttime {
+        if now.delta_seconds(start) < -skew {
+            return Err(Error::KrbError {
+                code: err::TKT_NYV,
+                text: Some("ticket not yet valid".into()),
+            });
+        }
+    }
+    if ticket_part.endtime.delta_seconds(&now) < -skew {
+        return Err(Error::KrbError {
+            code: err::TKT_EXPIRED,
+            text: Some("ticket expired".into()),
+        });
+    }
+    if let Some(addrs) = params.addresses {
+        if let Some(caddr) = &ticket_part.caddr {
+            if caddr != addrs {
+                return Err(Error::KrbError {
+                    code: err::BADADDR,
+                    text: Some("address mismatch".into()),
+                });
+            }
+        }
+    }
+    let session_etype = EncryptionType::from_iana(ticket_part.key.keytype)
+        .or_else(|_| EncryptionType::known(ticket_part.key.keytype))?;
     let session = ProtocolKey::from_bytes(session_etype, ticket_part.key.keyvalue.as_ref())?;
     let auth_usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)?;
     let auth_plain = decrypt(&session, auth_usage, ap.authenticator.cipher.as_ref())?;
     let authenticator: Authenticator = decode(&auth_plain)?;
+    authenticator
+        .cusec
+        .validate()
+        .map_err(|e| Error::ReplyMismatch(e.to_string()))?;
     if authenticator.cname != ticket_part.cname || authenticator.crealm != ticket_part.crealm {
         return Err(Error::KrbError {
-            code: krb5_types::err::BAD_INTEGRITY,
+            code: err::BAD_INTEGRITY,
             text: Some("authenticator/ticket client mismatch".into()),
         });
+    }
+    let skew_delta = now.delta_seconds(&authenticator.ctime).unsigned_abs() as i64;
+    if skew_delta > skew {
+        return Err(Error::KrbError {
+            code: err::SKEW,
+            text: Some("authenticator clock skew".into()),
+        });
+    }
+    if let Some(ck) = &authenticator.cksum {
+        if let Some(data) = app_cksum {
+            let usage = KeyUsage::new(ku::AP_REQ_AUTH_CKSUM)?;
+            verify_checksum(&session, usage, data, ck.checksum.as_ref())?;
+        }
     }
     let client = format!(
         "{}@{}",
         authenticator.cname.components_joined(),
         String::from_utf8_lossy(authenticator.crealm.as_bytes())
     );
-    let stamp = (
-        client,
-        authenticator.ctime.unix_seconds(),
-        authenticator.cusec,
+    let server = format!(
+        "{}@{}",
+        ap.ticket.sname.components_joined(),
+        String::from_utf8_lossy(ap.ticket.realm.as_bytes())
     );
-    if !replay.seen.insert(stamp) {
+    let key = ReplayKey {
+        client,
+        server,
+        ctime: authenticator.ctime.unix_seconds(),
+        cusec: authenticator.cusec.get(),
+        auth_hash: ReplayCache::hash_authenticator(ap.authenticator.cipher.as_ref()),
+    };
+    if replay.check_and_store(key) {
         return Err(Error::KrbError {
-            code: krb5_types::err::REPEAT,
+            code: err::REPEAT,
             text: Some("authenticator replay".into()),
         });
     }
     Ok(ApVerifyOk {
         ticket_part,
         authenticator,
+        mutual_required: ap.ap_options.wants_mutual(),
     })
 }

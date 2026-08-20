@@ -35,16 +35,49 @@ impl KdcAddr {
 }
 
 /// Send `request` to the KDC. Prefers UDP; retries on TCP if the KDC asks
-/// (`KRB_ERR_RESPONSE_TOO_BIG`) or UDP fails.
+/// (`KRB_ERR_RESPONSE_TOO_BIG`) or UDP fails. UDP uses `connect()` so an
+/// off-path first datagram is not accepted.
 ///
 /// # Errors
 ///
 /// Returns [`Error::Io`] on network failure.
 pub fn exchange(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
+    exchange_with_failover(std::slice::from_ref(addr), request)
+}
+
+/// Try each KDC in order with UDP retransmit/backoff (1s, 2s, 4s).
+///
+/// # Errors
+///
+/// Returns the last transport error.
+pub fn exchange_with_failover(addrs: &[KdcAddr], request: &[u8]) -> Result<Vec<u8>, Error> {
+    let mut last = Error::transport_msg("no KDC addresses");
+    for addr in addrs {
+        match exchange_one(addr, request) {
+            Ok(r) => return Ok(r),
+            Err(e) if e.is_retryable() => last = e,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last)
+}
+
+fn exchange_one(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
     match exchange_udp(addr, request) {
-        Ok(reply) if is_response_too_big(&reply) => exchange_tcp(addr, request),
+        Ok(reply) if is_response_too_big(&reply) => {
+            tracing::info!(
+                event = krb5_log::events::PROTOCOL_TRANSPORT,
+                correlation_id = krb5_log::current_correlation_id(),
+                component = "krb5-protocol",
+                outcome = "ok",
+                error = "KRB_ERR_RESPONSE_TOO_BIG, falling back to TCP",
+            );
+            exchange_tcp(addr, request)
+        }
         Ok(reply) => Ok(reply),
-        Err(Error::Io(_)) => exchange_tcp(addr, request),
+        Err(Error::Io {
+            retryable: true, ..
+        }) => exchange_tcp(addr, request),
         Err(e) => Err(e),
     }
 }
@@ -64,58 +97,81 @@ fn exchange_udp(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
     } else {
         "0.0.0.0:0"
     };
-    let sock = UdpSocket::bind(bind).map_err(|e| Error::Io(format!("udp bind: {e}")))?;
+    let sock = UdpSocket::bind(bind).map_err(|e| Error::transport_msg(format!("udp bind: {e}")))?;
     sock.set_read_timeout(Some(TIMEOUT))
-        .map_err(|e| Error::Io(e.to_string()))?;
+        .map_err(|e| Error::transport_msg(e.to_string()))?;
     sock.set_write_timeout(Some(TIMEOUT))
-        .map_err(|e| Error::Io(e.to_string()))?;
+        .map_err(|e| Error::transport_msg(e.to_string()))?;
     let dest = format!("{}:{}", addr.host, addr.port);
-    sock.send_to(request, dest.as_str())
-        .map_err(|e| Error::Io(format!("udp send {dest}: {e}")))?;
-    let mut buf = vec![0u8; UDP_MAX];
-    let (n, _) = sock
-        .recv_from(&mut buf)
-        .map_err(|e| Error::Io(format!("udp recv: {e}")))?;
-    buf.truncate(n);
-    Ok(buf)
+    sock.connect(dest.as_str()).map_err(Error::from_io)?;
+    let backoffs = [
+        Duration::from_secs(1),
+        Duration::from_secs(2),
+        Duration::from_secs(4),
+    ];
+    let mut last = Error::transport_msg("udp timeout");
+    for (i, bo) in backoffs.iter().enumerate() {
+        sock.set_read_timeout(Some(*bo)).map_err(Error::from_io)?;
+        if let Err(e) = sock.send(request) {
+            last = Error::from_io(e);
+            continue;
+        }
+        let mut buf = vec![0u8; UDP_MAX];
+        match sock.recv(&mut buf) {
+            Ok(n) => {
+                buf.truncate(n);
+                return Ok(buf);
+            }
+            Err(e) => {
+                last = Error::from_io(e);
+                if i + 1 == backoffs.len() {
+                    break;
+                }
+            }
+        }
+    }
+    Err(last)
 }
 
 fn exchange_tcp(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
     let dest = format!("{}:{}", addr.host, addr.port);
     let mut addrs = dest
         .to_socket_addrs()
-        .map_err(|e| Error::Io(e.to_string()))?;
+        .map_err(|e| Error::transport_msg(e.to_string()))?;
     let sa = addrs
         .next()
-        .ok_or_else(|| Error::Io("no KDC address".into()))?;
+        .ok_or_else(|| Error::transport_msg("no KDC address"))?;
     let mut stream = TcpStream::connect_timeout(&sa, TIMEOUT)
-        .map_err(|e| Error::Io(format!("tcp connect {dest}: {e}")))?;
+        .map_err(|e| Error::transport_msg(format!("tcp connect {dest}: {e}")))?;
     stream
         .set_read_timeout(Some(TIMEOUT))
-        .map_err(|e| Error::Io(e.to_string()))?;
+        .map_err(|e| Error::transport_msg(e.to_string()))?;
     stream
         .set_write_timeout(Some(TIMEOUT))
-        .map_err(|e| Error::Io(e.to_string()))?;
-    let len = u32::try_from(request.len()).map_err(|_| Error::Io("request too large".into()))?;
+        .map_err(|e| Error::transport_msg(e.to_string()))?;
+    let len =
+        u32::try_from(request.len()).map_err(|_| Error::transport_msg("request too large"))?;
     use std::io::{Read, Write};
     stream
         .write_all(&len.to_be_bytes())
-        .map_err(|e| Error::Io(e.to_string()))?;
+        .map_err(|e| Error::transport_msg(e.to_string()))?;
     stream
         .write_all(request)
-        .map_err(|e| Error::Io(e.to_string()))?;
-    stream.flush().map_err(|e| Error::Io(e.to_string()))?;
+        .map_err(|e| Error::transport_msg(e.to_string()))?;
+    stream
+        .flush()
+        .map_err(|e| Error::transport_msg(e.to_string()))?;
     let mut hdr = [0u8; 4];
     stream
         .read_exact(&mut hdr)
-        .map_err(|e| Error::Io(e.to_string()))?;
+        .map_err(|e| Error::transport_msg(e.to_string()))?;
     let n = u32::from_be_bytes(hdr) as usize;
     if n == 0 || n > 1024 * 1024 {
-        return Err(Error::Io(format!("invalid TCP length {n}")));
+        return Err(Error::transport_msg(format!("invalid TCP length {n}")));
     }
     let mut buf = vec![0u8; n];
     stream
         .read_exact(&mut buf)
-        .map_err(|e| Error::Io(e.to_string()))?;
+        .map_err(|e| Error::transport_msg(e.to_string()))?;
     Ok(buf)
 }
