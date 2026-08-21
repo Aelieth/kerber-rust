@@ -74,27 +74,49 @@ fn tgs_inner(
     let mut hop_realm = realm.to_owned();
     for _ in 0..8 {
         let out = tgs_once(&cur_kdc, &cur_tgt, sname.clone(), &hop_realm)?;
-        authenticate_srealm(&out)?;
-        if out.ticket.sname.is_krbtgt() && out.ticket.sname != *sname {
-            let foreign = referral_hop_realm(&out.ticket.sname).ok_or(Error::Referral)?;
-            if foreign.is_empty() || foreign == hop_realm {
-                return Err(Error::Referral);
+        match tgs_hop_decision(sname, &hop_realm, &out)? {
+            TgsHop::Done => return Ok(out),
+            TgsHop::Referral(foreign) => {
+                hop_realm.clone_from(&foreign);
+                cur_kdc = kdc_for_realm(&foreign, kdc);
+                cur_tgt = AsOutcome {
+                    ticket: out.ticket,
+                    enc_part: out.enc_part,
+                    client_key: cur_tgt.client_key.clone(),
+                    session_key: out.session_key,
+                    cname: cur_tgt.cname.clone(),
+                    crealm: cur_tgt.crealm.clone(),
+                };
             }
-            hop_realm.clone_from(&foreign);
-            cur_kdc = kdc_for_realm(&foreign, kdc);
-            cur_tgt = AsOutcome {
-                ticket: out.ticket,
-                enc_part: out.enc_part,
-                client_key: cur_tgt.client_key.clone(),
-                session_key: out.session_key,
-                cname: cur_tgt.cname.clone(),
-                crealm: cur_tgt.crealm.clone(),
-            };
-            continue;
         }
-        return Ok(out);
     }
     Err(Error::Referral)
+}
+
+/// One TGS-REQ hop: stay, chase a referral, or reject a bad srealm.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TgsHop {
+    /// `out` is the requested service ticket.
+    Done,
+    /// Chase `krbtgt/FOREIGN`; next `body.realm` is this string.
+    Referral(String),
+}
+
+/// Authenticate `srealm` then decide whether this TGS-REP is a referral hop.
+pub(crate) fn tgs_hop_decision(
+    requested: &PrincipalName,
+    hop_realm: &str,
+    out: &TgsOutcome,
+) -> Result<TgsHop, Error> {
+    authenticate_srealm(out)?;
+    if out.ticket.sname.is_krbtgt() && out.ticket.sname != *requested {
+        let foreign = referral_hop_realm(&out.ticket.sname).ok_or(Error::Referral)?;
+        if foreign.is_empty() || foreign == hop_realm {
+            return Err(Error::Referral);
+        }
+        return Ok(TgsHop::Referral(foreign));
+    }
+    Ok(TgsHop::Done)
 }
 
 /// Next TGS-REQ `realm` after a referral TGT `krbtgt/FOREIGN`.
@@ -244,10 +266,10 @@ fn tgs_once(
     if enc_part.nonce != nonce {
         return Err(Error::NonceMismatch);
     }
-    if inner.ticket.sname != requested && enc_part.sname != requested {
-        if inner.ticket.sname.is_krbtgt() {
-            return Err(Error::Referral);
-        }
+    if inner.ticket.sname != requested
+        && enc_part.sname != requested
+        && !inner.ticket.sname.is_krbtgt()
+    {
         return Err(Error::ReplyMismatch("TGS-REP sname mismatch".into()));
     }
     let session_etype = EncryptionType::from_iana(enc_part.key.keytype)
@@ -265,4 +287,93 @@ fn random_nonce31() -> Result<u32, Error> {
     getrandom::getrandom(&mut b).map_err(|e| Error::transport_msg(e.to_string()))?;
     let n = u32::from_be_bytes(b) & 0x7fff_ffff;
     Ok(if n == 0 { 1 } else { n })
+}
+
+#[cfg(test)]
+mod tests {
+    use krb5_crypto::{EncryptionType, ProtocolKey};
+    use krb5_types::{
+        ascii, EncKdcRepPart, EncryptedData, EncryptionKey, OctetString, PrincipalName, Ticket,
+        TicketFlags,
+    };
+
+    use super::*;
+
+    fn session() -> ProtocolKey {
+        ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[7u8; 32]).unwrap()
+    }
+
+    fn outcome(ticket_realm: &str, sname: PrincipalName, srealm: &str) -> TgsOutcome {
+        let t = KerberosTime::now();
+        TgsOutcome {
+            ticket: Ticket {
+                tkt_vno: Ticket::VNO,
+                realm: ascii(ticket_realm),
+                sname: sname.clone(),
+                enc_part: EncryptedData {
+                    etype: 18,
+                    kvno: Some(1),
+                    cipher: OctetString::from(vec![0u8; 16]),
+                },
+            },
+            enc_part: EncKdcRepPart {
+                key: EncryptionKey {
+                    keytype: 18,
+                    keyvalue: OctetString::from(vec![7u8; 32]),
+                },
+                last_req: vec![],
+                nonce: 1,
+                key_expiration: None,
+                flags: TicketFlags::none(),
+                authtime: t.clone(),
+                starttime: None,
+                endtime: t,
+                renew_till: None,
+                srealm: ascii(srealm),
+                sname,
+                caddr: None,
+                encrypted_pa_data: None,
+            },
+            session_key: session(),
+        }
+    }
+
+    #[test]
+    fn hop_two_uses_foreign_realm() {
+        let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "svc.other.test"]);
+        let krbtgt = PrincipalName::krbtgt("OTHER.TEST");
+        let out = outcome("OTHER.TEST", krbtgt, "OTHER.TEST");
+        match tgs_hop_decision(&host, "KERBER.TEST", &out).unwrap() {
+            TgsHop::Referral(r) => assert_eq!(r, "OTHER.TEST"),
+            TgsHop::Done => panic!("expected referral hop"),
+        }
+    }
+
+    #[test]
+    fn hop_rejects_mismatched_srealm() {
+        let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "svc"]);
+        let krbtgt = PrincipalName::krbtgt("OTHER.TEST");
+        let out = outcome("OTHER.TEST", krbtgt, "EVIL.TEST");
+        let err = tgs_hop_decision(&host, "KERBER.TEST", &out).unwrap_err();
+        assert!(matches!(err, Error::ReplyMismatch(_)));
+    }
+
+    #[test]
+    fn hop_rejects_same_realm_referral() {
+        let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "svc"]);
+        let krbtgt = PrincipalName::krbtgt("KERBER.TEST");
+        let out = outcome("KERBER.TEST", krbtgt, "KERBER.TEST");
+        let err = tgs_hop_decision(&host, "KERBER.TEST", &out).unwrap_err();
+        assert!(matches!(err, Error::Referral));
+    }
+
+    #[test]
+    fn hop_done_for_service_ticket() {
+        let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "svc"]);
+        let out = outcome("KERBER.TEST", host.clone(), "KERBER.TEST");
+        assert_eq!(
+            tgs_hop_decision(&host, "KERBER.TEST", &out).unwrap(),
+            TgsHop::Done
+        );
+    }
 }
