@@ -13,3 +13,5 @@ core
 # Socket-boundary captures (golden MIT PDUs are tests/traces/mit-*.der)
 /tests/traces/kdc-*.der
 /tests/traces/client-*.der
+# Captured AD oracle fixtures — svc.keytab is a REAL service key; keep local, never commit
+/tests/traces/ad/
