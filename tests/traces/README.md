@@ -1,8 +1,10 @@
 # Golden DER / traces
 
 In-crate tests (`crates/krb5-protocol/tests/golden_traces.rs`) decode each
-`mit-*.der` with the shipped rasn encoder/decoder and field-diff a
-re-encode. A divergence fails the unit `test` CI job.
+`mit-*.der` with the shipped rasn codec and require `encode(decode(raw))`
+to equal the captured bytes (plus named fields). A divergence fails the
+unit `test` CI job. `mit-krb-error-preauth.der` is the KRB-ERROR we emit
+(PREAUTH_REQUIRED), not a MIT-KDC reply.
 
 Set `KERBER_CAPTURE_DIR` to this directory (or a temp dir) when running
 the KDC or client: each raw PDU is written as `{kdc,client}-{req,rep}-<nonce>.der`

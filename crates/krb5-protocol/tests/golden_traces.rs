@@ -1,5 +1,5 @@
 //! Decode checked-in `tests/traces/mit-*.der` with the shipped codec and
-//! field-diff against a re-encode. Fails on encoder divergence.
+//! byte/field-diff a re-encode against the MIT (or self-emitted error) bytes.
 
 use krb5_asn1::{decode, encode};
 use krb5_protocol::{as_req, tgs_req};
@@ -14,7 +14,29 @@ fn load(name: &str) -> Vec<u8> {
     std::fs::read(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()))
 }
 
-macro_rules! round_trip {
+fn first_diff(a: &[u8], b: &[u8]) -> String {
+    let n = a.len().min(b.len());
+    let i = (0..n).find(|&i| a[i] != b[i]).unwrap_or(n);
+    let win = |s: &[u8]| {
+        let lo = i.saturating_sub(4);
+        let hi = (i + 12).min(s.len());
+        s[lo..hi]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    format!(
+        "first differ @ {i} (len {} vs {}): ours [{}] mit [{}]",
+        a.len(),
+        b.len(),
+        win(a),
+        win(b)
+    )
+}
+
+/// Genuine MIT PDUs: re-encode must match the captured bytes.
+macro_rules! mit_round_trip {
     ($ty:ty, $name:expr, $tag:expr) => {{
         let raw = load($name);
         assert_eq!(
@@ -28,16 +50,33 @@ macro_rules! round_trip {
         let redecoded: $ty = decode(&again).unwrap_or_else(|e| panic!("redecode {}: {e}", $name));
         assert_eq!(
             decoded, redecoded,
-            "{}: shipped encoder diverged (decode→encode→decode)",
+            "{}: decode→encode→decode changed fields",
             $name
         );
+        assert_eq!(
+            again,
+            raw,
+            "{}: encoder DER diverged from MIT: {}",
+            $name,
+            first_diff(&again, &raw)
+        );
+        decoded
     }};
+}
+
+fn utf8_realm(r: &krb5_types::Realm) -> &str {
+    std::str::from_utf8(r.as_bytes()).unwrap()
 }
 
 #[test]
 fn mit_as_req_round_trips_through_encoder() {
-    round_trip!(AsReq, "mit-as-req.der", 0x6a);
-    round_trip!(AsReq, "mit-as-req-preauth.der", 0x6a);
+    let req: AsReq = mit_round_trip!(AsReq, "mit-as-req.der", 0x6a);
+    assert_eq!(req.0.pvno, 5);
+    assert_eq!(req.0.msg_type, 10);
+    assert_eq!(utf8_realm(&req.0.req_body.realm), "KERBER.TEST");
+    let pre: AsReq = mit_round_trip!(AsReq, "mit-as-req-preauth.der", 0x6a);
+    assert_eq!(pre.0.msg_type, 10);
+    assert!(pre.0.padata.as_ref().is_some_and(|p| !p.is_empty()));
     let our = encode(&as_req(
         PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
         "KERBER.TEST",
@@ -49,38 +88,54 @@ fn mit_as_req_round_trips_through_encoder() {
     let decoded: AsReq = decode(&our).unwrap();
     assert_eq!(decoded.0.pvno, 5);
     assert_eq!(decoded.0.msg_type, 10);
+    assert_eq!(utf8_realm(&decoded.0.req_body.realm), "KERBER.TEST");
 }
 
 #[test]
 fn mit_tgs_req_round_trips_through_encoder() {
-    round_trip!(TgsReq, "mit-tgs-req.der", 0x6c);
+    let req: TgsReq = mit_round_trip!(TgsReq, "mit-tgs-req.der", 0x6c);
+    assert_eq!(req.0.pvno, 5);
+    assert_eq!(req.0.msg_type, 12);
 }
 
 #[test]
 fn mit_as_rep_round_trips_through_encoder() {
-    round_trip!(AsRep, "mit-as-rep.der", 0x6b);
-    let raw = load("mit-as-rep.der");
-    let rep: AsRep = decode(&raw).unwrap();
+    let rep: AsRep = mit_round_trip!(AsRep, "mit-as-rep.der", 0x6b);
     assert_eq!(rep.0.pvno, 5);
     assert_eq!(rep.0.msg_type, 11);
-    assert_eq!(
-        std::str::from_utf8(rep.0.crealm.as_bytes()).unwrap(),
-        "KERBER.TEST"
-    );
+    assert_eq!(utf8_realm(&rep.0.crealm), "KERBER.TEST");
+    assert_eq!(utf8_realm(&rep.0.ticket.realm), "KERBER.TEST");
+    assert!(rep.0.ticket.enc_part.etype != 0);
 }
 
 #[test]
 fn mit_tgs_rep_round_trips_through_encoder() {
-    round_trip!(TgsRep, "mit-tgs-rep.der", 0x6d);
+    let rep: TgsRep = mit_round_trip!(TgsRep, "mit-tgs-rep.der", 0x6d);
+    assert_eq!(rep.0.pvno, 5);
+    assert_eq!(rep.0.msg_type, 13);
+    assert_eq!(utf8_realm(&rep.0.crealm), "KERBER.TEST");
+    assert_eq!(utf8_realm(&rep.0.ticket.realm), "KERBER.TEST");
+    assert!(rep.0.ticket.enc_part.etype != 0);
 }
 
 #[test]
 fn mit_krb_error_round_trips_through_encoder() {
-    round_trip!(KrbError, "mit-krb-error-preauth.der", 0x7e);
+    // Self-emitted PREAUTH_REQUIRED (not a MIT-KDC PDU). Semantic fields only;
+    // stime/nonce in a live issue_as will not byte-match this capture.
     let raw = load("mit-krb-error-preauth.der");
+    assert_eq!(raw.first().copied(), Some(0x7e));
     let e: KrbError = decode(&raw).unwrap();
+    let again = encode(&e).unwrap();
+    assert_eq!(decode::<KrbError>(&again).unwrap(), e);
+    assert_eq!(
+        again,
+        raw,
+        "self-emitted KRB-ERROR re-encode: {}",
+        first_diff(&again, &raw)
+    );
     assert_eq!(e.pvno, 5);
     assert_eq!(e.msg_type, 30);
+    assert_eq!(e.error_code, krb5_types::err::PREAUTH_REQUIRED);
 }
 
 #[test]
