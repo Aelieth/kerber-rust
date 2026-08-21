@@ -17,8 +17,10 @@ RPC is not implemented. Persistence is embed-only. `bidirectional-gate`
 is Rust↔Rust, not a MIT oracle. `krb5-config` is consumed: the KDC applies `kdc.conf`
 ticket policy (and non-test listen/db paths); `kinit` / TGS referral
 chase use `KRB5_CONFIG` then `/etc/krb5.conf` `[realms]` (argv is the
-fallback). Long soaks and live Heimdal/AD/SSPI remain
-environment-dependent. See [docs/stages.md](docs/stages.md).
+fallback). Long soaks and live Heimdal/SSPI remain
+environment-dependent. AD lab coordinates and the `~/adlab` isolation
+protocol are in [docs/ad-lab.md](docs/ad-lab.md). See
+[docs/stages.md](docs/stages.md).
 
 **License:** [Apache-2.0](LICENSE-APACHE) OR [MIT](LICENSE-MIT), at your
 option. This tree contains cryptographic software. Export from the

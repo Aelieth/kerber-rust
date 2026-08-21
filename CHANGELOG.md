@@ -70,9 +70,9 @@ this project uses semantic versioning once a crate is published.
 - `pkinit-gate.sh` fails when MIT PKINIT interop fails; `cargo-deny`
   is blocking in CI.
 - `KERBER_CAPTURE_DIR` writes raw PDUs. Checked-in `tests/traces/mit-*.der`
-  are decoded and field-diffed against the shipped encoder in unit CI
-  (`golden_traces.rs`). Reply goldens are MIT-KDC bytes from
-  `client-gate.sh`.
+  are decoded and **byte-diffed** (`encode(decode(raw)) == raw`) against
+  the shipped encoder in unit CI (`golden_traces.rs`). Reply goldens are
+  MIT-KDC bytes from `client-gate.sh`. AD lab coordinates: `docs/ad-lab.md`.
 - RFC 6803 Camellia uses KDF-FEEDBACK-CMAC (not RFC 3961 n-fold DK).
   RFC 3961 3DES s2k uses 168-fold + random-to-key. Published KATs live
   in `krb5-crypto/tests/known_answer.rs`.

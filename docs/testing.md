@@ -5,8 +5,9 @@ Testing is continuous. Categories grow with the stages.
 ## Normal / baseline
 
 - Known-answer tests in `crates/krb5-crypto/tests/known_answer.rs`
-  (RFC 3961 3DES s2k, RFC 3962, RFC 6803 Camellia-CTS-CMAC, RFC 8009
-  PRF, RFC 4556 `octetstring2key`, SPAKE IANA M/N, MIT `t_derive.c` /
+  (RFC 3961 3DES s2k, RFC 3962, RFC 6803 Camellia-CTS-CMAC, MIT
+  `t_prf.c` PRF / RFC 6113 PRF+, RFC 4556 `octetstring2key`, RFC 4757
+  RC4 s2k, SPAKE IANA M/N + fixed-scalar public, MIT `t_derive.c` /
   `t_cksums.c`).
 - DER round-trip in `crates/krb5-asn1/tests/round_trip.rs`.
 - Downstream consumer tests in `examples/consumer`.
@@ -27,8 +28,10 @@ PKINIT CMS, PAC NDR, SPAKE points, Oakley DH, GSS tokens) seeded from
 
 ## Interop
 
-Primary oracle: MIT Kerberos **1.22.2** in `harness/`. Heimdal and
-Active Directory / SSPI are later stages.
+Primary oracle: MIT Kerberos **1.22.2** in `harness/`. A Windows
+Server 2022 Evaluation DC (`AD.KERBER.TEST`) is captured for the AD
+round; see [`ad-lab.md`](ad-lab.md). Live AD commands use `~/adlab`
+only — never `/etc/krb5.conf` or SSSD. Heimdal and SSPI remain later.
 
 ## Production-gate
 
