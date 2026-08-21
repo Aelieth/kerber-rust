@@ -449,9 +449,9 @@ fn rfc6803_camellia_cts_cmac() {
     assert_eq!(decrypt(&cam256_empty, u0, &got256).unwrap(), b"");
 }
 
-/// RFC 8009 appendix A PRF, plus RFC 6113 PRF+ counter-prepend.
+/// MIT `t_prf.c` PRF vectors (RFC 8009 etypes 19/20 and AES-SHA1 PRF+).
 #[test]
-fn rfc8009_prf_and_prf_plus() {
+fn mit_t_prf_and_rfc6113_prf_plus() {
     let k128 = ProtocolKey::from_bytes(
         EncryptionType::Aes128CtsHmacSha256128,
         &hex("3705d96080c17728a0e800eab6e0d23c"),
@@ -470,10 +470,24 @@ fn rfc8009_prf_and_prf_plus() {
         prf(&k256, b"test").unwrap(),
         hex("9801f69a368c2bf675e59521e177d9a07f67efe1cfde8d3c8d6f6a0256e3b17db3c1b62ad1b8553360d17367eb1514d2")
     );
-    let plus = prf_plus(&k128, b"test", 32).unwrap();
-    let mut seed = vec![1u8];
-    seed.extend_from_slice(b"test");
-    assert_eq!(plus, prf(&k128, &seed).unwrap());
+    // MIT t_prf.c AES-128-SHA1: PRF(K, 0x01 || "a") — the first PRF+ block.
+    let k_sha1 = ProtocolKey::from_bytes(
+        EncryptionType::Aes128CtsHmacSha196,
+        &hex("ae272e7cdec86ac5138cdb196d8e297d"),
+    )
+    .unwrap();
+    assert_eq!(
+        prf_plus(&k_sha1, b"a", 16).unwrap(),
+        hex("77b39a37a868920f2a51f9dd150c5717")
+    );
+}
+
+/// RFC 4757 string-to-key is MD4(UTF-16LE(password)) — the NT hash of
+/// "password" is a published NTLM vector.
+#[test]
+fn rfc4757_rc4_string_to_key() {
+    let k = string_to_key(EncryptionType::Rc4Hmac, b"password", b"", None).unwrap();
+    assert_eq!(k.as_bytes(), hex("8846f7eaee8fb117ad06bdd830b7586c"));
 }
 
 /// RFC 4556 `octetstring2key`: SHA-1(0x00 || x) K-truncate. Empty `x` is
@@ -508,8 +522,10 @@ fn spake_iana_mn_and_fixed_scalar() {
     let mut w = [0u8; 32];
     w[31] = 2;
     let pub_s = spake_public_wbytes(&w, &secret, true).unwrap();
-    assert_eq!(pub_s.len(), 33);
-    assert!(pub_s[0] == 0x02 || pub_s[0] == 0x03);
+    assert_eq!(
+        pub_s,
+        hex("02cae70a1517dcfe1d30fe368abaa3048eea46260ada39c78ceb0ef6222fccd61a")
+    );
     let thash = spake_thash_update(&[0u8; 32], m, n);
     assert_eq!(
         thash,
