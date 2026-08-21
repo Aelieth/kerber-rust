@@ -285,7 +285,8 @@ mod tests {
             "KERBER.TEST",
             9,
             Some(vec![krb5_kdc::pa_enc_timestamp(&key).unwrap()]),
-        );
+        )
+        .unwrap();
         krb5_kdc::issue_as(&replica, &req).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }

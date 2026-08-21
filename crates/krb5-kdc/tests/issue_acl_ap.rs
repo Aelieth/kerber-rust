@@ -93,7 +93,7 @@ fn acl_parse_kadm5_style() {
 fn as_without_preauth_is_preauth_required() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = as_req(cname, TEST_REALM, 7, None);
+    let req = as_req(cname, TEST_REALM, 7, None).unwrap();
     let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
     match err {
         Error::PreauthRequired { e_data } => assert!(!e_data.is_empty()),
@@ -107,7 +107,7 @@ fn as_and_tgs_issue_decryptable_tickets() {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = client_key();
     let padata = vec![pa_enc_timestamp(&key).expect("pa-ts")];
-    let req = as_req(cname.clone(), TEST_REALM, 11, Some(padata));
+    let req = as_req(cname.clone(), TEST_REALM, 11, Some(padata)).unwrap();
     let issued = krb5_kdc::issue_as(&store, &req).expect("AS");
 
     let usage_as = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
@@ -173,7 +173,8 @@ fn ap_req_valid_truncated_wrong_key_replay() {
         TEST_REALM,
         21,
         Some(vec![pa_enc_timestamp(&key).expect("pa")]),
-    );
+    )
+    .unwrap();
     let as_out = krb5_kdc::issue_as(&store, &req).expect("AS");
     let tgs = tgs_req(
         as_out.rep.0.ticket.clone(),
@@ -252,7 +253,8 @@ fn as_rep_flags_are_initial_and_preauth_not_renewable() {
         TEST_REALM,
         42,
         Some(vec![pa_enc_timestamp(&key).expect("pa")]),
-    );
+    )
+    .unwrap();
     let issued = krb5_kdc::issue_as(&store, &req).expect("AS");
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
     let plain = decrypt(&key, usage, issued.rep.0.enc_part.cipher.as_ref()).expect("dec");
@@ -284,7 +286,8 @@ fn wrong_password_yields_preauth_failed_bytes() {
         TEST_REALM,
         5,
         Some(vec![pa_enc_timestamp(&wrong).expect("pa")]),
-    );
+    )
+    .unwrap();
     let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
     assert!(!bytes.is_empty());
     let e: krb5_types::KrbError = decode(&bytes).expect("KRB-ERROR");
@@ -301,7 +304,8 @@ fn no_common_etype_is_etype_nosupp() {
         TEST_REALM,
         6,
         Some(vec![pa_enc_timestamp(&key).expect("pa")]),
-    );
+    )
+    .unwrap();
     req.0.req_body.etype = vec![23]; // rc4, not in store unless allow_weak
     let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
     let e: krb5_types::KrbError = decode(&bytes).expect("KRB-ERROR");
@@ -318,7 +322,8 @@ fn tgs_bad_checksum_is_error() {
         TEST_REALM,
         8,
         Some(vec![pa_enc_timestamp(&key).expect("pa")]),
-    );
+    )
+    .unwrap();
     let as_out = krb5_kdc::issue_as(&store, &req).expect("AS");
     let mut tgs = tgs_req(
         as_out.rep.0.ticket.clone(),

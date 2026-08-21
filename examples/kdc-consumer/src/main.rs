@@ -23,7 +23,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         TEST_REALM,
         99,
         Some(vec![pa_enc_timestamp(&ckey.key)?]),
-    );
+    )?;
     let as_out = krb5_kdc::issue_as(&store, &req)?;
     let tkt_usage = KeyUsage::new(ku::TICKET)?;
     let tgt_key = store
@@ -120,7 +120,8 @@ mod tests {
             TEST_REALM,
             3,
             Some(vec![pa_enc_timestamp(&ckey.key).unwrap()]),
-        );
+        )
+        .unwrap();
         let as_out = krb5_kdc::issue_as(&store, &req).unwrap();
         let usage = KeyUsage::new(ku::TICKET).unwrap();
         assert_ne!(usage.get(), 0);

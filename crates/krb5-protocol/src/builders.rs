@@ -3,16 +3,28 @@
 use krb5_asn1::encode;
 use krb5_crypto::{checksum, encrypt, EncryptionType, KeyUsage, ProtocolKey};
 use krb5_types::{
-    ascii, ku, pa, ApOptions, ApReq, AsReq, Authenticator, Checksum, EncryptedData, KdcOptions,
-    KdcReq, KdcReqBody, KerberosTime, Microseconds, PaData, PaEncTsEnc, PrincipalName, TgsReq,
-    Ticket,
+    ku, pa, ApOptions, ApReq, AsReq, Authenticator, Checksum, EncryptedData, KdcOptions, KdcReq,
+    KdcReqBody, KerberosTime, Microseconds, PaData, PaEncTsEnc, PrincipalName, TgsReq, Ticket,
 };
 
 use crate::error::Error;
 
+fn realm_string(realm: &str) -> Result<krb5_types::Realm, Error> {
+    krb5_types::try_ascii(realm).map_err(|e| Error::ReplyMismatch(e.to_string()))
+}
+
 /// AS-REQ for `cname@realm` with optional padata.
-#[must_use]
-pub fn as_req(cname: PrincipalName, realm: &str, nonce: u32, padata: Option<Vec<PaData>>) -> AsReq {
+///
+/// # Errors
+///
+/// Returns [`Error::ReplyMismatch`] when `realm` is not a GeneralString.
+pub fn as_req(
+    cname: PrincipalName,
+    realm: &str,
+    nonce: u32,
+    padata: Option<Vec<PaData>>,
+) -> Result<AsReq, Error> {
+    let _ = realm_string(realm)?;
     as_req_sname(
         cname,
         realm,
@@ -27,7 +39,10 @@ pub fn as_req(cname: PrincipalName, realm: &str, nonce: u32, padata: Option<Vec<
 }
 
 /// AS-REQ with an explicit `sname` and etype list.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns [`Error::ReplyMismatch`] when `realm` is not a GeneralString.
 pub fn as_req_sname(
     cname: PrincipalName,
     realm: &str,
@@ -35,18 +50,18 @@ pub fn as_req_sname(
     padata: Option<Vec<PaData>>,
     sname: PrincipalName,
     etypes: Vec<i32>,
-) -> AsReq {
+) -> Result<AsReq, Error> {
     let till = KerberosTime::now()
         .add_hours(10)
         .unwrap_or_else(|_| KerberosTime::now());
-    AsReq(KdcReq {
+    Ok(AsReq(KdcReq {
         pvno: KdcReq::PVNO,
         msg_type: KdcReq::MSG_AS_REQ,
         padata,
         req_body: KdcReqBody {
             kdc_options: KdcOptions::forwardable(),
             cname: Some(cname),
-            realm: ascii(realm),
+            realm: realm_string(realm)?,
             sname: Some(sname),
             from: None,
             till,
@@ -57,7 +72,7 @@ pub fn as_req_sname(
             enc_authorization_data: None,
             additional_tickets: None,
         },
-    })
+    }))
 }
 
 /// PA-ENC-TIMESTAMP encrypted with the client long-term key (usage 1).

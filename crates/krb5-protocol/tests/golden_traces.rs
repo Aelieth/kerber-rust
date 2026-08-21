@@ -77,12 +77,15 @@ fn mit_as_req_round_trips_through_encoder() {
     let pre: AsReq = mit_round_trip!(AsReq, "mit-as-req-preauth.der", 0x6a);
     assert_eq!(pre.0.msg_type, 10);
     assert!(pre.0.padata.as_ref().is_some_and(|p| !p.is_empty()));
-    let our = encode(&as_req(
-        PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
-        "KERBER.TEST",
-        1,
-        None,
-    ))
+    let our = encode(
+        &as_req(
+            PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+            "KERBER.TEST",
+            1,
+            None,
+        )
+        .unwrap(),
+    )
     .unwrap();
     assert_eq!(our[0], 0x6a, "shipped AS-REQ encoder APPLICATION 10");
     let decoded: AsReq = decode(&our).unwrap();
@@ -159,7 +162,8 @@ fn tgs_req_builder_emits_application_12() {
         TEST_REALM,
         1,
         Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    );
+    )
+    .unwrap();
     let as_out = krb5_kdc::issue_as(&store, &req).unwrap();
     let tgs = tgs_req(
         as_out.rep.0.ticket,

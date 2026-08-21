@@ -401,7 +401,7 @@ mod tests {
             )
         });
         let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
-        let req = crate::as_req(cname, crate::TEST_REALM, 1, None);
+        let req = crate::as_req(cname, crate::TEST_REALM, 1, None).unwrap();
         let bytes = encode(&req).unwrap();
         let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
         sock.set_read_timeout(Some(Duration::from_secs(2))).unwrap();

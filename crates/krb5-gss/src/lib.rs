@@ -706,7 +706,8 @@ mod tests {
             TEST_REALM,
             1,
             Some(vec![pa_enc_timestamp(&key).unwrap()]),
-        );
+        )
+        .unwrap();
         let as_out = krb5_kdc::issue_as(&store, &req).unwrap();
         let tgs = tgs_req(
             as_out.rep.0.ticket.clone(),
@@ -778,7 +779,8 @@ mod tests {
             TEST_REALM,
             7,
             Some(vec![pa_enc_timestamp(&key).unwrap()]),
-        );
+        )
+        .unwrap();
         let as_out = krb5_kdc::issue_as(&store, &req).unwrap();
         let tgs = tgs_req(
             as_out.rep.0.ticket.clone(),
@@ -877,7 +879,8 @@ mod tests {
             TEST_REALM,
             9,
             Some(vec![pa_enc_timestamp(&key).unwrap()]),
-        );
+        )
+        .unwrap();
         let as_out = krb5_kdc::issue_as(&store, &req).unwrap();
         let tgs = tgs_req(
             as_out.rep.0.ticket.clone(),

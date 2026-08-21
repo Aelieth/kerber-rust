@@ -70,7 +70,8 @@ fn issue_tgt(
         TEST_REALM,
         nonce,
         Some(vec![pa_enc_timestamp(&key).expect("pa")]),
-    );
+    )
+    .unwrap();
     krb5_kdc::issue_as(store, &req).expect("AS")
 }
 
@@ -101,7 +102,8 @@ fn kpasswd_bumps_kvno_keeps_old_keys_and_switches_password() {
         TEST_REALM,
         101,
         Some(vec![pa_enc_timestamp(&new_key).expect("pa")]),
-    );
+    )
+    .unwrap();
     krb5_kdc::issue_as(&store, &ok).expect("AS with new password");
 
     let old = as_req(
@@ -109,7 +111,8 @@ fn kpasswd_bumps_kvno_keeps_old_keys_and_switches_password() {
         TEST_REALM,
         102,
         Some(vec![pa_enc_timestamp(&user_key()).expect("pa")]),
-    );
+    )
+    .unwrap();
     match krb5_kdc::issue_as(&store, &old) {
         Err(
             Error::Crypto(_)
@@ -158,7 +161,7 @@ fn fast_as_exchange_strengthen_and_finished() {
     .expect("armor AP-REQ");
     let akey = armor_key(&armor_as.session_key, Some(&sub)).expect("armor key");
     let inner = vec![pa_enc_timestamp(&key).expect("pa")];
-    let mut req = as_req(cname.clone(), TEST_REALM, 202, None);
+    let mut req = as_req(cname.clone(), TEST_REALM, 202, None).unwrap();
     attach_fast(&mut req, &armor_ap, &akey, inner).expect("FAST wrap");
     let issued = krb5_kdc::issue_as(&store, &req).expect("FAST AS");
     let fast = unwrap_fast_rep(&akey, &issued.rep.0.padata).expect("FAST rep");
@@ -186,7 +189,7 @@ fn spake_challenge_then_as_rep() {
         .key
         .clone();
     let support = pa_spake_support();
-    let req1 = as_req(cname.clone(), TEST_REALM, 301, Some(vec![support.clone()]));
+    let req1 = as_req(cname.clone(), TEST_REALM, 301, Some(vec![support.clone()])).unwrap();
     let err = krb5_kdc::issue_as(&store, &req1).unwrap_err();
     let e_data = match err {
         Error::Protocol {
@@ -211,7 +214,7 @@ fn spake_challenge_then_as_rep() {
         krb5_types::spake::PaSpake::Challenge(c) => c,
         other => panic!("expected SPAKE challenge, got {other:?}"),
     };
-    let mut req2 = as_req(cname, TEST_REALM, 302, None);
+    let mut req2 = as_req(cname, TEST_REALM, 302, None).unwrap();
     let body_der = encode(&req2.0.req_body).expect("body");
     let (resp, spake_key) = pa_spake_response(
         &key,
@@ -241,7 +244,7 @@ fn pkinit_advertised_in_method_data_when_ca_enabled() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     store.enable_pkinit_ca().expect("PKINIT CA");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = as_req(cname, TEST_REALM, 400, None);
+    let req = as_req(cname, TEST_REALM, 400, None).unwrap();
     let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
     let e_data = match err {
         Error::PreauthRequired { e_data } => e_data,
@@ -261,7 +264,7 @@ fn pkinit_not_advertised_without_ca() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     assert!(store.pkinit_ca.is_none());
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = as_req(cname, TEST_REALM, 399, None);
+    let req = as_req(cname, TEST_REALM, 399, None).unwrap();
     let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
     let e_data = match err {
         Error::PreauthRequired { e_data } => e_data,
@@ -282,7 +285,7 @@ fn pkinit_ecdh_reply_key() {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let kp = p256_generate().expect("client ECDH");
     let pa = pa_pk_as_req(&kp.public, &ca).expect("PA-PK-AS-REQ");
-    let req = as_req(cname, TEST_REALM, 401, Some(vec![pa]));
+    let req = as_req(cname, TEST_REALM, 401, Some(vec![pa])).unwrap();
     let issued = krb5_kdc::issue_as(&store, &req).expect("PKINIT AS");
     let et = EncryptionType::Aes256CtsHmacSha196;
     let reply =
@@ -303,7 +306,7 @@ fn pkinit_modp14_reply_key() {
     let kp = dh_generate(&OAKLEY_2048).expect("client DH");
     let spki = krb5_types::pkinit::encode_dh_spki(&OAKLEY_2048.prime_bytes(), &kp.public);
     let pa = pa_pk_as_req_spki(&spki, &ca).expect("PA-PK-AS-REQ");
-    let req = as_req(cname, TEST_REALM, 404, Some(vec![pa]));
+    let req = as_req(cname, TEST_REALM, 404, Some(vec![pa])).unwrap();
     let issued = krb5_kdc::issue_as(&store, &req).expect("PKINIT DH AS");
     let kdc_y = kdc_dh_public_from_rep(issued.rep.0.padata.as_deref(), &ca.ca_cert);
     let shared = dh_shared(&OAKLEY_2048, &kp.secret, &kdc_y).expect("DH");
@@ -357,7 +360,7 @@ fn pkinit_forged_cms_is_rejected() {
         padata_type: pa::PK_AS_REQ,
         padata_value: encode(&req_body).expect("pa").into(),
     };
-    let req = as_req(cname, TEST_REALM, 402, Some(vec![pa]));
+    let req = as_req(cname, TEST_REALM, 402, Some(vec![pa])).unwrap();
     let err = krb5_kdc::issue_as(&store, &req).expect_err("forged CMS");
     match err {
         Error::Protocol { code, .. } => assert_eq!(code, err::PREAUTH_FAILED),
@@ -373,7 +376,7 @@ fn pkinit_without_provisioned_ca_is_rejected() {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let kp = p256_generate().expect("client ECDH");
     let pa = pa_pk_as_req(&kp.public, &ca).expect("PA-PK-AS-REQ");
-    let req = as_req(cname, TEST_REALM, 403, Some(vec![pa]));
+    let req = as_req(cname, TEST_REALM, 403, Some(vec![pa])).unwrap();
     let err = krb5_kdc::issue_as(&store, &req).expect_err("PKINIT off");
     match err {
         Error::Protocol { code, .. } => assert_eq!(code, err::PREAUTH_FAILED),
@@ -572,7 +575,7 @@ fn s4u2self_bad_checksum_rejected() {
 fn as_wrong_realm_is_chaseable() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let mut req = as_req(cname, TEST_REALM, 50, None);
+    let mut req = as_req(cname, TEST_REALM, 50, None).unwrap();
     req.0.req_body.realm = ascii("OTHER.TEST");
     let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
     let e: krb5_types::KrbError = decode(&bytes).expect("KRB-ERROR");
@@ -724,7 +727,8 @@ fn issue_as_and_tgs_with_etype_20_mint_sha2_tickets() {
         Some(vec![pa_enc_timestamp(&key).expect("pa")]),
         PrincipalName::krbtgt(TEST_REALM),
         vec![sha2.to_iana()],
-    );
+    )
+    .unwrap();
     let as_out = krb5_kdc::issue_as(&store, &req).expect("AS etype 20");
     assert_eq!(as_out.session_key.etype(), sha2);
     assert_eq!(

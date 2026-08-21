@@ -109,7 +109,7 @@ fn udp_listener_answers_wrong_password() {
     });
     thread::sleep(Duration::from_millis(50));
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = as_req(cname, TEST_REALM, 1, None);
+    let req = as_req(cname, TEST_REALM, 1, None).unwrap();
     let bytes = encode(&req).unwrap();
     let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
     sock.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
@@ -203,7 +203,7 @@ fn listener_chaos_udp_garbage_then_valid() {
         let _ = sock.recv(&mut buf);
     }
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = as_req(cname, TEST_REALM, 1, None);
+    let req = as_req(cname, TEST_REALM, 1, None).unwrap();
     let bytes = encode(&req).unwrap();
     sock.send_to(&bytes, addr).unwrap();
     let mut buf = [0u8; 4096];

@@ -33,7 +33,8 @@ fn as_rep_enc_part_is_application_25() {
         TEST_REALM,
         1,
         Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    );
+    )
+    .unwrap();
     let issued = krb5_kdc::issue_as(&store, &req).unwrap();
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
     let plain = krb5_crypto::decrypt(&key, usage, issued.rep.0.enc_part.cipher.as_ref()).unwrap();
@@ -51,7 +52,8 @@ fn ap_rep_mutual_and_safe_priv() {
         TEST_REALM,
         2,
         Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    );
+    )
+    .unwrap();
     let as_out = krb5_kdc::issue_as(&store, &req).unwrap();
     let tgs = tgs_req(
         as_out.rep.0.ticket.clone(),
@@ -158,6 +160,17 @@ fn exchange_tcp_and_udp_round_trip_local_kdc() {
     assert_eq!(got[0], 0x7e);
     let e: KrbError = decode(&got).unwrap();
     assert_eq!(e.error_code, err::PREAUTH_REQUIRED);
+}
+
+#[test]
+fn as_req_rejects_non_ascii_realm() {
+    let err = as_req(
+        PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+        "KERBER.\u{2603}",
+        1,
+        None,
+    );
+    assert!(err.is_err(), "non-ASCII realm must not panic");
 }
 
 #[test]
