@@ -12,7 +12,9 @@ mod acl;
 mod ad;
 mod error;
 mod issue;
+mod kdb_dump;
 mod listen;
+mod mkey;
 mod persist;
 mod preauth;
 mod store;
@@ -24,13 +26,23 @@ pub use ad::{
 };
 pub use error::Error;
 pub use issue::{handle_request, issue_as, issue_tgs, IssuedAs, IssuedTgs};
+pub use kdb_dump::{
+    dump_store, dump_store_etype, load_dump, load_dump_etype, load_dump_path, parse_dump,
+    write_dump, write_dump_path, write_dump_path_etype, DumpError, DumpFile, DumpKeyData,
+    DumpKeySlot, DumpPrincipal, KDB_DUMP_VERSION, KDB_DUMP_VERSION_R18, TL_KADM_DATA,
+    TL_LAST_PWD_CHANGE, TL_MKVNO, TL_MOD_PRINC,
+};
 pub use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 pub use listen::{
     bind_preferred, bind_udp_tcp, drop_privileges, drop_privileges_to, serve, serve_until,
     shared_store, ListenLimits, SharedStore, BIND_CANDIDATES, MAX_TCP_REQUEST, MAX_TCP_WORKERS,
 };
+pub use mkey::{harness_master_etype, master_key_from_password, MASTER_NAME};
 pub use persist::{load_store, save_store, PersistError};
-pub use store::{random_key, s2k_params, KeyEntry, Policy, Principal, PrincipalStore, S2K_ITERS};
+pub use store::{
+    random_key, s2k_params, KeyEntry, Policy, Principal, PrincipalStore, TlData,
+    KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH, S2K_ITERS,
+};
 
 use krb5_types::PrincipalName;
 

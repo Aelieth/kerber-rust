@@ -12,6 +12,10 @@ publish.workspace = true
 name = "krb5-kdc"
 path = "src/bin/krb5-kdc.rs"
 
+[[bin]]
+name = "krb5-kdb"
+path = "src/bin/krb5-kdb.rs"
+
 [dependencies]
 getrandom.workspace = true
 krb5-asn1.workspace = true

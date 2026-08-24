@@ -14,6 +14,15 @@ use crate::error::Error;
 /// Default PBKDF2 iteration count advertised in ETYPE-INFO2 (RFC 3962 default).
 pub const S2K_ITERS: u32 = 4096;
 
+/// MIT `KRB5_KDB_REQUIRES_PRE_AUTH`. Captured `getprinc` + dump field is **128**, not `0x8`.
+pub const KDB_REQUIRES_PRE_AUTH: u32 = 0x0000_0080;
+/// MIT `KRB5_KDB_DISALLOW_ALL_TIX`.
+pub const KDB_DISALLOW_ALL_TIX: u32 = 0x0000_0040;
+/// MIT `KRB5_KDB_LOCKDOWN_KEYS`.
+pub const KDB_LOCKDOWN_KEYS: u32 = 0x0080_0000;
+/// MIT `KRB5_KDB_V1_BASE_LENGTH` (dump `len` field).
+pub const KDB_V1_BASE_LENGTH: u32 = 38;
+
 /// Long-term key for one etype.
 #[derive(Clone, Debug)]
 pub struct KeyEntry {
@@ -23,6 +32,33 @@ pub struct KeyEntry {
     pub key: ProtocolKey,
     /// Key version.
     pub kvno: u32,
+    /// MIT `key_data_type[1]` when dump `ver` is 2.
+    pub salt_type: Option<i32>,
+    /// MIT `key_data_contents[1]` (salt) when dump `ver` is 2.
+    pub kdb_salt: Option<Vec<u8>>,
+}
+
+impl KeyEntry {
+    /// Key without dump salt metadata (`ver` 1 on write).
+    #[must_use]
+    pub fn new(etype: EncryptionType, key: ProtocolKey, kvno: u32) -> Self {
+        Self {
+            etype,
+            key,
+            kvno,
+            salt_type: None,
+            kdb_salt: None,
+        }
+    }
+}
+
+/// MIT dump `tl_data` triplet (type, length implied by contents).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TlData {
+    /// `tl_data_type` (`KRB5_TL_*`).
+    pub ty: i32,
+    /// Raw contents (length is `contents.len()`).
+    pub contents: Vec<u8>,
 }
 
 /// One realm principal.
@@ -44,6 +80,69 @@ pub struct Principal {
     pub locked: bool,
     /// Password expiry unix seconds (0 = none).
     pub pw_expire: u32,
+    /// MIT KDB attributes bitfield (passthrough for dump/load).
+    pub attributes: u32,
+    /// Max renewable life in seconds (0 = use realm policy).
+    pub max_renewable_life: u64,
+    /// Principal expiration unix seconds (0 = never).
+    pub expiration: u32,
+    /// Last successful authentication unix seconds.
+    pub last_success: u32,
+    /// Last failed authentication unix seconds.
+    pub last_failed: u32,
+    /// Failed password attempts.
+    pub fail_auth_count: u32,
+    /// Master-key kvno that encrypts `key_data`.
+    pub mkvno: u16,
+    /// Dump `len` field (`KRB5_KDB_V1_BASE_LENGTH` = 38).
+    pub db_entry_len: u32,
+    /// Opaque MIT `tl_data` for lossless dump round-trip.
+    pub tl_data: Vec<TlData>,
+    /// Opaque MIT extra data (`e_data`).
+    pub e_data: Vec<u8>,
+}
+
+impl Principal {
+    /// Construct a principal with dump metadata zeroed (KDB3 / bootstrap).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_keys(
+        name: PrincipalName,
+        realm: String,
+        keys: Vec<KeyEntry>,
+        salt: Vec<u8>,
+        requires_preauth: bool,
+        max_life: u64,
+        locked: bool,
+        pw_expire: u32,
+    ) -> Self {
+        let mut attributes = 0u32;
+        if requires_preauth {
+            attributes |= KDB_REQUIRES_PRE_AUTH;
+        }
+        if locked {
+            attributes |= KDB_DISALLOW_ALL_TIX;
+        }
+        Self {
+            name,
+            realm,
+            keys,
+            salt,
+            requires_preauth,
+            max_life,
+            locked,
+            pw_expire,
+            attributes,
+            max_renewable_life: 0,
+            expiration: 0,
+            last_success: 0,
+            last_failed: 0,
+            fail_auth_count: 0,
+            mkvno: 1,
+            db_entry_len: KDB_V1_BASE_LENGTH,
+            tl_data: Vec::new(),
+            e_data: Vec::new(),
+        }
+    }
 }
 
 /// Realm-wide ticket policy.
@@ -391,11 +490,7 @@ impl PrincipalStore {
         ] {
             let params = s2k_params(etype);
             let key = string_to_key(etype, password, &salt, Some(&params))?;
-            new_keys.push(KeyEntry {
-                etype,
-                key,
-                kvno: next_kvno,
-            });
+            new_keys.push(KeyEntry::new(etype, key, next_kvno));
         }
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         p.keys.extend(new_keys);
@@ -417,6 +512,11 @@ impl PrincipalStore {
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         p.locked = locked;
         p.pw_expire = pw_expire;
+        if locked {
+            p.attributes |= KDB_DISALLOW_ALL_TIX;
+        } else {
+            p.attributes &= !KDB_DISALLOW_ALL_TIX;
+        }
         self.save_if_configured()
     }
 
@@ -465,20 +565,16 @@ impl PrincipalStore {
             return Err(Error::AlreadyExists);
         }
         let salt = name.default_salt(&self.realm);
-        let p = Principal {
+        let p = Principal::from_keys(
             name,
-            realm: self.realm.clone(),
-            keys: vec![KeyEntry {
-                etype: key.etype(),
-                key,
-                kvno: 1,
-            }],
+            self.realm.clone(),
+            vec![KeyEntry::new(key.etype(), key, 1)],
             salt,
-            requires_preauth: false,
-            max_life: 0,
-            locked: false,
-            pw_expire: 0,
-        };
+            false,
+            0,
+            false,
+            0,
+        );
         self.map.insert(id, p);
         self.save_if_configured()
     }
@@ -504,14 +600,7 @@ impl PrincipalStore {
         let id = format!("{}@{}", name.components_joined(), self.realm);
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         let kvno = p.keys.iter().map(|k| k.kvno).min().unwrap_or(1);
-        p.keys.insert(
-            0,
-            KeyEntry {
-                etype: key.etype(),
-                key,
-                kvno,
-            },
-        );
+        p.keys.insert(0, KeyEntry::new(key.etype(), key, kvno));
         self.save_if_configured()
     }
 
@@ -591,22 +680,18 @@ impl PrincipalStore {
         ] {
             let params = s2k_params(etype);
             let key = string_to_key(etype, password, &salt, Some(&params))?;
-            keys.push(KeyEntry {
-                etype,
-                key,
-                kvno: 1,
-            });
+            keys.push(KeyEntry::new(etype, key, 1));
         }
-        let p = Principal {
-            name: name.clone(),
-            realm: self.realm.clone(),
+        let p = Principal::from_keys(
+            name.clone(),
+            self.realm.clone(),
             keys,
             salt,
-            requires_preauth: self.policy.requires_preauth,
-            max_life: 0,
-            locked: false,
-            pw_expire: 0,
-        };
+            self.policy.requires_preauth,
+            0,
+            false,
+            0,
+        );
         self.map.insert(p.id(), p);
         self.save_if_configured()
     }
@@ -618,23 +703,19 @@ impl PrincipalStore {
     ) -> Result<(), Error> {
         let mut keys = Vec::new();
         for etype in etypes {
-            keys.push(KeyEntry {
-                etype: *etype,
-                key: random_key(*etype)?,
-                kvno: 1,
-            });
+            keys.push(KeyEntry::new(*etype, random_key(*etype)?, 1));
         }
         let salt = name.default_salt(&self.realm);
-        let p = Principal {
-            name: name.clone(),
-            realm: self.realm.clone(),
+        let p = Principal::from_keys(
+            name.clone(),
+            self.realm.clone(),
             keys,
             salt,
-            requires_preauth: false,
-            max_life: 0,
-            locked: false,
-            pw_expire: 0,
-        };
+            false,
+            0,
+            false,
+            0,
+        );
         self.map.insert(p.id(), p);
         self.save_if_configured()
     }

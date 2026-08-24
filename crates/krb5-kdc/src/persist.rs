@@ -141,7 +141,7 @@ fn parse_plain(plain: &[u8], v2: bool, v3: bool) -> Result<PrincipalStore, Persi
                 EncryptionType::known(et).map_err(|e| PersistError::Crypto(e.to_string()))?;
             let key = ProtocolKey::from_bytes(etype, &kb)
                 .map_err(|e| PersistError::Crypto(e.to_string()))?;
-            keys.push(KeyEntry { etype, key, kvno });
+            keys.push(KeyEntry::new(etype, key, kvno));
         }
         let parts: Vec<&str> = name_s.split('/').collect();
         let name = PrincipalName::try_new(ntype, parts)
@@ -155,16 +155,16 @@ fn parse_plain(plain: &[u8], v2: bool, v3: bool) -> Result<PrincipalStore, Persi
         } else {
             (false, 0)
         };
-        let p = Principal {
+        let p = Principal::from_keys(
             name,
-            realm: store.realm().to_owned(),
+            store.realm().to_owned(),
             keys,
             salt,
             requires_preauth,
             max_life,
             locked,
             pw_expire,
-        };
+        );
         store_insert(&mut store, p);
         let _ = S2K_ITERS;
     }
