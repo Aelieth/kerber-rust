@@ -29,6 +29,10 @@ applies the RFC 4757 usage map; 3DES uses RFC 3961 §6.3 s2k with
 appendix A.4 output). Single-DES is not implemented.
 
 `krb5-config` parses `krb5.conf`/`kdc.conf` and DNS SRV. The KDC applies
-`kdc.conf` ticket policy (and non-test listen/db paths). `kinit` and TGS
-referral chase use `KRB5_CONFIG` then `/etc/krb5.conf` `[realms]` (argv
-is the fallback).
+`kdc.conf` ticket policy (and non-test listen/db paths, including
+`master_key_type` / `db_library`). `kinit` and TGS referral chase use
+`KRB5_CONFIG` then `/etc/krb5.conf` `[realms]` (argv is the fallback).
+The KDC database oracle is MIT `kdb5_util` dump/load (`krb5-kdb`,
+version 7): MIT `kinit` both directions (`scripts/kdb-dump-gate.sh`).
+KDB3 persist remains an internal fallback. MIT-wire kprop/kpropd is a
+follow-on (plan K5).

@@ -52,9 +52,16 @@ this project uses semantic versioning once a crate is published.
   evidence ticket and decodes PA-PAC-OPTIONS (167). PA-FOR-USER accepts
   HMAC-MD5-ARCFOUR (cksumtype -138) on AES session keys.
 - `bounded_stress_handle_request` asserts 64 concurrent valid AS+TGS
-  succeed. Harness CI runs `kadmin-gate`, `kpasswd-gate`, `prod-gate`.
-  `samba-ad-gate.sh` exits 2 unless a live Samba/AD `kinit`/`kvno`
-  succeeds (no fabricated pass from “image exists”).
+  succeed. Harness CI runs `kadmin-gate`, `kpasswd-gate`, `kdb-dump-gate`,
+  `prod-gate`. `samba-ad-gate.sh` exits 2 unless a live Samba/AD
+  `kinit`/`kvno` succeeds (no fabricated pass from “image exists”).
+- MIT `kdb5_util` dump/load (version 7; `-r18` is version 6):
+  `krb5-kdb load`/`dump`, KDB usage-0 `key_data` with a cleartext
+  `int16_LE` length prefix, master key string-to-key of
+  `masterpassword` with salt `KERBER.TESTKM` and etype 20. Golden
+  `tests/traces/kdb/mit-dump-v7.txt`. Gate `scripts/kdb-dump-gate.sh`
+  (MIT `kinit` both directions). Protocol `KeyUsage::new(0)` still
+  rejected. KDB3 persist remains the internal at-rest format.
 
 ### Security
 

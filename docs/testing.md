@@ -50,7 +50,12 @@ Stage 5: `scripts/kdc-gate.sh` copies the Rust `krb5-kdc` binary into a
 client-only MIT 1.22.2 container, binds 127.0.0.1:88 (fallback 8888),
 and runs MIT `kinit user@KERBER.TEST` plus `kvno host/testhost.kerber.test`.
 In-crate tests drive `issue_as` / `issue_tgs` / `Acl::check` /
-`verify_ap_req` without a socket.
+`verify_ap_req` without a socket. The database oracle is MIT
+`kdb5_util` dump/load (`scripts/kdb-dump-gate.sh`): MIT dump → Rust
+load → Rust KDC → MIT `kinit`, and Rust dump → MIT `kdb5_util load` →
+MIT `krb5kdc` → MIT `kinit`. Promotion is MIT `kinit` + `klist`, never
+a Rust-vs-Rust round-trip. Golden dump: `tests/traces/kdb/mit-dump-v7.txt`
+(MIT 1.22.2 default is version **7**; `-r18` is version 6).
 
 Stage 4/5 GSS: `scripts/gss-gate.sh` copies `krb5-gss-accept` into the
 MIT 1.22.2 container, exports `host/testhost.kerber.test` to a keytab,
@@ -85,8 +90,9 @@ AD PAC: `crates/krb5-kdc/tests/ad_pac.rs` decodes committed
 captured `host/svc` PAC server checksum is verified (usage 17). Skip
 cleanly without the keytab.
 
-Era II gates. The harness CI job runs `kadmin-gate`, `kpasswd-gate`, and
-`prod-gate` after `pkinit-gate`. `ad-*` remain one-shot against a live DC.
+Era II gates. The harness CI job runs `kadmin-gate`, `kpasswd-gate`,
+`kdb-dump-gate`, and `prod-gate` after `pkinit-gate`. `ad-*` remain
+one-shot against a live DC.
 `samba`/`heimdal`/`gss-sspi` exit 2 when those oracles are absent.
 
 - `scripts/samba-ad-gate.sh` — Samba 4 AD DC. The only `exit 0` is after a
@@ -109,6 +115,12 @@ Era II gates. The harness CI job runs `kadmin-gate`, `kpasswd-gate`, and
 - `scripts/kpasswd-gate.sh` — MIT `kpasswd` against kadmind UDP/TCP
   464 (`kadmin/changepw`), then `kinit` with the new password; old
   password must fail; second `kpasswd` + `kinit`. Run twice.
+- `scripts/kdb-dump-gate.sh` — MIT 1.22.2 dump/load both directions.
+  Half A: `krb5-kdb load` of `tests/traces/kdb/mit-dump-v7.txt`, Rust
+  KDC, MIT `kinit user` / `kinit pauser` (`REQUIRES_PRE_AUTH` = 128).
+  Half B: `krb5-kdb dump --from-dump`, MIT `kdb5_util load`, MIT
+  `krb5kdc` (Rust KDC must be dead so :88 is free), MIT `kinit` with
+  `renew until` in `klist`. Run twice.
 - `scripts/prod-gate.sh` — Rust KDC on `127.0.0.1:18888`, `krb5-kinit`
   AS+TGS, structured-log analysis (`kdc.issue` + `correlation_id`),
   PDU pcap under `$KERBER_SCRATCH/prod-gate/` (loopback CAP_NET_RAW

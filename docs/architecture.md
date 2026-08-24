@@ -46,7 +46,10 @@ FILE ccache (so the KDC does not depend on the client crate). UDP uses
 **`krb5-client`** is `kinit` (password from env/stdin, never argv).
 
 **`krb5-kdc`** issues AS/TGS from an in-memory store with optional
-persist/stash. The serving store is `Arc<RwLock<PrincipalStore>>` so
+KDB3 persist/stash (internal fallback) and a MIT `kdb5_util` dump/load
+codec (`krb5-kdb`; default dump version 7). `key_data` uses KDB usage 0
+with a cleartext `int16_LE` length prefix; protocol `KeyUsage::new(0)`
+stays rejected. The serving store is `Arc<RwLock<PrincipalStore>>` so
 kadmind/kpasswd mutations reach `save_store`. Default bind is
 `127.0.0.1` (not `0.0.0.0`). After a privileged bind the daemon drops
 to `KRB5_KDC_USER` (default `nobody`). TCP workers are capped
@@ -76,8 +79,8 @@ client is not gated.
 **`krb5-config`** parses `krb5.conf` / `kdc.conf` and DNS SRV. The KDC
 applies `kdc.conf` ticket policy from `KRB5_KDC_PROFILE` /
 `KRB5_KDC_CONF` / `/etc/krb5kdc/kdc.conf`; without `--test-realm` it
-also takes `database_name` / `key_stash_file` / listen ports from that
-file. `kinit` and TGS referral chase call `discover_kdc` (`KRB5_CONFIG`
+also takes `database_name` / `key_stash_file` / `master_key_type` /
+`db_library` / listen ports from that file. `kinit` and TGS referral chase call `discover_kdc` (`KRB5_CONFIG`
 then `/etc/krb5.conf`); argv remains the fallback.
 
 ## Security invariants
