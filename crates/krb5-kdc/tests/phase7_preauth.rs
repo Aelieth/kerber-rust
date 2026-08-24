@@ -746,6 +746,50 @@ fn tgs_canonicalize_issues_cross_realm_krbtgt() {
 }
 
 #[test]
+fn tgs_referral_ad_kerber_test_issues_krbtgt() {
+    // In-tree hop for the A5 realm names. Live AD.KERBER.TEST↔KERBER.TEST
+    // trust is not configured on the DC; this is not that proof.
+    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
+    store
+        .create_interrealm(
+            &acl,
+            &documented_admin_id(),
+            "AD.KERBER.TEST",
+            b"ad-interrealm-secret",
+        )
+        .expect("interrealm");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 71);
+    let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "svc.ad.kerber.test"]);
+    let tgs = tgs_req_ex(
+        tgt.rep.0.ticket.clone(),
+        &tgt.session_key,
+        TEST_REALM,
+        &cname,
+        host,
+        "AD.KERBER.TEST",
+        72,
+        KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true),
+        None,
+        Vec::new(),
+        pref_etypes(),
+    )
+    .expect("AD referral TGS-REQ");
+    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("AD referral TGS");
+    assert_eq!(
+        out.rep.0.ticket.sname.components_joined(),
+        "krbtgt/AD.KERBER.TEST"
+    );
+    let ir_name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "AD.KERBER.TEST"]);
+    let ir = store.get_name(&ir_name).unwrap().best_key().unwrap();
+    let part = decrypt_ticket_part(&ir.key, &out.rep.0.ticket).expect("inter-realm enc");
+    assert!(
+        part.transited.realms().iter().any(|r| r == TEST_REALM),
+        "transited must name the issuing realm"
+    );
+}
+
+#[test]
 fn password_principal_has_rfc8009_keys() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let user = store

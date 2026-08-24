@@ -180,6 +180,11 @@ fn referral_hop_realm_uses_foreign_sname() {
         krb5_protocol::referral_hop_realm(&sname).as_deref(),
         Some("OTHER.TEST")
     );
+    let ad = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "AD.KERBER.TEST"]);
+    assert_eq!(
+        krb5_protocol::referral_hop_realm(&ad).as_deref(),
+        Some("AD.KERBER.TEST")
+    );
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "svc"]);
     assert!(krb5_protocol::referral_hop_realm(&host).is_none());
 }
