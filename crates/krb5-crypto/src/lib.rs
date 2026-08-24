@@ -34,7 +34,7 @@ pub(crate) mod cts;
 
 pub use cf2::{
     key_from_shared, krb_fx_cf2, octetstring2key, p256_ecdsa_sign, p256_ecdsa_verify,
-    p256_generate, p256_shared, P256Keypair,
+    p256_generate, p256_shared, pkinit_kdf_agile, P256Keypair,
 };
 pub use derive::{derive_keys, DerivedKeys};
 pub use error::Error;

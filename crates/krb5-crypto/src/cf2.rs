@@ -174,6 +174,38 @@ pub fn octetstring2key(etype: EncryptionType, x: &[u8]) -> Result<ProtocolKey, E
     ProtocolKey::from_bytes(etype, &buf)
 }
 
+/// RFC 8636 PKINIT KDF: `SHA-256(counter || Z || OtherInfo)` K-truncated.
+///
+/// `other_info` is the DER of RFC 8636 `OtherInfo` (or a test stand-in).
+/// `Z` is the DH/ECDH shared secret. This is **not** RFC 4556 SHA-1
+/// `octetstring2key`.
+///
+/// # Errors
+///
+/// Key-length failures.
+pub fn pkinit_kdf_agile(
+    etype: EncryptionType,
+    shared: &[u8],
+    other_info: &[u8],
+) -> Result<ProtocolKey, Error> {
+    let n = etype.key_len();
+    let mut buf = Vec::with_capacity(n + 32);
+    let mut counter = 1u32;
+    while buf.len() < n {
+        let mut h = Sha256::new();
+        Sha2Digest::update(&mut h, counter.to_be_bytes());
+        Sha2Digest::update(&mut h, shared);
+        Sha2Digest::update(&mut h, other_info);
+        buf.extend_from_slice(&Sha2Digest::finalize(h));
+        counter = counter.saturating_add(1);
+        if counter == 0 {
+            break;
+        }
+    }
+    buf.truncate(n);
+    ProtocolKey::from_bytes(etype, &buf)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,6 +219,17 @@ mod tests {
         let ab = p256_shared(&a.secret, &b.public).unwrap();
         let ba = p256_shared(&b.secret, &a.public).unwrap();
         assert_eq!(ab, ba);
+    }
+
+    #[test]
+    fn rfc8636_kdf_differs_from_octetstring2key() {
+        let z = b"shared-secret-bytes-for-kdf";
+        let other = b"other-info";
+        let agile = pkinit_kdf_agile(EncryptionType::Aes256CtsHmacSha196, z, other).unwrap();
+        let sha1 = octetstring2key(EncryptionType::Aes256CtsHmacSha196, z).unwrap();
+        assert_ne!(agile.as_bytes(), sha1.as_bytes());
+        let again = pkinit_kdf_agile(EncryptionType::Aes256CtsHmacSha196, z, other).unwrap();
+        assert_eq!(agile.as_bytes(), again.as_bytes());
     }
 
     #[test]
