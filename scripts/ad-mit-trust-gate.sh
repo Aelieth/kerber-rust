@@ -2,9 +2,10 @@
 # Isolated AD.KERBER.TEST ↔ KERBER.TEST referral/trust gate.
 # NEVER writes /etc/krb5.conf or SSSD. Lab state lives in ~/adlab.
 #
-# Exit 0 only if MIT kinit kbruser@AD.KERBER.TEST then kvno yields
-# krbtgt/KERBER.TEST@AD.KERBER.TEST and host/testhost.kerber.test@KERBER.TEST
-# (etype 17 or 18) in klist. Exit 2 is honest unavailability.
+# Exit 0 only if both directions content-assert in klist (etype 17 or 18):
+#   kbruser@AD.KERBER.TEST → host/testhost.kerber.test@KERBER.TEST
+#   user@KERBER.TEST → host/svc.ad.kerber.test@AD.KERBER.TEST
+# Exit 2 is honest unavailability.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -28,7 +29,14 @@ export KRB5_CONFIG="${KRB5_CONFIG:-$ADLAB/ad-krb5.conf}"
 export KRB5CCNAME="FILE:$SCRATCH/ad-mit-trust.ccache"
 export KRB5_KTNAME="FILE:$ADLAB/svc.keytab"
 BIND="${KERBER_KDC_BIND:-10.10.44.154:8888}"
-HEX_FILE="${ADLAB}/interrealm.aes256.hex"
+# Issue key = Windows TDO inbound (krbtgt/AD.KERBER.TEST@KERBER.TEST).
+# Accept key = Windows TDO outbound (krbtgt/KERBER.TEST@AD.KERBER.TEST).
+HEX_ISSUE="${ADLAB}/interrealm.issue.aes256.hex"
+HEX_ACCEPT="${ADLAB}/interrealm.aes256.hex"
+HEX_FILE="$HEX_ISSUE"
+if [ ! -f "$HEX_FILE" ]; then
+    HEX_FILE="$HEX_ACCEPT"
+fi
 
 LOG="$SCRATCH/ad-mit-trust-gate.log"
 KDC_LOG="$SCRATCH/ad-mit-kdc.log"
@@ -86,14 +94,23 @@ if [ -f "$HEX_FILE" ]; then
         cargo build -p krb5-kdc --bin krb5-kdc -q
         mkdir -p "$ADLAB/kdc"
         KEY="$(tr -d ' \n' <"$HEX_FILE")"
-        KRB5_TEST_USER_PASSWORD="${KRB5_TEST_USER_PASSWORD:-userpassword}" \
-        KRB5_TEST_ADMIN_PASSWORD="${KRB5_TEST_ADMIN_PASSWORD:-adminpassword}" \
-        KRB5_TEST_FOREIGN_REALM=AD.KERBER.TEST \
-        KRB5_TEST_INTERREALM_KEY="$KEY" \
-        KRB5_KDC_DB="$ADLAB/kdc/principal" \
-        KRB5_KDC_STASH="$ADLAB/kdc/stash" \
-        RUST_LOG="${RUST_LOG:-krb5_kdc=info}" \
-            ./target/debug/krb5-kdc --test-realm "$BIND" >"$KDC_LOG" 2>&1 &
+        ACCEPT=""
+        if [ -f "$HEX_ACCEPT" ] && [ -f "$HEX_ISSUE" ]; then
+            ACCEPT="$(tr -d ' \n' <"$HEX_ACCEPT")"
+        fi
+        export KRB5_TEST_USER_PASSWORD="${KRB5_TEST_USER_PASSWORD:-userpassword}"
+        export KRB5_TEST_ADMIN_PASSWORD="${KRB5_TEST_ADMIN_PASSWORD:-adminpassword}"
+        export KRB5_TEST_FOREIGN_REALM=AD.KERBER.TEST
+        export KRB5_TEST_INTERREALM_KEY="$KEY"
+        if [ -n "$ACCEPT" ]; then
+            export KRB5_TEST_INTERREALM_KEY_ACCEPT="$ACCEPT"
+        else
+            unset KRB5_TEST_INTERREALM_KEY_ACCEPT || true
+        fi
+        export KRB5_KDC_DB="$ADLAB/kdc/principal"
+        export KRB5_KDC_STASH="$ADLAB/kdc/stash"
+        export RUST_LOG="${RUST_LOG:-krb5_kdc=info}"
+        ./target/debug/krb5-kdc --test-realm "$BIND" >"$KDC_LOG" 2>&1 &
         KDC_PID=$!
         ok=0
         for _ in $(seq 1 80); do
@@ -138,9 +155,37 @@ if [ "$kinit_rc" -eq 0 ]; then
     if echo "$KLIST" | grep -q 'krbtgt/KERBER.TEST@AD.KERBER.TEST' \
         && echo "$KLIST" | grep -q 'host/testhost.kerber.test@KERBER.TEST' \
         && echo "$KLIST" | grep -Eq 'aes(128|256)-cts-hmac-sha1-96'; then
-        log "ad.mit.trust.gate" "ok" ',"principal":"kbruser@AD.KERBER.TEST","trust":"live","service":"host/testhost.kerber.test"'
-        exit 0
+        echo "AD→KERBER.TEST host ticket ok" | tee -a "$LOG"
+    else
+        KLIST=""
     fi
+fi
+
+# Reverse: user@KERBER.TEST → host/svc.ad.kerber.test@AD.KERBER.TEST
+REV_CC="FILE:$SCRATCH/ad-mit-trust-rev.ccache"
+export KRB5CCNAME="$REV_CC"
+USER_PW="${KRB5_TEST_USER_PASSWORD:-userpassword}"
+set +e
+printf '%s\n' "$USER_PW" | timeout 20 kinit user@KERBER.TEST >>"$LOG" 2>&1
+rev_kinit_rc=$?
+set -e
+echo "rev_kinit_rc=$rev_kinit_rc" | tee -a "$LOG"
+REVLIST=""
+if [ "$rev_kinit_rc" -eq 0 ]; then
+    set +e
+    timeout 25 kvno host/svc.ad.kerber.test@AD.KERBER.TEST >>"$LOG" 2>&1
+    KRB5CCNAME="$REV_CC" klist -e >>"$LOG" 2>&1
+    set -e
+    REVLIST="$(KRB5CCNAME="$REV_CC" klist -e 2>/dev/null || true)"
+    echo "$REVLIST" | tee -a "$LOG"
+fi
+
+if [ -n "${KLIST:-}" ] \
+    && echo "${REVLIST:-}" | grep -q 'krbtgt/AD.KERBER.TEST@KERBER.TEST' \
+    && echo "${REVLIST:-}" | grep -q 'host/svc.ad.kerber.test@AD.KERBER.TEST' \
+    && echo "${REVLIST:-}" | grep -Eq 'aes(128|256)-cts-hmac-sha1-96'; then
+    log "ad.mit.trust.gate" "ok" ',"principal":"kbruser@AD.KERBER.TEST","trust":"live","forward":"host/testhost.kerber.test","reverse":"host/svc.ad.kerber.test"'
+    exit 0
 fi
 
 echo "---- in-tree referral hop (AD.KERBER.TEST names, not a live DC trust) ----" | tee -a "$LOG"
