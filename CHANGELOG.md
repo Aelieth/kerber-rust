@@ -26,10 +26,11 @@ this project uses semantic versioning once a crate is published.
   MIT 1.22.2 `kadmin` `addprinc`/`cpw` then `kinit` is gated by
   `scripts/kadmin-gate.sh`. Version-1 AP-REQ framing remains for
   library tests. RFC 3244 kpasswd on 464; kprop dump over TCP 754.
-- RFC 8636 SHA-256 PKINIT KDF helper (`pkinit_kdf_agile`) and AuthPack
-  `supportedKDFs` detector. The KDC reply key remains RFC 4556
-  `octetstring2key` (MIT 1.22.2 PKINIT still uses SHA-1 unless `kdfId`
-  is in PA-PK-AS-REP).
+- RFC 8636 SHA-256 PKINIT KDF on the KDC issue path when AuthPack
+  `supportedKDFs` includes `id-pkinit-kdf-ah-sha256`: `kdf` is set in
+  `DHRepInfo` and the reply key is `SHA-256(counter||Z||OtherInfo)`.
+  MIT 1.22.2 `kinit` TRACE `PKINIT used KDF 2B06010502030602`. Without
+  `supportedKDFs` the KDC still uses RFC 4556 `octetstring2key`.
 - FILE ccache parser skips MIT `X-CACHECONF` etype 0 so AD `ad.ccache`
   tickets remain readable.
 

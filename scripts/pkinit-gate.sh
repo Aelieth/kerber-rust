@@ -96,7 +96,10 @@ set -e
 docker exec "$NAME" klist || true
 if [ "$rc" -eq 0 ]; then
     docker exec "$NAME" klist | grep -q 'user@KERBER.TEST'
-    log "pkinit.gate" "ok" ',"mode":"mit-kinit","mit_plugin":"present"'
+    echo "==== KDC PKINIT KDF ===="
+    docker exec "$NAME" grep -E 'rfc8636|kdf|pkinit' /tmp/kdc.log || true
+    docker exec "$NAME" grep -q 'rfc8636 sha256 kdf' /tmp/kdc.log
+    log "pkinit.gate" "ok" ',"mode":"mit-kinit","kdf":"rfc8636-sha256","mit_plugin":"present"'
     exit 0
 fi
 echo "MIT kinit with FILE identity failed (rc=$rc)"

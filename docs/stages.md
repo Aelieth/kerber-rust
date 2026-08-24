@@ -34,8 +34,8 @@ to full 1.0 parity is tracked in `working/plan-roadmap-adprod-*.md`:
   mutations persist; KDC reloads the db on mtime/length change.
   `krb5-kadmind` AUTH_GSSAPI 300001: MIT `kadmin` `addprinc`/`cpw` then
   `kinit extra@KERBER.TEST` (`scripts/kadmin-gate.sh`). RFC 3244 kpasswd;
-  kprop dump/load; RFC 8636 SHA-256 PKINIT KDF helper exists, KDC reply
-  key stays `octetstring2key`.
+  kprop dump/load; RFC 8636 SHA-256 PKINIT KDF on the issue path when
+  AuthPack advertises it (`scripts/pkinit-gate.sh`).
 - **Track C — Production verification:** `scripts/prod-gate.sh` archives
   structured KDC logs; bounded concurrent `handle_request` stress; `cargo
   deny` + `cargo geiger` when present. 1.0 tag is not cut.
