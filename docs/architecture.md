@@ -73,8 +73,8 @@ AP-REQ framing (library tests) and `krb5-kadmind` ONC RPC program 2112
 464 (`kadmin/changepw`, MIT `kpasswd` gated by
 `scripts/kpasswd-gate.sh`), kprop dump/load on 754 (shared stash
 master; replica `issue_as` in library tests). MIT 1.22.2 `kadmin`
-`addprinc`/`cpw` is gated by `scripts/kadmin-gate.sh`. The MIT `kprop`
-client is not gated.
+add/get/list/mod/chrand/del is gated by `scripts/kadmin-gate.sh`. The
+MIT `kprop` client is not gated.
 
 **`krb5-config`** parses `krb5.conf` / `kdc.conf` and DNS SRV. The KDC
 applies `kdc.conf` ticket policy from `KRB5_KDC_PROFILE` /

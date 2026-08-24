@@ -109,9 +109,12 @@ one-shot against a live DC.
   klist must name `for client user@KERBER.TEST`. S4U2Proxy rejects a
   non-forwardable evidence ticket (`BADOPTION`) and parses PA-PAC-OPTIONS
   (167).
-- `scripts/kadmin-gate.sh` — MIT `kadmin` `addprinc`/`cpw` against
-  `krb5-kadmind` on 749, then `kinit extra@KERBER.TEST`. AUTH_GSSAPI
-  flavor 300001. Run twice.
+- `scripts/kadmin-gate.sh` — MIT `kadmin` against `krb5-kadmind` on 749
+  (AUTH_GSSAPI 300001): `addprinc`, `cpw`, `getprinc` (`Principal:
+  extra@KERBER.TEST`), `listprincs` (names `extra` and `user`),
+  `modprinc +requires_preauth` then `kinit`, `cpw -randkey` (old
+  password must fail) + `ktadd` + `kinit -k`, `delprinc` then
+  `getprinc` error. Run twice.
 - `scripts/kpasswd-gate.sh` — MIT `kpasswd` against kadmind UDP/TCP
   464 (`kadmin/changepw`), then `kinit` with the new password; old
   password must fail; second `kpasswd` + `kinit`. Run twice.

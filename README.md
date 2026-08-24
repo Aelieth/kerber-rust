@@ -16,7 +16,8 @@ RFC 8009 SHA-2 (`sha2-gate.sh`, MIT `kinit`/`kvno` with
 (`tests/traces/pac-kbruser.ndr`; server checksum vs `svc.keytab` when
 present). `krb5-kadmind` speaks ONC RPC program 2112 with AUTH_GSSAPI
 flavor 300001; `scripts/kadmin-gate.sh` content-asserts MIT `kadmin`
-`addprinc`/`cpw` then `kinit extra@KERBER.TEST`. Persistence is stash/db
+`addprinc`/`cpw`/`getprinc`/`listprincs`/`modprinc`/`cpw -randkey`/
+`ktadd`/`delprinc` then `kinit extra@KERBER.TEST`. Persistence is stash/db
 with a runtime-mutable `RwLock` store that reloads when kadmind writes.
 `bidirectional-gate` is Rust↔Rust, not a MIT oracle.
 **CI coverage:** the AS/TGS, GSS, PKINIT, SPAKE, SHA-2, and cross-realm gates
@@ -88,7 +89,8 @@ out-of-process only). Production wrap emits RFC 4121 RRC=16.
 kpasswd on UDP/TCP 464 (`scripts/kpasswd-gate.sh`), and kprop
 dump/load over a shared stash — a **private replication format; MIT `kprop`
 is not yet interop-gated** and there is no `kpropd` daemon. Gate:
-`scripts/kadmin-gate.sh`. The KDC database oracle is MIT `kdb5_util`
+`scripts/kadmin-gate.sh` (get/list/mod/chrand/del in addition to
+addprinc/cpw). The KDC database oracle is MIT `kdb5_util`
 dump/load (`krb5-kdb`, version 7): MIT `kinit` both directions
 (`scripts/kdb-dump-gate.sh`). MIT S4U against this KDC:
 `scripts/s4u-mit-gate.sh`.
@@ -146,9 +148,10 @@ port cannot be bound. It does not silently bind `0.0.0.0`.
 ./scripts/kdc-gate.sh    # MIT 1.22.2 kinit + kvno against the Rust KDC
 ```
 
-Admin mutations: MIT `kadmin` against `krb5-kadmind` on 749 (AUTH_GSSAPI),
-or library `Acl::check` plus `PrincipalStore::create_host` /
-`export_keytab`. POSIX machine auth at the Kerberos layer is AP-REQ
+Admin mutations: MIT `kadmin` against `krb5-kadmind` on 749 (AUTH_GSSAPI)
+for add/get/list/mod/chrand/del, or library `Acl::check` plus
+`PrincipalStore::create_host` / `export_keytab`. POSIX machine auth at the
+Kerberos layer is AP-REQ
 build (`krb5-protocol::build_ap_req`) and verify with the host keytab
 (`verify_ap_req`).
 

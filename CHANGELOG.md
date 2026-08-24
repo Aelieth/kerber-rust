@@ -23,8 +23,12 @@ this project uses semantic versioning once a crate is published.
   Privilege drop is skipped when a shared persist db is configured
   (kadmind writes 0600 files the dropped user could not re-read).
   `krb5-kadmind` ONC RPC program 2112 / AUTH_GSSAPI flavor 300001:
-  MIT 1.22.2 `kadmin` `addprinc`/`cpw` then `kinit` is gated by
-  `scripts/kadmin-gate.sh`. Version-1 AP-REQ framing remains for
+  MIT 1.22.2 `kadmin` `addprinc`/`cpw`/`getprinc`/`listprincs`/
+  `modprinc`/`cpw -randkey`/`ktadd`/`delprinc` then `kinit` is gated
+  by `scripts/kadmin-gate.sh`. `getprinc` encodes `mod_name` (MIT
+  unparses it; a NULL modifier is `KRB5_PARSE_MALFORMED`).
+  `listprincs` is MIT `xdr_gprincs_ret` (count, then `xdr_array` of
+  `xdr_nullstring`). Version-1 AP-REQ framing remains for
   library tests. RFC 3244 kpasswd on UDP/TCP 464 (`kadmin/changepw`):
   MIT 1.22.2 `kpasswd` then `kinit` is gated by
   `scripts/kpasswd-gate.sh`. KRB-PRIV uses the authenticator subkey
@@ -122,7 +126,8 @@ this project uses semantic versioning once a crate is published.
   window; SAFE/PRIV builders increment `seq_number`.
 - Docs: MIT `kinit` PKINIT, SPAKE (`pa_type` 151), FAST TGS `kvno`, and
   two-realm `kvno` are gated; AD PAC NDR is golden-gated; MIT `kadmin`
-  AUTH_GSSAPI `addprinc`/`cpw` is gated (`scripts/kadmin-gate.sh`).
+  AUTH_GSSAPI add/get/list/mod/chrand/del is gated
+  (`scripts/kadmin-gate.sh`).
   `KRB5_CONFIG` / `KRB5_KDC_PROFILE` / `/etc/krb5.conf` /
   `/etc/krb5kdc/kdc.conf` are consumed when present.
 - `pkinit-gate.sh` fails when MIT PKINIT interop fails; `cargo-deny`
