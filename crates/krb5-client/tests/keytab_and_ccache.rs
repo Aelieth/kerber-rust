@@ -51,3 +51,59 @@ fn truncated_keytab_is_error() {
     truncated.push(0);
     assert!(Keytab::parse(&truncated).is_err());
 }
+
+fn ccache_put_data(buf: &mut Vec<u8>, d: &[u8]) {
+    buf.extend_from_slice(&(u32::try_from(d.len()).unwrap()).to_be_bytes());
+    buf.extend_from_slice(d);
+}
+
+fn ccache_put_principal(buf: &mut Vec<u8>, realm: &[u8], parts: &[&[u8]]) {
+    buf.extend_from_slice(&1i32.to_be_bytes());
+    buf.extend_from_slice(&(u32::try_from(parts.len()).unwrap()).to_be_bytes());
+    ccache_put_data(buf, realm);
+    for p in parts {
+        ccache_put_data(buf, p);
+    }
+}
+
+#[test]
+fn file_ccache_skips_etype_zero_config_and_keeps_tickets() {
+    use krb5_client::FileCcache;
+    let mut b = vec![0x05, 0x04, 0x00, 0x00];
+    ccache_put_principal(&mut b, b"KERBER.TEST", &[b"user"]);
+    // X-CACHECONF with etype 0 (MIT kinit).
+    ccache_put_principal(&mut b, b"KERBER.TEST", &[b"user"]);
+    ccache_put_principal(
+        &mut b,
+        b"X-CACHECONF:",
+        &[b"krb5_ccache_conf_data", b"pa_type", b"krbtgt/KERBER.TEST"],
+    );
+    b.extend_from_slice(&0u16.to_be_bytes()); // etype 0
+    ccache_put_data(&mut b, &[]); // empty key
+    for _ in 0..4 {
+        b.extend_from_slice(&0u32.to_be_bytes()); // times
+    }
+    b.push(0); // is_skey
+    b.extend_from_slice(&0u32.to_be_bytes()); // flags
+    b.extend_from_slice(&0u32.to_be_bytes()); // naddr
+    b.extend_from_slice(&0u32.to_be_bytes()); // nauth
+    ccache_put_data(&mut b, &[1]); // ticket
+    ccache_put_data(&mut b, &[]); // second
+                                  // Real AES256 ticket.
+    ccache_put_principal(&mut b, b"KERBER.TEST", &[b"user"]);
+    ccache_put_principal(&mut b, b"KERBER.TEST", &[b"host", b"svc"]);
+    b.extend_from_slice(&18u16.to_be_bytes());
+    ccache_put_data(&mut b, &[0u8; 32]);
+    for _ in 0..4 {
+        b.extend_from_slice(&0u32.to_be_bytes());
+    }
+    b.push(0);
+    b.extend_from_slice(&0u32.to_be_bytes());
+    b.extend_from_slice(&0u32.to_be_bytes());
+    b.extend_from_slice(&0u32.to_be_bytes());
+    ccache_put_data(&mut b, b"ticket-der");
+    ccache_put_data(&mut b, &[]);
+    let cc = FileCcache::parse(&b).expect("etype 0 must not fail the FILE");
+    assert_eq!(cc.creds.len(), 1);
+    assert_eq!(cc.creds[0].server.1.components_joined(), "host/svc");
+}

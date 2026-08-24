@@ -131,10 +131,15 @@ impl FileCcache {
             }
             let ticket = take_data(bytes, &mut i)?;
             let _second = take_data(bytes, &mut i)?;
-            let etype = EncryptionType::known(etype_n)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-            let key = ProtocolKey::from_bytes(etype, &keybytes)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+            // MIT kinit writes X-CACHECONF with etype 0 and an empty key.
+            // Skip those (and any other unknown etype) instead of failing the
+            // whole FILE so real tickets remain readable.
+            let Ok(etype) = EncryptionType::known(etype_n) else {
+                continue;
+            };
+            let Ok(key) = ProtocolKey::from_bytes(etype, &keybytes) else {
+                continue;
+            };
             creds.push(CcacheCred {
                 client,
                 server,
