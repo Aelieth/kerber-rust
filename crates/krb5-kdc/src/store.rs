@@ -735,6 +735,74 @@ impl PrincipalStore {
         }
     }
 
+    /// Principal ids (`name@REALM`), sorted.
+    #[must_use]
+    pub fn ids(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.map.keys().cloned().collect();
+        v.sort();
+        v
+    }
+
+    /// Replace long-term keys with a new random kvno (kadm5 `chrand`).
+    ///
+    /// Default MIT `cpw -randkey` / `ktadd` does not keep old kvnos, so the
+    /// previous password must fail `kinit`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] or RNG failure.
+    pub fn chrand(&mut self, name: &PrincipalName) -> Result<Vec<KeyEntry>, Error> {
+        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let existing = self.map.get(&id).ok_or(Error::NotFound)?;
+        let next_kvno = existing
+            .keys
+            .iter()
+            .map(|k| k.kvno)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+        let mut new_keys = Vec::new();
+        for etype in randkey_etypes() {
+            new_keys.push(KeyEntry::new(etype, random_key(etype)?, next_kvno));
+        }
+        let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+        p.keys.clone_from(&new_keys);
+        self.save_if_configured()?;
+        Ok(new_keys)
+    }
+
+    /// Apply kadm5 `modprinc` fields (mask already interpreted by the caller).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    pub fn apply_admin_fields(
+        &mut self,
+        name: &PrincipalName,
+        attributes: Option<u32>,
+        max_life: Option<u64>,
+        expiration: Option<u32>,
+        pw_expire: Option<u32>,
+    ) -> Result<(), Error> {
+        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+        if let Some(a) = attributes {
+            p.attributes = a;
+            p.requires_preauth = a & KDB_REQUIRES_PRE_AUTH != 0;
+            p.locked = a & KDB_DISALLOW_ALL_TIX != 0;
+        }
+        if let Some(m) = max_life {
+            p.max_life = m;
+        }
+        if let Some(e) = expiration {
+            p.expiration = e;
+        }
+        if let Some(e) = pw_expire {
+            p.pw_expire = e;
+        }
+        self.save_if_configured()
+    }
+
     /// Iterate principals (persistence).
     pub(crate) fn debug_principals(&self) -> impl Iterator<Item = &Principal> {
         self.map.values()

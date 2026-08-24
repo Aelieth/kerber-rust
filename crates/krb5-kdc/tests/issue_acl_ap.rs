@@ -82,9 +82,16 @@ fn acl_deny_non_admin_create_delete_ktadd() {
 fn acl_parse_kadm5_style() {
     let acl = Acl::parse("admin@KERBER.TEST *\nuser@KERBER.TEST i\n# comment\n");
     assert!(acl.check("admin@KERBER.TEST", AdminOp::Create).is_ok());
+    assert!(acl.check("admin@KERBER.TEST", AdminOp::Modify).is_ok());
+    assert!(acl.check("admin@KERBER.TEST", AdminOp::Inquire).is_ok());
     assert!(acl.check("user@KERBER.TEST", AdminOp::Ktadd).is_ok());
+    assert!(acl.check("user@KERBER.TEST", AdminOp::Inquire).is_ok());
     assert_eq!(
         acl.check("user@KERBER.TEST", AdminOp::Create).unwrap_err(),
+        Error::AclDenied
+    );
+    assert_eq!(
+        acl.check("user@KERBER.TEST", AdminOp::Modify).unwrap_err(),
         Error::AclDenied
     );
 }

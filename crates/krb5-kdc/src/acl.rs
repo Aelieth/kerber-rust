@@ -1,4 +1,4 @@
-//! kadm5.acl-style allow/deny for mutating admin operations.
+//! kadm5.acl-style allow/deny for admin operations.
 
 use crate::error::Error;
 
@@ -13,6 +13,10 @@ pub enum AdminOp {
     Ktadd,
     /// Change a password (`kpasswd` / kadm5 `c`).
     ChangePassword,
+    /// Inquire (`getprinc` / `listprincs` / kadm5 `i`).
+    Inquire,
+    /// Modify attributes (`modprinc` / kadm5 `m`).
+    Modify,
 }
 
 /// One ACL line: a principal pattern and permission flags.
@@ -28,6 +32,8 @@ pub struct AclEntry {
     pub inquire: bool,
     /// `c` (changepw) / `*`
     pub changepw: bool,
+    /// `m` (modify) / `*`
+    pub modify: bool,
 }
 
 /// Ordered ACL; first matching principal wins. Unlisted principals are denied.
@@ -64,6 +70,7 @@ impl Acl {
                 delete: all || perms.contains('d'),
                 inquire: all || perms.contains('i'),
                 changepw: all || perms.contains('c'),
+                modify: all || perms.contains('m'),
             });
         }
         Self { entries }
@@ -79,6 +86,7 @@ impl Acl {
                 delete: true,
                 inquire: true,
                 changepw: true,
+                modify: true,
             }],
         }
     }
@@ -96,8 +104,9 @@ impl Acl {
             let ok = match op {
                 AdminOp::Create => e.add,
                 AdminOp::Delete => e.delete,
-                AdminOp::Ktadd => e.inquire,
+                AdminOp::Ktadd | AdminOp::Inquire => e.inquire,
                 AdminOp::ChangePassword => e.changepw,
+                AdminOp::Modify => e.modify,
             };
             if ok {
                 tracing::info!(
@@ -129,6 +138,8 @@ fn op_name(op: AdminOp) -> &'static str {
         AdminOp::Delete => "delete",
         AdminOp::Ktadd => "ktadd",
         AdminOp::ChangePassword => "cpw",
+        AdminOp::Inquire => "inquire",
+        AdminOp::Modify => "modify",
     }
 }
 
