@@ -129,6 +129,8 @@ pub struct GssContext {
     recv_window: std::collections::HashSet<u64>,
     initiator: bool,
     replay: ReplayCache,
+    /// Authenticated client `name@REALM` (set on accept; initiator from cname).
+    pub client: Option<String>,
 }
 
 /// Per-message sequence window (RFC 4121 replay detection).
@@ -186,6 +188,11 @@ impl GssContext {
                 recv_window: std::collections::HashSet::new(),
                 initiator: true,
                 replay: ReplayCache::new(),
+                client: Some(format!(
+                    "{}@{}",
+                    cname.components_joined(),
+                    String::from_utf8_lossy(crealm.as_bytes())
+                )),
             },
             token,
         ))
@@ -220,6 +227,7 @@ impl GssContext {
             recv_window: std::collections::HashSet::new(),
             initiator: false,
             replay: ReplayCache::new(),
+            client: None,
         };
         let params = krb5_protocol::ApVerifyParams {
             expected_server,
@@ -231,6 +239,11 @@ impl GssContext {
             now: None,
         };
         let ok = krb5_protocol::verify_ap_req_ex(&inner[2..], &params, &ctx.replay, None)?;
+        let client = format!(
+            "{}@{}",
+            ok.authenticator.cname.components_joined(),
+            String::from_utf8_lossy(ok.authenticator.crealm.as_bytes())
+        );
         if let Some(ck) = &ok.authenticator.cksum {
             if ck.cksumtype == GSS_CHECKSUM_TYPE {
                 check_channel_bindings(ck.checksum.as_ref(), channel_bindings)?;
@@ -258,6 +271,7 @@ impl GssContext {
             recv_window: std::collections::HashSet::new(),
             initiator: false,
             replay: ctx.replay,
+            client: Some(client),
         };
         let mut ap_rep_tok = None;
         if ok.mutual_required {
@@ -274,15 +288,9 @@ impl GssContext {
     ///
     /// Crypto failures.
     pub fn wrap(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, Error> {
-        let usage = seal_usage(self.initiator);
-        let header = wrap_header(self.initiator, true, self.send_seq);
-        let mut to_enc = plaintext.to_vec();
-        to_enc.extend_from_slice(&header);
-        let cipher = encrypt(&self.session, usage, &to_enc)?;
-        self.send_seq = self.send_seq.wrapping_add(1);
-        let mut tok = header.to_vec();
-        tok.extend_from_slice(&cipher);
-        Ok(tok)
+        // RFC 4121 RRC: rotate EC bytes of ciphertext toward the header so
+        // SSPI can decrypt in place. AES confounder is 16 octets.
+        self.wrap_with_rrc_inner(plaintext, 16)
     }
 
     /// Unwrap a wrap token. Sequence numbers are checked.
@@ -360,14 +368,24 @@ impl GssContext {
         &self.session
     }
 
-    /// Wrap with a non-zero RRC (self-test of rotate direction). Production
-    /// `wrap` still emits RRC=0; send-side RRC≠0 vs SSPI is AD-round pending.
+    /// Wrap with an explicit RRC (tests pin rotate direction).
     ///
     /// # Errors
     ///
     /// Crypto failures.
     pub fn wrap_with_rrc(&mut self, plaintext: &[u8], rrc: u16) -> Result<Vec<u8>, Error> {
-        let mut tok = self.wrap(plaintext)?;
+        self.wrap_with_rrc_inner(plaintext, rrc)
+    }
+
+    fn wrap_with_rrc_inner(&mut self, plaintext: &[u8], rrc: u16) -> Result<Vec<u8>, Error> {
+        let usage = seal_usage(self.initiator);
+        let header = wrap_header(self.initiator, true, self.send_seq);
+        let mut to_enc = plaintext.to_vec();
+        to_enc.extend_from_slice(&header);
+        let cipher = encrypt(&self.session, usage, &to_enc)?;
+        self.send_seq = self.send_seq.wrapping_add(1);
+        let mut tok = header.to_vec();
+        tok.extend_from_slice(&cipher);
         apply_send_rrc(&mut tok, rrc)?;
         Ok(tok)
     }
@@ -746,6 +764,7 @@ mod tests {
     fn wrap_unwrap_mic_round_trip() {
         let (mut init, mut acc) = contexts();
         let wrapped = init.wrap(b"hello gss").unwrap();
+        assert_ne!(&wrapped[6..8], &[0, 0], "production wrap emits RRC≠0");
         let plain = acc.unwrap(&wrapped).unwrap();
         assert_eq!(plain, b"hello gss");
         let mic = init.get_mic(b"hello gss").unwrap();
