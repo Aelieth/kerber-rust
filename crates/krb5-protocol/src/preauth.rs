@@ -3,8 +3,8 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     checksum, decrypt, encrypt, krb_fx_cf2, octetstring2key, p256_generate, p256_shared,
-    spake_derive_key, spake_public_wbytes, spake_result_wbytes, spake_thash_update, spake_wbytes,
-    EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256,
+    pkinit_kdf_agile, spake_derive_key, spake_public_wbytes, spake_result_wbytes,
+    spake_thash_update, spake_wbytes, EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256,
 };
 use krb5_types::{
     ku, pa, ApOptions, ApReq, AsReq, Authenticator, Checksum, EncryptedData, EncryptionKey,
@@ -302,6 +302,42 @@ pub fn pa_pk_as_req_spki(spki: &[u8], ca: &krb5_types::pkinit::PkinitCa) -> Resu
     })
 }
 
+/// PA-PK-AS-REQ advertising RFC 8636 SHA-256 `supportedKDFs`.
+///
+/// # Errors
+///
+/// DER or CMS wrap failures.
+pub fn pa_pk_as_req_agile(
+    client_public: &[u8],
+    ca: &krb5_types::pkinit::PkinitCa,
+) -> Result<PaData, Error> {
+    let spki = krb5_types::pkinit::encode_ec_spki(client_public);
+    let pack = krb5_types::pkinit::AuthPack {
+        pk_authenticator: krb5_types::pkinit::PkAuthenticator {
+            cusec: Microseconds::ZERO,
+            ctime: KerberosTime::now(),
+            nonce: 1,
+            pa_checksum: None,
+        },
+        client_public_value: Some(spki.into()),
+        supported_cms_types: None,
+    };
+    let inner = encode(&pack)?;
+    let inner = krb5_types::pkinit::authpack_with_sha256_kdf(&inner)
+        .ok_or_else(|| Error::ReplyMismatch("AuthPack kdf".into()))?;
+    let signed = krb5_types::pkinit::cms_wrap(&inner, ca)
+        .map_err(|e| Error::ReplyMismatch(format!("PKINIT CMS wrap: {e}")))?;
+    let req = krb5_types::pkinit::PaPkAsReq {
+        signed_auth_pack: signed.into(),
+        trusted_certifiers: None,
+        kdc_pk_id: None,
+    };
+    Ok(PaData {
+        padata_type: pa::PK_AS_REQ,
+        padata_value: encode(&req)?.into(),
+    })
+}
+
 /// Derive the PKINIT reply key from PA-PK-AS-REP `dh_signed_data` (CMS or raw P-256).
 ///
 /// # Errors
@@ -330,7 +366,72 @@ pub fn pkinit_reply_key(
         .or_else(|| krb5_types::pkinit::decode_ec_spki(&inner))
         .unwrap_or(inner);
     let shared = p256_shared(client_secret, &kdc_pub)?;
+    if let Some(oid) = krb5_types::pkinit::pa_pk_as_rep_kdf_oid(raw.padata_value.as_ref()) {
+        if oid.as_slice() == krb5_types::pkinit::KDF_AH_SHA256_OID {
+            return Err(Error::ReplyMismatch(
+                "PKINIT RFC 8636 KDF requires pkinit_reply_key_agile".into(),
+            ));
+        }
+    }
     octetstring2key(etype, &shared).map_err(Into::into)
+}
+
+/// Derive the PKINIT reply key using RFC 8636 when `kdf` is in PA-PK-AS-REP.
+///
+/// # Errors
+///
+/// Missing padata, ECDH, or KDF failures.
+pub fn pkinit_reply_key_agile(
+    client_secret: &[u8; 32],
+    padata: &Option<Vec<PaData>>,
+    etype: EncryptionType,
+    kdc_trust_anchor: &[u8],
+    as_req: &[u8],
+    client: &PrincipalName,
+    realm: &str,
+) -> Result<ProtocolKey, Error> {
+    let raw = padata
+        .as_ref()
+        .and_then(|v| v.iter().find(|p| p.padata_type == pa::PK_AS_REP))
+        .ok_or_else(|| Error::ReplyMismatch("missing PA-PK-AS-REP".into()))?;
+    let cms = krb5_types::pkinit::pa_pk_as_rep_dh_signed_data(raw.padata_value.as_ref())
+        .ok_or_else(|| Error::ReplyMismatch("PKINIT dhSignedData".into()))?;
+    let inner = krb5_types::pkinit::cms_verify(&cms, kdc_trust_anchor)
+        .map_err(|e| Error::ReplyMismatch(format!("PKINIT KDC CMS: {e}")))?;
+    let kdc_pub = krb5_types::pkinit::decode_kdc_dh_point(&inner)
+        .or_else(|| krb5_types::pkinit::decode_ec_spki(&inner))
+        .unwrap_or(inner);
+    let shared = p256_shared(client_secret, &kdc_pub)?;
+    let Some(oid) = krb5_types::pkinit::pa_pk_as_rep_kdf_oid(raw.padata_value.as_ref()) else {
+        return octetstring2key(etype, &shared).map_err(Into::into);
+    };
+    if oid.as_slice() != krb5_types::pkinit::KDF_AH_SHA256_OID {
+        return Err(Error::ReplyMismatch("PKINIT unknown kdf".into()));
+    }
+    let parts: Vec<String> = client
+        .name_string
+        .iter()
+        .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
+        .collect();
+    let prefs: Vec<&str> = parts.iter().map(String::as_str).collect();
+    let party_u = krb5_types::pkinit::encode_krb5_principal_name(realm, client.name_type, &prefs);
+    let party_v = krb5_types::pkinit::encode_krb5_principal_name(
+        realm,
+        PrincipalName::NT_SRV_INST,
+        &["krbtgt", realm],
+    );
+    let supp = krb5_types::pkinit::encode_pkinit_supp_pub_info(
+        etype.to_iana(),
+        as_req,
+        raw.padata_value.as_ref(),
+    );
+    let other = krb5_types::pkinit::encode_rfc8636_other_info(
+        krb5_types::pkinit::KDF_AH_SHA256_OID,
+        &party_u,
+        &party_v,
+        &supp,
+    );
+    pkinit_kdf_agile(etype, &shared, &other).map_err(Into::into)
 }
 
 /// PA-FOR-USER (S4U2Self) checksummed with the TGT session key (usage 17).

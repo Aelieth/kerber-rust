@@ -205,7 +205,18 @@ fn issue_as_from(
     let mut extra_padata: Vec<PaData> = vec![supported_enctypes_pa(client)];
     let mut as_rep_key = ckey.key.clone();
     let mut skip_timestamp = false;
-    if let Some((rk, pa_pk)) = process_pkinit(store, work_padata.as_deref(), etype)? {
+    let as_req_der = match raw {
+        Some(r) => r.to_vec(),
+        None => encode(req)?,
+    };
+    if let Some((rk, pa_pk)) = process_pkinit(
+        store,
+        work_padata.as_deref(),
+        etype,
+        &as_req_der,
+        &cname,
+        store.realm(),
+    )? {
         as_rep_key = rk;
         extra_padata.push(pa_pk);
         skip_timestamp = true;

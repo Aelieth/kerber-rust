@@ -291,6 +291,146 @@ pub fn parse_authpack(der: &[u8]) -> Option<(u32, Vec<u8>)> {
 /// RFC 8636 `id-pkinit-kdf-ah-sha256` (1.3.6.1.5.2.3.6.2).
 pub const KDF_AH_SHA256_OID: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x02, 0x03, 0x06, 0x02];
 
+/// RFC 4556 `KRB5PrincipalName` (realm + `PrincipalName`).
+#[must_use]
+pub fn encode_krb5_principal_name(realm: &str, ntype: i32, parts: &[&str]) -> Vec<u8> {
+    let realm_f = tlv(0xa0, &tlv(0x1b, realm.as_bytes()));
+    let nt = tlv(0xa0, &der_i32(ntype));
+    let mut names = Vec::new();
+    for p in parts {
+        names.extend(tlv(0x1b, p.as_bytes()));
+    }
+    let ns = tlv(0xa1, &tlv(0x30, &names));
+    let pname = tlv(0xa1, &tlv(0x30, &[nt, ns].concat()));
+    tlv(0x30, &[realm_f, pname].concat())
+}
+
+fn der_i32(v: i32) -> Vec<u8> {
+    der_unsigned(&v.to_be_bytes())
+}
+
+/// RFC 8636 `KDFAlgorithmId`.
+#[must_use]
+pub fn encode_kdf_algorithm_id(oid: &[u8]) -> Vec<u8> {
+    tlv(0x30, &tlv(0xa0, &oid_der(oid)))
+}
+
+/// RFC 8636 `PkinitSuppPubInfo`.
+#[must_use]
+pub fn encode_pkinit_supp_pub_info(enctype: i32, as_req: &[u8], pk_as_rep: &[u8]) -> Vec<u8> {
+    let e = tlv(0xa0, &der_i32(enctype));
+    let a = tlv(0xa1, &tlv(0x04, as_req));
+    let p = tlv(0xa2, &tlv(0x04, pk_as_rep));
+    tlv(0x30, &[e, a, p].concat())
+}
+
+/// RFC 8636 `OtherInfo`. Tagged OCTET STRING fields use the SP 800-56A
+/// ASN.1 `FixedInfo` layout MIT encodes (`[n] IMPLICIT OCTET STRING`).
+#[must_use]
+pub fn encode_rfc8636_other_info(
+    kdf_oid: &[u8],
+    party_u: &[u8],
+    party_v: &[u8],
+    supp_pub: &[u8],
+) -> Vec<u8> {
+    let alg = tlv(0x30, &oid_der(kdf_oid));
+    let u = tlv(0xa0, &tlv(0x04, party_u));
+    let v = tlv(0xa1, &tlv(0x04, party_v));
+    let s = tlv(0xa2, &tlv(0x04, supp_pub));
+    tlv(0x30, &[alg, u, v, s].concat())
+}
+
+/// Append `supportedKDFs` (SHA-256) as AuthPack [4].
+#[must_use]
+pub fn authpack_with_sha256_kdf(authpack: &[u8]) -> Option<Vec<u8>> {
+    let (t, body, _) = take_tlv(authpack)?;
+    if t != 0x30 {
+        return None;
+    }
+    let kdfs = tlv(
+        0xa4,
+        &tlv(0x30, &encode_kdf_algorithm_id(KDF_AH_SHA256_OID)),
+    );
+    Some(tlv(0x30, &[body, kdfs.as_slice()].concat()))
+}
+
+/// Insert RFC 8636 `kdf` [2] into a rasn-encoded `PA-PK-AS-REP` dhInfo.
+#[must_use]
+pub fn pa_pk_as_rep_with_kdf(pa_pk_as_rep: &[u8], kdf_oid: &[u8]) -> Option<Vec<u8>> {
+    let (t, inner, _) = take_tlv(pa_pk_as_rep)?;
+    if t != 0xa0 {
+        return None;
+    }
+    let (st, body, _) = take_tlv(inner)?;
+    if st != 0x30 {
+        return None;
+    }
+    let kdf = tlv(0xa2, &encode_kdf_algorithm_id(kdf_oid));
+    Some(tlv(0xa0, &tlv(0x30, &[body, kdf.as_slice()].concat())))
+}
+
+/// `dhSignedData` octets from a `PA-PK-AS-REP` dhInfo (with or without `kdf`).
+#[must_use]
+pub fn pa_pk_as_rep_dh_signed_data(pa_pk_as_rep: &[u8]) -> Option<Vec<u8>> {
+    let (t, inner, _) = take_tlv(pa_pk_as_rep)?;
+    if t != 0xa0 {
+        return None;
+    }
+    let (st, body, _) = take_tlv(inner)?;
+    if st != 0x30 {
+        return None;
+    }
+    let (tag, val, _) = take_tlv(body)?;
+    // [0] IMPLICIT OCTET STRING is 0x80.
+    if tag == 0x80 || tag == 0xa0 {
+        Some(val.to_vec())
+    } else {
+        None
+    }
+}
+
+/// OID body of `DHRepInfo.kdf` when present.
+#[must_use]
+pub fn pa_pk_as_rep_kdf_oid(pa_pk_as_rep: &[u8]) -> Option<Vec<u8>> {
+    let (t, inner, _) = take_tlv(pa_pk_as_rep)?;
+    if t != 0xa0 {
+        return None;
+    }
+    let (st, mut body, _) = take_tlv(inner)?;
+    if st != 0x30 {
+        return None;
+    }
+    while !body.is_empty() {
+        let (tag, val, rest) = take_tlv(body)?;
+        if tag == 0xa2 {
+            return kdf_oid_from_algorithm_id(val);
+        }
+        body = rest;
+    }
+    None
+}
+
+fn kdf_oid_from_algorithm_id(mut b: &[u8]) -> Option<Vec<u8>> {
+    if b.first() == Some(&0x30) {
+        let (_, inner, _) = take_tlv(b)?;
+        b = inner;
+    }
+    while !b.is_empty() {
+        let (tag, val, rest) = take_tlv(b)?;
+        if tag == 0xa0 || tag == 0x06 {
+            if tag == 0x06 {
+                return Some(val.to_vec());
+            }
+            let (t2, v2, _) = take_tlv(val)?;
+            if t2 == 0x06 {
+                return Some(v2.to_vec());
+            }
+        }
+        b = rest;
+    }
+    None
+}
+
 /// Whether AuthPack `supportedKDFs` includes SHA-256 (RFC 8636).
 #[must_use]
 pub fn authpack_wants_sha256_kdf(der: &[u8]) -> bool {
@@ -1116,5 +1256,36 @@ impl PkinitCa {
             pem("CERTIFICATE", &cert),
             pem_ec_key(&s, &p)
         ))
+    }
+}
+
+#[cfg(test)]
+mod rfc8636_tests {
+    use super::*;
+    use sha2::{Digest, Sha256};
+
+    #[test]
+    fn rfc8636_other_info_is_stable_and_oid_specific() {
+        let client = encode_krb5_principal_name("SU.SE", 1, &["lha"]);
+        let server = encode_krb5_principal_name("SU.SE", 2, &["krbtgt", "SU.SE"]);
+        let supp = encode_pkinit_supp_pub_info(18, &[0xAA; 10], &[0xBB; 9]);
+        let other = encode_rfc8636_other_info(KDF_AH_SHA256_OID, &client, &server, &supp);
+        let oid384: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x02, 0x03, 0x06, 0x04];
+        let other384 = encode_rfc8636_other_info(oid384, &client, &server, &supp);
+        assert_ne!(other, other384);
+        assert!(other.starts_with(&[0x30]));
+        let z = vec![0u8; 256];
+        let mut h = Sha256::new();
+        h.update(1u32.to_be_bytes());
+        h.update(&z);
+        h.update(&other);
+        let key: [u8; 32] = h.finalize().into();
+        let again = encode_rfc8636_other_info(KDF_AH_SHA256_OID, &client, &server, &supp);
+        let mut h2 = Sha256::new();
+        h2.update(1u32.to_be_bytes());
+        h2.update(&z);
+        h2.update(&again);
+        let key2: [u8; 32] = h2.finalize().into();
+        assert_eq!(key, key2);
     }
 }

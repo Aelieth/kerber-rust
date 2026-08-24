@@ -3,9 +3,9 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     checksum, decrypt, dh_generate, dh_group_for_prime, dh_shared, encrypt, krb_fx_cf2,
-    octetstring2key, p256_generate, p256_shared, spake_derive_key, spake_kdc_keygen,
-    spake_result_wbytes, spake_thash_update, spake_wbytes, verify_checksum, EncryptionType,
-    KeyUsage, ProtocolKey, SPAKE_GROUP_P256,
+    octetstring2key, p256_generate, p256_shared, pkinit_kdf_agile, spake_derive_key,
+    spake_kdc_keygen, spake_result_wbytes, spake_thash_update, spake_wbytes, verify_checksum,
+    EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256,
 };
 use krb5_types::{
     err, ku, pa, AsReq, EncryptedData, EncryptionKey, KerberosTime, MethodData, Microseconds,
@@ -277,6 +277,9 @@ pub(crate) fn process_pkinit(
     store: &PrincipalStore,
     padata: Option<&[PaData]>,
     etype: EncryptionType,
+    as_req_der: &[u8],
+    cname: &PrincipalName,
+    realm: &str,
 ) -> Result<Option<(ProtocolKey, PaData)>, Error> {
     let Some(raw) = find_pa(padata, pa::PK_AS_REQ) else {
         return Ok(None);
@@ -311,12 +314,12 @@ pub(crate) fn process_pkinit(
         );
         proto(err::PREAUTH_FAILED, "PKINIT AuthPack")
     })?;
-    let (reply_key, info) = if let Some(peer) = krb5_types::pkinit::decode_ec_spki(&spki) {
+    let agile = krb5_types::pkinit::authpack_wants_sha256_kdf(&inner);
+    let (z, info) = if let Some(peer) = krb5_types::pkinit::decode_ec_spki(&spki) {
         let kp = p256_generate()?;
         let shared = p256_shared(&kp.secret, &peer)?;
-        let reply_key = octetstring2key(etype, &shared)?;
         let info = krb5_types::pkinit::encode_kdc_dh_key_info(&kp.public, nonce);
-        (reply_key, info)
+        (shared.to_vec(), info)
     } else if let Some((p, y)) = krb5_types::pkinit::parse_dh_spki(&spki) {
         let group = dh_group_for_prime(&p).ok_or_else(|| {
             tracing::error!(
@@ -338,9 +341,9 @@ pub(crate) fn process_pkinit(
         let kp = dh_generate(group)?;
         let shared = dh_shared(group, &kp.secret, &y)
             .map_err(|_| proto(err::DH_KEY_PARAMETERS_NOT_ACCEPTED, "PKINIT DH peer"))?;
-        let reply_key = octetstring2key(etype, &shared)?;
+        let z = pad_z(&shared, p.len());
         let info = krb5_types::pkinit::encode_kdc_dh_key_info(&kp.public_der, nonce);
-        (reply_key, info)
+        (z, info)
     } else {
         tracing::error!(
             event = "kdc.pkinit",
@@ -359,11 +362,60 @@ pub(crate) fn process_pkinit(
         dh_signed_data: wrapped_pub.into(),
         server_dh_nonce: None,
     });
+    let mut pa_bytes = encode(&rep)?;
+    if agile {
+        pa_bytes = krb5_types::pkinit::pa_pk_as_rep_with_kdf(
+            &pa_bytes,
+            krb5_types::pkinit::KDF_AH_SHA256_OID,
+        )
+        .ok_or_else(|| proto(err::PREAUTH_FAILED, "PKINIT kdf encode"))?;
+    }
+    let reply_key = if agile {
+        tracing::info!(
+            event = "kdc.pkinit",
+            component = "krb5-kdc",
+            outcome = "ok",
+            detail = "rfc8636 sha256 kdf",
+        );
+        let parts: Vec<String> = cname
+            .name_string
+            .iter()
+            .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
+            .collect();
+        let prefs: Vec<&str> = parts.iter().map(String::as_str).collect();
+        let party_u =
+            krb5_types::pkinit::encode_krb5_principal_name(realm, cname.name_type, &prefs);
+        let party_v = krb5_types::pkinit::encode_krb5_principal_name(
+            realm,
+            PrincipalName::NT_SRV_INST,
+            &["krbtgt", realm],
+        );
+        let supp =
+            krb5_types::pkinit::encode_pkinit_supp_pub_info(etype.to_iana(), as_req_der, &pa_bytes);
+        let other = krb5_types::pkinit::encode_rfc8636_other_info(
+            krb5_types::pkinit::KDF_AH_SHA256_OID,
+            &party_u,
+            &party_v,
+            &supp,
+        );
+        pkinit_kdf_agile(etype, &z, &other)?
+    } else {
+        octetstring2key(etype, &z)?
+    };
     let pa = PaData {
         padata_type: pa::PK_AS_REP,
-        padata_value: encode(&rep)?.into(),
+        padata_value: pa_bytes.into(),
     };
     Ok(Some((reply_key, pa)))
+}
+
+fn pad_z(shared: &[u8], modulus_len: usize) -> Vec<u8> {
+    if shared.len() >= modulus_len {
+        return shared.to_vec();
+    }
+    let mut z = vec![0u8; modulus_len];
+    z[modulus_len - shared.len()..].copy_from_slice(shared);
+    z
 }
 
 pub(crate) fn find_pa(padata: Option<&[PaData]>, ty: i32) -> Option<&[u8]> {

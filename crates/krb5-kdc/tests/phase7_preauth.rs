@@ -16,8 +16,8 @@ use krb5_kdc::{
 };
 use krb5_protocol::{
     apply_strengthen, armor_key, as_req_sname, attach_fast, build_fast_armor, pa_for_user,
-    pa_pk_as_req, pa_pk_as_req_spki, pa_spake_response, pa_spake_support, pkinit_reply_key,
-    tgs_req_ex, unwrap_fast_rep,
+    pa_pk_as_req, pa_pk_as_req_agile, pa_pk_as_req_spki, pa_spake_response, pa_spake_support,
+    pkinit_reply_key, pkinit_reply_key_agile, tgs_req_ex, unwrap_fast_rep,
 };
 use krb5_types::{
     ascii, err, flag_bit, ku, pa, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart,
@@ -295,6 +295,48 @@ fn pkinit_ecdh_reply_key() {
     let plain = decrypt(&reply, usage, issued.rep.0.enc_part.cipher.as_ref()).expect("enc");
     let enc = decode_enc_part(&plain);
     assert_eq!(enc.nonce, 401);
+}
+
+#[test]
+fn pkinit_ecdh_rfc8636_sha256_kdf() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    store.enable_pkinit_ca().expect("PKINIT CA");
+    let ca = store.pkinit_ca.as_ref().expect("CA").clone();
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let kp = p256_generate().expect("client ECDH");
+    let pa = pa_pk_as_req_agile(&kp.public, &ca).expect("PA-PK-AS-REQ agile");
+    let req = as_req(cname.clone(), TEST_REALM, 411, Some(vec![pa])).unwrap();
+    let as_req_der = encode(&req).expect("AS-REQ");
+    let issued = krb5_kdc::issue_as(&store, &req).expect("PKINIT AS agile");
+    let raw_rep = issued
+        .rep
+        .0
+        .padata
+        .as_ref()
+        .and_then(|v| v.iter().find(|p| p.padata_type == pa::PK_AS_REP))
+        .expect("PA-PK-AS-REP");
+    assert_eq!(
+        krb5_types::pkinit::pa_pk_as_rep_kdf_oid(raw_rep.padata_value.as_ref()).as_deref(),
+        Some(krb5_types::pkinit::KDF_AH_SHA256_OID)
+    );
+    let et = EncryptionType::Aes256CtsHmacSha196;
+    let reply = pkinit_reply_key_agile(
+        &kp.secret,
+        &issued.rep.0.padata,
+        et,
+        &ca.ca_cert,
+        &as_req_der,
+        &cname,
+        TEST_REALM,
+    )
+    .expect("agile ECDH key");
+    assert_eq!(reply.as_bytes(), issued.as_rep_key.as_bytes());
+    let o2k = pkinit_reply_key(&kp.secret, &issued.rep.0.padata, et, &ca.ca_cert);
+    assert!(o2k.is_err(), "o2k helper must not silently decrypt agile");
+    let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
+    let plain = decrypt(&reply, usage, issued.rep.0.enc_part.cipher.as_ref()).expect("enc");
+    let enc = decode_enc_part(&plain);
+    assert_eq!(enc.nonce, 411);
 }
 
 #[test]
