@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# MIT 1.22.2 kadmin addprinc + cpw against Rust kadmind (GSS-RPC 749).
+# MIT 1.22.2 kadmin against Rust kadmind (GSS-RPC 749):
+# addprinc, cpw, getprinc, listprincs, modprinc, cpw -randkey, ktadd, delprinc.
 # Isolated: runs inside the MIT image; never touches host /etc/krb5.conf.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -118,6 +119,56 @@ KLIST2="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" klist)"
 echo "$KLIST2"
 echo "$KLIST2" | grep -q 'extra@KERBER.TEST'
 
-log "kadmin.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"addprinc+cpw"'
+echo "==== MIT kadmin getprinc extra ===="
+GET="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc extra' 2>&1 || true)"
+echo "$GET"
+echo "$GET" | grep -q 'Principal: extra@KERBER.TEST'
+
+echo "==== MIT kadmin listprincs ===="
+LIST="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'listprincs' 2>&1 || true)"
+echo "$LIST"
+echo "$LIST" | grep -q 'extra@KERBER.TEST'
+echo "$LIST" | grep -q 'user@KERBER.TEST'
+
+echo "==== MIT kadmin modprinc +requires_preauth extra ===="
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'modprinc +requires_preauth extra'
+GET2="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc extra' 2>&1 || true)"
+echo "$GET2"
+echo "$GET2" | grep -q 'REQUIRES_PRE_AUTH'
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" sh -c 'printf "extra-rotated\n" | kinit extra@KERBER.TEST'
+KLIST3="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" klist)"
+echo "$KLIST3"
+echo "$KLIST3" | grep -q 'extra@KERBER.TEST'
+
+echo "==== MIT kadmin cpw -randkey extra + ktadd + kinit -k ===="
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'cpw -randkey extra'
+if docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" sh -c 'printf "extra-rotated\n" | kinit extra@KERBER.TEST'; then
+    echo "old password still worked after chrand" >&2
+    exit 1
+fi
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'ktadd -k /tmp/extra.keytab extra'
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kinit -k -t /tmp/extra.keytab extra@KERBER.TEST
+KLIST4="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" klist)"
+echo "$KLIST4"
+echo "$KLIST4" | grep -q 'extra@KERBER.TEST'
+
+echo "==== MIT kadmin delprinc extra ===="
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'delprinc -force extra'
+DELGET="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc extra' 2>&1 || true)"
+echo "$DELGET"
+echo "$DELGET" | grep -qiE 'does not exist|not found|UNK_PRINC'
+
+log "kadmin.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"addprinc+cpw+get+list+mod+chrand+del"'
 exit 0
 
