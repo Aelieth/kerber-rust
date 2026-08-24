@@ -12,6 +12,12 @@ SCRATCH="${KERBER_SCRATCH:-/tmp/grok-goal-50fb1f8298b1/implementer}"
 mkdir -p "$SCRATCH"
 
 ADLAB="${ADLAB:-$HOME/adlab}"
+if [ -f "$ADLAB/env" ]; then
+    # shellcheck disable=SC1091
+    set -a
+    . "$ADLAB/env"
+    set +a
+fi
 export KRB5_CONFIG="${KRB5_CONFIG:-$ADLAB/ad-krb5.conf}"
 export KRB5CCNAME="FILE:$SCRATCH/ad-windows.ccache"
 export KRB5_KTNAME="FILE:$ADLAB/svc.keytab"
