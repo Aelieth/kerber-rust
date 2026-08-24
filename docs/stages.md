@@ -28,10 +28,9 @@ to full 1.0 parity is tracked in `working/plan-roadmap-adprod-*.md`:
   issued PACs carry signatures 6, 7, 16, 19 and self-verify; server checksum
   usage 17 matches AD offline. Samba AD DC image is not in-tree (gate
   records unavailability). Production GSS wrap emits RRC≠0. S4U2Self/Proxy
-  remain in-tree. Live Windows `kinit` uses `~/adlab/env`
-  (`AD_KBRUSER_PASSWORD`). `AD.KERBER.TEST`→`KERBER.TEST` live referral
-  + `host/testhost.kerber.test` is gated (`scripts/ad-mit-trust-gate.sh`).
-  Reverse host ticket: AD decrypt of the Rust-issued referral TGT fails.
+  remain in-tree. Live Windows `kinit` uses `~/adlab/env`.
+  Bidirectional `AD.KERBER.TEST`↔`KERBER.TEST` host tickets are gated
+  (`scripts/ad-mit-trust-gate.sh` twice).
 - **Track B — Operational parity:** serving store is `RwLock` so kadmind
   mutations persist; KDC reloads the db on mtime/length change.
   `krb5-kadmind` AUTH_GSSAPI 300001: MIT `kadmin` `addprinc`/`cpw` then

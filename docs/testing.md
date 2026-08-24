@@ -96,10 +96,9 @@ Era II gates (honest unavailability, never a fabricated pass):
   flavor 300001. Run twice.
 - `scripts/prod-gate.sh` — Rust KDC on `127.0.0.1:18888`, structured
   logs archived under `$KERBER_SCRATCH/prod-gate/`.
-- `scripts/ad-mit-trust-gate.sh` — isolated `kinit kbruser@AD.KERBER.TEST`
-  then `kvno` for `krbtgt/KERBER.TEST` and
-  `host/testhost.kerber.test@KERBER.TEST` (aes256). Sources `~/adlab/env`.
-  Reverse AD host ticket is not yet proven (AD decrypt-integrity-failed).
+- `scripts/ad-mit-trust-gate.sh` — both directions (aes256):
+  `kbruser@AD.KERBER.TEST` → `host/testhost.kerber.test` and
+  `user@KERBER.TEST` → `host/svc.ad.kerber.test`. Sources `~/adlab/env`.
 
 Live AD work must set `KRB5_CONFIG` / `KRB5CCNAME` / `KRB5_KTNAME` to
 `~/adlab`. Never edit host `/etc/krb5.conf` or SSSD.

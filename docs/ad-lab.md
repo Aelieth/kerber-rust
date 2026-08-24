@@ -69,10 +69,14 @@ The DC has a bidirectional MIT realm trust `KERBER.TEST` (`netdom
 (rootless distrobox cannot bind host `:88`; TESTLABBY stays on
 `aurora.testlabby.local`).
 
-`scripts/ad-mit-trust-gate.sh` (twice): MIT `kinit kbruser@AD.KERBER.TEST`
-then `kvno` yields `krbtgt/KERBER.TEST@AD.KERBER.TEST` and
-`host/testhost.kerber.test@KERBER.TEST` (aes256-cts-hmac-sha1-96).
-Operator secrets stay in `~/adlab/env` (0600). The reverse hop
-(`user@KERBER.TEST` → `host/svc.ad.kerber.test`) issues the referral
-TGT from the Rust KDC; AD then returns decrypt-integrity-failed
-(inbound TDO key ≠ the ktpass AES-256 key used outbound).
+`scripts/ad-mit-trust-gate.sh` (twice): both directions, aes256:
+
+- `kbruser@AD.KERBER.TEST` → `host/testhost.kerber.test@KERBER.TEST`
+- `user@KERBER.TEST` → `host/svc.ad.kerber.test@AD.KERBER.TEST`
+
+Windows TDO inbound/outbound AES keys differ by salt. The Rust KDC
+issues `krbtgt/AD.KERBER.TEST` with the inbound key and decrypts
+AD-issued referrals with the outbound key (`KRB5_TEST_INTERREALM_KEY`
+/ `KRB5_TEST_INTERREALM_KEY_ACCEPT`). Referral TGTs omit PAC so AD
+does not policy-reject dummy logon SIDs. Secrets stay in `~/adlab/`
+(0600).
