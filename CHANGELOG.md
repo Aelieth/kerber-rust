@@ -37,6 +37,9 @@ this project uses semantic versioning once a crate is published.
   bidirectional `AD.KERBER.TEST`↔`KERBER.TEST` host tickets
   (`scripts/ad-mit-trust-gate.sh`): Windows TDO inbound/outbound AES
   keys are both loaded; referral TGTs omit PAC.
+- `scripts/prod-gate.sh` drives shipped `krb5-kinit` against
+  `127.0.0.1:18888`, requires `kdc.issue` JSON with `correlation_id`,
+  and archives a PDU pcap. Heimdal and SSPI gates record unavailability.
 
 ### Security
 

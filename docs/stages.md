@@ -37,6 +37,8 @@ to full 1.0 parity is tracked in `working/plan-roadmap-adprod-*.md`:
   `kinit extra@KERBER.TEST` (`scripts/kadmin-gate.sh`). RFC 3244 kpasswd;
   kprop dump/load; RFC 8636 SHA-256 PKINIT KDF on the issue path when
   AuthPack advertises it (`scripts/pkinit-gate.sh`).
-- **Track C — Production verification:** `scripts/prod-gate.sh` archives
-  structured KDC logs; bounded concurrent `handle_request` stress; `cargo
-  deny` + `cargo geiger` when present. 1.0 tag is not cut.
+- **Track C — Production verification:** `scripts/prod-gate.sh` twice:
+  `krb5-kinit` AS+TGS, JSON log analysis, archived PDU pcap. Bounded
+  stress + UDP chaos twice. `cargo deny`; `cargo geiger` when it can
+  target a package; `cargo vet` absent. Samba/Heimdal/SSPI oracles
+  captured unavailable. **1.0 is not tagged** (C4 matrix incomplete).

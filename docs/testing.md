@@ -94,8 +94,13 @@ Era II gates (honest unavailability, never a fabricated pass):
 - `scripts/kadmin-gate.sh` — MIT `kadmin` `addprinc`/`cpw` against
   `krb5-kadmind` on 749, then `kinit extra@KERBER.TEST`. AUTH_GSSAPI
   flavor 300001. Run twice.
-- `scripts/prod-gate.sh` — Rust KDC on `127.0.0.1:18888`, structured
-  logs archived under `$KERBER_SCRATCH/prod-gate/`.
+- `scripts/prod-gate.sh` — Rust KDC on `127.0.0.1:18888`, `krb5-kinit`
+  AS+TGS, structured-log analysis (`kdc.issue` + `correlation_id`),
+  PDU pcap under `$KERBER_SCRATCH/prod-gate/` (loopback CAP_NET_RAW
+  is unavailable in rootless distrobox; pcap is reconstructed from
+  `KERBER_CAPTURE_DIR`).
+- `scripts/heimdal-gate.sh` / `scripts/gss-sspi-gate.sh` — exit 2 +
+  unavailability log when those oracles are absent.
 - `scripts/ad-mit-trust-gate.sh` — both directions (aes256):
   `kbruser@AD.KERBER.TEST` → `host/testhost.kerber.test` and
   `user@KERBER.TEST` → `host/svc.ad.kerber.test`. Sources `~/adlab/env`.
