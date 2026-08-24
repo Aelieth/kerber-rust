@@ -1,0 +1,18 @@
+Principal: pauser@KERBER.TEST
+Expiration date: [never]
+Last password change: Mon Aug 24 19:05:34 UTC 2026
+Password expiration date: [never]
+Maximum ticket life: 0 days 10:00:00
+Maximum renewable life: 7 days 00:00:00
+Last modified: Mon Aug 24 19:05:34 UTC 2026 (root/admin@KERBER.TEST)
+Last successful authentication: [never]
+Last failed authentication: [never]
+Failed password attempts: 0
+Number of keys: 4
+Key: vno 1, aes256-cts-hmac-sha384-192
+Key: vno 1, aes128-cts-hmac-sha256-128
+Key: vno 1, aes256-cts-hmac-sha1-96
+Key: vno 1, aes128-cts-hmac-sha1-96
+MKey: vno 1
+Attributes: REQUIRES_PRE_AUTH
+Policy: [none]

@@ -22,6 +22,9 @@ files are gitignored.
 | `mit-tgs-req.der` | `0x6c` | MIT TGS-REQ (FAST) |
 | `mit-tgs-rep.der` | `0x6d` | MIT 1.22.2 KDC TGS-REP (`client-gate.sh` `client-rep-*.der`) |
 | `pac-kbruser.ndr` | NDR | Windows Server 2022 `PAC_LOGON_INFO` for `kbruser` (identity bytes only; extracted from the captured `host/svc` ticket) |
+| `kdb/mit-dump-v7.txt` | dump | MIT 1.22.2 `kdb5_util dump` (default **version 7**) of `KERBER.TEST` (`user`/`pauser`/`host/testhost.kerber.test`; master password `masterpassword`). Keys are master-key-encrypted; the test-realm password is already public. |
+| `kdb/mit-dump-v6.txt` | dump | Same realm via `kdb5_util dump -r18` (**version 6**). Princ grammar matches v7. |
+| `kdb/getprinc-pauser.txt` | text | `kadmin.local getprinc pauser` at dump time. `Attributes: REQUIRES_PRE_AUTH` is dump field **128**, not `0x8`. |
 
 Reply goldens must be MIT-KDC bytes from the Rust client socket
 (`client-rep-*.der`), not Rust-KDC socket dumps (`kdc-rep-*.der`).
