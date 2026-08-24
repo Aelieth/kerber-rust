@@ -41,6 +41,7 @@ Passwords and `svc.keytab` are operator-held. Never commit them.
 | `~/adlab/svc.keytab` | Service key (secret) |
 | `~/adlab/ad-krb.pcap` | Wire capture of AS+TGS including the PAC-bearing service ticket |
 | `tests/traces/ad/` | Gitignored copies for local tests. Refresh **from** `~/adlab`. |
+| `tests/traces/pac-kbruser.ndr` | Committed non-secret `PAC_LOGON_INFO` NDR of `kbruser` (no keys). |
 
 ## Safe re-test (never touch host krb5/sssd)
 

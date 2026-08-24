@@ -6,6 +6,31 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased]
 
+### Added
+
+- AD PAC: MS-RPCE NDR32 `KERB_VALIDATION_INFO` in field-encounter
+  referent order. Golden `tests/traces/pac-kbruser.ndr` (kbruser /
+  kbrgroup / ADKERBER SID) re-encodes byte-identically. Server checksum
+  usage 17 verifies against the lab `svc.keytab` when present.
+- PAC signatures 6, 7, 16 (`PAC_TICKET_CHECKSUM`), 19
+  (`PAC_FULL_CHECKSUM`). `ulType` 12 is UPN/DNS; 16 is the ticket
+  checksum. Issued tickets self-verify all four with the local krbtgt.
+- `PA-SUPPORTED-ENCTYPES` bits follow keys on the principal (not a
+  static `0x18`).
+- GSS wrap send-side RRC=16 (RFC 4121).
+- Runtime-mutable `SharedStore` (`RwLock`) so kadmind/kpasswd mutations
+  reach stash/db. Kadmind version-1 AP-REQ framing (library tests) plus
+  `krb5-kadmind` ONC RPC program 2112 / RPCSEC_GSS flavor 6. MIT 1.22.2
+  `kadmin` uses AUTH_GSSAPI flavor 300001, so the live kadmin-gate does
+  not yet complete `addprinc`. RFC 3244 kpasswd on 464; kprop dump over
+  TCP 754.
+- RFC 8636 SHA-256 PKINIT KDF helper (`pkinit_kdf_agile`) and AuthPack
+  `supportedKDFs` detector. The KDC reply key remains RFC 4556
+  `octetstring2key` (MIT 1.22.2 PKINIT still uses SHA-1 unless `kdfId`
+  is in PA-PK-AS-REP).
+- FILE ccache parser skips MIT `X-CACHECONF` etype 0 so AD `ad.ccache`
+  tickets remain readable.
+
 ### Security
 
 - PKINIT `cms_verify` is mandatory against a provisioned CA; forged CMS
@@ -18,7 +43,7 @@ this project uses semantic versioning once a crate is published.
 - `--test-realm` reads passwords from `KRB5_TEST_*_PASSWORD` (not
   compiled into the binary). Network crates deny `unwrap`/`expect`/`panic`.
 
-### Added
+### Previously added
 
 - Phase 0–8 audit work: honest CI oracles (`client-gate`, `kdc-gate`,
   bidirectional Rust↔Rust), `cargo audit`/`deny`, MSRV 1.85, `--release`
@@ -64,9 +89,10 @@ this project uses semantic versioning once a crate is published.
 - KRB-SAFE/PRIV/CRED unwrap consults `ReplayCache` and a 300s timestamp
   window; SAFE/PRIV builders increment `seq_number`.
 - Docs: MIT `kinit` PKINIT, SPAKE (`pa_type` 151), FAST TGS `kvno`, and
-  two-realm `kvno` are gated; PAC/Camellia remain unit-gated; kadmind
-  RPC is not implemented. `KRB5_CONFIG` / `KRB5_KDC_PROFILE` /
-  `/etc/krb5.conf` / `/etc/krb5kdc/kdc.conf` are consumed when present.
+  two-realm `kvno` are gated; AD PAC NDR is golden-gated; kadmind
+  RPCSEC_GSS exists, MIT AUTH_GSSAPI `kadmin` is not the oracle yet.
+  `KRB5_CONFIG` / `KRB5_KDC_PROFILE` / `/etc/krb5.conf` /
+  `/etc/krb5kdc/kdc.conf` are consumed when present.
 - `pkinit-gate.sh` fails when MIT PKINIT interop fails; `cargo-deny`
   is blocking in CI.
 - `KERBER_CAPTURE_DIR` writes raw PDUs. Checked-in `tests/traces/mit-*.der`
@@ -80,9 +106,9 @@ this project uses semantic versioning once a crate is published.
 - `krb5-config` / `krb5-types` / `krb5-crypto` deny `unwrap`/`expect`/`panic`.
 - krbtgt and host principals carry RFC 8009 keys; `sha2-gate.sh` is a
   live MIT `kinit`/`kvno` forcing aes256-cts-hmac-sha384-192.
-- Persistence is embed-only (the daemon cannot mutate `Arc<PrincipalStore>`
-  at runtime). GSS first-seq matches the AP-REQ authenticator; wrap/MIC
-  use a windowed replay cache. Send-side RRC≠0 / SSPI is AD-round pending.
+- Persistence is stash/db with a runtime-mutable `RwLock` store. GSS
+  first-seq matches the AP-REQ authenticator; wrap/MIC use a windowed
+  replay cache. Production wrap emits RRC=16.
 
 ## [0.1.0] - 2026-08-19
 

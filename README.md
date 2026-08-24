@@ -12,9 +12,14 @@ This is an early-stage project targeting MIT 1.22.2 wire compatibility.
 `kinit` (`spake-gate.sh`, `pa_type` 151 / group 2), two-realm
 `kvno` (`cross-realm-gate.sh`, `host/svc.other.test@OTHER.TEST`), and
 RFC 8009 SHA-2 (`sha2-gate.sh`, MIT `kinit`/`kvno` with
-`aes256-cts-hmac-sha384-192`). PAC remains **unit-gated**. kadmind MIT
-RPC is not implemented. Persistence is embed-only. `bidirectional-gate`
-is Rust↔Rust, not a MIT oracle. `krb5-config` is consumed: the KDC applies `kdc.conf`
+`aes256-cts-hmac-sha384-192`). AD PAC NDR is **golden-gated**
+(`tests/traces/pac-kbruser.ndr`; server checksum vs `svc.keytab` when
+present). kadmind version-1 AP-REQ framing is library-tested; `krb5-kadmind`
+speaks ONC RPC program 2112 / RPCSEC_GSS flavor 6. MIT 1.22.2 `kadmin`
+uses AUTH_GSSAPI flavor 300001, so live `addprinc` is not yet the
+oracle. Persistence is stash/db with a runtime-mutable `RwLock` store.
+`bidirectional-gate` is Rust↔Rust, not a MIT oracle.
+`krb5-config` is consumed: the KDC applies `kdc.conf`
 ticket policy (and non-test listen/db paths); `kinit` / TGS referral
 chase use `KRB5_CONFIG` then `/etc/krb5.conf` `[realms]` (argv is the
 fallback). Long soaks and live Heimdal/SSPI remain
@@ -45,7 +50,7 @@ Focused crates under `crates/`:
 | `krb5-client` | `kinit` (password env/stdin), MIT FILE ccache v4, keytab v1/v2 |
 | `krb5-kdc` | AS/TGS issue, persist/stash, ACL, UDP/TCP listener |
 | `krb5-gss` | GSS wrap/unwrap/MIC, SPNEGO framing (no C FFI) |
-| `krb5-admin` | kadmind-equivalent ACL session, ktadd, kprop dump/load |
+| `krb5-admin` | kadmind (v1 framing + ONC RPC 2112), kpasswd 464, kprop |
 
 See [docs/architecture.md](docs/architecture.md) and
 [docs/rfc-mapping.md](docs/rfc-mapping.md).
@@ -71,9 +76,12 @@ See [docs/architecture.md](docs/architecture.md) and
   `scripts/kdc-gate.sh`.
 
 GSS-API is `krb5-gss` (library wrap/MIC; MIT `libgssapi_krb5` is
-out-of-process only). kadmind MIT RPC ABI is not implemented;
-`krb5-admin` enforces the ACL over a library/session API. Weak etypes
-(16/23/25/26) are known but refused unless `allow_weak_crypto`.
+out-of-process only). Production wrap emits RFC 4121 RRC=16.
+`krb5-admin` serves AP-REQ authenticated ops (version-1 framing) and
+`krb5-kadmind` (ONC RPC 2112 / RPCSEC_GSS) on 749, RFC 3244 kpasswd on
+464, and kprop dump/load. MIT `kadmin` AUTH_GSSAPI is not yet the
+wire oracle. Weak etypes (16/23/25/26) are known but refused unless
+`allow_weak_crypto`.
 
 ## Build and test
 

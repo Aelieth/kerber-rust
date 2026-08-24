@@ -78,6 +78,26 @@ Cross-realm: `scripts/cross-realm-gate.sh` starts two Rust KDCs
 then MIT `kinit` + `kvno host/svc.other.test@OTHER.TEST`. It fails
 unless `klist` contains `krbtgt/OTHER.TEST` and the host ticket.
 
+AD PAC: `crates/krb5-kdc/tests/ad_pac.rs` decodes committed
+`tests/traces/pac-kbruser.ndr` (byte-identical re-encode; `kbruser` /
+`kbrgroup` / ADKERBER SID). With `~/adlab/svc.keytab` present, the
+captured `host/svc` PAC server checksum is verified (usage 17). Skip
+cleanly without the keytab.
+
+Era II gates (honest unavailability, never a fabricated pass):
+
+- `scripts/samba-ad-gate.sh` — Samba 4 AD DC (exit 2 + unavailability
+  log when no image).
+- `scripts/ad-windows-gate.sh` — isolated `kinit`/`kvno` against
+  `10.10.38.38` (`~/adlab` only; needs `AD_KBRUSER_PASSWORD`).
+- `scripts/kadmin-gate.sh` — MIT `kadmin` `addprinc`/`cpw` against
+  `krb5-kadmind` on 749. Currently fails: MIT uses AUTH_GSSAPI 300001.
+- `scripts/prod-gate.sh` — Rust KDC on `127.0.0.1:18888`, structured
+  logs archived under `$KERBER_SCRATCH/prod-gate/`.
+
+Live AD work must set `KRB5_CONFIG` / `KRB5CCNAME` / `KRB5_KTNAME` to
+`~/adlab`. Never edit host `/etc/krb5.conf` or SSSD.
+
 ## MIT 1.22.2 harness
 
 | Item | Value |
