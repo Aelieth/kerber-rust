@@ -34,5 +34,6 @@ appendix A.4 output). Single-DES is not implemented.
 `KRB5_CONFIG` then `/etc/krb5.conf` `[realms]` (argv is the fallback).
 The KDC database oracle is MIT `kdb5_util` dump/load (`krb5-kdb`,
 version 7): MIT `kinit` both directions (`scripts/kdb-dump-gate.sh`).
-KDB3 persist remains an internal fallback. MIT-wire kprop/kpropd is a
-follow-on (plan K5).
+KDB3 persist remains an internal fallback. MIT-wire kprop/kpropd on 754
+wraps dump version 7 (`scripts/kprop-gate.sh`: MIT `kprop` → Rust
+`kpropd` then MIT `kinit`). Rust→MIT `kpropd` is not gated.

@@ -35,6 +35,13 @@ this project uses semantic versioning once a crate is published.
   when present; success replies include AP-REP. kprop dump encrypts
   with the existing shared stash (never a throwaway master) and is
   proven over a real TCP socket (`kprop_tcp_replica_issues_as_with_shared_stash`).
+  `krb5-kpropd` on TCP 754: MIT `sendauth` version `kprop5_01`, KRB-SAFE
+  dump size (MIT checksums the full KRB-SAFE with a dummy checksum),
+  `initivector` then KRB-PRIV 32768-byte dump-v7 chunks. MIT `kprop`
+  then MIT `kinit user` is gated by `scripts/kprop-gate.sh`. Rust→MIT
+  `kpropd` is not gated. A kadmind `addprinc` survives killing
+  `krb5-kdc` by `/proc/PID/comm` and relaunching
+  (`scripts/restart-gate.sh`).
 - RFC 8636 SHA-256 PKINIT KDF on the KDC issue path when AuthPack
   `supportedKDFs` includes `id-pkinit-kdf-ah-sha256`: `kdf` is set in
   `DHRepInfo` and the reply key is `SHA-256(counter||Z||OtherInfo)`.
@@ -57,7 +64,7 @@ this project uses semantic versioning once a crate is published.
   HMAC-MD5-ARCFOUR (cksumtype -138) on AES session keys.
 - `bounded_stress_handle_request` asserts 64 concurrent valid AS+TGS
   succeed. Harness CI runs `kadmin-gate`, `kpasswd-gate`, `kdb-dump-gate`,
-  `prod-gate`. `samba-ad-gate.sh` exits 2 unless a live Samba/AD
+  `kprop-gate`, `restart-gate`, `prod-gate`. `samba-ad-gate.sh` exits 2 unless a live Samba/AD
   `kinit`/`kvno` succeeds (no fabricated pass from “image exists”).
 - MIT `kdb5_util` dump/load (version 7; `-r18` is version 6):
   `krb5-kdb load`/`dump`, KDB usage-0 `key_data` with a cleartext

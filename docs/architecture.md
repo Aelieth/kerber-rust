@@ -71,10 +71,12 @@ size). SSPI peer proof remains environment-dependent.
 AP-REQ framing (library tests) and `krb5-kadmind` ONC RPC program 2112
 / AUTH_GSSAPI flavor 300001 on TCP 749, RFC 3244 kpasswd on UDP/TCP
 464 (`kadmin/changepw`, MIT `kpasswd` gated by
-`scripts/kpasswd-gate.sh`), kprop dump/load on 754 (shared stash
-master; replica `issue_as` in library tests). MIT 1.22.2 `kadmin`
-add/get/list/mod/chrand/del is gated by `scripts/kadmin-gate.sh`. The
-MIT `kprop` client is not gated.
+`scripts/kpasswd-gate.sh`), `krb5-kpropd` on 754 wrapping MIT dump
+version 7 (`sendauth` `kprop5_01`, KRB-SAFE size, KRB-PRIV chunks).
+MIT `kprop` then MIT `kinit` is gated by `scripts/kprop-gate.sh`.
+MIT 1.22.2 `kadmin` add/get/list/mod/chrand/del is gated by
+`scripts/kadmin-gate.sh`. A kadmind mutation survives KDC process
+relaunch (`scripts/restart-gate.sh`).
 
 **`krb5-config`** parses `krb5.conf` / `kdc.conf` and DNS SRV. The KDC
 applies `kdc.conf` ticket policy from `KRB5_KDC_PROFILE` /

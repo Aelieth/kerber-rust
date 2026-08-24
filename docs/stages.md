@@ -38,7 +38,8 @@ to full 1.0 parity is tracked in `working/plan-roadmap-adprod-*.md`:
   chrand/ktadd/del then `kinit extra@KERBER.TEST`
   (`scripts/kadmin-gate.sh`). RFC 3244
   kpasswd on UDP/TCP 464 (`scripts/kpasswd-gate.sh` MIT `kpasswd` then
-  `kinit`); kprop dump/load with the existing stash master; RFC 8636
+  `kinit`); `krb5-kpropd` on 754 wrapping dump version 7 (`scripts/kprop-gate.sh`
+  MIT `kprop` then MIT `kinit`); RFC 8636
   SHA-256 PKINIT KDF on the issue path when
   AuthPack advertises it (`scripts/pkinit-gate.sh`). Stage-5 database
   backend is MIT `kdb5_util` dump/load (`krb5-kdb`, version 7): MIT
@@ -58,7 +59,10 @@ oracle. Rust S4U2Self/Proxy is MIT-gated (`scripts/s4u-mit-gate.sh`
 PA-PAC-OPTIONS. `ad-*` gates are **one-shot** against a since-torn-down DC;
 cross-realm referral TGTs **omit the PAC**. The **prod-gate is a
 single-process Rust↔Rust loopback** (now in CI). `bounded_stress` asserts
-concurrent AS+TGS; soak/differential absent. **kprop is a private format**
-(no `kpropd`). **kadmind** MIT-gates add/get/list/mod/chrand/del (`renprinc`
-remaining). Harness CI runs
-`pkinit-gate`, `kadmin-gate`, `kpasswd-gate`, `kdb-dump-gate`, `prod-gate`.
+concurrent AS+TGS; soak/differential absent. **kpropd** on 754 wraps dump
+version 7; MIT `kprop`→Rust then MIT `kinit` is gated (`kprop-gate.sh`).
+Rust→MIT `kpropd` is not gated. B1 restart (kill `krb5-kdc` by comm,
+relaunch, MIT `kinit`) is gated. **kadmind** MIT-gates
+add/get/list/mod/chrand/del (`renprinc` remaining). Harness CI runs
+`pkinit-gate`, `kadmin-gate`, `kpasswd-gate`, `kdb-dump-gate`,
+`kprop-gate`, `restart-gate`, `prod-gate`.

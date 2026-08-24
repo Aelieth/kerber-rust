@@ -91,7 +91,8 @@ captured `host/svc` PAC server checksum is verified (usage 17). Skip
 cleanly without the keytab.
 
 Era II gates. The harness CI job runs `kadmin-gate`, `kpasswd-gate`,
-`kdb-dump-gate`, and `prod-gate` after `pkinit-gate`. `ad-*` remain
+`kdb-dump-gate`, `kprop-gate`, `restart-gate`, and `prod-gate` after
+`pkinit-gate`. `ad-*` remain
 one-shot against a live DC.
 `samba`/`heimdal`/`gss-sspi` exit 2 when those oracles are absent.
 
@@ -124,6 +125,14 @@ one-shot against a live DC.
   Half B: `krb5-kdb dump --from-dump`, MIT `kdb5_util load`, MIT
   `krb5kdc` (Rust KDC must be dead so :88 is free), MIT `kinit` with
   `renew until` in `klist`. Run twice.
+- `scripts/kprop-gate.sh` — MIT `kprop` of a version-7 dump to
+  `krb5-kpropd` on 754 (`kprop5_01` sendauth, KRB-SAFE size, KRB-PRIV
+  32768-byte chunks), then MIT `kinit user` against the replica Rust
+  KDC. `klist` names `user@KERBER.TEST`. Run twice. Rust→MIT `kpropd`
+  is not gated.
+- `scripts/restart-gate.sh` — MIT `kadmin addprinc extra`, MIT `kinit`,
+  kill `krb5-kdc` by `/proc/PID/comm`, relaunch the same binary on the
+  same db/stash, MIT `kinit extra` still works. Run twice.
 - `scripts/prod-gate.sh` — Rust KDC on `127.0.0.1:18888`, `krb5-kinit`
   AS+TGS, structured-log analysis (`kdc.issue` + `correlation_id`),
   PDU pcap under `$KERBER_SCRATCH/prod-gate/` (loopback CAP_NET_RAW
