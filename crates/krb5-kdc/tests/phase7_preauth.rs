@@ -419,6 +419,7 @@ fn as_and_tgs_tickets_carry_verifiable_pac() {
         tgt_part.authtime.unix_seconds(),
         &host.key,
         &krbtgt.key,
+        &[],
     )
     .expect("sign");
     verify_pac(&signed, &host.key, &krbtgt.key).expect("re-sign");
@@ -622,7 +623,31 @@ fn as_rep_advertises_supported_enctypes() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 53);
     let pa = issued.rep.0.padata.as_ref().expect("padata");
-    assert!(pa.iter().any(|p| p.padata_type == pa::SUPPORTED_ENCTYPES));
+    let raw = pa
+        .iter()
+        .find(|p| p.padata_type == pa::SUPPORTED_ENCTYPES)
+        .expect("PA-SUPPORTED-ENCTYPES")
+        .padata_value
+        .as_ref();
+    assert!(raw.len() >= 4);
+    let bits = u32::from_le_bytes(raw[..4].try_into().unwrap());
+    let user = store
+        .get_name(&PrincipalName::new(
+            PrincipalName::NT_PRINCIPAL,
+            [TEST_USER],
+        ))
+        .unwrap();
+    let expect = user.supported_enctypes_mask();
+    assert_eq!(bits, expect, "bits must match keys on the principal");
+    assert_ne!(
+        bits, 0x18,
+        "must not be the static AES-SHA1 mask; SHA-2 keys are present"
+    );
+    assert_eq!(
+        bits & 0x18,
+        0x18,
+        "AES-SHA1 17/18 still advertised when those keys exist"
+    );
 }
 
 #[test]

@@ -8,13 +8,13 @@ use krb5_crypto::{
 };
 use krb5_protocol::{ReplayCache, ReplayKey};
 use krb5_types::{
-    err, flag_bit, ku, pa, AsRep, AsReq, AuthorizationData, EncAsRepPart, EncKdcRepPart,
-    EncTgsRepPart, EncTicketPart, EncryptedData, EncryptionKey, EtypeInfo2, EtypeInfo2Entry,
-    KerberosTime, KrbError, LastReqValue, MethodData, Microseconds, OctetString, PaData,
-    PaEncTsEnc, PrincipalName, TgsRep, TgsReq, Ticket, TicketFlags, TransitedEncoding,
+    err, flag_bit, ku, pa, AsRep, AsReq, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart,
+    EncryptedData, EncryptionKey, EtypeInfo2, EtypeInfo2Entry, KerberosTime, KrbError,
+    LastReqValue, MethodData, Microseconds, OctetString, PaData, PaEncTsEnc, PrincipalName, TgsRep,
+    TgsReq, Ticket, TicketFlags, TransitedEncoding,
 };
 
-use crate::ad::{s4u2proxy_client, s4u2self_client, ticket_authz, u2u_session};
+use crate::ad::{s4u2proxy_client, s4u2self_client, sign_pac, u2u_session, wrap_win2k_pac};
 use crate::error::Error;
 use crate::preauth::{
     fast_finished, process_pkinit, process_spake, unwrap_fast, unwrap_fast_padata, wrap_fast_rep,
@@ -202,10 +202,7 @@ fn issue_as_from(
         req.0.padata.clone()
     };
 
-    let mut extra_padata: Vec<PaData> = vec![PaData {
-        padata_type: pa::SUPPORTED_ENCTYPES,
-        padata_value: 0x18u32.to_le_bytes().to_vec().into(),
-    }];
+    let mut extra_padata: Vec<PaData> = vec![supported_enctypes_pa(client)];
     let mut as_rep_key = ckey.key.clone();
     let mut skip_timestamp = false;
     if let Some((rk, pa_pk)) = process_pkinit(store, work_padata.as_deref(), etype)? {
@@ -261,7 +258,10 @@ fn issue_as_from(
     if body.kdc_options.bit(flag_bit::RENEWABLE) {
         flags = flags.with_bit(flag_bit::RENEWABLE, true);
     }
-    let authz = ticket_authz(store, &cname, store.realm(), &now, &skey.key)?;
+    let krbtgt_key = store
+        .krbtgt()
+        .and_then(|p| p.best_key())
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
     let ticket = mint_ticket(
         &skey.key,
         skey.kvno,
@@ -274,7 +274,7 @@ fn issue_as_from(
         &now,
         &end,
         flags.clone(),
-        authz,
+        &krbtgt_key.key,
         TransitedEncoding::empty(),
         renew_till_for(store, &now, &flags),
     )?;
@@ -487,7 +487,10 @@ fn issue_tgs_from(
     if body.kdc_options.bit(flag_bit::RENEWABLE) && enc_tkt.flags.renewable() {
         flags = flags.with_bit(flag_bit::RENEWABLE, true);
     }
-    let authz = ticket_authz(store, &ticket_cname, &ticket_crealm, &now, &tkt_key)?;
+    let krbtgt_key = store
+        .krbtgt()
+        .and_then(|p| p.best_key())
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
     let ticket = mint_ticket(
         &tkt_key,
         tkt_kvno,
@@ -500,7 +503,7 @@ fn issue_tgs_from(
         &now,
         &end,
         flags.clone(),
-        authz,
+        &krbtgt_key.key,
         transited,
         renew_till_for(store, &now, &flags),
     )?;
@@ -528,17 +531,23 @@ fn issue_tgs_from(
     };
     let usage = KeyUsage::new(enc_usage)?;
     let cipher = encrypt(&enc_key, usage, &enc_der)?;
+    let mut tgs_pa = Vec::new();
+    if let Some(client_p) = store.get_name(&ticket_cname) {
+        tgs_pa.push(supported_enctypes_pa(client_p));
+    }
     let padata = if let Some(f) = tgs_fast {
         let finished = fast_finished(&f.armor_key, &ticket, &ticket_cname, &ticket_crealm)?;
         Some(vec![wrap_fast_rep(
             &f.armor_key,
-            Vec::new(),
+            tgs_pa,
             None,
             body.nonce,
             Some(finished),
         )?])
-    } else {
+    } else if tgs_pa.is_empty() {
         None
+    } else {
+        Some(tgs_pa)
     };
     let rep = TgsRep(krb5_types::KdcRep {
         pvno: krb5_types::KdcRep::PVNO,
@@ -638,11 +647,12 @@ fn mint_ticket(
     authtime: &KerberosTime,
     endtime: &KerberosTime,
     flags: TicketFlags,
-    authorization_data: Option<AuthorizationData>,
+    kdc_key: &ProtocolKey,
     transited: TransitedEncoding,
     renew_till: Option<KerberosTime>,
 ) -> Result<Ticket, Error> {
-    let part = EncTicketPart {
+    let placeholder = wrap_win2k_pac(&[0])?;
+    let mut part = EncTicketPart {
         flags,
         key: encryption_key(session),
         crealm: ks(crealm)?,
@@ -653,8 +663,18 @@ fn mint_ticket(
         endtime: endtime.clone(),
         renew_till,
         caddr: None,
-        authorization_data,
+        authorization_data: Some(placeholder),
     };
+    let checksum_der = encode(&part)?;
+    let pac = sign_pac(
+        cname,
+        crealm,
+        authtime.unix_seconds(),
+        service_key,
+        kdc_key,
+        &checksum_der,
+    )?;
+    part.authorization_data = Some(wrap_win2k_pac(&pac)?);
     let der = encode(&part)?;
     let usage = KeyUsage::new(ku::TICKET)?;
     let cipher = encrypt(service_key, usage, &der)?;
@@ -705,6 +725,17 @@ fn encryption_key(key: &ProtocolKey) -> EncryptionKey {
     EncryptionKey {
         keytype: key.etype().to_iana(),
         keyvalue: OctetString::from(key.as_bytes().to_vec()),
+    }
+}
+
+fn supported_enctypes_pa(princ: &Principal) -> PaData {
+    PaData {
+        padata_type: pa::SUPPORTED_ENCTYPES,
+        padata_value: princ
+            .supported_enctypes_mask()
+            .to_le_bytes()
+            .to_vec()
+            .into(),
     }
 }
 

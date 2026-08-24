@@ -8,7 +8,7 @@ use std::time::Duration;
 use krb5_asn1::{decode, encode};
 use krb5_kdc::{
     as_req, bootstrap_documented, documented_admin_id, handle_request, load_store, save_store,
-    serve, TEST_REALM, TEST_USER,
+    serve, shared_store, TEST_REALM, TEST_USER,
 };
 use krb5_types::{err, PrincipalName};
 
@@ -103,7 +103,7 @@ fn udp_listener_answers_wrong_password() {
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
     let addr = udp.local_addr().unwrap();
     let tcp = std::net::TcpListener::bind(addr).unwrap();
-    let store = Arc::new(store);
+    let store = shared_store(store);
     thread::spawn(move || {
         let _ = serve(store, udp, tcp);
     });
@@ -133,7 +133,7 @@ fn tcp_worker_cap_drops_excess_connections() {
     let addr = udp.local_addr().unwrap();
     let tcp = std::net::TcpListener::bind(addr).unwrap();
     let flag = Arc::new(AtomicBool::new(false));
-    let store = Arc::new(store);
+    let store = shared_store(store);
     let f2 = Arc::clone(&flag);
     thread::spawn(move || {
         let _ = serve_until(
@@ -179,7 +179,7 @@ fn listener_chaos_udp_garbage_then_valid() {
     let addr = udp.local_addr().unwrap();
     let tcp = std::net::TcpListener::bind(addr).unwrap();
     let flag = Arc::new(AtomicBool::new(false));
-    let store = Arc::new(store);
+    let store = shared_store(store);
     let f2 = Arc::clone(&flag);
     thread::spawn(move || {
         let _ = serve_until(

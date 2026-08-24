@@ -7,8 +7,8 @@ use krb5_asn1::{decode, encode};
 use krb5_client::Keytab;
 use krb5_crypto::{decrypt, KeyUsage};
 use krb5_kdc::{
-    as_req, bootstrap_documented, documented_admin_id, documented_host, pa_enc_timestamp, tgs_req,
-    TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
+    as_req, bootstrap_documented, documented_admin_id, documented_host, pa_enc_timestamp,
+    pac_from_ticket_part, tgs_req, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
 };
 use krb5_protocol::{build_ap_req, verify_ap_req, ReplayCache};
 use krb5_types::{ascii, ku, EncTicketPart, PrincipalName};
@@ -79,6 +79,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("keytab_entries={}", parsed.entries.len());
     println!("keytab_v2={}", kt_bytes[0] == 0x05 && kt_bytes[1] == 0x02);
     println!("ap_ok=true");
+    if let Some(pac) = pac_from_ticket_part(&svc_part) {
+        let parsed = krb5_types::pac::Pac::parse(&pac)?;
+        if let Some(logon) = parsed.buffer(krb5_types::pac::PAC_LOGON_INFO) {
+            let (name, _) = krb5_types::pac::parse_logon_info(logon)?;
+            println!("pac_effective_name={name}");
+        }
+    }
+    let golden = include_bytes!("../../../tests/traces/pac-kbruser.ndr");
+    let v = krb5_types::pac::parse_kerb_validation_info(golden)?;
+    println!("golden_effective_name={}", v.effective_name.value);
     Ok(())
 }
 
@@ -169,6 +179,10 @@ mod tests {
             .name
             .components_joined()
             .contains(TEST_HOST));
+
+        let golden = include_bytes!("../../../tests/traces/pac-kbruser.ndr");
+        let v = krb5_types::pac::parse_kerb_validation_info(golden).unwrap();
+        assert_eq!(v.effective_name.value, "kbruser");
 
         let ap = build_ap_req(
             tgs_out.rep.0.ticket.clone(),

@@ -3,12 +3,29 @@
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration;
 
 use crate::issue::handle_request;
 use crate::store::PrincipalStore;
+
+/// Serving store: AS/TGS take a read lock; kadmind/kpasswd take a write lock
+/// so runtime mutations reach [`crate::persist::save_store`].
+pub type SharedStore = Arc<RwLock<PrincipalStore>>;
+
+/// Wrap an in-memory store for [`serve`].
+#[must_use]
+pub fn shared_store(store: PrincipalStore) -> SharedStore {
+    Arc::new(RwLock::new(store))
+}
+
+fn read_store<R>(store: &SharedStore, f: impl FnOnce(&PrincipalStore) -> R) -> R {
+    let g = store
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    f(&g)
+}
 
 /// Addresses tried when the caller does not pin a bind address.
 /// Never includes `0.0.0.0` — the daemon must be given an explicit bind
@@ -146,7 +163,7 @@ fn install_shutdown_flag(flag: &Arc<AtomicBool>) {
 /// # Errors
 ///
 /// Returns if a listener thread panics; individual datagrams are logged.
-pub fn serve(store: Arc<PrincipalStore>, udp: UdpSocket, tcp: TcpListener) -> io::Result<()> {
+pub fn serve(store: SharedStore, udp: UdpSocket, tcp: TcpListener) -> io::Result<()> {
     let shutdown = Arc::new(AtomicBool::new(false));
     install_shutdown_flag(&shutdown);
     serve_until(store, udp, tcp, shutdown, ListenLimits::default())
@@ -159,7 +176,7 @@ pub fn serve(store: Arc<PrincipalStore>, udp: UdpSocket, tcp: TcpListener) -> io
 /// Listener thread panic, or bind/socket option failures.
 #[allow(clippy::needless_pass_by_value)] // Arc is cloned into the UDP/TCP threads
 pub fn serve_until(
-    store: Arc<PrincipalStore>,
+    store: SharedStore,
     udp: UdpSocket,
     tcp: TcpListener,
     shutdown: Arc<AtomicBool>,
@@ -179,14 +196,14 @@ pub fn serve_until(
 }
 
 #[allow(clippy::needless_pass_by_value)] // UDP socket is owned by the worker thread
-fn udp_loop(store: &PrincipalStore, sock: UdpSocket, shutdown: &AtomicBool) {
+fn udp_loop(store: &SharedStore, sock: UdpSocket, shutdown: &AtomicBool) {
     let mut buf = vec![0u8; 65_535];
     while !shutdown.load(Ordering::Relaxed) {
         match sock.recv_from(&mut buf) {
             Ok((n, peer)) => {
                 let payload = buf[..n].to_vec();
                 let reply = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    handle_request(store, &payload)
+                    read_store(store, |s| handle_request(s, &payload))
                 }));
                 match reply {
                     Ok(Ok(reply)) => {
@@ -235,7 +252,7 @@ fn udp_loop(store: &PrincipalStore, sock: UdpSocket, shutdown: &AtomicBool) {
 
 #[allow(clippy::needless_pass_by_value)] // TCP listener is owned by the worker thread
 fn tcp_loop(
-    store: &Arc<PrincipalStore>,
+    store: &SharedStore,
     listener: TcpListener,
     shutdown: &AtomicBool,
     limits: ListenLimits,
@@ -301,7 +318,7 @@ fn tcp_loop(
 }
 
 fn handle_tcp(
-    store: &PrincipalStore,
+    store: &SharedStore,
     mut stream: TcpStream,
     max_body: usize,
     timeout: Duration,
@@ -320,7 +337,7 @@ fn handle_tcp(
     let mut req = vec![0u8; n];
     stream.read_exact(&mut req)?;
     let reply = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        handle_request(store, &req)
+        read_store(store, |s| handle_request(s, &req))
     })) {
         Ok(Ok(r)) => r,
         Ok(Err(e)) => {
@@ -364,7 +381,7 @@ mod tests {
         let (store, _) = bootstrap_documented().unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
-        let store = Arc::new(store);
+        let store = shared_store(store);
         thread::spawn(move || {
             let (s, _) = listener.accept().unwrap();
             let _ = handle_tcp(&store, s, 32, Duration::from_secs(2));
@@ -385,7 +402,7 @@ mod tests {
         let addr = udp.local_addr().unwrap();
         let tcp = TcpListener::bind(addr).unwrap();
         let flag = Arc::new(AtomicBool::new(false));
-        let store = Arc::new(store);
+        let store = shared_store(store);
         let f2 = Arc::clone(&flag);
         let h = thread::spawn(move || {
             serve_until(

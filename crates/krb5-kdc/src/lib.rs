@@ -18,13 +18,16 @@ mod preauth;
 mod store;
 
 pub use acl::{Acl, AclEntry, AdminOp};
-pub use ad::{decrypt_ticket_part, pac_from_ticket_part, sign_pac, verify_pac};
+pub use ad::{
+    decrypt_ticket_part, pac_from_ticket_part, sign_pac, ticket_checksum_der, verify_pac,
+    verify_pac_signatures, wrap_win2k_pac,
+};
 pub use error::Error;
 pub use issue::{handle_request, issue_as, issue_tgs, IssuedAs, IssuedTgs};
 pub use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 pub use listen::{
     bind_preferred, bind_udp_tcp, drop_privileges, drop_privileges_to, serve, serve_until,
-    ListenLimits, BIND_CANDIDATES, MAX_TCP_REQUEST, MAX_TCP_WORKERS,
+    shared_store, ListenLimits, SharedStore, BIND_CANDIDATES, MAX_TCP_REQUEST, MAX_TCP_WORKERS,
 };
 pub use persist::{load_store, save_store, PersistError};
 pub use store::{random_key, s2k_params, KeyEntry, Policy, Principal, PrincipalStore, S2K_ITERS};
@@ -50,6 +53,12 @@ pub fn documented_host() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", TEST_HOST])
 }
 
+/// `kadmin/admin` as NT-SRV-INST (MIT kadmind acceptor).
+#[must_use]
+pub fn documented_kadmin() -> PrincipalName {
+    PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "admin"])
+}
+
 /// `admin@KERBER.TEST` actor string.
 #[must_use]
 pub fn documented_admin_id() -> String {
@@ -71,5 +80,6 @@ pub fn bootstrap_documented() -> Result<(PrincipalStore, Acl), Error> {
     )?;
     let acl = Acl::allow_admin(documented_admin_id());
     store.create_host(&acl, &documented_admin_id(), &documented_host())?;
+    store.create_host(&acl, &documented_admin_id(), &documented_kadmin())?;
     Ok((store, acl))
 }

@@ -10,37 +10,24 @@ use crate::error::Error;
 use crate::preauth::{find_pa, proto};
 use crate::store::PrincipalStore;
 
-/// Build AD-IF-RELEVANT wrapping a signed PAC.
-pub(crate) fn ticket_authz(
-    store: &PrincipalStore,
-    cname: &PrincipalName,
-    crealm: &str,
-    authtime: &krb5_types::KerberosTime,
-    service_key: &ProtocolKey,
-) -> Result<Option<krb5_types::AuthorizationData>, Error> {
-    let krbtgt = store
-        .krbtgt()
-        .and_then(|p| p.best_key())
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
-    let pac = sign_pac(
-        cname,
-        crealm,
-        authtime.unix_seconds(),
-        service_key,
-        &krbtgt.key,
-    )?;
+/// AD-IF-RELEVANT wrapping AD-WIN2K-PAC `pac_bytes`.
+///
+/// # Errors
+///
+/// DER encode of the inner authorization-data.
+pub fn wrap_win2k_pac(pac_bytes: &[u8]) -> Result<krb5_types::AuthorizationData, Error> {
     let inner = vec![AuthorizationDataValue {
         ad_type: pa::AD_WIN2K_PAC,
-        ad_data: pac.into(),
+        ad_data: pac_bytes.to_vec().into(),
     }];
     let wrapped = encode(&inner)?;
-    Ok(Some(vec![AuthorizationDataValue {
+    Ok(vec![AuthorizationDataValue {
         ad_type: pa::AD_IF_RELEVANT,
         ad_data: wrapped.into(),
-    }]))
+    }])
 }
 
-/// Sign a PAC with service then KDC checksums (key usage 17).
+/// Sign a PAC: ticket (16), full (19), server (6), KDC (7). Key usage 17.
 ///
 /// # Errors
 ///
@@ -51,10 +38,12 @@ pub fn sign_pac(
     authtime: u32,
     server: &ProtocolKey,
     kdc: &ProtocolKey,
+    enc_tkt_der: &[u8],
 ) -> Result<Vec<u8>, Error> {
-    let cksumtype = server.etype().checksum_type();
-    let mac_len = server.etype().hmac_output_len();
-    let zeros = vec![0u8; mac_len];
+    let server_type = server.etype().checksum_type();
+    let kdc_type = kdc.etype().checksum_type();
+    let server_zeros = vec![0u8; server.etype().hmac_output_len()];
+    let kdc_zeros = vec![0u8; kdc.etype().hmac_output_len()];
     let mut pac = krb5_types::pac::Pac {
         version: 0,
         buffers: vec![
@@ -67,28 +56,65 @@ pub fn sign_pac(
                 data: krb5_types::pac::client_info_buffer(authtime, &cname.components_joined()),
             },
             krb5_types::pac::PacBuffer {
+                kind: krb5_types::pac::PAC_TICKET_CHECKSUM,
+                data: krb5_types::pac::signature_buffer(kdc_type, &kdc_zeros),
+            },
+            krb5_types::pac::PacBuffer {
+                kind: krb5_types::pac::PAC_FULL_CHECKSUM,
+                data: krb5_types::pac::signature_buffer(kdc_type, &kdc_zeros),
+            },
+            krb5_types::pac::PacBuffer {
                 kind: krb5_types::pac::PAC_SERVER_CHECKSUM,
-                data: krb5_types::pac::signature_buffer(cksumtype, &zeros),
+                data: krb5_types::pac::signature_buffer(server_type, &server_zeros),
             },
             krb5_types::pac::PacBuffer {
                 kind: krb5_types::pac::PAC_PRIVSVR_CHECKSUM,
-                data: krb5_types::pac::signature_buffer(cksumtype, &zeros),
+                data: krb5_types::pac::signature_buffer(kdc_type, &kdc_zeros),
             },
         ],
     };
     let usage = KeyUsage::new(ku::KERB_NON_KERB_CKSUM_SALT)?;
-    let zeroed = pac.bytes_for_checksum();
-    let server_mac = checksum(server, usage, &zeroed)?;
+    // 1. Ticket checksum over EncTicketPart with PAC ad-data = 0x00.
+    let ticket_mac = checksum(kdc, usage, enc_tkt_der)?;
+    set_sig(
+        &mut pac,
+        krb5_types::pac::PAC_TICKET_CHECKSUM,
+        kdc_type,
+        &ticket_mac,
+    );
+    // 2. Full PAC checksum over PAC with 6, 7, 19 zeroed (16 filled).
+    let full_mac = checksum(kdc, usage, &pac.bytes_for_full_checksum())?;
+    set_sig(
+        &mut pac,
+        krb5_types::pac::PAC_FULL_CHECKSUM,
+        kdc_type,
+        &full_mac,
+    );
+    // 3. Server checksum over PAC with 6, 7 zeroed (16 and 19 filled).
+    let server_mac = checksum(server, usage, &pac.bytes_for_checksum())?;
+    set_sig(
+        &mut pac,
+        krb5_types::pac::PAC_SERVER_CHECKSUM,
+        server_type,
+        &server_mac,
+    );
+    // 4. KDC checksum over the server MAC bytes.
     let kdc_mac = checksum(kdc, usage, &server_mac)?;
+    set_sig(
+        &mut pac,
+        krb5_types::pac::PAC_PRIVSVR_CHECKSUM,
+        kdc_type,
+        &kdc_mac,
+    );
+    Ok(pac.to_bytes())
+}
+
+fn set_sig(pac: &mut krb5_types::pac::Pac, kind: u32, cksumtype: i32, mac: &[u8]) {
     for b in &mut pac.buffers {
-        if b.kind == krb5_types::pac::PAC_SERVER_CHECKSUM {
-            b.data = krb5_types::pac::signature_buffer(cksumtype, &server_mac);
-        }
-        if b.kind == krb5_types::pac::PAC_PRIVSVR_CHECKSUM {
-            b.data = krb5_types::pac::signature_buffer(cksumtype, &kdc_mac);
+        if b.kind == kind {
+            b.data = krb5_types::pac::signature_buffer(cksumtype, mac);
         }
     }
-    Ok(pac.to_bytes())
 }
 
 /// Verify PAC server checksum with `server` and KDC checksum with `kdc`.
@@ -97,21 +123,55 @@ pub fn sign_pac(
 ///
 /// PAC parse or integrity failure.
 pub fn verify_pac(pac_bytes: &[u8], server: &ProtocolKey, kdc: &ProtocolKey) -> Result<(), Error> {
+    verify_pac_signatures(pac_bytes, server, Some(kdc), None)
+}
+
+/// Verify PAC signatures. Server is always checked. KDC / ticket / full
+/// require `kdc`. Ticket checksum requires `enc_tkt_der` (PAC ad-data = 0x00).
+///
+/// # Errors
+///
+/// PAC parse or integrity failure.
+pub fn verify_pac_signatures(
+    pac_bytes: &[u8],
+    server: &ProtocolKey,
+    kdc: Option<&ProtocolKey>,
+    enc_tkt_der: Option<&[u8]>,
+) -> Result<(), Error> {
     let pac = krb5_types::pac::Pac::parse(pac_bytes)
         .map_err(|e| proto(err::BAD_INTEGRITY, &format!("PAC parse: {e}")))?;
     let usage = KeyUsage::new(ku::KERB_NON_KERB_CKSUM_SALT)?;
-    let zeroed = pac.bytes_for_checksum();
-    let server_mac = checksum(server, usage, &zeroed)?;
+    let server_mac = checksum(server, usage, &pac.bytes_for_checksum())?;
     krb5_types::pac::verify_server_checksum(&pac, &server_mac)
         .map_err(|_| proto(err::BAD_INTEGRITY, "PAC server checksum"))?;
+    let Some(kdc) = kdc else {
+        return Ok(());
+    };
     let kdc_mac = checksum(kdc, usage, &server_mac)?;
-    let got = pac
-        .kdc_checksum()
-        .ok_or_else(|| proto(err::BAD_INTEGRITY, "PAC kdc checksum missing"))?;
-    if got.len() < 4 + kdc_mac.len() || got[4..4 + kdc_mac.len()] != kdc_mac {
-        return Err(proto(err::BAD_INTEGRITY, "PAC kdc checksum"));
+    krb5_types::pac::verify_sig_buf(pac.kdc_checksum(), &kdc_mac)
+        .map_err(|_| proto(err::BAD_INTEGRITY, "PAC kdc checksum"))?;
+    if let Some(der) = enc_tkt_der {
+        let ticket_mac = checksum(kdc, usage, der)?;
+        krb5_types::pac::verify_sig_buf(pac.ticket_checksum(), &ticket_mac)
+            .map_err(|_| proto(err::BAD_INTEGRITY, "PAC ticket checksum"))?;
+        let full_mac = checksum(kdc, usage, &pac.bytes_for_full_checksum())?;
+        krb5_types::pac::verify_sig_buf(pac.full_checksum(), &full_mac)
+            .map_err(|_| proto(err::BAD_INTEGRITY, "PAC full checksum"))?;
     }
     Ok(())
+}
+
+/// DER of `part` with PAC `ad-data` replaced by a single zero byte.
+///
+/// # Errors
+///
+/// DER encode.
+pub fn ticket_checksum_der(part: &EncTicketPart) -> Result<Vec<u8>, Error> {
+    let mut clone = part.clone();
+    if let Some(ad) = clone.authorization_data.take() {
+        clone.authorization_data = Some(krb5_types::pac::authorization_with_zeroed_pac(&ad));
+    }
+    encode(&clone).map_err(Error::from)
 }
 
 /// Extract PAC bytes from EncTicketPart authorization-data.

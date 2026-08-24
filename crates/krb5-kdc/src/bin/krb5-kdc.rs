@@ -11,11 +11,10 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use krb5_kdc::{
-    bind_preferred, documented_host, drop_privileges, load_store, serve, Acl, PrincipalStore,
-    BIND_CANDIDATES, TEST_ADMIN, TEST_REALM, TEST_USER,
+    bind_preferred, documented_host, documented_kadmin, drop_privileges, load_store, serve,
+    shared_store, Acl, PrincipalStore, BIND_CANDIDATES, TEST_ADMIN, TEST_REALM, TEST_USER,
 };
 
 fn main() {
@@ -61,6 +60,23 @@ fn main() {
             std::process::exit(2);
         }
     };
+    if test_realm {
+        if let (Ok(db), Ok(stash)) = (
+            std::env::var("KRB5_KDC_DB"),
+            std::env::var("KRB5_KDC_STASH"),
+        ) {
+            let db = std::path::PathBuf::from(db);
+            let stash = std::path::PathBuf::from(stash);
+            if let Err(e) = krb5_kdc::save_store(&store, &db, &stash) {
+                eprintln!("krb5-kdc: save store: {e}");
+                std::process::exit(1);
+            }
+            store = krb5_kdc::load_store(&db, &stash).unwrap_or_else(|e| {
+                eprintln!("krb5-kdc: reload store: {e}");
+                std::process::exit(1);
+            });
+        }
+    }
     if let Some(conf) = &kdc_conf {
         store.apply_kdc_conf(conf);
     }
@@ -83,7 +99,7 @@ fn main() {
             println!("pkinit-user {dir}/user.pem");
         }
     }
-    let store = Arc::new(store);
+    let store = shared_store(store);
 
     let pinned: Option<String> = args
         .into_iter()
@@ -187,6 +203,10 @@ fn bootstrap_test_realm() -> PrincipalStore {
     };
     if let Err(e) = store.create_host(&acl, &actor, &host) {
         eprintln!("krb5-kdc: host principal: {e}");
+        std::process::exit(1);
+    }
+    if let Err(e) = store.create_host(&acl, &actor, &documented_kadmin()) {
+        eprintln!("krb5-kdc: kadmin/admin: {e}");
         std::process::exit(1);
     }
     if let (Ok(foreign), Ok(hexkey)) = (

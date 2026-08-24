@@ -101,6 +101,29 @@ impl Principal {
             .or_else(|| self.key_for(etype))
     }
 
+    /// MS-KILE `PA-SUPPORTED-ENCTYPES` bits for keys actually present.
+    ///
+    /// AES-SHA1 17/18 are 0x08/0x10; RFC 8009 19/20 use 0x20/0x40 (the
+    /// original MS-KILE table stopped at AES-SHA1; those bits are unused
+    /// by FAST/claims which live at 0x00010000+).
+    #[must_use]
+    pub fn supported_enctypes_mask(&self) -> u32 {
+        let mut m = 0u32;
+        for k in &self.keys {
+            m |= match k.etype {
+                EncryptionType::Des3CbcSha1 => 0x0000_0002,
+                EncryptionType::Rc4Hmac => 0x0000_0004,
+                EncryptionType::Aes128CtsHmacSha196 => 0x0000_0008,
+                EncryptionType::Aes256CtsHmacSha196 => 0x0000_0010,
+                EncryptionType::Aes128CtsHmacSha256128 => 0x0000_0020,
+                EncryptionType::Aes256CtsHmacSha384192 => 0x0000_0040,
+                EncryptionType::Camellia128CtsCmac => 0x0000_0080,
+                EncryptionType::Camellia256CtsCmac => 0x0000_0100,
+            };
+        }
+        m
+    }
+
     /// Preferred stored key (highest etype in [`EncryptionType::preferred`]).
     #[must_use]
     pub fn best_key(&self) -> Option<&KeyEntry> {
