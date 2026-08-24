@@ -29,7 +29,10 @@ to full 1.0 parity is tracked in `working/plan-roadmap-adprod-*.md`:
   usage 17 matches AD offline. Samba AD DC image is not in-tree (gate
   records unavailability). Production GSS wrap emits RRC≠0. S4U2Self/Proxy
   remain in-tree. Live Windows `kinit` needs `AD_KBRUSER_PASSWORD` (DC
-  `10.10.38.38` is reachable; isolation is `~/adlab` only).
+  `10.10.38.38` is reachable; isolation is `~/adlab` only). Live
+  `AD.KERBER.TEST`↔`KERBER.TEST` trust is not configured on the DC
+  (`scripts/ad-mit-trust-gate.sh` records that; in-tree referral hop
+  for those realm names exists).
 - **Track B — Operational parity:** serving store is `RwLock` so kadmind
   mutations persist; KDC reloads the db on mtime/length change.
   `krb5-kadmind` AUTH_GSSAPI 300001: MIT `kadmin` `addprinc`/`cpw` then

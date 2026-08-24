@@ -60,3 +60,11 @@ Never `realm join`, `adcli join`, or edit `/etc/krb5.conf` /
 `/etc/sssd/sssd.conf`. Never write tickets to the default KCM/KEYRING
 cache. Rust `discover_kdc` appends `/etc/krb5.conf` after `KRB5_CONFIG`;
 omit the env var and you will hit the home realm.
+
+## Cross-realm trust (A5)
+
+Live `AD.KERBER.TEST`↔`KERBER.TEST` trust is **not configured** on this
+DC. `scripts/ad-mit-trust-gate.sh` pings the DC under an isolated
+`KRB5_CONFIG`, records the missing client-side `KERBER.TEST` stanza,
+and exits 2. In-tree TGS referral for `krbtgt/AD.KERBER.TEST` is
+unit-tested; that is not a live Windows trust.

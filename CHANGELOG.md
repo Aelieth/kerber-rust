@@ -33,6 +33,9 @@ this project uses semantic versioning once a crate is published.
   `supportedKDFs` the KDC still uses RFC 4556 `octetstring2key`.
 - FILE ccache parser skips MIT `X-CACHECONF` etype 0 so AD `ad.ccache`
   tickets remain readable.
+- In-tree TGS referral hop for `krbtgt/AD.KERBER.TEST`. Live
+  `AD.KERBER.TEST`↔`KERBER.TEST` trust is not configured on the lab
+  DC; `scripts/ad-mit-trust-gate.sh` records that (exit 2).
 
 ### Security
 

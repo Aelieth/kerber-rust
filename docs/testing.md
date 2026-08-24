@@ -96,6 +96,10 @@ Era II gates (honest unavailability, never a fabricated pass):
   flavor 300001. Run twice.
 - `scripts/prod-gate.sh` — Rust KDC on `127.0.0.1:18888`, structured
   logs archived under `$KERBER_SCRATCH/prod-gate/`.
+- `scripts/ad-mit-trust-gate.sh` — isolated `AD.KERBER.TEST`↔`KERBER.TEST`
+  referral/trust attempt. Exit 2 + log when the DC has no trust
+  configured (in-tree `krbtgt/AD.KERBER.TEST` referral hop is
+  unit-tested; that is not live AD proof).
 
 Live AD work must set `KRB5_CONFIG` / `KRB5CCNAME` / `KRB5_KTNAME` to
 `~/adlab`. Never edit host `/etc/krb5.conf` or SSSD.

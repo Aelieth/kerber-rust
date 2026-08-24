@@ -24,8 +24,9 @@ ticket policy (and non-test listen/db paths); `kinit` / TGS referral
 chase use `KRB5_CONFIG` then `/etc/krb5.conf` `[realms]` (argv is the
 fallback). Long soaks and live Heimdal/SSPI remain
 environment-dependent. AD lab coordinates and the `~/adlab` isolation
-protocol are in [docs/ad-lab.md](docs/ad-lab.md). See
-[docs/stages.md](docs/stages.md).
+protocol are in [docs/ad-lab.md](docs/ad-lab.md). Live
+`AD.KERBER.TEST`↔`KERBER.TEST` trust is not configured on the lab DC
+(`scripts/ad-mit-trust-gate.sh`). See [docs/stages.md](docs/stages.md).
 
 **License:** [Apache-2.0](LICENSE-APACHE) OR [MIT](LICENSE-MIT), at your
 option. This tree contains cryptographic software. Export from the
