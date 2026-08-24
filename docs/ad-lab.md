@@ -63,8 +63,16 @@ omit the env var and you will hit the home realm.
 
 ## Cross-realm trust (A5)
 
-Live `AD.KERBER.TEST`↔`KERBER.TEST` trust is **not configured** on this
-DC. `scripts/ad-mit-trust-gate.sh` pings the DC under an isolated
-`KRB5_CONFIG`, records the missing client-side `KERBER.TEST` stanza,
-and exits 2. In-tree TGS referral for `krbtgt/AD.KERBER.TEST` is
-unit-tested; that is not a live Windows trust.
+The DC has a bidirectional MIT realm trust `KERBER.TEST` (`netdom
+/twoway`, `ksetup /addkdc` → `10.10.44.154`). Isolated
+`~/adlab/ad-krb5.conf` lists `KERBER.TEST` at `10.10.44.154:8888`
+(rootless distrobox cannot bind host `:88`; TESTLABBY stays on
+`aurora.testlabby.local`).
+
+`scripts/ad-mit-trust-gate.sh` (twice): MIT `kinit kbruser@AD.KERBER.TEST`
+then `kvno` yields `krbtgt/KERBER.TEST@AD.KERBER.TEST` and
+`host/testhost.kerber.test@KERBER.TEST` (aes256-cts-hmac-sha1-96).
+Operator secrets stay in `~/adlab/env` (0600). The reverse hop
+(`user@KERBER.TEST` → `host/svc.ad.kerber.test`) issues the referral
+TGT from the Rust KDC; AD then returns decrypt-integrity-failed
+(inbound TDO key ≠ the ktpass AES-256 key used outbound).

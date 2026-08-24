@@ -34,8 +34,9 @@ this project uses semantic versioning once a crate is published.
 - FILE ccache parser skips MIT `X-CACHECONF` etype 0 so AD `ad.ccache`
   tickets remain readable.
 - In-tree TGS referral hop for `krbtgt/AD.KERBER.TEST`. Live
-  `AD.KERBER.TEST`↔`KERBER.TEST` trust is not configured on the lab
-  DC; `scripts/ad-mit-trust-gate.sh` records that (exit 2).
+  `AD.KERBER.TEST`→`KERBER.TEST`: MIT `kinit kbruser` then `kvno`
+  `host/testhost.kerber.test` (aes256) via `scripts/ad-mit-trust-gate.sh`.
+  Reverse AD host ticket still fails AD decrypt.
 
 ### Security
 
