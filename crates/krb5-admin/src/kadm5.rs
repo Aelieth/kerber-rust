@@ -38,15 +38,31 @@ const MSG_ACCEPTED: u32 = 0;
 const SUCCESS: u32 = 0;
 
 const CREATE_PRINCIPAL: u32 = 1;
+const DELETE_PRINCIPAL: u32 = 2;
+const MODIFY_PRINCIPAL: u32 = 3;
+const GET_PRINCIPAL: u32 = 5;
 const CHPASS_PRINCIPAL: u32 = 6;
+const CHRAND_PRINCIPAL: u32 = 7;
 const GET_PRIVS: u32 = 12;
 const INIT: u32 = 13;
+const GET_PRINCS: u32 = 14;
 const CREATE_PRINCIPAL3: u32 = 18;
 const CHPASS_PRINCIPAL3: u32 = 19;
+const CHRAND_PRINCIPAL3: u32 = 20;
+
+/// MIT `KADM5_UNK_PRINC`.
+const KADM5_UNK_PRINC: u32 = 43_787_532;
+/// MIT `KADM5_FAILURE`.
+const KADM5_FAILURE: u32 = 43_787_520;
+const KADM5_ATTRIBUTES: u32 = 0x0000_0010;
+const KADM5_MAX_LIFE: u32 = 0x0000_0020;
+const KADM5_PRINC_EXPIRE_TIME: u32 = 0x0000_0002;
+const KADM5_PW_EXPIRATION: u32 = 0x0000_0004;
 
 /// OpenVision/MIT `KADM5_API_VERSION_2`.
 const API_V2: u32 = 0x1234_5702;
-const KADM5_PRIVS: u32 = 0x0000_000F;
+/// MIT `KADM5_PRIV_{GET,ADD,MODIFY,DELETE}` plus list (0x10) and cpw (0x20).
+const KADM5_PRIVS: u32 = 0x0000_003F;
 
 /// Serve one TCP connection until EOF.
 ///
@@ -510,7 +526,72 @@ fn dispatch_kadm5(
             w.u32(KADM5_PRIVS);
             Ok(w.b)
         }
-        5 => Ok(generic_ret(API_V2, 437_875_715)), // KADM5_UNK_PRINC
+        GET_PRINCIPAL => {
+            let (name, _mask) = parse_get(args)?;
+            if acl.check(actor, krb5_kdc::AdminOp::Inquire).is_err() {
+                return Ok(generic_ret(API_V2, 43_787_521));
+            }
+            let g = store
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match g.get_name(&name) {
+                Some(p) => {
+                    tracing::info!(
+                        event = krb5_log::events::ADMIN,
+                        component = "krb5-admin",
+                        outcome = "ok",
+                        detail = "getprinc",
+                        principal = p.id(),
+                    );
+                    Ok(encode_gprinc(p))
+                }
+                None => Ok(generic_ret(API_V2, KADM5_UNK_PRINC)),
+            }
+        }
+        GET_PRINCS => {
+            if acl.check(actor, krb5_kdc::AdminOp::Inquire).is_err() {
+                return Ok(generic_ret(API_V2, 43_787_521));
+            }
+            let expr = parse_gprincs(args)?;
+            let g = store
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut ids = g.ids();
+            if let Some(e) = expr.as_deref() {
+                if e != "*" && !e.is_empty() {
+                    ids.retain(|id| id.contains(e.trim_end_matches('*')));
+                }
+            }
+            Ok(encode_gprincs(&ids))
+        }
+        DELETE_PRINCIPAL => {
+            let name = parse_one_princ(args)?;
+            let mut g = store
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut sess = AdminSession::local(&mut g, acl, actor);
+            match sess.delete(&name) {
+                Ok(()) => Ok(generic_ret(API_V2, 0)),
+                Err(e) => Ok(generic_ret(API_V2, kadm5_code(&e))),
+            }
+        }
+        MODIFY_PRINCIPAL => {
+            let (name, mask, fields) = parse_modify(args)?;
+            if acl.check(actor, krb5_kdc::AdminOp::Modify).is_err() {
+                return Ok(generic_ret(API_V2, 43_787_523));
+            }
+            let mut g = store
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let attributes = (mask & KADM5_ATTRIBUTES != 0).then_some(fields.attributes);
+            let max_life = (mask & KADM5_MAX_LIFE != 0).then_some(u64::from(fields.max_life));
+            let expiration = (mask & KADM5_PRINC_EXPIRE_TIME != 0).then_some(fields.expire);
+            let pw_expire = (mask & KADM5_PW_EXPIRATION != 0).then_some(fields.pw_expire);
+            match g.apply_admin_fields(&name, attributes, max_life, expiration, pw_expire) {
+                Ok(()) => Ok(generic_ret(API_V2, 0)),
+                Err(e) => Ok(generic_ret(API_V2, kadm5_code(&Error::from(e)))),
+            }
+        }
         CREATE_PRINCIPAL | CREATE_PRINCIPAL3 => {
             let (name, pass) = parse_create(args, proc == CREATE_PRINCIPAL3)?;
             let mut g = store
@@ -533,15 +614,28 @@ fn dispatch_kadm5(
                 Err(e) => Ok(generic_ret(API_V2, kadm5_code(&e))),
             }
         }
+        CHRAND_PRINCIPAL | CHRAND_PRINCIPAL3 => {
+            let name = parse_chrand(args, proc == CHRAND_PRINCIPAL3)?;
+            if acl.check(actor, krb5_kdc::AdminOp::ChangePassword).is_err() {
+                return Ok(generic_ret(API_V2, 43_787_521));
+            }
+            let mut g = store
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match g.chrand(&name) {
+                Ok(keys) => Ok(encode_chrand(&keys)),
+                Err(e) => Ok(generic_ret(API_V2, kadm5_code(&Error::from(e)))),
+            }
+        }
         _ => Ok(generic_ret(API_V2, 7)),
     }
 }
 
 fn kadm5_code(e: &Error) -> u32 {
     match e {
-        Error::AclDenied => 1,
-        Error::NotFound => 2,
-        Error::Inner(_) => 7,
+        Error::AclDenied => 43_787_521,
+        Error::NotFound => KADM5_UNK_PRINC,
+        Error::Inner(_) => KADM5_FAILURE,
     }
 }
 
@@ -575,6 +669,168 @@ fn parse_chpass(args: &[u8], v3: bool) -> Result<(PrincipalName, String), Error>
     }
     let pass = r.nullstring()?.unwrap_or_default();
     Ok((princ, pass))
+}
+
+fn parse_get(args: &[u8]) -> Result<(PrincipalName, u32), Error> {
+    let mut r = XdrR::new(args);
+    let _api = r.u32()?;
+    let princ = r.principal()?;
+    let mask = r.u32().unwrap_or(u32::MAX);
+    Ok((princ, mask))
+}
+
+fn parse_gprincs(args: &[u8]) -> Result<Option<String>, Error> {
+    let mut r = XdrR::new(args);
+    let _api = r.u32()?;
+    r.nullstring()
+}
+
+fn parse_one_princ(args: &[u8]) -> Result<PrincipalName, Error> {
+    let mut r = XdrR::new(args);
+    let _api = r.u32()?;
+    r.principal()
+}
+
+fn parse_chrand(args: &[u8], v3: bool) -> Result<PrincipalName, Error> {
+    let mut r = XdrR::new(args);
+    let _api = r.u32()?;
+    let princ = r.principal()?;
+    if v3 {
+        let _keepold = r.u32().unwrap_or(0);
+        let _ = r.skip_array_i32_pairs();
+    }
+    Ok(princ)
+}
+
+struct ModFields {
+    expire: u32,
+    pw_expire: u32,
+    max_life: u32,
+    attributes: u32,
+}
+
+fn parse_modify(args: &[u8]) -> Result<(PrincipalName, u32, ModFields), Error> {
+    let mut r = XdrR::new(args);
+    let _api = r.u32()?;
+    let princ = r.principal()?;
+    let expire = r.u32()?;
+    let _last_pwd = r.u32()?;
+    let pw_expire = r.u32()?;
+    let max_life = r.u32()?;
+    let mod_null = r.u32()?;
+    if mod_null == 0 {
+        let _ = r.principal()?;
+    }
+    let _mod_date = r.u32()?;
+    let attributes = r.u32()?;
+    r.u32()?; // kvno
+    r.u32()?; // mkvno
+    let _ = r.nullstring()?;
+    r.u32()?; // aux
+    r.u32()?; // max_rlife
+    r.u32()?; // last_success
+    r.u32()?; // last_failed
+    r.u32()?; // fail_auth_count
+    let n_key = r.u32()?;
+    let _n_tl = r.u32()?;
+    let tl_null = r.u32()?;
+    if tl_null == 0 {
+        loop {
+            let more = r.u32()?;
+            if more == 0 {
+                break;
+            }
+            r.u32()?;
+            let _ = r.opaque()?;
+        }
+    }
+    let n = r.u32().unwrap_or(0);
+    let walk = if n == 0 { n_key } else { n };
+    for _ in 0..walk {
+        let ver = r.u32()?;
+        r.u32()?;
+        r.u32()?;
+        if ver > 1 {
+            r.u32()?;
+        }
+    }
+    let mask = r.u32().unwrap_or(0);
+    Ok((
+        princ,
+        mask,
+        ModFields {
+            expire,
+            pw_expire,
+            max_life,
+            attributes,
+        },
+    ))
+}
+
+fn encode_gprinc(p: &krb5_kdc::Principal) -> Vec<u8> {
+    let mut w = XdrW::default();
+    w.u32(API_V2);
+    w.u32(0);
+    encode_principal_ent(&mut w, p);
+    w.b
+}
+
+fn encode_principal_ent(w: &mut XdrW, p: &krb5_kdc::Principal) {
+    let id = p.id();
+    w.nullstring(Some(&id));
+    w.u32(p.expiration);
+    w.u32(0);
+    w.u32(p.pw_expire);
+    w.u32(u32::try_from(p.max_life).unwrap_or(0));
+    // MIT kadmin always unparses `mod_name`; a NULL pointer is
+    // KRB5_PARSE_MALFORMED ("while unparsing principal").
+    let mod_name = format!("kadmin/admin@{}", p.realm);
+    w.u32(0); // xdr_nulltype FALSE → encode principal
+    w.nullstring(Some(&mod_name));
+    w.u32(0); // mod_date
+    w.u32(p.attributes);
+    let kvno = p.keys.iter().map(|k| k.kvno).max().unwrap_or(1);
+    w.u32(kvno);
+    w.u32(u32::from(p.mkvno));
+    w.u32(0); // policy NULL (xdr_nullstring size 0)
+    w.u32(0); // aux
+    w.u32(u32::try_from(p.max_renewable_life).unwrap_or(0));
+    w.u32(p.last_success);
+    w.u32(p.last_failed);
+    w.u32(p.fail_auth_count);
+    // Omit key_data on the wire (n_key_data=0). MIT kadmin getprinc does
+    // not need key contents; xdr_array maxsize is n_key_data.
+    w.u32(0); // n_key_data
+    w.u32(0); // n_tl_data
+    w.u32(1); // tl_data NULL (xdr_nulltype)
+    w.u32(0); // key_data array count
+}
+
+fn encode_gprincs(ids: &[String]) -> Vec<u8> {
+    let mut w = XdrW::default();
+    w.u32(API_V2);
+    w.u32(0);
+    let n = u32::try_from(ids.len()).unwrap_or(0);
+    // MIT `xdr_gprincs_ret`: `xdr_int count` then `xdr_array` of
+    // `xdr_nullstring` (the array writes count again).
+    w.u32(n);
+    w.u32(n);
+    for id in ids {
+        w.nullstring(Some(id));
+    }
+    w.b
+}
+
+fn encode_chrand(keys: &[krb5_kdc::KeyEntry]) -> Vec<u8> {
+    let mut w = XdrW::default();
+    w.u32(API_V2);
+    w.u32(0);
+    w.u32(u32::try_from(keys.len()).unwrap_or(0));
+    for k in keys {
+        w.u32(u32::try_from(k.etype.to_iana()).unwrap_or(0));
+        w.opaque(k.key.as_bytes());
+    }
+    w.b
 }
 
 /// After the leading principal, skip the rest of `kadm5_principal_ent_rec`.
@@ -723,6 +979,20 @@ impl XdrW {
         let pad = (4 - (d.len() % 4)) % 4;
         self.b.extend(std::iter::repeat_n(0u8, pad));
     }
+
+    fn nullstring(&mut self, s: Option<&str>) {
+        match s {
+            None => self.u32(0),
+            Some(s) => {
+                let n = s.len() + 1;
+                self.u32(u32::try_from(n).unwrap_or(0));
+                self.b.extend_from_slice(s.as_bytes());
+                self.b.push(0);
+                let pad = (4 - (n % 4)) % 4;
+                self.b.extend(std::iter::repeat_n(0u8, pad));
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -783,5 +1053,176 @@ mod tests {
         assert_eq!(r.u32().unwrap(), 0);
         assert_eq!(r.opaque().unwrap(), b"tok");
         assert_eq!(r.opaque().unwrap(), b"isn");
+    }
+
+    fn setup() -> (krb5_kdc::SharedStore, Acl, String) {
+        let (store, acl) = krb5_kdc::bootstrap_documented().unwrap();
+        let actor = krb5_kdc::documented_admin_id();
+        (krb5_kdc::shared_store(store), acl, actor)
+    }
+
+    fn encode_named(name: &str) -> Vec<u8> {
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some(name));
+        w.b
+    }
+
+    fn ret_code(b: &[u8]) -> u32 {
+        let mut r = XdrR::new(b);
+        let _api = r.u32().unwrap();
+        r.u32().unwrap()
+    }
+
+    #[test]
+    fn getprinc_returns_documented_user_not_unk_princ() {
+        let (store, acl, actor) = setup();
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some("user@KERBER.TEST"));
+        w.u32(u32::MAX);
+        let out = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &w.b).unwrap();
+        assert_ne!(ret_code(&out), KADM5_UNK_PRINC);
+        assert_eq!(ret_code(&out), 0);
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), API_V2);
+        assert_eq!(r.u32().unwrap(), 0);
+        assert_eq!(
+            r.nullstring().unwrap().as_deref(),
+            Some("user@KERBER.TEST"),
+            "gprinc_ret.rec.principal is xdr_nullstring of name@REALM"
+        );
+        r.u32().unwrap(); // expire
+        r.u32().unwrap();
+        r.u32().unwrap();
+        r.u32().unwrap();
+        assert_eq!(r.u32().unwrap(), 0, "mod_name present");
+        assert_eq!(
+            r.nullstring().unwrap().as_deref(),
+            Some("kadmin/admin@KERBER.TEST")
+        );
+    }
+
+    #[test]
+    fn getprinc_missing_is_unk_princ() {
+        let (store, acl, actor) = setup();
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some("no-such@KERBER.TEST"));
+        w.u32(u32::MAX);
+        let out = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &w.b).unwrap();
+        assert_eq!(ret_code(&out), KADM5_UNK_PRINC);
+    }
+
+    #[test]
+    fn listprincs_names_documented_principals() {
+        let (store, acl, actor) = setup();
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.u32(0);
+        let out = dispatch_kadm5(&store, &acl, &actor, GET_PRINCS, &w.b).unwrap();
+        assert_eq!(ret_code(&out), 0);
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), API_V2);
+        assert_eq!(r.u32().unwrap(), 0);
+        let n = r.u32().unwrap();
+        assert_eq!(r.u32().unwrap(), n, "xdr_array repeats count");
+        assert!(n >= 2);
+        let mut names = Vec::new();
+        for _ in 0..n {
+            names.push(r.nullstring().unwrap().unwrap());
+        }
+        assert!(names.iter().any(|s| s == "user@KERBER.TEST"));
+        assert!(names.iter().any(|s| s == "admin@KERBER.TEST"));
+    }
+
+    #[test]
+    fn delprinc_then_getprinc_is_unk_princ() {
+        let (store, acl, actor) = setup();
+        let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["extra"]);
+        {
+            let mut g = store.write().unwrap();
+            g.create_password(&acl, &actor, &extra, b"extra-secret")
+                .unwrap();
+        }
+        let del = encode_named("extra@KERBER.TEST");
+        let out = dispatch_kadm5(&store, &acl, &actor, DELETE_PRINCIPAL, &del).unwrap();
+        assert_eq!(ret_code(&out), 0);
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some("extra@KERBER.TEST"));
+        w.u32(u32::MAX);
+        let got = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &w.b).unwrap();
+        assert_eq!(ret_code(&got), KADM5_UNK_PRINC);
+    }
+
+    #[test]
+    fn chrand_bumps_kvno() {
+        let (store, acl, actor) = setup();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [krb5_kdc::TEST_USER]);
+        let kvno_before = {
+            let g = store.read().unwrap();
+            g.get_name(&user)
+                .unwrap()
+                .keys
+                .iter()
+                .map(|k| k.kvno)
+                .max()
+                .unwrap()
+        };
+        let args = encode_named("user@KERBER.TEST");
+        let out = dispatch_kadm5(&store, &acl, &actor, CHRAND_PRINCIPAL, &args).unwrap();
+        assert_eq!(ret_code(&out), 0);
+        let kvno_after = {
+            let g = store.read().unwrap();
+            g.get_name(&user)
+                .unwrap()
+                .keys
+                .iter()
+                .map(|k| k.kvno)
+                .max()
+                .unwrap()
+        };
+        assert!(kvno_after > kvno_before);
+    }
+
+    #[test]
+    fn modprinc_sets_requires_preauth_bit() {
+        let (store, acl, actor) = setup();
+        let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["modme"]);
+        {
+            let mut g = store.write().unwrap();
+            g.create_password(&acl, &actor, &extra, b"mod-secret")
+                .unwrap();
+        }
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some("modme@KERBER.TEST"));
+        w.u32(0); // expire
+        w.u32(0);
+        w.u32(0); // pw_expire
+        w.u32(3600); // max_life
+        w.u32(1); // mod_name NULL
+        w.u32(0);
+        w.u32(krb5_kdc::KDB_REQUIRES_PRE_AUTH);
+        w.u32(1); // kvno
+        w.u32(1);
+        w.u32(0); // policy
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0); // n_key
+        w.u32(0); // n_tl
+        w.u32(1); // tl null
+        w.u32(0); // key_data array
+        w.u32(KADM5_ATTRIBUTES | KADM5_MAX_LIFE);
+        let out = dispatch_kadm5(&store, &acl, &actor, MODIFY_PRINCIPAL, &w.b).unwrap();
+        assert_eq!(ret_code(&out), 0);
+        let g = store.read().unwrap();
+        let p = g.get_name(&extra).unwrap();
+        assert!(p.requires_preauth);
+        assert_eq!(p.max_life, 3600);
     }
 }
