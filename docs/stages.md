@@ -28,9 +28,10 @@ to full 1.0 parity is tracked in `working/plan-roadmap-adprod-*.md`:
   issued PACs carry signatures 6, 7, 16, 19 and self-verify; server checksum
   usage 17 matches AD offline. Samba AD DC image is not in-tree (gate
   records unavailability). Production GSS wrap emits RRC≠0. S4U2Self/Proxy
-  remain in-tree. Live Windows `kinit` uses `~/adlab/env`.
-  Bidirectional `AD.KERBER.TEST`↔`KERBER.TEST` host tickets are gated
-  (`scripts/ad-mit-trust-gate.sh` twice).
+  remain in-tree. Live Windows `kinit`/`kvno` (`ad-windows-gate.sh`)
+  and S4U2Self/S4U2Proxy (`ad-s4u-gate.sh`) use `~/adlab`. Bidirectional
+  `AD.KERBER.TEST`↔`KERBER.TEST` host tickets are gated
+  (`scripts/ad-mit-trust-gate.sh`).
 - **Track B — Operational parity:** serving store is `RwLock` so kadmind
   mutations persist; KDC reloads the db on mtime/length change.
   `krb5-kadmind` AUTH_GSSAPI 300001: MIT `kadmin` `addprinc`/`cpw` then

@@ -40,6 +40,8 @@ this project uses semantic versioning once a crate is published.
 - `scripts/prod-gate.sh` drives shipped `krb5-kinit` against
   `127.0.0.1:18888`, requires `kdc.issue` JSON with `correlation_id`,
   and archives a PDU pcap. Heimdal and SSPI gates record unavailability.
+- Live AD S4U2Self/S4U2Proxy: `scripts/ad-s4u-gate.sh` (`kvno -U` /
+  `kvno -U -P`, client `kbruser@AD.KERBER.TEST`).
 
 ### Security
 

@@ -61,6 +61,10 @@ Never `realm join`, `adcli join`, or edit `/etc/krb5.conf` /
 cache. Rust `discover_kdc` appends `/etc/krb5.conf` after `KRB5_CONFIG`;
 omit the env var and you will hit the home realm.
 
+`kbrsvc` is trusted-to-authenticate-for-delegation with
+`msDS-AllowedToDelegateTo` = `host/svc.ad.kerber.test`. Gate:
+`scripts/ad-s4u-gate.sh` (S4U2Self + S4U2Proxy, `for client kbruser`).
+
 ## Cross-realm trust (A5)
 
 The DC has a bidirectional MIT realm trust `KERBER.TEST` (`netdom

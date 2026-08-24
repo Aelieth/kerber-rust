@@ -89,8 +89,12 @@ Era II gates (honest unavailability, never a fabricated pass):
 
 - `scripts/samba-ad-gate.sh` — Samba 4 AD DC (exit 2 + unavailability
   log when no image).
-- `scripts/ad-windows-gate.sh` — isolated `kinit`/`kvno` against
-  `10.10.38.38` (`~/adlab` only; needs `AD_KBRUSER_PASSWORD`).
+- `scripts/ad-windows-gate.sh` — isolated `kinit kbruser@AD.KERBER.TEST`
+  then `kvno host/svc.ad.kerber.test` (aes256, kvno 3). Sources
+  `~/adlab/env`.
+- `scripts/ad-s4u-gate.sh` — `kinit -f -k host/svc.ad.kerber.test` then
+  MIT `kvno -U kbruser` (S4U2Self) and `kvno -U kbruser -P` (S4U2Proxy).
+  klist must name `for client kbruser@AD.KERBER.TEST`.
 - `scripts/kadmin-gate.sh` — MIT `kadmin` `addprinc`/`cpw` against
   `krb5-kadmind` on 749, then `kinit extra@KERBER.TEST`. AUTH_GSSAPI
   flavor 300001. Run twice.
