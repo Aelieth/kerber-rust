@@ -11,8 +11,11 @@
 //! * Etypes 19 and 20 use RFC 8009 (HMAC-SHA-2 over IV||ciphertext,
 //!   SP 800-108 KDF).
 //!
-//! Key usage 0 is rejected. PBKDF2 iteration count 0 (RFC 3962 = 2^32) is
-//! rejected as a local DoS control.
+//! Key usage 0 is rejected by [`KeyUsage::new`]. MIT KDB `key_data` is the
+//! documented exception (`kdb_encrypt_key` / `kdb_decrypt_key` use
+//! [`KeyUsage::from_rfc`] with usage 0 plus a cleartext `int16_LE` length
+//! prefix). PBKDF2 iteration count 0 (RFC 3962 = 2^32) is rejected as a
+//! local DoS control.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -45,7 +48,8 @@ pub use modp::{
 };
 pub use ops::{
     checksum, decrypt, decrypt_with_state, encrypt, encrypt_with_confounder, encrypt_with_state,
-    hmac_md5_arcfour_checksum, string_to_key, verify_checksum, CipherState,
+    hmac_md5_arcfour_checksum, kdb_decrypt_key, kdb_encrypt_key, string_to_key, verify_checksum,
+    CipherState,
 };
 pub use prf::{prf, prf_plus};
 pub use spake::{

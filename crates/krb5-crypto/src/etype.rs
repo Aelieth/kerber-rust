@@ -19,7 +19,12 @@ impl KeyUsage {
         Ok(Self(n))
     }
 
-    /// Compile-time RFC usage constant. `n` must be non-zero.
+    /// RFC usage number without the [`Self::new`] zero check.
+    ///
+    /// Protocol encrypt/decrypt must use [`Self::new`]. MIT KDB
+    /// `krb5_dbe_def_encrypt_key_data` is the documented exception that
+    /// uses usage 0 (`from_rfc(0)` via `kdb_encrypt_key` /
+    /// `kdb_decrypt_key`).
     #[must_use]
     pub const fn from_rfc(n: u32) -> Self {
         Self(n)
@@ -223,6 +228,29 @@ impl EncryptionType {
     #[must_use]
     pub const fn is_camellia(self) -> bool {
         matches!(self, Self::Camellia128CtsCmac | Self::Camellia256CtsCmac)
+    }
+
+    /// MIT `enctype` name as used in `kdc.conf` (`aes256-cts-hmac-sha384-192`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnsupportedEtype`] when `name` is not an implemented etype.
+    pub fn from_mit_name(name: &str) -> Result<Self, Error> {
+        let n = name.trim();
+        if let Ok(num) = n.parse::<i32>() {
+            return Self::known(num);
+        }
+        match n {
+            "aes128-cts-hmac-sha1-96" | "aes128-cts" => Ok(Self::Aes128CtsHmacSha196),
+            "aes256-cts-hmac-sha1-96" | "aes256-cts" => Ok(Self::Aes256CtsHmacSha196),
+            "aes128-cts-hmac-sha256-128" => Ok(Self::Aes128CtsHmacSha256128),
+            "aes256-cts-hmac-sha384-192" => Ok(Self::Aes256CtsHmacSha384192),
+            "des3-cbc-sha1" | "des3-cbc-sha1-kd" => Ok(Self::Des3CbcSha1),
+            "arcfour-hmac" | "rc4-hmac" => Ok(Self::Rc4Hmac),
+            "camellia128-cts-cmac" | "camellia128-cts" => Ok(Self::Camellia128CtsCmac),
+            "camellia256-cts-cmac" | "camellia256-cts" => Ok(Self::Camellia256CtsCmac),
+            _ => Err(Error::UnsupportedEtype(0)),
+        }
     }
 
     /// RFC 8009 / RFC 6803 `enctype-name` prepended to the salt, or `None`

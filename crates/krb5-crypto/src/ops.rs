@@ -173,6 +173,44 @@ pub fn encrypt(key: &ProtocolKey, usage: KeyUsage, plaintext: &[u8]) -> Result<V
     encrypt_with_confounder(key, usage, &conf, plaintext)
 }
 
+/// MIT KDB `key_data` framing: `int16_LE(key_length) ‖ RFC 3961 encrypt`.
+///
+/// The length prefix is **cleartext** (the 1.22.2 dump stores `20 00` /
+/// `10 00` ahead of the ciphertext). The encrypted portion is the raw
+/// protocol key under the master key with **usage 0** (ivec = NULL).
+/// Protocol callers must keep using [`KeyUsage::new`], which still rejects 0.
+///
+/// # Errors
+///
+/// [`Error::InvalidKeyLength`] when `raw_key` is longer than u16, or encrypt
+/// failures from the master-key etype.
+pub fn kdb_encrypt_key(mkey: &ProtocolKey, raw_key: &[u8]) -> Result<Vec<u8>, Error> {
+    let key_len = u16::try_from(raw_key.len()).map_err(|_| Error::InvalidKeyLength)?;
+    let cipher = encrypt(mkey, KeyUsage::from_rfc(0), raw_key)?;
+    let mut out = Vec::with_capacity(2 + cipher.len());
+    out.extend_from_slice(&key_len.to_le_bytes());
+    out.extend_from_slice(&cipher);
+    Ok(out)
+}
+
+/// Inverse of [`kdb_encrypt_key`].
+///
+/// # Errors
+///
+/// Decrypt / integrity failures, or a length prefix that does not match the
+/// decrypted key.
+pub fn kdb_decrypt_key(mkey: &ProtocolKey, ciphertext: &[u8]) -> Result<Vec<u8>, Error> {
+    if ciphertext.len() < 2 {
+        return Err(Error::CiphertextTooShort);
+    }
+    let key_len = usize::from(u16::from_le_bytes([ciphertext[0], ciphertext[1]]));
+    let plain = decrypt(mkey, KeyUsage::from_rfc(0), &ciphertext[2..])?;
+    if plain.len() != key_len {
+        return Err(Error::InvalidKeyLength);
+    }
+    Ok(plain)
+}
+
 /// Encrypt with a caller-supplied 16-octet confounder.
 ///
 /// Required for known-answer tests (RFC 8009 Appendix A). Production

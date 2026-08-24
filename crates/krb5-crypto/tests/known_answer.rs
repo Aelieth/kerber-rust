@@ -1,9 +1,10 @@
 //! Published known-answer tests. These call the public RFC 3961 API only.
 
 use krb5_crypto::{
-    checksum, decrypt, derive_keys, encrypt, encrypt_with_confounder, octetstring2key, prf,
-    prf_plus, spake_decode_point, spake_m_bytes, spake_n_bytes, spake_public_wbytes,
-    spake_thash_update, string_to_key, EncryptionType, Error, KeyUsage, ProtocolKey,
+    checksum, decrypt, derive_keys, encrypt, encrypt_with_confounder, kdb_decrypt_key,
+    kdb_encrypt_key, octetstring2key, prf, prf_plus, spake_decode_point, spake_m_bytes,
+    spake_n_bytes, spake_public_wbytes, spake_thash_update, string_to_key, EncryptionType, Error,
+    KeyUsage, ProtocolKey,
 };
 
 fn hex(s: &str) -> Vec<u8> {
@@ -300,6 +301,25 @@ fn weak_etype_refused_unless_allowed() {
 #[test]
 fn rejects_key_usage_zero() {
     assert_eq!(KeyUsage::new(0).unwrap_err(), Error::InvalidKeyUsage);
+}
+
+#[test]
+fn kdb_usage_zero_frames_int16_le_and_new_still_rejects() {
+    assert_eq!(KeyUsage::new(0).unwrap_err(), Error::InvalidKeyUsage);
+    let mkey = string_to_key(
+        EncryptionType::Aes256CtsHmacSha384192,
+        b"masterpassword",
+        b"KERBER.TESTKM",
+        None,
+    )
+    .unwrap();
+    let raw = vec![0x11u8; 32];
+    let ct = kdb_encrypt_key(&mkey, &raw).unwrap();
+    assert_eq!(kdb_decrypt_key(&mkey, &ct).unwrap(), raw);
+    assert_eq!(
+        EncryptionType::from_mit_name("aes256-cts-hmac-sha384-192").unwrap(),
+        EncryptionType::Aes256CtsHmacSha384192
+    );
 }
 
 #[test]
