@@ -22,7 +22,7 @@ DER inside the test.
 - Key usage 0 is rejected.
 
 DER-strictness negatives live in `crates/krb5-asn1/tests/der_strict.rs`.
-`fuzz/` has ≥6 cargo-fuzz targets (DER, AS/TGS/AP, keytab/ccache,
+`fuzz/` has 8 cargo-fuzz targets (DER, AS/TGS/AP, keytab/ccache,
 PKINIT CMS, PAC NDR, SPAKE points, Oakley DH, GSS tokens) seeded from
 `tests/traces/`. CI smokes each target ~60s (`.github/workflows/fuzz.yml`).
 
@@ -85,16 +85,24 @@ AD PAC: `crates/krb5-kdc/tests/ad_pac.rs` decodes committed
 captured `host/svc` PAC server checksum is verified (usage 17). Skip
 cleanly without the keytab.
 
-Era II gates (honest unavailability, never a fabricated pass):
+Era II gates. The harness CI job runs `kadmin-gate`, `kpasswd-gate`, and
+`prod-gate` after `pkinit-gate`. `ad-*` remain one-shot against a live DC.
+`samba`/`heimdal`/`gss-sspi` exit 2 when those oracles are absent.
 
-- `scripts/samba-ad-gate.sh` — Samba 4 AD DC (exit 2 + unavailability
-  log when no image).
+- `scripts/samba-ad-gate.sh` — Samba 4 AD DC. The only `exit 0` is after a
+  live `kinit`/`kvno`/`klist`. Missing docker, image, or KDC is `exit 2`
+  plus `samba-ad-gate-unavailable.log`.
 - `scripts/ad-windows-gate.sh` — isolated `kinit kbruser@AD.KERBER.TEST`
   then `kvno host/svc.ad.kerber.test` (aes256, kvno 3). Sources
   `~/adlab/env`.
 - `scripts/ad-s4u-gate.sh` — `kinit -f -k host/svc.ad.kerber.test` then
-  MIT `kvno -U kbruser` (S4U2Self) and `kvno -U kbruser -P` (S4U2Proxy).
-  klist must name `for client kbruser@AD.KERBER.TEST`.
+  MIT `kvno -U kbruser` (S4U2Self) and `kvno -U kbruser -P` (S4U2Proxy)
+  against **AD's** KDC. klist must name `for client kbruser@AD.KERBER.TEST`.
+- `scripts/s4u-mit-gate.sh` — MIT `kvno -U user` and `kvno -U user -P`
+  against the **Rust** KDC (`kinit -f -k host/testhost.kerber.test`).
+  klist must name `for client user@KERBER.TEST`. S4U2Proxy rejects a
+  non-forwardable evidence ticket (`BADOPTION`) and parses PA-PAC-OPTIONS
+  (167).
 - `scripts/kadmin-gate.sh` — MIT `kadmin` `addprinc`/`cpw` against
   `krb5-kadmind` on 749, then `kinit extra@KERBER.TEST`. AUTH_GSSAPI
   flavor 300001. Run twice.

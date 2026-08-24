@@ -19,6 +19,10 @@ flavor 300001; `scripts/kadmin-gate.sh` content-asserts MIT `kadmin`
 `addprinc`/`cpw` then `kinit extra@KERBER.TEST`. Persistence is stash/db
 with a runtime-mutable `RwLock` store that reloads when kadmind writes.
 `bidirectional-gate` is Rust↔Rust, not a MIT oracle.
+**CI coverage:** the AS/TGS, GSS, PKINIT, SPAKE, SHA-2, and cross-realm gates
+plus `kadmin-gate`, `kpasswd-gate`, and `prod-gate` in the harness job. The
+`ad-*` gates are one-shot against a live DC; `samba`/`heimdal`/`gss-sspi` are
+honest `exit 2` placeholders until those oracles exist.
 `krb5-config` is consumed: the KDC applies `kdc.conf`
 ticket policy (and non-test listen/db paths); `kinit` / TGS referral
 chase use `KRB5_CONFIG` then `/etc/krb5.conf` `[realms]` (argv is the
@@ -81,7 +85,10 @@ out-of-process only). Production wrap emits RFC 4121 RRC=16.
 `krb5-admin` serves AP-REQ authenticated ops (version-1 framing) and
 `krb5-kadmind` (ONC RPC 2112 / AUTH_GSSAPI 300001) on 749, RFC 3244
 kpasswd on UDP/TCP 464 (`scripts/kpasswd-gate.sh`), and kprop
-dump/load (shared stash). Gate: `scripts/kadmin-gate.sh`.
+dump/load over a shared stash — a **private replication format; MIT `kprop`
+is not yet interop-gated** and there is no `kpropd` daemon. Gate:
+`scripts/kadmin-gate.sh`. MIT S4U against this KDC:
+`scripts/s4u-mit-gate.sh`.
 Weak etypes (16/23/25/26) are known but refused unless
 `allow_weak_crypto`.
 

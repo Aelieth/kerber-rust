@@ -47,6 +47,14 @@ this project uses semantic versioning once a crate is published.
   and archives a PDU pcap. Heimdal and SSPI gates record unavailability.
 - Live AD S4U2Self/S4U2Proxy: `scripts/ad-s4u-gate.sh` (`kvno -U` /
   `kvno -U -P`, client `kbruser@AD.KERBER.TEST`).
+- MIT `kvno -U` / `-U -P` against the **Rust** KDC
+  (`scripts/s4u-mit-gate.sh`); S4U2Proxy requires a forwardable
+  evidence ticket and decodes PA-PAC-OPTIONS (167). PA-FOR-USER accepts
+  HMAC-MD5-ARCFOUR (cksumtype -138) on AES session keys.
+- `bounded_stress_handle_request` asserts 64 concurrent valid AS+TGS
+  succeed. Harness CI runs `kadmin-gate`, `kpasswd-gate`, `prod-gate`.
+  `samba-ad-gate.sh` exits 2 unless a live Samba/AD `kinit`/`kvno`
+  succeeds (no fabricated pass from “image exists”).
 
 ### Security
 

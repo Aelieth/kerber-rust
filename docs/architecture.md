@@ -53,7 +53,9 @@ to `KRB5_KDC_USER` (default `nobody`). TCP workers are capped
 (`MAX_TCP_WORKERS`); SIGTERM/SIGINT stop `serve`. `--test-realm`
 bootstraps documented principals (including `kadmin/admin` and
 `kadmin/changepw`); with `KRB5_KDC_DB` + stash the test realm is saved
-so a separate kadmind process can reload it.
+so a separate kadmind process can reload it. `--export-keytab` /
+`KRB5_EXPORT_KEYTAB` writes the documented host principal. S4U2Proxy
+rejects a non-forwardable evidence ticket and parses PA-PAC-OPTIONS.
 
 **`krb5-gss`** provides RFC 4121 wrap/MIC (MIT `libgssapi_krb5` is
 out-of-process; `scripts/gss-gate.sh`). The acceptor binds

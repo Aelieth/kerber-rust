@@ -28,8 +28,8 @@ to full 1.0 parity is tracked in `working/plan-roadmap-adprod-*.md`:
   issued PACs carry signatures 6, 7, 16, 19 and self-verify; server checksum
   usage 17 matches AD offline. Samba AD DC image is not in-tree (gate
   records unavailability). Production GSS wrap emits RRC≠0. S4U2Self/Proxy
-  remain in-tree. Live Windows `kinit`/`kvno` (`ad-windows-gate.sh`)
-  and S4U2Self/S4U2Proxy (`ad-s4u-gate.sh`) use `~/adlab`. Bidirectional
+  against the Rust KDC: `scripts/s4u-mit-gate.sh`. Live Windows `kinit`/`kvno`
+  (`ad-windows-gate.sh`) and AD S4U (`ad-s4u-gate.sh`) use `~/adlab`. Bidirectional
   `AD.KERBER.TEST`↔`KERBER.TEST` host tickets are gated
   (`scripts/ad-mit-trust-gate.sh`).
 - **Track B — Operational parity:** serving store is `RwLock` so kadmind
@@ -42,6 +42,18 @@ to full 1.0 parity is tracked in `working/plan-roadmap-adprod-*.md`:
   AuthPack advertises it (`scripts/pkinit-gate.sh`).
 - **Track C — Production verification:** `scripts/prod-gate.sh` twice:
   `krb5-kinit` AS+TGS, JSON log analysis, archived PDU pcap. Bounded
-  stress + UDP chaos twice. `cargo deny`; `cargo geiger` when it can
-  target a package; `cargo vet` absent. Samba/Heimdal/SSPI oracles
-  captured unavailable. **1.0 is not tagged** (C4 matrix incomplete).
+  stress + UDP chaos twice. `cargo deny`; `cargo geiger` is installed but a
+  no-op on the virtual manifest (needs a per-package target); `cargo vet`
+  absent. Samba/Heimdal/SSPI oracles captured unavailable. **1.0 is not
+  tagged** (C4 matrix incomplete).
+
+**Audit caveats (2026-08-24).** PAC **NDR codec** and **RFC 8636 KDF** are
+done. Type-16/full PAC signatures remain self-round-trip until a Samba
+oracle. Rust S4U2Self/Proxy is MIT-gated (`scripts/s4u-mit-gate.sh`
+`kvno -U` / `-U -P`); S4U2Proxy rejects non-forwardable evidence and parses
+PA-PAC-OPTIONS. `ad-*` gates are **one-shot** against a since-torn-down DC;
+cross-realm referral TGTs **omit the PAC**. The **prod-gate is a
+single-process Rust↔Rust loopback** (now in CI). `bounded_stress` asserts
+concurrent AS+TGS; soak/differential absent. **kprop is a private format**
+(no `kpropd`). **kadmind implements only addprinc+cpw**. Harness CI runs
+`pkinit-gate`, `kadmin-gate`, `kpasswd-gate`, `prod-gate`.
