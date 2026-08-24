@@ -5,10 +5,19 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+mod kadm5;
+mod listen;
+
 use krb5_kdc::{Acl, AdminOp, PrincipalStore};
 use krb5_protocol::{verify_ap_req, Keytab, ReplayCache};
 use krb5_types::PrincipalName;
 use thiserror::Error;
+
+pub use kadm5::serve_kadm5_conn;
+pub use listen::{
+    dispatch_kadmind, encode_kadmind_req, encode_kpasswd_req, handle_kpasswd_rfc3244, kprop_recv,
+    kprop_send, serve_kadmind, serve_kpasswd_udp, KADMIND_PORT, KPASSWD_PORT, KPROP_PORT,
+};
 
 /// Admin error.
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -189,6 +198,7 @@ pub fn receive_propagate(
 mod tests {
     use super::*;
     use krb5_kdc::{bootstrap_documented, documented_admin_id, documented_host};
+    use krb5_protocol::ReplayCache;
 
     #[test]
     fn kadmind_enforces_acl() {
@@ -289,5 +299,168 @@ mod tests {
         .unwrap();
         krb5_kdc::issue_as(&replica, &req).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn kadmind_wire_create_is_visible_after_reload() {
+        use krb5_asn1::encode;
+        use krb5_kdc::{documented_host, load_store, save_store, shared_store, TEST_REALM};
+        use krb5_protocol::{build_ap_req, pa_enc_timestamp, tgs_req};
+
+        let dir = std::env::temp_dir().join(format!(
+            "kadmind-wire-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let db = dir.join("principal");
+        let stash = dir.join("stash");
+        let (store, acl) = bootstrap_documented().unwrap();
+        save_store(&store, &db, &stash).unwrap();
+        let store = load_store(&db, &stash).unwrap();
+        assert!(store.persist_paths.is_some());
+
+        let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["admin"]);
+        let admin_key = store
+            .get_name(&admin)
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let as_req = krb5_kdc::as_req(
+            admin.clone(),
+            TEST_REALM,
+            41,
+            Some(vec![pa_enc_timestamp(&admin_key).unwrap()]),
+        )
+        .unwrap();
+        let as_out = krb5_kdc::issue_as(&store, &as_req).unwrap();
+        let tgs = tgs_req(
+            as_out.rep.0.ticket.clone(),
+            &as_out.session_key,
+            TEST_REALM,
+            &admin,
+            documented_host(),
+            TEST_REALM,
+            42,
+        )
+        .unwrap();
+        let tgs_out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
+        let host_key = store
+            .get_name(&documented_host())
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let ap = build_ap_req(
+            tgs_out.rep.0.ticket.clone(),
+            &tgs_out.session_key,
+            &krb5_types::ascii(TEST_REALM),
+            &admin,
+        )
+        .unwrap();
+        let ap_der = encode(&ap).unwrap();
+
+        let shared = shared_store(store);
+        let replay = ReplayCache::new();
+        let payload = b"wireuser@KERBER.TEST\0wire-secret";
+        let body = encode_kadmind_req(Op::Create, &ap_der, payload);
+        let reply = dispatch_kadmind(&shared, &acl, &host_key, &replay, &body).expect("create");
+        assert_eq!(&reply[..4], &[0, 0, 0, 0]);
+
+        let loaded = load_store(&db, &stash).unwrap();
+        let created = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["wireuser"]);
+        assert!(
+            loaded.get_name(&created).is_some(),
+            "kadmind create must persist to stash/db"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn kpasswd_rfc3244_bumps_kvno() {
+        use krb5_asn1::encode;
+        use krb5_kdc::{shared_store, TEST_REALM, TEST_USER};
+        use krb5_protocol::{build_ap_req, build_krb_priv, pa_enc_timestamp, tgs_req};
+        use krb5_types::ChangePasswdData;
+
+        let (store, acl) = bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+        let user_key = store
+            .get_name(&user)
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let kvno_before = store
+            .get_name(&user)
+            .unwrap()
+            .keys
+            .iter()
+            .map(|k| k.kvno)
+            .max()
+            .unwrap();
+        let as_req = krb5_kdc::as_req(
+            user.clone(),
+            TEST_REALM,
+            43,
+            Some(vec![pa_enc_timestamp(&user_key).unwrap()]),
+        )
+        .unwrap();
+        let as_out = krb5_kdc::issue_as(&store, &as_req).unwrap();
+        let tgs = tgs_req(
+            as_out.rep.0.ticket.clone(),
+            &as_out.session_key,
+            TEST_REALM,
+            &user,
+            documented_host(),
+            TEST_REALM,
+            44,
+        )
+        .unwrap();
+        let tgs_out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
+        let host_key = store
+            .get_name(&documented_host())
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let ap = build_ap_req(
+            tgs_out.rep.0.ticket.clone(),
+            &tgs_out.session_key,
+            &krb5_types::ascii(TEST_REALM),
+            &user,
+        )
+        .unwrap();
+        let ap_der = encode(&ap).unwrap();
+        let cpw = ChangePasswdData {
+            newpasswd: b"rfc3244-new".to_vec().into(),
+            targname: Some(user.clone()),
+            targrealm: Some(krb5_types::ascii(TEST_REALM)),
+        };
+        let cpw_der = encode(&cpw).unwrap();
+        let priv_msg = build_krb_priv(&tgs_out.session_key, &cpw_der).unwrap();
+        let priv_der = encode(&priv_msg).unwrap();
+        let req = encode_kpasswd_req(&ap_der, &priv_der);
+        let shared = shared_store(store);
+        let replay = ReplayCache::new();
+        handle_kpasswd_rfc3244(&shared, &acl, &host_key, &replay, &req).expect("kpasswd");
+        let after = shared.read().unwrap();
+        let kvno_after = after
+            .get_name(&user)
+            .unwrap()
+            .keys
+            .iter()
+            .map(|k| k.kvno)
+            .max()
+            .unwrap();
+        assert!(kvno_after > kvno_before);
     }
 }

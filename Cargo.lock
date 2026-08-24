@@ -461,15 +461,18 @@ dependencies = [
 name = "krb5-admin"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.2.17",
  "krb5-asn1",
  "krb5-config",
  "krb5-crypto",
+ "krb5-gss",
  "krb5-kdc",
  "krb5-log",
  "krb5-protocol",
  "krb5-types",
  "thiserror",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

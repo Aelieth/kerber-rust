@@ -11,13 +11,20 @@ publish.workspace = true
 [dependencies]
 krb5-asn1.workspace = true
 krb5-config.workspace = true
+getrandom.workspace = true
 krb5-crypto.workspace = true
+krb5-gss.workspace = true
 krb5-kdc.workspace = true
 krb5-log.workspace = true
 krb5-protocol.workspace = true
 krb5-types.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[[bin]]
+name = "krb5-kadmind"
+path = "src/bin/krb5-kadmind.rs"
 
 [lints]
 workspace = true
