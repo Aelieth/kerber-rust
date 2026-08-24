@@ -99,6 +99,11 @@ fn main() {
             println!("pkinit-user {dir}/user.pem");
         }
     }
+    let persist = store.persist_paths.clone();
+    match &persist {
+        Some((db, stash)) => println!("persist {} {}", db.display(), stash.display()),
+        None => println!("persist none"),
+    }
     let store = shared_store(store);
 
     let pinned: Option<String> = args
@@ -112,13 +117,19 @@ fn main() {
         eprintln!("krb5-kdc: bind failed: {e}");
         std::process::exit(1);
     });
-    match drop_privileges() {
-        Ok(true) => eprintln!("krb5-kdc: dropped privileges"),
-        Ok(false) => {}
-        Err(e) => {
-            eprintln!("krb5-kdc: privilege drop: {e}");
-            std::process::exit(1);
+    // Kadmind writes the db as the kadmind uid (root in the gate). Dropping
+    // to nobody would make 0600 persist files unreadable on reload.
+    if persist.is_none() {
+        match drop_privileges() {
+            Ok(true) => eprintln!("krb5-kdc: dropped privileges"),
+            Ok(false) => {}
+            Err(e) => {
+                eprintln!("krb5-kdc: privilege drop: {e}");
+                std::process::exit(1);
+            }
         }
+    } else {
+        eprintln!("krb5-kdc: privilege drop skipped (shared persist db)");
     }
     println!("listening {addr}");
     if let Err(e) = serve(store, udp, tcp) {

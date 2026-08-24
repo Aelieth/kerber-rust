@@ -21,6 +21,20 @@ pub fn shared_store(store: PrincipalStore) -> SharedStore {
 }
 
 fn read_store<R>(store: &SharedStore, f: impl FnOnce(&PrincipalStore) -> R) -> R {
+    {
+        let mut w = store
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Err(e) = w.reload_if_stale() {
+            tracing::error!(
+                event = krb5_log::events::KDC_LISTEN,
+                component = "krb5-kdc",
+                outcome = "error",
+                error = %e,
+                detail = "reload store",
+            );
+        }
+    }
     let g = store
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner);

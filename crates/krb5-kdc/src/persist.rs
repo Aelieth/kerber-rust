@@ -51,6 +51,9 @@ pub fn load_store(db_path: &Path, stash_path: &Path) -> Result<PrincipalStore, P
         decrypt(&master, usage, &blob[4..]).map_err(|e| PersistError::Crypto(e.to_string()))?;
     let mut store = parse_plain(&plain, v2, v3)?;
     store.persist_paths = Some((db_path.to_path_buf(), stash_path.to_path_buf()));
+    if let Ok(meta) = std::fs::metadata(db_path) {
+        store.db_stamp = Some((meta.modified().ok(), meta.len()));
+    }
     Ok(store)
 }
 

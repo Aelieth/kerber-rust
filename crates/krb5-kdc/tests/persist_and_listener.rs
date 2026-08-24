@@ -42,6 +42,35 @@ fn persist_survives_restart_without_key_regen() {
 }
 
 #[test]
+fn reload_if_stale_sees_kadmin_create() {
+    let dir = std::env::temp_dir().join(format!(
+        "krb5-reload-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::create_dir_all(&dir);
+    let db = dir.join("principal");
+    let stash = dir.join("stash");
+    let (mut writer, acl) = bootstrap_documented().unwrap();
+    save_store(&writer, &db, &stash).unwrap();
+    let mut reader = load_store(&db, &stash).unwrap();
+    let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["extra"]);
+    writer.persist_paths = Some((db.clone(), stash.clone()));
+    writer
+        .create_password(&acl, &documented_admin_id(), &extra, b"extra-secret")
+        .unwrap();
+    reader.reload_if_stale().unwrap();
+    assert!(
+        reader.get_name(&extra).is_some(),
+        "KDC must pick up kadmind create from the shared db"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn persist_paths_saves_password_lock_and_expiry() {
     let dir = std::env::temp_dir().join(format!(
         "krb5-persist-status-{}-{}",

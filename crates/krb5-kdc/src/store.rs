@@ -149,6 +149,8 @@ pub struct PrincipalStore {
     pub pkinit_ca: Option<PkinitCa>,
     /// Optional `(db, stash)` paths; mutations write through when set.
     pub persist_paths: Option<(std::path::PathBuf, std::path::PathBuf)>,
+    /// Last observed (mtime, len) of the db file; kadmind mutations bump it.
+    pub(crate) db_stamp: Option<(Option<std::time::SystemTime>, u64)>,
 }
 
 impl PrincipalStore {
@@ -163,14 +165,56 @@ impl PrincipalStore {
             pa_replay: ReplayCache::with_limits(50_000, Duration::from_secs(300)),
             pkinit_ca: None,
             persist_paths: None,
+            db_stamp: None,
         }
+    }
+
+    /// Reload from stash/db when the file mtime or length changed.
+    ///
+    /// Kadmind and the KDC are separate processes sharing `KRB5_KDC_DB`.
+    /// Length is part of the stamp because some filesystems have 1s mtime.
+    ///
+    /// # Errors
+    ///
+    /// Persist load failures.
+    pub fn reload_if_stale(&mut self) -> Result<(), Error> {
+        let Some((db, stash)) = self.persist_paths.clone() else {
+            return Ok(());
+        };
+        let Ok(meta) = std::fs::metadata(&db) else {
+            return Ok(());
+        };
+        let stamp = (meta.modified().ok(), meta.len());
+        if Some(stamp) == self.db_stamp {
+            return Ok(());
+        }
+        tracing::info!(
+            event = krb5_log::events::KDC_ISSUE,
+            component = "krb5-kdc",
+            outcome = "ok",
+            detail = "reload store",
+            db_len = stamp.1,
+        );
+        let mut loaded =
+            crate::persist::load_store(&db, &stash).map_err(|e| Error::Crypto(e.to_string()))?;
+        loaded.db_stamp = Some(stamp);
+        *self = loaded;
+        Ok(())
     }
 
     fn save_if_configured(&self) -> Result<(), Error> {
         let Some((db, stash)) = &self.persist_paths else {
             return Ok(());
         };
-        crate::persist::save_store(self, db, stash).map_err(|e| Error::Crypto(e.to_string()))
+        crate::persist::save_store(self, db, stash).map_err(|e| Error::Crypto(e.to_string()))?;
+        tracing::info!(
+            event = krb5_log::events::ADMIN,
+            component = "krb5-kdc",
+            outcome = "ok",
+            detail = "saved store",
+            db = %db.display(),
+        );
+        Ok(())
     }
 
     /// Apply `kdc.conf` ticket policy.
