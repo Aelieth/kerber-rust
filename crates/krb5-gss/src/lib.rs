@@ -244,9 +244,15 @@ impl GssContext {
             ok.authenticator.cname.components_joined(),
             String::from_utf8_lossy(ok.authenticator.crealm.as_bytes())
         );
+        let mut want_mutual = ok.mutual_required;
         if let Some(ck) = &ok.authenticator.cksum {
             if ck.cksumtype == GSS_CHECKSUM_TYPE {
                 check_channel_bindings(ck.checksum.as_ref(), channel_bindings)?;
+                if ck.checksum.as_ref().len() >= 24 {
+                    let mut f = [0u8; 4];
+                    f.copy_from_slice(&ck.checksum.as_ref()[20..24]);
+                    want_mutual |= u32::from_le_bytes(f) & GSS_C_MUTUAL != 0;
+                }
             }
         }
         let sess = if let Some(sk) = &ok.authenticator.subkey {
@@ -274,7 +280,7 @@ impl GssContext {
             client: Some(client),
         };
         let mut ap_rep_tok = None;
-        if ok.mutual_required {
+        if want_mutual {
             let ap_rep = build_ap_rep(&out.session, &ok.authenticator, None, Some(0))?;
             let der = encode(&ap_rep)?;
             ap_rep_tok = Some(gss_wrap_app(TOK_AP_REP, &der));
@@ -309,9 +315,30 @@ impl GssContext {
         let seq = u64::from_be_bytes(header[8..16].try_into().map_err(|_| Error::Truncated)?);
         self.accept_seq(seq)?;
         let rrc = u16::from_be_bytes(header[6..8].try_into().map_err(|_| Error::Truncated)?);
-        let cipher = rotate_rrc(&inner[16..], rrc);
+        let payload = rotate_rrc(&inner[16..], rrc);
         let usage = seal_usage(!self.initiator);
-        let plain = decrypt(&self.session, usage, &cipher)?;
+        if header[2] & FLAG_SEALED == 0 {
+            // RFC 4121 wrap without confidentiality: header | data | checksum.
+            let ec = usize::from(u16::from_be_bytes(
+                header[4..6].try_into().map_err(|_| Error::Truncated)?,
+            ));
+            if payload.len() < ec {
+                return Err(Error::Truncated);
+            }
+            let split = payload.len() - ec;
+            let data = &payload[..split];
+            let mac = &payload[split..];
+            let mut h = header;
+            h[4] = 0;
+            h[5] = 0;
+            h[6] = 0;
+            h[7] = 0;
+            let mut to_ck = data.to_vec();
+            to_ck.extend_from_slice(&h);
+            verify_checksum(&self.session, usage, &to_ck, mac).map_err(|_| Error::Integrity)?;
+            return Ok(data.to_vec());
+        }
+        let plain = decrypt(&self.session, usage, &payload)?;
         if plain.len() < 16 {
             return Err(Error::Truncated);
         }
@@ -377,6 +404,27 @@ impl GssContext {
         self.wrap_with_rrc_inner(plaintext, rrc)
     }
 
+    /// Wrap without confidentiality (`gss_seal` conf=0). AUTH_GSSAPI
+    /// `signed_isn` / sequence verifiers use this (MIT `auth_gssapi_seal_seq`).
+    ///
+    /// # Errors
+    ///
+    /// Crypto failures.
+    pub fn wrap_integ(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, Error> {
+        let usage = seal_usage(self.initiator);
+        let mut header = wrap_header(self.initiator, false, self.send_seq);
+        let mut to_ck = plaintext.to_vec();
+        to_ck.extend_from_slice(&header);
+        let mac = checksum(&self.session, usage, &to_ck)?;
+        let ec = u16::try_from(mac.len()).map_err(|_| Error::Truncated)?;
+        header[4..6].copy_from_slice(&ec.to_be_bytes());
+        self.send_seq = self.send_seq.wrapping_add(1);
+        let mut tok = header.to_vec();
+        tok.extend_from_slice(plaintext);
+        tok.extend_from_slice(&mac);
+        Ok(tok)
+    }
+
     fn wrap_with_rrc_inner(&mut self, plaintext: &[u8], rrc: u16) -> Result<Vec<u8>, Error> {
         let usage = seal_usage(self.initiator);
         let header = wrap_header(self.initiator, true, self.send_seq);
@@ -433,6 +481,10 @@ fn authenticator_checksum(cb: Option<&ChannelBindings>, flags: u32) -> Vec<u8> {
 }
 
 fn check_channel_bindings(cksum: &[u8], local: Option<&ChannelBindings>) -> Result<(), Error> {
+    // RFC 4121: GSS_C_NO_CHANNEL_BINDINGS on the acceptor ignores the token.
+    let Some(local) = local else {
+        return Ok(());
+    };
     if cksum.len() < 24 {
         return Err(Error::ChannelBindings);
     }
@@ -442,7 +494,7 @@ fn check_channel_bindings(cksum: &[u8], local: Option<&ChannelBindings>) -> Resu
     }
     let mut got = [0u8; 16];
     got.copy_from_slice(&cksum[4..20]);
-    let expect = ChannelBindings::bnd_hash(local);
+    let expect = ChannelBindings::bnd_hash(Some(local));
     if got != expect {
         return Err(Error::ChannelBindings);
     }
@@ -773,6 +825,15 @@ mod tests {
     }
 
     #[test]
+    fn wrap_integ_round_trip_is_unsealed() {
+        let (mut init, mut acc) = contexts();
+        let tok = init.wrap_integ(&1u32.to_be_bytes()).unwrap();
+        assert_eq!(tok[2] & FLAG_SEALED, 0);
+        let plain = acc.unwrap(&tok).unwrap();
+        assert_eq!(plain, 1u32.to_be_bytes());
+    }
+
+    #[test]
     fn mit_shaped_wrap_token_is_accepted() {
         let (init, mut acc) = contexts();
         let tok = mit_shaped_wrap(init.session_key(), true, 0, b"mit-layout").unwrap();
@@ -850,6 +911,14 @@ mod tests {
             Err(e) => panic!("expected channel bindings error, got {e}"),
             Ok(_) => panic!("expected channel bindings error"),
         }
+        GssContext::accept_sec_context(
+            &token,
+            std::slice::from_ref(skey),
+            None,
+            Some(&documented_host()),
+            Some(TEST_REALM),
+        )
+        .expect("acceptor GSS_C_NO_CHANNEL_BINDINGS ignores token CB");
     }
 
     #[test]
