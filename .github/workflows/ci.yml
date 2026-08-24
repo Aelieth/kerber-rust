@@ -67,6 +67,12 @@ jobs:
         run: ./scripts/gss-gate.sh
       - name: pkinit-gate (MIT pkinit.so vs Rust KDC)
         run: ./scripts/pkinit-gate.sh
+      - name: kadmin-gate (MIT kadmin vs krb5-kadmind)
+        run: ./scripts/kadmin-gate.sh
+      - name: kpasswd-gate (MIT kpasswd vs kadmind 464)
+        run: ./scripts/kpasswd-gate.sh
+      - name: prod-gate (kinit + log analysis + pcap)
+        run: ./scripts/prod-gate.sh
       - name: cross-realm-gate
         run: ./scripts/cross-realm-gate.sh
       - name: spake-gate
