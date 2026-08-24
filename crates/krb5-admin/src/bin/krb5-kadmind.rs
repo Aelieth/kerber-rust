@@ -57,6 +57,10 @@ fn main() {
         eprintln!("krb5-kadmind: no kadmin/admin keys");
         std::process::exit(1);
     }
+    match &store.persist_paths {
+        Some((db, stash)) => println!("persist {} {}", db.display(), stash.display()),
+        None => eprintln!("krb5-kadmind: no persist_paths (mutations stay in memory)"),
+    }
     let shared = shared_store(store);
     let bind = args
         .first()

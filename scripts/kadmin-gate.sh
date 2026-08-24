@@ -101,7 +101,10 @@ echo "==== kdc log (tail) ===="
 docker exec "$NAME" tail -20 /tmp/kdc.log 2>/dev/null || true
 echo "==== kinit extra ===="
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" sh -c 'printf "extra-secret\n" | kinit extra@KERBER.TEST'
+    "$NAME" sh -c 'printf "extra-secret\n" | kinit extra@KERBER.TEST' || true
+echo "==== kdc log after extra kinit ===="
+docker exec "$NAME" grep -E 'reload store|persist |CLIENT|saved store|error' /tmp/kdc.log | tail -30 || true
+docker exec "$NAME" ls -l /tmp/principal /tmp/stash 2>/dev/null || true
 KLIST="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" klist)"
 echo "$KLIST"
 echo "$KLIST" | grep -q 'extra@KERBER.TEST'

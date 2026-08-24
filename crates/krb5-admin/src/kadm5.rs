@@ -1,7 +1,8 @@
 //! MIT kadm5 GSS-RPC (ONC RPC program 2112, version 2) on TCP 749.
 //!
-//! Enough of RFC 2203 RPCSEC_GSS + KADM5_API_VERSION_2/3 for MIT 1.22.2
-//! `kadmin` to `addprinc` and `cpw`. This is not a full C ABI clone.
+//! MIT 1.22.2 `kadmin` authenticates with AUTH_GSSAPI flavor 300001
+//! (`auth_gssapi.h`), not RFC 2203 RPCSEC_GSS flavor 6. This is not a
+//! full C ABI clone.
 
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
@@ -20,6 +21,12 @@ const KADM_PROG: u32 = 2112;
 const KADM_VERS: u32 = 2;
 const FLAVOR_GSS: u32 = 6;
 const FLAVOR_NONE: u32 = 0;
+/// OpenVision / MIT `AUTH_GSSAPI` (`<gssrpc/auth.h>`).
+const FLAVOR_AUTH_GSSAPI: u32 = 300_001;
+const AUTH_GSSAPI_INIT: u32 = 1;
+const AUTH_GSSAPI_CONTINUE_INIT: u32 = 2;
+const AUTH_GSSAPI_DESTROY: u32 = 4;
+const AUTH_GSSAPI_CREDS_VERS: u32 = 2;
 const RPCSEC_GSS_VERS: u32 = 1;
 const RPG_DATA: u32 = 0;
 const RPG_INIT: u32 = 1;
@@ -56,6 +63,7 @@ pub fn serve_kadm5_conn(
     mut stream: TcpStream,
 ) -> io::Result<()> {
     let mut gss: Option<GssContext> = None;
+    let mut agss: Option<Agss> = None;
     let handle = random_handle();
     loop {
         let rec = match read_record(&mut stream) {
@@ -71,6 +79,7 @@ pub fn serve_kadm5_conn(
             &expected_realm,
             &handle,
             &mut gss,
+            &mut agss,
             &rec,
         ) {
             Ok(r) => r,
@@ -122,6 +131,13 @@ fn write_record(stream: &mut TcpStream, body: &[u8]) -> io::Result<()> {
     stream.flush()
 }
 
+struct Agss {
+    ctx: GssContext,
+    established: bool,
+    handle: Vec<u8>,
+    seq: u32,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn handle_rpc(
     store: &SharedStore,
@@ -131,6 +147,7 @@ fn handle_rpc(
     expected_realm: &str,
     handle: &[u8],
     gss: &mut Option<GssContext>,
+    agss: &mut Option<Agss>,
     rec: &[u8],
 ) -> Result<Vec<u8>, Error> {
     let mut r = XdrR::new(rec);
@@ -151,8 +168,25 @@ fn handle_rpc(
     let header_end = r.i;
     let verf_flavor = r.u32()?;
     let verf = r.opaque()?;
+
+    if cred_flavor == FLAVOR_AUTH_GSSAPI {
+        return handle_auth_gssapi(
+            store,
+            acl,
+            service_keys,
+            expected_server,
+            expected_realm,
+            agss,
+            xid,
+            proc,
+            &cred,
+            &verf,
+            r.rest(),
+        );
+    }
+
     if cred_flavor != FLAVOR_GSS {
-        // ONC RPC ping (AUTH_NONE / AUTH_UNIX NULLPROC) before RPCSEC_GSS.
+        // ONC RPC ping (AUTH_NONE / AUTH_UNIX NULLPROC).
         tracing::info!(
             event = krb5_log::events::ADMIN,
             component = "krb5-admin",
@@ -232,6 +266,180 @@ fn handle_rpc(
     Ok(rpc_reply_gss(xid, &mic, &wrap))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn handle_auth_gssapi(
+    store: &SharedStore,
+    acl: &Acl,
+    service_keys: &[ProtocolKey],
+    expected_server: &PrincipalName,
+    expected_realm: &str,
+    agss: &mut Option<Agss>,
+    xid: u32,
+    proc: u32,
+    cred: &[u8],
+    verf: &[u8],
+    args: &[u8],
+) -> Result<Vec<u8>, Error> {
+    let mut cr = XdrR::new(cred);
+    let version = cr.u32()?;
+    let auth_msg = cr.bool()?;
+    let client_handle = cr.opaque()?;
+    if version != AUTH_GSSAPI_CREDS_VERS {
+        return Err(Error::Inner("auth_gssapi creds version".into()));
+    }
+    tracing::info!(
+        event = krb5_log::events::ADMIN,
+        component = "krb5-admin",
+        outcome = "ok",
+        detail = "auth_gssapi",
+        proc,
+        auth_msg,
+        handle_len = client_handle.len(),
+    );
+
+    if auth_msg && (proc == AUTH_GSSAPI_INIT || proc == AUTH_GSSAPI_CONTINUE_INIT) {
+        let mut ar = XdrR::new(args);
+        let arg_ver = ar.u32()?;
+        let token = ar.opaque()?;
+        let (ctx, out_tok) = match GssContext::accept_sec_context(
+            &token,
+            service_keys,
+            None,
+            Some(expected_server),
+            Some(expected_realm),
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!(
+                    event = krb5_log::events::ADMIN,
+                    component = "krb5-admin",
+                    outcome = "error",
+                    error = %e,
+                    detail = "accept_sec_context",
+                );
+                let mut body = XdrW::default();
+                encode_init_res(&mut body, arg_ver, &[], 1, 0, &[], &[]);
+                return Ok(rpc_reply_clear(xid, &body.b));
+            }
+        };
+        let mut isn = [0u8; 4];
+        let _ = getrandom::getrandom(&mut isn);
+        let seq = u32::from_le_bytes(isn);
+        let handle = 1u32.to_le_bytes().to_vec();
+        let mut ctx = ctx;
+        let signed = ctx
+            .wrap_integ(&seq.to_be_bytes())
+            .map_err(|e| Error::Inner(format!("seal isn: {e}")))?;
+        let tok = out_tok.unwrap_or_default();
+        *agss = Some(Agss {
+            ctx,
+            established: true,
+            handle: handle.clone(),
+            seq,
+        });
+        let mut body = XdrW::default();
+        encode_init_res(&mut body, arg_ver, &handle, 0, 0, &tok, &signed);
+        return Ok(rpc_reply_clear(xid, &body.b));
+    }
+
+    let st = agss
+        .as_mut()
+        .ok_or_else(|| Error::Inner("auth_gssapi not established".into()))?;
+    if !client_handle.is_empty() && client_handle != st.handle {
+        return Err(Error::Inner("auth_gssapi handle".into()));
+    }
+
+    if auth_msg && proc == AUTH_GSSAPI_DESTROY {
+        *agss = None;
+        return Ok(rpc_reply_clear(xid, &[]));
+    }
+
+    if !st.established {
+        return Err(Error::Inner("auth_gssapi incomplete".into()));
+    }
+
+    // Verifier is gss_seal(conf=0) of htonl(expected seq).
+    let got = st
+        .ctx
+        .unwrap(verf)
+        .map_err(|e| Error::Inner(format!("unseal seq: {e}")))?;
+    if got.len() != 4 {
+        return Err(Error::Inner("unseal seq len".into()));
+    }
+    let mut seqb = [0u8; 4];
+    seqb.copy_from_slice(&got);
+    let got_seq = u32::from_be_bytes(seqb);
+    if got_seq != st.seq.wrapping_add(1) {
+        return Err(Error::Inner(format!(
+            "auth_gssapi seq {} want {}",
+            got_seq,
+            st.seq.wrapping_add(1)
+        )));
+    }
+    st.seq = st.seq.wrapping_add(1);
+    let req_seq = st.seq;
+    let reply_seq = st.seq.wrapping_add(1);
+    let reply_verf = st
+        .ctx
+        .wrap_integ(&reply_seq.to_be_bytes())
+        .map_err(|e| Error::Inner(format!("seal reply seq: {e}")))?;
+    st.seq = st.seq.wrapping_add(1);
+
+    if auth_msg {
+        return Ok(rpc_reply_agss(xid, &reply_verf, &[]));
+    }
+
+    let mut wr = XdrR::new(args);
+    let wrapped = wr.opaque()?;
+    let plain = st
+        .ctx
+        .unwrap(&wrapped)
+        .map_err(|e| Error::Inner(format!("unwrap data: {e}")))?;
+    if plain.len() < 4 {
+        return Err(Error::Inner("wrap_data seq".into()));
+    }
+    let mut inner_seq = [0u8; 4];
+    inner_seq.copy_from_slice(&plain[..4]);
+    let inner_seq = u32::from_be_bytes(inner_seq);
+    if inner_seq != req_seq {
+        return Err(Error::Inner("wrap_data seq mismatch".into()));
+    }
+    let kadm_args = &plain[4..];
+    let actor = st
+        .ctx
+        .client
+        .clone()
+        .unwrap_or_else(|| format!("admin@{expected_realm}"));
+    let result = dispatch_kadm5(store, acl, &actor, proc, kadm_args)?;
+    let mut inner = Vec::with_capacity(4 + result.len());
+    inner.extend_from_slice(&st.seq.to_be_bytes());
+    inner.extend_from_slice(&result);
+    let wrap = st
+        .ctx
+        .wrap_with_rrc(&inner, 0)
+        .map_err(|e| Error::Inner(format!("wrap data: {e}")))?;
+    let mut body = XdrW::default();
+    body.opaque(&wrap);
+    Ok(rpc_reply_agss(xid, &reply_verf, &body.b))
+}
+
+fn encode_init_res(
+    w: &mut XdrW,
+    version: u32,
+    handle: &[u8],
+    major: u32,
+    minor: u32,
+    token: &[u8],
+    signed_isn: &[u8],
+) {
+    w.u32(version);
+    w.opaque(handle);
+    w.u32(major);
+    w.u32(minor);
+    w.opaque(token);
+    w.opaque(signed_isn);
+}
+
 fn rpc_reply_clear(xid: u32, body: &[u8]) -> Vec<u8> {
     let mut w = XdrW::default();
     w.u32(xid);
@@ -253,6 +461,18 @@ fn rpc_reply_gss(xid: u32, mic: &[u8], wrap: &[u8]) -> Vec<u8> {
     w.opaque(mic);
     w.u32(SUCCESS);
     w.opaque(wrap);
+    w.b
+}
+
+fn rpc_reply_agss(xid: u32, verf: &[u8], body: &[u8]) -> Vec<u8> {
+    let mut w = XdrW::default();
+    w.u32(xid);
+    w.u32(MSG_REPLY);
+    w.u32(MSG_ACCEPTED);
+    w.u32(FLAVOR_AUTH_GSSAPI);
+    w.opaque(verf);
+    w.u32(SUCCESS);
+    w.b.extend_from_slice(body);
     w.b
 }
 
@@ -432,6 +652,14 @@ impl<'a> XdrR<'a> {
         Ok(u32::from_be_bytes(buf))
     }
 
+    fn bool(&mut self) -> Result<bool, Error> {
+        Ok(self.u32()? != 0)
+    }
+
+    fn rest(&self) -> &[u8] {
+        self.b.get(self.i..).unwrap_or(&[])
+    }
+
     fn opaque(&mut self) -> Result<Vec<u8>, Error> {
         let n = self.u32()? as usize;
         self.need(n)?;
@@ -533,5 +761,27 @@ mod tests {
         let b = generic_ret(API_V2, 0);
         assert_eq!(b.len(), 8);
         assert_eq!(&b[..4], &API_V2.to_be_bytes());
+    }
+
+    #[test]
+    fn auth_gssapi_creds_and_init_res_xdr() {
+        let mut w = XdrW::default();
+        w.u32(2);
+        w.u32(1); // auth_msg TRUE
+        w.opaque(&[]);
+        let mut r = XdrR::new(&w.b);
+        assert_eq!(r.u32().unwrap(), 2);
+        assert!(r.bool().unwrap());
+        assert!(r.opaque().unwrap().is_empty());
+
+        let mut body = XdrW::default();
+        encode_init_res(&mut body, 4, &1u32.to_le_bytes(), 0, 0, b"tok", b"isn");
+        let mut r = XdrR::new(&body.b);
+        assert_eq!(r.u32().unwrap(), 4);
+        assert_eq!(r.opaque().unwrap(), 1u32.to_le_bytes());
+        assert_eq!(r.u32().unwrap(), 0);
+        assert_eq!(r.u32().unwrap(), 0);
+        assert_eq!(r.opaque().unwrap(), b"tok");
+        assert_eq!(r.opaque().unwrap(), b"isn");
     }
 }
