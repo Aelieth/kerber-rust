@@ -6,11 +6,13 @@ use std::thread;
 use std::time::Duration;
 
 use krb5_asn1::{decode, encode};
+use krb5_crypto::{decrypt, string_to_key, EncryptionType, KeyUsage, ProtocolKey};
 use krb5_kdc::{
-    as_req, bootstrap_documented, documented_admin_id, handle_request, load_store, save_store,
-    serve, shared_store, TEST_REALM, TEST_USER,
+    as_req, bootstrap_documented, documented_admin_id, documented_host, handle_request, load_store,
+    pa_enc_timestamp, save_store, serve, shared_store, tgs_req, S2K_ITERS, TEST_REALM, TEST_USER,
+    TEST_USER_PASSWORD,
 };
-use krb5_types::{err, PrincipalName};
+use krb5_types::{err, ku, AsRep, EncAsRepPart, PrincipalName};
 
 #[test]
 fn persist_survives_restart_without_key_regen() {
@@ -246,17 +248,78 @@ fn listener_chaos_udp_garbage_then_valid() {
 fn bounded_stress_handle_request() {
     let (store, _) = bootstrap_documented().unwrap();
     let store = Arc::new(store);
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let salt = cname.default_salt(TEST_REALM);
+    let key = string_to_key(
+        EncryptionType::Aes256CtsHmacSha196,
+        TEST_USER_PASSWORD,
+        &salt,
+        Some(&S2K_ITERS.to_be_bytes()),
+    )
+    .unwrap();
     let mut joins = Vec::new();
-    for _ in 0..8 {
+    for t in 0..8u32 {
         let s = Arc::clone(&store);
+        let key = key.clone();
+        let cname = cname.clone();
         joins.push(thread::spawn(move || {
-            for _ in 0..32 {
+            let mut ok_as = 0u32;
+            let mut ok_tgs = 0u32;
+            for i in 0..8u32 {
                 let _ = handle_request(&s, &[0xff; 16]);
                 let _ = handle_request(&s, &[]);
+                let nonce = 10_000 + t * 100 + i;
+                let req = as_req(
+                    cname.clone(),
+                    TEST_REALM,
+                    nonce,
+                    Some(vec![pa_enc_timestamp(&key).unwrap()]),
+                )
+                .unwrap();
+                let rep = handle_request(&s, &encode(&req).unwrap()).unwrap();
+                assert_eq!(
+                    rep.first().copied(),
+                    Some(0x6b),
+                    "valid AS-REQ must yield AS-REP"
+                );
+                ok_as += 1;
+                let as_rep: AsRep = decode(&rep).unwrap();
+                let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
+                let plain = decrypt(&key, usage, as_rep.0.enc_part.cipher.as_ref()).unwrap();
+                let EncAsRepPart(part) = decode(&plain).unwrap();
+                let session = ProtocolKey::from_bytes(
+                    EncryptionType::from_iana(part.key.keytype).unwrap(),
+                    part.key.keyvalue.as_ref(),
+                )
+                .unwrap();
+                let tgs = tgs_req(
+                    as_rep.0.ticket,
+                    &session,
+                    TEST_REALM,
+                    &cname,
+                    documented_host(),
+                    TEST_REALM,
+                    nonce + 50,
+                )
+                .unwrap();
+                let tgs_rep = handle_request(&s, &encode(&tgs).unwrap()).unwrap();
+                assert_eq!(
+                    tgs_rep.first().copied(),
+                    Some(0x6d),
+                    "valid TGS-REQ must yield TGS-REP"
+                );
+                ok_tgs += 1;
             }
+            (ok_as, ok_tgs)
         }));
     }
+    let mut total_as = 0u32;
+    let mut total_tgs = 0u32;
     for j in joins {
-        j.join().unwrap();
+        let (a, g) = j.join().unwrap();
+        total_as += a;
+        total_tgs += g;
     }
+    assert_eq!(total_as, 64, "every concurrent AS must succeed");
+    assert_eq!(total_tgs, 64, "every concurrent TGS must succeed");
 }
