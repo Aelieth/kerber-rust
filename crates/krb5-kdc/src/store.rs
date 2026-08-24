@@ -483,6 +483,38 @@ impl PrincipalStore {
         self.save_if_configured()
     }
 
+    /// Extra inter-realm key used only to decrypt tickets the peer issued.
+    ///
+    /// Windows TDOs derive inbound and outbound AES keys from the same
+    /// password with different salts. Insert at the front so [`Principal::best_key`]
+    /// (highest kvno, last among ties) stays the issue key.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AclDenied`] or [`Error::NotFound`].
+    pub fn add_interrealm_decrypt_key(
+        &mut self,
+        acl: &Acl,
+        actor: &str,
+        foreign_realm: &str,
+        key: ProtocolKey,
+    ) -> Result<(), Error> {
+        acl.check(actor, AdminOp::Create)?;
+        let name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", foreign_realm]);
+        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+        let kvno = p.keys.iter().map(|k| k.kvno).min().unwrap_or(1);
+        p.keys.insert(
+            0,
+            KeyEntry {
+                etype: key.etype(),
+                key,
+                kvno,
+            },
+        );
+        self.save_if_configured()
+    }
+
     /// ACL-gated password change (admin `c` / `*`).
     ///
     /// # Errors

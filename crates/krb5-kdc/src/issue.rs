@@ -288,6 +288,7 @@ fn issue_as_from(
         &krbtgt_key.key,
         TransitedEncoding::empty(),
         renew_till_for(store, &now, &flags),
+        true,
     )?;
     let renew_till = renew_till_for(store, &now, &flags);
     let enc_part = enc_rep_part(
@@ -502,6 +503,14 @@ fn issue_tgs_from(
         .krbtgt()
         .and_then(|p| p.best_key())
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
+    // Referral TGT PAC 16/19/7 must be keyed with the inter-realm key
+    // the foreign KDC holds (Windows TDO inbound), not the local krbtgt.
+    let pac_kdc = if sname.is_krbtgt() && !sname.is_krbtgt_for(store.realm()) {
+        tkt_key.clone()
+    } else {
+        krbtgt_key.key.clone()
+    };
+    let include_pac = !sname.is_krbtgt() || sname.is_krbtgt_for(store.realm());
     let ticket = mint_ticket(
         &tkt_key,
         tkt_kvno,
@@ -514,9 +523,10 @@ fn issue_tgs_from(
         &now,
         &end,
         flags.clone(),
-        &krbtgt_key.key,
+        &pac_kdc,
         transited,
         renew_till_for(store, &now, &flags),
+        include_pac,
     )?;
     let renew_till = renew_till_for(store, &now, &flags);
     let enc_part = enc_rep_part(
@@ -661,8 +671,8 @@ fn mint_ticket(
     kdc_key: &ProtocolKey,
     transited: TransitedEncoding,
     renew_till: Option<KerberosTime>,
+    include_pac: bool,
 ) -> Result<Ticket, Error> {
-    let placeholder = wrap_win2k_pac(&[0])?;
     let mut part = EncTicketPart {
         flags,
         key: encryption_key(session),
@@ -674,18 +684,22 @@ fn mint_ticket(
         endtime: endtime.clone(),
         renew_till,
         caddr: None,
-        authorization_data: Some(placeholder),
+        authorization_data: None,
     };
-    let checksum_der = encode(&part)?;
-    let pac = sign_pac(
-        cname,
-        crealm,
-        authtime.unix_seconds(),
-        service_key,
-        kdc_key,
-        &checksum_der,
-    )?;
-    part.authorization_data = Some(wrap_win2k_pac(&pac)?);
+    if include_pac {
+        let placeholder = wrap_win2k_pac(&[0])?;
+        part.authorization_data = Some(placeholder);
+        let checksum_der = encode(&part)?;
+        let pac = sign_pac(
+            cname,
+            crealm,
+            authtime.unix_seconds(),
+            service_key,
+            kdc_key,
+            &checksum_der,
+        )?;
+        part.authorization_data = Some(wrap_win2k_pac(&pac)?);
+    }
     let der = encode(&part)?;
     let usage = KeyUsage::new(ku::TICKET)?;
     let cipher = encrypt(service_key, usage, &der)?;

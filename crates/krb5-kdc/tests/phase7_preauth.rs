@@ -790,6 +790,71 @@ fn tgs_referral_ad_kerber_test_issues_krbtgt() {
 }
 
 #[test]
+fn interrealm_issue_key_is_not_the_peer_accept_key() {
+    // Windows TDO inbound/outbound AES keys differ by salt. Issue toward
+    // AD with the inbound key; still decrypt AD-issued referrals with the
+    // outbound key.
+    let issue_bytes = [0x11u8; 32];
+    let accept_bytes = [0x22u8; 32];
+    let issue_key =
+        krb5_crypto::ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &issue_bytes)
+            .expect("issue key");
+    let accept_key =
+        krb5_crypto::ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &accept_bytes)
+            .expect("accept key");
+    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
+    store
+        .create_interrealm_key(&acl, &documented_admin_id(), "AD.KERBER.TEST", issue_key)
+        .expect("issue");
+    store
+        .add_interrealm_decrypt_key(&acl, &documented_admin_id(), "AD.KERBER.TEST", accept_key)
+        .expect("accept");
+    let ir_name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "AD.KERBER.TEST"]);
+    let ir = store.get_name(&ir_name).expect("ir");
+    assert_eq!(ir.keys.len(), 2);
+    assert_eq!(
+        ir.best_key().unwrap().key.as_bytes(),
+        issue_bytes.as_slice(),
+        "TGS issue must use the inbound AD key"
+    );
+    assert!(ir.keys.iter().any(|k| k.key.as_bytes() == accept_bytes));
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 81);
+    let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "svc.ad.kerber.test"]);
+    let tgs = tgs_req_ex(
+        tgt.rep.0.ticket.clone(),
+        &tgt.session_key,
+        TEST_REALM,
+        &cname,
+        host,
+        "AD.KERBER.TEST",
+        82,
+        KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true),
+        None,
+        Vec::new(),
+        pref_etypes(),
+    )
+    .expect("AD referral TGS-REQ");
+    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("AD referral TGS");
+    let issue_key =
+        krb5_crypto::ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &issue_bytes)
+            .unwrap();
+    let accept_key =
+        krb5_crypto::ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &accept_bytes)
+            .unwrap();
+    decrypt_ticket_part(&issue_key, &out.rep.0.ticket).expect("issue key must open the referral");
+    assert!(
+        decrypt_ticket_part(&accept_key, &out.rep.0.ticket).is_err(),
+        "peer accept key must not open tickets we issue toward AD"
+    );
+    let part = decrypt_ticket_part(&issue_key, &out.rep.0.ticket).unwrap();
+    assert!(
+        pac_from_ticket_part(&part).is_none(),
+        "referral TGT must omit PAC so AD does not policy-reject dummy logon SIDs"
+    );
+}
+
+#[test]
 fn password_principal_has_rfc8009_keys() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let user = store
