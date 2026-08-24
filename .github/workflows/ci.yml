@@ -73,6 +73,10 @@ jobs:
         run: ./scripts/kpasswd-gate.sh
       - name: kdb-dump-gate (MIT dump/load + kinit both directions)
         run: ./scripts/kdb-dump-gate.sh
+      - name: kprop-gate (MIT kprop dump v7 vs Rust kpropd)
+        run: ./scripts/kprop-gate.sh
+      - name: restart-gate (persist mutation survives KDC relaunch)
+        run: ./scripts/restart-gate.sh
       - name: prod-gate (kinit + log analysis + pcap)
         run: ./scripts/prod-gate.sh
       - name: cross-realm-gate
