@@ -59,6 +59,12 @@ pub fn documented_kadmin() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "admin"])
 }
 
+/// `kadmin/changepw` as NT-SRV-INST (RFC 3244 kpasswd acceptor).
+#[must_use]
+pub fn documented_changepw() -> PrincipalName {
+    PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "changepw"])
+}
+
 /// `admin@KERBER.TEST` actor string.
 #[must_use]
 pub fn documented_admin_id() -> String {
@@ -81,5 +87,6 @@ pub fn bootstrap_documented() -> Result<(PrincipalStore, Acl), Error> {
     let acl = Acl::allow_admin(documented_admin_id());
     store.create_host(&acl, &documented_admin_id(), &documented_host())?;
     store.create_host(&acl, &documented_admin_id(), &documented_kadmin())?;
+    store.create_host(&acl, &documented_admin_id(), &documented_changepw())?;
     Ok((store, acl))
 }

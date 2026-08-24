@@ -16,7 +16,8 @@ use thiserror::Error;
 pub use kadm5::serve_kadm5_conn;
 pub use listen::{
     dispatch_kadmind, encode_kadmind_req, encode_kpasswd_req, handle_kpasswd_rfc3244, kprop_recv,
-    kprop_send, serve_kadmind, serve_kpasswd_udp, KADMIND_PORT, KPASSWD_PORT, KPROP_PORT,
+    kprop_send, serve_kadmind, serve_kpasswd_tcp, serve_kpasswd_udp, KADMIND_PORT, KPASSWD_PORT,
+    KPROP_PORT,
 };
 
 /// Admin error.
@@ -385,7 +386,7 @@ mod tests {
     #[test]
     fn kpasswd_rfc3244_bumps_kvno() {
         use krb5_asn1::encode;
-        use krb5_kdc::{shared_store, TEST_REALM, TEST_USER};
+        use krb5_kdc::{documented_changepw, shared_store, TEST_REALM, TEST_USER};
         use krb5_protocol::{build_ap_req, build_krb_priv, pa_enc_timestamp, tgs_req};
         use krb5_types::ChangePasswdData;
 
@@ -414,19 +415,20 @@ mod tests {
         )
         .unwrap();
         let as_out = krb5_kdc::issue_as(&store, &as_req).unwrap();
+        let changepw = documented_changepw();
         let tgs = tgs_req(
             as_out.rep.0.ticket.clone(),
             &as_out.session_key,
             TEST_REALM,
             &user,
-            documented_host(),
+            changepw.clone(),
             TEST_REALM,
             44,
         )
         .unwrap();
         let tgs_out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
-        let host_key = store
-            .get_name(&documented_host())
+        let cpw_key = store
+            .get_name(&changepw)
             .unwrap()
             .best_key()
             .unwrap()
@@ -451,7 +453,11 @@ mod tests {
         let req = encode_kpasswd_req(&ap_der, &priv_der);
         let shared = shared_store(store);
         let replay = ReplayCache::new();
-        handle_kpasswd_rfc3244(&shared, &acl, &host_key, &replay, &req).expect("kpasswd");
+        let rep = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &replay, &req).expect("kpasswd");
+        assert!(
+            rep.len() > 6 && u16::from_be_bytes([rep[4], rep[5]]) > 0,
+            "success reply must include AP-REP"
+        );
         let after = shared.read().unwrap();
         let kvno_after = after
             .get_name(&user)
@@ -461,6 +467,320 @@ mod tests {
             .map(|k| k.kvno)
             .max()
             .unwrap();
-        assert!(kvno_after > kvno_before);
+        assert!(kvno_after > kvno_before, "RFC 3244 must bump kvno");
+
+        let salt = user.default_salt(TEST_REALM);
+        let new_key = krb5_crypto::string_to_key(
+            krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
+            b"rfc3244-new",
+            &salt,
+            Some(&krb5_kdc::S2K_ITERS.to_be_bytes()),
+        )
+        .unwrap();
+        let as_new = krb5_kdc::as_req(
+            user.clone(),
+            TEST_REALM,
+            45,
+            Some(vec![pa_enc_timestamp(&new_key).unwrap()]),
+        )
+        .unwrap();
+        krb5_kdc::issue_as(&after, &as_new).expect("AS with RFC 3244 new password");
+
+        let as_old = krb5_kdc::as_req(
+            user,
+            TEST_REALM,
+            46,
+            Some(vec![pa_enc_timestamp(&user_key).unwrap()]),
+        )
+        .unwrap();
+        assert!(
+            krb5_kdc::issue_as(&after, &as_old).is_err(),
+            "old password must fail after kpasswd"
+        );
+    }
+
+    #[test]
+    fn kpasswd_udp_listener_then_issue_as() {
+        use std::net::UdpSocket;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use std::thread;
+        use std::time::Duration;
+
+        use krb5_asn1::encode;
+        use krb5_kdc::{documented_changepw, shared_store, TEST_REALM, TEST_USER};
+        use krb5_protocol::{build_ap_req, build_krb_priv, pa_enc_timestamp, tgs_req};
+        use krb5_types::ChangePasswdData;
+
+        let (store, acl) = bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+        let user_key = store
+            .get_name(&user)
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let changepw = documented_changepw();
+        let cpw_key = store
+            .get_name(&changepw)
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let as_out = krb5_kdc::issue_as(
+            &store,
+            &krb5_kdc::as_req(
+                user.clone(),
+                TEST_REALM,
+                47,
+                Some(vec![pa_enc_timestamp(&user_key).unwrap()]),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let tgs_out = krb5_kdc::issue_tgs(
+            &store,
+            &tgs_req(
+                as_out.rep.0.ticket.clone(),
+                &as_out.session_key,
+                TEST_REALM,
+                &user,
+                changepw,
+                TEST_REALM,
+                48,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let ap = build_ap_req(
+            tgs_out.rep.0.ticket.clone(),
+            &tgs_out.session_key,
+            &krb5_types::ascii(TEST_REALM),
+            &user,
+        )
+        .unwrap();
+        let cpw = ChangePasswdData {
+            newpasswd: b"udp-new-pass".to_vec().into(),
+            targname: Some(user.clone()),
+            targrealm: Some(krb5_types::ascii(TEST_REALM)),
+        };
+        let priv_msg = build_krb_priv(&tgs_out.session_key, &encode(&cpw).unwrap()).unwrap();
+        let req = encode_kpasswd_req(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
+
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr = sock.local_addr().unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let shared = shared_store(store);
+        let shared2 = shared.clone();
+        let stop2 = Arc::clone(&stop);
+        thread::spawn(move || {
+            let _ = serve_kpasswd_udp(shared2, acl, cpw_key, sock, stop2);
+        });
+        thread::sleep(Duration::from_millis(30));
+        let client = UdpSocket::bind("127.0.0.1:0").unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        client.send_to(&req, addr).unwrap();
+        let mut buf = [0u8; 4096];
+        let n = client.recv(&mut buf).expect("kpasswd reply");
+        assert!(n > 6, "RFC 3244 reply");
+        stop.store(true, Ordering::Relaxed);
+        let after = shared.read().unwrap();
+        let salt = user.default_salt(TEST_REALM);
+        let new_key = krb5_crypto::string_to_key(
+            krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
+            b"udp-new-pass",
+            &salt,
+            Some(&krb5_kdc::S2K_ITERS.to_be_bytes()),
+        )
+        .unwrap();
+        let as_new = krb5_kdc::as_req(
+            user,
+            TEST_REALM,
+            49,
+            Some(vec![pa_enc_timestamp(&new_key).unwrap()]),
+        )
+        .unwrap();
+        krb5_kdc::issue_as(&after, &as_new).expect("AS after UDP kpasswd");
+    }
+
+    #[test]
+    fn kpasswd_mit_style_subkey_seq0_then_issue_as() {
+        use krb5_asn1::encode;
+        use krb5_kdc::{documented_changepw, shared_store, TEST_REALM, TEST_USER};
+        use krb5_protocol::{
+            build_ap_req_with_cksum, build_krb_priv_with_seq, pa_enc_timestamp, tgs_req,
+        };
+        use krb5_types::ApOptions;
+
+        let (store, acl) = bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+        let user_key = store
+            .get_name(&user)
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let changepw = documented_changepw();
+        let cpw_key = store
+            .get_name(&changepw)
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let as_out = krb5_kdc::issue_as(
+            &store,
+            &krb5_kdc::as_req(
+                user.clone(),
+                TEST_REALM,
+                50,
+                Some(vec![pa_enc_timestamp(&user_key).unwrap()]),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let tgs_out = krb5_kdc::issue_tgs(
+            &store,
+            &tgs_req(
+                as_out.rep.0.ticket.clone(),
+                &as_out.session_key,
+                TEST_REALM,
+                &user,
+                changepw,
+                TEST_REALM,
+                51,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let sub = krb5_crypto::ProtocolKey::from_bytes(
+            krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
+            &[0x5au8; 32],
+        )
+        .unwrap();
+        let sub_ek = krb5_types::EncryptionKey {
+            keytype: sub.etype().to_iana(),
+            keyvalue: sub.as_bytes().to_vec().into(),
+        };
+        let ap = build_ap_req_with_cksum(
+            tgs_out.rep.0.ticket.clone(),
+            &tgs_out.session_key,
+            &krb5_types::ascii(TEST_REALM),
+            &user,
+            ApOptions::none(),
+            None,
+            Some(sub_ek),
+        )
+        .unwrap();
+        // MIT kpasswd: version 1, raw password, subkey, seq 0.
+        let priv_msg = build_krb_priv_with_seq(&sub, b"kpasswd-one", Some(0)).unwrap();
+        let req = encode_kpasswd_req(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
+        let shared = shared_store(store);
+        let replay = ReplayCache::new();
+        let rep = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &replay, &req)
+            .expect("MIT-style kpasswd");
+        assert!(
+            rep.len() > 6 && u16::from_be_bytes([rep[4], rep[5]]) > 0,
+            "MIT kpasswd requires AP-REP on success"
+        );
+        let after = shared.read().unwrap();
+        let salt = user.default_salt(TEST_REALM);
+        let new_key = krb5_crypto::string_to_key(
+            krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
+            b"kpasswd-one",
+            &salt,
+            Some(&krb5_kdc::S2K_ITERS.to_be_bytes()),
+        )
+        .unwrap();
+        let as_new = krb5_kdc::as_req(
+            user,
+            TEST_REALM,
+            52,
+            Some(vec![pa_enc_timestamp(&new_key).unwrap()]),
+        )
+        .unwrap();
+        krb5_kdc::issue_as(&after, &as_new).expect("AS after MIT-style kpasswd");
+    }
+
+    #[test]
+    fn kprop_tcp_replica_issues_as_with_shared_stash() {
+        use std::net::{TcpListener, TcpStream};
+        use std::thread;
+        use std::time::Duration;
+
+        use krb5_kdc::{save_store, TEST_REALM, TEST_USER};
+
+        let dir = std::env::temp_dir().join(format!(
+            "kprop-tcp-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let primary_db = dir.join("primary");
+        let replica_db = dir.join("replica");
+        let stash = dir.join("stash");
+        let (store, _) = bootstrap_documented().unwrap();
+        save_store(&store, &primary_db, &stash).unwrap();
+        let before = store
+            .krbtgt()
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .as_bytes()
+            .to_vec();
+
+        let listener = TcpListener::bind("127.0.0.1:754")
+            .or_else(|_| TcpListener::bind("127.0.0.1:0"))
+            .unwrap();
+        let addr = listener.local_addr().unwrap();
+        let replica_db2 = replica_db.clone();
+        let stash2 = stash.clone();
+        let join = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            kprop_recv(&mut stream, &replica_db2, &stash2).expect("kprop_recv")
+        });
+        thread::sleep(Duration::from_millis(20));
+        let mut client = TcpStream::connect(addr).unwrap();
+        kprop_send(&store, &stash, &mut client).expect("kprop_send");
+        let replica = join.join().expect("thread");
+        let after = replica
+            .krbtgt()
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .as_bytes()
+            .to_vec();
+        assert_eq!(
+            before, after,
+            "replica krbtgt must match the primary (shared stash)"
+        );
+        let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+        let salt = cname.default_salt(TEST_REALM);
+        let key = krb5_crypto::string_to_key(
+            krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
+            b"userpassword",
+            &salt,
+            Some(&krb5_kdc::S2K_ITERS.to_be_bytes()),
+        )
+        .unwrap();
+        let req = krb5_kdc::as_req(
+            cname,
+            TEST_REALM,
+            91,
+            Some(vec![krb5_kdc::pa_enc_timestamp(&key).unwrap()]),
+        )
+        .unwrap();
+        krb5_kdc::issue_as(&replica, &req).expect("replica issue_as");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

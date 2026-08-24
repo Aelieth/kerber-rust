@@ -8,10 +8,12 @@ use std::thread;
 use std::time::Duration;
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::ProtocolKey;
+use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_kdc::{save_store, SharedStore};
-use krb5_protocol::{build_krb_priv, unwrap_krb_priv, verify_ap_req, ReplayCache};
-use krb5_types::{ChangePasswdData, PrincipalName};
+use krb5_protocol::{
+    build_ap_rep, build_krb_priv_with_seq, unwrap_krb_priv_ex, verify_ap_req, ReplayCache,
+};
+use krb5_types::{ChangePasswdData, EncryptionKey, PrincipalName};
 
 use crate::{AdminSession, Error, Op};
 
@@ -231,7 +233,54 @@ pub fn encode_kadmind_req(op: Op, ap_req: &[u8], payload: &[u8]) -> Vec<u8> {
     v
 }
 
-/// RFC 3244 kpasswd request: `len, version, ap-req-len, AP-REQ, KRB-PRIV`.
+fn protocol_key_from_enc(kt: &EncryptionKey) -> Result<ProtocolKey, Error> {
+    let etype = EncryptionType::from_iana(kt.keytype)
+        .or_else(|_| EncryptionType::known(kt.keytype))
+        .map_err(|e| Error::Inner(e.to_string()))?;
+    ProtocolKey::from_bytes(etype, kt.keyvalue.as_ref()).map_err(|e| Error::Inner(e.to_string()))
+}
+
+/// Frame a kpasswd reply: `len, version=1, AP-REP-len, AP-REP, KRB-PRIV`.
+///
+/// MIT `krb5int_rd_chpw_rep` treats AP-REP length 0 as a framed KRB-ERROR
+/// and will not accept a successful result. Success replies must include
+/// AP-REP; the following KRB-PRIV is encrypted in the authenticator subkey
+/// (else the ticket session key).
+fn frame_kpasswd_rep(ap_rep: &[u8], priv_der: &[u8]) -> Vec<u8> {
+    let total = 6usize
+        .saturating_add(ap_rep.len())
+        .saturating_add(priv_der.len());
+    let mut out = Vec::with_capacity(total);
+    out.extend_from_slice(&(u16::try_from(total).unwrap_or(0)).to_be_bytes());
+    out.extend_from_slice(&1u16.to_be_bytes());
+    out.extend_from_slice(&(u16::try_from(ap_rep.len()).unwrap_or(0)).to_be_bytes());
+    out.extend_from_slice(ap_rep);
+    out.extend_from_slice(priv_der);
+    out
+}
+
+fn kpasswd_success_rep(
+    session: &ProtocolKey,
+    priv_key: &ProtocolKey,
+    authenticator: &krb5_types::Authenticator,
+    result: &[u8],
+) -> Result<Vec<u8>, Error> {
+    // Match AP-REP seq to KRB-PRIV seq (MIT rd_rep then rd_priv).
+    let seq = authenticator.seq_number.or(Some(1));
+    let ap_rep =
+        build_ap_rep(session, authenticator, None, seq).map_err(|e| Error::Inner(e.to_string()))?;
+    let ap_der = encode(&ap_rep).map_err(|e| Error::Inner(e.to_string()))?;
+    let priv_rep =
+        build_krb_priv_with_seq(priv_key, result, seq).map_err(|e| Error::Inner(e.to_string()))?;
+    let priv_der = encode(&priv_rep).map_err(|e| Error::Inner(e.to_string()))?;
+    Ok(frame_kpasswd_rep(&ap_der, &priv_der))
+}
+
+/// RFC 3244 / MIT changepw request: `len, version, ap-req-len, AP-REQ, KRB-PRIV`.
+///
+/// Version 1 (MIT `kpasswd`) carries the raw password in KRB-PRIV. Version
+/// `0xff80` (setpw) carries `ChangePasswdData`. KRB-PRIV is encrypted with
+/// the authenticator subkey when present (MIT always sends one).
 ///
 /// # Errors
 ///
@@ -255,46 +304,35 @@ pub fn handle_kpasswd_rfc3244(
     let ap_req = &raw[6..6 + ap_len];
     let priv_raw = &raw[6 + ap_len..];
     let ok = verify_ap_req(ap_req, service_key, replay).map_err(|e| Error::Inner(e.to_string()))?;
-    let session = {
-        let kt = ok.ticket_part.key;
-        ProtocolKey::from_bytes(
-            krb5_crypto::EncryptionType::from_iana(kt.keytype)
-                .or_else(|_| krb5_crypto::EncryptionType::known(kt.keytype))
-                .map_err(|e| Error::Inner(e.to_string()))?,
-            kt.keyvalue.as_ref(),
-        )
-        .map_err(|e| Error::Inner(e.to_string()))?
+    let session = protocol_key_from_enc(&ok.ticket_part.key)?;
+    let priv_key = match &ok.authenticator.subkey {
+        Some(sk) => protocol_key_from_enc(sk)?,
+        None => session.clone(),
     };
-    let user_data =
-        unwrap_krb_priv(&session, priv_raw, replay).map_err(|e| Error::Inner(e.to_string()))?;
+    let user_data = unwrap_krb_priv_ex(&priv_key, priv_raw, replay, false, false)
+        .map_err(|e| Error::Inner(e.to_string()))?;
     let (targ, newpass) = if let Ok(cpw) = decode::<ChangePasswdData>(&user_data) {
         let name = cpw.targname.unwrap_or(ok.authenticator.cname.clone());
         (name, cpw.newpasswd.to_vec())
     } else {
         (ok.authenticator.cname.clone(), user_data)
     };
-    let mut g = store
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut sess = AdminSession::local(
-        &mut g,
-        acl,
-        format!(
-            "{}@{}",
-            ok.authenticator.cname.components_joined(),
-            String::from_utf8_lossy(ok.authenticator.crealm.as_bytes())
-        ),
-    );
-    sess.change_password(&targ, &newpass)?;
-    let priv_rep = build_krb_priv(&session, &[0, 0]).map_err(|e| Error::Inner(e.to_string()))?;
-    let priv_der = encode(&priv_rep).map_err(|e| Error::Inner(e.to_string()))?;
-    let mut out = Vec::new();
-    let inner_len = 2 + 2 + 2 + priv_der.len();
-    out.extend_from_slice(&(u16::try_from(inner_len + 2).unwrap_or(0)).to_be_bytes());
-    out.extend_from_slice(&1u16.to_be_bytes()); // version
-    out.extend_from_slice(&0u16.to_be_bytes()); // no AP-REP
-    out.extend_from_slice(&priv_der);
-    Ok(out)
+    {
+        let mut g = store
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut sess = AdminSession::local(
+            &mut g,
+            acl,
+            format!(
+                "{}@{}",
+                ok.authenticator.cname.components_joined(),
+                String::from_utf8_lossy(ok.authenticator.crealm.as_bytes())
+            ),
+        );
+        sess.change_password(&targ, &newpass)?;
+    }
+    kpasswd_success_rep(&session, &priv_key, &ok.authenticator, &[0, 0])
 }
 
 /// Encode an RFC 3244 kpasswd request.
@@ -352,19 +390,90 @@ pub fn serve_kpasswd_udp(
     Ok(())
 }
 
+/// Serve kpasswd on TCP 464 (MIT 4-byte length prefix, then RFC 3244 body).
+///
+/// MIT 1.22.2 `kpasswd` tries TCP first.
+///
+/// # Errors
+///
+/// Bind / accept failures.
+#[allow(clippy::needless_pass_by_value)]
+pub fn serve_kpasswd_tcp(
+    store: SharedStore,
+    acl: krb5_kdc::Acl,
+    service_key: ProtocolKey,
+    listener: TcpListener,
+    shutdown: Arc<AtomicBool>,
+) -> io::Result<()> {
+    listener.set_nonblocking(true)?;
+    let replay = ReplayCache::new();
+    while !shutdown.load(Ordering::Relaxed) {
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+                match read_len_pref(&mut stream, 64 * 1024) {
+                    Ok(body) => {
+                        match handle_kpasswd_rfc3244(&store, &acl, &service_key, &replay, &body) {
+                            Ok(rep) => {
+                                let _ = write_len_pref(&mut stream, &rep);
+                            }
+                            Err(e) => tracing::error!(
+                                event = krb5_log::events::ADMIN,
+                                component = "krb5-admin",
+                                outcome = "error",
+                                error = %e,
+                            ),
+                        }
+                    }
+                    Err(e) => tracing::error!(
+                        event = krb5_log::events::ADMIN,
+                        component = "krb5-admin",
+                        outcome = "error",
+                        error = %e,
+                    ),
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
 /// kprop dump over TCP: send the KDB3 blob (4-byte length prefix).
+///
+/// Encrypts with the **existing** shared stash/master. A missing stash
+/// is an error — never mint a throwaway master the replica cannot load.
 ///
 /// # Errors
 ///
 /// Persist or I/O.
-pub fn kprop_send(store: &krb5_kdc::PrincipalStore, stream: &mut TcpStream) -> io::Result<()> {
-    let tmp = std::env::temp_dir().join(format!("kprop-send-{}", std::process::id()));
-    let db = tmp.with_extension("db");
-    let stash = tmp.with_extension("stash");
-    save_store(store, &db, &stash).map_err(io::Error::other)?;
+pub fn kprop_send(
+    store: &krb5_kdc::PrincipalStore,
+    stash: &std::path::Path,
+    stream: &mut TcpStream,
+) -> io::Result<()> {
+    if !stash.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "kprop requires an existing shared stash",
+        ));
+    }
+    let db = std::env::temp_dir().join(format!(
+        "kprop-send-{}-{}.db",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    save_store(store, &db, stash).map_err(io::Error::other)?;
     let blob = std::fs::read(&db)?;
     let _ = std::fs::remove_file(&db);
-    let _ = std::fs::remove_file(&stash);
     let len = u32::try_from(blob.len()).unwrap_or(0);
     stream.write_all(&len.to_be_bytes())?;
     stream.write_all(&blob)?;

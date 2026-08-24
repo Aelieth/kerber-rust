@@ -3,17 +3,21 @@
 //! Usage: `krb5-kadmind [--test-realm] [host:port]`
 //!
 //! Shares `KRB5_KDC_DB` / `KRB5_KDC_STASH` with `krb5-kdc`. `--test-realm`
-//! bootstraps KERBER.TEST including `kadmin/admin`.
+//! bootstraps KERBER.TEST including `kadmin/admin` and `kadmin/changepw`.
+//! TCP 749 is kadm5; UDP 464 is RFC 3244 kpasswd.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use std::net::TcpListener;
+use std::net::{TcpListener, UdpSocket};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use krb5_admin::serve_kadm5_conn;
-use krb5_kdc::{bootstrap_documented, documented_kadmin, load_store, shared_store, Acl};
+use krb5_admin::{serve_kadm5_conn, serve_kpasswd_tcp, serve_kpasswd_udp};
+use krb5_kdc::{
+    bootstrap_documented, documented_changepw, documented_kadmin, load_store, shared_store, Acl,
+};
 
 fn main() {
     let _ = tracing_subscriber::fmt()
@@ -49,6 +53,7 @@ fn main() {
 
     let realm = store.realm().to_owned();
     let kadmin = documented_kadmin();
+    let changepw = documented_changepw();
     let keys: Vec<_> = store
         .get_name(&kadmin)
         .map(|p| p.keys.iter().map(|k| k.key.clone()).collect())
@@ -57,6 +62,10 @@ fn main() {
         eprintln!("krb5-kadmind: no kadmin/admin keys");
         std::process::exit(1);
     }
+    let cpw_key = store
+        .get_name(&changepw)
+        .and_then(|p| p.best_key())
+        .map(|k| k.key.clone());
     match &store.persist_paths {
         Some((db, stash)) => println!("persist {} {}", db.display(), stash.display()),
         None => eprintln!("krb5-kadmind: no persist_paths (mutations stay in memory)"),
@@ -72,6 +81,43 @@ fn main() {
     });
     listener.set_nonblocking(true).ok();
     println!("listening {bind}");
+
+    let kpasswd_bind =
+        std::env::var("KRB5_KPASSWD_BIND").unwrap_or_else(|_| "127.0.0.1:464".into());
+    if let Some(cpw_key) = cpw_key {
+        let mut udp_ok = false;
+        let mut tcp_ok = false;
+        match UdpSocket::bind(&kpasswd_bind) {
+            Ok(sock) => {
+                let store = Arc::clone(&shared);
+                let acl_cpw = acl.clone();
+                let key = cpw_key.clone();
+                let stop = Arc::new(AtomicBool::new(false));
+                thread::spawn(move || {
+                    let _ = serve_kpasswd_udp(store, acl_cpw, key, sock, stop);
+                });
+                udp_ok = true;
+            }
+            Err(e) => eprintln!("krb5-kadmind: kpasswd udp {kpasswd_bind}: {e}"),
+        }
+        match TcpListener::bind(&kpasswd_bind) {
+            Ok(listener) => {
+                let store = Arc::clone(&shared);
+                let acl_cpw = acl.clone();
+                let stop = Arc::new(AtomicBool::new(false));
+                thread::spawn(move || {
+                    let _ = serve_kpasswd_tcp(store, acl_cpw, cpw_key, listener, stop);
+                });
+                tcp_ok = true;
+            }
+            Err(e) => eprintln!("krb5-kadmind: kpasswd tcp {kpasswd_bind}: {e}"),
+        }
+        if udp_ok || tcp_ok {
+            println!("kpasswd {kpasswd_bind}");
+        }
+    } else {
+        eprintln!("krb5-kadmind: no kadmin/changepw keys (RFC 3244 not listening)");
+    }
     loop {
         match listener.accept() {
             Ok((stream, _)) => {
