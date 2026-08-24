@@ -80,7 +80,8 @@ GSS-API is `krb5-gss` (library wrap/MIC; MIT `libgssapi_krb5` is
 out-of-process only). Production wrap emits RFC 4121 RRC=16.
 `krb5-admin` serves AP-REQ authenticated ops (version-1 framing) and
 `krb5-kadmind` (ONC RPC 2112 / AUTH_GSSAPI 300001) on 749, RFC 3244
-kpasswd on 464, and kprop dump/load. Gate: `scripts/kadmin-gate.sh`.
+kpasswd on UDP/TCP 464 (`scripts/kpasswd-gate.sh`), and kprop
+dump/load (shared stash). Gate: `scripts/kadmin-gate.sh`.
 Weak etypes (16/23/25/26) are known but refused unless
 `allow_weak_crypto`.
 

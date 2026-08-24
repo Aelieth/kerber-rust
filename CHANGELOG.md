@@ -25,7 +25,12 @@ this project uses semantic versioning once a crate is published.
   `krb5-kadmind` ONC RPC program 2112 / AUTH_GSSAPI flavor 300001:
   MIT 1.22.2 `kadmin` `addprinc`/`cpw` then `kinit` is gated by
   `scripts/kadmin-gate.sh`. Version-1 AP-REQ framing remains for
-  library tests. RFC 3244 kpasswd on 464; kprop dump over TCP 754.
+  library tests. RFC 3244 kpasswd on UDP/TCP 464 (`kadmin/changepw`):
+  MIT 1.22.2 `kpasswd` then `kinit` is gated by
+  `scripts/kpasswd-gate.sh`. KRB-PRIV uses the authenticator subkey
+  when present; success replies include AP-REP. kprop dump encrypts
+  with the existing shared stash (never a throwaway master) and is
+  proven over a real TCP socket (`kprop_tcp_replica_issues_as_with_shared_stash`).
 - RFC 8636 SHA-256 PKINIT KDF on the KDC issue path when AuthPack
   `supportedKDFs` includes `id-pkinit-kdf-ah-sha256`: `kdf` is set in
   `DHRepInfo` and the reply key is `SHA-256(counter||Z||OtherInfo)`.

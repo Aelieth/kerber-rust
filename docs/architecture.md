@@ -51,9 +51,9 @@ kadmind/kpasswd mutations reach `save_store`. Default bind is
 `127.0.0.1` (not `0.0.0.0`). After a privileged bind the daemon drops
 to `KRB5_KDC_USER` (default `nobody`). TCP workers are capped
 (`MAX_TCP_WORKERS`); SIGTERM/SIGINT stop `serve`. `--test-realm`
-bootstraps documented principals (including `kadmin/admin`); with
-`KRB5_KDC_DB` + stash the test realm is saved so a separate kadmind
-process can reload it.
+bootstraps documented principals (including `kadmin/admin` and
+`kadmin/changepw`); with `KRB5_KDC_DB` + stash the test realm is saved
+so a separate kadmind process can reload it.
 
 **`krb5-gss`** provides RFC 4121 wrap/MIC (MIT `libgssapi_krb5` is
 out-of-process; `scripts/gss-gate.sh`). The acceptor binds
@@ -64,9 +64,12 @@ size). SSPI peer proof remains environment-dependent.
 
 **`krb5-admin`** is an ACL-enforced session plus listeners: version-1
 AP-REQ framing (library tests) and `krb5-kadmind` ONC RPC program 2112
-/ AUTH_GSSAPI flavor 300001 on TCP 749, RFC 3244 kpasswd on 464, kprop
-dump/load on 754. MIT 1.22.2 `kadmin` `addprinc`/`cpw` is gated by
-`scripts/kadmin-gate.sh`.
+/ AUTH_GSSAPI flavor 300001 on TCP 749, RFC 3244 kpasswd on UDP/TCP
+464 (`kadmin/changepw`, MIT `kpasswd` gated by
+`scripts/kpasswd-gate.sh`), kprop dump/load on 754 (shared stash
+master; replica `issue_as` in library tests). MIT 1.22.2 `kadmin`
+`addprinc`/`cpw` is gated by `scripts/kadmin-gate.sh`. The MIT `kprop`
+client is not gated.
 
 **`krb5-config`** parses `krb5.conf` / `kdc.conf` and DNS SRV. The KDC
 applies `kdc.conf` ticket policy from `KRB5_KDC_PROFILE` /

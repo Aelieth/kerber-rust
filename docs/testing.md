@@ -98,6 +98,9 @@ Era II gates (honest unavailability, never a fabricated pass):
 - `scripts/kadmin-gate.sh` — MIT `kadmin` `addprinc`/`cpw` against
   `krb5-kadmind` on 749, then `kinit extra@KERBER.TEST`. AUTH_GSSAPI
   flavor 300001. Run twice.
+- `scripts/kpasswd-gate.sh` — MIT `kpasswd` against kadmind UDP/TCP
+  464 (`kadmin/changepw`), then `kinit` with the new password; old
+  password must fail; second `kpasswd` + `kinit`. Run twice.
 - `scripts/prod-gate.sh` — Rust KDC on `127.0.0.1:18888`, `krb5-kinit`
   AS+TGS, structured-log analysis (`kdc.issue` + `correlation_id`),
   PDU pcap under `$KERBER_SCRATCH/prod-gate/` (loopback CAP_NET_RAW
