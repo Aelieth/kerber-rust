@@ -71,6 +71,8 @@ jobs:
         run: ./scripts/kadmin-gate.sh
       - name: kpasswd-gate (MIT kpasswd vs kadmind 464)
         run: ./scripts/kpasswd-gate.sh
+      - name: kdb-dump-gate (MIT dump/load + kinit both directions)
+        run: ./scripts/kdb-dump-gate.sh
       - name: prod-gate (kinit + log analysis + pcap)
         run: ./scripts/prod-gate.sh
       - name: cross-realm-gate
