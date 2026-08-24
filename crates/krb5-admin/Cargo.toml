@@ -26,5 +26,9 @@ tracing-subscriber.workspace = true
 name = "krb5-kadmind"
 path = "src/bin/krb5-kadmind.rs"
 
+[[bin]]
+name = "krb5-kpropd"
+path = "src/bin/krb5-kpropd.rs"
+
 [lints]
 workspace = true

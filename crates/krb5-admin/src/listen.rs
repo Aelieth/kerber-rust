@@ -444,51 +444,35 @@ pub fn serve_kpasswd_tcp(
     Ok(())
 }
 
-/// kprop dump over TCP: send the KDB3 blob (4-byte length prefix).
+/// kprop dump over TCP: send MIT dump version-7 text (4-byte length prefix).
 ///
-/// Encrypts with the **existing** shared stash/master. A missing stash
-/// is an error — never mint a throwaway master the replica cannot load.
+/// The body is `kdb5_util load_dump version 7`, not a KDB3 blob. MIT-wire
+/// sendauth lives in [`crate::kprop`].
 ///
 /// # Errors
 ///
-/// Persist or I/O.
+/// Dump or I/O.
 pub fn kprop_send(
     store: &krb5_kdc::PrincipalStore,
-    stash: &std::path::Path,
+    master_password: &[u8],
     stream: &mut TcpStream,
 ) -> io::Result<()> {
-    if !stash.exists() {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "kprop requires an existing shared stash",
-        ));
-    }
-    let db = std::env::temp_dir().join(format!(
-        "kprop-send-{}-{}.db",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    save_store(store, &db, stash).map_err(io::Error::other)?;
-    let blob = std::fs::read(&db)?;
-    let _ = std::fs::remove_file(&db);
+    let blob = crate::kprop::kprop_dump_bytes(store, master_password)
+        .map_err(|e| io::Error::other(e.to_string()))?;
     let len = u32::try_from(blob.len()).unwrap_or(0);
     stream.write_all(&len.to_be_bytes())?;
     stream.write_all(&blob)?;
     stream.flush()
 }
 
-/// Receive a kprop dump and load it.
+/// Receive a length-prefixed dump v7 body and load it.
 ///
 /// # Errors
 ///
-/// I/O or persist.
+/// I/O or dump parse/crypto.
 pub fn kprop_recv(
     stream: &mut TcpStream,
-    db: &std::path::Path,
-    stash: &std::path::Path,
+    master_password: &[u8],
 ) -> Result<krb5_kdc::PrincipalStore, Error> {
     let mut hdr = [0u8; 4];
     stream
@@ -499,9 +483,5 @@ pub fn kprop_recv(
     stream
         .read_exact(&mut blob)
         .map_err(|e| Error::Inner(e.to_string()))?;
-    std::fs::write(db, &blob).map_err(|e| Error::Inner(e.to_string()))?;
-    if !stash.exists() {
-        // replica must share stash/master key; caller supplies it
-    }
-    krb5_kdc::load_store(db, stash).map_err(|e| Error::Inner(e.to_string()))
+    crate::kprop::kprop_load_bytes(&blob, master_password)
 }
