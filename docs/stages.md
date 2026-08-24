@@ -11,7 +11,7 @@ logs. Unit tests alone do not promote a stage.
 | 3 | Protocol library + minimal client (AS/TGS), ccache/keytab, first live MIT production gate | **In tree** (`krb5-protocol`, `krb5-client`; gate: `scripts/client-gate.sh`) |
 | 4 | Higher-level client, GSS-API/SPNEGO (RFC 4121) | **In tree** (`krb5-gss` wrap/unwrap/MIC, SPNEGO framing; MIT GSS is out-of-process) |
 | 5 | KDC core (AS+TGS) + database backend, bidirectional interop | **In tree** (in-memory + optional persist/stash; ACL; AP-REQ; gates: `kdc-gate.sh`, `bidirectional-gate.sh`). Not a full MIT KDB. |
-| 6 | Admin tools, plugins, propagation, remaining parity | **In tree** (`krb5-admin` ACL-enforced session, ktadd of all kvnos, kpasswd with kvno rotation, kprop dump/load, inter-realm krbtgt + transited). Kadmind version-1 framing + ONC RPC 2112 / RPCSEC_GSS; MIT `kadmin` AUTH_GSSAPI is not the oracle yet. |
+| 6 | Admin tools, plugins, propagation, remaining parity | **In tree** (`krb5-admin` ACL-enforced session, ktadd of all kvnos, kpasswd with kvno rotation, kprop dump/load, inter-realm krbtgt + transited). Kadmind AUTH_GSSAPI 300001 gated by MIT `kadmin` `addprinc`/`cpw`. |
 | 7–8 | Hardening, stress, chaos, adversarial, observability, final gates | **Partial → Era II.** MIT-oracle gates exist for AS/TGS, FAST TGS `kvno`, GSS wrap, PKINIT `kinit`, SPAKE `kinit` (`pa_type` 151 / group 2), two-realm `kvno`, and SHA-2 `kinit`/`kvno`. Golden MIT DER is byte-diffed; published crypto KATs; 8 cargo-fuzz targets; panic-deny lints on input-facing crates. AD PAC NDR is golden-gated. Long soak and live Heimdal/AD/SSPI are the remaining Era II work. |
 
 Stage 2 production-gate of a *Rust client* is Stage 3. This repository
@@ -31,11 +31,11 @@ to full 1.0 parity is tracked in `working/plan-roadmap-adprod-*.md`:
   remain in-tree. Live Windows `kinit` needs `AD_KBRUSER_PASSWORD` (DC
   `10.10.38.38` is reachable; isolation is `~/adlab` only).
 - **Track B — Operational parity:** serving store is `RwLock` so kadmind
-  mutations persist; kadmind version-1 AP-REQ framing plus `krb5-kadmind`
-  ONC RPC 2112 / RPCSEC_GSS flavor 6 (MIT `kadmin` uses AUTH_GSSAPI
-  300001; live `addprinc` not yet); RFC 3244 kpasswd; kprop dump/load;
-  RFC 8636 SHA-256 PKINIT KDF helper exists, KDC reply key stays
-  `octetstring2key`.
+  mutations persist; KDC reloads the db on mtime/length change.
+  `krb5-kadmind` AUTH_GSSAPI 300001: MIT `kadmin` `addprinc`/`cpw` then
+  `kinit extra@KERBER.TEST` (`scripts/kadmin-gate.sh`). RFC 3244 kpasswd;
+  kprop dump/load; RFC 8636 SHA-256 PKINIT KDF helper exists, KDC reply
+  key stays `octetstring2key`.
 - **Track C — Production verification:** `scripts/prod-gate.sh` archives
   structured KDC logs; bounded concurrent `handle_request` stress; `cargo
   deny` + `cargo geiger` when present. 1.0 tag is not cut.

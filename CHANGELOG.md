@@ -19,11 +19,13 @@ this project uses semantic versioning once a crate is published.
   static `0x18`).
 - GSS wrap send-side RRC=16 (RFC 4121).
 - Runtime-mutable `SharedStore` (`RwLock`) so kadmind/kpasswd mutations
-  reach stash/db. Kadmind version-1 AP-REQ framing (library tests) plus
-  `krb5-kadmind` ONC RPC program 2112 / RPCSEC_GSS flavor 6. MIT 1.22.2
-  `kadmin` uses AUTH_GSSAPI flavor 300001, so the live kadmin-gate does
-  not yet complete `addprinc`. RFC 3244 kpasswd on 464; kprop dump over
-  TCP 754.
+  reach stash/db. The KDC reloads the db when mtime/length changes.
+  Privilege drop is skipped when a shared persist db is configured
+  (kadmind writes 0600 files the dropped user could not re-read).
+  `krb5-kadmind` ONC RPC program 2112 / AUTH_GSSAPI flavor 300001:
+  MIT 1.22.2 `kadmin` `addprinc`/`cpw` then `kinit` is gated by
+  `scripts/kadmin-gate.sh`. Version-1 AP-REQ framing remains for
+  library tests. RFC 3244 kpasswd on 464; kprop dump over TCP 754.
 - RFC 8636 SHA-256 PKINIT KDF helper (`pkinit_kdf_agile`) and AuthPack
   `supportedKDFs` detector. The KDC reply key remains RFC 4556
   `octetstring2key` (MIT 1.22.2 PKINIT still uses SHA-1 unless `kdfId`
@@ -89,8 +91,8 @@ this project uses semantic versioning once a crate is published.
 - KRB-SAFE/PRIV/CRED unwrap consults `ReplayCache` and a 300s timestamp
   window; SAFE/PRIV builders increment `seq_number`.
 - Docs: MIT `kinit` PKINIT, SPAKE (`pa_type` 151), FAST TGS `kvno`, and
-  two-realm `kvno` are gated; AD PAC NDR is golden-gated; kadmind
-  RPCSEC_GSS exists, MIT AUTH_GSSAPI `kadmin` is not the oracle yet.
+  two-realm `kvno` are gated; AD PAC NDR is golden-gated; MIT `kadmin`
+  AUTH_GSSAPI `addprinc`/`cpw` is gated (`scripts/kadmin-gate.sh`).
   `KRB5_CONFIG` / `KRB5_KDC_PROFILE` / `/etc/krb5.conf` /
   `/etc/krb5kdc/kdc.conf` are consumed when present.
 - `pkinit-gate.sh` fails when MIT PKINIT interop fails; `cargo-deny`

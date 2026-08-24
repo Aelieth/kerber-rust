@@ -91,7 +91,8 @@ Era II gates (honest unavailability, never a fabricated pass):
 - `scripts/ad-windows-gate.sh` — isolated `kinit`/`kvno` against
   `10.10.38.38` (`~/adlab` only; needs `AD_KBRUSER_PASSWORD`).
 - `scripts/kadmin-gate.sh` — MIT `kadmin` `addprinc`/`cpw` against
-  `krb5-kadmind` on 749. Currently fails: MIT uses AUTH_GSSAPI 300001.
+  `krb5-kadmind` on 749, then `kinit extra@KERBER.TEST`. AUTH_GSSAPI
+  flavor 300001. Run twice.
 - `scripts/prod-gate.sh` — Rust KDC on `127.0.0.1:18888`, structured
   logs archived under `$KERBER_SCRATCH/prod-gate/`.
 

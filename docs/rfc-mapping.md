@@ -17,7 +17,7 @@ primary implementation oracle. Existing Rust crates (`rasn-kerberos`,
 | [3244](https://www.rfc-editor.org/rfc/rfc3244) | kpasswd | UDP 464: AP-REQ + KRB-PRIV `ChangePasswdData`. `PrincipalStore::set_password` bumps kvno and keeps prior keys; ACL `c` plus self-service. |
 | [8636](https://www.rfc-editor.org/rfc/rfc8636) | PKINIT KDF agility | `pkinit_kdf_agile` implements `SHA-256(counter\|\|Z\|\|OtherInfo)`. AuthPack `supportedKDFs` detector for `id-pkinit-kdf-ah-sha256`. Not selected on the KDC issue path. |
 | MS-PAC / MS-RPCE | PAC | NDR32 `KERB_VALIDATION_INFO` in field-encounter referent order. Golden `tests/traces/pac-kbruser.ndr`. Signatures 6, 7, 16 (`PAC_TICKET_CHECKSUM`), 19 (`PAC_FULL_CHECKSUM`); `ulType` 12 is UPN/DNS. Server checksum usage 17. |
-| ONC RPC / kadm5 | kadmind 749 | Version-1 AP-REQ framing (library). `krb5-kadmind`: program 2112 vers 2, RPCSEC_GSS flavor 6. MIT 1.22.2 `kadmin` uses AUTH_GSSAPI flavor 300001 — live `addprinc` is not yet gated. |
+| ONC RPC / kadm5 | kadmind 749 | Version-1 AP-REQ framing (library). `krb5-kadmind`: program 2112 vers 2, AUTH_GSSAPI flavor 300001 (`init_res.signed_isn`, wrap_data). MIT 1.22.2 `kadmin` `addprinc`/`cpw` gated by `scripts/kadmin-gate.sh`. |
 | [4120] transited / referrals | Cross-realm | `krbtgt/FOREIGN` keys with an explicit shared key (`KRB5_TEST_INTERREALM_KEY`); TGS referral tickets; comma-separated transited (tr-type 1, not X.500 compress); AS `WRONG_REALM`. `scripts/cross-realm-gate.sh` MIT `kvno host/svc.other.test@OTHER.TEST`. |
 | [4120] §7.2.1 / UDP-TCP 88 | KDC protocol | Harness and `krb5-kdc` listen on 127.0.0.1:88 (fallback 8888). |
 

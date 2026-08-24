@@ -64,9 +64,9 @@ size). SSPI peer proof remains environment-dependent.
 
 **`krb5-admin`** is an ACL-enforced session plus listeners: version-1
 AP-REQ framing (library tests) and `krb5-kadmind` ONC RPC program 2112
-/ RPCSEC_GSS flavor 6 on TCP 749, RFC 3244 kpasswd on 464, kprop
-dump/load on 754. MIT 1.22.2 `kadmin` uses AUTH_GSSAPI flavor 300001
-and is not yet the live oracle.
+/ AUTH_GSSAPI flavor 300001 on TCP 749, RFC 3244 kpasswd on 464, kprop
+dump/load on 754. MIT 1.22.2 `kadmin` `addprinc`/`cpw` is gated by
+`scripts/kadmin-gate.sh`.
 
 **`krb5-config`** parses `krb5.conf` / `kdc.conf` and DNS SRV. The KDC
 applies `kdc.conf` ticket policy from `KRB5_KDC_PROFILE` /
