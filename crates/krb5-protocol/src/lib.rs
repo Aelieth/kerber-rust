@@ -25,8 +25,8 @@ mod transport;
 
 pub use ap_rep::{build_ap_rep, verify_ap_rep};
 pub use ap_req::{
-    build_ap_req, build_ap_req_opts, build_ap_req_with_cksum, verify_ap_req, verify_ap_req_ex,
-    ApVerifyOk, ApVerifyParams, DEFAULT_SKEW,
+    build_ap_req, build_ap_req_mutual_seq, build_ap_req_opts, build_ap_req_with_cksum,
+    verify_ap_req, verify_ap_req_ex, ApVerifyOk, ApVerifyParams, DEFAULT_SKEW,
 };
 pub use as_ex::{as_exchange, AsOutcome, AsRequest};
 pub use builders::{
@@ -43,8 +43,9 @@ pub use preauth::{
 };
 pub use replay::{ReplayCache, ReplayKey};
 pub use safe_priv::{
-    build_krb_cred, build_krb_priv, build_krb_priv_with_seq, build_krb_safe, unwrap_krb_cred,
-    unwrap_krb_priv, unwrap_krb_priv_ex, unwrap_krb_safe,
+    build_krb_cred, build_krb_priv, build_krb_priv_chained, build_krb_priv_with_seq,
+    build_krb_safe, build_krb_safe_ex, unwrap_krb_cred, unwrap_krb_priv, unwrap_krb_priv_chained,
+    unwrap_krb_priv_ex, unwrap_krb_safe, unwrap_krb_safe_ex,
 };
 pub use secret_file::write_secret_file;
 pub use tgs::{referral_hop_realm, tgs_exchange, TgsOutcome};

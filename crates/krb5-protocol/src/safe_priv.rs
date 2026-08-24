@@ -3,7 +3,10 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{checksum, decrypt, encrypt, verify_checksum, KeyUsage, ProtocolKey};
+use krb5_crypto::{
+    checksum, decrypt, decrypt_with_state, encrypt, encrypt_with_state, verify_checksum,
+    CipherState, KeyUsage, ProtocolKey,
+};
 use krb5_types::{
     ku, EncKrbCredPart, EncKrbPrivPart, EncryptedData, HostAddress, KerberosTime, KrbCred,
     KrbCredInfo, KrbPriv, KrbSafe, KrbSafeBody, Microseconds, OctetString, Ticket,
@@ -37,14 +40,38 @@ fn local_addr() -> HostAddress {
 ///
 /// Crypto or DER failures.
 pub fn build_krb_safe(session: &ProtocolKey, user_data: &[u8]) -> Result<KrbSafe, Error> {
-    let now = KerberosTime::now();
+    build_krb_safe_ex(session, user_data, Some(take_seq(&NEXT_SAFE_SEQ)), true)
+}
+
+/// Build a KRB-SAFE with explicit sequence and optional timestamp.
+///
+/// MIT `kprop` sets `KRB5_AUTH_CONTEXT_DO_SEQUENCE` only (no `DO_TIME`).
+///
+/// # Errors
+///
+/// Crypto or DER failures.
+pub fn build_krb_safe_ex(
+    session: &ProtocolKey,
+    user_data: &[u8],
+    seq_number: Option<u32>,
+    include_time: bool,
+) -> Result<KrbSafe, Error> {
+    let (timestamp, usec) = if include_time {
+        let now = KerberosTime::now();
+        (
+            Some(now.clone()),
+            Some(Microseconds::from_subsec_micros(
+                now.0.timestamp_subsec_micros(),
+            )),
+        )
+    } else {
+        (None, None)
+    };
     let body = KrbSafeBody {
         user_data: user_data.to_vec().into(),
-        timestamp: Some(now.clone()),
-        usec: Some(Microseconds::from_subsec_micros(
-            now.0.timestamp_subsec_micros(),
-        )),
-        seq_number: Some(take_seq(&NEXT_SAFE_SEQ)),
+        timestamp,
+        usec,
+        seq_number,
         s_address: local_addr(),
         r_address: None,
     };
@@ -72,6 +99,21 @@ pub fn unwrap_krb_safe(
     raw: &[u8],
     replay: &ReplayCache,
 ) -> Result<Vec<u8>, Error> {
+    unwrap_krb_safe_ex(session, raw, replay, true, true)
+}
+
+/// Verify a KRB-SAFE.
+///
+/// # Errors
+///
+/// Integrity, window, replay, or DER failures.
+pub fn unwrap_krb_safe_ex(
+    session: &ProtocolKey,
+    raw: &[u8],
+    replay: &ReplayCache,
+    require_seq: bool,
+    require_time: bool,
+) -> Result<Vec<u8>, Error> {
     let msg: KrbSafe = decode(raw)?;
     let body_der = encode(&msg.safe_body)?;
     let usage = KeyUsage::new(ku::KRB_SAFE_CKSUM)?;
@@ -82,7 +124,7 @@ pub fn unwrap_krb_safe(
         msg.safe_body.timestamp.as_ref(),
         msg.safe_body.usec.as_ref(),
         msg.safe_body.seq_number,
-        FreshPolicy::SeqAndTime,
+        fresh_policy(require_seq, require_time),
         raw,
     )?;
     Ok(msg.safe_body.user_data.to_vec())
@@ -96,6 +138,17 @@ enum FreshPolicy {
     TimeOnly,
     /// MIT kpasswd: seq 0 and missing timestamp are legal.
     HashOnly,
+    /// MIT `kprop` (`DO_SEQUENCE` only): seq required, timestamp optional.
+    SeqOnly,
+}
+
+fn fresh_policy(require_seq: bool, require_time: bool) -> FreshPolicy {
+    match (require_seq, require_time) {
+        (true, true) => FreshPolicy::SeqAndTime,
+        (true, false) => FreshPolicy::SeqOnly,
+        (false, true) => FreshPolicy::TimeOnly,
+        (false, false) => FreshPolicy::HashOnly,
+    }
 }
 
 fn accept_fresh(
@@ -107,8 +160,8 @@ fn accept_fresh(
     policy: FreshPolicy,
     raw: &[u8],
 ) -> Result<(), Error> {
-    let require_time = !matches!(policy, FreshPolicy::HashOnly);
-    let require_seq = matches!(policy, FreshPolicy::SeqAndTime);
+    let require_time = matches!(policy, FreshPolicy::SeqAndTime | FreshPolicy::TimeOnly);
+    let require_seq = matches!(policy, FreshPolicy::SeqAndTime | FreshPolicy::SeqOnly);
     if require_time && ts.is_none() {
         return Err(Error::ReplyMismatch(format!("{kind} missing timestamp")));
     }
@@ -121,7 +174,10 @@ fn accept_fresh(
     }
     if require_seq {
         match seq {
-            None | Some(0) => {
+            None => {
+                return Err(Error::ReplyMismatch(format!("{kind} seq")));
+            }
+            Some(0) if matches!(policy, FreshPolicy::SeqAndTime) => {
                 return Err(Error::ReplyMismatch(format!("{kind} seq")));
             }
             Some(_) => {}
@@ -163,20 +219,44 @@ pub fn build_krb_priv_with_seq(
     user_data: &[u8],
     seq_number: Option<u32>,
 ) -> Result<KrbPriv, Error> {
-    let now = KerberosTime::now();
+    let mut state = CipherState::initial();
+    build_krb_priv_chained(session, user_data, seq_number, true, &mut state)
+}
+
+/// Build a KRB-PRIV with cipher-state chaining (MIT `auth_con_initivector`).
+///
+/// # Errors
+///
+/// Crypto or DER failures.
+pub fn build_krb_priv_chained(
+    session: &ProtocolKey,
+    user_data: &[u8],
+    seq_number: Option<u32>,
+    include_time: bool,
+    state: &mut CipherState,
+) -> Result<KrbPriv, Error> {
+    let (timestamp, usec) = if include_time {
+        let now = KerberosTime::now();
+        (
+            Some(now.clone()),
+            Some(Microseconds::from_subsec_micros(
+                now.0.timestamp_subsec_micros(),
+            )),
+        )
+    } else {
+        (None, None)
+    };
     let part = EncKrbPrivPart {
         user_data: user_data.to_vec().into(),
-        timestamp: Some(now.clone()),
-        usec: Some(Microseconds::from_subsec_micros(
-            now.0.timestamp_subsec_micros(),
-        )),
+        timestamp,
+        usec,
         seq_number,
         s_address: local_addr(),
         r_address: None,
     };
     let der = encode(&part)?;
     let usage = KeyUsage::new(ku::KRB_PRIV_ENC_PART)?;
-    let cipher = encrypt(session, usage, &der)?;
+    let cipher = encrypt_with_state(session, usage, state, &der)?;
     Ok(KrbPriv {
         pvno: KrbPriv::PVNO,
         msg_type: KrbPriv::MSG_TYPE,
@@ -219,9 +299,26 @@ pub fn unwrap_krb_priv_ex(
     require_seq: bool,
     require_time: bool,
 ) -> Result<Vec<u8>, Error> {
+    let mut state = CipherState::initial();
+    unwrap_krb_priv_chained(session, raw, replay, require_seq, require_time, &mut state)
+}
+
+/// Decrypt a KRB-PRIV using cipher-state chaining (MIT kprop `initivector`).
+///
+/// # Errors
+///
+/// Crypto, window, replay, or DER failures.
+pub fn unwrap_krb_priv_chained(
+    session: &ProtocolKey,
+    raw: &[u8],
+    replay: &ReplayCache,
+    require_seq: bool,
+    require_time: bool,
+    state: &mut CipherState,
+) -> Result<Vec<u8>, Error> {
     let msg: KrbPriv = decode(raw)?;
     let usage = KeyUsage::new(ku::KRB_PRIV_ENC_PART)?;
-    let plain = decrypt(session, usage, msg.enc_part.cipher.as_ref())?;
+    let plain = decrypt_with_state(session, usage, state, msg.enc_part.cipher.as_ref())?;
     let part: EncKrbPrivPart = decode(&plain)?;
     accept_fresh(
         replay,
@@ -229,11 +326,7 @@ pub fn unwrap_krb_priv_ex(
         part.timestamp.as_ref(),
         part.usec.as_ref(),
         part.seq_number,
-        if require_seq || require_time {
-            FreshPolicy::SeqAndTime
-        } else {
-            FreshPolicy::HashOnly
-        },
+        fresh_policy(require_seq, require_time),
         raw,
     )?;
     Ok(part.user_data.to_vec())

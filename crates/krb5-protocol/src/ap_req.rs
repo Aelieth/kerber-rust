@@ -91,6 +91,49 @@ pub fn build_ap_req_opts(
     build_ap_req_with_cksum(ticket, session_key, crealm, cname, ap_options, cksum, None)
 }
 
+/// Build an AP-REQ with mutual auth and an explicit authenticator sequence.
+///
+/// MIT `kprop` `sendauth` uses `AP_OPTS_MUTUAL_REQUIRED` and `DO_SEQUENCE`.
+///
+/// # Errors
+///
+/// Returns crypto or DER failures.
+pub fn build_ap_req_mutual_seq(
+    ticket: Ticket,
+    session_key: &ProtocolKey,
+    crealm: &Realm,
+    cname: &PrincipalName,
+    seq_number: u32,
+) -> Result<ApReq, Error> {
+    let now = KerberosTime::now();
+    let usec = krb5_types::Microseconds::from_subsec_micros(now.0.timestamp_subsec_micros());
+    let authenticator = Authenticator {
+        authenticator_vno: Authenticator::VNO,
+        crealm: crealm.clone(),
+        cname: cname.clone(),
+        cksum: None,
+        cusec: usec,
+        ctime: now,
+        subkey: None,
+        seq_number: Some(seq_number),
+        authorization_data: None,
+    };
+    let der = encode(&authenticator)?;
+    let usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)?;
+    let cipher = encrypt(session_key, usage, &der)?;
+    Ok(ApReq {
+        pvno: ApReq::PVNO,
+        msg_type: ApReq::MSG_TYPE,
+        ap_options: ApOptions::mutual_required(),
+        ticket,
+        authenticator: EncryptedData {
+            etype: session_key.etype().to_iana(),
+            kvno: None,
+            cipher: cipher.into(),
+        },
+    })
+}
+
 /// Build an AP-REQ with a caller-supplied authenticator checksum (GSS 0x8003).
 ///
 /// # Errors
