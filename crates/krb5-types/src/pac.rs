@@ -1,21 +1,41 @@
 //! AD-WIN2K-PAC parse, verify, and sign (MS-PAC).
+//!
+//! `PAC_LOGON_INFO` is MS-RPCE Type-Serialization v1 / NDR32
+//! `KERB_VALIDATION_INFO`. Pointer referents are deferred in
+//! field-encounter order (not dumped after the whole struct as a bag).
+
+use std::fmt::Write as _;
 
 use subtle::ConstantTimeEq;
 
-/// PAC buffer type: logon info.
+/// PAC buffer type: logon info (`KERB_VALIDATION_INFO`).
 pub const PAC_LOGON_INFO: u32 = 1;
+/// PAC buffer type: credentials.
+pub const PAC_CREDENTIAL_INFO: u32 = 2;
 /// PAC buffer type: server checksum.
 pub const PAC_SERVER_CHECKSUM: u32 = 6;
 /// PAC buffer type: KDC / privilege-server checksum.
 pub const PAC_PRIVSVR_CHECKSUM: u32 = 7;
 /// PAC buffer type: client name and ticket info.
 pub const PAC_CLIENT_INFO: u32 = 10;
-/// PAC buffer type: UPN/DNS info.
-pub const PAC_UPN_DNS_INFO: u32 = 16;
+/// PAC buffer type: constrained delegation info.
+pub const PAC_DELEGATION_INFO: u32 = 11;
+/// PAC buffer type: UPN/DNS info (MS-PAC `ulType` 12, not 16).
+pub const PAC_UPN_DNS_INFO: u32 = 12;
 /// PAC buffer type: client claims.
-pub const PAC_CLIENT_CLAIMS: u32 = 19;
+pub const PAC_CLIENT_CLAIMS: u32 = 13;
 /// PAC buffer type: device info.
-pub const PAC_DEVICE_INFO: u32 = 20;
+pub const PAC_DEVICE_INFO: u32 = 14;
+/// PAC buffer type: device claims.
+pub const PAC_DEVICE_CLAIMS: u32 = 15;
+/// PAC buffer type: ticket checksum (CVE-2020-17049). **Not** UPN/DNS.
+pub const PAC_TICKET_CHECKSUM: u32 = 16;
+/// PAC buffer type: PAC attributes.
+pub const PAC_ATTRIBUTES_INFO: u32 = 17;
+/// PAC buffer type: requester SID.
+pub const PAC_REQUESTER_SID: u32 = 18;
+/// PAC buffer type: extended KDC / full PAC checksum (CVE-2022-37967).
+pub const PAC_FULL_CHECKSUM: u32 = 19;
 
 /// Signature type HMAC-MD5 (RC4). RFC 4757 cksumtype -138.
 pub const CKSUM_HMAC_MD5: i32 = -138;
@@ -23,6 +43,19 @@ pub const CKSUM_HMAC_MD5: i32 = -138;
 pub const CKSUM_HMAC_SHA1_96_AES128: i32 = 15;
 /// Signature type HMAC-SHA1-96-AES256.
 pub const CKSUM_HMAC_SHA1_96_AES256: i32 = 16;
+
+/// SE_GROUP_MANDATORY | SE_GROUP_ENABLED_BY_DEFAULT | SE_GROUP_ENABLED.
+pub const SE_GROUP_DEFAULT: u32 = 7;
+/// `USER_NORMAL_ACCOUNT`.
+pub const USER_NORMAL_ACCOUNT: u32 = 0x10;
+/// `LOGON_EXTRA_SIDS`.
+pub const LOGON_EXTRA_SIDS: u32 = 0x20;
+/// NDR unique-pointer IDs start here and increment by 4 (Windows).
+const NDR_PTR_BASE: u32 = 0x0002_0000;
+/// FILETIME "never" (AD logoff / kickoff / must-change).
+const NT_TIME_NEVER: u64 = 0x7fff_ffff_ffff_ffff;
+/// NT time of Unix epoch.
+const NT_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
 
 /// One PAC info buffer.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -139,14 +172,33 @@ impl Pac {
         out
     }
 
-    /// Zero the signature fields in server and KDC checksum buffers, then
-    /// return the bytes used as HMAC input (the whole PAC with zeroed
-    /// signatures).
+    /// First buffer of `kind`.
+    #[must_use]
+    pub fn buffer(&self, kind: u32) -> Option<&[u8]> {
+        self.buffers
+            .iter()
+            .find(|b| b.kind == kind)
+            .map(|b| b.data.as_slice())
+    }
+
+    /// Zero server (6) and KDC (7) signature payloads. Ticket (16) and full
+    /// (19) checksums stay populated — that is the AD server-checksum region.
     #[must_use]
     pub fn bytes_for_checksum(&self) -> Vec<u8> {
+        self.bytes_zeroing(&[PAC_SERVER_CHECKSUM, PAC_PRIVSVR_CHECKSUM])
+    }
+
+    /// Zero server, KDC, and full-PAC (19) signatures. Ticket checksum (16)
+    /// stays filled. MS-PAC extended-KDC hash region.
+    #[must_use]
+    pub fn bytes_for_full_checksum(&self) -> Vec<u8> {
+        self.bytes_zeroing(&[PAC_SERVER_CHECKSUM, PAC_PRIVSVR_CHECKSUM, PAC_FULL_CHECKSUM])
+    }
+
+    fn bytes_zeroing(&self, kinds: &[u32]) -> Vec<u8> {
         let mut clone = self.clone();
         for b in &mut clone.buffers {
-            if b.kind == PAC_SERVER_CHECKSUM || b.kind == PAC_PRIVSVR_CHECKSUM {
+            if kinds.contains(&b.kind) {
                 zero_signature_payload(&mut b.data);
             }
         }
@@ -156,19 +208,25 @@ impl Pac {
     /// Server checksum buffer payload, if present.
     #[must_use]
     pub fn server_checksum(&self) -> Option<&[u8]> {
-        self.buffers
-            .iter()
-            .find(|b| b.kind == PAC_SERVER_CHECKSUM)
-            .map(|b| b.data.as_slice())
+        self.buffer(PAC_SERVER_CHECKSUM)
     }
 
     /// KDC checksum buffer payload, if present.
     #[must_use]
     pub fn kdc_checksum(&self) -> Option<&[u8]> {
-        self.buffers
-            .iter()
-            .find(|b| b.kind == PAC_PRIVSVR_CHECKSUM)
-            .map(|b| b.data.as_slice())
+        self.buffer(PAC_PRIVSVR_CHECKSUM)
+    }
+
+    /// Ticket checksum (type 16) payload, if present.
+    #[must_use]
+    pub fn ticket_checksum(&self) -> Option<&[u8]> {
+        self.buffer(PAC_TICKET_CHECKSUM)
+    }
+
+    /// Full PAC checksum (type 19) payload, if present.
+    #[must_use]
+    pub fn full_checksum(&self) -> Option<&[u8]> {
+        self.buffer(PAC_FULL_CHECKSUM)
     }
 }
 
@@ -181,17 +239,23 @@ fn zero_signature_payload(data: &mut [u8]) {
     }
 }
 
-/// Verify the server checksum (HMAC-SHA1 over the PAC with signatures zeroed).
-///
-/// The `mac` function is the keyed checksum of the service (typically
-/// `krb5_crypto::checksum` with the service ticket session or long-term key).
+/// Verify the server checksum (HMAC over the PAC with signatures 6/7 zeroed).
 ///
 /// # Errors
 ///
 /// Returns [`PacError::Integrity`] on mismatch, [`PacError::MissingBuffer`]
 /// when the server checksum is absent.
 pub fn verify_server_checksum(pac: &Pac, expected: &[u8]) -> Result<(), PacError> {
-    let Some(got) = pac.server_checksum() else {
+    verify_sig_buf(pac.server_checksum(), expected)
+}
+
+/// Verify a signature buffer (`SignatureType` + MAC) against `expected` MAC.
+///
+/// # Errors
+///
+/// Missing buffer or mismatch.
+pub fn verify_sig_buf(got: Option<&[u8]>, expected: &[u8]) -> Result<(), PacError> {
+    let Some(got) = got else {
         return Err(PacError::MissingBuffer);
     };
     if got.len() < 4 + expected.len() {
@@ -216,10 +280,7 @@ pub fn signature_buffer(cksumtype: i32, mac: &[u8]) -> Vec<u8> {
 /// Client-info PAC buffer: little-endian NT time + UTF-16LE name.
 #[must_use]
 pub fn client_info_buffer(authtime_unix: u32, name: &str) -> Vec<u8> {
-    // NT time = unix * 10_000_000 + 116444736000000000
-    let nt = u64::from(authtime_unix)
-        .saturating_mul(10_000_000)
-        .saturating_add(116_444_736_000_000_000);
+    let nt = unix_to_nt(authtime_unix);
     let utf16: Vec<u8> = name.encode_utf16().flat_map(u16::to_le_bytes).collect();
     let mut v = Vec::with_capacity(10 + utf16.len());
     v.extend_from_slice(&nt.to_le_bytes());
@@ -229,120 +290,232 @@ pub fn client_info_buffer(authtime_unix: u32, name: &str) -> Vec<u8> {
     v
 }
 
-/// NDR32 `KERB_VALIDATION_INFO` (MS-PAC PAC_LOGON_INFO) for `client` / `realm`.
-///
-/// Layout is NDR32 with a type-serialization v1 header. Strings are
-/// UTF-16LE `RPC_UNICODE_STRING`. This is not a full NDR64 / all-optional
-/// Windows field set (ExtraSids / resource groups are empty).
+fn unix_to_nt(unix: u32) -> u64 {
+    u64::from(unix)
+        .saturating_mul(10_000_000)
+        .saturating_add(NT_UNIX_EPOCH)
+}
+
+/// NDR32 `RPC_UNICODE_STRING` (embedded, Buffer deferred).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RpcUnicode {
+    /// `Length` in bytes (not including a terminator).
+    pub length: u16,
+    /// `MaximumLength` in bytes (often `Length + 2`).
+    pub maximum_length: u16,
+    /// Whether `Buffer` is a non-null referent. AD empty strings are non-null.
+    pub pointed: bool,
+    /// UTF-16 decoded text.
+    pub value: String,
+}
+
+impl RpcUnicode {
+    /// Non-null string; empty uses Length=Max=0 still pointed (AD style).
+    #[must_use]
+    pub fn pointed(s: &str) -> Self {
+        let n = u16::try_from(s.encode_utf16().count().saturating_mul(2)).unwrap_or(u16::MAX);
+        let max = if n == 0 { 0 } else { n.saturating_add(2) };
+        Self {
+            length: n,
+            maximum_length: max,
+            pointed: true,
+            value: s.to_owned(),
+        }
+    }
+
+    fn actual_chars(&self) -> u32 {
+        u32::try_from(self.value.encode_utf16().count()).unwrap_or(0)
+    }
+
+    fn max_chars(&self) -> u32 {
+        u32::from(self.maximum_length / 2)
+    }
+}
+
+/// NDR32 `RPC_SID`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RpcSid {
+    /// Revision (1).
+    pub revision: u8,
+    /// 6-byte identifier authority (NT Authority is `{0,0,0,0,0,5}`).
+    pub identifier_authority: [u8; 6],
+    /// Sub-authorities (RID path).
+    pub sub_authority: Vec<u32>,
+}
+
+impl RpcSid {
+    /// `S-1-5-21-1-2-3` dummy domain SID used when issuing a PAC.
+    #[must_use]
+    pub fn dummy_domain() -> Self {
+        Self {
+            revision: 1,
+            identifier_authority: [0, 0, 0, 0, 0, 5],
+            sub_authority: vec![21, 1, 2, 3],
+        }
+    }
+
+    /// SDDL-ish `S-1-…` form for assertions.
+    #[must_use]
+    pub fn to_sddl(&self) -> String {
+        let ia = u64::from_be_bytes([
+            0,
+            0,
+            self.identifier_authority[0],
+            self.identifier_authority[1],
+            self.identifier_authority[2],
+            self.identifier_authority[3],
+            self.identifier_authority[4],
+            self.identifier_authority[5],
+        ]);
+        let mut s = format!("S-{}-{ia}", self.revision);
+        for r in &self.sub_authority {
+            let _ = write!(s, "-{r}");
+        }
+        s
+    }
+}
+
+/// `GROUP_MEMBERSHIP`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GroupMembership {
+    /// Relative ID.
+    pub relative_id: u32,
+    /// `SE_GROUP_*` bits.
+    pub attributes: u32,
+}
+
+/// `KERB_SID_AND_ATTRIBUTES`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExtraSid {
+    /// SID.
+    pub sid: RpcSid,
+    /// Attributes.
+    pub attributes: u32,
+}
+
+/// MS-PAC `KERB_VALIDATION_INFO` (NDR32).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KerbValidationInfo {
+    /// LogonTime FILETIME.
+    pub logon_time: u64,
+    /// LogoffTime FILETIME.
+    pub logoff_time: u64,
+    /// KickOffTime FILETIME.
+    pub kickoff_time: u64,
+    /// PasswordLastSet FILETIME.
+    pub password_last_set: u64,
+    /// PasswordCanChange FILETIME.
+    pub password_can_change: u64,
+    /// PasswordMustChange FILETIME.
+    pub password_must_change: u64,
+    /// SamAccountName.
+    pub effective_name: RpcUnicode,
+    /// Display name.
+    pub full_name: RpcUnicode,
+    /// Logon script.
+    pub logon_script: RpcUnicode,
+    /// Profile path.
+    pub profile_path: RpcUnicode,
+    /// Home directory.
+    pub home_directory: RpcUnicode,
+    /// Home drive.
+    pub home_directory_drive: RpcUnicode,
+    /// Logon count.
+    pub logon_count: u16,
+    /// Bad password count.
+    pub bad_password_count: u16,
+    /// User RID.
+    pub user_id: u32,
+    /// Primary group RID.
+    pub primary_group_id: u32,
+    /// Group memberships (`GroupCount` / `GroupIds`).
+    pub groups: Vec<GroupMembership>,
+    /// UserFlags.
+    pub user_flags: u32,
+    /// Session key (often zeros in the PAC).
+    pub session_key: [u8; 16],
+    /// Logon server (DC NetBIOS).
+    pub logon_server: RpcUnicode,
+    /// NetBIOS domain.
+    pub logon_domain_name: RpcUnicode,
+    /// Domain SID.
+    pub logon_domain_id: RpcSid,
+    /// Reserved1[2].
+    pub reserved1: [u32; 2],
+    /// UserAccountControl.
+    pub user_account_control: u32,
+    /// SubAuthStatus.
+    pub sub_auth_status: u32,
+    /// LastSuccessfulILogon.
+    pub last_successful_ilogon: u64,
+    /// LastFailedILogon.
+    pub last_failed_ilogon: u64,
+    /// FailedILogonCount.
+    pub failed_ilogon_count: u32,
+    /// Reserved3.
+    pub reserved3: u32,
+    /// Extra SIDs.
+    pub extra_sids: Vec<ExtraSid>,
+    /// Resource group domain SID.
+    pub resource_group_domain_sid: Option<RpcSid>,
+    /// Resource group memberships.
+    pub resource_groups: Vec<GroupMembership>,
+}
+
+impl KerbValidationInfo {
+    /// Minimal PAC logon info for a KDC-issued ticket.
+    #[must_use]
+    pub fn for_client(client: &str, realm: &str) -> Self {
+        Self {
+            logon_time: 0,
+            logoff_time: NT_TIME_NEVER,
+            kickoff_time: NT_TIME_NEVER,
+            password_last_set: 0,
+            password_can_change: 0,
+            password_must_change: NT_TIME_NEVER,
+            effective_name: RpcUnicode::pointed(client),
+            full_name: RpcUnicode::pointed(""),
+            logon_script: RpcUnicode::pointed(""),
+            profile_path: RpcUnicode::pointed(""),
+            home_directory: RpcUnicode::pointed(""),
+            home_directory_drive: RpcUnicode::pointed(""),
+            logon_count: 1,
+            bad_password_count: 0,
+            user_id: 1104,
+            primary_group_id: 513,
+            groups: vec![GroupMembership {
+                relative_id: 513,
+                attributes: SE_GROUP_DEFAULT,
+            }],
+            user_flags: 0,
+            session_key: [0; 16],
+            logon_server: RpcUnicode::pointed(""),
+            logon_domain_name: RpcUnicode::pointed(realm),
+            logon_domain_id: RpcSid::dummy_domain(),
+            reserved1: [0; 2],
+            user_account_control: USER_NORMAL_ACCOUNT,
+            sub_auth_status: 0,
+            last_successful_ilogon: 0,
+            last_failed_ilogon: 0,
+            failed_ilogon_count: 0,
+            reserved3: 0,
+            extra_sids: Vec::new(),
+            resource_group_domain_sid: None,
+            resource_groups: Vec::new(),
+        }
+    }
+
+    /// Type-serialization v1 + NDR32 of this struct.
+    #[must_use]
+    pub fn to_ndr(&self) -> Vec<u8> {
+        encode_kerb_validation_info(self)
+    }
+}
+
+/// NDR32 `KERB_VALIDATION_INFO` for `client` / `realm` (KDC issuance).
 #[must_use]
 pub fn logon_info_buffer(client: &str, realm: &str) -> Vec<u8> {
-    ndr_kerb_validation_info(client, realm, 1104, 513)
-}
-
-fn ndr_kerb_validation_info(client: &str, realm: &str, user_rid: u32, primary: u32) -> Vec<u8> {
-    let name = utf16le(client);
-    let dom = utf16le(realm);
-    let mut body = Vec::new();
-    for _ in 0..6 {
-        body.extend_from_slice(&0u64.to_le_bytes());
-    }
-    let mut deferred: Vec<Vec<u8>> = Vec::new();
-    push_rpc_unicode(&mut body, &mut deferred, &name);
-    for _ in 0..5 {
-        push_rpc_unicode(&mut body, &mut deferred, &[]);
-    }
-    body.extend_from_slice(&1u16.to_le_bytes());
-    body.extend_from_slice(&0u16.to_le_bytes());
-    body.extend_from_slice(&user_rid.to_le_bytes());
-    body.extend_from_slice(&primary.to_le_bytes());
-    body.extend_from_slice(&1u32.to_le_bytes());
-    let groups_id = 0x0002_0000u32 + u32::try_from(deferred.len()).unwrap_or(0) * 4;
-    body.extend_from_slice(&groups_id.to_le_bytes());
-    deferred.push(ndr_group_membership(primary));
-    body.extend_from_slice(&0u32.to_le_bytes());
-    body.extend_from_slice(&[0u8; 16]);
-    push_rpc_unicode(&mut body, &mut deferred, &[]);
-    push_rpc_unicode(&mut body, &mut deferred, &dom);
-    let sid_id = 0x0002_0000u32 + u32::try_from(deferred.len()).unwrap_or(0) * 4;
-    body.extend_from_slice(&sid_id.to_le_bytes());
-    deferred.push(ndr_sid_s1_5_21());
-    body.extend_from_slice(&0u32.to_le_bytes());
-    body.extend_from_slice(&0u32.to_le_bytes());
-    body.extend_from_slice(&0x10u32.to_le_bytes());
-    body.extend_from_slice(&0u32.to_le_bytes());
-    body.extend_from_slice(&0u64.to_le_bytes());
-    body.extend_from_slice(&0u64.to_le_bytes());
-    body.extend_from_slice(&0u32.to_le_bytes());
-    body.extend_from_slice(&0u32.to_le_bytes());
-    body.extend_from_slice(&0u32.to_le_bytes());
-    body.extend_from_slice(&0u32.to_le_bytes());
-    body.extend_from_slice(&0u32.to_le_bytes());
-    body.extend_from_slice(&0u32.to_le_bytes());
-    body.extend_from_slice(&0u32.to_le_bytes());
-    for s in deferred {
-        body.extend_from_slice(&s);
-    }
-
-    let mut out = Vec::new();
-    out.extend_from_slice(&[1, 0x10, 8, 0]);
-    out.extend_from_slice(&0xcccc_ccceu32.to_le_bytes());
-    out.extend_from_slice(&(u32::try_from(body.len()).unwrap_or(u32::MAX)).to_le_bytes());
-    out.extend_from_slice(&0u32.to_le_bytes());
-    out.extend_from_slice(&0x0002_0000u32.to_le_bytes());
-    out.extend_from_slice(&body);
-    out
-}
-
-fn utf16le(s: &str) -> Vec<u8> {
-    s.encode_utf16().flat_map(u16::to_le_bytes).collect()
-}
-
-fn push_rpc_unicode(body: &mut Vec<u8>, deferred: &mut Vec<Vec<u8>>, utf16: &[u8]) {
-    let n = u16::try_from(utf16.len()).unwrap_or(u16::MAX);
-    body.extend_from_slice(&n.to_le_bytes());
-    body.extend_from_slice(&n.saturating_add(2).to_le_bytes());
-    if utf16.is_empty() {
-        body.extend_from_slice(&0u32.to_le_bytes());
-    } else {
-        let id = 0x0002_0000u32 + u32::try_from(deferred.len()).unwrap_or(0) * 4;
-        body.extend_from_slice(&id.to_le_bytes());
-        let mut blob = Vec::new();
-        ndr_conformant_string(&mut blob, utf16);
-        deferred.push(blob);
-    }
-}
-
-fn ndr_group_membership(primary: u32) -> Vec<u8> {
-    let mut v = Vec::new();
-    v.extend_from_slice(&1u32.to_le_bytes());
-    v.extend_from_slice(&0u32.to_le_bytes());
-    v.extend_from_slice(&1u32.to_le_bytes());
-    v.extend_from_slice(&primary.to_le_bytes());
-    v.extend_from_slice(&7u32.to_le_bytes());
-    v
-}
-
-fn ndr_sid_s1_5_21() -> Vec<u8> {
-    let mut v = Vec::new();
-    v.extend_from_slice(&4u32.to_le_bytes());
-    v.push(1);
-    v.push(4);
-    v.extend_from_slice(&[0, 0, 0, 0, 0, 5]);
-    v.extend_from_slice(&21u32.to_le_bytes());
-    v.extend_from_slice(&1u32.to_le_bytes());
-    v.extend_from_slice(&2u32.to_le_bytes());
-    v.extend_from_slice(&3u32.to_le_bytes());
-    v
-}
-
-fn ndr_conformant_string(out: &mut Vec<u8>, utf16: &[u8]) {
-    let chars = u32::try_from(utf16.len() / 2).unwrap_or(0);
-    out.extend_from_slice(&chars.to_le_bytes());
-    out.extend_from_slice(&0u32.to_le_bytes());
-    out.extend_from_slice(&chars.to_le_bytes());
-    out.extend_from_slice(utf16);
-    let pad = (4 - (utf16.len() % 4)) % 4;
-    out.extend(std::iter::repeat_n(0u8, pad));
+    KerbValidationInfo::for_client(client, realm).to_ndr()
 }
 
 /// Parse [`logon_info_buffer`] (NDR) or the legacy UTF-8 placeholder.
@@ -351,10 +524,472 @@ fn ndr_conformant_string(out: &mut Vec<u8>, utf16: &[u8]) {
 ///
 /// Returns [`PacError::Truncated`] when the buffer is too short.
 pub fn parse_logon_info(data: &[u8]) -> Result<(String, String), PacError> {
-    if let Ok(v) = parse_ndr_logon_info(data) {
-        return Ok(v);
+    if let Ok(v) = parse_kerb_validation_info(data) {
+        return Ok((v.effective_name.value, v.logon_domain_name.value));
     }
     parse_legacy_utf8_logon(data)
+}
+
+/// Decode Type-Serialization v1 + NDR32 `KERB_VALIDATION_INFO`.
+///
+/// # Errors
+///
+/// Truncated or malformed NDR.
+pub fn parse_kerb_validation_info(data: &[u8]) -> Result<KerbValidationInfo, PacError> {
+    let mut r = NdrR { b: data, i: 0 };
+    if r.u8()? != 1 || r.u8()? != 0x10 {
+        return Err(PacError::Truncated);
+    }
+    let _hlen = r.u16()?;
+    let _filler = r.u32()?;
+    let _objlen = r.u32()?;
+    let _pfiller = r.u32()?;
+    let top = r.u32()?;
+    if top == 0 {
+        return Err(PacError::Truncated);
+    }
+    let logon_time = r.u64()?;
+    let logoff_time = r.u64()?;
+    let kickoff_time = r.u64()?;
+    let password_last_set = r.u64()?;
+    let password_can_change = r.u64()?;
+    let password_must_change = r.u64()?;
+    let effective_name = r.ustr()?;
+    let full_name = r.ustr()?;
+    let logon_script = r.ustr()?;
+    let profile_path = r.ustr()?;
+    let home_directory = r.ustr()?;
+    let home_directory_drive = r.ustr()?;
+    let logon_count = r.u16()?;
+    let bad_password_count = r.u16()?;
+    let user_id = r.u32()?;
+    let primary_group_id = r.u32()?;
+    let group_count = r.u32()?;
+    let groups_ptr = r.u32()?;
+    let user_flags = r.u32()?;
+    let mut session_key = [0u8; 16];
+    session_key.copy_from_slice(r.bytes(16)?);
+    let logon_server = r.ustr()?;
+    let logon_domain_name = r.ustr()?;
+    let domain_sid_ptr = r.u32()?;
+    let reserved1 = [r.u32()?, r.u32()?];
+    let user_account_control = r.u32()?;
+    let sub_auth_status = r.u32()?;
+    let last_successful_ilogon = r.u64()?;
+    let last_failed_ilogon = r.u64()?;
+    let failed_ilogon_count = r.u32()?;
+    let reserved3 = r.u32()?;
+    let sid_count = r.u32()?;
+    let extra_ptr = r.u32()?;
+    let rg_sid_ptr = r.u32()?;
+    let rg_count = r.u32()?;
+    let rg_ptr = r.u32()?;
+
+    let effective_name = r.take_str(effective_name)?;
+    let full_name = r.take_str(full_name)?;
+    let logon_script = r.take_str(logon_script)?;
+    let profile_path = r.take_str(profile_path)?;
+    let home_directory = r.take_str(home_directory)?;
+    let home_directory_drive = r.take_str(home_directory_drive)?;
+
+    let groups = if groups_ptr == 0 {
+        Vec::new()
+    } else {
+        r.group_array(group_count)?
+    };
+    let logon_server = r.take_str(logon_server)?;
+    let logon_domain_name = r.take_str(logon_domain_name)?;
+    let logon_domain_id = if domain_sid_ptr == 0 {
+        return Err(PacError::Truncated);
+    } else {
+        r.sid()?
+    };
+    let extra_sids = if extra_ptr == 0 {
+        Vec::new()
+    } else {
+        r.extra_sids(sid_count)?
+    };
+    let resource_group_domain_sid = if rg_sid_ptr == 0 {
+        None
+    } else {
+        Some(r.sid()?)
+    };
+    let resource_groups = if rg_ptr == 0 {
+        Vec::new()
+    } else {
+        r.group_array(rg_count)?
+    };
+
+    if effective_name.value.is_empty() {
+        return Err(PacError::Truncated);
+    }
+    Ok(KerbValidationInfo {
+        logon_time,
+        logoff_time,
+        kickoff_time,
+        password_last_set,
+        password_can_change,
+        password_must_change,
+        effective_name,
+        full_name,
+        logon_script,
+        profile_path,
+        home_directory,
+        home_directory_drive,
+        logon_count,
+        bad_password_count,
+        user_id,
+        primary_group_id,
+        groups,
+        user_flags,
+        session_key,
+        logon_server,
+        logon_domain_name,
+        logon_domain_id,
+        reserved1,
+        user_account_control,
+        sub_auth_status,
+        last_successful_ilogon,
+        last_failed_ilogon,
+        failed_ilogon_count,
+        reserved3,
+        extra_sids,
+        resource_group_domain_sid,
+        resource_groups,
+    })
+}
+
+fn encode_kerb_validation_info(info: &KerbValidationInfo) -> Vec<u8> {
+    let mut w = NdrW::default();
+    w.u8(1);
+    w.u8(0x10);
+    w.u16(8);
+    w.u32(0xcccc_cccc);
+    let obj_at = w.b.len();
+    w.u32(0);
+    w.u32(0);
+    w.ptr(true);
+    w.u64(info.logon_time);
+    w.u64(info.logoff_time);
+    w.u64(info.kickoff_time);
+    w.u64(info.password_last_set);
+    w.u64(info.password_can_change);
+    w.u64(info.password_must_change);
+    w.ustr_hdr(&info.effective_name);
+    w.ustr_hdr(&info.full_name);
+    w.ustr_hdr(&info.logon_script);
+    w.ustr_hdr(&info.profile_path);
+    w.ustr_hdr(&info.home_directory);
+    w.ustr_hdr(&info.home_directory_drive);
+    w.u16(info.logon_count);
+    w.u16(info.bad_password_count);
+    w.u32(info.user_id);
+    w.u32(info.primary_group_id);
+    w.u32(u32::try_from(info.groups.len()).unwrap_or(0));
+    w.ptr(!info.groups.is_empty());
+    w.u32(info.user_flags);
+    w.b.extend_from_slice(&info.session_key);
+    w.ustr_hdr(&info.logon_server);
+    w.ustr_hdr(&info.logon_domain_name);
+    w.ptr(true);
+    w.u32(info.reserved1[0]);
+    w.u32(info.reserved1[1]);
+    w.u32(info.user_account_control);
+    w.u32(info.sub_auth_status);
+    w.u64(info.last_successful_ilogon);
+    w.u64(info.last_failed_ilogon);
+    w.u32(info.failed_ilogon_count);
+    w.u32(info.reserved3);
+    w.u32(u32::try_from(info.extra_sids.len()).unwrap_or(0));
+    w.ptr(!info.extra_sids.is_empty());
+    w.ptr(info.resource_group_domain_sid.is_some());
+    w.u32(u32::try_from(info.resource_groups.len()).unwrap_or(0));
+    w.ptr(!info.resource_groups.is_empty());
+
+    w.ustr_body(&info.effective_name);
+    w.ustr_body(&info.full_name);
+    w.ustr_body(&info.logon_script);
+    w.ustr_body(&info.profile_path);
+    w.ustr_body(&info.home_directory);
+    w.ustr_body(&info.home_directory_drive);
+    if !info.groups.is_empty() {
+        w.group_array(&info.groups);
+    }
+    w.ustr_body(&info.logon_server);
+    w.ustr_body(&info.logon_domain_name);
+    w.sid(&info.logon_domain_id);
+    if !info.extra_sids.is_empty() {
+        w.extra_sids(&info.extra_sids);
+    }
+    if let Some(sid) = &info.resource_group_domain_sid {
+        w.sid(sid);
+    }
+    if !info.resource_groups.is_empty() {
+        w.group_array(&info.resource_groups);
+    }
+
+    let objlen = u32::try_from(w.b.len().saturating_sub(16)).unwrap_or(u32::MAX);
+    w.b[obj_at..obj_at + 4].copy_from_slice(&objlen.to_le_bytes());
+    w.b
+}
+
+struct NdrR<'a> {
+    b: &'a [u8],
+    i: usize,
+}
+
+impl NdrR<'_> {
+    fn need(&self, n: usize) -> Result<(), PacError> {
+        if self.i.checked_add(n).is_none_or(|e| e > self.b.len()) {
+            Err(PacError::Truncated)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn align4(&mut self) {
+        let pad = (4 - (self.i % 4)) % 4;
+        self.i = self.i.saturating_add(pad).min(self.b.len());
+    }
+
+    fn u8(&mut self) -> Result<u8, PacError> {
+        self.need(1)?;
+        let v = self.b[self.i];
+        self.i += 1;
+        Ok(v)
+    }
+
+    fn u16(&mut self) -> Result<u16, PacError> {
+        self.need(2)?;
+        let v = u16::from_le_bytes(
+            self.b[self.i..self.i + 2]
+                .try_into()
+                .map_err(|_| PacError::Truncated)?,
+        );
+        self.i += 2;
+        Ok(v)
+    }
+
+    fn u32(&mut self) -> Result<u32, PacError> {
+        self.need(4)?;
+        let v = u32::from_le_bytes(
+            self.b[self.i..self.i + 4]
+                .try_into()
+                .map_err(|_| PacError::Truncated)?,
+        );
+        self.i += 4;
+        Ok(v)
+    }
+
+    fn u64(&mut self) -> Result<u64, PacError> {
+        self.need(8)?;
+        let v = u64::from_le_bytes(
+            self.b[self.i..self.i + 8]
+                .try_into()
+                .map_err(|_| PacError::Truncated)?,
+        );
+        self.i += 8;
+        Ok(v)
+    }
+
+    fn take_str(&mut self, s: RpcUnicode) -> Result<RpcUnicode, PacError> {
+        if s.pointed {
+            self.conf_string(s)
+        } else {
+            Ok(s)
+        }
+    }
+
+    fn bytes(&mut self, n: usize) -> Result<&[u8], PacError> {
+        self.need(n)?;
+        let s = &self.b[self.i..self.i + n];
+        self.i += n;
+        Ok(s)
+    }
+
+    fn ustr(&mut self) -> Result<RpcUnicode, PacError> {
+        let length = self.u16()?;
+        let maximum_length = self.u16()?;
+        let ptr = self.u32()?;
+        Ok(RpcUnicode {
+            length,
+            maximum_length,
+            pointed: ptr != 0,
+            value: String::new(),
+        })
+    }
+
+    fn conf_string(&mut self, mut s: RpcUnicode) -> Result<RpcUnicode, PacError> {
+        self.align4();
+        let maxc = self.u32()?;
+        let _off = self.u32()?;
+        let act = self.u32()?;
+        if act > maxc || act > 1024 {
+            return Err(PacError::Truncated);
+        }
+        let nbytes = usize::try_from(act.saturating_mul(2)).map_err(|_| PacError::Truncated)?;
+        let raw = self.bytes(nbytes)?;
+        let mut u16s = Vec::with_capacity(act as usize);
+        for k in 0..act as usize {
+            u16s.push(u16::from_le_bytes([raw[k * 2], raw[k * 2 + 1]]));
+        }
+        s.value = String::from_utf16(&u16s).map_err(|_| PacError::Truncated)?;
+        let pad = (4 - (nbytes % 4)) % 4;
+        self.i = self.i.saturating_add(pad).min(self.b.len());
+        Ok(s)
+    }
+
+    fn group_array(&mut self, expect: u32) -> Result<Vec<GroupMembership>, PacError> {
+        self.align4();
+        let maxc = self.u32()?;
+        if maxc != expect || maxc > 1024 {
+            return Err(PacError::Truncated);
+        }
+        let mut out = Vec::with_capacity(maxc as usize);
+        for _ in 0..maxc {
+            out.push(GroupMembership {
+                relative_id: self.u32()?,
+                attributes: self.u32()?,
+            });
+        }
+        Ok(out)
+    }
+
+    fn sid(&mut self) -> Result<RpcSid, PacError> {
+        self.align4();
+        let maxc = self.u32()?;
+        let revision = self.u8()?;
+        let subc = self.u8()?;
+        if u32::from(subc) > maxc || subc > 15 {
+            return Err(PacError::Truncated);
+        }
+        let ia = self.bytes(6)?;
+        let mut identifier_authority = [0u8; 6];
+        identifier_authority.copy_from_slice(ia);
+        let mut sub_authority = Vec::with_capacity(usize::from(subc));
+        for _ in 0..subc {
+            sub_authority.push(self.u32()?);
+        }
+        Ok(RpcSid {
+            revision,
+            identifier_authority,
+            sub_authority,
+        })
+    }
+
+    fn extra_sids(&mut self, expect: u32) -> Result<Vec<ExtraSid>, PacError> {
+        self.align4();
+        let maxc = self.u32()?;
+        if maxc != expect || maxc > 64 {
+            return Err(PacError::Truncated);
+        }
+        let mut hdrs = Vec::with_capacity(maxc as usize);
+        for _ in 0..maxc {
+            let ptr = self.u32()?;
+            let attributes = self.u32()?;
+            hdrs.push((ptr, attributes));
+        }
+        let mut out = Vec::with_capacity(hdrs.len());
+        for (ptr, attributes) in hdrs {
+            if ptr == 0 {
+                return Err(PacError::Truncated);
+            }
+            out.push(ExtraSid {
+                sid: self.sid()?,
+                attributes,
+            });
+        }
+        Ok(out)
+    }
+}
+
+struct NdrW {
+    b: Vec<u8>,
+    next: u32,
+}
+
+impl Default for NdrW {
+    fn default() -> Self {
+        Self {
+            b: Vec::new(),
+            next: NDR_PTR_BASE,
+        }
+    }
+}
+
+impl NdrW {
+    fn u8(&mut self, v: u8) {
+        self.b.push(v);
+    }
+    fn u16(&mut self, v: u16) {
+        self.b.extend_from_slice(&v.to_le_bytes());
+    }
+    fn u32(&mut self, v: u32) {
+        self.b.extend_from_slice(&v.to_le_bytes());
+    }
+    fn u64(&mut self, v: u64) {
+        self.b.extend_from_slice(&v.to_le_bytes());
+    }
+    fn align4(&mut self) {
+        while self.b.len() % 4 != 0 {
+            self.b.push(0);
+        }
+    }
+    fn ptr(&mut self, present: bool) {
+        if present {
+            self.u32(self.next);
+            self.next = self.next.saturating_add(4);
+        } else {
+            self.u32(0);
+        }
+    }
+    fn ustr_hdr(&mut self, s: &RpcUnicode) {
+        self.u16(s.length);
+        self.u16(s.maximum_length);
+        self.ptr(s.pointed);
+    }
+    fn ustr_body(&mut self, s: &RpcUnicode) {
+        if !s.pointed {
+            return;
+        }
+        self.align4();
+        self.u32(s.max_chars());
+        self.u32(0);
+        self.u32(s.actual_chars());
+        let utf16: Vec<u8> = s.value.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        self.b.extend_from_slice(&utf16);
+        self.align4();
+    }
+    fn group_array(&mut self, g: &[GroupMembership]) {
+        self.align4();
+        self.u32(u32::try_from(g.len()).unwrap_or(0));
+        for m in g {
+            self.u32(m.relative_id);
+            self.u32(m.attributes);
+        }
+    }
+    fn sid(&mut self, s: &RpcSid) {
+        self.align4();
+        let n = u32::try_from(s.sub_authority.len()).unwrap_or(0);
+        self.u32(n);
+        self.u8(s.revision);
+        self.u8(u8::try_from(s.sub_authority.len()).unwrap_or(0));
+        self.b.extend_from_slice(&s.identifier_authority);
+        for r in &s.sub_authority {
+            self.u32(*r);
+        }
+    }
+    fn extra_sids(&mut self, extras: &[ExtraSid]) {
+        self.align4();
+        self.u32(u32::try_from(extras.len()).unwrap_or(0));
+        for e in extras {
+            self.ptr(true);
+            self.u32(e.attributes);
+        }
+        for e in extras {
+            self.sid(&e.sid);
+        }
+    }
 }
 
 fn parse_legacy_utf8_logon(data: &[u8]) -> Result<(String, String), PacError> {
@@ -375,84 +1010,88 @@ fn parse_legacy_utf8_logon(data: &[u8]) -> Result<(String, String), PacError> {
     Ok((client.to_owned(), realm.to_owned()))
 }
 
-/// Type-serialization v1 header + unique pointer (8 + 8 + 4).
-const NDR_TYPE_HEADER: usize = 20;
-/// Fixed KERB_VALIDATION_INFO NDR32 size before deferred pointers (see encoder).
-const NDR_LOGON_STRUCT: usize = 216;
-
-fn parse_ndr_logon_info(data: &[u8]) -> Result<(String, String), PacError> {
-    if data.len() < NDR_TYPE_HEADER + NDR_LOGON_STRUCT || data[0] != 1 || data[1] != 0x10 {
-        return Err(PacError::Truncated);
-    }
-    let body = &data[NDR_TYPE_HEADER..];
-    let user_rid = u32::from_le_bytes(body[100..104].try_into().map_err(|_| PacError::Truncated)?);
-    if user_rid == 0 {
-        return Err(PacError::Truncated);
-    }
-    let mut tail = &body[NDR_LOGON_STRUCT..];
-    let (client, rest) = take_conformant_string(tail)?;
-    tail = rest;
-    if tail.len() >= 20 {
-        let max = u32::from_le_bytes(tail[0..4].try_into().map_err(|_| PacError::Truncated)?);
-        let actual = u32::from_le_bytes(tail[8..12].try_into().map_err(|_| PacError::Truncated)?);
-        if max == 1 && actual == 1 {
-            tail = &tail[20..];
-        }
-    }
-    let realm = take_conformant_string(tail)
-        .map(|(s, _)| s)
-        .unwrap_or_default();
-    if client.is_empty() {
-        return Err(PacError::Truncated);
-    }
-    Ok((client, realm))
+/// Replace AD-WIN2K-PAC `ad-data` with a single zero byte (MS-PAC ticket checksum).
+///
+/// Walks `AD-IF-RELEVANT` wrappers. Other elements are copied.
+#[must_use]
+pub fn authorization_with_zeroed_pac(
+    ad: &[crate::AuthorizationDataValue],
+) -> crate::AuthorizationData {
+    ad.iter()
+        .map(|el| {
+            if el.ad_type == crate::pa::AD_WIN2K_PAC {
+                crate::AuthorizationDataValue {
+                    ad_type: el.ad_type,
+                    ad_data: vec![0u8].into(),
+                }
+            } else if el.ad_type == crate::pa::AD_IF_RELEVANT {
+                if let Ok(inner) =
+                    rasn::der::decode::<crate::AuthorizationData>(el.ad_data.as_ref())
+                {
+                    if let Ok(bytes) = rasn::der::encode(&authorization_with_zeroed_pac(&inner)) {
+                        return crate::AuthorizationDataValue {
+                            ad_type: el.ad_type,
+                            ad_data: bytes.into(),
+                        };
+                    }
+                }
+                el.clone()
+            } else {
+                el.clone()
+            }
+        })
+        .collect()
 }
 
-fn take_conformant_string(b: &[u8]) -> Result<(String, &[u8]), PacError> {
-    if b.len() < 12 {
-        return Err(PacError::Truncated);
-    }
-    let max = u32::from_le_bytes(b[0..4].try_into().map_err(|_| PacError::Truncated)?) as usize;
-    let actual = u32::from_le_bytes(b[8..12].try_into().map_err(|_| PacError::Truncated)?) as usize;
-    if actual > max || actual > 256 {
-        return Err(PacError::Truncated);
-    }
-    let nbytes = actual.saturating_mul(2);
-    if 12 + nbytes > b.len() {
-        return Err(PacError::Truncated);
-    }
-    let mut u16s = Vec::with_capacity(actual);
-    for k in 0..actual {
-        let o = 12 + k * 2;
-        u16s.push(u16::from_le_bytes([b[o], b[o + 1]]));
-    }
-    let s = String::from_utf16(&u16s).map_err(|_| PacError::Truncated)?;
-    let pad = (4 - (nbytes % 4)) % 4;
-    Ok((s, &b[12 + nbytes + pad..]))
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[allow(dead_code)]
-fn ndr_conformant_strings(mut b: &[u8]) -> Result<Vec<String>, PacError> {
-    let mut out = Vec::new();
-    while b.len() >= 12 && out.len() < 2 {
-        let max = u32::from_le_bytes(b[0..4].try_into().map_err(|_| PacError::Truncated)?) as usize;
-        let actual =
-            u32::from_le_bytes(b[8..12].try_into().map_err(|_| PacError::Truncated)?) as usize;
-        if actual > max || actual > 256 {
-            break;
-        }
-        let nbytes = actual.saturating_mul(2);
-        if 12 + nbytes > b.len() {
-            break;
-        }
-        let mut u16s = Vec::with_capacity(actual);
-        for k in 0..actual {
-            let o = 12 + k * 2;
-            u16s.push(u16::from_le_bytes([b[o], b[o + 1]]));
-        }
-        out.push(String::from_utf16(&u16s).map_err(|_| PacError::Truncated)?);
-        let pad = (4 - (nbytes % 4)) % 4;
-        b = &b[12 + nbytes + pad..];
+    #[test]
+    fn ultype_16_is_ticket_checksum_not_upn_dns() {
+        assert_eq!(PAC_UPN_DNS_INFO, 12);
+        assert_eq!(PAC_TICKET_CHECKSUM, 16);
+        assert_eq!(PAC_FULL_CHECKSUM, 19);
+        assert_ne!(PAC_UPN_DNS_INFO, PAC_TICKET_CHECKSUM);
     }
-    Ok(out)
+
+    #[test]
+    fn issued_logon_round_trip_is_byte_identical() {
+        let raw = logon_info_buffer("user", "KERBER.TEST");
+        let parsed = parse_kerb_validation_info(&raw).expect("NDR");
+        assert_eq!(parsed.effective_name.value, "user");
+        assert_eq!(parsed.logon_domain_name.value, "KERBER.TEST");
+        assert_eq!(parsed.user_id, 1104);
+        assert_eq!(parsed.primary_group_id, 513);
+        let again = parsed.to_ndr();
+        assert_eq!(again, raw, "issued NDR must round-trip byte-for-byte");
+    }
+
+    #[test]
+    fn ad_golden_kbruser_fields_and_reencode() {
+        let raw = include_bytes!("../../../tests/traces/pac-kbruser.ndr");
+        let v = parse_kerb_validation_info(raw).expect("AD NDR");
+        assert_eq!(v.effective_name.value, "kbruser");
+        assert_eq!(v.logon_domain_name.value, "ADKERBER");
+        assert_eq!(v.logon_server.value, "TEST-SERVER");
+        assert_eq!(v.user_id, 1103);
+        assert_eq!(v.primary_group_id, 513);
+        assert!(
+            v.groups.iter().any(|g| g.relative_id == 1104),
+            "kbrgroup RID 1104: {:?}",
+            v.groups
+        );
+        assert_eq!(
+            v.logon_domain_id.to_sddl(),
+            "S-1-5-21-1662395604-3502713894-542445324"
+        );
+        assert_eq!(v.extra_sids.len(), 1);
+        assert_eq!(v.extra_sids[0].sid.to_sddl(), "S-1-18-1");
+        let again = v.to_ndr();
+        assert_eq!(
+            again.as_slice(),
+            raw.as_slice(),
+            "re-encode must match captured AD NDR"
+        );
+    }
 }

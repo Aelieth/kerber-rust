@@ -29,8 +29,8 @@ pub mod spake;
 
 pub use constants::{ap_bit, err, flag_bit, ku, pa};
 pub use extra::{
-    ApRep, EncApRepPart, EncKrbCredPart, EncKrbPrivPart, KrbCred, KrbCredInfo, KrbPriv, KrbSafe,
-    KrbSafeBody,
+    ApRep, ChangePasswdData, EncApRepPart, EncKrbCredPart, EncKrbPrivPart, KrbCred, KrbCredInfo,
+    KrbPriv, KrbSafe, KrbSafeBody,
 };
 pub use name_error::{NameError, TimeError};
 

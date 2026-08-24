@@ -21,6 +21,7 @@ files are gitignored.
 | `mit-as-rep.der` | `0x6b` | MIT 1.22.2 KDC AS-REP (`client-gate.sh` `client-rep-*.der`) |
 | `mit-tgs-req.der` | `0x6c` | MIT TGS-REQ (FAST) |
 | `mit-tgs-rep.der` | `0x6d` | MIT 1.22.2 KDC TGS-REP (`client-gate.sh` `client-rep-*.der`) |
+| `pac-kbruser.ndr` | NDR | Windows Server 2022 `PAC_LOGON_INFO` for `kbruser` (identity bytes only; extracted from the captured `host/svc` ticket) |
 
 Reply goldens must be MIT-KDC bytes from the Rust client socket
 (`client-rep-*.der`), not Rust-KDC socket dumps (`kdc-rep-*.der`).

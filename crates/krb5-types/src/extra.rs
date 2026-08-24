@@ -3,8 +3,8 @@
 use rasn::prelude::*;
 
 use crate::{
-    Checksum, EncryptedData, EncryptionKey, HostAddress, KerberosTime, Microseconds, PrincipalName,
-    Realm, Ticket,
+    Checksum, EncryptedData, EncryptionKey, HostAddress, KerberosTime, Microseconds, OctetString,
+    PrincipalName, Realm, Ticket,
 };
 
 /// AP-REP ::= [APPLICATION 15] SEQUENCE { pvno, msg-type, enc-part }
@@ -226,4 +226,18 @@ pub struct KrbCredInfo {
     /// Addresses.
     #[rasn(tag(explicit(10)))]
     pub caddr: Option<crate::HostAddresses>,
+}
+
+/// RFC 3244 `ChangePasswdData`.
+#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+pub struct ChangePasswdData {
+    /// New password octets.
+    #[rasn(tag(explicit(0)))]
+    pub newpasswd: OctetString,
+    /// Optional target name.
+    #[rasn(tag(explicit(1)))]
+    pub targname: Option<PrincipalName>,
+    /// Optional target realm.
+    #[rasn(tag(explicit(2)))]
+    pub targrealm: Option<Realm>,
 }

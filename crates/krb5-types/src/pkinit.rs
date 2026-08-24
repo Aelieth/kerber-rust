@@ -288,6 +288,47 @@ pub fn parse_authpack(der: &[u8]) -> Option<(u32, Vec<u8>)> {
     Some((nonce, spki?))
 }
 
+/// RFC 8636 `id-pkinit-kdf-ah-sha256` (1.3.6.1.5.2.3.6.2).
+pub const KDF_AH_SHA256_OID: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x02, 0x03, 0x06, 0x02];
+
+/// Whether AuthPack `supportedKDFs` includes SHA-256 (RFC 8636).
+#[must_use]
+pub fn authpack_wants_sha256_kdf(der: &[u8]) -> bool {
+    let Some((t, body, _)) = take_tlv(der) else {
+        return false;
+    };
+    if t != 0x30 {
+        return false;
+    }
+    let mut cur = body;
+    while !cur.is_empty() {
+        let Some((tag, inner, rest)) = take_tlv(cur) else {
+            break;
+        };
+        if tag == 0xa4 && oid_in(inner, KDF_AH_SHA256_OID) {
+            return true;
+        }
+        cur = rest;
+    }
+    false
+}
+
+fn oid_in(mut b: &[u8], oid: &[u8]) -> bool {
+    while !b.is_empty() {
+        let Some((tag, inner, rest)) = take_tlv(b) else {
+            return false;
+        };
+        if tag == 0x06 && inner == oid {
+            return true;
+        }
+        if oid_in(inner, oid) {
+            return true;
+        }
+        b = rest;
+    }
+    false
+}
+
 fn unwrap_explicit_seq(inner: &[u8]) -> &[u8] {
     if inner.first() == Some(&0x30) {
         take_tlv(inner).map_or(inner, |(_, b, _)| b)
