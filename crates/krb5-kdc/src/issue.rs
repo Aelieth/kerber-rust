@@ -456,7 +456,7 @@ fn issue_tgs_from(
     if let Some((user, realm)) = s4u2self_client(&tgt_session, tgs_padata)? {
         ticket_cname = user;
         ticket_crealm = realm;
-    } else if let Some(cn) = s4u2proxy_client(store, req, &enc_tkt.cname)? {
+    } else if let Some(cn) = s4u2proxy_client(store, req, &enc_tkt.cname, tgs_padata)? {
         ticket_cname = cn;
     }
     if utf8_realm(&enc_tkt.crealm) != store.realm() {

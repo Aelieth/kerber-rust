@@ -16,8 +16,8 @@ use krb5_kdc::{
 };
 use krb5_protocol::{
     apply_strengthen, armor_key, as_req_sname, attach_fast, build_fast_armor, pa_for_user,
-    pa_pk_as_req, pa_pk_as_req_agile, pa_pk_as_req_spki, pa_spake_response, pa_spake_support,
-    pkinit_reply_key, pkinit_reply_key_agile, tgs_req_ex, unwrap_fast_rep,
+    pa_pac_options, pa_pk_as_req, pa_pk_as_req_agile, pa_pk_as_req_spki, pa_spake_response,
+    pa_spake_support, pkinit_reply_key, pkinit_reply_key_agile, tgs_req_ex, unwrap_fast_rep,
 };
 use krb5_types::{
     ascii, err, flag_bit, ku, pa, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart,
@@ -544,6 +544,135 @@ fn s4u2proxy_takes_cname_from_evidence() {
         .unwrap();
     let part = decrypt_ticket_part(&host.key, &out.rep.0.ticket).expect("enc");
     assert_eq!(part.cname.components_joined(), TEST_ADMIN);
+}
+
+#[test]
+fn s4u2proxy_rejects_non_forwardable_evidence() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
+    let admin_tgt = issue_tgt(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 711);
+    let evidence_tgs = tgs_req_ex(
+        admin_tgt.rep.0.ticket.clone(),
+        &admin_tgt.session_key,
+        TEST_REALM,
+        &admin,
+        user.clone(),
+        TEST_REALM,
+        712,
+        KdcOptions::none(),
+        None,
+        Vec::new(),
+        pref_etypes(),
+    )
+    .expect("non-forwardable evidence TGS-REQ");
+    let evidence = krb5_kdc::issue_tgs(&store, &evidence_tgs).expect("evidence");
+    let user_long = store.get_name(&user).unwrap().best_key().unwrap();
+    let ev_part = decrypt_ticket_part(&user_long.key, &evidence.rep.0.ticket).expect("ev");
+    assert!(
+        !ev_part.flags.forwardable(),
+        "fixture must be a non-forwardable evidence ticket"
+    );
+    let user_tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 713);
+    let opts = KdcOptions::forwardable().with_bit(flag_bit::CNAME_IN_ADDL_TKT, true);
+    let tgs = tgs_req_ex(
+        user_tgt.rep.0.ticket.clone(),
+        &user_tgt.session_key,
+        TEST_REALM,
+        &user,
+        documented_host(),
+        TEST_REALM,
+        714,
+        opts,
+        Some(vec![evidence.rep.0.ticket.clone()]),
+        Vec::new(),
+        pref_etypes(),
+    )
+    .expect("S4U2Proxy TGS-REQ");
+    match krb5_kdc::issue_tgs(&store, &tgs) {
+        Err(Error::Protocol { code, .. }) => assert_eq!(code, err::BADOPTION),
+        other => panic!("expected BADOPTION, got {other:?}"),
+    }
+}
+
+#[test]
+fn s4u2proxy_rejects_malformed_pac_options() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
+    let admin_tgt = issue_tgt(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 721);
+    let evidence_tgs = tgs_req(
+        admin_tgt.rep.0.ticket.clone(),
+        &admin_tgt.session_key,
+        TEST_REALM,
+        &admin,
+        user.clone(),
+        TEST_REALM,
+        722,
+    )
+    .expect("evidence TGS-REQ");
+    let evidence = krb5_kdc::issue_tgs(&store, &evidence_tgs).expect("evidence");
+    let user_tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 723);
+    let opts = KdcOptions::forwardable().with_bit(flag_bit::CNAME_IN_ADDL_TKT, true);
+    let bad = krb5_types::PaData {
+        padata_type: pa::PAC_OPTIONS,
+        padata_value: b"not-der".to_vec().into(),
+    };
+    let tgs = tgs_req_ex(
+        user_tgt.rep.0.ticket.clone(),
+        &user_tgt.session_key,
+        TEST_REALM,
+        &user,
+        documented_host(),
+        TEST_REALM,
+        724,
+        opts,
+        Some(vec![evidence.rep.0.ticket.clone()]),
+        vec![bad],
+        pref_etypes(),
+    )
+    .expect("S4U2Proxy TGS-REQ");
+    match krb5_kdc::issue_tgs(&store, &tgs) {
+        Err(Error::Protocol { code, .. }) => assert_eq!(code, err::BADOPTION),
+        other => panic!("expected BADOPTION for malformed PA-PAC-OPTIONS, got {other:?}"),
+    }
+}
+
+#[test]
+fn s4u2proxy_honors_pac_options_rbcd() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
+    let admin_tgt = issue_tgt(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 731);
+    let evidence_tgs = tgs_req(
+        admin_tgt.rep.0.ticket.clone(),
+        &admin_tgt.session_key,
+        TEST_REALM,
+        &admin,
+        user.clone(),
+        TEST_REALM,
+        732,
+    )
+    .expect("evidence TGS-REQ");
+    let evidence = krb5_kdc::issue_tgs(&store, &evidence_tgs).expect("evidence");
+    let user_tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 733);
+    let opts = KdcOptions::forwardable().with_bit(flag_bit::CNAME_IN_ADDL_TKT, true);
+    let tgs = tgs_req_ex(
+        user_tgt.rep.0.ticket.clone(),
+        &user_tgt.session_key,
+        TEST_REALM,
+        &user,
+        documented_host(),
+        TEST_REALM,
+        734,
+        opts,
+        Some(vec![evidence.rep.0.ticket.clone()]),
+        vec![pa_pac_options(true).expect("PA-PAC-OPTIONS")],
+        pref_etypes(),
+    )
+    .expect("S4U2Proxy TGS-REQ");
+    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("S4U2Proxy with PA-PAC-OPTIONS");
+    assert_eq!(out.rep.0.cname.components_joined(), TEST_ADMIN);
 }
 
 #[test]

@@ -8,7 +8,7 @@ use krb5_crypto::{
 };
 use krb5_types::{
     ku, pa, ApOptions, ApReq, AsReq, Authenticator, Checksum, EncryptedData, EncryptionKey,
-    KerberosTime, Microseconds, PaData, PrincipalName, Realm, Ticket,
+    KerberosFlags, KerberosTime, Microseconds, PaData, PrincipalName, Realm, Ticket,
 };
 
 use crate::error::Error;
@@ -462,5 +462,24 @@ pub fn pa_for_user(
     Ok(PaData {
         padata_type: pa::FOR_USER,
         padata_value: encode(&for_user)?.into(),
+    })
+}
+
+/// PA-PAC-OPTIONS (padata 167). `rbcd` sets MS-KILE bit 3.
+///
+/// # Errors
+///
+/// DER encode.
+pub fn pa_pac_options(rbcd: bool) -> Result<PaData, Error> {
+    let body = if rbcd {
+        krb5_types::s4u::PaPacOptions::rbcd()
+    } else {
+        krb5_types::s4u::PaPacOptions {
+            flags: KerberosFlags::repeat(false, 32),
+        }
+    };
+    Ok(PaData {
+        padata_type: pa::PAC_OPTIONS,
+        padata_value: encode(&body)?.into(),
     })
 }

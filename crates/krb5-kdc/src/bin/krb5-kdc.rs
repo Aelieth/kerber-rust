@@ -13,9 +13,9 @@
 use std::path::PathBuf;
 
 use krb5_kdc::{
-    bind_preferred, documented_changepw, documented_host, documented_kadmin, drop_privileges,
-    load_store, serve, shared_store, Acl, PrincipalStore, BIND_CANDIDATES, TEST_ADMIN, TEST_REALM,
-    TEST_USER,
+    bind_preferred, documented_admin_id, documented_changepw, documented_host, documented_kadmin,
+    drop_privileges, load_store, serve, shared_store, Acl, PrincipalStore, BIND_CANDIDATES,
+    TEST_ADMIN, TEST_REALM, TEST_USER,
 };
 
 fn main() {
@@ -31,6 +31,7 @@ fn main() {
     let test_realm = args.iter().any(|a| a == "--test-realm");
     args.retain(|a| a != "--test-realm");
     let mut export_pkinit: Option<String> = None;
+    let mut export_keytab: Option<String> = None;
     let mut i = 0usize;
     while i < args.len() {
         if args[i] == "--export-pkinit" {
@@ -41,7 +42,18 @@ fn main() {
             }
             continue;
         }
+        if args[i] == "--export-keytab" {
+            export_keytab = args.get(i + 1).cloned();
+            args.remove(i);
+            if i < args.len() {
+                args.remove(i);
+            }
+            continue;
+        }
         i += 1;
+    }
+    if export_keytab.is_none() {
+        export_keytab = std::env::var("KRB5_EXPORT_KEYTAB").ok();
     }
 
     let kdc_conf = load_kdc_conf();
@@ -87,6 +99,22 @@ fn main() {
         if let Err(e) = store.enable_pkinit_ca() {
             eprintln!("krb5-kdc: PKINIT CA: {e}");
             std::process::exit(1);
+        }
+    }
+    if let Some(path) = export_keytab.as_ref() {
+        let acl = Acl::allow_admin(documented_admin_id());
+        match store.export_keytab(&acl, &documented_admin_id(), &documented_host()) {
+            Ok(kt) => {
+                if let Err(e) = kt.write_file(path) {
+                    eprintln!("krb5-kdc: export-keytab {path}: {e}");
+                    std::process::exit(1);
+                }
+                println!("keytab {path}");
+            }
+            Err(e) => {
+                eprintln!("krb5-kdc: export-keytab: {e}");
+                std::process::exit(1);
+            }
         }
     }
     if let Some(dir) = export_pkinit.as_ref() {

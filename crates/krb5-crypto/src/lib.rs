@@ -45,7 +45,7 @@ pub use modp::{
 };
 pub use ops::{
     checksum, decrypt, decrypt_with_state, encrypt, encrypt_with_confounder, encrypt_with_state,
-    string_to_key, verify_checksum, CipherState,
+    hmac_md5_arcfour_checksum, string_to_key, verify_checksum, CipherState,
 };
 pub use prf::{prf, prf_plus};
 pub use spake::{

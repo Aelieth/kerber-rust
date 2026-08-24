@@ -435,6 +435,32 @@ fn hmac_md5_simple(key: &[u8], data: &[u8]) -> Result<Vec<u8>, Error> {
     Ok(mac.finalize().into_bytes().to_vec())
 }
 
+/// RFC 4757 HMAC-MD5-ARCFOUR checksum (cksumtype -138).
+///
+/// MS-SFU PA-FOR-USER uses this with the TGT session key even when that
+/// key is AES (MIT `krb5int_hmacmd5_checksum`). Key length must be ≤ 64.
+///
+/// # Errors
+///
+/// Key longer than the MD5 block, or HMAC setup failure.
+pub fn hmac_md5_arcfour_checksum(key: &[u8], usage: u32, message: &[u8]) -> Result<Vec<u8>, Error> {
+    use md5::{Digest, Md5};
+    if key.len() > 64 {
+        return Err(Error::InvalidKeyLength);
+    }
+    let mapped = match usage {
+        3 | 9 => 8,
+        23 => 13,
+        n => n,
+    };
+    let ksign = hmac_md5_simple(key, b"signaturekey\0")?;
+    let mut hasher = Md5::new();
+    hasher.update(mapped.to_le_bytes());
+    hasher.update(message);
+    let hashval = hasher.finalize();
+    hmac_md5_simple(&ksign, &hashval)
+}
+
 /// Constant-time verify of a keyed checksum.
 ///
 /// # Errors

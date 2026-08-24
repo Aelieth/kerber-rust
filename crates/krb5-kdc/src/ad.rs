@@ -208,17 +208,25 @@ pub(crate) fn s4u2self_client(
     let data = krb5_types::s4u::pa_for_user_cksum_data(&pa.user_name, realm, pkg);
     let usage = KeyUsage::new(ku::PA_FOR_USER)?;
     let mic = checksum(tgt_session, usage, &data)?;
-    if mic.as_slice() != pa.cksum.checksum.as_ref() {
+    let hmac_md5 =
+        krb5_crypto::hmac_md5_arcfour_checksum(tgt_session.as_bytes(), ku::PA_FOR_USER, &data)?;
+    let got = pa.cksum.checksum.as_ref();
+    if got != mic.as_slice() && got != hmac_md5.as_slice() {
         return Err(proto(err::INAPP_CKSUM, "PA-FOR-USER"));
     }
     Ok(Some((pa.user_name, realm.to_owned())))
 }
 
 /// S4U2Proxy: evidence ticket in additional-tickets, cname from evidence.
+///
+/// MS-SFU: the evidence ticket MUST be forwardable. PA-PAC-OPTIONS (167),
+/// when present, is decoded; a truncated or non-DER value is `BADOPTION`.
+/// The RBCD bit is read so the field is not ignored.
 pub(crate) fn s4u2proxy_client(
     store: &PrincipalStore,
     tgs: &TgsReq,
     tgt_cname: &PrincipalName,
+    padata: Option<&[PaData]>,
 ) -> Result<Option<PrincipalName>, Error> {
     if !tgs
         .0
@@ -227,6 +235,11 @@ pub(crate) fn s4u2proxy_client(
         .bit(krb5_types::flag_bit::CNAME_IN_ADDL_TKT)
     {
         return Ok(None);
+    }
+    if let Some(raw) = find_pa(padata, pa::PAC_OPTIONS) {
+        let opts: krb5_types::s4u::PaPacOptions =
+            decode(raw).map_err(|_| proto(err::BADOPTION, "PA-PAC-OPTIONS"))?;
+        let _rbcd = opts.resource_based_constrained_delegation();
     }
     let extra = tgs
         .0
@@ -250,6 +263,12 @@ pub(crate) fn s4u2proxy_client(
     let usage = KeyUsage::new(ku::TICKET)?;
     let plain = decrypt(&skey.key, usage, extra.enc_part.cipher.as_ref())?;
     let part: EncTicketPart = decode(&plain)?;
+    if !part.flags.forwardable() {
+        return Err(proto(
+            err::BADOPTION,
+            "S4U2Proxy evidence ticket is not forwardable",
+        ));
+    }
     Ok(Some(part.cname))
 }
 
