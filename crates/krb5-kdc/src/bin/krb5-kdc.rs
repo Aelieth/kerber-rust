@@ -32,6 +32,7 @@ fn main() {
     args.retain(|a| a != "--test-realm");
     let mut export_pkinit: Option<String> = None;
     let mut export_keytab: Option<String> = None;
+    let mut export_krbtgt: Option<String> = None;
     let mut i = 0usize;
     while i < args.len() {
         if args[i] == "--export-pkinit" {
@@ -50,10 +51,21 @@ fn main() {
             }
             continue;
         }
+        if args[i] == "--export-krbtgt-keytab" {
+            export_krbtgt = args.get(i + 1).cloned();
+            args.remove(i);
+            if i < args.len() {
+                args.remove(i);
+            }
+            continue;
+        }
         i += 1;
     }
     if export_keytab.is_none() {
         export_keytab = std::env::var("KRB5_EXPORT_KEYTAB").ok();
+    }
+    if export_krbtgt.is_none() {
+        export_krbtgt = std::env::var("KRB5_EXPORT_KRBTGT_KEYTAB").ok();
     }
 
     let kdc_conf = load_kdc_conf();
@@ -113,6 +125,23 @@ fn main() {
             }
             Err(e) => {
                 eprintln!("krb5-kdc: export-keytab: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if let Some(path) = export_krbtgt.as_ref() {
+        let acl = Acl::allow_admin(documented_admin_id());
+        let tgt = krb5_types::PrincipalName::krbtgt(store.realm());
+        match store.export_keytab(&acl, &documented_admin_id(), &tgt) {
+            Ok(kt) => {
+                if let Err(e) = kt.write_file(path) {
+                    eprintln!("krb5-kdc: export-krbtgt-keytab {path}: {e}");
+                    std::process::exit(1);
+                }
+                println!("krbtgt-keytab {path}");
+            }
+            Err(e) => {
+                eprintln!("krb5-kdc: export-krbtgt-keytab: {e}");
                 std::process::exit(1);
             }
         }
