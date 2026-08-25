@@ -262,6 +262,7 @@ impl DumpPrincipal {
                 tl_data: self.tl_data,
                 e_data: self.e_data,
                 rid,
+                s4u_allowed_from: Vec::new(),
             },
             sid,
         ))

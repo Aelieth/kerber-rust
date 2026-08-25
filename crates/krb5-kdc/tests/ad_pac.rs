@@ -216,12 +216,12 @@ fn issued_pac_self_verifies_all_four_signatures() {
     let ident = store.pac_identity(&cname, TEST_REALM);
     let signed = sign_pac(
         &cname,
-        TEST_REALM,
         tgt_part.authtime.unix_seconds(),
         &host.key,
         &krbtgt.key,
         &der,
         &ident,
+        None,
     )
     .expect("sign");
     // Re-sign uses the service-ticket checksum input, so ticket/full will

@@ -290,6 +290,7 @@ fn issue_as_from(
         renew_till_for(store, &now, &flags),
         store,
         true,
+        None,
     )?;
     let renew_till = renew_till_for(store, &now, &flags);
     let enc_part = enc_rep_part(
@@ -454,11 +455,13 @@ fn issue_tgs_from(
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no server key"))?;
     let mut ticket_cname = enc_tkt.cname.clone();
     let mut ticket_crealm = utf8_realm(&enc_tkt.crealm).to_owned();
+    let mut evidence_logon = None;
     if let Some((user, realm)) = s4u2self_client(&tgt_session, tgs_padata)? {
         ticket_cname = user;
         ticket_crealm = realm;
-    } else if let Some(cn) = s4u2proxy_client(store, req, &enc_tkt.cname, tgs_padata)? {
+    } else if let Some((cn, logon)) = s4u2proxy_client(store, req, &enc_tkt.cname, tgs_padata)? {
         ticket_cname = cn;
+        evidence_logon = Some(logon);
     }
     if utf8_realm(&enc_tkt.crealm) != store.realm() {
         for r in enc_tkt.transited.realms() {
@@ -532,6 +535,7 @@ fn issue_tgs_from(
         renew_till_for(store, &now, &flags),
         store,
         include_pac,
+        evidence_logon.as_deref(),
     )?;
     let renew_till = renew_till_for(store, &now, &flags);
     let enc_part = enc_rep_part(
@@ -678,6 +682,7 @@ fn mint_ticket(
     renew_till: Option<KerberosTime>,
     store: &PrincipalStore,
     include_pac: bool,
+    logon_override: Option<&[u8]>,
 ) -> Result<Ticket, Error> {
     let mut part = EncTicketPart {
         flags,
@@ -699,12 +704,12 @@ fn mint_ticket(
         let ident = store.pac_identity(cname, crealm);
         let pac = sign_pac(
             cname,
-            crealm,
             authtime.unix_seconds(),
             service_key,
             kdc_key,
             &checksum_der,
             &ident,
+            logon_override,
         )?;
         part.authorization_data = Some(wrap_win2k_pac(&pac)?);
     }

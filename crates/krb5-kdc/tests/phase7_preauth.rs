@@ -459,12 +459,12 @@ fn as_and_tgs_tickets_carry_verifiable_pac() {
     let ident = store.pac_identity(&cname, TEST_REALM);
     let signed = sign_pac(
         &cname,
-        TEST_REALM,
         tgt_part.authtime.unix_seconds(),
         &host.key,
         &krbtgt.key,
         &[],
         &ident,
+        None,
     )
     .expect("sign");
     verify_pac(&signed, &host.key, &krbtgt.key).expect("re-sign");
@@ -547,6 +547,12 @@ fn s4u2proxy_takes_cname_from_evidence() {
         .unwrap();
     let part = decrypt_ticket_part(&host.key, &out.rep.0.ticket).expect("enc");
     assert_eq!(part.cname.components_joined(), TEST_ADMIN);
+    let pac = pac_from_ticket_part(&part).expect("copied PAC");
+    let parsed = krb5_types::pac::Pac::parse(&pac).expect("PAC");
+    let logon =
+        parse_kerb_validation_info(parsed.buffer(PAC_LOGON_INFO).expect("logon")).expect("NDR");
+    assert_eq!(logon.user_id, store.get_name(&admin).unwrap().rid);
+    assert_eq!(logon.effective_name.value, TEST_ADMIN);
 }
 
 #[test]
@@ -674,7 +680,47 @@ fn s4u2proxy_honors_pac_options_rbcd() {
         pref_etypes(),
     )
     .expect("S4U2Proxy TGS-REQ");
-    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("S4U2Proxy with PA-PAC-OPTIONS");
+    match krb5_kdc::issue_tgs(&store, &tgs) {
+        Err(Error::Protocol { code, .. }) => assert_eq!(code, err::BADOPTION),
+        other => panic!("RBCD without allow-list must deny, got {other:?}"),
+    }
+}
+
+#[test]
+fn s4u2proxy_rbcd_allowed_from_succeeds() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
+    store.allow_s4u_from(&documented_host(), &user.components_joined());
+    let admin_tgt = issue_tgt(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 741);
+    let evidence_tgs = tgs_req(
+        admin_tgt.rep.0.ticket.clone(),
+        &admin_tgt.session_key,
+        TEST_REALM,
+        &admin,
+        user.clone(),
+        TEST_REALM,
+        742,
+    )
+    .expect("evidence TGS-REQ");
+    let evidence = krb5_kdc::issue_tgs(&store, &evidence_tgs).expect("evidence");
+    let user_tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 743);
+    let opts = KdcOptions::forwardable().with_bit(flag_bit::CNAME_IN_ADDL_TKT, true);
+    let tgs = tgs_req_ex(
+        user_tgt.rep.0.ticket.clone(),
+        &user_tgt.session_key,
+        TEST_REALM,
+        &user,
+        documented_host(),
+        TEST_REALM,
+        744,
+        opts,
+        Some(vec![evidence.rep.0.ticket.clone()]),
+        vec![pa_pac_options(true).expect("PA-PAC-OPTIONS")],
+        pref_etypes(),
+    )
+    .expect("S4U2Proxy TGS-REQ");
+    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("RBCD allowed");
     assert_eq!(out.rep.0.cname.components_joined(), TEST_ADMIN);
 }
 

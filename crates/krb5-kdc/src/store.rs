@@ -110,6 +110,8 @@ pub struct Principal {
     pub e_data: Vec<u8>,
     /// Relative ID in the realm domain SID (0 = unassigned).
     pub rid: u32,
+    /// Evidence-server names allowed to S4U2Proxy here (RBCD).
+    pub s4u_allowed_from: Vec<String>,
 }
 
 impl Principal {
@@ -152,6 +154,7 @@ impl Principal {
             tl_data: Vec::new(),
             e_data: Vec::new(),
             rid: 0,
+            s4u_allowed_from: Vec::new(),
         }
     }
 }
@@ -375,6 +378,14 @@ impl PrincipalStore {
         }
     }
 
+    /// Permit `from` to S4U2Proxy to `name` (RBCD allow-list).
+    pub fn allow_s4u_from(&mut self, name: &PrincipalName, from: &str) {
+        let id = format!("{}@{}", name.components_joined(), self.realm);
+        if let Some(p) = self.map.get_mut(&id) {
+            p.s4u_allowed_from.push(from.to_owned());
+        }
+    }
+
     /// PAC identity for `name` in `crealm` (store RID, or `RID_FIRST_USER` if unknown).
     #[must_use]
     pub fn pac_identity(&self, name: &PrincipalName, crealm: &str) -> PacIdentity {
@@ -528,7 +539,9 @@ impl PrincipalStore {
         if self.map.contains_key(&id) {
             return Err(Error::AlreadyExists);
         }
-        self.insert_randkey(name, &randkey_etypes())
+        self.insert_randkey(name, &randkey_etypes())?;
+        self.allow_s4u_from(name, &name.components_joined());
+        Ok(())
     }
 
     /// Replace password-derived keys (kpasswd): bump kvno, keep prior keys

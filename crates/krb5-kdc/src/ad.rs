@@ -34,28 +34,32 @@ pub fn wrap_win2k_pac(pac_bytes: &[u8]) -> Result<krb5_types::AuthorizationData,
 /// Crypto or DER failures while building checksums.
 pub fn sign_pac(
     cname: &PrincipalName,
-    _crealm: &str,
     authtime: u32,
     server: &ProtocolKey,
     kdc: &ProtocolKey,
     enc_tkt_der: &[u8],
     identity: &krb5_types::pac::PacIdentity,
+    logon_override: Option<&[u8]>,
 ) -> Result<Vec<u8>, Error> {
     let server_type = server.etype().checksum_type();
     let kdc_type = kdc.etype().checksum_type();
     let server_zeros = vec![0u8; server.etype().hmac_output_len()];
     let kdc_zeros = vec![0u8; kdc.etype().hmac_output_len()];
+    let logon = match logon_override {
+        Some(b) => b.to_vec(),
+        None => krb5_types::pac::logon_info_buffer(
+            &identity.sam,
+            &identity.realm,
+            &identity.domain_sid,
+            identity.rid,
+        ),
+    };
     let mut pac = krb5_types::pac::Pac {
         version: 0,
         buffers: vec![
             krb5_types::pac::PacBuffer {
                 kind: krb5_types::pac::PAC_LOGON_INFO,
-                data: krb5_types::pac::logon_info_buffer(
-                    &identity.sam,
-                    &identity.realm,
-                    &identity.domain_sid,
-                    identity.rid,
-                ),
+                data: logon,
             },
             krb5_types::pac::PacBuffer {
                 kind: krb5_types::pac::PAC_CLIENT_INFO,
@@ -245,7 +249,7 @@ pub(crate) fn s4u2proxy_client(
     tgs: &TgsReq,
     tgt_cname: &PrincipalName,
     padata: Option<&[PaData]>,
-) -> Result<Option<PrincipalName>, Error> {
+) -> Result<Option<(PrincipalName, Vec<u8>)>, Error> {
     if !tgs
         .0
         .req_body
@@ -254,10 +258,11 @@ pub(crate) fn s4u2proxy_client(
     {
         return Ok(None);
     }
+    let mut rbcd = false;
     if let Some(raw) = find_pa(padata, pa::PAC_OPTIONS) {
         let opts: krb5_types::s4u::PaPacOptions =
             decode(raw).map_err(|_| proto(err::BADOPTION, "PA-PAC-OPTIONS"))?;
-        let _rbcd = opts.resource_based_constrained_delegation();
+        rbcd = opts.resource_based_constrained_delegation();
     }
     let extra = tgs
         .0
@@ -287,7 +292,36 @@ pub(crate) fn s4u2proxy_client(
             "S4U2Proxy evidence ticket is not forwardable",
         ));
     }
-    Ok(Some(part.cname))
+    if rbcd {
+        let dest = tgs
+            .0
+            .req_body
+            .sname
+            .as_ref()
+            .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "S4U2Proxy sname"))?;
+        let target = store
+            .get_name(dest)
+            .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "S4U2Proxy target"))?;
+        let from = extra.sname.components_joined();
+        if !target.s4u_allowed_from.iter().any(|n| n == &from) {
+            return Err(proto(err::BADOPTION, "RBCD not allowed"));
+        }
+    }
+    let pac = pac_from_ticket_part(&part)
+        .ok_or_else(|| proto(err::BAD_INTEGRITY, "S4U2Proxy evidence PAC"))?;
+    let krbtgt = store
+        .krbtgt()
+        .and_then(|p| p.best_key())
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
+    let der = ticket_checksum_der(&part)?;
+    verify_pac_signatures(&pac, &skey.key, Some(&krbtgt.key), Some(&der))?;
+    let parsed = krb5_types::pac::Pac::parse(&pac)
+        .map_err(|e| proto(err::BAD_INTEGRITY, &format!("evidence PAC: {e}")))?;
+    let logon = parsed
+        .buffer(krb5_types::pac::PAC_LOGON_INFO)
+        .ok_or_else(|| proto(err::BAD_INTEGRITY, "evidence PAC logon"))?
+        .to_vec();
+    Ok(Some((part.cname, logon)))
 }
 
 /// U2U: encrypt ticket with additional-ticket session key.
