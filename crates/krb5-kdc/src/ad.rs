@@ -196,6 +196,27 @@ pub fn ticket_checksum_der(part: &EncTicketPart) -> Result<Vec<u8>, Error> {
     encode(&clone).map_err(Error::from)
 }
 
+/// If the TGT carries a PAC, verify it with `ticket_key` (the key that
+/// opened the ticket) and return LOGON_INFO. Missing PAC is `Ok(None)`
+/// so MIT TGTs still work.
+pub(crate) fn presented_tgt_logon(
+    part: &EncTicketPart,
+    ticket_key: &ProtocolKey,
+) -> Result<Option<Vec<u8>>, Error> {
+    let Some(pac) = pac_from_ticket_part(part) else {
+        return Ok(None);
+    };
+    let der = ticket_checksum_der(part)?;
+    verify_pac_signatures(&pac, ticket_key, Some(ticket_key), Some(&der))?;
+    let parsed = krb5_types::pac::Pac::parse(&pac)
+        .map_err(|e| proto(err::BAD_INTEGRITY, &format!("TGT PAC: {e}")))?;
+    let logon = parsed
+        .buffer(krb5_types::pac::PAC_LOGON_INFO)
+        .ok_or_else(|| proto(err::BAD_INTEGRITY, "TGT PAC logon"))?
+        .to_vec();
+    Ok(Some(logon))
+}
+
 /// Extract PAC bytes from EncTicketPart authorization-data.
 pub fn pac_from_ticket_part(part: &EncTicketPart) -> Option<Vec<u8>> {
     let ad = part.authorization_data.as_ref()?;

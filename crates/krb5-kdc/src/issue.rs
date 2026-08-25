@@ -7,6 +7,7 @@ use krb5_crypto::{
     decrypt, encrypt, krb_fx_cf2, verify_checksum, EncryptionType, KeyUsage, ProtocolKey,
 };
 use krb5_protocol::{ReplayCache, ReplayKey};
+use krb5_types::pac::{parse_kerb_validation_info, PacIdentity};
 use krb5_types::{
     err, flag_bit, ku, pa, AsRep, AsReq, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart,
     EncryptedData, EncryptionKey, EtypeInfo2, EtypeInfo2Entry, KerberosTime, KrbError,
@@ -14,7 +15,9 @@ use krb5_types::{
     TgsReq, Ticket, TicketFlags, TransitedEncoding,
 };
 
-use crate::ad::{s4u2proxy_client, s4u2self_client, sign_pac, u2u_session, wrap_win2k_pac};
+use crate::ad::{
+    presented_tgt_logon, s4u2proxy_client, s4u2self_client, sign_pac, u2u_session, wrap_win2k_pac,
+};
 use crate::error::Error;
 use crate::preauth::{
     fast_finished, process_pkinit, process_spake, unwrap_fast, unwrap_fast_padata, wrap_fast_rep,
@@ -273,6 +276,11 @@ fn issue_as_from(
         .krbtgt()
         .and_then(|p| p.best_key())
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
+    let pac_kdc = if sname.is_krbtgt_for(store.realm()) {
+        skey.key.clone()
+    } else {
+        krbtgt_key.key.clone()
+    };
     let ticket = mint_ticket(
         &skey.key,
         skey.kvno,
@@ -285,7 +293,7 @@ fn issue_as_from(
         &now,
         &end,
         flags.clone(),
-        &krbtgt_key.key,
+        &pac_kdc,
         TransitedEncoding::empty(),
         renew_till_for(store, &now, &flags),
         store,
@@ -391,7 +399,7 @@ fn issue_tgs_from(
     }
     let tkt_etype = EncryptionType::from_iana(ap.ticket.enc_part.etype)
         .or_else(|_| EncryptionType::known(ap.ticket.enc_part.etype))?;
-    let enc_tkt = decrypt_presented_tgt(store, &ap, tkt_etype)?;
+    let (enc_tkt, tgt_key) = decrypt_presented_tgt(store, &ap, tkt_etype)?;
     check_ticket_times(store, &enc_tkt)?;
     let sess_etype = EncryptionType::from_iana(enc_tkt.key.keytype)
         .or_else(|_| EncryptionType::known(enc_tkt.key.keytype))?;
@@ -461,6 +469,8 @@ fn issue_tgs_from(
         ticket_crealm = realm;
     } else if let Some((cn, logon)) = s4u2proxy_client(store, req, &enc_tkt.cname, tgs_padata)? {
         ticket_cname = cn;
+        evidence_logon = Some(logon);
+    } else if let Some(logon) = presented_tgt_logon(&enc_tkt, &tgt_key)? {
         evidence_logon = Some(logon);
     }
     if utf8_realm(&enc_tkt.crealm) != store.realm() {
@@ -618,7 +628,7 @@ fn decrypt_presented_tgt(
     store: &PrincipalStore,
     ap: &krb5_types::ApReq,
     tkt_etype: EncryptionType,
-) -> Result<EncTicketPart, Error> {
+) -> Result<(EncTicketPart, ProtocolKey), Error> {
     let usage = KeyUsage::new(ku::TICKET)?;
     let cipher = ap.ticket.enc_part.cipher.as_ref();
     let kvno = ap.ticket.enc_part.kvno;
@@ -638,7 +648,7 @@ fn decrypt_presented_tgt(
         match decrypt(key, usage, cipher) {
             Ok(plain) => {
                 if let Ok(part) = decode::<EncTicketPart>(&plain) {
-                    return Ok(part);
+                    return Ok((part, key.clone()));
                 }
             }
             Err(e) => last = Error::from(e),
@@ -701,7 +711,18 @@ fn mint_ticket(
         let placeholder = wrap_win2k_pac(&[0])?;
         part.authorization_data = Some(placeholder);
         let checksum_der = encode(&part)?;
-        let ident = store.pac_identity(cname, crealm);
+        let ident = if let Some(b) = logon_override {
+            let v = parse_kerb_validation_info(b)
+                .map_err(|e| proto(err::BAD_INTEGRITY, &format!("PAC logon: {e}")))?;
+            PacIdentity {
+                sam: v.effective_name.value,
+                realm: crealm.to_owned(),
+                domain_sid: v.logon_domain_id,
+                rid: v.user_id,
+            }
+        } else {
+            store.pac_identity(cname, crealm)
+        };
         let pac = sign_pac(
             cname,
             authtime.unix_seconds(),

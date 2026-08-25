@@ -5,21 +5,24 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    decrypt, dh_generate, dh_shared, octetstring2key, p256_generate, string_to_key, EncryptionType,
-    KeyUsage, ProtocolKey, OAKLEY_2048,
+    decrypt, dh_generate, dh_shared, encrypt, octetstring2key, p256_generate, string_to_key,
+    EncryptionType, KeyUsage, ProtocolKey, OAKLEY_2048,
 };
 use krb5_kdc::{
     as_req, bootstrap_documented, decrypt_ticket_part, documented_admin_id, documented_host,
     pa_enc_timestamp, pac_from_ticket_part, sign_pac, tgs_req, ticket_checksum_der, verify_pac,
-    verify_pac_signatures, Acl, AdminOp, Error, PrincipalStore, S2K_ITERS, TEST_ADMIN,
-    TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
+    verify_pac_signatures, wrap_win2k_pac, Acl, AdminOp, Error, PrincipalStore, S2K_ITERS,
+    TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
 };
 use krb5_protocol::{
     apply_strengthen, armor_key, as_req_sname, attach_fast, build_fast_armor, pa_for_user,
     pa_pac_options, pa_pk_as_req, pa_pk_as_req_agile, pa_pk_as_req_spki, pa_spake_response,
     pa_spake_support, pkinit_reply_key, pkinit_reply_key_agile, tgs_req_ex, unwrap_fast_rep,
 };
-use krb5_types::pac::{parse_kerb_validation_info, PAC_LOGON_INFO};
+use krb5_types::pac::{
+    parse_kerb_validation_info, Pac, RpcSid, PAC_LOGON_INFO, PAC_SERVER_CHECKSUM,
+    PAC_TICKET_CHECKSUM,
+};
 use krb5_types::{
     ascii, err, flag_bit, ku, pa, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart,
     KdcOptions, MethodData, PrincipalName,
@@ -1161,4 +1164,206 @@ fn ktadd_exports_all_kvnos_after_kpasswd() {
         .expect("ktadd");
     let kvnos: Vec<u32> = kt.entries.iter().map(|e| e.kvno).collect();
     assert!(kvnos.contains(&1) && kvnos.iter().any(|v| *v > 1));
+}
+
+fn two_realm_pac_stores() -> (PrincipalStore, PrincipalStore, ProtocolKey, PrincipalName) {
+    let (mut local, acl_a) = bootstrap_documented().expect("local");
+    local.set_domain_sid(RpcSid::nt_domain(9, 8, 7));
+    let mut foreign = PrincipalStore::bootstrap(
+        "OTHER.TEST",
+        TEST_USER,
+        TEST_USER_PASSWORD,
+        TEST_ADMIN,
+        TEST_ADMIN_PASSWORD,
+    )
+    .expect("foreign");
+    foreign.set_domain_sid(RpcSid::nt_domain(11, 12, 13));
+    let actor_b = format!("{TEST_ADMIN}@OTHER.TEST");
+    let acl_b = Acl::allow_admin(&actor_b);
+    let host_b = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "svc.other.test"]);
+    foreign
+        .create_host(&acl_b, &actor_b, &host_b)
+        .expect("host");
+    let ir =
+        ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x5a; 32]).expect("ir key");
+    local
+        .create_interrealm_key(&acl_a, &documented_admin_id(), "OTHER.TEST", ir.clone())
+        .expect("A→B");
+    foreign
+        .create_interrealm_key(&acl_b, &actor_b, TEST_REALM, ir.clone())
+        .expect("B→A");
+    (local, foreign, ir, host_b)
+}
+
+fn referral_from_local(local: &PrincipalStore, nonce: u32) -> (krb5_kdc::IssuedTgs, PrincipalName) {
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let tgt = issue_tgt(local, TEST_USER, TEST_USER_PASSWORD, nonce);
+    let other = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "OTHER.TEST"]);
+    let tgs = tgs_req(
+        tgt.rep.0.ticket.clone(),
+        &tgt.session_key,
+        TEST_REALM,
+        &cname,
+        other.clone(),
+        TEST_REALM,
+        nonce + 1,
+    )
+    .expect("referral TGS-REQ");
+    (
+        krb5_kdc::issue_tgs(local, &tgs).expect("referral TGS"),
+        cname,
+    )
+}
+
+fn rewrap_ticket(
+    ticket: &krb5_types::Ticket,
+    part: &EncTicketPart,
+    key: &ProtocolKey,
+) -> krb5_types::Ticket {
+    let der = encode(part).expect("enc-tkt DER");
+    let usage = KeyUsage::new(ku::TICKET).expect("usage");
+    let cipher = encrypt(key, usage, &der).expect("encrypt");
+    let mut out = ticket.clone();
+    out.enc_part.cipher = cipher.into();
+    out
+}
+
+fn flip_pac_sig(part: &mut EncTicketPart, kind: u32) {
+    let pac = pac_from_ticket_part(part).expect("PAC");
+    let mut parsed = Pac::parse(&pac).expect("parse");
+    let buf = parsed
+        .buffers
+        .iter_mut()
+        .find(|b| b.kind == kind)
+        .expect("sig buffer");
+    assert!(buf.data.len() > 4, "MAC bytes");
+    buf.data[4] ^= 0xff;
+    part.authorization_data = Some(wrap_win2k_pac(&parsed.to_bytes()).expect("wrap"));
+}
+
+#[test]
+fn tgs_copies_foreign_referral_pac_identity() {
+    let (local, foreign, ir, host_b) = two_realm_pac_stores();
+    assert_ne!(local.domain_sid().to_sddl(), foreign.domain_sid().to_sddl());
+    let (referral, cname) = referral_from_local(&local, 9100);
+    let ref_part = decrypt_ticket_part(&ir, &referral.rep.0.ticket).expect("referral enc");
+    let ref_pac = pac_from_ticket_part(&ref_part).expect("referral PAC");
+    let ref_logon = parse_kerb_validation_info(
+        Pac::parse(&ref_pac)
+            .expect("PAC")
+            .buffer(PAC_LOGON_INFO)
+            .expect("logon"),
+    )
+    .expect("NDR");
+    assert_eq!(
+        ref_logon.logon_domain_id.to_sddl(),
+        local.domain_sid().to_sddl()
+    );
+
+    let tgs = tgs_req(
+        referral.rep.0.ticket.clone(),
+        &referral.session_key,
+        TEST_REALM,
+        &cname,
+        host_b.clone(),
+        "OTHER.TEST",
+        9102,
+    )
+    .expect("foreign TGS-REQ");
+    let out = krb5_kdc::issue_tgs(&foreign, &tgs).expect("foreign TGS");
+    let host_key = foreign.get_name(&host_b).unwrap().best_key().unwrap();
+    let part = decrypt_ticket_part(&host_key.key, &out.rep.0.ticket).expect("svc");
+    let pac = pac_from_ticket_part(&part).expect("svc PAC");
+    let logon = parse_kerb_validation_info(
+        Pac::parse(&pac)
+            .expect("PAC")
+            .buffer(PAC_LOGON_INFO)
+            .expect("logon"),
+    )
+    .expect("NDR");
+    assert_eq!(logon.user_id, ref_logon.user_id);
+    assert_eq!(
+        logon.logon_domain_id.to_sddl(),
+        local.domain_sid().to_sddl(),
+        "issued PAC must keep the foreign LOGON_INFO SID, not the local store SID"
+    );
+    assert_ne!(
+        logon.logon_domain_id.to_sddl(),
+        foreign.domain_sid().to_sddl()
+    );
+    assert_ne!(
+        logon.logon_domain_id.to_sddl(),
+        RpcSid::dummy_domain().to_sddl()
+    );
+}
+
+#[test]
+fn tgs_rejects_corrupt_foreign_referral_pac() {
+    let (local, foreign, ir, host_b) = two_realm_pac_stores();
+    let (referral, cname) = referral_from_local(&local, 9200);
+    let mut part = decrypt_ticket_part(&ir, &referral.rep.0.ticket).expect("referral enc");
+    flip_pac_sig(&mut part, PAC_SERVER_CHECKSUM);
+    let bad_server = rewrap_ticket(&referral.rep.0.ticket, &part, &ir);
+    let tgs = tgs_req(
+        bad_server,
+        &referral.session_key,
+        TEST_REALM,
+        &cname,
+        host_b.clone(),
+        "OTHER.TEST",
+        9202,
+    )
+    .expect("TGS-REQ");
+    match krb5_kdc::issue_tgs(&foreign, &tgs) {
+        Err(Error::Protocol { code, .. }) => assert_eq!(code, err::BAD_INTEGRITY),
+        other => panic!("corrupt server checksum must fail, got {other:?}"),
+    }
+
+    let mut part16 = decrypt_ticket_part(&ir, &referral.rep.0.ticket).expect("referral enc");
+    flip_pac_sig(&mut part16, PAC_TICKET_CHECKSUM);
+    let bad_16 = rewrap_ticket(&referral.rep.0.ticket, &part16, &ir);
+    let tgs16 = tgs_req(
+        bad_16,
+        &referral.session_key,
+        TEST_REALM,
+        &cname,
+        host_b,
+        "OTHER.TEST",
+        9203,
+    )
+    .expect("TGS-REQ");
+    match krb5_kdc::issue_tgs(&foreign, &tgs16) {
+        Err(Error::Protocol { code, .. }) => assert_eq!(code, err::BAD_INTEGRITY),
+        other => panic!("corrupt type-16 checksum must fail, got {other:?}"),
+    }
+}
+
+#[test]
+fn tgs_without_pac_still_issues() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 9300);
+    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
+    let mut part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("TGT");
+    assert!(pac_from_ticket_part(&part).is_some());
+    part.authorization_data = None;
+    let stripped = rewrap_ticket(&issued.rep.0.ticket, &part, &krbtgt.key);
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let tgs = tgs_req(
+        stripped,
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        9301,
+    )
+    .expect("TGS-REQ");
+    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("MIT TGT without PAC must still issue");
+    let host = store
+        .get_name(&documented_host())
+        .unwrap()
+        .best_key()
+        .unwrap();
+    let svc = decrypt_ticket_part(&host.key, &out.rep.0.ticket).expect("svc");
+    assert!(pac_from_ticket_part(&svc).is_some());
 }
