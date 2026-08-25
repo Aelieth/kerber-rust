@@ -54,6 +54,11 @@ this project uses semantic versioning once a crate is published.
   (`scripts/ad-mit-trust-gate.sh`): Windows TDO inbound/outbound AES
   keys are both loaded. Referral TGTs carry a PAC signed with the
   inter-realm key (`scripts/samba-crossrealm-gate.sh` both directions).
+  TGS verifies a presented TGT PAC with the key that opened the ticket
+  and copies LOGON_INFO into the issued service PAC (foreign SID/RID
+  survive; corrupt server or type-16 checksum is `KRB_AP_ERR_BAD_INTEGRITY`).
+  A TGT without a PAC still issues (MIT). `kvno` success is not that
+  copy proof.
 - `scripts/prod-gate.sh` drives shipped `krb5-kinit` against
   `127.0.0.1:18888`, requires `kdc.issue` JSON with `correlation_id`,
   and archives a PDU pcap. Heimdal and SSPI gates record unavailability.

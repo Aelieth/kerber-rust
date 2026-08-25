@@ -88,5 +88,6 @@ Windows TDO inbound/outbound AES keys differ by salt. The Rust KDC
 issues `krbtgt/AD.KERBER.TEST` with the inbound key and decrypts
 AD-issued referrals with the outbound key (`KRB5_TEST_INTERREALM_KEY`
 / `KRB5_TEST_INTERREALM_KEY_ACCEPT`). Referral TGTs carry a PAC with
-store SID/RID (`scripts/samba-crossrealm-gate.sh`). Secrets stay in
-`~/adlab/` (0600).
+store SID/RID (`scripts/samba-crossrealm-gate.sh`). The accepting TGS
+verifies that PAC and copies LOGON_INFO; `kvno` is not that copy
+proof. Secrets stay in `~/adlab/` (0600).

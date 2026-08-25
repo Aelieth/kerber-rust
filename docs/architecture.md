@@ -60,7 +60,9 @@ so a separate kadmind process can reload it. `--export-keytab` /
 `KRB5_EXPORT_KEYTAB` writes the documented host principal. Issued PACs
 include buffers 12/17/18 and store SID/RID. S4U2Proxy copies the
 evidence PAC, requires a forwardable evidence ticket, and denies RBCD
-unless allowed. Referral TGTs carry a PAC.
+unless allowed. Referral TGTs carry a PAC. TGS verifies a presented
+TGT PAC with the ticket key and copies LOGON_INFO; a TGT without a PAC
+still synthesizes identity from the store.
 
 **`krb5-gss`** provides RFC 4121 wrap/MIC (MIT `libgssapi_krb5` is
 out-of-process; `scripts/gss-gate.sh`). The acceptor binds

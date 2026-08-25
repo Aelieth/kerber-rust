@@ -55,9 +55,11 @@ to full 1.0 parity is tracked in `working/plan-roadmap-adprod-*.md`:
 done. Samba L1 decodes the full buffer set of a Rust PAC
 (`samba-pac-verify-gate.sh`); Samba's KDC accepts a Rust referral PAC
 both directions (`samba-crossrealm-gate.sh`) — that is the L2/L3
-signature oracle (`kcrypto` is not in distro `python3-samba`). Rust
-S4U2Self/Proxy is MIT-gated (`scripts/s4u-mit-gate.sh`); S4U2Proxy
-copies the evidence PAC and denies RBCD unless allowed. `ad-*` gates
+signature oracle (`kcrypto` is not in distro `python3-samba`). TGS
+verifies a presented PAC and copies LOGON_INFO (in-repo two-realm
+tests; `kvno` is not that copy proof). Rust S4U2Self/Proxy is
+MIT-gated (`scripts/s4u-mit-gate.sh`); S4U2Proxy copies the evidence
+PAC and denies RBCD unless allowed. `ad-*` gates
 are **one-shot** against a since-torn-down Windows DC. The **prod-gate
 is a single-process Rust↔Rust loopback** (now in CI). `bounded_stress`
 asserts concurrent AS+TGS; soak/differential absent. **kpropd** on 754

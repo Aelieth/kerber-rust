@@ -106,7 +106,10 @@ after `pkinit-gate`. `ad-*` remain one-shot against a live Windows DC.
 - `scripts/samba-crossrealm-gate.sh` — shared-trust-password TDO;
   MIT `kvno` `user@KERBER.TEST` → `host/svc.ad.kerber.test` and
   `kbruser@AD.KERBER.TEST` → `host/testhost.kerber.test`. Samba logs
-  must not contain `PAC … failed`.
+  must not contain `PAC … failed`. `kvno` is not proof that the TGS
+  copied LOGON_INFO; that copy is `tgs_copies_foreign_referral_pac_identity`
+  / `tgs_rejects_corrupt_foreign_referral_pac` in
+  `crates/krb5-kdc/tests/phase7_preauth.rs`.
 - `scripts/ad-windows-gate.sh` — isolated `kinit kbruser@AD.KERBER.TEST`
   then `kvno host/svc.ad.kerber.test` (aes256, kvno 3). Sources
   `~/adlab/env`.
