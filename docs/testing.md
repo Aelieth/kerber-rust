@@ -101,8 +101,11 @@ after `pkinit-gate`. `ad-*` remain one-shot against a live Windows DC.
   plus `samba-ad-gate-unavailable.log`.
 - `scripts/samba-pac-verify-gate.sh` — co-located Rust KDC on `:8888`;
   Samba `PAC_DATA_RAW` + typed LOGON_INFO/REQUESTOR of a Rust-issued PAC
-  (buffers 1,10,12,16,17,18,19,6,7). Dummy SID fails. `kcrypto` is not
-  shipped; L2 signatures are the L3 Samba KDC path.
+  (buffers 1,10,12,16,17,18,19,6,7). Dummy SID fails.
+- `scripts/samba-pac-l2-gate.sh` — Samba `kcrypto` (RFC 3961 AES checksums)
+  recomputes PAC 6/7/16/19 of a Rust-issued ticket. Type-16 is over the
+  original EncTicketPart bytes with PAC ad-data `0x00`. A flipped MAC
+  must fail. Missing image/`kcrypto` is `exit 2`.
 - `scripts/samba-crossrealm-gate.sh` — shared-trust-password TDO;
   MIT `kvno` `user@KERBER.TEST` → `host/svc.ad.kerber.test` and
   `kbruser@AD.KERBER.TEST` → `host/testhost.kerber.test`. Samba logs

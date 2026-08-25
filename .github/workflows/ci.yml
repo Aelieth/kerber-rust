@@ -100,6 +100,10 @@ jobs:
         run: ./scripts/samba-pac-verify-gate.sh
         env:
           SAMBA_AD_IMAGE: samba-ad-dc:latest
+      - name: samba-pac-l2-gate (Samba kcrypto 6/7/16/19)
+        run: ./scripts/samba-pac-l2-gate.sh
+        env:
+          SAMBA_AD_IMAGE: samba-ad-dc:latest
       - name: samba-crossrealm-gate (L3 both-direction PAC)
         run: ./scripts/samba-crossrealm-gate.sh
         env:

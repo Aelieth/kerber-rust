@@ -112,12 +112,14 @@ SAMBA_AD_PASSWORD=<admin pw> \
 ```
 
 **A2/A5 payoff (in CI):** `scripts/samba-pac-verify-gate.sh` (L1: Samba
-IDL decode of a Rust PAC) and `scripts/samba-crossrealm-gate.sh` (L3:
-MIT `kvno` both directions; Samba KDC accepts the Rust referral PAC).
+IDL decode of a Rust PAC), `scripts/samba-pac-l2-gate.sh` (L2: Samba
+`kcrypto` recomputes 6/7/16/19; a flipped MAC fails), and
+`scripts/samba-crossrealm-gate.sh` (L3: MIT `kvno` both directions).
 The Rust TGS verifies a presented PAC and copies LOGON_INFO (in-repo
-two-realm tests). `kvno` is not that copy proof.
-`samba.tests.krb5.kcrypto` is not in distro `python3-samba`; L2
-signatures are the L3 KDC path. Missing image is still `exit 2`.
+two-realm tests). `kvno` is not that copy proof. Ubuntu
+`samba-testsuite` does not ship `samba.tests.krb5.kcrypto`; L2 vendors
+Samba 4.19.5's `kcrypto.py` (AES checksums) plus `python3-cryptography`.
+Missing image is still `exit 2`.
 
 ## Isolation (never touch host krb5/sssd)
 

@@ -46,6 +46,11 @@ RUN SAMBA_REALM="${SAMBA_REALM}" \
     SAMBA_KBRSVC_PASSWORD="${SAMBA_KBRSVC_PASSWORD}" \
     /usr/local/bin/samba-provision.sh
 
+# L2 PAC signatures: samba.tests.krb5.kcrypto (not in python3-samba).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends samba-testsuite python3-cryptography \
+    && rm -rf /var/lib/apt/lists/*
+
 EXPOSE 53 88/tcp 88/udp 389 464/tcp 464/udp 636 3268
 
 # Samba KDC listening on UDP 88 is the readiness signal the gate also polls.

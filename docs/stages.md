@@ -26,7 +26,8 @@ to full 1.0 parity is tracked in `working/plan-roadmap-adprod-*.md`:
 - **Track A — AD/Windows interop:** NDR32 `KERB_VALIDATION_INFO` decodes the
   captured `kbruser` PAC (`tests/traces/pac-kbruser.ndr`) byte-identically.
   Issued PACs include buffers 12/17/18 and store SID/RID. Samba L1/L3
-  gates: `samba-pac-verify-gate.sh`, `samba-crossrealm-gate.sh`. Production
+  gates: `samba-pac-verify-gate.sh`, `samba-pac-l2-gate.sh` (kcrypto 6/7/16/19),
+  `samba-crossrealm-gate.sh`. Production
   GSS wrap emits RRC≠0. S4U2Self/Proxy against the Rust KDC:
   `scripts/s4u-mit-gate.sh` (in CI; evidence PAC copy, classic
   constrained delegation, RBCD). Live Windows
@@ -54,9 +55,9 @@ to full 1.0 parity is tracked in `working/plan-roadmap-adprod-*.md`:
 
 **Audit caveats (2026-08-25).** PAC **NDR codec** and **RFC 8636 KDF** are
 done. Samba L1 decodes the full buffer set of a Rust PAC
-(`samba-pac-verify-gate.sh`); Samba's KDC accepts a Rust referral PAC
-both directions (`samba-crossrealm-gate.sh`) — that is the L2/L3
-signature oracle (`kcrypto` is not in distro `python3-samba`). TGS
+(`samba-pac-verify-gate.sh`); Samba `kcrypto` validates checksums 6/7/16/19
+(`samba-pac-l2-gate.sh`); Samba's KDC accepts a Rust referral PAC
+both directions (`samba-crossrealm-gate.sh`). TGS
 verifies a presented PAC and copies LOGON_INFO (in-repo two-realm
 tests; `kvno` is not that copy proof). Rust S4U2Self/Proxy is
 MIT-gated in CI (`scripts/s4u-mit-gate.sh`); S4U2Proxy copies the evidence
@@ -69,4 +70,4 @@ wraps dump version 7. Rust→MIT `kpropd` is not gated. **kadmind**
 MIT-gates add/get/list/mod/chrand/del (`renprinc` remaining). Harness
 CI runs `pkinit-gate`, `kadmin-gate`, `kpasswd-gate`, `kdb-dump-gate`,
 `kprop-gate`, `restart-gate`, `prod-gate`, `s4u-mit-gate`, `samba-ad-gate`,
-`samba-pac-verify-gate`, `samba-crossrealm-gate`.
+`samba-pac-verify-gate`, `samba-pac-l2-gate`, `samba-crossrealm-gate`.
