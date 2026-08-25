@@ -606,7 +606,7 @@ impl KerbValidationInfo {
                 relative_id: 513,
                 attributes: SE_GROUP_DEFAULT,
             }],
-            user_flags: 0,
+            user_flags: LOGON_EXTRA_SIDS,
             session_key: [0; 16],
             logon_server: RpcUnicode::pointed(""),
             logon_domain_name: RpcUnicode::pointed(realm),
@@ -618,7 +618,14 @@ impl KerbValidationInfo {
             last_failed_ilogon: 0,
             failed_ilogon_count: 0,
             reserved3: 0,
-            extra_sids: Vec::new(),
+            extra_sids: vec![ExtraSid {
+                sid: RpcSid {
+                    revision: 1,
+                    identifier_authority: [0, 0, 0, 0, 0, 18],
+                    sub_authority: vec![1],
+                },
+                attributes: SE_GROUP_DEFAULT,
+            }],
             resource_group_domain_sid: None,
             resource_groups: Vec::new(),
         }

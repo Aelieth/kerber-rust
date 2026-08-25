@@ -8,12 +8,16 @@ use std::fs;
 use std::process::ExitCode;
 
 use krb5_asn1::decode;
-use krb5_kdc::{decrypt_ticket_part, pac_from_ticket_part};
+use krb5_crypto::{string_to_key, EncryptionType};
+use krb5_kdc::{decrypt_ticket_part, pac_from_ticket_part, s2k_params};
 use krb5_protocol::{FileCcache, Keytab};
 use krb5_types::Ticket;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("--s2k") {
+        return s2k_hex(&args);
+    }
     let mut keytab = None;
     let mut ccache = None;
     let mut out = None;
@@ -91,4 +95,26 @@ fn main() -> ExitCode {
     }
     eprintln!("krb5-pac-extract: no host/ ticket in ccache");
     ExitCode::from(1)
+}
+
+fn s2k_hex(args: &[String]) -> ExitCode {
+    if args.len() != 3 {
+        eprintln!("usage: krb5-pac-extract --s2k <password> <salt>");
+        return ExitCode::from(2);
+    }
+    let etype = EncryptionType::Aes256CtsHmacSha196;
+    let params = s2k_params(etype);
+    match string_to_key(etype, args[1].as_bytes(), args[2].as_bytes(), Some(&params)) {
+        Ok(key) => {
+            for b in key.as_bytes() {
+                print!("{b:02x}");
+            }
+            println!();
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("krb5-pac-extract: s2k: {e}");
+            ExitCode::from(1)
+        }
+    }
 }

@@ -10,15 +10,16 @@ use krb5_crypto::{
 };
 use krb5_kdc::{
     as_req, bootstrap_documented, decrypt_ticket_part, documented_admin_id, documented_host,
-    pa_enc_timestamp, pac_from_ticket_part, sign_pac, tgs_req, verify_pac, Acl, AdminOp, Error,
-    PrincipalStore, S2K_ITERS, TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER,
-    TEST_USER_PASSWORD,
+    pa_enc_timestamp, pac_from_ticket_part, sign_pac, tgs_req, ticket_checksum_der, verify_pac,
+    verify_pac_signatures, Acl, AdminOp, Error, PrincipalStore, S2K_ITERS, TEST_ADMIN,
+    TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
 };
 use krb5_protocol::{
     apply_strengthen, armor_key, as_req_sname, attach_fast, build_fast_armor, pa_for_user,
     pa_pac_options, pa_pk_as_req, pa_pk_as_req_agile, pa_pk_as_req_spki, pa_spake_response,
     pa_spake_support, pkinit_reply_key, pkinit_reply_key_agile, tgs_req_ex, unwrap_fast_rep,
 };
+use krb5_types::pac::{parse_kerb_validation_info, PAC_LOGON_INFO};
 use krb5_types::{
     ascii, err, flag_bit, ku, pa, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart,
     KdcOptions, MethodData, PrincipalName,
@@ -786,8 +787,9 @@ fn tgs_referral_uses_interrealm_key_and_transited() {
     let ir = store.get_name(&other).unwrap().best_key().unwrap();
     let part = decrypt_ticket_part(&ir.key, &out.rep.0.ticket).expect("inter-realm enc");
     assert!(
-        part.transited.realms().iter().any(|r| r == TEST_REALM),
-        "transited must name the issuing realm"
+        part.transited.realms().is_empty(),
+        "first-hop referral transited excludes client realm: {:?}",
+        part.transited.realms()
     );
 }
 
@@ -915,8 +917,9 @@ fn tgs_referral_ad_kerber_test_issues_krbtgt() {
     let ir = store.get_name(&ir_name).unwrap().best_key().unwrap();
     let part = decrypt_ticket_part(&ir.key, &out.rep.0.ticket).expect("inter-realm enc");
     assert!(
-        part.transited.realms().iter().any(|r| r == TEST_REALM),
-        "transited must name the issuing realm"
+        part.transited.realms().is_empty(),
+        "first-hop referral transited excludes client realm: {:?}",
+        part.transited.realms()
     );
 }
 
@@ -979,10 +982,17 @@ fn interrealm_issue_key_is_not_the_peer_accept_key() {
         "peer accept key must not open tickets we issue toward AD"
     );
     let part = decrypt_ticket_part(&issue_key, &out.rep.0.ticket).unwrap();
-    assert!(
-        pac_from_ticket_part(&part).is_none(),
-        "referral TGT must omit PAC so AD does not policy-reject dummy logon SIDs"
+    let pac = pac_from_ticket_part(&part).expect("referral TGT must carry a PAC");
+    let parsed = krb5_types::pac::Pac::parse(&pac).expect("PAC");
+    let logon =
+        parse_kerb_validation_info(parsed.buffer(PAC_LOGON_INFO).expect("logon")).expect("NDR");
+    assert_ne!(
+        logon.logon_domain_id.to_sddl(),
+        krb5_types::pac::RpcSid::dummy_domain().to_sddl()
     );
+    let der = ticket_checksum_der(&part).expect("der");
+    verify_pac_signatures(&pac, &issue_key, Some(&issue_key), Some(&der))
+        .expect("referral PAC signed with inter-realm key");
 }
 
 #[test]

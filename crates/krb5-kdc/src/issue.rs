@@ -475,7 +475,10 @@ fn issue_tgs_from(
     let mut transited = enc_tkt.transited.clone();
     let cross_realm = (sname.is_krbtgt() && !sname.is_krbtgt_for(store.realm()))
         || utf8_realm(&enc_tkt.crealm) != store.realm();
-    if cross_realm {
+    // RFC 4120: transited lists intermediate realms, excluding the client's
+    // realm and the ticket server realm. A first-hop referral from a local
+    // TGT must stay empty; only an incoming foreign TGT names us.
+    if utf8_realm(&enc_tkt.crealm) != store.realm() {
         transited = transited.with_realm(store.realm());
     }
     let session = random_key(skey.etype)?;
@@ -511,7 +514,7 @@ fn issue_tgs_from(
     } else {
         krbtgt_key.key.clone()
     };
-    let include_pac = !sname.is_krbtgt() || sname.is_krbtgt_for(store.realm());
+    let include_pac = true;
     let ticket = mint_ticket(
         &tkt_key,
         tkt_kvno,
