@@ -344,13 +344,57 @@ pub struct RpcSid {
 }
 
 impl RpcSid {
-    /// `S-1-5-21-1-2-3` dummy domain SID used when issuing a PAC.
+    /// `S-1-5-21-1-2-3` dummy domain SID. Issued PACs must not use this.
     #[must_use]
     pub fn dummy_domain() -> Self {
         Self {
             revision: 1,
             identifier_authority: [0, 0, 0, 0, 0, 5],
             sub_authority: vec![21, 1, 2, 3],
+        }
+    }
+
+    /// Parse SDDL `S-R-I-…`.
+    #[must_use]
+    pub fn from_sddl(s: &str) -> Option<Self> {
+        let rest = s
+            .strip_prefix('S')
+            .or_else(|| s.strip_prefix('s'))?
+            .strip_prefix('-')?;
+        let mut parts = rest.split('-');
+        let revision: u8 = parts.next()?.parse().ok()?;
+        let ia: u64 = parts.next()?.parse().ok()?;
+        let mut identifier_authority = [0u8; 6];
+        identifier_authority.copy_from_slice(&ia.to_be_bytes()[2..8]);
+        let mut sub_authority = Vec::new();
+        for p in parts {
+            sub_authority.push(p.parse().ok()?);
+        }
+        if sub_authority.is_empty() {
+            return None;
+        }
+        Some(Self {
+            revision,
+            identifier_authority,
+            sub_authority,
+        })
+    }
+
+    /// Domain SID with `rid` appended (client / PAC_REQUESTOR).
+    #[must_use]
+    pub fn with_rid(&self, rid: u32) -> Self {
+        let mut s = self.clone();
+        s.sub_authority.push(rid);
+        s
+    }
+
+    /// NT Authority domain SID `S-1-5-21-a-b-c`.
+    #[must_use]
+    pub fn nt_domain(a: u32, b: u32, c: u32) -> Self {
+        Self {
+            revision: 1,
+            identifier_authority: [0, 0, 0, 0, 0, 5],
+            sub_authority: vec![21, a, b, c],
         }
     }
 
@@ -462,10 +506,37 @@ pub struct KerbValidationInfo {
     pub resource_groups: Vec<GroupMembership>,
 }
 
-impl KerbValidationInfo {
-    /// Minimal PAC logon info for a KDC-issued ticket.
+/// Client identity for PAC issuance (domain SID + RID from the store).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PacIdentity {
+    /// SAM account name (`user`, not `user@REALM`).
+    pub sam: String,
+    /// Kerberos realm / DNS domain.
+    pub realm: String,
+    /// Per-realm domain SID (`S-1-5-21-…`, not dummy `S-1-5-21-1-2-3`).
+    pub domain_sid: RpcSid,
+    /// Relative ID of this principal.
+    pub rid: u32,
+}
+
+impl PacIdentity {
+    /// Client SID = domain SID + RID.
     #[must_use]
-    pub fn for_client(client: &str, realm: &str) -> Self {
+    pub fn client_sid(&self) -> RpcSid {
+        self.domain_sid.with_rid(self.rid)
+    }
+
+    /// `sam@realm` UPN.
+    #[must_use]
+    pub fn upn(&self) -> String {
+        format!("{}@{}", self.sam, self.realm)
+    }
+}
+
+impl KerbValidationInfo {
+    /// PAC logon info for a KDC-issued ticket using store identity.
+    #[must_use]
+    pub fn for_client(client: &str, realm: &str, domain_sid: &RpcSid, rid: u32) -> Self {
         Self {
             logon_time: 0,
             logoff_time: NT_TIME_NEVER,
@@ -481,7 +552,7 @@ impl KerbValidationInfo {
             home_directory_drive: RpcUnicode::pointed(""),
             logon_count: 1,
             bad_password_count: 0,
-            user_id: 1104,
+            user_id: rid,
             primary_group_id: 513,
             groups: vec![GroupMembership {
                 relative_id: 513,
@@ -491,7 +562,7 @@ impl KerbValidationInfo {
             session_key: [0; 16],
             logon_server: RpcUnicode::pointed(""),
             logon_domain_name: RpcUnicode::pointed(realm),
-            logon_domain_id: RpcSid::dummy_domain(),
+            logon_domain_id: domain_sid.clone(),
             reserved1: [0; 2],
             user_account_control: USER_NORMAL_ACCOUNT,
             sub_auth_status: 0,
@@ -514,8 +585,8 @@ impl KerbValidationInfo {
 
 /// NDR32 `KERB_VALIDATION_INFO` for `client` / `realm` (KDC issuance).
 #[must_use]
-pub fn logon_info_buffer(client: &str, realm: &str) -> Vec<u8> {
-    KerbValidationInfo::for_client(client, realm).to_ndr()
+pub fn logon_info_buffer(client: &str, realm: &str, domain_sid: &RpcSid, rid: u32) -> Vec<u8> {
+    KerbValidationInfo::for_client(client, realm, domain_sid, rid).to_ndr()
 }
 
 /// Parse [`logon_info_buffer`] (NDR) or the legacy UTF-8 placeholder.
@@ -1057,14 +1128,31 @@ mod tests {
 
     #[test]
     fn issued_logon_round_trip_is_byte_identical() {
-        let raw = logon_info_buffer("user", "KERBER.TEST");
+        let sid = RpcSid::nt_domain(9, 8, 7);
+        let raw = logon_info_buffer("user", "KERBER.TEST", &sid, 1000);
         let parsed = parse_kerb_validation_info(&raw).expect("NDR");
         assert_eq!(parsed.effective_name.value, "user");
         assert_eq!(parsed.logon_domain_name.value, "KERBER.TEST");
-        assert_eq!(parsed.user_id, 1104);
+        assert_eq!(parsed.user_id, 1000);
         assert_eq!(parsed.primary_group_id, 513);
+        assert_eq!(parsed.logon_domain_id.to_sddl(), "S-1-5-21-9-8-7");
+        assert_ne!(
+            parsed.logon_domain_id.to_sddl(),
+            RpcSid::dummy_domain().to_sddl()
+        );
         let again = parsed.to_ndr();
         assert_eq!(again, raw, "issued NDR must round-trip byte-for-byte");
+    }
+
+    #[test]
+    fn sddl_round_trip_and_with_rid() {
+        let s = RpcSid::from_sddl("S-1-5-21-891046300-1937985867-1481223175").unwrap();
+        assert_eq!(s.to_sddl(), "S-1-5-21-891046300-1937985867-1481223175");
+        assert_eq!(
+            s.with_rid(1103).to_sddl(),
+            "S-1-5-21-891046300-1937985867-1481223175-1103"
+        );
+        assert!(RpcSid::from_sddl("not-a-sid").is_none());
     }
 
     #[test]

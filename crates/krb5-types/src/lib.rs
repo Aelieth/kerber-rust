@@ -1030,7 +1030,12 @@ mod tests {
 
     #[test]
     fn pac_ndr_logon_info_round_trip() {
-        let raw = pac::logon_info_buffer("user", "KERBER.TEST");
+        let raw = pac::logon_info_buffer(
+            "user",
+            "KERBER.TEST",
+            &pac::RpcSid::nt_domain(9, 8, 7),
+            1000,
+        );
         let (c, r) = pac::parse_logon_info(&raw).expect("NDR parse");
         assert_eq!(c, "user");
         assert_eq!(r, "KERBER.TEST");
