@@ -48,6 +48,10 @@ pub const CKSUM_HMAC_SHA1_96_AES256: i32 = 16;
 pub const SE_GROUP_DEFAULT: u32 = 7;
 /// `USER_NORMAL_ACCOUNT`.
 pub const USER_NORMAL_ACCOUNT: u32 = 0x10;
+/// PAC attributes: `PAC_WAS_REQUESTED`.
+pub const PAC_ATTRIBUTE_WAS_REQUESTED: u32 = 0x0000_0001;
+/// UPN/DNS: SAM name + SID extension present.
+pub const PAC_UPN_DNS_HAS_SAM_AND_SID: u32 = 0x0000_0002;
 /// `LOGON_EXTRA_SIDS`.
 pub const LOGON_EXTRA_SIDS: u32 = 0x20;
 /// NDR unique-pointer IDs start here and increment by 4 (Windows).
@@ -388,6 +392,50 @@ impl RpcSid {
         s
     }
 
+    /// MS-DTYP packet SID (revision, count, authority, sub-authorities).
+    #[must_use]
+    pub fn to_ms_dtyp(&self) -> Vec<u8> {
+        let mut v = Vec::with_capacity(8 + self.sub_authority.len() * 4);
+        v.push(self.revision);
+        v.push(u8::try_from(self.sub_authority.len()).unwrap_or(0));
+        v.extend_from_slice(&self.identifier_authority);
+        for r in &self.sub_authority {
+            v.extend_from_slice(&r.to_le_bytes());
+        }
+        v
+    }
+
+    /// Parse [`Self::to_ms_dtyp`].
+    #[must_use]
+    pub fn from_ms_dtyp(b: &[u8]) -> Option<Self> {
+        if b.len() < 8 {
+            return None;
+        }
+        let revision = b[0];
+        let n = usize::from(b[1]);
+        if b.len() < 8 + n * 4 {
+            return None;
+        }
+        let mut identifier_authority = [0u8; 6];
+        identifier_authority.copy_from_slice(&b[2..8]);
+        let mut sub_authority = Vec::with_capacity(n);
+        let mut off = 8;
+        for _ in 0..n {
+            sub_authority.push(u32::from_le_bytes([
+                b[off],
+                b[off + 1],
+                b[off + 2],
+                b[off + 3],
+            ]));
+            off += 4;
+        }
+        Some(Self {
+            revision,
+            identifier_authority,
+            sub_authority,
+        })
+    }
+
     /// NT Authority domain SID `S-1-5-21-a-b-c`.
     #[must_use]
     pub fn nt_domain(a: u32, b: u32, c: u32) -> Self {
@@ -587,6 +635,131 @@ impl KerbValidationInfo {
 #[must_use]
 pub fn logon_info_buffer(client: &str, realm: &str, domain_sid: &RpcSid, rid: u32) -> Vec<u8> {
     KerbValidationInfo::for_client(client, realm, domain_sid, rid).to_ndr()
+}
+
+/// PAC buffer 17: `PAC_WAS_REQUESTED`.
+#[must_use]
+pub fn attributes_info_buffer() -> Vec<u8> {
+    let mut v = Vec::with_capacity(8);
+    v.extend_from_slice(&2u32.to_le_bytes());
+    v.extend_from_slice(&PAC_ATTRIBUTE_WAS_REQUESTED.to_le_bytes());
+    v
+}
+
+/// PAC buffer 18: requester SID (MS-DTYP packet).
+#[must_use]
+pub fn requester_sid_buffer(sid: &RpcSid) -> Vec<u8> {
+    sid.to_ms_dtyp()
+}
+
+/// PAC buffer 12: UPN + DNS + SAM + SID (`PAC_UPN_DNS_FLAG_HAS_SAM_NAME_AND_SID`).
+#[must_use]
+pub fn upn_dns_buffer(identity: &PacIdentity) -> Vec<u8> {
+    let upn = utf16_bytes(&identity.upn());
+    let dns = utf16_bytes(&identity.realm.to_ascii_lowercase());
+    let sam = utf16_bytes(&identity.sam);
+    let sid = identity.client_sid().to_ms_dtyp();
+    let mut data = vec![0u8; 24];
+    let upn_off = data.len();
+    data.extend_from_slice(&upn);
+    let dns_off = data.len();
+    data.extend_from_slice(&dns);
+    while data.len() % 2 != 0 {
+        data.push(0);
+    }
+    let sam_off = data.len();
+    data.extend_from_slice(&sam);
+    while data.len() % 4 != 0 {
+        data.push(0);
+    }
+    let sid_off = data.len();
+    data.extend_from_slice(&sid);
+    put_u16(&mut data, 0, u16::try_from(upn.len()).unwrap_or(u16::MAX));
+    put_u16(&mut data, 2, u16::try_from(upn_off).unwrap_or(u16::MAX));
+    put_u16(&mut data, 4, u16::try_from(dns.len()).unwrap_or(u16::MAX));
+    put_u16(&mut data, 6, u16::try_from(dns_off).unwrap_or(u16::MAX));
+    data[8..12].copy_from_slice(&PAC_UPN_DNS_HAS_SAM_AND_SID.to_le_bytes());
+    put_u16(&mut data, 12, u16::try_from(sam.len()).unwrap_or(u16::MAX));
+    put_u16(&mut data, 14, u16::try_from(sam_off).unwrap_or(u16::MAX));
+    put_u16(&mut data, 16, u16::try_from(sid.len()).unwrap_or(u16::MAX));
+    put_u16(&mut data, 18, u16::try_from(sid_off).unwrap_or(u16::MAX));
+    data
+}
+
+fn utf16_bytes(s: &str) -> Vec<u8> {
+    s.encode_utf16().flat_map(u16::to_le_bytes).collect()
+}
+
+fn put_u16(b: &mut [u8], off: usize, v: u16) {
+    b[off..off + 2].copy_from_slice(&v.to_le_bytes());
+}
+
+/// Parsed PAC buffer 12.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpnDnsInfo {
+    /// `user@REALM`.
+    pub upn: String,
+    /// DNS domain (lowercase realm).
+    pub dns_domain: String,
+    /// SAM name when the SID extension is present.
+    pub sam: Option<String>,
+    /// Object SID when the SID extension is present.
+    pub sid: Option<RpcSid>,
+}
+
+/// Parse [`upn_dns_buffer`].
+///
+/// # Errors
+///
+/// Truncated header or offsets.
+pub fn parse_upn_dns(data: &[u8]) -> Result<UpnDnsInfo, PacError> {
+    if data.len() < 12 {
+        return Err(PacError::Truncated);
+    }
+    let upn_len = u16::from_le_bytes([data[0], data[1]]) as usize;
+    let upn_off = u16::from_le_bytes([data[2], data[3]]) as usize;
+    let dns_len = u16::from_le_bytes([data[4], data[5]]) as usize;
+    let dns_off = u16::from_le_bytes([data[6], data[7]]) as usize;
+    let flags = u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
+    let upn = utf16_str(data, upn_off, upn_len)?;
+    let dns = utf16_str(data, dns_off, dns_len)?;
+    if flags & PAC_UPN_DNS_HAS_SAM_AND_SID == 0 || data.len() < 20 {
+        return Ok(UpnDnsInfo {
+            upn,
+            dns_domain: dns,
+            sam: None,
+            sid: None,
+        });
+    }
+    let sam_len = u16::from_le_bytes([data[12], data[13]]) as usize;
+    let sam_off = u16::from_le_bytes([data[14], data[15]]) as usize;
+    let sid_len = u16::from_le_bytes([data[16], data[17]]) as usize;
+    let sid_off = u16::from_le_bytes([data[18], data[19]]) as usize;
+    let sam = utf16_str(data, sam_off, sam_len)?;
+    if sid_off + sid_len > data.len() {
+        return Err(PacError::Truncated);
+    }
+    let sid = RpcSid::from_ms_dtyp(&data[sid_off..sid_off + sid_len]).ok_or(PacError::Truncated)?;
+    Ok(UpnDnsInfo {
+        upn,
+        dns_domain: dns,
+        sam: Some(sam),
+        sid: Some(sid),
+    })
+}
+
+fn utf16_str(data: &[u8], off: usize, len: usize) -> Result<String, PacError> {
+    if off.checked_add(len).is_none_or(|e| e > data.len()) || len % 2 != 0 {
+        return Err(PacError::Truncated);
+    }
+    let mut u16s = Vec::with_capacity(len / 2);
+    for k in 0..len / 2 {
+        u16s.push(u16::from_le_bytes([
+            data[off + k * 2],
+            data[off + k * 2 + 1],
+        ]));
+    }
+    String::from_utf16(&u16s).map_err(|_| PacError::Truncated)
 }
 
 /// Parse [`logon_info_buffer`] (NDR) or the legacy UTF-8 placeholder.
@@ -1142,6 +1315,30 @@ mod tests {
         );
         let again = parsed.to_ndr();
         assert_eq!(again, raw, "issued NDR must round-trip byte-for-byte");
+    }
+
+    #[test]
+    fn upn_dns_attributes_requester_round_trip() {
+        let ident = PacIdentity {
+            sam: "user".into(),
+            realm: "KERBER.TEST".into(),
+            domain_sid: RpcSid::nt_domain(9, 8, 7),
+            rid: 1000,
+        };
+        let upn = upn_dns_buffer(&ident);
+        let parsed = parse_upn_dns(&upn).expect("upn");
+        assert_eq!(parsed.upn, "user@KERBER.TEST");
+        assert_eq!(parsed.dns_domain, "kerber.test");
+        assert_eq!(parsed.sam.as_deref(), Some("user"));
+        assert_eq!(parsed.sid.unwrap().to_sddl(), ident.client_sid().to_sddl());
+        let attr = attributes_info_buffer();
+        assert_eq!(&attr[0..4], &2u32.to_le_bytes());
+        assert_eq!(&attr[4..8], &PAC_ATTRIBUTE_WAS_REQUESTED.to_le_bytes());
+        let req = requester_sid_buffer(&ident.client_sid());
+        assert_eq!(
+            RpcSid::from_ms_dtyp(&req).unwrap().to_sddl(),
+            "S-1-5-21-9-8-7-1000"
+        );
     }
 
     #[test]

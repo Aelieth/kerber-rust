@@ -14,8 +14,9 @@ use krb5_kdc::{
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req, FileCcache, Keytab};
 use krb5_types::ku;
 use krb5_types::pac::{
-    parse_kerb_validation_info, Pac, PAC_CLIENT_INFO, PAC_FULL_CHECKSUM, PAC_LOGON_INFO,
-    PAC_PRIVSVR_CHECKSUM, PAC_SERVER_CHECKSUM, PAC_TICKET_CHECKSUM, PAC_UPN_DNS_INFO,
+    parse_kerb_validation_info, parse_upn_dns, Pac, PAC_ATTRIBUTES_INFO, PAC_CLIENT_INFO,
+    PAC_FULL_CHECKSUM, PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM, PAC_REQUESTER_SID,
+    PAC_SERVER_CHECKSUM, PAC_TICKET_CHECKSUM, PAC_UPN_DNS_INFO,
 };
 use krb5_types::{PrincipalName, Ticket};
 
@@ -156,9 +157,26 @@ fn issued_pac_self_verifies_all_four_signatures() {
     assert_eq!(logon.user_id, store.get_name(&cname).unwrap().rid);
     assert_eq!(logon.logon_domain_id, *store.domain_sid());
     let kinds: Vec<u32> = parsed.buffers.iter().map(|b| b.kind).collect();
+    let req = parsed.buffer(PAC_REQUESTER_SID).expect("requestor");
+    assert_eq!(
+        krb5_types::pac::RpcSid::from_ms_dtyp(req)
+            .unwrap()
+            .to_sddl(),
+        store
+            .pac_identity(&cname, TEST_REALM)
+            .client_sid()
+            .to_sddl()
+    );
+    let upn = parse_upn_dns(parsed.buffer(PAC_UPN_DNS_INFO).expect("upn")).expect("upn parse");
+    assert_eq!(upn.upn, format!("{TEST_USER}@{TEST_REALM}"));
+    assert_eq!(upn.dns_domain, "kerber.test");
+    assert_eq!(upn.sam.as_deref(), Some(TEST_USER));
     for need in [
         PAC_LOGON_INFO,
         PAC_CLIENT_INFO,
+        PAC_UPN_DNS_INFO,
+        PAC_ATTRIBUTES_INFO,
+        PAC_REQUESTER_SID,
         PAC_SERVER_CHECKSUM,
         PAC_PRIVSVR_CHECKSUM,
         PAC_TICKET_CHECKSUM,

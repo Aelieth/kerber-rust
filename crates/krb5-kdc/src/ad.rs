@@ -62,6 +62,18 @@ pub fn sign_pac(
                 data: krb5_types::pac::client_info_buffer(authtime, &cname.components_joined()),
             },
             krb5_types::pac::PacBuffer {
+                kind: krb5_types::pac::PAC_UPN_DNS_INFO,
+                data: krb5_types::pac::upn_dns_buffer(identity),
+            },
+            krb5_types::pac::PacBuffer {
+                kind: krb5_types::pac::PAC_ATTRIBUTES_INFO,
+                data: krb5_types::pac::attributes_info_buffer(),
+            },
+            krb5_types::pac::PacBuffer {
+                kind: krb5_types::pac::PAC_REQUESTER_SID,
+                data: krb5_types::pac::requester_sid_buffer(&identity.client_sid()),
+            },
+            krb5_types::pac::PacBuffer {
                 kind: krb5_types::pac::PAC_TICKET_CHECKSUM,
                 data: krb5_types::pac::signature_buffer(kdc_type, &kdc_zeros),
             },
