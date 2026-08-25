@@ -109,7 +109,8 @@ after `pkinit-gate`. `ad-*` remain one-shot against a live Windows DC.
   must not contain `PAC … failed`. `kvno` is not proof that the TGS
   copied LOGON_INFO; that copy is `tgs_copies_foreign_referral_pac_identity`
   / `tgs_rejects_corrupt_foreign_referral_pac` in
-  `crates/krb5-kdc/tests/phase7_preauth.rs`.
+  `crates/krb5-kdc/tests/phase7_preauth.rs`. Type-16 is hashed over the
+  original EncTicketPart bytes with PAC ad-data a single zero.
 - `scripts/ad-windows-gate.sh` — isolated `kinit kbruser@AD.KERBER.TEST`
   then `kvno host/svc.ad.kerber.test` (aes256, kvno 3). Sources
   `~/adlab/env`.

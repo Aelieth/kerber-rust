@@ -57,8 +57,10 @@ this project uses semantic versioning once a crate is published.
   TGS verifies a presented TGT PAC with the key that opened the ticket
   and copies LOGON_INFO into the issued service PAC (foreign SID/RID
   survive; corrupt server or type-16 checksum is `KRB_AP_ERR_BAD_INTEGRITY`).
-  A TGT without a PAC still issues (MIT). `kvno` success is not that
-  copy proof.
+  Type-16 is over the original decrypted EncTicketPart bytes with PAC
+  ad-data a single zero (not a rasn re-encode). Foreign TGTs check the
+  server checksum plus type-16; KDC/19 use the issuing krbtgt. A TGT
+  without a PAC still issues (MIT). `kvno` success is not that copy proof.
 - `scripts/prod-gate.sh` drives shipped `krb5-kinit` against
   `127.0.0.1:18888`, requires `kdc.issue` JSON with `correlation_id`,
   and archives a PDU pcap. Heimdal and SSPI gates record unavailability.
