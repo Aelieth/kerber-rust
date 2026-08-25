@@ -57,8 +57,10 @@ to `KRB5_KDC_USER` (default `nobody`). TCP workers are capped
 bootstraps documented principals (including `kadmin/admin` and
 `kadmin/changepw`); with `KRB5_KDC_DB` + stash the test realm is saved
 so a separate kadmind process can reload it. `--export-keytab` /
-`KRB5_EXPORT_KEYTAB` writes the documented host principal. S4U2Proxy
-rejects a non-forwardable evidence ticket and parses PA-PAC-OPTIONS.
+`KRB5_EXPORT_KEYTAB` writes the documented host principal. Issued PACs
+include buffers 12/17/18 and store SID/RID. S4U2Proxy copies the
+evidence PAC, requires a forwardable evidence ticket, and denies RBCD
+unless allowed. Referral TGTs carry a PAC.
 
 **`krb5-gss`** provides RFC 4121 wrap/MIC (MIT `libgssapi_krb5` is
 out-of-process; `scripts/gss-gate.sh`). The acceptor binds

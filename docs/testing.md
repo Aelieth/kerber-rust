@@ -91,14 +91,22 @@ captured `host/svc` PAC server checksum is verified (usage 17). Skip
 cleanly without the keytab.
 
 Era II gates. The harness CI job runs `kadmin-gate`, `kpasswd-gate`,
-`kdb-dump-gate`, `kprop-gate`, `restart-gate`, and `prod-gate` after
-`pkinit-gate`. `ad-*` remain
-one-shot against a live DC.
-`samba`/`heimdal`/`gss-sspi` exit 2 when those oracles are absent.
+`kdb-dump-gate`, `kprop-gate`, `restart-gate`, `prod-gate`,
+`samba-ad-gate`, `samba-pac-verify-gate`, and `samba-crossrealm-gate`
+after `pkinit-gate`. `ad-*` remain one-shot against a live Windows DC.
+`heimdal`/`gss-sspi` exit 2 when those oracles are absent.
 
 - `scripts/samba-ad-gate.sh` — Samba 4 AD DC. The only `exit 0` is after a
   live `kinit`/`kvno`/`klist`. Missing docker, image, or KDC is `exit 2`
   plus `samba-ad-gate-unavailable.log`.
+- `scripts/samba-pac-verify-gate.sh` — co-located Rust KDC on `:8888`;
+  Samba `PAC_DATA_RAW` + typed LOGON_INFO/REQUESTOR of a Rust-issued PAC
+  (buffers 1,10,12,16,17,18,19,6,7). Dummy SID fails. `kcrypto` is not
+  shipped; L2 signatures are the L3 Samba KDC path.
+- `scripts/samba-crossrealm-gate.sh` — shared-trust-password TDO;
+  MIT `kvno` `user@KERBER.TEST` → `host/svc.ad.kerber.test` and
+  `kbruser@AD.KERBER.TEST` → `host/testhost.kerber.test`. Samba logs
+  must not contain `PAC … failed`.
 - `scripts/ad-windows-gate.sh` — isolated `kinit kbruser@AD.KERBER.TEST`
   then `kvno host/svc.ad.kerber.test` (aes256, kvno 3). Sources
   `~/adlab/env`.

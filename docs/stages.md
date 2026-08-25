@@ -24,14 +24,13 @@ Stages 1–6 are substantially done at the MIT-1.22.2 level; the remaining road
 to full 1.0 parity is tracked in `working/plan-roadmap-adprod-*.md`:
 
 - **Track A — AD/Windows interop:** NDR32 `KERB_VALIDATION_INFO` decodes the
-  captured `kbruser` PAC (`tests/traces/pac-kbruser.ndr`) byte-identically;
-  issued PACs carry signatures 6, 7, 16, 19 and self-verify; server checksum
-  usage 17 matches AD offline. Samba AD DC image is not in-tree (gate
-  records unavailability). Production GSS wrap emits RRC≠0. S4U2Self/Proxy
-  against the Rust KDC: `scripts/s4u-mit-gate.sh`. Live Windows `kinit`/`kvno`
-  (`ad-windows-gate.sh`) and AD S4U (`ad-s4u-gate.sh`) use `~/adlab`. Bidirectional
-  `AD.KERBER.TEST`↔`KERBER.TEST` host tickets are gated
-  (`scripts/ad-mit-trust-gate.sh`).
+  captured `kbruser` PAC (`tests/traces/pac-kbruser.ndr`) byte-identically.
+  Issued PACs include buffers 12/17/18 and store SID/RID. Samba L1/L3
+  gates: `samba-pac-verify-gate.sh`, `samba-crossrealm-gate.sh`. Production
+  GSS wrap emits RRC≠0. S4U2Self/Proxy against the Rust KDC:
+  `scripts/s4u-mit-gate.sh` (evidence PAC copy + RBCD). Live Windows
+  `kinit`/`kvno` (`ad-windows-gate.sh`) and AD S4U (`ad-s4u-gate.sh`) use
+  `~/adlab`.
 - **Track B — Operational parity:** serving store is `RwLock` so kadmind
   mutations persist; KDC reloads the db on mtime/length change.
   `krb5-kadmind` AUTH_GSSAPI 300001: MIT `kadmin` add/cpw/get/list/mod/
@@ -52,17 +51,18 @@ to full 1.0 parity is tracked in `working/plan-roadmap-adprod-*.md`:
   absent. Samba/Heimdal/SSPI oracles captured unavailable. **1.0 is not
   tagged** (C4 matrix incomplete).
 
-**Audit caveats (2026-08-24).** PAC **NDR codec** and **RFC 8636 KDF** are
-done. Type-16/full PAC signatures remain self-round-trip until a Samba
-oracle. Rust S4U2Self/Proxy is MIT-gated (`scripts/s4u-mit-gate.sh`
-`kvno -U` / `-U -P`); S4U2Proxy rejects non-forwardable evidence and parses
-PA-PAC-OPTIONS. `ad-*` gates are **one-shot** against a since-torn-down DC;
-cross-realm referral TGTs **omit the PAC**. The **prod-gate is a
-single-process Rust↔Rust loopback** (now in CI). `bounded_stress` asserts
-concurrent AS+TGS; soak/differential absent. **kpropd** on 754 wraps dump
-version 7; MIT `kprop`→Rust then MIT `kinit` is gated (`kprop-gate.sh`).
-Rust→MIT `kpropd` is not gated. B1 restart (kill `krb5-kdc` by comm,
-relaunch, MIT `kinit`) is gated. **kadmind** MIT-gates
-add/get/list/mod/chrand/del (`renprinc` remaining). Harness CI runs
-`pkinit-gate`, `kadmin-gate`, `kpasswd-gate`, `kdb-dump-gate`,
-`kprop-gate`, `restart-gate`, `prod-gate`.
+**Audit caveats (2026-08-25).** PAC **NDR codec** and **RFC 8636 KDF** are
+done. Samba L1 decodes the full buffer set of a Rust PAC
+(`samba-pac-verify-gate.sh`); Samba's KDC accepts a Rust referral PAC
+both directions (`samba-crossrealm-gate.sh`) — that is the L2/L3
+signature oracle (`kcrypto` is not in distro `python3-samba`). Rust
+S4U2Self/Proxy is MIT-gated (`scripts/s4u-mit-gate.sh`); S4U2Proxy
+copies the evidence PAC and denies RBCD unless allowed. `ad-*` gates
+are **one-shot** against a since-torn-down Windows DC. The **prod-gate
+is a single-process Rust↔Rust loopback** (now in CI). `bounded_stress`
+asserts concurrent AS+TGS; soak/differential absent. **kpropd** on 754
+wraps dump version 7. Rust→MIT `kpropd` is not gated. **kadmind**
+MIT-gates add/get/list/mod/chrand/del (`renprinc` remaining). Harness
+CI runs `pkinit-gate`, `kadmin-gate`, `kpasswd-gate`, `kdb-dump-gate`,
+`kprop-gate`, `restart-gate`, `prod-gate`, `samba-ad-gate`,
+`samba-pac-verify-gate`, `samba-crossrealm-gate`.

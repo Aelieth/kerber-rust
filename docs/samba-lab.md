@@ -111,12 +111,11 @@ SAMBA_AD_PASSWORD=<admin pw> \
   ./scripts/samba-ad-gate.sh
 ```
 
-**A3 payoff (to be added):** after the baseline `kinit`/`kvno`, have Samba
-**verify a Rust-issued PAC** (a small `krb5_pac_verify` C shim built in the image,
-or an S4U / cross-realm flow that forces Samba to validate) so type-6/7 **and the
-currently self-round-trip type-16 / type-19 signatures** are externally checked.
-Archive the pcap + structured logs (production-gate discipline). Wire into CI
-conditional on the image being present; keep the `exit 2` honesty when absent.
+**A2/A5 payoff (in CI):** `scripts/samba-pac-verify-gate.sh` (L1: Samba
+IDL decode of a Rust PAC) and `scripts/samba-crossrealm-gate.sh` (L3:
+MIT `kvno` both directions; Samba KDC accepts the Rust referral PAC).
+`samba.tests.krb5.kcrypto` is not in distro `python3-samba`; L2
+signatures are the L3 KDC path. Missing image is still `exit 2`.
 
 ## Isolation (never touch host krb5/sssd)
 

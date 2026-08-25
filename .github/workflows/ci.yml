@@ -94,3 +94,11 @@ jobs:
           SAMBA_AD_REALM: AD.KERBER.TEST
           SAMBA_AD_USER: Administrator
           SAMBA_AD_PASSWORD: Samba-Admin-Kerber-2026!
+      - name: samba-pac-verify-gate (L1 Samba decode of Rust PAC)
+        run: ./scripts/samba-pac-verify-gate.sh
+        env:
+          SAMBA_AD_IMAGE: samba-ad-dc:latest
+      - name: samba-crossrealm-gate (L3 both-direction PAC)
+        run: ./scripts/samba-crossrealm-gate.sh
+        env:
+          SAMBA_AD_IMAGE: samba-ad-dc:latest

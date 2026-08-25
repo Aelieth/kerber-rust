@@ -52,20 +52,25 @@ this project uses semantic versioning once a crate is published.
 - In-tree TGS referral hop for `krbtgt/AD.KERBER.TEST`. Live
   bidirectional `AD.KERBER.TEST`↔`KERBER.TEST` host tickets
   (`scripts/ad-mit-trust-gate.sh`): Windows TDO inbound/outbound AES
-  keys are both loaded; referral TGTs omit PAC.
+  keys are both loaded. Referral TGTs carry a PAC signed with the
+  inter-realm key (`scripts/samba-crossrealm-gate.sh` both directions).
 - `scripts/prod-gate.sh` drives shipped `krb5-kinit` against
   `127.0.0.1:18888`, requires `kdc.issue` JSON with `correlation_id`,
   and archives a PDU pcap. Heimdal and SSPI gates record unavailability.
 - Live AD S4U2Self/S4U2Proxy: `scripts/ad-s4u-gate.sh` (`kvno -U` /
   `kvno -U -P`, client `kbruser@AD.KERBER.TEST`).
 - MIT `kvno -U` / `-U -P` against the **Rust** KDC
-  (`scripts/s4u-mit-gate.sh`); S4U2Proxy requires a forwardable
-  evidence ticket and decodes PA-PAC-OPTIONS (167). PA-FOR-USER accepts
+  (`scripts/s4u-mit-gate.sh`); S4U2Proxy copies the evidence PAC,
+  requires a forwardable evidence ticket, and denies RBCD unless
+  allowed. PA-FOR-USER accepts
   HMAC-MD5-ARCFOUR (cksumtype -138) on AES session keys.
 - `bounded_stress_handle_request` asserts 64 concurrent valid AS+TGS
   succeed. Harness CI runs `kadmin-gate`, `kpasswd-gate`, `kdb-dump-gate`,
-  `kprop-gate`, `restart-gate`, `prod-gate`. `samba-ad-gate.sh` exits 2 unless a live Samba/AD
-  `kinit`/`kvno` succeeds (no fabricated pass from “image exists”).
+  `kprop-gate`, `restart-gate`, `prod-gate`, `samba-ad-gate`,
+  `samba-pac-verify-gate` (Samba IDL decode of a Rust PAC), and
+  `samba-crossrealm-gate` (MIT `kvno` both directions vs Samba).
+  `samba-ad-gate.sh` exits 2 unless a live Samba/AD `kinit`/`kvno`
+  succeeds (no fabricated pass from “image exists”).
 - MIT `kdb5_util` dump/load (version 7; `-r18` is version 6):
   `krb5-kdb load`/`dump`, KDB usage-0 `key_data` with a cleartext
   `int16_LE` length prefix, master key string-to-key of

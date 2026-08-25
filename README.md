@@ -22,9 +22,10 @@ with a runtime-mutable `RwLock` store that reloads when kadmind writes.
 `bidirectional-gate` is Rust↔Rust, not a MIT oracle.
 **CI coverage:** the AS/TGS, GSS, PKINIT, SPAKE, SHA-2, and cross-realm gates
 plus `kadmin-gate`, `kpasswd-gate`, `kdb-dump-gate`, `kprop-gate`,
-`restart-gate`, and `prod-gate` in the harness job. The
-`ad-*` gates are one-shot against a live DC; `samba`/`heimdal`/`gss-sspi` are
-honest `exit 2` placeholders until those oracles exist.
+`restart-gate`, `prod-gate`, `samba-ad-gate`, `samba-pac-verify-gate`,
+and `samba-crossrealm-gate` in the harness job. The `ad-*` gates are
+one-shot against a live Windows DC; `heimdal`/`gss-sspi` stay honest
+`exit 2` placeholders until those oracles exist.
 `krb5-config` is consumed: the KDC applies `kdc.conf`
 ticket policy (and non-test listen/db paths); `kinit` / TGS referral
 chase use `KRB5_CONFIG` then `/etc/krb5.conf` `[realms]` (argv is the
