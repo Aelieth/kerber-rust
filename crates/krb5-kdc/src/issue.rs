@@ -399,7 +399,7 @@ fn issue_tgs_from(
     }
     let tkt_etype = EncryptionType::from_iana(ap.ticket.enc_part.etype)
         .or_else(|_| EncryptionType::known(ap.ticket.enc_part.etype))?;
-    let (enc_tkt, tgt_key) = decrypt_presented_tgt(store, &ap, tkt_etype)?;
+    let (enc_tkt, tgt_key, tgt_plain) = decrypt_presented_tgt(store, &ap, tkt_etype)?;
     check_ticket_times(store, &enc_tkt)?;
     let sess_etype = EncryptionType::from_iana(enc_tkt.key.keytype)
         .or_else(|_| EncryptionType::known(enc_tkt.key.keytype))?;
@@ -470,7 +470,8 @@ fn issue_tgs_from(
     } else if let Some((cn, logon)) = s4u2proxy_client(store, req, &enc_tkt.cname, tgs_padata)? {
         ticket_cname = cn;
         evidence_logon = Some(logon);
-    } else if let Some(logon) = presented_tgt_logon(&enc_tkt, &tgt_key)? {
+    } else if let Some(logon) = presented_tgt_logon(&enc_tkt, &tgt_key, &tgt_plain, store.realm())?
+    {
         evidence_logon = Some(logon);
     }
     if utf8_realm(&enc_tkt.crealm) != store.realm() {
@@ -628,7 +629,7 @@ fn decrypt_presented_tgt(
     store: &PrincipalStore,
     ap: &krb5_types::ApReq,
     tkt_etype: EncryptionType,
-) -> Result<(EncTicketPart, ProtocolKey), Error> {
+) -> Result<(EncTicketPart, ProtocolKey, Vec<u8>), Error> {
     let usage = KeyUsage::new(ku::TICKET)?;
     let cipher = ap.ticket.enc_part.cipher.as_ref();
     let kvno = ap.ticket.enc_part.kvno;
@@ -648,7 +649,7 @@ fn decrypt_presented_tgt(
         match decrypt(key, usage, cipher) {
             Ok(plain) => {
                 if let Ok(part) = decode::<EncTicketPart>(&plain) {
-                    return Ok((part, key.clone()));
+                    return Ok((part, key.clone(), plain));
                 }
             }
             Err(e) => last = Error::from(e),

@@ -1294,6 +1294,113 @@ pub fn authorization_with_zeroed_pac(
         .collect()
 }
 
+/// EncTicketPart DER with PAC `ad-data` replaced by a single zero byte.
+///
+/// Preserves the issuer's TLV encodings (MS-PAC type 16). A rasn
+/// re-encode of a Samba/Heimdal ticket will not match.
+#[must_use]
+pub fn zero_pac_ad_data(enc_tkt: &[u8], pac: &[u8]) -> Option<Vec<u8>> {
+    if pac.is_empty() {
+        return None;
+    }
+    let (out, replaced, n) = rewrite_one(enc_tkt, 0, pac)?;
+    if replaced && n == enc_tkt.len() {
+        Some(out)
+    } else {
+        None
+    }
+}
+
+fn rewrite_one(data: &[u8], off: usize, pac: &[u8]) -> Option<(Vec<u8>, bool, usize)> {
+    let (tag, constructed, content, tlv_len) = read_tlv(data, off)?;
+    let orig = data[off..off + tlv_len].to_vec();
+    if tag == 0x04 && content == pac {
+        return Some((encode_tlv(0x04, &[0]), true, tlv_len));
+    }
+    if constructed {
+        let mut children = Vec::new();
+        let mut pos = 0;
+        let mut any = false;
+        while pos < content.len() {
+            let (ch, r, n) = rewrite_one(content, pos, pac)?;
+            children.extend_from_slice(&ch);
+            any |= r;
+            pos += n;
+        }
+        if pos != content.len() {
+            return None;
+        }
+        if any {
+            return Some((encode_tlv(tag, &children), true, tlv_len));
+        }
+        return Some((orig, false, tlv_len));
+    }
+    if tag == 0x04 && content.first().is_some_and(|b| *b == 0x30) {
+        if let Some((inner, true, n)) = rewrite_one(content, 0, pac) {
+            if n == content.len() {
+                return Some((encode_tlv(tag, &inner), true, tlv_len));
+            }
+        }
+    }
+    Some((orig, false, tlv_len))
+}
+
+fn read_tlv(data: &[u8], off: usize) -> Option<(u8, bool, &[u8], usize)> {
+    if off >= data.len() {
+        return None;
+    }
+    let tag = data[off];
+    if tag & 0x1f == 0x1f {
+        return None;
+    }
+    let constructed = tag & 0x20 != 0;
+    let (len, len_bytes) = read_der_len(data, off + 1)?;
+    let hdr = 1 + len_bytes;
+    let start = off + hdr;
+    let end = start.checked_add(len)?;
+    if end > data.len() {
+        return None;
+    }
+    Some((tag, constructed, &data[start..end], hdr + len))
+}
+
+fn read_der_len(data: &[u8], off: usize) -> Option<(usize, usize)> {
+    let b = *data.get(off)?;
+    if b < 0x80 {
+        return Some((b as usize, 1));
+    }
+    let nbytes = (b & 0x7f) as usize;
+    if nbytes == 0 || nbytes > 4 || off + 1 + nbytes > data.len() {
+        return None;
+    }
+    let mut n = 0usize;
+    for i in 0..nbytes {
+        n = (n << 8) | usize::from(data[off + 1 + i]);
+    }
+    Some((n, 1 + nbytes))
+}
+
+fn encode_tlv(tag: u8, content: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(2 + content.len());
+    out.push(tag);
+    out.extend(encode_der_len(content.len()));
+    out.extend_from_slice(content);
+    out
+}
+
+fn encode_der_len(n: usize) -> Vec<u8> {
+    fn b(v: usize) -> u8 {
+        u8::try_from(v & 0xff).unwrap_or(0)
+    }
+    match n {
+        0..=127 => vec![b(n)],
+        128..=255 => vec![0x81, b(n)],
+        256..=65535 => vec![0x82, b(n >> 8), b(n)],
+        65536..=16_777_215 => vec![0x83, b(n >> 16), b(n >> 8), b(n)],
+        _ => vec![0x84, b(n >> 24), b(n >> 16), b(n >> 8), b(n)],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1304,6 +1411,56 @@ mod tests {
         assert_eq!(PAC_TICKET_CHECKSUM, 16);
         assert_eq!(PAC_FULL_CHECKSUM, 19);
         assert_ne!(PAC_UPN_DNS_INFO, PAC_TICKET_CHECKSUM);
+    }
+
+    fn u8_len(n: usize) -> u8 {
+        u8::try_from(n).expect("test DER fits in a short length")
+    }
+
+    #[test]
+    fn zero_pac_ad_data_preserves_sibling_encoding() {
+        let pac = vec![0x09, 0, 0, 0, 0, 0, 0, 0, 1, 2];
+        // SEQUENCE { INTEGER 1 with non-minimal length, OCTET STRING pac }
+        let mut der = vec![0x30, 0];
+        der.extend_from_slice(&[0x02, 0x81, 0x01, 0x01]);
+        der.push(0x04);
+        der.push(u8_len(pac.len()));
+        der.extend_from_slice(&pac);
+        der[1] = u8_len(der.len() - 2);
+        let out = zero_pac_ad_data(&der, &pac).expect("PAC in DER");
+        assert_eq!(&out[2..6], &[0x02, 0x81, 0x01, 0x01]);
+        assert_eq!(&out[6..], &[0x04, 0x01, 0x00]);
+        assert!(zero_pac_ad_data(&der, b"nope").is_none());
+    }
+
+    #[test]
+    fn zero_pac_ad_data_walks_ad_if_relevant() {
+        let pac = vec![0x09, 0, 0, 0, 0, 0, 0, 0, 3, 4];
+        // AD-WIN2K-PAC inner SEQUENCE { INTEGER 128, OCTET STRING pac }
+        let mut inner = vec![0x30, 0];
+        inner.extend_from_slice(&[0x02, 0x02, 0x00, 0x80]);
+        inner.push(0x04);
+        inner.push(u8_len(pac.len()));
+        inner.extend_from_slice(&pac);
+        inner[1] = u8_len(inner.len() - 2);
+        // AD-IF-RELEVANT SEQUENCE { INTEGER 1, OCTET STRING inner }
+        let mut outer = vec![0x30, 0];
+        outer.extend_from_slice(&[0x02, 0x01, 0x01]);
+        outer.push(0x04);
+        outer.push(u8_len(inner.len()));
+        outer.extend_from_slice(&inner);
+        outer[1] = u8_len(outer.len() - 2);
+        // APPLICATION 3 wrapping SEQUENCE
+        let mut app = vec![0x63, 0];
+        app.extend_from_slice(&outer);
+        app[1] = u8_len(app.len() - 2);
+        let out = zero_pac_ad_data(&app, &pac).expect("nested PAC");
+        assert_eq!(out[0], 0x63);
+        assert!(
+            out.windows(3).any(|w| w == [0x04, 0x01, 0x00]),
+            "PAC octet string must be a single zero: {out:02x?}"
+        );
+        assert!(!out.windows(pac.len()).any(|w| w == pac.as_slice()));
     }
 
     #[test]

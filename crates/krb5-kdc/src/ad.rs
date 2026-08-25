@@ -196,25 +196,60 @@ pub fn ticket_checksum_der(part: &EncTicketPart) -> Result<Vec<u8>, Error> {
     encode(&clone).map_err(Error::from)
 }
 
+/// Type-16 input over the decrypted EncTicketPart bytes, PAC ad-data = 0x00.
+pub(crate) fn ticket_checksum_input(plain: &[u8], part: &EncTicketPart) -> Result<Vec<u8>, Error> {
+    if let Some(pac) = pac_from_ticket_part(part) {
+        if let Some(z) = krb5_types::pac::zero_pac_ad_data(plain, &pac) {
+            return Ok(z);
+        }
+    }
+    ticket_checksum_der(part)
+}
+
 /// If the TGT carries a PAC, verify it with `ticket_key` (the key that
 /// opened the ticket) and return LOGON_INFO. Missing PAC is `Ok(None)`
-/// so MIT TGTs still work.
+/// so MIT TGTs still work. Foreign TGTs: server checksum plus type-16
+/// over the original EncTicketPart bytes (KDC/19 use the issuing krbtgt).
 pub(crate) fn presented_tgt_logon(
     part: &EncTicketPart,
     ticket_key: &ProtocolKey,
+    enc_tkt_plain: &[u8],
+    realm: &str,
 ) -> Result<Option<Vec<u8>>, Error> {
     let Some(pac) = pac_from_ticket_part(part) else {
         return Ok(None);
     };
-    let der = ticket_checksum_der(part)?;
-    verify_pac_signatures(&pac, ticket_key, Some(ticket_key), Some(&der))?;
+    verify_pac_signatures(&pac, ticket_key, None, None)?;
     let parsed = krb5_types::pac::Pac::parse(&pac)
         .map_err(|e| proto(err::BAD_INTEGRITY, &format!("TGT PAC: {e}")))?;
+    let der = ticket_checksum_input(enc_tkt_plain, part)?;
+    if utf8(&part.crealm) == realm {
+        if verify_pac_signatures(&pac, ticket_key, Some(ticket_key), Some(&der)).is_err() {
+            let re = ticket_checksum_der(part)?;
+            verify_pac_signatures(&pac, ticket_key, Some(ticket_key), Some(&re))?;
+        }
+    } else if parsed.ticket_checksum().is_some()
+        && checksum_ticket_sig(&parsed, ticket_key, &der).is_err()
+    {
+        let re = ticket_checksum_der(part)?;
+        checksum_ticket_sig(&parsed, ticket_key, &re)?;
+    }
     let logon = parsed
         .buffer(krb5_types::pac::PAC_LOGON_INFO)
         .ok_or_else(|| proto(err::BAD_INTEGRITY, "TGT PAC logon"))?
         .to_vec();
     Ok(Some(logon))
+}
+
+fn checksum_ticket_sig(
+    pac: &krb5_types::pac::Pac,
+    key: &ProtocolKey,
+    der: &[u8],
+) -> Result<(), Error> {
+    let usage = KeyUsage::new(ku::KERB_NON_KERB_CKSUM_SALT)?;
+    let mac = checksum(key, usage, der)?;
+    krb5_types::pac::verify_sig_buf(pac.ticket_checksum(), &mac)
+        .map_err(|_| proto(err::BAD_INTEGRITY, "PAC ticket checksum"))
 }
 
 /// Extract PAC bytes from EncTicketPart authorization-data.
@@ -334,7 +369,7 @@ pub(crate) fn s4u2proxy_client(
         .krbtgt()
         .and_then(|p| p.best_key())
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
-    let der = ticket_checksum_der(&part)?;
+    let der = ticket_checksum_input(&plain, &part)?;
     verify_pac_signatures(&pac, &skey.key, Some(&krbtgt.key), Some(&der))?;
     let parsed = krb5_types::pac::Pac::parse(&pac)
         .map_err(|e| proto(err::BAD_INTEGRITY, &format!("evidence PAC: {e}")))?;

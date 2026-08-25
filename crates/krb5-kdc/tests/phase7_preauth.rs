@@ -20,7 +20,7 @@ use krb5_protocol::{
     pa_spake_support, pkinit_reply_key, pkinit_reply_key_agile, tgs_req_ex, unwrap_fast_rep,
 };
 use krb5_types::pac::{
-    parse_kerb_validation_info, Pac, RpcSid, PAC_LOGON_INFO, PAC_SERVER_CHECKSUM,
+    parse_kerb_validation_info, zero_pac_ad_data, Pac, RpcSid, PAC_LOGON_INFO, PAC_SERVER_CHECKSUM,
     PAC_TICKET_CHECKSUM,
 };
 use krb5_types::{
@@ -1366,4 +1366,28 @@ fn tgs_without_pac_still_issues() {
         .unwrap();
     let svc = decrypt_ticket_part(&host.key, &out.rep.0.ticket).expect("svc");
     assert!(pac_from_ticket_part(&svc).is_some());
+}
+
+#[test]
+fn type16_checksum_uses_original_enc_tkt_bytes() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 9400);
+    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
+    let usage = KeyUsage::new(ku::TICKET).expect("usage");
+    let plain = decrypt(
+        &krbtgt.key,
+        usage,
+        issued.rep.0.ticket.enc_part.cipher.as_ref(),
+    )
+    .expect("plain");
+    let part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("TGT");
+    let pac = pac_from_ticket_part(&part).expect("PAC");
+    let from_bytes = zero_pac_ad_data(&plain, &pac).expect("surgical PAC zero");
+    let reencoded = ticket_checksum_der(&part).expect("re-encode");
+    assert_eq!(
+        from_bytes, reencoded,
+        "self-issued rasn DER must match original-bytes PAC zero"
+    );
+    verify_pac_signatures(&pac, &krbtgt.key, Some(&krbtgt.key), Some(&from_bytes))
+        .expect("type-16 over original bytes");
 }
