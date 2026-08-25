@@ -21,8 +21,32 @@ def main() -> int:
         sid = str(ndr_unpack(security.dom_sid, res[0]["objectSid"][0]))
         print("DOMAIN_SID", sid)
         return 0
+    if len(sys.argv) == 3 and sys.argv[1] == "--user-sid":
+        name = sys.argv[2]
+        if not name.replace("-", "").isalnum():
+            print("usage: extract_tdo.py <TRUST_REALM>|--self-sid|--user-sid <sam>", file=sys.stderr)
+            return 2
+        lp = LoadParm()
+        lp.load_default()
+        creds = Credentials()
+        creds.guess(lp)
+        sam = SamDB(session_info=system_session(), credentials=creds, lp=lp)
+        res = sam.search(
+            sam.domain_dn(),
+            expression=f"(sAMAccountName={name})",
+            attrs=["objectSid"],
+        )
+        if not res:
+            print("USER_MISSING", name)
+            return 1
+        sid = str(ndr_unpack(security.dom_sid, res[0]["objectSid"][0]))
+        domain, _, rid = sid.rpartition("-")
+        print("USER_SID", sid)
+        print("USER_RID", rid)
+        print("DOMAIN_SID", domain)
+        return 0
     if len(sys.argv) != 2:
-        print("usage: extract_tdo.py <TRUST_REALM>|--self-sid", file=sys.stderr)
+        print("usage: extract_tdo.py <TRUST_REALM>|--self-sid|--user-sid <sam>", file=sys.stderr)
         return 2
     realm = sys.argv[1]
     lp = LoadParm()

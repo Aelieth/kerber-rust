@@ -44,11 +44,51 @@ def write_dummy_requestor(src: str, dst: str) -> int:
     return 1
 
 
+def extra_sid_strings(ctr) -> list[str]:
+    extra = []
+    try:
+        for item in ctr.info.info3.sids or []:
+            extra.append(str(getattr(item, "sid", item)))
+    except (AttributeError, TypeError):
+        return []
+    return extra
+
+
+def dump_sids(path: str) -> int:
+    blob = open(path, "rb").read()
+    raw = ndr_unpack(krb5pac.PAC_DATA_RAW, blob)
+    by_type = {int(b.type): bytes(b.info.remaining) for b in raw.buffers}
+    if 1 not in by_type:
+        print("L1_NO_LOGON", "have", sorted(by_type))
+        return 1
+    ctr = ndr_unpack(krb5pac.PAC_LOGON_INFO_CTR, by_type[1][16:], allow_remaining=True)
+    base = ctr.info.info3.base
+    extra = extra_sid_strings(ctr)
+    print("EXTRA_SIDS", ",".join(extra) if extra else "-")
+    print(
+        "SIDFILTER_OK",
+        "domain",
+        str(base.domain_sid),
+        "rid",
+        int(base.rid),
+        "account",
+        str(base.account_name.string),
+        "types",
+        sorted(by_type),
+    )
+    return 0
+
+
 def main() -> int:
     if len(sys.argv) == 4 and sys.argv[1] == "--write-dummy":
         return write_dummy_requestor(sys.argv[2], sys.argv[3])
+    if len(sys.argv) == 3 and sys.argv[1] == "--sids":
+        return dump_sids(sys.argv[2])
     if len(sys.argv) != 2:
-        print("usage: pac_l1.py <pac.bin> | --write-dummy <src> <dst>", file=sys.stderr)
+        print(
+            "usage: pac_l1.py <pac.bin> | --write-dummy <src> <dst> | --sids <pac.bin>",
+            file=sys.stderr,
+        )
         return 2
     blob = open(sys.argv[1], "rb").read()
     raw = ndr_unpack(krb5pac.PAC_DATA_RAW, blob)
@@ -86,6 +126,7 @@ def main() -> int:
     logon_sid = str(base.domain_sid)
     rid = int(base.rid)
     account = str(base.account_name.string)
+    extra_sids = extra_sid_strings(ctr)
     if logon_sid.startswith(DUMMY):
         print("L1_DUMMY_DOMAIN", logon_sid)
         return 1
@@ -93,6 +134,7 @@ def main() -> int:
         print("L1_REQUESTOR_MISMATCH", requestor, logon_sid, rid)
         return 1
 
+    print("EXTRA_SIDS", ",".join(extra_sids) if extra_sids else "-")
     print(
         "L1_OK",
         "types",

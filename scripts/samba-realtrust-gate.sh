@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # D2: two Samba AD DCs, real samba-tool domain trust create, Rust bridged
-# with the TDO keys, both-direction kvno, reverse PAC SID == kbruser.
-# Isolation: docker exec / KRB5_CONFIG; host /etc/krb5.conf stays TESTLABBY.LOCAL.
+# with the TDO keys, both-direction kvno, reverse PAC SID == live Samba-A
+# kbruser. Isolation: docker exec / KRB5_CONFIG; host /etc/krb5.conf stays
+# TESTLABBY.LOCAL. Trust-create fail with images present is exit 1.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -106,21 +107,44 @@ trust_rc=$?
 set -e
 echo "$TRUST_OUT"
 if [ "$trust_rc" -ne 0 ]; then
-    echo "samba-tool domain trust create failed; trying local+remote with same admin password notes"
-    unavailable "samba-tool domain trust create failed: $(echo "$TRUST_OUT" | tr '\n' ' ' | cut -c1-400)"
+    echo "$TRUST_OUT"
+    log "samba.realtrust" "error" ",\"error\":\"trust-create\""
+    exit 1
 fi
 echo "$TRUST_OUT" | tee "$SCRATCH/samba-tool-trust-create.txt" >/dev/null
 
 TDO="$(docker exec "$NAME_A" python3 /tmp/extract_tdo.py KERBER.TEST 2>&1)"
 echo "$TDO" | grep -v TDO_PASSWORD
-echo "$TDO" | grep -q TDO_OK || unavailable "no TDO on Samba-A"
+if ! echo "$TDO" | grep -q TDO_OK; then
+    log "samba.realtrust" "error" ",\"error\":\"tdo-a\""
+    exit 1
+fi
 TRUST_HEX="$(echo "$TDO" | awk '/^TDO_PASSWORD_HEX /{print $2}')"
 RAW_HEX="$(echo "$TDO" | awk '/^TDO_RAW_HEX /{print $2}')"
 [ -n "$TRUST_HEX" ] || unavailable "TDO password hex empty"
 
+B_TDO="$(docker exec "$NAME_B" python3 /tmp/extract_tdo.py AD.KERBER.TEST 2>&1)"
+echo "$B_TDO" | grep -v TDO_PASSWORD
+if ! echo "$B_TDO" | grep -q TDO_OK; then
+    log "samba.realtrust" "error" ",\"error\":\"tdo-b\""
+    exit 1
+fi
+
 B_SID="$(docker exec "$NAME_B" python3 /tmp/extract_tdo.py --self-sid | awk '/^DOMAIN_SID /{print $2}')"
 [ -n "$B_SID" ] || unavailable "Samba-B domain SID missing"
 echo "KERBER.TEST SID $B_SID"
+A_SID="$(docker exec "$NAME_A" python3 /tmp/extract_tdo.py --self-sid | awk '/^DOMAIN_SID /{print $2}')"
+[ -n "$A_SID" ] || unavailable "Samba-A domain SID missing"
+echo "AD.KERBER.TEST SID $A_SID"
+KBR="$(docker exec "$NAME_A" python3 /tmp/extract_tdo.py --user-sid kbruser 2>&1)"
+echo "$KBR"
+KBR_SID="$(echo "$KBR" | awk '/^USER_SID /{print $2}')"
+KBR_RID="$(echo "$KBR" | awk '/^USER_RID /{print $2}')"
+if [ -z "$KBR_SID" ] || [ -z "$KBR_RID" ]; then
+    log "samba.realtrust" "error" ",\"error\":\"kbruser-sid\""
+    exit 1
+fi
+echo "kbruser $KBR_SID rid $KBR_RID"
 
 # Respawn Samba-A KDC workers so the TDO is live.
 docker exec "$NAME_A" sh -c 'for p in /proc/[0-9]*; do
@@ -266,20 +290,34 @@ L1="$(docker exec "$NAME_A" python3 /tmp/pac_l1.py /tmp/rev.pac 2>&1)"
 echo "$L1"
 echo "$L1" | grep -q L1_OK || { log "samba.realtrust" "error" ",\"error\":\"reverse-pac\""; exit 1; }
 RID="$(echo "$L1" | awk '{for(i=1;i<=NF;i++) if($i=="rid") print $(i+1)}')"
-echo "reverse PAC rid=$RID"
-if [ "$RID" != "1103" ]; then
-    echo "expected kbruser RID 1103, got $RID"
-    log "samba.realtrust" "error" ",\"error\":\"sid\",\"rid\":\"$RID\""
+LOGON_SID="$(echo "$L1" | awk '{for(i=1;i<=NF;i++) if($i=="domain") print $(i+1)}')"
+echo "reverse PAC domain=$LOGON_SID rid=$RID (live kbruser $KBR_SID rid $KBR_RID, A $A_SID)"
+if [ "$RID" != "$KBR_RID" ] || [ "$LOGON_SID" != "$A_SID" ]; then
+    echo "expected domain $A_SID rid $KBR_RID, got $LOGON_SID $RID"
+    log "samba.realtrust" "error" ",\"error\":\"sid\",\"rid\":\"$RID\",\"domain\":\"$LOGON_SID\""
     exit 1
 fi
 echo "$L1" | grep -q 'S-1-5-21-1-2-3' && { log "samba.realtrust" "error" ",\"error\":\"dummy-sid\""; exit 1; }
 
-# R9: forward Samba PAC SID-filter observation (best-effort).
-docker exec -e KRB5_CONFIG=/tmp/xr-krb5.conf "$NAME_A" \
-    sh -c 'printf "userpassword\n" | kinit user@KERBER.TEST' >/dev/null 2>&1 || true
 set +e
-docker exec "$NAME_A" samba-tool user show kbruser --attributes=objectSid 2>/dev/null | tee "$SCRATCH/r9-kbruser-sid.txt" >/dev/null
+docker exec "$NAME_A" sh -c \
+    'samba-tool domain exportkeytab /tmp/svc.kt --principal="host/svc.ad.kerber.test@AD.KERBER.TEST" >/tmp/svc-kt.err 2>&1'
+svc_kt_rc=$?
 set -e
+if [ "$svc_kt_rc" -ne 0 ] || ! docker exec "$NAME_A" test -f /tmp/svc.kt; then
+    docker exec "$NAME_A" cat /tmp/svc-kt.err 2>/dev/null || true
+    log "samba.realtrust" "error" ",\"error\":\"fwd-keytab\""
+    exit 1
+fi
+docker exec "$NAME_A" /tmp/krb5-pac-extract \
+    --keytab /tmp/svc.kt --ccache /tmp/krb5cc_rt --out /tmp/fwd.pac
+FWD_PAC="$(docker exec "$NAME_A" python3 /tmp/pac_l1.py --sids /tmp/fwd.pac 2>&1)"
+echo "$FWD_PAC" | tee "$SCRATCH/r9-forward-pac.txt"
+echo "$FWD_PAC" | grep -q SIDFILTER_OK || { log "samba.realtrust" "error" ",\"error\":\"forward-pac\""; exit 1; }
+FWD_DOM="$(echo "$FWD_PAC" | awk '{for(i=1;i<=NF;i++) if($i=="domain") print $(i+1)}')"
+FWD_RID="$(echo "$FWD_PAC" | awk '{for(i=1;i<=NF;i++) if($i=="rid") print $(i+1)}')"
+FWD_EXTRA="$(echo "$FWD_PAC" | awk '/^EXTRA_SIDS /{print $2}')"
+echo "R9_SIDFILTER domain=$FWD_DOM rid=$FWD_RID extra=${FWD_EXTRA:--} (B $B_SID)"
 
-log "samba.realtrust" "ok" ",\"direction\":\"both\",\"trust\":\"samba-tool\",\"reverse_rid\":1103"
+log "samba.realtrust" "ok" ",\"direction\":\"both\",\"trust\":\"samba-tool\",\"reverse_rid\":\"$RID\",\"reverse_sid\":\"$LOGON_SID\""
 exit 0
