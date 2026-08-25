@@ -181,9 +181,12 @@ fn parse_plain(plain: &[u8], v2: bool, v3: bool) -> Result<PrincipalStore, Persi
     if i + 4 <= plain.len() && &plain[i..i + 4] == b"SID1" {
         i += 4;
         let sddl = take_str(plain, &mut i)?;
-        if let Some(sid) = RpcSid::from_sddl(&sddl) {
-            store.set_domain_sid(sid);
-        }
+        let Some(sid) = RpcSid::from_sddl(&sddl) else {
+            return Err(PersistError::Format(format!(
+                "SID1 trailer is not valid SDDL: {sddl}"
+            )));
+        };
+        store.set_domain_sid(sid);
         let next = take_u32(plain, &mut i)?;
         let nrid = take_u32(plain, &mut i)?;
         for _ in 0..nrid {

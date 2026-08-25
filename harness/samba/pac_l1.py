@@ -4,7 +4,7 @@ import struct
 import sys
 
 from samba.dcerpc import krb5pac, security
-from samba.ndr import ndr_print, ndr_unpack
+from samba.ndr import ndr_pack, ndr_print, ndr_unpack
 
 NEED = {
     krb5pac.PAC_TYPE_LOGON_INFO: "LOGON_INFO",
@@ -25,9 +25,30 @@ def utf16_at(data: bytes, off: int, length: int) -> str:
     return data[off : off + length].decode("utf-16le")
 
 
+def write_dummy_requestor(src: str, dst: str) -> int:
+    blob = bytearray(open(src, "rb").read())
+    n, _ver = struct.unpack_from("<II", blob)
+    dummy = ndr_pack(security.dom_sid("S-1-5-21-1-2-3-1000"))
+    for i in range(n):
+        typ, size, off = struct.unpack_from("<IIQ", blob, 8 + i * 16)
+        if typ != 18:
+            continue
+        if len(dummy) > size:
+            print("L1_DUMMY_TOO_BIG", len(dummy), size)
+            return 1
+        blob[off : off + len(dummy)] = dummy
+        struct.pack_into("<I", blob, 8 + i * 16 + 4, len(dummy))
+        open(dst, "wb").write(blob)
+        return 0
+    print("L1_NO_REQUESTOR")
+    return 1
+
+
 def main() -> int:
+    if len(sys.argv) == 4 and sys.argv[1] == "--write-dummy":
+        return write_dummy_requestor(sys.argv[2], sys.argv[3])
     if len(sys.argv) != 2:
-        print("usage: pac_l1.py <pac.bin>", file=sys.stderr)
+        print("usage: pac_l1.py <pac.bin> | --write-dummy <src> <dst>", file=sys.stderr)
         return 2
     blob = open(sys.argv[1], "rb").read()
     raw = ndr_unpack(krb5pac.PAC_DATA_RAW, blob)

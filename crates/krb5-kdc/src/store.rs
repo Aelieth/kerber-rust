@@ -287,7 +287,10 @@ impl PrincipalStore {
             pkinit_ca: None,
             persist_paths: None,
             db_stamp: None,
-            domain_sid: generate_domain_sid(),
+            domain_sid: generate_domain_sid().unwrap_or_else(|_| {
+                eprintln!("krb5-kdc: getrandom failed generating domain SID");
+                std::process::exit(1);
+            }),
             next_rid: RID_FIRST_USER,
         }
     }
@@ -341,16 +344,24 @@ impl PrincipalStore {
     }
 
     /// Apply `kdc.conf` ticket policy.
-    pub fn apply_kdc_conf(&mut self, conf: &krb5_config::KdcConf) {
+    ///
+    /// # Errors
+    ///
+    /// Unparseable `domain_sid` SDDL.
+    pub fn apply_kdc_conf(&mut self, conf: &krb5_config::KdcConf) -> Result<(), Error> {
         self.policy.max_life = conf.max_life;
         self.policy.max_renewable_life = conf.max_renewable_life;
         self.policy.allow_weak_crypto = conf.allow_weak_crypto;
         self.policy.requires_preauth = conf.requires_preauth;
         if let Some(s) = conf.domain_sid.as_deref() {
-            if let Some(sid) = RpcSid::from_sddl(s) {
-                self.domain_sid = sid;
-            }
+            let Some(sid) = RpcSid::from_sddl(s) else {
+                return Err(Error::Crypto(format!(
+                    "kdc.conf domain_sid is not valid SDDL: {s}"
+                )));
+            };
+            self.domain_sid = sid;
         }
+        Ok(())
     }
 
     /// Realm NT domain SID.
@@ -940,13 +951,24 @@ impl PrincipalStore {
     }
 }
 
-fn generate_domain_sid() -> RpcSid {
+fn generate_domain_sid() -> Result<RpcSid, Error> {
     let mut b = [0u8; 12];
-    let _ = getrandom::getrandom(&mut b);
+    getrandom::getrandom(&mut b).map_err(|_| Error::Rng)?;
+    sid_from_random_bytes(&b)
+}
+
+fn sid_from_random_bytes(b: &[u8; 12]) -> Result<RpcSid, Error> {
+    if b.iter().all(|x| *x == 0) {
+        return Err(Error::Rng);
+    }
     let a = u32::from_le_bytes([b[0], b[1], b[2], b[3]]) | 1;
     let c = u32::from_le_bytes([b[4], b[5], b[6], b[7]]) | 1;
     let d = u32::from_le_bytes([b[8], b[9], b[10], b[11]]) | 1;
-    RpcSid::nt_domain(a, c, d)
+    let sid = RpcSid::nt_domain(a, c, d);
+    if sid.to_sddl() == RpcSid::dummy_domain().to_sddl() {
+        return Err(Error::Rng);
+    }
+    Ok(sid)
 }
 
 /// Fill a random protocol key of `etype`.
@@ -997,7 +1019,7 @@ mod tests {
 ",
         )
         .unwrap();
-        store.apply_kdc_conf(&conf);
+        store.apply_kdc_conf(&conf).unwrap();
         assert_eq!(store.policy.max_life, 5400);
         assert_eq!(store.policy.max_renewable_life, 2 * 86400);
         assert!(!store.policy.requires_preauth);
@@ -1034,10 +1056,30 @@ mod tests {
 ",
         )
         .unwrap();
-        store.apply_kdc_conf(&conf);
+        store.apply_kdc_conf(&conf).unwrap();
         assert_eq!(
             store.domain_sid().to_sddl(),
             "S-1-5-21-891046300-1937985867-1481223175"
         );
+    }
+
+    #[test]
+    fn apply_kdc_conf_rejects_bad_domain_sid() {
+        let mut store = PrincipalStore::new("KERBER.TEST");
+        let conf = krb5_config::KdcConf::parse(
+            r"
+[realms]
+    KERBER.TEST = {
+        domain_sid = not-a-sid
+    }
+",
+        )
+        .unwrap();
+        assert!(store.apply_kdc_conf(&conf).is_err());
+    }
+
+    #[test]
+    fn random_sid_rejects_all_zero() {
+        assert!(sid_from_random_bytes(&[0; 12]).is_err());
     }
 }

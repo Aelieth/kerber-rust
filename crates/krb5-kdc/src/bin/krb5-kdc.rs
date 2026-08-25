@@ -103,7 +103,10 @@ fn main() {
         }
     }
     if let Some(conf) = &kdc_conf {
-        store.apply_kdc_conf(conf);
+        if let Err(e) = store.apply_kdc_conf(conf) {
+            eprintln!("krb5-kdc: kdc.conf: {e}");
+            std::process::exit(2);
+        }
     }
     let enable_pkinit =
         export_pkinit.is_some() || std::env::var("KRB5_ENABLE_PKINIT").ok().as_deref() == Some("1");

@@ -240,7 +240,7 @@ impl DumpPrincipal {
         let mkvno = mkvno_from_tl(&self.tl_data);
         let requires_preauth = self.attributes & KDB_REQUIRES_PRE_AUTH != 0;
         let locked = self.attributes & KDB_DISALLOW_ALL_TIX != 0;
-        let (sid, rid) = parse_sid_tl(&self.tl_data);
+        let (sid, rid) = parse_sid_tl(&self.tl_data)?;
         Ok((
             Principal {
                 name,
@@ -767,18 +767,18 @@ fn encode_sid_tl(domain: &RpcSid, rid: u32) -> TlData {
     }
 }
 
-fn parse_sid_tl(tl: &[TlData]) -> (Option<RpcSid>, u32) {
+fn parse_sid_tl(tl: &[TlData]) -> Result<(Option<RpcSid>, u32), DumpError> {
     let Some(t) = tl.iter().find(|t| t.ty == TL_KERBER_SID) else {
-        return (None, 0);
+        return Ok((None, 0));
     };
     if t.contents.len() < 13 || t.contents[0] != 1 {
-        return (None, 0);
+        return Err(DumpError::Format("corrupt 0x4B01 SID tl_data".into()));
     }
     let rid = u32::from_le_bytes([t.contents[1], t.contents[2], t.contents[3], t.contents[4]]);
     let revision = t.contents[5];
     let n = usize::from(t.contents[6]);
     if t.contents.len() < 13 + n * 4 {
-        return (None, 0);
+        return Err(DumpError::Format("truncated 0x4B01 SID tl_data".into()));
     }
     let mut identifier_authority = [0u8; 6];
     identifier_authority.copy_from_slice(&t.contents[7..13]);
@@ -793,14 +793,14 @@ fn parse_sid_tl(tl: &[TlData]) -> (Option<RpcSid>, u32) {
         ]));
         off += 4;
     }
-    (
+    Ok((
         Some(RpcSid {
             revision,
             identifier_authority,
             sub_authority,
         }),
         rid,
-    )
+    ))
 }
 
 fn synthesize_tl(realm: &str, now: u32, mkvno: u16, is_km: bool) -> Vec<TlData> {
@@ -851,4 +851,20 @@ fn synthesize_km(realm: &str, mkey: &ProtocolKey, now: u32) -> Principal {
     p.max_renewable_life = 604_800;
     p.tl_data = synthesize_tl(realm, now, 1, true);
     p
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::TlData;
+
+    #[test]
+    fn corrupt_kerber_sid_tl_is_error() {
+        let tl = vec![TlData {
+            ty: TL_KERBER_SID,
+            contents: vec![0xff],
+        }];
+        let err = parse_sid_tl(&tl).unwrap_err();
+        assert!(err.to_string().contains("0x4B01"));
+    }
 }

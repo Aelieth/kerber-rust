@@ -145,6 +145,18 @@ echo "$L1" | grep -q 'L1_OK'
 echo "$L1" | grep -q 'REQUESTER_SID\|requestor'
 echo "$L1" | grep -v L1_DUMMY_REQUESTOR | grep -q L1_OK
 
+docker exec "$NAME" python3 /tmp/pac_l1.py --write-dummy /tmp/rust.pac /tmp/dummy.pac
+set +e
+D1="$(docker exec "$NAME" python3 /tmp/pac_l1.py /tmp/dummy.pac 2>&1)"
+d1_rc=$?
+set -e
+echo "$D1"
+if [ "$d1_rc" -eq 0 ] || echo "$D1" | grep -q L1_OK; then
+    log "samba.pac.verify" "error" ",\"error\":\"dummy-sid-accepted\""
+    exit 1
+fi
+echo "$D1" | grep -q L1_DUMMY
+
 L2="deferred-to-l3"
 set +e
 docker exec "$NAME" python3 -c 'import samba.tests.krb5.kcrypto' >/dev/null 2>&1
