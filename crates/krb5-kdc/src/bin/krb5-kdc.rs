@@ -301,16 +301,24 @@ fn bootstrap_test_realm() -> PrincipalStore {
         // Peer-issued tickets (AD outbound) may use a second AES key
         // (Windows TDO inbound/outbound salts differ).
         if let Ok(hex2) = std::env::var("KRB5_TEST_INTERREALM_KEY_ACCEPT") {
-            match parse_hex_key(&hex2) {
-                Ok(key) => {
-                    if let Err(e) = store.add_interrealm_decrypt_key(&acl, &actor, &foreign, key) {
-                        eprintln!("krb5-kdc: inter-realm accept key: {e}");
-                        std::process::exit(1);
-                    }
+            for part in hex2.split(',') {
+                let part = part.trim();
+                if part.is_empty() {
+                    continue;
                 }
-                Err(e) => {
-                    eprintln!("krb5-kdc: KRB5_TEST_INTERREALM_KEY_ACCEPT: {e}");
-                    std::process::exit(2);
+                match parse_hex_key(part) {
+                    Ok(key) => {
+                        if let Err(e) =
+                            store.add_interrealm_decrypt_key(&acl, &actor, &foreign, key)
+                        {
+                            eprintln!("krb5-kdc: inter-realm accept key: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("krb5-kdc: KRB5_TEST_INTERREALM_KEY_ACCEPT: {e}");
+                        std::process::exit(2);
+                    }
                 }
             }
         }

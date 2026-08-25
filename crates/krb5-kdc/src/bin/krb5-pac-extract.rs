@@ -17,8 +17,13 @@ use krb5_types::{ku, EncTicketPart, Ticket};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().map(String::as_str) == Some("--s2k") {
+    if args.first().map(String::as_str) == Some("--s2k")
+        || args.first().map(String::as_str) == Some("--s2k-hex")
+    {
         return s2k_hex(&args);
+    }
+    if args.first().map(String::as_str) == Some("--dump-keytab") {
+        return dump_keytab(&args);
     }
     let mut keytab = None;
     let mut ccache = None;
@@ -166,6 +171,41 @@ fn preferred_key(kt: &Keytab) -> Option<ProtocolKey> {
         .or_else(|| kt.entries.first().map(|e| e.key.clone()))
 }
 
+fn dump_keytab(args: &[String]) -> ExitCode {
+    if args.len() != 2 {
+        eprintln!("usage: krb5-pac-extract --dump-keytab <kt>");
+        return ExitCode::from(2);
+    }
+    let kt = match Keytab::parse(&fs::read(&args[1]).unwrap_or_default()) {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("krb5-pac-extract: keytab: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    for e in &kt.entries {
+        println!(
+            "KEY {} {} {}",
+            e.key.etype().to_iana(),
+            hex_bytes(e.key.as_bytes()),
+            e.name.components_joined()
+        );
+    }
+    ExitCode::SUCCESS
+}
+
+fn hex_decode(h: &str) -> Result<Vec<u8>, String> {
+    let h = h.trim();
+    if h.len() % 2 != 0 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("odd or non-hex".into());
+    }
+    let mut out = vec![0u8; h.len() / 2];
+    for i in 0..out.len() {
+        out[i] = u8::from_str_radix(&h[i * 2..i * 2 + 2], 16).map_err(|e| e.to_string())?;
+    }
+    Ok(out)
+}
+
 fn hex_bytes(b: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut s = String::with_capacity(b.len() * 2);
@@ -183,7 +223,18 @@ fn s2k_hex(args: &[String]) -> ExitCode {
     }
     let etype = EncryptionType::Aes256CtsHmacSha196;
     let params = s2k_params(etype);
-    match string_to_key(etype, args[1].as_bytes(), args[2].as_bytes(), Some(&params)) {
+    let pw = if args[0] == "--s2k-hex" {
+        match hex_decode(&args[1]) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("krb5-pac-extract: s2k-hex: {e}");
+                return ExitCode::from(2);
+            }
+        }
+    } else {
+        args[1].as_bytes().to_vec()
+    };
+    match string_to_key(etype, &pw, args[2].as_bytes(), Some(&params)) {
         Ok(key) => {
             for b in key.as_bytes() {
                 print!("{b:02x}");
