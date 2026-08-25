@@ -7,6 +7,7 @@ use crate::error::Error;
 use crate::store::{KeyEntry, Principal, PrincipalStore, S2K_ITERS};
 use krb5_crypto::{decrypt, encrypt, EncryptionType, KeyUsage, ProtocolKey};
 use krb5_protocol::write_secret_file;
+use krb5_types::pac::RpcSid;
 use krb5_types::PrincipalName;
 
 /// Persistence failure.
@@ -117,6 +118,15 @@ fn serialize_plain(store: &PrincipalStore) -> Vec<u8> {
         out.push(u8::from(p.locked));
         out.extend_from_slice(&p.pw_expire.to_be_bytes());
     }
+    out.extend_from_slice(b"SID1");
+    put_str(&mut out, &store.domain_sid().to_sddl());
+    out.extend_from_slice(&store.next_rid().to_be_bytes());
+    let nr = u32::try_from(store_debug_count(store)).unwrap_or(0);
+    out.extend_from_slice(&nr.to_be_bytes());
+    for p in store_iter(store) {
+        put_str(&mut out, &p.id());
+        out.extend_from_slice(&p.rid.to_be_bytes());
+    }
     out
 }
 
@@ -167,6 +177,21 @@ fn parse_plain(plain: &[u8], v2: bool, v3: bool) -> Result<PrincipalStore, Persi
         );
         store_insert(&mut store, p);
         let _ = S2K_ITERS;
+    }
+    if i + 4 <= plain.len() && &plain[i..i + 4] == b"SID1" {
+        i += 4;
+        let sddl = take_str(plain, &mut i)?;
+        if let Some(sid) = RpcSid::from_sddl(&sddl) {
+            store.set_domain_sid(sid);
+        }
+        let next = take_u32(plain, &mut i)?;
+        let nrid = take_u32(plain, &mut i)?;
+        for _ in 0..nrid {
+            let id = take_str(plain, &mut i)?;
+            let rid = take_u32(plain, &mut i)?;
+            store.set_principal_rid(&id, rid);
+        }
+        store.set_next_rid(next);
     }
     Ok(store)
 }

@@ -17,6 +17,7 @@ use std::path::Path;
 
 use krb5_crypto::{kdb_decrypt_key, kdb_encrypt_key, EncryptionType, ProtocolKey};
 use krb5_protocol::write_secret_file;
+use krb5_types::pac::RpcSid;
 use krb5_types::PrincipalName;
 
 use crate::error::Error as KdcError;
@@ -41,6 +42,8 @@ pub const TL_KADM_DATA: i32 = 3;
 pub const TL_MKVNO: i32 = 8;
 /// `KRB5_TL_ACTKVNO`.
 pub const TL_ACTKVNO: i32 = 9;
+/// Private `tl_data` type: domain SID + RID (MIT has no SID; opaque round-trip).
+pub const TL_KERBER_SID: i32 = 0x4B01;
 /// `KRB5_KDB_SALTTYPE_NORMAL`.
 pub const SALTTYPE_NORMAL: i32 = 0;
 /// `KRB5_KDB_SALTTYPE_SPECIAL`.
@@ -166,15 +169,28 @@ impl DumpFile {
     pub fn into_store(self, mkey: &ProtocolKey) -> Result<PrincipalStore, DumpError> {
         let realm = self.realm()?.to_owned();
         let mut store = PrincipalStore::new(realm);
+        let mut domain: Option<RpcSid> = None;
         for p in self.princs {
-            store.debug_insert(p.into_principal(mkey)?);
+            let is_km = p.name.starts_with("K/M@");
+            let (princ, sid) = p.into_principal(mkey)?;
+            if is_km {
+                if let Some(s) = sid {
+                    domain = Some(s);
+                }
+            } else if domain.is_none() {
+                domain = sid;
+            }
+            store.debug_insert(princ);
+        }
+        if let Some(sid) = domain {
+            store.set_domain_sid(sid);
         }
         Ok(store)
     }
 }
 
 impl DumpPrincipal {
-    fn into_principal(self, mkey: &ProtocolKey) -> Result<Principal, DumpError> {
+    fn into_principal(self, mkey: &ProtocolKey) -> Result<(Principal, Option<RpcSid>), DumpError> {
         let (name, realm) = parse_unparsed(&self.name)?;
         let mut keys = Vec::new();
         let mut princ_salt: Option<Vec<u8>> = None;
@@ -224,26 +240,31 @@ impl DumpPrincipal {
         let mkvno = mkvno_from_tl(&self.tl_data);
         let requires_preauth = self.attributes & KDB_REQUIRES_PRE_AUTH != 0;
         let locked = self.attributes & KDB_DISALLOW_ALL_TIX != 0;
-        Ok(Principal {
-            name,
-            realm,
-            keys,
-            salt,
-            requires_preauth,
-            max_life: u64::from(self.max_life),
-            locked,
-            pw_expire: self.pw_expiration,
-            attributes: self.attributes,
-            max_renewable_life: u64::from(self.max_renewable_life),
-            expiration: self.expiration,
-            last_success: self.last_success,
-            last_failed: self.last_failed,
-            fail_auth_count: self.fail_auth_count,
-            mkvno,
-            db_entry_len: self.db_len,
-            tl_data: self.tl_data,
-            e_data: self.e_data,
-        })
+        let (sid, rid) = parse_sid_tl(&self.tl_data);
+        Ok((
+            Principal {
+                name,
+                realm,
+                keys,
+                salt,
+                requires_preauth,
+                max_life: u64::from(self.max_life),
+                locked,
+                pw_expire: self.pw_expiration,
+                attributes: self.attributes,
+                max_renewable_life: u64::from(self.max_renewable_life),
+                expiration: self.expiration,
+                last_success: self.last_success,
+                last_failed: self.last_failed,
+                fail_auth_count: self.fail_auth_count,
+                mkvno,
+                db_entry_len: self.db_len,
+                tl_data: self.tl_data,
+                e_data: self.e_data,
+                rid,
+            },
+            sid,
+        ))
     }
 }
 
@@ -643,7 +664,7 @@ fn write_princ_record(
     } else {
         u32::try_from(p.max_renewable_life).unwrap_or(u32::MAX)
     };
-    let tl = if p.tl_data.is_empty() {
+    let mut tl = if p.tl_data.is_empty() {
         synthesize_tl(
             &p.realm,
             unix_now(),
@@ -653,6 +674,7 @@ fn write_princ_record(
     } else {
         p.tl_data.clone()
     };
+    merge_sid_tl(&mut tl, store.domain_sid(), p.rid);
     let mut keys = Vec::new();
     for k in &p.keys {
         let enc = kdb_encrypt_key(mkey, k.key.as_bytes())?;
@@ -720,6 +742,63 @@ fn write_princ_record(
     let _ = write!(out, "{};", encode_hex(&p.e_data));
     out.push('\n');
     Ok(())
+}
+
+fn merge_sid_tl(tl: &mut Vec<TlData>, domain: &RpcSid, rid: u32) {
+    tl.retain(|t| t.ty != TL_KERBER_SID);
+    tl.push(encode_sid_tl(domain, rid));
+}
+
+fn encode_sid_tl(domain: &RpcSid, rid: u32) -> TlData {
+    let mut contents = Vec::with_capacity(16 + domain.sub_authority.len() * 4);
+    contents.push(1);
+    contents.extend_from_slice(&rid.to_le_bytes());
+    contents.push(domain.revision);
+    contents.push(u8::try_from(domain.sub_authority.len()).unwrap_or(0));
+    contents.extend_from_slice(&domain.identifier_authority);
+    for s in &domain.sub_authority {
+        contents.extend_from_slice(&s.to_le_bytes());
+    }
+    TlData {
+        ty: TL_KERBER_SID,
+        contents,
+    }
+}
+
+fn parse_sid_tl(tl: &[TlData]) -> (Option<RpcSid>, u32) {
+    let Some(t) = tl.iter().find(|t| t.ty == TL_KERBER_SID) else {
+        return (None, 0);
+    };
+    if t.contents.len() < 13 || t.contents[0] != 1 {
+        return (None, 0);
+    }
+    let rid = u32::from_le_bytes([t.contents[1], t.contents[2], t.contents[3], t.contents[4]]);
+    let revision = t.contents[5];
+    let n = usize::from(t.contents[6]);
+    if t.contents.len() < 13 + n * 4 {
+        return (None, 0);
+    }
+    let mut identifier_authority = [0u8; 6];
+    identifier_authority.copy_from_slice(&t.contents[7..13]);
+    let mut sub_authority = Vec::with_capacity(n);
+    let mut off = 13;
+    for _ in 0..n {
+        sub_authority.push(u32::from_le_bytes([
+            t.contents[off],
+            t.contents[off + 1],
+            t.contents[off + 2],
+            t.contents[off + 3],
+        ]));
+        off += 4;
+    }
+    (
+        Some(RpcSid {
+            revision,
+            identifier_authority,
+            sub_authority,
+        }),
+        rid,
+    )
 }
 
 fn synthesize_tl(realm: &str, now: u32, mkvno: u16, is_km: bool) -> Vec<TlData> {

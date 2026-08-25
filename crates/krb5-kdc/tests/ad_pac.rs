@@ -146,6 +146,15 @@ fn issued_pac_self_verifies_all_four_signatures() {
     let tgt_part = decrypt_ticket_part(&krbtgt.key, &as_out.rep.0.ticket).expect("TGT");
     let tgt_pac = pac_from_ticket_part(&tgt_part).expect("TGT PAC");
     let parsed = Pac::parse(&tgt_pac).expect("parse");
+    let logon = parse_kerb_validation_info(parsed.buffer(PAC_LOGON_INFO).expect("logon"))
+        .expect("issued NDR");
+    assert_ne!(
+        logon.logon_domain_id.to_sddl(),
+        krb5_types::pac::RpcSid::dummy_domain().to_sddl(),
+        "issued PAC must not use dummy S-1-5-21-1-2-3"
+    );
+    assert_eq!(logon.user_id, store.get_name(&cname).unwrap().rid);
+    assert_eq!(logon.logon_domain_id, *store.domain_sid());
     let kinds: Vec<u32> = parsed.buffers.iter().map(|b| b.kind).collect();
     for need in [
         PAC_LOGON_INFO,
@@ -186,6 +195,7 @@ fn issued_pac_self_verifies_all_four_signatures() {
     verify_pac_signatures(&pac, &host.key, Some(&krbtgt.key), Some(&der)).expect("svc all four");
     verify_pac(&pac, &host.key, &krbtgt.key).expect("server+kdc");
 
+    let ident = store.pac_identity(&cname, TEST_REALM);
     let signed = sign_pac(
         &cname,
         TEST_REALM,
@@ -193,6 +203,7 @@ fn issued_pac_self_verifies_all_four_signatures() {
         &host.key,
         &krbtgt.key,
         &der,
+        &ident,
     )
     .expect("sign");
     // Re-sign uses the service-ticket checksum input, so ticket/full will

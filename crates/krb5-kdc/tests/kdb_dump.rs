@@ -244,6 +244,39 @@ fn dump_write_header_grammar_and_tl_data() {
 }
 
 #[test]
+fn dump_load_preserves_sid_rid_not_dummy() {
+    let store = load_dump(&golden_v7(), b"masterpassword").unwrap();
+    assert_ne!(
+        store.domain_sid().to_sddl(),
+        krb5_types::pac::RpcSid::dummy_domain().to_sddl()
+    );
+    let krbtgt = store.get("krbtgt/KERBER.TEST@KERBER.TEST").expect("krbtgt");
+    assert_eq!(krbtgt.rid, krb5_kdc::RID_KRBTGT);
+    let user = store.get("user@KERBER.TEST").unwrap();
+    assert_ne!(user.rid, 0);
+    let sid = store.domain_sid().clone();
+    let user_rid = user.rid;
+    let text = dump_store(&store, b"masterpassword").unwrap();
+    let reparsed = parse_dump(&text).unwrap();
+    assert!(
+        reparsed
+            .princ("user@KERBER.TEST")
+            .unwrap()
+            .tl_data
+            .iter()
+            .any(|t| t.ty == krb5_kdc::TL_KERBER_SID),
+        "dump must carry SID/RID tl_data"
+    );
+    let again = load_dump(&text, b"masterpassword").unwrap();
+    assert_eq!(again.domain_sid().to_sddl(), sid.to_sddl());
+    assert_eq!(again.get("user@KERBER.TEST").unwrap().rid, user_rid);
+    assert_eq!(
+        again.get("krbtgt/KERBER.TEST@KERBER.TEST").unwrap().rid,
+        krb5_kdc::RID_KRBTGT
+    );
+}
+
+#[test]
 fn krb5_kdb_cli_load_and_dump_content() {
     let dir = std::env::temp_dir().join(format!(
         "krb5-kdb-cli-{}-{}",

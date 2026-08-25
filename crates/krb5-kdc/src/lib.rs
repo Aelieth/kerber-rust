@@ -30,7 +30,7 @@ pub use kdb_dump::{
     dump_store, dump_store_etype, load_dump, load_dump_etype, load_dump_path, parse_dump,
     write_dump, write_dump_path, write_dump_path_etype, DumpError, DumpFile, DumpKeyData,
     DumpKeySlot, DumpPrincipal, KDB_DUMP_VERSION, KDB_DUMP_VERSION_R18, TL_KADM_DATA,
-    TL_LAST_PWD_CHANGE, TL_MKVNO, TL_MOD_PRINC,
+    TL_KERBER_SID, TL_LAST_PWD_CHANGE, TL_MKVNO, TL_MOD_PRINC,
 };
 pub use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 pub use listen::{
@@ -41,7 +41,8 @@ pub use mkey::{harness_master_etype, master_key_from_password, MASTER_NAME};
 pub use persist::{load_store, save_store, PersistError};
 pub use store::{
     random_key, s2k_params, KeyEntry, Policy, Principal, PrincipalStore, TlData,
-    KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH, S2K_ITERS,
+    KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH,
+    RID_ADMINISTRATOR, RID_FIRST_USER, RID_KRBTGT, S2K_ITERS,
 };
 
 use krb5_types::PrincipalName;

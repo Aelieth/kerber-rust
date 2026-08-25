@@ -40,6 +40,17 @@ fn persist_survives_restart_without_key_regen() {
         .as_bytes()
         .to_vec();
     assert_eq!(krbtgt_before, krbtgt_after);
+    assert_ne!(
+        loaded.domain_sid().to_sddl(),
+        krb5_types::pac::RpcSid::dummy_domain().to_sddl()
+    );
+    assert_eq!(loaded.domain_sid().to_sddl(), store.domain_sid().to_sddl());
+    let user = krb5_types::PrincipalName::new(krb5_types::PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    assert_eq!(
+        loaded.get_name(&user).unwrap().rid,
+        store.get_name(&user).unwrap().rid
+    );
+    assert_eq!(loaded.krbtgt().unwrap().rid, krb5_kdc::RID_KRBTGT);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

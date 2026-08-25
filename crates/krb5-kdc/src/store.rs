@@ -5,8 +5,16 @@ use std::time::Duration;
 
 use krb5_crypto::{string_to_key, EncryptionType, ProtocolKey};
 use krb5_protocol::{Keytab, KeytabEntry, ReplayCache};
+use krb5_types::pac::{PacIdentity, RpcSid};
 use krb5_types::pkinit::PkinitCa;
 use krb5_types::PrincipalName;
+
+/// Well-known RID: Administrator.
+pub const RID_ADMINISTRATOR: u32 = 500;
+/// Well-known RID: krbtgt.
+pub const RID_KRBTGT: u32 = 502;
+/// First allocated RID for ordinary principals (AD-style).
+pub const RID_FIRST_USER: u32 = 1000;
 
 use crate::acl::{Acl, AdminOp};
 use crate::error::Error;
@@ -100,6 +108,8 @@ pub struct Principal {
     pub tl_data: Vec<TlData>,
     /// Opaque MIT extra data (`e_data`).
     pub e_data: Vec<u8>,
+    /// Relative ID in the realm domain SID (0 = unassigned).
+    pub rid: u32,
 }
 
 impl Principal {
@@ -141,6 +151,7 @@ impl Principal {
             db_entry_len: KDB_V1_BASE_LENGTH,
             tl_data: Vec::new(),
             e_data: Vec::new(),
+            rid: 0,
         }
     }
 }
@@ -250,6 +261,10 @@ pub struct PrincipalStore {
     pub persist_paths: Option<(std::path::PathBuf, std::path::PathBuf)>,
     /// Last observed (mtime, len) of the db file; kadmind mutations bump it.
     pub(crate) db_stamp: Option<(Option<std::time::SystemTime>, u64)>,
+    /// Per-realm NT domain SID (never the dummy `S-1-5-21-1-2-3`).
+    domain_sid: RpcSid,
+    /// Next RID to allocate (`RID_FIRST_USER` and up).
+    next_rid: u32,
 }
 
 impl PrincipalStore {
@@ -265,6 +280,8 @@ impl PrincipalStore {
             pkinit_ca: None,
             persist_paths: None,
             db_stamp: None,
+            domain_sid: generate_domain_sid(),
+            next_rid: RID_FIRST_USER,
         }
     }
 
@@ -322,6 +339,58 @@ impl PrincipalStore {
         self.policy.max_renewable_life = conf.max_renewable_life;
         self.policy.allow_weak_crypto = conf.allow_weak_crypto;
         self.policy.requires_preauth = conf.requires_preauth;
+        if let Some(s) = conf.domain_sid.as_deref() {
+            if let Some(sid) = RpcSid::from_sddl(s) {
+                self.domain_sid = sid;
+            }
+        }
+    }
+
+    /// Realm NT domain SID.
+    #[must_use]
+    pub fn domain_sid(&self) -> &RpcSid {
+        &self.domain_sid
+    }
+
+    /// Next RID that would be allocated for an ordinary principal.
+    #[must_use]
+    pub fn next_rid(&self) -> u32 {
+        self.next_rid
+    }
+
+    /// Override the realm domain SID (config / dump / persist).
+    pub fn set_domain_sid(&mut self, sid: RpcSid) {
+        self.domain_sid = sid;
+    }
+
+    pub(crate) fn set_principal_rid(&mut self, id: &str, rid: u32) {
+        if let Some(p) = self.map.get_mut(id) {
+            p.rid = rid;
+        }
+    }
+
+    pub(crate) fn set_next_rid(&mut self, next: u32) {
+        if next >= RID_FIRST_USER {
+            self.next_rid = next;
+        }
+    }
+
+    /// PAC identity for `name` in `crealm` (store RID, or `RID_FIRST_USER` if unknown).
+    #[must_use]
+    pub fn pac_identity(&self, name: &PrincipalName, crealm: &str) -> PacIdentity {
+        let rid = self.get_name(name).map_or(RID_FIRST_USER, |p| {
+            if p.rid == 0 {
+                RID_FIRST_USER
+            } else {
+                p.rid
+            }
+        });
+        PacIdentity {
+            sam: name.components_joined(),
+            realm: crealm.to_owned(),
+            domain_sid: self.domain_sid.clone(),
+            rid,
+        }
     }
 
     /// Provision a PKINIT test CA. Off by default so a KDC without an
@@ -575,7 +644,7 @@ impl PrincipalStore {
             false,
             0,
         );
-        self.map.insert(id, p);
+        self.put_principal(p);
         self.save_if_configured()
     }
 
@@ -692,7 +761,7 @@ impl PrincipalStore {
             false,
             0,
         );
-        self.map.insert(p.id(), p);
+        self.put_principal(p);
         self.save_if_configured()
     }
 
@@ -716,7 +785,7 @@ impl PrincipalStore {
             false,
             0,
         );
-        self.map.insert(p.id(), p);
+        self.put_principal(p);
         self.save_if_configured()
     }
 
@@ -810,8 +879,47 @@ impl PrincipalStore {
 
     /// Insert a fully-formed principal (persistence).
     pub(crate) fn debug_insert(&mut self, p: Principal) {
+        self.put_principal(p);
+    }
+
+    fn put_principal(&mut self, mut p: Principal) {
+        if p.rid == 0 {
+            p.rid = self.alloc_rid(&p.name);
+        }
+        self.bump_next_rid(p.rid);
         self.map.insert(p.id(), p);
     }
+
+    fn alloc_rid(&mut self, name: &PrincipalName) -> u32 {
+        if name.is_krbtgt_for(&self.realm) {
+            return RID_KRBTGT;
+        }
+        if name.name_type == PrincipalName::NT_PRINCIPAL
+            && name
+                .components_joined()
+                .eq_ignore_ascii_case("Administrator")
+        {
+            return RID_ADMINISTRATOR;
+        }
+        let r = self.next_rid;
+        self.next_rid = self.next_rid.saturating_add(1);
+        r
+    }
+
+    fn bump_next_rid(&mut self, rid: u32) {
+        if rid >= RID_FIRST_USER && rid >= self.next_rid {
+            self.next_rid = rid.saturating_add(1);
+        }
+    }
+}
+
+fn generate_domain_sid() -> RpcSid {
+    let mut b = [0u8; 12];
+    let _ = getrandom::getrandom(&mut b);
+    let a = u32::from_le_bytes([b[0], b[1], b[2], b[3]]) | 1;
+    let c = u32::from_le_bytes([b[4], b[5], b[6], b[7]]) | 1;
+    let d = u32::from_le_bytes([b[8], b[9], b[10], b[11]]) | 1;
+    RpcSid::nt_domain(a, c, d)
 }
 
 /// Fill a random protocol key of `etype`.
@@ -867,5 +975,42 @@ mod tests {
         assert_eq!(store.policy.max_renewable_life, 2 * 86400);
         assert!(!store.policy.requires_preauth);
         assert!(store.policy.allow_weak_crypto);
+    }
+
+    #[test]
+    fn bootstrap_sid_rid_are_real_not_dummy() {
+        let (store, _) = crate::bootstrap_documented().unwrap();
+        assert_ne!(
+            store.domain_sid().to_sddl(),
+            RpcSid::dummy_domain().to_sddl()
+        );
+        assert_eq!(store.krbtgt().unwrap().rid, RID_KRBTGT);
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+        assert_eq!(store.get_name(&user).unwrap().rid, RID_FIRST_USER);
+        let ident = store.pac_identity(&user, store.realm());
+        assert_eq!(ident.rid, RID_FIRST_USER);
+        assert_eq!(
+            ident.client_sid().to_sddl(),
+            store.domain_sid().with_rid(RID_FIRST_USER).to_sddl()
+        );
+    }
+
+    #[test]
+    fn apply_kdc_conf_domain_sid() {
+        let mut store = PrincipalStore::new("KERBER.TEST");
+        let conf = krb5_config::KdcConf::parse(
+            r"
+[realms]
+    KERBER.TEST = {
+        domain_sid = S-1-5-21-891046300-1937985867-1481223175
+    }
+",
+        )
+        .unwrap();
+        store.apply_kdc_conf(&conf);
+        assert_eq!(
+            store.domain_sid().to_sddl(),
+            "S-1-5-21-891046300-1937985867-1481223175"
+        );
     }
 }

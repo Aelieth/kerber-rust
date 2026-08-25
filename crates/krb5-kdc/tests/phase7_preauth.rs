@@ -455,6 +455,7 @@ fn as_and_tgs_tickets_carry_verifiable_pac() {
     let svc = decrypt_ticket_part(&host.key, &tgs_out.rep.0.ticket).expect("svc");
     let pac = pac_from_ticket_part(&svc).expect("PAC on service ticket");
     verify_pac(&pac, &host.key, &krbtgt.key).expect("service PAC");
+    let ident = store.pac_identity(&cname, TEST_REALM);
     let signed = sign_pac(
         &cname,
         TEST_REALM,
@@ -462,6 +463,7 @@ fn as_and_tgs_tickets_carry_verifiable_pac() {
         &host.key,
         &krbtgt.key,
         &[],
+        &ident,
     )
     .expect("sign");
     verify_pac(&signed, &host.key, &krbtgt.key).expect("re-sign");

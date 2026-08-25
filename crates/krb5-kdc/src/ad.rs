@@ -34,11 +34,12 @@ pub fn wrap_win2k_pac(pac_bytes: &[u8]) -> Result<krb5_types::AuthorizationData,
 /// Crypto or DER failures while building checksums.
 pub fn sign_pac(
     cname: &PrincipalName,
-    crealm: &str,
+    _crealm: &str,
     authtime: u32,
     server: &ProtocolKey,
     kdc: &ProtocolKey,
     enc_tkt_der: &[u8],
+    identity: &krb5_types::pac::PacIdentity,
 ) -> Result<Vec<u8>, Error> {
     let server_type = server.etype().checksum_type();
     let kdc_type = kdc.etype().checksum_type();
@@ -49,7 +50,12 @@ pub fn sign_pac(
         buffers: vec![
             krb5_types::pac::PacBuffer {
                 kind: krb5_types::pac::PAC_LOGON_INFO,
-                data: krb5_types::pac::logon_info_buffer(&cname.components_joined(), crealm),
+                data: krb5_types::pac::logon_info_buffer(
+                    &identity.sam,
+                    &identity.realm,
+                    &identity.domain_sid,
+                    identity.rid,
+                ),
             },
             krb5_types::pac::PacBuffer {
                 kind: krb5_types::pac::PAC_CLIENT_INFO,

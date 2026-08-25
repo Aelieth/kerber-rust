@@ -288,6 +288,7 @@ fn issue_as_from(
         &krbtgt_key.key,
         TransitedEncoding::empty(),
         renew_till_for(store, &now, &flags),
+        store,
         true,
     )?;
     let renew_till = renew_till_for(store, &now, &flags);
@@ -526,6 +527,7 @@ fn issue_tgs_from(
         &pac_kdc,
         transited,
         renew_till_for(store, &now, &flags),
+        store,
         include_pac,
     )?;
     let renew_till = renew_till_for(store, &now, &flags);
@@ -671,6 +673,7 @@ fn mint_ticket(
     kdc_key: &ProtocolKey,
     transited: TransitedEncoding,
     renew_till: Option<KerberosTime>,
+    store: &PrincipalStore,
     include_pac: bool,
 ) -> Result<Ticket, Error> {
     let mut part = EncTicketPart {
@@ -690,6 +693,7 @@ fn mint_ticket(
         let placeholder = wrap_win2k_pac(&[0])?;
         part.authorization_data = Some(placeholder);
         let checksum_der = encode(&part)?;
+        let ident = store.pac_identity(cname, crealm);
         let pac = sign_pac(
             cname,
             crealm,
@@ -697,6 +701,7 @@ fn mint_ticket(
             service_key,
             kdc_key,
             &checksum_der,
+            &ident,
         )?;
         part.authorization_data = Some(wrap_win2k_pac(&pac)?);
     }

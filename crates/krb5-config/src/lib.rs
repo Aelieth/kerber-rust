@@ -97,6 +97,8 @@ pub struct KdcConf {
     pub master_key_type: Option<String>,
     /// `database_module` / `db_library` (db2, lmdb, …). Unused by dump/load.
     pub db_library: Option<String>,
+    /// Optional NT domain SID (`S-1-5-21-…`) for PAC issuance.
+    pub domain_sid: Option<String>,
 }
 
 impl Default for KdcConf {
@@ -115,6 +117,7 @@ impl Default for KdcConf {
             requires_preauth: true,
             master_key_type: None,
             db_library: None,
+            domain_sid: None,
         }
     }
 }
@@ -357,6 +360,7 @@ fn parse_kdc_realm_line(conf: &mut KdcConf, line: &str) {
         "requires_preauth" => conf.requires_preauth = truthy(&v),
         "master_key_type" => conf.master_key_type = Some(v),
         "database_module" | "db_library" => conf.db_library = Some(v),
+        "domain_sid" => conf.domain_sid = Some(v),
         _ => {}
     }
 }
@@ -697,6 +701,7 @@ mod tests {
         database_name = /var/lib/krb5kdc/principal
         master_key_type = aes256-cts-hmac-sha384-192
         db_library = db2
+        domain_sid = S-1-5-21-891046300-1937985867-1481223175
     }
 ";
         let c = KdcConf::parse(text).unwrap();
@@ -709,6 +714,10 @@ mod tests {
             Some("aes256-cts-hmac-sha384-192")
         );
         assert_eq!(c.db_library.as_deref(), Some("db2"));
+        assert_eq!(
+            c.domain_sid.as_deref(),
+            Some("S-1-5-21-891046300-1937985867-1481223175")
+        );
         assert_eq!(c.kdc_listen[0], "127.0.0.1:88");
         let mit = KdcConf::parse(
             r"
