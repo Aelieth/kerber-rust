@@ -21,9 +21,10 @@ passwords are test fixtures, not real secrets.
 > regenerate a Samba-sourced PAC fixture. The A3 gate does not depend on SID
 > equality; it depends on Samba **verifying a Rust-issued PAC's signatures**.
 >
-> *(Verified 2026-08-25: Samba domain SID
-> `S-1-5-21-891046300-1937985867-1481223175`, `kbruser` RID 1103, `kbrsvc` RID
-> 1104 — recorded in `working/samba-lab-accounts.md`.)*
+> *(Domain SID is baked at image build. First image
+> `S-1-5-21-891046300-…`; last-pass recapture `S-1-5-21-1813809682-…`,
+> `kbruser` RID 1103. Live values: `working/samba-lab-accounts.md`.
+> `samba-realtrust-gate.sh` pins `--self-sid` / `--user-sid`.)*
 
 ## Topology
 
@@ -113,7 +114,9 @@ SAMBA_AD_PASSWORD=<admin pw> \
 
 **A2/A5 payoff (in CI):** `scripts/samba-pac-verify-gate.sh` (L1: Samba
 IDL decode of a Rust PAC), `scripts/samba-pac-l2-gate.sh` (L2: Samba
-`kcrypto` recomputes 6/7/16/19; a flipped MAC fails), and
+`kcrypto` recomputes 6/7/16/19; type-16 pre-image is rebuilt in the
+oracle from raw EncTicketPart; a type-6 MAC flip fails with
+`L2_MISMATCH`), and
 `scripts/samba-crossrealm-gate.sh` (L3: MIT `kvno` both directions).
 The Rust TGS verifies a presented PAC and copies LOGON_INFO (in-repo
 two-realm tests). `kvno` is not that copy proof. Ubuntu
@@ -123,6 +126,8 @@ Missing image is still `exit 2`.
 **Real trust (D2, in CI):** `scripts/samba-realtrust-gate.sh` stands up
 `samba-ad-dc` (`AD.KERBER.TEST`) and `samba-kerber-dc` (`KERBER.TEST`)
 and runs `samba-tool domain trust create` (not only `trust_local.py`).
+Trust-create failure with images present is `exit 1`. Reverse PAC
+SID/RID is the live Samba-A `kbruser` `objectSid`.
 
 ## Isolation (never touch host krb5/sssd)
 

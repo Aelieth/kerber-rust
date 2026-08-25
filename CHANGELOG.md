@@ -76,10 +76,11 @@ this project uses semantic versioning once a crate is published.
   succeed. Harness CI runs `kadmin-gate`, `kpasswd-gate`, `kdb-dump-gate`,
   `kprop-gate`, `restart-gate`, `prod-gate`, `s4u-mit-gate`,
   `samba-ad-gate`, `samba-pac-verify-gate` (Samba IDL decode of a Rust PAC),
-  `samba-pac-l2-gate` (Samba kcrypto validates PAC 6/7/16/19; a flipped MAC
-  fails), `samba-crossrealm-gate` (MIT `kvno` both directions vs Samba), and
+  `samba-pac-l2-gate` (vendored Samba kcrypto validates PAC 6/7/16/19;
+  type-16 pre-image rebuilt in the oracle; a type-6 MAC flip fails),
+  `samba-crossrealm-gate` (MIT `kvno` both directions vs Samba), and
   `samba-realtrust-gate` (peer DC + `samba-tool domain trust create`; reverse
-  PAC RID 1103).
+  PAC SID/RID equals live Samba-A `kbruser` `objectSid`).
   `samba-ad-gate.sh` exits 2 unless a live Samba/AD `kinit`/`kvno`
   succeeds (no fabricated pass from “image exists”).
 - MIT `kdb5_util` dump/load (version 7; `-r18` is version 6):

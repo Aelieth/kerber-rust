@@ -26,7 +26,7 @@ to full 1.0 parity is tracked in `working/plan-roadmap-adprod-*.md`:
 - **Track A — AD/Windows interop:** NDR32 `KERB_VALIDATION_INFO` decodes the
   captured `kbruser` PAC (`tests/traces/pac-kbruser.ndr`) byte-identically.
   Issued PACs include buffers 12/17/18 and store SID/RID. Samba L1/L3
-  gates: `samba-pac-verify-gate.sh`, `samba-pac-l2-gate.sh` (kcrypto 6/7/16/19),
+  gates: `samba-pac-verify-gate.sh`, `samba-pac-l2-gate.sh` (vendored kcrypto 6/7/16/19),
   `samba-crossrealm-gate.sh`. Production
   GSS wrap emits RRC≠0. S4U2Self/Proxy against the Rust KDC:
   `scripts/s4u-mit-gate.sh` (in CI; evidence PAC copy, classic
