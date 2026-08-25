@@ -348,19 +348,24 @@ pub(crate) fn s4u2proxy_client(
             "S4U2Proxy evidence ticket is not forwardable",
         ));
     }
+    let dest = tgs
+        .0
+        .req_body
+        .sname
+        .as_ref()
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "S4U2Proxy sname"))?;
     if rbcd {
-        let dest = tgs
-            .0
-            .req_body
-            .sname
-            .as_ref()
-            .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "S4U2Proxy sname"))?;
         let target = store
             .get_name(dest)
             .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "S4U2Proxy target"))?;
         let from = extra.sname.components_joined();
         if !target.s4u_allowed_from.iter().any(|n| n == &from) {
             return Err(proto(err::BADOPTION, "RBCD not allowed"));
+        }
+    } else {
+        let want = dest.components_joined();
+        if !server.s4u_allowed_to.iter().any(|n| n == &want) {
+            return Err(proto(err::BADOPTION, "constrained delegation not allowed"));
         }
     }
     let pac = pac_from_ticket_part(&part)

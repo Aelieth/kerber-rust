@@ -112,6 +112,9 @@ pub struct Principal {
     pub rid: u32,
     /// Evidence-server names allowed to S4U2Proxy here (RBCD).
     pub s4u_allowed_from: Vec<String>,
+    /// Target names this principal may S4U2Proxy to (classic constrained
+    /// delegation / `msDS-AllowedToDelegateTo`).
+    pub s4u_allowed_to: Vec<String>,
 }
 
 impl Principal {
@@ -155,6 +158,7 @@ impl Principal {
             e_data: Vec::new(),
             rid: 0,
             s4u_allowed_from: Vec::new(),
+            s4u_allowed_to: Vec::new(),
         }
     }
 }
@@ -386,6 +390,14 @@ impl PrincipalStore {
         }
     }
 
+    /// Permit `name` to S4U2Proxy to `to` (classic constrained delegation).
+    pub fn allow_s4u_to(&mut self, name: &PrincipalName, to: &str) {
+        let id = format!("{}@{}", name.components_joined(), self.realm);
+        if let Some(p) = self.map.get_mut(&id) {
+            p.s4u_allowed_to.push(to.to_owned());
+        }
+    }
+
     /// PAC identity for `name` in `crealm` (store RID, or `RID_FIRST_USER` if unknown).
     #[must_use]
     pub fn pac_identity(&self, name: &PrincipalName, crealm: &str) -> PacIdentity {
@@ -540,7 +552,9 @@ impl PrincipalStore {
             return Err(Error::AlreadyExists);
         }
         self.insert_randkey(name, &randkey_etypes())?;
-        self.allow_s4u_from(name, &name.components_joined());
+        let self_name = name.components_joined();
+        self.allow_s4u_from(name, &self_name);
+        self.allow_s4u_to(name, &self_name);
         Ok(())
     }
 

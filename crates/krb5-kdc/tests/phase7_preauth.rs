@@ -510,9 +510,10 @@ fn s4u2self_impersonates_user() {
 
 #[test]
 fn s4u2proxy_takes_cname_from_evidence() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
+    store.allow_s4u_to(&user, &documented_host().components_joined());
     let admin_tgt = issue_tgt(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 701);
     let evidence_tgs = tgs_req(
         admin_tgt.rep.0.ticket.clone(),
@@ -647,6 +648,45 @@ fn s4u2proxy_rejects_malformed_pac_options() {
     match krb5_kdc::issue_tgs(&store, &tgs) {
         Err(Error::Protocol { code, .. }) => assert_eq!(code, err::BADOPTION),
         other => panic!("expected BADOPTION for malformed PA-PAC-OPTIONS, got {other:?}"),
+    }
+}
+
+#[test]
+fn s4u2proxy_classic_denied_without_allowed_to() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
+    let admin_tgt = issue_tgt(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 751);
+    let evidence_tgs = tgs_req(
+        admin_tgt.rep.0.ticket.clone(),
+        &admin_tgt.session_key,
+        TEST_REALM,
+        &admin,
+        user.clone(),
+        TEST_REALM,
+        752,
+    )
+    .expect("evidence TGS-REQ");
+    let evidence = krb5_kdc::issue_tgs(&store, &evidence_tgs).expect("evidence");
+    let user_tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 753);
+    let opts = KdcOptions::forwardable().with_bit(flag_bit::CNAME_IN_ADDL_TKT, true);
+    let tgs = tgs_req_ex(
+        user_tgt.rep.0.ticket.clone(),
+        &user_tgt.session_key,
+        TEST_REALM,
+        &user,
+        documented_host(),
+        TEST_REALM,
+        754,
+        opts,
+        Some(vec![evidence.rep.0.ticket.clone()]),
+        Vec::new(),
+        pref_etypes(),
+    )
+    .expect("S4U2Proxy TGS-REQ");
+    match krb5_kdc::issue_tgs(&store, &tgs) {
+        Err(Error::Protocol { code, .. }) => assert_eq!(code, err::BADOPTION),
+        other => panic!("classic S4U2Proxy without allowed-to must deny, got {other:?}"),
     }
 }
 
