@@ -120,6 +120,9 @@ two-realm tests). `kvno` is not that copy proof. Ubuntu
 `samba-testsuite` does not ship `samba.tests.krb5.kcrypto`; L2 vendors
 Samba 4.19.5's `kcrypto.py` (AES checksums) plus `python3-cryptography`.
 Missing image is still `exit 2`.
+**Real trust (D2, in CI):** `scripts/samba-realtrust-gate.sh` stands up
+`samba-ad-dc` (`AD.KERBER.TEST`) and `samba-kerber-dc` (`KERBER.TEST`)
+and runs `samba-tool domain trust create` (not only `trust_local.py`).
 
 ## Isolation (never touch host krb5/sssd)
 

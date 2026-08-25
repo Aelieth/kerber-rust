@@ -106,6 +106,10 @@ after `pkinit-gate`. `ad-*` remain one-shot against a live Windows DC.
   recomputes PAC 6/7/16/19 of a Rust-issued ticket. Type-16 is over the
   original EncTicketPart bytes with PAC ad-data `0x00`. A flipped MAC
   must fail. Missing image/`kcrypto` is `exit 2`.
+- `scripts/samba-realtrust-gate.sh` — two Samba AD DCs; real
+  `samba-tool domain trust create`; both-direction `kvno`; reverse
+  Rust service PAC LOGON_INFO RID is Samba `kbruser` 1103. Missing
+  images `exit 2`.
 - `scripts/samba-crossrealm-gate.sh` — shared-trust-password TDO;
   MIT `kvno` `user@KERBER.TEST` → `host/svc.ad.kerber.test` and
   `kbruser@AD.KERBER.TEST` → `host/testhost.kerber.test`. Samba logs

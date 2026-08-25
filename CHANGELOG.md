@@ -77,7 +77,9 @@ this project uses semantic versioning once a crate is published.
   `kprop-gate`, `restart-gate`, `prod-gate`, `s4u-mit-gate`,
   `samba-ad-gate`, `samba-pac-verify-gate` (Samba IDL decode of a Rust PAC),
   `samba-pac-l2-gate` (Samba kcrypto validates PAC 6/7/16/19; a flipped MAC
-  fails), and `samba-crossrealm-gate` (MIT `kvno` both directions vs Samba).
+  fails), `samba-crossrealm-gate` (MIT `kvno` both directions vs Samba), and
+  `samba-realtrust-gate` (peer DC + `samba-tool domain trust create`; reverse
+  PAC RID 1103).
   `samba-ad-gate.sh` exits 2 unless a live Samba/AD `kinit`/`kvno`
   succeeds (no fabricated pass from “image exists”).
 - MIT `kdb5_util` dump/load (version 7; `-r18` is version 6):

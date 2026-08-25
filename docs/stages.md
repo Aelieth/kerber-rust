@@ -70,4 +70,5 @@ wraps dump version 7. Rust→MIT `kpropd` is not gated. **kadmind**
 MIT-gates add/get/list/mod/chrand/del (`renprinc` remaining). Harness
 CI runs `pkinit-gate`, `kadmin-gate`, `kpasswd-gate`, `kdb-dump-gate`,
 `kprop-gate`, `restart-gate`, `prod-gate`, `s4u-mit-gate`, `samba-ad-gate`,
-`samba-pac-verify-gate`, `samba-pac-l2-gate`, `samba-crossrealm-gate`.
+`samba-pac-verify-gate`, `samba-pac-l2-gate`, `samba-crossrealm-gate`,
+`samba-realtrust-gate`.
