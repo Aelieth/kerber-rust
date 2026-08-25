@@ -100,7 +100,7 @@ jobs:
         run: ./scripts/samba-pac-verify-gate.sh
         env:
           SAMBA_AD_IMAGE: samba-ad-dc:latest
-      - name: samba-pac-l2-gate (Samba kcrypto 6/7/16/19)
+      - name: samba-pac-l2-gate (Samba kcrypto, vendored reference)
         run: ./scripts/samba-pac-l2-gate.sh
         env:
           SAMBA_AD_IMAGE: samba-ad-dc:latest

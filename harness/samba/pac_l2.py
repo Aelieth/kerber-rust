@@ -46,6 +46,104 @@ def sig_mac(data: bytes) -> tuple[int, bytes]:
     return stype, data[4:]
 
 
+def read_der_len(data: bytes, off: int):
+    if off >= len(data):
+        return None
+    b = data[off]
+    if b < 0x80:
+        return b, 1
+    nbytes = b & 0x7F
+    if nbytes == 0 or nbytes > 4 or off + 1 + nbytes > len(data):
+        return None
+    n = 0
+    for i in range(nbytes):
+        n = (n << 8) | data[off + 1 + i]
+    return n, 1 + nbytes
+
+
+def read_tlv(data: bytes, off: int):
+    if off >= len(data):
+        return None
+    tag = data[off]
+    if tag & 0x1F == 0x1F:
+        return None
+    constructed = tag & 0x20 != 0
+    parsed = read_der_len(data, off + 1)
+    if parsed is None:
+        return None
+    length, len_bytes = parsed
+    hdr = 1 + len_bytes
+    start = off + hdr
+    end = start + length
+    if end > len(data):
+        return None
+    return tag, constructed, data[start:end], hdr + length
+
+
+def encode_der_len(n: int) -> bytes:
+    if n <= 127:
+        return bytes([n])
+    if n <= 255:
+        return bytes([0x81, n])
+    if n <= 65535:
+        return bytes([0x82, (n >> 8) & 0xFF, n & 0xFF])
+    if n <= 16_777_215:
+        return bytes([0x83, (n >> 16) & 0xFF, (n >> 8) & 0xFF, n & 0xFF])
+    return bytes(
+        [0x84, (n >> 24) & 0xFF, (n >> 16) & 0xFF, (n >> 8) & 0xFF, n & 0xFF]
+    )
+
+
+def encode_tlv(tag: int, content: bytes) -> bytes:
+    return bytes([tag]) + encode_der_len(len(content)) + content
+
+
+def rewrite_one(data: bytes, off: int, pac: bytes):
+    parsed = read_tlv(data, off)
+    if parsed is None:
+        return None
+    tag, constructed, content, tlv_len = parsed
+    orig = data[off : off + tlv_len]
+    if tag == 0x04 and content == pac:
+        return encode_tlv(0x04, b"\x00"), True, tlv_len
+    if constructed:
+        children = bytearray()
+        pos = 0
+        any_r = False
+        while pos < len(content):
+            inner = rewrite_one(content, pos, pac)
+            if inner is None:
+                return None
+            ch, replaced, n = inner
+            children.extend(ch)
+            any_r = any_r or replaced
+            pos += n
+        if pos != len(content):
+            return None
+        if any_r:
+            return encode_tlv(tag, bytes(children)), True, tlv_len
+        return orig, False, tlv_len
+    if tag == 0x04 and content[:1] == b"\x30":
+        inner = rewrite_one(content, 0, pac)
+        if inner is not None:
+            inn, ok, n = inner
+            if ok and n == len(content):
+                return encode_tlv(tag, inn), True, tlv_len
+    return orig, False, tlv_len
+
+
+def zero_pac_ad_data(enc_tkt: bytes, pac: bytes):
+    if not pac:
+        return None
+    inner = rewrite_one(enc_tkt, 0, pac)
+    if inner is None:
+        return None
+    out, replaced, n = inner
+    if replaced and n == len(enc_tkt):
+        return out
+    return None
+
+
 def load_keys(path: str):
     etype, server, kdc = None, None, None
     for line in open(path, encoding="ascii"):
@@ -95,17 +193,21 @@ def main() -> int:
     got_srv = make_checksum(CKSUM[srv_type], server_key, KU, server_in)
     got_kdc = make_checksum(CKSUM[kdc_type], kdc_key, KU, srv_mac)
     got_full = make_checksum(CKSUM[t19_type], kdc_key, KU, full_in)
-    got_t16 = make_checksum(CKSUM[t16_type], kdc_key, KU, enc_tkt)
 
     failed = []
     if got_srv != srv_mac:
         failed.append("6")
     if got_kdc != kdc_mac:
         failed.append("7")
-    if got_t16 != t16_mac:
-        failed.append("16")
     if got_full != t19_mac:
         failed.append("19")
+    pre16 = zero_pac_ad_data(enc_tkt, blob)
+    if pre16 is None:
+        if not failed:
+            print("L2_NO_TYPE16_PREIMAGE")
+            return 1
+    elif make_checksum(CKSUM[t16_type], kdc_key, KU, pre16) != t16_mac:
+        failed.append("16")
     if failed:
         print("L2_MISMATCH", ",".join(failed))
         return 1

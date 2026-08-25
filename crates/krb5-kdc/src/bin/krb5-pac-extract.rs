@@ -1,7 +1,7 @@
 //! Decrypt a service ticket from a FILE ccache and write PAC bytes.
 //!
 //! Usage: `krb5-pac-extract --keytab <kt> --ccache <cc> --out <pac>`
-//! Optional: `--enc-tkt-out`, `--krbtgt-keytab`, `--keys-out`.
+//! Optional: `--enc-tkt-out` (raw decrypted EncTicketPart), `--krbtgt-keytab`, `--keys-out`.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -12,7 +12,6 @@ use krb5_asn1::decode;
 use krb5_crypto::{decrypt, string_to_key, EncryptionType, KeyUsage, ProtocolKey};
 use krb5_kdc::{pac_from_ticket_part, s2k_params};
 use krb5_protocol::{FileCcache, Keytab};
-use krb5_types::pac::zero_pac_ad_data;
 use krb5_types::{ku, EncTicketPart, Ticket};
 
 fn main() -> ExitCode {
@@ -127,8 +126,7 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
             if let Some(der_path) = &enc_tkt_out {
-                let der = zero_pac_ad_data(&plain, &pac).unwrap_or(plain.clone());
-                if fs::write(der_path, &der).is_err() {
+                if fs::write(der_path, &plain).is_err() {
                     eprintln!("krb5-pac-extract: write {der_path}");
                     return ExitCode::from(1);
                 }

@@ -146,11 +146,20 @@ if [ "$l2_rc" -ne 0 ] || ! echo "$L2" | grep -q L2_OK; then
 fi
 
 docker exec "$NAME" python3 -c '
-p=open("/tmp/rust.pac","rb").read()
-b=bytearray(p)
-# Flip a MAC byte in the first signature-sized region after the header.
-b[40] ^= 0xff
-open("/tmp/rust.pac.bad","wb").write(b)
+import struct, sys
+p = open("/tmp/rust.pac", "rb").read()
+n, _ver = struct.unpack_from("<II", p)
+b = bytearray(p)
+found = False
+for i in range(n):
+    typ, size, off = struct.unpack_from("<IIQ", p, 8 + i * 16)
+    if typ == 6 and size > 4:
+        b[off + 4] ^= 0xFF
+        found = True
+        break
+if not found:
+    sys.exit("no PAC type-6 MAC")
+open("/tmp/rust.pac.bad", "wb").write(b)
 '
 set +e
 BAD="$(docker exec "$NAME" python3 /tmp/pac_l2.py /tmp/rust.pac.bad /tmp/rust.enc_tkt /tmp/rust.keys 2>&1)"
@@ -159,6 +168,10 @@ set -e
 echo "$BAD"
 if [ "$bad_rc" -eq 0 ] || echo "$BAD" | grep -q L2_OK; then
     log "samba.pac.l2" "error" ",\"error\":\"corrupt-mac-passed\""
+    exit 1
+fi
+if echo "$BAD" | grep -q L2_MISSING; then
+    log "samba.pac.l2" "error" ",\"error\":\"corrupt-mac-missing\""
     exit 1
 fi
 echo "$BAD" | grep -q L2_MISMATCH
