@@ -5,7 +5,7 @@
 set -eu
 
 REALM="${SAMBA_REALM:-AD.KERBER.TEST}"
-FQDN="dc1.ad.kerber.test"
+FQDN="dc1.$(printf '%s' "$REALM" | tr 'A-Z' 'a-z')"
 
 # Make the DC's own FQDN resolve to the container IP before samba starts
 # (Docker only seeds the short hostname; Samba's internal DNS is not up yet).

@@ -108,3 +108,10 @@ jobs:
         run: ./scripts/samba-crossrealm-gate.sh
         env:
           SAMBA_AD_IMAGE: samba-ad-dc:latest
+      - name: Build peer Samba DC (KERBER.TEST)
+        run: docker build -f harness/samba/Dockerfile --build-arg SAMBA_REALM=KERBER.TEST --build-arg SAMBA_DOMAIN=KERBER -t samba-kerber-dc:latest .
+      - name: samba-realtrust-gate (samba-tool trust + reverse PAC SID)
+        run: ./scripts/samba-realtrust-gate.sh
+        env:
+          SAMBA_AD_IMAGE: samba-ad-dc:latest
+          SAMBA_KERBER_IMAGE: samba-kerber-dc:latest
