@@ -120,8 +120,9 @@ after `pkinit-gate`. `ad-*` remain one-shot against a live Windows DC.
 - `scripts/s4u-mit-gate.sh` — MIT `kvno -U user` and `kvno -U user -P`
   against the **Rust** KDC (`kinit -f -k host/testhost.kerber.test`).
   klist must name `for client user@KERBER.TEST`. S4U2Proxy rejects a
-  non-forwardable evidence ticket (`BADOPTION`) and parses PA-PAC-OPTIONS
-  (167).
+  non-forwardable evidence ticket (`BADOPTION`), denies classic
+  constrained delegation unless `s4u_allowed_to` lists the target, and
+  parses PA-PAC-OPTIONS (167). In the harness CI job.
 - `scripts/kadmin-gate.sh` — MIT `kadmin` against `krb5-kadmind` on 749
   (AUTH_GSSAPI 300001): `addprinc`, `cpw`, `getprinc` (`Principal:
   extra@KERBER.TEST`), `listprincs` (names `extra` and `user`),

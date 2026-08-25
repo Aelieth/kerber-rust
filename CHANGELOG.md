@@ -67,15 +67,16 @@ this project uses semantic versioning once a crate is published.
 - Live AD S4U2Self/S4U2Proxy: `scripts/ad-s4u-gate.sh` (`kvno -U` /
   `kvno -U -P`, client `kbruser@AD.KERBER.TEST`).
 - MIT `kvno -U` / `-U -P` against the **Rust** KDC
-  (`scripts/s4u-mit-gate.sh`); S4U2Proxy copies the evidence PAC,
-  requires a forwardable evidence ticket, and denies RBCD unless
-  allowed. PA-FOR-USER accepts
+  (`scripts/s4u-mit-gate.sh`, in CI); S4U2Proxy copies the evidence PAC,
+  requires a forwardable evidence ticket, and denies classic constrained
+  delegation unless `s4u_allowed_to` lists the target (and RBCD unless
+  `s4u_allowed_from` lists the evidence server). PA-FOR-USER accepts
   HMAC-MD5-ARCFOUR (cksumtype -138) on AES session keys.
 - `bounded_stress_handle_request` asserts 64 concurrent valid AS+TGS
   succeed. Harness CI runs `kadmin-gate`, `kpasswd-gate`, `kdb-dump-gate`,
-  `kprop-gate`, `restart-gate`, `prod-gate`, `samba-ad-gate`,
-  `samba-pac-verify-gate` (Samba IDL decode of a Rust PAC), and
-  `samba-crossrealm-gate` (MIT `kvno` both directions vs Samba).
+  `kprop-gate`, `restart-gate`, `prod-gate`, `s4u-mit-gate`,
+  `samba-ad-gate`, `samba-pac-verify-gate` (Samba IDL decode of a Rust PAC),
+  and `samba-crossrealm-gate` (MIT `kvno` both directions vs Samba).
   `samba-ad-gate.sh` exits 2 unless a live Samba/AD `kinit`/`kvno`
   succeeds (no fabricated pass from “image exists”).
 - MIT `kdb5_util` dump/load (version 7; `-r18` is version 6):

@@ -85,6 +85,8 @@ jobs:
         run: ./scripts/spake-gate.sh
       - name: sha2-gate
         run: ./scripts/sha2-gate.sh
+      - name: s4u-mit-gate (MIT kvno -U / -U -P vs Rust KDC)
+        run: ./scripts/s4u-mit-gate.sh
       - name: Build Samba AD DC image (harness/samba)
         run: docker build -f harness/samba/Dockerfile -t samba-ad-dc:latest .
       - name: samba-ad-gate (Samba 4 AD DC live kinit/kvno)

@@ -28,7 +28,8 @@ to full 1.0 parity is tracked in `working/plan-roadmap-adprod-*.md`:
   Issued PACs include buffers 12/17/18 and store SID/RID. Samba L1/L3
   gates: `samba-pac-verify-gate.sh`, `samba-crossrealm-gate.sh`. Production
   GSS wrap emits RRC≠0. S4U2Self/Proxy against the Rust KDC:
-  `scripts/s4u-mit-gate.sh` (evidence PAC copy + RBCD). Live Windows
+  `scripts/s4u-mit-gate.sh` (in CI; evidence PAC copy, classic
+  constrained delegation, RBCD). Live Windows
   `kinit`/`kvno` (`ad-windows-gate.sh`) and AD S4U (`ad-s4u-gate.sh`) use
   `~/adlab`.
 - **Track B — Operational parity:** serving store is `RwLock` so kadmind
@@ -58,13 +59,14 @@ both directions (`samba-crossrealm-gate.sh`) — that is the L2/L3
 signature oracle (`kcrypto` is not in distro `python3-samba`). TGS
 verifies a presented PAC and copies LOGON_INFO (in-repo two-realm
 tests; `kvno` is not that copy proof). Rust S4U2Self/Proxy is
-MIT-gated (`scripts/s4u-mit-gate.sh`); S4U2Proxy copies the evidence
-PAC and denies RBCD unless allowed. `ad-*` gates
+MIT-gated in CI (`scripts/s4u-mit-gate.sh`); S4U2Proxy copies the evidence
+PAC, denies classic constrained delegation unless `s4u_allowed_to` lists
+the target, and denies RBCD unless allowed. `ad-*` gates
 are **one-shot** against a since-torn-down Windows DC. The **prod-gate
 is a single-process Rust↔Rust loopback** (now in CI). `bounded_stress`
 asserts concurrent AS+TGS; soak/differential absent. **kpropd** on 754
 wraps dump version 7. Rust→MIT `kpropd` is not gated. **kadmind**
 MIT-gates add/get/list/mod/chrand/del (`renprinc` remaining). Harness
 CI runs `pkinit-gate`, `kadmin-gate`, `kpasswd-gate`, `kdb-dump-gate`,
-`kprop-gate`, `restart-gate`, `prod-gate`, `samba-ad-gate`,
+`kprop-gate`, `restart-gate`, `prod-gate`, `s4u-mit-gate`, `samba-ad-gate`,
 `samba-pac-verify-gate`, `samba-crossrealm-gate`.
