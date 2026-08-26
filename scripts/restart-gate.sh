@@ -70,6 +70,7 @@ start_kdc() {
     docker exec -d \
         -e KRB5_TEST_USER_PASSWORD=userpassword \
         -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
+        -e KRB5_MASTER_PASSWORD=masterpassword \
         -e KRB5_KDC_DB=/tmp/principal \
         -e KRB5_KDC_STASH=/tmp/stash \
         "$NAME" sh -c '/tmp/krb5-kdc '"$1"' 127.0.0.1:88 >/tmp/kdc.log 2>&1'
@@ -148,5 +149,18 @@ KLIST2="$(docker exec -e KRB5_CONFIG=/tmp/restart-krb5.conf "$NAME" klist)"
 echo "$KLIST2"
 echo "$KLIST2" | grep -q 'extra@KERBER.TEST'
 
-log "restart.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"mutate+kill+relaunch+kinit"'
+echo "==== MIT kdb5_util load of daemon persist ===="
+HEADER="$(docker exec "$NAME" head -1 /tmp/principal)"
+echo "$HEADER"
+echo "$HEADER" | grep -q 'kdb5_util load_dump version 7'
+docker exec "$NAME" grep -q 'extra@KERBER.TEST' /tmp/principal
+docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
+docker exec "$NAME" kdb5_util create -s -P masterpassword
+docker exec "$NAME" kdb5_util load /tmp/principal
+docker exec "$NAME" kdb5_util dump /tmp/mit-from-daemon.dump
+MITDUMP="$(docker exec "$NAME" grep extra@KERBER.TEST /tmp/mit-from-daemon.dump)"
+echo "$MITDUMP"
+echo "$MITDUMP" | grep -q 'extra@KERBER.TEST'
+
+log "restart.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"mutate+kill+relaunch+kinit+kdb5_util"'
 exit 0

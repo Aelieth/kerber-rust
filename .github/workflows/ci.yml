@@ -81,6 +81,8 @@ jobs:
         run: ./scripts/restart-gate.sh
       - name: prod-gate (kinit + log analysis + pcap)
         run: ./scripts/prod-gate.sh
+      - name: prod-realm-gate (multi-host MIT client + kprop failover)
+        run: ./scripts/prod-realm-gate.sh
       - name: cross-realm-gate
         run: ./scripts/cross-realm-gate.sh
       - name: spake-gate
