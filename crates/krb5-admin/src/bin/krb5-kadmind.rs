@@ -9,6 +9,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::net::{TcpListener, UdpSocket};
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::thread;
@@ -16,7 +17,8 @@ use std::time::Duration;
 
 use krb5_admin::{serve_kadm5_conn, serve_kpasswd_tcp, serve_kpasswd_udp};
 use krb5_kdc::{
-    bootstrap_documented, documented_changepw, documented_kadmin, load_store, shared_store, Acl,
+    acl_for_store, bootstrap_documented, documented_changepw, documented_kadmin, load_store,
+    shared_store,
 };
 
 fn main() {
@@ -32,22 +34,23 @@ fn main() {
     let test_realm = args.iter().any(|a| a == "--test-realm");
     args.retain(|a| a != "--test-realm");
 
+    let kdc_conf = load_kdc_conf();
     let (store, acl) = if test_realm {
         bootstrap_documented().unwrap_or_else(|e| {
             eprintln!("krb5-kadmind: bootstrap: {e}");
             std::process::exit(1);
         })
     } else {
-        let db =
-            std::env::var("KRB5_KDC_DB").unwrap_or_else(|_| "/var/lib/krb5kdc/principal".into());
-        let stash =
-            std::env::var("KRB5_KDC_STASH").unwrap_or_else(|_| "/var/lib/krb5kdc/stash".into());
-        let store = load_store(std::path::Path::new(&db), std::path::Path::new(&stash))
-            .unwrap_or_else(|e| {
-                eprintln!("krb5-kadmind: load: {e}");
-                std::process::exit(1);
-            });
-        let acl = Acl::allow_admin(krb5_kdc::documented_admin_id());
+        let (db, stash) = db_and_stash(kdc_conf.as_ref());
+        let store = load_store(&db, &stash).unwrap_or_else(|e| {
+            eprintln!("krb5-kadmind: load: {e}");
+            std::process::exit(1);
+        });
+        let acl_path = acl_file_path(kdc_conf.as_ref());
+        let acl = acl_for_store(store.realm(), acl_path.as_deref()).unwrap_or_else(|e| {
+            eprintln!("krb5-kadmind: acl: {e}");
+            std::process::exit(1);
+        });
         (store, acl)
     };
 
@@ -139,4 +142,38 @@ fn main() {
             }
         }
     }
+}
+
+fn load_kdc_conf() -> Option<krb5_config::KdcConf> {
+    let path = krb5_config::kdc_conf_path()?;
+    match krb5_config::KdcConf::load_file(&path) {
+        Ok(c) => Some(c),
+        Err(e) => {
+            eprintln!("krb5-kadmind: kdc.conf: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn db_and_stash(conf: Option<&krb5_config::KdcConf>) -> (PathBuf, PathBuf) {
+    let db = std::env::var("KRB5_KDC_DB")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(|| conf.and_then(|c| c.database_name.clone()))
+        .unwrap_or_else(|| PathBuf::from("/var/lib/krb5kdc/principal"));
+    let stash = std::env::var("KRB5_KDC_STASH")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(|| conf.and_then(|c| c.key_stash_file.clone()))
+        .unwrap_or_else(|| PathBuf::from("/var/lib/krb5kdc/stash"));
+    (db, stash)
+}
+
+fn acl_file_path(conf: Option<&krb5_config::KdcConf>) -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("KRB5_ACL_FILE") {
+        if !p.is_empty() {
+            return Some(PathBuf::from(p));
+        }
+    }
+    conf.and_then(|c| c.acl_file.clone())
 }

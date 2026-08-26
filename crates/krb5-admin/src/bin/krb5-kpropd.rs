@@ -56,7 +56,7 @@ fn main() {
     listener.set_nonblocking(true).ok();
     println!("listening {bind}");
     let stop = Arc::new(AtomicBool::new(false));
-    let realm = std::env::var("KRB5_TEST_REALM").unwrap_or_else(|_| "KERBER.TEST".into());
+    let realm = kpropd_realm();
     loop {
         if stop.load(Ordering::Relaxed) {
             break;
@@ -94,6 +94,12 @@ fn main() {
     }
 }
 
+fn kpropd_realm() -> String {
+    std::env::var("KRB5_KDC_REALM")
+        .or_else(|_| std::env::var("KRB5_TEST_REALM"))
+        .unwrap_or_else(|_| krb5_kdc::TEST_REALM.to_owned())
+}
+
 fn load_host_keys() -> Vec<ProtocolKey> {
     if let Ok(path) = std::env::var("KRB5_KPROP_KEYTAB") {
         match std::fs::read(&path).and_then(|b| Keytab::parse(&b)) {
@@ -107,9 +113,11 @@ fn load_host_keys() -> Vec<ProtocolKey> {
     let stash = std::env::var("KRB5_KDC_STASH").ok();
     if let (Some(db), Some(stash)) = (db, stash) {
         if let Ok(store) = load_store(std::path::Path::new(&db), std::path::Path::new(&stash)) {
-            let host = documented_host();
-            if let Some(p) = store.get_name(&host) {
-                return p.keys.iter().map(|k| k.key.clone()).collect();
+            if store.realm() == krb5_kdc::TEST_REALM {
+                let host = documented_host();
+                if let Some(p) = store.get_name(&host) {
+                    return p.keys.iter().map(|k| k.key.clone()).collect();
+                }
             }
         }
     }
