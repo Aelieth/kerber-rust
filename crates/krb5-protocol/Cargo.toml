@@ -7,6 +7,22 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
+autotests = false
+
+[features]
+diff = []
+
+[[example]]
+name = "diffsend"
+required-features = ["diff"]
+
+[[test]]
+name = "golden_traces"
+path = "tests/golden_traces.rs"
+
+[[test]]
+name = "messages"
+path = "tests/messages.rs"
 
 [dependencies]
 chrono.workspace = true

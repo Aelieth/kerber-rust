@@ -16,7 +16,7 @@ use krb5_types::{
 /// Named MIT/Rust divergences that must not fail the gate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Whitelist {
-    /// MIT issues renewable tickets; Rust does not (`kdb-dump-gate` klist).
+    /// MIT default policy issues renewable; Rust only when the client asks.
     pub mit_renewable_flags: bool,
     /// MIT adds PA-ETYPE-INFO2 / PA-SUPPORTED-ENCTYPES on AS/TGS replies.
     pub mit_as_padata: bool,
@@ -170,10 +170,10 @@ pub fn compare_preauth_e_data(a: Option<&[u8]>, b: Option<&[u8]>) -> Result<(), 
             "ETYPE-INFO2 empty rust={ea:?} mit={eb:?}"
         )));
     }
-    // MIT lists the chosen etype; Rust lists every key on the principal.
-    if !ea.iter().any(|e| eb.contains(e)) {
+    // MIT lists the chosen etype; Rust lists every key. Require MIT ⊆ Rust.
+    if eb.iter().any(|e| !ea.contains(e)) {
         return Err(DiffError(format!(
-            "ETYPE-INFO2 disjoint rust={ea:?} mit={eb:?}"
+            "ETYPE-INFO2 mit not subset of rust rust={ea:?} mit={eb:?}"
         )));
     }
     Ok(())
@@ -223,21 +223,16 @@ pub fn decode_enc_kdc_rep(plain: &[u8]) -> Result<(EncKdcRepPart, bool), DiffErr
     )))
 }
 
-fn flags_u32(f: &TicketFlags, drop_renewable: bool) -> u32 {
-    let mut v = 0u32;
-    if f.forwardable() {
-        v |= 1 << (31 - flag_bit::FORWARDABLE);
+fn named_flag_mask(wl: &Whitelist) -> u32 {
+    let mut m = 1u32 << (31 - flag_bit::CANONICALIZE);
+    if wl.mit_renewable_flags {
+        m |= 1 << (31 - flag_bit::RENEWABLE);
     }
-    if f.initial() {
-        v |= 1 << (31 - flag_bit::INITIAL);
-    }
-    if f.pre_authent() {
-        v |= 1 << (31 - flag_bit::PRE_AUTHENT);
-    }
-    if !drop_renewable && f.renewable() {
-        v |= 1 << (31 - flag_bit::RENEWABLE);
-    }
-    v
+    m
+}
+
+fn masked_flags(f: &TicketFlags, wl: &Whitelist) -> u32 {
+    f.to_u32() & !named_flag_mask(wl)
 }
 
 fn padata_types_filtered(rep: &KdcRep, drop_mit: bool) -> Vec<i32> {
@@ -280,7 +275,7 @@ pub fn stable_rep(
             ticket.transited.tr_type
         },
         transited_contents: ticket.transited.contents.as_ref().to_vec(),
-        flags: flags_u32(&enc.flags, wl.mit_renewable_flags),
+        flags: masked_flags(&enc.flags, wl),
         padata_types: padata_types_filtered(rep, wl.mit_as_padata),
         tkt_crealm: ks(&ticket.crealm),
         tkt_cname: ticket.cname.components_joined(),
@@ -311,9 +306,7 @@ fn whitelist_hits(
             hits.push("mit-as-padata");
         }
     }
-    if rust_enc.flags.to_u32() & !(1 << (31 - flag_bit::RENEWABLE))
-        != mit_enc.flags.to_u32() & !(1 << (31 - flag_bit::RENEWABLE))
-    {
+    if rust_enc.flags.bit(flag_bit::CANONICALIZE) != mit_enc.flags.bit(flag_bit::CANONICALIZE) {
         hits.push("mit-extra-ticket-flags");
     }
     if rust.enc_part.kvno != mit.enc_part.kvno {

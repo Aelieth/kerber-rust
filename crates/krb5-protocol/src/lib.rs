@@ -14,6 +14,8 @@ mod as_ex;
 mod builders;
 mod capture;
 mod ccache;
+#[cfg(any(test, feature = "diff"))]
+#[cfg_attr(not(feature = "diff"), allow(dead_code))]
 mod diff;
 mod error;
 mod keytab;
@@ -35,6 +37,7 @@ pub use builders::{
 };
 pub use capture::capture_pdu;
 pub use ccache::{parse_principal, realm, tgt_cred, CcacheCred, FileCcache};
+#[cfg(feature = "diff")]
 pub use diff::{
     compare_krb_error, compare_preauth_e_data, compare_stable_rep, decode_enc_kdc_rep,
     stable_krb_error, stable_rep, CompareOk, DiffError, StableKrbError, StableRep, Whitelist,
@@ -55,3 +58,7 @@ pub use safe_priv::{
 pub use secret_file::write_secret_file;
 pub use tgs::{referral_hop_realm, tgs_exchange, TgsOutcome};
 pub use transport::{exchange, exchange_on_tcp, exchange_with_failover, KdcAddr, KDC_PORT};
+
+#[cfg(test)]
+#[path = "../tests/diff_compare.rs"]
+mod diff_compare;

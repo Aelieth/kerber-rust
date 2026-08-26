@@ -39,7 +39,7 @@ if [ ! -f "$GOLDEN" ]; then
 fi
 
 cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-kdb -q
-cargo build -p krb5-protocol --example diffsend -q
+cargo build -p krb5-protocol --example diffsend --features diff -q
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT" || true

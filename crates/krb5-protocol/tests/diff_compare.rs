@@ -1,9 +1,11 @@
 //! Fail-red fixture for the shipped differential compare path.
 
-use krb5_protocol::{compare_krb_error, compare_stable_rep, Whitelist};
+use crate::diff::{compare_krb_error, compare_preauth_e_data, compare_stable_rep, Whitelist};
+use krb5_asn1::encode;
 use krb5_types::{
-    err, EncKdcRepPart, EncTicketPart, EncryptedData, EncryptionKey, KdcRep, KerberosTime,
-    KrbError, Microseconds, PrincipalName, Ticket, TicketFlags, TransitedEncoding,
+    err, flag_bit, pa, EncKdcRepPart, EncTicketPart, EncryptedData, EncryptionKey, EtypeInfo2,
+    EtypeInfo2Entry, KdcRep, KerberosTime, KrbError, MethodData, Microseconds, PaData,
+    PrincipalName, Ticket, TicketFlags, TransitedEncoding,
 };
 
 fn sample_error(code: i32, stime_off: i64, text: &str) -> KrbError {
@@ -126,6 +128,74 @@ fn success_volatile_only_passes_cname_mismatch_fails() {
     assert!(
         err.0.contains("stable-rep mismatch"),
         "shipped compare must name the stable mismatch: {}",
+        err.0
+    );
+}
+
+fn method_edata(etypes: &[i32]) -> Vec<u8> {
+    let info: EtypeInfo2 = etypes
+        .iter()
+        .map(|&etype| EtypeInfo2Entry {
+            etype,
+            salt: None,
+            s2kparams: None,
+        })
+        .collect();
+    let info_der = encode(&info).expect("ETYPE-INFO2");
+    let md: MethodData = vec![
+        PaData {
+            padata_type: pa::ENC_TIMESTAMP,
+            padata_value: vec![].into(),
+        },
+        PaData {
+            padata_type: pa::ETYPE_INFO2,
+            padata_value: info_der.into(),
+        },
+    ];
+    encode(&md).expect("METHOD-DATA")
+}
+
+#[test]
+fn etype_info2_mit_subset_of_rust_passes_superset_fails() {
+    let rust = method_edata(&[17, 18, 19, 20]);
+    let mit = method_edata(&[18]);
+    compare_preauth_e_data(Some(&rust), Some(&mit)).expect("MIT ⊆ Rust must pass");
+
+    let mit_extra = method_edata(&[18, 23]);
+    let rust_chosen = method_edata(&[18]);
+    let err = compare_preauth_e_data(Some(&rust_chosen), Some(&mit_extra))
+        .expect_err("MIT etype outside the Rust set must fail");
+    assert!(
+        err.0.contains("ETYPE-INFO2"),
+        "shipped compare must name the etype mismatch: {}",
+        err.0
+    );
+}
+
+#[test]
+fn unwhitelisted_ticket_flag_bit_fails_canonicalize_is_masked() {
+    let wl = Whitelist::default();
+    let (r_rep, r_enc, r_tkt) = sample_parts("user", 0xaa, 0);
+
+    let (m_rep, mut m_enc, mut m_tkt) = sample_parts("user", 0xbb, 11);
+    m_enc.flags = m_enc.flags.with_bit(flag_bit::CANONICALIZE, true);
+    m_tkt.flags = m_tkt.flags.with_bit(flag_bit::CANONICALIZE, true);
+    let ok = compare_stable_rep(&r_rep, &r_enc, &r_tkt, &m_rep, &m_enc, &m_tkt, &wl)
+        .expect("canonicalize is a named whitelist bit");
+    assert!(
+        ok.whitelisted.contains(&"mit-extra-ticket-flags"),
+        "canonicalize divergence must hit the named whitelist: {:?}",
+        ok.whitelisted
+    );
+
+    let (b_rep, mut b_enc, mut b_tkt) = sample_parts("user", 0xbb, 11);
+    b_enc.flags = b_enc.flags.with_bit(flag_bit::PROXY, true);
+    b_tkt.flags = b_tkt.flags.with_bit(flag_bit::PROXY, true);
+    let err = compare_stable_rep(&r_rep, &r_enc, &r_tkt, &b_rep, &b_enc, &b_tkt, &wl)
+        .expect_err("PROXY is not a named whitelist bit");
+    assert!(
+        err.0.contains("stable-rep mismatch"),
+        "un-whitelisted flag bit must fail red: {}",
         err.0
     );
 }
