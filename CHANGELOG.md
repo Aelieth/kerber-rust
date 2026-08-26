@@ -17,14 +17,25 @@ this project uses semantic versioning once a crate is published.
 
 ### Added
 
+- Differential-vs-MIT: `scripts/differential-gate.sh` loads one dump into
+  a live Rust KDC and MIT 1.22.2 `krb5kdc` at once and
+  `examples/diffsend.rs` sends the same encoded AS/TGS bytes to both.
+  KRB-ERROR compares `error_code`/`realm`/`sname` (times/`e_text`
+  masked). Success replies decrypt, null volatiles, and compare the
+  stable set. Known MIT divergences are named in `docs/testing.md`
+  (`mit-renewable-flags`, `mit-as-padata`, `mit-as-enc-app-26`).
+  Un-whitelisted mismatch fails red. In CI after `kdb-dump-gate`.
 - C2 soak/stress/chaos over the multi-host realm: `scripts/stress-gate.sh`
   drives concurrent wire AS+TGS (`krb5-client` `examples/loadgen.rs`)
   with MIT `kinit`/`kvno` sampling and fails unless KDC `duration_us`
-  p99 is ≤ 500 ms, throughput ≥ 4 issue-ok/s, error-rate 0, panics 0.
-  `scripts/chaos-gate.sh` applies `tc netem`, a low memory cap, and
-  primary-kill failover under load. `scripts/soak-gate.sh` runs a
-  bounded window with RSS leak detection and non-degrading latency
-  (scheduled longer run in `.github/workflows/soak.yml`).
+  p99 is ≤ 50 ms, throughput ≥ 8 issue-ok/s, intra-run p99 degrade-factor
+  2.5, error-rate 0, panics 0.
+  `scripts/chaos-gate.sh` applies `tc netem` (`KERBER_REQUIRE_NETEM=1`
+  in CI), a low memory cap, and primary-kill failover under load
+  (`State.Running=false` after kill). `scripts/soak-gate.sh` runs a
+  bounded window with RSS slope + additive leak detection and
+  non-degrading latency (scheduled longer run in
+  `.github/workflows/soak.yml`; `KERBER_REQUIRE_REAL_PCAP=1` is honored).
   `KERBER_REQUIRE_REAL_PCAP=1` makes `prod-realm-gate` require a real
   eth0 capture (CI builds `kerber-rust-prod-node` as its own fail-red
   step). In CI after `prod-realm-gate`.

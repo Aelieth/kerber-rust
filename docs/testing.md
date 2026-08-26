@@ -96,7 +96,7 @@ pinned at `=0.27.0` (`0.27.1+` does not build on 1.85). There is no
 unlocked `--locked` fallback.
 
 Era II gates. The harness CI job runs `kadmin-gate`, `kpasswd-gate`,
-`kdb-dump-gate`, `kprop-gate`, `kprop-reverse-gate`, `restart-gate`,
+`kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `restart-gate`,
 `prod-gate`, `prod-realm-gate`, `stress-gate`, `chaos-gate`, `soak-gate`, `s4u-mit-gate`, `samba-ad-gate`, `ad-windows-gate`,
 `ad-s4u-gate`, `samba-pac-verify-gate`, `samba-pac-l2-gate`,
 `samba-crossrealm-gate`, and `samba-realtrust-gate` after `pkinit-gate`.
@@ -163,6 +163,34 @@ Era II gates. The harness CI job runs `kadmin-gate`, `kpasswd-gate`,
   Half B: MIT `kdb5_util load` of the **running KDC at-rest file**
   (`kdb5_util load_dump version 7`, not KDB3), MIT `krb5kdc`, MIT
   `kinit` with `renew until` in `klist`. Run twice.
+- `scripts/differential-gate.sh` — one dump, two live KDCs (Rust `:8888`,
+  MIT 1.22.2 `krb5kdc` `:88`). `examples/diffsend.rs` encodes each
+  AS/TGS case **once** and TCP-exchanges the same bytes to both.
+  KRB-ERROR compares `error_code`/`realm`/`sname` (mask
+  `stime`/`susec`/`ctime`/`cusec`/`e_text`; PREAUTH `e_data` is
+  structural; extra FAST/SPAKE PA types are mechanism ads; MIT
+  ETYPE-INFO2 lists the chosen etype, Rust lists every key). A foreign-realm AS-REQ is MIT `C_PRINCIPAL_UNKNOWN(6)`
+  echoing the requested realm/sname, not RFC `WRONG_REALM(68)`.
+  A TGS with a non-krbtgt presented ticket is MIT `NOT_US(35)`
+  ("The ticket isn't for us"), not `NO_TGT(67)`.
+  AS-REP/TGS-REP decrypt, null volatiles, and compare the
+  stable set. Un-whitelisted divergence is fail-red. Honest `exit 2`
+  only when docker/MIT image is absent. In CI (bare `run:`).
+  **Whitelist (with justification):**
+  - `mit-renewable-flags` — MIT issues renewable tickets; Rust does
+    not (`kdb-dump-gate` `klist` `renew until` vs half A).
+  - `mit-as-padata` — MIT adds `PA-ETYPE-INFO2` / `PA-SUPPORTED-ENCTYPES`
+    on replies; those types are filtered before compare.
+  - `mit-as-enc-app-26` — MIT wraps AS enc-part as APPLICATION 26
+    (RFC 4120 is 25); decode accepts 25/26/untagged.
+  - `mit-drop-garbage-pdu` — MIT 1.22.2 closes TCP on truncated DER;
+    Rust replies `KRB_ERR_GENERIC(60)`.
+  - `mit-as-enc-kvno` — MIT omits AS-REP enc-part kvno; Rust sets kvno 1.
+  - `mit-empty-transited-type` — MIT `tr-type` 1 with empty contents;
+    Rust `tr-type` 0.
+  - `mit-extra-ticket-flags` — MIT sets canonicalize (bit 15) on issued
+    tickets; compare uses forwardable/initial/pre-authent (and
+    renewable when not whitelisted).
 - `scripts/kprop-gate.sh` — MIT `kprop` of a version-7 dump to
   `krb5-kpropd` on 754 (`kprop5_01` sendauth, KRB-SAFE size, KRB-PRIV
   32768-byte chunks), then MIT `kinit user` against the replica Rust
@@ -190,17 +218,21 @@ Era II gates. The harness CI job runs `kadmin-gate`, `kpasswd-gate`,
   missing eth0 capture fails red. In CI after `prod-gate`.
 - `scripts/stress-gate.sh` — C2a: concurrent wire AS+TGS via
   `examples/loadgen.rs` plus MIT `kinit`/`kvno` under load. KDC JSON
-  `duration_us` p99 ≤ 500 ms, throughput ≥ 4 issue-ok/s, error-rate 0,
-  panics 0 (`scripts/lib/analyze-kdc-slo.py`). Bounded; in CI.
+  `duration_us` p99 ≤ 50 ms, throughput ≥ 8 issue-ok/s, intra-run
+  window p99 degrade-factor 2.5, error-rate 0, panics 0
+  (`scripts/lib/analyze-kdc-slo.py`). Bounded; in CI.
 - `scripts/chaos-gate.sh` — C2b: `tc netem` delay/loss/reorder (MIT
   must complete), low `--memory` under load (no OOM-panic), `docker kill`
   of the primary mid-load then MIT `kinit`/`kvno` on the kprop replica
-  (including a kadmin-created host). In CI.
+  (including a kadmin-created host). `KERBER_REQUIRE_NETEM=1` in CI
+  dies unless netem applied; after kill, `State.Running=false`. In CI.
 - `scripts/soak-gate.sh` — C2c: sustained moderate load (~70 s in CI,
-  300 s scheduled in `.github/workflows/soak.yml`). RSS series must not
-  grow unbounded; window-over-window `duration_us` p99 must not degrade
-  by more than 2.5×; error-rate 0; panics 0; `correlation_id` on
-  issue-ok. Archives logs + pcap + RSS/latency series.
+  300 s scheduled in `.github/workflows/soak.yml`). RSS last ≤ first×1.5
+  + 8 MiB and slope ≤ 0.05 MiB/s; window-over-window `duration_us` p99
+  must not degrade by more than 2.5×; error-rate 0; panics 0;
+  `correlation_id` on issue-ok. `KERBER_REQUIRE_REAL_PCAP=1` fails
+  unless the client tcpdump archive is present. Archives logs + pcap +
+  RSS/latency series.
 - `scripts/heimdal-gate.sh` / `scripts/gss-sspi-gate.sh` — exit 2 +
   unavailability log when those oracles are absent.
 - `scripts/ad-mit-trust-gate.sh` — alias of `samba-realtrust-gate.sh`

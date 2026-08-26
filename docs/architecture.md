@@ -41,7 +41,10 @@ AP-REQ build/verify.
 
 **`krb5-protocol`** runs AS/TGS/AP/SAFE/PRIV/CRED, plus MIT keytab and
 FILE ccache (so the KDC does not depend on the client crate). UDP uses
-`send_to`/`recv_from` and ignores off-path source addresses.
+`send_to`/`recv_from` and ignores off-path source addresses. Reply
+compare (`diff`) masks KRB-ERROR times/`e_text` and nulls AS/TGS
+volatiles so `scripts/differential-gate.sh` can fail red on an
+un-whitelisted MIT divergence.
 
 **`krb5-client`** is `kinit` (password from env/stdin, never argv).
 

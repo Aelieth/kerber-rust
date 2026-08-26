@@ -21,7 +21,7 @@ flavor 300001; `scripts/kadmin-gate.sh` content-asserts MIT `kadmin`
 at-rest file is MIT dump version 7 (stash holds the master key).
 `bidirectional-gate` is Rust↔Rust, not a MIT oracle.
 **CI coverage:** the AS/TGS, GSS, PKINIT, SPAKE, SHA-2, and cross-realm gates
-plus `kadmin-gate`, `kpasswd-gate`, `kdb-dump-gate`, `kprop-gate`,
+plus `kadmin-gate`, `kpasswd-gate`, `kdb-dump-gate`, `differential-gate`, `kprop-gate`,
 `kprop-reverse-gate`, `restart-gate`, `prod-gate`, `prod-realm-gate`,
 `stress-gate`, `chaos-gate`, `soak-gate`, `s4u-mit-gate`,
 `samba-ad-gate`, `ad-windows-gate`, `ad-s4u-gate`,
@@ -33,7 +33,9 @@ until those oracles exist.
 ticket policy (and non-test listen/db paths); `kinit` / TGS referral
 chase use `KRB5_CONFIG` then `/etc/krb5.conf` `[realms]` (argv is the
 fallback). Wire stress/chaos/soak gates run over `harness/prod`; a
-longer soak is scheduled (`.github/workflows/soak.yml`). Live Heimdal/SSPI remain
+longer soak is scheduled (`.github/workflows/soak.yml`).
+`scripts/differential-gate.sh` sends the same AS/TGS bytes to a live
+Rust KDC and MIT 1.22.2 on one dump. Live Heimdal/SSPI remain
 environment-dependent. AD lab coordinates and the `~/adlab` isolation
 protocol are in [docs/ad-lab.md](docs/ad-lab.md). Live
 `AD.KERBER.TEST`↔`KERBER.TEST` host tickets are gated
