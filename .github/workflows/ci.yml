@@ -73,6 +73,8 @@ jobs:
         run: ./scripts/kpasswd-gate.sh
       - name: kdb-dump-gate (MIT dump/load + kinit both directions)
         run: ./scripts/kdb-dump-gate.sh
+      - name: differential-gate (same AS/TGS bytes to Rust and MIT)
+        run: ./scripts/differential-gate.sh
       - name: kprop-gate (MIT kprop dump v7 vs Rust kpropd)
         run: ./scripts/kprop-gate.sh
       - name: kprop-reverse-gate (Rust kprop vs MIT kpropd)
