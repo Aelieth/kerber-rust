@@ -24,8 +24,9 @@ this project uses semantic versioning once a crate is published.
   (kadmind writes 0600 files the dropped user could not re-read).
   `krb5-kadmind` ONC RPC program 2112 / AUTH_GSSAPI flavor 300001:
   MIT 1.22.2 `kadmin` `addprinc`/`cpw`/`getprinc`/`listprincs`/
-  `modprinc`/`cpw -randkey`/`ktadd`/`delprinc` then `kinit` is gated
-  by `scripts/kadmin-gate.sh`. `getprinc` encodes `mod_name` (MIT
+  `modprinc`/`cpw -randkey`/`ktadd`/`renprinc`/`delprinc` then `kinit`
+  is gated by `scripts/kadmin-gate.sh`. Rename is kadm5 proc 4
+  (add+delete ACL; RID/keys kept). `getprinc` encodes `mod_name` (MIT
   unparses it; a NULL modifier is `KRB5_PARSE_MALFORMED`).
   `listprincs` is MIT `xdr_gprincs_ret` (count, then `xdr_array` of
   `xdr_nullstring`). Version-1 AP-REQ framing remains for
@@ -38,8 +39,10 @@ this project uses semantic versioning once a crate is published.
   `krb5-kpropd` on TCP 754: MIT `sendauth` version `kprop5_01`, KRB-SAFE
   dump size (MIT checksums the full KRB-SAFE with a dummy checksum),
   `initivector` then KRB-PRIV 32768-byte dump-v7 chunks. MIT `kprop`
-  then MIT `kinit user` is gated by `scripts/kprop-gate.sh`. Rust→MIT
-  `kpropd` is not gated. A kadmind `addprinc` survives killing
+  then MIT `kinit user` is gated by `scripts/kprop-gate.sh`. Rust
+  `krb5-kprop` → MIT `kpropd` then MIT `kinit user` is
+  `scripts/kprop-reverse-gate.sh` (dump-size SAFE uses the authenticator
+  sequence). A kadmind `addprinc` survives killing
   `krb5-kdc` by `/proc/PID/comm` and relaunching
   (`scripts/restart-gate.sh`).
 - RFC 8636 SHA-256 PKINIT KDF on the KDC issue path when AuthPack
@@ -51,8 +54,8 @@ this project uses semantic versioning once a crate is published.
   tickets remain readable.
 - In-tree TGS referral hop for `krbtgt/AD.KERBER.TEST`. Live
   bidirectional `AD.KERBER.TEST`↔`KERBER.TEST` host tickets
-  (`scripts/ad-mit-trust-gate.sh`): Windows TDO inbound/outbound AES
-  keys are both loaded. Referral TGTs carry a PAC signed with the
+  (`scripts/ad-mit-trust-gate.sh` aliases `samba-realtrust-gate.sh`).
+  Referral TGTs carry a PAC signed with the
   inter-realm key (`scripts/samba-crossrealm-gate.sh` both directions).
   TGS verifies a presented TGT PAC with the key that opened the ticket
   and copies LOGON_INFO into the issued service PAC (foreign SID/RID
@@ -64,8 +67,10 @@ this project uses semantic versioning once a crate is published.
 - `scripts/prod-gate.sh` drives shipped `krb5-kinit` against
   `127.0.0.1:18888`, requires `kdc.issue` JSON with `correlation_id`,
   and archives a PDU pcap. Heimdal and SSPI gates record unavailability.
-- Live AD S4U2Self/S4U2Proxy: `scripts/ad-s4u-gate.sh` (`kvno -U` /
-  `kvno -U -P`, client `kbruser@AD.KERBER.TEST`).
+- Live Samba S4U2Self/S4U2Proxy: `scripts/ad-s4u-gate.sh` (`kinit -k
+  kbrsvc`, `kvno -U kbruser kbrsvc` / `kvno -U kbruser -P host/svc`,
+  client `kbruser@AD.KERBER.TEST`). `ad-windows-gate.sh` is live Samba
+  `kinit kbruser` + `kvno host/svc`.
 - MIT `kvno -U` / `-U -P` against the **Rust** KDC
   (`scripts/s4u-mit-gate.sh`, in CI); S4U2Proxy copies the evidence PAC,
   requires a forwardable evidence ticket, and denies classic constrained
@@ -74,10 +79,12 @@ this project uses semantic versioning once a crate is published.
   HMAC-MD5-ARCFOUR (cksumtype -138) on AES session keys.
 - `bounded_stress_handle_request` asserts 64 concurrent valid AS+TGS
   succeed. Harness CI runs `kadmin-gate`, `kpasswd-gate`, `kdb-dump-gate`,
-  `kprop-gate`, `restart-gate`, `prod-gate`, `s4u-mit-gate`,
-  `samba-ad-gate`, `samba-pac-verify-gate` (Samba IDL decode of a Rust PAC),
+  `kprop-gate`, `kprop-reverse-gate`, `restart-gate`, `prod-gate`,
+  `s4u-mit-gate`, `samba-ad-gate`, `ad-windows-gate`, `ad-s4u-gate`,
+  `samba-pac-verify-gate` (Samba IDL decode of a Rust PAC),
   `samba-pac-l2-gate` (vendored Samba kcrypto validates PAC 6/7/16/19;
-  type-16 pre-image rebuilt in the oracle; a type-6 MAC flip fails),
+  type-16 pre-image rebuilt in the oracle; a type-6 MAC flip and a
+  type-16 EncTicketPart pre-image flip fail),
   `samba-crossrealm-gate` (MIT `kvno` both directions vs Samba), and
   `samba-realtrust-gate` (peer DC + `samba-tool domain trust create`; reverse
   PAC SID/RID equals live Samba-A `kbruser` `objectSid`).
@@ -89,7 +96,8 @@ this project uses semantic versioning once a crate is published.
   `masterpassword` with salt `KERBER.TESTKM` and etype 20. Golden
   `tests/traces/kdb/mit-dump-v7.txt`. Gate `scripts/kdb-dump-gate.sh`
   (MIT `kinit` both directions). Protocol `KeyUsage::new(0)` still
-  rejected. KDB3 persist remains the internal at-rest format.
+  rejected. The live at-rest file is dump version 7; KDB3 still loads
+  for one release.
 
 ### Security
 

@@ -140,9 +140,13 @@ must use a `~/adlab`-style isolated `KRB5_CONFIG` / `KRB5CCNAME` / `KRB5_KTNAME`
 
 ## Relationship to the captured Windows DC
 
-- **Same realm/accounts by name** → existing `ad-s4u-gate.sh`,
-  `ad-windows-gate.sh`, `ad-mit-trust-gate.sh` can be repointed at Samba (live,
-  reproducible) instead of the torn-down Windows DC (one-shot).
+- **Same realm/accounts by name** → `ad-windows-gate.sh` and
+  `ad-s4u-gate.sh` now run against live Samba in CI. `ad-mit-trust-gate.sh`
+  aliases `samba-realtrust-gate.sh`. Samba vs Windows: domain SID is
+  provisioned at image build (not the Windows `891046300…` golden);
+  `host/svc.ad.kerber.test` is an SPN on `kbrsvc` (not a computer
+  account); ticket kvno is 2 (Windows lab was 3); etype remains
+  `aes256-cts-hmac-sha1-96`.
 - **Different domain SID** → the committed `pac-kbruser.ndr` (Windows-sourced)
   stays the NDR-codec golden; SID-dependent checks are reconciled in A2/A5.
 - **Cross-realm trust (A5)** with `KERBER.TEST` is re-established against Samba

@@ -17,15 +17,17 @@ RFC 8009 SHA-2 (`sha2-gate.sh`, MIT `kinit`/`kvno` with
 present). `krb5-kadmind` speaks ONC RPC program 2112 with AUTH_GSSAPI
 flavor 300001; `scripts/kadmin-gate.sh` content-asserts MIT `kadmin`
 `addprinc`/`cpw`/`getprinc`/`listprincs`/`modprinc`/`cpw -randkey`/
-`ktadd`/`delprinc` then `kinit extra@KERBER.TEST`. Persistence is stash/db
-with a runtime-mutable `RwLock` store that reloads when kadmind writes.
+`ktadd`/`renprinc`/`delprinc` then `kinit extra@KERBER.TEST`. The live
+at-rest file is MIT dump version 7 (stash holds the master key).
 `bidirectional-gate` is Rust↔Rust, not a MIT oracle.
 **CI coverage:** the AS/TGS, GSS, PKINIT, SPAKE, SHA-2, and cross-realm gates
 plus `kadmin-gate`, `kpasswd-gate`, `kdb-dump-gate`, `kprop-gate`,
-`restart-gate`, `prod-gate`, `samba-ad-gate`, `samba-pac-verify-gate`,
-and `samba-crossrealm-gate` in the harness job. The `ad-*` gates are
-one-shot against a live Windows DC; `heimdal`/`gss-sspi` stay honest
-`exit 2` placeholders until those oracles exist.
+`kprop-reverse-gate`, `restart-gate`, `prod-gate`, `s4u-mit-gate`,
+`samba-ad-gate`, `ad-windows-gate`, `ad-s4u-gate`,
+`samba-pac-verify-gate`, `samba-pac-l2-gate`, `samba-crossrealm-gate`,
+and `samba-realtrust-gate` in the harness job. The `ad-*` gates drive
+live Samba; `heimdal`/`gss-sspi` stay honest `exit 2` placeholders
+until those oracles exist.
 `krb5-config` is consumed: the KDC applies `kdc.conf`
 ticket policy (and non-test listen/db paths); `kinit` / TGS referral
 chase use `KRB5_CONFIG` then `/etc/krb5.conf` `[realms]` (argv is the
@@ -33,7 +35,8 @@ fallback). Long soaks and live Heimdal/SSPI remain
 environment-dependent. AD lab coordinates and the `~/adlab` isolation
 protocol are in [docs/ad-lab.md](docs/ad-lab.md). Live
 `AD.KERBER.TEST`↔`KERBER.TEST` host tickets are gated
-(`scripts/ad-mit-trust-gate.sh`). See [docs/stages.md](docs/stages.md).
+(`scripts/samba-realtrust-gate.sh`; `ad-mit-trust-gate.sh` is an alias).
+See [docs/stages.md](docs/stages.md).
 
 **License:** [Apache-2.0](LICENSE-APACHE) OR [MIT](LICENSE-MIT), at your
 option. This tree contains cryptographic software. Export from the
@@ -58,7 +61,7 @@ Focused crates under `crates/`:
 | `krb5-client` | `kinit` (password env/stdin), MIT FILE ccache v4, keytab v1/v2 |
 | `krb5-kdc` | AS/TGS issue, persist/stash, MIT dump/load (`krb5-kdb`), ACL, UDP/TCP listener |
 | `krb5-gss` | GSS wrap/unwrap/MIC, SPNEGO framing (no C FFI) |
-| `krb5-admin` | kadmind (AUTH_GSSAPI 300001), kpasswd 464, kpropd 754 |
+| `krb5-admin` | kadmind (AUTH_GSSAPI 300001), kpasswd 464, kprop/kpropd 754 |
 
 See [docs/architecture.md](docs/architecture.md) and
 [docs/rfc-mapping.md](docs/rfc-mapping.md).

@@ -45,9 +45,10 @@ FILE ccache (so the KDC does not depend on the client crate). UDP uses
 
 **`krb5-client`** is `kinit` (password from env/stdin, never argv).
 
-**`krb5-kdc`** issues AS/TGS from an in-memory store with optional
-KDB3 persist/stash (internal fallback) and a MIT `kdb5_util` dump/load
-codec (`krb5-kdb`; default dump version 7). `key_data` uses KDB usage 0
+**`krb5-kdc`** issues AS/TGS from an in-memory store. The at-rest file
+is MIT dump version 7 (stash still holds the master key; SID/RID in
+`TL_KERBER_SID`). Legacy KDB3 ciphertext still loads for one release.
+`krb5-kdb` is the dump/load CLI. `key_data` uses KDB usage 0
 with a cleartext `int16_LE` length prefix; protocol `KeyUsage::new(0)`
 stays rejected. The serving store is `Arc<RwLock<PrincipalStore>>` so
 kadmind/kpasswd mutations reach `save_store`. Default bind is
@@ -78,6 +79,8 @@ AP-REQ framing (library tests) and `krb5-kadmind` ONC RPC program 2112
 `scripts/kpasswd-gate.sh`), `krb5-kpropd` on 754 wrapping MIT dump
 version 7 (`sendauth` `kprop5_01`, KRB-SAFE size, KRB-PRIV chunks).
 MIT `kprop` then MIT `kinit` is gated by `scripts/kprop-gate.sh`.
+Rust `krb5-kprop` → MIT `kpropd` then MIT `kinit` is
+`scripts/kprop-reverse-gate.sh`.
 MIT 1.22.2 `kadmin` add/get/list/mod/chrand/del is gated by
 `scripts/kadmin-gate.sh`. A kadmind mutation survives KDC process
 relaunch (`scripts/restart-gate.sh`).

@@ -91,9 +91,11 @@ captured `host/svc` PAC server checksum is verified (usage 17). Skip
 cleanly without the keytab.
 
 Era II gates. The harness CI job runs `kadmin-gate`, `kpasswd-gate`,
-`kdb-dump-gate`, `kprop-gate`, `restart-gate`, `prod-gate`,
-`samba-ad-gate`, `samba-pac-verify-gate`, and `samba-crossrealm-gate`
-after `pkinit-gate`. `ad-*` remain one-shot against a live Windows DC.
+`kdb-dump-gate`, `kprop-gate`, `kprop-reverse-gate`, `restart-gate`,
+`prod-gate`, `s4u-mit-gate`, `samba-ad-gate`, `ad-windows-gate`,
+`ad-s4u-gate`, `samba-pac-verify-gate`, `samba-pac-l2-gate`,
+`samba-crossrealm-gate`, and `samba-realtrust-gate` after `pkinit-gate`.
+`ad-*` are live Samba (`samba-ad-dc`), not the torn-down Windows DC.
 `heimdal`/`gss-sspi` exit 2 when those oracles are absent.
 
 - `scripts/samba-ad-gate.sh` — Samba 4 AD DC. The only `exit 0` is after a
@@ -106,7 +108,11 @@ after `pkinit-gate`. `ad-*` remain one-shot against a live Windows DC.
   checksums) recomputes PAC 6/7/16/19 of a Rust-issued ticket. Type-16 is
   hashed in the oracle over the raw EncTicketPart with PAC ad-data
   `0x00`. A type-6 MAC byte flip (`off+4`) must print `L2_MISMATCH` (not
-  `L2_MISSING`). Missing image/`kcrypto` is `exit 2`.
+  `L2_MISSING`). A second negative flips a pre-PAC EncTicketPart primitive
+  byte (type-16 signed bytes) and must print `L2_MISMATCH` including `16`.
+  Type-16 pre-image **transliteration**: Python `zero_pac_ad_data` is a
+  port of the Rust rewriter, not Samba C; reverse `samba-realtrust-gate`
+  is the live Samba type-16 oracle. Missing image/`kcrypto` is `exit 2`.
 - `scripts/samba-realtrust-gate.sh` — two Samba AD DCs; real
   `samba-tool domain trust create` (fail with images present is `exit 1`);
   both-direction `kvno`; reverse Rust service PAC LOGON_INFO SID/RID
@@ -119,12 +125,16 @@ after `pkinit-gate`. `ad-*` remain one-shot against a live Windows DC.
   / `tgs_rejects_corrupt_foreign_referral_pac` in
   `crates/krb5-kdc/tests/phase7_preauth.rs`. Type-16 is hashed over the
   original EncTicketPart bytes with PAC ad-data a single zero.
-- `scripts/ad-windows-gate.sh` — isolated `kinit kbruser@AD.KERBER.TEST`
-  then `kvno host/svc.ad.kerber.test` (aes256, kvno 3). Sources
-  `~/adlab/env`.
-- `scripts/ad-s4u-gate.sh` — `kinit -f -k host/svc.ad.kerber.test` then
-  MIT `kvno -U kbruser` (S4U2Self) and `kvno -U kbruser -P` (S4U2Proxy)
-  against **AD's** KDC. klist must name `for client kbruser@AD.KERBER.TEST`.
+- `scripts/ad-windows-gate.sh` — live Samba `kinit kbruser@AD.KERBER.TEST`
+  then `kvno host/svc.ad.kerber.test` (aes256-cts-hmac-sha1-96). Samba
+  kvno is 2 (Windows lab was 3). Missing image is `exit 2`.
+- `scripts/ad-s4u-gate.sh` — live Samba: `kinit -f -k kbrsvc` then
+  MIT `kvno -U kbruser kbrsvc` (S4U2Self) and
+  `kvno -U kbruser -P host/svc.ad.kerber.test` (S4U2Proxy). klist must
+  name `host/svc.ad.kerber.test` `for client kbruser@AD.KERBER.TEST`.
+  Windows used a computer account `host/svc`; Samba registers that SPN
+  on `kbrsvc` (S4U2Self to `host/svc` is `client and server principal
+  names must match`).
 - `scripts/s4u-mit-gate.sh` — MIT `kvno -U user` and `kvno -U user -P`
   against the **Rust** KDC (`kinit -f -k host/testhost.kerber.test`).
   klist must name `for client user@KERBER.TEST`. S4U2Proxy rejects a
@@ -135,22 +145,26 @@ after `pkinit-gate`. `ad-*` remain one-shot against a live Windows DC.
   (AUTH_GSSAPI 300001): `addprinc`, `cpw`, `getprinc` (`Principal:
   extra@KERBER.TEST`), `listprincs` (names `extra` and `user`),
   `modprinc +requires_preauth` then `kinit`, `cpw -randkey` (old
-  password must fail) + `ktadd` + `kinit -k`, `delprinc` then
-  `getprinc` error. Run twice.
+  password must fail) + `ktadd` + `kinit -k`, `renprinc -force`
+  `renamefrom`→`renameto` then `getprinc` new / old fails / `kinit -k`
+  new, `delprinc` then `getprinc` error. Rename uses `-randkey` (MIT
+  default-salt password keys may not `kinit` after rename). Run twice.
 - `scripts/kpasswd-gate.sh` — MIT `kpasswd` against kadmind UDP/TCP
   464 (`kadmin/changepw`), then `kinit` with the new password; old
   password must fail; second `kpasswd` + `kinit`. Run twice.
 - `scripts/kdb-dump-gate.sh` — MIT 1.22.2 dump/load both directions.
   Half A: `krb5-kdb load` of `tests/traces/kdb/mit-dump-v7.txt`, Rust
   KDC, MIT `kinit user` / `kinit pauser` (`REQUIRES_PRE_AUTH` = 128).
-  Half B: `krb5-kdb dump --from-dump`, MIT `kdb5_util load`, MIT
-  `krb5kdc` (Rust KDC must be dead so :88 is free), MIT `kinit` with
-  `renew until` in `klist`. Run twice.
+  Half B: MIT `kdb5_util load` of the **running KDC at-rest file**
+  (`kdb5_util load_dump version 7`, not KDB3), MIT `krb5kdc`, MIT
+  `kinit` with `renew until` in `klist`. Run twice.
 - `scripts/kprop-gate.sh` — MIT `kprop` of a version-7 dump to
   `krb5-kpropd` on 754 (`kprop5_01` sendauth, KRB-SAFE size, KRB-PRIV
   32768-byte chunks), then MIT `kinit user` against the replica Rust
-  KDC. `klist` names `user@KERBER.TEST`. Run twice. Rust→MIT `kpropd`
-  is not gated.
+  KDC. `klist` names `user@KERBER.TEST`. Run twice.
+- `scripts/kprop-reverse-gate.sh` — Rust `krb5-kprop` to MIT `kpropd`
+  (`kpropd -S -P 754`), then MIT `krb5kdc` + MIT `kinit user@KERBER.TEST`.
+  Missing MIT image is `exit 2`. Run twice.
 - `scripts/restart-gate.sh` — MIT `kadmin addprinc extra`, MIT `kinit`,
   kill `krb5-kdc` by `/proc/PID/comm`, relaunch the same binary on the
   same db/stash, MIT `kinit extra` still works. Run twice.
@@ -161,9 +175,8 @@ after `pkinit-gate`. `ad-*` remain one-shot against a live Windows DC.
   `KERBER_CAPTURE_DIR`).
 - `scripts/heimdal-gate.sh` / `scripts/gss-sspi-gate.sh` — exit 2 +
   unavailability log when those oracles are absent.
-- `scripts/ad-mit-trust-gate.sh` — both directions (aes256):
-  `kbruser@AD.KERBER.TEST` → `host/testhost.kerber.test` and
-  `user@KERBER.TEST` → `host/svc.ad.kerber.test`. Sources `~/adlab/env`.
+- `scripts/ad-mit-trust-gate.sh` — alias of `samba-realtrust-gate.sh`
+  (does not claim a Windows DC).
 
 Live AD work must set `KRB5_CONFIG` / `KRB5CCNAME` / `KRB5_KTNAME` to
 `~/adlab`. Never edit host `/etc/krb5.conf` or SSSD.
