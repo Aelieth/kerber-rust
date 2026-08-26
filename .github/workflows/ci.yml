@@ -75,6 +75,8 @@ jobs:
         run: ./scripts/kdb-dump-gate.sh
       - name: kprop-gate (MIT kprop dump v7 vs Rust kpropd)
         run: ./scripts/kprop-gate.sh
+      - name: kprop-reverse-gate (Rust kprop vs MIT kpropd)
+        run: ./scripts/kprop-reverse-gate.sh
       - name: restart-gate (persist mutation survives KDC relaunch)
         run: ./scripts/restart-gate.sh
       - name: prod-gate (kinit + log analysis + pcap)
@@ -96,6 +98,14 @@ jobs:
           SAMBA_AD_REALM: AD.KERBER.TEST
           SAMBA_AD_USER: Administrator
           SAMBA_AD_PASSWORD: Samba-Admin-Kerber-2026!
+      - name: ad-windows-gate (live Samba kinit kbruser + kvno host/svc)
+        run: ./scripts/ad-windows-gate.sh
+        env:
+          SAMBA_AD_IMAGE: samba-ad-dc:latest
+      - name: ad-s4u-gate (live Samba S4U2Self/Proxy)
+        run: ./scripts/ad-s4u-gate.sh
+        env:
+          SAMBA_AD_IMAGE: samba-ad-dc:latest
       - name: samba-pac-verify-gate (L1 Samba decode of Rust PAC)
         run: ./scripts/samba-pac-verify-gate.sh
         env:

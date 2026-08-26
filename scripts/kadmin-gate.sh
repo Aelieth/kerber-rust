@@ -161,6 +161,27 @@ KLIST4="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" klist)"
 echo "$KLIST4"
 echo "$KLIST4" | grep -q 'extra@KERBER.TEST'
 
+echo "==== MIT kadmin renprinc (randkey; default-salt password kinit is not required) ===="
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -randkey renamefrom'
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'renprinc -force renamefrom renameto'
+RENGET="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc renameto' 2>&1 || true)"
+echo "$RENGET"
+echo "$RENGET" | grep -q 'Principal: renameto@KERBER.TEST'
+RENOLD="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc renamefrom' 2>&1 || true)"
+echo "$RENOLD"
+echo "$RENOLD" | grep -qiE 'does not exist|not found|UNK_PRINC'
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'ktadd -k /tmp/renameto.keytab renameto'
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kinit -k -t /tmp/renameto.keytab renameto@KERBER.TEST
+KLISTR="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" klist)"
+echo "$KLISTR"
+echo "$KLISTR" | grep -q 'renameto@KERBER.TEST'
+
 echo "==== MIT kadmin delprinc extra ===="
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'delprinc -force extra'
@@ -169,6 +190,6 @@ DELGET="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
 echo "$DELGET"
 echo "$DELGET" | grep -qiE 'does not exist|not found|UNK_PRINC'
 
-log "kadmin.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"addprinc+cpw+get+list+mod+chrand+del"'
+log "kadmin.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"addprinc+cpw+get+list+mod+chrand+renprinc+del"'
 exit 0
 

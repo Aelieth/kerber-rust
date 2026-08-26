@@ -107,7 +107,6 @@ trust_rc=$?
 set -e
 echo "$TRUST_OUT"
 if [ "$trust_rc" -ne 0 ]; then
-    echo "$TRUST_OUT"
     log "samba.realtrust" "error" ",\"error\":\"trust-create\""
     exit 1
 fi

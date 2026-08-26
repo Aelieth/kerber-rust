@@ -176,5 +176,68 @@ if echo "$BAD" | grep -q L2_MISSING; then
 fi
 echo "$BAD" | grep -q L2_MISMATCH
 
-log "samba.pac.l2" "ok" ",\"l2\":\"ok\",\"corrupt\":\"fail\""
+docker exec "$NAME" python3 -c '
+import sys
+
+def hdr(data, off):
+    if off + 1 >= len(data):
+        return None
+    b = data[off + 1]
+    if b < 0x80:
+        return off + 2, b
+    n = b & 0x7F
+    if n == 0 or off + 2 + n > len(data):
+        return None
+    ln = int.from_bytes(data[off + 2 : off + 2 + n], "big")
+    return off + 2 + n, ln
+
+def primitive_before_pac(data, off, end, pac_at):
+    while off < end:
+        parsed = hdr(data, off)
+        if parsed is None:
+            return None
+        start, ln = parsed
+        constructed = data[off] & 0x20
+        if constructed:
+            found = primitive_before_pac(data, start, start + ln, pac_at)
+            if found is not None:
+                return found
+        elif ln >= 1 and start + ln <= pac_at:
+            return start + ln - 1
+        off = start + ln
+    return None
+
+enc = open("/tmp/rust.enc_tkt", "rb").read()
+pac = open("/tmp/rust.pac", "rb").read()
+pac_at = enc.find(pac)
+if pac_at < 0:
+    sys.exit("PAC needle missing from EncTicketPart")
+parsed = hdr(enc, 0)
+if parsed is None:
+    sys.exit("bad EncTicketPart")
+start, ln = parsed
+off = primitive_before_pac(enc, start, start + ln, pac_at)
+if off is None:
+    sys.exit("no pre-PAC primitive")
+b = bytearray(enc)
+b[off] ^= 0xFF
+open("/tmp/rust.enc_tkt.bad16", "wb").write(b)
+'
+set +e
+BAD16="$(docker exec "$NAME" python3 /tmp/pac_l2.py /tmp/rust.pac /tmp/rust.enc_tkt.bad16 /tmp/rust.keys 2>&1)"
+bad16_rc=$?
+set -e
+echo "$BAD16"
+if [ "$bad16_rc" -eq 0 ] || echo "$BAD16" | grep -q L2_OK; then
+    log "samba.pac.l2" "error" ",\"error\":\"corrupt-type16-passed\""
+    exit 1
+fi
+if echo "$BAD16" | grep -q L2_MISSING; then
+    log "samba.pac.l2" "error" ",\"error\":\"corrupt-type16-missing\""
+    exit 1
+fi
+echo "$BAD16" | grep -q L2_MISMATCH
+echo "$BAD16" | grep -q '16'
+
+log "samba.pac.l2" "ok" ",\"l2\":\"ok\",\"corrupt\":\"fail\",\"type16\":\"fail\""
 exit 0
