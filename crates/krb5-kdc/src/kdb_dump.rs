@@ -335,6 +335,15 @@ pub fn load_dump_etype(
     dump.into_store(&mkey)
 }
 
+/// Load dump text with an already-derived master key.
+///
+/// # Errors
+///
+/// Parse or crypto failures.
+pub fn load_dump_mkey(text: &str, mkey: &ProtocolKey) -> Result<PrincipalStore, DumpError> {
+    parse_dump(text)?.into_store(mkey)
+}
+
 /// Load from a path.
 ///
 /// # Errors

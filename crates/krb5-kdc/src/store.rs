@@ -118,7 +118,7 @@ pub struct Principal {
 }
 
 impl Principal {
-    /// Construct a principal with dump metadata zeroed (KDB3 / bootstrap).
+    /// Construct a principal with dump metadata zeroed (bootstrap / KDB3 load).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_keys(
         name: PrincipalName,
@@ -739,6 +739,35 @@ impl PrincipalStore {
         self.save_if_configured()
     }
 
+    /// Rename a principal. Requires add and delete ACL privs (MIT).
+    ///
+    /// RID, keys, and attributes are kept. A non-zero RID is not
+    /// re-allocated. Default-salt password keys stay verbatim (MIT);
+    /// `kinit` after rename may need an explicit salt or `cpw`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AclDenied`], [`Error::NotFound`], or [`Error::AlreadyExists`].
+    pub fn rename(
+        &mut self,
+        acl: &Acl,
+        actor: &str,
+        old: &PrincipalName,
+        new: &PrincipalName,
+    ) -> Result<(), Error> {
+        acl.check(actor, AdminOp::Create)?;
+        acl.check(actor, AdminOp::Delete)?;
+        let old_id = format!("{}@{}", old.components_joined(), self.realm);
+        let new_id = format!("{}@{}", new.components_joined(), self.realm);
+        if self.map.contains_key(&new_id) {
+            return Err(Error::AlreadyExists);
+        }
+        let mut p = self.map.remove(&old_id).ok_or(Error::NotFound)?;
+        p.name = new.clone();
+        self.map.insert(p.id(), p);
+        self.save_if_configured()
+    }
+
     /// ACL-gated keytab export using the existing v2 writer.
     ///
     /// # Errors
@@ -1081,5 +1110,39 @@ mod tests {
     #[test]
     fn random_sid_rejects_all_zero() {
         assert!(sid_from_random_bytes(&[0; 12]).is_err());
+    }
+
+    #[test]
+    fn rename_keeps_rid_and_keys() {
+        let (mut store, acl) = crate::bootstrap_documented().unwrap();
+        let actor = crate::documented_admin_id();
+        let old = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["renamefrom"]);
+        let new = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["renameto"]);
+        store
+            .create_password(&acl, &actor, &old, b"rename-secret")
+            .unwrap();
+        let before = store.get_name(&old).unwrap();
+        let rid = before.rid;
+        let keys: Vec<(i32, u32, Vec<u8>)> = before
+            .keys
+            .iter()
+            .map(|k| (k.etype.to_iana(), k.kvno, k.key.as_bytes().to_vec()))
+            .collect();
+        assert_ne!(rid, 0);
+        store.rename(&acl, &actor, &old, &new).unwrap();
+        assert!(store.get_name(&old).is_none());
+        let after = store.get_name(&new).unwrap();
+        assert_eq!(after.rid, rid);
+        let after_keys: Vec<(i32, u32, Vec<u8>)> = after
+            .keys
+            .iter()
+            .map(|k| (k.etype.to_iana(), k.kvno, k.key.as_bytes().to_vec()))
+            .collect();
+        assert_eq!(after_keys, keys);
+        let add_only = Acl::parse("admin@KERBER.TEST a\n");
+        store
+            .create_password(&acl, &actor, &old, b"rename-secret")
+            .unwrap();
+        assert!(store.rename(&add_only, &actor, &old, &new).is_err());
     }
 }

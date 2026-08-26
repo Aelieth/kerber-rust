@@ -30,6 +30,13 @@ fn persist_survives_restart_without_key_regen() {
         .as_bytes()
         .to_vec();
     save_store(&store, &db, &stash).unwrap();
+    let header = std::fs::read(&db).unwrap();
+    assert!(
+        header.starts_with(b"kdb5_util load_dump version 7"),
+        "live db must be dump version 7, got {}",
+        String::from_utf8_lossy(&header[..header.len().min(40)])
+    );
+    assert!(!header.starts_with(b"KDB3"));
     let loaded = load_store(&db, &stash).unwrap();
     let krbtgt_after = loaded
         .krbtgt()
@@ -123,8 +130,99 @@ fn persist_paths_saves_password_lock_and_expiry() {
         kvno_after > kvno_before,
         "change_password must persist a kvno bump via save_if_configured"
     );
-    assert!(p.locked, "locked must round-trip through KDB3");
+    assert!(p.locked, "locked must round-trip through dump v7");
     assert_eq!(p.pw_expire, 1_700_000_123);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn persist_dump_v7_issues_as_with_string_to_key() {
+    let dir = std::env::temp_dir().join(format!(
+        "krb5-persist-as-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::create_dir_all(&dir);
+    let db = dir.join("principal");
+    let stash = dir.join("stash");
+    let (store, _) = bootstrap_documented().unwrap();
+    save_store(&store, &db, &stash).unwrap();
+    let raw = std::fs::read(&db).unwrap();
+    assert!(raw.starts_with(b"kdb5_util load_dump version 7"));
+    assert!(!raw.starts_with(b"KDB3"));
+    let loaded = load_store(&db, &stash).unwrap();
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let salt = cname.default_salt(TEST_REALM);
+    let key = string_to_key(
+        EncryptionType::Aes256CtsHmacSha196,
+        TEST_USER_PASSWORD,
+        &salt,
+        Some(&S2K_ITERS.to_be_bytes()),
+    )
+    .unwrap();
+    let req = as_req(
+        cname,
+        TEST_REALM,
+        77,
+        Some(vec![pa_enc_timestamp(&key).unwrap()]),
+    )
+    .unwrap();
+    let rep = handle_request(&loaded, &encode(&req).unwrap()).unwrap();
+    assert_eq!(rep.first().copied(), Some(0x6b));
+    let as_rep: AsRep = decode(&rep).unwrap();
+    let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
+    let plain = decrypt(&key, usage, as_rep.0.enc_part.cipher.as_ref()).unwrap();
+    let EncAsRepPart(_) = decode(&plain).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn persist_legacy_kdb3_still_loads_sid() {
+    use krb5_kdc::save_store_legacy_kdb3;
+
+    let dir = std::env::temp_dir().join(format!(
+        "krb5-persist-kdb3-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::create_dir_all(&dir);
+    let db = dir.join("principal");
+    let stash = dir.join("stash");
+    let (store, _) = bootstrap_documented().unwrap();
+    let sid = store.domain_sid().to_sddl();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let rid = store.get_name(&user).unwrap().rid;
+    save_store_legacy_kdb3(&store, &db, &stash).unwrap();
+    let raw = std::fs::read(&db).unwrap();
+    assert!(raw.starts_with(b"KDB3"));
+    let loaded = load_store(&db, &stash).unwrap();
+    assert_eq!(loaded.domain_sid().to_sddl(), sid);
+    assert_eq!(loaded.get_name(&user).unwrap().rid, rid);
+    assert_ne!(sid, krb5_types::pac::RpcSid::dummy_domain().to_sddl());
+    let cname = user;
+    let salt = cname.default_salt(TEST_REALM);
+    let key = string_to_key(
+        EncryptionType::Aes256CtsHmacSha196,
+        TEST_USER_PASSWORD,
+        &salt,
+        Some(&S2K_ITERS.to_be_bytes()),
+    )
+    .unwrap();
+    let req = as_req(
+        cname,
+        TEST_REALM,
+        78,
+        Some(vec![pa_enc_timestamp(&key).unwrap()]),
+    )
+    .unwrap();
+    let rep = handle_request(&loaded, &encode(&req).unwrap()).unwrap();
+    assert_eq!(rep.first().copied(), Some(0x6b));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

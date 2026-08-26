@@ -13,6 +13,8 @@ NAME="kerber-rust-kdb-dump-gate"
 GOLDEN="tests/traces/kdb/mit-dump-v7.txt"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
+SCRATCH="${KERBER_SCRATCH:-/tmp/grok-goal-1b3488ffd6ae/implementer}"
+mkdir -p "$SCRATCH"
 
 log() {
     printf '{"event":"%s","correlation_id":"%s","component":"kdb-dump-gate","outcome":"%s"%s}\n' \
@@ -21,6 +23,7 @@ log() {
 
 if ! command -v docker >/dev/null 2>&1; then
     log "kdb.dump.gate" "error" ',"error":"docker not available"'
+    echo "docker not available" >"$SCRATCH/kdb-dump-unavailable.log"
     exit 2
 fi
 
@@ -36,6 +39,7 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
 fi
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     log "kdb.dump.gate" "error" ',"error":"MIT image unavailable"'
+    echo "MIT image unavailable" >"$SCRATCH/kdb-dump-unavailable.log"
     exit 2
 fi
 
@@ -115,7 +119,7 @@ KLIST_AP="$(docker exec -e KRB5_CONFIG=/tmp/kdb-krb5.conf "$NAME" klist)"
 echo "$KLIST_AP"
 echo "$KLIST_AP" | grep -q 'pauser@KERBER.TEST'
 
-echo "==== half B: krb5-kdb dump --from-dump ===="
+echo "==== half B: MIT load of the running KDC at-rest file ===="
 # Stop the Rust KDC so MIT krb5kdc can bind :88. Match /proc/PID/comm only
 # (a shell whose script text mentions the binary must not be killed).
 docker exec "$NAME" sh -c '
@@ -142,23 +146,18 @@ if [ "$free" != 1 ]; then
     log "kdb.dump.gate" "error" ',"error":"rust kdc still bound :88"'
     exit 1
 fi
-DUMP_B="$(docker exec \
-    -e KRB5_MASTER_PASSWORD=masterpassword \
-    "$NAME" /tmp/krb5-kdb dump /tmp/rust.dump --from-dump /tmp/mit.dump)"
-echo "$DUMP_B"
-echo "$DUMP_B" | grep -q 'ok dump version=7'
-HEADER_B="$(docker exec "$NAME" head -1 /tmp/rust.dump)"
+HEADER_B="$(docker exec "$NAME" head -1 /tmp/principal)"
 echo "$HEADER_B"
 [ "$HEADER_B" = "kdb5_util load_dump version 7" ]
-docker exec "$NAME" grep -q 'princ	' /tmp/rust.dump
-docker exec "$NAME" grep -q 'user@KERBER.TEST' /tmp/rust.dump
-docker exec "$NAME" grep -q 'pauser@KERBER.TEST' /tmp/rust.dump
-docker exec "$NAME" grep -q 'host/testhost.kerber.test@KERBER.TEST' /tmp/rust.dump
+docker exec "$NAME" grep -q 'princ	' /tmp/principal
+docker exec "$NAME" grep -q 'user@KERBER.TEST' /tmp/principal
+docker exec "$NAME" grep -q 'pauser@KERBER.TEST' /tmp/principal
+docker exec "$NAME" grep -q 'host/testhost.kerber.test@KERBER.TEST' /tmp/principal
 
 echo "==== half B: MIT kdb5_util load + krb5kdc ===="
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec "$NAME" kdb5_util create -s -P masterpassword
-docker exec "$NAME" kdb5_util load /tmp/rust.dump
+docker exec "$NAME" kdb5_util load /tmp/principal
 STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc; sleep 0.4' 2>&1 || true)"
 echo "$STARTLOG"
 ok=0

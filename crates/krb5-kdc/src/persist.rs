@@ -1,14 +1,23 @@
-//! Persistent principal database: stash + at-rest encrypted JSON.
+//! Persistent principal database: stash + MIT dump version 7 at rest.
+//!
+//! New writes are dump text (`kdb5_util load_dump version 7`). SID/RID live
+//! in dump `tl_data` (`TL_KERBER_SID`). Legacy `KDB1`/`KDB2`/`KDB3`
+//! ciphertext still loads for one release. The stash remains the raw master
+//! key; it is not rewritten as MIT `.k5.REALM`.
 
 use std::fs;
 use std::path::Path;
 
 use crate::error::Error;
+use crate::kdb_dump::{load_dump_mkey, write_dump};
+use crate::mkey::{harness_master_etype, master_key_from_password};
 use crate::store::{KeyEntry, Principal, PrincipalStore, S2K_ITERS};
 use krb5_crypto::{decrypt, encrypt, EncryptionType, KeyUsage, ProtocolKey};
 use krb5_protocol::write_secret_file;
 use krb5_types::pac::RpcSid;
 use krb5_types::PrincipalName;
+
+const DUMP_PREFIX: &[u8] = b"kdb5_util load_dump version ";
 
 /// Persistence failure.
 #[derive(Debug, thiserror::Error)]
@@ -30,27 +39,34 @@ impl From<Error> for PersistError {
     }
 }
 
+impl From<crate::kdb_dump::DumpError> for PersistError {
+    fn from(e: crate::kdb_dump::DumpError) -> Self {
+        match e {
+            crate::kdb_dump::DumpError::Io(e) => Self::Io(e),
+            crate::kdb_dump::DumpError::Crypto(s) => Self::Crypto(s),
+            crate::kdb_dump::DumpError::Format(s) => Self::Format(s),
+        }
+    }
+}
+
 /// Load a store from `db_path` using the master key in `stash_path`.
+///
+/// Dump version 6/7 text is the canonical format. `KDB1`/`KDB2`/`KDB3`
+/// ciphertext is still accepted.
 ///
 /// # Errors
 ///
 /// I/O or decrypt failures. A missing db is [`PersistError::Format`].
 pub fn load_store(db_path: &Path, stash_path: &Path) -> Result<PrincipalStore, PersistError> {
-    let master = load_stash(stash_path)?;
+    let stash = fs::read(stash_path)?;
     let blob = fs::read(db_path)?;
-    if blob.len() < 4 {
-        return Err(PersistError::Format("missing KDB magic".into()));
-    }
-    let magic = &blob[..4];
-    let v2 = magic == b"KDB2";
-    let v3 = magic == b"KDB3";
-    if !v2 && !v3 && magic != b"KDB1" {
-        return Err(PersistError::Format("missing KDB1/KDB2/KDB3 magic".into()));
-    }
-    let usage = KeyUsage::new(2).map_err(|e| PersistError::Crypto(e.to_string()))?;
-    let plain =
-        decrypt(&master, usage, &blob[4..]).map_err(|e| PersistError::Crypto(e.to_string()))?;
-    let mut store = parse_plain(&plain, v2, v3)?;
+    let mut store = if blob.starts_with(DUMP_PREFIX) {
+        let text = std::str::from_utf8(&blob)
+            .map_err(|_| PersistError::Format("dump is not utf-8".into()))?;
+        load_dump_with_stash(text, &stash)?
+    } else {
+        load_kdb_blob(&blob, &stash)?
+    };
     store.persist_paths = Some((db_path.to_path_buf(), stash_path.to_path_buf()));
     if let Ok(meta) = std::fs::metadata(db_path) {
         store.db_stamp = Some((meta.modified().ok(), meta.len()));
@@ -58,18 +74,41 @@ pub fn load_store(db_path: &Path, stash_path: &Path) -> Result<PrincipalStore, P
     Ok(store)
 }
 
-/// Save `store` to `db_path`, creating `stash_path` if needed.
+/// Save `store` as MIT dump version 7. Creates `stash_path` if needed.
+///
+/// When `KRB5_MASTER_PASSWORD` is set and the stash is new, the master key
+/// is derived with the harness etype (MIT `aes256-cts-hmac-sha384-192`) so
+/// `kdb5_util load` of the live file succeeds after `create -s -P`.
 ///
 /// # Errors
 ///
-/// I/O or encrypt failures.
+/// I/O or dump crypto failures.
 pub fn save_store(
     store: &PrincipalStore,
     db_path: &Path,
     stash_path: &Path,
 ) -> Result<(), PersistError> {
+    let master = master_for_save(store, db_path, stash_path)?;
+    let text = write_dump(store, &master)?;
+    write_secret_file(db_path, text.as_bytes())?;
+    Ok(())
+}
+
+/// Write a KDB3 ciphertext (one-release load tests / migration helper).
+///
+/// New production writes use [`save_store`] (dump v7). This remains so a
+/// generated legacy blob can prove `load_store` still reads KDB3.
+///
+/// # Errors
+///
+/// I/O or encrypt failures.
+pub fn save_store_legacy_kdb3(
+    store: &PrincipalStore,
+    db_path: &Path,
+    stash_path: &Path,
+) -> Result<(), PersistError> {
     let master = if stash_path.exists() {
-        load_stash(stash_path)?
+        load_stash_etype(stash_path, EncryptionType::Aes256CtsHmacSha196)?
     } else {
         let m = random_master()?;
         write_secret_file(stash_path, m.as_bytes())?;
@@ -85,10 +124,101 @@ pub fn save_store(
     Ok(())
 }
 
-fn load_stash(path: &Path) -> Result<ProtocolKey, PersistError> {
+fn load_dump_with_stash(text: &str, stash: &[u8]) -> Result<PrincipalStore, PersistError> {
+    for etype in stash_etypes() {
+        let Ok(mkey) = ProtocolKey::from_bytes(etype, stash) else {
+            continue;
+        };
+        if let Ok(store) = load_dump_mkey(text, &mkey) {
+            return Ok(store);
+        }
+    }
+    Err(PersistError::Crypto(
+        "stash master key did not decrypt dump key_data".into(),
+    ))
+}
+
+fn load_kdb_blob(blob: &[u8], stash: &[u8]) -> Result<PrincipalStore, PersistError> {
+    if blob.len() < 4 {
+        return Err(PersistError::Format("missing KDB magic".into()));
+    }
+    let magic = &blob[..4];
+    let v2 = magic == b"KDB2";
+    let v3 = magic == b"KDB3";
+    if !v2 && !v3 && magic != b"KDB1" {
+        return Err(PersistError::Format(
+            "missing dump header or KDB1/KDB2/KDB3 magic".into(),
+        ));
+    }
+    let master = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, stash)
+        .map_err(|e| PersistError::Crypto(e.to_string()))?;
+    let usage = KeyUsage::new(2).map_err(|e| PersistError::Crypto(e.to_string()))?;
+    let plain =
+        decrypt(&master, usage, &blob[4..]).map_err(|e| PersistError::Crypto(e.to_string()))?;
+    parse_plain(&plain, v2, v3)
+}
+
+fn master_for_save(
+    store: &PrincipalStore,
+    db_path: &Path,
+    stash_path: &Path,
+) -> Result<ProtocolKey, PersistError> {
+    if stash_path.exists() {
+        return existing_stash_key(db_path, stash_path);
+    }
+    let master = if let Ok(pw) = std::env::var("KRB5_MASTER_PASSWORD") {
+        let etype = persist_master_etype();
+        master_key_from_password(store.realm(), pw.as_bytes(), etype)?
+    } else {
+        random_master()?
+    };
+    write_secret_file(stash_path, master.as_bytes())?;
+    Ok(master)
+}
+
+fn existing_stash_key(db_path: &Path, stash_path: &Path) -> Result<ProtocolKey, PersistError> {
+    let bytes = fs::read(stash_path)?;
+    if let Ok(blob) = fs::read(db_path) {
+        if blob.starts_with(DUMP_PREFIX) {
+            if let Ok(text) = std::str::from_utf8(&blob) {
+                for etype in stash_etypes() {
+                    let Ok(mkey) = ProtocolKey::from_bytes(etype, &bytes) else {
+                        continue;
+                    };
+                    if load_dump_mkey(text, &mkey).is_ok() {
+                        return Ok(mkey);
+                    }
+                }
+            }
+        }
+    }
+    for etype in stash_etypes() {
+        if let Ok(mkey) = ProtocolKey::from_bytes(etype, &bytes) {
+            return Ok(mkey);
+        }
+    }
+    Err(PersistError::Crypto(
+        "stash is not a usable master key".into(),
+    ))
+}
+
+fn persist_master_etype() -> EncryptionType {
+    std::env::var("KRB5_MASTER_ETYPE")
+        .ok()
+        .and_then(|s| EncryptionType::from_mit_name(&s).ok())
+        .unwrap_or_else(harness_master_etype)
+}
+
+fn stash_etypes() -> [EncryptionType; 2] {
+    [
+        EncryptionType::Aes256CtsHmacSha384192,
+        EncryptionType::Aes256CtsHmacSha196,
+    ]
+}
+
+fn load_stash_etype(path: &Path, etype: EncryptionType) -> Result<ProtocolKey, PersistError> {
     let bytes = fs::read(path)?;
-    ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &bytes)
-        .map_err(|e| PersistError::Crypto(e.to_string()))
+    ProtocolKey::from_bytes(etype, &bytes).map_err(|e| PersistError::Crypto(e.to_string()))
 }
 
 fn random_master() -> Result<ProtocolKey, PersistError> {
