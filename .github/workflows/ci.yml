@@ -29,8 +29,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.85
-      - name: MSRV 1.85
-        run: cargo test --workspace --locked || cargo test --workspace
+      - name: MSRV 1.85 (locked)
+        run: cargo test --workspace --locked
 
   audit:
     runs-on: ubuntu-latest
