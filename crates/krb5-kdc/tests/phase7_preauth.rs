@@ -843,8 +843,11 @@ fn as_wrong_realm_is_chaseable() {
     req.0.req_body.realm = ascii("OTHER.TEST");
     let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
     let e: krb5_types::KrbError = decode(&bytes).expect("KRB-ERROR");
-    assert_eq!(e.error_code, err::WRONG_REALM);
-    assert_eq!(std::str::from_utf8(e.realm.as_bytes()).unwrap(), TEST_REALM);
+    assert_eq!(e.error_code, err::C_PRINCIPAL_UNKNOWN);
+    assert_eq!(
+        std::str::from_utf8(e.realm.as_bytes()).unwrap(),
+        "OTHER.TEST"
+    );
 }
 
 #[test]

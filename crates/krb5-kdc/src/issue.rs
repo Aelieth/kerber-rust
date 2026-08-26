@@ -85,27 +85,47 @@ pub fn handle_request(store: &PrincipalStore, raw: &[u8]) -> Result<Vec<u8>, Err
 
 fn handle_inner(store: &PrincipalStore, raw: &[u8]) -> Result<Vec<u8>, Error> {
     if raw.is_empty() {
-        return Ok(encode_krb_error(store, err::GENERIC, Some("empty"), None));
+        return Ok(encode_krb_error(
+            store,
+            err::GENERIC,
+            Some("empty"),
+            None,
+            None,
+        ));
     }
     match raw[0] {
         0x6a => match decode::<AsReq>(raw) {
             Ok(req) => as_reply(store, &req, raw),
-            Err(_) => Ok(encode_krb_error(store, err::GENERIC, Some("asn1"), None)),
+            Err(_) => Ok(encode_krb_error(
+                store,
+                err::GENERIC,
+                Some("asn1"),
+                None,
+                None,
+            )),
         },
         0x6c => match decode::<TgsReq>(raw) {
             Ok(req) => tgs_reply(store, &req, raw),
-            Err(_) => Ok(encode_krb_error(store, err::GENERIC, Some("asn1"), None)),
+            Err(_) => Ok(encode_krb_error(
+                store,
+                err::GENERIC,
+                Some("asn1"),
+                None,
+                None,
+            )),
         },
         _ => Ok(encode_krb_error(
             store,
             err::BAD_PVNO,
             Some("unexpected PDU"),
             None,
+            None,
         )),
     }
 }
 
 fn as_reply(store: &PrincipalStore, req: &AsReq, raw: &[u8]) -> Result<Vec<u8>, Error> {
+    let body = Some(&req.0.req_body);
     match issue_as_from(store, req, Some(raw)) {
         Ok(issued) => Ok(encode(&issued.rep)?),
         Err(Error::PreauthRequired { e_data }) => Ok(encode_krb_error(
@@ -113,44 +133,62 @@ fn as_reply(store: &PrincipalStore, req: &AsReq, raw: &[u8]) -> Result<Vec<u8>, 
             err::PREAUTH_REQUIRED,
             None,
             Some(e_data),
+            body,
         )),
         Err(Error::Protocol { code, text, e_data }) => {
-            Ok(encode_krb_error(store, code, text.as_deref(), e_data))
+            Ok(encode_krb_error(store, code, text.as_deref(), e_data, body))
         }
         Err(Error::Crypto(_)) => Ok(encode_krb_error(
             store,
             err::PREAUTH_FAILED,
             Some("preauth"),
             None,
+            body,
         )),
-        Err(Error::Asn1(_)) => Ok(encode_krb_error(store, err::GENERIC, Some("asn1"), None)),
+        Err(Error::Asn1(_)) => Ok(encode_krb_error(
+            store,
+            err::GENERIC,
+            Some("asn1"),
+            None,
+            body,
+        )),
         Err(e) => Ok(encode_krb_error(
             store,
             err::GENERIC,
             Some(&e.to_string()),
             None,
+            body,
         )),
     }
 }
 
 fn tgs_reply(store: &PrincipalStore, req: &TgsReq, raw: &[u8]) -> Result<Vec<u8>, Error> {
+    let body = Some(&req.0.req_body);
     match issue_tgs_from(store, req, Some(raw)) {
         Ok(issued) => Ok(encode(&issued.rep)?),
         Err(Error::Protocol { code, text, e_data }) => {
-            Ok(encode_krb_error(store, code, text.as_deref(), e_data))
+            Ok(encode_krb_error(store, code, text.as_deref(), e_data, body))
         }
         Err(Error::Crypto(_)) => Ok(encode_krb_error(
             store,
             err::BAD_INTEGRITY,
             Some("integrity"),
             None,
+            body,
         )),
-        Err(Error::Asn1(_)) => Ok(encode_krb_error(store, err::GENERIC, Some("asn1"), None)),
+        Err(Error::Asn1(_)) => Ok(encode_krb_error(
+            store,
+            err::GENERIC,
+            Some("asn1"),
+            None,
+            body,
+        )),
         Err(e) => Ok(encode_krb_error(
             store,
             err::GENERIC,
             Some(&e.to_string()),
             None,
+            body,
         )),
     }
 }
@@ -171,7 +209,7 @@ fn issue_as_from(
 ) -> Result<IssuedAs, Error> {
     let body = &req.0.req_body;
     if utf8_realm(&body.realm) != store.realm() {
-        return Err(proto(err::WRONG_REALM, store.realm()));
+        return Err(proto(err::C_PRINCIPAL_UNKNOWN, "wrong realm"));
     }
     if body.kdc_options.unsupported_bits() != 0 {
         return Err(proto(err::BADOPTION, "unsupported KDCOptions"));
@@ -395,7 +433,7 @@ fn issue_tgs_from(
         .ok_or_else(|| proto(err::PREAUTH_FAILED, "no PA-TGS-REQ"))?;
     let ap: krb5_types::ApReq = decode(ap_raw.as_ref())?;
     if !ap.ticket.sname.is_krbtgt_for(store.realm()) {
-        return Err(proto(err::NO_TGT, "presented ticket is not a TGT"));
+        return Err(proto(err::NOT_US, "presented ticket is not a TGT"));
     }
     let tkt_etype = EncryptionType::from_iana(ap.ticket.enc_part.etype)
         .or_else(|_| EncryptionType::known(ap.ticket.enc_part.etype))?;
@@ -909,21 +947,33 @@ fn encode_krb_error(
     code: i32,
     text: Option<&str>,
     e_data: Option<Vec<u8>>,
+    body: Option<&krb5_types::KdcReqBody>,
 ) -> Vec<u8> {
-    let realm = match krb5_types::try_ascii(store.realm()) {
+    // MIT 1.22.2 echoes the request realm/sname (C_PRINCIPAL_UNKNOWN for a
+    // foreign-realm AS-REQ, not WRONG_REALM).
+    let realm_s = body
+        .map(|b| utf8_realm(&b.realm).to_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| store.realm().to_owned());
+    let realm = match krb5_types::try_ascii(&realm_s) {
         Ok(r) => r,
         Err(_) => match krb5_types::try_ascii("INVALID") {
             Ok(r) => r,
             Err(_) => return Vec::new(),
         },
     };
-    let sname = match PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", store.realm()])
-    {
-        Ok(n) => n,
-        Err(_) => match PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", "INVALID"]) {
+    let sname = if let Some(n) = body.and_then(|b| b.sname.clone()) {
+        n
+    } else {
+        match PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", realm_s.as_str()]) {
             Ok(n) => n,
-            Err(_) => return Vec::new(),
-        },
+            Err(_) => {
+                match PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", "INVALID"]) {
+                    Ok(n) => n,
+                    Err(_) => return Vec::new(),
+                }
+            }
+        }
     };
     let pdu = KrbError {
         pvno: KrbError::PVNO,
