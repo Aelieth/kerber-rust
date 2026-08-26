@@ -62,6 +62,9 @@ if docker exec "$CLIENT" sh -c 'command -v tcpdump >/dev/null'; then
     sleep 0.5
     CAP=1
 fi
+if [ "${KERBER_REQUIRE_REAL_PCAP:-0}" = "1" ] && [ "$CAP" != 1 ]; then
+    die "KERBER_REQUIRE_REAL_PCAP=1 but tcpdump is not available on the client"
+fi
 
 echo "==== soak ${SOAK_S}s workers=${KERBER_LOAD_WORKERS} ===="
 : >"$OUT/rss.tsv"
@@ -93,7 +96,16 @@ grep -q '"err":0' "$OUT/loadgen.log" || die "loadgen reported errors during soak
 
 if [ "$CAP" = 1 ]; then
     docker exec "$CLIENT" sh -c 'kill -INT "$(cat /tmp/tcpdump.pid 2>/dev/null)" 2>/dev/null; sleep 0.3' || true
-    docker cp "$CLIENT":/tmp/soak.pcap "$OUT/soak.pcap" 2>/dev/null || true
+    if ! docker cp "$CLIENT":/tmp/soak.pcap "$OUT/soak.pcap" 2>/dev/null; then
+        if [ "${KERBER_REQUIRE_REAL_PCAP:-0}" = "1" ]; then
+            die "KERBER_REQUIRE_REAL_PCAP=1 but soak pcap was not archived"
+        fi
+    fi
+fi
+if [ "${KERBER_REQUIRE_REAL_PCAP:-0}" = "1" ]; then
+    [ -f "$OUT/soak.pcap" ] || die "KERBER_REQUIRE_REAL_PCAP=1 but no soak pcap was archived"
+    PSZ="$(wc -c <"$OUT/soak.pcap" | tr -d ' ')"
+    [ "$PSZ" -gt 24 ] || die "KERBER_REQUIRE_REAL_PCAP=1 but soak pcap is empty"
 fi
 docker cp "$PRIMARY":/tmp/kdc.log "$OUT/kdc1.log"
 
@@ -108,8 +120,9 @@ python3 "$ROOT/scripts/lib/analyze-kdc-slo.py" \
     --degrade-factor 2.5 \
     --rss-series "$OUT/rss.tsv" \
     --min-rss-samples 5 \
-    --rss-max-growth 2.0 \
-    --rss-max-extra-mib 20 \
+    --rss-max-growth "${KERBER_SLO_RSS_MAX_GROWTH:-1.5}" \
+    --rss-max-extra-mib "${KERBER_SLO_RSS_MAX_EXTRA_MIB:-8}" \
+    --rss-max-slope-mib-s "${KERBER_SLO_RSS_MAX_SLOPE_MIB_S:-0.05}" \
     || die "soak SLO/RSS analysis failed"
 
 python3 - "$OUT/kdc1.log" "$OUT/latency.tsv" <<'PY'
