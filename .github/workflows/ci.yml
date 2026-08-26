@@ -143,3 +143,7 @@ jobs:
         env:
           SAMBA_AD_IMAGE: samba-ad-dc:latest
           SAMBA_KERBER_IMAGE: samba-kerber-dc:latest
+      - name: Build Heimdal 7.8 image (harness/heimdal)
+        run: docker build -f harness/heimdal/Dockerfile -t kerber-rust-heimdal-kdc:latest .
+      - name: heimdal-gate (Heimdal 7.8 bidirectional)
+        run: ./scripts/heimdal-gate.sh
