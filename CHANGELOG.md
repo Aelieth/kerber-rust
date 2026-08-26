@@ -17,6 +17,17 @@ this project uses semantic versioning once a crate is published.
 
 ### Added
 
+- C2 soak/stress/chaos over the multi-host realm: `scripts/stress-gate.sh`
+  drives concurrent wire AS+TGS (`krb5-client` `examples/loadgen.rs`)
+  with MIT `kinit`/`kvno` sampling and fails unless KDC `duration_us`
+  p99 is ≤ 500 ms, throughput ≥ 4 issue-ok/s, error-rate 0, panics 0.
+  `scripts/chaos-gate.sh` applies `tc netem`, a low memory cap, and
+  primary-kill failover under load. `scripts/soak-gate.sh` runs a
+  bounded window with RSS leak detection and non-degrading latency
+  (scheduled longer run in `.github/workflows/soak.yml`).
+  `KERBER_REQUIRE_REAL_PCAP=1` makes `prod-realm-gate` require a real
+  eth0 capture (CI builds `kerber-rust-prod-node` as its own fail-red
+  step). In CI after `prod-realm-gate`.
 - C1 multi-host prod realm: `krb5-kdb create <realm>` writes dump
   version 7; kadmind ACL is `admin@<store.realm()>` (or `acl_file`);
   kpropd realm is `KRB5_KDC_REALM` (fallback `KRB5_TEST_REALM`) and the

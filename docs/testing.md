@@ -97,7 +97,7 @@ unlocked `--locked` fallback.
 
 Era II gates. The harness CI job runs `kadmin-gate`, `kpasswd-gate`,
 `kdb-dump-gate`, `kprop-gate`, `kprop-reverse-gate`, `restart-gate`,
-`prod-gate`, `prod-realm-gate`, `s4u-mit-gate`, `samba-ad-gate`, `ad-windows-gate`,
+`prod-gate`, `prod-realm-gate`, `stress-gate`, `chaos-gate`, `soak-gate`, `s4u-mit-gate`, `samba-ad-gate`, `ad-windows-gate`,
 `ad-s4u-gate`, `samba-pac-verify-gate`, `samba-pac-l2-gate`,
 `samba-crossrealm-gate`, and `samba-realtrust-gate` after `pkinit-gate`.
 `ad-*` are live Samba (`samba-ad-dc`), not the torn-down Windows DC.
@@ -185,7 +185,22 @@ Era II gates. The harness CI job runs `kadmin-gate`, `kpasswd-gate`,
   `kvno`/`kadmin addprinc+ktadd` against the primary; Rust `krb5-kprop`
   to the replica `:754`; kill primary; MIT `kinit`/`kvno` against the
   replica. Structured-log analysis + real NIC pcap when `NET_RAW` works
-  (`pcap-source=reconstructed` otherwise). In CI after `prod-gate`.
+  (`pcap-source=reconstructed` otherwise; reconstructed still requires
+  AS/TGS PDUs 10/11/12/13). CI sets `KERBER_REQUIRE_REAL_PCAP=1` so
+  missing eth0 capture fails red. In CI after `prod-gate`.
+- `scripts/stress-gate.sh` — C2a: concurrent wire AS+TGS via
+  `examples/loadgen.rs` plus MIT `kinit`/`kvno` under load. KDC JSON
+  `duration_us` p99 ≤ 500 ms, throughput ≥ 4 issue-ok/s, error-rate 0,
+  panics 0 (`scripts/lib/analyze-kdc-slo.py`). Bounded; in CI.
+- `scripts/chaos-gate.sh` — C2b: `tc netem` delay/loss/reorder (MIT
+  must complete), low `--memory` under load (no OOM-panic), `docker kill`
+  of the primary mid-load then MIT `kinit`/`kvno` on the kprop replica
+  (including a kadmin-created host). In CI.
+- `scripts/soak-gate.sh` — C2c: sustained moderate load (~70 s in CI,
+  300 s scheduled in `.github/workflows/soak.yml`). RSS series must not
+  grow unbounded; window-over-window `duration_us` p99 must not degrade
+  by more than 2.5×; error-rate 0; panics 0; `correlation_id` on
+  issue-ok. Archives logs + pcap + RSS/latency series.
 - `scripts/heimdal-gate.sh` / `scripts/gss-sspi-gate.sh` — exit 2 +
   unavailability log when those oracles are absent.
 - `scripts/ad-mit-trust-gate.sh` — alias of `samba-realtrust-gate.sh`

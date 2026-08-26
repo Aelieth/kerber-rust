@@ -14,7 +14,10 @@ content-asserting CI gate over this substrate.
 - **kadmind** ACL `admin@PROD.KERBER.TEST` (MIT `kadmin addprinc` + `ktadd`).
 - **kprop** primary→replica on `:754` and primary-kill failover (`prod-realm-gate.sh`).
 - **Real NIC packet capture** when `NET_RAW` works (`tcpdump -i eth0`); otherwise
-  the gate logs `pcap-source=reconstructed`.
+  the gate logs `pcap-source=reconstructed` (still requires AS/TGS PDUs).
+  CI sets `KERBER_REQUIRE_REAL_PCAP=1`.
+- **C2** `stress-gate` / `chaos-gate` / `soak-gate` reuse this substrate
+  (`NET_ADMIN` is added so `tc netem` can run).
 - **Resource caps hold** — each node capped at 1 GiB / 2 CPU.
 
 ## Quick start
@@ -24,6 +27,9 @@ cargo build -p krb5-kdc -p krb5-admin
 ./harness/prod/env-up.sh        # network + 3 capped nodes + self-smoke
 ./harness/prod/env-status.sh    # IPs, listeners, live mem/cpu vs caps
 ./scripts/prod-realm-gate.sh    # kadmin + kprop + failover + logs/pcap
+./scripts/stress-gate.sh        # wire load + p99 SLO
+./scripts/chaos-gate.sh         # netem + memory + failover-under-load
+./scripts/soak-gate.sh          # bounded soak + RSS
 ./harness/prod/env-down.sh      # tear down (add --all to also drop Samba nodes)
 ```
 

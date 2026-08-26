@@ -82,7 +82,9 @@ MIT `kprop` then MIT `kinit` is gated by `scripts/kprop-gate.sh`.
 Rust `krb5-kprop` → MIT `kpropd` then MIT `kinit` is
 `scripts/kprop-reverse-gate.sh` (additive to the in-process kprop tests).
 C1 multi-host MIT client vs Rust primary/replica is
-`scripts/prod-realm-gate.sh`.
+`scripts/prod-realm-gate.sh`. C2 wire stress/chaos/soak over that realm
+are `scripts/stress-gate.sh`, `scripts/chaos-gate.sh`, and
+`scripts/soak-gate.sh`.
 MIT 1.22.2 `kadmin` add/get/list/mod/chrand/del is gated by
 `scripts/kadmin-gate.sh`. A kadmind mutation survives KDC process
 relaunch (`scripts/restart-gate.sh`).

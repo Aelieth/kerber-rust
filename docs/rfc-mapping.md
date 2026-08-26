@@ -40,4 +40,6 @@ release. MIT-wire kprop/kpropd on 754 wraps dump version 7 both
 directions (`scripts/kprop-gate.sh` MIT→Rust; `scripts/kprop-reverse-gate.sh`
 Rust `krb5-kprop` → MIT `kpropd` then MIT `kinit`; additive to the
 in-process kprop tests). C1 multi-host MIT client vs Rust primary/replica
-is `scripts/prod-realm-gate.sh`.
+is `scripts/prod-realm-gate.sh`. C2 stress/chaos/soak over that realm
+are `scripts/stress-gate.sh`, `scripts/chaos-gate.sh`, and
+`scripts/soak-gate.sh`.
