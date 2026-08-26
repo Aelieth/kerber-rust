@@ -96,6 +96,8 @@ jobs:
           KERBER_REQUIRE_NETEM: "1"
         run: ./scripts/chaos-gate.sh
       - name: soak-gate (bounded leak detection)
+        env:
+          KERBER_REQUIRE_REAL_PCAP: "1"
         run: ./scripts/soak-gate.sh
       - name: cross-realm-gate
         run: ./scripts/cross-realm-gate.sh
