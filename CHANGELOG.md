@@ -6,6 +6,15 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased]
 
+### Fixed
+
+- MSRV 1.85 is actually green on the locked tree: `rasn` is pinned at
+  `=0.27.0` (`0.27.1+` uses `usize::is_multiple_of` as a const fn,
+  which is not stable on 1.85). The CI `msrv` job runs
+  `cargo test --workspace --locked` only (no unlocked fallback).
+  Golden MIT DER tests still pass on that pin. The kpasswd UDP
+  listener test waits 15s for a reply (1.85 debug s2k can exceed 2s).
+
 ### Added
 
 - AD PAC: MS-RPCE NDR32 `KERB_VALIDATION_INFO` in field-encounter

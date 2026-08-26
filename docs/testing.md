@@ -90,6 +90,11 @@ AD PAC: `crates/krb5-kdc/tests/ad_pac.rs` decodes committed
 captured `host/svc` PAC server checksum is verified (usage 17). Skip
 cleanly without the keytab.
 
+MSRV is 1.85 (`package.rust-version`). The `msrv` CI job is
+`cargo test --workspace --locked` on that toolchain, with `rasn`
+pinned at `=0.27.0` (`0.27.1+` does not build on 1.85). There is no
+unlocked `--locked` fallback.
+
 Era II gates. The harness CI job runs `kadmin-gate`, `kpasswd-gate`,
 `kdb-dump-gate`, `kprop-gate`, `kprop-reverse-gate`, `restart-gate`,
 `prod-gate`, `s4u-mit-gate`, `samba-ad-gate`, `ad-windows-gate`,

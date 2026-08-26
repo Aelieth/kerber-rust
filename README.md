@@ -42,9 +42,12 @@ See [docs/stages.md](docs/stages.md).
 option. This tree contains cryptographic software. Export from the
 United States (and some other jurisdictions) may require a license;
 review local export-control rules before distributing binaries. Supply
-chain: `cargo audit` in CI; `deny.toml` for licenses/advisories. The
-product itself is `forbid(unsafe_code)`; some dependencies contain
-`unsafe` (RustCrypto, getrandom, nix).
+chain: `cargo audit` in CI; `deny.toml` for licenses/advisories.
+MSRV is **1.85** (`package.rust-version`); CI `msrv` runs
+`cargo test --workspace --locked` on that toolchain (`rasn` is pinned
+at `=0.27.0` so the lockfile builds there). The product itself is
+`forbid(unsafe_code)`; some dependencies contain `unsafe` (RustCrypto,
+getrandom, nix).
 
 ## Architecture
 
