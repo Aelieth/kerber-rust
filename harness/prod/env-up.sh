@@ -36,6 +36,9 @@ command -v docker >/dev/null 2>&1 || die "docker not found"
 # Pick the capture-tooling image; fall back to the lean base if it is not built.
 IMAGE="$KERBER_PROD_IMAGE"
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    if [ "${KERBER_REQUIRE_REAL_PCAP:-0}" = "1" ]; then
+        die "$IMAGE absent and KERBER_REQUIRE_REAL_PCAP=1 (no tcpdump-less fallback)"
+    fi
     warn "$IMAGE absent; falling back to $KERBER_PROD_IMAGE_FALLBACK (no in-container tcpdump/tshark)"
     IMAGE="$KERBER_PROD_IMAGE_FALLBACK"
     docker image inspect "$IMAGE" >/dev/null 2>&1 || die "neither prod-node nor base MIT image is built"
@@ -61,7 +64,7 @@ say "network $NET ready"
 run_node() { # name hostname
     docker run -d --name "$1" --hostname "$2" --network "$NET" \
         --memory="$KERBER_KDC_MEM" --cpus="$KERBER_KDC_CPUS" \
-        --cap-add=NET_RAW \
+        --cap-add=NET_RAW --cap-add=NET_ADMIN \
         --entrypoint sleep "$IMAGE" 86400 >/dev/null \
         || die "failed to launch $1"
 }
@@ -112,10 +115,14 @@ docker exec "$PRIMARY" grep -q "krbtgt/${REALM}@${REALM}" /tmp/prod.db \
 say "created dump-v7 realm $REALM"
 
 docker exec "$PRIMARY" mkdir -p /tmp/pdus
+CAPTURE_ENV=()
+if [ "${KERBER_CAPTURE:-1}" != "0" ]; then
+    CAPTURE_ENV=(-e KERBER_CAPTURE_DIR=/tmp/pdus)
+fi
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/prod.db -e KRB5_KDC_STASH=/tmp/prod.stash \
     -e KRB5_MASTER_PASSWORD="$KERBER_PROD_MASTER_PW" \
-    -e KERBER_CAPTURE_DIR=/tmp/pdus \
+    "${CAPTURE_ENV[@]}" \
     -e RUST_LOG=info \
     -e CORRELATION_ID="${CORRELATION_ID:-}" \
     "$PRIMARY" sh -c '/usr/local/bin/krb5-kdc 0.0.0.0:88 >/tmp/kdc.log 2>&1'

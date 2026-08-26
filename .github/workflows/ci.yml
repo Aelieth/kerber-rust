@@ -81,7 +81,11 @@ jobs:
         run: ./scripts/restart-gate.sh
       - name: prod-gate (kinit + log analysis + pcap)
         run: ./scripts/prod-gate.sh
+      - name: Build prod-node capture image
+        run: docker build -f harness/prod/Dockerfile -t kerber-rust-prod-node:latest .
       - name: prod-realm-gate (multi-host MIT client + kprop failover)
+        env:
+          KERBER_REQUIRE_REAL_PCAP: "1"
         run: ./scripts/prod-realm-gate.sh
       - name: cross-realm-gate
         run: ./scripts/cross-realm-gate.sh
@@ -99,7 +103,7 @@ jobs:
           SAMBA_AD_IMAGE: samba-ad-dc:latest
           SAMBA_AD_REALM: AD.KERBER.TEST
           SAMBA_AD_USER: Administrator
-          SAMBA_AD_PASSWORD: Samba-Admin-Kerber-2026!
+          SAMBA_AD_PASSWORD: ${{ secrets.SAMBA_AD_PASSWORD }}
       - name: ad-windows-gate (live Samba kinit kbruser + kvno host/svc)
         run: ./scripts/ad-windows-gate.sh
         env:

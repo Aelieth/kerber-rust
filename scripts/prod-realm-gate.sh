@@ -58,7 +58,7 @@ if ! docker image inspect "$KERBER_PROD_IMAGE" >/dev/null 2>&1; then
     if docker image inspect "$KERBER_PROD_IMAGE_FALLBACK" >/dev/null 2>&1; then
         echo "building $KERBER_PROD_IMAGE from $KERBER_PROD_IMAGE_FALLBACK"
         docker build -f harness/prod/Dockerfile -t "$KERBER_PROD_IMAGE" "$ROOT" \
-            || echo "prod-node build failed; env-up will fall back to MIT image"
+            || die "prod-node capture image build failed"
     else
         unavailable "neither $KERBER_PROD_IMAGE nor $KERBER_PROD_IMAGE_FALLBACK is built"
     fi
@@ -134,6 +134,9 @@ if docker exec "$PRIMARY" sh -c 'command -v tcpdump >/dev/null'; then
         'tcpdump -i eth0 -n -U -s 0 -w /tmp/prod-realm.pcap "port 88 or port 754 or (ip[6:2] & 0x1fff != 0)" >/tmp/tcpdump.log 2>&1 & echo $! >/tmp/tcpdump.pid'
     sleep 0.8
     CAP=1
+fi
+if [ "${KERBER_REQUIRE_REAL_PCAP:-0}" = "1" ] && [ "$CAP" != 1 ]; then
+    die "KERBER_REQUIRE_REAL_PCAP=1 but tcpdump is not available on the primary"
 fi
 
 echo "==== MIT kinit/kvno against primary ===="
@@ -284,23 +287,31 @@ if [ -f "$OUT/prod-realm.pcap" ]; then
         echo "$MSG" | grep -qw 13 || die "pcap missing TGS-REP (13)"
     fi
 else
+    if [ "${KERBER_REQUIRE_REAL_PCAP:-0}" = "1" ]; then
+        die "KERBER_REQUIRE_REAL_PCAP=1 but no eth0 pcap was archived"
+    fi
     echo "pcap_source=reconstructed" | tee "$OUT/pcap.stat"
     docker cp "$PRIMARY":/tmp/pdus "$OUT/pdus" 2>/dev/null || docker cp "$REPLICA":/tmp/pdus "$OUT/pdus" 2>/dev/null || true
     PCAP="$OUT/prod-realm.pcap"
-    python3 - "$OUT/pdus" "$PCAP" <<'PY' || true
+    python3 - "$OUT/pdus" "$PCAP" <<'PY'
 import pathlib, struct, sys, time
 src, dst = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 if not src.is_dir():
-    sys.exit(0)
+    print("reconstructed pdu dir missing", file=sys.stderr)
+    sys.exit(1)
 files = sorted(src.glob("*.der"))
 gh = struct.pack("<IHHIIII", 0xA1B2C3D4, 2, 4, 0, 0, 65535, 101)
 pkts = []
 ts = time.time()
 sport = 50000
+types = set()
 for i, f in enumerate(files):
     payload = f.read_bytes()
     if not payload:
         continue
+    tag = payload[0]
+    if 0x60 <= tag <= 0x7F:
+        types.add(tag - 0x60)
     sip, dip = (b"\x7f\x00\x00\x01", b"\x7f\x00\x00\x01")
     sp, dp = (sport, 88) if "req" in f.name else (88, sport)
     udp_len = 8 + len(payload)
@@ -311,8 +322,12 @@ for i, f in enumerate(files):
     sec = int(ts)
     usec = int((ts - sec) * 1e6) + i
     pkts.append(struct.pack("<IIII", sec, usec, len(pkt), len(pkt)) + pkt)
+need = {10, 11, 12, 13}
+if not need.issubset(types):
+    print(f"reconstructed PDUs missing AS/TGS; have={sorted(types)} need={sorted(need)}", file=sys.stderr)
+    sys.exit(1)
 dst.write_bytes(gh + b"".join(pkts))
-print(f"pcap_pdus={len(pkts)} pcap_bytes={dst.stat().st_size}")
+print(f"pcap_pdus={len(pkts)} pcap_bytes={dst.stat().st_size} msg_types={' '.join(str(t) for t in sorted(types))}")
 PY
     echo "pcap_source=reconstructed" | tee -a "$OUT/pcap.stat"
     if [ "$CAP" = 1 ]; then

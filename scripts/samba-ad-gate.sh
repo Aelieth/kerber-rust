@@ -76,10 +76,10 @@ fi
 
 REALM="${SAMBA_AD_REALM:-}"
 USER="${SAMBA_AD_USER:-Administrator}"
-PASSWORD="${SAMBA_AD_PASSWORD:-}"
+PASSWORD="${SAMBA_AD_PASSWORD:-Samba-Admin-Kerber-2026!}"
 if [ -z "$REALM" ] || [ -z "$PASSWORD" ]; then
     docker logs "$NAME" >>"$UNAVAIL" 2>&1 || true
-    unavailable "Samba KDC listening but SAMBA_AD_REALM/SAMBA_AD_PASSWORD unset; refusing exit 0 without kinit"
+    unavailable "Samba KDC listening but SAMBA_AD_REALM unset; refusing exit 0 without kinit"
 fi
 
 docker exec "$NAME" sh -c "cat >/tmp/samba-krb5.conf <<EOF
