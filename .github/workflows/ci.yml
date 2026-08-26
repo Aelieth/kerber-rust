@@ -87,6 +87,12 @@ jobs:
         env:
           KERBER_REQUIRE_REAL_PCAP: "1"
         run: ./scripts/prod-realm-gate.sh
+      - name: stress-gate (wire AS+TGS + latency SLO)
+        run: ./scripts/stress-gate.sh
+      - name: chaos-gate (netem + memory + failover-under-load)
+        run: ./scripts/chaos-gate.sh
+      - name: soak-gate (bounded leak detection)
+        run: ./scripts/soak-gate.sh
       - name: cross-realm-gate
         run: ./scripts/cross-realm-gate.sh
       - name: spake-gate

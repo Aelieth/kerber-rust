@@ -1,0 +1,25 @@
+name: soak
+
+on:
+  schedule:
+    - cron: "47 5 * * *"
+  workflow_dispatch:
+
+jobs:
+  soak:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build MIT harness image
+        run: ./scripts/run-harness.sh
+      - name: Stop MIT harness
+        if: always()
+        run: ./scripts/stop-harness.sh || true
+      - name: Build prod-node capture image
+        run: docker build -f harness/prod/Dockerfile -t kerber-rust-prod-node:latest .
+      - name: soak-gate (scheduled window)
+        env:
+          KERBER_SOAK_SECONDS: "300"
+          KERBER_REQUIRE_REAL_PCAP: "1"
+        run: ./scripts/soak-gate.sh
