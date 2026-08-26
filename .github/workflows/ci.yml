@@ -90,6 +90,8 @@ jobs:
       - name: stress-gate (wire AS+TGS + latency SLO)
         run: ./scripts/stress-gate.sh
       - name: chaos-gate (netem + memory + failover-under-load)
+        env:
+          KERBER_REQUIRE_NETEM: "1"
         run: ./scripts/chaos-gate.sh
       - name: soak-gate (bounded leak detection)
         run: ./scripts/soak-gate.sh

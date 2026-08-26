@@ -75,6 +75,9 @@ fi
 if [ "$NETEM_OK" = 1 ]; then
     echo "netem: MIT ok, no panic" | tee -a "$OUT/netem.log"
 fi
+if [ "${KERBER_REQUIRE_NETEM:-0}" = "1" ] && [ "$NETEM_OK" != "1" ]; then
+    die "KERBER_REQUIRE_NETEM=1 but netem was not applied"
+fi
 
 echo "==== low memory cap $MEM_CAP under load ===="
 if docker update --memory "$MEM_CAP" --memory-swap "$MEM_CAP" "$PRIMARY" 2>"$OUT/mem-update.err"; then
@@ -109,6 +112,9 @@ prod_loadgen "$PIP" >"$OUT/loadgen-failover.log" 2>&1 &
 LG_PID=$!
 sleep 1.5
 docker kill "$PRIMARY" >/dev/null
+RUNNING="$(docker inspect -f '{{.State.Running}}' "$PRIMARY" 2>/dev/null || echo missing)"
+echo "primary_running=$RUNNING" | tee "$OUT/primary-after-kill.txt"
+[ "$RUNNING" = "false" ] || die "primary still running after docker kill (running=$RUNNING)"
 prod_point_client_at "$RIP"
 prod_client kdestroy -A >/dev/null 2>&1 || true
 prod_client sh -c "printf '%s\n' '$KERBER_PROD_USER_PW' | kinit user@$REALM" \
