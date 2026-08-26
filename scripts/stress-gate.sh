@@ -15,8 +15,9 @@ SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-stress-gate}"
 OUT="$SCRATCH/stress-gate"
 mkdir -p "$OUT"
 
-P99_MAX_US="${KERBER_SLO_P99_MAX_US:-500000}"
-THROUGHPUT_MIN="${KERBER_SLO_THROUGHPUT_MIN:-4}"
+P99_MAX_US="${KERBER_SLO_P99_MAX_US:-50000}"
+THROUGHPUT_MIN="${KERBER_SLO_THROUGHPUT_MIN:-8}"
+DEGRADE_FACTOR="${KERBER_SLO_DEGRADE_FACTOR:-2.5}"
 export KERBER_LOAD_WORKERS="${KERBER_LOAD_WORKERS:-8}"
 export KERBER_LOAD_ITERS="${KERBER_LOAD_ITERS:-8}"
 
@@ -94,9 +95,11 @@ python3 "$ROOT/scripts/lib/analyze-kdc-slo.py" \
     --max-error-rate 0 \
     --min-issue-ok 16 \
     --elapsed-s "$ELAPSED" \
+    --windows 2 \
+    --degrade-factor "$DEGRADE_FACTOR" \
     || die "SLO analysis failed"
 
-echo "slo_p99_max_us=$P99_MAX_US throughput_min=$THROUGHPUT_MIN" | tee "$OUT/slo.bounds"
+echo "slo_p99_max_us=$P99_MAX_US throughput_min=$THROUGHPUT_MIN degrade_factor=$DEGRADE_FACTOR" | tee "$OUT/slo.bounds"
 log "stress.gate" "ok" \
-    ",\"realm\":\"$REALM\",\"p99_max_us\":$P99_MAX_US,\"throughput_min\":$THROUGHPUT_MIN"
+    ",\"realm\":\"$REALM\",\"p99_max_us\":$P99_MAX_US,\"throughput_min\":$THROUGHPUT_MIN,\"degrade_factor\":$DEGRADE_FACTOR"
 exit 0
