@@ -3,8 +3,9 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{decrypt, string_to_key, EncryptionType, KeyUsage, ProtocolKey};
 use krb5_kdc::{
-    as_req, bootstrap_documented, documented_admin_id, documented_host, pa_enc_timestamp, tgs_req,
-    Acl, AdminOp, Error, PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
+    acl_for_store, as_req, bootstrap_documented, documented_admin_id, documented_host,
+    pa_enc_timestamp, tgs_req, Acl, AdminOp, Error, PrincipalStore, S2K_ITERS, TEST_REALM,
+    TEST_USER, TEST_USER_PASSWORD,
 };
 use krb5_protocol::Keytab;
 use krb5_protocol::{build_ap_req, verify_ap_req, ReplayCache};
@@ -369,6 +370,53 @@ fn hostile_keytab_does_not_panic() {
     let r = catch_unwind(|| krb5_protocol::Keytab::parse(&non_ascii));
     assert!(r.is_ok());
     assert!(r.unwrap().is_err());
+}
+
+#[test]
+fn kadmind_acl_follows_store_realm_or_acl_file() {
+    let none = acl_for_store("PROD.KERBER.TEST", None).expect("default acl");
+    assert!(none
+        .check("admin@PROD.KERBER.TEST", AdminOp::Create)
+        .is_ok());
+    assert_eq!(
+        none.check("admin@KERBER.TEST", AdminOp::Create)
+            .unwrap_err(),
+        Error::AclDenied
+    );
+
+    let dir = std::env::temp_dir().join(format!(
+        "kadmind-acl-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("kadm5.acl");
+    std::fs::write(
+        &path,
+        "admin@PROD.KERBER.TEST *\noperator@PROD.KERBER.TEST i\n",
+    )
+    .unwrap();
+    let file = acl_for_store("PROD.KERBER.TEST", Some(&path)).expect("file acl");
+    assert!(file
+        .check("admin@PROD.KERBER.TEST", AdminOp::Create)
+        .is_ok());
+    assert!(file
+        .check("operator@PROD.KERBER.TEST", AdminOp::Inquire)
+        .is_ok());
+    assert_eq!(
+        file.check("admin@KERBER.TEST", AdminOp::Create)
+            .unwrap_err(),
+        Error::AclDenied
+    );
+    assert_eq!(
+        file.check("operator@PROD.KERBER.TEST", AdminOp::Create)
+            .unwrap_err(),
+        Error::AclDenied
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

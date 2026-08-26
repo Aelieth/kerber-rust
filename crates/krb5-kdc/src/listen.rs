@@ -340,7 +340,18 @@ fn handle_tcp(
     stream.set_read_timeout(Some(timeout))?;
     stream.set_write_timeout(Some(timeout))?;
     let mut hdr = [0u8; 4];
-    stream.read_exact(&mut hdr)?;
+    match stream.read_exact(&mut hdr) {
+        Ok(()) => {}
+        // MIT may TCP-connect :88 and leave without a PDU.
+        Err(e)
+            if e.kind() == io::ErrorKind::UnexpectedEof
+                || e.kind() == io::ErrorKind::TimedOut
+                || e.kind() == io::ErrorKind::WouldBlock =>
+        {
+            return Ok(());
+        }
+        Err(e) => return Err(e),
+    }
     let n = usize::try_from(u32::from_be_bytes(hdr)).unwrap_or(usize::MAX);
     if n == 0 || n > max_body {
         return Err(io::Error::new(
@@ -349,7 +360,17 @@ fn handle_tcp(
         ));
     }
     let mut req = vec![0u8; n];
-    stream.read_exact(&mut req)?;
+    match stream.read_exact(&mut req) {
+        Ok(()) => {}
+        Err(e)
+            if e.kind() == io::ErrorKind::UnexpectedEof
+                || e.kind() == io::ErrorKind::TimedOut
+                || e.kind() == io::ErrorKind::WouldBlock =>
+        {
+            return Ok(());
+        }
+        Err(e) => return Err(e),
+    }
     let reply = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         read_store(store, |s| handle_request(s, &req))
     })) {

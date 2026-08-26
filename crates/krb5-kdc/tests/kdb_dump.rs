@@ -341,3 +341,50 @@ fn krb5_kdb_cli_load_and_dump_content() {
     assert!(written.contains("host/testhost.kerber.test@KERBER.TEST"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn krb5_kdb_cli_create_named_realm_dump_v7() {
+    let dir = std::env::temp_dir().join(format!(
+        "krb5-kdb-create-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::create_dir_all(&dir);
+    let db = dir.join("principal");
+    let stash = dir.join("stash");
+    let bin = env!("CARGO_BIN_EXE_krb5-kdb");
+
+    let out = Command::new(bin)
+        .args(["create", "PROD.KERBER.TEST"])
+        .env("KRB5_MASTER_PASSWORD", "masterpassword")
+        .env("KRB5_TEST_USER_PASSWORD", "userpassword")
+        .env("KRB5_TEST_ADMIN_PASSWORD", "adminpassword")
+        .env("KRB5_KDC_DB", &db)
+        .env("KRB5_KDC_STASH", &stash)
+        .output()
+        .expect("run create");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "create failed: {stdout}{stderr}");
+    assert!(
+        stdout.contains("ok create version=7"),
+        "create stdout must report version: {stdout}"
+    );
+    assert!(
+        stdout.contains("realm=PROD.KERBER.TEST"),
+        "create stdout must report realm: {stdout}"
+    );
+    let written = std::fs::read_to_string(&db).expect("read created db");
+    assert!(
+        written.starts_with("kdb5_util load_dump version 7\n"),
+        "created file header"
+    );
+    assert!(
+        written.contains("krbtgt/PROD.KERBER.TEST@PROD.KERBER.TEST"),
+        "created file must contain krbtgt: {written}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

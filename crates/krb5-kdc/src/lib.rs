@@ -81,7 +81,65 @@ pub fn documented_changepw() -> PrincipalName {
 /// `admin@KERBER.TEST` actor string.
 #[must_use]
 pub fn documented_admin_id() -> String {
-    format!("{TEST_ADMIN}@{TEST_REALM}")
+    admin_id_for_realm(TEST_REALM)
+}
+
+/// `admin@<realm>` actor string used by kadmind when no `acl_file` is set.
+#[must_use]
+pub fn admin_id_for_realm(realm: &str) -> String {
+    format!("{TEST_ADMIN}@{realm}")
+}
+
+/// `host/testhost.<realm-as-dns>` as NT-SRV-HST.
+#[must_use]
+pub fn host_for_realm(realm: &str) -> PrincipalName {
+    let inst = format!("testhost.{}", realm.to_ascii_lowercase());
+    PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", inst.as_str()])
+}
+
+/// Kadmind ACL: `acl_file` when it grants `admin@<realm>`, else that admin with `*`.
+///
+/// # Errors
+///
+/// Returns [`Error::Crypto`] when `acl_file` is set but unreadable.
+pub fn acl_for_store(realm: &str, acl_file: Option<&std::path::Path>) -> Result<Acl, Error> {
+    let default = Acl::allow_admin(admin_id_for_realm(realm));
+    let Some(path) = acl_file else {
+        return Ok(default);
+    };
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| Error::Crypto(format!("acl_file {}: {e}", path.display())))?;
+    let parsed = Acl::parse(&text);
+    // MIT harness `*/admin@REALM` does not match `admin@REALM`.
+    if parsed
+        .check(&admin_id_for_realm(realm), AdminOp::Create)
+        .is_ok()
+    {
+        Ok(parsed)
+    } else {
+        Ok(default)
+    }
+}
+
+/// Bootstrap a named realm: krbtgt, user, admin, host, `kadmin/admin`, `kadmin/changepw`.
+///
+/// # Errors
+///
+/// Returns crypto failures from string-to-key or ACL-gated host create.
+pub fn bootstrap_realm(
+    realm: &str,
+    user: &str,
+    user_password: &[u8],
+    admin: &str,
+    admin_password: &[u8],
+) -> Result<(PrincipalStore, Acl), Error> {
+    let mut store = PrincipalStore::bootstrap(realm, user, user_password, admin, admin_password)?;
+    let actor = admin_id_for_realm(realm);
+    let acl = Acl::allow_admin(&actor);
+    store.create_host(&acl, &actor, &host_for_realm(realm))?;
+    store.create_host(&acl, &actor, &documented_kadmin())?;
+    store.create_host(&acl, &actor, &documented_changepw())?;
+    Ok((store, acl))
 }
 
 /// Bootstrap the documented realm: krbtgt, user, admin, host.
@@ -90,16 +148,11 @@ pub fn documented_admin_id() -> String {
 ///
 /// Returns crypto failures from string-to-key or ACL-gated host create.
 pub fn bootstrap_documented() -> Result<(PrincipalStore, Acl), Error> {
-    let mut store = PrincipalStore::bootstrap(
+    bootstrap_realm(
         TEST_REALM,
         TEST_USER,
         TEST_USER_PASSWORD,
         TEST_ADMIN,
         TEST_ADMIN_PASSWORD,
-    )?;
-    let acl = Acl::allow_admin(documented_admin_id());
-    store.create_host(&acl, &documented_admin_id(), &documented_host())?;
-    store.create_host(&acl, &documented_admin_id(), &documented_kadmin())?;
-    store.create_host(&acl, &documented_admin_id(), &documented_changepw())?;
-    Ok((store, acl))
+    )
 }

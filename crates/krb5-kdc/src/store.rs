@@ -315,7 +315,8 @@ impl PrincipalStore {
             return Ok(());
         }
         tracing::info!(
-            event = krb5_log::events::KDC_ISSUE,
+            event = krb5_log::events::KDC_LISTEN,
+            correlation_id = krb5_log::current_correlation_id(),
             component = "krb5-kdc",
             outcome = "ok",
             detail = "reload store",
