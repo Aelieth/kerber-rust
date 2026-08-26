@@ -21,10 +21,16 @@ this project uses semantic versioning once a crate is published.
   a live Rust KDC and MIT 1.22.2 `krb5kdc` at once and
   `examples/diffsend.rs` sends the same encoded AS/TGS bytes to both.
   KRB-ERROR compares `error_code`/`realm`/`sname` (times/`e_text`
-  masked). Success replies decrypt, null volatiles, and compare the
-  stable set. Known MIT divergences are named in `docs/testing.md`
-  (`mit-renewable-flags`, `mit-as-padata`, `mit-as-enc-app-26`).
-  Un-whitelisted mismatch fails red. In CI after `kdb-dump-gate`.
+  masked). PREAUTH ETYPE-INFO2 requires the MIT etype set ⊆ the Rust
+  set. Success replies decrypt, null volatiles, and compare the
+  stable set including the full ticket-flag word (only named
+  whitelist bits masked). Known MIT divergences are named in
+  `docs/testing.md`. Un-whitelisted mismatch fails red. The compare
+  surface is feature `diff`, not the default public API. TGS success
+  uses a hand-minted PAC-less TGT (exported krbtgt etype 20); PAC
+  copy/re-sign is not on this path. Rust issues renewable when
+  requested; `mit-renewable-flags` is default-policy, not a missing
+  flag. In CI after `kdb-dump-gate`.
 - C2 soak/stress/chaos over the multi-host realm: `scripts/stress-gate.sh`
   drives concurrent wire AS+TGS (`krb5-client` `examples/loadgen.rs`)
   with MIT `kinit`/`kvno` sampling and fails unless KDC `duration_us`

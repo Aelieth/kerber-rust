@@ -169,16 +169,27 @@ Era II gates. The harness CI job runs `kadmin-gate`, `kpasswd-gate`,
   KRB-ERROR compares `error_code`/`realm`/`sname` (mask
   `stime`/`susec`/`ctime`/`cusec`/`e_text`; PREAUTH `e_data` is
   structural; extra FAST/SPAKE PA types are mechanism ads; MIT
-  ETYPE-INFO2 lists the chosen etype, Rust lists every key). A foreign-realm AS-REQ is MIT `C_PRINCIPAL_UNKNOWN(6)`
+  ETYPE-INFO2 must be a subset of the Rust set — MIT lists the
+  chosen etype, Rust lists every key). A foreign-realm AS-REQ is MIT `C_PRINCIPAL_UNKNOWN(6)`
   echoing the requested realm/sname, not RFC `WRONG_REALM(68)`.
   A TGS with a non-krbtgt presented ticket is MIT `NOT_US(35)`
   ("The ticket isn't for us"), not `NO_TGT(67)`.
   AS-REP/TGS-REP decrypt, null volatiles, and compare the
-  stable set. Un-whitelisted divergence is fail-red. Honest `exit 2`
+  stable set. Ticket flags compare the full flag word; only named
+  whitelist bits (renewable, canonicalize) are masked. Un-whitelisted
+  divergence is fail-red. Honest `exit 2`
   only when docker/MIT image is absent. In CI (bare `run:`).
+  Compare lives behind `krb5-protocol` feature `diff` (`examples/diffsend`
+  and the unit fixture); it is not on the default public API.
+  **TGS vehicle:** success TGS cases mint a PAC-less TGT with the
+  exported krbtgt key (etype 20, empty `tr-type` 1). A live Rust PAC
+  TGT is `PROCESS_TGS` at MIT; an MIT PAC TGT fails Rust type-16
+  verify. PAC copy/re-sign is not exercised on this path.
   **Whitelist (with justification):**
-  - `mit-renewable-flags` — MIT issues renewable tickets; Rust does
-    not (`kdb-dump-gate` `klist` `renew until` vs half A).
+  - `mit-renewable-flags` — MIT default policy issues renewable
+    tickets (`kdb-dump-gate` `klist` `renew until`). Rust *does*
+    issue renewable when the client requests it; the remaining gap
+    is default-policy, not an inability to set the flag.
   - `mit-as-padata` — MIT adds `PA-ETYPE-INFO2` / `PA-SUPPORTED-ENCTYPES`
     on replies; those types are filtered before compare.
   - `mit-as-enc-app-26` — MIT wraps AS enc-part as APPLICATION 26
@@ -189,8 +200,8 @@ Era II gates. The harness CI job runs `kadmin-gate`, `kpasswd-gate`,
   - `mit-empty-transited-type` — MIT `tr-type` 1 with empty contents;
     Rust `tr-type` 0.
   - `mit-extra-ticket-flags` — MIT sets canonicalize (bit 15) on issued
-    tickets; compare uses forwardable/initial/pre-authent (and
-    renewable when not whitelisted).
+    tickets; that bit is masked. Any other un-whitelisted flag bit
+    fails red.
 - `scripts/kprop-gate.sh` — MIT `kprop` of a version-7 dump to
   `krb5-kpropd` on 754 (`kprop5_01` sendauth, KRB-SAFE size, KRB-PRIV
   32768-byte chunks), then MIT `kinit user` against the replica Rust
