@@ -47,8 +47,10 @@ to full 1.0 parity is tracked in `working/plan-roadmap-adprod-*.md`:
   backend is MIT `kdb5_util` dump/load (`krb5-kdb`, version 7): MIT
   `kinit` against the Rust KDC on a loaded dump, and MIT `krb5kdc` +
   `kinit` on a Rust-written dump (`scripts/kdb-dump-gate.sh`).
-- **Track C — Production verification:** `scripts/prod-gate.sh` twice:
-  `krb5-kinit` AS+TGS, JSON log analysis, archived PDU pcap. Bounded
+- **Track C — Production verification:** `scripts/prod-gate.sh` (loopback
+  Rust↔Rust) plus **`scripts/prod-realm-gate.sh`** (MIT client vs Rust
+  primary/replica on a docker network, realm `PROD.KERBER.TEST`, kprop
+  failover, structured logs + NIC pcap). Bounded
   stress + UDP chaos twice. `cargo deny`; `cargo geiger` is installed but a
   no-op on the virtual manifest (needs a per-package target); `cargo vet`
   absent. Samba/Heimdal/SSPI oracles captured unavailable. **1.0 is not
@@ -64,12 +66,14 @@ tests; `kvno` is not that copy proof). Rust S4U2Self/Proxy is
 MIT-gated in CI (`scripts/s4u-mit-gate.sh`); S4U2Proxy copies the evidence
 PAC, denies classic constrained delegation unless `s4u_allowed_to` lists
 the target, and denies RBCD unless allowed. `ad-windows-gate` / `ad-s4u-gate` are live Samba in CI.
-`ad-mit-trust-gate.sh` aliases `samba-realtrust-gate.sh`. The **prod-gate
-is a single-process Rust↔Rust loopback** (now in CI). `bounded_stress`
+`ad-mit-trust-gate.sh` aliases `samba-realtrust-gate.sh`. **C1** is
+`prod-gate.sh` (loopback) plus **`prod-realm-gate.sh`** (multi-host MIT
+client, named realm, kprop failover; in CI). `bounded_stress`
 asserts concurrent AS+TGS; soak/differential absent. **kprop** on 754
-is gated both directions. **kadmind** MIT-gates add/get/list/mod/chrand/
+is gated both directions (`kprop-gate` MIT→Rust; `kprop-reverse-gate`
+Rust→MIT, additive to the in-process dump/send tests). **kadmind** MIT-gates add/get/list/mod/chrand/
 `renprinc`/del. Harness CI runs `pkinit-gate`, `kadmin-gate`,
 `kpasswd-gate`, `kdb-dump-gate`, `kprop-gate`, `kprop-reverse-gate`,
-`restart-gate`, `prod-gate`, `s4u-mit-gate`, `samba-ad-gate`,
+`restart-gate`, `prod-gate`, `prod-realm-gate`, `s4u-mit-gate`, `samba-ad-gate`,
 `ad-windows-gate`, `ad-s4u-gate`, `samba-pac-verify-gate`,
 `samba-pac-l2-gate`, `samba-crossrealm-gate`, `samba-realtrust-gate`.

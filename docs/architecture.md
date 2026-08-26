@@ -80,7 +80,9 @@ AP-REQ framing (library tests) and `krb5-kadmind` ONC RPC program 2112
 version 7 (`sendauth` `kprop5_01`, KRB-SAFE size, KRB-PRIV chunks).
 MIT `kprop` then MIT `kinit` is gated by `scripts/kprop-gate.sh`.
 Rust `krb5-kprop` → MIT `kpropd` then MIT `kinit` is
-`scripts/kprop-reverse-gate.sh`.
+`scripts/kprop-reverse-gate.sh` (additive to the in-process kprop tests).
+C1 multi-host MIT client vs Rust primary/replica is
+`scripts/prod-realm-gate.sh`.
 MIT 1.22.2 `kadmin` add/get/list/mod/chrand/del is gated by
 `scripts/kadmin-gate.sh`. A kadmind mutation survives KDC process
 relaunch (`scripts/restart-gate.sh`).

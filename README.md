@@ -22,7 +22,7 @@ at-rest file is MIT dump version 7 (stash holds the master key).
 `bidirectional-gate` is Rust↔Rust, not a MIT oracle.
 **CI coverage:** the AS/TGS, GSS, PKINIT, SPAKE, SHA-2, and cross-realm gates
 plus `kadmin-gate`, `kpasswd-gate`, `kdb-dump-gate`, `kprop-gate`,
-`kprop-reverse-gate`, `restart-gate`, `prod-gate`, `s4u-mit-gate`,
+`kprop-reverse-gate`, `restart-gate`, `prod-gate`, `prod-realm-gate`, `s4u-mit-gate`,
 `samba-ad-gate`, `ad-windows-gate`, `ad-s4u-gate`,
 `samba-pac-verify-gate`, `samba-pac-l2-gate`, `samba-crossrealm-gate`,
 and `samba-realtrust-gate` in the harness job. The `ad-*` gates drive

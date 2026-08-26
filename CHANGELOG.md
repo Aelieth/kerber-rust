@@ -17,6 +17,15 @@ this project uses semantic versioning once a crate is published.
 
 ### Added
 
+- C1 multi-host prod realm: `krb5-kdb create <realm>` writes dump
+  version 7; kadmind ACL is `admin@<store.realm()>` (or `acl_file`);
+  kpropd realm is `KRB5_KDC_REALM` (fallback `KRB5_TEST_REALM`) and the
+  documented `host/testhost.kerber.test` keytab fallback is test-realm
+  only. `scripts/prod-realm-gate.sh` drives MIT `kinit`/`kvno`/`kadmin`
+  on `PROD.KERBER.TEST` across a docker network, Rust `krb5-kprop` to a
+  replica, primary-kill failover, structured-log analysis, and a real
+  NIC pcap when `NET_RAW` works. In CI after loopback `prod-gate`.
+  `restart-gate` also has MIT `kdb5_util` load the daemon persist file.
 - AD PAC: MS-RPCE NDR32 `KERB_VALIDATION_INFO` in field-encounter
   referent order. Golden `tests/traces/pac-kbruser.ndr` (kbruser /
   kbrgroup / ADKERBER SID) re-encodes byte-identically. Server checksum
@@ -89,7 +98,7 @@ this project uses semantic versioning once a crate is published.
 - `bounded_stress_handle_request` asserts 64 concurrent valid AS+TGS
   succeed. Harness CI runs `kadmin-gate`, `kpasswd-gate`, `kdb-dump-gate`,
   `kprop-gate`, `kprop-reverse-gate`, `restart-gate`, `prod-gate`,
-  `s4u-mit-gate`, `samba-ad-gate`, `ad-windows-gate`, `ad-s4u-gate`,
+  `prod-realm-gate`, `s4u-mit-gate`, `samba-ad-gate`, `ad-windows-gate`, `ad-s4u-gate`,
   `samba-pac-verify-gate` (Samba IDL decode of a Rust PAC),
   `samba-pac-l2-gate` (vendored Samba kcrypto validates PAC 6/7/16/19;
   type-16 pre-image rebuilt in the oracle; a type-6 MAC flip and a

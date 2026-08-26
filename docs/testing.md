@@ -97,7 +97,7 @@ unlocked `--locked` fallback.
 
 Era II gates. The harness CI job runs `kadmin-gate`, `kpasswd-gate`,
 `kdb-dump-gate`, `kprop-gate`, `kprop-reverse-gate`, `restart-gate`,
-`prod-gate`, `s4u-mit-gate`, `samba-ad-gate`, `ad-windows-gate`,
+`prod-gate`, `prod-realm-gate`, `s4u-mit-gate`, `samba-ad-gate`, `ad-windows-gate`,
 `ad-s4u-gate`, `samba-pac-verify-gate`, `samba-pac-l2-gate`,
 `samba-crossrealm-gate`, and `samba-realtrust-gate` after `pkinit-gate`.
 `ad-*` are live Samba (`samba-ad-dc`), not the torn-down Windows DC.
@@ -169,15 +169,23 @@ Era II gates. The harness CI job runs `kadmin-gate`, `kpasswd-gate`,
   KDC. `klist` names `user@KERBER.TEST`. Run twice.
 - `scripts/kprop-reverse-gate.sh` — Rust `krb5-kprop` to MIT `kpropd`
   (`kpropd -S -P 754`), then MIT `krb5kdc` + MIT `kinit user@KERBER.TEST`.
-  Missing MIT image is `exit 2`. Run twice.
+  Additive to the in-process kprop dump/send tests in `krb5-admin`; it does
+  not replace them. Missing MIT image is `exit 2`. Run twice.
 - `scripts/restart-gate.sh` — MIT `kadmin addprinc extra`, MIT `kinit`,
   kill `krb5-kdc` by `/proc/PID/comm`, relaunch the same binary on the
-  same db/stash, MIT `kinit extra` still works. Run twice.
+  same db/stash, MIT `kinit extra` still works. Then MIT `kdb5_util load`
+  of the daemon-persisted dump-v7 file. Run twice.
 - `scripts/prod-gate.sh` — Rust KDC on `127.0.0.1:18888`, `krb5-kinit`
   AS+TGS, structured-log analysis (`kdc.issue` + `correlation_id`),
   PDU pcap under `$KERBER_SCRATCH/prod-gate/` (loopback CAP_NET_RAW
   is unavailable in rootless distrobox; pcap is reconstructed from
-  `KERBER_CAPTURE_DIR`).
+  `KERBER_CAPTURE_DIR`). Kept as the loopback gate.
+- `scripts/prod-realm-gate.sh` — C1 multi-host: `PROD.KERBER.TEST` on a
+  docker network (Rust primary + Rust replica + MIT client). MIT `kinit`/
+  `kvno`/`kadmin addprinc+ktadd` against the primary; Rust `krb5-kprop`
+  to the replica `:754`; kill primary; MIT `kinit`/`kvno` against the
+  replica. Structured-log analysis + real NIC pcap when `NET_RAW` works
+  (`pcap-source=reconstructed` otherwise). In CI after `prod-gate`.
 - `scripts/heimdal-gate.sh` / `scripts/gss-sspi-gate.sh` — exit 2 +
   unavailability log when those oracles are absent.
 - `scripts/ad-mit-trust-gate.sh` — alias of `samba-realtrust-gate.sh`

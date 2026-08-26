@@ -38,4 +38,6 @@ version 7`); MIT `kinit` both directions (`scripts/kdb-dump-gate.sh`
 loads the running KDC db file). Legacy KDB3 still loads for one
 release. MIT-wire kprop/kpropd on 754 wraps dump version 7 both
 directions (`scripts/kprop-gate.sh` MIT→Rust; `scripts/kprop-reverse-gate.sh`
-Rust `krb5-kprop` → MIT `kpropd` then MIT `kinit`).
+Rust `krb5-kprop` → MIT `kpropd` then MIT `kinit`; additive to the
+in-process kprop tests). C1 multi-host MIT client vs Rust primary/replica
+is `scripts/prod-realm-gate.sh`.
