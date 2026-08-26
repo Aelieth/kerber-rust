@@ -458,9 +458,11 @@ pub fn kprop_sendauth(
     let authenticator: krb5_types::Authenticator =
         decode(&auth_plain).map_err(|e| Error::Inner(e.to_string()))?;
     verify_ap_rep(&ap_rep_raw, session, &authenticator).map_err(|e| Error::Inner(e.to_string()))?;
+    // MIT kpropd expects the dump-size SAFE to use the authenticator
+    // sequence, not authenticator+1 (`Message out of order`).
     Ok(KpropAuth {
         session: session.clone(),
-        local_seq: seq.wrapping_add(1),
+        local_seq: seq,
         remote_seq: None,
         replay,
     })

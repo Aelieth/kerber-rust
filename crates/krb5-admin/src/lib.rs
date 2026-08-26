@@ -127,6 +127,17 @@ impl<'a> AdminSession<'a> {
             .map_err(Error::from)
     }
 
+    /// Rename (ACL add + delete).
+    ///
+    /// # Errors
+    ///
+    /// ACL, not found, or already exists.
+    pub fn rename(&mut self, old: &PrincipalName, new: &PrincipalName) -> Result<(), Error> {
+        self.store
+            .rename(self.acl, &self.actor, old, new)
+            .map_err(Error::from)
+    }
+
     /// Over-the-wire ktadd (ACL `inquire`).
     ///
     /// # Errors

@@ -40,6 +40,7 @@ const SUCCESS: u32 = 0;
 const CREATE_PRINCIPAL: u32 = 1;
 const DELETE_PRINCIPAL: u32 = 2;
 const MODIFY_PRINCIPAL: u32 = 3;
+const RENAME_PRINCIPAL: u32 = 4;
 const GET_PRINCIPAL: u32 = 5;
 const CHPASS_PRINCIPAL: u32 = 6;
 const CHRAND_PRINCIPAL: u32 = 7;
@@ -603,6 +604,17 @@ fn dispatch_kadm5(
                 Err(e) => Ok(generic_ret(API_V2, kadm5_code(&e))),
             }
         }
+        RENAME_PRINCIPAL => {
+            let (old, new) = parse_rename(args)?;
+            let mut g = store
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut sess = AdminSession::local(&mut g, acl, actor);
+            match sess.rename(&old, &new) {
+                Ok(()) => Ok(generic_ret(API_V2, 0)),
+                Err(e) => Ok(generic_ret(API_V2, kadm5_code(&e))),
+            }
+        }
         CHPASS_PRINCIPAL | CHPASS_PRINCIPAL3 => {
             let (name, pass) = parse_chpass(args, proc == CHPASS_PRINCIPAL3)?;
             let mut g = store
@@ -689,6 +701,14 @@ fn parse_one_princ(args: &[u8]) -> Result<PrincipalName, Error> {
     let mut r = XdrR::new(args);
     let _api = r.u32()?;
     r.principal()
+}
+
+fn parse_rename(args: &[u8]) -> Result<(PrincipalName, PrincipalName), Error> {
+    let mut r = XdrR::new(args);
+    let _api = r.u32()?;
+    let old = r.principal()?;
+    let new = r.principal()?;
+    Ok((old, new))
 }
 
 fn parse_chrand(args: &[u8], v3: bool) -> Result<PrincipalName, Error> {
@@ -1031,6 +1051,63 @@ mod tests {
         let b = generic_ret(API_V2, 0);
         assert_eq!(b.len(), 8);
         assert_eq!(&b[..4], &API_V2.to_be_bytes());
+    }
+
+    #[test]
+    fn parse_rename_reads_two_principals() {
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some("old@KERBER.TEST"));
+        w.nullstring(Some("new@KERBER.TEST"));
+        let (old, new) = parse_rename(&w.b).unwrap();
+        assert_eq!(old.components_joined(), "old");
+        assert_eq!(new.components_joined(), "new");
+    }
+
+    #[test]
+    fn rename_dispatch_keeps_rid_and_requires_add_delete() {
+        use krb5_kdc::{bootstrap_documented, documented_admin_id, shared_store, TEST_REALM};
+
+        let (mut store, acl) = bootstrap_documented().unwrap();
+        let actor = documented_admin_id();
+        let old = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["renamefrom"]);
+        let new = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["renameto"]);
+        store
+            .create_password(&acl, &actor, &old, b"rename-secret")
+            .unwrap();
+        let rid = store.get_name(&old).unwrap().rid;
+        let key = store
+            .get_name(&old)
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .as_bytes()
+            .to_vec();
+        let shared = shared_store(store);
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some(&format!("renamefrom@{TEST_REALM}")));
+        w.nullstring(Some(&format!("renameto@{TEST_REALM}")));
+        let ret = dispatch_kadm5(&shared, &acl, &actor, RENAME_PRINCIPAL, &w.b).unwrap();
+        assert_eq!(&ret[4..8], &0u32.to_be_bytes());
+        {
+            let g = shared.read().unwrap();
+            assert!(g.get_name(&old).is_none());
+            let p = g.get_name(&new).unwrap();
+            assert_eq!(p.rid, rid);
+            assert_eq!(p.best_key().unwrap().key.as_bytes(), key.as_slice());
+        }
+        let add_only = Acl::parse("admin@KERBER.TEST a\n");
+        let mut w2 = XdrW::default();
+        w2.u32(API_V2);
+        w2.nullstring(Some(&format!("renameto@{TEST_REALM}")));
+        w2.nullstring(Some(&format!("renamefrom@{TEST_REALM}")));
+        let denied = dispatch_kadm5(&shared, &add_only, &actor, RENAME_PRINCIPAL, &w2.b).unwrap();
+        assert_ne!(&denied[4..8], &0u32.to_be_bytes());
+        let g = shared.read().unwrap();
+        assert!(g.get_name(&new).is_some());
+        assert!(g.get_name(&old).is_none());
     }
 
     #[test]
