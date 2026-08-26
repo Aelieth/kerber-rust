@@ -93,6 +93,18 @@ fn tgs_inner(
     Err(Error::Referral)
 }
 
+/// RFC 4120 name-type is a hint. Heimdal canonicalize may return NT-SRV-HST
+/// for a host principal requested as NT-PRINCIPAL; compare name-strings.
+fn tgs_sname_matches(
+    requested: &PrincipalName,
+    ticket: &PrincipalName,
+    enc: &PrincipalName,
+) -> bool {
+    ticket.name_string == requested.name_string
+        || enc.name_string == requested.name_string
+        || ticket.is_krbtgt()
+}
+
 /// One TGS-REQ hop: stay, chase a referral, or reject a bad srealm.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TgsHop {
@@ -266,11 +278,12 @@ fn tgs_once(
     if enc_part.nonce != nonce {
         return Err(Error::NonceMismatch);
     }
-    if inner.ticket.sname != requested
-        && enc_part.sname != requested
-        && !inner.ticket.sname.is_krbtgt()
-    {
-        return Err(Error::ReplyMismatch("TGS-REP sname mismatch".into()));
+    if !tgs_sname_matches(&requested, &inner.ticket.sname, &enc_part.sname) {
+        return Err(Error::ReplyMismatch(format!(
+            "TGS-REP sname mismatch requested={} ticket={}",
+            requested.components_joined(),
+            inner.ticket.sname.components_joined()
+        )));
     }
     let session_etype = EncryptionType::from_iana(enc_part.key.keytype)
         .or_else(|_| EncryptionType::known(enc_part.key.keytype))?;
@@ -375,5 +388,20 @@ mod tests {
             tgs_hop_decision(&host, "KERBER.TEST", &out).unwrap(),
             TgsHop::Done
         );
+    }
+
+    #[test]
+    fn tgs_sname_ignores_name_type_rejects_wrong_components() {
+        let asked = PrincipalName::new(
+            PrincipalName::NT_PRINCIPAL,
+            ["host", "testhost.kerber.test"],
+        );
+        let heimdal =
+            PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
+        assert!(tgs_sname_matches(&asked, &heimdal, &heimdal));
+        let other = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "other.kerber.test"]);
+        assert!(!tgs_sname_matches(&asked, &other, &other));
+        let krbtgt = PrincipalName::krbtgt("OTHER.TEST");
+        assert!(tgs_sname_matches(&asked, &krbtgt, &krbtgt));
     }
 }
