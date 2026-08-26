@@ -5,13 +5,16 @@ Gates and the --self-test fixture share this path. Do not reimplement
 percentiles inside Rust tests.
 
 Documented CI bounds (debug build, bounded wire load):
-  p99 duration_us  <= 500000   (500 ms)
-  throughput       >= 4        (kdc.issue outcome=ok per second)
+  p99 duration_us  <= 50000    (50 ms; catches a 10x regression vs lab ~9.4 ms)
+  throughput       >= 8        (kdc.issue outcome=ok per second)
   error_rate       == 0
   panics           == 0
+Stress additionally:
+  second-window p99 <= first-window p99 * 2.5
 Soak additionally:
   second-window p99 <= first-window p99 * 2.5
-  RSS last <= first * 2.0 + 20 MiB
+  RSS last <= first * 1.5 + 8 MiB
+  RSS slope <= 0.05 MiB/s
 """
 from __future__ import annotations
 
@@ -119,12 +122,17 @@ def parse_rss(path: pathlib.Path | None) -> dict | None:
     first = samples[0][1]
     last = samples[-1][1]
     peak = max(s[1] for s in samples)
+    elapsed = samples[-1][0] - samples[0][0]
+    extra = last - first
+    slope = (extra / elapsed) if elapsed > 0 else None
     return {
         "samples": len(samples),
         "first_mib": first,
         "last_mib": last,
         "max_mib": peak,
         "growth": (last / first) if first > 0 else None,
+        "elapsed_s": elapsed,
+        "slope_mib_s": slope,
     }
 
 
@@ -176,6 +184,10 @@ def evaluate(args: argparse.Namespace, parsed: dict, rss: dict | None) -> dict:
             cap = first * args.rss_max_growth + args.rss_max_extra_mib
             if last > cap:
                 issues.append(f"rss_growth:{last}>{cap}")
+            slope_max = getattr(args, "rss_max_slope_mib_s", None)
+            slope = rss.get("slope_mib_s")
+            if slope_max is not None and slope is not None and slope > slope_max:
+                issues.append(f"rss_slope:{slope}>{slope_max}")
     outcome = "ok" if not issues else "error"
     return {
         "event": "kdc.slo",
@@ -228,6 +240,7 @@ def self_test() -> int:
             min_rss_samples=0,
             rss_max_growth=2.0,
             rss_max_extra_mib=20.0,
+            rss_max_slope_mib_s=None,
         )
         rep = evaluate(ns, parsed, None)
         if rep["outcome"] != "ok":
@@ -282,6 +295,36 @@ def self_test() -> int:
         ):
             print("self-test error-rate did not fail", json.dumps(rep_e), file=sys.stderr)
             return 1
+        rss_path = pathlib.Path(td) / "rss-leak.tsv"
+        rss_path.write_text(
+            "# epoch_s rss_mib\n"
+            "1000 8.0\n"
+            "1005 8.8\n"
+            "1010 9.6\n"
+            "1015 10.4\n"
+            "1020 11.2\n"
+            "1025 12.0\n"
+        )
+        rss_leak = parse_rss(rss_path)
+        ns.p99_max_us = 500000
+        ns.max_error_rate = 1.0
+        ns.min_issue_ok = 1
+        ns.throughput_min = None
+        ns.min_rss_samples = 5
+        ns.rss_max_growth = 2.0
+        ns.rss_max_extra_mib = 20.0
+        ns.rss_max_slope_mib_s = 0.05
+        rep_rss = evaluate(ns, parsed, rss_leak)
+        if rep_rss["outcome"] != "error" or not any(
+            i.startswith("rss_slope:") for i in rep_rss["issues"]
+        ):
+            print("self-test rss-slope did not fail", json.dumps(rep_rss), file=sys.stderr)
+            return 1
+        ns.rss_max_slope_mib_s = None
+        rep_old = evaluate(ns, parsed, rss_leak)
+        if rep_old["outcome"] != "ok":
+            print("self-test rss old-floor should pass", json.dumps(rep_old), file=sys.stderr)
+            return 1
     print("self-test ok")
     return 0
 
@@ -301,6 +344,7 @@ def main() -> int:
     ap.add_argument("--min-rss-samples", type=int, default=5)
     ap.add_argument("--rss-max-growth", type=float, default=2.0)
     ap.add_argument("--rss-max-extra-mib", type=float, default=20.0)
+    ap.add_argument("--rss-max-slope-mib-s", type=float, default=None)
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args()
     if args.self_test:
