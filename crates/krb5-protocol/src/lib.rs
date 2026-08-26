@@ -14,6 +14,7 @@ mod as_ex;
 mod builders;
 mod capture;
 mod ccache;
+mod diff;
 mod error;
 mod keytab;
 mod preauth;
@@ -34,6 +35,10 @@ pub use builders::{
 };
 pub use capture::capture_pdu;
 pub use ccache::{parse_principal, realm, tgt_cred, CcacheCred, FileCcache};
+pub use diff::{
+    compare_krb_error, compare_preauth_e_data, compare_stable_rep, decode_enc_kdc_rep,
+    stable_krb_error, stable_rep, CompareOk, DiffError, StableKrbError, StableRep, Whitelist,
+};
 pub use error::Error;
 pub use keytab::{Keytab, KeytabEntry};
 pub use preauth::{
@@ -49,4 +54,4 @@ pub use safe_priv::{
 };
 pub use secret_file::write_secret_file;
 pub use tgs::{referral_hop_realm, tgs_exchange, TgsOutcome};
-pub use transport::{exchange, exchange_with_failover, KdcAddr, KDC_PORT};
+pub use transport::{exchange, exchange_on_tcp, exchange_with_failover, KdcAddr, KDC_PORT};

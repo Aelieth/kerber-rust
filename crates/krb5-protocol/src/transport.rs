@@ -46,6 +46,16 @@ pub fn exchange(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
     exchange_with_failover(std::slice::from_ref(addr), request)
 }
 
+/// Send `request` on TCP only so a PAC-sized reply cannot silently upgrade UDP.
+///
+/// # Errors
+///
+/// Returns [`Error::Io`] on network failure.
+pub fn exchange_on_tcp(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
+    crate::capture_pdu("client-req", request);
+    exchange_tcp(addr, request)
+}
+
 /// Try each KDC in order with UDP retransmit/backoff (1s, 2s) then TCP.
 ///
 /// # Errors
