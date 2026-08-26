@@ -386,5 +386,17 @@ fn krb5_kdb_cli_create_named_realm_dump_v7() {
         written.contains("krbtgt/PROD.KERBER.TEST@PROD.KERBER.TEST"),
         "created file must contain krbtgt: {written}"
     );
+    assert!(
+        written.contains("kadmin/admin@PROD.KERBER.TEST"),
+        "create must seed kadmin/admin: {written}"
+    );
+    assert!(
+        written.contains("kadmin/changepw@PROD.KERBER.TEST"),
+        "create must seed kadmin/changepw: {written}"
+    );
+    assert!(
+        written.contains("host/testhost.prod.kerber.test@PROD.KERBER.TEST"),
+        "create must seed host/testhost.<dns>: {written}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

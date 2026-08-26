@@ -420,6 +420,33 @@ fn kadmind_acl_follows_store_realm_or_acl_file() {
 }
 
 #[test]
+fn acl_file_without_realm_admin_add_is_discarded_not_merged() {
+    let dir = std::env::temp_dir().join(format!(
+        "kadmind-acl-discard-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("kadm5.acl");
+    std::fs::write(&path, "operator@PROD.KERBER.TEST *\n").unwrap();
+    let acl = acl_for_store("PROD.KERBER.TEST", Some(&path)).expect("discard to default");
+    assert!(
+        acl.check("admin@PROD.KERBER.TEST", AdminOp::Create).is_ok(),
+        "realm admin must keep * after discard"
+    );
+    assert_eq!(
+        acl.check("operator@PROD.KERBER.TEST", AdminOp::Create)
+            .unwrap_err(),
+        Error::AclDenied,
+        "operator grant must not merge in when the file is discarded"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn documented_kadm5_acl_file_shape() {
     let text = include_str!("../../../harness/kadm5.acl");
     let acl = Acl::parse(text);
