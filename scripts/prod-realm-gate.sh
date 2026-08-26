@@ -7,24 +7,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
-. "$ROOT/harness/prod/limits.env"
+. "$ROOT/scripts/lib/prod-realm-common.sh"
 
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-prod-realm-gate}"
 OUT="$SCRATCH/prod-realm-gate"
 mkdir -p "$OUT"
-
-REALM="${KERBER_PROD_REALM:-PROD.KERBER.TEST}"
-export KERBER_PROD_REALM="$REALM"
-DNS_DOMAIN="$(printf '%s' "$REALM" | tr '[:upper:]' '[:lower:]')"
-PRIMARY="kerber-rust-prod-kdc1"
-REPLICA="kerber-rust-prod-kdc2"
-CLIENT="kerber-rust-prod-client"
-HOST_SMOKE="host/testhost.${DNS_DOMAIN}"
-HOST_APP="host/app.${DNS_DOMAIN}"
-HOST_REPLICA="host/kdc2.${DNS_DOMAIN}"
-REPLICA_FQDN="kdc2.${DNS_DOMAIN}"
 
 log() {
     printf '{"event":"%s","correlation_id":"%s","component":"prod-realm-gate","outcome":"%s"%s}\n' \
@@ -68,14 +57,8 @@ echo "==== env-up $REALM ===="
 "$ROOT/harness/prod/env-up.sh" | tee "$OUT/env-up.log"
 grep -q 'SMOKE OK' "$OUT/env-up.log" || die "env-up smoke did not pass"
 
-ip_of() { docker inspect -f "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}" "$1"; }
-PIP="$(ip_of "$PRIMARY")"; RIP="$(ip_of "$REPLICA")"; CIP="$(ip_of "$CLIENT")"
+PIP="$(prod_ip_of "$PRIMARY")"; RIP="$(prod_ip_of "$REPLICA")"; CIP="$(prod_ip_of "$CLIENT")"
 [ -n "$PIP" ] && [ -n "$RIP" ] && [ -n "$CIP" ] || die "IP discovery failed"
-CONF=/tmp/prod-krb5.conf
-
-client() {
-    docker exec -e KRB5_CONFIG="$CONF" "$CLIENT" "$@"
-}
 
 analyze_logs() {
     local src="$1" dest="$2"
@@ -140,64 +123,20 @@ if [ "${KERBER_REQUIRE_REAL_PCAP:-0}" = "1" ] && [ "$CAP" != 1 ]; then
 fi
 
 echo "==== MIT kinit/kvno against primary ===="
-client kdestroy -A >/dev/null 2>&1 || true
-client sh -c "printf '%s\n' '$KERBER_PROD_USER_PW' | kinit user@$REALM" \
+prod_client kdestroy -A >/dev/null 2>&1 || true
+prod_client sh -c "printf '%s\n' '$KERBER_PROD_USER_PW' | kinit user@$REALM" \
     | tee "$OUT/kinit-primary.log"
-KVNO1="$(client kvno "${HOST_SMOKE}@$REALM" 2>&1 | tee -a "$OUT/kinit-primary.log")"
+KVNO1="$(prod_client kvno "${HOST_SMOKE}@$REALM" 2>&1 | tee -a "$OUT/kinit-primary.log")"
 echo "$KVNO1"
-KL1="$(client klist 2>&1 | tee "$OUT/klist-primary.txt")"
+KL1="$(prod_client klist 2>&1 | tee "$OUT/klist-primary.txt")"
 echo "$KL1"
 echo "$KL1" | grep -q "krbtgt/${REALM}" || die "klist missing krbtgt/$REALM"
 echo "$KL1" | grep -q "testhost.${DNS_DOMAIN}" || die "klist missing $HOST_SMOKE"
 
-echo "==== MIT kadmin addprinc+ktadd then kvno ===="
-client kadmin -p "admin@$REALM" -w "$KERBER_PROD_ADMIN_PW" \
-    -q "addprinc -randkey $HOST_APP" | tee "$OUT/kadmin.log"
-client kadmin -p "admin@$REALM" -w "$KERBER_PROD_ADMIN_PW" \
-    -q "ktadd -k /tmp/app.keytab $HOST_APP" | tee -a "$OUT/kadmin.log"
-client kvno "${HOST_APP}@$REALM" | tee "$OUT/kvno-app.log"
-KLAPP="$(client klist 2>&1 | tee "$OUT/klist-app.txt")"
-echo "$KLAPP" | grep -q "app.${DNS_DOMAIN}" || die "klist missing $HOST_APP after kadmin"
-
-echo "==== kprop primary -> replica ===="
-client kadmin -p "admin@$REALM" -w "$KERBER_PROD_ADMIN_PW" \
-    -q "addprinc -randkey $HOST_REPLICA" | tee -a "$OUT/kadmin.log"
-client kadmin -p "admin@$REALM" -w "$KERBER_PROD_ADMIN_PW" \
-    -q "ktadd -k /tmp/kdc2.keytab $HOST_REPLICA" | tee -a "$OUT/kadmin.log"
-docker cp "$CLIENT":/tmp/kdc2.keytab "$OUT/kdc2.keytab"
-docker cp "$OUT/kdc2.keytab" "$PRIMARY":/tmp/kdc2.keytab
-docker cp "$OUT/kdc2.keytab" "$REPLICA":/tmp/kdc2.keytab
-
-docker exec "$REPLICA" mkdir -p /tmp/pdus
-docker exec -d \
-    -e KRB5_MASTER_PASSWORD="$KERBER_PROD_MASTER_PW" \
-    -e KRB5_KPROP_KEYTAB=/tmp/kdc2.keytab \
-    -e KRB5_KDC_DB=/tmp/replica.db \
-    -e KRB5_KDC_STASH=/tmp/replica.stash \
-    -e KRB5_KDC_REALM="$REALM" \
-    -e RUST_LOG=info \
-    "$REPLICA" sh -c '/usr/local/bin/krb5-kpropd 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
-ok=0
-for _ in $(seq 1 40); do
-    docker exec "$REPLICA" grep -q '^listening' /tmp/kpropd.log 2>/dev/null && { ok=1; break; }
-    sleep 0.25
-done
-[ "$ok" = 1 ] || {
+echo "==== kprop primary -> replica (shared helper) ===="
+prod_kprop_replica || {
     docker exec "$REPLICA" cat /tmp/kpropd.log >&2 || true
-    die "kpropd did not listen"
-}
-
-KPROP="$(docker exec \
-    -e KRB5_KDC_DB=/tmp/prod.db \
-    -e KRB5_KDC_STASH=/tmp/prod.stash \
-    -e KRB5_MASTER_PASSWORD="$KERBER_PROD_MASTER_PW" \
-    -e KRB5_KPROP_KEYTAB=/tmp/kdc2.keytab \
-    "$PRIMARY" /usr/local/bin/krb5-kprop -P 754 -s /tmp/kdc2.keytab -n "$REPLICA_FQDN" "$REPLICA_FQDN" 2>&1 \
-    | tee "$OUT/kprop.log")"
-echo "$KPROP"
-echo "$KPROP" | grep -q 'kprop ok' || {
-    docker exec "$REPLICA" cat /tmp/kpropd.log >&2 || true
-    die "kprop primary->replica failed"
+    die "kprop/replica KDC failed"
 }
 docker exec "$REPLICA" grep -q 'kprop ok' /tmp/kpropd.log \
     || die "kpropd log missing kprop ok"
@@ -205,22 +144,10 @@ docker exec "$REPLICA" test -f /tmp/replica.db || die "replica db missing after 
 docker exec "$REPLICA" head -1 /tmp/replica.db | grep -q 'kdb5_util load_dump version 7' \
     || die "replica db is not dump version 7"
 
-docker exec -d \
-    -e KRB5_KDC_DB=/tmp/replica.db \
-    -e KRB5_KDC_STASH=/tmp/replica.stash \
-    -e KERBER_CAPTURE_DIR=/tmp/pdus \
-    -e RUST_LOG=info \
-    -e CORRELATION_ID="$CORRELATION_ID" \
-    "$REPLICA" sh -c '/usr/local/bin/krb5-kdc 0.0.0.0:88 >/tmp/kdc.log 2>&1'
-ok=0
-for _ in $(seq 1 80); do
-    docker exec "$REPLICA" grep -q '^listening' /tmp/kdc.log 2>/dev/null && { ok=1; break; }
-    sleep 0.25
-done
-[ "$ok" = 1 ] || {
-    docker exec "$REPLICA" cat /tmp/kdc.log >&2 || true
-    die "replica KDC did not listen"
-}
+echo "==== MIT kvno kadmin host on primary ===="
+prod_client kvno "${HOST_APP}@$REALM" | tee "$OUT/kvno-app.log"
+KLAPP="$(prod_client klist 2>&1 | tee "$OUT/klist-app.txt")"
+echo "$KLAPP" | grep -q "app.${DNS_DOMAIN}" || die "klist missing $HOST_APP after kadmin"
 
 docker cp "$PRIMARY":/tmp/kdc.log "$OUT/kdc1.log"
 analyze_logs "$OUT/kdc1.log" "$OUT/kdc1-log-analysis.json"
@@ -234,26 +161,14 @@ fi
 
 echo "==== kill primary; MIT kinit/kvno against replica ===="
 docker kill "$PRIMARY" >/dev/null
-docker exec "$CLIENT" sh -c "cat >$CONF <<EOF
-[libdefaults]
-    default_realm = $REALM
-    dns_lookup_kdc = false
-    dns_lookup_realm = false
-    rdns = false
-    default_ccache_name = FILE:/tmp/krb5cc_prod
-[realms]
-    $REALM = {
-        kdc = $RIP
-        admin_server = $RIP
-    }
-EOF"
+prod_point_client_at "$RIP"
 
-client kdestroy -A >/dev/null 2>&1 || true
-client sh -c "printf '%s\n' '$KERBER_PROD_USER_PW' | kinit user@$REALM" \
+prod_client kdestroy -A >/dev/null 2>&1 || true
+prod_client sh -c "printf '%s\n' '$KERBER_PROD_USER_PW' | kinit user@$REALM" \
     | tee "$OUT/kinit-replica.log"
-client kvno "${HOST_SMOKE}@$REALM" | tee -a "$OUT/kinit-replica.log"
-client kvno "${HOST_APP}@$REALM" | tee -a "$OUT/kinit-replica.log"
-KL2="$(client klist 2>&1 | tee "$OUT/klist-replica.txt")"
+prod_client kvno "${HOST_SMOKE}@$REALM" | tee -a "$OUT/kinit-replica.log"
+prod_client kvno "${HOST_APP}@$REALM" | tee -a "$OUT/kinit-replica.log"
+KL2="$(prod_client klist 2>&1 | tee "$OUT/klist-replica.txt")"
 echo "$KL2"
 echo "$KL2" | grep -q "krbtgt/${REALM}" || die "replica klist missing krbtgt"
 echo "$KL2" | grep -q "testhost.${DNS_DOMAIN}" || die "replica klist missing smoke host"
