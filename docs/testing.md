@@ -28,10 +28,11 @@ PKINIT CMS, PAC NDR, SPAKE points, Oakley DH, GSS tokens) seeded from
 
 ## Interop
 
-Primary oracle: MIT Kerberos **1.22.2** in `harness/`. A Windows
-Server 2022 Evaluation DC (`AD.KERBER.TEST`) is captured for the AD
-round; see [`ad-lab.md`](ad-lab.md). Live AD commands use `~/adlab`
-only — never `/etc/krb5.conf` or SSSD. Heimdal and SSPI remain later.
+Primary oracle: MIT Kerberos **1.22.2** in `harness/`. Secondary:
+Heimdal **7.8** in `harness/heimdal/` (`scripts/heimdal-gate.sh`). A
+Windows Server 2022 Evaluation DC (`AD.KERBER.TEST`) is captured for
+the AD round; see [`ad-lab.md`](ad-lab.md). Live AD commands use
+`~/adlab` only — never `/etc/krb5.conf` or SSSD. SSPI remains later.
 
 ## Production-gate
 
@@ -99,9 +100,10 @@ Era II gates. The harness CI job runs `kadmin-gate`, `kpasswd-gate`,
 `kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `restart-gate`,
 `prod-gate`, `prod-realm-gate`, `stress-gate`, `chaos-gate`, `soak-gate`, `s4u-mit-gate`, `samba-ad-gate`, `ad-windows-gate`,
 `ad-s4u-gate`, `samba-pac-verify-gate`, `samba-pac-l2-gate`,
-`samba-crossrealm-gate`, and `samba-realtrust-gate` after `pkinit-gate`.
+`samba-crossrealm-gate`, `samba-realtrust-gate`, and `heimdal-gate` after `pkinit-gate`.
 `ad-*` are live Samba (`samba-ad-dc`), not the torn-down Windows DC.
-`heimdal`/`gss-sspi` exit 2 when those oracles are absent.
+`heimdal-gate` is live Heimdal 7.8 both directions. `gss-sspi` exits 2
+when that oracle is absent.
 
 - `scripts/samba-ad-gate.sh` — Samba 4 AD DC. The only `exit 0` is after a
   live `kinit`/`kvno`/`klist`. Missing docker, image, or KDC is `exit 2`
@@ -244,8 +246,21 @@ Era II gates. The harness CI job runs `kadmin-gate`, `kpasswd-gate`,
   `correlation_id` on issue-ok. `KERBER_REQUIRE_REAL_PCAP=1` fails
   unless the client tcpdump archive is present. Archives logs + pcap +
   RSS/latency series.
-- `scripts/heimdal-gate.sh` / `scripts/gss-sspi-gate.sh` — exit 2 +
-  unavailability log when those oracles are absent.
+- `scripts/heimdal-gate.sh` — Heimdal 7.8 secondary oracle
+  (`harness/heimdal/`, Debian bookworm apt, no `krb5-user`). The only
+  `exit 0` is after both directions content-assert AES-SHA1
+  (`aes256-cts-hmac-sha1-96`): Heimdal `kinit` + `kgetcred` against the
+  Rust KDC with `klist` naming `user@KERBER.TEST` and
+  `host/testhost.kerber.test`, then Rust `krb5-kinit` against the
+  Heimdal KDC with Heimdal `klist` naming the same principals. Bookworm
+  Heimdal 7.8 has no RFC 8009 etypes 19/20; the image pins
+  `default_etypes` and the HDB master key to etype 18. Missing
+  docker/image is honest `exit 2` plus
+  `heimdal-gate-unavailable.log`. In CI (build image, then bare `run:`).
+  TGS-REP `name-type` is a hint (RFC 4120 §6.2); Heimdal canonicalize
+  may return NT-SRV-HST for a host principal requested as NT-PRINCIPAL.
+- `scripts/gss-sspi-gate.sh` — exit 2 + unavailability log when that
+  oracle is absent.
 - `scripts/ad-mit-trust-gate.sh` — alias of `samba-realtrust-gate.sh`
   (does not claim a Windows DC).
 

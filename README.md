@@ -26,16 +26,18 @@ plus `kadmin-gate`, `kpasswd-gate`, `kdb-dump-gate`, `differential-gate`, `kprop
 `stress-gate`, `chaos-gate`, `soak-gate`, `s4u-mit-gate`,
 `samba-ad-gate`, `ad-windows-gate`, `ad-s4u-gate`,
 `samba-pac-verify-gate`, `samba-pac-l2-gate`, `samba-crossrealm-gate`,
-and `samba-realtrust-gate` in the harness job. The `ad-*` gates drive
-live Samba; `heimdal`/`gss-sspi` stay honest `exit 2` placeholders
-until those oracles exist.
+`samba-realtrust-gate`, and `heimdal-gate` in the harness job. The `ad-*`
+gates drive live Samba; `heimdal-gate` is live Heimdal 7.8 both
+directions (`kinit`/`kgetcred` vs the Rust KDC, `krb5-kinit` vs the
+Heimdal KDC). `gss-sspi` stays an honest `exit 2` placeholder.
 `krb5-config` is consumed: the KDC applies `kdc.conf`
 ticket policy (and non-test listen/db paths); `kinit` / TGS referral
 chase use `KRB5_CONFIG` then `/etc/krb5.conf` `[realms]` (argv is the
 fallback). Wire stress/chaos/soak gates run over `harness/prod`; a
 longer soak is scheduled (`.github/workflows/soak.yml`).
 `scripts/differential-gate.sh` sends the same AS/TGS bytes to a live
-Rust KDC and MIT 1.22.2 on one dump. Live Heimdal/SSPI remain
+Rust KDC and MIT 1.22.2 on one dump. `scripts/heimdal-gate.sh` is the
+Heimdal 7.8 secondary oracle (AES-SHA1). Live SSPI remains
 environment-dependent. AD lab coordinates and the `~/adlab` isolation
 protocol are in [docs/ad-lab.md](docs/ad-lab.md). Live
 `AD.KERBER.TEST`↔`KERBER.TEST` host tickets are gated

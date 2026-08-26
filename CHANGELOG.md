@@ -8,6 +8,9 @@ this project uses semantic versioning once a crate is published.
 
 ### Fixed
 
+- TGS-REP sname compare uses name-string components, not `name-type`.
+  RFC 4120 treats name-type as a hint; Heimdal canonicalize may return
+  NT-SRV-HST for a host principal requested as NT-PRINCIPAL.
 - MSRV 1.85 is actually green on the locked tree: `rasn` is pinned at
   `=0.27.0` (`0.27.1+` uses `usize::is_multiple_of` as a const fn,
   which is not stable on 1.85). The CI `msrv` job runs
@@ -17,6 +20,13 @@ this project uses semantic versioning once a crate is published.
 
 ### Added
 
+- Heimdal 7.8 secondary oracle: `harness/heimdal/` (Debian bookworm apt,
+  no `krb5-user`; HDB master key etype 18) and
+  `scripts/heimdal-gate.sh`. Both directions content-assert AES-SHA1:
+  Heimdal `kinit`/`kgetcred` vs the Rust KDC, Rust `krb5-kinit` vs the
+  Heimdal KDC; `klist` names `user@KERBER.TEST` and
+  `host/testhost.kerber.test`. Missing docker/image is honest `exit 2`.
+  In CI after the Samba block.
 - Differential-vs-MIT: `scripts/differential-gate.sh` loads one dump into
   a live Rust KDC and MIT 1.22.2 `krb5kdc` at once and
   `examples/diffsend.rs` sends the same encoded AS/TGS bytes to both.
