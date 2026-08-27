@@ -121,9 +121,7 @@ fn exchange_one(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
 
 fn is_response_too_big(bytes: &[u8]) -> bool {
     bytes.first() == Some(&0x7e)
-        && decode::<KrbError>(bytes)
-            .map(|e| e.error_code == err::RESPONSE_TOO_BIG)
-            .unwrap_or(false)
+        && decode::<KrbError>(bytes).is_ok_and(|e| e.error_code == err::RESPONSE_TOO_BIG)
 }
 
 fn dest_addr(addr: &KdcAddr) -> Result<SocketAddr, Error> {

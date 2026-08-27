@@ -40,8 +40,7 @@ impl Keytab {
     pub fn single(realm: Realm, name: PrincipalName, kvno: u32, key: ProtocolKey) -> Self {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| u32::try_from(d.as_secs()).unwrap_or(0))
-            .unwrap_or(0);
+            .map_or(0, |d| u32::try_from(d.as_secs()).unwrap_or(0));
         Self {
             version: 0x0502,
             entries: vec![KeytabEntry {

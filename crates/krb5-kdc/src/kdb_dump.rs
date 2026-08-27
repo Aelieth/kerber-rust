@@ -637,8 +637,7 @@ fn unix_now() -> u32 {
     u32::try_from(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
+            .map_or(0, |d| d.as_secs()),
     )
     .unwrap_or(u32::MAX)
 }

@@ -30,15 +30,12 @@ mod tests {
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
+                .map_or(0, |d| d.as_nanos())
         ));
         let _ = std::fs::create_dir_all(&dir);
         std::env::set_var("KERBER_CAPTURE_DIR", &dir);
         super::capture_pdu("test", b"\x6a\x03");
-        let count = std::fs::read_dir(&dir)
-            .map(std::iter::Iterator::count)
-            .unwrap_or(0);
+        let count = std::fs::read_dir(&dir).map_or(0, std::iter::Iterator::count);
         std::env::remove_var("KERBER_CAPTURE_DIR");
         let _ = std::fs::remove_dir_all(&dir);
         assert!(count >= 1);

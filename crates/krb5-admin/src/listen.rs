@@ -188,8 +188,7 @@ pub fn dispatch_kadmind(
             let tmp = std::env::temp_dir().join(format!("kprop-{}-{}", std::process::id(), {
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0)
+                    .map_or(0, |d| d.as_nanos())
             }));
             let db = tmp.with_extension("db");
             let stash = tmp.with_extension("stash");

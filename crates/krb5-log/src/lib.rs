@@ -141,8 +141,7 @@ pub fn new_correlation_id() -> String {
     if getrandom::getrandom(&mut bytes).is_err() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_nanos());
         bytes[..8].copy_from_slice(&nanos.to_be_bytes()[..8]);
         bytes[8..].copy_from_slice(&nanos.to_le_bytes()[..8]);
     }

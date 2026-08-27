@@ -6,6 +6,12 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased]
 
+### Fixed
+
+- Clippy on rustc 1.98 (`-D clippy::pedantic`) accepts `map_or` /
+  `is_ok_and` in place of `map().unwrap_or`. GitHub Actions `test`
+  was failing at clippy before tests or the harness ran.
+
 ## [1.0.0] - 2026-08-27
 
 ### Fixed

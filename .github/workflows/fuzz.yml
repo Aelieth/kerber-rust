@@ -29,7 +29,7 @@ jobs:
           - oakley_dh
           - gss_token
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@nightly
       - name: cargo-fuzz
         run: cargo install cargo-fuzz --locked

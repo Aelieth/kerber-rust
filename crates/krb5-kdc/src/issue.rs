@@ -916,7 +916,7 @@ fn preauth_required(store: &PrincipalStore, client: &Principal) -> Error {
     }
     let etype_info = PaData {
         padata_type: pa::ETYPE_INFO2,
-        padata_value: encode(&info).map(Into::into).unwrap_or_default(),
+        padata_value: encode(&info).map_or_else(|_| Vec::new().into(), Into::into),
     };
     let mut method: MethodData = Vec::new();
     method.push(PaData {

@@ -102,7 +102,7 @@ impl ReplayCache {
     /// Number of live entries (tests).
     #[must_use]
     pub fn len(&self) -> usize {
-        self.inner.lock().map(|g| g.seen.len()).unwrap_or(0)
+        self.inner.lock().map_or(0, |g| g.seen.len())
     }
 
     /// Whether empty.
