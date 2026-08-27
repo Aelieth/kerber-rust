@@ -208,10 +208,10 @@ pub fn decode_enc_kdc_rep(plain: &[u8]) -> Result<(EncKdcRepPart, bool), DiffErr
     if let Ok(EncAsRepPart(part)) = decode::<EncAsRepPart>(plain) {
         return Ok((part, false));
     }
-    if plain.first() == Some(&0x7a) {
-        if let Ok(EncTgsRepPart(part)) = decode::<EncTgsRepPart>(plain) {
-            return Ok((part, true));
-        }
+    if plain.first() == Some(&0x7a)
+        && let Ok(EncTgsRepPart(part)) = decode::<EncTgsRepPart>(plain)
+    {
+        return Ok((part, true));
     }
     if let Ok(part) = decode::<EncKdcRepPart>(plain) {
         return Ok((part, false));

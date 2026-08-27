@@ -478,10 +478,10 @@ fn unwrap_explicit_seq(inner: &[u8]) -> &[u8] {
 }
 
 fn unwrap_spki_field(inner: &[u8]) -> Vec<u8> {
-    if inner.first() == Some(&0x04) {
-        if let Some((_, body, _)) = take_tlv(inner) {
-            return body.to_vec();
-        }
+    if inner.first() == Some(&0x04)
+        && let Some((_, body, _)) = take_tlv(inner)
+    {
+        return body.to_vec();
     }
     inner.to_vec()
 }
@@ -905,10 +905,10 @@ fn signed_attrs_set(econtent_oid: &[u8], e_content: &[u8]) -> Vec<u8> {
 /// [`cms_verify`] against a provisioned trust anchor.
 #[must_use]
 pub fn cms_unwrap(der: &[u8]) -> Vec<u8> {
-    if let Ok(ci) = rasn::der::decode::<CmsContentInfo>(der) {
-        if let Some(ec) = ci.content.encap_content_info.e_content {
-            return ec.to_vec();
-        }
+    if let Ok(ci) = rasn::der::decode::<CmsContentInfo>(der)
+        && let Some(ec) = ci.content.encap_content_info.e_content
+    {
+        return ec.to_vec();
     }
     if let Ok(p) = cms_parts(der) {
         return p.e_content;
@@ -957,19 +957,16 @@ fn signed_attrs_digest_ok(sattrs: &[u8], expect: &[u8]) -> bool {
     };
     let mut cur = body;
     while let Some((_, attr, rest)) = take_tlv(cur) {
-        if let Some((_, oid, after)) = take_tlv(attr) {
-            if oid == [0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x04]
+        if let Some((_, oid, after)) = take_tlv(attr)
+            && (oid == [0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x04]
                 || (oid.first() == Some(&0x06)
                     && oid.get(2..)
-                        == Some([0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x04].as_slice()))
-            {
-                if let Some((_, set, _)) = take_tlv(after) {
-                    if let Some((t, oct, _)) = take_tlv(set) {
-                        let d = if t == 0x04 { oct } else { set };
-                        return d == expect;
-                    }
-                }
-            }
+                        == Some([0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x04].as_slice())))
+            && let Some((_, set, _)) = take_tlv(after)
+            && let Some((t, oct, _)) = take_tlv(set)
+        {
+            let d = if t == 0x04 { oct } else { set };
+            return d == expect;
         }
         cur = rest;
         if rest.is_empty() {

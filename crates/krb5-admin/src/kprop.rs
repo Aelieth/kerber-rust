@@ -250,13 +250,13 @@ pub struct KpropAuth {
 impl KpropAuth {
     fn check_remote_seq(&mut self, got: Option<u32>) -> Result<(), Error> {
         let s = got.ok_or_else(|| Error::Inner("kprop missing seq".into()))?;
-        if let Some(prev) = self.remote_seq {
-            if s != prev.wrapping_add(1) {
-                return Err(Error::Inner(format!(
-                    "kprop seq {s} want {}",
-                    prev.wrapping_add(1)
-                )));
-            }
+        if let Some(prev) = self.remote_seq
+            && s != prev.wrapping_add(1)
+        {
+            return Err(Error::Inner(format!(
+                "kprop seq {s} want {}",
+                prev.wrapping_add(1)
+            )));
         }
         self.remote_seq = Some(s);
         Ok(())

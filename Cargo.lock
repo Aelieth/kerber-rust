@@ -835,9 +835,9 @@ checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 
 [[package]]
 name = "rasn"
-version = "0.27.0"
+version = "0.28.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39a1c895be4fdfcf5a9163ef000d3f8918ecb7ebb81ccd03fffef6e37c7080f1"
+checksum = "0d1b71dd951343df0fe30b11bca09518f3aba8e5bd0ece4564adbc2dabd875fa"
 dependencies = [
  "bitvec",
  "bitvec-nom2",
@@ -858,9 +858,9 @@ dependencies = [
 
 [[package]]
 name = "rasn-derive"
-version = "0.27.0"
+version = "0.28.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf9723b0a85560548db5711650d32a2f10791addc7e998d3a59bdb2a12088d65"
+checksum = "979eafa601d351f7f6490f1d2f4decc168e8e51cb6517c6c6ff80111951129d5"
 dependencies = [
  "proc-macro2",
  "rasn-derive-impl",
@@ -869,9 +869,9 @@ dependencies = [
 
 [[package]]
 name = "rasn-derive-impl"
-version = "0.27.0"
+version = "0.28.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "713484435a087ea1e2611351bb6e54e755709a37bf45bd8c101052988fe9f39b"
+checksum = "eee3136c97d6f2553c0d9f84d2c2555bb87ae9b365c5c9274e8bc5c366174431"
 dependencies = [
  "either",
  "itertools",

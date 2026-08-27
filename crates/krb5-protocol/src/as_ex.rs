@@ -325,10 +325,10 @@ pub(crate) fn check_as_rep_times(
     if end + skew < now {
         return Err(Error::ReplyMismatch("AS-REP ticket expired".into()));
     }
-    if let Some(st) = &enc_part.starttime {
-        if i64::from(st.unix_seconds()) > now + skew {
-            return Err(Error::ReplyMismatch("AS-REP ticket not yet valid".into()));
-        }
+    if let Some(st) = &enc_part.starttime
+        && i64::from(st.unix_seconds()) > now + skew
+    {
+        return Err(Error::ReplyMismatch("AS-REP ticket not yet valid".into()));
     }
     Ok(())
 }
@@ -340,10 +340,10 @@ fn decode_enc_as(plain: &[u8]) -> Result<EncKdcRepPart, Error> {
     if let Ok(EncAsRepPart(part)) = decode::<EncAsRepPart>(plain) {
         return Ok(part);
     }
-    if plain.first() == Some(&0x7a) {
-        if let Ok(krb5_types::EncTgsRepPart(part)) = decode::<krb5_types::EncTgsRepPart>(plain) {
-            return Ok(part);
-        }
+    if plain.first() == Some(&0x7a)
+        && let Ok(krb5_types::EncTgsRepPart(part)) = decode::<krb5_types::EncTgsRepPart>(plain)
+    {
+        return Ok(part);
     }
     if let Ok(part) = decode::<EncKdcRepPart>(plain) {
         return Ok(part);

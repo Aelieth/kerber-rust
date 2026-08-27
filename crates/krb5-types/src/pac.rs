@@ -671,12 +671,12 @@ pub fn upn_dns_buffer(identity: &PacIdentity) -> Vec<u8> {
     data.extend_from_slice(&upn);
     let dns_off = data.len();
     data.extend_from_slice(&dns);
-    while data.len() % 2 != 0 {
+    while !data.len().is_multiple_of(2) {
         data.push(0);
     }
     let sam_off = data.len();
     data.extend_from_slice(&sam);
-    while data.len() % 4 != 0 {
+    while !data.len().is_multiple_of(4) {
         data.push(0);
     }
     let sid_off = data.len();
@@ -756,7 +756,7 @@ pub fn parse_upn_dns(data: &[u8]) -> Result<UpnDnsInfo, PacError> {
 }
 
 fn utf16_str(data: &[u8], off: usize, len: usize) -> Result<String, PacError> {
-    if off.checked_add(len).is_none_or(|e| e > data.len()) || len % 2 != 0 {
+    if off.checked_add(len).is_none_or(|e| e > data.len()) || !len.is_multiple_of(2) {
         return Err(PacError::Truncated);
     }
     let mut u16s = Vec::with_capacity(len / 2);
@@ -1182,7 +1182,7 @@ impl NdrW {
         self.b.extend_from_slice(&v.to_le_bytes());
     }
     fn align4(&mut self) {
-        while self.b.len() % 4 != 0 {
+        while !self.b.len().is_multiple_of(4) {
             self.b.push(0);
         }
     }
@@ -1278,13 +1278,12 @@ pub fn authorization_with_zeroed_pac(
             } else if el.ad_type == crate::pa::AD_IF_RELEVANT {
                 if let Ok(inner) =
                     rasn::der::decode::<crate::AuthorizationData>(el.ad_data.as_ref())
+                    && let Ok(bytes) = rasn::der::encode(&authorization_with_zeroed_pac(&inner))
                 {
-                    if let Ok(bytes) = rasn::der::encode(&authorization_with_zeroed_pac(&inner)) {
-                        return crate::AuthorizationDataValue {
-                            ad_type: el.ad_type,
-                            ad_data: bytes.into(),
-                        };
-                    }
+                    return crate::AuthorizationDataValue {
+                        ad_type: el.ad_type,
+                        ad_data: bytes.into(),
+                    };
                 }
                 el.clone()
             } else {
@@ -1335,12 +1334,12 @@ fn rewrite_one(data: &[u8], off: usize, pac: &[u8]) -> Option<(Vec<u8>, bool, us
         }
         return Some((orig, false, tlv_len));
     }
-    if tag == 0x04 && content.first().is_some_and(|b| *b == 0x30) {
-        if let Some((inner, true, n)) = rewrite_one(content, 0, pac) {
-            if n == content.len() {
-                return Some((encode_tlv(tag, &inner), true, tlv_len));
-            }
-        }
+    if tag == 0x04
+        && content.first().is_some_and(|b| *b == 0x30)
+        && let Some((inner, true, n)) = rewrite_one(content, 0, pac)
+        && n == content.len()
+    {
+        return Some((encode_tlv(tag, &inner), true, tlv_len));
     }
     Some((orig, false, tlv_len))
 }

@@ -363,12 +363,12 @@ pub fn pkinit_reply_key(
         .or_else(|| krb5_types::pkinit::decode_ec_spki(&inner))
         .unwrap_or(inner);
     let shared = p256_shared(client_secret, &kdc_pub)?;
-    if let Some(oid) = krb5_types::pkinit::pa_pk_as_rep_kdf_oid(raw.padata_value.as_ref()) {
-        if oid.as_slice() == krb5_types::pkinit::KDF_AH_SHA256_OID {
-            return Err(Error::ReplyMismatch(
-                "PKINIT RFC 8636 KDF requires pkinit_reply_key_agile".into(),
-            ));
-        }
+    if let Some(oid) = krb5_types::pkinit::pa_pk_as_rep_kdf_oid(raw.padata_value.as_ref())
+        && oid.as_slice() == krb5_types::pkinit::KDF_AH_SHA256_OID
+    {
+        return Err(Error::ReplyMismatch(
+            "PKINIT RFC 8636 KDF requires pkinit_reply_key_agile".into(),
+        ));
     }
     octetstring2key(etype, &shared).map_err(Into::into)
 }

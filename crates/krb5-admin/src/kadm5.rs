@@ -558,10 +558,11 @@ fn dispatch_kadm5(
                 .read()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let mut ids = g.ids();
-            if let Some(e) = expr.as_deref() {
-                if e != "*" && !e.is_empty() {
-                    ids.retain(|id| id.contains(e.trim_end_matches('*')));
-                }
+            if let Some(e) = expr.as_deref()
+                && e != "*"
+                && !e.is_empty()
+            {
+                ids.retain(|id| id.contains(e.trim_end_matches('*')));
             }
             Ok(encode_gprincs(&ids))
         }

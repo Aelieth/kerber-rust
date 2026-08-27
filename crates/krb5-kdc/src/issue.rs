@@ -535,10 +535,10 @@ fn issue_tgs_from(
     let now = KerberosTime::now();
     let mut end = enc_tkt.endtime.clone();
     let life = requested_life(store, server, body);
-    if let Ok(capped) = now.add_seconds(i64::try_from(life).unwrap_or(i64::MAX)) {
-        if capped.unix_seconds() < end.unix_seconds() {
-            end = capped;
-        }
+    if let Ok(capped) = now.add_seconds(i64::try_from(life).unwrap_or(i64::MAX))
+        && capped.unix_seconds() < end.unix_seconds()
+    {
+        end = capped;
     }
     let mut flags = TicketFlags::none();
     // Bit 12: the check ran (same-realm empty transited included). MIT matches.
@@ -667,12 +667,11 @@ fn decrypt_presented_tgt(
     let cipher = ap.ticket.enc_part.cipher.as_ref();
     let kvno = ap.ticket.enc_part.kvno;
     let mut candidates: Vec<&krb5_crypto::ProtocolKey> = Vec::new();
-    if let Some(p) = store.krbtgt() {
-        if let Some(v) = kvno {
-            if let Some(k) = p.key_for_kvno(tkt_etype, v) {
-                candidates.push(&k.key);
-            }
-        }
+    if let Some(p) = store.krbtgt()
+        && let Some(v) = kvno
+        && let Some(k) = p.key_for_kvno(tkt_etype, v)
+    {
+        candidates.push(&k.key);
     }
     for key in store.krbtgt_keys() {
         candidates.push(key);
@@ -697,10 +696,10 @@ fn check_ticket_times(store: &PrincipalStore, tkt: &EncTicketPart) -> Result<(),
     if tkt.flags.invalid() {
         return Err(proto(err::TKT_NYV, "INVALID"));
     }
-    if let Some(start) = &tkt.starttime {
-        if now.delta_seconds(start) < -skew {
-            return Err(proto(err::TKT_NYV, "not yet valid"));
-        }
+    if let Some(start) = &tkt.starttime
+        && now.delta_seconds(start) < -skew
+    {
+        return Err(proto(err::TKT_NYV, "not yet valid"));
     }
     if tkt.endtime.delta_seconds(&now) < -skew {
         return Err(proto(err::TKT_EXPIRED, "expired"));
@@ -838,10 +837,10 @@ fn select_etype(
     allow_weak: bool,
 ) -> Result<EncryptionType, Error> {
     for n in requested {
-        if let Ok(e) = EncryptionType::from_iana_policy(*n, allow_weak) {
-            if princ.key_for(e).is_some() {
-                return Ok(e);
-            }
+        if let Ok(e) = EncryptionType::from_iana_policy(*n, allow_weak)
+            && princ.key_for(e).is_some()
+        {
+            return Ok(e);
         }
     }
     Err(proto(err::ETYPE_NOSUPP, "no common etype"))

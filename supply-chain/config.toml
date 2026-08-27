@@ -153,7 +153,7 @@ notes = "Product CSPRNG (workspace pin 0.2). Dual version is rasn-derive-impl �
 [[exemptions.getrandom]]
 version = "0.4.3"
 criteria = "safe-to-deploy"
-notes = "Build-time only via rasn-derive-impl 0.27.0 → uuid 1.24. Not unifiable without bumping the MSRV rasn pin."
+notes = "Build-time only via rasn-derive-impl 0.28.14 → uuid 1.24. Dual getrandom remains; not a runtime product dep."
 
 [[exemptions.group]]
 version = "0.13.0"
@@ -252,14 +252,14 @@ version = "0.7.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rasn]]
-version = "0.27.0"
+version = "0.28.14"
 criteria = "safe-to-deploy"
-notes = "Pinned at =0.27.0 for MSRV 1.85. Local full audit deferred; golden MIT DER is the protocol net."
+notes = "Unpinned 0.28. Local full audit deferred; golden MIT DER is the protocol net."
 
 [[exemptions.rasn-derive-impl]]
-version = "0.27.0"
+version = "0.28.14"
 criteria = "safe-to-deploy"
-notes = "Proc-macro implementation behind locally audited rasn-derive 0.27.0. ~3k lines; exemption pending a full local audit."
+notes = "Proc-macro implementation behind locally audited rasn-derive 0.28.14. Exemption pending a full local audit."
 
 [[exemptions.rc4]]
 version = "0.1.0"

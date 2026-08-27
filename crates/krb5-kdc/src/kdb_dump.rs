@@ -227,14 +227,13 @@ impl DumpPrincipal {
                 kdb_salt,
             });
         }
-        if name.components_joined() == "K/M" {
-            if let Some(first) = keys.first() {
-                if first.key.as_bytes() != mkey.as_bytes() {
-                    return Err(DumpError::Crypto(
-                        "K/M key_data does not match derived master key".into(),
-                    ));
-                }
-            }
+        if name.components_joined() == "K/M"
+            && let Some(first) = keys.first()
+            && first.key.as_bytes() != mkey.as_bytes()
+        {
+            return Err(DumpError::Crypto(
+                "K/M key_data does not match derived master key".into(),
+            ));
         }
         let salt = princ_salt.unwrap_or_else(|| name.default_salt(&realm));
         let mkvno = mkvno_from_tl(&self.tl_data);
@@ -589,7 +588,7 @@ impl<'a> Cursor<'a> {
 }
 
 fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
-    if s.len() % 2 != 0 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !s.len().is_multiple_of(2) || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(format!("bad hex: {s}"));
     }
     (0..s.len())

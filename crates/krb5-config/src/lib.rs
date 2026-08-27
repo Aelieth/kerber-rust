@@ -168,10 +168,10 @@ impl Krb5Conf {
             if section == "libdefaults" {
                 parse_libdefaults(&mut conf, line);
             }
-            if section == "domain_realm" {
-                if let Some((d, r)) = split_kv(line) {
-                    conf.domain_realm.insert(d.to_ascii_lowercase(), r);
-                }
+            if section == "domain_realm"
+                && let Some((d, r)) = split_kv(line)
+            {
+                conf.domain_realm.insert(d.to_ascii_lowercase(), r);
             }
         }
         Ok(conf)
@@ -193,10 +193,10 @@ impl Krb5Conf {
     ///
     /// Returns DNS errors when lookup is enabled and fails with no static list.
     pub fn kdcs_for(&self, realm: &str) -> Result<Vec<Endpoint>, Error> {
-        if let Some(list) = self.kdcs.get(realm) {
-            if !list.is_empty() {
-                return Ok(list.clone());
-            }
+        if let Some(list) = self.kdcs.get(realm)
+            && !list.is_empty()
+        {
+            return Ok(list.clone());
         }
         if self.dns_lookup_kdc {
             return lookup_srv_kdc(realm);
@@ -376,13 +376,13 @@ fn truthy(v: &str) -> bool {
 }
 
 fn parse_endpoint(v: &str) -> Endpoint {
-    if let Some((h, p)) = v.rsplit_once(':') {
-        if let Ok(port) = p.parse() {
-            return Endpoint {
-                host: h.to_owned(),
-                port,
-            };
-        }
+    if let Some((h, p)) = v.rsplit_once(':')
+        && let Ok(port) = p.parse()
+    {
+        return Endpoint {
+            host: h.to_owned(),
+            port,
+        };
     }
     Endpoint::kdc(v)
 }
@@ -470,12 +470,11 @@ pub fn discover_kdc_in<P: AsRef<Path>>(
     realm: &str,
 ) -> Option<Endpoint> {
     for path in paths {
-        if let Ok(conf) = Krb5Conf::load_file(path) {
-            if let Ok(list) = conf.kdcs_for(realm) {
-                if let Some(ep) = list.into_iter().next() {
-                    return Some(ep);
-                }
-            }
+        if let Ok(conf) = Krb5Conf::load_file(path)
+            && let Ok(list) = conf.kdcs_for(realm)
+            && let Some(ep) = list.into_iter().next()
+        {
+            return Some(ep);
         }
     }
     None

@@ -198,10 +198,10 @@ pub fn ticket_checksum_der(part: &EncTicketPart) -> Result<Vec<u8>, Error> {
 
 /// Type-16 input over the decrypted EncTicketPart bytes, PAC ad-data = 0x00.
 pub(crate) fn ticket_checksum_input(plain: &[u8], part: &EncTicketPart) -> Result<Vec<u8>, Error> {
-    if let Some(pac) = pac_from_ticket_part(part) {
-        if let Some(z) = krb5_types::pac::zero_pac_ad_data(plain, &pac) {
-            return Ok(z);
-        }
+    if let Some(pac) = pac_from_ticket_part(part)
+        && let Some(z) = krb5_types::pac::zero_pac_ad_data(plain, &pac)
+    {
+        return Ok(z);
     }
     ticket_checksum_der(part)
 }
@@ -259,12 +259,12 @@ pub fn pac_from_ticket_part(part: &EncTicketPart) -> Option<Vec<u8>> {
         if el.ad_type == pa::AD_WIN2K_PAC {
             return Some(el.ad_data.to_vec());
         }
-        if el.ad_type == pa::AD_IF_RELEVANT {
-            if let Ok(inner) = decode::<krb5_types::AuthorizationData>(el.ad_data.as_ref()) {
-                for i in inner {
-                    if i.ad_type == pa::AD_WIN2K_PAC {
-                        return Some(i.ad_data.to_vec());
-                    }
+        if el.ad_type == pa::AD_IF_RELEVANT
+            && let Ok(inner) = decode::<krb5_types::AuthorizationData>(el.ad_data.as_ref())
+        {
+            for i in inner {
+                if i.ad_type == pa::AD_WIN2K_PAC {
+                    return Some(i.ad_data.to_vec());
                 }
             }
         }

@@ -126,11 +126,11 @@ fn main() -> ExitCode {
                 eprintln!("krb5-pac-extract: write {out_path}");
                 return ExitCode::from(1);
             }
-            if let Some(der_path) = &enc_tkt_out {
-                if fs::write(der_path, &plain).is_err() {
-                    eprintln!("krb5-pac-extract: write {der_path}");
-                    return ExitCode::from(1);
-                }
+            if let Some(der_path) = &enc_tkt_out
+                && fs::write(der_path, &plain).is_err()
+            {
+                eprintln!("krb5-pac-extract: write {der_path}");
+                return ExitCode::from(1);
             }
             if let Some(keys_path) = &keys_out {
                 let etype = ent.key.etype().to_iana();
@@ -195,7 +195,7 @@ fn dump_keytab(args: &[String]) -> ExitCode {
 
 fn hex_decode(h: &str) -> Result<Vec<u8>, String> {
     let h = h.trim();
-    if h.len() % 2 != 0 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !h.len().is_multiple_of(2) || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("odd or non-hex".into());
     }
     let mut out = vec![0u8; h.len() / 2];

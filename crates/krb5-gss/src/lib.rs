@@ -245,14 +245,14 @@ impl GssContext {
             String::from_utf8_lossy(ok.authenticator.crealm.as_bytes())
         );
         let mut want_mutual = ok.mutual_required;
-        if let Some(ck) = &ok.authenticator.cksum {
-            if ck.cksumtype == GSS_CHECKSUM_TYPE {
-                check_channel_bindings(ck.checksum.as_ref(), channel_bindings)?;
-                if ck.checksum.as_ref().len() >= 24 {
-                    let mut f = [0u8; 4];
-                    f.copy_from_slice(&ck.checksum.as_ref()[20..24]);
-                    want_mutual |= u32::from_le_bytes(f) & GSS_C_MUTUAL != 0;
-                }
+        if let Some(ck) = &ok.authenticator.cksum
+            && ck.cksumtype == GSS_CHECKSUM_TYPE
+        {
+            check_channel_bindings(ck.checksum.as_ref(), channel_bindings)?;
+            if ck.checksum.as_ref().len() >= 24 {
+                let mut f = [0u8; 4];
+                f.copy_from_slice(&ck.checksum.as_ref()[20..24]);
+                want_mutual |= u32::from_le_bytes(f) & GSS_C_MUTUAL != 0;
             }
         }
         let sess = if let Some(sk) = &ok.authenticator.subkey {

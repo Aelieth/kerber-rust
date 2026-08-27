@@ -86,36 +86,34 @@ fn main() {
             std::process::exit(2);
         }
     };
-    if test_realm {
-        if let (Ok(db), Ok(stash)) = (
+    if test_realm
+        && let (Ok(db), Ok(stash)) = (
             std::env::var("KRB5_KDC_DB"),
             std::env::var("KRB5_KDC_STASH"),
-        ) {
-            let db = std::path::PathBuf::from(db);
-            let stash = std::path::PathBuf::from(stash);
-            if let Err(e) = krb5_kdc::save_store(&store, &db, &stash) {
-                eprintln!("krb5-kdc: save store: {e}");
-                std::process::exit(1);
-            }
-            store = krb5_kdc::load_store(&db, &stash).unwrap_or_else(|e| {
-                eprintln!("krb5-kdc: reload store: {e}");
-                std::process::exit(1);
-            });
+        )
+    {
+        let db = std::path::PathBuf::from(db);
+        let stash = std::path::PathBuf::from(stash);
+        if let Err(e) = krb5_kdc::save_store(&store, &db, &stash) {
+            eprintln!("krb5-kdc: save store: {e}");
+            std::process::exit(1);
         }
+        store = krb5_kdc::load_store(&db, &stash).unwrap_or_else(|e| {
+            eprintln!("krb5-kdc: reload store: {e}");
+            std::process::exit(1);
+        });
     }
-    if let Some(conf) = &kdc_conf {
-        if let Err(e) = store.apply_kdc_conf(conf) {
-            eprintln!("krb5-kdc: kdc.conf: {e}");
-            std::process::exit(2);
-        }
+    if let Some(conf) = &kdc_conf
+        && let Err(e) = store.apply_kdc_conf(conf)
+    {
+        eprintln!("krb5-kdc: kdc.conf: {e}");
+        std::process::exit(2);
     }
     let enable_pkinit =
         export_pkinit.is_some() || std::env::var("KRB5_ENABLE_PKINIT").ok().as_deref() == Some("1");
-    if enable_pkinit {
-        if let Err(e) = store.enable_pkinit_ca() {
-            eprintln!("krb5-kdc: PKINIT CA: {e}");
-            std::process::exit(1);
-        }
+    if enable_pkinit && let Err(e) = store.enable_pkinit_ca() {
+        eprintln!("krb5-kdc: PKINIT CA: {e}");
+        std::process::exit(1);
     }
     if let Some(path) = export_keytab.as_ref() {
         let acl = Acl::allow_admin(documented_admin_id());
@@ -231,12 +229,11 @@ fn bind_list(
     if let Some(bind) = pinned {
         return vec![bind];
     }
-    if !test_realm {
-        if let Some(c) = conf {
-            if !c.kdc_listen.is_empty() {
-                return c.kdc_listen.clone();
-            }
-        }
+    if !test_realm
+        && let Some(c) = conf
+        && !c.kdc_listen.is_empty()
+    {
+        return c.kdc_listen.clone();
     }
     BIND_CANDIDATES.iter().map(|s| (*s).to_owned()).collect()
 }

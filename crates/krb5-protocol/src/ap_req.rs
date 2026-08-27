@@ -247,21 +247,21 @@ fn verify_inner(
         return Err(Error::TruncatedReply);
     }
     let ap: ApReq = decode(raw)?;
-    if let Some(exp) = params.expected_server {
-        if ap.ticket.sname.components_joined() != exp.components_joined() {
-            return Err(Error::KrbError {
-                code: err::NOT_US,
-                text: Some("ticket sname does not match expected server".into()),
-            });
-        }
+    if let Some(exp) = params.expected_server
+        && ap.ticket.sname.components_joined() != exp.components_joined()
+    {
+        return Err(Error::KrbError {
+            code: err::NOT_US,
+            text: Some("ticket sname does not match expected server".into()),
+        });
     }
-    if let Some(r) = params.expected_realm {
-        if ap.ticket.realm.as_bytes() != r.as_bytes() {
-            return Err(Error::KrbError {
-                code: err::NOT_US,
-                text: Some("ticket realm does not match".into()),
-            });
-        }
+    if let Some(r) = params.expected_realm
+        && ap.ticket.realm.as_bytes() != r.as_bytes()
+    {
+        return Err(Error::KrbError {
+            code: err::NOT_US,
+            text: Some("ticket realm does not match".into()),
+        });
     }
     let tkt_usage = KeyUsage::new(ku::TICKET)?;
     let mut last_err = Error::KrbError {
@@ -295,13 +295,13 @@ fn verify_inner(
     }
     let now = params.now.clone().unwrap_or_else(KerberosTime::now);
     let skew = params.skew.max(0);
-    if let Some(start) = &ticket_part.starttime {
-        if now.delta_seconds(start) < -skew {
-            return Err(Error::KrbError {
-                code: err::TKT_NYV,
-                text: Some("ticket not yet valid".into()),
-            });
-        }
+    if let Some(start) = &ticket_part.starttime
+        && now.delta_seconds(start) < -skew
+    {
+        return Err(Error::KrbError {
+            code: err::TKT_NYV,
+            text: Some("ticket not yet valid".into()),
+        });
     }
     if ticket_part.endtime.delta_seconds(&now) < -skew {
         return Err(Error::KrbError {
@@ -309,15 +309,14 @@ fn verify_inner(
             text: Some("ticket expired".into()),
         });
     }
-    if let Some(addrs) = params.addresses {
-        if let Some(caddr) = &ticket_part.caddr {
-            if caddr != addrs {
-                return Err(Error::KrbError {
-                    code: err::BADADDR,
-                    text: Some("address mismatch".into()),
-                });
-            }
-        }
+    if let Some(addrs) = params.addresses
+        && let Some(caddr) = &ticket_part.caddr
+        && caddr != addrs
+    {
+        return Err(Error::KrbError {
+            code: err::BADADDR,
+            text: Some("address mismatch".into()),
+        });
     }
     let session_etype = EncryptionType::from_iana(ticket_part.key.keytype)
         .or_else(|_| EncryptionType::known(ticket_part.key.keytype))?;
@@ -343,11 +342,11 @@ fn verify_inner(
             text: Some("authenticator clock skew".into()),
         });
     }
-    if let Some(ck) = &authenticator.cksum {
-        if let Some(data) = app_cksum {
-            let usage = KeyUsage::new(ku::AP_REQ_AUTH_CKSUM)?;
-            verify_checksum(&session, usage, data, ck.checksum.as_ref())?;
-        }
+    if let Some(ck) = &authenticator.cksum
+        && let Some(data) = app_cksum
+    {
+        let usage = KeyUsage::new(ku::AP_REQ_AUTH_CKSUM)?;
+        verify_checksum(&session, usage, data, ck.checksum.as_ref())?;
     }
     let client = format!(
         "{}@{}",

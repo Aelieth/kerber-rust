@@ -172,10 +172,10 @@ fn db_and_stash(conf: Option<&krb5_config::KdcConf>) -> (PathBuf, PathBuf) {
 }
 
 fn acl_file_path(conf: Option<&krb5_config::KdcConf>) -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("KRB5_ACL_FILE") {
-        if !p.is_empty() {
-            return Some(PathBuf::from(p));
-        }
+    if let Ok(p) = std::env::var("KRB5_ACL_FILE")
+        && !p.is_empty()
+    {
+        return Some(PathBuf::from(p));
     }
     conf.and_then(|c| c.acl_file.clone())
 }

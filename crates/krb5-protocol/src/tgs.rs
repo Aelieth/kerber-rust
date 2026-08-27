@@ -155,13 +155,13 @@ fn authenticate_srealm(out: &TgsOutcome) -> Result<(), Error> {
 fn kdc_for_realm(realm: &str, fallback: &KdcAddr) -> KdcAddr {
     let env_key = format!("KRB5_KDC_{}", realm.replace('.', "_"));
     if let Ok(v) = std::env::var(env_key) {
-        if let Some((h, p)) = v.rsplit_once(':') {
-            if let Ok(port) = p.parse() {
-                return KdcAddr {
-                    host: h.to_owned(),
-                    port,
-                };
-            }
+        if let Some((h, p)) = v.rsplit_once(':')
+            && let Ok(port) = p.parse()
+        {
+            return KdcAddr {
+                host: h.to_owned(),
+                port,
+            };
         }
         return KdcAddr::new(v);
     }

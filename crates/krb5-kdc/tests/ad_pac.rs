@@ -60,10 +60,10 @@ fn load_service_ticket(dir: &Path) -> Option<Ticket> {
             if cred.is_config() {
                 continue;
             }
-            if cred.server.1.components_joined().starts_with("host/") {
-                if let Ok(t) = decode::<Ticket>(&cred.ticket) {
-                    return Some(t);
-                }
+            if cred.server.1.components_joined().starts_with("host/")
+                && let Ok(t) = decode::<Ticket>(&cred.ticket)
+            {
+                return Some(t);
             }
         }
     }

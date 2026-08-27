@@ -86,11 +86,11 @@ fn armor_key_from_ap(
     let cipher = ap.ticket.enc_part.cipher.as_ref();
     let mut enc_tkt: Option<krb5_types::EncTicketPart> = None;
     for key in store.krbtgt_keys() {
-        if let Ok(plain) = decrypt(key, tkt_usage, cipher) {
-            if let Ok(part) = decode::<krb5_types::EncTicketPart>(&plain) {
-                enc_tkt = Some(part);
-                break;
-            }
+        if let Ok(plain) = decrypt(key, tkt_usage, cipher)
+            && let Ok(part) = decode::<krb5_types::EncTicketPart>(&plain)
+        {
+            enc_tkt = Some(part);
+            break;
         }
     }
     let enc_tkt = enc_tkt.ok_or_else(|| proto(err::BAD_INTEGRITY, "FAST armor TGT"))?;

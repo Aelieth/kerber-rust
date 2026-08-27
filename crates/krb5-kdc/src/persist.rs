@@ -178,17 +178,16 @@ fn master_for_save(
 
 fn existing_stash_key(db_path: &Path, stash_path: &Path) -> Result<ProtocolKey, PersistError> {
     let bytes = fs::read(stash_path)?;
-    if let Ok(blob) = fs::read(db_path) {
-        if blob.starts_with(DUMP_PREFIX) {
-            if let Ok(text) = std::str::from_utf8(&blob) {
-                for etype in stash_etypes() {
-                    let Ok(mkey) = ProtocolKey::from_bytes(etype, &bytes) else {
-                        continue;
-                    };
-                    if load_dump_mkey(text, &mkey).is_ok() {
-                        return Ok(mkey);
-                    }
-                }
+    if let Ok(blob) = fs::read(db_path)
+        && blob.starts_with(DUMP_PREFIX)
+        && let Ok(text) = std::str::from_utf8(&blob)
+    {
+        for etype in stash_etypes() {
+            let Ok(mkey) = ProtocolKey::from_bytes(etype, &bytes) else {
+                continue;
+            };
+            if load_dump_mkey(text, &mkey).is_ok() {
+                return Ok(mkey);
             }
         }
     }

@@ -114,7 +114,7 @@ pub(crate) fn des3_encrypt(
     let mut data = Vec::with_capacity(DES_BLOCK + plaintext.len());
     data.extend_from_slice(&conf);
     data.extend_from_slice(plaintext);
-    while data.len() % DES_BLOCK != 0 {
+    while !data.len().is_multiple_of(DES_BLOCK) {
         data.push(0);
     }
     let iv = [0u8; DES_BLOCK];
@@ -151,7 +151,7 @@ pub(crate) fn des3_cbc_encrypt(
     iv: [u8; DES_BLOCK],
     plain: &[u8],
 ) -> Result<Vec<u8>, Error> {
-    if key.len() != 24 || plain.len() % DES_BLOCK != 0 {
+    if key.len() != 24 || !plain.len().is_multiple_of(DES_BLOCK) {
         return Err(Error::InvalidKeyLength);
     }
     let cipher = <TdesEde3 as KeyInit>::new_from_slice(key).map_err(|_| Error::InvalidKeyLength)?;
@@ -171,7 +171,7 @@ pub(crate) fn des3_cbc_encrypt(
 }
 
 fn des3_cbc_decrypt(key: &[u8], iv: [u8; DES_BLOCK], cipher_text: &[u8]) -> Result<Vec<u8>, Error> {
-    if key.len() != 24 || cipher_text.len() % DES_BLOCK != 0 {
+    if key.len() != 24 || !cipher_text.len().is_multiple_of(DES_BLOCK) {
         return Err(Error::InvalidKeyLength);
     }
     let cipher = <TdesEde3 as KeyInit>::new_from_slice(key).map_err(|_| Error::InvalidKeyLength)?;
@@ -280,7 +280,7 @@ fn des_is_weak(key: &[u8]) -> bool {
 fn odd_parity(block: &mut [u8]) {
     for b in block {
         let mut x = *b & 0xfe;
-        if x.count_ones() % 2 == 0 {
+        if x.count_ones().is_multiple_of(2) {
             x |= 1;
         }
         *b = x;
