@@ -8,11 +8,11 @@ on:
 jobs:
   soak:
     runs-on: ubuntu-latest
-    env:
-      KERBER_SCRATCH: ${{ runner.temp }}/kerber
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+      - name: Scratch dir
+        run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
       - name: Build MIT harness image
         run: ./scripts/run-harness.sh
       - name: Stop MIT harness

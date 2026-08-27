@@ -57,11 +57,11 @@ jobs:
   harness:
     runs-on: ubuntu-latest
     needs: test
-    env:
-      KERBER_SCRATCH: ${{ runner.temp }}/kerber
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+      - name: Scratch dir
+        run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
       - name: Build and kinit against MIT 1.22.2
         run: ./scripts/run-harness.sh
       - name: client-gate
