@@ -459,7 +459,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-admin"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "getrandom 0.2.17",
  "krb5-asn1",
@@ -477,7 +477,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-asn1"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "krb5-log",
  "krb5-types",
@@ -488,7 +488,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-client"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "krb5-asn1",
  "krb5-config",
@@ -503,7 +503,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-config"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "krb5-log",
  "thiserror",
@@ -512,7 +512,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-consumer"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "krb5-asn1",
  "krb5-crypto",
@@ -524,7 +524,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-crypto"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "aes",
  "camellia",
@@ -549,7 +549,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-gss"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "getrandom 0.2.17",
  "krb5-asn1",
@@ -566,7 +566,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-kdc"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "getrandom 0.2.17",
  "krb5-asn1",
@@ -585,7 +585,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-kdc-consumer"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "krb5-asn1",
  "krb5-client",
@@ -599,14 +599,14 @@ dependencies = [
 
 [[package]]
 name = "krb5-log"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "getrandom 0.2.17",
 ]
 
 [[package]]
 name = "krb5-protocol"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "getrandom 0.2.17",
@@ -625,7 +625,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-types"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "getrandom 0.2.17",
