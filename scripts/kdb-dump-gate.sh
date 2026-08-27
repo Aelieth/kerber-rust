@@ -13,7 +13,7 @@ NAME="kerber-rust-kdb-dump-gate"
 GOLDEN="tests/traces/kdb/mit-dump-v7.txt"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
-SCRATCH="${KERBER_SCRATCH:-/tmp/grok-goal-1b3488ffd6ae/implementer}"
+SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-kdb-dump-gate}"
 mkdir -p "$SCRATCH"
 
 log() {

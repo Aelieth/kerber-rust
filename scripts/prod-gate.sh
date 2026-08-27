@@ -11,7 +11,7 @@ cd "$ROOT"
 
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
-SCRATCH="${KERBER_SCRATCH:-/tmp/grok-goal-50fb1f8298b1/implementer}"
+SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-prod-gate}"
 OUT="$SCRATCH/prod-gate"
 mkdir -p "$OUT"
 
@@ -28,6 +28,7 @@ cargo build -p krb5-client --bin krb5-kinit -q
 BIND="127.0.0.1:18888"
 LOG="$OUT/kdc.json"
 PCAP="$OUT/kdc.pcap"
+LO_PCAP="$OUT/kdc-lo.pcap"
 TCPDUMP_PID=""
 KDC_PID=""
 
@@ -41,10 +42,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Loopback capture of the isolated bind only.
+# Loopback capture of the isolated bind only. Write aside from $PCAP:
+# sudo tcpdump creates a root-owned file; chmod a+r does not make it
+# writable, and reconstruct would then PermissionError on GHA.
 if command -v tcpdump >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
-    rm -f "$PCAP"
-    sudo -n tcpdump -i lo -n -U -w "$PCAP" "port 18888" >/dev/null 2>"$OUT/tcpdump.err" &
+    rm -f "$LO_PCAP"
+    sudo -n tcpdump -i lo -n -U -w "$LO_PCAP" "port 18888" >/dev/null 2>"$OUT/tcpdump.err" &
     TCPDUMP_PID=$!
     sleep 0.2
 else
@@ -92,7 +95,7 @@ if [ -n "$TCPDUMP_PID" ]; then
     sudo -n kill "$TCPDUMP_PID" >/dev/null 2>&1 || true
     TCPDUMP_PID=""
     sleep 0.2
-    sudo -n chmod a+r "$PCAP" 2>/dev/null || true
+    sudo -n chmod a+r "$LO_PCAP" 2>/dev/null || true
 fi
 
 # Structured-log analysis is a promotion criterion.
@@ -157,6 +160,8 @@ fi
 
 # NIC capture needs CAP_NET_RAW (absent in this rootless distrobox).
 # Reconstruct a pcap from KERBER_CAPTURE_DIR PDUs (real socket-boundary DER).
+# Always (re)create $PCAP as this user; do not replace a root-owned live capture.
+rm -f "$PCAP" 2>/dev/null || sudo -n rm -f "$PCAP" 2>/dev/null || true
 python3 - "$KERBER_CAPTURE_DIR" "$PCAP" <<'PY'
 import pathlib, struct, sys, time
 src, dst = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])

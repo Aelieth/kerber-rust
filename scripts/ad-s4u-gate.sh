@@ -9,7 +9,7 @@ cd "$ROOT"
 
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
-SCRATCH="${KERBER_SCRATCH:-/tmp/grok-goal-1b3488ffd6ae/implementer}"
+SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-ad-s4u-gate}"
 mkdir -p "$SCRATCH"
 UNAVAIL="$SCRATCH/ad-s4u-unavailable.log"
 LOG="$SCRATCH/ad-s4u-gate.log"

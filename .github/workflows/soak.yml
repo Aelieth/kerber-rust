@@ -8,6 +8,8 @@ on:
 jobs:
   soak:
     runs-on: ubuntu-latest
+    env:
+      KERBER_SCRATCH: ${{ runner.temp }}/kerber
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable

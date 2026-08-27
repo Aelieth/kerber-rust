@@ -6,7 +6,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
-SCRATCH="${KERBER_SCRATCH:-/tmp/grok-goal-50fb1f8298b1/implementer}"
+SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-gss-sspi-gate}"
 mkdir -p "$SCRATCH"
 {
     echo "date=$(date -Iseconds)"
