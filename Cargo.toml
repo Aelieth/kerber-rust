@@ -18,7 +18,7 @@ members = [
 [workspace.package]
 version = "1.0.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.95"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/Aelieth/kerber-rust"
 homepage = "https://github.com/Aelieth/kerber-rust"
@@ -51,8 +51,7 @@ signal-hook = { version = "0.3", default-features = false }
 p256 = { version = "0.13", default-features = false, features = ["arithmetic", "ecdsa"] }
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 # 0.27.1+ uses usize::is_multiple_of as a const fn (rustc ≥ 1.87).
-# Keep MSRV 1.85: pin the last 0.27 that builds on 1.85. Golden DER tests
-# are the protocol safety net if encodings differ from 0.27.4.
+# Exact pin until the rasn bump; golden DER tests are the protocol net.
 rasn = "=0.27.0"
 rc4 = "0.1"
 sha1 = "0.10"
