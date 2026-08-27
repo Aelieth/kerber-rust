@@ -8,6 +8,9 @@ this project uses semantic versioning once a crate is published.
 
 ### Fixed
 
+- `imports.lock` is formatted for cargo-vet **0.10.0** (CI pin
+  `cargo-vet@0.10.0`). 0.10.2 writes unescaped quotes in imported
+  `notes` and fails store-format against 0.10.0.
 - Same-realm TGS service tickets set `TRANSITED_POLICY_CHECKED` (RFC
   bit 12) when the KDC performs the transited check (empty same-realm
   transited included), matching MIT 1.22.2. `DISABLE_TRANSITED_CHECK`

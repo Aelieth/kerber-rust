@@ -46,7 +46,7 @@ jobs:
       - name: Install cargo-geiger and cargo-vet
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-geiger,cargo-vet
+          tool: cargo-geiger,cargo-vet@0.10.0
       - name: cargo-geiger (per-crate, 0-unsafe product)
         run: ./scripts/geiger.sh
         env:

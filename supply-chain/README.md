@@ -2,7 +2,9 @@
 
 Imported audit sets: **Google**, **Mozilla**, **Bytecode Alliance**
 (names in the cargo-vet registry). `cargo vet --locked` is the CI
-gate.
+gate. CI installs **cargo-vet 0.10.0** (`cargo-vet@0.10.0`); 0.10.2
+escapes imported `notes` quotes differently and fails store-format
+on this `imports.lock`.
 
 **RustCrypto** is not in that registry (checked 2026-08-27) and no
 published `audits.toml` URL was found. RustCrypto crates in this tree
