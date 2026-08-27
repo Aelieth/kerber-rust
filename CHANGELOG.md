@@ -6,16 +6,13 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-08-27
+
 ### Fixed
 
 - Clippy on rustc 1.98 (`-D clippy::pedantic`) accepts `map_or` /
   `is_ok_and` in place of `map().unwrap_or`. GitHub Actions `test`
   was failing at clippy before tests or the harness ran.
-
-## [1.0.0] - 2026-08-27
-
-### Fixed
-
 - `imports.lock` is formatted for cargo-vet **0.10.0** (CI pin
   `cargo-vet@0.10.0`). 0.10.2 writes unescaped quotes in imported
   `notes` and fails store-format against 0.10.0.
