@@ -1169,14 +1169,21 @@ fn issue_as_and_tgs_with_etype_20_mint_sha2_tickets() {
 }
 
 #[test]
-fn same_realm_ticket_omits_transited_policy_checked() {
+fn same_realm_ticket_sets_transited_policy_checked() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 70);
+    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
+    let tgt_part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("tgt");
+    assert!(
+        !tgt_part.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED),
+        "AS-REP TGT must not set TRANSITED-POLICY-CHECKED"
+    );
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let tgt = tgs_req(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
-        &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]),
+        &cname,
         documented_host(),
         TEST_REALM,
         71,
@@ -1190,8 +1197,29 @@ fn same_realm_ticket_omits_transited_policy_checked() {
         .unwrap();
     let part = decrypt_ticket_part(&host.key, &out.rep.0.ticket).expect("enc");
     assert!(
-        !part.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED),
-        "same-realm ticket must not set TRANSITED-POLICY-CHECKED"
+        part.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED),
+        "same-realm TGS must set TRANSITED-POLICY-CHECKED when the check ran"
+    );
+
+    let skip = tgs_req_ex(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        72,
+        KdcOptions::forwardable().with_bit(flag_bit::DISABLE_TRANSITED_CHECK, true),
+        None,
+        Vec::new(),
+        pref_etypes(),
+    )
+    .expect("tgs skip");
+    let skipped = krb5_kdc::issue_tgs(&store, &skip).expect("issue skip");
+    let skip_part = decrypt_ticket_part(&host.key, &skipped.rep.0.ticket).expect("enc skip");
+    assert!(
+        !skip_part.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED),
+        "DISABLE_TRANSITED_CHECK must leave TRANSITED-POLICY-CHECKED off"
     );
 }
 

@@ -512,7 +512,8 @@ fn issue_tgs_from(
     {
         evidence_logon = Some(logon);
     }
-    if utf8_realm(&enc_tkt.crealm) != store.realm() {
+    let skip_transited = body.kdc_options.bit(flag_bit::DISABLE_TRANSITED_CHECK);
+    if !skip_transited && utf8_realm(&enc_tkt.crealm) != store.realm() {
         for r in enc_tkt.transited.realms() {
             if store.policy.transited_reject.iter().any(|d| d == &r) {
                 return Err(proto(err::PATH_NOT_ACCEPTED, &r));
@@ -525,8 +526,6 @@ fn issue_tgs_from(
         (skey.key.clone(), skey.kvno, skey.etype)
     };
     let mut transited = enc_tkt.transited.clone();
-    let cross_realm = (sname.is_krbtgt() && !sname.is_krbtgt_for(store.realm()))
-        || utf8_realm(&enc_tkt.crealm) != store.realm();
     // RFC 4120: transited lists intermediate realms, excluding the client's
     // realm and the ticket server realm. A first-hop referral from a local
     // TGT must stay empty; only an incoming foreign TGT names us.
@@ -543,7 +542,8 @@ fn issue_tgs_from(
         }
     }
     let mut flags = TicketFlags::none();
-    if cross_realm {
+    // Bit 12: the check ran (same-realm empty transited included). MIT matches.
+    if !skip_transited {
         flags = flags.with_bit(flag_bit::TRANSITED_POLICY_CHECKED, true);
     }
     if enc_tkt.flags.pre_authent() {
