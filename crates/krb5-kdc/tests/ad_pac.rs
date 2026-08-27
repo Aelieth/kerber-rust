@@ -9,7 +9,7 @@ use krb5_asn1::decode;
 use krb5_crypto::{checksum, KeyUsage};
 use krb5_kdc::{
     bootstrap_documented, decrypt_ticket_part, documented_host, pac_from_ticket_part, sign_pac,
-    ticket_checksum_der, verify_pac, verify_pac_signatures, TEST_REALM, TEST_USER,
+    ticket_checksum_der, verify_pac, verify_pac_signatures, Error, TEST_REALM, TEST_USER,
 };
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req, FileCcache, Keytab};
 use krb5_types::ku;
@@ -18,7 +18,7 @@ use krb5_types::pac::{
     PAC_FULL_CHECKSUM, PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM, PAC_REQUESTER_SID,
     PAC_SERVER_CHECKSUM, PAC_TICKET_CHECKSUM, PAC_UPN_DNS_INFO,
 };
-use krb5_types::{PrincipalName, Ticket};
+use krb5_types::{err, PrincipalName, Ticket};
 
 fn traces_ad() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/traces/ad")
@@ -227,6 +227,80 @@ fn issued_pac_self_verifies_all_four_signatures() {
     // Re-sign uses the service-ticket checksum input, so ticket/full will
     // not match that EncTicketPart; server+kdc still must.
     verify_pac(&signed, &host.key, &krbtgt.key).expect("re-sign server+kdc");
+}
+
+fn flip_pac_mac(pac_bytes: &[u8], kind: u32) -> Vec<u8> {
+    let mut parsed = Pac::parse(pac_bytes).expect("parse");
+    let buf = parsed
+        .buffers
+        .iter_mut()
+        .find(|b| b.kind == kind)
+        .expect("sig buffer");
+    assert!(buf.data.len() > 4, "MAC bytes past SignatureType");
+    buf.data[4] ^= 0xff;
+    parsed.to_bytes()
+}
+
+#[test]
+fn signed_pac_tampered_kdc_and_full_checksums_are_bad_integrity() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let user = store.get_name(&cname).unwrap().best_key().unwrap();
+    let req = as_req(
+        cname.clone(),
+        TEST_REALM,
+        711,
+        Some(vec![pa_enc_timestamp(&user.key).expect("pa")]),
+    )
+    .unwrap();
+    let as_out = krb5_kdc::issue_as(&store, &req).expect("AS");
+    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
+    let tgs = tgs_req(
+        as_out.rep.0.ticket.clone(),
+        &as_out.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        712,
+    )
+    .expect("TGS-REQ");
+    let tgs_out = krb5_kdc::issue_tgs(&store, &tgs).expect("TGS");
+    let host = store
+        .get_name(&documented_host())
+        .unwrap()
+        .best_key()
+        .unwrap();
+    let svc = decrypt_ticket_part(&host.key, &tgs_out.rep.0.ticket).expect("svc");
+    let der = ticket_checksum_der(&svc).expect("svc zeroed");
+    let ident = store.pac_identity(&cname, TEST_REALM);
+    let signed = sign_pac(
+        &cname,
+        svc.authtime.unix_seconds(),
+        &host.key,
+        &krbtgt.key,
+        &der,
+        &ident,
+        None,
+    )
+    .expect("sign");
+    verify_pac_signatures(&signed, &host.key, Some(&krbtgt.key), Some(&der)).expect("clean");
+
+    let flipped7 = flip_pac_mac(&signed, PAC_PRIVSVR_CHECKSUM);
+    match verify_pac_signatures(&flipped7, &host.key, Some(&krbtgt.key), Some(&der)) {
+        Err(Error::Protocol { code, .. }) => {
+            assert_eq!(code, err::BAD_INTEGRITY, "type-7 MAC flip");
+        }
+        other => panic!("expected BAD_INTEGRITY for type 7, got {other:?}"),
+    }
+
+    let flipped19 = flip_pac_mac(&signed, PAC_FULL_CHECKSUM);
+    match verify_pac_signatures(&flipped19, &host.key, Some(&krbtgt.key), Some(&der)) {
+        Err(Error::Protocol { code, .. }) => {
+            assert_eq!(code, err::BAD_INTEGRITY, "type-19 MAC flip");
+        }
+        other => panic!("expected BAD_INTEGRITY for type 19, got {other:?}"),
+    }
 }
 
 #[test]

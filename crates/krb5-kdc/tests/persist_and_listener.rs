@@ -61,6 +61,30 @@ fn persist_survives_restart_without_key_regen() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[cfg(unix)]
+#[test]
+fn persist_writes_db_and_stash_mode_0600() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!(
+        "krb5-persist-0600-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::create_dir_all(&dir);
+    let db = dir.join("principal");
+    let stash = dir.join("stash");
+    let (store, _) = bootstrap_documented().unwrap();
+    save_store(&store, &db, &stash).unwrap();
+    let db_mode = std::fs::metadata(&db).unwrap().permissions().mode() & 0o777;
+    let stash_mode = std::fs::metadata(&stash).unwrap().permissions().mode() & 0o777;
+    assert_eq!(db_mode, 0o600, "db must be 0600");
+    assert_eq!(stash_mode, 0o600, "stash must be 0600");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn reload_if_stale_sees_kadmin_create() {
     let dir = std::env::temp_dir().join(format!(
