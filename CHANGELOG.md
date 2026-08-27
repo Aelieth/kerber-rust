@@ -6,6 +6,8 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-08-27
+
 ### Fixed
 
 - `imports.lock` is formatted for cargo-vet **0.10.0** (CI pin
@@ -27,6 +29,12 @@ this project uses semantic versioning once a crate is published.
 
 ### Added
 
+- PAC type-7 (KDC) and type-19 (full) MAC-byte tamper negatives:
+  shipped `sign_pac` then `verify_pac_signatures` returns
+  `BAD_INTEGRITY`. Unix `save_store` writes db and stash mode 0600.
+- Interop matrix: [`docs/interop-matrix.md`](docs/interop-matrix.md)
+  (MIT / Samba / Heimdal external oracles + supply-chain; loopback,
+  soak, golden/KAT/fuzz, and SSPI `exit 2` labeled not-external).
 - C3 supply-chain and security artifacts: `docs/security.md` timing/replay
   matrix; KDC TGS-authenticator and PA-ENC-TIMESTAMP `REPEAT` tests;
   `ReplayCache` window/cap/poison tests; per-crate `scripts/geiger.sh`
@@ -36,7 +44,7 @@ this project uses semantic versioning once a crate is published.
   dual `getrandom` 0.2/0.4 justified by the MSRV `rasn` pin). `NOTICE`
   plus `docs/export-control.md` (ECCN 5D002 / TSU §740.13(e) note).
   Logs-as-metrics documented; in-process counters deferred. In the CI
-  `audit` job. **1.0 stays untagged.**
+  `audit` job.
 - Heimdal 7.8 secondary oracle: `harness/heimdal/` (Debian bookworm apt,
   no `krb5-user`; HDB master key etype 18) and
   `scripts/heimdal-gate.sh`. Both directions content-assert AES-SHA1:

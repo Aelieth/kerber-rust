@@ -5,7 +5,9 @@ wire compatibility with [MIT Kerberos](https://web.mit.edu/kerberos/)
 **1.22.2**, Heimdal, and Active Directory. There is no C FFI in this
 tree.
 
-This is an early-stage project targeting MIT 1.22.2 wire compatibility.
+This is the **1.0** MIT 1.22.2 / Heimdal / AD interop tree. The
+external-oracle inventory is
+[docs/interop-matrix.md](docs/interop-matrix.md).
 **Content-asserting MIT 1.22.2 gates exist for** AS/TGS (`client-gate`,
 `kdc-gate`, including FAST TGS `kvno`), GSS wrap (`gss-gate`), PKINIT
 `kinit` (`pkinit-gate.sh`, hard-fail without `pkinit.so`), SPAKE
