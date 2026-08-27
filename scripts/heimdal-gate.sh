@@ -46,8 +46,8 @@ assert_klist() {
     local text="$2"
     echo "==== $label ===="
     echo "$text"
-    echo "$text" | grep -q 'user@' || die "$label klist missing user@"
-    echo "$text" | grep -q 'host/testhost.' || die "$label klist missing host/testhost."
+    echo "$text" | grep -q 'user@KERBER.TEST' || die "$label klist missing user@KERBER.TEST"
+    echo "$text" | grep -q 'host/testhost.kerber.test' || die "$label klist missing host/testhost.kerber.test"
 }
 
 write_client_conf() {
@@ -87,7 +87,7 @@ trap cleanup EXIT
 
 echo "==== Heimdal client vs Rust KDC ===="
 docker run -d --name "$NAME_H2R" --entrypoint sleep "$IMAGE" 3600 >/dev/null \
-    || unavailable "docker run $IMAGE (sleep) failed"
+    || die "docker run $IMAGE (sleep) failed"
 docker cp target/debug/krb5-kdc "$NAME_H2R":/tmp/krb5-kdc \
     || die "docker cp krb5-kdc failed"
 docker exec "$NAME_H2R" chmod +x /tmp/krb5-kdc
@@ -137,7 +137,7 @@ log "heimdal.client.rustkdc" "ok" ",\"principal\":\"${USER_PRINC}\",\"service\":
 
 echo "==== Rust client vs Heimdal KDC ===="
 docker run -d --name "$NAME_R2H" "$IMAGE" >/dev/null \
-    || unavailable "docker run $IMAGE (kdc) failed"
+    || die "docker run $IMAGE (kdc) failed"
 ok=0
 for _ in $(seq 1 40); do
     if docker logs "$NAME_R2H" 2>&1 | grep -q '"event":"heimdal.start"'; then
