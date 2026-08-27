@@ -18,10 +18,12 @@ Stage 2 production-gate of a *Rust client* is Stage 3. This repository
 currently gates crypto/ASN.1 on known-answer tests, malformed-input
 tests, fmt/clippy, and harness `kinit` against MIT 1.22.2.
 
-## Era II — Active Directory interop & production verification (1.0)
+## Era II — Active Directory interop & production verification (closed at 1.0)
 
-Stages 1–6 are done at the MIT-1.22.2 level. Era II Track A/B/C is in
-tree; the external-oracle inventory is [`interop-matrix.md`](interop-matrix.md):
+Stages 1–8 are done at the MIT-1.22.2 + Samba + Heimdal level that
+**v1.0.0** claims. The external-oracle inventory is
+[`interop-matrix.md`](interop-matrix.md). Local breadcrumbs:
+`working/era-ii/`.
 
 - **Track A — AD/Windows interop:** NDR32 `KERB_VALIDATION_INFO` decodes the
   captured `kbruser` PAC (`tests/traces/pac-kbruser.ndr`) byte-identically.
