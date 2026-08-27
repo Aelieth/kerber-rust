@@ -8,6 +8,10 @@ this project uses semantic versioning once a crate is published.
 
 ### Fixed
 
+- Same-realm TGS service tickets set `TRANSITED_POLICY_CHECKED` (RFC
+  bit 12) when the KDC performs the transited check (empty same-realm
+  transited included), matching MIT 1.22.2. `DISABLE_TRANSITED_CHECK`
+  skips the check and leaves the flag off. AS-REP TGTs are unchanged.
 - TGS-REP sname compare uses name-string components, not `name-type`.
   RFC 4120 treats name-type as a hint; Heimdal canonicalize may return
   NT-SRV-HST for a host principal requested as NT-PRINCIPAL.

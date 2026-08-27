@@ -203,7 +203,10 @@ when that oracle is absent.
     Rust `tr-type` 0.
   - `mit-extra-ticket-flags` — MIT sets canonicalize (bit 15) on issued
     tickets; that bit is masked. Any other un-whitelisted flag bit
-    fails red.
+    fails red. Same-realm TGS sets `TRANSITED_POLICY_CHECKED` (bit 12)
+    when the transited check ran, matching MIT; it is not whitelisted.
+    `DISABLE_TRANSITED_CHECK` leaves the flag off. AS-REP TGTs do not
+    set bit 12.
 - `scripts/kprop-gate.sh` — MIT `kprop` of a version-7 dump to
   `krb5-kpropd` on 754 (`kprop5_01` sendauth, KRB-SAFE size, KRB-PRIV
   32768-byte chunks), then MIT `kinit user` against the replica Rust
