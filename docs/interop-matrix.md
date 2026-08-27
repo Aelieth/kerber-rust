@@ -80,5 +80,7 @@ implementation oracle.
 | cargo-vet exemptions | shrinking list; not a full local audit of every crate | documented |
 | in-process metrics counters | deferred; logs-as-metrics only (`logging.md`) | n/a |
 
-MSRV 1.85 `cargo test --workspace --locked` is the `msrv` job (`rasn = "=0.27.0"`).
-`publish = false` stays; this matrix is the 1.0 claim, not crates.io.
+MSRV 1.95 `cargo test --workspace --locked` is the `msrv` job (edition
+2024; `rasn` 0.28, goldens are the DER net). `publish = false` stays;
+this matrix is the 1.0 claim, not crates.io. KLLDAP alignment:
+[`integration-klldap.md`](integration-klldap.md).

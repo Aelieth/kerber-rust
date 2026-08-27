@@ -86,3 +86,11 @@ Rust→MIT, additive to the in-process dump/send tests). **kadmind** MIT-gates a
 `ad-windows-gate`, `ad-s4u-gate`, `samba-pac-verify-gate`,
 `samba-pac-l2-gate`, `samba-crossrealm-gate`, `samba-realtrust-gate`,
 `heimdal-gate`.
+
+## Era III — KLLDAP integration (Phase 1 landed)
+
+`v1.0.0` is the tagged MIT/Samba/Heimdal baseline. Phase 1 aligns
+edition **2024**, MSRV **1.95**, `nix` 0.31, and unpinned `rasn` 0.28
+with KLLDAP 0.7.5 so a future embed has no overlapping crate majors.
+See [`integration-klldap.md`](integration-klldap.md). Replacing
+`lldap-kerberos` FFI-to-system-MIT is a later phase.

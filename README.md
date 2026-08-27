@@ -53,11 +53,13 @@ honest ECCN 5D002 / TSU §740.13(e) note). Supply
 chain: `cargo audit`, `cargo deny`, per-crate `cargo geiger` (`scripts/geiger.sh`),
 and `cargo vet --locked` in the CI `audit` job. See
 [docs/security.md](docs/security.md).
-MSRV is **1.85** (`package.rust-version`); CI `msrv` runs
-`cargo test --workspace --locked` on that toolchain (`rasn` is pinned
-at `=0.27.0` so the lockfile builds there). The product itself is
-`forbid(unsafe_code)`; some dependencies contain `unsafe` (RustCrypto,
-getrandom, nix).
+MSRV is **1.95** (`package.rust-version`), edition **2024**, matching
+KLLDAP 0.7.5. CI `msrv` runs `cargo test --workspace --locked` on that
+toolchain. `rasn` is unpinned (`0.28`, lock 0.28.14); MIT golden DER is
+the protocol net. See
+[docs/integration-klldap.md](docs/integration-klldap.md). The product
+itself is `forbid(unsafe_code)`; some dependencies contain `unsafe`
+(RustCrypto, getrandom, nix).
 
 ## Architecture
 

@@ -93,10 +93,11 @@ AD PAC: `crates/krb5-kdc/tests/ad_pac.rs` decodes committed
 captured `host/svc` PAC server checksum is verified (usage 17). Skip
 cleanly without the keytab.
 
-MSRV is 1.85 (`package.rust-version`). The `msrv` CI job is
-`cargo test --workspace --locked` on that toolchain, with `rasn`
-pinned at `=0.27.0` (`0.27.1+` does not build on 1.85). There is no
-unlocked `--locked` fallback.
+MSRV is 1.95 (`package.rust-version`), edition 2024, matching KLLDAP
+0.7.5. The `msrv` CI job is `cargo test --workspace --locked` on that
+toolchain. `rasn` is unpinned (`0.28`); golden MIT DER is the protocol
+net if encodings drift. There is no unlocked `--locked` fallback.
+KLLDAP alignment: [`integration-klldap.md`](integration-klldap.md).
 
 Era II gates. The harness CI job runs `kadmin-gate`, `kpasswd-gate`,
 `kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `restart-gate`,

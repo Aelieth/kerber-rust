@@ -6,6 +6,14 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased]
 
+### Changed
+
+- Align the workspace with KLLDAP 0.7.5: edition **2024**, MSRV **1.95**,
+  `nix` **0.31**, and `rasn` unpinned at **0.28.14**. MIT golden DER
+  still byte-matches `tests/traces/mit-*.der`. Privilege-drop still
+  no-ops when not root. See
+  [`docs/integration-klldap.md`](docs/integration-klldap.md).
+
 ## [1.0.0] - 2026-08-27
 
 ### Fixed
