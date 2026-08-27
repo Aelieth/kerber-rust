@@ -1,0 +1,8 @@
+
+# cargo-vet audits file
+
+[[audits.rasn-derive]]
+who = "Aelieth <shaiaelieth@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.27.0"
+notes = "Thin proc-macro facade: parse DeriveInput, forward to rasn-derive-impl, convert syn errors to compile_error. No unsafe."
