@@ -9,6 +9,7 @@ Documented CI bounds (debug build, bounded wire load):
   throughput       >= 8        (kdc.issue outcome=ok per second)
   error_rate       == 0
   panics           == 0
+Stress p99/throughput/windows skip env-up + MIT-before (--warmup-log).
 Stress additionally:
   second-window p99 <= first-window p99 * 2.5
 Soak additionally:
@@ -149,10 +150,21 @@ def window_p99(durations: list[tuple[float, float]], nwindows: int) -> list[floa
 
 def evaluate(args: argparse.Namespace, parsed: dict, rss: dict | None) -> dict:
     issues = list(parsed["issues"])
+    skip = max(0, int(getattr(args, "skip_first_ok", 0) or 0))
+    warmup_path = getattr(args, "warmup_log", None)
+    if warmup_path:
+        w = parse_logs([pathlib.Path(warmup_path)])
+        skip = len(w["durations"])
+        issues.extend(w["issues"])
+    durations = parsed["durations"][skip:]
+    durs = [d for _, d in durations]
+    n_ok = len(durs)
+    p50 = percentile(durs, 50)
+    p99 = percentile(durs, 99)
+    max_us = max(durs) if durs else None
     elapsed = args.elapsed_s
-    throughput = (parsed["n_issue_ok"] / elapsed) if elapsed and elapsed > 0 else None
+    throughput = (n_ok / elapsed) if elapsed and elapsed > 0 else None
     if args.p99_max_us is not None:
-        p99 = parsed["p99_us"]
         if p99 is None:
             issues.append("no_duration_us")
         elif p99 > args.p99_max_us:
@@ -166,9 +178,9 @@ def evaluate(args: argparse.Namespace, parsed: dict, rss: dict | None) -> dict:
         issues.append(f"error_rate:{parsed['error_rate']}>max:{args.max_error_rate}")
     if parsed["panics"] != 0:
         issues.append(f"panics:{parsed['panics']}")
-    if args.min_issue_ok is not None and parsed["n_issue_ok"] < args.min_issue_ok:
-        issues.append(f"issue_ok:{parsed['n_issue_ok']}<min:{args.min_issue_ok}")
-    windows = window_p99(parsed["durations"], args.windows) if args.windows else []
+    if args.min_issue_ok is not None and n_ok < args.min_issue_ok:
+        issues.append(f"issue_ok:{n_ok}<min:{args.min_issue_ok}")
+    windows = window_p99(durations, args.windows) if args.windows else []
     if args.windows >= 2 and args.degrade_factor is not None and len(windows) >= 2:
         first, last = windows[0], windows[-1]
         if first is None or last is None:
@@ -197,11 +209,12 @@ def evaluate(args: argparse.Namespace, parsed: dict, rss: dict | None) -> dict:
         "correlation_id_fields": parsed["n_cid"],
         "panics": parsed["panics"],
         "error_rate": parsed["error_rate"],
-        "p50_us": parsed["p50_us"],
-        "p99_us": parsed["p99_us"],
-        "max_us": parsed["max_us"],
+        "p50_us": p50,
+        "p99_us": p99,
+        "max_us": max_us,
         "elapsed_s": elapsed,
         "throughput": throughput,
+        "skipped_ok": skip,
         "windows_p99_us": windows,
         "rss": rss,
         "issues": issues,
@@ -241,6 +254,8 @@ def self_test() -> int:
             rss_max_growth=2.0,
             rss_max_extra_mib=20.0,
             rss_max_slope_mib_s=None,
+            skip_first_ok=0,
+            warmup_log=None,
         )
         rep = evaluate(ns, parsed, None)
         if rep["outcome"] != "ok":
@@ -325,6 +340,49 @@ def self_test() -> int:
         if rep_old["outcome"] != "ok":
             print("self-test rss old-floor should pass", json.dumps(rep_old), file=sys.stderr)
             return 1
+        slow = json.dumps(
+            {
+                "fields": {
+                    "event": "kdc.issue",
+                    "outcome": "ok",
+                    "correlation_id": "ee",
+                    "duration_us": 200_000,
+                }
+            }
+        )
+        warm = pathlib.Path(td) / "warmup.log"
+        full = pathlib.Path(td) / "warmed.log"
+        warm.write_text(slow + "\n" + slow + "\n")
+        full.write_text(slow + "\n" + slow + "\n" + "\n".join(ok_lines) + "\n")
+        ns.p99_max_us = 50000
+        ns.max_error_rate = 0.0
+        ns.min_issue_ok = 10
+        ns.min_rss_samples = 0
+        ns.warmup_log = None
+        ns.skip_first_ok = 0
+        parsed_full = parse_logs([full])
+        rep_cold = evaluate(ns, parsed_full, None)
+        if rep_cold["outcome"] != "error" or not any(
+            i.startswith("p99_us:") for i in rep_cold["issues"]
+        ):
+            print("self-test cold p99 did not fail", json.dumps(rep_cold), file=sys.stderr)
+            return 1
+        ns.warmup_log = str(warm)
+        rep_warm = evaluate(ns, parsed_full, None)
+        if rep_warm["outcome"] != "ok" or rep_warm.get("skipped_ok") != 2:
+            print("self-test warmup skip should pass", json.dumps(rep_warm), file=sys.stderr)
+            return 1
+        tail = pathlib.Path(td) / "tail-spike.log"
+        tail.write_text("\n".join(ok_lines) + "\n" + slow + "\n")
+        ns.warmup_log = None
+        ns.skip_first_ok = 0
+        parsed_tail = parse_logs([tail])
+        rep_tail = evaluate(ns, parsed_tail, None)
+        if rep_tail["outcome"] != "error" or not any(
+            i.startswith("p99_us:") for i in rep_tail["issues"]
+        ):
+            print("self-test trailing spike did not fail", json.dumps(rep_tail), file=sys.stderr)
+            return 1
     print("self-test ok")
     return 0
 
@@ -345,6 +403,8 @@ def main() -> int:
     ap.add_argument("--rss-max-growth", type=float, default=2.0)
     ap.add_argument("--rss-max-extra-mib", type=float, default=20.0)
     ap.add_argument("--rss-max-slope-mib-s", type=float, default=None)
+    ap.add_argument("--skip-first-ok", type=int, default=0)
+    ap.add_argument("--warmup-log", default=None)
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args()
     if args.self_test:

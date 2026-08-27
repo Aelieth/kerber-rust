@@ -57,6 +57,12 @@ prod_stage_loadgen || die "stage loadgen"
 
 echo "==== MIT sample before load ===="
 prod_mit_sample before || die "MIT kinit/kvno failed before load"
+# Cold PAC-sized AS-REP and first worker burst are bring-up, not the load
+# p99 (GHA first-window ~100 ms). Snapshot after a discarded warmup run.
+echo "==== warmup loadgen ===="
+prod_loadgen "$PIP" >"$OUT/loadgen-warmup.log" 2>&1 || die "warmup loadgen failed"
+grep -q '"err":0' "$OUT/loadgen-warmup.log" || die "warmup loadgen reported errors"
+docker cp "$PRIMARY":/tmp/kdc.log "$OUT/kdc-warmup.log"
 
 echo "==== wire loadgen workers=${KERBER_LOAD_WORKERS} iters=${KERBER_LOAD_ITERS} ===="
 MID_RC_FILE="$OUT/mid.rc"
@@ -89,6 +95,7 @@ ELAPSED=$((END - START))
 
 python3 "$ROOT/scripts/lib/analyze-kdc-slo.py" \
     --log "$OUT/kdc1.log" \
+    --warmup-log "$OUT/kdc-warmup.log" \
     --out "$OUT/slo.json" \
     --p99-max-us "$P99_MAX_US" \
     --throughput-min "$THROUGHPUT_MIN" \

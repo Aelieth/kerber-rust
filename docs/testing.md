@@ -236,9 +236,9 @@ when that oracle is absent.
   missing eth0 capture fails red. In CI after `prod-gate`.
 - `scripts/stress-gate.sh` — C2a: concurrent wire AS+TGS via
   `examples/loadgen.rs` plus MIT `kinit`/`kvno` under load. KDC JSON
-  `duration_us` p99 ≤ 50 ms, throughput ≥ 8 issue-ok/s, intra-run
-  window p99 degrade-factor 2.5, error-rate 0, panics 0
-  (`scripts/lib/analyze-kdc-slo.py`). Bounded; in CI.
+  `duration_us` p99 ≤ 50 ms after a discarded warmup load, throughput
+  ≥ 8 issue-ok/s, intra-run window p99 degrade-factor 2.5, error-rate 0,
+  panics 0 (`scripts/lib/analyze-kdc-slo.py`). Bounded; in CI.
 - `scripts/chaos-gate.sh` — C2b: `tc netem` delay/loss/reorder (MIT
   must complete), low `--memory` under load (no OOM-panic), `docker kill`
   of the primary mid-load then MIT `kinit`/`kvno` on the kprop replica
