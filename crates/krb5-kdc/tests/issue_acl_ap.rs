@@ -233,6 +233,60 @@ fn ap_req_valid_truncated_wrong_key_replay() {
 }
 
 #[test]
+fn tgs_authenticator_replay_is_repeat() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = client_key();
+    let req = as_req(
+        cname.clone(),
+        TEST_REALM,
+        31,
+        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
+    )
+    .unwrap();
+    let as_out = krb5_kdc::issue_as(&store, &req).expect("AS");
+    let tgs = tgs_req(
+        as_out.rep.0.ticket.clone(),
+        &as_out.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        32,
+    )
+    .expect("TGS-REQ");
+    krb5_kdc::issue_tgs(&store, &tgs).expect("first TGS");
+    let replay_err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
+    match replay_err {
+        Error::Protocol { code, .. } => {
+            assert_eq!(
+                code,
+                err::REPEAT,
+                "TGS authenticator replay must set REPEAT"
+            );
+        }
+        other => panic!("expected REPEAT, got {other}"),
+    }
+}
+
+#[test]
+fn pa_enc_timestamp_replay_is_repeat() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = client_key();
+    let padata = vec![pa_enc_timestamp(&key).expect("pa-ts")];
+    let req = as_req(cname, TEST_REALM, 33, Some(padata)).unwrap();
+    krb5_kdc::issue_as(&store, &req).expect("first AS");
+    let replay_err = krb5_kdc::issue_as(&store, &req).unwrap_err();
+    match replay_err {
+        Error::Protocol { code, .. } => {
+            assert_eq!(code, err::REPEAT, "same PA-ENC-TIMESTAMP must set REPEAT");
+        }
+        other => panic!("expected REPEAT, got {other}"),
+    }
+}
+
+#[test]
 fn handle_request_empty_is_error() {
     let store = PrincipalStore::new(TEST_REALM);
     let reply = krb5_kdc::handle_request(&store, &[]).expect("always a byte reply");

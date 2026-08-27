@@ -111,3 +111,71 @@ impl ReplayCache {
         self.len() == 0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread;
+
+    fn key(tag: u8) -> ReplayKey {
+        ReplayKey {
+            client: format!("user{tag}@KERBER.TEST"),
+            server: "krbtgt/KERBER.TEST@KERBER.TEST".into(),
+            ctime: 1_700_000_000,
+            cusec: u32::from(tag),
+            auth_hash: [tag; 20],
+        }
+    }
+
+    #[test]
+    fn window_prune_is_not_replay() {
+        let cache = ReplayCache::with_limits(8, Duration::from_millis(20));
+        let k = key(1);
+        assert!(!cache.check_and_store(k.clone()));
+        thread::sleep(Duration::from_millis(50));
+        assert!(
+            !cache.check_and_store(k),
+            "entries older than the window must not count as replays"
+        );
+    }
+
+    #[test]
+    fn cap_evicts_oldest_not_grow() {
+        let cache = ReplayCache::with_limits(2, Duration::from_secs(60));
+        let a = key(1);
+        let b = key(2);
+        let c = key(3);
+        assert!(!cache.check_and_store(a.clone()));
+        assert!(!cache.check_and_store(b.clone()));
+        assert_eq!(cache.len(), 2);
+        assert!(!cache.check_and_store(c.clone()));
+        assert_eq!(cache.len(), 2, "cap must not grow unbounded");
+        assert!(
+            cache.check_and_store(b.clone()),
+            "live entry must still be a replay"
+        );
+        assert!(
+            cache.check_and_store(c),
+            "newest live entry must still be a replay"
+        );
+        assert!(
+            !cache.check_and_store(a),
+            "evicted oldest must not count as a replay"
+        );
+        assert_eq!(cache.len(), 2);
+    }
+
+    #[test]
+    fn poison_fails_closed() {
+        let cache = ReplayCache::with_limits(8, Duration::from_secs(60));
+        let inner = Arc::clone(&cache.inner);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _g = inner.lock().unwrap();
+            panic!("poison");
+        }));
+        assert!(
+            cache.check_and_store(key(1)),
+            "a poisoned lock must be treated as a replay"
+        );
+    }
+}
