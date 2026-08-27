@@ -45,9 +45,9 @@ protocol are in [docs/ad-lab.md](docs/ad-lab.md). Live
 See [docs/stages.md](docs/stages.md).
 
 **License:** [Apache-2.0](LICENSE-APACHE) OR [MIT](LICENSE-MIT), at your
-option. This tree contains cryptographic software. Export from the
-United States (and some other jurisdictions) may require a license;
-review local export-control rules before distributing binaries. Supply
+option. See [NOTICE](NOTICE) and
+[docs/export-control.md](docs/export-control.md) (cryptographic software;
+honest ECCN 5D002 / TSU §740.13(e) note). Supply
 chain: `cargo audit` in CI; `deny.toml` for licenses/advisories.
 MSRV is **1.85** (`package.rust-version`); CI `msrv` runs
 `cargo test --workspace --locked` on that toolchain (`rasn` is pinned
