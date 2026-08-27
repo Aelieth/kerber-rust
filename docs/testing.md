@@ -28,6 +28,8 @@ PKINIT CMS, PAC NDR, SPAKE points, Oakley DH, GSS tokens) seeded from
 
 ## Interop
 
+The 1.0 external-oracle inventory is [`interop-matrix.md`](interop-matrix.md).
+
 Primary oracle: MIT Kerberos **1.22.2** in `harness/`. Secondary:
 Heimdal **7.8** in `harness/heimdal/` (`scripts/heimdal-gate.sh`). A
 Windows Server 2022 Evaluation DC (`AD.KERBER.TEST`) is captured for
