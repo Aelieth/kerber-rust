@@ -43,6 +43,14 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: cargo-deny
         uses: EmbarkStudios/cargo-deny-action@v2
+      - name: Install cargo-geiger
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-geiger
+      - name: cargo-geiger (per-crate, 0-unsafe product)
+        run: ./scripts/geiger.sh
+        env:
+          GEIGER_DEPS_OUT: ${{ runner.temp }}/geiger-deps.txt
 
   harness:
     runs-on: ubuntu-latest

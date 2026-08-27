@@ -6,6 +6,7 @@
 //! ticket from that store, and calls [`krb5_admin::kprop_send_store`].
 //! Dump keys are wrapped with `KRB5_MASTER_PASSWORD`.
 
+#![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::net::TcpStream;

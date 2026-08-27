@@ -5,6 +5,8 @@
 //! Password is `KRB5_PASSWORD`. Concurrency is `KERBER_LOAD_WORKERS` (default 8)
 //! times `KERBER_LOAD_ITERS` (default 8), or loop until `KERBER_LOAD_SECONDS`.
 
+#![forbid(unsafe_code)]
+
 use std::env;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;

@@ -5,6 +5,8 @@
 //! Env: `KRB5_PASSWORD`, `KERBER_PAUSER_PASSWORD`, `KERBER_DIFF_REALM`,
 //! `KERBER_KRBTGT_KEYTAB`, `KERBER_HOST_KEYTAB`.
 
+#![forbid(unsafe_code)]
+
 use std::env;
 use std::fmt::Write as _;
 use std::fs;

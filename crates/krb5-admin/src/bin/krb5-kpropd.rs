@@ -6,6 +6,7 @@
 //! authenticate `sendauth`. The dump body is loaded with
 //! `KRB5_MASTER_PASSWORD` and saved to the replica db.
 
+#![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::net::TcpListener;

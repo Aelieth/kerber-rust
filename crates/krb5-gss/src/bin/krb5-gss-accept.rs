@@ -3,6 +3,7 @@
 //! Speaks the MIT `gss-sample` TCP framing: 4-byte length prefix then token.
 //! Usage: `krb5-gss-accept --keytab PATH [--listen HOST:PORT]`
 
+#![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::io::{Read, Write};

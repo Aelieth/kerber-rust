@@ -10,6 +10,7 @@
 //! (MIT name or IANA number; default `aes256-cts-hmac-sha384-192`).
 //! Create passwords: `KRB5_TEST_USER_PASSWORD` / `KRB5_TEST_ADMIN_PASSWORD`.
 
+#![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::path::PathBuf;

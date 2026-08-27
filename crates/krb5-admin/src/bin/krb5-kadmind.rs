@@ -6,6 +6,7 @@
 //! bootstraps KERBER.TEST including `kadmin/admin` and `kadmin/changepw`.
 //! TCP 749 is kadm5; UDP 464 is RFC 3244 kpasswd.
 
+#![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::net::{TcpListener, UdpSocket};

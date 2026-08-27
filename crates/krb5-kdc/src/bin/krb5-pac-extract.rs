@@ -3,6 +3,7 @@
 //! Usage: `krb5-pac-extract --keytab <kt> --ccache <cc> --out <pac>`
 //! Optional: `--enc-tkt-out` (raw decrypted EncTicketPart), `--krbtgt-keytab`, `--keys-out`.
 
+#![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::fs;
