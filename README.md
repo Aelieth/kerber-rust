@@ -48,7 +48,9 @@ See [docs/stages.md](docs/stages.md).
 option. See [NOTICE](NOTICE) and
 [docs/export-control.md](docs/export-control.md) (cryptographic software;
 honest ECCN 5D002 / TSU §740.13(e) note). Supply
-chain: `cargo audit` in CI; `deny.toml` for licenses/advisories.
+chain: `cargo audit`, `cargo deny`, per-crate `cargo geiger` (`scripts/geiger.sh`),
+and `cargo vet --locked` in the CI `audit` job. See
+[docs/security.md](docs/security.md).
 MSRV is **1.85** (`package.rust-version`); CI `msrv` runs
 `cargo test --workspace --locked` on that toolchain (`rasn` is pinned
 at `=0.27.0` so the lockfile builds there). The product itself is

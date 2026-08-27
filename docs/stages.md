@@ -54,9 +54,12 @@ to full 1.0 parity is tracked in `working/plan-roadmap-adprod-*.md`:
   **chaos-gate** (netem + memory + failover-under-load), and **soak-gate**
   (RSS leak check; scheduled longer run). Differential-vs-MIT
   (`differential-gate`) is in CI. Heimdal 7.8 bidirectional (`heimdal-gate`)
-  is in CI. `cargo deny`; `cargo geiger` is installed but a
-  no-op on the virtual manifest (needs a per-package target); `cargo vet`
-  absent. SSPI oracle captured unavailable. **1.0 is not
+  is in CI. `cargo deny`, per-crate `cargo geiger` (`scripts/geiger.sh`),
+  and `cargo vet --locked` are in the CI `audit` job. Timing/replay
+  matrix: [`docs/security.md`](security.md). Export: [`NOTICE`](../NOTICE),
+  [`docs/export-control.md`](export-control.md). Logs-as-metrics:
+  [`docs/logging.md`](logging.md) (in-process counters deferred).
+  SSPI oracle captured unavailable. **1.0 is not
   tagged** (C4 matrix incomplete).
 
 **Audit caveats (2026-08-25).** PAC **NDR codec** and **RFC 8636 KDF** are

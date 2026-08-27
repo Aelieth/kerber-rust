@@ -20,6 +20,15 @@ never install a subscriber. Tests and the harness do.
 
 Canonical `event` strings live in `krb5_log::events`.
 
+## Logs as metrics
+
+Every issue and crypto/ASN.1 event already carries `duration_us` and
+`outcome`. An aggregator (log shipper, `analyze-kdc-slo.py`, the
+stress/soak gates) derives counts, rates, and p99 from those fields.
+**In-process counters, a metrics crate, and Prometheus are deferred**
+past 1.0; they are not 1.0-blocking. Do not add them unless the
+project later opts in.
+
 ## Example (JSON subscriber)
 
 ```json

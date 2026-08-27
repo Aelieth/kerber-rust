@@ -24,6 +24,16 @@ this project uses semantic versioning once a crate is published.
 
 ### Added
 
+- C3 supply-chain and security artifacts: `docs/security.md` timing/replay
+  matrix; KDC TGS-authenticator and PA-ENC-TIMESTAMP `REPEAT` tests;
+  `ReplayCache` window/cap/poison tests; per-crate `scripts/geiger.sh`
+  (0-unsafe product, dependency surface archived); `cargo vet --locked`
+  with Google / Mozilla / Bytecode Alliance imports (`rasn-derive`
+  0.27.0 locally audited; remaining third-party crates exempt;
+  dual `getrandom` 0.2/0.4 justified by the MSRV `rasn` pin). `NOTICE`
+  plus `docs/export-control.md` (ECCN 5D002 / TSU §740.13(e) note).
+  Logs-as-metrics documented; in-process counters deferred. In the CI
+  `audit` job. **1.0 stays untagged.**
 - Heimdal 7.8 secondary oracle: `harness/heimdal/` (Debian bookworm apt,
   no `krb5-user`; HDB master key etype 18) and
   `scripts/heimdal-gate.sh`. Both directions content-assert AES-SHA1:
