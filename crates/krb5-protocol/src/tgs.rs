@@ -3,17 +3,17 @@
 use std::time::Instant;
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{checksum, decrypt, encrypt, EncryptionType, KeyUsage, ProtocolKey};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt};
 use krb5_types::{
-    flag_bit, ku, pa, ApOptions, ApReq, Authenticator, Checksum, EncKdcRepPart, EncTgsRepPart,
-    EncryptedData, KdcOptions, KdcReq, KdcReqBody, KerberosTime, PaData, PrincipalName, TgsRep,
-    TgsReq, Ticket,
+    ApOptions, ApReq, Authenticator, Checksum, EncKdcRepPart, EncTgsRepPart, EncryptedData,
+    KdcOptions, KdcReq, KdcReqBody, KerberosTime, PaData, PrincipalName, TgsRep, TgsReq, Ticket,
+    flag_bit, ku, pa,
 };
 
 use crate::as_ex::AsOutcome;
 use crate::error::Error;
 
-use crate::transport::{exchange, KdcAddr};
+use crate::transport::{KdcAddr, exchange};
 
 /// Successful TGS exchange.
 #[derive(Clone, Debug)]
@@ -270,10 +270,9 @@ fn tgs_once(
     let TgsRep(inner) = decode::<TgsRep>(&reply)?;
     let usage = KeyUsage::new(ku::TGS_REP_ENC_PART)?;
     let plain = decrypt(&tgt.session_key, usage, inner.enc_part.cipher.as_ref())?;
-    let enc_part = if let Ok(EncTgsRepPart(p)) = decode::<EncTgsRepPart>(&plain) {
-        p
-    } else {
-        decode::<EncKdcRepPart>(&plain)?
+    let enc_part = match decode::<EncTgsRepPart>(&plain) {
+        Ok(EncTgsRepPart(p)) => p,
+        _ => decode::<EncKdcRepPart>(&plain)?,
     };
     if enc_part.nonce != nonce {
         return Err(Error::NonceMismatch);
@@ -306,8 +305,8 @@ fn random_nonce31() -> Result<u32, Error> {
 mod tests {
     use krb5_crypto::{EncryptionType, ProtocolKey};
     use krb5_types::{
-        ascii, EncKdcRepPart, EncryptedData, EncryptionKey, OctetString, PrincipalName, Ticket,
-        TicketFlags,
+        EncKdcRepPart, EncryptedData, EncryptionKey, OctetString, PrincipalName, Ticket,
+        TicketFlags, ascii,
     };
 
     use super::*;

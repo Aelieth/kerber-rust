@@ -14,9 +14,9 @@
 use std::path::PathBuf;
 
 use krb5_kdc::{
-    bind_preferred, documented_admin_id, documented_changepw, documented_host, documented_kadmin,
-    drop_privileges, load_store, serve, shared_store, Acl, PrincipalStore, BIND_CANDIDATES,
-    TEST_ADMIN, TEST_REALM, TEST_USER,
+    Acl, BIND_CANDIDATES, PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER, bind_preferred,
+    documented_admin_id, documented_changepw, documented_host, documented_kadmin, drop_privileges,
+    load_store, serve, shared_store,
 };
 
 fn main() {

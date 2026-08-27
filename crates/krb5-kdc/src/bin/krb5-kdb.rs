@@ -17,8 +17,8 @@ use std::path::PathBuf;
 
 use krb5_crypto::EncryptionType;
 use krb5_kdc::{
-    bootstrap_realm, load_dump_etype, load_store, parse_dump, save_store, write_dump_path_etype,
-    KDB_DUMP_VERSION, TEST_ADMIN, TEST_USER,
+    KDB_DUMP_VERSION, TEST_ADMIN, TEST_USER, bootstrap_realm, load_dump_etype, load_store,
+    parse_dump, save_store, write_dump_path_etype,
 };
 
 fn main() {

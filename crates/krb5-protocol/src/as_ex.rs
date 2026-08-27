@@ -3,15 +3,15 @@
 use std::time::Instant;
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{decrypt, encrypt, string_to_key, EncryptionType, KeyUsage, ProtocolKey};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, string_to_key};
 use krb5_types::{
-    err, ku, pa, AsRep, AsReq, EncAsRepPart, EncKdcRepPart, EncryptedData, EtypeInfo, EtypeInfo2,
-    KdcOptions, KdcReq, KdcReqBody, KerberosTime, KrbError, MethodData, PaData, PaEncTsEnc,
-    PrincipalName,
+    AsRep, AsReq, EncAsRepPart, EncKdcRepPart, EncryptedData, EtypeInfo, EtypeInfo2, KdcOptions,
+    KdcReq, KdcReqBody, KerberosTime, KrbError, MethodData, PaData, PaEncTsEnc, PrincipalName, err,
+    ku, pa,
 };
 
 use crate::error::Error;
-use crate::transport::{exchange, KdcAddr};
+use crate::transport::{KdcAddr, exchange};
 
 /// Successful AS exchange: TGT plus session key.
 #[derive(Clone, Debug)]
@@ -503,7 +503,7 @@ fn emit(event: &'static str, correlation_id: &str, started: Instant, err: Option
 mod decode_enc_as_tests {
     use super::*;
     use krb5_types::{
-        ascii, kerberos_time_from_utc_z, EncTgsRepPart, EncryptionKey, OctetString, TicketFlags,
+        EncTgsRepPart, EncryptionKey, OctetString, TicketFlags, ascii, kerberos_time_from_utc_z,
     };
 
     fn sample_part() -> EncKdcRepPart {

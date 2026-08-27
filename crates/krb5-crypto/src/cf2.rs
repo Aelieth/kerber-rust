@@ -65,8 +65,8 @@ pub struct P256Keypair {
 ///
 /// [`Error::Rng`] when the CSPRNG fails or the scalar is invalid.
 pub fn p256_generate() -> Result<P256Keypair, Error> {
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
     use p256::elliptic_curve::PrimeField;
+    use p256::elliptic_curve::sec1::ToEncodedPoint;
     use p256::{AffinePoint, ProjectivePoint};
     let scalar = random_scalar()?;
     let point = ProjectivePoint::GENERATOR * scalar;
@@ -142,7 +142,7 @@ fn random_scalar() -> Result<p256::Scalar, Error> {
 }
 
 fn scalar_from_bytes32(b: &[u8; 32]) -> Result<p256::Scalar, Error> {
-    use p256::elliptic_curve::{ff::Field, PrimeField};
+    use p256::elliptic_curve::{PrimeField, ff::Field};
     let s = Option::<p256::Scalar>::from(p256::Scalar::from_repr((*b).into()))
         .ok_or(Error::Integrity)?;
     if bool::from(s.is_zero()) {

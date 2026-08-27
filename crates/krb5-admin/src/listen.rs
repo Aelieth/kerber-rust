@@ -2,16 +2,16 @@
 
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream, UdpSocket};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, ProtocolKey};
-use krb5_kdc::{save_store, SharedStore};
+use krb5_kdc::{SharedStore, save_store};
 use krb5_protocol::{
-    build_ap_rep, build_krb_priv_with_seq, unwrap_krb_priv_ex, verify_ap_req, ReplayCache,
+    ReplayCache, build_ap_rep, build_krb_priv_with_seq, unwrap_krb_priv_ex, verify_ap_req,
 };
 use krb5_types::{ChangePasswdData, EncryptionKey, PrincipalName};
 
@@ -310,11 +310,12 @@ pub fn handle_kpasswd_rfc3244(
     };
     let user_data = unwrap_krb_priv_ex(&priv_key, priv_raw, replay, false, false)
         .map_err(|e| Error::Inner(e.to_string()))?;
-    let (targ, newpass) = if let Ok(cpw) = decode::<ChangePasswdData>(&user_data) {
-        let name = cpw.targname.unwrap_or(ok.authenticator.cname.clone());
-        (name, cpw.newpasswd.to_vec())
-    } else {
-        (ok.authenticator.cname.clone(), user_data)
+    let (targ, newpass) = match decode::<ChangePasswdData>(&user_data) {
+        Ok(cpw) => {
+            let name = cpw.targname.unwrap_or(ok.authenticator.cname.clone());
+            (name, cpw.newpasswd.to_vec())
+        }
+        Err(_) => (ok.authenticator.cname.clone(), user_data),
     };
     {
         let mut g = store

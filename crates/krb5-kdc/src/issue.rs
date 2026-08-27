@@ -4,15 +4,15 @@ use std::time::Instant;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    decrypt, encrypt, krb_fx_cf2, verify_checksum, EncryptionType, KeyUsage, ProtocolKey,
+    EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, krb_fx_cf2, verify_checksum,
 };
 use krb5_protocol::{ReplayCache, ReplayKey};
-use krb5_types::pac::{parse_kerb_validation_info, PacIdentity};
+use krb5_types::pac::{PacIdentity, parse_kerb_validation_info};
 use krb5_types::{
-    err, flag_bit, ku, pa, AsRep, AsReq, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart,
-    EncryptedData, EncryptionKey, EtypeInfo2, EtypeInfo2Entry, KerberosTime, KrbError,
-    LastReqValue, MethodData, Microseconds, OctetString, PaData, PaEncTsEnc, PrincipalName, TgsRep,
-    TgsReq, Ticket, TicketFlags, TransitedEncoding,
+    AsRep, AsReq, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, EncryptedData,
+    EncryptionKey, EtypeInfo2, EtypeInfo2Entry, KerberosTime, KrbError, LastReqValue, MethodData,
+    Microseconds, OctetString, PaData, PaEncTsEnc, PrincipalName, TgsRep, TgsReq, Ticket,
+    TicketFlags, TransitedEncoding, err, flag_bit, ku, pa,
 };
 
 use crate::ad::{
@@ -20,10 +20,10 @@ use crate::ad::{
 };
 use crate::error::Error;
 use crate::preauth::{
-    fast_finished, process_pkinit, process_spake, unwrap_fast, unwrap_fast_padata, wrap_fast_rep,
-    SpakeStep,
+    SpakeStep, fast_finished, process_pkinit, process_spake, unwrap_fast, unwrap_fast_padata,
+    wrap_fast_rep,
 };
-use crate::store::{random_key, s2k_params, Principal, PrincipalStore};
+use crate::store::{Principal, PrincipalStore, random_key, s2k_params};
 
 /// Issued AS-REP plus the session key (for tests that decrypt the TGT).
 #[derive(Debug)]
@@ -250,7 +250,7 @@ fn issue_as_from(
         Some(r) => r.to_vec(),
         None => encode(req)?,
     };
-    if let Some((rk, pa_pk)) = process_pkinit(
+    match process_pkinit(
         store,
         work_padata.as_deref(),
         etype,
@@ -258,25 +258,25 @@ fn issue_as_from(
         &cname,
         store.realm(),
     )? {
-        as_rep_key = rk;
-        extra_padata.push(pa_pk);
-        skip_timestamp = true;
-    } else if let Some(step) =
-        process_spake(store, client, work_padata.as_deref(), &ckey.key, body_der)?
-    {
-        match step {
-            SpakeStep::Challenge(e_data) => {
+        Some((rk, pa_pk)) => {
+            as_rep_key = rk;
+            extra_padata.push(pa_pk);
+            skip_timestamp = true;
+        }
+        None => match process_spake(store, client, work_padata.as_deref(), &ckey.key, body_der)? {
+            Some(SpakeStep::Challenge(e_data)) => {
                 return Err(Error::Protocol {
                     code: err::MORE_PREAUTH_DATA_REQUIRED,
                     text: Some("SPAKE challenge".into()),
                     e_data: Some(e_data),
                 });
             }
-            SpakeStep::Done(k) => {
+            Some(SpakeStep::Done(k)) => {
                 as_rep_key = k;
                 skip_timestamp = true;
             }
-        }
+            None => {}
+        },
     }
     if client.requires_preauth && !skip_timestamp {
         match extract_enc_timestamp(work_padata.as_deref()) {
@@ -520,10 +520,9 @@ fn issue_tgs_from(
             }
         }
     }
-    let (tkt_key, tkt_kvno, tkt_etype) = if let Some((k, kv, et)) = u2u_session(store, req)? {
-        (k, kv, et)
-    } else {
-        (skey.key.clone(), skey.kvno, skey.etype)
+    let (tkt_key, tkt_kvno, tkt_etype) = match u2u_session(store, req)? {
+        Some((k, kv, et)) => (k, kv, et),
+        None => (skey.key.clone(), skey.kvno, skey.etype),
     };
     let mut transited = enc_tkt.transited.clone();
     // RFC 4120: transited lists intermediate realms, excluding the client's
@@ -656,11 +655,7 @@ fn requested_life(store: &PrincipalStore, princ: &Principal, body: &krb5_types::
     } else {
         store.policy.max_life
     };
-    if want == 0 {
-        cap
-    } else {
-        want.min(cap)
-    }
+    if want == 0 { cap } else { want.min(cap) }
 }
 
 fn decrypt_presented_tgt(

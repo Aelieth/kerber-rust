@@ -1,6 +1,6 @@
 //! DER-strictness negatives: truncated, extra bytes, BER indefinite, non-minimal.
 
-use krb5_asn1::{decode, encode, PrincipalName};
+use krb5_asn1::{PrincipalName, decode, encode};
 use krb5_types::PrincipalName as PN;
 
 #[test]

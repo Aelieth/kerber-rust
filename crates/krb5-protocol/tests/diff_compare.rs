@@ -1,11 +1,11 @@
 //! Fail-red fixture for the shipped differential compare path.
 
-use crate::diff::{compare_krb_error, compare_preauth_e_data, compare_stable_rep, Whitelist};
+use crate::diff::{Whitelist, compare_krb_error, compare_preauth_e_data, compare_stable_rep};
 use krb5_asn1::encode;
 use krb5_types::{
-    err, flag_bit, pa, EncKdcRepPart, EncTicketPart, EncryptedData, EncryptionKey, EtypeInfo2,
-    EtypeInfo2Entry, KdcRep, KerberosTime, KrbError, MethodData, Microseconds, PaData,
-    PrincipalName, Ticket, TicketFlags, TransitedEncoding,
+    EncKdcRepPart, EncTicketPart, EncryptedData, EncryptionKey, EtypeInfo2, EtypeInfo2Entry,
+    KdcRep, KerberosTime, KrbError, MethodData, Microseconds, PaData, PrincipalName, Ticket,
+    TicketFlags, TransitedEncoding, err, flag_bit, pa,
 };
 
 fn sample_error(code: i32, stime_off: i64, text: &str) -> KrbError {

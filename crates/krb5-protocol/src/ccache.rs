@@ -5,7 +5,7 @@ use std::path::Path;
 
 use krb5_asn1::encode;
 use krb5_crypto::{EncryptionType, ProtocolKey};
-use krb5_types::{kerberos_string_from_bytes, PrincipalName, Realm, Ticket};
+use krb5_types::{PrincipalName, Realm, Ticket, kerberos_string_from_bytes};
 
 use crate::secret_file::write_secret_file;
 

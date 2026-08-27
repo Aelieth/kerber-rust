@@ -5,13 +5,13 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_client::Keytab;
-use krb5_crypto::{decrypt, KeyUsage};
+use krb5_crypto::{KeyUsage, decrypt};
 use krb5_kdc::{
-    as_req, bootstrap_documented, documented_admin_id, documented_host, pa_enc_timestamp,
-    pac_from_ticket_part, tgs_req, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
+    TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented, documented_admin_id,
+    documented_host, pa_enc_timestamp, pac_from_ticket_part, tgs_req,
 };
-use krb5_protocol::{build_ap_req, verify_ap_req, ReplayCache};
-use krb5_types::{ascii, ku, EncTicketPart, PrincipalName};
+use krb5_protocol::{ReplayCache, build_ap_req, verify_ap_req};
+use krb5_types::{EncTicketPart, PrincipalName, ascii, ku};
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let (store, acl) = bootstrap_documented()?;
@@ -175,10 +175,12 @@ mod tests {
             parsed.entries.len() >= 4,
             "host randkeys include RFC 8009 etypes"
         );
-        assert!(parsed.entries[0]
-            .name
-            .components_joined()
-            .contains(TEST_HOST));
+        assert!(
+            parsed.entries[0]
+                .name
+                .components_joined()
+                .contains(TEST_HOST)
+        );
 
         let golden = include_bytes!("../../../tests/traces/pac-kbruser.ndr");
         let v = krb5_types::pac::parse_kerb_validation_info(golden).unwrap();

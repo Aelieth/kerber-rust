@@ -2,13 +2,13 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    checksum, decrypt, encrypt, krb_fx_cf2, octetstring2key, p256_generate, p256_shared,
-    pkinit_kdf_agile, spake_derive_key, spake_public_wbytes, spake_result_wbytes,
-    spake_thash_update, spake_wbytes, EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256,
+    EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256, checksum, decrypt, encrypt,
+    krb_fx_cf2, octetstring2key, p256_generate, p256_shared, pkinit_kdf_agile, spake_derive_key,
+    spake_public_wbytes, spake_result_wbytes, spake_thash_update, spake_wbytes,
 };
 use krb5_types::{
-    ku, pa, ApOptions, ApReq, AsReq, Authenticator, Checksum, EncryptedData, EncryptionKey,
-    KerberosFlags, KerberosTime, Microseconds, PaData, PrincipalName, Realm, Ticket,
+    ApOptions, ApReq, AsReq, Authenticator, Checksum, EncryptedData, EncryptionKey, KerberosFlags,
+    KerberosTime, Microseconds, PaData, PrincipalName, Realm, Ticket, ku, pa,
 };
 
 use crate::error::Error;
@@ -155,12 +155,9 @@ pub fn unwrap_fast_rep(
         .as_ref()
         .and_then(|v| v.iter().find(|p| p.padata_type == pa::FX_FAST))
         .ok_or_else(|| Error::ReplyMismatch("missing PA-FX-FAST".into()))?;
-    let armored = if let Ok(krb5_types::fast::PaFxFastRep::ArmoredData(w)) =
-        decode::<krb5_types::fast::PaFxFastRep>(raw.padata_value.as_ref())
-    {
-        w
-    } else {
-        decode::<krb5_types::fast::KrbFastArmoredRep>(raw.padata_value.as_ref())?
+    let armored = match decode::<krb5_types::fast::PaFxFastRep>(raw.padata_value.as_ref()) {
+        Ok(krb5_types::fast::PaFxFastRep::ArmoredData(w)) => w,
+        _ => decode::<krb5_types::fast::KrbFastArmoredRep>(raw.padata_value.as_ref())?,
     };
     let usage = KeyUsage::new(ku::FAST_REP)?;
     let plain = decrypt(armor_key, usage, armored.enc_fast_rep.cipher.as_ref())?;

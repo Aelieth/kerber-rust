@@ -28,19 +28,19 @@ mod transport;
 
 pub use ap_rep::{build_ap_rep, verify_ap_rep};
 pub use ap_req::{
-    build_ap_req, build_ap_req_mutual_seq, build_ap_req_opts, build_ap_req_with_cksum,
-    verify_ap_req, verify_ap_req_ex, ApVerifyOk, ApVerifyParams, DEFAULT_SKEW,
+    ApVerifyOk, ApVerifyParams, DEFAULT_SKEW, build_ap_req, build_ap_req_mutual_seq,
+    build_ap_req_opts, build_ap_req_with_cksum, verify_ap_req, verify_ap_req_ex,
 };
-pub use as_ex::{as_exchange, AsOutcome, AsRequest};
+pub use as_ex::{AsOutcome, AsRequest, as_exchange};
 pub use builders::{
     as_req, as_req_sname, pa_enc_timestamp, pa_enc_timestamp_at, tgs_req, tgs_req_ex,
 };
 pub use capture::capture_pdu;
-pub use ccache::{parse_principal, realm, tgt_cred, CcacheCred, FileCcache};
+pub use ccache::{CcacheCred, FileCcache, parse_principal, realm, tgt_cred};
 #[cfg(feature = "diff")]
 pub use diff::{
-    compare_krb_error, compare_preauth_e_data, compare_stable_rep, decode_enc_kdc_rep,
-    stable_krb_error, stable_rep, CompareOk, DiffError, StableKrbError, StableRep, Whitelist,
+    CompareOk, DiffError, StableKrbError, StableRep, Whitelist, compare_krb_error,
+    compare_preauth_e_data, compare_stable_rep, decode_enc_kdc_rep, stable_krb_error, stable_rep,
 };
 pub use error::Error;
 pub use keytab::{Keytab, KeytabEntry};
@@ -56,8 +56,8 @@ pub use safe_priv::{
     unwrap_krb_priv_ex, unwrap_krb_safe, unwrap_krb_safe_ex,
 };
 pub use secret_file::write_secret_file;
-pub use tgs::{referral_hop_realm, tgs_exchange, TgsOutcome};
-pub use transport::{exchange, exchange_on_tcp, exchange_with_failover, KdcAddr, KDC_PORT};
+pub use tgs::{TgsOutcome, referral_hop_realm, tgs_exchange};
+pub use transport::{KDC_PORT, KdcAddr, exchange, exchange_on_tcp, exchange_with_failover};
 
 #[cfg(test)]
 #[path = "../tests/diff_compare.rs"]

@@ -4,12 +4,12 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    checksum, decrypt, decrypt_with_state, encrypt, encrypt_with_state, verify_checksum,
-    CipherState, KeyUsage, ProtocolKey,
+    CipherState, KeyUsage, ProtocolKey, checksum, decrypt, decrypt_with_state, encrypt,
+    encrypt_with_state, verify_checksum,
 };
 use krb5_types::{
-    ku, EncKrbCredPart, EncKrbPrivPart, EncryptedData, HostAddress, KerberosTime, KrbCred,
-    KrbCredInfo, KrbPriv, KrbSafe, KrbSafeBody, Microseconds, OctetString, Ticket,
+    EncKrbCredPart, EncKrbPrivPart, EncryptedData, HostAddress, KerberosTime, KrbCred, KrbCredInfo,
+    KrbPriv, KrbSafe, KrbSafeBody, Microseconds, OctetString, Ticket, ku,
 };
 
 use crate::error::Error;

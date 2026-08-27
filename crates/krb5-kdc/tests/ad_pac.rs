@@ -6,19 +6,19 @@
 use std::path::{Path, PathBuf};
 
 use krb5_asn1::decode;
-use krb5_crypto::{checksum, KeyUsage};
+use krb5_crypto::{KeyUsage, checksum};
 use krb5_kdc::{
-    bootstrap_documented, decrypt_ticket_part, documented_host, pac_from_ticket_part, sign_pac,
-    ticket_checksum_der, verify_pac, verify_pac_signatures, Error, TEST_REALM, TEST_USER,
+    Error, TEST_REALM, TEST_USER, bootstrap_documented, decrypt_ticket_part, documented_host,
+    pac_from_ticket_part, sign_pac, ticket_checksum_der, verify_pac, verify_pac_signatures,
 };
-use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req, FileCcache, Keytab};
+use krb5_protocol::{FileCcache, Keytab, as_req, pa_enc_timestamp, tgs_req};
 use krb5_types::ku;
 use krb5_types::pac::{
-    parse_kerb_validation_info, parse_upn_dns, Pac, PAC_ATTRIBUTES_INFO, PAC_CLIENT_INFO,
-    PAC_FULL_CHECKSUM, PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM, PAC_REQUESTER_SID,
-    PAC_SERVER_CHECKSUM, PAC_TICKET_CHECKSUM, PAC_UPN_DNS_INFO,
+    PAC_ATTRIBUTES_INFO, PAC_CLIENT_INFO, PAC_FULL_CHECKSUM, PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM,
+    PAC_REQUESTER_SID, PAC_SERVER_CHECKSUM, PAC_TICKET_CHECKSUM, PAC_UPN_DNS_INFO, Pac,
+    parse_kerb_validation_info, parse_upn_dns,
 };
-use krb5_types::{err, PrincipalName, Ticket};
+use krb5_types::{PrincipalName, Ticket, err};
 
 fn traces_ad() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/traces/ad")

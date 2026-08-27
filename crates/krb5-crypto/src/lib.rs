@@ -36,24 +36,24 @@ pub(crate) mod weak;
 pub(crate) mod cts;
 
 pub use cf2::{
-    key_from_shared, krb_fx_cf2, octetstring2key, p256_ecdsa_sign, p256_ecdsa_verify,
-    p256_generate, p256_shared, pkinit_kdf_agile, P256Keypair,
+    P256Keypair, key_from_shared, krb_fx_cf2, octetstring2key, p256_ecdsa_sign, p256_ecdsa_verify,
+    p256_generate, p256_shared, pkinit_kdf_agile,
 };
-pub use derive::{derive_keys, DerivedKeys};
+pub use derive::{DerivedKeys, derive_keys};
 pub use error::Error;
 pub use etype::{EncryptionType, KeyUsage};
 pub use key::ProtocolKey;
 pub use modp::{
-    dh_generate, dh_group_for_prime, dh_shared, DhGroup, DhKeypair, OAKLEY_2048, OAKLEY_4096,
+    DhGroup, DhKeypair, OAKLEY_2048, OAKLEY_4096, dh_generate, dh_group_for_prime, dh_shared,
 };
 pub use ops::{
-    checksum, decrypt, decrypt_with_state, encrypt, encrypt_with_confounder, encrypt_with_state,
-    hmac_md5_arcfour_checksum, kdb_decrypt_key, kdb_encrypt_key, string_to_key, verify_checksum,
-    CipherState,
+    CipherState, checksum, decrypt, decrypt_with_state, encrypt, encrypt_with_confounder,
+    encrypt_with_state, hmac_md5_arcfour_checksum, kdb_decrypt_key, kdb_encrypt_key, string_to_key,
+    verify_checksum,
 };
 pub use prf::{prf, prf_plus};
 pub use spake::{
-    spake_decode_point, spake_derive_key, spake_finish, spake_kdc_keygen, spake_m_bytes,
-    spake_n_bytes, spake_public, spake_public_wbytes, spake_result_wbytes, spake_thash_update,
-    spake_wbytes, SPAKE_GROUP_P256,
+    SPAKE_GROUP_P256, spake_decode_point, spake_derive_key, spake_finish, spake_kdc_keygen,
+    spake_m_bytes, spake_n_bytes, spake_public, spake_public_wbytes, spake_result_wbytes,
+    spake_thash_update, spake_wbytes,
 };

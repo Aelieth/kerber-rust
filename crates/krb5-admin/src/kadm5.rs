@@ -1066,7 +1066,7 @@ mod tests {
 
     #[test]
     fn rename_dispatch_keeps_rid_and_requires_add_delete() {
-        use krb5_kdc::{bootstrap_documented, documented_admin_id, shared_store, TEST_REALM};
+        use krb5_kdc::{TEST_REALM, bootstrap_documented, documented_admin_id, shared_store};
 
         let (mut store, acl) = bootstrap_documented().unwrap();
         let actor = documented_admin_id();

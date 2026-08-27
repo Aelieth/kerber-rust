@@ -4,11 +4,11 @@ use std::time::Instant;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    checksum, decrypt, encrypt, verify_checksum, EncryptionType, KeyUsage, ProtocolKey,
+    EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt, verify_checksum,
 };
 use krb5_types::{
-    err, ku, ApOptions, ApReq, Authenticator, EncTicketPart, EncryptedData, HostAddresses,
-    KerberosTime, PrincipalName, Realm, Ticket,
+    ApOptions, ApReq, Authenticator, EncTicketPart, EncryptedData, HostAddresses, KerberosTime,
+    PrincipalName, Realm, Ticket, err, ku,
 };
 
 use crate::error::Error;

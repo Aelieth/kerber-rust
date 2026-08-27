@@ -12,7 +12,7 @@
 use std::net::TcpStream;
 use std::path::PathBuf;
 
-use krb5_admin::{kprop_send_store, KPROP_PORT};
+use krb5_admin::{KPROP_PORT, kprop_send_store};
 use krb5_kdc::{as_req, issue_as, issue_tgs, load_store, pa_enc_timestamp, tgs_req};
 use krb5_protocol::Keytab;
 use krb5_types::PrincipalName;

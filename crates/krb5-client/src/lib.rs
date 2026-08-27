@@ -9,17 +9,17 @@
 
 use std::path::Path;
 
-use krb5_protocol::{as_exchange, tgs_exchange, AsOutcome, AsRequest, KdcAddr, TgsOutcome};
+use krb5_protocol::{AsOutcome, AsRequest, KdcAddr, TgsOutcome, as_exchange, tgs_exchange};
 use krb5_types::PrincipalName;
 use zeroize::Zeroize;
 
 pub use krb5_protocol::{
-    parse_principal, realm, tgt_cred, CcacheCred, FileCcache, Keytab, KeytabEntry,
+    CcacheCred, FileCcache, Keytab, KeytabEntry, parse_principal, realm, tgt_cred,
 };
 pub use krb5_protocol::{Error as ProtocolError, KDC_PORT};
 
 pub mod ccache {
-    pub use krb5_protocol::{parse_principal, realm, tgt_cred, CcacheCred, FileCcache};
+    pub use krb5_protocol::{CcacheCred, FileCcache, parse_principal, realm, tgt_cred};
 }
 
 pub mod keytab {

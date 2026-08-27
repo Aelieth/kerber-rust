@@ -37,7 +37,7 @@ fn first_diff(a: &[u8], b: &[u8]) -> String {
 
 /// Genuine MIT PDUs: re-encode must match the captured bytes.
 macro_rules! mit_round_trip {
-    ($ty:ty, $name:expr, $tag:expr) => {{
+    ($ty:ty, $name:expr_2021, $tag:expr_2021) => {{
         let raw = load($name);
         assert_eq!(
             raw.first().copied(),
@@ -143,10 +143,10 @@ fn mit_krb_error_round_trips_through_encoder() {
 
 #[test]
 fn tgs_req_builder_emits_application_12() {
-    use krb5_crypto::{string_to_key, EncryptionType};
+    use krb5_crypto::{EncryptionType, string_to_key};
     use krb5_kdc::{
-        as_req as kdc_as_req, bootstrap_documented, documented_host, pa_enc_timestamp, S2K_ITERS,
-        TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
+        S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req as kdc_as_req,
+        bootstrap_documented, documented_host, pa_enc_timestamp,
     };
     let (store, _) = bootstrap_documented().unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);

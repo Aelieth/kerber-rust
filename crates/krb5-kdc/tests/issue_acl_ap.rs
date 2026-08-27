@@ -1,16 +1,16 @@
 //! Gating tests: ACL allow/deny, AS/TGS issue, AP-REQ verify negatives.
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{decrypt, string_to_key, EncryptionType, KeyUsage, ProtocolKey};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, string_to_key};
 use krb5_kdc::{
+    Acl, AdminOp, Error, PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
     acl_for_store, as_req, bootstrap_documented, documented_admin_id, documented_host,
-    pa_enc_timestamp, tgs_req, Acl, AdminOp, Error, PrincipalStore, S2K_ITERS, TEST_REALM,
-    TEST_USER, TEST_USER_PASSWORD,
+    pa_enc_timestamp, tgs_req,
 };
 use krb5_protocol::Keytab;
-use krb5_protocol::{build_ap_req, verify_ap_req, ReplayCache};
+use krb5_protocol::{ReplayCache, build_ap_req, verify_ap_req};
 use krb5_types::{
-    ascii, err, ku, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, PrincipalName,
+    EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, PrincipalName, ascii, err, ku,
 };
 
 fn client_key() -> ProtocolKey {
@@ -53,10 +53,12 @@ fn acl_allow_admin_create_and_ktadd() {
         4,
         "host randkeys include etypes 17–20"
     );
-    assert!(parsed
-        .entries
-        .iter()
-        .any(|e| e.key.etype() == EncryptionType::Aes256CtsHmacSha384192));
+    assert!(
+        parsed
+            .entries
+            .iter()
+            .any(|e| e.key.etype() == EncryptionType::Aes256CtsHmacSha384192)
+    );
     assert_eq!(
         parsed.entries[0].name.components_joined(),
         "host/extra.kerber.test"
@@ -429,9 +431,10 @@ fn hostile_keytab_does_not_panic() {
 #[test]
 fn kadmind_acl_follows_store_realm_or_acl_file() {
     let none = acl_for_store("PROD.KERBER.TEST", None).expect("default acl");
-    assert!(none
-        .check("admin@PROD.KERBER.TEST", AdminOp::Create)
-        .is_ok());
+    assert!(
+        none.check("admin@PROD.KERBER.TEST", AdminOp::Create)
+            .is_ok()
+    );
     assert_eq!(
         none.check("admin@KERBER.TEST", AdminOp::Create)
             .unwrap_err(),
@@ -454,12 +457,14 @@ fn kadmind_acl_follows_store_realm_or_acl_file() {
     )
     .unwrap();
     let file = acl_for_store("PROD.KERBER.TEST", Some(&path)).expect("file acl");
-    assert!(file
-        .check("admin@PROD.KERBER.TEST", AdminOp::Create)
-        .is_ok());
-    assert!(file
-        .check("operator@PROD.KERBER.TEST", AdminOp::Inquire)
-        .is_ok());
+    assert!(
+        file.check("admin@PROD.KERBER.TEST", AdminOp::Create)
+            .is_ok()
+    );
+    assert!(
+        file.check("operator@PROD.KERBER.TEST", AdminOp::Inquire)
+            .is_ok()
+    );
     assert_eq!(
         file.check("admin@KERBER.TEST", AdminOp::Create)
             .unwrap_err(),

@@ -282,7 +282,7 @@ fn encrypt_inner_state(
                     .get(..8)
                     .unwrap_or(&confounder[..confounder.len().min(8)]),
                 plaintext,
-            )
+            );
         }
         EncryptionType::Des3CbcSha1 => return crate::weak::des3_encrypt(key, usage, plaintext),
         EncryptionType::Camellia128CtsCmac | EncryptionType::Camellia256CtsCmac => {

@@ -1,9 +1,9 @@
 //! PAC issuance and S4U2Self / S4U2Proxy / U2U.
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{checksum, decrypt, EncryptionType, KeyUsage, ProtocolKey};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt};
 use krb5_types::{
-    err, ku, pa, AuthorizationDataValue, EncTicketPart, PaData, PrincipalName, TgsReq, Ticket,
+    AuthorizationDataValue, EncTicketPart, PaData, PrincipalName, TgsReq, Ticket, err, ku, pa,
 };
 
 use crate::error::Error;

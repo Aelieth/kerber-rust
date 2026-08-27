@@ -11,12 +11,12 @@
 
 use std::net::TcpListener;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use krb5_admin::{kpropd_handle_conn, KPROP_PORT};
+use krb5_admin::{KPROP_PORT, kpropd_handle_conn};
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::{documented_host, load_store};
 use krb5_protocol::Keytab;
@@ -62,7 +62,8 @@ fn main() {
         if stop.load(Ordering::Relaxed) {
             break;
         }
-        match listener.accept() {
+        let accepted = listener.accept();
+        match accepted {
             Ok((mut stream, _)) => {
                 let keys = host_keys.clone();
                 let realm = realm.clone();

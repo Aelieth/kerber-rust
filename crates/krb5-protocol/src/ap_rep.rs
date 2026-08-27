@@ -1,9 +1,9 @@
 //! AP-REP / EncAPRepPart (RFC 4120 §5.5.2) mutual authentication.
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{decrypt, encrypt, KeyUsage, ProtocolKey};
+use krb5_crypto::{KeyUsage, ProtocolKey, decrypt, encrypt};
 use krb5_types::{
-    ku, ApRep, Authenticator, EncApRepPart, EncryptedData, EncryptionKey, Microseconds,
+    ApRep, Authenticator, EncApRepPart, EncryptedData, EncryptionKey, Microseconds, ku,
 };
 
 use crate::error::Error;

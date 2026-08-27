@@ -1,16 +1,16 @@
 //! Protocol message tests: AP-REP, SAFE/PRIV/CRED, DER tags.
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{string_to_key, EncryptionType, KeyUsage};
+use krb5_crypto::{EncryptionType, KeyUsage, string_to_key};
 use krb5_kdc::{
-    as_req, bootstrap_documented, documented_host, pa_enc_timestamp, tgs_req, S2K_ITERS,
-    TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
+    S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
+    documented_host, pa_enc_timestamp, tgs_req,
 };
 use krb5_protocol::{
-    build_ap_rep, build_ap_req, build_krb_cred, build_krb_priv, build_krb_safe, unwrap_krb_priv,
-    unwrap_krb_safe, verify_ap_rep, verify_ap_req, ReplayCache,
+    ReplayCache, build_ap_rep, build_ap_req, build_krb_cred, build_krb_priv, build_krb_safe,
+    unwrap_krb_priv, unwrap_krb_safe, verify_ap_rep, verify_ap_req,
 };
-use krb5_types::{ascii, ku, EncAsRepPart, PrincipalName};
+use krb5_types::{EncAsRepPart, PrincipalName, ascii, ku};
 
 fn client_key() -> krb5_crypto::ProtocolKey {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -106,8 +106,8 @@ fn exchange_tcp_and_udp_round_trip_local_kdc() {
     use std::thread;
     use std::time::Duration;
 
-    use krb5_protocol::{exchange, KdcAddr};
-    use krb5_types::{ascii, err, KerberosTime, KrbError, Microseconds, PrincipalName};
+    use krb5_protocol::{KdcAddr, exchange};
+    use krb5_types::{KerberosTime, KrbError, Microseconds, PrincipalName, ascii, err};
 
     let reply = encode(&KrbError {
         pvno: KrbError::PVNO,
@@ -206,12 +206,12 @@ fn non_ascii_realm_as_exchange_is_err() {
 #[test]
 fn first_bare_as_req_skew_is_retried() {
     use std::net::UdpSocket;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::thread;
     use std::time::Duration;
 
-    use krb5_types::{ascii, err, KerberosTime, KrbError, Microseconds, PrincipalName};
+    use krb5_types::{KerberosTime, KrbError, Microseconds, PrincipalName, ascii, err};
 
     let hits = Arc::new(AtomicUsize::new(0));
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();

@@ -3,11 +3,11 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use krb5_crypto::{string_to_key, EncryptionType, ProtocolKey};
+use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
 use krb5_protocol::{Keytab, KeytabEntry, ReplayCache};
+use krb5_types::PrincipalName;
 use krb5_types::pac::{PacIdentity, RpcSid};
 use krb5_types::pkinit::PkinitCa;
-use krb5_types::PrincipalName;
 
 /// Well-known RID: Administrator.
 pub const RID_ADMINISTRATOR: u32 = 500;
@@ -414,11 +414,7 @@ impl PrincipalStore {
     #[must_use]
     pub fn pac_identity(&self, name: &PrincipalName, crealm: &str) -> PacIdentity {
         let rid = self.get_name(name).map_or(RID_FIRST_USER, |p| {
-            if p.rid == 0 {
-                RID_FIRST_USER
-            } else {
-                p.rid
-            }
+            if p.rid == 0 { RID_FIRST_USER } else { p.rid }
         });
         PacIdentity {
             sam: name.components_joined(),

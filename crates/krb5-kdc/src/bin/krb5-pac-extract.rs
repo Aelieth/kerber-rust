@@ -10,10 +10,10 @@ use std::fs;
 use std::process::ExitCode;
 
 use krb5_asn1::decode;
-use krb5_crypto::{decrypt, string_to_key, EncryptionType, KeyUsage, ProtocolKey};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, string_to_key};
 use krb5_kdc::{pac_from_ticket_part, s2k_params};
 use krb5_protocol::{FileCcache, Keytab};
-use krb5_types::{ku, EncTicketPart, Ticket};
+use krb5_types::{EncTicketPart, Ticket, ku};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();

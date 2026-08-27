@@ -404,7 +404,7 @@ mod tests {
     use super::*;
     use crate::bootstrap_documented;
     use krb5_asn1::{decode, encode};
-    use krb5_types::{err, PrincipalName};
+    use krb5_types::{PrincipalName, err};
 
     #[test]
     fn drop_privileges_is_noop_when_unprivileged() {

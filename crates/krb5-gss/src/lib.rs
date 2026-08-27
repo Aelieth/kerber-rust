@@ -8,9 +8,9 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use krb5_asn1::encode;
-use krb5_crypto::{checksum, decrypt, encrypt, verify_checksum, KeyUsage, ProtocolKey};
-use krb5_protocol::{build_ap_rep, build_ap_req_with_cksum, ReplayCache};
-use krb5_types::{ku, ApOptions, Checksum, PrincipalName, Realm, Ticket};
+use krb5_crypto::{KeyUsage, ProtocolKey, checksum, decrypt, encrypt, verify_checksum};
+use krb5_protocol::{ReplayCache, build_ap_rep, build_ap_req_with_cksum};
+use krb5_types::{ApOptions, Checksum, PrincipalName, Realm, Ticket, ku};
 use thiserror::Error;
 
 /// ISO OID 1.2.840.113554.1.2.2 (Kerberos V5 GSS).
@@ -754,10 +754,10 @@ pub fn mit_shaped_wrap(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use krb5_crypto::{string_to_key, EncryptionType};
+    use krb5_crypto::{EncryptionType, string_to_key};
     use krb5_kdc::{
-        as_req, bootstrap_documented, documented_host, pa_enc_timestamp, tgs_req, S2K_ITERS,
-        TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
+        S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
+        documented_host, pa_enc_timestamp, tgs_req,
     };
     use krb5_types::ascii;
 

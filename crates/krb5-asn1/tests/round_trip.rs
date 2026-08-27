@@ -1,10 +1,10 @@
 //! DER round-trip and malformed-input tests for RFC 4120 core types.
 
 use krb5_asn1::{
-    decode, encode, types, ApReq, EncryptedData, Error, KdcRep, KdcReq, KrbError, PrincipalName,
-    Realm, Ticket,
+    ApReq, EncryptedData, Error, KdcRep, KdcReq, KrbError, PrincipalName, Realm, Ticket, decode,
+    encode, types,
 };
-use krb5_types::{kerberos_time_from_utc_z, ApOptions, KdcOptions, KdcReqBody, OctetString};
+use krb5_types::{ApOptions, KdcOptions, KdcReqBody, OctetString, kerberos_time_from_utc_z};
 
 fn install_json_tracing() {
     let _ = tracing_subscriber::fmt()

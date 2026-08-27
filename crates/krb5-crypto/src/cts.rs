@@ -1,8 +1,8 @@
 //! AES CBC-CS3 (RFC 3962 / NIST SP 800-38A addendum), matching MIT krb5 1.22.2.
 
 use aes::{
-    cipher::{generic_array::GenericArray, BlockDecrypt, BlockEncrypt, KeyInit},
     Aes128, Aes256,
+    cipher::{BlockDecrypt, BlockEncrypt, KeyInit, generic_array::GenericArray},
 };
 use camellia::{Camellia128, Camellia256};
 

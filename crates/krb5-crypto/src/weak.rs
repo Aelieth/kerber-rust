@@ -1,7 +1,7 @@
 //! Legacy / AD enctypes (16, 23, 25, 26) used only when `allow_weak_crypto`.
 
-use des::cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
 use des::TdesEde3;
+use des::cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
 use hmac::{Hmac, Mac};
 use md4::{Digest, Md4};
 use md5::Md5;

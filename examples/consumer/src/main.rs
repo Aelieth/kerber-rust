@@ -3,8 +3,8 @@
 //! This binary is not a Kerberos client. It exercises the public encrypt and
 //! DER APIs with published vectors so CI can catch crate-boundary regressions.
 
-use krb5_asn1::{decode, encode, PrincipalName};
-use krb5_crypto::{decrypt, encrypt_with_confounder, EncryptionType, KeyUsage, ProtocolKey};
+use krb5_asn1::{PrincipalName, decode, encode};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt_with_confounder};
 
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
@@ -58,11 +58,11 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use krb5_asn1::{decode, encode, EncryptedData, KdcRep, KdcReq, KrbError, Ticket};
+    use krb5_asn1::{EncryptedData, KdcRep, KdcReq, KrbError, Ticket, decode, encode};
     use krb5_crypto::encrypt;
     use krb5_types::{
-        ascii, kerberos_time_from_utc_z, ApOptions, KdcOptions, KdcReqBody, OctetString,
-        Ticket as Tkt,
+        ApOptions, KdcOptions, KdcReqBody, OctetString, Ticket as Tkt, ascii,
+        kerberos_time_from_utc_z,
     };
 
     fn install_tracing() {

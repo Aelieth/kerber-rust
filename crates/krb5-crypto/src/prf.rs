@@ -70,7 +70,7 @@ fn prf_aes_sha1(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
     let tmp1 = hasher.finalize();
     // RFC 3961 §5.3 / MIT `prf_dk.c`: truncate the hash to the closest
     // multiple of the cipher block size, then encrypt.
-    let out = if key.etype() == EncryptionType::Des3CbcSha1 {
+    if key.etype() == EncryptionType::Des3CbcSha1 {
         let mut dk = crate::weak::dk_des3(key.as_bytes(), b"prf")?;
         let trunc = (tmp1.len() / 8) * 8;
         let c = crate::weak::des3_cbc_encrypt(&dk, [0u8; 8], &tmp1[..trunc])?;
@@ -84,8 +84,7 @@ fn prf_aes_sha1(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
         let enc = cts::encrypt_block(&dk, &block)?;
         dk.zeroize();
         Ok(enc.to_vec())
-    };
-    out
+    }
 }
 
 fn prf_camellia(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {

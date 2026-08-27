@@ -5,7 +5,7 @@
 //! `master_key_type` is etype 20 (`aes256-cts-hmac-sha384-192`); s2kparams
 //! are the etype default (32768). Stash `.k5.REALM` parsing is later.
 
-use krb5_crypto::{string_to_key, EncryptionType, ProtocolKey};
+use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
 use krb5_types::PrincipalName;
 
 use crate::error::Error;

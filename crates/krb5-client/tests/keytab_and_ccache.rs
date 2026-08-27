@@ -1,8 +1,8 @@
 //! Keytab v2 and FILE ccache round-trips through the shipped serializers.
 
-use krb5_client::{parse_principal, Keytab};
+use krb5_client::{Keytab, parse_principal};
 use krb5_crypto::{EncryptionType, ProtocolKey};
-use krb5_types::{ascii, PrincipalName};
+use krb5_types::{PrincipalName, ascii};
 
 fn hex(s: &str) -> Vec<u8> {
     let s: String = s.chars().filter(|c| !c.is_whitespace()).collect();
@@ -89,7 +89,7 @@ fn file_ccache_skips_etype_zero_config_and_keeps_tickets() {
     b.extend_from_slice(&0u32.to_be_bytes()); // nauth
     ccache_put_data(&mut b, &[1]); // ticket
     ccache_put_data(&mut b, &[]); // second
-                                  // Real AES256 ticket.
+    // Real AES256 ticket.
     ccache_put_principal(&mut b, b"KERBER.TEST", &[b"user"]);
     ccache_put_principal(&mut b, b"KERBER.TEST", &[b"host", b"svc"]);
     b.extend_from_slice(&18u16.to_be_bytes());

@@ -5,14 +5,14 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    decrypt, dh_generate, dh_shared, encrypt, octetstring2key, p256_generate, string_to_key,
-    EncryptionType, KeyUsage, ProtocolKey, OAKLEY_2048,
+    EncryptionType, KeyUsage, OAKLEY_2048, ProtocolKey, decrypt, dh_generate, dh_shared, encrypt,
+    octetstring2key, p256_generate, string_to_key,
 };
 use krb5_kdc::{
-    as_req, bootstrap_documented, decrypt_ticket_part, documented_admin_id, documented_host,
-    pa_enc_timestamp, pac_from_ticket_part, sign_pac, tgs_req, ticket_checksum_der, verify_pac,
-    verify_pac_signatures, wrap_win2k_pac, Acl, AdminOp, Error, PrincipalStore, S2K_ITERS,
-    TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
+    Acl, AdminOp, Error, PrincipalStore, S2K_ITERS, TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM,
+    TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented, decrypt_ticket_part,
+    documented_admin_id, documented_host, pa_enc_timestamp, pac_from_ticket_part, sign_pac,
+    tgs_req, ticket_checksum_der, verify_pac, verify_pac_signatures, wrap_win2k_pac,
 };
 use krb5_protocol::{
     apply_strengthen, armor_key, as_req_sname, attach_fast, build_fast_armor, pa_for_user,
@@ -20,12 +20,12 @@ use krb5_protocol::{
     pa_spake_support, pkinit_reply_key, pkinit_reply_key_agile, tgs_req_ex, unwrap_fast_rep,
 };
 use krb5_types::pac::{
-    parse_kerb_validation_info, zero_pac_ad_data, Pac, RpcSid, PAC_LOGON_INFO, PAC_SERVER_CHECKSUM,
-    PAC_TICKET_CHECKSUM,
+    PAC_LOGON_INFO, PAC_SERVER_CHECKSUM, PAC_TICKET_CHECKSUM, Pac, RpcSid,
+    parse_kerb_validation_info, zero_pac_ad_data,
 };
 use krb5_types::{
-    ascii, err, flag_bit, ku, pa, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart,
-    KdcOptions, MethodData, PrincipalName,
+    EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, KdcOptions, MethodData,
+    PrincipalName, ascii, err, flag_bit, ku, pa,
 };
 
 fn password_key(name: &str, password: &[u8]) -> ProtocolKey {
@@ -138,9 +138,10 @@ fn kpasswd_denied_without_changepw_acl() {
         .change_password(&acl, "admin@KERBER.TEST", &cname, b"x")
         .unwrap_err();
     assert_eq!(err, Error::AclDenied);
-    assert!(acl
-        .check("admin@KERBER.TEST", AdminOp::ChangePassword)
-        .is_err());
+    assert!(
+        acl.check("admin@KERBER.TEST", AdminOp::ChangePassword)
+            .is_err()
+    );
     let acl_c = Acl::parse("admin@KERBER.TEST c\n");
     store
         .change_password(&acl_c, "admin@KERBER.TEST", &cname, b"ok-pass")
@@ -1096,25 +1097,29 @@ fn password_principal_has_rfc8009_keys() {
             [TEST_USER],
         ))
         .expect("user");
-    assert!(user
-        .key_for(EncryptionType::Aes256CtsHmacSha384192)
-        .is_some());
-    assert!(user
-        .key_for(EncryptionType::Aes128CtsHmacSha256128)
-        .is_some());
+    assert!(
+        user.key_for(EncryptionType::Aes256CtsHmacSha384192)
+            .is_some()
+    );
+    assert!(
+        user.key_for(EncryptionType::Aes128CtsHmacSha256128)
+            .is_some()
+    );
 }
 
 #[test]
 fn krbtgt_and_host_have_rfc8009_keys() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let tgt = store.krbtgt().expect("krbtgt");
-    assert!(tgt
-        .key_for(EncryptionType::Aes256CtsHmacSha384192)
-        .is_some());
+    assert!(
+        tgt.key_for(EncryptionType::Aes256CtsHmacSha384192)
+            .is_some()
+    );
     let host = store.get_name(&documented_host()).expect("host");
-    assert!(host
-        .key_for(EncryptionType::Aes256CtsHmacSha384192)
-        .is_some());
+    assert!(
+        host.key_for(EncryptionType::Aes256CtsHmacSha384192)
+            .is_some()
+    );
 }
 
 #[test]

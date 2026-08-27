@@ -12,10 +12,10 @@ use crate::error::Error;
 use crate::kdb_dump::{load_dump_mkey, write_dump};
 use crate::mkey::{harness_master_etype, master_key_from_password};
 use crate::store::{KeyEntry, Principal, PrincipalStore, S2K_ITERS};
-use krb5_crypto::{decrypt, encrypt, EncryptionType, KeyUsage, ProtocolKey};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt};
 use krb5_protocol::write_secret_file;
-use krb5_types::pac::RpcSid;
 use krb5_types::PrincipalName;
+use krb5_types::pac::RpcSid;
 
 const DUMP_PREFIX: &[u8] = b"kdb5_util load_dump version ";
 

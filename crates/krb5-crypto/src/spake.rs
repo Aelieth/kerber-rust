@@ -57,7 +57,7 @@ pub fn spake_decode_point(bytes: &[u8]) -> Result<(), Error> {
 }
 
 fn scalar_from_bytes32(b: &[u8; 32]) -> Result<p256::Scalar, Error> {
-    use p256::elliptic_curve::{ff::Field, PrimeField};
+    use p256::elliptic_curve::{PrimeField, ff::Field};
     let s = Option::<p256::Scalar>::from(p256::Scalar::from_repr((*b).into()))
         .ok_or(Error::Integrity)?;
     if bool::from(s.is_zero()) {
@@ -67,9 +67,9 @@ fn scalar_from_bytes32(b: &[u8; 32]) -> Result<p256::Scalar, Error> {
 }
 
 fn scalar_from_wbytes(wbytes: &[u8]) -> Result<p256::Scalar, Error> {
+    use p256::U256;
     use p256::elliptic_curve::ff::Field;
     use p256::elliptic_curve::ops::Reduce;
-    use p256::U256;
     if wbytes.len() != 32 {
         return Err(Error::Integrity);
     }
@@ -91,8 +91,8 @@ fn decode_compressed(bytes: &[u8]) -> Result<p256::ProjectivePoint, Error> {
 }
 
 fn encode_compressed(p: p256::ProjectivePoint) -> Vec<u8> {
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
     use p256::AffinePoint;
+    use p256::elliptic_curve::sec1::ToEncodedPoint;
     AffinePoint::from(p)
         .to_encoded_point(true)
         .as_bytes()

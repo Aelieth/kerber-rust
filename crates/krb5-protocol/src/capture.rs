@@ -11,20 +11,24 @@ pub fn capture_pdu(label: &str, bytes: &[u8]) {
     if dir.is_empty() {
         return;
     }
-    let _ = std::fs::create_dir_all(&dir);
+    write_capture(&dir, label, bytes);
+}
+
+fn write_capture(dir: &str, label: &str, bytes: &[u8]) {
+    let _ = std::fs::create_dir_all(dir);
     let mut n = [0u8; 4];
     if getrandom::getrandom(&mut n).is_err() {
         return;
     }
     let fname = format!("{label}-{:08x}.der", u32::from_be_bytes(n));
-    let path = std::path::Path::new(&dir).join(fname);
+    let path = std::path::Path::new(dir).join(fname);
     let _ = std::fs::write(path, bytes);
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn capture_writes_der_when_env_set() {
+    fn capture_writes_der_into_dir() {
         let dir = std::env::temp_dir().join(format!(
             "kerber-cap-{}-{}",
             std::process::id(),
@@ -33,10 +37,8 @@ mod tests {
                 .map_or(0, |d| d.as_nanos())
         ));
         let _ = std::fs::create_dir_all(&dir);
-        std::env::set_var("KERBER_CAPTURE_DIR", &dir);
-        super::capture_pdu("test", b"\x6a\x03");
+        super::write_capture(dir.to_str().expect("utf8 temp"), "test", b"\x6a\x03");
         let count = std::fs::read_dir(&dir).map_or(0, std::iter::Iterator::count);
-        std::env::remove_var("KERBER_CAPTURE_DIR");
         let _ = std::fs::remove_dir_all(&dir);
         assert!(count >= 1);
     }

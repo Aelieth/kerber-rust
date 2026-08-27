@@ -14,14 +14,14 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{decrypt, encrypt, string_to_key, EncryptionType, KeyUsage, ProtocolKey};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, string_to_key};
 use krb5_protocol::{
-    as_req, as_req_sname, compare_krb_error, compare_stable_rep, decode_enc_kdc_rep,
-    exchange_on_tcp, pa_enc_timestamp, pa_enc_timestamp_at, tgs_req, KdcAddr, Keytab, Whitelist,
+    KdcAddr, Keytab, Whitelist, as_req, as_req_sname, compare_krb_error, compare_stable_rep,
+    decode_enc_kdc_rep, exchange_on_tcp, pa_enc_timestamp, pa_enc_timestamp_at, tgs_req,
 };
 use krb5_types::{
-    err, ku, AsRep, EncTicketPart, EncryptedData, EncryptionKey, KerberosTime, KrbError,
-    PrincipalName, TgsRep, Ticket, TicketFlags, TransitedEncoding,
+    AsRep, EncTicketPart, EncryptedData, EncryptionKey, KerberosTime, KrbError, PrincipalName,
+    TgsRep, Ticket, TicketFlags, TransitedEncoding, err, ku,
 };
 use sha1::{Digest, Sha1};
 

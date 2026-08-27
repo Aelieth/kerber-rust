@@ -9,8 +9,8 @@
 use krb5_asn1::decode;
 use krb5_types::flag_bit;
 use krb5_types::{
-    err, pa, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, EtypeInfo2, KdcRep,
-    KrbError, MethodData, TicketFlags,
+    EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, EtypeInfo2, KdcRep, KrbError,
+    MethodData, TicketFlags, err, pa,
 };
 
 /// Named MIT/Rust divergences that must not fail the gate.

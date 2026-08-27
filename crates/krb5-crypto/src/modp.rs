@@ -97,11 +97,7 @@ fn p4096() -> &'static BigUint {
 
 impl DhGroup {
     fn prime(&self) -> &'static BigUint {
-        if self.bits == 2048 {
-            p2048()
-        } else {
-            p4096()
-        }
+        if self.bits == 2048 { p2048() } else { p4096() }
     }
 
     /// Length of the modulus in octets (padded DH secret / public).

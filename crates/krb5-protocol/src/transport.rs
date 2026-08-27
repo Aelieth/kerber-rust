@@ -5,7 +5,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket
 use std::time::Duration;
 
 use krb5_asn1::decode;
-use krb5_types::{err, KrbError};
+use krb5_types::{KrbError, err};
 
 use crate::error::Error;
 

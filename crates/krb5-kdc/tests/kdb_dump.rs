@@ -6,10 +6,10 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use krb5_crypto::{kdb_decrypt_key, string_to_key, EncryptionType, KeyUsage};
+use krb5_crypto::{EncryptionType, KeyUsage, kdb_decrypt_key, string_to_key};
 use krb5_kdc::{
-    dump_store, load_dump, master_key_from_password, parse_dump, KDB_DUMP_VERSION,
-    KDB_REQUIRES_PRE_AUTH, TL_LAST_PWD_CHANGE, TL_MOD_PRINC,
+    KDB_DUMP_VERSION, KDB_REQUIRES_PRE_AUTH, TL_LAST_PWD_CHANGE, TL_MOD_PRINC, dump_store,
+    load_dump, master_key_from_password, parse_dump,
 };
 use krb5_types::PrincipalName;
 

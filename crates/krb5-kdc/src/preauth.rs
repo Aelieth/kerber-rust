@@ -2,14 +2,14 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    checksum, decrypt, dh_generate, dh_group_for_prime, dh_shared, encrypt, krb_fx_cf2,
-    octetstring2key, p256_generate, p256_shared, pkinit_kdf_agile, spake_derive_key,
-    spake_kdc_keygen, spake_result_wbytes, spake_thash_update, spake_wbytes, verify_checksum,
-    EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256,
+    EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256, checksum, decrypt, dh_generate,
+    dh_group_for_prime, dh_shared, encrypt, krb_fx_cf2, octetstring2key, p256_generate,
+    p256_shared, pkinit_kdf_agile, spake_derive_key, spake_kdc_keygen, spake_result_wbytes,
+    spake_thash_update, spake_wbytes, verify_checksum,
 };
 use krb5_types::{
-    err, ku, pa, AsReq, EncryptedData, EncryptionKey, KerberosTime, MethodData, Microseconds,
-    PaData, PrincipalName,
+    AsReq, EncryptedData, EncryptionKey, KerberosTime, MethodData, Microseconds, PaData,
+    PrincipalName, err, ku, pa,
 };
 
 use crate::error::Error;
@@ -35,12 +35,9 @@ pub(crate) fn unwrap_fast_padata(
     let Some(raw) = find_pa(padata, pa::FX_FAST) else {
         return Ok(None);
     };
-    let armored = if let Ok(krb5_types::fast::PaFxFast::ArmoredData(w)) =
-        decode::<krb5_types::fast::PaFxFast>(raw)
-    {
-        w
-    } else {
-        decode::<krb5_types::fast::KrbFastArmoredReq>(raw)?
+    let armored = match decode::<krb5_types::fast::PaFxFast>(raw) {
+        Ok(krb5_types::fast::PaFxFast::ArmoredData(w)) => w,
+        _ => decode::<krb5_types::fast::KrbFastArmoredReq>(raw)?,
     };
     let armor_key = armor_key_from(store, &armored, padata)?;
     let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM)?;

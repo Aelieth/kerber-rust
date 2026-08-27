@@ -10,19 +10,19 @@ mod kprop;
 mod listen;
 
 use krb5_kdc::{Acl, AdminOp, PrincipalStore};
-use krb5_protocol::{verify_ap_req, Keytab, ReplayCache};
+use krb5_protocol::{Keytab, ReplayCache, verify_ap_req};
 use krb5_types::PrincipalName;
 use thiserror::Error;
 
 pub use kadm5::serve_kadm5_conn;
 pub use kprop::{
-    kprop_dump_bytes, kprop_load_bytes, kprop_send_dump, kprop_send_store, kprop_sendauth,
-    kpropd_handle_conn, kpropd_recv_dump, kpropd_recvauth, kpropd_send_ack, KpropAuth,
+    KpropAuth, kprop_dump_bytes, kprop_load_bytes, kprop_send_dump, kprop_send_store,
+    kprop_sendauth, kpropd_handle_conn, kpropd_recv_dump, kpropd_recvauth, kpropd_send_ack,
 };
 pub use listen::{
-    dispatch_kadmind, encode_kadmind_req, encode_kpasswd_req, handle_kpasswd_rfc3244, kprop_recv,
-    kprop_send, serve_kadmind, serve_kpasswd_tcp, serve_kpasswd_udp, KADMIND_PORT, KPASSWD_PORT,
-    KPROP_PORT,
+    KADMIND_PORT, KPASSWD_PORT, KPROP_PORT, dispatch_kadmind, encode_kadmind_req,
+    encode_kpasswd_req, handle_kpasswd_rfc3244, kprop_recv, kprop_send, serve_kadmind,
+    serve_kpasswd_tcp, serve_kpasswd_udp,
 };
 
 /// Admin error.
@@ -321,7 +321,7 @@ mod tests {
     #[test]
     fn kadmind_wire_create_is_visible_after_reload() {
         use krb5_asn1::encode;
-        use krb5_kdc::{documented_host, load_store, save_store, shared_store, TEST_REALM};
+        use krb5_kdc::{TEST_REALM, documented_host, load_store, save_store, shared_store};
         use krb5_protocol::{build_ap_req, pa_enc_timestamp, tgs_req};
 
         let dir = std::env::temp_dir().join(format!(
@@ -402,7 +402,7 @@ mod tests {
     #[test]
     fn kpasswd_rfc3244_bumps_kvno() {
         use krb5_asn1::encode;
-        use krb5_kdc::{documented_changepw, shared_store, TEST_REALM, TEST_USER};
+        use krb5_kdc::{TEST_REALM, TEST_USER, documented_changepw, shared_store};
         use krb5_protocol::{build_ap_req, build_krb_priv, pa_enc_timestamp, tgs_req};
         use krb5_types::ChangePasswdData;
 
@@ -518,13 +518,13 @@ mod tests {
     #[test]
     fn kpasswd_udp_listener_then_issue_as() {
         use std::net::UdpSocket;
-        use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
         use std::thread;
         use std::time::Duration;
 
         use krb5_asn1::encode;
-        use krb5_kdc::{documented_changepw, shared_store, TEST_REALM, TEST_USER};
+        use krb5_kdc::{TEST_REALM, TEST_USER, documented_changepw, shared_store};
         use krb5_protocol::{build_ap_req, build_krb_priv, pa_enc_timestamp, tgs_req};
         use krb5_types::ChangePasswdData;
 
@@ -627,7 +627,7 @@ mod tests {
     #[test]
     fn kpasswd_mit_style_subkey_seq0_then_issue_as() {
         use krb5_asn1::encode;
-        use krb5_kdc::{documented_changepw, shared_store, TEST_REALM, TEST_USER};
+        use krb5_kdc::{TEST_REALM, TEST_USER, documented_changepw, shared_store};
         use krb5_protocol::{
             build_ap_req_with_cksum, build_krb_priv_with_seq, pa_enc_timestamp, tgs_req,
         };
@@ -833,7 +833,7 @@ mod tests {
         use std::thread;
         use std::time::Duration;
 
-        use krb5_kdc::{documented_host, TEST_REALM, TEST_USER};
+        use krb5_kdc::{TEST_REALM, TEST_USER, documented_host};
         use krb5_protocol::{pa_enc_timestamp, tgs_req};
 
         const MASTER: &[u8] = b"masterpassword";

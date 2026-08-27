@@ -6,13 +6,13 @@ use std::thread;
 use std::time::Duration;
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{decrypt, string_to_key, EncryptionType, KeyUsage, ProtocolKey};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, string_to_key};
 use krb5_kdc::{
-    as_req, bootstrap_documented, documented_admin_id, documented_host, handle_request, load_store,
-    pa_enc_timestamp, save_store, serve, shared_store, tgs_req, S2K_ITERS, TEST_REALM, TEST_USER,
-    TEST_USER_PASSWORD,
+    S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
+    documented_admin_id, documented_host, handle_request, load_store, pa_enc_timestamp, save_store,
+    serve, shared_store, tgs_req,
 };
-use krb5_types::{err, ku, AsRep, EncAsRepPart, PrincipalName};
+use krb5_types::{AsRep, EncAsRepPart, PrincipalName, err, ku};
 
 #[test]
 fn persist_survives_restart_without_key_regen() {
@@ -290,7 +290,7 @@ fn tcp_worker_cap_drops_excess_connections() {
     use std::net::TcpStream;
     use std::sync::atomic::AtomicBool;
 
-    use krb5_kdc::{serve_until, ListenLimits};
+    use krb5_kdc::{ListenLimits, serve_until};
 
     let (store, _) = bootstrap_documented().unwrap();
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -336,7 +336,7 @@ fn tcp_worker_cap_drops_excess_connections() {
 fn listener_chaos_udp_garbage_then_valid() {
     use std::sync::atomic::AtomicBool;
 
-    use krb5_kdc::{serve_until, ListenLimits};
+    use krb5_kdc::{ListenLimits, serve_until};
 
     let (store, _) = bootstrap_documented().unwrap();
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();

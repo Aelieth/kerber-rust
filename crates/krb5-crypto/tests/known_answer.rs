@@ -1,10 +1,10 @@
 //! Published known-answer tests. These call the public RFC 3961 API only.
 
 use krb5_crypto::{
-    checksum, decrypt, derive_keys, encrypt, encrypt_with_confounder, kdb_decrypt_key,
-    kdb_encrypt_key, octetstring2key, prf, prf_plus, spake_decode_point, spake_m_bytes,
-    spake_n_bytes, spake_public_wbytes, spake_thash_update, string_to_key, EncryptionType, Error,
-    KeyUsage, ProtocolKey,
+    EncryptionType, Error, KeyUsage, ProtocolKey, checksum, decrypt, derive_keys, encrypt,
+    encrypt_with_confounder, kdb_decrypt_key, kdb_encrypt_key, octetstring2key, prf, prf_plus,
+    spake_decode_point, spake_m_bytes, spake_n_bytes, spake_public_wbytes, spake_thash_update,
+    string_to_key,
 };
 
 fn hex(s: &str) -> Vec<u8> {
@@ -488,7 +488,9 @@ fn mit_t_prf_and_rfc6113_prf_plus() {
     .unwrap();
     assert_eq!(
         prf(&k256, b"test").unwrap(),
-        hex("9801f69a368c2bf675e59521e177d9a07f67efe1cfde8d3c8d6f6a0256e3b17db3c1b62ad1b8553360d17367eb1514d2")
+        hex(
+            "9801f69a368c2bf675e59521e177d9a07f67efe1cfde8d3c8d6f6a0256e3b17db3c1b62ad1b8553360d17367eb1514d2"
+        )
     );
     // MIT t_prf.c AES-128-SHA1: PRF(K, 0x01 || "a") — the first PRF+ block.
     let k_sha1 = ProtocolKey::from_bytes(
