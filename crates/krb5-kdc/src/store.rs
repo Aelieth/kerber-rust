@@ -9,6 +9,7 @@ use krb5_protocol::{Keytab, KeytabEntry, ReplayCache};
 use krb5_types::PrincipalName;
 use krb5_types::pac::{PacIdentity, RpcSid};
 use krb5_types::pkinit::PkinitCa;
+use subtle::ConstantTimeEq;
 
 /// Well-known RID: Administrator.
 pub const RID_ADMINISTRATOR: u32 = 500;
@@ -510,7 +511,7 @@ impl PrincipalStore {
             return (IPROP_FULL_RESYNC, cur, Vec::new());
         }
         let first = entries.first().map_or(0, |e| e.sno);
-        if last_sno + 1 < first {
+        if last_sno.saturating_add(1) < first {
             return (IPROP_FULL_RESYNC, cur, Vec::new());
         }
         (IPROP_OK, cur, entries)
@@ -1305,7 +1306,7 @@ impl PrincipalStore {
         for k in &p.keys {
             let params = s2k_params(k.etype);
             if let Ok(nk) = string_to_key(k.etype, password, &p.salt, Some(&params))
-                && nk.as_bytes() == k.key.as_bytes()
+                && bool::from(nk.as_bytes().ct_eq(k.key.as_bytes()))
             {
                 return Err(Error::PasswordPolicy("history".into()));
             }

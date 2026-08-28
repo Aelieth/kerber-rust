@@ -577,6 +577,7 @@ dependencies = [
  "krb5-types",
  "nix",
  "signal-hook",
+ "subtle",
  "thiserror",
  "tracing",
  "tracing-subscriber",

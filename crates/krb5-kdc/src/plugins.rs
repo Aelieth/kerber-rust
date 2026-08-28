@@ -372,5 +372,12 @@ mod tests {
             pol.as_checks.load(Ordering::SeqCst) >= 1,
             "demo policy check_as must run"
         );
+        EXTRA
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        *POLICY
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 }
