@@ -17,6 +17,7 @@ mod kdb_dump;
 mod listen;
 mod mkey;
 mod persist;
+mod plugins;
 mod preauth;
 mod store;
 
@@ -43,6 +44,9 @@ pub use listen::{
 };
 pub use mkey::{MASTER_NAME, harness_master_etype, master_key_from_password};
 pub use persist::{PersistError, load_store, save_store, save_store_legacy_kdb3};
+pub use plugins::{
+    DemoPolicy, DemoPreauth, KdcPolicy, KdcPreauth, current_policy, register_preauth, set_policy,
+};
 pub use store::{
     KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH, KeyEntry,
     Policy, Principal, PrincipalStore, RID_ADMINISTRATOR, RID_FIRST_USER, RID_KRBTGT, S2K_ITERS,

@@ -20,10 +20,8 @@ use crate::ad::{
 };
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
-use crate::preauth::{
-    SpakeStep, fast_finished, process_pkinit, process_spake, unwrap_fast, unwrap_fast_padata,
-    wrap_fast_rep,
-};
+use crate::plugins::{PreauthAction, current_policy, run_as_preauth};
+use crate::preauth::{fast_finished, unwrap_fast, unwrap_fast_padata, wrap_fast_rep};
 use crate::store::{Principal, random_key, s2k_params};
 
 /// Issued AS-REP plus the session key (for tests that decrypt the TGT).
@@ -251,33 +249,34 @@ fn issue_as_from(
         Some(r) => r.to_vec(),
         None => encode(req)?,
     };
-    match process_pkinit(
+    current_policy().check_as(store, &cname);
+    match run_as_preauth(
         store,
+        &client,
         work_padata.as_deref(),
+        &ckey.key,
         etype,
         &as_req_der,
+        body_der,
         &cname,
-        store.realm(),
     )? {
-        Some((rk, pa_pk)) => {
-            as_rep_key = rk;
-            extra_padata.push(pa_pk);
+        Some(PreauthAction::Pkinit { key, pa }) => {
+            as_rep_key = key;
+            extra_padata.push(pa);
             skip_timestamp = true;
         }
-        None => match process_spake(store, &client, work_padata.as_deref(), &ckey.key, body_der)? {
-            Some(SpakeStep::Challenge(e_data)) => {
-                return Err(Error::Protocol {
-                    code: err::MORE_PREAUTH_DATA_REQUIRED,
-                    text: Some("SPAKE challenge".into()),
-                    e_data: Some(e_data),
-                });
-            }
-            Some(SpakeStep::Done(k)) => {
-                as_rep_key = k;
-                skip_timestamp = true;
-            }
-            None => {}
-        },
+        Some(PreauthAction::Challenge(e_data)) => {
+            return Err(Error::Protocol {
+                code: err::MORE_PREAUTH_DATA_REQUIRED,
+                text: Some("SPAKE challenge".into()),
+                e_data: Some(e_data),
+            });
+        }
+        Some(PreauthAction::SpakeDone(k)) => {
+            as_rep_key = k;
+            skip_timestamp = true;
+        }
+        None => {}
     }
     if client.requires_preauth && !skip_timestamp {
         match extract_enc_timestamp(work_padata.as_deref()) {
@@ -491,6 +490,7 @@ fn issue_tgs_from(
             sname = referral;
         }
     }
+    current_policy().check_tgs(store, &sname);
     let server = store
         .fetch_name(&sname)?
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "unknown server"))?;
@@ -919,25 +919,7 @@ fn preauth_required(store: &dyn PrincipalRead, client: &Principal) -> Error {
         padata_type: pa::ETYPE_INFO2,
         padata_value: encode(&info).map_or_else(|_| Vec::new().into(), Into::into),
     };
-    let mut method: MethodData = Vec::new();
-    method.push(PaData {
-        padata_type: pa::SPAKE,
-        padata_value: OctetString::from(Vec::<u8>::new()),
-    });
-    if store.pkinit_ca().is_some() {
-        method.push(PaData {
-            padata_type: pa::PK_AS_REQ,
-            padata_value: OctetString::from(Vec::<u8>::new()),
-        });
-        method.push(PaData {
-            padata_type: pa::TD_DH_PARAMETERS,
-            padata_value: krb5_types::pkinit::encode_td_dh_p256().into(),
-        });
-    }
-    method.push(PaData {
-        padata_type: pa::ENC_TIMESTAMP,
-        padata_value: OctetString::from(Vec::<u8>::new()),
-    });
+    let mut method: MethodData = crate::plugins::advertise_preauth(store, client);
     method.push(etype_info);
     let e_data = encode(&method).unwrap_or_default();
     Error::PreauthRequired { e_data }
