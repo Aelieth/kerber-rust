@@ -235,6 +235,35 @@ echo "$I2" | grep -qiE 'revoked|CLIENT_REVOKED' && {
 kadmin_q 'delprinc -force timeduser' >/dev/null
 kadmin_q 'delpol -force timed' >/dev/null
 
+echo "==== MIT kadmin history depth 2 ===="
+kadmin_q 'addpol -minlength 8 -minclasses 2 -history 2 histn' >/dev/null
+kadmin_q 'addprinc -policy histn -pw Hist-pw0 histuser' >/dev/null
+kadmin_q 'cpw -pw Hist-pw1 histuser' >/dev/null
+kadmin_q 'cpw -pw Hist-pw2 histuser' >/dev/null
+H0="$(kadmin_q 'cpw -pw Hist-pw0 histuser')"
+echo "$H0"
+if ! echo "$H0" | grep -qiE 'reuse|REUSE|history'; then
+    docker exec "$NAME" cat /tmp/kadmind.log >&2 || true
+    log "policy.gate" "error" ',"error":"history-2 must reject password 2 changes ago"'
+    exit 1
+fi
+H1="$(kadmin_q 'cpw -pw Hist-pw1 histuser')"
+echo "$H1"
+if ! echo "$H1" | grep -qiE 'reuse|REUSE|history'; then
+    log "policy.gate" "error" ',"error":"history-2 must reject password 1 change ago"'
+    exit 1
+fi
+kadmin_q 'cpw -pw Hist-pw3 histuser' >/dev/null
+HOK="$(kadmin_q 'cpw -pw Hist-pw0 histuser')"
+echo "$HOK"
+if ! echo "$HOK" | grep -qi 'password .* changed'; then
+    docker exec "$NAME" cat /tmp/kadmind.log >&2 || true
+    log "policy.gate" "error" ',"error":"N+1-th password must be reusable"'
+    exit 1
+fi
+kadmin_q 'delprinc -force histuser' >/dev/null
+kadmin_q 'delpol -force histn' >/dev/null
+
 echo "==== MIT kadmin delpol lockme ===="
 kadmin_q 'delpol -force lockme' >/dev/null
 DELGET="$(kadmin_q 'getpol lockme')"

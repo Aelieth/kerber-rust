@@ -78,8 +78,10 @@ pub struct Principal {
     pub name: PrincipalName,
     /// Realm.
     pub realm: String,
-    /// Keys by etype (may include multiple kvnos).
+    /// Active keys (one kvno; `keepold=false` on password change).
     pub keys: Vec<KeyEntry>,
+    /// Prior password keys, pruned to policy history depth N.
+    pub key_history: Vec<KeyEntry>,
     /// Salt used for password-derived keys.
     pub salt: Vec<u8>,
     /// Whether AS requires PA-ENC-TIMESTAMP.
@@ -145,6 +147,7 @@ impl Principal {
             name,
             realm,
             keys,
+            key_history: Vec::new(),
             salt,
             requires_preauth,
             max_life,
@@ -828,8 +831,8 @@ impl PrincipalStore {
         Ok(())
     }
 
-    /// Replace password-derived keys (kpasswd): bump kvno, keep prior keys
-    /// and principal policy.
+    /// Replace password-derived keys (`keepold=false`): one active kvno;
+    /// prior keys go to [`Principal::key_history`] pruned to policy depth N.
     ///
     /// # Errors
     ///
@@ -844,10 +847,16 @@ impl PrincipalStore {
         let next_kvno = existing
             .keys
             .iter()
+            .chain(existing.key_history.iter())
             .map(|k| k.kvno)
             .max()
             .unwrap_or(0)
             .saturating_add(1);
+        let depth = existing
+            .pw_policy
+            .as_ref()
+            .and_then(|n| self.policies.get(n))
+            .map_or(0, |pol| pol.history);
         let mut new_keys = Vec::new();
         for etype in [
             EncryptionType::Aes256CtsHmacSha196,
@@ -860,7 +869,9 @@ impl PrincipalStore {
             new_keys.push(KeyEntry::new(etype, key, next_kvno));
         }
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
-        p.keys.extend(new_keys);
+        let old = std::mem::replace(&mut p.keys, new_keys);
+        p.key_history.extend(old);
+        p.key_history = prune_key_history(std::mem::take(&mut p.key_history), depth);
         let snap = p.clone();
         self.note_ulog(id, false, Some(snap));
         self.save_if_configured()
@@ -1317,7 +1328,14 @@ impl PrincipalStore {
         if pol.history == 0 {
             return Ok(());
         }
-        for k in &p.keys {
+        let n = pol.history as usize;
+        let mut hist: Vec<&KeyEntry> = p.key_history.iter().collect();
+        let mut kvnos: Vec<u32> = hist.iter().map(|k| k.kvno).collect();
+        kvnos.sort_unstable();
+        kvnos.dedup();
+        let keep: Vec<u32> = kvnos.into_iter().rev().take(n).collect();
+        hist.retain(|k| keep.contains(&k.kvno));
+        for k in p.keys.iter().chain(hist) {
             let params = s2k_params(k.etype);
             if let Ok(nk) = string_to_key(k.etype, password, &p.salt, Some(&params))
                 && bool::from(nk.as_bytes().ct_eq(k.key.as_bytes()))
@@ -1467,6 +1485,19 @@ impl PrincipalStore {
             self.next_rid = rid.saturating_add(1);
         }
     }
+}
+
+pub(crate) fn prune_key_history(keys: Vec<KeyEntry>, depth: u32) -> Vec<KeyEntry> {
+    if depth == 0 {
+        return Vec::new();
+    }
+    let mut kvnos: Vec<u32> = keys.iter().map(|k| k.kvno).collect();
+    kvnos.sort_unstable();
+    kvnos.dedup();
+    let keep: Vec<u32> = kvnos.into_iter().rev().take(depth as usize).collect();
+    keys.into_iter()
+        .filter(|k| keep.contains(&k.kvno))
+        .collect()
 }
 
 pub(crate) fn unix_now_u32() -> u32 {
@@ -1707,6 +1738,14 @@ mod tests {
             store.set_password(&user, b"Longer1x").is_err(),
             "history must reject reuse of the current password"
         );
+        let n_kvno = {
+            let p = store.get_name(&user).unwrap();
+            let mut v: Vec<u32> = p.keys.iter().map(|k| k.kvno).collect();
+            v.sort_unstable();
+            v.dedup();
+            v.len()
+        };
+        assert_eq!(n_kvno, 1, "keepold=false: one active kvno");
 
         let key = store
             .get_name(&user)
@@ -1778,6 +1817,56 @@ mod tests {
             store.check_password_quality(&user, b"Aa1!aaa ").is_ok(),
             "space is MIT class other (5th)"
         );
+    }
+
+    #[test]
+    fn password_history_depth_n_rejects_last_n() {
+        let (mut store, _) = crate::bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+        store.put_policy(NamedPolicy {
+            name: "histn".into(),
+            min_length: 8,
+            min_classes: 2,
+            history: 2,
+            max_fail: 0,
+            pw_failcnt_interval: 0,
+            pw_lockout_duration: 0,
+        });
+        store
+            .set_principal_policy(&user, Some("histn".into()))
+            .unwrap();
+        store.set_password(&user, b"Hist-pw0").unwrap();
+        store.set_password(&user, b"Hist-pw1").unwrap();
+        store.set_password(&user, b"Hist-pw2").unwrap();
+        assert!(
+            store.set_password(&user, b"Hist-pw0").is_err(),
+            "depth-2 must reject the password 2 changes ago"
+        );
+        assert!(store.set_password(&user, b"Hist-pw1").is_err());
+        store.set_password(&user, b"Hist-pw3").unwrap();
+        store
+            .set_password(&user, b"Hist-pw0")
+            .expect("N+1-th password must be reusable");
+        let p = store.get_name(&user).unwrap();
+        let mut kvnos: Vec<u32> = p.keys.iter().map(|k| k.kvno).collect();
+        kvnos.sort_unstable();
+        kvnos.dedup();
+        assert_eq!(kvnos.len(), 1, "active keys are a single kvno");
+        let mut hkv: Vec<u32> = p.key_history.iter().map(|k| k.kvno).collect();
+        hkv.sort_unstable();
+        hkv.dedup();
+        assert!(
+            hkv.len() <= 2,
+            "history pruned to depth 2 kvnos, got {hkv:?}"
+        );
+        let text = crate::dump_store(&store, b"masterpassword").unwrap();
+        assert!(
+            text.contains("\t19204\t"),
+            "dump must emit TL_KERBER_HIST 0x4B04: {text}"
+        );
+        let again = crate::load_dump(&text, b"masterpassword").unwrap();
+        let p2 = again.get_name(&user).unwrap();
+        assert!(!p2.key_history.is_empty(), "hist tl_data must round-trip");
     }
 
     #[test]

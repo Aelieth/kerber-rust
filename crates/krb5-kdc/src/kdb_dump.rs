@@ -48,6 +48,8 @@ pub const TL_KERBER_SID: i32 = 0x4B01;
 pub const TL_KERBER_POLICY: i32 = 0x4B02;
 /// Private `tl_data` type: iprop serial (4-byte BE).
 pub const TL_KERBER_SERIAL: i32 = 0x4B03;
+/// Private `tl_data` type: password history keys (MIT preserves unknown types).
+pub const TL_KERBER_HIST: i32 = 0x4B04;
 /// `KRB5_KDB_SALTTYPE_NORMAL`.
 pub const SALTTYPE_NORMAL: i32 = 0;
 /// `KRB5_KDB_SALTTYPE_SPECIAL`.
@@ -258,6 +260,7 @@ impl DumpPrincipal {
                 name,
                 realm,
                 keys,
+                key_history: hist_from_tl(&self.tl_data, mkey)?,
                 salt,
                 requires_preauth,
                 max_life: u64::from(self.max_life),
@@ -754,6 +757,7 @@ fn write_princ_record(
     };
     merge_sid_tl(&mut tl, store.domain_sid(), p.rid);
     merge_policy_tl(&mut tl, p.pw_policy.as_deref());
+    merge_hist_tl(&mut tl, &p.key_history, mkey)?;
     if p.name.components_joined() == "K/M" {
         merge_serial_tl(&mut tl, store.serial());
     }
@@ -839,6 +843,74 @@ fn merge_policy_tl(tl: &mut Vec<TlData>, policy: Option<&str>) {
             contents: name.as_bytes().to_vec(),
         });
     }
+}
+
+fn merge_hist_tl(
+    tl: &mut Vec<TlData>,
+    hist: &[KeyEntry],
+    mkey: &ProtocolKey,
+) -> Result<(), DumpError> {
+    tl.retain(|t| t.ty != TL_KERBER_HIST);
+    if hist.is_empty() {
+        return Ok(());
+    }
+    tl.push(TlData {
+        ty: TL_KERBER_HIST,
+        contents: encode_hist(hist, mkey)?,
+    });
+    Ok(())
+}
+
+fn encode_hist(keys: &[KeyEntry], mkey: &ProtocolKey) -> Result<Vec<u8>, DumpError> {
+    let mut b = Vec::new();
+    b.extend_from_slice(&(u32::try_from(keys.len()).unwrap_or(0)).to_be_bytes());
+    for k in keys {
+        b.extend_from_slice(&k.etype.to_iana().to_be_bytes());
+        b.extend_from_slice(&k.kvno.to_be_bytes());
+        let enc = kdb_encrypt_key(mkey, k.key.as_bytes())?;
+        let n = u16::try_from(enc.len()).unwrap_or(u16::MAX);
+        b.extend_from_slice(&n.to_be_bytes());
+        b.extend_from_slice(&enc);
+    }
+    Ok(b)
+}
+
+fn hist_from_tl(tl: &[TlData], mkey: &ProtocolKey) -> Result<Vec<KeyEntry>, DumpError> {
+    let Some(t) = tl.iter().find(|x| x.ty == TL_KERBER_HIST) else {
+        return Ok(Vec::new());
+    };
+    decode_hist(&t.contents, mkey)
+}
+
+fn decode_hist(b: &[u8], mkey: &ProtocolKey) -> Result<Vec<KeyEntry>, DumpError> {
+    if b.len() < 4 {
+        return Err(DumpError::Format("short 0x4B04 hist tl_data".into()));
+    }
+    let n = u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize;
+    let mut i = 4usize;
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        if i + 10 > b.len() {
+            return Err(DumpError::Format("truncated 0x4B04 hist tl_data".into()));
+        }
+        let etype = i32::from_be_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+        i += 4;
+        let kvno = u32::from_be_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+        i += 4;
+        let ln = u16::from_be_bytes([b[i], b[i + 1]]) as usize;
+        i += 2;
+        if i + ln > b.len() {
+            return Err(DumpError::Format("truncated 0x4B04 hist key".into()));
+        }
+        let enc = &b[i..i + ln];
+        i += ln;
+        let et = EncryptionType::known(etype).map_err(|e| DumpError::Crypto(e.to_string()))?;
+        let raw = kdb_decrypt_key(mkey, enc).map_err(|e| DumpError::Crypto(e.to_string()))?;
+        let key =
+            ProtocolKey::from_bytes(et, &raw).map_err(|e| DumpError::Crypto(e.to_string()))?;
+        out.push(KeyEntry::new(et, key, kvno));
+    }
+    Ok(out)
 }
 
 fn merge_serial_tl(tl: &mut Vec<TlData>, sno: u32) {

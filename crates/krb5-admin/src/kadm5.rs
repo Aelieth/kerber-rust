@@ -1093,6 +1093,7 @@ fn decode_kdbe(
         name,
         realm,
         keys,
+        key_history: Vec::new(),
         salt,
         requires_preauth,
         max_life,
