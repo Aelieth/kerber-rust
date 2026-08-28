@@ -265,6 +265,36 @@ fn pkinit_advertised_in_method_data_when_ca_enabled() {
 }
 
 #[test]
+fn ca_enabled_preauth_required_method_data_types() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    store.enable_pkinit_ca().expect("PKINIT CA");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let req = as_req(cname, TEST_REALM, 401, None).unwrap();
+    let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
+    let e_data = match err {
+        Error::PreauthRequired { e_data } => e_data,
+        other => panic!("expected PreauthRequired, got {other:?}"),
+    };
+    let method: MethodData = decode(&e_data).expect("METHOD-DATA");
+    let types: Vec<i32> = method.iter().map(|p| p.padata_type).collect();
+    assert_eq!(
+        types,
+        vec![
+            pa::PK_AS_REQ,
+            pa::TD_DH_PARAMETERS,
+            pa::SPAKE,
+            pa::ENC_TIMESTAMP,
+            pa::ETYPE_INFO2,
+        ],
+        "CA-enabled METHOD-DATA types must pin [16, 109, 151, 2, 19]"
+    );
+    let again = encode(&method).expect("re-encode");
+    let round: MethodData = decode(&again).expect("decode encode");
+    assert_eq!(round, method);
+    assert_eq!(again, e_data, "METHOD-DATA encode(decode) must be identity");
+}
+
+#[test]
 fn pkinit_not_advertised_without_ca() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     assert!(store.pkinit_ca().is_none());
