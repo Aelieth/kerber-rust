@@ -115,6 +115,73 @@ fn reload_if_stale_sees_kadmin_create() {
 }
 
 #[test]
+fn reload_if_stale_keeps_lockout_and_pa_replay() {
+    use krb5_kdc::{NamedPolicy, TEST_USER};
+    use krb5_protocol::ReplayKey;
+
+    let dir = std::env::temp_dir().join(format!(
+        "krb5-reload-overlay-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::create_dir_all(&dir);
+    let db = dir.join("principal");
+    let stash = dir.join("stash");
+    let (mut writer, acl) = bootstrap_documented().unwrap();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    writer.put_policy(NamedPolicy {
+        name: "lock".into(),
+        min_length: 0,
+        min_classes: 0,
+        history: 0,
+        max_fail: 3,
+    });
+    writer
+        .set_principal_policy(&user, Some("lock".into()))
+        .unwrap();
+    save_store(&writer, &db, &stash).unwrap();
+    let mut reader = load_store(&db, &stash).unwrap();
+    let before = reader.get_name(&user).unwrap();
+    assert_eq!(reader.max_fail_for(before), 3);
+    reader.record_as_outcome(&user, false);
+    reader.record_as_outcome(&user, false);
+    let after_fail = reader.get_name(&user).unwrap();
+    assert_eq!(reader.fail_auth_of(after_fail), 2);
+    let rk = ReplayKey {
+        client: format!("{TEST_USER}@{TEST_REALM}"),
+        server: format!("krbtgt/{TEST_REALM}@{TEST_REALM}"),
+        ctime: 1,
+        cusec: 2,
+        auth_hash: [7u8; 20],
+    };
+    assert!(
+        !reader.pa_replay().check_and_store(rk.clone()),
+        "first PA must insert"
+    );
+    writer.persist_paths = Some((db.clone(), stash.clone()));
+    let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["unrelated"]);
+    writer
+        .create_password(&acl, &documented_admin_id(), &extra, b"unrelated-secret")
+        .unwrap();
+    reader.reload_if_stale().unwrap();
+    assert!(reader.get_name(&extra).is_some(), "reload must see extra");
+    let after = reader.get_name(&user).unwrap();
+    assert_eq!(
+        reader.fail_auth_of(after),
+        2,
+        "lockout overlay must survive reload_if_stale"
+    );
+    assert!(
+        reader.pa_replay().check_and_store(rk),
+        "PA replay cache must survive reload_if_stale"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn persist_paths_saves_password_lock_and_expiry() {
     let dir = std::env::temp_dir().join(format!(
         "krb5-persist-status-{}-{}",

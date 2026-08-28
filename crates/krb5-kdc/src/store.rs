@@ -384,6 +384,10 @@ impl PrincipalStore {
         let mut loaded =
             crate::persist::load_store(&db, &stash).map_err(|e| Error::Crypto(e.to_string()))?;
         loaded.db_stamp = Some(stamp);
+        // Dump rows/policies/serial come from disk; lockout overlay, replay
+        // caches, and PKINIT CA are process-local.
+        loaded.as_fail = Arc::clone(&self.as_fail);
+        loaded.env = std::mem::take(&mut self.env);
         *self = loaded;
         Ok(())
     }
