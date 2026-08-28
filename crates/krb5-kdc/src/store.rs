@@ -1,7 +1,6 @@
 //! In-memory principal database and ACL-gated mutations.
 
 use std::collections::HashMap;
-use std::time::Duration;
 
 use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
 use krb5_protocol::{Keytab, KeytabEntry, ReplayCache};
@@ -251,19 +250,14 @@ impl Principal {
     }
 }
 
-/// Realm principal store.
+/// Realm principal store (dump-v7 / HashMap backend).
 #[derive(Clone, Debug)]
 pub struct PrincipalStore {
     realm: String,
     map: HashMap<String, Principal>,
     /// Ticket policy.
     pub policy: Policy,
-    /// TGS authenticator replay cache.
-    pub tgs_replay: ReplayCache,
-    /// PA-ENC-TIMESTAMP replay cache.
-    pub pa_replay: ReplayCache,
-    /// PKINIT test CA (`pkinit_anchors` FILE).
-    pub pkinit_ca: Option<PkinitCa>,
+    env: crate::kdb::KdcEnv,
     /// Optional `(db, stash)` paths; mutations write through when set.
     pub persist_paths: Option<(std::path::PathBuf, std::path::PathBuf)>,
     /// Last observed (mtime, len) of the db file; kadmind mutations bump it.
@@ -282,9 +276,7 @@ impl PrincipalStore {
             realm: realm.into(),
             map: HashMap::new(),
             policy: Policy::default(),
-            tgs_replay: ReplayCache::with_limits(50_000, Duration::from_secs(300)),
-            pa_replay: ReplayCache::with_limits(50_000, Duration::from_secs(300)),
-            pkinit_ca: None,
+            env: crate::kdb::KdcEnv::new(),
             persist_paths: None,
             db_stamp: None,
             domain_sid: generate_domain_sid().unwrap_or_else(|_| {
@@ -327,6 +319,45 @@ impl PrincipalStore {
         loaded.db_stamp = Some(stamp);
         *self = loaded;
         Ok(())
+    }
+
+    /// Ticket policy.
+    #[must_use]
+    pub fn policy(&self) -> &Policy {
+        &self.policy
+    }
+
+    /// Process-local KDC env (replay / PKINIT CA).
+    #[must_use]
+    pub fn env(&self) -> &crate::kdb::KdcEnv {
+        &self.env
+    }
+
+    /// TGS replay cache.
+    #[must_use]
+    pub fn tgs_replay(&self) -> &ReplayCache {
+        &self.env.tgs_replay
+    }
+
+    /// PA-ENC-TIMESTAMP replay cache.
+    #[must_use]
+    pub fn pa_replay(&self) -> &ReplayCache {
+        &self.env.pa_replay
+    }
+
+    /// PKINIT CA if provisioned.
+    #[must_use]
+    pub fn pkinit_ca(&self) -> Option<&PkinitCa> {
+        self.env.pkinit_ca.as_ref()
+    }
+
+    pub(crate) fn save_configured(&self) -> Result<(), Error> {
+        self.save_if_configured()
+    }
+
+    pub(crate) fn remove_id_inner(&mut self, id: &str) -> Result<(), Error> {
+        self.map.remove(id).ok_or(Error::NotFound)?;
+        self.save_if_configured()
     }
 
     fn save_if_configured(&self) -> Result<(), Error> {
@@ -431,10 +462,11 @@ impl PrincipalStore {
     ///
     /// [`Error::Crypto`] when P-256 key generation fails.
     pub fn enable_pkinit_ca(&mut self) -> Result<&PkinitCa, Error> {
-        if self.pkinit_ca.is_none() {
-            self.pkinit_ca = PkinitCa::generate();
+        if self.env.pkinit_ca.is_none() {
+            self.env.pkinit_ca = PkinitCa::generate();
         }
-        self.pkinit_ca
+        self.env
+            .pkinit_ca
             .as_ref()
             .ok_or_else(|| Error::Crypto("pkinit CA generate failed".into()))
     }
@@ -487,13 +519,14 @@ impl PrincipalStore {
     /// PEM of the PKINIT test CA for MIT `pkinit_anchors = FILE:`.
     #[must_use]
     pub fn pkinit_anchor_pem(&self) -> Option<String> {
-        self.pkinit_ca.as_ref().map(PkinitCa::cert_pem)
+        self.env.pkinit_ca.as_ref().map(PkinitCa::cert_pem)
     }
 
     /// User identity PEM (cert+key) for MIT `X509_user_identity=FILE:`.
     #[must_use]
     pub fn pkinit_user_pem(&self, cn: &str) -> Option<String> {
-        self.pkinit_ca
+        self.env
+            .pkinit_ca
             .as_ref()
             .and_then(|c| c.user_identity_pem(cn))
     }
@@ -506,17 +539,21 @@ impl PrincipalStore {
 
     /// Local TGT keys plus inter-realm `krbtgt/FOREIGN` keys (incoming referrals).
     #[must_use]
-    pub fn krbtgt_keys(&self) -> Vec<&ProtocolKey> {
+    pub fn krbtgt_keys(&self) -> Vec<ProtocolKey> {
+        self.krbtgt_key_vec()
+    }
+
+    pub(crate) fn krbtgt_key_vec(&self) -> Vec<ProtocolKey> {
         let mut out = Vec::new();
         if let Some(p) = self.krbtgt() {
             for k in &p.keys {
-                out.push(&k.key);
+                out.push(k.key.clone());
             }
         }
         for p in self.map.values() {
             if p.name.is_krbtgt() && !p.name.is_krbtgt_for(&self.realm) {
                 for k in &p.keys {
-                    out.push(&k.key);
+                    out.push(k.key.clone());
                 }
             }
         }

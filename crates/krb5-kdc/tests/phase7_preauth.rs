@@ -267,7 +267,7 @@ fn pkinit_advertised_in_method_data_when_ca_enabled() {
 #[test]
 fn pkinit_not_advertised_without_ca() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
-    assert!(store.pkinit_ca.is_none());
+    assert!(store.pkinit_ca().is_none());
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let req = as_req(cname, TEST_REALM, 399, None).unwrap();
     let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
@@ -286,7 +286,7 @@ fn pkinit_not_advertised_without_ca() {
 fn pkinit_ecdh_reply_key() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     store.enable_pkinit_ca().expect("PKINIT CA");
-    let ca = store.pkinit_ca.as_ref().expect("CA").clone();
+    let ca = store.pkinit_ca().expect("CA").clone();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let kp = p256_generate().expect("client ECDH");
     let pa = pa_pk_as_req(&kp.public, &ca).expect("PA-PK-AS-REQ");
@@ -306,7 +306,7 @@ fn pkinit_ecdh_reply_key() {
 fn pkinit_ecdh_rfc8636_sha256_kdf() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     store.enable_pkinit_ca().expect("PKINIT CA");
-    let ca = store.pkinit_ca.as_ref().expect("CA").clone();
+    let ca = store.pkinit_ca().expect("CA").clone();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let kp = p256_generate().expect("client ECDH");
     let pa = pa_pk_as_req_agile(&kp.public, &ca).expect("PA-PK-AS-REQ agile");
@@ -348,7 +348,7 @@ fn pkinit_ecdh_rfc8636_sha256_kdf() {
 fn pkinit_modp14_reply_key() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     store.enable_pkinit_ca().expect("PKINIT CA");
-    let ca = store.pkinit_ca.as_ref().expect("CA").clone();
+    let ca = store.pkinit_ca().expect("CA").clone();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let kp = dh_generate(&OAKLEY_2048).expect("client DH");
     let spki = krb5_types::pkinit::encode_dh_spki(&OAKLEY_2048.prime_bytes(), &kp.public);
@@ -418,7 +418,7 @@ fn pkinit_forged_cms_is_rejected() {
 #[test]
 fn pkinit_without_provisioned_ca_is_rejected() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
-    assert!(store.pkinit_ca.is_none());
+    assert!(store.pkinit_ca().is_none());
     let ca = krb5_types::pkinit::PkinitCa::generate().expect("unrelated CA");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let kp = p256_generate().expect("client ECDH");

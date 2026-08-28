@@ -1,0 +1,422 @@
+//! Public KDB extension surface (MIT kdb capabilities as Rust traits).
+//!
+//! Dump-v7 [`crate::PrincipalStore`] is the default at-rest backend.
+//! `db_library` selects the factory; unknown names error. Process-local
+//! replay caches and the PKINIT CA live on [`KdcEnv`], not dump rows.
+
+use std::collections::BTreeMap;
+use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use krb5_crypto::ProtocolKey;
+use krb5_protocol::ReplayCache;
+use krb5_types::PrincipalName;
+use krb5_types::pac::{PacIdentity, RpcSid};
+use krb5_types::pkinit::PkinitCa;
+
+use crate::error::Error;
+use crate::persist::{PersistError, load_store};
+use crate::store::{Policy, Principal, PrincipalStore, RID_FIRST_USER};
+
+/// Process-local KDC state (replay + PKINIT CA). Not dump/persist rows.
+#[derive(Clone, Debug)]
+pub struct KdcEnv {
+    /// TGS authenticator replay cache.
+    pub tgs_replay: ReplayCache,
+    /// PA-ENC-TIMESTAMP replay cache.
+    pub pa_replay: ReplayCache,
+    /// PKINIT test CA.
+    pub pkinit_ca: Option<PkinitCa>,
+}
+
+impl Default for KdcEnv {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl KdcEnv {
+    /// Empty CA, default replay windows.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            tgs_replay: ReplayCache::with_limits(50_000, std::time::Duration::from_secs(300)),
+            pa_replay: ReplayCache::with_limits(50_000, std::time::Duration::from_secs(300)),
+            pkinit_ca: None,
+        }
+    }
+}
+
+/// MIT kdb lookup / iterate (owned rows so a fetch-on-demand backend can impl).
+pub trait PrincipalRead: Send + Sync {
+    /// Realm name.
+    fn realm(&self) -> &str;
+    /// Ticket policy.
+    fn policy(&self) -> &Policy;
+    /// Domain SID.
+    fn domain_sid(&self) -> &RpcSid;
+    /// Process-local env.
+    fn env(&self) -> &KdcEnv;
+    /// Lookup `name@REALM`.
+    ///
+    /// # Errors
+    ///
+    /// Backend I/O or decode failures.
+    fn fetch(&self, id: &str) -> Result<Option<Principal>, Error>;
+    /// Lookup by name in this realm.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures.
+    fn fetch_name(&self, name: &PrincipalName) -> Result<Option<Principal>, Error> {
+        self.fetch(&format!("{}@{}", name.components_joined(), self.realm()))
+    }
+    /// `krbtgt/REALM@REALM`.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures.
+    fn fetch_krbtgt(&self) -> Result<Option<Principal>, Error> {
+        self.fetch_name(&PrincipalName::krbtgt(self.realm()))
+    }
+    /// Local + inter-realm krbtgt keys.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures.
+    fn krbtgt_keys(&self) -> Result<Vec<ProtocolKey>, Error>;
+    /// Principal ids, sorted.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures.
+    fn list_ids(&self) -> Result<Vec<String>, Error>;
+    /// All principals (iterate).
+    ///
+    /// # Errors
+    ///
+    /// Backend failures.
+    fn list_principals(&self) -> Result<Vec<Principal>, Error>;
+    /// TGS replay cache.
+    fn tgs_replay(&self) -> &ReplayCache {
+        &self.env().tgs_replay
+    }
+    /// PA-ENC-TIMESTAMP replay cache.
+    fn pa_replay(&self) -> &ReplayCache {
+        &self.env().pa_replay
+    }
+    /// PKINIT CA if provisioned.
+    fn pkinit_ca(&self) -> Option<&PkinitCa> {
+        self.env().pkinit_ca.as_ref()
+    }
+    /// PAC identity for `name` in `crealm`.
+    fn pac_identity(&self, name: &PrincipalName, crealm: &str) -> PacIdentity {
+        let rid = self
+            .fetch_name(name)
+            .ok()
+            .flatten()
+            .map_or(RID_FIRST_USER, |p| {
+                if p.rid == 0 { RID_FIRST_USER } else { p.rid }
+            });
+        PacIdentity {
+            sam: name.components_joined(),
+            realm: crealm.to_owned(),
+            domain_sid: self.domain_sid().clone(),
+            rid,
+        }
+    }
+}
+
+/// MIT kdb mutate.
+pub trait PrincipalWrite: PrincipalRead {
+    /// Insert or replace a principal.
+    ///
+    /// # Errors
+    ///
+    /// Backend failures.
+    fn put_principal(&mut self, p: Principal) -> Result<(), Error>;
+    /// Delete by `name@REALM`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] or backend failures.
+    fn remove_id(&mut self, id: &str) -> Result<(), Error>;
+    /// Provision a PKINIT CA on the process-local env.
+    ///
+    /// # Errors
+    ///
+    /// Key generation failure.
+    fn enable_pkinit_ca(&mut self) -> Result<&PkinitCa, Error>;
+}
+
+/// Reload / persist gate.
+pub trait StoreLifecycle {
+    /// Reload from disk when the file stamp changed.
+    ///
+    /// # Errors
+    ///
+    /// Persist load failures.
+    fn reload_if_stale(&mut self) -> Result<(), Error>;
+    /// Write through when persist paths are set.
+    ///
+    /// # Errors
+    ///
+    /// Persist save failures.
+    fn save_if_configured(&self) -> Result<(), Error>;
+}
+
+/// Combined kdb extension surface.
+pub trait Store: PrincipalRead + PrincipalWrite + StoreLifecycle {}
+
+impl<T> Store for T where T: PrincipalRead + PrincipalWrite + StoreLifecycle {}
+
+impl<T: PrincipalRead + ?Sized> PrincipalRead for std::sync::Arc<T> {
+    fn realm(&self) -> &str {
+        (**self).realm()
+    }
+    fn policy(&self) -> &Policy {
+        (**self).policy()
+    }
+    fn domain_sid(&self) -> &RpcSid {
+        (**self).domain_sid()
+    }
+    fn env(&self) -> &KdcEnv {
+        (**self).env()
+    }
+    fn fetch(&self, id: &str) -> Result<Option<Principal>, Error> {
+        (**self).fetch(id)
+    }
+    fn krbtgt_keys(&self) -> Result<Vec<ProtocolKey>, Error> {
+        <T as PrincipalRead>::krbtgt_keys(&**self)
+    }
+    fn list_ids(&self) -> Result<Vec<String>, Error> {
+        (**self).list_ids()
+    }
+    fn list_principals(&self) -> Result<Vec<Principal>, Error> {
+        (**self).list_principals()
+    }
+}
+
+
+
+/// Open a backend from `db_library` (kdc.conf). Dump-v7 is the default.
+///
+/// # Errors
+///
+/// Unknown `db_library`, or dump load failures.
+pub fn open_store(
+    db_library: Option<&str>,
+    db: &Path,
+    stash: &Path,
+) -> Result<PrincipalStore, PersistError> {
+    match db_library.map(str::trim).filter(|s| !s.is_empty()) {
+        None | Some("dump" | "dump-v7" | "kdb5_dump") => load_store(db, stash),
+        Some(name) => Err(PersistError::UnknownDbLibrary(name.to_owned())),
+    }
+}
+
+/// In-tree second backend (BTreeMap). Not dump-v7; proves issue is not
+/// hardcoded to [`PrincipalStore`]'s HashMap.
+#[derive(Debug)]
+pub struct MemoryStore {
+    realm: String,
+    map: BTreeMap<String, Principal>,
+    policy: Policy,
+    domain_sid: RpcSid,
+    next_rid: u32,
+    env: KdcEnv,
+    lookups: AtomicU64,
+}
+
+impl MemoryStore {
+    /// Empty realm.
+    #[must_use]
+    pub fn new(realm: impl Into<String>) -> Self {
+        Self {
+            realm: realm.into(),
+            map: BTreeMap::new(),
+            policy: Policy::default(),
+            domain_sid: RpcSid::from_sddl("S-1-5-21-10-20-30").unwrap_or_else(RpcSid::dummy_domain),
+            next_rid: RID_FIRST_USER,
+            env: KdcEnv::new(),
+            lookups: AtomicU64::new(0),
+        }
+    }
+
+    /// Copy principals out of a dump-v7 store.
+    #[must_use]
+    pub fn from_dump(store: &PrincipalStore) -> Self {
+        let mut m = Self::new(store.realm());
+        m.policy = store.policy().clone();
+        m.domain_sid = store.domain_sid().clone();
+        m.next_rid = store.next_rid();
+        for p in store.debug_principals() {
+            m.map.insert(p.id(), p.clone());
+        }
+        m
+    }
+
+    /// How many [`PrincipalRead::fetch`] calls hit this map.
+    #[must_use]
+    pub fn lookup_count(&self) -> u64 {
+        self.lookups.load(Ordering::SeqCst)
+    }
+}
+
+impl PrincipalRead for MemoryStore {
+    fn realm(&self) -> &str {
+        &self.realm
+    }
+    fn policy(&self) -> &Policy {
+        &self.policy
+    }
+    fn domain_sid(&self) -> &RpcSid {
+        &self.domain_sid
+    }
+    fn env(&self) -> &KdcEnv {
+        &self.env
+    }
+    fn fetch(&self, id: &str) -> Result<Option<Principal>, Error> {
+        self.lookups.fetch_add(1, Ordering::SeqCst);
+        Ok(self.map.get(id).cloned())
+    }
+    fn krbtgt_keys(&self) -> Result<Vec<ProtocolKey>, Error> {
+        let mut out = Vec::new();
+        if let Some(p) = self.fetch_krbtgt()? {
+            out.extend(p.keys.iter().map(|k| k.key.clone()));
+        }
+        for p in self.map.values() {
+            if p.name.is_krbtgt() && !p.name.is_krbtgt_for(&self.realm) {
+                out.extend(p.keys.iter().map(|k| k.key.clone()));
+            }
+        }
+        Ok(out)
+    }
+    fn list_ids(&self) -> Result<Vec<String>, Error> {
+        Ok(self.map.keys().cloned().collect())
+    }
+    fn list_principals(&self) -> Result<Vec<Principal>, Error> {
+        Ok(self.map.values().cloned().collect())
+    }
+}
+
+impl PrincipalWrite for MemoryStore {
+    fn put_principal(&mut self, p: Principal) -> Result<(), Error> {
+        self.map.insert(p.id(), p);
+        Ok(())
+    }
+    fn remove_id(&mut self, id: &str) -> Result<(), Error> {
+        self.map.remove(id).ok_or(Error::NotFound)?;
+        Ok(())
+    }
+    fn enable_pkinit_ca(&mut self) -> Result<&PkinitCa, Error> {
+        if self.env.pkinit_ca.is_none() {
+            self.env.pkinit_ca = PkinitCa::generate();
+        }
+        self.env
+            .pkinit_ca
+            .as_ref()
+            .ok_or_else(|| Error::Crypto("pkinit CA generate failed".into()))
+    }
+}
+
+impl StoreLifecycle for MemoryStore {
+    fn reload_if_stale(&mut self) -> Result<(), Error> {
+        Ok(())
+    }
+    fn save_if_configured(&self) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+impl PrincipalRead for PrincipalStore {
+    fn realm(&self) -> &str {
+        self.realm()
+    }
+    fn policy(&self) -> &Policy {
+        self.policy()
+    }
+    fn domain_sid(&self) -> &RpcSid {
+        self.domain_sid()
+    }
+    fn env(&self) -> &KdcEnv {
+        self.env()
+    }
+    fn fetch(&self, id: &str) -> Result<Option<Principal>, Error> {
+        Ok(self.get(id).cloned())
+    }
+    fn fetch_name(&self, name: &PrincipalName) -> Result<Option<Principal>, Error> {
+        Ok(self.get_name(name).cloned())
+    }
+    fn krbtgt_keys(&self) -> Result<Vec<ProtocolKey>, Error> {
+        Ok(self.krbtgt_key_vec())
+    }
+    fn list_ids(&self) -> Result<Vec<String>, Error> {
+        Ok(self.ids())
+    }
+    fn list_principals(&self) -> Result<Vec<Principal>, Error> {
+        Ok(self.debug_principals().cloned().collect())
+    }
+}
+
+impl PrincipalWrite for PrincipalStore {
+    fn put_principal(&mut self, p: Principal) -> Result<(), Error> {
+        self.debug_insert(p);
+        Ok(())
+    }
+    fn remove_id(&mut self, id: &str) -> Result<(), Error> {
+        self.remove_id_inner(id)
+    }
+    fn enable_pkinit_ca(&mut self) -> Result<&PkinitCa, Error> {
+        PrincipalStore::enable_pkinit_ca(self)
+    }
+}
+
+impl StoreLifecycle for PrincipalStore {
+    fn reload_if_stale(&mut self) -> Result<(), Error> {
+        PrincipalStore::reload_if_stale(self)
+    }
+    fn save_if_configured(&self) -> Result<(), Error> {
+        self.save_configured()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::TEST_REALM;
+    use crate::bootstrap_documented;
+    use krb5_protocol::as_req;
+    use krb5_types::PrincipalName;
+
+    #[test]
+    fn unknown_db_library_errors() {
+        let err = open_store(Some("lmdb"), Path::new("/nope"), Path::new("/nope")).unwrap_err();
+        match err {
+            PersistError::UnknownDbLibrary(n) => assert_eq!(n, "lmdb"),
+            other => panic!("expected UnknownDbLibrary, got {other}"),
+        }
+    }
+
+    #[test]
+    fn issue_as_hits_memory_store() {
+        let (dump, _) = bootstrap_documented().unwrap();
+        let mem = MemoryStore::from_dump(&dump);
+        let before = mem.lookup_count();
+        let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+        let key = dump
+            .get_name(&cname)
+            .expect("user")
+            .best_key()
+            .expect("key")
+            .key
+            .clone();
+        let padata = vec![krb5_protocol::pa_enc_timestamp(&key).expect("pa-ts")];
+        let req = as_req(cname, TEST_REALM, 11, Some(padata)).unwrap();
+        crate::issue_as(&mem, &req).expect("AS via MemoryStore");
+        assert!(
+            mem.lookup_count() > before,
+            "issue_as must fetch through MemoryStore"
+        );
+    }
+}

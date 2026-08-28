@@ -12,6 +12,7 @@ mod acl;
 mod ad;
 mod error;
 mod issue;
+mod kdb;
 mod kdb_dump;
 mod listen;
 mod mkey;
@@ -26,6 +27,9 @@ pub use ad::{
 };
 pub use error::Error;
 pub use issue::{IssuedAs, IssuedTgs, handle_request, issue_as, issue_tgs};
+pub use kdb::{
+    KdcEnv, MemoryStore, PrincipalRead, PrincipalWrite, Store, StoreLifecycle, open_store,
+};
 pub use kdb_dump::{
     DumpError, DumpFile, DumpKeyData, DumpKeySlot, DumpPrincipal, KDB_DUMP_VERSION,
     KDB_DUMP_VERSION_R18, TL_KADM_DATA, TL_KERBER_SID, TL_LAST_PWD_CHANGE, TL_MKVNO, TL_MOD_PRINC,

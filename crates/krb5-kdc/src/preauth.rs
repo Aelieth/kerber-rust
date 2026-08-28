@@ -13,7 +13,8 @@ use krb5_types::{
 };
 
 use crate::error::Error;
-use crate::store::{Principal, PrincipalStore};
+use crate::kdb::PrincipalRead;
+use crate::store::Principal;
 
 pub(crate) struct FastOk {
     pub armor_key: ProtocolKey,
@@ -21,14 +22,14 @@ pub(crate) struct FastOk {
 }
 
 /// Unwrap PA-FX-FAST from an AS-REQ.
-pub(crate) fn unwrap_fast(store: &PrincipalStore, req: &AsReq) -> Result<Option<FastOk>, Error> {
+pub(crate) fn unwrap_fast(store: &dyn PrincipalRead, req: &AsReq) -> Result<Option<FastOk>, Error> {
     let body_der = encode(&req.0.req_body)?;
     unwrap_fast_padata(store, req.0.padata.as_deref(), &body_der)
 }
 
 /// Unwrap PA-FX-FAST from AS or TGS padata.
 pub(crate) fn unwrap_fast_padata(
-    store: &PrincipalStore,
+    store: &dyn PrincipalRead,
     padata: Option<&[PaData]>,
     body_der: &[u8],
 ) -> Result<Option<FastOk>, Error> {
@@ -60,7 +61,7 @@ pub(crate) fn unwrap_fast_padata(
 }
 
 fn armor_key_from(
-    store: &PrincipalStore,
+    store: &dyn PrincipalRead,
     armored: &krb5_types::fast::KrbFastArmoredReq,
     outer_padata: Option<&[PaData]>,
 ) -> Result<ProtocolKey, Error> {
@@ -77,7 +78,7 @@ fn armor_key_from(
 }
 
 fn armor_key_from_ap(
-    store: &PrincipalStore,
+    store: &dyn PrincipalRead,
     ap_raw: &[u8],
     authenticator_usage: u32,
 ) -> Result<ProtocolKey, Error> {
@@ -85,8 +86,8 @@ fn armor_key_from_ap(
     let tkt_usage = KeyUsage::new(ku::TICKET)?;
     let cipher = ap.ticket.enc_part.cipher.as_ref();
     let mut enc_tkt: Option<krb5_types::EncTicketPart> = None;
-    for key in store.krbtgt_keys() {
-        if let Ok(plain) = decrypt(key, tkt_usage, cipher)
+    for key in store.krbtgt_keys()? {
+        if let Ok(plain) = decrypt(&key, tkt_usage, cipher)
             && let Ok(part) = decode::<krb5_types::EncTicketPart>(&plain)
         {
             enc_tkt = Some(part);
@@ -112,19 +113,23 @@ fn armor_key_from_ap(
 }
 
 /// Encrypt a FAST cookie (client id + SPAKE secret or empty).
-pub(crate) fn make_cookie(store: &PrincipalStore, payload: &[u8]) -> Result<Vec<u8>, Error> {
-    let krbtgt = store
-        .krbtgt()
-        .and_then(Principal::best_key)
+pub(crate) fn make_cookie(store: &dyn PrincipalRead, payload: &[u8]) -> Result<Vec<u8>, Error> {
+    let krbtgt_p = store
+        .fetch_krbtgt()?
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
+    let krbtgt = krbtgt_p
+        .best_key()
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
     let usage = KeyUsage::new(ku::FAST_COOKIE)?;
     encrypt(&krbtgt.key, usage, payload).map_err(Error::from)
 }
 
-pub(crate) fn open_cookie(store: &PrincipalStore, blob: &[u8]) -> Result<Vec<u8>, Error> {
-    let krbtgt = store
-        .krbtgt()
-        .and_then(Principal::best_key)
+pub(crate) fn open_cookie(store: &dyn PrincipalRead, blob: &[u8]) -> Result<Vec<u8>, Error> {
+    let krbtgt_p = store
+        .fetch_krbtgt()?
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
+    let krbtgt = krbtgt_p
+        .best_key()
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
     let usage = KeyUsage::new(ku::FAST_COOKIE)?;
     decrypt(&krbtgt.key, usage, blob).map_err(|_| proto(err::PREAUTH_FAILED, "bad cookie"))
@@ -173,7 +178,7 @@ pub(crate) enum SpakeStep {
 }
 
 pub(crate) fn process_spake(
-    store: &PrincipalStore,
+    store: &dyn PrincipalRead,
     _client: &Principal,
     padata: Option<&[PaData]>,
     ikey: &ProtocolKey,
@@ -235,7 +240,7 @@ pub(crate) fn process_spake(
 }
 
 fn send_spake_challenge(
-    store: &PrincipalStore,
+    store: &dyn PrincipalRead,
     ikey: &ProtocolKey,
     support_der: &[u8],
 ) -> Result<Option<SpakeStep>, Error> {
@@ -271,7 +276,7 @@ fn send_spake_challenge(
 
 /// PKINIT: ECDH reply key from PA-PK-AS-REQ.
 pub(crate) fn process_pkinit(
-    store: &PrincipalStore,
+    store: &dyn PrincipalRead,
     padata: Option<&[PaData]>,
     etype: EncryptionType,
     as_req_der: &[u8],
@@ -287,8 +292,7 @@ pub(crate) fn process_pkinit(
             .ok_or_else(|| proto(err::PREAUTH_FAILED, "PKINIT PA-PK-AS-REQ"))?,
     };
     let ca = store
-        .pkinit_ca
-        .as_ref()
+        .pkinit_ca()
         .ok_or_else(|| proto(err::PREAUTH_FAILED, "PKINIT not configured"))?;
     let inner = krb5_types::pkinit::cms_verify(&cms, &ca.ca_cert).map_err(|e| {
         tracing::error!(

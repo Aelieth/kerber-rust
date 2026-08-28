@@ -7,8 +7,8 @@ use krb5_types::{
 };
 
 use crate::error::Error;
+use crate::kdb::PrincipalRead;
 use crate::preauth::{find_pa, proto};
-use crate::store::PrincipalStore;
 
 /// AD-IF-RELEVANT wrapping AD-WIN2K-PAC `pac_bytes`.
 ///
@@ -301,7 +301,7 @@ pub(crate) fn s4u2self_client(
 /// when present, is decoded; a truncated or non-DER value is `BADOPTION`.
 /// The RBCD bit is read so the field is not ignored.
 pub(crate) fn s4u2proxy_client(
-    store: &PrincipalStore,
+    store: &dyn PrincipalRead,
     tgs: &TgsReq,
     tgt_cname: &PrincipalName,
     padata: Option<&[PaData]>,
@@ -334,7 +334,7 @@ pub(crate) fn s4u2proxy_client(
         ));
     }
     let server = store
-        .get_name(&extra.sname)
+        .fetch_name(&extra.sname)?
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "evidence server"))?;
     let skey = server
         .best_key()
@@ -356,7 +356,7 @@ pub(crate) fn s4u2proxy_client(
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "S4U2Proxy sname"))?;
     if rbcd {
         let target = store
-            .get_name(dest)
+            .fetch_name(dest)?
             .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "S4U2Proxy target"))?;
         let from = extra.sname.components_joined();
         if !target.s4u_allowed_from.iter().any(|n| n == &from) {
@@ -370,9 +370,11 @@ pub(crate) fn s4u2proxy_client(
     }
     let pac = pac_from_ticket_part(&part)
         .ok_or_else(|| proto(err::BAD_INTEGRITY, "S4U2Proxy evidence PAC"))?;
-    let krbtgt = store
-        .krbtgt()
-        .and_then(|p| p.best_key())
+    let krbtgt_p = store
+        .fetch_krbtgt()?
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
+    let krbtgt = krbtgt_p
+        .best_key()
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
     let der = ticket_checksum_input(&plain, &part)?;
     verify_pac_signatures(&pac, &skey.key, Some(&krbtgt.key), Some(&der))?;
@@ -387,7 +389,7 @@ pub(crate) fn s4u2proxy_client(
 
 /// U2U: encrypt ticket with additional-ticket session key.
 pub(crate) fn u2u_session(
-    store: &PrincipalStore,
+    store: &dyn PrincipalRead,
     tgs: &TgsReq,
 ) -> Result<Option<(ProtocolKey, u32, EncryptionType)>, Error> {
     if !tgs
@@ -405,9 +407,11 @@ pub(crate) fn u2u_session(
         .as_ref()
         .and_then(|v| v.first())
         .ok_or_else(|| proto(err::BADOPTION, "U2U needs additional-ticket"))?;
-    let krbtgt = store
-        .krbtgt()
-        .and_then(|p| p.best_key())
+    let krbtgt_p = store
+        .fetch_krbtgt()?
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
+    let krbtgt = krbtgt_p
+        .best_key()
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
     let usage = KeyUsage::new(ku::TICKET)?;
     let plain = decrypt(&krbtgt.key, usage, extra.enc_part.cipher.as_ref())?;

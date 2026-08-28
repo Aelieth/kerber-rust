@@ -95,7 +95,7 @@ pub struct KdcConf {
     pub requires_preauth: bool,
     /// `master_key_type` (MIT name, e.g. `aes256-cts-hmac-sha384-192`).
     pub master_key_type: Option<String>,
-    /// `database_module` / `db_library` (db2, lmdb, …). Unused by dump/load.
+    /// `database_module` / `db_library`. Default dump-v7; unknown names error.
     pub db_library: Option<String>,
     /// Optional NT domain SID (`S-1-5-21-…`) for PAC issuance.
     pub domain_sid: Option<String>,

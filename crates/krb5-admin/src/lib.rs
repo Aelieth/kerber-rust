@@ -500,7 +500,7 @@ mod tests {
             Some(vec![pa_enc_timestamp(&new_key).unwrap()]),
         )
         .unwrap();
-        krb5_kdc::issue_as(&after, &as_new).expect("AS with RFC 3244 new password");
+        krb5_kdc::issue_as(&*after, &as_new).expect("AS with RFC 3244 new password");
 
         let as_old = krb5_kdc::as_req(
             user,
@@ -510,7 +510,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            krb5_kdc::issue_as(&after, &as_old).is_err(),
+            krb5_kdc::issue_as(&*after, &as_old).is_err(),
             "old password must fail after kpasswd"
         );
     }
@@ -621,7 +621,7 @@ mod tests {
             Some(vec![pa_enc_timestamp(&new_key).unwrap()]),
         )
         .unwrap();
-        krb5_kdc::issue_as(&after, &as_new).expect("AS after UDP kpasswd");
+        krb5_kdc::issue_as(&*after, &as_new).expect("AS after UDP kpasswd");
     }
 
     #[test]
@@ -721,7 +721,7 @@ mod tests {
             Some(vec![pa_enc_timestamp(&new_key).unwrap()]),
         )
         .unwrap();
-        krb5_kdc::issue_as(&after, &as_new).expect("AS after MIT-style kpasswd");
+        krb5_kdc::issue_as(&*after, &as_new).expect("AS after MIT-style kpasswd");
     }
 
     #[test]

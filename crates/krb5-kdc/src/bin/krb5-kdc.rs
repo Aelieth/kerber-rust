@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use krb5_kdc::{
     Acl, BIND_CANDIDATES, PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER, bind_preferred,
     documented_admin_id, documented_changepw, documented_host, documented_kadmin, drop_privileges,
-    load_store, serve, shared_store,
+    open_store, serve, shared_store,
 };
 
 fn main() {
@@ -75,7 +75,8 @@ fn main() {
     } else {
         let (db, stash) = db_and_stash(kdc_conf.as_ref());
         if let (Some(db), Some(stash)) = (db, stash) {
-            load_store(&db, &stash).unwrap_or_else(|e| {
+            let lib = kdc_conf.as_ref().and_then(|c| c.db_library.as_deref());
+            open_store(lib, &db, &stash).unwrap_or_else(|e| {
                 eprintln!("krb5-kdc: load store: {e}");
                 std::process::exit(1);
             })

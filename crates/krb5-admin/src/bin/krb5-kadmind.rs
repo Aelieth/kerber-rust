@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use krb5_admin::{serve_kadm5_conn, serve_kpasswd_tcp, serve_kpasswd_udp};
 use krb5_kdc::{
-    acl_for_store, bootstrap_documented, documented_changepw, documented_kadmin, load_store,
+    acl_for_store, bootstrap_documented, documented_changepw, documented_kadmin, open_store,
     shared_store,
 };
 
@@ -43,7 +43,8 @@ fn main() {
         })
     } else {
         let (db, stash) = db_and_stash(kdc_conf.as_ref());
-        let store = load_store(&db, &stash).unwrap_or_else(|e| {
+        let lib = kdc_conf.as_ref().and_then(|c| c.db_library.as_deref());
+        let store = open_store(lib, &db, &stash).unwrap_or_else(|e| {
             eprintln!("krb5-kadmind: load: {e}");
             std::process::exit(1);
         });

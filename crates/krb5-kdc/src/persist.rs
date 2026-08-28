@@ -31,6 +31,9 @@ pub enum PersistError {
     /// Format.
     #[error("persist format: {0}")]
     Format(String),
+    /// `db_library` is not a supported backend.
+    #[error("unknown db_library: {0}")]
+    UnknownDbLibrary(String),
 }
 
 impl From<Error> for PersistError {
