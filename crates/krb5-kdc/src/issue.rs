@@ -237,6 +237,7 @@ fn issue_as_from(
     if client.locked || (count_locked && in_lockout_window) {
         return Err(proto(err::CLIENT_REVOKED, "locked"));
     }
+    current_policy().check_as(store, &client)?;
     let etype = select_etype(&body.etype, &client, store.policy().allow_weak_crypto)?;
     let ckey = client
         .key_for(etype)
@@ -263,7 +264,6 @@ fn issue_as_from(
         Some(r) => r.to_vec(),
         None => encode(req)?,
     };
-    current_policy().check_as(store, &cname);
     match run_as_preauth(
         store,
         &client,
@@ -510,7 +510,7 @@ fn issue_tgs_from(
             sname = referral;
         }
     }
-    current_policy().check_tgs(store, &sname);
+    current_policy().check_tgs(store, &sname)?;
     let server = store
         .fetch_name(&sname)?
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "unknown server"))?;

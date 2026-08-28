@@ -46,7 +46,8 @@ pub use listen::{
 pub use mkey::{MASTER_NAME, harness_master_etype, master_key_from_password};
 pub use persist::{PersistError, load_store, save_store, save_store_legacy_kdb3};
 pub use plugins::{
-    DemoPolicy, DemoPreauth, KdcPolicy, KdcPreauth, current_policy, register_preauth, set_policy,
+    DemoPolicy, DemoPreauth, DenyPolicy, KdcPolicy, KdcPreauth, current_policy, register_preauth,
+    set_policy,
 };
 pub use store::{
     IPROP_FULL_RESYNC, IPROP_NIL, IPROP_OK, KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS,

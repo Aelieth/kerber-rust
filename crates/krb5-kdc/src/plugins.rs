@@ -277,18 +277,50 @@ pub fn run_as_preauth(
 
 /// Ticket-policy hook (etype / transited / lifetimes stay on DefaultPolicy).
 pub trait KdcPolicy: Send + Sync {
-    /// Called on each AS issue.
-    fn check_as(&self, store: &dyn PrincipalRead, client: &PrincipalName);
-    /// Called on each TGS issue.
-    fn check_tgs(&self, store: &dyn PrincipalRead, sname: &PrincipalName);
+    /// Called on each AS issue after fetch; `Err` denies the request.
+    ///
+    /// # Errors
+    ///
+    /// Policy denial.
+    fn check_as(&self, store: &dyn PrincipalRead, client: &Principal) -> Result<(), Error>;
+    /// Called on each TGS issue; `Err` denies the request.
+    ///
+    /// # Errors
+    ///
+    /// Policy denial.
+    fn check_tgs(&self, store: &dyn PrincipalRead, sname: &PrincipalName) -> Result<(), Error>;
 }
 
 /// Default policy: records nothing; built-in ticket rules stay in issue.rs.
 pub struct DefaultPolicy;
 
 impl KdcPolicy for DefaultPolicy {
-    fn check_as(&self, _store: &dyn PrincipalRead, _client: &PrincipalName) {}
-    fn check_tgs(&self, _store: &dyn PrincipalRead, _sname: &PrincipalName) {}
+    fn check_as(&self, _store: &dyn PrincipalRead, _client: &Principal) -> Result<(), Error> {
+        Ok(())
+    }
+    fn check_tgs(&self, _store: &dyn PrincipalRead, _sname: &PrincipalName) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+/// Test hook: deny every AS and TGS.
+pub struct DenyPolicy;
+
+impl KdcPolicy for DenyPolicy {
+    fn check_as(&self, _store: &dyn PrincipalRead, _client: &Principal) -> Result<(), Error> {
+        Err(Error::Protocol {
+            code: krb5_types::err::POLICY,
+            text: Some("kdcpolicy".into()),
+            e_data: None,
+        })
+    }
+    fn check_tgs(&self, _store: &dyn PrincipalRead, _sname: &PrincipalName) -> Result<(), Error> {
+        Err(Error::Protocol {
+            code: krb5_types::err::POLICY,
+            text: Some("kdcpolicy".into()),
+            e_data: None,
+        })
+    }
 }
 
 /// Demo policy: counts AS/TGS checks.
@@ -301,11 +333,13 @@ pub struct DemoPolicy {
 }
 
 impl KdcPolicy for DemoPolicy {
-    fn check_as(&self, _store: &dyn PrincipalRead, _client: &PrincipalName) {
+    fn check_as(&self, _store: &dyn PrincipalRead, _client: &Principal) -> Result<(), Error> {
         self.as_checks.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
-    fn check_tgs(&self, _store: &dyn PrincipalRead, _sname: &PrincipalName) {
+    fn check_tgs(&self, _store: &dyn PrincipalRead, _sname: &PrincipalName) -> Result<(), Error> {
         self.tgs_checks.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
 }
 
@@ -376,6 +410,107 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
+        *POLICY
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+
+    #[test]
+    fn deny_policy_blocks_issue_as_and_issue_tgs() {
+        use crate::documented_host;
+        use krb5_protocol::tgs_req;
+
+        set_policy(Arc::new(DenyPolicy));
+        let (store, _) = bootstrap_documented().unwrap();
+        let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+        let key = store
+            .get_name(&cname)
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let req = as_req(
+            cname.clone(),
+            TEST_REALM,
+            5,
+            Some(vec![pa_enc_timestamp(&key).unwrap()]),
+        )
+        .unwrap();
+        let as_err = crate::issue_as(&store, &req).unwrap_err();
+        match as_err {
+            Error::Protocol { code, .. } if code == krb5_types::err::POLICY => {}
+            other => panic!("AS deny: {other:?}"),
+        }
+        *POLICY
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        let issued = crate::issue_as(&store, &req).expect("AS with default policy");
+        set_policy(Arc::new(DenyPolicy));
+        let tgs = tgs_req(
+            issued.rep.0.ticket.clone(),
+            &issued.session_key,
+            TEST_REALM,
+            &cname,
+            documented_host(),
+            TEST_REALM,
+            7,
+        )
+        .unwrap();
+        let tgs_err = crate::issue_tgs(&store, &tgs).unwrap_err();
+        match tgs_err {
+            Error::Protocol { code, .. } if code == krb5_types::err::POLICY => {}
+            other => panic!("TGS deny: {other:?}"),
+        }
+        *POLICY
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+
+    #[test]
+    fn swapped_policy_does_not_drop_as_lockout() {
+        use crate::store::NamedPolicy;
+
+        set_policy(Arc::new(DemoPolicy::default()));
+        let (mut store, _) = bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+        store.put_policy(NamedPolicy {
+            name: "lock".into(),
+            min_length: 0,
+            min_classes: 0,
+            history: 0,
+            max_fail: 1,
+            pw_failcnt_interval: 0,
+            pw_lockout_duration: 0,
+        });
+        store
+            .set_principal_policy(&user, Some("lock".into()))
+            .unwrap();
+        let zeros = krb5_crypto::ProtocolKey::from_bytes(
+            krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
+            &[0u8; 32],
+        )
+        .unwrap();
+        let mut skew = 0i64;
+        let mut bad_as = || {
+            skew += 1;
+            let ts = krb5_types::KerberosTime::now().add_seconds(skew).unwrap();
+            as_req(
+                user.clone(),
+                TEST_REALM,
+                1,
+                Some(vec![
+                    krb5_protocol::pa_enc_timestamp_at(&zeros, &ts).unwrap(),
+                ]),
+            )
+            .unwrap()
+        };
+        assert!(crate::issue_as(&store, &bad_as()).is_err());
+        let locked = crate::issue_as(&store, &bad_as()).unwrap_err();
+        match locked {
+            Error::Protocol { code, .. } if code == krb5_types::err::CLIENT_REVOKED => {}
+            other => panic!("lockout must stay inline: {other:?}"),
+        }
         *POLICY
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
