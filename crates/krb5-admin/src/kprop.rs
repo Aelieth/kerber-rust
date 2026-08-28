@@ -419,6 +419,32 @@ pub fn kpropd_handle_conn(
     Ok(store)
 }
 
+/// One in-process iprop poll (serial-delta or full-resync signal).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IpropPoll {
+    /// Applied `n` ulog entries.
+    Applied(usize),
+    /// No new serials.
+    Nil,
+    /// Replica should take a full dump (`kpropd_handle_conn`).
+    FullResync(u32),
+}
+
+/// Pull `master` ulog into `slave`. `last_sno == 0` is full resync (MIT).
+pub fn iprop_poll_once(master: &PrincipalStore, slave: &mut PrincipalStore) -> IpropPoll {
+    let last = slave.serial();
+    let (st, _, entries) = master.iprop_get(last);
+    if st == krb5_kdc::IPROP_FULL_RESYNC {
+        return IpropPoll::FullResync(master.serial());
+    }
+    if st == krb5_kdc::IPROP_NIL || entries.is_empty() {
+        return IpropPoll::Nil;
+    }
+    let n = entries.len();
+    slave.apply_updates(&entries);
+    IpropPoll::Applied(n)
+}
+
 /// Primary: `sendauth` then dump bytes.
 ///
 /// # Errors
@@ -520,4 +546,36 @@ pub fn kprop_send_store(
     let dump = kprop_dump_bytes(store, master_password)?;
     let mut auth = kprop_sendauth(stream, ticket, session, crealm, cname, 1)?;
     kprop_send_dump(stream, &mut auth, &dump)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use krb5_kdc::{bootstrap_documented, documented_admin_id};
+    use krb5_types::PrincipalName;
+
+    #[test]
+    fn iprop_poll_applies_delta_or_signals_resync() {
+        let (mut master, acl) = bootstrap_documented().unwrap();
+        let (mut slave, _) = bootstrap_documented().unwrap();
+        assert_eq!(
+            iprop_poll_once(&master, &mut slave),
+            IpropPoll::Nil,
+            "matching serials are NIL"
+        );
+        let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["pulled"]);
+        master
+            .create_password(&acl, &documented_admin_id(), &extra, b"pulled-secret")
+            .unwrap();
+        match iprop_poll_once(&master, &mut slave) {
+            IpropPoll::Applied(n) => assert!(n >= 1),
+            other => panic!("expected Applied, got {other:?}"),
+        }
+        assert!(slave.get_name(&extra).is_some());
+        let mut empty = krb5_kdc::PrincipalStore::new(krb5_kdc::TEST_REALM);
+        assert!(matches!(
+            iprop_poll_once(&master, &mut empty),
+            IpropPoll::FullResync(_)
+        ));
+    }
 }

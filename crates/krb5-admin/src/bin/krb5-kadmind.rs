@@ -59,10 +59,13 @@ fn main() {
     let realm = store.realm().to_owned();
     let kadmin = documented_kadmin();
     let changepw = documented_changepw();
-    let keys: Vec<_> = store
+    let mut keys: Vec<_> = store
         .get_name(&kadmin)
         .map(|p| p.keys.iter().map(|k| k.key.clone()).collect())
         .unwrap_or_default();
+    if let Some(p) = store.get_name(&krb5_kdc::documented_kiprop()) {
+        keys.extend(p.keys.iter().map(|k| k.key.clone()));
+    }
     if keys.is_empty() {
         eprintln!("krb5-kadmind: no kadmin/admin keys");
         std::process::exit(1);

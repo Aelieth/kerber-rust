@@ -1,6 +1,7 @@
 //! In-memory principal database and ACL-gated mutations.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
@@ -166,6 +167,29 @@ impl Principal {
     }
 }
 
+/// Circular iprop update-log entry (serial-numbered; MIT `kdb_incr_update`).
+#[derive(Clone, Debug)]
+pub struct UlogEntry {
+    /// Monotonic serial (`kdb_sno_t`).
+    pub sno: u32,
+    /// Unix seconds.
+    pub time: u32,
+    /// Unparsed `name@REALM` (or `policy:<name>`).
+    pub name: String,
+    /// Deletion marker.
+    pub deleted: bool,
+    /// Snapshot for in-process apply (absent on dump-only markers).
+    pub princ: Option<Principal>,
+}
+
+const ULOG_CAP: usize = 1024;
+/// MIT `UPDATE_OK`.
+pub const IPROP_OK: u32 = 0;
+/// MIT `UPDATE_FULL_RESYNC_NEEDED`.
+pub const IPROP_FULL_RESYNC: u32 = 2;
+/// MIT `UPDATE_NIL`.
+pub const IPROP_NIL: u32 = 4;
+
 /// Named dump/kadm5 password policy.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NamedPolicy {
@@ -301,6 +325,9 @@ pub struct PrincipalStore {
     next_rid: u32,
     policies: HashMap<String, NamedPolicy>,
     as_fail: Arc<Mutex<HashMap<String, u32>>>,
+    serial: Arc<AtomicU32>,
+    ulog: Arc<Mutex<VecDeque<UlogEntry>>>,
+    pending: Arc<Mutex<Vec<UlogEntry>>>,
 }
 
 impl PrincipalStore {
@@ -321,6 +348,9 @@ impl PrincipalStore {
             next_rid: RID_FIRST_USER,
             policies: HashMap::new(),
             as_fail: Arc::new(Mutex::new(HashMap::new())),
+            serial: Arc::new(AtomicU32::new(0)),
+            ulog: Arc::new(Mutex::new(VecDeque::new())),
+            pending: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -394,10 +424,119 @@ impl PrincipalStore {
 
     pub(crate) fn remove_id_inner(&mut self, id: &str) -> Result<(), Error> {
         self.map.remove(id).ok_or(Error::NotFound)?;
+        self.note_ulog(id.to_owned(), true, None);
         self.save_if_configured()
     }
 
+    /// Monotonic iprop serial (0 = never mutated via save).
+    #[must_use]
+    pub fn serial(&self) -> u32 {
+        self.serial.load(Ordering::SeqCst)
+    }
+
+    /// Set serial after dump load (`TL_KERBER_SERIAL`).
+    pub(crate) fn set_serial(&self, sno: u32) {
+        self.serial.store(sno, Ordering::SeqCst);
+    }
+
+    /// Snapshot of the update log (oldest first).
+    #[must_use]
+    pub fn ulog(&self) -> Vec<UlogEntry> {
+        self.ulog
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Entries with `sno > last_sno`.
+    #[must_use]
+    pub fn updates_after(&self, last_sno: u32) -> Vec<UlogEntry> {
+        self.ulog()
+            .into_iter()
+            .filter(|e| e.sno > last_sno)
+            .collect()
+    }
+
+    /// MIT iprop GET_UPDATES: `(status, last_sno, entries)`.
+    ///
+    /// `last_sno == 0` is first contact → full resync. A gap in the
+    /// circular log also returns full resync.
+    #[must_use]
+    pub fn iprop_get(&self, last_sno: u32) -> (u32, u32, Vec<UlogEntry>) {
+        let cur = self.serial();
+        if last_sno == 0 {
+            return (IPROP_FULL_RESYNC, cur, Vec::new());
+        }
+        if last_sno >= cur {
+            return (IPROP_NIL, cur, Vec::new());
+        }
+        let entries = self.updates_after(last_sno);
+        if entries.is_empty() {
+            return (IPROP_FULL_RESYNC, cur, Vec::new());
+        }
+        let first = entries.first().map_or(0, |e| e.sno);
+        if last_sno + 1 < first {
+            return (IPROP_FULL_RESYNC, cur, Vec::new());
+        }
+        (IPROP_OK, cur, entries)
+    }
+
+    /// Apply serial-delta (does not re-log).
+    pub fn apply_updates(&mut self, entries: &[UlogEntry]) {
+        for e in entries {
+            if e.deleted {
+                self.map.remove(&e.name);
+            } else if let Some(p) = &e.princ {
+                self.map.insert(p.id(), p.clone());
+            }
+            let cur = self.serial();
+            if e.sno > cur {
+                self.serial.store(e.sno, Ordering::SeqCst);
+            }
+        }
+    }
+
+    fn note_ulog(&self, name: String, deleted: bool, princ: Option<Principal>) {
+        self.pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(UlogEntry {
+                sno: 0,
+                time: unix_now_u32(),
+                name,
+                deleted,
+                princ,
+            });
+    }
+
+    fn commit_ulog(&self) {
+        let pending: Vec<UlogEntry> = {
+            self.pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .drain(..)
+                .collect()
+        };
+        if pending.is_empty() {
+            return;
+        }
+        let mut log = self
+            .ulog
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for mut e in pending {
+            e.sno = self.serial.fetch_add(1, Ordering::SeqCst) + 1;
+            log.push_back(e);
+            while log.len() > ULOG_CAP {
+                log.pop_front();
+            }
+        }
+    }
+
     fn save_if_configured(&self) -> Result<(), Error> {
+        self.commit_ulog();
         let Some((db, stash)) = &self.persist_paths else {
             return Ok(());
         };
@@ -673,6 +812,8 @@ impl PrincipalStore {
         }
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         p.keys.extend(new_keys);
+        let snap = p.clone();
+        self.note_ulog(id, false, Some(snap));
         self.save_if_configured()
     }
 
@@ -1024,9 +1165,13 @@ impl PrincipalStore {
         self.map.values()
     }
 
-    /// Insert a fully-formed principal (persistence).
-    pub(crate) fn debug_insert(&mut self, p: Principal) {
-        self.put_principal(p);
+    /// Insert a fully-formed principal (persistence / dump load; no ulog).
+    pub(crate) fn debug_insert(&mut self, mut p: Principal) {
+        if p.rid == 0 {
+            p.rid = self.alloc_rid(&p.name);
+        }
+        self.bump_next_rid(p.rid);
+        self.map.insert(p.id(), p);
     }
 
     /// Named password policies.
@@ -1037,8 +1182,14 @@ impl PrincipalStore {
 
     /// Insert or replace a named policy.
     pub fn put_policy(&mut self, pol: NamedPolicy) {
+        self.note_ulog(format!("policy:{}", pol.name), false, None);
         self.policies.insert(pol.name.clone(), pol);
         let _ = self.save_if_configured();
+    }
+
+    /// Load a dump policy without logging (dump/iprop apply).
+    pub(crate) fn load_policy(&mut self, pol: NamedPolicy) {
+        self.policies.insert(pol.name.clone(), pol);
     }
 
     /// Delete a named policy.
@@ -1048,6 +1199,7 @@ impl PrincipalStore {
     /// [`Error::NotFound`].
     pub fn delete_policy(&mut self, name: &str) -> Result<(), Error> {
         self.policies.remove(name).ok_or(Error::NotFound)?;
+        self.note_ulog(format!("policy:{name}"), true, None);
         self.save_if_configured()
     }
 
@@ -1154,7 +1306,9 @@ impl PrincipalStore {
             p.rid = self.alloc_rid(&p.name);
         }
         self.bump_next_rid(p.rid);
-        self.map.insert(p.id(), p);
+        let id = p.id();
+        self.note_ulog(id.clone(), false, Some(p.clone()));
+        self.map.insert(id, p);
     }
 
     fn alloc_rid(&mut self, name: &PrincipalName) -> u32 {
@@ -1178,6 +1332,15 @@ impl PrincipalStore {
             self.next_rid = rid.saturating_add(1);
         }
     }
+}
+
+fn unix_now_u32() -> u32 {
+    u32::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs()),
+    )
+    .unwrap_or(u32::MAX)
 }
 
 fn check_pwqual(password: &[u8], pol: &NamedPolicy) -> Result<(), Error> {
@@ -1447,5 +1610,90 @@ mod tests {
         assert!(crate::issue_as(&store, &bad_as()).is_err());
         let locked = crate::issue_as(&store, &bad_as()).unwrap_err();
         assert!(revoked(&locked), "expected CLIENT_REVOKED, got {locked:?}");
+    }
+
+    #[test]
+    fn serial_ulog_delta_then_issue_as() {
+        use krb5_protocol::{as_req, pa_enc_timestamp};
+
+        let (mut master, acl) = crate::bootstrap_documented().unwrap();
+        let (mut slave, _) = crate::bootstrap_documented().unwrap();
+        let actor = crate::documented_admin_id();
+        let sno0 = master.serial();
+        assert!(
+            sno0 > 0,
+            "bootstrap mutations must advance serial (not mtime-only)"
+        );
+        assert_eq!(master.iprop_get(0).0, IPROP_FULL_RESYNC);
+        assert_eq!(master.iprop_get(sno0).0, IPROP_NIL);
+
+        let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["iproped"]);
+        master
+            .create_password(&acl, &actor, &extra, b"iprop-secret")
+            .unwrap();
+        let sno1 = master.serial();
+        assert!(sno1 > sno0);
+        let (st, last, entries) = master.iprop_get(sno0);
+        assert_eq!(st, IPROP_OK);
+        assert_eq!(last, sno1);
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.name.contains("iproped") && !e.deleted),
+            "ulog must record the create: {entries:?}"
+        );
+
+        slave.apply_updates(&entries);
+        assert!(slave.get_name(&extra).is_some());
+        assert_eq!(slave.serial(), sno1);
+        let key = slave
+            .get_name(&extra)
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let req = as_req(
+            extra,
+            crate::TEST_REALM,
+            11,
+            Some(vec![pa_enc_timestamp(&key).unwrap()]),
+        )
+        .unwrap();
+        crate::issue_as(&slave, &req).expect("slave must issue after serial-delta");
+    }
+
+    #[test]
+    fn persist_round_trip_keeps_serial_not_mtime() {
+        let dir = std::env::temp_dir().join(format!(
+            "krb5-iprop-serial-{}-{}",
+            std::process::id(),
+            unix_now_u32()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let db = dir.join("principal");
+        let stash = dir.join("stash");
+        let (mut store, acl) = crate::bootstrap_documented().unwrap();
+        crate::persist::save_store(&store, &db, &stash).unwrap();
+        store.persist_paths = Some((db.clone(), stash.clone()));
+        let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["serialed"]);
+        store
+            .create_password(
+                &acl,
+                &crate::documented_admin_id(),
+                &extra,
+                b"serial-secret",
+            )
+            .unwrap();
+        let sno = store.serial();
+        assert!(sno > 0);
+        let loaded = crate::persist::load_store(&db, &stash).unwrap();
+        assert_eq!(
+            loaded.serial(),
+            sno,
+            "serial must survive dump persist, not db_stamp mtime"
+        );
+        assert!(loaded.get_name(&extra).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

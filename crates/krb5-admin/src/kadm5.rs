@@ -19,6 +19,13 @@ const LAST_FRAG: u32 = 0x8000_0000;
 const RPC_VERSION: u32 = 2;
 const KADM_PROG: u32 = 2112;
 const KADM_VERS: u32 = 2;
+/// MIT `KRB5_IPROP_PROG`.
+const IPROP_PROG: u32 = 100_423;
+const IPROP_VERS: u32 = 1;
+const IPROP_NULL: u32 = 0;
+const IPROP_GET_UPDATES: u32 = 1;
+const IPROP_FULL_RESYNC: u32 = 2;
+const IPROP_FULL_RESYNC_EXT: u32 = 3;
 const FLAVOR_GSS: u32 = 6;
 const FLAVOR_NONE: u32 = 0;
 /// OpenVision / MIT `AUTH_GSSAPI` (`<gssrpc/auth.h>`).
@@ -197,7 +204,9 @@ fn handle_rpc(
     let prog = r.u32()?;
     let vers = r.u32()?;
     let proc = r.u32()?;
-    if rpcvers != RPC_VERSION || prog != KADM_PROG || vers != KADM_VERS {
+    let kadm = prog == KADM_PROG && vers == KADM_VERS;
+    let iprop = prog == IPROP_PROG && vers == IPROP_VERS;
+    if rpcvers != RPC_VERSION || !(kadm || iprop) {
         return Err(Error::Inner("rpc program".into()));
     }
     let cred_flavor = r.u32()?;
@@ -216,6 +225,7 @@ fn handle_rpc(
             agss,
             xid,
             proc,
+            iprop,
             &cred,
             &verf,
             r.rest(),
@@ -289,7 +299,11 @@ fn handle_rpc(
         .client
         .clone()
         .unwrap_or_else(|| format!("admin@{expected_realm}"));
-    let result = dispatch_kadm5(store, acl, &actor, proc, args)?;
+    let result = if iprop {
+        dispatch_iprop(store, proc, args)
+    } else {
+        dispatch_kadm5(store, acl, &actor, proc, args)?
+    };
     let mut inner = Vec::with_capacity(4 + result.len());
     inner.extend_from_slice(&seq.to_be_bytes());
     inner.extend_from_slice(&result);
@@ -313,6 +327,7 @@ fn handle_auth_gssapi(
     agss: &mut Option<Agss>,
     xid: u32,
     proc: u32,
+    iprop: bool,
     cred: &[u8],
     verf: &[u8],
     args: &[u8],
@@ -338,11 +353,12 @@ fn handle_auth_gssapi(
         let mut ar = XdrR::new(args);
         let arg_ver = ar.u32()?;
         let token = ar.opaque()?;
+        let server = if iprop { None } else { Some(expected_server) };
         let (ctx, out_tok) = match GssContext::accept_sec_context(
             &token,
             service_keys,
             None,
-            Some(expected_server),
+            server,
             Some(expected_realm),
         ) {
             Ok(v) => v,
@@ -447,7 +463,11 @@ fn handle_auth_gssapi(
         .client
         .clone()
         .unwrap_or_else(|| format!("admin@{expected_realm}"));
-    let result = dispatch_kadm5(store, acl, &actor, proc, kadm_args)?;
+    let result = if iprop {
+        dispatch_iprop(store, proc, kadm_args)
+    } else {
+        dispatch_kadm5(store, acl, &actor, proc, kadm_args)?
+    };
     let mut inner = Vec::with_capacity(4 + result.len());
     inner.extend_from_slice(&st.seq.to_be_bytes());
     inner.extend_from_slice(&result);
@@ -529,6 +549,76 @@ fn parse_gcred(data: &[u8]) -> Result<Gcred, Error> {
         seq_num: r.u32()?,
         service: r.u32()?,
     })
+}
+
+fn dispatch_iprop(store: &SharedStore, proc: u32, args: &[u8]) -> Vec<u8> {
+    match proc {
+        IPROP_NULL => Vec::new(),
+        IPROP_GET_UPDATES => {
+            let mut r = XdrR::new(args);
+            let last_sno = r.u32().unwrap_or(0);
+            let g = store
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let (status, last, entries) = g.iprop_get(last_sno);
+            encode_incr_result(status, last, &entries)
+        }
+        IPROP_FULL_RESYNC | IPROP_FULL_RESYNC_EXT => {
+            let g = store
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            encode_fullresync(g.serial())
+        }
+        _ => encode_incr_result(krb5_kdc::IPROP_FULL_RESYNC, 0, &[]),
+    }
+}
+
+fn encode_kdb_last(w: &mut XdrW, sno: u32) {
+    w.u32(sno);
+    w.u32(
+        u32::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs()),
+        )
+        .unwrap_or(0),
+    );
+    w.u32(0);
+}
+
+fn encode_utf8str(w: &mut XdrW, s: &str) {
+    w.opaque(s.as_bytes());
+}
+
+fn encode_incr_update(w: &mut XdrW, e: &krb5_kdc::UlogEntry) {
+    encode_utf8str(w, &e.name);
+    w.u32(e.sno);
+    w.u32(e.time);
+    w.u32(0);
+    w.u32(0);
+    w.u32(u32::from(e.deleted));
+    w.u32(1);
+    w.u32(0);
+    w.u32(0);
+}
+
+fn encode_incr_result(status: u32, last: u32, entries: &[krb5_kdc::UlogEntry]) -> Vec<u8> {
+    let mut w = XdrW::default();
+    encode_kdb_last(&mut w, last);
+    let n = u32::try_from(entries.len()).unwrap_or(0);
+    w.u32(n);
+    for e in entries {
+        encode_incr_update(&mut w, e);
+    }
+    w.u32(status);
+    w.b
+}
+
+fn encode_fullresync(last: u32) -> Vec<u8> {
+    let mut w = XdrW::default();
+    encode_kdb_last(&mut w, last);
+    w.u32(krb5_kdc::IPROP_OK);
+    w.b
 }
 
 fn dispatch_kadm5(
@@ -1678,5 +1768,72 @@ mod tests {
         assert_eq!(ret_code(&deleted), 0);
         let missing = dispatch_kadm5(&store, &acl, &actor, GET_POLICY, &gq.b).unwrap();
         assert_eq!(ret_code(&missing), KADM5_UNK_POLICY);
+    }
+
+    #[test]
+    fn iprop_get_updates_full_resync_then_delta() {
+        let (store, acl, actor) = setup();
+        let last = {
+            let g = store.read().unwrap();
+            g.serial()
+        };
+        let mut args = XdrW::default();
+        args.u32(0);
+        args.u32(0);
+        args.u32(0);
+        let first = dispatch_iprop(&store, IPROP_GET_UPDATES, &args.b);
+        let mut r = XdrR::new(&first);
+        let sno = r.u32().unwrap();
+        assert!(sno >= last);
+        r.u32().unwrap();
+        r.u32().unwrap();
+        let n = r.u32().unwrap();
+        for _ in 0..n {
+            let _ = r.opaque();
+            let _ = r.u32();
+            let _ = r.u32();
+            let _ = r.u32();
+            let _ = r.u32();
+            let _ = r.u32();
+            let _ = r.u32();
+            let _ = r.u32();
+            let _ = r.u32();
+        }
+        assert_eq!(r.u32().unwrap(), krb5_kdc::IPROP_FULL_RESYNC);
+
+        let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["iproprpc"]);
+        {
+            let mut g = store.write().unwrap();
+            g.create_password(&acl, &actor, &extra, b"iprop-rpc-secret")
+                .unwrap();
+        }
+        let mut delta = XdrW::default();
+        delta.u32(last);
+        delta.u32(0);
+        delta.u32(0);
+        let out = dispatch_iprop(&store, IPROP_GET_UPDATES, &delta.b);
+        let mut d = XdrR::new(&out);
+        let _ = d.u32().unwrap();
+        let _ = d.u32().unwrap();
+        let _ = d.u32().unwrap();
+        let n = d.u32().unwrap();
+        assert!(n >= 1);
+        let mut names = Vec::new();
+        for _ in 0..n {
+            names.push(String::from_utf8_lossy(&d.opaque().unwrap()).into_owned());
+            let _ = d.u32();
+            let _ = d.u32();
+            let _ = d.u32();
+            let _ = d.u32();
+            let _ = d.u32();
+            let _ = d.u32();
+            let _ = d.u32();
+            let _ = d.u32();
+        }
+        assert_eq!(d.u32().unwrap(), krb5_kdc::IPROP_OK);
+        assert!(
+            names.iter().any(|s| s.contains("iproprpc")),
+            "GET_UPDATES delta must name the new principal: {names:?}"
+        );
     }
 }

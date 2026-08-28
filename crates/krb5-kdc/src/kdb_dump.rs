@@ -46,6 +46,8 @@ pub const TL_ACTKVNO: i32 = 9;
 pub const TL_KERBER_SID: i32 = 0x4B01;
 /// Private `tl_data` type: bound named-policy name (UTF-8).
 pub const TL_KERBER_POLICY: i32 = 0x4B02;
+/// Private `tl_data` type: iprop serial (4-byte BE).
+pub const TL_KERBER_SERIAL: i32 = 0x4B03;
 /// `KRB5_KDB_SALTTYPE_NORMAL`.
 pub const SALTTYPE_NORMAL: i32 = 0;
 /// `KRB5_KDB_SALTTYPE_SPECIAL`.
@@ -170,7 +172,7 @@ impl DumpFile {
     /// Crypto or name-parse failures.
     pub fn into_store(self, mkey: &ProtocolKey) -> Result<PrincipalStore, DumpError> {
         let realm = self.realm()?.to_owned();
-        let mut store = PrincipalStore::new(realm);
+        let mut store = PrincipalStore::new(realm.clone());
         let mut domain: Option<RpcSid> = None;
         for p in self.princs {
             let is_km = p.name.starts_with("K/M@");
@@ -185,10 +187,15 @@ impl DumpFile {
             store.debug_insert(princ);
         }
         for line in &self.policies {
-            store.put_policy(parse_policy_rest(line));
+            store.load_policy(parse_policy_rest(line));
         }
         if let Some(sid) = domain {
             store.set_domain_sid(sid);
+        }
+        if let Some(km) = store.get(&format!("K/M@{realm}"))
+            && let Some(sno) = serial_from_tl(&km.tl_data)
+        {
+            store.set_serial(sno);
         }
         Ok(store)
     }
@@ -716,6 +723,9 @@ fn write_princ_record(
     };
     merge_sid_tl(&mut tl, store.domain_sid(), p.rid);
     merge_policy_tl(&mut tl, p.pw_policy.as_deref());
+    if p.name.components_joined() == "K/M" {
+        merge_serial_tl(&mut tl, store.serial());
+    }
     let mut keys = Vec::new();
     for k in &p.keys {
         let enc = kdb_encrypt_key(mkey, k.key.as_bytes())?;
@@ -798,6 +808,20 @@ fn merge_policy_tl(tl: &mut Vec<TlData>, policy: Option<&str>) {
             contents: name.as_bytes().to_vec(),
         });
     }
+}
+
+fn merge_serial_tl(tl: &mut Vec<TlData>, sno: u32) {
+    tl.retain(|t| t.ty != TL_KERBER_SERIAL);
+    tl.push(TlData {
+        ty: TL_KERBER_SERIAL,
+        contents: sno.to_be_bytes().to_vec(),
+    });
+}
+
+fn serial_from_tl(tl: &[TlData]) -> Option<u32> {
+    tl.iter()
+        .find(|t| t.ty == TL_KERBER_SERIAL && t.contents.len() == 4)
+        .map(|t| u32::from_be_bytes([t.contents[0], t.contents[1], t.contents[2], t.contents[3]]))
 }
 
 fn policy_from_tl(tl: &[TlData]) -> Option<String> {
@@ -949,6 +973,7 @@ mod tests {
             again.get_name(&user).unwrap().pw_policy.as_deref(),
             Some("strict")
         );
+        assert_eq!(again.serial(), store.serial());
     }
 
     #[test]

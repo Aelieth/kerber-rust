@@ -16,8 +16,9 @@ use thiserror::Error;
 
 pub use kadm5::serve_kadm5_conn;
 pub use kprop::{
-    KpropAuth, kprop_dump_bytes, kprop_load_bytes, kprop_send_dump, kprop_send_store,
-    kprop_sendauth, kpropd_handle_conn, kpropd_recv_dump, kpropd_recvauth, kpropd_send_ack,
+    IpropPoll, KpropAuth, iprop_poll_once, kprop_dump_bytes, kprop_load_bytes, kprop_send_dump,
+    kprop_send_store, kprop_sendauth, kpropd_handle_conn, kpropd_recv_dump, kpropd_recvauth,
+    kpropd_send_ack,
 };
 pub use listen::{
     KADMIND_PORT, KPASSWD_PORT, KPROP_PORT, dispatch_kadmind, encode_kadmind_req,
