@@ -99,8 +99,8 @@ toolchain. `rasn` is unpinned (`0.28`); golden MIT DER is the protocol
 net if encodings drift. There is no unlocked `--locked` fallback.
 KLLDAP alignment: [`integration-klldap.md`](integration-klldap.md).
 
-Era II gates. The harness CI job runs `kadmin-gate`, `kpasswd-gate`,
-`kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `restart-gate`,
+Era II gates. The harness CI job runs `kadmin-gate`, `policy-gate`, `kpasswd-gate`,
+`kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `iprop-gate`, `restart-gate`,
 `prod-gate`, `prod-realm-gate`, `stress-gate`, `chaos-gate`, `soak-gate`, `s4u-mit-gate`, `samba-ad-gate`, `ad-windows-gate`,
 `ad-s4u-gate`, `samba-pac-verify-gate`, `samba-pac-l2-gate`,
 `samba-crossrealm-gate`, `samba-realtrust-gate`, and `heimdal-gate` after `pkinit-gate`.
@@ -151,6 +151,13 @@ when that oracle is absent.
   non-forwardable evidence ticket (`BADOPTION`), denies classic
   constrained delegation unless `s4u_allowed_to` lists the target, and
   parses PA-PAC-OPTIONS (167). In the harness CI job.
+- `scripts/policy-gate.sh` — MIT `kadmin` addpol/modpol/getpol/listpols/delpol
+  against `krb5-kadmind`; `addprinc -policy` then wrong `kinit` and a
+  good password both yield `CLIENT_REVOKED` at `maxfailure 1`. In CI.
+- `scripts/iprop-gate.sh` — MIT `kpropd -A` must not report IPROP
+  program unregistered; Rust `krb5-kprop` → MIT replica then MIT
+  `kinit user`; MIT `kprop` → `krb5-kpropd` then MIT `kinit` vs the
+  Rust replica. In CI.
 - `scripts/kadmin-gate.sh` — MIT `kadmin` against `krb5-kadmind` on 749
   (AUTH_GSSAPI 300001): `addprinc`, `cpw`, `getprinc` (`Principal:
   extra@KERBER.TEST`), `listprincs` (names `extra` and `user`),

@@ -22,6 +22,8 @@ the script documents otherwise.
 | `sha2-gate.sh` | MIT `kinit`/`kvno` etype 20 vs Rust KDC | `klist -e` names `aes256-cts-hmac-sha384-192` | harness |
 | `cross-realm-gate.sh` | MIT `kinit` + `kvno host/svc.other.test@OTHER.TEST` | `klist` has `krbtgt/OTHER.TEST` and the host ticket | harness |
 | `kadmin-gate.sh` | MIT `kadmin` vs `krb5-kadmind` 749 | add/cpw/get/list/mod/chrand/ktadd/`renprinc`/del then `kinit extra` | harness |
+| `policy-gate.sh` | MIT `kadmin` addpol/modpol/getpol/delpol/listpols + `kinit` | `Policy: lockme`; lockout `CLIENT_REVOKED` | harness |
+| `iprop-gate.sh` | MIT `kpropd -A` + kprop both ways | IPROP program served; MIT `kinit user` each direction | harness |
 | `kpasswd-gate.sh` | MIT `kpasswd` vs kadmind 464 | new password `kinit`; old fails; run twice | harness |
 | `kdb-dump-gate.sh` | MIT `kdb5_util` dump/load both ways | MIT `kinit` vs Rust on loaded dump; MIT `krb5kdc` + `kinit` on Rust dump v7 | harness |
 | `differential-gate.sh` | same AS/TGS bytes to Rust and MIT on one dump | stable-rep / error-code compare; un-whitelisted mismatch fails red | harness |

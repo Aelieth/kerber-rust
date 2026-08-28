@@ -11,7 +11,7 @@ logs. Unit tests alone do not promote a stage.
 | 3 | Protocol library + minimal client (AS/TGS), ccache/keytab, first live MIT production gate | **In tree** (`krb5-protocol`, `krb5-client`; gate: `scripts/client-gate.sh`) |
 | 4 | Higher-level client, GSS-API/SPNEGO (RFC 4121) | **In tree** (`krb5-gss` wrap/unwrap/MIC, SPNEGO framing; MIT GSS is out-of-process) |
 | 5 | KDC core (AS+TGS) + database backend, bidirectional interop | **In tree** (in-memory + dump-v7 at-rest; one-release KDB3 load; MIT `kdb5_util` dump/load; ACL; AP-REQ; gates: `kdc-gate.sh`, `bidirectional-gate.sh`, `kdb-dump-gate.sh`). MIT `kinit` both directions is the database oracle. |
-| 6 | Admin tools, plugins, propagation, remaining parity | **In tree** (`krb5-admin` ACL-enforced session, ktadd of all kvnos, kpasswd with kvno rotation, kprop dump/load, inter-realm krbtgt + transited). Kadmind AUTH_GSSAPI 300001 gated by MIT `kadmin` add/get/list/mod/chrand/del. MIT `kpasswd` gated by `scripts/kpasswd-gate.sh`. |
+| 6 | Admin tools, plugins, propagation, remaining parity | **In tree** (1.0: kadmind AUTH_GSSAPI, kpasswd, full-dump kprop both ways). **Era III Tier 1:** KDB traits + registries ([`plugins.md`](plugins.md), not dlopen); named policies (`policy-gate.sh`); iprop serial/ulog (`iprop-gate.sh`). |
 | 7–8 | Hardening, stress, chaos, adversarial, observability, final gates | **In tree (1.0).** MIT-oracle gates exist for AS/TGS, FAST TGS `kvno`, GSS wrap, PKINIT `kinit`, SPAKE `kinit` (`pa_type` 151 / group 2), two-realm `kvno`, and SHA-2 `kinit`/`kvno`. Golden MIT DER is byte-diffed; published crypto KATs; 8 cargo-fuzz targets; panic-deny lints on input-facing crates. AD PAC NDR is golden-gated. Wire **stress/chaos/soak** run over `harness/prod` (`stress-gate`, `chaos-gate`, `soak-gate`; scheduled soak in `soak.yml`). Differential-vs-MIT is `scripts/differential-gate.sh` (same AS/TGS bytes to Rust and MIT 1.22.2 on one dump). Heimdal 7.8 bidirectional is `scripts/heimdal-gate.sh`. Inventory: [`interop-matrix.md`](interop-matrix.md). Live SSPI remains environment-dependent. |
 
 Stage 2 production-gate of a *Rust client* is Stage 3. This repository
@@ -81,16 +81,22 @@ remains. Differential-vs-MIT is `differential-gate` (in CI). **kprop** on 754
 is gated both directions (`kprop-gate` MIT→Rust; `kprop-reverse-gate`
 Rust→MIT, additive to the in-process dump/send tests). **kadmind** MIT-gates add/get/list/mod/chrand/
 `renprinc`/del. Harness CI runs `pkinit-gate`, `kadmin-gate`,
-`kpasswd-gate`, `kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`,
-`restart-gate`, `prod-gate`, `prod-realm-gate`, `stress-gate`, `chaos-gate`, `soak-gate`, `s4u-mit-gate`, `samba-ad-gate`,
+`kpasswd-gate`, `policy-gate`, `kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`,
+`iprop-gate`, `restart-gate`, `prod-gate`, `prod-realm-gate`, `stress-gate`, `chaos-gate`, `soak-gate`, `s4u-mit-gate`, `samba-ad-gate`,
 `ad-windows-gate`, `ad-s4u-gate`, `samba-pac-verify-gate`,
 `samba-pac-l2-gate`, `samba-crossrealm-gate`, `samba-realtrust-gate`,
 `heimdal-gate`.
 
-## Era III — KLLDAP integration (Phase 1 landed)
+## Era III — KLLDAP integration (Phase 1 landed; Tier 1 §6 landed)
 
 `v1.0.0` is the tagged MIT/Samba/Heimdal baseline. Phase 1 aligns
 edition **2024**, MSRV **1.95**, `nix` 0.31, and unpinned `rasn` 0.28
 with KLLDAP 0.7.5 so a future embed has no overlapping crate majors.
 See [`integration-klldap.md`](integration-klldap.md). Replacing
 `lldap-kerberos` FFI-to-system-MIT is a later phase.
+
+**Tier 1 §6** (plugins / named policies / iprop) is in tree: KDB
+traits + `MemoryStore`, kdcpreauth/kdcpolicy registries, named
+policies + lockout (`policy-gate.sh`), iprop serial/ulog
+(`iprop-gate.sh`). Plugin shape is Rust traits, not dlopen
+([`plugins.md`](plugins.md)).

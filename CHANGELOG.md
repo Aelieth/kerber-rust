@@ -6,6 +6,18 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased]
 
+### Added
+
+- KDB extension surface: `PrincipalRead` / `PrincipalWrite` /
+  `StoreLifecycle`, dump-v7 default, `db_library` factory, in-tree
+  `MemoryStore`. kdcpreauth and kdcpolicy registries (PKINIT, SPAKE,
+  enc-timestamp as built-ins). Named password policies: dump `policy\t`
+  records, kadm5 addpol/modpol/getpol/delpol/listpols (opcodes 8–11,
+  15), pwqual, AS lockout `CLIENT_REVOKED`. Iprop serial + ulog; kadmind
+  program 100423 `IPROP_GET_UPDATES` / `FULL_RESYNC`. Gates:
+  `scripts/policy-gate.sh`, `scripts/iprop-gate.sh`. Traits, not
+  dlopen: [`docs/plugins.md`](docs/plugins.md).
+
 ### Changed
 
 - Align the workspace with KLLDAP 0.7.5: edition **2024**, MSRV **1.95**,

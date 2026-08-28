@@ -89,7 +89,10 @@ C1 multi-host MIT client vs Rust primary/replica is
 are `scripts/stress-gate.sh`, `scripts/chaos-gate.sh`, and
 `scripts/soak-gate.sh`.
 MIT 1.22.2 `kadmin` add/get/list/mod/chrand/del is gated by
-`scripts/kadmin-gate.sh`. A kadmind mutation survives KDC process
+`scripts/kadmin-gate.sh`. Named policies and lockout:
+`scripts/policy-gate.sh`. Iprop serial/ulog and `kpropd -A`:
+`scripts/iprop-gate.sh`. Extension points: [`plugins.md`](plugins.md)
+(traits, not dlopen). A kadmind mutation survives KDC process
 relaunch (`scripts/restart-gate.sh`).
 
 **`krb5-config`** parses `krb5.conf` / `kdc.conf` and DNS SRV. The KDC
