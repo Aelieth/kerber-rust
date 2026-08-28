@@ -367,10 +367,21 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-/// Replace the policy hook for this thread (tests). Process default stays
-/// [`DefaultPolicy`] so parallel tests cannot steal AS/TGS from each other.
+/// Install the policy hook for every thread (KDC serve workers).
 pub fn set_policy(p: Arc<dyn KdcPolicy>) {
+    *POLICY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(p);
+}
+
+/// Install a thread-local hook checked before the process-wide slot (tests).
+pub fn set_thread_policy(p: Arc<dyn KdcPolicy>) {
     THREAD_POLICY.with(|t| *t.borrow_mut() = Some(p));
+}
+
+/// Drop the thread-local hook so this thread uses the process-wide slot.
+pub fn clear_thread_policy() {
+    THREAD_POLICY.with(|t| *t.borrow_mut() = None);
 }
 
 /// Current policy hook.
@@ -399,7 +410,7 @@ mod tests {
         let demo = DemoPreauth::new();
         register_preauth(Arc::clone(&demo) as Arc<dyn KdcPreauth>);
         let pol = Arc::new(DemoPolicy::default());
-        set_policy(Arc::clone(&pol) as Arc<dyn KdcPolicy>);
+        set_thread_policy(Arc::clone(&pol) as Arc<dyn KdcPolicy>);
         let (store, _) = bootstrap_documented().unwrap();
         let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
         let req = as_req(cname.clone(), TEST_REALM, 3, None).unwrap();
@@ -434,7 +445,7 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
-        THREAD_POLICY.with(|t| *t.borrow_mut() = None);
+        clear_thread_policy();
     }
 
     #[test]
@@ -442,7 +453,7 @@ mod tests {
         use crate::documented_host;
         use krb5_protocol::tgs_req;
 
-        set_policy(Arc::new(DenyPolicy));
+        set_thread_policy(Arc::new(DenyPolicy));
         let (store, _) = bootstrap_documented().unwrap();
         let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
         let key = store
@@ -464,9 +475,9 @@ mod tests {
             Error::Protocol { code, .. } if code == krb5_types::err::POLICY => {}
             other => panic!("AS deny: {other:?}"),
         }
-        THREAD_POLICY.with(|t| *t.borrow_mut() = None);
+        clear_thread_policy();
         let issued = crate::issue_as(&store, &req).expect("AS with default policy");
-        set_policy(Arc::new(DenyPolicy));
+        set_thread_policy(Arc::new(DenyPolicy));
         let tgs = tgs_req(
             issued.rep.0.ticket.clone(),
             &issued.session_key,
@@ -482,14 +493,14 @@ mod tests {
             Error::Protocol { code, .. } if code == krb5_types::err::POLICY => {}
             other => panic!("TGS deny: {other:?}"),
         }
-        THREAD_POLICY.with(|t| *t.borrow_mut() = None);
+        clear_thread_policy();
     }
 
     #[test]
     fn swapped_policy_does_not_drop_as_lockout() {
         use crate::store::NamedPolicy;
 
-        set_policy(Arc::new(DemoPolicy::default()));
+        set_thread_policy(Arc::new(DemoPolicy::default()));
         let (mut store, _) = bootstrap_documented().unwrap();
         let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
         store.put_policy(NamedPolicy {
@@ -529,7 +540,39 @@ mod tests {
             Error::Protocol { code, .. } if code == krb5_types::err::CLIENT_REVOKED => {}
             other => panic!("lockout must stay inline: {other:?}"),
         }
-        THREAD_POLICY.with(|t| *t.borrow_mut() = None);
+        clear_thread_policy();
+    }
+
+    #[test]
+    fn set_policy_is_visible_on_a_spawned_thread() {
+        let (store, _) = bootstrap_documented().unwrap();
+        let pol = Arc::new(DemoPolicy::default());
+        set_policy(Arc::clone(&pol) as Arc<dyn KdcPolicy>);
+        let hits = std::thread::spawn({
+            let pol = Arc::clone(&pol);
+            let store = store.clone();
+            move || {
+                let user = store
+                    .get_name(&PrincipalName::new(
+                        PrincipalName::NT_PRINCIPAL,
+                        [TEST_USER],
+                    ))
+                    .expect("user");
+                current_policy()
+                    .check_as(&store, user)
+                    .expect("demo policy allows");
+                pol.as_checks.load(Ordering::SeqCst)
+            }
+        })
+        .join()
+        .expect("join");
+        *POLICY
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        assert!(
+            hits >= 1,
+            "serve-thread current_policy must see set_policy, got {hits}"
+        );
     }
 
     #[test]
