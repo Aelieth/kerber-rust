@@ -114,6 +114,14 @@ pub trait PrincipalRead: Send + Sync {
     fn fail_auth_of(&self, p: &Principal) -> u32 {
         p.fail_auth_count
     }
+    /// Last failed AS unix seconds (overlay or dump field).
+    fn last_failed_of(&self, p: &Principal) -> u32 {
+        p.last_failed
+    }
+    /// Last successful AS unix seconds (overlay or dump field).
+    fn last_success_of(&self, p: &Principal) -> u32 {
+        p.last_success
+    }
     /// Max failures before CLIENT_REVOKED (0 = none).
     fn max_fail_for(&self, p: &Principal) -> u32 {
         let _ = p;
@@ -210,6 +218,12 @@ impl<T: PrincipalRead + ?Sized> PrincipalRead for std::sync::Arc<T> {
     fn fail_auth_of(&self, p: &Principal) -> u32 {
         (**self).fail_auth_of(p)
     }
+    fn last_failed_of(&self, p: &Principal) -> u32 {
+        (**self).last_failed_of(p)
+    }
+    fn last_success_of(&self, p: &Principal) -> u32 {
+        (**self).last_success_of(p)
+    }
     fn max_fail_for(&self, p: &Principal) -> u32 {
         (**self).max_fail_for(p)
     }
@@ -246,7 +260,7 @@ pub struct MemoryStore {
     env: KdcEnv,
     lookups: AtomicU64,
     policies: HashMap<String, NamedPolicy>,
-    as_fail: Arc<Mutex<HashMap<String, u32>>>,
+    as_fail: Arc<Mutex<HashMap<String, crate::store::AsFailState>>>,
 }
 
 impl MemoryStore {
@@ -327,8 +341,21 @@ impl PrincipalRead for MemoryStore {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&p.id())
-            .copied()
-            .unwrap_or(p.fail_auth_count)
+            .map_or(p.fail_auth_count, |s| s.count)
+    }
+    fn last_failed_of(&self, p: &Principal) -> u32 {
+        self.as_fail
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&p.id())
+            .map_or(p.last_failed, |s| s.last_failed)
+    }
+    fn last_success_of(&self, p: &Principal) -> u32 {
+        self.as_fail
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&p.id())
+            .map_or(p.last_success, |s| s.last_success)
     }
     fn max_fail_for(&self, p: &Principal) -> u32 {
         p.pw_policy
@@ -338,16 +365,40 @@ impl PrincipalRead for MemoryStore {
     }
     fn record_as_outcome(&self, name: &PrincipalName, ok: bool) {
         let id = format!("{}@{}", name.components_joined(), self.realm);
-        let stored = self.map.get(&id).map_or(0, |p| p.fail_auth_count);
+        let fallback = self
+            .map
+            .get(&id)
+            .map_or(crate::store::AsFailState::default(), |p| {
+                crate::store::AsFailState {
+                    count: p.fail_auth_count,
+                    last_failed: p.last_failed,
+                    last_success: p.last_success,
+                }
+            });
+        let now = crate::store::unix_now_u32();
         let mut g = self
             .as_fail
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let cur = g.get(&id).copied().unwrap_or(fallback);
         if ok {
-            g.insert(id, 0);
+            g.insert(
+                id,
+                crate::store::AsFailState {
+                    count: 0,
+                    last_failed: cur.last_failed,
+                    last_success: now,
+                },
+            );
         } else {
-            let cur = g.get(&id).copied().unwrap_or(stored);
-            g.insert(id, cur.saturating_add(1));
+            g.insert(
+                id,
+                crate::store::AsFailState {
+                    count: cur.count.saturating_add(1),
+                    last_failed: now,
+                    last_success: cur.last_success,
+                },
+            );
         }
     }
 }
@@ -411,6 +462,12 @@ impl PrincipalRead for PrincipalStore {
     }
     fn fail_auth_of(&self, p: &Principal) -> u32 {
         PrincipalStore::fail_auth_of(self, p)
+    }
+    fn last_failed_of(&self, p: &Principal) -> u32 {
+        PrincipalStore::last_failed_of(self, p)
+    }
+    fn last_success_of(&self, p: &Principal) -> u32 {
+        PrincipalStore::last_success_of(self, p)
     }
     fn max_fail_for(&self, p: &Principal) -> u32 {
         PrincipalStore::max_fail_for(self, p)

@@ -191,6 +191,14 @@ pub const IPROP_FULL_RESYNC: u32 = 2;
 /// MIT `UPDATE_NIL`.
 pub const IPROP_NIL: u32 = 4;
 
+/// Process-local AS fail overlay (count + timestamps). Dump rows stay stale.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct AsFailState {
+    pub count: u32,
+    pub last_failed: u32,
+    pub last_success: u32,
+}
+
 /// Named dump/kadm5 password policy.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NamedPolicy {
@@ -325,7 +333,7 @@ pub struct PrincipalStore {
     /// Next RID to allocate (`RID_FIRST_USER` and up).
     next_rid: u32,
     policies: HashMap<String, NamedPolicy>,
-    as_fail: Arc<Mutex<HashMap<String, u32>>>,
+    as_fail: Arc<Mutex<HashMap<String, AsFailState>>>,
     serial: Arc<AtomicU32>,
     ulog: Arc<Mutex<VecDeque<UlogEntry>>>,
     pending: Arc<Mutex<Vec<UlogEntry>>>,
@@ -1321,8 +1329,27 @@ impl PrincipalStore {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&p.id())
-            .copied()
-            .unwrap_or(p.fail_auth_count)
+            .map_or(p.fail_auth_count, |s| s.count)
+    }
+
+    /// Overlay last-failed unix seconds (dump field if the overlay is empty).
+    #[must_use]
+    pub fn last_failed_of(&self, p: &Principal) -> u32 {
+        self.as_fail
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&p.id())
+            .map_or(p.last_failed, |s| s.last_failed)
+    }
+
+    /// Overlay last-success unix seconds.
+    #[must_use]
+    pub fn last_success_of(&self, p: &Principal) -> u32 {
+        self.as_fail
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&p.id())
+            .map_or(p.last_success, |s| s.last_success)
     }
 
     /// Max failures from the bound policy (0 = no lockout).
@@ -1337,16 +1364,38 @@ impl PrincipalStore {
     /// Record AS password outcome (interior-mutable; dump writes the overlay).
     pub fn record_as_outcome(&self, name: &PrincipalName, ok: bool) {
         let id = format!("{}@{}", name.components_joined(), self.realm);
-        let stored = self.map.get(&id).map_or(0, |p| p.fail_auth_count);
+        let fallback = self
+            .map
+            .get(&id)
+            .map_or(AsFailState::default(), |p| AsFailState {
+                count: p.fail_auth_count,
+                last_failed: p.last_failed,
+                last_success: p.last_success,
+            });
+        let now = unix_now_u32();
         let mut g = self
             .as_fail
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let cur = g.get(&id).copied().unwrap_or(fallback);
         if ok {
-            g.insert(id, 0);
+            g.insert(
+                id,
+                AsFailState {
+                    count: 0,
+                    last_failed: cur.last_failed,
+                    last_success: now,
+                },
+            );
         } else {
-            let cur = g.get(&id).copied().unwrap_or(stored);
-            g.insert(id, cur.saturating_add(1));
+            g.insert(
+                id,
+                AsFailState {
+                    count: cur.count.saturating_add(1),
+                    last_failed: now,
+                    last_success: cur.last_success,
+                },
+            );
         }
     }
 
@@ -1383,7 +1432,7 @@ impl PrincipalStore {
     }
 }
 
-fn unix_now_u32() -> u32 {
+pub(crate) fn unix_now_u32() -> u32 {
     u32::try_from(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1688,6 +1737,54 @@ mod tests {
             store.check_password_quality(&user, b"Aa1!aaa ").is_ok(),
             "space is MIT class other (5th)"
         );
+    }
+
+    #[test]
+    fn failed_as_stamps_last_failed() {
+        use krb5_protocol::{as_req, pa_enc_timestamp, pa_enc_timestamp_at};
+        use krb5_types::KerberosTime;
+
+        let (store, _) = crate::bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+        let p0 = store.get_name(&user).unwrap().clone();
+        assert_eq!(store.last_failed_of(&p0), 0);
+        assert_eq!(store.last_success_of(&p0), 0);
+        let zeros = krb5_crypto::ProtocolKey::from_bytes(
+            krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
+            &[0u8; 32],
+        )
+        .unwrap();
+        let ts = KerberosTime::now().add_seconds(1).unwrap();
+        let bad = as_req(
+            user.clone(),
+            crate::TEST_REALM,
+            1,
+            Some(vec![pa_enc_timestamp_at(&zeros, &ts).unwrap()]),
+        )
+        .unwrap();
+        assert!(crate::issue_as(&store, &bad).is_err());
+        let p1 = store.get_name(&user).unwrap().clone();
+        let failed = store.last_failed_of(&p1);
+        assert!(
+            failed > 0,
+            "failed AS must stamp overlay last_failed, got {failed}"
+        );
+        let key = p1.best_key().unwrap().key.clone();
+        let good = as_req(
+            user.clone(),
+            crate::TEST_REALM,
+            1,
+            Some(vec![pa_enc_timestamp(&key).unwrap()]),
+        )
+        .unwrap();
+        crate::issue_as(&store, &good).unwrap();
+        let p2 = store.get_name(&user).unwrap().clone();
+        let ok_at = store.last_success_of(&p2);
+        assert!(
+            ok_at >= failed,
+            "success must stamp last_success ({ok_at}) at/after last_failed ({failed})"
+        );
+        assert_eq!(store.fail_auth_of(&p2), 0);
     }
 
     #[test]

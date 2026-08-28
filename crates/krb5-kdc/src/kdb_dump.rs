@@ -787,8 +787,8 @@ fn write_princ_record(
         dump_attributes(p),
         p.expiration,
         p.pw_expire,
-        p.last_success,
-        p.last_failed,
+        store.last_success_of(p),
+        store.last_failed_of(p),
         store.fail_auth_of(p)
     );
     for t in &tl {
