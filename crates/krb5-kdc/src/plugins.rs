@@ -266,7 +266,9 @@ pub fn advertise_preauth(store: &dyn PrincipalRead, client: &Principal) -> Vec<P
     out
 }
 
-/// Run registered AS preauth modules in order.
+/// Run registered AS preauth modules in order. First `Some` action wins;
+/// later modules (EXTRA after EncTsOk on a normal login) are skipped.
+/// Observe-every-AS is a future kadm5_hook, not this cascade.
 ///
 /// # Errors
 ///
@@ -423,6 +425,11 @@ mod tests {
             demo.ads.load(Ordering::SeqCst) >= 1,
             "demo advertise must run from preauth_required"
         );
+        let procs_after_required = demo.procs.load(Ordering::SeqCst);
+        assert!(
+            procs_after_required >= 1,
+            "demo process_as must run when no module returns an action"
+        );
         let key = store
             .get_name(&cname)
             .unwrap()
@@ -433,9 +440,10 @@ mod tests {
         let padata = vec![pa_enc_timestamp(&key).unwrap()];
         let req = as_req(cname, TEST_REALM, 4, Some(padata)).unwrap();
         crate::issue_as(&store, &req).expect("AS");
-        assert!(
-            demo.procs.load(Ordering::SeqCst) >= 1,
-            "demo process_as must run on the AS path"
+        assert_eq!(
+            demo.procs.load(Ordering::SeqCst),
+            procs_after_required,
+            "EncTsOk short-circuits EXTRA process_as"
         );
         assert!(
             pol.as_checks.load(Ordering::SeqCst) >= 1,

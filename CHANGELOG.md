@@ -12,7 +12,9 @@ this project uses semantic versioning once a crate is published.
   `StoreLifecycle`. Dump-v7 is the default backend; `db_library=memory`
   serves `MemoryStore` seeded from dump (`scripts/store-gate.sh`).
   Kadmind mutation on `&mut dyn Store` is still deferred. kdcpreauth:
-  PKINIT, SPAKE, and enc-timestamp `process_as` (no double-verify).
+  PKINIT, SPAKE, and enc-timestamp `process_as` (no double-verify;
+  first module to return an action wins; EncTsOk short-circuits EXTRA
+  on a normal login; observe-every-AS is a future kadm5_hook).
   `KdcPolicy::check_as` / `check_tgs` can deny (`DenyPolicy`); AS
   lockout stays a mandatory inline gate. Named policies: five password
   classes; `pw_failcnt_interval` / `pw_lockout_duration`; history depth
