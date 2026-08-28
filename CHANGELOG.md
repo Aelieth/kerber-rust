@@ -13,6 +13,8 @@ this project uses semantic versioning once a crate is published.
   still byte-matches `tests/traces/mit-*.der`. Privilege-drop still
   no-ops when not root. See
   [`docs/integration-klldap.md`](docs/integration-klldap.md).
+  Bisect: `c6c59d8` (MSRV bump) was clippy-red on stable until
+  `d226f8c` folded MSRV-gated `is_multiple_of` / if-let-chains.
 
 ## [1.0.0] - 2026-08-27
 

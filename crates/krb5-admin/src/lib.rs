@@ -596,7 +596,7 @@ mod tests {
         });
         thread::sleep(Duration::from_millis(30));
         let client = UdpSocket::bind("127.0.0.1:0").unwrap();
-        // 1.85 debug s2k in change_password can exceed 2s before the reply.
+        // Debug s2k in change_password can exceed 2s before the reply.
         client
             .set_read_timeout(Some(Duration::from_secs(15)))
             .unwrap();
