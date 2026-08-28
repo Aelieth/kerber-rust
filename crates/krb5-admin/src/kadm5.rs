@@ -90,6 +90,8 @@ const KADM5_PW_MIN_LENGTH: u32 = 0x0001_0000;
 const KADM5_PW_MIN_CLASSES: u32 = 0x0002_0000;
 const KADM5_PW_HISTORY_NUM: u32 = 0x0004_0000;
 const KADM5_PW_MAX_FAILURE: u32 = 0x0010_0000;
+const KADM5_PW_FAILURE_COUNT_INTERVAL: u32 = 0x0020_0000;
+const KADM5_PW_LOCKOUT_DURATION: u32 = 0x0040_0000;
 
 /// OpenVision/MIT `KADM5_API_VERSION_2`.
 const API_V2: u32 = 0x1234_5702;
@@ -1470,10 +1472,12 @@ fn parse_policy_arg(args: &[u8]) -> Result<(u32, krb5_kdc::NamedPolicy, u32), Er
     let history = r.u32().unwrap_or(0);
     let _refcnt = r.u32().unwrap_or(0);
     let mut max_fail = 0;
+    let mut pw_failcnt_interval = 0;
+    let mut pw_lockout_duration = 0;
     if api >= API_V3 {
         max_fail = r.u32().unwrap_or(0);
-        let _ = r.u32();
-        let _ = r.u32();
+        pw_failcnt_interval = r.u32().unwrap_or(0);
+        pw_lockout_duration = r.u32().unwrap_or(0);
     }
     if api >= API_V4 {
         let _ = r.u32();
@@ -1502,6 +1506,8 @@ fn parse_policy_arg(args: &[u8]) -> Result<(u32, krb5_kdc::NamedPolicy, u32), Er
             min_classes,
             history,
             max_fail,
+            pw_failcnt_interval,
+            pw_lockout_duration,
         },
         mask,
     ))
@@ -1524,6 +1530,12 @@ fn merge_policy(
     if mask & KADM5_PW_MAX_FAILURE != 0 {
         existing.max_fail = rec.max_fail;
     }
+    if mask & KADM5_PW_FAILURE_COUNT_INTERVAL != 0 {
+        existing.pw_failcnt_interval = rec.pw_failcnt_interval;
+    }
+    if mask & KADM5_PW_LOCKOUT_DURATION != 0 {
+        existing.pw_lockout_duration = rec.pw_lockout_duration;
+    }
     existing
 }
 
@@ -1537,8 +1549,8 @@ fn encode_policy_rec(w: &mut XdrW, api: u32, p: &krb5_kdc::NamedPolicy) {
     w.u32(0);
     if api >= API_V3 {
         w.u32(p.max_fail);
-        w.u32(0);
-        w.u32(0);
+        w.u32(p.pw_failcnt_interval);
+        w.u32(p.pw_lockout_duration);
     }
     if api >= API_V4 {
         w.u32(0);
@@ -2243,6 +2255,8 @@ mod tests {
             min_classes: 2,
             history: 0,
             max_fail: 2,
+            pw_failcnt_interval: 0,
+            pw_lockout_duration: 0,
         };
         let mask = KADM5_POLICY | KADM5_PW_MIN_LENGTH | KADM5_PW_MIN_CLASSES | KADM5_PW_MAX_FAILURE;
         let created = dispatch_kadm5(
@@ -2281,6 +2295,8 @@ mod tests {
         r.u32().unwrap();
         r.u32().unwrap();
         assert_eq!(r.u32().unwrap(), 2);
+        assert_eq!(r.u32().unwrap(), 0);
+        assert_eq!(r.u32().unwrap(), 0);
 
         let mut list_args = XdrW::default();
         list_args.u32(API_V4);
@@ -2315,6 +2331,26 @@ mod tests {
             let p = g.policies().get("strict").unwrap();
             assert_eq!(p.min_length, 10);
             assert_eq!(p.max_fail, 2, "modpol must not zero unmasked fields");
+        }
+        let mut timed = pol.clone();
+        timed.pw_failcnt_interval = 30;
+        timed.pw_lockout_duration = 60;
+        let tmask = KADM5_PW_FAILURE_COUNT_INTERVAL | KADM5_PW_LOCKOUT_DURATION;
+        let tmod = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            MODIFY_POLICY,
+            &encode_cpol(API_V4, &timed, tmask),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&tmod), 0);
+        {
+            let g = store.read().unwrap();
+            let p = g.policies().get("strict").unwrap();
+            assert_eq!(p.pw_failcnt_interval, 30);
+            assert_eq!(p.pw_lockout_duration, 60);
+            assert_eq!(p.min_length, 10);
         }
 
         let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [krb5_kdc::TEST_USER]);

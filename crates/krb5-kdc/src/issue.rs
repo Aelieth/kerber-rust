@@ -220,9 +220,21 @@ fn issue_as_from(
     let client = store
         .fetch_name(&cname)?
         .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, "unknown client"))?;
-    let fails = store.fail_auth_of(&client);
+    let mut fails = store.fail_auth_of(&client);
     let max_fail = store.max_fail_for(&client);
-    if client.locked || (max_fail > 0 && fails >= max_fail) {
+    let last_failed = store.last_failed_of(&client);
+    let now = crate::store::unix_now_u32();
+    let (interval, duration) = store
+        .named_policy_for(&client)
+        .map_or((0, 0), |p| (p.pw_failcnt_interval, p.pw_lockout_duration));
+    if interval > 0 && last_failed > 0 && now >= last_failed.saturating_add(interval) {
+        store.clear_as_fail_count(&cname);
+        fails = 0;
+    }
+    let count_locked = max_fail > 0 && fails >= max_fail;
+    let in_lockout_window =
+        duration == 0 || (last_failed > 0 && now < last_failed.saturating_add(duration));
+    if client.locked || (count_locked && in_lockout_window) {
         return Err(proto(err::CLIENT_REVOKED, "locked"));
     }
     let etype = select_etype(&body.etype, &client, store.policy().allow_weak_crypto)?;

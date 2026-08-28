@@ -138,6 +138,8 @@ fn reload_if_stale_keeps_lockout_and_pa_replay() {
         min_classes: 0,
         history: 0,
         max_fail: 3,
+        pw_failcnt_interval: 0,
+        pw_lockout_duration: 0,
     });
     writer
         .set_principal_policy(&user, Some("lock".into()))

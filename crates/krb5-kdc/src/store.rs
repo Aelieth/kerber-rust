@@ -212,6 +212,10 @@ pub struct NamedPolicy {
     pub history: u32,
     /// Failures before lockout (0 = no lockout).
     pub max_fail: u32,
+    /// Seconds after `last_failed` after which the fail count resets (0 = never).
+    pub pw_failcnt_interval: u32,
+    /// Seconds the lock lasts after `last_failed` (0 = until a successful AS).
+    pub pw_lockout_duration: u32,
 }
 
 impl NamedPolicy {
@@ -224,6 +228,8 @@ impl NamedPolicy {
             min_classes: 0,
             history: 0,
             max_fail: 0,
+            pw_failcnt_interval: 0,
+            pw_lockout_duration: 0,
         }
     }
 }
@@ -1361,6 +1367,37 @@ impl PrincipalStore {
             .map_or(0, |pol| pol.max_fail)
     }
 
+    /// Bound named policy, if any.
+    #[must_use]
+    pub fn named_policy_for(&self, p: &Principal) -> Option<NamedPolicy> {
+        p.pw_policy
+            .as_ref()
+            .and_then(|n| self.policies.get(n).cloned())
+    }
+
+    /// Zero the overlay fail count without stamping last_success (interval reset).
+    pub fn clear_as_fail_count(&self, name: &PrincipalName) {
+        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let fallback = self
+            .map
+            .get(&id)
+            .map_or(AsFailState::default(), |p| AsFailState {
+                count: 0,
+                last_failed: p.last_failed,
+                last_success: p.last_success,
+            });
+        let mut g = self
+            .as_fail
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match g.get_mut(&id) {
+            Some(s) => s.count = 0,
+            None => {
+                g.insert(id, fallback);
+            }
+        }
+    }
+
     /// Record AS password outcome (interior-mutable; dump writes the overlay).
     pub fn record_as_outcome(&self, name: &PrincipalName, ok: bool) {
         let id = format!("{}@{}", name.components_joined(), self.realm);
@@ -1657,6 +1694,8 @@ mod tests {
             min_classes: 2,
             history: 1,
             max_fail: 3,
+            pw_failcnt_interval: 0,
+            pw_lockout_duration: 0,
         });
         store
             .set_principal_policy(&user, Some("strict".into()))
@@ -1725,6 +1764,8 @@ mod tests {
             min_classes: 5,
             history: 0,
             max_fail: 0,
+            pw_failcnt_interval: 0,
+            pw_lockout_duration: 0,
         });
         store
             .set_principal_policy(&user, Some("five".into()))
@@ -1785,6 +1826,71 @@ mod tests {
             "success must stamp last_success ({ok_at}) at/after last_failed ({failed})"
         );
         assert_eq!(store.fail_auth_of(&p2), 0);
+    }
+
+    #[test]
+    fn lockout_duration_expires_and_interval_resets() {
+        use krb5_protocol::{as_req, pa_enc_timestamp, pa_enc_timestamp_at};
+        use krb5_types::KerberosTime;
+
+        let (mut store, _) = crate::bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+        store.put_policy(NamedPolicy {
+            name: "timed".into(),
+            min_length: 0,
+            min_classes: 0,
+            history: 0,
+            max_fail: 1,
+            pw_failcnt_interval: 1,
+            pw_lockout_duration: 1,
+        });
+        store
+            .set_principal_policy(&user, Some("timed".into()))
+            .unwrap();
+        let key = store
+            .get_name(&user)
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let good = as_req(
+            user.clone(),
+            crate::TEST_REALM,
+            1,
+            Some(vec![pa_enc_timestamp(&key).unwrap()]),
+        )
+        .unwrap();
+        let zeros = krb5_crypto::ProtocolKey::from_bytes(
+            krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
+            &[0u8; 32],
+        )
+        .unwrap();
+        let mut skew = 0i64;
+        let mut bad_as = || {
+            skew += 1;
+            let ts = KerberosTime::now().add_seconds(skew).unwrap();
+            as_req(
+                user.clone(),
+                crate::TEST_REALM,
+                1,
+                Some(vec![pa_enc_timestamp_at(&zeros, &ts).unwrap()]),
+            )
+            .unwrap()
+        };
+        let revoked = |e: &Error| matches!(e, Error::Protocol { code, .. } if *code == krb5_types::err::CLIENT_REVOKED);
+        assert!(crate::issue_as(&store, &bad_as()).is_err());
+        let locked = crate::issue_as(&store, &bad_as()).unwrap_err();
+        assert!(revoked(&locked), "max_fail 1 must lock on the next AS");
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        crate::issue_as(&store, &good).expect("elapsed lockout duration must unlock");
+        assert!(crate::issue_as(&store, &bad_as()).is_err());
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let second = crate::issue_as(&store, &bad_as()).unwrap_err();
+        assert!(
+            !revoked(&second),
+            "elapsed failcnt interval must reset the count: {second:?}"
+        );
     }
 
     #[test]

@@ -424,8 +424,14 @@ pub fn write_dump(store: &PrincipalStore, mkey: &ProtocolKey) -> Result<String, 
             // attributes/max_life/max_renewable/allowed_keysalts/n_tl_data.
             let _ = writeln!(
                 out,
-                "policy\t{}\t0\t0\t{}\t{}\t{}\t0\t{}\t0\t0\t0\t0\t0\t-\t0",
-                pol.name, pol.min_length, pol.min_classes, pol.history, pol.max_fail
+                "policy\t{}\t0\t0\t{}\t{}\t{}\t0\t{}\t{}\t{}\t0\t0\t0\t-\t0",
+                pol.name,
+                pol.min_length,
+                pol.min_classes,
+                pol.history,
+                pol.max_fail,
+                pol.pw_failcnt_interval,
+                pol.pw_lockout_duration
             );
         }
     }
@@ -471,6 +477,8 @@ fn parse_policy_rest(rest: &str) -> NamedPolicy {
         min_classes: nums.get(3).copied().unwrap_or(0),
         history: nums.get(4).copied().unwrap_or(0),
         max_fail: nums.get(6).copied().unwrap_or(0),
+        pw_failcnt_interval: nums.get(7).copied().unwrap_or(0),
+        pw_lockout_duration: nums.get(8).copied().unwrap_or(0),
     }
 }
 
@@ -976,6 +984,8 @@ mod tests {
             min_classes: 2,
             history: 1,
             max_fail: 3,
+            pw_failcnt_interval: 30,
+            pw_lockout_duration: 60,
         });
         let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
         store
@@ -993,6 +1003,8 @@ mod tests {
         assert_eq!(pol.min_classes, 2);
         assert_eq!(pol.history, 1);
         assert_eq!(pol.max_fail, 3);
+        assert_eq!(pol.pw_failcnt_interval, 30);
+        assert_eq!(pol.pw_lockout_duration, 60);
         assert_eq!(
             again.get_name(&user).unwrap().pw_policy.as_deref(),
             Some("strict")

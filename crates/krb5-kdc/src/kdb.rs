@@ -129,6 +129,13 @@ pub trait PrincipalRead: Send + Sync {
     }
     /// Record AS password success/failure.
     fn record_as_outcome(&self, _name: &PrincipalName, _ok: bool) {}
+    /// Bound named policy, if any.
+    fn named_policy_for(&self, p: &Principal) -> Option<NamedPolicy> {
+        let _ = p;
+        None
+    }
+    /// Zero fail count without stamping last_success (interval window).
+    fn clear_as_fail_count(&self, _name: &PrincipalName) {}
     /// PAC identity for `name` in `crealm`.
     fn pac_identity(&self, name: &PrincipalName, crealm: &str) -> PacIdentity {
         let rid = self
@@ -229,6 +236,12 @@ impl<T: PrincipalRead + ?Sized> PrincipalRead for std::sync::Arc<T> {
     }
     fn record_as_outcome(&self, name: &PrincipalName, ok: bool) {
         (**self).record_as_outcome(name, ok);
+    }
+    fn named_policy_for(&self, p: &Principal) -> Option<NamedPolicy> {
+        (**self).named_policy_for(p)
+    }
+    fn clear_as_fail_count(&self, name: &PrincipalName) {
+        (**self).clear_as_fail_count(name);
     }
 }
 
@@ -401,6 +414,34 @@ impl PrincipalRead for MemoryStore {
             );
         }
     }
+    fn named_policy_for(&self, p: &Principal) -> Option<NamedPolicy> {
+        p.pw_policy
+            .as_ref()
+            .and_then(|n| self.policies.get(n).cloned())
+    }
+    fn clear_as_fail_count(&self, name: &PrincipalName) {
+        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let fallback = self
+            .map
+            .get(&id)
+            .map_or(crate::store::AsFailState::default(), |p| {
+                crate::store::AsFailState {
+                    count: 0,
+                    last_failed: p.last_failed,
+                    last_success: p.last_success,
+                }
+            });
+        let mut g = self
+            .as_fail
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match g.get_mut(&id) {
+            Some(s) => s.count = 0,
+            None => {
+                g.insert(id, fallback);
+            }
+        }
+    }
 }
 
 impl PrincipalWrite for MemoryStore {
@@ -474,6 +515,12 @@ impl PrincipalRead for PrincipalStore {
     }
     fn record_as_outcome(&self, name: &PrincipalName, ok: bool) {
         PrincipalStore::record_as_outcome(self, name, ok);
+    }
+    fn named_policy_for(&self, p: &Principal) -> Option<NamedPolicy> {
+        PrincipalStore::named_policy_for(self, p)
+    }
+    fn clear_as_fail_count(&self, name: &PrincipalName) {
+        PrincipalStore::clear_as_fail_count(self, name);
     }
 }
 
@@ -554,6 +601,8 @@ mod tests {
             min_classes: 2,
             history: 1,
             max_fail: 3,
+            pw_failcnt_interval: 0,
+            pw_lockout_duration: 0,
         });
         dump.set_principal_policy(&user, Some("strict".into()))
             .unwrap();
