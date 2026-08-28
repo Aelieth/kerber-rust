@@ -420,9 +420,11 @@ pub fn write_dump(store: &PrincipalStore, mkey: &ProtocolKey) -> Result<String, 
     names.sort();
     for n in names {
         if let Some(pol) = store.policies().get(&n) {
+            // MIT dump version 7 is r1.11: r1.8 nine counters, then
+            // attributes/max_life/max_renewable/allowed_keysalts/n_tl_data.
             let _ = writeln!(
                 out,
-                "policy\t{}\t0\t0\t{}\t{}\t{}\t0\t{}\t0\t0\t0",
+                "policy\t{}\t0\t0\t{}\t{}\t{}\t0\t{}\t0\t0\t0\t0\t0\t-\t0",
                 pol.name, pol.min_length, pol.min_classes, pol.history, pol.max_fail
             );
         }
@@ -981,8 +983,9 @@ mod tests {
             .unwrap();
         let text = dump_store(&store, b"masterpassword").unwrap();
         assert!(
-            text.lines().any(|l| l.starts_with("policy\tstrict\t")),
-            "dump must emit policy records: {text}"
+            text.lines()
+                .any(|l| l.starts_with("policy\tstrict\t") && l.ends_with("\t-\t0")),
+            "dump must emit MIT r1.11 policy records: {text}"
         );
         let again = load_dump(&text, b"masterpassword").unwrap();
         let pol = again.policies().get("strict").expect("loaded policy");

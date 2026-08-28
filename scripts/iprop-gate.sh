@@ -217,7 +217,14 @@ for _ in $(seq 1 40); do
     sleep 1
 done
 echo "==== kpropd-iprop.log (delta) ===="
-docker exec "$NAME" cat /tmp/kpropd-iprop.log 2>/dev/null || true
+DELTA_LOG="$(docker exec "$NAME" cat /tmp/kpropd-iprop.log 2>/dev/null || true)"
+echo "$DELTA_LOG"
+echo "$DELTA_LOG" | grep -qiE 'Got incremental updates|Incremental updates:'
+FR="$(echo "$DELTA_LOG" | grep -ci 'Full resync needed' || true)"
+if [ "$FR" != 1 ]; then
+    log "iprop.gate" "error" ",\"error\":\"expected one FULL_RESYNC, got $FR\""
+    exit 1
+fi
 if [ "$ok" != 1 ]; then
     docker exec "$NAME" kadmin.local -q 'getprinc extra' 2>&1 || true
     docker exec "$NAME" kadmin.local -q 'getprinc user' 2>&1 || true
@@ -335,6 +342,15 @@ echo "$LOAD" | grep -q 'iprop dump'
 echo "==== mutate MIT master: extra2 ===="
 docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf \
     "$NAME" kadmin.local -q 'addprinc -pw extra2-secret extra2'
+DUMP2="$(docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf \
+    "$NAME" kdb5_util dump -i1 /tmp/mit2.dump 2>&1 || true)"
+echo "$DUMP2"
+HEAD2="$(docker exec "$NAME" head -1 /tmp/mit2.dump 2>/dev/null || true)"
+echo "$HEAD2"
+SNO2="$(echo "$HEAD2" | awk '{print $3}')"
+SEC2="$(echo "$HEAD2" | awk '{print $4}')"
+USEC2="$(echo "$HEAD2" | awk '{print $5}')"
+echo "dump2 last_sno=$SNO2 last_time=$SEC2 $USEC2"
 
 echo "==== MIT kinit -k kiprop (keytab probe) ===="
 docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
@@ -355,7 +371,6 @@ echo "==== mit-kadmind.log ===="
 docker exec "$NAME" cat /tmp/mit-kadmind.log 2>/dev/null || true
 echo "$PULL" | grep -q 'iprop pull ok'
 kill_comm krb5kdc
-kill_comm kadmind
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/rust-replica \
     -e KRB5_KDC_STASH=/tmp/rust-replica.stash \
@@ -379,5 +394,67 @@ KLIST2="$(docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf "$NAME" klist)"
 echo "$KLIST2"
 echo "$KLIST2" | grep -q 'extra2@KERBER.TEST'
 
-log "iprop.gate" "ok" ',"op":"kpropd-A-delta-kinit-extra+mit-kadmind-pull-kinit-extra2"'
+echo "==== MIT delprinc extra2 then Rust pull ===="
+kill_comm krb5-kdc
+free=0
+for _ in $(seq 1 40); do
+    if ! docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.2)" 2>/dev/null; then
+        free=1
+        break
+    fi
+    sleep 0.25
+done
+docker exec -d -e KRB5_KDC_PROFILE=/tmp/kdc.conf -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    "$NAME" sh -c 'krb5kdc'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    log "iprop.gate" "error" ',"error":"MIT krb5kdc did not listen for delete pull"'
+    exit 1
+fi
+docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf \
+    "$NAME" kadmin.local -q 'delprinc -force extra2'
+PULL2="$(docker exec \
+    -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_DB=/tmp/rust-replica \
+    -e KRB5_KDC_STASH=/tmp/rust-replica.stash \
+    -e KRB5_KPROP_KEYTAB=/tmp/mit-iprop.keytab \
+    -e KRB5_KDC=127.0.0.1 \
+    -e KRB5_IPROP_HOST=testhost.kerber.test \
+    "$NAME" /tmp/krb5-iprop-pull --last-sno "$SNO2" --last-time "$SEC2" "$USEC2" testhost.kerber.test:2121 2>&1 || true)"
+echo "$PULL2"
+echo "$PULL2" | grep -q 'iprop pull ok'
+kill_comm krb5kdc
+kill_comm kadmind
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/rust-replica \
+    -e KRB5_KDC_STASH=/tmp/rust-replica.stash \
+    "$NAME" sh -c '/tmp/krb5-kdc 127.0.0.1:88 >/tmp/rust-replica2.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/rust-replica2.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/rust-replica2.log >&2 || true
+    log "iprop.gate" "error" ',"error":"rust replica did not listen after delete pull"'
+    exit 1
+fi
+docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+GONE="$(docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    "$NAME" sh -c 'printf "extra2-secret\n" | kinit extra2@KERBER.TEST' 2>&1 || true)"
+echo "$GONE"
+echo "$GONE" | grep -qiE 'Client not found|not found in Kerberos database|UNKNOWN_PRINC'
+
+log "iprop.gate" "ok" ',"op":"kpropd-A-delta-kinit-extra+mit-kadmind-pull-kinit-extra2+delprinc"'
 exit 0

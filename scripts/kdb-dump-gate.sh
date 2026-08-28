@@ -154,10 +154,29 @@ docker exec "$NAME" grep -q 'user@KERBER.TEST' /tmp/principal
 docker exec "$NAME" grep -q 'pauser@KERBER.TEST' /tmp/principal
 docker exec "$NAME" grep -q 'host/testhost.kerber.test@KERBER.TEST' /tmp/principal
 
+echo "==== half B: seed policy line on Rust dump ===="
+ADDPOL="$(docker exec \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kdb addpol lockme 2>&1 || true)"
+echo "$ADDPOL"
+echo "$ADDPOL" | grep -q 'ok addpol name=lockme'
+docker exec "$NAME" grep -q '^policy	lockme	' /tmp/principal
+docker exec "$NAME" grep -q 'user@KERBER.TEST' /tmp/principal
+
 echo "==== half B: MIT kdb5_util load + krb5kdc ===="
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec "$NAME" kdb5_util create -s -P masterpassword
-docker exec "$NAME" kdb5_util load /tmp/principal
+LOAD_B="$(docker exec "$NAME" kdb5_util load /tmp/principal 2>&1 || true)"
+echo "$LOAD_B"
+echo "$LOAD_B" | grep -qiE 'error|fail' && {
+    log "kdb.dump.gate" "error" ',"error":"MIT kdb5_util load rejected policy dump"'
+    exit 1
+}
+GETPOL="$(docker exec "$NAME" kadmin.local -q 'getpol lockme' 2>&1 || true)"
+echo "$GETPOL"
+echo "$GETPOL" | grep -q 'Policy: lockme'
 STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc; sleep 0.4' 2>&1 || true)"
 echo "$STARTLOG"
 ok=0

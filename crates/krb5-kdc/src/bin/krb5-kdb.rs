@@ -5,6 +5,7 @@
 //!   `krb5-kdb dump <dump>` — store → MIT dump (version 7)
 //!   `krb5-kdb dump <dump> --from-dump <other>` — transcode a MIT dump
 //!   `krb5-kdb create <realm>` — bootstrap + dump-v7 persist
+//!   `krb5-kdb addpol <name>` — named policy + bind `user` if present
 //!
 //! Master password: `KRB5_MASTER_PASSWORD`. Optional `KRB5_MASTER_ETYPE`
 //! (MIT name or IANA number; default `aes256-cts-hmac-sha384-192`).
@@ -17,9 +18,10 @@ use std::path::PathBuf;
 
 use krb5_crypto::EncryptionType;
 use krb5_kdc::{
-    KDB_DUMP_VERSION, TEST_ADMIN, TEST_USER, bootstrap_realm, load_dump_etype, load_store,
-    parse_dump, save_store, write_dump_path_etype,
+    KDB_DUMP_VERSION, NamedPolicy, TEST_ADMIN, TEST_USER, bootstrap_realm, load_dump_etype,
+    load_store, parse_dump, save_store, write_dump_path_etype,
 };
+use krb5_types::PrincipalName;
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
@@ -38,7 +40,7 @@ fn main() {
     }
     if args.len() != 2 {
         eprintln!(
-            "usage: krb5-kdb load <dump>\n       krb5-kdb dump <dump> [--from-dump <mit-dump>]\n       krb5-kdb create <realm>"
+            "usage: krb5-kdb load <dump>\n       krb5-kdb dump <dump> [--from-dump <mit-dump>]\n       krb5-kdb create <realm>\n       krb5-kdb addpol <name>"
         );
         std::process::exit(2);
     }
@@ -54,6 +56,7 @@ fn main() {
         "load" => cmd_load(&path, password.as_bytes(), etype),
         "dump" => cmd_dump(&path, from_dump.as_deref(), password.as_bytes(), etype),
         "create" => cmd_create(&args[1]),
+        "addpol" => cmd_addpol(&args[1]),
         other => {
             eprintln!("krb5-kdb: unknown command {other}");
             std::process::exit(2);
@@ -175,6 +178,39 @@ fn cmd_create(realm: &str) {
     }
     let nprinc = written.lines().filter(|l| l.starts_with("princ\t")).count();
     println!("ok create version={KDB_DUMP_VERSION} realm={realm} principals={nprinc}");
+}
+
+fn cmd_addpol(name: &str) {
+    if name.is_empty() {
+        eprintln!("krb5-kdb: empty policy name");
+        std::process::exit(2);
+    }
+    let (db, stash) = db_and_stash();
+    let mut store = load_store(&db, &stash).unwrap_or_else(|e| {
+        eprintln!("krb5-kdb: load store: {e}");
+        std::process::exit(1);
+    });
+    store.put_policy(NamedPolicy {
+        name: name.to_owned(),
+        min_length: 8,
+        min_classes: 2,
+        history: 1,
+        max_fail: 1,
+    });
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    if store.get_name(&user).is_some() {
+        store
+            .set_principal_policy(&user, Some(name.to_owned()))
+            .unwrap_or_else(|e| {
+                eprintln!("krb5-kdb: bind policy: {e}");
+                std::process::exit(1);
+            });
+    }
+    save_store(&store, &db, &stash).unwrap_or_else(|e| {
+        eprintln!("krb5-kdb: save store: {e}");
+        std::process::exit(1);
+    });
+    println!("ok addpol name={name}");
 }
 
 fn db_and_stash() -> (PathBuf, PathBuf) {

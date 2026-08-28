@@ -106,7 +106,7 @@ docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
     "$NAME" sh -c 'printf "adminpassword\n" | kinit admin@KERBER.TEST'
 
 echo "==== MIT kadmin addpol lockme ===="
-ADD="$(kadmin_q 'addpol -minlength 8 -minclasses 2 -maxfailure 1 lockme')"
+ADD="$(kadmin_q 'addpol -minlength 8 -minclasses 2 -history 1 -maxfailure 2 lockme')"
 echo "$ADD"
 
 echo "==== MIT kadmin getpol lockme ===="
@@ -114,7 +114,7 @@ GET="$(kadmin_q 'getpol lockme')"
 echo "$GET"
 echo "$GET" | grep -q 'Policy: lockme'
 echo "$GET" | grep -q 'Minimum password length: 8'
-echo "$GET" | grep -qiE 'Maximum password failures.*1|failures before lockout: 1'
+echo "$GET" | grep -qiE 'Maximum password failures.*2|failures before lockout: 2'
 
 echo "==== MIT kadmin listpols ===="
 LIST="$(kadmin_q 'listpols')"
@@ -126,7 +126,7 @@ kadmin_q 'modpol -minlength 10 lockme' >/dev/null
 GET2="$(kadmin_q 'getpol lockme')"
 echo "$GET2"
 echo "$GET2" | grep -q 'Minimum password length: 10'
-echo "$GET2" | grep -qiE 'Maximum password failures.*1|failures before lockout: 1'
+echo "$GET2" | grep -qiE 'Maximum password failures.*2|failures before lockout: 2'
 
 echo "==== MIT kadmin addprinc -policy lockme lockuser ===="
 ADDPR="$(kadmin_q 'addprinc -policy lockme -pw lock-secret lockuser')"
@@ -136,12 +136,45 @@ echo "$GETPR"
 echo "$GETPR" | grep -q 'Principal: lockuser@KERBER.TEST'
 echo "$GETPR" | grep -q 'Policy: lockme'
 
-echo "==== MIT kinit lockuser wrong then lockout ===="
-WRONG="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
+echo "==== MIT kadmin cpw too-short and reuse ===="
+SHORT="$(kadmin_q 'cpw -pw ab lockuser')"
+echo "$SHORT"
+if ! echo "$SHORT" | grep -qiE 'too short|TOOSHORT'; then
+    docker exec "$NAME" cat /tmp/kadmind.log >&2 || true
+    log "policy.gate" "error" ',"error":"cpw too-short did not assert KADM5_PASS_Q_TOOSHORT"'
+    exit 1
+fi
+REUSE="$(kadmin_q 'cpw -pw lock-secret lockuser')"
+echo "$REUSE"
+if ! echo "$REUSE" | grep -qiE 'reuse|REUSE|history'; then
+    docker exec "$NAME" cat /tmp/kadmind.log >&2 || true
+    log "policy.gate" "error" ',"error":"cpw reuse did not assert KADM5_PASS_REUSE"'
+    exit 1
+fi
+
+echo "==== MIT kinit lockuser maxfailure 2 reset then lock ===="
+WRONG1="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
     "$NAME" sh -c 'printf "wrong-password\n" | kinit lockuser@KERBER.TEST' 2>&1 || true)"
-echo "$WRONG"
+echo "$WRONG1"
+docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+if ! docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
+    "$NAME" sh -c 'printf "lock-secret\n" | kinit lockuser@KERBER.TEST'; then
+    log "policy.gate" "error" ',"error":"correct kinit after one fail must reset lockout"'
+    exit 1
+fi
+docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+WRONG2="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
+    "$NAME" sh -c 'printf "wrong-password\n" | kinit lockuser@KERBER.TEST' 2>&1 || true)"
+echo "$WRONG2"
+echo "$WRONG2" | grep -qiE 'revoked|CLIENT_REVOKED' && {
+    log "policy.gate" "error" ',"error":"first fail after reset must not lock"'
+    exit 1
+}
+WRONG3="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
+    "$NAME" sh -c 'printf "wrong-password\n" | kinit lockuser@KERBER.TEST' 2>&1 || true)"
+echo "$WRONG3"
 LOCKED="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
-    "$NAME" sh -c 'printf "lock-secret\n" | kinit lockuser@KERBER.TEST' 2>&1 || true)"
+    "$NAME" sh -c 'printf "wrong-password\n" | kinit lockuser@KERBER.TEST' 2>&1 || true)"
 echo "$LOCKED"
 echo "$LOCKED" | grep -qiE 'revoked|CLIENT_REVOKED'
 
@@ -151,5 +184,5 @@ DELGET="$(kadmin_q 'getpol lockme')"
 echo "$DELGET"
 echo "$DELGET" | grep -qiE 'does not exist|not found|UNK|unknown policy'
 
-log "policy.gate" "ok" ',"policy":"lockme","op":"addpol+getpol+listpols+modpol+lockout+delpol"'
+log "policy.gate" "ok" ',"policy":"lockme","op":"addpol+getpol+listpols+modpol+cpw-pwqual+lockout-reset+delpol"'
 exit 0
