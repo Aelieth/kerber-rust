@@ -4,9 +4,10 @@
 //! `db_library` selects the factory; unknown names error. Process-local
 //! replay caches and the PKINIT CA live on [`KdcEnv`], not dump rows.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use krb5_crypto::ProtocolKey;
 use krb5_protocol::ReplayCache;
@@ -16,7 +17,7 @@ use krb5_types::pkinit::PkinitCa;
 
 use crate::error::Error;
 use crate::persist::{PersistError, load_store};
-use crate::store::{Policy, Principal, PrincipalStore, RID_FIRST_USER};
+use crate::store::{NamedPolicy, Policy, Principal, PrincipalStore, RID_FIRST_USER};
 
 /// Process-local KDC state (replay + PKINIT CA). Not dump/persist rows.
 #[derive(Clone, Debug)]
@@ -244,6 +245,8 @@ pub struct MemoryStore {
     next_rid: u32,
     env: KdcEnv,
     lookups: AtomicU64,
+    policies: HashMap<String, NamedPolicy>,
+    as_fail: Arc<Mutex<HashMap<String, u32>>>,
 }
 
 impl MemoryStore {
@@ -258,6 +261,8 @@ impl MemoryStore {
             next_rid: RID_FIRST_USER,
             env: KdcEnv::new(),
             lookups: AtomicU64::new(0),
+            policies: HashMap::new(),
+            as_fail: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -268,6 +273,7 @@ impl MemoryStore {
         m.policy = store.policy().clone();
         m.domain_sid = store.domain_sid().clone();
         m.next_rid = store.next_rid();
+        m.policies.clone_from(store.policies());
         for p in store.debug_principals() {
             m.map.insert(p.id(), p.clone());
         }
@@ -315,6 +321,34 @@ impl PrincipalRead for MemoryStore {
     }
     fn list_principals(&self) -> Result<Vec<Principal>, Error> {
         Ok(self.map.values().cloned().collect())
+    }
+    fn fail_auth_of(&self, p: &Principal) -> u32 {
+        self.as_fail
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&p.id())
+            .copied()
+            .unwrap_or(p.fail_auth_count)
+    }
+    fn max_fail_for(&self, p: &Principal) -> u32 {
+        p.pw_policy
+            .as_ref()
+            .and_then(|n| self.policies.get(n))
+            .map_or(0, |pol| pol.max_fail)
+    }
+    fn record_as_outcome(&self, name: &PrincipalName, ok: bool) {
+        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let stored = self.map.get(&id).map_or(0, |p| p.fail_auth_count);
+        let mut g = self
+            .as_fail
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if ok {
+            g.insert(id, 0);
+        } else {
+            let cur = g.get(&id).copied().unwrap_or(stored);
+            g.insert(id, cur.saturating_add(1));
+        }
     }
 }
 
@@ -445,5 +479,71 @@ mod tests {
             mem.lookup_count() > before,
             "issue_as must fetch through MemoryStore"
         );
+    }
+
+    #[test]
+    fn memory_store_lockout_revokes_after_max_fail() {
+        use krb5_protocol::{pa_enc_timestamp, pa_enc_timestamp_at};
+        use krb5_types::KerberosTime;
+
+        use crate::TEST_USER;
+        use crate::error::Error;
+
+        let (mut dump, _) = bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+        dump.put_policy(NamedPolicy {
+            name: "strict".into(),
+            min_length: 8,
+            min_classes: 2,
+            history: 1,
+            max_fail: 3,
+        });
+        dump.set_principal_policy(&user, Some("strict".into()))
+            .unwrap();
+        let mem = MemoryStore::from_dump(&dump);
+        let key = dump
+            .get_name(&user)
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let good = as_req(
+            user.clone(),
+            TEST_REALM,
+            1,
+            Some(vec![pa_enc_timestamp(&key).unwrap()]),
+        )
+        .unwrap();
+        let zeros = krb5_crypto::ProtocolKey::from_bytes(
+            krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
+            &[0u8; 32],
+        )
+        .unwrap();
+        let mut skew = 0i64;
+        let mut bad_as = || {
+            skew += 1;
+            let ts = KerberosTime::now().add_seconds(skew).unwrap();
+            as_req(
+                user.clone(),
+                TEST_REALM,
+                1,
+                Some(vec![pa_enc_timestamp_at(&zeros, &ts).unwrap()]),
+            )
+            .unwrap()
+        };
+        let revoked = |e: &Error| matches!(e, Error::Protocol { code, .. } if *code == krb5_types::err::CLIENT_REVOKED);
+        assert!(crate::issue_as(&mem, &bad_as()).is_err());
+        assert!(crate::issue_as(&mem, &bad_as()).is_err());
+        crate::issue_as(&mem, &good).expect("success must reset fail count");
+        assert!(crate::issue_as(&mem, &bad_as()).is_err());
+        let second = crate::issue_as(&mem, &bad_as()).unwrap_err();
+        assert!(
+            !revoked(&second),
+            "second fail after success must not lock: {second:?}"
+        );
+        assert!(crate::issue_as(&mem, &bad_as()).is_err());
+        let locked = crate::issue_as(&mem, &bad_as()).unwrap_err();
+        assert!(revoked(&locked), "expected CLIENT_REVOKED, got {locked:?}");
     }
 }
