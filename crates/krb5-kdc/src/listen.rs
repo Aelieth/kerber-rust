@@ -8,19 +8,28 @@ use std::thread;
 use std::time::Duration;
 
 use crate::issue::handle_request;
-use crate::store::PrincipalStore;
+use crate::kdb::Store;
 
 /// Serving store: AS/TGS take a read lock; kadmind/kpasswd take a write lock
 /// so runtime mutations reach [`crate::persist::save_store`].
-pub type SharedStore = Arc<RwLock<PrincipalStore>>;
+pub type SharedStore = Arc<RwLock<Box<dyn Store>>>;
 
-/// Wrap an in-memory store for [`serve`].
+/// Wrap a [`Store`] backend for [`serve`].
 #[must_use]
-pub fn shared_store(store: PrincipalStore) -> SharedStore {
+pub fn shared_store<S: Store + 'static>(store: S) -> SharedStore {
+    Arc::new(RwLock::new(Box::new(store)))
+}
+
+/// Kadmind still locks [`crate::PrincipalStore`] (dyn-Store admin is deferred).
+pub type SharedDump = Arc<RwLock<crate::store::PrincipalStore>>;
+
+/// Wrap a dump-v7 store for kadmind / kpasswd.
+#[must_use]
+pub fn shared_dump(store: crate::store::PrincipalStore) -> SharedDump {
     Arc::new(RwLock::new(store))
 }
 
-fn read_store<R>(store: &SharedStore, f: impl FnOnce(&PrincipalStore) -> R) -> R {
+fn read_store<R>(store: &SharedStore, f: impl FnOnce(&dyn Store) -> R) -> R {
     {
         let mut w = store
             .write()
@@ -38,7 +47,7 @@ fn read_store<R>(store: &SharedStore, f: impl FnOnce(&PrincipalStore) -> R) -> R
     let g = store
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    f(&g)
+    f(&**g)
 }
 
 /// Addresses tried when the caller does not pin a bind address.

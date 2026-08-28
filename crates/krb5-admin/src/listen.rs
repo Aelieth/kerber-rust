@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, ProtocolKey};
-use krb5_kdc::{SharedStore, save_store};
+use krb5_kdc::{SharedDump as SharedStore, save_store};
 use krb5_protocol::{
     ReplayCache, build_ap_rep, build_krb_priv_with_seq, unwrap_krb_priv_ex, verify_ap_req,
 };

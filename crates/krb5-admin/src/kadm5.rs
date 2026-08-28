@@ -11,7 +11,7 @@ use krb5_crypto::{EncryptionType, ProtocolKey, kdb_decrypt_key};
 use krb5_gss::GssContext;
 use krb5_kdc::{
     Acl, KDB_DISALLOW_ALL_TIX, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH, KeyEntry, Principal,
-    SharedStore,
+    SharedDump as SharedStore,
 };
 use krb5_types::{PrincipalName, Ticket};
 
@@ -2001,7 +2001,9 @@ mod tests {
 
     #[test]
     fn rename_dispatch_keeps_rid_and_requires_add_delete() {
-        use krb5_kdc::{TEST_REALM, bootstrap_documented, documented_admin_id, shared_store};
+        use krb5_kdc::{
+            TEST_REALM, bootstrap_documented, documented_admin_id, shared_dump as shared_store,
+        };
 
         let (mut store, acl) = bootstrap_documented().unwrap();
         let actor = documented_admin_id();
@@ -2067,10 +2069,10 @@ mod tests {
         assert_eq!(r.opaque().unwrap(), b"isn");
     }
 
-    fn setup() -> (krb5_kdc::SharedStore, Acl, String) {
+    fn setup() -> (krb5_kdc::SharedDump, Acl, String) {
         let (store, acl) = krb5_kdc::bootstrap_documented().unwrap();
         let actor = krb5_kdc::documented_admin_id();
-        (krb5_kdc::shared_store(store), acl, actor)
+        (krb5_kdc::shared_dump(store), acl, actor)
     }
 
     fn encode_named(name: &str) -> Vec<u8> {

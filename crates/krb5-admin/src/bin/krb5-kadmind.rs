@@ -20,7 +20,7 @@ use krb5_admin::{serve_kadm5_conn, serve_kpasswd_tcp, serve_kpasswd_udp};
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::{
     PrincipalStore, acl_for_store, bootstrap_documented, documented_changepw, documented_kadmin,
-    documented_kiprop, open_store, shared_store,
+    documented_kiprop, open_store, shared_dump as shared_store,
 };
 
 fn main() {

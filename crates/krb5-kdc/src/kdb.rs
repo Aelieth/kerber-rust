@@ -193,9 +193,25 @@ pub trait StoreLifecycle {
 }
 
 /// Combined kdb extension surface.
-pub trait Store: PrincipalRead + PrincipalWrite + StoreLifecycle {}
+pub trait Store: PrincipalRead + PrincipalWrite + StoreLifecycle + Send + Sync {
+    /// Kadmind still reads [`PrincipalStore`] (deferred dyn-Store admin).
+    fn as_principal_store(&self) -> Option<&PrincipalStore> {
+        None
+    }
+    /// Kadmind still mutates [`PrincipalStore`] (deferred dyn-Store admin).
+    fn as_principal_store_mut(&mut self) -> Option<&mut PrincipalStore> {
+        None
+    }
+}
 
-impl<T> Store for T where T: PrincipalRead + PrincipalWrite + StoreLifecycle {}
+impl Store for PrincipalStore {
+    fn as_principal_store(&self) -> Option<&PrincipalStore> {
+        Some(self)
+    }
+    fn as_principal_store_mut(&mut self) -> Option<&mut PrincipalStore> {
+        Some(self)
+    }
+}
 
 impl<T: PrincipalRead + ?Sized> PrincipalRead for std::sync::Arc<T> {
     fn realm(&self) -> &str {
@@ -472,6 +488,8 @@ impl StoreLifecycle for MemoryStore {
         Ok(())
     }
 }
+
+impl Store for MemoryStore {}
 
 impl PrincipalRead for PrincipalStore {
     fn realm(&self) -> &str {

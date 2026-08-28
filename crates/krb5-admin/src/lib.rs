@@ -322,7 +322,9 @@ mod tests {
     #[test]
     fn kadmind_wire_create_is_visible_after_reload() {
         use krb5_asn1::encode;
-        use krb5_kdc::{TEST_REALM, documented_host, load_store, save_store, shared_store};
+        use krb5_kdc::{
+            TEST_REALM, documented_host, load_store, save_store, shared_dump as shared_store,
+        };
         use krb5_protocol::{build_ap_req, pa_enc_timestamp, tgs_req};
 
         let dir = std::env::temp_dir().join(format!(
@@ -403,7 +405,7 @@ mod tests {
     #[test]
     fn kpasswd_rfc3244_bumps_kvno() {
         use krb5_asn1::encode;
-        use krb5_kdc::{TEST_REALM, TEST_USER, documented_changepw, shared_store};
+        use krb5_kdc::{TEST_REALM, TEST_USER, documented_changepw, shared_dump as shared_store};
         use krb5_protocol::{build_ap_req, build_krb_priv, pa_enc_timestamp, tgs_req};
         use krb5_types::ChangePasswdData;
 
@@ -525,7 +527,7 @@ mod tests {
         use std::time::Duration;
 
         use krb5_asn1::encode;
-        use krb5_kdc::{TEST_REALM, TEST_USER, documented_changepw, shared_store};
+        use krb5_kdc::{TEST_REALM, TEST_USER, documented_changepw, shared_dump as shared_store};
         use krb5_protocol::{build_ap_req, build_krb_priv, pa_enc_timestamp, tgs_req};
         use krb5_types::ChangePasswdData;
 
@@ -628,7 +630,7 @@ mod tests {
     #[test]
     fn kpasswd_mit_style_subkey_seq0_then_issue_as() {
         use krb5_asn1::encode;
-        use krb5_kdc::{TEST_REALM, TEST_USER, documented_changepw, shared_store};
+        use krb5_kdc::{TEST_REALM, TEST_USER, documented_changepw, shared_dump as shared_store};
         use krb5_protocol::{
             build_ap_req_with_cksum, build_krb_priv_with_seq, pa_enc_timestamp, tgs_req,
         };

@@ -165,7 +165,17 @@ fn main() {
         Some((db, stash)) => println!("persist {} {}", db.display(), stash.display()),
         None => println!("persist none"),
     }
-    let store = shared_store(store);
+    let env_lib = std::env::var("KRB5_KDC_DB_LIBRARY").ok();
+    let lib = env_lib
+        .as_deref()
+        .or_else(|| kdc_conf.as_ref().and_then(|c| c.db_library.as_deref()));
+    let store = if lib == Some("memory") {
+        println!("backend memory");
+        shared_store(krb5_kdc::MemoryStore::from_dump(&store))
+    } else {
+        println!("backend dump");
+        shared_store(store)
+    };
 
     let pinned: Option<String> = args
         .into_iter()

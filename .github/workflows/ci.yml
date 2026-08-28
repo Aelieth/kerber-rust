@@ -73,6 +73,8 @@ jobs:
         run: ./scripts/stop-harness.sh || true
       - name: kdc-gate (MIT client vs Rust KDC)
         run: ./scripts/kdc-gate.sh
+      - name: store-gate (MemoryStore serve + MIT kinit/kvno)
+        run: ./scripts/store-gate.sh
       - name: bidirectional Rust client vs Rust KDC
         run: ./scripts/bidirectional-gate.sh
       - name: gss-gate (MIT libgssapi vs krb5-gss)
