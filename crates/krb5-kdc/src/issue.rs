@@ -220,7 +220,9 @@ fn issue_as_from(
     let client = store
         .fetch_name(&cname)?
         .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, "unknown client"))?;
-    if client.locked {
+    let fails = store.fail_auth_of(&client);
+    let max_fail = store.max_fail_for(&client);
+    if client.locked || (max_fail > 0 && fails >= max_fail) {
         return Err(proto(err::CLIENT_REVOKED, "locked"));
     }
     let etype = select_etype(&body.etype, &client, store.policy().allow_weak_crypto)?;
@@ -281,7 +283,13 @@ fn issue_as_from(
     if client.requires_preauth && !skip_timestamp {
         match extract_enc_timestamp(work_padata.as_deref()) {
             None => return Err(preauth_required(store, &client)),
-            Some(blob) => verify_enc_timestamp(store, &client, &ckey.key, blob.as_ref())?,
+            Some(blob) => match verify_enc_timestamp(store, &client, &ckey.key, blob.as_ref()) {
+                Ok(()) => store.record_as_outcome(&cname, true),
+                Err(e) => {
+                    store.record_as_outcome(&cname, false);
+                    return Err(e);
+                }
+            },
         }
     }
 

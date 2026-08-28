@@ -109,6 +109,17 @@ pub trait PrincipalRead: Send + Sync {
     fn pkinit_ca(&self) -> Option<&PkinitCa> {
         self.env().pkinit_ca.as_ref()
     }
+    /// Fail-count used for lockout (principal row plus overlay).
+    fn fail_auth_of(&self, p: &Principal) -> u32 {
+        p.fail_auth_count
+    }
+    /// Max failures before CLIENT_REVOKED (0 = none).
+    fn max_fail_for(&self, p: &Principal) -> u32 {
+        let _ = p;
+        0
+    }
+    /// Record AS password success/failure.
+    fn record_as_outcome(&self, _name: &PrincipalName, _ok: bool) {}
     /// PAC identity for `name` in `crealm`.
     fn pac_identity(&self, name: &PrincipalName, crealm: &str) -> PacIdentity {
         let rid = self
@@ -195,9 +206,16 @@ impl<T: PrincipalRead + ?Sized> PrincipalRead for std::sync::Arc<T> {
     fn list_principals(&self) -> Result<Vec<Principal>, Error> {
         (**self).list_principals()
     }
+    fn fail_auth_of(&self, p: &Principal) -> u32 {
+        (**self).fail_auth_of(p)
+    }
+    fn max_fail_for(&self, p: &Principal) -> u32 {
+        (**self).max_fail_for(p)
+    }
+    fn record_as_outcome(&self, name: &PrincipalName, ok: bool) {
+        (**self).record_as_outcome(name, ok);
+    }
 }
-
-
 
 /// Open a backend from `db_library` (kdc.conf). Dump-v7 is the default.
 ///
@@ -356,6 +374,15 @@ impl PrincipalRead for PrincipalStore {
     }
     fn list_principals(&self) -> Result<Vec<Principal>, Error> {
         Ok(self.debug_principals().cloned().collect())
+    }
+    fn fail_auth_of(&self, p: &Principal) -> u32 {
+        PrincipalStore::fail_auth_of(self, p)
+    }
+    fn max_fail_for(&self, p: &Principal) -> u32 {
+        PrincipalStore::max_fail_for(self, p)
+    }
+    fn record_as_outcome(&self, name: &PrincipalName, ok: bool) {
+        PrincipalStore::record_as_outcome(self, name, ok);
     }
 }
 

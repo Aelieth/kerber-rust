@@ -44,24 +44,44 @@ const RENAME_PRINCIPAL: u32 = 4;
 const GET_PRINCIPAL: u32 = 5;
 const CHPASS_PRINCIPAL: u32 = 6;
 const CHRAND_PRINCIPAL: u32 = 7;
+const CREATE_POLICY: u32 = 8;
+const DELETE_POLICY: u32 = 9;
+const MODIFY_POLICY: u32 = 10;
+const GET_POLICY: u32 = 11;
 const GET_PRIVS: u32 = 12;
 const INIT: u32 = 13;
 const GET_PRINCS: u32 = 14;
+const GET_POLS: u32 = 15;
 const CREATE_PRINCIPAL3: u32 = 18;
 const CHPASS_PRINCIPAL3: u32 = 19;
 const CHRAND_PRINCIPAL3: u32 = 20;
 
 /// MIT `KADM5_UNK_PRINC`.
 const KADM5_UNK_PRINC: u32 = 43_787_532;
+/// MIT `KADM5_UNK_POLICY`.
+const KADM5_UNK_POLICY: u32 = 43_787_533;
+/// MIT `KADM5_DUP`.
+const KADM5_DUP: u32 = 43_787_527;
 /// MIT `KADM5_FAILURE`.
 const KADM5_FAILURE: u32 = 43_787_520;
+const KADM5_PASS_Q_TOOSHORT: u32 = 43_787_538;
+const KADM5_PASS_Q_CLASS: u32 = 43_787_539;
+const KADM5_PASS_REUSE: u32 = 43_787_541;
 const KADM5_ATTRIBUTES: u32 = 0x0000_0010;
 const KADM5_MAX_LIFE: u32 = 0x0000_0020;
 const KADM5_PRINC_EXPIRE_TIME: u32 = 0x0000_0002;
 const KADM5_PW_EXPIRATION: u32 = 0x0000_0004;
+const KADM5_POLICY: u32 = 0x0000_0800;
+const KADM5_POLICY_CLR: u32 = 0x0000_1000;
+const KADM5_PW_MIN_LENGTH: u32 = 0x0001_0000;
+const KADM5_PW_MIN_CLASSES: u32 = 0x0002_0000;
+const KADM5_PW_HISTORY_NUM: u32 = 0x0004_0000;
+const KADM5_PW_MAX_FAILURE: u32 = 0x0010_0000;
 
 /// OpenVision/MIT `KADM5_API_VERSION_2`.
 const API_V2: u32 = 0x1234_5702;
+const API_V3: u32 = 0x1234_5703;
+const API_V4: u32 = 0x1234_5704;
 /// MIT `KADM5_PRIV_{GET,ADD,MODIFY,DELETE}` plus list (0x10) and cpw (0x20).
 const KADM5_PRIVS: u32 = 0x0000_003F;
 
@@ -589,19 +609,49 @@ fn dispatch_kadm5(
             let max_life = (mask & KADM5_MAX_LIFE != 0).then_some(u64::from(fields.max_life));
             let expiration = (mask & KADM5_PRINC_EXPIRE_TIME != 0).then_some(fields.expire);
             let pw_expire = (mask & KADM5_PW_EXPIRATION != 0).then_some(fields.pw_expire);
-            match g.apply_admin_fields(&name, attributes, max_life, expiration, pw_expire) {
+            let clear_policy = mask & KADM5_POLICY_CLR != 0;
+            let policy = if clear_policy {
+                None
+            } else if mask & KADM5_POLICY != 0 {
+                fields.policy
+            } else {
+                None
+            };
+            match g.apply_admin_fields(
+                &name,
+                attributes,
+                max_life,
+                expiration,
+                pw_expire,
+                policy,
+                clear_policy,
+            ) {
                 Ok(()) => Ok(generic_ret(API_V2, 0)),
                 Err(e) => Ok(generic_ret(API_V2, kadm5_code(&Error::from(e)))),
             }
         }
         CREATE_PRINCIPAL | CREATE_PRINCIPAL3 => {
-            let (name, pass) = parse_create(args, proc == CREATE_PRINCIPAL3)?;
+            let (name, pass, policy) = parse_create(args, proc == CREATE_PRINCIPAL3)?;
             let mut g = store
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(ref pol) = policy
+                && let Err(e) = g.check_named_policy(pol, pass.as_bytes())
+            {
+                return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
+            }
             let mut sess = AdminSession::local(&mut g, acl, actor);
-            match sess.create_password(&name, pass.as_bytes()) {
-                Ok(()) => Ok(generic_ret(API_V2, 0)),
+            let created = sess.create_password(&name, pass.as_bytes());
+            drop(sess);
+            match created {
+                Ok(()) => {
+                    if let Some(pol) = policy
+                        && let Err(e) = g.set_principal_policy(&name, Some(pol))
+                    {
+                        return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
+                    }
+                    Ok(generic_ret(API_V2, 0))
+                }
                 Err(e) => Ok(generic_ret(API_V2, kadm5_code(&e))),
             }
         }
@@ -627,6 +677,82 @@ fn dispatch_kadm5(
                 Err(e) => Ok(generic_ret(API_V2, kadm5_code(&e))),
             }
         }
+        CREATE_POLICY => {
+            let (api, pol, _mask) = parse_policy_arg(args)?;
+            if acl.check(actor, krb5_kdc::AdminOp::Create).is_err() {
+                return Ok(generic_ret(api, 43_787_521));
+            }
+            if pol.name.is_empty() {
+                return Ok(generic_ret(api, KADM5_UNK_POLICY));
+            }
+            let mut g = store
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if g.policies().contains_key(&pol.name) {
+                return Ok(generic_ret(api, KADM5_DUP));
+            }
+            g.put_policy(pol);
+            Ok(generic_ret(api, 0))
+        }
+        DELETE_POLICY => {
+            let (api, name) = parse_policy_name(args)?;
+            if acl.check(actor, krb5_kdc::AdminOp::Delete).is_err() {
+                return Ok(generic_ret(api, 43_787_521));
+            }
+            let mut g = store
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match g.delete_policy(&name) {
+                Ok(()) => Ok(generic_ret(api, 0)),
+                Err(krb5_kdc::Error::NotFound) => Ok(generic_ret(api, KADM5_UNK_POLICY)),
+                Err(e) => Ok(generic_ret(api, kadm5_code(&Error::from(e)))),
+            }
+        }
+        MODIFY_POLICY => {
+            let (api, rec, mask) = parse_policy_arg(args)?;
+            if acl.check(actor, krb5_kdc::AdminOp::Modify).is_err() {
+                return Ok(generic_ret(api, 43_787_523));
+            }
+            let mut g = store
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(existing) = g.policies().get(&rec.name).cloned() else {
+                return Ok(generic_ret(api, KADM5_UNK_POLICY));
+            };
+            g.put_policy(merge_policy(existing, &rec, mask));
+            Ok(generic_ret(api, 0))
+        }
+        GET_POLICY => {
+            let (api, name) = parse_policy_name(args)?;
+            if acl.check(actor, krb5_kdc::AdminOp::Inquire).is_err() {
+                return Ok(generic_ret(api, 43_787_521));
+            }
+            let g = store
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match g.policies().get(&name) {
+                Some(p) => Ok(encode_policy(api, p)),
+                None => Ok(generic_ret(api, KADM5_UNK_POLICY)),
+            }
+        }
+        GET_POLS => {
+            let (api, expr) = parse_gpols(args);
+            if acl.check(actor, krb5_kdc::AdminOp::Inquire).is_err() {
+                return Ok(generic_ret(api, 43_787_521));
+            }
+            let g = store
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut names: Vec<_> = g.policies().keys().cloned().collect();
+            if let Some(e) = expr.as_deref()
+                && e != "*"
+                && !e.is_empty()
+            {
+                names.retain(|n| n.contains(e.trim_end_matches('*')));
+            }
+            names.sort();
+            Ok(encode_pols(api, &names))
+        }
         CHRAND_PRINCIPAL | CHRAND_PRINCIPAL3 => {
             let name = parse_chrand(args, proc == CHRAND_PRINCIPAL3)?;
             if acl.check(actor, krb5_kdc::AdminOp::ChangePassword).is_err() {
@@ -648,6 +774,9 @@ fn kadm5_code(e: &Error) -> u32 {
     match e {
         Error::AclDenied => 43_787_521,
         Error::NotFound => KADM5_UNK_PRINC,
+        Error::Inner(s) if s.contains("min_length") => KADM5_PASS_Q_TOOSHORT,
+        Error::Inner(s) if s.contains("min_classes") => KADM5_PASS_Q_CLASS,
+        Error::Inner(s) if s.contains("history") => KADM5_PASS_REUSE,
         Error::Inner(_) => KADM5_FAILURE,
     }
 }
@@ -659,17 +788,141 @@ fn generic_ret(api: u32, code: u32) -> Vec<u8> {
     w.b
 }
 
-fn parse_create(args: &[u8], v3: bool) -> Result<(PrincipalName, String), Error> {
+fn parse_policy_name(args: &[u8]) -> Result<(u32, String), Error> {
+    let mut r = XdrR::new(args);
+    let api = r.u32()?;
+    Ok((api, r.nullstring()?.unwrap_or_default()))
+}
+
+fn parse_gpols(args: &[u8]) -> (u32, Option<String>) {
+    let mut r = XdrR::new(args);
+    let api = r.u32().unwrap_or(API_V2);
+    (api, r.nullstring().ok().flatten())
+}
+
+fn parse_policy_arg(args: &[u8]) -> Result<(u32, krb5_kdc::NamedPolicy, u32), Error> {
+    let mut r = XdrR::new(args);
+    let api = r.u32()?;
+    let name = r.nullstring()?.unwrap_or_default();
+    let _min_life = r.u32().unwrap_or(0);
+    let _max_life = r.u32().unwrap_or(0);
+    let min_length = r.u32().unwrap_or(0);
+    let min_classes = r.u32().unwrap_or(0);
+    let history = r.u32().unwrap_or(0);
+    let _refcnt = r.u32().unwrap_or(0);
+    let mut max_fail = 0;
+    if api >= API_V3 {
+        max_fail = r.u32().unwrap_or(0);
+        let _ = r.u32();
+        let _ = r.u32();
+    }
+    if api >= API_V4 {
+        let _ = r.u32();
+        let _ = r.u32();
+        let _ = r.u32();
+        let _ = r.nullstring();
+        let _n_tl = r.u32().unwrap_or(0);
+        let tl_null = r.u32().unwrap_or(1);
+        if tl_null == 0 {
+            loop {
+                let more = r.u32().unwrap_or(0);
+                if more == 0 {
+                    break;
+                }
+                let _ = r.u32();
+                let _ = r.opaque();
+            }
+        }
+    }
+    let mask = r.u32().unwrap_or(0);
+    Ok((
+        api,
+        krb5_kdc::NamedPolicy {
+            name,
+            min_length,
+            min_classes,
+            history,
+            max_fail,
+        },
+        mask,
+    ))
+}
+
+fn merge_policy(
+    mut existing: krb5_kdc::NamedPolicy,
+    rec: &krb5_kdc::NamedPolicy,
+    mask: u32,
+) -> krb5_kdc::NamedPolicy {
+    if mask & KADM5_PW_MIN_LENGTH != 0 {
+        existing.min_length = rec.min_length;
+    }
+    if mask & KADM5_PW_MIN_CLASSES != 0 {
+        existing.min_classes = rec.min_classes;
+    }
+    if mask & KADM5_PW_HISTORY_NUM != 0 {
+        existing.history = rec.history;
+    }
+    if mask & KADM5_PW_MAX_FAILURE != 0 {
+        existing.max_fail = rec.max_fail;
+    }
+    existing
+}
+
+fn encode_policy_rec(w: &mut XdrW, api: u32, p: &krb5_kdc::NamedPolicy) {
+    w.nullstring(Some(&p.name));
+    w.u32(0);
+    w.u32(0);
+    w.u32(p.min_length);
+    w.u32(p.min_classes);
+    w.u32(p.history);
+    w.u32(0);
+    if api >= API_V3 {
+        w.u32(p.max_fail);
+        w.u32(0);
+        w.u32(0);
+    }
+    if api >= API_V4 {
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(1);
+    }
+}
+
+fn encode_policy(api: u32, p: &krb5_kdc::NamedPolicy) -> Vec<u8> {
+    let mut w = XdrW::default();
+    w.u32(api);
+    w.u32(0);
+    encode_policy_rec(&mut w, api, p);
+    w.b
+}
+
+fn encode_pols(api: u32, names: &[String]) -> Vec<u8> {
+    let mut w = XdrW::default();
+    w.u32(api);
+    w.u32(0);
+    let n = u32::try_from(names.len()).unwrap_or(0);
+    w.u32(n);
+    w.u32(n);
+    for name in names {
+        w.nullstring(Some(name));
+    }
+    w.b
+}
+
+fn parse_create(args: &[u8], v3: bool) -> Result<(PrincipalName, String, Option<String>), Error> {
     let mut r = XdrR::new(args);
     let _api = r.u32()?;
     let princ = r.principal()?;
-    skip_principal_ent_rest(&mut r)?;
+    let policy = skip_principal_ent_rest(&mut r)?;
     let _mask = r.u32()?;
     if v3 {
         r.skip_array_i32_pairs()?;
     }
     let pass = r.nullstring()?.unwrap_or_default();
-    Ok((princ, pass))
+    Ok((princ, pass, policy))
 }
 
 fn parse_chpass(args: &[u8], v3: bool) -> Result<(PrincipalName, String), Error> {
@@ -728,6 +981,7 @@ struct ModFields {
     pw_expire: u32,
     max_life: u32,
     attributes: u32,
+    policy: Option<String>,
 }
 
 fn parse_modify(args: &[u8]) -> Result<(PrincipalName, u32, ModFields), Error> {
@@ -746,7 +1000,7 @@ fn parse_modify(args: &[u8]) -> Result<(PrincipalName, u32, ModFields), Error> {
     let attributes = r.u32()?;
     r.u32()?; // kvno
     r.u32()?; // mkvno
-    let _ = r.nullstring()?;
+    let policy = r.nullstring()?;
     r.u32()?; // aux
     r.u32()?; // max_rlife
     r.u32()?; // last_success
@@ -784,6 +1038,7 @@ fn parse_modify(args: &[u8]) -> Result<(PrincipalName, u32, ModFields), Error> {
             pw_expire,
             max_life,
             attributes,
+            policy,
         },
     ))
 }
@@ -813,8 +1068,16 @@ fn encode_principal_ent(w: &mut XdrW, p: &krb5_kdc::Principal) {
     let kvno = p.keys.iter().map(|k| k.kvno).max().unwrap_or(1);
     w.u32(kvno);
     w.u32(u32::from(p.mkvno));
-    w.u32(0); // policy NULL (xdr_nullstring size 0)
-    w.u32(0); // aux
+    match p.pw_policy.as_deref() {
+        Some(n) if !n.is_empty() => {
+            w.nullstring(Some(n));
+            w.u32(KADM5_POLICY);
+        }
+        _ => {
+            w.u32(0);
+            w.u32(0);
+        }
+    }
     w.u32(u32::try_from(p.max_renewable_life).unwrap_or(0));
     w.u32(p.last_success);
     w.u32(p.last_failed);
@@ -855,7 +1118,7 @@ fn encode_chrand(keys: &[krb5_kdc::KeyEntry]) -> Vec<u8> {
 }
 
 /// After the leading principal, skip the rest of `kadm5_principal_ent_rec`.
-fn skip_principal_ent_rest(r: &mut XdrR<'_>) -> Result<(), Error> {
+fn skip_principal_ent_rest(r: &mut XdrR<'_>) -> Result<Option<String>, Error> {
     // 4 timestamps/deltats: expire, last_pwd, pw_expire, max_life
     for _ in 0..4 {
         r.u32()?;
@@ -868,7 +1131,7 @@ fn skip_principal_ent_rest(r: &mut XdrR<'_>) -> Result<(), Error> {
     r.u32()?; // attributes
     r.u32()?; // kvno
     r.u32()?; // mkvno
-    let _ = r.nullstring()?; // policy
+    let policy = r.nullstring()?;
     r.u32()?; // aux_attributes (xdr_long)
     r.u32()?; // max_renewable_life
     r.u32()?; // last_success
@@ -900,7 +1163,7 @@ fn skip_principal_ent_rest(r: &mut XdrR<'_>) -> Result<(), Error> {
             r.u32()?; // type[1]
         }
     }
-    Ok(())
+    Ok(policy)
 }
 
 struct XdrR<'a> {
@@ -1302,5 +1565,118 @@ mod tests {
         let p = g.get_name(&extra).unwrap();
         assert!(p.requires_preauth);
         assert_eq!(p.max_life, 3600);
+    }
+
+    fn encode_cpol(api: u32, p: &krb5_kdc::NamedPolicy, mask: u32) -> Vec<u8> {
+        let mut w = XdrW::default();
+        w.u32(api);
+        encode_policy_rec(&mut w, api, p);
+        w.u32(mask);
+        w.b
+    }
+
+    #[test]
+    fn kadm5_policy_verbs_and_pwqual() {
+        let (store, acl, actor) = setup();
+        let pol = krb5_kdc::NamedPolicy {
+            name: "strict".into(),
+            min_length: 8,
+            min_classes: 2,
+            history: 0,
+            max_fail: 2,
+        };
+        let mask = KADM5_POLICY | KADM5_PW_MIN_LENGTH | KADM5_PW_MIN_CLASSES | KADM5_PW_MAX_FAILURE;
+        let created = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            CREATE_POLICY,
+            &encode_cpol(API_V4, &pol, mask),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&created), 0);
+
+        let dup = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            CREATE_POLICY,
+            &encode_cpol(API_V4, &pol, mask),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&dup), KADM5_DUP);
+
+        let mut gq = XdrW::default();
+        gq.u32(API_V4);
+        gq.nullstring(Some("strict"));
+        let got = dispatch_kadm5(&store, &acl, &actor, GET_POLICY, &gq.b).unwrap();
+        assert_eq!(ret_code(&got), 0);
+        let mut r = XdrR::new(&got);
+        assert_eq!(r.u32().unwrap(), API_V4);
+        assert_eq!(r.u32().unwrap(), 0);
+        assert_eq!(r.nullstring().unwrap().as_deref(), Some("strict"));
+        r.u32().unwrap();
+        r.u32().unwrap();
+        assert_eq!(r.u32().unwrap(), 8);
+        assert_eq!(r.u32().unwrap(), 2);
+        r.u32().unwrap();
+        r.u32().unwrap();
+        assert_eq!(r.u32().unwrap(), 2);
+
+        let mut list_args = XdrW::default();
+        list_args.u32(API_V4);
+        list_args.u32(0);
+        let listed = dispatch_kadm5(&store, &acl, &actor, GET_POLS, &list_args.b).unwrap();
+        assert_eq!(ret_code(&listed), 0);
+        let mut lr = XdrR::new(&listed);
+        let _ = lr.u32().unwrap();
+        let _ = lr.u32().unwrap();
+        let n = lr.u32().unwrap();
+        assert_eq!(lr.u32().unwrap(), n);
+        let mut names = Vec::new();
+        for _ in 0..n {
+            names.push(lr.nullstring().unwrap().unwrap());
+        }
+        assert!(names.iter().any(|s| s == "strict"));
+
+        let mut shorter = pol.clone();
+        shorter.min_length = 10;
+        let mod_mask = KADM5_PW_MIN_LENGTH;
+        let modified = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            MODIFY_POLICY,
+            &encode_cpol(API_V4, &shorter, mod_mask),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&modified), 0);
+        {
+            let g = store.read().unwrap();
+            let p = g.policies().get("strict").unwrap();
+            assert_eq!(p.min_length, 10);
+            assert_eq!(p.max_fail, 2, "modpol must not zero unmasked fields");
+        }
+
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [krb5_kdc::TEST_USER]);
+        {
+            let mut g = store.write().unwrap();
+            g.set_principal_policy(&user, Some("strict".into()))
+                .unwrap();
+        }
+        let mut chpw = XdrW::default();
+        chpw.u32(API_V2);
+        chpw.nullstring(Some("user@KERBER.TEST"));
+        chpw.nullstring(Some("short"));
+        let rejected = dispatch_kadm5(&store, &acl, &actor, CHPASS_PRINCIPAL, &chpw.b).unwrap();
+        assert_eq!(ret_code(&rejected), KADM5_PASS_Q_TOOSHORT);
+
+        let mut del = XdrW::default();
+        del.u32(API_V4);
+        del.nullstring(Some("strict"));
+        let deleted = dispatch_kadm5(&store, &acl, &actor, DELETE_POLICY, &del.b).unwrap();
+        assert_eq!(ret_code(&deleted), 0);
+        let missing = dispatch_kadm5(&store, &acl, &actor, GET_POLICY, &gq.b).unwrap();
+        assert_eq!(ret_code(&missing), KADM5_UNK_POLICY);
     }
 }

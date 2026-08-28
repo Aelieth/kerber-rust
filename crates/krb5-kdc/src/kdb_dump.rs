@@ -23,8 +23,8 @@ use krb5_types::pac::RpcSid;
 use crate::error::Error as KdcError;
 use crate::mkey::{MASTER_NAME, harness_master_etype, master_key_from_password};
 use crate::store::{
-    KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PRE_AUTH, KeyEntry, Principal,
-    PrincipalStore, TlData,
+    KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PRE_AUTH, KeyEntry, NamedPolicy,
+    Principal, PrincipalStore, TlData,
 };
 
 /// MIT 1.22.2 default (`kdb5_util load_dump version 7`).
@@ -44,6 +44,8 @@ pub const TL_MKVNO: i32 = 8;
 pub const TL_ACTKVNO: i32 = 9;
 /// Private `tl_data` type: domain SID + RID (MIT has no SID; opaque round-trip).
 pub const TL_KERBER_SID: i32 = 0x4B01;
+/// Private `tl_data` type: bound named-policy name (UTF-8).
+pub const TL_KERBER_POLICY: i32 = 0x4B02;
 /// `KRB5_KDB_SALTTYPE_NORMAL`.
 pub const SALTTYPE_NORMAL: i32 = 0;
 /// `KRB5_KDB_SALTTYPE_SPECIAL`.
@@ -82,7 +84,7 @@ pub struct DumpFile {
     pub version: u32,
     /// Principal records in file order.
     pub princs: Vec<DumpPrincipal>,
-    /// Opaque `policy\t…` lines (passthrough; golden has none).
+    /// `policy\t…` rest (name + MIT numeric fields). Golden dumps have none.
     pub policies: Vec<String>,
 }
 
@@ -182,6 +184,9 @@ impl DumpFile {
             }
             store.debug_insert(princ);
         }
+        for line in &self.policies {
+            store.put_policy(parse_policy_rest(line));
+        }
         if let Some(sid) = domain {
             store.set_domain_sid(sid);
         }
@@ -240,6 +245,7 @@ impl DumpPrincipal {
         let requires_preauth = self.attributes & KDB_REQUIRES_PRE_AUTH != 0;
         let locked = self.attributes & KDB_DISALLOW_ALL_TIX != 0;
         let (sid, rid) = parse_sid_tl(&self.tl_data)?;
+        let pw_policy = policy_from_tl(&self.tl_data);
         Ok((
             Principal {
                 name,
@@ -263,6 +269,7 @@ impl DumpPrincipal {
                 rid,
                 s4u_allowed_from: Vec::new(),
                 s4u_allowed_to: Vec::new(),
+                pw_policy,
             },
             sid,
         ))
@@ -402,6 +409,17 @@ pub fn write_dump(store: &PrincipalStore, mkey: &ProtocolKey) -> Result<String, 
     for p in princs {
         write_princ_record(&mut out, p, mkey, store)?;
     }
+    let mut names: Vec<_> = store.policies().keys().cloned().collect();
+    names.sort();
+    for n in names {
+        if let Some(pol) = store.policies().get(&n) {
+            let _ = writeln!(
+                out,
+                "policy\t{}\t0\t0\t{}\t{}\t{}\t0\t{}\t0\t0\t0",
+                pol.name, pol.min_length, pol.min_classes, pol.history, pol.max_fail
+            );
+        }
+    }
     Ok(out)
 }
 
@@ -432,6 +450,19 @@ pub fn write_dump_path_etype(
     let text = dump_store_etype(store, master_password, etype)?;
     write_secret_file(path, text.as_bytes())?;
     Ok(())
+}
+
+fn parse_policy_rest(rest: &str) -> NamedPolicy {
+    let mut it = rest.split('\t');
+    let name = it.next().unwrap_or("").to_owned();
+    let nums: Vec<u32> = it.filter_map(|s| s.parse().ok()).collect();
+    NamedPolicy {
+        name,
+        min_length: nums.get(2).copied().unwrap_or(0),
+        min_classes: nums.get(3).copied().unwrap_or(0),
+        history: nums.get(4).copied().unwrap_or(0),
+        max_fail: nums.get(6).copied().unwrap_or(0),
+    }
 }
 
 fn parse_header(line: &str) -> Result<u32, DumpError> {
@@ -684,6 +715,7 @@ fn write_princ_record(
         p.tl_data.clone()
     };
     merge_sid_tl(&mut tl, store.domain_sid(), p.rid);
+    merge_policy_tl(&mut tl, p.pw_policy.as_deref());
     let mut keys = Vec::new();
     for k in &p.keys {
         let enc = kdb_encrypt_key(mkey, k.key.as_bytes())?;
@@ -724,7 +756,7 @@ fn write_princ_record(
         p.pw_expire,
         p.last_success,
         p.last_failed,
-        p.fail_auth_count
+        store.fail_auth_of(p)
     );
     for t in &tl {
         let _ = write!(
@@ -756,6 +788,25 @@ fn write_princ_record(
 fn merge_sid_tl(tl: &mut Vec<TlData>, domain: &RpcSid, rid: u32) {
     tl.retain(|t| t.ty != TL_KERBER_SID);
     tl.push(encode_sid_tl(domain, rid));
+}
+
+fn merge_policy_tl(tl: &mut Vec<TlData>, policy: Option<&str>) {
+    tl.retain(|t| t.ty != TL_KERBER_POLICY);
+    if let Some(name) = policy.filter(|s| !s.is_empty()) {
+        tl.push(TlData {
+            ty: TL_KERBER_POLICY,
+            contents: name.as_bytes().to_vec(),
+        });
+    }
+}
+
+fn policy_from_tl(tl: &[TlData]) -> Option<String> {
+    tl.iter()
+        .find(|t| t.ty == TL_KERBER_POLICY)
+        .and_then(|t| std::str::from_utf8(&t.contents).ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn encode_sid_tl(domain: &RpcSid, rid: u32) -> TlData {
@@ -864,6 +915,41 @@ fn synthesize_km(realm: &str, mkey: &ProtocolKey, now: u32) -> Principal {
 mod tests {
     use super::*;
     use crate::store::TlData;
+
+    #[test]
+    fn named_policy_dump_round_trip() {
+        use crate::store::NamedPolicy;
+        use crate::{TEST_USER, bootstrap_documented, dump_store, load_dump};
+        use krb5_types::PrincipalName;
+
+        let (mut store, _) = bootstrap_documented().unwrap();
+        store.put_policy(NamedPolicy {
+            name: "strict".into(),
+            min_length: 8,
+            min_classes: 2,
+            history: 1,
+            max_fail: 3,
+        });
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+        store
+            .set_principal_policy(&user, Some("strict".into()))
+            .unwrap();
+        let text = dump_store(&store, b"masterpassword").unwrap();
+        assert!(
+            text.lines().any(|l| l.starts_with("policy\tstrict\t")),
+            "dump must emit policy records: {text}"
+        );
+        let again = load_dump(&text, b"masterpassword").unwrap();
+        let pol = again.policies().get("strict").expect("loaded policy");
+        assert_eq!(pol.min_length, 8);
+        assert_eq!(pol.min_classes, 2);
+        assert_eq!(pol.history, 1);
+        assert_eq!(pol.max_fail, 3);
+        assert_eq!(
+            again.get_name(&user).unwrap().pw_policy.as_deref(),
+            Some("strict")
+        );
+    }
 
     #[test]
     fn corrupt_kerber_sid_tl_is_error() {

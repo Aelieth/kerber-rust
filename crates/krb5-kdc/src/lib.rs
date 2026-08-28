@@ -33,9 +33,9 @@ pub use kdb::{
 };
 pub use kdb_dump::{
     DumpError, DumpFile, DumpKeyData, DumpKeySlot, DumpPrincipal, KDB_DUMP_VERSION,
-    KDB_DUMP_VERSION_R18, TL_KADM_DATA, TL_KERBER_SID, TL_LAST_PWD_CHANGE, TL_MKVNO, TL_MOD_PRINC,
-    dump_store, dump_store_etype, load_dump, load_dump_etype, load_dump_mkey, load_dump_path,
-    parse_dump, write_dump, write_dump_path, write_dump_path_etype,
+    KDB_DUMP_VERSION_R18, TL_KADM_DATA, TL_KERBER_POLICY, TL_KERBER_SID, TL_LAST_PWD_CHANGE,
+    TL_MKVNO, TL_MOD_PRINC, dump_store, dump_store_etype, load_dump, load_dump_etype,
+    load_dump_mkey, load_dump_path, parse_dump, write_dump, write_dump_path, write_dump_path_etype,
 };
 pub use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 pub use listen::{
@@ -49,8 +49,8 @@ pub use plugins::{
 };
 pub use store::{
     KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH, KeyEntry,
-    Policy, Principal, PrincipalStore, RID_ADMINISTRATOR, RID_FIRST_USER, RID_KRBTGT, S2K_ITERS,
-    TlData, random_key, s2k_params,
+    NamedPolicy, Policy, Principal, PrincipalStore, RID_ADMINISTRATOR, RID_FIRST_USER, RID_KRBTGT,
+    S2K_ITERS, TlData, random_key, s2k_params,
 };
 
 use krb5_types::PrincipalName;

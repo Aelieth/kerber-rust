@@ -81,6 +81,8 @@ jobs:
         run: ./scripts/pkinit-gate.sh
       - name: kadmin-gate (MIT kadmin vs krb5-kadmind)
         run: ./scripts/kadmin-gate.sh
+      - name: policy-gate (MIT kadmin addpol/modpol/getpol/delpol/listpols + kinit lockout)
+        run: ./scripts/policy-gate.sh
       - name: kpasswd-gate (MIT kpasswd vs kadmind 464)
         run: ./scripts/kpasswd-gate.sh
       - name: kdb-dump-gate (MIT dump/load + kinit both directions)

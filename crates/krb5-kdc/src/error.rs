@@ -26,6 +26,8 @@ pub enum Error {
     NotFound,
     /// CSPRNG failed.
     Rng,
+    /// Password rejected by named policy.
+    PasswordPolicy(String),
     /// Request PDU was not AS-REQ or TGS-REQ.
     UnexpectedPdu,
     /// Client must retry with PA-ENC-TIMESTAMP; `e_data` is METHOD-DATA.
@@ -48,6 +50,7 @@ impl fmt::Display for Error {
             Self::AlreadyExists => write!(f, "principal exists"),
             Self::NotFound => write!(f, "principal not found"),
             Self::Rng => write!(f, "rng failed"),
+            Self::PasswordPolicy(s) => write!(f, "password policy: {s}"),
             Self::UnexpectedPdu => write!(f, "unexpected PDU"),
             Self::PreauthRequired { .. } => write!(f, "preauth required"),
         }

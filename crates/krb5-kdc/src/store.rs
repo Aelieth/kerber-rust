@@ -1,6 +1,7 @@
 //! In-memory principal database and ACL-gated mutations.
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
 use krb5_protocol::{Keytab, KeytabEntry, ReplayCache};
@@ -114,6 +115,8 @@ pub struct Principal {
     /// Target names this principal may S4U2Proxy to (classic constrained
     /// delegation / `msDS-AllowedToDelegateTo`).
     pub s4u_allowed_to: Vec<String>,
+    /// Bound named password policy (`policy\t` / kadm5).
+    pub pw_policy: Option<String>,
 }
 
 impl Principal {
@@ -158,6 +161,36 @@ impl Principal {
             rid: 0,
             s4u_allowed_from: Vec::new(),
             s4u_allowed_to: Vec::new(),
+            pw_policy: None,
+        }
+    }
+}
+
+/// Named dump/kadm5 password policy.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NamedPolicy {
+    /// Policy name.
+    pub name: String,
+    /// Minimum password length.
+    pub min_length: u32,
+    /// Distinct character classes required (0 = none).
+    pub min_classes: u32,
+    /// History depth (0 = unused).
+    pub history: u32,
+    /// Failures before lockout (0 = no lockout).
+    pub max_fail: u32,
+}
+
+impl NamedPolicy {
+    /// Name-only policy with no quality/lockout rules.
+    #[must_use]
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            min_length: 0,
+            min_classes: 0,
+            history: 0,
+            max_fail: 0,
         }
     }
 }
@@ -266,6 +299,8 @@ pub struct PrincipalStore {
     domain_sid: RpcSid,
     /// Next RID to allocate (`RID_FIRST_USER` and up).
     next_rid: u32,
+    policies: HashMap<String, NamedPolicy>,
+    as_fail: Arc<Mutex<HashMap<String, u32>>>,
 }
 
 impl PrincipalStore {
@@ -284,6 +319,8 @@ impl PrincipalStore {
                 std::process::exit(1);
             }),
             next_rid: RID_FIRST_USER,
+            policies: HashMap::new(),
+            as_fail: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -610,6 +647,7 @@ impl PrincipalStore {
     ///
     /// [`Error::NotFound`] when the principal is missing.
     pub fn set_password(&mut self, name: &PrincipalName, password: &[u8]) -> Result<(), Error> {
+        self.check_password_quality(name, password)?;
         let id = format!("{}@{}", name.components_joined(), self.realm);
         let Some(existing) = self.map.get(&id) else {
             return Err(Error::NotFound);
@@ -946,6 +984,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::NotFound`].
+    #[allow(clippy::too_many_arguments)]
     pub fn apply_admin_fields(
         &mut self,
         name: &PrincipalName,
@@ -953,6 +992,8 @@ impl PrincipalStore {
         max_life: Option<u64>,
         expiration: Option<u32>,
         pw_expire: Option<u32>,
+        policy: Option<String>,
+        clear_policy: bool,
     ) -> Result<(), Error> {
         let id = format!("{}@{}", name.components_joined(), self.realm);
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
@@ -970,6 +1011,11 @@ impl PrincipalStore {
         if let Some(e) = pw_expire {
             p.pw_expire = e;
         }
+        if clear_policy {
+            p.pw_policy = None;
+        } else if let Some(pol) = policy {
+            p.pw_policy = Some(pol);
+        }
         self.save_if_configured()
     }
 
@@ -981,6 +1027,126 @@ impl PrincipalStore {
     /// Insert a fully-formed principal (persistence).
     pub(crate) fn debug_insert(&mut self, p: Principal) {
         self.put_principal(p);
+    }
+
+    /// Named password policies.
+    #[must_use]
+    pub fn policies(&self) -> &HashMap<String, NamedPolicy> {
+        &self.policies
+    }
+
+    /// Insert or replace a named policy.
+    pub fn put_policy(&mut self, pol: NamedPolicy) {
+        self.policies.insert(pol.name.clone(), pol);
+        let _ = self.save_if_configured();
+    }
+
+    /// Delete a named policy.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    pub fn delete_policy(&mut self, name: &str) -> Result<(), Error> {
+        self.policies.remove(name).ok_or(Error::NotFound)?;
+        self.save_if_configured()
+    }
+
+    /// Bind `princ` to `policy` (None unbinds).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    pub fn set_principal_policy(
+        &mut self,
+        name: &PrincipalName,
+        policy: Option<String>,
+    ) -> Result<(), Error> {
+        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+        p.pw_policy = policy;
+        self.save_if_configured()
+    }
+
+    /// Reject `password` against a named policy (create / kadm5 `-policy`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::PasswordPolicy`].
+    pub fn check_named_policy(&self, policy: &str, password: &[u8]) -> Result<(), Error> {
+        match self.policies.get(policy) {
+            Some(pol) => check_pwqual(password, pol),
+            None => Ok(()),
+        }
+    }
+
+    /// Reject `password` against the principal's named policy.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::PasswordPolicy`].
+    pub fn check_password_quality(
+        &self,
+        name: &PrincipalName,
+        password: &[u8],
+    ) -> Result<(), Error> {
+        let Some(p) = self.get_name(name) else {
+            return Ok(());
+        };
+        let Some(ref n) = p.pw_policy else {
+            return Ok(());
+        };
+        let Some(pol) = self.policies.get(n) else {
+            return Ok(());
+        };
+        check_pwqual(password, pol)?;
+        if pol.history == 0 {
+            return Ok(());
+        }
+        for k in &p.keys {
+            let params = s2k_params(k.etype);
+            if let Ok(nk) = string_to_key(k.etype, password, &p.salt, Some(&params))
+                && nk.as_bytes() == k.key.as_bytes()
+            {
+                return Err(Error::PasswordPolicy("history".into()));
+            }
+        }
+        Ok(())
+    }
+
+    /// Overlay AS-fail count for lockout (absolute; success stores 0).
+    #[must_use]
+    pub fn fail_auth_of(&self, p: &Principal) -> u32 {
+        self.as_fail
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&p.id())
+            .copied()
+            .unwrap_or(p.fail_auth_count)
+    }
+
+    /// Max failures from the bound policy (0 = no lockout).
+    #[must_use]
+    pub fn max_fail_for(&self, p: &Principal) -> u32 {
+        p.pw_policy
+            .as_ref()
+            .and_then(|n| self.policies.get(n))
+            .map_or(0, |pol| pol.max_fail)
+    }
+
+    /// Record AS password outcome (interior-mutable; dump writes the overlay).
+    pub fn record_as_outcome(&self, name: &PrincipalName, ok: bool) {
+        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let stored = self.map.get(&id).map_or(0, |p| p.fail_auth_count);
+        let mut g = self
+            .as_fail
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if ok {
+            g.insert(id, 0);
+        } else {
+            let cur = g.get(&id).copied().unwrap_or(stored);
+            g.insert(id, cur.saturating_add(1));
+        }
     }
 
     fn put_principal(&mut self, mut p: Principal) {
@@ -1012,6 +1178,38 @@ impl PrincipalStore {
             self.next_rid = rid.saturating_add(1);
         }
     }
+}
+
+fn check_pwqual(password: &[u8], pol: &NamedPolicy) -> Result<(), Error> {
+    let s = std::str::from_utf8(password).unwrap_or("");
+    if pol.min_length > 0 && s.len() < pol.min_length as usize {
+        return Err(Error::PasswordPolicy(format!(
+            "min_length {}",
+            pol.min_length
+        )));
+    }
+    if pol.min_classes > 0 {
+        let mut n = 0u32;
+        if s.chars().any(|c| c.is_ascii_lowercase()) {
+            n += 1;
+        }
+        if s.chars().any(|c| c.is_ascii_uppercase()) {
+            n += 1;
+        }
+        if s.chars().any(|c| c.is_ascii_digit()) {
+            n += 1;
+        }
+        if s.chars().any(|c| !c.is_ascii_alphanumeric()) {
+            n += 1;
+        }
+        if n < pol.min_classes {
+            return Err(Error::PasswordPolicy(format!(
+                "min_classes {}",
+                pol.min_classes
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn generate_domain_sid() -> Result<RpcSid, Error> {
@@ -1178,5 +1376,76 @@ mod tests {
             .create_password(&acl, &actor, &old, b"rename-secret")
             .unwrap();
         assert!(store.rename(&add_only, &actor, &old, &new).is_err());
+    }
+
+    #[test]
+    fn named_policy_pwqual_and_lockout() {
+        use krb5_protocol::{as_req, pa_enc_timestamp, pa_enc_timestamp_at};
+        use krb5_types::KerberosTime;
+
+        let (mut store, _) = crate::bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+        store.put_policy(NamedPolicy {
+            name: "strict".into(),
+            min_length: 8,
+            min_classes: 2,
+            history: 1,
+            max_fail: 3,
+        });
+        store
+            .set_principal_policy(&user, Some("strict".into()))
+            .unwrap();
+        assert!(store.check_password_quality(&user, b"short").is_err());
+        assert!(store.set_password(&user, b"short").is_err());
+        store.set_password(&user, b"Longer1x").unwrap();
+        assert!(
+            store.set_password(&user, b"Longer1x").is_err(),
+            "history must reject reuse of the current password"
+        );
+
+        let key = store
+            .get_name(&user)
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let good = as_req(
+            user.clone(),
+            crate::TEST_REALM,
+            1,
+            Some(vec![pa_enc_timestamp(&key).unwrap()]),
+        )
+        .unwrap();
+        let zeros = krb5_crypto::ProtocolKey::from_bytes(
+            krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
+            &[0u8; 32],
+        )
+        .unwrap();
+        let mut skew = 0i64;
+        let mut bad_as = || {
+            skew += 1;
+            let ts = KerberosTime::now().add_seconds(skew).unwrap();
+            as_req(
+                user.clone(),
+                crate::TEST_REALM,
+                1,
+                Some(vec![pa_enc_timestamp_at(&zeros, &ts).unwrap()]),
+            )
+            .unwrap()
+        };
+        let revoked = |e: &Error| matches!(e, Error::Protocol { code, .. } if *code == krb5_types::err::CLIENT_REVOKED);
+        assert!(crate::issue_as(&store, &bad_as()).is_err());
+        assert!(crate::issue_as(&store, &bad_as()).is_err());
+        crate::issue_as(&store, &good).expect("success must reset fail count");
+        assert!(crate::issue_as(&store, &bad_as()).is_err());
+        let second = crate::issue_as(&store, &bad_as()).unwrap_err();
+        assert!(
+            !revoked(&second),
+            "second fail after success must not lock (count was reset): {second:?}"
+        );
+        assert!(crate::issue_as(&store, &bad_as()).is_err());
+        let locked = crate::issue_as(&store, &bad_as()).unwrap_err();
+        assert!(revoked(&locked), "expected CLIENT_REVOKED, got {locked:?}");
     }
 }
