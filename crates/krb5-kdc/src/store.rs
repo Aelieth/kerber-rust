@@ -852,11 +852,13 @@ impl PrincipalStore {
             .max()
             .unwrap_or(0)
             .saturating_add(1);
+        // MIT `pw_history_num` counts the current password inside N, so
+        // history=1 keeps no old keys (A→B→A is allowed).
         let depth = existing
             .pw_policy
             .as_ref()
             .and_then(|n| self.policies.get(n))
-            .map_or(0, |pol| pol.history);
+            .map_or(0, |pol| pol.history.saturating_sub(1));
         let mut new_keys = Vec::new();
         for etype in [
             EncryptionType::Aes256CtsHmacSha196,
@@ -1328,12 +1330,12 @@ impl PrincipalStore {
         if pol.history == 0 {
             return Ok(());
         }
-        let n = pol.history as usize;
+        let extra = pol.history.saturating_sub(1) as usize;
         let mut hist: Vec<&KeyEntry> = p.key_history.iter().collect();
         let mut kvnos: Vec<u32> = hist.iter().map(|k| k.kvno).collect();
         kvnos.sort_unstable();
         kvnos.dedup();
-        let keep: Vec<u32> = kvnos.into_iter().rev().take(n).collect();
+        let keep: Vec<u32> = kvnos.into_iter().rev().take(extra).collect();
         hist.retain(|k| keep.contains(&k.kvno));
         for k in p.keys.iter().chain(hist) {
             let params = s2k_params(k.etype);
@@ -1820,11 +1822,33 @@ mod tests {
     }
 
     #[test]
-    fn password_history_depth_n_rejects_last_n() {
+    fn password_history_matches_mit_window() {
         let (mut store, _) = crate::bootstrap_documented().unwrap();
         let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
         store.put_policy(NamedPolicy {
-            name: "histn".into(),
+            name: "h1".into(),
+            min_length: 8,
+            min_classes: 2,
+            history: 1,
+            max_fail: 0,
+            pw_failcnt_interval: 0,
+            pw_lockout_duration: 0,
+        });
+        store
+            .set_principal_policy(&user, Some("h1".into()))
+            .unwrap();
+        store.set_password(&user, b"Hist-pw0").unwrap();
+        assert!(
+            store.set_password(&user, b"Hist-pw0").is_err(),
+            "current password is inside history=1"
+        );
+        store.set_password(&user, b"Hist-pw1").unwrap();
+        store
+            .set_password(&user, b"Hist-pw0")
+            .expect("history=1 must allow A→B→A like MIT");
+
+        store.put_policy(NamedPolicy {
+            name: "h2".into(),
             min_length: 8,
             min_classes: 2,
             history: 2,
@@ -1833,20 +1857,20 @@ mod tests {
             pw_lockout_duration: 0,
         });
         store
-            .set_principal_policy(&user, Some("histn".into()))
+            .set_principal_policy(&user, Some("h2".into()))
             .unwrap();
+        store.set_password(&user, b"Hist-seed1").unwrap();
+        store.set_password(&user, b"Hist-seed2").unwrap();
         store.set_password(&user, b"Hist-pw0").unwrap();
         store.set_password(&user, b"Hist-pw1").unwrap();
         store.set_password(&user, b"Hist-pw2").unwrap();
         assert!(
-            store.set_password(&user, b"Hist-pw0").is_err(),
-            "depth-2 must reject the password 2 changes ago"
+            store.set_password(&user, b"Hist-pw1").is_err(),
+            "history=2 must reject B after A→B→C (MIT)"
         );
-        assert!(store.set_password(&user, b"Hist-pw1").is_err());
-        store.set_password(&user, b"Hist-pw3").unwrap();
         store
             .set_password(&user, b"Hist-pw0")
-            .expect("N+1-th password must be reusable");
+            .expect("history=2 must allow the N-boundary password A after A→B→C");
         let p = store.get_name(&user).unwrap();
         let mut kvnos: Vec<u32> = p.keys.iter().map(|k| k.kvno).collect();
         kvnos.sort_unstable();
@@ -1856,8 +1880,8 @@ mod tests {
         hkv.sort_unstable();
         hkv.dedup();
         assert!(
-            hkv.len() <= 2,
-            "history pruned to depth 2 kvnos, got {hkv:?}"
+            hkv.len() <= 1,
+            "history=2 stores N-1 old kvnos, got {hkv:?}"
         );
         let text = crate::dump_store(&store, b"masterpassword").unwrap();
         assert!(
