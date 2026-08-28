@@ -9,15 +9,21 @@ this project uses semantic versioning once a crate is published.
 ### Added
 
 - KDB extension surface: `PrincipalRead` / `PrincipalWrite` /
-  `StoreLifecycle`, dump-v7 default, `db_library` factory, in-tree
-  `MemoryStore`. kdcpreauth and kdcpolicy registries (PKINIT, SPAKE,
-  enc-timestamp as built-ins). Named password policies: dump `policy\t`
-  records, kadm5 addpol/modpol/getpol/delpol/listpols (opcodes 8–11,
-  15), pwqual, AS lockout `CLIENT_REVOKED`. Iprop serial + ulog; kadmind
-  program 100423 `IPROP_GET_UPDATES` / `FULL_RESYNC`; `krb5-iprop-pull`
-  RPCSEC_GSS client. Gates: `scripts/policy-gate.sh`,
-  `scripts/iprop-gate.sh` (serial-delta both ways, MIT `kinit extra` /
-  `extra2`). Traits, not dlopen: [`docs/plugins.md`](docs/plugins.md).
+  `StoreLifecycle`, dump-v7 **production** backend, `db_library`
+  factory. In-tree `MemoryStore` proves the traits are generic; it is
+  not a servable KDC backend. kdcpreauth registry: PKINIT and SPAKE
+  process AS; enc-timestamp is **advertise-only** (`process_as` is a
+  no-op). `KdcPolicy` is **observe-only** (ticket rules stay inline).
+  Named policies: dump `policy\t` (MIT r1.11), kadm5 opcodes 8–11/15,
+  pwqual min-length/classes, history as **reject any retained key**
+  (not depth-N). AS lockout `CLIENT_REVOKED` is live and survives
+  `reload_if_stale` but is **memory-only across a full KDC restart**;
+  no time-based auto-unlock. Iprop serial + ulog; kadmind program
+  100423; `krb5-iprop-pull`. Gates: `scripts/policy-gate.sh` (MIT
+  `cpw` too-short/reuse, maxfailure-2 reset), `scripts/kdb-dump-gate.sh`
+  (`getpol` after MIT load), `scripts/iprop-gate.sh` (serial-delta
+  both ways, MIT `delprinc`). Traits, not dlopen:
+  [`docs/plugins.md`](docs/plugins.md).
 
 ### Changed
 

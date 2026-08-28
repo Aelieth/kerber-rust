@@ -7,10 +7,10 @@ is no `dlopen`.
 
 | Surface | MIT analogue | In tree |
 | --- | --- | --- |
-| KDB | `kdb5` plugin / `db_library` | [`PrincipalRead`](../crates/krb5-kdc/src/kdb.rs) / `PrincipalWrite` / `StoreLifecycle`. Dump-v7 is the default backend. `db_library` selects the factory; unknown names error. `MemoryStore` is a second in-tree backend. Replay caches and the PKINIT CA live on `KdcEnv`, not dump rows. |
-| kdcpreauth | `kdcpreauth` | [`KdcPreauth`](../crates/krb5-kdc/src/plugins.rs) registry. PKINIT, SPAKE, and enc-timestamp are registered built-ins. `preauth_required` enumerates the registry. |
-| kdcpolicy | `kdcpolicy` | [`KdcPolicy`](../crates/krb5-kdc/src/plugins.rs). AS/TGS checks run through `current_policy()`. |
-| pwqual | `pwqual` | Named [`NamedPolicy`](../crates/krb5-kdc/src/store.rs) min-length / classes / history at `set_password`. kadm5 addpol/modpol/getpol/delpol/listpols. |
+| KDB | `kdb5` plugin / `db_library` | [`PrincipalRead`](../crates/krb5-kdc/src/kdb.rs) / `PrincipalWrite` / `StoreLifecycle`. Dump-v7 is the **servable** backend. `db_library` selects the factory; unknown names error. `MemoryStore` is a second in-tree backend for tests, not a production KDC. Replay caches, PKINIT CA, and the AS-fail overlay live on `KdcEnv` / process state and survive dump reload, not a full KDC restart. |
+| kdcpreauth | `kdcpreauth` | [`KdcPreauth`](../crates/krb5-kdc/src/plugins.rs) registry. PKINIT and SPAKE process AS. Enc-timestamp is registered so METHOD-DATA advertises it; `EncTsMod::process_as` is a no-op (timestamp verify stays inline). |
+| kdcpolicy | `kdcpolicy` | [`KdcPolicy`](../crates/krb5-kdc/src/plugins.rs) is observe-only (`check_as` / `check_tgs` do not decide tickets). |
+| pwqual | `pwqual` | Named [`NamedPolicy`](../crates/krb5-kdc/src/store.rs) min-length / classes at `set_password`. History rejects any currently retained key (boolean), not a depth-N ring. No time-based auto-unlock. kadm5 addpol/modpol/getpol/delpol/listpols. |
 
 LDAP, db2, and LMDB are not required implementations. None is
 privileged: each backend implements the same KDB traits.

@@ -151,14 +151,15 @@ when that oracle is absent.
   non-forwardable evidence ticket (`BADOPTION`), denies classic
   constrained delegation unless `s4u_allowed_to` lists the target, and
   parses PA-PAC-OPTIONS (167). In the harness CI job.
-- `scripts/policy-gate.sh` — MIT `kadmin` addpol/modpol/getpol/listpols/delpol
-  against `krb5-kadmind`; `addprinc -policy` then wrong `kinit` and a
-  good password both yield `CLIENT_REVOKED` at `maxfailure 1`. In CI.
+- `scripts/policy-gate.sh` — MIT `kadmin` addpol/modpol/getpol/listpols/`cpw`/delpol
+  against `krb5-kadmind`; too-short and reuse; `maxfailure 2` wrong then
+  correct (reset) then fails until `CLIENT_REVOKED`. In CI.
 - `scripts/iprop-gate.sh` — MIT `kpropd -A` must not report IPROP
   program unregistered. After first-contact kprop `-i` (ipropx),
   mutate the master and require serial-delta: MIT `kinit extra` on
-  the MIT replica; `krb5-iprop-pull` vs MIT kadmind then MIT
-  `kinit extra2` on the Rust replica. In CI.
+  the MIT replica (one FULL_RESYNC, then incremental); `krb5-iprop-pull`
+  vs MIT kadmind then MIT `kinit extra2`; MIT `delprinc extra2` then the
+  name is gone on the Rust replica. In CI.
 - `scripts/kadmin-gate.sh` — MIT `kadmin` against `krb5-kadmind` on 749
   (AUTH_GSSAPI 300001): `addprinc`, `cpw`, `getprinc` (`Principal:
   extra@KERBER.TEST`), `listprincs` (names `extra` and `user`),
