@@ -22,7 +22,8 @@ the script documents otherwise.
 | `sha2-gate.sh` | MIT `kinit`/`kvno` etype 20 vs Rust KDC | `klist -e` names `aes256-cts-hmac-sha384-192` | harness |
 | `cross-realm-gate.sh` | MIT `kinit` + `kvno host/svc.other.test@OTHER.TEST` | `klist` has `krbtgt/OTHER.TEST` and the host ticket | harness |
 | `kadmin-gate.sh` | MIT `kadmin` vs `krb5-kadmind` 749 | add/cpw/get/list/mod/chrand/ktadd/`renprinc`/del then `kinit extra` | harness |
-| `policy-gate.sh` | MIT `kadmin` addpol/modpol/getpol/`cpw`/delpol + `kinit` | too-short + reuse; maxfailure-2 reset then `CLIENT_REVOKED` | harness |
+| `policy-gate.sh` | MIT `kadmin` addpol/modpol/getpol/`cpw`/delpol + `kinit` | too-short + reuse; minclasses 5; history-N; maxfailure-2; lockout duration/interval | harness |
+| `store-gate.sh` | MIT `kinit`/`kvno` vs MemoryStore KDC | `backend memory`; `user@KERBER.TEST` + host kvno | harness |
 | `iprop-gate.sh` | MIT `kpropd -A` GET_UPDATES + `krb5-iprop-pull` vs MIT kadmind | MIT `kinit extra` after serial-delta; MIT `kinit extra2` on Rust replica | harness |
 | `kpasswd-gate.sh` | MIT `kpasswd` vs kadmind 464 | new password `kinit`; old fails; run twice | harness |
 | `kdb-dump-gate.sh` | MIT `kdb5_util` dump/load both ways | MIT `kinit` vs Rust; MIT load of policy-bearing dump + `getpol lockme` | harness |

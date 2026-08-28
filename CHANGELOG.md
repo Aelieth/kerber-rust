@@ -9,20 +9,19 @@ this project uses semantic versioning once a crate is published.
 ### Added
 
 - KDB extension surface: `PrincipalRead` / `PrincipalWrite` /
-  `StoreLifecycle`, dump-v7 **production** backend, `db_library`
-  factory. In-tree `MemoryStore` proves the traits are generic; it is
-  not a servable KDC backend. kdcpreauth registry: PKINIT and SPAKE
-  process AS; enc-timestamp is **advertise-only** (`process_as` is a
-  no-op). `KdcPolicy` is **observe-only** (ticket rules stay inline).
-  Named policies: dump `policy\t` (MIT r1.11), kadm5 opcodes 8–11/15,
-  pwqual min-length/classes, history as **reject any retained key**
-  (not depth-N). AS lockout `CLIENT_REVOKED` is live and survives
-  `reload_if_stale` but is **memory-only across a full KDC restart**;
-  no time-based auto-unlock. Iprop serial + ulog; kadmind program
-  100423; `krb5-iprop-pull`. Gates: `scripts/policy-gate.sh` (MIT
-  `cpw` too-short/reuse, maxfailure-2 reset), `scripts/kdb-dump-gate.sh`
-  (`getpol` after MIT load), `scripts/iprop-gate.sh` (serial-delta
-  both ways, MIT `delprinc`). Traits, not dlopen:
+  `StoreLifecycle`. Dump-v7 is the default backend; `db_library=memory`
+  serves `MemoryStore` seeded from dump (`scripts/store-gate.sh`).
+  Kadmind mutation on `&mut dyn Store` is still deferred. kdcpreauth:
+  PKINIT, SPAKE, and enc-timestamp `process_as` (no double-verify).
+  `KdcPolicy::check_as` / `check_tgs` can deny (`DenyPolicy`); AS
+  lockout stays a mandatory inline gate. Named policies: five password
+  classes; `pw_failcnt_interval` / `pw_lockout_duration`; history depth
+  N (`keepold=false`, `TL_KERBER_HIST` 0x4B04). Lockout overlay is
+  reload-safe and **memory-only across a full KDC restart**. Iprop
+  serial + ulog; kadmind program 100423. Gates: `policy-gate.sh` (MIT
+  `cpw` too-short/reuse/minclasses-5/history-N, maxfailure-2, lockout
+  duration/interval), `store-gate.sh`, `kdb-dump-gate.sh`,
+  `iprop-gate.sh`. Traits, not dlopen:
   [`docs/plugins.md`](docs/plugins.md).
 
 ### Changed

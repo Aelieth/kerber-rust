@@ -152,8 +152,11 @@ when that oracle is absent.
   constrained delegation unless `s4u_allowed_to` lists the target, and
   parses PA-PAC-OPTIONS (167). In the harness CI job.
 - `scripts/policy-gate.sh` — MIT `kadmin` addpol/modpol/getpol/listpols/`cpw`/delpol
-  against `krb5-kadmind`; too-short and reuse; `maxfailure 2` wrong then
-  correct (reset) then fails until `CLIENT_REVOKED`. In CI.
+  against `krb5-kadmind`; too-short and reuse; `-minclasses 5`; history-N;
+  `maxfailure 2` reset then `CLIENT_REVOKED`; lockout duration / failcnt
+  interval. In CI.
+- `scripts/store-gate.sh` — `db_library=memory` KDC seeded from `--test-realm`;
+  MIT `kinit` + `kvno`. In CI after `kdc-gate`.
 - `scripts/iprop-gate.sh` — MIT `kpropd -A` must not report IPROP
   program unregistered. After first-contact kprop `-i` (ipropx),
   mutate the master and require serial-delta: MIT `kinit extra` on

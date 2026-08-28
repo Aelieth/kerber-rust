@@ -277,8 +277,8 @@ pub fn open_store(
     }
 }
 
-/// In-tree second backend (BTreeMap). Not dump-v7; proves issue is not
-/// hardcoded to [`PrincipalStore`]'s HashMap.
+/// In-tree second backend (BTreeMap). Servable when `db_library=memory`
+/// (seeded from dump). Kadmind still mutates dump-v7 [`PrincipalStore`].
 #[derive(Debug)]
 pub struct MemoryStore {
     realm: String,

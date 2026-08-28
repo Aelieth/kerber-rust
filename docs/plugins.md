@@ -7,10 +7,10 @@ is no `dlopen`.
 
 | Surface | MIT analogue | In tree |
 | --- | --- | --- |
-| KDB | `kdb5` plugin / `db_library` | [`PrincipalRead`](../crates/krb5-kdc/src/kdb.rs) / `PrincipalWrite` / `StoreLifecycle`. Dump-v7 is the **servable** backend. `db_library` selects the factory; unknown names error. `MemoryStore` is a second in-tree backend for tests, not a production KDC. Replay caches, PKINIT CA, and the AS-fail overlay live on `KdcEnv` / process state and survive dump reload, not a full KDC restart. |
-| kdcpreauth | `kdcpreauth` | [`KdcPreauth`](../crates/krb5-kdc/src/plugins.rs) registry. PKINIT and SPAKE process AS. Enc-timestamp is registered so METHOD-DATA advertises it; `EncTsMod::process_as` is a no-op (timestamp verify stays inline). |
-| kdcpolicy | `kdcpolicy` | [`KdcPolicy`](../crates/krb5-kdc/src/plugins.rs) is observe-only (`check_as` / `check_tgs` do not decide tickets). |
-| pwqual | `pwqual` | Named [`NamedPolicy`](../crates/krb5-kdc/src/store.rs) min-length / classes at `set_password`. History rejects any currently retained key (boolean), not a depth-N ring. No time-based auto-unlock. kadm5 addpol/modpol/getpol/delpol/listpols. |
+| KDB | `kdb5` plugin / `db_library` | [`PrincipalRead`](../crates/krb5-kdc/src/kdb.rs) / `PrincipalWrite` / `StoreLifecycle`. Dump-v7 is the default. `db_library=memory` serves [`MemoryStore`](../crates/krb5-kdc/src/kdb.rs) from a dump seed (`scripts/store-gate.sh`). Kadmind still mutates `PrincipalStore` only. Replay caches, PKINIT CA, and the AS-fail overlay live on `KdcEnv` / process state and survive dump reload, not a full KDC restart. |
+| kdcpreauth | `kdcpreauth` | [`KdcPreauth`](../crates/krb5-kdc/src/plugins.rs) registry. PKINIT, SPAKE, and enc-timestamp process AS (`EncTsOk`; caller must not re-verify). |
+| kdcpolicy | `kdcpolicy` | [`KdcPolicy`](../crates/krb5-kdc/src/plugins.rs) `check_as` / `check_tgs` return `Result` and can deny. AS lockout stays inline, not in the swappable slot. |
+| pwqual | `pwqual` | Named [`NamedPolicy`](../crates/krb5-kdc/src/store.rs): five classes; history depth N; `pw_failcnt_interval` / `pw_lockout_duration`. kadm5 addpol/modpol/getpol/delpol/listpols. |
 
 LDAP, db2, and LMDB are not required implementations. None is
 privileged: each backend implements the same KDB traits.
@@ -25,6 +25,7 @@ MIT `kdb_incr_update_t` over RPCSEC_GSS (`krb5-iprop-pull` or
 timestamp or MIT returns `UPDATE_FULL_RESYNC_NEEDED`.
 
 Gates: `scripts/policy-gate.sh` (MIT `kadmin` policies + `kinit`
-`CLIENT_REVOKED`); `scripts/iprop-gate.sh` (`kpropd -A` serial-delta
-then MIT `kinit extra`; MIT kadmind → Rust slave then MIT
-`kinit extra2`).
+`CLIENT_REVOKED`, minclasses 5, lockout time, history-N);
+`scripts/store-gate.sh` (MemoryStore serve); `scripts/iprop-gate.sh`
+(`kpropd -A` serial-delta then MIT `kinit extra`; MIT kadmind → Rust
+slave then MIT `kinit extra2`).
