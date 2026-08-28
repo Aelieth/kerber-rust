@@ -362,16 +362,23 @@ impl KdcPolicy for DemoPolicy {
 
 static POLICY: Mutex<Option<Arc<dyn KdcPolicy>>> = Mutex::new(None);
 
-/// Replace the process-wide policy hook (tests).
+thread_local! {
+    static THREAD_POLICY: std::cell::RefCell<Option<Arc<dyn KdcPolicy>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Replace the policy hook for this thread (tests). Process default stays
+/// [`DefaultPolicy`] so parallel tests cannot steal AS/TGS from each other.
 pub fn set_policy(p: Arc<dyn KdcPolicy>) {
-    *POLICY
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(p);
+    THREAD_POLICY.with(|t| *t.borrow_mut() = Some(p));
 }
 
 /// Current policy hook.
 #[must_use]
 pub fn current_policy() -> Arc<dyn KdcPolicy> {
+    if let Some(p) = THREAD_POLICY.with(|t| t.borrow().clone()) {
+        return p;
+    }
     POLICY
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -427,9 +434,7 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
-        *POLICY
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        THREAD_POLICY.with(|t| *t.borrow_mut() = None);
     }
 
     #[test]
@@ -459,9 +464,7 @@ mod tests {
             Error::Protocol { code, .. } if code == krb5_types::err::POLICY => {}
             other => panic!("AS deny: {other:?}"),
         }
-        *POLICY
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        THREAD_POLICY.with(|t| *t.borrow_mut() = None);
         let issued = crate::issue_as(&store, &req).expect("AS with default policy");
         set_policy(Arc::new(DenyPolicy));
         let tgs = tgs_req(
@@ -479,9 +482,7 @@ mod tests {
             Error::Protocol { code, .. } if code == krb5_types::err::POLICY => {}
             other => panic!("TGS deny: {other:?}"),
         }
-        *POLICY
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        THREAD_POLICY.with(|t| *t.borrow_mut() = None);
     }
 
     #[test]
@@ -528,9 +529,7 @@ mod tests {
             Error::Protocol { code, .. } if code == krb5_types::err::CLIENT_REVOKED => {}
             other => panic!("lockout must stay inline: {other:?}"),
         }
-        *POLICY
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        THREAD_POLICY.with(|t| *t.borrow_mut() = None);
     }
 
     #[test]
