@@ -25,6 +25,8 @@ pub enum PreauthAction {
     Challenge(Vec<u8>),
     /// SPAKE finished; key encrypts AS-REP.
     SpakeDone(ProtocolKey),
+    /// PA-ENC-TIMESTAMP verified (replay recorded); caller must not re-verify.
+    EncTsOk,
 }
 
 /// One kdcpreauth module.
@@ -145,16 +147,31 @@ impl KdcPreauth for EncTsMod {
     }
     fn process_as(
         &self,
-        _store: &dyn PrincipalRead,
-        _client: &Principal,
-        _padata: Option<&[PaData]>,
-        _ikey: &ProtocolKey,
+        store: &dyn PrincipalRead,
+        client: &Principal,
+        padata: Option<&[PaData]>,
+        ikey: &ProtocolKey,
         _etype: krb5_crypto::EncryptionType,
         _as_req_der: &[u8],
         _body_der: &[u8],
-        _cname: &PrincipalName,
+        cname: &PrincipalName,
     ) -> Result<Option<PreauthAction>, Error> {
-        Ok(None)
+        if !client.requires_preauth {
+            return Ok(None);
+        }
+        let Some(blob) = crate::issue::extract_enc_timestamp(padata) else {
+            return Ok(None);
+        };
+        match crate::issue::verify_enc_timestamp(store, client, ikey, blob.as_ref()) {
+            Ok(()) => {
+                store.record_as_outcome(cname, true);
+                Ok(Some(PreauthAction::EncTsOk))
+            }
+            Err(e) => {
+                store.record_as_outcome(cname, false);
+                Err(e)
+            }
+        }
     }
 }
 
@@ -514,5 +531,26 @@ mod tests {
         *POLICY
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+
+    #[test]
+    fn enc_timestamp_registry_success_does_not_double_verify() {
+        let (store, _) = bootstrap_documented().unwrap();
+        let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+        let key = store
+            .get_name(&cname)
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let padata = vec![pa_enc_timestamp(&key).unwrap()];
+        let req = as_req(cname, TEST_REALM, 9, Some(padata)).unwrap();
+        crate::issue_as(&store, &req).expect("registry EncTsOk must not re-verify (replay)");
+        let replay = crate::issue_as(&store, &req).unwrap_err();
+        match replay {
+            Error::Protocol { code, .. } if code == krb5_types::err::REPEAT => {}
+            other => panic!("second AS must REPEAT, got {other:?}"),
+        }
     }
 }

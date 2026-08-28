@@ -290,19 +290,13 @@ fn issue_as_from(
             as_rep_key = k;
             skip_timestamp = true;
         }
+        Some(PreauthAction::EncTsOk) => {
+            skip_timestamp = true;
+        }
         None => {}
     }
     if client.requires_preauth && !skip_timestamp {
-        match extract_enc_timestamp(work_padata.as_deref()) {
-            None => return Err(preauth_required(store, &client)),
-            Some(blob) => match verify_enc_timestamp(store, &client, &ckey.key, blob.as_ref()) {
-                Ok(()) => store.record_as_outcome(&cname, true),
-                Err(e) => {
-                    store.record_as_outcome(&cname, false);
-                    return Err(e);
-                }
-            },
-        }
+        return Err(preauth_required(store, &client));
     }
 
     let sname = body
@@ -873,7 +867,7 @@ fn select_etype(
     Err(proto(err::ETYPE_NOSUPP, "no common etype"))
 }
 
-fn extract_enc_timestamp(padata: Option<&[PaData]>) -> Option<&OctetString> {
+pub(crate) fn extract_enc_timestamp(padata: Option<&[PaData]>) -> Option<&OctetString> {
     padata?.iter().find_map(|p| {
         if p.padata_type == pa::ENC_TIMESTAMP {
             Some(&p.padata_value)
@@ -893,7 +887,7 @@ fn extract_pa_tgs(padata: Option<&[PaData]>) -> Option<&OctetString> {
     })
 }
 
-fn verify_enc_timestamp(
+pub(crate) fn verify_enc_timestamp(
     store: &dyn PrincipalRead,
     client: &Principal,
     key: &ProtocolKey,
