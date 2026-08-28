@@ -7,10 +7,13 @@
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 
-use krb5_crypto::ProtocolKey;
+use krb5_crypto::{EncryptionType, ProtocolKey, kdb_decrypt_key};
 use krb5_gss::GssContext;
-use krb5_kdc::{Acl, SharedStore};
-use krb5_types::PrincipalName;
+use krb5_kdc::{
+    Acl, KDB_DISALLOW_ALL_TIX, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH, KeyEntry, Principal,
+    SharedStore,
+};
+use krb5_types::{PrincipalName, Ticket};
 
 use crate::AdminSession;
 use crate::Error;
@@ -251,14 +254,11 @@ fn handle_rpc(
 
     if gcred.proc == RPG_INIT || gcred.proc == RPG_CONTINUE {
         let token = r.opaque()?;
-        let (ctx, out_tok) = GssContext::accept_sec_context(
-            &token,
-            service_keys,
-            None,
-            Some(expected_server),
-            Some(expected_realm),
-        )
-        .map_err(|e| Error::Inner(e.to_string()))?;
+        // RPCSEC_GSS: MIT kadmin uses kadmin/admin; kpropd uses kiprop/host
+        // on program 2112 then 100423. Bind by service key, not sname.
+        let (ctx, out_tok) =
+            GssContext::accept_sec_context(&token, service_keys, None, None, Some(expected_realm))
+                .map_err(|e| Error::Inner(e.to_string()))?;
         *gss = Some(ctx);
         let mut body = XdrW::default();
         body.opaque(handle);
@@ -551,6 +551,26 @@ fn parse_gcred(data: &[u8]) -> Result<Gcred, Error> {
     })
 }
 
+const AT_ATTRFLAGS: u32 = 0;
+const AT_MAX_LIFE: u32 = 1;
+const AT_MAX_RENEW_LIFE: u32 = 2;
+const AT_EXP: u32 = 3;
+const AT_PW_EXP: u32 = 4;
+const AT_LAST_SUCCESS: u32 = 5;
+const AT_LAST_FAILED: u32 = 6;
+const AT_FAIL_AUTH_COUNT: u32 = 7;
+const AT_PRINC: u32 = 8;
+const AT_KEYDATA: u32 = 9;
+const AT_TL_DATA: u32 = 10;
+const AT_LEN: u32 = 11;
+const AT_MOD_PRINC: u32 = 12;
+const AT_MOD_TIME: u32 = 13;
+const AT_PW_LAST_CHANGE: u32 = 15;
+const AT_PW_POLICY: u32 = 16;
+const AT_PW_POLICY_SWITCH: u32 = 17;
+const AT_PW_HIST_KVNO: u32 = 18;
+const AT_PW_HIST: u32 = 19;
+
 fn dispatch_iprop(store: &SharedStore, proc: u32, args: &[u8]) -> Vec<u8> {
     match proc {
         IPROP_NULL => Vec::new(),
@@ -561,7 +581,7 @@ fn dispatch_iprop(store: &SharedStore, proc: u32, args: &[u8]) -> Vec<u8> {
                 .read()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let (status, last, entries) = g.iprop_get(last_sno);
-            encode_incr_result(status, last, &entries)
+            encode_incr_result(status, last, &entries, g.iprop_master_key().as_ref())
         }
         IPROP_FULL_RESYNC | IPROP_FULL_RESYNC_EXT => {
             let g = store
@@ -569,7 +589,7 @@ fn dispatch_iprop(store: &SharedStore, proc: u32, args: &[u8]) -> Vec<u8> {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             encode_fullresync(g.serial())
         }
-        _ => encode_incr_result(krb5_kdc::IPROP_FULL_RESYNC, 0, &[]),
+        _ => encode_incr_result(krb5_kdc::IPROP_FULL_RESYNC, 0, &[], None),
     }
 }
 
@@ -590,25 +610,120 @@ fn encode_utf8str(w: &mut XdrW, s: &str) {
     w.opaque(s.as_bytes());
 }
 
-fn encode_incr_update(w: &mut XdrW, e: &krb5_kdc::UlogEntry) {
+fn encode_incr_update(
+    w: &mut XdrW,
+    e: &krb5_kdc::UlogEntry,
+    mkey: Option<&krb5_crypto::ProtocolKey>,
+) {
     encode_utf8str(w, &e.name);
     w.u32(e.sno);
     w.u32(e.time);
     w.u32(0);
-    w.u32(0);
+    if e.deleted {
+        w.u32(0);
+    } else if let Some(p) = e.princ.as_ref() {
+        encode_kdbe(w, p, mkey);
+    } else {
+        w.u32(0);
+    }
     w.u32(u32::from(e.deleted));
     w.u32(1);
     w.u32(0);
     w.u32(0);
 }
 
-fn encode_incr_result(status: u32, last: u32, entries: &[krb5_kdc::UlogEntry]) -> Vec<u8> {
+fn encode_kdbe(w: &mut XdrW, p: &krb5_kdc::Principal, mkey: Option<&krb5_crypto::ProtocolKey>) {
+    let mut body = XdrW::default();
+    let mut n = 0u32;
+    body.u32(AT_ATTRFLAGS);
+    body.u32(p.attributes);
+    n += 1;
+    body.u32(AT_MAX_LIFE);
+    body.u32(u32::try_from(p.max_life).unwrap_or(0));
+    n += 1;
+    body.u32(AT_MAX_RENEW_LIFE);
+    body.u32(u32::try_from(p.max_renewable_life).unwrap_or(0));
+    n += 1;
+    body.u32(AT_EXP);
+    body.u32(p.expiration);
+    n += 1;
+    body.u32(AT_PW_EXP);
+    body.u32(p.pw_expire);
+    n += 1;
+    body.u32(AT_PRINC);
+    encode_utf8str(&mut body, &p.realm);
+    let comps: Vec<String> = p
+        .name
+        .name_string
+        .iter()
+        .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
+        .collect();
+    body.u32(u32::try_from(comps.len()).unwrap_or(0));
+    for c in &comps {
+        // MIT `KV5M_DATA` (`krb5_data.magic`).
+        body.u32((-1_760_647_422i32).cast_unsigned());
+        encode_utf8str(&mut body, c);
+    }
+    body.u32(u32::try_from(p.name.name_type).unwrap_or(0));
+    n += 1;
+    body.u32(AT_KEYDATA);
+    body.u32(u32::try_from(p.keys.len()).unwrap_or(0));
+    for k in &p.keys {
+        let salt = k.kdb_salt.clone().unwrap_or_else(|| p.salt.clone());
+        let salt_ty = k.salt_type.unwrap_or(0);
+        body.u32(2);
+        body.u32(k.kvno);
+        body.u32(2);
+        body.u32(u32::try_from(k.etype.to_iana()).unwrap_or(0));
+        body.u32(u32::try_from(salt_ty).unwrap_or(0));
+        body.u32(2);
+        let enc = mkey
+            .and_then(|m| krb5_crypto::kdb_encrypt_key(m, k.key.as_bytes()).ok())
+            .unwrap_or_else(|| k.key.as_bytes().to_vec());
+        body.opaque(&enc);
+        body.opaque(&salt);
+    }
+    n += 1;
+    body.u32(AT_LEN);
+    body.u32(p.db_entry_len);
+    n += 1;
+    let now = u32::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs()),
+    )
+    .unwrap_or(0);
+    body.u32(AT_PW_LAST_CHANGE);
+    body.u32(now);
+    n += 1;
+    body.u32(AT_MOD_PRINC);
+    encode_utf8str(&mut body, &p.realm);
+    body.u32(2);
+    body.u32((-1_760_647_422i32).cast_unsigned());
+    encode_utf8str(&mut body, "kadmin");
+    body.u32((-1_760_647_422i32).cast_unsigned());
+    encode_utf8str(&mut body, "admin");
+    body.u32(u32::try_from(krb5_types::PrincipalName::NT_SRV_INST).unwrap_or(2));
+    n += 1;
+    body.u32(AT_MOD_TIME);
+    body.u32(now);
+    n += 1;
+    w.u32(n);
+    w.b.extend_from_slice(&body.b);
+}
+
+fn encode_incr_result(
+    status: u32,
+    last: u32,
+    entries: &[krb5_kdc::UlogEntry],
+    mkey: Option<&krb5_crypto::ProtocolKey>,
+) -> Vec<u8> {
     let mut w = XdrW::default();
     encode_kdb_last(&mut w, last);
     let n = u32::try_from(entries.len()).unwrap_or(0);
     w.u32(n);
     for e in entries {
-        encode_incr_update(&mut w, e);
+        encode_incr_update(&mut w, e, mkey);
     }
     w.u32(status);
     w.b
@@ -619,6 +734,456 @@ fn encode_fullresync(last: u32) -> Vec<u8> {
     encode_kdb_last(&mut w, last);
     w.u32(krb5_kdc::IPROP_OK);
     w.b
+}
+
+/// Outcome of [`iprop_pull`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IpropPull {
+    /// MIT `update_status_t`.
+    pub status: u32,
+    /// `kdb_last_t.last_sno` from the reply.
+    pub last_sno: u32,
+    /// Entries applied into the replica store.
+    pub applied: usize,
+}
+
+/// RPCSEC_GSS IPROP_GET_UPDATES against MIT `kadmind` (program 100423).
+///
+/// # Errors
+///
+/// GSS, RPC, XDR, or crypto failures.
+#[allow(clippy::too_many_arguments)]
+pub fn iprop_pull(
+    stream: &mut TcpStream,
+    ticket: Ticket,
+    session: &ProtocolKey,
+    crealm: &krb5_types::Realm,
+    cname: &PrincipalName,
+    last_sno: u32,
+    last_sec: u32,
+    last_usec: u32,
+    store: &mut krb5_kdc::PrincipalStore,
+) -> Result<IpropPull, Error> {
+    let (mut ctx, token) = GssContext::init_sec_context(ticket, session, crealm, cname, true, None)
+        .map_err(|e| Error::Inner(e.to_string()))?;
+    let mut xid = 1u32;
+    let handle = rpcsec_init(stream, &mut ctx, session, &token, &mut xid)?;
+    let mut args = XdrW::default();
+    args.u32(last_sno);
+    args.u32(last_sec);
+    args.u32(last_usec);
+    let body = rpcsec_data(
+        stream,
+        &mut ctx,
+        &handle,
+        &mut xid,
+        1,
+        IPROP_PROG,
+        IPROP_VERS,
+        IPROP_GET_UPDATES,
+        &args.b,
+    )?;
+    let (status, last, entries) = decode_incr_result(&body, store.iprop_master_key().as_ref())?;
+    let n = entries.len();
+    if status == krb5_kdc::IPROP_OK && n > 0 {
+        store.apply_updates(&entries);
+    }
+    Ok(IpropPull {
+        status,
+        last_sno: last,
+        applied: if status == krb5_kdc::IPROP_OK { n } else { 0 },
+    })
+}
+
+fn rpcsec_init(
+    stream: &mut TcpStream,
+    ctx: &mut GssContext,
+    ticket_session: &ProtocolKey,
+    token: &[u8],
+    xid: &mut u32,
+) -> Result<Vec<u8>, Error> {
+    let mut cred = XdrW::default();
+    cred.u32(RPCSEC_GSS_VERS);
+    cred.u32(RPG_INIT);
+    cred.u32(0);
+    cred.u32(GSS_PRIVACY);
+    cred.opaque(&[]);
+    let mut arg = XdrW::default();
+    arg.opaque(token);
+    let rec = rpc_call_bytes(
+        *xid,
+        IPROP_PROG,
+        IPROP_VERS,
+        IPROP_NULL,
+        FLAVOR_GSS,
+        &cred.b,
+        FLAVOR_NONE,
+        &[],
+        &arg.b,
+    );
+    *xid = xid.wrapping_add(1);
+    write_record(stream, &rec).map_err(|e| Error::Inner(e.to_string()))?;
+    let reply = read_record(stream).map_err(|e| Error::Inner(e.to_string()))?;
+    let mut r = XdrR::new(&reply);
+    let _ = r.u32()?;
+    if r.u32()? != MSG_REPLY {
+        return Err(Error::Inner("rpcsec init not reply".into()));
+    }
+    if r.u32()? != MSG_ACCEPTED {
+        return Err(Error::Inner("rpcsec init denied".into()));
+    }
+    let verf_flavor = r.u32()?;
+    let verf = r.opaque()?;
+    if r.u32()? != SUCCESS {
+        return Err(Error::Inner("rpcsec init accept".into()));
+    }
+    let handle = r.opaque()?;
+    let major = r.u32()?;
+    let _minor = r.u32()?;
+    let window = r.u32()?;
+    let out = r.opaque()?;
+    if major != 0 {
+        return Err(Error::Inner(format!("rpcsec gss major {major}")));
+    }
+    if !out.is_empty() {
+        ctx.process_ap_rep(&out, ticket_session)
+            .map_err(|e| Error::Inner(format!("rpcsec ap-rep: {e}")))?;
+    }
+    // RFC 2203: INIT verifier is a MIC of the sequence window.
+    if verf_flavor == FLAVOR_GSS && !verf.is_empty() {
+        ctx.verify_mic(&window.to_be_bytes(), &verf)
+            .map_err(|e| Error::Inner(format!("rpcsec init mic: {e}")))?;
+    }
+    Ok(handle)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn rpcsec_data(
+    stream: &mut TcpStream,
+    ctx: &mut GssContext,
+    handle: &[u8],
+    xid: &mut u32,
+    seq: u32,
+    prog: u32,
+    vers: u32,
+    proc: u32,
+    args: &[u8],
+) -> Result<Vec<u8>, Error> {
+    let mut cred = XdrW::default();
+    cred.u32(RPCSEC_GSS_VERS);
+    cred.u32(RPG_DATA);
+    cred.u32(seq);
+    cred.u32(GSS_PRIVACY);
+    cred.opaque(handle);
+    let mut header = XdrW::default();
+    header.u32(*xid);
+    header.u32(MSG_CALL);
+    header.u32(RPC_VERSION);
+    header.u32(prog);
+    header.u32(vers);
+    header.u32(proc);
+    header.u32(FLAVOR_GSS);
+    header.opaque(&cred.b);
+    let mic = ctx
+        .get_mic(&header.b)
+        .map_err(|e| Error::Inner(format!("rpcsec mic: {e}")))?;
+    // MIT `xdr_rpc_gss_wrap_data`: gss_wrap(xdr_u_int32(seq) || args).
+    // libgssrpc unwraps RRC=0 (same as the acceptor path above).
+    let mut inner = Vec::with_capacity(4 + args.len());
+    inner.extend_from_slice(&seq.to_be_bytes());
+    inner.extend_from_slice(args);
+    let wrap = ctx
+        .wrap_with_rrc(&inner, 0)
+        .map_err(|e| Error::Inner(format!("rpcsec wrap: {e}")))?;
+    let mut arg = XdrW::default();
+    arg.opaque(&wrap);
+    let rec = rpc_call_bytes(
+        *xid, prog, vers, proc, FLAVOR_GSS, &cred.b, FLAVOR_GSS, &mic, &arg.b,
+    );
+    *xid = xid.wrapping_add(1);
+    write_record(stream, &rec).map_err(|e| Error::Inner(e.to_string()))?;
+    let reply = read_record(stream).map_err(|e| Error::Inner(e.to_string()))?;
+    let mut r = XdrR::new(&reply);
+    let _ = r.u32()?;
+    if r.u32()? != MSG_REPLY {
+        return Err(Error::Inner("rpcsec data not reply".into()));
+    }
+    if r.u32()? != MSG_ACCEPTED {
+        return Err(Error::Inner("rpcsec data denied".into()));
+    }
+    let verf_flavor = r.u32()?;
+    let verf = r.opaque()?;
+    let accept_stat = r.u32()?;
+    if accept_stat != SUCCESS {
+        return Err(Error::Inner(format!("rpcsec data accept {accept_stat}")));
+    }
+    if verf_flavor == FLAVOR_GSS {
+        ctx.verify_mic(&seq.to_be_bytes(), &verf)
+            .map_err(|e| Error::Inner(format!("rpcsec reply mic: {e}")))?;
+    }
+    let wrapped = r.opaque()?;
+    let plain = ctx
+        .unwrap(&wrapped)
+        .map_err(|e| Error::Inner(format!("rpcsec unwrap: {e}")))?;
+    if plain.len() < 4 {
+        return Err(Error::Inner("rpcsec wrap seq".into()));
+    }
+    let got = u32::from_be_bytes(
+        plain[..4]
+            .try_into()
+            .map_err(|_| Error::Inner("rpcsec wrap seq".into()))?,
+    );
+    if got != seq {
+        return Err(Error::Inner(format!("rpcsec wrap seq {got} want {seq}")));
+    }
+    Ok(plain[4..].to_vec())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn rpc_call_bytes(
+    xid: u32,
+    prog: u32,
+    vers: u32,
+    proc: u32,
+    cred_flavor: u32,
+    cred: &[u8],
+    verf_flavor: u32,
+    verf: &[u8],
+    args: &[u8],
+) -> Vec<u8> {
+    let mut w = XdrW::default();
+    w.u32(xid);
+    w.u32(MSG_CALL);
+    w.u32(RPC_VERSION);
+    w.u32(prog);
+    w.u32(vers);
+    w.u32(proc);
+    w.u32(cred_flavor);
+    w.opaque(cred);
+    w.u32(verf_flavor);
+    w.opaque(verf);
+    w.b.extend_from_slice(args);
+    w.b
+}
+
+fn decode_incr_result(
+    b: &[u8],
+    mkey: Option<&ProtocolKey>,
+) -> Result<(u32, u32, Vec<krb5_kdc::UlogEntry>), Error> {
+    let mut r = XdrR::new(b);
+    let last = r.u32()?;
+    let _sec = r.u32()?;
+    let _usec = r.u32()?;
+    let n = r.u32()? as usize;
+    let mut entries = Vec::with_capacity(n.min(1024));
+    for _ in 0..n {
+        entries.push(decode_incr_update(&mut r, mkey)?);
+    }
+    let status = r.u32()?;
+    Ok((status, last, entries))
+}
+
+fn decode_incr_update(
+    r: &mut XdrR<'_>,
+    mkey: Option<&ProtocolKey>,
+) -> Result<krb5_kdc::UlogEntry, Error> {
+    let name_raw = r.opaque()?;
+    let name = String::from_utf8_lossy(&name_raw).into_owned();
+    let sno = r.u32()?;
+    let time = r.u32()?;
+    let _usec = r.u32()?;
+    let princ = decode_kdbe(r, mkey, &name)?;
+    let deleted = r.bool()?;
+    let _commit = r.bool()?;
+    let seen = r.u32()?;
+    for _ in 0..seen {
+        let _ = r.opaque()?;
+    }
+    let _futures = r.opaque()?;
+    Ok(krb5_kdc::UlogEntry {
+        sno,
+        time,
+        name,
+        deleted,
+        princ: if deleted { None } else { princ },
+    })
+}
+
+fn decode_kdbe(
+    r: &mut XdrR<'_>,
+    mkey: Option<&ProtocolKey>,
+    fallback: &str,
+) -> Result<Option<Principal>, Error> {
+    let n = r.u32()? as usize;
+    if n == 0 {
+        return Ok(None);
+    }
+    let mut attributes = 0u32;
+    let mut max_life = 0u64;
+    let mut max_renewable_life = 0u64;
+    let mut expiration = 0u32;
+    let mut pw_expire = 0u32;
+    let mut last_success = 0u32;
+    let mut last_failed = 0u32;
+    let mut fail_auth_count = 0u32;
+    let mut db_entry_len = KDB_V1_BASE_LENGTH;
+    let mut pw_policy = None;
+    let mut parsed_name: Option<(PrincipalName, String)> = None;
+    let mut keys = Vec::new();
+    for _ in 0..n {
+        let tag = r.u32()?;
+        match tag {
+            AT_ATTRFLAGS => attributes = r.u32()?,
+            AT_MAX_LIFE => max_life = u64::from(r.u32()?),
+            AT_MAX_RENEW_LIFE => max_renewable_life = u64::from(r.u32()?),
+            AT_EXP => expiration = r.u32()?,
+            AT_PW_EXP => pw_expire = r.u32()?,
+            AT_LAST_SUCCESS => last_success = r.u32()?,
+            AT_LAST_FAILED => last_failed = r.u32()?,
+            AT_FAIL_AUTH_COUNT => fail_auth_count = r.u32()?,
+            AT_PRINC => parsed_name = Some(decode_princ(r)?),
+            AT_KEYDATA => keys = decode_keydata(r, mkey)?,
+            AT_TL_DATA => {
+                let nt = r.u32()? as usize;
+                for _ in 0..nt {
+                    let _ty = r.u32()?;
+                    let _ = r.opaque()?;
+                }
+            }
+            AT_LEN => db_entry_len = r.u32()?,
+            AT_PW_LAST_CHANGE | AT_MOD_TIME | AT_PW_HIST_KVNO => {
+                let _ = r.u32()?;
+            }
+            AT_PW_POLICY => {
+                let s = r.opaque()?;
+                pw_policy = Some(String::from_utf8_lossy(&s).into_owned());
+            }
+            AT_PW_POLICY_SWITCH => {
+                let _ = r.bool()?;
+            }
+            AT_MOD_PRINC => {
+                let _ = decode_princ(r)?;
+            }
+            AT_PW_HIST => {
+                let nh = r.u32()? as usize;
+                for _ in 0..nh {
+                    let _ = decode_keydata(r, None)?;
+                }
+            }
+            _ => {
+                let _ = r.opaque()?;
+            }
+        }
+    }
+    let (name, realm) = if let Some(v) = parsed_name {
+        v
+    } else {
+        parse_unparsed(fallback)?
+    };
+    let requires_preauth = attributes & KDB_REQUIRES_PRE_AUTH != 0;
+    let locked = attributes & KDB_DISALLOW_ALL_TIX != 0;
+    let salt = name.default_salt(&realm);
+    Ok(Some(Principal {
+        name,
+        realm,
+        keys,
+        salt,
+        requires_preauth,
+        max_life,
+        locked,
+        pw_expire,
+        attributes,
+        max_renewable_life,
+        expiration,
+        last_success,
+        last_failed,
+        fail_auth_count,
+        mkvno: 1,
+        db_entry_len,
+        tl_data: Vec::new(),
+        e_data: Vec::new(),
+        rid: 0,
+        s4u_allowed_from: Vec::new(),
+        s4u_allowed_to: Vec::new(),
+        pw_policy,
+    }))
+}
+
+fn decode_princ(r: &mut XdrR<'_>) -> Result<(PrincipalName, String), Error> {
+    let realm_b = r.opaque()?;
+    let realm = String::from_utf8_lossy(&realm_b).into_owned();
+    let n = r.u32()? as usize;
+    let mut comps = Vec::with_capacity(n);
+    for _ in 0..n {
+        let _magic = r.u32()?;
+        let c = r.opaque()?;
+        comps.push(String::from_utf8_lossy(&c).into_owned());
+    }
+    let ntype = r.u32()?.cast_signed();
+    let refs: Vec<&str> = comps.iter().map(String::as_str).collect();
+    let name = PrincipalName::try_new(ntype, refs).map_err(|e| Error::Inner(e.to_string()))?;
+    Ok((name, realm))
+}
+
+fn parse_unparsed(s: &str) -> Result<(PrincipalName, String), Error> {
+    let (left, realm) = s.split_once('@').unwrap_or((s, ""));
+    let parts: Vec<&str> = left.split('/').collect();
+    let ntype = if parts.len() > 1 {
+        PrincipalName::NT_SRV_HST
+    } else {
+        PrincipalName::NT_PRINCIPAL
+    };
+    let name = PrincipalName::try_new(ntype, parts).map_err(|e| Error::Inner(e.to_string()))?;
+    Ok((name, realm.to_owned()))
+}
+
+fn decode_keydata(r: &mut XdrR<'_>, mkey: Option<&ProtocolKey>) -> Result<Vec<KeyEntry>, Error> {
+    let n = r.u32()? as usize;
+    let mut keys = Vec::with_capacity(n.min(16));
+    for _ in 0..n {
+        let ver = r.u32()?;
+        let kvno = r.u32()?;
+        let n_enc = r.u32()? as usize;
+        let mut enctypes = Vec::with_capacity(n_enc);
+        for _ in 0..n_enc {
+            enctypes.push(r.u32()?.cast_signed());
+        }
+        let n_cont = r.u32()? as usize;
+        let mut contents = Vec::with_capacity(n_cont);
+        for _ in 0..n_cont {
+            contents.push(r.opaque()?);
+        }
+        let Some(et) = enctypes.first().copied() else {
+            continue;
+        };
+        let Ok(etype) = EncryptionType::from_iana(et).or_else(|_| EncryptionType::known(et)) else {
+            continue;
+        };
+        let Some(raw_enc) = contents.first() else {
+            continue;
+        };
+        let raw = if let Some(m) = mkey {
+            kdb_decrypt_key(m, raw_enc).map_err(|e| Error::Inner(e.to_string()))?
+        } else {
+            raw_enc.clone()
+        };
+        let Ok(key) = ProtocolKey::from_bytes(etype, &raw) else {
+            continue;
+        };
+        let (salt_type, kdb_salt) = if ver >= 2 {
+            (enctypes.get(1).copied(), contents.get(1).cloned())
+        } else {
+            (None, None)
+        };
+        keys.push(KeyEntry {
+            etype,
+            key,
+            kvno,
+            salt_type,
+            kdb_salt,
+        });
+    }
+    Ok(keys)
 }
 
 fn dispatch_kadm5(
@@ -1812,28 +2377,28 @@ mod tests {
         delta.u32(0);
         delta.u32(0);
         let out = dispatch_iprop(&store, IPROP_GET_UPDATES, &delta.b);
+        assert!(
+            out.windows(b"iproprpc".len()).any(|w| w == b"iproprpc"),
+            "GET_UPDATES delta must name the new principal"
+        );
+        assert!(
+            out.windows(4).any(|w| w == AT_KEYDATA.to_be_bytes()),
+            "kdb_incr_update_t must carry AT_KEYDATA for MIT ulog_replay"
+        );
         let mut d = XdrR::new(&out);
         let _ = d.u32().unwrap();
         let _ = d.u32().unwrap();
         let _ = d.u32().unwrap();
-        let n = d.u32().unwrap();
-        assert!(n >= 1);
-        let mut names = Vec::new();
-        for _ in 0..n {
-            names.push(String::from_utf8_lossy(&d.opaque().unwrap()).into_owned());
-            let _ = d.u32();
-            let _ = d.u32();
-            let _ = d.u32();
-            let _ = d.u32();
-            let _ = d.u32();
-            let _ = d.u32();
-            let _ = d.u32();
-            let _ = d.u32();
-        }
-        assert_eq!(d.u32().unwrap(), krb5_kdc::IPROP_OK);
+        assert!(d.u32().unwrap() >= 1);
+
+        let (st, last2, entries) = decode_incr_result(&out, None).unwrap();
+        assert_eq!(st, krb5_kdc::IPROP_OK);
+        assert!(last2 >= last);
         assert!(
-            names.iter().any(|s| s.contains("iproprpc")),
-            "GET_UPDATES delta must name the new principal: {names:?}"
+            entries
+                .iter()
+                .any(|e| e.name.contains("iproprpc") && e.princ.is_some()),
+            "decode must recover the new principal: {entries:?}"
         );
     }
 }

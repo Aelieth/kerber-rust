@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MIT iprop both ways vs Rust kadmind (program 100423) + full-resync kprop.
+# MIT iprop serial-delta both ways, then MIT kinit of the *new* principal.
 # Isolated: docker --entrypoint sleep; never touches host /etc/krb5.conf.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -39,7 +39,7 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 2
 fi
 
-cargo build -p krb5-kdc --bin krb5-kdc -p krb5-admin --bin krb5-kadmind --bin krb5-kprop --bin krb5-kpropd
+cargo build -p krb5-kdc --bin krb5-kdc -p krb5-admin --bin krb5-kadmind --bin krb5-kprop --bin krb5-kpropd --bin krb5-iprop-pull
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
@@ -54,10 +54,11 @@ docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --hostname testhost.kerber.test --entrypoint sleep "$IMAGE" 3600 >/dev/null
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
+docker exec "$NAME" sh -c 'grep -v testhost.kerber.test /etc/hosts >/tmp/hosts.new; echo "127.0.0.1 testhost.kerber.test testhost" >>/tmp/hosts.new; cat /tmp/hosts.new >/etc/hosts'
 
-if ! docker exec "$NAME" sh -c 'command -v kpropd >/dev/null && command -v kprop >/dev/null'; then
-    log "iprop.gate" "error" ',"error":"kprop/kpropd missing"'
-    echo "kprop/kpropd missing" >"$SCRATCH/iprop-unavailable.log"
+if ! docker exec "$NAME" sh -c 'command -v kpropd >/dev/null && command -v kadmind >/dev/null'; then
+    log "iprop.gate" "error" ',"error":"kpropd/kadmind missing"'
+    echo "kpropd/kadmind missing" >"$SCRATCH/iprop-unavailable.log"
     exit 2
 fi
 
@@ -65,7 +66,8 @@ docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc
 docker cp target/debug/krb5-kadmind "$NAME":/tmp/krb5-kadmind
 docker cp target/debug/krb5-kprop "$NAME":/tmp/krb5-kprop
 docker cp target/debug/krb5-kpropd "$NAME":/tmp/krb5-kpropd
-docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kadmind /tmp/krb5-kprop /tmp/krb5-kpropd
+docker cp target/debug/krb5-iprop-pull "$NAME":/tmp/krb5-iprop-pull
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kadmind /tmp/krb5-kprop /tmp/krb5-kpropd /tmp/krb5-iprop-pull
 
 docker exec "$NAME" sh -c 'cat >/tmp/iprop-krb5.conf <<EOF
 [libdefaults]
@@ -76,12 +78,15 @@ docker exec "$NAME" sh -c 'cat >/tmp/iprop-krb5.conf <<EOF
     default_ccache_name = FILE:/tmp/krb5cc_iprop
 [realms]
     KERBER.TEST = {
-        kdc = 127.0.0.1
-        admin_server = 127.0.0.1
+        kdc = testhost.kerber.test
+        admin_server = testhost.kerber.test
+        iprop_enable = true
+        iprop_port = 749
+        iprop_slave_poll = 10
     }
 EOF'
 
-echo "==== Rust KDC + kadmind (iprop program 100423) ===="
+echo "==== A: Rust master → MIT kpropd -A serial-delta ===="
 docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
     -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
@@ -89,7 +94,7 @@ docker exec -d \
     -e KRB5_KDC_STASH=/tmp/stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_EXPORT_KEYTAB=/tmp/host.keytab \
-    "$NAME" sh -c '/tmp/krb5-kdc --test-realm 127.0.0.1:88 >/tmp/kdc.log 2>&1'
+    "$NAME" sh -c '/tmp/krb5-kdc --test-realm 0.0.0.0:88 >/tmp/kdc.log 2>&1'
 ok=0
 for _ in $(seq 1 80); do
     if docker exec "$NAME" grep -q '^listening ' /tmp/kdc.log 2>/dev/null; then
@@ -103,11 +108,11 @@ if [ "$ok" != 1 ]; then
     log "iprop.gate" "error" ',"error":"kdc did not listen"'
     exit 1
 fi
-
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
-    "$NAME" sh -c '/tmp/krb5-kadmind --test-realm 127.0.0.1:749 >/tmp/kadmind.log 2>&1'
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" sh -c '/tmp/krb5-kadmind 0.0.0.0:749 >/tmp/kadmind.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
     if docker exec "$NAME" grep -q '^listening ' /tmp/kadmind.log 2>/dev/null; then
@@ -122,66 +127,113 @@ if [ "$ok" != 1 ]; then
     exit 1
 fi
 
-echo "==== MIT kpropd -A probes IPROP_PROG ===="
+docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    "$NAME" sh -c 'printf "adminpassword\n" | kinit admin@KERBER.TEST'
+docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q \
+    'addprinc -randkey kiprop/testhost.kerber.test' || true
+docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q \
+    'ktadd -k /tmp/iprop.keytab kiprop/testhost.kerber.test host/testhost.kerber.test'
+
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec "$NAME" kdb5_util create -s -P masterpassword
-docker exec "$NAME" sh -c 'printf "host/testhost.kerber.test@KERBER.TEST\n" >/tmp/kpropd.acl'
+docker exec "$NAME" sh -c 'printf "host/testhost.kerber.test@KERBER.TEST\nkiprop/testhost.kerber.test@KERBER.TEST\n" >/tmp/kpropd.acl'
 kill_comm kpropd
 docker exec -d \
     -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
-    -e KRB5_KTNAME=/tmp/host.keytab \
-    "$NAME" sh -c 'kpropd -S -d -A 127.0.0.1 -a /tmp/kpropd.acl -P 754 -f /tmp/from_kprop.dump -p "$(command -v kdb5_util)" >/tmp/kpropd-iprop.log 2>&1'
-sleep 2
-IPROP_LOG="$(docker exec "$NAME" cat /tmp/kpropd-iprop.log 2>/dev/null || true)"
-echo "$IPROP_LOG"
-if echo "$IPROP_LOG" | grep -qiE 'Program not registered|PROG_UNAVAIL|rpc program'; then
-    log "iprop.gate" "error" ',"error":"MIT kpropd -A: IPROP program not served"'
-    exit 1
-fi
-
-echo "==== full-resync: Rust kprop → MIT kpropd, MIT kinit ===="
-kill_comm kpropd
-docker exec -d \
-    -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
-    -e KRB5_KTNAME=/tmp/host.keytab \
-    "$NAME" sh -c 'kpropd -S -d -a /tmp/kpropd.acl -P 754 -f /tmp/from_kprop.dump -p "$(command -v kdb5_util)" >/tmp/kpropd.log 2>&1'
+    -e KRB5_KTNAME=/tmp/iprop.keytab \
+    "$NAME" sh -c 'kpropd -S -d -A testhost.kerber.test -a /tmp/kpropd.acl -P 754 -s /tmp/iprop.keytab -f /tmp/from_kprop.dump -p "$(command -v kdb5_util)" >/tmp/kpropd-iprop.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
-    if docker exec "$NAME" grep -Eq 'ready|waiting for a kprop' /tmp/kpropd.log 2>/dev/null; then
+    if docker exec "$NAME" grep -Eq 'ready|waiting for a kprop|iprop' /tmp/kpropd-iprop.log 2>/dev/null; then
         ok=1
         break
     fi
     sleep 0.25
 done
-if [ "$ok" != 1 ]; then
-    docker exec "$NAME" cat /tmp/kpropd.log >&2 || true
-    log "iprop.gate" "error" ',"error":"MIT kpropd did not listen"'
+sleep 1
+IPROP_LOG="$(docker exec "$NAME" cat /tmp/kpropd-iprop.log 2>/dev/null || true)"
+echo "$IPROP_LOG"
+if echo "$IPROP_LOG" | grep -qiE 'Program not registered|PROG_UNAVAIL'; then
+    log "iprop.gate" "error" ',"error":"MIT kpropd -A: IPROP program not served"'
     exit 1
 fi
+
+echo "==== hosts / listeners ===="
+docker exec "$NAME" cat /etc/hosts || true
+docker exec "$NAME" sh -c 'ss -lnt 2>/dev/null || netstat -lnt 2>/dev/null || true'
+
+echo "==== wait kpropd FULL_RESYNC request ===="
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" grep -Eq 'Full resync needed|Calling iprop_get_updates' /tmp/kpropd-iprop.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.5
+done
+echo "==== kpropd-iprop.log (pre-kprop) ===="
+docker exec "$NAME" cat /tmp/kpropd-iprop.log 2>/dev/null || true
+
+echo "==== first contact: Rust kprop -i dump (ipropx last_sno) ===="
 KPROP="$(docker exec \
     -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
-    -e KRB5_KPROP_KEYTAB=/tmp/host.keytab \
-    "$NAME" /tmp/krb5-kprop -P 754 -s /tmp/host.keytab -n testhost.kerber.test 127.0.0.1 2>&1 || true)"
+    -e KRB5_KPROP_KEYTAB=/tmp/iprop.keytab \
+    "$NAME" /tmp/krb5-kprop -i -P 754 -s /tmp/iprop.keytab -n testhost.kerber.test testhost.kerber.test 2>&1 || true)"
 echo "$KPROP"
 echo "$KPROP" | grep -q 'kprop ok'
 ok=0
 for _ in $(seq 1 40); do
-    if docker exec "$NAME" test -s /tmp/from_kprop.dump 2>/dev/null; then
+    if docker exec "$NAME" kadmin.local -q 'getprinc user' 2>/dev/null | grep -q 'Principal: user@KERBER.TEST'; then
         ok=1
         break
     fi
     sleep 0.25
 done
 if [ "$ok" != 1 ]; then
-    log "iprop.gate" "error" ',"error":"MIT kpropd did not write dump"'
+    docker exec "$NAME" kadmin.local -q 'getprinc user' 2>&1 || true
+    docker exec "$NAME" cat /tmp/kpropd-iprop.log >&2 || true
+    log "iprop.gate" "error" ',"error":"MIT replica missing user after full-resync kprop"'
     exit 1
 fi
+
+echo "==== mutate master: MIT kadmin addprinc extra ===="
+ADD="$(docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw extra-secret extra' 2>&1 || true)"
+echo "$ADD"
+echo "$ADD" | grep -qi 'created'
+
+echo "==== wait MIT kpropd -A GET_UPDATES serial-delta ===="
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" kadmin.local -q 'getprinc extra' 2>/dev/null | grep -q 'Principal: extra@KERBER.TEST'; then
+        ok=1
+        break
+    fi
+    sleep 1
+done
+echo "==== kpropd-iprop.log (delta) ===="
+docker exec "$NAME" cat /tmp/kpropd-iprop.log 2>/dev/null || true
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" kadmin.local -q 'getprinc extra' 2>&1 || true
+    docker exec "$NAME" kadmin.local -q 'getprinc user' 2>&1 || true
+    docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf "$NAME" kdb5_util dump /tmp/after-delta.dump 2>&1 || true
+    echo "==== replica dump extra ===="
+    docker exec "$NAME" grep extra /tmp/after-delta.dump 2>/dev/null || true
+    docker exec "$NAME" head -3 /tmp/after-delta.dump 2>/dev/null || true
+    echo "==== kadmind.log ===="
+    docker exec "$NAME" cat /tmp/kadmind.log 2>/dev/null || true
+    log "iprop.gate" "error" ',"error":"MIT replica missing extra after serial-delta (GET_UPDATES)"'
+    exit 1
+fi
+
+echo "==== MIT kinit extra on replica after delta ===="
 kill_comm krb5-kdc
 kill_comm krb5-kadmind
-kill_comm kpropd
 free=0
 for _ in $(seq 1 40); do
     if ! docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.2)" 2>/dev/null; then
@@ -190,7 +242,6 @@ for _ in $(seq 1 40); do
     fi
     sleep 0.25
 done
-docker exec "$NAME" sh -c 'kdb5_util load /tmp/from_kprop.dump >/tmp/kdb-load.log 2>&1 || true'
 docker exec "$NAME" sh -c 'krb5kdc; sleep 0.4' >/dev/null 2>&1 || true
 ok=0
 for _ in $(seq 1 40); do
@@ -201,65 +252,113 @@ for _ in $(seq 1 40); do
     sleep 0.25
 done
 if [ "$ok" != 1 ]; then
-    docker exec "$NAME" cat /tmp/kdb-load.log >&2 || true
-    log "iprop.gate" "error" ',"error":"MIT krb5kdc did not listen"'
+    log "iprop.gate" "error" ',"error":"MIT krb5kdc did not listen after delta"'
     exit 1
 fi
 docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
-    "$NAME" sh -c 'printf "userpassword\n" | kinit user@KERBER.TEST'
+    "$NAME" sh -c 'printf "extra-secret\n" | kinit extra@KERBER.TEST'
 KLIST="$(docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf "$NAME" klist)"
 echo "$KLIST"
-echo "$KLIST" | grep -q 'user@KERBER.TEST'
+echo "$KLIST" | grep -q 'extra@KERBER.TEST'
 kill_comm krb5kdc
+kill_comm kpropd
 
-echo "==== MIT kprop → Rust kpropd (other direction), MIT kinit vs Rust replica ===="
+echo "==== B: MIT kadmind master → Rust slave GET_UPDATES, MIT kinit extra2 ===="
+docker exec "$NAME" sh -c 'cat >/tmp/kadm5.acl <<EOF
+*/admin@KERBER.TEST *
+admin@KERBER.TEST *
+kiprop/testhost.kerber.test@KERBER.TEST p
+EOF'
+docker exec "$NAME" sh -c 'cat >/tmp/kdc.conf <<EOF
+[kdcdefaults]
+[realms]
+    KERBER.TEST = {
+        database_name = /var/lib/krb5kdc/principal
+        acl_file = /tmp/kadm5.acl
+        key_stash_file = /var/lib/krb5kdc/.k5.KERBER.TEST
+        kadmind_port = 749
+        kdc_ports = 88
+        master_key_type = aes256-cts-hmac-sha384-192
+        supported_enctypes = aes256-cts-hmac-sha384-192:normal aes128-cts-hmac-sha256-128:normal aes256-cts-hmac-sha1-96:normal aes128-cts-hmac-sha1-96:normal
+        iprop_enable = true
+        iprop_port = 2121
+        iprop_listen = 0.0.0.0:2121
+        iprop_master_ulogsize = 1000
+        iprop_slave_poll = 10
+    }
+EOF'
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
-docker exec "$NAME" kdb5_util create -s -P masterpassword
-docker exec "$NAME" kadmin.local -q 'addprinc -pw userpassword user'
-HN="$(docker exec "$NAME" hostname)"
-docker exec "$NAME" kadmin.local -q "addprinc -randkey host/localhost"
-docker exec "$NAME" kadmin.local -q "addprinc -randkey host/${HN}"
-docker exec "$NAME" kadmin.local -q "ktadd -k /tmp/mit.host.keytab host/localhost host/${HN}"
-docker exec "$NAME" kdb5_util dump /tmp/mit.dump
+docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf "$NAME" kdb5_util create -s -P masterpassword
+docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf "$NAME" kadmin.local -q 'addprinc -pw userpassword user'
+docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf "$NAME" kadmin.local -q 'addprinc -randkey kiprop/testhost.kerber.test'
+docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf "$NAME" kadmin.local -q 'addprinc -randkey host/testhost.kerber.test'
+docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf "$NAME" kadmin.local -q 'ktadd -k /tmp/mit-iprop.keytab kiprop/testhost.kerber.test host/testhost.kerber.test'
 kill_comm krb5kdc
-docker exec "$NAME" sh -c 'krb5kdc; sleep 0.3' >/dev/null 2>&1 || true
-docker exec -d \
-    -e KRB5_MASTER_PASSWORD=masterpassword \
-    -e KRB5_KPROP_KEYTAB=/tmp/mit.host.keytab \
-    -e KRB5_KDC_DB=/tmp/replica \
-    -e KRB5_KDC_STASH=/tmp/replica.stash \
-    -e KRB5_TEST_REALM=KERBER.TEST \
-    "$NAME" sh -c '/tmp/krb5-kpropd 127.0.0.1:754 >/tmp/rust-kpropd.log 2>&1'
+kill_comm kadmind
+docker exec -d -e KRB5_KDC_PROFILE=/tmp/kdc.conf -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    "$NAME" sh -c 'krb5kdc; kadmind -nofork >/tmp/mit-kadmind.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
-    if docker exec "$NAME" grep -q '^listening ' /tmp/rust-kpropd.log 2>/dev/null; then
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.3)" 2>/dev/null \
+        && docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null \
+        && docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',2121),0.3)" 2>/dev/null; then
         ok=1
         break
     fi
     sleep 0.25
 done
 if [ "$ok" != 1 ]; then
-    docker exec "$NAME" cat /tmp/rust-kpropd.log >&2 || true
-    log "iprop.gate" "error" ',"error":"rust kpropd did not listen"'
+    docker exec "$NAME" cat /tmp/mit-kadmind.log >&2 || true
+    docker exec "$NAME" sh -c 'ss -lnt 2>/dev/null || netstat -lnt 2>/dev/null || true' >&2
+    log "iprop.gate" "error" ',"error":"MIT krb5kdc/kadmind did not listen"'
     exit 1
 fi
-KPROP2="$(docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
-    "$NAME" kprop -f /tmp/mit.dump -s /tmp/mit.host.keytab -P 754 -d localhost 2>&1 || true)"
-echo "$KPROP2"
-echo "$KPROP2" | grep -q 'SUCCEEDED'
+echo "==== MIT iprop dump (first contact) ===="
+DUMP_OUT="$(docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf \
+    "$NAME" kdb5_util dump -i1 /tmp/mit.dump 2>&1 || true)"
+echo "$DUMP_OUT"
+HEAD="$(docker exec "$NAME" head -1 /tmp/mit.dump 2>/dev/null || true)"
+echo "$HEAD"
+echo "$HEAD" | grep -q '^ipropx '
+SNO="$(echo "$HEAD" | awk '{print $3}')"
+SEC="$(echo "$HEAD" | awk '{print $4}')"
+USEC="$(echo "$HEAD" | awk '{print $5}')"
+echo "dump last_sno=$SNO last_time=$SEC $USEC"
+LOAD="$(docker exec \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_DB=/tmp/rust-replica \
+    -e KRB5_KDC_STASH=/tmp/rust-replica.stash \
+    "$NAME" /tmp/krb5-iprop-pull --load-dump /tmp/mit.dump 2>&1 || true)"
+echo "$LOAD"
+echo "$LOAD" | grep -q 'iprop dump'
+
+echo "==== mutate MIT master: extra2 ===="
+docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf \
+    "$NAME" kadmin.local -q 'addprinc -pw extra2-secret extra2'
+
+echo "==== MIT kinit -k kiprop (keytab probe) ===="
+docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    "$NAME" kinit -k -t /tmp/mit-iprop.keytab kiprop/testhost.kerber.test 2>&1 || true
+docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf "$NAME" klist 2>&1 || true
+echo "==== Rust iprop-pull vs MIT kadmind serial-delta ===="
+PULL="$(docker exec \
+    -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_DB=/tmp/rust-replica \
+    -e KRB5_KDC_STASH=/tmp/rust-replica.stash \
+    -e KRB5_KPROP_KEYTAB=/tmp/mit-iprop.keytab \
+    -e KRB5_KDC=127.0.0.1 \
+    -e KRB5_IPROP_HOST=testhost.kerber.test \
+    "$NAME" /tmp/krb5-iprop-pull --last-sno "$SNO" --last-time "$SEC" "$USEC" testhost.kerber.test:2121 2>&1 || true)"
+echo "$PULL"
+echo "==== mit-kadmind.log ===="
+docker exec "$NAME" cat /tmp/mit-kadmind.log 2>/dev/null || true
+echo "$PULL" | grep -q 'iprop pull ok'
 kill_comm krb5kdc
-kill_comm krb5-kpropd
-free=0
-for _ in $(seq 1 40); do
-    if ! docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.2)" 2>/dev/null; then
-        free=1
-        break
-    fi
-    sleep 0.25
-done
+kill_comm kadmind
 docker exec -d \
-    -e KRB5_KDC_DB=/tmp/replica \
-    -e KRB5_KDC_STASH=/tmp/replica.stash \
+    -e KRB5_KDC_DB=/tmp/rust-replica \
+    -e KRB5_KDC_STASH=/tmp/rust-replica.stash \
     "$NAME" sh -c '/tmp/krb5-kdc 127.0.0.1:88 >/tmp/rust-replica.log 2>&1'
 ok=0
 for _ in $(seq 1 80); do
@@ -271,15 +370,14 @@ for _ in $(seq 1 80); do
 done
 if [ "$ok" != 1 ]; then
     docker exec "$NAME" cat /tmp/rust-replica.log >&2 || true
-    echo "MIT kprop to rust replica did not yield a listening KDC" >"$SCRATCH/phase4-mit.err"
-    log "iprop.gate" "error" ',"error":"rust replica did not listen after MIT kprop"'
+    log "iprop.gate" "error" ',"error":"rust replica did not listen after iprop pull"'
     exit 1
 fi
 docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
-    "$NAME" sh -c 'printf "userpassword\n" | kinit user@KERBER.TEST'
+    "$NAME" sh -c 'printf "extra2-secret\n" | kinit extra2@KERBER.TEST'
 KLIST2="$(docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf "$NAME" klist)"
 echo "$KLIST2"
-echo "$KLIST2" | grep -q 'user@KERBER.TEST'
+echo "$KLIST2" | grep -q 'extra2@KERBER.TEST'
 
-log "iprop.gate" "ok" ',"op":"iprop-probe+kprop-both-ways+kinit"'
+log "iprop.gate" "ok" ',"op":"kpropd-A-delta-kinit-extra+mit-kadmind-pull-kinit-extra2"'
 exit 0

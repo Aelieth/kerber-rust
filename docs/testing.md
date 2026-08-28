@@ -155,9 +155,10 @@ when that oracle is absent.
   against `krb5-kadmind`; `addprinc -policy` then wrong `kinit` and a
   good password both yield `CLIENT_REVOKED` at `maxfailure 1`. In CI.
 - `scripts/iprop-gate.sh` — MIT `kpropd -A` must not report IPROP
-  program unregistered; Rust `krb5-kprop` → MIT replica then MIT
-  `kinit user`; MIT `kprop` → `krb5-kpropd` then MIT `kinit` vs the
-  Rust replica. In CI.
+  program unregistered. After first-contact kprop `-i` (ipropx),
+  mutate the master and require serial-delta: MIT `kinit extra` on
+  the MIT replica; `krb5-iprop-pull` vs MIT kadmind then MIT
+  `kinit extra2` on the Rust replica. In CI.
 - `scripts/kadmin-gate.sh` — MIT `kadmin` against `krb5-kadmind` on 749
   (AUTH_GSSAPI 300001): `addprinc`, `cpw`, `getprinc` (`Principal:
   extra@KERBER.TEST`), `listprincs` (names `extra` and `user`),

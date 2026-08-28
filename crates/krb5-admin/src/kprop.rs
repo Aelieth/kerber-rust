@@ -12,7 +12,7 @@ use std::path::Path;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{CipherState, EncryptionType, ProtocolKey};
-use krb5_kdc::{PrincipalStore, dump_store, load_dump, save_store};
+use krb5_kdc::{PrincipalStore, dump_store, dump_store_iprop, load_dump, save_store};
 use krb5_protocol::{
     ApVerifyParams, ReplayCache, build_ap_rep, build_ap_req_mutual_seq, build_krb_priv_chained,
     build_krb_safe_ex, unwrap_krb_priv_chained, verify_ap_rep, verify_ap_req_ex,
@@ -39,6 +39,17 @@ pub fn kprop_dump_bytes(store: &PrincipalStore, master_password: &[u8]) -> Resul
         .map_err(|e| Error::Inner(e.to_string()))
 }
 
+/// MIT `kdb5_util dump -i1` body so `kpropd -A` `load -i` sets replica last_sno.
+///
+/// # Errors
+///
+/// Dump crypto failures.
+pub fn kprop_dump_iprop(store: &PrincipalStore, master_password: &[u8]) -> Result<Vec<u8>, Error> {
+    dump_store_iprop(store, master_password)
+        .map(String::into_bytes)
+        .map_err(|e| Error::Inner(e.to_string()))
+}
+
 /// Load a kprop body as dump version 6/7. Rejects KDB3 magic and truncated
 /// headers.
 ///
@@ -52,7 +63,10 @@ pub fn kprop_load_bytes(bytes: &[u8], master_password: &[u8]) -> Result<Principa
         ));
     }
     let text = std::str::from_utf8(bytes).map_err(|e| Error::Inner(e.to_string()))?;
-    if !text.starts_with("kdb5_util load_dump version ") {
+    if !text.starts_with("kdb5_util load_dump version ")
+        && !text.starts_with("ipropx ")
+        && !text.starts_with("iprop ")
+    {
         return Err(Error::Inner("kprop body missing dump header".into()));
     }
     load_dump(text, master_password).map_err(|e| Error::Inner(e.to_string()))
@@ -543,7 +557,61 @@ pub fn kprop_send_store(
     crealm: &krb5_types::Realm,
     cname: &PrincipalName,
 ) -> Result<(), Error> {
-    let dump = kprop_dump_bytes(store, master_password)?;
+    kprop_send_store_ex(
+        stream,
+        store,
+        master_password,
+        ticket,
+        session,
+        crealm,
+        cname,
+        false,
+    )
+}
+
+/// [`kprop_send_store`] with an ipropx dump header (`kpropd -A` `load -i`).
+///
+/// # Errors
+///
+/// Dump, auth, or I/O.
+#[allow(clippy::too_many_arguments)]
+pub fn kprop_send_store_iprop(
+    stream: &mut TcpStream,
+    store: &PrincipalStore,
+    master_password: &[u8],
+    ticket: Ticket,
+    session: &ProtocolKey,
+    crealm: &krb5_types::Realm,
+    cname: &PrincipalName,
+) -> Result<(), Error> {
+    kprop_send_store_ex(
+        stream,
+        store,
+        master_password,
+        ticket,
+        session,
+        crealm,
+        cname,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn kprop_send_store_ex(
+    stream: &mut TcpStream,
+    store: &PrincipalStore,
+    master_password: &[u8],
+    ticket: Ticket,
+    session: &ProtocolKey,
+    crealm: &krb5_types::Realm,
+    cname: &PrincipalName,
+    iprop: bool,
+) -> Result<(), Error> {
+    let dump = if iprop {
+        kprop_dump_iprop(store, master_password)?
+    } else {
+        kprop_dump_bytes(store, master_password)?
+    };
     let mut auth = kprop_sendauth(stream, ticket, session, crealm, cname, 1)?;
     kprop_send_dump(stream, &mut auth, &dump)
 }

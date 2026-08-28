@@ -14,9 +14,10 @@ this project uses semantic versioning once a crate is published.
   enc-timestamp as built-ins). Named password policies: dump `policy\t`
   records, kadm5 addpol/modpol/getpol/delpol/listpols (opcodes 8–11,
   15), pwqual, AS lockout `CLIENT_REVOKED`. Iprop serial + ulog; kadmind
-  program 100423 `IPROP_GET_UPDATES` / `FULL_RESYNC`. Gates:
-  `scripts/policy-gate.sh`, `scripts/iprop-gate.sh`. Traits, not
-  dlopen: [`docs/plugins.md`](docs/plugins.md).
+  program 100423 `IPROP_GET_UPDATES` / `FULL_RESYNC`; `krb5-iprop-pull`
+  RPCSEC_GSS client. Gates: `scripts/policy-gate.sh`,
+  `scripts/iprop-gate.sh` (serial-delta both ways, MIT `kinit extra` /
+  `extra2`). Traits, not dlopen: [`docs/plugins.md`](docs/plugins.md).
 
 ### Changed
 

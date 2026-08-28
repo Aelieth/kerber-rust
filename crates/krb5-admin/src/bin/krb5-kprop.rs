@@ -12,7 +12,7 @@
 use std::net::TcpStream;
 use std::path::PathBuf;
 
-use krb5_admin::{KPROP_PORT, kprop_send_store};
+use krb5_admin::{KPROP_PORT, kprop_send_store, kprop_send_store_iprop};
 use krb5_kdc::{as_req, issue_as, issue_tgs, load_store, pa_enc_timestamp, tgs_req};
 use krb5_protocol::Keytab;
 use krb5_types::PrincipalName;
@@ -30,9 +30,11 @@ fn main() {
     let mut keytab: Option<PathBuf> = std::env::var("KRB5_KPROP_KEYTAB").ok().map(PathBuf::from);
     let mut instance: Option<String> = None;
     let mut replica: Option<String> = None;
+    let mut iprop = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
+            "-i" => iprop = true,
             "-P" => {
                 let p = args.next().unwrap_or_else(|| need_arg("-P"));
                 port = p.parse().unwrap_or_else(|_| {
@@ -122,7 +124,12 @@ fn main() {
         eprintln!("krb5-kprop: connect {addr}: {e}");
         std::process::exit(1);
     });
-    kprop_send_store(
+    let send = if iprop {
+        kprop_send_store_iprop
+    } else {
+        kprop_send_store
+    };
+    send(
         &mut stream,
         &store,
         master.as_bytes(),
@@ -160,6 +167,6 @@ fn need_arg(flag: &str) -> String {
 }
 
 fn usage() -> ! {
-    eprintln!("usage: krb5-kprop [-P port] [-s keytab] [-n host-instance] replica");
+    eprintln!("usage: krb5-kprop [-i] [-P port] [-s keytab] [-n host-instance] replica");
     std::process::exit(2);
 }

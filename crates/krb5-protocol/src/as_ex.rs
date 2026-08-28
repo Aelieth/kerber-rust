@@ -49,10 +49,36 @@ pub struct AsRequest<'a> {
 ///
 /// Returns transport, crypto, or `KRB-ERROR` failures.
 pub fn as_exchange(req: &AsRequest<'_>) -> Result<AsOutcome, Error> {
+    wrap_as(req, &[])
+}
+
+/// AS-REQ using long-term keys (keytab), not a password.
+///
+/// # Errors
+///
+/// Transport, crypto, or `KRB-ERROR` failures.
+pub fn as_exchange_key(
+    cname: PrincipalName,
+    realm: &str,
+    keys: &[ProtocolKey],
+    kdc: &KdcAddr,
+) -> Result<AsOutcome, Error> {
+    wrap_as(
+        &AsRequest {
+            cname,
+            realm,
+            password: b"",
+            kdc,
+        },
+        keys,
+    )
+}
+
+fn wrap_as(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutcome, Error> {
     let correlation_id = krb5_log::new_correlation_id();
     let _g = krb5_log::enter_correlation(correlation_id.clone());
     let started = Instant::now();
-    let result = as_exchange_inner(req);
+    let result = as_exchange_inner(req, keys);
     emit(
         krb5_log::events::PROTOCOL_AS,
         &correlation_id,
@@ -62,7 +88,7 @@ pub fn as_exchange(req: &AsRequest<'_>) -> Result<AsOutcome, Error> {
     result
 }
 
-fn as_exchange_inner(req: &AsRequest<'_>) -> Result<AsOutcome, Error> {
+fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutcome, Error> {
     let _ = krb5_types::try_ascii(req.realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?;
     let etypes: Vec<i32> = EncryptionType::preferred()
         .iter()
@@ -78,7 +104,9 @@ fn as_exchange_inner(req: &AsRequest<'_>) -> Result<AsOutcome, Error> {
     let reply = exchange(req.kdc, &wire)?;
 
     match classify(&reply)? {
-        KdcMsg::AsRep(rep) => finish_as_rep(rep, nonce, None, req.password, &req.cname, req.realm),
+        KdcMsg::AsRep(rep) => {
+            finish_as_rep_keys(rep, nonce, keys, req.password, &req.cname, req.realm)
+        }
         KdcMsg::Error(e) if e.error_code == err::SKEW => {
             // First-reply SKEW: resync from KDC stime and retry the bare AS-REQ.
             let skew_time = e.stime.clone();
@@ -87,25 +115,73 @@ fn as_exchange_inner(req: &AsRequest<'_>) -> Result<AsOutcome, Error> {
             let reply = exchange(req.kdc, &wire)?;
             match classify(&reply)? {
                 KdcMsg::AsRep(rep) => {
-                    finish_as_rep(rep, nonce, None, req.password, &req.cname, req.realm)
+                    finish_as_rep_keys(rep, nonce, keys, req.password, &req.cname, req.realm)
                 }
                 KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
-                    continue_preauth(req, nonce, till, &etypes, &e, Some(&skew_time))
+                    continue_preauth(req, keys, nonce, till, &etypes, &e, Some(&skew_time))
                 }
                 KdcMsg::Error(e) => classify_kdc_error(&e),
                 KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
             }
         }
         KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
-            continue_preauth(req, nonce, till, &etypes, &e, None)
+            continue_preauth(req, keys, nonce, till, &etypes, &e, None)
         }
         KdcMsg::Error(e) => classify_kdc_error(&e),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
     }
 }
 
+fn finish_as_rep_keys(
+    rep: AsRep,
+    nonce: u32,
+    keys: &[ProtocolKey],
+    password: &[u8],
+    cname: &PrincipalName,
+    realm: &str,
+) -> Result<AsOutcome, Error> {
+    if keys.is_empty() {
+        return finish_as_rep(rep, nonce, None, password, cname, realm, false);
+    }
+    let want = EncryptionType::from_iana(rep.0.enc_part.etype).ok();
+    if let Some(k) = pick_key(keys, want)
+        && let Ok(out) = finish_as_rep(rep.clone(), nonce, Some(k), password, cname, realm, false)
+    {
+        return Ok(out);
+    }
+    let mut last = Error::ReplyMismatch("no keytab key decrypted AS-REP".into());
+    for k in keys {
+        match finish_as_rep(
+            rep.clone(),
+            nonce,
+            Some(k.clone()),
+            password,
+            cname,
+            realm,
+            false,
+        ) {
+            Ok(out) => return Ok(out),
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
+}
+
+fn pick_key(keys: &[ProtocolKey], etype: Option<EncryptionType>) -> Option<ProtocolKey> {
+    if keys.is_empty() {
+        return None;
+    }
+    if let Some(et) = etype
+        && let Some(k) = keys.iter().find(|k| k.etype() == et)
+    {
+        return Some(k.clone());
+    }
+    keys.first().cloned()
+}
+
 fn continue_preauth(
     req: &AsRequest<'_>,
+    keys: &[ProtocolKey],
     nonce: u32,
     till: KerberosTime,
     etypes: &[i32],
@@ -113,7 +189,10 @@ fn continue_preauth(
     skew_hint: Option<&KerberosTime>,
 ) -> Result<AsOutcome, Error> {
     let (etype, salt, params) = select_s2k(preauth_err, &req.cname, req.realm)?;
-    let client_key = string_to_key(etype, req.password, &salt, params.as_deref())?;
+    let client_key = pick_key(keys, Some(etype)).map_or_else(
+        || string_to_key(etype, req.password, &salt, params.as_deref()),
+        Ok,
+    )?;
     let padata = vec![match skew_hint {
         Some(t) => pa_enc_timestamp_at(&client_key, t)?,
         None => pa_enc_timestamp(&client_key)?,
@@ -136,6 +215,7 @@ fn continue_preauth(
             req.password,
             &req.cname,
             req.realm,
+            true,
         ),
         KdcMsg::Error(e) if e.error_code == err::SKEW => {
             let skew_time = e.stime.clone();
@@ -151,6 +231,7 @@ fn continue_preauth(
                     req.password,
                     &req.cname,
                     req.realm,
+                    true,
                 ),
                 KdcMsg::Error(e) => classify_kdc_error(&e),
                 KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
@@ -170,6 +251,7 @@ fn continue_preauth(
                     req.password,
                     &req.cname,
                     req.realm,
+                    true,
                 ),
                 KdcMsg::Error(e) => classify_kdc_error(&e),
                 KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
@@ -251,9 +333,10 @@ fn finish_as_rep(
     password: &[u8],
     cname: &PrincipalName,
     realm: &str,
+    sent_preauth: bool,
 ) -> Result<AsOutcome, Error> {
     let inner = rep.0;
-    let had_preauth = client_key.is_some();
+    let had_preauth = sent_preauth;
     let etype = EncryptionType::from_iana(inner.enc_part.etype)?;
     let key = if let Some(k) = client_key {
         k

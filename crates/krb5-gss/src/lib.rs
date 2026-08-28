@@ -7,10 +7,12 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
-use krb5_asn1::encode;
-use krb5_crypto::{KeyUsage, ProtocolKey, checksum, decrypt, encrypt, verify_checksum};
+use krb5_asn1::{decode, encode};
+use krb5_crypto::{
+    EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt, verify_checksum,
+};
 use krb5_protocol::{ReplayCache, build_ap_rep, build_ap_req_with_cksum};
-use krb5_types::{ApOptions, Checksum, PrincipalName, Realm, Ticket, ku};
+use krb5_types::{ApOptions, ApRep, Checksum, EncApRepPart, PrincipalName, Realm, Ticket, ku};
 use thiserror::Error;
 
 /// ISO OID 1.2.840.113554.1.2.2 (Kerberos V5 GSS).
@@ -28,6 +30,7 @@ const TOK_AP_REP: [u8; 2] = [0x02, 0x00];
 
 const FLAG_SENT_BY_ACCEPTOR: u8 = 0x01;
 const FLAG_SEALED: u8 = 0x02;
+const FLAG_ACCEPTOR_SUBKEY: u8 = 0x04;
 
 const GSS_C_MUTUAL: u32 = 2;
 const GSS_C_REPLAY: u32 = 4;
@@ -123,6 +126,8 @@ impl ChannelBindings {
 /// Established GSS context (initiator or acceptor).
 pub struct GssContext {
     session: ProtocolKey,
+    /// MIT CFX acceptor subkey from AP-REP (`FLAG_ACCEPTOR_SUBKEY`).
+    acceptor_subkey: Option<ProtocolKey>,
     send_seq: u64,
     recv_seq: u64,
     recv_seen: bool,
@@ -182,6 +187,7 @@ impl GssContext {
         Ok((
             Self {
                 session: sub,
+                acceptor_subkey: None,
                 send_seq: 0,
                 recv_seq: 0,
                 recv_seen: false,
@@ -221,6 +227,7 @@ impl GssContext {
         }
         let ctx = Self {
             session: first.clone(),
+            acceptor_subkey: None,
             send_seq: 0,
             recv_seq: 0,
             recv_seen: false,
@@ -271,6 +278,7 @@ impl GssContext {
         let base = ok.authenticator.seq_number.unwrap_or(0);
         let out = Self {
             session: sess,
+            acceptor_subkey: None,
             send_seq: 0,
             recv_seq: u64::from(base),
             recv_seen: false,
@@ -286,6 +294,45 @@ impl GssContext {
             ap_rep_tok = Some(gss_wrap_app(TOK_AP_REP, &der));
         }
         Ok((out, ap_rep_tok))
+    }
+
+    /// Consume the MIT CFX AP-REP token (acceptor subkey).
+    ///
+    /// MIT `krb5_mk_rep` encrypts EncAPRepPart with the **ticket session**
+    /// (`auth_context->key`), not the authenticator subkey.
+    ///
+    /// # Errors
+    ///
+    /// Truncated token, decrypt, or DER failures.
+    pub fn process_ap_rep(
+        &mut self,
+        token: &[u8],
+        ticket_session: &ProtocolKey,
+    ) -> Result<(), Error> {
+        let inner = gss_unwrap_app(token)?;
+        if inner.len() < 2 || inner[..2] != TOK_AP_REP {
+            return Err(Error::Truncated);
+        }
+        let ap: ApRep = decode(&inner[2..])?;
+        let usage = KeyUsage::new(ku::AP_REP_ENC_PART)?;
+        let plain = decrypt(ticket_session, usage, ap.enc_part.cipher.as_ref())?;
+        let part: EncApRepPart = decode(&plain)?;
+        if let Some(sk) = part.subkey {
+            let et = EncryptionType::from_iana(sk.keytype)
+                .or_else(|_| EncryptionType::known(sk.keytype))?;
+            self.acceptor_subkey = Some(ProtocolKey::from_bytes(et, sk.keyvalue.as_ref())?);
+        }
+        Ok(())
+    }
+
+    fn recv_key(&self, flags: u8) -> Result<&ProtocolKey, Error> {
+        if flags & FLAG_ACCEPTOR_SUBKEY != 0 {
+            self.acceptor_subkey
+                .as_ref()
+                .ok_or_else(|| Error::Inner("gss acceptor subkey".into()))
+        } else {
+            Ok(&self.session)
+        }
     }
 
     /// Per-message wrap (confidentiality). RFC 4121 §4.2.6 token.
@@ -317,6 +364,7 @@ impl GssContext {
         let rrc = u16::from_be_bytes(header[6..8].try_into().map_err(|_| Error::Truncated)?);
         let payload = rotate_rrc(&inner[16..], rrc);
         let usage = seal_usage(!self.initiator);
+        let key = self.recv_key(header[2])?;
         if header[2] & FLAG_SEALED == 0 {
             // RFC 4121 wrap without confidentiality: header | data | checksum.
             let ec = usize::from(u16::from_be_bytes(
@@ -335,10 +383,10 @@ impl GssContext {
             h[7] = 0;
             let mut to_ck = data.to_vec();
             to_ck.extend_from_slice(&h);
-            verify_checksum(&self.session, usage, &to_ck, mac).map_err(|_| Error::Integrity)?;
+            verify_checksum(key, usage, &to_ck, mac).map_err(|_| Error::Integrity)?;
             return Ok(data.to_vec());
         }
-        let plain = decrypt(&self.session, usage, &payload)?;
+        let plain = decrypt(key, usage, &payload)?;
         if plain.len() < 16 {
             return Err(Error::Truncated);
         }
@@ -383,9 +431,10 @@ impl GssContext {
         let seq = u64::from_be_bytes(inner[8..16].try_into().map_err(|_| Error::Truncated)?);
         self.accept_seq(seq)?;
         let usage = sign_usage(!self.initiator);
+        let key = self.recv_key(inner[2])?;
         let mut buf = data.to_vec();
         buf.extend_from_slice(&inner[..16]);
-        verify_checksum(&self.session, usage, &buf, &inner[16..]).map_err(|_| Error::Integrity)?;
+        verify_checksum(key, usage, &buf, &inner[16..]).map_err(|_| Error::Integrity)?;
         Ok(())
     }
 
@@ -443,7 +492,10 @@ impl GssContext {
             return Err(Error::Sequence);
         }
         if !self.recv_seen {
-            if seq != self.recv_seq {
+            // Acceptor: first wrap/MIC must match the authenticator seq.
+            // Initiator: MIT libgssrpc may spend seq 0 on an INIT-window
+            // MIC it then discards, so the first token we see is not 0.
+            if !self.initiator && seq != self.recv_seq {
                 return Err(Error::Sequence);
             }
             self.recv_seen = true;
@@ -741,8 +793,19 @@ pub fn mit_shaped_wrap(
     seq: u64,
     plaintext: &[u8],
 ) -> Result<Vec<u8>, Error> {
+    mit_shaped_wrap_flags(session, initiator, seq, plaintext, 0)
+}
+
+fn mit_shaped_wrap_flags(
+    session: &ProtocolKey,
+    initiator: bool,
+    seq: u64,
+    plaintext: &[u8],
+    extra_flags: u8,
+) -> Result<Vec<u8>, Error> {
     let usage = seal_usage(initiator);
-    let header = wrap_header(initiator, true, seq);
+    let mut header = wrap_header(initiator, true, seq);
+    header[2] |= extra_flags;
     let mut to_enc = plaintext.to_vec();
     to_enc.extend_from_slice(&header);
     let cipher = encrypt(session, usage, &to_enc)?;
@@ -1029,6 +1092,53 @@ mod tests {
         assert!(matches!(acc.unwrap(&bad), Err(Error::Sequence)));
         let good = mit_shaped_wrap(init.session_key(), true, 0, b"ok").unwrap();
         assert_eq!(acc.unwrap(&good).unwrap(), b"ok");
+    }
+
+    #[test]
+    fn initiator_first_recv_seq_need_not_be_zero() {
+        let (mut init, acc) = contexts();
+        let tok = mit_shaped_wrap(acc.session_key(), false, 1, b"init-win").unwrap();
+        assert_eq!(init.unwrap(&tok).unwrap(), b"init-win");
+    }
+
+    #[test]
+    fn process_ap_rep_acceptor_subkey_unwrap() {
+        use krb5_types::{EncApRepPart, EncryptedData, EncryptionKey, KerberosTime, Microseconds};
+
+        let (mut init, _acc) = contexts();
+        let et = init.session_key().etype();
+        let mut ticket_raw = vec![0u8; et.key_len()];
+        getrandom::getrandom(&mut ticket_raw).unwrap();
+        let ticket = ProtocolKey::from_bytes(et, &ticket_raw).unwrap();
+        let mut raw = vec![0u8; et.key_len()];
+        getrandom::getrandom(&mut raw).unwrap();
+        let sub = ProtocolKey::from_bytes(et, &raw).unwrap();
+        let part = EncApRepPart {
+            ctime: KerberosTime::now(),
+            cusec: Microseconds::new(0).unwrap(),
+            subkey: Some(EncryptionKey {
+                keytype: et.to_iana(),
+                keyvalue: sub.as_bytes().to_vec().into(),
+            }),
+            seq_number: Some(0),
+        };
+        let der = encode(&part).unwrap();
+        let usage = KeyUsage::new(ku::AP_REP_ENC_PART).unwrap();
+        let cipher = encrypt(&ticket, usage, &der).unwrap();
+        let ap = ApRep {
+            pvno: ApRep::PVNO,
+            msg_type: ApRep::MSG_TYPE,
+            enc_part: EncryptedData {
+                etype: et.to_iana(),
+                kvno: None,
+                cipher: cipher.into(),
+            },
+        };
+        let tok = gss_wrap_app(TOK_AP_REP, &encode(&ap).unwrap());
+        init.process_ap_rep(&tok, &ticket).unwrap();
+        let wrapped =
+            mit_shaped_wrap_flags(&sub, false, 0, b"subkey", FLAG_ACCEPTOR_SUBKEY).unwrap();
+        assert_eq!(init.unwrap(&wrapped).unwrap(), b"subkey");
     }
 
     #[test]

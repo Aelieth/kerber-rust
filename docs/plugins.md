@@ -18,9 +18,13 @@ privileged: each backend implements the same KDB traits.
 Iprop is not a plugin. The store keeps a monotonic serial and a
 circular update log. kadmind serves MIT program **100423**
 (`IPROP_GET_UPDATES`, `IPROP_FULL_RESYNC`). First contact
-(`last_sno == 0`) returns full-resync; a slave then takes dump-v7
-kprop. Serial-delta apply is in-process (`iprop_poll_once`).
+(`last_sno == 0`) returns full-resync; a slave then takes an
+`ipropx` dump (`kprop -i` / `kdb5_util dump -i1`). Serial-delta is
+MIT `kdb_incr_update_t` over RPCSEC_GSS (`krb5-iprop-pull` or
+`iprop_poll_once`). `kdb_last_t` must echo the dump-header
+timestamp or MIT returns `UPDATE_FULL_RESYNC_NEEDED`.
 
 Gates: `scripts/policy-gate.sh` (MIT `kadmin` policies + `kinit`
-`CLIENT_REVOKED`); `scripts/iprop-gate.sh` (`kpropd -A` probe +
-kprop both ways then MIT `kinit`).
+`CLIENT_REVOKED`); `scripts/iprop-gate.sh` (`kpropd -A` serial-delta
+then MIT `kinit extra`; MIT kadmind → Rust slave then MIT
+`kinit extra2`).

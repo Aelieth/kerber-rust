@@ -15,8 +15,8 @@ use std::path::PathBuf;
 
 use krb5_kdc::{
     Acl, BIND_CANDIDATES, PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER, bind_preferred,
-    documented_admin_id, documented_changepw, documented_host, documented_kadmin, drop_privileges,
-    open_store, serve, shared_store,
+    documented_admin_id, documented_changepw, documented_host, documented_kadmin,
+    documented_kiprop, drop_privileges, open_store, serve, shared_store,
 };
 
 fn main() {
@@ -282,6 +282,10 @@ fn bootstrap_test_realm() -> PrincipalStore {
     }
     if let Err(e) = store.create_host(&acl, &actor, &documented_changepw()) {
         eprintln!("krb5-kdc: kadmin/changepw: {e}");
+        std::process::exit(1);
+    }
+    if let Err(e) = store.create_host(&acl, &actor, &documented_kiprop()) {
+        eprintln!("krb5-kdc: kiprop: {e}");
         std::process::exit(1);
     }
     if let (Ok(foreign), Ok(hexkey)) = (

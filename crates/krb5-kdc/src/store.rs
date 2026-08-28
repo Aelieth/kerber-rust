@@ -428,6 +428,35 @@ impl PrincipalStore {
         self.save_if_configured()
     }
 
+    /// Master key for iprop `AT_KEYDATA` (stash, `K/M`, or `KRB5_MASTER_PASSWORD`).
+    #[must_use]
+    pub fn iprop_master_key(&self) -> Option<krb5_crypto::ProtocolKey> {
+        if let Some((_, stash)) = &self.persist_paths
+            && let Ok(bytes) = std::fs::read(stash)
+        {
+            for et in [
+                krb5_crypto::EncryptionType::Aes256CtsHmacSha384192,
+                krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
+            ] {
+                if let Ok(k) = krb5_crypto::ProtocolKey::from_bytes(et, &bytes) {
+                    return Some(k);
+                }
+            }
+        }
+        if let Ok(pw) = std::env::var("KRB5_MASTER_PASSWORD")
+            && let Ok(k) = crate::master_key_from_password(
+                &self.realm,
+                pw.as_bytes(),
+                crate::harness_master_etype(),
+            )
+        {
+            return Some(k);
+        }
+        self.get(&format!("K/M@{}", self.realm))
+            .and_then(|km| km.best_key())
+            .map(|k| k.key.clone())
+    }
+
     /// Monotonic iprop serial (0 = never mutated via save).
     #[must_use]
     pub fn serial(&self) -> u32 {
@@ -496,6 +525,7 @@ impl PrincipalStore {
                 self.serial.store(e.sno, Ordering::SeqCst);
             }
         }
+        let _ = self.save_if_configured();
     }
 
     fn note_ulog(&self, name: String, deleted: bool, princ: Option<Principal>) {
@@ -837,6 +867,8 @@ impl PrincipalStore {
         } else {
             p.attributes &= !KDB_DISALLOW_ALL_TIX;
         }
+        let snap = p.clone();
+        self.note_ulog(id, false, Some(snap));
         self.save_if_configured()
     }
 
@@ -861,6 +893,9 @@ impl PrincipalStore {
         self.insert_password(&name, password)?;
         if let Some(p) = self.map.get_mut(&id) {
             p.requires_preauth = false;
+        }
+        if let Some(p) = self.map.get(&id) {
+            self.note_ulog(id.clone(), false, Some(p.clone()));
         }
         self.save_if_configured()
     }
@@ -921,6 +956,8 @@ impl PrincipalStore {
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         let kvno = p.keys.iter().map(|k| k.kvno).min().unwrap_or(1);
         p.keys.insert(0, KeyEntry::new(key.etype(), key, kvno));
+        let snap = p.clone();
+        self.note_ulog(id, false, Some(snap));
         self.save_if_configured()
     }
 
@@ -948,8 +985,7 @@ impl PrincipalStore {
     pub fn delete(&mut self, acl: &Acl, actor: &str, name: &PrincipalName) -> Result<(), Error> {
         acl.check(actor, AdminOp::Delete)?;
         let id = format!("{}@{}", name.components_joined(), self.realm);
-        self.map.remove(&id).ok_or(Error::NotFound)?;
-        self.save_if_configured()
+        self.remove_id_inner(&id)
     }
 
     /// Rename a principal. Requires add and delete ACL privs (MIT).
@@ -977,6 +1013,8 @@ impl PrincipalStore {
         }
         let mut p = self.map.remove(&old_id).ok_or(Error::NotFound)?;
         p.name = new.clone();
+        self.note_ulog(old_id, true, None);
+        self.note_ulog(p.id(), false, Some(p.clone()));
         self.map.insert(p.id(), p);
         self.save_if_configured()
     }
@@ -1116,6 +1154,8 @@ impl PrincipalStore {
         }
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         p.keys.clone_from(&new_keys);
+        let snap = p.clone();
+        self.note_ulog(id, false, Some(snap));
         self.save_if_configured()?;
         Ok(new_keys)
     }
@@ -1157,6 +1197,8 @@ impl PrincipalStore {
         } else if let Some(pol) = policy {
             p.pw_policy = Some(pol);
         }
+        let snap = p.clone();
+        self.note_ulog(id, false, Some(snap));
         self.save_if_configured()
     }
 
@@ -1216,6 +1258,8 @@ impl PrincipalStore {
         let id = format!("{}@{}", name.components_joined(), self.realm);
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         p.pw_policy = policy;
+        let snap = p.clone();
+        self.note_ulog(id, false, Some(snap));
         self.save_if_configured()
     }
 
@@ -1661,6 +1705,55 @@ mod tests {
         )
         .unwrap();
         crate::issue_as(&slave, &req).expect("slave must issue after serial-delta");
+    }
+
+    #[test]
+    fn ulog_records_delete_rename_chrand() {
+        let (mut store, acl) = crate::bootstrap_documented().unwrap();
+        let actor = crate::documented_admin_id();
+        let a = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["ulogdel"]);
+        let b = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["ulogren"]);
+        store
+            .create_password(&acl, &actor, &a, b"ulog-secret")
+            .unwrap();
+        let after_create = store.serial();
+        store.delete(&acl, &actor, &a).unwrap();
+        let del = store.updates_after(after_create);
+        assert!(
+            del.iter().any(|e| e.name.contains("ulogdel") && e.deleted),
+            "delete must be ulogged: {del:?}"
+        );
+        store
+            .create_password(&acl, &actor, &a, b"ulog-secret")
+            .unwrap();
+        let after_recreate = store.serial();
+        store.rename(&acl, &actor, &a, &b).unwrap();
+        let ren = store.updates_after(after_recreate);
+        assert!(
+            ren.iter().any(|e| e.name.contains("ulogdel") && e.deleted)
+                && ren
+                    .iter()
+                    .any(|e| e.name.contains("ulogren") && !e.deleted && e.princ.is_some()),
+            "rename must ulog delete+add: {ren:?}"
+        );
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+        let after_ren = store.serial();
+        store.chrand(&user).unwrap();
+        let ch = store.updates_after(after_ren);
+        assert!(
+            ch.iter()
+                .any(|e| e.name.contains(crate::TEST_USER) && e.princ.is_some()),
+            "chrand must be ulogged: {ch:?}"
+        );
+        store.set_status(&user, true, 0).unwrap();
+        assert!(
+            store
+                .ulog()
+                .iter()
+                .any(|e| e.name.contains(crate::TEST_USER)
+                    && e.princ.as_ref().is_some_and(|p| p.locked)),
+            "set_status must be ulogged"
+        );
     }
 
     #[test]

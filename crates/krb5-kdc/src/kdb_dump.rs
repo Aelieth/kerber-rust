@@ -474,6 +474,9 @@ fn parse_policy_rest(rest: &str) -> NamedPolicy {
 
 fn parse_header(line: &str) -> Result<u32, DumpError> {
     const PREFIX: &str = "kdb5_util load_dump version ";
+    if line.starts_with("ipropx ") || line.starts_with("iprop ") {
+        return Ok(KDB_DUMP_VERSION);
+    }
     let rest = line
         .strip_prefix(PREFIX)
         .ok_or_else(|| DumpError::Format(format!("bad dump header: {line}")))?;
@@ -487,6 +490,24 @@ fn parse_header(line: &str) -> Result<u32, DumpError> {
         )));
     }
     Ok(version)
+}
+
+/// MIT `kdb5_util dump -i1` (`ipropx 1 <sno> <sec> <usec>`).
+///
+/// # Errors
+///
+/// Crypto failures.
+pub fn dump_store_iprop(
+    store: &PrincipalStore,
+    master_password: &[u8],
+) -> Result<String, DumpError> {
+    let text = dump_store(store, master_password)?;
+    let header = format!("ipropx 1 {} {} 0\n", store.serial(), unix_now());
+    Ok(text.replacen(
+        &format!("kdb5_util load_dump version {KDB_DUMP_VERSION}\n"),
+        &header,
+        1,
+    ))
 }
 
 fn parse_princ_line(rest: &str, lineno: usize) -> Result<DumpPrincipal, DumpError> {

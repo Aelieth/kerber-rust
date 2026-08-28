@@ -34,5 +34,9 @@ path = "src/bin/krb5-kpropd.rs"
 name = "krb5-kprop"
 path = "src/bin/krb5-kprop.rs"
 
+[[bin]]
+name = "krb5-iprop-pull"
+path = "src/bin/krb5-iprop-pull.rs"
+
 [lints]
 workspace = true

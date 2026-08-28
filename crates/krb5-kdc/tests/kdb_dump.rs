@@ -9,7 +9,7 @@ use std::process::Command;
 use krb5_crypto::{EncryptionType, KeyUsage, kdb_decrypt_key, string_to_key};
 use krb5_kdc::{
     KDB_DUMP_VERSION, KDB_REQUIRES_PRE_AUTH, TL_LAST_PWD_CHANGE, TL_MOD_PRINC, dump_store,
-    load_dump, master_key_from_password, parse_dump,
+    dump_store_iprop, load_dump, master_key_from_password, parse_dump,
 };
 use krb5_types::PrincipalName;
 
@@ -197,6 +197,13 @@ fn dump_write_header_grammar_and_tl_data() {
         "writer must emit version 7, got {:?}",
         text.lines().next()
     );
+    let iprop = dump_store_iprop(&store, b"masterpassword").expect("iprop dump");
+    assert!(
+        iprop.starts_with("ipropx 1 "),
+        "iprop dump must start ipropx 1 <sno> <sec> 0, got {:?}",
+        iprop.lines().next()
+    );
+    parse_dump(&iprop).expect("parse ipropx dump");
     let reparsed = parse_dump(&text).expect("reparse rust dump");
     assert_eq!(reparsed.version, 7);
     let pauser = reparsed.princ("pauser@KERBER.TEST").unwrap();

@@ -17,9 +17,10 @@ use std::thread;
 use std::time::Duration;
 
 use krb5_admin::{serve_kadm5_conn, serve_kpasswd_tcp, serve_kpasswd_udp};
+use krb5_crypto::ProtocolKey;
 use krb5_kdc::{
-    acl_for_store, bootstrap_documented, documented_changepw, documented_kadmin, open_store,
-    shared_store,
+    PrincipalStore, acl_for_store, bootstrap_documented, documented_changepw, documented_kadmin,
+    documented_kiprop, open_store, shared_store,
 };
 
 fn main() {
@@ -59,14 +60,7 @@ fn main() {
     let realm = store.realm().to_owned();
     let kadmin = documented_kadmin();
     let changepw = documented_changepw();
-    let mut keys: Vec<_> = store
-        .get_name(&kadmin)
-        .map(|p| p.keys.iter().map(|k| k.key.clone()).collect())
-        .unwrap_or_default();
-    if let Some(p) = store.get_name(&krb5_kdc::documented_kiprop()) {
-        keys.extend(p.keys.iter().map(|k| k.key.clone()));
-    }
-    if keys.is_empty() {
+    if acceptor_keys(&store).is_empty() {
         eprintln!("krb5-kadmind: no kadmin/admin keys");
         std::process::exit(1);
     }
@@ -131,8 +125,13 @@ fn main() {
         match accepted {
             Ok((stream, _)) => {
                 let store = Arc::clone(&shared);
+                let keys = {
+                    let g = store
+                        .read()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    acceptor_keys(&g)
+                };
                 let acl = acl.clone();
-                let keys = keys.clone();
                 let kadmin = kadmin.clone();
                 let realm = realm.clone();
                 thread::spawn(move || {
@@ -148,6 +147,16 @@ fn main() {
             }
         }
     }
+}
+
+fn acceptor_keys(store: &PrincipalStore) -> Vec<ProtocolKey> {
+    let mut keys = Vec::new();
+    for name in [documented_kadmin(), documented_kiprop()] {
+        if let Some(p) = store.get_name(&name) {
+            keys.extend(p.keys.iter().map(|k| k.key.clone()));
+        }
+    }
+    keys
 }
 
 fn load_kdc_conf() -> Option<krb5_config::KdcConf> {
