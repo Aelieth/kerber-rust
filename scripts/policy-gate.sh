@@ -201,41 +201,48 @@ fi
 kadmin_q 'delprinc -force classuser' >/dev/null
 kadmin_q 'delpol -force class5' >/dev/null
 
-echo "==== MIT kadmin lockout duration and failcnt interval ===="
-kadmin_q 'addpol -minlength 8 -minclasses 1 -history 0 -maxfailure 1 -lockoutduration 2s -failurecountinterval 2s timed' >/dev/null
-TGET="$(kadmin_q 'getpol timed')"
-echo "$TGET"
-echo "$TGET" | grep -q 'Policy: timed'
-echo "$TGET" | grep -qiE 'lockout duration: 0 days 00:00:02'
-echo "$TGET" | grep -qiE 'failure count reset interval: 0 days 00:00:02'
-kadmin_q 'addprinc -policy timed -pw Time-sec1 timeduser' >/dev/null
-T1="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
-    "$NAME" sh -c 'printf "wrong-password\n" | kinit timeduser@KERBER.TEST' 2>&1 || true)"
-echo "$T1"
-T2="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
-    "$NAME" sh -c 'printf "wrong-password\n" | kinit timeduser@KERBER.TEST' 2>&1 || true)"
-echo "$T2"
-echo "$T2" | grep -qiE 'revoked|CLIENT_REVOKED'
-sleep 3
+echo "==== MIT kadmin duration-only lockout ===="
+kadmin_q 'addpol -minlength 8 -minclasses 1 -history 0 -maxfailure 1 -lockoutduration 3s -failurecountinterval 0s durpol' >/dev/null
+DGET="$(kadmin_q 'getpol durpol')"
+echo "$DGET"
+echo "$DGET" | grep -qiE 'lockout duration: 0 days 00:00:03'
+kadmin_q 'addprinc -policy durpol -pw Time-sec1 duruser' >/dev/null
+D1="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
+    "$NAME" sh -c 'printf "wrong-password\n" | kinit duruser@KERBER.TEST' 2>&1 || true)"
+echo "$D1"
+D2="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
+    "$NAME" sh -c 'printf "wrong-password\n" | kinit duruser@KERBER.TEST' 2>&1 || true)"
+echo "$D2"
+echo "$D2" | grep -qiE 'revoked|CLIENT_REVOKED'
+sleep 4
 if ! docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
-    "$NAME" sh -c 'printf "Time-sec1\n" | kinit timeduser@KERBER.TEST'; then
-    log "policy.gate" "error" ',"error":"elapsed lockout duration must allow kinit"'
+    "$NAME" sh -c 'printf "Time-sec1\n" | kinit duruser@KERBER.TEST'; then
+    log "policy.gate" "error" ',"error":"duration-only elapsed lockout must allow kinit"'
     exit 1
 fi
 docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+kadmin_q 'delprinc -force duruser' >/dev/null
+kadmin_q 'delpol -force durpol' >/dev/null
+
+echo "==== MIT kadmin interval-only failcnt reset ===="
+kadmin_q 'addpol -minlength 8 -minclasses 1 -history 0 -maxfailure 1 -lockoutduration 0s -failurecountinterval 2s intpol' >/dev/null
+IGET="$(kadmin_q 'getpol intpol')"
+echo "$IGET"
+echo "$IGET" | grep -qiE 'failure count reset interval: 0 days 00:00:02'
+kadmin_q 'addprinc -policy intpol -pw Time-sec1 intuser' >/dev/null
 I1="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
-    "$NAME" sh -c 'printf "wrong-password\n" | kinit timeduser@KERBER.TEST' 2>&1 || true)"
+    "$NAME" sh -c 'printf "wrong-password\n" | kinit intuser@KERBER.TEST' 2>&1 || true)"
 echo "$I1"
 sleep 3
 I2="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
-    "$NAME" sh -c 'printf "wrong-password\n" | kinit timeduser@KERBER.TEST' 2>&1 || true)"
+    "$NAME" sh -c 'printf "wrong-password\n" | kinit intuser@KERBER.TEST' 2>&1 || true)"
 echo "$I2"
 echo "$I2" | grep -qiE 'revoked|CLIENT_REVOKED' && {
-    log "policy.gate" "error" ',"error":"elapsed failcnt interval must not lock on next wrong"'
+    log "policy.gate" "error" ',"error":"interval-only elapsed must not lock on next wrong"'
     exit 1
 }
-kadmin_q 'delprinc -force timeduser' >/dev/null
-kadmin_q 'delpol -force timed' >/dev/null
+kadmin_q 'delprinc -force intuser' >/dev/null
+kadmin_q 'delpol -force intpol' >/dev/null
 
 echo "==== MIT kadmin history depth 2 (current counts inside N) ===="
 kadmin_q 'addpol -minlength 8 -minclasses 2 -history 2 histn' >/dev/null

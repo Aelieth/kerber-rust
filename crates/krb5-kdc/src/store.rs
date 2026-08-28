@@ -1942,23 +1942,23 @@ mod tests {
     }
 
     #[test]
-    fn lockout_duration_expires_and_interval_resets() {
+    fn lockout_duration_only_unlocks_after_sleep() {
         use krb5_protocol::{as_req, pa_enc_timestamp, pa_enc_timestamp_at};
         use krb5_types::KerberosTime;
 
         let (mut store, _) = crate::bootstrap_documented().unwrap();
         let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
         store.put_policy(NamedPolicy {
-            name: "timed".into(),
+            name: "dur".into(),
             min_length: 0,
             min_classes: 0,
             history: 0,
             max_fail: 1,
-            pw_failcnt_interval: 1,
+            pw_failcnt_interval: 0,
             pw_lockout_duration: 1,
         });
         store
-            .set_principal_policy(&user, Some("timed".into()))
+            .set_principal_policy(&user, Some("dur".into()))
             .unwrap();
         let key = store
             .get_name(&user)
@@ -1996,13 +1996,53 @@ mod tests {
         let locked = crate::issue_as(&store, &bad_as()).unwrap_err();
         assert!(revoked(&locked), "max_fail 1 must lock on the next AS");
         std::thread::sleep(std::time::Duration::from_secs(2));
-        crate::issue_as(&store, &good).expect("elapsed lockout duration must unlock");
+        crate::issue_as(&store, &good)
+            .expect("elapsed lockout duration with interval=0 must unlock");
+    }
+
+    #[test]
+    fn lockout_interval_only_resets_fail_count() {
+        use krb5_protocol::{as_req, pa_enc_timestamp_at};
+        use krb5_types::KerberosTime;
+
+        let (mut store, _) = crate::bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+        store.put_policy(NamedPolicy {
+            name: "intv".into(),
+            min_length: 0,
+            min_classes: 0,
+            history: 0,
+            max_fail: 1,
+            pw_failcnt_interval: 1,
+            pw_lockout_duration: 0,
+        });
+        store
+            .set_principal_policy(&user, Some("intv".into()))
+            .unwrap();
+        let zeros = krb5_crypto::ProtocolKey::from_bytes(
+            krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
+            &[0u8; 32],
+        )
+        .unwrap();
+        let mut skew = 0i64;
+        let mut bad_as = || {
+            skew += 1;
+            let ts = KerberosTime::now().add_seconds(skew).unwrap();
+            as_req(
+                user.clone(),
+                crate::TEST_REALM,
+                1,
+                Some(vec![pa_enc_timestamp_at(&zeros, &ts).unwrap()]),
+            )
+            .unwrap()
+        };
+        let revoked = |e: &Error| matches!(e, Error::Protocol { code, .. } if *code == krb5_types::err::CLIENT_REVOKED);
         assert!(crate::issue_as(&store, &bad_as()).is_err());
         std::thread::sleep(std::time::Duration::from_secs(2));
         let second = crate::issue_as(&store, &bad_as()).unwrap_err();
         assert!(
             !revoked(&second),
-            "elapsed failcnt interval must reset the count: {second:?}"
+            "elapsed failcnt interval with duration=0 must not lock: {second:?}"
         );
     }
 
