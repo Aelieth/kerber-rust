@@ -305,12 +305,13 @@ if [ "$free" != 1 ]; then
 fi
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec "$NAME" kdb5_util create -s -P masterpassword >/dev/null
-LOADH="$(docker exec "$NAME" kdb5_util load /tmp/principal 2>&1 || true)"
+LOADRC=0
+LOADH="$(docker exec "$NAME" kdb5_util load /tmp/principal 2>&1)" || LOADRC=$?
 echo "$LOADH"
-echo "$LOADH" | grep -qiE 'error|fail|cannot parse' && {
+if [ "$LOADRC" -ne 0 ] || echo "$LOADH" | grep -qiE 'error|fail|cannot parse'; then
     log "policy.gate" "error" ',"error":"MIT kdb5_util load rejected history dump"'
     exit 1
-}
+fi
 GETH="$(docker exec "$NAME" kadmin.local -q 'getprinc histuser' 2>&1 || true)"
 echo "$GETH"
 echo "$GETH" | grep -q 'Principal: histuser@KERBER.TEST'

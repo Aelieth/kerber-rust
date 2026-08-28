@@ -80,7 +80,7 @@ pub struct Principal {
     pub realm: String,
     /// Active keys (one kvno; `keepold=false` on password change).
     pub keys: Vec<KeyEntry>,
-    /// Prior password keys, pruned to policy history depth N.
+    /// Prior password keys, pruned to N-1 old kvnos (MIT current counts inside N).
     pub key_history: Vec<KeyEntry>,
     /// Salt used for password-derived keys.
     pub salt: Vec<u8>,

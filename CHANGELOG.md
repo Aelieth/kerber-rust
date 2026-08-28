@@ -15,15 +15,18 @@ this project uses semantic versioning once a crate is published.
   PKINIT, SPAKE, and enc-timestamp `process_as` (no double-verify;
   first module to return an action wins; EncTsOk short-circuits EXTRA
   on a normal login; observe-every-AS is a future kadm5_hook).
-  `KdcPolicy::check_as` / `check_tgs` can deny (`DenyPolicy`); AS
-  lockout stays a mandatory inline gate. Named policies: five password
-  classes; `pw_failcnt_interval` / `pw_lockout_duration`; history depth
-  N (`keepold=false`, `TL_KERBER_HIST` 0x4B04). Lockout overlay is
-  reload-safe and **memory-only across a full KDC restart**. Iprop
-  serial + ulog; kadmind program 100423. Gates: `policy-gate.sh` (MIT
-  `cpw` too-short/reuse/minclasses-5/history-N, maxfailure-2, lockout
-  duration/interval), `store-gate.sh`, `kdb-dump-gate.sh`,
-  `iprop-gate.sh`. Traits, not dlopen:
+  `KdcPolicy::check_as` / `check_tgs` can deny (`DenyPolicy`);
+  `set_policy` is process-wide (serve threads); tests use
+  `set_thread_policy`. AS lockout stays a mandatory inline gate.
+  Named policies: five password classes; `pw_failcnt_interval` /
+  `pw_lockout_duration`; history depth N (current counts inside N;
+  store N-1 old kvnos; `keepold=false`, `TL_KERBER_HIST` 0x4B04).
+  Lockout overlay is reload-safe and **memory-only across a full KDC
+  restart**. Iprop serial + ulog; kadmind program 100423; password
+  history on full-resync dump, not incremental iprop. Gates:
+  `policy-gate.sh` (MIT `cpw` too-short/reuse/minclasses-5/history-N,
+  maxfailure-2, lockout duration/interval), `store-gate.sh`,
+  `kdb-dump-gate.sh`, `iprop-gate.sh`. Traits, not dlopen:
   [`docs/plugins.md`](docs/plugins.md).
 
 ### Changed

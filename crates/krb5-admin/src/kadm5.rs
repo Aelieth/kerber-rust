@@ -1093,6 +1093,7 @@ fn decode_kdbe(
         name,
         realm,
         keys,
+        // Incremental iprop kdbe does not carry TL_KERBER_HIST (full-resync dump does).
         key_history: Vec::new(),
         salt,
         requires_preauth,

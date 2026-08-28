@@ -502,6 +502,17 @@ mod tests {
             other => panic!("TGS deny: {other:?}"),
         }
         clear_thread_policy();
+        let tgs_ok = tgs_req(
+            issued.rep.0.ticket.clone(),
+            &issued.session_key,
+            TEST_REALM,
+            &cname,
+            documented_host(),
+            TEST_REALM,
+            8,
+        )
+        .unwrap();
+        crate::issue_tgs(&store, &tgs_ok).expect("TGS with default policy");
     }
 
     #[test]

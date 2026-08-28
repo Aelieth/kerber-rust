@@ -152,7 +152,8 @@ when that oracle is absent.
   constrained delegation unless `s4u_allowed_to` lists the target, and
   parses PA-PAC-OPTIONS (167). In the harness CI job.
 - `scripts/policy-gate.sh` — MIT `kadmin` addpol/modpol/getpol/listpols/`cpw`/delpol
-  against `krb5-kadmind`; too-short and reuse; `-minclasses 5`; history-N;
+  against `krb5-kadmind`; too-short and reuse; `-minclasses 5`; history-N
+  (current counts inside N);
   `maxfailure 2` reset then `CLIENT_REVOKED`; lockout duration / failcnt
   interval. In CI.
 - `scripts/store-gate.sh` — `db_library=memory` KDC seeded from `--test-realm`;

@@ -80,7 +80,7 @@ fn issue_tgt(
 }
 
 #[test]
-fn kpasswd_bumps_kvno_keeps_old_keys_and_switches_password() {
+fn kpasswd_bumps_kvno_single_active_and_switches_password() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let before = store.get_name(&cname).expect("user");
