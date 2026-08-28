@@ -178,6 +178,27 @@ LOCKED="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
 echo "$LOCKED"
 echo "$LOCKED" | grep -qiE 'revoked|CLIENT_REVOKED'
 
+echo "==== MIT kadmin cpw minclasses 5 ===="
+kadmin_q 'addpol -minlength 8 -minclasses 5 class5' >/dev/null
+ADD5="$(kadmin_q 'addprinc -policy class5 -pw "Aa1!aaa " classuser')"
+echo "$ADD5"
+FOUR="$(kadmin_q 'cpw -pw Aa1!aaaa classuser')"
+echo "$FOUR"
+if ! echo "$FOUR" | grep -qi 'enough character classes'; then
+    docker exec "$NAME" cat /tmp/kadmind.log >&2 || true
+    log "policy.gate" "error" ',"error":"cpw 4-class did not assert KADM5_PASS_Q_CLASS"'
+    exit 1
+fi
+FIVE="$(kadmin_q 'cpw -pw "Aa1!aaB " classuser')"
+echo "$FIVE"
+if ! echo "$FIVE" | grep -qi 'password .* changed'; then
+    docker exec "$NAME" cat /tmp/kadmind.log >&2 || true
+    log "policy.gate" "error" ',"error":"cpw 5-class must succeed"'
+    exit 1
+fi
+kadmin_q 'delprinc -force classuser' >/dev/null
+kadmin_q 'delpol -force class5' >/dev/null
+
 echo "==== MIT kadmin delpol lockme ===="
 kadmin_q 'delpol -force lockme' >/dev/null
 DELGET="$(kadmin_q 'getpol lockme')"

@@ -1411,7 +1411,12 @@ fn check_pwqual(password: &[u8], pol: &NamedPolicy) -> Result<(), Error> {
         if s.chars().any(|c| c.is_ascii_digit()) {
             n += 1;
         }
-        if s.chars().any(|c| !c.is_ascii_alphanumeric()) {
+        if s.chars().any(|c| c.is_ascii_punctuation()) {
+            n += 1;
+        }
+        if s.chars()
+            .any(|c| !(c.is_ascii_alphanumeric() || c.is_ascii_punctuation()))
+        {
             n += 1;
         }
         if n < pol.min_classes {
@@ -1659,6 +1664,30 @@ mod tests {
         assert!(crate::issue_as(&store, &bad_as()).is_err());
         let locked = crate::issue_as(&store, &bad_as()).unwrap_err();
         assert!(revoked(&locked), "expected CLIENT_REVOKED, got {locked:?}");
+    }
+
+    #[test]
+    fn pwqual_counts_five_mit_classes() {
+        let (mut store, _) = crate::bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+        store.put_policy(NamedPolicy {
+            name: "five".into(),
+            min_length: 8,
+            min_classes: 5,
+            history: 0,
+            max_fail: 0,
+        });
+        store
+            .set_principal_policy(&user, Some("five".into()))
+            .unwrap();
+        assert!(
+            store.check_password_quality(&user, b"Aa1!aaaa").is_err(),
+            "lower+upper+digit+punct is 4 classes"
+        );
+        assert!(
+            store.check_password_quality(&user, b"Aa1!aaa ").is_ok(),
+            "space is MIT class other (5th)"
+        );
     }
 
     #[test]
