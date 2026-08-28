@@ -849,6 +849,7 @@ fn rpcsec_init(
         ctx.process_ap_rep(&out, ticket_session)
             .map_err(|e| Error::Inner(format!("rpcsec ap-rep: {e}")))?;
     }
+    ctx.allow_rpcsec_init_window();
     // RFC 2203: INIT verifier is a MIC of the sequence window.
     if verf_flavor == FLAVOR_GSS && !verf.is_empty() {
         ctx.verify_mic(&window.to_be_bytes(), &verf)

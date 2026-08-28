@@ -133,6 +133,8 @@ pub struct GssContext {
     recv_seen: bool,
     recv_window: std::collections::HashSet<u64>,
     initiator: bool,
+    /// MIT libgssrpc INIT may spend GSS seq 0 on a discarded window MIC.
+    rpcsec_init_window: bool,
     replay: ReplayCache,
     /// Authenticated client `name@REALM` (set on accept; initiator from cname).
     pub client: Option<String>,
@@ -193,6 +195,7 @@ impl GssContext {
                 recv_seen: false,
                 recv_window: std::collections::HashSet::new(),
                 initiator: true,
+                rpcsec_init_window: false,
                 replay: ReplayCache::new(),
                 client: Some(format!(
                     "{}@{}",
@@ -233,6 +236,7 @@ impl GssContext {
             recv_seen: false,
             recv_window: std::collections::HashSet::new(),
             initiator: false,
+            rpcsec_init_window: false,
             replay: ReplayCache::new(),
             client: None,
         };
@@ -284,6 +288,7 @@ impl GssContext {
             recv_seen: false,
             recv_window: std::collections::HashSet::new(),
             initiator: false,
+            rpcsec_init_window: false,
             replay: ctx.replay,
             client: Some(client),
         };
@@ -487,15 +492,19 @@ impl GssContext {
         Ok(tok)
     }
 
+    /// MIT libgssrpc INIT verifier may skip GSS seq 0 (discarded window MIC).
+    ///
+    /// Only the iprop RPCSEC client sets this. Default wrap/MIC stays strict.
+    pub fn allow_rpcsec_init_window(&mut self) {
+        self.rpcsec_init_window = true;
+    }
+
     fn accept_seq(&mut self, seq: u64) -> Result<(), Error> {
         if self.recv_window.contains(&seq) {
             return Err(Error::Sequence);
         }
         if !self.recv_seen {
-            // Acceptor: first wrap/MIC must match the authenticator seq.
-            // Initiator: MIT libgssrpc may spend seq 0 on an INIT-window
-            // MIC it then discards, so the first token we see is not 0.
-            if !self.initiator && seq != self.recv_seq {
+            if seq != self.recv_seq && !self.rpcsec_init_window {
                 return Err(Error::Sequence);
             }
             self.recv_seen = true;
@@ -1095,10 +1104,17 @@ mod tests {
     }
 
     #[test]
-    fn initiator_first_recv_seq_need_not_be_zero() {
-        let (mut init, acc) = contexts();
-        let tok = mit_shaped_wrap(acc.session_key(), false, 1, b"init-win").unwrap();
-        assert_eq!(init.unwrap(&tok).unwrap(), b"init-win");
+    fn rpcsec_init_window_accepts_seq_gap_default_rejects() {
+        let (mut strict, acc) = contexts();
+        let gap = mit_shaped_wrap(acc.session_key(), false, 1, b"init-win").unwrap();
+        assert!(
+            matches!(strict.unwrap(&gap), Err(Error::Sequence)),
+            "default first-recv must match authenticator base"
+        );
+        let (mut iprop, acc) = contexts();
+        iprop.allow_rpcsec_init_window();
+        let gap = mit_shaped_wrap(acc.session_key(), false, 1, b"init-win").unwrap();
+        assert_eq!(iprop.unwrap(&gap).unwrap(), b"init-win");
     }
 
     #[test]
