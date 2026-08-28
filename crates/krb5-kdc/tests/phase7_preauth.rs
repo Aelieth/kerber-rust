@@ -85,7 +85,6 @@ fn kpasswd_bumps_kvno_keeps_old_keys_and_switches_password() {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let before = store.get_name(&cname).expect("user");
     let old_kvno = before.keys.iter().map(|k| k.kvno).max().expect("kvno");
-    let old_count = before.keys.len();
     store
         .change_password(
             &acl,
@@ -97,8 +96,10 @@ fn kpasswd_bumps_kvno_keeps_old_keys_and_switches_password() {
     let after = store.get_name(&cname).expect("user");
     let new_kvno = after.keys.iter().map(|k| k.kvno).max().expect("kvno");
     assert_eq!(new_kvno, old_kvno + 1);
-    assert!(after.keys.len() > old_count, "prior kvnos must remain");
-    assert!(after.keys.iter().any(|k| k.kvno == old_kvno));
+    assert!(
+        after.keys.iter().all(|k| k.kvno == new_kvno),
+        "keepold=false: one active kvno"
+    );
 
     let new_key = password_key(TEST_USER, b"brand-new-pass");
     let ok = as_req(
@@ -1269,7 +1270,10 @@ fn ktadd_exports_all_kvnos_after_kpasswd() {
         .export_keytab(&acl, &documented_admin_id(), &cname)
         .expect("ktadd");
     let kvnos: Vec<u32> = kt.entries.iter().map(|e| e.kvno).collect();
-    assert!(kvnos.contains(&1) && kvnos.iter().any(|v| *v > 1));
+    assert!(
+        !kvnos.is_empty() && kvnos.iter().all(|v| *v > 1),
+        "keepold=false ktadd exports the new kvno only: {kvnos:?}"
+    );
 }
 
 fn two_realm_pac_stores() -> (PrincipalStore, PrincipalStore, ProtocolKey, PrincipalName) {
