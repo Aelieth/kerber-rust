@@ -531,7 +531,8 @@ fn issue_tgs_from(
         .or_else(|| server.best_key())
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no server key"))?;
     let tgs_client = store.fetch_name(&enc_tkt.cname)?;
-    check_db_times(tgs_client.as_ref(), &server)?;
+    // MIT TGS checks the server only; a valid TGT still issues after client expiry.
+    check_db_times(None, &server)?;
     check_tgs_policy_flags(&server, body, ap.ticket.sname.is_krbtgt(), &enc_tkt)?;
     let mut ticket_cname = enc_tkt.cname.clone();
     let mut ticket_crealm = utf8_realm(&enc_tkt.crealm).to_owned();

@@ -190,5 +190,62 @@ KLIST="$(docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf "$NAME" klist)"
 echo "$KLIST"
 echo "$KLIST" | grep -q 'user@KERBER.TEST'
 
-log "expire.gate" "ok" ',"name_exp":true,"key_expired":true,"pwchange_service":true'
+echo "==== TGS after pwexpire: kvno still succeeds ===="
+kadmin_q 'addprinc -pw tgs-secret tgsuser'
+docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf \
+    "$NAME" sh -c 'printf "tgs-secret\n" | kinit tgsuser@KERBER.TEST'
+kadmin_q 'modprinc -pwexpire "Jan 1, 2020 00:00:00 UTC" tgsuser'
+if ! docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf \
+    "$NAME" kvno host/testhost.kerber.test; then
+    docker exec "$NAME" cat /tmp/kdc.log >&2 || true
+    log "expire.gate" "error" ',"error":"TGS after pwexpire failed"'
+    exit 1
+fi
+docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+kadmin_q 'modprinc -password_changing_service kadmin/changepw'
+PW_AS="$(kinit_try 'printf "tgs-secret\n" | kinit tgsuser@KERBER.TEST')"
+echo "$PW_AS"
+echo "$PW_AS" | grep -qiE "Password has expired|key has expired|KEY_EXP"
+if echo "$PW_AS" | grep -qiE 'Authenticated|Ticket cache'; then
+    echo "password-expired tgsuser obtained a TGT after TGS" >&2
+    exit 1
+fi
+kadmin_q 'modprinc +password_changing_service kadmin/changepw'
+
+echo "==== TGS after account expire: kvno still succeeds ===="
+kadmin_q 'addprinc -pw acct-secret tgsacct'
+docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf \
+    "$NAME" sh -c 'printf "acct-secret\n" | kinit tgsacct@KERBER.TEST'
+kadmin_q 'modprinc -expire "Jan 1, 2020 00:00:00 UTC" tgsacct'
+if ! docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf \
+    "$NAME" kvno host/testhost.kerber.test; then
+    docker exec "$NAME" cat /tmp/kdc.log >&2 || true
+    log "expire.gate" "error" ',"error":"TGS after account expire failed"'
+    exit 1
+fi
+docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+ACCT_AS="$(kinit_try 'printf "acct-secret\n" | kinit tgsacct@KERBER.TEST')"
+echo "$ACCT_AS"
+echo "$ACCT_AS" | grep -qiE "entry in database has expired|name.exp"
+if echo "$ACCT_AS" | grep -qiE 'Authenticated|Ticket cache'; then
+    echo "account-expired tgsacct obtained a TGT after TGS" >&2
+    exit 1
+fi
+
+echo "==== TGS expired server is SERVICE_EXP ===="
+docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf \
+    "$NAME" sh -c 'printf "userpassword\n" | kinit user@KERBER.TEST'
+kadmin_q 'modprinc -expire "Jan 1, 2020 00:00:00 UTC" host/testhost.kerber.test'
+SVC="$(docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf \
+    "$NAME" kvno host/testhost.kerber.test 2>&1 || true)"
+echo "$SVC"
+echo "$SVC" | grep -qiE "entry in database has expired|SERVICE_EXP"
+if echo "$SVC" | grep -q 'kvno ='; then
+    echo "expired server issued a service ticket" >&2
+    exit 1
+fi
+kadmin_q 'modprinc -expire never host/testhost.kerber.test'
+
+log "expire.gate" "ok" ',"name_exp":true,"key_expired":true,"pwchange_service":true,"tgs_after_client_expire":true,"service_exp":true'
 exit 0

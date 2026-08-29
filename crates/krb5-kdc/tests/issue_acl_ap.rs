@@ -611,25 +611,33 @@ fn as_zero_expiration_still_issues() {
 }
 
 #[test]
-fn tgs_rejects_expired_client_after_tgt_issued() {
+fn tgs_issues_after_client_expires() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let issued = krb5_kdc::issue_as(&store, &user_as_req(47)).expect("AS while unexpired");
     store
         .apply_admin_fields(&cname, None, None, Some(1), None, None, false)
         .unwrap();
-    let tgs = tgs_req(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        48,
-    )
-    .expect("TGS-REQ");
-    let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(proto_code(err), err::NAME_EXP);
+    krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 48)).expect("TGS after NAME_EXP");
+
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let issued = krb5_kdc::issue_as(&store, &user_as_req(49)).expect("AS while unexpired");
+    store
+        .apply_admin_fields(&cname, None, None, None, Some(1), None, false)
+        .unwrap();
+    krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 50)).expect("TGS after KEY_EXPIRED");
+}
+
+#[test]
+fn tgs_rejects_expired_server() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let host = documented_host();
+    let issued = krb5_kdc::issue_as(&store, &user_as_req(51)).expect("AS");
+    store
+        .apply_admin_fields(&host, None, None, Some(1), None, None, false)
+        .unwrap();
+    let err = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 52)).unwrap_err();
+    assert_eq!(proto_code(err), err::SERVICE_EXP);
 }
 
 fn or_attr(store: &mut PrincipalStore, name: &PrincipalName, bit: u32) {
