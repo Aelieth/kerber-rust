@@ -3,6 +3,7 @@
  */
 #include <gssapi/gssapi.h>
 #include <gssapi/gssapi_krb5.h>
+static gss_OID_desc oid_spnego = { 6, (void *)"\x2b\x06\x01\x05\x05\x02" };
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <stdio.h>
@@ -53,7 +54,15 @@ int main(int argc, char **argv) {
     const char *msg = argv[3];
     const char *ip = argv[4];
     int port = atoi(argv[5]);
-    int want_deleg = argc >= 7 && strcmp(argv[6], "deleg") == 0;
+    int want_deleg = 0;
+    gss_OID mech = (gss_OID)gss_mech_krb5;
+    if (argc >= 7) {
+        if (strcmp(argv[6], "deleg") == 0) {
+            want_deleg = 1;
+        } else if (strcmp(argv[6], "spnego") == 0) {
+            mech = &oid_spnego;
+        }
+    }
 
     char namebuf[256];
     snprintf(namebuf, sizeof namebuf, "%s@%s", service, host);
@@ -87,7 +96,7 @@ int main(int argc, char **argv) {
             GSS_C_NO_CREDENTIAL,
             &ctx,
             target,
-            (gss_OID)gss_mech_krb5,
+            mech,
             GSS_C_MUTUAL_FLAG | GSS_C_CONF_FLAG | GSS_C_INTEG_FLAG
                 | (want_deleg ? GSS_C_DELEG_FLAG : 0),
             0,

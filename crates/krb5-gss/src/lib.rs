@@ -146,6 +146,7 @@ pub struct GssContext {
     pub client: Option<String>,
     /// Delegated client from a 0x8003 KRB-CRED trailer (`GSS_C_DELEG_FLAG`).
     pub delegated: Option<String>,
+    spnego_mech_list: Option<Vec<u8>>,
 }
 
 /// Forwarded TGT (or other ticket) to embed in a GSS delegation checksum.
@@ -231,6 +232,7 @@ impl GssContext {
                     String::from_utf8_lossy(crealm.as_bytes())
                 )),
                 delegated: None,
+                spnego_mech_list: None,
             },
             token,
         ))
@@ -269,6 +271,7 @@ impl GssContext {
             replay: ReplayCache::new(),
             client: None,
             delegated: None,
+            spnego_mech_list: None,
         };
         let params = krb5_protocol::ApVerifyParams {
             expected_server,
@@ -332,6 +335,7 @@ impl GssContext {
             replay: ctx.replay,
             client: Some(client),
             delegated,
+            spnego_mech_list: None,
         };
         let mut ap_rep_tok = None;
         if want_mutual {
@@ -938,6 +942,196 @@ fn find_mech_token(neg: &[u8]) -> Result<&[u8], Error> {
     Err(Error::Truncated)
 }
 
+const SPNEGO_ACCEPT_COMPLETED: u8 = 0;
+
+fn der_oid(oid: &[u8]) -> Vec<u8> {
+    der_tlv(0x06, oid)
+}
+
+fn der_octet(b: &[u8]) -> Vec<u8> {
+    der_tlv(0x04, b)
+}
+
+fn der_enumerated(v: u8) -> Vec<u8> {
+    vec![0x0a, 0x01, v]
+}
+
+fn parse_octet(body: &[u8]) -> Result<Vec<u8>, Error> {
+    if body.first() != Some(&0x04) {
+        return Ok(body.to_vec());
+    }
+    let (h, n) = der_len_decode(body.get(1..).ok_or(Error::Truncated)?)?;
+    body.get(1 + h..1 + h + n)
+        .ok_or(Error::Truncated)
+        .map(<[u8]>::to_vec)
+}
+
+fn gss_oid_body(token: &[u8]) -> Result<(&[u8], &[u8]), Error> {
+    if token.len() < 2 || token[0] != 0x60 {
+        return Err(Error::Truncated);
+    }
+    let (hlen, blen) = der_len_decode(&token[1..])?;
+    let start = 1 + hlen;
+    let body = token.get(start..start + blen).ok_or(Error::Truncated)?;
+    if body.first() != Some(&0x06) || body.len() < 2 {
+        return Err(Error::Truncated);
+    }
+    let oid_len = usize::from(body[1]);
+    let oid = body.get(2..2 + oid_len).ok_or(Error::Truncated)?;
+    let rest = body.get(2 + oid_len..).ok_or(Error::Truncated)?;
+    Ok((oid, rest))
+}
+
+/// Whether `token` is a GSS-wrapped SPNEGO NegotiationToken.
+#[must_use]
+pub fn is_spnego(token: &[u8]) -> bool {
+    matches!(gss_oid_body(token), Ok((oid, _)) if oid == SPNEGO_OID)
+}
+
+struct NegInit {
+    mech_list_der: Vec<u8>,
+    mech_token: Vec<u8>,
+    mic: Option<Vec<u8>>,
+}
+
+fn parse_neg_init(token: &[u8]) -> Result<NegInit, Error> {
+    let (oid, rest) = gss_oid_body(token)?;
+    if oid != SPNEGO_OID {
+        return Err(Error::Truncated);
+    }
+    if rest.first() != Some(&0xa0) {
+        return Err(Error::Truncated);
+    }
+    let (h, n) = der_len_decode(rest.get(1..).ok_or(Error::Truncated)?)?;
+    let inner = rest.get(1 + h..1 + h + n).ok_or(Error::Truncated)?;
+    let seq = if inner.first() == Some(&0x30) {
+        let (sh, sn) = der_len_decode(inner.get(1..).ok_or(Error::Truncated)?)?;
+        inner.get(1 + sh..1 + sh + sn).ok_or(Error::Truncated)?
+    } else {
+        inner
+    };
+    let mut mech_list_der = None;
+    let mut mech_token = None;
+    let mut mic = None;
+    let mut i = 0usize;
+    while i < seq.len() {
+        let tag = seq[i];
+        let (lh, ln) = der_len_decode(seq.get(i + 1..).ok_or(Error::Truncated)?)?;
+        let body = seq
+            .get(i + 1 + lh..i + 1 + lh + ln)
+            .ok_or(Error::Truncated)?;
+        match tag {
+            0xa0 => mech_list_der = Some(body.to_vec()),
+            0xa2 => mech_token = Some(parse_octet(body)?),
+            0xa3 => mic = Some(parse_octet(body)?),
+            _ => {}
+        }
+        i = i.saturating_add(1).saturating_add(lh).saturating_add(ln);
+    }
+    Ok(NegInit {
+        mech_list_der: mech_list_der.ok_or(Error::Truncated)?,
+        mech_token: mech_token.ok_or(Error::Truncated)?,
+        mic,
+    })
+}
+
+fn encode_neg_resp(state: u8, mech: &[u8], response: Option<&[u8]>, mic: Option<&[u8]>) -> Vec<u8> {
+    let mut seq = der_tlv(0xa0, &der_enumerated(state));
+    seq.extend_from_slice(&der_tlv(0xa1, &der_oid(mech)));
+    if let Some(r) = response {
+        seq.extend_from_slice(&der_tlv(0xa2, &der_octet(r)));
+    }
+    if let Some(m) = mic {
+        seq.extend_from_slice(&der_tlv(0xa3, &der_octet(m)));
+    }
+    der_tlv(0xa1, &der_tlv(0x30, &seq))
+}
+
+fn mech_token_as_gss(mech_token: &[u8]) -> Vec<u8> {
+    if mech_token.first() == Some(&0x60) {
+        mech_token.to_vec()
+    } else {
+        gss_wrap_app(TOK_AP_REQ, mech_token)
+    }
+}
+
+/// SPNEGO acceptor: `NegTokenInit` → krb5 accept → `NegTokenResp` with MIC.
+///
+/// # Errors
+///
+/// Truncated SPNEGO, AP-REQ verify, or MIC verify.
+pub fn spnego_accept(
+    token: &[u8],
+    service_keys: &[ProtocolKey],
+    channel_bindings: Option<&ChannelBindings>,
+    expected_server: Option<&PrincipalName>,
+    expected_realm: Option<&str>,
+) -> Result<(GssContext, Vec<u8>), Error> {
+    let init = parse_neg_init(token)?;
+    let mech = mech_token_as_gss(&init.mech_token);
+    let (mut ctx, ap_rep) = GssContext::accept_sec_context(
+        &mech,
+        service_keys,
+        channel_bindings,
+        expected_server,
+        expected_realm,
+    )?;
+    if let Some(mic) = &init.mic {
+        ctx.verify_mic(&init.mech_list_der, mic)?;
+    }
+    let mic = ctx.get_mic(&init.mech_list_der)?;
+    ctx.spnego_mech_list = Some(init.mech_list_der);
+    let resp = encode_neg_resp(
+        SPNEGO_ACCEPT_COMPLETED,
+        KRB5_OID,
+        ap_rep.as_deref(),
+        Some(&mic),
+    );
+    Ok((ctx, resp))
+}
+
+fn parse_neg_resp_mic(token: &[u8]) -> Result<Vec<u8>, Error> {
+    let rest = if token.first() == Some(&0xa1) {
+        token
+    } else {
+        return Err(Error::Truncated);
+    };
+    let (h, n) = der_len_decode(rest.get(1..).ok_or(Error::Truncated)?)?;
+    let inner = rest.get(1 + h..1 + h + n).ok_or(Error::Truncated)?;
+    let seq = if inner.first() == Some(&0x30) {
+        let (sh, sn) = der_len_decode(inner.get(1..).ok_or(Error::Truncated)?)?;
+        inner.get(1 + sh..1 + sh + sn).ok_or(Error::Truncated)?
+    } else {
+        inner
+    };
+    let mut i = 0usize;
+    while i < seq.len() {
+        let tag = seq[i];
+        let (lh, ln) = der_len_decode(seq.get(i + 1..).ok_or(Error::Truncated)?)?;
+        let body = seq
+            .get(i + 1 + lh..i + 1 + lh + ln)
+            .ok_or(Error::Truncated)?;
+        if tag == 0xa3 {
+            return parse_octet(body);
+        }
+        i = i.saturating_add(1).saturating_add(lh).saturating_add(ln);
+    }
+    Err(Error::Truncated)
+}
+
+impl GssContext {
+    /// Verify a follow-up SPNEGO `NegTokenResp` mechListMIC.
+    ///
+    /// # Errors
+    ///
+    /// Truncated token or MIC verify.
+    pub fn verify_spnego_mic(&mut self, token: &[u8]) -> Result<(), Error> {
+        let list = self.spnego_mech_list.clone().ok_or(Error::Truncated)?;
+        let mic = parse_neg_resp_mic(token)?;
+        self.verify_mic(&list, &mic)
+    }
+}
+
 fn md5_16(data: &[u8]) -> [u8; 16] {
     use md5::{Digest, Md5};
     let out = Md5::digest(data);
@@ -1169,6 +1363,51 @@ mod tests {
         assert_eq!(inner, krb.as_slice());
         let raw = der_tlv(0x60, &[der_tlv(0x06, KRB5_OID), vec![0x01, 0x00]].concat());
         assert_eq!(spnego_inner(&raw).unwrap(), raw.as_slice());
+    }
+
+    #[test]
+    fn spnego_accept_emits_neg_token_resp() {
+        let (_as_out, tgs_out, skey, cname) = user_host();
+        let (_init, krb) = GssContext::init_sec_context(
+            tgs_out.rep.0.ticket.clone(),
+            &tgs_out.session_key,
+            &ascii(TEST_REALM),
+            &cname,
+            true,
+            None,
+            None,
+        )
+        .unwrap();
+        let tok = spnego_init(&krb);
+        assert!(is_spnego(&tok));
+        let (acc, resp) = spnego_accept(
+            &tok,
+            std::slice::from_ref(&skey),
+            None,
+            Some(&documented_host()),
+            Some(TEST_REALM),
+        )
+        .unwrap();
+        assert_eq!(
+            resp.first().copied(),
+            Some(0xa1),
+            "MIT wants bare NegTokenResp"
+        );
+        assert!(acc.client.is_some());
+    }
+
+    #[test]
+    fn spnego_hostile_length_is_truncated_not_panic() {
+        let mut tok = vec![0x60, 0x82, 0xff, 0xff, 0x06, 0x06];
+        tok.extend_from_slice(SPNEGO_OID);
+        tok.extend_from_slice(&[0xa0, 0x03, 0x30, 0x01, 0x00]);
+        let r = std::panic::catch_unwind(|| parse_neg_init(&tok));
+        assert!(r.is_ok(), "hostile SPNEGO length must not panic");
+        assert!(matches!(r.unwrap(), Err(Error::Truncated)));
+        assert!(matches!(
+            spnego_accept(&tok, &[], None, None, None),
+            Err(Error::Truncated)
+        ));
     }
 
     #[test]

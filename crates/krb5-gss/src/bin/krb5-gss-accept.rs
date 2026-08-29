@@ -71,14 +71,24 @@ fn main() {
         eprintln!("read AP-REQ: {e}");
         std::process::exit(1);
     });
-    let inner = krb5_gss::spnego_inner(&tok).map_or_else(|_| tok.clone(), Vec::from);
     let realm = std::str::from_utf8(ent.realm.as_bytes()).unwrap_or("");
-    let (mut ctx, ap_rep) =
+    let (mut ctx, ap_rep) = if krb5_gss::is_spnego(&tok) {
+        let (ctx, resp) =
+            krb5_gss::spnego_accept(&tok, &service_keys, None, Some(&ent.name), Some(realm))
+                .unwrap_or_else(|e| {
+                    eprintln!("spnego_accept: {e}");
+                    std::process::exit(1);
+                });
+        println!("gss-accept spnego mic ok");
+        (ctx, Some(resp))
+    } else {
+        let inner = krb5_gss::spnego_inner(&tok).map_or_else(|_| tok.clone(), Vec::from);
         GssContext::accept_sec_context(&inner, &service_keys, None, Some(&ent.name), Some(realm))
             .unwrap_or_else(|e| {
                 eprintln!("accept_sec_context: {e}");
                 std::process::exit(1);
-            });
+            })
+    };
     if let Some(c) = ctx.client.as_deref() {
         println!("gss-accept client={c}");
     }
@@ -103,6 +113,15 @@ fn main() {
         };
         let n = wrap.len().min(16);
         eprintln!("wrap token len={} hdr={:02x?}", wrap.len(), &wrap[..n]);
+        if wrap.first() == Some(&0xa1) {
+            ctx.verify_spnego_mic(&wrap).unwrap_or_else(|e| {
+                eprintln!("spnego peer mic: {e}");
+                std::process::exit(1);
+            });
+            println!("gss-accept spnego peer mic ok");
+            nwrap = nwrap.saturating_add(1);
+            continue;
+        }
         let plain = ctx.unwrap(&wrap).unwrap_or_else(|e| {
             eprintln!("unwrap: {e}");
             std::process::exit(1);

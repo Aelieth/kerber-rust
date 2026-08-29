@@ -198,4 +198,30 @@ echo "$MIT_ACC"
 echo "$MIT_ACC" | grep -q 'mit-gss unwrap ok hello-from-rust-gss'
 echo "$MIT_ACC" | grep -q 'mit-gss delegated=user@KERBER.TEST'
 
-log "gss.gate" "ok" ",\"acceptor\":\"krb5-gss\",\"initiator\":\"mit-libgssapi\",\"deleg\":\"both\""
+echo "==== MIT SPNEGO initiator vs Rust acceptor ===="
+docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
+sleep 0.2
+docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /etc/krb5kdc/testhost.keytab --listen 127.0.0.1:4444 >/tmp/gss-accept-spnego.log 2>&1'
+ok=0
+for _ in $(seq 1 20); do
+    if docker exec "$NAME" grep -q 'listening' /tmp/gss-accept-spnego.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.15
+done
+[ "$ok" = 1 ] || {
+    docker exec "$NAME" cat /tmp/gss-accept-spnego.log >&2 || true
+    log "gss.gate" "error" ',"error":"gss-accept did not listen for spnego"'
+    exit 1
+}
+docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
+    /tmp/gss-mit-client testhost.kerber.test host "$MSG" 127.0.0.1 4444 spnego
+SPNEGO_LOG="$(docker exec "$NAME" cat /tmp/gss-accept-spnego.log 2>/dev/null || true)"
+echo "$SPNEGO_LOG"
+echo "$SPNEGO_LOG" | grep -q 'gss-accept unwrap ok'
+echo "$SPNEGO_LOG" | grep -q "$MSG"
+echo "$SPNEGO_LOG" | grep -q 'gss-accept spnego mic ok'
+echo "$SPNEGO_LOG" | grep -q 'gss-accept spnego peer mic ok'
+
+log "gss.gate" "ok" ",\"acceptor\":\"krb5-gss\",\"initiator\":\"mit-libgssapi\",\"deleg\":\"both\",\"spnego\":\"ok\""
