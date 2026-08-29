@@ -1083,6 +1083,9 @@ impl PrincipalStore {
 
     /// ACL-gated keytab export using the existing v2 writer.
     ///
+    /// `LOCKDOWN_KEYS` is refused. Local CLI export uses
+    /// [`Self::export_keytab_local`].
+    ///
     /// # Errors
     ///
     /// [`Error::AclDenied`] or [`Error::NotFound`].
@@ -1097,6 +1100,24 @@ impl PrincipalStore {
         if p.attributes & KDB_LOCKDOWN_KEYS != 0 {
             return Err(Error::AclDenied);
         }
+        Self::keytab_from(p)
+    }
+
+    /// Local-operator keytab export for `--export-keytab` /
+    /// `--export-krbtgt-keytab`.
+    ///
+    /// The operator already holds the DB and stash, so `LOCKDOWN_KEYS` is
+    /// not applied. Remote kadm5 extract still uses [`Self::export_keytab`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    pub fn export_keytab_local(&self, name: &PrincipalName) -> Result<Keytab, Error> {
+        let p = self.get_name(name).ok_or(Error::NotFound)?;
+        Self::keytab_from(p)
+    }
+
+    fn keytab_from(p: &Principal) -> Result<Keytab, Error> {
         if p.keys.is_empty() {
             return Err(Error::NotFound);
         }

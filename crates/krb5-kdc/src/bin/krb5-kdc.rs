@@ -15,8 +15,8 @@ use std::path::PathBuf;
 
 use krb5_kdc::{
     Acl, BIND_CANDIDATES, PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER, bind_preferred,
-    documented_admin_id, documented_changepw, documented_host, documented_kadmin,
-    documented_kiprop, drop_privileges, open_store, serve, shared_store,
+    documented_changepw, documented_host, documented_kadmin, documented_kiprop, drop_privileges,
+    open_store, serve, shared_store,
 };
 
 fn main() {
@@ -117,8 +117,7 @@ fn main() {
         std::process::exit(1);
     }
     if let Some(path) = export_keytab.as_ref() {
-        let acl = Acl::allow_admin(documented_admin_id());
-        match store.export_keytab(&acl, &documented_admin_id(), &documented_host()) {
+        match store.export_keytab_local(&documented_host()) {
             Ok(kt) => {
                 if let Err(e) = kt.write_file(path) {
                     eprintln!("krb5-kdc: export-keytab {path}: {e}");
@@ -133,9 +132,8 @@ fn main() {
         }
     }
     if let Some(path) = export_krbtgt.as_ref() {
-        let acl = Acl::allow_admin(documented_admin_id());
         let tgt = krb5_types::PrincipalName::krbtgt(store.realm());
-        match store.export_keytab(&acl, &documented_admin_id(), &tgt) {
+        match store.export_keytab_local(&tgt) {
             Ok(kt) => {
                 if let Err(e) = kt.write_file(path) {
                     eprintln!("krb5-kdc: export-krbtgt-keytab {path}: {e}");

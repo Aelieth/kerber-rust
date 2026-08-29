@@ -89,6 +89,24 @@ fn export_keytab_lockdown_is_denied() {
 }
 
 #[test]
+fn export_keytab_local_bypasses_lockdown() {
+    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
+    let tgt = PrincipalName::krbtgt(TEST_REALM);
+    store
+        .apply_admin_fields(&tgt, Some(KDB_LOCKDOWN_KEYS), None, None, None, None, false)
+        .expect("lockdown krbtgt");
+    let err = store
+        .export_keytab(&acl, &documented_admin_id(), &tgt)
+        .unwrap_err();
+    assert_eq!(err, Error::AclDenied);
+    let kt = store
+        .export_keytab_local(&tgt)
+        .expect("local --export-krbtgt-keytab");
+    assert!(!kt.entries.is_empty());
+    assert_eq!(kt.entries[0].name.components_joined(), "krbtgt/KERBER.TEST");
+}
+
+#[test]
 fn acl_deny_non_admin_create_delete_ktadd() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     let user = format!("{TEST_USER}@{TEST_REALM}");
