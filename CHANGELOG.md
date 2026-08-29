@@ -72,6 +72,18 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   again. SETKEY4 is MIT `xdr_kadm5_key_data`. `getprinc` lists
   current keys only.
 
+- **G1–G4 consolidation (MIT-gated).** S4U2Self looks up the
+  impersonated for-user (missing `C_PRINCIPAL_UNKNOWN`,
+  `DISALLOW_ALL_TIX` `CLIENT_REVOKED`, expired `NAME_EXP`). Iprop
+  decode caps hostile XDR counts. `+needchange` /
+  `REQUIRES_PWCHANGE` is `KEY_EXPIRED` except `PWCHANGE_SERVICE`.
+  Incremental kdbe omits vendor `0x4B0x` TL. Keepold key_data is
+  separate from OSA password history (EXTRACT / getprinc /
+  `cpw -keepold`). getprinc dates come from stored TL. CHRAND
+  denial is `AUTH_CHANGEPW`. Renewal rejects `renew_till <= now`.
+  Keyless incremental apply keeps replica keys. Gates:
+  `s4u-mit-gate`, `expire-gate`, `kadmin-gate`.
+
 - KDB extension surface: `PrincipalRead` / `PrincipalWrite` /
   `StoreLifecycle`. Dump-v7 is the default backend; `db_library=memory`
   serves `MemoryStore` seeded from dump (`scripts/store-gate.sh`).
