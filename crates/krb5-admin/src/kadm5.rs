@@ -1791,6 +1791,8 @@ fn parse_setkey(
     let n = r.u32()?;
     let mut keys = Vec::new();
     for _ in 0..n {
+        // SETKEY4 is MIT xdr_kadm5_key_data (kvno, keyblock, salt), not
+        // xdr_krb5_key_data (no leading key_data_ver).
         let kvno = if proc == SETKEY_PRINCIPAL4 {
             r.u32()?
         } else {
@@ -2762,6 +2764,28 @@ mod tests {
         w.b
     }
 
+    fn setkey4_args(
+        name: &str,
+        keepold: bool,
+        kvno: u32,
+        etype: i32,
+        key: &[u8],
+        salt_type: i32,
+        salt: &[u8],
+    ) -> Vec<u8> {
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some(name));
+        w.u32(u32::from(keepold));
+        w.u32(1);
+        w.u32(kvno);
+        w.u32(u32::try_from(etype).unwrap());
+        w.opaque(key);
+        w.u32(u32::try_from(salt_type).unwrap());
+        w.opaque(salt);
+        w.b
+    }
+
     #[test]
     fn setkey3_empty_ks_tuple() {
         let (store, acl, actor) = setup();
@@ -2809,16 +2833,6 @@ mod tests {
     #[test]
     fn setkey4_keepold_retains_history() {
         let (store, acl, actor) = setup();
-        let mut w = XdrW::default();
-        w.u32(API_V2);
-        w.nullstring(Some("user@KERBER.TEST"));
-        w.u32(1);
-        w.u32(1);
-        w.u32(0);
-        w.u32(18);
-        w.opaque(&[0xCDu8; 32]);
-        w.u32(0);
-        w.opaque(&[]);
         let n_old = {
             let g = store.read().unwrap();
             g.get_name(&PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]))
@@ -2826,7 +2840,14 @@ mod tests {
                 .keys
                 .len()
         };
-        let out = dispatch_kadm5(&store, &acl, &actor, SETKEY_PRINCIPAL4, &w.b).unwrap();
+        let out = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            SETKEY_PRINCIPAL4,
+            &setkey4_args("user@KERBER.TEST", true, 0, 18, &[0xCDu8; 32], 0, &[]),
+        )
+        .unwrap();
         assert_eq!(ret_code(&out), 0);
         let g = store.read().unwrap();
         let p = g
@@ -2835,6 +2856,53 @@ mod tests {
         assert_eq!(p.keys.len(), 1);
         assert_eq!(p.key_history.len(), n_old);
         assert_eq!(p.keys[0].key.as_bytes(), &[0xCDu8; 32]);
+    }
+
+    #[test]
+    fn setkey4_kadm5_key_data_kvno_and_salt() {
+        let (store, acl, actor) = setup();
+        let key = [0x11u8; 32];
+        let salt = b"special-salt";
+        let out = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            SETKEY_PRINCIPAL4,
+            &setkey4_args("user@KERBER.TEST", false, 5, 18, &key, 4, salt),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&out), 0);
+        let g = store.read().unwrap();
+        let p = g
+            .get_name(&PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]))
+            .unwrap();
+        assert_eq!(p.keys.len(), 1);
+        assert_eq!(p.keys[0].kvno, 5);
+        assert_eq!(p.keys[0].etype.to_iana(), 18);
+        assert_eq!(p.keys[0].key.as_bytes(), key);
+        assert_eq!(p.keys[0].salt_type, Some(4));
+        assert_eq!(p.keys[0].kdb_salt.as_deref(), Some(salt.as_slice()));
+        assert!(p.key_history.is_empty());
+    }
+
+    #[test]
+    fn setkey4_krb5_key_data_ver_first_does_not_decode() {
+        let (store, acl, actor) = setup();
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some("user@KERBER.TEST"));
+        w.u32(0);
+        w.u32(1);
+        w.u32(2);
+        w.u32(5);
+        w.u32(18);
+        w.opaque(&[0xABu8; 32]);
+        w.u32(4);
+        w.opaque(b"s");
+        assert!(
+            dispatch_kadm5(&store, &acl, &actor, SETKEY_PRINCIPAL4, &w.b).is_err(),
+            "xdr_krb5_key_data (key_data_ver first) is not SETKEY4"
+        );
     }
 
     #[test]
