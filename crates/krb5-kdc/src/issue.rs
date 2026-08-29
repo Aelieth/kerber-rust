@@ -543,6 +543,9 @@ fn issue_tgs_from(
             sname = referral;
         }
     }
+    if (renew || validate) && sname != ap.ticket.sname {
+        return Err(proto(err::BADOPTION, "RENEW/VALIDATE server mismatch"));
+    }
     current_policy().check_tgs(store, &sname)?;
     let server = store
         .fetch_name(&sname)?

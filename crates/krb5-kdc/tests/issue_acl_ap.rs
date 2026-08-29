@@ -959,6 +959,40 @@ fn tgs_renew_and_validate_together_is_badoption() {
     assert_eq!(proto_code(err), err::BADOPTION);
 }
 
+fn renew_tgs_sname(
+    issued: &krb5_kdc::IssuedAs,
+    sname: PrincipalName,
+    nonce: u32,
+) -> krb5_types::TgsReq {
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    tgs_req_ex(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        sname,
+        TEST_REALM,
+        nonce,
+        KdcOptions::forwardable()
+            .with_bit(flag_bit::RENEWABLE, true)
+            .with_bit(flag_bit::RENEW, true),
+        None,
+        Vec::new(),
+        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
+    )
+    .expect("RENEW TGS-REQ")
+}
+
+#[test]
+fn tgs_renew_wrong_sname_is_badoption() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let issued = renewable_as(&store, 118);
+    let err =
+        krb5_kdc::issue_tgs(&store, &renew_tgs_sname(&issued, documented_host(), 119)).unwrap_err();
+    assert_eq!(proto_code(err), err::BADOPTION);
+    krb5_kdc::issue_tgs(&store, &renew_tgs(&issued, 120)).expect("RENEW krbtgt");
+}
+
 #[test]
 fn tgs_honors_svr_tgt_based_lockout_and_ok_as_delegate() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
