@@ -1289,13 +1289,7 @@ fn extract_delegated(
     if part.is_none() {
         part = unwrap_krb_cred(ticket_session, raw, &ReplayCache::new()).ok();
     }
-    let part = if let Some(p) = part {
-        p
-    } else {
-        let msg: KrbCred = decode(raw)?;
-        let enc: EncKrbCredPart = decode(msg.enc_part.cipher.as_ref())?;
-        (msg, enc)
-    };
+    let part = part.ok_or(Error::Integrity)?;
     let info = part.1.ticket_info.first().ok_or(Error::Truncated)?;
     let name = info
         .pname
@@ -2337,6 +2331,84 @@ mod tests {
         .unwrap();
         let want = format!("{TEST_USER}@{TEST_REALM}");
         assert_eq!(acc.delegated(), Some(want.as_str()));
+    }
+
+    #[test]
+    fn accept_plaintext_krb_cred_is_refused() {
+        let (as_out, tgs_out, skey, cname) = user_host();
+        let realm = ascii(TEST_REALM);
+        let info = KrbCredInfo {
+            key: EncryptionKey {
+                keytype: as_out.session_key.etype().to_iana(),
+                keyvalue: as_out.session_key.as_bytes().to_vec().into(),
+            },
+            prealm: Some(realm.clone()),
+            pname: Some(cname.clone()),
+            flags: None,
+            authtime: None,
+            starttime: None,
+            endtime: None,
+            renew_till: None,
+            srealm: Some(realm.clone()),
+            sname: Some(PrincipalName::krbtgt(TEST_REALM)),
+            caddr: None,
+        };
+        let now = KerberosTime::now();
+        let part = EncKrbCredPart {
+            ticket_info: vec![info],
+            nonce: None,
+            timestamp: Some(now.clone()),
+            usec: Some(Microseconds::from_subsec_micros(
+                now.0.timestamp_subsec_micros(),
+            )),
+            s_address: None,
+            r_address: None,
+        };
+        let cred = KrbCred {
+            pvno: KrbCred::PVNO,
+            msg_type: KrbCred::MSG_TYPE,
+            tickets: vec![as_out.rep.0.ticket.clone()],
+            enc_part: EncryptedData {
+                etype: tgs_out.session_key.etype().to_iana(),
+                kvno: None,
+                cipher: encode(&part).unwrap().into(),
+            },
+        };
+        let der = encode(&cred).unwrap();
+        let ck = authenticator_checksum(None, GSS_C_DELEG | GSS_C_INTEG, Some(&der));
+        let cksum = Checksum {
+            cksumtype: GSS_CHECKSUM_TYPE,
+            checksum: ck.into(),
+        };
+        let sub = random_subkey(&tgs_out.session_key).unwrap();
+        let enc_sub = EncryptionKey {
+            keytype: sub.etype().to_iana(),
+            keyvalue: sub.as_bytes().to_vec().into(),
+        };
+        let ap = build_ap_req_with_cksum(
+            tgs_out.rep.0.ticket.clone(),
+            &tgs_out.session_key,
+            &realm,
+            &cname,
+            ApOptions::none(),
+            Some(cksum),
+            Some(enc_sub),
+        )
+        .unwrap();
+        let token = gss_wrap_app(TOK_AP_REQ, &encode(&ap).unwrap());
+        let Err(err) = GssContext::accept_sec_context(
+            &token,
+            std::slice::from_ref(&skey),
+            None,
+            Some(&documented_host()),
+            Some(TEST_REALM),
+        ) else {
+            panic!("plaintext EncKrbCredPart must not populate delegated()")
+        };
+        assert!(
+            matches!(err, Error::Integrity),
+            "plaintext KRB-CRED must be Integrity, got {err}"
+        );
     }
 
     struct WrappedIov {

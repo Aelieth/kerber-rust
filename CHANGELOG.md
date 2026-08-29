@@ -94,7 +94,9 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   (HEADER|DATA|empty PADDING|TRAILER, RRC=0); `SIGN_ONLY` is in the
   integrity HMAC. `export_sec_context`/`import_sec_context` round-trip
   wrap; `inquire_context` reports ticket lifetime and GSS flags
-  (`scripts/gss-gate.sh`).
+  (`scripts/gss-gate.sh`). A delegated KRB-CRED must decrypt under the
+  ticket session key (or authenticator subkey); a plaintext
+  EncKrbCredPart trailer is `Integrity`.
 
 - KDB extension surface: `PrincipalRead` / `PrincipalWrite` /
   `StoreLifecycle`. Dump-v7 is the default backend; `db_library=memory`
