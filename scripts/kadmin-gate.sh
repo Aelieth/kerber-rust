@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # MIT 1.22.2 kadmin against Rust kadmind (GSS-RPC 749):
-# addprinc, cpw, getprinc, listprincs, modprinc, cpw -randkey, ktadd, delprinc.
+# addprinc, cpw, getprinc, listprincs, modprinc, cpw -randkey, ktadd,
+# ktadd -norandkey, delprinc.
 # Isolated: runs inside the MIT image; never touches host /etc/krb5.conf.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -57,9 +58,14 @@ if [ "$ok" != 1 ]; then
     exit 1
 fi
 
+docker exec "$NAME" sh -c 'cat >/tmp/kadm5.acl <<EOF
+admin@KERBER.TEST *e
+EOF'
+
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_ACL_FILE=/tmp/kadm5.acl \
     "$NAME" sh -c '/tmp/krb5-kadmind 127.0.0.1:749 >/tmp/kadmind.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
@@ -164,6 +170,21 @@ KLIST4="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" klist)"
 echo "$KLIST4"
 echo "$KLIST4" | grep -q 'extra@KERBER.TEST'
 
+echo "==== MIT kadmin ktadd -norandkey extra + kinit -k ===="
+KTN="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'ktadd -norandkey -k /tmp/extra-norand.keytab extra' 2>&1 || true)"
+echo "$KTN"
+echo "$KTN" | grep -qi 'added to keytab'
+if echo "$KTN" | grep -qiE 'extract-keys|AUTH_EXTRACT|Operation requires|while adding'; then
+    echo "ktadd -norandkey failed: $KTN" >&2
+    exit 1
+fi
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kinit -k -t /tmp/extra-norand.keytab extra@KERBER.TEST
+KLISTN="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" klist)"
+echo "$KLISTN"
+echo "$KLISTN" | grep -q 'extra@KERBER.TEST'
+
 echo "==== MIT kadmin renprinc (randkey; default-salt password kinit is not required) ===="
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -randkey renamefrom'
@@ -193,6 +214,6 @@ DELGET="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
 echo "$DELGET"
 echo "$DELGET" | grep -qiE 'does not exist|not found|UNK_PRINC'
 
-log "kadmin.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"addprinc+cpw+get+list+mod+chrand+renprinc+del"'
+log "kadmin.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"addprinc+cpw+get+list+mod+chrand+norandkey+renprinc+del"'
 exit 0
 

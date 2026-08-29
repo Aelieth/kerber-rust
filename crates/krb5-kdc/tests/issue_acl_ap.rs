@@ -4,10 +4,10 @@ use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, string_to_key};
 use krb5_kdc::{
     Acl, AdminOp, Error, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED,
-    KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_NO_AUTH_DATA_REQUIRED,
-    KDB_OK_AS_DELEGATE, KDB_REQUIRES_HW_AUTH, PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER,
-    TEST_USER_PASSWORD, acl_for_store, as_req, bootstrap_documented, documented_admin_id,
-    documented_changepw, documented_host, pa_enc_timestamp, tgs_req,
+    KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_LOCKDOWN_KEYS,
+    KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE, KDB_REQUIRES_HW_AUTH, PrincipalStore, S2K_ITERS,
+    TEST_REALM, TEST_USER, TEST_USER_PASSWORD, acl_for_store, as_req, bootstrap_documented,
+    documented_admin_id, documented_changepw, documented_host, pa_enc_timestamp, tgs_req,
 };
 use krb5_protocol::Keytab;
 use krb5_protocol::{ReplayCache, as_req_sname, build_ap_req, tgs_req_ex, verify_ap_req};
@@ -69,6 +69,26 @@ fn acl_allow_admin_create_and_ktadd() {
 }
 
 #[test]
+fn export_keytab_lockdown_is_denied() {
+    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
+    store
+        .apply_admin_fields(
+            &documented_host(),
+            Some(KDB_LOCKDOWN_KEYS),
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .expect("lockdown");
+    let err = store
+        .export_keytab(&acl, &documented_admin_id(), &documented_host())
+        .unwrap_err();
+    assert_eq!(err, Error::AclDenied);
+}
+
+#[test]
 fn acl_deny_non_admin_create_delete_ktadd() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     let user = format!("{TEST_USER}@{TEST_REALM}");
@@ -90,7 +110,16 @@ fn acl_parse_kadm5_style() {
     assert!(acl.check("admin@KERBER.TEST", AdminOp::Create).is_ok());
     assert!(acl.check("admin@KERBER.TEST", AdminOp::Modify).is_ok());
     assert!(acl.check("admin@KERBER.TEST", AdminOp::Inquire).is_ok());
-    assert!(acl.check("user@KERBER.TEST", AdminOp::Ktadd).is_ok());
+    assert_eq!(
+        acl.check("admin@KERBER.TEST", AdminOp::Extract)
+            .unwrap_err(),
+        Error::AclDenied,
+        "MIT * / x does not grant extract"
+    );
+    assert_eq!(
+        acl.check("user@KERBER.TEST", AdminOp::Ktadd).unwrap_err(),
+        Error::AclDenied
+    );
     assert!(acl.check("user@KERBER.TEST", AdminOp::Inquire).is_ok());
     assert_eq!(
         acl.check("user@KERBER.TEST", AdminOp::Create).unwrap_err(),
@@ -103,6 +132,9 @@ fn acl_parse_kadm5_style() {
     assert_eq!(acl.privs("admin@KERBER.TEST"), 0x3F);
     assert_eq!(acl.privs("user@KERBER.TEST"), 0x01);
     assert_eq!(acl.privs("nobody@KERBER.TEST"), 0);
+    let with_e = Acl::parse("admin@KERBER.TEST *e\n");
+    assert!(with_e.check("admin@KERBER.TEST", AdminOp::Extract).is_ok());
+    assert_eq!(with_e.privs("admin@KERBER.TEST"), 0x7F);
 }
 
 #[test]

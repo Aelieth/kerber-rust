@@ -15,6 +15,8 @@ pub enum AdminOp {
     ChangePassword,
     /// Inquire (`getprinc` / `listprincs` / kadm5 `i`).
     Inquire,
+    /// Extract keys (`ktadd -norandkey` / kadm5 `e`). Not implied by `*`/`x`.
+    Extract,
     /// Modify attributes (`modprinc` / kadm5 `m`).
     Modify,
     /// List principals/policies (kadm5 `l`).
@@ -32,8 +34,10 @@ pub struct AclEntry {
     pub add: bool,
     /// `d` / `*`
     pub delete: bool,
-    /// `i` (inquire / extract) / `*`
+    /// `i` (inquire) / `*`
     pub inquire: bool,
+    /// `e` (extract keys). MIT does not include this in `*`/`x`.
+    pub extract: bool,
     /// `c` (changepw) / `*`
     pub changepw: bool,
     /// `m` (modify) / `*`
@@ -77,6 +81,7 @@ impl Acl {
                 add: all || perms.contains('a'),
                 delete: all || perms.contains('d'),
                 inquire: all || perms.contains('i'),
+                extract: perms.contains('e'),
                 changepw: all || perms.contains('c'),
                 modify: all || perms.contains('m'),
                 list: all || perms.contains('l'),
@@ -95,6 +100,7 @@ impl Acl {
                 add: true,
                 delete: true,
                 inquire: true,
+                extract: true,
                 changepw: true,
                 modify: true,
                 list: true,
@@ -116,7 +122,8 @@ impl Acl {
             let ok = match op {
                 AdminOp::Create => e.add,
                 AdminOp::Delete => e.delete,
-                AdminOp::Ktadd | AdminOp::Inquire => e.inquire,
+                AdminOp::Inquire => e.inquire,
+                AdminOp::Ktadd | AdminOp::Extract => e.extract,
                 AdminOp::ChangePassword => e.changepw,
                 AdminOp::Modify => e.modify,
                 AdminOp::List => e.list,
@@ -171,6 +178,9 @@ impl Acl {
             if e.changepw {
                 bits |= 0x20;
             }
+            if e.extract {
+                bits |= 0x40;
+            }
             return bits;
         }
         0
@@ -190,6 +200,7 @@ fn op_name(op: AdminOp) -> &'static str {
         AdminOp::Ktadd => "ktadd",
         AdminOp::ChangePassword => "cpw",
         AdminOp::Inquire => "inquire",
+        AdminOp::Extract => "extract",
         AdminOp::Modify => "modify",
         AdminOp::List => "list",
         AdminOp::Propagate => "propagate",

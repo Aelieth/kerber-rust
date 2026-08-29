@@ -10,8 +10,8 @@ use std::net::TcpStream;
 use krb5_crypto::{EncryptionType, ProtocolKey, kdb_decrypt_key};
 use krb5_gss::GssContext;
 use krb5_kdc::{
-    Acl, KDB_DISALLOW_ALL_TIX, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH, KeyEntry, Principal,
-    SharedDump as SharedStore,
+    Acl, KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH,
+    KeyEntry, Principal, SharedDump as SharedStore,
 };
 use krb5_types::{PrincipalName, Ticket};
 
@@ -65,6 +65,7 @@ const GET_POLS: u32 = 15;
 const CREATE_PRINCIPAL3: u32 = 18;
 const CHPASS_PRINCIPAL3: u32 = 19;
 const CHRAND_PRINCIPAL3: u32 = 20;
+const EXTRACT_KEYS: u32 = 26;
 
 /// MIT `KADM5_UNK_PRINC`.
 const KADM5_UNK_PRINC: u32 = 43_787_532;
@@ -80,6 +81,10 @@ const KADM5_PASS_Q_TOOSHORT: u32 = 43_787_542;
 const KADM5_PASS_Q_CLASS: u32 = 43_787_543;
 /// MIT `ovk` 25.
 const KADM5_PASS_REUSE: u32 = 43_787_545;
+/// MIT `ovk` 60 (`KADM5_AUTH_EXTRACT`).
+const KADM5_AUTH_EXTRACT: u32 = 43_787_580;
+/// MIT `ovk` 61 (`KADM5_PROTECT_KEYS`).
+const KADM5_PROTECT_KEYS: u32 = 43_787_581;
 const KADM5_ATTRIBUTES: u32 = 0x0000_0010;
 const KADM5_MAX_LIFE: u32 = 0x0000_0020;
 const KADM5_PRINC_EXPIRE_TIME: u32 = 0x0000_0002;
@@ -97,8 +102,8 @@ const KADM5_PW_LOCKOUT_DURATION: u32 = 0x0040_0000;
 const API_V2: u32 = 0x1234_5702;
 const API_V3: u32 = 0x1234_5703;
 const API_V4: u32 = 0x1234_5704;
-/// MIT `KADM5_PRIV_{GET,ADD,MODIFY,DELETE}` plus list (0x10) and cpw (0x20).
-const KADM5_PRIVS: u32 = 0x0000_003F;
+/// MIT `KADM5_PRIV_{GET,ADD,MODIFY,DELETE}` plus list (0x10), cpw (0x20), extract (0x40).
+const KADM5_PRIVS: u32 = 0x0000_007F;
 
 /// Serve one TCP connection until EOF.
 ///
@@ -1425,6 +1430,29 @@ fn dispatch_kadm5(
                 Err(e) => Ok(generic_ret(API_V2, kadm5_code(&Error::from(e)))),
             }
         }
+        EXTRACT_KEYS => {
+            let (api, name, kvno) = parse_extract(args)?;
+            let g = store
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(p) = g.get_name(&name) else {
+                return Ok(generic_ret(api, KADM5_UNK_PRINC));
+            };
+            if acl.check(actor, krb5_kdc::AdminOp::Extract).is_err() {
+                return Ok(generic_ret(api, KADM5_AUTH_EXTRACT));
+            }
+            if p.attributes & KDB_LOCKDOWN_KEYS != 0 {
+                return Ok(generic_ret(api, KADM5_PROTECT_KEYS));
+            }
+            tracing::info!(
+                event = krb5_log::events::ADMIN,
+                component = "krb5-admin",
+                outcome = "ok",
+                detail = "extract",
+                principal = p.id(),
+            );
+            Ok(encode_extract_keys(api, p, kvno))
+        }
         _ => Ok(generic_ret(API_V2, 7)),
     }
 }
@@ -1634,6 +1662,14 @@ fn parse_rename(args: &[u8]) -> Result<(PrincipalName, PrincipalName), Error> {
     Ok((old, new))
 }
 
+fn parse_extract(args: &[u8]) -> Result<(u32, PrincipalName, u32), Error> {
+    let mut r = XdrR::new(args);
+    let api = r.u32()?;
+    let princ = r.principal()?;
+    let kvno = r.u32().unwrap_or(0);
+    Ok((api, princ, kvno))
+}
+
 fn parse_chrand(args: &[u8], v3: bool) -> Result<PrincipalName, Error> {
     let mut r = XdrR::new(args);
     let _api = r.u32()?;
@@ -1801,6 +1837,27 @@ fn encode_chrand(keys: &[krb5_kdc::KeyEntry]) -> Vec<u8> {
     for k in keys {
         w.u32(u32::try_from(k.etype.to_iana()).unwrap_or(0));
         w.opaque(k.key.as_bytes());
+    }
+    w.b
+}
+
+fn encode_extract_keys(api: u32, p: &krb5_kdc::Principal, kvno: u32) -> Vec<u8> {
+    let keys: Vec<&krb5_kdc::KeyEntry> = p
+        .keys
+        .iter()
+        .chain(p.key_history.iter())
+        .filter(|k| kvno == 0 || k.kvno == kvno)
+        .collect();
+    let mut w = XdrW::default();
+    w.u32(api);
+    w.u32(0);
+    w.u32(u32::try_from(keys.len()).unwrap_or(0));
+    for k in keys {
+        w.u32(k.kvno);
+        w.u32(u32::try_from(k.etype.to_iana()).unwrap_or(0));
+        w.opaque(k.key.as_bytes());
+        w.u32(u32::try_from(k.salt_type.unwrap_or(0)).unwrap_or(0));
+        w.opaque(k.kdb_salt.as_deref().unwrap_or(p.salt.as_slice()));
     }
     w.b
 }
@@ -2013,6 +2070,16 @@ mod tests {
         assert_eq!(r.u32().unwrap(), API_V2);
         assert_eq!(r.u32().unwrap(), 0);
         assert_eq!(r.u32().unwrap(), KADM5_PRIVS);
+        let star = Acl::parse("admin@KERBER.TEST *\n");
+        let star_out = dispatch_kadm5(&store, &star, &actor, GET_PRIVS, &[]).unwrap();
+        let mut r = XdrR::new(&star_out);
+        assert_eq!(r.u32().unwrap(), API_V2);
+        assert_eq!(r.u32().unwrap(), 0);
+        assert_eq!(
+            r.u32().unwrap(),
+            0x3F,
+            "MIT * does not include extract (0x40)"
+        );
         let limited = Acl::parse("admin@KERBER.TEST *\nlimited@KERBER.TEST i\n");
         let out = dispatch_kadm5(&store, &limited, "limited@KERBER.TEST", GET_PRIVS, &[]).unwrap();
         let mut r = XdrR::new(&out);
@@ -2201,6 +2268,118 @@ mod tests {
         w.nullstring(Some("no-such@KERBER.TEST"));
         w.u32(u32::MAX);
         let out = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &w.b).unwrap();
+        assert_eq!(ret_code(&out), KADM5_UNK_PRINC);
+    }
+
+    fn extract_args(name: &str, kvno: u32) -> Vec<u8> {
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some(name));
+        w.u32(kvno);
+        w.b
+    }
+
+    #[test]
+    fn extract_keys_returns_key_bytes() {
+        let (store, acl, actor) = setup();
+        let expected = {
+            let g = store.read().unwrap();
+            let p = g
+                .get_name(&PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]))
+                .unwrap();
+            (
+                p.keys.len(),
+                p.keys[0].kvno,
+                p.keys[0].etype.to_iana(),
+                p.keys[0].key.as_bytes().to_vec(),
+                p.salt.clone(),
+            )
+        };
+        let out = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            EXTRACT_KEYS,
+            &extract_args("user@KERBER.TEST", 0),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&out), 0);
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), API_V2);
+        assert_eq!(r.u32().unwrap(), 0);
+        let n = r.u32().unwrap();
+        assert_eq!(n as usize, expected.0);
+        assert_eq!(r.u32().unwrap(), expected.1);
+        assert_eq!(r.u32().unwrap(), u32::try_from(expected.2).unwrap());
+        assert_eq!(r.opaque().unwrap(), expected.3);
+        assert_eq!(r.u32().unwrap(), 0);
+        assert_eq!(r.opaque().unwrap(), expected.4);
+    }
+
+    #[test]
+    fn extract_keys_acl_is_auth_extract() {
+        let (store, _acl, _actor) = setup();
+        let limited = Acl::parse("admin@KERBER.TEST *\nlimited@KERBER.TEST i\n");
+        let out = dispatch_kadm5(
+            &store,
+            &limited,
+            "limited@KERBER.TEST",
+            EXTRACT_KEYS,
+            &extract_args("user@KERBER.TEST", 0),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&out), KADM5_AUTH_EXTRACT);
+        let star = Acl::parse("admin@KERBER.TEST *\n");
+        let denied = dispatch_kadm5(
+            &store,
+            &star,
+            "admin@KERBER.TEST",
+            EXTRACT_KEYS,
+            &extract_args("user@KERBER.TEST", 0),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&denied), KADM5_AUTH_EXTRACT);
+    }
+
+    #[test]
+    fn extract_keys_lockdown_is_protect_keys() {
+        let (store, acl, actor) = setup();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+        {
+            let mut g = store.write().unwrap();
+            g.apply_admin_fields(
+                &user,
+                Some(KDB_LOCKDOWN_KEYS),
+                None,
+                None,
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+        }
+        let out = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            EXTRACT_KEYS,
+            &extract_args("user@KERBER.TEST", 0),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&out), KADM5_PROTECT_KEYS);
+    }
+
+    #[test]
+    fn extract_keys_missing_is_unk_princ() {
+        let (store, acl, actor) = setup();
+        let out = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            EXTRACT_KEYS,
+            &extract_args("no-such@KERBER.TEST", 0),
+        )
+        .unwrap();
         assert_eq!(ret_code(&out), KADM5_UNK_PRINC);
     }
 

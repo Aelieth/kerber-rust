@@ -1091,6 +1091,9 @@ impl PrincipalStore {
     ) -> Result<Keytab, Error> {
         acl.check(actor, AdminOp::Ktadd)?;
         let p = self.get_name(name).ok_or(Error::NotFound)?;
+        if p.attributes & KDB_LOCKDOWN_KEYS != 0 {
+            return Err(Error::AclDenied);
+        }
         if p.keys.is_empty() {
             return Err(Error::NotFound);
         }

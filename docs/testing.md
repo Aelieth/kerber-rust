@@ -185,7 +185,8 @@ when that oracle is absent.
   (AUTH_GSSAPI 300001): `addprinc`, `cpw`, `getprinc` (`Principal:
   extra@KERBER.TEST`), `listprincs` (names `extra` and `user`),
   `modprinc +requires_preauth` then `kinit`, `cpw -randkey` (old
-  password must fail) + `ktadd` + `kinit -k`, `renprinc -force`
+  password must fail) + `ktadd` + `kinit -k`, `ktadd -norandkey` +
+  `kinit -k`, `renprinc -force`
   `renamefrom`→`renameto` then `getprinc` new / old fails / `kinit -k`
   new, `delprinc` then `getprinc` error. Rename uses `-randkey` (MIT
   default-salt password keys may not `kinit` after rename). Run twice.

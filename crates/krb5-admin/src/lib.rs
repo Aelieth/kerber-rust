@@ -139,7 +139,7 @@ impl<'a> AdminSession<'a> {
             .map_err(Error::from)
     }
 
-    /// Over-the-wire ktadd (ACL `inquire`).
+    /// Over-the-wire ktadd (ACL `e` / extract).
     ///
     /// # Errors
     ///
