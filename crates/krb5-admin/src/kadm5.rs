@@ -1973,7 +1973,7 @@ fn encode_principal_ent(w: &mut XdrW, p: &krb5_kdc::Principal) {
     w.u32(p.last_success);
     w.u32(p.last_failed);
     w.u32(p.fail_auth_count);
-    let n_key = u32::try_from(p.keys.len().saturating_add(p.key_history.len())).unwrap_or(0);
+    let n_key = u32::try_from(p.keys.len()).unwrap_or(0);
     let n_tl = u32::try_from(p.tl_data.len()).unwrap_or(0);
     w.u32(n_key);
     w.u32(n_tl);
@@ -1989,7 +1989,7 @@ fn encode_principal_ent(w: &mut XdrW, p: &krb5_kdc::Principal) {
         w.u32(0);
     }
     w.u32(n_key);
-    for k in p.keys.iter().chain(p.key_history.iter()) {
+    for k in &p.keys {
         let ver = if k.salt_type.is_some() { 2 } else { 1 };
         w.u32(ver);
         w.u32(k.kvno);
@@ -2452,6 +2452,91 @@ mod tests {
                 r.u32().unwrap();
             }
         }
+    }
+
+    fn gprinc_key_kvnos(out: &[u8]) -> (u32, Vec<u32>) {
+        let mut r = XdrR::new(out);
+        r.u32().unwrap();
+        r.u32().unwrap();
+        let _ = r.nullstring().unwrap();
+        for _ in 0..4 {
+            r.u32().unwrap();
+        }
+        assert_eq!(r.u32().unwrap(), 0);
+        let _ = r.nullstring().unwrap();
+        for _ in 0..4 {
+            r.u32().unwrap();
+        }
+        let _ = r.nullstring().unwrap();
+        for _ in 0..5 {
+            r.u32().unwrap();
+        }
+        let n_key = r.u32().unwrap();
+        let n_tl = r.u32().unwrap();
+        let tl_null = r.u32().unwrap();
+        if tl_null == 0 {
+            loop {
+                let more = r.u32().unwrap();
+                if more == 0 {
+                    break;
+                }
+                r.u32().unwrap();
+                let _ = r.opaque().unwrap();
+            }
+        } else {
+            assert_eq!(n_tl, 0);
+        }
+        let n = r.u32().unwrap();
+        assert_eq!(n, n_key);
+        let mut kvnos = Vec::new();
+        for _ in 0..n {
+            let ver = r.u32().unwrap();
+            kvnos.push(r.u32().unwrap());
+            r.u32().unwrap();
+            if ver > 1 {
+                r.u32().unwrap();
+            }
+        }
+        (n_key, kvnos)
+    }
+
+    #[test]
+    fn getprinc_omits_password_history_kvnos() {
+        let (store, acl, actor) = setup();
+        let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["histuser"]);
+        {
+            let mut g = store.write().unwrap();
+            let mut pol = krb5_kdc::NamedPolicy::new("e3hist");
+            pol.history = 2;
+            g.put_policy(pol);
+            g.create_password(&acl, &actor, &name, b"hist-secret")
+                .unwrap();
+            g.set_principal_policy(&name, Some("e3hist".into()))
+                .unwrap();
+            g.set_password(&name, b"hist-rotated").unwrap();
+            let p = g.get_name(&name).unwrap();
+            assert!(!p.key_history.is_empty());
+        }
+        let out = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &{
+            let mut w = XdrW::default();
+            w.u32(API_V2);
+            w.nullstring(Some("histuser@KERBER.TEST"));
+            w.u32(u32::MAX);
+            w.b
+        })
+        .unwrap();
+        assert_eq!(ret_code(&out), 0);
+        let (n_key, kvnos) = gprinc_key_kvnos(&out);
+        let g = store.read().unwrap();
+        let p = g.get_name(&name).unwrap();
+        assert_eq!(n_key as usize, p.keys.len());
+        let current = p.keys[0].kvno;
+        assert!(
+            kvnos.iter().all(|v| *v == current),
+            "history kvnos in getprinc: {kvnos:?}"
+        );
+        assert!(!p.key_history.is_empty());
+        assert!(p.key_history.iter().any(|k| k.kvno != current));
     }
 
     #[test]

@@ -187,8 +187,11 @@ docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
 GETP="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc purgee' 2>&1 || true)"
 echo "$GETP"
-echo "$GETP" | grep -qE 'Key: vno 1,'
 echo "$GETP" | grep -qE 'Key: vno 2,'
+if echo "$GETP" | grep -qE 'Key: vno 1,'; then
+    echo "getprinc listed password-history kvno 1: $GETP" >&2
+    exit 1
+fi
 PURGE="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'purgekeys purgee' 2>&1 || true)"
 echo "$PURGE"
