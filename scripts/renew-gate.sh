@@ -169,6 +169,7 @@ fi
 echo "==== second kinit -R after strip must fail ===="
 AGAIN="$(docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf "$NAME" kinit -R 2>&1 || true)"
 echo "$AGAIN"
+echo "$AGAIN" | grep -qiE "can't fulfill requested option|BADOPTION"
 if echo "$AGAIN" | grep -qiE 'Authenticated|Ticket cache'; then
     echo "second kinit -R after strip succeeded" >&2
     exit 1

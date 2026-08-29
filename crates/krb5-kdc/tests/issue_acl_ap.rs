@@ -900,7 +900,8 @@ fn validate_tgs(issued: &krb5_kdc::IssuedAs, nonce: u32) -> krb5_types::TgsReq {
 
 #[test]
 fn as_postdated_is_invalid_until_validate() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    store.policy.skew = 0;
     let from = KerberosTime::now().add_seconds(2).unwrap();
     let issued = krb5_kdc::issue_as(&store, &postdated_as_req(110, from)).expect("postdated AS");
     let part = tgt_part(&store, &issued);
@@ -916,6 +917,43 @@ fn as_postdated_is_invalid_until_validate() {
     assert!(!after.flags.invalid());
     krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 114))
         .expect_err("unvalidated TGT still NYV");
+}
+
+#[test]
+fn as_may_postdate_alone_does_not_postdate() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let from = KerberosTime::now().add_seconds(60).unwrap();
+    let mut req = user_as_req(123);
+    req.0.req_body.from = Some(from);
+    req.0.req_body.kdc_options = req
+        .0
+        .req_body
+        .kdc_options
+        .with_bit(flag_bit::MAY_POSTDATE, true);
+    let issued = krb5_kdc::issue_as(&store, &req).expect("AS");
+    let part = tgt_part(&store, &issued);
+    assert!(!part.flags.invalid());
+    assert!(!part.flags.bit(flag_bit::POSTDATED));
+    assert!(part.flags.bit(flag_bit::MAY_POSTDATE));
+}
+
+#[test]
+fn tgs_validate_allows_starttime_within_skew() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let from = KerberosTime::now().add_seconds(2).unwrap();
+    let issued = krb5_kdc::issue_as(&store, &postdated_as_req(124, from)).expect("postdated AS");
+    krb5_kdc::issue_tgs(&store, &validate_tgs(&issued, 125)).expect("VALIDATE within skew");
+}
+
+#[test]
+fn tgs_renew_strips_forwardable_when_disallow() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let issued = renewable_as(&store, 126);
+    assert!(tgt_part(&store, &issued).flags.forwardable());
+    or_attr(&mut store, &cname, KDB_DISALLOW_FORWARDABLE);
+    let out = krb5_kdc::issue_tgs(&store, &renew_tgs(&issued, 127)).expect("RENEW");
+    assert!(!tgs_tgt_part(&store, &out).flags.forwardable());
 }
 
 #[test]

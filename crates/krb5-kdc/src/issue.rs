@@ -345,8 +345,7 @@ fn issue_as_from(
     }
     if let Some(from) = &body.from
         && from.unix_seconds() > now.unix_seconds()
-        && (body.kdc_options.bit(flag_bit::POSTDATED)
-            || body.kdc_options.bit(flag_bit::MAY_POSTDATE))
+        && body.kdc_options.bit(flag_bit::POSTDATED)
     {
         starttime = from.clone();
         flags = flags
@@ -624,15 +623,11 @@ fn issue_tgs_from(
             end = till.clone();
         }
         flags = enc_tkt.flags.clone().with_bit(flag_bit::INVALID, false);
-        let deny_ren = attr(&server, KDB_DISALLOW_RENEWABLE)
-            || tgs_client
-                .as_ref()
-                .is_some_and(|c| attr(c, KDB_DISALLOW_RENEWABLE));
-        if deny_ren {
-            flags = flags.with_bit(flag_bit::RENEWABLE, false);
-            ticket_renew_till = None;
-        } else {
+        flags = apply_disallow_flags(flags, tgs_client.as_ref(), &server);
+        if flags.renewable() {
             ticket_renew_till = enc_tkt.renew_till.clone();
+        } else {
+            ticket_renew_till = None;
         }
         if !skip_transited {
             flags = flags.with_bit(flag_bit::TRANSITED_POLICY_CHECKED, true);
@@ -843,7 +838,7 @@ fn check_ticket_times(
             return Err(proto(err::BADOPTION, "VALIDATE VALID TICKET"));
         }
         let start = tkt.starttime.as_ref().unwrap_or(&tkt.authtime);
-        if start.unix_seconds() > now.unix_seconds() {
+        if now.delta_seconds(start) < -skew {
             return Err(proto(err::TKT_NYV, "NOT_YET_VALID"));
         }
         if tkt.endtime.delta_seconds(&now) < -skew {
