@@ -560,12 +560,21 @@ impl PrincipalStore {
     }
 
     /// Apply serial-delta (does not re-log).
+    ///
+    /// MIT incremental kdbe is a field mask: a later `setstr` update may
+    /// omit `AT_KEYDATA`. Empty incoming keys/history keep the existing
+    /// principal's.
     pub fn apply_updates(&mut self, entries: &[UlogEntry]) {
         for e in entries {
             if e.deleted {
                 self.map.remove(&e.name);
             } else if let Some(p) = &e.princ {
-                self.map.insert(p.id(), p.clone());
+                let merged = if let Some(old) = self.map.get(&p.id()) {
+                    Self::merge_iprop_princ(old, p)
+                } else {
+                    p.clone()
+                };
+                self.map.insert(merged.id(), merged);
             }
             let cur = self.serial();
             if e.sno > cur {
@@ -573,6 +582,32 @@ impl PrincipalStore {
             }
         }
         let _ = self.save_if_configured();
+    }
+
+    fn merge_iprop_princ(old: &Principal, new: &Principal) -> Principal {
+        let mut m = new.clone();
+        if m.keys.is_empty() {
+            m.keys.clone_from(&old.keys);
+        }
+        if m.key_history.is_empty() {
+            m.key_history.clone_from(&old.key_history);
+        }
+        if m.string_attrs.is_empty() {
+            m.string_attrs.clone_from(&old.string_attrs);
+        }
+        if m.tl_data.is_empty() {
+            m.tl_data.clone_from(&old.tl_data);
+        }
+        if m.pw_policy.is_none() {
+            m.pw_policy.clone_from(&old.pw_policy);
+        }
+        if m.salt.is_empty() {
+            m.salt.clone_from(&old.salt);
+        }
+        if m.rid == 0 {
+            m.rid = old.rid;
+        }
+        m
     }
 
     fn note_ulog(&self, name: String, deleted: bool, princ: Option<Principal>) {

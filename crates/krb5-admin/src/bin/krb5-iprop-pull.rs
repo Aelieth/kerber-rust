@@ -192,8 +192,8 @@ fn main() {
         std::process::exit(1);
     }
     println!(
-        "iprop pull ok last_sno={} applied={}",
-        pulled.last_sno, pulled.applied
+        "iprop pull ok last_sno={} last_time={} {} applied={}",
+        pulled.last_sno, pulled.last_sec, pulled.last_usec, pulled.applied
     );
 }
 

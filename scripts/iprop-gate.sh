@@ -297,6 +297,7 @@ EOF'
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf "$NAME" kdb5_util create -s -P masterpassword
 docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf "$NAME" kadmin.local -q 'addprinc -pw userpassword user'
+docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf "$NAME" kadmin.local -q 'addprinc -pw adminpassword admin'
 docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf "$NAME" kadmin.local -q 'addprinc -randkey kiprop/testhost.kerber.test'
 docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf "$NAME" kadmin.local -q 'addprinc -randkey host/testhost.kerber.test'
 docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf "$NAME" kadmin.local -q 'ktadd -k /tmp/mit-iprop.keytab kiprop/testhost.kerber.test host/testhost.kerber.test'
@@ -339,18 +340,11 @@ LOAD="$(docker exec \
 echo "$LOAD"
 echo "$LOAD" | grep -q 'iprop dump'
 
-echo "==== mutate MIT master: extra2 ===="
+echo "==== mutate MIT master: extra2 + setstr ===="
 docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf \
     "$NAME" kadmin.local -q 'addprinc -pw extra2-secret extra2'
-DUMP2="$(docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf \
-    "$NAME" kdb5_util dump -i1 /tmp/mit2.dump 2>&1 || true)"
-echo "$DUMP2"
-HEAD2="$(docker exec "$NAME" head -1 /tmp/mit2.dump 2>/dev/null || true)"
-echo "$HEAD2"
-SNO2="$(echo "$HEAD2" | awk '{print $3}')"
-SEC2="$(echo "$HEAD2" | awk '{print $4}')"
-USEC2="$(echo "$HEAD2" | awk '{print $5}')"
-echo "dump2 last_sno=$SNO2 last_time=$SEC2 $USEC2"
+docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf \
+    "$NAME" kadmin.local -q 'setstr extra2 note hello-g4a'
 
 echo "==== MIT kinit -k kiprop (keytab probe) ===="
 docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
@@ -370,6 +364,16 @@ echo "$PULL"
 echo "==== mit-kadmind.log ===="
 docker exec "$NAME" cat /tmp/mit-kadmind.log 2>/dev/null || true
 echo "$PULL" | grep -q 'iprop pull ok'
+SNO2="$(echo "$PULL" | sed -n 's/.*iprop pull ok last_sno=\([0-9]*\).*/\1/p' | tail -1)"
+SEC2="$(echo "$PULL" | sed -n 's/.*last_time=\([0-9]*\) \([0-9]*\).*/\1/p' | tail -1)"
+USEC2="$(echo "$PULL" | sed -n 's/.*last_time=\([0-9]*\) \([0-9]*\).*/\2/p' | tail -1)"
+: "${SNO2:=$SNO}"
+: "${SEC2:=$SEC}"
+: "${USEC2:=$USEC}"
+echo "replica last_sno=$SNO2 last_time=$SEC2 $USEC2"
+REPLICA="$(docker exec "$NAME" cat /tmp/rust-replica 2>/dev/null || true)"
+echo "$REPLICA" | grep extra2 || true
+echo "$REPLICA" | grep -q '6e6f74650068656c6c6f2d67346100'
 kill_comm krb5kdc
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/rust-replica \

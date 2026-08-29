@@ -34,9 +34,9 @@ pub use kdb::{
 pub use kdb_dump::{
     DumpError, DumpFile, DumpKeyData, DumpKeySlot, DumpPrincipal, KDB_DUMP_VERSION,
     KDB_DUMP_VERSION_R18, TL_KADM_DATA, TL_KERBER_HIST, TL_KERBER_POLICY, TL_KERBER_SERIAL,
-    TL_KERBER_SID, TL_LAST_PWD_CHANGE, TL_MKVNO, TL_MOD_PRINC, dump_store, dump_store_etype,
-    dump_store_iprop, load_dump, load_dump_etype, load_dump_mkey, load_dump_path, parse_dump,
-    write_dump, write_dump_path, write_dump_path_etype,
+    TL_KERBER_SID, TL_LAST_PWD_CHANGE, TL_MKVNO, TL_MOD_PRINC, TL_STRING_ATTRS, dump_store,
+    dump_store_etype, dump_store_iprop, load_dump, load_dump_etype, load_dump_mkey, load_dump_path,
+    parse_dump, write_dump, write_dump_path, write_dump_path_etype,
 };
 pub use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 pub use listen::{

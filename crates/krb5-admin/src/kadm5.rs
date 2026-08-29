@@ -11,7 +11,8 @@ use krb5_crypto::{EncryptionType, ProtocolKey, kdb_decrypt_key};
 use krb5_gss::GssContext;
 use krb5_kdc::{
     Acl, KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH,
-    KeyEntry, Principal, SharedDump as SharedStore,
+    KeyEntry, Principal, SharedDump as SharedStore, TL_KERBER_HIST, TL_KERBER_POLICY,
+    TL_LAST_PWD_CHANGE, TL_STRING_ATTRS, TlData,
 };
 use krb5_types::{PrincipalName, Ticket};
 
@@ -630,6 +631,75 @@ fn encode_utf8str(w: &mut XdrW, s: &str) {
     w.opaque(s.as_bytes());
 }
 
+fn encode_keydata(
+    w: &mut XdrW,
+    keys: &[KeyEntry],
+    mkey: Option<&krb5_crypto::ProtocolKey>,
+    fallback_salt: &[u8],
+) {
+    w.u32(u32::try_from(keys.len()).unwrap_or(0));
+    for k in keys {
+        let salt = k.kdb_salt.clone().unwrap_or_else(|| fallback_salt.to_vec());
+        let salt_ty = k.salt_type.unwrap_or(0);
+        w.u32(2);
+        w.u32(k.kvno);
+        w.u32(2);
+        w.u32(u32::try_from(k.etype.to_iana()).unwrap_or(0));
+        w.u32(u32::try_from(salt_ty).unwrap_or(0));
+        w.u32(2);
+        let enc = mkey
+            .and_then(|m| krb5_crypto::kdb_encrypt_key(m, k.key.as_bytes()).ok())
+            .unwrap_or_else(|| k.key.as_bytes().to_vec());
+        w.opaque(&enc);
+        w.opaque(&salt);
+    }
+}
+
+fn kdbe_tl(p: &krb5_kdc::Principal) -> Vec<TlData> {
+    let mut tl = p.tl_data.clone();
+    tl.retain(|t| t.ty != TL_STRING_ATTRS && t.ty != TL_KERBER_HIST && t.ty != TL_KERBER_POLICY);
+    if !p.string_attrs.is_empty() {
+        let mut contents = Vec::new();
+        for (k, v) in &p.string_attrs {
+            contents.extend_from_slice(k.as_bytes());
+            contents.push(0);
+            contents.extend_from_slice(v.as_bytes());
+            contents.push(0);
+        }
+        tl.push(TlData {
+            ty: TL_STRING_ATTRS,
+            contents,
+        });
+    }
+    tl
+}
+
+fn string_attrs_from_tl(tl: &[TlData]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for t in tl {
+        if t.ty != TL_STRING_ATTRS {
+            continue;
+        }
+        let mut parts = t.contents.split(|b| *b == 0);
+        while let (Some(k), Some(v)) = (parts.next(), parts.next()) {
+            if k.is_empty() {
+                continue;
+            }
+            out.push((
+                String::from_utf8_lossy(k).into_owned(),
+                String::from_utf8_lossy(v).into_owned(),
+            ));
+        }
+    }
+    out
+}
+
+fn tl_u32(tl: &[TlData], ty: i32) -> Option<u32> {
+    let t = tl.iter().find(|t| t.ty == ty)?;
+    let b: [u8; 4] = t.contents.get(..4)?.try_into().ok()?;
+    Some(u32::from_le_bytes(b))
+}
+
 fn encode_incr_update(
     w: &mut XdrW,
     e: &krb5_kdc::UlogEntry,
@@ -670,6 +740,15 @@ fn encode_kdbe(w: &mut XdrW, p: &krb5_kdc::Principal, mkey: Option<&krb5_crypto:
     body.u32(AT_PW_EXP);
     body.u32(p.pw_expire);
     n += 1;
+    body.u32(AT_LAST_SUCCESS);
+    body.u32(p.last_success);
+    n += 1;
+    body.u32(AT_LAST_FAILED);
+    body.u32(p.last_failed);
+    n += 1;
+    body.u32(AT_FAIL_AUTH_COUNT);
+    body.u32(p.fail_auth_count);
+    n += 1;
     body.u32(AT_PRINC);
     encode_utf8str(&mut body, &p.realm);
     let comps: Vec<String> = p
@@ -687,35 +766,43 @@ fn encode_kdbe(w: &mut XdrW, p: &krb5_kdc::Principal, mkey: Option<&krb5_crypto:
     body.u32(u32::try_from(p.name.name_type).unwrap_or(0));
     n += 1;
     body.u32(AT_KEYDATA);
-    body.u32(u32::try_from(p.keys.len()).unwrap_or(0));
-    for k in &p.keys {
-        let salt = k.kdb_salt.clone().unwrap_or_else(|| p.salt.clone());
-        let salt_ty = k.salt_type.unwrap_or(0);
-        body.u32(2);
-        body.u32(k.kvno);
-        body.u32(2);
-        body.u32(u32::try_from(k.etype.to_iana()).unwrap_or(0));
-        body.u32(u32::try_from(salt_ty).unwrap_or(0));
-        body.u32(2);
-        let enc = mkey
-            .and_then(|m| krb5_crypto::kdb_encrypt_key(m, k.key.as_bytes()).ok())
-            .unwrap_or_else(|| k.key.as_bytes().to_vec());
-        body.opaque(&enc);
-        body.opaque(&salt);
-    }
+    encode_keydata(&mut body, &p.keys, mkey, &p.salt);
     n += 1;
+    let tl = kdbe_tl(p);
+    if !tl.is_empty() {
+        body.u32(AT_TL_DATA);
+        body.u32(u32::try_from(tl.len()).unwrap_or(0));
+        for t in &tl {
+            body.u32(u32::try_from(t.ty).unwrap_or(0));
+            body.opaque(&t.contents);
+        }
+        n += 1;
+    }
     body.u32(AT_LEN);
     body.u32(p.db_entry_len);
     n += 1;
+    if let Some(pol) = p.pw_policy.as_deref().filter(|s| !s.is_empty()) {
+        body.u32(AT_PW_POLICY);
+        encode_utf8str(&mut body, pol);
+        n += 1;
+    }
+    if !p.key_history.is_empty() {
+        body.u32(AT_PW_HIST);
+        body.u32(1);
+        encode_keydata(&mut body, &p.key_history, mkey, &p.salt);
+        n += 1;
+    }
     let now = u32::try_from(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs()),
     )
     .unwrap_or(0);
+    let pw_last = tl_u32(&p.tl_data, TL_LAST_PWD_CHANGE).unwrap_or(now);
     body.u32(AT_PW_LAST_CHANGE);
-    body.u32(now);
+    body.u32(pw_last);
     n += 1;
+    // MIT kadmin unparses mod_name; omitting AT_MOD_PRINC corrupts the replica.
     body.u32(AT_MOD_PRINC);
     encode_utf8str(&mut body, &p.realm);
     body.u32(2);
@@ -726,7 +813,7 @@ fn encode_kdbe(w: &mut XdrW, p: &krb5_kdc::Principal, mkey: Option<&krb5_crypto:
     body.u32(u32::try_from(krb5_types::PrincipalName::NT_SRV_INST).unwrap_or(2));
     n += 1;
     body.u32(AT_MOD_TIME);
-    body.u32(now);
+    body.u32(pw_last);
     n += 1;
     w.u32(n);
     w.b.extend_from_slice(&body.b);
@@ -763,6 +850,10 @@ pub struct IpropPull {
     pub status: u32,
     /// `kdb_last_t.last_sno` from the reply.
     pub last_sno: u32,
+    /// `kdb_last_t.last_time.seconds`.
+    pub last_sec: u32,
+    /// `kdb_last_t.last_time.useconds`.
+    pub last_usec: u32,
     /// Entries applied into the replica store.
     pub applied: usize,
 }
@@ -803,7 +894,8 @@ pub fn iprop_pull(
         IPROP_GET_UPDATES,
         &args.b,
     )?;
-    let (status, last, entries) = decode_incr_result(&body, store.iprop_master_key().as_ref())?;
+    let (status, last, last_sec, last_usec, entries) =
+        decode_incr_result(&body, store.iprop_master_key().as_ref())?;
     let n = entries.len();
     if status == krb5_kdc::IPROP_OK && n > 0 {
         store.apply_updates(&entries);
@@ -811,6 +903,8 @@ pub fn iprop_pull(
     Ok(IpropPull {
         status,
         last_sno: last,
+        last_sec,
+        last_usec,
         applied: if status == krb5_kdc::IPROP_OK { n } else { 0 },
     })
 }
@@ -990,18 +1084,18 @@ fn rpc_call_bytes(
 fn decode_incr_result(
     b: &[u8],
     mkey: Option<&ProtocolKey>,
-) -> Result<(u32, u32, Vec<krb5_kdc::UlogEntry>), Error> {
+) -> Result<(u32, u32, u32, u32, Vec<krb5_kdc::UlogEntry>), Error> {
     let mut r = XdrR::new(b);
     let last = r.u32()?;
-    let _sec = r.u32()?;
-    let _usec = r.u32()?;
+    let sec = r.u32()?;
+    let usec = r.u32()?;
     let n = r.u32()? as usize;
     let mut entries = Vec::with_capacity(n.min(1024));
     for _ in 0..n {
         entries.push(decode_incr_update(&mut r, mkey)?);
     }
     let status = r.u32()?;
-    Ok((status, last, entries))
+    Ok((status, last, sec, usec, entries))
 }
 
 fn decode_incr_update(
@@ -1051,6 +1145,9 @@ fn decode_kdbe(
     let mut pw_policy = None;
     let mut parsed_name: Option<(PrincipalName, String)> = None;
     let mut keys = Vec::new();
+    let mut tl_data = Vec::new();
+    let mut key_history = Vec::new();
+    let mut pw_last_change = None;
     for _ in 0..n {
         let tag = r.u32()?;
         match tag {
@@ -1067,12 +1164,14 @@ fn decode_kdbe(
             AT_TL_DATA => {
                 let nt = r.u32()? as usize;
                 for _ in 0..nt {
-                    let _ty = r.u32()?;
-                    let _ = r.opaque()?;
+                    let ty = r.u32()?.cast_signed();
+                    let contents = r.opaque()?;
+                    tl_data.push(TlData { ty, contents });
                 }
             }
             AT_LEN => db_entry_len = r.u32()?,
-            AT_PW_LAST_CHANGE | AT_MOD_TIME | AT_PW_HIST_KVNO => {
+            AT_PW_LAST_CHANGE => pw_last_change = Some(r.u32()?),
+            AT_MOD_TIME | AT_PW_HIST_KVNO => {
                 let _ = r.u32()?;
             }
             AT_PW_POLICY => {
@@ -1088,7 +1187,7 @@ fn decode_kdbe(
             AT_PW_HIST => {
                 let nh = r.u32()? as usize;
                 for _ in 0..nh {
-                    let _ = decode_keydata(r, None)?;
+                    key_history.extend(decode_keydata(r, mkey)?);
                 }
             }
             _ => {
@@ -1101,6 +1200,15 @@ fn decode_kdbe(
     } else {
         parse_unparsed(fallback)?
     };
+    let string_attrs = string_attrs_from_tl(&tl_data);
+    if let Some(ts) = pw_last_change
+        && !tl_data.iter().any(|t| t.ty == TL_LAST_PWD_CHANGE)
+    {
+        tl_data.push(TlData {
+            ty: TL_LAST_PWD_CHANGE,
+            contents: ts.to_le_bytes().to_vec(),
+        });
+    }
     let requires_preauth = attributes & KDB_REQUIRES_PRE_AUTH != 0;
     let locked = attributes & KDB_DISALLOW_ALL_TIX != 0;
     let salt = name.default_salt(&realm);
@@ -1108,8 +1216,7 @@ fn decode_kdbe(
         name,
         realm,
         keys,
-        // Incremental iprop kdbe does not carry TL_KERBER_HIST (full-resync dump does).
-        key_history: Vec::new(),
+        key_history,
         salt,
         requires_preauth,
         max_life,
@@ -1123,13 +1230,13 @@ fn decode_kdbe(
         fail_auth_count,
         mkvno: 1,
         db_entry_len,
-        tl_data: Vec::new(),
+        tl_data,
         e_data: Vec::new(),
         rid: 0,
         s4u_allowed_from: Vec::new(),
         s4u_allowed_to: Vec::new(),
         pw_policy,
-        string_attrs: Vec::new(),
+        string_attrs,
     }))
 }
 
@@ -3481,7 +3588,7 @@ mod tests {
         let _ = d.u32().unwrap();
         assert!(d.u32().unwrap() >= 1);
 
-        let (st, last2, entries) = decode_incr_result(&out, None).unwrap();
+        let (st, last2, _, _, entries) = decode_incr_result(&out, None).unwrap();
         assert_eq!(st, krb5_kdc::IPROP_OK);
         assert!(last2 >= last);
         assert!(
@@ -3507,7 +3614,7 @@ mod tests {
             IPROP_GET_UPDATES,
             &args.b,
         );
-        let (st, _, entries) = decode_incr_result(&out, None).unwrap();
+        let (st, _, _, _, entries) = decode_incr_result(&out, None).unwrap();
         assert_eq!(st, krb5_kdc::IPROP_PERM_DENIED);
         assert!(
             entries.is_empty(),
@@ -3520,7 +3627,54 @@ mod tests {
             IPROP_GET_UPDATES,
             &args.b,
         );
-        let (st_ok, _, _) = decode_incr_result(&ok, None).unwrap();
+        let (st_ok, _, _, _, _) = decode_incr_result(&ok, None).unwrap();
         assert_ne!(st_ok, krb5_kdc::IPROP_PERM_DENIED);
+    }
+
+    #[test]
+    fn iprop_kdbe_round_trips_string_attrs_history_policy_lockout() {
+        let (store, acl, actor) = setup();
+        let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["g4user"]);
+        {
+            let mut g = store.write().unwrap();
+            let mut pol = krb5_kdc::NamedPolicy::new("g4apol");
+            pol.history = 2;
+            g.put_policy(pol);
+            g.create_password(&acl, &actor, &name, b"g4-secret")
+                .unwrap();
+            g.set_principal_policy(&name, Some("g4apol".into()))
+                .unwrap();
+            g.set_password(&name, b"g4-rotated").unwrap();
+            g.set_string(&name, "note", Some("hello-g4a")).unwrap();
+        }
+        let mut p = {
+            let g = store.read().unwrap();
+            g.get_name(&name).unwrap().clone()
+        };
+        assert!(!p.key_history.is_empty());
+        assert_eq!(p.string_attrs, vec![("note".into(), "hello-g4a".into())]);
+        p.last_success = 111;
+        p.last_failed = 222;
+        p.fail_auth_count = 3;
+        p.tl_data.push(TlData {
+            ty: TL_LAST_PWD_CHANGE,
+            contents: 1_234u32.to_le_bytes().to_vec(),
+        });
+        let mut w = XdrW::default();
+        encode_kdbe(&mut w, &p, None);
+        let mut r = XdrR::new(&w.b);
+        let got = decode_kdbe(&mut r, None, &p.id()).unwrap().unwrap();
+        assert_eq!(got.string_attrs, p.string_attrs);
+        assert_eq!(got.key_history.len(), p.key_history.len());
+        assert_eq!(got.keys[0].key.as_bytes(), p.keys[0].key.as_bytes());
+        assert_eq!(got.pw_policy.as_deref(), Some("g4apol"));
+        assert_eq!(got.last_success, 111);
+        assert_eq!(got.last_failed, 222);
+        assert_eq!(got.fail_auth_count, 3);
+        assert_eq!(tl_u32(&got.tl_data, TL_LAST_PWD_CHANGE), Some(1_234));
+        assert!(
+            !got.string_attrs.is_empty(),
+            "incremental kdbe must carry string_attrs"
+        );
     }
 }
