@@ -882,6 +882,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let host_keys2 = host_keys.clone();
         let host_for_server = host.clone();
+        let allowed = vec![format!("admin@{TEST_REALM}")];
         let join = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let dir = std::env::temp_dir().join(format!(
@@ -902,6 +903,7 @@ mod tests {
                 MASTER,
                 &db,
                 &stash,
+                Some(allowed.as_slice()),
             )
             .expect("kpropd_handle_conn");
             let _ = std::fs::remove_dir_all(&dir);
@@ -937,5 +939,97 @@ mod tests {
         )
         .unwrap();
         krb5_kdc::issue_as(&replica, &req).expect("MIT-wire replica issue_as");
+    }
+
+    #[test]
+    fn kpropd_rejects_client_not_on_allowlist() {
+        use std::net::{TcpListener, TcpStream};
+        use std::thread;
+        use std::time::Duration;
+
+        use krb5_kdc::{TEST_REALM, documented_host};
+        use krb5_protocol::{pa_enc_timestamp, tgs_req};
+
+        const MASTER: &[u8] = b"masterpassword";
+        let (store, _) = bootstrap_documented().unwrap();
+        let host = documented_host();
+        let host_keys: Vec<_> = store
+            .get_name(&host)
+            .unwrap()
+            .keys
+            .iter()
+            .map(|k| k.key.clone())
+            .collect();
+        let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["admin"]);
+        let admin_key = store
+            .get_name(&admin)
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let as_req = krb5_kdc::as_req(
+            admin.clone(),
+            TEST_REALM,
+            81,
+            Some(vec![pa_enc_timestamp(&admin_key).unwrap()]),
+        )
+        .unwrap();
+        let as_out = krb5_kdc::issue_as(&store, &as_req).unwrap();
+        let tgs = tgs_req(
+            as_out.rep.0.ticket.clone(),
+            &as_out.session_key,
+            TEST_REALM,
+            &admin,
+            host.clone(),
+            TEST_REALM,
+            82,
+        )
+        .unwrap();
+        let tgs_out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let host_keys2 = host_keys.clone();
+        let host_for_server = host.clone();
+        let allowed = vec![format!("host/testhost.kerber.test@{TEST_REALM}")];
+        let join = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let dir = std::env::temp_dir().join(format!(
+                "kprop-deny-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos())
+            ));
+            let _ = std::fs::create_dir_all(&dir);
+            let db = dir.join("replica");
+            let stash = dir.join("stash");
+            let err = kpropd_handle_conn(
+                &mut stream,
+                &host_keys2,
+                Some(&host_for_server),
+                Some(TEST_REALM),
+                MASTER,
+                &db,
+                &stash,
+                Some(allowed.as_slice()),
+            )
+            .unwrap_err();
+            let _ = std::fs::remove_dir_all(&dir);
+            err
+        });
+        thread::sleep(Duration::from_millis(20));
+        let mut client = TcpStream::connect(addr).unwrap();
+        let _ = kprop_send_store(
+            &mut client,
+            &store,
+            MASTER,
+            tgs_out.rep.0.ticket.clone(),
+            &tgs_out.session_key,
+            &krb5_types::ascii(TEST_REALM),
+            &admin,
+        );
+        let err = join.join().expect("thread");
+        assert_eq!(err, Error::AclDenied);
     }
 }

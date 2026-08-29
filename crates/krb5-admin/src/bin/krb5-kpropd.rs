@@ -58,6 +58,7 @@ fn main() {
     println!("listening {bind}");
     let stop = Arc::new(AtomicBool::new(false));
     let realm = kpropd_realm();
+    let allowed = kpropd_acl();
     loop {
         if stop.load(Ordering::Relaxed) {
             break;
@@ -70,6 +71,7 @@ fn main() {
                 let master = master.clone();
                 let db = db.clone();
                 let stash = stash.clone();
+                let allowed = allowed.clone();
                 thread::spawn(move || {
                     match kpropd_handle_conn(
                         &mut stream,
@@ -79,6 +81,7 @@ fn main() {
                         master.as_bytes(),
                         &db,
                         &stash,
+                        allowed.as_deref(),
                     ) {
                         Ok(_) => println!("kprop ok"),
                         Err(e) => eprintln!("krb5-kpropd: {e}"),
@@ -100,6 +103,18 @@ fn kpropd_realm() -> String {
     std::env::var("KRB5_KDC_REALM")
         .or_else(|_| std::env::var("KRB5_TEST_REALM"))
         .unwrap_or_else(|_| krb5_kdc::TEST_REALM.to_owned())
+}
+
+fn kpropd_acl() -> Option<Vec<String>> {
+    let path = std::env::var("KRB5_KPROP_ACL").ok()?;
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    Some(
+        text.lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .filter_map(|l| l.split_whitespace().next().map(str::to_owned))
+            .collect(),
+    )
 }
 
 fn load_host_keys() -> Vec<ProtocolKey> {

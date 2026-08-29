@@ -12,7 +12,7 @@ use std::path::Path;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{CipherState, EncryptionType, ProtocolKey};
-use krb5_kdc::{PrincipalStore, dump_store, dump_store_iprop, load_dump, save_store};
+use krb5_kdc::{Acl, PrincipalStore, dump_store, dump_store_iprop, load_dump, save_store};
 use krb5_protocol::{
     ApVerifyParams, ReplayCache, build_ap_rep, build_ap_req_mutual_seq, build_krb_priv_chained,
     build_krb_safe_ex, unwrap_krb_priv_chained, verify_ap_rep, verify_ap_req_ex,
@@ -293,6 +293,7 @@ pub fn kpropd_recvauth(
     host_keys: &[ProtocolKey],
     expected_server: Option<&PrincipalName>,
     expected_realm: Option<&str>,
+    allowed_clients: Option<&[String]>,
 ) -> Result<KpropAuth, Error> {
     let ver = read_message(stream).map_err(|e| Error::Inner(e.to_string()))?;
     if ver.as_slice() != SENDAUTH_VERSION {
@@ -325,6 +326,12 @@ pub fn kpropd_recvauth(
             return Err(Error::Inner(e.to_string()));
         }
     };
+    let crealm = String::from_utf8_lossy(ok.authenticator.crealm.as_bytes());
+    let client = format!("{}@{crealm}", ok.authenticator.cname.components_joined());
+    if !kpropd_client_allowed(&client, allowed_clients, expected_realm) {
+        let _ = write_message(stream, &[]);
+        return Err(Error::AclDenied);
+    }
     write_message(stream, &[]).map_err(|e| Error::Inner(e.to_string()))?;
     let session = session_from_ticket(&ok)?;
     let mut local_seq = 1u32;
@@ -348,6 +355,18 @@ pub fn kpropd_recvauth(
         remote_seq: None,
         replay,
     })
+}
+
+fn kpropd_client_allowed(client: &str, allowed: Option<&[String]>, realm: Option<&str>) -> bool {
+    match allowed {
+        Some([]) => false,
+        Some(patterns) => patterns.iter().any(|p| Acl::name_matches(p, client)),
+        None => {
+            let r = realm.unwrap_or("");
+            Acl::name_matches(&format!("host/*@{r}"), client)
+                || Acl::name_matches(&format!("kiprop/*@{r}"), client)
+        }
+    }
 }
 
 /// Receive dump bytes after [`kpropd_recvauth`].
@@ -409,6 +428,7 @@ pub fn kpropd_send_ack(
 /// # Errors
 ///
 /// Auth, dump, persist, or I/O.
+#[allow(clippy::too_many_arguments)]
 pub fn kpropd_handle_conn(
     stream: &mut TcpStream,
     host_keys: &[ProtocolKey],
@@ -417,8 +437,15 @@ pub fn kpropd_handle_conn(
     master_password: &[u8],
     db: &Path,
     stash: &Path,
+    allowed_clients: Option<&[String]>,
 ) -> Result<PrincipalStore, Error> {
-    let mut auth = kpropd_recvauth(stream, host_keys, expected_server, expected_realm)?;
+    let mut auth = kpropd_recvauth(
+        stream,
+        host_keys,
+        expected_server,
+        expected_realm,
+        allowed_clients,
+    )?;
     let dump = kpropd_recv_dump(stream, &mut auth)?;
     let store = kprop_load_bytes(&dump, master_password)?;
     save_store(&store, db, stash).map_err(|e| Error::Inner(e.to_string()))?;

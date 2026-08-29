@@ -51,12 +51,13 @@ pub use plugins::{
     current_policy, register_preauth, set_policy, set_thread_policy,
 };
 pub use store::{
-    IPROP_FULL_RESYNC, IPROP_NIL, IPROP_OK, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_FORWARDABLE,
-    KDB_DISALLOW_POSTDATED, KDB_DISALLOW_PROXIABLE, KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR,
-    KDB_DISALLOW_TGT_BASED, KDB_LOCKDOWN_KEYS, KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE,
-    KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH,
-    KeyEntry, NamedPolicy, Policy, Principal, PrincipalStore, RID_ADMINISTRATOR, RID_FIRST_USER,
-    RID_KRBTGT, S2K_ITERS, TlData, UlogEntry, random_key, s2k_params,
+    IPROP_FULL_RESYNC, IPROP_NIL, IPROP_OK, IPROP_PERM_DENIED, KDB_DISALLOW_ALL_TIX,
+    KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED, KDB_DISALLOW_PROXIABLE,
+    KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_LOCKDOWN_KEYS,
+    KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH,
+    KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH, KeyEntry, NamedPolicy, Policy, Principal,
+    PrincipalStore, RID_ADMINISTRATOR, RID_FIRST_USER, RID_KRBTGT, S2K_ITERS, TlData, UlogEntry,
+    random_key, s2k_params,
 };
 
 use krb5_types::PrincipalName;
@@ -123,7 +124,10 @@ pub fn host_for_realm(realm: &str) -> PrincipalName {
 ///
 /// Returns [`Error::Crypto`] when `acl_file` is set but unreadable.
 pub fn acl_for_store(realm: &str, acl_file: Option<&std::path::Path>) -> Result<Acl, Error> {
-    let default = Acl::allow_admin(admin_id_for_realm(realm));
+    let default = Acl::parse(&format!(
+        "{} *\nkiprop/*@{realm} p\n",
+        admin_id_for_realm(realm)
+    ));
     let Some(path) = acl_file else {
         return Ok(default);
     };

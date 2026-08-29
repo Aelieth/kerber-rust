@@ -175,6 +175,12 @@ impl Acl {
         }
         0
     }
+
+    /// kadm5.acl principal glob (`*/admin@REALM`, `host/*@REALM`).
+    #[must_use]
+    pub fn name_matches(pattern: &str, actor: &str) -> bool {
+        principal_matches(pattern, actor)
+    }
 }
 
 fn op_name(op: AdminOp) -> &'static str {

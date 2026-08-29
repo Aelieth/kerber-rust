@@ -441,6 +441,13 @@ fn kadmind_acl_follows_store_realm_or_acl_file() {
         none.check("admin@PROD.KERBER.TEST", AdminOp::Create)
             .is_ok()
     );
+    assert!(
+        none.check(
+            "kiprop/testhost.prod.kerber.test@PROD.KERBER.TEST",
+            AdminOp::Propagate
+        )
+        .is_ok()
+    );
     assert_eq!(
         none.check("admin@KERBER.TEST", AdminOp::Create)
             .unwrap_err(),

@@ -213,6 +213,8 @@ pub const IPROP_OK: u32 = 0;
 pub const IPROP_FULL_RESYNC: u32 = 2;
 /// MIT `UPDATE_NIL`.
 pub const IPROP_NIL: u32 = 4;
+/// MIT `UPDATE_PERM_DENIED`.
+pub const IPROP_PERM_DENIED: u32 = 5;
 
 /// Process-local AS fail overlay (count + timestamps). Dump rows stay stale.
 #[derive(Clone, Copy, Debug, Default)]

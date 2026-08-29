@@ -305,7 +305,7 @@ fn handle_rpc(
         .clone()
         .unwrap_or_else(|| format!("admin@{expected_realm}"));
     let result = if iprop {
-        dispatch_iprop(store, proc, args)
+        dispatch_iprop(store, acl, &actor, proc, args)
     } else {
         dispatch_kadm5(store, acl, &actor, proc, args)?
     };
@@ -469,7 +469,7 @@ fn handle_auth_gssapi(
         .clone()
         .unwrap_or_else(|| format!("admin@{expected_realm}"));
     let result = if iprop {
-        dispatch_iprop(store, proc, kadm_args)
+        dispatch_iprop(store, acl, &actor, proc, kadm_args)
     } else {
         dispatch_kadm5(store, acl, &actor, proc, kadm_args)?
     };
@@ -576,7 +576,10 @@ const AT_PW_POLICY_SWITCH: u32 = 17;
 const AT_PW_HIST_KVNO: u32 = 18;
 const AT_PW_HIST: u32 = 19;
 
-fn dispatch_iprop(store: &SharedStore, proc: u32, args: &[u8]) -> Vec<u8> {
+fn dispatch_iprop(store: &SharedStore, acl: &Acl, actor: &str, proc: u32, args: &[u8]) -> Vec<u8> {
+    if proc != IPROP_NULL && acl.check(actor, krb5_kdc::AdminOp::Propagate).is_err() {
+        return encode_incr_result(krb5_kdc::IPROP_PERM_DENIED, 0, &[], None);
+    }
     match proc {
         IPROP_NULL => Vec::new(),
         IPROP_GET_UPDATES => {
@@ -2411,7 +2414,7 @@ mod tests {
         args.u32(0);
         args.u32(0);
         args.u32(0);
-        let first = dispatch_iprop(&store, IPROP_GET_UPDATES, &args.b);
+        let first = dispatch_iprop(&store, &acl, &actor, IPROP_GET_UPDATES, &args.b);
         let mut r = XdrR::new(&first);
         let sno = r.u32().unwrap();
         assert!(sno >= last);
@@ -2441,7 +2444,7 @@ mod tests {
         delta.u32(last);
         delta.u32(0);
         delta.u32(0);
-        let out = dispatch_iprop(&store, IPROP_GET_UPDATES, &delta.b);
+        let out = dispatch_iprop(&store, &acl, &actor, IPROP_GET_UPDATES, &delta.b);
         assert!(
             out.windows(b"iproprpc".len()).any(|w| w == b"iproprpc"),
             "GET_UPDATES delta must name the new principal"
@@ -2465,5 +2468,37 @@ mod tests {
                 .any(|e| e.name.contains("iproprpc") && e.princ.is_some()),
             "decode must recover the new principal: {entries:?}"
         );
+    }
+
+    #[test]
+    fn iprop_get_updates_denies_actor_without_propagate() {
+        let (store, _acl, _actor) = setup();
+        let limited = Acl::parse("admin@KERBER.TEST *\nuser@KERBER.TEST i\n");
+        let mut args = XdrW::default();
+        args.u32(0);
+        args.u32(0);
+        args.u32(0);
+        let out = dispatch_iprop(
+            &store,
+            &limited,
+            "user@KERBER.TEST",
+            IPROP_GET_UPDATES,
+            &args.b,
+        );
+        let (st, _, entries) = decode_incr_result(&out, None).unwrap();
+        assert_eq!(st, krb5_kdc::IPROP_PERM_DENIED);
+        assert!(
+            entries.is_empty(),
+            "unauthorized GET_UPDATES must not leak ulog: {entries:?}"
+        );
+        let ok = dispatch_iprop(
+            &store,
+            &limited,
+            "admin@KERBER.TEST",
+            IPROP_GET_UPDATES,
+            &args.b,
+        );
+        let (st_ok, _, _) = decode_incr_result(&ok, None).unwrap();
+        assert_ne!(st_ok, krb5_kdc::IPROP_PERM_DENIED);
     }
 }
