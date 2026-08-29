@@ -10,7 +10,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 
 use krb5_asn1::decode;
-use krb5_gss::{DelegCred, GssContext};
+use krb5_gss::{DelegCred, GssContext, IovBuf, IovType};
 use krb5_protocol::FileCcache;
 use krb5_types::Ticket;
 
@@ -113,7 +113,7 @@ fn main() {
         eprintln!("process_ap_rep: {e}");
         std::process::exit(1);
     });
-    let wrapped = ctx.wrap(b"hello-from-rust-gss").unwrap_or_else(|e| {
+    let wrapped = wrap_iov_token(&mut ctx, b"hello-from-rust-gss").unwrap_or_else(|e| {
         eprintln!("wrap: {e}");
         std::process::exit(1);
     });
@@ -122,6 +122,39 @@ fn main() {
         std::process::exit(1);
     });
     println!("gss-init wrap sent hello-from-rust-gss");
+}
+
+fn wrap_iov_token(ctx: &mut GssContext, msg: &[u8]) -> Result<Vec<u8>, krb5_gss::Error> {
+    let mut header = Vec::new();
+    let mut data = msg.to_vec();
+    let mut padding = Vec::new();
+    let mut trailer = Vec::new();
+    ctx.wrap_iov(
+        true,
+        &mut [
+            IovBuf {
+                kind: IovType::Header,
+                data: &mut header,
+            },
+            IovBuf {
+                kind: IovType::Data,
+                data: &mut data,
+            },
+            IovBuf {
+                kind: IovType::Padding,
+                data: &mut padding,
+            },
+            IovBuf {
+                kind: IovType::Trailer,
+                data: &mut trailer,
+            },
+        ],
+    )?;
+    let mut tok = header;
+    tok.extend_from_slice(&data);
+    tok.extend_from_slice(&padding);
+    tok.extend_from_slice(&trailer);
+    Ok(tok)
 }
 
 fn read_token(s: &mut TcpStream) -> std::io::Result<Vec<u8>> {

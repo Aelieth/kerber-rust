@@ -2,6 +2,7 @@
  * Out-of-process only; not linked into the Rust product.
  */
 #include <gssapi/gssapi.h>
+#include <gssapi/gssapi_ext.h>
 #include <gssapi/gssapi_krb5.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -163,15 +164,29 @@ int main(int argc, char **argv) {
         fprintf(stderr, "mit-gss delegated=\n");
     }
 
-    recv_token(fd, &in);
-    gss_buffer_desc plain = { 0, NULL };
-    int conf = 0;
-    maj = gss_unwrap(&min, ctx, &in, &plain, &conf, NULL);
-    if (maj != GSS_S_COMPLETE) {
-        die_gss("unwrap", maj, min);
+    {
+        OM_uint32 lifetime = 0, flags = 0;
+        maj = gss_inquire_context(&min, ctx, NULL, NULL, &lifetime, NULL, &flags, NULL, NULL);
+        if (maj == GSS_S_COMPLETE) {
+            fprintf(stderr, "mit-gss inquire flags=%u lifetime=%u\n", flags, lifetime);
+        }
     }
-    fprintf(stderr, "mit-gss unwrap ok %.*s\n", (int)plain.length, (char *)plain.value);
-    gss_release_buffer(&min, &plain);
+
+    recv_token(fd, &in);
+    gss_iov_buffer_desc iov[2];
+    iov[0].type = GSS_IOV_BUFFER_TYPE_STREAM;
+    iov[0].buffer = in;
+    iov[1].type = GSS_IOV_BUFFER_TYPE_DATA | GSS_IOV_BUFFER_FLAG_ALLOCATE;
+    iov[1].buffer.value = NULL;
+    iov[1].buffer.length = 0;
+    int conf = 0;
+    maj = gss_unwrap_iov(&min, ctx, &conf, NULL, iov, 2);
+    if (maj != GSS_S_COMPLETE) {
+        die_gss("unwrap_iov", maj, min);
+    }
+    fprintf(stderr, "mit-gss unwrap ok %.*s\n",
+        (int)iov[1].buffer.length, (char *)iov[1].buffer.value);
+    gss_release_iov_buffer(&min, iov, 2);
     free(in.value);
     gss_delete_sec_context(&min, &ctx, GSS_C_NO_BUFFER);
     if (src != GSS_C_NO_NAME) {

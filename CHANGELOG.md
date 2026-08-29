@@ -89,7 +89,11 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   not RID 1000 (`scripts/iprop-gate.sh`). `cpw -randkey` / setkey
   stamp last-password-change and last-modified (`scripts/kadmin-gate.sh`).
   GSS `GSS_C_DELEG_FLAG` carries a 0x8003 KRB-CRED trailer; the acceptor
-  bound-checks `Dlgth`. SPNEGO `NegTokenResp` carries `mechListMIC`
+  bound-checks `Dlgth`. SPNEGO `NegTokenResp` carries `mechListMIC`.
+  AES/RFC 8009 `wrap_iov`/`unwrap_iov` slice CFX wrap tokens
+  (HEADER|DATA|empty PADDING|TRAILER, RRC=0); `SIGN_ONLY` is in the
+  integrity HMAC. `export_sec_context`/`import_sec_context` round-trip
+  wrap; `inquire_context` reports ticket lifetime and GSS flags
   (`scripts/gss-gate.sh`).
 
 - KDB extension surface: `PrincipalRead` / `PrincipalWrite` /

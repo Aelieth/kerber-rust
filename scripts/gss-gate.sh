@@ -224,4 +224,59 @@ echo "$SPNEGO_LOG" | grep -q "$MSG"
 echo "$SPNEGO_LOG" | grep -q 'gss-accept spnego mic ok'
 echo "$SPNEGO_LOG" | grep -q 'gss-accept spnego peer mic ok'
 
-log "gss.gate" "ok" ",\"acceptor\":\"krb5-gss\",\"initiator\":\"mit-libgssapi\",\"deleg\":\"both\",\"spnego\":\"ok\""
+echo "==== MIT wrap_iov vs Rust unwrap_iov ===="
+docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
+sleep 0.2
+docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /etc/krb5kdc/testhost.keytab --listen 127.0.0.1:4444 >/tmp/gss-accept-iov.log 2>&1'
+ok=0
+for _ in $(seq 1 20); do
+    if docker exec "$NAME" grep -q 'listening' /tmp/gss-accept-iov.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.15
+done
+[ "$ok" = 1 ] || {
+    docker exec "$NAME" cat /tmp/gss-accept-iov.log >&2 || true
+    log "gss.gate" "error" ',"error":"gss-accept did not listen for iov"'
+    exit 1
+}
+docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
+    /tmp/gss-mit-client testhost.kerber.test host "$MSG" 127.0.0.1 4444 iov
+IOV_LOG="$(docker exec "$NAME" cat /tmp/gss-accept-iov.log 2>/dev/null || true)"
+echo "$IOV_LOG"
+echo "$IOV_LOG" | grep -q 'gss-accept unwrap ok'
+echo "$IOV_LOG" | grep -q "$MSG"
+echo "$IOV_LOG" | grep -q 'gss-accept import ok'
+echo "$IOV_LOG" | grep -q 'gss-accept inquire flags='
+IOV_LIFE="$(echo "$IOV_LOG" | sed -n 's/.*gss-accept inquire flags=\([0-9]*\) lifetime=\([0-9]*\).*/\2/p' | head -1)"
+IOV_FLAGS="$(echo "$IOV_LOG" | sed -n 's/.*gss-accept inquire flags=\([0-9]*\) lifetime=.*/\1/p' | head -1)"
+[ "${IOV_LIFE:-0}" -gt 0 ]
+# MUTUAL|CONF|INTEG|TRANS
+[ $((${IOV_FLAGS:-0} & 306)) -eq 306 ]
+
+echo "==== MIT wrap_iov SIGN_ONLY vs Rust unwrap_iov ===="
+docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
+sleep 0.2
+docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /etc/krb5kdc/testhost.keytab --listen 127.0.0.1:4444 --assoc rpc-hdr >/tmp/gss-accept-sign.log 2>&1'
+ok=0
+for _ in $(seq 1 20); do
+    if docker exec "$NAME" grep -q 'listening' /tmp/gss-accept-sign.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.15
+done
+[ "$ok" = 1 ] || {
+    docker exec "$NAME" cat /tmp/gss-accept-sign.log >&2 || true
+    log "gss.gate" "error" ',"error":"gss-accept did not listen for sign"'
+    exit 1
+}
+docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
+    /tmp/gss-mit-client testhost.kerber.test host "$MSG" 127.0.0.1 4444 sign
+SIGN_LOG="$(docker exec "$NAME" cat /tmp/gss-accept-sign.log 2>/dev/null || true)"
+echo "$SIGN_LOG"
+echo "$SIGN_LOG" | grep -q 'gss-accept unwrap ok'
+echo "$SIGN_LOG" | grep -q "$MSG"
+
+log "gss.gate" "ok" ",\"acceptor\":\"krb5-gss\",\"initiator\":\"mit-libgssapi\",\"deleg\":\"both\",\"spnego\":\"ok\",\"iov\":\"ok\""

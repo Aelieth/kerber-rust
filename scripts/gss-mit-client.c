@@ -2,6 +2,7 @@
  * Out-of-process only; not linked into the Rust product.
  */
 #include <gssapi/gssapi.h>
+#include <gssapi/gssapi_ext.h>
 #include <gssapi/gssapi_krb5.h>
 static gss_OID_desc oid_spnego = { 6, (void *)"\x2b\x06\x01\x05\x05\x02" };
 #include <arpa/inet.h>
@@ -55,12 +56,19 @@ int main(int argc, char **argv) {
     const char *ip = argv[4];
     int port = atoi(argv[5]);
     int want_deleg = 0;
+    int want_iov = 0;
+    int want_sign = 0;
     gss_OID mech = (gss_OID)gss_mech_krb5;
     if (argc >= 7) {
         if (strcmp(argv[6], "deleg") == 0) {
             want_deleg = 1;
         } else if (strcmp(argv[6], "spnego") == 0) {
             mech = &oid_spnego;
+        } else if (strcmp(argv[6], "iov") == 0) {
+            want_iov = 1;
+        } else if (strcmp(argv[6], "sign") == 0) {
+            want_iov = 1;
+            want_sign = 1;
         }
     }
 
@@ -122,18 +130,94 @@ int main(int argc, char **argv) {
         }
     } while (maj == GSS_S_CONTINUE_NEEDED);
 
-    gss_buffer_desc payload = { strlen(msg), (void *)msg };
-    gss_buffer_desc wrapped = { 0, NULL };
-    int conf = 0;
-    maj = gss_wrap(&min, ctx, 1, GSS_C_QOP_DEFAULT, &payload, &conf, &wrapped);
-    if (maj != GSS_S_COMPLETE) {
-        die_gss("wrap", maj, min);
+    {
+        OM_uint32 lifetime = 0, flags = 0;
+        maj = gss_inquire_context(&min, ctx, NULL, NULL, &lifetime, NULL, &flags, NULL, NULL);
+        if (maj != GSS_S_COMPLETE) {
+            die_gss("inquire_context", maj, min);
+        }
+        fprintf(stderr, "mit-gss inquire flags=%u lifetime=%u\n", flags, lifetime);
     }
-    send_token(fd, &wrapped);
-    gss_release_buffer(&min, &wrapped);
+
+    int conf = 0;
+    if (want_iov) {
+        gss_iov_buffer_desc iov[5];
+        int n = 0;
+        char assoc[] = "rpc-hdr";
+        size_t msglen = strlen(msg);
+        void *payload = malloc(msglen ? msglen : 1);
+        if (!payload) {
+            perror("malloc");
+            exit(1);
+        }
+        memcpy(payload, msg, msglen);
+        iov[n].type = GSS_IOV_BUFFER_TYPE_HEADER | GSS_IOV_BUFFER_FLAG_ALLOCATE;
+        iov[n].buffer.value = NULL;
+        iov[n].buffer.length = 0;
+        n++;
+        if (want_sign) {
+            iov[n].type = GSS_IOV_BUFFER_TYPE_SIGN_ONLY;
+            iov[n].buffer.value = assoc;
+            iov[n].buffer.length = sizeof assoc - 1;
+            n++;
+        }
+        iov[n].type = GSS_IOV_BUFFER_TYPE_DATA;
+        iov[n].buffer.value = payload;
+        iov[n].buffer.length = msglen;
+        n++;
+        iov[n].type = GSS_IOV_BUFFER_TYPE_PADDING | GSS_IOV_BUFFER_FLAG_ALLOCATE;
+        iov[n].buffer.value = NULL;
+        iov[n].buffer.length = 0;
+        n++;
+        iov[n].type = GSS_IOV_BUFFER_TYPE_TRAILER | GSS_IOV_BUFFER_FLAG_ALLOCATE;
+        iov[n].buffer.value = NULL;
+        iov[n].buffer.length = 0;
+        n++;
+        maj = gss_wrap_iov(&min, ctx, 1, GSS_C_QOP_DEFAULT, &conf, iov, n);
+        if (maj != GSS_S_COMPLETE) {
+            die_gss("wrap_iov", maj, min);
+        }
+        size_t total = 0;
+        int i;
+        for (i = 0; i < n; i++) {
+            OM_uint32 t = GSS_IOV_BUFFER_TYPE(iov[i].type);
+            if (t == GSS_IOV_BUFFER_TYPE_HEADER || t == GSS_IOV_BUFFER_TYPE_DATA
+                || t == GSS_IOV_BUFFER_TYPE_PADDING || t == GSS_IOV_BUFFER_TYPE_TRAILER) {
+                total += iov[i].buffer.length;
+            }
+        }
+        gss_buffer_desc wrapped = { total, malloc(total ? total : 1) };
+        if (!wrapped.value) {
+            perror("malloc");
+            exit(1);
+        }
+        unsigned char *p = wrapped.value;
+        for (i = 0; i < n; i++) {
+            OM_uint32 t = GSS_IOV_BUFFER_TYPE(iov[i].type);
+            if (t == GSS_IOV_BUFFER_TYPE_HEADER || t == GSS_IOV_BUFFER_TYPE_DATA
+                || t == GSS_IOV_BUFFER_TYPE_PADDING || t == GSS_IOV_BUFFER_TYPE_TRAILER) {
+                memcpy(p, iov[i].buffer.value, iov[i].buffer.length);
+                p += iov[i].buffer.length;
+            }
+        }
+        send_token(fd, &wrapped);
+        free(wrapped.value);
+        gss_release_iov_buffer(&min, iov, n);
+        free(payload);
+        fprintf(stderr, "mit-gss wrap_iov sent %s sign=%d\n", msg, want_sign);
+    } else {
+        gss_buffer_desc payload = { strlen(msg), (void *)msg };
+        gss_buffer_desc wrapped = { 0, NULL };
+        maj = gss_wrap(&min, ctx, 1, GSS_C_QOP_DEFAULT, &payload, &conf, &wrapped);
+        if (maj != GSS_S_COMPLETE) {
+            die_gss("wrap", maj, min);
+        }
+        send_token(fd, &wrapped);
+        gss_release_buffer(&min, &wrapped);
+        fprintf(stderr, "mit-gss wrap sent %s\n", msg);
+    }
     gss_delete_sec_context(&min, &ctx, GSS_C_NO_BUFFER);
     gss_release_name(&min, &target);
     close(fd);
-    fprintf(stderr, "mit-gss wrap sent %s\n", msg);
     return 0;
 }

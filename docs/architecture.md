@@ -72,8 +72,9 @@ still synthesizes identity from the store.
 out-of-process; `scripts/gss-gate.sh`). The acceptor binds
 `expected_server` / `expected_realm` from the keytab. First wrap/MIC
 seq is checked against the AP-REQ authenticator seq; wrap/MIC use a
-windowed replay cache. Production `wrap` emits RRC=16 (AES confounder
-size). SSPI peer proof remains environment-dependent.
+windowed replay cache. Production `wrap` emits RRC=0 (MIT 1.22.2);
+`wrap_iov` is AES/RFC 8009 only. SSPI peer proof remains
+environment-dependent.
 
 **`krb5-admin`** is an ACL-enforced session plus listeners: version-1
 AP-REQ framing (library tests) and `krb5-kadmind` ONC RPC program 2112

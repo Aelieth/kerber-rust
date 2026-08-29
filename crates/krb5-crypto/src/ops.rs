@@ -422,6 +422,52 @@ fn decrypt_inner_state(
     }
 }
 
+/// Truncated HMAC with the encryption integrity key (`Ki`), not `Kc`.
+///
+/// GSS wrap_iov `SIGN_ONLY` associated data is mixed into this MAC.
+///
+/// # Errors
+///
+/// Key-derivation failures.
+pub fn integrity_mac(key: &ProtocolKey, usage: KeyUsage, message: &[u8]) -> Result<Vec<u8>, Error> {
+    if !key.etype().is_aes() {
+        return Err(Error::UnsupportedEtype(key.etype().to_iana()));
+    }
+    let keys = derive_usage_keys(key.etype(), key.as_bytes(), usage)?;
+    hmac_truncated(key.etype(), &keys.ki, message)
+}
+
+/// AES-CTS decrypt of `cipher` with no HMAC (confounder, plaintext).
+///
+/// Caller must already have verified [`integrity_mac`].
+///
+/// # Errors
+///
+/// Short ciphertext, non-AES etype, or CTS failures.
+pub fn decrypt_cts(
+    key: &ProtocolKey,
+    usage: KeyUsage,
+    cipher: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>), Error> {
+    if !key.etype().is_aes() {
+        return Err(Error::UnsupportedEtype(key.etype().to_iana()));
+    }
+    if cipher.len() < BLOCK {
+        return Err(Error::CiphertextTooShort);
+    }
+    let keys = derive_usage_keys(key.etype(), key.as_bytes(), usage)?;
+    let iv = CipherState::initial().iv;
+    let mut p = cts::decrypt(&keys.ke, &iv, cipher)?;
+    if p.len() < BLOCK {
+        p.zeroize();
+        return Err(Error::CiphertextTooShort);
+    }
+    let plain = p[BLOCK..].to_vec();
+    let conf = p[..BLOCK].to_vec();
+    p.zeroize();
+    Ok((conf, plain))
+}
+
 /// Keyed checksum (RFC 3961 `get_mic` / RFC 8009 section 6).
 ///
 /// # Errors

@@ -9,7 +9,8 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt, verify_checksum,
+    EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, decrypt_cts, encrypt,
+    encrypt_with_confounder, integrity_mac, verify_checksum,
 };
 use krb5_protocol::{ReplayCache, build_ap_rep, build_ap_req_with_cksum, unwrap_krb_cred};
 use krb5_types::{
@@ -37,12 +38,22 @@ const FLAG_ACCEPTOR_SUBKEY: u8 = 0x04;
 
 /// RFC 4121 `GSS_C_DELEG_FLAG`.
 pub const GSS_C_DELEG: u32 = 1;
-const GSS_C_MUTUAL: u32 = 2;
-const GSS_C_REPLAY: u32 = 4;
-const GSS_C_SEQUENCE: u32 = 8;
-const GSS_C_CONF: u32 = 16;
-const GSS_C_INTEG: u32 = 32;
+/// RFC 2744 `GSS_C_MUTUAL_FLAG`.
+pub const GSS_C_MUTUAL: u32 = 2;
+/// RFC 2744 `GSS_C_REPLAY_FLAG`.
+pub const GSS_C_REPLAY: u32 = 4;
+/// RFC 2744 `GSS_C_SEQUENCE_FLAG`.
+pub const GSS_C_SEQUENCE: u32 = 8;
+/// RFC 2744 `GSS_C_CONF_FLAG`.
+pub const GSS_C_CONF: u32 = 16;
+/// RFC 2744 `GSS_C_INTEG_FLAG`.
+pub const GSS_C_INTEG: u32 = 32;
+/// RFC 2744 `GSS_C_TRANS_FLAG` (context is exportable).
+pub const GSS_C_TRANS: u32 = 256;
 const KRB5_GSS_FOR_CREDS: u16 = 1;
+const EXPORT_MAGIC: &[u8; 4] = b"K5G1";
+const EXPORT_VERSION: u8 = 1;
+const AES_CONFOUNDER: usize = 16;
 
 /// GSS-API error.
 #[derive(Debug, Error)]
@@ -147,6 +158,44 @@ pub struct GssContext {
     /// Delegated client from a 0x8003 KRB-CRED trailer (`GSS_C_DELEG_FLAG`).
     pub delegated: Option<String>,
     spnego_mech_list: Option<Vec<u8>>,
+    lifetime_end: u32,
+    gss_flags: u32,
+}
+
+/// GSS IOV buffer type (MIT `gssapi_ext.h`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IovType {
+    /// Confidentiality payload (encrypted in place).
+    Data,
+    /// Token header (GSS 16 + AES confounder ciphertext).
+    Header,
+    /// E(header) + HMAC.
+    Trailer,
+    /// Empty for AES-CTS / RFC 8009.
+    Padding,
+    /// Integrity-only associated data (RPCSEC_GSS header).
+    SignOnly,
+}
+
+/// One wrap_iov buffer. HEADER/TRAILER/PADDING are resized; DATA is in-place.
+pub struct IovBuf<'a> {
+    /// Buffer role.
+    pub kind: IovType,
+    /// Backing storage.
+    pub data: &'a mut Vec<u8>,
+}
+
+/// Result of [`GssContext::inquire_context`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InquireOk {
+    /// True if this context is the initiator.
+    pub initiator: bool,
+    /// Established GSS flags (`GSS_C_*`), including `GSS_C_TRANS`.
+    pub flags: u32,
+    /// Remaining ticket lifetime in seconds (`0` if unknown or expired).
+    pub lifetime: u32,
+    /// Authenticated client `name@REALM`.
+    pub client: Option<String>,
 }
 
 /// Forwarded TGT (or other ticket) to embed in a GSS delegation checksum.
@@ -233,6 +282,8 @@ impl GssContext {
                 )),
                 delegated: None,
                 spnego_mech_list: None,
+                lifetime_end: 0,
+                gss_flags: flags,
             },
             token,
         ))
@@ -272,6 +323,8 @@ impl GssContext {
             client: None,
             delegated: None,
             spnego_mech_list: None,
+            lifetime_end: 0,
+            gss_flags: 0,
         };
         let params = krb5_protocol::ApVerifyParams {
             expected_server,
@@ -304,6 +357,7 @@ impl GssContext {
         };
         let mut want_mutual = ok.mutual_required;
         let mut delegated = None;
+        let mut gss_flags = GSS_C_INTEG | GSS_C_CONF | GSS_C_REPLAY | GSS_C_SEQUENCE;
         if let Some(ck) = &ok.authenticator.cksum
             && ck.cksumtype == GSS_CHECKSUM_TYPE
         {
@@ -312,6 +366,7 @@ impl GssContext {
                 let mut f = [0u8; 4];
                 f.copy_from_slice(&ck.checksum.as_ref()[20..24]);
                 let flags = u32::from_le_bytes(f);
+                gss_flags = flags;
                 want_mutual |= flags & GSS_C_MUTUAL != 0;
                 delegated = extract_delegated(
                     ck.checksum.as_ref(),
@@ -320,6 +375,9 @@ impl GssContext {
                     &ticket_session,
                 )?;
             }
+        }
+        if want_mutual {
+            gss_flags |= GSS_C_MUTUAL;
         }
         let sess = subkey.unwrap_or(ticket_session);
         let base = ok.authenticator.seq_number.unwrap_or(0);
@@ -336,6 +394,8 @@ impl GssContext {
             client: Some(client),
             delegated,
             spnego_mech_list: None,
+            lifetime_end: ok.ticket_part.endtime.unix_seconds(),
+            gss_flags,
         };
         let mut ap_rep_tok = None;
         if want_mutual {
@@ -553,6 +613,344 @@ impl GssContext {
         Ok(tok)
     }
 
+    /// CFX wrap_iov (AES / RFC 8009). `conf` encrypts DATA; `SIGN_ONLY` is MAC-only.
+    ///
+    /// Layout: HEADER (32) | DATA | PADDING (empty) | TRAILER (E(header)+HMAC), RRC=0.
+    ///
+    /// # Errors
+    ///
+    /// Non-AES etype, missing HEADER/DATA/TRAILER, or crypto failures.
+    pub fn wrap_iov(&mut self, conf: bool, iov: &mut [IovBuf<'_>]) -> Result<(), Error> {
+        if conf {
+            self.wrap_iov_sealed(iov)
+        } else {
+            self.wrap_iov_integ(iov)
+        }
+    }
+
+    /// Inverse of [`Self::wrap_iov`]. DATA is replaced with plaintext.
+    ///
+    /// # Errors
+    ///
+    /// Truncated buffers, integrity, sequence, or non-AES etype.
+    pub fn unwrap_iov(&mut self, iov: &mut [IovBuf<'_>]) -> Result<(), Error> {
+        let sealed = iov
+            .iter()
+            .find(|b| b.kind == IovType::Header)
+            .and_then(|b| b.data.get(2).copied())
+            .ok_or(Error::Truncated)?
+            & FLAG_SEALED
+            != 0;
+        if sealed {
+            self.unwrap_iov_sealed(iov)
+        } else {
+            self.unwrap_iov_integ(iov)
+        }
+    }
+
+    /// HEADER / PADDING / TRAILER sizes for AES wrap_iov (`conf` = confidentiality).
+    ///
+    /// # Errors
+    ///
+    /// Non-AES etype.
+    pub fn wrap_iov_length(&self, conf: bool) -> Result<(usize, usize, usize), Error> {
+        let (key, _) = self.send_key();
+        require_aes(key.etype())?;
+        let h = key.etype().hmac_output_len();
+        if conf {
+            Ok((16 + AES_CONFOUNDER, 0, 16 + h))
+        } else {
+            Ok((16, 0, h))
+        }
+    }
+
+    fn wrap_iov_sealed(&mut self, iov: &mut [IovBuf<'_>]) -> Result<(), Error> {
+        let (key, extra) = self.send_key();
+        let key = key.clone();
+        require_aes(key.etype())?;
+        let hmac_len = key.etype().hmac_output_len();
+        let usage = seal_usage(self.initiator);
+        let mut tok_hdr = wrap_header(self.initiator, true, self.send_seq);
+        tok_hdr[2] |= extra;
+        let has_ad = iov
+            .iter()
+            .any(|b| b.kind == IovType::SignOnly && !b.data.is_empty());
+        if !has_ad {
+            let n = iov_data_len(iov)?;
+            let mut plain = Vec::with_capacity(n);
+            iov_copy_data(iov, &mut plain)?;
+            let tok = self.wrap(&plain)?;
+            let trailer_len = 16 + hmac_len;
+            if tok.len() != 16 + AES_CONFOUNDER + n + trailer_len {
+                return Err(Error::Truncated);
+            }
+            return split_wrap_token(iov, &tok, n, trailer_len);
+        }
+        let n = iov_data_len(iov)?;
+        let mut plain = Vec::with_capacity(n);
+        iov_copy_data(iov, &mut plain)?;
+        let mut conf = [0u8; AES_CONFOUNDER];
+        getrandom::getrandom(&mut conf).map_err(|e| Error::Inner(e.to_string()))?;
+        let mut to_enc = plain.clone();
+        to_enc.extend_from_slice(&tok_hdr);
+        let mut cipher = encrypt_with_confounder(&key, usage, &conf, &to_enc)?;
+        let c_len = cipher.len().checked_sub(hmac_len).ok_or(Error::Truncated)?;
+        let hmac_in = iov_hmac_input(
+            iov,
+            key.etype().is_rfc8009(),
+            &conf,
+            &cipher[..c_len],
+            &tok_hdr,
+            None,
+        )?;
+        let mac = integrity_mac(&key, usage, &hmac_in)?;
+        if mac.len() != hmac_len {
+            return Err(Error::Truncated);
+        }
+        cipher.truncate(c_len);
+        cipher.extend_from_slice(&mac);
+        self.send_seq = self.send_seq.wrapping_add(1);
+        let trailer_len = 16 + hmac_len;
+        let mut tok = tok_hdr.to_vec();
+        tok.extend_from_slice(&cipher);
+        split_wrap_token(iov, &tok, n, trailer_len)
+    }
+
+    fn wrap_iov_integ(&mut self, iov: &mut [IovBuf<'_>]) -> Result<(), Error> {
+        let (key, extra) = self.send_key();
+        let key = key.clone();
+        require_aes(key.etype())?;
+        let usage = seal_usage(self.initiator);
+        let mut header = wrap_header(self.initiator, false, self.send_seq);
+        header[2] |= extra;
+        let mut to_ck = Vec::new();
+        iov_sign_body(iov, &mut to_ck);
+        to_ck.extend_from_slice(&header);
+        let mac = checksum(&key, usage, &to_ck)?;
+        let ec = u16::try_from(mac.len()).map_err(|_| Error::Truncated)?;
+        header[4..6].copy_from_slice(&ec.to_be_bytes());
+        self.send_seq = self.send_seq.wrapping_add(1);
+        write_iov_one(iov, IovType::Header, &header)?;
+        write_iov_one(iov, IovType::Trailer, &mac)?;
+        if let Some(p) = iov.iter_mut().find(|b| b.kind == IovType::Padding) {
+            p.data.clear();
+        }
+        Ok(())
+    }
+
+    fn unwrap_iov_sealed(&mut self, iov: &mut [IovBuf<'_>]) -> Result<(), Error> {
+        let has_ad = iov
+            .iter()
+            .any(|b| b.kind == IovType::SignOnly && !b.data.is_empty());
+        if !has_ad {
+            let tok = join_wrap_token(iov)?;
+            let plain = self.unwrap(&tok)?;
+            write_iov_data(iov, &plain)?;
+            return Ok(());
+        }
+        let header = iov_find(iov, IovType::Header)?.to_vec();
+        if header.len() != 16 + AES_CONFOUNDER {
+            return Err(Error::Truncated);
+        }
+        let mut tok_hdr = [0u8; 16];
+        tok_hdr.copy_from_slice(&header[..16]);
+        if tok_hdr[..2] != TOK_WRAP || tok_hdr[2] & FLAG_SEALED == 0 {
+            return Err(Error::Truncated);
+        }
+        let rrc = u16::from_be_bytes(tok_hdr[6..8].try_into().map_err(|_| Error::Truncated)?);
+        if rrc != 0 {
+            return Err(Error::Truncated);
+        }
+        let key = self.recv_key(tok_hdr[2])?.clone();
+        require_aes(key.etype())?;
+        let hmac_len = key.etype().hmac_output_len();
+        let trailer = iov_find(iov, IovType::Trailer)?.to_vec();
+        if trailer.len() != 16 + hmac_len {
+            return Err(Error::Truncated);
+        }
+        let n = iov_data_len(iov)?;
+        let mut c = Vec::with_capacity(AES_CONFOUNDER + n + 16);
+        c.extend_from_slice(&header[16..]);
+        iov_copy_data(iov, &mut c)?;
+        c.extend_from_slice(&trailer[..16]);
+        let mac = &trailer[16..];
+        let usage = seal_usage(!self.initiator);
+        let rfc8009 = key.etype().is_rfc8009();
+        let (conf, plain) = decrypt_cts(&key, usage, &c)?;
+        if rfc8009 {
+            let hmac_in = iov_hmac_input(iov, true, &[], &c, &tok_hdr, None)?;
+            let expect = integrity_mac(&key, usage, &hmac_in)?;
+            if !mac_eq(mac, &expect) {
+                return Err(Error::Integrity);
+            }
+        }
+        if plain.len() < 16 {
+            return Err(Error::Truncated);
+        }
+        let (msg, trail) = plain.split_at(plain.len() - 16);
+        if !rfc8009 {
+            let hmac_in = iov_hmac_input(iov, false, &conf, &[], &tok_hdr, Some(msg))?;
+            let expect = integrity_mac(&key, usage, &hmac_in)?;
+            if !mac_eq(mac, &expect) {
+                return Err(Error::Integrity);
+            }
+        }
+        let mut expected = tok_hdr;
+        expected[6] = 0;
+        expected[7] = 0;
+        if trail != expected {
+            return Err(Error::Integrity);
+        }
+        let seq = u64::from_be_bytes(tok_hdr[8..16].try_into().map_err(|_| Error::Truncated)?);
+        self.accept_seq(seq)?;
+        write_iov_data(iov, msg)
+    }
+
+    fn unwrap_iov_integ(&mut self, iov: &mut [IovBuf<'_>]) -> Result<(), Error> {
+        let tok = join_wrap_token(iov)?;
+        let plain = self.unwrap(&tok)?;
+        write_iov_data(iov, &plain)
+    }
+
+    /// Serialize context state (private Rust↔Rust format, not MIT `kg_ctx_externalize`).
+    ///
+    /// # Errors
+    ///
+    /// Key length overflows `u16`.
+    pub fn export_sec_context(&self) -> Result<Vec<u8>, Error> {
+        let mut o = Vec::new();
+        o.extend_from_slice(EXPORT_MAGIC);
+        o.push(EXPORT_VERSION);
+        o.push(u8::from(self.initiator));
+        o.push(u8::from(self.rpcsec_init_window));
+        o.extend_from_slice(&self.gss_flags.to_le_bytes());
+        o.extend_from_slice(&self.lifetime_end.to_le_bytes());
+        o.extend_from_slice(&self.send_seq.to_be_bytes());
+        o.extend_from_slice(&self.recv_seq.to_be_bytes());
+        o.push(u8::from(self.recv_seen));
+        let mut win: Vec<u64> = self.recv_window.iter().copied().collect();
+        win.sort_unstable();
+        let nwin = u16::try_from(win.len()).map_err(|_| Error::Truncated)?;
+        o.extend_from_slice(&nwin.to_be_bytes());
+        for s in win {
+            o.extend_from_slice(&s.to_be_bytes());
+        }
+        write_key(&mut o, &self.session)?;
+        match &self.acceptor_subkey {
+            Some(k) => {
+                o.push(1);
+                write_key(&mut o, k)?;
+            }
+            None => o.push(0),
+        }
+        write_opt_str(&mut o, self.client.as_deref())?;
+        write_opt_str(&mut o, self.delegated.as_deref())?;
+        let sp = self.spnego_mech_list.as_deref().unwrap_or(&[]);
+        let n = u16::try_from(sp.len()).map_err(|_| Error::Truncated)?;
+        o.extend_from_slice(&n.to_be_bytes());
+        o.extend_from_slice(sp);
+        Ok(o)
+    }
+
+    /// Inverse of [`Self::export_sec_context`].
+    ///
+    /// # Errors
+    ///
+    /// Truncated or unknown version.
+    pub fn import_sec_context(token: &[u8]) -> Result<Self, Error> {
+        let mut i = 0usize;
+        if token.get(i..i + 4) != Some(EXPORT_MAGIC.as_slice()) {
+            return Err(Error::Truncated);
+        }
+        i += 4;
+        let ver = *token.get(i).ok_or(Error::Truncated)?;
+        i += 1;
+        if ver != EXPORT_VERSION {
+            return Err(Error::Truncated);
+        }
+        let initiator = *token.get(i).ok_or(Error::Truncated)? != 0;
+        i += 1;
+        let rpcsec_init_window = *token.get(i).ok_or(Error::Truncated)? != 0;
+        i += 1;
+        let gss_flags = u32::from_le_bytes(take_arr(token, &mut i)?);
+        let lifetime_end = u32::from_le_bytes(take_arr(token, &mut i)?);
+        let send_seq = u64::from_be_bytes(take_arr(token, &mut i)?);
+        let recv_seq = u64::from_be_bytes(take_arr(token, &mut i)?);
+        let recv_seen = *token.get(i).ok_or(Error::Truncated)? != 0;
+        i += 1;
+        let nwin = usize::from(u16::from_be_bytes(take_arr(token, &mut i)?));
+        if nwin > 64 {
+            return Err(Error::Truncated);
+        }
+        let mut recv_window = std::collections::HashSet::new();
+        for _ in 0..nwin {
+            recv_window.insert(u64::from_be_bytes(take_arr(token, &mut i)?));
+        }
+        let session = read_key(token, &mut i)?;
+        let has_sub = *token.get(i).ok_or(Error::Truncated)?;
+        i += 1;
+        let acceptor_subkey = if has_sub != 0 {
+            Some(read_key(token, &mut i)?)
+        } else {
+            None
+        };
+        let client = read_opt_str(token, &mut i)?;
+        let delegated = read_opt_str(token, &mut i)?;
+        let nsp = usize::from(u16::from_be_bytes(take_arr(token, &mut i)?));
+        let sp = token.get(i..i + nsp).ok_or(Error::Truncated)?;
+        i += nsp;
+        if i != token.len() {
+            return Err(Error::Truncated);
+        }
+        Ok(Self {
+            session,
+            acceptor_subkey,
+            send_seq,
+            recv_seq,
+            recv_seen,
+            recv_window,
+            initiator,
+            rpcsec_init_window,
+            replay: ReplayCache::new(),
+            client,
+            delegated,
+            spnego_mech_list: if sp.is_empty() {
+                None
+            } else {
+                Some(sp.to_vec())
+            },
+            lifetime_end,
+            gss_flags,
+        })
+    }
+
+    /// Remaining lifetime, GSS flags, and names.
+    #[must_use]
+    pub fn inquire_context(&self) -> InquireOk {
+        InquireOk {
+            initiator: self.initiator,
+            flags: self.gss_flags | GSS_C_TRANS,
+            lifetime: self.lifetime(),
+            client: self.client.clone(),
+        }
+    }
+
+    /// Remaining ticket lifetime in seconds (`0` if unknown or expired).
+    #[must_use]
+    pub fn lifetime(&self) -> u32 {
+        if self.lifetime_end == 0 {
+            return 0;
+        }
+        let now = KerberosTime::now().unix_seconds();
+        self.lifetime_end.saturating_sub(now)
+    }
+
+    /// Established GSS flags, including `GSS_C_TRANS`.
+    #[must_use]
+    pub fn gss_flags(&self) -> u32 {
+        self.gss_flags | GSS_C_TRANS
+    }
+
     /// MIT libgssrpc INIT verifier may skip GSS seq 0 (discarded window MIC).
     ///
     /// Only the iprop RPCSEC client sets this. Default wrap/MIC stays strict.
@@ -585,6 +983,213 @@ impl GssContext {
         }
         Ok(())
     }
+}
+
+fn require_aes(et: EncryptionType) -> Result<(), Error> {
+    if et.is_aes() {
+        Ok(())
+    } else {
+        Err(Error::Inner("gss wrap_iov aes".into()))
+    }
+}
+
+fn mac_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+fn iov_find<'a>(iov: &'a [IovBuf<'_>], kind: IovType) -> Result<&'a [u8], Error> {
+    let mut found = None;
+    for b in iov {
+        if b.kind == kind {
+            if found.is_some() {
+                return Err(Error::Truncated);
+            }
+            found = Some(b.data.as_slice());
+        }
+    }
+    found.ok_or(Error::Truncated)
+}
+
+fn iov_data_len(iov: &[IovBuf<'_>]) -> Result<usize, Error> {
+    let n: usize = iov
+        .iter()
+        .filter(|b| b.kind == IovType::Data)
+        .map(|b| b.data.len())
+        .sum();
+    if n == 0 && !iov.iter().any(|b| b.kind == IovType::Data) {
+        return Err(Error::Truncated);
+    }
+    Ok(n)
+}
+
+fn iov_copy_data(iov: &[IovBuf<'_>], out: &mut Vec<u8>) -> Result<(), Error> {
+    let mut any = false;
+    for b in iov {
+        if b.kind == IovType::Data {
+            any = true;
+            out.extend_from_slice(b.data);
+        }
+    }
+    if any { Ok(()) } else { Err(Error::Truncated) }
+}
+
+fn iov_sign_body(iov: &[IovBuf<'_>], out: &mut Vec<u8>) {
+    for b in iov {
+        if matches!(b.kind, IovType::Data | IovType::SignOnly) {
+            out.extend_from_slice(b.data);
+        }
+    }
+}
+
+fn write_iov_one(iov: &mut [IovBuf<'_>], kind: IovType, bytes: &[u8]) -> Result<(), Error> {
+    let mut slot = None;
+    for (i, b) in iov.iter().enumerate() {
+        if b.kind == kind {
+            if slot.is_some() {
+                return Err(Error::Truncated);
+            }
+            slot = Some(i);
+        }
+    }
+    let i = slot.ok_or(Error::Truncated)?;
+    iov[i].data.clear();
+    iov[i].data.extend_from_slice(bytes);
+    Ok(())
+}
+
+fn write_iov_data(iov: &mut [IovBuf<'_>], plain: &[u8]) -> Result<(), Error> {
+    let mut off = 0usize;
+    for b in iov.iter_mut() {
+        if b.kind == IovType::Data {
+            let n = b.data.len();
+            let chunk = plain.get(off..off + n).ok_or(Error::Truncated)?;
+            b.data.copy_from_slice(chunk);
+            off += n;
+        }
+    }
+    if off == plain.len() {
+        Ok(())
+    } else {
+        Err(Error::Truncated)
+    }
+}
+
+fn join_wrap_token(iov: &[IovBuf<'_>]) -> Result<Vec<u8>, Error> {
+    let mut tok = iov_find(iov, IovType::Header)?.to_vec();
+    iov_copy_data(iov, &mut tok)?;
+    if let Ok(p) = iov_find(iov, IovType::Padding) {
+        tok.extend_from_slice(p);
+    }
+    tok.extend_from_slice(iov_find(iov, IovType::Trailer)?);
+    Ok(tok)
+}
+
+fn split_wrap_token(
+    iov: &mut [IovBuf<'_>],
+    tok: &[u8],
+    n: usize,
+    trailer_len: usize,
+) -> Result<(), Error> {
+    let header_len = 16 + AES_CONFOUNDER;
+    if tok.len() != header_len + n + trailer_len {
+        return Err(Error::Truncated);
+    }
+    write_iov_one(iov, IovType::Header, &tok[..header_len])?;
+    write_iov_data(iov, &tok[header_len..header_len + n])?;
+    if let Some(p) = iov.iter_mut().find(|b| b.kind == IovType::Padding) {
+        p.data.clear();
+    }
+    write_iov_one(iov, IovType::Trailer, &tok[header_len + n..])
+}
+
+fn iov_hmac_input(
+    iov: &[IovBuf<'_>],
+    rfc8009: bool,
+    conf: &[u8],
+    cipher: &[u8],
+    tok_hdr: &[u8; 16],
+    data_plain: Option<&[u8]>,
+) -> Result<Vec<u8>, Error> {
+    if rfc8009 {
+        let mut m = vec![0u8; 16];
+        m.extend_from_slice(cipher.get(..AES_CONFOUNDER).ok_or(Error::Truncated)?);
+        let mut off = AES_CONFOUNDER;
+        for b in iov {
+            match b.kind {
+                IovType::Data => {
+                    let n = b.data.len();
+                    m.extend_from_slice(cipher.get(off..off + n).ok_or(Error::Truncated)?);
+                    off += n;
+                }
+                IovType::SignOnly => m.extend_from_slice(b.data),
+                _ => {}
+            }
+        }
+        m.extend_from_slice(cipher.get(off..off + 16).ok_or(Error::Truncated)?);
+        return Ok(m);
+    }
+    let mut m = conf.to_vec();
+    let mut poff = 0usize;
+    for b in iov {
+        match b.kind {
+            IovType::Data => {
+                if let Some(p) = data_plain {
+                    let n = b.data.len();
+                    m.extend_from_slice(p.get(poff..poff + n).ok_or(Error::Truncated)?);
+                    poff += n;
+                } else {
+                    m.extend_from_slice(b.data);
+                }
+            }
+            IovType::SignOnly => m.extend_from_slice(b.data),
+            _ => {}
+        }
+    }
+    m.extend_from_slice(tok_hdr);
+    Ok(m)
+}
+
+fn write_key(out: &mut Vec<u8>, key: &ProtocolKey) -> Result<(), Error> {
+    out.extend_from_slice(&key.etype().to_iana().to_be_bytes());
+    let n = u16::try_from(key.as_bytes().len()).map_err(|_| Error::Truncated)?;
+    out.extend_from_slice(&n.to_be_bytes());
+    out.extend_from_slice(key.as_bytes());
+    Ok(())
+}
+
+fn read_key(token: &[u8], i: &mut usize) -> Result<ProtocolKey, Error> {
+    let etype_n = i32::from_be_bytes(take_arr(token, i)?);
+    let n = usize::from(u16::from_be_bytes(take_arr(token, i)?));
+    let bytes = token.get(*i..*i + n).ok_or(Error::Truncated)?;
+    *i += n;
+    let et = EncryptionType::from_iana(etype_n).or_else(|_| EncryptionType::known(etype_n))?;
+    Ok(ProtocolKey::from_bytes(et, bytes)?)
+}
+
+fn take_arr<const N: usize>(token: &[u8], i: &mut usize) -> Result<[u8; N], Error> {
+    let s = token.get(*i..*i + N).ok_or(Error::Truncated)?;
+    *i += N;
+    s.try_into().map_err(|_| Error::Truncated)
+}
+
+fn write_opt_str(out: &mut Vec<u8>, s: Option<&str>) -> Result<(), Error> {
+    let b = s.unwrap_or("").as_bytes();
+    let n = u16::try_from(b.len()).map_err(|_| Error::Truncated)?;
+    out.extend_from_slice(&n.to_be_bytes());
+    out.extend_from_slice(b);
+    Ok(())
+}
+
+fn read_opt_str(token: &[u8], i: &mut usize) -> Result<Option<String>, Error> {
+    let n = usize::from(u16::from_be_bytes(take_arr(token, i)?));
+    let b = token.get(*i..*i + n).ok_or(Error::Truncated)?;
+    *i += n;
+    if b.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(
+        String::from_utf8(b.to_vec()).map_err(|_| Error::Truncated)?,
+    ))
 }
 
 fn random_subkey(session: &ProtocolKey) -> Result<ProtocolKey, Error> {
@@ -1732,5 +2337,263 @@ mod tests {
         .unwrap();
         let want = format!("{TEST_USER}@{TEST_REALM}");
         assert_eq!(acc.delegated(), Some(want.as_str()));
+    }
+
+    struct WrappedIov {
+        header: Vec<u8>,
+        data: Vec<u8>,
+        padding: Vec<u8>,
+        trailer: Vec<u8>,
+        sign: Vec<u8>,
+    }
+
+    fn wrap_iov_once(ctx: &mut GssContext, msg: &[u8], assoc: Option<&[u8]>) -> WrappedIov {
+        let mut header = Vec::new();
+        let mut data = msg.to_vec();
+        let mut padding = vec![0xff];
+        let mut trailer = Vec::new();
+        let mut sign = assoc.unwrap_or(&[]).to_vec();
+        let mut iov = vec![
+            IovBuf {
+                kind: IovType::Header,
+                data: &mut header,
+            },
+            IovBuf {
+                kind: IovType::Data,
+                data: &mut data,
+            },
+            IovBuf {
+                kind: IovType::Padding,
+                data: &mut padding,
+            },
+            IovBuf {
+                kind: IovType::Trailer,
+                data: &mut trailer,
+            },
+        ];
+        if assoc.is_some() {
+            iov.insert(
+                1,
+                IovBuf {
+                    kind: IovType::SignOnly,
+                    data: &mut sign,
+                },
+            );
+        }
+        ctx.wrap_iov(true, &mut iov).unwrap();
+        WrappedIov {
+            header,
+            data,
+            padding,
+            trailer,
+            sign,
+        }
+    }
+
+    fn unwrap_iov_once(
+        ctx: &mut GssContext,
+        header: &mut Vec<u8>,
+        data: &mut Vec<u8>,
+        padding: &mut Vec<u8>,
+        trailer: &mut Vec<u8>,
+        assoc: Option<&mut Vec<u8>>,
+    ) -> Result<(), Error> {
+        let mut iov = Vec::new();
+        iov.push(IovBuf {
+            kind: IovType::Header,
+            data: header,
+        });
+        if let Some(s) = assoc {
+            iov.push(IovBuf {
+                kind: IovType::SignOnly,
+                data: s,
+            });
+        }
+        iov.push(IovBuf {
+            kind: IovType::Data,
+            data,
+        });
+        iov.push(IovBuf {
+            kind: IovType::Padding,
+            data: padding,
+        });
+        iov.push(IovBuf {
+            kind: IovType::Trailer,
+            data: trailer,
+        });
+        ctx.unwrap_iov(&mut iov)
+    }
+
+    #[test]
+    fn wrap_iov_slices_match_wrap_token() {
+        let (mut init, mut acc) = contexts();
+        let w = wrap_iov_once(&mut init, b"iov-hello", None);
+        assert_eq!(w.header.len(), 32, "GSS 16 + AES confounder 16");
+        assert_eq!(w.padding.len(), 0, "AES padding empty");
+        assert_eq!(w.trailer.len(), 16 + 12, "E(header)+HMAC-SHA1-96");
+        assert_eq!(&w.header[..2], &TOK_WRAP);
+        assert_eq!(&w.header[6..8], &[0, 0], "RRC=0");
+        let tok: Vec<u8> = [&w.header[..], &w.data[..], &w.padding[..], &w.trailer[..]].concat();
+        assert_eq!(acc.unwrap(&tok).unwrap(), b"iov-hello");
+        let (mut init, mut acc) = contexts();
+        let mut h = Vec::new();
+        let mut d = b"iov-hello".to_vec();
+        let mut p = Vec::new();
+        let mut t = Vec::new();
+        init.wrap_iov(
+            true,
+            &mut [
+                IovBuf {
+                    kind: IovType::Header,
+                    data: &mut h,
+                },
+                IovBuf {
+                    kind: IovType::Data,
+                    data: &mut d,
+                },
+                IovBuf {
+                    kind: IovType::Padding,
+                    data: &mut p,
+                },
+                IovBuf {
+                    kind: IovType::Trailer,
+                    data: &mut t,
+                },
+            ],
+        )
+        .unwrap();
+        unwrap_iov_once(&mut acc, &mut h, &mut d, &mut p, &mut t, None).unwrap();
+        assert_eq!(d, b"iov-hello");
+    }
+
+    #[test]
+    fn wrap_iov_sign_only_is_checksummed_not_encrypted() {
+        let (mut init, mut acc) = contexts();
+        let assoc = b"rpc-hdr";
+        let mut w = wrap_iov_once(&mut init, b"body", Some(assoc));
+        assert_eq!(w.sign, assoc, "SIGN_ONLY is not encrypted");
+        assert_ne!(w.data, b"body", "DATA is ciphertext");
+        unwrap_iov_once(
+            &mut acc,
+            &mut w.header,
+            &mut w.data,
+            &mut w.padding,
+            &mut w.trailer,
+            Some(&mut w.sign),
+        )
+        .unwrap();
+        assert_eq!(w.data, b"body");
+        let (mut init, mut acc) = contexts();
+        let mut w = wrap_iov_once(&mut init, b"body", Some(assoc));
+        let mut bad = assoc.to_vec();
+        bad[0] ^= 1;
+        assert!(matches!(
+            unwrap_iov_once(
+                &mut acc,
+                &mut w.header,
+                &mut w.data,
+                &mut w.padding,
+                &mut w.trailer,
+                Some(&mut bad)
+            ),
+            Err(Error::Integrity)
+        ));
+    }
+
+    fn bare_ctx(key: ProtocolKey, initiator: bool) -> GssContext {
+        GssContext {
+            session: key,
+            acceptor_subkey: None,
+            send_seq: 0,
+            recv_seq: 0,
+            recv_seen: false,
+            recv_window: std::collections::HashSet::new(),
+            initiator,
+            rpcsec_init_window: false,
+            replay: krb5_protocol::ReplayCache::new(),
+            client: None,
+            delegated: None,
+            spnego_mech_list: None,
+            lifetime_end: 0,
+            gss_flags: GSS_C_INTEG | GSS_C_CONF,
+        }
+    }
+
+    #[test]
+    fn wrap_iov_rfc8009_sign_only_round_trips() {
+        let et = EncryptionType::Aes256CtsHmacSha384192;
+        let key = ProtocolKey::from_bytes(et, &[0x5au8; 32]).unwrap();
+        let mut init = bare_ctx(key.clone(), true);
+        let mut acc = bare_ctx(key, false);
+        let mut w = wrap_iov_once(&mut init, b"sha2-body", Some(b"rpc-hdr"));
+        assert_eq!(w.trailer.len(), 16 + 24, "E(header)+HMAC-SHA384-192");
+        assert_eq!(w.sign, b"rpc-hdr");
+        unwrap_iov_once(
+            &mut acc,
+            &mut w.header,
+            &mut w.data,
+            &mut w.padding,
+            &mut w.trailer,
+            Some(&mut w.sign),
+        )
+        .unwrap();
+        assert_eq!(w.data, b"sha2-body");
+    }
+
+    #[test]
+    fn export_import_wrap_still_works() {
+        let (mut init, acc) = contexts();
+        let w = init.wrap(b"keep").unwrap();
+        let tok = acc.export_sec_context().unwrap();
+        let mut acc2 = GssContext::import_sec_context(&tok).unwrap();
+        assert_eq!(acc2.unwrap(&w).unwrap(), b"keep");
+        let w2 = init.wrap(b"again").unwrap();
+        assert_eq!(acc2.unwrap(&w2).unwrap(), b"again");
+        assert!(matches!(
+            GssContext::import_sec_context(&tok[..8]),
+            Err(Error::Truncated)
+        ));
+        assert!(matches!(
+            GssContext::import_sec_context(b"XXXX"),
+            Err(Error::Truncated)
+        ));
+    }
+
+    #[test]
+    fn inquire_reports_lifetime_and_flags() {
+        let (_init, acc) = contexts();
+        let q = acc.inquire_context();
+        assert!(!q.initiator);
+        assert_ne!(q.flags & GSS_C_INTEG, 0);
+        assert_ne!(q.flags & GSS_C_CONF, 0);
+        assert_ne!(q.flags & GSS_C_TRANS, 0);
+        assert!(q.lifetime > 0, "ticket endtime must be stashed");
+        assert!(q.client.is_some());
+        let (init, _) = contexts();
+        assert!(init.inquire_context().initiator);
+        assert_ne!(init.gss_flags() & GSS_C_INTEG, 0);
+    }
+
+    #[test]
+    fn wrap_iov_hostile_header_is_truncated() {
+        let (mut init, _acc) = contexts();
+        let mut data = b"x".to_vec();
+        let mut trailer = Vec::new();
+        let r = init.wrap_iov(
+            true,
+            &mut [
+                IovBuf {
+                    kind: IovType::Data,
+                    data: &mut data,
+                },
+                IovBuf {
+                    kind: IovType::Trailer,
+                    data: &mut trailer,
+                },
+            ],
+        );
+        assert!(matches!(r, Err(Error::Truncated)));
+        let (h, pad, t) = init.wrap_iov_length(true).unwrap();
+        assert_eq!((h, pad, t), (32, 0, 28));
     }
 }

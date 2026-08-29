@@ -69,6 +69,10 @@ acceptor print `gss-accept delegated=user@KERBER.TEST`. A Rust initiator
 with a KRB-CRED trailer must make MIT `gss-mit-server` print the same
 name. A MIT SPNEGO initiator (`gss_mech_spnego`) must complete
 `NegTokenResp` + `mechListMIC` and still unwrap `hello-from-mit-gss`.
+MIT `gss_wrap_iov` (HEADER|DATA|PADDING|TRAILER, and with `SIGN_ONLY`)
+must unwrap on the Rust acceptor; Rust `wrap_iov` concatenates to a
+token MIT `gss_unwrap_iov` STREAM accepts. The acceptor prints
+`gss-accept import ok` and `inquire flags=` with lifetime > 0.
 
 PKINIT: `scripts/pkinit-gate.sh` **fails** unless MIT `pkinit.so` is
 present and MIT `kinit -X X509_user_identity=FILE:` succeeds against

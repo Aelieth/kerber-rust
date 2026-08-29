@@ -9,7 +9,7 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
 
-use krb5_gss::GssContext;
+use krb5_gss::{GssContext, IovBuf, IovType};
 use krb5_protocol::Keytab;
 
 fn main() {
@@ -23,6 +23,7 @@ fn main() {
 
     let mut keytab = None::<String>;
     let mut listen = "127.0.0.1:4444".to_owned();
+    let mut assoc = Vec::new();
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -30,6 +31,11 @@ fn main() {
             "--listen" => {
                 if let Some(v) = args.next() {
                     listen = v;
+                }
+            }
+            "--assoc" => {
+                if let Some(v) = args.next() {
+                    assoc = v.into_bytes();
                 }
             }
             _ => {}
@@ -95,6 +101,22 @@ fn main() {
     if let Some(d) = ctx.delegated() {
         println!("gss-accept delegated={d}");
     }
+    {
+        let q = ctx.inquire_context();
+        println!(
+            "gss-accept inquire flags={} lifetime={}",
+            q.flags, q.lifetime
+        );
+    }
+    let exported = ctx.export_sec_context().unwrap_or_else(|e| {
+        eprintln!("export: {e}");
+        std::process::exit(1);
+    });
+    ctx = GssContext::import_sec_context(&exported).unwrap_or_else(|e| {
+        eprintln!("import: {e}");
+        std::process::exit(1);
+    });
+    println!("gss-accept import ok");
     if let Some(rep) = ap_rep {
         write_token(&mut stream, &rep).unwrap_or_else(|e| {
             eprintln!("write AP-REP: {e}");
@@ -122,7 +144,7 @@ fn main() {
             nwrap = nwrap.saturating_add(1);
             continue;
         }
-        let plain = ctx.unwrap(&wrap).unwrap_or_else(|e| {
+        let plain = unwrap_iov_token(&mut ctx, &wrap, &assoc).unwrap_or_else(|e| {
             eprintln!("unwrap: {e}");
             std::process::exit(1);
         });
@@ -130,6 +152,58 @@ fn main() {
         println!("gss-accept plaintext={}", String::from_utf8_lossy(&plain));
         nwrap = nwrap.saturating_add(1);
     }
+}
+
+fn unwrap_iov_token(
+    ctx: &mut GssContext,
+    wrap: &[u8],
+    assoc: &[u8],
+) -> Result<Vec<u8>, krb5_gss::Error> {
+    if wrap.first() != Some(&0x05) {
+        return ctx.unwrap(wrap);
+    }
+    let sealed = wrap.get(2).copied().unwrap_or(0) & 0x02 != 0;
+    if !sealed {
+        return ctx.unwrap(wrap);
+    }
+    let (header_len, _, trailer_len) = ctx.wrap_iov_length(true)?;
+    if wrap.len() < header_len + trailer_len {
+        return ctx.unwrap(wrap);
+    }
+    let mut header = wrap[..header_len].to_vec();
+    let mut trailer = wrap[wrap.len() - trailer_len..].to_vec();
+    let mut data = wrap[header_len..wrap.len() - trailer_len].to_vec();
+    let mut padding = Vec::new();
+    let mut sign = assoc.to_vec();
+    let mut iov = vec![
+        IovBuf {
+            kind: IovType::Header,
+            data: &mut header,
+        },
+        IovBuf {
+            kind: IovType::Data,
+            data: &mut data,
+        },
+        IovBuf {
+            kind: IovType::Padding,
+            data: &mut padding,
+        },
+        IovBuf {
+            kind: IovType::Trailer,
+            data: &mut trailer,
+        },
+    ];
+    if !assoc.is_empty() {
+        iov.insert(
+            1,
+            IovBuf {
+                kind: IovType::SignOnly,
+                data: &mut sign,
+            },
+        );
+    }
+    ctx.unwrap_iov(&mut iov)?;
+    Ok(data)
 }
 
 fn read_token(s: &mut std::net::TcpStream) -> std::io::Result<Vec<u8>> {
