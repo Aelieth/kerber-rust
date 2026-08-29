@@ -1207,7 +1207,7 @@ fn dispatch_kadm5(
             let mut w = XdrW::default();
             w.u32(API_V2);
             w.u32(0);
-            w.u32(KADM5_PRIVS);
+            w.u32(acl.privs(actor) & KADM5_PRIVS);
             Ok(w.b)
         }
         GET_PRINCIPAL => {
@@ -1988,6 +1988,27 @@ mod tests {
         let b = generic_ret(API_V2, 0);
         assert_eq!(b.len(), 8);
         assert_eq!(&b[..4], &API_V2.to_be_bytes());
+    }
+
+    #[test]
+    fn get_privs_follows_actor_acl_not_constant() {
+        let (store, acl, actor) = setup();
+        let admin = dispatch_kadm5(&store, &acl, &actor, GET_PRIVS, &[]).unwrap();
+        let mut r = XdrR::new(&admin);
+        assert_eq!(r.u32().unwrap(), API_V2);
+        assert_eq!(r.u32().unwrap(), 0);
+        assert_eq!(r.u32().unwrap(), KADM5_PRIVS);
+        let limited = Acl::parse("admin@KERBER.TEST *\nlimited@KERBER.TEST i\n");
+        let out = dispatch_kadm5(&store, &limited, "limited@KERBER.TEST", GET_PRIVS, &[]).unwrap();
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), API_V2);
+        assert_eq!(r.u32().unwrap(), 0);
+        assert_eq!(r.u32().unwrap(), 0x01, "inquire-only is GET, not 0x3F");
+        let none = dispatch_kadm5(&store, &limited, "nobody@KERBER.TEST", GET_PRIVS, &[]).unwrap();
+        let mut r = XdrR::new(&none);
+        assert_eq!(r.u32().unwrap(), API_V2);
+        assert_eq!(r.u32().unwrap(), 0);
+        assert_eq!(r.u32().unwrap(), 0);
     }
 
     #[test]

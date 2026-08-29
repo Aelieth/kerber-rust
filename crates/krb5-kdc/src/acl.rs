@@ -17,6 +17,10 @@ pub enum AdminOp {
     Inquire,
     /// Modify attributes (`modprinc` / kadm5 `m`).
     Modify,
+    /// List principals/policies (kadm5 `l`).
+    List,
+    /// Incremental/full dump propagation (kadm5 `p`).
+    Propagate,
 }
 
 /// One ACL line: a principal pattern and permission flags.
@@ -34,6 +38,10 @@ pub struct AclEntry {
     pub changepw: bool,
     /// `m` (modify) / `*`
     pub modify: bool,
+    /// `l` (list) / `*`
+    pub list: bool,
+    /// `p` (propagate) / `*`
+    pub propagate: bool,
 }
 
 /// Ordered ACL; first matching principal wins. Unlisted principals are denied.
@@ -71,6 +79,8 @@ impl Acl {
                 inquire: all || perms.contains('i'),
                 changepw: all || perms.contains('c'),
                 modify: all || perms.contains('m'),
+                list: all || perms.contains('l'),
+                propagate: all || perms.contains('p'),
             });
         }
         Self { entries }
@@ -87,6 +97,8 @@ impl Acl {
                 inquire: true,
                 changepw: true,
                 modify: true,
+                list: true,
+                propagate: true,
             }],
         }
     }
@@ -107,6 +119,8 @@ impl Acl {
                 AdminOp::Ktadd | AdminOp::Inquire => e.inquire,
                 AdminOp::ChangePassword => e.changepw,
                 AdminOp::Modify => e.modify,
+                AdminOp::List => e.list,
+                AdminOp::Propagate => e.propagate,
             };
             if ok {
                 tracing::info!(
@@ -130,6 +144,37 @@ impl Acl {
         );
         Err(Error::AclDenied)
     }
+
+    /// MIT `kadm5_get_privs` mask for `actor` (`KADM5_PRIV_*`, 0 if none).
+    #[must_use]
+    pub fn privs(&self, actor: &str) -> u32 {
+        for e in &self.entries {
+            if !principal_matches(&e.principal, actor) {
+                continue;
+            }
+            let mut bits = 0u32;
+            if e.inquire {
+                bits |= 0x01;
+            }
+            if e.add {
+                bits |= 0x02;
+            }
+            if e.modify {
+                bits |= 0x04;
+            }
+            if e.delete {
+                bits |= 0x08;
+            }
+            if e.list {
+                bits |= 0x10;
+            }
+            if e.changepw {
+                bits |= 0x20;
+            }
+            return bits;
+        }
+        0
+    }
 }
 
 fn op_name(op: AdminOp) -> &'static str {
@@ -140,6 +185,8 @@ fn op_name(op: AdminOp) -> &'static str {
         AdminOp::ChangePassword => "cpw",
         AdminOp::Inquire => "inquire",
         AdminOp::Modify => "modify",
+        AdminOp::List => "list",
+        AdminOp::Propagate => "propagate",
     }
 }
 

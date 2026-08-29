@@ -100,6 +100,9 @@ fn acl_parse_kadm5_style() {
         acl.check("user@KERBER.TEST", AdminOp::Modify).unwrap_err(),
         Error::AclDenied
     );
+    assert_eq!(acl.privs("admin@KERBER.TEST"), 0x3F);
+    assert_eq!(acl.privs("user@KERBER.TEST"), 0x01);
+    assert_eq!(acl.privs("nobody@KERBER.TEST"), 0);
 }
 
 #[test]
