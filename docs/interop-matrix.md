@@ -23,8 +23,13 @@ the script documents otherwise.
 | `cross-realm-gate.sh` | MIT `kinit` + `kvno host/svc.other.test@OTHER.TEST` | `klist` has `krbtgt/OTHER.TEST` and the host ticket | harness |
 | `kadmin-gate.sh` | MIT `kadmin` vs `krb5-kadmind` 749 | add/cpw/get/list/mod/chrand/ktadd/`renprinc`/del then `kinit extra` | harness |
 | `policy-gate.sh` | MIT `kadmin` addpol/modpol/getpol/`cpw`/delpol + `kinit` | too-short + reuse; minclasses 5; history-N (current inside N); maxfailure-2; lockout duration/interval | harness |
+| `history-mit-gate.sh` | MIT `kadmin.local` history-window on a MIT KDB | history=1 allows A→B→A; history=2 rejects B after A→B→C | harness |
 | `store-gate.sh` | MIT `kinit`/`kvno` vs MemoryStore KDC | `backend memory`; `user@KERBER.TEST` + host kvno | harness |
 | `iprop-gate.sh` | MIT `kpropd -A` GET_UPDATES + `krb5-iprop-pull` vs MIT kadmind | MIT `kinit extra` after serial-delta; MIT `kinit extra2` on Rust replica | harness |
+| `expire-gate.sh` | MIT `kinit` vs Rust KDC after `modprinc -expire`/`-pwexpire` | NAME_EXP vs KEY_EXPIRED; `kinit -S kadmin/changepw` on expired password | harness |
+| `flags-gate.sh` | MIT `modprinc` +flag then `kinit`/`kvno`/`klist -f` | ALL_TIX revoked; no `F` when DISALLOW_FORWARDABLE; `O` when OK_AS_DELEGATE; SVR user2user; TGT_BASED POLICY; HW_AUTH no ticket | harness |
+| `getprivs-gate.sh` | MIT `kadmin getprivs` vs Rust kadmind ACL | admin INQUIRE/ADD/MODIFY; limited `i` is INQUIRE only | harness |
+| `prop-acl-gate.sh` | MIT `kprop` vs Rust kpropd `KRB5_KPROP_ACL` | empty allowlist: `acl denied`, no replica; host allowlist: MIT `kinit user` | harness |
 | `kpasswd-gate.sh` | MIT `kpasswd` vs kadmind 464 | new password `kinit`; old fails; run twice | harness |
 | `kdb-dump-gate.sh` | MIT `kdb5_util` dump/load both ways | MIT `kinit` vs Rust; MIT load of policy-bearing dump + `getpol lockme` | harness |
 | `differential-gate.sh` | same AS/TGS bytes to Rust and MIT on one dump | stable-rep / error-code compare; un-whitelisted mismatch fails red | harness |

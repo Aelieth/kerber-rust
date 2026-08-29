@@ -99,8 +99,9 @@ toolchain. `rasn` is unpinned (`0.28`); golden MIT DER is the protocol
 net if encodings drift. There is no unlocked `--locked` fallback.
 KLLDAP alignment: [`integration-klldap.md`](integration-klldap.md).
 
-Era II gates. The harness CI job runs `kadmin-gate`, `policy-gate`, `kpasswd-gate`,
-`kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `iprop-gate`, `restart-gate`,
+Era II gates. The harness CI job runs `kadmin-gate`, `policy-gate`, `history-mit-gate`, `kpasswd-gate`,
+`kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `iprop-gate`,
+`expire-gate`, `flags-gate`, `getprivs-gate`, `prop-acl-gate`, `restart-gate`,
 `prod-gate`, `prod-realm-gate`, `stress-gate`, `chaos-gate`, `soak-gate`, `s4u-mit-gate`, `samba-ad-gate`, `ad-windows-gate`,
 `ad-s4u-gate`, `samba-pac-verify-gate`, `samba-pac-l2-gate`,
 `samba-crossrealm-gate`, `samba-realtrust-gate`, and `heimdal-gate` after `pkinit-gate`.
@@ -164,6 +165,14 @@ when that oracle is absent.
   the MIT replica (one FULL_RESYNC, then incremental); `krb5-iprop-pull`
   vs MIT kadmind then MIT `kinit extra2`; MIT `delprinc extra2` then the
   name is gone on the Rust replica. In CI.
+- `scripts/expire-gate.sh` — MIT `kinit` NAME_EXP vs KEY_EXPIRED;
+  `kinit -S kadmin/changepw` on a password-expired client. In CI.
+- `scripts/flags-gate.sh` — MIT `modprinc` DISALLOW_*/OK_AS_DELEGATE/
+  REQUIRES_HW_AUTH then `kinit`/`kvno`/`klist -f`. In CI.
+- `scripts/getprivs-gate.sh` — MIT `kadmin getprivs` as a limited `i`
+  actor is INQUIRE only. In CI.
+- `scripts/prop-acl-gate.sh` — MIT `kprop` vs empty `KRB5_KPROP_ACL`
+  is refused (no replica dump); host allowlist still loads. In CI.
 - `scripts/kadmin-gate.sh` — MIT `kadmin` against `krb5-kadmind` on 749
   (AUTH_GSSAPI 300001): `addprinc`, `cpw`, `getprinc` (`Principal:
   extra@KERBER.TEST`), `listprincs` (names `extra` and `user`),

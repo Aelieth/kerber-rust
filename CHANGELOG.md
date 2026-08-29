@@ -4,9 +4,37 @@ All notable changes to this project are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project uses semantic versioning once a crate is published.
 
-## [Unreleased]
+## [Unreleased] — targeting 1.1.0
+
+The **1.1** line is *general-purpose MIT 1.22.2 completeness*: making the KDC
+behave like MIT across the board and stand alone as a client toolset. The
+roadmap is nine gated phases — **G1** faithfulness (enforce expiration +
+principal flags, real `GET_PRIVS`, iprop/kpropd ACLs) · **G2** ticket
+renewal + postdating · **G3** full kadmin verbs · **G4** iprop fidelity ·
+**G5** GSS breadth (delegation / SPNEGO / IOV) · **G6** client-side preauth +
+NT-ENTERPRISE · **G7** standalone user CLIs · **G8** KEYRING ccache · **G9**
+config breadth. Each phase lands behind a real-MIT gate before it counts as
+done. The entries below are the post-1.0 groundwork already in tree (Tier-1
+plugin/policy/propagation parity + the KLLDAP 0.7.5 toolchain alignment).
+**G1 faithfulness has landed** (expiration, stored flags, real `GET_PRIVS`,
+iprop/kpropd ACLs). 1.1 is cut when G1–G9 are complete.
 
 ### Added
+
+- **G1 faithfulness (MIT-gated).** AS/TGS enforce stored principal
+  expiration (`KDC_ERR_NAME_EXP`) before password/key expiration
+  (`KDC_ERR_KEY_EXPIRED`); 0 still means never; `PWCHANGE_SERVICE`
+  (`kadmin/changepw`) still issues to a password-expired client
+  (`scripts/expire-gate.sh`). Stored KDB flags are honored at issue
+  time: `DISALLOW_*` (ALL_TIX / SVR / TGT_BASED / FORWARDABLE /
+  RENEWABLE / PROXIABLE / POSTDATED), `OK_AS_DELEGATE`,
+  `REQUIRES_HW_AUTH`, `NO_AUTH_DATA_REQUIRED`
+  (`scripts/flags-gate.sh`). kadmind `GET_PRIVS` is the actor's ACL
+  mask, not constant `0x3F` (`scripts/getprivs-gate.sh`). iprop
+  GET_UPDATES/FULL_RESYNC require `p`; kpropd matches the AP-REQ
+  client against `KRB5_KPROP_ACL` (`scripts/prop-acl-gate.sh`).
+  Lockout `DISALLOW_ALL_TIX` → `CLIENT_REVOKED` is unchanged.
+  `EncKdcRepPart.key_expiration` stays `None`.
 
 - KDB extension surface: `PrincipalRead` / `PrincipalWrite` /
   `StoreLifecycle`. Dump-v7 is the default backend; `db_library=memory`

@@ -85,6 +85,8 @@ jobs:
         run: ./scripts/kadmin-gate.sh
       - name: policy-gate (MIT kadmin addpol/modpol/getpol/delpol/listpols + kinit lockout)
         run: ./scripts/policy-gate.sh
+      - name: history-mit-gate (MIT kadmin.local history-window oracle)
+        run: ./scripts/history-mit-gate.sh
       - name: kpasswd-gate (MIT kpasswd vs kadmind 464)
         run: ./scripts/kpasswd-gate.sh
       - name: kdb-dump-gate (MIT dump/load + kinit both directions)
@@ -97,6 +99,14 @@ jobs:
         run: ./scripts/kprop-reverse-gate.sh
       - name: iprop-gate (MIT kpropd -A vs Rust kadmind + serial-delta)
         run: ./scripts/iprop-gate.sh
+      - name: expire-gate (MIT kinit NAME_EXP / KEY_EXPIRED / PWCHANGE_SERVICE)
+        run: ./scripts/expire-gate.sh
+      - name: flags-gate (MIT modprinc DISALLOW_* / OK_AS_DELEGATE / REQUIRES_HW_AUTH)
+        run: ./scripts/flags-gate.sh
+      - name: getprivs-gate (MIT kadmin getprivs limited ACL actor)
+        run: ./scripts/getprivs-gate.sh
+      - name: prop-acl-gate (MIT kprop unauthorized GSS peer refused)
+        run: ./scripts/prop-acl-gate.sh
       - name: restart-gate (persist mutation survives KDC relaunch)
         run: ./scripts/restart-gate.sh
       - name: prod-gate (kinit + log analysis + pcap)
