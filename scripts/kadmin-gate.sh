@@ -130,9 +130,8 @@ GET="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc extra' 2>&1 || true)"
 echo "$GET"
 echo "$GET" | grep -q 'Principal: extra@KERBER.TEST'
-echo "$GET" | grep -q 'Number of keys:'
-echo "$GET" | grep -qv 'Number of keys: 0'
-echo "$GET" | grep -qE 'Key: vno [1-9]'
+echo "$GET" | grep -q 'Number of keys: 4'
+echo "$GET" | grep -qE 'Key: vno 2,'
 
 echo "==== MIT kadmin setstr/getstrs extra ===="
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \

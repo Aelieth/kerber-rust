@@ -6,6 +6,7 @@
 //!   `krb5-kdb dump <dump> --from-dump <other>` — transcode a MIT dump
 //!   `krb5-kdb create <realm>` — bootstrap + dump-v7 persist
 //!   `krb5-kdb addpol <name>` — named policy + bind `user` if present
+//!   `krb5-kdb setstr <princ> <key> <value>` — string attr (`KRB5_TL_STRING_ATTRS`)
 //!
 //! Master password: `KRB5_MASTER_PASSWORD`. Optional `KRB5_MASTER_ETYPE`
 //! (MIT name or IANA number; default `aes256-cts-hmac-sha384-192`).
@@ -38,13 +39,17 @@ fn main() {
         }
         i += 1;
     }
-    if args.len() != 2 {
-        eprintln!(
-            "usage: krb5-kdb load <dump>\n       krb5-kdb dump <dump> [--from-dump <mit-dump>]\n       krb5-kdb create <realm>\n       krb5-kdb addpol <name>"
-        );
-        std::process::exit(2);
+    let cmd = args.first().map_or("", String::as_str);
+    if cmd == "setstr" {
+        if args.len() != 4 {
+            usage();
+        }
+        cmd_setstr(&args[1], &args[2], &args[3]);
+        return;
     }
-    let cmd = args[0].as_str();
+    if args.len() != 2 {
+        usage();
+    }
     let path = PathBuf::from(&args[1]);
     let password = std::env::var("KRB5_MASTER_PASSWORD").unwrap_or_else(|_| {
         eprintln!("krb5-kdb: set KRB5_MASTER_PASSWORD");
@@ -62,6 +67,13 @@ fn main() {
             std::process::exit(2);
         }
     }
+}
+
+fn usage() -> ! {
+    eprintln!(
+        "usage: krb5-kdb load <dump>\n       krb5-kdb dump <dump> [--from-dump <mit-dump>]\n       krb5-kdb create <realm>\n       krb5-kdb addpol <name>\n       krb5-kdb setstr <princ> <key> <value>"
+    );
+    std::process::exit(2);
 }
 
 fn cmd_load(path: &std::path::Path, password: &[u8], etype: EncryptionType) {
@@ -213,6 +225,36 @@ fn cmd_addpol(name: &str) {
         std::process::exit(1);
     });
     println!("ok addpol name={name}");
+}
+
+fn cmd_setstr(princ: &str, key: &str, value: &str) {
+    if key.is_empty() {
+        eprintln!("krb5-kdb: empty setstr key");
+        std::process::exit(2);
+    }
+    let (db, stash) = db_and_stash();
+    let mut store = load_store(&db, &stash).unwrap_or_else(|e| {
+        eprintln!("krb5-kdb: load store: {e}");
+        std::process::exit(1);
+    });
+    let user = princ.split_once('@').map_or(princ, |(u, _)| u);
+    let parts: Vec<&str> = user.split('/').collect();
+    let name = if parts.len() > 1 {
+        PrincipalName::new(PrincipalName::NT_SRV_INST, parts)
+    } else {
+        PrincipalName::new(PrincipalName::NT_PRINCIPAL, parts)
+    };
+    store
+        .set_string(&name, key, Some(value))
+        .unwrap_or_else(|e| {
+            eprintln!("krb5-kdb: setstr: {e}");
+            std::process::exit(1);
+        });
+    save_store(&store, &db, &stash).unwrap_or_else(|e| {
+        eprintln!("krb5-kdb: save store: {e}");
+        std::process::exit(1);
+    });
+    println!("ok setstr {princ} {key}");
 }
 
 fn db_and_stash() -> (PathBuf, PathBuf) {

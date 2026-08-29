@@ -165,6 +165,16 @@ echo "$ADDPOL" | grep -q 'ok addpol name=lockme'
 docker exec "$NAME" grep -q '^policy	lockme	' /tmp/principal
 docker exec "$NAME" grep -q 'user@KERBER.TEST' /tmp/principal
 
+echo "==== half B: seed TL 0x000b string attr on Rust dump ===="
+SETSTR="$(docker exec \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kdb setstr user note hello-g3d 2>&1 || true)"
+echo "$SETSTR"
+echo "$SETSTR" | grep -q 'ok setstr user note'
+docker exec "$NAME" grep -q '6e6f74650068656c6c6f2d67336400' /tmp/principal
+
 echo "==== half B: MIT kdb5_util load + krb5kdc ===="
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec "$NAME" kdb5_util create -s -P masterpassword
@@ -177,6 +187,9 @@ echo "$LOAD_B" | grep -qiE 'error|fail' && {
 GETPOL="$(docker exec "$NAME" kadmin.local -q 'getpol lockme' 2>&1 || true)"
 echo "$GETPOL"
 echo "$GETPOL" | grep -q 'Policy: lockme'
+GETSTRS="$(docker exec "$NAME" kadmin.local -q 'getstrs user' 2>&1 || true)"
+echo "$GETSTRS"
+echo "$GETSTRS" | grep -q 'note: hello-g3d'
 STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc; sleep 0.4' 2>&1 || true)"
 echo "$STARTLOG"
 ok=0
