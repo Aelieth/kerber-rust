@@ -91,18 +91,26 @@ fn main() {
             std::process::exit(1);
         });
     }
-    let wrap = read_token(&mut stream).unwrap_or_else(|e| {
-        eprintln!("read wrap: {e}");
-        std::process::exit(1);
-    });
-    let n = wrap.len().min(16);
-    eprintln!("wrap token len={} hdr={:02x?}", wrap.len(), &wrap[..n]);
-    let plain = ctx.unwrap(&wrap).unwrap_or_else(|e| {
-        eprintln!("unwrap: {e}");
-        std::process::exit(1);
-    });
-    println!("gss-accept unwrap ok bytes={}", plain.len());
-    println!("gss-accept plaintext={}", String::from_utf8_lossy(&plain));
+    let mut nwrap = 0u32;
+    loop {
+        let wrap = match read_token(&mut stream) {
+            Ok(w) => w,
+            Err(_) if nwrap > 0 => break,
+            Err(e) => {
+                eprintln!("read wrap: {e}");
+                std::process::exit(1);
+            }
+        };
+        let n = wrap.len().min(16);
+        eprintln!("wrap token len={} hdr={:02x?}", wrap.len(), &wrap[..n]);
+        let plain = ctx.unwrap(&wrap).unwrap_or_else(|e| {
+            eprintln!("unwrap: {e}");
+            std::process::exit(1);
+        });
+        println!("gss-accept unwrap ok bytes={}", plain.len());
+        println!("gss-accept plaintext={}", String::from_utf8_lossy(&plain));
+        nwrap = nwrap.saturating_add(1);
+    }
 }
 
 fn read_token(s: &mut std::net::TcpStream) -> std::io::Result<Vec<u8>> {
