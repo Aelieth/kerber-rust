@@ -108,6 +108,45 @@ if [ "$ok" != 1 ]; then
     exit 1
 fi
 
+echo "==== Rust kpropd unset ACL (deny even host/ peers) ===="
+kill_comm krb5-kpropd
+docker exec -d \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KPROP_KEYTAB=/tmp/host.keytab \
+    -e KRB5_KDC_DB=/tmp/replica \
+    -e KRB5_KDC_STASH=/tmp/replica.stash \
+    -e KRB5_TEST_REALM=KERBER.TEST \
+    "$NAME" sh -c '/tmp/krb5-kpropd 127.0.0.1:754 >/tmp/kpropd.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/kpropd.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kpropd.log >&2 || true
+    log "propacl.gate" "error" ',"error":"kpropd (unset ACL) did not listen"'
+    exit 1
+fi
+
+echo "==== unauthorized MIT kprop (ACL unset) ===="
+UNSET="$(docker exec -e KRB5_CONFIG=/tmp/prop-krb5.conf \
+    "$NAME" kprop -f /tmp/dump -s /tmp/host.keytab -P 754 -d localhost 2>&1 || true)"
+echo "$UNSET"
+UNSET_LOG="$(docker exec "$NAME" cat /tmp/kpropd.log 2>/dev/null || true)"
+echo "$UNSET_LOG"
+if echo "$UNSET" | grep -q 'SUCCEEDED'; then
+    echo "unset-ACL kprop succeeded" >&2
+    exit 1
+fi
+echo "$UNSET_LOG" | grep -qiE 'acl denied|ACL'
+if docker exec "$NAME" test -f /tmp/replica; then
+    echo "unset-ACL kprop wrote a replica dump" >&2
+    exit 1
+fi
+
 echo "==== Rust kpropd empty ACL (deny all MIT GSS peers) ===="
 kill_comm krb5-kpropd
 docker exec -d \
@@ -214,5 +253,5 @@ KLIST="$(docker exec -e KRB5_CONFIG=/tmp/prop-krb5.conf "$NAME" klist)"
 echo "$KLIST"
 echo "$KLIST" | grep -q 'user@KERBER.TEST'
 
-log "propacl.gate" "ok" ',"unauthorized_refused":true,"authorized_kprop":true'
+log "propacl.gate" "ok" ',"unauthorized_refused":true,"unset_acl_refused":true,"authorized_kprop":true'
 exit 0

@@ -88,6 +88,7 @@ docker exec "$NAME" kadmin.local -q "addprinc -randkey host/localhost"
 docker exec "$NAME" kadmin.local -q "addprinc -randkey host/${HN}"
 docker exec "$NAME" kadmin.local -q "ktadd -k /tmp/host.keytab host/localhost host/${HN}"
 docker exec "$NAME" kdb5_util dump /tmp/dump
+docker exec "$NAME" sh -c "printf 'host/localhost@KERBER.TEST\\nhost/${HN}@KERBER.TEST\\n' >/tmp/kpropd.acl"
 docker exec "$NAME" sh -c 'sleep 0.2; touch /tmp/dump.dump_ok'
 DUMP_HEAD="$(docker exec "$NAME" head -1 /tmp/dump)"
 echo "$DUMP_HEAD"
@@ -117,6 +118,7 @@ kill_comm kpropd
 docker exec -d \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_KPROP_KEYTAB=/tmp/host.keytab \
+    -e KRB5_KPROP_ACL=/tmp/kpropd.acl \
     -e KRB5_KDC_DB=/tmp/replica \
     -e KRB5_KDC_STASH=/tmp/replica.stash \
     -e KRB5_TEST_REALM=KERBER.TEST \

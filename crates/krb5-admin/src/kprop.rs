@@ -328,7 +328,7 @@ pub fn kpropd_recvauth(
     };
     let crealm = String::from_utf8_lossy(ok.authenticator.crealm.as_bytes());
     let client = format!("{}@{crealm}", ok.authenticator.cname.components_joined());
-    if !kpropd_client_allowed(&client, allowed_clients, expected_realm) {
+    if !kpropd_client_allowed(&client, allowed_clients) {
         let _ = write_message(stream, &[]);
         return Err(Error::AclDenied);
     }
@@ -357,16 +357,8 @@ pub fn kpropd_recvauth(
     })
 }
 
-fn kpropd_client_allowed(client: &str, allowed: Option<&[String]>, realm: Option<&str>) -> bool {
-    match allowed {
-        Some([]) => false,
-        Some(patterns) => patterns.iter().any(|p| Acl::name_matches(p, client)),
-        None => {
-            let r = realm.unwrap_or("");
-            Acl::name_matches(&format!("host/*@{r}"), client)
-                || Acl::name_matches(&format!("kiprop/*@{r}"), client)
-        }
-    }
+fn kpropd_client_allowed(client: &str, allowed: Option<&[String]>) -> bool {
+    allowed.is_some_and(|patterns| patterns.iter().any(|p| Acl::name_matches(p, client)))
 }
 
 /// Receive dump bytes after [`kpropd_recvauth`].

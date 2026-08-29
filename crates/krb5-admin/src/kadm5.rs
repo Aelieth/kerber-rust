@@ -300,10 +300,7 @@ fn handle_rpc(
             .map_err(|_| Error::Inner("seq".into()))?,
     );
     let args = &plain[4..];
-    let actor = ctx
-        .client
-        .clone()
-        .unwrap_or_else(|| format!("admin@{expected_realm}"));
+    let actor = ctx.client.clone().ok_or(Error::AclDenied)?;
     let result = if iprop {
         dispatch_iprop(store, acl, &actor, proc, args)
     } else {
@@ -463,11 +460,7 @@ fn handle_auth_gssapi(
         return Err(Error::Inner("wrap_data seq mismatch".into()));
     }
     let kadm_args = &plain[4..];
-    let actor = st
-        .ctx
-        .client
-        .clone()
-        .unwrap_or_else(|| format!("admin@{expected_realm}"));
+    let actor = st.ctx.client.clone().ok_or(Error::AclDenied)?;
     let result = if iprop {
         dispatch_iprop(store, acl, &actor, proc, kadm_args)
     } else {

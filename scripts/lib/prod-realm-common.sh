@@ -80,9 +80,11 @@ prod_kprop_replica() {
     docker cp "$OUT/kdc2.keytab" "$REPLICA":/tmp/kdc2.keytab || return 1
     docker exec "$REPLICA" mkdir -p /tmp/pdus || return 1
 
+    docker exec "$REPLICA" sh -c "printf '%s@%s\\n' '$HOST_REPLICA' '$REALM' >/tmp/kpropd.acl"
     docker exec -d \
         -e KRB5_MASTER_PASSWORD="$KERBER_PROD_MASTER_PW" \
         -e KRB5_KPROP_KEYTAB=/tmp/kdc2.keytab \
+        -e KRB5_KPROP_ACL=/tmp/kpropd.acl \
         -e KRB5_KDC_DB=/tmp/replica.db \
         -e KRB5_KDC_STASH=/tmp/replica.stash \
         -e KRB5_KDC_REALM="$REALM" \
