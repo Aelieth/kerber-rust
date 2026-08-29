@@ -11,8 +11,7 @@ use krb5_crypto::{EncryptionType, ProtocolKey, kdb_decrypt_key};
 use krb5_gss::GssContext;
 use krb5_kdc::{
     Acl, KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH,
-    KeyEntry, Principal, SharedDump as SharedStore, TL_KERBER_HIST, TL_KERBER_POLICY,
-    TL_LAST_PWD_CHANGE, TL_STRING_ATTRS, TlData,
+    KeyEntry, Principal, SharedDump as SharedStore, TL_LAST_PWD_CHANGE, TL_STRING_ATTRS, TlData,
 };
 use krb5_types::{PrincipalName, Ticket};
 
@@ -657,7 +656,7 @@ fn encode_keydata(
 
 fn kdbe_tl(p: &krb5_kdc::Principal) -> Vec<TlData> {
     let mut tl = p.tl_data.clone();
-    tl.retain(|t| t.ty != TL_STRING_ATTRS && t.ty != TL_KERBER_HIST && t.ty != TL_KERBER_POLICY);
+    tl.retain(|t| t.ty != TL_STRING_ATTRS && !(0x4B00..=0x4BFF).contains(&t.ty));
     if !p.string_attrs.is_empty() {
         let mut contents = Vec::new();
         for (k, v) in &p.string_attrs {
@@ -3701,6 +3700,40 @@ mod tests {
         assert!(
             decode_kdbe(&mut r, None, "hostile@KERBER.TEST").is_err(),
             "huge keydata slot count must not pre-alloc"
+        );
+    }
+
+    #[test]
+    fn iprop_kdbe_omits_internal_kerber_tl() {
+        let (store, _, _) = setup();
+        let mut p = {
+            let g = store.read().unwrap();
+            g.krbtgt().unwrap().clone()
+        };
+        p.tl_data.push(TlData {
+            ty: krb5_kdc::TL_KERBER_SID,
+            contents: vec![1, 2, 3, 4],
+        });
+        p.tl_data.push(TlData {
+            ty: krb5_kdc::TL_KERBER_SERIAL,
+            contents: 9u32.to_be_bytes().to_vec(),
+        });
+        let mut w = XdrW::default();
+        encode_kdbe(&mut w, &p, None);
+        assert!(
+            !w.b.windows(4).any(|w| w == 0x4B01u32.to_be_bytes()),
+            "incremental kdbe must not emit TL_KERBER_SID"
+        );
+        assert!(
+            !w.b.windows(4).any(|w| w == 0x4B03u32.to_be_bytes()),
+            "incremental kdbe must not emit TL_KERBER_SERIAL"
+        );
+        let mut r = XdrR::new(&w.b);
+        let got = decode_kdbe(&mut r, None, &p.id()).unwrap().unwrap();
+        assert!(
+            !got.tl_data
+                .iter()
+                .any(|t| t.ty == krb5_kdc::TL_KERBER_SID || t.ty == krb5_kdc::TL_KERBER_SERIAL)
         );
     }
 }
