@@ -38,7 +38,7 @@ the script documents otherwise.
 | `kprop-gate.sh` | MIT `kprop` dump v7 vs `krb5-kpropd` 754 | MIT `kinit user` on replica; `klist` names `user@KERBER.TEST` | harness |
 | `kprop-reverse-gate.sh` | Rust `krb5-kprop` vs MIT `kpropd` | MIT `krb5kdc` + MIT `kinit user@KERBER.TEST` | harness |
 | `restart-gate.sh` | MIT `kadmin addprinc extra`; kill `krb5-kdc` by comm; relaunch | MIT `kinit extra` after relaunch; MIT load of persist dump v7 | harness |
-| `s4u-mit-gate.sh` | MIT `kvno -U` / `-U -P` vs Rust KDC | `klist` `for client user@KERBER.TEST`; non-forwardable → `BADOPTION` | harness |
+| `s4u-mit-gate.sh` | MIT `kvno -U` / `-U -P` vs Rust KDC | `klist` `for client user@KERBER.TEST`; `kvno -U nosuch` not found; `kvno -U locked` revoked; non-forwardable → `BADOPTION` | harness |
 | `prod-realm-gate.sh` | MIT client vs Rust primary/replica `PROD.KERBER.TEST` | MIT `kinit`/`kvno`/`kadmin`; kprop failover; NIC pcap when required | harness |
 | `stress-gate.sh` | wire AS+TGS + MIT `kinit`/`kvno` under load | p99 `duration_us` ≤ 50 ms; ≥ 8 issue-ok/s; error-rate 0 | harness |
 | `chaos-gate.sh` | `tc netem` + memory cap + primary kill under load | MIT completes; no OOM-panic; replica `kinit`/`kvno` after kill | harness |

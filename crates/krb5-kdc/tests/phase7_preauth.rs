@@ -9,10 +9,11 @@ use krb5_crypto::{
     octetstring2key, p256_generate, string_to_key,
 };
 use krb5_kdc::{
-    Acl, AdminOp, Error, PrincipalStore, S2K_ITERS, TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM,
-    TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented, decrypt_ticket_part,
-    documented_admin_id, documented_host, pa_enc_timestamp, pac_from_ticket_part, sign_pac,
-    tgs_req, ticket_checksum_der, verify_pac, verify_pac_signatures, wrap_win2k_pac,
+    Acl, AdminOp, Error, KDB_DISALLOW_ALL_TIX, PrincipalStore, RID_FIRST_USER, S2K_ITERS,
+    TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req,
+    bootstrap_documented, decrypt_ticket_part, documented_admin_id, documented_host,
+    pa_enc_timestamp, pac_from_ticket_part, sign_pac, tgs_req, ticket_checksum_der, verify_pac,
+    verify_pac_signatures, wrap_win2k_pac,
 };
 use krb5_protocol::{
     apply_strengthen, armor_key, as_req_sname, attach_fast, build_fast_armor, pa_for_user,
@@ -538,6 +539,69 @@ fn s4u2self_impersonates_user() {
     let pac = pac_from_ticket_part(&part).expect("PAC");
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     verify_pac(&pac, &host.key, &krbtgt.key).expect("S4U PAC");
+    let parsed = Pac::parse(&pac).expect("PAC");
+    let logon =
+        parse_kerb_validation_info(parsed.buffer(PAC_LOGON_INFO).expect("logon")).expect("NDR");
+    assert_eq!(logon.user_id, store.get_name(&admin).unwrap().rid);
+    assert_ne!(logon.user_id, RID_FIRST_USER);
+}
+
+fn s4u2self_tgs(store: &PrincipalStore, for_user: PrincipalName, nonce: u32) -> krb5_types::TgsReq {
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let tgt = issue_tgt(store, TEST_USER, TEST_USER_PASSWORD, nonce);
+    let pa = pa_for_user(&tgt.session_key, for_user, TEST_REALM).expect("PA-FOR-USER");
+    tgs_req_ex(
+        tgt.rep.0.ticket.clone(),
+        &tgt.session_key,
+        TEST_REALM,
+        &user,
+        documented_host(),
+        TEST_REALM,
+        nonce + 1,
+        KdcOptions::forwardable(),
+        None,
+        vec![pa],
+        pref_etypes(),
+    )
+    .expect("S4U TGS-REQ")
+}
+
+fn s4u_code(e: Error) -> i32 {
+    match e {
+        Error::Protocol { code, .. } => code,
+        other => panic!("expected protocol error, got {other:?}"),
+    }
+}
+
+#[test]
+fn s4u2self_unknown_for_user_is_refused() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let nosuch = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["nosuch"]);
+    let err = krb5_kdc::issue_tgs(&store, &s4u2self_tgs(&store, nosuch, 610)).unwrap_err();
+    assert_eq!(s4u_code(err), err::C_PRINCIPAL_UNKNOWN);
+}
+
+#[test]
+fn s4u2self_disabled_for_user_is_revoked() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
+    let a = store.get_name(&admin).unwrap().attributes | KDB_DISALLOW_ALL_TIX;
+    store
+        .apply_admin_fields(&admin, Some(a), None, None, None, None, false)
+        .unwrap();
+    let err = krb5_kdc::issue_tgs(&store, &s4u2self_tgs(&store, admin, 620)).unwrap_err();
+    assert_eq!(s4u_code(err), err::CLIENT_REVOKED);
+}
+
+#[test]
+fn s4u2self_expired_for_user_is_name_exp() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
+    store
+        .apply_admin_fields(&admin, None, None, Some(1), None, None, false)
+        .unwrap();
+    let err = krb5_kdc::issue_tgs(&store, &s4u2self_tgs(&store, admin, 630)).unwrap_err();
+    assert_eq!(s4u_code(err), err::NAME_EXP);
 }
 
 #[test]

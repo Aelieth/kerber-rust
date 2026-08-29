@@ -337,6 +337,20 @@ fn bootstrap_test_realm() -> PrincipalStore {
             }
         }
     }
+    if let Ok(pw) = std::env::var("KRB5_TEST_LOCKED_USER")
+        && !pw.is_empty()
+    {
+        let locked =
+            krb5_types::PrincipalName::new(krb5_types::PrincipalName::NT_PRINCIPAL, ["locked"]);
+        if let Err(e) = store.create_password(&acl, &actor, &locked, pw.as_bytes()) {
+            eprintln!("krb5-kdc: locked user: {e}");
+            std::process::exit(1);
+        }
+        if let Err(e) = store.set_status(&locked, true, 0) {
+            eprintln!("krb5-kdc: lock user: {e}");
+            std::process::exit(1);
+        }
+    }
     store
 }
 

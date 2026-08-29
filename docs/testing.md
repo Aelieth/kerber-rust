@@ -148,8 +148,10 @@ when that oracle is absent.
   names must match`).
 - `scripts/s4u-mit-gate.sh` — MIT `kvno -U user` and `kvno -U user -P`
   against the **Rust** KDC (`kinit -f -k host/testhost.kerber.test`).
-  klist must name `for client user@KERBER.TEST`. S4U2Proxy rejects a
-  non-forwardable evidence ticket (`BADOPTION`), denies classic
+  klist must name `for client user@KERBER.TEST`. `kvno -U nosuch` is
+  `Client not found`; `kvno -U locked` (`KRB5_TEST_LOCKED_USER`,
+  `DISALLOW_ALL_TIX`) is `credentials have been revoked`. S4U2Proxy
+  rejects a non-forwardable evidence ticket (`BADOPTION`), denies classic
   constrained delegation unless `s4u_allowed_to` lists the target, and
   parses PA-PAC-OPTIONS (167). In the harness CI job.
 - `scripts/policy-gate.sh` — MIT `kadmin` addpol/modpol/getpol/listpols/`cpw`/delpol

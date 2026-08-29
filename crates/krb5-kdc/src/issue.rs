@@ -570,6 +570,7 @@ fn issue_tgs_from(
     let mut ticket_crealm = utf8_realm(&enc_tkt.crealm).to_owned();
     let mut evidence_logon = None;
     if let Some((user, realm)) = s4u2self_client(&tgt_session, tgs_padata)? {
+        check_s4u2self_for_user(store, &user, &server)?;
         ticket_cname = user;
         ticket_crealm = realm;
     } else if let Some((cn, logon)) = s4u2proxy_client(store, req, &enc_tkt.cname, tgs_padata)? {
@@ -1213,6 +1214,21 @@ fn proto(code: i32, text: &str) -> Error {
         text: Some(text.to_owned()),
         e_data: None,
     }
+}
+
+/// MIT `kdc_process_s4u2self_req`: look up the impersonated client.
+fn check_s4u2self_for_user(
+    store: &dyn PrincipalRead,
+    user: &PrincipalName,
+    server: &Principal,
+) -> Result<(), Error> {
+    let for_p = store
+        .fetch_name(user)?
+        .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, "S4U2Self"))?;
+    if for_p.locked || attr(&for_p, KDB_DISALLOW_ALL_TIX) {
+        return Err(proto(err::CLIENT_REVOKED, "S4U2Self locked"));
+    }
+    check_db_times(Some(&for_p), server)
 }
 
 /// MIT `validate_as_request`: 0 = never; principal expiry before password expiry.

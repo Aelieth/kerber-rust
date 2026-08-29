@@ -39,6 +39,7 @@ docker exec "$NAME" chmod +x /tmp/krb5-kdc
 docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
     -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
+    -e KRB5_TEST_LOCKED_USER=lock-secret \
     -e KRB5_EXPORT_KEYTAB=/tmp/host.keytab \
     "$NAME" sh -c '/tmp/krb5-kdc --test-realm 127.0.0.1:88 >/tmp/kdc.log 2>&1 || /tmp/krb5-kdc --test-realm --export-keytab /tmp/host.keytab 127.0.0.1:8888 >/tmp/kdc.log 2>&1'
 
@@ -101,6 +102,22 @@ KLIST2="$(docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf "$NAME" klist -f)"
 echo "$KLIST2"
 echo "$KLIST2" | grep -q 'for client user@KERBER.TEST'
 echo "$KLIST2" | grep -q 'host/testhost.kerber.test'
+
+echo "==== MIT kvno -U nosuch (C_PRINCIPAL_UNKNOWN) ===="
+set +e
+NOSUCH="$(docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf \
+    "$NAME" kvno -U nosuch host/testhost.kerber.test 2>&1)"
+set -e
+echo "$NOSUCH"
+echo "$NOSUCH" | grep -qiE "not found in Kerberos database|C_PRINCIPAL_UNKNOWN"
+
+echo "==== MIT kvno -U locked (CLIENT_REVOKED) ===="
+set +e
+LOCKED="$(docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf \
+    "$NAME" kvno -U locked host/testhost.kerber.test 2>&1)"
+set -e
+echo "$LOCKED"
+echo "$LOCKED" | grep -qiE "credentials have been revoked|CLIENT_REVOKED"
 
 log "s4u.mit.gate" "ok" ',"principal":"host/testhost.kerber.test","for_client":"user@KERBER.TEST"'
 exit 0
