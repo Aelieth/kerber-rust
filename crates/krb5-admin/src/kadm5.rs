@@ -89,6 +89,8 @@ const KADM5_PASS_Q_CLASS: u32 = 43_787_543;
 const KADM5_PASS_REUSE: u32 = 43_787_545;
 /// MIT `ovk` 3 (`KADM5_AUTH_MODIFY`).
 const KADM5_AUTH_MODIFY: u32 = 43_787_523;
+/// MIT `ovk` 45 (`KADM5_AUTH_CHANGEPW`).
+const KADM5_AUTH_CHANGEPW: u32 = 43_787_565;
 /// MIT `ovk` 50 (`KADM5_AUTH_SETKEY`).
 const KADM5_AUTH_SETKEY: u32 = 43_787_570;
 /// MIT `ovk` 59 (`KADM5_SETKEY_BAD_KVNO`).
@@ -1348,6 +1350,10 @@ fn dispatch_kadm5(
             let mut g = store
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let target = format!("{}@{}", name.components_joined(), g.realm());
+            if actor != target && acl.check(actor, krb5_kdc::AdminOp::ChangePassword).is_err() {
+                return Ok(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
+            }
             let lockdown = match g.get_name(&name) {
                 None => return Ok(generic_ret(API_V2, KADM5_UNK_PRINC)),
                 Some(p) => p.attributes & KDB_LOCKDOWN_KEYS != 0,
@@ -1457,15 +1463,15 @@ fn dispatch_kadm5(
         }
         EXTRACT_KEYS => {
             let (api, name, kvno) = parse_extract(args)?;
+            if acl.check(actor, krb5_kdc::AdminOp::Extract).is_err() {
+                return Ok(generic_ret(api, KADM5_AUTH_EXTRACT));
+            }
             let g = store
                 .read()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let Some(p) = g.get_name(&name) else {
                 return Ok(generic_ret(api, KADM5_UNK_PRINC));
             };
-            if acl.check(actor, krb5_kdc::AdminOp::Extract).is_err() {
-                return Ok(generic_ret(api, KADM5_AUTH_EXTRACT));
-            }
             if p.attributes & KDB_LOCKDOWN_KEYS != 0 {
                 return Ok(generic_ret(api, KADM5_PROTECT_KEYS));
             }
@@ -1480,6 +1486,9 @@ fn dispatch_kadm5(
         }
         PURGEKEYS => {
             let (api, name, keepkvno) = parse_purgekeys(args)?;
+            if acl.check(actor, krb5_kdc::AdminOp::Modify).is_err() {
+                return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
+            }
             let mut g = store
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1489,9 +1498,6 @@ fn dispatch_kadm5(
             };
             if lockdown {
                 return Ok(generic_ret(api, KADM5_PROTECT_KEYS));
-            }
-            if acl.check(actor, krb5_kdc::AdminOp::Modify).is_err() {
-                return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
             }
             match g.purgekeys(&name, keepkvno) {
                 Ok(()) => {
@@ -1508,6 +1514,9 @@ fn dispatch_kadm5(
         }
         SETKEY_PRINCIPAL | SETKEY_PRINCIPAL3 | SETKEY_PRINCIPAL4 => {
             let (api, name, keys, keepold) = parse_setkey(args, proc)?;
+            if acl.check(actor, krb5_kdc::AdminOp::SetKey).is_err() {
+                return Ok(generic_ret(api, KADM5_AUTH_SETKEY));
+            }
             let mut g = store
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1517,9 +1526,6 @@ fn dispatch_kadm5(
             };
             if lockdown {
                 return Ok(generic_ret(api, KADM5_PROTECT_KEYS));
-            }
-            if acl.check(actor, krb5_kdc::AdminOp::SetKey).is_err() {
-                return Ok(generic_ret(api, KADM5_AUTH_SETKEY));
             }
             match g.set_keys(&name, keys, keepold) {
                 Ok(()) => Ok(generic_ret(api, 0)),
@@ -3070,6 +3076,104 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ret_code(&out), KADM5_UNK_PRINC);
+    }
+
+    fn chpass_args(name: &str, pass: &str) -> Vec<u8> {
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some(name));
+        w.nullstring(Some(pass));
+        w.b
+    }
+
+    fn lockdown_user(store: &SharedStore) {
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+        let mut g = store.write().unwrap();
+        g.apply_admin_fields(
+            &user,
+            Some(KDB_LOCKDOWN_KEYS),
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn unauthorized_is_auth_even_if_missing_or_lockdown() {
+        let (store, _acl, _actor) = setup();
+        lockdown_user(&store);
+        let limited = Acl::parse("limited@KERBER.TEST i\n");
+        let actor = "limited@KERBER.TEST";
+        let cases: [(u32, Vec<u8>, u32); 8] = [
+            (
+                EXTRACT_KEYS,
+                extract_args("user@KERBER.TEST", 0),
+                KADM5_AUTH_EXTRACT,
+            ),
+            (
+                EXTRACT_KEYS,
+                extract_args("no-such@KERBER.TEST", 0),
+                KADM5_AUTH_EXTRACT,
+            ),
+            (
+                PURGEKEYS,
+                purgekeys_args("user@KERBER.TEST", -1),
+                KADM5_AUTH_MODIFY,
+            ),
+            (
+                PURGEKEYS,
+                purgekeys_args("no-such@KERBER.TEST", -1),
+                KADM5_AUTH_MODIFY,
+            ),
+            (
+                SETKEY_PRINCIPAL,
+                setkey16_args("user@KERBER.TEST", 18, &[0xABu8; 32]),
+                KADM5_AUTH_SETKEY,
+            ),
+            (
+                SETKEY_PRINCIPAL,
+                setkey16_args("no-such@KERBER.TEST", 18, &[0xABu8; 32]),
+                KADM5_AUTH_SETKEY,
+            ),
+            (
+                CHPASS_PRINCIPAL,
+                chpass_args("user@KERBER.TEST", "nope"),
+                KADM5_AUTH_CHANGEPW,
+            ),
+            (
+                CHPASS_PRINCIPAL,
+                chpass_args("no-such@KERBER.TEST", "nope"),
+                KADM5_AUTH_CHANGEPW,
+            ),
+        ];
+        for (proc, args, want) in cases {
+            let out = dispatch_kadm5(&store, &limited, actor, proc, &args).unwrap();
+            assert_eq!(ret_code(&out), want, "proc {proc}");
+        }
+    }
+
+    #[test]
+    fn setkey_keepold_kvno_collision_is_bad_kvno() {
+        let (store, acl, actor) = setup();
+        let kvno = {
+            let g = store.read().unwrap();
+            g.get_name(&PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]))
+                .unwrap()
+                .keys[0]
+                .kvno
+        };
+        let out = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            SETKEY_PRINCIPAL4,
+            &setkey4_args("user@KERBER.TEST", true, kvno, 18, &[0xABu8; 32], 0, &[]),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&out), KADM5_SETKEY_BAD_KVNO);
     }
 
     #[test]
