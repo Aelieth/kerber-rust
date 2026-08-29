@@ -31,6 +31,7 @@ fn main() -> ExitCode {
     let mut enc_tkt_out = None;
     let mut krbtgt_kt = None;
     let mut keys_out = None;
+    let mut print_rid = false;
     let mut i = 0usize;
     while i < args.len() {
         match args[i].as_str() {
@@ -58,10 +59,15 @@ fn main() -> ExitCode {
                 keys_out = args.get(i + 1).cloned();
                 i += 2;
             }
+            "--print-rid" => {
+                print_rid = true;
+                i += 1;
+            }
             _ => {
                 eprintln!(
                     "usage: krb5-pac-extract --keytab <kt> --ccache <cc> --out <pac> \
-                     [--enc-tkt-out <der>] [--krbtgt-keytab <kt>] [--keys-out <txt>]"
+                     [--enc-tkt-out <der>] [--krbtgt-keytab <kt>] [--keys-out <txt>] \
+                     [--print-rid]"
                 );
                 return ExitCode::from(2);
             }
@@ -122,6 +128,19 @@ fn main() -> ExitCode {
             let Some(pac) = pac_from_ticket_part(&part) else {
                 continue;
             };
+            if print_rid {
+                let rid = krb5_types::pac::Pac::parse(&pac).ok().and_then(|parsed| {
+                    parsed
+                        .buffer(krb5_types::pac::PAC_LOGON_INFO)
+                        .and_then(|b| krb5_types::pac::parse_kerb_validation_info(b).ok())
+                        .map(|v| v.user_id)
+                });
+                let Some(rid) = rid else {
+                    eprintln!("krb5-pac-extract: no PAC_LOGON_INFO");
+                    return ExitCode::from(1);
+                };
+                println!("pac_rid={rid}");
+            }
             if fs::write(&out_path, &pac).is_err() {
                 eprintln!("krb5-pac-extract: write {out_path}");
                 return ExitCode::from(1);

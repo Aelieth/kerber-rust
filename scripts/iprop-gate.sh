@@ -39,7 +39,7 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 2
 fi
 
-cargo build -p krb5-kdc --bin krb5-kdc -p krb5-admin --bin krb5-kadmind --bin krb5-kprop --bin krb5-kpropd --bin krb5-iprop-pull
+cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-pac-extract -p krb5-admin --bin krb5-kadmind --bin krb5-kprop --bin krb5-kpropd --bin krb5-iprop-pull
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
@@ -63,11 +63,12 @@ if ! docker exec "$NAME" sh -c 'command -v kpropd >/dev/null && command -v kadmi
 fi
 
 docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc
+docker cp target/debug/krb5-pac-extract "$NAME":/tmp/krb5-pac-extract
 docker cp target/debug/krb5-kadmind "$NAME":/tmp/krb5-kadmind
 docker cp target/debug/krb5-kprop "$NAME":/tmp/krb5-kprop
 docker cp target/debug/krb5-kpropd "$NAME":/tmp/krb5-kpropd
 docker cp target/debug/krb5-iprop-pull "$NAME":/tmp/krb5-iprop-pull
-docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kadmind /tmp/krb5-kprop /tmp/krb5-kpropd /tmp/krb5-iprop-pull
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-pac-extract /tmp/krb5-kadmind /tmp/krb5-kprop /tmp/krb5-kpropd /tmp/krb5-iprop-pull
 
 docker exec "$NAME" sh -c 'cat >/tmp/iprop-krb5.conf <<EOF
 [libdefaults]
@@ -438,6 +439,7 @@ kill_comm krb5kdc
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/rust-replica \
     -e KRB5_KDC_STASH=/tmp/rust-replica.stash \
+    -e KRB5_EXPORT_KEYTAB=/tmp/replica-host.keytab \
     "$NAME" sh -c '/tmp/krb5-kdc 127.0.0.1:88 >/tmp/rust-replica.log 2>&1'
 ok=0
 for _ in $(seq 1 80); do
@@ -457,6 +459,20 @@ docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
 KLIST2="$(docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf "$NAME" klist)"
 echo "$KLIST2"
 echo "$KLIST2" | grep -q 'extra2@KERBER.TEST'
+
+echo "==== replica PAC RID for extra2 after incremental ===="
+docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    "$NAME" kvno host/testhost.kerber.test@KERBER.TEST
+PACRID="$(docker exec "$NAME" /tmp/krb5-pac-extract \
+    --keytab /tmp/replica-host.keytab --ccache /tmp/krb5cc_iprop \
+    --out /tmp/extra2.pac --print-rid 2>&1 || true)"
+echo "$PACRID"
+RID="$(echo "$PACRID" | sed -n 's/^pac_rid=\([0-9][0-9]*\)$/\1/p' | tail -1)"
+if [ -z "$RID" ] || [ "$RID" = "1000" ]; then
+    log "iprop.gate" "error" ",\"error\":\"replica extra2 PAC RID is ${RID:-missing} (want != 1000)\""
+    exit 1
+fi
+echo "extra2 pac_rid=$RID"
 
 echo "==== MIT delprinc extra2 then Rust pull ===="
 kill_comm krb5-kdc
@@ -520,5 +536,5 @@ GONE="$(docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
 echo "$GONE"
 echo "$GONE" | grep -qiE 'Client not found|not found in Kerberos database|UNKNOWN_PRINC'
 
-log "iprop.gate" "ok" ',"op":"kpropd-A-delta-kinit-extra+mit-kadmind-pull-kinit-extra2+delprinc"'
+log "iprop.gate" "ok" ",\"op\":\"kpropd-A-delta-kinit-extra+mit-kadmind-pull-kinit-extra2+delprinc\",\"extra2_pac_rid\":$RID"
 exit 0

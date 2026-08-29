@@ -586,6 +586,7 @@ impl PrincipalStore {
                 } else {
                     p.clone()
                 };
+                let merged = self.assign_iprop_rid(merged);
                 self.map.insert(merged.id(), merged);
             }
             let cur = self.serial();
@@ -620,6 +621,17 @@ impl PrincipalStore {
             m.rid = old.rid;
         }
         m
+    }
+
+    /// Incremental kdbe has no SID (vendor `0x4B0x` is stripped). A new
+    /// replica row with `rid==0` must not PAC as `RID_FIRST_USER`.
+    fn assign_iprop_rid(&mut self, mut p: Principal) -> Principal {
+        if p.rid == 0 {
+            p.rid = self.alloc_rid(&p.name);
+        } else {
+            self.bump_next_rid(p.rid);
+        }
+        p
     }
 
     fn note_ulog(&self, name: String, deleted: bool, princ: Option<Principal>) {
@@ -2351,6 +2363,58 @@ mod tests {
         )
         .unwrap();
         crate::issue_as(&slave, &req).expect("slave must issue after serial-delta");
+    }
+
+    #[test]
+    fn apply_updates_assigns_rid_so_replica_pac_is_not_first_user() {
+        use crate::{decrypt_ticket_part, pa_enc_timestamp, pac_from_ticket_part};
+        use krb5_protocol::as_req;
+        use krb5_types::pac::{PAC_LOGON_INFO, Pac, parse_kerb_validation_info};
+
+        let (mut master, acl) = crate::bootstrap_documented().unwrap();
+        let (mut slave, _) = crate::bootstrap_documented().unwrap();
+        let actor = crate::documented_admin_id();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+        let user_rid = slave.get_name(&user).unwrap().rid;
+        assert_eq!(user_rid, RID_FIRST_USER);
+
+        let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["iproped"]);
+        master
+            .create_password(&acl, &actor, &extra, b"iprop-secret")
+            .unwrap();
+        let mut incr = master.get_name(&extra).unwrap().clone();
+        incr.rid = 0;
+        incr.tl_data.retain(|t| t.ty != crate::TL_KERBER_SID);
+        slave.apply_updates(&[UlogEntry {
+            sno: slave.serial().saturating_add(1),
+            time: 1,
+            name: incr.id(),
+            deleted: false,
+            princ: Some(incr),
+        }]);
+
+        let got = slave.get_name(&extra).unwrap().clone();
+        assert_ne!(got.rid, 0, "incremental apply must allocate a RID");
+        assert_ne!(got.rid, RID_FIRST_USER);
+        assert_ne!(got.rid, user_rid);
+
+        let key = got.best_key().unwrap().key.clone();
+        let req = as_req(
+            extra.clone(),
+            crate::TEST_REALM,
+            21,
+            Some(vec![pa_enc_timestamp(&key).unwrap()]),
+        )
+        .unwrap();
+        let as_out = crate::issue_as(&slave, &req).expect("replica AS");
+        let tgt = slave.krbtgt().unwrap().best_key().unwrap();
+        let part = decrypt_ticket_part(&tgt.key, &as_out.rep.0.ticket).expect("enc");
+        let pac = pac_from_ticket_part(&part).expect("PAC");
+        let parsed = Pac::parse(&pac).expect("PAC");
+        let logon =
+            parse_kerb_validation_info(parsed.buffer(PAC_LOGON_INFO).expect("logon")).expect("NDR");
+        assert_eq!(logon.user_id, got.rid);
+        assert_ne!(logon.user_id, RID_FIRST_USER);
     }
 
     #[test]
