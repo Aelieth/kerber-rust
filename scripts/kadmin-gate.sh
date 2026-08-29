@@ -133,6 +133,21 @@ echo "$GET" | grep -q 'Principal: extra@KERBER.TEST'
 echo "$GET" | grep -q 'Number of keys: 4'
 echo "$GET" | grep -qE 'Key: vno 2,'
 
+echo "==== MIT kadmin cpw -keepold ===="
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q \
+    'addprinc -pw keep-secret keepoldu'
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q \
+    'cpw -keepold -pw keep-rotated keepoldu'
+GETK="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc keepoldu' 2>&1 || true)"
+echo "$GETK"
+echo "$GETK" | grep -qE 'Key: vno 1,'
+echo "$GETK" | grep -qE 'Key: vno 2,'
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" sh -c 'printf "keep-rotated\n" | kinit keepoldu@KERBER.TEST'
+
 echo "==== MIT kadmin setstr/getstrs extra ===="
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'setstr extra note hello-g3d'

@@ -100,9 +100,9 @@ pub struct Principal {
     pub name: PrincipalName,
     /// Realm.
     pub realm: String,
-    /// Active keys (one kvno; `keepold=false` on password change).
+    /// Active key_data (current kvno, plus `keepold` kvnos).
     pub keys: Vec<KeyEntry>,
-    /// Prior password keys, pruned to N-1 old kvnos (MIT current counts inside N).
+    /// OSA password-history keys (dump `TL_KERBER_HIST`; not getprinc/EXTRACT).
     pub key_history: Vec<KeyEntry>,
     /// Salt used for password-derived keys.
     pub salt: Vec<u8>,
@@ -914,6 +914,20 @@ impl PrincipalStore {
     ///
     /// [`Error::NotFound`] when the principal is missing.
     pub fn set_password(&mut self, name: &PrincipalName, password: &[u8]) -> Result<(), Error> {
+        self.set_password_keepold(name, password, false)
+    }
+
+    /// Password change; `keepold` keeps prior key_data kvnos (MIT `cpw -keepold`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] when the principal is missing.
+    pub fn set_password_keepold(
+        &mut self,
+        name: &PrincipalName,
+        password: &[u8],
+        keepold: bool,
+    ) -> Result<(), Error> {
         self.check_password_quality(name, password)?;
         let id = format!("{}@{}", name.components_joined(), self.realm);
         let Some(existing) = self.map.get(&id) else {
@@ -946,12 +960,25 @@ impl PrincipalStore {
             let key = string_to_key(etype, password, &salt, Some(&params))?;
             new_keys.push(KeyEntry::new(etype, key, next_kvno));
         }
-        let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+        self.replace_password_keys(&id, new_keys, depth, keepold)
+    }
+
+    fn replace_password_keys(
+        &mut self,
+        id: &str,
+        new_keys: Vec<KeyEntry>,
+        depth: u32,
+        keepold: bool,
+    ) -> Result<(), Error> {
+        let p = self.map.get_mut(id).ok_or(Error::NotFound)?;
         let old = std::mem::replace(&mut p.keys, new_keys);
-        p.key_history.extend(old);
+        p.key_history.extend(old.iter().cloned());
         p.key_history = prune_key_history(std::mem::take(&mut p.key_history), depth);
+        if keepold {
+            p.keys.extend(old);
+        }
         let snap = p.clone();
-        self.note_ulog(id, false, Some(snap));
+        self.note_ulog(id.to_owned(), false, Some(snap));
         self.save_if_configured()
     }
 
@@ -1301,18 +1328,12 @@ impl PrincipalStore {
     pub fn purgekeys(&mut self, name: &PrincipalName, keepkvno: i32) -> Result<(), Error> {
         let id = format!("{}@{}", name.components_joined(), self.realm);
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
-        let mut all = std::mem::take(&mut p.keys);
-        all.append(&mut p.key_history);
         let keep = if keepkvno <= 0 {
-            all.iter().map(|k| k.kvno).max().unwrap_or(0)
+            p.keys.iter().map(|k| k.kvno).max().unwrap_or(0)
         } else {
             u32::try_from(keepkvno).unwrap_or(u32::MAX)
         };
-        all.retain(|k| k.kvno >= keep);
-        if let Some(newest) = all.iter().map(|k| k.kvno).max() {
-            p.keys = all.iter().filter(|k| k.kvno == newest).cloned().collect();
-            p.key_history = all.into_iter().filter(|k| k.kvno != newest).collect();
-        }
+        p.keys.retain(|k| k.kvno >= keep);
         let snap = p.clone();
         self.note_ulog(id, false, Some(snap));
         self.save_if_configured()
@@ -1321,7 +1342,7 @@ impl PrincipalStore {
     /// Replace keys with caller-supplied material (`kadm5_setkey_principal`).
     ///
     /// `kvno == 0` on every entry picks the next version. `keepold` retains
-    /// prior kvnos in [`Principal::key_history`].
+    /// prior kvnos in [`Principal::keys`].
     ///
     /// # Errors
     ///
@@ -1351,12 +1372,7 @@ impl PrincipalStore {
                 .unwrap_or(0)
                 .saturating_add(1)
         } else {
-            if keepold
-                && p.keys
-                    .iter()
-                    .chain(p.key_history.iter())
-                    .any(|k| k.kvno == want)
-            {
+            if keepold && p.keys.iter().any(|k| k.kvno == want) {
                 return Err(Error::Crypto("setkey kvno".into()));
             }
             want
@@ -1366,9 +1382,8 @@ impl PrincipalStore {
         }
         if keepold {
             let old = std::mem::replace(&mut p.keys, keys);
-            p.key_history.extend(old);
+            p.keys.extend(old);
         } else {
-            p.key_history.clear();
             p.keys = keys;
         }
         let snap = p.clone();
