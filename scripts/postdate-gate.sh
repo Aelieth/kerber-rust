@@ -156,6 +156,32 @@ if ! docker exec -e KRB5_CONFIG=/tmp/postdate-krb5.conf \
     exit 1
 fi
 
+echo "==== kinit -s +20s -l 5m endtime is absolute till ===="
+docker exec -e KRB5_CONFIG=/tmp/postdate-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+STARTL="$(docker exec "$NAME" date -u -d '+20 seconds' '+%Y%m%d%H%M%S')"
+echo "startl=$STARTL"
+if ! docker exec -e KRB5_CONFIG=/tmp/postdate-krb5.conf \
+    "$NAME" sh -c "printf 'pd-secret\n' | kinit -s '$STARTL' -l 5m pduser@KERBER.TEST"; then
+    docker exec "$NAME" cat /tmp/kdc.log >&2 || true
+    log "postdate.gate" "error" ',"error":"kinit -s -l 5m failed"'
+    exit 1
+fi
+KL5="$(docker exec -e KRB5_CONFIG=/tmp/postdate-krb5.conf "$NAME" klist -f)"
+echo "$KL5"
+LIFE="$(python3 -c '
+import datetime, sys
+out = sys.argv[1]
+line = [l for l in out.splitlines() if "krbtgt/" in l][0]
+parts = line.split()
+start = datetime.datetime.strptime(parts[0] + " " + parts[1], "%m/%d/%y %H:%M:%S")
+end = datetime.datetime.strptime(parts[2] + " " + parts[3], "%m/%d/%y %H:%M:%S")
+delta = int((end - start).total_seconds())
+print(delta)
+if delta != 300:
+    raise SystemExit("end-start=%s want 300" % delta)
+' "$KL5")"
+echo "life_secs=$LIFE"
+
 echo "==== DISALLOW_POSTDATED: kinit -s CANNOT_POSTDATE ===="
 kadmin_q 'addprinc -pw nd-secret nduser'
 kadmin_q 'modprinc -allow_postdated nduser'
@@ -170,5 +196,5 @@ if echo "$ND" | grep -qiE 'Authenticated|Ticket cache'; then
     exit 1
 fi
 
-log "postdate.gate" "ok" ',"invalid":true,"tkt_nyv":true,"validate":true,"cannot_postdate":true'
+log "postdate.gate" "ok" ',"invalid":true,"tkt_nyv":true,"validate":true,"cannot_postdate":true,"till_absolute":true'
 exit 0

@@ -322,9 +322,13 @@ fn issue_as_from(
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no server key"))?;
     check_db_times(Some(&client), &server)?;
     check_as_policy_flags(&client, &server, body)?;
+    if let Some(from) = &body.from
+        && from.unix_seconds() > body.till.unix_seconds()
+    {
+        return Err(proto(err::NEVER_VALID, "from after till"));
+    }
     let session = random_key(etype)?;
     let now = KerberosTime::now();
-    let life = requested_life(store, &client, body);
     let mut starttime = now.clone();
     let mut flags = TicketFlags::initial_preauth();
     if body.kdc_options.bit(flag_bit::FORWARDABLE) {
@@ -350,6 +354,7 @@ fn issue_as_from(
             .with_bit(flag_bit::INVALID, true);
     }
     flags = apply_disallow_flags(flags, Some(&client), &server);
+    let life = requested_life(store, &client, body, &starttime);
     let end = starttime
         .add_seconds(i64::try_from(life).unwrap_or(i64::MAX))
         .or_else(|_| starttime.add_hours(10))
@@ -648,7 +653,7 @@ fn issue_tgs_from(
         authtime = now.clone();
         starttime = now.clone();
         end = enc_tkt.endtime.clone();
-        let life = requested_life(store, &server, body);
+        let life = requested_life(store, &server, body, &now);
         if let Ok(capped) = now.add_seconds(i64::try_from(life).unwrap_or(i64::MAX))
             && capped.unix_seconds() < end.unix_seconds()
         {
@@ -782,10 +787,11 @@ fn requested_life(
     store: &dyn PrincipalRead,
     princ: &Principal,
     body: &krb5_types::KdcReqBody,
+    origin: &KerberosTime,
 ) -> u64 {
     let till = u64::from(body.till.unix_seconds());
-    let now = u64::from(KerberosTime::now().unix_seconds());
-    let want = till.saturating_sub(now);
+    let start = u64::from(origin.unix_seconds());
+    let want = till.saturating_sub(start);
     let cap = if princ.max_life > 0 {
         princ.max_life.min(store.policy().max_life)
     } else {
