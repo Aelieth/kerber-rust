@@ -98,7 +98,10 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   ticket session key (or authenticator subkey); a plaintext
   EncKrbCredPart trailer is `Integrity`. SPNEGO accept requires the
   krb5 OID in `MechTypeList`. Wrap/MIC verify integrity before
-  advancing the GSS sequence window.
+  advancing the GSS sequence window. Replica incremental PAC RID is
+  still allocated locally (≠ 1000); matching the master's RID is
+  deferred because MIT kdbe has no SID and F4 keeps vendor `0x4B0x`
+  TL off the incremental wire.
 
 - KDB extension surface: `PrincipalRead` / `PrincipalWrite` /
   `StoreLifecycle`. Dump-v7 is the default backend; `db_library=memory`
