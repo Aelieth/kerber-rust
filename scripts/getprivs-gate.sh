@@ -136,5 +136,18 @@ if echo "$LIMP" | grep -qiE 'ADD|MODIFY|DELETE|CHANGEPW|LIST'; then
     exit 1
 fi
 
-log "getprivs.gate" "ok" ',"admin_full":true,"limited_get_only":true'
+echo "==== limited cpw -randkey is AUTH_CHANGEPW ===="
+RAND="$(kadmin_q limited@KERBER.TEST limited-secret 'cpw -randkey user')"
+echo "$RAND"
+echo "$RAND" | grep -qi 'change-password'
+if echo "$RAND" | grep -qi "Operation requires \`\`get'' privilege"; then
+    echo "chrand ACL denial was AUTH_GET, want AUTH_CHANGEPW: $RAND" >&2
+    exit 1
+fi
+if echo "$RAND" | grep -qiE 'randomized|changed'; then
+    echo "limited randkey succeeded: $RAND" >&2
+    exit 1
+fi
+
+log "getprivs.gate" "ok" ',"admin_full":true,"limited_get_only":true,"limited_chrand_auth_changepw":true'
 exit 0

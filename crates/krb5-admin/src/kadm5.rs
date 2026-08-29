@@ -90,6 +90,8 @@ const KADM5_PASS_Q_CLASS: u32 = 43_787_543;
 const KADM5_PASS_REUSE: u32 = 43_787_545;
 /// MIT `ovk` 3 (`KADM5_AUTH_MODIFY`).
 const KADM5_AUTH_MODIFY: u32 = 43_787_523;
+/// MIT `ovk` 1 (`KADM5_AUTH_GET`).
+const KADM5_AUTH_GET: u32 = 43_787_521;
 /// MIT `ovk` 45 (`KADM5_AUTH_CHANGEPW`).
 const KADM5_AUTH_CHANGEPW: u32 = 43_787_565;
 /// MIT `ovk` 50 (`KADM5_AUTH_SETKEY`).
@@ -1337,7 +1339,7 @@ fn dispatch_kadm5(
         GET_PRINCIPAL => {
             let (name, _mask) = parse_get(args)?;
             if acl.check(actor, krb5_kdc::AdminOp::Inquire).is_err() {
-                return Ok(generic_ret(API_V2, 43_787_521));
+                return Ok(generic_ret(API_V2, KADM5_AUTH_GET));
             }
             let g = store
                 .read()
@@ -1358,7 +1360,7 @@ fn dispatch_kadm5(
         }
         GET_PRINCS => {
             if acl.check(actor, krb5_kdc::AdminOp::Inquire).is_err() {
-                return Ok(generic_ret(API_V2, 43_787_521));
+                return Ok(generic_ret(API_V2, KADM5_AUTH_GET));
             }
             let expr = parse_gprincs(args)?;
             let g = store
@@ -1477,7 +1479,7 @@ fn dispatch_kadm5(
         CREATE_POLICY => {
             let (api, pol, _mask) = parse_policy_arg(args)?;
             if acl.check(actor, krb5_kdc::AdminOp::Create).is_err() {
-                return Ok(generic_ret(api, 43_787_521));
+                return Ok(generic_ret(api, KADM5_AUTH_GET));
             }
             if pol.name.is_empty() {
                 return Ok(generic_ret(api, KADM5_UNK_POLICY));
@@ -1494,7 +1496,7 @@ fn dispatch_kadm5(
         DELETE_POLICY => {
             let (api, name) = parse_policy_name(args)?;
             if acl.check(actor, krb5_kdc::AdminOp::Delete).is_err() {
-                return Ok(generic_ret(api, 43_787_521));
+                return Ok(generic_ret(api, KADM5_AUTH_GET));
             }
             let mut g = store
                 .write()
@@ -1522,7 +1524,7 @@ fn dispatch_kadm5(
         GET_POLICY => {
             let (api, name) = parse_policy_name(args)?;
             if acl.check(actor, krb5_kdc::AdminOp::Inquire).is_err() {
-                return Ok(generic_ret(api, 43_787_521));
+                return Ok(generic_ret(api, KADM5_AUTH_GET));
             }
             let g = store
                 .read()
@@ -1535,7 +1537,7 @@ fn dispatch_kadm5(
         GET_POLS => {
             let (api, expr) = parse_gpols(args);
             if acl.check(actor, krb5_kdc::AdminOp::Inquire).is_err() {
-                return Ok(generic_ret(api, 43_787_521));
+                return Ok(generic_ret(api, KADM5_AUTH_GET));
             }
             let g = store
                 .read()
@@ -1642,7 +1644,7 @@ fn dispatch_kadm5(
         GET_STRINGS => {
             let (api, name) = parse_gstrings(args)?;
             if acl.check(actor, krb5_kdc::AdminOp::Inquire).is_err() {
-                return Ok(generic_ret(api, 43_787_521));
+                return Ok(generic_ret(api, KADM5_AUTH_GET));
             }
             let g = store
                 .read()
@@ -1674,7 +1676,7 @@ fn dispatch_kadm5(
 
 fn kadm5_code(e: &Error) -> u32 {
     match e {
-        Error::AclDenied => 43_787_521,
+        Error::AclDenied => KADM5_AUTH_GET,
         Error::NotFound => KADM5_UNK_PRINC,
         Error::Inner(s) if s.contains("min_length") => KADM5_PASS_Q_TOOSHORT,
         Error::Inner(s) if s.contains("min_classes") => KADM5_PASS_Q_CLASS,
@@ -3420,6 +3422,25 @@ mod tests {
         for (proc, args, want) in cases {
             let out = dispatch_kadm5(&store, &limited, actor, proc, &args).unwrap();
             assert_eq!(ret_code(&out), want, "proc {proc}");
+        }
+    }
+
+    #[test]
+    fn chrand_acl_is_auth_changepw() {
+        let (store, _acl, _actor) = setup();
+        let limited = Acl::parse("limited@KERBER.TEST i\n");
+        for name in ["user@KERBER.TEST", "no-such@KERBER.TEST"] {
+            let out = dispatch_kadm5(
+                &store,
+                &limited,
+                "limited@KERBER.TEST",
+                CHRAND_PRINCIPAL,
+                &encode_named(name),
+            )
+            .unwrap();
+            let code = ret_code(&out);
+            assert_eq!(code, KADM5_AUTH_CHANGEPW, "{name}");
+            assert_ne!(code, KADM5_AUTH_GET, "chrand must not be AUTH_GET: {name}");
         }
     }
 

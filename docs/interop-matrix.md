@@ -30,7 +30,7 @@ the script documents otherwise.
 | `flags-gate.sh` | MIT `modprinc` +flag then `kinit`/`kvno`/`klist -f` | ALL_TIX revoked; no `F` when DISALLOW_FORWARDABLE; `O` when OK_AS_DELEGATE; SVR user2user; TGT_BASED POLICY; HW_AUTH no ticket | harness |
 | `renew-gate.sh` | MIT `kinit -R` / `kinit -p` vs Rust KDC | `renew until` preserved; `-allow_renewable` strips `R`; `klist -f` shows `P` | harness |
 | `postdate-gate.sh` | MIT `kinit -s` / `kinit -v` vs Rust KDC | INVALID `i` then TKT_NYV; validate then `kvno`; `-allow_postdated` is CANNOT_POSTDATE | harness |
-| `getprivs-gate.sh` | MIT `kadmin getprivs` vs Rust kadmind ACL | admin INQUIRE/ADD/MODIFY; limited `i` is INQUIRE only | harness |
+| `getprivs-gate.sh` | MIT `kadmin getprivs` vs Rust kadmind ACL | admin INQUIRE/ADD/MODIFY; limited `i` is INQUIRE only; `cpw -randkey` is AUTH_CHANGEPW | harness |
 | `prop-acl-gate.sh` | MIT `kprop` vs Rust kpropd `KRB5_KPROP_ACL` | unset or empty allowlist: `acl denied`, no replica; host allowlist: MIT `kinit user` | harness |
 | `kpasswd-gate.sh` | MIT `kpasswd` vs kadmind 464 | new password `kinit`; old fails; run twice | harness |
 | `kdb-dump-gate.sh` | MIT `kdb5_util` dump/load both ways | MIT `kinit` vs Rust; MIT load of policy-bearing dump + `getpol lockme` | harness |

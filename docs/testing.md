@@ -181,7 +181,8 @@ when that oracle is absent.
   is TKT_NYV; `kinit -v` after starttime is usable; `-allow_postdated`
   is CANNOT_POSTDATE. In CI.
 - `scripts/getprivs-gate.sh` — MIT `kadmin getprivs` as a limited `i`
-  actor is INQUIRE only. In CI.
+  actor is INQUIRE only; `cpw -randkey` is AUTH_CHANGEPW
+  (`change-password` privilege), not AUTH_GET. In CI.
 - `scripts/prop-acl-gate.sh` — MIT `kprop` vs unset or empty
   `KRB5_KPROP_ACL` is refused (no replica dump); host allowlist still
   loads. In CI.
