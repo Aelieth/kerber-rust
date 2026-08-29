@@ -1,7 +1,7 @@
 //! Gating tests: ACL allow/deny, AS/TGS issue, AP-REQ verify negatives.
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, string_to_key};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, string_to_key};
 use krb5_kdc::{
     Acl, AdminOp, Error, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED,
     KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_LOCKDOWN_KEYS,
@@ -14,7 +14,7 @@ use krb5_protocol::Keytab;
 use krb5_protocol::{ReplayCache, as_req_sname, build_ap_req, tgs_req_ex, verify_ap_req};
 use krb5_types::{
     EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, KdcOptions, KerberosTime, KrbError,
-    PrincipalName, ascii, err, flag_bit, ku,
+    OctetString, PrincipalName, ascii, err, flag_bit, ku,
 };
 
 fn client_key() -> ProtocolKey {
@@ -929,6 +929,23 @@ fn tgs_renew_after_endtime_still_issues() {
     let err = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 96)).unwrap_err();
     assert_eq!(proto_code(err), err::TKT_EXPIRED);
     krb5_kdc::issue_tgs(&store, &renew_tgs(&issued, 97)).expect("RENEW after endtime");
+}
+
+#[test]
+fn tgs_renew_rejects_renew_till_not_after_now() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let issued = renewable_as(&store, 100);
+    let tgt_key = store.krbtgt().unwrap().best_key().unwrap();
+    let usage = KeyUsage::new(ku::TICKET).unwrap();
+    let mut part = tgt_part(&store, &issued);
+    let now = KerberosTime::now();
+    part.renew_till = Some(now.add_seconds(-1).unwrap());
+    let der = encode(&part).unwrap();
+    let cipher = encrypt(&tgt_key.key, usage, &der).unwrap();
+    let mut issued = issued;
+    issued.rep.0.ticket.enc_part.cipher = OctetString::from(cipher);
+    let err = krb5_kdc::issue_tgs(&store, &renew_tgs(&issued, 101)).unwrap_err();
+    assert_eq!(proto_code(err), err::TKT_EXPIRED);
 }
 
 #[test]

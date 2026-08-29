@@ -860,7 +860,7 @@ fn check_ticket_times(
             return Err(proto(err::BADOPTION, "TICKET NOT RENEWABLE"));
         }
         match &tkt.renew_till {
-            Some(till) if till.delta_seconds(&now) < -skew => {
+            Some(till) if till.unix_seconds() <= now.unix_seconds() => {
                 return Err(proto(err::TKT_EXPIRED, "renew_till"));
             }
             None => return Err(proto(err::TKT_EXPIRED, "renew_till")),

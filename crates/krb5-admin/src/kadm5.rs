@@ -11,7 +11,8 @@ use krb5_crypto::{EncryptionType, ProtocolKey, kdb_decrypt_key};
 use krb5_gss::GssContext;
 use krb5_kdc::{
     Acl, KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH,
-    KeyEntry, Principal, SharedDump as SharedStore, TL_LAST_PWD_CHANGE, TL_STRING_ATTRS, TlData,
+    KeyEntry, Principal, SharedDump as SharedStore, TL_LAST_PWD_CHANGE, TL_MOD_PRINC,
+    TL_STRING_ATTRS, TlData,
 };
 use krb5_types::{PrincipalName, Ticket};
 
@@ -798,6 +799,7 @@ fn encode_kdbe(w: &mut XdrW, p: &krb5_kdc::Principal, mkey: Option<&krb5_crypto:
     )
     .unwrap_or(0);
     let pw_last = tl_u32(&p.tl_data, TL_LAST_PWD_CHANGE).unwrap_or(now);
+    let mod_time = tl_u32(&p.tl_data, TL_MOD_PRINC).unwrap_or(now);
     body.u32(AT_PW_LAST_CHANGE);
     body.u32(pw_last);
     n += 1;
@@ -812,7 +814,7 @@ fn encode_kdbe(w: &mut XdrW, p: &krb5_kdc::Principal, mkey: Option<&krb5_crypto:
     body.u32(u32::try_from(krb5_types::PrincipalName::NT_SRV_INST).unwrap_or(2));
     n += 1;
     body.u32(AT_MOD_TIME);
-    body.u32(pw_last);
+    body.u32(mod_time);
     n += 1;
     w.u32(n);
     w.b.extend_from_slice(&body.b);
@@ -1551,7 +1553,7 @@ fn dispatch_kadm5(
         CHRAND_PRINCIPAL | CHRAND_PRINCIPAL3 => {
             let name = parse_chrand(args, proc == CHRAND_PRINCIPAL3)?;
             if acl.check(actor, krb5_kdc::AdminOp::ChangePassword).is_err() {
-                return Ok(generic_ret(API_V2, 43_787_521));
+                return Ok(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
             }
             let mut g = store
                 .write()
@@ -2060,7 +2062,7 @@ fn encode_principal_ent(w: &mut XdrW, p: &krb5_kdc::Principal) {
     let id = p.id();
     w.nullstring(Some(&id));
     w.u32(p.expiration);
-    w.u32(0);
+    w.u32(tl_u32(&p.tl_data, TL_LAST_PWD_CHANGE).unwrap_or(0));
     w.u32(p.pw_expire);
     w.u32(u32::try_from(p.max_life).unwrap_or(0));
     // MIT kadmin always unparses `mod_name`; a NULL pointer is
@@ -2068,7 +2070,7 @@ fn encode_principal_ent(w: &mut XdrW, p: &krb5_kdc::Principal) {
     let mod_name = format!("kadmin/admin@{}", p.realm);
     w.u32(0); // xdr_nulltype FALSE → encode principal
     w.nullstring(Some(&mod_name));
-    w.u32(0); // mod_date
+    w.u32(tl_u32(&p.tl_data, TL_MOD_PRINC).unwrap_or(0));
     w.u32(p.attributes);
     let kvno = p.keys.iter().map(|k| k.kvno).max().unwrap_or(1);
     w.u32(kvno);
@@ -2611,6 +2613,57 @@ mod tests {
             }
         }
         (n_key, kvnos)
+    }
+
+    #[test]
+    fn getprinc_uses_stored_pwd_and_mod_dates() {
+        let (store, acl, actor) = setup();
+        let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["dated"]);
+        {
+            let mut g = store.write().unwrap();
+            g.create_password(&acl, &actor, &name, b"date-secret")
+                .unwrap();
+            let p = g.get_name(&name).unwrap();
+            let mut p = p.clone();
+            p.tl_data
+                .retain(|t| t.ty != TL_LAST_PWD_CHANGE && t.ty != TL_MOD_PRINC);
+            p.tl_data.push(TlData {
+                ty: TL_LAST_PWD_CHANGE,
+                contents: 1_111u32.to_le_bytes().to_vec(),
+            });
+            p.tl_data.push(TlData {
+                ty: TL_MOD_PRINC,
+                contents: {
+                    let mut v = 2_222u32.to_le_bytes().to_vec();
+                    v.extend_from_slice(b"kadmin/admin@KERBER.TEST\0");
+                    v
+                },
+            });
+            krb5_kdc::PrincipalWrite::put_principal(&mut *g, p).unwrap();
+        }
+        let out = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &{
+            let mut w = XdrW::default();
+            w.u32(API_V2);
+            w.nullstring(Some("dated@KERBER.TEST"));
+            w.u32(u32::MAX);
+            w.b
+        })
+        .unwrap();
+        assert_eq!(ret_code(&out), 0);
+        let mut r = XdrR::new(&out);
+        r.u32().unwrap();
+        r.u32().unwrap();
+        let _ = r.nullstring().unwrap();
+        let _ = r.u32().unwrap();
+        let last_pwd = r.u32().unwrap();
+        let _ = r.u32().unwrap();
+        let _ = r.u32().unwrap();
+        assert_eq!(r.u32().unwrap(), 0);
+        let _ = r.nullstring().unwrap();
+        let mod_date = r.u32().unwrap();
+        assert_eq!(last_pwd, 1_111);
+        assert_eq!(mod_date, 2_222);
+        assert_ne!(mod_date, last_pwd);
     }
 
     #[test]
@@ -3295,7 +3348,7 @@ mod tests {
         lockdown_user(&store);
         let limited = Acl::parse("limited@KERBER.TEST i\n");
         let actor = "limited@KERBER.TEST";
-        let cases: [(u32, Vec<u8>, u32); 8] = [
+        let cases: [(u32, Vec<u8>, u32); 10] = [
             (
                 EXTRACT_KEYS,
                 extract_args("user@KERBER.TEST", 0),
@@ -3334,6 +3387,16 @@ mod tests {
             (
                 CHPASS_PRINCIPAL,
                 chpass_args("no-such@KERBER.TEST", "nope"),
+                KADM5_AUTH_CHANGEPW,
+            ),
+            (
+                CHRAND_PRINCIPAL,
+                encode_named("user@KERBER.TEST"),
+                KADM5_AUTH_CHANGEPW,
+            ),
+            (
+                CHRAND_PRINCIPAL,
+                encode_named("no-such@KERBER.TEST"),
                 KADM5_AUTH_CHANGEPW,
             ),
         ];
