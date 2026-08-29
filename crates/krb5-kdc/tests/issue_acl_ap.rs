@@ -3,17 +3,17 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, string_to_key};
 use krb5_kdc::{
-    Acl, AdminOp, Error, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_RENEWABLE,
-    KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE,
-    KDB_REQUIRES_HW_AUTH, PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
-    acl_for_store, as_req, bootstrap_documented, documented_admin_id, documented_changepw,
-    documented_host, pa_enc_timestamp, tgs_req,
+    Acl, AdminOp, Error, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED,
+    KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_NO_AUTH_DATA_REQUIRED,
+    KDB_OK_AS_DELEGATE, KDB_REQUIRES_HW_AUTH, PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER,
+    TEST_USER_PASSWORD, acl_for_store, as_req, bootstrap_documented, documented_admin_id,
+    documented_changepw, documented_host, pa_enc_timestamp, tgs_req,
 };
 use krb5_protocol::Keytab;
 use krb5_protocol::{ReplayCache, as_req_sname, build_ap_req, tgs_req_ex, verify_ap_req};
 use krb5_types::{
-    EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, KdcOptions, KrbError, PrincipalName,
-    ascii, err, flag_bit, ku,
+    EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, KdcOptions, KerberosTime, KrbError,
+    PrincipalName, ascii, err, flag_bit, ku,
 };
 
 fn client_key() -> ProtocolKey {
@@ -866,6 +866,66 @@ fn tgs_renew_non_renewable_is_badoption() {
     assert!(!tgt_part(&store, &issued).flags.renewable());
     let err = krb5_kdc::issue_tgs(&store, &renew_tgs(&issued, 99)).unwrap_err();
     assert_eq!(proto_code(err), err::BADOPTION);
+}
+
+fn postdated_as_req(nonce: u32, from: KerberosTime) -> krb5_types::AsReq {
+    let mut req = user_as_req(nonce);
+    req.0.req_body.from = Some(from);
+    req.0.req_body.kdc_options = req
+        .0
+        .req_body
+        .kdc_options
+        .with_bit(flag_bit::MAY_POSTDATE, true)
+        .with_bit(flag_bit::POSTDATED, true);
+    req
+}
+
+fn validate_tgs(issued: &krb5_kdc::IssuedAs, nonce: u32) -> krb5_types::TgsReq {
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    tgs_req_ex(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        PrincipalName::krbtgt(TEST_REALM),
+        TEST_REALM,
+        nonce,
+        KdcOptions::forwardable().with_bit(flag_bit::VALIDATE, true),
+        None,
+        Vec::new(),
+        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
+    )
+    .expect("VALIDATE TGS-REQ")
+}
+
+#[test]
+fn as_postdated_is_invalid_until_validate() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let from = KerberosTime::now().add_seconds(2).unwrap();
+    let issued = krb5_kdc::issue_as(&store, &postdated_as_req(110, from)).expect("postdated AS");
+    let part = tgt_part(&store, &issued);
+    assert!(part.flags.invalid());
+    assert!(part.flags.bit(flag_bit::POSTDATED));
+    let err = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 111)).unwrap_err();
+    assert_eq!(proto_code(err), err::TKT_NYV);
+    let too_soon = krb5_kdc::issue_tgs(&store, &validate_tgs(&issued, 112)).unwrap_err();
+    assert_eq!(proto_code(too_soon), err::TKT_NYV);
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let out = krb5_kdc::issue_tgs(&store, &validate_tgs(&issued, 113)).expect("VALIDATE");
+    let after = tgs_tgt_part(&store, &out);
+    assert!(!after.flags.invalid());
+    krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 114))
+        .expect_err("unvalidated TGT still NYV");
+}
+
+#[test]
+fn as_cannot_postdate_when_disallow() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    or_attr(&mut store, &cname, KDB_DISALLOW_POSTDATED);
+    let from = KerberosTime::now().add_seconds(30).unwrap();
+    let err = krb5_kdc::issue_as(&store, &postdated_as_req(115, from)).unwrap_err();
+    assert_eq!(proto_code(err), err::CANNOT_POSTDATE);
 }
 
 #[test]

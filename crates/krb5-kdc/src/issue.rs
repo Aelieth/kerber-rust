@@ -325,10 +325,7 @@ fn issue_as_from(
     let session = random_key(etype)?;
     let now = KerberosTime::now();
     let life = requested_life(store, &client, body);
-    let end = now
-        .add_seconds(i64::try_from(life).unwrap_or(i64::MAX))
-        .or_else(|_| now.add_hours(10))
-        .map_err(|_| proto(err::NEVER_VALID, "endtime"))?;
+    let mut starttime = now.clone();
     let mut flags = TicketFlags::initial_preauth();
     if body.kdc_options.bit(flag_bit::FORWARDABLE) {
         flags = flags.with_bit(flag_bit::FORWARDABLE, true);
@@ -339,7 +336,24 @@ fn issue_as_from(
     if body.kdc_options.bit(flag_bit::RENEWABLE) {
         flags = flags.with_bit(flag_bit::RENEWABLE, true);
     }
+    if body.kdc_options.bit(flag_bit::MAY_POSTDATE) {
+        flags = flags.with_bit(flag_bit::MAY_POSTDATE, true);
+    }
+    if let Some(from) = &body.from
+        && from.unix_seconds() > now.unix_seconds()
+        && (body.kdc_options.bit(flag_bit::POSTDATED)
+            || body.kdc_options.bit(flag_bit::MAY_POSTDATE))
+    {
+        starttime = from.clone();
+        flags = flags
+            .with_bit(flag_bit::POSTDATED, true)
+            .with_bit(flag_bit::INVALID, true);
+    }
     flags = apply_disallow_flags(flags, Some(&client), &server);
+    let end = starttime
+        .add_seconds(i64::try_from(life).unwrap_or(i64::MAX))
+        .or_else(|_| starttime.add_hours(10))
+        .map_err(|_| proto(err::NEVER_VALID, "endtime"))?;
     let include_pac = !attr(&server, KDB_NO_AUTH_DATA_REQUIRED);
     let krbtgt_p = store
         .fetch_krbtgt()?
@@ -370,7 +384,7 @@ fn issue_as_from(
         store,
         include_pac,
         None,
-        &now,
+        &starttime,
     )?;
     let renew_till = renew_till_for(store, &now, &flags, Some(&client), body.rtime.as_ref());
     let enc_part = enc_rep_part(
@@ -378,7 +392,7 @@ fn issue_as_from(
         body.nonce,
         &now,
         &now,
-        &now,
+        &starttime,
         &end,
         store.realm(),
         &sname,
@@ -475,7 +489,8 @@ fn issue_tgs_from(
         .or_else(|_| EncryptionType::known(ap.ticket.enc_part.etype))?;
     let (enc_tkt, tgt_key, tgt_plain) = decrypt_presented_tgt(store, &ap, tkt_etype)?;
     let renew = body.kdc_options.bit(flag_bit::RENEW);
-    check_ticket_times(store, &enc_tkt, renew)?;
+    let validate = body.kdc_options.bit(flag_bit::VALIDATE);
+    check_ticket_times(store, &enc_tkt, renew, validate)?;
     let sess_etype = EncryptionType::from_iana(enc_tkt.key.keytype)
         .or_else(|_| EncryptionType::known(enc_tkt.key.keytype))?;
     let tgt_session = ProtocolKey::from_bytes(sess_etype, enc_tkt.key.keyvalue.as_ref())?;
@@ -605,6 +620,18 @@ fn issue_tgs_from(
         } else {
             ticket_renew_till = enc_tkt.renew_till.clone();
         }
+        if !skip_transited {
+            flags = flags.with_bit(flag_bit::TRANSITED_POLICY_CHECKED, true);
+        }
+    } else if validate {
+        authtime = enc_tkt.authtime.clone();
+        starttime = enc_tkt
+            .starttime
+            .clone()
+            .unwrap_or_else(|| enc_tkt.authtime.clone());
+        end = enc_tkt.endtime.clone();
+        ticket_renew_till = enc_tkt.renew_till.clone();
+        flags = enc_tkt.flags.clone().with_bit(flag_bit::INVALID, false);
         if !skip_transited {
             flags = flags.with_bit(flag_bit::TRANSITED_POLICY_CHECKED, true);
         }
@@ -792,9 +819,23 @@ fn check_ticket_times(
     store: &dyn PrincipalRead,
     tkt: &EncTicketPart,
     renew: bool,
+    validate: bool,
 ) -> Result<(), Error> {
     let now = KerberosTime::now();
     let skew = store.policy().skew;
+    if validate {
+        if !tkt.flags.invalid() {
+            return Err(proto(err::BADOPTION, "VALIDATE VALID TICKET"));
+        }
+        let start = tkt.starttime.as_ref().unwrap_or(&tkt.authtime);
+        if start.unix_seconds() > now.unix_seconds() {
+            return Err(proto(err::TKT_NYV, "NOT_YET_VALID"));
+        }
+        if tkt.endtime.delta_seconds(&now) < -skew {
+            return Err(proto(err::TKT_EXPIRED, "expired"));
+        }
+        return Ok(());
+    }
     if tkt.flags.invalid() {
         return Err(proto(err::TKT_NYV, "INVALID"));
     }

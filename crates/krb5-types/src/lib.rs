@@ -473,7 +473,10 @@ impl KdcOptions {
             | (1u32 << (31 - flag_bit::DISABLE_TRANSITED_CHECK))
             | (1u32 << (31 - flag_bit::RENEWABLE_OK))
             | (1u32 << (31 - flag_bit::ENC_TKT_IN_SKEY))
-            | (1u32 << (31 - flag_bit::RENEW));
+            | (1u32 << (31 - flag_bit::RENEW))
+            | (1u32 << (31 - flag_bit::MAY_POSTDATE))
+            | (1u32 << (31 - flag_bit::POSTDATED))
+            | (1u32 << (31 - flag_bit::VALIDATE));
         self.to_u32() & !supported
     }
 }
