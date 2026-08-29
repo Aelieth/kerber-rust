@@ -255,8 +255,28 @@ echo "$KLIST3"
 echo "$KLIST3" | grep -q 'extra@KERBER.TEST'
 
 echo "==== MIT kadmin cpw -randkey extra + ktadd + kinit -k ===="
+PWD_BEFORE="$(echo "$GET2" | grep '^Last password change:')"
+MOD_BEFORE="$(echo "$GET2" | grep '^Last modified:')"
+sleep 1
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'cpw -randkey extra'
+GETR="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc extra' 2>&1 || true)"
+echo "$GETR"
+PWDR="$(echo "$GETR" | grep '^Last password change:')"
+MODR="$(echo "$GETR" | grep '^Last modified:')"
+echo "$PWDR"
+echo "$MODR"
+echo "$PWDR" | grep -v '\[never\]'
+echo "$MODR" | grep -v '1970'
+if [ "$PWDR" = "$PWD_BEFORE" ]; then
+    echo "Last password change did not move after cpw -randkey: $PWDR" >&2
+    exit 1
+fi
+if [ "$MODR" = "$MOD_BEFORE" ]; then
+    echo "Last modified did not move after cpw -randkey: $MODR" >&2
+    exit 1
+fi
 if docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" sh -c 'printf "extra-rotated\n" | kinit extra@KERBER.TEST'; then
     echo "old password still worked after chrand" >&2

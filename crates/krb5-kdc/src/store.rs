@@ -1329,6 +1329,7 @@ impl PrincipalStore {
         }
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         p.keys.clone_from(&new_keys);
+        stamp_admin_tl(p, true);
         let snap = p.clone();
         self.note_ulog(id, false, Some(snap));
         self.save_if_configured()?;
@@ -1402,6 +1403,7 @@ impl PrincipalStore {
         } else {
             p.keys = keys;
         }
+        stamp_admin_tl(p, true);
         let snap = p.clone();
         self.note_ulog(id, false, Some(snap));
         self.save_if_configured()
@@ -1868,6 +1870,75 @@ pub fn s2k_params(etype: EncryptionType) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn admin_tl_u32(p: &Principal, ty: i32) -> u32 {
+        p.tl_data
+            .iter()
+            .find(|t| t.ty == ty)
+            .and_then(|t| t.contents.get(..4))
+            .map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap()))
+    }
+
+    fn plant_stale_admin_tl(p: &mut Principal, ts: u32) {
+        p.tl_data
+            .retain(|t| t.ty != TL_LAST_PWD_CHANGE && t.ty != TL_MOD_PRINC);
+        p.tl_data.push(TlData {
+            ty: TL_LAST_PWD_CHANGE,
+            contents: ts.to_le_bytes().to_vec(),
+        });
+        let mut modp = ts.to_le_bytes().to_vec();
+        modp.extend_from_slice(b"kadmin/admin@KERBER.TEST\0");
+        p.tl_data.push(TlData {
+            ty: TL_MOD_PRINC,
+            contents: modp,
+        });
+    }
+
+    #[test]
+    fn chrand_stamps_last_pwd_and_mod() {
+        let (mut store, _) = crate::bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+        let mut p = store.get_name(&user).unwrap().clone();
+        plant_stale_admin_tl(&mut p, 1_000);
+        store.debug_insert(p);
+        store.chrand(&user).unwrap();
+        let after = store.get_name(&user).unwrap();
+        assert_ne!(
+            admin_tl_u32(after, TL_LAST_PWD_CHANGE),
+            1_000,
+            "chrand must stamp last-pwd"
+        );
+        assert_ne!(
+            admin_tl_u32(after, TL_MOD_PRINC),
+            1_000,
+            "chrand must stamp mod"
+        );
+    }
+
+    #[test]
+    fn set_keys_stamps_last_pwd_and_mod() {
+        let (mut store, _) = crate::bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+        let mut p = store.get_name(&user).unwrap().clone();
+        let etype = p.best_key().unwrap().etype;
+        plant_stale_admin_tl(&mut p, 1_000);
+        store.debug_insert(p);
+        let key = random_key(etype).unwrap();
+        store
+            .set_keys(&user, vec![KeyEntry::new(etype, key, 0)], false)
+            .unwrap();
+        let after = store.get_name(&user).unwrap();
+        assert_ne!(
+            admin_tl_u32(after, TL_LAST_PWD_CHANGE),
+            1_000,
+            "setkey must stamp last-pwd"
+        );
+        assert_ne!(
+            admin_tl_u32(after, TL_MOD_PRINC),
+            1_000,
+            "setkey must stamp mod"
+        );
+    }
 
     #[test]
     fn apply_kdc_conf_sets_ticket_policy() {

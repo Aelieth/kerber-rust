@@ -86,7 +86,8 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
 
 - **G5 GSS breadth (in progress).** Replica incremental apply
   allocates a RID when kdbe has none, so a new principal's PAC is
-  not RID 1000 (`scripts/iprop-gate.sh`).
+  not RID 1000 (`scripts/iprop-gate.sh`). `cpw -randkey` / setkey
+  stamp last-password-change and last-modified (`scripts/kadmin-gate.sh`).
 
 - KDB extension surface: `PrincipalRead` / `PrincipalWrite` /
   `StoreLifecycle`. Dump-v7 is the default backend; `db_library=memory`

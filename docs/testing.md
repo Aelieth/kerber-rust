@@ -191,7 +191,8 @@ when that oracle is absent.
   extra@KERBER.TEST`; last password change is not `[never]`; last
   modified is not Unix epoch), `listprincs` (names `extra` and `user`),
   `modprinc +requires_preauth` then `kinit`, `cpw -randkey` (old
-  password must fail) + `ktadd` + `kinit -k`, `ktadd -norandkey` +
+  password must fail; last password change / last modified move) +
+  `ktadd` + `kinit -k`, `ktadd -norandkey` +
   `kinit -k`, `+lockdown_keys` (cpw and `ktadd -norandkey` refused),
   `purgekeys` (old kvno gone), `cpw -keepold` (getprinc lists both kvnos),
   `setstr`/`getstrs`, `renprinc -force`
