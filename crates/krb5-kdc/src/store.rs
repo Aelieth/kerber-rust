@@ -141,6 +141,8 @@ pub struct Principal {
     pub s4u_allowed_to: Vec<String>,
     /// Bound named password policy (`policy\t` / kadm5).
     pub pw_policy: Option<String>,
+    /// MIT string attributes (`setstr` / `KRB5_TL_STRING_ATTRS`).
+    pub string_attrs: Vec<(String, String)>,
 }
 
 impl Principal {
@@ -187,6 +189,7 @@ impl Principal {
             s4u_allowed_from: Vec::new(),
             s4u_allowed_to: Vec::new(),
             pw_policy: None,
+            string_attrs: Vec::new(),
         }
     }
 }
@@ -1404,6 +1407,39 @@ impl PrincipalStore {
         let id = format!("{}@{}", name.components_joined(), self.realm);
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         p.pw_policy = policy;
+        let snap = p.clone();
+        self.note_ulog(id, false, Some(snap));
+        self.save_if_configured()
+    }
+
+    /// MIT `kadm5_get_strings`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    pub fn get_strings(&self, name: &PrincipalName) -> Result<Vec<(String, String)>, Error> {
+        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let p = self.map.get(&id).ok_or(Error::NotFound)?;
+        Ok(p.string_attrs.clone())
+    }
+
+    /// MIT `kadm5_set_string`. `value == None` deletes `key`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    pub fn set_string(
+        &mut self,
+        name: &PrincipalName,
+        key: &str,
+        value: Option<&str>,
+    ) -> Result<(), Error> {
+        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+        p.string_attrs.retain(|(k, _)| k != key);
+        if let Some(v) = value {
+            p.string_attrs.push((key.to_owned(), v.to_owned()));
+        }
         let snap = p.clone();
         self.note_ulog(id, false, Some(snap));
         self.save_if_configured()

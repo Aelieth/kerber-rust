@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # MIT 1.22.2 kadmin against Rust kadmind (GSS-RPC 749):
 # addprinc, cpw, getprinc, listprincs, modprinc, cpw -randkey, ktadd,
-# ktadd -norandkey, purgekeys, delprinc.
+# ktadd -norandkey, purgekeys, setstr/getstrs, delprinc.
 # Isolated: runs inside the MIT image; never touches host /etc/krb5.conf.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -134,6 +134,14 @@ echo "$GET" | grep -q 'Number of keys:'
 echo "$GET" | grep -qv 'Number of keys: 0'
 echo "$GET" | grep -qE 'Key: vno [1-9]'
 
+echo "==== MIT kadmin setstr/getstrs extra ===="
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'setstr extra note hello-g3d'
+STRS="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getstrs extra' 2>&1 || true)"
+echo "$STRS"
+echo "$STRS" | grep -q 'note: hello-g3d'
+
 echo "==== MIT kadmin purgekeys ===="
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addpol -history 2 g3bhist'
@@ -248,6 +256,6 @@ DELGET="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
 echo "$DELGET"
 echo "$DELGET" | grep -qiE 'does not exist|not found|UNK_PRINC'
 
-log "kadmin.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"addprinc+cpw+get+list+mod+chrand+norandkey+purgekeys+renprinc+del"'
+log "kadmin.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"addprinc+cpw+get+list+mod+chrand+norandkey+purgekeys+setstr+renprinc+del"'
 exit 0
 

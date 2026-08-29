@@ -40,6 +40,8 @@ pub const TL_MOD_PRINC: i32 = 2;
 pub const TL_KADM_DATA: i32 = 3;
 /// `KRB5_TL_MKVNO`.
 pub const TL_MKVNO: i32 = 8;
+/// `KRB5_TL_STRING_ATTRS`.
+pub const TL_STRING_ATTRS: i32 = 0x000b;
 /// `KRB5_TL_ACTKVNO`.
 pub const TL_ACTKVNO: i32 = 9;
 /// Private `tl_data` type: domain SID + RID (MIT has no SID; opaque round-trip).
@@ -255,6 +257,7 @@ impl DumpPrincipal {
         let locked = self.attributes & KDB_DISALLOW_ALL_TIX != 0;
         let (sid, rid) = parse_sid_tl(&self.tl_data)?;
         let pw_policy = policy_from_tl(&self.tl_data);
+        let string_attrs = attrs_from_tl(&self.tl_data);
         Ok((
             Principal {
                 name,
@@ -280,6 +283,7 @@ impl DumpPrincipal {
                 s4u_allowed_from: Vec::new(),
                 s4u_allowed_to: Vec::new(),
                 pw_policy,
+                string_attrs,
             },
             sid,
         ))
@@ -757,6 +761,7 @@ fn write_princ_record(
     };
     merge_sid_tl(&mut tl, store.domain_sid(), p.rid);
     merge_policy_tl(&mut tl, p.pw_policy.as_deref());
+    merge_string_attrs_tl(&mut tl, &p.string_attrs);
     merge_hist_tl(&mut tl, &p.key_history, mkey)?;
     if p.name.components_joined() == "K/M" {
         merge_serial_tl(&mut tl, store.serial());
@@ -833,6 +838,44 @@ fn write_princ_record(
 fn merge_sid_tl(tl: &mut Vec<TlData>, domain: &RpcSid, rid: u32) {
     tl.retain(|t| t.ty != TL_KERBER_SID);
     tl.push(encode_sid_tl(domain, rid));
+}
+
+fn merge_string_attrs_tl(tl: &mut Vec<TlData>, attrs: &[(String, String)]) {
+    tl.retain(|t| t.ty != TL_STRING_ATTRS);
+    if attrs.is_empty() {
+        return;
+    }
+    let mut contents = Vec::new();
+    for (k, v) in attrs {
+        contents.extend_from_slice(k.as_bytes());
+        contents.push(0);
+        contents.extend_from_slice(v.as_bytes());
+        contents.push(0);
+    }
+    tl.push(TlData {
+        ty: TL_STRING_ATTRS,
+        contents,
+    });
+}
+
+fn attrs_from_tl(tl: &[TlData]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for t in tl {
+        if t.ty != TL_STRING_ATTRS {
+            continue;
+        }
+        let mut parts = t.contents.split(|b| *b == 0);
+        while let (Some(k), Some(v)) = (parts.next(), parts.next()) {
+            if k.is_empty() {
+                continue;
+            }
+            out.push((
+                String::from_utf8_lossy(k).into_owned(),
+                String::from_utf8_lossy(v).into_owned(),
+            ));
+        }
+    }
+    out
 }
 
 fn merge_policy_tl(tl: &mut Vec<TlData>, policy: Option<&str>) {
@@ -1082,6 +1125,24 @@ mod tests {
             Some("strict")
         );
         assert_eq!(again.serial(), store.serial());
+    }
+
+    #[test]
+    fn string_attrs_dump_round_trip() {
+        use crate::{TEST_USER, bootstrap_documented, dump_store, load_dump};
+        use krb5_types::PrincipalName;
+
+        let (mut store, _) = bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+        store.set_string(&user, "note", Some("hello-g3d")).unwrap();
+        let text = dump_store(&store, b"masterpassword").unwrap();
+        assert!(
+            text.contains("68656c6c6f2d673364"),
+            "dump must hex-encode string attr value: {text}"
+        );
+        let again = load_dump(&text, b"masterpassword").unwrap();
+        let attrs = again.get_strings(&user).unwrap();
+        assert_eq!(attrs, vec![("note".into(), "hello-g3d".into())]);
     }
 
     #[test]

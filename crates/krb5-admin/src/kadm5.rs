@@ -69,6 +69,8 @@ const SETKEY_PRINCIPAL: u32 = 16;
 const SETKEY_PRINCIPAL3: u32 = 21;
 const SETKEY_PRINCIPAL4: u32 = 25;
 const PURGEKEYS: u32 = 22;
+const GET_STRINGS: u32 = 23;
+const SET_STRING: u32 = 24;
 const EXTRACT_KEYS: u32 = 26;
 
 /// MIT `KADM5_UNK_PRINC`.
@@ -1125,6 +1127,7 @@ fn decode_kdbe(
         s4u_allowed_from: Vec::new(),
         s4u_allowed_to: Vec::new(),
         pw_policy,
+        string_attrs: Vec::new(),
     }))
 }
 
@@ -1511,6 +1514,35 @@ fn dispatch_kadm5(
                 Err(e) => Ok(generic_ret(api, kadm5_code(&Error::from(e)))),
             }
         }
+        GET_STRINGS => {
+            let (api, name) = parse_gstrings(args)?;
+            if acl.check(actor, krb5_kdc::AdminOp::Inquire).is_err() {
+                return Ok(generic_ret(api, 43_787_521));
+            }
+            let g = store
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match g.get_strings(&name) {
+                Ok(attrs) => Ok(encode_gstrings(api, &attrs)),
+                Err(e) => Ok(generic_ret(api, kadm5_code(&Error::from(e)))),
+            }
+        }
+        SET_STRING => {
+            let (api, name, key, value) = parse_sstring(args)?;
+            if acl.check(actor, krb5_kdc::AdminOp::Modify).is_err() {
+                return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
+            }
+            if key.is_empty() {
+                return Ok(generic_ret(api, KADM5_FAILURE));
+            }
+            let mut g = store
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match g.set_string(&name, &key, value.as_deref()) {
+                Ok(()) => Ok(generic_ret(api, 0)),
+                Err(e) => Ok(generic_ret(api, kadm5_code(&Error::from(e)))),
+            }
+        }
         _ => Ok(generic_ret(API_V2, 7)),
     }
 }
@@ -1771,6 +1803,35 @@ fn parse_setkey(
         keys.push(ke);
     }
     Ok((api, princ, keys, keepold))
+}
+
+fn parse_gstrings(args: &[u8]) -> Result<(u32, PrincipalName), Error> {
+    let mut r = XdrR::new(args);
+    let api = r.u32()?;
+    Ok((api, r.principal()?))
+}
+
+fn parse_sstring(args: &[u8]) -> Result<(u32, PrincipalName, String, Option<String>), Error> {
+    let mut r = XdrR::new(args);
+    let api = r.u32()?;
+    let princ = r.principal()?;
+    let key = r.nullstring()?.unwrap_or_default();
+    let value = r.nullstring()?;
+    Ok((api, princ, key, value))
+}
+
+fn encode_gstrings(api: u32, attrs: &[(String, String)]) -> Vec<u8> {
+    let mut w = XdrW::default();
+    w.u32(api);
+    w.u32(0);
+    let n = u32::try_from(attrs.len()).unwrap_or(0);
+    w.u32(n);
+    w.u32(n);
+    for (k, v) in attrs {
+        w.nullstring(Some(k));
+        w.nullstring(Some(v));
+    }
+    w.b
 }
 
 fn parse_extract(args: &[u8]) -> Result<(u32, PrincipalName, u32), Error> {
@@ -2698,6 +2759,31 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ret_code(&out), KADM5_PROTECT_KEYS);
+    }
+
+    #[test]
+    fn setstr_getstrs_round_trip() {
+        let (store, acl, actor) = setup();
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some("user@KERBER.TEST"));
+        w.nullstring(Some("note"));
+        w.nullstring(Some("hello-g3d"));
+        let out = dispatch_kadm5(&store, &acl, &actor, SET_STRING, &w.b).unwrap();
+        assert_eq!(ret_code(&out), 0);
+        let mut g = XdrW::default();
+        g.u32(API_V2);
+        g.nullstring(Some("user@KERBER.TEST"));
+        let got = dispatch_kadm5(&store, &acl, &actor, GET_STRINGS, &g.b).unwrap();
+        assert_eq!(ret_code(&got), 0);
+        let mut r = XdrR::new(&got);
+        assert_eq!(r.u32().unwrap(), API_V2);
+        assert_eq!(r.u32().unwrap(), 0);
+        let n = r.u32().unwrap();
+        assert_eq!(r.u32().unwrap(), n);
+        assert_eq!(n, 1);
+        assert_eq!(r.nullstring().unwrap().as_deref(), Some("note"));
+        assert_eq!(r.nullstring().unwrap().as_deref(), Some("hello-g3d"));
     }
 
     #[test]
