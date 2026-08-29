@@ -5,13 +5,14 @@
 //! ciphertext still loads for one release. The stash remains the raw master
 //! key; it is not rewritten as MIT `.k5.REALM`.
 
+use std::fmt::Write as _;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::Error;
 use crate::kdb_dump::{load_dump_mkey, write_dump};
 use crate::mkey::{harness_master_etype, master_key_from_password};
-use crate::store::{KeyEntry, Principal, PrincipalStore, S2K_ITERS};
+use crate::store::{KeyEntry, Principal, PrincipalStore, S2K_ITERS, UlogEntry};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt};
 use krb5_protocol::write_secret_file;
 use krb5_types::PrincipalName;
@@ -74,6 +75,7 @@ pub fn load_store(db_path: &Path, stash_path: &Path) -> Result<PrincipalStore, P
     if let Ok(meta) = std::fs::metadata(db_path) {
         store.db_stamp = Some((meta.modified().ok(), meta.len()));
     }
+    load_ulog(&mut store, db_path)?;
     Ok(store)
 }
 
@@ -94,6 +96,77 @@ pub fn save_store(
     let master = master_for_save(store, db_path, stash_path)?;
     let text = write_dump(store, &master)?;
     write_secret_file(db_path, text.as_bytes())?;
+    save_ulog(store, db_path)?;
+    Ok(())
+}
+
+fn ulog_path(db_path: &Path) -> PathBuf {
+    let mut s = db_path.as_os_str().to_os_string();
+    s.push(".ulog");
+    PathBuf::from(s)
+}
+
+fn save_ulog(store: &PrincipalStore, db_path: &Path) -> Result<(), PersistError> {
+    let mut text = String::from("ulog 1\n");
+    for e in store.ulog() {
+        let _ = writeln!(
+            text,
+            "{}\t{}\t{}\t{}",
+            e.sno,
+            e.time,
+            u32::from(e.deleted),
+            e.name
+        );
+    }
+    write_secret_file(&ulog_path(db_path), text.as_bytes())?;
+    Ok(())
+}
+
+fn load_ulog(store: &mut PrincipalStore, db_path: &Path) -> Result<(), PersistError> {
+    let path = ulog_path(db_path);
+    let Ok(text) = fs::read_to_string(&path) else {
+        return Ok(());
+    };
+    let mut lines = text.lines();
+    let Some(hdr) = lines.next() else {
+        return Ok(());
+    };
+    if !hdr.starts_with("ulog ") {
+        return Err(PersistError::Format("ulog header".into()));
+    }
+    let mut entries = Vec::new();
+    for line in lines {
+        if line.is_empty() {
+            continue;
+        }
+        let mut f = line.splitn(4, '\t');
+        let sno: u32 = f
+            .next()
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| PersistError::Format("ulog sno".into()))?;
+        let time: u32 = f
+            .next()
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| PersistError::Format("ulog time".into()))?;
+        let deleted = f.next() == Some("1");
+        let name = f
+            .next()
+            .ok_or_else(|| PersistError::Format("ulog name".into()))?
+            .to_owned();
+        let princ = if deleted {
+            None
+        } else {
+            store.get(&name).cloned()
+        };
+        entries.push(UlogEntry {
+            sno,
+            time,
+            name,
+            deleted,
+            princ,
+        });
+    }
+    store.restore_ulog(entries);
     Ok(())
 }
 

@@ -515,6 +515,15 @@ impl PrincipalStore {
         self.serial.store(sno, Ordering::SeqCst);
     }
 
+    /// Reload ulog entries from persist (`{db}.ulog`).
+    pub(crate) fn restore_ulog(&self, entries: Vec<UlogEntry>) {
+        let mut log = self
+            .ulog
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *log = entries.into();
+    }
+
     /// Snapshot of the update log (oldest first).
     #[must_use]
     pub fn ulog(&self) -> Vec<UlogEntry> {

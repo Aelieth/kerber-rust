@@ -207,6 +207,65 @@ ADD="$(docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
 echo "$ADD"
 echo "$ADD" | grep -qi 'created'
 
+echo "==== restart Rust master; ulog must survive ===="
+kill_comm krb5-kadmind
+kill_comm krb5-kdc
+free=0
+for _ in $(seq 1 40); do
+    if ! docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.2)" 2>/dev/null \
+        && ! docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.2)" 2>/dev/null; then
+        free=1
+        break
+    fi
+    sleep 0.25
+done
+[ "$free" = 1 ] || {
+    log "iprop.gate" "error" ',"error":"master ports still bound"'
+    exit 1
+}
+docker exec "$NAME" sh -c ':> /tmp/kdc.log; :> /tmp/kadmind.log'
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" sh -c '/tmp/krb5-kdc 0.0.0.0:88 >/tmp/kdc.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/kdc.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+[ "$ok" = 1 ] || {
+    docker exec "$NAME" cat /tmp/kdc.log >&2 || true
+    log "iprop.gate" "error" ',"error":"kdc did not listen after restart"'
+    exit 1
+}
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" sh -c '/tmp/krb5-kadmind 0.0.0.0:749 >/tmp/kadmind.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/kadmind.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+[ "$ok" = 1 ] || {
+    docker exec "$NAME" cat /tmp/kadmind.log >&2 || true
+    log "iprop.gate" "error" ',"error":"kadmind did not listen after restart"'
+    exit 1
+}
+
+echo "==== persisted ulog after restart ===="
+ULOG="$(docker exec "$NAME" cat /tmp/principal.ulog 2>/dev/null || true)"
+echo "$ULOG"
+echo "$ULOG" | grep -q extra
+
 echo "==== wait MIT kpropd -A GET_UPDATES serial-delta ===="
 ok=0
 for _ in $(seq 1 40); do
@@ -221,10 +280,11 @@ DELTA_LOG="$(docker exec "$NAME" cat /tmp/kpropd-iprop.log 2>/dev/null || true)"
 echo "$DELTA_LOG"
 echo "$DELTA_LOG" | grep -qiE 'Got incremental updates|Incremental updates:'
 FR="$(echo "$DELTA_LOG" | grep -ci 'Full resync needed' || true)"
-if [ "$FR" != 1 ]; then
-    log "iprop.gate" "error" ",\"error\":\"expected one FULL_RESYNC, got $FR\""
+if [ "$FR" -gt 1 ]; then
+    log "iprop.gate" "error" ",\"error\":\"spurious FULL_RESYNC after restart, got $FR\""
     exit 1
 fi
+echo "$DELTA_LOG" | grep -qi 'Got incremental updates'
 if [ "$ok" != 1 ]; then
     docker exec "$NAME" kadmin.local -q 'getprinc extra' 2>&1 || true
     docker exec "$NAME" kadmin.local -q 'getprinc user' 2>&1 || true

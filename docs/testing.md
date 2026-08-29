@@ -161,10 +161,11 @@ when that oracle is absent.
   MIT `kinit` + `kvno`. In CI after `kdc-gate`.
 - `scripts/iprop-gate.sh` — MIT `kpropd -A` must not report IPROP
   program unregistered. After first-contact kprop `-i` (ipropx),
-  mutate the master and require serial-delta: MIT `kinit extra` on
-  the MIT replica (one FULL_RESYNC, then incremental); `krb5-iprop-pull`
-  vs MIT kadmind then MIT `kinit extra2`; MIT `delprinc extra2` then the
-  name is gone on the Rust replica. In CI.
+  mutate the master, restart the Rust kadmind, and require serial-delta
+  with no extra FULL_RESYNC: MIT `kinit extra` on the MIT replica;
+  `krb5-iprop-pull` vs MIT kadmind then MIT `kinit extra2` (replica dump
+  keeps `setstr` TL 0x000b); MIT `delprinc extra2` then the name is gone
+  on the Rust replica. In CI.
 - `scripts/expire-gate.sh` — MIT `kinit` NAME_EXP vs KEY_EXPIRED;
   `kinit -S kadmin/changepw` on a password-expired client; TGS `kvno`
   after client `-pwexpire`/`-expire` still succeeds. In CI.

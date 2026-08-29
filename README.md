@@ -87,7 +87,7 @@ gated against real MIT before it counts as done:
 | **G1** | **Faithfulness — landed.** Principal/password expiration, stored `DISALLOW_*` / `OK_AS_DELEGATE` / `REQUIRES_HW_AUTH` / `NO_AUTH_DATA_REQUIRED`, real `GET_PRIVS`, iprop/kpropd ACLs. Gates: `expire-gate`, `flags-gate`, `getprivs-gate`, `prop-acl-gate` |
 | **G2** | **Renewal & postdating — landed.** `kinit -R`, MAY-POSTDATE / POSTDATED / VALIDATE, the PROXIABLE flag. Gates: `renew-gate`, `postdate-gate` |
 | **G3** | **kadmin completeness — landed.** `getprinc` key metadata, `EXTRACT_KEYS` (`ktadd -norandkey`), PURGEKEYS, SETKEY, GET/SET_STRINGS. Gate: `kadmin-gate`. MIT `*`/`x` do not grant extract (`e`). SETKEY is unit-tested (no MIT `setkey` verb) |
-| **G4** | **iprop fidelity** — carry policy / history / lockout in incremental updates; persist the ulog on disk |
+| **G4** | **iprop fidelity — landed.** Incremental kdbe carries string-attrs / history / policy / lockout; ulog persists across master restart. Gates: `iprop-gate`, `differential-gate` |
 | **G5** | **GSS breadth** — credential delegation, real SPNEGO negotiation, `wrap_iov`/`unwrap_iov` for NFSv4 `RPCSEC_GSS` / SSH / HTTP · *hard requirement* |
 | **G6** | **Client-side preauth & names** — wire PKINIT / SPAKE / FAST into `kinit`; NT-ENTERPRISE canonicalization |
 | **G7** | **Standalone user CLIs** — `klist`, `kvno`, `kdestroy`, `kpasswd`, `kadmin`, `ktutil` (and retire the harness's reliance on MIT's own clients) |

@@ -61,6 +61,50 @@ fn persist_survives_restart_without_key_regen() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn persist_ulog_survives_reload() {
+    let dir = std::env::temp_dir().join(format!(
+        "krb5-ulog-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::create_dir_all(&dir);
+    let db = dir.join("principal");
+    let stash = dir.join("stash");
+    let (mut store, acl) = bootstrap_documented().unwrap();
+    store.persist_paths = Some((db.clone(), stash.clone()));
+    save_store(&store, &db, &stash).unwrap();
+    let extra = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "ulog.kerber.test"]);
+    store
+        .create_host(&acl, &documented_admin_id(), &extra)
+        .unwrap();
+    let sno = store.serial();
+    assert!(sno > 0);
+    let before = store.ulog();
+    assert!(
+        before.iter().any(|e| e.name.contains("ulog.kerber.test")),
+        "ulog must record the create: {before:?}"
+    );
+    let loaded = load_store(&db, &stash).unwrap();
+    assert_eq!(loaded.serial(), sno);
+    let after = loaded.ulog();
+    assert!(
+        after
+            .iter()
+            .any(|e| e.name.contains("ulog.kerber.test") && e.princ.is_some()),
+        "reloaded ulog must keep extra: {after:?}"
+    );
+    let delta = loaded.updates_after(sno.saturating_sub(1));
+    assert!(
+        !delta.is_empty(),
+        "replica poll after restart must stay incremental"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[cfg(unix)]
 #[test]
 fn persist_writes_db_and_stash_mode_0600() {

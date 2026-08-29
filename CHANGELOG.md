@@ -16,8 +16,8 @@ NT-ENTERPRISE · **G7** standalone user CLIs · **G8** KEYRING ccache · **G9**
 config breadth. Each phase lands behind a real-MIT gate before it counts as
 done. The entries below are the post-1.0 groundwork already in tree (Tier-1
 plugin/policy/propagation parity + the KLLDAP 0.7.5 toolchain alignment).
-**G1 faithfulness, G2 renewal/postdating, and G3 kadmin completeness
-have landed.** 1.1 is cut when G1–G9 are complete.
+**G1 faithfulness, G2 renewal/postdating, G3 kadmin completeness, and
+G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
 
 ### Added
 
@@ -59,6 +59,19 @@ have landed.** 1.1 is cut when G1–G9 are complete.
   must not leak).
   Gate: `scripts/kadmin-gate.sh`.
 
+- **G4 iprop fidelity (MIT-gated).** Incremental kdbe encode/decode
+  carry lockout, policy, `TL_STRING_ATTRS` (0x000b), and `AT_PW_HIST`.
+  Replica apply merges partial MIT updates so a later `setstr` does
+  not wipe keys. Ulog serial+entries persist next to the dump
+  (`principal.ulog`) and reload after master restart, so the next
+  replica poll stays incremental. Local `--export-keytab` /
+  `--export-krbtgt-keytab` bypass `LOCKDOWN_KEYS` (MIT flags krbtgt
+  lockdown by default); remote extract still refuses. Gate:
+  `scripts/iprop-gate.sh` (string-attrs on extra2; master restart
+  then incremental extra, no extra FULL_RESYNC). `scripts/differential-gate.sh` is green
+  again. SETKEY4 is MIT `xdr_kadm5_key_data`. `getprinc` lists
+  current keys only.
+
 - KDB extension surface: `PrincipalRead` / `PrincipalWrite` /
   `StoreLifecycle`. Dump-v7 is the default backend; `db_library=memory`
   serves `MemoryStore` seeded from dump (`scripts/store-gate.sh`).
@@ -74,7 +87,8 @@ have landed.** 1.1 is cut when G1–G9 are complete.
   store N-1 old kvnos; `keepold=false`, `TL_KERBER_HIST` 0x4B04).
   Lockout overlay is reload-safe and **memory-only across a full KDC
   restart**. Iprop serial + ulog; kadmind program 100423; password
-  history on full-resync dump, not incremental iprop. Gates:
+  history on full-resync dump and incremental iprop (`AT_PW_HIST`).
+  Gates:
   `policy-gate.sh` (MIT `cpw` too-short/reuse/minclasses-5/history-N,
   maxfailure-2, lockout duration/interval), `store-gate.sh`,
   `kdb-dump-gate.sh`, `iprop-gate.sh`. Traits, not dlopen:
