@@ -1543,7 +1543,7 @@ fn dispatch_kadm5(
                 Err(e) => Ok(generic_ret(api, kadm5_code(&Error::from(e)))),
             }
         }
-        _ => Ok(generic_ret(API_V2, 7)),
+        _ => Ok(generic_ret(API_V2, KADM5_FAILURE)),
     }
 }
 
@@ -2232,6 +2232,14 @@ mod tests {
         let b = generic_ret(API_V2, 0);
         assert_eq!(b.len(), 8);
         assert_eq!(&b[..4], &API_V2.to_be_bytes());
+    }
+
+    #[test]
+    fn unknown_proc_is_kadm5_failure_not_seven() {
+        let (store, acl, actor) = setup();
+        let out = dispatch_kadm5(&store, &acl, &actor, 99, &[]).unwrap();
+        assert_eq!(ret_code(&out), KADM5_FAILURE);
+        assert_ne!(ret_code(&out), 7);
     }
 
     #[test]

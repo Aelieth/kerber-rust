@@ -16,8 +16,8 @@ NT-ENTERPRISE · **G7** standalone user CLIs · **G8** KEYRING ccache · **G9**
 config breadth. Each phase lands behind a real-MIT gate before it counts as
 done. The entries below are the post-1.0 groundwork already in tree (Tier-1
 plugin/policy/propagation parity + the KLLDAP 0.7.5 toolchain alignment).
-**G1 faithfulness and G2 renewal/postdating have landed.** 1.1 is cut
-when G1–G9 are complete.
+**G1 faithfulness, G2 renewal/postdating, and G3 kadmin completeness
+have landed.** 1.1 is cut when G1–G9 are complete.
 
 ### Added
 
@@ -46,6 +46,16 @@ when G1–G9 are complete.
   `TKT_NYV` until `kinit -v` (`scripts/postdate-gate.sh`).
   `DISALLOW_POSTDATED` is `CANNOT_POSTDATE`. `RENEWABLE_OK` is still
   accepted and ignored (G2c).
+
+- **G3 kadmin completeness (MIT-gated).** `GET_PRINCIPAL` returns key
+  metadata (`Number of keys` / `Key: vno N`; MIT 1.22.2 has no
+  `getprinc -keys`). `EXTRACT_KEYS` (op 26) plus ACL `e` unblocks
+  `ktadd -norandkey` then `kinit -k`; MIT `*`/`x` do not include `e`.
+  `PURGEKEYS` (op 22) drops old kvnos. SETKEY ops 16/21/25 (no MIT
+  `kadmin setkey` verb; unit-tested). `GET_STRINGS`/`SET_STRING` plus
+  dump `KRB5_TL_STRING_ATTRS`. Unknown kadm5 procs return
+  `KADM5_FAILURE`, not `7`. `LOCKDOWN_KEYS` refuses extract/purge/setkey.
+  Gate: `scripts/kadmin-gate.sh`.
 
 - KDB extension surface: `PrincipalRead` / `PrincipalWrite` /
   `StoreLifecycle`. Dump-v7 is the default backend; `db_library=memory`

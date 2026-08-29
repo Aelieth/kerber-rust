@@ -38,8 +38,8 @@ Stages 1–8 are done at the MIT-1.22.2 + Samba + Heimdal level that
 - **Track B — Operational parity:** serving store is `RwLock` so kadmind
   mutations persist; KDC reloads the db on mtime/length change.
   `krb5-kadmind` AUTH_GSSAPI 300001: MIT `kadmin` add/cpw/get/list/mod/
-  chrand/ktadd/`renprinc`/del then `kinit extra@KERBER.TEST`
-  (`scripts/kadmin-gate.sh`). RFC 3244
+  chrand/ktadd/`ktadd -norandkey`/purgekeys/setstr/`renprinc`/del then
+  `kinit extra@KERBER.TEST` (`scripts/kadmin-gate.sh`). RFC 3244
   kpasswd on UDP/TCP 464 (`scripts/kpasswd-gate.sh` MIT `kpasswd` then
   `kinit`); kprop on 754 wrapping dump version 7 both directions
   (`scripts/kprop-gate.sh` MIT→Rust; `scripts/kprop-reverse-gate.sh`

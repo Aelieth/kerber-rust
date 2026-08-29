@@ -86,7 +86,7 @@ gated against real MIT before it counts as done:
 | --- | --- |
 | **G1** | **Faithfulness — landed.** Principal/password expiration, stored `DISALLOW_*` / `OK_AS_DELEGATE` / `REQUIRES_HW_AUTH` / `NO_AUTH_DATA_REQUIRED`, real `GET_PRIVS`, iprop/kpropd ACLs. Gates: `expire-gate`, `flags-gate`, `getprivs-gate`, `prop-acl-gate` |
 | **G2** | **Renewal & postdating — landed.** `kinit -R`, MAY-POSTDATE / POSTDATED / VALIDATE, the PROXIABLE flag. Gates: `renew-gate`, `postdate-gate` |
-| **G3** | **kadmin completeness** — `getprinc` returns keys (→ `ktadd -norandkey`), PURGEKEYS, SETKEY, GET/SET_STRINGS, EXTRACT_KEYS |
+| **G3** | **kadmin completeness — landed.** `getprinc` key metadata, `EXTRACT_KEYS` (`ktadd -norandkey`), PURGEKEYS, SETKEY, GET/SET_STRINGS. Gate: `kadmin-gate`. MIT `*`/`x` do not grant extract (`e`). SETKEY is unit-tested (no MIT `setkey` verb) |
 | **G4** | **iprop fidelity** — carry policy / history / lockout in incremental updates; persist the ulog on disk |
 | **G5** | **GSS breadth** — credential delegation, real SPNEGO negotiation, `wrap_iov`/`unwrap_iov` for NFSv4 `RPCSEC_GSS` / SSH / HTTP · *hard requirement* |
 | **G6** | **Client-side preauth & names** — wire PKINIT / SPAKE / FAST into `kinit`; NT-ENTERPRISE canonicalization |
@@ -141,7 +141,7 @@ binds `0.0.0.0`.
 | --- | --- |
 | Realm | `KERBER.TEST` |
 | User | `user@KERBER.TEST` / `userpassword` |
-| Admin | `admin@KERBER.TEST` (ACL `*`: create, delete, ktadd) |
+| Admin | `admin@KERBER.TEST` (ACL `*`; extract needs `e`) |
 | Host | `host/testhost.kerber.test` (random keys, etypes 17–20) |
 | Default etype | 18 (`aes256-cts-hmac-sha1-96`); krbtgt/host also hold RFC 8009 19/20 |
 
