@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # MIT 1.22.2 kadmin against Rust kadmind (GSS-RPC 749):
 # addprinc, cpw, getprinc, listprincs, modprinc, cpw -randkey, ktadd,
-# ktadd -norandkey, delprinc.
+# ktadd -norandkey, purgekeys, delprinc.
 # Isolated: runs inside the MIT image; never touches host /etc/krb5.conf.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -134,6 +134,40 @@ echo "$GET" | grep -q 'Number of keys:'
 echo "$GET" | grep -qv 'Number of keys: 0'
 echo "$GET" | grep -qE 'Key: vno [1-9]'
 
+echo "==== MIT kadmin purgekeys ===="
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addpol -history 2 g3bhist'
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw purge-secret -policy g3bhist purgee'
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'cpw -pw purge-rotated purgee'
+GETP="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc purgee' 2>&1 || true)"
+echo "$GETP"
+echo "$GETP" | grep -qE 'Key: vno 1,'
+echo "$GETP" | grep -qE 'Key: vno 2,'
+PURGE="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'purgekeys purgee' 2>&1 || true)"
+echo "$PURGE"
+echo "$PURGE" | grep -qi purged
+if echo "$PURGE" | grep -qiE 'while purging|Operation failed|unknown procedure'; then
+    echo "purgekeys failed: $PURGE" >&2
+    exit 1
+fi
+GETP2="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc purgee' 2>&1 || true)"
+echo "$GETP2"
+echo "$GETP2" | grep -qE 'Key: vno 2,'
+if echo "$GETP2" | grep -qE 'Key: vno 1,'; then
+    echo "purgekeys left kvno 1: $GETP2" >&2
+    exit 1
+fi
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" sh -c 'printf "purge-rotated\n" | kinit purgee@KERBER.TEST'
+KLISTP="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" klist)"
+echo "$KLISTP"
+echo "$KLISTP" | grep -q 'purgee@KERBER.TEST'
+
 echo "==== MIT kadmin listprincs ===="
 LIST="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'listprincs' 2>&1 || true)"
@@ -214,6 +248,6 @@ DELGET="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
 echo "$DELGET"
 echo "$DELGET" | grep -qiE 'does not exist|not found|UNK_PRINC'
 
-log "kadmin.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"addprinc+cpw+get+list+mod+chrand+norandkey+renprinc+del"'
+log "kadmin.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"addprinc+cpw+get+list+mod+chrand+norandkey+purgekeys+renprinc+del"'
 exit 0
 

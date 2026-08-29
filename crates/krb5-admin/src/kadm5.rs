@@ -65,6 +65,7 @@ const GET_POLS: u32 = 15;
 const CREATE_PRINCIPAL3: u32 = 18;
 const CHPASS_PRINCIPAL3: u32 = 19;
 const CHRAND_PRINCIPAL3: u32 = 20;
+const PURGEKEYS: u32 = 22;
 const EXTRACT_KEYS: u32 = 26;
 
 /// MIT `KADM5_UNK_PRINC`.
@@ -81,6 +82,8 @@ const KADM5_PASS_Q_TOOSHORT: u32 = 43_787_542;
 const KADM5_PASS_Q_CLASS: u32 = 43_787_543;
 /// MIT `ovk` 25.
 const KADM5_PASS_REUSE: u32 = 43_787_545;
+/// MIT `ovk` 3 (`KADM5_AUTH_MODIFY`).
+const KADM5_AUTH_MODIFY: u32 = 43_787_523;
 /// MIT `ovk` 60 (`KADM5_AUTH_EXTRACT`).
 const KADM5_AUTH_EXTRACT: u32 = 43_787_580;
 /// MIT `ovk` 61 (`KADM5_PROTECT_KEYS`).
@@ -1264,7 +1267,7 @@ fn dispatch_kadm5(
         MODIFY_PRINCIPAL => {
             let (name, mask, fields) = parse_modify(args)?;
             if acl.check(actor, krb5_kdc::AdminOp::Modify).is_err() {
-                return Ok(generic_ret(API_V2, 43_787_523));
+                return Ok(generic_ret(API_V2, KADM5_AUTH_MODIFY));
             }
             let mut g = store
                 .write()
@@ -1375,7 +1378,7 @@ fn dispatch_kadm5(
         MODIFY_POLICY => {
             let (api, rec, mask) = parse_policy_arg(args)?;
             if acl.check(actor, krb5_kdc::AdminOp::Modify).is_err() {
-                return Ok(generic_ret(api, 43_787_523));
+                return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
             }
             let mut g = store
                 .write()
@@ -1452,6 +1455,34 @@ fn dispatch_kadm5(
                 principal = p.id(),
             );
             Ok(encode_extract_keys(api, p, kvno))
+        }
+        PURGEKEYS => {
+            let (api, name, keepkvno) = parse_purgekeys(args)?;
+            let mut g = store
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let lockdown = match g.get_name(&name) {
+                None => return Ok(generic_ret(api, KADM5_UNK_PRINC)),
+                Some(p) => p.attributes & KDB_LOCKDOWN_KEYS != 0,
+            };
+            if lockdown {
+                return Ok(generic_ret(api, KADM5_PROTECT_KEYS));
+            }
+            if acl.check(actor, krb5_kdc::AdminOp::Modify).is_err() {
+                return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
+            }
+            match g.purgekeys(&name, keepkvno) {
+                Ok(()) => {
+                    tracing::info!(
+                        event = krb5_log::events::ADMIN,
+                        component = "krb5-admin",
+                        outcome = "ok",
+                        detail = "purgekeys",
+                    );
+                    Ok(generic_ret(api, 0))
+                }
+                Err(e) => Ok(generic_ret(api, kadm5_code(&Error::from(e)))),
+            }
         }
         _ => Ok(generic_ret(API_V2, 7)),
     }
@@ -1662,6 +1693,14 @@ fn parse_rename(args: &[u8]) -> Result<(PrincipalName, PrincipalName), Error> {
     Ok((old, new))
 }
 
+fn parse_purgekeys(args: &[u8]) -> Result<(u32, PrincipalName, i32), Error> {
+    let mut r = XdrR::new(args);
+    let api = r.u32()?;
+    let princ = r.principal()?;
+    let keep = i32::from_be_bytes(r.u32().unwrap_or(u32::MAX).to_be_bytes());
+    Ok((api, princ, keep))
+}
+
 fn parse_extract(args: &[u8]) -> Result<(u32, PrincipalName, u32), Error> {
     let mut r = XdrR::new(args);
     let api = r.u32()?;
@@ -1787,7 +1826,7 @@ fn encode_principal_ent(w: &mut XdrW, p: &krb5_kdc::Principal) {
     w.u32(p.last_success);
     w.u32(p.last_failed);
     w.u32(p.fail_auth_count);
-    let n_key = u32::try_from(p.keys.len()).unwrap_or(0);
+    let n_key = u32::try_from(p.keys.len().saturating_add(p.key_history.len())).unwrap_or(0);
     let n_tl = u32::try_from(p.tl_data.len()).unwrap_or(0);
     w.u32(n_key);
     w.u32(n_tl);
@@ -1803,7 +1842,7 @@ fn encode_principal_ent(w: &mut XdrW, p: &krb5_kdc::Principal) {
         w.u32(0);
     }
     w.u32(n_key);
-    for k in &p.keys {
+    for k in p.keys.iter().chain(p.key_history.iter()) {
         let ver = if k.salt_type.is_some() { 2 } else { 1 };
         w.u32(ver);
         w.u32(k.kvno);
@@ -2364,6 +2403,98 @@ mod tests {
             &actor,
             EXTRACT_KEYS,
             &extract_args("user@KERBER.TEST", 0),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&out), KADM5_PROTECT_KEYS);
+    }
+
+    fn purgekeys_args(name: &str, keepkvno: i32) -> Vec<u8> {
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some(name));
+        w.u32(u32::from_be_bytes(keepkvno.to_be_bytes()));
+        w.b
+    }
+
+    #[test]
+    fn purgekeys_drops_old_kvnos() {
+        let (store, acl, actor) = setup();
+        let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["purgee"]);
+        {
+            let mut g = store.write().unwrap();
+            let mut pol = krb5_kdc::NamedPolicy::new("g3bhist");
+            pol.history = 2;
+            g.put_policy(pol);
+            g.create_password(&acl, &actor, &name, b"purge-secret")
+                .unwrap();
+            g.set_principal_policy(&name, Some("g3bhist".into()))
+                .unwrap();
+            g.set_password(&name, b"purge-rotated").unwrap();
+            let p = g.get_name(&name).unwrap();
+            assert!(!p.key_history.is_empty());
+        }
+        let out = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            PURGEKEYS,
+            &purgekeys_args("purgee@KERBER.TEST", -1),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&out), 0);
+        let g = store.read().unwrap();
+        let p = g.get_name(&name).unwrap();
+        assert!(p.key_history.is_empty());
+        assert!(!p.keys.is_empty());
+        let got = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &{
+            let mut w = XdrW::default();
+            w.u32(API_V2);
+            w.nullstring(Some("purgee@KERBER.TEST"));
+            w.u32(u32::MAX);
+            w.b
+        })
+        .unwrap();
+        assert_eq!(ret_code(&got), 0);
+    }
+
+    #[test]
+    fn purgekeys_acl_is_auth_modify() {
+        let (store, _acl, _actor) = setup();
+        let limited = Acl::parse("limited@KERBER.TEST i\n");
+        let out = dispatch_kadm5(
+            &store,
+            &limited,
+            "limited@KERBER.TEST",
+            PURGEKEYS,
+            &purgekeys_args("user@KERBER.TEST", -1),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&out), KADM5_AUTH_MODIFY);
+    }
+
+    #[test]
+    fn purgekeys_lockdown_is_protect_keys() {
+        let (store, acl, actor) = setup();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+        {
+            let mut g = store.write().unwrap();
+            g.apply_admin_fields(
+                &user,
+                Some(KDB_LOCKDOWN_KEYS),
+                None,
+                None,
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+        }
+        let out = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            PURGEKEYS,
+            &purgekeys_args("user@KERBER.TEST", -1),
         )
         .unwrap();
         assert_eq!(ret_code(&out), KADM5_PROTECT_KEYS);

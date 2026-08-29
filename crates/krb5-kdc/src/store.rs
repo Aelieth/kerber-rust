@@ -1222,6 +1222,32 @@ impl PrincipalStore {
         Ok(new_keys)
     }
 
+    /// Drop keys with kvno below `keepkvno`. `keepkvno <= 0` keeps only the
+    /// newest kvno (MIT `purgekeys` without `-keepkvno`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    pub fn purgekeys(&mut self, name: &PrincipalName, keepkvno: i32) -> Result<(), Error> {
+        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+        let mut all = std::mem::take(&mut p.keys);
+        all.append(&mut p.key_history);
+        let keep = if keepkvno <= 0 {
+            all.iter().map(|k| k.kvno).max().unwrap_or(0)
+        } else {
+            u32::try_from(keepkvno).unwrap_or(u32::MAX)
+        };
+        all.retain(|k| k.kvno >= keep);
+        if let Some(newest) = all.iter().map(|k| k.kvno).max() {
+            p.keys = all.iter().filter(|k| k.kvno == newest).cloned().collect();
+            p.key_history = all.into_iter().filter(|k| k.kvno != newest).collect();
+        }
+        let snap = p.clone();
+        self.note_ulog(id, false, Some(snap));
+        self.save_if_configured()
+    }
+
     /// Apply kadm5 `modprinc` fields (mask already interpreted by the caller).
     ///
     /// # Errors
