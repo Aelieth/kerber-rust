@@ -103,6 +103,8 @@ jobs:
         run: ./scripts/expire-gate.sh
       - name: flags-gate (MIT modprinc DISALLOW_* / OK_AS_DELEGATE / REQUIRES_HW_AUTH)
         run: ./scripts/flags-gate.sh
+      - name: renew-gate (MIT kinit -R / kinit -p vs Rust KDC)
+        run: ./scripts/renew-gate.sh
       - name: getprivs-gate (MIT kadmin getprivs limited ACL actor)
         run: ./scripts/getprivs-gate.sh
       - name: prop-acl-gate (MIT kprop unauthorized GSS peer refused)

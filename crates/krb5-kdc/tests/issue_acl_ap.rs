@@ -762,6 +762,112 @@ fn tgs_strips_renewable_when_server_disallow_renewable() {
     assert!(!part.flags.renewable());
 }
 
+fn renewable_as(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
+    let mut req = user_as_req(nonce);
+    req.0.req_body.kdc_options = req
+        .0
+        .req_body
+        .kdc_options
+        .with_bit(flag_bit::RENEWABLE, true);
+    krb5_kdc::issue_as(store, &req).expect("AS renewable")
+}
+
+fn renew_tgs(issued: &krb5_kdc::IssuedAs, nonce: u32) -> krb5_types::TgsReq {
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    tgs_req_ex(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        PrincipalName::krbtgt(TEST_REALM),
+        TEST_REALM,
+        nonce,
+        KdcOptions::forwardable()
+            .with_bit(flag_bit::RENEWABLE, true)
+            .with_bit(flag_bit::RENEW, true),
+        None,
+        Vec::new(),
+        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
+    )
+    .expect("RENEW TGS-REQ")
+}
+
+fn tgs_tgt_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedTgs) -> EncTicketPart {
+    let tgt_key = store.krbtgt().unwrap().best_key().unwrap();
+    let usage = KeyUsage::new(ku::TICKET).unwrap();
+    let plain = decrypt(
+        &tgt_key.key,
+        usage,
+        issued.rep.0.ticket.enc_part.cipher.as_ref(),
+    )
+    .unwrap();
+    decode(&plain).unwrap()
+}
+
+#[test]
+fn as_sets_proxiable_when_requested() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let mut req = user_as_req(90);
+    req.0.req_body.kdc_options = req
+        .0
+        .req_body
+        .kdc_options
+        .with_bit(flag_bit::PROXIABLE, true);
+    let issued = krb5_kdc::issue_as(&store, &req).expect("AS");
+    assert!(tgt_part(&store, &issued).flags.proxiable());
+}
+
+#[test]
+fn tgs_renew_preserves_renew_till() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let issued = renewable_as(&store, 91);
+    let before = tgt_part(&store, &issued);
+    assert!(before.flags.renewable());
+    let old_till = before.renew_till.clone().expect("renew_till");
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    let out = krb5_kdc::issue_tgs(&store, &renew_tgs(&issued, 92)).expect("RENEW");
+    let after = tgs_tgt_part(&store, &out);
+    assert!(after.flags.renewable());
+    assert_eq!(after.renew_till, Some(old_till));
+    assert!(after.endtime.unix_seconds() >= before.endtime.unix_seconds());
+}
+
+#[test]
+fn tgs_renew_strips_when_disallow_renewable() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let issued = renewable_as(&store, 93);
+    or_attr(&mut store, &cname, KDB_DISALLOW_RENEWABLE);
+    let out = krb5_kdc::issue_tgs(&store, &renew_tgs(&issued, 94)).expect("RENEW strips");
+    let after = tgs_tgt_part(&store, &out);
+    assert!(!after.flags.renewable());
+    assert!(after.renew_till.is_none());
+}
+
+#[test]
+fn tgs_renew_after_endtime_still_issues() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    store.policy.skew = 0;
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    store
+        .apply_admin_fields(&cname, None, Some(1), None, None, None, false)
+        .unwrap();
+    let issued = renewable_as(&store, 95);
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let err = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 96)).unwrap_err();
+    assert_eq!(proto_code(err), err::TKT_EXPIRED);
+    krb5_kdc::issue_tgs(&store, &renew_tgs(&issued, 97)).expect("RENEW after endtime");
+}
+
+#[test]
+fn tgs_renew_non_renewable_is_badoption() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let issued = krb5_kdc::issue_as(&store, &user_as_req(98)).expect("AS");
+    assert!(!tgt_part(&store, &issued).flags.renewable());
+    let err = krb5_kdc::issue_tgs(&store, &renew_tgs(&issued, 99)).unwrap_err();
+    assert_eq!(proto_code(err), err::BADOPTION);
+}
+
 #[test]
 fn tgs_honors_svr_tgt_based_lockout_and_ok_as_delegate() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");

@@ -333,6 +333,9 @@ fn issue_as_from(
     if body.kdc_options.bit(flag_bit::FORWARDABLE) {
         flags = flags.with_bit(flag_bit::FORWARDABLE, true);
     }
+    if body.kdc_options.bit(flag_bit::PROXIABLE) {
+        flags = flags.with_bit(flag_bit::PROXIABLE, true);
+    }
     if body.kdc_options.bit(flag_bit::RENEWABLE) {
         flags = flags.with_bit(flag_bit::RENEWABLE, true);
     }
@@ -363,15 +366,18 @@ fn issue_as_from(
         flags.clone(),
         &pac_kdc,
         TransitedEncoding::empty(),
-        renew_till_for(store, &now, &flags),
+        renew_till_for(store, &now, &flags, Some(&client), body.rtime.as_ref()),
         store,
         include_pac,
         None,
+        &now,
     )?;
-    let renew_till = renew_till_for(store, &now, &flags);
+    let renew_till = renew_till_for(store, &now, &flags, Some(&client), body.rtime.as_ref());
     let enc_part = enc_rep_part(
         &session,
         body.nonce,
+        &now,
+        &now,
         &now,
         &end,
         store.realm(),
@@ -468,7 +474,8 @@ fn issue_tgs_from(
     let tkt_etype = EncryptionType::from_iana(ap.ticket.enc_part.etype)
         .or_else(|_| EncryptionType::known(ap.ticket.enc_part.etype))?;
     let (enc_tkt, tgt_key, tgt_plain) = decrypt_presented_tgt(store, &ap, tkt_etype)?;
-    check_ticket_times(store, &enc_tkt)?;
+    let renew = body.kdc_options.bit(flag_bit::RENEW);
+    check_ticket_times(store, &enc_tkt, renew)?;
     let sess_etype = EncryptionType::from_iana(enc_tkt.key.keytype)
         .or_else(|_| EncryptionType::known(enc_tkt.key.keytype))?;
     let tgt_session = ProtocolKey::from_bytes(sess_etype, enc_tkt.key.keyvalue.as_ref())?;
@@ -568,28 +575,74 @@ fn issue_tgs_from(
     }
     let session = random_key(skey.etype)?;
     let now = KerberosTime::now();
-    let mut end = enc_tkt.endtime.clone();
-    let life = requested_life(store, &server, body);
-    if let Ok(capped) = now.add_seconds(i64::try_from(life).unwrap_or(i64::MAX))
-        && capped.unix_seconds() < end.unix_seconds()
-    {
-        end = capped;
+    let authtime;
+    let starttime;
+    let mut end;
+    let mut flags;
+    let ticket_renew_till;
+    if renew {
+        authtime = enc_tkt.authtime.clone();
+        starttime = now.clone();
+        let old_start = enc_tkt
+            .starttime
+            .clone()
+            .unwrap_or_else(|| enc_tkt.authtime.clone());
+        let old_life = enc_tkt.endtime.delta_seconds(&old_start).max(0);
+        end = now.add_seconds(old_life).unwrap_or_else(|_| now.clone());
+        if let Some(till) = &enc_tkt.renew_till
+            && till.unix_seconds() < end.unix_seconds()
+        {
+            end = till.clone();
+        }
+        flags = enc_tkt.flags.clone().with_bit(flag_bit::INVALID, false);
+        let deny_ren = attr(&server, KDB_DISALLOW_RENEWABLE)
+            || tgs_client
+                .as_ref()
+                .is_some_and(|c| attr(c, KDB_DISALLOW_RENEWABLE));
+        if deny_ren {
+            flags = flags.with_bit(flag_bit::RENEWABLE, false);
+            ticket_renew_till = None;
+        } else {
+            ticket_renew_till = enc_tkt.renew_till.clone();
+        }
+        if !skip_transited {
+            flags = flags.with_bit(flag_bit::TRANSITED_POLICY_CHECKED, true);
+        }
+    } else {
+        authtime = now.clone();
+        starttime = now.clone();
+        end = enc_tkt.endtime.clone();
+        let life = requested_life(store, &server, body);
+        if let Ok(capped) = now.add_seconds(i64::try_from(life).unwrap_or(i64::MAX))
+            && capped.unix_seconds() < end.unix_seconds()
+        {
+            end = capped;
+        }
+        flags = TicketFlags::none();
+        if !skip_transited {
+            flags = flags.with_bit(flag_bit::TRANSITED_POLICY_CHECKED, true);
+        }
+        if enc_tkt.flags.pre_authent() {
+            flags = flags.with_bit(flag_bit::PRE_AUTHENT, true);
+        }
+        if body.kdc_options.bit(flag_bit::FORWARDABLE) && enc_tkt.flags.forwardable() {
+            flags = flags.with_bit(flag_bit::FORWARDABLE, true);
+        }
+        if body.kdc_options.bit(flag_bit::RENEWABLE) && enc_tkt.flags.renewable() {
+            flags = flags.with_bit(flag_bit::RENEWABLE, true);
+        }
+        if body.kdc_options.bit(flag_bit::PROXIABLE) && enc_tkt.flags.proxiable() {
+            flags = flags.with_bit(flag_bit::PROXIABLE, true);
+        }
+        flags = apply_disallow_flags(flags, tgs_client.as_ref(), &server);
+        ticket_renew_till = renew_till_for(
+            store,
+            &now,
+            &flags,
+            tgs_client.as_ref(),
+            body.rtime.as_ref(),
+        );
     }
-    let mut flags = TicketFlags::none();
-    // Bit 12: the check ran (same-realm empty transited included). MIT matches.
-    if !skip_transited {
-        flags = flags.with_bit(flag_bit::TRANSITED_POLICY_CHECKED, true);
-    }
-    if enc_tkt.flags.pre_authent() {
-        flags = flags.with_bit(flag_bit::PRE_AUTHENT, true);
-    }
-    if body.kdc_options.bit(flag_bit::FORWARDABLE) && enc_tkt.flags.forwardable() {
-        flags = flags.with_bit(flag_bit::FORWARDABLE, true);
-    }
-    if body.kdc_options.bit(flag_bit::RENEWABLE) && enc_tkt.flags.renewable() {
-        flags = flags.with_bit(flag_bit::RENEWABLE, true);
-    }
-    flags = apply_disallow_flags(flags, tgs_client.as_ref(), &server);
     if attr(&server, KDB_OK_AS_DELEGATE) {
         flags = flags.with_bit(flag_bit::OK_AS_DELEGATE, true);
     }
@@ -616,26 +669,28 @@ fn issue_tgs_from(
         &sname,
         &ticket_crealm,
         &ticket_cname,
-        &now,
+        &authtime,
         &end,
         flags.clone(),
         &pac_kdc,
         transited,
-        renew_till_for(store, &now, &flags),
+        ticket_renew_till.clone(),
         store,
         include_pac,
         evidence_logon.as_deref(),
+        &starttime,
     )?;
-    let renew_till = renew_till_for(store, &now, &flags);
     let enc_part = enc_rep_part(
         &session,
         body.nonce,
         &now,
+        &authtime,
+        &starttime,
         &end,
         store.realm(),
         &sname,
         flags,
-        renew_till,
+        ticket_renew_till,
     )?;
     let enc_der = encode(&EncTgsRepPart(enc_part))?;
     let (enc_key, enc_usage) = if let Some(sub) = authenticator.subkey {
@@ -733,7 +788,11 @@ fn decrypt_presented_tgt(
     Err(last)
 }
 
-fn check_ticket_times(store: &dyn PrincipalRead, tkt: &EncTicketPart) -> Result<(), Error> {
+fn check_ticket_times(
+    store: &dyn PrincipalRead,
+    tkt: &EncTicketPart,
+    renew: bool,
+) -> Result<(), Error> {
     let now = KerberosTime::now();
     let skew = store.policy().skew;
     if tkt.flags.invalid() {
@@ -743,6 +802,19 @@ fn check_ticket_times(store: &dyn PrincipalRead, tkt: &EncTicketPart) -> Result<
         && now.delta_seconds(start) < -skew
     {
         return Err(proto(err::TKT_NYV, "not yet valid"));
+    }
+    if renew {
+        if !tkt.flags.renewable() {
+            return Err(proto(err::BADOPTION, "TICKET NOT RENEWABLE"));
+        }
+        match &tkt.renew_till {
+            Some(till) if till.delta_seconds(&now) < -skew => {
+                return Err(proto(err::TKT_EXPIRED, "renew_till"));
+            }
+            None => return Err(proto(err::TKT_EXPIRED, "renew_till")),
+            Some(_) => {}
+        }
+        return Ok(());
     }
     if tkt.endtime.delta_seconds(&now) < -skew {
         return Err(proto(err::TKT_EXPIRED, "expired"));
@@ -769,6 +841,7 @@ fn mint_ticket(
     store: &dyn PrincipalRead,
     include_pac: bool,
     logon_override: Option<&[u8]>,
+    starttime: &KerberosTime,
 ) -> Result<Ticket, Error> {
     let mut part = EncTicketPart {
         flags,
@@ -777,7 +850,7 @@ fn mint_ticket(
         cname: cname.clone(),
         transited,
         authtime: authtime.clone(),
-        starttime: Some(authtime.clone()),
+        starttime: Some(starttime.clone()),
         endtime: endtime.clone(),
         renew_till,
         caddr: None,
@@ -830,6 +903,8 @@ fn enc_rep_part(
     session: &ProtocolKey,
     nonce: u32,
     now: &KerberosTime,
+    authtime: &KerberosTime,
+    starttime: &KerberosTime,
     end: &KerberosTime,
     realm: &str,
     sname: &PrincipalName,
@@ -845,8 +920,8 @@ fn enc_rep_part(
         nonce,
         key_expiration: None,
         flags,
-        authtime: now.clone(),
-        starttime: Some(now.clone()),
+        authtime: authtime.clone(),
+        starttime: Some(starttime.clone()),
         endtime: end.clone(),
         renew_till,
         srealm: ks(realm)?,
@@ -1020,12 +1095,26 @@ fn renew_till_for(
     store: &dyn PrincipalRead,
     now: &KerberosTime,
     flags: &TicketFlags,
+    princ: Option<&Principal>,
+    rtime: Option<&KerberosTime>,
 ) -> Option<KerberosTime> {
     if !flags.renewable() {
         return None;
     }
-    let life = i64::try_from(store.policy().max_renewable_life).unwrap_or(i64::MAX);
-    now.add_seconds(life).ok()
+    let mut life = store.policy().max_renewable_life;
+    if let Some(p) = princ
+        && p.max_renewable_life > 0
+    {
+        life = life.min(p.max_renewable_life);
+    }
+    if let Some(rt) = rtime {
+        let want = u64::from(rt.unix_seconds()).saturating_sub(u64::from(now.unix_seconds()));
+        if want > 0 {
+            life = life.min(want);
+        }
+    }
+    now.add_seconds(i64::try_from(life).unwrap_or(i64::MAX))
+        .ok()
 }
 
 /// Wire KDC-REQ-BODY (EXPLICIT [4] contents) from an AS-REQ/TGS-REQ PDU.

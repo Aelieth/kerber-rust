@@ -101,7 +101,7 @@ KLLDAP alignment: [`integration-klldap.md`](integration-klldap.md).
 
 Era II gates. The harness CI job runs `kadmin-gate`, `policy-gate`, `history-mit-gate`, `kpasswd-gate`,
 `kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `iprop-gate`,
-`expire-gate`, `flags-gate`, `getprivs-gate`, `prop-acl-gate`, `restart-gate`,
+`expire-gate`, `flags-gate`, `renew-gate`, `getprivs-gate`, `prop-acl-gate`, `restart-gate`,
 `prod-gate`, `prod-realm-gate`, `stress-gate`, `chaos-gate`, `soak-gate`, `s4u-mit-gate`, `samba-ad-gate`, `ad-windows-gate`,
 `ad-s4u-gate`, `samba-pac-verify-gate`, `samba-pac-l2-gate`,
 `samba-crossrealm-gate`, `samba-realtrust-gate`, and `heimdal-gate` after `pkinit-gate`.
@@ -169,6 +169,9 @@ when that oracle is absent.
   `kinit -S kadmin/changepw` on a password-expired client. In CI.
 - `scripts/flags-gate.sh` — MIT `modprinc` DISALLOW_*/OK_AS_DELEGATE/
   REQUIRES_HW_AUTH then `kinit`/`kvno`/`klist -f`. In CI.
+- `scripts/renew-gate.sh` — MIT `kinit -r 1d -l 5m` then `kinit -R`
+  (endtime moves, `renew until` unchanged); `-allow_renewable` strips
+  `R`; `kinit -p` shows `P`. In CI.
 - `scripts/getprivs-gate.sh` — MIT `kadmin getprivs` as a limited `i`
   actor is INQUIRE only. In CI.
 - `scripts/prop-acl-gate.sh` — MIT `kprop` vs empty `KRB5_KPROP_ACL`

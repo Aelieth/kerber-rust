@@ -399,6 +399,12 @@ impl TicketFlags {
         self.bit(flag_bit::FORWARDABLE)
     }
 
+    /// RFC 4120 `proxiable` (bit 3).
+    #[must_use]
+    pub fn proxiable(&self) -> bool {
+        self.bit(flag_bit::PROXIABLE)
+    }
+
     /// RFC 4120 `invalid` (bit 7).
     #[must_use]
     pub fn invalid(&self) -> bool {
@@ -466,7 +472,8 @@ impl KdcOptions {
             | (1u32 << (31 - flag_bit::CANONICALIZE))
             | (1u32 << (31 - flag_bit::DISABLE_TRANSITED_CHECK))
             | (1u32 << (31 - flag_bit::RENEWABLE_OK))
-            | (1u32 << (31 - flag_bit::ENC_TKT_IN_SKEY));
+            | (1u32 << (31 - flag_bit::ENC_TKT_IN_SKEY))
+            | (1u32 << (31 - flag_bit::RENEW));
         self.to_u32() & !supported
     }
 }
