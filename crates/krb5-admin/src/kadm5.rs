@@ -1244,7 +1244,7 @@ fn decode_princ(r: &mut XdrR<'_>) -> Result<(PrincipalName, String), Error> {
     let realm_b = r.opaque()?;
     let realm = String::from_utf8_lossy(&realm_b).into_owned();
     let n = r.u32()? as usize;
-    let mut comps = Vec::with_capacity(n);
+    let mut comps = Vec::with_capacity(n.min(16));
     for _ in 0..n {
         let _magic = r.u32()?;
         let c = r.opaque()?;
@@ -1275,12 +1275,12 @@ fn decode_keydata(r: &mut XdrR<'_>, mkey: Option<&ProtocolKey>) -> Result<Vec<Ke
         let ver = r.u32()?;
         let kvno = r.u32()?;
         let n_enc = r.u32()? as usize;
-        let mut enctypes = Vec::with_capacity(n_enc);
+        let mut enctypes = Vec::with_capacity(n_enc.min(16));
         for _ in 0..n_enc {
             enctypes.push(r.u32()?.cast_signed());
         }
         let n_cont = r.u32()? as usize;
-        let mut contents = Vec::with_capacity(n_cont);
+        let mut contents = Vec::with_capacity(n_cont.min(16));
         for _ in 0..n_cont {
             contents.push(r.opaque()?);
         }
@@ -3675,6 +3675,32 @@ mod tests {
         assert!(
             !got.string_attrs.is_empty(),
             "incremental kdbe must carry string_attrs"
+        );
+    }
+
+    #[test]
+    fn iprop_decode_caps_hostile_wire_counts() {
+        let mut princ = XdrW::default();
+        princ.u32(1);
+        princ.u32(AT_PRINC);
+        princ.opaque(b"KERBER.TEST");
+        princ.u32(u32::MAX);
+        let mut r = XdrR::new(&princ.b);
+        assert!(
+            decode_kdbe(&mut r, None, "hostile@KERBER.TEST").is_err(),
+            "huge principal-component count must not pre-alloc"
+        );
+        let mut keys = XdrW::default();
+        keys.u32(1);
+        keys.u32(AT_KEYDATA);
+        keys.u32(1);
+        keys.u32(2);
+        keys.u32(1);
+        keys.u32(u32::MAX);
+        let mut r = XdrR::new(&keys.b);
+        assert!(
+            decode_kdbe(&mut r, None, "hostile@KERBER.TEST").is_err(),
+            "huge keydata slot count must not pre-alloc"
         );
     }
 }
