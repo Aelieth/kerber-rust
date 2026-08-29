@@ -65,6 +65,9 @@ const GET_POLS: u32 = 15;
 const CREATE_PRINCIPAL3: u32 = 18;
 const CHPASS_PRINCIPAL3: u32 = 19;
 const CHRAND_PRINCIPAL3: u32 = 20;
+const SETKEY_PRINCIPAL: u32 = 16;
+const SETKEY_PRINCIPAL3: u32 = 21;
+const SETKEY_PRINCIPAL4: u32 = 25;
 const PURGEKEYS: u32 = 22;
 const EXTRACT_KEYS: u32 = 26;
 
@@ -84,6 +87,10 @@ const KADM5_PASS_Q_CLASS: u32 = 43_787_543;
 const KADM5_PASS_REUSE: u32 = 43_787_545;
 /// MIT `ovk` 3 (`KADM5_AUTH_MODIFY`).
 const KADM5_AUTH_MODIFY: u32 = 43_787_523;
+/// MIT `ovk` 50 (`KADM5_AUTH_SETKEY`).
+const KADM5_AUTH_SETKEY: u32 = 43_787_570;
+/// MIT `ovk` 59 (`KADM5_SETKEY_BAD_KVNO`).
+const KADM5_SETKEY_BAD_KVNO: u32 = 43_787_579;
 /// MIT `ovk` 60 (`KADM5_AUTH_EXTRACT`).
 const KADM5_AUTH_EXTRACT: u32 = 43_787_580;
 /// MIT `ovk` 61 (`KADM5_PROTECT_KEYS`).
@@ -1484,6 +1491,26 @@ fn dispatch_kadm5(
                 Err(e) => Ok(generic_ret(api, kadm5_code(&Error::from(e)))),
             }
         }
+        SETKEY_PRINCIPAL | SETKEY_PRINCIPAL3 | SETKEY_PRINCIPAL4 => {
+            let (api, name, keys, keepold) = parse_setkey(args, proc)?;
+            let mut g = store
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let lockdown = match g.get_name(&name) {
+                None => return Ok(generic_ret(api, KADM5_UNK_PRINC)),
+                Some(p) => p.attributes & KDB_LOCKDOWN_KEYS != 0,
+            };
+            if lockdown {
+                return Ok(generic_ret(api, KADM5_PROTECT_KEYS));
+            }
+            if acl.check(actor, krb5_kdc::AdminOp::SetKey).is_err() {
+                return Ok(generic_ret(api, KADM5_AUTH_SETKEY));
+            }
+            match g.set_keys(&name, keys, keepold) {
+                Ok(()) => Ok(generic_ret(api, 0)),
+                Err(e) => Ok(generic_ret(api, kadm5_code(&Error::from(e)))),
+            }
+        }
         _ => Ok(generic_ret(API_V2, 7)),
     }
 }
@@ -1495,6 +1522,7 @@ fn kadm5_code(e: &Error) -> u32 {
         Error::Inner(s) if s.contains("min_length") => KADM5_PASS_Q_TOOSHORT,
         Error::Inner(s) if s.contains("min_classes") => KADM5_PASS_Q_CLASS,
         Error::Inner(s) if s.contains("history") => KADM5_PASS_REUSE,
+        Error::Inner(s) if s.contains("setkey kvno") => KADM5_SETKEY_BAD_KVNO,
         Error::Inner(_) => KADM5_FAILURE,
     }
 }
@@ -1699,6 +1727,50 @@ fn parse_purgekeys(args: &[u8]) -> Result<(u32, PrincipalName, i32), Error> {
     let princ = r.principal()?;
     let keep = i32::from_be_bytes(r.u32().unwrap_or(u32::MAX).to_be_bytes());
     Ok((api, princ, keep))
+}
+
+fn parse_setkey(
+    args: &[u8],
+    proc: u32,
+) -> Result<(u32, PrincipalName, Vec<krb5_kdc::KeyEntry>, bool), Error> {
+    let mut r = XdrR::new(args);
+    let api = r.u32()?;
+    let princ = r.principal()?;
+    let keepold = if proc == SETKEY_PRINCIPAL {
+        false
+    } else {
+        r.u32()? != 0
+    };
+    if proc == SETKEY_PRINCIPAL3 {
+        r.skip_array_i32_pairs()?;
+    }
+    let n = r.u32()?;
+    let mut keys = Vec::new();
+    for _ in 0..n {
+        let kvno = if proc == SETKEY_PRINCIPAL4 {
+            r.u32()?
+        } else {
+            0
+        };
+        let et = i32::from_be_bytes(r.u32()?.to_be_bytes());
+        let etype = EncryptionType::known(et).map_err(|e| Error::Inner(e.to_string()))?;
+        let bytes = r.opaque()?;
+        let key =
+            ProtocolKey::from_bytes(etype, &bytes).map_err(|e| Error::Inner(e.to_string()))?;
+        let mut ke = KeyEntry::new(etype, key, kvno);
+        if proc == SETKEY_PRINCIPAL4 {
+            let st = i32::from_be_bytes(r.u32()?.to_be_bytes());
+            let salt = r.opaque()?;
+            if st != 0 {
+                ke.salt_type = Some(st);
+            }
+            if !salt.is_empty() {
+                ke.kdb_salt = Some(salt);
+            }
+        }
+        keys.push(ke);
+    }
+    Ok((api, princ, keys, keepold))
 }
 
 fn parse_extract(args: &[u8]) -> Result<(u32, PrincipalName, u32), Error> {
@@ -2495,6 +2567,134 @@ mod tests {
             &actor,
             PURGEKEYS,
             &purgekeys_args("user@KERBER.TEST", -1),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&out), KADM5_PROTECT_KEYS);
+    }
+
+    fn setkey16_args(name: &str, etype: i32, key: &[u8]) -> Vec<u8> {
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some(name));
+        w.u32(1);
+        w.u32(u32::try_from(etype).unwrap());
+        w.opaque(key);
+        w.b
+    }
+
+    #[test]
+    fn setkey3_empty_ks_tuple() {
+        let (store, acl, actor) = setup();
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some("user@KERBER.TEST"));
+        w.u32(0);
+        w.u32(0);
+        w.u32(1);
+        w.u32(18);
+        w.opaque(&[0xEFu8; 32]);
+        let out = dispatch_kadm5(&store, &acl, &actor, SETKEY_PRINCIPAL3, &w.b).unwrap();
+        assert_eq!(ret_code(&out), 0);
+        let g = store.read().unwrap();
+        let p = g
+            .get_name(&PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]))
+            .unwrap();
+        assert_eq!(p.keys[0].key.as_bytes(), &[0xEFu8; 32]);
+        assert!(p.key_history.is_empty());
+    }
+
+    #[test]
+    fn setkey_replaces_keys() {
+        let (store, acl, actor) = setup();
+        let key = [0xABu8; 32];
+        let out = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            SETKEY_PRINCIPAL,
+            &setkey16_args("user@KERBER.TEST", 18, &key),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&out), 0);
+        let g = store.read().unwrap();
+        let p = g
+            .get_name(&PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]))
+            .unwrap();
+        assert_eq!(p.keys.len(), 1);
+        assert_eq!(p.keys[0].etype.to_iana(), 18);
+        assert_eq!(p.keys[0].key.as_bytes(), key);
+        assert!(p.key_history.is_empty());
+    }
+
+    #[test]
+    fn setkey4_keepold_retains_history() {
+        let (store, acl, actor) = setup();
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some("user@KERBER.TEST"));
+        w.u32(1);
+        w.u32(1);
+        w.u32(0);
+        w.u32(18);
+        w.opaque(&[0xCDu8; 32]);
+        w.u32(0);
+        w.opaque(&[]);
+        let n_old = {
+            let g = store.read().unwrap();
+            g.get_name(&PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]))
+                .unwrap()
+                .keys
+                .len()
+        };
+        let out = dispatch_kadm5(&store, &acl, &actor, SETKEY_PRINCIPAL4, &w.b).unwrap();
+        assert_eq!(ret_code(&out), 0);
+        let g = store.read().unwrap();
+        let p = g
+            .get_name(&PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]))
+            .unwrap();
+        assert_eq!(p.keys.len(), 1);
+        assert_eq!(p.key_history.len(), n_old);
+        assert_eq!(p.keys[0].key.as_bytes(), &[0xCDu8; 32]);
+    }
+
+    #[test]
+    fn setkey_acl_is_auth_setkey() {
+        let (store, _acl, _actor) = setup();
+        let limited = Acl::parse("limited@KERBER.TEST i\n");
+        let out = dispatch_kadm5(
+            &store,
+            &limited,
+            "limited@KERBER.TEST",
+            SETKEY_PRINCIPAL,
+            &setkey16_args("user@KERBER.TEST", 18, &[0xABu8; 32]),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&out), KADM5_AUTH_SETKEY);
+    }
+
+    #[test]
+    fn setkey_lockdown_is_protect_keys() {
+        let (store, acl, actor) = setup();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+        {
+            let mut g = store.write().unwrap();
+            g.apply_admin_fields(
+                &user,
+                Some(KDB_LOCKDOWN_KEYS),
+                None,
+                None,
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+        }
+        let out = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            SETKEY_PRINCIPAL,
+            &setkey16_args("user@KERBER.TEST", 18, &[0xABu8; 32]),
         )
         .unwrap();
         assert_eq!(ret_code(&out), KADM5_PROTECT_KEYS);

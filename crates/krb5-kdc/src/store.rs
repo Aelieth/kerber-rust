@@ -1248,6 +1248,64 @@ impl PrincipalStore {
         self.save_if_configured()
     }
 
+    /// Replace keys with caller-supplied material (`kadm5_setkey_principal`).
+    ///
+    /// `kvno == 0` on every entry picks the next version. `keepold` retains
+    /// prior kvnos in [`Principal::key_history`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`], or [`Error::Crypto`] when `keepold` collides with
+    /// an existing kvno.
+    pub fn set_keys(
+        &mut self,
+        name: &PrincipalName,
+        mut keys: Vec<KeyEntry>,
+        keepold: bool,
+    ) -> Result<(), Error> {
+        if keys.is_empty() {
+            return Err(Error::Crypto("setkey empty".into()));
+        }
+        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+        let want = keys[0].kvno;
+        if keys.iter().any(|k| k.kvno != want) {
+            return Err(Error::Crypto("setkey kvno".into()));
+        }
+        let kvno = if want == 0 {
+            p.keys
+                .iter()
+                .chain(p.key_history.iter())
+                .map(|k| k.kvno)
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1)
+        } else {
+            if keepold
+                && p.keys
+                    .iter()
+                    .chain(p.key_history.iter())
+                    .any(|k| k.kvno == want)
+            {
+                return Err(Error::Crypto("setkey kvno".into()));
+            }
+            want
+        };
+        for k in &mut keys {
+            k.kvno = kvno;
+        }
+        if keepold {
+            let old = std::mem::replace(&mut p.keys, keys);
+            p.key_history.extend(old);
+        } else {
+            p.key_history.clear();
+            p.keys = keys;
+        }
+        let snap = p.clone();
+        self.note_ulog(id, false, Some(snap));
+        self.save_if_configured()
+    }
+
     /// Apply kadm5 `modprinc` fields (mask already interpreted by the caller).
     ///
     /// # Errors

@@ -109,6 +109,7 @@ fn acl_parse_kadm5_style() {
     let acl = Acl::parse("admin@KERBER.TEST *\nuser@KERBER.TEST i\n# comment\n");
     assert!(acl.check("admin@KERBER.TEST", AdminOp::Create).is_ok());
     assert!(acl.check("admin@KERBER.TEST", AdminOp::Modify).is_ok());
+    assert!(acl.check("admin@KERBER.TEST", AdminOp::SetKey).is_ok());
     assert!(acl.check("admin@KERBER.TEST", AdminOp::Inquire).is_ok());
     assert_eq!(
         acl.check("admin@KERBER.TEST", AdminOp::Extract)

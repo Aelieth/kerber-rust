@@ -19,6 +19,8 @@ pub enum AdminOp {
     Extract,
     /// Modify attributes (`modprinc` / kadm5 `m`).
     Modify,
+    /// Set keys explicitly (`setkey` / kadm5 `s`). Implied by `*`/`x`.
+    SetKey,
     /// List principals/policies (kadm5 `l`).
     List,
     /// Incremental/full dump propagation (kadm5 `p`).
@@ -42,6 +44,8 @@ pub struct AclEntry {
     pub changepw: bool,
     /// `m` (modify) / `*`
     pub modify: bool,
+    /// `s` (setkey) / `*`
+    pub setkey: bool,
     /// `l` (list) / `*`
     pub list: bool,
     /// `p` (propagate) / `*`
@@ -84,6 +88,7 @@ impl Acl {
                 extract: perms.contains('e'),
                 changepw: all || perms.contains('c'),
                 modify: all || perms.contains('m'),
+                setkey: all || perms.contains('s'),
                 list: all || perms.contains('l'),
                 propagate: all || perms.contains('p'),
             });
@@ -103,6 +108,7 @@ impl Acl {
                 extract: true,
                 changepw: true,
                 modify: true,
+                setkey: true,
                 list: true,
                 propagate: true,
             }],
@@ -126,6 +132,7 @@ impl Acl {
                 AdminOp::Ktadd | AdminOp::Extract => e.extract,
                 AdminOp::ChangePassword => e.changepw,
                 AdminOp::Modify => e.modify,
+                AdminOp::SetKey => e.setkey,
                 AdminOp::List => e.list,
                 AdminOp::Propagate => e.propagate,
             };
@@ -202,6 +209,7 @@ fn op_name(op: AdminOp) -> &'static str {
         AdminOp::Inquire => "inquire",
         AdminOp::Extract => "extract",
         AdminOp::Modify => "modify",
+        AdminOp::SetKey => "setkey",
         AdminOp::List => "list",
         AdminOp::Propagate => "propagate",
     }
