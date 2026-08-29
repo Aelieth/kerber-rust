@@ -247,5 +247,30 @@ if echo "$SVC" | grep -q 'kvno ='; then
 fi
 kadmin_q 'modprinc -expire never host/testhost.kerber.test'
 
-log "expire.gate" "ok" ',"name_exp":true,"key_expired":true,"pwchange_service":true,"tgs_after_client_expire":true,"service_exp":true'
+echo "==== MIT kadmin +needchange → KEY_EXPIRED; changepw still issues ===="
+kadmin_q 'addprinc -pw need-secret needuser'
+NEEDGET="$(kadmin_q 'modprinc +needchange needuser'; kadmin_q 'getprinc needuser')"
+echo "$NEEDGET"
+echo "$NEEDGET" | grep -q 'REQUIRES_PWCHANGE'
+kadmin_q 'modprinc -password_changing_service kadmin/changepw'
+NEED="$(kinit_try 'printf "need-secret\n" | kinit needuser@KERBER.TEST')"
+echo "$NEED"
+echo "$NEED" | grep -qiE "Password has expired|key has expired|KEY_EXP"
+if echo "$NEED" | grep -qiE 'Authenticated|Ticket cache'; then
+    echo "+needchange principal obtained a TGT" >&2
+    exit 1
+fi
+kadmin_q 'modprinc +password_changing_service kadmin/changepw'
+docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+if ! docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf \
+    "$NAME" sh -c 'printf "need-secret\n" | kinit -S kadmin/changepw@KERBER.TEST needuser@KERBER.TEST'; then
+    docker exec "$NAME" cat /tmp/kdc.log >&2 || true
+    log "expire.gate" "error" ',"error":"+needchange changepw kinit failed"'
+    exit 1
+fi
+NEEDCPW="$(docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf "$NAME" klist)"
+echo "$NEEDCPW"
+echo "$NEEDCPW" | grep -q 'kadmin/changepw'
+
+log "expire.gate" "ok" ',"name_exp":true,"key_expired":true,"pwchange_service":true,"tgs_after_client_expire":true,"service_exp":true,"needchange":true'
 exit 0

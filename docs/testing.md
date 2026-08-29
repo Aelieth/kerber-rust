@@ -170,7 +170,8 @@ when that oracle is absent.
   on the Rust replica. In CI.
 - `scripts/expire-gate.sh` — MIT `kinit` NAME_EXP vs KEY_EXPIRED;
   `kinit -S kadmin/changepw` on a password-expired client; TGS `kvno`
-  after client `-pwexpire`/`-expire` still succeeds. In CI.
+  after client `-pwexpire`/`-expire` still succeeds; `modprinc +needchange`
+  is `KEY_EXPIRED` unless the server is `PWCHANGE_SERVICE`. In CI.
 - `scripts/flags-gate.sh` — MIT `modprinc` DISALLOW_*/OK_AS_DELEGATE/
   REQUIRES_HW_AUTH then `kinit`/`kvno`/`klist -f`. In CI.
 - `scripts/renew-gate.sh` — MIT `kinit -r 1d -l 5m` then `kinit -R`

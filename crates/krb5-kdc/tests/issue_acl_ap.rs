@@ -5,9 +5,10 @@ use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, string_to_key}
 use krb5_kdc::{
     Acl, AdminOp, Error, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED,
     KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_LOCKDOWN_KEYS,
-    KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE, KDB_REQUIRES_HW_AUTH, PrincipalStore, S2K_ITERS,
-    TEST_REALM, TEST_USER, TEST_USER_PASSWORD, acl_for_store, as_req, bootstrap_documented,
-    documented_admin_id, documented_changepw, documented_host, pa_enc_timestamp, tgs_req,
+    KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PWCHANGE,
+    PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, acl_for_store, as_req,
+    bootstrap_documented, documented_admin_id, documented_changepw, documented_host,
+    pa_enc_timestamp, tgs_req,
 };
 use krb5_protocol::Keytab;
 use krb5_protocol::{ReplayCache, as_req_sname, build_ap_req, tgs_req_ex, verify_ap_req};
@@ -637,6 +638,26 @@ fn as_rejects_expired_password_unless_pwchange_service() {
     )
     .unwrap();
     krb5_kdc::issue_as(&store, &changepw).expect("PWCHANGE_SERVICE allows expired key");
+}
+
+#[test]
+fn as_needchange_is_key_expired_unless_changepw() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    or_attr(&mut store, &cname, KDB_REQUIRES_PWCHANGE);
+    let err = krb5_kdc::issue_as(&store, &user_as_req(48)).unwrap_err();
+    assert_eq!(proto_code(err), err::KEY_EXPIRED);
+    let key = client_key();
+    let changepw = as_req_sname(
+        cname,
+        TEST_REALM,
+        49,
+        Some(vec![pa_enc_timestamp(&key).expect("pa-ts")]),
+        documented_changepw(),
+        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
+    )
+    .unwrap();
+    krb5_kdc::issue_as(&store, &changepw).expect("PWCHANGE_SERVICE allows +needchange");
 }
 
 #[test]

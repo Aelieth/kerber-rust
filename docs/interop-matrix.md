@@ -26,7 +26,7 @@ the script documents otherwise.
 | `history-mit-gate.sh` | MIT `kadmin.local` history-window on a MIT KDB | history=1 allows A→B→A; history=2 rejects B after A→B→C | harness |
 | `store-gate.sh` | MIT `kinit`/`kvno` vs MemoryStore KDC | `backend memory`; `user@KERBER.TEST` + host kvno | harness |
 | `iprop-gate.sh` | MIT `kpropd -A` GET_UPDATES + `krb5-iprop-pull` vs MIT kadmind | MIT `kinit extra` after master restart + serial-delta (no extra FULL_RESYNC); MIT `kinit extra2` on Rust replica with `setstr` TL 0x000b | harness |
-| `expire-gate.sh` | MIT `kinit` vs Rust KDC after `modprinc -expire`/`-pwexpire` | NAME_EXP vs KEY_EXPIRED; TGS `kvno` after client expiry; `kinit -S kadmin/changepw` | harness |
+| `expire-gate.sh` | MIT `kinit` vs Rust KDC after `modprinc -expire`/`-pwexpire`/`+needchange` | NAME_EXP vs KEY_EXPIRED; TGS `kvno` after client expiry; `kinit -S kadmin/changepw`; `+needchange` KEY_EXPIRED | harness |
 | `flags-gate.sh` | MIT `modprinc` +flag then `kinit`/`kvno`/`klist -f` | ALL_TIX revoked; no `F` when DISALLOW_FORWARDABLE; `O` when OK_AS_DELEGATE; SVR user2user; TGT_BASED POLICY; HW_AUTH no ticket | harness |
 | `renew-gate.sh` | MIT `kinit -R` / `kinit -p` vs Rust KDC | `renew until` preserved; `-allow_renewable` strips `R`; `klist -f` shows `P` | harness |
 | `postdate-gate.sh` | MIT `kinit -s` / `kinit -v` vs Rust KDC | INVALID `i` then TKT_NYV; validate then `kvno`; `-allow_postdated` is CANNOT_POSTDATE | harness |

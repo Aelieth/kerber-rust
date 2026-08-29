@@ -25,8 +25,8 @@ use crate::preauth::{fast_finished, unwrap_fast, unwrap_fast_padata, wrap_fast_r
 use crate::store::{
     KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED, KDB_DISALLOW_PROXIABLE,
     KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_NO_AUTH_DATA_REQUIRED,
-    KDB_OK_AS_DELEGATE, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH, Principal, random_key,
-    s2k_params,
+    KDB_OK_AS_DELEGATE, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PWCHANGE,
+    Principal, random_key, s2k_params,
 };
 
 /// Issued AS-REP plus the session key (for tests that decrypt the TGT).
@@ -1238,7 +1238,9 @@ fn check_db_times(client: Option<&Principal>, server: &Principal) -> Result<(), 
         if c.expiration != 0 && now > c.expiration {
             return Err(proto(err::NAME_EXP, "CLIENT EXPIRED"));
         }
-        if c.pw_expire != 0 && now > c.pw_expire && server.attributes & KDB_PWCHANGE_SERVICE == 0 {
+        let needchange = attr(c, KDB_REQUIRES_PWCHANGE);
+        let pw_lapsed = c.pw_expire != 0 && now > c.pw_expire;
+        if (needchange || pw_lapsed) && server.attributes & KDB_PWCHANGE_SERVICE == 0 {
             return Err(proto(err::KEY_EXPIRED, "CLIENT KEY EXPIRED"));
         }
     }
