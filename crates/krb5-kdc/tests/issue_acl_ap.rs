@@ -928,6 +928,37 @@ fn as_cannot_postdate_when_disallow() {
     assert_eq!(proto_code(err), err::CANNOT_POSTDATE);
 }
 
+fn renew_and_validate_tgs(issued: &krb5_kdc::IssuedAs, nonce: u32) -> krb5_types::TgsReq {
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    tgs_req_ex(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        PrincipalName::krbtgt(TEST_REALM),
+        TEST_REALM,
+        nonce,
+        KdcOptions::forwardable()
+            .with_bit(flag_bit::RENEW, true)
+            .with_bit(flag_bit::VALIDATE, true),
+        None,
+        Vec::new(),
+        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
+    )
+    .expect("RENEW+VALIDATE TGS-REQ")
+}
+
+#[test]
+fn tgs_renew_and_validate_together_is_badoption() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let from = KerberosTime::now().add_seconds(1).unwrap();
+    let issued = krb5_kdc::issue_as(&store, &postdated_as_req(116, from)).expect("postdated AS");
+    assert!(!tgt_part(&store, &issued).flags.renewable());
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let err = krb5_kdc::issue_tgs(&store, &renew_and_validate_tgs(&issued, 117)).unwrap_err();
+    assert_eq!(proto_code(err), err::BADOPTION);
+}
+
 #[test]
 fn tgs_honors_svr_tgt_based_lockout_and_ok_as_delegate() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");

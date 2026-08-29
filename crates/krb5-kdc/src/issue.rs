@@ -490,6 +490,9 @@ fn issue_tgs_from(
     let (enc_tkt, tgt_key, tgt_plain) = decrypt_presented_tgt(store, &ap, tkt_etype)?;
     let renew = body.kdc_options.bit(flag_bit::RENEW);
     let validate = body.kdc_options.bit(flag_bit::VALIDATE);
+    if renew && validate {
+        return Err(proto(err::BADOPTION, "RENEW with VALIDATE"));
+    }
     check_ticket_times(store, &enc_tkt, renew, validate)?;
     let sess_etype = EncryptionType::from_iana(enc_tkt.key.keytype)
         .or_else(|_| EncryptionType::known(enc_tkt.key.keytype))?;
@@ -596,6 +599,9 @@ fn issue_tgs_from(
     let mut flags;
     let ticket_renew_till;
     if renew {
+        if !enc_tkt.flags.renewable() {
+            return Err(proto(err::BADOPTION, "TICKET NOT RENEWABLE"));
+        }
         authtime = enc_tkt.authtime.clone();
         starttime = now.clone();
         let old_start = enc_tkt
