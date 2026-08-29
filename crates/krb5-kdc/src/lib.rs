@@ -52,9 +52,9 @@ pub use plugins::{
 };
 pub use store::{
     IPROP_FULL_RESYNC, IPROP_NIL, IPROP_OK, KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS,
-    KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH, KeyEntry, NamedPolicy, Policy, Principal,
-    PrincipalStore, RID_ADMINISTRATOR, RID_FIRST_USER, RID_KRBTGT, S2K_ITERS, TlData, UlogEntry,
-    random_key, s2k_params,
+    KDB_PWCHANGE_SERVICE, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH, KeyEntry, NamedPolicy, Policy,
+    Principal, PrincipalStore, RID_ADMINISTRATOR, RID_FIRST_USER, RID_KRBTGT, S2K_ITERS, TlData,
+    UlogEntry, random_key, s2k_params,
 };
 
 use krb5_types::PrincipalName;
@@ -158,6 +158,13 @@ pub fn bootstrap_realm(
     store.create_host(&acl, &actor, &documented_kadmin())?;
     store.create_host(&acl, &actor, &documented_changepw())?;
     store.create_host(&acl, &actor, &documented_kiprop())?;
+    let changepw = documented_changepw();
+    let attrs = store
+        .get_name(&changepw)
+        .map_or(store::KDB_PWCHANGE_SERVICE, |p| {
+            p.attributes | store::KDB_PWCHANGE_SERVICE
+        });
+    store.apply_admin_fields(&changepw, Some(attrs), None, None, None, None, false)?;
     Ok((store, acl))
 }
 

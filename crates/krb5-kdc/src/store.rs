@@ -28,6 +28,8 @@ pub const S2K_ITERS: u32 = 4096;
 pub const KDB_REQUIRES_PRE_AUTH: u32 = 0x0000_0080;
 /// MIT `KRB5_KDB_DISALLOW_ALL_TIX`.
 pub const KDB_DISALLOW_ALL_TIX: u32 = 0x0000_0040;
+/// MIT `KRB5_KDB_PWCHANGE_SERVICE` — expired keys may still AS to this server.
+pub const KDB_PWCHANGE_SERVICE: u32 = 0x0000_2000;
 /// MIT `KRB5_KDB_LOCKDOWN_KEYS`.
 pub const KDB_LOCKDOWN_KEYS: u32 = 0x0080_0000;
 /// MIT `KRB5_KDB_V1_BASE_LENGTH` (dump `len` field).
@@ -826,6 +828,11 @@ impl PrincipalStore {
         }
         self.insert_randkey(name, &randkey_etypes())?;
         let self_name = name.components_joined();
+        if self_name == "kadmin/changepw"
+            && let Some(p) = self.map.get_mut(&id)
+        {
+            p.attributes |= KDB_PWCHANGE_SERVICE;
+        }
         self.allow_s4u_from(name, &self_name);
         self.allow_s4u_to(name, &self_name);
         Ok(())

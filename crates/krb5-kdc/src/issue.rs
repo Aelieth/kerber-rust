@@ -22,7 +22,7 @@ use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::plugins::{PreauthAction, current_policy, run_as_preauth};
 use crate::preauth::{fast_finished, unwrap_fast, unwrap_fast_padata, wrap_fast_rep};
-use crate::store::{Principal, random_key, s2k_params};
+use crate::store::{KDB_PWCHANGE_SERVICE, Principal, random_key, s2k_params};
 
 /// Issued AS-REP plus the session key (for tests that decrypt the TGT).
 #[derive(Debug)]
@@ -310,6 +310,7 @@ fn issue_as_from(
         .key_for(etype)
         .or_else(|| server.best_key())
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no server key"))?;
+    check_db_times(Some(&client), &server)?;
     let session = random_key(etype)?;
     let now = KerberosTime::now();
     let life = requested_life(store, &client, body);
@@ -516,6 +517,8 @@ fn issue_tgs_from(
         .and_then(|e| server.key_for(e))
         .or_else(|| server.best_key())
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no server key"))?;
+    let tgs_client = store.fetch_name(&enc_tkt.cname)?;
+    check_db_times(tgs_client.as_ref(), &server)?;
     let mut ticket_cname = enc_tkt.cname.clone();
     let mut ticket_crealm = utf8_realm(&enc_tkt.crealm).to_owned();
     let mut evidence_logon = None;
@@ -1051,6 +1054,23 @@ fn proto(code: i32, text: &str) -> Error {
         text: Some(text.to_owned()),
         e_data: None,
     }
+}
+
+/// MIT `validate_as_request`: 0 = never; principal expiry before password expiry.
+fn check_db_times(client: Option<&Principal>, server: &Principal) -> Result<(), Error> {
+    let now = crate::store::unix_now_u32();
+    if let Some(c) = client {
+        if c.expiration != 0 && now > c.expiration {
+            return Err(proto(err::NAME_EXP, "CLIENT EXPIRED"));
+        }
+        if c.pw_expire != 0 && now > c.pw_expire && server.attributes & KDB_PWCHANGE_SERVICE == 0 {
+            return Err(proto(err::KEY_EXPIRED, "CLIENT KEY EXPIRED"));
+        }
+    }
+    if server.expiration != 0 && now > server.expiration {
+        return Err(proto(err::SERVICE_EXP, "SERVICE EXPIRED"));
+    }
+    Ok(())
 }
 
 fn utf8_realm(r: &krb5_types::Realm) -> &str {

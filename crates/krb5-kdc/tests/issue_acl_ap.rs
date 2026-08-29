@@ -4,13 +4,14 @@ use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, string_to_key};
 use krb5_kdc::{
     Acl, AdminOp, Error, PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
-    acl_for_store, as_req, bootstrap_documented, documented_admin_id, documented_host,
-    pa_enc_timestamp, tgs_req,
+    acl_for_store, as_req, bootstrap_documented, documented_admin_id, documented_changepw,
+    documented_host, pa_enc_timestamp, tgs_req,
 };
 use krb5_protocol::Keytab;
-use krb5_protocol::{ReplayCache, build_ap_req, verify_ap_req};
+use krb5_protocol::{ReplayCache, as_req_sname, build_ap_req, verify_ap_req};
 use krb5_types::{
-    EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, PrincipalName, ascii, err, ku,
+    EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, KrbError, PrincipalName, ascii, err,
+    ku,
 };
 
 fn client_key() -> ProtocolKey {
@@ -515,4 +516,106 @@ fn documented_kadm5_acl_file_shape() {
         acl.check("user@KERBER.TEST", AdminOp::Create).unwrap_err(),
         Error::AclDenied
     );
+}
+
+fn user_as_req(nonce: u32) -> krb5_types::AsReq {
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = client_key();
+    as_req(
+        cname,
+        TEST_REALM,
+        nonce,
+        Some(vec![pa_enc_timestamp(&key).expect("pa-ts")]),
+    )
+    .unwrap()
+}
+
+fn proto_code(e: Error) -> i32 {
+    match e {
+        Error::Protocol { code, .. } => code,
+        other => panic!("expected protocol error, got {other:?}"),
+    }
+}
+
+#[test]
+fn as_rejects_expired_principal_before_expired_password() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    store
+        .apply_admin_fields(&cname, None, None, Some(1), Some(1), None, false)
+        .unwrap();
+    let err = krb5_kdc::issue_as(&store, &user_as_req(41)).unwrap_err();
+    assert_eq!(proto_code(err), err::NAME_EXP);
+
+    let raw = encode(&user_as_req(42)).unwrap();
+    let reply = krb5_kdc::handle_request(&store, &raw).unwrap();
+    let krb: KrbError = decode(&reply).expect("KRB-ERROR");
+    assert_eq!(krb.error_code, err::NAME_EXP);
+}
+
+#[test]
+fn as_rejects_expired_password_unless_pwchange_service() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    store
+        .apply_admin_fields(&cname, None, None, Some(0), Some(1), None, false)
+        .unwrap();
+    let err = krb5_kdc::issue_as(&store, &user_as_req(43)).unwrap_err();
+    assert_eq!(proto_code(err), err::KEY_EXPIRED);
+
+    let key = client_key();
+    let changepw = as_req_sname(
+        cname.clone(),
+        TEST_REALM,
+        44,
+        Some(vec![pa_enc_timestamp(&key).expect("pa-ts")]),
+        documented_changepw(),
+        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
+    )
+    .unwrap();
+    krb5_kdc::issue_as(&store, &changepw).expect("PWCHANGE_SERVICE allows expired key");
+}
+
+#[test]
+fn as_zero_expiration_still_issues() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    store
+        .apply_admin_fields(&cname, None, None, Some(0), Some(0), None, false)
+        .unwrap();
+    krb5_kdc::issue_as(&store, &user_as_req(45)).expect("0 = never");
+    store
+        .apply_admin_fields(
+            &cname,
+            None,
+            None,
+            Some(u32::MAX),
+            Some(u32::MAX),
+            None,
+            false,
+        )
+        .unwrap();
+    krb5_kdc::issue_as(&store, &user_as_req(46)).expect("future still issues");
+}
+
+#[test]
+fn tgs_rejects_expired_client_after_tgt_issued() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let issued = krb5_kdc::issue_as(&store, &user_as_req(47)).expect("AS while unexpired");
+    store
+        .apply_admin_fields(&cname, None, None, Some(1), None, None, false)
+        .unwrap();
+    let tgs = tgs_req(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        48,
+    )
+    .expect("TGS-REQ");
+    let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
+    assert_eq!(proto_code(err), err::NAME_EXP);
 }
