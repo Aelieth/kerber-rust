@@ -88,6 +88,8 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   allocates a RID when kdbe has none, so a new principal's PAC is
   not RID 1000 (`scripts/iprop-gate.sh`). `cpw -randkey` / setkey
   stamp last-password-change and last-modified (`scripts/kadmin-gate.sh`).
+  GSS `GSS_C_DELEG_FLAG` carries a 0x8003 KRB-CRED trailer; the acceptor
+  bound-checks `Dlgth` (`scripts/gss-gate.sh`).
 
 - KDB extension surface: `PrincipalRead` / `PrincipalWrite` /
   `StoreLifecycle`. Dump-v7 is the default backend; `db_library=memory`

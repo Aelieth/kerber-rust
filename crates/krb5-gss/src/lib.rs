@@ -11,8 +11,11 @@ use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt, verify_checksum,
 };
-use krb5_protocol::{ReplayCache, build_ap_rep, build_ap_req_with_cksum};
-use krb5_types::{ApOptions, ApRep, Checksum, EncApRepPart, PrincipalName, Realm, Ticket, ku};
+use krb5_protocol::{ReplayCache, build_ap_rep, build_ap_req_with_cksum, unwrap_krb_cred};
+use krb5_types::{
+    ApOptions, ApRep, Checksum, EncApRepPart, EncKrbCredPart, EncryptedData, EncryptionKey,
+    KerberosTime, KrbCred, KrbCredInfo, Microseconds, PrincipalName, Realm, Ticket, ku,
+};
 use thiserror::Error;
 
 /// ISO OID 1.2.840.113554.1.2.2 (Kerberos V5 GSS).
@@ -32,11 +35,14 @@ const FLAG_SENT_BY_ACCEPTOR: u8 = 0x01;
 const FLAG_SEALED: u8 = 0x02;
 const FLAG_ACCEPTOR_SUBKEY: u8 = 0x04;
 
+/// RFC 4121 `GSS_C_DELEG_FLAG`.
+pub const GSS_C_DELEG: u32 = 1;
 const GSS_C_MUTUAL: u32 = 2;
 const GSS_C_REPLAY: u32 = 4;
 const GSS_C_SEQUENCE: u32 = 8;
 const GSS_C_CONF: u32 = 16;
 const GSS_C_INTEG: u32 = 32;
+const KRB5_GSS_FOR_CREDS: u16 = 1;
 
 /// GSS-API error.
 #[derive(Debug, Error)]
@@ -138,6 +144,21 @@ pub struct GssContext {
     replay: ReplayCache,
     /// Authenticated client `name@REALM` (set on accept; initiator from cname).
     pub client: Option<String>,
+    /// Delegated client from a 0x8003 KRB-CRED trailer (`GSS_C_DELEG_FLAG`).
+    pub delegated: Option<String>,
+}
+
+/// Forwarded TGT (or other ticket) to embed in a GSS delegation checksum.
+#[derive(Clone, Debug)]
+pub struct DelegCred {
+    /// Ticket to forward.
+    pub ticket: Ticket,
+    /// Session key of `ticket` (goes in `KrbCredInfo.key`).
+    pub session: ProtocolKey,
+    /// Client realm.
+    pub crealm: Realm,
+    /// Client name.
+    pub cname: PrincipalName,
 }
 
 /// Per-message sequence window (RFC 4121 replay detection).
@@ -156,6 +177,7 @@ impl GssContext {
         cname: &PrincipalName,
         mutual: bool,
         channel_bindings: Option<&ChannelBindings>,
+        deleg: Option<&DelegCred>,
     ) -> Result<(Self, Vec<u8>), Error> {
         let opts = if mutual {
             ApOptions::mutual_required()
@@ -166,12 +188,18 @@ impl GssContext {
         if mutual {
             flags |= GSS_C_MUTUAL;
         }
+        let deleg_der = if let Some(d) = deleg {
+            flags |= GSS_C_DELEG;
+            Some(krb_cred_for_deleg(session, d)?)
+        } else {
+            None
+        };
         let cksum = Checksum {
             cksumtype: GSS_CHECKSUM_TYPE,
-            checksum: authenticator_checksum(channel_bindings, flags).into(),
+            checksum: authenticator_checksum(channel_bindings, flags, deleg_der.as_deref()).into(),
         };
         let sub = random_subkey(session)?;
-        let enc_sub = krb5_types::EncryptionKey {
+        let enc_sub = EncryptionKey {
             keytype: sub.etype().to_iana(),
             keyvalue: sub.as_bytes().to_vec().into(),
         };
@@ -202,6 +230,7 @@ impl GssContext {
                     cname.components_joined(),
                     String::from_utf8_lossy(crealm.as_bytes())
                 )),
+                delegated: None,
             },
             token,
         ))
@@ -239,6 +268,7 @@ impl GssContext {
             rpcsec_init_window: false,
             replay: ReplayCache::new(),
             client: None,
+            delegated: None,
         };
         let params = krb5_protocol::ApVerifyParams {
             expected_server,
@@ -255,7 +285,22 @@ impl GssContext {
             ok.authenticator.cname.components_joined(),
             String::from_utf8_lossy(ok.authenticator.crealm.as_bytes())
         );
+        let ticket_session = ProtocolKey::from_bytes(
+            EncryptionType::from_iana(ok.ticket_part.key.keytype)
+                .or_else(|_| EncryptionType::known(ok.ticket_part.key.keytype))?,
+            ok.ticket_part.key.keyvalue.as_ref(),
+        )?;
+        let subkey = if let Some(sk) = &ok.authenticator.subkey {
+            Some(ProtocolKey::from_bytes(
+                EncryptionType::from_iana(sk.keytype)
+                    .or_else(|_| EncryptionType::known(sk.keytype))?,
+                sk.keyvalue.as_ref(),
+            )?)
+        } else {
+            None
+        };
         let mut want_mutual = ok.mutual_required;
+        let mut delegated = None;
         if let Some(ck) = &ok.authenticator.cksum
             && ck.cksumtype == GSS_CHECKSUM_TYPE
         {
@@ -263,22 +308,17 @@ impl GssContext {
             if ck.checksum.as_ref().len() >= 24 {
                 let mut f = [0u8; 4];
                 f.copy_from_slice(&ck.checksum.as_ref()[20..24]);
-                want_mutual |= u32::from_le_bytes(f) & GSS_C_MUTUAL != 0;
+                let flags = u32::from_le_bytes(f);
+                want_mutual |= flags & GSS_C_MUTUAL != 0;
+                delegated = extract_delegated(
+                    ck.checksum.as_ref(),
+                    flags,
+                    subkey.as_ref(),
+                    &ticket_session,
+                )?;
             }
         }
-        let sess = if let Some(sk) = &ok.authenticator.subkey {
-            ProtocolKey::from_bytes(
-                krb5_crypto::EncryptionType::from_iana(sk.keytype)
-                    .or_else(|_| krb5_crypto::EncryptionType::known(sk.keytype))?,
-                sk.keyvalue.as_ref(),
-            )?
-        } else {
-            ProtocolKey::from_bytes(
-                krb5_crypto::EncryptionType::from_iana(ok.ticket_part.key.keytype)
-                    .or_else(|_| krb5_crypto::EncryptionType::known(ok.ticket_part.key.keytype))?,
-                ok.ticket_part.key.keyvalue.as_ref(),
-            )?
-        };
+        let sess = subkey.unwrap_or(ticket_session);
         let base = ok.authenticator.seq_number.unwrap_or(0);
         let out = Self {
             session: sess,
@@ -291,6 +331,7 @@ impl GssContext {
             rpcsec_init_window: false,
             replay: ctx.replay,
             client: Some(client),
+            delegated,
         };
         let mut ap_rep_tok = None;
         if want_mutual {
@@ -340,15 +381,23 @@ impl GssContext {
         }
     }
 
+    fn send_key(&self) -> (&ProtocolKey, u8) {
+        if let Some(k) = &self.acceptor_subkey {
+            (k, FLAG_ACCEPTOR_SUBKEY)
+        } else {
+            (&self.session, 0)
+        }
+    }
+
     /// Per-message wrap (confidentiality). RFC 4121 §4.2.6 token.
     ///
     /// # Errors
     ///
     /// Crypto failures.
     pub fn wrap(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, Error> {
-        // RFC 4121 RRC: rotate EC bytes of ciphertext toward the header so
-        // SSPI can decrypt in place. AES confounder is 16 octets.
-        self.wrap_with_rrc_inner(plaintext, 16)
+        // MIT 1.22.2 libgssapi_krb5 wrap tokens use RRC=0 (observed in
+        // gss-gate). wrap_with_rrc(16) remains for SSPI in-place decrypt.
+        self.wrap_with_rrc_inner(plaintext, 0)
     }
 
     /// Unwrap a wrap token. Sequence numbers are checked.
@@ -449,6 +498,12 @@ impl GssContext {
         &self.session
     }
 
+    /// Delegated initiator name if `GSS_C_DELEG_FLAG` carried a KRB-CRED.
+    #[must_use]
+    pub fn delegated(&self) -> Option<&str> {
+        self.delegated.as_deref()
+    }
+
     /// Wrap with an explicit RRC (tests pin rotate direction).
     ///
     /// # Errors
@@ -481,10 +536,12 @@ impl GssContext {
 
     fn wrap_with_rrc_inner(&mut self, plaintext: &[u8], rrc: u16) -> Result<Vec<u8>, Error> {
         let usage = seal_usage(self.initiator);
-        let header = wrap_header(self.initiator, true, self.send_seq);
+        let (key, extra) = self.send_key();
+        let mut header = wrap_header(self.initiator, true, self.send_seq);
+        header[2] |= extra;
         let mut to_enc = plaintext.to_vec();
         to_enc.extend_from_slice(&header);
-        let cipher = encrypt(&self.session, usage, &to_enc)?;
+        let cipher = encrypt(key, usage, &to_enc)?;
         self.send_seq = self.send_seq.wrapping_add(1);
         let mut tok = header.to_vec();
         tok.extend_from_slice(&cipher);
@@ -533,12 +590,112 @@ fn random_subkey(session: &ProtocolKey) -> Result<ProtocolKey, Error> {
     ProtocolKey::from_bytes(session.etype(), &b).map_err(Error::from)
 }
 
-fn authenticator_checksum(cb: Option<&ChannelBindings>, flags: u32) -> Vec<u8> {
-    let mut v = Vec::with_capacity(24);
+fn authenticator_checksum(
+    cb: Option<&ChannelBindings>,
+    flags: u32,
+    deleg_der: Option<&[u8]>,
+) -> Vec<u8> {
+    let extra = deleg_der.map_or(0, |d| 4 + d.len());
+    let mut v = Vec::with_capacity(24 + extra);
     v.extend_from_slice(&16u32.to_le_bytes());
     v.extend_from_slice(&ChannelBindings::bnd_hash(cb));
     v.extend_from_slice(&flags.to_le_bytes());
+    if let Some(der) = deleg_der {
+        v.extend_from_slice(&KRB5_GSS_FOR_CREDS.to_le_bytes());
+        let n = u16::try_from(der.len()).unwrap_or(u16::MAX);
+        v.extend_from_slice(&n.to_le_bytes());
+        v.extend_from_slice(der);
+    }
     v
+}
+
+fn krb_cred_for_deleg(ticket_session: &ProtocolKey, deleg: &DelegCred) -> Result<Vec<u8>, Error> {
+    let realm = String::from_utf8_lossy(deleg.crealm.as_bytes());
+    let info = KrbCredInfo {
+        key: EncryptionKey {
+            keytype: deleg.session.etype().to_iana(),
+            keyvalue: deleg.session.as_bytes().to_vec().into(),
+        },
+        prealm: Some(deleg.crealm.clone()),
+        pname: Some(deleg.cname.clone()),
+        flags: None,
+        authtime: None,
+        starttime: None,
+        endtime: None,
+        renew_till: None,
+        srealm: Some(deleg.crealm.clone()),
+        sname: Some(PrincipalName::krbtgt(realm.as_ref())),
+        caddr: None,
+    };
+    let now = KerberosTime::now();
+    let part = EncKrbCredPart {
+        ticket_info: vec![info],
+        nonce: None,
+        timestamp: Some(now.clone()),
+        usec: Some(Microseconds::from_subsec_micros(
+            now.0.timestamp_subsec_micros(),
+        )),
+        s_address: None,
+        r_address: None,
+    };
+    let der = encode(&part)?;
+    let usage = KeyUsage::new(ku::KRB_CRED_ENC_PART)?;
+    let cipher = encrypt(ticket_session, usage, &der)?;
+    let cred = KrbCred {
+        pvno: KrbCred::PVNO,
+        msg_type: KrbCred::MSG_TYPE,
+        tickets: vec![deleg.ticket.clone()],
+        enc_part: EncryptedData {
+            etype: ticket_session.etype().to_iana(),
+            kvno: None,
+            cipher: cipher.into(),
+        },
+    };
+    Ok(encode(&cred)?)
+}
+
+fn extract_delegated(
+    cksum: &[u8],
+    flags: u32,
+    subkey: Option<&ProtocolKey>,
+    ticket_session: &ProtocolKey,
+) -> Result<Option<String>, Error> {
+    if flags & GSS_C_DELEG == 0 {
+        return Ok(None);
+    }
+    if cksum.len() < 28 {
+        return Err(Error::Truncated);
+    }
+    let dlgth = usize::from(u16::from_le_bytes(
+        cksum[26..28].try_into().map_err(|_| Error::Truncated)?,
+    ));
+    if dlgth > cksum.len() - 28 {
+        return Err(Error::Truncated);
+    }
+    let raw = &cksum[28..28 + dlgth];
+    let mut part = None;
+    if let Some(sk) = subkey {
+        part = unwrap_krb_cred(sk, raw, &ReplayCache::new()).ok();
+    }
+    if part.is_none() {
+        part = unwrap_krb_cred(ticket_session, raw, &ReplayCache::new()).ok();
+    }
+    let part = if let Some(p) = part {
+        p
+    } else {
+        let msg: KrbCred = decode(raw)?;
+        let enc: EncKrbCredPart = decode(msg.enc_part.cipher.as_ref())?;
+        (msg, enc)
+    };
+    let info = part.1.ticket_info.first().ok_or(Error::Truncated)?;
+    let name = info
+        .pname
+        .as_ref()
+        .map_or(String::new(), PrincipalName::components_joined);
+    let realm = info.prealm.as_ref().map_or_else(String::new, |r| {
+        String::from_utf8_lossy(r.as_bytes()).into_owned()
+    });
+    Ok(Some(format!("{name}@{realm}")))
 }
 
 fn check_channel_bindings(cksum: &[u8], local: Option<&ChannelBindings>) -> Result<(), Error> {
@@ -869,6 +1026,7 @@ mod tests {
             &cname,
             false,
             None,
+            None,
         )
         .unwrap();
         let host = store.get_name(&documented_host()).unwrap();
@@ -888,7 +1046,7 @@ mod tests {
     fn wrap_unwrap_mic_round_trip() {
         let (mut init, mut acc) = contexts();
         let wrapped = init.wrap(b"hello gss").unwrap();
-        assert_ne!(&wrapped[6..8], &[0, 0], "production wrap emits RRC≠0");
+        assert_eq!(&wrapped[6..8], &[0, 0], "MIT wrap uses RRC=0");
         let plain = acc.unwrap(&wrapped).unwrap();
         assert_eq!(plain, b"hello gss");
         let mic = init.get_mic(b"hello gss").unwrap();
@@ -956,6 +1114,7 @@ mod tests {
             &cname,
             false,
             Some(&cb),
+            None,
         )
         .unwrap();
         let host = store.get_name(&documented_host()).unwrap();
@@ -1059,6 +1218,7 @@ mod tests {
             &ascii(TEST_REALM),
             &cname,
             false,
+            None,
             None,
         )
         .unwrap();
@@ -1178,5 +1338,160 @@ mod tests {
         assert_ne!(&tok[6..8], &[0, 0], "RRC field must be non-zero");
         let plain = acc.unwrap(&tok).unwrap();
         assert_eq!(plain, b"rrc-payload");
+    }
+
+    fn user_host() -> (
+        krb5_kdc::IssuedAs,
+        krb5_kdc::IssuedTgs,
+        ProtocolKey,
+        PrincipalName,
+    ) {
+        let (store, _) = bootstrap_documented().unwrap();
+        let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+        let key = string_to_key(
+            EncryptionType::Aes256CtsHmacSha196,
+            TEST_USER_PASSWORD,
+            cname.default_salt(TEST_REALM),
+            Some(&S2K_ITERS.to_be_bytes()),
+        )
+        .unwrap();
+        let req = as_req(
+            cname.clone(),
+            TEST_REALM,
+            41,
+            Some(vec![pa_enc_timestamp(&key).unwrap()]),
+        )
+        .unwrap();
+        let as_out = krb5_kdc::issue_as(&store, &req).unwrap();
+        let tgs = tgs_req(
+            as_out.rep.0.ticket.clone(),
+            &as_out.session_key,
+            TEST_REALM,
+            &cname,
+            documented_host(),
+            TEST_REALM,
+            42,
+        )
+        .unwrap();
+        let tgs_out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
+        let host = store.get_name(&documented_host()).unwrap();
+        let skey = host.best_key().unwrap().key.clone();
+        (as_out, tgs_out, skey, cname)
+    }
+
+    #[test]
+    fn deleg_checksum_carries_krb_cred() {
+        let (as_out, tgs_out, _skey, cname) = user_host();
+        let deleg = DelegCred {
+            ticket: as_out.rep.0.ticket.clone(),
+            session: as_out.session_key.clone(),
+            crealm: ascii(TEST_REALM),
+            cname: cname.clone(),
+        };
+        let (_init, token) = GssContext::init_sec_context(
+            tgs_out.rep.0.ticket.clone(),
+            &tgs_out.session_key,
+            &ascii(TEST_REALM),
+            &cname,
+            false,
+            None,
+            Some(&deleg),
+        )
+        .unwrap();
+        let inner = gss_unwrap_app(&token).unwrap();
+        let ap: krb5_types::ApReq = decode(&inner[2..]).unwrap();
+        let usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR).unwrap();
+        let plain = decrypt(
+            &tgs_out.session_key,
+            usage,
+            ap.authenticator.cipher.as_ref(),
+        )
+        .unwrap();
+        let auth: krb5_types::Authenticator = decode(&plain).unwrap();
+        let ck = auth.cksum.expect("0x8003");
+        assert_eq!(ck.cksumtype, GSS_CHECKSUM_TYPE);
+        let b = ck.checksum.as_ref();
+        assert!(b.len() > 28, "deleg trailer missing: len={}", b.len());
+        let flags = u32::from_le_bytes(b[20..24].try_into().unwrap());
+        assert_ne!(flags & GSS_C_DELEG, 0);
+        assert_eq!(&b[24..26], &KRB5_GSS_FOR_CREDS.to_le_bytes());
+    }
+
+    #[test]
+    fn accept_hostile_dlgth_is_truncated() {
+        let (as_out, tgs_out, skey, cname) = user_host();
+        let deleg = DelegCred {
+            ticket: as_out.rep.0.ticket.clone(),
+            session: as_out.session_key.clone(),
+            crealm: ascii(TEST_REALM),
+            cname: cname.clone(),
+        };
+        let der = krb_cred_for_deleg(&tgs_out.session_key, &deleg).unwrap();
+        let mut ck = authenticator_checksum(None, GSS_C_DELEG | GSS_C_INTEG, Some(&der));
+        ck[26..28].copy_from_slice(&0xFFFFu16.to_le_bytes());
+        let cksum = Checksum {
+            cksumtype: GSS_CHECKSUM_TYPE,
+            checksum: ck.into(),
+        };
+        let sub = random_subkey(&tgs_out.session_key).unwrap();
+        let enc_sub = EncryptionKey {
+            keytype: sub.etype().to_iana(),
+            keyvalue: sub.as_bytes().to_vec().into(),
+        };
+        let ap = build_ap_req_with_cksum(
+            tgs_out.rep.0.ticket.clone(),
+            &tgs_out.session_key,
+            &ascii(TEST_REALM),
+            &cname,
+            ApOptions::none(),
+            Some(cksum),
+            Some(enc_sub),
+        )
+        .unwrap();
+        let token = gss_wrap_app(TOK_AP_REQ, &encode(&ap).unwrap());
+        let Err(err) = GssContext::accept_sec_context(
+            &token,
+            std::slice::from_ref(&skey),
+            None,
+            Some(&documented_host()),
+            Some(TEST_REALM),
+        ) else {
+            panic!("hostile Dlgth must not accept")
+        };
+        assert!(
+            matches!(err, Error::Truncated),
+            "hostile Dlgth must be Truncated, got {err}"
+        );
+    }
+
+    #[test]
+    fn accept_extracts_delegated_client() {
+        let (as_out, tgs_out, skey, cname) = user_host();
+        let deleg = DelegCred {
+            ticket: as_out.rep.0.ticket.clone(),
+            session: as_out.session_key.clone(),
+            crealm: ascii(TEST_REALM),
+            cname: cname.clone(),
+        };
+        let (_init, token) = GssContext::init_sec_context(
+            tgs_out.rep.0.ticket.clone(),
+            &tgs_out.session_key,
+            &ascii(TEST_REALM),
+            &cname,
+            false,
+            None,
+            Some(&deleg),
+        )
+        .unwrap();
+        let (acc, _) = GssContext::accept_sec_context(
+            &token,
+            std::slice::from_ref(&skey),
+            None,
+            Some(&documented_host()),
+            Some(TEST_REALM),
+        )
+        .unwrap();
+        let want = format!("{TEST_USER}@{TEST_REALM}");
+        assert_eq!(acc.delegated(), Some(want.as_str()));
     }
 }

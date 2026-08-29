@@ -53,6 +53,7 @@ int main(int argc, char **argv) {
     const char *msg = argv[3];
     const char *ip = argv[4];
     int port = atoi(argv[5]);
+    int want_deleg = argc >= 7 && strcmp(argv[6], "deleg") == 0;
 
     char namebuf[256];
     snprintf(namebuf, sizeof namebuf, "%s@%s", service, host);
@@ -87,7 +88,8 @@ int main(int argc, char **argv) {
             &ctx,
             target,
             (gss_OID)gss_mech_krb5,
-            GSS_C_MUTUAL_FLAG | GSS_C_CONF_FLAG | GSS_C_INTEG_FLAG,
+            GSS_C_MUTUAL_FLAG | GSS_C_CONF_FLAG | GSS_C_INTEG_FLAG
+                | (want_deleg ? GSS_C_DELEG_FLAG : 0),
             0,
             GSS_C_NO_CHANNEL_BINDINGS,
             (in.length ? &in : GSS_C_NO_BUFFER),

@@ -12,6 +12,10 @@ publish.workspace = true
 name = "krb5-gss-accept"
 path = "src/bin/krb5-gss-accept.rs"
 
+[[bin]]
+name = "krb5-gss-init"
+path = "src/bin/krb5-gss-init.rs"
+
 [dependencies]
 krb5-asn1.workspace = true
 krb5-crypto.workspace = true

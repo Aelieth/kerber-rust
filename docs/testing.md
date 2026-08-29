@@ -64,7 +64,10 @@ Stage 4/5 GSS: `scripts/gss-gate.sh` copies `krb5-gss-accept` into the
 MIT 1.22.2 container, exports `host/testhost.kerber.test` to a keytab,
 and runs an out-of-process MIT `libgssapi_krb5` initiator (`scripts/gss-mit-client.c`)
 that wraps `hello-from-mit-gss`. The Rust acceptor must unwrap that
-plaintext.
+plaintext. A second MIT initiator with `GSS_C_DELEG_FLAG` must make the
+acceptor print `gss-accept delegated=user@KERBER.TEST`. A Rust initiator
+with a KRB-CRED trailer must make MIT `gss-mit-server` print the same
+name.
 
 PKINIT: `scripts/pkinit-gate.sh` **fails** unless MIT `pkinit.so` is
 present and MIT `kinit -X X509_user_identity=FILE:` succeeds against

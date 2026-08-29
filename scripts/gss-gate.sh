@@ -21,7 +21,7 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
-cargo build -p krb5-gss --bin krb5-gss-accept
+cargo build -p krb5-gss --bin krb5-gss-accept --bin krb5-gss-init
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
@@ -55,7 +55,8 @@ if [ "$ok" -ne 1 ]; then
 fi
 
 docker cp target/debug/krb5-gss-accept "$NAME":/tmp/krb5-gss-accept
-docker exec "$NAME" chmod +x /tmp/krb5-gss-accept
+docker cp target/debug/krb5-gss-init "$NAME":/tmp/krb5-gss-init
+docker exec "$NAME" chmod +x /tmp/krb5-gss-accept /tmp/krb5-gss-init
 
 kadmin_local() {
     docker exec \
@@ -101,4 +102,100 @@ echo "$ACCEPT"
 echo "$ACCEPT" | grep -q 'gss-accept unwrap ok'
 echo "$ACCEPT" | grep -q "$MSG"
 
-log "gss.gate" "ok" ",\"acceptor\":\"krb5-gss\",\"initiator\":\"mit-libgssapi\""
+echo "==== MIT libgssapi_krb5 initiator with GSS_C_DELEG_FLAG ===="
+docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
+sleep 0.2
+docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /etc/krb5kdc/testhost.keytab --listen 127.0.0.1:4444 >/tmp/gss-accept-deleg.log 2>&1'
+ok=0
+for _ in $(seq 1 20); do
+    if docker exec "$NAME" grep -q 'listening' /tmp/gss-accept-deleg.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.15
+done
+[ "$ok" = 1 ] || {
+    docker exec "$NAME" cat /tmp/gss-accept-deleg.log >&2 || true
+    log "gss.gate" "error" ',"error":"gss-accept did not listen for deleg"'
+    exit 1
+}
+docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
+    /tmp/gss-mit-client testhost.kerber.test host "$MSG" 127.0.0.1 4444 deleg
+DELEG_LOG="$(docker exec "$NAME" cat /tmp/gss-accept-deleg.log 2>/dev/null || true)"
+echo "$DELEG_LOG"
+echo "$DELEG_LOG" | grep -q 'gss-accept unwrap ok'
+echo "$DELEG_LOG" | grep -q 'gss-accept delegated=user@KERBER.TEST'
+
+echo "==== compile MIT acceptor helper ===="
+docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
+docker cp "$ROOT/scripts/gss-mit-server.c" "$NAME":/tmp/gss-mit-server.c
+if ! docker exec "$NAME" cc -o /tmp/gss-mit-server /tmp/gss-mit-server.c -lgssapi_krb5 -lkrb5; then
+    log "gss.gate" "error" ',"error":"cc gss-mit-server failed"'
+    exit 1
+fi
+docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
+    kvno host/testhost.kerber.test@KERBER.TEST
+
+echo "==== Rust initiator (no deleg) vs MIT acceptor ===="
+docker exec -d \
+    -e KRB5_KTNAME=/etc/krb5kdc/testhost.keytab \
+    "$NAME" sh -c '/tmp/gss-mit-server /etc/krb5kdc/testhost.keytab 127.0.0.1 4446 >/tmp/gss-mit-server-plain.log 2>&1'
+ok=0
+for _ in $(seq 1 20); do
+    if docker exec "$NAME" grep -q 'listening' /tmp/gss-mit-server-plain.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.15
+done
+[ "$ok" = 1 ] || {
+    docker exec "$NAME" cat /tmp/gss-mit-server-plain.log >&2 || true
+    log "gss.gate" "error" ',"error":"mit-gss-server plain did not listen"'
+    exit 1
+}
+if ! docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
+    /tmp/krb5-gss-init --ccache /tmp/krb5cc_harness --host testhost.kerber.test \
+    --ip 127.0.0.1 --port 4446; then
+    echo "==== mit-gss-server-plain.log ===="
+    docker exec "$NAME" cat /tmp/gss-mit-server-plain.log 2>/dev/null || true
+    log "gss.gate" "error" ',"error":"rust gss-init plain failed"'
+    exit 1
+fi
+PLAIN_ACC="$(docker exec "$NAME" cat /tmp/gss-mit-server-plain.log 2>/dev/null || true)"
+echo "$PLAIN_ACC"
+echo "$PLAIN_ACC" | grep -q 'mit-gss unwrap ok hello-from-rust-gss'
+
+echo "==== Rust initiator GSS_C_DELEG_FLAG vs MIT acceptor ===="
+docker exec -d \
+    -e KRB5_KTNAME=/etc/krb5kdc/testhost.keytab \
+    -e KRB5_TRACE=/tmp/gss-mit-trace \
+    "$NAME" sh -c '/tmp/gss-mit-server /etc/krb5kdc/testhost.keytab 127.0.0.1 4445 >/tmp/gss-mit-server.log 2>&1'
+ok=0
+for _ in $(seq 1 20); do
+    if docker exec "$NAME" grep -q 'listening' /tmp/gss-mit-server.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.15
+done
+[ "$ok" = 1 ] || {
+    docker exec "$NAME" cat /tmp/gss-mit-server.log >&2 || true
+    log "gss.gate" "error" ',"error":"mit-gss-server did not listen"'
+    exit 1
+}
+if ! docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
+    /tmp/krb5-gss-init --ccache /tmp/krb5cc_harness --host testhost.kerber.test \
+    --ip 127.0.0.1 --port 4445 --deleg; then
+    echo "==== mit-gss-server.log ===="
+    docker exec "$NAME" cat /tmp/gss-mit-server.log 2>/dev/null || true
+    echo "==== mit-gss-trace ===="
+    docker exec "$NAME" cat /tmp/gss-mit-trace 2>/dev/null || true
+    log "gss.gate" "error" ',"error":"rust gss-init failed"'
+    exit 1
+fi
+MIT_ACC="$(docker exec "$NAME" cat /tmp/gss-mit-server.log 2>/dev/null || true)"
+echo "$MIT_ACC"
+echo "$MIT_ACC" | grep -q 'mit-gss unwrap ok hello-from-rust-gss'
+echo "$MIT_ACC" | grep -q 'mit-gss delegated=user@KERBER.TEST'
+
+log "gss.gate" "ok" ",\"acceptor\":\"krb5-gss\",\"initiator\":\"mit-libgssapi\",\"deleg\":\"both\""

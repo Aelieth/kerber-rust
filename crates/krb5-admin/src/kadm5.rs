@@ -878,8 +878,9 @@ pub fn iprop_pull(
     last_usec: u32,
     store: &mut krb5_kdc::PrincipalStore,
 ) -> Result<IpropPull, Error> {
-    let (mut ctx, token) = GssContext::init_sec_context(ticket, session, crealm, cname, true, None)
-        .map_err(|e| Error::Inner(e.to_string()))?;
+    let (mut ctx, token) =
+        GssContext::init_sec_context(ticket, session, crealm, cname, true, None, None)
+            .map_err(|e| Error::Inner(e.to_string()))?;
     let mut xid = 1u32;
     let handle = rpcsec_init(stream, &mut ctx, session, &token, &mut xid)?;
     let mut args = XdrW::default();

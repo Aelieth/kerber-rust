@@ -79,6 +79,12 @@ fn main() {
                 eprintln!("accept_sec_context: {e}");
                 std::process::exit(1);
             });
+    if let Some(c) = ctx.client.as_deref() {
+        println!("gss-accept client={c}");
+    }
+    if let Some(d) = ctx.delegated() {
+        println!("gss-accept delegated={d}");
+    }
     if let Some(rep) = ap_rep {
         write_token(&mut stream, &rep).unwrap_or_else(|e| {
             eprintln!("write AP-REP: {e}");
