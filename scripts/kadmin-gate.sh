@@ -132,6 +132,12 @@ echo "$GET"
 echo "$GET" | grep -q 'Principal: extra@KERBER.TEST'
 echo "$GET" | grep -q 'Number of keys: 4'
 echo "$GET" | grep -qE 'Key: vno 2,'
+PWDCHG="$(echo "$GET" | grep '^Last password change:')"
+echo "$PWDCHG"
+echo "$PWDCHG" | grep -v '\[never\]'
+MODLINE="$(echo "$GET" | grep '^Last modified:')"
+echo "$MODLINE"
+echo "$MODLINE" | grep -v '1970'
 
 echo "==== MIT kadmin cpw -keepold ===="
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \

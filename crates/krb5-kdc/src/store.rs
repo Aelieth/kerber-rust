@@ -20,6 +20,7 @@ pub const RID_FIRST_USER: u32 = 1000;
 
 use crate::acl::{Acl, AdminOp};
 use crate::error::Error;
+use crate::kdb_dump::{TL_LAST_PWD_CHANGE, TL_MOD_PRINC};
 
 /// Default PBKDF2 iteration count advertised in ETYPE-INFO2 (RFC 3962 default).
 pub const S2K_ITERS: u32 = 4096;
@@ -977,6 +978,7 @@ impl PrincipalStore {
         if keepold {
             p.keys.extend(old);
         }
+        stamp_admin_tl(p, true);
         let snap = p.clone();
         self.note_ulog(id.to_owned(), false, Some(snap));
         self.save_if_configured()
@@ -1228,7 +1230,7 @@ impl PrincipalStore {
             let key = string_to_key(etype, password, &salt, Some(&params))?;
             keys.push(KeyEntry::new(etype, key, 1));
         }
-        let p = Principal::from_keys(
+        let mut p = Principal::from_keys(
             name.clone(),
             self.realm.clone(),
             keys,
@@ -1238,6 +1240,7 @@ impl PrincipalStore {
             false,
             0,
         );
+        stamp_admin_tl(&mut p, true);
         self.put_principal(p);
         self.save_if_configured()
     }
@@ -1252,7 +1255,7 @@ impl PrincipalStore {
             keys.push(KeyEntry::new(*etype, random_key(*etype)?, 1));
         }
         let salt = name.default_salt(&self.realm);
-        let p = Principal::from_keys(
+        let mut p = Principal::from_keys(
             name.clone(),
             self.realm.clone(),
             keys,
@@ -1262,6 +1265,7 @@ impl PrincipalStore {
             false,
             0,
         );
+        stamp_admin_tl(&mut p, true);
         self.put_principal(p);
         self.save_if_configured()
     }
@@ -1428,6 +1432,7 @@ impl PrincipalStore {
         } else if let Some(pol) = policy {
             p.pw_policy = Some(pol);
         }
+        stamp_admin_tl(p, false);
         let snap = p.clone();
         self.note_ulog(id, false, Some(snap));
         self.save_if_configured()
@@ -1732,6 +1737,25 @@ pub(crate) fn prune_key_history(keys: Vec<KeyEntry>, depth: u32) -> Vec<KeyEntry
     keys.into_iter()
         .filter(|k| keep.contains(&k.kvno))
         .collect()
+}
+
+fn stamp_admin_tl(p: &mut Principal, pwd_change: bool) {
+    let now = unix_now_u32();
+    p.tl_data
+        .retain(|t| t.ty != TL_MOD_PRINC && !(pwd_change && t.ty == TL_LAST_PWD_CHANGE));
+    let mut modp = now.to_le_bytes().to_vec();
+    modp.extend_from_slice(format!("kadmin/admin@{}", p.realm).as_bytes());
+    modp.push(0);
+    p.tl_data.push(TlData {
+        ty: TL_MOD_PRINC,
+        contents: modp,
+    });
+    if pwd_change {
+        p.tl_data.push(TlData {
+            ty: TL_LAST_PWD_CHANGE,
+            contents: now.to_le_bytes().to_vec(),
+        });
+    }
 }
 
 pub(crate) fn unix_now_u32() -> u32 {

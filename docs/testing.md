@@ -187,7 +187,8 @@ when that oracle is absent.
   loads. In CI.
 - `scripts/kadmin-gate.sh` — MIT `kadmin` against `krb5-kadmind` on 749
   (AUTH_GSSAPI 300001): `addprinc`, `cpw`, `getprinc` (`Principal:
-  extra@KERBER.TEST`), `listprincs` (names `extra` and `user`),
+  extra@KERBER.TEST`; last password change is not `[never]`; last
+  modified is not Unix epoch), `listprincs` (names `extra` and `user`),
   `modprinc +requires_preauth` then `kinit`, `cpw -randkey` (old
   password must fail) + `ktadd` + `kinit -k`, `ktadd -norandkey` +
   `kinit -k`, `+lockdown_keys` (cpw and `ktadd -norandkey` refused),

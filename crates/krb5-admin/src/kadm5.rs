@@ -2616,32 +2616,15 @@ mod tests {
     }
 
     #[test]
-    fn getprinc_uses_stored_pwd_and_mod_dates() {
+    fn getprinc_dates_from_create_cpw_mod() {
         let (store, acl, actor) = setup();
         let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["dated"]);
         {
             let mut g = store.write().unwrap();
             g.create_password(&acl, &actor, &name, b"date-secret")
                 .unwrap();
-            let p = g.get_name(&name).unwrap();
-            let mut p = p.clone();
-            p.tl_data
-                .retain(|t| t.ty != TL_LAST_PWD_CHANGE && t.ty != TL_MOD_PRINC);
-            p.tl_data.push(TlData {
-                ty: TL_LAST_PWD_CHANGE,
-                contents: 1_111u32.to_le_bytes().to_vec(),
-            });
-            p.tl_data.push(TlData {
-                ty: TL_MOD_PRINC,
-                contents: {
-                    let mut v = 2_222u32.to_le_bytes().to_vec();
-                    v.extend_from_slice(b"kadmin/admin@KERBER.TEST\0");
-                    v
-                },
-            });
-            krb5_kdc::PrincipalWrite::put_principal(&mut *g, p).unwrap();
         }
-        let out = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &{
+        let created = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &{
             let mut w = XdrW::default();
             w.u32(API_V2);
             w.nullstring(Some("dated@KERBER.TEST"));
@@ -2649,10 +2632,46 @@ mod tests {
             w.b
         })
         .unwrap();
-        assert_eq!(ret_code(&out), 0);
-        let mut r = XdrR::new(&out);
-        r.u32().unwrap();
-        r.u32().unwrap();
+        let (pwd0, mod0) = gprinc_pwd_and_mod(&created);
+        assert_ne!(pwd0, 0, "create must stamp last_pwd_change, not [never]");
+        assert_ne!(mod0, 0, "create must stamp mod_date, not Unix epoch");
+        {
+            let mut g = store.write().unwrap();
+            g.set_password(&name, b"date-rotated").unwrap();
+        }
+        let after_cpw = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &{
+            let mut w = XdrW::default();
+            w.u32(API_V2);
+            w.nullstring(Some("dated@KERBER.TEST"));
+            w.u32(u32::MAX);
+            w.b
+        })
+        .unwrap();
+        let (pwd1, mod1) = gprinc_pwd_and_mod(&after_cpw);
+        assert!(pwd1 >= pwd0, "cpw must keep a real last_pwd_change");
+        assert_ne!(mod1, 0);
+        {
+            let mut g = store.write().unwrap();
+            g.apply_admin_fields(&name, None, None, Some(u32::MAX), None, None, false)
+                .unwrap();
+        }
+        let after_mod = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &{
+            let mut w = XdrW::default();
+            w.u32(API_V2);
+            w.nullstring(Some("dated@KERBER.TEST"));
+            w.u32(u32::MAX);
+            w.b
+        })
+        .unwrap();
+        let (pwd2, mod2) = gprinc_pwd_and_mod(&after_mod);
+        assert_eq!(pwd2, pwd1, "modprinc must not clear last_pwd_change");
+        assert_ne!(mod2, 0);
+    }
+
+    fn gprinc_pwd_and_mod(out: &[u8]) -> (u32, u32) {
+        let mut r = XdrR::new(out);
+        assert_eq!(r.u32().unwrap(), API_V2);
+        assert_eq!(r.u32().unwrap(), 0);
         let _ = r.nullstring().unwrap();
         let _ = r.u32().unwrap();
         let last_pwd = r.u32().unwrap();
@@ -2661,9 +2680,7 @@ mod tests {
         assert_eq!(r.u32().unwrap(), 0);
         let _ = r.nullstring().unwrap();
         let mod_date = r.u32().unwrap();
-        assert_eq!(last_pwd, 1_111);
-        assert_eq!(mod_date, 2_222);
-        assert_ne!(mod_date, last_pwd);
+        (last_pwd, mod_date)
     }
 
     #[test]
