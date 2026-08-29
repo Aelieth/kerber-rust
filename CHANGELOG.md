@@ -96,7 +96,9 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   wrap; `inquire_context` reports ticket lifetime and GSS flags
   (`scripts/gss-gate.sh`). A delegated KRB-CRED must decrypt under the
   ticket session key (or authenticator subkey); a plaintext
-  EncKrbCredPart trailer is `Integrity`.
+  EncKrbCredPart trailer is `Integrity`. SPNEGO accept requires the
+  krb5 OID in `MechTypeList`. Wrap/MIC verify integrity before
+  advancing the GSS sequence window.
 
 - KDB extension surface: `PrincipalRead` / `PrincipalWrite` /
   `StoreLifecycle`. Dump-v7 is the default backend; `db_library=memory`

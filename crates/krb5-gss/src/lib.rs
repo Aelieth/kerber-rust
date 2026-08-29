@@ -478,7 +478,6 @@ impl GssContext {
         let mut header = [0u8; 16];
         header.copy_from_slice(&inner[..16]);
         let seq = u64::from_be_bytes(header[8..16].try_into().map_err(|_| Error::Truncated)?);
-        self.accept_seq(seq)?;
         let rrc = u16::from_be_bytes(header[6..8].try_into().map_err(|_| Error::Truncated)?);
         let payload = rotate_rrc(&inner[16..], rrc);
         let usage = seal_usage(!self.initiator);
@@ -502,9 +501,16 @@ impl GssContext {
             let mut to_ck = data.to_vec();
             to_ck.extend_from_slice(&h);
             verify_checksum(key, usage, &to_ck, mac).map_err(|_| Error::Integrity)?;
+            self.accept_seq(seq)?;
             return Ok(data.to_vec());
         }
-        let plain = decrypt(key, usage, &payload)?;
+        let plain = decrypt(key, usage, &payload).map_err(|e| {
+            if matches!(e, krb5_crypto::Error::Integrity) {
+                Error::Integrity
+            } else {
+                Error::from(e)
+            }
+        })?;
         if plain.len() < 16 {
             return Err(Error::Truncated);
         }
@@ -515,6 +521,7 @@ impl GssContext {
         if trail != expected {
             return Err(Error::Integrity);
         }
+        self.accept_seq(seq)?;
         Ok(msg.to_vec())
     }
 
@@ -547,12 +554,12 @@ impl GssContext {
             return Err(Error::Truncated);
         }
         let seq = u64::from_be_bytes(inner[8..16].try_into().map_err(|_| Error::Truncated)?);
-        self.accept_seq(seq)?;
         let usage = sign_usage(!self.initiator);
         let key = self.recv_key(inner[2])?;
         let mut buf = data.to_vec();
         buf.extend_from_slice(&inner[..16]);
         verify_checksum(key, usage, &buf, &inner[16..]).map_err(|_| Error::Integrity)?;
+        self.accept_seq(seq)?;
         Ok(())
     }
 
@@ -1634,6 +1641,29 @@ fn parse_neg_init(token: &[u8]) -> Result<NegInit, Error> {
     })
 }
 
+fn mech_list_has_krb5(list: &[u8]) -> Result<bool, Error> {
+    let seq = if list.first() == Some(&0x30) {
+        let (h, n) = der_len_decode(list.get(1..).ok_or(Error::Truncated)?)?;
+        list.get(1 + h..1 + h + n).ok_or(Error::Truncated)?
+    } else {
+        list
+    };
+    let mut i = 0usize;
+    let mut found = false;
+    while i < seq.len() {
+        let tag = seq[i];
+        let (lh, ln) = der_len_decode(seq.get(i + 1..).ok_or(Error::Truncated)?)?;
+        let body = seq
+            .get(i + 1 + lh..i + 1 + lh + ln)
+            .ok_or(Error::Truncated)?;
+        if tag == 0x06 && body == KRB5_OID {
+            found = true;
+        }
+        i = i.saturating_add(1).saturating_add(lh).saturating_add(ln);
+    }
+    Ok(found)
+}
+
 fn encode_neg_resp(state: u8, mech: &[u8], response: Option<&[u8]>, mic: Option<&[u8]>) -> Vec<u8> {
     let mut seq = der_tlv(0xa0, &der_enumerated(state));
     seq.extend_from_slice(&der_tlv(0xa1, &der_oid(mech)));
@@ -1667,6 +1697,9 @@ pub fn spnego_accept(
     expected_realm: Option<&str>,
 ) -> Result<(GssContext, Vec<u8>), Error> {
     let init = parse_neg_init(token)?;
+    if !mech_list_has_krb5(&init.mech_list_der)? {
+        return Err(Error::Truncated);
+    }
     let mech = mech_token_as_gss(&init.mech_token);
     let (mut ctx, ap_rep) = GssContext::accept_sec_context(
         &mech,
@@ -1848,6 +1881,31 @@ mod tests {
     }
 
     #[test]
+    fn garbage_mac_does_not_consume_seq() {
+        let (mut init, mut acc) = contexts();
+        let good = init.wrap(b"keep-seq").unwrap();
+        let mut bad = good.clone();
+        let last = bad.last_mut().expect("wrap token");
+        *last ^= 0xff;
+        assert!(acc.unwrap(&bad).is_err(), "garbage MAC must fail");
+        assert_eq!(
+            acc.unwrap(&good).unwrap(),
+            b"keep-seq",
+            "in-window seq must still accept a later good MAC"
+        );
+        let (mut init, mut acc) = contexts();
+        let mic = init.get_mic(b"keep-seq").unwrap();
+        let mut bad = mic.clone();
+        let last = bad.last_mut().expect("mic token");
+        *last ^= 0xff;
+        assert!(matches!(
+            acc.verify_mic(b"keep-seq", &bad),
+            Err(Error::Integrity)
+        ));
+        acc.verify_mic(b"keep-seq", &mic).unwrap();
+    }
+
+    #[test]
     fn wrap_integ_round_trip_is_unsealed() {
         let (mut init, mut acc) = contexts();
         let tok = init.wrap_integ(&1u32.to_be_bytes()).unwrap();
@@ -1993,6 +2051,41 @@ mod tests {
             "MIT wants bare NegTokenResp"
         );
         assert!(acc.client.is_some());
+    }
+
+    #[test]
+    fn spnego_accept_rejects_mech_list_without_krb5() {
+        let (_as_out, tgs_out, skey, cname) = user_host();
+        let (_init, krb) = GssContext::init_sec_context(
+            tgs_out.rep.0.ticket.clone(),
+            &tgs_out.session_key,
+            &ascii(TEST_REALM),
+            &cname,
+            true,
+            None,
+            None,
+        )
+        .unwrap();
+        let ntlm: &[u8] = &[0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x02, 0x0a];
+        let oid = der_tlv(0x06, ntlm);
+        let mech_types = der_tlv(0xa0, &der_tlv(0x30, &oid));
+        let mech_token = der_tlv(0xa2, &der_tlv(0x04, &krb));
+        let mut seq = mech_types;
+        seq.extend_from_slice(&mech_token);
+        let neg = der_tlv(0xa0, &der_tlv(0x30, &seq));
+        let mut app = der_tlv(0x06, SPNEGO_OID);
+        app.extend_from_slice(&neg);
+        let tok = der_tlv(0x60, &app);
+        assert!(matches!(
+            spnego_accept(
+                &tok,
+                std::slice::from_ref(&skey),
+                None,
+                Some(&documented_host()),
+                Some(TEST_REALM),
+            ),
+            Err(Error::Truncated)
+        ));
     }
 
     #[test]
