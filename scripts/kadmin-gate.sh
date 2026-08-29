@@ -142,6 +142,41 @@ STRS="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
 echo "$STRS"
 echo "$STRS" | grep -q 'note: hello-g3d'
 
+echo "==== MIT kadmin lockdown_keys ===="
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw lock-secret lockee'
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'modprinc +lockdown_keys lockee'
+GETL="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc lockee' 2>&1 || true)"
+echo "$GETL"
+echo "$GETL" | grep -qi LOCKDOWN
+CPWL="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'cpw -pw lock-rotated lockee' 2>&1 || true)"
+echo "$CPWL"
+if echo "$CPWL" | grep -qi 'changed'; then
+    echo "lockdown cpw rewrote keys: $CPWL" >&2
+    exit 1
+fi
+echo "$CPWL" | grep -qiE 'locked down|PROTECT_KEYS|protect'
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" sh -c 'printf "lock-secret\n" | kinit lockee@KERBER.TEST'
+KTL="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'ktadd -norandkey -k /tmp/lockee-norand.keytab lockee' 2>&1 || true)"
+echo "$KTL"
+if echo "$KTL" | grep -qi 'added to keytab'; then
+    echo "lockdown ktadd -norandkey leaked keys: $KTL" >&2
+    exit 1
+fi
+CHR="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'ktadd -k /tmp/lockee.keytab lockee' 2>&1 || true)"
+echo "$CHR"
+if docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kinit -k -t /tmp/lockee.keytab lockee@KERBER.TEST 2>/tmp/lockee-kinit.err; then
+    echo "lockdown ktadd leaked keys for kinit -k" >&2
+    exit 1
+fi
+
 echo "==== MIT kadmin purgekeys ===="
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addpol -history 2 g3bhist'
@@ -256,6 +291,6 @@ DELGET="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
 echo "$DELGET"
 echo "$DELGET" | grep -qiE 'does not exist|not found|UNK_PRINC'
 
-log "kadmin.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"addprinc+cpw+get+list+mod+chrand+norandkey+purgekeys+setstr+renprinc+del"'
+log "kadmin.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"addprinc+cpw+get+list+mod+chrand+norandkey+lockdown+purgekeys+setstr+renprinc+del"'
 exit 0
 

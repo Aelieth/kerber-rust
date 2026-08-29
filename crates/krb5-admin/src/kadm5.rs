@@ -1348,6 +1348,13 @@ fn dispatch_kadm5(
             let mut g = store
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let lockdown = match g.get_name(&name) {
+                None => return Ok(generic_ret(API_V2, KADM5_UNK_PRINC)),
+                Some(p) => p.attributes & KDB_LOCKDOWN_KEYS != 0,
+            };
+            if lockdown {
+                return Ok(generic_ret(API_V2, KADM5_PROTECT_KEYS));
+            }
             let mut sess = AdminSession::local(&mut g, acl, actor);
             match sess.change_password(&name, pass.as_bytes()) {
                 Ok(()) => Ok(generic_ret(API_V2, 0)),
@@ -1439,7 +1446,12 @@ fn dispatch_kadm5(
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             match g.chrand(&name) {
-                Ok(keys) => Ok(encode_chrand(&keys)),
+                Ok(keys) => {
+                    let hide = g
+                        .get_name(&name)
+                        .is_some_and(|p| p.attributes & KDB_LOCKDOWN_KEYS != 0);
+                    Ok(encode_chrand(if hide { &[] } else { &keys }))
+                }
                 Err(e) => Ok(generic_ret(API_V2, kadm5_code(&Error::from(e)))),
             }
         }
@@ -2547,6 +2559,105 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ret_code(&out), KADM5_PROTECT_KEYS);
+    }
+
+    #[test]
+    fn chpass_lockdown_is_protect_keys() {
+        let (store, acl, actor) = setup();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+        let before = {
+            let g = store.read().unwrap();
+            g.get_name(&user)
+                .unwrap()
+                .keys
+                .iter()
+                .map(|k| k.key.as_bytes().to_vec())
+                .collect::<Vec<_>>()
+        };
+        {
+            let mut g = store.write().unwrap();
+            g.apply_admin_fields(
+                &user,
+                Some(KDB_LOCKDOWN_KEYS),
+                None,
+                None,
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+        }
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some("user@KERBER.TEST"));
+        w.nullstring(Some("lock-rotated-secret"));
+        let out = dispatch_kadm5(&store, &acl, &actor, CHPASS_PRINCIPAL, &w.b).unwrap();
+        assert_eq!(ret_code(&out), KADM5_PROTECT_KEYS);
+        let after = {
+            let g = store.read().unwrap();
+            g.get_name(&user)
+                .unwrap()
+                .keys
+                .iter()
+                .map(|k| k.key.as_bytes().to_vec())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(after, before, "lockdown chpass must not rewrite keys");
+    }
+
+    #[test]
+    fn chrand_lockdown_returns_empty_keys() {
+        let (store, acl, actor) = setup();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+        let before = {
+            let g = store.read().unwrap();
+            g.get_name(&user)
+                .unwrap()
+                .keys
+                .iter()
+                .map(|k| k.key.as_bytes().to_vec())
+                .collect::<Vec<_>>()
+        };
+        {
+            let mut g = store.write().unwrap();
+            g.apply_admin_fields(
+                &user,
+                Some(KDB_LOCKDOWN_KEYS),
+                None,
+                None,
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+        }
+        let out = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            CHRAND_PRINCIPAL,
+            &encode_named("user@KERBER.TEST"),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&out), 0);
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), API_V2);
+        assert_eq!(r.u32().unwrap(), 0);
+        assert_eq!(
+            r.u32().unwrap(),
+            0,
+            "MIT chrand under lockdown returns no keys"
+        );
+        let after = {
+            let g = store.read().unwrap();
+            g.get_name(&user)
+                .unwrap()
+                .keys
+                .iter()
+                .map(|k| k.key.as_bytes().to_vec())
+                .collect::<Vec<_>>()
+        };
+        assert_ne!(after, before, "lockdown chrand still rotates stored keys");
     }
 
     fn purgekeys_args(name: &str, keepkvno: i32) -> Vec<u8> {

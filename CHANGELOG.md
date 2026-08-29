@@ -54,7 +54,9 @@ have landed.** 1.1 is cut when G1–G9 are complete.
   `PURGEKEYS` (op 22) drops old kvnos. SETKEY ops 16/21/25 (no MIT
   `kadmin setkey` verb; unit-tested). `GET_STRINGS`/`SET_STRING` plus
   dump `KRB5_TL_STRING_ATTRS`. Unknown kadm5 procs return
-  `KADM5_FAILURE`, not `7`. `LOCKDOWN_KEYS` refuses extract/purge/setkey.
+  `KADM5_FAILURE`, not `7`. `LOCKDOWN_KEYS` refuses extract/purge/setkey/
+  chpass; chrand still rotates but returns no key bytes (MIT `ktadd`
+  must not leak).
   Gate: `scripts/kadmin-gate.sh`.
 
 - KDB extension surface: `PrincipalRead` / `PrincipalWrite` /

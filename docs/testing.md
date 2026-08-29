@@ -186,7 +186,8 @@ when that oracle is absent.
   extra@KERBER.TEST`), `listprincs` (names `extra` and `user`),
   `modprinc +requires_preauth` then `kinit`, `cpw -randkey` (old
   password must fail) + `ktadd` + `kinit -k`, `ktadd -norandkey` +
-  `kinit -k`, `purgekeys` (old kvno gone), `setstr`/`getstrs`, `renprinc -force`
+  `kinit -k`, `+lockdown_keys` (cpw and `ktadd -norandkey` refused),
+  `purgekeys` (old kvno gone), `setstr`/`getstrs`, `renprinc -force`
   `renamefrom`→`renameto` then `getprinc` new / old fails / `kinit -k`
   new, `delprinc` then `getprinc` error. Rename uses `-randkey` (MIT
   default-salt password keys may not `kinit` after rename). Run twice.
