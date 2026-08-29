@@ -1133,9 +1133,6 @@ fn check_tgs_policy_flags(
     if attr(server, KDB_REQUIRES_HW_AUTH) && !tkt.flags.bit(flag_bit::HW_AUTHENT) {
         return Err(proto(err::GENERIC, "NO HW PREAUTH"));
     }
-    if attr(server, KDB_DISALLOW_RENEWABLE) && body.kdc_options.bit(flag_bit::RENEWABLE) {
-        return Err(proto(err::POLICY, "NON-RENEWABLE TICKET"));
-    }
     if attr(server, KDB_DISALLOW_POSTDATED)
         && (body.kdc_options.bit(flag_bit::MAY_POSTDATE)
             || body.kdc_options.bit(flag_bit::POSTDATED))

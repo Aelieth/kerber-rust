@@ -10,10 +10,10 @@ use krb5_kdc::{
     documented_host, pa_enc_timestamp, tgs_req,
 };
 use krb5_protocol::Keytab;
-use krb5_protocol::{ReplayCache, as_req_sname, build_ap_req, verify_ap_req};
+use krb5_protocol::{ReplayCache, as_req_sname, build_ap_req, tgs_req_ex, verify_ap_req};
 use krb5_types::{
-    EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, KrbError, PrincipalName, ascii, err,
-    flag_bit, ku,
+    EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, KdcOptions, KrbError, PrincipalName,
+    ascii, err, flag_bit, ku,
 };
 
 fn client_key() -> ProtocolKey {
@@ -719,6 +719,47 @@ fn as_disallow_all_tix_still_client_revoked() {
     or_attr(&mut store, &cname, KDB_DISALLOW_ALL_TIX);
     let err = krb5_kdc::issue_as(&store, &user_as_req(64)).unwrap_err();
     assert_eq!(proto_code(err), err::CLIENT_REVOKED);
+}
+
+#[test]
+fn tgs_strips_renewable_when_server_disallow_renewable() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let host = documented_host();
+    let mut areq = user_as_req(77);
+    areq.0.req_body.kdc_options = areq
+        .0
+        .req_body
+        .kdc_options
+        .with_bit(flag_bit::RENEWABLE, true);
+    let issued = krb5_kdc::issue_as(&store, &areq).expect("AS renewable");
+    assert!(tgt_part(&store, &issued).flags.renewable());
+    or_attr(&mut store, &host, KDB_DISALLOW_RENEWABLE);
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let tgs = tgs_req_ex(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        78,
+        KdcOptions::forwardable().with_bit(flag_bit::RENEWABLE, true),
+        None,
+        Vec::new(),
+        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
+    )
+    .expect("TGS-REQ");
+    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("strip not POLICY");
+    let host_key = store.get_name(&host).unwrap().best_key().unwrap();
+    let usage = KeyUsage::new(ku::TICKET).unwrap();
+    let plain = decrypt(
+        &host_key.key,
+        usage,
+        out.rep.0.ticket.enc_part.cipher.as_ref(),
+    )
+    .unwrap();
+    let part: EncTicketPart = decode(&plain).unwrap();
+    assert!(!part.flags.renewable());
 }
 
 #[test]
