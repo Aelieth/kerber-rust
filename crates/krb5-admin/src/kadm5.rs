@@ -1751,12 +1751,31 @@ fn encode_principal_ent(w: &mut XdrW, p: &krb5_kdc::Principal) {
     w.u32(p.last_success);
     w.u32(p.last_failed);
     w.u32(p.fail_auth_count);
-    // Omit key_data on the wire (n_key_data=0). MIT kadmin getprinc does
-    // not need key contents; xdr_array maxsize is n_key_data.
-    w.u32(0); // n_key_data
-    w.u32(0); // n_tl_data
-    w.u32(1); // tl_data NULL (xdr_nulltype)
-    w.u32(0); // key_data array count
+    let n_key = u32::try_from(p.keys.len()).unwrap_or(0);
+    let n_tl = u32::try_from(p.tl_data.len()).unwrap_or(0);
+    w.u32(n_key);
+    w.u32(n_tl);
+    if p.tl_data.is_empty() {
+        w.u32(1);
+    } else {
+        w.u32(0);
+        for tl in &p.tl_data {
+            w.u32(1);
+            w.u32(u32::try_from(tl.ty).unwrap_or(0));
+            w.opaque(&tl.contents);
+        }
+        w.u32(0);
+    }
+    w.u32(n_key);
+    for k in &p.keys {
+        let ver = if k.salt_type.is_some() { 2 } else { 1 };
+        w.u32(ver);
+        w.u32(k.kvno);
+        w.u32(u32::try_from(k.etype.to_iana()).unwrap_or(0));
+        if ver > 1 {
+            w.u32(u32::try_from(k.salt_type.unwrap_or(0)).unwrap_or(0));
+        }
+    }
 }
 
 fn encode_gprincs(ids: &[String]) -> Vec<u8> {
@@ -2134,6 +2153,44 @@ mod tests {
             r.nullstring().unwrap().as_deref(),
             Some("kadmin/admin@KERBER.TEST")
         );
+        r.u32().unwrap(); // mod_date
+        r.u32().unwrap(); // attributes
+        r.u32().unwrap(); // kvno
+        r.u32().unwrap(); // mkvno
+        let _ = r.nullstring().unwrap();
+        r.u32().unwrap(); // aux
+        r.u32().unwrap(); // max_renewable
+        r.u32().unwrap(); // last_success
+        r.u32().unwrap(); // last_failed
+        r.u32().unwrap(); // fail_auth_count
+        let n_key = r.u32().unwrap();
+        assert!(n_key >= 1, "getprinc n_key_data, got {n_key}");
+        let n_tl = r.u32().unwrap();
+        let tl_null = r.u32().unwrap();
+        if tl_null == 0 {
+            loop {
+                let more = r.u32().unwrap();
+                if more == 0 {
+                    break;
+                }
+                r.u32().unwrap();
+                let _ = r.opaque().unwrap();
+            }
+        } else {
+            assert_eq!(n_tl, 0);
+        }
+        let n = r.u32().unwrap();
+        assert_eq!(n, n_key);
+        for _ in 0..n {
+            let ver = r.u32().unwrap();
+            let kvno = r.u32().unwrap();
+            let etype = r.u32().unwrap();
+            assert!(kvno >= 1);
+            assert!(etype > 0);
+            if ver > 1 {
+                r.u32().unwrap();
+            }
+        }
     }
 
     #[test]
