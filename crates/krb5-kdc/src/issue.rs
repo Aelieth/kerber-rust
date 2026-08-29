@@ -22,7 +22,12 @@ use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::plugins::{PreauthAction, current_policy, run_as_preauth};
 use crate::preauth::{fast_finished, unwrap_fast, unwrap_fast_padata, wrap_fast_rep};
-use crate::store::{KDB_PWCHANGE_SERVICE, Principal, random_key, s2k_params};
+use crate::store::{
+    KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED, KDB_DISALLOW_PROXIABLE,
+    KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_NO_AUTH_DATA_REQUIRED,
+    KDB_OK_AS_DELEGATE, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH, Principal, random_key,
+    s2k_params,
+};
 
 /// Issued AS-REP plus the session key (for tests that decrypt the TGT).
 #[derive(Debug)]
@@ -260,6 +265,7 @@ fn issue_as_from(
     let mut extra_padata: Vec<PaData> = vec![supported_enctypes_pa(&client)];
     let mut as_rep_key = ckey.key.clone();
     let mut skip_timestamp = false;
+    let mut hw_preauth = false;
     let as_req_der = match raw {
         Some(r) => r.to_vec(),
         None => encode(req)?,
@@ -278,6 +284,7 @@ fn issue_as_from(
             as_rep_key = key;
             extra_padata.push(pa);
             skip_timestamp = true;
+            hw_preauth = true;
         }
         Some(PreauthAction::Challenge(e_data)) => {
             return Err(Error::Protocol {
@@ -298,6 +305,9 @@ fn issue_as_from(
     if client.requires_preauth && !skip_timestamp {
         return Err(preauth_required(store, &client));
     }
+    if attr(&client, KDB_REQUIRES_HW_AUTH) && !hw_preauth {
+        return Err(proto(err::PREAUTH_FAILED, "NO HW PREAUTH"));
+    }
 
     let sname = body
         .sname
@@ -311,6 +321,7 @@ fn issue_as_from(
         .or_else(|| server.best_key())
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no server key"))?;
     check_db_times(Some(&client), &server)?;
+    check_as_policy_flags(&client, &server, body)?;
     let session = random_key(etype)?;
     let now = KerberosTime::now();
     let life = requested_life(store, &client, body);
@@ -325,6 +336,8 @@ fn issue_as_from(
     if body.kdc_options.bit(flag_bit::RENEWABLE) {
         flags = flags.with_bit(flag_bit::RENEWABLE, true);
     }
+    flags = apply_disallow_flags(flags, Some(&client), &server);
+    let include_pac = !attr(&server, KDB_NO_AUTH_DATA_REQUIRED);
     let krbtgt_p = store
         .fetch_krbtgt()?
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
@@ -352,7 +365,7 @@ fn issue_as_from(
         TransitedEncoding::empty(),
         renew_till_for(store, &now, &flags),
         store,
-        true,
+        include_pac,
         None,
     )?;
     let renew_till = renew_till_for(store, &now, &flags);
@@ -519,6 +532,7 @@ fn issue_tgs_from(
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no server key"))?;
     let tgs_client = store.fetch_name(&enc_tkt.cname)?;
     check_db_times(tgs_client.as_ref(), &server)?;
+    check_tgs_policy_flags(&server, body, ap.ticket.sname.is_krbtgt(), &enc_tkt)?;
     let mut ticket_cname = enc_tkt.cname.clone();
     let mut ticket_crealm = utf8_realm(&enc_tkt.crealm).to_owned();
     let mut evidence_logon = None;
@@ -574,6 +588,10 @@ fn issue_tgs_from(
     if body.kdc_options.bit(flag_bit::RENEWABLE) && enc_tkt.flags.renewable() {
         flags = flags.with_bit(flag_bit::RENEWABLE, true);
     }
+    flags = apply_disallow_flags(flags, tgs_client.as_ref(), &server);
+    if attr(&server, KDB_OK_AS_DELEGATE) {
+        flags = flags.with_bit(flag_bit::OK_AS_DELEGATE, true);
+    }
     let krbtgt_p = store
         .fetch_krbtgt()?
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
@@ -587,7 +605,7 @@ fn issue_tgs_from(
     } else {
         krbtgt_key.key.clone()
     };
-    let include_pac = true;
+    let include_pac = !attr(&server, KDB_NO_AUTH_DATA_REQUIRED);
     let ticket = mint_ticket(
         &tkt_key,
         tkt_kvno,
@@ -1071,6 +1089,82 @@ fn check_db_times(client: Option<&Principal>, server: &Principal) -> Result<(), 
         return Err(proto(err::SERVICE_EXP, "SERVICE EXPIRED"));
     }
     Ok(())
+}
+
+fn attr(p: &Principal, bit: u32) -> bool {
+    p.attributes & bit != 0
+}
+
+fn check_as_policy_flags(
+    client: &Principal,
+    server: &Principal,
+    body: &krb5_types::KdcReqBody,
+) -> Result<(), Error> {
+    if attr(server, KDB_DISALLOW_ALL_TIX) {
+        return Err(proto(err::S_PRINCIPAL_UNKNOWN, "SERVICE LOCKED OUT"));
+    }
+    if attr(server, KDB_DISALLOW_SVR) && !body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY) {
+        return Err(proto(err::MUST_USE_USER2USER, "SERVICE NOT ALLOWED"));
+    }
+    if (body.kdc_options.bit(flag_bit::MAY_POSTDATE) || body.kdc_options.bit(flag_bit::POSTDATED))
+        && (attr(client, KDB_DISALLOW_POSTDATED) || attr(server, KDB_DISALLOW_POSTDATED))
+    {
+        return Err(proto(err::CANNOT_POSTDATE, "POSTDATE NOT ALLOWED"));
+    }
+    Ok(())
+}
+
+fn check_tgs_policy_flags(
+    server: &Principal,
+    body: &krb5_types::KdcReqBody,
+    header_is_tgt: bool,
+    tkt: &EncTicketPart,
+) -> Result<(), Error> {
+    if attr(server, KDB_DISALLOW_ALL_TIX) {
+        return Err(proto(err::S_PRINCIPAL_UNKNOWN, "SERVER LOCKED OUT"));
+    }
+    if attr(server, KDB_DISALLOW_SVR) && !body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY) {
+        return Err(proto(err::MUST_USE_USER2USER, "SERVER NOT ALLOWED"));
+    }
+    if attr(server, KDB_DISALLOW_TGT_BASED) && header_is_tgt {
+        return Err(proto(err::POLICY, "TGT BASED NOT ALLOWED"));
+    }
+    if attr(server, KDB_REQUIRES_HW_AUTH) && !tkt.flags.bit(flag_bit::HW_AUTHENT) {
+        return Err(proto(err::GENERIC, "NO HW PREAUTH"));
+    }
+    if attr(server, KDB_DISALLOW_RENEWABLE) && body.kdc_options.bit(flag_bit::RENEWABLE) {
+        return Err(proto(err::POLICY, "NON-RENEWABLE TICKET"));
+    }
+    if attr(server, KDB_DISALLOW_POSTDATED)
+        && (body.kdc_options.bit(flag_bit::MAY_POSTDATE)
+            || body.kdc_options.bit(flag_bit::POSTDATED))
+    {
+        return Err(proto(err::CANNOT_POSTDATE, "NON-POSTDATABLE TICKET"));
+    }
+    Ok(())
+}
+
+fn apply_disallow_flags(
+    mut flags: TicketFlags,
+    client: Option<&Principal>,
+    server: &Principal,
+) -> TicketFlags {
+    let deny_fwd = attr(server, KDB_DISALLOW_FORWARDABLE)
+        || client.is_some_and(|c| attr(c, KDB_DISALLOW_FORWARDABLE));
+    if deny_fwd {
+        flags = flags.with_bit(flag_bit::FORWARDABLE, false);
+    }
+    let deny_ren = attr(server, KDB_DISALLOW_RENEWABLE)
+        || client.is_some_and(|c| attr(c, KDB_DISALLOW_RENEWABLE));
+    if deny_ren {
+        flags = flags.with_bit(flag_bit::RENEWABLE, false);
+    }
+    let deny_prx = attr(server, KDB_DISALLOW_PROXIABLE)
+        || client.is_some_and(|c| attr(c, KDB_DISALLOW_PROXIABLE));
+    if deny_prx {
+        flags = flags.with_bit(flag_bit::PROXIABLE, false);
+    }
+    flags
 }
 
 fn utf8_realm(r: &krb5_types::Realm) -> &str {

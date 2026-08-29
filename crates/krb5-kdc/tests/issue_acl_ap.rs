@@ -3,7 +3,9 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, string_to_key};
 use krb5_kdc::{
-    Acl, AdminOp, Error, PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
+    Acl, AdminOp, Error, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_RENEWABLE,
+    KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE,
+    KDB_REQUIRES_HW_AUTH, PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
     acl_for_store, as_req, bootstrap_documented, documented_admin_id, documented_changepw,
     documented_host, pa_enc_timestamp, tgs_req,
 };
@@ -11,7 +13,7 @@ use krb5_protocol::Keytab;
 use krb5_protocol::{ReplayCache, as_req_sname, build_ap_req, verify_ap_req};
 use krb5_types::{
     EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, KrbError, PrincipalName, ascii, err,
-    ku,
+    flag_bit, ku,
 };
 
 fn client_key() -> ProtocolKey {
@@ -618,4 +620,152 @@ fn tgs_rejects_expired_client_after_tgt_issued() {
     .expect("TGS-REQ");
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
     assert_eq!(proto_code(err), err::NAME_EXP);
+}
+
+fn or_attr(store: &mut PrincipalStore, name: &PrincipalName, bit: u32) {
+    let a = store.get_name(name).unwrap().attributes | bit;
+    store
+        .apply_admin_fields(name, Some(a), None, None, None, None, false)
+        .unwrap();
+}
+
+fn tgt_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs) -> EncTicketPart {
+    let tgt_key = store.krbtgt().unwrap().best_key().unwrap();
+    let usage = KeyUsage::new(ku::TICKET).unwrap();
+    let plain = decrypt(
+        &tgt_key.key,
+        usage,
+        issued.rep.0.ticket.enc_part.cipher.as_ref(),
+    )
+    .unwrap();
+    decode(&plain).unwrap()
+}
+
+fn host_tgs(
+    _store: &PrincipalStore,
+    issued: &krb5_kdc::IssuedAs,
+    nonce: u32,
+) -> krb5_types::TgsReq {
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    tgs_req(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        nonce,
+    )
+    .unwrap()
+}
+
+#[test]
+fn as_strips_forwardable_when_disallow_forwardable() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let before = krb5_kdc::issue_as(&store, &user_as_req(60)).expect("AS");
+    assert!(tgt_part(&store, &before).flags.forwardable());
+    or_attr(&mut store, &cname, KDB_DISALLOW_FORWARDABLE);
+    let after = krb5_kdc::issue_as(&store, &user_as_req(61)).expect("AS");
+    assert!(!tgt_part(&store, &after).flags.forwardable());
+}
+
+#[test]
+fn as_strips_renewable_when_disallow_renewable() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let mut req = user_as_req(62);
+    req.0.req_body.kdc_options = req
+        .0
+        .req_body
+        .kdc_options
+        .with_bit(flag_bit::RENEWABLE, true);
+    or_attr(&mut store, &cname, KDB_DISALLOW_RENEWABLE);
+    let issued = krb5_kdc::issue_as(&store, &req).expect("AS");
+    assert!(!tgt_part(&store, &issued).flags.renewable());
+}
+
+#[test]
+fn as_hw_auth_required_rejects_enc_ts() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    or_attr(&mut store, &cname, KDB_REQUIRES_HW_AUTH);
+    let err = krb5_kdc::issue_as(&store, &user_as_req(63)).unwrap_err();
+    assert_eq!(proto_code(err), err::PREAUTH_FAILED);
+}
+
+#[test]
+fn as_disallow_all_tix_still_client_revoked() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    or_attr(&mut store, &cname, KDB_DISALLOW_ALL_TIX);
+    let err = krb5_kdc::issue_as(&store, &user_as_req(64)).unwrap_err();
+    assert_eq!(proto_code(err), err::CLIENT_REVOKED);
+}
+
+#[test]
+fn tgs_honors_svr_tgt_based_lockout_and_ok_as_delegate() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let host = documented_host();
+    let issued = krb5_kdc::issue_as(&store, &user_as_req(65)).expect("AS");
+
+    or_attr(&mut store, &host, KDB_DISALLOW_SVR);
+    let err = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 66)).unwrap_err();
+    assert_eq!(proto_code(err), err::MUST_USE_USER2USER);
+
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let issued = krb5_kdc::issue_as(&store, &user_as_req(67)).expect("AS");
+    or_attr(&mut store, &host, KDB_DISALLOW_TGT_BASED);
+    let err = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 68)).unwrap_err();
+    assert_eq!(proto_code(err), err::POLICY);
+
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let issued = krb5_kdc::issue_as(&store, &user_as_req(69)).expect("AS");
+    or_attr(&mut store, &host, KDB_DISALLOW_ALL_TIX);
+    let err = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 70)).unwrap_err();
+    assert_eq!(proto_code(err), err::S_PRINCIPAL_UNKNOWN);
+
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let issued = krb5_kdc::issue_as(&store, &user_as_req(71)).expect("AS");
+    or_attr(&mut store, &host, KDB_OK_AS_DELEGATE);
+    let tgs = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 72)).expect("TGS");
+    let host_key = store.get_name(&host).unwrap().best_key().unwrap();
+    let usage = KeyUsage::new(ku::TICKET).unwrap();
+    let plain = decrypt(
+        &host_key.key,
+        usage,
+        tgs.rep.0.ticket.enc_part.cipher.as_ref(),
+    )
+    .unwrap();
+    let part: EncTicketPart = decode(&plain).unwrap();
+    assert!(part.flags.bit(flag_bit::OK_AS_DELEGATE));
+}
+
+#[test]
+fn tgs_skips_pac_when_no_auth_data_required() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let host = documented_host();
+    let issued = krb5_kdc::issue_as(&store, &user_as_req(73)).expect("AS");
+    or_attr(&mut store, &host, KDB_NO_AUTH_DATA_REQUIRED);
+    let tgs = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 74)).expect("TGS");
+    let host_key = store.get_name(&host).unwrap().best_key().unwrap();
+    let usage = KeyUsage::new(ku::TICKET).unwrap();
+    let plain = decrypt(
+        &host_key.key,
+        usage,
+        tgs.rep.0.ticket.enc_part.cipher.as_ref(),
+    )
+    .unwrap();
+    let part: EncTicketPart = decode(&plain).unwrap();
+    assert!(part.authorization_data.is_none());
+}
+
+#[test]
+fn tgs_requires_hw_auth_without_hw_flag() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let host = documented_host();
+    let issued = krb5_kdc::issue_as(&store, &user_as_req(75)).expect("AS");
+    or_attr(&mut store, &host, KDB_REQUIRES_HW_AUTH);
+    let err = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 76)).unwrap_err();
+    assert_eq!(proto_code(err), err::GENERIC);
 }
