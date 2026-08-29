@@ -16,8 +16,8 @@ NT-ENTERPRISE · **G7** standalone user CLIs · **G8** KEYRING ccache · **G9**
 config breadth. Each phase lands behind a real-MIT gate before it counts as
 done. The entries below are the post-1.0 groundwork already in tree (Tier-1
 plugin/policy/propagation parity + the KLLDAP 0.7.5 toolchain alignment).
-**G1 faithfulness has landed** (expiration, stored flags, real `GET_PRIVS`,
-iprop/kpropd ACLs). 1.1 is cut when G1–G9 are complete.
+**G1 faithfulness and G2 renewal/postdating have landed.** 1.1 is cut
+when G1–G9 are complete.
 
 ### Added
 
@@ -32,9 +32,20 @@ iprop/kpropd ACLs). 1.1 is cut when G1–G9 are complete.
   (`scripts/flags-gate.sh`). kadmind `GET_PRIVS` is the actor's ACL
   mask, not constant `0x3F` (`scripts/getprivs-gate.sh`). iprop
   GET_UPDATES/FULL_RESYNC require `p`; kpropd matches the AP-REQ
-  client against `KRB5_KPROP_ACL` (`scripts/prop-acl-gate.sh`).
+  client against `KRB5_KPROP_ACL` (unset or empty is deny-all;
+  `scripts/prop-acl-gate.sh`). TGS does not re-check client
+  expiration. TGS `DISALLOW_RENEWABLE` strips, not `POLICY`.
   Lockout `DISALLOW_ALL_TIX` → `CLIENT_REVOKED` is unchanged.
   `EncKdcRepPart.key_expiration` stays `None`.
+
+- **G2 renewal and postdating (MIT-gated).** `kinit -R` copies
+  `renew-till`, sets `starttime=now`, and caps the new lifetime by
+  the presented ticket (`scripts/renew-gate.sh`). `DISALLOW_RENEWABLE`
+  on renew strips `R` (a second `-R` is then `BADOPTION`). `kinit -p`
+  sets `P`. `kinit -s` issues `INVALID`+`POSTDATED`; `kvno` is
+  `TKT_NYV` until `kinit -v` (`scripts/postdate-gate.sh`).
+  `DISALLOW_POSTDATED` is `CANNOT_POSTDATE`. `RENEWABLE_OK` is still
+  accepted and ignored (G2c).
 
 - KDB extension surface: `PrincipalRead` / `PrincipalWrite` /
   `StoreLifecycle`. Dump-v7 is the default backend; `db_library=memory`

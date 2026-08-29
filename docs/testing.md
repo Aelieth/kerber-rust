@@ -166,7 +166,8 @@ when that oracle is absent.
   vs MIT kadmind then MIT `kinit extra2`; MIT `delprinc extra2` then the
   name is gone on the Rust replica. In CI.
 - `scripts/expire-gate.sh` — MIT `kinit` NAME_EXP vs KEY_EXPIRED;
-  `kinit -S kadmin/changepw` on a password-expired client. In CI.
+  `kinit -S kadmin/changepw` on a password-expired client; TGS `kvno`
+  after client `-pwexpire`/`-expire` still succeeds. In CI.
 - `scripts/flags-gate.sh` — MIT `modprinc` DISALLOW_*/OK_AS_DELEGATE/
   REQUIRES_HW_AUTH then `kinit`/`kvno`/`klist -f`. In CI.
 - `scripts/renew-gate.sh` — MIT `kinit -r 1d -l 5m` then `kinit -R`
@@ -177,8 +178,9 @@ when that oracle is absent.
   is CANNOT_POSTDATE. In CI.
 - `scripts/getprivs-gate.sh` — MIT `kadmin getprivs` as a limited `i`
   actor is INQUIRE only. In CI.
-- `scripts/prop-acl-gate.sh` — MIT `kprop` vs empty `KRB5_KPROP_ACL`
-  is refused (no replica dump); host allowlist still loads. In CI.
+- `scripts/prop-acl-gate.sh` — MIT `kprop` vs unset or empty
+  `KRB5_KPROP_ACL` is refused (no replica dump); host allowlist still
+  loads. In CI.
 - `scripts/kadmin-gate.sh` — MIT `kadmin` against `krb5-kadmind` on 749
   (AUTH_GSSAPI 300001): `addprinc`, `cpw`, `getprinc` (`Principal:
   extra@KERBER.TEST`), `listprincs` (names `extra` and `user`),

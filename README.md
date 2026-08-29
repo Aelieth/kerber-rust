@@ -85,7 +85,7 @@ gated against real MIT before it counts as done:
 | Phase | Delivers |
 | --- | --- |
 | **G1** | **Faithfulness — landed.** Principal/password expiration, stored `DISALLOW_*` / `OK_AS_DELEGATE` / `REQUIRES_HW_AUTH` / `NO_AUTH_DATA_REQUIRED`, real `GET_PRIVS`, iprop/kpropd ACLs. Gates: `expire-gate`, `flags-gate`, `getprivs-gate`, `prop-acl-gate` |
-| **G2** | **Renewal & postdating** — `kinit -R`, MAY-POSTDATE / POSTDATED / VALIDATE, the PROXIABLE flag |
+| **G2** | **Renewal & postdating — landed.** `kinit -R`, MAY-POSTDATE / POSTDATED / VALIDATE, the PROXIABLE flag. Gates: `renew-gate`, `postdate-gate` |
 | **G3** | **kadmin completeness** — `getprinc` returns keys (→ `ktadd -norandkey`), PURGEKEYS, SETKEY, GET/SET_STRINGS, EXTRACT_KEYS |
 | **G4** | **iprop fidelity** — carry policy / history / lockout in incremental updates; persist the ulog on disk |
 | **G5** | **GSS breadth** — credential delegation, real SPNEGO negotiation, `wrap_iov`/`unwrap_iov` for NFSv4 `RPCSEC_GSS` / SSH / HTTP · *hard requirement* |
