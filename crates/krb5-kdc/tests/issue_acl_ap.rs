@@ -934,12 +934,16 @@ fn tgs_renew_after_endtime_still_issues() {
 #[test]
 fn tgs_renew_rejects_renew_till_not_after_now() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
+    let skew = store.policy.skew;
+    assert!(skew >= 2, "default skew must include [now-skew, now]");
     let issued = renewable_as(&store, 100);
     let tgt_key = store.krbtgt().unwrap().best_key().unwrap();
     let usage = KeyUsage::new(ku::TICKET).unwrap();
     let mut part = tgt_part(&store, &issued);
     let now = KerberosTime::now();
-    part.renew_till = Some(now.add_seconds(-1).unwrap());
+    part.renew_till = Some(now.add_seconds(-(skew / 2)).unwrap());
+    // Stale PAC ticket-checksum would fail before the renew_till bound.
+    part.authorization_data = None;
     let der = encode(&part).unwrap();
     let cipher = encrypt(&tgt_key.key, usage, &der).unwrap();
     let mut issued = issued;
