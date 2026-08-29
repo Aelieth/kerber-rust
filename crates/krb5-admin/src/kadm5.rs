@@ -3838,6 +3838,7 @@ mod tests {
         p.last_success = 111;
         p.last_failed = 222;
         p.fail_auth_count = 3;
+        p.tl_data.retain(|t| t.ty != TL_LAST_PWD_CHANGE);
         p.tl_data.push(TlData {
             ty: TL_LAST_PWD_CHANGE,
             contents: 1_234u32.to_le_bytes().to_vec(),
