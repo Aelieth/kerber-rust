@@ -139,6 +139,8 @@ jobs:
         run: ./scripts/rust-kinit-spake-gate.sh
       - name: rust-kinit-fast-gate (Rust kinit FAST vs MIT KDC)
         run: ./scripts/rust-kinit-fast-gate.sh
+      - name: mit-fast-kdc-gate (MIT kinit -T FAST vs Rust KDC)
+        run: ./scripts/mit-fast-kdc-gate.sh
       - name: rust-kinit-pkinit-gate (Rust kinit PKINIT vs MIT KDC)
         run: ./scripts/rust-kinit-pkinit-gate.sh
       - name: rust-kinit-enterprise-gate (NT-ENTERPRISE both directions)

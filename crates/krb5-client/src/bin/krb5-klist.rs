@@ -104,7 +104,16 @@ fn format_cred(out: &mut String, cred: &CcacheCred, show_flags: bool, show_etype
             .map_or("unknown", EncryptionType::to_mit_name);
         let _ = writeln!(out, "\tEtype (skey, tkt): {skey}, {tkt}");
     }
-    let _ = writeln!(out, "\tTicket server: {server}");
+    if let Some(ts) = cred_ticket_server(cred) {
+        let _ = writeln!(out, "\tTicket server: {ts}");
+    }
+}
+
+fn cred_ticket_server(cred: &CcacheCred) -> Option<String> {
+    let tkt = decode::<Ticket>(&cred.ticket).ok()?;
+    let tkt_s = FileCcache::format_principal(&tkt.realm, &tkt.sname);
+    let cred_s = FileCcache::format_principal(&cred.server.0, &cred.server.1);
+    (tkt_s != cred_s).then_some(tkt_s)
 }
 
 fn fmt_unix(t: u32) -> String {
@@ -152,10 +161,41 @@ mod tests {
         let mut out = String::new();
         format_cred(&mut out, &cred, false, false);
         assert!(out.contains("renew until"), "{out}");
-        assert!(out.contains("Ticket server:"), "{out}");
+        assert!(!out.contains("Ticket server:"), "{out}");
         let mut none = String::new();
         format_cred(&mut none, &sample_cred(0), false, false);
         assert!(!none.contains("renew until"), "{none}");
+    }
+
+    #[test]
+    fn ticket_server_only_when_sname_differs() {
+        use krb5_asn1::encode;
+        use krb5_types::{EncryptedData, OctetString, ascii};
+        let mut cred = sample_cred(0);
+        let tkt = Ticket {
+            tkt_vno: Ticket::VNO,
+            realm: ascii("KERBER.TEST"),
+            sname: PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]),
+            enc_part: EncryptedData {
+                etype: 18,
+                kvno: Some(1),
+                cipher: OctetString::from(vec![0u8; 16]),
+            },
+        };
+        cred.ticket = encode(&tkt).unwrap();
+        let mut out = String::new();
+        format_cred(&mut out, &cred, false, false);
+        assert!(
+            out.contains("Ticket server: host/testhost.kerber.test@KERBER.TEST"),
+            "{out}"
+        );
+        cred.server = (
+            krb5_protocol::realm("KERBER.TEST"),
+            PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]),
+        );
+        let mut same = String::new();
+        format_cred(&mut same, &cred, false, false);
+        assert!(!same.contains("Ticket server:"), "{same}");
     }
 
     #[test]

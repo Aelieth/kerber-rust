@@ -44,7 +44,6 @@ echo "$RKLIST" | grep -q 'Default principal: user@KERBER.TEST'
 echo "$RKLIST" | grep -q 'krbtgt/KERBER.TEST@KERBER.TEST'
 echo "$RKLIST" | grep -q 'Flags:'
 echo "$RKLIST" | grep -q 'Etype (skey, tkt):'
-echo "$RKLIST" | grep -q 'Ticket server:'
 
 echo "==== MIT klist -f -e of Rust FILE ccache ===="
 MKLIST="$(docker exec "$NAME" klist -c /tmp/krb5cc_rust -f -e)"
@@ -60,7 +59,6 @@ echo "$RK2" | grep -q 'Default principal: user@KERBER.TEST'
 echo "$RK2" | grep -q 'host/testhost.kerber.test'
 echo "$RK2" | grep -q 'Flags:'
 echo "$RK2" | grep -q 'Etype (skey, tkt):'
-echo "$RK2" | grep -q 'Ticket server:'
 MIT_FLAGS="$(echo "$MKLIST" | grep -oE 'Flags: [A-Za-z]+')"
 RUST_FLAGS="$(echo "$RK2" | grep -oE 'Flags: [A-Za-z]+')"
 echo "mit_flags=$MIT_FLAGS"
@@ -104,7 +102,21 @@ docker exec "$NAME" sh -c 'echo userpassword | kinit -r 1d -c /tmp/krb5cc_renew 
 RENEW="$(docker exec "$NAME" /tmp/krb5-klist -c /tmp/krb5cc_renew)"
 echo "$RENEW"
 echo "$RENEW" | grep -q 'renew until'
-echo "$RENEW" | grep -q 'Ticket server:'
+
+echo "==== MIT vs Rust klist Ticket server text-diff ===="
+MIT_PLAIN="$(docker exec "$NAME" klist -c /tmp/krb5cc_mit)"
+RUST_PLAIN="$(docker exec "$NAME" /tmp/krb5-klist -c /tmp/krb5cc_mit)"
+echo "$MIT_PLAIN"
+echo "$RUST_PLAIN"
+mit_n="$(echo "$MIT_PLAIN" | grep -c 'Ticket server:' || true)"
+rust_n="$(echo "$RUST_PLAIN" | grep -c 'Ticket server:' || true)"
+echo "mit_ticket_server_lines=$mit_n rust_ticket_server_lines=$rust_n"
+test "$mit_n" = "$rust_n"
+MIT_SP="$(echo "$MIT_PLAIN" | awk '/Service principal/{p=1;next} p && NF && $0 !~ /^[[:space:]]/{print $NF}')"
+RUST_SP="$(echo "$RUST_PLAIN" | awk '/Service principal/{p=1;next} p && NF && $0 !~ /^[[:space:]]/{print $NF}')"
+echo "mit_sp=$MIT_SP"
+echo "rust_sp=$RUST_SP"
+test "$MIT_SP" = "$RUST_SP"
 
 echo "==== MIT kvno then Rust klist ===="
 docker exec "$NAME" sh -c 'echo userpassword | kinit -c /tmp/krb5cc_mitkvno user@KERBER.TEST'
