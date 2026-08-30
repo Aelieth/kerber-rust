@@ -332,6 +332,68 @@ fn spake_as_req_carries_pa_spake() {
 }
 
 #[test]
+fn want_spake_rejects_non_preauth_as_rep() {
+    use std::net::UdpSocket;
+    use std::thread;
+    use std::time::Duration;
+
+    use krb5_types::{AsRep, EncryptedData, KdcRep, PrincipalName, Ticket, ascii};
+
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = udp.local_addr().unwrap().port();
+    thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        let Ok((n, src)) = udp.recv_from(&mut buf) else {
+            return;
+        };
+        let _ = n;
+        let reply = encode(&AsRep(KdcRep {
+            pvno: KdcRep::PVNO,
+            msg_type: KdcRep::MSG_AS_REP,
+            padata: None,
+            crealm: ascii("KERBER.TEST"),
+            cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+            ticket: Ticket {
+                tkt_vno: 5,
+                realm: ascii("KERBER.TEST"),
+                sname: PrincipalName::krbtgt("KERBER.TEST"),
+                enc_part: EncryptedData {
+                    etype: 18,
+                    kvno: Some(1),
+                    cipher: vec![0].into(),
+                },
+            },
+            enc_part: EncryptedData {
+                etype: 18,
+                kvno: Some(1),
+                cipher: vec![0].into(),
+            },
+        }))
+        .unwrap();
+        let _ = udp.send_to(&reply, src);
+    });
+    thread::sleep(Duration::from_millis(20));
+    let err = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
+        cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+        realm: "KERBER.TEST",
+        password: b"userpassword",
+        kdc: &krb5_protocol::KdcAddr {
+            host: "127.0.0.1".into(),
+            port,
+        },
+        want_spake: true,
+        fast_armor: None,
+        pkinit: None,
+        canonicalize: false,
+    })
+    .expect_err("SPAKE skip");
+    assert!(
+        err.to_string().contains("SPAKE"),
+        "want_spake must refuse a non-preauth AS-REP, got {err}"
+    );
+}
+
+#[test]
 fn fast_preauth_retry_carries_fx_fast() {
     use std::net::UdpSocket;
     use std::sync::{Arc, Mutex};

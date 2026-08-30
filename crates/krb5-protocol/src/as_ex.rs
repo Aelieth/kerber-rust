@@ -168,15 +168,18 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
     let reply = exchange(req.kdc, &wire)?;
 
     match classify(&reply)? {
-        KdcMsg::AsRep(rep) => finish_as_rep_keys(
-            rep,
-            nonce,
-            keys,
-            req.password,
-            &req.cname,
-            req.realm,
-            req.canonicalize,
-        ),
+        KdcMsg::AsRep(rep) => {
+            refuse_spake_skip(req.want_spake)?;
+            finish_as_rep_keys(
+                rep,
+                nonce,
+                keys,
+                req.password,
+                &req.cname,
+                req.realm,
+                req.canonicalize,
+            )
+        }
         KdcMsg::Error(e) if e.error_code == err::SKEW => {
             // First-reply SKEW: resync from KDC stime and retry the bare AS-REQ.
             let skew_time = e.stime.clone();
@@ -192,15 +195,18 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
             let wire = encode(&first)?;
             let reply = exchange(req.kdc, &wire)?;
             match classify(&reply)? {
-                KdcMsg::AsRep(rep) => finish_as_rep_keys(
-                    rep,
-                    nonce,
-                    keys,
-                    req.password,
-                    &req.cname,
-                    req.realm,
-                    req.canonicalize,
-                ),
+                KdcMsg::AsRep(rep) => {
+                    refuse_spake_skip(req.want_spake)?;
+                    finish_as_rep_keys(
+                        rep,
+                        nonce,
+                        keys,
+                        req.password,
+                        &req.cname,
+                        req.realm,
+                        req.canonicalize,
+                    )
+                }
                 KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
                     if req.want_spake {
                         continue_spake(req, keys, nonce, till, &etypes, &e)
@@ -501,15 +507,7 @@ fn continue_spake(
     let wire = encode(&second)?;
     let reply = exchange(req.kdc, &wire)?;
     match classify(&reply)? {
-        KdcMsg::AsRep(rep) => finish_as_rep_keys(
-            rep,
-            nonce,
-            keys,
-            req.password,
-            &req.cname,
-            req.realm,
-            req.canonicalize,
-        ),
+        KdcMsg::AsRep(_) => Err(Error::ReplyMismatch("SPAKE required".into())),
         KdcMsg::Error(e)
             if e.error_code == err::PREAUTH_REQUIRED
                 || e.error_code == err::MORE_PREAUTH_DATA_REQUIRED =>
@@ -688,6 +686,14 @@ fn classify_kdc_error(e: &KrbError) -> Result<AsOutcome, Error> {
             })
         }
         _ => krb_err(e),
+    }
+}
+
+fn refuse_spake_skip(want_spake: bool) -> Result<(), Error> {
+    if want_spake {
+        Err(Error::ReplyMismatch("SPAKE required".into()))
+    } else {
+        Ok(())
     }
 }
 
