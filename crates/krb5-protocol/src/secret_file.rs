@@ -5,7 +5,7 @@ use std::io::{self, Write};
 use std::path::Path;
 
 #[cfg(unix)]
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 
 /// Write `bytes` to `path` with mode 0600 using a temp file + rename.
 ///
@@ -79,12 +79,27 @@ pub fn create_exclusive_secret(path: &Path) -> io::Result<std::fs::File> {
 
 /// Overwrite `path` with zeros, fsync, then unlink (kdestroy).
 ///
+/// Symlinks and non-regular files are refused. After open, Unix
+/// `(dev, ino)` must match the pre-open `lstat` so a swapped target
+/// is not zero-filled.
+///
 /// # Errors
 ///
 /// Returns I/O errors from open/write/sync/remove. Missing file is an error.
 pub fn destroy_secret_file(path: &Path) -> io::Result<()> {
-    let meta = fs::metadata(path)?;
+    let lmeta = fs::symlink_metadata(path)?;
+    if !lmeta.file_type().is_file() {
+        return Err(not_regular());
+    }
     let mut f = OpenOptions::new().write(true).open(path)?;
+    let meta = f.metadata()?;
+    #[cfg(unix)]
+    let swapped = meta.dev() != lmeta.dev() || meta.ino() != lmeta.ino();
+    #[cfg(not(unix))]
+    let swapped = false;
+    if swapped || !meta.file_type().is_file() {
+        return Err(not_regular());
+    }
     let chunk = [0u8; 4096];
     let mut left = meta.len();
     while left > 0 {
@@ -95,4 +110,8 @@ pub fn destroy_secret_file(path: &Path) -> io::Result<()> {
     f.sync_all()?;
     drop(f);
     fs::remove_file(path)
+}
+
+fn not_regular() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, "not a regular file")
 }

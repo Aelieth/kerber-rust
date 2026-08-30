@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use krb5_config::env_ccname;
+use krb5_config::{default_ccache_name, env_ccname};
 use krb5_protocol::destroy_secret_file;
 
 fn main() {
@@ -25,7 +25,7 @@ fn main() {
     }
     let path = ccname
         .or_else(env_ccname)
-        .unwrap_or_else(|| PathBuf::from("/tmp/krb5cc_0"));
+        .unwrap_or_else(default_ccache_name);
     if let Err(e) = destroy_secret_file(&path) {
         eprintln!("kdestroy: {e}");
         std::process::exit(1);

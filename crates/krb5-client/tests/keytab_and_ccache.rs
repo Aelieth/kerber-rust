@@ -137,3 +137,35 @@ fn destroy_secret_file_unlinks() {
     assert!(!path.exists());
     assert!(krb5_protocol::destroy_secret_file(&path).is_err());
 }
+
+#[test]
+fn destroy_secret_file_refuses_symlink() {
+    let dir = std::env::temp_dir();
+    let pid = std::process::id();
+    let target = dir.join(format!("krb5cc-destroy-target-{pid}"));
+    let link = dir.join(format!("krb5cc-destroy-link-{pid}"));
+    let _ = std::fs::remove_file(&target);
+    let _ = std::fs::remove_file(&link);
+    std::fs::write(&target, b"do-not-zero").unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    assert!(krb5_protocol::destroy_secret_file(&link).is_err());
+    assert_eq!(std::fs::read(&target).unwrap(), b"do-not-zero");
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let _ = std::fs::remove_file(&link);
+    let _ = std::fs::remove_file(&target);
+}
+
+#[test]
+fn destroy_secret_file_refuses_directory() {
+    let path = std::env::temp_dir().join(format!("krb5cc-destroy-dir-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir(&path).unwrap();
+    assert!(krb5_protocol::destroy_secret_file(&path).is_err());
+    assert!(path.is_dir());
+    std::fs::remove_dir(&path).unwrap();
+}

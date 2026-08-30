@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 
 use krb5_asn1::decode;
-use krb5_config::env_ccname;
+use krb5_config::{default_ccache_name, env_ccname};
 use krb5_protocol::{AsOutcome, FileCcache, KdcAddr, parse_principal, tgs_exchange, tgt_cred};
 use krb5_types::{EncKdcRepPart, EncryptionKey, KerberosTime, PrincipalName, Ticket, TicketFlags};
 
@@ -41,7 +41,7 @@ fn main() {
     });
     let path = ccname
         .or_else(env_ccname)
-        .unwrap_or_else(|| PathBuf::from("/tmp/krb5cc_0"));
+        .unwrap_or_else(default_ccache_name);
     if let Err(e) = run(&path, &host, &service) {
         eprintln!("kvno: {e}");
         std::process::exit(1);

@@ -506,6 +506,7 @@ name = "krb5-config"
 version = "1.0.0"
 dependencies = [
  "krb5-log",
+ "nix",
  "thiserror",
  "tracing",
 ]

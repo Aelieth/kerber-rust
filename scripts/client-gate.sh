@@ -91,3 +91,31 @@ set -e
 echo "$GONE"
 echo "$GONE" | grep -qi 'No credentials cache'
 test "$grc" -ne 0
+
+echo "==== kdestroy refuses a symlink and leaves the target intact ===="
+docker exec "$NAME" sh -c 'printf secret-target >/tmp/kdestroy-target
+rm -f /tmp/kdestroy-link
+ln -s /tmp/kdestroy-target /tmp/kdestroy-link'
+set +e
+SYMOUT="$(docker exec "$NAME" /tmp/krb5-kdestroy -c /tmp/kdestroy-link 2>&1)"
+symrc=$?
+set -e
+echo "$SYMOUT"
+test "$symrc" -ne 0
+echo "$SYMOUT" | grep -qi 'not a regular file'
+TARGET="$(docker exec "$NAME" cat /tmp/kdestroy-target)"
+echo "kdestroy_symlink_target=$TARGET"
+test "$TARGET" = "secret-target"
+docker exec "$NAME" test -L /tmp/kdestroy-link
+
+echo "==== default ccache is /tmp/krb5cc_<uid>, not literal /tmp/krb5cc_0 ===="
+NUID=12345
+docker exec "$NAME" sh -c "printf keep >/tmp/krb5cc_0
+printf uidc >/tmp/krb5cc_${NUID}
+chown ${NUID} /tmp/krb5cc_${NUID}
+chmod 600 /tmp/krb5cc_${NUID}"
+docker exec -u "$NUID" "$NAME" /tmp/krb5-kdestroy
+docker exec "$NAME" test ! -e "/tmp/krb5cc_${NUID}"
+KEEP="$(docker exec "$NAME" cat /tmp/krb5cc_0)"
+echo "default_uid=${NUID} krb5cc_0=$KEEP uid_file_gone=yes"
+test "$KEEP" = "keep"

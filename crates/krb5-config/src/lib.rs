@@ -443,6 +443,22 @@ pub fn env_ccname() -> Option<PathBuf> {
     })
 }
 
+/// MIT `FILE:/tmp/krb5cc_%{uid}` when `KRB5CCNAME` is unset.
+///
+/// `[libdefaults] default_ccache_name` parsing is G9.
+#[must_use]
+pub fn default_ccache_name() -> PathBuf {
+    #[cfg(unix)]
+    {
+        let uid = nix::unistd::Uid::current().as_raw();
+        PathBuf::from(format!("/tmp/krb5cc_{uid}"))
+    }
+    #[cfg(not(unix))]
+    {
+        PathBuf::from("/tmp/krb5cc_0")
+    }
+}
+
 /// `KRB5_CONFIG` path.
 #[must_use]
 pub fn env_krb5_config() -> Option<PathBuf> {
@@ -699,6 +715,18 @@ mod tests {
         assert_eq!(discovered[0].host, "127.0.0.1");
         assert_eq!(discovered[0].port, 88);
         assert_eq!(c.domain_realm[".kerber.test"], "KERBER.TEST");
+    }
+
+    #[test]
+    fn default_ccache_name_uses_process_uid() {
+        let uid = nix::unistd::Uid::current().as_raw();
+        assert_eq!(
+            default_ccache_name(),
+            PathBuf::from(format!("/tmp/krb5cc_{uid}"))
+        );
+        if uid != 0 {
+            assert_ne!(default_ccache_name(), PathBuf::from("/tmp/krb5cc_0"));
+        }
     }
 
     #[test]

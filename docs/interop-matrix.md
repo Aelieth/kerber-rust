@@ -14,7 +14,7 @@ the script documents otherwise.
 
 | Gate | Drives | Asserts | CI |
 | --- | --- | --- | --- |
-| `client-gate.sh` | Rust `krb5-kinit` vs MIT `krb5kdc` | MIT `klist` names TGT + `host/testhost.kerber.test`; Rust `klist -f -e` matches MIT flags/etype; `krb5-kvno` service ticket; `kdestroy` then MIT `klist` has no cache | harness |
+| `client-gate.sh` | Rust `krb5-kinit` vs MIT `krb5kdc` | MIT `klist` names TGT + `host/testhost.kerber.test`; Rust `klist -f -e` matches MIT flags/etype; `krb5-kvno` service ticket; `kdestroy` then MIT `klist` has no cache; symlink kdestroy refused (target intact); default ccache `/tmp/krb5cc_<uid>` | harness |
 | `ktutil-gate.sh` | MIT `ktadd` / Rust `ktutil` / MIT `kinit -k` | Rust list of MIT keytab; Rust-written keytab `kinit -k` | harness |
 | `kadmin-local-gate.sh` | Rust `krb5-kadmin-local` then MIT `kadmin` | `addprinc extra2` and `addprinc host/slashhost`; MIT getprinc/listprincs those names | harness |
 | `rust-kpasswd-mit-gate.sh` | Rust `krb5-kpasswd` vs MIT `kadmind` 464 | new password `kinit`; old fails | harness |

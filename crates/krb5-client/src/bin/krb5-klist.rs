@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use krb5_asn1::decode;
-use krb5_config::env_ccname;
+use krb5_config::{default_ccache_name, env_ccname};
 use krb5_crypto::EncryptionType;
 use krb5_protocol::FileCcache;
 use krb5_types::{Ticket, TicketFlags};
@@ -39,7 +39,7 @@ fn main() {
     }
     let path = ccname
         .or_else(env_ccname)
-        .unwrap_or_else(|| PathBuf::from("/tmp/krb5cc_0"));
+        .unwrap_or_else(default_ccache_name);
     if let Err(e) = list(&path, show_flags, show_etype) {
         eprintln!("klist: {e}");
         std::process::exit(1);
