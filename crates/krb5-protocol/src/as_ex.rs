@@ -11,7 +11,10 @@ use krb5_types::{
 };
 
 use crate::error::Error;
-use crate::preauth::{pa_spake_response, pa_spake_support};
+use crate::preauth::{
+    apply_strengthen, armor_key, attach_fast, build_fast_armor, pa_spake_response,
+    pa_spake_support, unwrap_fast_rep,
+};
 use crate::transport::{KdcAddr, exchange};
 
 /// Successful AS exchange: TGT plus session key.
@@ -43,6 +46,20 @@ pub struct AsRequest<'a> {
     pub kdc: &'a KdcAddr,
     /// Use PA-SPAKE (151, P-256) instead of PA-ENC-TIMESTAMP.
     pub want_spake: bool,
+    /// FAST armor (PA-FX-FAST). Inner preauth is still enc-timestamp.
+    pub fast_armor: Option<&'a FastArmor>,
+}
+
+/// Ticket used as RFC 6113 FAST AP-REQUEST armor.
+pub struct FastArmor {
+    /// Armor ticket (usually a TGT).
+    pub ticket: krb5_types::Ticket,
+    /// Session key of `ticket`.
+    pub session: ProtocolKey,
+    /// Client realm in the armor authenticator.
+    pub crealm: krb5_types::Realm,
+    /// Client name in the armor authenticator.
+    pub cname: PrincipalName,
 }
 
 /// Obtain a TGT. Sends a bare AS-REQ first; if the KDC requires preauth,
@@ -73,6 +90,7 @@ pub fn as_exchange_key(
             password: b"",
             kdc,
             want_spake: false,
+            fast_armor: None,
         },
         keys,
     )
@@ -103,6 +121,9 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
         .add_hours(10)
         .unwrap_or_else(|_| KerberosTime::now());
 
+    if req.fast_armor.is_some() {
+        return continue_fast(req, keys, nonce, till.clone(), &etypes, None);
+    }
     let support = req.want_spake.then(pa_spake_support);
     let first_pa = support.clone().map(|s| vec![s]);
     let first = build_as_req(
@@ -133,6 +154,8 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
                 KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
                     if req.want_spake {
                         continue_spake(req, keys, nonce, till, &etypes, &e)
+                    } else if req.fast_armor.is_some() {
+                        continue_fast(req, keys, nonce, till, &etypes, Some(&e))
                     } else {
                         continue_preauth(req, keys, nonce, till, &etypes, &e, Some(&skew_time))
                     }
@@ -147,6 +170,9 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
                     || e.error_code == err::MORE_PREAUTH_DATA_REQUIRED) =>
         {
             continue_spake(req, keys, nonce, till, &etypes, &e)
+        }
+        KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED && req.fast_armor.is_some() => {
+            continue_fast(req, keys, nonce, till, &etypes, Some(&e))
         }
         KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
             continue_preauth(req, keys, nonce, till, &etypes, &e, None)
@@ -280,6 +306,67 @@ fn continue_preauth(
                 KdcMsg::Error(e) => classify_kdc_error(&e),
                 KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
             }
+        }
+        KdcMsg::Error(e) => classify_kdc_error(&e),
+        KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
+    }
+}
+
+fn continue_fast(
+    req: &AsRequest<'_>,
+    keys: &[ProtocolKey],
+    nonce: u32,
+    till: KerberosTime,
+    etypes: &[i32],
+    err: Option<&KrbError>,
+) -> Result<AsOutcome, Error> {
+    let armor = req
+        .fast_armor
+        .ok_or_else(|| Error::ReplyMismatch("FAST armor missing".into()))?;
+    let mut raw = vec![0u8; armor.session.etype().key_len()];
+    getrandom::getrandom(&mut raw).map_err(|e| Error::transport_msg(e.to_string()))?;
+    let sub = ProtocolKey::from_bytes(armor.session.etype(), &raw)?;
+    let ap = build_fast_armor(
+        armor.ticket.clone(),
+        &armor.session,
+        &armor.crealm,
+        &armor.cname,
+        Some(&sub),
+    )?;
+    let akey = armor_key(&armor.session, Some(&sub))?;
+    let (etype, salt, params) = match err {
+        Some(e) => select_s2k(e, &req.cname, req.realm)?,
+        None => (
+            EncryptionType::preferred()[0],
+            req.cname.default_salt(req.realm),
+            None,
+        ),
+    };
+    let client_key = pick_key(keys, Some(etype)).map_or_else(
+        || string_to_key(etype, req.password, &salt, params.as_deref()),
+        Ok,
+    )?;
+    let inner = vec![pa_enc_timestamp(&client_key)?];
+    let mut req2 = build_as_req(&req.cname, req.realm, nonce, till, None, etypes)?;
+    attach_fast(&mut req2, &ap, &akey, inner)?;
+    let wire = encode(&req2)?;
+    let reply = exchange(req.kdc, &wire)?;
+    match classify(&reply)? {
+        KdcMsg::AsRep(rep) => {
+            let fast = unwrap_fast_rep(&akey, &rep.0.padata)?;
+            let reply_key = match &fast.strengthen_key {
+                Some(sk) => apply_strengthen(sk, &client_key)?,
+                None => client_key.clone(),
+            };
+            finish_as_rep(
+                rep,
+                nonce,
+                Some(reply_key),
+                req.password,
+                &req.cname,
+                req.realm,
+                true,
+            )
         }
         KdcMsg::Error(e) => classify_kdc_error(&e),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),

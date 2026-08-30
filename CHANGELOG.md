@@ -106,7 +106,9 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   no-AD `unwrap_iov` is AES-only; SPNEGO duplicate NegToken fields
   are `Truncated`; `krb5-gss-accept` sets a 30s socket timeout.
   Rust `kinit --spake` obtains a TGT from MIT 1.22.2 via PA-SPAKE
-  151 / P-256 (`scripts/rust-kinit-spake-gate.sh`).
+  151 / P-256 (`scripts/rust-kinit-spake-gate.sh`). `kinit --fast
+  --armor-ccache` wraps PA-ENC-TIMESTAMP in PA-FX-FAST
+  (`scripts/rust-kinit-fast-gate.sh`).
 
 - KDB extension surface: `PrincipalRead` / `PrincipalWrite` /
   `StoreLifecycle`. Dump-v7 is the default backend; `db_library=memory`

@@ -9,8 +9,11 @@
 
 use std::path::Path;
 
-use krb5_protocol::{AsOutcome, AsRequest, KdcAddr, TgsOutcome, as_exchange, tgs_exchange};
-use krb5_types::PrincipalName;
+use krb5_asn1::decode;
+use krb5_protocol::{
+    AsOutcome, AsRequest, FastArmor, KdcAddr, TgsOutcome, as_exchange, tgs_exchange,
+};
+use krb5_types::{PrincipalName, Ticket};
 use zeroize::Zeroize;
 
 pub use krb5_protocol::{
@@ -48,7 +51,7 @@ pub fn kinit(
     ccache_path: impl AsRef<Path>,
     service: Option<&str>,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
-    kinit_ex(kdc, principal, password, ccache_path, service, false)
+    kinit_ex(kdc, principal, password, ccache_path, service, false, None)
 }
 
 /// [`kinit`] with a preauth mode (`want_spake` = PA-SPAKE P-256).
@@ -63,6 +66,7 @@ pub fn kinit_ex(
     ccache_path: impl AsRef<Path>,
     service: Option<&str>,
     want_spake: bool,
+    armor_ccache: Option<&Path>,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
     let result = kinit_inner(
         kdc,
@@ -71,9 +75,27 @@ pub fn kinit_ex(
         ccache_path.as_ref(),
         service,
         want_spake,
+        armor_ccache,
     );
     password.zeroize();
     result
+}
+
+fn load_fast_armor(path: &Path) -> Result<FastArmor, Box<dyn std::error::Error + Send + Sync>> {
+    let bytes = std::fs::read(path)?;
+    let cc = FileCcache::parse(&bytes)?;
+    let cred = cc
+        .creds
+        .iter()
+        .find(|c| !c.is_config() && c.server.1.components_joined().starts_with("krbtgt/"))
+        .ok_or("armor ccache has no TGT")?;
+    let ticket: Ticket = decode(&cred.ticket)?;
+    Ok(FastArmor {
+        ticket,
+        session: cred.key.clone(),
+        crealm: cred.client.0.clone(),
+        cname: cred.client.1.clone(),
+    })
 }
 
 fn kinit_inner(
@@ -83,15 +105,21 @@ fn kinit_inner(
     ccache_path: &Path,
     service: Option<&str>,
     want_spake: bool,
+    armor_ccache: Option<&Path>,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
     let (cname, realm_s) = parse_principal(principal)?;
     let resolved = resolve_kdc(&realm_s, kdc);
+    let armor = match armor_ccache {
+        Some(p) => Some(load_fast_armor(p)?),
+        None => None,
+    };
     let as_out = as_exchange(&AsRequest {
         cname,
         realm: &realm_s,
         password,
         kdc: &resolved,
         want_spake,
+        fast_armor: armor.as_ref(),
     })?;
     let mut creds = vec![tgt_cred(
         &as_out.crealm,

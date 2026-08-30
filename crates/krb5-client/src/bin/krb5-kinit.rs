@@ -1,6 +1,6 @@
 //! Obtain a TGT from a KDC and write an MIT FILE ccache.
 //!
-//! Usage: krb5-kinit [--spake] <kdc-host> <user@REALM> <ccache-path> [service]
+//! Usage: krb5-kinit [--spake] [--fast --armor-ccache PATH] <kdc-host> <user@REALM> <ccache-path> [service]
 //!
 //! Password is read from `KRB5_PASSWORD` or stdin. Never from argv.
 
@@ -18,17 +18,22 @@ fn main() {
         .try_init();
 
     let mut want_spake = false;
+    let mut armor_ccache = None::<String>;
     let mut positional = Vec::new();
-    for a in std::env::args().skip(1) {
-        if a == "--spake" {
-            want_spake = true;
-        } else {
-            positional.push(a);
+    let mut args_iter = std::env::args().skip(1);
+    while let Some(a) = args_iter.next() {
+        match a.as_str() {
+            "--spake" => want_spake = true,
+            "--fast" => {}
+            "--armor-ccache" => armor_ccache = args_iter.next(),
+            _ => positional.push(a),
         }
     }
     let mut args = positional.into_iter();
     let host = args.next().unwrap_or_else(|| {
-        eprintln!("usage: krb5-kinit [--spake] <kdc-host> <user@REALM> <ccache-path> [service]");
+        eprintln!(
+            "usage: krb5-kinit [--spake] [--fast --armor-ccache PATH] <kdc-host> <user@REALM> <ccache-path> [service]"
+        );
         std::process::exit(2);
     });
     let principal = args.next().unwrap_or_else(|| {
@@ -67,6 +72,7 @@ fn main() {
         &ccache,
         service.as_deref(),
         want_spake,
+        armor_ccache.as_deref().map(std::path::Path::new),
     ) {
         Ok(r) => {
             println!(

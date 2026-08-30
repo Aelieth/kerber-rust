@@ -200,6 +200,7 @@ fn non_ascii_realm_as_exchange_is_err() {
             port: 1,
         },
         want_spake: false,
+        fast_armor: None,
     });
     assert!(err.is_err(), "non-ASCII realm must not panic");
 }
@@ -257,6 +258,7 @@ fn first_bare_as_req_skew_is_retried() {
             port,
         },
         want_spake: false,
+        fast_armor: None,
     });
     assert!(
         hits.load(Ordering::SeqCst) >= 2,
@@ -311,6 +313,7 @@ fn spake_as_req_carries_pa_spake() {
             port,
         },
         want_spake: true,
+        fast_armor: None,
     });
     let raw = first.lock().unwrap().clone();
     assert!(!raw.is_empty(), "SPAKE client must send an AS-REQ");
@@ -319,6 +322,92 @@ fn spake_as_req_carries_pa_spake() {
     assert!(
         padata.iter().any(|p| p.padata_type == pa::SPAKE),
         "want_spake AS-REQ must advertise PA-SPAKE (151), got {padata:?}"
+    );
+}
+
+#[test]
+fn fast_preauth_retry_carries_fx_fast() {
+    use std::net::UdpSocket;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::Duration;
+
+    use krb5_crypto::{EncryptionType, ProtocolKey};
+    use krb5_protocol::FastArmor;
+    use krb5_types::{
+        AsReq, EncryptedData, KerberosTime, KrbError, Microseconds, PrincipalName, Ticket, ascii,
+        err, pa,
+    };
+
+    let first = Arc::new(Mutex::new(Vec::new()));
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = udp.local_addr().unwrap().port();
+    let first2 = first.clone();
+    thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        for nsent in 0..2 {
+            let Ok((n, src)) = udp.recv_from(&mut buf) else {
+                return;
+            };
+            if nsent == 0 {
+                *first2.lock().unwrap() = buf[..n].to_vec();
+            }
+            let reply = encode(&KrbError {
+                pvno: KrbError::PVNO,
+                msg_type: KrbError::MSG_TYPE,
+                ctime: None,
+                cusec: None,
+                stime: KerberosTime::now(),
+                susec: Microseconds::ZERO,
+                error_code: err::PREAUTH_REQUIRED,
+                crealm: None,
+                cname: None,
+                realm: ascii("KERBER.TEST"),
+                sname: PrincipalName::krbtgt("KERBER.TEST"),
+                e_text: None,
+                e_data: None,
+            })
+            .unwrap();
+            let _ = udp.send_to(&reply, src);
+        }
+    });
+    thread::sleep(Duration::from_millis(20));
+    let session =
+        ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x42u8; 32]).unwrap();
+    let ticket = Ticket {
+        tkt_vno: 5,
+        realm: ascii("KERBER.TEST"),
+        sname: PrincipalName::krbtgt("KERBER.TEST"),
+        enc_part: EncryptedData {
+            etype: 18,
+            kvno: Some(1),
+            cipher: vec![0u8; 32].into(),
+        },
+    };
+    let armor = FastArmor {
+        ticket,
+        session,
+        crealm: ascii("KERBER.TEST"),
+        cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+    };
+    let _ = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
+        cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+        realm: "KERBER.TEST",
+        password: b"userpassword",
+        kdc: &krb5_protocol::KdcAddr {
+            host: "127.0.0.1".into(),
+            port,
+        },
+        want_spake: false,
+        fast_armor: Some(&armor),
+    });
+    let raw = first.lock().unwrap().clone();
+    assert!(!raw.is_empty(), "FAST client must send an AS-REQ");
+    let req: AsReq = decode(&raw).expect("AS-REQ");
+    let padata = req.0.padata.unwrap_or_default();
+    assert!(
+        padata.iter().any(|p| p.padata_type == pa::FX_FAST),
+        "FAST AS-REQ must carry PA-FX-FAST (136), got {padata:?}"
     );
 }
 
