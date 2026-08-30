@@ -1213,6 +1213,40 @@ impl PrincipalStore {
         Self::keytab_from(p)
     }
 
+    /// Local `ktadd`: optional rotate, export ignoring lockdown, then `write`.
+    ///
+    /// On write failure a rotation is rolled back so the dump kvno is
+    /// unchanged (MIT kadmin.local ignores lockdown; a failing op must
+    /// not persist a destructive step).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`], RNG, persist, or `write`.
+    pub fn ktadd_local_atomic(
+        &mut self,
+        name: &PrincipalName,
+        rotate: bool,
+        write: impl FnOnce(&Keytab) -> Result<(), Error>,
+    ) -> Result<Keytab, Error> {
+        let snap = self.get_name(name).cloned().ok_or(Error::NotFound)?;
+        if rotate {
+            self.chrand(name)?;
+        }
+        let kt = self.export_keytab_local(name)?;
+        match write(&kt) {
+            Ok(()) => Ok(kt),
+            Err(e) => {
+                if rotate {
+                    let id = snap.id();
+                    self.note_ulog(id.clone(), false, Some(snap.clone()));
+                    self.map.insert(id, snap);
+                    let _ = self.save_if_configured();
+                }
+                Err(e)
+            }
+        }
+    }
+
     fn keytab_from(p: &Principal) -> Result<Keytab, Error> {
         if p.keys.is_empty() {
             return Err(Error::NotFound);

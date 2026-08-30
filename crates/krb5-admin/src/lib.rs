@@ -9,7 +9,9 @@ mod kadm5;
 mod kprop;
 mod listen;
 
-use krb5_kdc::{Acl, AdminOp, KDB_REQUIRES_PRE_AUTH, NamedPolicy, PrincipalStore};
+use krb5_kdc::{
+    Acl, AdminOp, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PRE_AUTH, NamedPolicy, PrincipalStore,
+};
 use krb5_protocol::{Keytab, ReplayCache, verify_ap_req};
 use krb5_types::PrincipalName;
 use thiserror::Error;
@@ -70,6 +72,7 @@ pub struct KadminArgs {
 pub fn kadmin_attr_bit(name: &str) -> Option<u32> {
     match name {
         "requires_preauth" => Some(KDB_REQUIRES_PRE_AUTH),
+        "lockdown_keys" => Some(KDB_LOCKDOWN_KEYS),
         _ => None,
     }
 }
@@ -285,6 +288,33 @@ impl<'a> AdminSession<'a> {
     pub fn ktadd(&self, name: &PrincipalName) -> Result<Keytab, Error> {
         self.store
             .export_keytab(self.acl, &self.actor, name)
+            .map_err(Error::from)
+    }
+
+    /// Local `ktadd` / `ktadd -norandkey`: ignore lockdown, rotate then
+    /// extract, persist rotation only after `write` succeeds.
+    ///
+    /// # Errors
+    ///
+    /// ACL, not found, or `write`.
+    pub fn ktadd_local(
+        &mut self,
+        name: &PrincipalName,
+        rotate: bool,
+        write: impl FnOnce(&Keytab) -> Result<(), String>,
+    ) -> Result<Keytab, Error> {
+        self.acl
+            .check(&self.actor, AdminOp::Ktadd)
+            .map_err(Error::from)?;
+        if rotate {
+            self.acl
+                .check(&self.actor, AdminOp::ChangePassword)
+                .map_err(Error::from)?;
+        }
+        self.store
+            .ktadd_local_atomic(name, rotate, |kt| {
+                write(kt).map_err(krb5_kdc::Error::Crypto)
+            })
             .map_err(Error::from)
     }
 
@@ -1405,5 +1435,107 @@ mod tests {
         assert_eq!(a.ktpath.as_deref(), Some("/tmp/x.keytab"));
         assert!(a.norandkey);
         assert_eq!(a.name, "host/x");
+        let a = parse_kadmin_args(&["+lockdown_keys", "lockee"]).unwrap();
+        assert_eq!(a.attr_set, KDB_LOCKDOWN_KEYS);
+    }
+
+    fn max_kvno(store: &PrincipalStore, name: &PrincipalName) -> u32 {
+        store
+            .get_name(name)
+            .unwrap()
+            .keys
+            .iter()
+            .map(|k| k.kvno)
+            .max()
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn ktadd_local_lockdown_rotates_and_extracts() {
+        let (mut store, acl) = bootstrap_documented().unwrap();
+        let extra = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "lockee.kerber.test"]);
+        {
+            let mut admin = AdminSession::local(&mut store, &acl, documented_admin_id());
+            admin.create_randkey(&extra).unwrap();
+            admin
+                .modify_attributes(&extra, Some(KDB_LOCKDOWN_KEYS))
+                .unwrap();
+        }
+        assert_eq!(
+            store
+                .export_keytab(&acl, &documented_admin_id(), &extra)
+                .unwrap_err(),
+            krb5_kdc::Error::AclDenied
+        );
+        let before = max_kvno(&store, &extra);
+        let mut written = None;
+        {
+            let mut admin = AdminSession::local(&mut store, &acl, documented_admin_id());
+            admin
+                .ktadd_local(&extra, true, |kt| {
+                    written = Some(kt.entries.len());
+                    Ok(())
+                })
+                .unwrap();
+        }
+        assert!(written.unwrap() >= 1);
+        assert!(max_kvno(&store, &extra) > before);
+    }
+
+    #[test]
+    fn ktadd_local_write_fail_does_not_persist_rotation() {
+        use krb5_kdc::{load_store, save_store};
+        let dir = std::env::temp_dir().join(format!(
+            "ktadd-atomic-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let db = dir.join("principal");
+        let stash = dir.join("stash");
+        let (mut store, acl) = bootstrap_documented().unwrap();
+        let extra = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "atomic.kerber.test"]);
+        {
+            let mut admin = AdminSession::local(&mut store, &acl, documented_admin_id());
+            admin.create_randkey(&extra).unwrap();
+        }
+        save_store(&store, &db, &stash).unwrap();
+        store.persist_paths = Some((db.clone(), stash.clone()));
+        let before = max_kvno(&store, &extra);
+        {
+            let mut admin = AdminSession::local(&mut store, &acl, documented_admin_id());
+            let err = admin
+                .ktadd_local(&extra, true, |_| Err("disk full".into()))
+                .unwrap_err();
+            assert!(matches!(err, Error::Inner(_)));
+        }
+        assert_eq!(max_kvno(&store, &extra), before);
+        let reloaded = load_store(&db, &stash).unwrap();
+        assert_eq!(max_kvno(&reloaded, &extra), before);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ktadd_local_krbtgt_rotates_like_mit() {
+        let (mut store, acl) = bootstrap_documented().unwrap();
+        let tgt = PrincipalName::krbtgt(krb5_kdc::TEST_REALM);
+        store
+            .apply_admin_fields(&tgt, Some(KDB_LOCKDOWN_KEYS), None, None, None, None, false)
+            .unwrap();
+        let before = max_kvno(&store, &tgt);
+        let mut n = 0;
+        {
+            let mut admin = AdminSession::local(&mut store, &acl, documented_admin_id());
+            admin
+                .ktadd_local(&tgt, true, |kt| {
+                    n = kt.entries.len();
+                    Ok(())
+                })
+                .unwrap();
+        }
+        assert!(n >= 1);
+        assert!(max_kvno(&store, &tgt) > before);
     }
 }

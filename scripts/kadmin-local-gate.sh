@@ -19,7 +19,7 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
-cargo build -p krb5-kdc --bin krb5-kdc -p krb5-admin --bin krb5-kadmind --bin krb5-kadmin-local
+cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-kdb -p krb5-admin --bin krb5-kadmind --bin krb5-kadmin-local
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
@@ -31,9 +31,10 @@ cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc
+docker cp target/debug/krb5-kdb "$NAME":/tmp/krb5-kdb
 docker cp target/debug/krb5-kadmind "$NAME":/tmp/krb5-kadmind
 docker cp target/debug/krb5-kadmin-local "$NAME":/tmp/krb5-kadmin-local
-docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kadmind /tmp/krb5-kadmin-local
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb /tmp/krb5-kadmind /tmp/krb5-kadmin-local
 
 docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
@@ -278,5 +279,107 @@ echo "$RACE" | grep -qi 'does not exist' && {
     exit 1
 }
 
-log "kadmin.local.gate" "ok" ',"principal":"extra2@KERBER.TEST,host/slashhost@KERBER.TEST,randsvc,ktone,kttwo,raceprinc"'
+echo "==== MIT kadmin.local lockdown oracle ===="
+docker exec "$NAME" sh -c '
+set -e
+kdb5_util create -s -P masterpassword -r KERBER.TEST
+kadmin.local -r KERBER.TEST -q "addprinc -randkey lockee@KERBER.TEST"
+kadmin.local -r KERBER.TEST -q "modprinc +lockdown_keys lockee@KERBER.TEST"
+echo "---- getprinc lockee before ktadd ----"
+kadmin.local -r KERBER.TEST -q "getprinc lockee@KERBER.TEST"
+kadmin.local -r KERBER.TEST -q "ktadd -k /tmp/mit-lockee.keytab lockee@KERBER.TEST"
+echo mit_lockee_ktadd_rc=$?
+echo "---- getprinc lockee after ktadd ----"
+kadmin.local -r KERBER.TEST -q "getprinc lockee@KERBER.TEST"
+kadmin.local -r KERBER.TEST -q "ktadd -k /tmp/mit-krbtgt.keytab krbtgt/KERBER.TEST"
+echo mit_krbtgt_ktadd_rc=$?
+echo "---- getprinc krbtgt after ktadd ----"
+kadmin.local -r KERBER.TEST -q "getprinc krbtgt/KERBER.TEST"
+echo "---- klist -k ----"
+klist -k /tmp/mit-lockee.keytab
+klist -k /tmp/mit-krbtgt.keytab
+'
+MITL="$(docker exec "$NAME" kadmin.local -r KERBER.TEST -q 'getprinc lockee@KERBER.TEST')"
+echo "$MITL"
+echo "$MITL" | grep -qi LOCKDOWN
+echo "$MITL" | grep -Eqi 'Key: vno[[:space:]]*2'
+docker exec "$NAME" test -s /tmp/mit-lockee.keytab
+docker exec "$NAME" test -s /tmp/mit-krbtgt.keytab
+
+echo "==== Rust ktadd on +lockdown_keys (test-realm) ===="
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey lockee'
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'modprinc +lockdown_keys lockee'
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'ktadd -k /tmp/lockee.keytab lockee'
+LK="$(docker exec "$NAME" klist -k /tmp/lockee.keytab)"
+echo "$LK"
+echo "$LK" | grep -q 'lockee@KERBER.TEST'
+docker exec "$NAME" sh -c 'kill $(pidof krb5-kadmind) 2>/dev/null || true'
+sleep 0.3
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+    "$NAME" sh -c '/tmp/krb5-kadmind 127.0.0.1:749 >/tmp/kadmind.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/kadmind.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kadmind.log >&2 || true
+    log "kadmin.local.gate" "error" ',"error":"kadmind did not listen after lockdown ktadd"'
+    exit 1
+fi
+MITLOCK="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc lockee')"
+echo "$MITLOCK"
+echo "$MITLOCK" | grep -qi LOCKDOWN
+echo "$MITLOCK" | grep -Eqi 'Key: vno[[:space:]]*2'
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" \
+    kinit -k -t /tmp/lockee.keytab lockee@KERBER.TEST
+echo "kinit -k lockee ok"
+
+echo "==== golden dump ktadd lockdown + krbtgt footgun ===="
+docker cp tests/traces/kdb/mit-dump-v7.txt "$NAME":/tmp/mit.dump
+docker exec \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_DB=/tmp/golden-principal \
+    -e KRB5_KDC_STASH=/tmp/golden-stash \
+    "$NAME" /tmp/krb5-kdb load /tmp/mit.dump
+docker exec \
+    -e KRB5_KDC_DB=/tmp/golden-principal \
+    -e KRB5_KDC_STASH=/tmp/golden-stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey gldlock'
+docker exec \
+    -e KRB5_KDC_DB=/tmp/golden-principal \
+    -e KRB5_KDC_STASH=/tmp/golden-stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'modprinc +lockdown_keys gldlock'
+docker exec \
+    -e KRB5_KDC_DB=/tmp/golden-principal \
+    -e KRB5_KDC_STASH=/tmp/golden-stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'ktadd -k /tmp/gld.locktab gldlock'
+GLD="$(docker exec "$NAME" klist -k /tmp/gld.locktab)"
+echo "$GLD"
+echo "$GLD" | grep -q 'gldlock@KERBER.TEST'
+docker exec \
+    -e KRB5_KDC_DB=/tmp/golden-principal \
+    -e KRB5_KDC_STASH=/tmp/golden-stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'ktadd -k /tmp/gld-krbtgt.keytab krbtgt/KERBER.TEST'
+GTGT="$(docker exec "$NAME" klist -k /tmp/gld-krbtgt.keytab)"
+echo "$GTGT"
+echo "$GTGT" | grep -q 'krbtgt/KERBER.TEST@KERBER.TEST'
+
+log "kadmin.local.gate" "ok" ',"principal":"extra2@KERBER.TEST,host/slashhost@KERBER.TEST,randsvc,ktone,kttwo,raceprinc,lockee,gldlock,krbtgt"'
 exit 0

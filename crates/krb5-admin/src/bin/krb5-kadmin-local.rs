@@ -131,20 +131,10 @@ fn run(sess: &mut AdminSession<'_>, line: &str) -> Result<(), String> {
             let a = parse_kadmin_args(&parts[1..])?;
             let ktpath = a.ktpath.as_deref().ok_or("ktadd -k <file> <name>")?;
             let name = parse_name(sess, &a.name)?;
-            if !a.norandkey {
-                sess.chrand(&name).map_err(|e| e.to_string())?;
-            }
-            let added: Keytab = sess.ktadd(&name).map_err(|e| e.to_string())?;
             let path = std::path::Path::new(ktpath);
-            let mut kt = std::fs::read(path)
-                .ok()
-                .and_then(|b| Keytab::parse(&b).ok())
-                .unwrap_or_default();
-            kt.entries.extend(added.entries);
-            if kt.version == 0 {
-                kt.version = 0x0502;
-            }
-            kt.write_file(path).map_err(|e| e.to_string())
+            sess.ktadd_local(&name, !a.norandkey, |added| merge_write_keytab(path, added))
+                .map(|_| ())
+                .map_err(|e| e.to_string())
         }
         Some("modprinc" | "modify_principal") => {
             let a = parse_kadmin_args(&parts[1..])?;
@@ -173,6 +163,26 @@ fn run(sess: &mut AdminSession<'_>, line: &str) -> Result<(), String> {
         Some(other) => Err(format!("unknown {other}")),
         None => Ok(()),
     }
+}
+
+fn merge_write_keytab(path: &std::path::Path, added: &Keytab) -> Result<(), String> {
+    let mut kt = std::fs::read(path)
+        .ok()
+        .and_then(|b| Keytab::parse(&b).ok())
+        .unwrap_or_default();
+    for e in &added.entries {
+        kt.entries.push(krb5_protocol::KeytabEntry {
+            realm: e.realm.clone(),
+            name: e.name.clone(),
+            timestamp: e.timestamp,
+            kvno: e.kvno,
+            key: e.key.clone(),
+        });
+    }
+    if kt.version == 0 {
+        kt.version = 0x0502;
+    }
+    kt.write_file(path).map_err(|e| e.to_string())
 }
 
 fn parse_name(sess: &AdminSession<'_>, spec: &str) -> Result<PrincipalName, String> {
