@@ -320,6 +320,15 @@ fn kdb_usage_zero_frames_int16_le_and_new_still_rejects() {
         EncryptionType::from_mit_name("aes256-cts-hmac-sha384-192").unwrap(),
         EncryptionType::Aes256CtsHmacSha384192
     );
+    assert_eq!(
+        EncryptionType::Aes256CtsHmacSha196.to_mit_name(),
+        "aes256-cts-hmac-sha1-96"
+    );
+    assert_eq!(
+        EncryptionType::from_mit_name(EncryptionType::Aes128CtsHmacSha256128.to_mit_name())
+            .unwrap(),
+        EncryptionType::Aes128CtsHmacSha256128
+    );
 }
 
 #[test]

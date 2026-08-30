@@ -145,6 +145,12 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
 
 ### Changed
 
+- `krb5-klist` (`-c`/`-f`/`-e`) reads a FILE ccache; `krb5-kdestroy`
+  zeros then unlinks. Bidirectional MIT oracle in
+  `scripts/client-gate.sh`: Rust klist of a MIT-`kinit` ccache and MIT
+  `klist` of a Rust-written ccache agree on principal, service, flags,
+  and etype; after kdestroy MIT `klist` reports no cache.
+
 - `--spake` cannot combine with `--armor-ccache` or `--pkinit`.
   PKINIT trust-anchor `notBefore`/`notAfter` and `keyCertSign` are
   enforced. Realm compares at PKINIT SAN and NT-ENTERPRISE lookup are

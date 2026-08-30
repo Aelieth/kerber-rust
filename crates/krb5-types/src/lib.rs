@@ -407,6 +407,33 @@ impl TicketFlags {
         self.bit(flag_bit::PROXIABLE)
     }
 
+    /// MIT `klist -f` flag letters (same order as MIT 1.22.2).
+    #[must_use]
+    pub fn mit_letters(&self) -> String {
+        let mut s = String::new();
+        let bits = [
+            (flag_bit::FORWARDABLE, 'F'),
+            (flag_bit::FORWARDED, 'f'),
+            (flag_bit::PROXIABLE, 'P'),
+            (flag_bit::PROXY, 'p'),
+            (flag_bit::MAY_POSTDATE, 'D'),
+            (flag_bit::POSTDATED, 'd'),
+            (flag_bit::INVALID, 'i'),
+            (flag_bit::RENEWABLE, 'R'),
+            (flag_bit::INITIAL, 'I'),
+            (flag_bit::PRE_AUTHENT, 'A'),
+            (flag_bit::HW_AUTHENT, 'H'),
+            (flag_bit::TRANSITED_POLICY_CHECKED, 'T'),
+            (flag_bit::OK_AS_DELEGATE, 'O'),
+        ];
+        for (bit, ch) in bits {
+            if self.bit(bit) {
+                s.push(ch);
+            }
+        }
+        s
+    }
+
     /// RFC 4120 `invalid` (bit 7).
     #[must_use]
     pub fn invalid(&self) -> bool {
@@ -983,6 +1010,9 @@ mod tests {
         assert_eq!(f.to_u32(), 0x0060_0000);
         let round = TicketFlags::from_u32(0x0060_0000);
         assert!(round.initial() && round.pre_authent() && !round.renewable());
+        assert_eq!(round.mit_letters(), "IA");
+        let fwd = TicketFlags::none().with_bit(flag_bit::FORWARDABLE, true);
+        assert_eq!(fwd.mit_letters(), "F");
     }
 
     #[test]

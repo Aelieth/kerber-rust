@@ -76,3 +76,23 @@ pub fn create_exclusive_secret(path: &Path) -> io::Result<std::fs::File> {
     }
     opts.open(path)
 }
+
+/// Overwrite `path` with zeros, fsync, then unlink (kdestroy).
+///
+/// # Errors
+///
+/// Returns I/O errors from open/write/sync/remove. Missing file is an error.
+pub fn destroy_secret_file(path: &Path) -> io::Result<()> {
+    let meta = fs::metadata(path)?;
+    let mut f = OpenOptions::new().write(true).open(path)?;
+    let chunk = [0u8; 4096];
+    let mut left = meta.len();
+    while left > 0 {
+        let n = usize::try_from(left.min(chunk.len() as u64)).unwrap_or(chunk.len());
+        f.write_all(&chunk[..n])?;
+        left -= n as u64;
+    }
+    f.sync_all()?;
+    drop(f);
+    fs::remove_file(path)
+}

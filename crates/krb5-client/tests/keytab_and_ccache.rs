@@ -119,3 +119,12 @@ fn file_ccache_skips_etype_zero_config_and_keeps_tickets() {
     assert_eq!(cc.creds.len(), 1);
     assert_eq!(cc.creds[0].server.1.components_joined(), "host/svc");
 }
+
+#[test]
+fn destroy_secret_file_unlinks() {
+    let path = std::env::temp_dir().join(format!("krb5cc-destroy-{}", std::process::id()));
+    std::fs::write(&path, b"secret-cache").unwrap();
+    krb5_protocol::destroy_secret_file(&path).unwrap();
+    assert!(!path.exists());
+    assert!(krb5_protocol::destroy_secret_file(&path).is_err());
+}

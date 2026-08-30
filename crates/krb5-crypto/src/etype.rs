@@ -230,6 +230,21 @@ impl EncryptionType {
         matches!(self, Self::Camellia128CtsCmac | Self::Camellia256CtsCmac)
     }
 
+    /// MIT `klist -e` / `kdc.conf` enctype name.
+    #[must_use]
+    pub const fn to_mit_name(self) -> &'static str {
+        match self {
+            Self::Aes128CtsHmacSha196 => "aes128-cts-hmac-sha1-96",
+            Self::Aes256CtsHmacSha196 => "aes256-cts-hmac-sha1-96",
+            Self::Aes128CtsHmacSha256128 => "aes128-cts-hmac-sha256-128",
+            Self::Aes256CtsHmacSha384192 => "aes256-cts-hmac-sha384-192",
+            Self::Des3CbcSha1 => "des3-cbc-sha1",
+            Self::Rc4Hmac => "arcfour-hmac",
+            Self::Camellia128CtsCmac => "camellia128-cts-cmac",
+            Self::Camellia256CtsCmac => "camellia256-cts-cmac",
+        }
+    }
+
     /// MIT `enctype` name as used in `kdc.conf` (`aes256-cts-hmac-sha384-192`).
     ///
     /// # Errors

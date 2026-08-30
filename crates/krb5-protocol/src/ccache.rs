@@ -161,6 +161,16 @@ impl FileCcache {
         self.creds.iter().filter(|c| !c.is_config()).collect()
     }
 
+    /// `user@REALM` as MIT klist prints it.
+    #[must_use]
+    pub fn format_principal(realm: &Realm, name: &PrincipalName) -> String {
+        format!(
+            "{}@{}",
+            name.components_joined(),
+            String::from_utf8_lossy(realm.as_bytes())
+        )
+    }
+
     /// Insert an `X-CACHECONF:krb5_ccache_conf_data/{key}` entry.
     pub fn set_config(&mut self, key: &str, value: &[u8]) {
         let name = PrincipalName::new(

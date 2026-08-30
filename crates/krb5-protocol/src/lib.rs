@@ -56,7 +56,7 @@ pub use safe_priv::{
     build_krb_safe, build_krb_safe_ex, unwrap_krb_cred, unwrap_krb_priv, unwrap_krb_priv_chained,
     unwrap_krb_priv_ex, unwrap_krb_safe, unwrap_krb_safe_ex,
 };
-pub use secret_file::write_secret_file;
+pub use secret_file::{destroy_secret_file, write_secret_file};
 pub use tgs::{TgsOutcome, referral_hop_realm, tgs_exchange};
 pub use transport::{KDC_PORT, KdcAddr, exchange, exchange_on_tcp, exchange_with_failover};
 

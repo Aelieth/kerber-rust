@@ -12,6 +12,14 @@ publish.workspace = true
 name = "krb5-kinit"
 path = "src/bin/krb5-kinit.rs"
 
+[[bin]]
+name = "krb5-klist"
+path = "src/bin/krb5-klist.rs"
+
+[[bin]]
+name = "krb5-kdestroy"
+path = "src/bin/krb5-kdestroy.rs"
+
 [dependencies]
 krb5-asn1.workspace = true
 krb5-config.workspace = true
