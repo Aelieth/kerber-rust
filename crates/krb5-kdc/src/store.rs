@@ -4,6 +4,14 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
+#[cfg(test)]
+use std::cell::Cell;
+
+#[cfg(test)]
+thread_local! {
+    static FAIL_NEXT_KTADD_EXPORT: Cell<bool> = const { Cell::new(false) };
+}
+
 use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
 use krb5_protocol::{Keytab, KeytabEntry, ReplayCache};
 use krb5_types::PrincipalName;
@@ -926,6 +934,9 @@ impl PrincipalStore {
         }
         self.allow_s4u_from(name, &self_name);
         self.allow_s4u_to(name, &self_name);
+        if let Some(p) = self.map.get(&id) {
+            self.note_ulog(id.clone(), false, Some(p.clone()));
+        }
         self.save_if_configured()?;
         Ok(())
     }
@@ -1210,15 +1221,20 @@ impl PrincipalStore {
     ///
     /// [`Error::NotFound`].
     pub fn export_keytab_local(&self, name: &PrincipalName) -> Result<Keytab, Error> {
+        #[cfg(test)]
+        if FAIL_NEXT_KTADD_EXPORT.with(Cell::get) {
+            FAIL_NEXT_KTADD_EXPORT.with(|c| c.set(false));
+            return Err(Error::Crypto("injected export fail".into()));
+        }
         let p = self.get_name(name).ok_or(Error::NotFound)?;
         Self::keytab_from(p)
     }
 
     /// Local `ktadd`: optional rotate, export ignoring lockdown, then `write`.
     ///
-    /// On write failure a rotation is rolled back so the dump kvno is
-    /// unchanged (MIT kadmin.local ignores lockdown; a failing op must
-    /// not persist a destructive step).
+    /// On export or write failure a rotation is rolled back so the dump
+    /// kvno is unchanged. A rollback save error is returned with the
+    /// original failure (not swallowed).
     ///
     /// # Errors
     ///
@@ -1233,18 +1249,26 @@ impl PrincipalStore {
         if rotate {
             self.chrand(name)?;
         }
-        let kt = self.export_keytab_local(name)?;
+        let kt = match self.export_keytab_local(name) {
+            Ok(kt) => kt,
+            Err(e) => return Err(self.rollback_rotate(rotate, snap, e)),
+        };
         match write(&kt) {
             Ok(()) => Ok(kt),
-            Err(e) => {
-                if rotate {
-                    let id = snap.id();
-                    self.note_ulog(id.clone(), false, Some(snap.clone()));
-                    self.map.insert(id, snap);
-                    let _ = self.save_if_configured();
-                }
-                Err(e)
-            }
+            Err(e) => Err(self.rollback_rotate(rotate, snap, e)),
+        }
+    }
+
+    fn rollback_rotate(&mut self, rotate: bool, snap: Principal, e: Error) -> Error {
+        if !rotate {
+            return e;
+        }
+        let id = snap.id();
+        self.note_ulog(id.clone(), false, Some(snap.clone()));
+        self.map.insert(id, snap);
+        match self.save_if_configured() {
+            Ok(()) => e,
+            Err(re) => Error::Crypto(format!("{e}; rollback failed: {re}")),
         }
     }
 
@@ -2671,6 +2695,94 @@ mod tests {
         let loaded = crate::persist::load_store(&db, &stash).unwrap();
         let p = loaded.get_name(&cpw).expect("changepw");
         assert_ne!(p.attributes & KDB_PWCHANGE_SERVICE, 0);
+        let flagged = store
+            .ulog()
+            .into_iter()
+            .rev()
+            .find(|e| e.name.contains("kadmin/changepw") && e.princ.is_some())
+            .expect("ulog kdbe for kadmin/changepw");
+        assert_ne!(
+            flagged.princ.as_ref().unwrap().attributes & KDB_PWCHANGE_SERVICE,
+            0,
+            "ulog snapshot must carry PWCHANGE_SERVICE"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn max_kvno(store: &PrincipalStore, name: &PrincipalName) -> u32 {
+        store
+            .get_name(name)
+            .and_then(|p| p.keys.iter().map(|k| k.kvno).max())
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn ktadd_export_fail_rolls_back_rotation() {
+        let dir = std::env::temp_dir().join(format!(
+            "krb5-ktadd-export-{}-{}",
+            std::process::id(),
+            unix_now_u32()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let db = dir.join("principal");
+        let stash = dir.join("stash");
+        let (mut store, acl) = crate::bootstrap_documented().unwrap();
+        let extra = PrincipalName::new(
+            PrincipalName::NT_SRV_HST,
+            ["host", "exportfail.kerber.test"],
+        );
+        store
+            .create_host(&acl, &crate::documented_admin_id(), &extra)
+            .unwrap();
+        crate::persist::save_store(&store, &db, &stash).unwrap();
+        store.persist_paths = Some((db.clone(), stash.clone()));
+        let before = max_kvno(&store, &extra);
+        super::FAIL_NEXT_KTADD_EXPORT.with(|c| c.set(true));
+        let err = store
+            .ktadd_local_atomic(&extra, true, |_| Ok(()))
+            .unwrap_err();
+        assert!(err.to_string().contains("injected export fail"), "{err}");
+        assert_eq!(max_kvno(&store, &extra), before);
+        let reloaded = crate::persist::load_store(&db, &stash).unwrap();
+        assert_eq!(max_kvno(&reloaded, &extra), before);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ktadd_rollback_save_fail_surfaces_both() {
+        let dir = std::env::temp_dir().join(format!(
+            "krb5-ktadd-rbsave-{}-{}",
+            std::process::id(),
+            unix_now_u32()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let db = dir.join("principal");
+        let stash = dir.join("stash");
+        let (mut store, acl) = crate::bootstrap_documented().unwrap();
+        let extra = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "rbsave.kerber.test"]);
+        store
+            .create_host(&acl, &crate::documented_admin_id(), &extra)
+            .unwrap();
+        crate::persist::save_store(&store, &db, &stash).unwrap();
+        store.persist_paths = Some((db.clone(), stash.clone()));
+        let err = store
+            .ktadd_local_atomic(&extra, true, |_| {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+                }
+                Err(Error::Crypto("disk full".into()))
+            })
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("disk full"), "{msg}");
+        assert!(msg.contains("rollback failed"), "{msg}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755));
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
