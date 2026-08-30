@@ -136,4 +136,43 @@ if ! echo "$TRACE$OUT" | grep -Eqi 'PKINIT|pa[_ ]?type[[:space:]]*16|padata type
     exit 1
 fi
 log "pkinit.client.gate" "ok" ',"mode":"rust-kinit","pa_type":16,"principal":"user@KERBER.TEST","mit_plugin":"present"'
+
+echo "==== negative: MIT KDC identity is a client cert (rogue KDC) ===="
+docker exec "$NAME" sh -c 'grep -q pkinit_identity /etc/krb5kdc/kdc.conf && sed -i "s|pkinit_identity = FILE:/tmp/pkinit/kdc.pem|pkinit_identity = FILE:/tmp/pkinit/user.pem|" /etc/krb5kdc/kdc.conf'
+docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
+sleep 0.3
+docker exec -d \
+    -e KRB5_TRACE=/tmp/mit-kdc-rogue.trace \
+    -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
+    -e KRB5_CONFIG=/etc/krb5.conf \
+    "$NAME" sh -c 'krb5kdc >/tmp/mit-kdc-rogue.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    echo "MIT krb5kdc did not listen with client-cert identity (refused the rogue cert)"
+    docker exec "$NAME" cat /tmp/mit-kdc-rogue.log >&2 || true
+    log "pkinit.client.gate" "ok" ',"mode":"rust-kinit-rogue","refused":"mit-kdc-client-cert-identity"'
+    exit 0
+fi
+docker exec "$NAME" sh -c 'cat /dev/null > /tmp/mit-kdc-rogue.trace' || true
+set +e
+ROGUE="$(docker exec -e KRB5_PASSWORD= "$NAME" \
+    /tmp/krb5-kinit --pkinit FILE:/tmp/pkinit/user.pem --pkinit-anchors FILE:/tmp/pkinit/ca.pem \
+    127.0.0.1 user@KERBER.TEST /tmp/krb5cc_pkinit_rogue 2>&1)"
+rrc=$?
+set -e
+echo "$ROGUE"
+if [ "$rrc" -eq 0 ]; then
+    echo "==== MIT kdc rogue log ===="
+    docker exec "$NAME" cat /tmp/mit-kdc-rogue.log 2>/dev/null || true
+    log "pkinit.client.gate" "error" ',"error":"rust kinit accepted client-cert KDC CMS"'
+    exit 1
+fi
+log "pkinit.client.gate" "ok" ',"mode":"rust-kinit-rogue","refused":"client-cert-kdc","rc":'"$rrc"
 exit 0

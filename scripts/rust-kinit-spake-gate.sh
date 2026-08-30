@@ -53,6 +53,7 @@ fi
 
 docker exec "$NAME" sh -c 'grep -q spake_preauth_groups /etc/krb5kdc/kdc.conf || sed -i "/\[kdcdefaults\]/a\\    spake_preauth_groups = P-256" /etc/krb5kdc/kdc.conf'
 docker exec "$NAME" sh -c 'grep -q spake_preauth_groups /etc/krb5.conf || sed -i "/\[libdefaults\]/a\\    spake_preauth_groups = P-256\n    preferred_preauth_types = 151" /etc/krb5.conf'
+docker exec "$NAME" kadmin.local -q 'modprinc +requires_preauth user'
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
 sleep 0.3
 docker exec -d \
@@ -78,6 +79,7 @@ docker cp target/debug/krb5-kinit "$NAME":/tmp/krb5-kinit
 docker exec "$NAME" chmod +x /tmp/krb5-kinit
 
 echo "==== Rust kinit --spake vs MIT KDC ===="
+docker exec "$NAME" sh -c 'cat /dev/null > /tmp/mit-kdc.trace' || true
 set +e
 OUT="$(docker exec -e KRB5_PASSWORD=userpassword "$NAME" \
     /tmp/krb5-kinit --spake 127.0.0.1 user@KERBER.TEST /tmp/krb5cc_spake 2>&1)"
@@ -96,8 +98,9 @@ KLIST="$(docker exec "$NAME" klist -c /tmp/krb5cc_spake 2>/dev/null || true)"
 echo "$KLIST"
 echo "$KLIST" | grep -q 'user@KERBER.TEST'
 TRACE="$(docker exec "$NAME" cat /tmp/mit-kdc.trace 2>/dev/null || true)"
-if ! echo "$TRACE$OUT" | grep -Eqi 'SPAKE|pa[_ ]?type[[:space:]]*151|padata type 151|group[[:space:]]*2'; then
-    log "spake.client.gate" "error" ',"error":"kinit succeeded without SPAKE evidence"'
+if ! echo "$TRACE" | grep -Eqi 'SPAKE|pa[_ ]?type[[:space:]]*151|padata type 151|group[[:space:]]*2'; then
+    echo "$TRACE" >&2
+    log "spake.client.gate" "error" ',"error":"kinit succeeded without SPAKE KDC TRACE"'
     exit 1
 fi
 log "spake.client.gate" "ok" ',"mode":"rust-kinit","pa_type":151,"group":2,"principal":"user@KERBER.TEST"'

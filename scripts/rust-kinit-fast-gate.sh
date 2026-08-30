@@ -98,8 +98,9 @@ KLIST="$(docker exec "$NAME" klist -c /tmp/krb5cc_fast 2>/dev/null || true)"
 echo "$KLIST"
 echo "$KLIST" | grep -q 'user@KERBER.TEST'
 TRACE="$(docker exec "$NAME" cat /tmp/mit-kdc.trace 2>/dev/null || true)"
-if ! echo "$TRACE$OUT" | grep -Eqi 'FX-FAST|FX_FAST|padata type 136|PA-FX-FAST|fast'; then
-    log "fast.client.gate" "error" ',"error":"kinit succeeded without FAST evidence"'
+if ! echo "$TRACE" | grep -Eqi 'Decrypted AP-REQ|FX-FAST|FX_FAST|padata type 136|PA-FX-FAST'; then
+    echo "$TRACE" >&2
+    log "fast.client.gate" "error" ',"error":"kinit succeeded without FAST KDC TRACE"'
     exit 1
 fi
 log "fast.client.gate" "ok" ',"mode":"rust-kinit","pa_type":136,"principal":"user@KERBER.TEST"'

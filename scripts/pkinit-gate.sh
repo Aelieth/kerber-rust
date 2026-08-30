@@ -99,7 +99,20 @@ if [ "$rc" -eq 0 ]; then
     echo "==== KDC PKINIT KDF ===="
     docker exec "$NAME" grep -E 'rfc8636|kdf|pkinit' /tmp/kdc.log || true
     docker exec "$NAME" grep -q 'rfc8636 sha256 kdf' /tmp/kdc.log
-    log "pkinit.gate" "ok" ',"mode":"mit-kinit","kdf":"rfc8636-sha256","mit_plugin":"present"'
+    echo "==== negative: MIT kinit with SAN≠cname ===="
+    docker exec "$NAME" grep -q 'BEGIN CERTIFICATE' /tmp/pkinit/other.pem
+    set +e
+    docker exec -e KRB5_TRACE=/dev/stderr "$NAME" \
+        kinit -X X509_user_identity=FILE:/tmp/pkinit/other.pem user@KERBER.TEST
+    nrc=$?
+    set -e
+    if [ "$nrc" -eq 0 ]; then
+        echo "MIT kinit with other.pem SAN must not issue user@KERBER.TEST"
+        docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
+        log "pkinit.gate" "error" ',"error":"SAN mismatch accepted"'
+        exit 1
+    fi
+    log "pkinit.gate" "ok" ',"mode":"mit-kinit","kdf":"rfc8636-sha256","mit_plugin":"present","san_mismatch":"refused"'
     exit 0
 fi
 echo "MIT kinit with FILE identity failed (rc=$rc)"
