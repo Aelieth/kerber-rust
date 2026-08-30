@@ -190,6 +190,14 @@ fn run(sess: &mut AdminSession<'_>, line: &str) -> Result<LineOutcome, String> {
                 .map_err(|e| e.to_string())
                 .map(|()| LineOutcome::Next)
         }
+        Some("getstrs") => {
+            let spec = parts.get(1).ok_or("getstrs <name>")?;
+            let name = parse_name(sess, spec)?;
+            for (k, v) in sess.string_attrs(&name).map_err(|e| e.to_string())? {
+                println!("{k}: {v}");
+            }
+            Ok(LineOutcome::Next)
+        }
         Some(other) => Err(format!("unknown {other}")),
         None => Ok(LineOutcome::Next),
     }
@@ -259,6 +267,24 @@ mod tests {
         let (mut store, acl) = sess_pair();
         let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
         assert!(run(&mut sess, "nope").is_err());
+    }
+
+    #[test]
+    fn getstrs_prints_set_attr() {
+        let (mut store, acl) = sess_pair();
+        let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+        run(&mut sess, "setstr user m5k m5v").unwrap();
+        run(&mut sess, "getstrs user").unwrap();
+        let attrs = sess
+            .string_attrs(&krb5_types::PrincipalName::new(
+                krb5_types::PrincipalName::NT_PRINCIPAL,
+                ["user"],
+            ))
+            .unwrap();
+        assert!(
+            attrs.iter().any(|(k, v)| k == "m5k" && v == "m5v"),
+            "{attrs:?}"
+        );
     }
 
     #[test]

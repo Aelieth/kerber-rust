@@ -194,7 +194,7 @@ MITRAND="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc randsvc')"
 echo "$MITRAND"
 echo "$MITRAND" | grep -q 'randsvc@KERBER.TEST'
-echo "$MITRAND" | grep -Eqi 'Key: vno[[:space:]]*1'
+echo "$MITRAND" | grep -Eq '^Key: vno[[:space:]]*1'
 echo "$MITGET" | grep -q 'REQUIRES_PRE_AUTH' && {
     echo "extra2 should have been cleared of REQUIRES_PRE_AUTH before kadmind" >&2
     exit 1
@@ -254,8 +254,9 @@ MITKV="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
 echo "$MITKV"
 echo "$MITKV" | grep -Eqi 'vno[[:space:]]*2'
 
-echo "==== listprincs does not clobber concurrent kadmind create ===="
+echo "==== local setstr does not clobber concurrent kadmind create ===="
 docker exec "$NAME" sh -c '
+  set -e
   rm -f /tmp/klfifo
   mkfifo /tmp/klfifo
   env KRB5_KDC_DB=/tmp/principal KRB5_KDC_STASH=/tmp/stash \
@@ -265,19 +266,27 @@ docker exec "$NAME" sh -c '
   sleep 0.3
   env KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     kadmin -p admin@KERBER.TEST -w adminpassword -q "addprinc -pw race-pw raceprinc"
-  echo listprincs >&3
+  echo "setstr extra2 racek racev" >&3
   echo q >&3
   exec 3>&-
-  wait "$(cat /tmp/kl.pid)" || true
+  wait "$(cat /tmp/kl.pid)"
 '
-RACE="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc raceprinc')"
+RACE="$(docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'getprinc raceprinc')"
 echo "$RACE"
 echo "$RACE" | grep -q 'raceprinc@KERBER.TEST'
 echo "$RACE" | grep -qi 'does not exist' && {
-    log "kadmin.local.gate" "error" ',"error":"listprincs clobbered concurrent kadmind principal"'
+    log "kadmin.local.gate" "error" ',"error":"local setstr clobbered concurrent kadmind principal"'
     exit 1
 }
+RACESTR="$(docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'getstrs extra2')"
+echo "$RACESTR"
+echo "$RACESTR" | grep -q 'racek: racev'
 
 echo "==== MIT kadmin.local lockdown oracle ===="
 docker exec "$NAME" sh -c '
@@ -383,6 +392,7 @@ echo "$GTGT" | grep -q 'krbtgt/KERBER.TEST@KERBER.TEST'
 
 echo "==== setstr does not clobber concurrent kadmind create ===="
 docker exec "$NAME" sh -c '
+  set -e
   rm -f /tmp/m5fifo
   mkfifo /tmp/m5fifo
   env KRB5_KDC_DB=/tmp/principal KRB5_KDC_STASH=/tmp/stash \
@@ -395,18 +405,30 @@ docker exec "$NAME" sh -c '
   echo "setstr extra2 m5k m5v" >&3
   echo q >&3
   exec 3>&-
-  wait "$(cat /tmp/m5.pid)" || true
+  wait "$(cat /tmp/m5.pid)"
 '
-M5R="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc m5race')"
+echo "---- m5.err ----"
+docker exec "$NAME" cat /tmp/m5.err || true
+M5R="$(docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'getprinc m5race')"
 echo "$M5R"
 echo "$M5R" | grep -q 'm5race@KERBER.TEST'
 echo "$M5R" | grep -qi 'does not exist' && {
     log "kadmin.local.gate" "error" ',"error":"setstr clobbered concurrent kadmind principal"'
     exit 1
 }
-M5E="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc extra2')"
+M5S="$(docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'getstrs extra2')"
+echo "$M5S"
+echo "$M5S" | grep -q 'm5k: m5v'
+M5E="$(docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'getprinc extra2')"
 echo "$M5E"
 echo "$M5E" | grep -q 'extra2@KERBER.TEST'
 

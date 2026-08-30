@@ -438,6 +438,15 @@ impl<'a> AdminSession<'a> {
             .set_string(name, key, Some(val))
             .map_err(Error::from)
     }
+
+    /// `getstrs`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    pub fn string_attrs(&self, name: &PrincipalName) -> Result<Vec<(String, String)>, Error> {
+        self.store.get_strings(name).map_err(Error::from)
+    }
 }
 
 /// RFC 3244 kpasswd request: AP-REQ + new password octets.
@@ -1563,6 +1572,11 @@ mod tests {
         let loaded = load_store(&db, &stash).unwrap();
         assert!(loaded.get_name(&extra).is_some());
         assert!(loaded.get_name(&user).is_some());
+        let attrs = loaded.get_strings(&user).unwrap();
+        assert!(
+            attrs.iter().any(|(k, v)| k == "m5k" && v == "m5v"),
+            "setstr must persist m5k=m5v: {attrs:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
