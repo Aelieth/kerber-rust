@@ -1,14 +1,17 @@
 //! Obtain a TGT from a KDC and write an MIT FILE ccache.
 //!
-//! Usage: krb5-kinit [--spake] [--fast --armor-ccache PATH] [--pkinit FILE:user.pem --pkinit-anchors FILE:ca.pem] [-E|--enterprise] <kdc-host> <user@REALM> <ccache-path> [service]
+//! Usage: krb5-kinit [--spake] [--fast --armor-ccache PATH] [--pkinit FILE:user.pem --pkinit-anchors FILE:ca.pem] [-E|--enterprise] [-c ccache] <kdc-host> <user@REALM> [ccache-path] [service]
 //!
 //! Password is read from `KRB5_PASSWORD` or stdin. Never from argv.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+
+use std::path::PathBuf;
 
 use krb5_client::kinit_ex;
-use krb5_config::env_password;
+use krb5_config::{env_password, resolve_ccname};
 use krb5_protocol::KdcAddr;
 
 fn strip_file_spec(s: String) -> String {
@@ -29,6 +32,7 @@ fn main() {
     let mut pkinit_identity = None::<String>;
     let mut pkinit_anchors = None::<String>;
     let mut enterprise = false;
+    let mut ccflag = None::<String>;
     let mut positional = Vec::new();
     let mut args_iter = std::env::args().skip(1);
     while let Some(a) = args_iter.next() {
@@ -39,6 +43,13 @@ fn main() {
             "--pkinit" => pkinit_identity = args_iter.next().map(strip_file_spec),
             "--pkinit-anchors" => pkinit_anchors = args_iter.next().map(strip_file_spec),
             "-E" | "--enterprise" => enterprise = true,
+            "-c" => {
+                let Some(s) = args_iter.next() else {
+                    eprintln!("kinit: missing -c argument");
+                    std::process::exit(2);
+                };
+                ccflag = Some(s);
+            }
             _ => positional.push(a),
         }
     }
@@ -49,7 +60,7 @@ fn main() {
     let mut args = positional.into_iter();
     let host = args.next().unwrap_or_else(|| {
         eprintln!(
-            "usage: krb5-kinit [--spake] [--fast --armor-ccache PATH] [--pkinit FILE:user.pem --pkinit-anchors FILE:ca.pem] [-E|--enterprise] <kdc-host> <user@REALM> <ccache-path> [service]"
+            "usage: krb5-kinit [--spake] [--fast --armor-ccache PATH] [--pkinit FILE:user.pem --pkinit-anchors FILE:ca.pem] [-E|--enterprise] [-c ccache] <kdc-host> <user@REALM> [ccache-path] [service]"
         );
         std::process::exit(2);
     });
@@ -57,11 +68,12 @@ fn main() {
         eprintln!("missing user@REALM");
         std::process::exit(2);
     });
-    let ccache = args.next().unwrap_or_else(|| {
-        eprintln!("missing ccache-path");
+    let pos_cc = args.next();
+    let service = args.next();
+    let ccache = ccache_path(ccflag.as_deref(), pos_cc.as_deref()).unwrap_or_else(|e| {
+        eprintln!("kinit: {e}");
         std::process::exit(2);
     });
-    let service = args.next();
     let mut password = env_password().unwrap_or_else(|| {
         if pkinit_identity.is_some() {
             return Vec::new();
@@ -108,5 +120,36 @@ fn main() {
             eprintln!("kinit failed: {e}");
             std::process::exit(1);
         }
+    }
+}
+
+fn ccache_path(flag: Option<&str>, positional: Option<&str>) -> Result<PathBuf, String> {
+    resolve_ccname(flag.or(positional))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ccache_path_flag_beats_positional() {
+        let p = ccache_path(Some("FILE:/tmp/a"), Some("/tmp/b")).unwrap();
+        assert_eq!(p, PathBuf::from("/tmp/a"));
+    }
+
+    #[test]
+    fn ccache_path_rejects_keyring() {
+        let e = ccache_path(Some("KEYRING:user:foo"), None).unwrap_err();
+        assert!(e.contains("G8"), "{e}");
+        let e = ccache_path(Some("KCM:"), None).unwrap_err();
+        assert!(e.contains("G8"), "{e}");
+    }
+
+    #[test]
+    fn ccache_path_default_is_uid_file() {
+        assert_eq!(
+            ccache_path(None, None).unwrap(),
+            krb5_config::default_ccache_name()
+        );
     }
 }

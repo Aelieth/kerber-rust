@@ -24,13 +24,18 @@ fn main() {
     };
     if args.is_empty() {
         let stdin = io::stdin();
+        let mut failed = false;
         for line in stdin.lock().lines() {
             let Ok(line) = line else {
                 break;
             };
             if let Err(e) = run_line(&mut kt, &line) {
                 eprintln!("ktutil: {e}");
+                failed = true;
             }
+        }
+        if failed {
+            std::process::exit(1);
         }
         return;
     }
@@ -226,5 +231,6 @@ mod tests {
         assert!(text.contains("user@KERBER.TEST"), "{text}");
         assert!(text.contains("aes256-cts-hmac-sha1-96"), "{text}");
         assert!(text.contains("   2"), "{text}");
+        assert!(run_line(&mut kt, "nope").is_err());
     }
 }

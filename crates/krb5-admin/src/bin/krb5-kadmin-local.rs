@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use std::io::{self, BufRead};
 use std::path::PathBuf;
@@ -47,13 +48,18 @@ fn main() {
     let mut sess = AdminSession::local(&mut store, &acl, actor);
     if queued.is_empty() {
         let stdin = io::stdin();
+        let mut failed = false;
         for line in stdin.lock().lines() {
             let Ok(line) = line else {
                 break;
             };
             if let Err(e) = run(&mut sess, &line) {
                 eprintln!("kadmin.local: {e}");
+                failed = true;
             }
+        }
+        if failed {
+            std::process::exit(1);
         }
     } else {
         for c in queued {
@@ -214,4 +220,16 @@ fn apply_optional_fields(
         sess.set_policy(name, pol).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_verb_is_error() {
+        let (mut store, acl) = krb5_kdc::bootstrap_documented().unwrap();
+        let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+        assert!(run(&mut sess, "nope").is_err());
+    }
 }
