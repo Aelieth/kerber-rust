@@ -20,6 +20,7 @@ fn main() {
         version: 0x0502,
         entries: Vec::new(),
         skipped_unknown_etype: 0,
+        unparsed: Vec::new(),
     };
     if args.is_empty() {
         let stdin = io::stdin();
@@ -218,6 +219,7 @@ mod tests {
                 key,
             }],
             skipped_unknown_etype: 0,
+            unparsed: Vec::new(),
         };
         run_line(&mut kt, "list -e").unwrap();
         let text = format_list(&kt, false, true, false);

@@ -926,6 +926,7 @@ impl PrincipalStore {
         }
         self.allow_s4u_from(name, &self_name);
         self.allow_s4u_to(name, &self_name);
+        self.save_if_configured()?;
         Ok(())
     }
 
@@ -1268,6 +1269,7 @@ impl PrincipalStore {
         Ok(Keytab {
             version: 0x0502,
             skipped_unknown_etype: 0,
+            unparsed: Vec::new(),
             entries,
         })
     }
@@ -2643,6 +2645,32 @@ mod tests {
             "serial must survive dump persist, not db_stamp mtime"
         );
         assert!(loaded.get_name(&extra).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn create_host_changepw_flag_survives_save() {
+        let dir = std::env::temp_dir().join(format!(
+            "krb5-changepw-{}-{}",
+            std::process::id(),
+            unix_now_u32()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let db = dir.join("principal");
+        let stash = dir.join("stash");
+        let (mut store, acl) = crate::bootstrap_documented().unwrap();
+        let cpw = crate::documented_changepw();
+        store
+            .delete(&acl, &crate::documented_admin_id(), &cpw)
+            .unwrap();
+        crate::persist::save_store(&store, &db, &stash).unwrap();
+        store.persist_paths = Some((db.clone(), stash.clone()));
+        store
+            .create_host(&acl, &crate::documented_admin_id(), &cpw)
+            .unwrap();
+        let loaded = crate::persist::load_store(&db, &stash).unwrap();
+        let p = loaded.get_name(&cpw).expect("changepw");
+        assert_ne!(p.attributes & KDB_PWCHANGE_SERVICE, 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

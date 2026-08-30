@@ -32,6 +32,8 @@ pub struct Keytab {
     pub entries: Vec<KeytabEntry>,
     /// Count of entries skipped because the etype is unknown / refused.
     pub skipped_unknown_etype: usize,
+    /// Unknown-etype records (parsed-entry count before each raw blob).
+    pub unparsed: Vec<(usize, Vec<u8>)>,
 }
 
 impl Keytab {
@@ -51,6 +53,7 @@ impl Keytab {
                 key,
             }],
             skipped_unknown_etype: 0,
+            unparsed: Vec::new(),
         }
     }
 
@@ -63,11 +66,22 @@ impl Keytab {
             0x0502
         };
         let mut out = ver.to_be_bytes().to_vec();
-        for e in &self.entries {
+        let mut ei = 0;
+        let mut ui = 0;
+        loop {
+            if ui < self.unparsed.len() && (ei >= self.entries.len() || self.unparsed[ui].0 <= ei) {
+                out.extend_from_slice(&self.unparsed[ui].1);
+                ui += 1;
+                continue;
+            }
+            let Some(e) = self.entries.get(ei) else {
+                break;
+            };
             let body = marshal_entry(e, ver);
             let len = i32::try_from(body.len()).unwrap_or(0);
             out.extend_from_slice(&len.to_be_bytes());
             out.extend_from_slice(&body);
+            ei += 1;
         }
         out
     }
@@ -83,8 +97,15 @@ impl Keytab {
 
     /// Append `other` entries (ktadd / merge).
     pub fn merge(&mut self, other: Keytab) {
+        let n = self.entries.len();
         self.entries.extend(other.entries);
         self.skipped_unknown_etype += other.skipped_unknown_etype;
+        self.unparsed.extend(
+            other
+                .unparsed
+                .into_iter()
+                .map(|(i, b)| (i.saturating_add(n), b)),
+        );
     }
 
     /// Parse v1 or v2. Unknown etypes skip that entry rather than failing.
@@ -102,8 +123,9 @@ impl Keytab {
         let version = u16::from_be_bytes([bytes[0], bytes[1]]);
         let mut i = 2;
         let mut entries = Vec::new();
-        let mut skipped = 0;
+        let mut unparsed = Vec::new();
         while i + 4 <= bytes.len() {
+            let rec = i;
             let size = i32::from_be_bytes(bytes[i..i + 4].try_into().map_err(|_| eof())?);
             i += 4;
             if size <= 0 {
@@ -129,7 +151,7 @@ impl Keytab {
                     if err.kind() == io::ErrorKind::InvalidData
                         && err.to_string().contains("etype") =>
                 {
-                    skipped += 1;
+                    unparsed.push((entries.len(), bytes[rec..i + size].to_vec()));
                 }
                 Err(e) => return Err(e),
             }
@@ -137,8 +159,9 @@ impl Keytab {
         }
         Ok(Self {
             version,
+            skipped_unknown_etype: unparsed.len(),
+            unparsed,
             entries,
-            skipped_unknown_etype: skipped,
         })
     }
 }
@@ -243,4 +266,69 @@ fn take_counted16(b: &[u8], i: &mut usize) -> Result<Vec<u8>, io::Error> {
 
 fn eof() -> io::Error {
     io::Error::new(io::ErrorKind::UnexpectedEof, "keytab truncated")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use krb5_types::{PrincipalName, ascii};
+
+    fn sample_entry() -> KeytabEntry {
+        let key = ProtocolKey::from_bytes(EncryptionType::Aes128CtsHmacSha196, &[9u8; 16]).unwrap();
+        KeytabEntry {
+            realm: ascii("KERBER.TEST"),
+            name: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+            timestamp: 1_700_000_000,
+            kvno: 1,
+            key,
+        }
+    }
+
+    fn patch_etype(body: &mut [u8], etype: u16) {
+        let mut i = 0;
+        let ncomp = u16::from_be_bytes([body[0], body[1]]);
+        i += 2;
+        let rlen = usize::from(u16::from_be_bytes([body[i], body[i + 1]]));
+        i += 2 + rlen;
+        for _ in 0..ncomp {
+            let n = usize::from(u16::from_be_bytes([body[i], body[i + 1]]));
+            i += 2 + n;
+        }
+        i += 4 + 4 + 1;
+        body[i..i + 2].copy_from_slice(&etype.to_be_bytes());
+    }
+
+    #[test]
+    fn merge_keeps_unknown_etype_bytes() {
+        let known = Keytab::single(
+            ascii("KERBER.TEST"),
+            PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+            1,
+            ProtocolKey::from_bytes(EncryptionType::Aes128CtsHmacSha196, &[9u8; 16]).unwrap(),
+        );
+        let mut body = marshal_entry(&sample_entry(), 0x0502);
+        patch_etype(&mut body, 99);
+        let mut rec = i32::try_from(body.len()).unwrap().to_be_bytes().to_vec();
+        rec.extend_from_slice(&body);
+        let mut bytes = known.to_bytes();
+        bytes.extend_from_slice(&rec);
+        let parsed = Keytab::parse(&bytes).unwrap();
+        assert_eq!(parsed.entries.len(), 1);
+        assert_eq!(parsed.unparsed.len(), 1);
+        assert_eq!(parsed.unparsed[0].1, rec);
+        let extra = Keytab::single(
+            ascii("KERBER.TEST"),
+            PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["host"]),
+            2,
+            ProtocolKey::from_bytes(EncryptionType::Aes128CtsHmacSha196, &[8u8; 16]).unwrap(),
+        );
+        let mut merged = parsed;
+        merged.merge(extra);
+        let out = merged.to_bytes();
+        let again = Keytab::parse(&out).unwrap();
+        assert_eq!(again.entries.len(), 2);
+        assert_eq!(again.unparsed.len(), 1);
+        assert_eq!(again.unparsed[0].1, rec);
+        assert!(out.windows(rec.len()).any(|w| w == rec.as_slice()));
+    }
 }

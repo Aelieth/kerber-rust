@@ -381,5 +381,39 @@ GTGT="$(docker exec "$NAME" klist -k /tmp/gld-krbtgt.keytab)"
 echo "$GTGT"
 echo "$GTGT" | grep -q 'krbtgt/KERBER.TEST@KERBER.TEST'
 
+echo "==== addprinc -randkey kadmin/changepw keeps PWCHANGE_SERVICE ===="
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'delprinc kadmin/changepw'
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey kadmin/changepw'
+docker exec "$NAME" sh -c 'kill $(pidof krb5-kadmind) 2>/dev/null || true'
+sleep 0.3
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+    "$NAME" sh -c '/tmp/krb5-kadmind 127.0.0.1:749 >/tmp/kadmind.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/kadmind.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kadmind.log >&2 || true
+    log "kadmin.local.gate" "error" ',"error":"kadmind did not listen after changepw recreate"'
+    exit 1
+fi
+MITCPW="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc kadmin/changepw')"
+echo "$MITCPW"
+echo "$MITCPW" | grep -q 'PWCHANGE_SERVICE'
+
 log "kadmin.local.gate" "ok" ',"principal":"extra2@KERBER.TEST,host/slashhost@KERBER.TEST,randsvc,ktone,kttwo,raceprinc,lockee,gldlock,krbtgt"'
 exit 0
