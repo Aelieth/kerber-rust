@@ -19,6 +19,24 @@ use crate::error::Error;
 use crate::persist::{PersistError, load_store};
 use crate::store::{NamedPolicy, Policy, Principal, PrincipalStore, RID_FIRST_USER};
 
+/// Map a wire name to a `user@REALM` store id.
+///
+/// NT-ENTERPRISE is a single `user@suffix` component (RFC 6806), not a
+/// `/`-joined name. The local-part is looked up in `realm`.
+#[must_use]
+pub fn lookup_principal_id(name: &PrincipalName, realm: &str) -> String {
+    if name.name_type == PrincipalName::NT_ENTERPRISE {
+        let raw = name.components_joined();
+        if let Some((user, _)) = raw.rsplit_once('@')
+            && !user.is_empty()
+        {
+            return format!("{user}@{realm}");
+        }
+        return format!("{raw}@{realm}");
+    }
+    format!("{}@{}", name.components_joined(), realm)
+}
+
 /// Process-local KDC state (replay + PKINIT CA). Not dump/persist rows.
 #[derive(Clone, Debug)]
 pub struct KdcEnv {
@@ -70,7 +88,7 @@ pub trait PrincipalRead: Send + Sync {
     ///
     /// Backend failures.
     fn fetch_name(&self, name: &PrincipalName) -> Result<Option<Principal>, Error> {
-        self.fetch(&format!("{}@{}", name.components_joined(), self.realm()))
+        self.fetch(&lookup_principal_id(name, self.realm()))
     }
     /// `krbtgt/REALM@REALM`.
     ///

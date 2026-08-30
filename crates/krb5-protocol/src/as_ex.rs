@@ -9,7 +9,7 @@ use krb5_crypto::{
 use krb5_types::{
     AsRep, AsReq, EncAsRepPart, EncKdcRepPart, EncryptedData, EtypeInfo, EtypeInfo2, KdcOptions,
     KdcReq, KdcReqBody, KerberosTime, KrbError, MethodData, PaData, PaEncTsEnc, PrincipalName, err,
-    ku, pa,
+    flag_bit, ku, pa,
 };
 use sha1::{Digest, Sha1};
 use zeroize::Zeroize;
@@ -54,6 +54,8 @@ pub struct AsRequest<'a> {
     pub fast_armor: Option<&'a FastArmor>,
     /// PKINIT client identity (PA-PK-AS-REQ). Sent on the first AS-REQ.
     pub pkinit: Option<&'a PkinitClient>,
+    /// RFC 6806 canonicalize (NT-ENTERPRISE client names).
+    pub canonicalize: bool,
 }
 
 /// RFC 4556 client certificate + trust anchor for PKINIT.
@@ -114,6 +116,7 @@ pub fn as_exchange_key(
             want_spake: false,
             fast_armor: None,
             pkinit: None,
+            canonicalize: false,
         },
         keys,
     )
@@ -159,24 +162,45 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
         till.clone(),
         first_pa,
         &etypes,
+        req.canonicalize,
     )?;
     let wire = encode(&first)?;
     let reply = exchange(req.kdc, &wire)?;
 
     match classify(&reply)? {
-        KdcMsg::AsRep(rep) => {
-            finish_as_rep_keys(rep, nonce, keys, req.password, &req.cname, req.realm)
-        }
+        KdcMsg::AsRep(rep) => finish_as_rep_keys(
+            rep,
+            nonce,
+            keys,
+            req.password,
+            &req.cname,
+            req.realm,
+            req.canonicalize,
+        ),
         KdcMsg::Error(e) if e.error_code == err::SKEW => {
             // First-reply SKEW: resync from KDC stime and retry the bare AS-REQ.
             let skew_time = e.stime.clone();
-            let first = build_as_req(&req.cname, req.realm, nonce, till.clone(), None, &etypes)?;
+            let first = build_as_req(
+                &req.cname,
+                req.realm,
+                nonce,
+                till.clone(),
+                None,
+                &etypes,
+                req.canonicalize,
+            )?;
             let wire = encode(&first)?;
             let reply = exchange(req.kdc, &wire)?;
             match classify(&reply)? {
-                KdcMsg::AsRep(rep) => {
-                    finish_as_rep_keys(rep, nonce, keys, req.password, &req.cname, req.realm)
-                }
+                KdcMsg::AsRep(rep) => finish_as_rep_keys(
+                    rep,
+                    nonce,
+                    keys,
+                    req.password,
+                    &req.cname,
+                    req.realm,
+                    req.canonicalize,
+                ),
                 KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
                     if req.want_spake {
                         continue_spake(req, keys, nonce, till, &etypes, &e)
@@ -215,13 +239,32 @@ fn finish_as_rep_keys(
     password: &[u8],
     cname: &PrincipalName,
     realm: &str,
+    canonicalize: bool,
 ) -> Result<AsOutcome, Error> {
     if keys.is_empty() {
-        return finish_as_rep(rep, nonce, None, password, cname, realm, false);
+        return finish_as_rep(
+            rep,
+            nonce,
+            None,
+            password,
+            cname,
+            realm,
+            false,
+            canonicalize,
+        );
     }
     let want = EncryptionType::from_iana(rep.0.enc_part.etype).ok();
     if let Some(k) = pick_key(keys, want)
-        && let Ok(out) = finish_as_rep(rep.clone(), nonce, Some(k), password, cname, realm, false)
+        && let Ok(out) = finish_as_rep(
+            rep.clone(),
+            nonce,
+            Some(k),
+            password,
+            cname,
+            realm,
+            false,
+            canonicalize,
+        )
     {
         return Ok(out);
     }
@@ -235,6 +278,7 @@ fn finish_as_rep_keys(
             cname,
             realm,
             false,
+            canonicalize,
         ) {
             Ok(out) => return Ok(out),
             Err(e) => last = e,
@@ -264,7 +308,7 @@ fn continue_preauth(
     preauth_err: &KrbError,
     skew_hint: Option<&KerberosTime>,
 ) -> Result<AsOutcome, Error> {
-    let (etype, salt, params) = select_s2k(preauth_err, &req.cname, req.realm)?;
+    let (etype, salt, params) = select_s2k(preauth_err, &salt_cname(&req.cname), req.realm)?;
     let client_key = pick_key(keys, Some(etype)).map_or_else(
         || string_to_key(etype, req.password, &salt, params.as_deref()),
         Ok,
@@ -280,6 +324,7 @@ fn continue_preauth(
         till.clone(),
         Some(padata),
         etypes,
+        req.canonicalize,
     )?;
     let wire = encode(&second)?;
     let reply = exchange(req.kdc, &wire)?;
@@ -292,11 +337,20 @@ fn continue_preauth(
             &req.cname,
             req.realm,
             true,
+            req.canonicalize,
         ),
         KdcMsg::Error(e) if e.error_code == err::SKEW => {
             let skew_time = e.stime.clone();
             let padata = vec![pa_enc_timestamp_at(&client_key, &skew_time)?];
-            let third = build_as_req(&req.cname, req.realm, nonce, till, Some(padata), etypes)?;
+            let third = build_as_req(
+                &req.cname,
+                req.realm,
+                nonce,
+                till,
+                Some(padata),
+                etypes,
+                req.canonicalize,
+            )?;
             let wire = encode(&third)?;
             let reply = exchange(req.kdc, &wire)?;
             match classify(&reply)? {
@@ -308,6 +362,7 @@ fn continue_preauth(
                     &req.cname,
                     req.realm,
                     true,
+                    req.canonicalize,
                 ),
                 KdcMsg::Error(e) => classify_kdc_error(&e),
                 KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
@@ -316,7 +371,15 @@ fn continue_preauth(
         KdcMsg::Error(e) if e.error_code == err::ETYPE_NOSUPP => {
             let etypes = vec![EncryptionType::Aes256CtsHmacSha196.to_iana()];
             let padata = vec![pa_enc_timestamp(&client_key)?];
-            let retry = build_as_req(&req.cname, req.realm, nonce, till, Some(padata), &etypes)?;
+            let retry = build_as_req(
+                &req.cname,
+                req.realm,
+                nonce,
+                till,
+                Some(padata),
+                &etypes,
+                req.canonicalize,
+            )?;
             let wire = encode(&retry)?;
             let reply = exchange(req.kdc, &wire)?;
             match classify(&reply)? {
@@ -328,6 +391,7 @@ fn continue_preauth(
                     &req.cname,
                     req.realm,
                     true,
+                    req.canonicalize,
                 ),
                 KdcMsg::Error(e) => classify_kdc_error(&e),
                 KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
@@ -361,10 +425,10 @@ fn continue_fast(
     )?;
     let akey = armor_key(&armor.session, Some(&sub))?;
     let (etype, salt, params) = match err {
-        Some(e) => select_s2k(e, &req.cname, req.realm)?,
+        Some(e) => select_s2k(e, &salt_cname(&req.cname), req.realm)?,
         None => (
             EncryptionType::preferred()[0],
-            req.cname.default_salt(req.realm),
+            salt_cname(&req.cname).default_salt(req.realm),
             None,
         ),
     };
@@ -373,7 +437,15 @@ fn continue_fast(
         Ok,
     )?;
     let inner = vec![pa_enc_timestamp(&client_key)?];
-    let mut req2 = build_as_req(&req.cname, req.realm, nonce, till, None, etypes)?;
+    let mut req2 = build_as_req(
+        &req.cname,
+        req.realm,
+        nonce,
+        till,
+        None,
+        etypes,
+        req.canonicalize,
+    )?;
     attach_fast(&mut req2, &ap, &akey, inner)?;
     let wire = encode(&req2)?;
     let reply = exchange(req.kdc, &wire)?;
@@ -392,6 +464,7 @@ fn continue_fast(
                 &req.cname,
                 req.realm,
                 true,
+                req.canonicalize,
             )
         }
         KdcMsg::Error(e) => classify_kdc_error(&e),
@@ -423,13 +496,20 @@ fn continue_spake(
         till.clone(),
         Some(padata),
         etypes,
+        req.canonicalize,
     )?;
     let wire = encode(&second)?;
     let reply = exchange(req.kdc, &wire)?;
     match classify(&reply)? {
-        KdcMsg::AsRep(rep) => {
-            finish_as_rep_keys(rep, nonce, keys, req.password, &req.cname, req.realm)
-        }
+        KdcMsg::AsRep(rep) => finish_as_rep_keys(
+            rep,
+            nonce,
+            keys,
+            req.password,
+            &req.cname,
+            req.realm,
+            req.canonicalize,
+        ),
         KdcMsg::Error(e)
             if e.error_code == err::PREAUTH_REQUIRED
                 || e.error_code == err::MORE_PREAUTH_DATA_REQUIRED =>
@@ -462,12 +542,20 @@ fn send_spake_response(
     let cookie = find_pa(&method, pa::FX_COOKIE)
         .cloned()
         .ok_or_else(|| Error::ReplyMismatch("SPAKE FX_COOKIE missing".into()))?;
-    let (etype, salt, params) = select_s2k(err, &req.cname, req.realm)?;
+    let (etype, salt, params) = select_s2k(err, &salt_cname(&req.cname), req.realm)?;
     let ikey = pick_key(keys, Some(etype)).map_or_else(
         || string_to_key(etype, req.password, &salt, params.as_deref()),
         Ok,
     )?;
-    let mut req2 = build_as_req(&req.cname, req.realm, nonce, till, None, etypes)?;
+    let mut req2 = build_as_req(
+        &req.cname,
+        req.realm,
+        nonce,
+        till,
+        None,
+        etypes,
+        req.canonicalize,
+    )?;
     let body_der = encode(&req2.0.req_body)?;
     let (resp, k0) = pa_spake_response(
         &ikey,
@@ -488,6 +576,7 @@ fn send_spake_response(
             &req.cname,
             req.realm,
             true,
+            req.canonicalize,
         ),
         KdcMsg::Error(e) => classify_kdc_error(&e),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
@@ -504,7 +593,15 @@ fn continue_pkinit(
         .pkinit
         .ok_or_else(|| Error::ReplyMismatch("PKINIT identity missing".into()))?;
     let kp = p256_generate()?;
-    let mut req2 = build_as_req(&req.cname, req.realm, nonce, till, None, etypes)?;
+    let mut req2 = build_as_req(
+        &req.cname,
+        req.realm,
+        nonce,
+        till,
+        None,
+        etypes,
+        req.canonicalize,
+    )?;
     let body_der = encode(&req2.0.req_body)?;
     let mut h = Sha1::new();
     h.update(&body_der);
@@ -539,6 +636,7 @@ fn continue_pkinit(
                 &req.cname,
                 req.realm,
                 true,
+                req.canonicalize,
             )
         }
         KdcMsg::Error(e) => classify_kdc_error(&e),
@@ -633,6 +731,7 @@ fn krb_err(e: &KrbError) -> Result<AsOutcome, Error> {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finish_as_rep(
     rep: AsRep,
     nonce: u32,
@@ -641,6 +740,7 @@ fn finish_as_rep(
     cname: &PrincipalName,
     realm: &str,
     sent_preauth: bool,
+    canonicalize: bool,
 ) -> Result<AsOutcome, Error> {
     let inner = rep.0;
     let had_preauth = sent_preauth;
@@ -648,7 +748,7 @@ fn finish_as_rep(
     let key = if let Some(k) = client_key {
         k
     } else {
-        let salt = cname.default_salt(realm);
+        let salt = salt_cname(cname).default_salt(realm);
         string_to_key(etype, password, &salt, None)?
     };
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART)?;
@@ -658,7 +758,10 @@ fn finish_as_rep(
         return Err(Error::NonceMismatch);
     }
     if inner.cname != *cname {
-        return Err(Error::ReplyMismatch("AS-REP cname mismatch".into()));
+        let enterprise = cname.name_type == PrincipalName::NT_ENTERPRISE;
+        if !(canonicalize || enterprise) || inner.cname.name_string.is_empty() {
+            return Err(Error::ReplyMismatch("AS-REP cname mismatch".into()));
+        }
     }
     if inner.crealm.as_bytes() != realm.as_bytes() {
         return Err(Error::ReplyMismatch("AS-REP crealm mismatch".into()));
@@ -745,6 +848,18 @@ fn decode_enc_as(plain: &[u8]) -> Result<EncKdcRepPart, Error> {
     )))
 }
 
+fn salt_cname(cname: &PrincipalName) -> PrincipalName {
+    if cname.name_type != PrincipalName::NT_ENTERPRISE {
+        return cname.clone();
+    }
+    let raw = cname.components_joined();
+    let user = match raw.rsplit_once('@') {
+        Some((u, _)) if !u.is_empty() => u,
+        _ => raw.as_str(),
+    };
+    PrincipalName::new(PrincipalName::NT_PRINCIPAL, [user])
+}
+
 fn build_as_req(
     cname: &PrincipalName,
     realm: &str,
@@ -752,14 +867,19 @@ fn build_as_req(
     till: KerberosTime,
     padata: Option<Vec<PaData>>,
     etypes: &[i32],
+    canonicalize: bool,
 ) -> Result<AsReq, Error> {
     let realm_s = krb5_types::try_ascii(realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?;
+    let mut opts = KdcOptions::forwardable();
+    if canonicalize {
+        opts = opts.with_bit(flag_bit::CANONICALIZE, true);
+    }
     Ok(AsReq(KdcReq {
         pvno: KdcReq::PVNO,
         msg_type: KdcReq::MSG_AS_REQ,
         padata,
         req_body: KdcReqBody {
-            kdc_options: KdcOptions::forwardable(),
+            kdc_options: opts,
             cname: Some(cname.clone()),
             realm: realm_s,
             sname: Some(PrincipalName::krbtgt(realm)),

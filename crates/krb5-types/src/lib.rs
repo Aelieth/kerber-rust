@@ -155,6 +155,8 @@ impl PrincipalName {
     pub const NT_SRV_INST: i32 = 2;
     /// NT-SRV-HST (3).
     pub const NT_SRV_HST: i32 = 3;
+    /// NT-ENTERPRISE (10), RFC 6806. One component, typically `user@REALM`.
+    pub const NT_ENTERPRISE: i32 = 10;
 
     /// Build a principal from a name type and GeneralString components.
     ///

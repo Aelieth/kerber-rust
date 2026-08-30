@@ -218,13 +218,20 @@ fn issue_as_from(
     if body.kdc_options.unsupported_bits() != 0 {
         return Err(proto(err::BADOPTION, "unsupported KDCOptions"));
     }
-    let cname = body
+    let req_cname = body
         .cname
         .clone()
         .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, "no cname"))?;
     let client = store
-        .fetch_name(&cname)?
+        .fetch_name(&req_cname)?
         .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, "unknown client"))?;
+    let cname = if req_cname.name_type == PrincipalName::NT_ENTERPRISE
+        || body.kdc_options.bit(flag_bit::CANONICALIZE)
+    {
+        client.name.clone()
+    } else {
+        req_cname.clone()
+    };
     let mut fails = store.fail_auth_of(&client);
     let max_fail = store.max_fail_for(&client);
     let last_failed = store.last_failed_of(&client);
@@ -233,7 +240,7 @@ fn issue_as_from(
         .named_policy_for(&client)
         .map_or((0, 0), |p| (p.pw_failcnt_interval, p.pw_lockout_duration));
     if interval > 0 && last_failed > 0 && now >= last_failed.saturating_add(interval) {
-        store.clear_as_fail_count(&cname);
+        store.clear_as_fail_count(&client.name);
         fails = 0;
     }
     let count_locked = max_fail > 0 && fails >= max_fail;

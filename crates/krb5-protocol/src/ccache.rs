@@ -198,6 +198,15 @@ impl FileCcache {
 ///
 /// Returns a message when the spec has no `@` or a component is not IA5.
 pub fn parse_principal(spec: &str) -> Result<(PrincipalName, String), String> {
+    parse_principal_ex(spec, false)
+}
+
+/// Parse `name@REALM`. `enterprise` uses NT-ENTERPRISE (one component).
+///
+/// # Errors
+///
+/// Returns a message when the spec has no `@` or a component is not IA5.
+pub fn parse_principal_ex(spec: &str, enterprise: bool) -> Result<(PrincipalName, String), String> {
     let (user, realm) = spec
         .rsplit_once('@')
         .ok_or_else(|| format!("principal must be name@REALM, got {spec}"))?;
@@ -206,6 +215,11 @@ pub fn parse_principal(spec: &str) -> Result<(PrincipalName, String), String> {
     }
     if !user.is_ascii() || !realm.is_ascii() {
         return Err("non-ASCII principal".into());
+    }
+    if enterprise {
+        return PrincipalName::try_new(PrincipalName::NT_ENTERPRISE, [user])
+            .map(|n| (n, realm.to_owned()))
+            .map_err(|e| e.to_string());
     }
     let parts: Vec<&str> = user.split('/').collect();
     let ntype = if parts.len() > 1 {

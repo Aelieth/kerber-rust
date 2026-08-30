@@ -1,6 +1,6 @@
 //! Obtain a TGT from a KDC and write an MIT FILE ccache.
 //!
-//! Usage: krb5-kinit [--spake] [--fast --armor-ccache PATH] [--pkinit FILE:user.pem --pkinit-anchors FILE:ca.pem] <kdc-host> <user@REALM> <ccache-path> [service]
+//! Usage: krb5-kinit [--spake] [--fast --armor-ccache PATH] [--pkinit FILE:user.pem --pkinit-anchors FILE:ca.pem] [-E|--enterprise] <kdc-host> <user@REALM> <ccache-path> [service]
 //!
 //! Password is read from `KRB5_PASSWORD` or stdin. Never from argv.
 
@@ -28,6 +28,7 @@ fn main() {
     let mut armor_ccache = None::<String>;
     let mut pkinit_identity = None::<String>;
     let mut pkinit_anchors = None::<String>;
+    let mut enterprise = false;
     let mut positional = Vec::new();
     let mut args_iter = std::env::args().skip(1);
     while let Some(a) = args_iter.next() {
@@ -37,13 +38,14 @@ fn main() {
             "--armor-ccache" => armor_ccache = args_iter.next(),
             "--pkinit" => pkinit_identity = args_iter.next().map(strip_file_spec),
             "--pkinit-anchors" => pkinit_anchors = args_iter.next().map(strip_file_spec),
+            "-E" | "--enterprise" => enterprise = true,
             _ => positional.push(a),
         }
     }
     let mut args = positional.into_iter();
     let host = args.next().unwrap_or_else(|| {
         eprintln!(
-            "usage: krb5-kinit [--spake] [--fast --armor-ccache PATH] [--pkinit FILE:user.pem --pkinit-anchors FILE:ca.pem] <kdc-host> <user@REALM> <ccache-path> [service]"
+            "usage: krb5-kinit [--spake] [--fast --armor-ccache PATH] [--pkinit FILE:user.pem --pkinit-anchors FILE:ca.pem] [-E|--enterprise] <kdc-host> <user@REALM> <ccache-path> [service]"
         );
         std::process::exit(2);
     });
@@ -89,6 +91,7 @@ fn main() {
         armor_ccache.as_deref().map(std::path::Path::new),
         pkinit_identity.as_deref().map(std::path::Path::new),
         pkinit_anchors.as_deref().map(std::path::Path::new),
+        enterprise,
     ) {
         Ok(r) => {
             println!(

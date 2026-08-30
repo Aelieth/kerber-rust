@@ -110,6 +110,8 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   --armor-ccache` wraps PA-ENC-TIMESTAMP in PA-FX-FAST
   (`scripts/rust-kinit-fast-gate.sh`). `kinit --pkinit FILE:` obtains
   a TGT via PA-PK-AS-REQ (`scripts/rust-kinit-pkinit-gate.sh`).
+  `kinit -E` / NT-ENTERPRISE (name-type 10) canonicalizes to the stored
+  principal (`scripts/rust-kinit-enterprise-gate.sh`).
 
 - KDB extension surface: `PrincipalRead` / `PrincipalWrite` /
   `StoreLifecycle`. Dump-v7 is the default backend; `db_library=memory`

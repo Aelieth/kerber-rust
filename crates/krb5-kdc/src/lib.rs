@@ -29,7 +29,8 @@ pub use ad::{
 pub use error::Error;
 pub use issue::{IssuedAs, IssuedTgs, handle_request, issue_as, issue_tgs};
 pub use kdb::{
-    KdcEnv, MemoryStore, PrincipalRead, PrincipalWrite, Store, StoreLifecycle, open_store,
+    KdcEnv, MemoryStore, PrincipalRead, PrincipalWrite, Store, StoreLifecycle, lookup_principal_id,
+    open_store,
 };
 pub use kdb_dump::{
     DumpError, DumpFile, DumpKeyData, DumpKeySlot, DumpPrincipal, KDB_DUMP_VERSION,

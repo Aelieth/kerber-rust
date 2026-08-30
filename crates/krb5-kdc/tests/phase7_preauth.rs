@@ -1032,6 +1032,35 @@ fn pac_logon_info_is_ndr() {
 }
 
 #[test]
+fn enterprise_as_canonicalizes_cname() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let ent = PrincipalName::new(
+        PrincipalName::NT_ENTERPRISE,
+        [format!("{TEST_USER}@{TEST_REALM}")],
+    );
+    assert!(
+        store.get_name(&ent).is_some(),
+        "NT-ENTERPRISE user@REALM must look up user, not user@REALM@REALM"
+    );
+    let key = password_key(TEST_USER, TEST_USER_PASSWORD);
+    let mut req = as_req(
+        ent,
+        TEST_REALM,
+        70,
+        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
+    )
+    .unwrap();
+    req.0.req_body.kdc_options = req
+        .0
+        .req_body
+        .kdc_options
+        .with_bit(flag_bit::CANONICALIZE, true);
+    let issued = krb5_kdc::issue_as(&store, &req).expect("enterprise AS");
+    assert_eq!(issued.rep.0.cname.name_type, PrincipalName::NT_PRINCIPAL);
+    assert_eq!(issued.rep.0.cname.components_joined(), TEST_USER);
+}
+
+#[test]
 fn tgs_canonicalize_issues_cross_realm_krbtgt() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     store

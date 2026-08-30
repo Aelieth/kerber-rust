@@ -825,7 +825,7 @@ impl PrincipalStore {
     #[must_use]
     pub fn get_name(&self, name: &PrincipalName) -> Option<&Principal> {
         self.map
-            .get(&format!("{}@{}", name.components_joined(), self.realm))
+            .get(&crate::kdb::lookup_principal_id(name, &self.realm))
     }
 
     /// PEM of the PKINIT test CA for MIT `pkinit_anchors = FILE:`.

@@ -11,7 +11,8 @@ use std::path::Path;
 
 use krb5_asn1::decode;
 use krb5_protocol::{
-    AsOutcome, AsRequest, FastArmor, KdcAddr, PkinitClient, TgsOutcome, as_exchange, tgs_exchange,
+    AsOutcome, AsRequest, FastArmor, KdcAddr, PkinitClient, TgsOutcome, as_exchange,
+    parse_principal_ex, tgs_exchange,
 };
 use krb5_types::{PrincipalName, Ticket};
 use zeroize::Zeroize;
@@ -61,6 +62,7 @@ pub fn kinit(
         None,
         None,
         None,
+        false,
     )
 }
 
@@ -80,6 +82,7 @@ pub fn kinit_ex(
     armor_ccache: Option<&Path>,
     pkinit_identity: Option<&Path>,
     pkinit_anchors: Option<&Path>,
+    enterprise: bool,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
     let result = kinit_inner(
         kdc,
@@ -91,6 +94,7 @@ pub fn kinit_ex(
         armor_ccache,
         pkinit_identity,
         pkinit_anchors,
+        enterprise,
     );
     password.zeroize();
     result
@@ -161,8 +165,9 @@ fn kinit_inner(
     armor_ccache: Option<&Path>,
     pkinit_identity: Option<&Path>,
     pkinit_anchors: Option<&Path>,
+    enterprise: bool,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
-    let (cname, realm_s) = parse_principal(principal)?;
+    let (cname, realm_s) = parse_principal_ex(principal, enterprise)?;
     let resolved = resolve_kdc(&realm_s, kdc);
     let armor = match armor_ccache {
         Some(p) => Some(load_fast_armor(p)?),
@@ -190,6 +195,7 @@ fn kinit_inner(
         want_spake,
         fast_armor: armor.as_ref(),
         pkinit: pkinit.as_ref(),
+        canonicalize: enterprise,
     })?;
     let mut creds = vec![tgt_cred(
         &as_out.crealm,

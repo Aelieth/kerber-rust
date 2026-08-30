@@ -7,6 +7,7 @@ primary implementation oracle. Existing Rust crates (`rasn-kerberos`,
 | RFC | Title | Status in this tree |
 | --- | --- | --- |
 | [4120](https://www.rfc-editor.org/rfc/rfc4120) | The Kerberos Network Authentication Service (V5) | Core types + DER; AS/TGS client in `krb5-protocol` / `krb5-client`; AS/TGS KDC in `krb5-kdc`; AP-REQ verify. |
+| [6806](https://www.rfc-editor.org/rfc/rfc6806) | Kerberos Principal Name Canonicalization and Cross-Realm Referrals | `NT-ENTERPRISE` (10) is a single `user@suffix` component. AS canonicalize returns the stored principal (`user`), not the enterprise string. Client: `kinit -E`. Gate: `scripts/rust-kinit-enterprise-gate.sh`. |
 | [3961](https://www.rfc-editor.org/rfc/rfc3961) | Encryption and Checksum Specifications | n-fold, DK, simplified profile, key usage. Etypes 17–20 only. |
 | [3962](https://www.rfc-editor.org/rfc/rfc3962) | AES Encryption for Kerberos 5 | Etypes 17, 18 (`aes128/256-cts-hmac-sha1-96`). |
 | [8009](https://www.rfc-editor.org/rfc/rfc8009) | AES Encryption with HMAC-SHA2 | Etypes 19, 20 (`aes128-cts-hmac-sha256-128`, `aes256-cts-hmac-sha384-192`). |
