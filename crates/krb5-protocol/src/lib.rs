@@ -43,7 +43,7 @@ pub use diff::{
     compare_preauth_e_data, compare_stable_rep, decode_enc_kdc_rep, stable_krb_error, stable_rep,
 };
 pub use error::Error;
-pub use keytab::{Keytab, KeytabEntry};
+pub use keytab::{Keytab, KeytabEntry, KeytabSlot};
 pub use preauth::{
     apply_strengthen, armor_key, attach_fast, build_fast_armor, fx_fast_padata, pa_for_user,
     pa_pac_options, pa_pk_as_req, pa_pk_as_req_agile, pa_pk_as_req_cn, pa_pk_as_req_signed,

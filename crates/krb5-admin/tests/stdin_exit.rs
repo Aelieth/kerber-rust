@@ -33,6 +33,13 @@ fn ktutil_nope_then_q_exits_1() {
     assert_eq!(out.status.code(), Some(0));
     let out = pipe_stdin(bin, b"q\nnope\n");
     assert_eq!(out.status.code(), Some(0));
+    let out = pipe_stdin(bin, b"\xff\nq\n");
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]
@@ -78,5 +85,12 @@ fn kadmin_local_nope_then_q_exits_1() {
     assert_eq!(out.status.code(), Some(0));
     let out = run(b"q\nnope\n");
     assert_eq!(out.status.code(), Some(0));
+    let out = run(b"\xff\nq\n");
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

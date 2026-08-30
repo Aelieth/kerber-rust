@@ -12,7 +12,7 @@ use std::io::{self, BufRead, Write};
 use std::path::Path;
 
 use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
-use krb5_protocol::{Keytab, KeytabEntry, parse_principal};
+use krb5_protocol::{Keytab, KeytabEntry, KeytabSlot, parse_principal};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -23,11 +23,7 @@ fn main() {
         unparsed: Vec::new(),
     };
     if args.is_empty() {
-        let stdin = io::stdin();
-        std::process::exit(run_stdin(
-            &mut kt,
-            stdin.lock().lines().map_while(Result::ok),
-        ));
+        std::process::exit(run_stdin_reader(&mut kt, io::stdin().lock()));
     }
     if let Err(e) = run_line(&mut kt, &args.join(" ")) {
         eprintln!("ktutil: {e}");
@@ -40,6 +36,7 @@ enum LineOutcome {
     Quit,
 }
 
+#[cfg(test)]
 fn run_stdin<I, S>(kt: &mut Keytab, lines: I) -> i32
 where
     I: IntoIterator<Item = S>,
@@ -48,6 +45,29 @@ where
     let mut failed = false;
     for line in lines {
         match run_line(kt, line.as_ref()) {
+            Ok(LineOutcome::Next) => {}
+            Ok(LineOutcome::Quit) => break,
+            Err(e) => {
+                eprintln!("ktutil: {e}");
+                failed = true;
+            }
+        }
+    }
+    i32::from(failed)
+}
+
+fn run_stdin_reader<R: BufRead>(kt: &mut Keytab, reader: R) -> i32 {
+    let mut failed = false;
+    for line in reader.lines() {
+        let line = match line {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("ktutil: {e}");
+                failed = true;
+                continue;
+            }
+        };
+        match run_line(kt, &line) {
             Ok(LineOutcome::Next) => {}
             Ok(LineOutcome::Quit) => break,
             Err(e) => {
@@ -98,10 +118,7 @@ fn run_line(kt: &mut Keytab, line: &str) -> Result<LineOutcome, String> {
                 .ok_or("delent <slot>")?
                 .parse()
                 .map_err(|_| "delent slot")?;
-            if slot == 0 || slot > kt.entries.len() {
-                return Err("no such slot".into());
-            }
-            kt.entries.remove(slot - 1);
+            kt.remove_slot(slot).map_err(|e| e.to_string())?;
             Ok(LineOutcome::Next)
         }
         Some("addent") => addent(kt, &parts[1..]).map(|()| LineOutcome::Next),
@@ -112,21 +129,28 @@ fn run_line(kt: &mut Keytab, line: &str) -> Result<LineOutcome, String> {
 
 fn format_list(kt: &Keytab, show_t: bool, show_e: bool, show_k: bool) -> String {
     let mut out = String::from("slot KVNO Principal\n");
-    for (i, e) in kt.entries.iter().enumerate() {
-        let princ = format!(
-            "{}@{}",
-            e.name.components_joined(),
-            String::from_utf8_lossy(e.realm.as_bytes())
-        );
-        let _ = write!(out, "{:>4} {:>4} {princ}", i + 1, e.kvno);
-        if show_t {
-            let _ = write!(out, " t={}", e.timestamp);
-        }
-        if show_e {
-            let _ = write!(out, " {}", e.key.etype().to_mit_name());
-        }
-        if show_k {
-            let _ = write!(out, " ({})", hex(e.key.as_bytes()));
+    for (i, slot) in kt.slots().iter().enumerate() {
+        match slot {
+            KeytabSlot::Entry(e) => {
+                let princ = format!(
+                    "{}@{}",
+                    e.name.components_joined(),
+                    String::from_utf8_lossy(e.realm.as_bytes())
+                );
+                let _ = write!(out, "{:>4} {:>4} {princ}", i + 1, e.kvno);
+                if show_t {
+                    let _ = write!(out, " t={}", e.timestamp);
+                }
+                if show_e {
+                    let _ = write!(out, " {}", e.key.etype().to_mit_name());
+                }
+                if show_k {
+                    let _ = write!(out, " ({})", hex(e.key.as_bytes()));
+                }
+            }
+            KeytabSlot::Unparsed(_) => {
+                let _ = write!(out, "{:>4}    - (unparsed)", i + 1);
+            }
         }
         out.push('\n');
     }
@@ -275,5 +299,31 @@ mod tests {
         let mut kt = empty_kt();
         assert_eq!(run_stdin(&mut kt, ["q", "nope"]), 0);
         assert!(matches!(run_line(&mut kt, "quit"), Ok(LineOutcome::Quit)));
+    }
+
+    #[test]
+    fn stdin_invalid_utf8_exits_1() {
+        let mut kt = empty_kt();
+        let rc = run_stdin_reader(&mut kt, std::io::Cursor::new(b"\xff\nq\n"));
+        assert_eq!(rc, 1);
+    }
+
+    #[test]
+    fn list_numbers_unparsed_slots() {
+        let mut kt = empty_kt();
+        kt.entries.push(KeytabEntry {
+            realm: ascii("KERBER.TEST"),
+            name: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+            timestamp: 1,
+            kvno: 1,
+            key: ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[3u8; 32]).unwrap(),
+        });
+        kt.unparsed.push((0, vec![0, 0, 0, 4, 0, 0, 0, 0]));
+        let text = format_list(&kt, false, false, false);
+        assert!(text.contains("   1    - (unparsed)"), "{text}");
+        assert!(text.contains("   2    1 user@KERBER.TEST"), "{text}");
+        run_line(&mut kt, "delent 1").unwrap();
+        assert!(kt.unparsed.is_empty());
+        assert_eq!(kt.entries.len(), 1);
     }
 }

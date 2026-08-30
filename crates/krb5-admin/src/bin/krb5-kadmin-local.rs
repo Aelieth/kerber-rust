@@ -47,11 +47,7 @@ fn main() {
     });
     let mut sess = AdminSession::local(&mut store, &acl, actor);
     if queued.is_empty() {
-        let stdin = io::stdin();
-        std::process::exit(run_stdin(
-            &mut sess,
-            stdin.lock().lines().map_while(Result::ok),
-        ));
+        std::process::exit(run_stdin_reader(&mut sess, io::stdin().lock()));
     }
     for c in queued {
         match run(&mut sess, &c) {
@@ -83,6 +79,7 @@ enum LineOutcome {
     Quit,
 }
 
+#[cfg(test)]
 fn run_stdin<I, S>(sess: &mut AdminSession<'_>, lines: I) -> i32
 where
     I: IntoIterator<Item = S>,
@@ -91,6 +88,29 @@ where
     let mut failed = false;
     for line in lines {
         match run(sess, line.as_ref()) {
+            Ok(LineOutcome::Next) => {}
+            Ok(LineOutcome::Quit) => break,
+            Err(e) => {
+                eprintln!("kadmin.local: {e}");
+                failed = true;
+            }
+        }
+    }
+    i32::from(failed)
+}
+
+fn run_stdin_reader<R: BufRead>(sess: &mut AdminSession<'_>, reader: R) -> i32 {
+    let mut failed = false;
+    for line in reader.lines() {
+        let line = match line {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("kadmin.local: {e}");
+                failed = true;
+                continue;
+            }
+        };
+        match run(sess, &line) {
             Ok(LineOutcome::Next) => {}
             Ok(LineOutcome::Quit) => break,
             Err(e) => {
@@ -204,10 +224,12 @@ fn run(sess: &mut AdminSession<'_>, line: &str) -> Result<LineOutcome, String> {
 }
 
 fn merge_write_keytab(path: &std::path::Path, added: &Keytab) -> Result<(), String> {
-    let mut kt = std::fs::read(path)
-        .ok()
-        .and_then(|b| Keytab::parse(&b).ok())
-        .unwrap_or_default();
+    let mut kt = match std::fs::read(path) {
+        Ok(b) => Keytab::parse(&b).map_err(|e| e.to_string())?,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Keytab::default(),
+        Err(e) => return Err(e.to_string()),
+    };
+    let n = kt.entries.len();
     for e in &added.entries {
         kt.entries.push(krb5_protocol::KeytabEntry {
             realm: e.realm.clone(),
@@ -217,6 +239,12 @@ fn merge_write_keytab(path: &std::path::Path, added: &Keytab) -> Result<(), Stri
             key: e.key.clone(),
         });
     }
+    kt.unparsed.extend(
+        added
+            .unparsed
+            .iter()
+            .map(|(i, b)| (i.saturating_add(n), b.clone())),
+    );
     if kt.version == 0 {
         kt.version = 0x0502;
     }
@@ -303,5 +331,31 @@ mod tests {
         assert_eq!(run_stdin(&mut sess, ["q"]), 0);
         assert_eq!(run_stdin(&mut sess, ["q", "nope"]), 0);
         assert!(matches!(run(&mut sess, "quit"), Ok(LineOutcome::Quit)));
+    }
+
+    #[test]
+    fn stdin_invalid_utf8_exits_1() {
+        let (mut store, acl) = sess_pair();
+        let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+        let rc = run_stdin_reader(&mut sess, std::io::Cursor::new(b"\xff\nq\n"));
+        assert_eq!(rc, 1);
+    }
+
+    #[test]
+    fn merge_write_refuses_unparseable() {
+        let dir = std::env::temp_dir().join(format!(
+            "kt-refuse-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("bad.keytab");
+        std::fs::write(&path, b"not-a-keytab").unwrap();
+        let added = Keytab::default();
+        assert!(merge_write_keytab(&path, &added).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"not-a-keytab");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

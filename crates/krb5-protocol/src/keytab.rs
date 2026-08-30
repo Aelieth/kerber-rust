@@ -8,6 +8,15 @@ use krb5_types::{PrincipalName, Realm, kerberos_string_from_bytes};
 
 use crate::secret_file::write_secret_file;
 
+/// One file-order keytab slot (parsed entry or unknown-etype blob).
+#[derive(Debug)]
+pub enum KeytabSlot<'a> {
+    /// Known etype.
+    Entry(&'a KeytabEntry),
+    /// Raw record (length prefix included), unknown etype.
+    Unparsed(&'a [u8]),
+}
+
 /// One keytab entry.
 #[derive(Debug)]
 pub struct KeytabEntry {
@@ -95,6 +104,68 @@ impl Keytab {
         write_secret_file(path.as_ref(), &self.to_bytes())
     }
 
+    /// File-order slots: parsed entries interleaved with unknown-etype blobs.
+    #[must_use]
+    pub fn slots(&self) -> Vec<KeytabSlot<'_>> {
+        let mut ei = 0;
+        let mut ui = 0;
+        let mut out = Vec::new();
+        loop {
+            if ui < self.unparsed.len() && (ei >= self.entries.len() || self.unparsed[ui].0 <= ei) {
+                out.push(KeytabSlot::Unparsed(&self.unparsed[ui].1));
+                ui += 1;
+                continue;
+            }
+            let Some(e) = self.entries.get(ei) else {
+                break;
+            };
+            out.push(KeytabSlot::Entry(e));
+            ei += 1;
+        }
+        out
+    }
+
+    /// Remove the 1-based file-order slot (parsed or unparsed).
+    ///
+    /// # Errors
+    ///
+    /// Slot 0 or past the last slot.
+    pub fn remove_slot(&mut self, slot: usize) -> io::Result<()> {
+        let n = self.slots().len();
+        if slot == 0 || slot > n {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "no such slot"));
+        }
+        let mut ei = 0;
+        let mut ui = 0;
+        let mut seen = 0;
+        loop {
+            if ui < self.unparsed.len() && (ei >= self.entries.len() || self.unparsed[ui].0 <= ei) {
+                seen += 1;
+                if seen == slot {
+                    self.unparsed.remove(ui);
+                    return Ok(());
+                }
+                ui += 1;
+                continue;
+            }
+            if ei >= self.entries.len() {
+                break;
+            }
+            seen += 1;
+            if seen == slot {
+                self.entries.remove(ei);
+                for (idx, _) in &mut self.unparsed {
+                    if *idx > ei {
+                        *idx = idx.saturating_sub(1);
+                    }
+                }
+                return Ok(());
+            }
+            ei += 1;
+        }
+        Err(io::Error::new(io::ErrorKind::InvalidInput, "no such slot"))
+    }
+
     /// Append `other` entries (ktadd / merge).
     pub fn merge(&mut self, other: Keytab) {
         let n = self.entries.len();
@@ -147,13 +218,10 @@ impl Keytab {
             }
             match parse_entry(&bytes[i..i + size], version) {
                 Ok(e) => entries.push(e),
-                Err(err)
-                    if err.kind() == io::ErrorKind::InvalidData
-                        && err.to_string().contains("etype") =>
-                {
+                Err(EntryErr::UnsupportedEtype) => {
                     unparsed.push((entries.len(), bytes[rec..i + size].to_vec()));
                 }
-                Err(e) => return Err(e),
+                Err(EntryErr::Io(e)) => return Err(e),
             }
             i += size;
         }
@@ -187,7 +255,18 @@ fn marshal_entry(e: &KeytabEntry, ver: u16) -> Vec<u8> {
     b
 }
 
-fn parse_entry(body: &[u8], ver: u16) -> Result<KeytabEntry, io::Error> {
+enum EntryErr {
+    UnsupportedEtype,
+    Io(io::Error),
+}
+
+impl From<io::Error> for EntryErr {
+    fn from(e: io::Error) -> Self {
+        Self::Io(e)
+    }
+}
+
+fn parse_entry(body: &[u8], ver: u16) -> Result<KeytabEntry, EntryErr> {
     let mut i = 0;
     let ncomp = take_u16(body, &mut i)?;
     let realm = take_counted16(body, &mut i)?;
@@ -198,7 +277,7 @@ fn parse_entry(body: &[u8], ver: u16) -> Result<KeytabEntry, io::Error> {
     let nametype = take_i32(body, &mut i)?;
     let timestamp = take_u32(body, &mut i)?;
     if i >= body.len() {
-        return Err(eof());
+        return Err(eof().into());
     }
     let kvno8 = body[i];
     i += 1;
@@ -209,8 +288,18 @@ fn parse_entry(body: &[u8], ver: u16) -> Result<KeytabEntry, io::Error> {
     } else {
         u32::from(kvno8)
     };
-    let etype = EncryptionType::known(enctype)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, format!("etype {enctype}")))?;
+    let etype = match EncryptionType::known(enctype) {
+        Ok(e) => e,
+        Err(krb5_crypto::Error::UnsupportedEtype(_)) => {
+            return Err(EntryErr::UnsupportedEtype);
+        }
+        Err(e) => {
+            return Err(EntryErr::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                e.to_string(),
+            )));
+        }
+    };
     let key = ProtocolKey::from_bytes(etype, &keybytes)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
     let realm_s = kerberos_string_from_bytes(&realm)
@@ -330,5 +419,42 @@ mod tests {
         assert_eq!(again.unparsed.len(), 1);
         assert_eq!(again.unparsed[0].1, rec);
         assert!(out.windows(rec.len()).any(|w| w == rec.as_slice()));
+    }
+
+    #[test]
+    fn slots_number_unparsed_and_delent() {
+        let known = Keytab::single(
+            ascii("KERBER.TEST"),
+            PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+            1,
+            ProtocolKey::from_bytes(EncryptionType::Aes128CtsHmacSha196, &[9u8; 16]).unwrap(),
+        );
+        let mut body = marshal_entry(&sample_entry(), 0x0502);
+        patch_etype(&mut body, 99);
+        let mut rec = i32::try_from(body.len()).unwrap().to_be_bytes().to_vec();
+        rec.extend_from_slice(&body);
+        let mut bytes = known.to_bytes();
+        bytes.extend_from_slice(&rec);
+        let extra = Keytab::single(
+            ascii("KERBER.TEST"),
+            PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["host"]),
+            2,
+            ProtocolKey::from_bytes(EncryptionType::Aes128CtsHmacSha196, &[8u8; 16]).unwrap(),
+        );
+        bytes.extend_from_slice(&extra.to_bytes()[2..]);
+        let mut parsed = Keytab::parse(&bytes).unwrap();
+        assert_eq!(parsed.slots().len(), 3);
+        assert!(matches!(parsed.slots()[1], KeytabSlot::Unparsed(_)));
+        parsed.remove_slot(2).unwrap();
+        assert_eq!(parsed.slots().len(), 2);
+        assert!(matches!(parsed.slots()[0], KeytabSlot::Entry(_)));
+        assert!(matches!(parsed.slots()[1], KeytabSlot::Entry(_)));
+        assert!(parsed.unparsed.is_empty());
+    }
+
+    #[test]
+    fn truncated_entry_is_not_unparsed() {
+        let err = Keytab::parse(&[0x05, 0x02, 0, 0, 0, 20, 1]).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
     }
 }
