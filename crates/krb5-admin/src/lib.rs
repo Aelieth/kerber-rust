@@ -9,7 +9,7 @@ mod kadm5;
 mod kprop;
 mod listen;
 
-use krb5_kdc::{Acl, AdminOp, PrincipalStore};
+use krb5_kdc::{Acl, AdminOp, NamedPolicy, PrincipalStore};
 use krb5_protocol::{Keytab, ReplayCache, verify_ap_req};
 use krb5_types::PrincipalName;
 use thiserror::Error;
@@ -22,8 +22,8 @@ pub use kprop::{
 };
 pub use listen::{
     KADMIND_PORT, KPASSWD_PORT, KPROP_PORT, dispatch_kadmind, encode_kadmind_req,
-    encode_kpasswd_req, handle_kpasswd_rfc3244, kprop_recv, kprop_send, serve_kadmind,
-    serve_kpasswd_tcp, serve_kpasswd_udp,
+    encode_kpasswd_req, handle_kpasswd_rfc3244, kprop_recv, kprop_send, parse_kpasswd_rep,
+    serve_kadmind, serve_kpasswd_tcp, serve_kpasswd_udp,
 };
 
 /// Admin error.
@@ -166,6 +166,80 @@ impl<'a> AdminSession<'a> {
                 .map_err(Error::from)?;
         }
         self.store.set_password(name, password).map_err(Error::from)
+    }
+
+    /// Realm of the bound store.
+    #[must_use]
+    pub fn realm(&self) -> &str {
+        self.store.realm()
+    }
+
+    /// `listprincs`.
+    #[must_use]
+    pub fn list_ids(&self) -> Vec<String> {
+        self.store.ids()
+    }
+
+    /// `getprinc` display id.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    pub fn get_principal_id(&self, name: &PrincipalName) -> Result<String, Error> {
+        let p = self.store.get_name(name).ok_or(Error::NotFound)?;
+        Ok(format!("{}@{}", p.name.components_joined(), p.realm))
+    }
+
+    /// `modprinc` attributes only.
+    ///
+    /// # Errors
+    ///
+    /// ACL or not found.
+    pub fn modify_attributes(
+        &mut self,
+        name: &PrincipalName,
+        attributes: Option<u32>,
+    ) -> Result<(), Error> {
+        self.acl
+            .check(&self.actor, AdminOp::Modify)
+            .map_err(Error::from)?;
+        self.store
+            .apply_admin_fields(name, attributes, None, None, None, None, false)
+            .map_err(Error::from)
+    }
+
+    /// `addpol`.
+    pub fn add_policy(&mut self, name: &str) {
+        self.store.put_policy(NamedPolicy::new(name));
+    }
+
+    /// `getpol`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    pub fn get_policy(&self, name: &str) -> Result<String, Error> {
+        self.store
+            .policies()
+            .get(name)
+            .map(|p| p.name.clone())
+            .ok_or(Error::NotFound)
+    }
+
+    /// `setstr`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    pub fn set_string_attr(
+        &mut self,
+        name: &PrincipalName,
+        key: &str,
+        val: &str,
+    ) -> Result<(), Error> {
+        self.store
+            .set_string(name, key, Some(val))
+            .map_err(Error::from)
     }
 }
 
@@ -477,6 +551,9 @@ mod tests {
             rep.len() > 6 && u16::from_be_bytes([rep[4], rep[5]]) > 0,
             "success reply must include AP-REP"
         );
+        let (ap_rep, priv_rep) = parse_kpasswd_rep(&rep).expect("parse kpasswd rep");
+        assert!(!ap_rep.is_empty() && !priv_rep.is_empty());
+        assert!(parse_kpasswd_rep(&[0, 6, 0, 1, 0, 0]).is_err());
         let after = shared.read().unwrap();
         let kvno_after = after
             .get_name(&user)

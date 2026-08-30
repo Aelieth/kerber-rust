@@ -22,7 +22,7 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
-cargo build -p krb5-kdc --bin krb5-kdc -p krb5-admin --bin krb5-kadmind
+cargo build -p krb5-kdc --bin krb5-kdc -p krb5-admin --bin krb5-kadmind --bin krb5-kpasswd
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
@@ -35,7 +35,8 @@ trap cleanup EXIT
 
 docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc
 docker cp target/debug/krb5-kadmind "$NAME":/tmp/krb5-kadmind
-docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kadmind
+docker cp target/debug/krb5-kpasswd "$NAME":/tmp/krb5-kpasswd
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kadmind /tmp/krb5-kpasswd
 
 docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
@@ -132,6 +133,24 @@ docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
 KLIST2="$(docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf "$NAME" klist)"
 echo "$KLIST2"
 echo "$KLIST2" | grep -q 'user@KERBER.TEST'
+
+echo "==== Rust kpasswd vs Rust kadmind ===="
+docker exec -e KRB5_PASSWORD=kpasswd-two -e KRB5_NEW_PASSWORD=rust-kpw \
+    "$NAME" /tmp/krb5-kpasswd 127.0.0.1 user@KERBER.TEST
+docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
+    "$NAME" sh -c 'printf "rust-kpw\n" | kinit user@KERBER.TEST'
+KLIST3="$(docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf "$NAME" klist)"
+echo "$KLIST3"
+echo "$KLIST3" | grep -q 'user@KERBER.TEST'
+set +e
+docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
+    "$NAME" sh -c 'printf "kpasswd-two\n" | kinit user@KERBER.TEST'
+old2=$?
+set -e
+if [ "$old2" -eq 0 ]; then
+    log "kpasswd.gate" "error" ',"error":"rust kpasswd old password still works"'
+    exit 1
+fi
 
 log "kpasswd.gate" "ok" ',"principal":"user@KERBER.TEST","op":"kpasswd+kinit"'
 exit 0

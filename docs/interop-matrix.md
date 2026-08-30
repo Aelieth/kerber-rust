@@ -16,6 +16,8 @@ the script documents otherwise.
 | --- | --- | --- | --- |
 | `client-gate.sh` | Rust `krb5-kinit` vs MIT `krb5kdc` | MIT `klist` names TGT + `host/testhost.kerber.test`; Rust `klist -f -e` matches MIT flags/etype; `krb5-kvno` service ticket; `kdestroy` then MIT `klist` has no cache | harness |
 | `ktutil-gate.sh` | MIT `ktadd` / Rust `ktutil` / MIT `kinit -k` | Rust list of MIT keytab; Rust-written keytab `kinit -k` | harness |
+| `kadmin-local-gate.sh` | Rust `krb5-kadmin-local` then MIT `kadmin` | `addprinc extra2`; MIT getprinc/listprincs `extra2@KERBER.TEST` | harness |
+| `rust-kpasswd-mit-gate.sh` | Rust `krb5-kpasswd` vs MIT `kadmind` 464 | new password `kinit`; old fails | harness |
 | `kdc-gate.sh` | MIT `kinit`/`kvno` vs Rust KDC | MIT TGT + host ticket (FAST TGS `kvno` included) | harness |
 | `gss-gate.sh` | MIT `libgssapi_krb5` initiator vs `krb5-gss-accept` | unwrap of `hello-from-mit-gss`; `GSS_C_DELEG_FLAG` both directions names `user@KERBER.TEST`; MIT SPNEGO handshake + `mechListMIC`; MIT `gss_wrap_iov` / Rust `unwrap_iov` (incl. `SIGN_ONLY`); Rust `wrap_iov` / MIT `gss_unwrap_iov`; inquire lifetime > 0 | harness |
 | `pkinit-gate.sh` | MIT `kinit -X X509_user_identity=FILE:` vs Rust KDC | `pkinit.so` present; log `rfc8636 sha256 kdf`; SAN≠cname log `pkinit client san` | harness |
@@ -37,7 +39,7 @@ the script documents otherwise.
 | `postdate-gate.sh` | MIT `kinit -s` / `kinit -v` vs Rust KDC | INVALID `i` then TKT_NYV; validate then `kvno`; `-allow_postdated` is CANNOT_POSTDATE | harness |
 | `getprivs-gate.sh` | MIT `kadmin getprivs` vs Rust kadmind ACL | admin INQUIRE/ADD/MODIFY; limited `i` is INQUIRE only; `cpw -randkey` is AUTH_CHANGEPW | harness |
 | `prop-acl-gate.sh` | MIT `kprop` vs Rust kpropd `KRB5_KPROP_ACL` | unset or empty allowlist: `acl denied`, no replica; host allowlist: MIT `kinit user` | harness |
-| `kpasswd-gate.sh` | MIT `kpasswd` vs kadmind 464 | new password `kinit`; old fails; run twice | harness |
+| `kpasswd-gate.sh` | MIT `kpasswd` vs Rust kadmind 464; Rust `krb5-kpasswd` vs Rust kadmind | new password `kinit`; old fails; run twice; Rust client after MIT | harness |
 | `kdb-dump-gate.sh` | MIT `kdb5_util` dump/load both ways | MIT `kinit` vs Rust; MIT load of policy-bearing dump + `getpol lockme` | harness |
 | `differential-gate.sh` | same AS/TGS bytes to Rust and MIT on one dump | stable-rep / error-code compare; un-whitelisted mismatch fails red | harness |
 | `kprop-gate.sh` | MIT `kprop` dump v7 vs `krb5-kpropd` 754 | MIT `kinit user` on replica; `klist` names `user@KERBER.TEST` | harness |

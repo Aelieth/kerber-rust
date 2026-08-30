@@ -150,6 +150,15 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   `client-gate.sh` (kvno) and `scripts/ktutil-gate.sh` (MIT `ktadd`
   list + Rust keytab `kinit -k`).
 
+- `krb5-kadmin-local` (Cargo bin; MIT `kadmin.local`) mutates dump
+  + stash; MIT `kadmin` getprinc/listprincs is the oracle
+  (`scripts/kadmin-local-gate.sh`). `krb5-kpasswd` is RFC 3244
+  TCP-464 first; the AS-REQ sname is `kadmin/changepw` because MIT
+  flags that principal `DISALLOW_TGT_BASED`. Gates: Rust kpasswd
+  vs Rust kadmind (`kpasswd-gate.sh`) and vs MIT kadmind
+  (`scripts/rust-kpasswd-mit-gate.sh`); new-password `kinit`
+  succeeds and the old password fails.
+
 - `krb5-klist` (`-c`/`-f`/`-e`) reads a FILE ccache; `krb5-kdestroy`
   zeros then unlinks. Bidirectional MIT oracle in
   `scripts/client-gate.sh`: Rust klist of a MIT-`kinit` ccache and MIT

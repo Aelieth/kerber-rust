@@ -196,6 +196,7 @@ fn kinit_inner(
         fast_armor: armor.as_ref(),
         pkinit: pkinit.as_ref(),
         canonicalize: enterprise,
+        sname: None,
     })?;
     let mut creds = vec![tgt_cred(
         &as_out.crealm,

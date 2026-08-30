@@ -335,6 +335,27 @@ pub fn handle_kpasswd_rfc3244(
     kpasswd_success_rep(&session, &priv_key, &ok.authenticator, &[0, 0])
 }
 
+/// Parse a kpasswd reply (`len,ver,AP-REP-len,AP-REP,KRB-PRIV`).
+///
+/// AP-REP length 0 is a framed KRB-ERROR.
+///
+/// # Errors
+///
+/// Truncation or framed error.
+pub fn parse_kpasswd_rep(raw: &[u8]) -> Result<(Vec<u8>, Vec<u8>), Error> {
+    if raw.len() < 6 {
+        return Err(Error::Inner("kpasswd truncated".into()));
+    }
+    let ap_len = usize::from(u16::from_be_bytes([raw[4], raw[5]]));
+    if ap_len == 0 {
+        return Err(Error::Inner("kpasswd framed error".into()));
+    }
+    if 6 + ap_len > raw.len() {
+        return Err(Error::Inner("kpasswd AP-REP".into()));
+    }
+    Ok((raw[6..6 + ap_len].to_vec(), raw[6 + ap_len..].to_vec()))
+}
+
 /// Encode an RFC 3244 kpasswd request.
 #[must_use]
 pub fn encode_kpasswd_req(ap_req: &[u8], krb_priv_der: &[u8]) -> Vec<u8> {

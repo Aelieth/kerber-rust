@@ -135,7 +135,7 @@ toolchain. `rasn` is unpinned (`0.28`); golden MIT DER is the protocol
 net if encodings drift. There is no unlocked `--locked` fallback.
 KLLDAP alignment: [`integration-klldap.md`](integration-klldap.md).
 
-Era II gates. The harness CI job runs `kadmin-gate`, `policy-gate`, `history-mit-gate`, `kpasswd-gate`,
+Era II gates. The harness CI job runs `kadmin-gate`, `kadmin-local-gate`, `policy-gate`, `history-mit-gate`, `kpasswd-gate`, `rust-kpasswd-mit-gate`, `ktutil-gate`,
 `kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `iprop-gate`,
 `expire-gate`, `flags-gate`, `renew-gate`, `postdate-gate`, `getprivs-gate`, `prop-acl-gate`, `restart-gate`,
 `prod-gate`, `prod-realm-gate`, `stress-gate`, `chaos-gate`, `soak-gate`, `s4u-mit-gate`, `samba-ad-gate`, `ad-windows-gate`,
@@ -237,9 +237,16 @@ when that oracle is absent.
   `renamefrom`→`renameto` then `getprinc` new / old fails / `kinit -k`
   new, `delprinc` then `getprinc` error. Rename uses `-randkey` (MIT
   default-salt password keys may not `kinit` after rename). Run twice.
+- `scripts/kadmin-local-gate.sh` — Rust `krb5-kadmin-local` `addprinc`
+  extra2 on dump/stash; MIT `kadmin` getprinc/listprincs names
+  `extra2@KERBER.TEST`. Run twice.
 - `scripts/kpasswd-gate.sh` — MIT `kpasswd` against kadmind UDP/TCP
   464 (`kadmin/changepw`), then `kinit` with the new password; old
-  password must fail; second `kpasswd` + `kinit`. Run twice.
+  password must fail; second `kpasswd` + `kinit`; then Rust
+  `krb5-kpasswd` against the same Rust kadmind. Run twice.
+  `scripts/rust-kpasswd-mit-gate.sh` is Rust `krb5-kpasswd` against
+  MIT `kadmind` (AS-REQ sname `kadmin/changepw`; MIT
+  `DISALLOW_TGT_BASED`).
 - `scripts/kdb-dump-gate.sh` — MIT 1.22.2 dump/load both directions.
   Half A: `krb5-kdb load` of `tests/traces/kdb/mit-dump-v7.txt`, Rust
   KDC, MIT `kinit user` / `kinit pauser` (`REQUIRES_PRE_AUTH` = 128).

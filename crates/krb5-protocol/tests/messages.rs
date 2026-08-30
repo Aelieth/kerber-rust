@@ -203,6 +203,7 @@ fn non_ascii_realm_as_exchange_is_err() {
         fast_armor: None,
         pkinit: None,
         canonicalize: false,
+        sname: None,
     });
     assert!(err.is_err(), "non-ASCII realm must not panic");
 }
@@ -263,6 +264,7 @@ fn first_bare_as_req_skew_is_retried() {
         fast_armor: None,
         pkinit: None,
         canonicalize: false,
+        sname: None,
     });
     assert!(
         hits.load(Ordering::SeqCst) >= 2,
@@ -320,6 +322,7 @@ fn spake_as_req_carries_pa_spake() {
         fast_armor: None,
         pkinit: None,
         canonicalize: false,
+        sname: None,
     });
     let raw = first.lock().unwrap().clone();
     assert!(!raw.is_empty(), "SPAKE client must send an AS-REQ");
@@ -385,6 +388,7 @@ fn want_spake_rejects_non_preauth_as_rep() {
         fast_armor: None,
         pkinit: None,
         canonicalize: false,
+        sname: None,
     })
     .expect_err("SPAKE skip");
     assert!(
@@ -418,6 +422,7 @@ fn want_spake_rejects_fast_and_pkinit() {
         fast_armor: None,
         pkinit: Some(&pk),
         canonicalize: false,
+        sname: None,
     })
     .expect_err("spake+pkinit");
     assert!(err.to_string().contains("SPAKE exclusive"), "got {err}");
@@ -448,6 +453,7 @@ fn want_spake_rejects_fast_and_pkinit() {
         fast_armor: Some(&armor),
         pkinit: None,
         canonicalize: false,
+        sname: None,
     })
     .expect_err("spake+fast");
     assert!(err.to_string().contains("SPAKE exclusive"), "got {err}");
@@ -530,6 +536,7 @@ fn fast_preauth_retry_carries_fx_fast() {
         fast_armor: Some(&armor),
         pkinit: None,
         canonicalize: false,
+        sname: None,
     });
     let raw = first.lock().unwrap().clone();
     assert!(!raw.is_empty(), "FAST client must send an AS-REQ");
@@ -605,6 +612,7 @@ fn pkinit_as_req_carries_pa_pk_as_req() {
         fast_armor: None,
         pkinit: Some(&pk),
         canonicalize: false,
+        sname: None,
     });
     let raw = first.lock().unwrap().clone();
     assert!(!raw.is_empty(), "PKINIT client must send an AS-REQ");
@@ -669,6 +677,7 @@ fn enterprise_as_req_sets_name_type_and_canonicalize() {
         fast_armor: None,
         pkinit: None,
         canonicalize: true,
+        sname: None,
     });
     let raw = first.lock().unwrap().clone();
     assert!(!raw.is_empty(), "enterprise client must send an AS-REQ");

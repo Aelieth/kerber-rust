@@ -42,5 +42,13 @@ path = "src/bin/krb5-iprop-pull.rs"
 name = "krb5-ktutil"
 path = "src/bin/krb5-ktutil.rs"
 
+[[bin]]
+name = "krb5-kadmin-local"
+path = "src/bin/krb5-kadmin-local.rs"
+
+[[bin]]
+name = "krb5-kpasswd"
+path = "src/bin/krb5-kpasswd.rs"
+
 [lints]
 workspace = true
