@@ -822,6 +822,12 @@ impl GssContext {
     }
 
     fn unwrap_iov_integ(&mut self, iov: &mut [IovBuf<'_>]) -> Result<(), Error> {
+        let flags = iov
+            .iter()
+            .find(|b| b.kind == IovType::Header)
+            .and_then(|b| b.data.get(2).copied())
+            .ok_or(Error::Truncated)?;
+        require_aes(self.recv_key(flags)?.etype())?;
         let tok = join_wrap_token(iov)?;
         let plain = self.unwrap(&tok)?;
         write_iov_data(iov, &plain)
@@ -1709,6 +1715,11 @@ fn mech_token_as_gss(mech_token: &[u8]) -> Vec<u8> {
 }
 
 /// SPNEGO acceptor: `NegTokenInit` → krb5 accept → `NegTokenResp` with MIC.
+///
+/// A `mechListMIC` on the init token is verified here. A follow-up
+/// `NegTokenResp` MIC from the initiator (RFC 4178 second-leg) is **not**
+/// consumed by this call; the acceptor must pass that token to
+/// [`GssContext::verify_spnego_mic`] after the context is established.
 ///
 /// # Errors
 ///
@@ -2762,6 +2773,28 @@ mod tests {
         )
         .unwrap();
         assert_eq!(w.data, b"sha2-body");
+    }
+
+    #[test]
+    fn unwrap_iov_integ_rejects_non_aes() {
+        let key = ProtocolKey::from_bytes(EncryptionType::Des3CbcSha1, &[0x11u8; 24]).unwrap();
+        let mut ctx = bare_ctx(key, false);
+        let mut header = vec![0x05, 0x04, 0x00, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let mut data = b"x".to_vec();
+        let mut padding = Vec::new();
+        let mut trailer = Vec::new();
+        let err = unwrap_iov_once(
+            &mut ctx,
+            &mut header,
+            &mut data,
+            &mut padding,
+            &mut trailer,
+            None,
+        );
+        assert!(
+            matches!(err, Err(Error::Inner(ref s)) if s.contains("aes")),
+            "non-AES unwrap_iov_integ must fail, got {err:?}"
+        );
     }
 
     #[test]
