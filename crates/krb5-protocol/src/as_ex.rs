@@ -1,19 +1,23 @@
-//! AS-REQ / AS-REP with PA-ENC-TIMESTAMP or SPAKE preauthentication.
+//! AS-REQ / AS-REP with PA-ENC-TIMESTAMP, SPAKE, FAST, or PKINIT.
 
 use std::time::Instant;
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, string_to_key};
+use krb5_crypto::{
+    EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, p256_generate, string_to_key,
+};
 use krb5_types::{
     AsRep, AsReq, EncAsRepPart, EncKdcRepPart, EncryptedData, EtypeInfo, EtypeInfo2, KdcOptions,
     KdcReq, KdcReqBody, KerberosTime, KrbError, MethodData, PaData, PaEncTsEnc, PrincipalName, err,
     ku, pa,
 };
+use sha1::{Digest, Sha1};
+use zeroize::Zeroize;
 
 use crate::error::Error;
 use crate::preauth::{
-    apply_strengthen, armor_key, attach_fast, build_fast_armor, pa_spake_response,
-    pa_spake_support, unwrap_fast_rep,
+    apply_strengthen, armor_key, attach_fast, build_fast_armor, pa_pk_as_req_signed,
+    pa_spake_response, pa_spake_support, pkinit_reply_key_agile, unwrap_fast_rep,
 };
 use crate::transport::{KdcAddr, exchange};
 
@@ -48,6 +52,24 @@ pub struct AsRequest<'a> {
     pub want_spake: bool,
     /// FAST armor (PA-FX-FAST). Inner preauth is still enc-timestamp.
     pub fast_armor: Option<&'a FastArmor>,
+    /// PKINIT client identity (PA-PK-AS-REQ). Sent on the first AS-REQ.
+    pub pkinit: Option<&'a PkinitClient>,
+}
+
+/// RFC 4556 client certificate + trust anchor for PKINIT.
+pub struct PkinitClient {
+    /// Leaf certificate (DER).
+    pub cert: Vec<u8>,
+    /// P-256 scalar matching `cert`.
+    pub key: [u8; 32],
+    /// CA certificate used to verify the KDC CMS (DER).
+    pub ca_cert: Vec<u8>,
+}
+
+impl Drop for PkinitClient {
+    fn drop(&mut self) {
+        self.key.zeroize();
+    }
 }
 
 /// Ticket used as RFC 6113 FAST AP-REQUEST armor.
@@ -91,6 +113,7 @@ pub fn as_exchange_key(
             kdc,
             want_spake: false,
             fast_armor: None,
+            pkinit: None,
         },
         keys,
     )
@@ -123,6 +146,9 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
 
     if req.fast_armor.is_some() {
         return continue_fast(req, keys, nonce, till.clone(), &etypes, None);
+    }
+    if req.pkinit.is_some() {
+        return continue_pkinit(req, nonce, till, &etypes);
     }
     let support = req.want_spake.then(pa_spake_support);
     let first_pa = support.clone().map(|s| vec![s]);
@@ -463,6 +489,58 @@ fn send_spake_response(
             req.realm,
             true,
         ),
+        KdcMsg::Error(e) => classify_kdc_error(&e),
+        KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
+    }
+}
+
+fn continue_pkinit(
+    req: &AsRequest<'_>,
+    nonce: u32,
+    till: KerberosTime,
+    etypes: &[i32],
+) -> Result<AsOutcome, Error> {
+    let pk = req
+        .pkinit
+        .ok_or_else(|| Error::ReplyMismatch("PKINIT identity missing".into()))?;
+    let kp = p256_generate()?;
+    let mut req2 = build_as_req(&req.cname, req.realm, nonce, till, None, etypes)?;
+    let body_der = encode(&req2.0.req_body)?;
+    let mut h = Sha1::new();
+    h.update(&body_der);
+    let sha1 = h.finalize();
+    let pa = pa_pk_as_req_signed(&kp.public, &pk.cert, &pk.key, nonce, &sha1)?;
+    req2.0.padata = Some(vec![pa]);
+    let wire = encode(&req2)?;
+    tracing::info!(
+        event = "client.pkinit",
+        component = "krb5-protocol",
+        outcome = "ok",
+        pa_type = pa::PK_AS_REQ,
+    );
+    let reply = exchange(req.kdc, &wire)?;
+    match classify(&reply)? {
+        KdcMsg::AsRep(rep) => {
+            let etype = EncryptionType::from_iana(rep.0.enc_part.etype)?;
+            let reply_key = pkinit_reply_key_agile(
+                &kp.secret,
+                &rep.0.padata,
+                etype,
+                &pk.ca_cert,
+                &wire,
+                &req.cname,
+                req.realm,
+            )?;
+            finish_as_rep(
+                rep,
+                nonce,
+                Some(reply_key),
+                req.password,
+                &req.cname,
+                req.realm,
+                true,
+            )
+        }
         KdcMsg::Error(e) => classify_kdc_error(&e),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
     }

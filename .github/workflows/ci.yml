@@ -139,6 +139,8 @@ jobs:
         run: ./scripts/rust-kinit-spake-gate.sh
       - name: rust-kinit-fast-gate (Rust kinit FAST vs MIT KDC)
         run: ./scripts/rust-kinit-fast-gate.sh
+      - name: rust-kinit-pkinit-gate (Rust kinit PKINIT vs MIT KDC)
+        run: ./scripts/rust-kinit-pkinit-gate.sh
       - name: sha2-gate
         run: ./scripts/sha2-gate.sh
       - name: s4u-mit-gate (MIT kvno -U / -U -P vs Rust KDC)

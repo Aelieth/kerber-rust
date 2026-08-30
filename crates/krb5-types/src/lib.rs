@@ -1086,6 +1086,28 @@ mod tests {
             pkinit::cms_verify(inner, &ca.ca_cert).is_err(),
             "unwrapped plaintext is not a valid CMS"
         );
+        let (cert, key) = pkinit::parse_identity_pem(&id).expect("parse identity");
+        assert!(
+            cert.windows(6)
+                .any(|w| w == [0x2b, 0x06, 0x01, 0x05, 0x02, 0x02]),
+            "client cert must carry id-pkinit-san 1.3.6.1.5.2.2"
+        );
+        let signed =
+            pkinit::cms_sign_leaf(inner, &cert, &key, pkinit::ECONTENT_AUTHDATA).expect("leaf cms");
+        assert_eq!(
+            pkinit::cms_verify(&signed, &ca.ca_cert).expect("leaf verify"),
+            inner
+        );
+        let kdc_pem = ca.kdc_identity_pem().expect("kdc pem");
+        assert!(kdc_pem.contains("BEGIN CERTIFICATE"));
+        assert!(kdc_pem.contains("BEGIN EC PRIVATE KEY"));
+        let (kcert, kkey) = pkinit::parse_identity_pem(&kdc_pem).expect("kdc identity");
+        let ksigned =
+            pkinit::cms_sign_leaf(inner, &kcert, &kkey, pkinit::ECONTENT_DHKEY).expect("kdc cms");
+        assert_eq!(
+            pkinit::cms_verify(&ksigned, &ca.ca_cert).expect("kdc leaf verify"),
+            inner
+        );
     }
 
     #[test]

@@ -11,7 +11,7 @@ use std::path::Path;
 
 use krb5_asn1::decode;
 use krb5_protocol::{
-    AsOutcome, AsRequest, FastArmor, KdcAddr, TgsOutcome, as_exchange, tgs_exchange,
+    AsOutcome, AsRequest, FastArmor, KdcAddr, PkinitClient, TgsOutcome, as_exchange, tgs_exchange,
 };
 use krb5_types::{PrincipalName, Ticket};
 use zeroize::Zeroize;
@@ -51,7 +51,17 @@ pub fn kinit(
     ccache_path: impl AsRef<Path>,
     service: Option<&str>,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
-    kinit_ex(kdc, principal, password, ccache_path, service, false, None)
+    kinit_ex(
+        kdc,
+        principal,
+        password,
+        ccache_path,
+        service,
+        false,
+        None,
+        None,
+        None,
+    )
 }
 
 /// [`kinit`] with a preauth mode (`want_spake` = PA-SPAKE P-256).
@@ -59,6 +69,7 @@ pub fn kinit(
 /// # Errors
 ///
 /// Protocol or I/O errors. The password buffer is zeroized before return.
+#[allow(clippy::too_many_arguments)]
 pub fn kinit_ex(
     kdc: &KdcAddr,
     principal: &str,
@@ -67,6 +78,8 @@ pub fn kinit_ex(
     service: Option<&str>,
     want_spake: bool,
     armor_ccache: Option<&Path>,
+    pkinit_identity: Option<&Path>,
+    pkinit_anchors: Option<&Path>,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
     let result = kinit_inner(
         kdc,
@@ -76,6 +89,8 @@ pub fn kinit_ex(
         service,
         want_spake,
         armor_ccache,
+        pkinit_identity,
+        pkinit_anchors,
     );
     password.zeroize();
     result
@@ -98,6 +113,44 @@ fn load_fast_armor(path: &Path) -> Result<FastArmor, Box<dyn std::error::Error +
     })
 }
 
+fn strip_file_spec(s: &str) -> &str {
+    s.strip_prefix("FILE:").unwrap_or(s)
+}
+
+fn load_pkinit(
+    identity: &Path,
+    anchors: &Path,
+) -> Result<PkinitClient, Box<dyn std::error::Error + Send + Sync>> {
+    let id = std::fs::read_to_string(identity)?;
+    let (cert, key) = krb5_types::pkinit::parse_identity_pem(&id).ok_or("pkinit identity PEM")?;
+    let anc = std::fs::read_to_string(anchors)?;
+    let ca_cert = krb5_types::pkinit::parse_pem("CERTIFICATE", &anc).ok_or("pkinit anchors PEM")?;
+    Ok(PkinitClient { cert, key, ca_cert })
+}
+
+fn pkinit_from_conf(realm: &str) -> (Option<std::path::PathBuf>, Option<std::path::PathBuf>) {
+    for path in krb5_config::krb5_conf_paths() {
+        let Ok(conf) = krb5_config::Krb5Conf::load_file(&path) else {
+            continue;
+        };
+        let id = conf
+            .pkinit_identities
+            .get(realm)
+            .and_then(|v| v.first())
+            .map(|s| std::path::PathBuf::from(strip_file_spec(s)));
+        let an = conf
+            .pkinit_anchors
+            .get(realm)
+            .and_then(|v| v.first())
+            .map(|s| std::path::PathBuf::from(strip_file_spec(s)));
+        if id.is_some() || an.is_some() {
+            return (id, an);
+        }
+    }
+    (None, None)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn kinit_inner(
     kdc: &KdcAddr,
     principal: &str,
@@ -106,12 +159,28 @@ fn kinit_inner(
     service: Option<&str>,
     want_spake: bool,
     armor_ccache: Option<&Path>,
+    pkinit_identity: Option<&Path>,
+    pkinit_anchors: Option<&Path>,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
     let (cname, realm_s) = parse_principal(principal)?;
     let resolved = resolve_kdc(&realm_s, kdc);
     let armor = match armor_ccache {
         Some(p) => Some(load_fast_armor(p)?),
         None => None,
+    };
+    let (conf_id, conf_an) = if pkinit_identity.is_none() || pkinit_anchors.is_none() {
+        pkinit_from_conf(&realm_s)
+    } else {
+        (None, None)
+    };
+    let id_path = pkinit_identity.map(Path::to_path_buf).or(conf_id);
+    let an_path = pkinit_anchors.map(Path::to_path_buf).or(conf_an);
+    let pkinit = match (id_path.as_deref(), an_path.as_deref()) {
+        (Some(i), Some(a)) => Some(load_pkinit(i, a)?),
+        (Some(_), None) | (None, Some(_)) => {
+            return Err("pkinit requires identity and anchors".into());
+        }
+        (None, None) => None,
     };
     let as_out = as_exchange(&AsRequest {
         cname,
@@ -120,6 +189,7 @@ fn kinit_inner(
         kdc: &resolved,
         want_spake,
         fast_armor: armor.as_ref(),
+        pkinit: pkinit.as_ref(),
     })?;
     let mut creds = vec![tgt_cred(
         &as_out.crealm,

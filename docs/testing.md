@@ -87,7 +87,10 @@ shows `user@KERBER.TEST`. Reverse: `scripts/rust-kinit-spake-gate.sh`
 is Rust `kinit --spake` against MIT KDC (`spake_preauth_groups = P-256`)
 and MIT `klist` `user@KERBER.TEST`. FAST: `scripts/rust-kinit-fast-gate.sh`
 is Rust `kinit --fast --armor-ccache` against MIT; the AS-REQ carries
-PA-FX-FAST and MIT `klist` names `user@KERBER.TEST`.
+PA-FX-FAST and MIT `klist` names `user@KERBER.TEST`. Reverse PKINIT:
+`scripts/rust-kinit-pkinit-gate.sh` is Rust `kinit --pkinit FILE:` against
+MIT KDC (`pkinit.so` + KDC cert + `id-pkinit-san`); it **fails** if the
+plugin is missing. MIT `klist` names `user@KERBER.TEST`.
 
 SHA-2: `scripts/sha2-gate.sh` is a live MIT 1.22.2 gate. It copies the
 Rust KDC into the MIT image, points `KRB5_CONFIG` at `/etc/krb5-sha2.conf`

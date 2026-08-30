@@ -66,6 +66,10 @@ pub struct Krb5Conf {
     pub kpasswd_servers: BTreeMap<String, Vec<Endpoint>>,
     /// Domain → realm (`[domain_realm]`).
     pub domain_realm: BTreeMap<String, String>,
+    /// Realm → `pkinit_identities` FILE values.
+    pub pkinit_identities: BTreeMap<String, Vec<String>>,
+    /// Realm → `pkinit_anchors` FILE values.
+    pub pkinit_anchors: BTreeMap<String, Vec<String>>,
 }
 
 /// KDC policy from `kdc.conf`.
@@ -305,6 +309,16 @@ fn parse_realm_line(conf: &mut Krb5Conf, realm: &str, line: &str) {
                 port: if ep.port == 88 { 464 } else { ep.port },
                 ..ep
             }),
+        "pkinit_identities" => conf
+            .pkinit_identities
+            .entry(realm.to_owned())
+            .or_default()
+            .push(v),
+        "pkinit_anchors" => conf
+            .pkinit_anchors
+            .entry(realm.to_owned())
+            .or_default()
+            .push(v),
         _ => {}
     }
 }
@@ -679,6 +693,8 @@ mod tests {
         assert_eq!(c.clockskew, 300);
         assert_eq!(c.kdcs["KERBER.TEST"][0].host, "127.0.0.1");
         assert_eq!(c.kdcs["KERBER.TEST"][0].port, 88);
+        assert!(c.pkinit_identities.is_empty());
+        assert!(c.pkinit_anchors.is_empty());
         let discovered = c.kdcs_for("KERBER.TEST").unwrap();
         assert_eq!(discovered[0].host, "127.0.0.1");
         assert_eq!(discovered[0].port, 88);
@@ -735,6 +751,29 @@ mod tests {
         assert_eq!(
             mit.database_name.as_deref(),
             Some(std::path::Path::new("/var/lib/krb5kdc/principal"))
+        );
+    }
+
+    #[test]
+    fn parse_pkinit_identities_and_anchors() {
+        let c = Krb5Conf::parse(
+            r"
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1
+        pkinit_identities = FILE:/tmp/pkinit/user.pem
+        pkinit_anchors = FILE:/tmp/pkinit/ca.pem
+    }
+",
+        )
+        .unwrap();
+        assert_eq!(
+            c.pkinit_identities["KERBER.TEST"],
+            vec!["FILE:/tmp/pkinit/user.pem".to_owned()]
+        );
+        assert_eq!(
+            c.pkinit_anchors["KERBER.TEST"],
+            vec!["FILE:/tmp/pkinit/ca.pem".to_owned()]
         );
     }
 

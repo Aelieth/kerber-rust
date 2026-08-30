@@ -335,6 +335,49 @@ pub fn pa_pk_as_req_agile(
     })
 }
 
+/// PA-PK-AS-REQ signed with a client identity (RFC 4556 + RFC 8636 SHA-256 KDF).
+///
+/// `body_sha1` is the SHA-1 of the encoded KDC-REQ-BODY (`paChecksum`).
+///
+/// # Errors
+///
+/// DER or CMS wrap failures.
+pub fn pa_pk_as_req_signed(
+    client_public: &[u8],
+    cert_der: &[u8],
+    leaf_secret: &[u8; 32],
+    nonce: u32,
+    body_sha1: &[u8],
+) -> Result<PaData, Error> {
+    let now = KerberosTime::now();
+    let usec = now.0.timestamp_subsec_micros() % 1_000_000;
+    let pk_auth = krb5_types::pkinit::PkAuthenticator {
+        cusec: Microseconds::from_subsec_micros(usec),
+        ctime: now,
+        nonce,
+        pa_checksum: Some(body_sha1.to_vec().into()),
+    };
+    let spki = krb5_types::pkinit::encode_ec_spki(client_public);
+    let inner = krb5_types::pkinit::encode_client_authpack(&pk_auth, &spki)
+        .ok_or_else(|| Error::ReplyMismatch("AuthPack kdf".into()))?;
+    let signed = krb5_types::pkinit::cms_sign_leaf(
+        &inner,
+        cert_der,
+        leaf_secret,
+        krb5_types::pkinit::ECONTENT_AUTHDATA,
+    )
+    .map_err(|e| Error::ReplyMismatch(format!("PKINIT CMS wrap: {e}")))?;
+    let req = krb5_types::pkinit::PaPkAsReq {
+        signed_auth_pack: signed.into(),
+        trusted_certifiers: None,
+        kdc_pk_id: None,
+    };
+    Ok(PaData {
+        padata_type: pa::PK_AS_REQ,
+        padata_value: encode(&req)?.into(),
+    })
+}
+
 /// Derive the PKINIT reply key from PA-PK-AS-REP `dh_signed_data` (CMS or raw P-256).
 ///
 /// # Errors

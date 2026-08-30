@@ -201,6 +201,7 @@ fn non_ascii_realm_as_exchange_is_err() {
         },
         want_spake: false,
         fast_armor: None,
+        pkinit: None,
     });
     assert!(err.is_err(), "non-ASCII realm must not panic");
 }
@@ -259,6 +260,7 @@ fn first_bare_as_req_skew_is_retried() {
         },
         want_spake: false,
         fast_armor: None,
+        pkinit: None,
     });
     assert!(
         hits.load(Ordering::SeqCst) >= 2,
@@ -314,6 +316,7 @@ fn spake_as_req_carries_pa_spake() {
         },
         want_spake: true,
         fast_armor: None,
+        pkinit: None,
     });
     let raw = first.lock().unwrap().clone();
     assert!(!raw.is_empty(), "SPAKE client must send an AS-REQ");
@@ -400,6 +403,7 @@ fn fast_preauth_retry_carries_fx_fast() {
         },
         want_spake: false,
         fast_armor: Some(&armor),
+        pkinit: None,
     });
     let raw = first.lock().unwrap().clone();
     assert!(!raw.is_empty(), "FAST client must send an AS-REQ");
@@ -408,6 +412,80 @@ fn fast_preauth_retry_carries_fx_fast() {
     assert!(
         padata.iter().any(|p| p.padata_type == pa::FX_FAST),
         "FAST AS-REQ must carry PA-FX-FAST (136), got {padata:?}"
+    );
+}
+
+#[test]
+fn pkinit_as_req_carries_pa_pk_as_req() {
+    use std::net::UdpSocket;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::Duration;
+
+    use krb5_protocol::PkinitClient;
+    use krb5_types::{
+        AsReq, KerberosTime, KrbError, Microseconds, PrincipalName, ascii, err, pa, pkinit,
+    };
+
+    let ca = pkinit::PkinitCa::generate().expect("CA");
+    let pem = ca
+        .user_identity_pem("user@KERBER.TEST")
+        .expect("user identity");
+    let (cert, key) = pkinit::parse_identity_pem(&pem).expect("parse identity");
+    let pk = PkinitClient {
+        cert,
+        key,
+        ca_cert: ca.ca_cert.clone(),
+    };
+
+    let first = Arc::new(Mutex::new(Vec::new()));
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = udp.local_addr().unwrap().port();
+    let first2 = first.clone();
+    thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        let Ok((n, src)) = udp.recv_from(&mut buf) else {
+            return;
+        };
+        *first2.lock().unwrap() = buf[..n].to_vec();
+        let reply = encode(&KrbError {
+            pvno: KrbError::PVNO,
+            msg_type: KrbError::MSG_TYPE,
+            ctime: None,
+            cusec: None,
+            stime: KerberosTime::now(),
+            susec: Microseconds::ZERO,
+            error_code: err::PREAUTH_REQUIRED,
+            crealm: None,
+            cname: None,
+            realm: ascii("KERBER.TEST"),
+            sname: PrincipalName::krbtgt("KERBER.TEST"),
+            e_text: None,
+            e_data: None,
+        })
+        .unwrap();
+        let _ = udp.send_to(&reply, src);
+    });
+    thread::sleep(Duration::from_millis(20));
+    let _ = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
+        cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+        realm: "KERBER.TEST",
+        password: b"",
+        kdc: &krb5_protocol::KdcAddr {
+            host: "127.0.0.1".into(),
+            port,
+        },
+        want_spake: false,
+        fast_armor: None,
+        pkinit: Some(&pk),
+    });
+    let raw = first.lock().unwrap().clone();
+    assert!(!raw.is_empty(), "PKINIT client must send an AS-REQ");
+    let req: AsReq = decode(&raw).expect("AS-REQ");
+    let padata = req.0.padata.unwrap_or_default();
+    assert!(
+        padata.iter().any(|p| p.padata_type == pa::PK_AS_REQ),
+        "PKINIT AS-REQ must carry PA-PK-AS-REQ (16), got {padata:?}"
     );
 }
 

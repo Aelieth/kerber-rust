@@ -108,7 +108,8 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   Rust `kinit --spake` obtains a TGT from MIT 1.22.2 via PA-SPAKE
   151 / P-256 (`scripts/rust-kinit-spake-gate.sh`). `kinit --fast
   --armor-ccache` wraps PA-ENC-TIMESTAMP in PA-FX-FAST
-  (`scripts/rust-kinit-fast-gate.sh`).
+  (`scripts/rust-kinit-fast-gate.sh`). `kinit --pkinit FILE:` obtains
+  a TGT via PA-PK-AS-REQ (`scripts/rust-kinit-pkinit-gate.sh`).
 
 - KDB extension surface: `PrincipalRead` / `PrincipalWrite` /
   `StoreLifecycle`. Dump-v7 is the default backend; `db_library=memory`

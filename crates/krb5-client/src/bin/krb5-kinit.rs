@@ -1,6 +1,6 @@
 //! Obtain a TGT from a KDC and write an MIT FILE ccache.
 //!
-//! Usage: krb5-kinit [--spake] [--fast --armor-ccache PATH] <kdc-host> <user@REALM> <ccache-path> [service]
+//! Usage: krb5-kinit [--spake] [--fast --armor-ccache PATH] [--pkinit FILE:user.pem --pkinit-anchors FILE:ca.pem] <kdc-host> <user@REALM> <ccache-path> [service]
 //!
 //! Password is read from `KRB5_PASSWORD` or stdin. Never from argv.
 
@@ -11,6 +11,13 @@ use krb5_client::kinit_ex;
 use krb5_config::env_password;
 use krb5_protocol::KdcAddr;
 
+fn strip_file_spec(s: String) -> String {
+    match s.strip_prefix("FILE:") {
+        Some(rest) => rest.to_owned(),
+        None => s,
+    }
+}
+
 fn main() {
     let _ = tracing_subscriber::fmt()
         .json()
@@ -19,6 +26,8 @@ fn main() {
 
     let mut want_spake = false;
     let mut armor_ccache = None::<String>;
+    let mut pkinit_identity = None::<String>;
+    let mut pkinit_anchors = None::<String>;
     let mut positional = Vec::new();
     let mut args_iter = std::env::args().skip(1);
     while let Some(a) = args_iter.next() {
@@ -26,13 +35,15 @@ fn main() {
             "--spake" => want_spake = true,
             "--fast" => {}
             "--armor-ccache" => armor_ccache = args_iter.next(),
+            "--pkinit" => pkinit_identity = args_iter.next().map(strip_file_spec),
+            "--pkinit-anchors" => pkinit_anchors = args_iter.next().map(strip_file_spec),
             _ => positional.push(a),
         }
     }
     let mut args = positional.into_iter();
     let host = args.next().unwrap_or_else(|| {
         eprintln!(
-            "usage: krb5-kinit [--spake] [--fast --armor-ccache PATH] <kdc-host> <user@REALM> <ccache-path> [service]"
+            "usage: krb5-kinit [--spake] [--fast --armor-ccache PATH] [--pkinit FILE:user.pem --pkinit-anchors FILE:ca.pem] <kdc-host> <user@REALM> <ccache-path> [service]"
         );
         std::process::exit(2);
     });
@@ -46,6 +57,9 @@ fn main() {
     });
     let service = args.next();
     let mut password = env_password().unwrap_or_else(|| {
+        if pkinit_identity.is_some() {
+            return Vec::new();
+        }
         let mut s = String::new();
         if std::io::stdin().read_line(&mut s).is_err() {
             eprintln!("failed to read password from stdin");
@@ -73,6 +87,8 @@ fn main() {
         service.as_deref(),
         want_spake,
         armor_ccache.as_deref().map(std::path::Path::new),
+        pkinit_identity.as_deref().map(std::path::Path::new),
+        pkinit_anchors.as_deref().map(std::path::Path::new),
     ) {
         Ok(r) => {
             println!(

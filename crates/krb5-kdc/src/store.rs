@@ -843,6 +843,15 @@ impl PrincipalStore {
             .and_then(|c| c.user_identity_pem(cn))
     }
 
+    /// KDC identity PEM (cert+key) for MIT `pkinit_identity = FILE:`.
+    #[must_use]
+    pub fn pkinit_kdc_pem(&self) -> Option<String> {
+        self.env
+            .pkinit_ca
+            .as_ref()
+            .and_then(PkinitCa::kdc_identity_pem)
+    }
+
     /// `krbtgt/REALM@REALM`.
     #[must_use]
     pub fn krbtgt(&self) -> Option<&Principal> {

@@ -33,9 +33,9 @@ pub struct PkAuthenticator {
     /// Nonce.
     #[rasn(tag(explicit(2)))]
     pub nonce: u32,
-    /// Optional checksum of the KDC-REQ-BODY.
+    /// SHA-1 of the KDC-REQ-BODY (RFC 4556 `OCTET STRING`, not a Checksum).
     #[rasn(tag(explicit(3)))]
-    pub pa_checksum: Option<Checksum>,
+    pub pa_checksum: Option<OctetString>,
 }
 
 /// AuthPack ::= SEQUENCE { pkAuthenticator, clientPublicValue, … }
@@ -352,6 +352,14 @@ pub fn authpack_with_sha256_kdf(authpack: &[u8]) -> Option<Vec<u8>> {
         &tlv(0x30, &encode_kdf_algorithm_id(KDF_AH_SHA256_OID)),
     );
     Some(tlv(0x30, &[body, kdfs.as_slice()].concat()))
+}
+
+/// AuthPack whose `clientPublicValue` is a raw SPKI SEQUENCE (MIT 1.22.2).
+#[must_use]
+pub fn encode_client_authpack(pk_auth: &PkAuthenticator, spki: &[u8]) -> Option<Vec<u8>> {
+    let pk = rasn::der::encode(pk_auth).ok()?;
+    let body = [tlv(0xa0, &pk), tlv(0xa1, spki)].concat();
+    authpack_with_sha256_kdf(&tlv(0x30, &body))
 }
 
 /// Insert RFC 8636 `kdf` [2] into a rasn-encoded `PA-PK-AS-REP` dhInfo.
@@ -734,7 +742,7 @@ fn p256_cert(
     tbs_body.extend_from_slice(&validity);
     tbs_body.extend_from_slice(&subject);
     tbs_body.extend_from_slice(&spki);
-    tbs_body.extend_from_slice(&cert_extensions(kind));
+    tbs_body.extend_from_slice(&cert_extensions(kind, subject_cn));
     let tbs = tlv(0x30, &tbs_body);
     let sig = p256_sign(signer_secret, &tbs)?;
     let mut sig_bit = vec![0u8];
@@ -747,7 +755,7 @@ fn self_signed_p256_cert(cn: &str, secret: &[u8; 32], public: &[u8]) -> Option<V
     p256_cert(1, cn, cn, public, secret, CertKind::Ca)
 }
 
-fn cert_extensions(kind: CertKind) -> Vec<u8> {
+fn cert_extensions(kind: CertKind, subject_cn: &str) -> Vec<u8> {
     let is_ca = matches!(kind, CertKind::Ca);
     let bc_oid = oid_der(&[0x55, 0x1d, 0x13]);
     let bc_val = if is_ca {
@@ -772,10 +780,19 @@ fn cert_extensions(kind: CertKind) -> Vec<u8> {
     let mut ext_body = [bc, ku].concat();
     match kind {
         CertKind::Kdc => {
-            ext_body.extend(san_dns("kerber.test"));
+            ext_body.extend(san_general(&[
+                other_name_pkinit("krbtgt/KERBER.TEST@KERBER.TEST"),
+                tlv(0x82, b"kerber.test"),
+            ]));
             ext_body.extend(eku(&[0x2b, 0x06, 0x01, 0x05, 0x02, 0x03, 0x05]));
         }
         CertKind::Client => {
+            let san = if subject_cn.contains('@') {
+                subject_cn.to_owned()
+            } else {
+                format!("{subject_cn}@KERBER.TEST")
+            };
+            ext_body.extend(san_general(&[other_name_pkinit(&san)]));
             ext_body.extend(eku(&[0x2b, 0x06, 0x01, 0x05, 0x02, 0x03, 0x04]));
         }
         CertKind::Ca => {}
@@ -783,13 +800,28 @@ fn cert_extensions(kind: CertKind) -> Vec<u8> {
     tlv(0xa3, &tlv(0x30, &ext_body))
 }
 
-fn san_dns(dns: &str) -> Vec<u8> {
-    let gn = tlv(0x82, dns.as_bytes());
-    let gns = tlv(0x30, &gn);
+fn san_general(names: &[Vec<u8>]) -> Vec<u8> {
+    let gns = tlv(0x30, &names.concat());
     tlv(
         0x30,
         &[oid_der(&[0x55, 0x1d, 0x11]), tlv(0x04, &gns)].concat(),
     )
+}
+
+fn other_name_pkinit(principal: &str) -> Vec<u8> {
+    let (name, realm) = principal
+        .rsplit_once('@')
+        .unwrap_or((principal, "KERBER.TEST"));
+    let parts: Vec<&str> = name.split('/').collect();
+    let ntype = if parts.len() > 1 {
+        crate::PrincipalName::NT_SRV_INST
+    } else {
+        crate::PrincipalName::NT_PRINCIPAL
+    };
+    let kn = encode_krb5_principal_name(realm, ntype, &parts);
+    let oid = oid_der(&[0x2b, 0x06, 0x01, 0x05, 0x02, 0x02]);
+    let value = tlv(0xa0, &kn);
+    tlv(0xa0, &[oid, value].concat())
 }
 
 fn eku(oid_body: &[u8]) -> Vec<u8> {
@@ -801,22 +833,49 @@ fn eku(oid_body: &[u8]) -> Vec<u8> {
 }
 
 fn spki_uncompressed(cert: &[u8]) -> Option<Vec<u8>> {
-    // BIT STRING of the subject public key: 0x03 len 0x00 0x04 || X || Y
-    let mut i = 0usize;
-    while i + 3 < cert.len() {
-        if cert[i] == 0x03 {
-            let (hlen, ln) = der_take_len(&cert[i + 1..])?;
-            let start = i + 1 + hlen;
-            let body = cert.get(start..start + ln)?;
-            if body.len() >= 66 && body[0] == 0 && body[1] == 0x04 {
-                return Some(body[1..].to_vec());
-            }
-            i = start + ln;
-            continue;
-        }
-        i += 1;
+    let (t, body, _) = take_tlv(cert)?;
+    if t != 0x30 {
+        return None;
     }
-    None
+    let (t, tbs, _) = take_tlv(body)?;
+    if t != 0x30 {
+        return None;
+    }
+    let mut cur = tbs;
+    if cur.first() == Some(&0xa0) {
+        cur = take_tlv(cur)?.2;
+    }
+    cur = take_tlv(cur)?.2;
+    cur = take_tlv(cur)?.2;
+    cur = take_tlv(cur)?.2;
+    cur = take_tlv(cur)?.2;
+    cur = take_tlv(cur)?.2;
+    let (t, spki, _) = take_tlv(cur)?;
+    if t != 0x30 {
+        return None;
+    }
+    let (_, _, rest) = take_tlv(spki)?;
+    let (t, bit, _) = take_tlv(rest)?;
+    if t != 0x03 {
+        return None;
+    }
+    let pt = if bit.first() == Some(&0) {
+        bit.get(1..)?
+    } else {
+        bit
+    };
+    if pt.first() == Some(&0x04) && pt.len() == 65 {
+        return Some(pt.to_vec());
+    }
+    decompress_p256(pt)
+}
+
+fn decompress_p256(pt: &[u8]) -> Option<Vec<u8>> {
+    use p256::elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint};
+    use p256::{AffinePoint, EncodedPoint};
+    let ep = EncodedPoint::from_bytes(pt).ok()?;
+    let aff = Option::<AffinePoint>::from(AffinePoint::from_encoded_point(&ep))?;
+    Some(aff.to_encoded_point(false).as_bytes().to_vec())
 }
 
 fn der_take_len(b: &[u8]) -> Option<(usize, usize)> {
@@ -888,6 +947,135 @@ pub fn cms_wrap_signed(
         &[tlv(0x02, &[0x03]), digest_algs, encap, certs, signers].concat(),
     );
     tlv(0x30, &[signed_data, tlv(0xa0, &sd)].concat())
+}
+
+/// CMS SignedData of `e_content` using an existing leaf cert and P-256 key.
+///
+/// # Errors
+///
+/// Missing issuer/serial, or ECDSA failure.
+pub fn cms_sign_leaf(
+    e_content: &[u8],
+    cert_der: &[u8],
+    secret: &[u8; 32],
+    econtent_oid: &[u8],
+) -> Result<Vec<u8>, &'static str> {
+    let (issuer, serial) = cert_issuer_serial(cert_der).ok_or("cms issuer")?;
+    let sattrs = signed_attrs_set(econtent_oid, e_content);
+    let signature = p256_sign(secret, &sattrs).ok_or("cms ecdsa")?;
+    let mut implicit = sattrs;
+    if implicit.first() == Some(&0x31) {
+        implicit[0] = 0xa0;
+    }
+    Ok(cms_wrap_signed(
+        e_content,
+        cert_der,
+        &signature,
+        &issuer,
+        &serial,
+        econtent_oid,
+        Some(&implicit),
+    ))
+}
+
+fn cert_issuer_serial(cert: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    let (t, body, _) = take_tlv(cert)?;
+    if t != 0x30 {
+        return None;
+    }
+    let (t, tbs, _) = take_tlv(body)?;
+    if t != 0x30 {
+        return None;
+    }
+    let mut cur = tbs;
+    if cur.first() == Some(&0xa0) {
+        cur = take_tlv(cur)?.2;
+    }
+    let (t, serial, rest) = take_tlv(cur)?;
+    if t != 0x02 {
+        return None;
+    }
+    let (_, _, rest) = take_tlv(rest)?;
+    let (t, issuer, _) = take_tlv(rest)?;
+    if t != 0x30 {
+        return None;
+    }
+    Some((tlv(0x30, issuer), serial.to_vec()))
+}
+
+/// First PEM block of `kind` (`CERTIFICATE`, `EC PRIVATE KEY`, …).
+#[must_use]
+pub fn parse_pem(kind: &str, text: &str) -> Option<Vec<u8>> {
+    let begin = format!("-----BEGIN {kind}-----");
+    let end = format!("-----END {kind}-----");
+    let start = text.find(&begin)? + begin.len();
+    let rest = text.get(start..)?;
+    let stop = rest.find(&end)?;
+    unbase64(rest.get(..stop)?.trim())
+}
+
+/// Certificate DER plus P-256 scalar from a MIT `FILE:` identity PEM.
+#[must_use]
+pub fn parse_identity_pem(text: &str) -> Option<(Vec<u8>, [u8; 32])> {
+    let cert = parse_pem("CERTIFICATE", text)?;
+    let key_der = parse_pem("EC PRIVATE KEY", text).or_else(|| parse_pem("PRIVATE KEY", text))?;
+    let key = parse_ec_scalar(&key_der)?;
+    Some((cert, key))
+}
+
+fn parse_ec_scalar(der: &[u8]) -> Option<[u8; 32]> {
+    let (t, body, _) = take_tlv(der)?;
+    if t != 0x30 {
+        return None;
+    }
+    let (t, _, rest) = take_tlv(body)?;
+    if t != 0x02 {
+        return None;
+    }
+    let (t, val, rest) = take_tlv(rest)?;
+    if t == 0x04 {
+        if val.len() == 32 {
+            let mut s = [0u8; 32];
+            s.copy_from_slice(val);
+            return Some(s);
+        }
+        return parse_ec_scalar(val);
+    }
+    if t == 0x30 {
+        let (t, oct, _) = take_tlv(rest)?;
+        if t == 0x04 {
+            if oct.len() == 32 {
+                let mut s = [0u8; 32];
+                s.copy_from_slice(oct);
+                return Some(s);
+            }
+            return parse_ec_scalar(oct);
+        }
+    }
+    None
+}
+
+fn unbase64(s: &str) -> Option<Vec<u8>> {
+    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes: Vec<u8> = s
+        .bytes()
+        .filter(|b| *b != b'=' && !b.is_ascii_whitespace())
+        .collect();
+    let mut out = Vec::with_capacity(bytes.len() * 3 / 4 + 1);
+    for chunk in bytes.chunks(4) {
+        let mut v = [0u8; 4];
+        for (i, b) in chunk.iter().enumerate() {
+            v[i] = u8::try_from(T.iter().position(|t| t == b)?).ok()?;
+        }
+        out.push((v[0] << 2) | (v[1] >> 4));
+        if chunk.len() >= 3 {
+            out.push((v[1] << 4) | (v[2] >> 2));
+        }
+        if chunk.len() >= 4 {
+            out.push((v[2] << 6) | v[3]);
+        }
+    }
+    Some(out)
 }
 
 fn signed_attrs_set(econtent_oid: &[u8], e_content: &[u8]) -> Vec<u8> {
@@ -1248,6 +1436,25 @@ impl PkinitCa {
     pub fn user_identity_pem(&self, cn: &str) -> Option<String> {
         let (s, p) = generate_p256()?;
         let cert = self.issue_leaf(cn, &s, &p)?;
+        Some(format!(
+            "{}{}",
+            pem("CERTIFICATE", &cert),
+            pem_ec_key(&s, &p)
+        ))
+    }
+
+    /// KDC identity PEM (cert+key) for MIT `pkinit_identity = FILE:`.
+    #[must_use]
+    pub fn kdc_identity_pem(&self) -> Option<String> {
+        let (s, p) = generate_p256()?;
+        let cert = p256_cert(
+            3,
+            "Kerber Test CA",
+            "krbtgt",
+            &p,
+            &self.ca_secret,
+            CertKind::Kdc,
+        )?;
         Some(format!(
             "{}{}",
             pem("CERTIFICATE", &cert),

@@ -21,6 +21,7 @@ the script documents otherwise.
 | `spake-gate.sh` | MIT `kinit` `pa_type` 151 / group 2 vs Rust KDC | TRACE 151 + group 2; `klist` `user@KERBER.TEST` | harness |
 | `rust-kinit-spake-gate.sh` | Rust `kinit --spake` vs MIT KDC P-256 | MIT `klist` `user@KERBER.TEST`; SPAKE padata | harness |
 | `rust-kinit-fast-gate.sh` | Rust `kinit --fast` vs MIT KDC | MIT `klist` `user@KERBER.TEST`; PA-FX-FAST | harness |
+| `rust-kinit-pkinit-gate.sh` | Rust `kinit --pkinit FILE:` vs MIT KDC | MIT `klist` `user@KERBER.TEST`; `pkinit.so`; PA-PK-AS-REQ | harness |
 | `sha2-gate.sh` | MIT `kinit`/`kvno` etype 20 vs Rust KDC | `klist -e` names `aes256-cts-hmac-sha384-192` | harness |
 | `cross-realm-gate.sh` | MIT `kinit` + `kvno host/svc.other.test@OTHER.TEST` | `klist` has `krbtgt/OTHER.TEST` and the host ticket | harness |
 | `kadmin-gate.sh` | MIT `kadmin` vs `krb5-kadmind` 749 | add/cpw/get/list/mod/chrand (dates move)/ktadd/`ktadd -norandkey`/`+lockdown_keys`/purgekeys/`cpw -keepold`/setstr/`renprinc`/del then `kinit extra` | harness |

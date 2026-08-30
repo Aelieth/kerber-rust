@@ -31,7 +31,7 @@ pub use ap_req::{
     ApVerifyOk, ApVerifyParams, DEFAULT_SKEW, build_ap_req, build_ap_req_mutual_seq,
     build_ap_req_opts, build_ap_req_with_cksum, verify_ap_req, verify_ap_req_ex,
 };
-pub use as_ex::{AsOutcome, AsRequest, FastArmor, as_exchange, as_exchange_key};
+pub use as_ex::{AsOutcome, AsRequest, FastArmor, PkinitClient, as_exchange, as_exchange_key};
 pub use builders::{
     as_req, as_req_sname, pa_enc_timestamp, pa_enc_timestamp_at, tgs_req, tgs_req_ex,
 };
@@ -46,8 +46,8 @@ pub use error::Error;
 pub use keytab::{Keytab, KeytabEntry};
 pub use preauth::{
     apply_strengthen, armor_key, attach_fast, build_fast_armor, fx_fast_padata, pa_for_user,
-    pa_pac_options, pa_pk_as_req, pa_pk_as_req_agile, pa_pk_as_req_spki, pa_spake_response,
-    pa_spake_support, pkinit_reply_key, pkinit_reply_key_agile, unwrap_fast_rep,
+    pa_pac_options, pa_pk_as_req, pa_pk_as_req_agile, pa_pk_as_req_signed, pa_pk_as_req_spki,
+    pa_spake_response, pa_spake_support, pkinit_reply_key, pkinit_reply_key_agile, unwrap_fast_rep,
 };
 pub use replay::{ReplayCache, ReplayKey};
 pub use safe_priv::{

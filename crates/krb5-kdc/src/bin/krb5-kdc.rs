@@ -157,6 +157,10 @@ fn main() {
             let _ = std::fs::write(format!("{dir}/user.pem"), pem);
             println!("pkinit-user {dir}/user.pem");
         }
+        if let Some(pem) = store.pkinit_kdc_pem() {
+            let _ = std::fs::write(format!("{dir}/kdc.pem"), pem);
+            println!("pkinit-kdc {dir}/kdc.pem");
+        }
     }
     let persist = store.persist_paths.clone();
     match &persist {
