@@ -238,8 +238,9 @@ when that oracle is absent.
   new, `delprinc` then `getprinc` error. Rename uses `-randkey` (MIT
   default-salt password keys may not `kinit` after rename). Run twice.
 - `scripts/kadmin-local-gate.sh` — Rust `krb5-kadmin-local` `addprinc`
-  extra2 on dump/stash; MIT `kadmin` getprinc/listprincs names
-  `extra2@KERBER.TEST`. Run twice.
+  extra2 and `host/slashhost` on dump/stash; MIT `kadmin` getprinc
+  names `extra2@KERBER.TEST` and `host/slashhost@KERBER.TEST` (slash
+  is two name-string components). Run twice.
 - `scripts/kpasswd-gate.sh` — MIT `kpasswd` against kadmind UDP/TCP
   464 (`kadmin/changepw`), then `kinit` with the new password; old
   password must fail; second `kpasswd` + `kinit`; then Rust

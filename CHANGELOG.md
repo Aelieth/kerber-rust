@@ -151,8 +151,10 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   list + Rust keytab `kinit -k`).
 
 - `krb5-kadmin-local` (Cargo bin; MIT `kadmin.local`) mutates dump
-  + stash; MIT `kadmin` getprinc/listprincs is the oracle
-  (`scripts/kadmin-local-gate.sh`). `krb5-kpasswd` is RFC 3244
+  + stash; no-`@` specs go through `parse_principal` with the store
+  realm so `host/foo` is `NT_SRV_INST`. MIT `kadmin` getprinc/listprincs
+  is the oracle (`scripts/kadmin-local-gate.sh`, including
+  `host/slashhost`). `krb5-kpasswd` is RFC 3244
   TCP-464 first; the AS-REQ sname is `kadmin/changepw` because MIT
   flags that principal `DISALLOW_TGT_BASED`. Gates: Rust kpasswd
   vs Rust kadmind (`kpasswd-gate.sh`) and vs MIT kadmind

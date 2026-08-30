@@ -43,6 +43,15 @@ fn parse_principal_splits_realm() {
 }
 
 #[test]
+fn parse_principal_slash_is_srv_inst() {
+    let (n, r) = parse_principal("host/slashhost@KERBER.TEST").unwrap();
+    assert_eq!(r, "KERBER.TEST");
+    assert_eq!(n.name_type, PrincipalName::NT_SRV_INST);
+    assert_eq!(n.name_string.len(), 2);
+    assert_eq!(n.components_joined(), "host/slashhost");
+}
+
+#[test]
 fn parse_enterprise_is_one_component() {
     let (n, r) = krb5_protocol::parse_principal_ex("user@KERBER.TEST", true).unwrap();
     assert_eq!(r, "KERBER.TEST");

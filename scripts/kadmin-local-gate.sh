@@ -75,6 +75,19 @@ GET="$(docker exec \
 echo "$GET"
 echo "$GET" | grep -q 'Principal: extra2@KERBER.TEST'
 
+echo "==== Rust kadmin.local addprinc host/slashhost ===="
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_PASSWORD=slash-local \
+    "$NAME" /tmp/krb5-kadmin-local -q 'addprinc host/slashhost'
+SLASH="$(docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'getprinc host/slashhost')"
+echo "$SLASH"
+echo "$SLASH" | grep -q 'Principal: host/slashhost@KERBER.TEST'
+
 docker exec "$NAME" sh -c 'cat >/tmp/kadm5.acl <<EOF
 admin@KERBER.TEST *e
 EOF'
@@ -123,5 +136,15 @@ MITLIST="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'listprincs extra2*')"
 echo "$MITLIST"
 echo "$MITLIST" | grep -q 'extra2@KERBER.TEST'
-log "kadmin.local.gate" "ok" ',"principal":"extra2@KERBER.TEST"'
+
+echo "==== MIT kadmin getprinc host/slashhost ===="
+MITSLASH="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc host/slashhost')"
+echo "$MITSLASH"
+echo "$MITSLASH" | grep -q 'Principal: host/slashhost@KERBER.TEST'
+echo "$MITSLASH" | grep -qi 'does not exist' && {
+    log "kadmin.local.gate" "error" ',"error":"MIT did not find host/slashhost as two components"'
+    exit 1
+}
+log "kadmin.local.gate" "ok" ',"principal":"extra2@KERBER.TEST,host/slashhost@KERBER.TEST"'
 exit 0

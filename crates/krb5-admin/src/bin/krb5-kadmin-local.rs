@@ -164,12 +164,13 @@ fn run(sess: &mut AdminSession<'_>, line: &str) -> Result<(), String> {
     }
 }
 
-fn parse_name(_sess: &AdminSession<'_>, spec: &str) -> Result<PrincipalName, String> {
-    if spec.contains('@') {
-        parse_principal(spec).map(|(n, _)| n)
+fn parse_name(sess: &AdminSession<'_>, spec: &str) -> Result<PrincipalName, String> {
+    let full = if spec.contains('@') {
+        spec.to_owned()
     } else {
-        Ok(PrincipalName::new(PrincipalName::NT_PRINCIPAL, [spec]))
-    }
+        format!("{}@{}", spec, sess.realm())
+    };
+    parse_principal(&full).map(|(n, _)| n)
 }
 
 fn password() -> Result<String, String> {
