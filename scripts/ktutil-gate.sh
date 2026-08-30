@@ -49,9 +49,18 @@ docker exec "$NAME" chmod +x /tmp/krb5-ktutil
 
 echo "==== MIT ktadd then Rust ktutil list ===="
 docker exec "$NAME" kadmin.local -q 'ktadd -k /tmp/mit.keytab -norandkey user'
-LIST="$(docker exec "$NAME" sh -c 'printf "rkt /tmp/mit.keytab\nlist -t -K\n" | /tmp/krb5-ktutil')"
+MITK="$(docker exec "$NAME" klist -k -t -e /tmp/mit.keytab)"
+echo "$MITK"
+LIST="$(docker exec "$NAME" sh -c 'printf "rkt /tmp/mit.keytab\nlist -t -e\n" | /tmp/krb5-ktutil')"
 echo "$LIST"
 echo "$LIST" | grep -q 'user@KERBER.TEST'
+MIT_KVNO="$(echo "$MITK" | awk '/user@KERBER.TEST/{print $1; exit}')"
+RUST_KVNO="$(echo "$LIST" | awk '/user@KERBER.TEST/{print $2; exit}')"
+echo "mit_kvno=$MIT_KVNO rust_kvno=$RUST_KVNO"
+test "$MIT_KVNO" = "$RUST_KVNO"
+echo "$MITK" | grep -q 'aes'
+echo "$LIST" | grep -q 'aes'
+echo "$LIST" | grep -q ' t='
 
 echo "==== Rust ktutil-written keytab MIT kinit -k ===="
 docker exec -e KRB5_PASSWORD=userpassword "$NAME" sh -c \

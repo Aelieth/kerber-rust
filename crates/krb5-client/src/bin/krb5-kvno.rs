@@ -7,22 +7,22 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use std::path::PathBuf;
-
 use krb5_asn1::decode;
-use krb5_config::{default_ccache_name, env_ccname};
+use krb5_config::resolve_ccname;
 use krb5_protocol::{AsOutcome, FileCcache, KdcAddr, parse_principal, tgs_exchange, tgt_cred};
 use krb5_types::{EncKdcRepPart, EncryptionKey, KerberosTime, PrincipalName, Ticket, TicketFlags};
 
 fn main() {
-    let mut ccname = None::<PathBuf>;
+    let mut ccname = None::<String>;
     let mut positional = Vec::new();
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         if a.as_str() == "-c" {
-            ccname = args
-                .next()
-                .map(|s| PathBuf::from(s.strip_prefix("FILE:").unwrap_or(&s)));
+            let Some(s) = args.next() else {
+                eprintln!("kvno: missing -c argument");
+                std::process::exit(2);
+            };
+            ccname = Some(s);
         } else if a == "-U" || a == "-P" {
             eprintln!("krb5-kvno: -U/-P (S4U) is not implemented");
             std::process::exit(2);
@@ -39,9 +39,10 @@ fn main() {
         eprintln!("missing service");
         std::process::exit(2);
     });
-    let path = ccname
-        .or_else(env_ccname)
-        .unwrap_or_else(default_ccache_name);
+    let path = resolve_ccname(ccname.as_deref()).unwrap_or_else(|e| {
+        eprintln!("kvno: {e}");
+        std::process::exit(2);
+    });
     if let Err(e) = run(&path, &host, &service) {
         eprintln!("kvno: {e}");
         std::process::exit(1);
@@ -90,7 +91,8 @@ fn run(path: &std::path::Path, host: &str, service: &str) -> Result<(), String> 
     } else {
         let parts: Vec<&str> = service.split('/').collect();
         (
-            PrincipalName::new(PrincipalName::NT_PRINCIPAL, parts),
+            PrincipalName::try_new(PrincipalName::NT_PRINCIPAL, parts)
+                .map_err(|e| e.to_string())?,
             crealm,
         )
     };

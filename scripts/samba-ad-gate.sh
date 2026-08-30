@@ -50,11 +50,11 @@ cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 set +e
-docker run -d --name "$NAME" --hostname dc1 "$IMAGE" >/tmp/samba-ad-run.err 2>&1
+docker run -d --name "$NAME" --hostname dc1 "$IMAGE" >"$SCRATCH/samba-ad-run.err" 2>&1
 run_rc=$?
 set -e
 if [ "$run_rc" -ne 0 ]; then
-    unavailable "docker run $IMAGE failed: $(tr '\n' ' ' </tmp/samba-ad-run.err 2>/dev/null || true)"
+    unavailable "docker run $IMAGE failed: $(tr '\n' ' ' <"$SCRATCH/samba-ad-run.err" 2>/dev/null || true)"
 fi
 
 ok=0

@@ -62,10 +62,10 @@ trap cleanup EXIT
 
 set +e
 docker run -d --name "$NAME_A" --hostname dc1 --network "$NET" \
-    -e SAMBA_REALM=AD.KERBER.TEST "$IMAGE_A" >/tmp/rt-a.err 2>&1
+    -e SAMBA_REALM=AD.KERBER.TEST "$IMAGE_A" >"$SCRATCH/rt-a.err" 2>&1
 ra=$?
 docker run -d --name "$NAME_B" --hostname dc1 --network "$NET" \
-    -e SAMBA_REALM=KERBER.TEST "$IMAGE_B" >/tmp/rt-b.err 2>&1
+    -e SAMBA_REALM=KERBER.TEST "$IMAGE_B" >"$SCRATCH/rt-b.err" 2>&1
 rb=$?
 set -e
 if [ "$ra" -ne 0 ] || [ "$rb" -ne 0 ]; then
@@ -166,9 +166,9 @@ fi
 # Prefer Samba-exported trust principal keys when exportkeytab works.
 set +e
 docker exec "$NAME_A" samba-tool domain exportkeytab /tmp/a-trust.kt \
-    --principal="krbtgt/KERBER.TEST@AD.KERBER.TEST" >/tmp/a-kt.err 2>&1
+    --principal="krbtgt/KERBER.TEST@AD.KERBER.TEST" >"$SCRATCH/a-kt.err" 2>&1
 docker exec "$NAME_B" samba-tool domain exportkeytab /tmp/b-trust.kt \
-    --principal="krbtgt/AD.KERBER.TEST@KERBER.TEST" >/tmp/b-kt.err 2>&1
+    --principal="krbtgt/AD.KERBER.TEST@KERBER.TEST" >"$SCRATCH/b-kt.err" 2>&1
 set -e
 docker cp "$NAME_A":/tmp/a-trust.kt "$SCRATCH/a-trust.kt" 2>/dev/null || true
 docker cp "$NAME_B":/tmp/b-trust.kt "$SCRATCH/b-trust.kt" 2>/dev/null || true

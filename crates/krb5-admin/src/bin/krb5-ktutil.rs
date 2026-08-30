@@ -72,6 +72,9 @@ fn run_line(kt: &mut Keytab, line: &str) -> Result<(), String> {
                 if show_t {
                     print!(" t={}", e.timestamp);
                 }
+                if parts.contains(&"-e") {
+                    print!(" {}", e.key.etype().to_mit_name());
+                }
                 if show_k {
                     print!(" ({})", hex(e.key.as_bytes()));
                 }
