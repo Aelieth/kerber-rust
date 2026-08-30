@@ -87,19 +87,25 @@ shows `user@KERBER.TEST`. Reverse: `scripts/rust-kinit-spake-gate.sh`
 is Rust `kinit --spake` against MIT KDC (`spake_preauth_groups = P-256`)
 and MIT `klist` `user@KERBER.TEST`. FAST: `scripts/rust-kinit-fast-gate.sh`
 is Rust `kinit --fast --armor-ccache` against MIT; the AS-REQ carries
-PA-FX-FAST and MIT `klist` names `user@KERBER.TEST`. Reverse PKINIT:
+PA-FX-FAST and MIT `klist` names `user@KERBER.TEST`. MIT 1.22.2 KDC TRACE
+does **not** print `FX-FAST`; the gate asserts `Decrypted AP-REQ` (the
+armor AP-REQ). Reverse PKINIT:
 `scripts/rust-kinit-pkinit-gate.sh` is Rust `kinit --pkinit FILE:` against
 MIT KDC (`pkinit.so` + KDC cert + `id-pkinit-san`); it **fails** if the
 plugin is missing. MIT `klist` names `user@KERBER.TEST`. A follow-up
 negative restarts MIT with `pkinit_identity` pointing at the *client*
-cert; Rust `kinit` must not obtain a TGT. `scripts/pkinit-gate.sh` also
-refuses MIT `kinit` with `other.pem` (SAN ≠ `user`). NT-ENTERPRISE:
+cert; Rust `kinit` must fail with `pkinit kdc eku`. MIT not listening
+on that identity is **red**. `scripts/pkinit-gate.sh` also
+refuses MIT `kinit` with `other.pem` (SAN ≠ `user`) and greps the Rust
+KDC log for `pkinit client san`. NT-ENTERPRISE:
 `scripts/rust-kinit-enterprise-gate.sh` is MIT `kinit -E` against the
 Rust KDC **and** Rust `kinit -E` against MIT; klist default principal
 is the canonical `user@KERBER.TEST`. A foreign UPN suffix is not a
 local alias. SPAKE: `scripts/rust-kinit-spake-gate.sh` sets
-`+requires_preauth user` and asserts SPAKE from the MIT KDC TRACE only.
-FAST: `scripts/rust-kinit-fast-gate.sh` asserts FX-FAST from TRACE only.
+`+requires_preauth user` and asserts a SPAKE *completion* line
+(`SPAKE response received` or `SPAKE derived K'`) from the MIT KDC TRACE,
+not a PREAUTH_REQUIRED offer. FAST: `scripts/rust-kinit-fast-gate.sh`
+asserts `Decrypted AP-REQ` from TRACE only.
 
 SHA-2: `scripts/sha2-gate.sh` is a live MIT 1.22.2 gate. It copies the
 Rust KDC into the MIT image, points `KRB5_CONFIG` at `/etc/krb5-sha2.conf`

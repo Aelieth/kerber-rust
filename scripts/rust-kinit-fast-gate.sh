@@ -79,7 +79,6 @@ docker exec -e KRB5_PASSWORD=userpassword "$NAME" \
     /tmp/krb5-kinit 127.0.0.1 user@KERBER.TEST /tmp/krb5cc_armor
 
 echo "==== Rust kinit --fast --armor-ccache ===="
-: >/tmp/mit-kdc.trace
 docker exec "$NAME" sh -c 'cat /dev/null > /tmp/mit-kdc.trace' || true
 set +e
 OUT="$(docker exec -e KRB5_PASSWORD=userpassword "$NAME" \
@@ -98,10 +97,11 @@ KLIST="$(docker exec "$NAME" klist -c /tmp/krb5cc_fast 2>/dev/null || true)"
 echo "$KLIST"
 echo "$KLIST" | grep -q 'user@KERBER.TEST'
 TRACE="$(docker exec "$NAME" cat /tmp/mit-kdc.trace 2>/dev/null || true)"
-if ! echo "$TRACE" | grep -Eqi 'Decrypted AP-REQ|FX-FAST|FX_FAST|padata type 136|PA-FX-FAST'; then
+if ! echo "$TRACE" | grep -Fq 'Decrypted AP-REQ'; then
     echo "$TRACE" >&2
-    log "fast.client.gate" "error" ',"error":"kinit succeeded without FAST KDC TRACE"'
+    log "fast.client.gate" "error" ',"error":"kinit succeeded without Decrypted AP-REQ TRACE"'
     exit 1
 fi
+echo "$TRACE" | grep -F 'Decrypted AP-REQ'
 log "fast.client.gate" "ok" ',"mode":"rust-kinit","pa_type":136,"principal":"user@KERBER.TEST"'
 exit 0

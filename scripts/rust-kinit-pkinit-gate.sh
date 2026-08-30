@@ -155,10 +155,10 @@ for _ in $(seq 1 40); do
     sleep 0.25
 done
 if [ "$ok" != 1 ]; then
-    echo "MIT krb5kdc did not listen with client-cert identity (refused the rogue cert)"
+    echo "MIT krb5kdc did not listen with client-cert identity"
     docker exec "$NAME" cat /tmp/mit-kdc-rogue.log >&2 || true
-    log "pkinit.client.gate" "ok" ',"mode":"rust-kinit-rogue","refused":"mit-kdc-client-cert-identity"'
-    exit 0
+    log "pkinit.client.gate" "error" ',"error":"MIT krb5kdc did not listen with client-cert identity"'
+    exit 1
 fi
 docker exec "$NAME" sh -c 'cat /dev/null > /tmp/mit-kdc-rogue.trace' || true
 set +e
@@ -172,6 +172,11 @@ if [ "$rrc" -eq 0 ]; then
     echo "==== MIT kdc rogue log ===="
     docker exec "$NAME" cat /tmp/mit-kdc-rogue.log 2>/dev/null || true
     log "pkinit.client.gate" "error" ',"error":"rust kinit accepted client-cert KDC CMS"'
+    exit 1
+fi
+if ! echo "$ROGUE" | grep -q 'pkinit kdc eku'; then
+    echo "$ROGUE" >&2
+    log "pkinit.client.gate" "error" ',"error":"rogue KDC refused without pkinit kdc eku","rc":'"$rrc"
     exit 1
 fi
 log "pkinit.client.gate" "ok" ',"mode":"rust-kinit-rogue","refused":"client-cert-kdc","rc":'"$rrc"

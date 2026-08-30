@@ -112,6 +112,13 @@ if [ "$rc" -eq 0 ]; then
         log "pkinit.gate" "error" ',"error":"SAN mismatch accepted"'
         exit 1
     fi
+    KDCLOG="$(docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true)"
+    if ! echo "$KDCLOG" | grep -q 'pkinit client san'; then
+        echo "$KDCLOG" >&2
+        log "pkinit.gate" "error" ',"error":"SAN mismatch refused without pkinit client san"'
+        exit 1
+    fi
+    echo "$KDCLOG" | grep 'pkinit client san'
     log "pkinit.gate" "ok" ',"mode":"mit-kinit","kdf":"rfc8636-sha256","mit_plugin":"present","san_mismatch":"refused"'
     exit 0
 fi

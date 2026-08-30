@@ -98,10 +98,11 @@ KLIST="$(docker exec "$NAME" klist -c /tmp/krb5cc_spake 2>/dev/null || true)"
 echo "$KLIST"
 echo "$KLIST" | grep -q 'user@KERBER.TEST'
 TRACE="$(docker exec "$NAME" cat /tmp/mit-kdc.trace 2>/dev/null || true)"
-if ! echo "$TRACE" | grep -Eqi 'SPAKE|pa[_ ]?type[[:space:]]*151|padata type 151|group[[:space:]]*2'; then
+if ! echo "$TRACE" | grep -Eq 'SPAKE response received|SPAKE derived K'; then
     echo "$TRACE" >&2
-    log "spake.client.gate" "error" ',"error":"kinit succeeded without SPAKE KDC TRACE"'
+    log "spake.client.gate" "error" ',"error":"kinit succeeded without SPAKE completion TRACE"'
     exit 1
 fi
+echo "$TRACE" | grep -E 'SPAKE response received|SPAKE derived K'
 log "spake.client.gate" "ok" ',"mode":"rust-kinit","pa_type":151,"group":2,"principal":"user@KERBER.TEST"'
 exit 0

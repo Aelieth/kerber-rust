@@ -145,6 +145,13 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
 
 ### Changed
 
+- FAST/SPAKE/PKINIT reverse-kinit gates assert MIT 1.22.2 TRACE
+  completion (`Decrypted AP-REQ`, `SPAKE response received` /
+  `SPAKE derived K'`), not a PREAUTH_REQUIRED offer or a string
+  MIT never prints. Rogue PKINIT is `pkinit kdc eku` (MIT not
+  listening is red). SAN≠cname greps the Rust KDC log for
+  `pkinit client san`.
+
 - Align the workspace with KLLDAP 0.7.5: edition **2024**, MSRV **1.95**,
   `nix` **0.31**, and `rasn` unpinned at **0.28.14**. MIT golden DER
   still byte-matches `tests/traces/mit-*.der`. Privilege-drop still
