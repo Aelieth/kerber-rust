@@ -138,6 +138,7 @@ fn wrap_as(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutcome, Error
 
 fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutcome, Error> {
     let _ = krb5_types::try_ascii(req.realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?;
+    refuse_spake_combo(req)?;
     let etypes: Vec<i32> = EncryptionType::preferred()
         .iter()
         .map(|e| e.to_iana())
@@ -160,7 +161,7 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
         req.realm,
         nonce,
         till.clone(),
-        first_pa,
+        first_pa.clone(),
         &etypes,
         req.canonicalize,
     )?;
@@ -188,7 +189,7 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
                 req.realm,
                 nonce,
                 till.clone(),
-                None,
+                first_pa.clone(),
                 &etypes,
                 req.canonicalize,
             )?;
@@ -210,8 +211,6 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
                 KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
                     if req.want_spake {
                         continue_spake(req, keys, nonce, till, &etypes, &e)
-                    } else if req.fast_armor.is_some() {
-                        continue_fast(req, keys, nonce, till, &etypes, Some(&e))
                     } else {
                         continue_preauth(req, keys, nonce, till, &etypes, &e, Some(&skew_time))
                     }
@@ -226,9 +225,6 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
                     || e.error_code == err::MORE_PREAUTH_DATA_REQUIRED) =>
         {
             continue_spake(req, keys, nonce, till, &etypes, &e)
-        }
-        KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED && req.fast_armor.is_some() => {
-            continue_fast(req, keys, nonce, till, &etypes, Some(&e))
         }
         KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
             continue_preauth(req, keys, nonce, till, &etypes, &e, None)
@@ -692,6 +688,14 @@ fn classify_kdc_error(e: &KrbError) -> Result<AsOutcome, Error> {
 fn refuse_spake_skip(want_spake: bool) -> Result<(), Error> {
     if want_spake {
         Err(Error::ReplyMismatch("SPAKE required".into()))
+    } else {
+        Ok(())
+    }
+}
+
+fn refuse_spake_combo(req: &AsRequest<'_>) -> Result<(), Error> {
+    if req.want_spake && (req.fast_armor.is_some() || req.pkinit.is_some()) {
+        Err(Error::ReplyMismatch("SPAKE exclusive".into()))
     } else {
         Ok(())
     }

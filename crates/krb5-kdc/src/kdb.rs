@@ -22,9 +22,8 @@ use crate::store::{NamedPolicy, Policy, Principal, PrincipalStore, RID_FIRST_USE
 /// Map a wire name to a `user@REALM` store id.
 ///
 /// NT-ENTERPRISE is a single `user@suffix` component (RFC 6806), not a
-/// `/`-joined name. A suffix matching `realm` (ASCII case-insensitive)
-/// maps to `user@realm`. Any other suffix is not a local alias (no
-/// cross-realm referral on this path).
+/// `/`-joined name. A suffix equal to `realm` (RFC 4120 §6.1, exact
+/// octets) maps to `user@realm`. Any other suffix is not a local alias.
 #[must_use]
 pub fn lookup_principal_id(name: &PrincipalName, realm: &str) -> String {
     if name.name_type == PrincipalName::NT_ENTERPRISE {
@@ -32,7 +31,7 @@ pub fn lookup_principal_id(name: &PrincipalName, realm: &str) -> String {
         if let Some((user, suffix)) = raw.rsplit_once('@')
             && !user.is_empty()
         {
-            if suffix.eq_ignore_ascii_case(realm) {
+            if suffix == realm {
                 return format!("{user}@{realm}");
             }
             return format!("{raw}@{realm}");

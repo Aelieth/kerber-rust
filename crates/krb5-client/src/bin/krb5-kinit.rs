@@ -42,6 +42,10 @@ fn main() {
             _ => positional.push(a),
         }
     }
+    if want_spake && (armor_ccache.is_some() || pkinit_identity.is_some()) {
+        eprintln!("--spake cannot be combined with --armor-ccache or --pkinit");
+        std::process::exit(2);
+    }
     let mut args = positional.into_iter();
     let host = args.next().unwrap_or_else(|| {
         eprintln!(

@@ -394,6 +394,66 @@ fn want_spake_rejects_non_preauth_as_rep() {
 }
 
 #[test]
+fn want_spake_rejects_fast_and_pkinit() {
+    use krb5_crypto::{EncryptionType, ProtocolKey};
+    use krb5_protocol::{FastArmor, PkinitClient};
+    use krb5_types::{EncryptedData, PrincipalName, Ticket, ascii};
+
+    let kdc = krb5_protocol::KdcAddr {
+        host: "127.0.0.1".into(),
+        port: 1,
+    };
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+    let pk = PkinitClient {
+        cert: vec![1],
+        key: [2u8; 32],
+        ca_cert: vec![3],
+    };
+    let err = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
+        cname: cname.clone(),
+        realm: "KERBER.TEST",
+        password: b"x",
+        kdc: &kdc,
+        want_spake: true,
+        fast_armor: None,
+        pkinit: Some(&pk),
+        canonicalize: false,
+    })
+    .expect_err("spake+pkinit");
+    assert!(err.to_string().contains("SPAKE exclusive"), "got {err}");
+
+    let session =
+        ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x42u8; 32]).unwrap();
+    let armor = FastArmor {
+        ticket: Ticket {
+            tkt_vno: 5,
+            realm: ascii("KERBER.TEST"),
+            sname: PrincipalName::krbtgt("KERBER.TEST"),
+            enc_part: EncryptedData {
+                etype: 18,
+                kvno: Some(1),
+                cipher: vec![0u8; 32].into(),
+            },
+        },
+        session,
+        crealm: ascii("KERBER.TEST"),
+        cname: cname.clone(),
+    };
+    let err = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
+        cname,
+        realm: "KERBER.TEST",
+        password: b"x",
+        kdc: &kdc,
+        want_spake: true,
+        fast_armor: Some(&armor),
+        pkinit: None,
+        canonicalize: false,
+    })
+    .expect_err("spake+fast");
+    assert!(err.to_string().contains("SPAKE exclusive"), "got {err}");
+}
+
+#[test]
 fn fast_preauth_retry_carries_fx_fast() {
     use std::net::UdpSocket;
     use std::sync::{Arc, Mutex};

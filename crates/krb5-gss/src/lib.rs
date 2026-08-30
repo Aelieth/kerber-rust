@@ -2776,6 +2776,39 @@ mod tests {
     }
 
     #[test]
+    fn wrap_iov_integ_aes_round_trips() {
+        let (mut init, mut acc) = contexts();
+        let mut h = Vec::new();
+        let mut d = b"integ-only".to_vec();
+        let mut p = Vec::new();
+        let mut t = Vec::new();
+        init.wrap_iov(
+            false,
+            &mut [
+                IovBuf {
+                    kind: IovType::Header,
+                    data: &mut h,
+                },
+                IovBuf {
+                    kind: IovType::Data,
+                    data: &mut d,
+                },
+                IovBuf {
+                    kind: IovType::Padding,
+                    data: &mut p,
+                },
+                IovBuf {
+                    kind: IovType::Trailer,
+                    data: &mut t,
+                },
+            ],
+        )
+        .unwrap();
+        unwrap_iov_once(&mut acc, &mut h, &mut d, &mut p, &mut t, None).unwrap();
+        assert_eq!(d, b"integ-only");
+    }
+
+    #[test]
     fn unwrap_iov_integ_rejects_non_aes() {
         let key = ProtocolKey::from_bytes(EncryptionType::Des3CbcSha1, &[0x11u8; 24]).unwrap();
         let mut ctx = bare_ctx(key, false);

@@ -1338,6 +1338,22 @@ fn enterprise_foreign_suffix_is_not_local_user() {
 }
 
 #[test]
+fn enterprise_mixed_case_suffix_is_not_local_user() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let ent = PrincipalName::new(PrincipalName::NT_ENTERPRISE, ["user@kerber.test"]);
+    assert!(
+        store.get_name(&ent).is_none(),
+        "realm compare is exact octets, not ASCII case-insensitive"
+    );
+    let req = as_req(ent, TEST_REALM, 73, None).unwrap();
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("mixed-case suffix");
+    match err {
+        Error::Protocol { code, .. } => assert_eq!(code, err::C_PRINCIPAL_UNKNOWN),
+        other => panic!("expected C_PRINCIPAL_UNKNOWN, got {other}"),
+    }
+}
+
+#[test]
 fn tgs_canonicalize_issues_cross_realm_krbtgt() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     store

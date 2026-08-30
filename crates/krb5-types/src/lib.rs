@@ -1193,6 +1193,27 @@ mod tests {
             pkinit::cms_verify(&cms, &ca.ca_cert).expect_err("DN mismatch"),
             "cms chain"
         );
+
+        let expired_ca = pkinit::PkinitCa::generate_window(b"200101000000Z", b"210101000000Z")
+            .expect("expired CA");
+        let cms = expired_ca.sign_cms(inner, "user").expect("expired ca cms");
+        assert_eq!(
+            pkinit::cms_verify(&cms, &expired_ca.ca_cert).expect_err("expired CA"),
+            "cms ca expired"
+        );
+
+        let noku = pkinit::PkinitCa::generate_no_key_cert_sign().expect("no ku");
+        let cms = noku.sign_cms(inner, "user").expect("no ku cms");
+        assert_eq!(
+            pkinit::cms_verify(&cms, &noku.ca_cert).expect_err("no keyCertSign"),
+            "cms ca ku"
+        );
+
+        let kcert = {
+            let (c, _, _) = ca.kdc_identity_for("KERBER.TEST").expect("kdc");
+            c
+        };
+        assert!(pkinit::require_kdc_pkinit_cert(&kcert, "kerber.test").is_err());
     }
 
     #[test]

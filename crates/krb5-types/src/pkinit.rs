@@ -115,6 +115,7 @@ const OID_MESSAGE_DIGEST: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x
 const OID_SAN: &[u8] = &[0x55, 0x1d, 0x11];
 const OID_EKU: &[u8] = &[0x55, 0x1d, 0x25];
 const OID_BC: &[u8] = &[0x55, 0x1d, 0x13];
+const OID_KU: &[u8] = &[0x55, 0x1d, 0x0f];
 const UTC_NOT_BEFORE: &[u8] = b"250101000000Z";
 const UTC_NOT_AFTER: &[u8] = b"360101000000Z";
 
@@ -777,6 +778,7 @@ fn directory_name(cn: &str) -> Vec<u8> {
 #[derive(Clone, Copy)]
 enum CertKind {
     Ca,
+    CaNoKeyCertSign,
     Kdc,
     Client,
 }
@@ -852,13 +854,8 @@ fn p256_cert_window(
     Some(tlv(0x30, &[tbs, alg_id, tlv(0x03, &sig_bit)].concat()))
 }
 
-/// Minimal X.509 v3 self-signed P-256 certificate (test CA).
-fn self_signed_p256_cert(cn: &str, secret: &[u8; 32], public: &[u8]) -> Option<Vec<u8>> {
-    p256_cert(1, cn, cn, public, secret, CertKind::Ca, "KERBER.TEST")
-}
-
 fn cert_extensions(kind: CertKind, subject_cn: &str, realm: &str) -> Vec<u8> {
-    let is_ca = matches!(kind, CertKind::Ca);
+    let is_ca = matches!(kind, CertKind::Ca | CertKind::CaNoKeyCertSign);
     let bc_oid = oid_der(&[0x55, 0x1d, 0x13]);
     let bc_val = if is_ca {
         tlv(0x30, &tlv(0x01, &[0xff]))
@@ -869,8 +866,8 @@ fn cert_extensions(kind: CertKind, subject_cn: &str, realm: &str) -> Vec<u8> {
         0x30,
         &[bc_oid, tlv(0x01, &[0xff]), tlv(0x04, &bc_val)].concat(),
     );
-    let ku_oid = oid_der(&[0x55, 0x1d, 0x0f]);
-    let ku_bits = if is_ca {
+    let ku_oid = oid_der(OID_KU);
+    let ku_bits = if matches!(kind, CertKind::Ca) {
         tlv(0x03, &[0x01, 0b0000_0110])
     } else {
         tlv(0x03, &[0x07, 0b1000_0000])
@@ -897,7 +894,7 @@ fn cert_extensions(kind: CertKind, subject_cn: &str, realm: &str) -> Vec<u8> {
             ext_body.extend(san_general(&[other_name_pkinit(&san)]));
             ext_body.extend(eku(OID_KP_CLIENT_AUTH));
         }
-        CertKind::Ca => {}
+        CertKind::Ca | CertKind::CaNoKeyCertSign => {}
     }
     tlv(0xa3, &tlv(0x30, &ext_body))
 }
@@ -1291,11 +1288,7 @@ pub fn require_kdc_pkinit_cert(cert: &[u8], realm: &str) -> Result<(), &'static 
         return Err("pkinit kdc eku");
     }
     let (san_realm, parts) = cert_pkinit_san(cert).ok_or("pkinit kdc san")?;
-    if !san_realm.eq_ignore_ascii_case(realm)
-        || parts.len() != 2
-        || parts[0] != "krbtgt"
-        || !parts[1].eq_ignore_ascii_case(realm)
-    {
+    if san_realm != realm || parts.len() != 2 || parts[0] != "krbtgt" || parts[1] != realm {
         return Err("pkinit kdc san");
     }
     Ok(())
@@ -1315,7 +1308,7 @@ pub fn require_client_pkinit_cert(
         return Err("pkinit client eku");
     }
     let (san_realm, parts) = cert_pkinit_san(cert).ok_or("pkinit client san")?;
-    if !san_realm.eq_ignore_ascii_case(realm) {
+    if san_realm != realm {
         return Err("pkinit client san");
     }
     if parts != pkinit_cname_parts(cname) {
@@ -1416,18 +1409,28 @@ fn cert_path_ok(leaf: &[u8], ca: &[u8]) -> Result<(), &'static str> {
     if !cert_basic_constraints_ca(ca) {
         return Err("cms ca");
     }
+    if !cert_has_key_cert_sign(ca) {
+        return Err("cms ca ku");
+    }
     let iss = cert_name_der(leaf, true).ok_or("cms issuer")?;
     let sub = cert_name_der(ca, false).ok_or("cms subject")?;
     if iss != sub {
         return Err("cms chain");
     }
-    let (nb, na) = cert_time_window(leaf).ok_or("cms validity")?;
     let now = chrono::Utc::now();
+    let (nb, na) = cert_time_window(leaf).ok_or("cms validity")?;
     if now < nb {
         return Err("cms notyet");
     }
     if now > na {
         return Err("cms expired");
+    }
+    let (ca_nb, ca_na) = cert_time_window(ca).ok_or("cms ca validity")?;
+    if now < ca_nb {
+        return Err("cms ca notyet");
+    }
+    if now > ca_na {
+        return Err("cms ca expired");
     }
     Ok(())
 }
@@ -1510,6 +1513,47 @@ fn each_ext(extensions: &[u8], mut visit: impl FnMut(&[u8], &[u8]) -> bool) {
             break;
         }
     }
+}
+
+fn cert_has_key_cert_sign(cert: &[u8]) -> bool {
+    let Some(w) = walk_tbs(cert) else {
+        return false;
+    };
+    let Some(exts) = w.extensions else {
+        return false;
+    };
+    let mut found = false;
+    each_ext(exts, |oid, val| {
+        if oid != OID_KU {
+            return false;
+        }
+        found = bitstring_has(val, 5);
+        true
+    });
+    found
+}
+
+fn bitstring_has(der: &[u8], bit: usize) -> bool {
+    let Some((t, body, _)) = take_tlv(der) else {
+        return false;
+    };
+    if t != 0x03 {
+        return false;
+    }
+    let Some((&unused, data)) = body.split_first() else {
+        return false;
+    };
+    let total = data
+        .len()
+        .saturating_mul(8)
+        .saturating_sub(usize::from(unused));
+    if bit >= total {
+        return false;
+    }
+    let Some(byte) = data.get(bit / 8) else {
+        return false;
+    };
+    byte & (1 << (7 - (bit % 8))) != 0
 }
 
 fn cert_has_eku(cert: &[u8], oid_body: &[u8]) -> bool {
@@ -1865,8 +1909,44 @@ impl PkinitCa {
     /// Generate a self-signed P-256 test CA.
     #[must_use]
     pub fn generate() -> Option<Self> {
+        Self::generate_window(UTC_NOT_BEFORE, UTC_NOT_AFTER)
+    }
+
+    /// Self-signed CA with an explicit UTCTime window.
+    #[must_use]
+    pub fn generate_window(not_before: &[u8], not_after: &[u8]) -> Option<Self> {
         let (ca_secret, ca_public) = generate_p256()?;
-        let ca_cert = self_signed_p256_cert("Kerber Test CA", &ca_secret, &ca_public)?;
+        let ca_cert = p256_cert_window(
+            1,
+            "Kerber Test CA",
+            "Kerber Test CA",
+            &ca_public,
+            &ca_secret,
+            CertKind::Ca,
+            "KERBER.TEST",
+            not_before,
+            not_after,
+        )?;
+        Some(Self {
+            ca_secret,
+            ca_cert,
+            ca_public,
+        })
+    }
+
+    /// CA with `basicConstraints` CA=true but without `keyCertSign`.
+    #[must_use]
+    pub fn generate_no_key_cert_sign() -> Option<Self> {
+        let (ca_secret, ca_public) = generate_p256()?;
+        let ca_cert = p256_cert(
+            1,
+            "Kerber Test CA",
+            "Kerber Test CA",
+            &ca_public,
+            &ca_secret,
+            CertKind::CaNoKeyCertSign,
+            "KERBER.TEST",
+        )?;
         Some(Self {
             ca_secret,
             ca_cert,

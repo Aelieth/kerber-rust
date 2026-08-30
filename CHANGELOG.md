@@ -145,6 +145,12 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
 
 ### Changed
 
+- `--spake` cannot combine with `--armor-ccache` or `--pkinit`.
+  PKINIT trust-anchor `notBefore`/`notAfter` and `keyCertSign` are
+  enforced. Realm compares at PKINIT SAN and NT-ENTERPRISE lookup are
+  exact octets (RFC 4120 §6.1). SPAKE SKEW retry keeps the support
+  padata. AES `wrap_iov(false)` round-trips.
+
 - PKINIT AuthPack `paChecksum` is SHA-1 of `KDC-REQ-BODY` (RFC 4556
   §3.2.2). CMS signed `content-type` must equal `eContentType`
   (RFC 5652 §5.3); the KDC also requires client `id-pkinit-authData`.
