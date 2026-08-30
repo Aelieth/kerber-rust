@@ -280,6 +280,7 @@ pub(crate) fn process_pkinit(
     padata: Option<&[PaData]>,
     etype: EncryptionType,
     as_req_der: &[u8],
+    body_der: &[u8],
     cname: &PrincipalName,
     realm: &str,
 ) -> Result<Option<(ProtocolKey, PaData)>, Error> {
@@ -308,9 +309,16 @@ pub(crate) fn process_pkinit(
         .ok()
         .and_then(|r| r.0.req_body.cname)
         .unwrap_or_else(|| cname.clone());
-    if let Err(e) =
-        krb5_types::pkinit::require_client_pkinit_cert(&verified.cert, &req_cname, realm)
-    {
+    if verified.e_content_type.as_slice() != krb5_types::pkinit::ECONTENT_AUTHDATA {
+        tracing::error!(
+            event = "kdc.pkinit",
+            component = "krb5-kdc",
+            outcome = "error",
+            error = "pkinit eContentType"
+        );
+        return Err(proto(err::PREAUTH_FAILED, "PKINIT eContentType"));
+    }
+    if let Err(e) = krb5_types::pkinit::require_client_pkinit_cert(&verified.cert, cname, realm) {
         tracing::error!(
             event = "kdc.pkinit",
             component = "krb5-kdc",
@@ -320,6 +328,15 @@ pub(crate) fn process_pkinit(
         return Err(proto(err::PREAUTH_FAILED, "PKINIT client cert"));
     }
     let inner = verified.e_content;
+    if let Err(e) = krb5_types::pkinit::authpack_pa_checksum_ok(&inner, body_der) {
+        tracing::error!(
+            event = "kdc.pkinit",
+            component = "krb5-kdc",
+            outcome = "error",
+            error = e
+        );
+        return Err(proto(err::PREAUTH_FAILED, "PKINIT paChecksum"));
+    }
     let (nonce, spki) = krb5_types::pkinit::parse_authpack(&inner).ok_or_else(|| {
         tracing::error!(
             event = "kdc.pkinit",

@@ -145,6 +145,12 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
 
 ### Changed
 
+- PKINIT AuthPack `paChecksum` is SHA-1 of `KDC-REQ-BODY` (RFC 4556
+  §3.2.2). CMS signed `content-type` must equal `eContentType`
+  (RFC 5652 §5.3); the KDC also requires client `id-pkinit-authData`.
+  Client SAN is bound to the canonical issued cname, not a stripped
+  enterprise suffix.
+
 - FAST/SPAKE/PKINIT reverse-kinit gates assert MIT 1.22.2 TRACE
   completion (`Decrypted AP-REQ`, `SPAKE response received` /
   `SPAKE derived K'`), not a PREAUTH_REQUIRED offer or a string

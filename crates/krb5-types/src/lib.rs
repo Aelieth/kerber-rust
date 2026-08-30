@@ -1117,6 +1117,43 @@ mod tests {
         pkinit::require_client_pkinit_cert(&cert, &user, "KERBER.TEST").expect("client SAN");
         let other = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["other"]);
         assert!(pkinit::require_client_pkinit_cert(&cert, &other, "KERBER.TEST").is_err());
+
+        let split = pkinit::cms_sign_leaf_oids(
+            inner,
+            &cert,
+            &key,
+            pkinit::ECONTENT_AUTHDATA,
+            pkinit::ECONTENT_DHKEY,
+        )
+        .expect("split oids");
+        assert_eq!(
+            pkinit::cms_verify_full(&split, &ca.ca_cert).expect_err("content-type"),
+            "cms content-type"
+        );
+        let body = b"kdc-req-body";
+        let ck = pkinit::kdc_req_body_checksum(body);
+        let pk_auth = pkinit::PkAuthenticator {
+            cusec: Microseconds::ZERO,
+            ctime: KerberosTime::now(),
+            nonce: 1,
+            pa_checksum: Some(ck.clone().into()),
+        };
+        let pack = pkinit::encode_client_authpack(&pk_auth, &pkinit::encode_ec_spki(&[0x04u8; 65]))
+            .expect("authpack");
+        pkinit::authpack_pa_checksum_ok(&pack, body).expect("paChecksum");
+        assert!(pkinit::authpack_pa_checksum_ok(&pack, b"other-body").is_err());
+        let mut ck_bad = ck;
+        ck_bad[0] ^= 1;
+        let pk_bad = pkinit::PkAuthenticator {
+            cusec: Microseconds::ZERO,
+            ctime: KerberosTime::now(),
+            nonce: 1,
+            pa_checksum: Some(ck_bad.into()),
+        };
+        let pack_bad =
+            pkinit::encode_client_authpack(&pk_bad, &pkinit::encode_ec_spki(&[0x04u8; 65]))
+                .expect("authpack bad");
+        assert!(pkinit::authpack_pa_checksum_ok(&pack_bad, body).is_err());
     }
 
     #[test]

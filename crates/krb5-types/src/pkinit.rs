@@ -110,6 +110,8 @@ pub const OID_PKINIT_SAN: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x02, 0x02];
 pub const OID_KP_CLIENT_AUTH: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x02, 0x03, 0x04];
 /// id-pkinit-KPKdc 1.3.6.1.5.2.3.5 (OID body).
 pub const OID_KP_KDC: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x02, 0x03, 0x05];
+const OID_CONTENT_TYPE: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x03];
+const OID_MESSAGE_DIGEST: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x04];
 const OID_SAN: &[u8] = &[0x55, 0x1d, 0x11];
 const OID_EKU: &[u8] = &[0x55, 0x1d, 0x25];
 const OID_BC: &[u8] = &[0x55, 0x1d, 0x13];
@@ -297,6 +299,47 @@ pub fn parse_authpack(der: &[u8]) -> Option<(u32, Vec<u8>)> {
         cur = rest;
     }
     Some((nonce, spki?))
+}
+
+/// SHA-1 of encoded `KDC-REQ-BODY` (RFC 4556 `paChecksum`).
+#[must_use]
+pub fn kdc_req_body_checksum(body: &[u8]) -> Vec<u8> {
+    sha1_bytes(body)
+}
+
+/// RFC 4556 §3.2.2: AuthPack `paChecksum` equals SHA-1 of `KDC-REQ-BODY`.
+///
+/// # Errors
+///
+/// Missing or mismatched checksum.
+pub fn authpack_pa_checksum_ok(authpack: &[u8], body: &[u8]) -> Result<(), &'static str> {
+    let got = parse_authpack_pa_checksum(authpack).ok_or("pkinit paChecksum")?;
+    let expect = sha1_bytes(body);
+    if got.len() != expect.len()
+        || !bool::from(subtle::ConstantTimeEq::ct_eq(
+            got.as_slice(),
+            expect.as_slice(),
+        ))
+    {
+        return Err("pkinit paChecksum");
+    }
+    Ok(())
+}
+
+fn parse_authpack_pa_checksum(der: &[u8]) -> Option<Vec<u8>> {
+    let (t, body, _) = take_tlv(der)?;
+    if t != 0x30 {
+        return None;
+    }
+    let mut cur = body;
+    while !cur.is_empty() {
+        let (tag, inner, rest) = take_tlv(cur)?;
+        if tag == 0xa0 {
+            return pkauth_checksum(unwrap_explicit_seq(inner));
+        }
+        cur = rest;
+    }
+    None
 }
 
 /// RFC 8636 `id-pkinit-kdf-ah-sha256` (1.3.6.1.5.2.3.6.2).
@@ -522,6 +565,23 @@ fn pkauth_nonce(seq_body: &[u8]) -> Option<u32> {
     None
 }
 
+fn pkauth_checksum(seq_body: &[u8]) -> Option<Vec<u8>> {
+    let mut cur = seq_body;
+    while !cur.is_empty() {
+        let (tag, inner, rest) = take_tlv(cur)?;
+        if tag == 0xa3 {
+            if inner.first() == Some(&0x04)
+                && let Some((_, body, _)) = take_tlv(inner)
+            {
+                return Some(body.to_vec());
+            }
+            return Some(inner.to_vec());
+        }
+        cur = rest;
+    }
+    None
+}
+
 fn der_uint(bytes: &[u8]) -> u32 {
     bytes.iter().fold(0u32, |acc, &b| {
         acc.saturating_mul(256).saturating_add(u32::from(b))
@@ -644,6 +704,11 @@ pub struct CmsContentInfo {
 fn sha256_bytes(data: &[u8]) -> Vec<u8> {
     use sha2::{Digest, Sha256};
     Sha256::digest(data).to_vec()
+}
+
+fn sha1_bytes(data: &[u8]) -> Vec<u8> {
+    use sha1::{Digest, Sha1};
+    Sha1::digest(data).to_vec()
 }
 
 fn tlv(tag: u8, body: &[u8]) -> Vec<u8> {
@@ -997,8 +1062,23 @@ pub fn cms_sign_leaf(
     secret: &[u8; 32],
     econtent_oid: &[u8],
 ) -> Result<Vec<u8>, &'static str> {
+    cms_sign_leaf_oids(e_content, cert_der, secret, econtent_oid, econtent_oid)
+}
+
+/// CMS SignedData with independent encap and signed `content-type` OIDs.
+///
+/// # Errors
+///
+/// Missing issuer/serial, or ECDSA failure.
+pub fn cms_sign_leaf_oids(
+    e_content: &[u8],
+    cert_der: &[u8],
+    secret: &[u8; 32],
+    encap_oid: &[u8],
+    signed_oid: &[u8],
+) -> Result<Vec<u8>, &'static str> {
     let (issuer, serial) = cert_issuer_serial(cert_der).ok_or("cms issuer")?;
-    let sattrs = signed_attrs_set(econtent_oid, e_content);
+    let sattrs = signed_attrs_set(signed_oid, e_content);
     let signature = p256_sign(secret, &sattrs).ok_or("cms ecdsa")?;
     let mut implicit = sattrs;
     if implicit.first() == Some(&0x31) {
@@ -1010,7 +1090,7 @@ pub fn cms_sign_leaf(
         &signature,
         &issuer,
         &serial,
-        econtent_oid,
+        encap_oid,
         Some(&implicit),
     ))
 }
@@ -1117,8 +1197,8 @@ fn unbase64(s: &str) -> Option<Vec<u8>> {
 
 fn signed_attrs_set(econtent_oid: &[u8], e_content: &[u8]) -> Vec<u8> {
     let digest = sha256_bytes(e_content);
-    let ct_oid = oid_der(&[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x03]);
-    let md_oid = oid_der(&[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x04]);
+    let ct_oid = oid_der(OID_CONTENT_TYPE);
+    let md_oid = oid_der(OID_MESSAGE_DIGEST);
     let ct = tlv(0x30, &[ct_oid, tlv(0x31, &oid_der(econtent_oid))].concat());
     let md = tlv(0x30, &[md_oid, tlv(0x31, &tlv(0x04, &digest))].concat());
     tlv(0x31, &[ct, md].concat())
@@ -1187,6 +1267,10 @@ pub fn cms_verify_full(der: &[u8], trust_anchor: &[u8]) -> Result<CmsVerified, &
         if !signed_attrs_digest_ok(sa, &expect) {
             return Err("cms message-digest");
         }
+        let ct = signed_attrs_content_type(sa).ok_or("cms content-type")?;
+        if ct != p.e_content_type {
+            return Err("cms content-type");
+        }
     } else if !p256_verify(&public, &p.e_content, &p.signature) {
         return Err("cms ecdsa");
     }
@@ -1253,7 +1337,15 @@ fn pkinit_cname_parts(cname: &crate::PrincipalName) -> Vec<String> {
         .collect()
 }
 
-fn signed_attrs_digest_ok(sattrs: &[u8], expect: &[u8]) -> bool {
+fn oid_body(der: &[u8]) -> &[u8] {
+    if der.first() == Some(&0x06) {
+        take_tlv(der).map_or(der, |(_, b, _)| b)
+    } else {
+        der
+    }
+}
+
+fn signed_attr_set(sattrs: &[u8], want: &[u8]) -> Option<Vec<u8>> {
     let body = if sattrs.first() == Some(&0xa0) || sattrs.first() == Some(&0x31) {
         take_tlv(sattrs).map_or(sattrs, |(_, b, _)| b)
     } else {
@@ -1262,22 +1354,37 @@ fn signed_attrs_digest_ok(sattrs: &[u8], expect: &[u8]) -> bool {
     let mut cur = body;
     while let Some((_, attr, rest)) = take_tlv(cur) {
         if let Some((_, oid, after)) = take_tlv(attr)
-            && (oid == [0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x04]
-                || (oid.first() == Some(&0x06)
-                    && oid.get(2..)
-                        == Some([0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x04].as_slice())))
+            && oid_body(oid) == want
             && let Some((_, set, _)) = take_tlv(after)
-            && let Some((t, oct, _)) = take_tlv(set)
         {
-            let d = if t == 0x04 { oct } else { set };
-            return d == expect;
+            return Some(set.to_vec());
         }
         cur = rest;
         if rest.is_empty() {
             break;
         }
     }
-    false
+    None
+}
+
+fn signed_attrs_digest_ok(sattrs: &[u8], expect: &[u8]) -> bool {
+    let Some(set) = signed_attr_set(sattrs, OID_MESSAGE_DIGEST) else {
+        return false;
+    };
+    take_tlv(&set).is_some_and(|(t, oct, _)| {
+        let d = if t == 0x04 { oct } else { set.as_slice() };
+        d == expect
+    })
+}
+
+fn signed_attrs_content_type(sattrs: &[u8]) -> Option<Vec<u8>> {
+    let set = signed_attr_set(sattrs, OID_CONTENT_TYPE)?;
+    let (t, body, _) = take_tlv(&set)?;
+    if t == 0x06 {
+        Some(body.to_vec())
+    } else {
+        Some(set)
+    }
 }
 
 fn cert_tbs_sig(cert: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {

@@ -264,8 +264,13 @@ pub fn pa_spake_response(
 pub fn pa_pk_as_req(
     client_public: &[u8],
     ca: &krb5_types::pkinit::PkinitCa,
+    body_sha1: Option<&[u8]>,
 ) -> Result<PaData, Error> {
-    pa_pk_as_req_spki(&krb5_types::pkinit::encode_ec_spki(client_public), ca)
+    pa_pk_as_req_spki(
+        &krb5_types::pkinit::encode_ec_spki(client_public),
+        ca,
+        body_sha1,
+    )
 }
 
 /// PA-PK-AS-REQ whose `clientPublicValue` is an already-encoded SPKI
@@ -274,8 +279,12 @@ pub fn pa_pk_as_req(
 /// # Errors
 ///
 /// DER or CMS wrap failures.
-pub fn pa_pk_as_req_spki(spki: &[u8], ca: &krb5_types::pkinit::PkinitCa) -> Result<PaData, Error> {
-    pa_pk_as_req_spki_cn(spki, ca, "user")
+pub fn pa_pk_as_req_spki(
+    spki: &[u8],
+    ca: &krb5_types::pkinit::PkinitCa,
+    body_sha1: Option<&[u8]>,
+) -> Result<PaData, Error> {
+    pa_pk_as_req_spki_cn(spki, ca, "user", body_sha1)
 }
 
 /// PA-PK-AS-REQ signed as `cn` (SAN / EKU follow that identity).
@@ -287,21 +296,28 @@ pub fn pa_pk_as_req_cn(
     client_public: &[u8],
     ca: &krb5_types::pkinit::PkinitCa,
     cn: &str,
+    body_sha1: Option<&[u8]>,
 ) -> Result<PaData, Error> {
-    pa_pk_as_req_spki_cn(&krb5_types::pkinit::encode_ec_spki(client_public), ca, cn)
+    pa_pk_as_req_spki_cn(
+        &krb5_types::pkinit::encode_ec_spki(client_public),
+        ca,
+        cn,
+        body_sha1,
+    )
 }
 
 fn pa_pk_as_req_spki_cn(
     spki: &[u8],
     ca: &krb5_types::pkinit::PkinitCa,
     cn: &str,
+    body_sha1: Option<&[u8]>,
 ) -> Result<PaData, Error> {
     let pack = krb5_types::pkinit::AuthPack {
         pk_authenticator: krb5_types::pkinit::PkAuthenticator {
             cusec: Microseconds::ZERO,
             ctime: KerberosTime::now(),
             nonce: 1,
-            pa_checksum: None,
+            pa_checksum: body_sha1.map(|s| s.to_vec().into()),
         },
         client_public_value: Some(spki.to_vec().into()),
         supported_cms_types: None,
@@ -329,6 +345,7 @@ fn pa_pk_as_req_spki_cn(
 pub fn pa_pk_as_req_agile(
     client_public: &[u8],
     ca: &krb5_types::pkinit::PkinitCa,
+    body_sha1: Option<&[u8]>,
 ) -> Result<PaData, Error> {
     let spki = krb5_types::pkinit::encode_ec_spki(client_public);
     let pack = krb5_types::pkinit::AuthPack {
@@ -336,7 +353,7 @@ pub fn pa_pk_as_req_agile(
             cusec: Microseconds::ZERO,
             ctime: KerberosTime::now(),
             nonce: 1,
-            pa_checksum: None,
+            pa_checksum: body_sha1.map(|s| s.to_vec().into()),
         },
         client_public_value: Some(spki.into()),
         supported_cms_types: None,

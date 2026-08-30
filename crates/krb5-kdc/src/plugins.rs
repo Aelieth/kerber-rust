@@ -90,13 +90,19 @@ impl KdcPreauth for PkinitMod {
         _ikey: &ProtocolKey,
         etype: krb5_crypto::EncryptionType,
         as_req_der: &[u8],
-        _body_der: &[u8],
+        body_der: &[u8],
         cname: &PrincipalName,
     ) -> Result<Option<PreauthAction>, Error> {
-        Ok(
-            process_pkinit(store, padata, etype, as_req_der, cname, store.realm())?
-                .map(|(key, pa)| PreauthAction::Pkinit { key, pa }),
-        )
+        Ok(process_pkinit(
+            store,
+            padata,
+            etype,
+            as_req_der,
+            body_der,
+            cname,
+            store.realm(),
+        )?
+        .map(|(key, pa)| PreauthAction::Pkinit { key, pa }))
     }
 }
 
