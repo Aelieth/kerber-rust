@@ -1,4 +1,4 @@
-//! AS-REQ / AS-REP with PA-ENC-TIMESTAMP preauthentication.
+//! AS-REQ / AS-REP with PA-ENC-TIMESTAMP or SPAKE preauthentication.
 
 use std::time::Instant;
 
@@ -11,6 +11,7 @@ use krb5_types::{
 };
 
 use crate::error::Error;
+use crate::preauth::{pa_spake_response, pa_spake_support};
 use crate::transport::{KdcAddr, exchange};
 
 /// Successful AS exchange: TGT plus session key.
@@ -40,6 +41,8 @@ pub struct AsRequest<'a> {
     pub password: &'a [u8],
     /// KDC address.
     pub kdc: &'a KdcAddr,
+    /// Use PA-SPAKE (151, P-256) instead of PA-ENC-TIMESTAMP.
+    pub want_spake: bool,
 }
 
 /// Obtain a TGT. Sends a bare AS-REQ first; if the KDC requires preauth,
@@ -69,6 +72,7 @@ pub fn as_exchange_key(
             realm,
             password: b"",
             kdc,
+            want_spake: false,
         },
         keys,
     )
@@ -99,7 +103,16 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
         .add_hours(10)
         .unwrap_or_else(|_| KerberosTime::now());
 
-    let first = build_as_req(&req.cname, req.realm, nonce, till.clone(), None, &etypes)?;
+    let support = req.want_spake.then(pa_spake_support);
+    let first_pa = support.clone().map(|s| vec![s]);
+    let first = build_as_req(
+        &req.cname,
+        req.realm,
+        nonce,
+        till.clone(),
+        first_pa,
+        &etypes,
+    )?;
     let wire = encode(&first)?;
     let reply = exchange(req.kdc, &wire)?;
 
@@ -118,11 +131,22 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
                     finish_as_rep_keys(rep, nonce, keys, req.password, &req.cname, req.realm)
                 }
                 KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
-                    continue_preauth(req, keys, nonce, till, &etypes, &e, Some(&skew_time))
+                    if req.want_spake {
+                        continue_spake(req, keys, nonce, till, &etypes, &e)
+                    } else {
+                        continue_preauth(req, keys, nonce, till, &etypes, &e, Some(&skew_time))
+                    }
                 }
                 KdcMsg::Error(e) => classify_kdc_error(&e),
                 KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
             }
+        }
+        KdcMsg::Error(e)
+            if req.want_spake
+                && (e.error_code == err::PREAUTH_REQUIRED
+                    || e.error_code == err::MORE_PREAUTH_DATA_REQUIRED) =>
+        {
+            continue_spake(req, keys, nonce, till, &etypes, &e)
         }
         KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
             continue_preauth(req, keys, nonce, till, &etypes, &e, None)
@@ -259,6 +283,124 @@ fn continue_preauth(
         }
         KdcMsg::Error(e) => classify_kdc_error(&e),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
+    }
+}
+
+fn continue_spake(
+    req: &AsRequest<'_>,
+    keys: &[ProtocolKey],
+    nonce: u32,
+    till: KerberosTime,
+    etypes: &[i32],
+    err: &KrbError,
+) -> Result<AsOutcome, Error> {
+    let support = pa_spake_support();
+    let method = method_from_error(err)?;
+    if spake_challenge(&method)?.is_some() {
+        return send_spake_response(req, keys, nonce, till, etypes, err, &support);
+    }
+    let mut padata = vec![support.clone()];
+    if let Some(c) = find_pa(&method, pa::FX_COOKIE) {
+        padata.push(c.clone());
+    }
+    let second = build_as_req(
+        &req.cname,
+        req.realm,
+        nonce,
+        till.clone(),
+        Some(padata),
+        etypes,
+    )?;
+    let wire = encode(&second)?;
+    let reply = exchange(req.kdc, &wire)?;
+    match classify(&reply)? {
+        KdcMsg::AsRep(rep) => {
+            finish_as_rep_keys(rep, nonce, keys, req.password, &req.cname, req.realm)
+        }
+        KdcMsg::Error(e)
+            if e.error_code == err::PREAUTH_REQUIRED
+                || e.error_code == err::MORE_PREAUTH_DATA_REQUIRED =>
+        {
+            send_spake_response(req, keys, nonce, till, etypes, &e, &support)
+        }
+        KdcMsg::Error(e) => classify_kdc_error(&e),
+        KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
+    }
+}
+
+fn send_spake_response(
+    req: &AsRequest<'_>,
+    keys: &[ProtocolKey],
+    nonce: u32,
+    till: KerberosTime,
+    etypes: &[i32],
+    err: &KrbError,
+    support: &PaData,
+) -> Result<AsOutcome, Error> {
+    let method = method_from_error(err)?;
+    let (spa, chal) = spake_challenge(&method)?
+        .ok_or_else(|| Error::ReplyMismatch("SPAKE challenge missing".into()))?;
+    if chal.group != krb5_types::spake::GROUP_P256 {
+        return Err(Error::ReplyMismatch(format!(
+            "SPAKE group {} (want P-256)",
+            chal.group
+        )));
+    }
+    let cookie = find_pa(&method, pa::FX_COOKIE)
+        .cloned()
+        .ok_or_else(|| Error::ReplyMismatch("SPAKE FX_COOKIE missing".into()))?;
+    let (etype, salt, params) = select_s2k(err, &req.cname, req.realm)?;
+    let ikey = pick_key(keys, Some(etype)).map_or_else(
+        || string_to_key(etype, req.password, &salt, params.as_deref()),
+        Ok,
+    )?;
+    let mut req2 = build_as_req(&req.cname, req.realm, nonce, till, None, etypes)?;
+    let body_der = encode(&req2.0.req_body)?;
+    let (resp, k0) = pa_spake_response(
+        &ikey,
+        support.padata_value.as_ref(),
+        spa.padata_value.as_ref(),
+        chal.pubkey.as_ref(),
+        &body_der,
+    )?;
+    req2.0.padata = Some(vec![resp, cookie]);
+    let wire = encode(&req2)?;
+    let reply = exchange(req.kdc, &wire)?;
+    match classify(&reply)? {
+        KdcMsg::AsRep(rep) => finish_as_rep(
+            rep,
+            nonce,
+            Some(k0),
+            req.password,
+            &req.cname,
+            req.realm,
+            true,
+        ),
+        KdcMsg::Error(e) => classify_kdc_error(&e),
+        KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
+    }
+}
+
+fn method_from_error(err: &KrbError) -> Result<MethodData, Error> {
+    let Some(ed) = &err.e_data else {
+        return Ok(Vec::new());
+    };
+    decode(ed.as_ref()).map_err(Error::from)
+}
+
+fn find_pa(method: &[PaData], ty: i32) -> Option<&PaData> {
+    method.iter().find(|p| p.padata_type == ty)
+}
+
+fn spake_challenge(
+    method: &[PaData],
+) -> Result<Option<(PaData, krb5_types::spake::SpakeChallenge)>, Error> {
+    let Some(p) = find_pa(method, pa::SPAKE) else {
+        return Ok(None);
+    };
+    match decode::<krb5_types::spake::PaSpake>(p.padata_value.as_ref())? {
+        krb5_types::spake::PaSpake::Challenge(c) => Ok(Some((p.clone(), c))),
+        _ => Ok(None),
     }
 }
 

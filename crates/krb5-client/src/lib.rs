@@ -48,7 +48,30 @@ pub fn kinit(
     ccache_path: impl AsRef<Path>,
     service: Option<&str>,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
-    let result = kinit_inner(kdc, principal, password, ccache_path.as_ref(), service);
+    kinit_ex(kdc, principal, password, ccache_path, service, false)
+}
+
+/// [`kinit`] with a preauth mode (`want_spake` = PA-SPAKE P-256).
+///
+/// # Errors
+///
+/// Protocol or I/O errors. The password buffer is zeroized before return.
+pub fn kinit_ex(
+    kdc: &KdcAddr,
+    principal: &str,
+    password: &mut [u8],
+    ccache_path: impl AsRef<Path>,
+    service: Option<&str>,
+    want_spake: bool,
+) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
+    let result = kinit_inner(
+        kdc,
+        principal,
+        password,
+        ccache_path.as_ref(),
+        service,
+        want_spake,
+    );
     password.zeroize();
     result
 }
@@ -59,6 +82,7 @@ fn kinit_inner(
     password: &[u8],
     ccache_path: &Path,
     service: Option<&str>,
+    want_spake: bool,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
     let (cname, realm_s) = parse_principal(principal)?;
     let resolved = resolve_kdc(&realm_s, kdc);
@@ -67,6 +91,7 @@ fn kinit_inner(
         realm: &realm_s,
         password,
         kdc: &resolved,
+        want_spake,
     })?;
     let mut creds = vec![tgt_cred(
         &as_out.crealm,

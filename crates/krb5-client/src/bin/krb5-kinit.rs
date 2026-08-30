@@ -1,13 +1,13 @@
 //! Obtain a TGT from a KDC and write an MIT FILE ccache.
 //!
-//! Usage: krb5-kinit <kdc-host> <user@REALM> <ccache-path> [service]
+//! Usage: krb5-kinit [--spake] <kdc-host> <user@REALM> <ccache-path> [service]
 //!
 //! Password is read from `KRB5_PASSWORD` or stdin. Never from argv.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use krb5_client::kinit;
+use krb5_client::kinit_ex;
 use krb5_config::env_password;
 use krb5_protocol::KdcAddr;
 
@@ -17,9 +17,18 @@ fn main() {
         .with_env_filter("krb5_crypto=info,krb5_asn1=info,krb5_protocol=info,krb5_client=info")
         .try_init();
 
-    let mut args = std::env::args().skip(1);
+    let mut want_spake = false;
+    let mut positional = Vec::new();
+    for a in std::env::args().skip(1) {
+        if a == "--spake" {
+            want_spake = true;
+        } else {
+            positional.push(a);
+        }
+    }
+    let mut args = positional.into_iter();
     let host = args.next().unwrap_or_else(|| {
-        eprintln!("usage: krb5-kinit <kdc-host> <user@REALM> <ccache-path> [service]");
+        eprintln!("usage: krb5-kinit [--spake] <kdc-host> <user@REALM> <ccache-path> [service]");
         std::process::exit(2);
     });
     let principal = args.next().unwrap_or_else(|| {
@@ -51,12 +60,13 @@ fn main() {
     } else {
         KdcAddr::new(host)
     };
-    match kinit(
+    match kinit_ex(
         &addr,
         &principal,
         &mut password,
         &ccache,
         service.as_deref(),
+        want_spake,
     ) {
         Ok(r) => {
             println!(

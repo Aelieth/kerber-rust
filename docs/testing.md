@@ -83,7 +83,9 @@ raw PDUs under `tests/traces/`.
 SPAKE: `scripts/spake-gate.sh` runs MIT `kinit` against the Rust KDC
 with `preferred_preauth_types = 151` and `spake_preauth_groups = P-256`.
 It fails unless TRACE contains `pa_type` 151 and group 2, and `klist`
-shows `user@KERBER.TEST`.
+shows `user@KERBER.TEST`. Reverse: `scripts/rust-kinit-spake-gate.sh`
+is Rust `kinit --spake` against MIT KDC (`spake_preauth_groups = P-256`)
+and MIT `klist` `user@KERBER.TEST`.
 
 SHA-2: `scripts/sha2-gate.sh` is a live MIT 1.22.2 gate. It copies the
 Rust KDC into the MIT image, points `KRB5_CONFIG` at `/etc/krb5-sha2.conf`

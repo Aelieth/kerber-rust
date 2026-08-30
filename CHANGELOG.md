@@ -105,6 +105,8 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   replay cache; RFC 8009 IOV verifies Ki HMAC before CTS decrypt;
   no-AD `unwrap_iov` is AES-only; SPNEGO duplicate NegToken fields
   are `Truncated`; `krb5-gss-accept` sets a 30s socket timeout.
+  Rust `kinit --spake` obtains a TGT from MIT 1.22.2 via PA-SPAKE
+  151 / P-256 (`scripts/rust-kinit-spake-gate.sh`).
 
 - KDB extension surface: `PrincipalRead` / `PrincipalWrite` /
   `StoreLifecycle`. Dump-v7 is the default backend; `db_library=memory`
