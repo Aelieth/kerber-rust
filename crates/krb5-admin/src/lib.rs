@@ -9,7 +9,7 @@ mod kadm5;
 mod kprop;
 mod listen;
 
-use krb5_kdc::{Acl, AdminOp, NamedPolicy, PrincipalStore};
+use krb5_kdc::{Acl, AdminOp, KDB_REQUIRES_PRE_AUTH, NamedPolicy, PrincipalStore};
 use krb5_protocol::{Keytab, ReplayCache, verify_ap_req};
 use krb5_types::PrincipalName;
 use thiserror::Error;
@@ -42,6 +42,94 @@ pub fn load_acl_file(actor: &str, path: Option<&std::path::Path>) -> Result<Acl,
         }
         None => Ok(Acl::allow_admin(actor)),
     }
+}
+
+/// Parsed `kadmin.local` verb operands (`-randkey` / `-pw` / `+attr`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KadminArgs {
+    /// Principal spec (no flags).
+    pub name: String,
+    /// `-randkey`.
+    pub randkey: bool,
+    /// `-norandkey` (ktadd).
+    pub norandkey: bool,
+    /// `-pw`.
+    pub pw: Option<String>,
+    /// `-policy`.
+    pub policy: Option<String>,
+    /// `ktadd -k`.
+    pub ktpath: Option<String>,
+    /// `+attr` bits.
+    pub attr_set: u32,
+    /// `-attr` bits.
+    pub attr_clear: u32,
+}
+
+/// MIT `+requires_preauth` (and the matching `-requires_preauth` clear).
+#[must_use]
+pub fn kadmin_attr_bit(name: &str) -> Option<u32> {
+    match name {
+        "requires_preauth" => Some(KDB_REQUIRES_PRE_AUTH),
+        _ => None,
+    }
+}
+
+/// Parse flags after the verb. Unknown `-foo` / `+foo` is an error.
+///
+/// # Errors
+///
+/// Missing principal, missing option value, or unknown flag.
+pub fn parse_kadmin_args(parts: &[&str]) -> Result<KadminArgs, String> {
+    let mut out = KadminArgs::default();
+    let mut rest = Vec::new();
+    let mut i = 0;
+    while i < parts.len() {
+        let p = parts[i];
+        match p {
+            "-randkey" => out.randkey = true,
+            "-norandkey" => out.norandkey = true,
+            "-pw" => {
+                i += 1;
+                out.pw = Some(
+                    parts
+                        .get(i)
+                        .copied()
+                        .ok_or("-pw needs a password")?
+                        .to_owned(),
+                );
+            }
+            "-policy" => {
+                i += 1;
+                out.policy = Some(
+                    parts
+                        .get(i)
+                        .copied()
+                        .ok_or("-policy needs a name")?
+                        .to_owned(),
+                );
+            }
+            "-k" => {
+                i += 1;
+                out.ktpath = Some(parts.get(i).copied().ok_or("-k needs a path")?.to_owned());
+            }
+            s if s.starts_with('+') => {
+                let bit = kadmin_attr_bit(&s[1..]).ok_or_else(|| format!("unknown flag {s}"))?;
+                out.attr_set |= bit;
+            }
+            s if let Some(bit) = s.strip_prefix('-').and_then(kadmin_attr_bit) => {
+                out.attr_clear |= bit;
+            }
+            s if s.starts_with('-') => return Err(format!("unknown flag {s}")),
+            other => rest.push(other),
+        }
+        i += 1;
+    }
+    match rest.len() {
+        0 => return Err("missing principal".into()),
+        1 => rest[0].clone_into(&mut out.name),
+        _ => return Err("extra argument".into()),
+    }
+    Ok(out)
 }
 
 /// Admin error.
@@ -135,6 +223,38 @@ impl<'a> AdminSession<'a> {
             .map_err(Error::from)
     }
 
+    /// Create a random-key principal (`addprinc -randkey`).
+    ///
+    /// # Errors
+    ///
+    /// ACL or already exists.
+    pub fn create_randkey(&mut self, name: &PrincipalName) -> Result<(), Error> {
+        self.store
+            .create_host(self.acl, &self.actor, name)
+            .map_err(Error::from)
+    }
+
+    /// Rotate keys (`cpw -randkey` / default `ktadd`).
+    ///
+    /// # Errors
+    ///
+    /// ACL or not found.
+    pub fn chrand(&mut self, name: &PrincipalName) -> Result<(), Error> {
+        self.acl
+            .check(&self.actor, AdminOp::ChangePassword)
+            .map_err(Error::from)?;
+        self.store.chrand(name).map(|_| ()).map_err(Error::from)
+    }
+
+    /// Stored `attributes` word.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    pub fn principal_attributes(&self, name: &PrincipalName) -> Result<u32, Error> {
+        Ok(self.store.get_name(name).ok_or(Error::NotFound)?.attributes)
+    }
+
     /// Delete a principal (ACL `delete`).
     ///
     /// # Errors
@@ -223,6 +343,20 @@ impl<'a> AdminSession<'a> {
             .map_err(Error::from)?;
         self.store
             .apply_admin_fields(name, attributes, None, None, None, None, false)
+            .map_err(Error::from)
+    }
+
+    /// `modprinc -policy`.
+    ///
+    /// # Errors
+    ///
+    /// ACL or not found.
+    pub fn set_policy(&mut self, name: &PrincipalName, policy: &str) -> Result<(), Error> {
+        self.acl
+            .check(&self.actor, AdminOp::Modify)
+            .map_err(Error::from)?;
+        self.store
+            .apply_admin_fields(name, None, None, None, None, Some(policy.to_owned()), false)
             .map_err(Error::from)
     }
 
@@ -1255,5 +1389,21 @@ mod tests {
         });
         let got = kpasswd_udp_exchange_to(dest, b"req").expect("kdc reply");
         assert_eq!(got, b"kdc-ok");
+    }
+
+    #[test]
+    fn parse_kadmin_args_flags() {
+        let a = parse_kadmin_args(&["-randkey", "svc"]).unwrap();
+        assert!(a.randkey);
+        assert_eq!(a.name, "svc");
+        let a = parse_kadmin_args(&["+requires_preauth", "user"]).unwrap();
+        assert_eq!(a.attr_set, KDB_REQUIRES_PRE_AUTH);
+        assert_eq!(a.name, "user");
+        assert!(parse_kadmin_args(&["-bogus", "user"]).is_err());
+        assert!(parse_kadmin_args(&["-randkey"]).is_err());
+        let a = parse_kadmin_args(&["-k", "/tmp/x.keytab", "-norandkey", "host/x"]).unwrap();
+        assert_eq!(a.ktpath.as_deref(), Some("/tmp/x.keytab"));
+        assert!(a.norandkey);
+        assert_eq!(a.name, "host/x");
     }
 }

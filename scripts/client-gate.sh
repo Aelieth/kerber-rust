@@ -75,6 +75,22 @@ MKVNO="$(docker exec "$NAME" klist -c /tmp/krb5cc_kvno)"
 echo "$MKVNO"
 echo "$MKVNO" | grep -q 'host/testhost.kerber.test'
 
+echo "==== Rust kvno keeps MIT X-CACHECONF entries ===="
+docker exec "$NAME" sh -c 'echo userpassword | kinit -c /tmp/krb5cc_lossless user@KERBER.TEST'
+BEFORE="$(docker exec "$NAME" sh -c 'wc -c < /tmp/krb5cc_lossless')"
+echo "bytes_before=$BEFORE"
+KCONF0="$(docker exec "$NAME" klist -C -c /tmp/krb5cc_lossless)"
+echo "$KCONF0"
+echo "$KCONF0" | grep -q '^config:'
+docker exec "$NAME" /tmp/krb5-kvno -c /tmp/krb5cc_lossless 127.0.0.1 host/testhost.kerber.test
+AFTER="$(docker exec "$NAME" sh -c 'wc -c < /tmp/krb5cc_lossless')"
+echo "bytes_after=$AFTER"
+test "$AFTER" -ge "$BEFORE"
+KCONF1="$(docker exec "$NAME" klist -C -c /tmp/krb5cc_lossless)"
+echo "$KCONF1"
+echo "$KCONF1" | grep -q '^config:'
+echo "$KCONF1" | grep -q 'host/testhost.kerber.test'
+
 echo "==== MIT kvno then Rust klist ===="
 docker exec "$NAME" sh -c 'echo userpassword | kinit -c /tmp/krb5cc_mitkvno user@KERBER.TEST'
 docker exec "$NAME" kvno -c /tmp/krb5cc_mitkvno host/testhost.kerber.test

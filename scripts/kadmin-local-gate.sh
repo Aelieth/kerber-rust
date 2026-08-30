@@ -88,6 +88,34 @@ SLASH="$(docker exec \
 echo "$SLASH"
 echo "$SLASH" | grep -q 'Principal: host/slashhost@KERBER.TEST'
 
+echo "==== addprinc -randkey / ktadd principals before kadmind ===="
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey randsvc'
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey ktone'
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey kttwo'
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'modprinc -requires_preauth extra2'
+set +e
+UNK="$(docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -bogus nosuch' 2>&1)"
+unkrc=$?
+set -e
+echo "$UNK"
+test "$unkrc" -ne 0
+echo "$UNK" | grep -qi 'unknown flag'
+
 echo "==== KRB5_ACL_FILE unreadable is a hard error ===="
 set +e
 ACLERR="$(docker exec \
@@ -159,5 +187,96 @@ echo "$MITSLASH" | grep -qi 'does not exist' && {
     log "kadmin.local.gate" "error" ',"error":"MIT did not find host/slashhost as two components"'
     exit 1
 }
-log "kadmin.local.gate" "ok" ',"principal":"extra2@KERBER.TEST,host/slashhost@KERBER.TEST"'
+
+echo "==== MIT getprinc randsvc (vno 1) + kinit -k ===="
+MITRAND="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc randsvc')"
+echo "$MITRAND"
+echo "$MITRAND" | grep -q 'randsvc@KERBER.TEST'
+echo "$MITRAND" | grep -Eqi 'vno[[:space:]]*1'
+echo "$MITGET" | grep -q 'REQUIRES_PRE_AUTH' && {
+    echo "extra2 should have been cleared of REQUIRES_PRE_AUTH before kadmind" >&2
+    exit 1
+}
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'ktadd -norandkey -k /tmp/rand.keytab randsvc'
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" \
+    kinit -k -t /tmp/rand.keytab randsvc@KERBER.TEST
+echo "kinit -k randsvc ok"
+
+echo "==== modprinc +requires_preauth and ktadd merge ===="
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'modprinc +requires_preauth extra2'
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'ktadd -k /tmp/both.keytab ktone'
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'ktadd -k /tmp/both.keytab kttwo'
+KLISTK="$(docker exec "$NAME" klist -k /tmp/both.keytab)"
+echo "$KLISTK"
+echo "$KLISTK" | grep -q 'ktone@KERBER.TEST'
+echo "$KLISTK" | grep -q 'kttwo@KERBER.TEST'
+
+docker exec "$NAME" sh -c 'kill $(pidof krb5-kadmind) 2>/dev/null || true'
+sleep 0.3
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+    "$NAME" sh -c '/tmp/krb5-kadmind 127.0.0.1:749 >/tmp/kadmind.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/kadmind.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kadmind.log >&2 || true
+    log "kadmin.local.gate" "error" ',"error":"kadmind did not listen after restart"'
+    exit 1
+fi
+MITPRE="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc extra2')"
+echo "$MITPRE"
+echo "$MITPRE" | grep -q 'REQUIRES_PRE_AUTH'
+MITKV="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc ktone')"
+echo "$MITKV"
+echo "$MITKV" | grep -Eqi 'vno[[:space:]]*2'
+
+echo "==== listprincs does not clobber concurrent kadmind create ===="
+docker exec "$NAME" sh -c '
+  rm -f /tmp/klfifo
+  mkfifo /tmp/klfifo
+  env KRB5_KDC_DB=/tmp/principal KRB5_KDC_STASH=/tmp/stash \
+    /tmp/krb5-kadmin-local </tmp/klfifo >/tmp/kl.out 2>/tmp/kl.err &
+  echo $! >/tmp/kl.pid
+  exec 3>/tmp/klfifo
+  sleep 0.3
+  env KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    kadmin -p admin@KERBER.TEST -w adminpassword -q "addprinc -pw race-pw raceprinc"
+  echo listprincs >&3
+  echo q >&3
+  exec 3>&-
+  wait "$(cat /tmp/kl.pid)" || true
+'
+RACE="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc raceprinc')"
+echo "$RACE"
+echo "$RACE" | grep -q 'raceprinc@KERBER.TEST'
+echo "$RACE" | grep -qi 'does not exist' && {
+    log "kadmin.local.gate" "error" ',"error":"listprincs clobbered concurrent kadmind principal"'
+    exit 1
+}
+
+log "kadmin.local.gate" "ok" ',"principal":"extra2@KERBER.TEST,host/slashhost@KERBER.TEST,randsvc,ktone,kttwo,raceprinc"'
 exit 0

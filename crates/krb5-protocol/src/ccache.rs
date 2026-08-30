@@ -48,8 +48,11 @@ impl CcacheCred {
 pub struct FileCcache {
     /// Default client principal.
     pub primary: (Realm, PrincipalName),
-    /// Credentials in file order.
+    /// Parsed credentials (unknown etypes omitted).
     pub creds: Vec<CcacheCred>,
+    /// Unparsed records (config / unknown etype) with how many
+    /// parsed creds preceded each blob, so rewrites stay lossless.
+    pub unparsed: Vec<(usize, Vec<u8>)>,
 }
 
 impl FileCcache {
@@ -63,7 +66,19 @@ impl FileCcache {
         w.u16(0x0504);
         w.u16(0);
         write_principal(&mut w, &self.primary.0, &self.primary.1);
-        for c in &self.creds {
+        let mut cred_i = 0;
+        let mut unp = 0;
+        loop {
+            if unp < self.unparsed.len()
+                && (cred_i >= self.creds.len() || self.unparsed[unp].0 <= cred_i)
+            {
+                w.buf.extend_from_slice(&self.unparsed[unp].1);
+                unp += 1;
+                continue;
+            }
+            let Some(c) = self.creds.get(cred_i) else {
+                break;
+            };
             write_principal(&mut w, &c.client.0, &c.client.1);
             write_principal(&mut w, &c.server.0, &c.server.1);
             w.u16(u16::try_from(c.key.etype().to_iana()).unwrap_or(0));
@@ -78,6 +93,7 @@ impl FileCcache {
             w.u32(0);
             w.data(&c.ticket);
             w.data(&[]);
+            cred_i += 1;
         }
         Ok(w.buf)
     }
@@ -109,7 +125,9 @@ impl FileCcache {
         i = i.saturating_add(usize::from(hdr_len));
         let primary = read_principal(bytes, &mut i)?;
         let mut creds = Vec::new();
+        let mut unparsed = Vec::new();
         while i < bytes.len() {
+            let start = i;
             let client = read_principal(bytes, &mut i)?;
             let server = read_principal(bytes, &mut i)?;
             let etype_n = i32::from(take_u16(bytes, &mut i)?);
@@ -132,13 +150,14 @@ impl FileCcache {
             }
             let ticket = take_data(bytes, &mut i)?;
             let _second = take_data(bytes, &mut i)?;
-            // MIT kinit writes X-CACHECONF with etype 0 and an empty key.
-            // Skip those (and any other unknown etype) instead of failing the
-            // whole FILE so real tickets remain readable.
+            // MIT kinit writes X-CACHECONF with etype 0. Keep the raw
+            // record so a rewrite does not drop pa_type / refresh_time.
             let Ok(etype) = EncryptionType::known(etype_n) else {
+                unparsed.push((creds.len(), bytes[start..i].to_vec()));
                 continue;
             };
             let Ok(key) = ProtocolKey::from_bytes(etype, &keybytes) else {
+                unparsed.push((creds.len(), bytes[start..i].to_vec()));
                 continue;
             };
             creds.push(CcacheCred {
@@ -153,7 +172,11 @@ impl FileCcache {
                 ticket,
             });
         }
-        Ok(Self { primary, creds })
+        Ok(Self {
+            primary,
+            creds,
+            unparsed,
+        })
     }
 
     /// Non-config credentials (list).

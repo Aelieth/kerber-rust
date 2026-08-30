@@ -9,8 +9,8 @@
 use std::io::{self, BufRead};
 use std::path::PathBuf;
 
-use krb5_admin::{AdminSession, load_acl_file};
-use krb5_kdc::{load_store, save_store};
+use krb5_admin::{AdminSession, KadminArgs, load_acl_file, parse_kadmin_args};
+use krb5_kdc::load_store;
 use krb5_protocol::{Keytab, parse_principal};
 use krb5_types::PrincipalName;
 
@@ -64,10 +64,6 @@ fn main() {
         }
     }
     drop(sess);
-    save_store(&store, &db, &stash).unwrap_or_else(|e| {
-        eprintln!("kadmin.local: save: {e}");
-        std::process::exit(1);
-    });
 }
 
 fn db_and_stash() -> (PathBuf, PathBuf) {
@@ -104,11 +100,16 @@ fn run(sess: &mut AdminSession<'_>, line: &str) -> Result<(), String> {
             Ok(())
         }
         Some("addprinc" | "add_principal") => {
-            let spec = parts.last().ok_or("addprinc <name>")?;
-            let name = parse_name(sess, spec)?;
-            let pw = password()?;
-            sess.create_password(&name, pw.as_bytes())
-                .map_err(|e| e.to_string())
+            let a = parse_kadmin_args(&parts[1..])?;
+            let name = parse_name(sess, &a.name)?;
+            if a.randkey {
+                sess.create_randkey(&name).map_err(|e| e.to_string())?;
+            } else {
+                let pw = a.pw.clone().map_or_else(password, Ok)?;
+                sess.create_password(&name, pw.as_bytes())
+                    .map_err(|e| e.to_string())?;
+            }
+            apply_optional_fields(sess, &name, &a)
         }
         Some("delprinc" | "delete_principal") => {
             let spec = parts.get(1).ok_or("delprinc <name>")?;
@@ -116,29 +117,39 @@ fn run(sess: &mut AdminSession<'_>, line: &str) -> Result<(), String> {
             sess.delete(&name).map_err(|e| e.to_string())
         }
         Some("cpw" | "change_password") => {
-            let spec = parts.last().ok_or("cpw <name>")?;
-            let name = parse_name(sess, spec)?;
-            let pw = password()?;
-            sess.change_password(&name, pw.as_bytes())
-                .map_err(|e| e.to_string())
+            let a = parse_kadmin_args(&parts[1..])?;
+            let name = parse_name(sess, &a.name)?;
+            if a.randkey {
+                sess.chrand(&name).map_err(|e| e.to_string())
+            } else {
+                let pw = a.pw.clone().map_or_else(password, Ok)?;
+                sess.change_password(&name, pw.as_bytes())
+                    .map_err(|e| e.to_string())
+            }
         }
         Some("ktadd") => {
-            let spec = parts.last().ok_or("ktadd <name>")?;
-            let ktpath = parts
-                .windows(2)
-                .find(|w| w[0] == "-k")
-                .and_then(|w| w.get(1))
-                .ok_or("ktadd -k <file> <name>")?;
-            let name = parse_name(sess, spec)?;
-            let kt: Keytab = sess.ktadd(&name).map_err(|e| e.to_string())?;
-            kt.write_file(std::path::Path::new(*ktpath))
-                .map_err(|e| e.to_string())
+            let a = parse_kadmin_args(&parts[1..])?;
+            let ktpath = a.ktpath.as_deref().ok_or("ktadd -k <file> <name>")?;
+            let name = parse_name(sess, &a.name)?;
+            if !a.norandkey {
+                sess.chrand(&name).map_err(|e| e.to_string())?;
+            }
+            let added: Keytab = sess.ktadd(&name).map_err(|e| e.to_string())?;
+            let path = std::path::Path::new(ktpath);
+            let mut kt = std::fs::read(path)
+                .ok()
+                .and_then(|b| Keytab::parse(&b).ok())
+                .unwrap_or_default();
+            kt.entries.extend(added.entries);
+            if kt.version == 0 {
+                kt.version = 0x0502;
+            }
+            kt.write_file(path).map_err(|e| e.to_string())
         }
         Some("modprinc" | "modify_principal") => {
-            let spec = parts.last().ok_or("modprinc <name>")?;
-            let name = parse_name(sess, spec)?;
-            sess.modify_attributes(&name, None)
-                .map_err(|e| e.to_string())
+            let a = parse_kadmin_args(&parts[1..])?;
+            let name = parse_name(sess, &a.name)?;
+            apply_optional_fields(sess, &name, &a)
         }
         Some("addpol" | "add_policy") => {
             let n = parts.get(1).ok_or("addpol <name>")?;
@@ -175,4 +186,22 @@ fn parse_name(sess: &AdminSession<'_>, spec: &str) -> Result<PrincipalName, Stri
 
 fn password() -> Result<String, String> {
     std::env::var("KRB5_PASSWORD").map_err(|_| "set KRB5_PASSWORD".into())
+}
+
+fn apply_optional_fields(
+    sess: &mut AdminSession<'_>,
+    name: &PrincipalName,
+    a: &KadminArgs,
+) -> Result<(), String> {
+    if a.attr_set != 0 || a.attr_clear != 0 {
+        let mut attrs = sess.principal_attributes(name).map_err(|e| e.to_string())?;
+        attrs |= a.attr_set;
+        attrs &= !a.attr_clear;
+        sess.modify_attributes(name, Some(attrs))
+            .map_err(|e| e.to_string())?;
+    }
+    if let Some(pol) = &a.policy {
+        sess.set_policy(name, pol).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }

@@ -242,7 +242,10 @@ when that oracle is absent.
   extra2 and `host/slashhost` on dump/stash; MIT `kadmin` getprinc
   names `extra2@KERBER.TEST` and `host/slashhost@KERBER.TEST` (slash
   is two name-string components). Set-but-unreadable `KRB5_ACL_FILE`
-  exits non-zero. Run twice.
+  exits non-zero. `-randkey` then MIT `getprinc` `vno 1` and
+  `kinit -k`; `+requires_preauth` on MIT `getprinc`; two `ktadd -k`
+  leave both principals (`klist -k`); `listprincs` must not clobber a
+  concurrent `kadmind` `addprinc`. Run twice.
 - `scripts/kpasswd-gate.sh` — MIT `kpasswd` against kadmind UDP/TCP
   464 (`kadmin/changepw`), then `kinit` with the new password; old
   password must fail; second `kpasswd` + `kinit`; then Rust

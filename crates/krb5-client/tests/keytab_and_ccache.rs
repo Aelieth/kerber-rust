@@ -127,6 +127,12 @@ fn file_ccache_skips_etype_zero_config_and_keeps_tickets() {
     let cc = FileCcache::parse(&b).expect("etype 0 must not fail the FILE");
     assert_eq!(cc.creds.len(), 1);
     assert_eq!(cc.creds[0].server.1.components_joined(), "host/svc");
+    assert_eq!(cc.unparsed.len(), 1);
+    let out = cc.to_bytes().expect("rewrite");
+    assert!(
+        out.windows(12).any(|w| w == b"X-CACHECONF:"),
+        "rewrite must keep MIT config principal"
+    );
 }
 
 #[test]

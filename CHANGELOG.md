@@ -161,6 +161,13 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   (`scripts/rust-kpasswd-mit-gate.sh`); new-password `kinit`
   succeeds and the old password fails.
 
+- `kvno` FILE rewrites keep unparsed MIT `X-CACHECONF` records
+  (`klist -C` `config:`). `kadmin.local` honors `-randkey` / `-pw` /
+  `-policy` / `+|-requires_preauth` and rejects unknown flags;
+  `ktadd` merges into an existing keytab and randomizes by default
+  (`-norandkey` keeps the key). `listprincs` no longer rewrites the
+  dump at exit.
+
 - kpasswd UDP accepts only the KDC it sent to and retries until the
   deadline; password and subkey buffers are zeroized. `kadmin.local`
   exits non-zero if `KRB5_ACL_FILE` is set and unreadable (not full

@@ -231,6 +231,7 @@ fn kinit_inner(
     let cache = FileCcache {
         primary: (as_out.crealm.clone(), as_out.cname.clone()),
         creds,
+        unparsed: Vec::new(),
     };
     cache.write_file(ccache_path)?;
     if let Some(e) = tgs_err {
