@@ -699,6 +699,24 @@ fn pkinit_signed_content_type_mismatch_is_refused() {
 }
 
 #[test]
+fn pkinit_two_authpacks_same_second_both_issue() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    store.enable_pkinit_ca().expect("PKINIT CA");
+    let ca = store.pkinit_ca().expect("CA").clone();
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let kp1 = p256_generate().expect("ecdh1");
+    let kp2 = p256_generate().expect("ecdh2");
+    let req1 = pkinit_as_req(cname.clone(), 452, |ck| {
+        pa_pk_as_req(&kp1.public, &ca, Some(ck)).expect("PA-PK-AS-REQ 1")
+    });
+    let req2 = pkinit_as_req(cname, 452, |ck| {
+        pa_pk_as_req(&kp2.public, &ca, Some(ck)).expect("PA-PK-AS-REQ 2")
+    });
+    krb5_kdc::issue_as(&store, &req1).expect("first AuthPack");
+    krb5_kdc::issue_as(&store, &req2).expect("second AuthPack same second");
+}
+
+#[test]
 fn pkinit_replayed_authpack_is_refused() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     store.enable_pkinit_ca().expect("PKINIT CA");

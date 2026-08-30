@@ -237,9 +237,11 @@ impl PrincipalName {
     /// Whether this name is `krbtgt/SOMETHING` (TGT / referral TGT).
     #[must_use]
     pub fn is_krbtgt(&self) -> bool {
-        self.name_string
-            .first()
-            .is_some_and(|p| p.as_bytes() == b"krbtgt")
+        self.name_string.len() == 2
+            && self
+                .name_string
+                .first()
+                .is_some_and(|p| p.as_bytes() == b"krbtgt")
     }
 
     /// Whether this is `krbtgt/{realm}` for `realm`.

@@ -11,6 +11,8 @@ IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-kadmin-gate"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
+SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-kadmin-gate}"
+mkdir -p "$SCRATCH"
 
 log() {
     printf '{"event":"%s","correlation_id":"%s","component":"kadmin-gate","outcome":"%s"%s}\n' \
@@ -192,7 +194,7 @@ CHR="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'ktadd -k /tmp/lockee.keytab lockee' 2>&1 || true)"
 echo "$CHR"
 if docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kinit -k -t /tmp/lockee.keytab lockee@KERBER.TEST 2>/tmp/lockee-kinit.err; then
+    "$NAME" kinit -k -t /tmp/lockee.keytab lockee@KERBER.TEST 2>"$SCRATCH/lockee-kinit.err"; then
     echo "lockdown ktadd leaked keys for kinit -k" >&2
     exit 1
 fi

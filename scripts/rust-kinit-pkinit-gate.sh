@@ -68,13 +68,27 @@ docker exec \
     "$NAME" sh -c '
         /tmp/krb5-kdc-export --test-realm --export-pkinit /tmp/pkinit 127.0.0.1:18888 >/tmp/pkinit-export.log 2>&1 &
         ep=$!
-        for _ in $(seq 1 50); do
-            [ -s /tmp/pkinit/kdc.pem ] && break
+        okpem=0
+        for _ in $(seq 1 200); do
+            if [ -s /tmp/pkinit/kdc.pem ]; then
+                okpem=1
+                break
+            fi
             sleep 0.1
         done
         kill "$ep" 2>/dev/null || true
         wait "$ep" 2>/dev/null || true
+        if [ "$okpem" != 1 ]; then
+            echo "pkinit export timed out" >&2
+            cat /tmp/pkinit-export.log >&2 || true
+            exit 1
+        fi
     '
+if ! docker exec "$NAME" test -s /tmp/pkinit/kdc.pem; then
+    log "pkinit.client.gate" "error" ',"error":"pkinit export timed out"'
+    docker exec "$NAME" cat /tmp/pkinit-export.log >&2 || true
+    exit 1
+fi
 docker exec "$NAME" grep -q 'BEGIN CERTIFICATE' /tmp/pkinit/ca.pem
 docker exec "$NAME" grep -q 'BEGIN CERTIFICATE' /tmp/pkinit/user.pem
 docker exec "$NAME" grep -q 'BEGIN EC PRIVATE KEY' /tmp/pkinit/user.pem

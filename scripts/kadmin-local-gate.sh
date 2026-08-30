@@ -194,7 +194,7 @@ MITRAND="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc randsvc')"
 echo "$MITRAND"
 echo "$MITRAND" | grep -q 'randsvc@KERBER.TEST'
-echo "$MITRAND" | grep -Eqi 'vno[[:space:]]*1'
+echo "$MITRAND" | grep -Eqi 'Key: vno[[:space:]]*1'
 echo "$MITGET" | grep -q 'REQUIRES_PRE_AUTH' && {
     echo "extra2 should have been cleared of REQUIRES_PRE_AUTH before kadmind" >&2
     exit 1

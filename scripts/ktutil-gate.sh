@@ -56,11 +56,16 @@ echo "$LIST"
 echo "$LIST" | grep -q 'user@KERBER.TEST'
 MIT_KVNO="$(echo "$MITK" | awk '/user@KERBER.TEST/{print $1; exit}')"
 RUST_KVNO="$(echo "$LIST" | awk '/user@KERBER.TEST/{print $2; exit}')"
+MIT_ET="$(echo "$MITK" | awk -F'[()]' '/user@KERBER.TEST/{print $2; exit}')"
+RUST_ET="$(echo "$LIST" | awk '/user@KERBER.TEST/{print $NF; exit}')"
+RUST_T="$(echo "$LIST" | awk '/user@KERBER.TEST/{for(i=1;i<=NF;i++) if($i ~ /^t=/){print substr($i,3); exit}}')"
 echo "mit_kvno=$MIT_KVNO rust_kvno=$RUST_KVNO"
+echo "mit_etype=$MIT_ET rust_etype=$RUST_ET"
+echo "rust_timestamp=$RUST_T"
 test "$MIT_KVNO" = "$RUST_KVNO"
-echo "$MITK" | grep -q 'aes'
-echo "$LIST" | grep -q 'aes'
-echo "$LIST" | grep -q ' t='
+test "$MIT_ET" = "$RUST_ET"
+test -n "$RUST_T"
+test "$RUST_T" -gt 0
 
 echo "==== Rust ktutil-written keytab MIT kinit -k ===="
 docker exec -e KRB5_PASSWORD=userpassword "$NAME" sh -c \
