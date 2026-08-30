@@ -32,6 +32,7 @@ krb5-config.workspace = true
 krb5-crypto.workspace = true
 krb5-log.workspace = true
 krb5-types.workspace = true
+nix = { workspace = true, features = ["fs"] }
 sha1.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

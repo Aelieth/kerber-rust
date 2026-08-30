@@ -620,6 +620,7 @@ dependencies = [
  "krb5-kdc",
  "krb5-log",
  "krb5-types",
+ "nix",
  "sha1",
  "thiserror",
  "tracing",

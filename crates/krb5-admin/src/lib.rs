@@ -215,12 +215,17 @@ impl<'a> AdminSession<'a> {
         }
     }
 
+    fn reload(&mut self) -> Result<(), Error> {
+        self.store.reload_if_stale().map_err(Error::from)
+    }
+
     /// Create a password principal (ACL `add`).
     ///
     /// # Errors
     ///
     /// [`Error::AclDenied`] when the actor is not permitted.
     pub fn create_password(&mut self, name: &PrincipalName, password: &[u8]) -> Result<(), Error> {
+        self.reload()?;
         self.store
             .create_password(self.acl, &self.actor, name, password)
             .map_err(Error::from)
@@ -232,6 +237,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// ACL or already exists.
     pub fn create_randkey(&mut self, name: &PrincipalName) -> Result<(), Error> {
+        self.reload()?;
         self.store
             .create_host(self.acl, &self.actor, name)
             .map_err(Error::from)
@@ -243,6 +249,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// ACL or not found.
     pub fn chrand(&mut self, name: &PrincipalName) -> Result<(), Error> {
+        self.reload()?;
         self.acl
             .check(&self.actor, AdminOp::ChangePassword)
             .map_err(Error::from)?;
@@ -264,6 +271,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// ACL or not found.
     pub fn delete(&mut self, name: &PrincipalName) -> Result<(), Error> {
+        self.reload()?;
         self.store
             .delete(self.acl, &self.actor, name)
             .map_err(Error::from)
@@ -275,6 +283,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// ACL, not found, or already exists.
     pub fn rename(&mut self, old: &PrincipalName, new: &PrincipalName) -> Result<(), Error> {
+        self.reload()?;
         self.store
             .rename(self.acl, &self.actor, old, new)
             .map_err(Error::from)
@@ -303,6 +312,7 @@ impl<'a> AdminSession<'a> {
         rotate: bool,
         write: impl FnOnce(&Keytab) -> Result<(), String>,
     ) -> Result<Keytab, Error> {
+        self.reload()?;
         self.acl
             .check(&self.actor, AdminOp::Ktadd)
             .map_err(Error::from)?;
@@ -327,6 +337,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// ACL denied or principal missing.
     pub fn change_password(&mut self, name: &PrincipalName, password: &[u8]) -> Result<(), Error> {
+        self.reload()?;
         let target = format!("{}@{}", name.components_joined(), self.store.realm());
         if self.actor != target {
             self.acl
@@ -368,6 +379,7 @@ impl<'a> AdminSession<'a> {
         name: &PrincipalName,
         attributes: Option<u32>,
     ) -> Result<(), Error> {
+        self.reload()?;
         self.acl
             .check(&self.actor, AdminOp::Modify)
             .map_err(Error::from)?;
@@ -382,6 +394,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// ACL or not found.
     pub fn set_policy(&mut self, name: &PrincipalName, policy: &str) -> Result<(), Error> {
+        self.reload()?;
         self.acl
             .check(&self.actor, AdminOp::Modify)
             .map_err(Error::from)?;
@@ -392,6 +405,7 @@ impl<'a> AdminSession<'a> {
 
     /// `addpol`.
     pub fn add_policy(&mut self, name: &str) {
+        let _ = self.reload();
         self.store.put_policy(NamedPolicy::new(name));
     }
 
@@ -419,6 +433,7 @@ impl<'a> AdminSession<'a> {
         key: &str,
         val: &str,
     ) -> Result<(), Error> {
+        self.reload()?;
         self.store
             .set_string(name, key, Some(val))
             .map_err(Error::from)
@@ -1514,6 +1529,40 @@ mod tests {
         assert_eq!(max_kvno(&store, &extra), before);
         let reloaded = load_store(&db, &stash).unwrap();
         assert_eq!(max_kvno(&reloaded, &extra), before);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn setstr_reload_keeps_concurrent_create() {
+        use krb5_kdc::{load_store, save_store};
+        let dir = std::env::temp_dir().join(format!(
+            "setstr-race-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let db = dir.join("principal");
+        let stash = dir.join("stash");
+        let (store, acl) = bootstrap_documented().unwrap();
+        save_store(&store, &db, &stash).unwrap();
+        let mut local = load_store(&db, &stash).unwrap();
+        let mut kadmind = load_store(&db, &stash).unwrap();
+        kadmind.persist_paths = Some((db.clone(), stash.clone()));
+        local.persist_paths = Some((db.clone(), stash.clone()));
+        let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["m5extra"]);
+        kadmind
+            .create_password(&acl, &documented_admin_id(), &extra, b"m5-secret")
+            .unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+        {
+            let mut sess = AdminSession::local(&mut local, &acl, documented_admin_id());
+            sess.set_string_attr(&user, "m5k", "m5v").unwrap();
+        }
+        let loaded = load_store(&db, &stash).unwrap();
+        assert!(loaded.get_name(&extra).is_some());
+        assert!(loaded.get_name(&user).is_some());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

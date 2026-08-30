@@ -167,6 +167,21 @@ fn destroy_secret_file_refuses_symlink() {
 }
 
 #[test]
+fn destroy_secret_file_refuses_fifo_quickly() {
+    let path = std::env::temp_dir().join(format!("krb5cc-destroy-fifo-{}", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let st = std::process::Command::new("mkfifo")
+        .arg(&path)
+        .status()
+        .expect("mkfifo");
+    assert!(st.success());
+    let t0 = std::time::Instant::now();
+    assert!(krb5_protocol::destroy_secret_file(&path).is_err());
+    assert!(t0.elapsed() < std::time::Duration::from_secs(2));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn destroy_secret_file_refuses_directory() {
     let path = std::env::temp_dir().join(format!("krb5cc-destroy-dir-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&path);

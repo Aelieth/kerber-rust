@@ -79,9 +79,10 @@ pub fn create_exclusive_secret(path: &Path) -> io::Result<std::fs::File> {
 
 /// Overwrite `path` with zeros, fsync, then unlink (kdestroy).
 ///
-/// Symlinks and non-regular files are refused. After open, Unix
-/// `(dev, ino)` must match the pre-open `lstat` so a swapped target
-/// is not zero-filled.
+/// Symlinks and non-regular files are refused. Unix `open` uses
+/// `O_NOFOLLOW|O_NONBLOCK` so a swap to a symlink or FIFO does not
+/// follow or hang. After open, `(dev, ino)` must match the pre-open
+/// `lstat`. Non-Unix: the swap race is not closed (`swapped=false`).
 ///
 /// # Errors
 ///
@@ -91,7 +92,13 @@ pub fn destroy_secret_file(path: &Path) -> io::Result<()> {
     if !lmeta.file_type().is_file() {
         return Err(not_regular());
     }
-    let mut f = OpenOptions::new().write(true).open(path)?;
+    let mut opts = OpenOptions::new();
+    opts.write(true);
+    #[cfg(unix)]
+    {
+        opts.custom_flags((nix::fcntl::OFlag::O_NOFOLLOW | nix::fcntl::OFlag::O_NONBLOCK).bits());
+    }
+    let mut f = opts.open(path)?;
     let meta = f.metadata()?;
     #[cfg(unix)]
     let swapped = meta.dev() != lmeta.dev() || meta.ino() != lmeta.ino();

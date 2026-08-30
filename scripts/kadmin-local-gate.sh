@@ -381,6 +381,35 @@ GTGT="$(docker exec "$NAME" klist -k /tmp/gld-krbtgt.keytab)"
 echo "$GTGT"
 echo "$GTGT" | grep -q 'krbtgt/KERBER.TEST@KERBER.TEST'
 
+echo "==== setstr does not clobber concurrent kadmind create ===="
+docker exec "$NAME" sh -c '
+  rm -f /tmp/m5fifo
+  mkfifo /tmp/m5fifo
+  env KRB5_KDC_DB=/tmp/principal KRB5_KDC_STASH=/tmp/stash \
+    /tmp/krb5-kadmin-local </tmp/m5fifo >/tmp/m5.out 2>/tmp/m5.err &
+  echo $! >/tmp/m5.pid
+  exec 3>/tmp/m5fifo
+  sleep 0.3
+  env KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    kadmin -p admin@KERBER.TEST -w adminpassword -q "addprinc -pw m5-pw m5race"
+  echo "setstr extra2 m5k m5v" >&3
+  echo q >&3
+  exec 3>&-
+  wait "$(cat /tmp/m5.pid)" || true
+'
+M5R="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc m5race')"
+echo "$M5R"
+echo "$M5R" | grep -q 'm5race@KERBER.TEST'
+echo "$M5R" | grep -qi 'does not exist' && {
+    log "kadmin.local.gate" "error" ',"error":"setstr clobbered concurrent kadmind principal"'
+    exit 1
+}
+M5E="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc extra2')"
+echo "$M5E"
+echo "$M5E" | grep -q 'extra2@KERBER.TEST'
+
 echo "==== addprinc -randkey kadmin/changepw keeps PWCHANGE_SERVICE ===="
 docker exec \
     -e KRB5_KDC_DB=/tmp/principal \
