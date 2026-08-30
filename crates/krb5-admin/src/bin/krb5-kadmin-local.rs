@@ -48,22 +48,16 @@ fn main() {
     let mut sess = AdminSession::local(&mut store, &acl, actor);
     if queued.is_empty() {
         let stdin = io::stdin();
-        let mut failed = false;
-        for line in stdin.lock().lines() {
-            let Ok(line) = line else {
-                break;
-            };
-            if let Err(e) = run(&mut sess, &line) {
-                eprintln!("kadmin.local: {e}");
-                failed = true;
-            }
-        }
-        if failed {
-            std::process::exit(1);
-        }
-    } else {
-        for c in queued {
-            if let Err(e) = run(&mut sess, &c) {
+        std::process::exit(run_stdin(
+            &mut sess,
+            stdin.lock().lines().map_while(Result::ok),
+        ));
+    }
+    for c in queued {
+        match run(&mut sess, &c) {
+            Ok(LineOutcome::Next) => {}
+            Ok(LineOutcome::Quit) => break,
+            Err(e) => {
                 eprintln!("kadmin.local: {e}");
                 std::process::exit(1);
             }
@@ -84,26 +78,50 @@ fn db_and_stash() -> (PathBuf, PathBuf) {
     (PathBuf::from(db), PathBuf::from(stash))
 }
 
-fn run(sess: &mut AdminSession<'_>, line: &str) -> Result<(), String> {
+enum LineOutcome {
+    Next,
+    Quit,
+}
+
+fn run_stdin<I, S>(sess: &mut AdminSession<'_>, lines: I) -> i32
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut failed = false;
+    for line in lines {
+        match run(sess, line.as_ref()) {
+            Ok(LineOutcome::Next) => {}
+            Ok(LineOutcome::Quit) => break,
+            Err(e) => {
+                eprintln!("kadmin.local: {e}");
+                failed = true;
+            }
+        }
+    }
+    i32::from(failed)
+}
+
+fn run(sess: &mut AdminSession<'_>, line: &str) -> Result<LineOutcome, String> {
     let line = line.trim();
     if line.is_empty() || line.starts_with('#') {
-        return Ok(());
+        return Ok(LineOutcome::Next);
     }
     let parts: Vec<&str> = line.split_whitespace().collect();
     match parts.first().copied() {
-        Some("q" | "quit" | "exit") => std::process::exit(0),
+        Some("q" | "quit" | "exit") => Ok(LineOutcome::Quit),
         Some("listprincs" | "list_principals") => {
             for id in sess.list_ids() {
                 println!("{id}");
             }
-            Ok(())
+            Ok(LineOutcome::Next)
         }
         Some("getprinc" | "get_principal") => {
             let spec = parts.get(1).ok_or("getprinc <name>")?;
             let name = parse_name(sess, spec)?;
             let p = sess.get_principal_id(&name).map_err(|e| e.to_string())?;
             println!("Principal: {p}");
-            Ok(())
+            Ok(LineOutcome::Next)
         }
         Some("addprinc" | "add_principal") => {
             let a = parse_kadmin_args(&parts[1..])?;
@@ -115,22 +133,27 @@ fn run(sess: &mut AdminSession<'_>, line: &str) -> Result<(), String> {
                 sess.create_password(&name, pw.as_bytes())
                     .map_err(|e| e.to_string())?;
             }
-            apply_optional_fields(sess, &name, &a)
+            apply_optional_fields(sess, &name, &a).map(|()| LineOutcome::Next)
         }
         Some("delprinc" | "delete_principal") => {
             let spec = parts.get(1).ok_or("delprinc <name>")?;
             let name = parse_name(sess, spec)?;
-            sess.delete(&name).map_err(|e| e.to_string())
+            sess.delete(&name)
+                .map_err(|e| e.to_string())
+                .map(|()| LineOutcome::Next)
         }
         Some("cpw" | "change_password") => {
             let a = parse_kadmin_args(&parts[1..])?;
             let name = parse_name(sess, &a.name)?;
             if a.randkey {
-                sess.chrand(&name).map_err(|e| e.to_string())
+                sess.chrand(&name)
+                    .map_err(|e| e.to_string())
+                    .map(|()| LineOutcome::Next)
             } else {
                 let pw = a.pw.clone().map_or_else(password, Ok)?;
                 sess.change_password(&name, pw.as_bytes())
                     .map_err(|e| e.to_string())
+                    .map(|()| LineOutcome::Next)
             }
         }
         Some("ktadd") => {
@@ -139,24 +162,24 @@ fn run(sess: &mut AdminSession<'_>, line: &str) -> Result<(), String> {
             let name = parse_name(sess, &a.name)?;
             let path = std::path::Path::new(ktpath);
             sess.ktadd_local(&name, !a.norandkey, |added| merge_write_keytab(path, added))
-                .map(|_| ())
+                .map(|_| LineOutcome::Next)
                 .map_err(|e| e.to_string())
         }
         Some("modprinc" | "modify_principal") => {
             let a = parse_kadmin_args(&parts[1..])?;
             let name = parse_name(sess, &a.name)?;
-            apply_optional_fields(sess, &name, &a)
+            apply_optional_fields(sess, &name, &a).map(|()| LineOutcome::Next)
         }
         Some("addpol" | "add_policy") => {
             let n = parts.get(1).ok_or("addpol <name>")?;
             sess.add_policy(n);
-            Ok(())
+            Ok(LineOutcome::Next)
         }
         Some("getpol" | "get_policy") => {
             let n = parts.get(1).ok_or("getpol <name>")?;
             let p = sess.get_policy(n).map_err(|e| e.to_string())?;
             println!("Policy: {p}");
-            Ok(())
+            Ok(LineOutcome::Next)
         }
         Some("setstr") => {
             let princ = parts.get(1).ok_or("setstr <princ> <key> <val>")?;
@@ -165,9 +188,10 @@ fn run(sess: &mut AdminSession<'_>, line: &str) -> Result<(), String> {
             let name = parse_name(sess, princ)?;
             sess.set_string_attr(&name, key, val)
                 .map_err(|e| e.to_string())
+                .map(|()| LineOutcome::Next)
         }
         Some(other) => Err(format!("unknown {other}")),
-        None => Ok(()),
+        None => Ok(LineOutcome::Next),
     }
 }
 
@@ -226,10 +250,32 @@ fn apply_optional_fields(
 mod tests {
     use super::*;
 
+    fn sess_pair() -> (krb5_kdc::PrincipalStore, krb5_kdc::Acl) {
+        krb5_kdc::bootstrap_documented().unwrap()
+    }
+
     #[test]
     fn unknown_verb_is_error() {
-        let (mut store, acl) = krb5_kdc::bootstrap_documented().unwrap();
+        let (mut store, acl) = sess_pair();
         let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
         assert!(run(&mut sess, "nope").is_err());
+    }
+
+    #[test]
+    fn stdin_nope_then_quit_exits_1() {
+        let (mut store, acl) = sess_pair();
+        let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+        assert_eq!(run_stdin(&mut sess, ["nope", "q"]), 1);
+        assert_eq!(run_stdin(&mut sess, ["nope", "quit"]), 1);
+        assert_eq!(run_stdin(&mut sess, ["nope", "exit"]), 1);
+    }
+
+    #[test]
+    fn stdin_quit_stops_before_later_failure() {
+        let (mut store, acl) = sess_pair();
+        let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+        assert_eq!(run_stdin(&mut sess, ["q"]), 0);
+        assert_eq!(run_stdin(&mut sess, ["q", "nope"]), 0);
+        assert!(matches!(run(&mut sess, "quit"), Ok(LineOutcome::Quit)));
     }
 }

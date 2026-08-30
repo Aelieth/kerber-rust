@@ -24,20 +24,10 @@ fn main() {
     };
     if args.is_empty() {
         let stdin = io::stdin();
-        let mut failed = false;
-        for line in stdin.lock().lines() {
-            let Ok(line) = line else {
-                break;
-            };
-            if let Err(e) = run_line(&mut kt, &line) {
-                eprintln!("ktutil: {e}");
-                failed = true;
-            }
-        }
-        if failed {
-            std::process::exit(1);
-        }
-        return;
+        std::process::exit(run_stdin(
+            &mut kt,
+            stdin.lock().lines().map_while(Result::ok),
+        ));
     }
     if let Err(e) = run_line(&mut kt, &args.join(" ")) {
         eprintln!("ktutil: {e}");
@@ -45,25 +35,50 @@ fn main() {
     }
 }
 
-fn run_line(kt: &mut Keytab, line: &str) -> Result<(), String> {
+enum LineOutcome {
+    Next,
+    Quit,
+}
+
+fn run_stdin<I, S>(kt: &mut Keytab, lines: I) -> i32
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut failed = false;
+    for line in lines {
+        match run_line(kt, line.as_ref()) {
+            Ok(LineOutcome::Next) => {}
+            Ok(LineOutcome::Quit) => break,
+            Err(e) => {
+                eprintln!("ktutil: {e}");
+                failed = true;
+            }
+        }
+    }
+    i32::from(failed)
+}
+
+fn run_line(kt: &mut Keytab, line: &str) -> Result<LineOutcome, String> {
     let line = line.trim();
     if line.is_empty() || line.starts_with('#') {
-        return Ok(());
+        return Ok(LineOutcome::Next);
     }
     let parts: Vec<&str> = line.split_whitespace().collect();
     match parts.first().copied() {
-        Some("q" | "quit" | "exit") => std::process::exit(0),
+        Some("q" | "quit" | "exit") => Ok(LineOutcome::Quit),
         Some("rkt") => {
             let path = parts.get(1).ok_or("rkt <file>")?;
             let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
             let other = Keytab::parse(&bytes).map_err(|e| e.to_string())?;
             kt.version = other.version;
             kt.merge(other);
-            Ok(())
+            Ok(LineOutcome::Next)
         }
         Some("wkt") => {
             let path = parts.get(1).ok_or("wkt <file>")?;
-            kt.write_file(Path::new(path)).map_err(|e| e.to_string())
+            kt.write_file(Path::new(path)).map_err(|e| e.to_string())?;
+            Ok(LineOutcome::Next)
         }
         Some("list" | "l") => {
             print!(
@@ -75,7 +90,7 @@ fn run_line(kt: &mut Keytab, line: &str) -> Result<(), String> {
                     parts.contains(&"-K"),
                 )
             );
-            Ok(())
+            Ok(LineOutcome::Next)
         }
         Some("delent") => {
             let slot: usize = parts
@@ -87,11 +102,11 @@ fn run_line(kt: &mut Keytab, line: &str) -> Result<(), String> {
                 return Err("no such slot".into());
             }
             kt.entries.remove(slot - 1);
-            Ok(())
+            Ok(LineOutcome::Next)
         }
-        Some("addent") => addent(kt, &parts[1..]),
+        Some("addent") => addent(kt, &parts[1..]).map(|()| LineOutcome::Next),
         Some(other) => Err(format!("unknown command {other}")),
-        None => Ok(()),
+        None => Ok(LineOutcome::Next),
     }
 }
 
@@ -232,5 +247,33 @@ mod tests {
         assert!(text.contains("aes256-cts-hmac-sha1-96"), "{text}");
         assert!(text.contains("   2"), "{text}");
         assert!(run_line(&mut kt, "nope").is_err());
+    }
+
+    fn empty_kt() -> Keytab {
+        Keytab {
+            version: 0x0502,
+            entries: Vec::new(),
+            skipped_unknown_etype: 0,
+            unparsed: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn stdin_nope_then_quit_exits_1() {
+        let mut kt = empty_kt();
+        assert_eq!(run_stdin(&mut kt, ["nope", "q"]), 1);
+        let mut kt = empty_kt();
+        assert_eq!(run_stdin(&mut kt, ["nope", "quit"]), 1);
+        let mut kt = empty_kt();
+        assert_eq!(run_stdin(&mut kt, ["nope", "exit"]), 1);
+    }
+
+    #[test]
+    fn stdin_quit_stops_before_later_failure() {
+        let mut kt = empty_kt();
+        assert_eq!(run_stdin(&mut kt, ["q"]), 0);
+        let mut kt = empty_kt();
+        assert_eq!(run_stdin(&mut kt, ["q", "nope"]), 0);
+        assert!(matches!(run_line(&mut kt, "quit"), Ok(LineOutcome::Quit)));
     }
 }
