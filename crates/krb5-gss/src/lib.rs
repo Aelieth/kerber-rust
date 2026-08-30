@@ -373,6 +373,7 @@ impl GssContext {
                     flags,
                     subkey.as_ref(),
                     &ticket_session,
+                    &ctx.replay,
                 )?;
             }
         }
@@ -750,6 +751,11 @@ impl GssContext {
             .iter()
             .any(|b| b.kind == IovType::SignOnly && !b.data.is_empty());
         if !has_ad {
+            let flags = {
+                let hdr = iov_find(iov, IovType::Header)?;
+                *hdr.get(2).ok_or(Error::Truncated)?
+            };
+            require_aes(self.recv_key(flags)?.etype())?;
             let tok = join_wrap_token(iov)?;
             let plain = self.unwrap(&tok)?;
             write_iov_data(iov, &plain)?;
@@ -783,14 +789,16 @@ impl GssContext {
         let mac = &trailer[16..];
         let usage = seal_usage(!self.initiator);
         let rfc8009 = key.etype().is_rfc8009();
-        let (conf, plain) = decrypt_cts(&key, usage, &c)?;
-        if rfc8009 {
+        let (conf, plain) = if rfc8009 {
             let hmac_in = iov_hmac_input(iov, true, &[], &c, &tok_hdr, None)?;
             let expect = integrity_mac(&key, usage, &hmac_in)?;
             if !mac_eq(mac, &expect) {
                 return Err(Error::Integrity);
             }
-        }
+            decrypt_cts(&key, usage, &c)?
+        } else {
+            decrypt_cts(&key, usage, &c)?
+        };
         if plain.len() < 16 {
             return Err(Error::Truncated);
         }
@@ -1275,6 +1283,7 @@ fn extract_delegated(
     flags: u32,
     subkey: Option<&ProtocolKey>,
     ticket_session: &ProtocolKey,
+    replay: &ReplayCache,
 ) -> Result<Option<String>, Error> {
     if flags & GSS_C_DELEG == 0 {
         return Ok(None);
@@ -1291,10 +1300,10 @@ fn extract_delegated(
     let raw = &cksum[28..28 + dlgth];
     let mut part = None;
     if let Some(sk) = subkey {
-        part = unwrap_krb_cred(sk, raw, &ReplayCache::new()).ok();
+        part = unwrap_krb_cred(sk, raw, replay).ok();
     }
     if part.is_none() {
-        part = unwrap_krb_cred(ticket_session, raw, &ReplayCache::new()).ok();
+        part = unwrap_krb_cred(ticket_session, raw, replay).ok();
     }
     let part = part.ok_or(Error::Integrity)?;
     let info = part.1.ticket_info.first().ok_or(Error::Truncated)?;
@@ -1627,9 +1636,24 @@ fn parse_neg_init(token: &[u8]) -> Result<NegInit, Error> {
             .get(i + 1 + lh..i + 1 + lh + ln)
             .ok_or(Error::Truncated)?;
         match tag {
-            0xa0 => mech_list_der = Some(body.to_vec()),
-            0xa2 => mech_token = Some(parse_octet(body)?),
-            0xa3 => mic = Some(parse_octet(body)?),
+            0xa0 => {
+                if mech_list_der.is_some() {
+                    return Err(Error::Truncated);
+                }
+                mech_list_der = Some(body.to_vec());
+            }
+            0xa2 => {
+                if mech_token.is_some() {
+                    return Err(Error::Truncated);
+                }
+                mech_token = Some(parse_octet(body)?);
+            }
+            0xa3 => {
+                if mic.is_some() {
+                    return Err(Error::Truncated);
+                }
+                mic = Some(parse_octet(body)?);
+            }
             _ => {}
         }
         i = i.saturating_add(1).saturating_add(lh).saturating_add(ln);
@@ -2071,6 +2095,41 @@ mod tests {
         let mech_types = der_tlv(0xa0, &der_tlv(0x30, &oid));
         let mech_token = der_tlv(0xa2, &der_tlv(0x04, &krb));
         let mut seq = mech_types;
+        seq.extend_from_slice(&mech_token);
+        let neg = der_tlv(0xa0, &der_tlv(0x30, &seq));
+        let mut app = der_tlv(0x06, SPNEGO_OID);
+        app.extend_from_slice(&neg);
+        let tok = der_tlv(0x60, &app);
+        assert!(matches!(
+            spnego_accept(
+                &tok,
+                std::slice::from_ref(&skey),
+                None,
+                Some(&documented_host()),
+                Some(TEST_REALM),
+            ),
+            Err(Error::Truncated)
+        ));
+    }
+
+    #[test]
+    fn spnego_duplicate_mech_types_is_truncated() {
+        let (_as_out, tgs_out, skey, cname) = user_host();
+        let (_init, krb) = GssContext::init_sec_context(
+            tgs_out.rep.0.ticket.clone(),
+            &tgs_out.session_key,
+            &ascii(TEST_REALM),
+            &cname,
+            true,
+            None,
+            None,
+        )
+        .unwrap();
+        let oid = der_tlv(0x06, KRB5_OID);
+        let mech_types = der_tlv(0xa0, &der_tlv(0x30, &oid));
+        let mech_token = der_tlv(0xa2, &der_tlv(0x04, &krb));
+        let mut seq = mech_types.clone();
+        seq.extend_from_slice(&mech_types);
         seq.extend_from_slice(&mech_token);
         let neg = der_tlv(0xa0, &der_tlv(0x30, &seq));
         let mut app = der_tlv(0x06, SPNEGO_OID);

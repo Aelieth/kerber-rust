@@ -8,6 +8,7 @@
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::time::Duration;
 
 use krb5_gss::{GssContext, IovBuf, IovType};
 use krb5_protocol::Keytab;
@@ -73,6 +74,8 @@ fn main() {
         eprintln!("accept: {e}");
         std::process::exit(1);
     });
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
     let tok = read_token(&mut stream).unwrap_or_else(|e| {
         eprintln!("read AP-REQ: {e}");
         std::process::exit(1);

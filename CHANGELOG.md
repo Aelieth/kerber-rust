@@ -101,7 +101,10 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   advancing the GSS sequence window. Replica incremental PAC RID is
   still allocated locally (≠ 1000); matching the master's RID is
   deferred because MIT kdbe has no SID and F4 keeps vendor `0x4B0x`
-  TL off the incremental wire.
+  TL off the incremental wire. Delegated KRB-CRED uses the accept
+  replay cache; RFC 8009 IOV verifies Ki HMAC before CTS decrypt;
+  no-AD `unwrap_iov` is AES-only; SPNEGO duplicate NegToken fields
+  are `Truncated`; `krb5-gss-accept` sets a 30s socket timeout.
 
 - KDB extension surface: `PrincipalRead` / `PrincipalWrite` /
   `StoreLifecycle`. Dump-v7 is the default backend; `db_library=memory`
