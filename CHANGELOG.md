@@ -111,7 +111,15 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   (`scripts/rust-kinit-fast-gate.sh`). `kinit --pkinit FILE:` obtains
   a TGT via PA-PK-AS-REQ (`scripts/rust-kinit-pkinit-gate.sh`).
   `kinit -E` / NT-ENTERPRISE (name-type 10) canonicalizes to the stored
-  principal (`scripts/rust-kinit-enterprise-gate.sh`).
+  principal (`scripts/rust-kinit-enterprise-gate.sh`). PKINIT client
+  verifies the KDC CMS signer is `id-pkinit-KPKdc` with SAN
+  `krbtgt/REALM@REALM` before ECDH; a CA-issued client cert cannot
+  impersonate the KDC. The KDC binds client SAN to the AS-REQ cname
+  and requires `id-pkinit-KPClientAuth`. CMS path validation checks
+  leaf validity, CA `basicConstraints`, and issuer DN. KDC-reply
+  `eContentType` is `id-pkinit-DHKeyData`. SPAKE is fail-closed when
+  requested. `unwrap_iov` integrity is AES-only. Enterprise suffixes
+  that are not the local realm are not aliases.
 
 - KDB extension surface: `PrincipalRead` / `PrincipalWrite` /
   `StoreLifecycle`. Dump-v7 is the default backend; `db_library=memory`
