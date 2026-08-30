@@ -17,8 +17,9 @@ use krb5_kdc::{
 };
 use krb5_protocol::{
     apply_strengthen, armor_key, as_req_sname, attach_fast, build_fast_armor, pa_for_user,
-    pa_pac_options, pa_pk_as_req, pa_pk_as_req_agile, pa_pk_as_req_spki, pa_spake_response,
-    pa_spake_support, pkinit_reply_key, pkinit_reply_key_agile, tgs_req_ex, unwrap_fast_rep,
+    pa_pac_options, pa_pk_as_req, pa_pk_as_req_agile, pa_pk_as_req_cn, pa_pk_as_req_spki,
+    pa_spake_response, pa_spake_support, pkinit_reply_key, pkinit_reply_key_agile, tgs_req_ex,
+    unwrap_fast_rep,
 };
 use krb5_types::pac::{
     PAC_LOGON_INFO, PAC_SERVER_CHECKSUM, PAC_TICKET_CHECKSUM, Pac, RpcSid,
@@ -325,8 +326,14 @@ fn pkinit_ecdh_reply_key() {
     let req = as_req(cname, TEST_REALM, 401, Some(vec![pa])).unwrap();
     let issued = krb5_kdc::issue_as(&store, &req).expect("PKINIT AS");
     let et = EncryptionType::Aes256CtsHmacSha196;
-    let reply =
-        pkinit_reply_key(&kp.secret, &issued.rep.0.padata, et, &ca.ca_cert).expect("ECDH key");
+    let reply = pkinit_reply_key(
+        &kp.secret,
+        &issued.rep.0.padata,
+        et,
+        &ca.ca_cert,
+        TEST_REALM,
+    )
+    .expect("ECDH key");
     assert_eq!(reply.as_bytes(), issued.as_rep_key.as_bytes());
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
     let plain = decrypt(&reply, usage, issued.rep.0.enc_part.cipher.as_ref()).expect("enc");
@@ -368,7 +375,13 @@ fn pkinit_ecdh_rfc8636_sha256_kdf() {
     )
     .expect("agile ECDH key");
     assert_eq!(reply.as_bytes(), issued.as_rep_key.as_bytes());
-    let o2k = pkinit_reply_key(&kp.secret, &issued.rep.0.padata, et, &ca.ca_cert);
+    let o2k = pkinit_reply_key(
+        &kp.secret,
+        &issued.rep.0.padata,
+        et,
+        &ca.ca_cert,
+        TEST_REALM,
+    );
     assert!(o2k.is_err(), "o2k helper must not silently decrypt agile");
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
     let plain = decrypt(&reply, usage, issued.rep.0.enc_part.cipher.as_ref()).expect("enc");
@@ -461,6 +474,134 @@ fn pkinit_without_provisioned_ca_is_rejected() {
         Error::Protocol { code, .. } => assert_eq!(code, err::PREAUTH_FAILED),
         other => panic!("expected PREAUTH_FAILED, got {other}"),
     }
+}
+
+fn pkinit_rep_from_cms(cms: Vec<u8>) -> Option<Vec<krb5_types::PaData>> {
+    let rep = krb5_types::pkinit::PaPkAsRep::DhInfo(krb5_types::pkinit::DhRepInfo {
+        dh_signed_data: cms.into(),
+        server_dh_nonce: None,
+    });
+    Some(vec![krb5_types::PaData {
+        padata_type: pa::PK_AS_REP,
+        padata_value: encode(&rep).ok()?.into(),
+    }])
+}
+
+#[test]
+fn pkinit_client_rejects_non_kdc_signer() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    store.enable_pkinit_ca().expect("PKINIT CA");
+    let ca = store.pkinit_ca().expect("CA").clone();
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let kp = p256_generate().expect("client ECDH");
+    let pa = pa_pk_as_req_agile(&kp.public, &ca).expect("PA-PK-AS-REQ");
+    let req = as_req(cname.clone(), TEST_REALM, 421, Some(vec![pa])).unwrap();
+    let as_req_der = encode(&req).expect("AS-REQ");
+    let issued = krb5_kdc::issue_as(&store, &req).expect("PKINIT AS");
+    let et = EncryptionType::Aes256CtsHmacSha196;
+    let ok = pkinit_reply_key_agile(
+        &kp.secret,
+        &issued.rep.0.padata,
+        et,
+        &ca.ca_cert,
+        &as_req_der,
+        &cname,
+        TEST_REALM,
+    )
+    .expect("KPKdc reply");
+    assert_eq!(ok.as_bytes(), issued.as_rep_key.as_bytes());
+
+    let raw = issued
+        .rep
+        .0
+        .padata
+        .as_ref()
+        .and_then(|v| v.iter().find(|p| p.padata_type == pa::PK_AS_REP))
+        .expect("PA-PK-AS-REP");
+    let cms = krb5_types::pkinit::pa_pk_as_rep_dh_signed_data(raw.padata_value.as_ref())
+        .expect("dhSignedData");
+    let inner = krb5_types::pkinit::cms_verify(&cms, &ca.ca_cert).expect("inner");
+
+    let (ccert, ckey) = ca
+        .client_identity_for("user@KERBER.TEST")
+        .expect("client id");
+    let rogue = krb5_types::pkinit::cms_sign_leaf(
+        &inner,
+        &ccert,
+        &ckey,
+        krb5_types::pkinit::ECONTENT_DHKEY,
+    )
+    .expect("rogue cms");
+    let err = pkinit_reply_key_agile(
+        &kp.secret,
+        &pkinit_rep_from_cms(rogue),
+        et,
+        &ca.ca_cert,
+        &as_req_der,
+        &cname,
+        TEST_REALM,
+    );
+    assert!(err.is_err(), "client-cert KDC CMS must be refused: {err:?}");
+
+    let (wcert, wkey, _) = ca.kdc_identity_for("OTHER.TEST").expect("wrong realm");
+    let wrong = krb5_types::pkinit::cms_sign_leaf(
+        &inner,
+        &wcert,
+        &wkey,
+        krb5_types::pkinit::ECONTENT_DHKEY,
+    )
+    .expect("wrong cms");
+    let err = pkinit_reply_key_agile(
+        &kp.secret,
+        &pkinit_rep_from_cms(wrong),
+        et,
+        &ca.ca_cert,
+        &as_req_der,
+        &cname,
+        TEST_REALM,
+    );
+    assert!(err.is_err(), "wrong-realm KDC SAN must be refused: {err:?}");
+
+    let (kcert, kkey, _) = ca.kdc_identity_for(TEST_REALM).expect("kdc id");
+    let bad_ct = krb5_types::pkinit::cms_sign_leaf(
+        &inner,
+        &kcert,
+        &kkey,
+        krb5_types::pkinit::ECONTENT_AUTHDATA,
+    )
+    .expect("authdata cms");
+    let err = pkinit_reply_key_agile(
+        &kp.secret,
+        &pkinit_rep_from_cms(bad_ct),
+        et,
+        &ca.ca_cert,
+        &as_req_der,
+        &cname,
+        TEST_REALM,
+    );
+    assert!(
+        err.is_err(),
+        "eContentType AUTHDATA must be refused: {err:?}"
+    );
+}
+
+#[test]
+fn pkinit_san_mismatch_is_refused() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    store.enable_pkinit_ca().expect("PKINIT CA");
+    let ca = store.pkinit_ca().expect("CA").clone();
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let kp = p256_generate().expect("client ECDH");
+    let pa = pa_pk_as_req_cn(&kp.public, &ca, "other@KERBER.TEST").expect("other");
+    let req = as_req(cname.clone(), TEST_REALM, 422, Some(vec![pa])).unwrap();
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("SAN mismatch");
+    match err {
+        Error::Protocol { code, .. } => assert_eq!(code, err::PREAUTH_FAILED),
+        other => panic!("expected PREAUTH_FAILED, got {other}"),
+    }
+    let pa_ok = pa_pk_as_req(&kp.public, &ca).expect("user");
+    let req_ok = as_req(cname, TEST_REALM, 423, Some(vec![pa_ok])).unwrap();
+    krb5_kdc::issue_as(&store, &req_ok).expect("matching SAN");
 }
 
 #[test]
@@ -1058,6 +1199,22 @@ fn enterprise_as_canonicalizes_cname() {
     let issued = krb5_kdc::issue_as(&store, &req).expect("enterprise AS");
     assert_eq!(issued.rep.0.cname.name_type, PrincipalName::NT_PRINCIPAL);
     assert_eq!(issued.rep.0.cname.components_joined(), TEST_USER);
+}
+
+#[test]
+fn enterprise_foreign_suffix_is_not_local_user() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let ent = PrincipalName::new(PrincipalName::NT_ENTERPRISE, ["user@OTHER.TEST"]);
+    assert!(
+        store.get_name(&ent).is_none(),
+        "foreign UPN suffix must not alias the local user"
+    );
+    let req = as_req(ent, TEST_REALM, 72, None).unwrap();
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("foreign enterprise");
+    match err {
+        Error::Protocol { code, .. } => assert_eq!(code, err::C_PRINCIPAL_UNKNOWN),
+        other => panic!("expected C_PRINCIPAL_UNKNOWN, got {other}"),
+    }
 }
 
 #[test]

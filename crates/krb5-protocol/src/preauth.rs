@@ -275,6 +275,27 @@ pub fn pa_pk_as_req(
 ///
 /// DER or CMS wrap failures.
 pub fn pa_pk_as_req_spki(spki: &[u8], ca: &krb5_types::pkinit::PkinitCa) -> Result<PaData, Error> {
+    pa_pk_as_req_spki_cn(spki, ca, "user")
+}
+
+/// PA-PK-AS-REQ signed as `cn` (SAN / EKU follow that identity).
+///
+/// # Errors
+///
+/// DER or CMS wrap failures.
+pub fn pa_pk_as_req_cn(
+    client_public: &[u8],
+    ca: &krb5_types::pkinit::PkinitCa,
+    cn: &str,
+) -> Result<PaData, Error> {
+    pa_pk_as_req_spki_cn(&krb5_types::pkinit::encode_ec_spki(client_public), ca, cn)
+}
+
+fn pa_pk_as_req_spki_cn(
+    spki: &[u8],
+    ca: &krb5_types::pkinit::PkinitCa,
+    cn: &str,
+) -> Result<PaData, Error> {
     let pack = krb5_types::pkinit::AuthPack {
         pk_authenticator: krb5_types::pkinit::PkAuthenticator {
             cusec: Microseconds::ZERO,
@@ -286,8 +307,9 @@ pub fn pa_pk_as_req_spki(spki: &[u8], ca: &krb5_types::pkinit::PkinitCa) -> Resu
         supported_cms_types: None,
     };
     let inner = encode(&pack)?;
-    let signed = krb5_types::pkinit::cms_wrap(&inner, ca)
-        .map_err(|e| Error::ReplyMismatch(format!("PKINIT CMS wrap: {e}")))?;
+    let signed = ca
+        .sign_cms(&inner, cn)
+        .ok_or_else(|| Error::ReplyMismatch("PKINIT CMS wrap".into()))?;
     let req = krb5_types::pkinit::PaPkAsReq {
         signed_auth_pack: signed.into(),
         trusted_certifiers: None,
@@ -322,8 +344,9 @@ pub fn pa_pk_as_req_agile(
     let inner = encode(&pack)?;
     let inner = krb5_types::pkinit::authpack_with_sha256_kdf(&inner)
         .ok_or_else(|| Error::ReplyMismatch("AuthPack kdf".into()))?;
-    let signed = krb5_types::pkinit::cms_wrap(&inner, ca)
-        .map_err(|e| Error::ReplyMismatch(format!("PKINIT CMS wrap: {e}")))?;
+    let signed = ca
+        .sign_cms(&inner, "user")
+        .ok_or_else(|| Error::ReplyMismatch("PKINIT CMS wrap".into()))?;
     let req = krb5_types::pkinit::PaPkAsReq {
         signed_auth_pack: signed.into(),
         trusted_certifiers: None,
@@ -378,6 +401,23 @@ pub fn pa_pk_as_req_signed(
     })
 }
 
+/// Verify the KDC CMS, then require KPKdc + SAN `krbtgt/REALM@REALM` and
+/// `id-pkinit-DHKeyData` before any ECDH.
+fn verify_kdc_pkinit_cms(
+    cms: &[u8],
+    kdc_trust_anchor: &[u8],
+    realm: &str,
+) -> Result<Vec<u8>, Error> {
+    let v = krb5_types::pkinit::cms_verify_full(cms, kdc_trust_anchor)
+        .map_err(|e| Error::ReplyMismatch(format!("PKINIT KDC CMS: {e}")))?;
+    krb5_types::pkinit::require_kdc_pkinit_cert(&v.cert, realm)
+        .map_err(|e| Error::ReplyMismatch(format!("PKINIT KDC CMS: {e}")))?;
+    if v.e_content_type.as_slice() != krb5_types::pkinit::ECONTENT_DHKEY {
+        return Err(Error::ReplyMismatch("PKINIT eContentType".into()));
+    }
+    Ok(v.e_content)
+}
+
 /// Derive the PKINIT reply key from PA-PK-AS-REP `dh_signed_data` (CMS or raw P-256).
 ///
 /// # Errors
@@ -388,6 +428,7 @@ pub fn pkinit_reply_key(
     padata: &Option<Vec<PaData>>,
     etype: EncryptionType,
     kdc_trust_anchor: &[u8],
+    realm: &str,
 ) -> Result<ProtocolKey, Error> {
     let raw = padata
         .as_ref()
@@ -400,11 +441,10 @@ pub fn pkinit_reply_key(
             return Err(Error::ReplyMismatch("PKINIT encKeyPack unsupported".into()));
         }
     };
-    let inner = krb5_types::pkinit::cms_verify(pub_kdc.dh_signed_data.as_ref(), kdc_trust_anchor)
-        .map_err(|e| Error::ReplyMismatch(format!("PKINIT KDC CMS: {e}")))?;
+    let inner = verify_kdc_pkinit_cms(pub_kdc.dh_signed_data.as_ref(), kdc_trust_anchor, realm)?;
     let kdc_pub = krb5_types::pkinit::decode_kdc_dh_point(&inner)
         .or_else(|| krb5_types::pkinit::decode_ec_spki(&inner))
-        .unwrap_or(inner);
+        .ok_or_else(|| Error::ReplyMismatch("PKINIT KDC DH".into()))?;
     let shared = p256_shared(client_secret, &kdc_pub)?;
     if let Some(oid) = krb5_types::pkinit::pa_pk_as_rep_kdf_oid(raw.padata_value.as_ref())
         && oid.as_slice() == krb5_types::pkinit::KDF_AH_SHA256_OID
@@ -436,11 +476,10 @@ pub fn pkinit_reply_key_agile(
         .ok_or_else(|| Error::ReplyMismatch("missing PA-PK-AS-REP".into()))?;
     let cms = krb5_types::pkinit::pa_pk_as_rep_dh_signed_data(raw.padata_value.as_ref())
         .ok_or_else(|| Error::ReplyMismatch("PKINIT dhSignedData".into()))?;
-    let inner = krb5_types::pkinit::cms_verify(&cms, kdc_trust_anchor)
-        .map_err(|e| Error::ReplyMismatch(format!("PKINIT KDC CMS: {e}")))?;
+    let inner = verify_kdc_pkinit_cms(&cms, kdc_trust_anchor, realm)?;
     let kdc_pub = krb5_types::pkinit::decode_kdc_dh_point(&inner)
         .or_else(|| krb5_types::pkinit::decode_ec_spki(&inner))
-        .unwrap_or(inner);
+        .ok_or_else(|| Error::ReplyMismatch("PKINIT KDC DH".into()))?;
     let shared = p256_shared(client_secret, &kdc_pub)?;
     let Some(oid) = krb5_types::pkinit::pa_pk_as_rep_kdf_oid(raw.padata_value.as_ref()) else {
         return octetstring2key(etype, &shared).map_err(Into::into);

@@ -104,6 +104,17 @@ pub struct KdcDHKeyInfo {
 pub const ECONTENT_AUTHDATA: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x02, 0x03, 0x01];
 /// id-pkinit-DHKeyData 1.3.6.1.5.2.3.2 (OID body).
 pub const ECONTENT_DHKEY: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x02, 0x03, 0x02];
+/// id-pkinit-san 1.3.6.1.5.2.2 (OID body).
+pub const OID_PKINIT_SAN: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x02, 0x02];
+/// id-pkinit-KPClientAuth 1.3.6.1.5.2.3.4 (OID body).
+pub const OID_KP_CLIENT_AUTH: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x02, 0x03, 0x04];
+/// id-pkinit-KPKdc 1.3.6.1.5.2.3.5 (OID body).
+pub const OID_KP_KDC: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x02, 0x03, 0x05];
+const OID_SAN: &[u8] = &[0x55, 0x1d, 0x11];
+const OID_EKU: &[u8] = &[0x55, 0x1d, 0x25];
+const OID_BC: &[u8] = &[0x55, 0x1d, 0x13];
+const UTC_NOT_BEFORE: &[u8] = b"250101000000Z";
+const UTC_NOT_AFTER: &[u8] = b"360101000000Z";
 
 /// SubjectPublicKeyInfo for an uncompressed P-256 point (RFC 5480).
 #[must_use]
@@ -712,6 +723,32 @@ fn p256_cert(
     subject_public: &[u8],
     signer_secret: &[u8; 32],
     kind: CertKind,
+    realm: &str,
+) -> Option<Vec<u8>> {
+    p256_cert_window(
+        serial,
+        issuer_cn,
+        subject_cn,
+        subject_public,
+        signer_secret,
+        kind,
+        realm,
+        UTC_NOT_BEFORE,
+        UTC_NOT_AFTER,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn p256_cert_window(
+    serial: u8,
+    issuer_cn: &str,
+    subject_cn: &str,
+    subject_public: &[u8],
+    signer_secret: &[u8; 32],
+    kind: CertKind,
+    realm: &str,
+    not_before: &[u8],
+    not_after: &[u8],
 ) -> Option<Vec<u8>> {
     let issuer = directory_name(issuer_cn);
     let subject = directory_name(subject_cn);
@@ -732,7 +769,7 @@ fn p256_cert(
     let spki = tlv(0x30, &[spki_alg, tlv(0x03, &bit)].concat());
     let validity = tlv(
         0x30,
-        &[tlv(0x17, b"250101000000Z"), tlv(0x17, b"360101000000Z")].concat(),
+        &[tlv(0x17, not_before), tlv(0x17, not_after)].concat(),
     );
     let mut tbs_body = Vec::new();
     tbs_body.extend(tlv(0xa0, &tlv(0x02, &[0x02])));
@@ -742,7 +779,7 @@ fn p256_cert(
     tbs_body.extend_from_slice(&validity);
     tbs_body.extend_from_slice(&subject);
     tbs_body.extend_from_slice(&spki);
-    tbs_body.extend_from_slice(&cert_extensions(kind, subject_cn));
+    tbs_body.extend_from_slice(&cert_extensions(kind, subject_cn, realm));
     let tbs = tlv(0x30, &tbs_body);
     let sig = p256_sign(signer_secret, &tbs)?;
     let mut sig_bit = vec![0u8];
@@ -752,10 +789,10 @@ fn p256_cert(
 
 /// Minimal X.509 v3 self-signed P-256 certificate (test CA).
 fn self_signed_p256_cert(cn: &str, secret: &[u8; 32], public: &[u8]) -> Option<Vec<u8>> {
-    p256_cert(1, cn, cn, public, secret, CertKind::Ca)
+    p256_cert(1, cn, cn, public, secret, CertKind::Ca, "KERBER.TEST")
 }
 
-fn cert_extensions(kind: CertKind, subject_cn: &str) -> Vec<u8> {
+fn cert_extensions(kind: CertKind, subject_cn: &str, realm: &str) -> Vec<u8> {
     let is_ca = matches!(kind, CertKind::Ca);
     let bc_oid = oid_der(&[0x55, 0x1d, 0x13]);
     let bc_val = if is_ca {
@@ -781,19 +818,19 @@ fn cert_extensions(kind: CertKind, subject_cn: &str) -> Vec<u8> {
     match kind {
         CertKind::Kdc => {
             ext_body.extend(san_general(&[
-                other_name_pkinit("krbtgt/KERBER.TEST@KERBER.TEST"),
+                other_name_pkinit(&format!("krbtgt/{realm}@{realm}")),
                 tlv(0x82, b"kerber.test"),
             ]));
-            ext_body.extend(eku(&[0x2b, 0x06, 0x01, 0x05, 0x02, 0x03, 0x05]));
+            ext_body.extend(eku(OID_KP_KDC));
         }
         CertKind::Client => {
             let san = if subject_cn.contains('@') {
                 subject_cn.to_owned()
             } else {
-                format!("{subject_cn}@KERBER.TEST")
+                format!("{subject_cn}@{realm}")
             };
             ext_body.extend(san_general(&[other_name_pkinit(&san)]));
-            ext_body.extend(eku(&[0x2b, 0x06, 0x01, 0x05, 0x02, 0x03, 0x04]));
+            ext_body.extend(eku(OID_KP_CLIENT_AUTH));
         }
         CertKind::Ca => {}
     }
@@ -1104,20 +1141,39 @@ pub fn cms_unwrap(der: &[u8]) -> Vec<u8> {
     der.to_vec()
 }
 
+/// Verified CMS SignedData: eContent, signer certificate, eContentType OID body.
+#[derive(Clone, Debug)]
+pub struct CmsVerified {
+    /// Encapsulated content.
+    pub e_content: Vec<u8>,
+    /// Embedded signer certificate (DER).
+    pub cert: Vec<u8>,
+    /// `eContentType` OID body (no DER tag).
+    pub e_content_type: Vec<u8>,
+}
+
 /// Verify CMS SignedData against `trust_anchor` (CA certificate DER).
 ///
 /// The embedded leaf must be issued by the trust anchor; the SignerInfo
 /// ECDSA-SHA256 signature is then checked with the leaf public key.
-/// There is no unverified fallback.
+/// There is no unverified fallback. Role checks (KDC vs client EKU/SAN)
+/// are separate: [`require_kdc_pkinit_cert`] / [`require_client_pkinit_cert`].
 ///
 /// # Errors
 ///
 /// Missing CMS fields, untrusted certificate, or ECDSA failure.
 pub fn cms_verify(der: &[u8], trust_anchor: &[u8]) -> Result<Vec<u8>, &'static str> {
+    Ok(cms_verify_full(der, trust_anchor)?.e_content)
+}
+
+/// [`cms_verify`] plus the signer certificate and eContentType.
+///
+/// # Errors
+///
+/// Same as [`cms_verify`].
+pub fn cms_verify_full(der: &[u8], trust_anchor: &[u8]) -> Result<CmsVerified, &'static str> {
     let p = cms_parts(der)?;
-    if !cert_issued_by(&p.cert, trust_anchor) {
-        return Err("cms trust");
-    }
+    cert_path_ok(&p.cert, trust_anchor)?;
     let public = spki_uncompressed(&p.cert).ok_or("cms spki")?;
     if let Some(sa) = &p.signed_attrs {
         let mut set = sa.clone();
@@ -1134,7 +1190,67 @@ pub fn cms_verify(der: &[u8], trust_anchor: &[u8]) -> Result<Vec<u8>, &'static s
     } else if !p256_verify(&public, &p.e_content, &p.signature) {
         return Err("cms ecdsa");
     }
-    Ok(p.e_content)
+    Ok(CmsVerified {
+        e_content: p.e_content,
+        cert: p.cert,
+        e_content_type: p.e_content_type,
+    })
+}
+
+/// RFC 4556 §3.2.4: signer is a KDC cert for `realm` (KPKdc + SAN krbtgt/REALM@REALM).
+///
+/// # Errors
+///
+/// Missing EKU or SAN mismatch.
+pub fn require_kdc_pkinit_cert(cert: &[u8], realm: &str) -> Result<(), &'static str> {
+    if !cert_has_eku(cert, OID_KP_KDC) {
+        return Err("pkinit kdc eku");
+    }
+    let (san_realm, parts) = cert_pkinit_san(cert).ok_or("pkinit kdc san")?;
+    if !san_realm.eq_ignore_ascii_case(realm)
+        || parts.len() != 2
+        || parts[0] != "krbtgt"
+        || !parts[1].eq_ignore_ascii_case(realm)
+    {
+        return Err("pkinit kdc san");
+    }
+    Ok(())
+}
+
+/// RFC 4556 §3.2.2: signer is a client cert bound to `cname` (KPClientAuth + SAN).
+///
+/// # Errors
+///
+/// Missing EKU or SAN↔cname mismatch.
+pub fn require_client_pkinit_cert(
+    cert: &[u8],
+    cname: &crate::PrincipalName,
+    realm: &str,
+) -> Result<(), &'static str> {
+    if !cert_has_eku(cert, OID_KP_CLIENT_AUTH) {
+        return Err("pkinit client eku");
+    }
+    let (san_realm, parts) = cert_pkinit_san(cert).ok_or("pkinit client san")?;
+    if !san_realm.eq_ignore_ascii_case(realm) {
+        return Err("pkinit client san");
+    }
+    if parts != pkinit_cname_parts(cname) {
+        return Err("pkinit client san");
+    }
+    Ok(())
+}
+
+fn pkinit_cname_parts(cname: &crate::PrincipalName) -> Vec<String> {
+    if cname.name_type == crate::PrincipalName::NT_ENTERPRISE {
+        let raw = cname.components_joined();
+        let user = raw.rsplit_once('@').map_or(raw.as_str(), |(u, _)| u);
+        return vec![user.to_string()];
+    }
+    cname
+        .name_string
+        .iter()
+        .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
+        .collect()
 }
 
 fn signed_attrs_digest_ok(sattrs: &[u8], expect: &[u8]) -> bool {
@@ -1184,16 +1300,293 @@ fn cert_tbs_sig(cert: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     Some((tbs, sig))
 }
 
-/// True when `leaf` is signed by the public key in `ca` (including a
-/// self-signed CA used as both leaf and anchor).
-fn cert_issued_by(leaf: &[u8], ca: &[u8]) -> bool {
-    let Some(ca_pub) = spki_uncompressed(ca) else {
+fn cert_path_ok(leaf: &[u8], ca: &[u8]) -> Result<(), &'static str> {
+    let ca_pub = spki_uncompressed(ca).ok_or("cms ca spki")?;
+    let (tbs, sig) = cert_tbs_sig(leaf).ok_or("cms leaf")?;
+    if !p256_verify(&ca_pub, &tbs, &sig) {
+        return Err("cms trust");
+    }
+    if !cert_basic_constraints_ca(ca) {
+        return Err("cms ca");
+    }
+    let iss = cert_name_der(leaf, true).ok_or("cms issuer")?;
+    let sub = cert_name_der(ca, false).ok_or("cms subject")?;
+    if iss != sub {
+        return Err("cms chain");
+    }
+    let (nb, na) = cert_time_window(leaf).ok_or("cms validity")?;
+    let now = chrono::Utc::now();
+    if now < nb {
+        return Err("cms notyet");
+    }
+    if now > na {
+        return Err("cms expired");
+    }
+    Ok(())
+}
+
+struct TbsWalk<'a> {
+    issuer: &'a [u8],
+    validity: &'a [u8],
+    subject: &'a [u8],
+    extensions: Option<&'a [u8]>,
+}
+
+fn walk_tbs(cert: &[u8]) -> Option<TbsWalk<'_>> {
+    let (t, body, _) = take_tlv(cert)?;
+    if t != 0x30 {
+        return None;
+    }
+    let (t, tbs, _) = take_tlv(body)?;
+    if t != 0x30 {
+        return None;
+    }
+    let mut cur = tbs;
+    if cur.first() == Some(&0xa0) {
+        cur = take_tlv(cur)?.2;
+    }
+    cur = take_tlv(cur)?.2;
+    cur = take_tlv(cur)?.2;
+    let (t, issuer, rest) = take_tlv(cur)?;
+    if t != 0x30 {
+        return None;
+    }
+    let (t, validity, rest) = take_tlv(rest)?;
+    if t != 0x30 {
+        return None;
+    }
+    let (t, subject, rest) = take_tlv(rest)?;
+    if t != 0x30 {
+        return None;
+    }
+    cur = take_tlv(rest)?.2;
+    let mut extensions = None;
+    while !cur.is_empty() {
+        let (t, inner, rest) = take_tlv(cur)?;
+        if t == 0xa3 {
+            let (t, seq, _) = take_tlv(inner)?;
+            if t == 0x30 {
+                extensions = Some(seq);
+            }
+            break;
+        }
+        cur = rest;
+    }
+    Some(TbsWalk {
+        issuer,
+        validity,
+        subject,
+        extensions,
+    })
+}
+
+fn each_ext(extensions: &[u8], mut visit: impl FnMut(&[u8], &[u8]) -> bool) {
+    let mut cur = extensions;
+    while let Some((_, ext, rest)) = take_tlv(cur) {
+        if let Some((t, oid, after)) = take_tlv(ext)
+            && t == 0x06
+        {
+            let val = if after.first() == Some(&0x01) {
+                take_tlv(after).and_then(|(_, _, r)| take_tlv(r))
+            } else {
+                take_tlv(after)
+            };
+            if let Some((t, oct, _)) = val
+                && t == 0x04
+                && visit(oid, oct)
+            {
+                return;
+            }
+        }
+        cur = rest;
+        if rest.is_empty() {
+            break;
+        }
+    }
+}
+
+fn cert_has_eku(cert: &[u8], oid_body: &[u8]) -> bool {
+    let Some(w) = walk_tbs(cert) else {
         return false;
     };
-    let Some((tbs, sig)) = cert_tbs_sig(leaf) else {
+    let Some(exts) = w.extensions else {
         return false;
     };
-    p256_verify(&ca_pub, &tbs, &sig)
+    let mut found = false;
+    each_ext(exts, |oid, val| {
+        if oid != OID_EKU {
+            return false;
+        }
+        let Some((t, seq, _)) = take_tlv(val) else {
+            return false;
+        };
+        if t != 0x30 {
+            return false;
+        }
+        let mut cur = seq;
+        while let Some((t, body, rest)) = take_tlv(cur) {
+            if t == 0x06 && body == oid_body {
+                found = true;
+                return true;
+            }
+            cur = rest;
+            if rest.is_empty() {
+                break;
+            }
+        }
+        false
+    });
+    found
+}
+
+fn cert_pkinit_san(cert: &[u8]) -> Option<(String, Vec<String>)> {
+    let w = walk_tbs(cert)?;
+    let exts = w.extensions?;
+    let mut out = None;
+    each_ext(exts, |oid, val| {
+        if oid != OID_SAN {
+            return false;
+        }
+        let Some((t, gns, _)) = take_tlv(val) else {
+            return false;
+        };
+        if t != 0x30 {
+            return false;
+        }
+        let mut cur = gns;
+        while let Some((t, gn, rest)) = take_tlv(cur) {
+            if t == 0xa0
+                && let Some((ot, oidb, after)) = take_tlv(gn)
+                && ot == 0x06
+                && oidb == OID_PKINIT_SAN
+                && let Some((vt, vbody, _)) = take_tlv(after)
+            {
+                let kn = if vt == 0xa0 { vbody } else { gn };
+                out = parse_krb5_principal_name(kn);
+                return out.is_some();
+            }
+            cur = rest;
+            if rest.is_empty() {
+                break;
+            }
+        }
+        false
+    });
+    out
+}
+
+fn parse_krb5_principal_name(der: &[u8]) -> Option<(String, Vec<String>)> {
+    let seq = if der.first() == Some(&0x30) {
+        take_tlv(der)?.1
+    } else {
+        der
+    };
+    let (t, realm_inner, rest) = take_tlv(seq)?;
+    if t != 0xa0 {
+        return None;
+    }
+    let (t, realm_b, _) = take_tlv(realm_inner)?;
+    if t != 0x1b && t != 0x16 && t != 0x0c {
+        return None;
+    }
+    let realm = std::str::from_utf8(realm_b).ok()?.to_string();
+    let (t, pname, _) = take_tlv(rest)?;
+    if t != 0xa1 {
+        return None;
+    }
+    let pname_seq = if pname.first() == Some(&0x30) {
+        take_tlv(pname)?.1
+    } else {
+        pname
+    };
+    let mut cur = pname_seq;
+    let mut parts = Vec::new();
+    while let Some((t, inner, rest)) = take_tlv(cur) {
+        if t == 0xa1 {
+            let names = if inner.first() == Some(&0x30) {
+                take_tlv(inner)?.1
+            } else {
+                inner
+            };
+            let mut n = names;
+            while let Some((nt, nb, nrest)) = take_tlv(n) {
+                if nt == 0x1b || nt == 0x16 || nt == 0x0c {
+                    parts.push(std::str::from_utf8(nb).ok()?.to_string());
+                }
+                n = nrest;
+                if nrest.is_empty() {
+                    break;
+                }
+            }
+        }
+        cur = rest;
+        if rest.is_empty() {
+            break;
+        }
+    }
+    Some((realm, parts))
+}
+
+fn cert_basic_constraints_ca(cert: &[u8]) -> bool {
+    let Some(w) = walk_tbs(cert) else {
+        return false;
+    };
+    let Some(exts) = w.extensions else {
+        return false;
+    };
+    let mut is_ca = false;
+    each_ext(exts, |oid, val| {
+        if oid != OID_BC {
+            return false;
+        }
+        if let Some((t, seq, _)) = take_tlv(val)
+            && t == 0x30
+            && let Some((bt, bb, _)) = take_tlv(seq)
+        {
+            is_ca = bt == 0x01 && bb.first() == Some(&0xff);
+        }
+        true
+    });
+    is_ca
+}
+
+fn cert_name_der(cert: &[u8], issuer: bool) -> Option<Vec<u8>> {
+    let w = walk_tbs(cert)?;
+    let body = if issuer { w.issuer } else { w.subject };
+    Some(tlv(0x30, body))
+}
+
+fn cert_time_window(
+    cert: &[u8],
+) -> Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)> {
+    let w = walk_tbs(cert)?;
+    let (t0, b0, rest) = take_tlv(w.validity)?;
+    let (t1, b1, _) = take_tlv(rest)?;
+    Some((parse_x509_time(t0, b0)?, parse_x509_time(t1, b1)?))
+}
+
+fn parse_x509_time(tag: u8, body: &[u8]) -> Option<chrono::DateTime<chrono::Utc>> {
+    let s = std::str::from_utf8(body).ok()?;
+    let (year, rest) = if tag == 0x17 && s.len() >= 13 {
+        let yy: i32 = s.get(..2)?.parse().ok()?;
+        let year = if yy >= 50 { 1900 + yy } else { 2000 + yy };
+        (year, s.get(2..13)?)
+    } else if tag == 0x18 && s.len() >= 15 {
+        let year: i32 = s.get(..4)?.parse().ok()?;
+        (year, s.get(4..15)?)
+    } else {
+        return None;
+    };
+    let month: u32 = rest.get(..2)?.parse().ok()?;
+    let day: u32 = rest.get(2..4)?.parse().ok()?;
+    let hour: u32 = rest.get(4..6)?.parse().ok()?;
+    let min: u32 = rest.get(6..8)?.parse().ok()?;
+    let sec: u32 = rest.get(8..10)?.parse().ok()?;
+    Some(
+        chrono::NaiveDate::from_ymd_opt(year, month, day)?
+            .and_hms_opt(hour, min, sec)?
+            .and_utc(),
+    )
 }
 
 struct CmsParts {
@@ -1201,6 +1594,7 @@ struct CmsParts {
     cert: Vec<u8>,
     signature: Vec<u8>,
     signed_attrs: Option<Vec<u8>>,
+    e_content_type: Vec<u8>,
 }
 
 fn cms_parts(der: &[u8]) -> Result<CmsParts, &'static str> {
@@ -1226,7 +1620,11 @@ fn cms_parts(der: &[u8]) -> Result<CmsParts, &'static str> {
     if t != 0x30 {
         return Err("encap");
     }
-    let (_, _ct, after_oid) = take_tlv(encap).ok_or("eContentType")?;
+    let (t, ct, after_oid) = take_tlv(encap).ok_or("eContentType")?;
+    if t != 0x06 {
+        return Err("eContentType");
+    }
+    let e_content_type = ct.to_vec();
     let (t, expl, _) = take_tlv(after_oid).ok_or("eContent")?;
     if t != 0xa0 {
         return Err("eContent tag");
@@ -1277,6 +1675,7 @@ fn cms_parts(der: &[u8]) -> Result<CmsParts, &'static str> {
         cert,
         signature: sig.to_vec(),
         signed_attrs,
+        e_content_type,
     })
 }
 
@@ -1389,13 +1788,50 @@ impl PkinitCa {
             leaf_public,
             &self.ca_secret,
             CertKind::Client,
+            "KERBER.TEST",
+        )
+    }
+
+    /// Client leaf with an explicit UTCTime validity window (`YYMMDDHHMMSSZ`).
+    #[must_use]
+    pub fn issue_leaf_window(
+        &self,
+        cn: &str,
+        leaf_public: &[u8],
+        not_before: &[u8],
+        not_after: &[u8],
+    ) -> Option<Vec<u8>> {
+        p256_cert_window(
+            2,
+            "Kerber Test CA",
+            cn,
+            leaf_public,
+            &self.ca_secret,
+            CertKind::Client,
+            "KERBER.TEST",
+            not_before,
+            not_after,
+        )
+    }
+
+    /// Client leaf whose issuer DN does not match this CA (CA key still signs).
+    #[must_use]
+    pub fn issue_leaf_wrong_issuer(&self, cn: &str, leaf_public: &[u8]) -> Option<Vec<u8>> {
+        p256_cert(
+            2,
+            "Wrong CA",
+            cn,
+            leaf_public,
+            &self.ca_secret,
+            CertKind::Client,
+            "KERBER.TEST",
         )
     }
 
     /// CMS-sign `e_content` with a fresh leaf under this CA (`id-pkinit-authData`).
     #[must_use]
     pub fn sign_cms(&self, e_content: &[u8], leaf_cn: &str) -> Option<Vec<u8>> {
-        self.sign_cms_typed(e_content, leaf_cn, ECONTENT_AUTHDATA)
+        self.sign_cms_typed(e_content, leaf_cn, ECONTENT_AUTHDATA, "KERBER.TEST")
     }
 
     /// CMS-sign `e_content` with `econtent_oid` and RFC 5652 signedAttrs.
@@ -1405,6 +1841,7 @@ impl PkinitCa {
         e_content: &[u8],
         leaf_cn: &str,
         econtent_oid: &[u8],
+        realm: &str,
     ) -> Option<Vec<u8>> {
         let (ls, lp) = generate_p256()?;
         let kind = if econtent_oid == ECONTENT_DHKEY {
@@ -1412,7 +1849,15 @@ impl PkinitCa {
         } else {
             CertKind::Client
         };
-        let leaf = p256_cert(2, "Kerber Test CA", leaf_cn, &lp, &self.ca_secret, kind)?;
+        let leaf = p256_cert(
+            2,
+            "Kerber Test CA",
+            leaf_cn,
+            &lp,
+            &self.ca_secret,
+            kind,
+            realm,
+        )?;
         let sattrs = signed_attrs_set(econtent_oid, e_content);
         let signature = p256_sign(&ls, &sattrs)?;
         let mut implicit = sattrs;
@@ -1446,6 +1891,23 @@ impl PkinitCa {
     /// KDC identity PEM (cert+key) for MIT `pkinit_identity = FILE:`.
     #[must_use]
     pub fn kdc_identity_pem(&self) -> Option<String> {
+        self.kdc_identity_pem_for("KERBER.TEST")
+    }
+
+    /// KDC identity whose `id-pkinit-san` is `krbtgt/REALM@REALM`.
+    #[must_use]
+    pub fn kdc_identity_pem_for(&self, realm: &str) -> Option<String> {
+        let (cert, s, p) = self.kdc_identity_for(realm)?;
+        Some(format!(
+            "{}{}",
+            pem("CERTIFICATE", &cert),
+            pem_ec_key(&s, &p)
+        ))
+    }
+
+    /// KDC leaf + scalar for `realm` (EKU KPKdc, SAN `krbtgt/REALM@REALM`).
+    #[must_use]
+    pub fn kdc_identity_for(&self, realm: &str) -> Option<(Vec<u8>, [u8; 32], Vec<u8>)> {
         let (s, p) = generate_p256()?;
         let cert = p256_cert(
             3,
@@ -1454,12 +1916,46 @@ impl PkinitCa {
             &p,
             &self.ca_secret,
             CertKind::Kdc,
+            realm,
         )?;
-        Some(format!(
-            "{}{}",
-            pem("CERTIFICATE", &cert),
-            pem_ec_key(&s, &p)
-        ))
+        Some((cert, s, p))
+    }
+
+    /// Client cert + scalar (EKU KPClientAuth, SAN from `cn`).
+    #[must_use]
+    pub fn client_identity_for(&self, cn: &str) -> Option<(Vec<u8>, [u8; 32])> {
+        let (s, p) = generate_p256()?;
+        let cert = self.issue_leaf(cn, &s, &p)?;
+        Some((cert, s))
+    }
+
+    /// Client identity with an explicit UTCTime validity window.
+    #[must_use]
+    pub fn client_identity_window(
+        &self,
+        cn: &str,
+        not_before: &[u8],
+        not_after: &[u8],
+    ) -> Option<(Vec<u8>, [u8; 32])> {
+        let (s, p) = generate_p256()?;
+        let cert = self.issue_leaf_window(cn, &p, not_before, not_after)?;
+        Some((cert, s))
+    }
+
+    /// Client identity whose issuer DN does not match this CA.
+    #[must_use]
+    pub fn client_identity_wrong_issuer(&self, cn: &str) -> Option<(Vec<u8>, [u8; 32])> {
+        let (s, p) = generate_p256()?;
+        let cert = self.issue_leaf_wrong_issuer(cn, &p)?;
+        Some((cert, s))
+    }
+
+    /// Self-signed end-entity (CA=false) for negative path-validation tests.
+    #[must_use]
+    pub fn self_signed_end_entity() -> Option<(Vec<u8>, [u8; 32])> {
+        let (s, p) = generate_p256()?;
+        let cert = p256_cert(1, "ee", "ee", &p, &s, CertKind::Client, "KERBER.TEST")?;
+        Some((cert, s))
     }
 }
 

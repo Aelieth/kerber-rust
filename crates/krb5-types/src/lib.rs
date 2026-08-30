@@ -1110,6 +1110,52 @@ mod tests {
             pkinit::cms_verify(&ksigned, &ca.ca_cert).expect("kdc leaf verify"),
             inner
         );
+        pkinit::require_kdc_pkinit_cert(&kcert, "KERBER.TEST").expect("KPKdc SAN");
+        assert!(pkinit::require_kdc_pkinit_cert(&kcert, "OTHER.TEST").is_err());
+        assert!(pkinit::require_kdc_pkinit_cert(&cert, "KERBER.TEST").is_err());
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+        pkinit::require_client_pkinit_cert(&cert, &user, "KERBER.TEST").expect("client SAN");
+        let other = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["other"]);
+        assert!(pkinit::require_client_pkinit_cert(&cert, &other, "KERBER.TEST").is_err());
+    }
+
+    #[test]
+    fn pkinit_cms_path_validation() {
+        let ca = pkinit::PkinitCa::generate().expect("CA");
+        let inner = b"path-validation";
+        let wrapped = pkinit::cms_wrap(inner, &ca).expect("wrap");
+        assert_eq!(
+            pkinit::cms_verify(&wrapped, &ca.ca_cert).expect("in-window chain"),
+            inner
+        );
+
+        let (expired, ekey) = ca
+            .client_identity_window("user@KERBER.TEST", b"200101000000Z", b"210101000000Z")
+            .expect("expired");
+        let cms = pkinit::cms_sign_leaf(inner, &expired, &ekey, pkinit::ECONTENT_AUTHDATA)
+            .expect("expired cms");
+        assert_eq!(
+            pkinit::cms_verify(&cms, &ca.ca_cert).expect_err("expired"),
+            "cms expired"
+        );
+
+        let (ee, ek) = pkinit::PkinitCa::self_signed_end_entity().expect("ee");
+        let cms =
+            pkinit::cms_sign_leaf(inner, &ee, &ek, pkinit::ECONTENT_AUTHDATA).expect("ee cms");
+        assert_eq!(
+            pkinit::cms_verify(&cms, &ee).expect_err("non-CA anchor"),
+            "cms ca"
+        );
+
+        let (wrong, wkey) = ca
+            .client_identity_wrong_issuer("user@KERBER.TEST")
+            .expect("wrong issuer");
+        let cms = pkinit::cms_sign_leaf(inner, &wrong, &wkey, pkinit::ECONTENT_AUTHDATA)
+            .expect("wrong cms");
+        assert_eq!(
+            pkinit::cms_verify(&cms, &ca.ca_cert).expect_err("DN mismatch"),
+            "cms chain"
+        );
     }
 
     #[test]

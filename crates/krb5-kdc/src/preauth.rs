@@ -294,7 +294,7 @@ pub(crate) fn process_pkinit(
     let ca = store
         .pkinit_ca()
         .ok_or_else(|| proto(err::PREAUTH_FAILED, "PKINIT not configured"))?;
-    let inner = krb5_types::pkinit::cms_verify(&cms, &ca.ca_cert).map_err(|e| {
+    let verified = krb5_types::pkinit::cms_verify_full(&cms, &ca.ca_cert).map_err(|e| {
         tracing::error!(
             event = "kdc.pkinit",
             component = "krb5-kdc",
@@ -304,6 +304,22 @@ pub(crate) fn process_pkinit(
         );
         proto(err::PREAUTH_FAILED, "PKINIT CMS")
     })?;
+    let req_cname = decode::<AsReq>(as_req_der)
+        .ok()
+        .and_then(|r| r.0.req_body.cname)
+        .unwrap_or_else(|| cname.clone());
+    if let Err(e) =
+        krb5_types::pkinit::require_client_pkinit_cert(&verified.cert, &req_cname, realm)
+    {
+        tracing::error!(
+            event = "kdc.pkinit",
+            component = "krb5-kdc",
+            outcome = "error",
+            error = e
+        );
+        return Err(proto(err::PREAUTH_FAILED, "PKINIT client cert"));
+    }
+    let inner = verified.e_content;
     let (nonce, spki) = krb5_types::pkinit::parse_authpack(&inner).ok_or_else(|| {
         tracing::error!(
             event = "kdc.pkinit",
@@ -357,7 +373,7 @@ pub(crate) fn process_pkinit(
         return Err(dh_params_not_accepted());
     };
     let wrapped_pub = ca
-        .sign_cms_typed(&info, "krbtgt", krb5_types::pkinit::ECONTENT_DHKEY)
+        .sign_cms_typed(&info, "krbtgt", krb5_types::pkinit::ECONTENT_DHKEY, realm)
         .ok_or_else(|| proto(err::PREAUTH_FAILED, "PKINIT CMS wrap"))?;
     let rep = krb5_types::pkinit::PaPkAsRep::DhInfo(krb5_types::pkinit::DhRepInfo {
         dh_signed_data: wrapped_pub.into(),
@@ -378,14 +394,14 @@ pub(crate) fn process_pkinit(
             outcome = "ok",
             detail = "rfc8636 sha256 kdf",
         );
-        let parts: Vec<String> = cname
+        let parts: Vec<String> = req_cname
             .name_string
             .iter()
             .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
             .collect();
         let prefs: Vec<&str> = parts.iter().map(String::as_str).collect();
         let party_u =
-            krb5_types::pkinit::encode_krb5_principal_name(realm, cname.name_type, &prefs);
+            krb5_types::pkinit::encode_krb5_principal_name(realm, req_cname.name_type, &prefs);
         let party_v = krb5_types::pkinit::encode_krb5_principal_name(
             realm,
             PrincipalName::NT_SRV_INST,

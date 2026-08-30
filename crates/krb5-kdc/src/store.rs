@@ -849,7 +849,7 @@ impl PrincipalStore {
         self.env
             .pkinit_ca
             .as_ref()
-            .and_then(PkinitCa::kdc_identity_pem)
+            .and_then(|c| c.kdc_identity_pem_for(&self.realm))
     }
 
     /// `krbtgt/REALM@REALM`.

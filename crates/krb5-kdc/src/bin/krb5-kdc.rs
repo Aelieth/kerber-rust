@@ -157,9 +157,20 @@ fn main() {
             let _ = std::fs::write(format!("{dir}/user.pem"), pem);
             println!("pkinit-user {dir}/user.pem");
         }
+        if let Some(pem) = store.pkinit_user_pem("other@KERBER.TEST") {
+            let _ = std::fs::write(format!("{dir}/other.pem"), pem);
+            println!("pkinit-other {dir}/other.pem");
+        }
         if let Some(pem) = store.pkinit_kdc_pem() {
             let _ = std::fs::write(format!("{dir}/kdc.pem"), pem);
             println!("pkinit-kdc {dir}/kdc.pem");
+        }
+        if let Some(pem) = store
+            .pkinit_ca()
+            .and_then(|c| c.kdc_identity_pem_for("OTHER.TEST"))
+        {
+            let _ = std::fs::write(format!("{dir}/kdc-wrong-realm.pem"), pem);
+            println!("pkinit-kdc-wrong-realm {dir}/kdc-wrong-realm.pem");
         }
     }
     let persist = store.persist_paths.clone();
