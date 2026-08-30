@@ -102,7 +102,25 @@ fn tgs_sname_matches(
 ) -> bool {
     ticket.name_string == requested.name_string
         || enc.name_string == requested.name_string
-        || ticket.is_krbtgt()
+        || (ticket.is_krbtgt()
+            && !requested.is_krbtgt()
+            && requested.components_joined() != ticket.components_joined())
+}
+
+fn tgs_sname_ok(
+    requested: &PrincipalName,
+    ticket: &PrincipalName,
+    enc: &PrincipalName,
+) -> Result<(), Error> {
+    if tgs_sname_matches(requested, ticket, enc) {
+        Ok(())
+    } else {
+        Err(Error::ReplyMismatch(format!(
+            "TGS-REP sname mismatch requested={} ticket={}",
+            requested.components_joined(),
+            ticket.components_joined()
+        )))
+    }
 }
 
 /// One TGS-REQ hop: stay, chase a referral, or reject a bad srealm.
@@ -277,13 +295,7 @@ fn tgs_once(
     if enc_part.nonce != nonce {
         return Err(Error::NonceMismatch);
     }
-    if !tgs_sname_matches(&requested, &inner.ticket.sname, &enc_part.sname) {
-        return Err(Error::ReplyMismatch(format!(
-            "TGS-REP sname mismatch requested={} ticket={}",
-            requested.components_joined(),
-            inner.ticket.sname.components_joined()
-        )));
-    }
+    tgs_sname_ok(&requested, &inner.ticket.sname, &enc_part.sname)?;
     let session_etype = EncryptionType::from_iana(enc_part.key.keytype)
         .or_else(|_| EncryptionType::known(enc_part.key.keytype))?;
     let session_key = ProtocolKey::from_bytes(session_etype, enc_part.key.keyvalue.as_ref())?;
@@ -402,5 +414,21 @@ mod tests {
         assert!(!tgs_sname_matches(&asked, &other, &other));
         let krbtgt = PrincipalName::krbtgt("OTHER.TEST");
         assert!(tgs_sname_matches(&asked, &krbtgt, &krbtgt));
+        tgs_sname_ok(&asked, &krbtgt, &krbtgt).unwrap();
+    }
+
+    #[test]
+    fn tgs_sname_flat_krbtgt_is_reply_mismatch() {
+        let two = PrincipalName::krbtgt("KERBER.TEST");
+        let flat = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["krbtgt/KERBER.TEST"]);
+        assert_eq!(two.components_joined(), flat.components_joined());
+        assert!(matches!(
+            tgs_sname_ok(&two, &flat, &flat),
+            Err(Error::ReplyMismatch(_))
+        ));
+        assert!(matches!(
+            tgs_sname_ok(&flat, &two, &two),
+            Err(Error::ReplyMismatch(_))
+        ));
     }
 }

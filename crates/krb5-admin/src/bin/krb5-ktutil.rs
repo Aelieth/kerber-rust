@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use std::fmt::Write as _;
 use std::io::{self, BufRead, Write};
@@ -59,27 +60,15 @@ fn run_line(kt: &mut Keytab, line: &str) -> Result<(), String> {
             kt.write_file(Path::new(path)).map_err(|e| e.to_string())
         }
         Some("list" | "l") => {
-            let show_t = parts.contains(&"-t");
-            let show_k = parts.contains(&"-K");
-            println!("slot KVNO Principal");
-            for (i, e) in kt.entries.iter().enumerate() {
-                let princ = format!(
-                    "{}@{}",
-                    e.name.components_joined(),
-                    String::from_utf8_lossy(e.realm.as_bytes())
-                );
-                print!("{:>4} {:>4} {princ}", i + 1, e.kvno);
-                if show_t {
-                    print!(" t={}", e.timestamp);
-                }
-                if parts.contains(&"-e") {
-                    print!(" {}", e.key.etype().to_mit_name());
-                }
-                if show_k {
-                    print!(" ({})", hex(e.key.as_bytes()));
-                }
-                println!();
-            }
+            print!(
+                "{}",
+                format_list(
+                    kt,
+                    parts.contains(&"-t"),
+                    parts.contains(&"-e"),
+                    parts.contains(&"-K"),
+                )
+            );
             Ok(())
         }
         Some("delent") => {
@@ -98,6 +87,29 @@ fn run_line(kt: &mut Keytab, line: &str) -> Result<(), String> {
         Some(other) => Err(format!("unknown command {other}")),
         None => Ok(()),
     }
+}
+
+fn format_list(kt: &Keytab, show_t: bool, show_e: bool, show_k: bool) -> String {
+    let mut out = String::from("slot KVNO Principal\n");
+    for (i, e) in kt.entries.iter().enumerate() {
+        let princ = format!(
+            "{}@{}",
+            e.name.components_joined(),
+            String::from_utf8_lossy(e.realm.as_bytes())
+        );
+        let _ = write!(out, "{:>4} {:>4} {princ}", i + 1, e.kvno);
+        if show_t {
+            let _ = write!(out, " t={}", e.timestamp);
+        }
+        if show_e {
+            let _ = write!(out, " {}", e.key.etype().to_mit_name());
+        }
+        if show_k {
+            let _ = write!(out, " ({})", hex(e.key.as_bytes()));
+        }
+        out.push('\n');
+    }
+    out
 }
 
 fn addent(kt: &mut Keytab, args: &[&str]) -> Result<(), String> {
@@ -185,4 +197,32 @@ fn parse_hex(s: &str) -> Result<Vec<u8>, String> {
         .step_by(2)
         .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| "hex".to_string()))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use krb5_crypto::ProtocolKey;
+    use krb5_types::{PrincipalName, ascii};
+
+    #[test]
+    fn run_line_list_e_prints_etype() {
+        let key = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[3u8; 32]).unwrap();
+        let mut kt = Keytab {
+            version: 0x0502,
+            entries: vec![KeytabEntry {
+                realm: ascii("KERBER.TEST"),
+                name: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+                timestamp: 1_700_000_000,
+                kvno: 2,
+                key,
+            }],
+            skipped_unknown_etype: 0,
+        };
+        run_line(&mut kt, "list -e").unwrap();
+        let text = format_list(&kt, false, true, false);
+        assert!(text.contains("user@KERBER.TEST"), "{text}");
+        assert!(text.contains("aes256-cts-hmac-sha1-96"), "{text}");
+        assert!(text.contains("   2"), "{text}");
+    }
 }

@@ -808,9 +808,11 @@ fn finish_as_rep(
     if inner.crealm.as_bytes() != realm.as_bytes() {
         return Err(Error::ReplyMismatch("AS-REP crealm mismatch".into()));
     }
-    if enc_part.sname.name_string != inner.ticket.sname.name_string {
-        return Err(Error::ReplyMismatch("AS-REP sname/ticket mismatch".into()));
-    }
+    as_sname_eq(
+        &enc_part.sname,
+        &inner.ticket.sname,
+        "AS-REP sname/ticket mismatch",
+    )?;
     if inner.enc_part.etype != key.etype().to_iana() && inner.enc_part.etype != enc_part.key.keytype
     {
         return Err(Error::ReplyMismatch("AS-REP etype mismatch".into()));
@@ -824,9 +826,7 @@ fn finish_as_rep(
     }
     let now = i64::from(KerberosTime::now().unix_seconds());
     check_as_rep_times(&enc_part, now, 300)?;
-    if enc_part.sname.name_string != expected_sname.name_string {
-        return Err(Error::ReplyMismatch("AS-REP sname mismatch".into()));
-    }
+    as_sname_eq(&enc_part.sname, expected_sname, "AS-REP sname mismatch")?;
     let requested: Vec<i32> = EncryptionType::preferred()
         .iter()
         .map(|e| e.to_iana())
@@ -845,6 +845,17 @@ fn finish_as_rep(
         cname: inner.cname,
         crealm: inner.crealm,
     })
+}
+
+pub(crate) fn as_sname_eq(
+    got: &PrincipalName,
+    expected: &PrincipalName,
+    why: &'static str,
+) -> Result<(), Error> {
+    if got.name_string != expected.name_string {
+        return Err(Error::ReplyMismatch(why.into()));
+    }
+    Ok(())
 }
 
 pub(crate) fn check_as_rep_times(
@@ -1110,5 +1121,35 @@ mod decode_enc_as_tests {
         super::check_as_rep_times(&part, now, 300).unwrap();
         part.authtime = kerberos_time_from_utc_z("20000101000000Z").expect("old");
         assert!(super::check_as_rep_times(&part, now, 300).is_err());
+    }
+}
+
+#[cfg(test)]
+mod as_sname_tests {
+    use super::*;
+
+    #[test]
+    fn flat_krbtgt_is_reply_mismatch() {
+        let two = PrincipalName::krbtgt("KERBER.TEST");
+        let flat = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["krbtgt/KERBER.TEST"]);
+        assert_eq!(two.components_joined(), flat.components_joined());
+        let err = as_sname_eq(&flat, &two, "AS-REP sname mismatch").unwrap_err();
+        assert!(matches!(err, Error::ReplyMismatch(s) if s == "AS-REP sname mismatch"));
+        let err = as_sname_eq(&two, &flat, "AS-REP sname mismatch").unwrap_err();
+        assert!(matches!(err, Error::ReplyMismatch(_)));
+    }
+
+    #[test]
+    fn krbtgt_requested_service_sname_is_reply_mismatch() {
+        let tgt = PrincipalName::krbtgt("KERBER.TEST");
+        let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
+        let err = as_sname_eq(&host, &tgt, "AS-REP sname mismatch").unwrap_err();
+        assert!(matches!(err, Error::ReplyMismatch(_)));
+    }
+
+    #[test]
+    fn changepw_sname_is_accepted() {
+        let cpw = PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "changepw"]);
+        as_sname_eq(&cpw, &cpw, "AS-REP sname mismatch").unwrap();
     }
 }

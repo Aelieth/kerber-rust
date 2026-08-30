@@ -99,6 +99,13 @@ echo "$KCONF1"
 echo "$KCONF1" | grep -q '^config:'
 echo "$KCONF1" | grep -q 'host/testhost.kerber.test'
 
+echo "==== MIT kinit -r then Rust klist renew until ===="
+docker exec "$NAME" sh -c 'echo userpassword | kinit -r 1d -c /tmp/krb5cc_renew user@KERBER.TEST'
+RENEW="$(docker exec "$NAME" /tmp/krb5-klist -c /tmp/krb5cc_renew)"
+echo "$RENEW"
+echo "$RENEW" | grep -q 'renew until'
+echo "$RENEW" | grep -q 'Ticket server:'
+
 echo "==== MIT kvno then Rust klist ===="
 docker exec "$NAME" sh -c 'echo userpassword | kinit -c /tmp/krb5cc_mitkvno user@KERBER.TEST'
 docker exec "$NAME" kvno -c /tmp/krb5cc_mitkvno host/testhost.kerber.test

@@ -4,13 +4,15 @@
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+use std::fmt::Write as _;
 use std::path::Path;
 
 use krb5_asn1::decode;
 use krb5_config::resolve_ccname;
 use krb5_crypto::EncryptionType;
-use krb5_protocol::FileCcache;
+use krb5_protocol::{CcacheCred, FileCcache};
 use krb5_types::{Ticket, TicketFlags};
 
 fn main() {
@@ -50,40 +52,59 @@ fn main() {
 }
 
 fn list(path: &Path, show_flags: bool, show_etype: bool) -> Result<(), String> {
+    print!("{}", cache_text(path, show_flags, show_etype)?);
+    Ok(())
+}
+
+fn cache_text(path: &Path, show_flags: bool, show_etype: bool) -> Result<String, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let cc = FileCcache::parse(&bytes).map_err(|e| e.to_string())?;
-    println!("Ticket cache: FILE:{}", path.display());
-    println!(
+    Ok(format_cache(&cc, path, show_flags, show_etype))
+}
+
+fn format_cache(cc: &FileCcache, path: &Path, show_flags: bool, show_etype: bool) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "Ticket cache: FILE:{}", path.display());
+    let _ = writeln!(
+        out,
         "Default principal: {}",
         FileCcache::format_principal(&cc.primary.0, &cc.primary.1)
     );
-    println!();
-    println!("Valid starting     Expires            Service principal");
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "Valid starting     Expires            Service principal"
+    );
     for cred in cc.list() {
-        let server = FileCcache::format_principal(&cred.server.0, &cred.server.1);
-        println!(
-            "{:>17}  {:>17}  {server}",
-            fmt_unix(cred.starttime),
-            fmt_unix(cred.endtime)
-        );
-        if cred.renew_till > 0 {
-            println!("\trenew until {}", fmt_unix(cred.renew_till));
-        }
-        if show_flags {
-            let letters = TicketFlags::from_u32(cred.ticket_flags).mit_letters();
-            println!("\tFlags: {letters}");
-        }
-        if show_etype {
-            let skey = cred.key.etype().to_mit_name();
-            let tkt = decode::<Ticket>(&cred.ticket)
-                .ok()
-                .and_then(|t| EncryptionType::known(t.enc_part.etype).ok())
-                .map_or("unknown", EncryptionType::to_mit_name);
-            println!("\tEtype (skey, tkt): {skey}, {tkt}");
-        }
-        println!("\tTicket server: {server}");
+        format_cred(&mut out, cred, show_flags, show_etype);
     }
-    Ok(())
+    out
+}
+
+fn format_cred(out: &mut String, cred: &CcacheCred, show_flags: bool, show_etype: bool) {
+    let server = FileCcache::format_principal(&cred.server.0, &cred.server.1);
+    let _ = writeln!(
+        out,
+        "{:>17}  {:>17}  {server}",
+        fmt_unix(cred.starttime),
+        fmt_unix(cred.endtime)
+    );
+    if cred.renew_till > 0 {
+        let _ = writeln!(out, "\trenew until {}", fmt_unix(cred.renew_till));
+    }
+    if show_flags {
+        let letters = TicketFlags::from_u32(cred.ticket_flags).mit_letters();
+        let _ = writeln!(out, "\tFlags: {letters}");
+    }
+    if show_etype {
+        let skey = cred.key.etype().to_mit_name();
+        let tkt = decode::<Ticket>(&cred.ticket)
+            .ok()
+            .and_then(|t| EncryptionType::known(t.enc_part.etype).ok())
+            .map_or("unknown", EncryptionType::to_mit_name);
+        let _ = writeln!(out, "\tEtype (skey, tkt): {skey}, {tkt}");
+    }
+    let _ = writeln!(out, "\tTicket server: {server}");
 }
 
 fn fmt_unix(t: u32) -> String {
@@ -97,11 +118,66 @@ fn fmt_unix(t: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use krb5_types::PrincipalName;
 
     #[test]
     fn fmt_unix_has_mit_date_shape() {
         let s = fmt_unix(1_700_000_000);
         assert_eq!(s.matches('/').count(), 2);
         assert!(s.contains(':'));
+    }
+
+    fn sample_cred(renew_till: u32) -> CcacheCred {
+        let realm = krb5_protocol::realm("KERBER.TEST");
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+        let key =
+            krb5_crypto::ProtocolKey::from_bytes(EncryptionType::Aes128CtsHmacSha196, &[0u8; 16])
+                .unwrap();
+        CcacheCred {
+            client: (realm.clone(), user.clone()),
+            server: (realm, PrincipalName::krbtgt("KERBER.TEST")),
+            key,
+            authtime: 1_700_000_000,
+            starttime: 1_700_000_000,
+            endtime: 1_700_360_000,
+            renew_till,
+            ticket_flags: 0,
+            ticket: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn format_cred_prints_renew_until_when_set() {
+        let cred = sample_cred(1_700_720_000);
+        let mut out = String::new();
+        format_cred(&mut out, &cred, false, false);
+        assert!(out.contains("renew until"), "{out}");
+        assert!(out.contains("Ticket server:"), "{out}");
+        let mut none = String::new();
+        format_cred(&mut none, &sample_cred(0), false, false);
+        assert!(!none.contains("renew until"), "{none}");
+    }
+
+    #[test]
+    fn list_file_ccache_prints_renew_until() {
+        let cred = sample_cred(1_700_720_000);
+        let cc = FileCcache {
+            primary: cred.client.clone(),
+            creds: vec![cred],
+            unparsed: Vec::new(),
+        };
+        let path = std::env::temp_dir().join(format!(
+            "krb5cc-klist-renew-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        cc.write_file(&path).unwrap();
+        list(&path, false, false).unwrap();
+        let text = cache_text(&path, false, false).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert!(text.contains("renew until"), "{text}");
+        assert!(text.contains("krbtgt/KERBER.TEST@KERBER.TEST"), "{text}");
     }
 }
