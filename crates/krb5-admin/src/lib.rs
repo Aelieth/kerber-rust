@@ -22,9 +22,27 @@ pub use kprop::{
 };
 pub use listen::{
     KADMIND_PORT, KPASSWD_PORT, KPROP_PORT, dispatch_kadmind, encode_kadmind_req,
-    encode_kpasswd_req, handle_kpasswd_rfc3244, kprop_recv, kprop_send, parse_kpasswd_rep,
-    serve_kadmind, serve_kpasswd_tcp, serve_kpasswd_udp,
+    encode_kpasswd_req, handle_kpasswd_rfc3244, kpasswd_udp_exchange_to, kprop_recv, kprop_send,
+    parse_kpasswd_rep, serve_kadmind, serve_kpasswd_tcp, serve_kpasswd_udp,
 };
+
+/// Load a kadm5 ACL file. `None` is MIT `kadmin.local` full privs for `actor`.
+///
+/// The ACL is not a security boundary here: the actor is self-chosen via
+/// `KRB5_KADMIN_PRINCIPAL`. A set-but-unreadable path is a hard error.
+///
+/// # Errors
+///
+/// `path` is set and cannot be read.
+pub fn load_acl_file(actor: &str, path: Option<&std::path::Path>) -> Result<Acl, String> {
+    match path {
+        Some(p) => {
+            let t = std::fs::read_to_string(p).map_err(|e| format!("ACL {}: {e}", p.display()))?;
+            Ok(Acl::parse(&t))
+        }
+        None => Ok(Acl::allow_admin(actor)),
+    }
+}
 
 /// Admin error.
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -1198,5 +1216,44 @@ mod tests {
         );
         let err = join.join().expect("thread");
         assert_eq!(err, Error::AclDenied);
+    }
+
+    #[test]
+    fn load_acl_file_missing_is_error() {
+        let path = std::env::temp_dir().join(format!("krb5-acl-missing-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        assert!(load_acl_file("admin@KERBER.TEST", Some(&path)).is_err());
+        let acl = load_acl_file("admin@KERBER.TEST", None).unwrap();
+        assert!(acl.check("admin@KERBER.TEST", AdminOp::Create).is_ok());
+    }
+
+    #[test]
+    fn load_acl_file_parses_readable() {
+        let path = std::env::temp_dir().join(format!("krb5-acl-ok-{}", std::process::id()));
+        std::fs::write(&path, "admin@KERBER.TEST *\n").unwrap();
+        let acl = load_acl_file("other@KERBER.TEST", Some(&path)).unwrap();
+        assert!(acl.check("admin@KERBER.TEST", AdminOp::Create).is_ok());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn kpasswd_udp_exchange_ignores_off_path() {
+        use std::net::UdpSocket;
+        use std::thread;
+        use std::time::Duration;
+
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let dest = server.local_addr().unwrap();
+        thread::spawn(move || {
+            let mut buf = [0u8; 64];
+            let (n, src) = server.recv_from(&mut buf).unwrap();
+            assert_eq!(&buf[..n], b"req");
+            let spoof = UdpSocket::bind("127.0.0.1:0").unwrap();
+            let _ = spoof.send_to(b"spoof", src);
+            thread::sleep(Duration::from_millis(30));
+            let _ = server.send_to(b"kdc-ok", src);
+        });
+        let got = kpasswd_udp_exchange_to(dest, b"req").expect("kdc reply");
+        assert_eq!(got, b"kdc-ok");
     }
 }

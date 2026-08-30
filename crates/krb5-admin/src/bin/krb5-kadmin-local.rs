@@ -9,8 +9,8 @@
 use std::io::{self, BufRead};
 use std::path::PathBuf;
 
-use krb5_admin::AdminSession;
-use krb5_kdc::{Acl, load_store, save_store};
+use krb5_admin::{AdminSession, load_acl_file};
+use krb5_kdc::{load_store, save_store};
 use krb5_protocol::{Keytab, parse_principal};
 use krb5_types::PrincipalName;
 
@@ -34,7 +34,16 @@ fn main() {
     });
     let actor = std::env::var("KRB5_KADMIN_PRINCIPAL")
         .unwrap_or_else(|_| format!("admin@{}", store.realm()));
-    let acl = acl_file(&actor);
+    let acl = load_acl_file(
+        &actor,
+        std::env::var_os("KRB5_ACL_FILE")
+            .as_deref()
+            .map(std::path::Path::new),
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("kadmin.local: {e}");
+        std::process::exit(1);
+    });
     let mut sess = AdminSession::local(&mut store, &acl, actor);
     if queued.is_empty() {
         let stdin = io::stdin();
@@ -71,15 +80,6 @@ fn db_and_stash() -> (PathBuf, PathBuf) {
         std::process::exit(2);
     });
     (PathBuf::from(db), PathBuf::from(stash))
-}
-
-fn acl_file(actor: &str) -> Acl {
-    if let Ok(p) = std::env::var("KRB5_ACL_FILE")
-        && let Ok(t) = std::fs::read_to_string(p)
-    {
-        return Acl::parse(&t);
-    }
-    Acl::allow_admin(actor)
 }
 
 fn run(sess: &mut AdminSession<'_>, line: &str) -> Result<(), String> {

@@ -21,6 +21,7 @@ krb5-types.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+zeroize.workspace = true
 
 [[bin]]
 name = "krb5-kadmind"

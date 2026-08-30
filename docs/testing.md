@@ -241,7 +241,8 @@ when that oracle is absent.
 - `scripts/kadmin-local-gate.sh` — Rust `krb5-kadmin-local` `addprinc`
   extra2 and `host/slashhost` on dump/stash; MIT `kadmin` getprinc
   names `extra2@KERBER.TEST` and `host/slashhost@KERBER.TEST` (slash
-  is two name-string components). Run twice.
+  is two name-string components). Set-but-unreadable `KRB5_ACL_FILE`
+  exits non-zero. Run twice.
 - `scripts/kpasswd-gate.sh` — MIT `kpasswd` against kadmind UDP/TCP
   464 (`kadmin/changepw`), then `kinit` with the new password; old
   password must fail; second `kpasswd` + `kinit`; then Rust

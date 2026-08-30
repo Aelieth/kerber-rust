@@ -161,6 +161,12 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   (`scripts/rust-kpasswd-mit-gate.sh`); new-password `kinit`
   succeeds and the old password fails.
 
+- kpasswd UDP accepts only the KDC it sent to and retries until the
+  deadline; password and subkey buffers are zeroized. `kadmin.local`
+  exits non-zero if `KRB5_ACL_FILE` is set and unreadable (not full
+  privs). The ACL is not a security boundary here (self-chosen
+  `KRB5_KADMIN_PRINCIPAL`; the master key is).
+
 - PKINIT CMS without `signedAttrs` is refused (RFC 5652 §5.3).
   PA-PK-AS-REQ under FAST hashes the FAST-inner `KDC-REQ-BODY` for
   AuthPack `paChecksum`. `PKAuthenticator` `ctime`/`cusec` are checked

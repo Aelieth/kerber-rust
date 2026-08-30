@@ -1,11 +1,11 @@
 //! TCP/UDP listeners for kadmind (749), kpasswd (464), and kprop (754).
 
 use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream, UdpSocket};
+use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, ProtocolKey};
@@ -25,6 +25,78 @@ pub const KPASSWD_PORT: u16 = 464;
 pub const KPROP_PORT: u16 = 754;
 
 const WIRE_VERSION: u8 = 1;
+
+/// UDP kpasswd: send `body` to `dest` and accept only that peer's reply.
+///
+/// # Errors
+///
+/// Bind, send, timeout, or I/O.
+pub fn kpasswd_udp_exchange_to(dest: SocketAddr, body: &[u8]) -> io::Result<Vec<u8>> {
+    let bind = if dest.ip().is_loopback() {
+        "127.0.0.1:0"
+    } else {
+        "0.0.0.0:0"
+    };
+    let sock = UdpSocket::bind(bind)?;
+    let backoffs = [
+        Duration::from_millis(500),
+        Duration::from_secs(1),
+        Duration::from_secs(2),
+    ];
+    let mut last = io::Error::new(io::ErrorKind::TimedOut, "kpasswd udp timeout");
+    for bo in backoffs {
+        sock.set_read_timeout(Some(bo))?;
+        if let Err(e) = sock.send_to(body, dest) {
+            last = e;
+            continue;
+        }
+        match kpasswd_udp_recv_until(&sock, dest, Instant::now() + bo) {
+            Ok(v) => return Ok(v),
+            Err(e)
+                if e.kind() == io::ErrorKind::TimedOut || e.kind() == io::ErrorKind::WouldBlock =>
+            {
+                last = e;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last)
+}
+
+fn kpasswd_udp_recv_until(
+    sock: &UdpSocket,
+    dest: SocketAddr,
+    deadline: Instant,
+) -> io::Result<Vec<u8>> {
+    loop {
+        let mut buf = vec![0u8; 65_535];
+        match sock.recv_from(&mut buf) {
+            Ok((n, src)) => {
+                if src.ip() != dest.ip() || src.port() != dest.port() {
+                    if Instant::now() >= deadline {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "kpasswd udp timeout",
+                        ));
+                    }
+                    continue;
+                }
+                buf.truncate(n);
+                return Ok(buf);
+            }
+            Err(e)
+                if e.kind() == io::ErrorKind::TimedOut
+                    || e.kind() == io::ErrorKind::WouldBlock
+                    || e.kind() == io::ErrorKind::Interrupted =>
+            {
+                if Instant::now() >= deadline {
+                    return Err(e);
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
 
 /// Serve kadmind until `shutdown`. GSS AP-REQ authenticates each op.
 ///

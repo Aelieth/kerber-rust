@@ -7,9 +7,9 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::io::{Read, Write};
-use std::net::{TcpStream, UdpSocket};
+use std::net::{TcpStream, ToSocketAddrs};
 
-use krb5_admin::{encode_kpasswd_req, parse_kpasswd_rep};
+use krb5_admin::{encode_kpasswd_req, kpasswd_udp_exchange_to, parse_kpasswd_rep};
 use krb5_asn1::encode;
 use krb5_crypto::{KeyUsage, ProtocolKey, encrypt};
 use krb5_protocol::{
@@ -19,6 +19,7 @@ use krb5_protocol::{
 use krb5_types::{
     ApOptions, ApReq, Authenticator, EncryptedData, EncryptionKey, KerberosTime, PrincipalName, ku,
 };
+use zeroize::Zeroize;
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -30,15 +31,18 @@ fn main() {
         eprintln!("missing user@REALM");
         std::process::exit(2);
     });
-    let old = std::env::var("KRB5_PASSWORD").unwrap_or_else(|_| {
+    let mut old = std::env::var("KRB5_PASSWORD").unwrap_or_else(|_| {
         eprintln!("kpasswd: set KRB5_PASSWORD");
         std::process::exit(2);
     });
-    let new = std::env::var("KRB5_NEW_PASSWORD").unwrap_or_else(|_| {
+    let mut new = std::env::var("KRB5_NEW_PASSWORD").unwrap_or_else(|_| {
         eprintln!("kpasswd: set KRB5_NEW_PASSWORD");
         std::process::exit(2);
     });
-    if let Err(e) = run(&host, &princ, old.as_bytes(), new.as_bytes()) {
+    let r = run(&host, &princ, old.as_bytes(), new.as_bytes());
+    old.zeroize();
+    new.zeroize();
+    if let Err(e) = r {
         eprintln!("kpasswd: {e}");
         std::process::exit(1);
     }
@@ -65,6 +69,7 @@ fn run(host: &str, princ: &str, old: &[u8], new: &[u8]) -> Result<(), String> {
     let mut sk = vec![0u8; tgs.session_key.etype().key_len()];
     getrandom::getrandom(&mut sk).map_err(|e| e.to_string())?;
     let sub = ProtocolKey::from_bytes(tgs.session_key.etype(), &sk).map_err(|e| e.to_string())?;
+    sk.zeroize();
     let sub_enc = EncryptionKey {
         keytype: sub.etype().to_iana(),
         keyvalue: sub.as_bytes().to_vec().into(),
@@ -141,12 +146,10 @@ fn send_kpasswd(kdc: &KdcAddr, body: &[u8]) -> Result<Vec<u8>, String> {
         s.read_exact(&mut out).map_err(|e| e.to_string())?;
         return Ok(out);
     }
-    let sock = UdpSocket::bind("0.0.0.0:0").map_err(|e| e.to_string())?;
-    sock.set_read_timeout(Some(std::time::Duration::from_secs(5)))
-        .map_err(|e| e.to_string())?;
-    sock.send_to(body, format!("{}:464", kdc.host))
-        .map_err(|e| e.to_string())?;
-    let mut buf = vec![0u8; 65_535];
-    let n = sock.recv(&mut buf).map_err(|e| e.to_string())?;
-    Ok(buf[..n].to_vec())
+    let dest = format!("{}:464", kdc.host)
+        .to_socket_addrs()
+        .map_err(|e| e.to_string())?
+        .next()
+        .ok_or_else(|| "kpasswd udp dest".to_string())?;
+    kpasswd_udp_exchange_to(dest, body).map_err(|e| e.to_string())
 }
