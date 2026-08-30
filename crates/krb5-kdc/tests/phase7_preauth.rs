@@ -1503,7 +1503,7 @@ fn enterprise_mixed_case_suffix_is_not_local_user() {
     let ent = PrincipalName::new(PrincipalName::NT_ENTERPRISE, ["user@kerber.test"]);
     assert!(
         store.get_name(&ent).is_none(),
-        "realm compare is exact octets, not ASCII case-insensitive"
+        "MIT 1.22.2 enterprise suffix is exact octets"
     );
     let req = as_req(ent, TEST_REALM, 73, None).unwrap();
     let err = krb5_kdc::issue_as(&store, &req).expect_err("mixed-case suffix");

@@ -808,7 +808,7 @@ fn finish_as_rep(
     if inner.crealm.as_bytes() != realm.as_bytes() {
         return Err(Error::ReplyMismatch("AS-REP crealm mismatch".into()));
     }
-    if enc_part.sname.components_joined() != inner.ticket.sname.components_joined() {
+    if enc_part.sname.name_string != inner.ticket.sname.name_string {
         return Err(Error::ReplyMismatch("AS-REP sname/ticket mismatch".into()));
     }
     if inner.enc_part.etype != key.etype().to_iana() && inner.enc_part.etype != enc_part.key.keytype
@@ -824,7 +824,7 @@ fn finish_as_rep(
     }
     let now = i64::from(KerberosTime::now().unix_seconds());
     check_as_rep_times(&enc_part, now, 300)?;
-    if enc_part.sname.components_joined() != expected_sname.components_joined() {
+    if enc_part.sname.name_string != expected_sname.name_string {
         return Err(Error::ReplyMismatch("AS-REP sname mismatch".into()));
     }
     let requested: Vec<i32> = EncryptionType::preferred()

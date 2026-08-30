@@ -81,6 +81,15 @@ if [ "$rc" -ne 0 ]; then
 fi
 KLIST="$(docker exec "$NAME" klist -c /tmp/krb5cc_ent 2>/dev/null || true)"
 assert_canonical "$KLIST"
+echo "==== Rust kinit -E mixed-case UPN vs MIT KDC (must fail) ===="
+set +e
+OUT="$(docker exec -e KRB5_PASSWORD=userpassword "$NAME" \
+    /tmp/krb5-kinit -E 127.0.0.1 user@kerber.test /tmp/krb5cc_ent_lc 2>&1)"
+rc=$?
+set -e
+echo "$OUT"
+test "$rc" -ne 0
+echo "$OUT" | grep -Eqi 'CLIENT_NOT_FOUND|C_PRINCIPAL_UNKNOWN|not found'
 cleanup_mit
 trap - EXIT
 
@@ -139,5 +148,14 @@ if [ "$rc" -ne 0 ]; then
     exit 1
 fi
 assert_canonical "$KLIST"
-log "enterprise.gate" "ok" ',"mode":"both","principal":"user@KERBER.TEST"'
+echo "==== MIT kinit -E mixed-case UPN vs Rust KDC (must fail) ===="
+set +e
+MIXOUT="$(docker exec -e KRB5_TRACE=/dev/stderr "$NAME" \
+    sh -c 'printf "%s\n" userpassword | kinit -E user@kerber.test' 2>&1)"
+rc=$?
+set -e
+echo "$MIXOUT"
+test "$rc" -ne 0
+echo "$MIXOUT" | grep -Eqi 'Client not found|not found|C_PRINCIPAL_UNKNOWN'
+log "enterprise.gate" "ok" ',"mode":"both","principal":"user@KERBER.TEST","mixed_case":"refused"'
 exit 0

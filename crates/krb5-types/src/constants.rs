@@ -294,6 +294,8 @@ pub mod flag_bit {
     pub const CNAME_IN_ADDL_TKT: usize = 14;
     /// canonicalize(15)
     pub const CANONICALIZE: usize = 15;
+    /// anonymous(16)
+    pub const ANONYMOUS: usize = 16;
     /// disable-transited-check(26)
     pub const DISABLE_TRANSITED_CHECK: usize = 26;
     /// renewable-ok(27)

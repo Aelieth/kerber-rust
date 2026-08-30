@@ -491,6 +491,7 @@ dependencies = [
 name = "krb5-client"
 version = "1.0.0"
 dependencies = [
+ "chrono",
  "krb5-asn1",
  "krb5-config",
  "krb5-crypto",

@@ -161,6 +161,21 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   (`scripts/rust-kpasswd-mit-gate.sh`); new-password `kinit`
   succeeds and the old password fails.
 
+- CLI unit coverage: klist `fmt_unix`, `parse_kadmin_args`,
+  `parse_ccname`, `parse_kpasswd_rep`. `ktutil-gate` compares
+  kvno/etype/timestamp. `client-gate` emits `log()` + `exit 0`.
+  Samba/AD `docker run` error logs write under `KERBER_SCRATCH`, not
+  host `/tmp`. `-c` without a value is an error; non-`FILE:` ccache
+  types are rejected until G8.
+
+- `klist` flag letters are MIT order `F f P p D d i R I H A T O a`
+  (anonymous `a`); it prints `renew until` and `Ticket server` in
+  local time. AS/TGS sname compare is component-wise. Trust-anchor
+  with **absent** `keyUsage` is accepted (RFC 5280 §6.1.4(n)); KU
+  present without `keyCertSign` is still refused. NT-ENTERPRISE
+  suffix match is exact octets (MIT `kinit -E user@kerber.test` in
+  `KERBER.TEST` is `CLIENT_NOT_FOUND`).
+
 - `kvno` FILE rewrites keep unparsed MIT `X-CACHECONF` records
   (`klist -C` `config:`). `kadmin.local` honors `-randkey` / `-pw` /
   `-policy` / `+|-requires_preauth` and rejects unknown flags;

@@ -25,6 +25,7 @@ name = "krb5-kvno"
 path = "src/bin/krb5-kvno.rs"
 
 [dependencies]
+chrono.workspace = true
 krb5-asn1.workspace = true
 krb5-config.workspace = true
 krb5-crypto.workspace = true

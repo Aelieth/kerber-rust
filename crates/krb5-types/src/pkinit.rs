@@ -827,6 +827,7 @@ fn directory_name(cn: &str) -> Vec<u8> {
 enum CertKind {
     Ca,
     CaNoKeyCertSign,
+    CaAbsentKu,
     Kdc,
     Client,
 }
@@ -903,7 +904,10 @@ fn p256_cert_window(
 }
 
 fn cert_extensions(kind: CertKind, subject_cn: &str, realm: &str) -> Vec<u8> {
-    let is_ca = matches!(kind, CertKind::Ca | CertKind::CaNoKeyCertSign);
+    let is_ca = matches!(
+        kind,
+        CertKind::Ca | CertKind::CaNoKeyCertSign | CertKind::CaAbsentKu
+    );
     let bc_oid = oid_der(&[0x55, 0x1d, 0x13]);
     let bc_val = if is_ca {
         tlv(0x30, &tlv(0x01, &[0xff]))
@@ -924,7 +928,11 @@ fn cert_extensions(kind: CertKind, subject_cn: &str, realm: &str) -> Vec<u8> {
         0x30,
         &[ku_oid, tlv(0x01, &[0xff]), tlv(0x04, &ku_bits)].concat(),
     );
-    let mut ext_body = [bc, ku].concat();
+    let mut ext_body = if matches!(kind, CertKind::CaAbsentKu) {
+        bc
+    } else {
+        [bc, ku].concat()
+    };
     match kind {
         CertKind::Kdc => {
             ext_body.extend(san_general(&[
@@ -942,7 +950,7 @@ fn cert_extensions(kind: CertKind, subject_cn: &str, realm: &str) -> Vec<u8> {
             ext_body.extend(san_general(&[other_name_pkinit(&san)]));
             ext_body.extend(eku(OID_KP_CLIENT_AUTH));
         }
-        CertKind::Ca | CertKind::CaNoKeyCertSign => {}
+        CertKind::Ca | CertKind::CaNoKeyCertSign | CertKind::CaAbsentKu => {}
     }
     tlv(0xa3, &tlv(0x30, &ext_body))
 }
@@ -1455,7 +1463,7 @@ fn cert_path_ok(leaf: &[u8], ca: &[u8]) -> Result<(), &'static str> {
     if !cert_basic_constraints_ca(ca) {
         return Err("cms ca");
     }
-    if !cert_has_key_cert_sign(ca) {
+    if !cert_key_cert_sign_ok(ca) {
         return Err("cms ca ku");
     }
     let iss = cert_name_der(leaf, true).ok_or("cms issuer")?;
@@ -1561,22 +1569,24 @@ fn each_ext(extensions: &[u8], mut visit: impl FnMut(&[u8], &[u8]) -> bool) {
     }
 }
 
-fn cert_has_key_cert_sign(cert: &[u8]) -> bool {
+fn cert_key_cert_sign_ok(cert: &[u8]) -> bool {
     let Some(w) = walk_tbs(cert) else {
         return false;
     };
     let Some(exts) = w.extensions else {
-        return false;
+        return true;
     };
-    let mut found = false;
+    let mut saw_ku = false;
+    let mut ok = false;
     each_ext(exts, |oid, val| {
         if oid != OID_KU {
             return false;
         }
-        found = bitstring_has(val, 5);
+        saw_ku = true;
+        ok = bitstring_has(val, 5);
         true
     });
-    found
+    !saw_ku || ok
 }
 
 fn bitstring_has(der: &[u8], bit: usize) -> bool {
@@ -1991,6 +2001,26 @@ impl PkinitCa {
             &ca_public,
             &ca_secret,
             CertKind::CaNoKeyCertSign,
+            "KERBER.TEST",
+        )?;
+        Some(Self {
+            ca_secret,
+            ca_cert,
+            ca_public,
+        })
+    }
+
+    /// CA with no `keyUsage` extension (RFC 5280 §6.1.4(n) skip).
+    #[must_use]
+    pub fn generate_absent_key_usage() -> Option<Self> {
+        let (ca_secret, ca_public) = generate_p256()?;
+        let ca_cert = p256_cert(
+            1,
+            "Kerber Test CA",
+            "Kerber Test CA",
+            &ca_public,
+            &ca_secret,
+            CertKind::CaAbsentKu,
             "KERBER.TEST",
         )?;
         Some(Self {

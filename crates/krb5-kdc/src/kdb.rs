@@ -23,7 +23,8 @@ use crate::store::{NamedPolicy, Policy, Principal, PrincipalStore, RID_FIRST_USE
 ///
 /// NT-ENTERPRISE is a single `user@suffix` component (RFC 6806), not a
 /// `/`-joined name. A suffix equal to `realm` (RFC 4120 §6.1, exact
-/// octets) maps to `user@realm`. Any other suffix is not a local alias.
+/// octets) maps to `user@realm`. Mixed-case `user@kerber.test` in
+/// `KERBER.TEST` is not a local alias (MIT `CLIENT_NOT_FOUND`).
 #[must_use]
 pub fn lookup_principal_id(name: &PrincipalName, realm: &str) -> String {
     if name.name_type == PrincipalName::NT_ENTERPRISE {

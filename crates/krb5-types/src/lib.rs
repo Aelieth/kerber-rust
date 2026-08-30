@@ -421,10 +421,11 @@ impl TicketFlags {
             (flag_bit::INVALID, 'i'),
             (flag_bit::RENEWABLE, 'R'),
             (flag_bit::INITIAL, 'I'),
-            (flag_bit::PRE_AUTHENT, 'A'),
             (flag_bit::HW_AUTHENT, 'H'),
+            (flag_bit::PRE_AUTHENT, 'A'),
             (flag_bit::TRANSITED_POLICY_CHECKED, 'T'),
             (flag_bit::OK_AS_DELEGATE, 'O'),
+            (flag_bit::ANONYMOUS, 'a'),
         ];
         for (bit, ch) in bits {
             if self.bit(bit) {
@@ -1027,6 +1028,12 @@ mod tests {
         assert_eq!(round.mit_letters(), "IA");
         let fwd = TicketFlags::none().with_bit(flag_bit::FORWARDABLE, true);
         assert_eq!(fwd.mit_letters(), "F");
+        let ha = TicketFlags::none()
+            .with_bit(flag_bit::HW_AUTHENT, true)
+            .with_bit(flag_bit::PRE_AUTHENT, true);
+        assert_eq!(ha.mit_letters(), "HA");
+        let anon = TicketFlags::none().with_bit(flag_bit::ANONYMOUS, true);
+        assert_eq!(anon.mit_letters(), "a");
     }
 
     #[test]
@@ -1073,6 +1080,9 @@ mod tests {
         assert!(!t.is_krbtgt_for("OTHER.TEST"));
         let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "x"]);
         assert!(!host.is_krbtgt());
+        let flat = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["krbtgt/KERBER.TEST"]);
+        assert_eq!(t.components_joined(), flat.components_joined());
+        assert_ne!(t.name_string, flat.name_string);
     }
 
     #[test]
@@ -1251,6 +1261,12 @@ mod tests {
         assert_eq!(
             pkinit::cms_verify(&cms, &noku.ca_cert).expect_err("no keyCertSign"),
             "cms ca ku"
+        );
+        let absent = pkinit::PkinitCa::generate_absent_key_usage().expect("absent ku");
+        let cms = absent.sign_cms(inner, "user").expect("absent ku cms");
+        assert_eq!(
+            pkinit::cms_verify(&cms, &absent.ca_cert).expect("RFC 5280 absent KU"),
+            inner
         );
 
         let kcert = {

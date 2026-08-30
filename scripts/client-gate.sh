@@ -4,6 +4,12 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
+export CORRELATION_ID
+log() {
+    printf '{"event":"%s","correlation_id":"%s","component":"client-gate","outcome":"%s"%s}\n' \
+        "$1" "$CORRELATION_ID" "$2" "${3:-}"
+}
 NAME="kerber-rust-mit-kdc"
 if ! docker ps -q --filter "name=^${NAME}$" | grep -q .; then
     echo "start the harness first: ./scripts/run-harness.sh" >&2
@@ -38,6 +44,7 @@ echo "$RKLIST" | grep -q 'Default principal: user@KERBER.TEST'
 echo "$RKLIST" | grep -q 'krbtgt/KERBER.TEST@KERBER.TEST'
 echo "$RKLIST" | grep -q 'Flags:'
 echo "$RKLIST" | grep -q 'Etype (skey, tkt):'
+echo "$RKLIST" | grep -q 'Ticket server:'
 
 echo "==== MIT klist -f -e of Rust FILE ccache ===="
 MKLIST="$(docker exec "$NAME" klist -c /tmp/krb5cc_rust -f -e)"
@@ -53,6 +60,7 @@ echo "$RK2" | grep -q 'Default principal: user@KERBER.TEST'
 echo "$RK2" | grep -q 'host/testhost.kerber.test'
 echo "$RK2" | grep -q 'Flags:'
 echo "$RK2" | grep -q 'Etype (skey, tkt):'
+echo "$RK2" | grep -q 'Ticket server:'
 MIT_FLAGS="$(echo "$MKLIST" | grep -oE 'Flags: [A-Za-z]+')"
 RUST_FLAGS="$(echo "$RK2" | grep -oE 'Flags: [A-Za-z]+')"
 echo "mit_flags=$MIT_FLAGS"
@@ -135,3 +143,5 @@ docker exec "$NAME" test ! -e "/tmp/krb5cc_${NUID}"
 KEEP="$(docker exec "$NAME" cat /tmp/krb5cc_0)"
 echo "default_uid=${NUID} krb5cc_0=$KEEP uid_file_gone=yes"
 test "$KEEP" = "keep"
+log "client.gate" "ok" ',"principal":"user@KERBER.TEST"'
+exit 0

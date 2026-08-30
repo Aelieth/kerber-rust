@@ -437,10 +437,42 @@ fn parse_duration_secs(v: &str) -> Option<u64> {
 /// `KRB5CCNAME` (FILE: prefix stripped).
 #[must_use]
 pub fn env_ccname() -> Option<PathBuf> {
-    std::env::var_os("KRB5CCNAME").map(|v| {
-        let s = v.to_string_lossy();
-        PathBuf::from(s.strip_prefix("FILE:").unwrap_or(s.as_ref()))
-    })
+    std::env::var_os("KRB5CCNAME").and_then(|v| parse_ccname(&v.to_string_lossy()).ok())
+}
+
+/// `-c` flag, else `KRB5CCNAME`, else [`default_ccache_name`].
+///
+/// # Errors
+///
+/// Unsupported ccache type.
+pub fn resolve_ccname(flag: Option<&str>) -> Result<PathBuf, String> {
+    if let Some(s) = flag {
+        return parse_ccname(s);
+    }
+    match std::env::var_os("KRB5CCNAME") {
+        Some(v) => parse_ccname(&v.to_string_lossy()),
+        None => Ok(default_ccache_name()),
+    }
+}
+
+/// FILE: residual, or a bare path. Other `TYPE:` prefixes are G8.
+///
+/// # Errors
+///
+/// Unsupported ccache type until G8.
+pub fn parse_ccname(spec: &str) -> Result<PathBuf, String> {
+    if let Some(rest) = spec.strip_prefix("FILE:") {
+        return Ok(PathBuf::from(rest));
+    }
+    if let Some((ty, _)) = spec.split_once(':')
+        && ty.bytes().all(|b| b.is_ascii_alphabetic() || b == b'_')
+        && !ty.is_empty()
+    {
+        return Err(format!(
+            "unsupported ccache type {ty} (FILE: only until G8)"
+        ));
+    }
+    Ok(PathBuf::from(spec))
 }
 
 /// MIT `FILE:/tmp/krb5cc_%{uid}` when `KRB5CCNAME` is unset.
@@ -727,6 +759,19 @@ mod tests {
         if uid != 0 {
             assert_ne!(default_ccache_name(), PathBuf::from("/tmp/krb5cc_0"));
         }
+    }
+
+    #[test]
+    fn parse_ccname_file_and_rejects_other_types() {
+        assert_eq!(
+            parse_ccname("FILE:/tmp/krb5cc_1").unwrap(),
+            PathBuf::from("/tmp/krb5cc_1")
+        );
+        assert!(parse_ccname("KEYRING:user:foo").unwrap_err().contains("G8"));
+        assert_eq!(
+            parse_ccname("/tmp/krb5cc_9").unwrap(),
+            PathBuf::from("/tmp/krb5cc_9")
+        );
     }
 
     #[test]
