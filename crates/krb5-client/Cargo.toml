@@ -20,6 +20,10 @@ path = "src/bin/krb5-klist.rs"
 name = "krb5-kdestroy"
 path = "src/bin/krb5-kdestroy.rs"
 
+[[bin]]
+name = "krb5-kvno"
+path = "src/bin/krb5-kvno.rs"
+
 [dependencies]
 krb5-asn1.workspace = true
 krb5-config.workspace = true

@@ -10,6 +10,7 @@ use krb5_types::{PrincipalName, Realm, Ticket, kerberos_string_from_bytes};
 use crate::secret_file::write_secret_file;
 
 /// One FILE ccache credential.
+#[derive(Clone)]
 pub struct CcacheCred {
     /// Client principal.
     pub client: (Realm, PrincipalName),

@@ -9,11 +9,12 @@ if ! docker ps -q --filter "name=^${NAME}$" | grep -q .; then
     echo "start the harness first: ./scripts/run-harness.sh" >&2
     exit 1
 fi
-cargo build -p krb5-client --bin krb5-kinit --bin krb5-klist --bin krb5-kdestroy
+cargo build -p krb5-client --bin krb5-kinit --bin krb5-klist --bin krb5-kdestroy --bin krb5-kvno
 docker cp target/debug/krb5-kinit "$NAME":/tmp/krb5-kinit
 docker cp target/debug/krb5-klist "$NAME":/tmp/krb5-klist
 docker cp target/debug/krb5-kdestroy "$NAME":/tmp/krb5-kdestroy
-docker exec "$NAME" chmod +x /tmp/krb5-kinit /tmp/krb5-klist /tmp/krb5-kdestroy
+docker cp target/debug/krb5-kvno "$NAME":/tmp/krb5-kvno
+docker exec "$NAME" chmod +x /tmp/krb5-kinit /tmp/krb5-klist /tmp/krb5-kdestroy /tmp/krb5-kvno
 docker exec "$NAME" mkdir -p /tmp/client-traces
 docker exec -e KRB5_PASSWORD=userpassword -e KERBER_CAPTURE_DIR=/tmp/client-traces \
     "$NAME" /tmp/krb5-kinit \
@@ -62,6 +63,24 @@ RUST_ET="$(echo "$RK2" | grep -oE 'Etype \(skey, tkt\): [^[:space:]]+, [^[:space
 echo "mit_etype=$MIT_ET"
 echo "rust_etype=$RUST_ET"
 test "$MIT_ET" = "$RUST_ET"
+
+echo "==== Rust kvno obtains a service ticket ===="
+docker exec -e KRB5_PASSWORD=userpassword "$NAME" \
+    /tmp/krb5-kinit 127.0.0.1 user@KERBER.TEST /tmp/krb5cc_kvno
+KVNO="$(docker exec "$NAME" /tmp/krb5-kvno -c /tmp/krb5cc_kvno 127.0.0.1 host/testhost.kerber.test)"
+echo "$KVNO"
+echo "$KVNO" | grep -q 'host/testhost.kerber.test'
+echo "$KVNO" | grep -q 'kvno ='
+MKVNO="$(docker exec "$NAME" klist -c /tmp/krb5cc_kvno)"
+echo "$MKVNO"
+echo "$MKVNO" | grep -q 'host/testhost.kerber.test'
+
+echo "==== MIT kvno then Rust klist ===="
+docker exec "$NAME" sh -c 'echo userpassword | kinit -c /tmp/krb5cc_mitkvno user@KERBER.TEST'
+docker exec "$NAME" kvno -c /tmp/krb5cc_mitkvno host/testhost.kerber.test
+RKVNO="$(docker exec "$NAME" /tmp/krb5-klist -c /tmp/krb5cc_mitkvno)"
+echo "$RKVNO"
+echo "$RKVNO" | grep -q 'host/testhost.kerber.test'
 
 echo "==== Rust kdestroy then MIT klist ===="
 docker exec "$NAME" /tmp/krb5-kdestroy -c /tmp/krb5cc_rust

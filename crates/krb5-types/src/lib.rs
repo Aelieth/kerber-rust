@@ -757,6 +757,20 @@ impl KerberosTime {
         u32::try_from(self.0.timestamp().max(0)).unwrap_or(u32::MAX)
     }
 
+    /// Inverse of [`Self::unix_seconds`].
+    ///
+    /// # Panics
+    ///
+    /// Panics only if chrono rejects UTC offset 0 (it does not).
+    #[must_use]
+    #[allow(clippy::expect_used)]
+    pub fn from_unix_seconds(s: u32) -> Self {
+        let tz = FixedOffset::east_opt(0).expect("UTC offset 0 is valid");
+        let utc = chrono::DateTime::from_timestamp(i64::from(s), 0).unwrap_or_else(Utc::now);
+        let dt = utc.with_timezone(&tz);
+        Self(dt.with_nanosecond(0).unwrap_or(dt))
+    }
+
     /// Add whole hours without panicking on overflow.
     ///
     /// # Errors

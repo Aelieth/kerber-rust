@@ -145,6 +145,11 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
 
 ### Changed
 
+- `krb5-kvno` obtains a service ticket via TGS (no `-U`/`-P`).
+  `krb5-ktutil` rkt/list(`-t`/`-K`)/wkt/addent/delent. Gates:
+  `client-gate.sh` (kvno) and `scripts/ktutil-gate.sh` (MIT `ktadd`
+  list + Rust keytab `kinit -k`).
+
 - `krb5-klist` (`-c`/`-f`/`-e`) reads a FILE ccache; `krb5-kdestroy`
   zeros then unlinks. Bidirectional MIT oracle in
   `scripts/client-gate.sh`: Rust klist of a MIT-`kinit` ccache and MIT

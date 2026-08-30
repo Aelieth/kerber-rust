@@ -46,7 +46,10 @@ into the MIT 1.22.2 container (same network namespace as the KDC),
 obtains a TGT and a `host/testhost.kerber.test` service ticket, and
 runs MIT `klist` on the FILE ccache. Rust `krb5-klist -c -f -e` reads a
 MIT-`kinit` FILE ccache and MIT `klist -f -e` reads the Rust-written
-one (principal, service, flags, etype). `krb5-kdestroy` zeros then
+one (principal, service, flags, etype). `krb5-kvno` obtains
+`host/testhost.kerber.test` via TGS (no `-U`/`-P`); MIT `klist` names
+that ticket and a MIT `kvno` ticket is visible to Rust klist.
+`krb5-kdestroy` zeros then
 unlinks so MIT `klist` reports no cache. The client uses unconnected UDP
 (`send_to`/`recv_from`) and ignores off-path source addresses. Host
 Docker UDP/TCP publish to port 88 is unreliable; the gate therefore
