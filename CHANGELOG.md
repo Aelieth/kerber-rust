@@ -161,6 +161,12 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   (`scripts/rust-kpasswd-mit-gate.sh`); new-password `kinit`
   succeeds and the old password fails.
 
+- PKINIT CMS without `signedAttrs` is refused (RFC 5652 §5.3).
+  PA-PK-AS-REQ under FAST hashes the FAST-inner `KDC-REQ-BODY` for
+  AuthPack `paChecksum`. `PKAuthenticator` `ctime`/`cusec` are checked
+  against the skew window and the PA replay cache (replay is
+  `PREAUTH_FAILED`).
+
 - `krb5-klist` (`-c`/`-f`/`-e`) reads a FILE ccache; `krb5-kdestroy`
   zeros then unlinks. Bidirectional MIT oracle in
   `scripts/client-gate.sh`: Rust klist of a MIT-`kinit` ccache and MIT

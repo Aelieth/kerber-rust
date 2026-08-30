@@ -5,8 +5,8 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    EncryptionType, KeyUsage, OAKLEY_2048, ProtocolKey, decrypt, dh_generate, dh_shared, encrypt,
-    octetstring2key, p256_generate, string_to_key,
+    EncryptionType, KeyUsage, OAKLEY_2048, ProtocolKey, checksum, decrypt, dh_generate, dh_shared,
+    encrypt, octetstring2key, p256_generate, string_to_key,
 };
 use krb5_kdc::{
     Acl, AdminOp, Error, KDB_DISALLOW_ALL_TIX, PrincipalStore, RID_FIRST_USER, S2K_ITERS,
@@ -26,8 +26,8 @@ use krb5_types::pac::{
     parse_kerb_validation_info, zero_pac_ad_data,
 };
 use krb5_types::{
-    EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, KdcOptions, MethodData,
-    PrincipalName, ascii, err, flag_bit, ku, pa,
+    Checksum, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, EncryptedData, KdcOptions,
+    KerberosTime, MethodData, Microseconds, PrincipalName, ascii, err, flag_bit, ku, pa,
 };
 
 fn password_key(name: &str, password: &[u8]) -> ProtocolKey {
@@ -696,6 +696,166 @@ fn pkinit_signed_content_type_mismatch_is_refused() {
         Error::Protocol { code, .. } => assert_eq!(code, err::PREAUTH_FAILED),
         other => panic!("expected PREAUTH_FAILED, got {other}"),
     }
+}
+
+#[test]
+fn pkinit_replayed_authpack_is_refused() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    store.enable_pkinit_ca().expect("PKINIT CA");
+    let ca = store.pkinit_ca().expect("CA").clone();
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let kp = p256_generate().expect("client ECDH");
+    let req = pkinit_as_req(cname, 440, |ck| {
+        pa_pk_as_req(&kp.public, &ca, Some(ck)).expect("PA-PK-AS-REQ")
+    });
+    krb5_kdc::issue_as(&store, &req).expect("first PKINIT");
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("replay");
+    match err {
+        Error::Protocol { code, .. } => assert_eq!(code, err::PREAUTH_FAILED),
+        other => panic!("expected PREAUTH_FAILED, got {other}"),
+    }
+}
+
+#[test]
+fn pkinit_stale_ctime_is_skew() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    store.enable_pkinit_ca().expect("PKINIT CA");
+    let ca = store.pkinit_ca().expect("CA").clone();
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let kp = p256_generate().expect("client ECDH");
+    let mut req = as_req(cname, TEST_REALM, 441, None).unwrap();
+    let body = encode(&req.0.req_body).expect("body");
+    let cksum = krb5_types::pkinit::kdc_req_body_checksum(&body);
+    let pack = krb5_types::pkinit::AuthPack {
+        pk_authenticator: krb5_types::pkinit::PkAuthenticator {
+            cusec: Microseconds::ZERO,
+            ctime: KerberosTime::from_unix_seconds(1),
+            nonce: 1,
+            pa_checksum: Some(cksum.into()),
+        },
+        client_public_value: Some(krb5_types::pkinit::encode_ec_spki(&kp.public).into()),
+        supported_cms_types: None,
+    };
+    let inner = encode(&pack).expect("AuthPack");
+    let signed = ca.sign_cms(&inner, "user").expect("cms");
+    let pa = krb5_types::pkinit::PaPkAsReq {
+        signed_auth_pack: signed.into(),
+        trusted_certifiers: None,
+        kdc_pk_id: None,
+    };
+    req.0.padata = Some(vec![krb5_types::PaData {
+        padata_type: pa::PK_AS_REQ,
+        padata_value: encode(&pa).expect("pa").into(),
+    }]);
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("stale ctime");
+    match err {
+        Error::Protocol { code, .. } => assert_eq!(code, err::SKEW),
+        other => panic!("expected SKEW, got {other}"),
+    }
+}
+
+#[test]
+fn pkinit_under_fast_issues() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    store.enable_pkinit_ca().expect("PKINIT CA");
+    let ca = store.pkinit_ca().expect("CA").clone();
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let kp = p256_generate().expect("client ECDH");
+    let armor_as = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 442);
+    let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x43u8; 32])
+        .expect("subkey");
+    let armor_ap = build_fast_armor(
+        armor_as.rep.0.ticket.clone(),
+        &armor_as.session_key,
+        &ascii(TEST_REALM),
+        &cname,
+        Some(&sub),
+    )
+    .expect("armor AP-REQ");
+    let akey = armor_key(&armor_as.session_key, Some(&sub)).expect("armor key");
+    let mut req = as_req(cname, TEST_REALM, 443, None).unwrap();
+    let body = encode(&req.0.req_body).expect("body");
+    let ck = krb5_types::pkinit::kdc_req_body_checksum(&body);
+    let inner = vec![pa_pk_as_req(&kp.public, &ca, Some(&ck)).expect("PA-PK-AS-REQ")];
+    attach_fast(&mut req, &armor_ap, &akey, inner).expect("FAST wrap");
+    krb5_kdc::issue_as(&store, &req).expect("PKINIT+FAST");
+}
+
+#[test]
+fn pkinit_fast_inner_body_hash_mismatch_is_refused() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    store.enable_pkinit_ca().expect("PKINIT CA");
+    let ca = store.pkinit_ca().expect("CA").clone();
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let kp = p256_generate().expect("client ECDH");
+    let armor_as = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 444);
+    let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x44u8; 32])
+        .expect("subkey");
+    let armor_ap = build_fast_armor(
+        armor_as.rep.0.ticket.clone(),
+        &armor_as.session_key,
+        &ascii(TEST_REALM),
+        &cname,
+        Some(&sub),
+    )
+    .expect("armor AP-REQ");
+    let akey = armor_key(&armor_as.session_key, Some(&sub)).expect("armor key");
+    let mut req = as_req(cname, TEST_REALM, 445, None).unwrap();
+    let outer = encode(&req.0.req_body).expect("outer");
+    let ck = krb5_types::pkinit::kdc_req_body_checksum(&outer);
+    let pa = pa_pk_as_req(&kp.public, &ca, Some(&ck)).expect("PA-PK-AS-REQ");
+    let mut inner_body = req.0.req_body.clone();
+    inner_body.nonce = inner_body.nonce.wrapping_add(1);
+    wrap_fast_split(&mut req, &armor_ap, &akey, vec![pa], inner_body).expect("FAST wrap");
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("inner paChecksum");
+    match err {
+        Error::Protocol { code, .. } => assert_eq!(code, err::PREAUTH_FAILED),
+        other => panic!("expected PREAUTH_FAILED, got {other}"),
+    }
+}
+
+fn wrap_fast_split(
+    req: &mut krb5_types::AsReq,
+    armor: &krb5_types::ApReq,
+    armor_key: &ProtocolKey,
+    inner_padata: Vec<krb5_types::PaData>,
+    inner_body: krb5_types::KdcReqBody,
+) -> Result<(), krb5_protocol::Error> {
+    let outer = encode(&req.0.req_body).map_err(|e| krb5_protocol::Error::Asn1(e.to_string()))?;
+    let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM)?;
+    let mic = checksum(armor_key, ck_usage, &outer)?;
+    let inner = krb5_types::fast::KrbFastReq {
+        fast_options: krb5_types::fast::fast_options_none(),
+        padata: inner_padata,
+        req_body: inner_body,
+    };
+    let inner_der = encode(&inner).map_err(|e| krb5_protocol::Error::Asn1(e.to_string()))?;
+    let enc_usage = KeyUsage::new(ku::FAST_ENC)?;
+    let cipher = encrypt(armor_key, enc_usage, &inner_der)?;
+    let armored = krb5_types::fast::KrbFastArmoredReq {
+        armor: Some(krb5_types::fast::KrbFastArmor {
+            armor_type: krb5_types::fast::ARMOR_AP_REQUEST,
+            armor_value: encode(armor)
+                .map_err(|e| krb5_protocol::Error::Asn1(e.to_string()))?
+                .into(),
+        }),
+        req_checksum: Checksum {
+            cksumtype: armor_key.etype().checksum_type(),
+            checksum: mic.into(),
+        },
+        enc_fast_req: EncryptedData {
+            etype: armor_key.etype().to_iana(),
+            kvno: None,
+            cipher: cipher.into(),
+        },
+    };
+    req.0.padata = Some(vec![krb5_types::PaData {
+        padata_type: pa::FX_FAST,
+        padata_value: encode(&krb5_types::fast::PaFxFast::ArmoredData(armored))
+            .map_err(|e| krb5_protocol::Error::Asn1(e.to_string()))?
+            .into(),
+    }]);
+    Ok(())
 }
 
 #[test]

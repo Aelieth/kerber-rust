@@ -308,6 +308,24 @@ pub fn kdc_req_body_checksum(body: &[u8]) -> Vec<u8> {
     sha1_bytes(body)
 }
 
+/// RFC 4556 §3.2.2: AuthPack `pkAuthenticator` `ctime` / `cusec`.
+#[must_use]
+pub fn parse_authpack_freshness(der: &[u8]) -> Option<(u32, u32)> {
+    let (t, body, _) = take_tlv(der)?;
+    if t != 0x30 {
+        return None;
+    }
+    let mut cur = body;
+    while !cur.is_empty() {
+        let (tag, inner, rest) = take_tlv(cur)?;
+        if tag == 0xa0 {
+            return pkauth_times(unwrap_explicit_seq(inner));
+        }
+        cur = rest;
+    }
+    None
+}
+
 /// RFC 4556 §3.2.2: AuthPack `paChecksum` equals SHA-1 of `KDC-REQ-BODY`.
 ///
 /// # Errors
@@ -547,6 +565,36 @@ fn unwrap_spki_field(inner: &[u8]) -> Vec<u8> {
         return body.to_vec();
     }
     inner.to_vec()
+}
+
+fn pkauth_times(seq_body: &[u8]) -> Option<(u32, u32)> {
+    let mut cusec = None;
+    let mut ctime = None;
+    let mut cur = seq_body;
+    while !cur.is_empty() {
+        let (tag, inner, rest) = take_tlv(cur)?;
+        if tag == 0xa0 {
+            let intb = if inner.first() == Some(&0x02) {
+                take_tlv(inner)?.1
+            } else {
+                inner
+            };
+            cusec = Some(der_uint(intb));
+        } else if tag == 0xa1 {
+            let gt = if inner.first() == Some(&0x18) {
+                take_tlv(inner)?.1
+            } else {
+                inner
+            };
+            let s = std::str::from_utf8(gt).ok()?;
+            ctime = Some(crate::kerberos_time_from_utc_z(s).ok()?.unix_seconds());
+        }
+        cur = rest;
+        if cusec.is_some() && ctime.is_some() {
+            break;
+        }
+    }
+    Some((ctime?, cusec?))
 }
 
 fn pkauth_nonce(seq_body: &[u8]) -> Option<u32> {
@@ -1252,24 +1300,22 @@ pub fn cms_verify_full(der: &[u8], trust_anchor: &[u8]) -> Result<CmsVerified, &
     let p = cms_parts(der)?;
     cert_path_ok(&p.cert, trust_anchor)?;
     let public = spki_uncompressed(&p.cert).ok_or("cms spki")?;
-    if let Some(sa) = &p.signed_attrs {
-        let mut set = sa.clone();
-        if set.first() == Some(&0xa0) {
-            set[0] = 0x31;
-        }
-        if !p256_verify(&public, &set, &p.signature) {
-            return Err("cms ecdsa attrs");
-        }
-        let expect = sha256_bytes(&p.e_content);
-        if !signed_attrs_digest_ok(sa, &expect) {
-            return Err("cms message-digest");
-        }
-        let ct = signed_attrs_content_type(sa).ok_or("cms content-type")?;
-        if ct != p.e_content_type {
-            return Err("cms content-type");
-        }
-    } else if !p256_verify(&public, &p.e_content, &p.signature) {
-        return Err("cms ecdsa");
+    // RFC 5652 §5.3: signedAttrs MUST be present when eContentType ≠ id-data.
+    let sa = p.signed_attrs.as_ref().ok_or("cms signedAttrs")?;
+    let mut set = sa.clone();
+    if set.first() == Some(&0xa0) {
+        set[0] = 0x31;
+    }
+    if !p256_verify(&public, &set, &p.signature) {
+        return Err("cms ecdsa attrs");
+    }
+    let expect = sha256_bytes(&p.e_content);
+    if !signed_attrs_digest_ok(sa, &expect) {
+        return Err("cms message-digest");
+    }
+    let ct = signed_attrs_content_type(sa).ok_or("cms content-type")?;
+    if ct != p.e_content_type {
+        return Err("cms content-type");
     }
     Ok(CmsVerified {
         e_content: p.e_content,
@@ -2174,5 +2220,32 @@ mod rfc8636_tests {
         h2.update(&again);
         let key2: [u8; 32] = h2.finalize().into();
         assert_eq!(key, key2);
+    }
+}
+
+#[cfg(test)]
+mod signed_attrs_tests {
+    use super::*;
+
+    #[test]
+    fn cms_verify_refuses_missing_signed_attrs() {
+        let ca = PkinitCa::generate().expect("CA");
+        let (cert, key) = ca.client_identity_for("user@KERBER.TEST").expect("id");
+        let inner = b"bare-econtent";
+        let (issuer, serial) = cert_issuer_serial(&cert).expect("ias");
+        let sig = p256_sign(&key, inner).expect("sig");
+        let cms = cms_wrap_signed(
+            inner,
+            &cert,
+            &sig,
+            &issuer,
+            &serial,
+            ECONTENT_AUTHDATA,
+            None,
+        );
+        assert_eq!(
+            cms_verify_full(&cms, &ca.ca_cert).expect_err("bare"),
+            "cms signedAttrs"
+        );
     }
 }

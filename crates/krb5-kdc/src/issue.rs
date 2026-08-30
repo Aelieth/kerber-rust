@@ -268,6 +268,10 @@ fn issue_as_from(
     } else {
         req.0.padata.clone()
     };
+    let pa_body: &[u8] = match fast.as_ref() {
+        Some(f) => f.inner_body.as_slice(),
+        None => body_der,
+    };
 
     let mut extra_padata: Vec<PaData> = vec![supported_enctypes_pa(&client)];
     let mut as_rep_key = ckey.key.clone();
@@ -284,7 +288,7 @@ fn issue_as_from(
         &ckey.key,
         etype,
         &as_req_der,
-        body_der,
+        pa_body,
         &cname,
     )? {
         Some(PreauthAction::Pkinit { key, pa }) => {

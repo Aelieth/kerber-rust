@@ -7,18 +7,20 @@ use krb5_crypto::{
     p256_shared, pkinit_kdf_agile, spake_derive_key, spake_kdc_keygen, spake_result_wbytes,
     spake_thash_update, spake_wbytes, verify_checksum,
 };
+use krb5_protocol::{ReplayCache, ReplayKey};
 use krb5_types::{
     AsReq, EncryptedData, EncryptionKey, KerberosTime, MethodData, Microseconds, PaData,
     PrincipalName, err, ku, pa,
 };
 
 use crate::error::Error;
-use crate::kdb::PrincipalRead;
+use crate::kdb::{PrincipalRead, lookup_principal_id};
 use crate::store::Principal;
 
 pub(crate) struct FastOk {
     pub armor_key: ProtocolKey,
     pub inner_padata: Vec<PaData>,
+    pub inner_body: Vec<u8>,
 }
 
 /// Unwrap PA-FX-FAST from an AS-REQ.
@@ -54,10 +56,47 @@ pub(crate) fn unwrap_fast_padata(
     let enc_usage = KeyUsage::new(ku::FAST_ENC)?;
     let plain = decrypt(&armor_key, enc_usage, armored.enc_fast_req.cipher.as_ref())?;
     let inner: krb5_types::fast::KrbFastReq = decode(&plain)?;
+    let inner_body = fast_req_body_der(&plain).map_or_else(|| encode(&inner.req_body), Ok)?;
     Ok(Some(FastOk {
         armor_key,
         inner_padata: inner.padata,
+        inner_body,
     }))
+}
+
+fn fast_req_body_der(plain: &[u8]) -> Option<Vec<u8>> {
+    let (t, seq, _) = take_der(plain)?;
+    if t != 0x30 {
+        return None;
+    }
+    let mut cur = seq;
+    while !cur.is_empty() {
+        let (tag, inner, rest) = take_der(cur)?;
+        if tag == 0xa2 {
+            return Some(inner.to_vec());
+        }
+        cur = rest;
+    }
+    None
+}
+
+fn take_der(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
+    let tag = *input.first()?;
+    let first = *input.get(1)?;
+    let (hlen, ln) = if first < 128 {
+        (1usize, usize::from(first))
+    } else if first == 0x81 && input.len() >= 3 {
+        (2, usize::from(input[2]))
+    } else if first == 0x82 && input.len() >= 4 {
+        (3, usize::from(u16::from_be_bytes([input[2], input[3]])))
+    } else {
+        return None;
+    };
+    let start = 1 + hlen;
+    let end = start.checked_add(ln)?;
+    let inner = input.get(start..end)?;
+    let rest = input.get(end..)?;
+    Some((tag, inner, rest))
 }
 
 fn armor_key_from(
@@ -336,6 +375,29 @@ pub(crate) fn process_pkinit(
             error = e
         );
         return Err(proto(err::PREAUTH_FAILED, "PKINIT paChecksum"));
+    }
+    let (ctime, cusec) = krb5_types::pkinit::parse_authpack_freshness(&inner).ok_or_else(|| {
+        tracing::error!(
+            event = "kdc.pkinit",
+            component = "krb5-kdc",
+            outcome = "error",
+            error = "pkinit ctime"
+        );
+        proto(err::PREAUTH_FAILED, "PKINIT AuthPack time")
+    })?;
+    let now = i64::from(KerberosTime::now().unix_seconds());
+    if (now - i64::from(ctime)).abs() > store.policy().skew {
+        return Err(proto(err::SKEW, "PKINIT ctime"));
+    }
+    let rkey = ReplayKey {
+        client: lookup_principal_id(cname, realm),
+        server: format!("krbtgt/{realm}@{realm}"),
+        ctime,
+        cusec,
+        auth_hash: ReplayCache::hash_authenticator(&cms),
+    };
+    if store.pa_replay().check_and_store(rkey) {
+        return Err(proto(err::PREAUTH_FAILED, "PKINIT replay"));
     }
     let (nonce, spki) = krb5_types::pkinit::parse_authpack(&inner).ok_or_else(|| {
         tracing::error!(
