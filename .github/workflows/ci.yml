@@ -68,6 +68,10 @@ jobs:
         env:
           KERBER_LIVE: "1"
         run: ./scripts/client-gate.sh
+      - name: ccache-gate
+        env:
+          KERBER_LIVE: "1"
+        run: ./scripts/ccache-gate.sh
       - name: Stop MIT harness
         if: always()
         run: ./scripts/stop-harness.sh || true
