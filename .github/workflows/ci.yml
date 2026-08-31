@@ -72,6 +72,10 @@ jobs:
         env:
           KERBER_LIVE: "1"
         run: ./scripts/ccache-gate.sh
+      - name: knobs-gate
+        env:
+          KERBER_LIVE: "1"
+        run: ./scripts/knobs-gate.sh
       - name: Stop MIT harness
         if: always()
         run: ./scripts/stop-harness.sh || true
@@ -109,6 +113,23 @@ jobs:
         run: ./scripts/flags-gate.sh
       - name: renew-gate (MIT kinit -R / kinit -p vs Rust KDC)
         run: ./scripts/renew-gate.sh
+      - name: sssd-renew / kit / gssproxy / nfs (exit 2 until vendored)
+        run: |
+          skip2() {
+            set +e
+            "$@"
+            rc=$?
+            set -e
+            if [ "$rc" -eq 2 ]; then
+              echo "$1 skipped (exit 2)"
+              return 0
+            fi
+            return "$rc"
+          }
+          skip2 ./scripts/sssd-renew-gate.sh
+          skip2 ./scripts/kit-conformance-gate.sh
+          skip2 ./scripts/gssproxy-gate.sh
+          skip2 ./scripts/nfs-krb5p-gate.sh
       - name: postdate-gate (MIT kinit -s / kinit -v vs Rust KDC)
         run: ./scripts/postdate-gate.sh
       - name: getprivs-gate (MIT kadmin getprivs limited ACL actor)
