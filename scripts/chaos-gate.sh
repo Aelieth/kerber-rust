@@ -38,7 +38,8 @@ cleanup() {
 trap cleanup EXIT
 
 command -v docker >/dev/null 2>&1 || unavailable "docker not available"
-cargo build -p krb5-kdc -p krb5-admin -p krb5-client --example loadgen -q
+cargo build -p krb5-kdc -p krb5-admin --bins -q
+cargo build -p krb5-client --example loadgen -q
 
 echo "==== env-up $REALM ===="
 "$ROOT/harness/prod/env-up.sh" | tee "$OUT/env-up.log"

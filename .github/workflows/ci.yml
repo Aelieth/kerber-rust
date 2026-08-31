@@ -206,7 +206,9 @@ jobs:
           docker build -f harness/Dockerfile -t kerber-rust-mit-kdc:1.22.2 .
           docker build -f harness/prod/Dockerfile -t kerber-rust-prod-node:latest .
       - name: Build KDC bins
-        run: cargo build -p krb5-kdc --bin krb5-kdc -p krb5-admin --bin krb5-kadmind -p krb5-client --example loadgen
+        run: |
+          cargo build -p krb5-kdc -p krb5-admin --bins
+          cargo build -p krb5-client --example loadgen
       - name: stress-gate (wire AS+TGS + latency SLO)
         run: ./scripts/stress-gate.sh
 
@@ -224,7 +226,9 @@ jobs:
           docker build -f harness/Dockerfile -t kerber-rust-mit-kdc:1.22.2 .
           docker build -f harness/prod/Dockerfile -t kerber-rust-prod-node:latest .
       - name: Build KDC bins
-        run: cargo build -p krb5-kdc --bin krb5-kdc -p krb5-admin --bin krb5-kadmind -p krb5-client --example loadgen
+        run: |
+          cargo build -p krb5-kdc -p krb5-admin --bins
+          cargo build -p krb5-client --example loadgen
       - name: chaos-gate (netem + memory + failover-under-load)
         env:
           KERBER_REQUIRE_NETEM: "1"
@@ -244,7 +248,9 @@ jobs:
           docker build -f harness/Dockerfile -t kerber-rust-mit-kdc:1.22.2 .
           docker build -f harness/prod/Dockerfile -t kerber-rust-prod-node:latest .
       - name: Build KDC bins
-        run: cargo build -p krb5-kdc --bin krb5-kdc -p krb5-admin --bin krb5-kadmind -p krb5-client --example loadgen
+        run: |
+          cargo build -p krb5-kdc -p krb5-admin --bins
+          cargo build -p krb5-client --example loadgen
       - name: soak-gate (bounded leak detection)
         env:
           KERBER_REQUIRE_REAL_PCAP: "1"

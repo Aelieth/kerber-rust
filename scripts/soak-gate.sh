@@ -43,7 +43,8 @@ trap cleanup EXIT
 command -v docker >/dev/null 2>&1 || unavailable "docker not available"
 python3 "$ROOT/scripts/lib/analyze-kdc-slo.py" --self-test \
     || die "SLO analyzer self-test failed"
-cargo build -p krb5-kdc -p krb5-admin -p krb5-client --example loadgen -q
+cargo build -p krb5-kdc -p krb5-admin --bins -q
+cargo build -p krb5-client --example loadgen -q
 
 echo "==== env-up $REALM ===="
 # PDU files in the KDC cgroup inflate docker stats via page cache; RSS
