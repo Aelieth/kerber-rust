@@ -231,20 +231,37 @@ fn challenge_pa(long_term: &ProtocolKey, armor_key: &ProtocolKey, ts: &KerberosT
     }
 }
 
-fn armor_pair(store: &PrincipalStore, armor_nonce: u32) -> (krb5_types::ApReq, ProtocolKey) {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+struct ArmorTgt {
+    ticket: krb5_types::Ticket,
+    session: ProtocolKey,
+    sub: ProtocolKey,
+}
+
+fn armor_tgt(store: &PrincipalStore, armor_nonce: u32) -> ArmorTgt {
     let armor_as = issue_tgt(store, TEST_USER, TEST_USER_PASSWORD, armor_nonce);
     let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x51u8; 32])
         .expect("subkey");
+    ArmorTgt {
+        ticket: armor_as.rep.0.ticket,
+        session: armor_as.session_key,
+        sub,
+    }
+}
+
+fn armor_ap_key(armor: &ArmorTgt, salt: u8) -> (krb5_types::ApReq, ProtocolKey) {
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let mut bytes = armor.sub.as_bytes().to_vec();
+    bytes[0] ^= salt;
+    let sub = ProtocolKey::from_bytes(armor.sub.etype(), &bytes).expect("sub");
     let armor_ap = build_fast_armor(
-        armor_as.rep.0.ticket.clone(),
-        &armor_as.session_key,
+        armor.ticket.clone(),
+        &armor.session,
         &ascii(TEST_REALM),
         &cname,
         Some(&sub),
     )
     .expect("armor");
-    let akey = armor_key(&armor_as.session_key, Some(&sub)).expect("akey");
+    let akey = armor_key(&armor.session, Some(&sub)).expect("akey");
     (armor_ap, akey)
 }
 
@@ -269,7 +286,7 @@ fn fast_challenge_req(
     nonce: u32,
     armor_nonce: u32,
 ) -> krb5_types::AsReq {
-    let (armor_ap, akey) = armor_pair(store, armor_nonce);
+    let (armor_ap, akey) = armor_ap_key(&armor_tgt(store, armor_nonce), 0);
     fast_challenge_req_with(&armor_ap, &akey, long_term, ts, nonce)
 }
 
@@ -289,28 +306,20 @@ fn encrypted_challenge_wrong_key_locks_at_max_fail() {
     store
         .set_principal_policy(&user, Some("chalock".into()))
         .unwrap();
-    let (armor_ap, akey) = armor_pair(&store, 800);
+    let armor = armor_tgt(&store, 800);
     let zeros = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0u8; 32]).unwrap();
     let now = KerberosTime::now();
-    let e1 = krb5_kdc::issue_as(
-        &store,
-        &fast_challenge_req_with(&armor_ap, &akey, &zeros, &now, 801),
-    )
-    .expect_err("wrong key");
+    let bad = |nonce: u32| {
+        let (ap, akey) = armor_ap_key(&armor, u8::try_from(nonce).unwrap_or(1));
+        fast_challenge_req_with(&ap, &akey, &zeros, &now, nonce)
+    };
+    let e1 = krb5_kdc::issue_as(&store, &bad(801)).expect_err("wrong key");
     assert_eq!(issue_code(e1), err::PREAUTH_FAILED);
     assert_eq!(store.fail_auth_of(store.get_name(&user).unwrap()), 1);
-    let e2 = krb5_kdc::issue_as(
-        &store,
-        &fast_challenge_req_with(&armor_ap, &akey, &zeros, &now, 803),
-    )
-    .expect_err("second fail");
+    let e2 = krb5_kdc::issue_as(&store, &bad(803)).expect_err("second fail");
     assert_eq!(issue_code(e2), err::PREAUTH_FAILED);
     assert_eq!(store.fail_auth_of(store.get_name(&user).unwrap()), 2);
-    let e3 = krb5_kdc::issue_as(
-        &store,
-        &fast_challenge_req_with(&armor_ap, &akey, &zeros, &now, 805),
-    )
-    .expect_err("locked");
+    let e3 = krb5_kdc::issue_as(&store, &bad(805)).expect_err("locked");
     assert_eq!(issue_code(e3), err::CLIENT_REVOKED);
 }
 
@@ -333,6 +342,142 @@ fn encrypted_challenge_replayed_blob_is_repeat() {
     krb5_kdc::issue_as(&store, &req).expect("first challenge");
     let err = krb5_kdc::issue_as(&store, &req).expect_err("replay");
     assert_eq!(issue_code(err), err::REPEAT);
+}
+
+fn e_data_has_fx_fast(err: &Error) -> bool {
+    let ed = match err {
+        Error::Protocol {
+            e_data: Some(ed), ..
+        }
+        | Error::PreauthRequired { e_data: ed } => ed.as_slice(),
+        _ => return false,
+    };
+    decode::<MethodData>(ed).is_ok_and(|m| m.iter().any(|p| p.padata_type == pa::FX_FAST))
+}
+
+#[test]
+fn encrypted_challenge_skew_is_fast_wrapped() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let key = user_key();
+    let stale = KerberosTime::now().add_seconds(-10_000).unwrap();
+    let err = krb5_kdc::issue_as(&store, &fast_challenge_req(&store, &key, &stale, 831, 830))
+        .expect_err("skew");
+    assert_eq!(issue_code(err.clone()), err::SKEW);
+    assert!(
+        e_data_has_fx_fast(&err),
+        "post-armor SKEW must be FAST-wrapped"
+    );
+}
+
+#[test]
+fn unknown_critical_fast_option_is_refused() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = user_key();
+    let armor_as = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 840);
+    let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x45u8; 32])
+        .expect("subkey");
+    let armor_ap = build_fast_armor(
+        armor_as.rep.0.ticket.clone(),
+        &armor_as.session_key,
+        &ascii(TEST_REALM),
+        &cname,
+        Some(&sub),
+    )
+    .expect("armor");
+    let akey = armor_key(&armor_as.session_key, Some(&sub)).expect("akey");
+    let mut req = as_req(cname, TEST_REALM, 841, None).unwrap();
+    let inner = req.0.req_body.clone();
+    let mut opts = krb5_types::fast::fast_options_none();
+    opts.set(16, true);
+    wrap_fast_split_opts(
+        &mut req,
+        &armor_ap,
+        &akey,
+        vec![pa_enc_timestamp(&key).expect("pa")],
+        inner,
+        opts,
+    )
+    .expect("FAST wrap");
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("critical option");
+    assert_eq!(issue_code(err), err::UNKNOWN_CRITICAL_FAST_OPTION);
+}
+
+#[test]
+fn tgs_fast_inner_nonce_not_outer() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 850);
+    let mut tgs = tgs_req(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        100,
+    )
+    .unwrap();
+    let mut inner_body = tgs.0.req_body.clone();
+    inner_body.nonce = 200;
+    wrap_tgs_fast(&mut tgs, &issued.session_key, inner_body).expect("TGS FAST");
+    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("TGS");
+    let usage = KeyUsage::new(ku::TGS_REP_ENC_PART).unwrap();
+    let plain = decrypt(
+        &issued.session_key,
+        usage,
+        out.rep.0.enc_part.cipher.as_ref(),
+    )
+    .expect("TGS enc");
+    let enc = decode_enc_part(&plain);
+    assert_eq!(
+        enc.nonce, 200,
+        "EncTgsRepPart must echo the inner FAST nonce"
+    );
+}
+
+fn wrap_tgs_fast(
+    req: &mut krb5_types::TgsReq,
+    armor_key: &ProtocolKey,
+    inner_body: krb5_types::KdcReqBody,
+) -> Result<(), krb5_protocol::Error> {
+    let ap_raw = req
+        .0
+        .padata
+        .as_ref()
+        .and_then(|p| p.iter().find(|x| x.padata_type == pa::TGS_REQ))
+        .map(|p| p.padata_value.as_ref().to_vec())
+        .ok_or_else(|| krb5_protocol::Error::Asn1("no PA-TGS-REQ".into()))?;
+    let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM)?;
+    let mic = checksum(armor_key, ck_usage, &ap_raw)?;
+    let inner = krb5_types::fast::KrbFastReq {
+        fast_options: krb5_types::fast::fast_options_none(),
+        padata: Vec::new(),
+        req_body: inner_body,
+    };
+    let inner_der = encode(&inner).map_err(|e| krb5_protocol::Error::Asn1(e.to_string()))?;
+    let enc_usage = KeyUsage::new(ku::FAST_ENC)?;
+    let cipher = encrypt(armor_key, enc_usage, &inner_der)?;
+    let armored = krb5_types::fast::KrbFastArmoredReq {
+        armor: None,
+        req_checksum: Checksum {
+            cksumtype: armor_key.etype().checksum_type(),
+            checksum: mic.into(),
+        },
+        enc_fast_req: EncryptedData {
+            etype: armor_key.etype().to_iana(),
+            kvno: None,
+            cipher: cipher.into(),
+        },
+    };
+    let pa = krb5_types::PaData {
+        padata_type: pa::FX_FAST,
+        padata_value: encode(&krb5_types::fast::PaFxFast::ArmoredData(armored))
+            .map_err(|e| krb5_protocol::Error::Asn1(e.to_string()))?
+            .into(),
+    };
+    req.0.padata.get_or_insert_with(Vec::new).push(pa);
+    Ok(())
 }
 
 #[test]
@@ -982,11 +1127,29 @@ fn wrap_fast_split(
     inner_padata: Vec<krb5_types::PaData>,
     inner_body: krb5_types::KdcReqBody,
 ) -> Result<(), krb5_protocol::Error> {
+    wrap_fast_split_opts(
+        req,
+        armor,
+        armor_key,
+        inner_padata,
+        inner_body,
+        krb5_types::fast::fast_options_none(),
+    )
+}
+
+fn wrap_fast_split_opts(
+    req: &mut krb5_types::AsReq,
+    armor: &krb5_types::ApReq,
+    armor_key: &ProtocolKey,
+    inner_padata: Vec<krb5_types::PaData>,
+    inner_body: krb5_types::KdcReqBody,
+    fast_options: krb5_types::fast::FastOptions,
+) -> Result<(), krb5_protocol::Error> {
     let outer = encode(&req.0.req_body).map_err(|e| krb5_protocol::Error::Asn1(e.to_string()))?;
     let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM)?;
     let mic = checksum(armor_key, ck_usage, &outer)?;
     let inner = krb5_types::fast::KrbFastReq {
-        fast_options: krb5_types::fast::fast_options_none(),
+        fast_options,
         padata: inner_padata,
         req_body: inner_body,
     };

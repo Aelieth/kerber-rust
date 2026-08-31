@@ -236,7 +236,10 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   bad password locks at `maxfailure` (`scripts/policy-gate.sh`).
   kadm5 `EXTRACT_KEYS` / `GET_PRINCIPAL` / `GET_STRINGS` and native
   ktadd reload the dump before read so a local `cpw` then remote
-  `ktadd -norandkey` exports the new key.
+  `ktadd -norandkey` exports the new key. FAST post-armor errors are
+  wrapped (RFC 6113 §5.4.4); issue uses the inner KDC-REQ-BODY and
+  inner nonce; unknown critical fast-options are error 93; armor TGT
+  is local TGS, unexpired, not INVALID.
 
 - Align the workspace with KLLDAP 0.7.5: edition **2024**, MSRV **1.95**,
   `nix` **0.31**, and `rasn` unpinned at **0.28.14**. MIT golden DER

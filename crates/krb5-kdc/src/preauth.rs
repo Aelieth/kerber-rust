@@ -22,6 +22,7 @@ pub(crate) struct FastOk {
     pub inner_padata: Vec<PaData>,
     pub inner_body: Vec<u8>,
     pub nonce: u32,
+    pub fast_options: krb5_types::fast::FastOptions,
 }
 
 /// Unwrap PA-FX-FAST from an AS-REQ.
@@ -64,6 +65,7 @@ pub(crate) fn unwrap_fast_padata(
         inner_padata: inner.padata,
         inner_body,
         nonce,
+        fast_options: inner.fast_options,
     }))
 }
 
@@ -111,7 +113,11 @@ fn armor_key_from(
         if armor.armor_type != krb5_types::fast::ARMOR_AP_REQUEST {
             return Err(proto(err::PREAUTH_FAILED, "unsupported FAST armor"));
         }
-        return armor_key_from_ap(store, armor.armor_value.as_ref(), ku::AP_REQ_AUTHENTICATOR);
+        return armor_key_from_ap(
+            store,
+            armor.armor_value.as_ref(),
+            ku::AP_REQ_AUTHENTICATOR,
+        );
     }
     // RFC 6113 TGS: armor may be omitted; PA-TGS-REQ is the armor (usage 7).
     let ap_raw = find_pa(outer_padata, pa::TGS_REQ)
@@ -125,6 +131,9 @@ fn armor_key_from_ap(
     authenticator_usage: u32,
 ) -> Result<ProtocolKey, Error> {
     let ap: krb5_types::ApReq = decode(ap_raw)?;
+    if !ap.ticket.sname.is_krbtgt_for(store.realm()) {
+        return Err(proto(err::NOT_US, "FAST armor not local TGS"));
+    }
     let tkt_usage = KeyUsage::new(ku::TICKET)?;
     let cipher = ap.ticket.enc_part.cipher.as_ref();
     let mut enc_tkt: Option<krb5_types::EncTicketPart> = None;
@@ -137,15 +146,24 @@ fn armor_key_from_ap(
         }
     }
     let enc_tkt = enc_tkt.ok_or_else(|| proto(err::BAD_INTEGRITY, "FAST armor TGT"))?;
+    if enc_tkt.flags.invalid() {
+        return Err(proto(err::TKT_NYV, "FAST armor INVALID"));
+    }
+    let now = i64::from(krb5_types::KerberosTime::now().unix_seconds());
+    if i64::from(enc_tkt.endtime.unix_seconds()) < now {
+        return Err(proto(err::TKT_EXPIRED, "FAST armor expired"));
+    }
     let etype = EncryptionType::from_iana(enc_tkt.key.keytype)
         .or_else(|_| EncryptionType::known(enc_tkt.key.keytype))?;
     let session = ProtocolKey::from_bytes(etype, enc_tkt.key.keyvalue.as_ref())?;
-    if let Some(sub) = {
-        let auth_usage = KeyUsage::new(authenticator_usage)?;
-        let auth_plain = decrypt(&session, auth_usage, ap.authenticator.cipher.as_ref())?;
-        let authenticator: krb5_types::Authenticator = decode(&auth_plain)?;
-        authenticator.subkey
-    } {
+    let auth_usage = KeyUsage::new(authenticator_usage)?;
+    let auth_plain = decrypt(&session, auth_usage, ap.authenticator.cipher.as_ref())?;
+    let authenticator: krb5_types::Authenticator = decode(&auth_plain)?;
+    let then = i64::from(authenticator.ctime.unix_seconds());
+    if (now - then).abs() > store.policy().skew {
+        return Err(proto(err::SKEW, "FAST armor authenticator"));
+    }
+    if let Some(sub) = authenticator.subkey {
         let st = EncryptionType::from_iana(sub.keytype)
             .or_else(|_| EncryptionType::known(sub.keytype))?;
         let subk = ProtocolKey::from_bytes(st, sub.keyvalue.as_ref())?;

@@ -10,9 +10,9 @@ use krb5_protocol::{ReplayCache, ReplayKey};
 use krb5_types::pac::{PacIdentity, parse_kerb_validation_info};
 use krb5_types::{
     AsRep, AsReq, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, EncryptedData,
-    EncryptionKey, EtypeInfo2, EtypeInfo2Entry, KerberosTime, KrbError, LastReqValue, MethodData,
-    Microseconds, OctetString, PaData, PaEncTsEnc, PrincipalName, TgsRep, TgsReq, Ticket,
-    TicketFlags, TransitedEncoding, err, flag_bit, ku, pa,
+    EncryptionKey, EtypeInfo2, EtypeInfo2Entry, KdcReqBody, KerberosTime, KrbError, LastReqValue,
+    MethodData, Microseconds, OctetString, PaData, PaEncTsEnc, PrincipalName, TgsRep, TgsReq,
+    Ticket, TicketFlags, TransitedEncoding, err, flag_bit, ku, pa,
 };
 
 use crate::ad::{
@@ -213,7 +213,27 @@ fn issue_as_from(
     req: &AsReq,
     raw: Option<&[u8]>,
 ) -> Result<IssuedAs, Error> {
-    let body = &req.0.req_body;
+    let outer = &req.0.req_body;
+    let fast = unwrap_fast(store, req)?;
+    let inner_owned: Option<KdcReqBody> = match fast.as_ref() {
+        Some(f) => Some(decode(&f.inner_body)?),
+        None => None,
+    };
+    let body = inner_owned.as_ref().unwrap_or(outer);
+    issue_as_body(store, req, raw, body, fast.as_ref())
+        .map_err(|e| wrap_as_fast(store, fast.as_ref(), e, body))
+}
+
+fn issue_as_body(
+    store: &dyn PrincipalRead,
+    req: &AsReq,
+    raw: Option<&[u8]>,
+    body: &KdcReqBody,
+    fast: Option<&FastOk>,
+) -> Result<IssuedAs, Error> {
+    if let Some(f) = fast {
+        check_fast_options(&f.fast_options)?;
+    }
     if utf8_realm(&body.realm) != store.realm() {
         return Err(proto(err::C_PRINCIPAL_UNKNOWN, "wrong realm"));
     }
@@ -263,14 +283,12 @@ fn issue_as_from(
         encoded_body = encode(body)?;
         &encoded_body
     };
-
-    let fast = unwrap_fast(store, req)?;
-    let work_padata = if let Some(ref f) = fast {
+    let work_padata = if let Some(f) = fast {
         Some(f.inner_padata.clone())
     } else {
         req.0.padata.clone()
     };
-    let pa_body: &[u8] = match fast.as_ref() {
+    let pa_body: &[u8] = match fast {
         Some(f) => f.inner_body.as_slice(),
         None => body_der,
     };
@@ -316,7 +334,7 @@ fn issue_as_from(
         None => {}
     }
     if !skip_timestamp
-        && let Some(f) = fast.as_ref()
+        && let Some(f) = fast
         && let Some(blob) = find_pa(Some(&f.inner_padata), pa::ENCRYPTED_CHALLENGE)
         && !blob.is_empty()
     {
@@ -333,7 +351,7 @@ fn issue_as_from(
         }
     }
     if client.requires_preauth && !skip_timestamp {
-        return Err(fast_preauth_required(store, &client, fast.as_ref(), body));
+        return Err(preauth_required(store, &client));
     }
     if attr(&client, KDB_REQUIRES_HW_AUTH) && !hw_preauth {
         return Err(proto(err::PREAUTH_FAILED, "NO HW PREAUTH"));
@@ -423,7 +441,7 @@ fn issue_as_from(
     let renew_till = renew_till_for(store, &now, &flags, Some(&client), body.rtime.as_ref());
     let enc_part = enc_rep_part(
         &session,
-        fast.as_ref().map_or(body.nonce, |f| f.nonce),
+        fast.map_or(body.nonce, |f| f.nonce),
         &now,
         &now,
         &starttime,
@@ -495,19 +513,38 @@ fn issue_tgs_from(
     req: &TgsReq,
     raw: Option<&[u8]>,
 ) -> Result<IssuedTgs, Error> {
-    let body = &req.0.req_body;
-    if body.kdc_options.unsupported_bits() != 0 {
-        return Err(proto(err::BADOPTION, "unsupported KDCOptions"));
-    }
+    let outer = &req.0.req_body;
     let encoded_body;
     let body_der: &[u8] = if let Some(slice) = raw.and_then(kdc_req_body_der) {
         slice
     } else {
-        encoded_body = encode(body)?;
+        encoded_body = encode(outer)?;
         &encoded_body
     };
     let tgs_fast = unwrap_fast_padata(store, req.0.padata.as_deref(), body_der)?;
-    let tgs_padata = if let Some(ref f) = tgs_fast {
+    let inner_owned: Option<KdcReqBody> = match tgs_fast.as_ref() {
+        Some(f) => Some(decode(&f.inner_body)?),
+        None => None,
+    };
+    let body = inner_owned.as_ref().unwrap_or(outer);
+    issue_tgs_body(store, req, body, tgs_fast.as_ref(), body_der)
+        .map_err(|e| wrap_as_fast(store, tgs_fast.as_ref(), e, body))
+}
+
+fn issue_tgs_body(
+    store: &dyn PrincipalRead,
+    req: &TgsReq,
+    body: &KdcReqBody,
+    tgs_fast: Option<&FastOk>,
+    body_der: &[u8],
+) -> Result<IssuedTgs, Error> {
+    if let Some(f) = tgs_fast {
+        check_fast_options(&f.fast_options)?;
+    }
+    if body.kdc_options.unsupported_bits() != 0 {
+        return Err(proto(err::BADOPTION, "unsupported KDCOptions"));
+    }
+    let tgs_padata = if let Some(f) = tgs_fast {
         Some(f.inner_padata.as_slice())
     } else {
         req.0.padata.as_deref()
@@ -749,7 +786,7 @@ fn issue_tgs_from(
     )?;
     let enc_part = enc_rep_part(
         &session,
-        body.nonce,
+        tgs_fast.map_or(body.nonce, |f| f.nonce),
         &now,
         &authtime,
         &starttime,
@@ -1165,41 +1202,63 @@ pub(crate) fn verify_enc_timestamp(
     Ok(())
 }
 
-fn fast_preauth_required(
+fn check_fast_options(opts: &krb5_types::fast::FastOptions) -> Result<(), Error> {
+    let n = opts.len().min(32);
+    for i in 16..n {
+        if opts[i] {
+            return Err(proto(err::UNKNOWN_CRITICAL_FAST_OPTION, "FAST option"));
+        }
+    }
+    Ok(())
+}
+
+fn wrap_as_fast(
     store: &dyn PrincipalRead,
-    client: &Principal,
     fast: Option<&FastOk>,
-    body: &krb5_types::KdcReqBody,
+    err: Error,
+    body: &KdcReqBody,
 ) -> Error {
-    let err = preauth_required(store, client);
-    let Error::PreauthRequired { e_data } = err else {
+    let Some(f) = fast else {
         return err;
     };
-    let Some(f) = fast else {
-        return Error::PreauthRequired { e_data };
+    let (code, text, inner_ed, as_preauth) = match err {
+        Error::PreauthRequired { e_data } => {
+            let mut method = decode::<MethodData>(&e_data).unwrap_or_default();
+            method.retain(|p| p.padata_type != pa::FX_FAST && p.padata_type != pa::SPAKE);
+            if !method
+                .iter()
+                .any(|p| p.padata_type == pa::ENCRYPTED_CHALLENGE)
+            {
+                method.insert(
+                    0,
+                    PaData {
+                        padata_type: pa::ENCRYPTED_CHALLENGE,
+                        padata_value: Vec::<u8>::new().into(),
+                    },
+                );
+            }
+            let inner = encode(&method).unwrap_or_default();
+            (err::PREAUTH_REQUIRED, None, inner, Some(method))
+        }
+        Error::Protocol { code, text, e_data } => (code, text, e_data.unwrap_or_default(), None),
+        Error::Crypto(_) => (
+            err::PREAUTH_FAILED,
+            Some("preauth".into()),
+            Vec::new(),
+            None,
+        ),
+        Error::Asn1(_) => (err::GENERIC, Some("asn1".into()), Vec::new(), None),
+        other => (err::GENERIC, Some(other.to_string()), Vec::new(), None),
     };
-    let Ok(mut method) = decode::<MethodData>(&e_data) else {
-        return Error::PreauthRequired { e_data };
-    };
-    method.retain(|p| p.padata_type != pa::FX_FAST && p.padata_type != pa::SPAKE);
-    if !method
-        .iter()
-        .any(|p| p.padata_type == pa::ENCRYPTED_CHALLENGE)
-    {
-        method.insert(
-            0,
-            PaData {
-                padata_type: pa::ENCRYPTED_CHALLENGE,
-                padata_value: Vec::<u8>::new().into(),
-            },
-        );
-    }
-    let inner_ed = encode(&method).unwrap_or_default();
     let inner_err = encode_krb_error(
         store,
-        err::PREAUTH_REQUIRED,
-        None,
-        Some(inner_ed),
+        code,
+        text.as_deref(),
+        if inner_ed.is_empty() {
+            None
+        } else {
+            Some(inner_ed)
+        },
         Some(body),
     );
     let mut padata = vec![PaData {
@@ -1213,10 +1272,22 @@ fn fast_preauth_required(
         }),
         Err(e) => return e,
     }
-    padata.extend(method);
+    if let Some(method) = as_preauth {
+        padata.extend(method);
+    }
     match wrap_fast_rep(&f.armor_key, padata, None, f.nonce, None) {
         Ok(pa) => match encode(&vec![pa]) {
-            Ok(outer) => Error::PreauthRequired { e_data: outer },
+            Ok(outer) => {
+                if code == err::PREAUTH_REQUIRED {
+                    Error::PreauthRequired { e_data: outer }
+                } else {
+                    Error::Protocol {
+                        code,
+                        text,
+                        e_data: Some(outer),
+                    }
+                }
+            }
             Err(e) => e.into(),
         },
         Err(e) => e,
