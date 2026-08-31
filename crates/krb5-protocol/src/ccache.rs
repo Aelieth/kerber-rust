@@ -152,6 +152,22 @@ impl FileCcache {
         )
     }
 
+    /// Tombstone credentials whose server principal matches `server`.
+    ///
+    /// Length is unchanged (`X-CACHECONF:` → `X-RMED-CONF:` is 12 bytes).
+    pub fn remove_cred(&mut self, realm: &Realm, server: &PrincipalName) {
+        for c in &mut self.creds {
+            if c.is_removed() {
+                continue;
+            }
+            if c.server.0.as_bytes() == realm.as_bytes()
+                && c.server.1.name_string == server.name_string
+            {
+                c.tombstone();
+            }
+        }
+    }
+
     /// Insert an `X-CACHECONF:krb5_ccache_conf_data/{key}` entry (etype 0).
     pub fn set_config(&mut self, key: &str, value: &[u8]) {
         self.creds.retain(|c| {
@@ -274,6 +290,7 @@ pub fn tgt_cred(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use krb5_types::PrincipalName;
 
     fn put_data(buf: &mut Vec<u8>, d: &[u8]) {
         buf.extend_from_slice(&(u32::try_from(d.len()).unwrap()).to_be_bytes());
@@ -356,5 +373,63 @@ mod tests {
         assert_eq!(t.second_ticket, b"second");
         let out = cc.to_bytes().expect("rewrite");
         assert_eq!(out, b, "parse → to_bytes must be identity");
+    }
+
+    #[test]
+    fn remove_cred_tombstones_ticket_and_config() {
+        let mut b = vec![0x05, 0x04, 0x00, 0x00];
+        put_princ(&mut b, b"KERBER.TEST", &[b"user"]);
+        put_princ(&mut b, b"KERBER.TEST", &[b"user"]);
+        put_princ(
+            &mut b,
+            b"X-CACHECONF:",
+            &[b"krb5_ccache_conf_data", b"pa_type"],
+        );
+        b.extend_from_slice(&0u16.to_be_bytes());
+        put_data(&mut b, &[]);
+        for _ in 0..4 {
+            b.extend_from_slice(&0u32.to_be_bytes());
+        }
+        b.push(0);
+        b.extend_from_slice(&0u32.to_be_bytes());
+        b.extend_from_slice(&0u32.to_be_bytes());
+        b.extend_from_slice(&0u32.to_be_bytes());
+        put_data(&mut b, &[1]);
+        put_data(&mut b, &[]);
+        put_princ(&mut b, b"KERBER.TEST", &[b"user"]);
+        put_princ(&mut b, b"KERBER.TEST", &[b"krbtgt", b"KERBER.TEST"]);
+        b.extend_from_slice(&18u16.to_be_bytes());
+        put_data(&mut b, &[0u8; 32]);
+        for _ in 0..4 {
+            b.extend_from_slice(&1u32.to_be_bytes());
+        }
+        b.push(0);
+        b.extend_from_slice(&0u32.to_be_bytes());
+        b.extend_from_slice(&0u32.to_be_bytes());
+        b.extend_from_slice(&0u32.to_be_bytes());
+        put_data(&mut b, b"tkt");
+        put_data(&mut b, &[]);
+        let mut cc = FileCcache::parse(&b).expect("parse");
+        assert_eq!(cc.list().len(), 1);
+        let before = cc.to_bytes().expect("before");
+        cc.remove_cred(&realm("KERBER.TEST"), &PrincipalName::krbtgt("KERBER.TEST"));
+        assert!(cc.list().is_empty());
+        assert!(cc.creds[1].is_removed());
+        assert_eq!(cc.creds[1].endtime, 0);
+        assert_eq!(cc.creds[1].authtime, u32::MAX);
+        let after_tkt = cc.to_bytes().expect("tombstone tkt");
+        assert_eq!(after_tkt.len(), before.len());
+        let conf = PrincipalName::new(
+            PrincipalName::NT_UNKNOWN,
+            ["krb5_ccache_conf_data", "pa_type"],
+        );
+        cc.remove_cred(&krb5_types::ascii("X-CACHECONF:"), &conf);
+        assert!(cc.creds[0].is_removed());
+        assert_eq!(cc.creds[0].server.0.as_bytes(), b"X-RMED-CONF:");
+        let after = cc.to_bytes().expect("tombstone conf");
+        assert_eq!(after.len(), before.len());
+        let again = FileCcache::parse(&after).expect("reparse");
+        assert!(again.list().is_empty());
+        assert!(again.creds.iter().all(CcacheCred::is_removed));
     }
 }

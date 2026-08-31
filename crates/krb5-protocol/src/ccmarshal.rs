@@ -92,6 +92,17 @@ impl CcacheCred {
     pub fn session_key(&self) -> Result<ProtocolKey, io::Error> {
         self.key.protocol_key()
     }
+
+    /// MIT FILE tombstone: `endtime = 0`, `authtime = -1`, config realm `X-RMED-CONF:`.
+    pub fn tombstone(&mut self) {
+        self.endtime = 0;
+        self.authtime = u32::MAX;
+        if self.server.0.as_bytes() == b"X-CACHECONF:"
+            && let Ok(r) = kerberos_string_from_bytes(b"X-RMED-CONF:")
+        {
+            self.server.0 = r;
+        }
+    }
 }
 
 #[derive(Default)]
