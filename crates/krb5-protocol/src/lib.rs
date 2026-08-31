@@ -42,7 +42,9 @@ pub use capture::capture_pdu;
 pub use ccache::{
     CcacheCred, CcacheKeyblock, FileCcache, parse_principal, parse_principal_ex, realm, tgt_cred,
 };
-pub use ccache_dir::{dir_cache_path, dir_display_name, dir_subsidiaries, dir_switch};
+pub use ccache_dir::{
+    dir_cache_path, dir_cache_path_for_store, dir_display_name, dir_subsidiaries, dir_switch,
+};
 pub use ccache_mem::{memory_destroy, memory_retrieve, memory_store};
 pub use ccmarshal::FCC_TAG_DELTATIME;
 #[cfg(feature = "diff")]

@@ -179,7 +179,10 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
 
 - **G8b (in progress).** FAST `hide-client-names` (bit 1) is
   `KDC_ERR_UNKNOWN_CRITICAL_FAST_OPTION` rather than a silent
-  cleartext-cname issue.
+  cleartext-cname issue. DIR collections init on store, not resolve.
+  FILE principal/realm identity is ASCII GeneralString. Committed MIT
+  `kinit -a` + u2u FILE golden (`tests/traces/ccache-mit-addr-u2u.bin`)
+  identity-checks addresses, authdata, and `second_ticket`.
 
 - `klist` flag letters are MIT order `F f P p D d i R I H A T O a`
   (anonymous `a`); it prints `renew until` in local time and

@@ -37,6 +37,12 @@ IDENT="$(docker exec "$NAME" /tmp/ccache-probe identity /tmp/krb5cc_ident)"
 echo "$IDENT"
 echo "$IDENT" | grep -q '^identity_ok bytes='
 
+echo "==== FILE identity of committed kinit -a + u2u golden ===="
+docker cp "$ROOT/tests/traces/ccache-mit-addr-u2u.bin" "$NAME":/tmp/ccache-mit-addr-u2u.bin
+GOLD="$(docker exec "$NAME" /tmp/ccache-probe identity /tmp/ccache-mit-addr-u2u.bin)"
+echo "$GOLD"
+echo "$GOLD" | grep -q '^identity_ok bytes='
+
 echo "==== MIT remove_cred on Rust FILE; klist both ways ===="
 docker exec -e KRB5_PASSWORD=userpassword "$NAME" \
     /tmp/krb5-kinit 127.0.0.1 user@KERBER.TEST /tmp/krb5cc_rust \
@@ -87,6 +93,16 @@ echo "==== MEMORY consumes MIT FILE ===="
 MEM="$(docker exec "$NAME" /tmp/ccache-probe memory-from /tmp/krb5cc_ident)"
 echo "$MEM"
 echo "$MEM" | grep -q 'memory_ok principal=user@KERBER.TEST'
+
+echo "==== DIR list of missing path does not create ===="
+docker exec "$NAME" rm -rf /tmp/dcc-missing
+set +e
+DIRMISS="$(docker exec "$NAME" /tmp/krb5-klist -c DIR:/tmp/dcc-missing 2>&1)"
+drc=$?
+set -e
+echo "$DIRMISS"
+test "$drc" -ne 0
+docker exec "$NAME" sh -c 'test ! -e /tmp/dcc-missing'
 
 echo "==== DIR collection MIT kinit + kswitch both ways ===="
 docker exec "$NAME" rm -rf /tmp/dcc

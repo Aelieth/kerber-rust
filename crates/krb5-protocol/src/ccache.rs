@@ -88,6 +88,10 @@ impl FileCcache {
 
     /// Parse a FILE ccache v4.
     ///
+    /// Principals and realms must be ASCII GeneralString (RFC 4120). A MIT
+    /// cache with non-ASCII name octets fails parse; identity is lossless
+    /// only inside that alphabet.
+    ///
     /// # Errors
     ///
     /// Truncation or invalid version / principal.
@@ -432,5 +436,36 @@ mod tests {
         let again = FileCcache::parse(&after).expect("reparse");
         assert!(again.list().is_empty());
         assert!(again.creds.iter().all(CcacheCred::is_removed));
+    }
+
+    #[test]
+    fn mit_addr_u2u_golden_is_identity() {
+        let bytes = include_bytes!("../../../tests/traces/ccache-mit-addr-u2u.bin");
+        let cc = FileCcache::parse(bytes).expect("parse MIT golden");
+        assert!(
+            cc.creds.iter().any(|c| !c.addresses.is_empty()),
+            "kinit -a addresses"
+        );
+        assert!(cc.creds.iter().any(|c| !c.authdata.is_empty()), "authdata");
+        assert!(
+            cc.creds.iter().any(|c| !c.second_ticket.is_empty()),
+            "second_ticket"
+        );
+        let out = cc.to_bytes().expect("to_bytes");
+        assert_eq!(out.as_slice(), &bytes[..]);
+    }
+
+    #[test]
+    fn parse_rejects_non_ascii_realm() {
+        let mut b = vec![0x05, 0x04, 0x00, 0x00];
+        put_princ(&mut b, b"K\x80R", &[b"user"]);
+        let Err(err) = FileCcache::parse(&b) else {
+            panic!("non-ASCII realm parsed");
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("GeneralString") || msg.contains("UTF-8") || msg.contains("principal"),
+            "{msg}"
+        );
     }
 }

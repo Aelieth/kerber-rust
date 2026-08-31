@@ -9,12 +9,25 @@ use std::os::unix::fs::PermissionsExt;
 
 const DEFAULT_SUB: &str = "tkt";
 
-/// FILE path for a DIR residual (`dirname` or `:filepath`).
+/// FILE path for a DIR residual (`dirname` or `:filepath`). Does not create.
+///
+/// # Errors
+///
+/// Missing directory, non-directory, or subsidiary name not starting with `tkt`.
+pub fn dir_cache_path(residual: &str) -> io::Result<PathBuf> {
+    resolve_dir(residual, false)
+}
+
+/// FILE path for a DIR residual, creating the collection on first store.
 ///
 /// # Errors
 ///
 /// Missing parent, non-directory, or subsidiary name not starting with `tkt`.
-pub fn dir_cache_path(residual: &str) -> io::Result<PathBuf> {
+pub fn dir_cache_path_for_store(residual: &str) -> io::Result<PathBuf> {
+    resolve_dir(residual, true)
+}
+
+fn resolve_dir(residual: &str, init: bool) -> io::Result<PathBuf> {
     if let Some(path) = residual.strip_prefix(':') {
         let p = Path::new(path);
         let name = file_name(p)?;
@@ -33,12 +46,24 @@ pub fn dir_cache_path(residual: &str) -> io::Result<PathBuf> {
                     "DIR subsidiary has no parent directory",
                 )
             })?;
-        ensure_dir(dir)?;
+        if init {
+            ensure_dir(dir)?;
+        }
         return Ok(p.to_path_buf());
     }
     let dir = Path::new(residual);
-    ensure_dir(dir)?;
-    let name = read_primary(dir)?;
+    if init {
+        ensure_dir(dir)?;
+    } else {
+        let m = fs::metadata(dir)?;
+        if !m.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "not a directory",
+            ));
+        }
+    }
+    let name = read_primary(dir, init)?;
     Ok(dir.join(name))
 }
 
@@ -126,7 +151,7 @@ fn ensure_dir(dir: &Path) -> io::Result<()> {
     }
 }
 
-fn read_primary(dir: &Path) -> io::Result<String> {
+fn read_primary(dir: &Path, init: bool) -> io::Result<String> {
     let p = dir.join("primary");
     match fs::read_to_string(&p) {
         Ok(s) => {
@@ -141,7 +166,9 @@ fn read_primary(dir: &Path) -> io::Result<String> {
             }
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            write_primary(dir, DEFAULT_SUB)?;
+            if init {
+                write_primary(dir, DEFAULT_SUB)?;
+            }
             Ok(DEFAULT_SUB.to_owned())
         }
         Err(e) => Err(e),
@@ -192,7 +219,9 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&dir);
         let residual = dir.to_string_lossy().into_owned();
-        let p = dir_cache_path(&residual).expect("primary tkt");
+        assert!(dir_cache_path(&residual).is_err());
+        assert!(!dir.exists());
+        let p = dir_cache_path_for_store(&residual).expect("primary tkt");
         assert_eq!(p.file_name().unwrap(), "tkt");
         assert!(dir.join("primary").is_file());
         let sub = dir.join("tktXXXX");
@@ -201,6 +230,27 @@ mod tests {
         dir_switch(&sub_res).expect("switch");
         let p2 = dir_cache_path(&residual).expect("switched");
         assert_eq!(p2.file_name().unwrap(), "tktXXXX");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dir_resolve_does_not_create() {
+        let dir = std::env::temp_dir().join(format!(
+            "krb5cc-dir-ro-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        let residual = dir.to_string_lossy().into_owned();
+        let err = dir_cache_path(&residual).expect_err("missing DIR");
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert!(!dir.exists());
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir_cache_path(&residual).expect("existing empty DIR");
+        assert_eq!(p.file_name().unwrap(), "tkt");
+        assert!(!dir.join("primary").exists());
         let _ = fs::remove_dir_all(&dir);
     }
 }

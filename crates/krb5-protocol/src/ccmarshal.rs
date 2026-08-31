@@ -155,6 +155,7 @@ pub(crate) fn unmarshal_princ(
     for _ in 0..ncomp {
         parts.push(take_data(b, i)?);
     }
+    // FILE name fields are raw octets in MIT; we require ASCII GeneralString.
     let realm = kerberos_string_from_bytes(&realm_b)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
     let name = PrincipalName::try_from_bytes(ntype, parts)

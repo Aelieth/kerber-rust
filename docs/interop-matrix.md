@@ -90,7 +90,9 @@ deletion is not guaranteed if marshal length would change. FILE
 stores still append/rewrite via temp+rename (MIT opens `O_APPEND`
 in place); whether to match MIT in-place open is open until G8b
 SSSD/gssproxy oracles. Unknown ccache prefixes are
-`KRB5_CC_UNKNOWN_TYPE` with no FILE fallback.
+`KRB5_CC_UNKNOWN_TYPE` with no FILE fallback. FILE principal and
+realm octets must be ASCII GeneralString; non-ASCII MIT caches fail
+parse (no silent corruption). DIR resolve does not create `primary`.
 
 ## Not external oracles
 

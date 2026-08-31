@@ -25,6 +25,7 @@ files are gitignored.
 | `kdb/mit-dump-v7.txt` | dump | MIT 1.22.2 `kdb5_util dump` (default **version 7**) of `KERBER.TEST` (`user`/`pauser`/`host/testhost.kerber.test`; master password `masterpassword`). Keys are master-key-encrypted; the test-realm password is already public. |
 | `kdb/mit-dump-v6.txt` | dump | Same realm via `kdb5_util dump -r18` (**version 6**). Princ grammar matches v7. |
 | `kdb/getprinc-pauser.txt` | text | `kadmin.local getprinc pauser` at dump time. `Attributes: REQUIRES_PRE_AUTH` is dump field **128**, not `0x8`. |
+| `ccache-mit-addr-u2u.bin` | FILE v4 | MIT 1.22.2 `kinit -a` TGT (addresses) plus a MIT `krb5_cc_store_cred` user-to-user cred (`is_skey`, authdata, `second_ticket`). Identity: `FileCcache::parse` → `to_bytes`. Test-realm keys; password already public. |
 
 Reply goldens must be MIT-KDC bytes from the Rust client socket
 (`client-rep-*.der`), not Rust-KDC socket dumps (`kdc-rep-*.der`).

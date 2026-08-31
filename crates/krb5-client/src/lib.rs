@@ -13,8 +13,8 @@ use krb5_asn1::decode;
 use krb5_config::CcSpec;
 use krb5_protocol::{
     AsOutcome, AsRequest, FastArmor, KdcAddr, PkinitClient, TgsOutcome, as_exchange,
-    dir_cache_path, memory_destroy, memory_retrieve, memory_store, parse_principal_ex,
-    tgs_exchange,
+    dir_cache_path, dir_cache_path_for_store, memory_destroy, memory_retrieve, memory_store,
+    parse_principal_ex, tgs_exchange,
 };
 use krb5_types::{PrincipalName, Ticket};
 use zeroize::Zeroize;
@@ -173,7 +173,7 @@ pub fn store_ccache(
             Ok(())
         }
         CcSpec::Dir(r) => {
-            let p = dir_cache_path(r)?;
+            let p = dir_cache_path_for_store(r)?;
             cc.write_file(p).map_err(Into::into)
         }
     }
