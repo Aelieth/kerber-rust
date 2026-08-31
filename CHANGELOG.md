@@ -239,7 +239,9 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   `ktadd -norandkey` exports the new key. FAST post-armor errors are
   wrapped (RFC 6113 §5.4.4); issue uses the inner KDC-REQ-BODY and
   inner nonce; unknown critical fast-options are error 93; armor TGT
-  is local TGS, unexpired, not INVALID.
+  is local TGS, unexpired, not INVALID. ktutil-gate lists a MIT
+  unknown-etype keytab as parsed princ/kvno plus `Unknown (N)`.
+  Local ktadd rolls back if chrand's own save fails.
 
 - Align the workspace with KLLDAP 0.7.5: edition **2024**, MSRV **1.95**,
   `nix` **0.31**, and `rasn` unpinned at **0.28.14**. MIT golden DER
@@ -249,12 +251,26 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   Bisect: `c6c59d8` (MSRV bump) was clippy-red on stable until
   `d226f8c` folded MSRV-gated `is_multiple_of` / if-let-chains.
 
-Deferred (G7 N-batch ledger, not this pass): PKINIT nonce /
-`signatureAlgorithm` / SignerInfo `sid` / 64 KiB DER cap; KDC
-retransmit lookaside; `addpol` swallows its save error; kvno `-U`/`-P`;
-G7g remote kadmin client; G8a-1 FILE ccache tagged header; kinit
-`-k/-t` unknown-flag parse (G8b-1). Reload→save still has no dump
-file lock (with db2/LMDB).
+Deferred (committed G7 ledger; not this 1.1 cut): kvno `-U`/`-P`;
+G7g remote AUTH_GSSAPI `kadmin` client; ktutil argv-join; kpasswd
+`ap_len==0`; PKINIT TRACE self-grade / nonce / `signatureAlgorithm` /
+SignerInfo `sid` / 64 KiB DER cap; KDC retransmit lookaside; TGS/AS
+sname asymmetry; argv `PrincipalName::new` ×3; `addpol` ACL+save;
+client-gate config-key equality; kpasswd subkey zeroize; `delprinc
+-force`; klist `for client` / `starttime==0`; keytab v1 endian;
+`take_der` dup; replay window vs skew; `pa_replay` cap; PKINIT
+`cusec` range; enterprise error code 6; `cms_wrap_signed(None)` pub;
+N4 `create_host` double dump write; N7 reload→save has no dump file
+lock (with db2/LMDB); FAST armor AP-REQ not stored in the TGS replay
+cache (MIT `kinit -T` reuses it); G8a-1 FILE ccache tagged header;
+G8b-1 kinit `-k/-t` unknown-flag parse. Nits: N1 raceprinc-leg
+stderr; N3 `Error::Crypto` flattening + root-fragile `0555` test; N5
+`skipped_unknown_etype` dead field + module doc "skipped"; N7
+`API_V2` hardcode + `kadm5_code` string-match + deleted-dump-proceeds-stale;
+N8 `FAST_COOKIE`==`ENC_CHALLENGE_CLIENT`==54 + cookie-as-encryption-oracle;
+N10 FIFO `is_err()` not `ENXIO` + `temp_dir()` host `/tmp`; iprop-gate
+FULL_RESYNC wait `$ok` printed-not-enforced.
+
 
 ## [1.0.0] - 2026-08-27
 
