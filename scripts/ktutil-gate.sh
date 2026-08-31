@@ -67,6 +67,32 @@ test "$MIT_ET" = "$RUST_ET"
 test -n "$RUST_T"
 test "$RUST_T" -gt 0
 
+echo "==== MIT unknown-etype keytab listed by Rust ktutil ===="
+docker exec -i "$NAME" python3 - <<'PY'
+import struct
+def put16(b, data):
+    return b + struct.pack('>H', len(data)) + data
+body = struct.pack('>H', 1)
+body = put16(body, b'KERBER.TEST')
+body = put16(body, b'user')
+body += struct.pack('>i', 1)
+body += struct.pack('>I', 1700000000)
+body += struct.pack('B', 3)
+body += struct.pack('>H', 99)
+body = put16(body, b'\x00' * 16)
+body += struct.pack('>I', 3)
+open('/tmp/unk.keytab', 'wb').write(b'\x05\x02' + struct.pack('>i', len(body)) + body)
+PY
+MITU="$(docker exec "$NAME" sh -c 'printf "rkt /tmp/unk.keytab\nlist\n" | ktutil')"
+echo "$MITU"
+echo "$MITU" | grep -q 'user@KERBER.TEST'
+echo "$MITU" | grep -Eq ' 3 .*user@KERBER.TEST'
+RUSTU="$(docker exec "$NAME" sh -c 'printf "rkt /tmp/unk.keytab\nlist -e\n" | /tmp/krb5-ktutil')"
+echo "$RUSTU"
+echo "$RUSTU" | grep -q 'user@KERBER.TEST'
+echo "$RUSTU" | grep -q 'Unknown (99)'
+echo "$RUSTU" | grep -Eq ' 3 .*user@KERBER.TEST Unknown \(99\)'
+
 echo "==== Rust ktutil-written keytab MIT kinit -k ===="
 docker exec -e KRB5_PASSWORD=userpassword "$NAME" sh -c \
     'printf "addent -password -p user@KERBER.TEST -k 1 -e aes256-cts-hmac-sha1-96\nwkt /tmp/rust.keytab\n" | /tmp/krb5-ktutil'

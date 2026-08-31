@@ -10,6 +10,7 @@ use std::cell::Cell;
 #[cfg(test)]
 thread_local! {
     static FAIL_NEXT_KTADD_EXPORT: Cell<bool> = const { Cell::new(false) };
+    static FAIL_NEXT_CHRAND_SAVE: Cell<bool> = const { Cell::new(false) };
 }
 
 use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
@@ -1248,8 +1249,8 @@ impl PrincipalStore {
         write: impl FnOnce(&Keytab) -> Result<(), Error>,
     ) -> Result<Keytab, Error> {
         let snap = self.get_name(name).cloned().ok_or(Error::NotFound)?;
-        if rotate {
-            self.chrand(name)?;
+        if rotate && let Err(e) = self.chrand(name) {
+            return Err(self.rollback_rotate(true, snap, e));
         }
         let kt = match self.export_keytab_local(name) {
             Ok(kt) => kt,
@@ -1403,6 +1404,11 @@ impl PrincipalStore {
         stamp_admin_tl(p, true);
         let snap = p.clone();
         self.note_ulog(id, false, Some(snap));
+        #[cfg(test)]
+        if FAIL_NEXT_CHRAND_SAVE.with(Cell::get) {
+            FAIL_NEXT_CHRAND_SAVE.with(|c| c.set(false));
+            return Err(Error::Crypto("injected chrand save fail".into()));
+        }
         self.save_if_configured()?;
         Ok(new_keys)
     }
@@ -2708,6 +2714,41 @@ mod tests {
             0,
             "ulog snapshot must carry PWCHANGE_SERVICE"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ktadd_chrand_save_fail_rolls_back_rotation() {
+        let dir = std::env::temp_dir().join(format!(
+            "krb5-ktadd-chrand-{}-{}",
+            std::process::id(),
+            unix_now_u32()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let db = dir.join("principal");
+        let stash = dir.join("stash");
+        let (mut store, acl) = crate::bootstrap_documented().unwrap();
+        let extra = PrincipalName::new(
+            PrincipalName::NT_SRV_HST,
+            ["host", "chrandfail.kerber.test"],
+        );
+        store
+            .create_host(&acl, &crate::documented_admin_id(), &extra)
+            .unwrap();
+        crate::persist::save_store(&store, &db, &stash).unwrap();
+        store.persist_paths = Some((db.clone(), stash.clone()));
+        let before = max_kvno(&store, &extra);
+        super::FAIL_NEXT_CHRAND_SAVE.with(|c| c.set(true));
+        let err = store
+            .ktadd_local_atomic(&extra, true, |_| Ok(()))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("injected chrand save fail"),
+            "{err}"
+        );
+        assert_eq!(max_kvno(&store, &extra), before);
+        let reloaded = crate::persist::load_store(&db, &stash).unwrap();
+        assert_eq!(max_kvno(&reloaded, &extra), before);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
