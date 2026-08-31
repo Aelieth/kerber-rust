@@ -107,15 +107,22 @@ echo "==== kinit admin ===="
 docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf \
     "$NAME" sh -c 'printf "adminpassword\n" | kinit admin@KERBER.TEST'
 
-echo "==== addprinc renewuser + maxrenewlife ===="
+echo "==== addprinc renewuser; four-term defaults ===="
 kadmin_q 'addprinc -pw renew-secret renewuser'
+KRBTGT_P="$(kadmin_q 'getprinc krbtgt/KERBER.TEST')"
+USER_P="$(kadmin_q 'getprinc renewuser')"
+echo "$KRBTGT_P"
+echo "$USER_P"
+# New-principal default copies realm policy (7d), so maxrenewlife is not 0.
+echo "$KRBTGT_P" | grep -E 'Maximum renewable life:' | grep -qvE '0 days 00:00:00'
+echo "$USER_P" | grep -E 'Maximum renewable life:' | grep -qvE '0 days 00:00:00'
 kadmin_q 'modprinc -maxrenewlife "7 days" renewuser'
 kadmin_q 'modprinc -maxrenewlife "7 days" krbtgt/KERBER.TEST'
 
-echo "==== MIT kinit -r 1d -l 5m ===="
+echo "==== MIT kinit -r 7d -l 10h (renew until ≈ start + 7d) ===="
 docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
 if ! docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf \
-    "$NAME" sh -c 'printf "renew-secret\n" | kinit -r 1d -l 5m renewuser@KERBER.TEST'; then
+    "$NAME" sh -c 'printf "renew-secret\n" | kinit -r 7d -l 10h renewuser@KERBER.TEST'; then
     docker exec "$NAME" cat /tmp/kdc.log >&2 || true
     log "renew.gate" "error" ',"error":"kinit -r failed"'
     exit 1
@@ -130,6 +137,17 @@ EXP1="$(echo "$BEFORE" | awk '/krbtgt\//{print $3, $4; exit}')"
 REN1="$(echo "$BEFORE" | awk -F'renew until ' '/renew until/{print $2}' | awk -F, '{print $1}')"
 echo "exp1=$EXP1 renew1=$REN1"
 [ -n "$EXP1" ] && [ -n "$REN1" ]
+START1="$(echo "$BEFORE" | awk '/krbtgt\//{print $1, $2; exit}')"
+echo "start1=$START1"
+if date -d "$START1" +%s >/dev/null 2>&1 && date -d "$REN1" +%s >/dev/null 2>&1; then
+    S_UNIX="$(date -d "$START1" +%s)"
+    R_UNIX="$(date -d "$REN1" +%s)"
+    DELTA=$((R_UNIX - S_UNIX))
+    echo "renew_delta_secs=$DELTA"
+    # 7d ± 2h
+    test "$DELTA" -ge 590400
+    test "$DELTA" -le 619200
+fi
 
 sleep 2
 echo "==== MIT kinit -R ===="

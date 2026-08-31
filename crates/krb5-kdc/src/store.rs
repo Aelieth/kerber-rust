@@ -281,6 +281,8 @@ pub struct Policy {
     pub max_life: u64,
     /// Max renewable lifetime seconds.
     pub max_renewable_life: u64,
+    /// Whether kdc.conf set `max_renewable_life` (unset ≠ 0).
+    pub max_renewable_life_set: bool,
     /// Clock skew seconds.
     pub skew: i64,
     /// Allow weak etypes.
@@ -296,6 +298,7 @@ impl Default for Policy {
         Self {
             max_life: 10 * 3600,
             max_renewable_life: 7 * 24 * 3600,
+            max_renewable_life_set: false,
             skew: 300,
             allow_weak_crypto: false,
             requires_preauth: true,
@@ -706,6 +709,7 @@ impl PrincipalStore {
     pub fn apply_kdc_conf(&mut self, conf: &krb5_config::KdcConf) -> Result<(), Error> {
         self.policy.max_life = conf.max_life;
         self.policy.max_renewable_life = conf.max_renewable_life;
+        self.policy.max_renewable_life_set = conf.max_renewable_life_set;
         self.policy.allow_weak_crypto = conf.allow_weak_crypto;
         self.policy.requires_preauth = conf.requires_preauth;
         if let Some(s) = conf.domain_sid.as_deref() {
@@ -1325,6 +1329,7 @@ impl PrincipalStore {
             false,
             0,
         );
+        p.max_renewable_life = self.policy.max_renewable_life;
         stamp_admin_tl(&mut p, true);
         self.put_principal(p);
         self.save_if_configured()
@@ -1350,6 +1355,7 @@ impl PrincipalStore {
             false,
             0,
         );
+        p.max_renewable_life = self.policy.max_renewable_life;
         stamp_admin_tl(&mut p, true);
         self.put_principal(p);
         self.save_if_configured()

@@ -432,13 +432,27 @@ fn issue_as_body(
         flags.clone(),
         &pac_kdc,
         TransitedEncoding::empty(),
-        renew_till_for(store, &now, &flags, Some(&client), body.rtime.as_ref()),
+        renew_till_for(
+            store,
+            &now,
+            &flags,
+            Some(&client),
+            Some(&server),
+            body.rtime.as_ref(),
+        ),
         store,
         include_pac,
         None,
         &starttime,
     )?;
-    let renew_till = renew_till_for(store, &now, &flags, Some(&client), body.rtime.as_ref());
+    let renew_till = renew_till_for(
+        store,
+        &now,
+        &flags,
+        Some(&client),
+        Some(&server),
+        body.rtime.as_ref(),
+    );
     let enc_part = enc_rep_part(
         &session,
         fast.map_or(body.nonce, |f| f.nonce),
@@ -744,6 +758,7 @@ fn issue_tgs_body(
             &now,
             &flags,
             tgs_client.as_ref(),
+            Some(&server),
             body.rtime.as_ref(),
         );
     }
@@ -1377,23 +1392,31 @@ fn renew_till_for(
     store: &dyn PrincipalRead,
     now: &KerberosTime,
     flags: &TicketFlags,
-    princ: Option<&Principal>,
+    client: Option<&Principal>,
+    server: Option<&Principal>,
     rtime: Option<&KerberosTime>,
 ) -> Option<KerberosTime> {
     if !flags.renewable() {
         return None;
     }
-    let mut life = store.policy().max_renewable_life;
-    if let Some(p) = princ
-        && p.max_renewable_life > 0
-    {
-        life = life.min(p.max_renewable_life);
+    let mut life = u64::MAX;
+    let pol = store.policy();
+    if pol.max_renewable_life_set {
+        life = life.min(pol.max_renewable_life);
+    }
+    for p in [client, server].into_iter().flatten() {
+        if p.max_renewable_life > 0 {
+            life = life.min(p.max_renewable_life);
+        }
     }
     if let Some(rt) = rtime {
         let want = u64::from(rt.unix_seconds()).saturating_sub(u64::from(now.unix_seconds()));
         if want > 0 {
             life = life.min(want);
         }
+    }
+    if life == u64::MAX {
+        life = pol.max_renewable_life;
     }
     now.add_seconds(i64::try_from(life).unwrap_or(i64::MAX))
         .ok()
