@@ -142,7 +142,8 @@ fn armor_key_from_ap(
         }
     }
     let enc_tkt = enc_tkt.ok_or_else(|| proto(err::BAD_INTEGRITY, "FAST armor TGT"))?;
-    if enc_tkt.flags.invalid() {
+    // Implicit TGS armor is PA-TGS-REQ; VALIDATE presents an INVALID TGT.
+    if enc_tkt.flags.invalid() && authenticator_usage != ku::TGS_REQ_AUTHENTICATOR {
         return Err(proto(err::TKT_NYV, "FAST armor INVALID"));
     }
     let now = i64::from(krb5_types::KerberosTime::now().unix_seconds());

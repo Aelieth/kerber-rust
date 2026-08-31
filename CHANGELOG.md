@@ -238,8 +238,10 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   ktadd reload the dump before read so a local `cpw` then remote
   `ktadd -norandkey` exports the new key. FAST post-armor errors are
   wrapped (RFC 6113 §5.4.4); issue uses the inner KDC-REQ-BODY and
-  inner nonce; unknown critical fast-options are error 93; armor TGT
-  is local TGS, unexpired, not INVALID. ktutil-gate lists a MIT
+  inner nonce; unknown critical fast-options are error 93; explicit
+  FAST armor TGT is local TGS, unexpired, not INVALID (implicit
+  PA-TGS-REQ armor may be INVALID under VALIDATE / MIT `kinit -v`).
+  ktutil-gate lists a MIT
   unknown-etype keytab as parsed princ/kvno plus `Unknown (N)`.
   Local ktadd rolls back if chrand's own save fails.
 

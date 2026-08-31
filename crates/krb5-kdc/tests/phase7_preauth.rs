@@ -436,6 +436,46 @@ fn tgs_fast_inner_nonce_not_outer() {
     );
 }
 
+#[test]
+fn tgs_fast_validate_allows_invalid_tgt_armor() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = user_key();
+    let from = KerberosTime::now().add_seconds(2).unwrap();
+    let mut req = as_req(
+        cname.clone(),
+        TEST_REALM,
+        860,
+        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
+    )
+    .unwrap();
+    req.0.req_body.from = Some(from);
+    req.0.req_body.kdc_options = req
+        .0
+        .req_body
+        .kdc_options
+        .with_bit(flag_bit::MAY_POSTDATE, true)
+        .with_bit(flag_bit::POSTDATED, true);
+    let issued = krb5_kdc::issue_as(&store, &req).expect("postdated AS");
+    let mut tgs = tgs_req_ex(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        PrincipalName::krbtgt(TEST_REALM),
+        TEST_REALM,
+        861,
+        KdcOptions::forwardable().with_bit(flag_bit::VALIDATE, true),
+        None,
+        Vec::new(),
+        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
+    )
+    .expect("VALIDATE");
+    let inner = tgs.0.req_body.clone();
+    wrap_tgs_fast(&mut tgs, &issued.session_key, inner).expect("TGS FAST");
+    krb5_kdc::issue_tgs(&store, &tgs).expect("FAST VALIDATE");
+}
+
 fn wrap_tgs_fast(
     req: &mut krb5_types::TgsReq,
     armor_key: &ProtocolKey,
