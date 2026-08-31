@@ -113,11 +113,7 @@ fn armor_key_from(
         if armor.armor_type != krb5_types::fast::ARMOR_AP_REQUEST {
             return Err(proto(err::PREAUTH_FAILED, "unsupported FAST armor"));
         }
-        return armor_key_from_ap(
-            store,
-            armor.armor_value.as_ref(),
-            ku::AP_REQ_AUTHENTICATOR,
-        );
+        return armor_key_from_ap(store, armor.armor_value.as_ref(), ku::AP_REQ_AUTHENTICATOR);
     }
     // RFC 6113 TGS: armor may be omitted; PA-TGS-REQ is the armor (usage 7).
     let ap_raw = find_pa(outer_padata, pa::TGS_REQ)
