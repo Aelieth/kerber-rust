@@ -244,8 +244,10 @@ when that oracle is absent.
   is two name-string components). Set-but-unreadable `KRB5_ACL_FILE`
   exits non-zero. `-randkey` then MIT `getprinc` `vno 1` and
   `kinit -k`; `+requires_preauth` on MIT `getprinc`; two `ktadd -k`
-  leave both principals (`klist -k`); `listprincs` must not clobber a
-  concurrent `kadmind` `addprinc`. Run twice.
+  leave both principals (`klist -k`); dump-based `getprinc` after a
+  mutating local `setstr` must keep a concurrent `kadmind` `addprinc`
+  (`m5k: m5v` via `getstrs`); local `addprinc n7local` then remote
+  `cpw extra2` must keep both on a fresh dump. Run twice.
 - `scripts/kpasswd-gate.sh` — MIT `kpasswd` against kadmind UDP/TCP
   464 (`kadmin/changepw`), then `kinit` with the new password; old
   password must fail; second `kpasswd` + `kinit`; then Rust

@@ -1321,6 +1321,21 @@ fn decode_keydata(r: &mut XdrR<'_>, mkey: Option<&ProtocolKey>) -> Result<Vec<Ke
     Ok(keys)
 }
 
+fn write_store(
+    store: &SharedStore,
+    api: u32,
+) -> Result<std::sync::RwLockWriteGuard<'_, krb5_kdc::PrincipalStore>, Vec<u8>> {
+    let mut g = store
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Reload then mutate then save. Two processes can still interleave
+    // that window; a dump file lock is deferred with db2/LMDB.
+    if let Err(e) = g.reload_if_stale() {
+        return Err(generic_ret(api, kadm5_code(&Error::from(e))));
+    }
+    Ok(g)
+}
+
 fn dispatch_kadm5(
     store: &SharedStore,
     acl: &Acl,
@@ -1378,9 +1393,10 @@ fn dispatch_kadm5(
         }
         DELETE_PRINCIPAL => {
             let name = parse_one_princ(args)?;
-            let mut g = store
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut g = match write_store(store, API_V2) {
+                Ok(g) => g,
+                Err(rep) => return Ok(rep),
+            };
             let mut sess = AdminSession::local(&mut g, acl, actor);
             match sess.delete(&name) {
                 Ok(()) => Ok(generic_ret(API_V2, 0)),
@@ -1392,9 +1408,10 @@ fn dispatch_kadm5(
             if acl.check(actor, krb5_kdc::AdminOp::Modify).is_err() {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_MODIFY));
             }
-            let mut g = store
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut g = match write_store(store, API_V2) {
+                Ok(g) => g,
+                Err(rep) => return Ok(rep),
+            };
             let attributes = (mask & KADM5_ATTRIBUTES != 0).then_some(fields.attributes);
             let max_life = (mask & KADM5_MAX_LIFE != 0).then_some(u64::from(fields.max_life));
             let expiration = (mask & KADM5_PRINC_EXPIRE_TIME != 0).then_some(fields.expire);
@@ -1422,9 +1439,10 @@ fn dispatch_kadm5(
         }
         CREATE_PRINCIPAL | CREATE_PRINCIPAL3 => {
             let (name, pass, policy) = parse_create(args, proc == CREATE_PRINCIPAL3)?;
-            let mut g = store
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut g = match write_store(store, API_V2) {
+                Ok(g) => g,
+                Err(rep) => return Ok(rep),
+            };
             if let Some(ref pol) = policy
                 && let Err(e) = g.check_named_policy(pol, pass.as_bytes())
             {
@@ -1447,9 +1465,10 @@ fn dispatch_kadm5(
         }
         RENAME_PRINCIPAL => {
             let (old, new) = parse_rename(args)?;
-            let mut g = store
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut g = match write_store(store, API_V2) {
+                Ok(g) => g,
+                Err(rep) => return Ok(rep),
+            };
             let mut sess = AdminSession::local(&mut g, acl, actor);
             match sess.rename(&old, &new) {
                 Ok(()) => Ok(generic_ret(API_V2, 0)),
@@ -1458,9 +1477,10 @@ fn dispatch_kadm5(
         }
         CHPASS_PRINCIPAL | CHPASS_PRINCIPAL3 => {
             let (name, pass, keepold) = parse_chpass(args, proc == CHPASS_PRINCIPAL3)?;
-            let mut g = store
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut g = match write_store(store, API_V2) {
+                Ok(g) => g,
+                Err(rep) => return Ok(rep),
+            };
             let target = format!("{}@{}", name.components_joined(), g.realm());
             if actor != target && acl.check(actor, krb5_kdc::AdminOp::ChangePassword).is_err() {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
@@ -1485,9 +1505,10 @@ fn dispatch_kadm5(
             if pol.name.is_empty() {
                 return Ok(generic_ret(api, KADM5_UNK_POLICY));
             }
-            let mut g = store
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut g = match write_store(store, api) {
+                Ok(g) => g,
+                Err(rep) => return Ok(rep),
+            };
             if g.policies().contains_key(&pol.name) {
                 return Ok(generic_ret(api, KADM5_DUP));
             }
@@ -1499,9 +1520,10 @@ fn dispatch_kadm5(
             if acl.check(actor, krb5_kdc::AdminOp::Delete).is_err() {
                 return Ok(generic_ret(api, KADM5_AUTH_GET));
             }
-            let mut g = store
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut g = match write_store(store, api) {
+                Ok(g) => g,
+                Err(rep) => return Ok(rep),
+            };
             match g.delete_policy(&name) {
                 Ok(()) => Ok(generic_ret(api, 0)),
                 Err(krb5_kdc::Error::NotFound) => Ok(generic_ret(api, KADM5_UNK_POLICY)),
@@ -1513,9 +1535,10 @@ fn dispatch_kadm5(
             if acl.check(actor, krb5_kdc::AdminOp::Modify).is_err() {
                 return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
             }
-            let mut g = store
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut g = match write_store(store, api) {
+                Ok(g) => g,
+                Err(rep) => return Ok(rep),
+            };
             let Some(existing) = g.policies().get(&rec.name).cloned() else {
                 return Ok(generic_ret(api, KADM5_UNK_POLICY));
             };
@@ -1558,9 +1581,10 @@ fn dispatch_kadm5(
             if acl.check(actor, krb5_kdc::AdminOp::ChangePassword).is_err() {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
             }
-            let mut g = store
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut g = match write_store(store, API_V2) {
+                Ok(g) => g,
+                Err(rep) => return Ok(rep),
+            };
             match g.chrand(&name) {
                 Ok(keys) => {
                     let hide = g
@@ -1599,9 +1623,10 @@ fn dispatch_kadm5(
             if acl.check(actor, krb5_kdc::AdminOp::Modify).is_err() {
                 return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
             }
-            let mut g = store
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut g = match write_store(store, API_V2) {
+                Ok(g) => g,
+                Err(rep) => return Ok(rep),
+            };
             let lockdown = match g.get_name(&name) {
                 None => return Ok(generic_ret(api, KADM5_UNK_PRINC)),
                 Some(p) => p.attributes & KDB_LOCKDOWN_KEYS != 0,
@@ -1627,9 +1652,10 @@ fn dispatch_kadm5(
             if acl.check(actor, krb5_kdc::AdminOp::SetKey).is_err() {
                 return Ok(generic_ret(api, KADM5_AUTH_SETKEY));
             }
-            let mut g = store
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut g = match write_store(store, API_V2) {
+                Ok(g) => g,
+                Err(rep) => return Ok(rep),
+            };
             let lockdown = match g.get_name(&name) {
                 None => return Ok(generic_ret(api, KADM5_UNK_PRINC)),
                 Some(p) => p.attributes & KDB_LOCKDOWN_KEYS != 0,
@@ -1663,9 +1689,10 @@ fn dispatch_kadm5(
             if key.is_empty() {
                 return Ok(generic_ret(api, KADM5_FAILURE));
             }
-            let mut g = store
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut g = match write_store(store, API_V2) {
+                Ok(g) => g,
+                Err(rep) => return Ok(rep),
+            };
             match g.set_string(&name, &key, value.as_deref()) {
                 Ok(()) => Ok(generic_ret(api, 0)),
                 Err(e) => Ok(generic_ret(api, kadm5_code(&Error::from(e)))),
@@ -3345,6 +3372,52 @@ mod tests {
         w.nullstring(Some(name));
         w.nullstring(Some(pass));
         w.b
+    }
+
+    #[test]
+    fn chpass_reload_keeps_concurrent_local_create() {
+        use krb5_kdc::{load_store, save_store};
+        let dir = std::env::temp_dir().join(format!(
+            "n7-chpass-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let db = dir.join("principal");
+        let stash = dir.join("stash");
+        let (store, acl) = krb5_kdc::bootstrap_documented().unwrap();
+        save_store(&store, &db, &stash).unwrap();
+        let mut local = load_store(&db, &stash).unwrap();
+        let kadmind = load_store(&db, &stash).unwrap();
+        let n7 = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["n7local"]);
+        {
+            let mut sess = AdminSession::local(&mut local, &acl, krb5_kdc::documented_admin_id());
+            sess.create_password(&n7, b"n7-secret").unwrap();
+        }
+        let shared = krb5_kdc::shared_dump(kadmind);
+        let actor = krb5_kdc::documented_admin_id();
+        let out = dispatch_kadm5(
+            &shared,
+            &acl,
+            &actor,
+            CHPASS_PRINCIPAL,
+            &chpass_args("user@KERBER.TEST", "n7-changed"),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&out), 0, "chpass user");
+        let loaded = load_store(&db, &stash).unwrap();
+        assert!(
+            loaded.get_name(&n7).is_some(),
+            "local addprinc must survive remote cpw"
+        );
+        assert!(
+            loaded
+                .get_name(&PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]))
+                .is_some()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn lockdown_user(store: &SharedStore) {

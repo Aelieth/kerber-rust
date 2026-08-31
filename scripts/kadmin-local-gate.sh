@@ -432,6 +432,27 @@ M5E="$(docker exec \
 echo "$M5E"
 echo "$M5E" | grep -q 'extra2@KERBER.TEST'
 
+echo "==== local addprinc then remote cpw keeps both ===="
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_PASSWORD=n7-pw \
+    "$NAME" /tmp/krb5-kadmin-local -q 'addprinc n7local'
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'cpw -pw extra-n7 extra2'
+N7L="$(docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'getprinc n7local')"
+echo "$N7L"
+echo "$N7L" | grep -q 'n7local@KERBER.TEST'
+N7E="$(docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'getprinc extra2')"
+echo "$N7E"
+echo "$N7E" | grep -q 'extra2@KERBER.TEST'
+
 echo "==== addprinc -randkey kadmin/changepw keeps PWCHANGE_SERVICE ===="
 docker exec \
     -e KRB5_KDC_DB=/tmp/principal \

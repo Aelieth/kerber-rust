@@ -94,7 +94,11 @@ MIT 1.22.2 `kadmin` add/get/list/mod/chrand/del is gated by
 `scripts/policy-gate.sh`. Iprop serial/ulog and `kpropd -A`:
 `scripts/iprop-gate.sh`. Extension points: [`plugins.md`](plugins.md)
 (traits, not dlopen). A kadmind mutation survives KDC process
-relaunch (`scripts/restart-gate.sh`).
+relaunch (`scripts/restart-gate.sh`). Mutating kadm5 verbs and
+`kadmin.local` reload the dump before they write so a concurrent
+local `addprinc` survives a remote `cpw`. There is still no dump
+file lock: the reload→mutate→save window can lose the last writer
+(dirty-flag/lock deferred with db2/LMDB).
 
 **`krb5-config`** parses `krb5.conf` / `kdc.conf` and DNS SRV. The KDC
 applies `kdc.conf` ticket policy from `KRB5_KDC_PROFILE` /
