@@ -107,7 +107,10 @@ fn run_stdin_reader<R: BufRead>(sess: &mut AdminSession<'_>, reader: R) -> i32 {
             Err(e) => {
                 eprintln!("kadmin.local: {e}");
                 failed = true;
-                continue;
+                if e.kind() == io::ErrorKind::InvalidData {
+                    continue;
+                }
+                break;
             }
         };
         match run(sess, &line) {
@@ -338,6 +341,36 @@ mod tests {
         let (mut store, acl) = sess_pair();
         let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
         let rc = run_stdin_reader(&mut sess, std::io::Cursor::new(b"\xff\nq\n"));
+        assert_eq!(rc, 1);
+        let (mut store, acl) = sess_pair();
+        let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+        let rc = run_stdin_reader(&mut sess, std::io::Cursor::new(b"\xff\nnope\nq\n"));
+        assert_eq!(rc, 1);
+    }
+
+    struct InjectedErr {
+        kind: io::ErrorKind,
+        n: u32,
+    }
+    impl io::Read for InjectedErr {
+        fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+            self.n += 1;
+            assert!(self.n < 8, "IO error must break the stdin loop");
+            Err(io::Error::new(self.kind, "injected"))
+        }
+    }
+
+    #[test]
+    fn stdin_read_error_breaks() {
+        let (mut store, acl) = sess_pair();
+        let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+        let rc = run_stdin_reader(
+            &mut sess,
+            io::BufReader::new(InjectedErr {
+                kind: io::ErrorKind::Other,
+                n: 0,
+            }),
+        );
         assert_eq!(rc, 1);
     }
 

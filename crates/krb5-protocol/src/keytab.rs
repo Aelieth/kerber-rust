@@ -104,6 +104,13 @@ impl Keytab {
         write_secret_file(path.as_ref(), &self.to_bytes())
     }
 
+    /// Principal / kvno / etype from an unknown-etype record (length prefix included).
+    #[must_use]
+    pub fn unparsed_meta(raw: &[u8], version: u16) -> Option<(u32, String, u32, i32)> {
+        let body = raw.get(4..)?;
+        parse_unparsed_meta(body, version).ok()
+    }
+
     /// File-order slots: parsed entries interleaved with unknown-etype blobs.
     #[must_use]
     pub fn slots(&self) -> Vec<KeytabSlot<'_>> {
@@ -264,6 +271,44 @@ impl From<io::Error> for EntryErr {
     fn from(e: io::Error) -> Self {
         Self::Io(e)
     }
+}
+
+fn parse_unparsed_meta(body: &[u8], ver: u16) -> Result<(u32, String, u32, i32), io::Error> {
+    let mut i = 0;
+    let ncomp = take_u16(body, &mut i)?;
+    let realm = take_counted16(body, &mut i)?;
+    let mut parts = Vec::new();
+    for _ in 0..ncomp {
+        parts.push(take_counted16(body, &mut i)?);
+    }
+    let nametype = take_i32(body, &mut i)?;
+    let timestamp = take_u32(body, &mut i)?;
+    if i >= body.len() {
+        return Err(eof());
+    }
+    let kvno8 = body[i];
+    i += 1;
+    let enctype = i32::from(take_u16(body, &mut i)?);
+    let _keybytes = take_counted16(body, &mut i)?;
+    let kvno = if ver == 0x0502 && i + 4 <= body.len() {
+        take_u32(body, &mut i)?
+    } else {
+        u32::from(kvno8)
+    };
+    let realm_s = kerberos_string_from_bytes(&realm)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+    let name = PrincipalName::try_from_bytes(nametype, parts)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+    Ok((
+        kvno,
+        format!(
+            "{}@{}",
+            name.components_joined(),
+            String::from_utf8_lossy(realm_s.as_bytes())
+        ),
+        timestamp,
+        enctype,
+    ))
 }
 
 fn parse_entry(body: &[u8], ver: u16) -> Result<KeytabEntry, EntryErr> {

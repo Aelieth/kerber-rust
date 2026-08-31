@@ -64,7 +64,10 @@ fn run_stdin_reader<R: BufRead>(kt: &mut Keytab, reader: R) -> i32 {
             Err(e) => {
                 eprintln!("ktutil: {e}");
                 failed = true;
-                continue;
+                if e.kind() == io::ErrorKind::InvalidData {
+                    continue;
+                }
+                break;
             }
         };
         match run_line(kt, &line) {
@@ -148,9 +151,23 @@ fn format_list(kt: &Keytab, show_t: bool, show_e: bool, show_k: bool) -> String 
                     let _ = write!(out, " ({})", hex(e.key.as_bytes()));
                 }
             }
-            KeytabSlot::Unparsed(_) => {
-                let _ = write!(out, "{:>4}    - (unparsed)", i + 1);
-            }
+            KeytabSlot::Unparsed(raw) => match Keytab::unparsed_meta(raw, kt.version) {
+                Some((kvno, princ, ts, enctype)) => {
+                    let _ = write!(out, "{:>4} {:>4} {princ}", i + 1, kvno);
+                    if show_t {
+                        let _ = write!(out, " t={ts}");
+                    }
+                    if show_e {
+                        let _ = write!(out, " Unknown ({enctype})");
+                    }
+                    if show_k {
+                        let _ = write!(out, " (-)");
+                    }
+                }
+                None => {
+                    let _ = write!(out, "{:>4}    - (unparsed)", i + 1);
+                }
+            },
         }
         out.push('\n');
     }
@@ -306,6 +323,34 @@ mod tests {
         let mut kt = empty_kt();
         let rc = run_stdin_reader(&mut kt, std::io::Cursor::new(b"\xff\nq\n"));
         assert_eq!(rc, 1);
+        let mut kt = empty_kt();
+        let rc = run_stdin_reader(&mut kt, std::io::Cursor::new(b"\xff\nnope\nq\n"));
+        assert_eq!(rc, 1);
+    }
+
+    struct InjectedErr {
+        kind: io::ErrorKind,
+        n: u32,
+    }
+    impl io::Read for InjectedErr {
+        fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+            self.n += 1;
+            assert!(self.n < 8, "IO error must break the stdin loop");
+            Err(io::Error::new(self.kind, "injected"))
+        }
+    }
+
+    #[test]
+    fn stdin_read_error_breaks() {
+        let mut kt = empty_kt();
+        let rc = run_stdin_reader(
+            &mut kt,
+            io::BufReader::new(InjectedErr {
+                kind: io::ErrorKind::Other,
+                n: 0,
+            }),
+        );
+        assert_eq!(rc, 1);
     }
 
     #[test]
@@ -321,6 +366,31 @@ mod tests {
         kt.unparsed.push((0, vec![0, 0, 0, 4, 0, 0, 0, 0]));
         let text = format_list(&kt, false, false, false);
         assert!(text.contains("   1    - (unparsed)"), "{text}");
+        assert!(text.contains("   2    1 user@KERBER.TEST"), "{text}");
+        let mut body = Vec::new();
+        body.extend_from_slice(&1u16.to_be_bytes());
+        let realm = b"KERBER.TEST";
+        body.extend_from_slice(&u16::try_from(realm.len()).unwrap().to_be_bytes());
+        body.extend_from_slice(realm);
+        let user = b"user";
+        body.extend_from_slice(&u16::try_from(user.len()).unwrap().to_be_bytes());
+        body.extend_from_slice(user);
+        body.extend_from_slice(&1i32.to_be_bytes());
+        body.extend_from_slice(&1u32.to_be_bytes());
+        body.push(7);
+        body.extend_from_slice(&99u16.to_be_bytes());
+        body.extend_from_slice(&16u16.to_be_bytes());
+        body.extend_from_slice(&[0u8; 16]);
+        body.extend_from_slice(&7u32.to_be_bytes());
+        let mut rec = i32::try_from(body.len()).unwrap().to_be_bytes().to_vec();
+        rec.extend_from_slice(&body);
+        kt.unparsed.clear();
+        kt.unparsed.push((0, rec));
+        let text = format_list(&kt, false, true, false);
+        assert!(
+            text.contains("   1    7 user@KERBER.TEST Unknown (99)"),
+            "{text}"
+        );
         assert!(text.contains("   2    1 user@KERBER.TEST"), "{text}");
         run_line(&mut kt, "delent 1").unwrap();
         assert!(kt.unparsed.is_empty());
