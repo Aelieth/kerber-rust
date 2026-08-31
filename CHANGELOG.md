@@ -184,8 +184,19 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   `kinit -a` + u2u FILE golden (`tests/traces/ccache-mit-addr-u2u.bin`)
   identity-checks addresses, authdata, and `second_ticket`.
   `kinit`/`klist`/`kvno`/`kdestroy` parse getopt-clustered shorts
-  (`kinit -kt` is keytab mode). `klist -s` follows MIT `klist.c`
+  (`kinit -kt` is keytab mode). `kinit -E` keeps the first `@` in the
+  UPN (MIT parse.c); MIT db2 has no UPN alias so `-E user@REALM` is
+  `CLIENT_NOT_FOUND`. `klist -s` follows MIT `klist.c`
   `check_ccache`. Password-on-stdin strips a trailing newline.
+  Fleet knobs: `udp_preference_limit`, etype lists, `forwardable`,
+  lifetimes, dns-lookup flags are parsed; Heimdal `kdc_timeout` /
+  `max_retries` are stored and ignored. Ticket renew time is the min
+  of request, krbtgt entry, client entry, and kdc.conf realm
+  `max_renewable_life` when set. New principals copy the 7d policy
+  onto `max_renewable_life`. `kit-conformance-gate` /
+  `gssproxy-gate` / `nfs-krb5p-gate` / `sssd-renew-gate` honest
+  **exit 2** until those oracles are vendored. FILE write stays
+  temp+rename.
 
 - `klist` flag letters are MIT order `F f P p D d i R I H A T O a`
   (anonymous `a`); it prints `renew until` in local time and

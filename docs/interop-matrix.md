@@ -14,8 +14,13 @@ the script documents otherwise.
 
 | Gate | Drives | Asserts | CI |
 | --- | --- | --- | --- |
-| `client-gate.sh` | Rust `krb5-kinit` vs MIT `krb5kdc` | MIT `klist` names TGT + `host/testhost.kerber.test`; Rust `klist -f -e` matches MIT flags/etype; `krb5-kvno` service ticket; `kdestroy` then MIT `klist` has no cache; symlink kdestroy refused (target intact); default ccache `/tmp/krb5cc_<uid>`; Rust `kvno` rewrite keeps MIT `klist -C` `config:` | harness |
-| `ccache-gate.sh` | MIT FILE/DIR/MEMORY vs Rust marshal | MIT-written FILE `parse → to_bytes` identity; MIT `krb5_cc_remove_cred` on a Rust FILE and Rust `remove_cred` on a MIT FILE; both `klist` skip tombstones; `klist -C` `config:` kept; DIR `kinit` twice + MIT/`krb5-kswitch` both ways; MEMORY consumes a MIT FILE; `KEYRING:` is `Unknown credential cache type` | harness |
+| `client-gate.sh` | Rust `krb5-kinit` vs MIT `krb5kdc` | MIT `klist` names TGT + `host/testhost.kerber.test`; Rust `klist -f -e` matches MIT flags/etype; `krb5-kvno` service ticket; `kdestroy` then MIT `klist` has no cache; symlink kdestroy refused (target intact); default ccache `/tmp/krb5cc_<uid>`; Rust `kvno` rewrite keeps MIT `klist -C` `config:`; `kinit -kt`; MIT and Rust `klist -s` agree | harness |
+| `ccache-gate.sh` | MIT FILE/DIR/MEMORY vs Rust marshal | MIT-written FILE `parse → to_bytes` identity; committed `kinit -a`+u2u golden identity; DIR list of a missing path does not create `primary`; MIT `krb5_cc_remove_cred` on a Rust FILE and Rust `remove_cred` on a MIT FILE; both `klist` skip tombstones; `klist -C` `config:` kept; DIR `kinit` twice + MIT/`krb5-kswitch` both ways; MEMORY consumes a MIT FILE; `KEYRING:` is `Unknown credential cache type` | harness |
+| `knobs-gate.sh` | kit-like `krb5.conf` vs MIT 1.22.2 and Rust `kinit` | `kdc_timeout`/`max_retries` do not change MIT (or Rust) kinit success; `forwardable` + `default_tkt_enctypes` show `F` and `aes256-cts-hmac-sha1-96` on `klist -f -e` | harness |
+| `kit-conformance-gate.sh` | kit twin 2×2 | `KIT_TWIN` digest logged; **exit 2** if the twin is absent | harness (skip 2) |
+| `gssproxy-gate.sh` | `X-GSSPROXY` FILE entry | **exit 2** until a Fedora/gssproxy oracle is vendored | harness (skip 2) |
+| `nfs-krb5p-gate.sh` | NFS `sec=krb5i`/`krb5p` | **exit 2** / manual until nfs-klldap-host is vendored | harness (skip 2) |
+| `sssd-renew-gate.sh` | SSSD `krb5_child` renew | **exit 2** until a digest-pinned Fedora `sssd-kcm` image can run | harness (skip 2) |
 | `ktutil-gate.sh` | MIT `ktadd` / Rust `ktutil` / MIT `kinit -k` | Rust list of MIT keytab; Rust-written keytab `kinit -k` | harness |
 | `kadmin-local-gate.sh` | Rust `krb5-kadmin-local` then MIT `kadmin` | `addprinc extra2` and `addprinc host/slashhost`; MIT getprinc/listprincs those names; set-but-unreadable `KRB5_ACL_FILE` is non-zero; `-randkey` + `kinit -k`; `+requires_preauth`; two `ktadd -k` both names; dump `getprinc` after mutating `setstr` keeps a concurrent kadmind create (`m5k: m5v`); local `addprinc n7local` then remote `cpw extra2` keeps both; local `ktadd krbtgt/REALM` is the MIT footgun (rotates + writes) | harness |
 | `rust-kpasswd-mit-gate.sh` | Rust `krb5-kpasswd` vs MIT `kadmind` 464 | new password `kinit`; old fails | harness |
@@ -27,7 +32,7 @@ the script documents otherwise.
 | `rust-kinit-fast-gate.sh` | Rust `kinit --fast` vs MIT KDC | MIT `klist` `user@KERBER.TEST`; TRACE `Decrypted AP-REQ` (MIT 1.22.2 does not print `FX-FAST`) | harness |
 | `mit-fast-kdc-gate.sh` | MIT `kinit -T` + `kvno` vs Rust KDC | TRACE `Upgrading to FAST due to presence of PA_FX_FAST`; ≥2 `fast::KrbFastResponse` (AS + TGS) | harness |
 | `rust-kinit-pkinit-gate.sh` | Rust `kinit --pkinit FILE:` vs MIT KDC | MIT `klist` `user@KERBER.TEST`; `pkinit.so`; PA-PK-AS-REQ; rogue KDC is `pkinit kdc eku` (MIT not listening is red) | harness |
-| `rust-kinit-enterprise-gate.sh` | MIT `kinit -E` vs Rust KDC and Rust `kinit -E` vs MIT | klist default principal `user@KERBER.TEST` (not the enterprise string) | harness |
+| `rust-kinit-enterprise-gate.sh` | MIT `kinit -E` vs Rust KDC; Rust `kinit -E` vs MIT (must match MIT client) | MIT db2: `CLIENT_NOT_FOUND` for `-E user@REALM`. Rust KDC: klist default principal `user@KERBER.TEST` | harness |
 | `sha2-gate.sh` | MIT `kinit`/`kvno` etype 20 vs Rust KDC | `klist -e` names `aes256-cts-hmac-sha384-192` | harness |
 | `cross-realm-gate.sh` | MIT `kinit` + `kvno host/svc.other.test@OTHER.TEST` | `klist` has `krbtgt/OTHER.TEST` and the host ticket | harness |
 | `kadmin-gate.sh` | MIT `kadmin` vs `krb5-kadmind` 749 | add/cpw/get/list/mod/chrand (dates move)/ktadd/`ktadd -norandkey`/`+lockdown_keys`/purgekeys/`cpw -keepold`/setstr/`renprinc`/del then `kinit extra` | harness |
@@ -88,11 +93,26 @@ FILE `delete_cred` is a same-length tombstone (`endtime = 0`,
 `authtime = -1`, config realm `X-CACHECONF:` → `X-RMED-CONF:`);
 deletion is not guaranteed if marshal length would change. FILE
 stores still append/rewrite via temp+rename (MIT opens `O_APPEND`
-in place); whether to match MIT in-place open is open until G8b
-SSSD/gssproxy oracles. Unknown ccache prefixes are
-`KRB5_CC_UNKNOWN_TYPE` with no FILE fallback. FILE principal and
-realm octets must be ASCII GeneralString; non-ASCII MIT caches fail
-parse (no silent corruption). DIR resolve does not create `primary`.
+in place); G8b gssproxy/SSSD oracles were unavailable (honest exit 2),
+so the in-place vs temp+rename decision stays **open**. Unknown ccache
+prefixes are `KRB5_CC_UNKNOWN_TYPE` with no FILE fallback. FILE
+principal and realm octets must be ASCII GeneralString; non-ASCII MIT
+caches fail parse (no silent corruption). DIR resolve does not create
+`primary`.
+
+**Knobs honored by ignoring:** `kdc_timeout` and `max_retries` have no
+MIT 1.22.2 parse site (Heimdal spellings; `sendto_kdc.c` `MAX_PASS 3`).
+Rust stores the strings and does not change pacing. `udp_preference_limit`
+(MIT default 1465), `rdns`, `kdc_timesync`, `permitted_enctypes` /
+`default_tkt_enctypes` / `default_tgs_enctypes`, `forwardable`,
+`ticket_lifetime`, `renew_lifetime`, `dns_lookup_kdc` /
+`dns_lookup_realm` are parsed at MIT's sites.
+
+**Renewable default, admin-overridable:** ticket renew time is the min of
+the request (`-r`, else RENEWABLE-OK till), the **krbtgt** entry, the
+**client** entry, and kdc.conf realm `max_renewable_life` when that key
+is **explicitly set** (unset ≠ 0). New principals copy the realm policy
+value (7d) onto `max_renewable_life` so `getprinc` is not 0.
 
 ## Not external oracles
 

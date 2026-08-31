@@ -65,8 +65,14 @@ FILE; Rust `remove_cred` tombstones a MIT-written FILE (`endtime = 0`,
 byte-for-byte. DIR: two MIT `kinit` into `DIR:/tmp/dcc`, MIT
 `kswitch -p` and Rust `krb5-kswitch -c DIR::` agree both ways.
 MEMORY: a MIT FILE is stored and listed in-process. Unbuilt prefixes
-(`KEYRING:`) are `Unknown credential cache type`. FILE write remains
-temp+rename (in-place vs rename is open until G8b SSSD/gssproxy).
+(`KEYRING:`) are `Unknown credential cache type`. DIR list of a missing
+path does not create `primary`. Committed `tests/traces/ccache-mit-addr-u2u.bin`
+(`kinit -a` + u2u) identity-checks addresses/authdata/`second_ticket`.
+FILE write remains temp+rename (G8b gssproxy/SSSD oracles exit 2).
+G8b: `kinit -kt` clustering, `klist -s` vs MIT `check_ccache`,
+`scripts/knobs-gate.sh` (Heimdal `kdc_timeout` ignored; honored etype
+list + `F`). `sssd-renew-gate` / `kit-conformance-gate` /
+`gssproxy-gate` / `nfs-krb5p-gate` honest **exit 2** until vendored.
 
 Stage 5: `scripts/kdc-gate.sh` copies the Rust `krb5-kdc` binary into a
 client-only MIT 1.22.2 container, binds 127.0.0.1:88 (fallback 8888),
@@ -120,9 +126,10 @@ on that identity is **red**. `scripts/pkinit-gate.sh` also
 refuses MIT `kinit` with `other.pem` (SAN ≠ `user`) and greps the Rust
 KDC log for `pkinit client san`. NT-ENTERPRISE:
 `scripts/rust-kinit-enterprise-gate.sh` is MIT `kinit -E` against the
-Rust KDC **and** Rust `kinit -E` against MIT; klist default principal
-is the canonical `user@KERBER.TEST`. A foreign UPN suffix is not a
-local alias. SPAKE: `scripts/rust-kinit-spake-gate.sh` sets
+Rust KDC (klist default principal is the canonical `user@KERBER.TEST`)
+**and** Rust `kinit -E` against MIT, which must match MIT `kinit -E`
+(`CLIENT_NOT_FOUND` on MIT db2; no UPN alias). A foreign UPN suffix is
+not a local alias. SPAKE: `scripts/rust-kinit-spake-gate.sh` sets
 `+requires_preauth user` and asserts a SPAKE *completion* line
 (`SPAKE response received` or `SPAKE derived K'`) from the MIT KDC TRACE,
 not a PREAUTH_REQUIRED offer. FAST: `scripts/rust-kinit-fast-gate.sh`
@@ -227,9 +234,15 @@ when that oracle is absent.
   is `KEY_EXPIRED` unless the server is `PWCHANGE_SERVICE`. In CI.
 - `scripts/flags-gate.sh` — MIT `modprinc` DISALLOW_*/OK_AS_DELEGATE/
   REQUIRES_HW_AUTH then `kinit`/`kvno`/`klist -f`. In CI.
-- `scripts/renew-gate.sh` — MIT `kinit -r 1d -l 5m` then `kinit -R`
-  (endtime moves, `renew until` unchanged); `-allow_renewable` strips
-  `R`; `kinit -p` shows `P`. In CI.
+- `scripts/renew-gate.sh` — four-term renew: `getprinc` krbtgt and user
+  `Maximum renewable life` not `0 days`; `kinit -r 7d` `renew until` ≈
+  start + 7d; then `kinit -R` (endtime moves, `renew until` unchanged);
+  `-allow_renewable` strips `R`; `kinit -p` shows `P`. In CI.
+- `scripts/knobs-gate.sh` — `kdc_timeout`/`max_retries` ignored; honored
+  `forwardable` + `default_tkt_enctypes`. In CI (MIT harness).
+- `scripts/sssd-renew-gate.sh` / `kit-conformance-gate.sh` /
+  `gssproxy-gate.sh` / `nfs-krb5p-gate.sh` — honest **exit 2** until the
+  Fedora/kit/NFS oracles are vendored (CI treats 2 as skip).
 - `scripts/postdate-gate.sh` — MIT `kinit -s` is INVALID (`i`), `kvno`
   is TKT_NYV; `kinit -v` after starttime is usable; `-allow_postdated`
   is CANNOT_POSTDATE. In CI.
