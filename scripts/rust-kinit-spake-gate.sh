@@ -82,7 +82,7 @@ echo "==== Rust kinit --spake vs MIT KDC ===="
 docker exec "$NAME" sh -c 'cat /dev/null > /tmp/mit-kdc.trace' || true
 set +e
 OUT="$(docker exec -e KRB5_PASSWORD=userpassword "$NAME" \
-    /tmp/krb5-kinit --spake 127.0.0.1 user@KERBER.TEST /tmp/krb5cc_spake 2>&1)"
+    /tmp/krb5-kinit --spake -c /tmp/krb5cc_spake user@KERBER.TEST 2>&1)"
 rc=$?
 set -e
 echo "$OUT"

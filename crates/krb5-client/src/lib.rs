@@ -12,9 +12,9 @@ use std::path::Path;
 use krb5_asn1::decode;
 use krb5_config::CcSpec;
 use krb5_protocol::{
-    AsOutcome, AsRequest, FastArmor, KdcAddr, PkinitClient, TgsOutcome, as_exchange,
-    dir_cache_path, dir_cache_path_for_store, memory_destroy, memory_retrieve, memory_store,
-    parse_principal_ex, tgs_exchange,
+    AsOutcome, AsRequest, AsTicketOpts, FastArmor, KdcAddr, PkinitClient, TgsOutcome, as_exchange,
+    as_exchange_with_keys, dir_cache_path, dir_cache_path_for_store, memory_destroy,
+    memory_retrieve, memory_store, parse_principal_ex, tgs_exchange, tgs_renew,
 };
 use krb5_types::{PrincipalName, Ticket};
 use zeroize::Zeroize;
@@ -32,6 +32,31 @@ pub mod ccache {
 
 pub mod keytab {
     pub use krb5_protocol::{Keytab, KeytabEntry};
+}
+
+pub mod cli;
+
+/// Flags for [`kinit_with`].
+#[derive(Clone, Debug, Default)]
+pub struct KinitParams<'a> {
+    /// Optional TGS service (`-S` or positional).
+    pub service: Option<&'a str>,
+    /// PA-SPAKE.
+    pub want_spake: bool,
+    /// FAST armor ccache.
+    pub armor_ccache: Option<&'a Path>,
+    /// PKINIT identity PEM.
+    pub pkinit_identity: Option<&'a Path>,
+    /// PKINIT anchors PEM.
+    pub pkinit_anchors: Option<&'a Path>,
+    /// NT-ENTERPRISE.
+    pub enterprise: bool,
+    /// Keytab (`-k` / `-t`).
+    pub keytab: Option<&'a Path>,
+    /// AS ticket options.
+    pub ticket: AsTicketOpts,
+    /// `kinit -R`.
+    pub renew: bool,
 }
 
 /// Result of [`kinit`].
@@ -88,20 +113,17 @@ pub fn kinit_ex(
     pkinit_anchors: Option<&Path>,
     enterprise: bool,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
-    let result = kinit_to_spec(
-        kdc,
-        principal,
-        password,
-        &CcSpec::File(ccache_path.as_ref().to_path_buf()),
+    let spec = CcSpec::File(ccache_path.as_ref().to_path_buf());
+    let params = KinitParams {
         service,
         want_spake,
         armor_ccache,
         pkinit_identity,
         pkinit_anchors,
         enterprise,
-    );
-    password.zeroize();
-    result
+        ..KinitParams::default()
+    };
+    kinit_with(kdc, principal, password, &spec, params)
 }
 
 /// [`kinit_ex`] storing into [`CcSpec`] (FILE, MEMORY, or DIR).
@@ -122,17 +144,36 @@ pub fn kinit_to_spec(
     pkinit_anchors: Option<&Path>,
     enterprise: bool,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
-    let built = kinit_inner(
+    kinit_with(
         kdc,
         principal,
         password,
-        service,
-        want_spake,
-        armor_ccache,
-        pkinit_identity,
-        pkinit_anchors,
-        enterprise,
-    );
+        spec,
+        KinitParams {
+            service,
+            want_spake,
+            armor_ccache,
+            pkinit_identity,
+            pkinit_anchors,
+            enterprise,
+            ..KinitParams::default()
+        },
+    )
+}
+
+/// [`kinit_to_spec`] with keytab, renewal, and ticket flags.
+///
+/// # Errors
+///
+/// Protocol or I/O errors. The password buffer is zeroized before return.
+pub fn kinit_with(
+    kdc: &KdcAddr,
+    principal: &str,
+    password: &mut [u8],
+    spec: &CcSpec,
+    params: KinitParams<'_>,
+) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
+    let built = kinit_inner(kdc, principal, password, spec, params);
     let result = match built {
         Ok((r, cc)) => store_ccache(spec, cc).map(|()| r),
         Err(e) => Err(e),
@@ -255,31 +296,30 @@ fn pkinit_from_conf(realm: &str) -> (Option<std::path::PathBuf>, Option<std::pat
     (None, None)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn kinit_inner(
     kdc: &KdcAddr,
     principal: &str,
     password: &[u8],
-    service: Option<&str>,
-    want_spake: bool,
-    armor_ccache: Option<&Path>,
-    pkinit_identity: Option<&Path>,
-    pkinit_anchors: Option<&Path>,
-    enterprise: bool,
+    spec: &CcSpec,
+    params: KinitParams<'_>,
 ) -> Result<(KinitResult, FileCcache), Box<dyn std::error::Error + Send + Sync>> {
-    let (cname, realm_s) = parse_principal_ex(principal, enterprise)?;
+    let (cname, realm_s) = parse_principal_ex(principal, params.enterprise)?;
     let resolved = resolve_kdc(&realm_s, kdc);
-    let armor = match armor_ccache {
+    if params.renew {
+        return renew_inner(&resolved, spec);
+    }
+    let armor = match params.armor_ccache {
         Some(p) => Some(load_fast_armor(p)?),
         None => None,
     };
-    let (conf_id, conf_an) = if pkinit_identity.is_none() || pkinit_anchors.is_none() {
+    let (conf_id, conf_an) = if params.pkinit_identity.is_none() || params.pkinit_anchors.is_none()
+    {
         pkinit_from_conf(&realm_s)
     } else {
         (None, None)
     };
-    let id_path = pkinit_identity.map(Path::to_path_buf).or(conf_id);
-    let an_path = pkinit_anchors.map(Path::to_path_buf).or(conf_an);
+    let id_path = params.pkinit_identity.map(Path::to_path_buf).or(conf_id);
+    let an_path = params.pkinit_anchors.map(Path::to_path_buf).or(conf_an);
     let pkinit = match (id_path.as_deref(), an_path.as_deref()) {
         (Some(i), Some(a)) => Some(load_pkinit(i, a)?),
         (Some(_), None) | (None, Some(_)) => {
@@ -287,17 +327,33 @@ fn kinit_inner(
         }
         (None, None) => None,
     };
-    let as_out = as_exchange(&AsRequest {
-        cname,
+    let req = AsRequest {
+        cname: cname.clone(),
         realm: &realm_s,
         password,
         kdc: &resolved,
-        want_spake,
+        want_spake: params.want_spake,
         fast_armor: armor.as_ref(),
         pkinit: pkinit.as_ref(),
-        canonicalize: enterprise,
+        canonicalize: params.enterprise,
         sname: None,
-    })?;
+        ticket: params.ticket,
+    };
+    let as_out = if let Some(ktpath) = params.keytab {
+        let kt = Keytab::parse(&std::fs::read(ktpath)?)?;
+        let keys: Vec<_> = kt
+            .entries
+            .iter()
+            .filter(|e| e.name == cname)
+            .map(|e| e.key.clone())
+            .collect();
+        if keys.is_empty() {
+            return Err("keytab has no matching principal".into());
+        }
+        as_exchange_with_keys(&req, &keys)?
+    } else {
+        as_exchange(&req)?
+    };
     let mut creds = vec![tgt_cred(
         &as_out.crealm,
         &as_out.cname,
@@ -307,7 +363,7 @@ fn kinit_inner(
     )?];
     let mut tgs_out = None;
     let mut tgs_err: Option<String> = None;
-    if let Some(svc) = service {
+    if let Some(svc) = params.service {
         let (svc_name, svc_realm) = match svc.rsplit_once('@') {
             Some((n, r)) => (n, r.to_owned()),
             None => (svc, realm_s.clone()),
@@ -339,6 +395,89 @@ fn kinit_inner(
         return Err(e.into());
     }
     Ok((KinitResult { as_out, tgs_out }, cache))
+}
+
+fn renew_inner(
+    kdc: &KdcAddr,
+    spec: &CcSpec,
+) -> Result<(KinitResult, FileCcache), Box<dyn std::error::Error + Send + Sync>> {
+    let mut cc = load_ccache(spec)?;
+    let cred = cc
+        .list()
+        .into_iter()
+        .find(|c| c.server.1.components_joined().starts_with("krbtgt/"))
+        .ok_or("ccache has no TGT")?
+        .clone();
+    let tgt = outcome_from_cred(&cred)?;
+    let tgs = tgs_renew(kdc, &tgt)?;
+    let new_cred = tgt_cred(
+        &tgt.crealm,
+        &tgt.cname,
+        &tgs.ticket,
+        &tgs.session_key,
+        &tgs.enc_part,
+    )?;
+    for c in &mut cc.creds {
+        if c.server.1.components_joined().starts_with("krbtgt/") && !c.is_config() {
+            *c = new_cred.clone();
+            break;
+        }
+    }
+    Ok((
+        KinitResult {
+            as_out: tgt,
+            tgs_out: Some(tgs),
+        },
+        cc,
+    ))
+}
+
+fn outcome_from_cred(
+    cred: &CcacheCred,
+) -> Result<AsOutcome, Box<dyn std::error::Error + Send + Sync>> {
+    let session = cred.session_key()?;
+    let ticket: Ticket = decode(&cred.ticket)?;
+    Ok(AsOutcome {
+        ticket,
+        enc_part: krb5_types::EncKdcRepPart {
+            key: krb5_types::EncryptionKey {
+                keytype: session.etype().to_iana(),
+                keyvalue: session.as_bytes().to_vec().into(),
+            },
+            last_req: Vec::new(),
+            nonce: 0,
+            key_expiration: None,
+            flags: krb5_types::TicketFlags::from_u32(cred.ticket_flags),
+            authtime: krb5_types::KerberosTime::from_unix_seconds(cred.authtime),
+            starttime: Some(krb5_types::KerberosTime::from_unix_seconds(cred.starttime)),
+            endtime: krb5_types::KerberosTime::from_unix_seconds(cred.endtime),
+            renew_till: (cred.renew_till > 0)
+                .then(|| krb5_types::KerberosTime::from_unix_seconds(cred.renew_till)),
+            srealm: cred.server.0.clone(),
+            sname: cred.server.1.clone(),
+            caddr: None,
+            encrypted_pa_data: None,
+        },
+        client_key: session.clone(),
+        session_key: session,
+        cname: cred.client.1.clone(),
+        crealm: cred.client.0.clone(),
+    })
+}
+
+/// Local IPv4 address for `kinit -a` (MIT ADDRTYPE_INET = 2).
+#[must_use]
+pub fn local_host_addresses() -> Option<krb5_types::HostAddresses> {
+    use std::net::{SocketAddr, UdpSocket};
+    let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.connect("8.8.8.8:80").ok()?;
+    let SocketAddr::V4(v4) = sock.local_addr().ok()? else {
+        return None;
+    };
+    Some(vec![krb5_types::HostAddress {
+        addr_type: 2,
+        address: v4.ip().octets().to_vec().into(),
+    }])
 }
 
 fn resolve_kdc(realm: &str, argv: &KdcAddr) -> KdcAddr {

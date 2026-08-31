@@ -8,42 +8,43 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use krb5_asn1::decode;
+use krb5_client::cli::parse_kvno;
 use krb5_client::{load_ccache, store_ccache};
 use krb5_config::resolve_ccspec;
 use krb5_protocol::{AsOutcome, KdcAddr, parse_principal, tgs_exchange, tgt_cred};
 use krb5_types::{EncKdcRepPart, EncryptionKey, KerberosTime, PrincipalName, Ticket, TicketFlags};
 
 fn main() {
-    let mut ccname = None::<String>;
-    let mut positional = Vec::new();
-    let mut args = std::env::args().skip(1);
-    while let Some(a) = args.next() {
-        if a.as_str() == "-c" {
-            let Some(s) = args.next() else {
-                eprintln!("kvno: missing -c argument");
-                std::process::exit(2);
-            };
-            ccname = Some(s);
-        } else if a == "-U" || a == "-P" {
-            eprintln!("krb5-kvno: -U/-P (S4U) is not implemented");
-            std::process::exit(2);
-        } else {
-            positional.push(a);
-        }
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    if raw.iter().any(|a| a == "-U" || a == "-P") {
+        eprintln!("krb5-kvno: -U/-P (S4U) is not implemented");
+        std::process::exit(2);
     }
-    let mut pos = positional.into_iter();
-    let host = pos.next().unwrap_or_else(|| {
-        eprintln!("usage: krb5-kvno [-c ccache] <kdc-host> <service>");
-        std::process::exit(2);
-    });
-    let service = pos.next().unwrap_or_else(|| {
-        eprintln!("missing service");
-        std::process::exit(2);
-    });
-    let spec = resolve_ccspec(ccname.as_deref()).unwrap_or_else(|e| {
+    let args = parse_kvno(&raw).unwrap_or_else(|e| {
         eprintln!("kvno: {e}");
         std::process::exit(2);
     });
+    let service = args.services.first().cloned().unwrap_or_else(|| {
+        eprintln!("usage: krb5-kvno [-c ccache] [kdc-host] <service>");
+        std::process::exit(2);
+    });
+    let spec = resolve_ccspec(args.ccache.as_deref()).unwrap_or_else(|e| {
+        eprintln!("kvno: {e}");
+        std::process::exit(2);
+    });
+    let host = if let Some(h) = args.kdc_host.clone() {
+        h
+    } else {
+        let cc = load_ccache(&spec).unwrap_or_else(|e| {
+            eprintln!("kvno: {e}");
+            std::process::exit(1);
+        });
+        let realm = String::from_utf8_lossy(cc.primary.0.as_bytes()).into_owned();
+        krb5_config::discover_kdc(&realm).map_or_else(
+            || "127.0.0.1".into(),
+            |ep| format!("{}:{}", ep.host, ep.port),
+        )
+    };
     if let Err(e) = run(&spec, &host, &service) {
         eprintln!("kvno: {e}");
         std::process::exit(1);

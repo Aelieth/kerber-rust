@@ -63,6 +63,25 @@ pub fn tgs_exchange(
     result
 }
 
+/// TGS-REQ with KDC option `renew` for `kinit -R`.
+///
+/// # Errors
+///
+/// Transport, crypto, or `KRB-ERROR` failures.
+pub fn tgs_renew(kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> {
+    let realm = String::from_utf8_lossy(tgt.crealm.as_bytes()).into_owned();
+    let sname = PrincipalName::krbtgt(&realm);
+    tgs_once(
+        kdc,
+        tgt,
+        sname,
+        &realm,
+        KdcOptions::none()
+            .with_bit(flag_bit::RENEW, true)
+            .with_bit(flag_bit::CANONICALIZE, true),
+    )
+}
+
 fn tgs_inner(
     kdc: &KdcAddr,
     tgt: &AsOutcome,
@@ -73,7 +92,13 @@ fn tgs_inner(
     let mut cur_tgt = tgt.clone();
     let mut hop_realm = realm.to_owned();
     for _ in 0..8 {
-        let out = tgs_once(&cur_kdc, &cur_tgt, sname.clone(), &hop_realm)?;
+        let out = tgs_once(
+            &cur_kdc,
+            &cur_tgt,
+            sname.clone(),
+            &hop_realm,
+            KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true),
+        )?;
         match tgs_hop_decision(sname, &hop_realm, &out)? {
             TgsHop::Done => return Ok(out),
             TgsHop::Referral(foreign) => {
@@ -197,6 +222,7 @@ fn tgs_once(
     tgt: &AsOutcome,
     sname: PrincipalName,
     realm: &str,
+    kdc_options: KdcOptions,
 ) -> Result<TgsOutcome, Error> {
     let nonce = random_nonce31()?;
     let till = KerberosTime(tgt.enc_part.endtime.0);
@@ -207,7 +233,7 @@ fn tgs_once(
 
     let requested = sname.clone();
     let body = KdcReqBody {
-        kdc_options: KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true),
+        kdc_options,
         cname: None,
         realm: krb5_types::try_ascii(realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?,
         sname: Some(sname),

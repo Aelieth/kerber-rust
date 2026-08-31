@@ -63,6 +63,7 @@ fn run(host: &str, princ: &str, old: &[u8], new: &[u8]) -> Result<(), String> {
         pkinit: None,
         canonicalize: false,
         sname: Some(&changepw),
+        ticket: krb5_protocol::AsTicketOpts::default(),
     })
     .map_err(|e| e.to_string())?;
     let tgs = as_out.clone();

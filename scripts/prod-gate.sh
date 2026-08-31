@@ -83,7 +83,8 @@ fi
 CC="$OUT/prod.ccache"
 rm -f "$CC"
 set +e
-./target/debug/krb5-kinit 127.0.0.1:18888 user@KERBER.TEST "$CC" host/testhost.kerber.test \
+./target/debug/krb5-kinit -c "$CC" -S host/testhost.kerber.test \
+    127.0.0.1:18888 user@KERBER.TEST \
     >"$OUT/kinit.log" 2>&1
 kinit_rc=$?
 set -e

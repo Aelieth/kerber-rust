@@ -29,7 +29,8 @@ if [ "$ok" -ne 1 ]; then
 fi
 
 export KRB5_PASSWORD=userpassword
-./target/debug/krb5-kinit 127.0.0.1:8889 user@KERBER.TEST "$TMP/ccache" host/testhost.kerber.test
+./target/debug/krb5-kinit -c "$TMP/ccache" -S host/testhost.kerber.test \
+    127.0.0.1:8889 user@KERBER.TEST
 
 test -f "$TMP/ccache"
 MAGIC="$(od -An -tx1 -N2 "$TMP/ccache" | tr -d ' \n')"

@@ -45,8 +45,7 @@ echo "$GOLD" | grep -q '^identity_ok bytes='
 
 echo "==== MIT remove_cred on Rust FILE; klist both ways ===="
 docker exec -e KRB5_PASSWORD=userpassword "$NAME" \
-    /tmp/krb5-kinit 127.0.0.1 user@KERBER.TEST /tmp/krb5cc_rust \
-    host/testhost.kerber.test
+    /tmp/krb5-kinit -c /tmp/krb5cc_rust -S host/testhost.kerber.test user@KERBER.TEST
 docker exec "$NAME" klist -c /tmp/krb5cc_rust | grep -q 'host/testhost.kerber.test'
 docker exec "$NAME" /tmp/ccache-mit-remove FILE:/tmp/krb5cc_rust \
     'host/testhost.kerber.test@KERBER.TEST'

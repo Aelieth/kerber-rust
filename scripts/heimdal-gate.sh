@@ -158,8 +158,8 @@ docker cp target/debug/krb5-kinit "$NAME_R2H":/tmp/krb5-kinit \
     || die "docker cp krb5-kinit failed"
 docker exec "$NAME_R2H" chmod +x /tmp/krb5-kinit
 if ! docker exec -e KRB5_PASSWORD=userpassword \
-    "$NAME_R2H" /tmp/krb5-kinit 127.0.0.1 user@KERBER.TEST /tmp/krb5cc_rust \
-    host/testhost.kerber.test; then
+    "$NAME_R2H" /tmp/krb5-kinit -c /tmp/krb5cc_rust -S host/testhost.kerber.test \
+    127.0.0.1 user@KERBER.TEST; then
     docker logs "$NAME_R2H" 2>&1 || true
     docker exec "$NAME_R2H" cat /var/log/heimdal-kdc.log 2>/dev/null || true
     die "Rust krb5-kinit against Heimdal KDC failed"

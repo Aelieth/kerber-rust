@@ -76,14 +76,14 @@ docker exec "$NAME" chmod +x /tmp/krb5-kinit
 
 echo "==== armor TGT (enc-ts) ===="
 docker exec -e KRB5_PASSWORD=userpassword "$NAME" \
-    /tmp/krb5-kinit 127.0.0.1 user@KERBER.TEST /tmp/krb5cc_armor
+    /tmp/krb5-kinit -c /tmp/krb5cc_armor user@KERBER.TEST
 
 echo "==== Rust kinit --fast --armor-ccache ===="
 docker exec "$NAME" sh -c 'cat /dev/null > /tmp/mit-kdc.trace' || true
 set +e
 OUT="$(docker exec -e KRB5_PASSWORD=userpassword "$NAME" \
     /tmp/krb5-kinit --fast --armor-ccache /tmp/krb5cc_armor \
-    127.0.0.1 user@KERBER.TEST /tmp/krb5cc_fast 2>&1)"
+    -c /tmp/krb5cc_fast user@KERBER.TEST 2>&1)"
 rc=$?
 set -e
 echo "$OUT"

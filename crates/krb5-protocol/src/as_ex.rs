@@ -58,6 +58,35 @@ pub struct AsRequest<'a> {
     pub canonicalize: bool,
     /// Optional AS sname (default `krbtgt/REALM`). `kadmin/changepw` for kpasswd.
     pub sname: Option<&'a PrincipalName>,
+    /// Lifetime, renewable life, and KDC option flags (`kinit -l/-r/-f/-p/-a`).
+    pub ticket: AsTicketOpts,
+}
+
+/// AS-REQ ticket policy from `kinit` flags.
+#[derive(Clone, Debug)]
+pub struct AsTicketOpts {
+    /// Ticket lifetime in seconds (`-l`). `None` is 10 hours.
+    pub lifetime: Option<u64>,
+    /// Renewable lifetime in seconds (`-r`).
+    pub rlife: Option<u64>,
+    /// Request `forwardable` (MIT default true here).
+    pub forwardable: bool,
+    /// Request `proxiable`.
+    pub proxiable: bool,
+    /// Host addresses (`-a`). `None` omits the field.
+    pub addresses: Option<krb5_types::HostAddresses>,
+}
+
+impl Default for AsTicketOpts {
+    fn default() -> Self {
+        Self {
+            lifetime: None,
+            rlife: None,
+            forwardable: true,
+            proxiable: false,
+            addresses: None,
+        }
+    }
 }
 
 /// RFC 4556 client certificate + trust anchor for PKINIT.
@@ -98,6 +127,18 @@ pub fn as_exchange(req: &AsRequest<'_>) -> Result<AsOutcome, Error> {
     wrap_as(req, &[])
 }
 
+/// [`as_exchange`] using long-term keys (keytab).
+///
+/// # Errors
+///
+/// Transport, crypto, or `KRB-ERROR` failures.
+pub fn as_exchange_with_keys(
+    req: &AsRequest<'_>,
+    keys: &[ProtocolKey],
+) -> Result<AsOutcome, Error> {
+    wrap_as(req, keys)
+}
+
 /// AS-REQ using long-term keys (keytab), not a password.
 ///
 /// # Errors
@@ -120,6 +161,7 @@ pub fn as_exchange_key(
             pkinit: None,
             canonicalize: false,
             sname: None,
+            ticket: AsTicketOpts::default(),
         },
         keys,
     )
@@ -153,9 +195,7 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
         .map(|e| e.to_iana())
         .collect();
     let nonce = random_nonce()?;
-    let till = KerberosTime::now()
-        .add_hours(10)
-        .unwrap_or_else(|_| KerberosTime::now());
+    let (till, _, _, _) = ticket_body(req);
 
     if req.fast_armor.is_some() {
         return continue_fast(req, keys, nonce, till.clone(), &etypes, None);
@@ -165,16 +205,7 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
     }
     let support = req.want_spake.then(pa_spake_support);
     let first_pa = support.clone().map(|s| vec![s]);
-    let first = build_as_req(
-        &req.cname,
-        req.realm,
-        nonce,
-        till.clone(),
-        first_pa.clone(),
-        &etypes,
-        req.canonicalize,
-        &req_sname(req),
-    )?;
+    let first = build_as_req_from(req, nonce, till.clone(), first_pa.clone(), &etypes)?;
     let wire = encode(&first)?;
     let reply = exchange(req.kdc, &wire)?;
 
@@ -195,16 +226,7 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
         KdcMsg::Error(e) if e.error_code == err::SKEW => {
             // First-reply SKEW: resync from KDC stime and retry the bare AS-REQ.
             let skew_time = e.stime.clone();
-            let first = build_as_req(
-                &req.cname,
-                req.realm,
-                nonce,
-                till.clone(),
-                first_pa.clone(),
-                &etypes,
-                req.canonicalize,
-                &req_sname(req),
-            )?;
+            let first = build_as_req_from(req, nonce, till.clone(), first_pa.clone(), &etypes)?;
             let wire = encode(&first)?;
             let reply = exchange(req.kdc, &wire)?;
             match classify(&reply)? {
@@ -337,16 +359,7 @@ fn continue_preauth(
         Some(t) => pa_enc_timestamp_at(&client_key, t)?,
         None => pa_enc_timestamp(&client_key)?,
     }];
-    let second = build_as_req(
-        &req.cname,
-        req.realm,
-        nonce,
-        till.clone(),
-        Some(padata),
-        etypes,
-        req.canonicalize,
-        &req_sname(req),
-    )?;
+    let second = build_as_req_from(req, nonce, till.clone(), Some(padata), etypes)?;
     let wire = encode(&second)?;
     let reply = exchange(req.kdc, &wire)?;
     match classify(&reply)? {
@@ -364,16 +377,7 @@ fn continue_preauth(
         KdcMsg::Error(e) if e.error_code == err::SKEW => {
             let skew_time = e.stime.clone();
             let padata = vec![pa_enc_timestamp_at(&client_key, &skew_time)?];
-            let third = build_as_req(
-                &req.cname,
-                req.realm,
-                nonce,
-                till,
-                Some(padata),
-                etypes,
-                req.canonicalize,
-                &req_sname(req),
-            )?;
+            let third = build_as_req_from(req, nonce, till, Some(padata), etypes)?;
             let wire = encode(&third)?;
             let reply = exchange(req.kdc, &wire)?;
             match classify(&reply)? {
@@ -395,16 +399,7 @@ fn continue_preauth(
         KdcMsg::Error(e) if e.error_code == err::ETYPE_NOSUPP => {
             let etypes = vec![EncryptionType::Aes256CtsHmacSha196.to_iana()];
             let padata = vec![pa_enc_timestamp(&client_key)?];
-            let retry = build_as_req(
-                &req.cname,
-                req.realm,
-                nonce,
-                till,
-                Some(padata),
-                &etypes,
-                req.canonicalize,
-                &req_sname(req),
-            )?;
+            let retry = build_as_req_from(req, nonce, till, Some(padata), &etypes)?;
             let wire = encode(&retry)?;
             let reply = exchange(req.kdc, &wire)?;
             match classify(&reply)? {
@@ -463,16 +458,7 @@ fn continue_fast(
         Ok,
     )?;
     let inner = vec![pa_enc_timestamp(&client_key)?];
-    let mut req2 = build_as_req(
-        &req.cname,
-        req.realm,
-        nonce,
-        till,
-        None,
-        etypes,
-        req.canonicalize,
-        &req_sname(req),
-    )?;
+    let mut req2 = build_as_req_from(req, nonce, till, None, etypes)?;
     attach_fast(&mut req2, &ap, &akey, inner)?;
     let wire = encode(&req2)?;
     let reply = exchange(req.kdc, &wire)?;
@@ -517,16 +503,7 @@ fn continue_spake(
     if let Some(c) = find_pa(&method, pa::FX_COOKIE) {
         padata.push(c.clone());
     }
-    let second = build_as_req(
-        &req.cname,
-        req.realm,
-        nonce,
-        till.clone(),
-        Some(padata),
-        etypes,
-        req.canonicalize,
-        &req_sname(req),
-    )?;
+    let second = build_as_req_from(req, nonce, till.clone(), Some(padata), etypes)?;
     let wire = encode(&second)?;
     let reply = exchange(req.kdc, &wire)?;
     match classify(&reply)? {
@@ -568,16 +545,7 @@ fn send_spake_response(
         || string_to_key(etype, req.password, &salt, params.as_deref()),
         Ok,
     )?;
-    let mut req2 = build_as_req(
-        &req.cname,
-        req.realm,
-        nonce,
-        till,
-        None,
-        etypes,
-        req.canonicalize,
-        &req_sname(req),
-    )?;
+    let mut req2 = build_as_req_from(req, nonce, till, None, etypes)?;
     let body_der = encode(&req2.0.req_body)?;
     let (resp, k0) = pa_spake_response(
         &ikey,
@@ -616,16 +584,7 @@ fn continue_pkinit(
         .pkinit
         .ok_or_else(|| Error::ReplyMismatch("PKINIT identity missing".into()))?;
     let kp = p256_generate()?;
-    let mut req2 = build_as_req(
-        &req.cname,
-        req.realm,
-        nonce,
-        till,
-        None,
-        etypes,
-        req.canonicalize,
-        &req_sname(req),
-    )?;
+    let mut req2 = build_as_req_from(req, nonce, till, None, etypes)?;
     let body_der = encode(&req2.0.req_body)?;
     let mut h = Sha1::new();
     h.update(&body_der);
@@ -913,41 +872,95 @@ fn salt_cname(cname: &PrincipalName) -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_PRINCIPAL, [user])
 }
 
+fn build_as_req_from(
+    req: &AsRequest<'_>,
+    nonce: u32,
+    till: KerberosTime,
+    padata: Option<Vec<PaData>>,
+    etypes: &[i32],
+) -> Result<AsReq, Error> {
+    let (_, rtime, kdc_options, addresses) = ticket_body(req);
+    build_as_req(
+        &req.cname,
+        req.realm,
+        nonce,
+        till,
+        rtime,
+        kdc_options,
+        addresses,
+        padata,
+        etypes,
+        &req_sname(req),
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_as_req(
     cname: &PrincipalName,
     realm: &str,
     nonce: u32,
     till: KerberosTime,
+    rtime: Option<KerberosTime>,
+    kdc_options: KdcOptions,
+    addresses: Option<krb5_types::HostAddresses>,
     padata: Option<Vec<PaData>>,
     etypes: &[i32],
-    canonicalize: bool,
     sname: &PrincipalName,
 ) -> Result<AsReq, Error> {
     let realm_s = krb5_types::try_ascii(realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?;
-    let mut opts = KdcOptions::forwardable();
-    if canonicalize {
-        opts = opts.with_bit(flag_bit::CANONICALIZE, true);
-    }
     Ok(AsReq(KdcReq {
         pvno: KdcReq::PVNO,
         msg_type: KdcReq::MSG_AS_REQ,
         padata,
         req_body: KdcReqBody {
-            kdc_options: opts,
+            kdc_options,
             cname: Some(cname.clone()),
             realm: realm_s,
             sname: Some(sname.clone()),
             from: None,
             till,
-            rtime: None,
+            rtime,
             nonce,
             etype: etypes.to_vec(),
-            addresses: None,
+            addresses,
             enc_authorization_data: None,
             additional_tickets: None,
         },
     }))
+}
+
+fn ticket_body(
+    req: &AsRequest<'_>,
+) -> (
+    KerberosTime,
+    Option<KerberosTime>,
+    KdcOptions,
+    Option<krb5_types::HostAddresses>,
+) {
+    let now = KerberosTime::now();
+    let life = req.ticket.lifetime.unwrap_or(10 * 3600);
+    let till = now
+        .add_seconds(i64::try_from(life).unwrap_or(i64::MAX))
+        .unwrap_or_else(|_| now.clone());
+    let mut opts = if req.ticket.forwardable {
+        KdcOptions::forwardable()
+    } else {
+        KdcOptions::none()
+    };
+    if req.ticket.proxiable {
+        opts = opts.with_bit(flag_bit::PROXIABLE, true);
+    }
+    let rtime = match req.ticket.rlife {
+        Some(r) if r > 0 => {
+            opts = opts.with_bit(flag_bit::RENEWABLE, true);
+            now.add_seconds(i64::try_from(r).unwrap_or(i64::MAX)).ok()
+        }
+        _ => None,
+    };
+    if req.canonicalize {
+        opts = opts.with_bit(flag_bit::CANONICALIZE, true);
+    }
+    (till, rtime, opts, req.ticket.addresses.clone())
 }
 
 fn pa_enc_timestamp(key: &ProtocolKey) -> Result<PaData, Error> {

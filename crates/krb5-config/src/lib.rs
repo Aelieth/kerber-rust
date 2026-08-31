@@ -401,6 +401,12 @@ fn parse_endpoint(v: &str) -> Endpoint {
     Endpoint::kdc(v)
 }
 
+/// Parse MIT `krb5_string_to_deltat` (`10h`, `7d`, `300`, `1h30m`).
+#[must_use]
+pub fn parse_deltat(v: &str) -> Option<u64> {
+    parse_duration_secs(v)
+}
+
 /// Parse `10h`, `7d`, `300`, `1h30m`.
 fn parse_duration_secs(v: &str) -> Option<u64> {
     if let Ok(n) = v.parse::<u64>() {

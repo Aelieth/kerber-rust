@@ -285,7 +285,16 @@ pub fn tgt_cred(
             .map_or(0, krb5_types::KerberosTime::unix_seconds),
         is_skey: 0,
         ticket_flags: enc.flags.to_u32(),
-        addresses: Vec::new(),
+        addresses: enc.caddr.as_ref().map_or_else(Vec::new, |hs| {
+            hs.iter()
+                .map(|h| {
+                    (
+                        u16::try_from(h.addr_type).unwrap_or(0),
+                        h.address.as_ref().to_vec(),
+                    )
+                })
+                .collect()
+        }),
         authdata: Vec::new(),
         ticket: ticket_der,
         second_ticket: Vec::new(),

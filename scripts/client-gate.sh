@@ -24,8 +24,7 @@ docker exec "$NAME" chmod +x /tmp/krb5-kinit /tmp/krb5-klist /tmp/krb5-kdestroy 
 docker exec "$NAME" mkdir -p /tmp/client-traces
 docker exec -e KRB5_PASSWORD=userpassword -e KERBER_CAPTURE_DIR=/tmp/client-traces \
     "$NAME" /tmp/krb5-kinit \
-    127.0.0.1 user@KERBER.TEST /tmp/krb5cc_rust \
-    host/testhost.kerber.test
+    -c /tmp/krb5cc_rust -S host/testhost.kerber.test user@KERBER.TEST
 TRACE_DST="${KERBER_TRACE_DST:-$ROOT/tests/traces}"
 mkdir -p "$TRACE_DST"
 docker cp "$NAME":/tmp/client-traces/. "$TRACE_DST/" 2>/dev/null || true
@@ -72,8 +71,8 @@ test "$MIT_ET" = "$RUST_ET"
 
 echo "==== Rust kvno obtains a service ticket ===="
 docker exec -e KRB5_PASSWORD=userpassword "$NAME" \
-    /tmp/krb5-kinit 127.0.0.1 user@KERBER.TEST /tmp/krb5cc_kvno
-KVNO="$(docker exec "$NAME" /tmp/krb5-kvno -c /tmp/krb5cc_kvno 127.0.0.1 host/testhost.kerber.test)"
+    /tmp/krb5-kinit -c /tmp/krb5cc_kvno user@KERBER.TEST
+KVNO="$(docker exec "$NAME" /tmp/krb5-kvno -c /tmp/krb5cc_kvno host/testhost.kerber.test)"
 echo "$KVNO"
 echo "$KVNO" | grep -q 'host/testhost.kerber.test'
 echo "$KVNO" | grep -q 'kvno ='
@@ -88,7 +87,7 @@ echo "bytes_before=$BEFORE"
 KCONF0="$(docker exec "$NAME" klist -C -c /tmp/krb5cc_lossless)"
 echo "$KCONF0"
 echo "$KCONF0" | grep -q '^config:'
-docker exec "$NAME" /tmp/krb5-kvno -c /tmp/krb5cc_lossless 127.0.0.1 host/testhost.kerber.test
+docker exec "$NAME" /tmp/krb5-kvno -c /tmp/krb5cc_lossless host/testhost.kerber.test
 AFTER="$(docker exec "$NAME" sh -c 'wc -c < /tmp/krb5cc_lossless')"
 echo "bytes_after=$AFTER"
 test "$AFTER" -ge "$BEFORE"
@@ -96,6 +95,33 @@ KCONF1="$(docker exec "$NAME" klist -C -c /tmp/krb5cc_lossless)"
 echo "$KCONF1"
 echo "$KCONF1" | grep -q '^config:'
 echo "$KCONF1" | grep -q 'host/testhost.kerber.test'
+
+echo "==== MIT and Rust klist -s agree on the same FILE ===="
+MIT_S_RC="$(docker exec "$NAME" sh -c 'klist -s -c /tmp/krb5cc_mit >/tmp/mit-s-out 2>/tmp/mit-s-err; echo $?')"
+RUST_S_RC="$(docker exec "$NAME" sh -c '/tmp/krb5-klist -s -c /tmp/krb5cc_mit >/tmp/rust-s-out 2>/tmp/rust-s-err; echo $?')"
+MIT_S_OUT="$(docker exec "$NAME" cat /tmp/mit-s-out)"
+RUST_S_OUT="$(docker exec "$NAME" cat /tmp/rust-s-out)"
+echo "mit_klist_s_rc=$MIT_S_RC rust_klist_s_rc=$RUST_S_RC"
+echo "mit_klist_s_stdout=$(printf %s "$MIT_S_OUT" | wc -c)"
+echo "rust_klist_s_stdout=$(printf %s "$RUST_S_OUT" | wc -c)"
+test "$MIT_S_RC" = "$RUST_S_RC"
+test -z "$MIT_S_OUT"
+test -z "$RUST_S_OUT"
+MISS_RC="$(docker exec "$NAME" sh -c '/tmp/krb5-klist -s -c /no/such/krb5cc_g8b >/tmp/miss-out 2>/tmp/miss-err; echo $?')"
+MISS_OUT="$(docker exec "$NAME" cat /tmp/miss-out)"
+echo "rust_klist_s_missing_rc=$MISS_RC"
+test "$MISS_RC" = "1"
+test -z "$MISS_OUT"
+
+echo "==== clustered kinit -kt is keytab mode ===="
+docker exec "$NAME" kadmin.local -q 'ktadd -k /tmp/user.keytab -norandkey user' >/dev/null
+set +e
+KT="$(docker exec "$NAME" /tmp/krb5-kinit -kt /tmp/user.keytab -c /tmp/krb5cc_kt user@KERBER.TEST 2>&1)"
+ktrc=$?
+set -e
+echo "$KT"
+test "$ktrc" -eq 0
+docker exec "$NAME" klist -c /tmp/krb5cc_kt | grep -q 'user@KERBER.TEST'
 
 echo "==== MIT kinit -r then Rust klist renew until ===="
 docker exec "$NAME" sh -c 'echo userpassword | kinit -r 1d -c /tmp/krb5cc_renew user@KERBER.TEST'

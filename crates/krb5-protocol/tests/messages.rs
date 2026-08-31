@@ -204,6 +204,7 @@ fn non_ascii_realm_as_exchange_is_err() {
         pkinit: None,
         canonicalize: false,
         sname: None,
+        ticket: krb5_protocol::AsTicketOpts::default(),
     });
     assert!(err.is_err(), "non-ASCII realm must not panic");
 }
@@ -265,6 +266,7 @@ fn first_bare_as_req_skew_is_retried() {
         pkinit: None,
         canonicalize: false,
         sname: None,
+        ticket: krb5_protocol::AsTicketOpts::default(),
     });
     assert!(
         hits.load(Ordering::SeqCst) >= 2,
@@ -323,6 +325,7 @@ fn spake_as_req_carries_pa_spake() {
         pkinit: None,
         canonicalize: false,
         sname: None,
+        ticket: krb5_protocol::AsTicketOpts::default(),
     });
     let raw = first.lock().unwrap().clone();
     assert!(!raw.is_empty(), "SPAKE client must send an AS-REQ");
@@ -389,6 +392,7 @@ fn want_spake_rejects_non_preauth_as_rep() {
         pkinit: None,
         canonicalize: false,
         sname: None,
+        ticket: krb5_protocol::AsTicketOpts::default(),
     })
     .expect_err("SPAKE skip");
     assert!(
@@ -423,6 +427,7 @@ fn want_spake_rejects_fast_and_pkinit() {
         pkinit: Some(&pk),
         canonicalize: false,
         sname: None,
+        ticket: krb5_protocol::AsTicketOpts::default(),
     })
     .expect_err("spake+pkinit");
     assert!(err.to_string().contains("SPAKE exclusive"), "got {err}");
@@ -454,6 +459,7 @@ fn want_spake_rejects_fast_and_pkinit() {
         pkinit: None,
         canonicalize: false,
         sname: None,
+        ticket: krb5_protocol::AsTicketOpts::default(),
     })
     .expect_err("spake+fast");
     assert!(err.to_string().contains("SPAKE exclusive"), "got {err}");
@@ -537,6 +543,7 @@ fn fast_preauth_retry_carries_fx_fast() {
         pkinit: None,
         canonicalize: false,
         sname: None,
+        ticket: krb5_protocol::AsTicketOpts::default(),
     });
     let raw = first.lock().unwrap().clone();
     assert!(!raw.is_empty(), "FAST client must send an AS-REQ");
@@ -613,6 +620,7 @@ fn pkinit_as_req_carries_pa_pk_as_req() {
         pkinit: Some(&pk),
         canonicalize: false,
         sname: None,
+        ticket: krb5_protocol::AsTicketOpts::default(),
     });
     let raw = first.lock().unwrap().clone();
     assert!(!raw.is_empty(), "PKINIT client must send an AS-REQ");
@@ -678,6 +686,7 @@ fn enterprise_as_req_sets_name_type_and_canonicalize() {
         pkinit: None,
         canonicalize: true,
         sname: None,
+        ticket: krb5_protocol::AsTicketOpts::default(),
     });
     let raw = first.lock().unwrap().clone();
     assert!(!raw.is_empty(), "enterprise client must send an AS-REQ");

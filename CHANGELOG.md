@@ -183,6 +183,9 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   FILE principal/realm identity is ASCII GeneralString. Committed MIT
   `kinit -a` + u2u FILE golden (`tests/traces/ccache-mit-addr-u2u.bin`)
   identity-checks addresses, authdata, and `second_ticket`.
+  `kinit`/`klist`/`kvno`/`kdestroy` parse getopt-clustered shorts
+  (`kinit -kt` is keytab mode). `klist -s` follows MIT `klist.c`
+  `check_ccache`. Password-on-stdin strips a trailing newline.
 
 - `klist` flag letters are MIT order `F f P p D d i R I H A T O a`
   (anonymous `a`); it prints `renew until` in local time and

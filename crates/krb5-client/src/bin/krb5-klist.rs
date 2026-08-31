@@ -1,6 +1,6 @@
 //! List tickets in a FILE ccache (MIT `klist -c` / `-f` / `-e`).
 //!
-//! Usage: krb5-klist [-c ccache] [-f] [-e]
+//! Usage: krb5-klist [-c ccache] [-f] [-e] [-s]
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -9,6 +9,7 @@
 use std::fmt::Write as _;
 
 use krb5_asn1::decode;
+use krb5_client::cli::{check_ccache, parse_klist};
 use krb5_client::load_ccache;
 use krb5_config::{CcSpec, resolve_ccspec};
 use krb5_crypto::EncryptionType;
@@ -16,39 +17,35 @@ use krb5_protocol::{CcacheCred, FileCcache, dir_display_name};
 use krb5_types::{Ticket, TicketFlags};
 
 fn main() {
-    let mut ccname = None::<String>;
-    let mut show_flags = false;
-    let mut show_etype = false;
-    let mut args = std::env::args().skip(1);
-    while let Some(a) = args.next() {
-        match a.as_str() {
-            "-c" => {
-                let Some(s) = args.next() else {
-                    eprintln!("klist: missing -c argument");
-                    std::process::exit(2);
-                };
-                ccname = Some(s);
-            }
-            "-f" => show_flags = true,
-            "-e" => show_etype = true,
-            "-fe" | "-ef" => {
-                show_flags = true;
-                show_etype = true;
-            }
-            _ => {
-                eprintln!("usage: krb5-klist [-c ccache] [-f] [-e]");
-                std::process::exit(2);
-            }
-        }
-    }
-    let spec = resolve_ccspec(ccname.as_deref()).unwrap_or_else(|e| {
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let args = parse_klist(&raw).unwrap_or_else(|e| {
         eprintln!("klist: {e}");
         std::process::exit(2);
     });
-    if let Err(e) = list(&spec, show_flags, show_etype) {
+    let spec = resolve_ccspec(args.ccache.as_deref()).unwrap_or_else(|e| {
+        if args.silent {
+            std::process::exit(1);
+        }
+        eprintln!("klist: {e}");
+        std::process::exit(2);
+    });
+    if args.silent {
+        std::process::exit(klist_status(&spec));
+    }
+    if let Err(e) = list(&spec, args.flags, args.etype) {
         eprintln!("klist: {e}");
         std::process::exit(1);
     }
+}
+
+fn klist_status(spec: &CcSpec) -> i32 {
+    let Ok(cc) = load_ccache(spec) else {
+        return 1;
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u32::try_from(d.as_secs()).unwrap_or(0));
+    check_ccache(&cc, now)
 }
 
 fn list(spec: &CcSpec, show_flags: bool, show_etype: bool) -> Result<(), String> {

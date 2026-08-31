@@ -127,7 +127,7 @@ docker exec "$NAME" sh -c 'cat /dev/null > /tmp/mit-kdc.trace' || true
 set +e
 OUT="$(docker exec -e KRB5_PASSWORD= "$NAME" \
     /tmp/krb5-kinit --pkinit FILE:/tmp/pkinit/user.pem --pkinit-anchors FILE:/tmp/pkinit/ca.pem \
-    127.0.0.1 user@KERBER.TEST /tmp/krb5cc_pkinit 2>&1)"
+    -c /tmp/krb5cc_pkinit user@KERBER.TEST 2>&1)"
 rc=$?
 set -e
 echo "$OUT"
@@ -178,7 +178,7 @@ docker exec "$NAME" sh -c 'cat /dev/null > /tmp/mit-kdc-rogue.trace' || true
 set +e
 ROGUE="$(docker exec -e KRB5_PASSWORD= "$NAME" \
     /tmp/krb5-kinit --pkinit FILE:/tmp/pkinit/user.pem --pkinit-anchors FILE:/tmp/pkinit/ca.pem \
-    127.0.0.1 user@KERBER.TEST /tmp/krb5cc_pkinit_rogue 2>&1)"
+    -c /tmp/krb5cc_pkinit_rogue user@KERBER.TEST 2>&1)"
 rrc=$?
 set -e
 echo "$ROGUE"
