@@ -139,7 +139,7 @@ fn dir_stdin(bin: &str, envs: &[(&str, std::path::PathBuf)]) -> std::process::Ou
     std::fs::create_dir_all(&scratch).unwrap();
     let file = File::open(&scratch).expect("open directory");
     let mut cmd = Command::new("timeout");
-    cmd.args(["2", bin])
+    cmd.args(["--kill-after=1s", "2", bin])
         .stdin(Stdio::from(file))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
