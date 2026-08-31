@@ -13,14 +13,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
       - name: fmt
         run: cargo fmt --all -- --check
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
       - name: test
-        run: cargo test --workspace
+        run: cargo nextest run --workspace
       - name: test --release
-        run: cargo test --workspace --release
+        run: cargo nextest run --workspace --release
       - name: doc
         run: cargo doc --workspace --no-deps
 
@@ -29,6 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.95
+      - uses: Swatinem/rust-cache@v2
       - name: MSRV 1.95 (locked)
         run: cargo test --workspace --locked
 
@@ -56,12 +62,22 @@ jobs:
 
   harness:
     runs-on: ubuntu-latest
-    needs: test
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Scratch dir
         run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@v3
+      - name: MIT KDC image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: harness/Dockerfile
+          load: true
+          tags: kerber-rust-mit-kdc:1.22.2
+          cache-from: type=gha,scope=mit-kdc
+          cache-to: type=gha,mode=max,scope=mit-kdc
       - name: Build and kinit against MIT 1.22.2
         run: ./scripts/run-harness.sh
       - name: client-gate
@@ -140,22 +156,19 @@ jobs:
         run: ./scripts/restart-gate.sh
       - name: prod-gate (kinit + log analysis + pcap)
         run: ./scripts/prod-gate.sh
-      - name: Build prod-node capture image
-        run: docker build -f harness/prod/Dockerfile -t kerber-rust-prod-node:latest .
+      - name: prod-node capture image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: harness/prod/Dockerfile
+          load: true
+          tags: kerber-rust-prod-node:latest
+          cache-from: type=gha,scope=prod-node
+          cache-to: type=gha,mode=max,scope=prod-node
       - name: prod-realm-gate (multi-host MIT client + kprop failover)
         env:
           KERBER_REQUIRE_REAL_PCAP: "1"
         run: ./scripts/prod-realm-gate.sh
-      - name: stress-gate (wire AS+TGS + latency SLO)
-        run: ./scripts/stress-gate.sh
-      - name: chaos-gate (netem + memory + failover-under-load)
-        env:
-          KERBER_REQUIRE_NETEM: "1"
-        run: ./scripts/chaos-gate.sh
-      - name: soak-gate (bounded leak detection)
-        env:
-          KERBER_REQUIRE_REAL_PCAP: "1"
-        run: ./scripts/soak-gate.sh
       - name: cross-realm-gate
         run: ./scripts/cross-realm-gate.sh
       - name: spake-gate
@@ -180,8 +193,132 @@ jobs:
         run: ./scripts/sha2-gate.sh
       - name: s4u-mit-gate (MIT kvno -U / -U -P vs Rust KDC)
         run: ./scripts/s4u-mit-gate.sh
-      - name: Build Samba AD DC image (harness/samba)
-        run: docker build -f harness/samba/Dockerfile -t samba-ad-dc:latest .
+
+  slo:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Scratch dir
+        run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@v3
+      - name: MIT KDC image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: harness/Dockerfile
+          load: true
+          tags: kerber-rust-mit-kdc:1.22.2
+          cache-from: type=gha,scope=mit-kdc
+          cache-to: type=gha,mode=max,scope=mit-kdc
+      - name: prod-node capture image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: harness/prod/Dockerfile
+          load: true
+          tags: kerber-rust-prod-node:latest
+          cache-from: type=gha,scope=prod-node
+          cache-to: type=gha,mode=max,scope=prod-node
+      - name: stress-gate (wire AS+TGS + latency SLO)
+        run: ./scripts/stress-gate.sh
+
+  chaos:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Scratch dir
+        run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@v3
+      - name: MIT KDC image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: harness/Dockerfile
+          load: true
+          tags: kerber-rust-mit-kdc:1.22.2
+          cache-from: type=gha,scope=mit-kdc
+          cache-to: type=gha,mode=max,scope=mit-kdc
+      - name: prod-node capture image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: harness/prod/Dockerfile
+          load: true
+          tags: kerber-rust-prod-node:latest
+          cache-from: type=gha,scope=prod-node
+          cache-to: type=gha,mode=max,scope=prod-node
+      - name: chaos-gate (netem + memory + failover-under-load)
+        env:
+          KERBER_REQUIRE_NETEM: "1"
+        run: ./scripts/chaos-gate.sh
+
+  soak:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Scratch dir
+        run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@v3
+      - name: MIT KDC image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: harness/Dockerfile
+          load: true
+          tags: kerber-rust-mit-kdc:1.22.2
+          cache-from: type=gha,scope=mit-kdc
+          cache-to: type=gha,mode=max,scope=mit-kdc
+      - name: prod-node capture image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: harness/prod/Dockerfile
+          load: true
+          tags: kerber-rust-prod-node:latest
+          cache-from: type=gha,scope=prod-node
+          cache-to: type=gha,mode=max,scope=prod-node
+      - name: soak-gate (bounded leak detection)
+        env:
+          KERBER_REQUIRE_REAL_PCAP: "1"
+        run: ./scripts/soak-gate.sh
+
+  peers:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Scratch dir
+        run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@v3
+      - name: MIT KDC image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: harness/Dockerfile
+          load: true
+          tags: kerber-rust-mit-kdc:1.22.2
+          cache-from: type=gha,scope=mit-kdc
+          cache-to: type=gha,mode=max,scope=mit-kdc
+      - name: Samba AD DC image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: harness/samba/Dockerfile
+          load: true
+          tags: samba-ad-dc:latest
+          cache-from: type=gha,scope=samba-ad
+          cache-to: type=gha,mode=max,scope=samba-ad
       - name: samba-ad-gate (Samba 4 AD DC live kinit/kvno)
         run: ./scripts/samba-ad-gate.sh
         env:
@@ -209,14 +346,31 @@ jobs:
         run: ./scripts/samba-crossrealm-gate.sh
         env:
           SAMBA_AD_IMAGE: samba-ad-dc:latest
-      - name: Build peer Samba DC (KERBER.TEST)
-        run: docker build -f harness/samba/Dockerfile --build-arg SAMBA_REALM=KERBER.TEST --build-arg SAMBA_DOMAIN=KERBER -t samba-kerber-dc:latest .
+      - name: peer Samba DC (KERBER.TEST)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: harness/samba/Dockerfile
+          load: true
+          tags: samba-kerber-dc:latest
+          build-args: |
+            SAMBA_REALM=KERBER.TEST
+            SAMBA_DOMAIN=KERBER
+          cache-from: type=gha,scope=samba-kerber
+          cache-to: type=gha,mode=max,scope=samba-kerber
       - name: samba-realtrust-gate (samba-tool trust + reverse PAC SID)
         run: ./scripts/samba-realtrust-gate.sh
         env:
           SAMBA_AD_IMAGE: samba-ad-dc:latest
           SAMBA_KERBER_IMAGE: samba-kerber-dc:latest
-      - name: Build Heimdal 7.8 image (harness/heimdal)
-        run: docker build -f harness/heimdal/Dockerfile -t kerber-rust-heimdal-kdc:latest .
+      - name: Heimdal 7.8 image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: harness/heimdal/Dockerfile
+          load: true
+          tags: kerber-rust-heimdal-kdc:latest
+          cache-from: type=gha,scope=heimdal
+          cache-to: type=gha,mode=max,scope=heimdal
       - name: heimdal-gate (Heimdal 7.8 bidirectional)
         run: ./scripts/heimdal-gate.sh

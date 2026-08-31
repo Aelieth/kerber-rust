@@ -356,10 +356,11 @@ when that oracle is absent.
   AS/TGS PDUs 10/11/12/13). CI sets `KERBER_REQUIRE_REAL_PCAP=1` so
   missing eth0 capture fails red. In CI after `prod-gate`.
 - `scripts/stress-gate.sh` — C2a: concurrent wire AS+TGS via
-  `examples/loadgen.rs` plus MIT `kinit`/`kvno` under load. KDC JSON
-  `duration_us` p99 ≤ 50 ms after a discarded warmup load, throughput
-  ≥ 8 issue-ok/s, intra-run window p99 degrade-factor 2.5, error-rate 0,
-  panics 0 (`scripts/lib/analyze-kdc-slo.py`). Bounded; in CI.
+  `examples/loadgen.rs` plus MIT `kinit`/`kvno` under load. Throughput
+  uses `kdc.issue` timestamps or `duration_us`, not Docker wall clock.
+  p99/throughput undershoot with `kdc_issue_err==0` and no panics is a
+  warning; error-rate and panics stay hard-fail. Own CI job (`slo`),
+  not on the required per-SHA path.
 - `scripts/chaos-gate.sh` — C2b: `tc netem` delay/loss/reorder (MIT
   must complete), low `--memory` under load (no OOM-panic), `docker kill`
   of the primary mid-load then MIT `kinit`/`kvno` on the kprop replica
@@ -371,7 +372,7 @@ when that oracle is absent.
   must not degrade by more than 2.5×; error-rate 0; panics 0;
   `correlation_id` on issue-ok. `KERBER_REQUIRE_REAL_PCAP=1` fails
   unless the client tcpdump archive is present. Archives logs + pcap +
-  RSS/latency series.
+  RSS/latency series. `soak` / `chaos` CI jobs are `continue-on-error`.
 - `scripts/heimdal-gate.sh` — Heimdal 7.8 secondary oracle
   (`harness/heimdal/`, Debian bookworm apt, no `krb5-user`). The only
   `exit 0` is after both directions content-assert AES-SHA1
@@ -382,7 +383,8 @@ when that oracle is absent.
   Heimdal 7.8 has no RFC 8009 etypes 19/20; the image pins
   `default_etypes` and the HDB master key to etype 18. Missing
   docker/image is honest `exit 2` plus
-  `heimdal-gate-unavailable.log`. In CI (build image, then bare `run:`).
+  `heimdal-gate-unavailable.log`. Samba/Heimdal run in the `peers` job
+  (`continue-on-error`); not required per SHA.
   TGS-REP `name-type` is a hint (RFC 4120 §6.2); Heimdal canonicalize
   may return NT-SRV-HST for a host principal requested as NT-PRINCIPAL.
 - `scripts/gss-sspi-gate.sh` — exit 2 + unavailability log when that

@@ -90,8 +90,8 @@ echo "==== MIT sample after load ===="
 prod_mit_sample after || die "MIT kinit/kvno failed after load"
 
 docker cp "$PRIMARY":/tmp/kdc.log "$OUT/kdc1.log"
-ELAPSED=$((END - START))
-[ "$ELAPSED" -lt 1 ] && ELAPSED=1
+WALL=$((END - START))
+[ "$WALL" -lt 1 ] && WALL=1
 
 python3 "$ROOT/scripts/lib/analyze-kdc-slo.py" \
     --log "$OUT/kdc1.log" \
@@ -101,7 +101,7 @@ python3 "$ROOT/scripts/lib/analyze-kdc-slo.py" \
     --throughput-min "$THROUGHPUT_MIN" \
     --max-error-rate 0 \
     --min-issue-ok 16 \
-    --elapsed-s "$ELAPSED" \
+    --elapsed-s "$WALL" \
     --windows 2 \
     --degrade-factor "$DEGRADE_FACTOR" \
     || die "SLO analysis failed"
