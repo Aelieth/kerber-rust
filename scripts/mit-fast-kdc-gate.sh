@@ -70,9 +70,9 @@ if ! docker exec -e KRB5_TRACE=/tmp/fast.trace "$NAME" \
 fi
 TRACE="$(docker exec "$NAME" cat /tmp/fast.trace)"
 echo "$TRACE"
-if ! echo "$TRACE" | grep -F 'FAST armor ccache'; then
+if ! echo "$TRACE" | grep -F 'Upgrading to FAST due to presence of PA_FX_FAST'; then
     echo "$TRACE" >&2
-    log "fast.kdc.gate" "error" ',"error":"kinit -T TRACE lacked FAST armor ccache"'
+    log "fast.kdc.gate" "error" ',"error":"kinit -T did not upgrade to FAST from PA_FX_FAST"'
     exit 1
 fi
 KLIST="$(docker exec "$NAME" klist -c /tmp/krb5cc_fast)"
@@ -91,10 +91,13 @@ KLIST2="$(docker exec "$NAME" klist -c /tmp/krb5cc_fast)"
 echo "$KLIST2"
 echo "$KLIST2" | grep -q 'host/testhost.kerber.test'
 KDCLOG="$(docker exec "$NAME" cat /tmp/kdc.log)"
-echo "$KDCLOG" | tail -20
-if ! echo "$KDCLOG" | grep -q 'fast::KrbFastResponse'; then
+echo "$KDCLOG" | tail -40
+FASTN="$(echo "$KDCLOG" | grep -c 'fast::KrbFastResponse' || true)"
+echo "KrbFastResponse count=$FASTN"
+if [ "$FASTN" -lt 2 ]; then
     echo "$KDCLOG" >&2
-    log "fast.kdc.gate" "error" ',"error":"Rust KDC log lacked FAST KrbFastResponse"'
+    echo "$TRACE" >&2
+    log "fast.kdc.gate" "error" ',"error":"Rust KDC log lacked two FAST KrbFastResponse (AS+TGS)"'
     exit 1
 fi
 

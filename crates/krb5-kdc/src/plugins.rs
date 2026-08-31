@@ -56,9 +56,38 @@ pub trait KdcPreauth: Send + Sync {
     ) -> Result<Option<PreauthAction>, Error>;
 }
 
+struct FastMod;
 struct PkinitMod;
 struct SpakeMod;
 struct EncTsMod;
+
+impl KdcPreauth for FastMod {
+    fn name(&self) -> &'static str {
+        "fast"
+    }
+    fn pa_types(&self) -> &'static [i32] {
+        &[pa::FX_FAST]
+    }
+    fn advertise(&self, _store: &dyn PrincipalRead, _client: &Principal) -> Vec<PaData> {
+        vec![PaData {
+            padata_type: pa::FX_FAST,
+            padata_value: Vec::<u8>::new().into(),
+        }]
+    }
+    fn process_as(
+        &self,
+        _store: &dyn PrincipalRead,
+        _client: &Principal,
+        _padata: Option<&[PaData]>,
+        _ikey: &ProtocolKey,
+        _etype: krb5_crypto::EncryptionType,
+        _as_req_der: &[u8],
+        _body_der: &[u8],
+        _cname: &PrincipalName,
+    ) -> Result<Option<PreauthAction>, Error> {
+        Ok(None)
+    }
+}
 
 impl KdcPreauth for PkinitMod {
     fn name(&self) -> &'static str {
@@ -234,7 +263,8 @@ static BUILTIN: OnceLock<Vec<Arc<dyn KdcPreauth>>> = OnceLock::new();
 fn builtins() -> &'static [Arc<dyn KdcPreauth>] {
     BUILTIN.get_or_init(|| {
         vec![
-            Arc::new(PkinitMod) as Arc<dyn KdcPreauth>,
+            Arc::new(FastMod) as Arc<dyn KdcPreauth>,
+            Arc::new(PkinitMod),
             Arc::new(SpakeMod),
             Arc::new(EncTsMod),
         ]

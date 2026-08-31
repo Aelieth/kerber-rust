@@ -21,6 +21,7 @@ pub(crate) struct FastOk {
     pub armor_key: ProtocolKey,
     pub inner_padata: Vec<PaData>,
     pub inner_body: Vec<u8>,
+    pub nonce: u32,
 }
 
 /// Unwrap PA-FX-FAST from an AS-REQ.
@@ -56,11 +57,13 @@ pub(crate) fn unwrap_fast_padata(
     let enc_usage = KeyUsage::new(ku::FAST_ENC)?;
     let plain = decrypt(&armor_key, enc_usage, armored.enc_fast_req.cipher.as_ref())?;
     let inner: krb5_types::fast::KrbFastReq = decode(&plain)?;
+    let nonce = inner.req_body.nonce;
     let inner_body = fast_req_body_der(&plain).map_or_else(|| encode(&inner.req_body), Ok)?;
     Ok(Some(FastOk {
         armor_key,
         inner_padata: inner.padata,
         inner_body,
+        nonce,
     }))
 }
 

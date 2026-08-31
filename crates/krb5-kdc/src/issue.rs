@@ -21,7 +21,9 @@ use crate::ad::{
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::plugins::{PreauthAction, current_policy, run_as_preauth};
-use crate::preauth::{fast_finished, unwrap_fast, unwrap_fast_padata, wrap_fast_rep};
+use crate::preauth::{
+    FastOk, fast_finished, find_pa, make_cookie, unwrap_fast, unwrap_fast_padata, wrap_fast_rep,
+};
 use crate::store::{
     KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED, KDB_DISALLOW_PROXIABLE,
     KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_NO_AUTH_DATA_REQUIRED,
@@ -313,8 +315,17 @@ fn issue_as_from(
         }
         None => {}
     }
+    if !skip_timestamp
+        && let Some(f) = fast.as_ref()
+        && let Some(blob) = find_pa(Some(&f.inner_padata), pa::ENCRYPTED_CHALLENGE)
+        && !blob.is_empty()
+    {
+        verify_encrypted_challenge(store, &client, &ckey.key, &f.armor_key, blob)?;
+        skip_timestamp = true;
+        extra_padata.push(kdc_encrypted_challenge(&f.armor_key, &ckey.key)?);
+    }
     if client.requires_preauth && !skip_timestamp {
-        return Err(preauth_required(store, &client));
+        return Err(fast_preauth_required(store, &client, fast.as_ref(), body));
     }
     if attr(&client, KDB_REQUIRES_HW_AUTH) && !hw_preauth {
         return Err(proto(err::PREAUTH_FAILED, "NO HW PREAUTH"));
@@ -404,7 +415,7 @@ fn issue_as_from(
     let renew_till = renew_till_for(store, &now, &flags, Some(&client), body.rtime.as_ref());
     let enc_part = enc_rep_part(
         &session,
-        body.nonce,
+        fast.as_ref().map_or(body.nonce, |f| f.nonce),
         &now,
         &now,
         &starttime,
@@ -425,7 +436,7 @@ fn issue_as_from(
             &f.armor_key,
             inner,
             Some(&sk),
-            body.nonce,
+            f.nonce,
             Some(finished),
         )?];
     }
@@ -763,7 +774,7 @@ fn issue_tgs_from(
             &f.armor_key,
             tgs_pa,
             None,
-            body.nonce,
+            f.nonce,
             Some(finished),
         )?])
     } else if tgs_pa.is_empty() {
@@ -1047,6 +1058,72 @@ fn extract_pa_tgs(padata: Option<&[PaData]>) -> Option<&OctetString> {
     })
 }
 
+fn verify_encrypted_challenge(
+    store: &dyn PrincipalRead,
+    client: &Principal,
+    long_term: &ProtocolKey,
+    armor_key: &ProtocolKey,
+    blob: &[u8],
+) -> Result<(), Error> {
+    let enc: EncryptedData = decode(blob)?;
+    let chal = krb_fx_cf2(
+        armor_key,
+        long_term,
+        b"clientchallengearmor",
+        b"challengelongterm",
+    )?;
+    let usage = KeyUsage::new(ku::ENC_CHALLENGE_CLIENT)?;
+    let plain = decrypt(&chal, usage, enc.cipher.as_ref())?;
+    let ts: PaEncTsEnc = decode(&plain)?;
+    if let Some(u) = ts.pausec {
+        u.validate().map_err(|_| proto(err::GENERIC, "pausec"))?;
+    }
+    let now = i64::from(KerberosTime::now().unix_seconds());
+    let then = i64::from(ts.patimestamp.unix_seconds());
+    if (now - then).abs() > store.policy().skew {
+        return Err(proto(err::SKEW, "encrypted challenge skew"));
+    }
+    let rkey = ReplayKey {
+        client: client.id(),
+        server: format!("krbtgt/{}@{}", store.realm(), store.realm()),
+        ctime: ts.patimestamp.unix_seconds(),
+        cusec: ts.pausec.map_or(0, Microseconds::get),
+        auth_hash: ReplayCache::hash_authenticator(blob),
+    };
+    if store.pa_replay().check_and_store(rkey) {
+        return Err(proto(err::REPEAT, "encrypted challenge replay"));
+    }
+    Ok(())
+}
+
+fn kdc_encrypted_challenge(
+    armor_key: &ProtocolKey,
+    long_term: &ProtocolKey,
+) -> Result<PaData, Error> {
+    let chal = krb_fx_cf2(
+        armor_key,
+        long_term,
+        b"kdcchallengearmor",
+        b"challengelongterm",
+    )?;
+    let ts = PaEncTsEnc {
+        patimestamp: KerberosTime::now(),
+        pausec: None,
+    };
+    let der = encode(&ts)?;
+    let usage = KeyUsage::new(ku::ENC_CHALLENGE_KDC)?;
+    let cipher = encrypt(&chal, usage, &der)?;
+    let enc = EncryptedData {
+        etype: chal.etype().to_iana(),
+        kvno: None,
+        cipher: cipher.into(),
+    };
+    Ok(PaData {
+        padata_type: pa::ENCRYPTED_CHALLENGE,
+        padata_value: encode(&enc)?.into(),
+    })
+}
+
 pub(crate) fn verify_enc_timestamp(
     store: &dyn PrincipalRead,
     client: &Principal,
@@ -1076,6 +1153,64 @@ pub(crate) fn verify_enc_timestamp(
         return Err(proto(err::REPEAT, "PA-ENC-TIMESTAMP replay"));
     }
     Ok(())
+}
+
+fn fast_preauth_required(
+    store: &dyn PrincipalRead,
+    client: &Principal,
+    fast: Option<&FastOk>,
+    body: &krb5_types::KdcReqBody,
+) -> Error {
+    let err = preauth_required(store, client);
+    let Error::PreauthRequired { e_data } = err else {
+        return err;
+    };
+    let Some(f) = fast else {
+        return Error::PreauthRequired { e_data };
+    };
+    let Ok(mut method) = decode::<MethodData>(&e_data) else {
+        return Error::PreauthRequired { e_data };
+    };
+    method.retain(|p| p.padata_type != pa::FX_FAST && p.padata_type != pa::SPAKE);
+    if !method
+        .iter()
+        .any(|p| p.padata_type == pa::ENCRYPTED_CHALLENGE)
+    {
+        method.insert(
+            0,
+            PaData {
+                padata_type: pa::ENCRYPTED_CHALLENGE,
+                padata_value: Vec::<u8>::new().into(),
+            },
+        );
+    }
+    let inner_ed = encode(&method).unwrap_or_default();
+    let inner_err = encode_krb_error(
+        store,
+        err::PREAUTH_REQUIRED,
+        None,
+        Some(inner_ed),
+        Some(body),
+    );
+    let mut padata = vec![PaData {
+        padata_type: pa::FX_ERROR,
+        padata_value: inner_err.into(),
+    }];
+    match make_cookie(store, b"fast") {
+        Ok(c) => padata.push(PaData {
+            padata_type: pa::FX_COOKIE,
+            padata_value: c.into(),
+        }),
+        Err(e) => return e,
+    }
+    padata.extend(method);
+    match wrap_fast_rep(&f.armor_key, padata, None, f.nonce, None) {
+        Ok(pa) => match encode(&vec![pa]) {
+            Ok(outer) => Error::PreauthRequired { e_data: outer },
+            Err(e) => e.into(),
+        },
+        Err(e) => e,
+    }
 }
 
 fn preauth_required(store: &dyn PrincipalRead, client: &Principal) -> Error {

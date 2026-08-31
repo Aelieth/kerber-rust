@@ -277,6 +277,10 @@ fn pkinit_advertised_in_method_data_when_ca_enabled() {
     );
     assert!(method.iter().any(|p| p.padata_type == pa::ENC_TIMESTAMP));
     assert!(method.iter().any(|p| p.padata_type == pa::ETYPE_INFO2));
+    assert!(
+        method.iter().any(|p| p.padata_type == pa::FX_FAST),
+        "PA-FX-FAST must be advertised so MIT kinit -T armors AS: {method:?}"
+    );
 }
 
 #[test]
@@ -295,13 +299,14 @@ fn ca_enabled_preauth_required_method_data_types() {
     assert_eq!(
         types,
         vec![
+            pa::FX_FAST,
             pa::PK_AS_REQ,
             pa::TD_DH_PARAMETERS,
             pa::SPAKE,
             pa::ENC_TIMESTAMP,
             pa::ETYPE_INFO2,
         ],
-        "CA-enabled METHOD-DATA types must pin [16, 109, 151, 2, 19]"
+        "CA-enabled METHOD-DATA types must pin [136, 16, 109, 151, 2, 19]"
     );
     let again = encode(&method).expect("re-encode");
     let round: MethodData = decode(&again).expect("decode encode");

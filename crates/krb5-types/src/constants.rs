@@ -178,6 +178,10 @@ pub mod ku {
     pub const FAST_FINISHED: u32 = 53;
     /// Cookie encrypted under the krbtgt key (local helper, not an RFC number).
     pub const FAST_COOKIE: u32 = 54;
+    /// RFC 6113 KEY_USAGE_ENC_CHALLENGE_CLIENT.
+    pub const ENC_CHALLENGE_CLIENT: u32 = 54;
+    /// RFC 6113 KEY_USAGE_ENC_CHALLENGE_KDC.
+    pub const ENC_CHALLENGE_KDC: u32 = 55;
     /// SPAKE factor encryption (MIT `KRB5_KEYUSAGE_SPAKE`).
     pub const SPAKE: u32 = 65;
 }
