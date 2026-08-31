@@ -152,6 +152,21 @@ jobs:
         env:
           KERBER_REQUIRE_REAL_PCAP: "1"
         run: ./scripts/prod-realm-gate.sh
+
+  mit-extra:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Scratch dir
+        run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
+      - name: Build and kinit against MIT 1.22.2
+        run: ./scripts/run-harness.sh
+      - name: Stop MIT harness
+        if: always()
+        run: ./scripts/stop-harness.sh || true
       - name: cross-realm-gate
         run: ./scripts/cross-realm-gate.sh
       - name: spake-gate
@@ -190,6 +205,8 @@ jobs:
         run: |
           docker build -f harness/Dockerfile -t kerber-rust-mit-kdc:1.22.2 .
           docker build -f harness/prod/Dockerfile -t kerber-rust-prod-node:latest .
+      - name: Build KDC bins
+        run: cargo build -p krb5-kdc --bin krb5-kdc -p krb5-admin --bin krb5-kadmind -p krb5-client --example loadgen
       - name: stress-gate (wire AS+TGS + latency SLO)
         run: ./scripts/stress-gate.sh
 
@@ -206,6 +223,8 @@ jobs:
         run: |
           docker build -f harness/Dockerfile -t kerber-rust-mit-kdc:1.22.2 .
           docker build -f harness/prod/Dockerfile -t kerber-rust-prod-node:latest .
+      - name: Build KDC bins
+        run: cargo build -p krb5-kdc --bin krb5-kdc -p krb5-admin --bin krb5-kadmind -p krb5-client --example loadgen
       - name: chaos-gate (netem + memory + failover-under-load)
         env:
           KERBER_REQUIRE_NETEM: "1"
@@ -224,6 +243,8 @@ jobs:
         run: |
           docker build -f harness/Dockerfile -t kerber-rust-mit-kdc:1.22.2 .
           docker build -f harness/prod/Dockerfile -t kerber-rust-prod-node:latest .
+      - name: Build KDC bins
+        run: cargo build -p krb5-kdc --bin krb5-kdc -p krb5-admin --bin krb5-kadmind -p krb5-client --example loadgen
       - name: soak-gate (bounded leak detection)
         env:
           KERBER_REQUIRE_REAL_PCAP: "1"
