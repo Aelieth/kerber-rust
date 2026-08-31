@@ -58,6 +58,8 @@ pub struct AsRequest<'a> {
     pub canonicalize: bool,
     /// Optional AS sname (default `krbtgt/REALM`). `kadmin/changepw` for kpasswd.
     pub sname: Option<&'a PrincipalName>,
+    /// AS-REQ etype list. `None` is [`EncryptionType::preferred`]. `kinit` passes `krb5.conf`.
+    pub etypes: Option<&'a [i32]>,
     /// Lifetime, renewable life, and KDC option flags (`kinit -l/-r/-f/-p/-a`).
     pub ticket: AsTicketOpts,
 }
@@ -161,6 +163,7 @@ pub fn as_exchange_key(
             pkinit: None,
             canonicalize: false,
             sname: None,
+            etypes: None,
             ticket: AsTicketOpts::default(),
         },
         keys,
@@ -190,7 +193,13 @@ fn req_sname(req: &AsRequest<'_>) -> PrincipalName {
 fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutcome, Error> {
     let _ = krb5_types::try_ascii(req.realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?;
     refuse_spake_combo(req)?;
-    let etypes = conf_etypes(false);
+    let etypes: Vec<i32> = match req.etypes {
+        Some(e) if !e.is_empty() => e.to_vec(),
+        _ => EncryptionType::preferred()
+            .iter()
+            .map(|e| e.to_iana())
+            .collect(),
+    };
     let nonce = random_nonce()?;
     let (till, _, _, _) = ticket_body(req);
 
@@ -347,7 +356,8 @@ fn continue_preauth(
     preauth_err: &KrbError,
     skew_hint: Option<&KerberosTime>,
 ) -> Result<AsOutcome, Error> {
-    let (etype, salt, params) = select_s2k(preauth_err, &salt_cname(&req.cname), req.realm)?;
+    let (etype, salt, params) =
+        select_s2k(preauth_err, &salt_cname(&req.cname), req.realm, etypes)?;
     let client_key = pick_key(keys, Some(etype)).map_or_else(
         || string_to_key(etype, req.password, &salt, params.as_deref()),
         Ok,
@@ -443,7 +453,7 @@ fn continue_fast(
     )?;
     let akey = armor_key(&armor.session, Some(&sub))?;
     let (etype, salt, params) = match err {
-        Some(e) => select_s2k(e, &salt_cname(&req.cname), req.realm)?,
+        Some(e) => select_s2k(e, &salt_cname(&req.cname), req.realm, etypes)?,
         None => (
             EncryptionType::preferred()[0],
             salt_cname(&req.cname).default_salt(req.realm),
@@ -537,7 +547,7 @@ fn send_spake_response(
     let cookie = find_pa(&method, pa::FX_COOKIE)
         .cloned()
         .ok_or_else(|| Error::ReplyMismatch("SPAKE FX_COOKIE missing".into()))?;
-    let (etype, salt, params) = select_s2k(err, &salt_cname(&req.cname), req.realm)?;
+    let (etype, salt, params) = select_s2k(err, &salt_cname(&req.cname), req.realm, etypes)?;
     let ikey = pick_key(keys, Some(etype)).map_or_else(
         || string_to_key(etype, req.password, &salt, params.as_deref()),
         Ok,
@@ -926,7 +936,9 @@ fn build_as_req(
     }))
 }
 
-pub(crate) fn conf_etypes(tgs: bool) -> Vec<i32> {
+/// Etype list from `krb5.conf` (`default_tkt_enctypes` / `default_tgs_enctypes`).
+#[must_use]
+pub fn conf_etypes(tgs: bool) -> Vec<i32> {
     let preferred: Vec<i32> = EncryptionType::preferred()
         .iter()
         .map(|e| e.to_iana())
@@ -1014,16 +1026,29 @@ fn pa_enc_timestamp_at(key: &ProtocolKey, now: &KerberosTime) -> Result<PaData, 
 
 type S2kMaterial = (EncryptionType, Vec<u8>, Option<Vec<u8>>);
 
-fn select_s2k(error: &KrbError, cname: &PrincipalName, realm: &str) -> Result<S2kMaterial, Error> {
+fn first_etype(etypes: &[i32]) -> EncryptionType {
+    etypes
+        .first()
+        .and_then(|n| EncryptionType::from_iana(*n).ok())
+        .unwrap_or(EncryptionType::Aes256CtsHmacSha196)
+}
+
+fn select_s2k(
+    error: &KrbError,
+    cname: &PrincipalName,
+    realm: &str,
+    etypes: &[i32],
+) -> Result<S2kMaterial, Error> {
     let default_salt = cname.default_salt(realm);
+    let fallback = first_etype(etypes);
     let Some(edata) = &error.e_data else {
-        return Ok((EncryptionType::Aes256CtsHmacSha384192, default_salt, None));
+        return Ok((fallback, default_salt, None));
     };
     let method: MethodData = decode(edata.as_ref())?;
     for p in &method {
         if p.padata_type == pa::ETYPE_INFO2 {
             let info: EtypeInfo2 = decode(p.padata_value.as_ref())?;
-            if let Some(found) = pick_info2(&info, &default_salt) {
+            if let Some(found) = pick_info2(&info, &default_salt, etypes) {
                 return Ok(found);
             }
         }
@@ -1031,23 +1056,26 @@ fn select_s2k(error: &KrbError, cname: &PrincipalName, realm: &str) -> Result<S2
     for p in &method {
         if p.padata_type == pa::ETYPE_INFO {
             let info: EtypeInfo = decode(p.padata_value.as_ref())?;
-            if let Some(found) = pick_info(&info, &default_salt) {
+            if let Some(found) = pick_info(&info, &default_salt, etypes) {
                 return Ok(found);
             }
         }
         if p.padata_type == pa::PW_SALT {
-            return Ok((
-                EncryptionType::Aes256CtsHmacSha384192,
-                p.padata_value.as_ref().to_vec(),
-                None,
-            ));
+            return Ok((fallback, p.padata_value.as_ref().to_vec(), None));
         }
     }
-    Ok((EncryptionType::Aes256CtsHmacSha384192, default_salt, None))
+    Ok((fallback, default_salt, None))
 }
 
-fn pick_info2(info: &EtypeInfo2, default_salt: &[u8]) -> Option<S2kMaterial> {
-    for wanted in EncryptionType::preferred() {
+fn pick_info2(info: &EtypeInfo2, default_salt: &[u8], etypes: &[i32]) -> Option<S2kMaterial> {
+    let mut order: Vec<EncryptionType> = etypes
+        .iter()
+        .filter_map(|n| EncryptionType::from_iana(*n).ok())
+        .collect();
+    if order.is_empty() {
+        order.extend(EncryptionType::preferred());
+    }
+    for wanted in order {
         if let Some(ent) = info.iter().find(|e| e.etype == wanted.to_iana()) {
             let salt = ent
                 .salt
@@ -1060,8 +1088,15 @@ fn pick_info2(info: &EtypeInfo2, default_salt: &[u8]) -> Option<S2kMaterial> {
     None
 }
 
-fn pick_info(info: &EtypeInfo, default_salt: &[u8]) -> Option<S2kMaterial> {
-    for wanted in EncryptionType::preferred() {
+fn pick_info(info: &EtypeInfo, default_salt: &[u8], etypes: &[i32]) -> Option<S2kMaterial> {
+    let mut order: Vec<EncryptionType> = etypes
+        .iter()
+        .filter_map(|n| EncryptionType::from_iana(*n).ok())
+        .collect();
+    if order.is_empty() {
+        order.extend(EncryptionType::preferred());
+    }
+    for wanted in order {
         if let Some(ent) = info.iter().find(|e| e.etype == wanted.to_iana()) {
             let salt = ent
                 .salt

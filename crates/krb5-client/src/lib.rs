@@ -338,6 +338,7 @@ fn kinit_inner(
         }
         (None, None) => None,
     };
+    let conf_e = krb5_protocol::conf_etypes(false);
     let req = AsRequest {
         cname: cname.clone(),
         realm: &realm_s,
@@ -348,6 +349,7 @@ fn kinit_inner(
         pkinit: pkinit.as_ref(),
         canonicalize: params.enterprise,
         sname: None,
+        etypes: Some(&conf_e),
         ticket: params.ticket,
     };
     let as_out = if let Some(ktpath) = params.keytab {
