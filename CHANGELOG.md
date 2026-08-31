@@ -166,7 +166,16 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   kvno and etype (timestamp compare is G8b). `client-gate` emits `log()` + `exit 0`.
   Samba/AD `docker run` error logs write under `KERBER_SCRATCH`, not
   host `/tmp`. `-c` without a value is an error; non-`FILE:` ccache
-  types are rejected until G8.
+  types return MIT `Unknown credential cache type` (no FILE fallback).
+
+- **G8a FILE fidelity (MIT-gated).** FILE v4 marshal is lossless
+  (`is_skey`, addresses, authdata, `second_ticket`, `FCC_TAG_DELTATIME`,
+  etype-0 `X-CACHECONF`). `delete_cred` writes MIT tombstones
+  (`endtime = 0`, `authtime = -1`, config realm `X-RMED-CONF:`);
+  readers skip them. `FILE`, `MEMORY` (process-global), and `DIR`
+  (`primary` / `tkt` / `DIR::` / `kswitch`) resolve; `KEYRING:` and
+  `KCM:` are unknown through 1.1 / G8c. Unknown critical FAST options
+  are RFC bits 0 and 2–15. Gate: `scripts/ccache-gate.sh`.
 
 - `klist` flag letters are MIT order `F f P p D d i R I H A T O a`
   (anonymous `a`); it prints `renew until` in local time and

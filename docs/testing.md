@@ -56,6 +56,18 @@ unlinks so MIT `klist` reports no cache. kdestroy refuses a symlink
 Docker UDP/TCP publish to port 88 is unreliable; the gate therefore
 talks to `127.0.0.1:88` *inside* the container.
 
+G8a: `scripts/ccache-gate.sh` is a MIT 1.22.2 FILE/DIR/MEMORY oracle.
+`ccache-mit-remove.c` calls MIT `krb5_cc_remove_cred` on a Rust-written
+FILE; Rust `remove_cred` tombstones a MIT-written FILE (`endtime = 0`,
+`authtime = -1`). Both `klist` implementations skip tombstones; MIT
+`klist -C` still shows `config:` after a host-ticket remove. A MIT
+`kinit` FILE round-trips through `FileCcache::parse` / `to_bytes`
+byte-for-byte. DIR: two MIT `kinit` into `DIR:/tmp/dcc`, MIT
+`kswitch -p` and Rust `krb5-kswitch -c DIR::` agree both ways.
+MEMORY: a MIT FILE is stored and listed in-process. Unbuilt prefixes
+(`KEYRING:`) are `Unknown credential cache type`. FILE write remains
+temp+rename (in-place vs rename is open until G8b SSSD/gssproxy).
+
 Stage 5: `scripts/kdc-gate.sh` copies the Rust `krb5-kdc` binary into a
 client-only MIT 1.22.2 container, binds 127.0.0.1:88 (fallback 8888),
 and runs MIT `kinit user@KERBER.TEST` plus `kvno host/testhost.kerber.test`.

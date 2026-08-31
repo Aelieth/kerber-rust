@@ -15,6 +15,7 @@ the script documents otherwise.
 | Gate | Drives | Asserts | CI |
 | --- | --- | --- | --- |
 | `client-gate.sh` | Rust `krb5-kinit` vs MIT `krb5kdc` | MIT `klist` names TGT + `host/testhost.kerber.test`; Rust `klist -f -e` matches MIT flags/etype; `krb5-kvno` service ticket; `kdestroy` then MIT `klist` has no cache; symlink kdestroy refused (target intact); default ccache `/tmp/krb5cc_<uid>`; Rust `kvno` rewrite keeps MIT `klist -C` `config:` | harness |
+| `ccache-gate.sh` | MIT FILE/DIR/MEMORY vs Rust marshal | MIT-written FILE `parse → to_bytes` identity; MIT `krb5_cc_remove_cred` on a Rust FILE and Rust `remove_cred` on a MIT FILE; both `klist` skip tombstones; `klist -C` `config:` kept; DIR `kinit` twice + MIT/`krb5-kswitch` both ways; MEMORY consumes a MIT FILE; `KEYRING:` is `Unknown credential cache type` | harness |
 | `ktutil-gate.sh` | MIT `ktadd` / Rust `ktutil` / MIT `kinit -k` | Rust list of MIT keytab; Rust-written keytab `kinit -k` | harness |
 | `kadmin-local-gate.sh` | Rust `krb5-kadmin-local` then MIT `kadmin` | `addprinc extra2` and `addprinc host/slashhost`; MIT getprinc/listprincs those names; set-but-unreadable `KRB5_ACL_FILE` is non-zero; `-randkey` + `kinit -k`; `+requires_preauth`; two `ktadd -k` both names; dump `getprinc` after mutating `setstr` keeps a concurrent kadmind create (`m5k: m5v`); local `addprinc n7local` then remote `cpw extra2` keeps both; local `ktadd krbtgt/REALM` is the MIT footgun (rotates + writes) | harness |
 | `rust-kpasswd-mit-gate.sh` | Rust `krb5-kpasswd` vs MIT `kadmind` 464 | new password `kinit`; old fails | harness |
@@ -80,6 +81,16 @@ not claim a Windows DC.
 | cargo-deny | `deny.toml` licenses/advisories/sources | allowlist only; crates.io sources | audit |
 | `scripts/geiger.sh` | per-crate `cargo geiger --forbid-only` | product 0-unsafe / `forbid(unsafe)`; dep surface archived, not a count gate | audit |
 | `cargo vet --locked` | `supply-chain/` (Google / Mozilla / Bytecode Alliance) | every third-party crate imported, locally audited, or exempt; cargo-vet **0.10.0** | audit |
+
+## Deviation ledger (MIT behaviours kept)
+
+FILE `delete_cred` is a same-length tombstone (`endtime = 0`,
+`authtime = -1`, config realm `X-CACHECONF:` → `X-RMED-CONF:`);
+deletion is not guaranteed if marshal length would change. FILE
+stores still append/rewrite via temp+rename (MIT opens `O_APPEND`
+in place); whether to match MIT in-place open is open until G8b
+SSSD/gssproxy oracles. Unknown ccache prefixes are
+`KRB5_CC_UNKNOWN_TYPE` with no FILE fallback.
 
 ## Not external oracles
 
