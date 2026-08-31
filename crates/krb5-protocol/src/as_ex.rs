@@ -190,10 +190,7 @@ fn req_sname(req: &AsRequest<'_>) -> PrincipalName {
 fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutcome, Error> {
     let _ = krb5_types::try_ascii(req.realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?;
     refuse_spake_combo(req)?;
-    let etypes: Vec<i32> = EncryptionType::preferred()
-        .iter()
-        .map(|e| e.to_iana())
-        .collect();
+    let etypes = conf_etypes(false);
     let nonce = random_nonce()?;
     let (till, _, _, _) = ticket_body(req);
 
@@ -927,6 +924,34 @@ fn build_as_req(
             additional_tickets: None,
         },
     }))
+}
+
+pub(crate) fn conf_etypes(tgs: bool) -> Vec<i32> {
+    let preferred: Vec<i32> = EncryptionType::preferred()
+        .iter()
+        .map(|e| e.to_iana())
+        .collect();
+    let Some(conf) = krb5_config::load_krb5_conf() else {
+        return preferred;
+    };
+    let names = if tgs && !conf.default_tgs_enctypes.is_empty() {
+        &conf.default_tgs_enctypes
+    } else if !tgs && !conf.default_tkt_enctypes.is_empty() {
+        &conf.default_tkt_enctypes
+    } else if !conf.permitted_enctypes.is_empty() {
+        &conf.permitted_enctypes
+    } else {
+        return preferred;
+    };
+    let v: Vec<i32> = names
+        .iter()
+        .filter_map(|n| {
+            EncryptionType::from_mit_name(n)
+                .ok()
+                .map(EncryptionType::to_iana)
+        })
+        .collect();
+    if v.is_empty() { preferred } else { v }
 }
 
 fn ticket_body(

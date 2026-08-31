@@ -226,10 +226,7 @@ fn tgs_once(
 ) -> Result<TgsOutcome, Error> {
     let nonce = random_nonce31()?;
     let till = KerberosTime(tgt.enc_part.endtime.0);
-    let etypes: Vec<i32> = EncryptionType::preferred()
-        .iter()
-        .map(|e| e.to_iana())
-        .collect();
+    let etypes = crate::as_ex::conf_etypes(true);
 
     let requested = sname.clone();
     let body = KdcReqBody {

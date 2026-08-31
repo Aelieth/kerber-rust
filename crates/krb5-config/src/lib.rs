@@ -58,6 +58,30 @@ pub struct Krb5Conf {
     pub clockskew: u32,
     /// `dns_lookup_kdc`.
     pub dns_lookup_kdc: bool,
+    /// `dns_lookup_realm` (MIT `krb5_get_host_realm`).
+    pub dns_lookup_realm: bool,
+    /// `udp_preference_limit` (MIT default 1465). `None` = default.
+    pub udp_preference_limit: Option<u32>,
+    /// `rdns`. Parsed; we do not reverse-resolve addresses.
+    pub rdns: bool,
+    /// `kdc_timesync`. Parsed; AS already resyncs on KRB-ERROR SKEW.
+    pub kdc_timesync: bool,
+    /// `permitted_enctypes`.
+    pub permitted_enctypes: Vec<String>,
+    /// `default_tkt_enctypes`.
+    pub default_tkt_enctypes: Vec<String>,
+    /// `default_tgs_enctypes`.
+    pub default_tgs_enctypes: Vec<String>,
+    /// `forwardable`.
+    pub forwardable: bool,
+    /// `ticket_lifetime` seconds.
+    pub ticket_lifetime: Option<u64>,
+    /// `renew_lifetime` seconds.
+    pub renew_lifetime: Option<u64>,
+    /// Heimdal `kdc_timeout` — no MIT parse site; stored and unused.
+    pub kdc_timeout: Option<String>,
+    /// Heimdal `max_retries` — no MIT parse site; stored and unused.
+    pub max_retries: Option<String>,
     /// Realm → KDC list.
     pub kdcs: BTreeMap<String, Vec<Endpoint>>,
     /// Realm → admin_server.
@@ -85,6 +109,8 @@ pub struct KdcConf {
     pub max_life: u64,
     /// Maximum renewable lifetime in seconds (default 7 days).
     pub max_renewable_life: u64,
+    /// Whether `max_renewable_life` was present in kdc.conf (unset ≠ 0).
+    pub max_renewable_life_set: bool,
     /// Database path.
     pub database_name: Option<PathBuf>,
     /// ACL file.
@@ -113,6 +139,7 @@ impl Default for KdcConf {
             realm: "KERBER.TEST".into(),
             max_life: 10 * 3600,
             max_renewable_life: 7 * 24 * 3600,
+            max_renewable_life_set: false,
             database_name: None,
             acl_file: None,
             key_stash_file: None,
@@ -132,6 +159,8 @@ impl Krb5Conf {
     pub fn new() -> Self {
         Self {
             clockskew: 300,
+            rdns: true,
+            kdc_timesync: true,
             ..Self::default()
         }
     }
@@ -282,8 +311,31 @@ fn parse_libdefaults(conf: &mut Krb5Conf, line: &str) {
                 .unwrap_or(300);
         }
         "dns_lookup_kdc" => conf.dns_lookup_kdc = truthy(&v),
+        "dns_lookup_realm" => conf.dns_lookup_realm = truthy(&v),
+        "udp_preference_limit" => {
+            conf.udp_preference_limit = v.parse().ok();
+        }
+        "rdns" => conf.rdns = truthy(&v),
+        "kdc_timesync" => conf.kdc_timesync = truthy(&v),
+        "permitted_enctypes" => conf.permitted_enctypes = split_ws(&v),
+        "default_tkt_enctypes" => conf.default_tkt_enctypes = split_ws(&v),
+        "default_tgs_enctypes" => conf.default_tgs_enctypes = split_ws(&v),
+        "forwardable" => conf.forwardable = truthy(&v),
+        "ticket_lifetime" => conf.ticket_lifetime = parse_duration_secs(&v),
+        "renew_lifetime" => conf.renew_lifetime = parse_duration_secs(&v),
+        "kdc_timeout" | "max_retries" => {
+            if k.eq_ignore_ascii_case("kdc_timeout") {
+                conf.kdc_timeout = Some(v);
+            } else {
+                conf.max_retries = Some(v);
+            }
+        }
         _ => {}
     }
+}
+
+fn split_ws(v: &str) -> Vec<String> {
+    v.split_whitespace().map(ToOwned::to_owned).collect()
 }
 
 fn parse_realm_line(conf: &mut Krb5Conf, realm: &str, line: &str) {
@@ -365,6 +417,7 @@ fn parse_kdc_realm_line(conf: &mut KdcConf, line: &str) {
         "max_life" => conf.max_life = parse_duration_secs(&v).unwrap_or(conf.max_life),
         "max_renewable_life" => {
             conf.max_renewable_life = parse_duration_secs(&v).unwrap_or(conf.max_renewable_life);
+            conf.max_renewable_life_set = true;
         }
         "database_name" => conf.database_name = Some(PathBuf::from(v)),
         "acl_file" => conf.acl_file = Some(PathBuf::from(v)),
@@ -598,6 +651,25 @@ pub fn discover_kdc(realm: &str) -> Option<Endpoint> {
     discover_kdc_in(krb5_conf_paths(), realm)
 }
 
+/// First readable `krb5.conf` from [`krb5_conf_paths`].
+#[must_use]
+pub fn load_krb5_conf() -> Option<Krb5Conf> {
+    for p in krb5_conf_paths() {
+        if let Ok(c) = Krb5Conf::load_file(p) {
+            return Some(c);
+        }
+    }
+    None
+}
+
+/// MIT `udp_preference_limit` (default 1465). Messages larger go TCP first.
+#[must_use]
+pub fn udp_preference_limit() -> usize {
+    load_krb5_conf()
+        .and_then(|c| c.udp_preference_limit)
+        .map_or(1465, |n| usize::try_from(n).unwrap_or(1465))
+}
+
 /// `KRB5_KDC_PROFILE` / `KRB5_KDC_CONF` / `/etc/krb5kdc/kdc.conf` if present.
 #[must_use]
 pub fn kdc_conf_path() -> Option<PathBuf> {
@@ -787,6 +859,9 @@ mod tests {
 ";
         let c = Krb5Conf::parse(text).unwrap();
         assert_eq!(c.default_realm.as_deref(), Some("KERBER.TEST"));
+        assert!(!c.dns_lookup_kdc);
+        assert!(c.kdc_timeout.is_none());
+        assert!(c.max_retries.is_none());
         assert!(!c.allow_weak_crypto);
         assert_eq!(c.clockskew, 300);
         assert_eq!(c.kdcs["KERBER.TEST"][0].host, "127.0.0.1");
@@ -797,6 +872,38 @@ mod tests {
         assert_eq!(discovered[0].host, "127.0.0.1");
         assert_eq!(discovered[0].port, 88);
         assert_eq!(c.domain_realm[".kerber.test"], "KERBER.TEST");
+    }
+
+    #[test]
+    fn parse_fleet_knobs_and_ignore_heimdal_spellings() {
+        let c = Krb5Conf::parse(
+            r"
+[libdefaults]
+    udp_preference_limit = 0
+    rdns = false
+    kdc_timesync = no
+    forwardable = true
+    ticket_lifetime = 10h
+    renew_lifetime = 7d
+    dns_lookup_realm = no
+    permitted_enctypes = aes256-cts-hmac-sha1-96 aes128-cts-hmac-sha1-96
+    default_tkt_enctypes = aes256-cts-hmac-sha1-96
+    default_tgs_enctypes = aes128-cts-hmac-sha1-96
+    kdc_timeout = 1
+    max_retries = 1
+",
+        )
+        .unwrap();
+        assert_eq!(c.udp_preference_limit, Some(0));
+        assert!(!c.rdns);
+        assert!(!c.kdc_timesync);
+        assert!(c.forwardable);
+        assert_eq!(c.ticket_lifetime, Some(10 * 3600));
+        assert_eq!(c.renew_lifetime, Some(7 * 86400));
+        assert_eq!(c.permitted_enctypes.len(), 2);
+        assert_eq!(c.default_tkt_enctypes, ["aes256-cts-hmac-sha1-96"]);
+        assert_eq!(c.kdc_timeout.as_deref(), Some("1"));
+        assert_eq!(c.max_retries.as_deref(), Some("1"));
     }
 
     #[test]

@@ -61,10 +61,21 @@ fn main() {
         eprintln!("--spake cannot be combined with --armor-ccache or --pkinit");
         std::process::exit(2);
     }
+    let conf = krb5_config::load_krb5_conf();
     let mut ticket = AsTicketOpts {
-        lifetime: args.lifetime.as_deref().and_then(parse_deltat),
-        rlife: args.rlife.as_deref().and_then(parse_deltat),
-        forwardable: args.forwardable.unwrap_or(true),
+        lifetime: args
+            .lifetime
+            .as_deref()
+            .and_then(parse_deltat)
+            .or_else(|| conf.as_ref().and_then(|c| c.ticket_lifetime)),
+        rlife: args
+            .rlife
+            .as_deref()
+            .and_then(parse_deltat)
+            .or_else(|| conf.as_ref().and_then(|c| c.renew_lifetime)),
+        forwardable: args
+            .forwardable
+            .unwrap_or_else(|| conf.as_ref().is_none_or(|c| c.forwardable)),
         proxiable: args.proxiable.unwrap_or(false),
         addresses: None,
     };
