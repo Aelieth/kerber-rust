@@ -177,6 +177,10 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   `KCM:` are unknown through 1.1 / G8c. Unknown critical FAST options
   are RFC bits 0 and 2–15. Gate: `scripts/ccache-gate.sh`.
 
+- **G8b (in progress).** FAST `hide-client-names` (bit 1) is
+  `KDC_ERR_UNKNOWN_CRITICAL_FAST_OPTION` rather than a silent
+  cleartext-cname issue.
+
 - `klist` flag letters are MIT order `F f P p D d i R I H A T O a`
   (anonymous `a`); it prints `renew until` in local time and
   `Ticket server` only when cred server ≠ ticket sname. AS/TGS sname

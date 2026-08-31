@@ -1204,9 +1204,11 @@ pub(crate) fn verify_enc_timestamp(
 
 fn check_fast_options(opts: &krb5_types::fast::FastOptions) -> Result<(), Error> {
     // MIT UNSUPPORTED_CRITICAL_FAST_OPTIONS = 0xbfff0000 (RFC bits 0, 2..15).
+    // Bit 1 (hide-client-names) is known in MIT; we refuse it (anonymous
+    // cname in the AS reply is a non-goal) rather than issue silently.
     let n = opts.len().min(16);
     for i in 0..n {
-        if i != 1 && opts[i] {
+        if opts[i] {
             return Err(proto(err::UNKNOWN_CRITICAL_FAST_OPTION, "FAST option"));
         }
     }

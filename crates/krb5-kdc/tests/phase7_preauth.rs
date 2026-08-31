@@ -418,9 +418,10 @@ fn noncritical_fast_option_bit_16_is_ignored() {
 }
 
 #[test]
-fn hide_client_names_is_not_unknown_critical() {
+fn hide_client_names_is_refused() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
-    wrap_as_fast_bit(&store, 844, 1).expect("bit 1 is hide-client-names");
+    let err = wrap_as_fast_bit(&store, 844, 1).expect_err("bit 1 hide-client-names");
+    assert_eq!(issue_code(err), err::UNKNOWN_CRITICAL_FAST_OPTION);
 }
 
 #[test]
