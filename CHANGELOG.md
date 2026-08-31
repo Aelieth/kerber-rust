@@ -163,14 +163,15 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
 
 - CLI unit coverage: klist `fmt_unix`, `parse_kadmin_args`,
   `parse_ccname`, `parse_kpasswd_rep`. `ktutil-gate` compares
-  kvno/etype/timestamp. `client-gate` emits `log()` + `exit 0`.
+  kvno and etype (timestamp compare is G8b). `client-gate` emits `log()` + `exit 0`.
   Samba/AD `docker run` error logs write under `KERBER_SCRATCH`, not
   host `/tmp`. `-c` without a value is an error; non-`FILE:` ccache
   types are rejected until G8.
 
 - `klist` flag letters are MIT order `F f P p D d i R I H A T O a`
-  (anonymous `a`); it prints `renew until` and `Ticket server` in
-  local time. AS/TGS sname compare is component-wise. Trust-anchor
+  (anonymous `a`); it prints `renew until` in local time and
+  `Ticket server` only when cred server ≠ ticket sname. AS/TGS sname
+  compare is component-wise. Trust-anchor
   with **absent** `keyUsage` is accepted (RFC 5280 §6.1.4(n)); KU
   present without `keyCertSign` is still refused. NT-ENTERPRISE
   suffix match is exact octets (MIT `kinit -E user@kerber.test` in
@@ -223,6 +224,15 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   listening is red). SAN≠cname greps the Rust KDC log for
   `pkinit client san`.
 
+- **G7 M-pass / N-batch (MIT-gated).** Local `kadmin.local ktadd`
+  ignores `LOCKDOWN_KEYS` like MIT 1.22.2 (rotate + write). **krbtgt
+  `ktadd krbtgt/REALM` is the MIT footgun** (rotates + writes;
+  lockdown is wire-only — user decision 2026-08-30). Remote kadm5
+  extract stays gated. Mutating local/remote verbs reload the dump
+  before save. MIT `kinit -T` against the Rust KDC armors AS via
+  PA-FX-FAST + PA-ENCRYPTED-CHALLENGE (`scripts/mit-fast-kdc-gate.sh`,
+  ≥2 `KrbFastResponse`).
+
 - Align the workspace with KLLDAP 0.7.5: edition **2024**, MSRV **1.95**,
   `nix` **0.31**, and `rasn` unpinned at **0.28.14**. MIT golden DER
   still byte-matches `tests/traces/mit-*.der`. Privilege-drop still
@@ -230,6 +240,13 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   [`docs/integration-klldap.md`](docs/integration-klldap.md).
   Bisect: `c6c59d8` (MSRV bump) was clippy-red on stable until
   `d226f8c` folded MSRV-gated `is_multiple_of` / if-let-chains.
+
+Deferred (G7 N-batch ledger, not this pass): PKINIT nonce /
+`signatureAlgorithm` / SignerInfo `sid` / 64 KiB DER cap; KDC
+retransmit lookaside; `addpol` swallows its save error; kvno `-U`/`-P`;
+G7g remote kadmin client; G8a-1 FILE ccache tagged header; kinit
+`-k/-t` unknown-flag parse (G8b-1). Reload→save still has no dump
+file lock (with db2/LMDB).
 
 ## [1.0.0] - 2026-08-27
 

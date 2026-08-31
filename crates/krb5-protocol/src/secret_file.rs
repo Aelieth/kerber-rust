@@ -4,6 +4,14 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
 
+#[cfg(test)]
+use std::cell::Cell;
+
+#[cfg(test)]
+thread_local! {
+    static SKIP_LSTAT_TYPE: Cell<bool> = const { Cell::new(false) };
+}
+
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 
@@ -89,7 +97,11 @@ pub fn create_exclusive_secret(path: &Path) -> io::Result<std::fs::File> {
 /// Returns I/O errors from open/write/sync/remove. Missing file is an error.
 pub fn destroy_secret_file(path: &Path) -> io::Result<()> {
     let lmeta = fs::symlink_metadata(path)?;
-    if !lmeta.file_type().is_file() {
+    #[cfg(test)]
+    let skip_type = SKIP_LSTAT_TYPE.with(Cell::get);
+    #[cfg(not(test))]
+    let skip_type = false;
+    if !skip_type && !lmeta.file_type().is_file() {
         return Err(not_regular());
     }
     let mut opts = OpenOptions::new();
@@ -121,4 +133,57 @@ pub fn destroy_secret_file(path: &Path) -> io::Result<()> {
 
 fn not_regular() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, "not a regular file")
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+    use std::time::Instant;
+
+    struct SkipType;
+    impl Drop for SkipType {
+        fn drop(&mut self) {
+            SKIP_LSTAT_TYPE.with(|c| c.set(false));
+        }
+    }
+
+    fn with_skip_lstat_type<R>(f: impl FnOnce() -> R) -> R {
+        SKIP_LSTAT_TYPE.with(|c| c.set(true));
+        let _g = SkipType;
+        f()
+    }
+
+    #[test]
+    fn open_refuses_symlink_with_nofollow() {
+        let dir = std::env::temp_dir();
+        let pid = std::process::id();
+        let target = dir.join(format!("krb5-nofollow-target-{pid}"));
+        let link = dir.join(format!("krb5-nofollow-link-{pid}"));
+        let _ = fs::remove_file(&target);
+        let _ = fs::remove_file(&link);
+        fs::write(&target, b"do-not-zero").unwrap();
+        symlink(&target, &link).unwrap();
+        let err = with_skip_lstat_type(|| destroy_secret_file(&link)).unwrap_err();
+        assert_eq!(err.raw_os_error(), Some(nix::libc::ELOOP), "{err}");
+        assert_eq!(fs::read(&target).unwrap(), b"do-not-zero");
+        let _ = fs::remove_file(&link);
+        let _ = fs::remove_file(&target);
+    }
+
+    #[test]
+    fn open_refuses_fifo_without_hang() {
+        let path = std::env::temp_dir().join(format!("krb5-nofollow-fifo-{}", std::process::id()));
+        let _ = fs::remove_file(&path);
+        let st = std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(st.success());
+        let t0 = Instant::now();
+        let err = with_skip_lstat_type(|| destroy_secret_file(&path));
+        assert!(err.is_err(), "FIFO open must fail");
+        assert!(t0.elapsed() < std::time::Duration::from_secs(2));
+        let _ = fs::remove_file(&path);
+    }
 }

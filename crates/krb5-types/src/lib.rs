@@ -1039,6 +1039,17 @@ mod tests {
     }
 
     #[test]
+    fn is_krbtgt_requires_two_components() {
+        let two = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "KERBER.TEST"]);
+        assert!(two.is_krbtgt());
+        let three = PrincipalName::new(
+            PrincipalName::NT_SRV_INST,
+            ["krbtgt", "KERBER.TEST", "extra"],
+        );
+        assert!(!three.is_krbtgt());
+    }
+
+    #[test]
     fn microseconds_rejects_out_of_range() {
         assert!(Microseconds::new(0).is_ok());
         assert!(Microseconds::new(999_999).is_ok());

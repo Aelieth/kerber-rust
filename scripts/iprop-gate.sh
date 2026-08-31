@@ -174,6 +174,7 @@ for _ in $(seq 1 40); do
     fi
     sleep 0.5
 done
+echo "kpropd FULL_RESYNC wait ok=$ok"
 echo "==== kpropd-iprop.log (pre-kprop) ===="
 docker exec "$NAME" cat /tmp/kpropd-iprop.log 2>/dev/null || true
 

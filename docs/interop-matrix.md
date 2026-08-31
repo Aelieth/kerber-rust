@@ -16,7 +16,7 @@ the script documents otherwise.
 | --- | --- | --- | --- |
 | `client-gate.sh` | Rust `krb5-kinit` vs MIT `krb5kdc` | MIT `klist` names TGT + `host/testhost.kerber.test`; Rust `klist -f -e` matches MIT flags/etype; `krb5-kvno` service ticket; `kdestroy` then MIT `klist` has no cache; symlink kdestroy refused (target intact); default ccache `/tmp/krb5cc_<uid>`; Rust `kvno` rewrite keeps MIT `klist -C` `config:` | harness |
 | `ktutil-gate.sh` | MIT `ktadd` / Rust `ktutil` / MIT `kinit -k` | Rust list of MIT keytab; Rust-written keytab `kinit -k` | harness |
-| `kadmin-local-gate.sh` | Rust `krb5-kadmin-local` then MIT `kadmin` | `addprinc extra2` and `addprinc host/slashhost`; MIT getprinc/listprincs those names; set-but-unreadable `KRB5_ACL_FILE` is non-zero; `-randkey` + `kinit -k`; `+requires_preauth`; two `ktadd -k` both names; concurrent kadmind principal survives `listprincs` | harness |
+| `kadmin-local-gate.sh` | Rust `krb5-kadmin-local` then MIT `kadmin` | `addprinc extra2` and `addprinc host/slashhost`; MIT getprinc/listprincs those names; set-but-unreadable `KRB5_ACL_FILE` is non-zero; `-randkey` + `kinit -k`; `+requires_preauth`; two `ktadd -k` both names; dump `getprinc` after mutating `setstr` keeps a concurrent kadmind create (`m5k: m5v`); local `addprinc n7local` then remote `cpw extra2` keeps both; local `ktadd krbtgt/REALM` is the MIT footgun (rotates + writes) | harness |
 | `rust-kpasswd-mit-gate.sh` | Rust `krb5-kpasswd` vs MIT `kadmind` 464 | new password `kinit`; old fails | harness |
 | `kdc-gate.sh` | MIT `kinit`/`kvno` vs Rust KDC | MIT TGT + host ticket (FAST TGS `kvno` included) | harness |
 | `gss-gate.sh` | MIT `libgssapi_krb5` initiator vs `krb5-gss-accept` | unwrap of `hello-from-mit-gss`; `GSS_C_DELEG_FLAG` both directions names `user@KERBER.TEST`; MIT SPNEGO handshake + `mechListMIC`; MIT `gss_wrap_iov` / Rust `unwrap_iov` (incl. `SIGN_ONLY`); Rust `wrap_iov` / MIT `gss_unwrap_iov`; inquire lifetime > 0 | harness |
@@ -24,6 +24,7 @@ the script documents otherwise.
 | `spake-gate.sh` | MIT `kinit` `pa_type` 151 / group 2 vs Rust KDC | TRACE 151 + group 2; `klist` `user@KERBER.TEST` | harness |
 | `rust-kinit-spake-gate.sh` | Rust `kinit --spake` vs MIT KDC P-256 | MIT `klist` `user@KERBER.TEST`; TRACE `SPAKE response received` or `SPAKE derived K'`; `+requires_preauth` | harness |
 | `rust-kinit-fast-gate.sh` | Rust `kinit --fast` vs MIT KDC | MIT `klist` `user@KERBER.TEST`; TRACE `Decrypted AP-REQ` (MIT 1.22.2 does not print `FX-FAST`) | harness |
+| `mit-fast-kdc-gate.sh` | MIT `kinit -T` + `kvno` vs Rust KDC | TRACE `Upgrading to FAST due to presence of PA_FX_FAST`; ≥2 `fast::KrbFastResponse` (AS + TGS) | harness |
 | `rust-kinit-pkinit-gate.sh` | Rust `kinit --pkinit FILE:` vs MIT KDC | MIT `klist` `user@KERBER.TEST`; `pkinit.so`; PA-PK-AS-REQ; rogue KDC is `pkinit kdc eku` (MIT not listening is red) | harness |
 | `rust-kinit-enterprise-gate.sh` | MIT `kinit -E` vs Rust KDC and Rust `kinit -E` vs MIT | klist default principal `user@KERBER.TEST` (not the enterprise string) | harness |
 | `sha2-gate.sh` | MIT `kinit`/`kvno` etype 20 vs Rust KDC | `klist -e` names `aes256-cts-hmac-sha384-192` | harness |

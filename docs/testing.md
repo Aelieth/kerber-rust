@@ -96,7 +96,9 @@ and MIT `klist` `user@KERBER.TEST`. FAST: `scripts/rust-kinit-fast-gate.sh`
 is Rust `kinit --fast --armor-ccache` against MIT; the AS-REQ carries
 PA-FX-FAST and MIT `klist` names `user@KERBER.TEST`. MIT 1.22.2 KDC TRACE
 does **not** print `FX-FAST`; the gate asserts `Decrypted AP-REQ` (the
-armor AP-REQ). Reverse PKINIT:
+armor AP-REQ). Reverse FAST: `scripts/mit-fast-kdc-gate.sh` is MIT
+`kinit -T` + `kvno` against the Rust KDC (TRACE upgrades on
+`PA_FX_FAST`; KDC log ≥2 `KrbFastResponse`). Reverse PKINIT:
 `scripts/rust-kinit-pkinit-gate.sh` is Rust `kinit --pkinit FILE:` against
 MIT KDC (`pkinit.so` + KDC cert + `id-pkinit-san`); it **fails** if the
 plugin is missing. MIT `klist` names `user@KERBER.TEST`. A follow-up
@@ -136,7 +138,7 @@ toolchain. `rasn` is unpinned (`0.28`); golden MIT DER is the protocol
 net if encodings drift. There is no unlocked `--locked` fallback.
 KLLDAP alignment: [`integration-klldap.md`](integration-klldap.md).
 
-Era II gates. The harness CI job runs `kadmin-gate`, `kadmin-local-gate`, `policy-gate`, `history-mit-gate`, `kpasswd-gate`, `rust-kpasswd-mit-gate`, `ktutil-gate`,
+Era II gates. The harness CI job runs `kadmin-gate`, `kadmin-local-gate`, `policy-gate`, `history-mit-gate`, `kpasswd-gate`, `rust-kpasswd-mit-gate`, `ktutil-gate`, `mit-fast-kdc-gate`,
 `kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `iprop-gate`,
 `expire-gate`, `flags-gate`, `renew-gate`, `postdate-gate`, `getprivs-gate`, `prop-acl-gate`, `restart-gate`,
 `prod-gate`, `prod-realm-gate`, `stress-gate`, `chaos-gate`, `soak-gate`, `s4u-mit-gate`, `samba-ad-gate`, `ad-windows-gate`,
