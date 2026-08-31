@@ -1203,9 +1203,10 @@ pub(crate) fn verify_enc_timestamp(
 }
 
 fn check_fast_options(opts: &krb5_types::fast::FastOptions) -> Result<(), Error> {
-    let n = opts.len().min(32);
-    for i in 16..n {
-        if opts[i] {
+    // MIT UNSUPPORTED_CRITICAL_FAST_OPTIONS = 0xbfff0000 (RFC bits 0, 2..15).
+    let n = opts.len().min(16);
+    for i in 0..n {
+        if i != 1 && opts[i] {
             return Err(proto(err::UNKNOWN_CRITICAL_FAST_OPTION, "FAST option"));
         }
     }

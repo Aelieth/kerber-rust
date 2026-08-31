@@ -1235,9 +1235,10 @@ impl PrincipalStore {
 
     /// Local `ktadd`: optional rotate, export ignoring lockdown, then `write`.
     ///
-    /// On export or write failure a rotation is rolled back so the dump
-    /// kvno is unchanged. A rollback save error is returned with the
-    /// original failure (not swallowed).
+    /// On export, write, or chrand-save failure a rotation is rolled back
+    /// so the dump kvno is unchanged. Standalone `chrand` does not roll
+    /// back. A rollback save error is returned with the original failure
+    /// (not swallowed).
     ///
     /// # Errors
     ///

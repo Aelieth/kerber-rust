@@ -369,12 +369,14 @@ fn encrypted_challenge_skew_is_fast_wrapped() {
     );
 }
 
-#[test]
-fn unknown_critical_fast_option_is_refused() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
+fn wrap_as_fast_bit(
+    store: &PrincipalStore,
+    nonce: u32,
+    bit: usize,
+) -> Result<krb5_kdc::IssuedAs, Error> {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = user_key();
-    let armor_as = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 840);
+    let armor_as = issue_tgt(store, TEST_USER, TEST_USER_PASSWORD, nonce);
     let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x45u8; 32])
         .expect("subkey");
     let armor_ap = build_fast_armor(
@@ -386,10 +388,10 @@ fn unknown_critical_fast_option_is_refused() {
     )
     .expect("armor");
     let akey = armor_key(&armor_as.session_key, Some(&sub)).expect("akey");
-    let mut req = as_req(cname, TEST_REALM, 841, None).unwrap();
+    let mut req = as_req(cname, TEST_REALM, nonce + 1, None).unwrap();
     let inner = req.0.req_body.clone();
     let mut opts = krb5_types::fast::fast_options_none();
-    opts.set(16, true);
+    opts.set(bit, true);
     wrap_fast_split_opts(
         &mut req,
         &armor_ap,
@@ -399,8 +401,156 @@ fn unknown_critical_fast_option_is_refused() {
         opts,
     )
     .expect("FAST wrap");
-    let err = krb5_kdc::issue_as(&store, &req).expect_err("critical option");
+    krb5_kdc::issue_as(store, &req)
+}
+
+#[test]
+fn unknown_critical_fast_option_is_refused() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let err = wrap_as_fast_bit(&store, 840, 2).expect_err("critical option");
     assert_eq!(issue_code(err), err::UNKNOWN_CRITICAL_FAST_OPTION);
+}
+
+#[test]
+fn noncritical_fast_option_bit_16_is_ignored() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    wrap_as_fast_bit(&store, 842, 16).expect("bit 16 is not unknown-critical");
+}
+
+#[test]
+fn hide_client_names_is_not_unknown_critical() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    wrap_as_fast_bit(&store, 844, 1).expect("bit 1 is hide-client-names");
+}
+
+#[test]
+fn explicit_as_armor_invalid_tgt_is_tkt_nyv() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = user_key();
+    let from = KerberosTime::now().add_seconds(2).unwrap();
+    let mut req = as_req(
+        cname.clone(),
+        TEST_REALM,
+        846,
+        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
+    )
+    .unwrap();
+    req.0.req_body.from = Some(from);
+    req.0.req_body.kdc_options = req
+        .0
+        .req_body
+        .kdc_options
+        .with_bit(flag_bit::MAY_POSTDATE, true)
+        .with_bit(flag_bit::POSTDATED, true);
+    let issued = krb5_kdc::issue_as(&store, &req).expect("postdated AS");
+    let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x46u8; 32])
+        .expect("subkey");
+    let armor_ap = build_fast_armor(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        &ascii(TEST_REALM),
+        &cname,
+        Some(&sub),
+    )
+    .expect("armor");
+    let akey = armor_key(&issued.session_key, Some(&sub)).expect("akey");
+    let mut fast_req = as_req(cname, TEST_REALM, 847, None).unwrap();
+    let inner = fast_req.0.req_body.clone();
+    wrap_fast_split_opts(
+        &mut fast_req,
+        &armor_ap,
+        &akey,
+        vec![pa_enc_timestamp(&key).expect("pa")],
+        inner,
+        krb5_types::fast::fast_options_none(),
+    )
+    .expect("FAST wrap");
+    let err = krb5_kdc::issue_as(&store, &fast_req).expect_err("INVALID armor");
+    assert_eq!(issue_code(err), err::TKT_NYV);
+}
+
+#[test]
+fn explicit_as_armor_non_krbtgt_is_not_us() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = user_key();
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 848);
+    let tgs = tgs_req(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        849,
+    )
+    .expect("TGS-REQ");
+    let svc = krb5_kdc::issue_tgs(&store, &tgs).expect("TGS");
+    let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x47u8; 32])
+        .expect("subkey");
+    let armor_ap = build_fast_armor(
+        svc.rep.0.ticket.clone(),
+        &svc.session_key,
+        &ascii(TEST_REALM),
+        &cname,
+        Some(&sub),
+    )
+    .expect("armor");
+    let akey = armor_key(&svc.session_key, Some(&sub)).expect("akey");
+    let mut fast_req = as_req(cname, TEST_REALM, 850, None).unwrap();
+    let inner = fast_req.0.req_body.clone();
+    wrap_fast_split_opts(
+        &mut fast_req,
+        &armor_ap,
+        &akey,
+        vec![pa_enc_timestamp(&key).expect("pa")],
+        inner,
+        krb5_types::fast::fast_options_none(),
+    )
+    .expect("FAST wrap");
+    let err = krb5_kdc::issue_as(&store, &fast_req).expect_err("host armor");
+    assert_eq!(issue_code(err), err::NOT_US);
+}
+
+#[test]
+fn explicit_as_armor_expired_tgt_is_tkt_expired() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = user_key();
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 851);
+    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
+    let mut part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("TGT");
+    part.endtime = KerberosTime::now().add_seconds(-120).unwrap();
+    let plain = encode(&part).expect("enc-tkt");
+    let usage = KeyUsage::new(ku::TICKET).unwrap();
+    let cipher = encrypt(&krbtgt.key, usage, &plain).expect("ticket");
+    let mut ticket = issued.rep.0.ticket.clone();
+    ticket.enc_part.cipher = cipher.into();
+    let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x48u8; 32])
+        .expect("subkey");
+    let armor_ap = build_fast_armor(
+        ticket,
+        &issued.session_key,
+        &ascii(TEST_REALM),
+        &cname,
+        Some(&sub),
+    )
+    .expect("armor");
+    let akey = armor_key(&issued.session_key, Some(&sub)).expect("akey");
+    let mut fast_req = as_req(cname, TEST_REALM, 852, None).unwrap();
+    let inner = fast_req.0.req_body.clone();
+    wrap_fast_split_opts(
+        &mut fast_req,
+        &armor_ap,
+        &akey,
+        vec![pa_enc_timestamp(&key).expect("pa")],
+        inner,
+        krb5_types::fast::fast_options_none(),
+    )
+    .expect("FAST wrap");
+    let err = krb5_kdc::issue_as(&store, &fast_req).expect_err("expired armor");
+    assert_eq!(issue_code(err), err::TKT_EXPIRED);
 }
 
 #[test]

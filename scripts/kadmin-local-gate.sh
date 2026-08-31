@@ -252,7 +252,7 @@ echo "$MITPRE" | grep -q 'REQUIRES_PRE_AUTH'
 MITKV="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc ktone')"
 echo "$MITKV"
-echo "$MITKV" | grep -Eqi 'vno[[:space:]]*2'
+echo "$MITKV" | grep -Eq '^Key: vno[[:space:]]*2'
 
 echo "==== local setstr does not clobber concurrent kadmind create ===="
 docker exec "$NAME" sh -c '
