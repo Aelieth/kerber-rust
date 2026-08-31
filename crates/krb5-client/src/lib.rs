@@ -18,12 +18,14 @@ use krb5_types::{PrincipalName, Ticket};
 use zeroize::Zeroize;
 
 pub use krb5_protocol::{
-    CcacheCred, FileCcache, Keytab, KeytabEntry, parse_principal, realm, tgt_cred,
+    CcacheCred, CcacheKeyblock, FileCcache, Keytab, KeytabEntry, parse_principal, realm, tgt_cred,
 };
 pub use krb5_protocol::{Error as ProtocolError, KDC_PORT};
 
 pub mod ccache {
-    pub use krb5_protocol::{CcacheCred, FileCcache, parse_principal, realm, tgt_cred};
+    pub use krb5_protocol::{
+        CcacheCred, CcacheKeyblock, FileCcache, parse_principal, realm, tgt_cred,
+    };
 }
 
 pub mod keytab {
@@ -111,7 +113,7 @@ fn load_fast_armor(path: &Path) -> Result<FastArmor, Box<dyn std::error::Error +
     let ticket: Ticket = decode(&cred.ticket)?;
     Ok(FastArmor {
         ticket,
-        session: cred.key.clone(),
+        session: cred.session_key()?,
         crealm: cred.client.0.clone(),
         cname: cred.client.1.clone(),
     })
@@ -228,11 +230,7 @@ fn kinit_inner(
             Err(e) => tgs_err = Some(e.to_string()),
         }
     }
-    let cache = FileCcache {
-        primary: (as_out.crealm.clone(), as_out.cname.clone()),
-        creds,
-        unparsed: Vec::new(),
-    };
+    let cache = FileCcache::new((as_out.crealm.clone(), as_out.cname.clone()), creds);
     cache.write_file(ccache_path)?;
     if let Some(e) = tgs_err {
         tracing::error!(

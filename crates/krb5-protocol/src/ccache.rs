@@ -4,58 +4,41 @@ use std::io;
 use std::path::Path;
 
 use krb5_asn1::encode;
-use krb5_crypto::{EncryptionType, ProtocolKey};
-use krb5_types::{PrincipalName, Realm, Ticket, kerberos_string_from_bytes};
+use krb5_crypto::ProtocolKey;
+use krb5_types::{PrincipalName, Realm, Ticket};
 
+use crate::ccmarshal::{
+    FCC_TAG_DELTATIME, Writer, marshal_cred, marshal_princ, take_u16, unmarshal_cred,
+    unmarshal_princ,
+};
 use crate::secret_file::write_secret_file;
 
-/// One FILE ccache credential.
-#[derive(Clone)]
-pub struct CcacheCred {
-    /// Client principal.
-    pub client: (Realm, PrincipalName),
-    /// Server principal.
-    pub server: (Realm, PrincipalName),
-    /// Session key.
-    pub key: ProtocolKey,
-    /// Unix authtime.
-    pub authtime: u32,
-    /// Unix starttime.
-    pub starttime: u32,
-    /// Unix endtime.
-    pub endtime: u32,
-    /// Unix renew_till (0 if none).
-    pub renew_till: u32,
-    /// Ticket flags as a 32-bit MIT integer (MSB is RFC bit 0).
-    pub ticket_flags: u32,
-    /// DER-encoded Ticket.
-    pub ticket: Vec<u8>,
-}
+pub use crate::ccmarshal::{CcacheCred, CcacheKeyblock};
 
-impl CcacheCred {
-    /// Whether this is an `X-CACHECONF:` config entry.
-    #[must_use]
-    pub fn is_config(&self) -> bool {
-        self.server
-            .1
-            .name_string
-            .first()
-            .is_some_and(|s| s.as_bytes() == b"X-CACHECONF:")
-    }
-}
-
-/// MIT FILE ccache (version 4, big-endian, empty tagged header).
+/// MIT FILE ccache (version 4, big-endian).
 pub struct FileCcache {
     /// Default client principal.
     pub primary: (Realm, PrincipalName),
-    /// Parsed credentials (unknown etypes omitted).
+    /// Parsed credentials, including config and tombstones.
     pub creds: Vec<CcacheCred>,
-    /// Unparsed records (config / unknown etype) with how many
-    /// parsed creds preceded each blob, so rewrites stay lossless.
+    /// Tagged header fields (`FCC_TAG_DELTATIME` is tag 1, 8 bytes).
+    pub header_tags: Vec<(u16, Vec<u8>)>,
+    /// Unparsed records with how many parsed creds preceded each blob.
     pub unparsed: Vec<(usize, Vec<u8>)>,
 }
 
 impl FileCcache {
+    /// New cache with a zero `DELTATIME` header.
+    #[must_use]
+    pub fn new(primary: (Realm, PrincipalName), creds: Vec<CcacheCred>) -> Self {
+        Self {
+            primary,
+            creds,
+            header_tags: vec![(FCC_TAG_DELTATIME, vec![0u8; 8])],
+            unparsed: Vec::new(),
+        }
+    }
+
     /// Serialize to MIT FILE ccache version 4.
     ///
     /// # Errors
@@ -64,8 +47,15 @@ impl FileCcache {
     pub fn to_bytes(&self) -> Result<Vec<u8>, io::Error> {
         let mut w = Writer::default();
         w.u16(0x0504);
-        w.u16(0);
-        write_principal(&mut w, &self.primary.0, &self.primary.1);
+        let mut hdr = Writer::default();
+        for (tag, val) in &self.header_tags {
+            hdr.u16(*tag);
+            hdr.u16(u16::try_from(val.len()).unwrap_or(0));
+            hdr.buf.extend_from_slice(val);
+        }
+        w.u16(u16::try_from(hdr.buf.len()).unwrap_or(0));
+        w.buf.extend_from_slice(&hdr.buf);
+        marshal_princ(&mut w, &self.primary.0, &self.primary.1);
         let mut cred_i = 0;
         let mut unp = 0;
         loop {
@@ -79,20 +69,7 @@ impl FileCcache {
             let Some(c) = self.creds.get(cred_i) else {
                 break;
             };
-            write_principal(&mut w, &c.client.0, &c.client.1);
-            write_principal(&mut w, &c.server.0, &c.server.1);
-            w.u16(u16::try_from(c.key.etype().to_iana()).unwrap_or(0));
-            w.data(c.key.as_bytes());
-            w.u32(c.authtime);
-            w.u32(c.starttime);
-            w.u32(c.endtime);
-            w.u32(c.renew_till);
-            w.u8(0);
-            w.u32(c.ticket_flags);
-            w.u32(0);
-            w.u32(0);
-            w.data(&c.ticket);
-            w.data(&[]);
+            marshal_cred(&mut w, c);
             cred_i += 1;
         }
         Ok(w.buf)
@@ -112,7 +89,7 @@ impl FileCcache {
     ///
     /// # Errors
     ///
-    /// Truncation or invalid version / principal / etype.
+    /// Truncation or invalid version / principal.
     pub fn parse(bytes: &[u8]) -> Result<Self, io::Error> {
         if bytes.len() < 4 || bytes[0] != 0x05 || bytes[1] != 0x04 {
             return Err(io::Error::new(
@@ -121,68 +98,48 @@ impl FileCcache {
             ));
         }
         let mut i = 2;
-        let hdr_len = take_u16(bytes, &mut i)?;
-        i = i.saturating_add(usize::from(hdr_len));
-        let primary = read_principal(bytes, &mut i)?;
+        let hdr_len = usize::from(take_u16(bytes, &mut i)?);
+        let hdr_end = i.saturating_add(hdr_len);
+        if hdr_end > bytes.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "ccache header truncated",
+            ));
+        }
+        let mut header_tags = Vec::new();
+        while i + 4 <= hdr_end {
+            let tag = take_u16(bytes, &mut i)?;
+            let flen = usize::from(take_u16(bytes, &mut i)?);
+            if i + flen > hdr_end {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "ccache header tag overruns",
+                ));
+            }
+            header_tags.push((tag, bytes[i..i + flen].to_vec()));
+            i += flen;
+        }
+        i = hdr_end;
+        let primary = unmarshal_princ(bytes, &mut i)?;
         let mut creds = Vec::new();
-        let mut unparsed = Vec::new();
         while i < bytes.len() {
-            let start = i;
-            let client = read_principal(bytes, &mut i)?;
-            let server = read_principal(bytes, &mut i)?;
-            let etype_n = i32::from(take_u16(bytes, &mut i)?);
-            let keybytes = take_data(bytes, &mut i)?;
-            let authtime = take_u32(bytes, &mut i)?;
-            let starttime = take_u32(bytes, &mut i)?;
-            let endtime = take_u32(bytes, &mut i)?;
-            let renew_till = take_u32(bytes, &mut i)?;
-            let _is_skey = take_u8(bytes, &mut i)?;
-            let ticket_flags = take_u32(bytes, &mut i)?;
-            let naddr = take_u32(bytes, &mut i)?;
-            for _ in 0..naddr {
-                let _ = take_u16(bytes, &mut i)?;
-                let _ = take_data(bytes, &mut i)?;
-            }
-            let nauth = take_u32(bytes, &mut i)?;
-            for _ in 0..nauth {
-                let _ = take_u16(bytes, &mut i)?;
-                let _ = take_data(bytes, &mut i)?;
-            }
-            let ticket = take_data(bytes, &mut i)?;
-            let _second = take_data(bytes, &mut i)?;
-            // MIT kinit writes X-CACHECONF with etype 0. Keep the raw
-            // record so a rewrite does not drop pa_type / refresh_time.
-            let Ok(etype) = EncryptionType::known(etype_n) else {
-                unparsed.push((creds.len(), bytes[start..i].to_vec()));
-                continue;
-            };
-            let Ok(key) = ProtocolKey::from_bytes(etype, &keybytes) else {
-                unparsed.push((creds.len(), bytes[start..i].to_vec()));
-                continue;
-            };
-            creds.push(CcacheCred {
-                client,
-                server,
-                key,
-                authtime,
-                starttime,
-                endtime,
-                renew_till,
-                ticket_flags,
-                ticket,
-            });
+            creds.push(unmarshal_cred(bytes, &mut i)?);
         }
         Ok(Self {
             primary,
             creds,
-            unparsed,
+            header_tags,
+            unparsed: Vec::new(),
         })
     }
 
-    /// Non-config credentials (list).
+    /// Non-config, non-tombstone credentials (list).
     #[must_use]
     pub fn list(&self) -> Vec<&CcacheCred> {
-        self.creds.iter().filter(|c| !c.is_config()).collect()
+        self.creds
+            .iter()
+            .filter(|c| !c.is_config() && !c.is_removed())
+            .collect()
     }
 
     /// `user@REALM` as MIT klist prints it.
@@ -195,34 +152,38 @@ impl FileCcache {
         )
     }
 
-    /// Insert an `X-CACHECONF:krb5_ccache_conf_data/{key}` entry.
+    /// Insert an `X-CACHECONF:krb5_ccache_conf_data/{key}` entry (etype 0).
     pub fn set_config(&mut self, key: &str, value: &[u8]) {
-        let name = PrincipalName::new(
-            PrincipalName::NT_UNKNOWN,
-            ["X-CACHECONF:", "krb5_ccache_conf_data", key],
-        );
         self.creds.retain(|c| {
             !(c.is_config()
                 && c.server
                     .1
                     .name_string
-                    .get(2)
+                    .get(1)
                     .is_some_and(|s| s.as_bytes() == key.as_bytes()))
         });
-        if let Ok(dummy) = ProtocolKey::from_bytes(EncryptionType::Aes128CtsHmacSha196, &[0u8; 16])
-        {
-            self.creds.push(CcacheCred {
-                client: self.primary.clone(),
-                server: (self.primary.0.clone(), name),
-                key: dummy,
-                authtime: 0,
-                starttime: 0,
-                endtime: 0,
-                renew_till: 0,
-                ticket_flags: 0,
-                ticket: value.to_vec(),
-            });
-        }
+        let Ok(conf_realm) = krb5_types::kerberos_string_from_bytes(b"X-CACHECONF:") else {
+            return;
+        };
+        let name = PrincipalName::new(PrincipalName::NT_UNKNOWN, ["krb5_ccache_conf_data", key]);
+        self.creds.push(CcacheCred {
+            client: self.primary.clone(),
+            server: (conf_realm, name),
+            key: CcacheKeyblock {
+                etype: 0,
+                contents: Vec::new(),
+            },
+            authtime: 0,
+            starttime: 0,
+            endtime: 0,
+            renew_till: 0,
+            is_skey: 0,
+            ticket_flags: 0,
+            addresses: Vec::new(),
+            authdata: Vec::new(),
+            ticket: value.to_vec(),
+            second_ticket: Vec::new(),
+        });
     }
 }
 
@@ -293,7 +254,7 @@ pub fn tgt_cred(
     Ok(CcacheCred {
         client: (crealm.clone(), cname.clone()),
         server: (enc.srealm.clone(), enc.sname.clone()),
-        key: session.clone(),
+        key: CcacheKeyblock::from_protocol(session),
         authtime: enc.authtime.unix_seconds(),
         starttime: start,
         endtime: enc.endtime.unix_seconds(),
@@ -301,100 +262,99 @@ pub fn tgt_cred(
             .renew_till
             .as_ref()
             .map_or(0, krb5_types::KerberosTime::unix_seconds),
+        is_skey: 0,
         ticket_flags: enc.flags.to_u32(),
+        addresses: Vec::new(),
+        authdata: Vec::new(),
         ticket: ticket_der,
+        second_ticket: Vec::new(),
     })
 }
 
-fn write_principal(w: &mut Writer, realm: &Realm, name: &PrincipalName) {
-    w.i32(name.name_type);
-    w.u32(u32::try_from(name.name_string.len()).unwrap_or(0));
-    w.data(realm.as_bytes());
-    for c in &name.name_string {
-        w.data(c.as_bytes());
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-fn read_principal(b: &[u8], i: &mut usize) -> Result<(Realm, PrincipalName), io::Error> {
-    let ntype = take_i32(b, i)?;
-    let ncomp = take_u32(b, i)? as usize;
-    let realm_b = take_data(b, i)?;
-    let mut parts = Vec::new();
-    for _ in 0..ncomp {
-        parts.push(take_data(b, i)?);
+    fn put_data(buf: &mut Vec<u8>, d: &[u8]) {
+        buf.extend_from_slice(&(u32::try_from(d.len()).unwrap()).to_be_bytes());
+        buf.extend_from_slice(d);
     }
-    let realm = kerberos_string_from_bytes(&realm_b)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-    let name = PrincipalName::try_from_bytes(ntype, parts)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-    Ok((realm, name))
-}
 
-#[derive(Default)]
-struct Writer {
-    buf: Vec<u8>,
-}
+    fn put_princ(buf: &mut Vec<u8>, realm: &[u8], parts: &[&[u8]]) {
+        buf.extend_from_slice(&1i32.to_be_bytes());
+        buf.extend_from_slice(&(u32::try_from(parts.len()).unwrap()).to_be_bytes());
+        put_data(buf, realm);
+        for p in parts {
+            put_data(buf, p);
+        }
+    }
 
-impl Writer {
-    fn u8(&mut self, v: u8) {
-        self.buf.push(v);
+    #[test]
+    fn parse_to_bytes_keeps_header_skey_addrs_authdata_second_and_config() {
+        let mut b = vec![0x05, 0x04];
+        // DELTATIME tag 1, len 8, sec=7, usec=9
+        b.extend_from_slice(&12u16.to_be_bytes());
+        b.extend_from_slice(&1u16.to_be_bytes());
+        b.extend_from_slice(&8u16.to_be_bytes());
+        b.extend_from_slice(&7i32.to_be_bytes());
+        b.extend_from_slice(&9i32.to_be_bytes());
+        put_princ(&mut b, b"KERBER.TEST", &[b"user"]);
+        // Config etype 0.
+        put_princ(&mut b, b"KERBER.TEST", &[b"user"]);
+        put_princ(
+            &mut b,
+            b"X-CACHECONF:",
+            &[b"krb5_ccache_conf_data", b"pa_type", b"krbtgt/KERBER.TEST"],
+        );
+        b.extend_from_slice(&0u16.to_be_bytes());
+        put_data(&mut b, &[]);
+        for _ in 0..4 {
+            b.extend_from_slice(&0u32.to_be_bytes());
+        }
+        b.push(0);
+        b.extend_from_slice(&0u32.to_be_bytes());
+        b.extend_from_slice(&0u32.to_be_bytes());
+        b.extend_from_slice(&0u32.to_be_bytes());
+        put_data(&mut b, &[1]);
+        put_data(&mut b, &[]);
+        // Ticket with is_skey, one address, one authdata, second_ticket.
+        put_princ(&mut b, b"KERBER.TEST", &[b"user"]);
+        put_princ(&mut b, b"KERBER.TEST", &[b"host", b"svc"]);
+        b.extend_from_slice(&18u16.to_be_bytes());
+        put_data(&mut b, &[0u8; 32]);
+        for _ in 0..4 {
+            b.extend_from_slice(&1u32.to_be_bytes());
+        }
+        b.push(1); // is_skey
+        b.extend_from_slice(&0x4000_0000u32.to_be_bytes());
+        b.extend_from_slice(&1u32.to_be_bytes()); // naddr
+        b.extend_from_slice(&2u16.to_be_bytes());
+        put_data(&mut b, &[127, 0, 0, 1]);
+        b.extend_from_slice(&1u32.to_be_bytes()); // nauth
+        b.extend_from_slice(&1u16.to_be_bytes());
+        put_data(&mut b, &[9, 9]);
+        put_data(&mut b, b"ticket-der");
+        put_data(&mut b, b"second");
+        let cc = FileCcache::parse(&b).expect("parse");
+        assert_eq!(
+            cc.header_tags,
+            vec![(1, {
+                let mut v = Vec::new();
+                v.extend_from_slice(&7i32.to_be_bytes());
+                v.extend_from_slice(&9i32.to_be_bytes());
+                v
+            })]
+        );
+        assert_eq!(cc.creds.len(), 2);
+        assert!(cc.creds[0].is_config());
+        assert!(!cc.creds[0].is_removed());
+        assert_eq!(cc.list().len(), 1);
+        let t = &cc.creds[1];
+        assert_eq!(t.is_skey, 1);
+        assert_eq!(t.addresses, vec![(2, vec![127, 0, 0, 1])]);
+        assert_eq!(t.authdata, vec![(1, vec![9, 9])]);
+        assert_eq!(t.second_ticket, b"second");
+        let out = cc.to_bytes().expect("rewrite");
+        assert_eq!(out, b, "parse → to_bytes must be identity");
     }
-    fn u16(&mut self, v: u16) {
-        self.buf.extend_from_slice(&v.to_be_bytes());
-    }
-    fn u32(&mut self, v: u32) {
-        self.buf.extend_from_slice(&v.to_be_bytes());
-    }
-    fn i32(&mut self, v: i32) {
-        self.buf.extend_from_slice(&v.to_be_bytes());
-    }
-    fn data(&mut self, b: &[u8]) {
-        self.u32(u32::try_from(b.len()).unwrap_or(0));
-        self.buf.extend_from_slice(b);
-    }
-}
-
-fn take_u8(b: &[u8], i: &mut usize) -> Result<u8, io::Error> {
-    if *i >= b.len() {
-        return Err(eof());
-    }
-    let v = b[*i];
-    *i += 1;
-    Ok(v)
-}
-
-fn take_u16(b: &[u8], i: &mut usize) -> Result<u16, io::Error> {
-    if *i + 2 > b.len() {
-        return Err(eof());
-    }
-    let v = u16::from_be_bytes(b[*i..*i + 2].try_into().map_err(|_| eof())?);
-    *i += 2;
-    Ok(v)
-}
-
-fn take_u32(b: &[u8], i: &mut usize) -> Result<u32, io::Error> {
-    if *i + 4 > b.len() {
-        return Err(eof());
-    }
-    let v = u32::from_be_bytes(b[*i..*i + 4].try_into().map_err(|_| eof())?);
-    *i += 4;
-    Ok(v)
-}
-
-fn take_i32(b: &[u8], i: &mut usize) -> Result<i32, io::Error> {
-    Ok(i32::from_be_bytes(take_u32(b, i)?.to_be_bytes()))
-}
-
-fn take_data(b: &[u8], i: &mut usize) -> Result<Vec<u8>, io::Error> {
-    let n = take_u32(b, i)? as usize;
-    if *i + n > b.len() {
-        return Err(eof());
-    }
-    let v = b[*i..*i + n].to_vec();
-    *i += n;
-    Ok(v)
-}
-
-fn eof() -> io::Error {
-    io::Error::new(io::ErrorKind::UnexpectedEof, "ccache truncated")
 }

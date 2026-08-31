@@ -97,7 +97,9 @@ fn format_cred(out: &mut String, cred: &CcacheCred, show_flags: bool, show_etype
         let _ = writeln!(out, "\tFlags: {letters}");
     }
     if show_etype {
-        let skey = cred.key.etype().to_mit_name();
+        let skey = cred
+            .session_key()
+            .map_or("unknown", |k| k.etype().to_mit_name());
         let tkt = decode::<Ticket>(&cred.ticket)
             .ok()
             .and_then(|t| EncryptionType::known(t.enc_part.etype).ok())
@@ -145,13 +147,17 @@ mod tests {
         CcacheCred {
             client: (realm.clone(), user.clone()),
             server: (realm, PrincipalName::krbtgt("KERBER.TEST")),
-            key,
+            key: krb5_protocol::CcacheKeyblock::from_protocol(&key),
             authtime: 1_700_000_000,
             starttime: 1_700_000_000,
             endtime: 1_700_360_000,
             renew_till,
+            is_skey: 0,
             ticket_flags: 0,
+            addresses: Vec::new(),
+            authdata: Vec::new(),
             ticket: Vec::new(),
+            second_ticket: Vec::new(),
         }
     }
 
@@ -201,11 +207,7 @@ mod tests {
     #[test]
     fn list_file_ccache_prints_renew_until() {
         let cred = sample_cred(1_700_720_000);
-        let cc = FileCcache {
-            primary: cred.client.clone(),
-            creds: vec![cred],
-            unparsed: Vec::new(),
-        };
+        let cc = FileCcache::new(cred.client.clone(), vec![cred]);
         let path = std::env::temp_dir().join(format!(
             "krb5cc-klist-renew-{}-{}",
             std::process::id(),

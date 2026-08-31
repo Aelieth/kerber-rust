@@ -58,13 +58,14 @@ fn run(path: &std::path::Path, host: &str, service: &str) -> Result<(), String> 
         .find(|c| c.server.1.components_joined().starts_with("krbtgt/"))
         .ok_or_else(|| "ccache has no TGT".to_string())?
         .clone();
+    let session = cred.session_key().map_err(|e| e.to_string())?;
     let ticket: Ticket = decode(&cred.ticket).map_err(|e| e.to_string())?;
     let tgt = AsOutcome {
         ticket,
         enc_part: EncKdcRepPart {
             key: EncryptionKey {
-                keytype: cred.key.etype().to_iana(),
-                keyvalue: cred.key.as_bytes().to_vec().into(),
+                keytype: session.etype().to_iana(),
+                keyvalue: session.as_bytes().to_vec().into(),
             },
             last_req: Vec::new(),
             nonce: 0,
@@ -80,8 +81,8 @@ fn run(path: &std::path::Path, host: &str, service: &str) -> Result<(), String> 
             caddr: None,
             encrypted_pa_data: None,
         },
-        client_key: cred.key.clone(),
-        session_key: cred.key.clone(),
+        client_key: session.clone(),
+        session_key: session,
         cname: cred.client.1.clone(),
         crealm: cred.client.0.clone(),
     };

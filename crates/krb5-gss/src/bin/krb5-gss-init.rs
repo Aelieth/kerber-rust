@@ -68,6 +68,10 @@ fn main() {
         eprintln!("host ticket: {e}");
         std::process::exit(1);
     });
+    let svc_key = svc.session_key().unwrap_or_else(|e| {
+        eprintln!("host session key: {e}");
+        std::process::exit(1);
+    });
     let deleg_cred = if deleg {
         let tkt: Ticket = decode(&tgt.ticket).unwrap_or_else(|e| {
             eprintln!("tgt: {e}");
@@ -75,7 +79,10 @@ fn main() {
         });
         Some(DelegCred {
             ticket: tkt,
-            session: tgt.key.clone(),
+            session: tgt.session_key().unwrap_or_else(|e| {
+                eprintln!("tgt session key: {e}");
+                std::process::exit(1);
+            }),
             crealm: tgt.client.0.clone(),
             cname: tgt.client.1.clone(),
         })
@@ -84,7 +91,7 @@ fn main() {
     };
     let (mut ctx, token) = GssContext::init_sec_context(
         ticket,
-        &svc.key,
+        &svc_key,
         &svc.client.0,
         &svc.client.1,
         true,
@@ -109,7 +116,7 @@ fn main() {
         eprintln!("read AP-REP: {e}");
         std::process::exit(1);
     });
-    ctx.process_ap_rep(&ap_rep, &svc.key).unwrap_or_else(|e| {
+    ctx.process_ap_rep(&ap_rep, &svc_key).unwrap_or_else(|e| {
         eprintln!("process_ap_rep: {e}");
         std::process::exit(1);
     });

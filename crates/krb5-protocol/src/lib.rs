@@ -14,6 +14,7 @@ mod as_ex;
 mod builders;
 mod capture;
 mod ccache;
+mod ccmarshal;
 #[cfg(any(test, feature = "diff"))]
 #[cfg_attr(not(feature = "diff"), allow(dead_code))]
 mod diff;
@@ -36,7 +37,10 @@ pub use builders::{
     as_req, as_req_sname, pa_enc_timestamp, pa_enc_timestamp_at, tgs_req, tgs_req_ex,
 };
 pub use capture::capture_pdu;
-pub use ccache::{CcacheCred, FileCcache, parse_principal, parse_principal_ex, realm, tgt_cred};
+pub use ccache::{
+    CcacheCred, CcacheKeyblock, FileCcache, parse_principal, parse_principal_ex, realm, tgt_cred,
+};
+pub use ccmarshal::FCC_TAG_DELTATIME;
 #[cfg(feature = "diff")]
 pub use diff::{
     CompareOk, DiffError, StableKrbError, StableRep, Whitelist, compare_krb_error,
