@@ -263,6 +263,14 @@ fn strip_file_spec(s: &str) -> &str {
     s.strip_prefix("FILE:").unwrap_or(s)
 }
 
+fn conf_default_realm() -> Option<String> {
+    krb5_config::krb5_conf_paths().into_iter().find_map(|p| {
+        krb5_config::Krb5Conf::load_file(&p)
+            .ok()
+            .and_then(|c| c.default_realm)
+    })
+}
+
 fn load_pkinit(
     identity: &Path,
     anchors: &Path,
@@ -305,9 +313,7 @@ fn kinit_inner(
 ) -> Result<(KinitResult, FileCcache), Box<dyn std::error::Error + Send + Sync>> {
     let (cname, mut realm_s) = parse_principal_ex(principal, params.enterprise)?;
     if realm_s.is_empty() {
-        realm_s = krb5_config::load_krb5_conf()
-            .and_then(|c| c.default_realm)
-            .ok_or("Cannot find KDC for requested realm")?;
+        realm_s = conf_default_realm().ok_or("Cannot find KDC for requested realm")?;
     }
     let resolved = resolve_kdc(&realm_s, kdc);
     if params.renew {

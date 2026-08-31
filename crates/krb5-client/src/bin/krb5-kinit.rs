@@ -44,8 +44,13 @@ fn main() {
         std::process::exit(2);
     });
     if realm.is_empty() {
-        realm = krb5_config::load_krb5_conf()
-            .and_then(|c| c.default_realm)
+        realm = krb5_config::krb5_conf_paths()
+            .into_iter()
+            .find_map(|p| {
+                krb5_config::Krb5Conf::load_file(&p)
+                    .ok()
+                    .and_then(|c| c.default_realm)
+            })
             .unwrap_or_default();
     }
     let addr = kdc_addr(args.kdc_host.as_deref(), &realm).unwrap_or_else(|e| {
