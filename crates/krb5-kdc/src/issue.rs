@@ -320,9 +320,17 @@ fn issue_as_from(
         && let Some(blob) = find_pa(Some(&f.inner_padata), pa::ENCRYPTED_CHALLENGE)
         && !blob.is_empty()
     {
-        verify_encrypted_challenge(store, &client, &ckey.key, &f.armor_key, blob)?;
-        skip_timestamp = true;
-        extra_padata.push(kdc_encrypted_challenge(&f.armor_key, &ckey.key)?);
+        match verify_encrypted_challenge(store, &client, &ckey.key, &f.armor_key, blob) {
+            Ok(()) => {
+                store.record_as_outcome(&cname, true);
+                skip_timestamp = true;
+                extra_padata.push(kdc_encrypted_challenge(&f.armor_key, &ckey.key)?);
+            }
+            Err(e) => {
+                store.record_as_outcome(&cname, false);
+                return Err(e);
+            }
+        }
     }
     if client.requires_preauth && !skip_timestamp {
         return Err(fast_preauth_required(store, &client, fast.as_ref(), body));
@@ -1073,8 +1081,10 @@ fn verify_encrypted_challenge(
         b"challengelongterm",
     )?;
     let usage = KeyUsage::new(ku::ENC_CHALLENGE_CLIENT)?;
-    let plain = decrypt(&chal, usage, enc.cipher.as_ref())?;
-    let ts: PaEncTsEnc = decode(&plain)?;
+    let plain = decrypt(&chal, usage, enc.cipher.as_ref())
+        .map_err(|_| proto(err::PREAUTH_FAILED, "encrypted challenge"))?;
+    let ts: PaEncTsEnc =
+        decode(&plain).map_err(|_| proto(err::PREAUTH_FAILED, "encrypted challenge der"))?;
     if let Some(u) = ts.pausec {
         u.validate().map_err(|_| proto(err::GENERIC, "pausec"))?;
     }

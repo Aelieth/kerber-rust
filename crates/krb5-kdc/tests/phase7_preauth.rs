@@ -6,11 +6,11 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     EncryptionType, KeyUsage, OAKLEY_2048, ProtocolKey, checksum, decrypt, dh_generate, dh_shared,
-    encrypt, octetstring2key, p256_generate, string_to_key,
+    encrypt, krb_fx_cf2, octetstring2key, p256_generate, string_to_key,
 };
 use krb5_kdc::{
-    Acl, AdminOp, Error, KDB_DISALLOW_ALL_TIX, PrincipalStore, RID_FIRST_USER, S2K_ITERS,
-    TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req,
+    Acl, AdminOp, Error, KDB_DISALLOW_ALL_TIX, NamedPolicy, PrincipalStore, RID_FIRST_USER,
+    S2K_ITERS, TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req,
     bootstrap_documented, decrypt_ticket_part, documented_admin_id, documented_host,
     pa_enc_timestamp, pac_from_ticket_part, sign_pac, tgs_req, ticket_checksum_der, verify_pac,
     verify_pac_signatures, wrap_win2k_pac,
@@ -27,7 +27,8 @@ use krb5_types::pac::{
 };
 use krb5_types::{
     Checksum, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, EncryptedData, KdcOptions,
-    KerberosTime, MethodData, Microseconds, PrincipalName, ascii, err, flag_bit, ku, pa,
+    KerberosTime, MethodData, Microseconds, PaData, PaEncTsEnc, PrincipalName, ascii, err,
+    flag_bit, ku, pa,
 };
 
 fn password_key(name: &str, password: &[u8]) -> ProtocolKey {
@@ -195,6 +196,143 @@ fn fast_as_exchange_strengthen_and_finished() {
     let enc = decode_enc_part(&plain);
     assert_eq!(enc.nonce, 202);
     assert!(enc.flags.pre_authent());
+}
+
+fn issue_code(err: Error) -> i32 {
+    match err {
+        Error::Protocol { code, .. } => code,
+        other => panic!("expected protocol error, got {other:?}"),
+    }
+}
+
+fn challenge_pa(long_term: &ProtocolKey, armor_key: &ProtocolKey, ts: &KerberosTime) -> PaData {
+    let chal = krb_fx_cf2(
+        armor_key,
+        long_term,
+        b"clientchallengearmor",
+        b"challengelongterm",
+    )
+    .expect("cf2");
+    let der = encode(&PaEncTsEnc {
+        patimestamp: ts.clone(),
+        pausec: None,
+    })
+    .expect("ts");
+    let usage = KeyUsage::new(ku::ENC_CHALLENGE_CLIENT).unwrap();
+    let cipher = encrypt(&chal, usage, &der).expect("enc");
+    let enc = EncryptedData {
+        etype: chal.etype().to_iana(),
+        kvno: None,
+        cipher: cipher.into(),
+    };
+    PaData {
+        padata_type: pa::ENCRYPTED_CHALLENGE,
+        padata_value: encode(&enc).expect("ed").into(),
+    }
+}
+
+fn armor_pair(store: &PrincipalStore, armor_nonce: u32) -> (krb5_types::ApReq, ProtocolKey) {
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let armor_as = issue_tgt(store, TEST_USER, TEST_USER_PASSWORD, armor_nonce);
+    let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x51u8; 32])
+        .expect("subkey");
+    let armor_ap = build_fast_armor(
+        armor_as.rep.0.ticket.clone(),
+        &armor_as.session_key,
+        &ascii(TEST_REALM),
+        &cname,
+        Some(&sub),
+    )
+    .expect("armor");
+    let akey = armor_key(&armor_as.session_key, Some(&sub)).expect("akey");
+    (armor_ap, akey)
+}
+
+fn fast_challenge_req_with(
+    armor_ap: &krb5_types::ApReq,
+    akey: &ProtocolKey,
+    long_term: &ProtocolKey,
+    ts: &KerberosTime,
+    nonce: u32,
+) -> krb5_types::AsReq {
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let inner = vec![challenge_pa(long_term, akey, ts)];
+    let mut req = as_req(cname, TEST_REALM, nonce, None).unwrap();
+    attach_fast(&mut req, armor_ap, akey, inner).expect("FAST wrap");
+    req
+}
+
+fn fast_challenge_req(
+    store: &PrincipalStore,
+    long_term: &ProtocolKey,
+    ts: &KerberosTime,
+    nonce: u32,
+    armor_nonce: u32,
+) -> krb5_types::AsReq {
+    let (armor_ap, akey) = armor_pair(store, armor_nonce);
+    fast_challenge_req_with(&armor_ap, &akey, long_term, ts, nonce)
+}
+
+#[test]
+fn encrypted_challenge_wrong_key_locks_at_max_fail() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    store.put_policy(NamedPolicy {
+        name: "chalock".into(),
+        min_length: 0,
+        min_classes: 0,
+        history: 0,
+        max_fail: 2,
+        pw_failcnt_interval: 0,
+        pw_lockout_duration: 0,
+    });
+    store
+        .set_principal_policy(&user, Some("chalock".into()))
+        .unwrap();
+    let (armor_ap, akey) = armor_pair(&store, 800);
+    let zeros = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0u8; 32]).unwrap();
+    let now = KerberosTime::now();
+    let e1 = krb5_kdc::issue_as(
+        &store,
+        &fast_challenge_req_with(&armor_ap, &akey, &zeros, &now, 801),
+    )
+    .expect_err("wrong key");
+    assert_eq!(issue_code(e1), err::PREAUTH_FAILED);
+    assert_eq!(store.fail_auth_of(store.get_name(&user).unwrap()), 1);
+    let e2 = krb5_kdc::issue_as(
+        &store,
+        &fast_challenge_req_with(&armor_ap, &akey, &zeros, &now, 803),
+    )
+    .expect_err("second fail");
+    assert_eq!(issue_code(e2), err::PREAUTH_FAILED);
+    assert_eq!(store.fail_auth_of(store.get_name(&user).unwrap()), 2);
+    let e3 = krb5_kdc::issue_as(
+        &store,
+        &fast_challenge_req_with(&armor_ap, &akey, &zeros, &now, 805),
+    )
+    .expect_err("locked");
+    assert_eq!(issue_code(e3), err::CLIENT_REVOKED);
+}
+
+#[test]
+fn encrypted_challenge_stale_ts_is_skew() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let key = user_key();
+    let stale = KerberosTime::now().add_seconds(-10_000).unwrap();
+    let err = krb5_kdc::issue_as(&store, &fast_challenge_req(&store, &key, &stale, 811, 810))
+        .expect_err("skew");
+    assert_eq!(issue_code(err), err::SKEW);
+}
+
+#[test]
+fn encrypted_challenge_replayed_blob_is_repeat() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let key = user_key();
+    let now = KerberosTime::now();
+    let req = fast_challenge_req(&store, &key, &now, 821, 820);
+    krb5_kdc::issue_as(&store, &req).expect("first challenge");
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("replay");
+    assert_eq!(issue_code(err), err::REPEAT);
 }
 
 #[test]

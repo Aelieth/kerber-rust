@@ -122,7 +122,7 @@ impl KdcPreauth for PkinitMod {
         body_der: &[u8],
         cname: &PrincipalName,
     ) -> Result<Option<PreauthAction>, Error> {
-        Ok(process_pkinit(
+        match process_pkinit(
             store,
             padata,
             etype,
@@ -130,8 +130,17 @@ impl KdcPreauth for PkinitMod {
             body_der,
             cname,
             store.realm(),
-        )?
-        .map(|(key, pa)| PreauthAction::Pkinit { key, pa }))
+        ) {
+            Ok(Some((key, pa))) => {
+                store.record_as_outcome(cname, true);
+                Ok(Some(PreauthAction::Pkinit { key, pa }))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => {
+                store.record_as_outcome(cname, false);
+                Err(e)
+            }
+        }
     }
 }
 
@@ -157,12 +166,19 @@ impl KdcPreauth for SpakeMod {
         _etype: krb5_crypto::EncryptionType,
         _as_req_der: &[u8],
         body_der: &[u8],
-        _cname: &PrincipalName,
+        cname: &PrincipalName,
     ) -> Result<Option<PreauthAction>, Error> {
-        match process_spake(store, client, padata, ikey, body_der)? {
-            Some(SpakeStep::Challenge(e_data)) => Ok(Some(PreauthAction::Challenge(e_data))),
-            Some(SpakeStep::Done(k)) => Ok(Some(PreauthAction::SpakeDone(k))),
-            None => Ok(None),
+        match process_spake(store, client, padata, ikey, body_der) {
+            Ok(Some(SpakeStep::Challenge(e_data))) => Ok(Some(PreauthAction::Challenge(e_data))),
+            Ok(Some(SpakeStep::Done(k))) => {
+                store.record_as_outcome(cname, true);
+                Ok(Some(PreauthAction::SpakeDone(k)))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => {
+                store.record_as_outcome(cname, false);
+                Err(e)
+            }
         }
     }
 }

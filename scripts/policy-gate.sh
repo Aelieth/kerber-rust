@@ -180,6 +180,43 @@ LOCKED="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
 echo "$LOCKED"
 echo "$LOCKED" | grep -qiE 'revoked|CLIENT_REVOKED'
 
+echo "==== MIT kinit -T encrypted-challenge lockout ===="
+docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+if ! docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
+    "$NAME" sh -c 'printf "userpassword\n" | kinit -c /tmp/krb5cc_armor user@KERBER.TEST'; then
+    log "policy.gate" "error" ',"error":"armor TGT for FAST lockout failed"'
+    exit 1
+fi
+kadmin_q 'addprinc -policy lockme -pw Fast-lock1 fastlock' >/dev/null
+fast_kinit() {
+    docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf -e KRB5_TRACE=/tmp/fastlock.trace \
+        "$NAME" sh -c 'printf "wrong-password\n" | kinit -T /tmp/krb5cc_armor -c /tmp/krb5cc_fastlock fastlock@KERBER.TEST' 2>&1 || true
+}
+F1="$(fast_kinit)"
+echo "$F1"
+FTRACE="$(docker exec "$NAME" cat /tmp/fastlock.trace 2>/dev/null || true)"
+echo "$FTRACE"
+if ! echo "$FTRACE" | grep -F 'Upgrading to FAST due to presence of PA_FX_FAST'; then
+    echo "$F1" >&2
+    echo "$FTRACE" >&2
+    docker exec "$NAME" cat /tmp/kdc.log >&2 || true
+    log "policy.gate" "error" ',"error":"FAST lockout kinit did not upgrade to FAST"'
+    exit 1
+fi
+echo "$F1" | grep -qiE 'revoked|CLIENT_REVOKED' && {
+    log "policy.gate" "error" ',"error":"first FAST fail must not lock"'
+    exit 1
+}
+F2="$(fast_kinit)"
+echo "$F2"
+echo "$F2" | grep -qiE 'revoked|CLIENT_REVOKED' && {
+    log "policy.gate" "error" ',"error":"second FAST fail must not lock (maxfailure 2)"'
+    exit 1
+}
+F3="$(fast_kinit)"
+echo "$F3"
+echo "$F3" | grep -qiE 'revoked|CLIENT_REVOKED'
+
 echo "==== MIT kadmin cpw minclasses 5 ===="
 kadmin_q 'addpol -minlength 8 -minclasses 5 class5' >/dev/null
 ADD5="$(kadmin_q 'addprinc -policy class5 -pw "Aa1!aaa " classuser')"

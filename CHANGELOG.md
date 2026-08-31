@@ -231,7 +231,9 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   extract stays gated. Mutating local/remote verbs reload the dump
   before save. MIT `kinit -T` against the Rust KDC armors AS via
   PA-FX-FAST + PA-ENCRYPTED-CHALLENGE (`scripts/mit-fast-kdc-gate.sh`,
-  ≥2 `KrbFastResponse`).
+  ≥2 `KrbFastResponse`). Encrypted-challenge, SPAKE, and PKINIT
+  record AS success/failure like enc-ts, so MIT `kinit -T` with a
+  bad password locks at `maxfailure` (`scripts/policy-gate.sh`).
 
 - Align the workspace with KLLDAP 0.7.5: edition **2024**, MSRV **1.95**,
   `nix` **0.31**, and `rasn` unpinned at **0.28.14**. MIT golden DER
