@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# NT-ENTERPRISE both directions: MIT kinit -E vs Rust KDC, and Rust kinit -E vs MIT KDC.
-# klist default principal must be the canonical user@KERBER.TEST.
+# NT-ENTERPRISE: MIT db2 has no UPN alias (kinit -E user@REALM is CLIENT_NOT_FOUND).
+# Rust kinit -E must match that MIT client. Rust KDC maps suffix==realm to user.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -67,20 +67,24 @@ fi
 docker cp target/debug/krb5-kinit "$NAME":/tmp/krb5-kinit
 docker exec "$NAME" chmod +x /tmp/krb5-kinit
 
-echo "==== Rust kinit -E vs MIT KDC ===="
+echo "==== MIT kinit -E vs MIT KDC (db2 has no UPN alias) ===="
+set +e
+MITOUT="$(docker exec "$NAME" \
+    sh -c 'printf "%s\n" userpassword | kinit -E -c /tmp/krb5cc_mit_ent user@KERBER.TEST' 2>&1)"
+mit_rc=$?
+set -e
+echo "$MITOUT"
+test "$mit_rc" -ne 0
+echo "$MITOUT" | grep -Eqi 'CLIENT_NOT_FOUND|not found'
+echo "==== Rust kinit -E vs MIT KDC (must match MIT client) ===="
 set +e
 OUT="$(docker exec -e KRB5_PASSWORD=userpassword "$NAME" \
     /tmp/krb5-kinit -E -c /tmp/krb5cc_ent user@KERBER.TEST 2>&1)"
 rc=$?
 set -e
 echo "$OUT"
-if [ "$rc" -ne 0 ]; then
-    docker exec "$NAME" cat /tmp/mit-kdc.log 2>/dev/null || true
-    log "enterprise.gate" "error" ',"error":"rust kinit -E vs MIT failed","rc":'"$rc"
-    exit 1
-fi
-KLIST="$(docker exec "$NAME" klist -c /tmp/krb5cc_ent 2>/dev/null || true)"
-assert_canonical "$KLIST"
+test "$rc" -ne 0
+echo "$OUT" | grep -Eqi 'CLIENT_NOT_FOUND|C_PRINCIPAL_UNKNOWN|not found'
 echo "==== Rust kinit -E mixed-case UPN vs MIT KDC (must fail) ===="
 set +e
 OUT="$(docker exec -e KRB5_PASSWORD=userpassword "$NAME" \
