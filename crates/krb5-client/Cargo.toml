@@ -24,6 +24,10 @@ path = "src/bin/krb5-kdestroy.rs"
 name = "krb5-kvno"
 path = "src/bin/krb5-kvno.rs"
 
+[[bin]]
+name = "krb5-kswitch"
+path = "src/bin/krb5-kswitch.rs"
+
 [dependencies]
 chrono.workspace = true
 krb5-asn1.workspace = true

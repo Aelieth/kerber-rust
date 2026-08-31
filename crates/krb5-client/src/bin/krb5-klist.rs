@@ -7,12 +7,12 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use std::fmt::Write as _;
-use std::path::Path;
 
 use krb5_asn1::decode;
-use krb5_config::resolve_ccname;
+use krb5_client::load_ccache;
+use krb5_config::{CcSpec, resolve_ccspec};
 use krb5_crypto::EncryptionType;
-use krb5_protocol::{CcacheCred, FileCcache};
+use krb5_protocol::{CcacheCred, FileCcache, dir_display_name};
 use krb5_types::{Ticket, TicketFlags};
 
 fn main() {
@@ -41,30 +41,42 @@ fn main() {
             }
         }
     }
-    let path = resolve_ccname(ccname.as_deref()).unwrap_or_else(|e| {
+    let spec = resolve_ccspec(ccname.as_deref()).unwrap_or_else(|e| {
         eprintln!("klist: {e}");
         std::process::exit(2);
     });
-    if let Err(e) = list(&path, show_flags, show_etype) {
+    if let Err(e) = list(&spec, show_flags, show_etype) {
         eprintln!("klist: {e}");
         std::process::exit(1);
     }
 }
 
-fn list(path: &Path, show_flags: bool, show_etype: bool) -> Result<(), String> {
-    print!("{}", cache_text(path, show_flags, show_etype)?);
+fn list(spec: &CcSpec, show_flags: bool, show_etype: bool) -> Result<(), String> {
+    print!("{}", cache_text(spec, show_flags, show_etype)?);
     Ok(())
 }
 
-fn cache_text(path: &Path, show_flags: bool, show_etype: bool) -> Result<String, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let cc = FileCcache::parse(&bytes).map_err(|e| e.to_string())?;
-    Ok(format_cache(&cc, path, show_flags, show_etype))
+fn cache_label(spec: &CcSpec) -> String {
+    match spec {
+        CcSpec::File(p) => format!("FILE:{}", p.display()),
+        CcSpec::Memory(n) => format!("MEMORY:{n}"),
+        CcSpec::Dir(r) => dir_display_name(r).unwrap_or_else(|_| format!("DIR:{r}")),
+    }
 }
 
-fn format_cache(cc: &FileCcache, path: &Path, show_flags: bool, show_etype: bool) -> String {
+fn cache_text(spec: &CcSpec, show_flags: bool, show_etype: bool) -> Result<String, String> {
+    let cc = load_ccache(spec).map_err(|e| e.to_string())?;
+    Ok(format_cache(
+        &cc,
+        &cache_label(spec),
+        show_flags,
+        show_etype,
+    ))
+}
+
+fn format_cache(cc: &FileCcache, label: &str, show_flags: bool, show_etype: bool) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "Ticket cache: FILE:{}", path.display());
+    let _ = writeln!(out, "Ticket cache: {label}");
     let _ = writeln!(
         out,
         "Default principal: {}",
@@ -216,8 +228,9 @@ mod tests {
                 .map_or(0, |d| d.as_nanos())
         ));
         cc.write_file(&path).unwrap();
-        list(&path, false, false).unwrap();
-        let text = cache_text(&path, false, false).unwrap();
+        let spec = CcSpec::File(path.clone());
+        list(&spec, false, false).unwrap();
+        let text = cache_text(&spec, false, false).unwrap();
         let _ = std::fs::remove_file(&path);
         assert!(text.contains("renew until"), "{text}");
         assert!(text.contains("krbtgt/KERBER.TEST@KERBER.TEST"), "{text}");

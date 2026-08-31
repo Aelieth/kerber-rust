@@ -16,6 +16,7 @@ use crate::secret_file::write_secret_file;
 pub use crate::ccmarshal::{CcacheCred, CcacheKeyblock};
 
 /// MIT FILE ccache (version 4, big-endian).
+#[derive(Clone)]
 pub struct FileCcache {
     /// Default client principal.
     pub primary: (Realm, PrincipalName),

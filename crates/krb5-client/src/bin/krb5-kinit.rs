@@ -8,10 +8,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
-use std::path::PathBuf;
-
-use krb5_client::kinit_ex;
-use krb5_config::{env_password, resolve_ccname};
+use krb5_client::kinit_to_spec;
+use krb5_config::{CcSpec, env_password, resolve_ccspec};
 use krb5_protocol::KdcAddr;
 
 fn strip_file_spec(s: String) -> String {
@@ -97,7 +95,7 @@ fn main() {
     } else {
         KdcAddr::new(host)
     };
-    match kinit_ex(
+    match kinit_to_spec(
         &addr,
         &principal,
         &mut password,
@@ -123,8 +121,8 @@ fn main() {
     }
 }
 
-fn ccache_path(flag: Option<&str>, positional: Option<&str>) -> Result<PathBuf, String> {
-    resolve_ccname(flag.or(positional))
+fn ccache_path(flag: Option<&str>, positional: Option<&str>) -> Result<CcSpec, String> {
+    resolve_ccspec(flag.or(positional))
 }
 
 #[cfg(test)]
@@ -134,22 +132,25 @@ mod tests {
     #[test]
     fn ccache_path_flag_beats_positional() {
         let p = ccache_path(Some("FILE:/tmp/a"), Some("/tmp/b")).unwrap();
-        assert_eq!(p, PathBuf::from("/tmp/a"));
+        assert_eq!(p, CcSpec::File(std::path::PathBuf::from("/tmp/a")));
     }
 
     #[test]
     fn ccache_path_rejects_keyring() {
         let e = ccache_path(Some("KEYRING:user:foo"), None).unwrap_err();
-        assert!(e.contains("G8"), "{e}");
+        assert_eq!(e, krb5_config::KRB5_CC_UNKNOWN_TYPE);
+        assert!(!e.contains("G8"), "{e}");
         let e = ccache_path(Some("KCM:"), None).unwrap_err();
-        assert!(e.contains("G8"), "{e}");
+        assert_eq!(e, krb5_config::KRB5_CC_UNKNOWN_TYPE);
+        let e = ccache_path(Some("NOTATYPE:x"), None).unwrap_err();
+        assert_eq!(e, krb5_config::KRB5_CC_UNKNOWN_TYPE);
     }
 
     #[test]
     fn ccache_path_default_is_uid_file() {
         assert_eq!(
             ccache_path(None, None).unwrap(),
-            krb5_config::default_ccache_name()
+            CcSpec::File(krb5_config::default_ccache_name())
         );
     }
 }

@@ -8,8 +8,9 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use krb5_asn1::decode;
-use krb5_config::resolve_ccname;
-use krb5_protocol::{AsOutcome, FileCcache, KdcAddr, parse_principal, tgs_exchange, tgt_cred};
+use krb5_client::{load_ccache, store_ccache};
+use krb5_config::resolve_ccspec;
+use krb5_protocol::{AsOutcome, KdcAddr, parse_principal, tgs_exchange, tgt_cred};
 use krb5_types::{EncKdcRepPart, EncryptionKey, KerberosTime, PrincipalName, Ticket, TicketFlags};
 
 fn main() {
@@ -39,19 +40,18 @@ fn main() {
         eprintln!("missing service");
         std::process::exit(2);
     });
-    let path = resolve_ccname(ccname.as_deref()).unwrap_or_else(|e| {
+    let spec = resolve_ccspec(ccname.as_deref()).unwrap_or_else(|e| {
         eprintln!("kvno: {e}");
         std::process::exit(2);
     });
-    if let Err(e) = run(&path, &host, &service) {
+    if let Err(e) = run(&spec, &host, &service) {
         eprintln!("kvno: {e}");
         std::process::exit(1);
     }
 }
 
-fn run(path: &std::path::Path, host: &str, service: &str) -> Result<(), String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mut cc = FileCcache::parse(&bytes).map_err(|e| e.to_string())?;
+fn run(spec: &krb5_config::CcSpec, host: &str, service: &str) -> Result<(), String> {
+    let mut cc = load_ccache(spec).map_err(|e| e.to_string())?;
     let cred = cc
         .list()
         .into_iter()
@@ -122,6 +122,6 @@ fn run(path: &std::path::Path, host: &str, service: &str) -> Result<(), String> 
         )
         .map_err(|e| e.to_string())?,
     );
-    cc.write_file(path).map_err(|e| e.to_string())?;
+    store_ccache(spec, cc).map_err(|e| e.to_string())?;
     Ok(())
 }

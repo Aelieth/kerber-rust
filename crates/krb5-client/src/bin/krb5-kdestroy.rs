@@ -5,8 +5,8 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use krb5_config::resolve_ccname;
-use krb5_protocol::destroy_secret_file;
+use krb5_client::destroy_ccache;
+use krb5_config::resolve_ccspec;
 
 fn main() {
     let mut ccname = None::<String>;
@@ -23,11 +23,11 @@ fn main() {
             std::process::exit(2);
         }
     }
-    let path = resolve_ccname(ccname.as_deref()).unwrap_or_else(|e| {
+    let spec = resolve_ccspec(ccname.as_deref()).unwrap_or_else(|e| {
         eprintln!("kdestroy: {e}");
         std::process::exit(2);
     });
-    if let Err(e) = destroy_secret_file(&path) {
+    if let Err(e) = destroy_ccache(&spec) {
         eprintln!("kdestroy: {e}");
         std::process::exit(1);
     }

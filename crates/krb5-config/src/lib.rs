@@ -434,45 +434,89 @@ fn parse_duration_secs(v: &str) -> Option<u64> {
     Some(total.saturating_add(num))
 }
 
-/// `KRB5CCNAME` (FILE: prefix stripped).
+/// MIT `KRB5_CC_UNKNOWN_TYPE`.
+pub const KRB5_CC_UNKNOWN_TYPE: &str = "Unknown credential cache type";
+
+/// Resolved ccache name (`krb5_cc_resolve`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CcSpec {
+    /// `FILE:path` or a residual with no type prefix.
+    File(PathBuf),
+    /// `MEMORY:name` (process-global).
+    Memory(String),
+    /// `DIR:dirname` or `DIR::filepath`.
+    Dir(String),
+}
+
+/// `KRB5CCNAME` (FILE: prefix stripped). Non-FILE names are ignored.
 #[must_use]
 pub fn env_ccname() -> Option<PathBuf> {
     std::env::var_os("KRB5CCNAME").and_then(|v| parse_ccname(&v.to_string_lossy()).ok())
 }
 
-/// `-c` flag, else `KRB5CCNAME`, else [`default_ccache_name`].
+/// `-c` flag, else `KRB5CCNAME`, else [`default_ccache_name`] as FILE.
 ///
 /// # Errors
 ///
-/// Unsupported ccache type.
-pub fn resolve_ccname(flag: Option<&str>) -> Result<PathBuf, String> {
+/// [`KRB5_CC_UNKNOWN_TYPE`].
+pub fn resolve_ccspec(flag: Option<&str>) -> Result<CcSpec, String> {
     if let Some(s) = flag {
-        return parse_ccname(s);
+        return parse_ccspec(s);
     }
     match std::env::var_os("KRB5CCNAME") {
-        Some(v) => parse_ccname(&v.to_string_lossy()),
-        None => Ok(default_ccache_name()),
+        Some(v) => parse_ccspec(&v.to_string_lossy()),
+        None => Ok(CcSpec::File(default_ccache_name())),
     }
 }
 
-/// FILE: residual, or a bare path. Other `TYPE:` prefixes are G8.
+/// `-c` flag, else `KRB5CCNAME`, else [`default_ccache_name`]. FILE only.
 ///
 /// # Errors
 ///
-/// Unsupported ccache type until G8.
+/// [`KRB5_CC_UNKNOWN_TYPE`].
+pub fn resolve_ccname(flag: Option<&str>) -> Result<PathBuf, String> {
+    match resolve_ccspec(flag)? {
+        CcSpec::File(p) => Ok(p),
+        _ => Err(KRB5_CC_UNKNOWN_TYPE.to_owned()),
+    }
+}
+
+/// Split `TYPE:residual`. A residual with no type prefix is FILE.
+///
+/// # Errors
+///
+/// [`KRB5_CC_UNKNOWN_TYPE`] for unrecognized or unbuilt prefixes.
+pub fn parse_ccspec(spec: &str) -> Result<CcSpec, String> {
+    match split_cc_type(spec) {
+        None => Ok(CcSpec::File(PathBuf::from(spec))),
+        Some(("FILE", rest)) => Ok(CcSpec::File(PathBuf::from(rest))),
+        Some(("MEMORY", rest)) => Ok(CcSpec::Memory(rest.to_owned())),
+        Some(("DIR", rest)) => Ok(CcSpec::Dir(rest.to_owned())),
+        Some(_) => Err(KRB5_CC_UNKNOWN_TYPE.to_owned()),
+    }
+}
+
+/// FILE residual, or a bare path.
+///
+/// # Errors
+///
+/// [`KRB5_CC_UNKNOWN_TYPE`].
 pub fn parse_ccname(spec: &str) -> Result<PathBuf, String> {
-    if let Some(rest) = spec.strip_prefix("FILE:") {
-        return Ok(PathBuf::from(rest));
+    match parse_ccspec(spec)? {
+        CcSpec::File(p) => Ok(p),
+        _ => Err(KRB5_CC_UNKNOWN_TYPE.to_owned()),
     }
-    if let Some((ty, _)) = spec.split_once(':')
-        && ty.bytes().all(|b| b.is_ascii_alphabetic() || b == b'_')
-        && !ty.is_empty()
-    {
-        return Err(format!(
-            "unsupported ccache type {ty} (FILE: only until G8)"
-        ));
+}
+
+fn split_cc_type(spec: &str) -> Option<(&str, &str)> {
+    let (ty, rest) = spec.split_once(':')?;
+    if ty.is_empty() {
+        return None;
     }
-    Ok(PathBuf::from(spec))
+    if !ty.bytes().all(|b| b.is_ascii_alphabetic() || b == b'_') {
+        return None;
+    }
+    Some((ty, rest))
 }
 
 /// MIT `FILE:/tmp/krb5cc_%{uid}` when `KRB5CCNAME` is unset.
@@ -767,11 +811,45 @@ mod tests {
             parse_ccname("FILE:/tmp/krb5cc_1").unwrap(),
             PathBuf::from("/tmp/krb5cc_1")
         );
-        assert!(parse_ccname("KEYRING:user:foo").unwrap_err().contains("G8"));
+        assert_eq!(
+            parse_ccname("KEYRING:user:foo").unwrap_err(),
+            KRB5_CC_UNKNOWN_TYPE
+        );
         assert_eq!(
             parse_ccname("/tmp/krb5cc_9").unwrap(),
             PathBuf::from("/tmp/krb5cc_9")
         );
+    }
+
+    #[test]
+    fn parse_ccspec_file_memory_dir_and_unknown() {
+        assert_eq!(
+            parse_ccspec("FILE:/tmp/a").unwrap(),
+            CcSpec::File(PathBuf::from("/tmp/a"))
+        );
+        assert_eq!(
+            parse_ccspec("/tmp/a").unwrap(),
+            CcSpec::File(PathBuf::from("/tmp/a"))
+        );
+        assert_eq!(
+            parse_ccspec("MEMORY:foo").unwrap(),
+            CcSpec::Memory("foo".into())
+        );
+        assert_eq!(
+            parse_ccspec("DIR:/tmp/cc").unwrap(),
+            CcSpec::Dir("/tmp/cc".into())
+        );
+        assert_eq!(
+            parse_ccspec("DIR::/tmp/cc/tkt").unwrap(),
+            CcSpec::Dir(":/tmp/cc/tkt".into())
+        );
+        assert_eq!(
+            parse_ccspec("KEYRING:persistent:1").unwrap_err(),
+            KRB5_CC_UNKNOWN_TYPE
+        );
+        assert_eq!(parse_ccspec("KCM:").unwrap_err(), KRB5_CC_UNKNOWN_TYPE);
+        assert_eq!(parse_ccspec("JUNK:x").unwrap_err(), KRB5_CC_UNKNOWN_TYPE);
+        assert!(!parse_ccspec("KEYRING:x").unwrap_err().contains("G8"));
     }
 
     #[test]

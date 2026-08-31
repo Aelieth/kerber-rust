@@ -10,9 +10,11 @@
 use std::path::Path;
 
 use krb5_asn1::decode;
+use krb5_config::CcSpec;
 use krb5_protocol::{
     AsOutcome, AsRequest, FastArmor, KdcAddr, PkinitClient, TgsOutcome, as_exchange,
-    parse_principal_ex, tgs_exchange,
+    dir_cache_path, memory_destroy, memory_retrieve, memory_store, parse_principal_ex,
+    tgs_exchange,
 };
 use krb5_types::{PrincipalName, Ticket};
 use zeroize::Zeroize;
@@ -86,11 +88,11 @@ pub fn kinit_ex(
     pkinit_anchors: Option<&Path>,
     enterprise: bool,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
-    let result = kinit_inner(
+    let result = kinit_to_spec(
         kdc,
         principal,
         password,
-        ccache_path.as_ref(),
+        &CcSpec::File(ccache_path.as_ref().to_path_buf()),
         service,
         want_spake,
         armor_ccache,
@@ -100,6 +102,103 @@ pub fn kinit_ex(
     );
     password.zeroize();
     result
+}
+
+/// [`kinit_ex`] storing into [`CcSpec`] (FILE, MEMORY, or DIR).
+///
+/// # Errors
+///
+/// Protocol or I/O errors. The password buffer is zeroized before return.
+#[allow(clippy::too_many_arguments)]
+pub fn kinit_to_spec(
+    kdc: &KdcAddr,
+    principal: &str,
+    password: &mut [u8],
+    spec: &CcSpec,
+    service: Option<&str>,
+    want_spake: bool,
+    armor_ccache: Option<&Path>,
+    pkinit_identity: Option<&Path>,
+    pkinit_anchors: Option<&Path>,
+    enterprise: bool,
+) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
+    let built = kinit_inner(
+        kdc,
+        principal,
+        password,
+        service,
+        want_spake,
+        armor_ccache,
+        pkinit_identity,
+        pkinit_anchors,
+        enterprise,
+    );
+    let result = match built {
+        Ok((r, cc)) => store_ccache(spec, cc).map(|()| r),
+        Err(e) => Err(e),
+    };
+    password.zeroize();
+    result
+}
+
+/// Load a FILE, MEMORY, or DIR cache.
+///
+/// # Errors
+///
+/// Missing cache or parse failure.
+pub fn load_ccache(spec: &CcSpec) -> Result<FileCcache, Box<dyn std::error::Error + Send + Sync>> {
+    match spec {
+        CcSpec::File(p) => Ok(FileCcache::parse(&std::fs::read(p)?)?),
+        CcSpec::Memory(n) => memory_retrieve(n).ok_or_else(|| "No credentials cache found".into()),
+        CcSpec::Dir(r) => {
+            let p = dir_cache_path(r)?;
+            Ok(FileCcache::parse(&std::fs::read(p)?)?)
+        }
+    }
+}
+
+/// Write a cache to FILE, MEMORY, or DIR.
+///
+/// # Errors
+///
+/// I/O or DIR residual errors.
+pub fn store_ccache(
+    spec: &CcSpec,
+    cc: FileCcache,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    match spec {
+        CcSpec::File(p) => cc.write_file(p).map_err(Into::into),
+        CcSpec::Memory(n) => {
+            memory_store(n.clone(), cc);
+            Ok(())
+        }
+        CcSpec::Dir(r) => {
+            let p = dir_cache_path(r)?;
+            cc.write_file(p).map_err(Into::into)
+        }
+    }
+}
+
+/// Destroy FILE, MEMORY, or DIR (primary/subsidiary FILE).
+///
+/// # Errors
+///
+/// Missing cache or I/O.
+pub fn destroy_ccache(spec: &CcSpec) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    match spec {
+        CcSpec::File(p) => krb5_protocol::destroy_secret_file(p).map_err(Into::into),
+        CcSpec::Memory(n) => {
+            if memory_destroy(n) {
+                Ok(())
+            } else {
+                Err("No credentials cache found".into())
+            }
+        }
+        CcSpec::Dir(r) => {
+            let p = dir_cache_path(r)?;
+            krb5_protocol::destroy_secret_file(&p).map_err(Into::into)
+        }
+    }
 }
 
 fn load_fast_armor(path: &Path) -> Result<FastArmor, Box<dyn std::error::Error + Send + Sync>> {
@@ -161,14 +260,13 @@ fn kinit_inner(
     kdc: &KdcAddr,
     principal: &str,
     password: &[u8],
-    ccache_path: &Path,
     service: Option<&str>,
     want_spake: bool,
     armor_ccache: Option<&Path>,
     pkinit_identity: Option<&Path>,
     pkinit_anchors: Option<&Path>,
     enterprise: bool,
-) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(KinitResult, FileCcache), Box<dyn std::error::Error + Send + Sync>> {
     let (cname, realm_s) = parse_principal_ex(principal, enterprise)?;
     let resolved = resolve_kdc(&realm_s, kdc);
     let armor = match armor_ccache {
@@ -231,7 +329,6 @@ fn kinit_inner(
         }
     }
     let cache = FileCcache::new((as_out.crealm.clone(), as_out.cname.clone()), creds);
-    cache.write_file(ccache_path)?;
     if let Some(e) = tgs_err {
         tracing::error!(
             event = "client.tgs",
@@ -241,7 +338,7 @@ fn kinit_inner(
         );
         return Err(e.into());
     }
-    Ok(KinitResult { as_out, tgs_out })
+    Ok((KinitResult { as_out, tgs_out }, cache))
 }
 
 fn resolve_kdc(realm: &str, argv: &KdcAddr) -> KdcAddr {
