@@ -2874,10 +2874,13 @@ mod tests {
         w.nullstring(Some("keep-rotated"));
         let out = dispatch_kadm5(&store, &acl, &actor, CHPASS_PRINCIPAL3, &w.b).unwrap();
         assert_eq!(ret_code(&out), 0);
-        let g = store.read().unwrap();
-        let p = g.get_name(&name).unwrap();
-        assert!(p.keys.iter().any(|k| k.kvno == old_kvno));
-        assert!(p.keys.iter().any(|k| k.kvno != old_kvno));
+        let n_keys = {
+            let g = store.read().unwrap();
+            let p = g.get_name(&name).unwrap();
+            assert!(p.keys.iter().any(|k| k.kvno == old_kvno));
+            assert!(p.keys.iter().any(|k| k.kvno != old_kvno));
+            p.keys.len()
+        };
         let got = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &{
             let mut w = XdrW::default();
             w.u32(API_V2);
@@ -2887,7 +2890,7 @@ mod tests {
         })
         .unwrap();
         let (n_key, kvnos) = gprinc_key_kvnos(&got);
-        assert_eq!(n_key as usize, p.keys.len());
+        assert_eq!(n_key as usize, n_keys);
         assert!(kvnos.contains(&old_kvno));
     }
 
@@ -3077,11 +3080,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ret_code(&out), 0);
-        let g = store.read().unwrap();
-        let p = g.get_name(&name).unwrap();
-        assert!(!p.key_history.is_empty());
-        assert!(p.keys.iter().all(|k| k.kvno != 1));
-        assert!(!p.keys.is_empty());
+        {
+            let g = store.read().unwrap();
+            let p = g.get_name(&name).unwrap();
+            assert!(!p.key_history.is_empty());
+            assert!(p.keys.iter().all(|k| k.kvno != 1));
+            assert!(!p.keys.is_empty());
+        }
         let got = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &{
             let mut w = XdrW::default();
             w.u32(API_V2);
