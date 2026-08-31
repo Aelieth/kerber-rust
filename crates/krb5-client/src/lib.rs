@@ -303,7 +303,12 @@ fn kinit_inner(
     spec: &CcSpec,
     params: KinitParams<'_>,
 ) -> Result<(KinitResult, FileCcache), Box<dyn std::error::Error + Send + Sync>> {
-    let (cname, realm_s) = parse_principal_ex(principal, params.enterprise)?;
+    let (cname, mut realm_s) = parse_principal_ex(principal, params.enterprise)?;
+    if realm_s.is_empty() {
+        realm_s = krb5_config::load_krb5_conf()
+            .and_then(|c| c.default_realm)
+            .ok_or("Cannot find KDC for requested realm")?;
+    }
     let resolved = resolve_kdc(&realm_s, kdc);
     if params.renew {
         return renew_inner(&resolved, spec);

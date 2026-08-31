@@ -39,10 +39,15 @@ fn main() {
         eprintln!("kinit: {e}");
         std::process::exit(2);
     });
-    let (_, realm) = parse_principal_ex(&principal, args.enterprise).unwrap_or_else(|e| {
+    let (_, mut realm) = parse_principal_ex(&principal, args.enterprise).unwrap_or_else(|e| {
         eprintln!("kinit: {e}");
         std::process::exit(2);
     });
+    if realm.is_empty() {
+        realm = krb5_config::load_krb5_conf()
+            .and_then(|c| c.default_realm)
+            .unwrap_or_default();
+    }
     let addr = kdc_addr(args.kdc_host.as_deref(), &realm).unwrap_or_else(|e| {
         eprintln!("kinit: {e}");
         std::process::exit(2);

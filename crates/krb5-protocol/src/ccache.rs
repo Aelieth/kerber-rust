@@ -218,15 +218,29 @@ pub fn parse_principal(spec: &str) -> Result<(PrincipalName, String), String> {
 }
 
 /// Parse `name@REALM`. `enterprise` uses NT-ENTERPRISE (one component).
+/// MIT parse.c: first `@` is the UPN; only a later `@` is the realm.
 ///
 /// # Errors
 ///
-/// Returns a message when the spec has no `@` or a component is not IA5.
+/// Returns a message when the spec has no `@` (non-enterprise) or a
+/// component is not IA5.
 pub fn parse_principal_ex(spec: &str, enterprise: bool) -> Result<(PrincipalName, String), String> {
-    let (user, realm) = spec
-        .rsplit_once('@')
-        .ok_or_else(|| format!("principal must be name@REALM, got {spec}"))?;
-    if user.is_empty() || realm.is_empty() {
+    let (user, realm) = if enterprise {
+        match spec.find('@') {
+            None => (spec, ""),
+            Some(first) => match spec[first + 1..].find('@') {
+                None => (spec, ""),
+                Some(rel) => {
+                    let at = first + 1 + rel;
+                    (&spec[..at], &spec[at + 1..])
+                }
+            },
+        }
+    } else {
+        spec.rsplit_once('@')
+            .ok_or_else(|| format!("principal must be name@REALM, got {spec}"))?
+    };
+    if user.is_empty() || (!enterprise && realm.is_empty()) {
         return Err("empty principal component".into());
     }
     if !user.is_ascii() || !realm.is_ascii() {

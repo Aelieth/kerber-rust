@@ -54,9 +54,12 @@ fn parse_principal_slash_is_srv_inst() {
 #[test]
 fn parse_enterprise_is_one_component() {
     let (n, r) = krb5_protocol::parse_principal_ex("user@KERBER.TEST", true).unwrap();
-    assert_eq!(r, "KERBER.TEST");
+    assert_eq!(r, "");
     assert_eq!(n.name_type, PrincipalName::NT_ENTERPRISE);
-    assert_eq!(n.components_joined(), "user");
+    assert_eq!(n.components_joined(), "user@KERBER.TEST");
+    let (mixed, mixed_realm) = krb5_protocol::parse_principal_ex("user@kerber.test", true).unwrap();
+    assert_eq!(mixed_realm, "");
+    assert_eq!(mixed.components_joined(), "user@kerber.test");
     let (n2, r2) =
         krb5_protocol::parse_principal_ex("alice@ad.example.com@KERBER.TEST", true).unwrap();
     assert_eq!(r2, "KERBER.TEST");
