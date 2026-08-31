@@ -294,7 +294,8 @@ impl<'a> AdminSession<'a> {
     /// # Errors
     ///
     /// ACL or not found.
-    pub fn ktadd(&self, name: &PrincipalName) -> Result<Keytab, Error> {
+    pub fn ktadd(&mut self, name: &PrincipalName) -> Result<Keytab, Error> {
+        self.reload()?;
         self.store
             .export_keytab(self.acl, &self.actor, name)
             .map_err(Error::from)

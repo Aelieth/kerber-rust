@@ -234,6 +234,9 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   ≥2 `KrbFastResponse`). Encrypted-challenge, SPAKE, and PKINIT
   record AS success/failure like enc-ts, so MIT `kinit -T` with a
   bad password locks at `maxfailure` (`scripts/policy-gate.sh`).
+  kadm5 `EXTRACT_KEYS` / `GET_PRINCIPAL` / `GET_STRINGS` and native
+  ktadd reload the dump before read so a local `cpw` then remote
+  `ktadd -norandkey` exports the new key.
 
 - Align the workspace with KLLDAP 0.7.5: edition **2024**, MSRV **1.95**,
   `nix` **0.31**, and `rasn` unpinned at **0.28.14**. MIT golden DER

@@ -311,9 +311,13 @@ klist -k /tmp/mit-krbtgt.keytab
 MITL="$(docker exec "$NAME" kadmin.local -r KERBER.TEST -q 'getprinc lockee@KERBER.TEST')"
 echo "$MITL"
 echo "$MITL" | grep -qi LOCKDOWN
-echo "$MITL" | grep -Eqi 'Key: vno[[:space:]]*2'
+echo "$MITL" | grep -Eq '^Key: vno[[:space:]]*2'
 docker exec "$NAME" test -s /tmp/mit-lockee.keytab
 docker exec "$NAME" test -s /tmp/mit-krbtgt.keytab
+MITKGT="$(docker exec "$NAME" kadmin.local -r KERBER.TEST -q 'getprinc krbtgt/KERBER.TEST')"
+echo "$MITKGT"
+echo "$MITKGT" | grep -qi LOCKDOWN
+echo "$MITKGT" | grep -Eq '^Key: vno[[:space:]]*2'
 
 echo "==== Rust ktadd on +lockdown_keys (test-realm) ===="
 docker exec \
@@ -355,7 +359,7 @@ MITLOCK="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc lockee')"
 echo "$MITLOCK"
 echo "$MITLOCK" | grep -qi LOCKDOWN
-echo "$MITLOCK" | grep -Eqi 'Key: vno[[:space:]]*2'
+echo "$MITLOCK" | grep -Eq '^Key: vno[[:space:]]*2'
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" \
     kinit -k -t /tmp/lockee.keytab lockee@KERBER.TEST
 echo "kinit -k lockee ok"
@@ -486,6 +490,25 @@ MITCPW="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc kadmin/changepw')"
 echo "$MITCPW"
 echo "$MITCPW" | grep -q 'PWCHANGE_SERVICE'
+
+echo "==== local cpw then remote ktadd -norandkey uses new key ===="
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'cpw -pw o3-new-secret user'
+KTN="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'ktadd -norandkey -k /tmp/o3user.keytab user' 2>&1 || true)"
+echo "$KTN"
+echo "$KTN" | grep -qi 'added to keytab'
+if echo "$KTN" | grep -qiE 'extract-keys|AUTH_EXTRACT|Operation requires|while adding'; then
+    echo "ktadd -norandkey after local cpw failed: $KTN" >&2
+    exit 1
+fi
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kinit -k -t /tmp/o3user.keytab user@KERBER.TEST
+O3L="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" klist)"
+echo "$O3L"
+echo "$O3L" | grep -q 'user@KERBER.TEST'
 
 log "kadmin.local.gate" "ok" ',"principal":"extra2@KERBER.TEST,host/slashhost@KERBER.TEST,randsvc,ktone,kttwo,raceprinc,lockee,gldlock,krbtgt"'
 exit 0
