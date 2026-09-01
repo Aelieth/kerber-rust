@@ -206,6 +206,11 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   unknown. NFS/gssproxy/kit cells honest exit 2; fleet default stays
   FILE (`docs/kcm-nfs-verdict.md`).
 
+- **G8 P-pass FAST SHA-2 client (MIT-gated).** `kinit --fast` derives
+  the FAST reply-key base from PA-ETYPE-INFO2 (RFC 6113 / RFC 8009
+  etype 20), not `preferred()[0]` (aes256-sha1).
+  `scripts/rust-kinit-fast-gate.sh` is fail-red on `mit-extra`.
+
 - `klist` flag letters are MIT order `F f P p D d i R I H A T O a`
   (anonymous `a`); it prints `renew until` in local time and
   `Ticket server` only when cred server ≠ ticket sname. AS/TGS sname

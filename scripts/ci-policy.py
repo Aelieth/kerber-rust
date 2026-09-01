@@ -3,8 +3,8 @@
 
 Parses `.github/workflows/*.yml` (and `.config/nextest.toml`) rather than
 a parallel copy of the job list. Job `continue-on-error` on the per-push
-`ci` workflow is allowed only for stress/chaos/soak plus the isolated
-FAST-client flake. Named deterministic MIT extras must fail-red per SHA.
+`ci` workflow is allowed only for stress/chaos/soak. Named deterministic
+MIT extras must fail-red per SHA.
 Samba PAC / realtrust / Heimdal must fail-red on a scheduled workflow.
 """
 from __future__ import annotations
@@ -19,12 +19,13 @@ NEXTEST_TOML = ROOT / ".config" / "nextest.toml"
 
 # Per-push jobs that may set continue-on-error: true. Everything else on
 # the push/PR workflow is fail-red.
-SOFT_PER_PUSH_JOBS = frozenset({"slo", "chaos", "soak", "fast-client"})
+SOFT_PER_PUSH_JOBS = frozenset({"slo", "chaos", "soak"})
 
 FAIL_RED_PER_PUSH = (
     "spake-gate.sh",
     "rust-kinit-spake-gate.sh",
     "mit-fast-kdc-gate.sh",
+    "rust-kinit-fast-gate.sh",
     "rust-kinit-pkinit-gate.sh",
     "rust-kinit-enterprise-gate.sh",
     "sha2-gate.sh",
@@ -35,8 +36,6 @@ FAIL_RED_PER_PUSH = (
     "rust-kpasswd-mit-gate.sh",
     "kcm-gate.sh",
 )
-
-FAST_CLIENT = "rust-kinit-fast-gate.sh"
 
 NIGHTLY_BLOCKING = (
     "samba-pac-verify-gate.sh",
@@ -50,7 +49,6 @@ TIMEOUT_JOBS = (
     "test",
     "harness",
     "mit-extra",
-    "fast-client",
     "slo",
     "chaos",
     "soak",
@@ -141,16 +139,6 @@ def check_ci(wf: Workflow) -> None:
             _die(f"{script} is not in {wf.path.name}")
         if all(j.continue_on_error for j in hits):
             _die(f"{script} only runs on continue-on-error jobs")
-
-    fast_hits = _scripts_in_jobs(wf.jobs, FAST_CLIENT)
-    if not fast_hits:
-        _die(f"{FAST_CLIENT} is not in {wf.path.name}")
-    if any(not j.continue_on_error for j in fast_hits):
-        _die(f"{FAST_CLIENT} must not run on a fail-red job")
-    if "fast-client" not in wf.jobs or not wf.jobs["fast-client"].continue_on_error:
-        _die("fast-client job must set continue-on-error")
-    if FAST_CLIENT not in wf.jobs["fast-client"].scripts:
-        _die(f"{FAST_CLIENT} must run in job fast-client")
 
     for script in NIGHTLY_BLOCKING:
         if _scripts_in_jobs(wf.jobs, script):

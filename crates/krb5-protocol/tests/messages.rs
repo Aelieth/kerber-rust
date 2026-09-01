@@ -563,6 +563,86 @@ fn fast_preauth_retry_carries_fx_fast() {
 }
 
 #[test]
+fn fast_client_continue_uses_etype20_from_info2() {
+    use std::net::UdpSocket;
+    use std::thread;
+    use std::time::Duration;
+
+    use krb5_crypto::{EncryptionType, string_to_key};
+    use krb5_kdc::{
+        TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, s2k_params, serve,
+        shared_store,
+    };
+    use krb5_protocol::{AsTicketOpts, FastArmor, as_exchange, as_req_sname, pa_enc_timestamp};
+    use krb5_types::{PrincipalName, ascii};
+
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let sha2 = EncryptionType::Aes256CtsHmacSha384192;
+    let key = string_to_key(
+        sha2,
+        TEST_USER_PASSWORD,
+        cname.default_salt(TEST_REALM),
+        Some(&s2k_params(sha2)),
+    )
+    .expect("s2k");
+    let armor_req = as_req_sname(
+        cname.clone(),
+        TEST_REALM,
+        401,
+        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
+        PrincipalName::krbtgt(TEST_REALM),
+        vec![sha2.to_iana()],
+    )
+    .expect("armor AS-REQ");
+    let armor_as = krb5_kdc::issue_as(&store, &armor_req).expect("armor TGT");
+    let armor = FastArmor {
+        ticket: armor_as.rep.0.ticket,
+        session: armor_as.session_key,
+        crealm: ascii(TEST_REALM),
+        cname: cname.clone(),
+    };
+
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let addr = udp.local_addr().unwrap();
+    let tcp = std::net::TcpListener::bind(addr).unwrap();
+    let port = addr.port();
+    let store = shared_store(store);
+    thread::spawn(move || {
+        let _ = serve(store, udp, tcp);
+    });
+    thread::sleep(Duration::from_millis(50));
+
+    let etypes = [
+        sha2.to_iana(),
+        EncryptionType::Aes128CtsHmacSha256128.to_iana(),
+        EncryptionType::Aes256CtsHmacSha196.to_iana(),
+        EncryptionType::Aes128CtsHmacSha196.to_iana(),
+    ];
+    let out = as_exchange(&krb5_protocol::AsRequest {
+        cname,
+        realm: TEST_REALM,
+        password: TEST_USER_PASSWORD,
+        kdc: &krb5_protocol::KdcAddr {
+            host: "127.0.0.1".into(),
+            port,
+        },
+        want_spake: false,
+        fast_armor: Some(&armor),
+        pkinit: None,
+        canonicalize: false,
+        sname: None,
+        etypes: Some(&etypes),
+        ticket: AsTicketOpts::default(),
+    })
+    .expect("FAST client continuation at etype 20");
+    assert_eq!(out.session_key.etype(), sha2);
+    assert_eq!(out.client_key.etype(), sha2);
+    assert_eq!(out.ticket.enc_part.etype, sha2.to_iana());
+    assert!(out.enc_part.flags.pre_authent());
+}
+
+#[test]
 fn pkinit_as_req_carries_pa_pk_as_req() {
     use std::net::UdpSocket;
     use std::sync::{Arc, Mutex};

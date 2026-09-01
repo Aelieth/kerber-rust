@@ -236,6 +236,8 @@ jobs:
         run: ./scripts/rust-kinit-spake-gate.sh
       - name: mit-fast-kdc-gate (MIT kinit -T FAST vs Rust KDC)
         run: ./scripts/mit-fast-kdc-gate.sh
+      - name: rust-kinit-fast-gate (Rust kinit FAST vs MIT KDC)
+        run: ./scripts/rust-kinit-fast-gate.sh
       - name: rust-kinit-pkinit-gate (Rust kinit PKINIT vs MIT KDC)
         run: ./scripts/rust-kinit-pkinit-gate.sh
       - name: rust-kinit-enterprise-gate (NT-ENTERPRISE both directions)
@@ -252,38 +254,6 @@ jobs:
         run: ./scripts/s4u-mit-gate.sh
       - name: kcm-gate (Rust KCM vs sssd-kcm + MIT klist)
         run: ./scripts/kcm-gate.sh
-
-  fast-client:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    continue-on-error: true
-    needs: mit-image
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/download-artifact@v4
-        with:
-          name: mit-kdc-image
-          path: /tmp
-      - name: docker load MIT image
-        run: |
-          set -euo pipefail
-          tar=/tmp/kerber-rust-mit-kdc.tar
-          if [ ! -f "$tar" ]; then
-            tar="$(find /tmp -name kerber-rust-mit-kdc.tar -type f | head -1)"
-          fi
-          docker load -i "$tar"
-          echo "KERBER_SKIP_MIT_BUILD=1" >> "$GITHUB_ENV"
-      - name: Scratch dir
-        run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
-      - name: Build and kinit against MIT 1.22.2
-        run: ./scripts/run-harness.sh
-      - name: Stop MIT harness
-        if: always()
-        run: ./scripts/stop-harness.sh || true
-      - name: rust-kinit-fast-gate (Rust kinit FAST vs MIT KDC)
-        run: ./scripts/rust-kinit-fast-gate.sh
 
   slo:
     runs-on: ubuntu-latest

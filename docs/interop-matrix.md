@@ -10,7 +10,7 @@ A row is **in CI** when the named job runs it without
 `continue-on-error` (per-push `ci`, or scheduled `peers` /
 `soak`). Missing docker/image is honest `exit 2` unless the script
 documents otherwise. Per-push `continue-on-error` is only `slo` /
-`chaos` / `soak` and isolated `fast-client`.
+`chaos` / `soak`.
 
 ## MIT 1.22.2 (primary)
 
@@ -33,7 +33,7 @@ documents otherwise. Per-push `continue-on-error` is only `slo` /
 | `pkinit-gate.sh` | MIT `kinit -X X509_user_identity=FILE:` vs Rust KDC | `pkinit.so` present; log `rfc8636 sha256 kdf`; SAN≠cname log `pkinit client san` | harness |
 | `spake-gate.sh` | MIT `kinit` `pa_type` 151 / group 2 vs Rust KDC | TRACE 151 + group 2; `klist` `user@KERBER.TEST` | mit-extra |
 | `rust-kinit-spake-gate.sh` | Rust `kinit --spake` vs MIT KDC P-256 | MIT `klist` `user@KERBER.TEST`; TRACE `SPAKE response received` or `SPAKE derived K'`; `+requires_preauth` | mit-extra |
-| `rust-kinit-fast-gate.sh` | Rust `kinit --fast` vs MIT KDC | MIT `klist` `user@KERBER.TEST`; TRACE `Decrypted AP-REQ` (MIT 1.22.2 does not print `FX-FAST`) | fast-client (continue-on-error) |
+| `rust-kinit-fast-gate.sh` | Rust `kinit --fast` vs MIT KDC | MIT `klist` `user@KERBER.TEST`; TRACE `Decrypted AP-REQ` (MIT 1.22.2 does not print `FX-FAST`); SHA-2-first `default_tkt_enctypes` | mit-extra |
 | `mit-fast-kdc-gate.sh` | MIT `kinit -T` + `kvno` vs Rust KDC | TRACE `Upgrading to FAST due to presence of PA_FX_FAST`; ≥2 `fast::KrbFastResponse` (AS + TGS) | mit-extra |
 | `rust-kinit-pkinit-gate.sh` | Rust `kinit --pkinit FILE:` vs MIT KDC | MIT `klist` `user@KERBER.TEST`; `pkinit.so`; PA-PK-AS-REQ; rogue KDC is `pkinit kdc eku` (MIT not listening is red) | mit-extra |
 | `rust-kinit-enterprise-gate.sh` | MIT `kinit -E` vs Rust KDC; Rust `kinit -E` vs MIT (must match MIT client) | MIT db2: `CLIENT_NOT_FOUND` for `-E user@REALM`. Rust KDC: klist default principal `user@KERBER.TEST` | mit-extra |

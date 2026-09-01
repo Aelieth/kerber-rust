@@ -379,8 +379,8 @@ when that oracle is absent.
   unless the client tcpdump archive is present. Archives logs + pcap +
   RSS/latency series. Per-push `soak` is `continue-on-error`; the
   scheduled workflow is fail-red. Per-push `continue-on-error` is only
-  `slo` / `chaos` / `soak` and isolated `fast-client`
-  (`scripts/rust-kinit-fast-gate.sh`, SHA2-armor FAST vs MIT).
+  `slo` / `chaos` / `soak`. `scripts/rust-kinit-fast-gate.sh` is fail-red
+  on `mit-extra` (SHA-2-first FAST vs MIT).
 - `scripts/heimdal-gate.sh` — Heimdal 7.8 secondary oracle
   (`harness/heimdal/`, Debian bookworm apt, no `krb5-user`). The only
   `exit 0` is after both directions content-assert AES-SHA1

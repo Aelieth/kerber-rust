@@ -204,7 +204,7 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
     let (till, _, _, _) = ticket_body(req);
 
     if req.fast_armor.is_some() {
-        return continue_fast(req, keys, nonce, till.clone(), &etypes, None);
+        return continue_fast(req, keys, nonce, till.clone(), &etypes);
     }
     if req.pkinit.is_some() {
         return continue_pkinit(req, nonce, till, &etypes);
@@ -436,7 +436,6 @@ fn continue_fast(
     nonce: u32,
     till: KerberosTime,
     etypes: &[i32],
-    err: Option<&KrbError>,
 ) -> Result<AsOutcome, Error> {
     let armor = req
         .fast_armor
@@ -444,53 +443,161 @@ fn continue_fast(
     let mut raw = vec![0u8; armor.session.etype().key_len()];
     getrandom::getrandom(&mut raw).map_err(|e| Error::transport_msg(e.to_string()))?;
     let sub = ProtocolKey::from_bytes(armor.session.etype(), &raw)?;
-    let ap = build_fast_armor(
+    let akey = armor_key(&armor.session, Some(&sub))?;
+    // RFC 6113 reply-key base is the PA-ETYPE-INFO2 long-term key, not preferred()[0].
+    let ap = fast_armor_ap(armor, &sub)?;
+    let mut probe = build_as_req_from(req, nonce, till.clone(), None, etypes)?;
+    attach_fast(&mut probe, &ap, &akey, Vec::new())?;
+    let reply = exchange(req.kdc, &encode(&probe)?)?;
+    match classify(&reply)? {
+        KdcMsg::AsRep(rep) => finish_fast_as(req, keys, nonce, etypes, &akey, None, rep),
+        KdcMsg::Error(e) => {
+            let (inner, cookie) = fast_error_material(&akey, &e);
+            if inner.error_code != err::PREAUTH_REQUIRED && e.error_code != err::PREAUTH_REQUIRED {
+                return classify_kdc_error(&inner);
+            }
+            let (etype, salt, params) =
+                select_s2k(&inner, &salt_cname(&req.cname), req.realm, etypes)?;
+            let client_key = pick_key(keys, Some(etype)).map_or_else(
+                || string_to_key(etype, req.password, &salt, params.as_deref()),
+                Ok,
+            )?;
+            let mut inner_pa = vec![pa_enc_timestamp(&client_key)?];
+            if let Some(c) = cookie {
+                inner_pa.push(c);
+            }
+            let ap = fast_armor_ap(armor, &sub)?;
+            let mut req2 = build_as_req_from(req, nonce, till, None, etypes)?;
+            attach_fast(&mut req2, &ap, &akey, inner_pa)?;
+            let reply = exchange(req.kdc, &encode(&req2)?)?;
+            match classify(&reply)? {
+                KdcMsg::AsRep(rep) => {
+                    finish_fast_as(req, keys, nonce, etypes, &akey, Some(client_key), rep)
+                }
+                KdcMsg::Error(e) => classify_kdc_error(&fast_error_material(&akey, &e).0),
+                KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
+            }
+        }
+        KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
+    }
+}
+
+fn finish_fast_as(
+    req: &AsRequest<'_>,
+    keys: &[ProtocolKey],
+    nonce: u32,
+    etypes: &[i32],
+    akey: &ProtocolKey,
+    client_key: Option<ProtocolKey>,
+    rep: AsRep,
+) -> Result<AsOutcome, Error> {
+    let fast = unwrap_fast_rep(akey, &rep.0.padata)?;
+    let sent_preauth = client_key.is_some();
+    let client_key = match client_key {
+        Some(k) => k,
+        None => fast_base_key(
+            keys,
+            req.password,
+            &req.cname,
+            req.realm,
+            etypes,
+            &fast,
+            rep.0.enc_part.etype,
+        )?,
+    };
+    let reply_key = match &fast.strengthen_key {
+        Some(sk) => apply_strengthen(sk, &client_key)?,
+        None => client_key,
+    };
+    finish_as_rep(
+        rep,
+        nonce,
+        Some(reply_key),
+        req.password,
+        &req.cname,
+        req.realm,
+        sent_preauth,
+        req.canonicalize,
+        &req_sname(req),
+    )
+}
+
+fn fast_base_key(
+    keys: &[ProtocolKey],
+    password: &[u8],
+    cname: &PrincipalName,
+    realm: &str,
+    etypes: &[i32],
+    fast: &krb5_types::fast::KrbFastResponse,
+    enc_etype: i32,
+) -> Result<ProtocolKey, Error> {
+    let default_salt = salt_cname(cname).default_salt(realm);
+    let material = fast.padata.iter().find_map(|p| {
+        if p.padata_type != pa::ETYPE_INFO2 {
+            return None;
+        }
+        let info: EtypeInfo2 = decode(p.padata_value.as_ref()).ok()?;
+        pick_info2(&info, &default_salt, etypes)
+    });
+    let (etype, salt, params) = match material {
+        Some(m) => m,
+        None => (
+            EncryptionType::from_iana(enc_etype).unwrap_or_else(|_| first_etype(etypes)),
+            default_salt,
+            None,
+        ),
+    };
+    pick_key(keys, Some(etype))
+        .map_or_else(
+            || string_to_key(etype, password, &salt, params.as_deref()),
+            Ok,
+        )
+        .map_err(Into::into)
+}
+
+fn fast_armor_ap(armor: &FastArmor, sub: &ProtocolKey) -> Result<krb5_types::ApReq, Error> {
+    build_fast_armor(
         armor.ticket.clone(),
         &armor.session,
         &armor.crealm,
         &armor.cname,
-        Some(&sub),
-    )?;
-    let akey = armor_key(&armor.session, Some(&sub))?;
-    let (etype, salt, params) = match err {
-        Some(e) => select_s2k(e, &salt_cname(&req.cname), req.realm, etypes)?,
-        None => (
-            EncryptionType::preferred()[0],
-            salt_cname(&req.cname).default_salt(req.realm),
-            None,
-        ),
+        Some(sub),
+    )
+}
+
+fn fast_error_material(akey: &ProtocolKey, err: &KrbError) -> (KrbError, Option<PaData>) {
+    let Some(ed) = &err.e_data else {
+        return (err.clone(), None);
     };
-    let client_key = pick_key(keys, Some(etype)).map_or_else(
-        || string_to_key(etype, req.password, &salt, params.as_deref()),
-        Ok,
-    )?;
-    let inner = vec![pa_enc_timestamp(&client_key)?];
-    let mut req2 = build_as_req_from(req, nonce, till, None, etypes)?;
-    attach_fast(&mut req2, &ap, &akey, inner)?;
-    let wire = encode(&req2)?;
-    let reply = exchange(req.kdc, &wire)?;
-    match classify(&reply)? {
-        KdcMsg::AsRep(rep) => {
-            let fast = unwrap_fast_rep(&akey, &rep.0.padata)?;
-            let reply_key = match &fast.strengthen_key {
-                Some(sk) => apply_strengthen(sk, &client_key)?,
-                None => client_key.clone(),
-            };
-            finish_as_rep(
-                rep,
-                nonce,
-                Some(reply_key),
-                req.password,
-                &req.cname,
-                req.realm,
-                true,
-                req.canonicalize,
-                &req_sname(req),
-            )
+    let method: MethodData = match decode(ed.as_ref()) {
+        Ok(m) => m,
+        Err(_) => return (err.clone(), None),
+    };
+    let outer_cookie = find_pa(&method, pa::FX_COOKIE).cloned();
+    let Some(fx) = find_pa(&method, pa::FX_FAST) else {
+        return (err.clone(), outer_cookie);
+    };
+    let Ok(fast) = unwrap_fast_rep(akey, &Some(vec![fx.clone()])) else {
+        return (err.clone(), outer_cookie);
+    };
+    let cookie = find_pa(&fast.padata, pa::FX_COOKIE)
+        .cloned()
+        .or(outer_cookie);
+    if let Some(fx_err) = find_pa(&fast.padata, pa::FX_ERROR)
+        && let Ok(mut inner) = decode::<KrbError>(fx_err.padata_value.as_ref())
+    {
+        if inner.e_data.is_none()
+            && let Ok(ed2) = encode(&fast.padata)
+        {
+            inner.e_data = Some(ed2.into());
         }
-        KdcMsg::Error(e) => classify_kdc_error(&e),
-        KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
+        return (inner, cookie);
     }
+    let mut synth = err.clone();
+    if let Ok(ed2) = encode(&fast.padata) {
+        synth.e_data = Some(ed2.into());
+    }
+    (synth, cookie)
 }
 
 fn continue_spake(
