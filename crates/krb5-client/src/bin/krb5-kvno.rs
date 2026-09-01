@@ -9,7 +9,7 @@
 
 use krb5_asn1::decode;
 use krb5_client::cli::parse_kvno;
-use krb5_client::{load_ccache, store_ccache};
+use krb5_client::{load_ccache, store_ccache_keep_default};
 use krb5_config::resolve_ccspec;
 use krb5_protocol::{AsOutcome, KdcAddr, parse_principal, tgs_exchange, tgt_cred};
 use krb5_types::{EncKdcRepPart, EncryptionKey, KerberosTime, PrincipalName, Ticket, TicketFlags};
@@ -123,6 +123,6 @@ fn run(spec: &krb5_config::CcSpec, host: &str, service: &str) -> Result<(), Stri
         )
         .map_err(|e| e.to_string())?,
     );
-    store_ccache(spec, cc).map_err(|e| e.to_string())?;
+    store_ccache_keep_default(spec, cc).map_err(|e| e.to_string())?;
     Ok(())
 }

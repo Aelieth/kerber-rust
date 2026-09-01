@@ -59,7 +59,7 @@ pub use diff::{
 pub use error::Error;
 pub use kcm::{
     KCM_SOCKET_DEFAULT, kcm_cache_names, kcm_destroy, kcm_load, kcm_socket_path, kcm_store,
-    kcm_switch, kcm_switch_principal,
+    kcm_store_keep_default, kcm_switch, kcm_switch_principal,
 };
 pub use keytab::{Keytab, KeytabEntry, KeytabSlot};
 pub use preauth::{

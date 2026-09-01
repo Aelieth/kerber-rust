@@ -14,8 +14,8 @@ use krb5_config::CcSpec;
 use krb5_protocol::{
     AsOutcome, AsRequest, AsTicketOpts, FastArmor, KdcAddr, PkinitClient, TgsOutcome, as_exchange,
     as_exchange_with_keys, dir_cache_path, dir_cache_path_for_store, kcm_destroy, kcm_load,
-    kcm_store, memory_destroy, memory_retrieve, memory_store, parse_principal_ex, tgs_exchange,
-    tgs_renew,
+    kcm_store, kcm_store_keep_default, memory_destroy, memory_retrieve, memory_store,
+    parse_principal_ex, tgs_exchange, tgs_renew,
 };
 use krb5_types::{PrincipalName, Ticket};
 use zeroize::Zeroize;
@@ -220,6 +220,21 @@ pub fn store_ccache(
             cc.write_file(p).map_err(Into::into)
         }
         CcSpec::Kcm(n) => kcm_store(n, &cc).map_err(Into::into),
+    }
+}
+
+/// [`store_ccache`] without switching the KCM collection default (`kvno`).
+///
+/// # Errors
+///
+/// I/O or DIR residual errors.
+pub fn store_ccache_keep_default(
+    spec: &CcSpec,
+    cc: FileCcache,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    match spec {
+        CcSpec::Kcm(n) => kcm_store_keep_default(n, &cc).map_err(Into::into),
+        _ => store_ccache(spec, cc),
     }
 }
 
