@@ -6,9 +6,11 @@ job. Per-gate assertions: [`testing.md`](testing.md). Timing/replay:
 [`security.md`](security.md). Isolation: never edit host
 `/etc/krb5.conf` (`TESTLABBY.LOCAL`).
 
-A row is **in CI** when the named job runs it on `main` without
-`continue-on-error`. Missing docker/image is honest `exit 2` unless
-the script documents otherwise.
+A row is **in CI** when the named job runs it without
+`continue-on-error` (per-push `ci`, or scheduled `peers` /
+`soak`). Missing docker/image is honest `exit 2` unless the script
+documents otherwise. Per-push `continue-on-error` is only `slo` /
+`chaos` / `soak` and isolated `fast-client`.
 
 ## MIT 1.22.2 (primary)
 
@@ -21,20 +23,20 @@ the script documents otherwise.
 | `gssproxy-gate.sh` | `X-GSSPROXY` FILE entry | **exit 2** until a Fedora/gssproxy oracle is vendored | harness (skip 2) |
 | `nfs-krb5p-gate.sh` | NFS `sec=krb5i`/`krb5p` | **exit 2** / manual until nfs-klldap-host is vendored | harness (skip 2) |
 | `sssd-renew-gate.sh` | SSSD `krb5_child` renew | **exit 2** until a digest-pinned Fedora `sssd-kcm` image can run | harness (skip 2) |
-| `ktutil-gate.sh` | MIT `ktadd` / Rust `ktutil` / MIT `kinit -k` | Rust list of MIT keytab; Rust-written keytab `kinit -k` | harness |
-| `kadmin-local-gate.sh` | Rust `krb5-kadmin-local` then MIT `kadmin` | `addprinc extra2` and `addprinc host/slashhost`; MIT getprinc/listprincs those names; set-but-unreadable `KRB5_ACL_FILE` is non-zero; `-randkey` + `kinit -k`; `+requires_preauth`; two `ktadd -k` both names; dump `getprinc` after mutating `setstr` keeps a concurrent kadmind create (`m5k: m5v`); local `addprinc n7local` then remote `cpw extra2` keeps both; local `ktadd krbtgt/REALM` is the MIT footgun (rotates + writes) | harness |
-| `rust-kpasswd-mit-gate.sh` | Rust `krb5-kpasswd` vs MIT `kadmind` 464 | new password `kinit`; old fails | harness |
+| `ktutil-gate.sh` | MIT `ktadd` / Rust `ktutil` / MIT `kinit -k` | Rust list of MIT keytab; Rust-written keytab `kinit -k` | mit-extra |
+| `kadmin-local-gate.sh` | Rust `krb5-kadmin-local` then MIT `kadmin` | `addprinc extra2` and `addprinc host/slashhost`; MIT getprinc/listprincs those names; set-but-unreadable `KRB5_ACL_FILE` is non-zero; `-randkey` + `kinit -k`; `+requires_preauth`; two `ktadd -k` both names; dump `getprinc` after mutating `setstr` keeps a concurrent kadmind create (`m5k: m5v`); local `addprinc n7local` then remote `cpw extra2` keeps both; local `ktadd krbtgt/REALM` is the MIT footgun (rotates + writes) | mit-extra |
+| `rust-kpasswd-mit-gate.sh` | Rust `krb5-kpasswd` vs MIT `kadmind` 464 | new password `kinit`; old fails | mit-extra |
 | `kdc-gate.sh` | MIT `kinit`/`kvno` vs Rust KDC | MIT TGT + host ticket (FAST TGS `kvno` included) | harness |
 | `gss-gate.sh` | MIT `libgssapi_krb5` initiator vs `krb5-gss-accept` | unwrap of `hello-from-mit-gss`; `GSS_C_DELEG_FLAG` both directions names `user@KERBER.TEST`; MIT SPNEGO handshake + `mechListMIC`; MIT `gss_wrap_iov` / Rust `unwrap_iov` (incl. `SIGN_ONLY`); Rust `wrap_iov` / MIT `gss_unwrap_iov`; inquire lifetime > 0 | harness |
 | `pkinit-gate.sh` | MIT `kinit -X X509_user_identity=FILE:` vs Rust KDC | `pkinit.so` present; log `rfc8636 sha256 kdf`; SAN≠cname log `pkinit client san` | harness |
-| `spake-gate.sh` | MIT `kinit` `pa_type` 151 / group 2 vs Rust KDC | TRACE 151 + group 2; `klist` `user@KERBER.TEST` | harness |
-| `rust-kinit-spake-gate.sh` | Rust `kinit --spake` vs MIT KDC P-256 | MIT `klist` `user@KERBER.TEST`; TRACE `SPAKE response received` or `SPAKE derived K'`; `+requires_preauth` | harness |
-| `rust-kinit-fast-gate.sh` | Rust `kinit --fast` vs MIT KDC | MIT `klist` `user@KERBER.TEST`; TRACE `Decrypted AP-REQ` (MIT 1.22.2 does not print `FX-FAST`) | harness |
-| `mit-fast-kdc-gate.sh` | MIT `kinit -T` + `kvno` vs Rust KDC | TRACE `Upgrading to FAST due to presence of PA_FX_FAST`; ≥2 `fast::KrbFastResponse` (AS + TGS) | harness |
-| `rust-kinit-pkinit-gate.sh` | Rust `kinit --pkinit FILE:` vs MIT KDC | MIT `klist` `user@KERBER.TEST`; `pkinit.so`; PA-PK-AS-REQ; rogue KDC is `pkinit kdc eku` (MIT not listening is red) | harness |
-| `rust-kinit-enterprise-gate.sh` | MIT `kinit -E` vs Rust KDC; Rust `kinit -E` vs MIT (must match MIT client) | MIT db2: `CLIENT_NOT_FOUND` for `-E user@REALM`. Rust KDC: klist default principal `user@KERBER.TEST` | harness |
-| `sha2-gate.sh` | MIT `kinit`/`kvno` etype 20 vs Rust KDC | `klist -e` names `aes256-cts-hmac-sha384-192` | harness |
-| `cross-realm-gate.sh` | MIT `kinit` + `kvno host/svc.other.test@OTHER.TEST` | `klist` has `krbtgt/OTHER.TEST` and the host ticket | harness |
+| `spake-gate.sh` | MIT `kinit` `pa_type` 151 / group 2 vs Rust KDC | TRACE 151 + group 2; `klist` `user@KERBER.TEST` | mit-extra |
+| `rust-kinit-spake-gate.sh` | Rust `kinit --spake` vs MIT KDC P-256 | MIT `klist` `user@KERBER.TEST`; TRACE `SPAKE response received` or `SPAKE derived K'`; `+requires_preauth` | mit-extra |
+| `rust-kinit-fast-gate.sh` | Rust `kinit --fast` vs MIT KDC | MIT `klist` `user@KERBER.TEST`; TRACE `Decrypted AP-REQ` (MIT 1.22.2 does not print `FX-FAST`) | fast-client (continue-on-error) |
+| `mit-fast-kdc-gate.sh` | MIT `kinit -T` + `kvno` vs Rust KDC | TRACE `Upgrading to FAST due to presence of PA_FX_FAST`; ≥2 `fast::KrbFastResponse` (AS + TGS) | mit-extra |
+| `rust-kinit-pkinit-gate.sh` | Rust `kinit --pkinit FILE:` vs MIT KDC | MIT `klist` `user@KERBER.TEST`; `pkinit.so`; PA-PK-AS-REQ; rogue KDC is `pkinit kdc eku` (MIT not listening is red) | mit-extra |
+| `rust-kinit-enterprise-gate.sh` | MIT `kinit -E` vs Rust KDC; Rust `kinit -E` vs MIT (must match MIT client) | MIT db2: `CLIENT_NOT_FOUND` for `-E user@REALM`. Rust KDC: klist default principal `user@KERBER.TEST` | mit-extra |
+| `sha2-gate.sh` | MIT `kinit`/`kvno` etype 20 vs Rust KDC | `klist -e` names `aes256-cts-hmac-sha384-192` | mit-extra |
+| `cross-realm-gate.sh` | MIT `kinit` + `kvno host/svc.other.test@OTHER.TEST` | `klist` has `krbtgt/OTHER.TEST` and the host ticket | mit-extra |
 | `kadmin-gate.sh` | MIT `kadmin` vs `krb5-kadmind` 749 | add/cpw/get/list/mod/chrand (dates move)/ktadd/`ktadd -norandkey`/`+lockdown_keys`/purgekeys/`cpw -keepold`/setstr/`renprinc`/del then `kinit extra` | harness |
 | `policy-gate.sh` | MIT `kadmin` addpol/modpol/getpol/`cpw`/delpol + `kinit` | too-short + reuse; minclasses 5; history-N (current inside N); maxfailure-2; lockout duration/interval | harness |
 | `history-mit-gate.sh` | MIT `kadmin.local` history-window on a MIT KDB | history=1 allows A→B→A; history=2 rejects B after A→B→C | harness |
@@ -52,22 +54,22 @@ the script documents otherwise.
 | `kprop-gate.sh` | MIT `kprop` dump v7 vs `krb5-kpropd` 754 | MIT `kinit user` on replica; `klist` names `user@KERBER.TEST` | harness |
 | `kprop-reverse-gate.sh` | Rust `krb5-kprop` vs MIT `kpropd` | MIT `krb5kdc` + MIT `kinit user@KERBER.TEST` | harness |
 | `restart-gate.sh` | MIT `kadmin addprinc extra`; kill `krb5-kdc` by comm; relaunch | MIT `kinit extra` after relaunch; MIT load of persist dump v7 | harness |
-| `s4u-mit-gate.sh` | MIT `kvno -U` / `-U -P` vs Rust KDC | `klist` `for client user@KERBER.TEST`; `kvno -U nosuch` not found; `kvno -U locked` revoked; non-forwardable → `BADOPTION` | harness |
+| `s4u-mit-gate.sh` | MIT `kvno -U` / `-U -P` vs Rust KDC | `klist` `for client user@KERBER.TEST`; `kvno -U nosuch` not found; `kvno -U locked` revoked; non-forwardable → `BADOPTION` | mit-extra |
 | `prod-realm-gate.sh` | MIT client vs Rust primary/replica `PROD.KERBER.TEST` | MIT `kinit`/`kvno`/`kadmin`; kprop failover; NIC pcap when required | harness |
-| `stress-gate.sh` | wire AS+TGS + MIT `kinit`/`kvno` under load | p99 `duration_us` ≤ 50 ms; ≥ 8 issue-ok/s; error-rate 0 | harness |
-| `chaos-gate.sh` | `tc netem` + memory cap + primary kill under load | MIT completes; no OOM-panic; replica `kinit`/`kvno` after kill | harness |
+| `stress-gate.sh` | wire AS+TGS + MIT `kinit`/`kvno` under load | p99 `duration_us` ≤ 50 ms; ≥ 8 issue-ok/s; error-rate 0 | slo (continue-on-error) |
+| `chaos-gate.sh` | `tc netem` + memory cap + primary kill under load | MIT completes; no OOM-panic; replica `kinit`/`kvno` after kill | chaos (continue-on-error) |
 
 ## Samba 4 AD (AD.KERBER.TEST)
 
 | Gate | Drives | Asserts | CI |
 | --- | --- | --- | --- |
-| `samba-ad-gate.sh` | live Samba DC `kinit`/`kvno` | `klist` after live AS/TGS; missing image `exit 2` | harness |
-| `ad-windows-gate.sh` | Samba `kinit kbruser` + `kvno host/svc` | live Samba ticket (not the torn-down Windows DC) | harness |
-| `ad-s4u-gate.sh` | Samba `kvno -U` / `-U -P` | `klist` names `host/svc.ad.kerber.test` for `kbruser` | harness |
-| `samba-pac-verify-gate.sh` | Samba decode of a Rust PAC (L1) | buffers `{1,10,12,16,17,18,19,6,7}`; dummy SID fails | harness |
-| `samba-pac-l2-gate.sh` | vendored Samba `kcrypto` 6/7/16/19 (L2) | recompute; type-6/16 MAC flip → `L2_MISMATCH` | harness |
-| `samba-crossrealm-gate.sh` | MIT `kvno` both ways vs Samba (L3) | Samba logs must not contain `PAC … failed` | harness |
-| `samba-realtrust-gate.sh` | `samba-tool domain trust create` + reverse PAC | reverse LOGON_INFO SID/RID = live Samba-A `kbruser` `objectSid` | harness |
+| `samba-ad-gate.sh` | live Samba DC `kinit`/`kvno` | `klist` after live AS/TGS; missing image `exit 2` | peers (nightly) |
+| `ad-windows-gate.sh` | Samba `kinit kbruser` + `kvno host/svc` | live Samba ticket (not the torn-down Windows DC) | peers (nightly) |
+| `ad-s4u-gate.sh` | Samba `kvno -U` / `-U -P` | `klist` names `host/svc.ad.kerber.test` for `kbruser` | peers (nightly) |
+| `samba-pac-verify-gate.sh` | Samba decode of a Rust PAC (L1) | buffers `{1,10,12,16,17,18,19,6,7}`; dummy SID fails | peers (nightly) |
+| `samba-pac-l2-gate.sh` | vendored Samba `kcrypto` 6/7/16/19 (L2) | recompute; type-6/16 MAC flip → `L2_MISMATCH` | peers (nightly) |
+| `samba-crossrealm-gate.sh` | MIT `kvno` both ways vs Samba (L3) | Samba logs must not contain `PAC … failed` | peers (nightly) |
+| `samba-realtrust-gate.sh` | `samba-tool domain trust create` + reverse PAC | reverse LOGON_INFO SID/RID = live Samba-A `kbruser` `objectSid` | peers (nightly) |
 
 `ad-mit-trust-gate.sh` is an alias of `samba-realtrust-gate.sh`. It does
 not claim a Windows DC.
@@ -76,7 +78,7 @@ not claim a Windows DC.
 
 | Gate | Drives | Asserts | CI |
 | --- | --- | --- | --- |
-| `heimdal-gate.sh` | Heimdal `kinit`/`kgetcred` vs Rust; Rust `krb5-kinit` vs Heimdal | AES-SHA1 both ways; `klist` names `user@KERBER.TEST` and `host/testhost.kerber.test`; missing image `exit 2` | harness |
+| `heimdal-gate.sh` | Heimdal `kinit`/`kgetcred` vs Rust; Rust `krb5-kinit` vs Heimdal | AES-SHA1 both ways; `klist` names `user@KERBER.TEST` and `host/testhost.kerber.test`; missing image `exit 2` | peers (nightly) |
 
 ## Supply-chain (not an interop oracle)
 

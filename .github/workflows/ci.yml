@@ -8,12 +8,15 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: CI policy
+        run: python3 scripts/ci-policy.py
       - name: fmt
         run: cargo fmt --all -- --check
       - name: clippy
@@ -23,14 +26,15 @@ jobs:
         with:
           tool: nextest
       - name: test
-        run: cargo nextest run --workspace
+        run: cargo nextest run --workspace --profile ci
       - name: test --release
-        run: cargo nextest run --workspace --release
+        run: cargo nextest run --workspace --release --profile ci
       - name: doc
         run: cargo doc --workspace --no-deps
 
   msrv:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.95
@@ -40,6 +44,7 @@ jobs:
 
   audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -60,12 +65,54 @@ jobs:
       - name: cargo-vet
         run: cargo vet --locked
 
+  mit-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/cache@v4
+        with:
+          path: /tmp/kerber-rust-mit-kdc.tar
+          key: mit-kdc-1.22.2-${{ hashFiles('harness/Dockerfile', 'harness/krb5.conf', 'harness/kdc.conf', 'harness/kadm5.acl', 'harness/krb5-sha2.conf', 'harness/entrypoint.sh') }}
+      - name: Load cached MIT image or docker build
+        run: |
+          set -euo pipefail
+          tar=/tmp/kerber-rust-mit-kdc.tar
+          image=kerber-rust-mit-kdc:1.22.2
+          if [ -f "$tar" ]; then
+            docker load -i "$tar"
+          else
+            docker build -f harness/Dockerfile -t "$image" .
+            docker save "$image" -o "$tar"
+          fi
+          docker image inspect "$image" >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mit-kdc-image
+          path: /tmp/kerber-rust-mit-kdc.tar
+          retention-days: 1
+
   harness:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: mit-image
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/download-artifact@v4
+        with:
+          name: mit-kdc-image
+          path: /tmp
+      - name: docker load MIT image
+        run: |
+          set -euo pipefail
+          tar=/tmp/kerber-rust-mit-kdc.tar
+          if [ ! -f "$tar" ]; then
+            tar="$(find /tmp -name kerber-rust-mit-kdc.tar -type f | head -1)"
+          fi
+          docker load -i "$tar"
+          echo "KERBER_SKIP_MIT_BUILD=1" >> "$GITHUB_ENV"
       - name: Scratch dir
         run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
       - name: Build and kinit against MIT 1.22.2
@@ -155,11 +202,25 @@ jobs:
 
   mit-extra:
     runs-on: ubuntu-latest
-    continue-on-error: true
+    timeout-minutes: 40
+    needs: mit-image
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/download-artifact@v4
+        with:
+          name: mit-kdc-image
+          path: /tmp
+      - name: docker load MIT image
+        run: |
+          set -euo pipefail
+          tar=/tmp/kerber-rust-mit-kdc.tar
+          if [ ! -f "$tar" ]; then
+            tar="$(find /tmp -name kerber-rust-mit-kdc.tar -type f | head -1)"
+          fi
+          docker load -i "$tar"
+          echo "KERBER_SKIP_MIT_BUILD=1" >> "$GITHUB_ENV"
       - name: Scratch dir
         run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
       - name: Build and kinit against MIT 1.22.2
@@ -173,8 +234,6 @@ jobs:
         run: ./scripts/spake-gate.sh
       - name: rust-kinit-spake-gate (Rust kinit SPAKE vs MIT KDC)
         run: ./scripts/rust-kinit-spake-gate.sh
-      - name: rust-kinit-fast-gate (Rust kinit FAST vs MIT KDC)
-        run: ./scripts/rust-kinit-fast-gate.sh
       - name: mit-fast-kdc-gate (MIT kinit -T FAST vs Rust KDC)
         run: ./scripts/mit-fast-kdc-gate.sh
       - name: rust-kinit-pkinit-gate (Rust kinit PKINIT vs MIT KDC)
@@ -192,19 +251,64 @@ jobs:
       - name: s4u-mit-gate (MIT kvno -U / -U -P vs Rust KDC)
         run: ./scripts/s4u-mit-gate.sh
 
-  slo:
+  fast-client:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     continue-on-error: true
+    needs: mit-image
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/download-artifact@v4
+        with:
+          name: mit-kdc-image
+          path: /tmp
+      - name: docker load MIT image
+        run: |
+          set -euo pipefail
+          tar=/tmp/kerber-rust-mit-kdc.tar
+          if [ ! -f "$tar" ]; then
+            tar="$(find /tmp -name kerber-rust-mit-kdc.tar -type f | head -1)"
+          fi
+          docker load -i "$tar"
+          echo "KERBER_SKIP_MIT_BUILD=1" >> "$GITHUB_ENV"
+      - name: Scratch dir
+        run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
+      - name: Build and kinit against MIT 1.22.2
+        run: ./scripts/run-harness.sh
+      - name: Stop MIT harness
+        if: always()
+        run: ./scripts/stop-harness.sh || true
+      - name: rust-kinit-fast-gate (Rust kinit FAST vs MIT KDC)
+        run: ./scripts/rust-kinit-fast-gate.sh
+
+  slo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    needs: mit-image
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/download-artifact@v4
+        with:
+          name: mit-kdc-image
+          path: /tmp
+      - name: docker load MIT image
+        run: |
+          set -euo pipefail
+          tar=/tmp/kerber-rust-mit-kdc.tar
+          if [ ! -f "$tar" ]; then
+            tar="$(find /tmp -name kerber-rust-mit-kdc.tar -type f | head -1)"
+          fi
+          docker load -i "$tar"
+          echo "KERBER_SKIP_MIT_BUILD=1" >> "$GITHUB_ENV"
       - name: Scratch dir
         run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
       - name: MIT + prod-node images
-        run: |
-          docker build -f harness/Dockerfile -t kerber-rust-mit-kdc:1.22.2 .
-          docker build -f harness/prod/Dockerfile -t kerber-rust-prod-node:latest .
+        run: docker build -f harness/prod/Dockerfile -t kerber-rust-prod-node:latest .
       - name: Build KDC bins
         run: |
           cargo build -p krb5-kdc -p krb5-admin --bins
@@ -214,17 +318,30 @@ jobs:
 
   chaos:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     continue-on-error: true
+    needs: mit-image
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/download-artifact@v4
+        with:
+          name: mit-kdc-image
+          path: /tmp
+      - name: docker load MIT image
+        run: |
+          set -euo pipefail
+          tar=/tmp/kerber-rust-mit-kdc.tar
+          if [ ! -f "$tar" ]; then
+            tar="$(find /tmp -name kerber-rust-mit-kdc.tar -type f | head -1)"
+          fi
+          docker load -i "$tar"
+          echo "KERBER_SKIP_MIT_BUILD=1" >> "$GITHUB_ENV"
       - name: Scratch dir
         run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
       - name: MIT + prod-node images
-        run: |
-          docker build -f harness/Dockerfile -t kerber-rust-mit-kdc:1.22.2 .
-          docker build -f harness/prod/Dockerfile -t kerber-rust-prod-node:latest .
+        run: docker build -f harness/prod/Dockerfile -t kerber-rust-prod-node:latest .
       - name: Build KDC bins
         run: |
           cargo build -p krb5-kdc -p krb5-admin --bins
@@ -236,17 +353,30 @@ jobs:
 
   soak:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     continue-on-error: true
+    needs: mit-image
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/download-artifact@v4
+        with:
+          name: mit-kdc-image
+          path: /tmp
+      - name: docker load MIT image
+        run: |
+          set -euo pipefail
+          tar=/tmp/kerber-rust-mit-kdc.tar
+          if [ ! -f "$tar" ]; then
+            tar="$(find /tmp -name kerber-rust-mit-kdc.tar -type f | head -1)"
+          fi
+          docker load -i "$tar"
+          echo "KERBER_SKIP_MIT_BUILD=1" >> "$GITHUB_ENV"
       - name: Scratch dir
         run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
       - name: MIT + prod-node images
-        run: |
-          docker build -f harness/Dockerfile -t kerber-rust-mit-kdc:1.22.2 .
-          docker build -f harness/prod/Dockerfile -t kerber-rust-prod-node:latest .
+        run: docker build -f harness/prod/Dockerfile -t kerber-rust-prod-node:latest .
       - name: Build KDC bins
         run: |
           cargo build -p krb5-kdc -p krb5-admin --bins
@@ -255,53 +385,3 @@ jobs:
         env:
           KERBER_REQUIRE_REAL_PCAP: "1"
         run: ./scripts/soak-gate.sh
-
-  peers:
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Scratch dir
-        run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
-      - name: Build Samba AD DC image (harness/samba)
-        run: docker build -f harness/samba/Dockerfile -t samba-ad-dc:latest .
-      - name: samba-ad-gate (Samba 4 AD DC live kinit/kvno)
-        run: ./scripts/samba-ad-gate.sh
-        env:
-          SAMBA_AD_IMAGE: samba-ad-dc:latest
-          SAMBA_AD_REALM: AD.KERBER.TEST
-          SAMBA_AD_USER: Administrator
-          SAMBA_AD_PASSWORD: ${{ secrets.SAMBA_AD_PASSWORD }}
-      - name: ad-windows-gate (live Samba kinit kbruser + kvno host/svc)
-        run: ./scripts/ad-windows-gate.sh
-        env:
-          SAMBA_AD_IMAGE: samba-ad-dc:latest
-      - name: ad-s4u-gate (live Samba S4U2Self/Proxy)
-        run: ./scripts/ad-s4u-gate.sh
-        env:
-          SAMBA_AD_IMAGE: samba-ad-dc:latest
-      - name: samba-pac-verify-gate (L1 Samba decode of Rust PAC)
-        run: ./scripts/samba-pac-verify-gate.sh
-        env:
-          SAMBA_AD_IMAGE: samba-ad-dc:latest
-      - name: samba-pac-l2-gate (Samba kcrypto, vendored reference)
-        run: ./scripts/samba-pac-l2-gate.sh
-        env:
-          SAMBA_AD_IMAGE: samba-ad-dc:latest
-      - name: samba-crossrealm-gate (L3 both-direction PAC)
-        run: ./scripts/samba-crossrealm-gate.sh
-        env:
-          SAMBA_AD_IMAGE: samba-ad-dc:latest
-      - name: Build peer Samba DC (KERBER.TEST)
-        run: docker build -f harness/samba/Dockerfile --build-arg SAMBA_REALM=KERBER.TEST --build-arg SAMBA_DOMAIN=KERBER -t samba-kerber-dc:latest .
-      - name: samba-realtrust-gate (samba-tool trust + reverse PAC SID)
-        run: ./scripts/samba-realtrust-gate.sh
-        env:
-          SAMBA_AD_IMAGE: samba-ad-dc:latest
-          SAMBA_KERBER_IMAGE: samba-kerber-dc:latest
-      - name: Build Heimdal 7.8 image (harness/heimdal)
-        run: docker build -f harness/heimdal/Dockerfile -t kerber-rust-heimdal-kdc:latest .
-      - name: heimdal-gate (Heimdal 7.8 bidirectional)
-        run: ./scripts/heimdal-gate.sh

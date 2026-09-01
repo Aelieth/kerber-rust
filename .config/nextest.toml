@@ -1,0 +1,8 @@
+# Hang protection: mark tests slow at 60s and kill them after 3 periods.
+# CI uses `--profile ci`. Local `cargo nextest run` uses `default`.
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[profile.ci]
+slow-timeout = { period = "60s", terminate-after = 3 }
+fail-fast = false

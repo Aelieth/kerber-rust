@@ -360,19 +360,23 @@ when that oracle is absent.
   uses `kdc.issue` timestamps or `duration_us`, not Docker wall clock.
   p99/throughput undershoot with `kdc_issue_err==0` and no panics is a
   warning; error-rate and panics stay hard-fail. Own CI job (`slo`),
-  not on the required per-SHA path.
+  `continue-on-error`; not on the required per-SHA path.
 - `scripts/chaos-gate.sh` — C2b: `tc netem` delay/loss/reorder (MIT
   must complete), low `--memory` under load (no OOM-panic), `docker kill`
   of the primary mid-load then MIT `kinit`/`kvno` on the kprop replica
   (including a kadmin-created host). `KERBER_REQUIRE_NETEM=1` in CI
-  dies unless netem applied; after kill, `State.Running=false`. In CI.
+  dies unless netem applied; after kill, `State.Running=false`. Own CI
+  job (`chaos`), `continue-on-error`.
 - `scripts/soak-gate.sh` — C2c: sustained moderate load (~70 s in CI,
   300 s scheduled in `.github/workflows/soak.yml`). RSS last ≤ first×1.5
   + 8 MiB and slope ≤ 0.05 MiB/s; window-over-window `duration_us` p99
   must not degrade by more than 2.5×; error-rate 0; panics 0;
   `correlation_id` on issue-ok. `KERBER_REQUIRE_REAL_PCAP=1` fails
   unless the client tcpdump archive is present. Archives logs + pcap +
-  RSS/latency series. `soak` / `chaos` CI jobs are `continue-on-error`.
+  RSS/latency series. Per-push `soak` is `continue-on-error`; the
+  scheduled workflow is fail-red. Per-push `continue-on-error` is only
+  `slo` / `chaos` / `soak` and isolated `fast-client`
+  (`scripts/rust-kinit-fast-gate.sh`, SHA2-armor FAST vs MIT).
 - `scripts/heimdal-gate.sh` — Heimdal 7.8 secondary oracle
   (`harness/heimdal/`, Debian bookworm apt, no `krb5-user`). The only
   `exit 0` is after both directions content-assert AES-SHA1
@@ -383,8 +387,9 @@ when that oracle is absent.
   Heimdal 7.8 has no RFC 8009 etypes 19/20; the image pins
   `default_etypes` and the HDB master key to etype 18. Missing
   docker/image is honest `exit 2` plus
-  `heimdal-gate-unavailable.log`. Samba/Heimdal run in the `peers` job
-  (`continue-on-error`); not required per SHA.
+  `heimdal-gate-unavailable.log`. Samba PAC L1/L2/L3, realtrust, and
+  Heimdal run on the scheduled `peers` workflow (fail-red, no
+  `continue-on-error`); not required per SHA.
   TGS-REP `name-type` is a hint (RFC 4120 §6.2); Heimdal canonicalize
   may return NT-SRV-HST for a host principal requested as NT-PRINCIPAL.
 - `scripts/gss-sspi-gate.sh` — exit 2 + unavailability log when that

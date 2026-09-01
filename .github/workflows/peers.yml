@@ -1,0 +1,57 @@
+name: peers
+
+on:
+  schedule:
+    - cron: "12 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  peers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Scratch dir
+        run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
+      - name: Build Samba AD DC image (harness/samba)
+        run: docker build -f harness/samba/Dockerfile -t samba-ad-dc:latest .
+      - name: samba-ad-gate (Samba 4 AD DC live kinit/kvno)
+        run: ./scripts/samba-ad-gate.sh
+        env:
+          SAMBA_AD_IMAGE: samba-ad-dc:latest
+          SAMBA_AD_REALM: AD.KERBER.TEST
+          SAMBA_AD_USER: Administrator
+          SAMBA_AD_PASSWORD: ${{ secrets.SAMBA_AD_PASSWORD }}
+      - name: ad-windows-gate (live Samba kinit kbruser + kvno host/svc)
+        run: ./scripts/ad-windows-gate.sh
+        env:
+          SAMBA_AD_IMAGE: samba-ad-dc:latest
+      - name: ad-s4u-gate (live Samba S4U2Self/Proxy)
+        run: ./scripts/ad-s4u-gate.sh
+        env:
+          SAMBA_AD_IMAGE: samba-ad-dc:latest
+      - name: samba-pac-verify-gate (L1 Samba decode of Rust PAC)
+        run: ./scripts/samba-pac-verify-gate.sh
+        env:
+          SAMBA_AD_IMAGE: samba-ad-dc:latest
+      - name: samba-pac-l2-gate (Samba kcrypto, vendored reference)
+        run: ./scripts/samba-pac-l2-gate.sh
+        env:
+          SAMBA_AD_IMAGE: samba-ad-dc:latest
+      - name: samba-crossrealm-gate (L3 both-direction PAC)
+        run: ./scripts/samba-crossrealm-gate.sh
+        env:
+          SAMBA_AD_IMAGE: samba-ad-dc:latest
+      - name: Build peer Samba DC (KERBER.TEST)
+        run: docker build -f harness/samba/Dockerfile --build-arg SAMBA_REALM=KERBER.TEST --build-arg SAMBA_DOMAIN=KERBER -t samba-kerber-dc:latest .
+      - name: samba-realtrust-gate (samba-tool trust + reverse PAC SID)
+        run: ./scripts/samba-realtrust-gate.sh
+        env:
+          SAMBA_AD_IMAGE: samba-ad-dc:latest
+          SAMBA_KERBER_IMAGE: samba-kerber-dc:latest
+      - name: Build Heimdal 7.8 image (harness/heimdal)
+        run: docker build -f harness/heimdal/Dockerfile -t kerber-rust-heimdal-kdc:latest .
+      - name: heimdal-gate (Heimdal 7.8 bidirectional)
+        run: ./scripts/heimdal-gate.sh

@@ -17,7 +17,13 @@ echo "{\"event\":\"harness.launch\",\"correlation_id\":\"${CORRELATION_ID}\",\"c
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-mit-kdc"
 
-docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
+# CI docker-loads a cached image and sets KERBER_SKIP_MIT_BUILD=1.
+# Unset locally so a stale tag cannot skip a Dockerfile change.
+if [ "${KERBER_SKIP_MIT_BUILD:-}" = "1" ] && docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo "{\"event\":\"harness.image\",\"correlation_id\":\"${CORRELATION_ID}\",\"component\":\"harness\",\"outcome\":\"ok\",\"image\":\"${IMAGE}\",\"source\":\"present\"}"
+else
+    docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
+fi
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" \
     -p 88:88/tcp -p 88:88/udp \

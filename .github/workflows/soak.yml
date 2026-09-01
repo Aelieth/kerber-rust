@@ -8,9 +8,27 @@ on:
 jobs:
   soak:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: /tmp/kerber-rust-mit-kdc.tar
+          key: mit-kdc-1.22.2-${{ hashFiles('harness/Dockerfile', 'harness/krb5.conf', 'harness/kdc.conf', 'harness/kadm5.acl', 'harness/krb5-sha2.conf', 'harness/entrypoint.sh') }}
+      - name: Load cached MIT image or docker build
+        run: |
+          set -euo pipefail
+          tar=/tmp/kerber-rust-mit-kdc.tar
+          image=kerber-rust-mit-kdc:1.22.2
+          if [ -f "$tar" ]; then
+            docker load -i "$tar"
+            echo "KERBER_SKIP_MIT_BUILD=1" >> "$GITHUB_ENV"
+          else
+            docker build -f harness/Dockerfile -t "$image" .
+            docker save "$image" -o "$tar"
+          fi
       - name: Scratch dir
         run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
       - name: Build MIT harness image
