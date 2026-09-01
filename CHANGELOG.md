@@ -29,6 +29,10 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   `krb5-kvno --disable-transited-check` is the bit-26 client (MIT
   `kvno` cannot set the bit). Gate: `scripts/capaths-transit-gate.sh`.
 
+- **G9 U-pass U2 (MIT-gated).** DOMAIN-X500-COMPRESS joins on the
+  unescaped field (MIT `chk_trans.c` `maybe_join`): `X.COM,C\.` →
+  `X.COM,C.X.COM`. Honest `EX.COM,B.` is unchanged. Comma cap stays.
+
 - **G9 S-pass (MIT-gated).** A present file whose nested `include`
   names a missing target is an error even on colon-split
   `KRB5_CONFIG` merge; a missing top-level path still skips.

@@ -1000,49 +1000,31 @@ fn expand_domain_x500(raw: &[u8]) -> Vec<String> {
     let mut last = String::new();
     let mut cur = String::new();
     let mut escaped = false;
-    let mut lead_escaped = false;
-    let mut trail_escaped = false;
     for c in s.chars() {
         if escaped {
-            if cur.is_empty() {
-                lead_escaped = true;
-            }
-            trail_escaped = true;
             cur.push(c);
             escaped = false;
             continue;
         }
         match c {
             '\\' => escaped = true,
-            ',' => {
-                take_x500_comp(&mut out, &mut last, &mut cur, lead_escaped, trail_escaped);
-                lead_escaped = false;
-                trail_escaped = false;
-            }
+            ',' => take_x500_comp(&mut out, &mut last, &mut cur),
             ' ' if cur.is_empty() => last.clear(),
-            _ => {
-                trail_escaped = false;
-                cur.push(c);
-            }
+            _ => cur.push(c),
         }
     }
-    take_x500_comp(&mut out, &mut last, &mut cur, lead_escaped, trail_escaped);
+    take_x500_comp(&mut out, &mut last, &mut cur);
     out
 }
 
-fn take_x500_comp(
-    out: &mut Vec<String>,
-    last: &mut String,
-    cur: &mut String,
-    lead_escaped: bool,
-    trail_escaped: bool,
-) {
+fn take_x500_comp(out: &mut Vec<String>, last: &mut String, cur: &mut String) {
     if cur.is_empty() {
         return;
     }
-    let expanded = if cur.starts_with('/') && !lead_escaped {
+    // MIT chk_trans.c maybe_join: join on the unescaped field.
+    let expanded = if cur.starts_with('/') {
         format!("{last}{cur}")
-    } else if cur.ends_with('.') && !trail_escaped {
+    } else if cur.ends_with('.') {
         format!("{cur}{last}")
     } else {
         cur.clone()
@@ -1238,8 +1220,8 @@ mod tests {
         };
         assert_eq!(
             dot.realms(),
-            vec!["X.COM".to_string(), "C.".to_string()],
-            "escaped trailing . is a literal hop, not a suffix join"
+            vec!["X.COM".to_string(), "C.X.COM".to_string()],
+            "MIT maybe_join: escaped trailing . still suffix-joins"
         );
 
         let slash = TransitedEncoding {
@@ -1248,8 +1230,8 @@ mod tests {
         };
         assert_eq!(
             slash.realms(),
-            vec!["X.COM".to_string(), "/Y".to_string()],
-            "escaped leading / is a literal hop, not a prefix join"
+            vec!["X.COM".to_string(), "X.COM/Y".to_string()],
+            "MIT maybe_join: escaped leading / still prefix-joins"
         );
 
         let join = TransitedEncoding {
