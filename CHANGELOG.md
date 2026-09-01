@@ -210,6 +210,11 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   the FAST reply-key base from PA-ETYPE-INFO2 (RFC 6113 / RFC 8009
   etype 20), not `preferred()[0]` (aes256-sha1).
   `scripts/rust-kinit-fast-gate.sh` is fail-red on `mit-extra`.
+  KCM `GET_CRED_LIST` rejects a hostile count with `InvalidData`.
+  Store is INITIALIZE+STORE (no REPLACE probe); `kvno` does not
+  `SET_DEFAULT_CACHE`. Socket path honors `kcm_socket` / `KCM_SOCKET`.
+  `kcm-opcode-gate.sh` value-asserts F43/F42 opcodes on a scheduled
+  workflow. R6 SSSD `krb5_child` renewal stays ungated.
 
 - `klist` flag letters are MIT order `F f P p D d i R I H A T O a`
   (anonymous `a`); it prints `renew until` in local time and

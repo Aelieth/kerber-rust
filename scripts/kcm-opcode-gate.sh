@@ -53,9 +53,9 @@ probe_one() {
         -e "KCM_KRB5_NVR=$krb5" -e "KCM_SSSD_NVR=$kcm" \
         "$name" python3 /usr/local/bin/kcm-probe-opcodes.py | tee "$out"
     docker rm -f "$name" >/dev/null 2>&1 || true
-    grep -q '^GET_CRED_LIST=' "$out"
-    grep -q '^REPLACE=' "$out"
-    grep -q '^RETRIEVE=' "$out"
+    grep -qx 'GET_CRED_LIST=ok' "$out"
+    grep -qx 'RETRIEVE=KRB5_FCC_INTERNAL' "$out"
+    grep -qx 'REPLACE=KRB5_FCC_INTERNAL' "$out"
 }
 
 probe_one f43 43 "$F43_DIGEST" "$SCRATCH/sssd-kcm-opcodes-f43.log"

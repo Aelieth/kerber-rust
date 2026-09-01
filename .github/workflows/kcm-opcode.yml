@@ -1,0 +1,17 @@
+name: kcm-opcode
+
+on:
+  schedule:
+    - cron: "18 7 * * *"
+  workflow_dispatch:
+
+jobs:
+  kcm-opcode:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Scratch dir
+        run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
+      - name: kcm-opcode-gate (F43/F42 sssd-kcm value-assert)
+        run: ./scripts/kcm-opcode-gate.sh

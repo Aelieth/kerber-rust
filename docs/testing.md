@@ -75,8 +75,13 @@ G8b: `kinit -kt` clustering, `klist -s` vs MIT `check_ccache`,
 list + `F`). `sssd-renew-gate` / `kit-conformance-gate` /
 `gssproxy-gate` / `nfs-krb5p-gate` honest **exit 2** until vendored.
 `scripts/kcm-gate.sh` is the G8c live sssd-kcm oracle (MIT `klist`
-names `user@KERBER.TEST`); verdict [`kcm-nfs-verdict.md`](kcm-nfs-verdict.md)
-(FILE stays until NFS cells run).
+names `user@KERBER.TEST`); socket path is `KCM_SOCKET`, else
+`[libdefaults] kcm_socket`, else `/var/run`→`/run`. Empty-residual
+`kinit -c KCM:` re-INITIALIZEs the default (not MIT `krb5_cc_new_unique`).
+`scripts/kcm-opcode-gate.sh` value-asserts F43/F42 opcodes on the
+scheduled `kcm-opcode` workflow. Verdict [`kcm-nfs-verdict.md`](kcm-nfs-verdict.md)
+(FILE stays until NFS cells run). R6 SSSD `krb5_child` renewal stays
+exit 2 (image is socket-only).
 
 Stage 5: `scripts/kdc-gate.sh` copies the Rust `krb5-kdc` binary into a
 client-only MIT 1.22.2 container, binds 127.0.0.1:88 (fallback 8888),
@@ -246,7 +251,11 @@ when that oracle is absent.
   `forwardable` + `default_tkt_enctypes`. In CI (MIT harness).
 - `scripts/sssd-renew-gate.sh` / `kit-conformance-gate.sh` /
   `gssproxy-gate.sh` / `nfs-krb5p-gate.sh` — honest **exit 2** until the
-  Fedora/kit/NFS oracles are vendored (CI treats 2 as skip).
+  Fedora/kit/NFS oracles are vendored (CI treats 2 as skip). R6
+  SSSD-side `krb5_child` renewal is still ungated.
+- `scripts/kcm-opcode-gate.sh` — live F43/F42 `sssd_kcm`; asserts
+  `GET_CRED_LIST=ok` and `RETRIEVE`/`REPLACE`=`KRB5_FCC_INTERNAL`.
+  Scheduled/dispatch (`kcm-opcode.yml`), not per-push.
 - `scripts/postdate-gate.sh` — MIT `kinit -s` is INVALID (`i`), `kvno`
   is TKT_NYV; `kinit -v` after starttime is usable; `-allow_postdated`
   is CANNOT_POSTDATE. In CI.

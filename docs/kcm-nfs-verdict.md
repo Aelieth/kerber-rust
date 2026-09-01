@@ -56,7 +56,8 @@ To abandon KCM later: leave kit on FILE; Rust `KCM:` resolve can stay
 
 ## Logs
 
-`scripts/kcm-opcode-gate.sh` (F43/F42 NVRs + opcode yes/no).
+`scripts/kcm-opcode-gate.sh` (F43/F42 NVRs; `GET_CRED_LIST=ok`,
+`RETRIEVE`/`REPLACE`=`KRB5_FCC_INTERNAL`).
 `scripts/kcm-gate.sh` (MIT `klist` principal names, kswitch, restart,
 re-prime, kdestroy). `scripts/nfs-krb5p-gate.sh` /
 `gssproxy-gate.sh` / `kit-conformance-gate.sh` exit 2.

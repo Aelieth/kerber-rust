@@ -43,6 +43,7 @@ NIGHTLY_BLOCKING = (
     "samba-crossrealm-gate.sh",
     "samba-realtrust-gate.sh",
     "heimdal-gate.sh",
+    "kcm-opcode-gate.sh",
 )
 
 TIMEOUT_JOBS = (

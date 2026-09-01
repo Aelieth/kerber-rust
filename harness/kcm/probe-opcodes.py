@@ -131,14 +131,16 @@ def main() -> int:
         ),
     )
     answers = {}
+    codes = {}
     for label, op, rest in probes:
         c, b = kcm_call(s, req(op, rest))
         ans = classify(c)
         answers[label] = ans
+        codes[label] = c
         print(f"{label} opcode={op} code={c} name={_code_name(c)} impl={ans} body_len={len(b)}")
     s.close()
     for label in ("RETRIEVE", "GET_CRED_LIST", "REPLACE"):
-        print(f"{label}={answers[label]}")
+        print(f"{label}={_code_name(codes[label])}")
     return 0
 
 
