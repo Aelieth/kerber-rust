@@ -21,6 +21,7 @@ mod ccmarshal;
 #[cfg_attr(not(feature = "diff"), allow(dead_code))]
 mod diff;
 mod error;
+mod kcm;
 mod keytab;
 mod preauth;
 mod replay;
@@ -56,6 +57,10 @@ pub use diff::{
     compare_preauth_e_data, compare_stable_rep, decode_enc_kdc_rep, stable_krb_error, stable_rep,
 };
 pub use error::Error;
+pub use kcm::{
+    KCM_SOCKET_DEFAULT, kcm_cache_names, kcm_destroy, kcm_load, kcm_socket_path, kcm_store,
+    kcm_switch, kcm_switch_principal,
+};
 pub use keytab::{Keytab, KeytabEntry, KeytabSlot};
 pub use preauth::{
     apply_strengthen, armor_key, attach_fast, build_fast_armor, fx_fast_padata, pa_for_user,

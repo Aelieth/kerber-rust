@@ -33,6 +33,7 @@ FAIL_RED_PER_PUSH = (
     "ktutil-gate.sh",
     "kadmin-local-gate.sh",
     "rust-kpasswd-mit-gate.sh",
+    "kcm-gate.sh",
 )
 
 FAST_CLIENT = "rust-kinit-fast-gate.sh"

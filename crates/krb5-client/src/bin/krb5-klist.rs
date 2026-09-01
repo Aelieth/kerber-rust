@@ -58,6 +58,8 @@ fn cache_label(spec: &CcSpec) -> String {
         CcSpec::File(p) => format!("FILE:{}", p.display()),
         CcSpec::Memory(n) => format!("MEMORY:{n}"),
         CcSpec::Dir(r) => dir_display_name(r).unwrap_or_else(|_| format!("DIR:{r}")),
+        CcSpec::Kcm(n) if n.is_empty() => "KCM:".to_owned(),
+        CcSpec::Kcm(n) => format!("KCM:{n}"),
     }
 }
 

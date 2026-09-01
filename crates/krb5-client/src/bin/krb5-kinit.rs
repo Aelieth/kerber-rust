@@ -185,8 +185,10 @@ mod tests {
         let e = resolve_ccspec(Some("KEYRING:user:foo")).unwrap_err();
         assert_eq!(e, krb5_config::KRB5_CC_UNKNOWN_TYPE);
         assert!(!e.contains("G8"), "{e}");
-        let e = resolve_ccspec(Some("KCM:")).unwrap_err();
-        assert_eq!(e, krb5_config::KRB5_CC_UNKNOWN_TYPE);
+        assert_eq!(
+            resolve_ccspec(Some("KCM:")).unwrap(),
+            krb5_config::CcSpec::Kcm(String::new())
+        );
         let e = resolve_ccspec(Some("NOTATYPE:x")).unwrap_err();
         assert_eq!(e, krb5_config::KRB5_CC_UNKNOWN_TYPE);
     }

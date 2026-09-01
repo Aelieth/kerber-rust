@@ -7,7 +7,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use krb5_config::{CcSpec, resolve_ccspec};
-use krb5_protocol::{FileCcache, dir_subsidiaries, dir_switch};
+use krb5_protocol::{FileCcache, dir_subsidiaries, dir_switch, kcm_switch, kcm_switch_principal};
 
 fn main() {
     let mut ccname = None::<String>;
@@ -53,14 +53,18 @@ fn run(ccname: Option<&str>, princ: Option<&str>) -> Result<(), String> {
     match spec {
         CcSpec::Dir(r) if r.starts_with(':') => dir_switch(&r).map_err(|e| e.to_string()),
         CcSpec::Dir(_) => Err("kswitch -c needs DIR::subsidiary".into()),
-        _ => Err("kswitch requires a DIR collection".into()),
+        CcSpec::Kcm(n) => kcm_switch(&n).map_err(|e| e.to_string()),
+        _ => Err("kswitch requires a DIR or KCM collection".into()),
     }
 }
 
 fn switch_principal(princ: &str) -> Result<(), String> {
     let spec = resolve_ccspec(None)?;
+    if matches!(spec, CcSpec::Kcm(_)) {
+        return kcm_switch_principal(princ).map_err(|e| e.to_string());
+    }
     let CcSpec::Dir(r) = spec else {
-        return Err("kswitch -p requires DIR default ccache".into());
+        return Err("kswitch -p requires DIR or KCM default ccache".into());
     };
     let dirname = r.strip_prefix(':').map_or(r.as_str(), |p| {
         std::path::Path::new(p)

@@ -65,7 +65,8 @@ FILE; Rust `remove_cred` tombstones a MIT-written FILE (`endtime = 0`,
 byte-for-byte. DIR: two MIT `kinit` into `DIR:/tmp/dcc`, MIT
 `kswitch -p` and Rust `krb5-kswitch -c DIR::` agree both ways.
 MEMORY: a MIT FILE is stored and listed in-process. Unbuilt prefixes
-(`KEYRING:`) are `Unknown credential cache type`. DIR list of a missing
+(`KEYRING:`) are `Unknown credential cache type`. `KCM:` talks sssd-kcm
+(`scripts/kcm-gate.sh`). DIR list of a missing
 path does not create `primary`. Committed `tests/traces/ccache-mit-addr-u2u.bin`
 (`kinit -a` + u2u) identity-checks addresses/authdata/`second_ticket`.
 FILE write remains temp+rename (G8b gssproxy/SSSD oracles exit 2).
@@ -73,6 +74,9 @@ G8b: `kinit -kt` clustering, `klist -s` vs MIT `check_ccache`,
 `scripts/knobs-gate.sh` (Heimdal `kdc_timeout` ignored; honored etype
 list + `F`). `sssd-renew-gate` / `kit-conformance-gate` /
 `gssproxy-gate` / `nfs-krb5p-gate` honest **exit 2** until vendored.
+`scripts/kcm-gate.sh` is the G8c live sssd-kcm oracle (MIT `klist`
+names `user@KERBER.TEST`); verdict [`kcm-nfs-verdict.md`](kcm-nfs-verdict.md)
+(FILE stays until NFS cells run).
 
 Stage 5: `scripts/kdc-gate.sh` copies the Rust `krb5-kdc` binary into a
 client-only MIT 1.22.2 container, binds 127.0.0.1:88 (fallback 8888),

@@ -173,8 +173,8 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   etype-0 `X-CACHECONF`). `delete_cred` writes MIT tombstones
   (`endtime = 0`, `authtime = -1`, config realm `X-RMED-CONF:`);
   readers skip them. `FILE`, `MEMORY` (process-global), and `DIR`
-  (`primary` / `tkt` / `DIR::` / `kswitch`) resolve; `KEYRING:` and
-  `KCM:` are unknown through 1.1 / G8c. Unknown critical FAST options
+  (`primary` / `tkt` / `DIR::` / `kswitch`) resolve; `KEYRING:` stays
+  unknown. `KCM:` is G8c (sssd-kcm). Unknown critical FAST options
   are RFC bits 0 and 2–15. Gate: `scripts/ccache-gate.sh`.
 
 - **G8b (in progress).** FAST `hide-client-names` (bit 1) is
@@ -197,6 +197,14 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   `gssproxy-gate` / `nfs-krb5p-gate` / `sssd-renew-gate` honest
   **exit 2** until those oracles are vendored. FILE write stays
   temp+rename.
+
+- **G8c KCM client (sssd-kcm-gated).** `KCM:` is a unix-socket ccache
+  (`GET_CRED_LIST`; `INITIALIZE`+`STORE` because Fedora `sssd-kcm`
+  2.12/2.11 returns `KRB5_FCC_INTERNAL` for `RETRIEVE`/`REPLACE`).
+  `scripts/kcm-gate.sh` asserts MIT 1.22.2 `klist` principal names,
+  `kswitch`, restart persist, re-prime, `kdestroy`. `KEYRING:` stays
+  unknown. NFS/gssproxy/kit cells honest exit 2; fleet default stays
+  FILE (`docs/kcm-nfs-verdict.md`).
 
 - `klist` flag letters are MIT order `F f P p D d i R I H A T O a`
   (anonymous `a`); it prints `renew until` in local time and

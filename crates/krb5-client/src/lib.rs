@@ -13,8 +13,9 @@ use krb5_asn1::decode;
 use krb5_config::CcSpec;
 use krb5_protocol::{
     AsOutcome, AsRequest, AsTicketOpts, FastArmor, KdcAddr, PkinitClient, TgsOutcome, as_exchange,
-    as_exchange_with_keys, dir_cache_path, dir_cache_path_for_store, memory_destroy,
-    memory_retrieve, memory_store, parse_principal_ex, tgs_exchange, tgs_renew,
+    as_exchange_with_keys, dir_cache_path, dir_cache_path_for_store, kcm_destroy, kcm_load,
+    kcm_store, memory_destroy, memory_retrieve, memory_store, parse_principal_ex, tgs_exchange,
+    tgs_renew,
 };
 use krb5_types::{PrincipalName, Ticket};
 use zeroize::Zeroize;
@@ -195,6 +196,7 @@ pub fn load_ccache(spec: &CcSpec) -> Result<FileCcache, Box<dyn std::error::Erro
             let p = dir_cache_path(r)?;
             Ok(FileCcache::parse(&std::fs::read(p)?)?)
         }
+        CcSpec::Kcm(n) => kcm_load(n).map_err(Into::into),
     }
 }
 
@@ -217,6 +219,7 @@ pub fn store_ccache(
             let p = dir_cache_path_for_store(r)?;
             cc.write_file(p).map_err(Into::into)
         }
+        CcSpec::Kcm(n) => kcm_store(n, &cc).map_err(Into::into),
     }
 }
 
@@ -239,6 +242,7 @@ pub fn destroy_ccache(spec: &CcSpec) -> Result<(), Box<dyn std::error::Error + S
             let p = dir_cache_path(r)?;
             krb5_protocol::destroy_secret_file(&p).map_err(Into::into)
         }
+        CcSpec::Kcm(n) => kcm_destroy(n).map_err(Into::into),
     }
 }
 

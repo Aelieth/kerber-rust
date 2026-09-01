@@ -18,6 +18,8 @@ documents otherwise. Per-push `continue-on-error` is only `slo` /
 | --- | --- | --- | --- |
 | `client-gate.sh` | Rust `krb5-kinit` vs MIT `krb5kdc` | MIT `klist` names TGT + `host/testhost.kerber.test`; Rust `klist -f -e` matches MIT flags/etype; `krb5-kvno` service ticket; `kdestroy` then MIT `klist` has no cache; symlink kdestroy refused (target intact); default ccache `/tmp/krb5cc_<uid>`; Rust `kvno` rewrite keeps MIT `klist -C` `config:`; `kinit -kt`; MIT and Rust `klist -s` agree | harness |
 | `ccache-gate.sh` | MIT FILE/DIR/MEMORY vs Rust marshal | MIT-written FILE `parse → to_bytes` identity; committed `kinit -a`+u2u golden identity; DIR list of a missing path does not create `primary`; MIT `krb5_cc_remove_cred` on a Rust FILE and Rust `remove_cred` on a MIT FILE; both `klist` skip tombstones; `klist -C` `config:` kept; DIR `kinit` twice + MIT/`krb5-kswitch` both ways; MEMORY consumes a MIT FILE; `KEYRING:` is `Unknown credential cache type` | harness |
+| `kcm-gate.sh` | Rust `KCM:` vs Fedora `sssd-kcm` + MIT 1.22.2 `klist` | Rust `kinit -c KCM:` then MIT `klist` names `user@KERBER.TEST`; MIT `kinit -c KCM:` then Rust `klist` names the principal; `kswitch` two-principal (GEN_NEW residual); restart persist; re-prime; `kdestroy`; `KEYRING:` still unknown | mit-extra |
+| `kcm-opcode-gate.sh` | running F43/F42 `sssd_kcm` | NVR pin; `GET_CRED_LIST` yes; `RETRIEVE`/`REPLACE` no (`KRB5_FCC_INTERNAL`) | local / image build |
 | `knobs-gate.sh` | kit-like `krb5.conf` vs MIT 1.22.2 and Rust `kinit` | `kdc_timeout`/`max_retries` do not change MIT (or Rust) kinit success; `forwardable` + `default_tkt_enctypes` show `F` and `aes256-cts-hmac-sha1-96` on `klist -f -e` | harness |
 | `kit-conformance-gate.sh` | kit twin 2×2 | `KIT_TWIN` digest logged; **exit 2** if the twin is absent | harness (skip 2) |
 | `gssproxy-gate.sh` | `X-GSSPROXY` FILE entry | **exit 2** until a Fedora/gssproxy oracle is vendored | harness (skip 2) |
@@ -97,7 +99,9 @@ deletion is not guaranteed if marshal length would change. FILE
 stores still append/rewrite via temp+rename (MIT opens `O_APPEND`
 in place); G8b gssproxy/SSSD oracles were unavailable (honest exit 2),
 so the in-place vs temp+rename decision stays **open**. Unknown ccache
-prefixes are `KRB5_CC_UNKNOWN_TYPE` with no FILE fallback. FILE
+prefixes are `KRB5_CC_UNKNOWN_TYPE` with no FILE fallback. `KCM:` is a
+real type (sssd-kcm); `KEYRING:` stays unknown. Fleet default stays FILE
+until NFS `sec=krb5i` cells run — [`kcm-nfs-verdict.md`](kcm-nfs-verdict.md). FILE
 principal and realm octets must be ASCII GeneralString; non-ASCII MIT
 caches fail parse (no silent corruption). DIR resolve does not create
 `primary`.

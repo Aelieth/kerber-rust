@@ -505,6 +505,8 @@ pub enum CcSpec {
     Memory(String),
     /// `DIR:dirname` or `DIR::filepath`.
     Dir(String),
+    /// `KCM:` or `KCM:residual` (sssd-kcm / Heimdal daemon).
+    Kcm(String),
 }
 
 /// `KRB5CCNAME` (FILE: prefix stripped). Non-FILE names are ignored.
@@ -551,6 +553,7 @@ pub fn parse_ccspec(spec: &str) -> Result<CcSpec, String> {
         Some(("FILE", rest)) => Ok(CcSpec::File(PathBuf::from(rest))),
         Some(("MEMORY", rest)) => Ok(CcSpec::Memory(rest.to_owned())),
         Some(("DIR", rest)) => Ok(CcSpec::Dir(rest.to_owned())),
+        Some(("KCM", rest)) => Ok(CcSpec::Kcm(rest.to_owned())),
         Some(_) => Err(KRB5_CC_UNKNOWN_TYPE.to_owned()),
     }
 }
@@ -960,7 +963,8 @@ mod tests {
             parse_ccspec("KEYRING:persistent:1").unwrap_err(),
             KRB5_CC_UNKNOWN_TYPE
         );
-        assert_eq!(parse_ccspec("KCM:").unwrap_err(), KRB5_CC_UNKNOWN_TYPE);
+        assert_eq!(parse_ccspec("KCM:").unwrap(), CcSpec::Kcm(String::new()));
+        assert_eq!(parse_ccspec("KCM:0").unwrap(), CcSpec::Kcm("0".into()));
         assert_eq!(parse_ccspec("JUNK:x").unwrap_err(), KRB5_CC_UNKNOWN_TYPE);
         assert!(!parse_ccspec("KEYRING:x").unwrap_err().contains("G8"));
     }
