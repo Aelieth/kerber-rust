@@ -2298,6 +2298,7 @@ fn same_realm_ticket_sets_transited_policy_checked() {
         "same-realm TGS must set TRANSITED-POLICY-CHECKED when the check ran"
     );
 
+    let skip_opts = KdcOptions::forwardable().with_bit(flag_bit::DISABLE_TRANSITED_CHECK, true);
     let skip = tgs_req_ex(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
@@ -2306,17 +2307,103 @@ fn same_realm_ticket_sets_transited_policy_checked() {
         documented_host(),
         TEST_REALM,
         72,
-        KdcOptions::forwardable().with_bit(flag_bit::DISABLE_TRANSITED_CHECK, true),
+        skip_opts.clone(),
         None,
         Vec::new(),
         pref_etypes(),
     )
     .expect("tgs skip");
-    let skipped = krb5_kdc::issue_tgs(&store, &skip).expect("issue skip");
-    let skip_part = decrypt_ticket_part(&host.key, &skipped.rep.0.ticket).expect("enc skip");
+    match krb5_kdc::issue_tgs(&store, &skip) {
+        Err(Error::Protocol { code, .. }) => assert_eq!(code, err::POLICY),
+        other => panic!("skip + default must be POLICY (12), got {other:?}"),
+    }
+
+    let mut as_renew = as_req(
+        cname.clone(),
+        TEST_REALM,
+        73,
+        Some(vec![pa_enc_timestamp(&user_key()).expect("pa")]),
+    )
+    .unwrap();
+    as_renew.0.req_body.kdc_options = as_renew
+        .0
+        .req_body
+        .kdc_options
+        .with_bit(flag_bit::RENEWABLE, true);
+    let issued_r = krb5_kdc::issue_as(&store, &as_renew).expect("AS renewable");
+    let tgs_tgt = tgs_req_ex(
+        issued_r.rep.0.ticket.clone(),
+        &issued_r.session_key,
+        TEST_REALM,
+        &cname,
+        PrincipalName::krbtgt(TEST_REALM),
+        TEST_REALM,
+        74,
+        KdcOptions::forwardable().with_bit(flag_bit::RENEWABLE, true),
+        None,
+        Vec::new(),
+        pref_etypes(),
+    )
+    .expect("tgs tgt");
+    let tgs_tgt_out = krb5_kdc::issue_tgs(&store, &tgs_tgt).expect("TGS TGT");
+    let tgt_key = store.krbtgt().unwrap().best_key().unwrap();
+    let tgs_tgt_part = decrypt_ticket_part(&tgt_key.key, &tgs_tgt_out.rep.0.ticket).expect("enc");
+    assert!(
+        tgs_tgt_part.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED),
+        "same-realm TGS TGT must carry T before RENEW+skip"
+    );
+    assert!(tgs_tgt_part.flags.renewable());
+    let renew_skip = tgs_req_ex(
+        tgs_tgt_out.rep.0.ticket.clone(),
+        &tgs_tgt_out.session_key,
+        TEST_REALM,
+        &cname,
+        PrincipalName::krbtgt(TEST_REALM),
+        TEST_REALM,
+        75,
+        KdcOptions::forwardable()
+            .with_bit(flag_bit::RENEW, true)
+            .with_bit(flag_bit::DISABLE_TRANSITED_CHECK, true),
+        None,
+        Vec::new(),
+        pref_etypes(),
+    )
+    .expect("renew skip");
+    let renewed = krb5_kdc::issue_tgs(&store, &renew_skip).expect("RENEW skip inherits T");
+    let renewed_part = decrypt_ticket_part(&tgt_key.key, &renewed.rep.0.ticket).expect("enc renew");
+    assert!(
+        renewed_part.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED),
+        "RENEW of a T ticket + skip must keep T"
+    );
+
+    let (mut lax_store, _) = bootstrap_documented().expect("lax");
+    lax_store.policy.reject_bad_transit = false;
+    let issued_lax = issue_tgt(&lax_store, TEST_USER, TEST_USER_PASSWORD, 76);
+    let skip_lax = tgs_req_ex(
+        issued_lax.rep.0.ticket.clone(),
+        &issued_lax.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        77,
+        skip_opts,
+        None,
+        Vec::new(),
+        pref_etypes(),
+    )
+    .expect("tgs skip lax");
+    let skipped =
+        krb5_kdc::issue_tgs(&lax_store, &skip_lax).expect("skip + reject_bad_transit=false");
+    let lax_host = lax_store
+        .get_name(&documented_host())
+        .unwrap()
+        .best_key()
+        .unwrap();
+    let skip_part = decrypt_ticket_part(&lax_host.key, &skipped.rep.0.ticket).expect("enc skip");
     assert!(
         !skip_part.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED),
-        "DISABLE_TRANSITED_CHECK must leave TRANSITED-POLICY-CHECKED off"
+        "skip + reject_bad_transit=false must leave T off"
     );
 }
 

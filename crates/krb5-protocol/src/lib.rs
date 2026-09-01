@@ -75,7 +75,7 @@ pub use safe_priv::{
     unwrap_krb_priv_ex, unwrap_krb_safe, unwrap_krb_safe_ex,
 };
 pub use secret_file::{destroy_secret_file, write_secret_file};
-pub use tgs::{TgsOutcome, referral_hop_realm, tgs_exchange, tgs_renew};
+pub use tgs::{TgsOutcome, referral_hop_realm, tgs_exchange, tgs_exchange_ex, tgs_renew};
 pub use transport::{KDC_PORT, KdcAddr, exchange, exchange_on_tcp, exchange_with_failover};
 
 #[cfg(test)]

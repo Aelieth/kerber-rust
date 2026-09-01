@@ -22,6 +22,13 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **G9 U-pass U1 (MIT-gated).** Default `reject_bad_transit` rejects
+  TGS `DISABLE_TRANSITED_CHECK` as `KDC_ERR_POLICY` (12, `KDC policy
+  rejects request`), matching MIT 1.22.2 `do_tgs_req`. RENEW/VALIDATE
+  of a ticket that already has `T` still inherit it.
+  `krb5-kvno --disable-transited-check` is the bit-26 client (MIT
+  `kvno` cannot set the bit). Gate: `scripts/capaths-transit-gate.sh`.
+
 - **G9 S-pass (MIT-gated).** A present file whose nested `include`
   names a missing target is an error even on colon-split
   `KRB5_CONFIG` merge; a missing top-level path still skips.

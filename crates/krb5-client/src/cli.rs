@@ -346,6 +346,16 @@ pub struct KvnoArgs {
     pub kdc_host: Option<String>,
     /// Service principals.
     pub services: Vec<String>,
+    /// `--disable-transited-check` (gate-only; MIT `kvno` cannot set bit 26).
+    pub disable_transited_check: bool,
+}
+
+fn kvno_longs() -> &'static [LongOpt] {
+    &[LongOpt {
+        name: "disable-transited-check",
+        takes_arg: false,
+        short: None,
+    }]
 }
 
 /// Parse `kvno` arguments after argv0.
@@ -354,9 +364,13 @@ pub struct KvnoArgs {
 ///
 /// Unknown option or missing argument.
 pub fn parse_kvno(args: &[String]) -> Result<KvnoArgs, String> {
-    let (opts, rest) = getopt(args, "c:", &[])?;
+    let (opts, rest) = getopt(args, "c:", kvno_longs())?;
     let mut out = KvnoArgs::default();
     for o in opts {
+        if o.long == Some("disable-transited-check") {
+            out.disable_transited_check = true;
+            continue;
+        }
         match o.flag {
             'c' => out.ccache = o.arg,
             _ => return Err(format!("invalid option -- '{}'", o.flag)),
@@ -480,6 +494,22 @@ mod tests {
         let a = parse_klist(&s(&["-sc", "/tmp/cc"])).unwrap();
         assert!(a.silent);
         assert_eq!(a.ccache.as_deref(), Some("/tmp/cc"));
+    }
+
+    #[test]
+    fn kvno_disable_transited_check_long_opt() {
+        let a = parse_kvno(&s(&[
+            "--disable-transited-check",
+            "-c",
+            "/tmp/cc",
+            "host/x@R",
+        ]))
+        .unwrap();
+        assert!(a.disable_transited_check);
+        assert_eq!(a.ccache.as_deref(), Some("/tmp/cc"));
+        assert_eq!(a.services, vec!["host/x@R".to_string()]);
+        let b = parse_kvno(&s(&["-c", "/tmp/cc", "host/x@R"])).unwrap();
+        assert!(!b.disable_transited_check);
     }
 
     #[test]

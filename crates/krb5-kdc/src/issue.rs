@@ -679,10 +679,13 @@ fn issue_tgs_body(
         &req_realm,
         &transited.realms(),
     );
-    if !skip_transited && !transit_checked && store.policy().reject_bad_transit {
+    // MIT do_tgs_req: skip leaves T unset; default reject_bad_transit
+    // then POLICY. RENEW/VALIDATE keep the header T (get_ticket_flags).
+    let inherited_t = (renew || validate) && enc_tkt.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED);
+    let set_transited_flag = !skip_transited && transit_checked;
+    if !(inherited_t || set_transited_flag) && store.policy().reject_bad_transit {
         return Err(proto(err::POLICY, "transited"));
     }
-    let set_transited_flag = !skip_transited && transit_checked;
     let session = random_key(skey.etype)?;
     let now = KerberosTime::now();
     let authtime;

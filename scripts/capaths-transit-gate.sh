@@ -23,6 +23,7 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-pac-extract
+cargo build -p krb5-client --bin krb5-kvno
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
@@ -35,7 +36,8 @@ trap cleanup EXIT
 
 docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc
 docker cp target/debug/krb5-pac-extract "$NAME":/tmp/krb5-pac-extract
-docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-pac-extract
+docker cp target/debug/krb5-kvno "$NAME":/tmp/krb5-kvno
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-pac-extract /tmp/krb5-kvno
 
 docker exec -i "$NAME" bash -s <<'CONF'
 set -euo pipefail
@@ -139,6 +141,7 @@ kad() {
     KRB5_KDC_PROFILE="\$profile" kadmin.local -r "\$realm" -q "\$*"
 }
 kad /tmp/kdc-A.conf A.TEST "addprinc -pw userpassword user"
+kad /tmp/kdc-A.conf A.TEST "addprinc -randkey host/svc.a.test"
 kad /tmp/kdc-A.conf A.TEST "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_PW} krbtgt/B.TEST@A.TEST"
 kad /tmp/kdc-B.conf B.TEST "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_PW} krbtgt/B.TEST@A.TEST"
 kad /tmp/kdc-B.conf B.TEST "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_PW} krbtgt/C.TEST@B.TEST"
@@ -188,6 +191,71 @@ chase() {
         kvno -c "$cc" host/svc.c.test@C.TEST
 }
 
+kinit_a() {
+    local cc="$1"
+    docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+        sh -c "printf 'userpassword\n' | kinit -c ${cc} user@A.TEST" >/dev/null
+}
+
+# Cache krbtgt/C.TEST via MIT kvno so rust kvno can TGS the dest hop.
+seed_c_tgt() {
+    local cc="$1"
+    kinit_a "$cc"
+    docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+        kvno -c "$cc" krbtgt/C.TEST@C.TEST >/dev/null
+}
+
+# MIT kvno cannot set DISABLE-TRANSITED-CHECK (bit 26).
+skip_kvno() {
+    local cc="$1"
+    local svc="$2"
+    docker exec \
+        -e KRB5_CONFIG=/tmp/client-capaths.conf \
+        -e KRB5_KDC_A_TEST=127.0.0.1:88 \
+        -e KRB5_KDC_B_TEST=127.0.0.1:89 \
+        -e KRB5_KDC_C_TEST=127.0.0.1:90 \
+        "$NAME" /tmp/krb5-kvno --disable-transited-check -c "$cc" "$svc"
+}
+
+expect_skip_policy() {
+    local label="$1"
+    local cc="$2"
+    local svc="$3"
+    set +e
+    local out rc
+    out="$(skip_kvno "$cc" "$svc" 2>&1)"
+    rc=$?
+    set -e
+    echo "$out"
+    if [ "$rc" -eq 0 ]; then
+        echo "$label: skip must be POLICY, got success" >&2
+        exit 1
+    fi
+    echo "$out" | grep -q 'KDC policy rejects request'
+}
+
+expect_skip_accept_t0() {
+    local label="$1"
+    local cc="$2"
+    local svc="$3"
+    local kt="$4"
+    set +e
+    local out rc
+    out="$(skip_kvno "$cc" "$svc" 2>&1)"
+    rc=$?
+    set -e
+    echo "$out"
+    if [ "$rc" -ne 0 ]; then
+        echo "$label: skip + reject_bad_transit=false must succeed" >&2
+        exit 1
+    fi
+    echo "$out" | grep -q "${svc}: kvno ="
+    local dump
+    dump="$(docker exec "$NAME" /tmp/krb5-pac-extract --keytab "$kt" --ccache "$cc" --print-transited)"
+    echo "$dump"
+    echo "$dump" | grep -q '^transited_policy_checked=0$'
+}
+
 echo "==== MIT kvno vs MIT KDCs (permitted) ===="
 set +e
 MIT_CHASE="$(chase /tmp/krb5cc_mit 2>&1)"
@@ -210,6 +278,14 @@ MIT_TR_TYPE="$(echo "$MIT_DUMP" | sed -n 's/^transited_tr_type=//p')"
 MIT_TR_CONTENTS="$(echo "$MIT_DUMP" | sed -n 's/^transited_contents=//p')"
 test "$MIT_TR_TYPE" = "1"
 test "$MIT_TR_CONTENTS" = "B.TEST"
+
+echo "==== MIT skip same-realm default is POLICY ===="
+kinit_a /tmp/krb5cc_mit_skip_a
+expect_skip_policy "MIT A skip" /tmp/krb5cc_mit_skip_a host/svc.a.test@A.TEST
+
+echo "==== MIT skip capaths-permitted default is POLICY ===="
+seed_c_tgt /tmp/krb5cc_mit_skip_d
+expect_skip_policy "MIT C skip" /tmp/krb5cc_mit_skip_d host/svc.c.test@C.TEST
 
 echo "==== MIT C without [capaths] rejects ===="
 docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/mit-c.pid)" 2>/dev/null || true'
@@ -296,6 +372,35 @@ echo "$MIT_LAX_FL" | grep -q T && {
 MIT_LAX_DUMP="$(docker exec "$NAME" /tmp/krb5-pac-extract --keytab /tmp/mit-c.host.kt --ccache /tmp/krb5cc_mit_lax --print-transited)"
 echo "$MIT_LAX_DUMP"
 echo "$MIT_LAX_DUMP" | grep -q '^transited_policy_checked=0$'
+
+echo "==== MIT C capaths + reject_bad_transit=false skip accepts without T ===="
+docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/mit-c.pid)" 2>/dev/null || true'
+for _ in $(seq 1 20); do
+    if docker exec "$NAME" python3 -c "
+import socket
+try:
+    s = socket.create_connection(('127.0.0.1', 90), 0.15)
+    s.close()
+    raise SystemExit(0)
+except OSError:
+    raise SystemExit(1)
+" 2>/dev/null; then
+        sleep 0.25
+        continue
+    fi
+    break
+done
+docker exec \
+    -e KRB5_CONFIG=/tmp/client-capaths.conf \
+    -e KRB5_KDC_PROFILE=/tmp/kdc-C-lax.conf \
+    "$NAME" sh -c "krb5kdc -n -r C.TEST >/tmp/mit-c-skip-lax.log 2>&1 & echo \$! >/tmp/mit-c.pid"
+wait_port 90 || {
+    docker exec "$NAME" cat /tmp/mit-c-skip-lax.log 2>/dev/null || true
+    log "capaths.gate" "error" ',"error":"MIT skip-lax C did not listen"'
+    exit 1
+}
+seed_c_tgt /tmp/krb5cc_mit_skip_b
+expect_skip_accept_t0 "MIT skip lax" /tmp/krb5cc_mit_skip_b host/svc.c.test@C.TEST /tmp/mit-c.host.kt
 
 echo "==== stop MIT KDCs ===="
 docker exec "$NAME" sh -c 'kill -9 $(cat /tmp/mit-a.pid /tmp/mit-b.pid /tmp/mit-c.pid 2>/dev/null) 2>/dev/null || true'
@@ -405,6 +510,14 @@ echo "rust tr_type=${RUST_TR_TYPE} contents=${RUST_TR_CONTENTS}"
 test "$MIT_TR_TYPE" = "$RUST_TR_TYPE"
 test "$MIT_TR_CONTENTS" = "$RUST_TR_CONTENTS"
 
+echo "==== Rust skip same-realm default is POLICY ===="
+kinit_a /tmp/krb5cc_rust_skip_a
+expect_skip_policy "Rust A skip" /tmp/krb5cc_rust_skip_a host/svc.a.test@A.TEST
+
+echo "==== Rust skip capaths-permitted default is POLICY ===="
+seed_c_tgt /tmp/krb5cc_rust_skip_d
+expect_skip_policy "Rust C skip" /tmp/krb5cc_rust_skip_d host/svc.c.test@C.TEST
+
 echo "==== restart C without capaths (rejected path) ===="
 docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/kdc-c.pid)" 2>/dev/null || true'
 sleep 1
@@ -463,6 +576,28 @@ RUST_LAX_DUMP="$(docker exec "$NAME" /tmp/krb5-pac-extract --keytab /tmp/rust-c-
 echo "$RUST_LAX_DUMP"
 echo "$RUST_LAX_DUMP" | grep -q '^transited_policy_checked=0$'
 
+echo "==== Rust C capaths + reject_bad_transit=false skip accepts without T ===="
+docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/kdc-c.pid)" 2>/dev/null || true'
+sleep 1
+docker exec \
+    -e KRB5_CONFIG=/tmp/kdc-c-allow.conf \
+    -e KRB5_KDC_PROFILE=/tmp/kdc-C-lax.conf \
+    -e KRB5_TEST_USER_PASSWORD=userpassword \
+    -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
+    -e KRB5_TEST_REALM=C.TEST \
+    -e KRB5_TEST_FOREIGN_REALM=B.TEST \
+    -e KRB5_TEST_INTERREALM_KEY="$XR_KEY" \
+    -e KRB5_TEST_HOST=svc.c.test \
+    -e KRB5_EXPORT_KEYTAB=/tmp/rust-c-skip-lax.kt \
+    "$NAME" sh -c '/tmp/krb5-kdc --test-realm 127.0.0.1:90 >/tmp/kdc-c-skip-lax.log 2>&1 & echo $! >/tmp/kdc-c.pid'
+wait_listen /tmp/kdc-c-skip-lax.log || {
+    docker exec "$NAME" cat /tmp/kdc-c-skip-lax.log 2>/dev/null || true
+    log "capaths.gate" "error" ',"error":"Rust skip-lax C did not listen"'
+    exit 1
+}
+seed_c_tgt /tmp/krb5cc_rust_skip_b
+expect_skip_accept_t0 "Rust skip lax" /tmp/krb5cc_rust_skip_b host/svc.c.test@C.TEST /tmp/rust-c-skip-lax.kt
+
 log "capaths.gate" "ok" \
-    ",\"path\":\"A.TEST>B.TEST>C.TEST\",\"permitted\":true,\"rejected\":true,\"transited_tr_type\":${MIT_TR_TYPE},\"transited_contents\":\"${MIT_TR_CONTENTS}\",\"transited_policy_checked\":true,\"reject_bad_transit_false\":true"
+    ",\"path\":\"A.TEST>B.TEST>C.TEST\",\"permitted\":true,\"rejected\":true,\"transited_tr_type\":${MIT_TR_TYPE},\"transited_contents\":\"${MIT_TR_CONTENTS}\",\"transited_policy_checked\":true,\"reject_bad_transit_false\":true,\"disable_transited_check\":true"
 exit 0

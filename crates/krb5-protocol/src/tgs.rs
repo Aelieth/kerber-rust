@@ -31,17 +31,34 @@ pub struct TgsOutcome {
 /// # Errors
 ///
 /// Returns transport, crypto, or `KRB-ERROR` failures.
-#[allow(clippy::needless_pass_by_value)]
 pub fn tgs_exchange(
     kdc: &KdcAddr,
     tgt: &AsOutcome,
     sname: PrincipalName,
     realm: &str,
 ) -> Result<TgsOutcome, Error> {
+    tgs_exchange_ex(kdc, tgt, sname, realm, false)
+}
+
+/// Like [`tgs_exchange`], with `DISABLE_TRANSITED_CHECK` on the hop whose
+/// presented TGT is `krbtgt/{realm}` (the service realm). Referral hops
+/// omit the bit so a default MIT KDC does not POLICY the first hop.
+///
+/// # Errors
+///
+/// Returns transport, crypto, or `KRB-ERROR` failures.
+#[allow(clippy::needless_pass_by_value)]
+pub fn tgs_exchange_ex(
+    kdc: &KdcAddr,
+    tgt: &AsOutcome,
+    sname: PrincipalName,
+    realm: &str,
+    disable_transited_check: bool,
+) -> Result<TgsOutcome, Error> {
     let correlation_id = krb5_log::new_correlation_id();
     let _g = krb5_log::enter_correlation(correlation_id.clone());
     let started = Instant::now();
-    let result = tgs_inner(kdc, tgt, &sname, realm);
+    let result = tgs_inner(kdc, tgt, &sname, realm, disable_transited_check);
     let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
     match &result {
         Ok(_) => tracing::info!(
@@ -96,18 +113,17 @@ fn tgs_inner(
     tgt: &AsOutcome,
     sname: &PrincipalName,
     realm: &str,
+    disable_transited_check: bool,
 ) -> Result<TgsOutcome, Error> {
     let mut cur_kdc = kdc.clone();
     let mut cur_tgt = tgt.clone();
     let mut hop_realm = realm.to_owned();
     for _ in 0..8 {
-        let out = tgs_once(
-            &cur_kdc,
-            &cur_tgt,
-            sname.clone(),
-            &hop_realm,
-            tgs_kdc_options(&cur_tgt),
-        )?;
+        let mut opts = tgs_kdc_options(&cur_tgt);
+        if disable_transited_check && cur_tgt.ticket.sname.is_krbtgt_for(realm) {
+            opts = opts.with_bit(flag_bit::DISABLE_TRANSITED_CHECK, true);
+        }
+        let out = tgs_once(&cur_kdc, &cur_tgt, sname.clone(), &hop_realm, opts)?;
         match tgs_hop_decision(sname, &hop_realm, &out)? {
             TgsHop::Done => return Ok(out),
             TgsHop::Referral(foreign) => {

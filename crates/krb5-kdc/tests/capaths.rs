@@ -5,7 +5,8 @@ use krb5_kdc::{
     Acl, Error, PrincipalStore, TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_USER, TEST_USER_PASSWORD,
     as_req, decrypt_ticket_part, pa_enc_timestamp, tgs_req,
 };
-use krb5_types::{PrincipalName, err, flag_bit};
+use krb5_protocol::tgs_req_ex;
+use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
 
 fn realm_store(realm: &str, host: &str) -> (PrincipalStore, Acl, String, PrincipalName) {
     let mut store = PrincipalStore::bootstrap(
@@ -120,6 +121,26 @@ fn three_hop_capaths_accept_and_reject() {
     let contents = String::from_utf8(part.transited.contents.as_ref().to_vec()).unwrap();
     assert_eq!(contents, "B.TEST");
     assert_eq!(part.transited.tr_type, 1);
+
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let skip_req = tgs_req_ex(
+        bc.rep.0.ticket.clone(),
+        &bc.session_key,
+        "A.TEST",
+        &cname,
+        host_c.clone(),
+        "C.TEST",
+        406,
+        KdcOptions::forwardable().with_bit(flag_bit::DISABLE_TRANSITED_CHECK, true),
+        None,
+        Vec::new(),
+        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
+    )
+    .expect("skip tgs");
+    match krb5_kdc::issue_tgs(&c, &skip_req) {
+        Err(Error::Protocol { code, .. }) => assert_eq!(code, err::POLICY),
+        other => panic!("capaths-permitted + skip + default must be POLICY, got {other:?}"),
+    }
 
     c.set_capaths(std::collections::BTreeMap::new());
     let denied = chase_tgs(

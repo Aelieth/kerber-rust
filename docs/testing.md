@@ -259,7 +259,10 @@ when that oracle is absent.
   vs three live MIT 1.22.2 KDCs, then the same chase vs three Rust
   KDCs; EncTicketPart transited (`tr-type` 1, contents `B.TEST`) and
   `TRANSITED_POLICY_CHECKED` match; missing capaths is `KDC policy
-  rejects request` (12). In CI (`mit-extra`).
+  rejects request` (12). `krb5-kvno --disable-transited-check` vs
+  default MIT and Rust is the same string; with
+  `reject_bad_transit=false` the skip is accepted and T is off. In CI
+  (`mit-extra`).
 - `scripts/config-include-gate.sh` — MIT vs Rust on the same
   `include`/`includedir` + colon-split `KRB5_CONFIG` tree: dotted
   `10.conf` is read; two-file scalar first-wins; missing include
@@ -356,8 +359,9 @@ when that oracle is absent.
     tickets; that bit is masked. Any other un-whitelisted flag bit
     fails red. Same-realm TGS sets `TRANSITED_POLICY_CHECKED` (bit 12)
     when the transited check ran, matching MIT; it is not whitelisted.
-    `DISABLE_TRANSITED_CHECK` leaves the flag off. AS-REP TGTs do not
-    set bit 12.
+    Default `reject_bad_transit` rejects `DISABLE_TRANSITED_CHECK` as
+    POLICY (12); `reject_bad_transit=false` accepts with T off.
+    AS-REP TGTs do not set bit 12.
 - `scripts/kprop-gate.sh` — MIT `kprop` of a version-7 dump to
   `krb5-kpropd` on 754 (`kprop5_01` sendauth, KRB-SAFE size, KRB-PRIV
   32768-byte chunks), then MIT `kinit user` against the replica Rust
