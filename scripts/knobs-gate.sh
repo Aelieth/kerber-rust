@@ -15,10 +15,11 @@ if ! docker ps -q --filter "name=^${NAME}$" | grep -q .; then
     exit 1
 fi
 
-cargo build -p krb5-client --bin krb5-kinit --bin krb5-klist -q
+cargo build -p krb5-client --bin krb5-kinit --bin krb5-klist --bin krb5-kvno -q
 docker cp target/debug/krb5-kinit "$NAME":/tmp/krb5-kinit
 docker cp target/debug/krb5-klist "$NAME":/tmp/krb5-klist
-docker exec "$NAME" chmod +x /tmp/krb5-kinit /tmp/krb5-klist
+docker cp target/debug/krb5-kvno "$NAME":/tmp/krb5-kvno
+docker exec "$NAME" chmod +x /tmp/krb5-kinit /tmp/krb5-klist /tmp/krb5-kvno
 
 echo "==== MIT kinit pacing is unchanged by kdc_timeout/max_retries ===="
 docker exec "$NAME" sh -c 'cat >/tmp/heimdal-knobs.conf <<EOF
@@ -150,5 +151,41 @@ RUST_DEF="$(docker exec -e KRB5_CONFIG=/tmp/ccache-none.conf "$NAME" env -u KRB5
 echo "$RUST_DEF"
 test "$(cache_line "$RUST_DEF")" = "FILE:/tmp/krb5cc_${UIDN}"
 
-log "knobs.gate" "ok" ',"kdc_timeout":"ignored","forwardable":true,"default_tkt_enctypes":"aes256-cts-hmac-sha1-96","default_ccache_name":"env>conf>builtin"'
+echo "==== domain_realm longest-suffix + conf proxiable ===="
+docker exec "$NAME" sh -c "cat >/tmp/domain-proxy.conf <<EOF
+[libdefaults]
+    default_realm = KERBER.TEST
+    dns_lookup_kdc = false
+    dns_lookup_realm = false
+    rdns = false
+    ticket_lifetime = 10h
+    proxiable = true
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1
+    }
+[domain_realm]
+    testhost.kerber.test = KERBER.TEST
+    .kerber.test = KERBER.TEST
+EOF"
+echo userpassword | docker exec -i -e KRB5_CONFIG=/tmp/domain-proxy.conf "$NAME" \
+    kinit -c /tmp/krb5cc_dr_mit user@KERBER.TEST
+MIT_KVNO="$(docker exec -e KRB5_CONFIG=/tmp/domain-proxy.conf "$NAME" \
+    kvno -c /tmp/krb5cc_dr_mit host/testhost.kerber.test)"
+echo "$MIT_KVNO"
+echo "$MIT_KVNO" | grep -q 'host/testhost.kerber.test'
+docker exec -e KRB5_CONFIG=/tmp/domain-proxy.conf -e KRB5_PASSWORD=userpassword "$NAME" \
+    /tmp/krb5-kinit -c /tmp/krb5cc_dr_rust user@KERBER.TEST
+RUST_KVNO="$(docker exec -e KRB5_CONFIG=/tmp/domain-proxy.conf "$NAME" \
+    /tmp/krb5-kvno -c /tmp/krb5cc_dr_rust host/testhost.kerber.test)"
+echo "$RUST_KVNO"
+echo "$RUST_KVNO" | grep -q 'host/testhost.kerber.test'
+MIT_P="$(docker exec -e KRB5_CONFIG=/tmp/domain-proxy.conf "$NAME" klist -f -c /tmp/krb5cc_dr_mit)"
+echo "$MIT_P"
+echo "$MIT_P" | awk -F'Flags: ' '/Flags:/{print $2}' | grep -q P
+RUST_P="$(docker exec "$NAME" /tmp/krb5-klist -f -c /tmp/krb5cc_dr_rust)"
+echo "$RUST_P"
+echo "$RUST_P" | awk -F'Flags: ' '/Flags:/{print $2}' | grep -q P
+
+log "knobs.gate" "ok" ',"kdc_timeout":"ignored","forwardable":true,"default_tkt_enctypes":"aes256-cts-hmac-sha1-96","default_ccache_name":"env>conf>builtin","proxiable":true'
 exit 0

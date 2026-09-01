@@ -265,7 +265,7 @@ fn parse_cred_list(body: &[u8]) -> io::Result<Vec<CcacheCred>> {
     let mut i = 4;
     let mut out = Vec::new();
     for _ in 0..count {
-        if i + 4 > body.len() {
+        if 4 > body.len().saturating_sub(i) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "KCM GET_CRED_LIST truncated",
@@ -273,7 +273,7 @@ fn parse_cred_list(body: &[u8]) -> io::Result<Vec<CcacheCred>> {
         }
         let n = u32::from_be_bytes(body[i..i + 4].try_into().unwrap_or([0; 4])) as usize;
         i += 4;
-        if n == 0 || i + n > body.len() {
+        if n == 0 || n > body.len().saturating_sub(i) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "KCM GET_CRED_LIST cred truncated",

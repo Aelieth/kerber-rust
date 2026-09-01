@@ -103,5 +103,35 @@ if ! echo "$TRACE" | grep -Fq 'Decrypted AP-REQ'; then
     exit 1
 fi
 echo "$TRACE" | grep -F 'Decrypted AP-REQ'
-log "fast.client.gate" "ok" ',"mode":"rust-kinit","pa_type":136,"principal":"user@KERBER.TEST"'
+
+echo "==== FAST immediate AS-REP (no +requires_preauth) ===="
+docker exec "$NAME" sh -c "kadmin.local -q 'addprinc -pw userpassword nopreauth' >/tmp/g9-nopreauth-add.out 2>&1" || true
+docker exec "$NAME" sh -c "kadmin.local -q 'modprinc -requires_preauth nopreauth' >/tmp/g9-nopreauth-mod.out 2>&1"
+docker exec "$NAME" sh -c 'cat /dev/null > /tmp/mit-kdc.trace' || true
+set +e
+OUT2="$(docker exec -e KRB5_PASSWORD=userpassword "$NAME" \
+    /tmp/krb5-kinit --fast --armor-ccache /tmp/krb5cc_armor \
+    -c /tmp/krb5cc_fast_np nopreauth@KERBER.TEST 2>&1)"
+rc2=$?
+set -e
+echo "$OUT2"
+if [ "$rc2" -ne 0 ]; then
+    echo "==== MIT kdc TRACE (nopreauth) ===="
+    docker exec "$NAME" cat /tmp/mit-kdc.trace 2>/dev/null || true
+    docker exec "$NAME" cat /tmp/g9-nopreauth-add.out 2>/dev/null || true
+    docker exec "$NAME" cat /tmp/g9-nopreauth-mod.out 2>/dev/null || true
+    log "fast.client.gate" "error" ',"error":"rust kinit --fast nopreauth failed","rc":'"$rc2"
+    exit 1
+fi
+KLIST2="$(docker exec "$NAME" klist -c /tmp/krb5cc_fast_np 2>/dev/null || true)"
+echo "$KLIST2"
+echo "$KLIST2" | grep -q 'nopreauth@KERBER.TEST'
+TRACE2="$(docker exec "$NAME" cat /tmp/mit-kdc.trace 2>/dev/null || true)"
+if ! echo "$TRACE2" | grep -Fq 'Decrypted AP-REQ'; then
+    echo "$TRACE2" >&2
+    log "fast.client.gate" "error" ',"error":"nopreauth FAST without Decrypted AP-REQ TRACE"'
+    exit 1
+fi
+echo "$TRACE2" | grep -F 'Decrypted AP-REQ'
+log "fast.client.gate" "ok" ',"mode":"rust-kinit","pa_type":136,"principal":"user@KERBER.TEST","nopreauth":true'
 exit 0

@@ -76,7 +76,10 @@ list + `F`). `sssd-renew-gate` / `kit-conformance-gate` /
 `gssproxy-gate` / `nfs-krb5p-gate` honest **exit 2** until vendored.
 `scripts/kcm-gate.sh` is the G8c live sssd-kcm oracle (MIT `klist`
 names `user@KERBER.TEST`); socket path is `KCM_SOCKET`, else
-`[libdefaults] kcm_socket`, else `/var/run`→`/run`. Empty-residual
+`[libdefaults] kcm_socket`, else `/var/run`→`/run`. The oracle
+container runs `sssd_kcm` as in-container root (needs
+`/var/lib/sss/secrets`); host isolation is the throwaway container,
+not `useradd 4242`. Empty-residual
 `kinit -c KCM:` re-INITIALIZEs the default (not MIT `krb5_cc_new_unique`).
 `scripts/kcm-opcode-gate.sh` value-asserts F43/F42 opcodes on the
 scheduled `kcm-opcode` workflow. Verdict [`kcm-nfs-verdict.md`](kcm-nfs-verdict.md)
@@ -249,7 +252,8 @@ when that oracle is absent.
   `-allow_renewable` strips `R`; `kinit -p` shows `P`. In CI.
 - `scripts/knobs-gate.sh` — `kdc_timeout`/`max_retries` ignored; honored
   `forwardable` + `default_tkt_enctypes`; `default_ccache_name`
-  env > conf (`%{uid}`) > builtin. In CI (MIT harness).
+  env > conf (`%{uid}`) > builtin; `[domain_realm]` + conf
+  `proxiable`. In CI (MIT harness).
 - `scripts/capaths-transit-gate.sh` — MIT `kvno` A.TEST→B.TEST→C.TEST
   vs three Rust KDCs; permitted capaths issues the host ticket;
   missing capaths is `KDC policy rejects transited path` (28). In CI

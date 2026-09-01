@@ -28,6 +28,13 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   dotfiles; include cycles and missing includes error. `/etc/krb5.conf.d`
   is not invented. Gate: `scripts/config-include-gate.sh`.
 
+- **G9d + P-pass carry-forwards (MIT-gated).** `[domain_realm]`
+  longest-suffix host→realm on `kvno`; conf `proxiable` like
+  `forwardable`. FAST no-`+requires_preauth` SHA-2 leg on
+  `rust-kinit-fast-gate.sh`. KCM `GET_CRED_LIST` length uses
+  saturating remaining-bytes. KCM oracle runs as in-container root
+  (sssd_kcm `/var/lib/sss/secrets`), documented.
+
 - **G9c `[capaths]` transit (MIT-gated).** Incoming foreign-crealm
   TGS checks transited hops against `[capaths]` (`.` = direct) or
   hierarchical derivation; `TRANSITED_POLICY_CHECKED` only on pass;

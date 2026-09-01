@@ -74,6 +74,8 @@ pub struct Krb5Conf {
     pub default_tgs_enctypes: Vec<String>,
     /// `forwardable`.
     pub forwardable: bool,
+    /// `proxiable`.
+    pub proxiable: bool,
     /// `ticket_lifetime` seconds.
     pub ticket_lifetime: Option<u64>,
     /// `renew_lifetime` seconds.
@@ -196,6 +198,12 @@ impl Krb5Conf {
         Ok(conf)
     }
 
+    /// Longest-suffix `[domain_realm]` map (MIT hostrealm profile).
+    #[must_use]
+    pub fn realm_for_host(&self, host: &str) -> Option<&str> {
+        host_to_realm(&self.domain_realm, host)
+    }
+
     /// KDCs for `realm`, possibly via DNS SRV when enabled.
     ///
     /// # Errors
@@ -311,6 +319,24 @@ fn valid_include_name(name: &str) -> bool {
     }
     name.bytes()
         .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+fn host_to_realm<'a>(map: &'a BTreeMap<String, String>, host: &str) -> Option<&'a str> {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if let Some(r) = map.get(&host) {
+        return Some(r.as_str());
+    }
+    let mut rest = host.as_str();
+    while let Some((_, suffix)) = rest.split_once('.') {
+        if let Some(r) = map.get(&format!(".{suffix}")) {
+            return Some(r.as_str());
+        }
+        if let Some(r) = map.get(suffix) {
+            return Some(r.as_str());
+        }
+        rest = suffix;
+    }
+    None
 }
 
 fn take_first(seen: &mut BTreeSet<String>, key: &str) -> bool {
@@ -494,6 +520,7 @@ fn parse_libdefaults(conf: &mut Krb5Conf, seen: &mut BTreeSet<String>, line: &st
             conf.default_tgs_enctypes = split_ws(&v);
         }
         "forwardable" if take_first(seen, "forwardable") => conf.forwardable = truthy(&v),
+        "proxiable" if take_first(seen, "proxiable") => conf.proxiable = truthy(&v),
         "ticket_lifetime" if take_first(seen, "ticket_lifetime") => {
             conf.ticket_lifetime = parse_duration_secs(&v);
         }
@@ -1150,6 +1177,25 @@ mod tests {
         assert_eq!(discovered[0].host, "127.0.0.1");
         assert_eq!(discovered[0].port, 88);
         assert_eq!(c.domain_realm[".kerber.test"], "KERBER.TEST");
+        assert_eq!(c.realm_for_host("app.kerber.test"), Some("KERBER.TEST"));
+        assert_eq!(c.realm_for_host("kerber.test"), None);
+        let mapped = Krb5Conf::parse(
+            r"
+[domain_realm]
+    testhost.kerber.test = EXACT.TEST
+    .kerber.test = DOT.TEST
+    kerber.test = BARE.TEST
+    .test = SHORT.TEST
+",
+        )
+        .unwrap();
+        assert_eq!(
+            mapped.realm_for_host("testhost.kerber.test"),
+            Some("EXACT.TEST")
+        );
+        assert_eq!(mapped.realm_for_host("app.kerber.test"), Some("DOT.TEST"));
+        assert_eq!(mapped.realm_for_host("kerber.test"), Some("BARE.TEST"));
+        assert_eq!(mapped.realm_for_host("other.test"), Some("SHORT.TEST"));
     }
 
     #[test]
@@ -1176,6 +1222,9 @@ mod tests {
         assert!(!c.rdns);
         assert!(!c.kdc_timesync);
         assert!(c.forwardable);
+        assert!(!c.proxiable);
+        let px = Krb5Conf::parse("[libdefaults]\n    proxiable = true\n").unwrap();
+        assert!(px.proxiable);
         assert_eq!(c.ticket_lifetime, Some(10 * 3600));
         assert_eq!(c.renew_lifetime, Some(7 * 86400));
         assert_eq!(c.permitted_enctypes.len(), 2);

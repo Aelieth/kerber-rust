@@ -85,7 +85,9 @@ fn main() {
         forwardable: args
             .forwardable
             .unwrap_or_else(|| conf.as_ref().is_none_or(|c| c.forwardable)),
-        proxiable: args.proxiable.unwrap_or(false),
+        proxiable: args
+            .proxiable
+            .unwrap_or_else(|| conf.as_ref().is_none_or(|c| c.proxiable)),
         addresses: None,
     };
     if args.addresses == Some(true) {

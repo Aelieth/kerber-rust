@@ -92,10 +92,16 @@ fn run(spec: &krb5_config::CcSpec, host: &str, service: &str) -> Result<(), Stri
         parse_principal(service)?
     } else {
         let parts: Vec<&str> = service.split('/').collect();
+        let srealm = parts
+            .get(1)
+            .and_then(|h| {
+                krb5_config::load_krb5_conf().and_then(|c| c.realm_for_host(h).map(str::to_owned))
+            })
+            .unwrap_or_else(|| crealm.clone());
         (
             PrincipalName::try_new(PrincipalName::NT_PRINCIPAL, parts)
                 .map_err(|e| e.to_string())?,
-            crealm,
+            srealm,
         )
     };
     let addr = if let Some((h, p)) = host.rsplit_once(':') {
