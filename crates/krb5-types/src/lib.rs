@@ -960,9 +960,12 @@ impl TransitedEncoding {
     }
 
     /// Realm names in `contents`. `tr-type` 1 is RFC 4120 §3.3.3.2
-    /// DOMAIN-X500-COMPRESS (MIT `chk_trans.c` `maybe_join`): a field ending
-    /// in `.` takes the previous name as suffix; a field starting with `/`
-    /// takes it as prefix. Encode stays uncompressed ([`Self::from_realms`]).
+    /// DOMAIN-X500-COMPRESS. MIT-verified (`chk_trans.c` `maybe_join`):
+    /// join on the unescaped field (trailing `.` suffix, leading `/`
+    /// prefix), including an escaped marker. More than 256 commas
+    /// yields a single `"\0"` hop, the analogue of MIT `MAXLEN` —
+    /// `do_tgs_req` collapses that failure to POLICY. Encode stays
+    /// uncompressed ([`Self::from_realms`]).
     #[must_use]
     pub fn realms(&self) -> Vec<String> {
         expand_domain_x500(self.contents.as_ref())
@@ -982,7 +985,7 @@ impl TransitedEncoding {
 
 /// Cap on comma-separated transited fields. Far above any real path;
 /// over this, expansion is skipped and a poison hop is returned so the
-/// transit check cannot match.
+/// transit check cannot match a legitimate realm.
 const MAX_TRANSIT_REALMS: usize = 256;
 
 fn expand_domain_x500(raw: &[u8]) -> Vec<String> {
@@ -1210,6 +1213,13 @@ mod tests {
         assert_eq!(hops.len(), 200);
         assert_eq!(hops[0], "X.COM");
         assert!(hops.iter().all(|h| h != "\0"));
+
+        let dots = TransitedEncoding {
+            tr_type: 1,
+            contents: OctetString::from(b"A.,".repeat(20_000)),
+        };
+        let hops = dots.realms();
+        assert_eq!(hops.as_slice(), ["\0"]);
     }
 
     #[test]

@@ -31,6 +31,17 @@ uses a per-context sequence window in addition to the AP-REQ cache.
 timing. There is no injectable clock; replay windows use
 `std::time::Instant` plus RFC 4120 authenticator `ctime`/`cusec`.
 
+## Documented deviations from MIT 1.22.2
+
+These are deliberate and fail closed (Rust rejects or bounds where
+MIT would accept or grow). They are not laxer than MIT.
+
+| Deviation | MIT | Rust | Why |
+| --- | --- | --- | --- |
+| Transited comma cap | 512-byte `MAXLEN` buffer per component (`chk_trans.c`); over-long is `ILL_CR_TKT` collapsed to POLICY | More than 256 commas → one `"\0"` poison hop → POLICY | Same observable POLICY; bounds expansion before join |
+| DOMAIN-X500-COMPRESS join | `maybe_join` on unescaped text (`X.COM,C\.` → `C.X.COM`) | Same (U2) | Match MIT, not RFC-literal escaped markers |
+| Encode-side X.500 RDN compression | MIT `add_to_transited` may emit compressed RDN form | Encode stays uncompressed (`from_realms`) | Deferred; decode still expands MIT compressed contents |
+
 ## Not in this matrix
 
 In-process metrics counters are deferred (logs already carry

@@ -41,6 +41,7 @@ documents otherwise. Per-push `continue-on-error` is only `slo` /
 | `sha2-gate.sh` | MIT `kinit`/`kvno` etype 20 vs Rust KDC | `klist -e` names `aes256-cts-hmac-sha384-192` | mit-extra |
 | `cross-realm-gate.sh` | MIT `kinit` + `kvno host/svc.other.test@OTHER.TEST` | `klist` has `krbtgt/OTHER.TEST` and the host ticket | mit-extra |
 | `capaths-transit-gate.sh` | MIT `kvno` A.TEST→B.TEST→C.TEST vs three MIT KDCs then three Rust KDCs; `krb5-kvno --disable-transited-check` vs both | EncTicketPart transited `tr-type=1` contents `B.TEST` and `T` match MIT KDC; deny: `KDC policy rejects request`; skip+default POLICY; skip+`reject_bad_transit=false` accept T=0 | mit-extra |
+| `capaths-compress-gate.sh` | MIT 4-hop A.EX.COM→EX.COM→B.EX.COM→C.EX.COM | contents `EX.COM,B.`, expanded `EX.COM,B.EX.COM`, T set; deny `KDC policy rejects request` | mit-extra |
 | `kadmin-gate.sh` | MIT `kadmin` vs `krb5-kadmind` 749 | add/cpw/get/list/mod/chrand (dates move)/ktadd/`ktadd -norandkey`/`+lockdown_keys`/purgekeys/`cpw -keepold`/setstr/`renprinc`/del then `kinit extra` | harness |
 | `policy-gate.sh` | MIT `kadmin` addpol/modpol/getpol/`cpw`/delpol + `kinit` | too-short + reuse; minclasses 5; history-N (current inside N); maxfailure-2; lockout duration/interval | harness |
 | `history-mit-gate.sh` | MIT `kadmin.local` history-window on a MIT KDB | history=1 allows A→B→A; history=2 rejects B after A→B→C | harness |

@@ -58,13 +58,17 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   saturating remaining-bytes. KCM oracle runs as in-container root
   (sssd_kcm `/var/lib/sss/secrets`), documented.
 
+- **G9 T-pass (MIT-gated).** `realms()` short-circuits at 256 commas
+  to a single NUL poison hop (Rust analogue of MIT `MAXLEN`; the
+  transit check cannot match a legitimate realm, so the KDC surfaces
+  POLICY). Gate: `scripts/capaths-compress-gate.sh`.
+
 - **G9c `[capaths]` transit (MIT-gated).** Incoming foreign-crealm
   TGS checks transited hops against `[capaths]` (`.` = direct) or
   hierarchical derivation; `TRANSITED_POLICY_CHECKED` only on pass;
   unpermitted hop is `KDC_ERR_POLICY` (12), matching live MIT 1.22.2.
-  Issued
-  transited encoding matches MIT 1.22.2 `add_to_transited` (previous
-  hop, `tr-type` 1, contents `B.TEST` on A→B→C). Gate:
+  Issued transited encoding matches MIT 1.22.2 `add_to_transited`
+  (previous hop, `tr-type` 1, contents `B.TEST` on A→B→C). Gate:
   `scripts/capaths-transit-gate.sh`.
 
 - **G9b default_ccache_name (MIT-gated).** `KRB5CCNAME` beats

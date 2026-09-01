@@ -22,9 +22,10 @@ DER inside the test.
 - Key usage 0 is rejected.
 
 DER-strictness negatives live in `crates/krb5-asn1/tests/der_strict.rs`.
-`fuzz/` has 8 cargo-fuzz targets (DER, AS/TGS/AP, keytab/ccache,
-PKINIT CMS, PAC NDR, SPAKE points, Oakley DH, GSS tokens) seeded from
-`tests/traces/`. CI smokes each target ~60s (`.github/workflows/fuzz.yml`).
+`fuzz/` has 9 cargo-fuzz targets (DER, AS/TGS/AP, keytab/ccache,
+PKINIT CMS, PAC NDR, SPAKE points, Oakley DH, GSS tokens, transited)
+seeded from `tests/traces/` (transited also has `fuzz/corpus/transited/`).
+CI smokes each target ~60s (`.github/workflows/fuzz.yml`).
 
 ## Interop
 
@@ -263,6 +264,10 @@ when that oracle is absent.
   default MIT and Rust is the same string; with
   `reject_bad_transit=false` the skip is accepted and T is off. In CI
   (`mit-extra`).
+- `scripts/capaths-compress-gate.sh` — MIT 4-hop
+  A.EX.COM→EX.COM→B.EX.COM→C.EX.COM; EncTicketPart contents
+  `EX.COM,B.`, expanded `EX.COM,B.EX.COM`, T set; deny is `KDC
+  policy rejects request`. In CI (`mit-extra`).
 - `scripts/config-include-gate.sh` — MIT vs Rust on the same
   `include`/`includedir` + colon-split `KRB5_CONFIG` tree: dotted
   `10.conf` is read; two-file scalar first-wins; missing include

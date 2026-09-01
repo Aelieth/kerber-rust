@@ -44,8 +44,10 @@ fn kinit_obtains_tgt_from_mit_kdc() {
             let bytes = std::fs::read(&cc).unwrap();
             assert_eq!(&bytes[..2], &[0x05, 0x04]);
             println!("live kinit tgt ok tgs={}", r.tgs_out.is_some());
+            let _ = std::fs::remove_file(&cc);
         }
         Err(e) => {
+            let _ = std::fs::remove_file(&cc);
             let msg = e.to_string();
             if msg.contains("transport")
                 || msg.contains("CLIENT_NOT_FOUND")
