@@ -980,36 +980,69 @@ impl TransitedEncoding {
     }
 }
 
+/// Cap on comma-separated transited fields. Far above any real path;
+/// over this, expansion is skipped and a poison hop is returned so the
+/// transit check cannot match.
+const MAX_TRANSIT_REALMS: usize = 256;
+
 fn expand_domain_x500(raw: &[u8]) -> Vec<String> {
+    let mut commas = 0usize;
+    for &b in raw {
+        if b == b',' {
+            commas += 1;
+            if commas > MAX_TRANSIT_REALMS {
+                return vec!["\0".to_owned()];
+            }
+        }
+    }
     let s = String::from_utf8_lossy(raw);
     let mut out = Vec::new();
     let mut last = String::new();
     let mut cur = String::new();
     let mut escaped = false;
+    let mut lead_escaped = false;
+    let mut trail_escaped = false;
     for c in s.chars() {
         if escaped {
+            if cur.is_empty() {
+                lead_escaped = true;
+            }
+            trail_escaped = true;
             cur.push(c);
             escaped = false;
             continue;
         }
         match c {
             '\\' => escaped = true,
-            ',' => take_x500_comp(&mut out, &mut last, &mut cur),
+            ',' => {
+                take_x500_comp(&mut out, &mut last, &mut cur, lead_escaped, trail_escaped);
+                lead_escaped = false;
+                trail_escaped = false;
+            }
             ' ' if cur.is_empty() => last.clear(),
-            _ => cur.push(c),
+            _ => {
+                trail_escaped = false;
+                cur.push(c);
+            }
         }
     }
-    take_x500_comp(&mut out, &mut last, &mut cur);
+    take_x500_comp(&mut out, &mut last, &mut cur, lead_escaped, trail_escaped);
     out
 }
 
-fn take_x500_comp(out: &mut Vec<String>, last: &mut String, cur: &mut String) {
+fn take_x500_comp(
+    out: &mut Vec<String>,
+    last: &mut String,
+    cur: &mut String,
+    lead_escaped: bool,
+    trail_escaped: bool,
+) {
     if cur.is_empty() {
         return;
     }
-    let expanded = if cur.starts_with('/') {
+    let expanded = if cur.starts_with('/') && !lead_escaped {
         format!("{last}{cur}")
-    } else if cur.ends_with('.') {
+    } else if cur.ends_with('.') && !trail_escaped {
         format!("{cur}{last}")
     } else {
         cur.clone()
@@ -1170,6 +1203,63 @@ mod tests {
                 "WASHINGTON.EDU".to_string(),
                 "CS.WASHINGTON.EDU".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn transited_x500_overlong_is_bounded_and_poisoned() {
+        let spam = TransitedEncoding {
+            tr_type: 1,
+            contents: OctetString::from(vec![b','; 20_000]),
+        };
+        let hops = spam.realms();
+        assert_eq!(
+            hops.len(),
+            1,
+            "overlong must be one poison hop, got {hops:?}"
+        );
+        assert_eq!(hops[0], "\0");
+
+        let modest = TransitedEncoding {
+            tr_type: 1,
+            contents: OctetString::from("X.COM,".repeat(200).into_bytes()),
+        };
+        let hops = modest.realms();
+        assert_eq!(hops.len(), 200);
+        assert_eq!(hops[0], "X.COM");
+        assert!(hops.iter().all(|h| h != "\0"));
+    }
+
+    #[test]
+    fn transited_x500_escaped_marker_is_literal() {
+        let dot = TransitedEncoding {
+            tr_type: 1,
+            contents: OctetString::from(b"X.COM,C\\.".to_vec()),
+        };
+        assert_eq!(
+            dot.realms(),
+            vec!["X.COM".to_string(), "C.".to_string()],
+            "escaped trailing . is a literal hop, not a suffix join"
+        );
+
+        let slash = TransitedEncoding {
+            tr_type: 1,
+            contents: OctetString::from(b"X.COM,\\/Y".to_vec()),
+        };
+        assert_eq!(
+            slash.realms(),
+            vec!["X.COM".to_string(), "/Y".to_string()],
+            "escaped leading / is a literal hop, not a prefix join"
+        );
+
+        let join = TransitedEncoding {
+            tr_type: 1,
+            contents: OctetString::from(b"X.COM,/Y".to_vec()),
+        };
+        assert_eq!(
+            join.realms(),
+            vec!["X.COM".to_string(), "X.COM/Y".to_string()],
+            "unescaped leading / still prefix-joins"
         );
     }
 
