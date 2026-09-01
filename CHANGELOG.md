@@ -30,7 +30,8 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
 
 - **G9d + P-pass carry-forwards (MIT-gated).** `[domain_realm]`
   longest-suffix host→realm on `kvno`; conf `proxiable` like
-  `forwardable`. FAST no-`+requires_preauth` SHA-2 leg on
+  `forwardable`, and TGS copies `P` from the TGT so `kvno` host
+  tickets are `PT` like MIT. FAST no-`+requires_preauth` SHA-2 leg on
   `rust-kinit-fast-gate.sh`. KCM `GET_CRED_LIST` length uses
   saturating remaining-bytes. KCM oracle runs as in-container root
   (sssd_kcm `/var/lib/sss/secrets`), documented.

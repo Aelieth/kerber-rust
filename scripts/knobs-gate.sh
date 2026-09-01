@@ -182,10 +182,10 @@ echo "$RUST_KVNO"
 echo "$RUST_KVNO" | grep -q 'host/testhost.kerber.test'
 MIT_P="$(docker exec -e KRB5_CONFIG=/tmp/domain-proxy.conf "$NAME" klist -f -c /tmp/krb5cc_dr_mit)"
 echo "$MIT_P"
-echo "$MIT_P" | awk -F'Flags: ' '/Flags:/{print $2}' | grep -q P
+echo "$MIT_P" | awk '/host\/testhost.kerber.test/{p=1;next} p&&/Flags:/{print;exit}' | grep -q P
 RUST_P="$(docker exec "$NAME" /tmp/krb5-klist -f -c /tmp/krb5cc_dr_rust)"
 echo "$RUST_P"
-echo "$RUST_P" | awk -F'Flags: ' '/Flags:/{print $2}' | grep -q P
+echo "$RUST_P" | awk '/host\/testhost.kerber.test/{p=1;next} p&&/Flags:/{print;exit}' | grep -q P
 
 log "knobs.gate" "ok" ',"kdc_timeout":"ignored","forwardable":true,"default_tkt_enctypes":"aes256-cts-hmac-sha1-96","default_ccache_name":"env>conf>builtin","proxiable":true'
 exit 0

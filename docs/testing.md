@@ -253,7 +253,8 @@ when that oracle is absent.
 - `scripts/knobs-gate.sh` — `kdc_timeout`/`max_retries` ignored; honored
   `forwardable` + `default_tkt_enctypes`; `default_ccache_name`
   env > conf (`%{uid}`) > builtin; `[domain_realm]` + conf
-  `proxiable`. In CI (MIT harness).
+  `proxiable` (MIT and Rust `kvno` host tickets both `PT`). In CI
+  (MIT harness).
 - `scripts/capaths-transit-gate.sh` — MIT `kvno` A.TEST→B.TEST→C.TEST
   vs three live MIT 1.22.2 KDCs, then the same chase vs three Rust
   KDCs; EncTicketPart transited (`tr-type` 1, contents `B.TEST`) and

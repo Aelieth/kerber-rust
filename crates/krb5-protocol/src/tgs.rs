@@ -82,6 +82,15 @@ pub fn tgs_renew(kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> {
     )
 }
 
+/// MIT `krb5_get_credentials`: copy F/P from the TGT into TGS-REQ options.
+fn tgs_kdc_options(tgt: &AsOutcome) -> KdcOptions {
+    let mut opts = KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true);
+    if tgt.enc_part.flags.proxiable() {
+        opts = opts.with_bit(flag_bit::PROXIABLE, true);
+    }
+    opts
+}
+
 fn tgs_inner(
     kdc: &KdcAddr,
     tgt: &AsOutcome,
@@ -97,7 +106,7 @@ fn tgs_inner(
             &cur_tgt,
             sname.clone(),
             &hop_realm,
-            KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true),
+            tgs_kdc_options(&cur_tgt),
         )?;
         match tgs_hop_decision(sname, &hop_realm, &out)? {
             TgsHop::Done => return Ok(out),
@@ -453,5 +462,33 @@ mod tests {
             tgs_sname_ok(&flat, &two, &two),
             Err(Error::ReplyMismatch(_))
         ));
+    }
+
+    fn tgt_with_proxiable(on: bool) -> AsOutcome {
+        let out = outcome(
+            "KERBER.TEST",
+            PrincipalName::krbtgt("KERBER.TEST"),
+            "KERBER.TEST",
+        );
+        AsOutcome {
+            ticket: out.ticket,
+            enc_part: EncKdcRepPart {
+                flags: TicketFlags::none().with_bit(flag_bit::PROXIABLE, on),
+                ..out.enc_part
+            },
+            client_key: session(),
+            session_key: session(),
+            cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+            crealm: ascii("KERBER.TEST"),
+        }
+    }
+
+    #[test]
+    fn tgs_options_copy_proxiable_from_tgt() {
+        let with_p = tgs_kdc_options(&tgt_with_proxiable(true));
+        assert!(with_p.bit(flag_bit::PROXIABLE));
+        assert!(with_p.bit(flag_bit::FORWARDABLE));
+        let without = tgs_kdc_options(&tgt_with_proxiable(false));
+        assert!(!without.bit(flag_bit::PROXIABLE));
     }
 }
