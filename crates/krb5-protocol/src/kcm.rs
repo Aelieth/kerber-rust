@@ -218,13 +218,23 @@ fn try_replace(io: &mut KcmIo, name: &str, cc: &FileCcache) -> io::Result<()> {
 }
 
 fn creds_via_list(io: &mut KcmIo, name: &str) -> io::Result<Vec<CcacheCred>> {
-    let body = io.call(OP_GET_CRED_LIST, &zname(name))?;
+    parse_cred_list(&io.call(OP_GET_CRED_LIST, &zname(name))?)
+}
+
+fn parse_cred_list(body: &[u8]) -> io::Result<Vec<CcacheCred>> {
     if body.len() < 4 {
         return Ok(Vec::new());
     }
     let count = u32::from_be_bytes(body[0..4].try_into().unwrap_or([0; 4])) as usize;
+    let rest = body.len() - 4;
+    if count > rest / 4 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "KCM GET_CRED_LIST count",
+        ));
+    }
     let mut i = 4;
-    let mut out = Vec::with_capacity(count);
+    let mut out = Vec::new();
     for _ in 0..count {
         if i + 4 > body.len() {
             return Err(io::Error::new(
@@ -234,7 +244,7 @@ fn creds_via_list(io: &mut KcmIo, name: &str) -> io::Result<Vec<CcacheCred>> {
         }
         let n = u32::from_be_bytes(body[i..i + 4].try_into().unwrap_or([0; 4])) as usize;
         i += 4;
-        if i + n > body.len() {
+        if n == 0 || i + n > body.len() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "KCM GET_CRED_LIST cred truncated",
@@ -396,5 +406,20 @@ mod tests {
     fn zname_is_nul_terminated() {
         assert_eq!(KCM_SOCKET_DEFAULT, "/var/run/.heim_org.h5l.kcm-socket");
         assert_eq!(zname("0"), b"0\0");
+    }
+
+    #[test]
+    fn get_cred_list_huge_count_is_invalid_data() {
+        let body = [0xff, 0xff, 0xff, 0xff];
+        match parse_cred_list(&body) {
+            Err(e) => assert_eq!(e.kind(), io::ErrorKind::InvalidData),
+            Ok(_) => panic!("huge GET_CRED_LIST count must be InvalidData"),
+        }
+        assert!(parse_cred_list(&[]).unwrap().is_empty());
+        let truncated = [0, 0, 0, 1, 0, 0, 0, 8, 1, 2, 3];
+        match parse_cred_list(&truncated) {
+            Err(e) => assert_eq!(e.kind(), io::ErrorKind::InvalidData),
+            Ok(_) => panic!("truncated GET_CRED_LIST cred must be InvalidData"),
+        }
     }
 }
