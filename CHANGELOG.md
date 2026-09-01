@@ -28,6 +28,13 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   dotfiles; include cycles and missing includes error. `/etc/krb5.conf.d`
   is not invented. Gate: `scripts/config-include-gate.sh`.
 
+- **G9b default_ccache_name (MIT-gated).** `KRB5CCNAME` beats
+  `[libdefaults] default_ccache_name` beats builtin
+  `FILE:/tmp/krb5cc_%{uid}`. Conf values expand `%{uid}` / `%{USERID}`
+  / `%{euid}` (and `%{null}` / `%{TEMP}` / `%{username}`); unknown
+  tokens fail closed. Env and `-c` are not expanded (MIT). Folded into
+  `scripts/knobs-gate.sh`.
+
 - **G1 faithfulness (MIT-gated).** AS/TGS enforce stored principal
   expiration (`KDC_ERR_NAME_EXP`) before password/key expiration
   (`KDC_ERR_KEY_EXPIRED`); 0 still means never; `PWCHANGE_SERVICE`

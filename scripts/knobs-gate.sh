@@ -83,5 +83,72 @@ echo "$RUST_FE" | grep -q 'Flags:'
 echo "$RUST_FE" | awk -F'Flags: ' '/Flags:/{print $2}' | grep -q F
 echo "$RUST_FE" | grep -q 'aes256-cts-hmac-sha1-96'
 
-log "knobs.gate" "ok" ',"kdc_timeout":"ignored","forwardable":true,"default_tkt_enctypes":"aes256-cts-hmac-sha1-96"'
+echo "==== default_ccache_name env > conf > builtin ===="
+UIDN="$(docker exec "$NAME" id -u)"
+docker exec "$NAME" sh -c "cat >/tmp/ccache-conf.conf <<EOF
+[libdefaults]
+    default_realm = KERBER.TEST
+    dns_lookup_kdc = false
+    dns_lookup_realm = false
+    rdns = false
+    ticket_lifetime = 10h
+    default_ccache_name = FILE:/tmp/g9b_conf_%{uid}
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1
+    }
+EOF"
+docker exec "$NAME" sh -c "cat >/tmp/ccache-none.conf <<EOF
+[libdefaults]
+    default_realm = KERBER.TEST
+    dns_lookup_kdc = false
+    dns_lookup_realm = false
+    rdns = false
+    ticket_lifetime = 10h
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1
+    }
+EOF"
+
+cache_line() {
+    echo "$1" | sed -n 's/^Ticket cache: //p' | head -1
+}
+
+echo userpassword | docker exec -i -e KRB5_CONFIG=/tmp/ccache-conf.conf -e KRB5CCNAME=FILE:/tmp/g9b_env "$NAME" \
+    kinit user@KERBER.TEST
+MIT_ENV="$(docker exec -e KRB5_CONFIG=/tmp/ccache-conf.conf -e KRB5CCNAME=FILE:/tmp/g9b_env "$NAME" klist)"
+echo "$MIT_ENV"
+test "$(cache_line "$MIT_ENV")" = "FILE:/tmp/g9b_env"
+docker exec -e KRB5_CONFIG=/tmp/ccache-conf.conf -e KRB5CCNAME=FILE:/tmp/g9b_env -e KRB5_PASSWORD=userpassword "$NAME" \
+    /tmp/krb5-kinit user@KERBER.TEST
+RUST_ENV="$(docker exec -e KRB5_CONFIG=/tmp/ccache-conf.conf -e KRB5CCNAME=FILE:/tmp/g9b_env "$NAME" /tmp/krb5-klist)"
+echo "$RUST_ENV"
+test "$(cache_line "$RUST_ENV")" = "FILE:/tmp/g9b_env"
+
+docker exec "$NAME" rm -f "/tmp/g9b_conf_${UIDN}"
+echo userpassword | docker exec -i -e KRB5_CONFIG=/tmp/ccache-conf.conf "$NAME" \
+    env -u KRB5CCNAME kinit user@KERBER.TEST
+MIT_CONF="$(docker exec -e KRB5_CONFIG=/tmp/ccache-conf.conf "$NAME" env -u KRB5CCNAME klist)"
+echo "$MIT_CONF"
+test "$(cache_line "$MIT_CONF")" = "FILE:/tmp/g9b_conf_${UIDN}"
+docker exec -e KRB5_CONFIG=/tmp/ccache-conf.conf -e KRB5_PASSWORD=userpassword "$NAME" \
+    env -u KRB5CCNAME /tmp/krb5-kinit user@KERBER.TEST
+RUST_CONF="$(docker exec -e KRB5_CONFIG=/tmp/ccache-conf.conf "$NAME" env -u KRB5CCNAME /tmp/krb5-klist)"
+echo "$RUST_CONF"
+test "$(cache_line "$RUST_CONF")" = "FILE:/tmp/g9b_conf_${UIDN}"
+
+docker exec "$NAME" rm -f "/tmp/krb5cc_${UIDN}"
+echo userpassword | docker exec -i -e KRB5_CONFIG=/tmp/ccache-none.conf "$NAME" \
+    env -u KRB5CCNAME kinit user@KERBER.TEST
+MIT_DEF="$(docker exec -e KRB5_CONFIG=/tmp/ccache-none.conf "$NAME" env -u KRB5CCNAME klist)"
+echo "$MIT_DEF"
+test "$(cache_line "$MIT_DEF")" = "FILE:/tmp/krb5cc_${UIDN}"
+docker exec -e KRB5_CONFIG=/tmp/ccache-none.conf -e KRB5_PASSWORD=userpassword "$NAME" \
+    env -u KRB5CCNAME /tmp/krb5-kinit user@KERBER.TEST
+RUST_DEF="$(docker exec -e KRB5_CONFIG=/tmp/ccache-none.conf "$NAME" env -u KRB5CCNAME /tmp/krb5-klist)"
+echo "$RUST_DEF"
+test "$(cache_line "$RUST_DEF")" = "FILE:/tmp/krb5cc_${UIDN}"
+
+log "knobs.gate" "ok" ',"kdc_timeout":"ignored","forwardable":true,"default_tkt_enctypes":"aes256-cts-hmac-sha1-96","default_ccache_name":"env>conf>builtin"'
 exit 0

@@ -248,7 +248,8 @@ when that oracle is absent.
   start + 7d; then `kinit -R` (endtime moves, `renew until` unchanged);
   `-allow_renewable` strips `R`; `kinit -p` shows `P`. In CI.
 - `scripts/knobs-gate.sh` — `kdc_timeout`/`max_retries` ignored; honored
-  `forwardable` + `default_tkt_enctypes`. In CI (MIT harness).
+  `forwardable` + `default_tkt_enctypes`; `default_ccache_name`
+  env > conf (`%{uid}`) > builtin. In CI (MIT harness).
 - `scripts/config-include-gate.sh` — MIT vs Rust on the same
   `include`/`includedir` + colon-split `KRB5_CONFIG` tree: dotted
   `10.conf` is read; two-file scalar first-wins; missing include

@@ -84,6 +84,8 @@ pub struct Krb5Conf {
     pub max_retries: Option<String>,
     /// `[libdefaults] kcm_socket` (MIT; `KCM_SOCKET` env overrides).
     pub kcm_socket: Option<String>,
+    /// `[libdefaults] default_ccache_name` (MIT parameter expansion).
+    pub default_ccache_name: Option<String>,
     /// Realm → KDC list.
     pub kdcs: BTreeMap<String, Vec<Endpoint>>,
     /// Realm → admin_server.
@@ -477,6 +479,9 @@ fn parse_libdefaults(conf: &mut Krb5Conf, seen: &mut BTreeSet<String>, line: &st
         "kdc_timeout" if take_first(seen, "kdc_timeout") => conf.kdc_timeout = Some(v),
         "max_retries" if take_first(seen, "max_retries") => conf.max_retries = Some(v),
         "kcm_socket" if take_first(seen, "kcm_socket") => conf.kcm_socket = Some(v),
+        "default_ccache_name" if take_first(seen, "default_ccache_name") => {
+            conf.default_ccache_name = Some(v);
+        }
         _ => {}
     }
 }
@@ -662,19 +667,105 @@ pub fn env_ccname() -> Option<PathBuf> {
     std::env::var_os("KRB5CCNAME").and_then(|v| parse_ccname(&v.to_string_lossy()).ok())
 }
 
-/// `-c` flag, else `KRB5CCNAME`, else [`default_ccache_name`] as FILE.
+const BUILTIN_CCACHE: &str = "FILE:/tmp/krb5cc_%{uid}";
+
+/// Expand MIT `default_ccache_name` tokens (`%{uid}` / `%{USERID}` / `%{euid}`).
 ///
 /// # Errors
 ///
-/// [`KRB5_CC_UNKNOWN_TYPE`].
+/// Unknown `%{token}` (MIT fails closed).
+pub fn expand_ccache_params(s: &str) -> Result<String, String> {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(start) = rest.find("%{") {
+        out.push_str(&rest[..start]);
+        rest = &rest[start + 2..];
+        let Some(end) = rest.find('}') else {
+            out.push_str("%{");
+            out.push_str(rest);
+            return Ok(out);
+        };
+        let token = &rest[..end];
+        rest = &rest[end + 1..];
+        out.push_str(&ccache_param(token)?);
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
+fn ccache_param(token: &str) -> Result<String, String> {
+    match token {
+        "uid" | "USERID" => Ok(unix_uid().to_string()),
+        "euid" => Ok(unix_euid().to_string()),
+        "null" => Ok(String::new()),
+        "TEMP" => Ok("/tmp".into()),
+        "username" => Ok(unix_username()),
+        _ => Err(format!("unknown ccache parameter %{{{token}}}")),
+    }
+}
+
+fn unix_uid() -> u32 {
+    #[cfg(unix)]
+    {
+        nix::unistd::Uid::current().as_raw()
+    }
+    #[cfg(not(unix))]
+    {
+        0
+    }
+}
+
+fn unix_euid() -> u32 {
+    #[cfg(unix)]
+    {
+        nix::unistd::Uid::effective().as_raw()
+    }
+    #[cfg(not(unix))]
+    {
+        0
+    }
+}
+
+fn unix_username() -> String {
+    #[cfg(unix)]
+    {
+        nix::unistd::User::from_uid(nix::unistd::Uid::effective())
+            .ok()
+            .flatten()
+            .map(|u| u.name)
+            .unwrap_or_default()
+    }
+    #[cfg(not(unix))]
+    {
+        String::new()
+    }
+}
+
+/// `-c` flag, else `KRB5CCNAME`, else conf `default_ccache_name`, else builtin.
+///
+/// # Errors
+///
+/// [`KRB5_CC_UNKNOWN_TYPE`] or an unknown `%{token}`.
 pub fn resolve_ccspec(flag: Option<&str>) -> Result<CcSpec, String> {
     if let Some(s) = flag {
         return parse_ccspec(s);
     }
-    match std::env::var_os("KRB5CCNAME") {
-        Some(v) => parse_ccspec(&v.to_string_lossy()),
-        None => Ok(CcSpec::File(default_ccache_name())),
+    if let Some(v) = std::env::var_os("KRB5CCNAME") {
+        return parse_ccspec(&v.to_string_lossy());
     }
+    default_ccspec()
+}
+
+/// Conf `default_ccache_name` after token expansion, else builtin FILE.
+///
+/// # Errors
+///
+/// Unknown `%{token}` or [`KRB5_CC_UNKNOWN_TYPE`].
+pub fn default_ccspec() -> Result<CcSpec, String> {
+    let raw = load_krb5_conf()
+        .and_then(|c| c.default_ccache_name)
+        .unwrap_or_else(|| BUILTIN_CCACHE.to_owned());
+    parse_ccspec(&expand_ccache_params(&raw)?)
 }
 
 /// `-c` flag, else `KRB5CCNAME`, else [`default_ccache_name`]. FILE only.
@@ -728,20 +819,10 @@ fn split_cc_type(spec: &str) -> Option<(&str, &str)> {
     Some((ty, rest))
 }
 
-/// MIT `FILE:/tmp/krb5cc_%{uid}` when `KRB5CCNAME` is unset.
-///
-/// `[libdefaults] default_ccache_name` parsing is G9.
+/// Builtin `FILE:/tmp/krb5cc_%{uid}` residual (no conf).
 #[must_use]
 pub fn default_ccache_name() -> PathBuf {
-    #[cfg(unix)]
-    {
-        let uid = nix::unistd::Uid::current().as_raw();
-        PathBuf::from(format!("/tmp/krb5cc_{uid}"))
-    }
-    #[cfg(not(unix))]
-    {
-        PathBuf::from("/tmp/krb5cc_0")
-    }
+    PathBuf::from(format!("/tmp/krb5cc_{}", unix_uid()))
 }
 
 /// `KRB5_CONFIG` path list (colon-split). Missing env is [`None`].
@@ -1078,8 +1159,16 @@ mod tests {
         assert_eq!(c.kdc_timeout.as_deref(), Some("1"));
         assert_eq!(c.max_retries.as_deref(), Some("1"));
         assert!(c.kcm_socket.is_none());
+        assert!(c.default_ccache_name.is_none());
         let sock = Krb5Conf::parse("[libdefaults]\n    kcm_socket = /tmp/kcm.sock\n").unwrap();
         assert_eq!(sock.kcm_socket.as_deref(), Some("/tmp/kcm.sock"));
+        let cc =
+            Krb5Conf::parse("[libdefaults]\n    default_ccache_name = FILE:/tmp/krb5cc_%{uid}\n")
+                .unwrap();
+        assert_eq!(
+            cc.default_ccache_name.as_deref(),
+            Some("FILE:/tmp/krb5cc_%{uid}")
+        );
     }
 
     #[test]
@@ -1092,6 +1181,30 @@ mod tests {
         if uid != 0 {
             assert_ne!(default_ccache_name(), PathBuf::from("/tmp/krb5cc_0"));
         }
+    }
+
+    #[test]
+    fn expand_ccache_params_uid_tokens() {
+        let uid = unix_uid();
+        let euid = unix_euid();
+        assert_eq!(
+            expand_ccache_params("FILE:/tmp/x_%{uid}_%{USERID}_%{euid}").unwrap(),
+            format!("FILE:/tmp/x_{uid}_{uid}_{euid}")
+        );
+        assert_eq!(
+            expand_ccache_params("FILE:/tmp/n_%{null}x").unwrap(),
+            "FILE:/tmp/n_x"
+        );
+        assert!(
+            expand_ccache_params("FILE:/tmp/%{nope}")
+                .unwrap_err()
+                .contains("nope")
+        );
+        let expanded = expand_ccache_params("FILE:/tmp/krb5cc_%{uid}").unwrap();
+        assert_eq!(
+            parse_ccspec(&expanded).unwrap(),
+            CcSpec::File(default_ccache_name())
+        );
     }
 
     #[test]
