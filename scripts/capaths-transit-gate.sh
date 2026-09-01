@@ -104,6 +104,16 @@ cat >/tmp/kdc-c-deny.conf <<EOF
 [libdefaults]
     default_realm = C.TEST
     dns_lookup_kdc = false
+[realms]
+    A.TEST = {
+        kdc = 127.0.0.1:88
+    }
+    B.TEST = {
+        kdc = 127.0.0.1:89
+    }
+    C.TEST = {
+        kdc = 127.0.0.1:90
+    }
 EOF
 CONF
 
@@ -196,6 +206,47 @@ echo "$MIT_DUMP"
 echo "$MIT_DUMP" | grep -q '^transited_policy_checked=1$'
 MIT_TR_TYPE="$(echo "$MIT_DUMP" | sed -n 's/^transited_tr_type=//p')"
 MIT_TR_CONTENTS="$(echo "$MIT_DUMP" | sed -n 's/^transited_contents=//p')"
+test "$MIT_TR_TYPE" = "1"
+test "$MIT_TR_CONTENTS" = "B.TEST"
+
+echo "==== MIT C without [capaths] rejects ===="
+docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/mit-c.pid)" 2>/dev/null || true'
+for _ in $(seq 1 20); do
+    if docker exec "$NAME" python3 -c "
+import socket
+try:
+    s = socket.create_connection(('127.0.0.1', 90), 0.15)
+    s.close()
+    raise SystemExit(0)
+except OSError:
+    raise SystemExit(1)
+" 2>/dev/null; then
+        sleep 0.25
+        continue
+    fi
+    break
+done
+docker exec \
+    -e KRB5_CONFIG=/tmp/kdc-c-deny.conf \
+    -e KRB5_KDC_PROFILE=/tmp/kdc-C.conf \
+    "$NAME" sh -c "krb5kdc -n -r C.TEST >/tmp/mit-c-deny.log 2>&1 & echo \$! >/tmp/mit-c.pid"
+wait_port 90 || {
+    docker exec "$NAME" cat /tmp/mit-c-deny.log 2>/dev/null || true
+    log "capaths.gate" "error" ',"error":"MIT deny C did not listen"'
+    exit 1
+}
+docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+    sh -c "printf 'userpassword\n' | kinit -c /tmp/krb5cc_mit_deny user@A.TEST" >/dev/null
+set +e
+MIT_DENY="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+    kvno -c /tmp/krb5cc_mit_deny host/svc.c.test@C.TEST 2>&1)"
+mit_drc=$?
+set -e
+echo "$MIT_DENY"
+test "$mit_drc" -ne 0
+# Live MIT 1.22.2 prints POLICY ("rejects request") on this deny; error 28
+# is "rejects transited path" (Rust C and the later Rust-deny leg).
+echo "$MIT_DENY" | grep -qE 'KDC policy rejects (transited path|request)'
 
 echo "==== stop MIT KDCs ===="
 docker exec "$NAME" sh -c 'kill -9 $(cat /tmp/mit-a.pid /tmp/mit-b.pid /tmp/mit-c.pid 2>/dev/null) 2>/dev/null || true'
