@@ -249,6 +249,10 @@ when that oracle is absent.
   `-allow_renewable` strips `R`; `kinit -p` shows `P`. In CI.
 - `scripts/knobs-gate.sh` — `kdc_timeout`/`max_retries` ignored; honored
   `forwardable` + `default_tkt_enctypes`. In CI (MIT harness).
+- `scripts/config-include-gate.sh` — MIT vs Rust on the same
+  `include`/`includedir` + colon-split `KRB5_CONFIG` tree: dotted
+  `10.conf` is read; two-file scalar first-wins; missing include
+  fails (does not hang). In CI (MIT harness).
 - `scripts/sssd-renew-gate.sh` / `kit-conformance-gate.sh` /
   `gssproxy-gate.sh` / `nfs-krb5p-gate.sh` — honest **exit 2** until the
   Fedora/kit/NFS oracles are vendored (CI treats 2 as skip). R6

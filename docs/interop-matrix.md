@@ -21,6 +21,7 @@ documents otherwise. Per-push `continue-on-error` is only `slo` /
 | `kcm-gate.sh` | Rust `KCM:` vs Fedora `sssd-kcm` + MIT 1.22.2 `klist` | Rust `kinit -c KCM:` then MIT `klist` names `user@KERBER.TEST`; MIT `kinit -c KCM:` then Rust `klist` names the principal; `kswitch` two-principal (GEN_NEW residual); restart persist; re-prime; `kdestroy`; `KEYRING:` still unknown | mit-extra |
 | `kcm-opcode-gate.sh` | running F43/F42 `sssd_kcm` | NVR pin; `GET_CRED_LIST=ok`; `RETRIEVE`/`REPLACE`=`KRB5_FCC_INTERNAL` | kcm-opcode (scheduled/dispatch) |
 | `knobs-gate.sh` | kit-like `krb5.conf` vs MIT 1.22.2 and Rust `kinit` | `kdc_timeout`/`max_retries` do not change MIT (or Rust) kinit success; `forwardable` + `default_tkt_enctypes` show `F` and `aes256-cts-hmac-sha1-96` on `klist -f -e` | harness |
+| `config-include-gate.sh` | MIT vs Rust `kinit`/`kvno` on `include`/`includedir` + `KRB5_CONFIG` | dotted `10.conf` drop-in; A:B first-wins `default_realm`; missing include fails both sides | harness |
 | `kit-conformance-gate.sh` | kit twin 2×2 | `KIT_TWIN` digest logged; **exit 2** if the twin is absent | harness (skip 2) |
 | `gssproxy-gate.sh` | `X-GSSPROXY` FILE entry | **exit 2** until a Fedora/gssproxy oracle is vendored | harness (skip 2) |
 | `nfs-krb5p-gate.sh` | NFS `sec=krb5i`/`krb5p` | **exit 2** / manual until nfs-klldap-host is vendored | harness (skip 2) |

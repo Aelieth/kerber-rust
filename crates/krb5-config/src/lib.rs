@@ -6,7 +6,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::{SocketAddr, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -167,59 +167,29 @@ impl Krb5Conf {
         }
     }
 
-    /// Parse MIT-style `krb5.conf` text.
+    /// Parse MIT-style `krb5.conf` text (no `include` / `includedir`).
     ///
     /// # Errors
     ///
     /// Returns [`Error::Parse`] on malformed braces.
     pub fn parse(text: &str) -> Result<Self, Error> {
         let mut conf = Self::new();
-        let mut section = String::new();
-        let mut realm: Option<String> = None;
-        for raw in text.lines() {
-            let line = raw.trim();
-            if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
-                continue;
-            }
-            if let Some(s) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-                section = s.trim().to_ascii_lowercase();
-                realm = None;
-                continue;
-            }
-            if section == "realms" {
-                if let Some(name) = line.strip_suffix('{') {
-                    realm = Some(name.trim().trim_end_matches('=').trim().to_string());
-                    continue;
-                }
-                if line == "}" {
-                    realm = None;
-                    continue;
-                }
-                if let Some(r) = realm.as_ref() {
-                    parse_realm_line(&mut conf, r, line);
-                }
-                continue;
-            }
-            if section == "libdefaults" {
-                parse_libdefaults(&mut conf, line);
-            }
-            if section == "domain_realm"
-                && let Some((d, r)) = split_kv(line)
-            {
-                conf.domain_realm.insert(d.to_ascii_lowercase(), r);
-            }
-        }
+        let mut seen = BTreeSet::new();
+        parse_into(&mut conf, &mut seen, text, None)?;
         Ok(conf)
     }
 
-    /// Load from `KRB5_CONFIG` or `path`.
+    /// Load a file or directory, honoring `include` / `includedir`.
     ///
     /// # Errors
     ///
-    /// Returns I/O or parse errors.
+    /// Returns I/O or parse errors, including include cycles.
     pub fn load_file(path: impl AsRef<Path>) -> Result<Self, Error> {
-        let text = std::fs::read_to_string(path)?;
-        Self::parse(&text)
+        let mut conf = Self::new();
+        let mut seen = BTreeSet::new();
+        let mut stack = Vec::new();
+        load_path_into(&mut conf, &mut seen, &mut stack, path.as_ref())?;
+        Ok(conf)
     }
 
     /// KDCs for `realm`, possibly via DNS SRV when enabled.
@@ -300,39 +270,213 @@ impl KdcConf {
     }
 }
 
-fn parse_libdefaults(conf: &mut Krb5Conf, line: &str) {
+const MAX_INCLUDE_DEPTH: usize = 32;
+
+enum IncludeKind<'a> {
+    File(&'a str),
+    Dir(&'a str),
+}
+
+fn include_directive(raw: &str) -> Option<IncludeKind<'_>> {
+    if let Some(rest) = raw.strip_prefix("includedir")
+        && rest.starts_with(|c: char| c.is_whitespace())
+    {
+        let p = rest.trim();
+        if !p.is_empty() {
+            return Some(IncludeKind::Dir(p));
+        }
+    }
+    if let Some(rest) = raw.strip_prefix("include")
+        && rest.starts_with(|c: char| c.is_whitespace())
+    {
+        let p = rest.trim();
+        if !p.is_empty() {
+            return Some(IncludeKind::File(p));
+        }
+    }
+    None
+}
+
+fn valid_include_name(name: &str) -> bool {
+    if name.starts_with('.') {
+        return false;
+    }
+    // MIT `valid_name`: suffix is the lowercase bytes ".conf", not a case-fold.
+    if name.len() >= 5 && name.as_bytes().ends_with(b".conf") {
+        return true;
+    }
+    name.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+fn take_first(seen: &mut BTreeSet<String>, key: &str) -> bool {
+    seen.insert(key.to_owned())
+}
+
+fn parse_into(
+    conf: &mut Krb5Conf,
+    seen: &mut BTreeSet<String>,
+    text: &str,
+    mut stack: Option<&mut Vec<PathBuf>>,
+) -> Result<(), Error> {
+    let mut section = String::new();
+    let mut realm: Option<String> = None;
+    for raw in text.lines() {
+        if let Some(kind) = include_directive(raw)
+            && let Some(st) = stack.as_deref_mut()
+        {
+            match kind {
+                IncludeKind::File(p) => load_file_into(conf, seen, st, Path::new(p))?,
+                IncludeKind::Dir(p) => load_dir_into(conf, seen, st, Path::new(p))?,
+            }
+            continue;
+        }
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if let Some(s) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            section = s.trim().to_ascii_lowercase();
+            realm = None;
+            continue;
+        }
+        if section == "realms" {
+            if let Some(name) = line.strip_suffix('{') {
+                realm = Some(name.trim().trim_end_matches('=').trim().to_string());
+                continue;
+            }
+            if line == "}" {
+                realm = None;
+                continue;
+            }
+            if let Some(r) = realm.as_ref() {
+                parse_realm_line(conf, r, line);
+            }
+            continue;
+        }
+        if section == "libdefaults" {
+            parse_libdefaults(conf, seen, line);
+        }
+        if section == "domain_realm"
+            && let Some((d, r)) = split_kv(line)
+        {
+            conf.domain_realm.entry(d.to_ascii_lowercase()).or_insert(r);
+        }
+    }
+    Ok(())
+}
+
+fn load_path_into(
+    conf: &mut Krb5Conf,
+    seen: &mut BTreeSet<String>,
+    stack: &mut Vec<PathBuf>,
+    path: &Path,
+) -> Result<(), Error> {
+    if path.is_dir() {
+        load_dir_into(conf, seen, stack, path)
+    } else {
+        load_file_into(conf, seen, stack, path)
+    }
+}
+
+fn load_file_into(
+    conf: &mut Krb5Conf,
+    seen: &mut BTreeSet<String>,
+    stack: &mut Vec<PathBuf>,
+    path: &Path,
+) -> Result<(), Error> {
+    if stack.len() >= MAX_INCLUDE_DEPTH {
+        return Err(Error::Parse("include nesting too deep".into()));
+    }
+    let canon = std::fs::canonicalize(path)?;
+    if stack.iter().any(|p| p == &canon) {
+        return Err(Error::Parse("include cycle".into()));
+    }
+    let text = std::fs::read_to_string(&canon)?;
+    stack.push(canon);
+    let result = parse_into(conf, seen, &text, Some(stack));
+    stack.pop();
+    result
+}
+
+fn load_dir_into(
+    conf: &mut Krb5Conf,
+    seen: &mut BTreeSet<String>,
+    stack: &mut Vec<PathBuf>,
+    dir: &Path,
+) -> Result<(), Error> {
+    if !dir.is_dir() {
+        return Err(Error::Parse(format!(
+            "includedir not a directory: {}",
+            dir.display()
+        )));
+    }
+    let mut names = Vec::new();
+    for ent in std::fs::read_dir(dir)? {
+        let ent = ent?;
+        let name = ent.file_name();
+        let Some(s) = name.to_str() else {
+            continue;
+        };
+        if valid_include_name(s) {
+            names.push(s.to_owned());
+        }
+    }
+    names.sort();
+    for name in names {
+        let p = dir.join(name);
+        if p.is_file() {
+            load_file_into(conf, seen, stack, &p)?;
+        }
+    }
+    Ok(())
+}
+
+fn parse_libdefaults(conf: &mut Krb5Conf, seen: &mut BTreeSet<String>, line: &str) {
     let Some((k, v)) = split_kv(line) else {
         return;
     };
-    match k.to_ascii_lowercase().as_str() {
-        "default_realm" => conf.default_realm = Some(v),
-        "allow_weak_crypto" => conf.allow_weak_crypto = truthy(&v),
-        "clockskew" => {
+    let key = k.to_ascii_lowercase();
+    match key.as_str() {
+        "default_realm" if take_first(seen, "default_realm") => conf.default_realm = Some(v),
+        "allow_weak_crypto" if take_first(seen, "allow_weak_crypto") => {
+            conf.allow_weak_crypto = truthy(&v);
+        }
+        "clockskew" if take_first(seen, "clockskew") => {
             conf.clockskew = parse_duration_secs(&v)
                 .and_then(|s| u32::try_from(s).ok())
                 .unwrap_or(300);
         }
-        "dns_lookup_kdc" => conf.dns_lookup_kdc = truthy(&v),
-        "dns_lookup_realm" => conf.dns_lookup_realm = truthy(&v),
-        "udp_preference_limit" => {
+        "dns_lookup_kdc" if take_first(seen, "dns_lookup_kdc") => {
+            conf.dns_lookup_kdc = truthy(&v);
+        }
+        "dns_lookup_realm" if take_first(seen, "dns_lookup_realm") => {
+            conf.dns_lookup_realm = truthy(&v);
+        }
+        "udp_preference_limit" if take_first(seen, "udp_preference_limit") => {
             conf.udp_preference_limit = v.parse().ok();
         }
-        "rdns" => conf.rdns = truthy(&v),
-        "kdc_timesync" => conf.kdc_timesync = truthy(&v),
-        "permitted_enctypes" => conf.permitted_enctypes = split_ws(&v),
-        "default_tkt_enctypes" => conf.default_tkt_enctypes = split_ws(&v),
-        "default_tgs_enctypes" => conf.default_tgs_enctypes = split_ws(&v),
-        "forwardable" => conf.forwardable = truthy(&v),
-        "ticket_lifetime" => conf.ticket_lifetime = parse_duration_secs(&v),
-        "renew_lifetime" => conf.renew_lifetime = parse_duration_secs(&v),
-        "kdc_timeout" | "max_retries" => {
-            if k.eq_ignore_ascii_case("kdc_timeout") {
-                conf.kdc_timeout = Some(v);
-            } else {
-                conf.max_retries = Some(v);
-            }
+        "rdns" if take_first(seen, "rdns") => conf.rdns = truthy(&v),
+        "kdc_timesync" if take_first(seen, "kdc_timesync") => conf.kdc_timesync = truthy(&v),
+        "permitted_enctypes" if take_first(seen, "permitted_enctypes") => {
+            conf.permitted_enctypes = split_ws(&v);
         }
-        "kcm_socket" => conf.kcm_socket = Some(v),
+        "default_tkt_enctypes" if take_first(seen, "default_tkt_enctypes") => {
+            conf.default_tkt_enctypes = split_ws(&v);
+        }
+        "default_tgs_enctypes" if take_first(seen, "default_tgs_enctypes") => {
+            conf.default_tgs_enctypes = split_ws(&v);
+        }
+        "forwardable" if take_first(seen, "forwardable") => conf.forwardable = truthy(&v),
+        "ticket_lifetime" if take_first(seen, "ticket_lifetime") => {
+            conf.ticket_lifetime = parse_duration_secs(&v);
+        }
+        "renew_lifetime" if take_first(seen, "renew_lifetime") => {
+            conf.renew_lifetime = parse_duration_secs(&v);
+        }
+        "kdc_timeout" if take_first(seen, "kdc_timeout") => conf.kdc_timeout = Some(v),
+        "max_retries" if take_first(seen, "max_retries") => conf.max_retries = Some(v),
+        "kcm_socket" if take_first(seen, "kcm_socket") => conf.kcm_socket = Some(v),
         _ => {}
     }
 }
@@ -600,10 +744,20 @@ pub fn default_ccache_name() -> PathBuf {
     }
 }
 
-/// `KRB5_CONFIG` path.
+/// `KRB5_CONFIG` path list (colon-split). Missing env is [`None`].
 #[must_use]
 pub fn env_krb5_config() -> Option<PathBuf> {
     std::env::var_os("KRB5_CONFIG").map(PathBuf::from)
+}
+
+/// Colon-split `KRB5_CONFIG` (empty components dropped).
+#[must_use]
+pub fn split_krb5_config_paths(value: &str) -> Vec<PathBuf> {
+    value
+        .split(':')
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .collect()
 }
 
 /// `KRB5_KTNAME` (FILE: prefix stripped).
@@ -623,32 +777,50 @@ pub fn env_kdc_config() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// `KRB5_CONFIG` then `/etc/krb5.conf`.
+/// `KRB5_CONFIG` (colon-split) or `/etc/krb5.conf` when unset.
 #[must_use]
 pub fn krb5_conf_paths() -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    if let Some(p) = env_krb5_config() {
-        out.push(p);
+    match std::env::var_os("KRB5_CONFIG") {
+        Some(v) => split_krb5_config_paths(&v.to_string_lossy()),
+        None => vec![PathBuf::from("/etc/krb5.conf")],
     }
-    out.push(PathBuf::from("/etc/krb5.conf"));
-    out
 }
 
-/// First KDC for `realm` from the given `krb5.conf` paths.
+/// Merge `krb5.conf` paths (includes, first-wins scalars, appended `kdc=`).
+///
+/// # Errors
+///
+/// Missing paths are skipped. A present file with a bad include is an error.
+pub fn load_krb5_conf_paths<P: AsRef<Path>>(
+    paths: impl IntoIterator<Item = P>,
+) -> Result<Krb5Conf, Error> {
+    let mut conf = Krb5Conf::new();
+    let mut seen = BTreeSet::new();
+    let mut stack = Vec::new();
+    let mut any = false;
+    for path in paths {
+        let path = path.as_ref();
+        match load_path_into(&mut conf, &mut seen, &mut stack, path) {
+            Ok(()) => any = true,
+            Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+    }
+    if any {
+        Ok(conf)
+    } else {
+        Err(std::io::Error::from(std::io::ErrorKind::NotFound).into())
+    }
+}
+
+/// First KDC for `realm` from the given `krb5.conf` paths (merged).
 #[must_use]
 pub fn discover_kdc_in<P: AsRef<Path>>(
     paths: impl IntoIterator<Item = P>,
     realm: &str,
 ) -> Option<Endpoint> {
-    for path in paths {
-        if let Ok(conf) = Krb5Conf::load_file(path)
-            && let Ok(list) = conf.kdcs_for(realm)
-            && let Some(ep) = list.into_iter().next()
-        {
-            return Some(ep);
-        }
-    }
-    None
+    let conf = load_krb5_conf_paths(paths).ok()?;
+    conf.kdcs_for(realm).ok()?.into_iter().next()
 }
 
 /// First KDC for `realm` from [`krb5_conf_paths`].
@@ -657,15 +829,10 @@ pub fn discover_kdc(realm: &str) -> Option<Endpoint> {
     discover_kdc_in(krb5_conf_paths(), realm)
 }
 
-/// First readable `krb5.conf` from [`krb5_conf_paths`].
+/// Merged `krb5.conf` from [`krb5_conf_paths`].
 #[must_use]
 pub fn load_krb5_conf() -> Option<Krb5Conf> {
-    for p in krb5_conf_paths() {
-        if let Ok(c) = Krb5Conf::load_file(p) {
-            return Some(c);
-        }
-    }
-    None
+    load_krb5_conf_paths(krb5_conf_paths()).ok()
 }
 
 /// MIT `udp_preference_limit` (default 1465). Messages larger go TCP first.
@@ -1086,5 +1253,178 @@ mod tests {
         assert_eq!(ep.port, 1088);
         assert!(discover_kdc_in([&path], "OTHER.TEST").is_none());
         let _ = std::fs::remove_file(&path);
+    }
+
+    fn g9a_tree(tag: &str) -> PathBuf {
+        let p = std::env::temp_dir().join(format!(
+            "kerber-g9a-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn split_krb5_config_paths_colon() {
+        assert_eq!(
+            split_krb5_config_paths("/a.conf:/b.conf"),
+            vec![PathBuf::from("/a.conf"), PathBuf::from("/b.conf")]
+        );
+        assert!(split_krb5_config_paths("").is_empty());
+        assert_eq!(
+            split_krb5_config_paths("/a.conf:"),
+            vec![PathBuf::from("/a.conf")]
+        );
+    }
+
+    #[test]
+    fn includedir_reads_dotted_conf() {
+        let root = g9a_tree("dot");
+        let drop = root.join("d.d");
+        std::fs::create_dir(&drop).unwrap();
+        std::fs::write(
+            root.join("main.conf"),
+            format!(
+                "includedir {}\n[libdefaults]\n    dns_lookup_kdc = false\n",
+                drop.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            drop.join("10.conf"),
+            r"
+[libdefaults]
+    default_realm = DOTTED.TEST
+[realms]
+    DOTTED.TEST = {
+        kdc = 10.9.8.7:1088
+    }
+",
+        )
+        .unwrap();
+        let c = Krb5Conf::load_file(root.join("main.conf")).unwrap();
+        assert_eq!(c.default_realm.as_deref(), Some("DOTTED.TEST"));
+        assert_eq!(c.kdcs["DOTTED.TEST"][0].host, "10.9.8.7");
+        assert_eq!(c.kdcs["DOTTED.TEST"][0].port, 1088);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn two_file_merge_first_wins_scalar_appends_kdc() {
+        let root = g9a_tree("merge");
+        let a = root.join("a.conf");
+        let b = root.join("b.conf");
+        std::fs::write(
+            &a,
+            r"
+[libdefaults]
+    default_realm = FIRST.TEST
+[realms]
+    FIRST.TEST = {
+        kdc = 10.0.0.1
+        kdc = 10.0.0.2
+    }
+",
+        )
+        .unwrap();
+        std::fs::write(
+            &b,
+            r"
+[libdefaults]
+    default_realm = SECOND.TEST
+[realms]
+    FIRST.TEST = {
+        kdc = 10.0.0.3
+    }
+",
+        )
+        .unwrap();
+        let c = load_krb5_conf_paths([&a, &b]).unwrap();
+        assert_eq!(c.default_realm.as_deref(), Some("FIRST.TEST"));
+        let kdcs: Vec<_> = c.kdcs["FIRST.TEST"]
+            .iter()
+            .map(|e| e.host.as_str())
+            .collect();
+        assert_eq!(kdcs, ["10.0.0.1", "10.0.0.2", "10.0.0.3"]);
+        let rev = load_krb5_conf_paths([&b, &a]).unwrap();
+        assert_eq!(rev.default_realm.as_deref(), Some("SECOND.TEST"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn include_then_local_keeps_included_scalar() {
+        let root = g9a_tree("inc");
+        let child = root.join("child.conf");
+        let parent = root.join("parent.conf");
+        std::fs::write(&child, "[libdefaults]\n    default_realm = CHILD.TEST\n").unwrap();
+        std::fs::write(
+            &parent,
+            format!(
+                "include {}\n[libdefaults]\n    default_realm = PARENT.TEST\n",
+                child.display()
+            ),
+        )
+        .unwrap();
+        let c = Krb5Conf::load_file(&parent).unwrap();
+        assert_eq!(c.default_realm.as_deref(), Some("CHILD.TEST"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn include_cycle_is_error() {
+        let root = g9a_tree("cyc");
+        let a = root.join("a.conf");
+        let b = root.join("b.conf");
+        std::fs::write(
+            &a,
+            format!(
+                "include {}\n[libdefaults]\n    default_realm = A.TEST\n",
+                b.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            &b,
+            format!(
+                "include {}\n[libdefaults]\n    default_realm = B.TEST\n",
+                a.display()
+            ),
+        )
+        .unwrap();
+        let err = Krb5Conf::load_file(&a).unwrap_err();
+        assert!(
+            matches!(err, Error::Parse(ref s) if s.contains("cycle")),
+            "{err}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn missing_include_is_error() {
+        let root = g9a_tree("miss");
+        let main = root.join("main.conf");
+        std::fs::write(
+            &main,
+            format!(
+                "include {}\n[libdefaults]\n    default_realm = X.TEST\n",
+                root.join("nope.conf").display()
+            ),
+        )
+        .unwrap();
+        assert!(Krb5Conf::load_file(&main).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn parse_text_does_not_follow_include() {
+        let c = Krb5Conf::parse(
+            "include /no/such/file.conf\n[libdefaults]\n    default_realm = LOCAL.TEST\n",
+        )
+        .unwrap();
+        assert_eq!(c.default_realm.as_deref(), Some("LOCAL.TEST"));
     }
 }

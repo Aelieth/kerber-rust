@@ -35,6 +35,7 @@ FAIL_RED_PER_PUSH = (
     "kadmin-local-gate.sh",
     "rust-kpasswd-mit-gate.sh",
     "kcm-gate.sh",
+    "config-include-gate.sh",
 )
 
 NIGHTLY_BLOCKING = (

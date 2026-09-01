@@ -129,6 +129,10 @@ jobs:
         env:
           KERBER_LIVE: "1"
         run: ./scripts/knobs-gate.sh
+      - name: config-include-gate
+        env:
+          KERBER_LIVE: "1"
+        run: ./scripts/config-include-gate.sh
       - name: Stop MIT harness
         if: always()
         run: ./scripts/stop-harness.sh || true

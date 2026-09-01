@@ -21,6 +21,13 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
 
 ### Added
 
+- **G9a include/includedir (MIT-gated).** Top-level `include` /
+  `includedir` and colon-split `KRB5_CONFIG` merge into one
+  `Krb5Conf` (MIT first-wins scalars, appended `kdc=`). `includedir`
+  reads `*.conf` (including `10.conf`) and alnum/`-`/`_` names, skips
+  dotfiles; include cycles and missing includes error. `/etc/krb5.conf.d`
+  is not invented. Gate: `scripts/config-include-gate.sh`.
+
 - **G1 faithfulness (MIT-gated).** AS/TGS enforce stored principal
   expiration (`KDC_ERR_NAME_EXP`) before password/key expiration
   (`KDC_ERR_KEY_EXPIRED`); 0 still means never; `PWCHANGE_SERVICE`

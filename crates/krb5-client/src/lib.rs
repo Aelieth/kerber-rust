@@ -283,11 +283,7 @@ fn strip_file_spec(s: &str) -> &str {
 }
 
 fn conf_default_realm() -> Option<String> {
-    krb5_config::krb5_conf_paths().into_iter().find_map(|p| {
-        krb5_config::Krb5Conf::load_file(&p)
-            .ok()
-            .and_then(|c| c.default_realm)
-    })
+    krb5_config::load_krb5_conf().and_then(|c| c.default_realm)
 }
 
 fn load_pkinit(
@@ -302,25 +298,20 @@ fn load_pkinit(
 }
 
 fn pkinit_from_conf(realm: &str) -> (Option<std::path::PathBuf>, Option<std::path::PathBuf>) {
-    for path in krb5_config::krb5_conf_paths() {
-        let Ok(conf) = krb5_config::Krb5Conf::load_file(&path) else {
-            continue;
-        };
-        let id = conf
-            .pkinit_identities
-            .get(realm)
-            .and_then(|v| v.first())
-            .map(|s| std::path::PathBuf::from(strip_file_spec(s)));
-        let an = conf
-            .pkinit_anchors
-            .get(realm)
-            .and_then(|v| v.first())
-            .map(|s| std::path::PathBuf::from(strip_file_spec(s)));
-        if id.is_some() || an.is_some() {
-            return (id, an);
-        }
-    }
-    (None, None)
+    let Some(conf) = krb5_config::load_krb5_conf() else {
+        return (None, None);
+    };
+    let id = conf
+        .pkinit_identities
+        .get(realm)
+        .and_then(|v| v.first())
+        .map(|s| std::path::PathBuf::from(strip_file_spec(s)));
+    let an = conf
+        .pkinit_anchors
+        .get(realm)
+        .and_then(|v| v.first())
+        .map(|s| std::path::PathBuf::from(strip_file_spec(s)));
+    (id, an)
 }
 
 fn kinit_inner(

@@ -33,6 +33,20 @@ fn main() {
         eprintln!("kinit: missing principal");
         std::process::exit(2);
     });
+    let principal = if !args.enterprise && !principal.contains('@') {
+        match krb5_config::load_krb5_conf_paths(krb5_config::krb5_conf_paths()) {
+            Ok(c) => match c.default_realm {
+                Some(r) => format!("{principal}@{r}"),
+                None => principal,
+            },
+            Err(e) => {
+                eprintln!("kinit: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        principal
+    };
     let service = args.service.clone().or(args.pos_service.clone());
     let ccflag = args.ccache.clone().or(args.pos_ccache.clone());
     let spec = resolve_ccspec(ccflag.as_deref()).unwrap_or_else(|e| {
@@ -44,13 +58,8 @@ fn main() {
         std::process::exit(2);
     });
     if realm.is_empty() {
-        realm = krb5_config::krb5_conf_paths()
-            .into_iter()
-            .find_map(|p| {
-                krb5_config::Krb5Conf::load_file(&p)
-                    .ok()
-                    .and_then(|c| c.default_realm)
-            })
+        realm = krb5_config::load_krb5_conf()
+            .and_then(|c| c.default_realm)
             .unwrap_or_default();
     }
     let addr = kdc_addr(args.kdc_host.as_deref(), &realm).unwrap_or_else(|e| {
