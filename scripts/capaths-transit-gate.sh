@@ -97,7 +97,7 @@ cat >/tmp/kdc-c-allow.conf <<EOF
     dns_lookup_kdc = false
 [capaths]
     A.TEST = {
-        C.TEST = B.TEST
+        C.TEST = B.TEST D.TEST
     }
 EOF
 cat >/tmp/kdc-c-deny.conf <<EOF

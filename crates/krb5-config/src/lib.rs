@@ -406,12 +406,15 @@ fn parse_into(
             if let Some(client) = capaths_client.as_ref()
                 && let Some((server, hop)) = split_kv(line)
             {
-                conf.capaths
+                let entry = conf
+                    .capaths
                     .entry(client.clone())
                     .or_default()
                     .entry(server.to_string())
-                    .or_default()
-                    .push(hop);
+                    .or_default();
+                for h in hop.split_whitespace() {
+                    entry.push(h.to_string());
+                }
             }
         }
     }
@@ -1662,6 +1665,22 @@ mod tests {
         assert_eq!(c.capaths["A.TEST"]["C.TEST"], ["B.TEST"]);
         assert_eq!(c.capaths["A.TEST"]["B.TEST"], ["."]);
         assert_eq!(c.capaths["C.TEST"]["A.TEST"], ["B.TEST"]);
+    }
+
+    #[test]
+    fn parse_capaths_space_separated_intermediates() {
+        let c = Krb5Conf::parse(
+            r"
+[capaths]
+    A.TEST = {
+        C.TEST = B.TEST D.TEST
+        B.TEST = .
+    }
+",
+        )
+        .unwrap();
+        assert_eq!(c.capaths["A.TEST"]["C.TEST"], ["B.TEST", "D.TEST"]);
+        assert_eq!(c.capaths["A.TEST"]["B.TEST"], ["."]);
     }
 
     #[test]

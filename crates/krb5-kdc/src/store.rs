@@ -2168,6 +2168,21 @@ mod tests {
     }
 
     #[test]
+    fn space_separated_capaths_accepts_each_hop() {
+        let mut p = Policy::default();
+        p.capaths
+            .entry("A.TEST".into())
+            .or_default()
+            .insert("C.TEST".into(), vec!["B.TEST".into(), "D.TEST".into()]);
+        assert!(p.transit_allowed(
+            "A.TEST",
+            "C.TEST",
+            &[String::from("B.TEST"), String::from("D.TEST")]
+        ));
+        assert!(!p.transit_allowed("A.TEST", "C.TEST", &[String::from("E.TEST")]));
+    }
+
+    #[test]
     fn bootstrap_sid_rid_are_real_not_dummy() {
         let (store, _) = crate::bootstrap_documented().unwrap();
         assert_ne!(
