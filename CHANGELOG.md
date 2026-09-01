@@ -16,10 +16,21 @@ NT-ENTERPRISE · **G7** standalone user CLIs · **G8** KEYRING ccache · **G9**
 config breadth. Each phase lands behind a real-MIT gate before it counts as
 done. The entries below are the post-1.0 groundwork already in tree (Tier-1
 plugin/policy/propagation parity + the KLLDAP 0.7.5 toolchain alignment).
-**G1 faithfulness, G2 renewal/postdating, G3 kadmin completeness, and
-G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
+**G1–G9 have landed** (faithfulness, renewal/postdating, kadmin,
+iprop, GSS breadth, client preauth, user CLIs, ccache/KCM, config
+breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
+
+- **G9 S-pass (MIT-gated).** A present file whose nested `include`
+  names a missing target is an error even on colon-split
+  `KRB5_CONFIG` merge; a missing top-level path still skips.
+  DOMAIN-X500-COMPRESS decode expands MIT `EX.COM,B.` to
+  `EX.COM,B.EX.COM`. `[capaths]` space-separated intermediates are
+  distinct hops. FAST nopreauth asserts aes256-sha2 / etype 20.
+  `reject_bad_transit = false` accepts a failed check without `T`.
+  Indented `include` inside a section is Improper format; an
+  unterminated `%{` in `default_ccache_name` fails closed.
 
 - **G9a include/includedir (MIT-gated).** Top-level `include` /
   `includedir` and colon-split `KRB5_CONFIG` merge into one
