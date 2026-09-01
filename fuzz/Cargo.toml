@@ -73,3 +73,10 @@ path = "fuzz_targets/gss_token.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "transited"
+path = "fuzz_targets/transited.rs"
+test = false
+doc = false
+bench = false

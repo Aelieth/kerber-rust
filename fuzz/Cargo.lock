@@ -50,6 +50,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c7f02d4ea65f2c1853089ffd8d2787bdbc63de2f0d29dedbcf8ccdfa0ccd4cf"
 
 [[package]]
+name = "bitflags"
+version = "2.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
+
+[[package]]
 name = "bitvec"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -125,6 +131,12 @@ name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
+
+[[package]]
+name = "cfg_aliases"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
 name = "chrono"
@@ -454,7 +466,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-asn1"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "krb5-log",
  "krb5-types",
@@ -464,16 +476,17 @@ dependencies = [
 
 [[package]]
 name = "krb5-config"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "krb5-log",
+ "nix",
  "thiserror",
  "tracing",
 ]
 
 [[package]]
 name = "krb5-crypto"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "aes",
  "camellia",
@@ -509,7 +522,7 @@ dependencies = [
 
 [[package]]
 name = "krb5-gss"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "getrandom 0.2.17",
  "krb5-asn1",
@@ -525,14 +538,14 @@ dependencies = [
 
 [[package]]
 name = "krb5-log"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "getrandom 0.2.17",
 ]
 
 [[package]]
 name = "krb5-protocol"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "getrandom 0.2.17",
@@ -541,6 +554,7 @@ dependencies = [
  "krb5-crypto",
  "krb5-log",
  "krb5-types",
+ "nix",
  "sha1",
  "thiserror",
  "tracing",
@@ -549,12 +563,13 @@ dependencies = [
 
 [[package]]
 name = "krb5-types"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "getrandom 0.2.17",
  "p256",
  "rasn",
+ "sha1",
  "sha2",
  "subtle",
  "thiserror",
@@ -628,6 +643,18 @@ name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
+
+[[package]]
+name = "nix"
+version = "0.31.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
+dependencies = [
+ "bitflags",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
 
 [[package]]
 name = "nom"
@@ -757,9 +784,9 @@ checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 
 [[package]]
 name = "rasn"
-version = "0.27.4"
+version = "0.28.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c133e7d35d847c312f98e0769e0a96e66677c59196b3a135ae86ffce353cd6c9"
+checksum = "0d1b71dd951343df0fe30b11bca09518f3aba8e5bd0ece4564adbc2dabd875fa"
 dependencies = [
  "bitvec",
  "bitvec-nom2",
@@ -780,9 +807,9 @@ dependencies = [
 
 [[package]]
 name = "rasn-derive"
-version = "0.27.4"
+version = "0.28.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "871a10a1ba4c3dfb1091746970e84cbd182a9578d0b6b8a9b89ee080a45476b2"
+checksum = "979eafa601d351f7f6490f1d2f4decc168e8e51cb6517c6c6ff80111951129d5"
 dependencies = [
  "proc-macro2",
  "rasn-derive-impl",
@@ -791,9 +818,9 @@ dependencies = [
 
 [[package]]
 name = "rasn-derive-impl"
-version = "0.27.4"
+version = "0.28.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8cb7c9cab0fd1dd92ec7d3a1b9ebbd0f9f2ce19a88152cd5993dce2709a00f8e"
+checksum = "eee3136c97d6f2553c0d9f84d2c2555bb87ae9b365c5c9274e8bc5c366174431"
 dependencies = [
  "either",
  "itertools",
