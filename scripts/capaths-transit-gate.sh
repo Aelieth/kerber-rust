@@ -247,7 +247,7 @@ set -e
 echo "$MIT_DENY"
 test "$mit_drc" -ne 0
 # Live MIT 1.22.2 prints POLICY ("rejects request") on this deny.
-echo "$MIT_DENY" | grep -qE 'KDC policy rejects (transited path|request)'
+echo "$MIT_DENY" | grep -q 'KDC policy rejects request'
 
 echo "==== MIT C reject_bad_transit=false accepts without T ===="
 docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/mit-c.pid)" 2>/dev/null || true'

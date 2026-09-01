@@ -210,7 +210,7 @@ set -e
 echo "$DENY"
 test "$drc" -ne 0
 # Live MIT 1.22.2 on this hierarchy prints POLICY, not PATH_NOT_ACCEPTED.
-echo "$DENY" | grep -qE 'KDC policy rejects (transited path|request)'
+echo "$DENY" | grep -q 'KDC policy rejects request'
 
 log "capaths.compress" "ok" \
     ',"contents":"EX.COM,B.","expanded":"EX.COM,B.EX.COM","denied":true'

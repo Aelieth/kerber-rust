@@ -133,13 +133,13 @@ if ! echo "$TRACE2" | grep -Fq 'Decrypted AP-REQ'; then
     exit 1
 fi
 echo "$TRACE2" | grep -F 'Decrypted AP-REQ'
-if ! echo "$TRACE2" | grep -F 'Decrypted AP-REQ' | grep -Eq 'aes256-sha2|aes256-cts-hmac-sha384-192'; then
+if ! echo "$TRACE2" | grep -F 'Decrypted AP-REQ' | grep -F 'aes256-sha2'; then
     echo "$TRACE2" >&2
     log "fast.client.gate" "error" ',"error":"nopreauth FAST AP-REQ was not aes256-sha2"'
     exit 1
 fi
 KLIST2E="$(docker exec "$NAME" klist -e -c /tmp/krb5cc_fast_np 2>/dev/null || true)"
 echo "$KLIST2E"
-echo "$KLIST2E" | grep -Eq 'aes256-cts-hmac-sha384-192|aes256-sha2'
+echo "$KLIST2E" | grep -F 'aes256-cts-hmac-sha384-192'
 log "fast.client.gate" "ok" ',"mode":"rust-kinit","pa_type":136,"principal":"user@KERBER.TEST","nopreauth":true,"etype":20'
 exit 0
