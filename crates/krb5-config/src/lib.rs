@@ -82,6 +82,8 @@ pub struct Krb5Conf {
     pub kdc_timeout: Option<String>,
     /// Heimdal `max_retries` — no MIT parse site; stored and unused.
     pub max_retries: Option<String>,
+    /// `[libdefaults] kcm_socket` (MIT; `KCM_SOCKET` env overrides).
+    pub kcm_socket: Option<String>,
     /// Realm → KDC list.
     pub kdcs: BTreeMap<String, Vec<Endpoint>>,
     /// Realm → admin_server.
@@ -330,6 +332,7 @@ fn parse_libdefaults(conf: &mut Krb5Conf, line: &str) {
                 conf.max_retries = Some(v);
             }
         }
+        "kcm_socket" => conf.kcm_socket = Some(v),
         _ => {}
     }
 }
@@ -907,6 +910,9 @@ mod tests {
         assert_eq!(c.default_tkt_enctypes, ["aes256-cts-hmac-sha1-96"]);
         assert_eq!(c.kdc_timeout.as_deref(), Some("1"));
         assert_eq!(c.max_retries.as_deref(), Some("1"));
+        assert!(c.kcm_socket.is_none());
+        let sock = Krb5Conf::parse("[libdefaults]\n    kcm_socket = /tmp/kcm.sock\n").unwrap();
+        assert_eq!(sock.kcm_socket.as_deref(), Some("/tmp/kcm.sock"));
     }
 
     #[test]

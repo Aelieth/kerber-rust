@@ -4,6 +4,9 @@
 //! opcode, args). Reply is 4-byte length, 4-byte status, then that many
 //! bytes starting with another status. sssd-kcm 2.11/2.12 implements
 //! GET_CRED_LIST; RETRIEVE and REPLACE return FCC_INTERNAL.
+//! Empty-residual `kinit -c KCM:` re-INITIALIZEs the collection default
+//! (same as MIT `kinit`). A second principal uses GEN_NEW (kcm-gate)
+//! rather than MIT `krb5_cc_new_unique` on a plain `KCM:` residual.
 
 use std::env;
 use std::io::{self, Read, Write};
@@ -73,13 +76,7 @@ impl KcmIo {
     }
 
     fn call_once(&mut self, opcode: u16, args: &[u8]) -> io::Result<Vec<u8>> {
-        let mut payload = vec![MAJOR, MINOR];
-        payload.extend_from_slice(&opcode.to_be_bytes());
-        payload.extend_from_slice(args);
-        let mut frame = Vec::with_capacity(4 + payload.len());
-        frame.extend_from_slice(&(u32::try_from(payload.len()).unwrap_or(0)).to_be_bytes());
-        frame.extend_from_slice(&payload);
-        self.stream.write_all(&frame)?;
+        self.stream.write_all(&request_frame(opcode, args))?;
         let mut hdr = [0u8; 8];
         self.stream.read_exact(&mut hdr)?;
         let n = u32::from_be_bytes(hdr[0..4].try_into().unwrap_or([0; 4])) as usize;
@@ -176,14 +173,25 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-/// Socket path: `KCM_SOCKET`, else the Heimdal default (and `/run` twin).
+/// Socket path: `KCM_SOCKET`, else `[libdefaults] kcm_socket`, else the
+/// Heimdal default (and `/run` twin).
 #[must_use]
 pub fn kcm_socket_path() -> PathBuf {
     #[cfg(test)]
     if let Some(p) = SOCKET_OVERRIDE.with(|s| s.borrow().clone()) {
         return p;
     }
-    if let Ok(p) = env::var("KCM_SOCKET") {
+    resolve_kcm_socket(
+        env::var("KCM_SOCKET").ok().filter(|s| !s.is_empty()),
+        krb5_config::load_krb5_conf().and_then(|c| c.kcm_socket),
+    )
+}
+
+fn resolve_kcm_socket(env_path: Option<String>, conf_path: Option<String>) -> PathBuf {
+    if let Some(p) = env_path {
+        return PathBuf::from(p);
+    }
+    if let Some(p) = conf_path {
         return PathBuf::from(p);
     }
     let default = Path::new(KCM_SOCKET_DEFAULT);
@@ -195,6 +203,16 @@ pub fn kcm_socket_path() -> PathBuf {
         return run.to_path_buf();
     }
     default.to_path_buf()
+}
+
+fn request_frame(opcode: u16, args: &[u8]) -> Vec<u8> {
+    let mut payload = vec![MAJOR, MINOR];
+    payload.extend_from_slice(&opcode.to_be_bytes());
+    payload.extend_from_slice(args);
+    let mut frame = Vec::with_capacity(4 + payload.len());
+    frame.extend_from_slice(&(u32::try_from(payload.len()).unwrap_or(0)).to_be_bytes());
+    frame.extend_from_slice(&payload);
+    frame
 }
 
 fn default_or(io: &mut KcmIo, residual: &str) -> io::Result<String> {
@@ -540,5 +558,69 @@ mod tests {
             !kvno_ops.contains(&OP_SET_DEFAULT_CACHE),
             "kvno store-back must not SET_DEFAULT_CACHE: {kvno_ops:?}"
         );
+    }
+
+    #[test]
+    fn request_frame_is_len_major_minor_opcode_args() {
+        let args = zname("0");
+        let f = request_frame(OP_GET_CRED_LIST, &args);
+        let n = u32::from_be_bytes(f[0..4].try_into().unwrap()) as usize;
+        assert_eq!(n, f.len() - 4);
+        assert_eq!(f[4], MAJOR);
+        assert_eq!(f[5], MINOR);
+        assert_eq!(&f[6..8], &OP_GET_CRED_LIST.to_be_bytes());
+        assert_eq!(&f[8..], args.as_slice());
+    }
+
+    #[test]
+    fn kcm_socket_env_overrides_conf_then_default() {
+        let env = resolve_kcm_socket(Some("/tmp/env.sock".into()), Some("/tmp/conf.sock".into()));
+        assert_eq!(env, PathBuf::from("/tmp/env.sock"));
+        let conf = resolve_kcm_socket(None, Some("/tmp/conf.sock".into()));
+        assert_eq!(conf, PathBuf::from("/tmp/conf.sock"));
+        let def = resolve_kcm_socket(None, None);
+        assert!(
+            def.ends_with(".heim_org.h5l.kcm-socket"),
+            "default socket, got {}",
+            def.display()
+        );
+    }
+
+    #[test]
+    fn get_cred_list_round_trips_ccmarshal_cred() {
+        let cred = CcacheCred {
+            client: (
+                krb5_types::ascii("KERBER.TEST"),
+                PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+            ),
+            server: (
+                krb5_types::ascii("KERBER.TEST"),
+                PrincipalName::krbtgt("KERBER.TEST"),
+            ),
+            key: crate::CcacheKeyblock {
+                etype: 18,
+                contents: vec![0x11; 32],
+            },
+            authtime: 10,
+            starttime: 10,
+            endtime: 20,
+            renew_till: 0,
+            is_skey: 0,
+            ticket_flags: 0x4000_0000,
+            addresses: Vec::new(),
+            authdata: Vec::new(),
+            ticket: vec![0x61, 0x03, 1, 2, 3],
+            second_ticket: Vec::new(),
+        };
+        let raw = marshal_one_cred(&cred);
+        let mut body = 1u32.to_be_bytes().to_vec();
+        body.extend_from_slice(&(u32::try_from(raw.len()).unwrap()).to_be_bytes());
+        body.extend_from_slice(&raw);
+        let list = parse_cred_list(&body).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].key.etype, 18);
+        assert_eq!(list[0].key.contents, cred.key.contents);
+        assert_eq!(list[0].ticket, cred.ticket);
+        assert_eq!(list[0].endtime, 20);
     }
 }
