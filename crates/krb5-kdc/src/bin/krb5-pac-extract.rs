@@ -32,6 +32,7 @@ fn main() -> ExitCode {
     let mut krbtgt_kt = None;
     let mut keys_out = None;
     let mut print_rid = false;
+    let mut print_transited = false;
     let mut i = 0usize;
     while i < args.len() {
         match args[i].as_str() {
@@ -63,20 +64,30 @@ fn main() -> ExitCode {
                 print_rid = true;
                 i += 1;
             }
+            "--print-transited" => {
+                print_transited = true;
+                i += 1;
+            }
             _ => {
                 eprintln!(
-                    "usage: krb5-pac-extract --keytab <kt> --ccache <cc> --out <pac> \
+                    "usage: krb5-pac-extract --keytab <kt> --ccache <cc> [--out <pac>] \
                      [--enc-tkt-out <der>] [--krbtgt-keytab <kt>] [--keys-out <txt>] \
-                     [--print-rid]"
+                     [--print-rid] [--print-transited]"
                 );
                 return ExitCode::from(2);
             }
         }
     }
-    let (Some(kt_path), Some(cc_path), Some(out_path)) = (keytab, ccache, out) else {
-        eprintln!("usage: krb5-pac-extract --keytab <kt> --ccache <cc> --out <pac>");
+    let (Some(kt_path), Some(cc_path)) = (keytab, ccache) else {
+        eprintln!(
+            "usage: krb5-pac-extract --keytab <kt> --ccache <cc> [--out <pac>] [--print-transited]"
+        );
         return ExitCode::from(2);
     };
+    if out.is_none() && !print_transited {
+        eprintln!("usage: krb5-pac-extract --keytab <kt> --ccache <cc> --out <pac>");
+        return ExitCode::from(2);
+    }
     let kt = match Keytab::parse(&fs::read(&kt_path).unwrap_or_default()) {
         Ok(k) if !k.entries.is_empty() => k,
         _ => {
@@ -125,7 +136,26 @@ fn main() -> ExitCode {
             let Ok(part) = decode::<EncTicketPart>(&plain) else {
                 continue;
             };
+            if print_transited {
+                let contents = String::from_utf8_lossy(part.transited.contents.as_ref());
+                let checked = i32::from(
+                    part.flags
+                        .bit(krb5_types::flag_bit::TRANSITED_POLICY_CHECKED),
+                );
+                println!("transited_tr_type={}", part.transited.tr_type);
+                println!("transited_contents={contents}");
+                println!("transited_policy_checked={checked}");
+                if out.is_none() {
+                    return ExitCode::SUCCESS;
+                }
+            }
+            let Some(out_path) = out.as_ref() else {
+                return ExitCode::SUCCESS;
+            };
             let Some(pac) = pac_from_ticket_part(&part) else {
+                if print_transited {
+                    return ExitCode::SUCCESS;
+                }
                 continue;
             };
             if print_rid {

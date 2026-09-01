@@ -948,18 +948,14 @@ impl TransitedEncoding {
         }
     }
 
-    /// DOMAIN-X500-COMPRESS (`tr-type` 1): comma-separated DNS realms with a
-    /// trailing comma, matching MIT `krb5_domain_x500_encode` for domain-style
-    /// names (no X.500 RDN compression).
+    /// DOMAIN-X500-COMPRESS (`tr-type` 1): comma-separated DNS realms matching
+    /// MIT KDC `add_to_transited` for domain-style names (no trailing comma,
+    /// no X.500 RDN compression).
     #[must_use]
     pub fn from_realms(realms: &[&str]) -> Self {
-        let mut s = realms.join(",");
-        if !s.is_empty() {
-            s.push(',');
-        }
         Self {
             tr_type: 1,
-            contents: OctetString::from(s.into_bytes()),
+            contents: OctetString::from(realms.join(",").into_bytes()),
         }
     }
 

@@ -15,8 +15,8 @@ use std::path::PathBuf;
 
 use krb5_kdc::{
     Acl, BIND_CANDIDATES, PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER, bind_preferred,
-    documented_changepw, documented_host, documented_kadmin, documented_kiprop, drop_privileges,
-    open_store, serve, shared_store,
+    documented_changepw, documented_kadmin, documented_kiprop, drop_privileges, open_store, serve,
+    shared_store,
 };
 
 fn main() {
@@ -120,7 +120,18 @@ fn main() {
         std::process::exit(1);
     }
     if let Some(path) = export_keytab.as_ref() {
-        match store.export_keytab_local(&documented_host()) {
+        let host_inst = std::env::var("KRB5_TEST_HOST").unwrap_or_else(|_| {
+            if store.realm() == TEST_REALM {
+                krb5_kdc::TEST_HOST.to_owned()
+            } else {
+                "svc.other.test".into()
+            }
+        });
+        let host = krb5_types::PrincipalName::new(
+            krb5_types::PrincipalName::NT_SRV_HST,
+            ["host", host_inst.as_str()],
+        );
+        match store.export_keytab_local(&host) {
             Ok(kt) => {
                 if let Err(e) = kt.write_file(path) {
                     eprintln!("krb5-kdc: export-keytab {path}: {e}");

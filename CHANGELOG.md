@@ -38,8 +38,9 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
 - **G9c `[capaths]` transit (MIT-gated).** Incoming foreign-crealm
   TGS checks transited hops against `[capaths]` (`.` = direct) or
   hierarchical derivation; `TRANSITED_POLICY_CHECKED` only on pass;
-  unpermitted hop is `KDC_ERR_PATH_NOT_ACCEPTED` (28). Three-hop
-  A.TEST→B.TEST→C.TEST vs MIT `kvno`. Gate:
+  unpermitted hop is `KDC_ERR_PATH_NOT_ACCEPTED` (28). Issued
+  transited encoding matches MIT 1.22.2 `add_to_transited` (previous
+  hop, `tr-type` 1, contents `B.TEST` on A→B→C). Gate:
   `scripts/capaths-transit-gate.sh`.
 
 - **G9b default_ccache_name (MIT-gated).** `KRB5CCNAME` beats

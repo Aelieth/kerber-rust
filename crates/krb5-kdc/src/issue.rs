@@ -667,11 +667,12 @@ fn issue_tgs_body(
         None => (skey.key.clone(), skey.kvno, skey.etype),
     };
     let mut transited = enc_tkt.transited.clone();
-    // RFC 4120: transited lists intermediate realms, excluding the client's
-    // realm and the ticket server realm. A first-hop referral from a local
-    // TGT must stay empty; only an incoming foreign TGT names us.
-    if utf8_realm(&enc_tkt.crealm) != store.realm() {
-        transited = transited.with_realm(store.realm());
+    // MIT `add_to_transited`: name the incoming TGT's server realm (the
+    // previous hop) unless that realm is the client or the requested server.
+    let prev_hop = utf8_realm(&ap.ticket.realm);
+    let crealm = utf8_realm(&enc_tkt.crealm);
+    if prev_hop != crealm && prev_hop != req_realm.as_str() {
+        transited = transited.with_realm(prev_hop);
     }
     let transited_ok = skip_transited
         || store.policy().transit_allowed(

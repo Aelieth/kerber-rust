@@ -116,10 +116,10 @@ fn three_hop_capaths_accept_and_reject() {
         "T set only when capaths check passed"
     );
     let hops = part.transited.realms();
-    assert!(
-        hops.iter().any(|h| h == "B.TEST"),
-        "transited names B.TEST: {hops:?}"
-    );
+    assert_eq!(hops, vec!["B.TEST".to_string()]);
+    let contents = String::from_utf8(part.transited.contents.as_ref().to_vec()).unwrap();
+    assert_eq!(contents, "B.TEST");
+    assert_eq!(part.transited.tr_type, 1);
 
     c.set_capaths(std::collections::BTreeMap::new());
     let denied = chase_tgs(

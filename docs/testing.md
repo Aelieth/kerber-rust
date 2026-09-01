@@ -255,9 +255,10 @@ when that oracle is absent.
   env > conf (`%{uid}`) > builtin; `[domain_realm]` + conf
   `proxiable`. In CI (MIT harness).
 - `scripts/capaths-transit-gate.sh` — MIT `kvno` A.TEST→B.TEST→C.TEST
-  vs three Rust KDCs; permitted capaths issues the host ticket;
-  missing capaths is `KDC policy rejects transited path` (28). In CI
-  (`mit-extra`).
+  vs three live MIT 1.22.2 KDCs, then the same chase vs three Rust
+  KDCs; EncTicketPart transited (`tr-type` 1, contents `B.TEST`) and
+  `TRANSITED_POLICY_CHECKED` match; missing capaths is `KDC policy
+  rejects transited path` (28). In CI (`mit-extra`).
 - `scripts/config-include-gate.sh` — MIT vs Rust on the same
   `include`/`includedir` + colon-split `KRB5_CONFIG` tree: dotted
   `10.conf` is read; two-file scalar first-wins; missing include
