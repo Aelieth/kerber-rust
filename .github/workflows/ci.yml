@@ -250,7 +250,7 @@ jobs:
         run: ./scripts/sha2-gate.sh
       - name: s4u-mit-gate (MIT kvno -U / -U -P vs Rust KDC)
         run: ./scripts/s4u-mit-gate.sh
-      - name: kcm-gate (Rust KCM: vs sssd-kcm + MIT klist)
+      - name: kcm-gate (Rust KCM vs sssd-kcm + MIT klist)
         run: ./scripts/kcm-gate.sh
 
   fast-client:
