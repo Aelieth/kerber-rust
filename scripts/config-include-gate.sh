@@ -125,6 +125,38 @@ test "$MIT_M" -ne 0
 test "$RUST_M" -ne 0
 test "$MIT_M" -ne 124
 test "$RUST_M" -ne 124
+
+echo "==== (d) nested missing include is an error even with another KRB5_CONFIG path ===="
+# other.conf is a complete KERBER.TEST profile. A skippable-include bug would
+# swallow the missing nested include and kinit as KERBER.TEST.
+set +e
+MIT_D_OUT=$(echo userpassword | timeout 5 env \
+    KRB5_CONFIG="$BASE/miss/main.conf:$BASE/merge/a.conf" \
+    kinit -c /tmp/g9a_mp_mit user 2>&1)
+MIT_D=$?
+RUST_D_OUT=$(timeout 5 env KRB5_CONFIG="$BASE/miss/main.conf:$BASE/merge/a.conf" \
+    KRB5_PASSWORD=userpassword /tmp/krb5-kinit -c /tmp/g9a_mp_rust user 2>&1)
+RUST_D=$?
+set -e
+echo "$MIT_D_OUT"
+echo "$RUST_D_OUT"
+echo "multi-path missing include mit_rc=$MIT_D rust_rc=$RUST_D"
+test "$MIT_D" -ne 0
+test "$RUST_D" -ne 0
+test "$MIT_D" -ne 124
+test "$RUST_D" -ne 124
+echo "$MIT_D_OUT" | grep -q 'Included profile file could not be read'
+echo "$RUST_D_OUT" | grep -q 'include target not found'
+
+echo "==== (e) missing top-level KRB5_CONFIG path is still skipped ===="
+echo userpassword | env KRB5_CONFIG="$BASE/miss/does-not-exist.conf:$BASE/merge/a.conf" \
+    kinit -c /tmp/g9a_skip_mit user
+env KRB5_CONFIG="$BASE/miss/does-not-exist.conf:$BASE/merge/a.conf" klist -c /tmp/g9a_skip_mit \
+    | grep -q 'user@KERBER.TEST'
+env KRB5_CONFIG="$BASE/miss/does-not-exist.conf:$BASE/merge/a.conf" KRB5_PASSWORD=userpassword \
+    /tmp/krb5-kinit -c /tmp/g9a_skip_rust user
+env KRB5_CONFIG="$BASE/miss/does-not-exist.conf:$BASE/merge/a.conf" /tmp/krb5-klist -c /tmp/g9a_skip_rust \
+    | grep -q 'user@KERBER.TEST'
 EOS
 
 log "config.include.gate" "ok" ',"dotted_conf":true,"first_wins":true,"malformed_no_hang":true'

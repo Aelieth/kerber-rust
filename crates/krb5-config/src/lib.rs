@@ -440,7 +440,16 @@ fn load_file_into(
     if stack.len() >= MAX_INCLUDE_DEPTH {
         return Err(Error::Parse("include nesting too deep".into()));
     }
-    let canon = std::fs::canonicalize(path)?;
+    let canon = match std::fs::canonicalize(path) {
+        Ok(p) => p,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !stack.is_empty() => {
+            return Err(Error::Parse(format!(
+                "include target not found: {}",
+                path.display()
+            )));
+        }
+        Err(e) => return Err(e.into()),
+    };
     if stack.iter().any(|p| p == &canon) {
         return Err(Error::Parse("include cycle".into()));
     }
@@ -1602,6 +1611,36 @@ mod tests {
         )
         .unwrap();
         assert!(Krb5Conf::load_file(&main).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn missing_include_on_multi_path_is_error() {
+        let root = g9a_tree("miss-merge");
+        let bad = root.join("bad.conf");
+        let other = root.join("other.conf");
+        let absent = root.join("absent.conf");
+        std::fs::write(
+            &bad,
+            format!(
+                "include {}\n[libdefaults]\n    default_realm = BAD.TEST\n",
+                root.join("nope.conf").display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(&other, "[libdefaults]\n    default_realm = OTHER.TEST\n").unwrap();
+        let err = load_krb5_conf_paths([&bad, &other]).unwrap_err();
+        assert!(
+            matches!(err, Error::Parse(ref s) if s.contains("include target not found")),
+            "{err}"
+        );
+        let err2 = load_krb5_conf_paths([&other, &bad]).unwrap_err();
+        assert!(
+            matches!(err2, Error::Parse(ref s) if s.contains("include target not found")),
+            "{err2}"
+        );
+        let skipped = load_krb5_conf_paths([&absent, &other]).unwrap();
+        assert_eq!(skipped.default_realm.as_deref(), Some("OTHER.TEST"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
