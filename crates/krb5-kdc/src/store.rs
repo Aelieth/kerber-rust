@@ -2141,6 +2141,33 @@ mod tests {
     }
 
     #[test]
+    fn compressed_transited_cannot_hide_hop() {
+        let t = krb5_types::TransitedEncoding {
+            tr_type: 1,
+            contents: krb5_types::OctetString::from(b"EX.COM,B.".to_vec()),
+        };
+        let hops = t.realms();
+        assert!(
+            hops.iter().any(|h| h == "B.EX.COM"),
+            "compressed B. must expand to B.EX.COM: {hops:?}"
+        );
+        let mut p = Policy::default();
+        p.capaths
+            .entry("A.EX.COM".into())
+            .or_default()
+            .insert("C.EX.COM".into(), vec!["EX.COM".into()]);
+        assert!(
+            !p.transit_allowed("A.EX.COM", "C.EX.COM", &hops),
+            "B.EX.COM is not on the capaths list"
+        );
+        p.capaths
+            .entry("A.EX.COM".into())
+            .or_default()
+            .insert("C.EX.COM".into(), vec!["EX.COM".into(), "B.EX.COM".into()]);
+        assert!(p.transit_allowed("A.EX.COM", "C.EX.COM", &hops));
+    }
+
+    #[test]
     fn bootstrap_sid_rid_are_real_not_dummy() {
         let (store, _) = crate::bootstrap_documented().unwrap();
         assert_ne!(

@@ -144,6 +144,7 @@ fn main() -> ExitCode {
                 );
                 println!("transited_tr_type={}", part.transited.tr_type);
                 println!("transited_contents={contents}");
+                println!("transited_realms={}", part.transited.realms().join(","));
                 println!("transited_policy_checked={checked}");
                 if out.is_none() {
                     return ExitCode::SUCCESS;

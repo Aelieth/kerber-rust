@@ -959,14 +959,13 @@ impl TransitedEncoding {
         }
     }
 
-    /// Realm names encoded in [`Self::from_realms`].
+    /// Realm names in `contents`. `tr-type` 1 is RFC 4120 §3.3.3.2
+    /// DOMAIN-X500-COMPRESS (MIT `chk_trans.c` `maybe_join`): a field ending
+    /// in `.` takes the previous name as suffix; a field starting with `/`
+    /// takes it as prefix. Encode stays uncompressed ([`Self::from_realms`]).
     #[must_use]
     pub fn realms(&self) -> Vec<String> {
-        let s = String::from_utf8_lossy(self.contents.as_ref());
-        s.split(',')
-            .filter(|r| !r.is_empty())
-            .map(str::to_owned)
-            .collect()
+        expand_domain_x500(self.contents.as_ref())
     }
 
     /// Append `realm` if it is not already present.
@@ -979,6 +978,45 @@ impl TransitedEncoding {
         let refs: Vec<&str> = rs.iter().map(String::as_str).collect();
         Self::from_realms(&refs)
     }
+}
+
+fn expand_domain_x500(raw: &[u8]) -> Vec<String> {
+    let s = String::from_utf8_lossy(raw);
+    let mut out = Vec::new();
+    let mut last = String::new();
+    let mut cur = String::new();
+    let mut escaped = false;
+    for c in s.chars() {
+        if escaped {
+            cur.push(c);
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' => escaped = true,
+            ',' => take_x500_comp(&mut out, &mut last, &mut cur),
+            ' ' if cur.is_empty() => last.clear(),
+            _ => cur.push(c),
+        }
+    }
+    take_x500_comp(&mut out, &mut last, &mut cur);
+    out
+}
+
+fn take_x500_comp(out: &mut Vec<String>, last: &mut String, cur: &mut String) {
+    if cur.is_empty() {
+        return;
+    }
+    let expanded = if cur.starts_with('/') {
+        format!("{last}{cur}")
+    } else if cur.ends_with('.') {
+        format!("{cur}{last}")
+    } else {
+        cur.clone()
+    };
+    out.push(expanded.clone());
+    *last = expanded;
+    cur.clear();
 }
 
 /// EncTicketPart ::= [APPLICATION 3] SEQUENCE { flags, key, crealm, ... }
@@ -1101,6 +1139,38 @@ mod tests {
             .with_realm("B.TEST");
         assert_eq!(t.realms(), vec!["A.TEST".to_string(), "B.TEST".to_string()]);
         assert_eq!(t.with_realm("A.TEST").realms().len(), 2);
+    }
+
+    #[test]
+    fn transited_x500_expand_mit_live_fixture() {
+        // Live MIT 1.22.2 4-hop A.EX.COM→EX.COM→B.EX.COM→C.EX.COM issued
+        // tr-type 1 contents "EX.COM,B." (captured s2-live-compress.log).
+        let t = TransitedEncoding {
+            tr_type: 1,
+            contents: OctetString::from(b"EX.COM,B.".to_vec()),
+        };
+        assert_eq!(
+            t.realms(),
+            vec!["EX.COM".to_string(), "B.EX.COM".to_string()]
+        );
+    }
+
+    #[test]
+    fn transited_x500_expand_rfc4120_example() {
+        let t = TransitedEncoding {
+            tr_type: 1,
+            contents: OctetString::from(b"EDU,MIT.,ATHENA.,WASHINGTON.EDU,CS.".to_vec()),
+        };
+        assert_eq!(
+            t.realms(),
+            vec![
+                "EDU".to_string(),
+                "MIT.EDU".to_string(),
+                "ATHENA.MIT.EDU".to_string(),
+                "WASHINGTON.EDU".to_string(),
+                "CS.WASHINGTON.EDU".to_string(),
+            ]
+        );
     }
 
     #[test]

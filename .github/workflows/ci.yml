@@ -236,6 +236,8 @@ jobs:
         run: ./scripts/cross-realm-gate.sh
       - name: capaths-transit-gate
         run: ./scripts/capaths-transit-gate.sh
+      - name: capaths-compress-gate
+        run: ./scripts/capaths-compress-gate.sh
       - name: spake-gate
         run: ./scripts/spake-gate.sh
       - name: rust-kinit-spake-gate (Rust kinit SPAKE vs MIT KDC)

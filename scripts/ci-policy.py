@@ -32,6 +32,7 @@ FAIL_RED_PER_PUSH = (
     "s4u-mit-gate.sh",
     "cross-realm-gate.sh",
     "capaths-transit-gate.sh",
+    "capaths-compress-gate.sh",
     "ktutil-gate.sh",
     "kadmin-local-gate.sh",
     "rust-kpasswd-mit-gate.sh",
