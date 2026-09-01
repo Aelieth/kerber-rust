@@ -40,6 +40,7 @@ documents otherwise. Per-push `continue-on-error` is only `slo` /
 | `rust-kinit-enterprise-gate.sh` | MIT `kinit -E` vs Rust KDC; Rust `kinit -E` vs MIT (must match MIT client) | MIT db2: `CLIENT_NOT_FOUND` for `-E user@REALM`. Rust KDC: klist default principal `user@KERBER.TEST` | mit-extra |
 | `sha2-gate.sh` | MIT `kinit`/`kvno` etype 20 vs Rust KDC | `klist -e` names `aes256-cts-hmac-sha384-192` | mit-extra |
 | `cross-realm-gate.sh` | MIT `kinit` + `kvno host/svc.other.test@OTHER.TEST` | `klist` has `krbtgt/OTHER.TEST` and the host ticket | mit-extra |
+| `capaths-transit-gate.sh` | MIT `kvno` A.TEST→B.TEST→C.TEST vs three Rust KDCs | permitted capaths: `krbtgt/B.TEST` + `krbtgt/C.TEST` + host; deny: MIT `KDC policy rejects transited path` | mit-extra |
 | `kadmin-gate.sh` | MIT `kadmin` vs `krb5-kadmind` 749 | add/cpw/get/list/mod/chrand (dates move)/ktadd/`ktadd -norandkey`/`+lockdown_keys`/purgekeys/`cpw -keepold`/setstr/`renprinc`/del then `kinit extra` | harness |
 | `policy-gate.sh` | MIT `kadmin` addpol/modpol/getpol/`cpw`/delpol + `kinit` | too-short + reuse; minclasses 5; history-N (current inside N); maxfailure-2; lockout duration/interval | harness |
 | `history-mit-gate.sh` | MIT `kadmin.local` history-window on a MIT KDB | history=1 allows A→B→A; history=2 rejects B after A→B→C | harness |

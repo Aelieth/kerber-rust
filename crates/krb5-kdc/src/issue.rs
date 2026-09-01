@@ -662,13 +662,6 @@ fn issue_tgs_body(
         evidence_logon = Some(logon);
     }
     let skip_transited = body.kdc_options.bit(flag_bit::DISABLE_TRANSITED_CHECK);
-    if !skip_transited && utf8_realm(&enc_tkt.crealm) != store.realm() {
-        for r in enc_tkt.transited.realms() {
-            if store.policy().transited_reject.iter().any(|d| d == &r) {
-                return Err(proto(err::PATH_NOT_ACCEPTED, &r));
-            }
-        }
-    }
     let (tkt_key, tkt_kvno, tkt_etype) = match u2u_session(store, req)? {
         Some((k, kv, et)) => (k, kv, et),
         None => (skey.key.clone(), skey.kvno, skey.etype),
@@ -679,6 +672,15 @@ fn issue_tgs_body(
     // TGT must stay empty; only an incoming foreign TGT names us.
     if utf8_realm(&enc_tkt.crealm) != store.realm() {
         transited = transited.with_realm(store.realm());
+    }
+    let transited_ok = skip_transited
+        || store.policy().transit_allowed(
+            utf8_realm(&enc_tkt.crealm),
+            &req_realm,
+            &transited.realms(),
+        );
+    if !skip_transited && !transited_ok {
+        return Err(proto(err::PATH_NOT_ACCEPTED, "transited"));
     }
     let session = random_key(skey.etype)?;
     let now = KerberosTime::now();

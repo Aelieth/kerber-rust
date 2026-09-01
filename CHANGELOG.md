@@ -28,6 +28,13 @@ G4 iprop fidelity have landed.** 1.1 is cut when G1–G9 are complete.
   dotfiles; include cycles and missing includes error. `/etc/krb5.conf.d`
   is not invented. Gate: `scripts/config-include-gate.sh`.
 
+- **G9c `[capaths]` transit (MIT-gated).** Incoming foreign-crealm
+  TGS checks transited hops against `[capaths]` (`.` = direct) or
+  hierarchical derivation; `TRANSITED_POLICY_CHECKED` only on pass;
+  unpermitted hop is `KDC_ERR_PATH_NOT_ACCEPTED` (28). Three-hop
+  A.TEST→B.TEST→C.TEST vs MIT `kvno`. Gate:
+  `scripts/capaths-transit-gate.sh`.
+
 - **G9b default_ccache_name (MIT-gated).** `KRB5CCNAME` beats
   `[libdefaults] default_ccache_name` beats builtin
   `FILE:/tmp/krb5cc_%{uid}`. Conf values expand `%{uid}` / `%{USERID}`

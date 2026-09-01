@@ -1,6 +1,6 @@
 //! In-memory principal database and ACL-gated mutations.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -291,6 +291,8 @@ pub struct Policy {
     pub requires_preauth: bool,
     /// Cross-realm transited realms that are rejected (`KDC_ERR_PATH_NOT_ACCEPTED`).
     pub transited_reject: Vec<String>,
+    /// `[capaths]` client → server → intermediates (`.` = direct).
+    pub capaths: BTreeMap<String, BTreeMap<String, Vec<String>>>,
 }
 
 impl Default for Policy {
@@ -303,8 +305,63 @@ impl Default for Policy {
             allow_weak_crypto: false,
             requires_preauth: true,
             transited_reject: Vec::new(),
+            capaths: BTreeMap::new(),
         }
     }
+}
+
+impl Policy {
+    /// MIT `krb5_check_transited_list`: capaths if present, else hierarchical.
+    #[must_use]
+    pub fn transit_allowed(&self, crealm: &str, srealm: &str, hops: &[String]) -> bool {
+        if hops
+            .iter()
+            .any(|h| self.transited_reject.iter().any(|d| d == h))
+        {
+            return false;
+        }
+        if hops.is_empty() {
+            return true;
+        }
+        let permitted = permitted_transited(&self.capaths, crealm, srealm);
+        hops.iter()
+            .all(|h| h == crealm || h == srealm || permitted.iter().any(|p| p == h))
+    }
+}
+
+fn permitted_transited(
+    capaths: &BTreeMap<String, BTreeMap<String, Vec<String>>>,
+    crealm: &str,
+    srealm: &str,
+) -> Vec<String> {
+    if let Some(vals) = capaths.get(crealm).and_then(|m| m.get(srealm)) {
+        if vals.iter().any(|v| v == ".") {
+            return Vec::new();
+        }
+        return vals.clone();
+    }
+    hierarchical_intermediates(crealm, srealm)
+}
+
+fn hierarchical_intermediates(client: &str, server: &str) -> Vec<String> {
+    let c: Vec<&str> = client.split('.').collect();
+    let s: Vec<&str> = server.split('.').collect();
+    let mut common = 0usize;
+    while common < c.len() && common < s.len() && c[c.len() - 1 - common] == s[s.len() - 1 - common]
+    {
+        common += 1;
+    }
+    if common == 0 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for k in 1..=c.len() - common {
+        out.push(c[k..].join("."));
+    }
+    for k in (0..s.len() - common).rev() {
+        out.push(s[k..].join("."));
+    }
+    out
 }
 
 impl Principal {
@@ -721,6 +778,11 @@ impl PrincipalStore {
             self.domain_sid = sid;
         }
         Ok(())
+    }
+
+    /// `[capaths]` from krb5.conf / kdc.conf.
+    pub fn set_capaths(&mut self, capaths: BTreeMap<String, BTreeMap<String, Vec<String>>>) {
+        self.policy.capaths = capaths;
     }
 
     /// Realm NT domain SID.
@@ -2044,6 +2106,38 @@ mod tests {
         assert_eq!(store.policy.max_renewable_life, 2 * 86400);
         assert!(!store.policy.requires_preauth);
         assert!(store.policy.allow_weak_crypto);
+    }
+
+    #[test]
+    fn transit_allowed_capaths_dot_and_hierarchical() {
+        let mut p = Policy::default();
+        assert!(p.transit_allowed("A.TEST", "A.TEST", &[]));
+        assert!(
+            p.transit_allowed("A.TEST", "C.TEST", &[String::from("C.TEST")]),
+            "first hop: server realm is an endpoint"
+        );
+        assert!(
+            !p.transit_allowed(
+                "A.TEST",
+                "C.TEST",
+                &[String::from("B.TEST"), String::from("C.TEST")]
+            ),
+            "B.TEST is not hierarchical between A.TEST and C.TEST"
+        );
+        p.capaths
+            .entry("A.TEST".into())
+            .or_default()
+            .insert("C.TEST".into(), vec!["B.TEST".into()]);
+        assert!(p.transit_allowed(
+            "A.TEST",
+            "C.TEST",
+            &[String::from("B.TEST"), String::from("C.TEST")]
+        ));
+        p.capaths
+            .entry("A.TEST".into())
+            .or_default()
+            .insert("C.TEST".into(), vec![".".into()]);
+        assert!(!p.transit_allowed("A.TEST", "C.TEST", &[String::from("B.TEST")]));
     }
 
     #[test]

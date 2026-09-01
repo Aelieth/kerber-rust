@@ -234,6 +234,8 @@ jobs:
         run: ./scripts/stop-harness.sh || true
       - name: cross-realm-gate
         run: ./scripts/cross-realm-gate.sh
+      - name: capaths-transit-gate
+        run: ./scripts/capaths-transit-gate.sh
       - name: spake-gate
         run: ./scripts/spake-gate.sh
       - name: rust-kinit-spake-gate (Rust kinit SPAKE vs MIT KDC)

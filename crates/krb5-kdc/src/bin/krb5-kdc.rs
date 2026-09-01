@@ -110,6 +110,9 @@ fn main() {
         eprintln!("krb5-kdc: kdc.conf: {e}");
         std::process::exit(2);
     }
+    if let Some(c) = krb5_config::load_krb5_conf() {
+        store.set_capaths(c.capaths);
+    }
     let enable_pkinit =
         export_pkinit.is_some() || std::env::var("KRB5_ENABLE_PKINIT").ok().as_deref() == Some("1");
     if enable_pkinit && let Err(e) = store.enable_pkinit_ca() {
@@ -287,14 +290,17 @@ fn bootstrap_test_realm() -> PrincipalStore {
     });
     let actor = format!("{TEST_ADMIN}@{realm}");
     let acl = Acl::allow_admin(&actor);
-    let host = if realm == TEST_REALM {
-        documented_host()
-    } else {
-        krb5_types::PrincipalName::new(
-            krb5_types::PrincipalName::NT_SRV_HST,
-            ["host", "svc.other.test"],
-        )
-    };
+    let host_inst = std::env::var("KRB5_TEST_HOST").unwrap_or_else(|_| {
+        if realm == TEST_REALM {
+            krb5_kdc::TEST_HOST.to_owned()
+        } else {
+            "svc.other.test".into()
+        }
+    });
+    let host = krb5_types::PrincipalName::new(
+        krb5_types::PrincipalName::NT_SRV_HST,
+        ["host", host_inst.as_str()],
+    );
     if let Err(e) = store.create_host(&acl, &actor, &host) {
         eprintln!("krb5-kdc: host principal: {e}");
         std::process::exit(1);
@@ -311,15 +317,22 @@ fn bootstrap_test_realm() -> PrincipalStore {
         eprintln!("krb5-kdc: kiprop: {e}");
         std::process::exit(1);
     }
-    if let (Ok(foreign), Ok(hexkey)) = (
+    if let (Ok(foreigns), Ok(hexkey)) = (
         std::env::var("KRB5_TEST_FOREIGN_REALM"),
         std::env::var("KRB5_TEST_INTERREALM_KEY"),
     ) {
         match parse_hex_key(&hexkey) {
             Ok(key) => {
-                if let Err(e) = store.create_interrealm_key(&acl, &actor, &foreign, key) {
-                    eprintln!("krb5-kdc: inter-realm: {e}");
-                    std::process::exit(1);
+                for foreign in foreigns.split(',') {
+                    let foreign = foreign.trim();
+                    if foreign.is_empty() {
+                        continue;
+                    }
+                    if let Err(e) = store.create_interrealm_key(&acl, &actor, foreign, key.clone())
+                    {
+                        eprintln!("krb5-kdc: inter-realm {foreign}: {e}");
+                        std::process::exit(1);
+                    }
                 }
             }
             Err(e) => {
@@ -337,11 +350,17 @@ fn bootstrap_test_realm() -> PrincipalStore {
                 }
                 match parse_hex_key(part) {
                     Ok(key) => {
-                        if let Err(e) =
-                            store.add_interrealm_decrypt_key(&acl, &actor, &foreign, key)
-                        {
-                            eprintln!("krb5-kdc: inter-realm accept key: {e}");
-                            std::process::exit(1);
+                        for foreign in foreigns.split(',') {
+                            let foreign = foreign.trim();
+                            if foreign.is_empty() {
+                                continue;
+                            }
+                            if let Err(e) =
+                                store.add_interrealm_decrypt_key(&acl, &actor, foreign, key.clone())
+                            {
+                                eprintln!("krb5-kdc: inter-realm accept key {foreign}: {e}");
+                                std::process::exit(1);
+                            }
                         }
                     }
                     Err(e) => {

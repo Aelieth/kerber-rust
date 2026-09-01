@@ -98,6 +98,8 @@ pub struct Krb5Conf {
     pub pkinit_identities: BTreeMap<String, Vec<String>>,
     /// Realm → `pkinit_anchors` FILE values.
     pub pkinit_anchors: BTreeMap<String, Vec<String>>,
+    /// `[capaths]` client-realm → server-realm → intermediates (`.` = direct).
+    pub capaths: BTreeMap<String, BTreeMap<String, Vec<String>>>,
 }
 
 /// KDC policy from `kdc.conf`.
@@ -323,6 +325,7 @@ fn parse_into(
 ) -> Result<(), Error> {
     let mut section = String::new();
     let mut realm: Option<String> = None;
+    let mut capaths_client: Option<String> = None;
     for raw in text.lines() {
         if let Some(kind) = include_directive(raw)
             && let Some(st) = stack.as_deref_mut()
@@ -340,6 +343,7 @@ fn parse_into(
         if let Some(s) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
             section = s.trim().to_ascii_lowercase();
             realm = None;
+            capaths_client = None;
             continue;
         }
         if section == "realms" {
@@ -363,6 +367,26 @@ fn parse_into(
             && let Some((d, r)) = split_kv(line)
         {
             conf.domain_realm.entry(d.to_ascii_lowercase()).or_insert(r);
+        }
+        if section == "capaths" {
+            if let Some(name) = line.strip_suffix('{') {
+                capaths_client = Some(name.trim().trim_end_matches('=').trim().to_string());
+                continue;
+            }
+            if line == "}" {
+                capaths_client = None;
+                continue;
+            }
+            if let Some(client) = capaths_client.as_ref()
+                && let Some((server, hop)) = split_kv(line)
+            {
+                conf.capaths
+                    .entry(client.clone())
+                    .or_default()
+                    .entry(server.to_string())
+                    .or_default()
+                    .push(hop);
+            }
         }
     }
     Ok(())
@@ -1530,6 +1554,26 @@ mod tests {
         .unwrap();
         assert!(Krb5Conf::load_file(&main).is_err());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn parse_capaths_client_server_hops() {
+        let c = Krb5Conf::parse(
+            r"
+[capaths]
+    A.TEST = {
+        C.TEST = B.TEST
+        B.TEST = .
+    }
+    C.TEST = {
+        A.TEST = B.TEST
+    }
+",
+        )
+        .unwrap();
+        assert_eq!(c.capaths["A.TEST"]["C.TEST"], ["B.TEST"]);
+        assert_eq!(c.capaths["A.TEST"]["B.TEST"], ["."]);
+        assert_eq!(c.capaths["C.TEST"]["A.TEST"], ["B.TEST"]);
     }
 
     #[test]
