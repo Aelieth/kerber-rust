@@ -293,6 +293,8 @@ pub struct Policy {
     pub transited_reject: Vec<String>,
     /// `[capaths]` client → server → intermediates (`.` = direct).
     pub capaths: BTreeMap<String, BTreeMap<String, Vec<String>>>,
+    /// MIT `reject_bad_transit` (default true).
+    pub reject_bad_transit: bool,
 }
 
 impl Default for Policy {
@@ -306,6 +308,7 @@ impl Default for Policy {
             requires_preauth: true,
             transited_reject: Vec::new(),
             capaths: BTreeMap::new(),
+            reject_bad_transit: true,
         }
     }
 }
@@ -769,6 +772,7 @@ impl PrincipalStore {
         self.policy.max_renewable_life_set = conf.max_renewable_life_set;
         self.policy.allow_weak_crypto = conf.allow_weak_crypto;
         self.policy.requires_preauth = conf.requires_preauth;
+        self.policy.reject_bad_transit = conf.reject_bad_transit;
         if let Some(s) = conf.domain_sid.as_deref() {
             let Some(sid) = RpcSid::from_sddl(s) else {
                 return Err(Error::Crypto(format!(
@@ -2106,6 +2110,7 @@ mod tests {
         assert_eq!(store.policy.max_renewable_life, 2 * 86400);
         assert!(!store.policy.requires_preauth);
         assert!(store.policy.allow_weak_crypto);
+        assert!(store.policy.reject_bad_transit);
     }
 
     #[test]

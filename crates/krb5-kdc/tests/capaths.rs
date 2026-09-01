@@ -109,8 +109,8 @@ fn three_hop_capaths_accept_and_reject() {
         403,
     )
     .expect("C host with capaths");
-    let skey = c.get_name(&host_c).unwrap().best_key().unwrap();
-    let part = decrypt_ticket_part(&skey.key, &host.rep.0.ticket).expect("enc");
+    let host_key = c.get_name(&host_c).unwrap().best_key().unwrap().key.clone();
+    let part = decrypt_ticket_part(&host_key, &host.rep.0.ticket).expect("enc");
     assert!(
         part.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED),
         "T set only when capaths check passed"
@@ -127,7 +127,7 @@ fn three_hop_capaths_accept_and_reject() {
         bc.rep.0.ticket.clone(),
         &bc.session_key,
         "A.TEST",
-        host_c,
+        host_c.clone(),
         "C.TEST",
         404,
     );
@@ -135,4 +135,21 @@ fn three_hop_capaths_accept_and_reject() {
         Err(Error::Protocol { code, .. }) => assert_eq!(code, err::PATH_NOT_ACCEPTED),
         other => panic!("expected PATH_NOT_ACCEPTED, got {other:?}"),
     }
+
+    c.policy.reject_bad_transit = false;
+    let lax = chase_tgs(
+        &c,
+        bc.rep.0.ticket.clone(),
+        &bc.session_key,
+        "A.TEST",
+        host_c.clone(),
+        "C.TEST",
+        405,
+    )
+    .expect("reject_bad_transit=false accepts");
+    let lax_part = decrypt_ticket_part(&host_key, &lax.rep.0.ticket).expect("enc lax");
+    assert!(
+        !lax_part.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED),
+        "failed check must not set T when reject_bad_transit is false"
+    );
 }

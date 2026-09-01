@@ -674,15 +674,15 @@ fn issue_tgs_body(
     if prev_hop != crealm && prev_hop != req_realm.as_str() {
         transited = transited.with_realm(prev_hop);
     }
-    let transited_ok = skip_transited
-        || store.policy().transit_allowed(
-            utf8_realm(&enc_tkt.crealm),
-            &req_realm,
-            &transited.realms(),
-        );
-    if !skip_transited && !transited_ok {
+    let transit_checked = store.policy().transit_allowed(
+        utf8_realm(&enc_tkt.crealm),
+        &req_realm,
+        &transited.realms(),
+    );
+    if !skip_transited && !transit_checked && store.policy().reject_bad_transit {
         return Err(proto(err::PATH_NOT_ACCEPTED, "transited"));
     }
+    let set_transited_flag = !skip_transited && transit_checked;
     let session = random_key(skey.etype)?;
     let now = KerberosTime::now();
     let authtime;
@@ -714,7 +714,7 @@ fn issue_tgs_body(
         } else {
             ticket_renew_till = None;
         }
-        if !skip_transited {
+        if set_transited_flag {
             flags = flags.with_bit(flag_bit::TRANSITED_POLICY_CHECKED, true);
         }
     } else if validate {
@@ -726,7 +726,7 @@ fn issue_tgs_body(
         end = enc_tkt.endtime.clone();
         ticket_renew_till = enc_tkt.renew_till.clone();
         flags = enc_tkt.flags.clone().with_bit(flag_bit::INVALID, false);
-        if !skip_transited {
+        if set_transited_flag {
             flags = flags.with_bit(flag_bit::TRANSITED_POLICY_CHECKED, true);
         }
     } else {
@@ -740,7 +740,7 @@ fn issue_tgs_body(
             end = capped;
         }
         flags = TicketFlags::none();
-        if !skip_transited {
+        if set_transited_flag {
             flags = flags.with_bit(flag_bit::TRANSITED_POLICY_CHECKED, true);
         }
         if enc_tkt.flags.pre_authent() {

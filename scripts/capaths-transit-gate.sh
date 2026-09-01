@@ -91,6 +91,8 @@ mkdir -p /tmp/db-a /tmp/db-b /tmp/db-c
 write_kdc_conf A.TEST 88 /tmp/db-a
 write_kdc_conf B.TEST 89 /tmp/db-b
 write_kdc_conf C.TEST 90 /tmp/db-c
+sed 's/supported_enctypes.*/reject_bad_transit = false\n        supported_enctypes = aes256-cts-hmac-sha1-96:normal/' \
+    /tmp/kdc-C.conf > /tmp/kdc-C-lax.conf
 cat >/tmp/kdc-c-allow.conf <<EOF
 [libdefaults]
     default_realm = C.TEST
@@ -248,6 +250,54 @@ test "$mit_drc" -ne 0
 # is "rejects transited path" (Rust C and the later Rust-deny leg).
 echo "$MIT_DENY" | grep -qE 'KDC policy rejects (transited path|request)'
 
+echo "==== MIT C reject_bad_transit=false accepts without T ===="
+docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/mit-c.pid)" 2>/dev/null || true'
+for _ in $(seq 1 20); do
+    if docker exec "$NAME" python3 -c "
+import socket
+try:
+    s = socket.create_connection(('127.0.0.1', 90), 0.15)
+    s.close()
+    raise SystemExit(0)
+except OSError:
+    raise SystemExit(1)
+" 2>/dev/null; then
+        sleep 0.25
+        continue
+    fi
+    break
+done
+docker exec \
+    -e KRB5_CONFIG=/tmp/kdc-c-deny.conf \
+    -e KRB5_KDC_PROFILE=/tmp/kdc-C-lax.conf \
+    "$NAME" sh -c "krb5kdc -n -r C.TEST >/tmp/mit-c-lax.log 2>&1 & echo \$! >/tmp/mit-c.pid"
+wait_port 90 || {
+    docker exec "$NAME" cat /tmp/mit-c-lax.log 2>/dev/null || true
+    log "capaths.gate" "error" ',"error":"MIT lax C did not listen"'
+    exit 1
+}
+docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+    sh -c "printf 'userpassword\n' | kinit -c /tmp/krb5cc_mit_lax user@A.TEST" >/dev/null
+set +e
+MIT_LAX="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+    kvno -c /tmp/krb5cc_mit_lax host/svc.c.test@C.TEST 2>&1)"
+mit_lax_rc=$?
+set -e
+echo "$MIT_LAX"
+test "$mit_lax_rc" -eq 0
+echo "$MIT_LAX" | grep -q 'host/svc.c.test@C.TEST: kvno ='
+MIT_LAX_FLAGS="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" klist -f -c /tmp/krb5cc_mit_lax)"
+echo "$MIT_LAX_FLAGS"
+MIT_LAX_FL="$(echo "$MIT_LAX_FLAGS" | awk '/host\/svc.c.test/{p=1;next} p&&/Flags:/{print;exit}')"
+echo "lax_host_flags=$MIT_LAX_FL"
+echo "$MIT_LAX_FL" | grep -q T && {
+    echo "reject_bad_transit=false must not set T" >&2
+    exit 1
+}
+MIT_LAX_DUMP="$(docker exec "$NAME" /tmp/krb5-pac-extract --keytab /tmp/mit-c.host.kt --ccache /tmp/krb5cc_mit_lax --print-transited)"
+echo "$MIT_LAX_DUMP"
+echo "$MIT_LAX_DUMP" | grep -q '^transited_policy_checked=0$'
+
 echo "==== stop MIT KDCs ===="
 docker exec "$NAME" sh -c 'kill -9 $(cat /tmp/mit-a.pid /tmp/mit-b.pid /tmp/mit-c.pid 2>/dev/null) 2>/dev/null || true'
 for _ in $(seq 1 20); do
@@ -381,6 +431,39 @@ echo "$DENY"
 test "$drc" -ne 0
 echo "$DENY" | grep -q 'KDC policy rejects transited path'
 
+echo "==== Rust C reject_bad_transit=false accepts without T ===="
+docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/kdc-c.pid)" 2>/dev/null || true'
+sleep 1
+docker exec \
+    -e KRB5_CONFIG=/tmp/kdc-c-deny.conf \
+    -e KRB5_KDC_PROFILE=/tmp/kdc-C-lax.conf \
+    -e KRB5_TEST_USER_PASSWORD=userpassword \
+    -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
+    -e KRB5_TEST_REALM=C.TEST \
+    -e KRB5_TEST_FOREIGN_REALM=B.TEST \
+    -e KRB5_TEST_INTERREALM_KEY="$XR_KEY" \
+    -e KRB5_TEST_HOST=svc.c.test \
+    -e KRB5_EXPORT_KEYTAB=/tmp/rust-c-lax.kt \
+    "$NAME" sh -c '/tmp/krb5-kdc --test-realm 127.0.0.1:90 >/tmp/kdc-c-lax.log 2>&1 & echo $! >/tmp/kdc-c.pid'
+wait_listen /tmp/kdc-c-lax.log || {
+    docker exec "$NAME" cat /tmp/kdc-c-lax.log 2>/dev/null || true
+    log "capaths.gate" "error" ',"error":"Rust lax C did not listen"'
+    exit 1
+}
+docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+    sh -c "printf 'userpassword\n' | kinit -c /tmp/krb5cc_rust_lax user@A.TEST" >/dev/null
+set +e
+RUST_LAX="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+    kvno -c /tmp/krb5cc_rust_lax host/svc.c.test@C.TEST 2>&1)"
+rust_lax_rc=$?
+set -e
+echo "$RUST_LAX"
+test "$rust_lax_rc" -eq 0
+echo "$RUST_LAX" | grep -q 'host/svc.c.test@C.TEST: kvno ='
+RUST_LAX_DUMP="$(docker exec "$NAME" /tmp/krb5-pac-extract --keytab /tmp/rust-c-lax.kt --ccache /tmp/krb5cc_rust_lax --print-transited)"
+echo "$RUST_LAX_DUMP"
+echo "$RUST_LAX_DUMP" | grep -q '^transited_policy_checked=0$'
+
 log "capaths.gate" "ok" \
-    ",\"path\":\"A.TEST>B.TEST>C.TEST\",\"permitted\":true,\"rejected\":true,\"transited_tr_type\":${MIT_TR_TYPE},\"transited_contents\":\"${MIT_TR_CONTENTS}\",\"transited_policy_checked\":true"
+    ",\"path\":\"A.TEST>B.TEST>C.TEST\",\"permitted\":true,\"rejected\":true,\"transited_tr_type\":${MIT_TR_TYPE},\"transited_contents\":\"${MIT_TR_CONTENTS}\",\"transited_policy_checked\":true,\"reject_bad_transit_false\":true"
 exit 0
