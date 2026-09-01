@@ -50,7 +50,8 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 - **G9c `[capaths]` transit (MIT-gated).** Incoming foreign-crealm
   TGS checks transited hops against `[capaths]` (`.` = direct) or
   hierarchical derivation; `TRANSITED_POLICY_CHECKED` only on pass;
-  unpermitted hop is `KDC_ERR_PATH_NOT_ACCEPTED` (28). Issued
+  unpermitted hop is `KDC_ERR_POLICY` (12), matching live MIT 1.22.2.
+  Issued
   transited encoding matches MIT 1.22.2 `add_to_transited` (previous
   hop, `tr-type` 1, contents `B.TEST` on A→B→C). Gate:
   `scripts/capaths-transit-gate.sh`.

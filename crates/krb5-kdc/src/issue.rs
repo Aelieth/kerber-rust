@@ -680,7 +680,7 @@ fn issue_tgs_body(
         &transited.realms(),
     );
     if !skip_transited && !transit_checked && store.policy().reject_bad_transit {
-        return Err(proto(err::PATH_NOT_ACCEPTED, "transited"));
+        return Err(proto(err::POLICY, "transited"));
     }
     let set_transited_flag = !skip_transited && transit_checked;
     let session = random_key(skey.etype)?;

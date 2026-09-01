@@ -132,8 +132,8 @@ fn three_hop_capaths_accept_and_reject() {
         404,
     );
     match denied {
-        Err(Error::Protocol { code, .. }) => assert_eq!(code, err::PATH_NOT_ACCEPTED),
-        other => panic!("expected PATH_NOT_ACCEPTED, got {other:?}"),
+        Err(Error::Protocol { code, .. }) => assert_eq!(code, err::POLICY),
+        other => panic!("expected POLICY, got {other:?}"),
     }
 
     c.policy.reject_bad_transit = false;

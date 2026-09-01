@@ -289,7 +289,7 @@ pub struct Policy {
     pub allow_weak_crypto: bool,
     /// Default requires_preauth for new principals.
     pub requires_preauth: bool,
-    /// Cross-realm transited realms that are rejected (`KDC_ERR_PATH_NOT_ACCEPTED`).
+    /// Cross-realm transited realms that are rejected (`KDC_ERR_POLICY`).
     pub transited_reject: Vec<String>,
     /// `[capaths]` client → server → intermediates (`.` = direct).
     pub capaths: BTreeMap<String, BTreeMap<String, Vec<String>>>,
