@@ -137,6 +137,9 @@ pub struct KdcConf {
     pub db_library: Option<String>,
     /// Optional NT domain SID (`S-1-5-21-…`) for PAC issuance.
     pub domain_sid: Option<String>,
+    /// `reject_bad_transit` (default true). When false, a failed transited
+    /// check is accepted without `TRANSITED_POLICY_CHECKED`.
+    pub reject_bad_transit: bool,
 }
 
 impl Default for KdcConf {
@@ -157,6 +160,7 @@ impl Default for KdcConf {
             master_key_type: None,
             db_library: None,
             domain_sid: None,
+            reject_bad_transit: true,
         }
     }
 }
@@ -365,6 +369,16 @@ fn parse_into(
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
             continue;
+        }
+        // MIT: column-0 include is a directive; indented include inside a
+        // section is Improper format (a relation with no '='). At file start
+        // (no section) MIT ignores it.
+        if !section.is_empty()
+            && split_kv(line).is_none()
+            && include_directive(line).is_some()
+            && include_directive(raw).is_none()
+        {
+            return Err(Error::Parse("improper format: indented include".into()));
         }
         if let Some(s) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
             section = s.trim().to_ascii_lowercase();
@@ -620,6 +634,7 @@ fn parse_kdcdefaults(conf: &mut KdcConf, line: &str) {
                 .collect();
         }
         "allow_weak_crypto" => conf.allow_weak_crypto = truthy(&v),
+        "reject_bad_transit" => conf.reject_bad_transit = truthy(&v),
         _ => {}
     }
 }
@@ -643,6 +658,7 @@ fn parse_kdc_realm_line(conf: &mut KdcConf, line: &str) {
         "master_key_type" => conf.master_key_type = Some(v),
         "database_module" | "db_library" => conf.db_library = Some(v),
         "domain_sid" => conf.domain_sid = Some(v),
+        "reject_bad_transit" => conf.reject_bad_transit = truthy(&v),
         _ => {}
     }
 }
@@ -736,7 +752,7 @@ const BUILTIN_CCACHE: &str = "FILE:/tmp/krb5cc_%{uid}";
 ///
 /// # Errors
 ///
-/// Unknown `%{token}` (MIT fails closed).
+/// Unknown `%{token}` or unterminated `%{` (MIT fails closed).
 pub fn expand_ccache_params(s: &str) -> Result<String, String> {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
@@ -744,9 +760,7 @@ pub fn expand_ccache_params(s: &str) -> Result<String, String> {
         out.push_str(&rest[..start]);
         rest = &rest[start + 2..];
         let Some(end) = rest.find('}') else {
-            out.push_str("%{");
-            out.push_str(rest);
-            return Ok(out);
+            return Err("unterminated %{token}".into());
         };
         let token = &rest[..end];
         rest = &rest[end + 1..];
@@ -1285,6 +1299,11 @@ mod tests {
                 .unwrap_err()
                 .contains("nope")
         );
+        assert!(
+            expand_ccache_params("FILE:/tmp/x_%{uid")
+                .unwrap_err()
+                .contains("unterminated")
+        );
         let expanded = expand_ccache_params("FILE:/tmp/krb5cc_%{uid}").unwrap();
         assert_eq!(
             parse_ccspec(&expanded).unwrap(),
@@ -1373,6 +1392,7 @@ mod tests {
             Some("S-1-5-21-891046300-1937985867-1481223175")
         );
         assert_eq!(c.kdc_listen[0], "127.0.0.1:88");
+        assert!(c.reject_bad_transit);
         let mit = KdcConf::parse(
             r"
 [realms]
@@ -1385,6 +1405,17 @@ mod tests {
 ",
         )
         .unwrap();
+        assert!(mit.reject_bad_transit);
+        let lax = KdcConf::parse(
+            r"
+[realms]
+    KERBER.TEST = {
+        reject_bad_transit = false
+    }
+",
+        )
+        .unwrap();
+        assert!(!lax.reject_bad_transit);
         assert_eq!(mit.max_life, 36000);
         assert_eq!(mit.max_renewable_life, 7 * 86400);
         assert_eq!(
@@ -1644,6 +1675,43 @@ mod tests {
         );
         let skipped = load_krb5_conf_paths([&absent, &other]).unwrap();
         assert_eq!(skipped.default_realm.as_deref(), Some("OTHER.TEST"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn indented_include_at_file_start_is_ignored() {
+        let root = g9a_tree("ind-start");
+        let main = root.join("main.conf");
+        std::fs::write(
+            &main,
+            format!(
+                "    include {}\n[libdefaults]\n    default_realm = OK.TEST\n",
+                root.join("nope.conf").display()
+            ),
+        )
+        .unwrap();
+        let c = Krb5Conf::load_file(&main).unwrap();
+        assert_eq!(c.default_realm.as_deref(), Some("OK.TEST"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn indented_include_inside_section_is_error() {
+        let root = g9a_tree("ind-sect");
+        let main = root.join("main.conf");
+        std::fs::write(
+            &main,
+            format!(
+                "[libdefaults]\n    default_realm = X.TEST\n    include {}\n",
+                root.join("nope.conf").display()
+            ),
+        )
+        .unwrap();
+        let err = Krb5Conf::load_file(&main).unwrap_err();
+        assert!(
+            matches!(err, Error::Parse(ref s) if s.contains("improper format")),
+            "{err}"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

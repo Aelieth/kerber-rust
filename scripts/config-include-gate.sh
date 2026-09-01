@@ -157,6 +157,77 @@ env KRB5_CONFIG="$BASE/miss/does-not-exist.conf:$BASE/merge/a.conf" KRB5_PASSWOR
     /tmp/krb5-kinit -c /tmp/g9a_skip_rust user
 env KRB5_CONFIG="$BASE/miss/does-not-exist.conf:$BASE/merge/a.conf" /tmp/krb5-klist -c /tmp/g9a_skip_rust \
     | grep -q 'user@KERBER.TEST'
+
+echo "==== (f) indented include at file start is ignored ===="
+cat >"$BASE/miss/indent-start.conf" <<EOF
+    include $BASE/miss/does-not-exist.conf
+[libdefaults]
+    default_realm = KERBER.TEST
+    dns_lookup_kdc = false
+    rdns = false
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1
+    }
+EOF
+echo userpassword | env KRB5_CONFIG="$BASE/miss/indent-start.conf" kinit -c /tmp/g9a_is_mit user
+env KRB5_CONFIG="$BASE/miss/indent-start.conf" klist -c /tmp/g9a_is_mit | grep -q 'user@KERBER.TEST'
+env KRB5_CONFIG="$BASE/miss/indent-start.conf" KRB5_PASSWORD=userpassword \
+    /tmp/krb5-kinit -c /tmp/g9a_is_rust user
+env KRB5_CONFIG="$BASE/miss/indent-start.conf" /tmp/krb5-klist -c /tmp/g9a_is_rust \
+    | grep -q 'user@KERBER.TEST'
+
+echo "==== (g) indented include inside a section is improper format ===="
+cat >"$BASE/miss/indent-sect.conf" <<EOF
+[libdefaults]
+    default_realm = KERBER.TEST
+    dns_lookup_kdc = false
+    include $BASE/miss/does-not-exist.conf
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1
+    }
+EOF
+set +e
+MIT_G_OUT=$(echo userpassword | timeout 5 env KRB5_CONFIG="$BASE/miss/indent-sect.conf" \
+    kinit -c /tmp/g9a_ig_mit user 2>&1)
+MIT_G=$?
+RUST_G_OUT=$(timeout 5 env KRB5_CONFIG="$BASE/miss/indent-sect.conf" KRB5_PASSWORD=userpassword \
+    /tmp/krb5-kinit -c /tmp/g9a_ig_rust user 2>&1)
+RUST_G=$?
+set -e
+echo "$MIT_G_OUT"
+echo "$RUST_G_OUT"
+test "$MIT_G" -ne 0
+test "$RUST_G" -ne 0
+echo "$MIT_G_OUT" | grep -q 'Improper format of Kerberos configuration file'
+echo "$RUST_G_OUT" | grep -q 'improper format'
+
+echo "==== (h) unterminated %{ in default_ccache_name is an error ===="
+cat >"$BASE/miss/unterm.conf" <<EOF
+[libdefaults]
+    default_realm = KERBER.TEST
+    dns_lookup_kdc = false
+    default_ccache_name = FILE:/tmp/g9a_unterm_%{uid
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1
+    }
+EOF
+set +e
+MIT_H_OUT=$(echo userpassword | timeout 5 env KRB5_CONFIG="$BASE/miss/unterm.conf" \
+    kinit user@KERBER.TEST 2>&1)
+MIT_H=$?
+RUST_H_OUT=$(timeout 5 env KRB5_CONFIG="$BASE/miss/unterm.conf" KRB5_PASSWORD=userpassword \
+    /tmp/krb5-kinit user@KERBER.TEST 2>&1)
+RUST_H=$?
+set -e
+echo "$MIT_H_OUT"
+echo "$RUST_H_OUT"
+test "$MIT_H" -ne 0
+test "$RUST_H" -ne 0
+echo "$MIT_H_OUT" | grep -q 'Internal credentials cache error'
+echo "$RUST_H_OUT" | grep -q 'unterminated'
 EOS
 
 log "config.include.gate" "ok" ',"dotted_conf":true,"first_wins":true,"malformed_no_hang":true'
