@@ -962,10 +962,10 @@ impl TransitedEncoding {
     /// Realm names in `contents`. `tr-type` 1 is RFC 4120 §3.3.3.2
     /// DOMAIN-X500-COMPRESS. MIT-verified (`chk_trans.c` `maybe_join`):
     /// join on the unescaped field (trailing `.` suffix, leading `/`
-    /// prefix), including an escaped marker. More than 256 commas
-    /// yields a single `"\0"` hop, the analogue of MIT `MAXLEN` —
-    /// `do_tgs_req` collapses that failure to POLICY. Encode stays
-    /// uncompressed ([`Self::from_realms`]).
+    /// prefix), including an escaped marker. More than 256 commas, or
+    /// a joined component over MIT `MAXLEN` 512 bytes, yields a single
+    /// `"\0"` hop — `do_tgs_req` collapses that failure to POLICY.
+    /// Encode stays uncompressed ([`Self::from_realms`]).
     #[must_use]
     pub fn realms(&self) -> Vec<String> {
         expand_domain_x500(self.contents.as_ref())
@@ -987,6 +987,8 @@ impl TransitedEncoding {
 /// over this, expansion is skipped and a poison hop is returned so the
 /// transit check cannot match a legitimate realm.
 const MAX_TRANSIT_REALMS: usize = 256;
+/// MIT `chk_trans.c` `MAXLEN`. A joined component over this is poison.
+const MAX_TRANSIT_COMPONENT: usize = 512;
 
 fn expand_domain_x500(raw: &[u8]) -> Vec<String> {
     let mut commas = 0usize;
@@ -1011,18 +1013,24 @@ fn expand_domain_x500(raw: &[u8]) -> Vec<String> {
         }
         match c {
             '\\' => escaped = true,
-            ',' => take_x500_comp(&mut out, &mut last, &mut cur),
+            ',' => {
+                if !take_x500_comp(&mut out, &mut last, &mut cur) {
+                    return vec!["\0".to_owned()];
+                }
+            }
             ' ' if cur.is_empty() => last.clear(),
             _ => cur.push(c),
         }
     }
-    take_x500_comp(&mut out, &mut last, &mut cur);
+    if !take_x500_comp(&mut out, &mut last, &mut cur) {
+        return vec!["\0".to_owned()];
+    }
     out
 }
 
-fn take_x500_comp(out: &mut Vec<String>, last: &mut String, cur: &mut String) {
+fn take_x500_comp(out: &mut Vec<String>, last: &mut String, cur: &mut String) -> bool {
     if cur.is_empty() {
-        return;
+        return true;
     }
     // MIT chk_trans.c maybe_join: join on the unescaped field.
     let expanded = if cur.starts_with('/') {
@@ -1032,9 +1040,13 @@ fn take_x500_comp(out: &mut Vec<String>, last: &mut String, cur: &mut String) {
     } else {
         cur.clone()
     };
+    if expanded.len() > MAX_TRANSIT_COMPONENT {
+        return false;
+    }
     out.push(expanded.clone());
     *last = expanded;
     cur.clear();
+    true
 }
 
 /// EncTicketPart ::= [APPLICATION 3] SEQUENCE { flags, key, crealm, ... }
@@ -1253,6 +1265,21 @@ mod tests {
             vec!["X.COM".to_string(), "X.COM/Y".to_string()],
             "unescaped leading / still prefix-joins"
         );
+    }
+
+    #[test]
+    fn transited_x500_component_over_maxlen_is_poisoned() {
+        let ok = TransitedEncoding {
+            tr_type: 1,
+            contents: OctetString::from(vec![b'A'; 512]),
+        };
+        assert_eq!(ok.realms(), vec!["A".repeat(512)]);
+
+        let over = TransitedEncoding {
+            tr_type: 1,
+            contents: OctetString::from(vec![b'A'; 513]),
+        };
+        assert_eq!(over.realms().as_slice(), ["\0"]);
     }
 
     #[test]

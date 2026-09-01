@@ -38,7 +38,7 @@ MIT would accept or grow). They are not laxer than MIT.
 
 | Deviation | MIT | Rust | Why |
 | --- | --- | --- | --- |
-| Transited comma cap | 512-byte `MAXLEN` buffer per component (`chk_trans.c`); over-long is `ILL_CR_TKT` collapsed to POLICY | More than 256 commas → one `"\0"` poison hop → POLICY | Same observable POLICY; bounds expansion before join |
+| Transited bounds | 512-byte `MAXLEN` buffer per component (`chk_trans.c`); over-long is `ILL_CR_TKT` collapsed to POLICY | More than 256 commas, or a joined component over 512 bytes → one `"\0"` poison hop → POLICY | Same observable POLICY; O(1)-class memory vs MIT |
 | DOMAIN-X500-COMPRESS join | `maybe_join` on unescaped text (`X.COM,C\.` → `C.X.COM`) | Same (U2) | Match MIT, not RFC-literal escaped markers |
 | Encode-side X.500 RDN compression | MIT `add_to_transited` may emit compressed RDN form | Encode stays uncompressed (`from_realms`) | Deferred; decode still expands MIT compressed contents |
 

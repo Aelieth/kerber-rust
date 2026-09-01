@@ -15,6 +15,9 @@ fuzz_target!(|data: &[u8]| {
         assert_eq!(hops.as_slice(), ["\0"]);
         return;
     }
+    if hops.as_slice() == ["\0"] {
+        return;
+    }
     assert!(hops.len() <= MAX_TRANSIT_REALMS + 1);
     if data.contains(&b'\\') {
         return;
