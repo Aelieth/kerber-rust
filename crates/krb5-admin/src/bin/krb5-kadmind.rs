@@ -22,6 +22,7 @@ use krb5_kdc::{
     PrincipalStore, acl_for_store, bootstrap_documented, documented_changepw, documented_kadmin,
     documented_kiprop, open_store, shared_dump as shared_store,
 };
+use krb5_protocol::ReplayCache;
 
 fn main() {
     let _ = tracing_subscriber::fmt()
@@ -120,6 +121,7 @@ fn main() {
     } else {
         eprintln!("krb5-kadmind: no kadmin/changepw keys (RFC 3244 not listening)");
     }
+    let rcache = ReplayCache::new();
     loop {
         let accepted = listener.accept();
         match accepted {
@@ -134,8 +136,9 @@ fn main() {
                 let acl = acl.clone();
                 let kadmin = kadmin.clone();
                 let realm = realm.clone();
+                let rcache = rcache.clone();
                 thread::spawn(move || {
-                    let _ = serve_kadm5_conn(store, acl, keys, kadmin, realm, stream);
+                    let _ = serve_kadm5_conn(store, acl, keys, kadmin, realm, rcache, stream);
                 });
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {

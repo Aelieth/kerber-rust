@@ -5,8 +5,9 @@ Constant-time MAC compare, replay detection, zeroize-on-drop, and
 matrix names the shipped site and the test that drives it.
 
 Replay is one implementation (`krb5-protocol` `ReplayCache`: 50_000
-entries, 5-minute window, fail-closed on mutex poison). GSS wrap/MIC
-uses a per-context sequence window in addition to the AP-REQ cache.
+entries, 5-minute window, fail-closed on mutex poison). GSS acceptors
+share one AP-REQ cache across `accept_sec_context` calls. GSS wrap/MIC
+uses a per-context sequence window in addition to that cache.
 
 ## Matrix
 
@@ -19,6 +20,7 @@ uses a per-context sequence window in addition to the AP-REQ cache.
 | Replay — PA-ENC-TIMESTAMP | `verify_enc_timestamp` (`issue.rs`) `pa_replay` | `pa_enc_timestamp_replay_is_repeat` |
 | Replay — KRB-SAFE / PRIV / CRED | `safe_priv.rs` `check_and_store` on unwrap | `messages.rs` unwrap path; `ReplayCache` unit tests |
 | Replay — GSS wrap/MIC sequence | `krb5-gss` `accept_seq` (`recv_window`) | `wrap_mic_replay_inside_window_is_rejected` |
+| Replay — GSS acceptor AP-REQ | `accept_sec_context` shared `ReplayCache` (process-wide in `krb5-gss-accept` / kadmind) | `accept_same_token_twice_is_repeat`; `gss-gate.sh` replay cell. In-memory, 300 s. MIT `dfl` file rcache did not reject across process restart in the harness (W1-C); same-process MIT `gss-mit-server` does. |
 | Replay cache window / cap / poison | `ReplayCache::check_and_store` | `replay::tests::{window_prune_is_not_replay, cap_evicts_oldest_not_grow, poison_fails_closed}` |
 | Zeroize-on-drop — protocol keys | `ProtocolKey` `Drop` (`krb5-crypto` `key.rs`) | Drop impl; `ProtocolKey` is every stash / keytab / ccache key |
 | Zeroize-on-drop — derived keys | `DerivedKeys` `Drop` (`derive.rs`) | Drop impl; used on every encrypt/decrypt |

@@ -304,6 +304,7 @@ impl GssContext {
         channel_bindings: Option<&ChannelBindings>,
         expected_server: Option<&PrincipalName>,
         expected_realm: Option<&str>,
+        rcache: &ReplayCache,
     ) -> Result<(Self, Option<Vec<u8>>), Error> {
         let first = service_keys.first().ok_or(Error::Truncated)?;
         let inner = gss_unwrap_app(token)?;
@@ -335,7 +336,7 @@ impl GssContext {
             addresses: None,
             now: None,
         };
-        let ok = krb5_protocol::verify_ap_req_ex(&inner[2..], &params, &ctx.replay, None)?;
+        let ok = krb5_protocol::verify_ap_req_ex(&inner[2..], &params, rcache, None)?;
         let client = format!(
             "{}@{}",
             ok.authenticator.cname.components_joined(),
@@ -1730,6 +1731,7 @@ pub fn spnego_accept(
     channel_bindings: Option<&ChannelBindings>,
     expected_server: Option<&PrincipalName>,
     expected_realm: Option<&str>,
+    rcache: &ReplayCache,
 ) -> Result<(GssContext, Vec<u8>), Error> {
     let init = parse_neg_init(token)?;
     if !mech_list_has_krb5(&init.mech_list_der)? {
@@ -1742,6 +1744,7 @@ pub fn spnego_accept(
         channel_bindings,
         expected_server,
         expected_realm,
+        rcache,
     )?;
     if let Some(mic) = &init.mic {
         ctx.verify_mic(&init.mech_list_der, mic)?;
@@ -1898,9 +1901,52 @@ mod tests {
             None,
             Some(&documented_host()),
             Some(TEST_REALM),
+            &ReplayCache::new(),
         )
         .unwrap();
         (init, acc)
+    }
+
+    #[test]
+    fn accept_same_token_twice_is_repeat() {
+        let (_as_out, tgs_out, skey, cname) = user_host();
+        let (_init, token) = GssContext::init_sec_context(
+            tgs_out.rep.0.ticket.clone(),
+            &tgs_out.session_key,
+            &ascii(TEST_REALM),
+            &cname,
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+        let rcache = ReplayCache::new();
+        GssContext::accept_sec_context(
+            &token,
+            std::slice::from_ref(&skey),
+            None,
+            Some(&documented_host()),
+            Some(TEST_REALM),
+            &rcache,
+        )
+        .expect("first accept");
+        match GssContext::accept_sec_context(
+            &token,
+            std::slice::from_ref(&skey),
+            None,
+            Some(&documented_host()),
+            Some(TEST_REALM),
+            &rcache,
+        ) {
+            Err(err) => {
+                let s = err.to_string();
+                assert!(
+                    s.contains("34") || s.contains("replay"),
+                    "expected 34 replay, got {err}"
+                );
+            }
+            Ok(_) => panic!("replayed AP-REQ must be 34"),
+        }
     }
 
     #[test]
@@ -2011,6 +2057,7 @@ mod tests {
             Some(&cb),
             Some(&documented_host()),
             Some(TEST_REALM),
+            &ReplayCache::new(),
         )
         .unwrap();
         let other = ChannelBindings {
@@ -2023,6 +2070,7 @@ mod tests {
             Some(&other),
             Some(&documented_host()),
             Some(TEST_REALM),
+            &ReplayCache::new(),
         ) {
             Err(Error::ChannelBindings) => {}
             Err(e) => panic!("expected channel bindings error, got {e}"),
@@ -2034,6 +2082,7 @@ mod tests {
             None,
             Some(&documented_host()),
             Some(TEST_REALM),
+            &ReplayCache::new(),
         )
         .expect("acceptor GSS_C_NO_CHANNEL_BINDINGS ignores token CB");
     }
@@ -2078,6 +2127,7 @@ mod tests {
             None,
             Some(&documented_host()),
             Some(TEST_REALM),
+            &ReplayCache::new(),
         )
         .unwrap();
         assert_eq!(
@@ -2118,6 +2168,7 @@ mod tests {
                 None,
                 Some(&documented_host()),
                 Some(TEST_REALM),
+                &ReplayCache::new(),
             ),
             Err(Error::Truncated)
         ));
@@ -2153,6 +2204,7 @@ mod tests {
                 None,
                 Some(&documented_host()),
                 Some(TEST_REALM),
+                &ReplayCache::new(),
             ),
             Err(Error::Truncated)
         ));
@@ -2167,7 +2219,7 @@ mod tests {
         assert!(r.is_ok(), "hostile SPNEGO length must not panic");
         assert!(matches!(r.unwrap(), Err(Error::Truncated)));
         assert!(matches!(
-            spnego_accept(&tok, &[], None, None, None),
+            spnego_accept(&tok, &[], None, None, None, &ReplayCache::new()),
             Err(Error::Truncated)
         ));
     }
@@ -2232,6 +2284,7 @@ mod tests {
             None,
             Some(&wrong),
             Some(TEST_REALM),
+            &ReplayCache::new(),
         ) else {
             panic!("wrong service accepted")
         };
@@ -2249,6 +2302,7 @@ mod tests {
                 None,
                 Some(&documented_host()),
                 Some(TEST_REALM),
+                &ReplayCache::new(),
             )
             .is_ok(),
             "matching service"
@@ -2456,6 +2510,7 @@ mod tests {
             None,
             Some(&documented_host()),
             Some(TEST_REALM),
+            &ReplayCache::new(),
         ) else {
             panic!("hostile Dlgth must not accept")
         };
@@ -2490,6 +2545,7 @@ mod tests {
             None,
             Some(&documented_host()),
             Some(TEST_REALM),
+            &ReplayCache::new(),
         )
         .unwrap();
         let want = format!("{TEST_USER}@{TEST_REALM}");
@@ -2565,6 +2621,7 @@ mod tests {
             None,
             Some(&documented_host()),
             Some(TEST_REALM),
+            &ReplayCache::new(),
         ) else {
             panic!("plaintext EncKrbCredPart must not populate delegated()")
         };

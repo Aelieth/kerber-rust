@@ -92,6 +92,22 @@ int main(int argc, char **argv) {
     int port = atoi(argv[3]);
     setenv("KRB5_KTNAME", keytab, 1);
 
+    gss_buffer_desc nbuf = { strlen("host@testhost.kerber.test"),
+                             (void *)"host@testhost.kerber.test" };
+    gss_name_t aname = GSS_C_NO_NAME;
+    gss_cred_id_t acred = GSS_C_NO_CREDENTIAL;
+    OM_uint32 amaj, amin;
+    amaj = gss_import_name(&amin, &nbuf, GSS_C_NT_HOSTBASED_SERVICE, &aname);
+    if (amaj != GSS_S_COMPLETE) {
+        die_gss("import_name", amaj, amin);
+    }
+    amaj = gss_acquire_cred(&amin, aname, GSS_C_INDEFINITE, GSS_C_NO_OID_SET,
+                            GSS_C_ACCEPT, &acred, NULL, NULL);
+    if (amaj != GSS_S_COMPLETE) {
+        die_gss("acquire_cred", amaj, amin);
+    }
+    gss_release_name(&amin, &aname);
+
     int ls = socket(AF_INET, SOCK_STREAM, 0);
     int one = 1;
     setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
@@ -104,15 +120,16 @@ int main(int argc, char **argv) {
         perror("bind");
         return 1;
     }
-    if (listen(ls, 1) != 0) {
+    if (listen(ls, 8) != 0) {
         perror("listen");
         return 1;
     }
     fprintf(stderr, "mit-gss-server listening\n");
+    for (;;) {
     int fd = accept(ls, NULL, NULL);
     if (fd < 0) {
         perror("accept");
-        return 1;
+        continue;
     }
 
     gss_ctx_id_t ctx = GSS_C_NO_CONTEXT;
@@ -126,7 +143,7 @@ int main(int argc, char **argv) {
         maj = gss_accept_sec_context(
             &min,
             &ctx,
-            GSS_C_NO_CREDENTIAL,
+            acred,
             &in,
             GSS_C_NO_CHANNEL_BINDINGS,
             &src,
@@ -143,6 +160,7 @@ int main(int argc, char **argv) {
             gss_release_buffer(&min, &out);
         }
         if (maj != GSS_S_COMPLETE && maj != GSS_S_CONTINUE_NEEDED) {
+            fflush(stderr);
             die_gss("accept_sec_context", maj, min);
         }
     } while (maj == GSS_S_CONTINUE_NEEDED);
@@ -193,6 +211,5 @@ int main(int argc, char **argv) {
         gss_release_name(&min, &src);
     }
     close(fd);
-    close(ls);
-    return 0;
+    }
 }

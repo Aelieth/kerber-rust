@@ -22,6 +22,12 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0 C4 (MIT-gated).** GSS `accept_sec_context` shares one acceptor
+  `ReplayCache` across calls (MIT cred rcache). A captured AP-REQ is 34
+  `REPEAT` (`authenticator replay`). Gate: `scripts/gss-gate.sh`
+  replayed AP-REQ vs Rust acceptor. MIT `gss-mit-server` in this
+  harness accepted the dumped token (W1-C).
+
 - **W0 C3 (MIT-gated).** Explicit FAST armor looks up the armor ticket
   by (`ticket.realm`, sname) first like MIT `rd_req`: foreign/missing
   is 35 `NOT_US` `FAST armor TGT`; a local non-krbtgt armor is 26

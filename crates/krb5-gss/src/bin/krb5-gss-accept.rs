@@ -11,7 +11,7 @@ use std::net::TcpListener;
 use std::time::Duration;
 
 use krb5_gss::{GssContext, IovBuf, IovType};
-use krb5_protocol::Keytab;
+use krb5_protocol::{Keytab, ReplayCache};
 
 fn main() {
     let _ = tracing_subscriber::fmt()
@@ -70,90 +70,124 @@ fn main() {
         std::process::exit(1);
     });
     println!("gss-accept listening {listen}");
-    let (mut stream, _) = listener.accept().unwrap_or_else(|e| {
-        eprintln!("accept: {e}");
-        std::process::exit(1);
-    });
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
-    let tok = read_token(&mut stream).unwrap_or_else(|e| {
-        eprintln!("read AP-REQ: {e}");
-        std::process::exit(1);
-    });
+    let rcache = ReplayCache::new();
     let realm = std::str::from_utf8(ent.realm.as_bytes()).unwrap_or("");
-    let (mut ctx, ap_rep) = if krb5_gss::is_spnego(&tok) {
-        let (ctx, resp) =
-            krb5_gss::spnego_accept(&tok, &service_keys, None, Some(&ent.name), Some(realm))
-                .unwrap_or_else(|e| {
-                    eprintln!("spnego_accept: {e}");
-                    std::process::exit(1);
-                });
-        println!("gss-accept spnego mic ok");
-        (ctx, Some(resp))
-    } else {
-        let inner = krb5_gss::spnego_inner(&tok).map_or_else(|_| tok.clone(), Vec::from);
-        GssContext::accept_sec_context(&inner, &service_keys, None, Some(&ent.name), Some(realm))
-            .unwrap_or_else(|e| {
-                eprintln!("accept_sec_context: {e}");
-                std::process::exit(1);
-            })
-    };
-    if let Some(c) = ctx.client.as_deref() {
-        println!("gss-accept client={c}");
-    }
-    if let Some(d) = ctx.delegated() {
-        println!("gss-accept delegated={d}");
-    }
-    {
-        let q = ctx.inquire_context();
-        println!(
-            "gss-accept inquire flags={} lifetime={}",
-            q.flags, q.lifetime
-        );
-    }
-    let exported = ctx.export_sec_context().unwrap_or_else(|e| {
-        eprintln!("export: {e}");
-        std::process::exit(1);
-    });
-    ctx = GssContext::import_sec_context(&exported).unwrap_or_else(|e| {
-        eprintln!("import: {e}");
-        std::process::exit(1);
-    });
-    println!("gss-accept import ok");
-    if let Some(rep) = ap_rep {
-        write_token(&mut stream, &rep).unwrap_or_else(|e| {
-            eprintln!("write AP-REP: {e}");
-            std::process::exit(1);
-        });
-    }
-    let mut nwrap = 0u32;
     loop {
-        let wrap = match read_token(&mut stream) {
-            Ok(w) => w,
-            Err(_) if nwrap > 0 => break,
+        let (mut stream, _) = match listener.accept() {
+            Ok(v) => v,
             Err(e) => {
-                eprintln!("read wrap: {e}");
-                std::process::exit(1);
+                eprintln!("accept: {e}");
+                continue;
             }
         };
-        let n = wrap.len().min(16);
-        eprintln!("wrap token len={} hdr={:02x?}", wrap.len(), &wrap[..n]);
-        if wrap.first() == Some(&0xa1) {
-            ctx.verify_spnego_mic(&wrap).unwrap_or_else(|e| {
-                eprintln!("spnego peer mic: {e}");
-                std::process::exit(1);
-            });
-            println!("gss-accept spnego peer mic ok");
-            nwrap = nwrap.saturating_add(1);
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
+        let tok = match read_token(&mut stream) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("read AP-REQ: {e}");
+                continue;
+            }
+        };
+        let accepted = if krb5_gss::is_spnego(&tok) {
+            match krb5_gss::spnego_accept(
+                &tok,
+                &service_keys,
+                None,
+                Some(&ent.name),
+                Some(realm),
+                &rcache,
+            ) {
+                Ok((ctx, resp)) => {
+                    println!("gss-accept spnego mic ok");
+                    Ok((ctx, Some(resp)))
+                }
+                Err(e) => Err(e),
+            }
+        } else {
+            let inner = krb5_gss::spnego_inner(&tok).map_or_else(|_| tok.clone(), Vec::from);
+            GssContext::accept_sec_context(
+                &inner,
+                &service_keys,
+                None,
+                Some(&ent.name),
+                Some(realm),
+                &rcache,
+            )
+        };
+        let (mut ctx, ap_rep) = match accepted {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("accept_sec_context: {e}");
+                continue;
+            }
+        };
+        if let Some(c) = ctx.client.as_deref() {
+            println!("gss-accept client={c}");
+        }
+        if let Some(d) = ctx.delegated() {
+            println!("gss-accept delegated={d}");
+        }
+        {
+            let q = ctx.inquire_context();
+            println!(
+                "gss-accept inquire flags={} lifetime={}",
+                q.flags, q.lifetime
+            );
+        }
+        let exported = match ctx.export_sec_context() {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("export: {e}");
+                continue;
+            }
+        };
+        ctx = match GssContext::import_sec_context(&exported) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("import: {e}");
+                continue;
+            }
+        };
+        println!("gss-accept import ok");
+        if let Some(rep) = ap_rep
+            && let Err(e) = write_token(&mut stream, &rep)
+        {
+            eprintln!("write AP-REP: {e}");
             continue;
         }
-        let plain = unwrap_iov_token(&mut ctx, &wrap, &assoc).unwrap_or_else(|e| {
-            eprintln!("unwrap: {e}");
-            std::process::exit(1);
-        });
-        println!("gss-accept unwrap ok bytes={}", plain.len());
-        println!("gss-accept plaintext={}", String::from_utf8_lossy(&plain));
-        nwrap = nwrap.saturating_add(1);
+        let mut nwrap = 0u32;
+        loop {
+            let wrap = match read_token(&mut stream) {
+                Ok(w) => w,
+                Err(_) if nwrap > 0 => break,
+                Err(e) => {
+                    eprintln!("read wrap: {e}");
+                    break;
+                }
+            };
+            let n = wrap.len().min(16);
+            eprintln!("wrap token len={} hdr={:02x?}", wrap.len(), &wrap[..n]);
+            if wrap.first() == Some(&0xa1) {
+                if let Err(e) = ctx.verify_spnego_mic(&wrap) {
+                    eprintln!("spnego peer mic: {e}");
+                    break;
+                }
+                println!("gss-accept spnego peer mic ok");
+                nwrap = nwrap.saturating_add(1);
+                continue;
+            }
+            let plain = match unwrap_iov_token(&mut ctx, &wrap, &assoc) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("unwrap: {e}");
+                    break;
+                }
+            };
+            println!("gss-accept unwrap ok bytes={}", plain.len());
+            println!("gss-accept plaintext={}", String::from_utf8_lossy(&plain));
+            nwrap = nwrap.saturating_add(1);
+        }
     }
 }
 

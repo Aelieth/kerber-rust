@@ -98,6 +98,8 @@ int main(int argc, char **argv) {
     gss_buffer_desc in = { 0, NULL };
     gss_buffer_desc out = { 0, NULL };
     OM_uint32 ret_flags = 0;
+    const char *dump_path = getenv("GSS_DUMP_TOKEN");
+    int dumped = 0;
     do {
         maj = gss_init_sec_context(
             &min,
@@ -120,6 +122,19 @@ int main(int argc, char **argv) {
             in.length = 0;
         }
         if (out.length) {
+            if (dump_path && !dumped) {
+                FILE *df = fopen(dump_path, "wb");
+                if (!df) {
+                    perror("GSS_DUMP_TOKEN");
+                    exit(1);
+                }
+                if (fwrite(out.value, 1, out.length, df) != out.length) {
+                    perror("GSS_DUMP_TOKEN write");
+                    exit(1);
+                }
+                fclose(df);
+                dumped = 1;
+            }
             send_token(fd, &out);
             gss_release_buffer(&min, &out);
         }

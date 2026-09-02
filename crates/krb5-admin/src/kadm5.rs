@@ -14,6 +14,7 @@ use krb5_kdc::{
     KeyEntry, Principal, SharedDump as SharedStore, TL_LAST_PWD_CHANGE, TL_MOD_PRINC,
     TL_STRING_ATTRS, TlData,
 };
+use krb5_protocol::ReplayCache;
 use krb5_types::{PrincipalName, Ticket};
 
 use crate::AdminSession;
@@ -134,6 +135,7 @@ pub fn serve_kadm5_conn(
     service_keys: Vec<ProtocolKey>,
     expected_server: PrincipalName,
     expected_realm: String,
+    rcache: ReplayCache,
     mut stream: TcpStream,
 ) -> io::Result<()> {
     let mut gss: Option<GssContext> = None;
@@ -154,6 +156,7 @@ pub fn serve_kadm5_conn(
             &handle,
             &mut gss,
             &mut agss,
+            &rcache,
             &rec,
         ) {
             Ok(r) => r,
@@ -222,6 +225,7 @@ fn handle_rpc(
     handle: &[u8],
     gss: &mut Option<GssContext>,
     agss: &mut Option<Agss>,
+    rcache: &ReplayCache,
     rec: &[u8],
 ) -> Result<Vec<u8>, Error> {
     let mut r = XdrR::new(rec);
@@ -259,6 +263,7 @@ fn handle_rpc(
             &cred,
             &verf,
             r.rest(),
+            rcache,
         );
     }
 
@@ -283,9 +288,15 @@ fn handle_rpc(
         let token = r.opaque()?;
         // RPCSEC_GSS: MIT kadmin uses kadmin/admin; kpropd uses kiprop/host
         // on program 2112 then 100423. Bind by service key, not sname.
-        let (ctx, out_tok) =
-            GssContext::accept_sec_context(&token, service_keys, None, None, Some(expected_realm))
-                .map_err(|e| Error::Inner(e.to_string()))?;
+        let (ctx, out_tok) = GssContext::accept_sec_context(
+            &token,
+            service_keys,
+            None,
+            None,
+            Some(expected_realm),
+            rcache,
+        )
+        .map_err(|e| Error::Inner(e.to_string()))?;
         *gss = Some(ctx);
         let mut body = XdrW::default();
         body.opaque(handle);
@@ -355,6 +366,7 @@ fn handle_auth_gssapi(
     cred: &[u8],
     verf: &[u8],
     args: &[u8],
+    rcache: &ReplayCache,
 ) -> Result<Vec<u8>, Error> {
     let mut cr = XdrR::new(cred);
     let version = cr.u32()?;
@@ -384,6 +396,7 @@ fn handle_auth_gssapi(
             None,
             server,
             Some(expected_realm),
+            rcache,
         ) {
             Ok(v) => v,
             Err(e) => {

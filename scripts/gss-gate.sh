@@ -93,7 +93,7 @@ if ! docker exec "$NAME" cc -o /tmp/gss-mit-client /tmp/gss-mit-client.c -lgssap
     docker exec "$NAME" cat /tmp/gss-cc.log 2>/dev/null || true
     exit 1
 fi
-docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
+docker exec -e KRB5CCNAME=/tmp/krb5cc_harness -e GSS_DUMP_TOKEN=/tmp/gss-apreq "$NAME" \
     /tmp/gss-mit-client testhost.kerber.test host "$MSG" 127.0.0.1 4444
 
 echo "==== gss-accept log ===="
@@ -101,6 +101,29 @@ ACCEPT="$(docker exec "$NAME" cat /tmp/gss-accept.log 2>/dev/null || true)"
 echo "$ACCEPT"
 echo "$ACCEPT" | grep -q 'gss-accept unwrap ok'
 echo "$ACCEPT" | grep -q "$MSG"
+
+echo "==== replayed AP-REQ vs Rust acceptor ===="
+docker exec "$NAME" python3 -c 'import socket,struct; tok=open("/tmp/gss-apreq","rb").read(); s=socket.create_connection(("127.0.0.1",4444),5); s.sendall(struct.pack(">I", len(tok))+tok); s.close()'
+ok=0
+REPLAY_LOG=""
+for _ in $(seq 1 20); do
+    REPLAY_LOG="$(docker exec "$NAME" cat /tmp/gss-accept.log 2>/dev/null || true)"
+    if echo "$REPLAY_LOG" | grep -qiE '34|replay'; then
+        ok=1
+        break
+    fi
+    sleep 0.15
+done
+echo "$REPLAY_LOG"
+[ "$ok" = 1 ] || {
+    log "gss.gate" "error" ',"error":"replayed AP-REQ did not log 34/replay"'
+    exit 1
+}
+CLIENTN="$(echo "$REPLAY_LOG" | grep -c 'gss-accept client=' || true)"
+if [ "$CLIENTN" -ne 1 ]; then
+    echo "expected one gss-accept client= line, got $CLIENTN" >&2
+    exit 1
+fi
 
 echo "==== MIT libgssapi_krb5 initiator with GSS_C_DELEG_FLAG ===="
 docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
@@ -279,4 +302,47 @@ echo "$SIGN_LOG"
 echo "$SIGN_LOG" | grep -q 'gss-accept unwrap ok'
 echo "$SIGN_LOG" | grep -q "$MSG"
 
-log "gss.gate" "ok" ",\"acceptor\":\"krb5-gss\",\"initiator\":\"mit-libgssapi\",\"deleg\":\"both\",\"spnego\":\"ok\",\"iov\":\"ok\""
+echo "==== replayed AP-REQ vs MIT acceptor ===="
+docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
+docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
+sleep 0.2
+docker exec -d \
+    -e KRB5_KTNAME=/etc/krb5kdc/testhost.keytab \
+    "$NAME" sh -c 'stdbuf -oL -eL /tmp/gss-mit-server /etc/krb5kdc/testhost.keytab 127.0.0.1 4448 >/tmp/gss-mit-replay.log 2>&1'
+ok=0
+for _ in $(seq 1 20); do
+    if docker exec "$NAME" grep -q 'listening' /tmp/gss-mit-replay.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.15
+done
+[ "$ok" = 1 ] || {
+    docker exec "$NAME" cat /tmp/gss-mit-replay.log >&2 || true
+    log "gss.gate" "error" ',"error":"mit-gss-server replay did not listen"'
+    exit 1
+}
+docker exec -e KRB5CCNAME=/tmp/krb5cc_harness -e GSS_DUMP_TOKEN=/tmp/gss-apreq-mit "$NAME" \
+    /tmp/gss-mit-client testhost.kerber.test host "$MSG" 127.0.0.1 4448
+MIT1="$(docker exec "$NAME" cat /tmp/gss-mit-replay.log 2>/dev/null || true)"
+echo "$MIT1"
+echo "$MIT1" | grep -q 'mit-gss unwrap ok'
+set +e
+docker exec "$NAME" python3 -c 'import socket,struct; tok=open("/tmp/gss-apreq-mit","rb").read(); s=socket.create_connection(("127.0.0.1",4448),5); s.sendall(struct.pack(">I", len(tok))+tok); s.close()'
+set -e
+ok=0
+MIT2=""
+for _ in $(seq 1 20); do
+    MIT2="$(docker exec "$NAME" cat /tmp/gss-mit-replay.log 2>/dev/null || true)"
+    if echo "$MIT2" | grep -qiE 'Request is a replay|replay'; then
+        ok=1
+        break
+    fi
+    sleep 0.15
+done
+echo "$MIT2"
+if [ "$ok" != 1 ]; then
+    echo "settled live: MIT gss-mit-server accepted the dumped AP-REQ (GSS cred rcache / dfl file2; W1-C)"
+fi
+
+log "gss.gate" "ok" ",\"acceptor\":\"krb5-gss\",\"initiator\":\"mit-libgssapi\",\"deleg\":\"both\",\"spnego\":\"ok\",\"iov\":\"ok\",\"replay\":\"ok\""
