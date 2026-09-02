@@ -62,7 +62,9 @@ Destination RENEW/VALIDATE is not exempt.
 
 A cross-realm TGT whose client realm is this KDC (`check_tgs_lineage`)
 is 12 `INVALID LINEAGE` even when `reject_bad_transit = false`.
-S4U2Self is exempt (MIT `tgs_policy.c`).
+S4U2Self is exempt (MIT `tgs_policy.c`). S4U2Self server match is by
+DB entry *and* realm (`is_client_db_alias`): a foreign TGT client with
+a colliding local name is 36 `INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH`.
 
 FAST armor decrypt binds keys to the armor `ticket.realm` (MIT
 `fast_util.c` `rd_req`); forged-realm armor is 31 `FAST armor TGT`.

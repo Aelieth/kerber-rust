@@ -221,12 +221,15 @@ when that oracle is absent.
   names must match`).
 - `scripts/s4u-mit-gate.sh` — MIT `kvno -U user` and `kvno -U user -P`
   against the **Rust** KDC (`kinit -f -k host/testhost.kerber.test`).
-  klist must name `for client user@KERBER.TEST`. `kvno -U nosuch` is
-  `Client not found`; `kvno -U locked` (`KRB5_TEST_LOCKED_USER`,
-  `DISALLOW_ALL_TIX`) is `credentials have been revoked`. S4U2Proxy
-  rejects a non-forwardable evidence ticket (`BADOPTION`), denies classic
-  constrained delegation unless `s4u_allowed_to` lists the target, and
-  parses PA-PAC-OPTIONS (167). In the harness CI job.
+  The user-TGT → host S4U2Self mismatch cell runs against both the MIT
+  KDC (default entrypoint, :88) and the Rust KDC (:8888); both log
+  `INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH`. klist must name
+  `for client user@KERBER.TEST`. `kvno -U nosuch` is `Client not found`;
+  `kvno -U locked` (`KRB5_TEST_LOCKED_USER`, `DISALLOW_ALL_TIX`) is
+  `credentials have been revoked`. S4U2Proxy rejects a non-forwardable
+  evidence ticket (`BADOPTION`), denies classic constrained delegation
+  unless `s4u_allowed_to` lists the target, and parses PA-PAC-OPTIONS
+  (167). In CI (`mit-extra`).
 - `scripts/policy-gate.sh` — MIT `kadmin` addpol/modpol/getpol/listpols/`cpw`/delpol
   against `krb5-kadmind`; too-short and reuse; `-minclasses 5`; history-N
   (current counts inside N);
@@ -273,7 +276,10 @@ when that oracle is absent.
   `host/svc.c.test@GARBAGE.EXAMPLE` aimed at C (`--body-realm`) is 60
   `GET_LOCAL_TGT` on both MIT and Rust. Dest RENEW at C with issuer
   `body.realm` is 60 both sides. A peer-minted TGT for a local user
-  (`--claim-crealm`) is `INVALID LINEAGE` on both sides. Bare A TGT plus Rust `krb5-kvno`
+  (`--claim-crealm`) is `INVALID LINEAGE` on both sides. A seeded C TGT
+  plus `krb5-kvno -U victim@A.TEST user@C.TEST` is 36
+  `INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH` on both MIT C and Rust C
+  (name collision across realms). Bare A TGT plus Rust `krb5-kvno
   host/svc.c.test@C.TEST` chases MIT A→B→C (`body.realm` is the current
   TGT realm). In CI (`mit-extra`).
 - `scripts/capaths-compress-gate.sh` — MIT 4-hop

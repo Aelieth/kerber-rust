@@ -878,3 +878,102 @@ fn s4u2self_cross_tgt_local_user_local_server_is_not_cross_realm() {
     assert_eq!(code, err::C_PRINCIPAL_UNKNOWN);
     assert_eq!(text.as_deref(), Some("NOT_CROSS_REALM_REQUEST"));
 }
+
+#[test]
+fn s4u2self_cross_tgt_foreign_client_named_like_local_server_is_badmatch() {
+    let (_a, _b, c, _ir, _host_c, bc) = three_realm();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
+    let pa = pa_for_user(&bc.session_key, admin, "A.TEST").expect("PA-FOR-USER");
+    let req = tgs_req_ex(
+        bc.rep.0.ticket.clone(),
+        &bc.session_key,
+        "A.TEST",
+        &user,
+        user.clone(),
+        "C.TEST",
+        986,
+        KdcOptions::forwardable(),
+        None,
+        vec![pa],
+        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
+    )
+    .expect("s4u");
+    let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
+    assert_eq!(code, err::BADMATCH);
+    assert_eq!(
+        text.as_deref(),
+        Some("INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH")
+    );
+}
+
+#[test]
+fn s4u2self_local_tgt_foreign_crealm_is_badmatch() {
+    let (_a, _b, c, _ir, _host_c, _bc) = three_realm();
+    let tgt = as_tgt(&c, "C.TEST", 984);
+    let tgt_key = c.krbtgt().unwrap().best_key().unwrap().key.clone();
+    let mut t = tgt.rep.0.ticket.clone();
+    let mut part = decrypt_ticket_part(&tgt_key, &t).expect("tgt");
+    part.crealm = krb5_types::try_ascii("A.TEST").expect("realm");
+    part.authorization_data = None;
+    reseal(&tgt_key, &mut t, &part);
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
+    let pa = pa_for_user(&tgt.session_key, admin, "C.TEST").expect("PA-FOR-USER");
+    let req = tgs_req_ex(
+        t,
+        &tgt.session_key,
+        "C.TEST",
+        &user,
+        user.clone(),
+        "C.TEST",
+        985,
+        KdcOptions::forwardable(),
+        None,
+        vec![pa],
+        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
+    )
+    .expect("s4u");
+    let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
+    assert_eq!(code, err::BADMATCH);
+    assert_eq!(
+        text.as_deref(),
+        Some("INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH")
+    );
+}
+
+#[test]
+fn s4u2self_cross_tgt_local_server_foreign_user_issues() {
+    let (_a, _b, mut c, ir, host_c, bc) = three_realm();
+    c.policy.reject_bad_transit = false;
+    let mut t = bc.rep.0.ticket.clone();
+    let mut part = decrypt_ticket_part(&ir, &t).expect("bc");
+    part.cname = host_c.clone();
+    part.crealm = krb5_types::try_ascii("C.TEST").expect("realm");
+    part.authorization_data = None;
+    reseal(&ir, &mut t, &part);
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
+    let pa = pa_for_user(&bc.session_key, admin, "A.TEST").expect("PA-FOR-USER");
+    let req = tgs_req_ex(
+        t,
+        &bc.session_key,
+        "C.TEST",
+        &host_c,
+        host_c.clone(),
+        "C.TEST",
+        987,
+        KdcOptions::forwardable(),
+        None,
+        vec![pa],
+        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
+    )
+    .expect("s4u");
+    let out = krb5_kdc::issue_tgs(&c, &req).expect("MIT case 4");
+    let host_key = c.get_name(&host_c).unwrap().best_key().unwrap().key.clone();
+    let part = decrypt_ticket_part(&host_key, &out.rep.0.ticket).expect("enc");
+    assert_eq!(part.cname.components_joined(), TEST_ADMIN);
+    assert_eq!(
+        std::str::from_utf8(part.crealm.as_bytes()).unwrap(),
+        "A.TEST"
+    );
+}

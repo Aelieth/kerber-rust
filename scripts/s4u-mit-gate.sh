@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# MIT kvno -U / kvno -U -P against the Rust KDC (not AD).
-# Isolated inside the MIT 1.22.2 image; never touches host /etc/krb5.conf.
+# MIT kvno -U / kvno -U -P against the Rust KDC (not AD). The mismatch
+# cell also runs against the image's MIT KDC. Isolated inside the MIT
+# 1.22.2 image; never touches host /etc/krb5.conf.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -29,9 +30,49 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
 fi
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
-docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
+docker run -d --name "$NAME" "$IMAGE" >/dev/null
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
+
+ok=0
+for _ in $(seq 1 90); do
+    logs="$(docker logs "$NAME" 2>&1 || true)"
+    if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"ok"'; then
+        ok=1
+        break
+    fi
+    if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"error"'; then
+        echo "$logs" >&2
+        log "s4u.mit.gate" "error" ',"error":"harness kinit failed"'
+        exit 1
+    fi
+    sleep 1
+done
+if [ "$ok" != 1 ]; then
+    log "s4u.mit.gate" "error" ',"error":"harness did not become ready"'
+    docker logs "$NAME" >&2 || true
+    exit 1
+fi
+
+# The mismatch cell uses -U admin; the entrypoint only adds `user`.
+docker exec "$NAME" kadmin.local -q "addprinc -randkey admin" >/dev/null
+
+docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
+sleep 0.3
+docker exec -d "$NAME" sh -c 'krb5kdc -n >/tmp/mit-kdc.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/mit-kdc.log >&2 || true
+    log "s4u.mit.gate" "error" ',"error":"MIT kdc did not listen"'
+    exit 1
+fi
 
 docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc
 docker cp target/debug/krb5-kvno "$NAME":/tmp/krb5-kvno
@@ -43,7 +84,7 @@ docker exec -d \
     -e KRB5_TEST_LOCKED_USER=lock-secret \
     -e KRB5_EXPORT_KEYTAB=/tmp/host.keytab \
     -e KRB5_TEST_OK_TO_AUTH_AS_DELEGATE=1 \
-    "$NAME" sh -c '/tmp/krb5-kdc --test-realm 127.0.0.1:88 >/tmp/kdc.log 2>&1 || /tmp/krb5-kdc --test-realm --export-keytab /tmp/host.keytab 127.0.0.1:8888 >/tmp/kdc.log 2>&1'
+    "$NAME" sh -c '/tmp/krb5-kdc --test-realm --export-keytab /tmp/host.keytab 127.0.0.1:8888 >/tmp/kdc.log 2>&1'
 
 ok=0
 for _ in $(seq 1 80); do
@@ -59,13 +100,20 @@ if [ "$ok" != 1 ]; then
     exit 1
 fi
 
-LISTEN="$(docker exec "$NAME" grep '^listening ' /tmp/kdc.log | tail -1)"
-KDC_LINE="kdc = 127.0.0.1"
-case "$LISTEN" in
-    *:8888*) KDC_LINE="kdc = 127.0.0.1:8888" ;;
-esac
-
-docker exec "$NAME" sh -c "cat >/tmp/s4u-krb5.conf <<EOF
+docker exec "$NAME" sh -c 'cat >/tmp/s4u-mit.conf <<EOF
+[libdefaults]
+    default_realm = KERBER.TEST
+    dns_lookup_kdc = false
+    dns_lookup_realm = false
+    rdns = false
+    forwardable = true
+    default_ccache_name = FILE:/tmp/krb5cc_s4u_mit
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1
+    }
+EOF
+cat >/tmp/s4u-krb5.conf <<EOF
 [libdefaults]
     default_realm = KERBER.TEST
     dns_lookup_kdc = false
@@ -75,9 +123,9 @@ docker exec "$NAME" sh -c "cat >/tmp/s4u-krb5.conf <<EOF
     default_ccache_name = FILE:/tmp/krb5cc_s4u
 [realms]
     KERBER.TEST = {
-        ${KDC_LINE}
+        kdc = 127.0.0.1:8888
     }
-EOF"
+EOF'
 
 if ! docker exec "$NAME" test -f /tmp/host.keytab; then
     docker exec "$NAME" cat /tmp/kdc.log >&2 || true
@@ -85,26 +133,36 @@ if ! docker exec "$NAME" test -f /tmp/host.keytab; then
     exit 1
 fi
 
-echo "==== user TGT + S4U2Self to host (mismatch, expect 36) ===="
-docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf \
-    "$NAME" sh -c 'printf "userpassword\n" | kinit user@KERBER.TEST'
-MM_BEFORE="$(docker exec "$NAME" sh -c 'wc -l < /tmp/kdc.log' | tr -d ' ')"
-KDC_HOST="127.0.0.1"
-case "$LISTEN" in
-    *:8888*) KDC_HOST="127.0.0.1:8888" ;;
-esac
-set +e
-MISMATCH="$(docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf -e KRB5CCNAME=FILE:/tmp/krb5cc_s4u \
-    "$NAME" /tmp/krb5-kvno -U admin "$KDC_HOST" host/testhost.kerber.test@KERBER.TEST 2>&1)"
-MM_RC=$?
-set -e
-echo "$MISMATCH"
-echo "mismatch_rc=$MM_RC"
-echo "$MISMATCH" | grep -qiE "Ticket/authenticator don't match|BADMATCH|INVALID_S4U2SELF"
-echo "$MM_RC" | grep -qx 1
-MM_NEW="$(docker exec "$NAME" sh -c "tail -n +$((MM_BEFORE + 1)) /tmp/kdc.log")"
-echo "$MM_NEW" | grep -q 'INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH'
-docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+expect_s4u_host_mismatch() {
+    local label="$1"
+    local conf="$2"
+    local kdc_host="$3"
+    local klog="$4"
+    local cc="$5"
+    echo "==== ${label}: user TGT + S4U2Self to host (mismatch, expect 36) ===="
+    docker exec -e KRB5_CONFIG="$conf" \
+        "$NAME" sh -c "printf 'userpassword\n' | kinit -c ${cc} user@KERBER.TEST"
+    local n
+    n="$(docker exec "$NAME" sh -c "wc -l < ${klog}" | tr -d '[:space:]')"
+    set +e
+    local out rc
+    out="$(docker exec -e KRB5_CONFIG="$conf" -e KRB5CCNAME="FILE:${cc}" \
+        "$NAME" /tmp/krb5-kvno -U admin "$kdc_host" host/testhost.kerber.test@KERBER.TEST 2>&1)"
+    rc=$?
+    set -e
+    echo "$out"
+    echo "${label}_mismatch_rc=$rc"
+    echo "$out" | grep -qiE "Ticket/authenticator don't match|BADMATCH|INVALID_S4U2SELF"
+    echo "$rc" | grep -qx 1
+    local new
+    new="$(docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}")"
+    echo "$new"
+    echo "$new" | grep -q 'INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH'
+    docker exec -e KRB5_CONFIG="$conf" "$NAME" kdestroy -c "$cc" >/dev/null 2>&1 || true
+}
+
+expect_s4u_host_mismatch "MIT KDC" /tmp/s4u-mit.conf 127.0.0.1 /tmp/mit-kdc.log /tmp/krb5cc_s4u_mit
+expect_s4u_host_mismatch "Rust KDC" /tmp/s4u-krb5.conf 127.0.0.1:8888 /tmp/kdc.log /tmp/krb5cc_s4u
 
 echo "==== kinit -f -k host/testhost.kerber.test ===="
 docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf -e KRB5_TRACE=/dev/stderr \

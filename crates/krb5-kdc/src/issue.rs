@@ -676,14 +676,18 @@ fn issue_tgs_body(
         } else {
             None
         };
-        check_tgs_s4u2self(
-            &server,
-            &enc_tkt,
-            body,
-            local_user.is_some(),
-            header_cross,
-            is_referral,
-        )?;
+        // MIT is_client_db_alias: foreign crealm is KDB NOENTRY → mismatch.
+        let is_self = utf8_realm(&enc_tkt.crealm)? == store.realm()
+            && tgs_client
+                .as_ref()
+                .is_some_and(|c| c.realm == server.realm && c.name == server.name);
+        if !is_referral && !is_self {
+            return Err(proto(
+                err::BADMATCH,
+                "INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH",
+            ));
+        }
+        check_tgs_s4u2self(body, local_user.is_some(), header_cross, is_referral)?;
         if let Some(ref for_p) = local_user {
             check_s4u2self_locked(for_p, &server)?;
         }
@@ -1559,21 +1563,13 @@ fn proto(code: i32, text: &str) -> Error {
     }
 }
 
-/// MIT `check_tgs_s4u2self` (`tgs_policy.c`).
+/// MIT `check_tgs_s4u2self` (`tgs_policy.c`) option and realm-combination checks.
 fn check_tgs_s4u2self(
-    server: &Principal,
-    enc_tkt: &EncTicketPart,
     body: &krb5_types::KdcReqBody,
     local_user: bool,
     header_cross: bool,
     is_referral: bool,
 ) -> Result<(), Error> {
-    if !is_referral && server.name.components_joined() != enc_tkt.cname.components_joined() {
-        return Err(proto(
-            err::BADMATCH,
-            "INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH",
-        ));
-    }
     if s4u2self_as_invalid_options(body) {
         return Err(proto(err::BADOPTION, "INVALID S4U2SELF OPTIONS"));
     }

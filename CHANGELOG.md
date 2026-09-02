@@ -51,11 +51,15 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   still present `GET_LOCAL_TGT`. Gate: bare A TGT → `krb5-kvno
   host/svc.c.test@C.TEST` vs three MIT KDCs.
 
-- **G9 Y0 (MIT-gated).** S4U2Self requires the requested server to be
-  the TGT client (`check_tgs_s4u2self`): mismatch is 36
+- **G9 Y0 (MIT KDC + client gated).** S4U2Self requires the requested
+  server to be the TGT client's DB entry *and* realm
+  (`is_client_db_alias` / `check_tgs_s4u2self`): a foreign impersonator
+  whose name collides with a local principal is 36
   `INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH`. Referral TGTs name the
   header client. `FORWARDABLE` is kept only with
-  `+ok_to_auth_as_delegate`. Gate: `scripts/s4u-mit-gate.sh`.
+  `+ok_to_auth_as_delegate`. Gates: `scripts/s4u-mit-gate.sh` (MIT +
+  Rust mismatch legs) and `scripts/capaths-transit-gate.sh` (cross-TGT
+  colliding-name cell).
 
 - **G9 X3.** Add-path hop emission is `push_hop`-capped; no-append
   inbound ≥ 500 is 43. Anonymous crealm skips transited parse.

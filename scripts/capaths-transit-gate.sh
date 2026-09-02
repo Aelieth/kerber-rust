@@ -171,6 +171,7 @@ kad /tmp/kdc-A.conf A.TEST "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_
 kad /tmp/kdc-B.conf B.TEST "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_PW} krbtgt/B.TEST@A.TEST"
 kad /tmp/kdc-B.conf B.TEST "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_PW} krbtgt/C.TEST@B.TEST"
 kad /tmp/kdc-C.conf C.TEST "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_PW} krbtgt/C.TEST@B.TEST"
+kad /tmp/kdc-C.conf C.TEST "addprinc -randkey user"
 kad /tmp/kdc-C.conf C.TEST "addprinc -randkey host/svc.c.test"
 kad /tmp/kdc-C.conf C.TEST "ktadd -k /tmp/mit-c.host.kt host/svc.c.test"
 EOF
@@ -398,6 +399,34 @@ expect_lineage() {
     docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" || true
 }
 
+expect_s4u_mismatch() {
+    local label="$1"
+    local cc="$2"
+    local klog="$3"
+    local n
+    n="$(docker exec "$NAME" sh -c "wc -l < ${klog}" | tr -d '[:space:]')"
+    set +e
+    local out rc
+    out="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+        /tmp/krb5-kvno -U victim@A.TEST -c "$cc" 127.0.0.1:90 user@C.TEST 2>&1)"
+    rc=$?
+    set -e
+    echo "$out"
+    if [ "$rc" -eq 0 ]; then
+        echo "$label: S4U2Self name-collision must not issue" >&2
+        docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" >&2 || true
+        exit 1
+    fi
+    echo "$out" | grep -qiE "Ticket/authenticator don't match|BADMATCH|INVALID_S4U2SELF"
+    if ! docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog} | grep -q 'INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH'"; then
+        echo "$label: new lines of ${klog} missing INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH" >&2
+        docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" >&2 || true
+        exit 1
+    fi
+    echo "$label new ${klog} lines (from $((n + 1))):"
+    docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" || true
+}
+
 expect_dest_renew_get_local_tgt() {
     local label="$1"
     local cc="$2"
@@ -528,6 +557,10 @@ echo "==== MIT C lineage local user on foreign TGT is INVALID LINEAGE ===="
 seed_c_tgt /tmp/krb5cc_mit_lineage
 forge_mit_lineage /tmp/krb5cc_mit_lineage /tmp/krb5cc_mit_lineage_out
 expect_lineage "MIT lineage" /tmp/krb5cc_mit_lineage_out /tmp/mit-c.log
+
+echo "==== MIT C S4U2Self foreign user named like local server is BADMATCH ===="
+seed_c_tgt /tmp/krb5cc_mit_s4u
+expect_s4u_mismatch "MIT S4U mismatch" /tmp/krb5cc_mit_s4u /tmp/mit-c.log
 
 echo "==== MIT skip same-realm default is POLICY ===="
 kinit_a /tmp/krb5cc_mit_skip_a
@@ -781,6 +814,10 @@ echo "==== Rust C lineage local user on foreign TGT is INVALID LINEAGE ===="
 seed_c_tgt /tmp/krb5cc_rust_lineage
 forge_rust_lineage /tmp/krb5cc_rust_lineage /tmp/krb5cc_rust_lineage_out
 expect_lineage "Rust lineage" /tmp/krb5cc_rust_lineage_out /tmp/kdc-c-allow.log
+
+echo "==== Rust C S4U2Self foreign user named like local server is BADMATCH ===="
+seed_c_tgt /tmp/krb5cc_rust_s4u
+expect_s4u_mismatch "Rust S4U mismatch" /tmp/krb5cc_rust_s4u /tmp/kdc-c-allow.log
 
 echo "==== Rust skip same-realm default is POLICY ===="
 kinit_a /tmp/krb5cc_rust_skip_a
