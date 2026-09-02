@@ -20,6 +20,10 @@ path = "src/bin/krb5-kdb.rs"
 name = "krb5-pac-extract"
 path = "src/bin/krb5-pac-extract.rs"
 
+[[bin]]
+name = "krb5-forge-tgt"
+path = "src/bin/krb5-forge-tgt.rs"
+
 [dependencies]
 getrandom.workspace = true
 krb5-asn1.workspace = true

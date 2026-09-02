@@ -267,7 +267,9 @@ when that oracle is absent.
   cells) and C-skip `klist` shows `krbtgt/C.TEST@B.TEST`.
   `krb5-kvno --disable-transited-check` vs default MIT and Rust is
   POLICY; with `reject_bad_transit=false` the skip is accepted and T
-  is off. In CI (`mit-extra`).
+  is off. Forged `ticket.realm` on a B-sealed `krbtgt/C.TEST` (empty
+  transited) is rejected at both MIT C and Rust C (`PROCESS_TGS`).
+  In CI (`mit-extra`).
 - `scripts/capaths-compress-gate.sh` — MIT 4-hop
   A.EX.COM→EX.COM→B.EX.COM→C.EX.COM; EncTicketPart contents
   `EX.COM,B.`, expanded `EX.COM,B.EX.COM`, T set; deny is `KDC

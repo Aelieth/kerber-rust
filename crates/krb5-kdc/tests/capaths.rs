@@ -390,3 +390,132 @@ fn transited_non_add_overlong_forwarded() {
         "non-add must forward inbound bytes unchanged"
     );
 }
+
+fn three_realm_distinct() -> (
+    PrincipalStore,
+    PrincipalStore,
+    PrincipalStore,
+    ProtocolKey,
+    ProtocolKey,
+    PrincipalName,
+    krb5_kdc::IssuedTgs,
+) {
+    let ab = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0xa1; 32]).expect("ab");
+    let bc = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0xc3; 32]).expect("bc");
+    let (mut a, acl_a, actor_a, _) = realm_store("A.TEST", "svc.a.test");
+    let (mut b, acl_b, actor_b, _) = realm_store("B.TEST", "svc.b.test");
+    let (mut c, acl_c, actor_c, host_c) = realm_store("C.TEST", "svc.c.test");
+    a.create_interrealm_key(&acl_a, &actor_a, "B.TEST", ab.clone())
+        .expect("A B");
+    b.create_interrealm_key(&acl_b, &actor_b, "A.TEST", ab.clone())
+        .expect("B A");
+    b.create_interrealm_key(&acl_b, &actor_b, "C.TEST", bc.clone())
+        .expect("B C");
+    c.create_interrealm_key(&acl_c, &actor_c, "B.TEST", bc.clone())
+        .expect("C B");
+    let mut cap = std::collections::BTreeMap::new();
+    cap.entry("A.TEST".into())
+        .or_insert_with(std::collections::BTreeMap::new)
+        .insert("C.TEST".into(), vec!["B.TEST".into()]);
+    c.set_capaths(cap);
+    let tgt = as_tgt(&a, "A.TEST", 900);
+    let abtgt = chase_tgs(
+        &a,
+        tgt.rep.0.ticket.clone(),
+        &tgt.session_key,
+        "A.TEST",
+        PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "B.TEST"]),
+        "A.TEST",
+        901,
+    )
+    .expect("A B");
+    let bctgt = chase_tgs(
+        &b,
+        abtgt.rep.0.ticket.clone(),
+        &abtgt.session_key,
+        "A.TEST",
+        PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "C.TEST"]),
+        "B.TEST",
+        902,
+    )
+    .expect("B C");
+    (a, b, c, ab, bc, host_c, bctgt)
+}
+
+fn reseal_empty_transited(key: &ProtocolKey, ticket: &Ticket, claimed: &str) -> Ticket {
+    let mut t = ticket.clone();
+    let mut part = decrypt_ticket_part(key, &t).expect("enc");
+    part.transited = krb5_types::TransitedEncoding::empty();
+    part.authorization_data = None;
+    reseal(key, &mut t, &part);
+    t.realm = krb5_types::try_ascii(claimed).expect("realm");
+    t
+}
+
+fn tgs_code_text(res: Result<krb5_kdc::IssuedTgs, Error>) -> (i32, Option<String>) {
+    match res {
+        Err(Error::Protocol { code, text, .. }) => (code, text),
+        other => panic!("expected protocol error, got {other:?}"),
+    }
+}
+
+#[test]
+fn presented_tgt_decrypt_is_bound_to_ticket_realm() {
+    let (_a, _b, mut c, _ab, bckey, host_c, bctgt) = three_realm_distinct();
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let host_key = c.get_name(&host_c).unwrap().best_key().unwrap().key.clone();
+
+    let honest = chase_tgs(
+        &c,
+        bctgt.rep.0.ticket.clone(),
+        &bctgt.session_key,
+        "A.TEST",
+        host_c.clone(),
+        "C.TEST",
+        910,
+    )
+    .expect("honest B hop with capaths");
+    let part = decrypt_ticket_part(&host_key, &honest.rep.0.ticket).expect("enc");
+    assert!(
+        part.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED),
+        "honest capaths must set T"
+    );
+
+    c.set_capaths(std::collections::BTreeMap::new());
+    let (code, text) = tgs_code_text(chase_tgs(
+        &c,
+        bctgt.rep.0.ticket.clone(),
+        &bctgt.session_key,
+        "A.TEST",
+        host_c.clone(),
+        "C.TEST",
+        911,
+    ));
+    assert_eq!(code, err::POLICY);
+    assert_eq!(text.as_deref(), Some("BAD_TRANSIT"));
+
+    for (nonce, claimed, want_code) in [
+        (912, "A.TEST", err::S_PRINCIPAL_UNKNOWN),
+        (913, "C.TEST", err::BAD_INTEGRITY),
+        (914, "D.TEST", err::S_PRINCIPAL_UNKNOWN),
+    ] {
+        let t = reseal_empty_transited(&bckey, &bctgt.rep.0.ticket, claimed);
+        let req = tgs_req(
+            t,
+            &bctgt.session_key,
+            "A.TEST",
+            &cname,
+            host_c.clone(),
+            "C.TEST",
+            nonce,
+        )
+        .expect("tgs");
+        let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
+        assert_eq!(code, want_code, "forged ticket.realm={claimed}");
+        assert_eq!(
+            text.as_deref(),
+            Some("PROCESS_TGS"),
+            "forged ticket.realm={claimed}"
+        );
+    }
+}

@@ -905,29 +905,38 @@ fn decrypt_presented_tgt(
     ap: &krb5_types::ApReq,
     tkt_etype: EncryptionType,
 ) -> Result<(EncTicketPart, ProtocolKey, Vec<u8>), Error> {
+    // MIT kdc_get_server_key: only keys of ticket.server (name and realm).
+    // Incoming interrealm keys are stored as krbtgt/<ticket.realm>@<local>.
+    let ticket_realm = utf8_realm(&ap.ticket.realm);
+    let princ = if ticket_realm == store.realm() {
+        store.fetch_krbtgt()?
+    } else {
+        let name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", ticket_realm]);
+        store.fetch_name(&name)?
+    };
+    let Some(p) = princ else {
+        return Err(proto(err::S_PRINCIPAL_UNKNOWN, "PROCESS_TGS"));
+    };
     let usage = KeyUsage::new(ku::TICKET)?;
     let cipher = ap.ticket.enc_part.cipher.as_ref();
     let kvno = ap.ticket.enc_part.kvno;
-    let mut candidates: Vec<krb5_crypto::ProtocolKey> = Vec::new();
-    if let Some(p) = store.fetch_krbtgt()?
-        && let Some(v) = kvno
+    let mut keys = Vec::new();
+    if let Some(v) = kvno
         && let Some(k) = p.key_for_kvno(tkt_etype, v)
     {
-        candidates.push(k.key.clone());
+        keys.push(k.key.clone());
     }
-    candidates.extend(store.krbtgt_keys()?);
-    let mut last = proto(err::BAD_INTEGRITY, "TGT decrypt");
-    for key in &candidates {
-        match decrypt(key, usage, cipher) {
-            Ok(plain) => {
-                if let Ok(part) = decode::<EncTicketPart>(&plain) {
-                    return Ok((part, key.clone(), plain));
-                }
-            }
-            Err(e) => last = Error::from(e),
+    for k in &p.keys {
+        keys.push(k.key.clone());
+    }
+    for key in &keys {
+        if let Ok(plain) = decrypt(key, usage, cipher)
+            && let Ok(part) = decode::<EncTicketPart>(&plain)
+        {
+            return Ok((part, key.clone(), plain));
         }
     }
-    Err(last)
+    Err(proto(err::BAD_INTEGRITY, "PROCESS_TGS"))
 }
 
 fn check_ticket_times(

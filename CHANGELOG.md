@@ -22,6 +22,13 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **G9 X1 (MIT-gated).** Presented TGS-TGT decryption is bound to
+  `ticket.realm` like MIT `kdc_get_server_key`: local `krbtgt/<local>`
+  keys only when the ticket realm is local; that peer's interrealm
+  keys when it is a known foreign realm; unknown realm is 7
+  `PROCESS_TGS`; bound-key decrypt failure is 31 `PROCESS_TGS`. Gate:
+  `scripts/capaths-transit-gate.sh` forge cells.
+
 - **G9 W-pass (MIT-gated).** Emitted hops capped at 4096
   (`TooManyFields`, STRICTER than MIT). Rejected requests log
   `kdc.issue` `outcome=krb-error` with `code` and `e-text`. Add-path

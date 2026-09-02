@@ -22,7 +22,7 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
-cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-pac-extract
+cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-pac-extract --bin krb5-forge-tgt
 cargo build -p krb5-client --bin krb5-kvno
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
@@ -36,8 +36,9 @@ trap cleanup EXIT
 
 docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc
 docker cp target/debug/krb5-pac-extract "$NAME":/tmp/krb5-pac-extract
+docker cp target/debug/krb5-forge-tgt "$NAME":/tmp/krb5-forge-tgt
 docker cp target/debug/krb5-kvno "$NAME":/tmp/krb5-kvno
-docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-pac-extract /tmp/krb5-kvno
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-pac-extract /tmp/krb5-forge-tgt /tmp/krb5-kvno
 
 docker exec -i "$NAME" bash -s <<'CONF'
 set -euo pipefail
@@ -244,6 +245,53 @@ expect_skip_policy() {
     docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" || true
 }
 
+expect_forge_reject() {
+    local label="$1"
+    local cc="$2"
+    local klog="$3"
+    local n
+    n="$(docker exec "$NAME" sh -c "wc -l < ${klog}" | tr -d '[:space:]')"
+    set +e
+    local out rc
+    out="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+        kvno -c "$cc" host/svc.c.test@C.TEST 2>&1)"
+    rc=$?
+    set -e
+    echo "$out"
+    if [ "$rc" -eq 0 ]; then
+        echo "$label: forged ticket.realm must not issue" >&2
+        docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" >&2 || true
+        exit 1
+    fi
+    if ! docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog} | grep -q PROCESS_TGS"; then
+        echo "$label: new lines of ${klog} missing PROCESS_TGS" >&2
+        docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" >&2 || true
+        exit 1
+    fi
+    echo "$label new ${klog} lines (from $((n + 1))):"
+    docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" || true
+}
+
+forge_mit_tgt() {
+    local in_cc="$1"
+    local out_cc="$2"
+    local claimed="$3"
+    docker exec "$NAME" /tmp/krb5-forge-tgt \
+        --ccache "$in_cc" --out "$out_cc" --claim-realm "$claimed" \
+        --tgt krbtgt/C.TEST \
+        --password "${XR_PW}" --principal 'krbtgt/C.TEST@B.TEST'
+}
+
+forge_rust_tgt() {
+    local in_cc="$1"
+    local out_cc="$2"
+    local claimed="$3"
+    docker exec "$NAME" /tmp/krb5-forge-tgt \
+        --ccache "$in_cc" --out "$out_cc" --claim-realm "$claimed" \
+        --tgt krbtgt/C.TEST \
+        --key-hex "${XR_KEY}"
+}
+
 expect_skip_accept_t0() {
     local label="$1"
     local cc="$2"
@@ -288,6 +336,13 @@ MIT_TR_TYPE="$(echo "$MIT_DUMP" | sed -n 's/^transited_tr_type=//p')"
 MIT_TR_CONTENTS="$(echo "$MIT_DUMP" | sed -n 's/^transited_contents=//p')"
 test "$MIT_TR_TYPE" = "1"
 test "$MIT_TR_CONTENTS" = "B.TEST"
+
+echo "==== MIT C rejects forged ticket.realm on B-sealed TGT ===="
+seed_c_tgt /tmp/krb5cc_mit_forge
+forge_mit_tgt /tmp/krb5cc_mit_forge /tmp/krb5cc_mit_forge_a A.TEST
+expect_forge_reject "MIT forge A.TEST" /tmp/krb5cc_mit_forge_a /tmp/mit-c.log
+forge_mit_tgt /tmp/krb5cc_mit_forge /tmp/krb5cc_mit_forge_c C.TEST
+expect_forge_reject "MIT forge C.TEST" /tmp/krb5cc_mit_forge_c /tmp/mit-c.log
 
 echo "==== MIT skip same-realm default is POLICY ===="
 kinit_a /tmp/krb5cc_mit_skip_a
@@ -521,6 +576,13 @@ echo "mit  tr_type=${MIT_TR_TYPE} contents=${MIT_TR_CONTENTS}"
 echo "rust tr_type=${RUST_TR_TYPE} contents=${RUST_TR_CONTENTS}"
 test "$MIT_TR_TYPE" = "$RUST_TR_TYPE"
 test "$MIT_TR_CONTENTS" = "$RUST_TR_CONTENTS"
+
+echo "==== Rust C rejects forged ticket.realm on B-sealed TGT ===="
+seed_c_tgt /tmp/krb5cc_rust_forge
+forge_rust_tgt /tmp/krb5cc_rust_forge /tmp/krb5cc_rust_forge_a A.TEST
+expect_forge_reject "Rust forge A.TEST" /tmp/krb5cc_rust_forge_a /tmp/kdc-c-allow.log
+forge_rust_tgt /tmp/krb5cc_rust_forge /tmp/krb5cc_rust_forge_c C.TEST
+expect_forge_reject "Rust forge C.TEST" /tmp/krb5cc_rust_forge_c /tmp/kdc-c-allow.log
 
 echo "==== Rust skip same-realm default is POLICY ===="
 kinit_a /tmp/krb5cc_rust_skip_a
