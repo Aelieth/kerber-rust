@@ -3,8 +3,9 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, encrypt};
 use krb5_kdc::{
-    Acl, Error, KDB_DISALLOW_ALL_TIX, PrincipalStore, TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_USER,
-    TEST_USER_PASSWORD, as_req, decrypt_ticket_part, pa_enc_timestamp, tgs_req,
+    Acl, Error, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_SVR, PrincipalStore, TEST_ADMIN,
+    TEST_ADMIN_PASSWORD, TEST_USER, TEST_USER_PASSWORD, as_req, decrypt_ticket_part,
+    pa_enc_timestamp, tgs_req,
 };
 use krb5_protocol::{pa_for_user, tgs_req_ex};
 use krb5_types::{
@@ -741,6 +742,79 @@ fn tgs_krbtgt_disallow_all_tix_is_process_tgs() {
         host_c,
         "C.TEST",
         980,
+    )
+    .expect("tgs");
+    let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
+    assert_eq!(code, err::S_PRINCIPAL_UNKNOWN);
+    assert_eq!(text.as_deref(), Some("PROCESS_TGS"));
+}
+
+#[test]
+fn tgs_local_krbtgt_disallow_all_tix_is_process_tgs() {
+    let (mut store, _, _, host) = realm_store("C.TEST", "svc.c.test");
+    let tgt = as_tgt(&store, "C.TEST", 981);
+    let krbtgt = PrincipalName::krbtgt("C.TEST");
+    let a = store.get_name(&krbtgt).unwrap().attributes | KDB_DISALLOW_ALL_TIX;
+    store
+        .apply_admin_fields(&krbtgt, Some(a), None, None, None, None, false)
+        .unwrap();
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let req = tgs_req(
+        tgt.rep.0.ticket.clone(),
+        &tgt.session_key,
+        "C.TEST",
+        &cname,
+        host,
+        "C.TEST",
+        982,
+    )
+    .expect("tgs");
+    let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&store, &req));
+    assert_eq!(code, err::S_PRINCIPAL_UNKNOWN);
+    assert_eq!(text.as_deref(), Some("PROCESS_TGS"));
+}
+
+#[test]
+fn tgs_local_krbtgt_disallow_svr_is_process_tgs() {
+    let (mut store, _, _, host) = realm_store("C.TEST", "svc.c.test");
+    let tgt = as_tgt(&store, "C.TEST", 983);
+    let krbtgt = PrincipalName::krbtgt("C.TEST");
+    let a = store.get_name(&krbtgt).unwrap().attributes | KDB_DISALLOW_SVR;
+    store
+        .apply_admin_fields(&krbtgt, Some(a), None, None, None, None, false)
+        .unwrap();
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let req = tgs_req(
+        tgt.rep.0.ticket.clone(),
+        &tgt.session_key,
+        "C.TEST",
+        &cname,
+        host,
+        "C.TEST",
+        984,
+    )
+    .expect("tgs");
+    let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&store, &req));
+    assert_eq!(code, err::S_PRINCIPAL_UNKNOWN);
+    assert_eq!(text.as_deref(), Some("PROCESS_TGS"));
+}
+
+#[test]
+fn tgs_cross_krbtgt_disallow_svr_is_process_tgs() {
+    let (_a, _b, mut c, _ab, _bc, host_c, bctgt) = three_realm_distinct();
+    let irn = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "B.TEST"]);
+    let a = c.get_name(&irn).unwrap().attributes | KDB_DISALLOW_SVR;
+    c.apply_admin_fields(&irn, Some(a), None, None, None, None, false)
+        .unwrap();
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let req = tgs_req(
+        bctgt.rep.0.ticket.clone(),
+        &bctgt.session_key,
+        "A.TEST",
+        &cname,
+        host_c,
+        "C.TEST",
+        985,
     )
     .expect("tgs");
     let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));

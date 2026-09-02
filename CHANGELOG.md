@@ -22,6 +22,13 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0 C5 (MIT-gated, test-gap).** Local and cross krbtgt `DISALLOW_SVR`
+  / `DISALLOW_ALL_TIX` are 7 `PROCESS_TGS` on the presented-TGT decrypt
+  (`kdc_get_server_key`). `--test-realm` honours
+  `KRB5_TEST_DISALLOW_TIX` / `KRB5_TEST_DISALLOW_SVR`. Gate:
+  `scripts/capaths-transit-gate.sh` MIT C `modprinc -allow_tix` and
+  Rust C restart.
+
 - **W0 C4 (MIT-gated).** GSS `accept_sec_context` shares one acceptor
   `ReplayCache` across calls (MIT cred rcache). A captured AP-REQ is 34
   `REPEAT` (`authenticator replay`). Gate: `scripts/gss-gate.sh`

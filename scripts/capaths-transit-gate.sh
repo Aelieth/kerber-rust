@@ -562,6 +562,36 @@ echo "==== MIT C S4U2Self foreign user named like local server is BADMATCH ===="
 seed_c_tgt /tmp/krb5cc_mit_s4u
 expect_s4u_mismatch "MIT S4U mismatch" /tmp/krb5cc_mit_s4u /tmp/mit-c.log
 
+echo "==== MIT C DISALLOW_ALL_TIX on inbound krbtgt is PROCESS_TGS ===="
+seed_c_tgt /tmp/krb5cc_mit_disallow
+docker exec \
+    -e KRB5_CONFIG=/tmp/client-capaths.conf \
+    -e KRB5_KDC_PROFILE=/tmp/kdc-C.conf \
+    "$NAME" kadmin.local -r C.TEST -q "modprinc -allow_tix krbtgt/C.TEST@B.TEST"
+n="$(docker exec "$NAME" sh -c 'wc -l < /tmp/mit-c.log' | tr -d '[:space:]')"
+set +e
+MITDIS="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+    kvno -c /tmp/krb5cc_mit_disallow host/svc.c.test@C.TEST 2>&1)"
+mitdis_rc=$?
+set -e
+echo "$MITDIS"
+if [ "$mitdis_rc" -eq 0 ]; then
+    echo "MIT disallow krbtgt must not issue" >&2
+    docker exec "$NAME" sh -c "tail -n +$((n + 1)) /tmp/mit-c.log" >&2 || true
+    exit 1
+fi
+echo "$MITDIS" | grep -qiE "not found in Kerberos database|PROCESS_TGS"
+if ! docker exec "$NAME" sh -c "tail -n +$((n + 1)) /tmp/mit-c.log | grep -q PROCESS_TGS"; then
+    echo "MIT disallow: new mit-c.log lines missing PROCESS_TGS" >&2
+    docker exec "$NAME" sh -c "tail -n +$((n + 1)) /tmp/mit-c.log" >&2 || true
+    exit 1
+fi
+docker exec "$NAME" sh -c "tail -n +$((n + 1)) /tmp/mit-c.log" || true
+docker exec \
+    -e KRB5_CONFIG=/tmp/client-capaths.conf \
+    -e KRB5_KDC_PROFILE=/tmp/kdc-C.conf \
+    "$NAME" kadmin.local -r C.TEST -q "modprinc +allow_tix krbtgt/C.TEST@B.TEST"
+
 echo "==== MIT skip same-realm default is POLICY ===="
 kinit_a /tmp/krb5cc_mit_skip_a
 expect_skip_policy "MIT A skip" /tmp/krb5cc_mit_skip_a host/svc.a.test@A.TEST /tmp/mit-a.log
@@ -738,6 +768,8 @@ start_c() {
         -e KRB5_TEST_INTERREALM_KEY="$XR_KEY" \
         -e KRB5_TEST_HOST=svc.c.test \
         -e KRB5_EXPORT_KEYTAB=/tmp/rust-c.host.kt \
+        -e KRB5_TEST_DISALLOW_TIX="${KRB5_TEST_DISALLOW_TIX:-}" \
+        -e KRB5_TEST_DISALLOW_SVR="${KRB5_TEST_DISALLOW_SVR:-}" \
         "$NAME" sh -c "/tmp/krb5-kdc --test-realm 127.0.0.1:90 >$log 2>&1 & echo \$! >/tmp/kdc-c.pid"
 }
 
@@ -818,6 +850,63 @@ expect_lineage "Rust lineage" /tmp/krb5cc_rust_lineage_out /tmp/kdc-c-allow.log
 echo "==== Rust C S4U2Self foreign user named like local server is BADMATCH ===="
 seed_c_tgt /tmp/krb5cc_rust_s4u
 expect_s4u_mismatch "Rust S4U mismatch" /tmp/krb5cc_rust_s4u /tmp/kdc-c-allow.log
+
+echo "==== Rust C DISALLOW_ALL_TIX on inbound krbtgt is PROCESS_TGS ===="
+seed_c_tgt /tmp/krb5cc_rust_disallow
+docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/kdc-c.pid)" 2>/dev/null || true'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',90),0.15)" 2>/dev/null; then
+        sleep 0.2
+        continue
+    fi
+    ok=1
+    break
+done
+[ "$ok" = 1 ]
+KRB5_TEST_DISALLOW_TIX=krbtgt/B.TEST start_c /tmp/kdc-c-allow.conf /tmp/kdc-c-disallow.log
+if ! wait_listen /tmp/kdc-c-disallow.log; then
+    docker exec "$NAME" cat /tmp/kdc-c-disallow.log >&2 || true
+    log "capaths.gate" "error" ',"error":"disallow KDC C did not listen"'
+    exit 1
+fi
+n="$(docker exec "$NAME" sh -c 'wc -l < /tmp/kdc-c-disallow.log' | tr -d '[:space:]')"
+set +e
+RUSTDIS="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+    kvno -c /tmp/krb5cc_rust_disallow host/svc.c.test@C.TEST 2>&1)"
+rustdis_rc=$?
+set -e
+echo "$RUSTDIS"
+if [ "$rustdis_rc" -eq 0 ]; then
+    echo "Rust disallow krbtgt must not issue" >&2
+    docker exec "$NAME" sh -c "tail -n +$((n + 1)) /tmp/kdc-c-disallow.log" >&2 || true
+    exit 1
+fi
+echo "$RUSTDIS" | grep -qiE "not found in Kerberos database|PROCESS_TGS"
+if ! docker exec "$NAME" sh -c "tail -n +$((n + 1)) /tmp/kdc-c-disallow.log | grep -q PROCESS_TGS"; then
+    echo "Rust disallow: new kdc-c-disallow.log lines missing PROCESS_TGS" >&2
+    docker exec "$NAME" sh -c "tail -n +$((n + 1)) /tmp/kdc-c-disallow.log" >&2 || true
+    exit 1
+fi
+docker exec "$NAME" sh -c "tail -n +$((n + 1)) /tmp/kdc-c-disallow.log" || true
+docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/kdc-c.pid)" 2>/dev/null || true'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',90),0.15)" 2>/dev/null; then
+        sleep 0.2
+        continue
+    fi
+    ok=1
+    break
+done
+[ "$ok" = 1 ]
+unset KRB5_TEST_DISALLOW_TIX
+start_c /tmp/kdc-c-allow.conf /tmp/kdc-c-allow.log
+if ! wait_listen /tmp/kdc-c-allow.log; then
+    docker exec "$NAME" cat /tmp/kdc-c-allow.log >&2 || true
+    log "capaths.gate" "error" ',"error":"restored KDC C did not listen"'
+    exit 1
+fi
 
 echo "==== Rust skip same-realm default is POLICY ===="
 kinit_a /tmp/krb5cc_rust_skip_a

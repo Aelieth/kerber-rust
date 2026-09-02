@@ -14,9 +14,9 @@
 use std::path::PathBuf;
 
 use krb5_kdc::{
-    Acl, BIND_CANDIDATES, KDB_OK_TO_AUTH_AS_DELEGATE, PrincipalStore, TEST_ADMIN, TEST_REALM,
-    TEST_USER, bind_preferred, documented_changepw, documented_kadmin, documented_kiprop,
-    drop_privileges, open_store, serve, shared_store,
+    Acl, BIND_CANDIDATES, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_SVR, KDB_OK_TO_AUTH_AS_DELEGATE,
+    PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER, bind_preferred, documented_changepw,
+    documented_kadmin, documented_kiprop, drop_privileges, open_store, serve, shared_store,
 };
 
 fn main() {
@@ -394,6 +394,8 @@ fn bootstrap_test_realm() -> PrincipalStore {
             }
         }
     }
+    apply_test_disallow(&mut store, "KRB5_TEST_DISALLOW_TIX", KDB_DISALLOW_ALL_TIX);
+    apply_test_disallow(&mut store, "KRB5_TEST_DISALLOW_SVR", KDB_DISALLOW_SVR);
     if let Ok(pw) = std::env::var("KRB5_TEST_LOCKED_USER")
         && !pw.is_empty()
     {
@@ -409,6 +411,48 @@ fn bootstrap_test_realm() -> PrincipalStore {
         }
     }
     store
+}
+
+fn apply_test_disallow(store: &mut PrincipalStore, env: &str, flag: u32) {
+    let Ok(spec) = std::env::var(env) else {
+        return;
+    };
+    let spec = spec.trim();
+    if spec.is_empty() {
+        return;
+    }
+    let Some(name) = test_princ(spec) else {
+        eprintln!("krb5-kdc: {env}: empty principal");
+        std::process::exit(2);
+    };
+    let a = if let Some(p) = store.get_name(&name) {
+        p.attributes | flag
+    } else {
+        eprintln!("krb5-kdc: {env}: {spec} missing");
+        std::process::exit(1);
+    };
+    if let Err(e) = store.apply_admin_fields(&name, Some(a), None, None, None, None, false) {
+        eprintln!("krb5-kdc: {env}: {e}");
+        std::process::exit(1);
+    }
+}
+
+fn test_princ(spec: &str) -> Option<krb5_types::PrincipalName> {
+    let spec = spec.split('@').next().unwrap_or(spec).trim();
+    if spec.is_empty() {
+        return None;
+    }
+    if let Some((a, b)) = spec.split_once('/') {
+        Some(krb5_types::PrincipalName::new(
+            krb5_types::PrincipalName::NT_SRV_INST,
+            [a, b],
+        ))
+    } else {
+        Some(krb5_types::PrincipalName::new(
+            krb5_types::PrincipalName::NT_PRINCIPAL,
+            [spec],
+        ))
+    }
 }
 
 fn parse_hex_key(hex: &str) -> Result<krb5_crypto::ProtocolKey, String> {

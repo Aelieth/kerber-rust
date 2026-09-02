@@ -285,7 +285,10 @@ when that oracle is absent.
   (`--claim-crealm`) is `INVALID LINEAGE` on both sides. A seeded C TGT
   plus `krb5-kvno -U victim@A.TEST user@C.TEST` is 36
   `INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH` on both MIT C and Rust C
-  (name collision across realms). Bare A TGT plus Rust `krb5-kvno
+  (name collision across realms). A seeded C TGT plus inbound
+  `krbtgt` `DISALLOW_ALL_TIX` is 7 `PROCESS_TGS` on both MIT C
+  (`modprinc -allow_tix`; client `Server <sname> not found in Kerberos
+  database`) and Rust C. Bare A TGT plus Rust `krb5-kvno
   host/svc.c.test@C.TEST` chases MIT A→B→C (`body.realm` is the current
   TGT realm). In CI (`mit-extra`).
 - `scripts/capaths-compress-gate.sh` — MIT 4-hop
