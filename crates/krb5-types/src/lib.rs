@@ -973,8 +973,9 @@ impl TransitedEncoding {
     /// Realm names in `contents`. `tr-type` 1 is RFC 4120 §3.3.3.2
     /// DOMAIN-X500-COMPRESS. MIT `chk_trans.c`: strip one trailing NUL;
     /// raw field ≥ 512 or joined > 512 is an error; join on unescaped
-    /// text. More than 256 commas is a Rust-STRICTER error. Encode stays
-    /// uncompressed ([`Self::from_realms`]).
+    /// text; null subfields seed `crealm`/`srealm` and emit hierarchical
+    /// intermediates (`process_intermediates`). More than 256 commas is a
+    /// Rust-STRICTER error. Encode stays uncompressed ([`Self::from_realms`]).
     ///
     /// # Errors
     ///
@@ -1036,11 +1037,7 @@ fn escape_transit_realm(realm: &str) -> String {
     out
 }
 
-fn expand_domain_x500(
-    raw: &[u8],
-    _crealm: &str,
-    _srealm: &str,
-) -> Result<Vec<String>, TransitError> {
+fn expand_domain_x500(raw: &[u8], crealm: &str, srealm: &str) -> Result<Vec<String>, TransitError> {
     let raw = match raw.split_last() {
         Some((0, rest)) => rest,
         _ => raw,
@@ -1062,48 +1059,123 @@ fn expand_domain_x500(
     let mut last = String::new();
     let mut cur = String::new();
     let mut escaped = false;
+    let mut intermediates = false;
+    let mut at_start = true;
     for c in s.chars() {
         if escaped {
             cur.push(c);
             escaped = false;
+            at_start = false;
             continue;
         }
         match c {
             '\\' => escaped = true,
-            ',' => take_x500_comp(&mut out, &mut last, &mut cur)?,
+            ',' => {
+                if cur.is_empty() {
+                    intermediates = true;
+                    if at_start {
+                        if crealm.len() >= MAX_TRANSIT_RAW {
+                            return Err(TransitError::FieldTooLong);
+                        }
+                        crealm.clone_into(&mut last);
+                    }
+                } else {
+                    emit_joined(&mut out, &mut last, &mut cur, intermediates)?;
+                    intermediates = false;
+                }
+            }
             ' ' if cur.is_empty() => last.clear(),
             _ => cur.push(c),
         }
+        at_start = false;
     }
-    take_x500_comp(&mut out, &mut last, &mut cur)?;
+    if cur.is_empty() {
+        process_intermediates(&last, srealm, &mut out)?;
+    } else {
+        emit_joined(&mut out, &mut last, &mut cur, intermediates)?;
+    }
     Ok(out)
 }
 
-fn take_x500_comp(
+fn emit_joined(
     out: &mut Vec<String>,
     last: &mut String,
     cur: &mut String,
+    intermediates: bool,
 ) -> Result<(), TransitError> {
-    if cur.is_empty() {
+    let this = maybe_join(last, cur)?;
+    let Some(this) = this else {
+        cur.clear();
         return Ok(());
+    };
+    out.push(this.clone());
+    if intermediates {
+        process_intermediates(&this, last, out)?;
+    }
+    *last = this;
+    cur.clear();
+    Ok(())
+}
+
+fn maybe_join(last: &str, cur: &str) -> Result<Option<String>, TransitError> {
+    if cur.is_empty() {
+        return Ok(None);
     }
     if cur.len() >= MAX_TRANSIT_RAW {
         return Err(TransitError::FieldTooLong);
     }
-    // MIT chk_trans.c maybe_join: join on the unescaped field.
     let expanded = if cur.starts_with('/') {
         format!("{last}{cur}")
     } else if cur.ends_with('.') {
         format!("{cur}{last}")
     } else {
-        cur.clone()
+        cur.to_owned()
     };
     if expanded.len() > MAX_TRANSIT_JOINED {
         return Err(TransitError::FieldTooLong);
     }
-    out.push(expanded.clone());
-    *last = expanded;
-    cur.clear();
+    Ok(Some(expanded))
+}
+
+fn process_intermediates(n1: &str, n2: &str, out: &mut Vec<String>) -> Result<(), TransitError> {
+    let (short, long) = if n1.len() > n2.len() {
+        (n2, n1)
+    } else {
+        (n1, n2)
+    };
+    if short.len() == long.len() {
+        return if short == long {
+            Ok(())
+        } else {
+            Err(TransitError::BadIntermediates)
+        };
+    }
+    if short.is_empty() {
+        return Err(TransitError::BadIntermediates);
+    }
+    let sb = short.as_bytes();
+    let lb = long.as_bytes();
+    if sb[0] == b'/' {
+        if lb[0] != b'/' || !long.starts_with(short) {
+            return Err(TransitError::BadIntermediates);
+        }
+        for i in (short.len() + 1)..long.len() {
+            if lb[i] == b'/' {
+                out.push(long[..i].to_owned());
+            }
+        }
+    } else {
+        if lb[0] == b'/' || !long.ends_with(short) {
+            return Err(TransitError::BadIntermediates);
+        }
+        let mut i = long.len() - short.len() - 1;
+        while i > 0 {
+            if lb[i - 1] == b'.' {
+                out.push(long[i..].to_owned());
+            }
+            i -= 1;
+        }
+    }
     Ok(())
 }
 
@@ -1286,7 +1358,7 @@ mod tests {
             TransitError::TooManyFields
         );
 
-        let modest = te("X.COM,".repeat(200).as_bytes());
+        let modest = te(format!("{}X.COM", "X.COM,".repeat(199)).as_bytes());
         let hops = modest.realms_for("", "").unwrap();
         assert_eq!(hops.len(), 200);
         assert_eq!(hops[0], "X.COM");
@@ -1362,6 +1434,58 @@ mod tests {
                 "/COM/HP".to_string(),
                 "/EDU/W".to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn transited_mit_transit_tests_vectors() {
+        fn set(xs: &[&str]) -> std::collections::BTreeSet<String> {
+            xs.iter().map(|s| (*s).to_string()).collect()
+        }
+        fn got(crealm: &str, srealm: &str, transit: &[u8]) -> std::collections::BTreeSet<String> {
+            te(transit)
+                .realms_for(crealm, srealm)
+                .expect("expand")
+                .into_iter()
+                .collect()
+        }
+
+        assert_eq!(
+            got("ATHENA.MIT.EDU", "HACK.FOOBAR.COM", b",EDU,BLORT.COM,COM,"),
+            set(&["MIT.EDU", "EDU", "BLORT.COM", "COM", "FOOBAR.COM"])
+        );
+        assert_eq!(got("ATHENA.MIT.EDU", "EDU", b","), set(&["MIT.EDU"]));
+        assert_eq!(got("EDU", "ATHENA.MIT.EDU", b","), set(&["MIT.EDU"]));
+        assert_eq!(
+            got("x", "x", b"/COM,/HP,/APOLLO, /COM/DEC"),
+            set(&["/COM", "/COM/HP", "/COM/HP/APOLLO", "/COM/DEC"])
+        );
+        assert_eq!(
+            got("x", "x", b"EDU,MIT.,ATHENA.,WASHINGTON.EDU,CS."),
+            set(&[
+                "EDU",
+                "MIT.EDU",
+                "ATHENA.MIT.EDU",
+                "WASHINGTON.EDU",
+                "CS.WASHINGTON.EDU"
+            ])
+        );
+        assert_eq!(
+            te(b",EDU,/COM,")
+                .realms_for("ATHENA.MIT.EDU", "/COM/HP/APOLLO")
+                .unwrap_err(),
+            TransitError::BadIntermediates
+        );
+        assert_eq!(
+            got("ATHENA.MIT.EDU", "/COM/HP/APOLLO", b",EDU, /COM,"),
+            set(&["EDU", "MIT.EDU", "/COM", "/COM/HP"])
+        );
+        let edu = got("ATHENA.MIT.EDU", "CS.CMU.EDU", b",EDU,");
+        assert_eq!(edu, set(&["EDU", "MIT.EDU", "CMU.EDU"]));
+        assert_ne!(edu, set(&["EDU"]), ",EDU, must not be hops {{EDU}} only");
+        assert_eq!(
+            got("XYZZY.ATHENA.MIT.EDU", "XYZZY.CS.CMU.EDU", b",EDU,"),
+            set(&["EDU", "MIT.EDU", "ATHENA.MIT.EDU", "CMU.EDU", "CS.CMU.EDU"])
         );
     }
 
