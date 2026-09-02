@@ -303,12 +303,32 @@ forge_mit_tgt() {
         --password "${XR_PW}" --principal 'krbtgt/C.TEST@B.TEST'
 }
 
+forge_mit_lineage() {
+    local in_cc="$1"
+    local out_cc="$2"
+    docker exec "$NAME" /tmp/krb5-forge-tgt \
+        --ccache "$in_cc" --out "$out_cc" --claim-realm B.TEST \
+        --claim-crealm C.TEST \
+        --tgt krbtgt/C.TEST \
+        --password "${XR_PW}" --principal 'krbtgt/C.TEST@B.TEST'
+}
+
 forge_rust_tgt() {
     local in_cc="$1"
     local out_cc="$2"
     local claimed="$3"
     docker exec "$NAME" /tmp/krb5-forge-tgt \
         --ccache "$in_cc" --out "$out_cc" --claim-realm "$claimed" \
+        --tgt krbtgt/C.TEST \
+        --key-hex "${XR_KEY}"
+}
+
+forge_rust_lineage() {
+    local in_cc="$1"
+    local out_cc="$2"
+    docker exec "$NAME" /tmp/krb5-forge-tgt \
+        --ccache "$in_cc" --out "$out_cc" --claim-realm B.TEST \
+        --claim-crealm C.TEST \
         --tgt krbtgt/C.TEST \
         --key-hex "${XR_KEY}"
 }
@@ -349,6 +369,33 @@ seed_c_tgt_renewable() {
         sh -c "printf 'userpassword\n' | kinit -r 7d -c ${cc} user@A.TEST" >/dev/null
     docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
         kvno -c "$cc" krbtgt/C.TEST@C.TEST >/dev/null
+}
+
+expect_lineage() {
+    local label="$1"
+    local cc="$2"
+    local klog="$3"
+    local n
+    n="$(docker exec "$NAME" sh -c "wc -l < ${klog}" | tr -d '[:space:]')"
+    set +e
+    local out rc
+    out="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+        /tmp/krb5-kvno --body-realm C.TEST -c "$cc" 127.0.0.1:90 host/svc.c.test@C.TEST 2>&1)"
+    rc=$?
+    set -e
+    echo "$out"
+    if [ "$rc" -eq 0 ]; then
+        echo "$label: lineage must not issue" >&2
+        docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" >&2 || true
+        exit 1
+    fi
+    if ! docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog} | grep -q 'INVALID LINEAGE'"; then
+        echo "$label: new lines of ${klog} missing INVALID LINEAGE" >&2
+        docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" >&2 || true
+        exit 1
+    fi
+    echo "$label new ${klog} lines (from $((n + 1))):"
+    docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" || true
 }
 
 expect_dest_renew_get_local_tgt() {
@@ -476,6 +523,11 @@ expect_looking_up_server "MIT GARBAGE.EXAMPLE" /tmp/krb5cc_mit_garbage /tmp/mit-
 echo "==== MIT dest RENEW with issuer body.realm is GET_LOCAL_TGT ===="
 seed_c_tgt_renewable /tmp/krb5cc_mit_renew
 expect_dest_renew_get_local_tgt "MIT dest RENEW issuer realm" /tmp/krb5cc_mit_renew /tmp/mit-c.log
+
+echo "==== MIT C lineage local user on foreign TGT is INVALID LINEAGE ===="
+seed_c_tgt /tmp/krb5cc_mit_lineage
+forge_mit_lineage /tmp/krb5cc_mit_lineage /tmp/krb5cc_mit_lineage_out
+expect_lineage "MIT lineage" /tmp/krb5cc_mit_lineage_out /tmp/mit-c.log
 
 echo "==== MIT skip same-realm default is POLICY ===="
 kinit_a /tmp/krb5cc_mit_skip_a
@@ -724,6 +776,11 @@ expect_looking_up_server "Rust GARBAGE.EXAMPLE" /tmp/krb5cc_rust_garbage /tmp/kd
 echo "==== Rust dest RENEW with issuer body.realm is GET_LOCAL_TGT ===="
 seed_c_tgt_renewable /tmp/krb5cc_rust_renew
 expect_dest_renew_get_local_tgt "Rust dest RENEW issuer realm" /tmp/krb5cc_rust_renew /tmp/kdc-c-allow.log
+
+echo "==== Rust C lineage local user on foreign TGT is INVALID LINEAGE ===="
+seed_c_tgt /tmp/krb5cc_rust_lineage
+forge_rust_lineage /tmp/krb5cc_rust_lineage /tmp/krb5cc_rust_lineage_out
+expect_lineage "Rust lineage" /tmp/krb5cc_rust_lineage_out /tmp/kdc-c-allow.log
 
 echo "==== Rust skip same-realm default is POLICY ===="
 kinit_a /tmp/krb5cc_rust_skip_a

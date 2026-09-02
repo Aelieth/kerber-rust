@@ -694,6 +694,38 @@ fn tgs_non_ascii_ticket_realm_is_process_tgs() {
 }
 
 #[test]
+fn tgs_lineage_local_user_on_foreign_tgt_is_policy() {
+    let (_a, _b, mut c, _ab, bckey, host_c, bctgt) = three_realm_distinct();
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let mut t = bctgt.rep.0.ticket.clone();
+    let mut part = decrypt_ticket_part(&bckey, &t).expect("bc");
+    part.crealm = krb5_types::try_ascii("C.TEST").expect("realm");
+    part.authorization_data = None;
+    reseal(&bckey, &mut t, &part);
+    for lax in [false, true] {
+        c.policy.reject_bad_transit = !lax;
+        let req = tgs_req(
+            t.clone(),
+            &bctgt.session_key,
+            "C.TEST",
+            &cname,
+            host_c.clone(),
+            "C.TEST",
+            if lax { 951 } else { 950 },
+        )
+        .expect("tgs");
+        let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
+        assert_eq!(code, err::POLICY, "reject_bad_transit={}", !lax);
+        assert_eq!(
+            text.as_deref(),
+            Some("INVALID LINEAGE"),
+            "reject_bad_transit={}",
+            !lax
+        );
+    }
+}
+
+#[test]
 fn transited_renew_at_dest_five_hundred_byte_add_path_is_43() {
     let (_a, _b, c, ir, _host_c, bc) = three_realm();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);

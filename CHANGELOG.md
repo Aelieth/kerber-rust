@@ -22,6 +22,12 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **G9 Y3 (MIT-gated).** A peer-minted TGT for a *local* user
+  (`crealm` local, header TGT realm foreign, not S4U2Self) is 12
+  `INVALID LINEAGE` for both `reject_bad_transit` values (MIT
+  `check_tgs_lineage`). Gate: `scripts/capaths-transit-gate.sh`
+  `--claim-crealm` cells.
+
 - **G9 Y2.** Non-ASCII `ticket.realm` on a presented TGT is 7
   `PROCESS_TGS` (`PrincipalName::try_new`), not a per-request panic.
 

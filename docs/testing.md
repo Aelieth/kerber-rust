@@ -272,7 +272,8 @@ when that oracle is absent.
   transited) is rejected at both MIT C and Rust C (`PROCESS_TGS`).
   `host/svc.c.test@GARBAGE.EXAMPLE` aimed at C (`--body-realm`) is 60
   `GET_LOCAL_TGT` on both MIT and Rust. Dest RENEW at C with issuer
-  `body.realm` is 60 both sides. Bare A TGT plus Rust `krb5-kvno
+  `body.realm` is 60 both sides. A peer-minted TGT for a local user
+  (`--claim-crealm`) is `INVALID LINEAGE` on both sides. Bare A TGT plus Rust `krb5-kvno`
   host/svc.c.test@C.TEST` chases MIT A→B→C (`body.realm` is the current
   TGT realm). In CI (`mit-extra`).
 - `scripts/capaths-compress-gate.sh` — MIT 4-hop

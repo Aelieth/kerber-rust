@@ -710,6 +710,11 @@ fn issue_tgs_body(
     let prev_hop = utf8_realm(&ap.ticket.realm)?;
     let crealm = utf8_realm(&enc_tkt.crealm)?;
     let is_crossrealm = prev_hop != store.realm() && prev_hop != crealm;
+    // MIT check_tgs_lineage: a local user on a foreign TGT is POLICY
+    // (skipped for S4U2Self).
+    if crealm == store.realm() && is_crossrealm && !s4u2self {
+        return Err(proto(err::POLICY, "INVALID LINEAGE"));
+    }
     if is_crossrealm {
         if transited.tr_type != 1 {
             return Err(proto(err::TRTYPE_NOSUPP, "VALIDATE_TRANSIT_TYPE"));

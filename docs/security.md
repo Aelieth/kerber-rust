@@ -60,6 +60,10 @@ A TGS-REQ whose `body.realm` is not a realm this KDC serves is 60
 multi-realm MIT KDC may answer 68 `WRONG_REALM` from `dispatch.c`).
 Destination RENEW/VALIDATE is not exempt.
 
+A cross-realm TGT whose client realm is this KDC (`check_tgs_lineage`)
+is 12 `INVALID LINEAGE` even when `reject_bad_transit = false`.
+S4U2Self is exempt (MIT `tgs_policy.c`).
+
 ## Not in this matrix
 
 In-process metrics counters are deferred (logs already carry

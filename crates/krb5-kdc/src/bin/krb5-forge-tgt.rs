@@ -21,6 +21,7 @@ fn main() -> ExitCode {
     let mut ccache = None;
     let mut out = None;
     let mut claim = None;
+    let mut claim_crealm = None;
     let mut key_hex = None;
     let mut password = None;
     let mut principal = None;
@@ -39,6 +40,10 @@ fn main() -> ExitCode {
             }
             "--claim-realm" => {
                 claim = args.get(i + 1).cloned();
+                i += 2;
+            }
+            "--claim-crealm" => {
+                claim_crealm = args.get(i + 1).cloned();
                 i += 2;
             }
             "--tgt" => {
@@ -130,6 +135,16 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    let claim_crealm_ks = match claim_crealm.as_deref() {
+        None => None,
+        Some(cr) => match krb5_types::try_ascii(cr) {
+            Ok(r) => Some(r),
+            Err(e) => {
+                eprintln!("krb5-forge-tgt: claim-crealm: {e}");
+                return ExitCode::from(2);
+            }
+        },
+    };
     let mut found = false;
     for cred in &mut cc.creds {
         if cred.is_config() || cred.is_removed() {
@@ -150,6 +165,9 @@ fn main() -> ExitCode {
         };
         part.transited = TransitedEncoding::empty();
         part.authorization_data = None;
+        if let Some(ref r) = claim_crealm_ks {
+            part.crealm = r.clone();
+        }
         let der = match encode(&part) {
             Ok(d) => d,
             Err(e) => {
@@ -173,8 +191,14 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
         }
+        if let Some(ref r) = claim_crealm_ks {
+            cred.client.0 = r.clone();
+        }
         found = true;
         break;
+    }
+    if found && let Some(ref r) = claim_crealm_ks {
+        cc.primary.0 = r.clone();
     }
     if !found {
         eprintln!("krb5-forge-tgt: no TGT decrypted with the supplied key");
