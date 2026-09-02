@@ -34,9 +34,7 @@ fn kinit_obtains_tgt_from_mit_kdc() {
         eprintln!("skipping live kinit: 127.0.0.1:88 not reachable (set KERBER_LIVE=1 to fail)");
         return;
     }
-    let dir = std::env::var_os("KERBER_SCRATCH")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
+    let dir = std::env::var_os("KERBER_SCRATCH").map_or_else(std::env::temp_dir, PathBuf::from);
     let cc = dir.join("krb5cc_kerber_rust_live");
     let _ = std::fs::remove_file(&cc);
     let _guard = CcGuard(cc.clone());
