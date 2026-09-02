@@ -25,7 +25,8 @@ DER-strictness negatives live in `crates/krb5-asn1/tests/der_strict.rs`.
 `fuzz/` has 9 cargo-fuzz targets (DER, AS/TGS/AP, keytab/ccache,
 PKINIT CMS, PAC NDR, SPAKE points, Oakley DH, GSS tokens, transited)
 seeded from `tests/traces/` (transited also has `fuzz/corpus/transited/`).
-CI smokes each target ~60s (`.github/workflows/fuzz.yml`).
+CI smokes each target ~60s (`.github/workflows/fuzz.yml`; schedule,
+dispatch, and PR on `fuzz/**` — no `push:` trigger).
 
 ## Interop
 

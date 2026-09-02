@@ -134,7 +134,7 @@ implementation oracle.
 | `prod-gate.sh` | loopback Rust↔Rust on `127.0.0.1` | harness |
 | `soak-gate.sh` | self RSS / latency on the prod realm (MIT sampling is not the leak proof) | harness + `soak.yml` |
 | golden MIT DER + crypto KATs | in-repo fixtures, not a live peer | test |
-| 8 cargo-fuzz targets | `fuzz.yml` smoke, not an interop peer | fuzz |
+| 9 cargo-fuzz targets | `fuzz.yml` smoke, not an interop peer | fuzz |
 | `gss-sspi-gate.sh` | honest `exit 2` when the SSPI oracle is absent | not a green claim |
 | in-process `bounded_stress` | not the wire stress-gate | unit |
 | cargo-vet exemptions | shrinking list; not a full local audit of every crate | documented |

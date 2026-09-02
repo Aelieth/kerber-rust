@@ -1,10 +1,19 @@
 //! Live AS/TGS against the MIT 1.22.2 harness when port 88 is reachable.
 
 use std::net::{TcpStream, ToSocketAddrs};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use krb5_client::kinit;
 use krb5_protocol::KdcAddr;
+
+struct CcGuard(PathBuf);
+
+impl Drop for CcGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
 
 fn kdc_up() -> bool {
     let Ok(mut addrs) = "127.0.0.1:88".to_socket_addrs() else {
@@ -25,9 +34,12 @@ fn kinit_obtains_tgt_from_mit_kdc() {
         eprintln!("skipping live kinit: 127.0.0.1:88 not reachable (set KERBER_LIVE=1 to fail)");
         return;
     }
-    let dir = std::env::temp_dir();
+    let dir = std::env::var_os("KERBER_SCRATCH")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
     let cc = dir.join("krb5cc_kerber_rust_live");
     let _ = std::fs::remove_file(&cc);
+    let _guard = CcGuard(cc.clone());
     let mut password = b"userpassword".to_vec();
     let addr = KdcAddr::new("127.0.0.1");
     let result = kinit(
@@ -44,10 +56,8 @@ fn kinit_obtains_tgt_from_mit_kdc() {
             let bytes = std::fs::read(&cc).unwrap();
             assert_eq!(&bytes[..2], &[0x05, 0x04]);
             println!("live kinit tgt ok tgs={}", r.tgs_out.is_some());
-            let _ = std::fs::remove_file(&cc);
         }
         Err(e) => {
-            let _ = std::fs::remove_file(&cc);
             let msg = e.to_string();
             if msg.contains("transport")
                 || msg.contains("CLIENT_NOT_FOUND")

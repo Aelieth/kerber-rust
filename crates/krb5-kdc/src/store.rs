@@ -314,7 +314,7 @@ impl Default for Policy {
 }
 
 impl Policy {
-    /// MIT `krb5_check_transited_list`: capaths if present, else hierarchical.
+    /// MIT `krb5_check_transited_list`: denylist, then capaths if present, else hierarchical.
     #[must_use]
     pub fn transit_allowed(&self, crealm: &str, srealm: &str, hops: &[String]) -> bool {
         if hops

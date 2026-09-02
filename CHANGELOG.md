@@ -22,6 +22,11 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **G9 V-pass (MIT-gated).** Transited expansion errors out of band
+  (raw ≤ 511 / joined ≤ 512; lone NUL is the empty list); null
+  subfields match MIT `process_intermediates`; skip-bit POLICY
+  e-text is `BAD_TRANSIT`.
+
 - **G9 U-pass U1 (MIT-gated).** Default `reject_bad_transit` rejects
   TGS `DISABLE_TRANSITED_CHECK` as `KDC_ERR_POLICY` (12, `KDC policy
   rejects request`), matching MIT 1.22.2 `do_tgs_req`. RENEW/VALIDATE
@@ -33,9 +38,14 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   unescaped field (MIT `chk_trans.c` `maybe_join`): `X.COM,C\.` →
   `X.COM,C.X.COM`. Honest `EX.COM,B.` is unchanged. Comma cap stays.
 
-- **G9 U-pass U4 (MIT-gated).** A joined transited component over
-  MIT `MAXLEN` 512 bytes is one poison hop (fail-closed, POLICY).
-  512 bytes still expands.
+- **G9 U-pass U4 (MIT-gated).** Raw transited field ≥ 512 unescaped
+  bytes or joined component > 512 is an expansion error (MIT
+  `MAXLEN`: 511 raw / 512 joined still expand).
+
+- **G9 T-pass (MIT-gated).** `realms()` short-circuits at 256 commas
+  to a single NUL poison hop (Rust analogue of MIT `MAXLEN`; the
+  transit check cannot match a legitimate realm, so the KDC surfaces
+  POLICY). Gate: `scripts/capaths-compress-gate.sh`.
 
 - **G9 S-pass (MIT-gated).** A present file whose nested `include`
   names a missing target is an error even on colon-split
@@ -61,11 +71,6 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   `rust-kinit-fast-gate.sh`. KCM `GET_CRED_LIST` length uses
   saturating remaining-bytes. KCM oracle runs as in-container root
   (sssd_kcm `/var/lib/sss/secrets`), documented.
-
-- **G9 T-pass (MIT-gated).** `realms()` short-circuits at 256 commas
-  to a single NUL poison hop (Rust analogue of MIT `MAXLEN`; the
-  transit check cannot match a legitimate realm, so the KDC surfaces
-  POLICY). Gate: `scripts/capaths-compress-gate.sh`.
 
 - **G9c `[capaths]` transit (MIT-gated).** Incoming foreign-crealm
   TGS checks transited hops against `[capaths]` (`.` = direct) or

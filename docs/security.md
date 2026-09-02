@@ -38,9 +38,18 @@ MIT would accept or grow). They are not laxer than MIT.
 
 | Deviation | MIT | Rust | Why |
 | --- | --- | --- | --- |
-| Transited bounds | 512-byte `MAXLEN` buffer per component (`chk_trans.c`); over-long is `ILL_CR_TKT` collapsed to POLICY | More than 256 commas, or a joined component over 512 bytes → one `"\0"` poison hop → POLICY | Same observable POLICY; O(1)-class memory vs MIT |
-| DOMAIN-X500-COMPRESS join | `maybe_join` on unescaped text (`X.COM,C\.` → `C.X.COM`) | Same (U2) | Match MIT, not RFC-literal escaped markers |
+| Transited field-count cap | No cap; a 300-hop honest path succeeds with T | More than 256 commas is `TooManyFields` (POLICY on the non-add path) | **STRICTER** than MIT |
+| Transited component bounds | Raw field ≤ 511 unescaped bytes; joined ≤ 512 (`chk_trans.c` `MAXLEN`) | Same (511 raw / 512 joined); over is `FieldTooLong` out of band | MIT-exact |
+| Invalid UTF-8 in transited | Byte-exact | `from_utf8_lossy` inflates invalid bytes 3× against the 512 bound and collapses sequences to U+FFFD | STRICTER; byte-exact matching is general-pass |
+| Append escaping | MIT `add_to_transited` does not escape `\` or `,` in the new realm | Escapes both | Stricter-correct than MIT's encoder |
+| Add-path raw bound | MIT add-path uses `MAX_REALM_LN` 500; `chk_trans` is 512 | One decoder at 512 | A 500–511-byte field is 43 in MIT add-path and POLICY (or 43) in Rust; both reject; not chased |
 | Encode-side X.500 RDN compression | MIT `add_to_transited` may emit compressed RDN form | Encode stays uncompressed (`from_realms`) | Deferred; decode still expands MIT compressed contents |
+
+### Parity decisions (not deviations)
+
+DOMAIN-X500-COMPRESS joins on unescaped field text (MIT `maybe_join`:
+`X.COM,C\.` → `C.X.COM`). Null subfields match MIT
+`process_intermediates` (leading/trailing comma, `,,`).
 
 ## Not in this matrix
 
