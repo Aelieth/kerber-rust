@@ -334,7 +334,7 @@ forge_rust_lineage() {
         --key-hex "${XR_KEY}"
 }
 
-expect_looking_up_server() {
+expect_get_local_tgt() {
     local label="$1"
     local cc="$2"
     local klog="$3"
@@ -562,7 +562,7 @@ expect_forge_reject "MIT forge C.TEST" /tmp/krb5cc_mit_forge_c /tmp/mit-c.log
 
 echo "==== MIT C GARBAGE.EXAMPLE local sname is GET_LOCAL_TGT ===="
 seed_c_tgt /tmp/krb5cc_mit_garbage
-expect_looking_up_server "MIT GARBAGE.EXAMPLE" /tmp/krb5cc_mit_garbage /tmp/mit-c.log
+expect_get_local_tgt "MIT GARBAGE.EXAMPLE" /tmp/krb5cc_mit_garbage /tmp/mit-c.log
 
 echo "==== MIT dest RENEW with issuer body.realm is GET_LOCAL_TGT ===="
 seed_c_tgt_renewable /tmp/krb5cc_mit_renew
@@ -851,7 +851,7 @@ expect_forge_reject "Rust forge C.TEST" /tmp/krb5cc_rust_forge_c /tmp/kdc-c-allo
 
 echo "==== Rust C GARBAGE.EXAMPLE local sname is GET_LOCAL_TGT ===="
 seed_c_tgt /tmp/krb5cc_rust_garbage
-expect_looking_up_server "Rust GARBAGE.EXAMPLE" /tmp/krb5cc_rust_garbage /tmp/kdc-c-allow.log
+expect_get_local_tgt "Rust GARBAGE.EXAMPLE" /tmp/krb5cc_rust_garbage /tmp/kdc-c-allow.log
 
 echo "==== Rust dest RENEW with issuer body.realm is GET_LOCAL_TGT ===="
 seed_c_tgt_renewable /tmp/krb5cc_rust_renew

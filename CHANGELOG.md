@@ -22,6 +22,11 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0 C7 (knob hygiene).** `krb5-kvno --renew` without `--body-realm`
+  is exit 2 (MIT `kvno` has no renew; `kinit -R` is `renew-gate.sh`).
+  `-U` binds `body.realm` to the presented TGT and refuses a missing
+  dest TGT instead of a foreign `body.realm`. Gate: C1's `-U` cell.
+
 - **W0 C6 (MIT-gated).** Referral chase rejects a hop back to the start
   realm and a repeated realm (`ReplyMismatch`); hop cap is 10
   (`KRB5_REFERRAL_MAXHOPS`). Asked-for path TGTs are stored (MIT `kvno`

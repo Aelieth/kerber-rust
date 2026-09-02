@@ -5,9 +5,11 @@
 //!
 //! `--disable-transited-check` is gate-only (MIT `kvno` cannot set bit 26).
 //! `--body-realm` is gate-only: send that TGS-REQ realm with no chase.
-//! `-U <user>` sends PA-FOR-USER (S4U2Self). MIT `kvno -U` also requires the
-//! ccache principal to equal the service; this binary does not, so a user TGT
-//! can present the Y0 mismatch cell. `-P` is not implemented.
+//! `--renew` requires `--body-realm` (MIT `kvno` has no renew; `kinit -R` is
+//! `renew-gate.sh`). `-U <user>` sends PA-FOR-USER with `body.realm` of the
+//! presented TGT (single request; no S4U referral walk). MIT `kvno -U` also
+//! requires the ccache principal to equal the service; this binary does not,
+//! so a user TGT can present the Y0 mismatch cell. `-P` is not implemented.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -175,7 +177,12 @@ fn run(
                 srealm.clone(),
             )
         };
-        tgs_s4u(&addr, &tgt, sname, &srealm, uname, &urealm).map_err(kvno_err)?
+        if hop_realm != srealm {
+            return Err(format!(
+                "no TGT for realm {srealm} in ccache; seed with `kvno krbtgt/{srealm}@{srealm}`"
+            ));
+        }
+        tgs_s4u(&addr, &tgt, sname, &hop_realm, uname, &urealm).map_err(kvno_err)?
     } else if let Some(br) = body_realm {
         tgs_exchange_once(&addr, &tgt, sname, br, disable_transited_check, renew)
             .map_err(kvno_err)?

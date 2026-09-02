@@ -410,6 +410,12 @@ pub fn parse_kvno(args: &[String]) -> Result<KvnoArgs, String> {
         out.kdc_host = Some(pos.remove(0));
     }
     out.services = pos;
+    if out.renew && out.body_realm.is_none() {
+        return Err(
+            "requires --body-realm (gate-only; MIT kvno has no renew — `kinit -R` is `renew-gate.sh`)"
+                .into(),
+        );
+    }
     Ok(out)
 }
 
@@ -552,6 +558,19 @@ mod tests {
         .unwrap();
         assert!(n.renew);
         assert_eq!(n.body_realm.as_deref(), Some("B.TEST"));
+    }
+
+    #[test]
+    fn kvno_renew_requires_body_realm() {
+        let e = parse_kvno(&s(&["--renew", "host/x@R"])).unwrap_err();
+        assert!(e.contains("requires --body-realm"), "{e}");
+    }
+
+    #[test]
+    fn kvno_for_user_with_realm_parses() {
+        let u = parse_kvno(&s(&["-U", "victim@A.TEST", "user@C.TEST"])).unwrap();
+        assert_eq!(u.for_user.as_deref(), Some("victim@A.TEST"));
+        assert_eq!(u.services, vec!["user@C.TEST".to_string()]);
     }
 
     #[test]
