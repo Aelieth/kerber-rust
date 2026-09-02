@@ -944,7 +944,8 @@ pub enum TransitError {
     /// Raw field ≥ 512 unescaped bytes, or joined component > 512.
     #[error("transited field too long")]
     FieldTooLong,
-    /// More than 256 commas (Rust-STRICTER; MIT has no field-count cap).
+    /// More than 256 commas, or more than [`MAX_TRANSIT_HOPS`] emitted hops
+    /// (Rust-STRICTER; MIT has no field-count or hop cap).
     #[error("too many transited fields")]
     TooManyFields,
     /// Null-subfield neighbours are mixed X.500/domain or non-hierarchical.
@@ -974,8 +975,9 @@ impl TransitedEncoding {
     /// DOMAIN-X500-COMPRESS. MIT `chk_trans.c`: strip one trailing NUL;
     /// raw field ≥ 512 or joined > 512 is an error; join on unescaped
     /// text; null subfields seed `crealm`/`srealm` and emit hierarchical
-    /// intermediates (`process_intermediates`). More than 256 commas is a
-    /// Rust-STRICTER error. Encode stays uncompressed ([`Self::from_realms`]).
+    /// intermediates (`process_intermediates`). More than 256 commas or
+    /// [`MAX_TRANSIT_HOPS`] emitted hops is a Rust-STRICTER error. Encode
+    /// stays uncompressed ([`Self::from_realms`]).
     ///
     /// # Errors
     ///
@@ -1021,6 +1023,10 @@ impl TransitedEncoding {
 
 /// Cap on comma-separated transited fields. Rust-STRICTER than MIT.
 const MAX_TRANSIT_REALMS: usize = 256;
+/// Cap on hops emitted by DOMAIN-X500-COMPRESS expansion. MIT streams
+/// `process_intermediates` callbacks at O(1) memory; Rust materializes
+/// the list. 4096 is ~100× any honest path and bounds allocation.
+pub const MAX_TRANSIT_HOPS: usize = 4096;
 /// MIT `chk_trans.c` `MAXLEN`. Writing the 512th raw unescaped byte errors.
 const MAX_TRANSIT_RAW: usize = 512;
 /// MIT `maybe_join`: `last + cur > 512` errors; joined of 512 is accepted.
@@ -1108,7 +1114,7 @@ fn emit_joined(
         cur.clear();
         return Ok(());
     };
-    out.push(this.clone());
+    push_hop(out, this.clone())?;
     if intermediates {
         process_intermediates(&this, last, out)?;
     }
@@ -1137,6 +1143,14 @@ fn maybe_join(last: &str, cur: &str) -> Result<Option<String>, TransitError> {
     Ok(Some(expanded))
 }
 
+fn push_hop(out: &mut Vec<String>, hop: String) -> Result<(), TransitError> {
+    if out.len() >= MAX_TRANSIT_HOPS {
+        return Err(TransitError::TooManyFields);
+    }
+    out.push(hop);
+    Ok(())
+}
+
 fn process_intermediates(n1: &str, n2: &str, out: &mut Vec<String>) -> Result<(), TransitError> {
     let (short, long) = if n1.len() > n2.len() {
         (n2, n1)
@@ -1161,7 +1175,7 @@ fn process_intermediates(n1: &str, n2: &str, out: &mut Vec<String>) -> Result<()
         }
         for i in (short.len() + 1)..long.len() {
             if lb[i] == b'/' {
-                out.push(long[..i].to_owned());
+                push_hop(out, long[..i].to_owned())?;
             }
         }
     } else {
@@ -1171,7 +1185,7 @@ fn process_intermediates(n1: &str, n2: &str, out: &mut Vec<String>) -> Result<()
         let mut i = long.len() - short.len() - 1;
         while i > 0 {
             if lb[i - 1] == b'.' {
-                out.push(long[i..].to_owned());
+                push_hop(out, long[i..].to_owned())?;
             }
             i -= 1;
         }
@@ -1486,6 +1500,24 @@ mod tests {
         assert_eq!(
             got("XYZZY.ATHENA.MIT.EDU", "XYZZY.CS.CMU.EDU", b",EDU,"),
             set(&["EDU", "MIT.EDU", "ATHENA.MIT.EDU", "CMU.EDU", "CS.CMU.EDU"])
+        );
+    }
+
+    #[test]
+    fn transited_hop_cap_is_too_many_fields() {
+        // Space-clears last, emits "/", then 510 slashes with intermediates.
+        // Nine cycles exceed MAX_TRANSIT_HOPS; comma count stays under 256.
+        let mut cycle = b" /,,".to_vec();
+        cycle.extend(std::iter::repeat_n(b'/', 510));
+        cycle.push(b',');
+        let buf = cycle.repeat(9);
+        assert_eq!(
+            te(&buf).realms_for("", "").unwrap_err(),
+            TransitError::TooManyFields
+        );
+        assert_eq!(
+            hops(b"EX.COM,B."),
+            vec!["EX.COM".to_string(), "B.EX.COM".to_string()]
         );
     }
 

@@ -1,6 +1,6 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use krb5_types::{OctetString, TransitedEncoding};
+use krb5_types::{MAX_TRANSIT_HOPS, OctetString, TransitedEncoding};
 
 const MAX_TRANSIT_REALMS: usize = 256;
 const MAX_TRANSIT_RAW: usize = 512;
@@ -53,6 +53,7 @@ fuzz_target!(|data: &[u8]| {
     let Ok(hops) = got else {
         return;
     };
+    assert!(hops.len() <= MAX_TRANSIT_HOPS);
     if data.contains(&b'\\') {
         return;
     }
