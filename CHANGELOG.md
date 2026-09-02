@@ -22,6 +22,13 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **G9 X2 (MIT-gated).** TGS server lookup is by full principal like
+  MIT `search_sprinc`: a local sname is served only when `body.realm`
+  equals the KDC realm; otherwise referral only if `krbtgt/<req_realm>`
+  exists, else 7 `LOOKING_UP_SERVER`. Hierarchical walks of a ≥512-byte
+  realm return empty. Non-UTF-8 realm is `GENERIC`. Gate:
+  `scripts/capaths-transit-gate.sh` GARBAGE.EXAMPLE cells.
+
 - **G9 X1 (MIT-gated).** Presented TGS-TGT decryption is bound to
   `ticket.realm` like MIT `kdc_get_server_key`: local `krbtgt/<local>`
   keys only when the ticket realm is local; that peer's interrealm

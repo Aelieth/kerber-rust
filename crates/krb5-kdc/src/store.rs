@@ -15,9 +15,9 @@ thread_local! {
 
 use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
 use krb5_protocol::{Keytab, KeytabEntry, ReplayCache};
-use krb5_types::PrincipalName;
 use krb5_types::pac::{PacIdentity, RpcSid};
 use krb5_types::pkinit::PkinitCa;
+use krb5_types::{MAX_TRANSIT_RAW, PrincipalName};
 use subtle::ConstantTimeEq;
 
 /// Well-known RID: Administrator.
@@ -341,6 +341,9 @@ fn permitted_transited(
 }
 
 fn hierarchical_intermediates(client: &str, server: &str) -> Vec<String> {
+    if client.len() >= MAX_TRANSIT_RAW || server.len() >= MAX_TRANSIT_RAW {
+        return Vec::new();
+    }
     let c: Vec<&str> = client.split('.').collect();
     let s: Vec<&str> = server.split('.').collect();
     let mut common = 0usize;
@@ -2164,6 +2167,17 @@ mod tests {
             .or_default()
             .insert("C.EX.COM".into(), vec!["EX.COM".into(), "B.EX.COM".into()]);
         assert!(p.transit_allowed("A.EX.COM", "C.EX.COM", &hops));
+    }
+
+    #[test]
+    fn hierarchical_intermediates_huge_realm_is_empty() {
+        assert_eq!(
+            hierarchical_intermediates("A.EX.COM", "C.EX.COM"),
+            vec!["EX.COM".to_string(), "C.EX.COM".to_string()]
+        );
+        let big = format!("{}A.TEST", "A.".repeat(30_000));
+        assert!(hierarchical_intermediates("A.TEST", &big).is_empty());
+        assert!(hierarchical_intermediates(&big, "C.TEST").is_empty());
     }
 
     #[test]

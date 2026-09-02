@@ -1037,7 +1037,7 @@ const MAX_TRANSIT_REALMS: usize = 256;
 /// the list. 4096 is ~100× any honest path and bounds allocation.
 pub const MAX_TRANSIT_HOPS: usize = 4096;
 /// MIT `chk_trans.c` `MAXLEN`. Writing the 512th raw unescaped byte errors.
-const MAX_TRANSIT_RAW: usize = 512;
+pub const MAX_TRANSIT_RAW: usize = 512;
 /// MIT `maybe_join`: `last + cur > 512` errors; joined of 512 is accepted.
 const MAX_TRANSIT_JOINED: usize = 512;
 /// MIT `kdc_transit.c` `MAX_REALM_LN`. Raw field of 500 unescaped bytes errors.
@@ -1214,6 +1214,9 @@ fn expand_domain_x500(raw: &[u8], crealm: &str, srealm: &str) -> Result<Vec<Stri
         at_start = false;
     }
     if cur.is_empty() {
+        if srealm.len() >= MAX_TRANSIT_RAW {
+            return Err(TransitError::FieldTooLong);
+        }
         process_intermediates(&last, srealm, &mut out)?;
     } else {
         emit_joined(&mut out, &mut last, &mut cur, intermediates)?;
@@ -1528,6 +1531,10 @@ mod tests {
         assert_eq!(hops(&vec![b'A'; 511]), vec!["A".repeat(511)]);
         assert_eq!(
             te(&vec![b'A'; 512]).realms_for("", "").unwrap_err(),
+            TransitError::FieldTooLong
+        );
+        assert_eq!(
+            te(b",").realms_for("A.TEST", &"A".repeat(512)).unwrap_err(),
             TransitError::FieldTooLong
         );
 

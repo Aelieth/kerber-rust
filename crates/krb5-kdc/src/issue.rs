@@ -238,7 +238,7 @@ fn issue_as_body(
     if let Some(f) = fast {
         check_fast_options(&f.fast_options)?;
     }
-    if utf8_realm(&body.realm) != store.realm() {
+    if utf8_realm(&body.realm)? != store.realm() {
         return Err(proto(err::C_PRINCIPAL_UNKNOWN, "wrong realm"));
     }
     if body.kdc_options.unsupported_bits() != 0 {
@@ -610,7 +610,7 @@ fn issue_tgs_body(
         client: format!(
             "{}@{}",
             authenticator.cname.components_joined(),
-            utf8_realm(&enc_tkt.crealm)
+            utf8_realm(&enc_tkt.crealm)?
         ),
         server: format!("krbtgt/{}@{}", store.realm(), store.realm()),
         ctime: authenticator.ctime.unix_seconds(),
@@ -624,13 +624,17 @@ fn issue_tgs_body(
         .sname
         .clone()
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no sname"))?;
-    let req_realm = utf8_realm(&body.realm).to_owned();
-    if store.fetch_name(&sname)?.is_none() && req_realm != store.realm() {
+    // MIT search_sprinc looks up the full principal; a local sname with a
+    // foreign body.realm is not a local hit. RENEW/VALIDATE cannot refer.
+    let req_realm = utf8_realm(&body.realm)?.to_owned();
+    if req_realm != store.realm() && !(renew || validate) {
         let referral =
-            PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", req_realm.as_str()]);
-        if store.fetch_name(&referral)?.is_some() {
-            sname = referral;
+            PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", req_realm.as_str()])
+                .map_err(|_| proto(err::S_PRINCIPAL_UNKNOWN, "LOOKING_UP_SERVER"))?;
+        if store.fetch_name(&referral)?.is_none() {
+            return Err(proto(err::S_PRINCIPAL_UNKNOWN, "LOOKING_UP_SERVER"));
         }
+        sname = referral;
     }
     if (renew || validate) && sname != ap.ticket.sname {
         return Err(proto(err::BADOPTION, "RENEW/VALIDATE server mismatch"));
@@ -652,7 +656,7 @@ fn issue_tgs_body(
     check_db_times(None, &server)?;
     check_tgs_policy_flags(&server, body, ap.ticket.sname.is_krbtgt(), &enc_tkt)?;
     let mut ticket_cname = enc_tkt.cname.clone();
-    let mut ticket_crealm = utf8_realm(&enc_tkt.crealm).to_owned();
+    let mut ticket_crealm = utf8_realm(&enc_tkt.crealm)?.to_owned();
     let mut evidence_logon = None;
     if let Some((user, realm)) = s4u2self_client(&tgt_session, tgs_padata)? {
         check_s4u2self_for_user(store, &user, &server)?;
@@ -673,8 +677,8 @@ fn issue_tgs_body(
     let mut transited = enc_tkt.transited.clone();
     // MIT is_crossrealm: header TGT realm ≠ local KDC realm and ≠ client.
     // Skip only the append when previous hop equals the request realm.
-    let prev_hop = utf8_realm(&ap.ticket.realm);
-    let crealm = utf8_realm(&enc_tkt.crealm);
+    let prev_hop = utf8_realm(&ap.ticket.realm)?;
+    let crealm = utf8_realm(&enc_tkt.crealm)?;
     let is_crossrealm = prev_hop != store.realm() && prev_hop != crealm;
     if is_crossrealm {
         if transited.tr_type != 1 {
@@ -907,7 +911,7 @@ fn decrypt_presented_tgt(
 ) -> Result<(EncTicketPart, ProtocolKey, Vec<u8>), Error> {
     // MIT kdc_get_server_key: only keys of ticket.server (name and realm).
     // Incoming interrealm keys are stored as krbtgt/<ticket.realm>@<local>.
-    let ticket_realm = utf8_realm(&ap.ticket.realm);
+    let ticket_realm = utf8_realm(&ap.ticket.realm)?;
     let princ = if ticket_realm == store.realm() {
         store.fetch_krbtgt()?
     } else {
@@ -1382,7 +1386,8 @@ fn encode_krb_error(
     // MIT 1.22.2 echoes the request realm/sname (C_PRINCIPAL_UNKNOWN for a
     // foreign-realm AS-REQ, not WRONG_REALM).
     let realm_s = body
-        .map(|b| utf8_realm(&b.realm).to_owned())
+        .and_then(|b| std::str::from_utf8(b.realm.as_bytes()).ok())
+        .map(str::to_owned)
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| store.realm().to_owned());
     let realm = match krb5_types::try_ascii(&realm_s) {
@@ -1615,6 +1620,6 @@ fn apply_disallow_flags(
     flags
 }
 
-fn utf8_realm(r: &krb5_types::Realm) -> &str {
-    std::str::from_utf8(r.as_bytes()).unwrap_or("KERBER.TEST")
+fn utf8_realm(r: &krb5_types::Realm) -> Result<&str, Error> {
+    std::str::from_utf8(r.as_bytes()).map_err(|_| proto(err::GENERIC, "non-ascii realm"))
 }

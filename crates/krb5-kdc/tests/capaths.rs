@@ -519,3 +519,63 @@ fn presented_tgt_decrypt_is_bound_to_ticket_realm() {
         );
     }
 }
+
+#[test]
+fn tgs_local_sname_unknown_body_realm_is_looking_up_server() {
+    let (_a, _b, c, _ir, host_c, bc) = three_realm();
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let req = tgs_req(
+        bc.rep.0.ticket.clone(),
+        &bc.session_key,
+        "A.TEST",
+        &cname,
+        host_c.clone(),
+        "GARBAGE.EXAMPLE",
+        920,
+    )
+    .expect("tgs");
+    let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
+    assert_eq!(code, err::S_PRINCIPAL_UNKNOWN);
+    assert_eq!(text.as_deref(), Some("LOOKING_UP_SERVER"));
+
+    let tgt = as_tgt(&c, "C.TEST", 921);
+    let req = tgs_req(
+        tgt.rep.0.ticket.clone(),
+        &tgt.session_key,
+        "C.TEST",
+        &cname,
+        host_c,
+        "GARBAGE.EXAMPLE",
+        922,
+    )
+    .expect("tgs");
+    let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
+    assert_eq!(code, err::S_PRINCIPAL_UNKNOWN);
+    assert_eq!(text.as_deref(), Some("LOOKING_UP_SERVER"));
+}
+
+#[test]
+fn tgs_huge_body_realm_is_looking_up_server_quickly() {
+    let (_a, _b, c, _ir, host_c, bc) = three_realm();
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let big = format!("{}A.TEST", "A.".repeat(30_000));
+    let req = tgs_req(
+        bc.rep.0.ticket.clone(),
+        &bc.session_key,
+        "A.TEST",
+        &cname,
+        host_c,
+        &big,
+        923,
+    )
+    .expect("tgs");
+    let t0 = std::time::Instant::now();
+    let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
+    let elapsed = t0.elapsed();
+    assert_eq!(code, err::S_PRINCIPAL_UNKNOWN);
+    assert_eq!(text.as_deref(), Some("LOOKING_UP_SERVER"));
+    assert!(
+        elapsed < std::time::Duration::from_millis(500),
+        "60 KiB body.realm took {elapsed:?}"
+    );
+}

@@ -25,6 +25,7 @@ fn main() -> ExitCode {
     let mut password = None;
     let mut principal = None;
     let mut tgt = None;
+    let mut alias_as = None;
     let mut i = 0usize;
     while i < args.len() {
         match args[i].as_str() {
@@ -56,19 +57,29 @@ fn main() -> ExitCode {
                 principal = args.get(i + 1).cloned();
                 i += 2;
             }
+            "--alias-as" => {
+                alias_as = args.get(i + 1).cloned();
+                i += 2;
+            }
             _ => {
                 eprintln!(
-                    "usage: krb5-forge-tgt --ccache <in> --out <out> --claim-realm <realm> \
-                     --tgt <krbtgt/REALM> (--key-hex <hex> | --password <pw> --principal <name@REALM>)"
+                    "usage: krb5-forge-tgt --ccache <in> --out <out> --tgt <krbtgt/REALM> \
+                     (--claim-realm <realm> (--key-hex <hex> | --password <pw> --principal <name@REALM>) \
+                     | --alias-as <krbtgt/REALM@REALM>)"
                 );
                 return ExitCode::from(2);
             }
         }
     }
-    let (Some(cc_path), Some(out_path), Some(claim_realm), Some(tgt_sname)) =
-        (ccache, out, claim, tgt)
-    else {
-        eprintln!("krb5-forge-tgt: --ccache, --out, --claim-realm, and --tgt are required");
+    let (Some(cc_path), Some(out_path), Some(tgt_sname)) = (ccache, out, tgt) else {
+        eprintln!("krb5-forge-tgt: --ccache, --out, and --tgt are required");
+        return ExitCode::from(2);
+    };
+    if let Some(alias) = alias_as {
+        return alias_tgt(&cc_path, &out_path, &tgt_sname, &alias);
+    }
+    let Some(claim_realm) = claim else {
+        eprintln!("krb5-forge-tgt: --claim-realm is required unless --alias-as");
         return ExitCode::from(2);
     };
     let key = match (key_hex, password, principal) {
@@ -170,6 +181,57 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
     if let Err(e) = cc.write_file(&out_path) {
+        eprintln!("krb5-forge-tgt: write {out_path}: {e}");
+        return ExitCode::from(1);
+    }
+    ExitCode::SUCCESS
+}
+
+fn alias_tgt(cc_path: &str, out_path: &str, tgt_sname: &str, alias: &str) -> ExitCode {
+    let bytes = match fs::read(cc_path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("krb5-forge-tgt: read {cc_path}: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let mut cc = match FileCcache::parse(&bytes) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("krb5-forge-tgt: ccache: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let (aname, arealm) = match parse_principal(alias) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("krb5-forge-tgt: alias-as: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let Ok(arealm_ks) = krb5_types::try_ascii(&arealm) else {
+        eprintln!("krb5-forge-tgt: alias-as realm");
+        return ExitCode::from(2);
+    };
+    let mut kept = None;
+    for cred in &cc.creds {
+        if cred.is_config() || cred.is_removed() {
+            continue;
+        }
+        if cred.server.1.components_joined() == tgt_sname {
+            let mut c = cred.clone();
+            c.server = (arealm_ks.clone(), aname.clone());
+            kept = Some(c);
+            break;
+        }
+    }
+    let Some(tgt) = kept else {
+        eprintln!("krb5-forge-tgt: no {tgt_sname} in ccache");
+        return ExitCode::from(1);
+    };
+    cc.creds.retain(krb5_protocol::CcacheCred::is_config);
+    cc.creds.push(tgt);
+    if let Err(e) = cc.write_file(out_path) {
         eprintln!("krb5-forge-tgt: write {out_path}: {e}");
         return ExitCode::from(1);
     }

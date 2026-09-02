@@ -269,7 +269,9 @@ when that oracle is absent.
   POLICY; with `reject_bad_transit=false` the skip is accepted and T
   is off. Forged `ticket.realm` on a B-sealed `krbtgt/C.TEST` (empty
   transited) is rejected at both MIT C and Rust C (`PROCESS_TGS`).
-  In CI (`mit-extra`).
+  `host/svc.c.test@GARBAGE.EXAMPLE` aimed at C without canonicalize
+  is 7 `LOOKING_UP_SERVER` on Rust and MIT status `GET_LOCAL_TGT`
+  (no such entry). In CI (`mit-extra`).
 - `scripts/capaths-compress-gate.sh` — MIT 4-hop
   A.EX.COM→EX.COM→B.EX.COM→C.EX.COM; EncTicketPart contents
   `EX.COM,B.`, expanded `EX.COM,B.EX.COM`, T set; deny is `KDC
