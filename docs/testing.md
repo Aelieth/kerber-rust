@@ -343,7 +343,10 @@ when that oracle is absent.
 - `scripts/kpasswd-gate.sh` — MIT `kpasswd` against kadmind UDP/TCP
   464 (`kadmin/changepw`), then `kinit` with the new password; old
   password must fail; second `kpasswd` + `kinit`; then Rust
-  `krb5-kpasswd` against the same Rust kadmind. Run twice.
+  `krb5-kpasswd` against the same Rust kadmind. A `-minlength 8`
+  policy rejection is RFC 3244 `SOFTERROR` (`[0,4]`; MIT `kpasswd`
+  rc 2, `Password change rejected`) on both Rust kadmind and MIT
+  `kadmind`. Run twice.
   `scripts/rust-kpasswd-mit-gate.sh` is Rust `krb5-kpasswd` against
   MIT `kadmind` (AS-REQ sname `kadmin/changepw`; MIT
   `DISALLOW_TGT_BASED`).

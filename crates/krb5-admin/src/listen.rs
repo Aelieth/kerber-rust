@@ -389,22 +389,37 @@ pub fn handle_kpasswd_rfc3244(
         }
         Err(_) => (ok.authenticator.cname.clone(), user_data),
     };
-    {
+    let client = format!(
+        "{}@{}",
+        ok.authenticator.cname.components_joined(),
+        String::from_utf8_lossy(ok.authenticator.crealm.as_bytes())
+    );
+    let (code, text) = {
         let mut g = store
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut sess = AdminSession::local(
-            &mut g,
-            acl,
-            format!(
-                "{}@{}",
-                ok.authenticator.cname.components_joined(),
-                String::from_utf8_lossy(ok.authenticator.crealm.as_bytes())
-            ),
-        );
-        sess.change_password(&targ, &newpass)?;
-    }
-    kpasswd_success_rep(&session, &priv_key, &ok.authenticator, &[0, 0])
+        let mut sess = AdminSession::local(&mut g, acl, client.clone());
+        match sess.change_password(&targ, &newpass) {
+            Ok(()) => (0u16, String::new()),
+            Err(Error::PasswordPolicy(msg)) => (4, msg),
+            Err(Error::AclDenied) => (5, "acl denied".into()),
+            Err(e) => (2, e.to_string()),
+        }
+    };
+    let log_outcome = if code == 0 { "ok" } else { "error" };
+    let log_text = if code == 0 { "success" } else { text.as_str() };
+    tracing::info!(
+        event = krb5_log::events::ADMIN,
+        component = "krb5-admin",
+        outcome = log_outcome,
+        code,
+        client = client.as_str(),
+        "chpw request for {client}: {log_text}"
+    );
+    let mut body = Vec::with_capacity(2 + text.len());
+    body.extend_from_slice(&code.to_be_bytes());
+    body.extend_from_slice(text.as_bytes());
+    kpasswd_success_rep(&session, &priv_key, &ok.authenticator, &body)
 }
 
 /// Parse a kpasswd reply (`len,ver,AP-REP-len,AP-REP,KRB-PRIV`).

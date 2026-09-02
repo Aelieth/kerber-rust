@@ -7,6 +7,7 @@ cd "$ROOT"
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-kpasswd-gate"
+NAME_MIT="kerber-rust-kpasswd-mit-pol"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-kpasswd-gate}"
@@ -28,9 +29,9 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
 fi
 
-docker rm -f "$NAME" >/dev/null 2>&1 || true
+docker rm -f "$NAME" "$NAME_MIT" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
+cleanup() { docker rm -f "$NAME" "$NAME_MIT" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc
@@ -152,5 +153,72 @@ if [ "$old2" -eq 0 ]; then
     exit 1
 fi
 
-log "kpasswd.gate" "ok" ',"principal":"user@KERBER.TEST","op":"kpasswd+kinit"'
+kadmin_q() {
+    docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
+        "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q "$1" 2>&1 || true
+}
+
+echo "==== Rust kadmind policy rejection is SOFTERROR ===="
+kadmin_q 'addpol -minlength 8 short8'
+kadmin_q 'modprinc -policy short8 user'
+nlog="$(docker exec "$NAME" sh -c 'wc -l < /tmp/kadmind.log' | tr -d '[:space:]')"
+set +e
+POL="$(docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf "$NAME" \
+    sh -c 'printf "rust-kpw\nabc\nabc\n" | kpasswd user@KERBER.TEST' 2>&1)"
+pol_rc=$?
+set -e
+echo "$POL"
+if [ "$pol_rc" -ne 2 ]; then
+    echo "Rust policy kpasswd rc=$pol_rc want 2" >&2
+    docker exec "$NAME" sh -c "tail -n +$((nlog + 1)) /tmp/kadmind.log" >&2 || true
+    log "kpasswd.gate" "error" ',"error":"policy rejection did not return rc 2"'
+    exit 1
+fi
+echo "$POL" | grep -qi 'Password change rejected'
+docker exec "$NAME" sh -c "tail -n +$((nlog + 1)) /tmp/kadmind.log" | grep -q 'chpw request'
+
+echo "==== MIT kadmind policy rejection is SOFTERROR ===="
+docker run -d --name "$NAME_MIT" "$IMAGE" >/dev/null
+ok=0
+for _ in $(seq 1 90); do
+    logs="$(docker logs "$NAME_MIT" 2>&1 || true)"
+    if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"ok"'; then
+        ok=1
+        break
+    fi
+    sleep 1
+done
+if [ "$ok" != 1 ]; then
+    docker logs "$NAME_MIT" >&2 || true
+    log "kpasswd.gate" "error" ',"error":"MIT harness did not become ready"'
+    exit 1
+fi
+docker exec -d "$NAME_MIT" kadmind
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',464),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    log "kpasswd.gate" "error" ',"error":"MIT kadmind 464 did not listen"'
+    exit 1
+fi
+docker exec "$NAME_MIT" kadmin.local -q 'addpol -minlength 8 short8'
+docker exec "$NAME_MIT" kadmin.local -q 'modprinc -policy short8 user'
+set +e
+MITPOL="$(docker exec "$NAME_MIT" sh -c 'printf "userpassword\nabc\nabc\n" | kpasswd user@KERBER.TEST' 2>&1)"
+mit_rc=$?
+set -e
+echo "$MITPOL"
+if [ "$mit_rc" -ne 2 ]; then
+    echo "MIT policy kpasswd rc=$mit_rc want 2" >&2
+    log "kpasswd.gate" "error" ',"error":"MIT policy rejection did not return rc 2"'
+    exit 1
+fi
+echo "$MITPOL" | grep -qi 'Password change rejected'
+
+log "kpasswd.gate" "ok" ',"principal":"user@KERBER.TEST","op":"kpasswd+kinit","softerror":true'
 exit 0

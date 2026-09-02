@@ -146,6 +146,9 @@ pub enum Error {
     /// Principal missing.
     #[error("not found")]
     NotFound,
+    /// Password rejected by named policy.
+    #[error("password policy: {0}")]
+    PasswordPolicy(String),
     /// Wrapped KDC error.
     #[error("{0}")]
     Inner(String),
@@ -156,6 +159,7 @@ impl From<krb5_kdc::Error> for Error {
         match e {
             krb5_kdc::Error::AclDenied => Self::AclDenied,
             krb5_kdc::Error::NotFound => Self::NotFound,
+            krb5_kdc::Error::PasswordPolicy(s) => Self::PasswordPolicy(s),
             other => Self::Inner(other.to_string()),
         }
     }
@@ -801,6 +805,106 @@ mod tests {
         assert!(
             krb5_kdc::issue_as(&*after, &as_old).is_err(),
             "old password must fail after kpasswd"
+        );
+    }
+
+    #[test]
+    fn kpasswd_policy_rejection_is_softerror() {
+        use krb5_asn1::encode;
+        use krb5_kdc::{
+            NamedPolicy, TEST_REALM, TEST_USER, documented_changepw, shared_dump as shared_store,
+        };
+        use krb5_protocol::{
+            ReplayCache, build_ap_req, build_krb_priv, pa_enc_timestamp, tgs_req,
+            unwrap_krb_priv_ex,
+        };
+        use krb5_types::ChangePasswdData;
+
+        let (mut store, acl) = bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+        store.put_policy(NamedPolicy {
+            name: "short8".into(),
+            min_length: 8,
+            min_classes: 0,
+            history: 0,
+            max_fail: 0,
+            pw_failcnt_interval: 0,
+            pw_lockout_duration: 0,
+        });
+        store
+            .set_principal_policy(&user, Some("short8".into()))
+            .unwrap();
+        let user_key = store
+            .get_name(&user)
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let as_out = krb5_kdc::issue_as(
+            &store,
+            &krb5_kdc::as_req(
+                user.clone(),
+                TEST_REALM,
+                47,
+                Some(vec![pa_enc_timestamp(&user_key).unwrap()]),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let changepw = documented_changepw();
+        let tgs_out = krb5_kdc::issue_tgs(
+            &store,
+            &tgs_req(
+                as_out.rep.0.ticket.clone(),
+                &as_out.session_key,
+                TEST_REALM,
+                &user,
+                changepw.clone(),
+                TEST_REALM,
+                48,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let cpw_key = store
+            .get_name(&changepw)
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let ap = build_ap_req(
+            tgs_out.rep.0.ticket.clone(),
+            &tgs_out.session_key,
+            &krb5_types::ascii(TEST_REALM),
+            &user,
+        )
+        .unwrap();
+        let cpw = ChangePasswdData {
+            newpasswd: b"abc".to_vec().into(),
+            targname: Some(user),
+            targrealm: Some(krb5_types::ascii(TEST_REALM)),
+        };
+        let priv_msg = build_krb_priv(&tgs_out.session_key, &encode(&cpw).unwrap()).unwrap();
+        let req = encode_kpasswd_req(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
+        let shared = shared_store(store);
+        let replay = ReplayCache::new();
+        let rep = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &replay, &req)
+            .expect("policy rejection must reply");
+        let (ap_rep, priv_rep) = parse_kpasswd_rep(&rep).expect("parse kpasswd rep");
+        assert!(!ap_rep.is_empty(), "SOFTERROR reply includes AP-REP");
+        let user_data = unwrap_krb_priv_ex(
+            &tgs_out.session_key,
+            &priv_rep,
+            &ReplayCache::new(),
+            false,
+            false,
+        )
+        .expect("unwrap KRB-PRIV");
+        assert!(
+            user_data.len() >= 2 && user_data[0] == 0 && user_data[1] == 4,
+            "SOFTERROR user-data [0,4]…, got {user_data:?}"
         );
     }
 

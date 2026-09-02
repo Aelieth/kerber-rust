@@ -22,6 +22,11 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0 C8 (MIT-gated).** kpasswd policy/ACL rejection is a KRB-PRIV
+  result (`[0,4]` `SOFTERROR`, `[0,5]` `ACCESSDENIED`, else `[0,2]`
+  `HARDERROR`) instead of dropping the datagram. Gate:
+  `scripts/kpasswd-gate.sh` `-minlength 8` vs Rust and MIT kadmind.
+
 - **W0 C7 (knob hygiene).** `krb5-kvno --renew` without `--body-realm`
   is exit 2 (MIT `kvno` has no renew; `kinit -R` is `renew-gate.sh`).
   `-U` binds `body.realm` to the presented TGT and refuses a missing

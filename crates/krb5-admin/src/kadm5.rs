@@ -1719,14 +1719,21 @@ fn dispatch_kadm5(
 }
 
 fn kadm5_code(e: &Error) -> u32 {
-    match e {
-        Error::AclDenied => KADM5_AUTH_GET,
-        Error::NotFound => KADM5_UNK_PRINC,
-        Error::Inner(s) if s.contains("min_length") => KADM5_PASS_Q_TOOSHORT,
-        Error::Inner(s) if s.contains("min_classes") => KADM5_PASS_Q_CLASS,
-        Error::Inner(s) if s.contains("history") => KADM5_PASS_REUSE,
-        Error::Inner(s) if s.contains("setkey kvno") => KADM5_SETKEY_BAD_KVNO,
-        Error::Inner(_) => KADM5_FAILURE,
+    let s = match e {
+        Error::AclDenied => return KADM5_AUTH_GET,
+        Error::NotFound => return KADM5_UNK_PRINC,
+        Error::PasswordPolicy(s) | Error::Inner(s) => s.as_str(),
+    };
+    if s.contains("min_length") {
+        KADM5_PASS_Q_TOOSHORT
+    } else if s.contains("min_classes") {
+        KADM5_PASS_Q_CLASS
+    } else if s.contains("history") {
+        KADM5_PASS_REUSE
+    } else if s.contains("setkey kvno") {
+        KADM5_SETKEY_BAD_KVNO
+    } else {
+        KADM5_FAILURE
     }
 }
 
