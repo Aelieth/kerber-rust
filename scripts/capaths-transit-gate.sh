@@ -220,6 +220,10 @@ expect_skip_policy() {
     local label="$1"
     local cc="$2"
     local svc="$3"
+    local klog="$4"
+    local n
+    n="$(docker exec "$NAME" sh -c "wc -l < ${klog}" | tr -d '[:space:]')"
+    n="${n:-0}"
     set +e
     local out rc
     out="$(skip_kvno "$cc" "$svc" 2>&1)"
@@ -231,8 +235,13 @@ expect_skip_policy() {
         exit 1
     fi
     echo "$out" | grep -q 'KDC policy rejects request'
-    docker exec "$NAME" sh -c \
-        'cat /tmp/mit-a.log /tmp/mit-c.log /tmp/kdc-a.log /tmp/kdc-c-allow.log 2>/dev/null | grep -q BAD_TRANSIT'
+    if ! docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog} | grep -q BAD_TRANSIT"; then
+        echo "$label: new lines of ${klog} missing BAD_TRANSIT" >&2
+        docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" >&2 || true
+        exit 1
+    fi
+    echo "$label new ${klog} lines (from $((n + 1))):"
+    docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" || true
 }
 
 expect_skip_accept_t0() {
@@ -282,11 +291,11 @@ test "$MIT_TR_CONTENTS" = "B.TEST"
 
 echo "==== MIT skip same-realm default is POLICY ===="
 kinit_a /tmp/krb5cc_mit_skip_a
-expect_skip_policy "MIT A skip" /tmp/krb5cc_mit_skip_a host/svc.a.test@A.TEST
+expect_skip_policy "MIT A skip" /tmp/krb5cc_mit_skip_a host/svc.a.test@A.TEST /tmp/mit-a.log
 
 echo "==== MIT skip capaths-permitted default is POLICY ===="
 seed_c_tgt /tmp/krb5cc_mit_skip_d
-expect_skip_policy "MIT C skip" /tmp/krb5cc_mit_skip_d host/svc.c.test@C.TEST
+expect_skip_policy "MIT C skip" /tmp/krb5cc_mit_skip_d host/svc.c.test@C.TEST /tmp/mit-c.log
 docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
     klist -c /tmp/krb5cc_mit_skip_d | grep -q 'krbtgt/C.TEST@B.TEST'
 
@@ -515,11 +524,11 @@ test "$MIT_TR_CONTENTS" = "$RUST_TR_CONTENTS"
 
 echo "==== Rust skip same-realm default is POLICY ===="
 kinit_a /tmp/krb5cc_rust_skip_a
-expect_skip_policy "Rust A skip" /tmp/krb5cc_rust_skip_a host/svc.a.test@A.TEST
+expect_skip_policy "Rust A skip" /tmp/krb5cc_rust_skip_a host/svc.a.test@A.TEST /tmp/kdc-a.log
 
 echo "==== Rust skip capaths-permitted default is POLICY ===="
 seed_c_tgt /tmp/krb5cc_rust_skip_d
-expect_skip_policy "Rust C skip" /tmp/krb5cc_rust_skip_d host/svc.c.test@C.TEST
+expect_skip_policy "Rust C skip" /tmp/krb5cc_rust_skip_d host/svc.c.test@C.TEST /tmp/kdc-c-allow.log
 docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
     klist -c /tmp/krb5cc_rust_skip_d | grep -q 'krbtgt/C.TEST@B.TEST'
 
