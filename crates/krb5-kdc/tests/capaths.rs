@@ -272,7 +272,7 @@ fn transited_add_path_type_and_ill_formed() {
     let mut tlong = bc.rep.0.ticket.clone();
     let mut part = decrypt_ticket_part(&ir, &tlong).expect("bc");
     part.transited.tr_type = 1;
-    part.transited.contents = OctetString::from(vec![b'A'; 512]);
+    part.transited.contents = OctetString::from(vec![b'A'; 500]);
     part.authorization_data = None;
     reseal(&ir, &mut tlong, &part);
     let req = tgs_req(
@@ -280,7 +280,7 @@ fn transited_add_path_type_and_ill_formed() {
         &bc.session_key,
         "A.TEST",
         &cname,
-        host_c,
+        host_c.clone(),
         "C.TEST",
         511,
     )
@@ -290,9 +290,63 @@ fn transited_add_path_type_and_ill_formed() {
             assert_eq!(code, err::ILL_CR_TKT);
             assert_eq!(text.as_deref(), Some("ADD_TO_TRANSITED_LIST"));
         }
-        other => panic!(
-            "add-path over-long must be 43 even with reject_bad_transit=false, got {other:?}"
-        ),
+        other => {
+            panic!("add-path raw 500 must be 43 even with reject_bad_transit=false, got {other:?}")
+        }
+    }
+}
+
+#[test]
+fn transited_add_path_bad_intermediates_is_policy() {
+    let (_a, _b, c, ir, host_c, bc) = three_realm();
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let mut t = bc.rep.0.ticket.clone();
+    let mut part = decrypt_ticket_part(&ir, &t).expect("bc");
+    part.transited.tr_type = 1;
+    part.transited.contents = OctetString::from(b",,".to_vec());
+    part.authorization_data = None;
+    reseal(&ir, &mut t, &part);
+    let req = tgs_req(t, &bc.session_key, "A.TEST", &cname, host_c, "C.TEST", 530).expect("tgs");
+    match krb5_kdc::issue_tgs(&c, &req) {
+        Err(Error::Protocol { code, text, .. }) => {
+            assert_eq!(code, err::POLICY);
+            assert_eq!(text.as_deref(), Some("BAD_TRANSIT"));
+        }
+        other => panic!("add-path BadIntermediates inbound must be 12, got {other:?}"),
+    }
+}
+
+#[test]
+fn transited_cross_realm_renew_at_dest_checks_tr_type() {
+    let (_a, _b, c, ir, _host_c, bc) = three_realm();
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let mut t = bc.rep.0.ticket.clone();
+    let mut part = decrypt_ticket_part(&ir, &t).expect("bc");
+    part.transited.tr_type = 2;
+    part.flags = part.flags.with_bit(flag_bit::RENEWABLE, true);
+    part.renew_till = Some(part.endtime.add_hours(24).expect("renew_till"));
+    part.authorization_data = None;
+    reseal(&ir, &mut t, &part);
+    let req = tgs_req_ex(
+        t,
+        &bc.session_key,
+        "A.TEST",
+        &cname,
+        PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "C.TEST"]),
+        "B.TEST",
+        531,
+        KdcOptions::forwardable().with_bit(flag_bit::RENEW, true),
+        None,
+        Vec::new(),
+        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
+    )
+    .expect("renew tgs");
+    match krb5_kdc::issue_tgs(&c, &req) {
+        Err(Error::Protocol { code, text, .. }) => {
+            assert_eq!(code, err::TRTYPE_NOSUPP);
+            assert_eq!(text.as_deref(), Some("VALIDATE_TRANSIT_TYPE"));
+        }
+        other => panic!("cross-realm RENEW at dest with tr_type≠1 must be 17, got {other:?}"),
     }
 }
 

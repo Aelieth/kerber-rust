@@ -941,7 +941,8 @@ pub struct TransitedEncoding {
 /// DOMAIN-X500-COMPRESS expansion failure (`chk_trans.c` / Rust comma cap).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum TransitError {
-    /// Raw field ≥ 512 unescaped bytes, or joined component > 512.
+    /// Check-path raw ≥ 512 or joined > 512; add-path raw ≥ 500, joined ≥ 499,
+    /// or rebuilt encoding ≥ 500 (MIT `MAX_REALM_LN`).
     #[error("transited field too long")]
     FieldTooLong,
     /// More than 256 commas, or more than [`MAX_TRANSIT_HOPS`] emitted hops
@@ -965,9 +966,13 @@ impl TransitedEncoding {
     /// no X.500 RDN compression).
     #[must_use]
     pub fn from_realms(realms: &[&str]) -> Self {
+        let mut contents = Vec::new();
+        for r in realms {
+            contents = encode_append(&contents, r);
+        }
         Self {
             tr_type: 1,
-            contents: OctetString::from(realms.join(",").into_bytes()),
+            contents: OctetString::from(contents),
         }
     }
 
@@ -986,38 +991,42 @@ impl TransitedEncoding {
         expand_domain_x500(self.contents.as_ref(), crealm, srealm)
     }
 
-    /// Append `realm` onto the original contents (MIT `add_to_transited`
-    /// concatenation + space before a `/`-leading realm). Escapes `\\`
-    /// and `,` in `realm`. Does not expand-then-rejoin.
+    /// Append `realm` onto the original contents (MIT `add_to_transited`:
+    /// add-path tokenizer, trailing-comma drop, space before `/`, rebuilt
+    /// length ≤ 499). Escapes `\\` and `,` in `realm`. Does not
+    /// expand-then-rejoin. `crealm`/`srealm` are unused (no null-subfields).
     ///
     /// # Errors
     ///
-    /// Inbound expansion failure.
+    /// Inbound add-path bound failure, or rebuilt encoding ≥ 500.
     pub fn append_realm(
         &self,
         realm: &str,
         crealm: &str,
         srealm: &str,
     ) -> Result<Self, TransitError> {
-        let hops = self.realms_for(crealm, srealm)?;
+        let _ = (crealm, srealm);
+        let hops = expand_add_path(self.contents.as_ref())?;
         if hops.iter().any(|h| h == realm) {
             return Ok(self.clone());
         }
-        let mut contents = self.contents.as_ref().to_vec();
-        if contents.last() == Some(&0) {
-            contents.pop();
+        let contents = encode_append(self.contents.as_ref(), realm);
+        if contents.len() >= MAX_ADD_PATH_TOTAL {
+            return Err(TransitError::FieldTooLong);
         }
-        if !contents.is_empty() {
-            contents.push(b',');
-            if realm.starts_with('/') {
-                contents.push(b' ');
-            }
-        }
-        contents.extend_from_slice(escape_transit_realm(realm).as_bytes());
         Ok(Self {
             tr_type: 1,
             contents: OctetString::from(contents),
         })
+    }
+
+    /// Validate inbound with the add-path tokenizer (no append).
+    ///
+    /// # Errors
+    ///
+    /// Add-path raw ≥ 500 or joined ≥ 499.
+    pub fn validate_add_path(&self) -> Result<(), TransitError> {
+        expand_add_path(self.contents.as_ref()).map(|_| ())
     }
 }
 
@@ -1031,6 +1040,118 @@ pub const MAX_TRANSIT_HOPS: usize = 4096;
 const MAX_TRANSIT_RAW: usize = 512;
 /// MIT `maybe_join`: `last + cur > 512` errors; joined of 512 is accepted.
 const MAX_TRANSIT_JOINED: usize = 512;
+/// MIT `kdc_transit.c` `MAX_REALM_LN`. Raw field of 500 unescaped bytes errors.
+const MAX_ADD_PATH_RAW: usize = 500;
+/// MIT `strlen(exp)+strlen(x)+1 >= 500`: joined ≥ 499 errors.
+const MAX_ADD_PATH_JOINED: usize = 499;
+/// MIT `strlcat` into a 500-byte buffer: rebuilt encoding ≥ 500 errors.
+const MAX_ADD_PATH_TOTAL: usize = 500;
+
+fn strip_trailing_nul(raw: &[u8]) -> &[u8] {
+    match raw.split_last() {
+        Some((0, rest)) => rest,
+        _ => raw,
+    }
+}
+
+fn drop_trailing_unescaped_comma(buf: &mut Vec<u8>) {
+    if buf.last() != Some(&b',') {
+        return;
+    }
+    let mut bs = 0usize;
+    let mut i = buf.len() - 1;
+    while i > 0 && buf[i - 1] == b'\\' {
+        bs += 1;
+        i -= 1;
+    }
+    if bs.is_multiple_of(2) {
+        buf.pop();
+    }
+}
+
+fn encode_append(raw: &[u8], realm: &str) -> Vec<u8> {
+    let mut contents = strip_trailing_nul(raw).to_vec();
+    drop_trailing_unescaped_comma(&mut contents);
+    if !contents.is_empty() {
+        contents.push(b',');
+        if realm.starts_with('/') {
+            contents.push(b' ');
+        }
+    }
+    contents.extend_from_slice(escape_transit_realm(realm).as_bytes());
+    contents
+}
+
+fn expand_add_path(raw: &[u8]) -> Result<Vec<String>, TransitError> {
+    let raw = strip_trailing_nul(raw);
+    if raw.is_empty() {
+        return Ok(Vec::new());
+    }
+    let s = String::from_utf8_lossy(raw);
+    let mut out = Vec::new();
+    let mut last = String::new();
+    let mut cur = String::new();
+    let mut escaped = false;
+    for c in s.chars() {
+        if escaped {
+            cur.push(c);
+            escaped = false;
+            if cur.len() >= MAX_ADD_PATH_RAW {
+                return Err(TransitError::FieldTooLong);
+            }
+            continue;
+        }
+        match c {
+            '\\' => escaped = true,
+            ',' => emit_add_path_field(&mut out, &mut last, &mut cur)?,
+            _ => {
+                cur.push(c);
+                if cur.len() >= MAX_ADD_PATH_RAW {
+                    return Err(TransitError::FieldTooLong);
+                }
+            }
+        }
+    }
+    emit_add_path_field(&mut out, &mut last, &mut cur)?;
+    Ok(out)
+}
+
+fn emit_add_path_field(
+    out: &mut Vec<String>,
+    last: &mut String,
+    cur: &mut String,
+) -> Result<(), TransitError> {
+    if cur.is_empty() {
+        return Ok(());
+    }
+    let this = add_path_join(last, cur)?;
+    out.push(this.clone());
+    *last = this;
+    cur.clear();
+    Ok(())
+}
+
+fn add_path_join(last: &str, cur: &str) -> Result<String, TransitError> {
+    if let Some(rest) = cur.strip_prefix(' ') {
+        if rest.len() >= MAX_ADD_PATH_RAW {
+            return Err(TransitError::FieldTooLong);
+        }
+        return Ok(rest.to_owned());
+    }
+    if cur.starts_with('/') && last.starts_with('/') {
+        if last.len() + cur.len() >= MAX_ADD_PATH_JOINED {
+            return Err(TransitError::FieldTooLong);
+        }
+        return Ok(format!("{last}{cur}"));
+    }
+    if cur.ends_with('.') {
+        if cur.len() + last.len() >= MAX_ADD_PATH_JOINED {
+            return Err(TransitError::FieldTooLong);
+        }
+        return Ok(format!("{cur}{last}"));
+    }
+    Ok(cur.to_owned())
+}
 
 fn escape_transit_realm(realm: &str) -> String {
     let mut out = String::with_capacity(realm.len());
@@ -1044,10 +1165,7 @@ fn escape_transit_realm(realm: &str) -> String {
 }
 
 fn expand_domain_x500(raw: &[u8], crealm: &str, srealm: &str) -> Result<Vec<String>, TransitError> {
-    let raw = match raw.split_last() {
-        Some((0, rest)) => rest,
-        _ => raw,
-    };
+    let raw = strip_trailing_nul(raw);
     if raw.is_empty() {
         return Ok(Vec::new());
     }
@@ -1519,6 +1637,69 @@ mod tests {
             hops(b"EX.COM,B."),
             vec!["EX.COM".to_string(), "B.EX.COM".to_string()]
         );
+    }
+
+    #[test]
+    fn transited_add_path_bounds() {
+        let r499 = "A".repeat(499);
+        assert_eq!(
+            TransitedEncoding::empty()
+                .append_realm(&r499, "", "")
+                .unwrap()
+                .contents
+                .as_ref()
+                .len(),
+            499
+        );
+        assert_eq!(
+            TransitedEncoding::empty()
+                .append_realm(&"A".repeat(500), "", "")
+                .unwrap_err(),
+            TransitError::FieldTooLong
+        );
+        assert!(te(&vec![b'A'; 511]).realms_for("", "").is_ok());
+        assert_eq!(
+            te(&vec![b'A'; 512]).realms_for("", "").unwrap_err(),
+            TransitError::FieldTooLong
+        );
+        assert_eq!(
+            te(&vec![b'A'; 500]).append_realm("X", "", "").unwrap_err(),
+            TransitError::FieldTooLong
+        );
+        assert_eq!(
+            te(&vec![b'A'; 497])
+                .append_realm("X", "", "")
+                .unwrap()
+                .contents
+                .as_ref()
+                .len(),
+            499
+        );
+        assert_eq!(
+            te(&vec![b'A'; 498]).append_realm("X", "", "").unwrap_err(),
+            TransitError::FieldTooLong
+        );
+
+        let mut joined_ok = b"X,".to_vec();
+        joined_ok.extend(vec![b'B'; 496]);
+        joined_ok.push(b'.');
+        te(&joined_ok)
+            .append_realm("X", "", "")
+            .expect("joined 498 ok");
+
+        let mut joined_err = b"X,".to_vec();
+        joined_err.extend(vec![b'B'; 497]);
+        joined_err.push(b'.');
+        assert_eq!(
+            te(&joined_err).append_realm("X", "", "").unwrap_err(),
+            TransitError::FieldTooLong
+        );
+
+        let edu = te(b"EDU,").append_realm("X", "", "").unwrap();
+        assert_eq!(edu.contents.as_ref(), b"EDU,X");
+
+        let inner = te(b"A,,B").append_realm("X", "", "").unwrap();
+        assert_eq!(inner.contents.as_ref(), b"A,,B,X");
     }
 
     #[test]

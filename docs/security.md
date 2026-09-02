@@ -43,7 +43,7 @@ MIT would accept or grow). They are not laxer than MIT.
 | Transited component bounds | Raw field ≤ 511 unescaped bytes; joined ≤ 512 (`chk_trans.c` `MAXLEN`) | Same (511 raw / 512 joined); over is `FieldTooLong` out of band | MIT-exact |
 | Invalid UTF-8 in transited | Byte-exact | `from_utf8_lossy` inflates invalid bytes 3× against the 512 bound and collapses sequences to U+FFFD | STRICTER; byte-exact matching is general-pass |
 | Append escaping | MIT `add_to_transited` does not escape `\` or `,` in the new realm | Escapes both | Stricter-correct than MIT's encoder |
-| Add-path raw bound | MIT add-path uses `MAX_REALM_LN` 500; `chk_trans` is 512 | One decoder at 512 | A 500–511-byte field is 43 in MIT add-path and POLICY (or 43) in Rust; both reject; not chased |
+| Add-path bounds | `MAX_REALM_LN` 500: raw ≥ 500, joined ≥ 499, rebuilt ≥ 500 (`strlcat` clamp; whole transited ≤ 499). Trailing empty field of `EDU,` is dropped (`EDU,`+`X` → `EDU,X`). Internal `,,` truncates MIT's list | Same raw/joined/total bounds. Encode stays uncompressed (total bound is stricter by the compression delta). Trailing-comma drop. Internal `,,` is preserved | MIT-exact bounds; `,,` preservation is stricter-correct |
 | Encode-side X.500 RDN compression | MIT `add_to_transited` may emit compressed RDN form | Encode stays uncompressed (`from_realms`) | Deferred; decode still expands MIT compressed contents |
 
 ### Parity decisions (not deviations)

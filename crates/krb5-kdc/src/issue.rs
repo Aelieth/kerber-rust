@@ -671,18 +671,24 @@ fn issue_tgs_body(
         None => (skey.key.clone(), skey.kvno, skey.etype),
     };
     let mut transited = enc_tkt.transited.clone();
-    // MIT `add_to_transited`: name the incoming TGT's server realm (the
-    // previous hop) unless that realm is the client or the requested server.
+    // MIT is_crossrealm: header TGT realm ≠ local KDC realm and ≠ client.
+    // Skip only the append when previous hop equals the request realm.
     let prev_hop = utf8_realm(&ap.ticket.realm);
     let crealm = utf8_realm(&enc_tkt.crealm);
-    let add_path = prev_hop != crealm && prev_hop != req_realm.as_str();
-    if add_path {
+    let is_crossrealm = prev_hop != store.realm() && prev_hop != crealm;
+    if is_crossrealm {
         if transited.tr_type != 1 {
             return Err(proto(err::TRTYPE_NOSUPP, "VALIDATE_TRANSIT_TYPE"));
         }
-        transited = transited
-            .append_realm(prev_hop, crealm, req_realm.as_str())
-            .map_err(|_| proto(err::ILL_CR_TKT, "ADD_TO_TRANSITED_LIST"))?;
+        if prev_hop == req_realm.as_str() {
+            transited
+                .validate_add_path()
+                .map_err(|_| proto(err::ILL_CR_TKT, "ADD_TO_TRANSITED_LIST"))?;
+        } else {
+            transited = transited
+                .append_realm(prev_hop, crealm, req_realm.as_str())
+                .map_err(|_| proto(err::ILL_CR_TKT, "ADD_TO_TRANSITED_LIST"))?;
+        }
     }
     let hops = transited.realms_for(crealm, req_realm.as_str());
     let transit_checked = match &hops {
