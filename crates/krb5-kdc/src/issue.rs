@@ -22,7 +22,7 @@ use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::plugins::{PreauthAction, current_policy, run_as_preauth};
 use crate::preauth::{
-    FastOk, fast_finished, find_pa, make_cookie, unwrap_fast, unwrap_fast_padata, wrap_fast_rep,
+    FastOk, fast_finished, find_pa, make_cookie, unwrap_fast, unwrap_fast_tgs, wrap_fast_rep,
 };
 use crate::store::{
     KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED, KDB_DISALLOW_PROXIABLE,
@@ -537,6 +537,15 @@ pub fn issue_tgs(store: &dyn PrincipalRead, req: &TgsReq) -> Result<IssuedTgs, E
     issue_tgs_from(store, req, None)
 }
 
+struct HeaderTgt {
+    ap: krb5_types::ApReq,
+    enc_tkt: EncTicketPart,
+    tgt_key: ProtocolKey,
+    tgt_plain: Vec<u8>,
+    session: ProtocolKey,
+    authenticator: krb5_types::Authenticator,
+}
+
 fn issue_tgs_from(
     store: &dyn PrincipalRead,
     req: &TgsReq,
@@ -550,14 +559,70 @@ fn issue_tgs_from(
         encoded_body = encode(outer)?;
         &encoded_body
     };
-    let tgs_fast = unwrap_fast_padata(store, req.0.padata.as_deref(), body_der)?;
+    // MIT kdc_process_tgs_req (PROCESS_TGS) before kdc_find_fast.
+    let header = process_tgs_header(store, req, body_der)?;
+    let pa_tgs = extract_pa_tgs(req.0.padata.as_deref())
+        .ok_or_else(|| proto(err::PREAUTH_FAILED, "no PA-TGS-REQ"))?;
+    let tgs_fast = unwrap_fast_tgs(
+        req.0.padata.as_deref(),
+        pa_tgs.as_ref(),
+        header.authenticator.subkey.as_ref(),
+        &header.session,
+    )?;
     let inner_owned: Option<KdcReqBody> = match tgs_fast.as_ref() {
         Some(f) => Some(decode(&f.inner_body)?),
         None => None,
     };
     let body = inner_owned.as_ref().unwrap_or(outer);
-    issue_tgs_body(store, req, body, tgs_fast.as_ref(), body_der)
+    issue_tgs_body(store, req, body, tgs_fast.as_ref(), header)
         .map_err(|e| wrap_as_fast(store, tgs_fast.as_ref(), e, body))
+}
+
+fn process_tgs_header(
+    store: &dyn PrincipalRead,
+    req: &TgsReq,
+    body_der: &[u8],
+) -> Result<HeaderTgt, Error> {
+    let ap_raw = extract_pa_tgs(req.0.padata.as_deref())
+        .ok_or_else(|| proto(err::PREAUTH_FAILED, "no PA-TGS-REQ"))?;
+    let ap: krb5_types::ApReq = decode(ap_raw.as_ref())?;
+    if !ap.ticket.sname.is_krbtgt_for(store.realm()) {
+        return Err(proto(err::NOT_US, "presented ticket is not a TGT"));
+    }
+    let tkt_etype = EncryptionType::from_iana(ap.ticket.enc_part.etype)
+        .or_else(|_| EncryptionType::known(ap.ticket.enc_part.etype))?;
+    let (enc_tkt, tgt_key, tgt_plain) = decrypt_presented_tgt(store, &ap, tkt_etype)?;
+    let sess_etype = EncryptionType::from_iana(enc_tkt.key.keytype)
+        .or_else(|_| EncryptionType::known(enc_tkt.key.keytype))?;
+    let session = ProtocolKey::from_bytes(sess_etype, enc_tkt.key.keyvalue.as_ref())?;
+    let auth_usage = KeyUsage::new(ku::TGS_REQ_AUTHENTICATOR)?;
+    let auth_plain = decrypt(&session, auth_usage, ap.authenticator.cipher.as_ref())?;
+    let authenticator: krb5_types::Authenticator = decode(&auth_plain)?;
+    authenticator
+        .cusec
+        .validate()
+        .map_err(|_| proto(err::GENERIC, "cusec"))?;
+    if authenticator.cname != enc_tkt.cname {
+        return Err(proto(err::BAD_INTEGRITY, "TGS authenticator mismatch"));
+    }
+    if let Some(ck) = &authenticator.cksum {
+        let ck_usage = KeyUsage::new(ku::TGS_REQ_AUTH_CKSUM)?;
+        verify_checksum(&session, ck_usage, body_der, ck.checksum.as_ref())
+            .map_err(|_| proto(err::INAPP_CKSUM, "TGS req-body checksum"))?;
+    } else {
+        return Err(proto(
+            err::INAPP_CKSUM,
+            "TGS authenticator missing checksum",
+        ));
+    }
+    Ok(HeaderTgt {
+        ap,
+        enc_tkt,
+        tgt_key,
+        tgt_plain,
+        session,
+        authenticator,
+    })
 }
 
 fn issue_tgs_body(
@@ -565,7 +630,7 @@ fn issue_tgs_body(
     req: &TgsReq,
     body: &KdcReqBody,
     tgs_fast: Option<&FastOk>,
-    body_der: &[u8],
+    header: HeaderTgt,
 ) -> Result<IssuedTgs, Error> {
     if let Some(f) = tgs_fast {
         check_fast_options(&f.fast_options)?;
@@ -578,45 +643,20 @@ fn issue_tgs_body(
     } else {
         req.0.padata.as_deref()
     };
-    let ap_raw = extract_pa_tgs(tgs_padata)
-        .or_else(|| extract_pa_tgs(req.0.padata.as_deref()))
-        .ok_or_else(|| proto(err::PREAUTH_FAILED, "no PA-TGS-REQ"))?;
-    let ap: krb5_types::ApReq = decode(ap_raw.as_ref())?;
-    if !ap.ticket.sname.is_krbtgt_for(store.realm()) {
-        return Err(proto(err::NOT_US, "presented ticket is not a TGT"));
-    }
-    let tkt_etype = EncryptionType::from_iana(ap.ticket.enc_part.etype)
-        .or_else(|_| EncryptionType::known(ap.ticket.enc_part.etype))?;
-    let (enc_tkt, tgt_key, tgt_plain) = decrypt_presented_tgt(store, &ap, tkt_etype)?;
+    let HeaderTgt {
+        ap,
+        enc_tkt,
+        tgt_key,
+        tgt_plain,
+        session: tgt_session,
+        authenticator,
+    } = header;
     let renew = body.kdc_options.bit(flag_bit::RENEW);
     let validate = body.kdc_options.bit(flag_bit::VALIDATE);
     if renew && validate {
         return Err(proto(err::BADOPTION, "RENEW with VALIDATE"));
     }
     check_ticket_times(store, &enc_tkt, renew, validate)?;
-    let sess_etype = EncryptionType::from_iana(enc_tkt.key.keytype)
-        .or_else(|_| EncryptionType::known(enc_tkt.key.keytype))?;
-    let tgt_session = ProtocolKey::from_bytes(sess_etype, enc_tkt.key.keyvalue.as_ref())?;
-    let auth_usage = KeyUsage::new(ku::TGS_REQ_AUTHENTICATOR)?;
-    let auth_plain = decrypt(&tgt_session, auth_usage, ap.authenticator.cipher.as_ref())?;
-    let authenticator: krb5_types::Authenticator = decode(&auth_plain)?;
-    authenticator
-        .cusec
-        .validate()
-        .map_err(|_| proto(err::GENERIC, "cusec"))?;
-    if authenticator.cname != enc_tkt.cname {
-        return Err(proto(err::BAD_INTEGRITY, "TGS authenticator mismatch"));
-    }
-    if let Some(ck) = &authenticator.cksum {
-        let ck_usage = KeyUsage::new(ku::TGS_REQ_AUTH_CKSUM)?;
-        verify_checksum(&tgt_session, ck_usage, body_der, ck.checksum.as_ref())
-            .map_err(|_| proto(err::INAPP_CKSUM, "TGS req-body checksum"))?;
-    } else {
-        return Err(proto(
-            err::INAPP_CKSUM,
-            "TGS authenticator missing checksum",
-        ));
-    }
     let rkey = ReplayKey {
         client: format!(
             "{}@{}",

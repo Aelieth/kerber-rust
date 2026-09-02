@@ -69,6 +69,59 @@ pub(crate) fn unwrap_fast_padata(
     }))
 }
 
+/// MIT `kdc_find_fast` for TGS: armor from the PA-TGS-REQ decrypt, not a
+/// second ticket unwrap. Explicit AP-REQ armor is PREAUTH_FAILED.
+pub(crate) fn unwrap_fast_tgs(
+    padata: Option<&[PaData]>,
+    pa_tgs_raw: &[u8],
+    subkey: Option<&EncryptionKey>,
+    session: &ProtocolKey,
+) -> Result<Option<FastOk>, Error> {
+    let Some(raw) = find_pa(padata, pa::FX_FAST) else {
+        return Ok(None);
+    };
+    let armored = match decode::<krb5_types::fast::PaFxFast>(raw) {
+        Ok(krb5_types::fast::PaFxFast::ArmoredData(w)) => w,
+        _ => decode::<krb5_types::fast::KrbFastArmoredReq>(raw)?,
+    };
+    if armored.armor.is_some() {
+        return Err(proto(
+            err::PREAUTH_FAILED,
+            "Ap-request armor not permitted with TGS",
+        ));
+    }
+    let Some(sub) = subkey else {
+        return Err(proto(
+            err::PREAUTH_FAILED,
+            "No armor key but FAST armored request present",
+        ));
+    };
+    let st =
+        EncryptionType::from_iana(sub.keytype).or_else(|_| EncryptionType::known(sub.keytype))?;
+    let subk = ProtocolKey::from_bytes(st, sub.keyvalue.as_ref())?;
+    let armor_key = krb_fx_cf2(&subk, session, b"subkeyarmor", b"ticketarmor")?;
+    let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM)?;
+    verify_checksum(
+        &armor_key,
+        ck_usage,
+        pa_tgs_raw,
+        armored.req_checksum.checksum.as_ref(),
+    )
+    .map_err(|_| proto(err::INAPP_CKSUM, "FIND_FAST"))?;
+    let enc_usage = KeyUsage::new(ku::FAST_ENC)?;
+    let plain = decrypt(&armor_key, enc_usage, armored.enc_fast_req.cipher.as_ref())?;
+    let inner: krb5_types::fast::KrbFastReq = decode(&plain)?;
+    let nonce = inner.req_body.nonce;
+    let inner_body = fast_req_body_der(&plain).map_or_else(|| encode(&inner.req_body), Ok)?;
+    Ok(Some(FastOk {
+        armor_key,
+        inner_padata: inner.padata,
+        inner_body,
+        nonce,
+        fast_options: inner.fast_options,
+    }))
+}
+
 fn fast_req_body_der(plain: &[u8]) -> Option<Vec<u8>> {
     let (t, seq, _) = take_der(plain)?;
     if t != 0x30 {
@@ -107,25 +160,18 @@ fn take_der(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
 fn armor_key_from(
     store: &dyn PrincipalRead,
     armored: &krb5_types::fast::KrbFastArmoredReq,
-    outer_padata: Option<&[PaData]>,
+    _outer_padata: Option<&[PaData]>,
 ) -> Result<ProtocolKey, Error> {
-    if let Some(armor) = armored.armor.as_ref() {
-        if armor.armor_type != krb5_types::fast::ARMOR_AP_REQUEST {
-            return Err(proto(err::PREAUTH_FAILED, "unsupported FAST armor"));
-        }
-        return armor_key_from_ap(store, armor.armor_value.as_ref(), ku::AP_REQ_AUTHENTICATOR);
+    let Some(armor) = armored.armor.as_ref() else {
+        return Err(proto(err::PREAUTH_FAILED, "FAST armor required"));
+    };
+    if armor.armor_type != krb5_types::fast::ARMOR_AP_REQUEST {
+        return Err(proto(err::PREAUTH_FAILED, "unsupported FAST armor"));
     }
-    // RFC 6113 TGS: armor may be omitted; PA-TGS-REQ is the armor (usage 7).
-    let ap_raw = find_pa(outer_padata, pa::TGS_REQ)
-        .ok_or_else(|| proto(err::PREAUTH_FAILED, "FAST armor required"))?;
-    armor_key_from_ap(store, ap_raw, ku::TGS_REQ_AUTHENTICATOR)
+    armor_key_from_ap(store, armor.armor_value.as_ref())
 }
 
-fn armor_key_from_ap(
-    store: &dyn PrincipalRead,
-    ap_raw: &[u8],
-    authenticator_usage: u32,
-) -> Result<ProtocolKey, Error> {
+fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<ProtocolKey, Error> {
     let ap: krb5_types::ApReq = decode(ap_raw)?;
     if !ap.ticket.sname.is_krbtgt_for(store.realm()) {
         return Err(proto(err::NOT_US, "FAST armor not local TGS"));
@@ -154,8 +200,7 @@ fn armor_key_from_ap(
         }
     }
     let enc_tkt = enc_tkt.ok_or_else(|| proto(err::BAD_INTEGRITY, "FAST armor TGT"))?;
-    // Implicit TGS armor is PA-TGS-REQ; VALIDATE presents an INVALID TGT.
-    if enc_tkt.flags.invalid() && authenticator_usage != ku::TGS_REQ_AUTHENTICATOR {
+    if enc_tkt.flags.invalid() {
         return Err(proto(err::TKT_NYV, "FAST armor INVALID"));
     }
     let now = i64::from(krb5_types::KerberosTime::now().unix_seconds());
@@ -165,7 +210,7 @@ fn armor_key_from_ap(
     let etype = EncryptionType::from_iana(enc_tkt.key.keytype)
         .or_else(|_| EncryptionType::known(enc_tkt.key.keytype))?;
     let session = ProtocolKey::from_bytes(etype, enc_tkt.key.keyvalue.as_ref())?;
-    let auth_usage = KeyUsage::new(authenticator_usage)?;
+    let auth_usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)?;
     let auth_plain = decrypt(&session, auth_usage, ap.authenticator.cipher.as_ref())?;
     let authenticator: krb5_types::Authenticator = decode(&auth_plain)?;
     let then = i64::from(authenticator.ctime.unix_seconds());

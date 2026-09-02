@@ -27,6 +27,14 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   After the presented-TGT krbtgt entry is selected, `DISALLOW_SVR` or
   `DISALLOW_ALL_TIX` is 7 `PROCESS_TGS` (`kdc_util.c:390-393`).
 
+- **W0 C2 (MIT-gated).** TGS FAST armor is derived from the PA-TGS-REQ
+  decrypt after `PROCESS_TGS` (`kdc_find_fast`): `cf2(subkey,
+  "subkeyarmor", session, "ticketarmor")`. Explicit AP-REQ armor on a
+  TGS-REQ is 24 `PREAUTH_FAILED`; FAST TGS without an authenticator
+  subkey is 24. Forged `ticket.realm` on a FAST TGS is 7 `PROCESS_TGS`
+  (not a second armor decrypt). Gate: `scripts/capaths-transit-gate.sh`
+  forge cells.
+
 - **G9 Y3 (MIT-gated).** A peer-minted TGT for a *local* user
   (`crealm` local, header TGT realm foreign, not S4U2Self) is 12
   `INVALID LINEAGE` for both `reject_bad_transit` values (MIT

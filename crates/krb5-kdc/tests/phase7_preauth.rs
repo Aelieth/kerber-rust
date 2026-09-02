@@ -26,9 +26,9 @@ use krb5_types::pac::{
     parse_kerb_validation_info, zero_pac_ad_data,
 };
 use krb5_types::{
-    Checksum, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, EncryptedData, KdcOptions,
-    KerberosTime, MethodData, Microseconds, PaData, PaEncTsEnc, PrincipalName, ascii, err,
-    flag_bit, ku, pa,
+    ApReq, Checksum, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, EncryptedData,
+    EncryptionKey, KdcOptions, KerberosTime, MethodData, Microseconds, PaData, PaEncTsEnc,
+    PrincipalName, ascii, err, flag_bit, ku, pa,
 };
 
 fn password_key(name: &str, password: &[u8]) -> ProtocolKey {
@@ -607,15 +607,10 @@ fn tgs_fast_inner_nonce_not_outer() {
     .unwrap();
     let mut inner_body = tgs.0.req_body.clone();
     inner_body.nonce = 200;
-    wrap_tgs_fast(&mut tgs, &issued.session_key, inner_body).expect("TGS FAST");
+    let subkey = wrap_tgs_fast(&mut tgs, &issued.session_key, inner_body).expect("TGS FAST");
     let out = krb5_kdc::issue_tgs(&store, &tgs).expect("TGS");
-    let usage = KeyUsage::new(ku::TGS_REP_ENC_PART).unwrap();
-    let plain = decrypt(
-        &issued.session_key,
-        usage,
-        out.rep.0.enc_part.cipher.as_ref(),
-    )
-    .expect("TGS enc");
+    let usage = KeyUsage::new(ku::TGS_REP_ENC_PART_SUBKEY).unwrap();
+    let plain = decrypt(&subkey, usage, out.rep.0.enc_part.cipher.as_ref()).expect("TGS enc");
     let enc = decode_enc_part(&plain);
     assert_eq!(
         enc.nonce, 200,
@@ -665,6 +660,71 @@ fn tgs_fast_validate_allows_invalid_tgt_armor() {
 
 fn wrap_tgs_fast(
     req: &mut krb5_types::TgsReq,
+    session: &ProtocolKey,
+    inner_body: krb5_types::KdcReqBody,
+) -> Result<ProtocolKey, krb5_protocol::Error> {
+    let padata = req
+        .0
+        .padata
+        .as_mut()
+        .ok_or_else(|| krb5_protocol::Error::Asn1("no padata".into()))?;
+    let pa_tgs = padata
+        .iter_mut()
+        .find(|x| x.padata_type == pa::TGS_REQ)
+        .ok_or_else(|| krb5_protocol::Error::Asn1("no PA-TGS-REQ".into()))?;
+    let mut ap: ApReq = decode(pa_tgs.padata_value.as_ref())
+        .map_err(|e| krb5_protocol::Error::Asn1(e.to_string()))?;
+    let auth_usage = KeyUsage::new(ku::TGS_REQ_AUTHENTICATOR)?;
+    let auth_plain = decrypt(session, auth_usage, ap.authenticator.cipher.as_ref())?;
+    let mut authenticator: krb5_types::Authenticator =
+        decode(&auth_plain).map_err(|e| krb5_protocol::Error::Asn1(e.to_string()))?;
+    let subkey = ProtocolKey::from_bytes(session.etype(), &[0x51u8; 32])
+        .map_err(|e| krb5_protocol::Error::Asn1(e.to_string()))?;
+    authenticator.subkey = Some(EncryptionKey {
+        keytype: subkey.etype().to_iana(),
+        keyvalue: subkey.as_bytes().to_vec().into(),
+    });
+    let auth_der = encode(&authenticator).map_err(|e| krb5_protocol::Error::Asn1(e.to_string()))?;
+    ap.authenticator.cipher = encrypt(session, auth_usage, &auth_der)?.into();
+    pa_tgs.padata_value = encode(&ap)
+        .map_err(|e| krb5_protocol::Error::Asn1(e.to_string()))?
+        .into();
+    let ap_raw = pa_tgs.padata_value.as_ref().to_vec();
+    let armor_key = krb_fx_cf2(&subkey, session, b"subkeyarmor", b"ticketarmor")?;
+    let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM)?;
+    let mic = checksum(&armor_key, ck_usage, &ap_raw)?;
+    let inner = krb5_types::fast::KrbFastReq {
+        fast_options: krb5_types::fast::fast_options_none(),
+        padata: Vec::new(),
+        req_body: inner_body,
+    };
+    let inner_der = encode(&inner).map_err(|e| krb5_protocol::Error::Asn1(e.to_string()))?;
+    let enc_usage = KeyUsage::new(ku::FAST_ENC)?;
+    let cipher = encrypt(&armor_key, enc_usage, &inner_der)?;
+    let armored = krb5_types::fast::KrbFastArmoredReq {
+        armor: None,
+        req_checksum: Checksum {
+            cksumtype: armor_key.etype().checksum_type(),
+            checksum: mic.into(),
+        },
+        enc_fast_req: EncryptedData {
+            etype: armor_key.etype().to_iana(),
+            kvno: None,
+            cipher: cipher.into(),
+        },
+    };
+    let pa = krb5_types::PaData {
+        padata_type: pa::FX_FAST,
+        padata_value: encode(&krb5_types::fast::PaFxFast::ArmoredData(armored))
+            .map_err(|e| krb5_protocol::Error::Asn1(e.to_string()))?
+            .into(),
+    };
+    req.0.padata.get_or_insert_with(Vec::new).push(pa);
+    Ok(subkey)
+}
+
+fn wrap_tgs_fast_no_subkey(
+    req: &mut krb5_types::TgsReq,
     armor_key: &ProtocolKey,
     inner_body: krb5_types::KdcReqBody,
 ) -> Result<(), krb5_protocol::Error> {
@@ -705,6 +765,131 @@ fn wrap_tgs_fast(
     };
     req.0.padata.get_or_insert_with(Vec::new).push(pa);
     Ok(())
+}
+
+#[test]
+fn tgs_fast_forged_ticket_realm_is_process_tgs() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 870);
+    let mut tgs = tgs_req(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        871,
+    )
+    .unwrap();
+    let inner = tgs.0.req_body.clone();
+    wrap_tgs_fast(&mut tgs, &issued.session_key, inner).expect("TGS FAST");
+    let pa = tgs
+        .0
+        .padata
+        .as_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|p| p.padata_type == pa::TGS_REQ)
+        .expect("PA-TGS-REQ");
+    let mut ap: ApReq = decode(pa.padata_value.as_ref()).expect("ap");
+    ap.ticket.realm = ascii("NOWHERE.TEST");
+    pa.padata_value = encode(&ap).expect("ap").into();
+    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("forged realm");
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::S_PRINCIPAL_UNKNOWN);
+            assert_eq!(text.as_deref(), Some("PROCESS_TGS"));
+        }
+        other => panic!("expected 7 PROCESS_TGS, got {other:?}"),
+    }
+}
+
+#[test]
+fn tgs_fast_explicit_armor_is_preauth_failed() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 872);
+    let mut tgs = tgs_req(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        873,
+    )
+    .unwrap();
+    let inner = tgs.0.req_body.clone();
+    wrap_tgs_fast(&mut tgs, &issued.session_key, inner).expect("TGS FAST");
+    let pa_tgs = tgs
+        .0
+        .padata
+        .as_ref()
+        .unwrap()
+        .iter()
+        .find(|p| p.padata_type == pa::TGS_REQ)
+        .expect("PA-TGS-REQ")
+        .padata_value
+        .clone();
+    let pa_fast = tgs
+        .0
+        .padata
+        .as_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|p| p.padata_type == pa::FX_FAST)
+        .expect("FAST");
+    let krb5_types::fast::PaFxFast::ArmoredData(mut armored) =
+        decode(pa_fast.padata_value.as_ref()).expect("fast");
+    armored.armor = Some(krb5_types::fast::KrbFastArmor {
+        armor_type: krb5_types::fast::ARMOR_AP_REQUEST,
+        armor_value: pa_tgs,
+    });
+    pa_fast.padata_value = encode(&krb5_types::fast::PaFxFast::ArmoredData(armored))
+        .expect("re-encode")
+        .into();
+    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("explicit TGS armor");
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::PREAUTH_FAILED);
+            assert_eq!(
+                text.as_deref(),
+                Some("Ap-request armor not permitted with TGS")
+            );
+        }
+        other => panic!("expected 24 PREAUTH_FAILED, got {other:?}"),
+    }
+}
+
+#[test]
+fn tgs_fast_without_subkey_is_preauth_failed() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 874);
+    let mut tgs = tgs_req(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        875,
+    )
+    .unwrap();
+    let inner = tgs.0.req_body.clone();
+    wrap_tgs_fast_no_subkey(&mut tgs, &issued.session_key, inner).expect("TGS FAST");
+    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("no subkey");
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::PREAUTH_FAILED);
+            assert_eq!(
+                text.as_deref(),
+                Some("No armor key but FAST armored request present")
+            );
+        }
+        other => panic!("expected 24 PREAUTH_FAILED, got {other:?}"),
+    }
 }
 
 #[test]
