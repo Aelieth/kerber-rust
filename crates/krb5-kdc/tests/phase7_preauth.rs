@@ -2320,7 +2320,10 @@ fn same_realm_ticket_sets_transited_policy_checked() {
     )
     .expect("tgs skip");
     match krb5_kdc::issue_tgs(&store, &skip) {
-        Err(Error::Protocol { code, .. }) => assert_eq!(code, err::POLICY),
+        Err(Error::Protocol { code, text, .. }) => {
+            assert_eq!(code, err::POLICY);
+            assert_eq!(text.as_deref(), Some("BAD_TRANSIT"));
+        }
         other => panic!("skip + default must be POLICY (12), got {other:?}"),
     }
 
@@ -2337,6 +2340,39 @@ fn same_realm_ticket_sets_transited_policy_checked() {
         .kdc_options
         .with_bit(flag_bit::RENEWABLE, true);
     let issued_r = krb5_kdc::issue_as(&store, &as_renew).expect("AS renewable");
+    let as_part = decrypt_ticket_part(
+        &store.krbtgt().unwrap().best_key().unwrap().key,
+        &issued_r.rep.0.ticket,
+    )
+    .expect("as tgt");
+    assert!(
+        !as_part.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED),
+        "AS TGT is the non-T negative control"
+    );
+    assert!(as_part.flags.renewable());
+    let renew_non_t = tgs_req_ex(
+        issued_r.rep.0.ticket.clone(),
+        &issued_r.session_key,
+        TEST_REALM,
+        &cname,
+        PrincipalName::krbtgt(TEST_REALM),
+        TEST_REALM,
+        78,
+        KdcOptions::forwardable()
+            .with_bit(flag_bit::RENEW, true)
+            .with_bit(flag_bit::DISABLE_TRANSITED_CHECK, true),
+        None,
+        Vec::new(),
+        pref_etypes(),
+    )
+    .expect("renew non-T skip");
+    match krb5_kdc::issue_tgs(&store, &renew_non_t) {
+        Err(Error::Protocol { code, text, .. }) => {
+            assert_eq!(code, err::POLICY);
+            assert_eq!(text.as_deref(), Some("BAD_TRANSIT"));
+        }
+        other => panic!("RENEW of a non-T ticket + skip must be POLICY, got {other:?}"),
+    }
     let tgs_tgt = tgs_req_ex(
         issued_r.rep.0.ticket.clone(),
         &issued_r.session_key,

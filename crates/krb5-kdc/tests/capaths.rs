@@ -144,7 +144,10 @@ fn three_hop_capaths_accept_and_reject() {
     )
     .expect("skip tgs");
     match krb5_kdc::issue_tgs(&c, &skip_req) {
-        Err(Error::Protocol { code, .. }) => assert_eq!(code, err::POLICY),
+        Err(Error::Protocol { code, text, .. }) => {
+            assert_eq!(code, err::POLICY);
+            assert_eq!(text.as_deref(), Some("BAD_TRANSIT"));
+        }
         other => panic!("capaths-permitted + skip + default must be POLICY, got {other:?}"),
     }
 

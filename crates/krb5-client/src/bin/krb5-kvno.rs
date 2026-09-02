@@ -1,7 +1,8 @@
 //! Obtain a service ticket via TGS and print its kvno (MIT `kvno`).
 //!
-//! Usage: krb5-kvno [-c ccache] <kdc-host> <service>
+//! Usage: krb5-kvno [-c ccache] [--disable-transited-check] [kdc-host] <service>
 //!
+//! `--disable-transited-check` is gate-only (MIT `kvno` cannot set bit 26).
 //! `-U`/`-P` (S4U) are not implemented.
 
 #![forbid(unsafe_code)]
@@ -27,7 +28,7 @@ fn main() {
         std::process::exit(2);
     });
     let service = args.services.first().cloned().unwrap_or_else(|| {
-        eprintln!("usage: krb5-kvno [-c ccache] [kdc-host] <service>");
+        eprintln!("usage: krb5-kvno [-c ccache] [--disable-transited-check] [kdc-host] <service>");
         std::process::exit(2);
     });
     let spec = resolve_ccspec(args.ccache.as_deref()).unwrap_or_else(|e| {
@@ -69,10 +70,6 @@ fn parse_addr(host: &str) -> KdcAddr {
 fn addr_for_realm(realm: &str, explicit: Option<&str>) -> KdcAddr {
     if let Some(h) = explicit {
         return parse_addr(h);
-    }
-    let env_key = format!("KRB5_KDC_{}", realm.replace('.', "_"));
-    if let Ok(v) = std::env::var(env_key) {
-        return parse_addr(&v);
     }
     krb5_config::discover_kdc(realm).map_or_else(
         || KdcAddr::new("127.0.0.1"),

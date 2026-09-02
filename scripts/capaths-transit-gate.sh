@@ -73,11 +73,13 @@ cat >/tmp/client-capaths.conf <<EOF
     }
 EOF
 write_kdc_conf() {
-    local realm="$1" port="$2" db="$3"
+    local realm="$1" port="$2" db="$3" klog="$4"
     cat >"/tmp/kdc-${realm%%.*}.conf" <<EOF
 [kdcdefaults]
     kdc_ports = ${port}
     kdc_tcp_ports = ${port}
+[logging]
+    kdc = FILE:${klog}
 [realms]
     ${realm} = {
         database_name = ${db}/principal
@@ -90,9 +92,9 @@ write_kdc_conf() {
 EOF
 }
 mkdir -p /tmp/db-a /tmp/db-b /tmp/db-c
-write_kdc_conf A.TEST 88 /tmp/db-a
-write_kdc_conf B.TEST 89 /tmp/db-b
-write_kdc_conf C.TEST 90 /tmp/db-c
+write_kdc_conf A.TEST 88 /tmp/db-a /tmp/mit-a.log
+write_kdc_conf B.TEST 89 /tmp/db-b /tmp/mit-b.log
+write_kdc_conf C.TEST 90 /tmp/db-c /tmp/mit-c.log
 sed 's/supported_enctypes.*/reject_bad_transit = false\n        supported_enctypes = aes256-cts-hmac-sha1-96:normal/' \
     /tmp/kdc-C.conf > /tmp/kdc-C-lax.conf
 cat >/tmp/kdc-c-allow.conf <<EOF
@@ -211,9 +213,6 @@ skip_kvno() {
     local svc="$2"
     docker exec \
         -e KRB5_CONFIG=/tmp/client-capaths.conf \
-        -e KRB5_KDC_A_TEST=127.0.0.1:88 \
-        -e KRB5_KDC_B_TEST=127.0.0.1:89 \
-        -e KRB5_KDC_C_TEST=127.0.0.1:90 \
         "$NAME" /tmp/krb5-kvno --disable-transited-check -c "$cc" "$svc"
 }
 
@@ -232,6 +231,8 @@ expect_skip_policy() {
         exit 1
     fi
     echo "$out" | grep -q 'KDC policy rejects request'
+    docker exec "$NAME" sh -c \
+        'cat /tmp/mit-a.log /tmp/mit-c.log /tmp/kdc-a.log /tmp/kdc-c-allow.log 2>/dev/null | grep -q BAD_TRANSIT'
 }
 
 expect_skip_accept_t0() {
@@ -286,6 +287,8 @@ expect_skip_policy "MIT A skip" /tmp/krb5cc_mit_skip_a host/svc.a.test@A.TEST
 echo "==== MIT skip capaths-permitted default is POLICY ===="
 seed_c_tgt /tmp/krb5cc_mit_skip_d
 expect_skip_policy "MIT C skip" /tmp/krb5cc_mit_skip_d host/svc.c.test@C.TEST
+docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+    klist -c /tmp/krb5cc_mit_skip_d | grep -q 'krbtgt/C.TEST@B.TEST'
 
 echo "==== MIT C without [capaths] rejects ===="
 docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/mit-c.pid)" 2>/dev/null || true'
@@ -517,6 +520,8 @@ expect_skip_policy "Rust A skip" /tmp/krb5cc_rust_skip_a host/svc.a.test@A.TEST
 echo "==== Rust skip capaths-permitted default is POLICY ===="
 seed_c_tgt /tmp/krb5cc_rust_skip_d
 expect_skip_policy "Rust C skip" /tmp/krb5cc_rust_skip_d host/svc.c.test@C.TEST
+docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+    klist -c /tmp/krb5cc_rust_skip_d | grep -q 'krbtgt/C.TEST@B.TEST'
 
 echo "==== restart C without capaths (rejected path) ===="
 docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/kdc-c.pid)" 2>/dev/null || true'

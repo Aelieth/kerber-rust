@@ -260,8 +260,10 @@ when that oracle is absent.
   vs three live MIT 1.22.2 KDCs, then the same chase vs three Rust
   KDCs; EncTicketPart transited (`tr-type` 1, contents `B.TEST`) and
   `TRANSITED_POLICY_CHECKED` match; missing capaths is `KDC policy
-  rejects request` (12). `krb5-kvno --disable-transited-check` vs
-  default MIT and Rust is the same string; with
+  rejects request` (12). Skip cells grep KDC logs for `BAD_TRANSIT`
+  (the status, not the client-synthesized string) and C-skip `klist`
+  shows `krbtgt/C.TEST@B.TEST`. `krb5-kvno --disable-transited-check`
+  vs default MIT and Rust is POLICY; with
   `reject_bad_transit=false` the skip is accepted and T is off. In CI
   (`mit-extra`).
 - `scripts/capaths-compress-gate.sh` — MIT 4-hop

@@ -690,7 +690,7 @@ fn issue_tgs_body(
     let inherited_t = (renew || validate) && enc_tkt.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED);
     let set_transited_flag = !skip_transited && transit_checked;
     if !(inherited_t || set_transited_flag) && store.policy().reject_bad_transit {
-        return Err(proto(err::POLICY, "transited"));
+        return Err(proto(err::POLICY, "BAD_TRANSIT"));
     }
     let session = random_key(skey.etype)?;
     let now = KerberosTime::now();
