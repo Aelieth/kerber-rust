@@ -22,10 +22,16 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0 C3 (MIT-gated).** Explicit FAST armor looks up the armor ticket
+  by (`ticket.realm`, sname) first like MIT `rd_req`: foreign/missing
+  is 35 `NOT_US` `FAST armor TGT`; a local non-krbtgt armor is 26
+  `SERVER_NOMATCH`. `krb5-forge-tgt --keep-cipher` rewrites only DER
+  `ticket.realm` so MIT `kinit -T` still selects the armor cred. Gate:
+  `scripts/mit-fast-kdc-gate.sh` forged `kinit -T` vs MIT and Rust.
+
 - **G9 Y4/Y5.** FAST armor decrypt selects keys by the armor ticket's
-  realm (forged-realm armor is `BAD_INTEGRITY` / `FAST armor TGT`).
-  After the presented-TGT krbtgt entry is selected, `DISALLOW_SVR` or
-  `DISALLOW_ALL_TIX` is 7 `PROCESS_TGS` (`kdc_util.c:390-393`).
+  realm. After the presented-TGT krbtgt entry is selected, `DISALLOW_SVR`
+  or `DISALLOW_ALL_TIX` is 7 `PROCESS_TGS` (`kdc_util.c:390-393`).
 
 - **W0 C2 (MIT-gated).** TGS FAST armor is derived from the PA-TGS-REQ
   decrypt after `PROCESS_TGS` (`kdc_find_fast`): `cf2(subkey,

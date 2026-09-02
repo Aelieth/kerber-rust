@@ -131,7 +131,9 @@ PA-FX-FAST and MIT `klist` names `user@KERBER.TEST`. MIT 1.22.2 KDC TRACE
 does **not** print `FX-FAST`; the gate asserts `Decrypted AP-REQ` (the
 armor AP-REQ). Reverse FAST: `scripts/mit-fast-kdc-gate.sh` is MIT
 `kinit -T` + `kvno` against the Rust KDC (TRACE upgrades on
-`PA_FX_FAST`; KDC log ≥2 `KrbFastResponse`). Reverse PKINIT:
+`PA_FX_FAST`; KDC log ≥2 `KrbFastResponse`). Forged-realm armor
+(`krb5-forge-tgt --keep-cipher --claim-realm`) is 35 `NOT_US` on
+both MIT and Rust (`The ticket isn't for us`). Reverse PKINIT:
 `scripts/rust-kinit-pkinit-gate.sh` is Rust `kinit --pkinit FILE:` against
 MIT KDC (`pkinit.so` + KDC cert + `id-pkinit-san`); it **fails** if the
 plugin is missing. MIT `klist` names `user@KERBER.TEST`. A follow-up

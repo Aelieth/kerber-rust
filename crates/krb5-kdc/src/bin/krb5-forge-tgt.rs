@@ -27,6 +27,7 @@ fn main() -> ExitCode {
     let mut principal = None;
     let mut tgt = None;
     let mut alias_as = None;
+    let mut keep_cipher = false;
     let mut i = 0usize;
     while i < args.len() {
         match args[i].as_str() {
@@ -66,10 +67,14 @@ fn main() -> ExitCode {
                 alias_as = args.get(i + 1).cloned();
                 i += 2;
             }
+            "--keep-cipher" => {
+                keep_cipher = true;
+                i += 1;
+            }
             _ => {
                 eprintln!(
                     "usage: krb5-forge-tgt --ccache <in> --out <out> --tgt <krbtgt/REALM> \
-                     (--claim-realm <realm> (--key-hex <hex> | --password <pw> --principal <name@REALM>) \
+                     (--claim-realm <realm> [--keep-cipher | --key-hex <hex> | --password <pw> --principal <name@REALM>] \
                      | --alias-as <krbtgt/REALM@REALM>)"
                 );
                 return ExitCode::from(2);
@@ -87,6 +92,9 @@ fn main() -> ExitCode {
         eprintln!("krb5-forge-tgt: --claim-realm is required unless --alias-as");
         return ExitCode::from(2);
     };
+    if keep_cipher {
+        return claim_realm_keep_cipher(&cc_path, &out_path, &tgt_sname, &claim_realm);
+    }
     let key = match (key_hex, password, principal) {
         (Some(hex), None, None) => match parse_hex_key(&hex) {
             Ok(k) => k,
@@ -205,6 +213,67 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
     if let Err(e) = cc.write_file(&out_path) {
+        eprintln!("krb5-forge-tgt: write {out_path}: {e}");
+        return ExitCode::from(1);
+    }
+    ExitCode::SUCCESS
+}
+
+fn claim_realm_keep_cipher(
+    cc_path: &str,
+    out_path: &str,
+    tgt_sname: &str,
+    claim_realm: &str,
+) -> ExitCode {
+    let bytes = match fs::read(cc_path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("krb5-forge-tgt: read {cc_path}: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let mut cc = match FileCcache::parse(&bytes) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("krb5-forge-tgt: ccache: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let claim_ks = match krb5_types::try_ascii(claim_realm) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("krb5-forge-tgt: claim-realm: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let mut found = false;
+    for cred in &mut cc.creds {
+        if cred.is_config() || cred.is_removed() {
+            continue;
+        }
+        if cred.server.1.components_joined() != tgt_sname {
+            continue;
+        }
+        let mut ticket: Ticket = match decode(&cred.ticket) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        ticket.realm = claim_ks.clone();
+        match encode(&ticket) {
+            Ok(tkt) => cred.ticket = tkt,
+            Err(e) => {
+                eprintln!("krb5-forge-tgt: encode Ticket: {e}");
+                return ExitCode::from(1);
+            }
+        }
+        found = true;
+        break;
+    }
+    if !found {
+        eprintln!("krb5-forge-tgt: no TGT matching {tgt_sname}");
+        return ExitCode::from(1);
+    }
+    if let Err(e) = cc.write_file(out_path) {
         eprintln!("krb5-forge-tgt: write {out_path}: {e}");
         return ExitCode::from(1);
     }

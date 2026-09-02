@@ -67,7 +67,8 @@ DB entry *and* realm (`is_client_db_alias`): a foreign TGT client with
 a colliding local name is 36 `INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH`.
 
 FAST armor decrypt binds keys to the armor `ticket.realm` (MIT
-`fast_util.c` `rd_req`); forged-realm armor is 31 `FAST armor TGT`.
+`fast_util.c` `rd_req`); forged-realm armor is 35 `NOT_US` (`rd_req`).
+A local non-krbtgt armor ticket is 26 `SERVER_NOMATCH`.
 A presented-TGT krbtgt with `DISALLOW_SVR` or `DISALLOW_ALL_TIX` is 7
 `PROCESS_TGS` (`kdc_util.c:390-393`).
 

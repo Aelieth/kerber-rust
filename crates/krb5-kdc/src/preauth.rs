@@ -173,23 +173,21 @@ fn armor_key_from(
 
 fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<ProtocolKey, Error> {
     let ap: krb5_types::ApReq = decode(ap_raw)?;
-    if !ap.ticket.sname.is_krbtgt_for(store.realm()) {
-        return Err(proto(err::NOT_US, "FAST armor not local TGS"));
-    }
     let tkt_usage = KeyUsage::new(ku::TICKET)?;
     let cipher = ap.ticket.enc_part.cipher.as_ref();
     let ticket_realm = std::str::from_utf8(ap.ticket.realm.as_bytes())
-        .map_err(|_| proto(err::BAD_INTEGRITY, "FAST armor TGT"))?;
-    let princ = if ticket_realm == store.realm() {
-        store.fetch_krbtgt()?
-    } else {
-        let name = PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", ticket_realm])
-            .map_err(|_| proto(err::BAD_INTEGRITY, "FAST armor TGT"))?;
-        store.fetch_name(&name)?
+        .map_err(|_| proto(err::NOT_US, "FAST armor TGT"))?;
+    // MIT rd_req: unknown server (foreign realm or missing row) is NOT_US;
+    // a local non-krbtgt armor ticket is SERVER_NOMATCH.
+    if ticket_realm != store.realm() {
+        return Err(proto(err::NOT_US, "FAST armor TGT"));
+    }
+    let Some(p) = store.fetch_name(&ap.ticket.sname)? else {
+        return Err(proto(err::NOT_US, "FAST armor TGT"));
     };
-    let Some(p) = princ else {
-        return Err(proto(err::BAD_INTEGRITY, "FAST armor TGT"));
-    };
+    if !ap.ticket.sname.is_krbtgt_for(store.realm()) {
+        return Err(proto(err::SERVER_NOMATCH, "FAST armor TGT"));
+    }
     let mut enc_tkt: Option<krb5_types::EncTicketPart> = None;
     for k in &p.keys {
         if let Ok(plain) = decrypt(&k.key, tkt_usage, cipher)
