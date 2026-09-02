@@ -362,8 +362,6 @@ when that oracle is absent.
   - `mit-drop-garbage-pdu` — MIT 1.22.2 closes TCP on truncated DER;
     Rust replies `KRB_ERR_GENERIC(60)`.
   - `mit-as-enc-kvno` — MIT omits AS-REP enc-part kvno; Rust sets kvno 1.
-  - `mit-empty-transited-type` — MIT `tr-type` 1 with empty contents;
-    Rust `tr-type` 0.
   - `mit-extra-ticket-flags` — MIT sets canonicalize (bit 15) on issued
     tickets; that bit is masked. Any other un-whitelisted flag bit
     fails red. Same-realm TGS sets `TRANSITED_POLICY_CHECKED` (bit 12)

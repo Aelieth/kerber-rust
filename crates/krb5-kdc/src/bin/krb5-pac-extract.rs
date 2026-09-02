@@ -146,11 +146,11 @@ fn main() -> ExitCode {
                 println!("transited_contents={contents}");
                 let crealm = std::str::from_utf8(part.crealm.as_bytes()).unwrap_or("");
                 let srealm = std::str::from_utf8(ticket.realm.as_bytes()).unwrap_or("");
-                let hops = part
-                    .transited
-                    .realms_for(crealm, srealm)
-                    .unwrap_or_default();
-                println!("transited_realms={}", hops.join(","));
+                let realms = match part.transited.realms_for(crealm, srealm) {
+                    Ok(hops) => hops.join(","),
+                    Err(e) => format!("<error: {e}>"),
+                };
+                println!("transited_realms={realms}");
                 println!("transited_policy_checked={checked}");
                 if out.is_none() {
                     return ExitCode::SUCCESS;

@@ -22,6 +22,13 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **G9 W-pass (MIT-gated).** Emitted hops capped at 4096
+  (`TooManyFields`, STRICTER than MIT). Rejected requests log
+  `kdc.issue` `outcome=krb-error` with `code` and `e-text`. Add-path
+  tokenizer matches MIT `MAX_REALM_LN` (499 raw / 498 joined / 499
+  total). `v1.0.0` AS emitted `tr_type` 0; a 1.0-minted TGT
+  forwarded by a 1.0 intermediate gets 17 at a 1.1/MIT final hop.
+
 - **G9 V-pass (MIT-gated).** Transited expansion errors out of band
   (raw ≤ 511 / joined ≤ 512; lone NUL is the empty list); null
   subfields match MIT `process_intermediates`; skip-bit POLICY
@@ -32,7 +39,9 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   rejects request`), matching MIT 1.22.2 `do_tgs_req`. RENEW/VALIDATE
   of a ticket that already has `T` still inherit it.
   `krb5-kvno --disable-transited-check` is the bit-26 client (MIT
-  `kvno` cannot set the bit). Gate: `scripts/capaths-transit-gate.sh`.
+  `kvno` cannot set the bit). `krb5-kvno` targets the service
+  realm's KDC when that TGT is cached (MIT-like). Gate:
+  `scripts/capaths-transit-gate.sh`.
 
 - **G9 U-pass U2 (MIT-gated).** DOMAIN-X500-COMPRESS joins on the
   unescaped field (MIT `chk_trans.c` `maybe_join`): `X.COM,C\.` →
@@ -42,10 +51,9 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   bytes or joined component > 512 is an expansion error (MIT
   `MAXLEN`: 511 raw / 512 joined still expand).
 
-- **G9 T-pass (MIT-gated).** `realms()` short-circuits at 256 commas
-  to a single NUL poison hop (Rust analogue of MIT `MAXLEN`; the
-  transit check cannot match a legitimate realm, so the KDC surfaces
-  POLICY). Gate: `scripts/capaths-compress-gate.sh`.
+- **G9 T-pass (MIT-gated).** More than 256 commas is
+  `TooManyFields` (Rust-STRICTER; MIT has no field-count cap). Gate:
+  `scripts/capaths-compress-gate.sh`.
 
 - **G9 S-pass (MIT-gated).** A present file whose nested `include`
   names a missing target is an error even on colon-split

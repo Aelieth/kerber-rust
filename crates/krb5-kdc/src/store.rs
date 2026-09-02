@@ -289,8 +289,6 @@ pub struct Policy {
     pub allow_weak_crypto: bool,
     /// Default requires_preauth for new principals.
     pub requires_preauth: bool,
-    /// Cross-realm transited realms that are rejected (`KDC_ERR_POLICY`).
-    pub transited_reject: Vec<String>,
     /// `[capaths]` client → server → intermediates (`.` = direct).
     pub capaths: BTreeMap<String, BTreeMap<String, Vec<String>>>,
     /// MIT `reject_bad_transit` (default true).
@@ -306,7 +304,6 @@ impl Default for Policy {
             skew: 300,
             allow_weak_crypto: false,
             requires_preauth: true,
-            transited_reject: Vec::new(),
             capaths: BTreeMap::new(),
             reject_bad_transit: true,
         }
@@ -314,14 +311,11 @@ impl Default for Policy {
 }
 
 impl Policy {
-    /// MIT `krb5_check_transited_list`: denylist, then capaths if present, else hierarchical.
+    /// MIT `krb5_check_transited_list`: anonymous crealm passes; then capaths if present, else hierarchical.
     #[must_use]
     pub fn transit_allowed(&self, crealm: &str, srealm: &str, hops: &[String]) -> bool {
-        if hops
-            .iter()
-            .any(|h| self.transited_reject.iter().any(|d| d == h))
-        {
-            return false;
+        if crealm == "WELLKNOWN:ANONYMOUS" {
+            return true;
         }
         if hops.is_empty() {
             return true;
@@ -2185,6 +2179,16 @@ mod tests {
             &[String::from("B.TEST"), String::from("D.TEST")]
         ));
         assert!(!p.transit_allowed("A.TEST", "C.TEST", &[String::from("E.TEST")]));
+    }
+
+    #[test]
+    fn anonymous_crealm_transit_check_passes() {
+        let p = Policy::default();
+        assert!(p.transit_allowed(
+            "WELLKNOWN:ANONYMOUS",
+            "C.TEST",
+            &[String::from("EVIL.TEST")]
+        ));
     }
 
     #[test]

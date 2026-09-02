@@ -980,9 +980,9 @@ impl TransitedEncoding {
     /// DOMAIN-X500-COMPRESS. MIT `chk_trans.c`: strip one trailing NUL;
     /// raw field ≥ 512 or joined > 512 is an error; join on unescaped
     /// text; null subfields seed `crealm`/`srealm` and emit hierarchical
-    /// intermediates (`process_intermediates`). More than 256 commas or
-    /// [`MAX_TRANSIT_HOPS`] emitted hops is a Rust-STRICTER error. Encode
-    /// stays uncompressed ([`Self::from_realms`]).
+    /// intermediates (`process_intermediates`). More than 256 raw commas
+    /// (including escaped `\,`) or [`MAX_TRANSIT_HOPS`] emitted hops is a
+    /// Rust-STRICTER error. Encode stays uncompressed ([`Self::from_realms`]).
     ///
     /// # Errors
     ///
@@ -1700,6 +1700,19 @@ mod tests {
 
         let inner = te(b"A,,B").append_realm("X", "", "").unwrap();
         assert_eq!(inner.contents.as_ref(), b"A,,B,X");
+    }
+
+    #[test]
+    fn transited_expansion_error_print_is_not_empty_list() {
+        let empty = format!(
+            "transited_realms={}",
+            te(b"").realms_for("", "").unwrap().join(",")
+        );
+        let err = te(&vec![b'A'; 512]).realms_for("", "").unwrap_err();
+        let failed = format!("transited_realms=<error: {err}>");
+        assert_eq!(empty, "transited_realms=");
+        assert_ne!(failed, empty);
+        assert!(failed.starts_with("transited_realms=<error:"));
     }
 
     #[test]

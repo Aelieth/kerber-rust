@@ -269,11 +269,7 @@ pub fn stable_rep(
         enc_part_kvno: rep.enc_part.kvno,
         srealm: ks(&enc.srealm),
         sname: enc.sname.components_joined(),
-        transited_tr_type: if ticket.transited.contents.as_ref().is_empty() {
-            0
-        } else {
-            ticket.transited.tr_type
-        },
+        transited_tr_type: ticket.transited.tr_type,
         transited_contents: ticket.transited.contents.as_ref().to_vec(),
         flags: masked_flags(&enc.flags, wl),
         padata_types: padata_types_filtered(rep, wl.mit_as_padata),
@@ -287,8 +283,6 @@ fn whitelist_hits(
     mit: &KdcRep,
     rust_enc: &EncKdcRepPart,
     mit_enc: &EncKdcRepPart,
-    rust_tkt: &EncTicketPart,
-    mit_tkt: &EncTicketPart,
     wl: &Whitelist,
 ) -> Vec<&'static str> {
     let mut hits = Vec::new();
@@ -311,12 +305,6 @@ fn whitelist_hits(
     }
     if rust.enc_part.kvno != mit.enc_part.kvno {
         hits.push("mit-as-enc-kvno");
-    }
-    if rust_tkt.transited.tr_type != mit_tkt.transited.tr_type
-        && rust_tkt.transited.contents.as_ref().is_empty()
-        && mit_tkt.transited.contents.as_ref().is_empty()
-    {
-        hits.push("mit-empty-transited-type");
     }
     hits
 }
@@ -349,7 +337,7 @@ pub fn compare_stable_rep(
         )));
     }
     Ok(CompareOk {
-        whitelisted: whitelist_hits(rust_rep, mit_rep, rust_enc, mit_enc, rust_tkt, mit_tkt, wl),
+        whitelisted: whitelist_hits(rust_rep, mit_rep, rust_enc, mit_enc, wl),
         mit_as_enc_app26: false,
     })
 }
