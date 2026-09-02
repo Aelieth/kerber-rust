@@ -246,7 +246,6 @@ expect_skip_policy() {
     local klog="$4"
     local n
     n="$(docker exec "$NAME" sh -c "wc -l < ${klog}" | tr -d '[:space:]')"
-    n="${n:-0}"
     set +e
     local out rc
     out="$(skip_kvno "$cc" "$svc" 2>&1)"

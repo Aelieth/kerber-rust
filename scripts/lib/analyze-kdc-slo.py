@@ -83,6 +83,7 @@ def parse_logs(paths: list[pathlib.Path]) -> dict:
     n_json = 0
     n_issue_ok = 0
     n_issue_err = 0
+    n_issue_krb_error = 0
     n_cid = 0
     panics = 0
     durations: list[tuple[float, float]] = []
@@ -126,6 +127,8 @@ def parse_logs(paths: list[pathlib.Path]) -> dict:
                             epochs.append(_parse_epoch(o))
                         except (TypeError, ValueError):
                             issues.append("bad_duration_us")
+                elif outcome == "krb-error":
+                    n_issue_krb_error += 1
                 elif outcome == "error":
                     n_issue_err += 1
     n_issue = n_issue_ok + n_issue_err
@@ -135,6 +138,7 @@ def parse_logs(paths: list[pathlib.Path]) -> dict:
         "n_json": n_json,
         "n_issue_ok": n_issue_ok,
         "n_issue_err": n_issue_err,
+        "n_issue_krb_error": n_issue_krb_error,
         "n_cid": n_cid,
         "panics": panics,
         "error_rate": error_rate,
@@ -253,6 +257,7 @@ def evaluate(args: argparse.Namespace, parsed: dict, rss: dict | None) -> dict:
         "json_lines": parsed["n_json"],
         "kdc_issue_ok": parsed["n_issue_ok"],
         "kdc_issue_err": parsed["n_issue_err"],
+        "kdc_issue_krb_error": parsed.get("n_issue_krb_error", 0),
         "correlation_id_fields": parsed["n_cid"],
         "panics": parsed["panics"],
         "error_rate": parsed["error_rate"],

@@ -70,17 +70,28 @@ pub fn handle_request(store: &dyn PrincipalRead, raw: &[u8]) -> Result<Vec<u8>, 
     }
     let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
     match &result {
-        Ok(bytes) => {
-            if !bytes.starts_with(&[0x7e]) {
-                tracing::info!(
-                    event = krb5_log::events::KDC_ISSUE,
-                    correlation_id = krb5_log::current_correlation_id(),
-                    component = "krb5-kdc",
-                    duration_us,
-                    outcome = "ok",
-                );
+        Ok(bytes) if bytes.starts_with(&[0x7e]) => {
+            let (code, mut e_text) = krb_error_log_fields(bytes);
+            if code == err::PREAUTH_REQUIRED && e_text.is_empty() {
+                e_text = "NEEDED_PREAUTH".into();
             }
+            tracing::info!(
+                event = krb5_log::events::KDC_ISSUE,
+                correlation_id = krb5_log::current_correlation_id(),
+                component = "krb5-kdc",
+                duration_us,
+                outcome = "krb-error",
+                code,
+                e_text,
+            );
         }
+        Ok(_) => tracing::info!(
+            event = krb5_log::events::KDC_ISSUE,
+            correlation_id = krb5_log::current_correlation_id(),
+            component = "krb5-kdc",
+            duration_us,
+            outcome = "ok",
+        ),
         Err(e) => tracing::error!(
             event = krb5_log::events::KDC_ISSUE,
             correlation_id = krb5_log::current_correlation_id(),
@@ -694,10 +705,13 @@ fn issue_tgs_body(
                 .map_err(|_| proto(err::ILL_CR_TKT, "ADD_TO_TRANSITED_LIST"))?;
         }
     }
-    let hops = transited.realms_for(crealm, req_realm.as_str());
-    let transit_checked = match &hops {
-        Ok(h) => store.policy().transit_allowed(crealm, &req_realm, h),
-        Err(_) => false,
+    let transit_checked = if crealm == "WELLKNOWN:ANONYMOUS" {
+        true
+    } else {
+        match transited.realms_for(crealm, req_realm.as_str()) {
+            Ok(h) => store.policy().transit_allowed(crealm, &req_realm, &h),
+            Err(_) => false,
+        }
     };
     // MIT do_tgs_req: skip leaves T unset; default reject_bad_transit
     // then POLICY. RENEW/VALIDATE keep the header T (get_ticket_flags).
@@ -1368,6 +1382,21 @@ fn preauth_required(store: &dyn PrincipalRead, client: &Principal) -> Error {
     Error::PreauthRequired { e_data }
 }
 
+fn krb_error_log_fields(bytes: &[u8]) -> (i32, String) {
+    match decode::<KrbError>(bytes) {
+        Ok(e) => {
+            let text = e
+                .e_text
+                .as_ref()
+                .and_then(|t| std::str::from_utf8(t.as_bytes()).ok())
+                .unwrap_or("")
+                .to_owned();
+            (e.error_code, text)
+        }
+        Err(_) => (0, String::new()),
+    }
+}
+
 fn encode_krb_error(
     store: &dyn PrincipalRead,
     code: i32,
@@ -1375,14 +1404,6 @@ fn encode_krb_error(
     e_data: Option<Vec<u8>>,
     body: Option<&krb5_types::KdcReqBody>,
 ) -> Vec<u8> {
-    tracing::warn!(
-        event = krb5_log::events::KDC_ISSUE,
-        correlation_id = krb5_log::current_correlation_id(),
-        component = "krb5-kdc",
-        outcome = "krb-error",
-        code,
-        e_text = text.unwrap_or(""),
-    );
     // MIT 1.22.2 echoes the request realm/sname (C_PRINCIPAL_UNKNOWN for a
     // foreign-realm AS-REQ, not WRONG_REALM).
     let realm_s = body

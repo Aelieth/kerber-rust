@@ -22,6 +22,11 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **G9 X3.** Add-path hop emission is `push_hop`-capped; no-append
+  inbound ≥ 500 is 43. Anonymous crealm skips transited parse.
+  `kdc.issue` `krb-error` lines are `info` and carry `duration_us`.
+  Transited fuzz seeds are `crealm\\0srealm\\0contents`.
+
 - **G9 X2 (MIT-gated).** TGS server lookup is by full principal like
   MIT `search_sprinc`: a local sname is served only when `body.realm`
   equals the KDC realm; otherwise referral only if `krbtgt/<req_realm>`
@@ -38,7 +43,7 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 - **G9 W-pass (MIT-gated).** Emitted hops capped at 4096
   (`TooManyFields`, STRICTER than MIT). Rejected requests log
-  `kdc.issue` `outcome=krb-error` with `code` and `e-text`. Add-path
+  `kdc.issue` `outcome=krb-error` with `code` and `e_text`. Add-path
   tokenizer matches MIT `MAX_REALM_LN` (499 raw / 498 joined / 499
   total). `v1.0.0` AS emitted `tr_type` 0; a 1.0-minted TGT
   forwarded by a 1.0 intermediate gets 17 at a 1.1/MIT final hop.

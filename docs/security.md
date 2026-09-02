@@ -34,7 +34,8 @@ timing. There is no injectable clock; replay windows use
 ## Documented deviations from MIT 1.22.2
 
 These are deliberate and fail closed (Rust rejects or bounds where
-MIT would accept or grow). They are not laxer than MIT.
+MIT would accept or grow). Honest UTF-8 paths are not laxer than MIT;
+the UTF-8 transited row below is mixed on absurd inputs.
 
 | Deviation | MIT | Rust | Why |
 | --- | --- | --- | --- |

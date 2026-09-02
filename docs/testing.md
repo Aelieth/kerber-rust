@@ -26,7 +26,8 @@ DER-strictness negatives live in `crates/krb5-asn1/tests/der_strict.rs`.
 PKINIT CMS, PAC NDR, SPAKE points, Oakley DH, GSS tokens, transited)
 seeded from `tests/traces/` (transited also has `fuzz/corpus/transited/`).
 CI smokes each target ~60s (`.github/workflows/fuzz.yml`; schedule,
-dispatch, and PR on `fuzz/**` — no `push:` trigger).
+dispatch, and PR on `fuzz/**` — no `push:` trigger). Transited seeds
+are `crealm\\0srealm\\0contents` so `process_intermediates` is reached.
 
 ## Interop
 
@@ -402,7 +403,8 @@ when that oracle is absent.
   `examples/loadgen.rs` plus MIT `kinit`/`kvno` under load. Throughput
   uses `kdc.issue` timestamps or `duration_us`, not Docker wall clock.
   p99/throughput undershoot with `kdc_issue_err==0` and no panics is a
-  warning; error-rate and panics stay hard-fail. Own CI job (`slo`),
+  warning; error-rate and panics stay hard-fail. `kdc_issue_krb_error`
+  is counted and kept out of `min-issue-ok`. Own CI job (`slo`),
   `continue-on-error`; not on the required per-SHA path.
 - `scripts/chaos-gate.sh` — C2b: `tc netem` delay/loss/reorder (MIT
   must complete), low `--memory` under load (no OOM-panic), `docker kill`

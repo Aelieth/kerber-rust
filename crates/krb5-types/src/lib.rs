@@ -962,8 +962,8 @@ impl TransitedEncoding {
     }
 
     /// DOMAIN-X500-COMPRESS (`tr-type` 1): comma-separated DNS realms matching
-    /// MIT KDC `add_to_transited` for domain-style names (no trailing comma,
-    /// no X.500 RDN compression).
+    /// MIT KDC `add_to_transited` for domain-style names (no trailing comma).
+    /// Standalone X.500 realms encode as `/A, /B` (space before a `/` hop).
     #[must_use]
     pub fn from_realms(realms: &[&str]) -> Self {
         let mut contents = Vec::new();
@@ -992,13 +992,15 @@ impl TransitedEncoding {
     }
 
     /// Append `realm` onto the original contents (MIT `add_to_transited`:
-    /// add-path tokenizer, trailing-comma drop, space before `/`, rebuilt
+    /// add-path tokenizer, trailing-comma drop, space before `/`, appended
     /// length ≤ 499). Escapes `\\` and `,` in `realm`. Does not
     /// expand-then-rejoin. `crealm`/`srealm` are unused (no null-subfields).
+    /// No-append paths (validate / already-present hop) still reject a
+    /// stripped inbound ≥ 500.
     ///
     /// # Errors
     ///
-    /// Inbound add-path bound failure, or rebuilt encoding ≥ 500.
+    /// Inbound add-path bound failure, or appended encoding ≥ 500.
     pub fn append_realm(
         &self,
         realm: &str,
@@ -1031,7 +1033,7 @@ impl TransitedEncoding {
 }
 
 /// Cap on comma-separated transited fields. Rust-STRICTER than MIT.
-const MAX_TRANSIT_REALMS: usize = 256;
+pub const MAX_TRANSIT_REALMS: usize = 256;
 /// Cap on hops emitted by DOMAIN-X500-COMPRESS expansion. MIT streams
 /// `process_intermediates` callbacks at O(1) memory; Rust materializes
 /// the list. 4096 is ~100× any honest path and bounds allocation.
@@ -1084,6 +1086,11 @@ fn encode_append(raw: &[u8], realm: &str) -> Vec<u8> {
 
 fn expand_add_path(raw: &[u8]) -> Result<Vec<String>, TransitError> {
     let raw = strip_trailing_nul(raw);
+    let mut stripped = raw.to_vec();
+    drop_trailing_unescaped_comma(&mut stripped);
+    if stripped.len() >= MAX_ADD_PATH_TOTAL {
+        return Err(TransitError::FieldTooLong);
+    }
     if raw.is_empty() {
         return Ok(Vec::new());
     }
@@ -1125,7 +1132,7 @@ fn emit_add_path_field(
         return Ok(());
     }
     let this = add_path_join(last, cur)?;
-    out.push(this.clone());
+    push_hop(out, this.clone())?;
     *last = this;
     cur.clear();
     Ok(())
@@ -1707,19 +1714,23 @@ mod tests {
 
         let inner = te(b"A,,B").append_realm("X", "", "").unwrap();
         assert_eq!(inner.contents.as_ref(), b"A,,B,X");
-    }
 
-    #[test]
-    fn transited_expansion_error_print_is_not_empty_list() {
-        let empty = format!(
-            "transited_realms={}",
-            te(b"").realms_for("", "").unwrap().join(",")
+        let five = std::iter::repeat_n("A".repeat(100), 5)
+            .collect::<Vec<_>>()
+            .join(",");
+        assert!(five.len() >= 500);
+        assert_eq!(
+            te(five.as_bytes()).validate_add_path().unwrap_err(),
+            TransitError::FieldTooLong
         );
-        let err = te(&vec![b'A'; 512]).realms_for("", "").unwrap_err();
-        let failed = format!("transited_realms=<error: {err}>");
-        assert_eq!(empty, "transited_realms=");
-        assert_ne!(failed, empty);
-        assert!(failed.starts_with("transited_realms=<error:"));
+        let named = format!("{},B.TEST", "A".repeat(494));
+        assert!(named.len() >= 500);
+        assert_eq!(
+            te(named.as_bytes())
+                .append_realm("B.TEST", "", "")
+                .unwrap_err(),
+            TransitError::FieldTooLong
+        );
     }
 
     #[test]

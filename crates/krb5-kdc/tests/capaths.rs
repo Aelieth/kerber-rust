@@ -579,3 +579,64 @@ fn tgs_huge_body_realm_is_looking_up_server_quickly() {
         "60 KiB body.realm took {elapsed:?}"
     );
 }
+
+#[test]
+fn transited_renew_at_dest_five_hundred_byte_add_path_is_43() {
+    let (_a, _b, c, ir, _host_c, bc) = three_realm();
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let mut t = bc.rep.0.ticket.clone();
+    let mut part = decrypt_ticket_part(&ir, &t).expect("bc");
+    part.transited.tr_type = 1;
+    part.transited.contents = OctetString::from(
+        std::iter::repeat_n("A".repeat(100), 5)
+            .collect::<Vec<_>>()
+            .join(",")
+            .into_bytes(),
+    );
+    part.flags = part.flags.with_bit(flag_bit::RENEWABLE, true);
+    part.renew_till = Some(part.endtime.add_hours(24).expect("renew_till"));
+    part.authorization_data = None;
+    reseal(&ir, &mut t, &part);
+    let req = tgs_req_ex(
+        t,
+        &bc.session_key,
+        "A.TEST",
+        &cname,
+        PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "C.TEST"]),
+        "B.TEST",
+        930,
+        KdcOptions::forwardable().with_bit(flag_bit::RENEW, true),
+        None,
+        Vec::new(),
+        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
+    )
+    .expect("renew tgs");
+    let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
+    assert_eq!(code, err::ILL_CR_TKT);
+    assert_eq!(text.as_deref(), Some("ADD_TO_TRANSITED_LIST"));
+}
+
+#[test]
+fn anonymous_crealm_skips_transited_parse() {
+    let (_a, _b, c, ir, host_c, bc) = three_realm();
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let mut t = bc.rep.0.ticket.clone();
+    let mut part = decrypt_ticket_part(&ir, &t).expect("bc");
+    part.crealm = krb5_types::try_ascii("WELLKNOWN:ANONYMOUS").expect("anon");
+    part.transited.tr_type = 1;
+    part.transited.contents = OctetString::from(b",".to_vec());
+    part.authorization_data = None;
+    reseal(&ir, &mut t, &part);
+    let req = tgs_req(
+        t,
+        &bc.session_key,
+        "WELLKNOWN:ANONYMOUS",
+        &cname,
+        host_c,
+        "C.TEST",
+        931,
+    )
+    .expect("tgs");
+    krb5_kdc::issue_tgs(&c, &req)
+        .expect("anonymous crealm must not POLICY on unexpandable transited");
+}

@@ -1,9 +1,6 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use krb5_types::{MAX_TRANSIT_HOPS, OctetString, TransitedEncoding};
-
-const MAX_TRANSIT_REALMS: usize = 256;
-const MAX_TRANSIT_RAW: usize = 512;
+use krb5_types::{MAX_TRANSIT_HOPS, MAX_TRANSIT_RAW, MAX_TRANSIT_REALMS, OctetString, TransitedEncoding};
 
 fn strip_nul(data: &[u8]) -> &[u8] {
     match data.split_last() {

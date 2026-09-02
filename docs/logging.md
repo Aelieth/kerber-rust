@@ -20,12 +20,12 @@ never install a subscriber. Tests and the harness do.
 
 Canonical `event` strings live in `krb5_log::events`.
 
-A request that is answered with a **KRB-ERROR** PDU is logged from
-`encode_krb_error` as `event=kdc.issue`, `outcome=krb-error`, plus
-`code` (RFC 4120 error-code) and `e_text` (MIT `log_tgs_req` status
-string, e.g. `BAD_TRANSIT`). Those replies are not logged as
-`outcome=ok`. Store-programming failures that cannot be encoded stay
-`outcome=error`.
+Every request logs one `event=kdc.issue` line from `handle_request`
+at `info`, including `duration_us`. A **KRB-ERROR** PDU is
+`outcome=krb-error` plus `code` (RFC 4120 error-code) and `e_text`
+(MIT `log_tgs_req` status string, e.g. `BAD_TRANSIT`). Code 25 logs
+`e_text=NEEDED_PREAUTH`. Store-programming failures that cannot be
+encoded stay `outcome=error`.
 
 ## Logs as metrics
 
