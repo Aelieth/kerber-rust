@@ -22,6 +22,12 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **G9 Y0 (MIT-gated).** S4U2Self requires the requested server to be
+  the TGT client (`check_tgs_s4u2self`): mismatch is 36
+  `INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH`. Referral TGTs name the
+  header client. `FORWARDABLE` is kept only with
+  `+ok_to_auth_as_delegate`. Gate: `scripts/s4u-mit-gate.sh`.
+
 - **G9 X3.** Add-path hop emission is `push_hop`-capped; no-append
   inbound ≥ 500 is 43. Anonymous crealm skips transited parse.
   `kdc.issue` `krb-error` lines are `info` and carry `duration_us`.

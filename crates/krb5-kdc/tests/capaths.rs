@@ -6,7 +6,7 @@ use krb5_kdc::{
     Acl, Error, PrincipalStore, TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_USER, TEST_USER_PASSWORD,
     as_req, decrypt_ticket_part, pa_enc_timestamp, tgs_req,
 };
-use krb5_protocol::tgs_req_ex;
+use krb5_protocol::{pa_for_user, tgs_req_ex};
 use krb5_types::{
     EncTicketPart, KdcOptions, OctetString, PrincipalName, Ticket, err, flag_bit, ku,
 };
@@ -639,4 +639,74 @@ fn anonymous_crealm_skips_transited_parse() {
     .expect("tgs");
     krb5_kdc::issue_tgs(&c, &req)
         .expect("anonymous crealm must not POLICY on unexpandable transited");
+}
+
+#[test]
+fn s4u2self_referral_names_header_client() {
+    let (a, b, _c, ir, _host_c, _bc) = three_realm();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
+    let tgt = as_tgt(&a, "A.TEST", 980);
+    let ab = chase_tgs(
+        &a,
+        tgt.rep.0.ticket.clone(),
+        &tgt.session_key,
+        "A.TEST",
+        PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "B.TEST"]),
+        "A.TEST",
+        981,
+    )
+    .expect("A B");
+    let pa = pa_for_user(&ab.session_key, admin, "A.TEST").expect("PA-FOR-USER");
+    let req = tgs_req_ex(
+        ab.rep.0.ticket.clone(),
+        &ab.session_key,
+        "A.TEST",
+        &user,
+        PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "C.TEST"]),
+        "B.TEST",
+        982,
+        KdcOptions::forwardable(),
+        None,
+        vec![pa],
+        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
+    )
+    .expect("s4u referral");
+    let out = krb5_kdc::issue_tgs(&b, &req).expect("cross S4U referral");
+    let part = decrypt_ticket_part(&ir, &out.rep.0.ticket).expect("enc");
+    assert_eq!(part.cname.components_joined(), TEST_USER);
+    assert_eq!(
+        std::str::from_utf8(part.crealm.as_bytes()).unwrap(),
+        "A.TEST"
+    );
+}
+
+#[test]
+fn s4u2self_cross_tgt_local_user_local_server_is_not_cross_realm() {
+    let (_a, _b, c, ir, host_c, bc) = three_realm();
+    let mut t = bc.rep.0.ticket.clone();
+    let mut part = decrypt_ticket_part(&ir, &t).expect("bc");
+    part.cname = host_c.clone();
+    part.crealm = krb5_types::try_ascii("C.TEST").expect("realm");
+    part.authorization_data = None;
+    reseal(&ir, &mut t, &part);
+    let local = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let pa = pa_for_user(&bc.session_key, local, "C.TEST").expect("PA-FOR-USER");
+    let req = tgs_req_ex(
+        t,
+        &bc.session_key,
+        "C.TEST",
+        &host_c,
+        host_c.clone(),
+        "C.TEST",
+        983,
+        KdcOptions::forwardable(),
+        None,
+        vec![pa],
+        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
+    )
+    .expect("s4u");
+    let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
+    assert_eq!(code, err::C_PRINCIPAL_UNKNOWN);
+    assert_eq!(text.as_deref(), Some("NOT_CROSS_REALM_REQUEST"));
 }

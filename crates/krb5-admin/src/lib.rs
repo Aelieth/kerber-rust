@@ -10,7 +10,8 @@ mod kprop;
 mod listen;
 
 use krb5_kdc::{
-    Acl, AdminOp, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PRE_AUTH, NamedPolicy, PrincipalStore,
+    Acl, AdminOp, KDB_LOCKDOWN_KEYS, KDB_OK_TO_AUTH_AS_DELEGATE, KDB_REQUIRES_PRE_AUTH,
+    NamedPolicy, PrincipalStore,
 };
 use krb5_protocol::{Keytab, ReplayCache, verify_ap_req};
 use krb5_types::PrincipalName;
@@ -73,6 +74,7 @@ pub fn kadmin_attr_bit(name: &str) -> Option<u32> {
     match name {
         "requires_preauth" => Some(KDB_REQUIRES_PRE_AUTH),
         "lockdown_keys" => Some(KDB_LOCKDOWN_KEYS),
+        "ok_to_auth_as_delegate" => Some(KDB_OK_TO_AUTH_AS_DELEGATE),
         _ => None,
     }
 }
@@ -1462,6 +1464,8 @@ mod tests {
         assert_eq!(a.name, "host/x");
         let a = parse_kadmin_args(&["+lockdown_keys", "lockee"]).unwrap();
         assert_eq!(a.attr_set, KDB_LOCKDOWN_KEYS);
+        let a = parse_kadmin_args(&["+ok_to_auth_as_delegate", "host/x"]).unwrap();
+        assert_eq!(a.attr_set, KDB_OK_TO_AUTH_AS_DELEGATE);
     }
 
     fn max_kvno(store: &PrincipalStore, name: &PrincipalName) -> u32 {

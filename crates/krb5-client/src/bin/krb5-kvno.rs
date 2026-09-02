@@ -3,7 +3,9 @@
 //! Usage: krb5-kvno [-c ccache] [--disable-transited-check] [kdc-host] <service>
 //!
 //! `--disable-transited-check` is gate-only (MIT `kvno` cannot set bit 26).
-//! `-U`/`-P` (S4U) are not implemented.
+//! `-U <user>` sends PA-FOR-USER (S4U2Self). MIT `kvno -U` also requires the
+//! ccache principal to equal the service; this binary does not, so a user TGT
+//! can present the Y0 mismatch cell. `-P` is not implemented.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -12,15 +14,15 @@ use krb5_asn1::decode;
 use krb5_client::cli::parse_kvno;
 use krb5_client::{load_ccache, store_ccache_keep_default};
 use krb5_config::resolve_ccspec;
-use krb5_protocol::{AsOutcome, KdcAddr, parse_principal, tgs_exchange_ex, tgt_cred};
+use krb5_protocol::{AsOutcome, KdcAddr, parse_principal, tgs_exchange_ex, tgs_s4u, tgt_cred};
 use krb5_types::{
     EncKdcRepPart, EncryptionKey, KerberosTime, PrincipalName, Ticket, TicketFlags, err,
 };
 
 fn main() {
     let raw: Vec<String> = std::env::args().skip(1).collect();
-    if raw.iter().any(|a| a == "-U" || a == "-P") {
-        eprintln!("krb5-kvno: -U/-P (S4U) is not implemented");
+    if raw.iter().any(|a| a == "-P") {
+        eprintln!("krb5-kvno: -P (S4U2Proxy) is not implemented");
         std::process::exit(2);
     }
     let args = parse_kvno(&raw).unwrap_or_else(|e| {
@@ -40,6 +42,7 @@ fn main() {
         args.kdc_host.as_deref(),
         &service,
         args.disable_transited_check,
+        args.for_user.as_deref(),
     ) {
         eprintln!("kvno: {e}");
         std::process::exit(1);
@@ -51,6 +54,10 @@ fn kvno_err(e: krb5_protocol::Error) -> String {
         krb5_protocol::Error::KrbError {
             code: err::POLICY, ..
         } => "KDC policy rejects request".into(),
+        krb5_protocol::Error::KrbError {
+            code: err::BADMATCH,
+            text,
+        } => text.unwrap_or_else(|| "Ticket/authenticator don't match".into()),
         other => other.to_string(),
     }
 }
@@ -85,6 +92,7 @@ fn run(
     kdc_host: Option<&str>,
     service: &str,
     disable_transited_check: bool,
+    for_user: Option<&str>,
 ) -> Result<(), String> {
     let mut cc = load_ccache(spec).map_err(|e| e.to_string())?;
     let (cred, sname, srealm, hop_realm) = {
@@ -150,8 +158,20 @@ fn run(
         cname: cred.client.1.clone(),
         crealm: cred.client.0.clone(),
     };
-    let tgs =
-        tgs_exchange_ex(&addr, &tgt, sname, &srealm, disable_transited_check).map_err(kvno_err)?;
+    let tgs = if let Some(who) = for_user {
+        let (uname, urealm) = if who.contains('@') {
+            parse_principal(who)?
+        } else {
+            (
+                PrincipalName::try_new(PrincipalName::NT_PRINCIPAL, [who])
+                    .map_err(|e| e.to_string())?,
+                srealm.clone(),
+            )
+        };
+        tgs_s4u(&addr, &tgt, sname, &srealm, uname, &urealm).map_err(kvno_err)?
+    } else {
+        tgs_exchange_ex(&addr, &tgt, sname, &srealm, disable_transited_check).map_err(kvno_err)?
+    };
     let kvno = tgs.ticket.enc_part.kvno.unwrap_or(0);
     println!("{service}: kvno = {kvno}");
     cc.creds.push(

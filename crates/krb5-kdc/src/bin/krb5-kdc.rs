@@ -14,9 +14,9 @@
 use std::path::PathBuf;
 
 use krb5_kdc::{
-    Acl, BIND_CANDIDATES, PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER, bind_preferred,
-    documented_changepw, documented_kadmin, documented_kiprop, drop_privileges, open_store, serve,
-    shared_store,
+    Acl, BIND_CANDIDATES, KDB_OK_TO_AUTH_AS_DELEGATE, PrincipalStore, TEST_ADMIN, TEST_REALM,
+    TEST_USER, bind_preferred, documented_changepw, documented_kadmin, documented_kiprop,
+    drop_privileges, open_store, serve, shared_store,
 };
 
 fn main() {
@@ -315,6 +315,18 @@ fn bootstrap_test_realm() -> PrincipalStore {
     if let Err(e) = store.create_host(&acl, &actor, &host) {
         eprintln!("krb5-kdc: host principal: {e}");
         std::process::exit(1);
+    }
+    if std::env::var("KRB5_TEST_OK_TO_AUTH_AS_DELEGATE").as_deref() == Ok("1") {
+        let a = if let Some(p) = store.get_name(&host) {
+            p.attributes | KDB_OK_TO_AUTH_AS_DELEGATE
+        } else {
+            eprintln!("krb5-kdc: host missing after create");
+            std::process::exit(1);
+        };
+        if let Err(e) = store.apply_admin_fields(&host, Some(a), None, None, None, None, false) {
+            eprintln!("krb5-kdc: ok_to_auth_as_delegate: {e}");
+            std::process::exit(1);
+        }
     }
     if let Err(e) = store.create_host(&acl, &actor, &documented_kadmin()) {
         eprintln!("krb5-kdc: kadmin/admin: {e}");

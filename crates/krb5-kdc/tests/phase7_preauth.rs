@@ -9,11 +9,11 @@ use krb5_crypto::{
     encrypt, krb_fx_cf2, octetstring2key, p256_generate, string_to_key,
 };
 use krb5_kdc::{
-    Acl, AdminOp, Error, KDB_DISALLOW_ALL_TIX, NamedPolicy, PrincipalStore, RID_FIRST_USER,
-    S2K_ITERS, TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req,
-    bootstrap_documented, decrypt_ticket_part, documented_admin_id, documented_host,
-    pa_enc_timestamp, pac_from_ticket_part, sign_pac, tgs_req, ticket_checksum_der, verify_pac,
-    verify_pac_signatures, wrap_win2k_pac,
+    Acl, AdminOp, Error, KDB_DISALLOW_ALL_TIX, KDB_OK_TO_AUTH_AS_DELEGATE, NamedPolicy,
+    PrincipalStore, RID_FIRST_USER, S2K_ITERS, TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM,
+    TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented, decrypt_ticket_part,
+    documented_admin_id, documented_host, pa_enc_timestamp, pac_from_ticket_part, sign_pac,
+    tgs_req, ticket_checksum_der, verify_pac, verify_pac_signatures, wrap_win2k_pac,
 };
 use krb5_protocol::{
     apply_strengthen, armor_key, as_req_sname, attach_fast, build_fast_armor, pa_for_user,
@@ -1442,19 +1442,47 @@ fn as_and_tgs_tickets_carry_verifiable_pac() {
     verify_pac(&signed, &host.key, &krbtgt.key).expect("re-sign");
 }
 
+fn issue_host_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
+    let host = documented_host();
+    let key = store
+        .get_name(&host)
+        .unwrap()
+        .best_key()
+        .unwrap()
+        .key
+        .clone();
+    let req = as_req(
+        host,
+        TEST_REALM,
+        nonce,
+        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
+    )
+    .unwrap();
+    krb5_kdc::issue_as(store, &req).expect("host AS")
+}
+
+fn or_host_attr(store: &mut PrincipalStore, bit: u32) {
+    let host = documented_host();
+    let a = store.get_name(&host).unwrap().attributes | bit;
+    store
+        .apply_admin_fields(&host, Some(a), None, None, None, None, false)
+        .unwrap();
+}
+
 #[test]
 fn s4u2self_impersonates_user() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    or_host_attr(&mut store, KDB_OK_TO_AUTH_AS_DELEGATE);
+    let host = documented_host();
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 601);
+    let tgt = issue_host_tgt(&store, 601);
     let pa = pa_for_user(&tgt.session_key, admin.clone(), TEST_REALM).expect("PA-FOR-USER");
     let tgs = tgs_req_ex(
         tgt.rep.0.ticket.clone(),
         &tgt.session_key,
         TEST_REALM,
-        &user,
-        documented_host(),
+        &host,
+        host.clone(),
         TEST_REALM,
         602,
         KdcOptions::forwardable(),
@@ -1465,16 +1493,13 @@ fn s4u2self_impersonates_user() {
     .expect("S4U TGS-REQ");
     let out = krb5_kdc::issue_tgs(&store, &tgs).expect("S4U2Self");
     assert_eq!(out.rep.0.cname.components_joined(), TEST_ADMIN);
-    let host = store
-        .get_name(&documented_host())
-        .unwrap()
-        .best_key()
-        .unwrap();
-    let part: EncTicketPart = decrypt_ticket_part(&host.key, &out.rep.0.ticket).expect("enc");
+    let hostk = store.get_name(&host).unwrap().best_key().unwrap();
+    let part: EncTicketPart = decrypt_ticket_part(&hostk.key, &out.rep.0.ticket).expect("enc");
     assert_eq!(part.cname.components_joined(), TEST_ADMIN);
+    assert!(part.flags.forwardable());
     let pac = pac_from_ticket_part(&part).expect("PAC");
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    verify_pac(&pac, &host.key, &krbtgt.key).expect("S4U PAC");
+    verify_pac(&pac, &hostk.key, &krbtgt.key).expect("S4U PAC");
     let parsed = Pac::parse(&pac).expect("PAC");
     let logon =
         parse_kerb_validation_info(parsed.buffer(PAC_LOGON_INFO).expect("logon")).expect("NDR");
@@ -1482,16 +1507,143 @@ fn s4u2self_impersonates_user() {
     assert_ne!(logon.user_id, RID_FIRST_USER);
 }
 
-fn s4u2self_tgs(store: &PrincipalStore, for_user: PrincipalName, nonce: u32) -> krb5_types::TgsReq {
+#[test]
+fn s4u2self_user_tgt_host_sname_is_badmatch() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt(store, TEST_USER, TEST_USER_PASSWORD, nonce);
-    let pa = pa_for_user(&tgt.session_key, for_user, TEST_REALM).expect("PA-FOR-USER");
-    tgs_req_ex(
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
+    let tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 640);
+    let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).expect("PA-FOR-USER");
+    let tgs = tgs_req_ex(
         tgt.rep.0.ticket.clone(),
         &tgt.session_key,
         TEST_REALM,
         &user,
         documented_host(),
+        TEST_REALM,
+        641,
+        KdcOptions::forwardable(),
+        None,
+        vec![pa],
+        pref_etypes(),
+    )
+    .expect("S4U TGS-REQ");
+    let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::BADMATCH);
+            assert_eq!(
+                text.as_deref(),
+                Some("INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH")
+            );
+        }
+        other => panic!("expected BADMATCH, got {other:?}"),
+    }
+}
+
+#[test]
+fn s4u2self_clears_forwardable_without_ok_to_auth() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let host = documented_host();
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
+    let tgt = issue_host_tgt(&store, 650);
+    let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).expect("PA-FOR-USER");
+    let tgs = tgs_req_ex(
+        tgt.rep.0.ticket.clone(),
+        &tgt.session_key,
+        TEST_REALM,
+        &host,
+        host.clone(),
+        TEST_REALM,
+        651,
+        KdcOptions::forwardable(),
+        None,
+        vec![pa],
+        pref_etypes(),
+    )
+    .expect("S4U TGS-REQ");
+    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("S4U2Self");
+    let hostk = store.get_name(&host).unwrap().best_key().unwrap();
+    let part: EncTicketPart = decrypt_ticket_part(&hostk.key, &out.rep.0.ticket).expect("enc");
+    assert!(!part.flags.forwardable());
+}
+
+#[test]
+fn s4u2self_local_tgt_referral_is_looking_up_server() {
+    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
+    let ir = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x11; 32]).unwrap();
+    store
+        .create_interrealm_key(&acl, &documented_admin_id(), "OTHER.TEST", ir)
+        .expect("interrealm");
+    let host = documented_host();
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
+    let tgt = issue_host_tgt(&store, 660);
+    let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).expect("PA-FOR-USER");
+    let tgs = tgs_req_ex(
+        tgt.rep.0.ticket.clone(),
+        &tgt.session_key,
+        TEST_REALM,
+        &host,
+        PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "OTHER.TEST"]),
+        TEST_REALM,
+        661,
+        KdcOptions::forwardable(),
+        None,
+        vec![pa],
+        pref_etypes(),
+    )
+    .expect("S4U TGS-REQ");
+    let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::S_PRINCIPAL_UNKNOWN);
+            assert_eq!(text.as_deref(), Some("LOOKING_UP_SERVER"));
+        }
+        other => panic!("expected 7 LOOKING_UP_SERVER, got {other:?}"),
+    }
+}
+
+#[test]
+fn s4u2self_local_tgt_foreign_user_is_not_ours() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let host = documented_host();
+    let foreign = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["alice"]);
+    let tgt = issue_host_tgt(&store, 670);
+    let pa = pa_for_user(&tgt.session_key, foreign, "OTHER.TEST").expect("PA-FOR-USER");
+    let tgs = tgs_req_ex(
+        tgt.rep.0.ticket.clone(),
+        &tgt.session_key,
+        TEST_REALM,
+        &host,
+        host.clone(),
+        TEST_REALM,
+        671,
+        KdcOptions::forwardable(),
+        None,
+        vec![pa],
+        pref_etypes(),
+    )
+    .expect("S4U TGS-REQ");
+    let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::POLICY);
+            assert_eq!(text.as_deref(), Some("S4U2SELF_CLIENT_NOT_OURS"));
+        }
+        other => panic!("expected POLICY S4U2SELF_CLIENT_NOT_OURS, got {other:?}"),
+    }
+}
+
+fn s4u2self_tgs(store: &PrincipalStore, for_user: PrincipalName, nonce: u32) -> krb5_types::TgsReq {
+    let host = documented_host();
+    let tgt = issue_host_tgt(store, nonce);
+    let pa = pa_for_user(&tgt.session_key, for_user, TEST_REALM).expect("PA-FOR-USER");
+    tgs_req_ex(
+        tgt.rep.0.ticket.clone(),
+        &tgt.session_key,
+        TEST_REALM,
+        &host,
+        host.clone(),
         TEST_REALM,
         nonce + 1,
         KdcOptions::forwardable(),

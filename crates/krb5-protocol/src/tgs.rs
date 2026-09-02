@@ -96,7 +96,26 @@ pub fn tgs_renew(kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> {
         KdcOptions::none()
             .with_bit(flag_bit::RENEW, true)
             .with_bit(flag_bit::CANONICALIZE, true),
+        &[],
     )
+}
+
+/// TGS-REQ with PA-FOR-USER (S4U2Self). The KDC enforces that `sname` is the
+/// TGT client; this helper does not.
+///
+/// # Errors
+///
+/// Transport, crypto, or `KRB-ERROR` failures.
+pub fn tgs_s4u(
+    kdc: &KdcAddr,
+    tgt: &AsOutcome,
+    sname: PrincipalName,
+    realm: &str,
+    for_user: PrincipalName,
+    for_realm: &str,
+) -> Result<TgsOutcome, Error> {
+    let pa = crate::pa_for_user(&tgt.session_key, for_user, for_realm)?;
+    tgs_once(kdc, tgt, sname, realm, tgs_kdc_options(tgt), &[pa])
 }
 
 /// MIT `krb5_get_credentials`: copy F/P from the TGT into TGS-REQ options.
@@ -123,7 +142,7 @@ fn tgs_inner(
         if disable_transited_check && cur_tgt.ticket.sname.is_krbtgt_for(realm) {
             opts = opts.with_bit(flag_bit::DISABLE_TRANSITED_CHECK, true);
         }
-        let out = tgs_once(&cur_kdc, &cur_tgt, sname.clone(), &hop_realm, opts)?;
+        let out = tgs_once(&cur_kdc, &cur_tgt, sname.clone(), &hop_realm, opts, &[])?;
         match tgs_hop_decision(sname, &hop_realm, &out)? {
             TgsHop::Done => return Ok(out),
             TgsHop::Referral(foreign) => {
@@ -236,6 +255,7 @@ fn tgs_once(
     sname: PrincipalName,
     realm: &str,
     kdc_options: KdcOptions,
+    extra_padata: &[PaData],
 ) -> Result<TgsOutcome, Error> {
     let nonce = random_nonce31()?;
     let till = KerberosTime(tgt.enc_part.endtime.0);
@@ -291,10 +311,11 @@ fn tgs_once(
     };
     // FAST armor AP-REQ uses key-usage 11; PA-TGS-REQ uses usage 7. MIT
     // FIND_FAST fails if the armor AP-REQ is the TGS authenticator.
-    let padata = vec![PaData {
+    let mut padata = vec![PaData {
         padata_type: pa::TGS_REQ,
         padata_value: encode(&ap_req)?.into(),
     }];
+    padata.extend_from_slice(extra_padata);
     let tgs = TgsReq(KdcReq {
         pvno: KdcReq::PVNO,
         msg_type: KdcReq::MSG_TGS_REQ,

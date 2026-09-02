@@ -348,6 +348,9 @@ pub struct KvnoArgs {
     pub services: Vec<String>,
     /// `--disable-transited-check` (gate-only; MIT `kvno` cannot set bit 26).
     pub disable_transited_check: bool,
+    /// `-U` impersonated user (S4U2Self). Unlike MIT `kvno`, the ccache
+    /// principal need not equal the service; the KDC enforces that.
+    pub for_user: Option<String>,
 }
 
 fn kvno_longs() -> &'static [LongOpt] {
@@ -364,7 +367,7 @@ fn kvno_longs() -> &'static [LongOpt] {
 ///
 /// Unknown option or missing argument.
 pub fn parse_kvno(args: &[String]) -> Result<KvnoArgs, String> {
-    let (opts, rest) = getopt(args, "c:", kvno_longs())?;
+    let (opts, rest) = getopt(args, "c:U:", kvno_longs())?;
     let mut out = KvnoArgs::default();
     for o in opts {
         if o.long == Some("disable-transited-check") {
@@ -373,6 +376,7 @@ pub fn parse_kvno(args: &[String]) -> Result<KvnoArgs, String> {
         }
         match o.flag {
             'c' => out.ccache = o.arg,
+            'U' => out.for_user = o.arg,
             _ => return Err(format!("invalid option -- '{}'", o.flag)),
         }
     }
@@ -510,6 +514,8 @@ mod tests {
         assert_eq!(a.services, vec!["host/x@R".to_string()]);
         let b = parse_kvno(&s(&["-c", "/tmp/cc", "host/x@R"])).unwrap();
         assert!(!b.disable_transited_check);
+        let u = parse_kvno(&s(&["-U", "admin", "host/x@R"])).unwrap();
+        assert_eq!(u.for_user.as_deref(), Some("admin"));
     }
 
     #[test]

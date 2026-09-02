@@ -27,8 +27,8 @@ use crate::preauth::{
 use crate::store::{
     KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED, KDB_DISALLOW_PROXIABLE,
     KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_NO_AUTH_DATA_REQUIRED,
-    KDB_OK_AS_DELEGATE, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PWCHANGE,
-    Principal, random_key, s2k_params,
+    KDB_OK_AS_DELEGATE, KDB_OK_TO_AUTH_AS_DELEGATE, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH,
+    KDB_REQUIRES_PWCHANGE, Principal, random_key, s2k_params,
 };
 
 /// Issued AS-REP plus the session key (for tests that decrypt the TGT).
@@ -669,10 +669,36 @@ fn issue_tgs_body(
     let mut ticket_cname = enc_tkt.cname.clone();
     let mut ticket_crealm = utf8_realm(&enc_tkt.crealm)?.to_owned();
     let mut evidence_logon = None;
+    let mut s4u2self = false;
     if let Some((user, realm)) = s4u2self_client(&tgt_session, tgs_padata)? {
-        check_s4u2self_for_user(store, &user, &server)?;
-        ticket_cname = user;
-        ticket_crealm = realm;
+        let header_cross = utf8_realm(&ap.ticket.realm)? != store.realm();
+        let is_referral = sname.is_krbtgt() && !sname.is_krbtgt_for(store.realm());
+        let local_user = if realm == store.realm() {
+            Some(
+                store
+                    .fetch_name(&user)?
+                    .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, "S4U2Self"))?,
+            )
+        } else {
+            None
+        };
+        check_tgs_s4u2self(
+            &server,
+            &enc_tkt,
+            body,
+            local_user.is_some(),
+            header_cross,
+            is_referral,
+        )?;
+        if let Some(ref for_p) = local_user {
+            check_s4u2self_locked(for_p, &server)?;
+        }
+        // Referral TGTs name the header client (MIT do_tgs_req.c:758-759).
+        if !is_referral {
+            ticket_cname = user;
+            ticket_crealm = realm;
+        }
+        s4u2self = true;
     } else if let Some((cn, logon)) = s4u2proxy_client(store, req, &enc_tkt.cname, tgs_padata)? {
         ticket_cname = cn;
         evidence_logon = Some(logon);
@@ -804,6 +830,9 @@ fn issue_tgs_body(
     }
     if attr(&server, KDB_OK_AS_DELEGATE) {
         flags = flags.with_bit(flag_bit::OK_AS_DELEGATE, true);
+    }
+    if s4u2self && !attr(&server, KDB_OK_TO_AUTH_AS_DELEGATE) {
+        flags = flags.with_bit(flag_bit::FORWARDABLE, false);
     }
     let krbtgt_p = store
         .fetch_krbtgt()?
@@ -1534,19 +1563,50 @@ fn proto(code: i32, text: &str) -> Error {
     }
 }
 
-/// MIT `kdc_process_s4u2self_req`: look up the impersonated client.
-fn check_s4u2self_for_user(
-    store: &dyn PrincipalRead,
-    user: &PrincipalName,
+/// MIT `check_tgs_s4u2self` (`tgs_policy.c`).
+fn check_tgs_s4u2self(
     server: &Principal,
+    enc_tkt: &EncTicketPart,
+    body: &krb5_types::KdcReqBody,
+    local_user: bool,
+    header_cross: bool,
+    is_referral: bool,
 ) -> Result<(), Error> {
-    let for_p = store
-        .fetch_name(user)?
-        .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, "S4U2Self"))?;
-    if for_p.locked || attr(&for_p, KDB_DISALLOW_ALL_TIX) {
+    if !is_referral && server.name.components_joined() != enc_tkt.cname.components_joined() {
+        return Err(proto(
+            err::BADMATCH,
+            "INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH",
+        ));
+    }
+    if s4u2self_as_invalid_options(body) {
+        return Err(proto(err::BADOPTION, "INVALID S4U2SELF OPTIONS"));
+    }
+    if !header_cross && is_referral {
+        return Err(proto(err::S_PRINCIPAL_UNKNOWN, "LOOKING_UP_SERVER"));
+    }
+    if local_user && header_cross && !is_referral {
+        return Err(proto(err::C_PRINCIPAL_UNKNOWN, "NOT_CROSS_REALM_REQUEST"));
+    }
+    if !local_user && !header_cross {
+        return Err(proto(err::POLICY, "S4U2SELF_CLIENT_NOT_OURS"));
+    }
+    Ok(())
+}
+
+fn s4u2self_as_invalid_options(body: &krb5_types::KdcReqBody) -> bool {
+    body.kdc_options.bit(flag_bit::FORWARDED)
+        || body.kdc_options.bit(flag_bit::PROXY)
+        || body.kdc_options.bit(flag_bit::VALIDATE)
+        || body.kdc_options.bit(flag_bit::RENEW)
+        || body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY)
+        || body.kdc_options.bit(flag_bit::CNAME_IN_ADDL_TKT)
+}
+
+fn check_s4u2self_locked(for_p: &Principal, server: &Principal) -> Result<(), Error> {
+    if for_p.locked || attr(for_p, KDB_DISALLOW_ALL_TIX) {
         return Err(proto(err::CLIENT_REVOKED, "S4U2Self locked"));
     }
-    check_db_times(Some(&for_p), server)
+    check_db_times(Some(for_p), server)
 }
 
 /// MIT `validate_as_request`: 0 = never; principal expiry before password expiry.
