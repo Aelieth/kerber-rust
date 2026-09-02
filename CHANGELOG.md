@@ -22,6 +22,12 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0 C6 (MIT-gated).** Referral chase rejects a hop back to the start
+  realm and a repeated realm (`ReplyMismatch`); hop cap is 10
+  (`KRB5_REFERRAL_MAXHOPS`). Asked-for path TGTs are stored (MIT `kvno`
+  keeps `krbtgt/C.TEST@B.TEST`, not an unasked `krbtgt/B.TEST@A.TEST`).
+  Gate: `scripts/capaths-transit-gate.sh` bare-A-TGT `klist`.
+
 - **W0 C5 (MIT-gated, test-gap).** Local and cross krbtgt `DISALLOW_SVR`
   / `DISALLOW_ALL_TIX` are 7 `PROCESS_TGS` on the presented-TGT decrypt
   (`kdc_get_server_key`). `--test-realm` honours

@@ -15,7 +15,7 @@ use krb5_protocol::{
     AsOutcome, AsRequest, AsTicketOpts, FastArmor, KdcAddr, PkinitClient, TgsOutcome, as_exchange,
     as_exchange_with_keys, dir_cache_path, dir_cache_path_for_store, kcm_destroy, kcm_load,
     kcm_store, kcm_store_keep_default, memory_destroy, memory_retrieve, memory_store,
-    parse_principal_ex, tgs_exchange, tgs_renew,
+    parse_principal_ex, tgs_exchange_path, tgs_renew,
 };
 use krb5_types::{PrincipalName, Ticket};
 use zeroize::Zeroize;
@@ -393,8 +393,17 @@ fn kinit_inner(
         };
         let parts: Vec<&str> = svc_name.split('/').collect();
         let sname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, parts);
-        match tgs_exchange(&resolved, &as_out, sname, &svc_realm) {
-            Ok(tgs) => {
+        match tgs_exchange_path(&resolved, &as_out, sname, &svc_realm, false) {
+            Ok((tgs, path)) => {
+                for p in path {
+                    creds.push(tgt_cred(
+                        &p.crealm,
+                        &p.cname,
+                        &p.ticket,
+                        &p.session_key,
+                        &p.enc_part,
+                    )?);
+                }
                 creds.push(tgt_cred(
                     &as_out.crealm,
                     &as_out.cname,

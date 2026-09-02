@@ -17,7 +17,7 @@ use krb5_client::cli::parse_kvno;
 use krb5_client::{load_ccache, store_ccache_keep_default};
 use krb5_config::resolve_ccspec;
 use krb5_protocol::{
-    AsOutcome, KdcAddr, parse_principal, tgs_exchange_ex, tgs_exchange_once, tgs_s4u, tgt_cred,
+    AsOutcome, KdcAddr, parse_principal, tgs_exchange_once, tgs_exchange_path, tgs_s4u, tgt_cred,
 };
 use krb5_types::{
     EncKdcRepPart, EncryptionKey, KerberosTime, PrincipalName, Ticket, TicketFlags, err,
@@ -180,7 +180,15 @@ fn run(
         tgs_exchange_once(&addr, &tgt, sname, br, disable_transited_check, renew)
             .map_err(kvno_err)?
     } else {
-        tgs_exchange_ex(&addr, &tgt, sname, &srealm, disable_transited_check).map_err(kvno_err)?
+        let (tgs, path) = tgs_exchange_path(&addr, &tgt, sname, &srealm, disable_transited_check)
+            .map_err(kvno_err)?;
+        for p in path {
+            cc.creds.push(
+                tgt_cred(&p.crealm, &p.cname, &p.ticket, &p.session_key, &p.enc_part)
+                    .map_err(|e| e.to_string())?,
+            );
+        }
+        tgs
     };
     let kvno = tgs.ticket.enc_part.kvno.unwrap_or(0);
     println!("{service}: kvno = {kvno}");

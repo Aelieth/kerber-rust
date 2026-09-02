@@ -16,6 +16,9 @@ use crate::error::Error;
 
 use crate::transport::{KdcAddr, exchange};
 
+/// MIT `KRB5_REFERRAL_MAXHOPS` (`k5-int.h`).
+const REFERRAL_MAX_HOPS: usize = 10;
+
 /// Successful TGS exchange.
 #[derive(Clone, Debug)]
 pub struct TgsOutcome {
@@ -56,29 +59,7 @@ pub fn tgs_exchange_ex(
     realm: &str,
     disable_transited_check: bool,
 ) -> Result<TgsOutcome, Error> {
-    let correlation_id = krb5_log::new_correlation_id();
-    let _g = krb5_log::enter_correlation(correlation_id.clone());
-    let started = Instant::now();
-    let result = tgs_inner(kdc, tgt, &sname, realm, disable_transited_check);
-    let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
-    match &result {
-        Ok(_) => tracing::info!(
-            event = krb5_log::events::PROTOCOL_TGS,
-            correlation_id,
-            component = "krb5-protocol",
-            duration_us,
-            outcome = "ok",
-        ),
-        Err(e) => tracing::error!(
-            event = krb5_log::events::PROTOCOL_TGS,
-            correlation_id,
-            component = "krb5-protocol",
-            duration_us,
-            outcome = "error",
-            error = %e,
-        ),
-    }
-    result
+    Ok(tgs_exchange_path(kdc, tgt, sname, realm, disable_transited_check)?.0)
 }
 
 /// One TGS-REQ; `realm` is `body.realm`. No capaths/referral chase.
@@ -106,6 +87,44 @@ pub fn tgs_exchange_once(
         opts = opts.with_bit(flag_bit::RENEW, true);
     }
     tgs_once(kdc, tgt, sname, realm, opts, &[])
+}
+
+/// Like [`tgs_exchange_ex`], also returning asked-for path TGTs to cache.
+///
+/// # Errors
+///
+/// Returns transport, crypto, or `KRB-ERROR` failures.
+#[allow(clippy::needless_pass_by_value)]
+pub fn tgs_exchange_path(
+    kdc: &KdcAddr,
+    tgt: &AsOutcome,
+    sname: PrincipalName,
+    realm: &str,
+    disable_transited_check: bool,
+) -> Result<(TgsOutcome, Vec<AsOutcome>), Error> {
+    let correlation_id = krb5_log::new_correlation_id();
+    let _g = krb5_log::enter_correlation(correlation_id.clone());
+    let started = Instant::now();
+    let result = tgs_inner(kdc, tgt, &sname, realm, disable_transited_check);
+    let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+    match &result {
+        Ok(_) => tracing::info!(
+            event = krb5_log::events::PROTOCOL_TGS,
+            correlation_id,
+            component = "krb5-protocol",
+            duration_us,
+            outcome = "ok",
+        ),
+        Err(e) => tracing::error!(
+            event = krb5_log::events::PROTOCOL_TGS,
+            correlation_id,
+            component = "krb5-protocol",
+            duration_us,
+            outcome = "error",
+            error = %e,
+        ),
+    }
+    result
 }
 
 /// TGS-REQ with KDC option `renew` for `kinit -R`.
@@ -161,25 +180,30 @@ fn tgs_inner(
     sname: &PrincipalName,
     realm: &str,
     disable_transited_check: bool,
-) -> Result<TgsOutcome, Error> {
+) -> Result<(TgsOutcome, Vec<AsOutcome>), Error> {
     let capaths = krb5_config::load_krb5_conf()
         .map(|c| c.capaths)
         .unwrap_or_default();
+    let start = tgt_served_realm(tgt);
     let mut cur_kdc = kdc.clone();
     let mut cur_tgt = tgt.clone();
+    let mut path = Vec::new();
     if tgt_served_realm(&cur_tgt) != realm {
-        cur_tgt = get_dest_tgt(kdc, &cur_tgt, realm, &capaths)?;
+        let (dest, hops) = get_dest_tgt(kdc, &cur_tgt, realm, &capaths)?;
+        cur_tgt = dest;
+        path = hops;
         cur_kdc = kdc_for_realm(&tgt_served_realm(&cur_tgt), kdc);
     }
-    for _ in 0..8 {
+    let mut seen = vec![start.clone()];
+    for _ in 0..REFERRAL_MAX_HOPS {
         let served = tgt_served_realm(&cur_tgt);
         let mut opts = tgs_kdc_options(&cur_tgt);
         if disable_transited_check && cur_tgt.ticket.sname.is_krbtgt_for(realm) {
             opts = opts.with_bit(flag_bit::DISABLE_TRANSITED_CHECK, true);
         }
         let out = tgs_once(&cur_kdc, &cur_tgt, sname.clone(), &served, opts, &[])?;
-        match tgs_hop_decision(sname, &served, &out)? {
-            TgsHop::Done => return Ok(out),
+        match chase_step(&start, &mut seen, sname, &served, &out)? {
+            TgsHop::Done => return Ok((out, path)),
             TgsHop::Referral(foreign) => {
                 cur_kdc = kdc_for_realm(&foreign, kdc);
                 cur_tgt = tgs_as_tgt(&cur_tgt, out);
@@ -205,16 +229,18 @@ fn get_dest_tgt(
     tgt: &AsOutcome,
     dest: &str,
     capaths: &BTreeMap<String, BTreeMap<String, Vec<String>>>,
-) -> Result<AsOutcome, Error> {
+) -> Result<(AsOutcome, Vec<AsOutcome>), Error> {
     let start = tgt_served_realm(tgt);
     let path = krb5_config::client_realm_path(capaths, &start, dest);
+    let mut seen = vec![start.clone()];
+    let mut cached = Vec::new();
     let mut cur_kdc = kdc.clone();
     let mut cur_tgt = tgt.clone();
     let mut next = dest.to_owned();
-    for _ in 0..8 {
+    for _ in 0..REFERRAL_MAX_HOPS {
         let served = tgt_served_realm(&cur_tgt);
         if served == dest {
-            return Ok(cur_tgt);
+            return Ok((cur_tgt, cached));
         }
         let hop = PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", next.as_str()])
             .map_err(|e| Error::ReplyMismatch(e.to_string()))?;
@@ -227,7 +253,10 @@ fn get_dest_tgt(
             &[],
         ) {
             Ok(out) => {
-                tgs_hop_decision(&hop, &served, &out)?;
+                chase_step(&start, &mut seen, &hop, &served, &out)?;
+                if asked_for_hop(&hop, &out) {
+                    cached.push(tgs_as_tgt(&cur_tgt, out.clone()));
+                }
                 cur_tgt = tgs_as_tgt(&cur_tgt, out);
                 cur_kdc = kdc_for_realm(&tgt_served_realm(&cur_tgt), kdc);
                 dest.clone_into(&mut next);
@@ -299,6 +328,35 @@ pub(crate) enum TgsHop {
     Done,
     /// Chase `krbtgt/FOREIGN`; next `body.realm` is this string.
     Referral(String),
+}
+
+fn asked_for_hop(requested: &PrincipalName, out: &TgsOutcome) -> bool {
+    out.ticket.sname == *requested || out.enc_part.sname == *requested
+}
+
+/// Per-chase hop: start-realm bounce and repeated realm are ReplyMismatch.
+fn chase_step(
+    start: &str,
+    seen: &mut Vec<String>,
+    requested: &PrincipalName,
+    hop_realm: &str,
+    out: &TgsOutcome,
+) -> Result<TgsHop, Error> {
+    match tgs_hop_decision(requested, hop_realm, out)? {
+        TgsHop::Done => Ok(TgsHop::Done),
+        TgsHop::Referral(foreign) => {
+            if foreign == start {
+                return Err(Error::ReplyMismatch(
+                    "referred back to the start realm".into(),
+                ));
+            }
+            if seen.iter().any(|r| r == &foreign) {
+                return Err(Error::ReplyMismatch("referral loop".into()));
+            }
+            seen.push(foreign.clone());
+            Ok(TgsHop::Referral(foreign))
+        }
+    }
 }
 
 /// Authenticate `srealm` then decide whether this TGS-REP is a referral hop.
@@ -651,5 +709,40 @@ mod tests {
         assert!(with_p.bit(flag_bit::FORWARDABLE));
         let without = tgs_kdc_options(&tgt_with_proxiable(false));
         assert!(!without.bit(flag_bit::PROXIABLE));
+    }
+
+    #[test]
+    fn chase_step_start_realm_referral_is_reply_mismatch() {
+        let want = PrincipalName::krbtgt("C.TEST");
+        let back = PrincipalName::krbtgt("A.TEST");
+        let out = outcome("A.TEST", back, "A.TEST");
+        let mut seen = vec!["A.TEST".into()];
+        let err = chase_step("A.TEST", &mut seen, &want, "B.TEST", &out).unwrap_err();
+        match err {
+            Error::ReplyMismatch(s) => assert!(s.contains("start realm"), "{s}"),
+            other => panic!("expected ReplyMismatch start realm, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn chase_step_repeated_realm_is_reply_mismatch() {
+        let want = PrincipalName::krbtgt("C.TEST");
+        let again = PrincipalName::krbtgt("B.TEST");
+        let out = outcome("B.TEST", again, "B.TEST");
+        let mut seen = vec!["A.TEST".into(), "B.TEST".into()];
+        let err = chase_step("A.TEST", &mut seen, &want, "C.TEST", &out).unwrap_err();
+        match err {
+            Error::ReplyMismatch(s) => assert!(s.contains("referral loop"), "{s}"),
+            other => panic!("expected ReplyMismatch referral loop, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn chase_step_asked_for_hop_is_cached() {
+        let want = PrincipalName::krbtgt("C.TEST");
+        let got_c = outcome("C.TEST", want.clone(), "B.TEST");
+        assert!(asked_for_hop(&want, &got_c));
+        let got_b = outcome("B.TEST", PrincipalName::krbtgt("B.TEST"), "A.TEST");
+        assert!(!asked_for_hop(&want, &got_b));
     }
 }

@@ -537,6 +537,21 @@ if docker exec "$NAME" sh -c "tail -n +$((na + 1)) /tmp/mit-a.log | grep -q GET_
     docker exec "$NAME" sh -c "tail -n +$((na + 1)) /tmp/mit-a.log" >&2 || true
     exit 1
 fi
+echo "==== path-TGT cache equals MIT kvno ===="
+MITKL="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" klist -c /tmp/krb5cc_mit)"
+RUSTKL="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" klist -c /tmp/krb5cc_rust_bare)"
+echo "$MITKL"
+echo "$RUSTKL"
+echo "$MITKL" | grep -q 'krbtgt/C.TEST@B.TEST'
+echo "$RUSTKL" | grep -q 'krbtgt/C.TEST@B.TEST'
+if echo "$MITKL" | grep -q 'krbtgt/B.TEST@A.TEST'; then
+    echo "MIT cached unasked B TGT" >&2
+    exit 1
+fi
+if echo "$RUSTKL" | grep -q 'krbtgt/B.TEST@A.TEST'; then
+    echo "Rust cached unasked B TGT" >&2
+    exit 1
+fi
 
 echo "==== MIT C rejects forged ticket.realm on B-sealed TGT ===="
 seed_c_tgt /tmp/krb5cc_mit_forge
