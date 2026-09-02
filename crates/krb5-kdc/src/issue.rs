@@ -671,14 +671,20 @@ fn issue_tgs_body(
     // previous hop) unless that realm is the client or the requested server.
     let prev_hop = utf8_realm(&ap.ticket.realm);
     let crealm = utf8_realm(&enc_tkt.crealm);
-    if prev_hop != crealm && prev_hop != req_realm.as_str() {
-        transited = transited.with_realm(prev_hop);
+    let add_path = prev_hop != crealm && prev_hop != req_realm.as_str();
+    if add_path {
+        if transited.tr_type != 1 {
+            return Err(proto(err::TRTYPE_NOSUPP, "VALIDATE_TRANSIT_TYPE"));
+        }
+        transited = transited
+            .append_realm(prev_hop, crealm, req_realm.as_str())
+            .map_err(|_| proto(err::ILL_CR_TKT, "ADD_TO_TRANSITED_LIST"))?;
     }
-    let transit_checked = store.policy().transit_allowed(
-        utf8_realm(&enc_tkt.crealm),
-        &req_realm,
-        &transited.realms(),
-    );
+    let hops = transited.realms_for(crealm, req_realm.as_str());
+    let transit_checked = match &hops {
+        Ok(h) => store.policy().transit_allowed(crealm, &req_realm, h),
+        Err(_) => false,
+    };
     // MIT do_tgs_req: skip leaves T unset; default reject_bad_transit
     // then POLICY. RENEW/VALIDATE keep the header T (get_ticket_flags).
     let inherited_t = (renew || validate) && enc_tkt.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED);

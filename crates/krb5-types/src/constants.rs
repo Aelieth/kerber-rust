@@ -90,6 +90,8 @@ pub mod err {
     pub const UNKNOWN_CRITICAL_FAST_OPTION: i32 = 93;
     /// KRB_AP_ERR_BADORDER
     pub const BADORDER: i32 = 42;
+    /// KRB_AP_ERR_ILL_CR_TKT
+    pub const ILL_CR_TKT: i32 = 43;
     /// KRB_AP_ERR_BADKEYVER
     pub const BADKEYVER: i32 = 44;
     /// KRB_AP_ERR_NOKEY

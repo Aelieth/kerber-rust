@@ -144,7 +144,13 @@ fn main() -> ExitCode {
                 );
                 println!("transited_tr_type={}", part.transited.tr_type);
                 println!("transited_contents={contents}");
-                println!("transited_realms={}", part.transited.realms().join(","));
+                let crealm = std::str::from_utf8(part.crealm.as_bytes()).unwrap_or("");
+                let srealm = std::str::from_utf8(ticket.realm.as_bytes()).unwrap_or("");
+                let hops = part
+                    .transited
+                    .realms_for(crealm, srealm)
+                    .unwrap_or_default();
+                println!("transited_realms={}", hops.join(","));
                 println!("transited_policy_checked={checked}");
                 if out.is_none() {
                     return ExitCode::SUCCESS;

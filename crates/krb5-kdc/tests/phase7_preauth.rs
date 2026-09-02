@@ -1911,9 +1911,12 @@ fn tgs_referral_uses_interrealm_key_and_transited() {
     let ir = store.get_name(&other).unwrap().best_key().unwrap();
     let part = decrypt_ticket_part(&ir.key, &out.rep.0.ticket).expect("inter-realm enc");
     assert!(
-        part.transited.realms().is_empty(),
+        part.transited
+            .realms_for(TEST_REALM, "OTHER.TEST")
+            .expect("expand")
+            .is_empty(),
         "first-hop referral transited excludes client realm: {:?}",
-        part.transited.realms()
+        part.transited.realms_for(TEST_REALM, "OTHER.TEST")
     );
 }
 
@@ -2102,9 +2105,12 @@ fn tgs_referral_ad_kerber_test_issues_krbtgt() {
     let ir = store.get_name(&ir_name).unwrap().best_key().unwrap();
     let part = decrypt_ticket_part(&ir.key, &out.rep.0.ticket).expect("inter-realm enc");
     assert!(
-        part.transited.realms().is_empty(),
+        part.transited
+            .realms_for(TEST_REALM, "AD.KERBER.TEST")
+            .expect("expand")
+            .is_empty(),
         "first-hop referral transited excludes client realm: {:?}",
-        part.transited.realms()
+        part.transited.realms_for(TEST_REALM, "AD.KERBER.TEST")
     );
 }
 

@@ -938,14 +938,25 @@ pub struct TransitedEncoding {
     pub contents: OctetString,
 }
 
+/// DOMAIN-X500-COMPRESS expansion failure (`chk_trans.c` / Rust comma cap).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum TransitError {
+    /// Raw field ≥ 512 unescaped bytes, or joined component > 512.
+    #[error("transited field too long")]
+    FieldTooLong,
+    /// More than 256 commas (Rust-STRICTER; MIT has no field-count cap).
+    #[error("too many transited fields")]
+    TooManyFields,
+    /// Null-subfield neighbours are mixed X.500/domain or non-hierarchical.
+    #[error("transited intermediates invalid")]
+    BadIntermediates,
+}
+
 impl TransitedEncoding {
-    /// Empty encoding (type 0, no realms).
+    /// Empty DOMAIN-X500-COMPRESS encoding (MIT AS `tr_type = 1`).
     #[must_use]
     pub fn empty() -> Self {
-        Self {
-            tr_type: 0,
-            contents: OctetString::from(Vec::<u8>::new()),
-        }
+        Self::from_realms(&[])
     }
 
     /// DOMAIN-X500-COMPRESS (`tr-type` 1): comma-separated DNS realms matching
@@ -960,43 +971,89 @@ impl TransitedEncoding {
     }
 
     /// Realm names in `contents`. `tr-type` 1 is RFC 4120 §3.3.3.2
-    /// DOMAIN-X500-COMPRESS. MIT-verified (`chk_trans.c` `maybe_join`):
-    /// join on the unescaped field (trailing `.` suffix, leading `/`
-    /// prefix), including an escaped marker. More than 256 commas, or
-    /// a joined component over MIT `MAXLEN` 512 bytes, yields a single
-    /// `"\0"` hop — `do_tgs_req` collapses that failure to POLICY.
-    /// Encode stays uncompressed ([`Self::from_realms`]).
-    #[must_use]
-    pub fn realms(&self) -> Vec<String> {
-        expand_domain_x500(self.contents.as_ref())
+    /// DOMAIN-X500-COMPRESS. MIT `chk_trans.c`: strip one trailing NUL;
+    /// raw field ≥ 512 or joined > 512 is an error; join on unescaped
+    /// text. More than 256 commas is a Rust-STRICTER error. Encode stays
+    /// uncompressed ([`Self::from_realms`]).
+    ///
+    /// # Errors
+    ///
+    /// Bound or structure failure. A lone NUL is the empty list, not an error.
+    pub fn realms_for(&self, crealm: &str, srealm: &str) -> Result<Vec<String>, TransitError> {
+        expand_domain_x500(self.contents.as_ref(), crealm, srealm)
     }
 
-    /// Append `realm` if it is not already present.
-    #[must_use]
-    pub fn with_realm(&self, realm: &str) -> Self {
-        let mut rs = self.realms();
-        if !rs.iter().any(|r| r == realm) {
-            rs.push(realm.to_owned());
+    /// Append `realm` onto the original contents (MIT `add_to_transited`
+    /// concatenation + space before a `/`-leading realm). Escapes `\\`
+    /// and `,` in `realm`. Does not expand-then-rejoin.
+    ///
+    /// # Errors
+    ///
+    /// Inbound expansion failure.
+    pub fn append_realm(
+        &self,
+        realm: &str,
+        crealm: &str,
+        srealm: &str,
+    ) -> Result<Self, TransitError> {
+        let hops = self.realms_for(crealm, srealm)?;
+        if hops.iter().any(|h| h == realm) {
+            return Ok(self.clone());
         }
-        let refs: Vec<&str> = rs.iter().map(String::as_str).collect();
-        Self::from_realms(&refs)
+        let mut contents = self.contents.as_ref().to_vec();
+        if contents.last() == Some(&0) {
+            contents.pop();
+        }
+        if !contents.is_empty() {
+            contents.push(b',');
+            if realm.starts_with('/') {
+                contents.push(b' ');
+            }
+        }
+        contents.extend_from_slice(escape_transit_realm(realm).as_bytes());
+        Ok(Self {
+            tr_type: 1,
+            contents: OctetString::from(contents),
+        })
     }
 }
 
-/// Cap on comma-separated transited fields. Far above any real path;
-/// over this, expansion is skipped and a poison hop is returned so the
-/// transit check cannot match a legitimate realm.
+/// Cap on comma-separated transited fields. Rust-STRICTER than MIT.
 const MAX_TRANSIT_REALMS: usize = 256;
-/// MIT `chk_trans.c` `MAXLEN`. A joined component over this is poison.
-const MAX_TRANSIT_COMPONENT: usize = 512;
+/// MIT `chk_trans.c` `MAXLEN`. Writing the 512th raw unescaped byte errors.
+const MAX_TRANSIT_RAW: usize = 512;
+/// MIT `maybe_join`: `last + cur > 512` errors; joined of 512 is accepted.
+const MAX_TRANSIT_JOINED: usize = 512;
 
-fn expand_domain_x500(raw: &[u8]) -> Vec<String> {
+fn escape_transit_realm(realm: &str) -> String {
+    let mut out = String::with_capacity(realm.len());
+    for c in realm.chars() {
+        if c == '\\' || c == ',' {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+fn expand_domain_x500(
+    raw: &[u8],
+    _crealm: &str,
+    _srealm: &str,
+) -> Result<Vec<String>, TransitError> {
+    let raw = match raw.split_last() {
+        Some((0, rest)) => rest,
+        _ => raw,
+    };
+    if raw.is_empty() {
+        return Ok(Vec::new());
+    }
     let mut commas = 0usize;
     for &b in raw {
         if b == b',' {
             commas += 1;
             if commas > MAX_TRANSIT_REALMS {
-                return vec!["\0".to_owned()];
+                return Err(TransitError::TooManyFields);
             }
         }
     }
@@ -1013,24 +1070,25 @@ fn expand_domain_x500(raw: &[u8]) -> Vec<String> {
         }
         match c {
             '\\' => escaped = true,
-            ',' => {
-                if !take_x500_comp(&mut out, &mut last, &mut cur) {
-                    return vec!["\0".to_owned()];
-                }
-            }
+            ',' => take_x500_comp(&mut out, &mut last, &mut cur)?,
             ' ' if cur.is_empty() => last.clear(),
             _ => cur.push(c),
         }
     }
-    if !take_x500_comp(&mut out, &mut last, &mut cur) {
-        return vec!["\0".to_owned()];
-    }
-    out
+    take_x500_comp(&mut out, &mut last, &mut cur)?;
+    Ok(out)
 }
 
-fn take_x500_comp(out: &mut Vec<String>, last: &mut String, cur: &mut String) -> bool {
+fn take_x500_comp(
+    out: &mut Vec<String>,
+    last: &mut String,
+    cur: &mut String,
+) -> Result<(), TransitError> {
     if cur.is_empty() {
-        return true;
+        return Ok(());
+    }
+    if cur.len() >= MAX_TRANSIT_RAW {
+        return Err(TransitError::FieldTooLong);
     }
     // MIT chk_trans.c maybe_join: join on the unescaped field.
     let expanded = if cur.starts_with('/') {
@@ -1040,13 +1098,13 @@ fn take_x500_comp(out: &mut Vec<String>, last: &mut String, cur: &mut String) ->
     } else {
         cur.clone()
     };
-    if expanded.len() > MAX_TRANSIT_COMPONENT {
-        return false;
+    if expanded.len() > MAX_TRANSIT_JOINED {
+        return Err(TransitError::FieldTooLong);
     }
     out.push(expanded.clone());
     *last = expanded;
     cur.clear();
-    true
+    Ok(())
 }
 
 /// EncTicketPart ::= [APPLICATION 3] SEQUENCE { flags, key, crealm, ... }
@@ -1162,37 +1220,54 @@ mod tests {
         assert_ne!(t.name_string, flat.name_string);
     }
 
+    fn te(contents: &[u8]) -> TransitedEncoding {
+        TransitedEncoding {
+            tr_type: 1,
+            contents: OctetString::from(contents.to_vec()),
+        }
+    }
+
+    fn hops(contents: &[u8]) -> Vec<String> {
+        te(contents).realms_for("", "").expect("expand")
+    }
+
     #[test]
     fn transited_csv_round_trip() {
         let t = TransitedEncoding::empty()
-            .with_realm("A.TEST")
-            .with_realm("B.TEST");
-        assert_eq!(t.realms(), vec!["A.TEST".to_string(), "B.TEST".to_string()]);
-        assert_eq!(t.with_realm("A.TEST").realms().len(), 2);
+            .append_realm("A.TEST", "", "")
+            .unwrap()
+            .append_realm("B.TEST", "", "")
+            .unwrap();
+        assert_eq!(
+            t.realms_for("", "").unwrap(),
+            vec!["A.TEST".to_string(), "B.TEST".to_string()]
+        );
+        assert_eq!(
+            t.append_realm("A.TEST", "", "")
+                .unwrap()
+                .realms_for("", "")
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(t.tr_type, 1);
+        assert_eq!(TransitedEncoding::empty().tr_type, 1);
     }
 
     #[test]
     fn transited_x500_expand_mit_live_fixture() {
         // Live MIT 1.22.2 4-hop A.EX.COM→EX.COM→B.EX.COM→C.EX.COM issued
         // tr-type 1 contents "EX.COM,B." (captured s2-live-compress.log).
-        let t = TransitedEncoding {
-            tr_type: 1,
-            contents: OctetString::from(b"EX.COM,B.".to_vec()),
-        };
         assert_eq!(
-            t.realms(),
+            hops(b"EX.COM,B."),
             vec!["EX.COM".to_string(), "B.EX.COM".to_string()]
         );
     }
 
     #[test]
     fn transited_x500_expand_rfc4120_example() {
-        let t = TransitedEncoding {
-            tr_type: 1,
-            contents: OctetString::from(b"EDU,MIT.,ATHENA.,WASHINGTON.EDU,CS.".to_vec()),
-        };
         assert_eq!(
-            t.realms(),
+            hops(b"EDU,MIT.,ATHENA.,WASHINGTON.EDU,CS."),
             vec![
                 "EDU".to_string(),
                 "MIT.EDU".to_string(),
@@ -1204,82 +1279,90 @@ mod tests {
     }
 
     #[test]
-    fn transited_x500_overlong_is_bounded_and_poisoned() {
-        let spam = TransitedEncoding {
-            tr_type: 1,
-            contents: OctetString::from(vec![b','; 20_000]),
-        };
-        let hops = spam.realms();
+    fn transited_x500_overlong_is_err() {
+        let spam = te(&vec![b','; 20_000]);
         assert_eq!(
-            hops.len(),
-            1,
-            "overlong must be one poison hop, got {hops:?}"
+            spam.realms_for("", "").unwrap_err(),
+            TransitError::TooManyFields
         );
-        assert_eq!(hops[0], "\0");
 
-        let modest = TransitedEncoding {
-            tr_type: 1,
-            contents: OctetString::from("X.COM,".repeat(200).into_bytes()),
-        };
-        let hops = modest.realms();
+        let modest = te("X.COM,".repeat(200).as_bytes());
+        let hops = modest.realms_for("", "").unwrap();
         assert_eq!(hops.len(), 200);
         assert_eq!(hops[0], "X.COM");
-        assert!(hops.iter().all(|h| h != "\0"));
 
-        let dots = TransitedEncoding {
-            tr_type: 1,
-            contents: OctetString::from(b"A.,".repeat(20_000)),
-        };
-        let hops = dots.realms();
-        assert_eq!(hops.as_slice(), ["\0"]);
+        let mut long_field = b"X.COM,".to_vec();
+        long_field.extend(vec![b'A'; 513]);
+        assert_eq!(
+            te(&long_field).realms_for("", "").unwrap_err(),
+            TransitError::FieldTooLong,
+            "≤256 commas holding a >512-byte literal field must err"
+        );
     }
 
     #[test]
-    fn transited_x500_escaped_marker_is_literal() {
-        let dot = TransitedEncoding {
-            tr_type: 1,
-            contents: OctetString::from(b"X.COM,C\\.".to_vec()),
-        };
+    fn transited_x500_escaped_marker_still_joins() {
         assert_eq!(
-            dot.realms(),
+            hops(b"X.COM,C\\."),
             vec!["X.COM".to_string(), "C.X.COM".to_string()],
             "MIT maybe_join: escaped trailing . still suffix-joins"
         );
-
-        let slash = TransitedEncoding {
-            tr_type: 1,
-            contents: OctetString::from(b"X.COM,\\/Y".to_vec()),
-        };
         assert_eq!(
-            slash.realms(),
+            hops(b"X.COM,\\/Y"),
             vec!["X.COM".to_string(), "X.COM/Y".to_string()],
             "MIT maybe_join: escaped leading / still prefix-joins"
         );
-
-        let join = TransitedEncoding {
-            tr_type: 1,
-            contents: OctetString::from(b"X.COM,/Y".to_vec()),
-        };
         assert_eq!(
-            join.realms(),
+            hops(b"X.COM,/Y"),
             vec!["X.COM".to_string(), "X.COM/Y".to_string()],
             "unescaped leading / still prefix-joins"
         );
     }
 
     #[test]
-    fn transited_x500_component_over_maxlen_is_poisoned() {
-        let ok = TransitedEncoding {
-            tr_type: 1,
-            contents: OctetString::from(vec![b'A'; 512]),
-        };
-        assert_eq!(ok.realms(), vec!["A".repeat(512)]);
+    fn transited_x500_bounds_nul_and_append() {
+        assert_eq!(hops(&vec![b'A'; 511]), vec!["A".repeat(511)]);
+        assert_eq!(
+            te(&vec![b'A'; 512]).realms_for("", "").unwrap_err(),
+            TransitError::FieldTooLong
+        );
 
-        let over = TransitedEncoding {
-            tr_type: 1,
-            contents: OctetString::from(vec![b'A'; 513]),
-        };
-        assert_eq!(over.realms().as_slice(), ["\0"]);
+        let mut joined_ok = b"X,".to_vec();
+        joined_ok.extend(vec![b'B'; 510]);
+        joined_ok.push(b'.');
+        assert_eq!(
+            hops(&joined_ok),
+            vec!["X".to_string(), format!("{}.X", "B".repeat(510))]
+        );
+
+        let mut joined_err = b"XX,".to_vec();
+        joined_err.extend(vec![b'B'; 510]);
+        joined_err.push(b'.');
+        assert_eq!(
+            te(&joined_err).realms_for("", "").unwrap_err(),
+            TransitError::FieldTooLong
+        );
+
+        assert_eq!(hops(b"EDU\0"), vec!["EDU".to_string()]);
+        assert!(te(b"\0").realms_for("", "").unwrap().is_empty());
+
+        let x500 = te(b"/COM,/HP").append_realm("X", "", "").unwrap();
+        assert_eq!(x500.contents.as_ref(), b"/COM,/HP,X");
+        assert_eq!(
+            x500.realms_for("", "").unwrap(),
+            vec!["/COM".to_string(), "/COM/HP".to_string(), "X".to_string()]
+        );
+
+        let spaced = te(b"/COM,/HP").append_realm("/EDU/W", "", "").unwrap();
+        assert_eq!(spaced.contents.as_ref(), b"/COM,/HP, /EDU/W");
+        assert_eq!(
+            spaced.realms_for("", "").unwrap(),
+            vec![
+                "/COM".to_string(),
+                "/COM/HP".to_string(),
+                "/EDU/W".to_string()
+            ]
+        );
     }
 
     #[test]

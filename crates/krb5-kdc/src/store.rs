@@ -317,9 +317,6 @@ impl Policy {
     /// MIT `krb5_check_transited_list`: capaths if present, else hierarchical.
     #[must_use]
     pub fn transit_allowed(&self, crealm: &str, srealm: &str, hops: &[String]) -> bool {
-        if hops.iter().any(|h| h == "\0") {
-            return false;
-        }
         if hops
             .iter()
             .any(|h| self.transited_reject.iter().any(|d| d == h))
@@ -2146,10 +2143,6 @@ mod tests {
             .or_default()
             .insert("C.TEST".into(), vec![".".into()]);
         assert!(!p.transit_allowed("A.TEST", "C.TEST", &[String::from("B.TEST")]));
-        assert!(
-            !p.transit_allowed("\0", "X.COM", &[String::from("\0")]),
-            "poison hop must not match even if crealm is NUL"
-        );
     }
 
     #[test]
@@ -2158,7 +2151,7 @@ mod tests {
             tr_type: 1,
             contents: krb5_types::OctetString::from(b"EX.COM,B.".to_vec()),
         };
-        let hops = t.realms();
+        let hops = t.realms_for("A.EX.COM", "C.EX.COM").unwrap();
         assert!(
             hops.iter().any(|h| h == "B.EX.COM"),
             "compressed B. must expand to B.EX.COM: {hops:?}"
