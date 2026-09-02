@@ -22,6 +22,9 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **G9 Y2.** Non-ASCII `ticket.realm` on a presented TGT is 7
+  `PROCESS_TGS` (`PrincipalName::try_new`), not a per-request panic.
+
 - **G9 Y1 KDC (MIT-gated).** TGS `body.realm` must be the served realm
   (`get_local_tgt`): otherwise 60 `GET_LOCAL_TGT` for every option set,
   including destination RENEW/VALIDATE. The Rust-only foreign-realm

@@ -1,6 +1,6 @@
 //! Capaths transited check on the shipped `issue_tgs` path.
 
-use krb5_asn1::encode;
+use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, encrypt};
 use krb5_kdc::{
     Acl, Error, PrincipalStore, TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_USER, TEST_USER_PASSWORD,
@@ -673,6 +673,24 @@ fn tgs_renew_at_dest_issuer_realm_is_get_local_tgt() {
     let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &renew));
     assert_eq!(code, err::GENERIC);
     assert_eq!(text.as_deref(), Some("GET_LOCAL_TGT"));
+}
+
+#[test]
+fn tgs_non_ascii_ticket_realm_is_process_tgs() {
+    let (_a, _b, c, _ir, host_c, bc) = three_realm();
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let der = [0x1bu8, 0x02, 0xC3, 0xA9];
+    let realm: krb5_types::Realm = decode(&der).expect("rasn GeneralString C3A9");
+    let mut t = bc.rep.0.ticket.clone();
+    t.realm = realm;
+    let req = tgs_req(t, &bc.session_key, "A.TEST", &cname, host_c, "C.TEST", 940).expect("tgs");
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        krb5_kdc::issue_tgs(&c, &req)
+    }))
+    .expect("non-ASCII ticket.realm must not panic");
+    let (code, text) = tgs_code_text(res);
+    assert_eq!(code, err::S_PRINCIPAL_UNKNOWN);
+    assert_eq!(text.as_deref(), Some("PROCESS_TGS"));
 }
 
 #[test]

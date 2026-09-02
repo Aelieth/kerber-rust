@@ -945,7 +945,8 @@ fn decrypt_presented_tgt(
     let princ = if ticket_realm == store.realm() {
         store.fetch_krbtgt()?
     } else {
-        let name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", ticket_realm]);
+        let name = PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", ticket_realm])
+            .map_err(|_| proto(err::S_PRINCIPAL_UNKNOWN, "PROCESS_TGS"))?;
         store.fetch_name(&name)?
     };
     let Some(p) = princ else {
