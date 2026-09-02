@@ -325,7 +325,7 @@ expect_looking_up_server() {
     set +e
     local out rc
     out="$(docker exec -e KRB5_CONFIG=/tmp/client-garbage.conf "$NAME" \
-        /tmp/krb5-kvno -c "${cc}_garbage" 127.0.0.1:90 host/svc.c.test@GARBAGE.EXAMPLE 2>&1)"
+        /tmp/krb5-kvno --body-realm GARBAGE.EXAMPLE -c "${cc}_garbage" 127.0.0.1:90 host/svc.c.test@GARBAGE.EXAMPLE 2>&1)"
     rc=$?
     set -e
     echo "$out"
@@ -387,6 +387,45 @@ MIT_TR_TYPE="$(echo "$MIT_DUMP" | sed -n 's/^transited_tr_type=//p')"
 MIT_TR_CONTENTS="$(echo "$MIT_DUMP" | sed -n 's/^transited_contents=//p')"
 test "$MIT_TR_TYPE" = "1"
 test "$MIT_TR_CONTENTS" = "B.TEST"
+
+echo "==== Rust kvno bare A TGT chases MIT A/B/C ===="
+kinit_a /tmp/krb5cc_rust_bare
+na="$(docker exec "$NAME" sh -c 'wc -l < /tmp/mit-a.log' | tr -d '[:space:]')"
+nb="$(docker exec "$NAME" sh -c 'wc -l < /tmp/mit-b.log' | tr -d '[:space:]')"
+nc="$(docker exec "$NAME" sh -c 'wc -l < /tmp/mit-c.log' | tr -d '[:space:]')"
+set +e
+BARE="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf -e KRB5_TRACE=/dev/stderr "$NAME" \
+    /tmp/krb5-kvno -c /tmp/krb5cc_rust_bare host/svc.c.test@C.TEST 2>&1)"
+bare_rc=$?
+set -e
+echo "$BARE"
+if [ "$bare_rc" -ne 0 ]; then
+    echo "bare A TGT rust kvno must chase MIT A/B/C" >&2
+    docker exec "$NAME" sh -c "tail -n +$((na + 1)) /tmp/mit-a.log; tail -n +$((nb + 1)) /tmp/mit-b.log; tail -n +$((nc + 1)) /tmp/mit-c.log" >&2 || true
+    log "capaths.gate" "error" ',"error":"bare A TGT rust kvno failed","rc":'"$bare_rc"
+    exit 1
+fi
+echo "$BARE" | grep -q 'host/svc.c.test@C.TEST: kvno ='
+if ! docker exec "$NAME" sh -c "tail -n +$((na + 1)) /tmp/mit-a.log | grep -q 'krbtgt/B.TEST'"; then
+    echo "bare chase: MIT A new lines missing krbtgt/B.TEST" >&2
+    docker exec "$NAME" sh -c "tail -n +$((na + 1)) /tmp/mit-a.log" >&2 || true
+    exit 1
+fi
+if ! docker exec "$NAME" sh -c "tail -n +$((nb + 1)) /tmp/mit-b.log | grep -q 'krbtgt/C.TEST'"; then
+    echo "bare chase: MIT B new lines missing krbtgt/C.TEST" >&2
+    docker exec "$NAME" sh -c "tail -n +$((nb + 1)) /tmp/mit-b.log" >&2 || true
+    exit 1
+fi
+if ! docker exec "$NAME" sh -c "tail -n +$((nc + 1)) /tmp/mit-c.log | grep -q 'host/svc.c.test'"; then
+    echo "bare chase: MIT C new lines missing host/svc.c.test" >&2
+    docker exec "$NAME" sh -c "tail -n +$((nc + 1)) /tmp/mit-c.log" >&2 || true
+    exit 1
+fi
+if docker exec "$NAME" sh -c "tail -n +$((na + 1)) /tmp/mit-a.log | grep -q GET_LOCAL_TGT"; then
+    echo "bare chase: MIT A must not GET_LOCAL_TGT (foreign body.realm)" >&2
+    docker exec "$NAME" sh -c "tail -n +$((na + 1)) /tmp/mit-a.log" >&2 || true
+    exit 1
+fi
 
 echo "==== MIT C rejects forged ticket.realm on B-sealed TGT ===="
 seed_c_tgt /tmp/krb5cc_mit_forge

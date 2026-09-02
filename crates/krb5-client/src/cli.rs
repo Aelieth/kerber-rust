@@ -348,17 +348,27 @@ pub struct KvnoArgs {
     pub services: Vec<String>,
     /// `--disable-transited-check` (gate-only; MIT `kvno` cannot set bit 26).
     pub disable_transited_check: bool,
+    /// `--body-realm` (gate-only): TGS-REQ realm with no chase. MIT clients
+    /// never send a foreign `body.realm`.
+    pub body_realm: Option<String>,
     /// `-U` impersonated user (S4U2Self). Unlike MIT `kvno`, the ccache
     /// principal need not equal the service; the KDC enforces that.
     pub for_user: Option<String>,
 }
 
 fn kvno_longs() -> &'static [LongOpt] {
-    &[LongOpt {
-        name: "disable-transited-check",
-        takes_arg: false,
-        short: None,
-    }]
+    &[
+        LongOpt {
+            name: "disable-transited-check",
+            takes_arg: false,
+            short: None,
+        },
+        LongOpt {
+            name: "body-realm",
+            takes_arg: true,
+            short: None,
+        },
+    ]
 }
 
 /// Parse `kvno` arguments after argv0.
@@ -372,6 +382,10 @@ pub fn parse_kvno(args: &[String]) -> Result<KvnoArgs, String> {
     for o in opts {
         if o.long == Some("disable-transited-check") {
             out.disable_transited_check = true;
+            continue;
+        }
+        if o.long == Some("body-realm") {
+            out.body_realm = o.arg;
             continue;
         }
         match o.flag {
@@ -516,6 +530,8 @@ mod tests {
         assert!(!b.disable_transited_check);
         let u = parse_kvno(&s(&["-U", "admin", "host/x@R"])).unwrap();
         assert_eq!(u.for_user.as_deref(), Some("admin"));
+        let r = parse_kvno(&s(&["--body-realm", "GARBAGE.EXAMPLE", "host/x@R"])).unwrap();
+        assert_eq!(r.body_realm.as_deref(), Some("GARBAGE.EXAMPLE"));
     }
 
     #[test]

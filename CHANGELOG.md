@@ -22,6 +22,15 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **G9 Y1 client (MIT-gated).** TGS chase asks the *current* TGT's
+  realm for `krbtgt/<next>` with `body.realm` = that realm (MIT
+  `make_request_for_tgt` / `k5_client_realm_path`: dest first, then
+  closer `[capaths]` hops; a closer-hop `krbtgt` reply is accepted).
+  `krb5-kvno` / `kinit -S` no longer send a foreign `body.realm` to
+  the first hop. `--body-realm` is gate-only so GARBAGE cells can
+  still present `GET_LOCAL_TGT`. Gate: bare A TGT → `krb5-kvno
+  host/svc.c.test@C.TEST` vs three MIT KDCs.
+
 - **G9 Y0 (MIT-gated).** S4U2Self requires the requested server to be
   the TGT client (`check_tgs_s4u2self`): mismatch is 36
   `INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH`. Referral TGTs name the

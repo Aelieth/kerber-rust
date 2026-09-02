@@ -1,8 +1,10 @@
 //! Obtain a service ticket via TGS and print its kvno (MIT `kvno`).
 //!
-//! Usage: krb5-kvno [-c ccache] [--disable-transited-check] [kdc-host] <service>
+//! Usage: krb5-kvno [-c ccache] [--disable-transited-check] [--body-realm REALM]
+//!                  [kdc-host] <service>
 //!
 //! `--disable-transited-check` is gate-only (MIT `kvno` cannot set bit 26).
+//! `--body-realm` is gate-only: send that TGS-REQ realm with no chase.
 //! `-U <user>` sends PA-FOR-USER (S4U2Self). MIT `kvno -U` also requires the
 //! ccache principal to equal the service; this binary does not, so a user TGT
 //! can present the Y0 mismatch cell. `-P` is not implemented.
@@ -14,7 +16,9 @@ use krb5_asn1::decode;
 use krb5_client::cli::parse_kvno;
 use krb5_client::{load_ccache, store_ccache_keep_default};
 use krb5_config::resolve_ccspec;
-use krb5_protocol::{AsOutcome, KdcAddr, parse_principal, tgs_exchange_ex, tgs_s4u, tgt_cred};
+use krb5_protocol::{
+    AsOutcome, KdcAddr, parse_principal, tgs_exchange_ex, tgs_exchange_once, tgs_s4u, tgt_cred,
+};
 use krb5_types::{
     EncKdcRepPart, EncryptionKey, KerberosTime, PrincipalName, Ticket, TicketFlags, err,
 };
@@ -30,7 +34,9 @@ fn main() {
         std::process::exit(2);
     });
     let service = args.services.first().cloned().unwrap_or_else(|| {
-        eprintln!("usage: krb5-kvno [-c ccache] [--disable-transited-check] [kdc-host] <service>");
+        eprintln!(
+            "usage: krb5-kvno [-c ccache] [--disable-transited-check] [--body-realm REALM] [kdc-host] <service>"
+        );
         std::process::exit(2);
     });
     let spec = resolve_ccspec(args.ccache.as_deref()).unwrap_or_else(|e| {
@@ -42,6 +48,7 @@ fn main() {
         args.kdc_host.as_deref(),
         &service,
         args.disable_transited_check,
+        args.body_realm.as_deref(),
         args.for_user.as_deref(),
     ) {
         eprintln!("kvno: {e}");
@@ -92,6 +99,7 @@ fn run(
     kdc_host: Option<&str>,
     service: &str,
     disable_transited_check: bool,
+    body_realm: Option<&str>,
     for_user: Option<&str>,
 ) -> Result<(), String> {
     let mut cc = load_ccache(spec).map_err(|e| e.to_string())?;
@@ -122,11 +130,8 @@ fn run(
             .find(|c| c.server.1.is_krbtgt_for(&srealm))
             .unwrap_or(any_tgt)
             .clone();
-        let hop_realm = if cred.server.1.is_krbtgt_for(&srealm) {
-            srealm.clone()
-        } else {
-            crealm
-        };
+        // First hop goes to the current TGT's KDC; tgs_exchange chases.
+        let hop_realm = krb5_protocol::referral_hop_realm(&cred.server.1).unwrap_or(crealm);
         (cred, sname, srealm, hop_realm)
     };
     let addr = addr_for_realm(&hop_realm, kdc_host);
@@ -169,6 +174,8 @@ fn run(
             )
         };
         tgs_s4u(&addr, &tgt, sname, &srealm, uname, &urealm).map_err(kvno_err)?
+    } else if let Some(br) = body_realm {
+        tgs_exchange_once(&addr, &tgt, sname, br, disable_transited_check).map_err(kvno_err)?
     } else {
         tgs_exchange_ex(&addr, &tgt, sname, &srealm, disable_transited_check).map_err(kvno_err)?
     };

@@ -224,6 +224,39 @@ impl Krb5Conf {
         }
         Ok(Vec::new())
     }
+
+    /// MIT `k5_client_realm_path`: client, `[capaths]` hops, server.
+    ///
+    /// `.` means a direct path (`[client, server]`). Missing capaths is
+    /// also direct (hierarchical tweens are `krb5_walk_realm_tree` only).
+    #[must_use]
+    pub fn client_realm_path(&self, client: &str, server: &str) -> Vec<String> {
+        client_realm_path(&self.capaths, client, server)
+    }
+}
+
+/// MIT `k5_client_realm_path` over an already-parsed `[capaths]` map.
+#[must_use]
+pub fn client_realm_path(
+    capaths: &BTreeMap<String, BTreeMap<String, Vec<String>>>,
+    client: &str,
+    server: &str,
+) -> Vec<String> {
+    if client == server {
+        return vec![client.to_owned()];
+    }
+    let mut path = vec![client.to_owned()];
+    if let Some(vals) = capaths.get(client).and_then(|m| m.get(server))
+        && !(vals.len() == 1 && vals[0] == ".")
+    {
+        for v in vals {
+            if v != "." {
+                path.push(v.clone());
+            }
+        }
+    }
+    path.push(server.to_owned());
+    path
 }
 
 impl KdcConf {
@@ -1749,6 +1782,19 @@ mod tests {
         .unwrap();
         assert_eq!(c.capaths["A.TEST"]["C.TEST"], ["B.TEST", "D.TEST"]);
         assert_eq!(c.capaths["A.TEST"]["B.TEST"], ["."]);
+        assert_eq!(
+            c.client_realm_path("A.TEST", "C.TEST"),
+            ["A.TEST", "B.TEST", "D.TEST", "C.TEST"]
+        );
+        assert_eq!(
+            c.client_realm_path("A.TEST", "B.TEST"),
+            ["A.TEST", "B.TEST"]
+        );
+        assert_eq!(c.client_realm_path("A.TEST", "A.TEST"), ["A.TEST"]);
+        assert_eq!(
+            client_realm_path(&BTreeMap::new(), "A.TEST", "C.TEST"),
+            ["A.TEST", "C.TEST"]
+        );
     }
 
     #[test]

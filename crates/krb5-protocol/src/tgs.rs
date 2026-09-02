@@ -1,5 +1,6 @@
 //! TGS-REQ / TGS-REP using an existing TGT.
 
+use std::collections::BTreeMap;
 use std::time::Instant;
 
 use krb5_asn1::{decode, encode};
@@ -80,6 +81,29 @@ pub fn tgs_exchange_ex(
     result
 }
 
+/// One TGS-REQ; `realm` is `body.realm`. No capaths/referral chase.
+///
+/// Gate-only (`krb5-kvno --body-realm`): MIT clients never send a foreign
+/// `body.realm`.
+///
+/// # Errors
+///
+/// Transport, crypto, or `KRB-ERROR` failures.
+#[allow(clippy::needless_pass_by_value)]
+pub fn tgs_exchange_once(
+    kdc: &KdcAddr,
+    tgt: &AsOutcome,
+    sname: PrincipalName,
+    realm: &str,
+    disable_transited_check: bool,
+) -> Result<TgsOutcome, Error> {
+    let mut opts = tgs_kdc_options(tgt);
+    if disable_transited_check {
+        opts = opts.with_bit(flag_bit::DISABLE_TRANSITED_CHECK, true);
+    }
+    tgs_once(kdc, tgt, sname, realm, opts, &[])
+}
+
 /// TGS-REQ with KDC option `renew` for `kinit -R`.
 ///
 /// # Errors
@@ -134,36 +158,110 @@ fn tgs_inner(
     realm: &str,
     disable_transited_check: bool,
 ) -> Result<TgsOutcome, Error> {
+    let capaths = krb5_config::load_krb5_conf()
+        .map(|c| c.capaths)
+        .unwrap_or_default();
     let mut cur_kdc = kdc.clone();
     let mut cur_tgt = tgt.clone();
-    let mut hop_realm = realm.to_owned();
+    if tgt_served_realm(&cur_tgt) != realm {
+        cur_tgt = get_dest_tgt(kdc, &cur_tgt, realm, &capaths)?;
+        cur_kdc = kdc_for_realm(&tgt_served_realm(&cur_tgt), kdc);
+    }
     for _ in 0..8 {
+        let served = tgt_served_realm(&cur_tgt);
         let mut opts = tgs_kdc_options(&cur_tgt);
         if disable_transited_check && cur_tgt.ticket.sname.is_krbtgt_for(realm) {
             opts = opts.with_bit(flag_bit::DISABLE_TRANSITED_CHECK, true);
         }
-        let out = tgs_once(&cur_kdc, &cur_tgt, sname.clone(), &hop_realm, opts, &[])?;
-        match tgs_hop_decision(sname, &hop_realm, &out)? {
+        let out = tgs_once(&cur_kdc, &cur_tgt, sname.clone(), &served, opts, &[])?;
+        match tgs_hop_decision(sname, &served, &out)? {
             TgsHop::Done => return Ok(out),
             TgsHop::Referral(foreign) => {
-                hop_realm.clone_from(&foreign);
                 cur_kdc = kdc_for_realm(&foreign, kdc);
-                cur_tgt = AsOutcome {
-                    ticket: out.ticket,
-                    enc_part: out.enc_part,
-                    client_key: cur_tgt.client_key.clone(),
-                    session_key: out.session_key,
-                    cname: cur_tgt.cname.clone(),
-                    crealm: cur_tgt.crealm.clone(),
-                };
+                cur_tgt = tgs_as_tgt(&cur_tgt, out);
             }
         }
     }
     Err(Error::Referral)
 }
 
+/// Realm this TGT is accepted at (MIT `cur_tgt->server` instance).
+fn tgt_served_realm(tgt: &AsOutcome) -> String {
+    referral_hop_realm(&tgt.ticket.sname)
+        .unwrap_or_else(|| String::from_utf8_lossy(tgt.ticket.realm.as_bytes()).into_owned())
+}
+
+/// Ask the current TGT's realm for `krbtgt/<next>` until we hold the dest TGT.
+///
+/// MIT `get_tgt_request` / `step_get_tgt`: dest first, then closer hops
+/// along `k5_client_realm_path`. Each TGS-REQ `body.realm` is the current
+/// TGT's realm (`make_request_for_tgt`).
+fn get_dest_tgt(
+    kdc: &KdcAddr,
+    tgt: &AsOutcome,
+    dest: &str,
+    capaths: &BTreeMap<String, BTreeMap<String, Vec<String>>>,
+) -> Result<AsOutcome, Error> {
+    let start = tgt_served_realm(tgt);
+    let path = krb5_config::client_realm_path(capaths, &start, dest);
+    let mut cur_kdc = kdc.clone();
+    let mut cur_tgt = tgt.clone();
+    let mut next = dest.to_owned();
+    for _ in 0..8 {
+        let served = tgt_served_realm(&cur_tgt);
+        if served == dest {
+            return Ok(cur_tgt);
+        }
+        let hop = PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", next.as_str()])
+            .map_err(|e| Error::ReplyMismatch(e.to_string()))?;
+        match tgs_once(
+            &cur_kdc,
+            &cur_tgt,
+            hop.clone(),
+            &served,
+            tgs_kdc_options(&cur_tgt),
+            &[],
+        ) {
+            Ok(out) => {
+                tgs_hop_decision(&hop, &served, &out)?;
+                cur_tgt = tgs_as_tgt(&cur_tgt, out);
+                cur_kdc = kdc_for_realm(&tgt_served_realm(&cur_tgt), kdc);
+                dest.clone_into(&mut next);
+            }
+            Err(e @ Error::KrbError { .. }) => match closer_hop(&path, &served, &next) {
+                Some(c) => next = c.to_owned(),
+                None => return Err(e),
+            },
+            Err(e) => return Err(e),
+        }
+    }
+    Err(Error::Referral)
+}
+
+/// Previous realm on `path` toward `next`. `None` when that is `cur`.
+fn closer_hop<'a>(path: &'a [String], cur: &str, next: &str) -> Option<&'a str> {
+    let ni = path.iter().position(|r| r == next)?;
+    if ni == 0 {
+        return None;
+    }
+    let c = path[ni - 1].as_str();
+    (c != cur).then_some(c)
+}
+
+fn tgs_as_tgt(prev: &AsOutcome, out: TgsOutcome) -> AsOutcome {
+    AsOutcome {
+        ticket: out.ticket,
+        enc_part: out.enc_part,
+        client_key: prev.client_key.clone(),
+        session_key: out.session_key,
+        cname: prev.cname.clone(),
+        crealm: prev.crealm.clone(),
+    }
+}
+
 /// RFC 4120 name-type is a hint. Heimdal canonicalize may return NT-SRV-HST
-/// for a host principal requested as NT-PRINCIPAL; compare name-strings.
+/// for a host principal requested as NT-PRINCIPAL. A krbtgt reply that is
+/// not the requested name is a referral or closer-hop TGT (`step_get_tgt`).
 fn tgs_sname_matches(
     requested: &PrincipalName,
     ticket: &PrincipalName,
@@ -171,9 +269,7 @@ fn tgs_sname_matches(
 ) -> bool {
     ticket.name_string == requested.name_string
         || enc.name_string == requested.name_string
-        || (ticket.is_krbtgt()
-            && !requested.is_krbtgt()
-            && requested.components_joined() != ticket.components_joined())
+        || (ticket.is_krbtgt() && requested.components_joined() != ticket.components_joined())
 }
 
 fn tgs_sname_ok(
@@ -472,6 +568,10 @@ mod tests {
         let krbtgt = PrincipalName::krbtgt("OTHER.TEST");
         assert!(tgs_sname_matches(&asked, &krbtgt, &krbtgt));
         tgs_sname_ok(&asked, &krbtgt, &krbtgt).unwrap();
+        let want_c = PrincipalName::krbtgt("C.TEST");
+        let got_b = PrincipalName::krbtgt("B.TEST");
+        assert!(tgs_sname_matches(&want_c, &got_b, &got_b));
+        tgs_sname_ok(&want_c, &got_b, &got_b).unwrap();
     }
 
     #[test]
@@ -487,6 +587,38 @@ mod tests {
             tgs_sname_ok(&flat, &two, &two),
             Err(Error::ReplyMismatch(_))
         ));
+    }
+
+    fn as_tgt(instance: &str) -> AsOutcome {
+        let out = outcome(instance, PrincipalName::krbtgt(instance), instance);
+        AsOutcome {
+            ticket: out.ticket,
+            enc_part: out.enc_part,
+            client_key: session(),
+            session_key: session(),
+            cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+            crealm: ascii(instance),
+        }
+    }
+
+    #[test]
+    fn served_realm_is_krbtgt_instance() {
+        let a = as_tgt("A.TEST");
+        assert_eq!(tgt_served_realm(&a), "A.TEST");
+        let mut x = as_tgt("C.TEST");
+        x.ticket.sname = PrincipalName::krbtgt("C.TEST");
+        x.ticket.realm = ascii("B.TEST");
+        assert_eq!(tgt_served_realm(&x), "C.TEST");
+    }
+
+    #[test]
+    fn closer_hop_dest_first_then_capaths() {
+        let path = ["A.TEST".into(), "B.TEST".into(), "C.TEST".into()];
+        assert_eq!(closer_hop(&path, "A.TEST", "C.TEST"), Some("B.TEST"));
+        assert_eq!(closer_hop(&path, "A.TEST", "B.TEST"), None);
+        assert_eq!(closer_hop(&path, "B.TEST", "C.TEST"), None);
+        let direct = ["A.TEST".into(), "C.TEST".into()];
+        assert_eq!(closer_hop(&direct, "A.TEST", "C.TEST"), None);
     }
 
     fn tgt_with_proxiable(on: bool) -> AsOutcome {
