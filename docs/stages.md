@@ -71,7 +71,7 @@ done. Samba L1 decodes the full buffer set of a Rust PAC
 both directions (`samba-crossrealm-gate.sh`). TGS
 verifies a presented PAC and copies LOGON_INFO (in-repo two-realm
 tests; `kvno` is not that copy proof). Rust S4U2Self/Proxy is
-MIT-gated in CI (`scripts/s4u-mit-gate.sh`); S4U2Proxy copies the evidence
+MIT KDC + client gated (C1; `scripts/s4u-mit-gate.sh`); S4U2Proxy copies the evidence
 PAC, denies classic constrained delegation unless `s4u_allowed_to` lists
 the target, and denies RBCD unless allowed. `ad-windows-gate` / `ad-s4u-gate` are live Samba in CI.
 `ad-mit-trust-gate.sh` aliases `samba-realtrust-gate.sh`. **C1** is

@@ -22,6 +22,11 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0 C9.** Changelog X2 foreign `body.realm` is 60 `GET_LOCAL_TGT`
+  (Y1), not 7 `LOOKING_UP_SERVER`. `docs/stages.md`, interop matrix,
+  README G5–G9, and `docs/logging.md` `code`/`e_text` rows match the
+  landed W0 gates.
+
 - **W0 C8 (MIT-gated).** kpasswd policy/ACL rejection is a KRB-PRIV
   result (`[0,4]` `SOFTERROR`, `[0,5]` `ACCESSDENIED`, else `[0,2]`
   `HARDERROR`) instead of dropping the datagram. Gate:
@@ -109,12 +114,12 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   `kdc.issue` `krb-error` lines are `info` and carry `duration_us`.
   Transited fuzz seeds are `crealm\\0srealm\\0contents`.
 
-- **G9 X2 (MIT-gated).** TGS server lookup is by full principal like
-  MIT `search_sprinc`: a local sname is served only when `body.realm`
-  equals the KDC realm; otherwise referral only if `krbtgt/<req_realm>`
-  exists, else 7 `LOOKING_UP_SERVER`. Hierarchical walks of a ≥512-byte
-  realm return empty. Non-UTF-8 realm is `GENERIC`. Gate:
-  `scripts/capaths-transit-gate.sh` GARBAGE.EXAMPLE cells.
+- **G9 X2 (superseded by Y1).** TGS server lookup is by full principal
+  like MIT `search_sprinc`: a local sname is served only when
+  `body.realm` equals the KDC realm. A foreign `body.realm` is 60
+  `GET_LOCAL_TGT` (Y1), not 7 `LOOKING_UP_SERVER`. Hierarchical walks
+  of a ≥512-byte realm return empty. Non-UTF-8 realm is `GENERIC`.
+  Gate: `scripts/capaths-transit-gate.sh` GARBAGE.EXAMPLE cells.
 
 - **G9 X1 (MIT-gated).** Presented TGS-TGT decryption is bound to
   `ticket.realm` like MIT `kdc_get_server_key`: local `krbtgt/<local>`

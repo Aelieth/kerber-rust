@@ -88,11 +88,11 @@ gated against real MIT before it counts as done:
 | **G2** | **Renewal & postdating — landed.** `kinit -R`, MAY-POSTDATE / POSTDATED / VALIDATE, the PROXIABLE flag. Gates: `renew-gate`, `postdate-gate` |
 | **G3** | **kadmin completeness — landed.** `getprinc` key metadata, `EXTRACT_KEYS` (`ktadd -norandkey`), PURGEKEYS, SETKEY, GET/SET_STRINGS. Gate: `kadmin-gate`. MIT `*`/`x` do not grant extract (`e`). SETKEY is unit-tested (no MIT `setkey` verb) |
 | **G4** | **iprop fidelity — landed.** Incremental kdbe carries string-attrs / history / policy / lockout; ulog persists across master restart. Gates: `iprop-gate`, `differential-gate` |
-| **G5** | **GSS breadth** — credential delegation, real SPNEGO negotiation, `wrap_iov`/`unwrap_iov` for NFSv4 `RPCSEC_GSS` / SSH / HTTP · *hard requirement* |
-| **G6** | **Client-side preauth & names** — wire PKINIT / SPAKE / FAST into `kinit`; NT-ENTERPRISE canonicalization |
-| **G7** | **Standalone user CLIs** — `klist`, `kvno`, `kdestroy`, `kpasswd`, `kadmin`, `ktutil` (and retire the harness's reliance on MIT's own clients) |
-| **G8** | **ccache breadth** — KEYRING (the SSSD/PAM default on Fedora/RHEL) · *hard requirement* |
-| **G9** | **Config breadth** — `[capaths]`, key `[libdefaults]` knobs, `dns_lookup_realm` |
+| **G5** | **GSS breadth — landed.** Credential delegation, real SPNEGO negotiation, `wrap_iov`/`unwrap_iov` for NFSv4 `RPCSEC_GSS` / SSH / HTTP · *hard requirement*. Gate: `gss-gate` |
+| **G6** | **Client-side preauth & names — landed.** Wire PKINIT / SPAKE / FAST into `kinit`; NT-ENTERPRISE canonicalization. Gates: `rust-kinit-{fast,pkinit,spake,enterprise}-gate` |
+| **G7** | **Standalone user CLIs — landed.** `klist`, `kvno`, `kdestroy`, `kpasswd`, `kadmin`, `ktutil`. Gates: `client-gate`, `kpasswd-gate`, `kadmin-gate`, `ktutil-gate` |
+| **G8** | **ccache breadth — landed.** FILE/DIR/MEMORY/KCM; `KEYRING:` is rejected (`Unknown credential cache type`). Gates: `ccache-gate`, `kcm-gate` |
+| **G9** | **Config breadth — landed.** `[capaths]`, key `[libdefaults]` knobs, `include`/`includedir`. Gates: `capaths-transit-gate`, `knobs-gate`, `config-include-gate` |
 
 G5 (GSS) and G8 (KEYRING ccache) are hard requirements: kerber-rust is meant
 to host real client networks that already use SSH GSSAPI delegation, HTTP

@@ -17,6 +17,8 @@ never install a subscriber. Tests and the harness do.
 | `pdu` | asn1 | Rust type name of the PDU |
 | `byte_len` | asn1 | Encoded or input length |
 | `error` | on failure | `Display` of the error (no key material) |
+| `code` | krb-error | RFC 4120 error-code on `kdc.issue` |
+| `e_text` | krb-error | MIT `log_tgs_req` status string (`PROCESS_TGS`, `GET_LOCAL_TGT`, …) |
 
 Canonical `event` strings live in `krb5_log::events`.
 
