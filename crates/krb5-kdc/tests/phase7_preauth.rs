@@ -198,6 +198,42 @@ fn fast_as_exchange_strengthen_and_finished() {
     assert!(enc.flags.pre_authent());
 }
 
+#[test]
+fn fast_as_forged_armor_realm_is_bad_integrity() {
+    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
+    let ir = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x33; 32]).unwrap();
+    store
+        .create_interrealm_key(&acl, &documented_admin_id(), "OTHER.TEST", ir)
+        .expect("ir");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = user_key();
+    let armor_as = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 210);
+    let mut ticket = armor_as.rep.0.ticket.clone();
+    ticket.realm = ascii("OTHER.TEST");
+    let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x42u8; 32])
+        .expect("subkey");
+    let armor_ap = build_fast_armor(
+        ticket,
+        &armor_as.session_key,
+        &ascii(TEST_REALM),
+        &cname,
+        Some(&sub),
+    )
+    .expect("armor AP-REQ");
+    let akey = armor_key(&armor_as.session_key, Some(&sub)).expect("armor key");
+    let inner = vec![pa_enc_timestamp(&key).expect("pa")];
+    let mut req = as_req(cname, TEST_REALM, 211, None).unwrap();
+    attach_fast(&mut req, &armor_ap, &akey, inner).expect("FAST wrap");
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("forged armor realm");
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::BAD_INTEGRITY);
+            assert_eq!(text.as_deref(), Some("FAST armor TGT"));
+        }
+        other => panic!("expected 31 FAST armor TGT, got {other:?}"),
+    }
+}
+
 fn issue_code(err: Error) -> i32 {
     match err {
         Error::Protocol { code, .. } => code,

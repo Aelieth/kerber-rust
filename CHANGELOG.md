@@ -22,6 +22,11 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **G9 Y4/Y5.** FAST armor decrypt selects keys by the armor ticket's
+  realm (forged-realm armor is `BAD_INTEGRITY` / `FAST armor TGT`).
+  After the presented-TGT krbtgt entry is selected, `DISALLOW_SVR` or
+  `DISALLOW_ALL_TIX` is 7 `PROCESS_TGS` (`kdc_util.c:390-393`).
+
 - **G9 Y3 (MIT-gated).** A peer-minted TGT for a *local* user
   (`crealm` local, header TGT realm foreign, not S4U2Self) is 12
   `INVALID LINEAGE` for both `reject_bad_transit` values (MIT

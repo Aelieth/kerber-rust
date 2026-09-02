@@ -957,6 +957,9 @@ fn decrypt_presented_tgt(
     let Some(p) = princ else {
         return Err(proto(err::S_PRINCIPAL_UNKNOWN, "PROCESS_TGS"));
     };
+    if attr(&p, KDB_DISALLOW_ALL_TIX) || attr(&p, KDB_DISALLOW_SVR) {
+        return Err(proto(err::S_PRINCIPAL_UNKNOWN, "PROCESS_TGS"));
+    }
     let usage = KeyUsage::new(ku::TICKET)?;
     let cipher = ap.ticket.enc_part.cipher.as_ref();
     let kvno = ap.ticket.enc_part.kvno;

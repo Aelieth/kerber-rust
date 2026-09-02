@@ -64,6 +64,11 @@ A cross-realm TGT whose client realm is this KDC (`check_tgs_lineage`)
 is 12 `INVALID LINEAGE` even when `reject_bad_transit = false`.
 S4U2Self is exempt (MIT `tgs_policy.c`).
 
+FAST armor decrypt binds keys to the armor `ticket.realm` (MIT
+`fast_util.c` `rd_req`); forged-realm armor is 31 `FAST armor TGT`.
+A presented-TGT krbtgt with `DISALLOW_SVR` or `DISALLOW_ALL_TIX` is 7
+`PROCESS_TGS` (`kdc_util.c:390-393`).
+
 ## Not in this matrix
 
 In-process metrics counters are deferred (logs already carry

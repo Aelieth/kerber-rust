@@ -132,9 +132,21 @@ fn armor_key_from_ap(
     }
     let tkt_usage = KeyUsage::new(ku::TICKET)?;
     let cipher = ap.ticket.enc_part.cipher.as_ref();
+    let ticket_realm = std::str::from_utf8(ap.ticket.realm.as_bytes())
+        .map_err(|_| proto(err::BAD_INTEGRITY, "FAST armor TGT"))?;
+    let princ = if ticket_realm == store.realm() {
+        store.fetch_krbtgt()?
+    } else {
+        let name = PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", ticket_realm])
+            .map_err(|_| proto(err::BAD_INTEGRITY, "FAST armor TGT"))?;
+        store.fetch_name(&name)?
+    };
+    let Some(p) = princ else {
+        return Err(proto(err::BAD_INTEGRITY, "FAST armor TGT"));
+    };
     let mut enc_tkt: Option<krb5_types::EncTicketPart> = None;
-    for key in store.krbtgt_keys()? {
-        if let Ok(plain) = decrypt(&key, tkt_usage, cipher)
+    for k in &p.keys {
+        if let Ok(plain) = decrypt(&k.key, tkt_usage, cipher)
             && let Ok(part) = decode::<krb5_types::EncTicketPart>(&plain)
         {
             enc_tkt = Some(part);

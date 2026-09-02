@@ -284,8 +284,8 @@ expect_forge_reject() {
         docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" >&2 || true
         exit 1
     fi
-    if ! docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog} | grep -q PROCESS_TGS"; then
-        echo "$label: new lines of ${klog} missing PROCESS_TGS" >&2
+    if ! docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog} | grep -Eq 'PROCESS_TGS|FAST armor TGT'"; then
+        echo "$label: new lines of ${klog} missing PROCESS_TGS/FAST armor TGT" >&2
         docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" >&2 || true
         exit 1
     fi
