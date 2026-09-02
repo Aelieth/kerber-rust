@@ -334,8 +334,43 @@ expect_looking_up_server() {
         docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" >&2 || true
         exit 1
     fi
-    if ! docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog} | grep -Eq 'LOOKING_UP_SERVER|GET_LOCAL_TGT'"; then
-        echo "$label: new lines of ${klog} missing LOOKING_UP_SERVER/GET_LOCAL_TGT" >&2
+    if ! docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog} | grep -q GET_LOCAL_TGT"; then
+        echo "$label: new lines of ${klog} missing GET_LOCAL_TGT" >&2
+        docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" >&2 || true
+        exit 1
+    fi
+    echo "$label new ${klog} lines (from $((n + 1))):"
+    docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" || true
+}
+
+seed_c_tgt_renewable() {
+    local cc="$1"
+    docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+        sh -c "printf 'userpassword\n' | kinit -r 7d -c ${cc} user@A.TEST" >/dev/null
+    docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+        kvno -c "$cc" krbtgt/C.TEST@C.TEST >/dev/null
+}
+
+expect_dest_renew_get_local_tgt() {
+    local label="$1"
+    local cc="$2"
+    local klog="$3"
+    local n
+    n="$(docker exec "$NAME" sh -c "wc -l < ${klog}" | tr -d '[:space:]')"
+    set +e
+    local out rc
+    out="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+        /tmp/krb5-kvno --renew --body-realm B.TEST -c "$cc" 127.0.0.1:90 krbtgt/C.TEST@C.TEST 2>&1)"
+    rc=$?
+    set -e
+    echo "$out"
+    if [ "$rc" -eq 0 ]; then
+        echo "$label: dest RENEW with issuer body.realm must not issue" >&2
+        docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" >&2 || true
+        exit 1
+    fi
+    if ! docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog} | grep -q GET_LOCAL_TGT"; then
+        echo "$label: new lines of ${klog} missing GET_LOCAL_TGT" >&2
         docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" >&2 || true
         exit 1
     fi
@@ -434,9 +469,13 @@ expect_forge_reject "MIT forge A.TEST" /tmp/krb5cc_mit_forge_a /tmp/mit-c.log
 forge_mit_tgt /tmp/krb5cc_mit_forge /tmp/krb5cc_mit_forge_c C.TEST
 expect_forge_reject "MIT forge C.TEST" /tmp/krb5cc_mit_forge_c /tmp/mit-c.log
 
-echo "==== MIT C GARBAGE.EXAMPLE local sname is LOOKING_UP_SERVER ===="
+echo "==== MIT C GARBAGE.EXAMPLE local sname is GET_LOCAL_TGT ===="
 seed_c_tgt /tmp/krb5cc_mit_garbage
 expect_looking_up_server "MIT GARBAGE.EXAMPLE" /tmp/krb5cc_mit_garbage /tmp/mit-c.log
+
+echo "==== MIT dest RENEW with issuer body.realm is GET_LOCAL_TGT ===="
+seed_c_tgt_renewable /tmp/krb5cc_mit_renew
+expect_dest_renew_get_local_tgt "MIT dest RENEW issuer realm" /tmp/krb5cc_mit_renew /tmp/mit-c.log
 
 echo "==== MIT skip same-realm default is POLICY ===="
 kinit_a /tmp/krb5cc_mit_skip_a
@@ -678,9 +717,13 @@ expect_forge_reject "Rust forge A.TEST" /tmp/krb5cc_rust_forge_a /tmp/kdc-c-allo
 forge_rust_tgt /tmp/krb5cc_rust_forge /tmp/krb5cc_rust_forge_c C.TEST
 expect_forge_reject "Rust forge C.TEST" /tmp/krb5cc_rust_forge_c /tmp/kdc-c-allow.log
 
-echo "==== Rust C GARBAGE.EXAMPLE local sname is LOOKING_UP_SERVER ===="
+echo "==== Rust C GARBAGE.EXAMPLE local sname is GET_LOCAL_TGT ===="
 seed_c_tgt /tmp/krb5cc_rust_garbage
 expect_looking_up_server "Rust GARBAGE.EXAMPLE" /tmp/krb5cc_rust_garbage /tmp/kdc-c-allow.log
+
+echo "==== Rust dest RENEW with issuer body.realm is GET_LOCAL_TGT ===="
+seed_c_tgt_renewable /tmp/krb5cc_rust_renew
+expect_dest_renew_get_local_tgt "Rust dest RENEW issuer realm" /tmp/krb5cc_rust_renew /tmp/kdc-c-allow.log
 
 echo "==== Rust skip same-realm default is POLICY ===="
 kinit_a /tmp/krb5cc_rust_skip_a

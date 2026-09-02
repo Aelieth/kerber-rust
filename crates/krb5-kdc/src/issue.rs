@@ -631,21 +631,15 @@ fn issue_tgs_body(
     if store.tgs_replay().check_and_store(rkey) {
         return Err(proto(err::REPEAT, "TGS authenticator replay"));
     }
-    let mut sname = body
+    let sname = body
         .sname
         .clone()
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no sname"))?;
-    // MIT search_sprinc looks up the full principal; a local sname with a
-    // foreign body.realm is not a local hit. RENEW/VALIDATE cannot refer.
+    // MIT get_local_tgt requires krbtgt/<body.realm>@<body.realm> in the KDB
+    // before search_sprinc. A single-realm KDC answers 60 GET_LOCAL_TGT.
     let req_realm = utf8_realm(&body.realm)?.to_owned();
-    if req_realm != store.realm() && !(renew || validate) {
-        let referral =
-            PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", req_realm.as_str()])
-                .map_err(|_| proto(err::S_PRINCIPAL_UNKNOWN, "LOOKING_UP_SERVER"))?;
-        if store.fetch_name(&referral)?.is_none() {
-            return Err(proto(err::S_PRINCIPAL_UNKNOWN, "LOOKING_UP_SERVER"));
-        }
-        sname = referral;
+    if req_realm != store.realm() {
+        return Err(proto(err::GENERIC, "GET_LOCAL_TGT"));
     }
     if (renew || validate) && sname != ap.ticket.sname {
         return Err(proto(err::BADOPTION, "RENEW/VALIDATE server mismatch"));
@@ -713,7 +707,6 @@ fn issue_tgs_body(
     };
     let mut transited = enc_tkt.transited.clone();
     // MIT is_crossrealm: header TGT realm ≠ local KDC realm and ≠ client.
-    // Skip only the append when previous hop equals the request realm.
     let prev_hop = utf8_realm(&ap.ticket.realm)?;
     let crealm = utf8_realm(&enc_tkt.crealm)?;
     let is_crossrealm = prev_hop != store.realm() && prev_hop != crealm;
@@ -721,15 +714,9 @@ fn issue_tgs_body(
         if transited.tr_type != 1 {
             return Err(proto(err::TRTYPE_NOSUPP, "VALIDATE_TRANSIT_TYPE"));
         }
-        if prev_hop == req_realm.as_str() {
-            transited
-                .validate_add_path()
-                .map_err(|_| proto(err::ILL_CR_TKT, "ADD_TO_TRANSITED_LIST"))?;
-        } else {
-            transited = transited
-                .append_realm(prev_hop, crealm, req_realm.as_str())
-                .map_err(|_| proto(err::ILL_CR_TKT, "ADD_TO_TRANSITED_LIST"))?;
-        }
+        transited = transited
+            .append_realm(prev_hop, crealm, req_realm.as_str())
+            .map_err(|_| proto(err::ILL_CR_TKT, "ADD_TO_TRANSITED_LIST"))?;
     }
     let transit_checked = if crealm == "WELLKNOWN:ANONYMOUS" {
         true

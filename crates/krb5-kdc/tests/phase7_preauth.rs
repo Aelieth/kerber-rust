@@ -2211,11 +2211,14 @@ fn tgs_canonicalize_issues_cross_realm_krbtgt() {
         pref_etypes(),
     )
     .expect("cross-realm TGS-REQ");
-    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("referral TGS");
-    assert_eq!(
-        out.rep.0.ticket.sname.components_joined(),
-        "krbtgt/OTHER.TEST"
-    );
+    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("foreign body.realm");
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::GENERIC);
+            assert_eq!(text.as_deref(), Some("GET_LOCAL_TGT"));
+        }
+        other => panic!("expected 60 GET_LOCAL_TGT, got {other:?}"),
+    }
 }
 
 #[test]
@@ -2233,14 +2236,14 @@ fn tgs_referral_ad_kerber_test_issues_krbtgt() {
         .expect("interrealm");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 71);
-    let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "svc.ad.kerber.test"]);
+    let ir_sname = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "AD.KERBER.TEST"]);
     let tgs = tgs_req_ex(
         tgt.rep.0.ticket.clone(),
         &tgt.session_key,
         TEST_REALM,
         &cname,
-        host,
-        "AD.KERBER.TEST",
+        ir_sname,
+        TEST_REALM,
         72,
         KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true),
         None,
@@ -2297,14 +2300,13 @@ fn interrealm_issue_key_is_not_the_peer_accept_key() {
     assert!(ir.keys.iter().any(|k| k.key.as_bytes() == accept_bytes));
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 81);
-    let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "svc.ad.kerber.test"]);
     let tgs = tgs_req_ex(
         tgt.rep.0.ticket.clone(),
         &tgt.session_key,
         TEST_REALM,
         &cname,
-        host,
-        "AD.KERBER.TEST",
+        ir_name,
+        TEST_REALM,
         82,
         KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true),
         None,

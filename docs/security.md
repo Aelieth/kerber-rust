@@ -55,6 +55,11 @@ DOMAIN-X500-COMPRESS joins on unescaped field text (MIT `maybe_join`:
 `X.COM,C\.` → `C.X.COM`). Null subfields match MIT
 `process_intermediates` (leading/trailing comma, `,,`).
 
+A TGS-REQ whose `body.realm` is not a realm this KDC serves is 60
+`GET_LOCAL_TGT` (MIT `get_local_tgt` on a single-realm KDC; a
+multi-realm MIT KDC may answer 68 `WRONG_REALM` from `dispatch.c`).
+Destination RENEW/VALIDATE is not exempt.
+
 ## Not in this matrix
 
 In-process metrics counters are deferred (logs already carry

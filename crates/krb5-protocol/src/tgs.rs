@@ -96,10 +96,14 @@ pub fn tgs_exchange_once(
     sname: PrincipalName,
     realm: &str,
     disable_transited_check: bool,
+    renew: bool,
 ) -> Result<TgsOutcome, Error> {
     let mut opts = tgs_kdc_options(tgt);
     if disable_transited_check {
         opts = opts.with_bit(flag_bit::DISABLE_TRANSITED_CHECK, true);
+    }
+    if renew {
+        opts = opts.with_bit(flag_bit::RENEW, true);
     }
     tgs_once(kdc, tgt, sname, realm, opts, &[])
 }

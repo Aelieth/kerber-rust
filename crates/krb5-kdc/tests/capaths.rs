@@ -47,6 +47,32 @@ fn as_tgt(store: &PrincipalStore, realm: &str, nonce: u32) -> krb5_kdc::IssuedAs
     krb5_kdc::issue_as(store, &req).expect("AS")
 }
 
+fn as_tgt_renewable(store: &PrincipalStore, realm: &str, nonce: u32) -> krb5_kdc::IssuedAs {
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let salt = cname.default_salt(realm);
+    let key = krb5_crypto::string_to_key(
+        EncryptionType::Aes256CtsHmacSha196,
+        TEST_USER_PASSWORD,
+        &salt,
+        Some(&krb5_kdc::S2K_ITERS.to_be_bytes()),
+    )
+    .expect("s2k");
+    let mut req = as_req(
+        cname,
+        realm,
+        nonce,
+        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
+    )
+    .unwrap();
+    req.0.req_body.kdc_options = req
+        .0
+        .req_body
+        .kdc_options
+        .with_bit(flag_bit::RENEWABLE, true);
+    req.0.req_body.rtime = Some(req.0.req_body.till.add_hours(48).expect("rtime"));
+    krb5_kdc::issue_as(store, &req).expect("AS renewable")
+}
+
 fn chase_tgs(
     store: &PrincipalStore,
     ticket: krb5_types::Ticket,
@@ -333,7 +359,7 @@ fn transited_cross_realm_renew_at_dest_checks_tr_type() {
         "A.TEST",
         &cname,
         PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "C.TEST"]),
-        "B.TEST",
+        "C.TEST",
         531,
         KdcOptions::forwardable().with_bit(flag_bit::RENEW, true),
         None,
@@ -521,7 +547,7 @@ fn presented_tgt_decrypt_is_bound_to_ticket_realm() {
 }
 
 #[test]
-fn tgs_local_sname_unknown_body_realm_is_looking_up_server() {
+fn tgs_local_sname_unknown_body_realm_is_get_local_tgt() {
     let (_a, _b, c, _ir, host_c, bc) = three_realm();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let req = tgs_req(
@@ -535,8 +561,8 @@ fn tgs_local_sname_unknown_body_realm_is_looking_up_server() {
     )
     .expect("tgs");
     let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
-    assert_eq!(code, err::S_PRINCIPAL_UNKNOWN);
-    assert_eq!(text.as_deref(), Some("LOOKING_UP_SERVER"));
+    assert_eq!(code, err::GENERIC);
+    assert_eq!(text.as_deref(), Some("GET_LOCAL_TGT"));
 
     let tgt = as_tgt(&c, "C.TEST", 921);
     let req = tgs_req(
@@ -550,12 +576,12 @@ fn tgs_local_sname_unknown_body_realm_is_looking_up_server() {
     )
     .expect("tgs");
     let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
-    assert_eq!(code, err::S_PRINCIPAL_UNKNOWN);
-    assert_eq!(text.as_deref(), Some("LOOKING_UP_SERVER"));
+    assert_eq!(code, err::GENERIC);
+    assert_eq!(text.as_deref(), Some("GET_LOCAL_TGT"));
 }
 
 #[test]
-fn tgs_huge_body_realm_is_looking_up_server_quickly() {
+fn tgs_huge_body_realm_is_get_local_tgt_quickly() {
     let (_a, _b, c, _ir, host_c, bc) = three_realm();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let big = format!("{}A.TEST", "A.".repeat(30_000));
@@ -572,12 +598,81 @@ fn tgs_huge_body_realm_is_looking_up_server_quickly() {
     let t0 = std::time::Instant::now();
     let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
     let elapsed = t0.elapsed();
-    assert_eq!(code, err::S_PRINCIPAL_UNKNOWN);
-    assert_eq!(text.as_deref(), Some("LOOKING_UP_SERVER"));
+    assert_eq!(code, err::GENERIC);
+    assert_eq!(text.as_deref(), Some("GET_LOCAL_TGT"));
     assert!(
         elapsed < std::time::Duration::from_millis(500),
         "60 KiB body.realm took {elapsed:?}"
     );
+}
+
+#[test]
+fn tgs_renew_at_dest_issuer_realm_is_get_local_tgt() {
+    let (a, b, mut c, _ab, _bc, host_c, _bctgt) = three_realm_distinct();
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let tgt = as_tgt_renewable(&a, "A.TEST", 970);
+    let ren = KdcOptions::forwardable().with_bit(flag_bit::RENEWABLE, true);
+    let ab = tgs_req_ex(
+        tgt.rep.0.ticket.clone(),
+        &tgt.session_key,
+        "A.TEST",
+        &cname,
+        PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "B.TEST"]),
+        "A.TEST",
+        971,
+        ren.clone(),
+        None,
+        Vec::new(),
+        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
+    )
+    .expect("ab");
+    let ab = krb5_kdc::issue_tgs(&a, &ab).expect("A->B");
+    let bc = tgs_req_ex(
+        ab.rep.0.ticket.clone(),
+        &ab.session_key,
+        "A.TEST",
+        &cname,
+        PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "C.TEST"]),
+        "B.TEST",
+        972,
+        ren,
+        None,
+        Vec::new(),
+        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
+    )
+    .expect("bc");
+    let bc = krb5_kdc::issue_tgs(&b, &bc).expect("B->C");
+    c.set_capaths(std::collections::BTreeMap::new());
+    let honest = tgs_req(
+        bc.rep.0.ticket.clone(),
+        &bc.session_key,
+        "A.TEST",
+        &cname,
+        host_c.clone(),
+        "C.TEST",
+        973,
+    )
+    .expect("tgs");
+    let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &honest));
+    assert_eq!(code, err::POLICY);
+    assert_eq!(text.as_deref(), Some("BAD_TRANSIT"));
+    let renew = tgs_req_ex(
+        bc.rep.0.ticket.clone(),
+        &bc.session_key,
+        "A.TEST",
+        &cname,
+        PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "C.TEST"]),
+        "B.TEST",
+        974,
+        KdcOptions::forwardable().with_bit(flag_bit::RENEW, true),
+        None,
+        Vec::new(),
+        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
+    )
+    .expect("renew");
+    let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &renew));
+    assert_eq!(code, err::GENERIC);
+    assert_eq!(text.as_deref(), Some("GET_LOCAL_TGT"));
 }
 
 #[test]
@@ -603,7 +698,7 @@ fn transited_renew_at_dest_five_hundred_byte_add_path_is_43() {
         "A.TEST",
         &cname,
         PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "C.TEST"]),
-        "B.TEST",
+        "C.TEST",
         930,
         KdcOptions::forwardable().with_bit(flag_bit::RENEW, true),
         None,

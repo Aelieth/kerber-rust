@@ -22,6 +22,12 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **G9 Y1 KDC (MIT-gated).** TGS `body.realm` must be the served realm
+  (`get_local_tgt`): otherwise 60 `GET_LOCAL_TGT` for every option set,
+  including destination RENEW/VALIDATE. The Rust-only foreign-realm
+  referral and the renew/validate carve-out are gone. Gate:
+  `scripts/capaths-transit-gate.sh` GARBAGE equality + dest-RENEW.
+
 - **G9 Y1 client (MIT-gated).** TGS chase asks the *current* TGT's
   realm for `krbtgt/<next>` with `body.realm` = that realm (MIT
   `make_request_for_tgt` / `k5_client_realm_path`: dest first, then

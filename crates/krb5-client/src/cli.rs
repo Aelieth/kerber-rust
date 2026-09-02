@@ -351,6 +351,8 @@ pub struct KvnoArgs {
     /// `--body-realm` (gate-only): TGS-REQ realm with no chase. MIT clients
     /// never send a foreign `body.realm`.
     pub body_realm: Option<String>,
+    /// `--renew` (gate-only): set KDC option RENEW (dest-RENEW cells).
+    pub renew: bool,
     /// `-U` impersonated user (S4U2Self). Unlike MIT `kvno`, the ccache
     /// principal need not equal the service; the KDC enforces that.
     pub for_user: Option<String>,
@@ -366,6 +368,11 @@ fn kvno_longs() -> &'static [LongOpt] {
         LongOpt {
             name: "body-realm",
             takes_arg: true,
+            short: None,
+        },
+        LongOpt {
+            name: "renew",
+            takes_arg: false,
             short: None,
         },
     ]
@@ -386,6 +393,10 @@ pub fn parse_kvno(args: &[String]) -> Result<KvnoArgs, String> {
         }
         if o.long == Some("body-realm") {
             out.body_realm = o.arg;
+            continue;
+        }
+        if o.long == Some("renew") {
+            out.renew = true;
             continue;
         }
         match o.flag {
@@ -532,6 +543,15 @@ mod tests {
         assert_eq!(u.for_user.as_deref(), Some("admin"));
         let r = parse_kvno(&s(&["--body-realm", "GARBAGE.EXAMPLE", "host/x@R"])).unwrap();
         assert_eq!(r.body_realm.as_deref(), Some("GARBAGE.EXAMPLE"));
+        let n = parse_kvno(&s(&[
+            "--renew",
+            "--body-realm",
+            "B.TEST",
+            "krbtgt/C.TEST@C.TEST",
+        ]))
+        .unwrap();
+        assert!(n.renew);
+        assert_eq!(n.body_realm.as_deref(), Some("B.TEST"));
     }
 
     #[test]

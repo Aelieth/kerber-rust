@@ -49,6 +49,7 @@ fn main() {
         &service,
         args.disable_transited_check,
         args.body_realm.as_deref(),
+        args.renew,
         args.for_user.as_deref(),
     ) {
         eprintln!("kvno: {e}");
@@ -100,6 +101,7 @@ fn run(
     service: &str,
     disable_transited_check: bool,
     body_realm: Option<&str>,
+    renew: bool,
     for_user: Option<&str>,
 ) -> Result<(), String> {
     let mut cc = load_ccache(spec).map_err(|e| e.to_string())?;
@@ -175,7 +177,8 @@ fn run(
         };
         tgs_s4u(&addr, &tgt, sname, &srealm, uname, &urealm).map_err(kvno_err)?
     } else if let Some(br) = body_realm {
-        tgs_exchange_once(&addr, &tgt, sname, br, disable_transited_check).map_err(kvno_err)?
+        tgs_exchange_once(&addr, &tgt, sname, br, disable_transited_check, renew)
+            .map_err(kvno_err)?
     } else {
         tgs_exchange_ex(&addr, &tgt, sname, &srealm, disable_transited_check).map_err(kvno_err)?
     };
