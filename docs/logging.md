@@ -10,7 +10,7 @@ never install a subscriber. Tests and the harness do.
 | `event` | yes | Stable name (`crypto.encrypt`, `asn1.decode`, `harness.kinit`, …) |
 | `correlation_id` | yes | 32 hex chars; one ID per *exchange* (crypto/ASN.1 inherit the parent via `enter_correlation`; they do not mint a new ID per op) |
 | `component` | yes | `krb5-crypto`, `krb5-asn1`, `krb5-kdc`, or `harness` |
-| `outcome` | yes | `ok` or `error` |
+| `outcome` | yes | `ok`, `error`, or `krb-error` |
 | `duration_us` | crypto/asn1 | Wall time of the operation |
 | `etype` | crypto | IANA encryption-type number |
 | `key_usage` | crypto | RFC 3961 usage, when applicable |
@@ -19,6 +19,13 @@ never install a subscriber. Tests and the harness do.
 | `error` | on failure | `Display` of the error (no key material) |
 
 Canonical `event` strings live in `krb5_log::events`.
+
+A request that is answered with a **KRB-ERROR** PDU is logged from
+`encode_krb_error` as `event=kdc.issue`, `outcome=krb-error`, plus
+`code` (RFC 4120 error-code) and `e_text` (MIT `log_tgs_req` status
+string, e.g. `BAD_TRANSIT`). Those replies are not logged as
+`outcome=ok`. Store-programming failures that cannot be encoded stay
+`outcome=error`.
 
 ## Logs as metrics
 

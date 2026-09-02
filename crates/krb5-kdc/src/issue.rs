@@ -70,13 +70,17 @@ pub fn handle_request(store: &dyn PrincipalRead, raw: &[u8]) -> Result<Vec<u8>, 
     }
     let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
     match &result {
-        Ok(_) => tracing::info!(
-            event = krb5_log::events::KDC_ISSUE,
-            correlation_id = krb5_log::current_correlation_id(),
-            component = "krb5-kdc",
-            duration_us,
-            outcome = "ok",
-        ),
+        Ok(bytes) => {
+            if !bytes.starts_with(&[0x7e]) {
+                tracing::info!(
+                    event = krb5_log::events::KDC_ISSUE,
+                    correlation_id = krb5_log::current_correlation_id(),
+                    component = "krb5-kdc",
+                    duration_us,
+                    outcome = "ok",
+                );
+            }
+        }
         Err(e) => tracing::error!(
             event = krb5_log::events::KDC_ISSUE,
             correlation_id = krb5_log::current_correlation_id(),
@@ -1352,6 +1356,14 @@ fn encode_krb_error(
     e_data: Option<Vec<u8>>,
     body: Option<&krb5_types::KdcReqBody>,
 ) -> Vec<u8> {
+    tracing::warn!(
+        event = krb5_log::events::KDC_ISSUE,
+        correlation_id = krb5_log::current_correlation_id(),
+        component = "krb5-kdc",
+        outcome = "krb-error",
+        code,
+        e_text = text.unwrap_or(""),
+    );
     // MIT 1.22.2 echoes the request realm/sname (C_PRINCIPAL_UNKNOWN for a
     // foreign-realm AS-REQ, not WRONG_REALM).
     let realm_s = body
