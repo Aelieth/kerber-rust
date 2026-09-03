@@ -345,8 +345,12 @@ impl<'a> AdminSession<'a> {
     /// ACL denied or principal missing.
     pub fn change_password(&mut self, name: &PrincipalName, password: &[u8]) -> Result<(), Error> {
         self.reload()?;
-        let target = format!("{}@{}", name.components_joined(), self.store.realm());
-        if self.actor != target {
+        let store_realm = self.store.realm();
+        let self_change = self.actor.rsplit_once('@').is_some_and(|(left, arealm)| {
+            let actor = PrincipalName::new(PrincipalName::NT_UNKNOWN, left.split('/'));
+            krb5_types::principal_compare(name, store_realm, &actor, arealm)
+        });
+        if !self_change {
             self.acl
                 .check(&self.actor, AdminOp::ChangePassword)
                 .map_err(Error::from)?;
@@ -660,10 +664,94 @@ mod tests {
     }
 
     #[test]
-    fn kpasswd_self_change_with_initial_succeeds() {
+    fn kpasswd_self_change_with_other_name_type_still_requires_initial() {
         use krb5_asn1::encode;
         use krb5_kdc::{TEST_REALM, TEST_USER, documented_changepw, shared_dump as shared_store};
-        use krb5_protocol::{build_ap_req, build_krb_priv};
+        use krb5_protocol::{build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
+        use krb5_types::ChangePasswdData;
+
+        let (mut store, acl) = bootstrap_documented().unwrap();
+        allow_tgs_changepw(&mut store);
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+        let user_key = store
+            .get_name(&user)
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let kvno_before = store
+            .get_name(&user)
+            .unwrap()
+            .keys
+            .iter()
+            .map(|k| k.kvno)
+            .max()
+            .unwrap();
+        let tgs_out = changepw_tgs_ticket(&store, &user, &user_key, 931);
+        let changepw = documented_changepw();
+        let cpw_key = store
+            .get_name(&changepw)
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let ap = build_ap_req(
+            tgs_out.rep.0.ticket.clone(),
+            &tgs_out.session_key,
+            &krb5_types::ascii(TEST_REALM),
+            &user,
+        )
+        .unwrap();
+        let cpw = ChangePasswdData {
+            newpasswd: b"nt-unknown-pass".to_vec().into(),
+            targname: Some(PrincipalName::new(PrincipalName::NT_UNKNOWN, [TEST_USER])),
+            targrealm: Some(krb5_types::ascii(TEST_REALM)),
+        };
+        let priv_msg = build_krb_priv(&tgs_out.session_key, &encode(&cpw).unwrap()).unwrap();
+        let req = encode_kpasswd_req(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
+        let shared = shared_store(store);
+        let rep =
+            handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req).unwrap();
+        let (_, priv_rep) = parse_kpasswd_rep(&rep).unwrap();
+        let user_data = unwrap_krb_priv_ex(
+            &tgs_out.session_key,
+            &priv_rep,
+            &ReplayCache::new(),
+            false,
+            false,
+        )
+        .unwrap();
+        assert!(
+            user_data.len() >= 2 && user_data[0] == 0 && user_data[1] == 7,
+            "name-type-insensitive self-change is INITIAL_FLAG_NEEDED [0,7], got {user_data:?}"
+        );
+        assert!(
+            user_data[2..].starts_with(b"Ticket must be derived from a password"),
+            "MIT text, got {:?}",
+            String::from_utf8_lossy(&user_data[2..])
+        );
+        let after = shared.read().unwrap();
+        let kvno_after = after
+            .get_name(&user)
+            .unwrap()
+            .keys
+            .iter()
+            .map(|k| k.kvno)
+            .max()
+            .unwrap();
+        assert_eq!(
+            kvno_after, kvno_before,
+            "NT-UNKNOWN targname must not bypass INITIAL"
+        );
+    }
+
+    #[test]
+    fn kpasswd_target_realm_mismatch_is_harderror() {
+        use krb5_asn1::encode;
+        use krb5_kdc::{TEST_REALM, TEST_USER, documented_changepw, shared_dump as shared_store};
+        use krb5_protocol::{build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
         use krb5_types::ChangePasswdData;
 
         let (store, acl) = bootstrap_documented().unwrap();
@@ -675,6 +763,97 @@ mod tests {
             .unwrap()
             .key
             .clone();
+        let kvno_before = store
+            .get_name(&user)
+            .unwrap()
+            .keys
+            .iter()
+            .map(|k| k.kvno)
+            .max()
+            .unwrap();
+        let as_out = changepw_as_ticket(&store, &user, &user_key, 941);
+        let changepw = documented_changepw();
+        let cpw_key = store
+            .get_name(&changepw)
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let ap = build_ap_req(
+            as_out.rep.0.ticket.clone(),
+            &as_out.session_key,
+            &krb5_types::ascii(TEST_REALM),
+            &user,
+        )
+        .unwrap();
+        let cpw = ChangePasswdData {
+            newpasswd: b"foreign-realm-pass".to_vec().into(),
+            targname: Some(user.clone()),
+            targrealm: Some(krb5_types::ascii("OTHER.TEST")),
+        };
+        let priv_msg = build_krb_priv(&as_out.session_key, &encode(&cpw).unwrap()).unwrap();
+        let req = encode_kpasswd_req(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
+        let shared = shared_store(store);
+        let rep =
+            handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req).unwrap();
+        let (_, priv_rep) = parse_kpasswd_rep(&rep).unwrap();
+        let user_data = unwrap_krb_priv_ex(
+            &as_out.session_key,
+            &priv_rep,
+            &ReplayCache::new(),
+            false,
+            false,
+        )
+        .unwrap();
+        assert!(
+            user_data.len() >= 2 && user_data[0] == 0 && user_data[1] == 2,
+            "foreign targrealm is HARDERROR [0,2], got {user_data:?}"
+        );
+        assert!(
+            user_data[2..].starts_with(b"Principal does not exist"),
+            "MIT UNK_PRINC text, got {:?}",
+            String::from_utf8_lossy(&user_data[2..])
+        );
+        let after = shared.read().unwrap();
+        let kvno_after = after
+            .get_name(&user)
+            .unwrap()
+            .keys
+            .iter()
+            .map(|k| k.kvno)
+            .max()
+            .unwrap();
+        assert_eq!(
+            kvno_after, kvno_before,
+            "foreign targrealm must not set password"
+        );
+    }
+
+    #[test]
+    fn kpasswd_self_change_with_initial_succeeds() {
+        use krb5_asn1::encode;
+        use krb5_kdc::{TEST_REALM, TEST_USER, documented_changepw, shared_dump as shared_store};
+        use krb5_protocol::{build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
+        use krb5_types::ChangePasswdData;
+
+        let (store, acl) = bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+        let user_key = store
+            .get_name(&user)
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let kvno_before = store
+            .get_name(&user)
+            .unwrap()
+            .keys
+            .iter()
+            .map(|k| k.kvno)
+            .max()
+            .unwrap();
         let as_out = changepw_as_ticket(&store, &user, &user_key, 911);
         let changepw = documented_changepw();
         let cpw_key = store
@@ -704,6 +883,32 @@ mod tests {
         assert!(
             rep.len() > 6 && u16::from_be_bytes([rep[4], rep[5]]) > 0,
             "INITIAL self-change includes AP-REP"
+        );
+        let (_, priv_rep) = parse_kpasswd_rep(&rep).unwrap();
+        let user_data = unwrap_krb_priv_ex(
+            &as_out.session_key,
+            &priv_rep,
+            &ReplayCache::new(),
+            false,
+            false,
+        )
+        .unwrap();
+        assert!(
+            user_data.len() >= 2 && user_data[0] == 0 && user_data[1] == 0,
+            "INITIAL self-change [0,0], got {user_data:?}"
+        );
+        let after = shared.read().unwrap();
+        let kvno_after = after
+            .get_name(&user)
+            .unwrap()
+            .keys
+            .iter()
+            .map(|k| k.kvno)
+            .max()
+            .unwrap();
+        assert!(
+            kvno_after > kvno_before,
+            "INITIAL self-change must bump kvno ({kvno_before} -> {kvno_after})"
         );
     }
 

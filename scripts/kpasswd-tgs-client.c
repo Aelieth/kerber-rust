@@ -1,6 +1,7 @@
 /* MIT krb5_change_password with a TGS-obtained kadmin/changepw ticket.
  * Out-of-process only; compiled in the MIT image (gss-mit-*.c).
  * usage: kpasswd-tgs-client <ccache> <realm> <newpw>
+ * KPASSWD_TARGNAME_TYPE=<n>: krb5_set_password with target->type = n.
  */
 #include <krb5.h>
 #include <stdio.h>
@@ -48,8 +49,23 @@ int main(int argc, char **argv) {
         krb5_free_error_message(ctx, m);
         return 1;
     }
-    rc = krb5_change_password(ctx, out, argv[3], &result_code, &code_string,
-                              &result_string);
+    {
+        const char *nt_env = getenv("KPASSWD_TARGNAME_TYPE");
+        if (nt_env != NULL) {
+            krb5_principal target = NULL;
+            if ((rc = krb5_copy_principal(ctx, in.client, &target))) {
+                fprintf(stderr, "copy_principal: %d\n", rc);
+                return 1;
+            }
+            target->type = atoi(nt_env);
+            rc = krb5_set_password(ctx, out, argv[3], target, &result_code,
+                                   &code_string, &result_string);
+            krb5_free_principal(ctx, target);
+        } else {
+            rc = krb5_change_password(ctx, out, argv[3], &result_code,
+                                      &code_string, &result_string);
+        }
+    }
     printf("krb5_change_password_rc=%d\n", rc);
     printf("result_code=%d\n", result_code);
     printf("result_code_string=%.*s\n", (int)code_string.length,

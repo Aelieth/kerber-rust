@@ -239,6 +239,23 @@ if docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
     echo "TGS kpasswd changed the password" >&2
     exit 1
 fi
+echo "==== TGS kpasswd NT-UNKNOWN targname still INITIAL (Rust) ===="
+docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
+    "$NAME" sh -c 'printf "rust-kpw\n" | kinit user@KERBER.TEST'
+set +e
+D2NT="$(docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf -e KPASSWD_TARGNAME_TYPE=0 \
+    "$NAME" /tmp/kpasswd-tgs-client FILE:/tmp/krb5cc_kpasswd KERBER.TEST e1-should-fail)"
+d2nt_rc=$?
+set -e
+echo "$D2NT"
+echo "$D2NT" | grep -F 'result_code=7'
+echo "$D2NT" | grep -F 'Ticket must be derived from a password'
+if docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
+    "$NAME" sh -c 'printf "e1-should-fail\n" | kinit user@KERBER.TEST'; then
+    echo "NT-UNKNOWN targname kpasswd changed the password" >&2
+    kadmin_q 'cpw -pw rust-kpw user'
+    exit 1
+fi
 kadmin_q 'modprinc -allow_tgs_req kadmin/changepw'
 
 echo "==== Rust kadmind policy rejection is SOFTERROR ===="
@@ -384,8 +401,25 @@ echo "$D2M" | grep -F 'result_code=7'
 echo "$D2M" | grep -F 'Ticket must be derived from a password'
 echo "==== MIT kadmind.log ===="
 docker exec "$NAME_MIT" sh -c 'cat /tmp/kadmind.log 2>/dev/null || true'
-if ! docker exec "$NAME_MIT" grep -F 'Ticket must be derived from a password' /tmp/kadmind.log 2>/dev/null; then
-    echo "MIT kadmind klog not in FILE (result_string is the equality bar)"
+docker logs "$NAME_MIT" 2>&1 | grep -F 'chpw request from 127.0.0.1 for user@KERBER.TEST: Operation requires initial ticket' \
+    || docker exec "$NAME_MIT" grep -F 'chpw request from 127.0.0.1 for user@KERBER.TEST: Operation requires initial ticket' /tmp/kadmind.log
+if docker exec "$NAME_MIT" sh -c 'export KRB5CCNAME=FILE:/tmp/krb5cc_d2; printf "d2-should-fail\n" | kinit user@KERBER.TEST'; then
+    echo "MIT TGS kpasswd changed the password" >&2
+    exit 1
+fi
+echo "==== TGS kpasswd NT-UNKNOWN targname still INITIAL (MIT) ===="
+docker exec "$NAME_MIT" sh -c 'export KRB5CCNAME=FILE:/tmp/krb5cc_d2; printf "userpassword\n" | kinit user@KERBER.TEST'
+set +e
+D2MNT="$(docker exec "$NAME_MIT" sh -c 'export KRB5CCNAME=FILE:/tmp/krb5cc_d2 KPASSWD_TARGNAME_TYPE=0; /tmp/kpasswd-tgs-client FILE:/tmp/krb5cc_d2 KERBER.TEST e1-should-fail')"
+d2mnt_rc=$?
+set -e
+echo "$D2MNT"
+echo "$D2MNT" | grep -F 'result_code=7'
+echo "$D2MNT" | grep -F 'Ticket must be derived from a password'
+if docker exec "$NAME_MIT" sh -c 'export KRB5CCNAME=FILE:/tmp/krb5cc_d2; printf "e1-should-fail\n" | kinit user@KERBER.TEST'; then
+    echo "MIT NT-UNKNOWN targname kpasswd changed the password" >&2
+    docker exec "$NAME_MIT" kadmin.local -q 'cpw -pw userpassword user'
+    exit 1
 fi
 docker exec "$NAME_MIT" kadmin.local -q 'modprinc -allow_tgs_req kadmin/changepw'
 

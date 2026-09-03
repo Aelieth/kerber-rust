@@ -358,7 +358,10 @@ when that oracle is absent.
   remote `ktadd -norandkey` is `extract-keys`. After `+allow_tgs_req`,
   a TGS-obtained `kadmin/changepw` ticket self-change is result 7
   `Ticket must be derived from a password` on both kadminds
-  (`scripts/kpasswd-tgs-client.c`). Run twice.
+  (`scripts/kpasswd-tgs-client.c`), including
+  `KPASSWD_TARGNAME_TYPE=0`. MIT kadmind log is `chpw request from
+  127.0.0.1 for user@KERBER.TEST: Operation requires initial ticket`.
+  Run twice.
   `scripts/rust-kpasswd-mit-gate.sh` is Rust `krb5-kpasswd` against
   MIT `kadmind` (AS-REQ sname `kadmin/changepw`; MIT
   `DISALLOW_TGT_BASED`).

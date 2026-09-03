@@ -34,6 +34,19 @@ pub use extra::{
 };
 pub use name_error::{NameError, TimeError};
 
+/// Name-type-insensitive equality of components and realm.
+///
+/// MIT `krb5_principal_compare` (`princ_comp.c:79-124`) ignores name type.
+#[must_use]
+pub fn principal_compare(
+    name_a: &PrincipalName,
+    realm_a: &str,
+    name_b: &PrincipalName,
+    realm_b: &str,
+) -> bool {
+    realm_a == realm_b && name_a.components_eq(name_b)
+}
+
 /// Construct a [`KerberosString`] from ASCII / GeneralString text.
 ///
 /// # Panics
@@ -212,6 +225,12 @@ impl PrincipalName {
     #[must_use]
     pub fn krbtgt(realm: &str) -> Self {
         Self::new(Self::NT_SRV_INST, ["krbtgt", realm])
+    }
+
+    /// Name-string components, ignoring `name_type`.
+    #[must_use]
+    pub fn components_eq(&self, other: &Self) -> bool {
+        self.name_string == other.name_string
     }
 
     /// Name-string components joined with `/` (`user`, `host/foo`).
@@ -1352,6 +1371,16 @@ pub struct EncTicketPart {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn principal_compare_ignores_name_type_and_checks_realm() {
+        let a = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+        let b = PrincipalName::new(PrincipalName::NT_UNKNOWN, ["user"]);
+        let c = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["admin"]);
+        assert!(principal_compare(&a, "KERBER.TEST", &b, "KERBER.TEST"));
+        assert!(!principal_compare(&a, "KERBER.TEST", &b, "OTHER.TEST"));
+        assert!(!principal_compare(&a, "KERBER.TEST", &c, "KERBER.TEST"));
+    }
 
     #[test]
     fn ticket_flags_initial_preauth_is_rfc_bits_9_and_10() {

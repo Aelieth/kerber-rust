@@ -1139,6 +1139,54 @@ fn tgs_authenticator_cname_mismatch_is_badmatch() {
 }
 
 #[test]
+fn tgs_authenticator_crealm_mismatch_is_badmatch() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 906);
+    let mut tgs = tgs_req(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        907,
+    )
+    .unwrap();
+    let pa = tgs
+        .0
+        .padata
+        .as_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|p| p.padata_type == pa::TGS_REQ)
+        .expect("PA-TGS-REQ");
+    let mut ap: ApReq = decode(pa.padata_value.as_ref()).expect("ap");
+    let auth_usage = KeyUsage::new(ku::TGS_REQ_AUTHENTICATOR).unwrap();
+    let auth_plain = decrypt(
+        &issued.session_key,
+        auth_usage,
+        ap.authenticator.cipher.as_ref(),
+    )
+    .expect("auth");
+    let mut authenticator: krb5_types::Authenticator = decode(&auth_plain).expect("authenticator");
+    authenticator.crealm = ascii("OTHER.TEST");
+    let auth_der = encode(&authenticator).expect("auth der");
+    ap.authenticator.cipher = encrypt(&issued.session_key, auth_usage, &auth_der)
+        .expect("enc")
+        .into();
+    pa.padata_value = encode(&ap).expect("ap").into();
+    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("crealm mismatch");
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::BADMATCH);
+            assert_eq!(text.as_deref(), Some("PROCESS_TGS"));
+        }
+        other => panic!("expected 36 BADMATCH PROCESS_TGS, got {other:?}"),
+    }
+}
+
+#[test]
 fn spake_challenge_then_as_rep() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);

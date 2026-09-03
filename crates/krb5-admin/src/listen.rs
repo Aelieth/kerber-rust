@@ -13,7 +13,7 @@ use krb5_kdc::{SharedDump as SharedStore, save_store};
 use krb5_protocol::{
     ReplayCache, build_ap_rep, build_krb_priv_with_seq, unwrap_krb_priv_ex, verify_ap_req,
 };
-use krb5_types::{ChangePasswdData, EncryptionKey, PrincipalName};
+use krb5_types::{ChangePasswdData, EncryptionKey, PrincipalName, principal_compare};
 
 use crate::{AdminSession, Error, Op};
 
@@ -382,21 +382,38 @@ pub fn handle_kpasswd_rfc3244(
     };
     let user_data = unwrap_krb_priv_ex(&priv_key, priv_raw, replay, false, false)
         .map_err(|e| Error::Inner(e.to_string()))?;
-    let (targ, newpass) = match decode::<ChangePasswdData>(&user_data) {
+    let ticket_crealm = String::from_utf8_lossy(ok.ticket_part.crealm.as_bytes()).into_owned();
+    let store_realm = {
+        let g = store
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        g.realm().to_owned()
+    };
+    let (targ, targ_realm, newpass) = match decode::<ChangePasswdData>(&user_data) {
         Ok(cpw) => {
-            let name = cpw.targname.unwrap_or(ok.authenticator.cname.clone());
-            (name, cpw.newpasswd.to_vec())
+            let name = cpw.targname.unwrap_or_else(|| ok.ticket_part.cname.clone());
+            let realm = cpw.targrealm.as_ref().map_or_else(
+                || ticket_crealm.clone(),
+                |r| String::from_utf8_lossy(r.as_bytes()).into_owned(),
+            );
+            (name, realm, cpw.newpasswd.to_vec())
         }
-        Err(_) => (ok.authenticator.cname.clone(), user_data),
+        Err(_) => (
+            ok.ticket_part.cname.clone(),
+            ticket_crealm.clone(),
+            user_data,
+        ),
     };
     let client = format!(
         "{}@{}",
-        ok.authenticator.cname.components_joined(),
-        String::from_utf8_lossy(ok.authenticator.crealm.as_bytes())
+        ok.ticket_part.cname.components_joined(),
+        ticket_crealm
     );
-    // MIT misc.c: self-change requires TKT_FLG_INITIAL (schpw.c → 7).
-    let self_change = targ == ok.ticket_part.cname;
-    let (code, text) = if self_change && !ok.ticket_part.flags.initial() {
+    // MIT misc.c: self-change is krb5_principal_compare (name type ignored).
+    let self_change = principal_compare(&targ, &targ_realm, &ok.ticket_part.cname, &ticket_crealm);
+    let (code, text) = if targ_realm != store_realm {
+        (2u16, "Principal does not exist".into())
+    } else if self_change && !ok.ticket_part.flags.initial() {
         (7u16, "Ticket must be derived from a password".into())
     } else {
         let mut g = store

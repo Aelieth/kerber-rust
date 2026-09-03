@@ -93,9 +93,11 @@ special-casing keeps `PWCHANGE_SERVICE` only (`create_principal` has
 none of the `kdb5_util create` bits).
 
 kpasswd self-change (RFC 3244 target absent or equal to the ticket
-client) requires `TKT_FLG_INITIAL` (`misc.c`); otherwise result 7
-`Ticket must be derived from a password`. Admin-style changes ignore
-INITIAL. `min_life` is W1.
+client on components and realm, name-type-insensitive like
+`krb5_principal_compare`) requires `TKT_FLG_INITIAL` (`misc.c`);
+otherwise result 7 `Ticket must be derived from a password`. A
+`targrealm` that is not the store realm is 2 `HARDERROR` (`KADM5_UNK_PRINC`).
+Admin-style changes ignore INITIAL. `min_life` is W1.
 
 ## Not in this matrix
 

@@ -600,7 +600,9 @@ fn process_tgs_header(
         .cusec
         .validate()
         .map_err(|_| proto(err::GENERIC, "cusec"))?;
-    if authenticator.cname != enc_tkt.cname {
+    let auth_realm = utf8_realm(&authenticator.crealm)?;
+    let tkt_realm = utf8_realm(&enc_tkt.crealm)?;
+    if !krb5_types::principal_compare(&authenticator.cname, auth_realm, &enc_tkt.cname, tkt_realm) {
         return Err(proto(err::BADMATCH, "PROCESS_TGS"));
     }
     if let Some(ck) = &authenticator.cksum {

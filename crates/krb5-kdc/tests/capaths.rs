@@ -1,7 +1,7 @@
 //! Capaths transited check on the shipped `issue_tgs` path.
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, encrypt};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt};
 use krb5_kdc::{
     Acl, Error, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_SVR, PrincipalStore, TEST_ADMIN,
     TEST_ADMIN_PASSWORD, TEST_USER, TEST_USER_PASSWORD, as_req, decrypt_ticket_part,
@@ -9,7 +9,7 @@ use krb5_kdc::{
 };
 use krb5_protocol::{pa_for_user, tgs_req_ex};
 use krb5_types::{
-    EncTicketPart, KdcOptions, OctetString, PrincipalName, Ticket, err, flag_bit, ku,
+    ApReq, EncTicketPart, KdcOptions, OctetString, PrincipalName, Ticket, err, flag_bit, ku, pa,
 };
 
 fn realm_store(realm: &str, host: &str) -> (PrincipalStore, Acl, String, PrincipalName) {
@@ -994,7 +994,7 @@ fn s4u2self_local_tgt_foreign_crealm_is_badmatch() {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let pa = pa_for_user(&tgt.session_key, admin, "C.TEST").expect("PA-FOR-USER");
-    let req = tgs_req_ex(
+    let mut req = tgs_req_ex(
         t,
         &tgt.session_key,
         "C.TEST",
@@ -1008,6 +1008,29 @@ fn s4u2self_local_tgt_foreign_crealm_is_badmatch() {
         vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
     .expect("s4u");
+    let tgs_pa = req
+        .0
+        .padata
+        .as_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|p| p.padata_type == pa::TGS_REQ)
+        .expect("PA-TGS-REQ");
+    let mut ap: ApReq = decode(tgs_pa.padata_value.as_ref()).expect("ap");
+    let auth_usage = KeyUsage::new(ku::TGS_REQ_AUTHENTICATOR).unwrap();
+    let auth_plain = decrypt(
+        &tgt.session_key,
+        auth_usage,
+        ap.authenticator.cipher.as_ref(),
+    )
+    .expect("auth");
+    let mut authenticator: krb5_types::Authenticator = decode(&auth_plain).expect("authenticator");
+    authenticator.crealm = krb5_types::try_ascii("A.TEST").expect("realm");
+    let auth_der = encode(&authenticator).expect("auth der");
+    ap.authenticator.cipher = encrypt(&tgt.session_key, auth_usage, &auth_der)
+        .expect("enc")
+        .into();
+    tgs_pa.padata_value = encode(&ap).expect("ap").into();
     let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
     assert_eq!(code, err::BADMATCH);
     assert_eq!(

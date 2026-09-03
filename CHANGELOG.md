@@ -43,6 +43,16 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   ticket client is 36 `PROCESS_TGS` (`rd_req_dec.c`). MIT clients cannot
   emit these; live FAST gates stay green.
 
+- **W0c E1 (MIT-gated).** kpasswd self-change compares the RFC 3244
+  target to the ticket client like `krb5_principal_compare` (components
+  + realm, name type ignored). A TGS-obtained ticket with
+  `targname` type 0 is still result 7. A foreign `targrealm` is 2
+  `HARDERROR` `Principal does not exist`. TGS authenticator vs ticket
+  client includes realm (36 `PROCESS_TGS`). Gate:
+  `scripts/kpasswd-gate.sh` `KPASSWD_TARGNAME_TYPE=0`. MIT kadmind log
+  `chpw request from 127.0.0.1 for user@KERBER.TEST: Operation requires
+  initial ticket`.
+
 - **W0b D2 (MIT-gated).** kpasswd self-change without `INITIAL` is
   RFC 3244 result 7 (`Ticket must be derived from a password`, MIT
   `misc.c` / `schpw.c`). Admin-style changes (target ≠ client) ignore
