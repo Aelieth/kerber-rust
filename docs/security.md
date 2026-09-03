@@ -77,16 +77,16 @@ A presented-TGT krbtgt with `DISALLOW_SVR` or `DISALLOW_ALL_TIX` is 7
 FAST `req_checksum` is verified over the wire KDC-REQ-BODY (field 4)
 when a raw packet is present (`do_as_req.c:526-531`); socketless tests
 re-encode. Verify runs before the keyedness check (`fast_util.c:207-224`):
-a failed verify is 41 `MODIFIED` `FIND_FAST`; an unkeyed type is 12
-`Unkeyed checksum used in fast_req` only after verify succeeds
-(RSA-MD4 2, RSA-MD5 7, NIST-SHA 9, SHA-1 14; MIT `cksumtypes.c`).
-CRC32 (1) has no table entry. Unknown type or `output_size` length
-mismatch is 60 `GENERIC` `FIND_FAST` (`KRB5_BAD_ENCTYPE` /
-`KRB5_BAD_MSIZE`). Unknown armor type is
-24 `Unknown FAST armor type %d`. TGS authenticator client ≠ ticket
-client is 36 `PROCESS_TGS`. Explicit TGS AP-REQ armor is 24 even
-without a subkey; MIT only rejects it when a subkey is present
-(`fast_util.c:159-166`).
+a failed verify is 41 `MODIFIED` wire `FIND_FAST`; an unkeyed type is
+12 wire `FIND_FAST` (log `detail` `Unkeyed checksum used in fast_req`)
+only after verify succeeds (RSA-MD4 2, RSA-MD5 7, NIST-SHA 9, SHA-1 14;
+MIT `cksumtypes.c`). CRC32 (1) has no table entry. Unknown type or
+`output_size` length mismatch is 60 `GENERIC` wire `FIND_FAST`
+(`KRB5_BAD_ENCTYPE` / `KRB5_BAD_MSIZE`). Unknown armor type is
+24 with wire `FIND_FAST` (log `detail` is `Unknown FAST armor type %d`).
+TGS authenticator client ≠ ticket client is 36 `PROCESS_TGS`. Explicit
+TGS AP-REQ armor is 24 `FIND_FAST` even without a subkey; MIT only
+rejects it when a subkey is present (`fast_util.c:159-166`).
 
 `kadmin/admin` and `kadmin/changepw` are bootstrapped with MIT
 `kadm5_create` attributes: both `DISALLOW_TGT_BASED|LOCKDOWN_KEYS`;

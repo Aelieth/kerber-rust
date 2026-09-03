@@ -148,8 +148,8 @@ fi
 echo "$FORGED" | grep -q "The ticket isn't for us"
 MM_NEW="$(docker exec "$NAME" sh -c "tail -n +$((MM_BEFORE + 1)) /tmp/kdc.log")"
 echo "$MM_NEW"
-echo "$MM_NEW" | grep -q 'FAST armor TGT'
-echo "$MM_NEW" | grep -q '"code":35'
+echo "$MM_NEW" | grep -q '"code":35,"e_text":"FIND_FAST"'
+echo "$MM_NEW" | grep -q '"detail":"FAST armor TGT"'
 
 echo "==== MIT KDC: forged-realm FAST armor is NOT_US ===="
 MITNAME="${NAME}-mit"

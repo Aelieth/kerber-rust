@@ -79,13 +79,13 @@ pub(crate) fn unwrap_fast_tgs(
         _ => decode::<krb5_types::fast::KrbFastArmoredReq>(raw)?,
     };
     if armored.armor.is_some() {
-        return Err(proto(
+        return Err(proto_fast(
             err::PREAUTH_FAILED,
             "Ap-request armor not permitted with TGS",
         ));
     }
     let Some(sub) = subkey else {
-        return Err(proto(
+        return Err(proto_fast(
             err::PREAUTH_FAILED,
             "No armor key but FAST armored request present",
         ));
@@ -151,7 +151,7 @@ fn verify_fast_req_checksum(
 ) -> Result<(), Error> {
     // MIT krb5_c_verify_checksum then krb5_c_is_keyed_cksum (fast_util.c:207-224).
     if !cksumtype_is_keyed(ck.cksumtype) && !cksumtype_is_unkeyed(ck.cksumtype) {
-        return Err(proto(err::GENERIC, "FIND_FAST"));
+        return Err(proto_fast(err::GENERIC, "unknown checksum type"));
     }
     let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM)?;
     match verify_checksum_type(
@@ -162,13 +162,16 @@ fn verify_fast_req_checksum(
         ck.checksum.as_ref(),
     ) {
         Ok(()) => {}
-        Err(krb5_crypto::Error::UnsupportedChecksum(_) | krb5_crypto::Error::BadChecksumSize) => {
-            return Err(proto(err::GENERIC, "FIND_FAST"));
+        Err(krb5_crypto::Error::UnsupportedChecksum(_)) => {
+            return Err(proto_fast(err::GENERIC, "unknown checksum type"));
         }
-        Err(_) => return Err(proto(err::MODIFIED, "FIND_FAST")),
+        Err(krb5_crypto::Error::BadChecksumSize) => {
+            return Err(proto_fast(err::GENERIC, "checksum length"));
+        }
+        Err(_) => return Err(proto_fast(err::MODIFIED, "modified checksum")),
     }
     if !cksumtype_is_keyed(ck.cksumtype) {
-        return Err(proto(err::POLICY, "Unkeyed checksum used in fast_req"));
+        return Err(proto_fast(err::POLICY, "Unkeyed checksum used in fast_req"));
     }
     Ok(())
 }
@@ -178,12 +181,12 @@ fn armor_key_from(
     armored: &krb5_types::fast::KrbFastArmoredReq,
 ) -> Result<ProtocolKey, Error> {
     let Some(armor) = armored.armor.as_ref() else {
-        return Err(proto(err::PREAUTH_FAILED, "FAST armor required"));
+        return Err(proto_fast(err::PREAUTH_FAILED, "FAST armor required"));
     };
     if armor.armor_type != krb5_types::fast::ARMOR_AP_REQUEST {
-        return Err(proto(
+        return Err(proto_fast(
             err::PREAUTH_FAILED,
-            &format!("Unknown FAST armor type {}", armor.armor_type),
+            format!("Unknown FAST armor type {}", armor.armor_type),
         ));
     }
     armor_key_from_ap(store, armor.armor_value.as_ref())
@@ -194,17 +197,17 @@ fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<Protoco
     let tkt_usage = KeyUsage::new(ku::TICKET)?;
     let cipher = ap.ticket.enc_part.cipher.as_ref();
     let ticket_realm = std::str::from_utf8(ap.ticket.realm.as_bytes())
-        .map_err(|_| proto(err::NOT_US, "FAST armor TGT"))?;
+        .map_err(|_| proto_fast(err::NOT_US, "FAST armor TGT"))?;
     // MIT rd_req: unknown server (foreign realm or missing row) is NOT_US;
     // a local non-krbtgt armor ticket is SERVER_NOMATCH.
     if ticket_realm != store.realm() {
-        return Err(proto(err::NOT_US, "FAST armor TGT"));
+        return Err(proto_fast(err::NOT_US, "FAST armor TGT"));
     }
     let Some(p) = store.fetch_name(&ap.ticket.sname)? else {
-        return Err(proto(err::NOT_US, "FAST armor TGT"));
+        return Err(proto_fast(err::NOT_US, "FAST armor TGT"));
     };
     if !ap.ticket.sname.is_krbtgt_for(store.realm()) {
-        return Err(proto(err::SERVER_NOMATCH, "FAST armor TGT"));
+        return Err(proto_fast(err::SERVER_NOMATCH, "FAST armor TGT"));
     }
     let mut enc_tkt: Option<krb5_types::EncTicketPart> = None;
     for k in &p.keys {
@@ -215,13 +218,13 @@ fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<Protoco
             break;
         }
     }
-    let enc_tkt = enc_tkt.ok_or_else(|| proto(err::BAD_INTEGRITY, "FAST armor TGT"))?;
+    let enc_tkt = enc_tkt.ok_or_else(|| proto_fast(err::BAD_INTEGRITY, "FAST armor TGT"))?;
     if enc_tkt.flags.invalid() {
-        return Err(proto(err::TKT_NYV, "FAST armor INVALID"));
+        return Err(proto_fast(err::TKT_NYV, "FAST armor INVALID"));
     }
     let now = i64::from(krb5_types::KerberosTime::now().unix_seconds());
     if i64::from(enc_tkt.endtime.unix_seconds()) < now {
-        return Err(proto(err::TKT_EXPIRED, "FAST armor expired"));
+        return Err(proto_fast(err::TKT_EXPIRED, "FAST armor expired"));
     }
     let etype = EncryptionType::from_iana(enc_tkt.key.keytype)
         .or_else(|_| EncryptionType::known(enc_tkt.key.keytype))?;
@@ -231,7 +234,7 @@ fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<Protoco
     let authenticator: krb5_types::Authenticator = decode(&auth_plain)?;
     let then = i64::from(authenticator.ctime.unix_seconds());
     if (now - then).abs() > store.policy().skew {
-        return Err(proto(err::SKEW, "FAST armor authenticator"));
+        return Err(proto_fast(err::SKEW, "FAST armor authenticator"));
     }
     if let Some(sub) = authenticator.subkey {
         let st = EncryptionType::from_iana(sub.keytype)
@@ -620,6 +623,16 @@ pub(crate) fn proto(code: i32, text: &str) -> Error {
         code,
         text: Some(text.to_owned()),
         e_data: None,
+        detail: None,
+    }
+}
+
+pub(crate) fn proto_fast(code: i32, detail: impl Into<String>) -> Error {
+    Error::Protocol {
+        code,
+        text: Some("FIND_FAST".into()),
+        e_data: None,
+        detail: Some(detail.into()),
     }
 }
 
@@ -640,6 +653,7 @@ pub(crate) fn proto_e(code: i32, text: &str, e_data: Vec<u8>) -> Error {
         code,
         text: Some(text.to_owned()),
         e_data: Some(e_data),
+        detail: None,
     }
 }
 

@@ -1,5 +1,6 @@
 //! AS and TGS ticket issuance as functions over the principal store.
 
+use std::cell::RefCell;
 use std::time::Instant;
 
 use krb5_asn1::{decode, encode};
@@ -30,6 +31,18 @@ use crate::store::{
     KDB_OK_AS_DELEGATE, KDB_OK_TO_AUTH_AS_DELEGATE, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH,
     KDB_REQUIRES_PWCHANGE, Principal, random_key, s2k_params,
 };
+
+thread_local! {
+    static ISSUE_DETAIL: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+fn set_issue_detail(detail: Option<String>) {
+    ISSUE_DETAIL.with(|c| *c.borrow_mut() = detail);
+}
+
+fn take_issue_detail() -> Option<String> {
+    ISSUE_DETAIL.with(|c| c.borrow_mut().take())
+}
 
 /// Issued AS-REP plus the session key (for tests that decrypt the TGT).
 #[derive(Debug)]
@@ -69,6 +82,7 @@ pub fn handle_request(store: &dyn PrincipalRead, raw: &[u8]) -> Result<Vec<u8>, 
         krb5_protocol::capture_pdu("kdc-rep", bytes);
     }
     let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+    let detail = take_issue_detail();
     match &result {
         Ok(bytes) if bytes.starts_with(&[0x7e]) => {
             let (code, mut e_text) = krb_error_log_fields(bytes);
@@ -83,6 +97,7 @@ pub fn handle_request(store: &dyn PrincipalRead, raw: &[u8]) -> Result<Vec<u8>, 
                 outcome = "krb-error",
                 code,
                 e_text,
+                detail = detail.as_deref().unwrap_or(""),
             );
         }
         Ok(_) => tracing::info!(
@@ -156,7 +171,13 @@ fn as_reply(store: &dyn PrincipalRead, req: &AsReq, raw: &[u8]) -> Result<Vec<u8
             Some(e_data),
             body,
         )),
-        Err(Error::Protocol { code, text, e_data }) => {
+        Err(Error::Protocol {
+            code,
+            text,
+            e_data,
+            detail,
+        }) => {
+            set_issue_detail(detail);
             Ok(encode_krb_error(store, code, text.as_deref(), e_data, body))
         }
         Err(Error::Crypto(_)) => Ok(encode_krb_error(
@@ -187,7 +208,13 @@ fn tgs_reply(store: &dyn PrincipalRead, req: &TgsReq, raw: &[u8]) -> Result<Vec<
     let body = Some(&req.0.req_body);
     match issue_tgs_from(store, req, Some(raw)) {
         Ok(issued) => Ok(encode(&issued.rep)?),
-        Err(Error::Protocol { code, text, e_data }) => {
+        Err(Error::Protocol {
+            code,
+            text,
+            e_data,
+            detail,
+        }) => {
+            set_issue_detail(detail);
             Ok(encode_krb_error(store, code, text.as_deref(), e_data, body))
         }
         Err(Error::Crypto(_)) => Ok(encode_krb_error(
@@ -344,6 +371,7 @@ fn issue_as_body(
                 code: err::MORE_PREAUTH_DATA_REQUIRED,
                 text: Some("SPAKE challenge".into()),
                 e_data: Some(e_data),
+                detail: None,
             });
         }
         Some(PreauthAction::SpakeDone(k)) => {
@@ -1349,7 +1377,10 @@ fn check_fast_options(opts: &krb5_types::fast::FastOptions) -> Result<(), Error>
     let n = opts.len().min(16);
     for i in 0..n {
         if opts[i] {
-            return Err(proto(err::UNKNOWN_CRITICAL_FAST_OPTION, "FAST option"));
+            return Err(crate::preauth::proto_fast(
+                err::UNKNOWN_CRITICAL_FAST_OPTION,
+                "FAST option",
+            ));
         }
     }
     Ok(())
@@ -1364,7 +1395,7 @@ fn wrap_as_fast(
     let Some(f) = fast else {
         return err;
     };
-    let (code, text, inner_ed, as_preauth) = match err {
+    let (code, text, inner_ed, as_preauth, detail) = match err {
         Error::PreauthRequired { e_data } => {
             let mut method = decode::<MethodData>(&e_data).unwrap_or_default();
             method.retain(|p| p.padata_type != pa::FX_FAST && p.padata_type != pa::SPAKE);
@@ -1381,17 +1412,29 @@ fn wrap_as_fast(
                 );
             }
             let inner = encode(&method).unwrap_or_default();
-            (err::PREAUTH_REQUIRED, None, inner, Some(method))
+            (err::PREAUTH_REQUIRED, None, inner, Some(method), None)
         }
-        Error::Protocol { code, text, e_data } => (code, text, e_data.unwrap_or_default(), None),
+        Error::Protocol {
+            code,
+            text,
+            e_data,
+            detail,
+        } => (code, text, e_data.unwrap_or_default(), None, detail),
         Error::Crypto(_) => (
             err::PREAUTH_FAILED,
             Some("preauth".into()),
             Vec::new(),
             None,
+            None,
         ),
-        Error::Asn1(_) => (err::GENERIC, Some("asn1".into()), Vec::new(), None),
-        other => (err::GENERIC, Some(other.to_string()), Vec::new(), None),
+        Error::Asn1(_) => (err::GENERIC, Some("asn1".into()), Vec::new(), None, None),
+        other => (
+            err::GENERIC,
+            Some(other.to_string()),
+            Vec::new(),
+            None,
+            None,
+        ),
     };
     let inner_err = encode_krb_error(
         store,
@@ -1428,6 +1471,7 @@ fn wrap_as_fast(
                         code,
                         text,
                         e_data: Some(outer),
+                        detail,
                     }
                 }
             }
@@ -1607,6 +1651,7 @@ fn proto(code: i32, text: &str) -> Error {
         code,
         text: Some(text.to_owned()),
         e_data: None,
+        detail: None,
     }
 }
 

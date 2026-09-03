@@ -22,6 +22,12 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0d G3 (MIT-gated).** FAST unwrap failures put MIT's status word
+  `FIND_FAST` on the wire `e_text` (`do_as_req.c:806`,
+  `do_tgs_req.c:205-206`). The descriptive `k5_setmsg` text is the
+  `kdc.issue` `detail` field, not the wire. Gates:
+  `mit-fast-kdc-gate.sh`, `rust-kinit-fast-gate.sh`.
+
 - **W0d G2 (unit-red; MIT by source).** `verify_checksum` dispatches on
   the claimed cksumtype like `krb5_c_verify_checksum`
   (`verify_checksum.c:46-79`). Unknown type and `output_size` length
@@ -57,12 +63,13 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   `scripts/gss-gate.sh`. MIT `dfl` persistence across restart is W1-C.
 
 - **W0b D3 (unit-red; MIT by source).** A bad FAST `req_checksum` is 41
-  `MODIFIED` `FIND_FAST` (`fast_util.c`). An unkeyed checksum type is 12
-  `Unkeyed checksum used in fast_req`. Unknown armor type is 24
-  `Unknown FAST armor type %d`. The AS checksum covers the outer
-  `KDC-REQ-BODY` only (`do_as_req.c`). TGS authenticator client ≠
-  ticket client is 36 `PROCESS_TGS` (`rd_req_dec.c`). MIT clients cannot
-  emit these; live FAST gates stay green.
+  `MODIFIED` with MIT log message `FIND_FAST` (`fast_util.c`). An
+  unkeyed checksum type is 12 (MIT log `Unkeyed checksum used in
+  fast_req`). Unknown armor type is 24 (MIT log `Unknown FAST armor
+  type %d`). The AS checksum covers the outer `KDC-REQ-BODY` only
+  (`do_as_req.c`). TGS authenticator client ≠ ticket client is 36
+  `PROCESS_TGS` (`rd_req_dec.c`). MIT clients cannot emit these; live
+  FAST gates stay green. Wire `e_text` is the status word as of W0d G3.
 
 - **W0c E4.** `scripts/ci-policy.py` rejects echo-only `if !` bodies in
   gate scripts, requires `--profile ci` on every `cargo nextest run`,

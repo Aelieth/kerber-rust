@@ -18,16 +18,18 @@ never install a subscriber. Tests and the harness do.
 | `byte_len` | asn1 | Encoded or input length |
 | `error` | on failure | `Display` of the error (no key material) |
 | `code` | krb-error | RFC 4120 error-code on `kdc.issue` |
-| `e_text` | krb-error | MIT `log_tgs_req` status string (`PROCESS_TGS`, `GET_LOCAL_TGT`, …) |
+| `e_text` | krb-error | MIT `log_tgs_req` status string (`PROCESS_TGS`, `GET_LOCAL_TGT`, `FIND_FAST`, …) |
+| `detail` | krb-error | MIT `k5_setmsg` text for FAST unwrap failures (not on the wire) |
 
 Canonical `event` strings live in `krb5_log::events`.
 
 Every request logs one `event=kdc.issue` line from `handle_request`
 at `info`, including `duration_us`. A **KRB-ERROR** PDU is
 `outcome=krb-error` plus `code` (RFC 4120 error-code) and `e_text`
-(MIT `log_tgs_req` status string, e.g. `BAD_TRANSIT`). Code 25 logs
-`e_text=NEEDED_PREAUTH`. Store-programming failures that cannot be
-encoded stay `outcome=error`.
+(MIT `log_tgs_req` status word, e.g. `BAD_TRANSIT`, `FIND_FAST`).
+FAST unwrap failures also log `detail` (MIT's `k5_setmsg` text).
+Code 25 logs `e_text=NEEDED_PREAUTH`. Store-programming failures
+that cannot be encoded stay `outcome=error`.
 
 ## Logs as metrics
 

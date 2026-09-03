@@ -13,10 +13,12 @@ pub enum Error {
     Protocol {
         /// Error code.
         code: i32,
-        /// Optional text.
+        /// Optional text (MIT status word on the wire).
         text: Option<String>,
         /// Optional KRB-ERROR `e-data` (METHOD-DATA / TD-DH-PARAMETERS).
         e_data: Option<Vec<u8>>,
+        /// MIT `k5_setmsg` text for `kdc.issue` `detail` (not on the wire).
+        detail: Option<String>,
     },
     /// Actor is not permitted this admin operation.
     AclDenied,
@@ -78,6 +80,7 @@ impl From<krb5_protocol::Error> for Error {
                 code,
                 text,
                 e_data: None,
+                detail: None,
             },
             other => Self::Crypto(other.to_string()),
         }

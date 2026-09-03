@@ -221,19 +221,29 @@ fn fast_as_forged_armor_realm_is_not_us() {
     let mut req = as_req(cname, TEST_REALM, 211, None).unwrap();
     attach_fast(&mut req, &armor_ap, &akey, inner).expect("FAST wrap");
     let err = krb5_kdc::issue_as(&store, &req).expect_err("forged armor realm");
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::NOT_US);
-            assert_eq!(text.as_deref(), Some("FAST armor TGT"));
-        }
-        other => panic!("expected 35 NOT_US FAST armor TGT, got {other:?}"),
-    }
+    assert_find_fast(err, err::NOT_US, "FAST armor TGT");
 }
 
 fn issue_code(err: Error) -> i32 {
     match err {
         Error::Protocol { code, .. } => code,
         other => panic!("expected protocol error, got {other:?}"),
+    }
+}
+
+fn assert_find_fast(err: Error, code: i32, detail: &str) {
+    match err {
+        Error::Protocol {
+            code: got,
+            text,
+            detail: d,
+            ..
+        } => {
+            assert_eq!(got, code);
+            assert_eq!(text.as_deref(), Some("FIND_FAST"));
+            assert_eq!(d.as_deref(), Some(detail));
+        }
+        other => panic!("expected {code} FIND_FAST {detail}, got {other:?}"),
     }
 }
 
@@ -543,13 +553,7 @@ fn fast_as_armor_for_host_ticket_is_server_nomatch() {
     )
     .expect("FAST wrap");
     let err = krb5_kdc::issue_as(&store, &fast_req).expect_err("host armor");
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::SERVER_NOMATCH);
-            assert_eq!(text.as_deref(), Some("FAST armor TGT"));
-        }
-        other => panic!("expected 26 SERVER_NOMATCH, got {other:?}"),
-    }
+    assert_find_fast(err, err::SERVER_NOMATCH, "FAST armor TGT");
 }
 
 #[test]
@@ -852,16 +856,11 @@ fn tgs_fast_explicit_armor_is_preauth_failed() {
         .expect("re-encode")
         .into();
     let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("explicit TGS armor");
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::PREAUTH_FAILED);
-            assert_eq!(
-                text.as_deref(),
-                Some("Ap-request armor not permitted with TGS")
-            );
-        }
-        other => panic!("expected 24 PREAUTH_FAILED, got {other:?}"),
-    }
+    assert_find_fast(
+        err,
+        err::PREAUTH_FAILED,
+        "Ap-request armor not permitted with TGS",
+    );
 }
 
 #[test]
@@ -882,16 +881,11 @@ fn tgs_fast_without_subkey_is_preauth_failed() {
     let inner = tgs.0.req_body.clone();
     wrap_tgs_fast_no_subkey(&mut tgs, &issued.session_key, inner).expect("TGS FAST");
     let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("no subkey");
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::PREAUTH_FAILED);
-            assert_eq!(
-                text.as_deref(),
-                Some("No armor key but FAST armored request present")
-            );
-        }
-        other => panic!("expected 24 PREAUTH_FAILED, got {other:?}"),
-    }
+    assert_find_fast(
+        err,
+        err::PREAUTH_FAILED,
+        "No armor key but FAST armored request present",
+    );
 }
 
 fn map_fx_fast_as(
@@ -988,13 +982,7 @@ fn fast_as_bad_req_checksum_is_modified() {
         a.req_checksum.checksum = ck.into();
     });
     let err = krb5_kdc::issue_as(&store, &req).expect_err("bad FAST checksum");
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::MODIFIED);
-            assert_eq!(text.as_deref(), Some("FIND_FAST"));
-        }
-        other => panic!("expected 41 MODIFIED FIND_FAST, got {other:?}"),
-    }
+    assert_find_fast(err, err::MODIFIED, "modified checksum");
 }
 
 #[test]
@@ -1007,13 +995,7 @@ fn fast_tgs_bad_req_checksum_is_modified() {
         a.req_checksum.checksum = ck.into();
     });
     let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("bad FAST checksum");
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::MODIFIED);
-            assert_eq!(text.as_deref(), Some("FIND_FAST"));
-        }
-        other => panic!("expected 41 MODIFIED FIND_FAST, got {other:?}"),
-    }
+    assert_find_fast(err, err::MODIFIED, "modified checksum");
 }
 
 #[test]
@@ -1022,13 +1004,7 @@ fn fast_as_crc32_checksum_is_generic() {
     let (mut req, _) = fast_as_prepared(&store, 894);
     map_fx_fast_as(&mut req, |a| a.req_checksum.cksumtype = 1);
     let err = krb5_kdc::issue_as(&store, &req).expect_err("CRC32 FAST checksum");
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::GENERIC);
-            assert_eq!(text.as_deref(), Some("FIND_FAST"));
-        }
-        other => panic!("expected 60 GENERIC FIND_FAST for CRC32, got {other:?}"),
-    }
+    assert_find_fast(err, err::GENERIC, "unknown checksum type");
 }
 
 #[test]
@@ -1042,13 +1018,7 @@ fn fast_as_short_mac_is_generic() {
         a.req_checksum.checksum = ck.into();
     });
     let err = krb5_kdc::issue_as(&store, &req).expect_err("short MAC on type 7");
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::GENERIC);
-            assert_eq!(text.as_deref(), Some("FIND_FAST"));
-        }
-        other => panic!("expected 60 GENERIC FIND_FAST for short MAC, got {other:?}"),
-    }
+    assert_find_fast(err, err::GENERIC, "checksum length");
 }
 
 #[test]
@@ -1062,13 +1032,7 @@ fn fast_as_rsa_md5_unkeyed_is_policy() {
         a.req_checksum.checksum = digest.into();
     });
     let err = krb5_kdc::issue_as(&store, &req).expect_err("RSA-MD5 unkeyed");
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::POLICY);
-            assert_eq!(text.as_deref(), Some("Unkeyed checksum used in fast_req"));
-        }
-        other => panic!("expected 12 POLICY unkeyed RSA-MD5, got {other:?}"),
-    }
+    assert_find_fast(err, err::POLICY, "Unkeyed checksum used in fast_req");
 }
 
 #[test]
@@ -1080,13 +1044,7 @@ fn fast_as_unkeyed_type_with_bad_bytes_is_modified() {
         a.req_checksum.checksum = vec![0xff; 16].into();
     });
     let err = krb5_kdc::issue_as(&store, &req).expect_err("unkeyed + bad bytes");
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::MODIFIED);
-            assert_eq!(text.as_deref(), Some("FIND_FAST"));
-        }
-        other => panic!("expected 41 MODIFIED FIND_FAST, got {other:?}"),
-    }
+    assert_find_fast(err, err::MODIFIED, "modified checksum");
 }
 
 #[test]
@@ -1110,13 +1068,7 @@ fn fast_tgs_unkeyed_checksum_is_policy() {
         a.req_checksum.checksum = digest.into();
     });
     let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("unkeyed FAST checksum");
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::POLICY);
-            assert_eq!(text.as_deref(), Some("Unkeyed checksum used in fast_req"));
-        }
-        other => panic!("expected 12 POLICY unkeyed, got {other:?}"),
-    }
+    assert_find_fast(err, err::POLICY, "Unkeyed checksum used in fast_req");
 }
 
 #[test]
@@ -1128,13 +1080,7 @@ fn fast_tgs_unkeyed_type_with_bad_bytes_is_modified() {
         a.req_checksum.checksum = vec![0xff; 16].into();
     });
     let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("unkeyed + bad bytes");
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::MODIFIED);
-            assert_eq!(text.as_deref(), Some("FIND_FAST"));
-        }
-        other => panic!("expected 41 MODIFIED FIND_FAST, got {other:?}"),
-    }
+    assert_find_fast(err, err::MODIFIED, "modified checksum");
 }
 
 #[test]
@@ -1143,13 +1089,7 @@ fn fast_as_unknown_cksumtype_matches_mit() {
     let (mut req, _) = fast_as_prepared(&store, 912);
     map_fx_fast_as(&mut req, |a| a.req_checksum.cksumtype = 99);
     let err = krb5_kdc::issue_as(&store, &req).expect_err("unknown cksumtype");
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::GENERIC);
-            assert_eq!(text.as_deref(), Some("FIND_FAST"));
-        }
-        other => panic!("expected 60 GENERIC FIND_FAST, got {other:?}"),
-    }
+    assert_find_fast(err, err::GENERIC, "unknown checksum type");
 }
 
 #[test]
@@ -1160,13 +1100,7 @@ fn fast_as_unknown_armor_type_is_preauth_failed() {
         a.armor.as_mut().expect("armor").armor_type = 99;
     });
     let err = krb5_kdc::issue_as(&store, &req).expect_err("unknown armor");
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::PREAUTH_FAILED);
-            assert_eq!(text.as_deref(), Some("Unknown FAST armor type 99"));
-        }
-        other => panic!("expected 24 Unknown FAST armor type, got {other:?}"),
-    }
+    assert_find_fast(err, err::PREAUTH_FAILED, "Unknown FAST armor type 99");
 }
 
 #[test]
@@ -1187,13 +1121,7 @@ fn fast_as_checksum_ignores_pa_tgs_req() {
         },
     );
     let err = krb5_kdc::issue_as(&store, &req).expect_err("body-only FAST checksum");
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::MODIFIED);
-            assert_eq!(text.as_deref(), Some("FIND_FAST"));
-        }
-        other => panic!("expected 41 MODIFIED FIND_FAST, got {other:?}"),
-    }
+    assert_find_fast(err, err::MODIFIED, "modified checksum");
 }
 
 fn der_take(input: &[u8]) -> Option<(u8, usize, &[u8], &[u8])> {
