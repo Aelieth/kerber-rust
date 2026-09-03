@@ -25,8 +25,18 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: nextest
+      - name: build tests
+        run: cargo nextest run --workspace --profile ci --no-run
       - name: test
         run: cargo nextest run --workspace --profile ci
+      - name: Upload nextest junit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextest-junit
+          path: target/nextest/ci/junit.xml
+          retention-days: 7
+          if-no-files-found: error
       - name: test --release
         run: cargo nextest run --workspace --release --profile ci
       - name: doc
