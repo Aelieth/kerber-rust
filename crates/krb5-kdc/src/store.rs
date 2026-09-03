@@ -884,6 +884,8 @@ impl PrincipalStore {
     ) -> Result<Self, Error> {
         let mut store = Self::new(realm);
         store.insert_randkey(&PrincipalName::krbtgt(realm), &randkey_etypes())?;
+        let tgt = PrincipalName::krbtgt(realm);
+        store.apply_admin_fields(&tgt, Some(KDB_LOCKDOWN_KEYS), None, None, None, None, false)?;
         store.insert_password(
             &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [user]),
             user_password,

@@ -9,6 +9,7 @@ cd "$ROOT"
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-kadmin-gate"
+NAME_MIT="kerber-rust-kadmin-mit"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-kadmin-gate}"
@@ -30,9 +31,9 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
 fi
 
-docker rm -f "$NAME" >/dev/null 2>&1 || true
+docker rm -f "$NAME" "$NAME_MIT" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
+cleanup() { docker rm -f "$NAME" "$NAME_MIT" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc
@@ -62,6 +63,7 @@ fi
 
 docker exec "$NAME" sh -c 'cat >/tmp/kadm5.acl <<EOF
 admin@KERBER.TEST *e
+extract/admin@KERBER.TEST *e
 EOF'
 
 docker exec -d \
@@ -180,7 +182,7 @@ if echo "$CPWL" | grep -qi 'changed'; then
     echo "lockdown cpw rewrote keys: $CPWL" >&2
     exit 1
 fi
-echo "$CPWL" | grep -qiE 'locked down|PROTECT_KEYS|protect'
+echo "$CPWL" | grep -F 'change-password'
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" sh -c 'printf "lock-secret\n" | kinit lockee@KERBER.TEST'
 KTL="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
@@ -328,6 +330,63 @@ KLISTR="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" klist)"
 echo "$KLISTR"
 echo "$KLISTR" | grep -q 'renameto@KERBER.TEST'
 
+echo "==== getprinc krbtgt LOCKDOWN_KEYS ===="
+TGTGET="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc krbtgt/KERBER.TEST' 2>&1 || true)"
+echo "$TGTGET"
+echo "$TGTGET" | grep -F 'LOCKDOWN_KEYS'
+
+echo "==== ktadd -norandkey krbtgt is extract-keys ===="
+KTGT="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'ktadd -norandkey -k /tmp/krbtgt.keytab krbtgt/KERBER.TEST' 2>&1 || true)"
+echo "$KTGT"
+echo "$KTGT" | grep -F 'extract-keys'
+if echo "$KTGT" | grep -qi 'added to keytab'; then
+    echo "ktadd -norandkey leaked krbtgt keys: $KTGT" >&2
+    exit 1
+fi
+
+echo "==== ktadd -norandkey kadmin/changepw is extract-keys ===="
+KTCPW="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'ktadd -norandkey -k /tmp/changepw.keytab kadmin/changepw' 2>&1 || true)"
+echo "$KTCPW"
+echo "$KTCPW" | grep -F 'extract-keys'
+
+echo "==== delprinc kadmin/changepw is delete privilege ===="
+DELCPW="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'delprinc -force kadmin/changepw' 2>&1 || true)"
+echo "$DELCPW"
+echo "$DELCPW" | grep -F "delete'' privilege"
+GETCPW="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc kadmin/changepw' 2>&1 || true)"
+echo "$GETCPW" | grep -q 'Principal: kadmin/changepw@KERBER.TEST'
+
+echo "==== modprinc -lockdown_keys kadmin/changepw is modify privilege ===="
+MODCPW="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'modprinc -lockdown_keys kadmin/changepw' 2>&1 || true)"
+echo "$MODCPW"
+echo "$MODCPW" | grep -F "modify'' privilege"
+GETCPW2="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc kadmin/changepw' 2>&1 || true)"
+echo "$GETCPW2" | grep -F 'LOCKDOWN_KEYS'
+
+echo "==== renprinc kadmin/changepw is delete privilege ===="
+RENCPW="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'renprinc -force kadmin/changepw kadmin/changepw2' 2>&1 || true)"
+echo "$RENCPW"
+echo "$RENCPW" | grep -F "delete'' privilege"
+
+echo "==== extract/admin ktadd -norandkey extra control ===="
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw extract-secret extract/admin'
+EXTKT="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p extract/admin@KERBER.TEST -w extract-secret -q 'ktadd -norandkey -k /tmp/extra-extract.keytab extra' 2>&1 || true)"
+echo "$EXTKT"
+if echo "$EXTKT" | grep -qiE 'extract-keys|AUTH_EXTRACT|Operation requires|while adding'; then
+    echo "extract/admin ktadd -norandkey extra failed: $EXTKT" >&2
+    exit 1
+fi
+
 echo "==== MIT kadmin delprinc extra ===="
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'delprinc -force extra'
@@ -335,6 +394,75 @@ DELGET="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc extra' 2>&1 || true)"
 echo "$DELGET"
 echo "$DELGET" | grep -qiE 'does not exist|not found|UNK_PRINC'
+
+echo "==== MIT kadmind lockdown cells ===="
+docker run -d --name "$NAME_MIT" "$IMAGE" >/dev/null
+ok=0
+for _ in $(seq 1 90); do
+    logs="$(docker logs "$NAME_MIT" 2>&1 || true)"
+    if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"ok"'; then
+        ok=1
+        break
+    fi
+    sleep 1
+done
+if [ "$ok" != 1 ]; then
+    docker logs "$NAME_MIT" >&2 || true
+    log "kadmin.gate" "error" ',"error":"MIT harness did not become ready"'
+    exit 1
+fi
+docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw extract-secret extract/admin'
+docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw adminpassword admin/admin'
+docker exec "$NAME_MIT" sh -c 'printf "%s\n" "*/admin@KERBER.TEST *e" "extract/admin@KERBER.TEST *e" > /var/kerberos/krb5kdc/kadm5.acl'
+docker exec "$NAME_MIT" sh -c '
+for comm in /proc/[0-9]*/comm; do
+    [ -f "$comm" ] || continue
+    read -r name < "$comm" || continue
+    if [ "$name" = "kadmind" ]; then
+        pid=${comm#/proc/}
+        pid=${pid%/comm}
+        kill "$pid" 2>/dev/null || true
+    fi
+done
+'
+sleep 0.4
+docker exec -d "$NAME_MIT" kadmind
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    log "kadmin.gate" "error" ',"error":"MIT kadmind did not listen"'
+    exit 1
+fi
+MITTGT="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc krbtgt/KERBER.TEST')"
+echo "$MITTGT"
+echo "$MITTGT" | grep -F 'LOCKDOWN_KEYS'
+MITCTL="$(docker exec "$NAME_MIT" kadmin -p extract/admin -w extract-secret -q 'ktadd -norandkey -k /tmp/c.keytab user' 2>&1 || true)"
+echo "$MITCTL"
+if echo "$MITCTL" | grep -qiE 'extract-keys|AUTH_EXTRACT|Operation requires|while adding'; then
+    echo "MIT extract/admin ktadd user failed: $MITCTL" >&2
+    exit 1
+fi
+MITKTGT="$(docker exec "$NAME_MIT" kadmin -p extract/admin -w extract-secret -q 'ktadd -norandkey -k /tmp/krbtgt.keytab krbtgt/KERBER.TEST' 2>&1 || true)"
+echo "$MITKTGT"
+echo "$MITKTGT" | grep -F 'extract-keys'
+MITKTCPW="$(docker exec "$NAME_MIT" kadmin -p extract/admin -w extract-secret -q 'ktadd -norandkey -k /tmp/changepw.keytab kadmin/changepw' 2>&1 || true)"
+echo "$MITKTCPW"
+echo "$MITKTCPW" | grep -F 'extract-keys'
+MITDEL="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'delprinc -force kadmin/changepw' 2>&1 || true)"
+echo "$MITDEL"
+echo "$MITDEL" | grep -F "delete'' privilege"
+MITMOD="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'modprinc -lockdown_keys kadmin/changepw' 2>&1 || true)"
+echo "$MITMOD"
+echo "$MITMOD" | grep -F "modify'' privilege"
+MITREN="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'renprinc -force kadmin/changepw kadmin/changepw2' 2>&1 || true)"
+echo "$MITREN"
+echo "$MITREN" | grep -F "delete'' privilege"
 
 log "kadmin.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"addprinc+cpw+get+list+mod+chrand+norandkey+lockdown+purgekeys+setstr+renprinc+del"'
 exit 0

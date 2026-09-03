@@ -43,6 +43,14 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   ticket client is 36 `PROCESS_TGS` (`rd_req_dec.c`). MIT clients cannot
   emit these; live FAST gates stay green.
 
+- **W0c E2 (MIT-gated).** Bootstrap sets `LOCKDOWN_KEYS` on krbtgt
+  (`kdb5_create.c:465`; dump `8388608`) and K/M (`8388672` =
+  `DISALLOW_ALL_TIX|LOCKDOWN_KEYS`). Remote delete/modify-clearing-the-bit/
+  rename of a locked-down principal are MIT privilege codes; chpass/
+  extract/setkey remap from `PROTECT_KEYS` to `AUTH_CHANGEPW` /
+  `AUTH_EXTRACT` / `AUTH_SETKEY`. Purgekeys stays `PROTECT_KEYS`
+  (stricter). Gate: `scripts/kadmin-gate.sh`.
+
 - **W0c E1 (MIT-gated).** kpasswd self-change compares the RFC 3244
   target to the ticket client like `krb5_principal_compare` (components
   + realm, name type ignored). A TGS-obtained ticket with

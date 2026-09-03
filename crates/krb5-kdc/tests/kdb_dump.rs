@@ -8,9 +8,10 @@ use std::process::Command;
 
 use krb5_crypto::{EncryptionType, KeyUsage, kdb_decrypt_key, string_to_key};
 use krb5_kdc::{
-    KDB_DISALLOW_TGT_BASED, KDB_DUMP_VERSION, KDB_LOCKDOWN_KEYS, KDB_PWCHANGE_SERVICE,
-    KDB_REQUIRES_PRE_AUTH, TL_LAST_PWD_CHANGE, TL_MOD_PRINC, dump_store, dump_store_iprop,
-    load_dump, master_key_from_password, parse_dump,
+    KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_TGT_BASED, KDB_DUMP_VERSION, KDB_LOCKDOWN_KEYS,
+    KDB_PWCHANGE_SERVICE, KDB_REQUIRES_PRE_AUTH, TL_LAST_PWD_CHANGE, TL_MOD_PRINC,
+    bootstrap_documented, dump_store, dump_store_iprop, load_dump, master_key_from_password,
+    parse_dump,
 };
 use krb5_types::PrincipalName;
 
@@ -20,6 +21,32 @@ fn traces() -> PathBuf {
 
 fn golden_v7() -> String {
     std::fs::read_to_string(traces().join("mit-dump-v7.txt")).expect("golden v7")
+}
+
+#[test]
+fn bootstrap_locks_down_krbtgt_and_master_key() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let tgt = store.krbtgt().expect("krbtgt");
+    assert_eq!(
+        tgt.attributes & KDB_LOCKDOWN_KEYS,
+        KDB_LOCKDOWN_KEYS,
+        "krbtgt LOCKDOWN_KEYS at bootstrap, got {:#x}",
+        tgt.attributes
+    );
+    let text = dump_store(&store, b"masterpassword").expect("dump");
+    let dump = parse_dump(&text).expect("parse");
+    assert_eq!(
+        dump.princ("krbtgt/KERBER.TEST@KERBER.TEST")
+            .expect("krbtgt dump")
+            .attributes,
+        KDB_LOCKDOWN_KEYS,
+        "MIT kdb5_create krbtgt attributes"
+    );
+    assert_eq!(
+        dump.princ("K/M@KERBER.TEST").expect("K/M dump").attributes,
+        KDB_DISALLOW_ALL_TIX | KDB_LOCKDOWN_KEYS,
+        "MIT kdb5_create K/M attributes"
+    );
 }
 
 fn golden_v6() -> String {
@@ -407,6 +434,16 @@ fn krb5_kdb_cli_create_named_realm_dump_v7() {
         "create must seed host/testhost.<dns>: {written}"
     );
     let dump = parse_dump(&written).expect("parse created dump");
+    assert_eq!(
+        dump.princ("krbtgt/PROD.KERBER.TEST@PROD.KERBER.TEST")
+            .expect("krbtgt")
+            .attributes,
+        KDB_LOCKDOWN_KEYS
+    );
+    assert_eq!(
+        dump.princ("K/M@PROD.KERBER.TEST").expect("K/M").attributes,
+        KDB_DISALLOW_ALL_TIX | KDB_LOCKDOWN_KEYS
+    );
     assert_eq!(
         dump.princ("kadmin/admin@PROD.KERBER.TEST")
             .expect("kadmin/admin")

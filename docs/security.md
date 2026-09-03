@@ -86,8 +86,14 @@ present (`fast_util.c:159-166`).
 `kadmin/admin` and `kadmin/changepw` are bootstrapped with MIT
 `kadm5_create` attributes: both `DISALLOW_TGT_BASED|LOCKDOWN_KEYS`;
 changepw also `PWCHANGE_SERVICE`. A TGS from a TGT is 12
-`TGT BASED NOT ALLOWED`. Remote kadm5 extract/`ktadd -norandkey` is
-`KADM5_PROTECT_KEYS` (`Operation requires ``extract-keys'' privilege`).
+`TGT BASED NOT ALLOWED`. `kdb5_util create` also sets `LOCKDOWN_KEYS`
+on `krbtgt/REALM` and `K/M` (`kdb5_create.c:465`). Remote kadm5
+maps lockdown to the privilege codes MIT kadmind remaps in
+`server_stubs.c`: extract `KADM5_AUTH_EXTRACT`, chpass
+`KADM5_AUTH_CHANGEPW`, setkey `KADM5_AUTH_SETKEY`, delete
+`KADM5_AUTH_DELETE`, modify that clears the bit `KADM5_AUTH_MODIFY`,
+rename of the source `KADM5_AUTH_DELETE`. Purgekeys stays
+`KADM5_PROTECT_KEYS` (stricter than MIT, which has no lockdown check).
 `kadmin.local` ktadd ignores lockdown like MIT. Create-time name
 special-casing keeps `PWCHANGE_SERVICE` only (`create_principal` has
 none of the `kdb5_util create` bits).

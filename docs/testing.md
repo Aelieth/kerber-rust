@@ -330,7 +330,11 @@ when that oracle is absent.
   `modprinc +requires_preauth` then `kinit`, `cpw -randkey` (old
   password must fail; last password change / last modified move) +
   `ktadd` + `kinit -k`, `ktadd -norandkey` +
-  `kinit -k`, `+lockdown_keys` (cpw and `ktadd -norandkey` refused),
+  `kinit -k`, `+lockdown_keys` (cpw is `change-password` privilege;
+  `ktadd -norandkey` of lockee/krbtgt/`kadmin/changepw` is `extract-keys`;
+  `delprinc`/`renprinc` of a locked-down principal is `delete`;
+  `modprinc -lockdown_keys` is `modify`; `getprinc krbtgt` shows
+  `LOCKDOWN_KEYS`),
   `purgekeys` (old kvno gone), `cpw -keepold` (getprinc lists both kvnos),
   `setstr`/`getstrs`, `renprinc -force`
   `renamefrom`→`renameto` then `getprinc` new / old fails / `kinit -k`

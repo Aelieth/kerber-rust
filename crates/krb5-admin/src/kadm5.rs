@@ -91,6 +91,8 @@ const KADM5_PASS_Q_CLASS: u32 = 43_787_543;
 const KADM5_PASS_REUSE: u32 = 43_787_545;
 /// MIT `ovk` 3 (`KADM5_AUTH_MODIFY`).
 const KADM5_AUTH_MODIFY: u32 = 43_787_523;
+/// MIT `ovk` 4 (`KADM5_AUTH_DELETE`).
+const KADM5_AUTH_DELETE: u32 = 43_787_524;
 /// MIT `ovk` 1 (`KADM5_AUTH_GET`).
 const KADM5_AUTH_GET: u32 = 43_787_521;
 /// MIT `ovk` 45 (`KADM5_AUTH_CHANGEPW`).
@@ -1411,6 +1413,11 @@ fn dispatch_kadm5(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
+            if g.get_name(&name)
+                .is_some_and(|p| p.attributes & KDB_LOCKDOWN_KEYS != 0)
+            {
+                return Ok(generic_ret(API_V2, KADM5_AUTH_DELETE));
+            }
             let mut sess = AdminSession::local(&mut g, acl, actor);
             match sess.delete(&name) {
                 Ok(()) => Ok(generic_ret(API_V2, 0)),
@@ -1426,6 +1433,13 @@ fn dispatch_kadm5(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
+            if mask & KADM5_ATTRIBUTES != 0
+                && fields.attributes & KDB_LOCKDOWN_KEYS == 0
+                && g.get_name(&name)
+                    .is_some_and(|p| p.attributes & KDB_LOCKDOWN_KEYS != 0)
+            {
+                return Ok(generic_ret(API_V2, KADM5_AUTH_MODIFY));
+            }
             let attributes = (mask & KADM5_ATTRIBUTES != 0).then_some(fields.attributes);
             let max_life = (mask & KADM5_MAX_LIFE != 0).then_some(u64::from(fields.max_life));
             let expiration = (mask & KADM5_PRINC_EXPIRE_TIME != 0).then_some(fields.expire);
@@ -1483,6 +1497,11 @@ fn dispatch_kadm5(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
+            if g.get_name(&old)
+                .is_some_and(|p| p.attributes & KDB_LOCKDOWN_KEYS != 0)
+            {
+                return Ok(generic_ret(API_V2, KADM5_AUTH_DELETE));
+            }
             let mut sess = AdminSession::local(&mut g, acl, actor);
             match sess.rename(&old, &new) {
                 Ok(()) => Ok(generic_ret(API_V2, 0)),
@@ -1504,7 +1523,7 @@ fn dispatch_kadm5(
                 Some(p) => p.attributes & KDB_LOCKDOWN_KEYS != 0,
             };
             if lockdown {
-                return Ok(generic_ret(API_V2, KADM5_PROTECT_KEYS));
+                return Ok(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
             }
             match g.set_password_keepold(&name, pass.as_bytes(), keepold) {
                 Ok(()) => Ok(generic_ret(API_V2, 0)),
@@ -1622,7 +1641,7 @@ fn dispatch_kadm5(
                 return Ok(generic_ret(api, KADM5_UNK_PRINC));
             };
             if p.attributes & KDB_LOCKDOWN_KEYS != 0 {
-                return Ok(generic_ret(api, KADM5_PROTECT_KEYS));
+                return Ok(generic_ret(api, KADM5_AUTH_EXTRACT));
             }
             tracing::info!(
                 event = krb5_log::events::ADMIN,
@@ -1676,7 +1695,7 @@ fn dispatch_kadm5(
                 Some(p) => p.attributes & KDB_LOCKDOWN_KEYS != 0,
             };
             if lockdown {
-                return Ok(generic_ret(api, KADM5_PROTECT_KEYS));
+                return Ok(generic_ret(api, KADM5_AUTH_SETKEY));
             }
             match g.set_keys(&name, keys, keepold) {
                 Ok(()) => Ok(generic_ret(api, 0)),
@@ -2964,7 +2983,7 @@ mod tests {
             &extract_args("user@KERBER.TEST", 0),
         )
         .unwrap();
-        assert_eq!(ret_code(&out), KADM5_PROTECT_KEYS);
+        assert_eq!(ret_code(&out), KADM5_AUTH_EXTRACT);
     }
 
     #[test]
@@ -2998,7 +3017,7 @@ mod tests {
         w.nullstring(Some("user@KERBER.TEST"));
         w.nullstring(Some("lock-rotated-secret"));
         let out = dispatch_kadm5(&store, &acl, &actor, CHPASS_PRINCIPAL, &w.b).unwrap();
-        assert_eq!(ret_code(&out), KADM5_PROTECT_KEYS);
+        assert_eq!(ret_code(&out), KADM5_AUTH_CHANGEPW);
         let after = {
             let g = store.read().unwrap();
             g.get_name(&user)
@@ -3352,7 +3371,111 @@ mod tests {
             &setkey16_args("user@KERBER.TEST", 18, &[0xABu8; 32]),
         )
         .unwrap();
-        assert_eq!(ret_code(&out), KADM5_PROTECT_KEYS);
+        assert_eq!(ret_code(&out), KADM5_AUTH_SETKEY);
+    }
+
+    #[test]
+    fn delete_lockdown_is_auth_delete() {
+        let (store, acl, actor) = setup();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+        {
+            let mut g = store.write().unwrap();
+            g.apply_admin_fields(
+                &user,
+                Some(KDB_LOCKDOWN_KEYS),
+                None,
+                None,
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+        }
+        let out = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            DELETE_PRINCIPAL,
+            &encode_named("user@KERBER.TEST"),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&out), KADM5_AUTH_DELETE);
+        assert!(store.read().unwrap().get_name(&user).is_some());
+    }
+
+    #[test]
+    fn modify_clear_lockdown_is_auth_modify() {
+        let (store, acl, actor) = setup();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+        {
+            let mut g = store.write().unwrap();
+            g.apply_admin_fields(
+                &user,
+                Some(KDB_LOCKDOWN_KEYS),
+                None,
+                None,
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+        }
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some("user@KERBER.TEST"));
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(3600);
+        w.u32(1);
+        w.u32(0);
+        w.u32(0);
+        w.u32(1);
+        w.u32(1);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(1);
+        w.u32(0);
+        w.u32(KADM5_ATTRIBUTES);
+        let out = dispatch_kadm5(&store, &acl, &actor, MODIFY_PRINCIPAL, &w.b).unwrap();
+        assert_eq!(ret_code(&out), KADM5_AUTH_MODIFY);
+        let g = store.read().unwrap();
+        assert_eq!(
+            g.get_name(&user).unwrap().attributes & KDB_LOCKDOWN_KEYS,
+            KDB_LOCKDOWN_KEYS
+        );
+    }
+
+    #[test]
+    fn rename_lockdown_source_is_auth_delete() {
+        let (store, acl, actor) = setup();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+        {
+            let mut g = store.write().unwrap();
+            g.apply_admin_fields(
+                &user,
+                Some(KDB_LOCKDOWN_KEYS),
+                None,
+                None,
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+        }
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some("user@KERBER.TEST"));
+        w.nullstring(Some("renamed@KERBER.TEST"));
+        let out = dispatch_kadm5(&store, &acl, &actor, RENAME_PRINCIPAL, &w.b).unwrap();
+        assert_eq!(ret_code(&out), KADM5_AUTH_DELETE);
+        assert!(store.read().unwrap().get_name(&user).is_some());
     }
 
     #[test]
