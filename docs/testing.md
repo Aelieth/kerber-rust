@@ -346,7 +346,10 @@ when that oracle is absent.
   `krb5-kpasswd` against the same Rust kadmind. A `-minlength 8`
   policy rejection is RFC 3244 `SOFTERROR` (`[0,4]`; MIT `kpasswd`
   rc 2, `Password change rejected`) on both Rust kadmind and MIT
-  `kadmind`. Run twice.
+  `kadmind`. A TGT-based `kvno kadmin/changepw` / `kadmin/admin` is
+  refused (`KDC policy rejects request`; KDC `TGT BASED NOT ALLOWED`)
+  on both KDCs; `getprinc` shows `DISALLOW_TGT_BASED`/`LOCKDOWN_KEYS`;
+  remote `ktadd -norandkey` is `extract-keys`. Run twice.
   `scripts/rust-kpasswd-mit-gate.sh` is Rust `krb5-kpasswd` against
   MIT `kadmind` (AS-REQ sname `kadmin/changepw`; MIT
   `DISALLOW_TGT_BASED`).

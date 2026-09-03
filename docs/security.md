@@ -74,6 +74,15 @@ A local non-krbtgt armor ticket is 26 `SERVER_NOMATCH`.
 A presented-TGT krbtgt with `DISALLOW_SVR` or `DISALLOW_ALL_TIX` is 7
 `PROCESS_TGS` (`kdc_util.c:390-393`).
 
+`kadmin/admin` and `kadmin/changepw` are bootstrapped with MIT
+`kadm5_create` attributes: both `DISALLOW_TGT_BASED|LOCKDOWN_KEYS`;
+changepw also `PWCHANGE_SERVICE`. A TGS from a TGT is 12
+`TGT BASED NOT ALLOWED`. Remote kadm5 extract/`ktadd -norandkey` is
+`KADM5_PROTECT_KEYS` (`Operation requires ``extract-keys'' privilege`).
+`kadmin.local` ktadd ignores lockdown like MIT. Create-time name
+special-casing keeps `PWCHANGE_SERVICE` only (`create_principal` has
+none of the `kdb5_util create` bits).
+
 ## Not in this matrix
 
 In-process metrics counters are deferred (logs already carry

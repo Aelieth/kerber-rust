@@ -166,14 +166,37 @@ pub fn bootstrap_realm(
     store.create_host(&acl, &actor, &documented_kadmin())?;
     store.create_host(&acl, &actor, &documented_changepw())?;
     store.create_host(&acl, &actor, &documented_kiprop())?;
-    let changepw = documented_changepw();
-    let attrs = store
-        .get_name(&changepw)
-        .map_or(store::KDB_PWCHANGE_SERVICE, |p| {
-            p.attributes | store::KDB_PWCHANGE_SERVICE
-        });
-    store.apply_admin_fields(&changepw, Some(attrs), None, None, None, None, false)?;
+    apply_kadm5_create_service_attrs(&mut store)?;
     Ok((store, acl))
+}
+
+/// MIT `kadm5_create` (`kadm5_create.c`) flags. `create_principal` does not set these.
+///
+/// # Errors
+///
+/// [`Error::NotFound`] when the kadmin principals are missing.
+pub fn apply_kadm5_create_service_attrs(store: &mut PrincipalStore) -> Result<(), Error> {
+    store.apply_admin_fields(
+        &documented_kadmin(),
+        Some(store::KDB_DISALLOW_TGT_BASED | store::KDB_LOCKDOWN_KEYS),
+        None,
+        None,
+        None,
+        None,
+        false,
+    )?;
+    store.apply_admin_fields(
+        &documented_changepw(),
+        Some(
+            store::KDB_DISALLOW_TGT_BASED | store::KDB_PWCHANGE_SERVICE | store::KDB_LOCKDOWN_KEYS,
+        ),
+        None,
+        None,
+        None,
+        None,
+        false,
+    )?;
+    Ok(())
 }
 
 /// Bootstrap the documented realm: krbtgt, user, admin, host.

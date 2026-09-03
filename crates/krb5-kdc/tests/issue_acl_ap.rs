@@ -5,10 +5,10 @@ use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, strin
 use krb5_kdc::{
     Acl, AdminOp, Error, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED,
     KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_LOCKDOWN_KEYS,
-    KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PWCHANGE,
-    PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, acl_for_store, as_req,
-    bootstrap_documented, documented_admin_id, documented_changepw, documented_host,
-    pa_enc_timestamp, tgs_req,
+    KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH,
+    KDB_REQUIRES_PWCHANGE, PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
+    acl_for_store, as_req, bootstrap_documented, documented_admin_id, documented_changepw,
+    documented_host, documented_kadmin, pa_enc_timestamp, tgs_req,
 };
 use krb5_protocol::Keytab;
 use krb5_protocol::{ReplayCache, as_req_sname, build_ap_req, tgs_req_ex, verify_ap_req};
@@ -1149,6 +1149,66 @@ fn tgs_renew_wrong_sname_is_badoption() {
         krb5_kdc::issue_tgs(&store, &renew_tgs_sname(&issued, documented_host(), 119)).unwrap_err();
     assert_eq!(proto_code(err), err::BADOPTION);
     krb5_kdc::issue_tgs(&store, &renew_tgs(&issued, 120)).expect("RENEW krbtgt");
+}
+
+#[test]
+fn bootstrap_changepw_and_admin_carry_kadm5_create_attributes() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let admin = store.get_name(&documented_kadmin()).expect("kadmin/admin");
+    assert_eq!(admin.attributes, KDB_DISALLOW_TGT_BASED | KDB_LOCKDOWN_KEYS);
+    let changepw = store
+        .get_name(&documented_changepw())
+        .expect("kadmin/changepw");
+    assert_eq!(
+        changepw.attributes,
+        KDB_DISALLOW_TGT_BASED | KDB_PWCHANGE_SERVICE | KDB_LOCKDOWN_KEYS
+    );
+}
+
+fn service_tgs(
+    issued: &krb5_kdc::IssuedAs,
+    sname: PrincipalName,
+    nonce: u32,
+) -> krb5_types::TgsReq {
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    tgs_req(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        sname,
+        TEST_REALM,
+        nonce,
+    )
+    .unwrap()
+}
+
+fn assert_tgt_based_not_allowed(err: Error) {
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::POLICY);
+            assert_eq!(text.as_deref(), Some("TGT BASED NOT ALLOWED"));
+        }
+        other => panic!("expected POLICY TGT BASED NOT ALLOWED, got {other:?}"),
+    }
+}
+
+#[test]
+fn tgs_for_changepw_with_tgt_is_tgt_based_not_allowed() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let issued = krb5_kdc::issue_as(&store, &user_as_req(801)).expect("AS");
+    let err =
+        krb5_kdc::issue_tgs(&store, &service_tgs(&issued, documented_changepw(), 802)).unwrap_err();
+    assert_tgt_based_not_allowed(err);
+}
+
+#[test]
+fn tgs_for_admin_with_tgt_is_tgt_based_not_allowed() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let issued = krb5_kdc::issue_as(&store, &user_as_req(803)).expect("AS");
+    let err =
+        krb5_kdc::issue_tgs(&store, &service_tgs(&issued, documented_kadmin(), 804)).unwrap_err();
+    assert_tgt_based_not_allowed(err);
 }
 
 #[test]

@@ -22,6 +22,15 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0b D1 (MIT-gated).** `kadmin/admin` and `kadmin/changepw` bootstrap
+  with MIT `kadm5_create` attributes (`DISALLOW_TGT_BASED|LOCKDOWN_KEYS`;
+  changepw also `PWCHANGE_SERVICE`). A TGT-based TGS is 12
+  `TGT BASED NOT ALLOWED`. MIT `kvno` prints `KDC policy rejects request
+  while getting credentials for kadmin/changepw@KERBER.TEST` (verbatim
+  on the Rust KDC). Remote `ktadd -norandkey` is `extract-keys`.
+  Create-time name special-casing stays `PWCHANGE_SERVICE` only.
+  Gate: `scripts/kpasswd-gate.sh`.
+
 - **W0 C9.** Changelog X2 foreign `body.realm` is 60 `GET_LOCAL_TGT`
   (Y1), not 7 `LOOKING_UP_SERVER`. `docs/stages.md`, interop matrix,
   README G5–G9, and `docs/logging.md` `code`/`e_text` rows match the

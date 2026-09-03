@@ -8,8 +8,9 @@ use std::process::Command;
 
 use krb5_crypto::{EncryptionType, KeyUsage, kdb_decrypt_key, string_to_key};
 use krb5_kdc::{
-    KDB_DUMP_VERSION, KDB_REQUIRES_PRE_AUTH, TL_LAST_PWD_CHANGE, TL_MOD_PRINC, dump_store,
-    dump_store_iprop, load_dump, master_key_from_password, parse_dump,
+    KDB_DISALLOW_TGT_BASED, KDB_DUMP_VERSION, KDB_LOCKDOWN_KEYS, KDB_PWCHANGE_SERVICE,
+    KDB_REQUIRES_PRE_AUTH, TL_LAST_PWD_CHANGE, TL_MOD_PRINC, dump_store, dump_store_iprop,
+    load_dump, master_key_from_password, parse_dump,
 };
 use krb5_types::PrincipalName;
 
@@ -404,6 +405,19 @@ fn krb5_kdb_cli_create_named_realm_dump_v7() {
     assert!(
         written.contains("host/testhost.prod.kerber.test@PROD.KERBER.TEST"),
         "create must seed host/testhost.<dns>: {written}"
+    );
+    let dump = parse_dump(&written).expect("parse created dump");
+    assert_eq!(
+        dump.princ("kadmin/admin@PROD.KERBER.TEST")
+            .expect("kadmin/admin")
+            .attributes,
+        KDB_DISALLOW_TGT_BASED | KDB_LOCKDOWN_KEYS
+    );
+    assert_eq!(
+        dump.princ("kadmin/changepw@PROD.KERBER.TEST")
+            .expect("kadmin/changepw")
+            .attributes,
+        KDB_DISALLOW_TGT_BASED | KDB_PWCHANGE_SERVICE | KDB_LOCKDOWN_KEYS
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

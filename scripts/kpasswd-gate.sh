@@ -93,6 +93,43 @@ docker exec "$NAME" sh -c 'cat >/tmp/kpasswd-krb5.conf <<EOF
     }
 EOF'
 
+echo "==== MIT kvno kadmin/changepw with TGT against Rust KDC (must refuse) ===="
+docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
+    "$NAME" sh -c 'printf "userpassword\n" | kinit user@KERBER.TEST'
+for run in 1 2; do
+    echo "---- changepw run $run ----"
+    set +e
+    KVNO="$(docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
+        "$NAME" kvno kadmin/changepw@KERBER.TEST 2>&1)"
+    kv_rc=$?
+    set -e
+    echo "$KVNO"
+    if [ "$kv_rc" -eq 0 ]; then
+        echo "kvno changepw rc=0 (want refuse)" >&2
+        docker exec "$NAME" cat /tmp/kdc.log >&2 || true
+        log "kpasswd.gate" "error" ',"error":"kvno kadmin/changepw issued from TGT"'
+        exit 1
+    fi
+    echo "$KVNO" | grep -F 'KDC policy rejects request while getting credentials for kadmin/changepw@KERBER.TEST'
+done
+for run in 1 2; do
+    echo "---- admin run $run ----"
+    set +e
+    KVNO="$(docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
+        "$NAME" kvno kadmin/admin@KERBER.TEST 2>&1)"
+    kv_rc=$?
+    set -e
+    echo "$KVNO"
+    if [ "$kv_rc" -eq 0 ]; then
+        echo "kvno admin rc=0 (want refuse)" >&2
+        docker exec "$NAME" cat /tmp/kdc.log >&2 || true
+        log "kpasswd.gate" "error" ',"error":"kvno kadmin/admin issued from TGT"'
+        exit 1
+    fi
+    echo "$KVNO" | grep -F 'KDC policy rejects request while getting credentials for kadmin/admin@KERBER.TEST'
+done
+docker exec "$NAME" grep -F '"code":12,"e_text":"TGT BASED NOT ALLOWED"' /tmp/kdc.log
+
 echo "==== MIT kpasswd once ===="
 set +e
 docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf -e KRB5_TRACE=/dev/stderr \
@@ -158,6 +195,26 @@ kadmin_q() {
         "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q "$1" 2>&1 || true
 }
 
+echo "==== getprinc kadmin/changepw and kadmin/admin ===="
+CPWGET="$(kadmin_q 'getprinc kadmin/changepw')"
+echo "$CPWGET"
+echo "$CPWGET" | grep -F 'DISALLOW_TGT_BASED'
+echo "$CPWGET" | grep -F 'PWCHANGE_SERVICE'
+echo "$CPWGET" | grep -F 'LOCKDOWN_KEYS'
+ADMGET="$(kadmin_q 'getprinc kadmin/admin')"
+echo "$ADMGET"
+echo "$ADMGET" | grep -F 'DISALLOW_TGT_BASED'
+echo "$ADMGET" | grep -F 'LOCKDOWN_KEYS'
+if echo "$ADMGET" | grep -F 'PWCHANGE_SERVICE'; then
+    echo "kadmin/admin must not carry PWCHANGE_SERVICE" >&2
+    exit 1
+fi
+
+echo "==== ktadd -norandkey kadmin/changepw is extract-keys ===="
+KTN="$(kadmin_q 'ktadd -norandkey -k /tmp/changepw.keytab kadmin/changepw')"
+echo "$KTN"
+echo "$KTN" | grep -F 'extract-keys'
+
 echo "==== Rust kadmind policy rejection is SOFTERROR ===="
 kadmin_q 'addpol -minlength 8 short8'
 kadmin_q 'modprinc -policy short8 user'
@@ -193,6 +250,33 @@ if [ "$ok" != 1 ]; then
     log "kpasswd.gate" "error" ',"error":"MIT harness did not become ready"'
     exit 1
 fi
+echo "==== MIT krb5kdc FILE log ===="
+docker exec "$NAME_MIT" sh -c 'sed -i "s|kdc = STDERR|kdc = FILE:/tmp/krb5kdc.log|" /etc/krb5.conf'
+docker exec "$NAME_MIT" sh -c '
+for comm in /proc/[0-9]*/comm; do
+    [ -f "$comm" ] || continue
+    read -r name < "$comm" || continue
+    if [ "$name" = "krb5kdc" ]; then
+        pid=${comm#/proc/}
+        pid=${pid%/comm}
+        kill "$pid" 2>/dev/null || true
+    fi
+done
+'
+sleep 0.4
+docker exec "$NAME_MIT" krb5kdc
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    log "kpasswd.gate" "error" ',"error":"MIT krb5kdc did not listen after log restart"'
+    exit 1
+fi
 docker exec -d "$NAME_MIT" kadmind
 ok=0
 for _ in $(seq 1 40); do
@@ -206,6 +290,55 @@ if [ "$ok" != 1 ]; then
     log "kpasswd.gate" "error" ',"error":"MIT kadmind 464 did not listen"'
     exit 1
 fi
+echo "==== MIT kvno kadmin/changepw with TGT against MIT KDC (must refuse) ===="
+docker exec "$NAME_MIT" sh -c 'export KRB5CCNAME=FILE:/tmp/krb5cc_d1; printf "userpassword\n" | kinit user@KERBER.TEST'
+for run in 1 2; do
+    echo "---- MIT changepw run $run ----"
+    set +e
+    KVNO="$(docker exec "$NAME_MIT" sh -c 'export KRB5CCNAME=FILE:/tmp/krb5cc_d1; kvno kadmin/changepw@KERBER.TEST' 2>&1)"
+    kv_rc=$?
+    set -e
+    echo "$KVNO"
+    if [ "$kv_rc" -eq 0 ]; then
+        echo "MIT kvno changepw rc=0 (want refuse)" >&2
+        log "kpasswd.gate" "error" ',"error":"MIT kvno kadmin/changepw issued from TGT"'
+        exit 1
+    fi
+    echo "$KVNO" | grep -F 'KDC policy rejects request while getting credentials for kadmin/changepw@KERBER.TEST'
+done
+for run in 1 2; do
+    echo "---- MIT admin run $run ----"
+    set +e
+    KVNO="$(docker exec "$NAME_MIT" sh -c 'export KRB5CCNAME=FILE:/tmp/krb5cc_d1; kvno kadmin/admin@KERBER.TEST' 2>&1)"
+    kv_rc=$?
+    set -e
+    echo "$KVNO"
+    if [ "$kv_rc" -eq 0 ]; then
+        echo "MIT kvno admin rc=0 (want refuse)" >&2
+        log "kpasswd.gate" "error" ',"error":"MIT kvno kadmin/admin issued from TGT"'
+        exit 1
+    fi
+    echo "$KVNO" | grep -F 'KDC policy rejects request while getting credentials for kadmin/admin@KERBER.TEST'
+done
+docker exec "$NAME_MIT" grep -F 'TGT BASED NOT ALLOWED' /tmp/krb5kdc.log
+
+echo "==== MIT getprinc kadmin/changepw and kadmin/admin ===="
+MITCPW="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc kadmin/changepw')"
+echo "$MITCPW"
+echo "$MITCPW" | grep -F 'DISALLOW_TGT_BASED'
+echo "$MITCPW" | grep -F 'PWCHANGE_SERVICE'
+echo "$MITCPW" | grep -F 'LOCKDOWN_KEYS'
+MITADM="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc kadmin/admin')"
+echo "$MITADM"
+echo "$MITADM" | grep -F 'DISALLOW_TGT_BASED'
+echo "$MITADM" | grep -F 'LOCKDOWN_KEYS'
+
+echo "==== MIT ktadd -norandkey kadmin/changepw is extract-keys ===="
+docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw adminpassword admin/admin' >/dev/null
+MITKT="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'ktadd -norandkey -k /tmp/changepw.keytab kadmin/changepw' 2>&1 || true)"
+echo "$MITKT"
+echo "$MITKT" | grep -F 'extract-keys'
+
 docker exec "$NAME_MIT" kadmin.local -q 'addpol -minlength 8 short8'
 docker exec "$NAME_MIT" kadmin.local -q 'modprinc -policy short8 user'
 set +e

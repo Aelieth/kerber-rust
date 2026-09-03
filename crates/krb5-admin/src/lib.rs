@@ -505,6 +505,32 @@ mod tests {
     use krb5_kdc::{bootstrap_documented, documented_admin_id, documented_host};
     use krb5_protocol::ReplayCache;
 
+    fn changepw_as_ticket(
+        store: &krb5_kdc::PrincipalStore,
+        user: &PrincipalName,
+        user_key: &krb5_crypto::ProtocolKey,
+        nonce: u32,
+    ) -> krb5_kdc::IssuedAs {
+        use krb5_kdc::{TEST_REALM, documented_changepw};
+        use krb5_protocol::pa_enc_timestamp;
+        krb5_kdc::issue_as(
+            store,
+            &krb5_protocol::as_req_sname(
+                user.clone(),
+                TEST_REALM,
+                nonce,
+                Some(vec![pa_enc_timestamp(user_key).unwrap()]),
+                documented_changepw(),
+                krb5_crypto::EncryptionType::preferred()
+                    .iter()
+                    .map(|e| e.to_iana())
+                    .collect(),
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    }
+
     #[test]
     fn kadmind_enforces_acl() {
         let (mut store, acl) = bootstrap_documented().unwrap();
@@ -693,7 +719,7 @@ mod tests {
     fn kpasswd_rfc3244_bumps_kvno() {
         use krb5_asn1::encode;
         use krb5_kdc::{TEST_REALM, TEST_USER, documented_changepw, shared_dump as shared_store};
-        use krb5_protocol::{build_ap_req, build_krb_priv, pa_enc_timestamp, tgs_req};
+        use krb5_protocol::{build_ap_req, build_krb_priv, pa_enc_timestamp};
         use krb5_types::ChangePasswdData;
 
         let (store, acl) = bootstrap_documented().unwrap();
@@ -713,26 +739,8 @@ mod tests {
             .map(|k| k.kvno)
             .max()
             .unwrap();
-        let as_req = krb5_kdc::as_req(
-            user.clone(),
-            TEST_REALM,
-            43,
-            Some(vec![pa_enc_timestamp(&user_key).unwrap()]),
-        )
-        .unwrap();
-        let as_out = krb5_kdc::issue_as(&store, &as_req).unwrap();
         let changepw = documented_changepw();
-        let tgs = tgs_req(
-            as_out.rep.0.ticket.clone(),
-            &as_out.session_key,
-            TEST_REALM,
-            &user,
-            changepw.clone(),
-            TEST_REALM,
-            44,
-        )
-        .unwrap();
-        let tgs_out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
+        let as_out = changepw_as_ticket(&store, &user, &user_key, 43);
         let cpw_key = store
             .get_name(&changepw)
             .unwrap()
@@ -741,8 +749,8 @@ mod tests {
             .key
             .clone();
         let ap = build_ap_req(
-            tgs_out.rep.0.ticket.clone(),
-            &tgs_out.session_key,
+            as_out.rep.0.ticket.clone(),
+            &as_out.session_key,
             &krb5_types::ascii(TEST_REALM),
             &user,
         )
@@ -754,7 +762,7 @@ mod tests {
             targrealm: Some(krb5_types::ascii(TEST_REALM)),
         };
         let cpw_der = encode(&cpw).unwrap();
-        let priv_msg = build_krb_priv(&tgs_out.session_key, &cpw_der).unwrap();
+        let priv_msg = build_krb_priv(&as_out.session_key, &cpw_der).unwrap();
         let priv_der = encode(&priv_msg).unwrap();
         let req = encode_kpasswd_req(&ap_der, &priv_der);
         let shared = shared_store(store);
@@ -814,10 +822,7 @@ mod tests {
         use krb5_kdc::{
             NamedPolicy, TEST_REALM, TEST_USER, documented_changepw, shared_dump as shared_store,
         };
-        use krb5_protocol::{
-            ReplayCache, build_ap_req, build_krb_priv, pa_enc_timestamp, tgs_req,
-            unwrap_krb_priv_ex,
-        };
+        use krb5_protocol::{ReplayCache, build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
         use krb5_types::ChangePasswdData;
 
         let (mut store, acl) = bootstrap_documented().unwrap();
@@ -841,32 +846,8 @@ mod tests {
             .unwrap()
             .key
             .clone();
-        let as_out = krb5_kdc::issue_as(
-            &store,
-            &krb5_kdc::as_req(
-                user.clone(),
-                TEST_REALM,
-                47,
-                Some(vec![pa_enc_timestamp(&user_key).unwrap()]),
-            )
-            .unwrap(),
-        )
-        .unwrap();
         let changepw = documented_changepw();
-        let tgs_out = krb5_kdc::issue_tgs(
-            &store,
-            &tgs_req(
-                as_out.rep.0.ticket.clone(),
-                &as_out.session_key,
-                TEST_REALM,
-                &user,
-                changepw.clone(),
-                TEST_REALM,
-                48,
-            )
-            .unwrap(),
-        )
-        .unwrap();
+        let as_out = changepw_as_ticket(&store, &user, &user_key, 47);
         let cpw_key = store
             .get_name(&changepw)
             .unwrap()
@@ -875,8 +856,8 @@ mod tests {
             .key
             .clone();
         let ap = build_ap_req(
-            tgs_out.rep.0.ticket.clone(),
-            &tgs_out.session_key,
+            as_out.rep.0.ticket.clone(),
+            &as_out.session_key,
             &krb5_types::ascii(TEST_REALM),
             &user,
         )
@@ -886,7 +867,7 @@ mod tests {
             targname: Some(user),
             targrealm: Some(krb5_types::ascii(TEST_REALM)),
         };
-        let priv_msg = build_krb_priv(&tgs_out.session_key, &encode(&cpw).unwrap()).unwrap();
+        let priv_msg = build_krb_priv(&as_out.session_key, &encode(&cpw).unwrap()).unwrap();
         let req = encode_kpasswd_req(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
         let shared = shared_store(store);
         let replay = ReplayCache::new();
@@ -895,7 +876,7 @@ mod tests {
         let (ap_rep, priv_rep) = parse_kpasswd_rep(&rep).expect("parse kpasswd rep");
         assert!(!ap_rep.is_empty(), "SOFTERROR reply includes AP-REP");
         let user_data = unwrap_krb_priv_ex(
-            &tgs_out.session_key,
+            &as_out.session_key,
             &priv_rep,
             &ReplayCache::new(),
             false,
@@ -918,7 +899,7 @@ mod tests {
 
         use krb5_asn1::encode;
         use krb5_kdc::{TEST_REALM, TEST_USER, documented_changepw, shared_dump as shared_store};
-        use krb5_protocol::{build_ap_req, build_krb_priv, pa_enc_timestamp, tgs_req};
+        use krb5_protocol::{build_ap_req, build_krb_priv, pa_enc_timestamp};
         use krb5_types::ChangePasswdData;
 
         let (store, acl) = bootstrap_documented().unwrap();
@@ -938,34 +919,10 @@ mod tests {
             .unwrap()
             .key
             .clone();
-        let as_out = krb5_kdc::issue_as(
-            &store,
-            &krb5_kdc::as_req(
-                user.clone(),
-                TEST_REALM,
-                47,
-                Some(vec![pa_enc_timestamp(&user_key).unwrap()]),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        let tgs_out = krb5_kdc::issue_tgs(
-            &store,
-            &tgs_req(
-                as_out.rep.0.ticket.clone(),
-                &as_out.session_key,
-                TEST_REALM,
-                &user,
-                changepw,
-                TEST_REALM,
-                48,
-            )
-            .unwrap(),
-        )
-        .unwrap();
+        let as_out = changepw_as_ticket(&store, &user, &user_key, 47);
         let ap = build_ap_req(
-            tgs_out.rep.0.ticket.clone(),
-            &tgs_out.session_key,
+            as_out.rep.0.ticket.clone(),
+            &as_out.session_key,
             &krb5_types::ascii(TEST_REALM),
             &user,
         )
@@ -975,7 +932,7 @@ mod tests {
             targname: Some(user.clone()),
             targrealm: Some(krb5_types::ascii(TEST_REALM)),
         };
-        let priv_msg = build_krb_priv(&tgs_out.session_key, &encode(&cpw).unwrap()).unwrap();
+        let priv_msg = build_krb_priv(&as_out.session_key, &encode(&cpw).unwrap()).unwrap();
         let req = encode_kpasswd_req(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
 
         let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -1021,9 +978,7 @@ mod tests {
     fn kpasswd_mit_style_subkey_seq0_then_issue_as() {
         use krb5_asn1::encode;
         use krb5_kdc::{TEST_REALM, TEST_USER, documented_changepw, shared_dump as shared_store};
-        use krb5_protocol::{
-            build_ap_req_with_cksum, build_krb_priv_with_seq, pa_enc_timestamp, tgs_req,
-        };
+        use krb5_protocol::{build_ap_req_with_cksum, build_krb_priv_with_seq, pa_enc_timestamp};
         use krb5_types::ApOptions;
 
         let (store, acl) = bootstrap_documented().unwrap();
@@ -1043,31 +998,7 @@ mod tests {
             .unwrap()
             .key
             .clone();
-        let as_out = krb5_kdc::issue_as(
-            &store,
-            &krb5_kdc::as_req(
-                user.clone(),
-                TEST_REALM,
-                50,
-                Some(vec![pa_enc_timestamp(&user_key).unwrap()]),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        let tgs_out = krb5_kdc::issue_tgs(
-            &store,
-            &tgs_req(
-                as_out.rep.0.ticket.clone(),
-                &as_out.session_key,
-                TEST_REALM,
-                &user,
-                changepw,
-                TEST_REALM,
-                51,
-            )
-            .unwrap(),
-        )
-        .unwrap();
+        let as_out = changepw_as_ticket(&store, &user, &user_key, 50);
         let sub = krb5_crypto::ProtocolKey::from_bytes(
             krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
             &[0x5au8; 32],
@@ -1078,8 +1009,8 @@ mod tests {
             keyvalue: sub.as_bytes().to_vec().into(),
         };
         let ap = build_ap_req_with_cksum(
-            tgs_out.rep.0.ticket.clone(),
-            &tgs_out.session_key,
+            as_out.rep.0.ticket.clone(),
+            &as_out.session_key,
             &krb5_types::ascii(TEST_REALM),
             &user,
             ApOptions::none(),

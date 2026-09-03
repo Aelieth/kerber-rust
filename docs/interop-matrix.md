@@ -53,7 +53,7 @@ documents otherwise. Per-push `continue-on-error` is only `slo` /
 | `postdate-gate.sh` | MIT `kinit -s` / `kinit -v` vs Rust KDC | INVALID `i` then TKT_NYV; validate then `kvno`; `-allow_postdated` is CANNOT_POSTDATE | harness |
 | `getprivs-gate.sh` | MIT `kadmin getprivs` vs Rust kadmind ACL | admin INQUIRE/ADD/MODIFY; limited `i` is INQUIRE only; `cpw -randkey` is AUTH_CHANGEPW | harness |
 | `prop-acl-gate.sh` | MIT `kprop` vs Rust kpropd `KRB5_KPROP_ACL` | unset or empty allowlist: `acl denied`, no replica; host allowlist: MIT `kinit user` | harness |
-| `kpasswd-gate.sh` | MIT `kpasswd` vs Rust kadmind 464; Rust `krb5-kpasswd` vs Rust kadmind | new password `kinit`; old fails; run twice; Rust client after MIT; `-minlength 8` is RFC 3244 `SOFTERROR` (rc 2, `Password change rejected`) on Rust and MIT kadmind | harness |
+| `kpasswd-gate.sh` | MIT `kpasswd` vs Rust kadmind 464; Rust `krb5-kpasswd` vs Rust kadmind | new password `kinit`; old fails; run twice; Rust client after MIT; `-minlength 8` is RFC 3244 `SOFTERROR` (rc 2, `Password change rejected`) on Rust and MIT kadmind; TGT `kvno kadmin/changepw` is 12 `TGT BASED NOT ALLOWED` (`KDC policy rejects request`) on both KDCs | harness |
 | `kdb-dump-gate.sh` | MIT `kdb5_util` dump/load both ways | MIT `kinit` vs Rust; MIT load of policy-bearing dump + `getpol lockme` | harness |
 | `differential-gate.sh` | same AS/TGS bytes to Rust and MIT on one dump | stable-rep / error-code compare; un-whitelisted mismatch fails red | harness |
 | `kprop-gate.sh` | MIT `kprop` dump v7 vs `krb5-kpropd` 754 | MIT `kinit user` on replica; `klist` names `user@KERBER.TEST` | harness |

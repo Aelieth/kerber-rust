@@ -15,8 +15,9 @@ use std::path::PathBuf;
 
 use krb5_kdc::{
     Acl, BIND_CANDIDATES, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_SVR, KDB_OK_TO_AUTH_AS_DELEGATE,
-    PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER, bind_preferred, documented_changepw,
-    documented_kadmin, documented_kiprop, drop_privileges, open_store, serve, shared_store,
+    PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER, apply_kadm5_create_service_attrs,
+    bind_preferred, documented_changepw, documented_kadmin, documented_kiprop, drop_privileges,
+    open_store, serve, shared_store,
 };
 
 fn main() {
@@ -338,6 +339,10 @@ fn bootstrap_test_realm() -> PrincipalStore {
     }
     if let Err(e) = store.create_host(&acl, &actor, &documented_kiprop()) {
         eprintln!("krb5-kdc: kiprop: {e}");
+        std::process::exit(1);
+    }
+    if let Err(e) = apply_kadm5_create_service_attrs(&mut store) {
+        eprintln!("krb5-kdc: kadmin service attrs: {e}");
         std::process::exit(1);
     }
     if let (Ok(foreigns), Ok(hexkey)) = (
