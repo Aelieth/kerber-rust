@@ -22,6 +22,14 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0b D5 (MIT-gated).** Forged-realm FAST TGS (`krb5-forge-tgt
+  --keep-cipher --claim-realm` then `kvno`) is 7 `PROCESS_TGS` on both
+  KDCs; MIT log `UNKNOWN SERVER: server='krbtgt/KERBER.TEST@FORGED.EXAMPLE'`;
+  client `Server host/testhost.kerber.test@KERBER.TEST not found in
+  Kerberos database` verbatim. Units:
+  `tgs_fast_forged_ticket_realm_is_process_tgs`. Gate:
+  `scripts/mit-fast-kdc-gate.sh`.
+
 - **W0b D4 (MIT-gated).** MIT GSS acceptor replay is KRB-ERROR 34
   (`Request is a replay`). Rust grep is
   `accept_sec_context: KRB-ERROR 34: authenticator replay`. Gate:
@@ -100,8 +108,10 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   "subkeyarmor", session, "ticketarmor")`. Explicit AP-REQ armor on a
   TGS-REQ is 24 `PREAUTH_FAILED`; FAST TGS without an authenticator
   subkey is 24. Forged `ticket.realm` on a FAST TGS is 7 `PROCESS_TGS`
-  (not a second armor decrypt). Gate: `scripts/capaths-transit-gate.sh`
-  forge cells.
+  (not a second armor decrypt;
+  `tgs_fast_forged_ticket_realm_is_process_tgs`). Gates:
+  `scripts/capaths-transit-gate.sh` forge cells;
+  `scripts/mit-fast-kdc-gate.sh` FAST TGS cell.
 
 - **G9 Y3 (MIT-gated).** A peer-minted TGT for a *local* user
   (`crealm` local, header TGT realm foreign, not S4U2Self) is 12

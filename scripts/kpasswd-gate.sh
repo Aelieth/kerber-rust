@@ -258,6 +258,7 @@ if [ "$pol_rc" -ne 2 ]; then
     exit 1
 fi
 echo "$POL" | grep -qi 'Password change rejected'
+echo "$POL" | grep -F 'min_length 8'
 docker exec "$NAME" sh -c "tail -n +$((nlog + 1)) /tmp/kadmind.log" | grep -q 'chpw request'
 
 echo "==== MIT kadmind policy rejection is SOFTERROR ===="
@@ -401,6 +402,7 @@ if [ "$mit_rc" -ne 2 ]; then
     exit 1
 fi
 echo "$MITPOL" | grep -qi 'Password change rejected'
+echo "$MITPOL" | grep -F 'New password is too short'
 
 log "kpasswd.gate" "ok" ',"principal":"user@KERBER.TEST","op":"kpasswd+kinit","softerror":true'
 exit 0

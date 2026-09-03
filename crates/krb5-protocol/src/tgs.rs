@@ -94,7 +94,7 @@ pub fn tgs_exchange_once(
 /// # Errors
 ///
 /// Returns transport, crypto, or `KRB-ERROR` failures.
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value)] // `tgt` is cloned into the path-TGT vec
 pub fn tgs_exchange_path(
     kdc: &KdcAddr,
     tgt: &AsOutcome,

@@ -102,6 +102,34 @@ if [ "$FASTN" -lt 2 ]; then
     exit 1
 fi
 
+echo "==== Rust KDC: forged-realm FAST TGS is PROCESS_TGS ===="
+if ! docker exec "$NAME" \
+    sh -c 'printf "userpassword\n" | kinit -T /tmp/krb5cc_armor -c /tmp/krb5cc_fast_tgs user@KERBER.TEST'; then
+    log "fast.kdc.gate" "error" ',"error":"kinit -T for FAST TGS forge failed"'
+    exit 1
+fi
+docker exec "$NAME" /tmp/krb5-forge-tgt \
+    --ccache /tmp/krb5cc_fast_tgs --out /tmp/krb5cc_fast_forged \
+    --claim-realm FORGED.EXAMPLE --tgt krbtgt/KERBER.TEST --keep-cipher
+TGS_BEFORE="$(docker exec "$NAME" sh -c 'wc -l < /tmp/kdc.log' | tr -d '[:space:]')"
+set +e
+TGSF="$(docker exec -e KRB5_TRACE=/tmp/tgs-forge.trace "$NAME" \
+    kvno -c /tmp/krb5cc_fast_forged host/testhost.kerber.test 2>&1)"
+TGSF_RC=$?
+set -e
+echo "$TGSF"
+if [ "$TGSF_RC" -eq 0 ]; then
+    echo "forged-realm FAST TGS must not kvno" >&2
+    exit 1
+fi
+echo "$TGSF" | grep -F 'kvno: Server host/testhost.kerber.test@KERBER.TEST not found in Kerberos database while getting credentials for host/testhost.kerber.test@KERBER.TEST'
+TRACEF="$(docker exec "$NAME" cat /tmp/tgs-forge.trace)"
+echo "$TRACEF"
+echo "$TRACEF" | grep -F 'Encoding request body and padata into FAST request'
+TGSNEW="$(docker exec "$NAME" sh -c "tail -n +$((TGS_BEFORE + 1)) /tmp/kdc.log")"
+echo "$TGSNEW"
+echo "$TGSNEW" | grep -q '"code":7,"e_text":"PROCESS_TGS"'
+
 echo "==== Rust KDC: forged-realm FAST armor is NOT_US ===="
 docker exec "$NAME" /tmp/krb5-forge-tgt \
     --ccache /tmp/krb5cc_armor --out /tmp/krb5cc_armor_forged \
@@ -117,7 +145,7 @@ if [ "$FORGED_RC" -eq 0 ]; then
     echo "forged-realm armor must not kinit" >&2
     exit 1
 fi
-echo "$FORGED" | grep -qiE "Wrong principal in request|ticket isn't for us|FAST armor TGT|NOT_US"
+echo "$FORGED" | grep -q "The ticket isn't for us"
 MM_NEW="$(docker exec "$NAME" sh -c "tail -n +$((MM_BEFORE + 1)) /tmp/kdc.log")"
 echo "$MM_NEW"
 echo "$MM_NEW" | grep -q 'FAST armor TGT'
@@ -162,6 +190,36 @@ fi
 docker cp target/debug/krb5-forge-tgt "$MITNAME":/tmp/krb5-forge-tgt
 docker exec "$MITNAME" chmod +x /tmp/krb5-forge-tgt
 docker exec "$MITNAME" sh -c 'printf "userpassword\n" | kinit -c /tmp/krb5cc_armor user@KERBER.TEST'
+if ! docker exec -e KRB5_TRACE=/tmp/mit-fast.trace "$MITNAME" \
+    sh -c 'printf "userpassword\n" | kinit -T /tmp/krb5cc_armor -c /tmp/krb5cc_fast user@KERBER.TEST'; then
+    docker exec "$MITNAME" cat /tmp/mit-fast.trace >&2 || true
+    log "fast.kdc.gate" "error" ',"error":"MIT kinit -T against MIT KDC failed"'
+    exit 1
+fi
+echo "==== MIT KDC: forged-realm FAST TGS is PROCESS_TGS ===="
+docker exec "$MITNAME" /tmp/krb5-forge-tgt \
+    --ccache /tmp/krb5cc_fast --out /tmp/krb5cc_fast_forged \
+    --claim-realm FORGED.EXAMPLE --tgt krbtgt/KERBER.TEST --keep-cipher
+n_tgs="$(docker exec "$MITNAME" sh -c 'wc -l < /tmp/mit-kdc.log' | tr -d '[:space:]')"
+set +e
+MITTGS="$(docker exec -e KRB5_TRACE=/tmp/mit-tgs-forge.trace "$MITNAME" \
+    kvno -c /tmp/krb5cc_fast_forged host/testhost.kerber.test 2>&1)"
+MITTGS_RC=$?
+set -e
+echo "$MITTGS"
+if [ "$MITTGS_RC" -eq 0 ]; then
+    echo "MIT forged-realm FAST TGS must not kvno" >&2
+    exit 1
+fi
+echo "$MITTGS" | grep -F 'kvno: Server host/testhost.kerber.test@KERBER.TEST not found in Kerberos database while getting credentials for host/testhost.kerber.test@KERBER.TEST'
+MITTRACE="$(docker exec "$MITNAME" cat /tmp/mit-tgs-forge.trace)"
+echo "$MITTRACE"
+echo "$MITTRACE" | grep -F 'Encoding request body and padata into FAST request'
+MITTGSLOG="$(docker exec "$MITNAME" sh -c "tail -n +$((n_tgs + 1)) /tmp/mit-kdc.log")"
+echo "$MITTGSLOG"
+echo "$MITTGSLOG" | grep -q 'PROCESS_TGS'
+echo "$MITTGSLOG" | grep -F "UNKNOWN SERVER: server='krbtgt/KERBER.TEST@FORGED.EXAMPLE'"
+
 docker exec "$MITNAME" /tmp/krb5-forge-tgt \
     --ccache /tmp/krb5cc_armor --out /tmp/krb5cc_armor_forged \
     --claim-realm FORGED.EXAMPLE --tgt krbtgt/KERBER.TEST --keep-cipher
@@ -176,8 +234,10 @@ if [ "$MITF_RC" -eq 0 ]; then
     echo "MIT forged-realm armor must not kinit" >&2
     exit 1
 fi
-echo "$MITF" | grep -qiE "Wrong principal in request|ticket isn't for us|FAST armor TGT|while handling ap-request armor"
-docker exec "$MITNAME" sh -c "tail -n +$((n + 1)) /tmp/mit-kdc.log" || true
+echo "$MITF" | grep -q "The ticket isn't for us"
+MITASLOG="$(docker exec "$MITNAME" sh -c "tail -n +$((n + 1)) /tmp/mit-kdc.log")"
+echo "$MITASLOG"
+echo "$MITASLOG" | grep -q 'while handling ap-request armor'
 
 log "fast.kdc.gate" "ok" ',"principal":"user@KERBER.TEST","mode":"mit-kinit-T"'
 exit 0

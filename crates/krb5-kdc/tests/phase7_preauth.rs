@@ -504,55 +504,6 @@ fn explicit_as_armor_invalid_tgt_is_tkt_nyv() {
 }
 
 #[test]
-fn explicit_as_armor_non_krbtgt_is_not_us() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let key = user_key();
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 848);
-    let tgs = tgs_req(
-        issued.rep.0.ticket.clone(),
-        &issued.session_key,
-        TEST_REALM,
-        &cname,
-        documented_host(),
-        TEST_REALM,
-        849,
-    )
-    .expect("TGS-REQ");
-    let svc = krb5_kdc::issue_tgs(&store, &tgs).expect("TGS");
-    let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x47u8; 32])
-        .expect("subkey");
-    let armor_ap = build_fast_armor(
-        svc.rep.0.ticket.clone(),
-        &svc.session_key,
-        &ascii(TEST_REALM),
-        &cname,
-        Some(&sub),
-    )
-    .expect("armor");
-    let akey = armor_key(&svc.session_key, Some(&sub)).expect("akey");
-    let mut fast_req = as_req(cname, TEST_REALM, 850, None).unwrap();
-    let inner = fast_req.0.req_body.clone();
-    wrap_fast_split_opts(
-        &mut fast_req,
-        &armor_ap,
-        &akey,
-        vec![pa_enc_timestamp(&key).expect("pa")],
-        inner,
-        krb5_types::fast::fast_options_none(),
-    )
-    .expect("FAST wrap");
-    let err = krb5_kdc::issue_as(&store, &fast_req).expect_err("host armor");
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::SERVER_NOMATCH);
-            assert_eq!(text.as_deref(), Some("FAST armor TGT"));
-        }
-        other => panic!("expected 26 SERVER_NOMATCH, got {other:?}"),
-    }
-}
-
-#[test]
 fn fast_as_armor_for_host_ticket_is_server_nomatch() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
