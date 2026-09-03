@@ -24,6 +24,10 @@ pub enum Error {
     CiphertextTooShort,
     /// HMAC did not match; ciphertext is discarded.
     Integrity,
+    /// Claimed cksumtype is not in MIT `cksumtypes.c`.
+    UnsupportedChecksum(i32),
+    /// `cksum->length != output_size` (`verify_checksum.c` `KRB5_BAD_MSIZE`).
+    BadChecksumSize,
     /// Operating-system CSPRNG failed while generating a confounder.
     Rng,
     /// PBKDF2 iteration count exceeds the local resource limit.
@@ -46,6 +50,8 @@ impl fmt::Display for Error {
             Self::InvalidConfounder => write!(f, "confounder must be 16 octets"),
             Self::CiphertextTooShort => write!(f, "ciphertext too short"),
             Self::Integrity => write!(f, "integrity check failed"),
+            Self::UnsupportedChecksum(n) => write!(f, "unsupported checksum type {n}"),
+            Self::BadChecksumSize => write!(f, "checksum length does not match output size"),
             Self::Rng => write!(f, "failed to generate random confounder"),
             Self::IterationLimit => write!(f, "PBKDF2 iteration count exceeds local limit"),
         }

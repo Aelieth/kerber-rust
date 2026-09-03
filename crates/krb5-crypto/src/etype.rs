@@ -294,5 +294,6 @@ pub const fn cksumtype_is_keyed(cksumtype: i32) -> bool {
 /// MIT `cksumtypes.c` unkeyed types (`CKSUM_UNKEYED`).
 #[must_use]
 pub const fn cksumtype_is_unkeyed(cksumtype: i32) -> bool {
-    matches!(cksumtype, 1 | 2 | 7 | 9 | 14)
+    // MIT cksumtypes.c: MD4 2 / MD5 7 / NIST-SHA 9 / SHA1 14. CRC32 (1) has no entry.
+    matches!(cksumtype, 2 | 7 | 9 | 14)
 }

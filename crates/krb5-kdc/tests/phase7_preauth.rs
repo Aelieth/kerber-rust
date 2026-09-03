@@ -6,7 +6,7 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     EncryptionType, KeyUsage, OAKLEY_2048, ProtocolKey, checksum, decrypt, dh_generate, dh_shared,
-    encrypt, krb_fx_cf2, octetstring2key, p256_generate, string_to_key,
+    encrypt, krb_fx_cf2, octetstring2key, p256_generate, string_to_key, unkeyed_checksum,
 };
 use krb5_kdc::{
     Acl, AdminOp, Error, KDB_DISALLOW_ALL_TIX, KDB_OK_TO_AUTH_AS_DELEGATE, NamedPolicy,
@@ -1017,17 +1017,57 @@ fn fast_tgs_bad_req_checksum_is_modified() {
 }
 
 #[test]
-fn fast_as_unkeyed_checksum_is_policy() {
+fn fast_as_crc32_checksum_is_generic() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let (mut req, _) = fast_as_prepared(&store, 894);
     map_fx_fast_as(&mut req, |a| a.req_checksum.cksumtype = 1);
-    let err = krb5_kdc::issue_as(&store, &req).expect_err("unkeyed FAST checksum");
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("CRC32 FAST checksum");
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::GENERIC);
+            assert_eq!(text.as_deref(), Some("FIND_FAST"));
+        }
+        other => panic!("expected 60 GENERIC FIND_FAST for CRC32, got {other:?}"),
+    }
+}
+
+#[test]
+fn fast_as_short_mac_is_generic() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut req, _) = fast_as_prepared(&store, 1035);
+    map_fx_fast_as(&mut req, |a| {
+        a.req_checksum.cksumtype = 7;
+        let mut ck = a.req_checksum.checksum.to_vec();
+        ck.truncate(12);
+        a.req_checksum.checksum = ck.into();
+    });
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("short MAC on type 7");
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::GENERIC);
+            assert_eq!(text.as_deref(), Some("FIND_FAST"));
+        }
+        other => panic!("expected 60 GENERIC FIND_FAST for short MAC, got {other:?}"),
+    }
+}
+
+#[test]
+fn fast_as_rsa_md5_unkeyed_is_policy() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut req, _) = fast_as_prepared(&store, 1070);
+    let body = encode(&req.0.req_body).expect("body");
+    let digest = krb5_crypto::unkeyed_checksum(7, &body).expect("md5");
+    map_fx_fast_as(&mut req, |a| {
+        a.req_checksum.cksumtype = 7;
+        a.req_checksum.checksum = digest.into();
+    });
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("RSA-MD5 unkeyed");
     match err {
         Error::Protocol { code, text, .. } => {
             assert_eq!(code, err::POLICY);
             assert_eq!(text.as_deref(), Some("Unkeyed checksum used in fast_req"));
         }
-        other => panic!("expected 12 POLICY unkeyed, got {other:?}"),
+        other => panic!("expected 12 POLICY unkeyed RSA-MD5, got {other:?}"),
     }
 }
 
@@ -1036,10 +1076,8 @@ fn fast_as_unkeyed_type_with_bad_bytes_is_modified() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let (mut req, _) = fast_as_prepared(&store, 908);
     map_fx_fast_as(&mut req, |a| {
-        a.req_checksum.cksumtype = 1;
-        let mut ck = a.req_checksum.checksum.to_vec();
-        ck[0] ^= 0xff;
-        a.req_checksum.checksum = ck.into();
+        a.req_checksum.cksumtype = 7;
+        a.req_checksum.checksum = vec![0xff; 16].into();
     });
     let err = krb5_kdc::issue_as(&store, &req).expect_err("unkeyed + bad bytes");
     match err {
@@ -1055,7 +1093,22 @@ fn fast_as_unkeyed_type_with_bad_bytes_is_modified() {
 fn fast_tgs_unkeyed_checksum_is_policy() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let mut tgs = fast_tgs_prepared(&store, 896);
-    map_fx_fast_tgs(&mut tgs, |a| a.req_checksum.cksumtype = 7);
+    let pa_tgs = tgs
+        .0
+        .padata
+        .as_ref()
+        .unwrap()
+        .iter()
+        .find(|p| p.padata_type == pa::TGS_REQ)
+        .unwrap()
+        .padata_value
+        .as_ref()
+        .to_vec();
+    let digest = unkeyed_checksum(7, &pa_tgs).expect("md5");
+    map_fx_fast_tgs(&mut tgs, |a| {
+        a.req_checksum.cksumtype = 7;
+        a.req_checksum.checksum = digest.into();
+    });
     let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("unkeyed FAST checksum");
     match err {
         Error::Protocol { code, text, .. } => {
@@ -1072,9 +1125,7 @@ fn fast_tgs_unkeyed_type_with_bad_bytes_is_modified() {
     let mut tgs = fast_tgs_prepared(&store, 910);
     map_fx_fast_tgs(&mut tgs, |a| {
         a.req_checksum.cksumtype = 7;
-        let mut ck = a.req_checksum.checksum.to_vec();
-        ck[0] ^= 0xff;
-        a.req_checksum.checksum = ck.into();
+        a.req_checksum.checksum = vec![0xff; 16].into();
     });
     let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("unkeyed + bad bytes");
     match err {

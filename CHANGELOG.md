@@ -22,6 +22,14 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0d G2 (unit-red; MIT by source).** `verify_checksum` dispatches on
+  the claimed cksumtype like `krb5_c_verify_checksum`
+  (`verify_checksum.c:46-79`). Unknown type and `output_size` length
+  mismatch are 60 `GENERIC` `FIND_FAST`. Unkeyed set is MIT
+  `cksumtypes.c` `{2,7,9,14}` (CRC32 is not unkeyed). Units:
+  `fast_as_crc32_checksum_is_generic`, `fast_as_short_mac_is_generic`,
+  `fast_as_rsa_md5_unkeyed_is_policy`. MIT clients cannot emit these.
+
 - **W0d G1 (MIT-gated).** kpasswd orders checks like
   `schpw_util_wrapper` (`misc.c:33-54`): principal compare first,
   non-INITIAL self → 7, unprivileged other principal → 5

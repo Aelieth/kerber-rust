@@ -5,7 +5,7 @@ use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256, checksum, cksumtype_is_keyed,
     cksumtype_is_unkeyed, decrypt, dh_generate, dh_group_for_prime, dh_shared, encrypt, krb_fx_cf2,
     octetstring2key, p256_generate, p256_shared, pkinit_kdf_agile, spake_derive_key,
-    spake_kdc_keygen, spake_result_wbytes, spake_thash_update, spake_wbytes, verify_checksum,
+    spake_kdc_keygen, spake_result_wbytes, spake_thash_update, spake_wbytes, verify_checksum_type,
 };
 use krb5_protocol::{ReplayCache, ReplayKey};
 use krb5_types::{
@@ -154,8 +154,19 @@ fn verify_fast_req_checksum(
         return Err(proto(err::GENERIC, "FIND_FAST"));
     }
     let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM)?;
-    verify_checksum(armor_key, ck_usage, ck_data, ck.checksum.as_ref())
-        .map_err(|_| proto(err::MODIFIED, "FIND_FAST"))?;
+    match verify_checksum_type(
+        armor_key,
+        ck_usage,
+        ck_data,
+        ck.cksumtype,
+        ck.checksum.as_ref(),
+    ) {
+        Ok(()) => {}
+        Err(krb5_crypto::Error::UnsupportedChecksum(_) | krb5_crypto::Error::BadChecksumSize) => {
+            return Err(proto(err::GENERIC, "FIND_FAST"));
+        }
+        Err(_) => return Err(proto(err::MODIFIED, "FIND_FAST")),
+    }
     if !cksumtype_is_keyed(ck.cksumtype) {
         return Err(proto(err::POLICY, "Unkeyed checksum used in fast_req"));
     }

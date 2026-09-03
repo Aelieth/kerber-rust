@@ -560,6 +560,79 @@ pub fn verify_checksum(
     mac_verify(mac, &expected)
 }
 
+/// MIT `cksumtypes.c` `output_size`. Unknown types are `None`.
+fn cksumtype_output_size(cksumtype: i32) -> Option<usize> {
+    match cksumtype {
+        2 | 7 | 17..=19 | -137 | -138 => Some(16),
+        9 | 12 | 14 => Some(20),
+        15 | 16 => Some(12),
+        20 => Some(24),
+        _ => None,
+    }
+}
+
+/// MIT `krb5int_unkeyed_checksum` (`cksumtypes.c` types 2, 7, 9, 14).
+///
+/// # Errors
+///
+/// [`Error::UnsupportedChecksum`] when `cksumtype` is not unkeyed.
+pub fn unkeyed_checksum(cksumtype: i32, message: &[u8]) -> Result<Vec<u8>, Error> {
+    match cksumtype {
+        2 => {
+            use md4::Digest;
+            Ok(md4::Md4::digest(message).to_vec())
+        }
+        7 => {
+            use md5::Digest;
+            Ok(md5::Md5::digest(message).to_vec())
+        }
+        9 | 14 => {
+            use sha1::Digest;
+            Ok(sha1::Sha1::digest(message).to_vec())
+        }
+        _ => Err(Error::UnsupportedChecksum(cksumtype)),
+    }
+}
+
+/// MIT `krb5_c_verify_checksum`: table lookup, length, then compute.
+///
+/// `cksumtype` 0 uses the key's mandatory type.
+///
+/// # Errors
+///
+/// Unknown type [`Error::UnsupportedChecksum`]; length
+/// [`Error::BadChecksumSize`]; mismatch [`Error::Integrity`].
+pub fn verify_checksum_type(
+    key: &ProtocolKey,
+    usage: KeyUsage,
+    message: &[u8],
+    cksumtype: i32,
+    mac: &[u8],
+) -> Result<(), Error> {
+    let ctype = if cksumtype == 0 {
+        key.etype().checksum_type()
+    } else {
+        cksumtype
+    };
+    let Some(want) = cksumtype_output_size(ctype) else {
+        return Err(Error::UnsupportedChecksum(ctype));
+    };
+    if mac.len() != want {
+        return Err(Error::BadChecksumSize);
+    }
+    if crate::etype::cksumtype_is_unkeyed(ctype) {
+        let expected = unkeyed_checksum(ctype, message)?;
+        return mac_verify(mac, &expected);
+    }
+    if !crate::etype::cksumtype_is_keyed(ctype) {
+        return Err(Error::UnsupportedChecksum(ctype));
+    }
+    if ctype != key.etype().checksum_type() {
+        return Err(Error::UnsupportedChecksum(ctype));
+    }
+    verify_checksum(key, usage, message, mac)
+}
+
 fn emit(
     event: &'static str,
     correlation_id: &str,

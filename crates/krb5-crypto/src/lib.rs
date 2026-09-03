@@ -49,7 +49,8 @@ pub use modp::{
 pub use ops::{
     CipherState, checksum, decrypt, decrypt_cts, decrypt_with_state, encrypt,
     encrypt_with_confounder, encrypt_with_state, hmac_md5_arcfour_checksum, integrity_mac,
-    kdb_decrypt_key, kdb_encrypt_key, string_to_key, verify_checksum,
+    kdb_decrypt_key, kdb_encrypt_key, string_to_key, unkeyed_checksum, verify_checksum,
+    verify_checksum_type,
 };
 pub use prf::{prf, prf_plus};
 pub use spake::{

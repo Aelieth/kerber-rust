@@ -79,9 +79,10 @@ when a raw packet is present (`do_as_req.c:526-531`); socketless tests
 re-encode. Verify runs before the keyedness check (`fast_util.c:207-224`):
 a failed verify is 41 `MODIFIED` `FIND_FAST`; an unkeyed type is 12
 `Unkeyed checksum used in fast_req` only after verify succeeds
-(CRC32 1, RSA-MD4 2, RSA-MD5 7, NIST-SHA 9, SHA-1 14; MIT
-`cksumtypes.c`). An unknown checksum type is 60 `GENERIC` `FIND_FAST`
-(`krb5_c_verify_checksum` → `KRB5_BAD_ENCTYPE`). Unknown armor type is
+(RSA-MD4 2, RSA-MD5 7, NIST-SHA 9, SHA-1 14; MIT `cksumtypes.c`).
+CRC32 (1) has no table entry. Unknown type or `output_size` length
+mismatch is 60 `GENERIC` `FIND_FAST` (`KRB5_BAD_ENCTYPE` /
+`KRB5_BAD_MSIZE`). Unknown armor type is
 24 `Unknown FAST armor type %d`. TGS authenticator client ≠ ticket
 client is 36 `PROCESS_TGS`. Explicit TGS AP-REQ armor is 24 even
 without a subkey; MIT only rejects it when a subkey is present
