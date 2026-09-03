@@ -1,0 +1,33 @@
+name: full-test
+
+on:
+  schedule:
+    - cron: "27 5 * * *"
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  test-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - name: test --release
+        run: cargo nextest run --workspace --release --profile ci
+
+  msrv-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.95
+      - uses: Swatinem/rust-cache@v2
+      - name: MSRV 1.95 test (locked)
+        run: cargo test --workspace --locked
