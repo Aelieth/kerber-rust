@@ -22,6 +22,16 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0d G5.** `docs/mit-parity-ledger.md` is the W1-A KDC parity
+  ledger with Part 0 applied: wire codes (`CLIENT EXPIRED` 1,
+  `SERVICE EXPIRED` 2, req-body checksum 31, `MORE_PREAUTH` 91,
+  FAST option 93), FAST wire `e_text` `FIND_FAST` after G3, honest
+  `proposed` proofs, 28 additions (AD-FX-ARMOR, `get_ticket_flags`,
+  TCP `FIELD_TOOLONG` 61, lockout last, …), and the ranked F-batches
+  recut from the verification reports. `docs/testing.md` records
+  wire-e_text vs log-detail and scripted retroactive-red.
+  `scripts/ci-policy.py` checks the ledger `proof` column.
+
 - **W0d G4.** `scripts/ci-policy.py` flags echo-only `if`/`elif`/`else`
   of any shape (not only `if !`), strips quoted strings before token
   matching, pairs `fi` by depth, and bans per-push `cargo test --all`.

@@ -9,7 +9,8 @@ Samba PAC / realtrust / Heimdal must fail-red on a scheduled workflow.
 
 Gate discipline (docs/testing.md): red-at-HEAD artefacts live under
 working/ which is gitignored, so CI cannot check them. This script
-checks workflow YAML and gate-script structure only.
+checks workflow YAML, gate-script structure, and the MIT parity
+ledger `proof` column.
 """
 from __future__ import annotations
 
@@ -22,6 +23,26 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 NEXTEST_TOML = ROOT / ".config" / "nextest.toml"
 GITIGNORE = ROOT / ".gitignore"
 SCRIPTS = ROOT / "scripts"
+LEDGER = ROOT / "docs" / "mit-parity-ledger.md"
+
+DIFFSEND_CASES = frozenset(
+    {
+        "garbage-pdu",
+        "unknown-cname",
+        "etype-nosupp",
+        "wrong-realm",
+        "pauser-no-preauth",
+        "skewed-timestamp",
+        "unknown-sname",
+        "as-success",
+        "tgs-success",
+        "tgs-not-a-tgt",
+        "tgt-expired",
+        "tgt-nyv",
+    }
+)
+_LEDGER_GATE = re.compile(r"(?:scripts/)?([A-Za-z0-9._-]+-gate(?:\.sh)?)")
+_LEDGER_DIFFSEND = re.compile(r"diffsend `([^`]+)`")
 
 # Per-push jobs that may set continue-on-error: true. Everything else on
 # the push/PR workflow is fail-red.
@@ -403,6 +424,52 @@ def check_no_informational_gates() -> None:
             _die(f"{path.name} informational if at line {hits[0]}")
 
 
+def _split_ledger_row(line: str) -> list[str]:
+    inner = line.strip()
+    if inner.startswith("|"):
+        inner = inner[1:]
+    if inner.endswith("|"):
+        inner = inner[:-1]
+    return [p.strip() for p in re.split(r"(?<!\\)\|", inner)]
+
+
+def check_ledger_proof_column(text: str | None = None) -> None:
+    """Proof cells may name existing diffsend cases / *-gate.sh or `proposed`."""
+    if text is None:
+        if not LEDGER.is_file():
+            _die("missing docs/mit-parity-ledger.md")
+        text = LEDGER.read_text()
+    existing = {p.name for p in SCRIPTS.glob("*-gate.sh")}
+    for i, line in enumerate(text.splitlines(), 1):
+        if (
+            not line.startswith("|")
+            or "MIT file:line" in line
+            or line.startswith("| ---")
+        ):
+            continue
+        cols = _split_ledger_row(line)
+        if len(cols) < 7:
+            continue
+        proof = cols[6]
+        proposed = bool(re.search(r"\bproposed\b", proof, re.I))
+        for m in _LEDGER_DIFFSEND.finditer(proof):
+            case = m.group(1)
+            if case not in DIFFSEND_CASES and not proposed:
+                _die(
+                    f"docs/mit-parity-ledger.md:{i} proof names diffsend `{case}` "
+                    "which is not a live case (use proposed)"
+                )
+        for m in _LEDGER_GATE.finditer(proof):
+            name = m.group(1)
+            if not name.endswith(".sh"):
+                name = name + ".sh"
+            if name not in existing and not proposed:
+                _die(
+                    f"docs/mit-parity-ledger.md:{i} proof names {name} "
+                    "which is not in scripts/ (use proposed)"
+                )
+
+
 def check_working_gitignored() -> None:
     if not GITIGNORE.is_file():
         _die("missing .gitignore")
@@ -547,6 +614,26 @@ jobs:
     )
     _must_die(check_ci_no_workspace_cargo_test, cargo_test_all)
 
+    ledger_ok = (
+        "| MIT file:line | check | MIT | Rust | e_text | verdict | proof |\n"
+        "| --- | --- | --- | --- | --- | --- | --- |\n"
+        "| kdc_util.c:1 | x | y | z | w | exact | diffsend `unknown-cname`; `scripts/expire-gate.sh` |\n"
+        "| kdc_util.c:2 | x | y | z | w | absent | proposed: diffsend `no-such-case`; proposed kdc-lookaside-gate.sh |\n"
+    )
+    check_ledger_proof_column(ledger_ok)
+    ledger_bad_case = (
+        "| MIT file:line | check | MIT | Rust | e_text | verdict | proof |\n"
+        "| --- | --- | --- | --- | --- | --- | --- |\n"
+        "| kdc_util.c:1 | x | y | z | w | exact | diffsend `no-such-case` |\n"
+    )
+    _must_die(check_ledger_proof_column, ledger_bad_case)
+    ledger_bad_gate = (
+        "| MIT file:line | check | MIT | Rust | e_text | verdict | proof |\n"
+        "| --- | --- | --- | --- | --- | --- | --- |\n"
+        "| kdc_util.c:1 | x | y | z | w | exact | kdc-lookaside-gate.sh |\n"
+    )
+    _must_die(check_ledger_proof_column, ledger_bad_gate)
+
 
 def main() -> None:
     _self_test()
@@ -572,6 +659,7 @@ def main() -> None:
     check_gate_membership(workflows)
     check_no_informational_gates()
     check_working_gitignored()
+    check_ledger_proof_column()
     print("ci-policy: ok")
 
 

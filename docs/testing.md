@@ -15,9 +15,20 @@ Red-at-HEAD artefact contract (captured under
 `working/logs/…/<item>-red-at-head.log`): the file is captured tool
 output of the failing unit or live cell, not a paraphrase. Write
 "unit-red only; MIT by source" when MIT clients cannot emit the cell.
-Retroactive red is a `git worktree` at the base SHA. Both legs of a
-text-equality cell assert pinned literals (never capture-from-MIT).
-Every branch asserts: no `if` whose body is only `echo`.
+Retroactive red is a scripted `git worktree` at the base SHA with
+`CARGO_TARGET_DIR` under `KERBER_SCRATCH` (not an afterthought).
+Archive the captured output under `working/logs/…` and the scratch.
+Both legs of a text-equality cell assert pinned literals (never
+capture-from-MIT). Every branch asserts: no `if` whose body is only
+`echo`.
+
+Wire `e_text` is MIT's status word (`do_as_req.c:806`,
+`do_tgs_req.c:205-206`). MIT `k5_setmsg` texts are KDC-log messages
+and land in the `kdc.issue` `detail` field, not on the wire. A cell
+that pins MIT text must say whether it is wire or log. The KDC MIT
+1.22.2 parity ledger is [`mit-parity-ledger.md`](mit-parity-ledger.md);
+a `proof` cell may name only an existing test function, gate script,
+or `diffsend` case, or the word `proposed`.
 
 ## Normal / baseline
 
