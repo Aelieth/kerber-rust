@@ -22,6 +22,19 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0d G1 (MIT-gated).** kpasswd orders checks like
+  `schpw_util_wrapper` (`misc.c:33-54`): principal compare first,
+  non-INITIAL self → 7, unprivileged other principal → 5
+  `Unauthorized request`, privileged foreign-realm target → 2 with
+  the `chpass_util` two-line text. RFC 3244 kadmind log is
+  `setpw request from 127.0.0.1 by user@KERBER.TEST for
+  user@KERBER.TEST: Operation requires initial ticket`. Units:
+  `kpasswd_foreign_self_change_needs_initial`,
+  `kpasswd_unprivileged_other_principal_is_accessdenied`,
+  `modprinc_keeping_lockdown_bit_is_allowed`. Gate:
+  `scripts/kpasswd-gate.sh`. Purgekeys on a locked-down principal
+  is refused (stricter); MIT succeeds.
+
 - **W0b D5 (MIT-gated).** Forged-realm FAST TGS (`krb5-forge-tgt
   --keep-cipher --claim-realm` then `kvno`) is 7 `PROCESS_TGS` on both
   KDCs; MIT log `UNKNOWN SERVER: server='krbtgt/KERBER.TEST@FORGED.EXAMPLE'`;

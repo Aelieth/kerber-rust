@@ -366,8 +366,26 @@ pub fn handle_kpasswd_rfc3244(
     if raw.len() < 6 {
         return Err(Error::Inner("kpasswd truncated".into()));
     }
+    handle_kpasswd_from(store, acl, service_key, replay, raw, "127.0.0.1")
+}
+
+const RFC3244_VERSION: u16 = 0xff80;
+const UNK_PRINC_PRIV: &str =
+    "Password not changed.\nPrincipal does not exist while trying to change password.\n";
+
+fn handle_kpasswd_from(
+    store: &SharedStore,
+    acl: &krb5_kdc::Acl,
+    service_key: &ProtocolKey,
+    replay: &ReplayCache,
+    raw: &[u8],
+    from: &str,
+) -> Result<Vec<u8>, Error> {
+    if raw.len() < 6 {
+        return Err(Error::Inner("kpasswd truncated".into()));
+    }
     let _msglen = u16::from_be_bytes([raw[0], raw[1]]);
-    let _ver = u16::from_be_bytes([raw[2], raw[3]]);
+    let ver = u16::from_be_bytes([raw[2], raw[3]]);
     let ap_len = u16::from_be_bytes([raw[4], raw[5]]) as usize;
     if 6 + ap_len > raw.len() {
         return Err(Error::Inner("kpasswd AP-REQ".into()));
@@ -409,33 +427,61 @@ pub fn handle_kpasswd_rfc3244(
         ok.ticket_part.cname.components_joined(),
         ticket_crealm
     );
-    // MIT misc.c: self-change is krb5_principal_compare (name type ignored).
+    let target_unparsed = format!("{}@{targ_realm}", targ.components_joined());
+    // MIT misc.c:33-54: compare first, INITIAL, auth(OP_CPW), then DB.
     let self_change = principal_compare(&targ, &targ_realm, &ok.ticket_part.cname, &ticket_crealm);
-    let (code, text) = if targ_realm != store_realm {
-        (2u16, "Principal does not exist".into())
-    } else if self_change && !ok.ticket_part.flags.initial() {
-        (7u16, "Ticket must be derived from a password".into())
+    let (code, text, log_err) = if self_change && !ok.ticket_part.flags.initial() {
+        (
+            7u16,
+            "Ticket must be derived from a password".to_owned(),
+            "Operation requires initial ticket",
+        )
+    } else if !self_change
+        && acl
+            .check(&client, krb5_kdc::AdminOp::ChangePassword)
+            .is_err()
+    {
+        (
+            5u16,
+            "Unauthorized request".to_owned(),
+            "Operation requires ``change-password'' privilege",
+        )
+    } else if targ_realm != store_realm {
+        (2u16, UNK_PRINC_PRIV.to_owned(), "Principal does not exist")
     } else {
         let mut g = store
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut sess = AdminSession::local(&mut g, acl, client.clone());
         match sess.change_password(&targ, &newpass) {
-            Ok(()) => (0u16, String::new()),
-            Err(Error::PasswordPolicy(msg)) => (4, msg),
-            Err(Error::AclDenied) => (5, "acl denied".into()),
-            Err(e) => (2, e.to_string()),
+            Ok(()) => (0u16, String::new(), "success"),
+            Err(Error::PasswordPolicy(msg)) => (4, msg, "password policy"),
+            Err(Error::AclDenied) => (
+                5,
+                "Unauthorized request".to_owned(),
+                "Operation requires ``change-password'' privilege",
+            ),
+            Err(Error::NotFound) => (2, UNK_PRINC_PRIV.to_owned(), "Principal does not exist"),
+            Err(e) => (
+                2,
+                format!("Password not changed.\n{e} while trying to change password.\n"),
+                "harderror",
+            ),
         }
     };
     let log_outcome = if code == 0 { "ok" } else { "error" };
-    let log_text = if code == 0 { "success" } else { text.as_str() };
+    let log_line = if ver == RFC3244_VERSION {
+        format!("setpw request from {from} by {client} for {target_unparsed}: {log_err}")
+    } else {
+        format!("chpw request from {from} for {client}: {log_err}")
+    };
     tracing::info!(
         event = krb5_log::events::ADMIN,
         component = "krb5-admin",
         outcome = log_outcome,
         code,
         client = client.as_str(),
-        "chpw request for {client}: {log_text}"
+        "{log_line}"
     );
     let mut body = Vec::with_capacity(2 + text.len());
     body.extend_from_slice(&code.to_be_bytes());
@@ -497,7 +543,14 @@ pub fn serve_kpasswd_udp(
     while !shutdown.load(Ordering::Relaxed) {
         match sock.recv_from(&mut buf) {
             Ok((n, peer)) => {
-                match handle_kpasswd_rfc3244(&store, &acl, &service_key, &replay, &buf[..n]) {
+                match handle_kpasswd_from(
+                    &store,
+                    &acl,
+                    &service_key,
+                    &replay,
+                    &buf[..n],
+                    &peer.ip().to_string(),
+                ) {
                     Ok(rep) => {
                         let _ = sock.send_to(&rep, peer);
                     }
@@ -538,12 +591,19 @@ pub fn serve_kpasswd_tcp(
     let replay = ReplayCache::new();
     while !shutdown.load(Ordering::Relaxed) {
         match listener.accept() {
-            Ok((mut stream, _)) => {
+            Ok((mut stream, peer)) => {
                 let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
                 let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
                 match read_len_pref(&mut stream, 64 * 1024) {
                     Ok(body) => {
-                        match handle_kpasswd_rfc3244(&store, &acl, &service_key, &replay, &body) {
+                        match handle_kpasswd_from(
+                            &store,
+                            &acl,
+                            &service_key,
+                            &replay,
+                            &body,
+                            &peer.ip().to_string(),
+                        ) {
                             Ok(rep) => {
                                 let _ = write_len_pref(&mut stream, &rep);
                             }

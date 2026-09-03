@@ -231,9 +231,10 @@ D2R="$(docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
 d2r_rc=$?
 set -e
 echo "$D2R"
+echo "helper_rc=$d2r_rc"
 echo "$D2R" | grep -F 'result_code=7'
 echo "$D2R" | grep -F 'Ticket must be derived from a password'
-docker exec "$NAME" sh -c "tail -n +$((nlog + 1)) /tmp/kadmind.log" | grep -F 'Ticket must be derived from a password'
+docker exec "$NAME" sh -c "tail -n +$((nlog + 1)) /tmp/kadmind.log" | grep -F 'chpw request from 127.0.0.1 for user@KERBER.TEST: Operation requires initial ticket'
 if docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
     "$NAME" sh -c 'printf "d2-should-fail\n" | kinit user@KERBER.TEST'; then
     echo "TGS kpasswd changed the password" >&2
@@ -242,20 +243,36 @@ fi
 echo "==== TGS kpasswd NT-UNKNOWN targname still INITIAL (Rust) ===="
 docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
     "$NAME" sh -c 'printf "rust-kpw\n" | kinit user@KERBER.TEST'
+nlog="$(docker exec "$NAME" sh -c 'wc -l < /tmp/kadmind.log' | tr -d '[:space:]')"
 set +e
 D2NT="$(docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf -e KPASSWD_TARGNAME_TYPE=0 \
     "$NAME" /tmp/kpasswd-tgs-client FILE:/tmp/krb5cc_kpasswd KERBER.TEST e1-should-fail)"
 d2nt_rc=$?
 set -e
 echo "$D2NT"
+echo "helper_rc=$d2nt_rc"
 echo "$D2NT" | grep -F 'result_code=7'
 echo "$D2NT" | grep -F 'Ticket must be derived from a password'
+docker exec "$NAME" sh -c "tail -n +$((nlog + 1)) /tmp/kadmind.log" | grep -F 'setpw request from 127.0.0.1 by user@KERBER.TEST for user@KERBER.TEST: Operation requires initial ticket'
 if docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
     "$NAME" sh -c 'printf "e1-should-fail\n" | kinit user@KERBER.TEST'; then
     echo "NT-UNKNOWN targname kpasswd changed the password" >&2
     kadmin_q 'cpw -pw rust-kpw user'
     exit 1
 fi
+echo "==== TGS kpasswd other principal is ACCESSDENIED (Rust) ===="
+kadmin_q 'addprinc -pw extra-secret extra'
+docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
+    "$NAME" sh -c 'printf "rust-kpw\n" | kinit user@KERBER.TEST'
+set +e
+D2O="$(docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf -e KPASSWD_TARGET=extra@KERBER.TEST \
+    "$NAME" /tmp/kpasswd-tgs-client FILE:/tmp/krb5cc_kpasswd KERBER.TEST other-should-fail)"
+d2o_rc=$?
+set -e
+echo "$D2O"
+echo "helper_rc=$d2o_rc"
+echo "$D2O" | grep -F 'result_code=5'
+echo "$D2O" | grep -F 'Unauthorized request'
 kadmin_q 'modprinc -allow_tgs_req kadmin/changepw'
 
 echo "==== Rust kadmind policy rejection is SOFTERROR ===="
@@ -397,6 +414,7 @@ D2M="$(docker exec "$NAME_MIT" sh -c 'export KRB5CCNAME=FILE:/tmp/krb5cc_d2; /tm
 d2m_rc=$?
 set -e
 echo "$D2M"
+echo "helper_rc=$d2m_rc"
 echo "$D2M" | grep -F 'result_code=7'
 echo "$D2M" | grep -F 'Ticket must be derived from a password'
 echo "==== MIT kadmind.log ===="
@@ -414,13 +432,27 @@ D2MNT="$(docker exec "$NAME_MIT" sh -c 'export KRB5CCNAME=FILE:/tmp/krb5cc_d2 KP
 d2mnt_rc=$?
 set -e
 echo "$D2MNT"
+echo "helper_rc=$d2mnt_rc"
 echo "$D2MNT" | grep -F 'result_code=7'
 echo "$D2MNT" | grep -F 'Ticket must be derived from a password'
+docker logs "$NAME_MIT" 2>&1 | grep -F 'setpw request from 127.0.0.1 by user@KERBER.TEST for user@KERBER.TEST: Operation requires initial ticket' \
+    || docker exec "$NAME_MIT" grep -F 'setpw request from 127.0.0.1 by user@KERBER.TEST for user@KERBER.TEST: Operation requires initial ticket' /tmp/kadmind.log
 if docker exec "$NAME_MIT" sh -c 'export KRB5CCNAME=FILE:/tmp/krb5cc_d2; printf "e1-should-fail\n" | kinit user@KERBER.TEST'; then
     echo "MIT NT-UNKNOWN targname kpasswd changed the password" >&2
     docker exec "$NAME_MIT" kadmin.local -q 'cpw -pw userpassword user'
     exit 1
 fi
+echo "==== TGS kpasswd other principal is ACCESSDENIED (MIT) ===="
+docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw extra-secret extra' >/dev/null
+docker exec "$NAME_MIT" sh -c 'export KRB5CCNAME=FILE:/tmp/krb5cc_d2; printf "userpassword\n" | kinit user@KERBER.TEST'
+set +e
+D2MO="$(docker exec "$NAME_MIT" sh -c 'export KRB5CCNAME=FILE:/tmp/krb5cc_d2 KPASSWD_TARGET=extra@KERBER.TEST; /tmp/kpasswd-tgs-client FILE:/tmp/krb5cc_d2 KERBER.TEST other-should-fail')"
+d2mo_rc=$?
+set -e
+echo "$D2MO"
+echo "helper_rc=$d2mo_rc"
+echo "$D2MO" | grep -F 'result_code=5'
+echo "$D2MO" | grep -F 'Unauthorized request'
 docker exec "$NAME_MIT" kadmin.local -q 'modprinc -allow_tgs_req kadmin/changepw'
 
 docker exec "$NAME_MIT" kadmin.local -q 'addpol -minlength 8 short8'

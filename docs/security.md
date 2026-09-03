@@ -104,10 +104,15 @@ none of the `kdb5_util create` bits).
 
 kpasswd self-change (RFC 3244 target absent or equal to the ticket
 client on components and realm, name-type-insensitive like
-`krb5_principal_compare`) requires `TKT_FLG_INITIAL` (`misc.c`);
-otherwise result 7 `Ticket must be derived from a password`. A
-`targrealm` that is not the store realm is 2 `HARDERROR` (`KADM5_UNK_PRINC`).
-Admin-style changes ignore INITIAL. `min_life` is W1.
+`krb5_principal_compare`) is checked first (`misc.c:33-54`). Non-INITIAL
+self is result 7 `Ticket must be derived from a password`. Unprivileged
+other principal is result 5 `Unauthorized request`
+(`KADM5_AUTH_CHANGEPW`). A privileged actor targeting a missing or
+foreign-realm principal is result 2 with `chpass_util.c:136-140`
+(`Password not changed.\nPrincipal does not exist while trying to
+change password.\n`). Admin-style changes ignore INITIAL. `min_life`
+is W1. Purgekeys of a locked-down principal is `KADM5_PROTECT_KEYS`
+(stricter than MIT, which has no lockdown check on purgekeys).
 
 ## Not in this matrix
 

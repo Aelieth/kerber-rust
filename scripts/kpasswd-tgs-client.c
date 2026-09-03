@@ -2,6 +2,7 @@
  * Out-of-process only; compiled in the MIT image (gss-mit-*.c).
  * usage: kpasswd-tgs-client <ccache> <realm> <newpw>
  * KPASSWD_TARGNAME_TYPE=<n>: krb5_set_password with target->type = n.
+ * KPASSWD_TARGET=name@realm: krb5_set_password with that principal.
  */
 #include <krb5.h>
 #include <stdio.h>
@@ -51,13 +52,20 @@ int main(int argc, char **argv) {
     }
     {
         const char *nt_env = getenv("KPASSWD_TARGNAME_TYPE");
-        if (nt_env != NULL) {
+        const char *targ_env = getenv("KPASSWD_TARGET");
+        if (nt_env != NULL || targ_env != NULL) {
             krb5_principal target = NULL;
-            if ((rc = krb5_copy_principal(ctx, in.client, &target))) {
+            if (targ_env != NULL) {
+                if ((rc = krb5_parse_name(ctx, targ_env, &target))) {
+                    fprintf(stderr, "parse_name: %d\n", rc);
+                    return 1;
+                }
+            } else if ((rc = krb5_copy_principal(ctx, in.client, &target))) {
                 fprintf(stderr, "copy_principal: %d\n", rc);
                 return 1;
             }
-            target->type = atoi(nt_env);
+            if (nt_env != NULL)
+                target->type = atoi(nt_env);
             rc = krb5_set_password(ctx, out, argv[3], target, &result_code,
                                    &code_string, &result_string);
             krb5_free_principal(ctx, target);

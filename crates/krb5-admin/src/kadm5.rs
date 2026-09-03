@@ -1514,8 +1514,11 @@ fn dispatch_kadm5(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            let target = format!("{}@{}", name.components_joined(), g.realm());
-            if actor != target && acl.check(actor, krb5_kdc::AdminOp::ChangePassword).is_err() {
+            let self_change = actor.rsplit_once('@').is_some_and(|(left, arealm)| {
+                let actor_name = PrincipalName::new(PrincipalName::NT_UNKNOWN, left.split('/'));
+                krb5_types::principal_compare(&name, g.realm(), &actor_name, arealm)
+            });
+            if !self_change && acl.check(actor, krb5_kdc::AdminOp::ChangePassword).is_err() {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
             }
             let lockdown = match g.get_name(&name) {
@@ -3445,6 +3448,55 @@ mod tests {
         w.u32(KADM5_ATTRIBUTES);
         let out = dispatch_kadm5(&store, &acl, &actor, MODIFY_PRINCIPAL, &w.b).unwrap();
         assert_eq!(ret_code(&out), KADM5_AUTH_MODIFY);
+        let g = store.read().unwrap();
+        assert_eq!(
+            g.get_name(&user).unwrap().attributes & KDB_LOCKDOWN_KEYS,
+            KDB_LOCKDOWN_KEYS
+        );
+    }
+
+    #[test]
+    fn modprinc_keeping_lockdown_bit_is_allowed() {
+        let (store, acl, actor) = setup();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+        {
+            let mut g = store.write().unwrap();
+            g.apply_admin_fields(
+                &user,
+                Some(KDB_LOCKDOWN_KEYS),
+                None,
+                None,
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+        }
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some("user@KERBER.TEST"));
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(3600);
+        w.u32(1);
+        w.u32(0);
+        w.u32(KDB_LOCKDOWN_KEYS);
+        w.u32(1);
+        w.u32(1);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(1);
+        w.u32(0);
+        w.u32(KADM5_ATTRIBUTES);
+        let out = dispatch_kadm5(&store, &acl, &actor, MODIFY_PRINCIPAL, &w.b).unwrap();
+        assert_eq!(ret_code(&out), 0);
         let g = store.read().unwrap();
         assert_eq!(
             g.get_name(&user).unwrap().attributes & KDB_LOCKDOWN_KEYS,

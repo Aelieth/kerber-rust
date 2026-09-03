@@ -376,6 +376,16 @@ RENCPW="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
 echo "$RENCPW"
 echo "$RENCPW" | grep -F "delete'' privilege"
 
+echo "==== purgekeys krbtgt is protect-keys (Rust stricter) ===="
+PURGE_TGT="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'purgekeys krbtgt/KERBER.TEST' 2>&1 || true)"
+echo "$PURGE_TGT"
+echo "$PURGE_TGT" | grep -F 'locked down'
+if echo "$PURGE_TGT" | grep -qi 'Old keys for principal'; then
+    echo "purgekeys cleared locked-down krbtgt keys: $PURGE_TGT" >&2
+    exit 1
+fi
+
 echo "==== extract/admin ktadd -norandkey extra control ===="
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw extract-secret extract/admin'
@@ -463,6 +473,15 @@ echo "$MITMOD" | grep -F "modify'' privilege"
 MITREN="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'renprinc -force kadmin/changepw kadmin/changepw2' 2>&1 || true)"
 echo "$MITREN"
 echo "$MITREN" | grep -F "delete'' privilege"
+
+echo "==== MIT purgekeys krbtgt succeeds (no lockdown check) ===="
+MITPURGE="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'purgekeys krbtgt/KERBER.TEST' 2>&1 || true)"
+echo "$MITPURGE"
+echo "$MITPURGE" | grep -F 'Old keys for principal'
+if echo "$MITPURGE" | grep -qiE 'locked down|PROTECT_KEYS'; then
+    echo "MIT purgekeys refused krbtgt: $MITPURGE" >&2
+    exit 1
+fi
 
 log "kadmin.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"addprinc+cpw+get+list+mod+chrand+norandkey+lockdown+purgekeys+setstr+renprinc+del"'
 exit 0
