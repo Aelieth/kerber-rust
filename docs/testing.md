@@ -2,6 +2,22 @@
 
 Testing is continuous. Categories grow with the stages.
 
+## Gate discipline
+
+`scripts/ci-policy.py` enforces workflow YAML (fail-red jobs, nextest
+`--profile ci` on every invocation, no per-push `cargo test
+--workspace`, `--no-run` + junit upload, no informational `if` bodies
+in `scripts/*-gate.sh`). It cannot check red-at-HEAD artefacts:
+`working/` is gitignored.
+
+Red-at-HEAD artefact contract (captured under
+`working/logs/…/<item>-red-at-head.log`): the file is captured tool
+output of the failing unit or live cell, not a paraphrase. Write
+"unit-red only; MIT by source" when MIT clients cannot emit the cell.
+Retroactive red is a `git worktree` at the base SHA. Both legs of a
+text-equality cell assert pinned literals (never capture-from-MIT).
+Every branch asserts: no `if` whose body is only `echo`.
+
 ## Normal / baseline
 
 - Known-answer tests in `crates/krb5-crypto/tests/known_answer.rs`

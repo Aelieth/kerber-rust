@@ -43,6 +43,13 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   ticket client is 36 `PROCESS_TGS` (`rd_req_dec.c`). MIT clients cannot
   emit these; live FAST gates stay green.
 
+- **W0c E4.** `scripts/ci-policy.py` rejects echo-only `if !` bodies in
+  gate scripts, requires `--profile ci` on every `cargo nextest run`,
+  forbids per-push `cargo test --workspace`, and ratchets the
+  `--no-run` + junit upload. `_self_test` has a negative fixture per
+  rule. The red-at-HEAD artefact contract is in `docs/testing.md`
+  (CI cannot read `working/`).
+
 - **W0c E3 (unit-red; MIT by source).** AS FAST `req_checksum` binds the
   wire KDC-REQ-BODY (`do_as_req.c:526-531`); a re-encode is used only
   when no raw packet exists. Verify runs before keyedness
@@ -135,8 +142,7 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   TGS-REQ is 24 `PREAUTH_FAILED`; FAST TGS without an authenticator
   subkey is 24. Forged `ticket.realm` on a FAST TGS is 7 `PROCESS_TGS`
   (not a second armor decrypt;
-  `tgs_fast_forged_ticket_realm_is_process_tgs`). Gates:
-  `scripts/capaths-transit-gate.sh` forge cells;
+  `tgs_fast_forged_ticket_realm_is_process_tgs`). Gate:
   `scripts/mit-fast-kdc-gate.sh` FAST TGS cell.
 
 - **G9 Y3 (MIT-gated).** A peer-minted TGT for a *local* user

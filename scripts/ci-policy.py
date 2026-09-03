@@ -7,11 +7,9 @@ a parallel copy of the job list. Job `continue-on-error` on the per-push
 MIT extras must fail-red per SHA.
 Samba PAC / realtrust / Heimdal must fail-red on a scheduled workflow.
 
-Red-at-HEAD artefact contract (working/ is gitignored; CI cannot read the
-logs): `<item>-red-at-head.log` is captured tool output; write
-"unit-red only; MIT by source" when MIT clients cannot emit the cell;
-retroactive red is a worktree at the base SHA. Gate scripts must not
-keep informational branches.
+Gate discipline (docs/testing.md): red-at-HEAD artefacts live under
+working/ which is gitignored, so CI cannot check them. This script
+checks workflow YAML and gate-script structure only.
 """
 from __future__ import annotations
 
@@ -195,10 +193,98 @@ def check_nightly(workflows: list[Workflow]) -> None:
             _die(f"{script} scheduled job has no timeout-minutes")
 
 
+_NEXTEST_RUN = re.compile(r"cargo\s+nextest\s+run[^\n]*")
+_CARGO_TEST_WS = re.compile(r"cargo\s+test\s+--workspace")
+_IF_ONELINER = re.compile(r"\bif\s+!.*;\s*then\b.*;\s*fi\b")
+_IF_START = re.compile(r"^\s*if\s+!")
+_FI = re.compile(r"^\s*fi\b")
+_ASSERT_IN_IF = re.compile(
+    r"""(?x)
+    \b(exit|die|return|break|continue)\b
+    | log\s+\S+\s+"error"
+    | \bok=
+    """
+)
+_NOISE_ONLY = re.compile(r"^(echo|printf|:)\b")
+
+
+def _fold_continuations(text: str) -> str:
+    return re.sub(r"\\\n\s*", " ", text)
+
+
+def _echo_only_body(body: str) -> bool:
+    stmts = [
+        ln.strip()
+        for ln in body.splitlines()
+        if ln.strip() and not ln.strip().startswith("#")
+    ]
+    return bool(stmts) and all(_NOISE_ONLY.match(s) for s in stmts)
+
+
+def informational_if_starts(text: str) -> list[int]:
+    """Line numbers of `if !` whose body is only echo/printf.
+
+    The W0b true-positive was kpasswd-gate's `if ! grep; then echo`
+    fallback. `if ! docker image inspect; then docker build` is not.
+    """
+    hits: list[int] = []
+    stack: list[tuple[int, list[str]]] = []
+    for i, raw in enumerate(text.splitlines(), 1):
+        line = raw.split("#", 1)[0].rstrip()
+        if not line.strip():
+            continue
+        if _IF_ONELINER.search(line):
+            then_m = re.search(r";\s*then\b(.*);\s*fi\b", line)
+            body = then_m.group(1) if then_m else line
+            if _echo_only_body(body) and not _ASSERT_IN_IF.search(line):
+                hits.append(i)
+            continue
+        if _IF_START.match(line):
+            stack.append((i, []))
+            continue
+        if _FI.match(line):
+            if stack:
+                start, body = stack.pop()
+                blob = "\n".join(body)
+                if _echo_only_body(blob) and not _ASSERT_IN_IF.search(blob):
+                    hits.append(start)
+            continue
+        if stack:
+            stack[-1][1].append(line)
+    return hits
+
+
 def check_nextest_profile(workflows: list[Workflow]) -> None:
     for wf in workflows:
-        if "nextest" in wf.text and "--profile ci" not in wf.text:
-            _die(f"{wf.path.name} cargo nextest must use --profile ci")
+        folded = _fold_continuations(wf.text)
+        cmds = _NEXTEST_RUN.findall(folded)
+        if "nextest" in folded and not cmds:
+            _die(f"{wf.path.name} mentions nextest but has no cargo nextest run")
+        for cmd in cmds:
+            if "--profile ci" not in cmd:
+                _die(f"{wf.path.name} cargo nextest run missing --profile ci")
+
+
+def check_ci_nextest_split(wf: Workflow) -> None:
+    if "ci.yml" not in wf.path.name:
+        return
+    job = wf.jobs.get("test")
+    if job is None:
+        _die(f"{wf.path.name} missing job test")
+    if "--no-run" not in job.body:
+        _die(f"{wf.path.name} test job must cargo nextest --no-run")
+    if "junit.xml" not in job.body:
+        _die(f"{wf.path.name} test job must produce nextest junit.xml")
+    if "upload-artifact" not in job.body:
+        _die(f"{wf.path.name} test job must upload-artifact the junit")
+
+
+def check_ci_no_workspace_cargo_test(wf: Workflow) -> None:
+    if "ci.yml" not in wf.path.name:
+        return
+    folded = _fold_continuations(wf.text)
+    if _CARGO_TEST_WS.search(folded):
+        _die(f"{wf.path.name} must not run cargo test --workspace on per-push")
 
 
 def check_all_timeouts(workflows: list[Workflow]) -> None:
@@ -237,9 +323,9 @@ def check_gate_membership(workflows: list[Workflow]) -> None:
 
 def check_no_informational_gates() -> None:
     for path in sorted(SCRIPTS.glob("*-gate.sh")):
-        text = path.read_text()
-        if re.search(r"informational", text, re.I):
-            _die(f"{path.name} has an informational branch")
+        hits = informational_if_starts(path.read_text())
+        if hits:
+            _die(f"{path.name} informational if at line {hits[0]}")
 
 
 def check_working_gitignored() -> None:
@@ -258,6 +344,21 @@ def check_nextest() -> None:
         _die(".config/nextest.toml has no slow-timeout")
     if "terminate-after" not in text:
         _die(".config/nextest.toml slow-timeout must terminate hangs")
+
+
+def _must_die(fn, *args) -> None:
+    err = sys.stderr
+    sys.stderr = open("/dev/null", "w", encoding="utf-8")
+    try:
+        fn(*args)
+        died = False
+    except SystemExit:
+        died = True
+    finally:
+        sys.stderr.close()
+        sys.stderr = err
+    if not died:
+        raise AssertionError(f"{fn.__name__} must fail closed")
 
 
 def _self_test() -> None:
@@ -289,18 +390,7 @@ jobs:
         pathlib.Path("notimeout.yml"),
         "name: fuzz\non:\n  schedule:\n    - cron: '0 0 * * *'\njobs:\n  smoke:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n",
     )
-    err = sys.stderr
-    sys.stderr = open("/dev/null", "w", encoding="utf-8")
-    try:
-        check_all_timeouts([no_timeout])
-        timed_out = False
-    except SystemExit:
-        timed_out = True
-    finally:
-        sys.stderr.close()
-        sys.stderr = err
-    if not timed_out:
-        raise AssertionError("check_all_timeouts must fail without timeout-minutes")
+    _must_die(check_all_timeouts, [no_timeout])
 
     sched = Workflow(
         pathlib.Path("full-test.yml"),
@@ -309,6 +399,37 @@ jobs:
     check_full_run_scheduled([sched])
     check_nextest_profile([sched])
     check_all_timeouts([sched])
+
+    echo_if = 'if ! grep -F foo /tmp/x; then\n    echo "informational fallback"\nfi\n'
+    if not informational_if_starts(echo_if):
+        raise AssertionError("informational echo if must be a violation")
+    ok_if = 'if ! grep -F foo /tmp/x; then\n    exit 1\nfi\n'
+    if informational_if_starts(ok_if):
+        raise AssertionError("if with exit must pass")
+
+    missing_profile = Workflow(
+        pathlib.Path("ci.yml"),
+        "name: ci\non:\n  push:\njobs:\n  test:\n    timeout-minutes: 1\n    steps:\n      - run: cargo nextest run --workspace\n",
+    )
+    _must_die(check_nextest_profile, [missing_profile])
+
+    cargo_test = Workflow(
+        pathlib.Path("ci.yml"),
+        "name: ci\non:\n  push:\njobs:\n  test:\n    timeout-minutes: 1\n    steps:\n      - run: cargo test --workspace\n",
+    )
+    _must_die(check_ci_no_workspace_cargo_test, cargo_test)
+
+    no_junit = Workflow(
+        pathlib.Path("ci.yml"),
+        "name: ci\non:\n  push:\njobs:\n  test:\n    timeout-minutes: 1\n    steps:\n      - run: cargo nextest run --workspace --profile ci --no-run\n",
+    )
+    _must_die(check_ci_nextest_split, no_junit)
+
+    no_norun = Workflow(
+        pathlib.Path("ci.yml"),
+        "name: ci\non:\n  push:\njobs:\n  test:\n    timeout-minutes: 1\n    steps:\n      - run: cargo nextest run --workspace --profile ci\n      - uses: actions/upload-artifact@v4\n        with:\n          path: target/nextest/ci/junit.xml\n",
+    )
+    _must_die(check_ci_nextest_split, no_norun)
 
 
 def main() -> None:
@@ -325,6 +446,8 @@ def main() -> None:
     if len(ci) != 1:
         _die("expected .github/workflows/ci.yml")
     check_ci(ci[0])
+    check_ci_nextest_split(ci[0])
+    check_ci_no_workspace_cargo_test(ci[0])
     check_nightly(workflows)
     check_nextest()
     check_nextest_profile(workflows)
