@@ -6,9 +6,10 @@ Testing is continuous. Categories grow with the stages.
 
 `scripts/ci-policy.py` enforces workflow YAML (fail-red jobs, nextest
 `--profile ci` on every invocation, no per-push `cargo test
---workspace`, `--no-run` + junit upload, no informational `if` bodies
-in `scripts/*-gate.sh`). It cannot check red-at-HEAD artefacts:
-`working/` is gitignored.
+--workspace` or `cargo test --all`, `--no-run` + junit upload, no
+echo-only `if`/`elif`/`else` bodies in `scripts/*-gate.sh`). It cannot
+check red-at-HEAD artefacts: `working/` is gitignored. `__pycache__/`
+is gitignored.
 
 Red-at-HEAD artefact contract (captured under
 `working/logs/…/<item>-red-at-head.log`): the file is captured tool

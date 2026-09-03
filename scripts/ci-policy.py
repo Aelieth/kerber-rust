@@ -195,21 +195,30 @@ def check_nightly(workflows: list[Workflow]) -> None:
 
 _NEXTEST_RUN = re.compile(r"cargo\s+nextest\s+run[^\n]*")
 _CARGO_TEST_WS = re.compile(r"cargo\s+test\s+--workspace")
-_IF_ONELINER = re.compile(r"\bif\s+!.*;\s*then\b.*;\s*fi\b")
-_IF_START = re.compile(r"^\s*if\s+!")
+_CARGO_TEST_ALL = re.compile(r"cargo\s+test\s+--all(?:\s|$)")
+_IF_ONELINER = re.compile(
+    r"^\s*(if|elif)\b.*;\s*then\b.*;\s*fi\b",
+)
+_IF_START = re.compile(r"^\s*(if|elif)\b")
+_ELSE = re.compile(r"^\s*else\b")
 _FI = re.compile(r"^\s*fi\b")
 _ASSERT_IN_IF = re.compile(
     r"""(?x)
     \b(exit|die|return|break|continue)\b
-    | log\s+\S+\s+"error"
-    | \bok=
+    | log\s+\S+\s+error
+    | (?:^|[\s;])[A-Za-z_][A-Za-z0-9_]*=
     """
 )
-_NOISE_ONLY = re.compile(r"^(echo|printf|:)\b")
+_NOISE_ONLY = re.compile(r"^(?:echo|printf|true)\b|^:(?:\s|$)")
+_QUOTED = re.compile(r"""('([^'\\]|\\.)*'|"([^"\\]|\\.)*")""")
 
 
 def _fold_continuations(text: str) -> str:
     return re.sub(r"\\\n\s*", " ", text)
+
+
+def _strip_quoted(s: str) -> str:
+    return _QUOTED.sub(" ", s)
 
 
 def _echo_only_body(body: str) -> bool:
@@ -218,39 +227,105 @@ def _echo_only_body(body: str) -> bool:
         for ln in body.splitlines()
         if ln.strip() and not ln.strip().startswith("#")
     ]
-    return bool(stmts) and all(_NOISE_ONLY.match(s) for s in stmts)
+    if not stmts:
+        return False
+    if not all(_NOISE_ONLY.match(s) for s in stmts):
+        return False
+    stripped = _strip_quoted(body)
+    if "|" in stripped:
+        return False
+    if re.search(r">(?!&2)", stripped.replace(">&2", "")):
+        return False
+    if _ASSERT_IN_IF.search(stripped):
+        return False
+    if re.search(r'log\s+\S+\s+"error"', body):
+        return False
+    return True
 
 
 def informational_if_starts(text: str) -> list[int]:
-    """Line numbers of `if !` whose body is only echo/printf.
+    """Line numbers of if-chains whose every arm is only echo/printf/: /true.
 
-    The W0b true-positive was kpasswd-gate's `if ! grep; then echo`
-    fallback. `if ! docker image inspect; then docker build` is not.
+    Nested `fi` is paired by depth so an inner `if` cannot pop the outer
+    frame. Quoted strings are stripped before token matching.
     """
     hits: list[int] = []
-    stack: list[tuple[int, list[str]]] = []
+    # frame: start_line, arms (completed), current arm lines
+    stack: list[tuple[int, list[str], list[str]]] = []
+
+    def _arm_echo(lines: list[str]) -> bool:
+        return _echo_only_body("\n".join(lines))
+
+    def _close_if(start: int, arms: list[str], current: list[str]) -> bool:
+        blobs = list(arms)
+        if current:
+            blobs.append("\n".join(current))
+        informational = bool(blobs) and all(_echo_only_body(b) for b in blobs)
+        if informational:
+            hits.append(start)
+        if stack:
+            stack[-1][2].append("echo x" if informational else "exit 1")
+        return informational
+
+    def _after_then(line: str) -> str:
+        parts = re.split(r"\bthen\b", line, maxsplit=1)
+        return parts[1].strip() if len(parts) == 2 else ""
+
     for i, raw in enumerate(text.splitlines(), 1):
-        line = raw.split("#", 1)[0].rstrip()
+        hash_at = None
+        in_s = in_d = False
+        for j, ch in enumerate(raw):
+            if ch == "'" and not in_d:
+                in_s = not in_s
+            elif ch == '"' and not in_s:
+                in_d = not in_d
+            elif ch == "#" and not in_s and not in_d:
+                hash_at = j
+                break
+        line = (raw[:hash_at] if hash_at is not None else raw).rstrip()
         if not line.strip():
             continue
         if _IF_ONELINER.search(line):
-            then_m = re.search(r";\s*then\b(.*);\s*fi\b", line)
-            body = then_m.group(1) if then_m else line
-            if _echo_only_body(body) and not _ASSERT_IN_IF.search(line):
-                hits.append(i)
+            then_m = re.search(r";\s*then\b(.*?)(?:;\s*else\b(.*))?;\s*fi\b", line)
+            if then_m:
+                arms = [p for p in then_m.groups() if p is not None]
+                if arms and all(_echo_only_body(p) for p in arms):
+                    hits.append(i)
+                    if stack:
+                        stack[-1][2].append("echo x")
+                elif stack:
+                    stack[-1][2].append("exit 1")
+            continue
+        if re.match(r"^\s*elif\b", line):
+            if stack:
+                start, arms, cur = stack[-1]
+                if cur:
+                    arms.append("\n".join(cur))
+                stack[-1] = (start, arms, [])
+                extra = _after_then(line)
+                if extra:
+                    stack[-1][2].append(extra)
             continue
         if _IF_START.match(line):
-            stack.append((i, []))
+            extra = _after_then(line)
+            stack.append((i, [], [extra] if extra else []))
+            continue
+        if _ELSE.match(line):
+            if stack:
+                start, arms, cur = stack[-1]
+                if cur:
+                    arms.append("\n".join(cur))
+                extra = re.split(r"\belse\b", line, maxsplit=1)
+                rest = extra[1].strip() if len(extra) == 2 else ""
+                stack[-1] = (start, arms, [rest] if rest else [])
             continue
         if _FI.match(line):
             if stack:
-                start, body = stack.pop()
-                blob = "\n".join(body)
-                if _echo_only_body(blob) and not _ASSERT_IN_IF.search(blob):
-                    hits.append(start)
+                start, arms, cur = stack.pop()
+                _close_if(start, arms, cur)
             continue
         if stack:
-            stack[-1][1].append(line)
+            stack[-1][2].append(line)
     return hits
 
 
@@ -283,8 +358,8 @@ def check_ci_no_workspace_cargo_test(wf: Workflow) -> None:
     if "ci.yml" not in wf.path.name:
         return
     folded = _fold_continuations(wf.text)
-    if _CARGO_TEST_WS.search(folded):
-        _die(f"{wf.path.name} must not run cargo test --workspace on per-push")
+    if _CARGO_TEST_WS.search(folded) or _CARGO_TEST_ALL.search(folded):
+        _die(f"{wf.path.name} must not run cargo test --workspace/--all on per-push")
 
 
 def check_all_timeouts(workflows: list[Workflow]) -> None:
@@ -334,6 +409,8 @@ def check_working_gitignored() -> None:
     text = GITIGNORE.read_text()
     if "/working" not in text and "working/" not in text:
         _die(".gitignore must ignore working/ (red-at-HEAD artefacts)")
+    if "__pycache__/" not in text:
+        _die(".gitignore must ignore __pycache__/")
 
 
 def check_nextest() -> None:
@@ -406,6 +483,27 @@ jobs:
     ok_if = 'if ! grep -F foo /tmp/x; then\n    exit 1\nfi\n'
     if informational_if_starts(ok_if):
         raise AssertionError("if with exit must pass")
+    gss_shape = 'if [ "$ok" != 1 ]; then\n    echo "settled live"\nfi\n'
+    if not informational_if_starts(gss_shape):
+        raise AssertionError("if [ ] echo-only must be a violation")
+    quoted_return = 'if true; then\n    echo "return from helper"\nfi\n'
+    if not informational_if_starts(quoted_return):
+        raise AssertionError("return inside quotes must not excuse echo-only")
+    else_echo = 'if true; then\n    :\nelse\n    echo only\nfi\n'
+    if not informational_if_starts(else_echo):
+        raise AssertionError("else echo-only must be a violation")
+    nested = 'if true; then\n    if false; then\n        echo inner\n    fi\n    exit 1\nfi\n'
+    nested_hits = informational_if_starts(nested)
+    if not nested_hits:
+        raise AssertionError("nested echo-only if must be a violation")
+    if nested_hits[0] == 1:
+        raise AssertionError("nested fi must not pop the outer if")
+    colon_if = 'if true; then\n    :\nfi\n'
+    if not informational_if_starts(colon_if):
+        raise AssertionError("colon-only if must be a violation")
+    oneliner = 'if [ "$ok" != 1 ]; then echo settled; fi\n'
+    if not informational_if_starts(oneliner):
+        raise AssertionError("one-liner echo-only must be a violation")
 
     missing_profile = Workflow(
         pathlib.Path("ci.yml"),
@@ -430,6 +528,24 @@ jobs:
         "name: ci\non:\n  push:\njobs:\n  test:\n    timeout-minutes: 1\n    steps:\n      - run: cargo nextest run --workspace --profile ci\n      - uses: actions/upload-artifact@v4\n        with:\n          path: target/nextest/ci/junit.xml\n",
     )
     _must_die(check_ci_nextest_split, no_norun)
+
+    no_upload = Workflow(
+        pathlib.Path("ci.yml"),
+        "name: ci\non:\n  push:\njobs:\n  test:\n    timeout-minutes: 1\n    steps:\n      - run: cargo nextest run --workspace --profile ci --no-run\n      - run: echo junit.xml\n",
+    )
+    _must_die(check_ci_nextest_split, no_upload)
+
+    mentions_nextest = Workflow(
+        pathlib.Path("ci.yml"),
+        "name: ci\non:\n  push:\njobs:\n  test:\n    timeout-minutes: 1\n    steps:\n      - run: echo nextest is great\n",
+    )
+    _must_die(check_nextest_profile, [mentions_nextest])
+
+    cargo_test_all = Workflow(
+        pathlib.Path("ci.yml"),
+        "name: ci\non:\n  push:\njobs:\n  test:\n    timeout-minutes: 1\n    steps:\n      - run: cargo test --all\n",
+    )
+    _must_die(check_ci_no_workspace_cargo_test, cargo_test_all)
 
 
 def main() -> None:

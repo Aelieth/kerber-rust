@@ -22,6 +22,13 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0d G4.** `scripts/ci-policy.py` flags echo-only `if`/`elif`/`else`
+  of any shape (not only `if !`), strips quoted strings before token
+  matching, pairs `fi` by depth, and bans per-push `cargo test --all`.
+  Detector: 0 hits on 60 gates at `bafc5f2`; flags `gss-gate.sh` at
+  `a9f0666` and `kpasswd-gate.sh` at `6e2d0e4`. `__pycache__/` is
+  gitignored.
+
 - **W0d G3 (MIT-gated).** FAST unwrap failures put MIT's status word
   `FIND_FAST` on the wire `e_text` (`do_as_req.c:806`,
   `do_tgs_req.c:205-206`). The descriptive `k5_setmsg` text is the
