@@ -2,10 +2,10 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256, checksum, cksumtype_is_keyed, decrypt,
-    dh_generate, dh_group_for_prime, dh_shared, encrypt, krb_fx_cf2, octetstring2key,
-    p256_generate, p256_shared, pkinit_kdf_agile, spake_derive_key, spake_kdc_keygen,
-    spake_result_wbytes, spake_thash_update, spake_wbytes, verify_checksum,
+    EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256, checksum, cksumtype_is_keyed,
+    cksumtype_is_unkeyed, decrypt, dh_generate, dh_group_for_prime, dh_shared, encrypt, krb_fx_cf2,
+    octetstring2key, p256_generate, p256_shared, pkinit_kdf_agile, spake_derive_key,
+    spake_kdc_keygen, spake_result_wbytes, spake_thash_update, spake_wbytes, verify_checksum,
 };
 use krb5_protocol::{ReplayCache, ReplayKey};
 use krb5_types::{
@@ -25,10 +25,13 @@ pub(crate) struct FastOk {
     pub fast_options: krb5_types::fast::FastOptions,
 }
 
-/// Unwrap PA-FX-FAST from an AS-REQ.
-pub(crate) fn unwrap_fast(store: &dyn PrincipalRead, req: &AsReq) -> Result<Option<FastOk>, Error> {
-    let body_der = encode(&req.0.req_body)?;
-    unwrap_fast_as(store, req.0.padata.as_deref(), &body_der)
+/// Unwrap PA-FX-FAST from an AS-REQ. `body_der` is the wire KDC-REQ-BODY.
+pub(crate) fn unwrap_fast(
+    store: &dyn PrincipalRead,
+    req: &AsReq,
+    body_der: &[u8],
+) -> Result<Option<FastOk>, Error> {
+    unwrap_fast_as(store, req.0.padata.as_deref(), body_der)
 }
 
 /// Unwrap PA-FX-FAST from AS padata. Checksum is the outer KDC-REQ-BODY only.
@@ -146,12 +149,17 @@ fn verify_fast_req_checksum(
     ck_data: &[u8],
     ck: &krb5_types::Checksum,
 ) -> Result<(), Error> {
-    if !cksumtype_is_keyed(ck.cksumtype) {
-        return Err(proto(err::POLICY, "Unkeyed checksum used in fast_req"));
+    // MIT krb5_c_verify_checksum then krb5_c_is_keyed_cksum (fast_util.c:207-224).
+    if !cksumtype_is_keyed(ck.cksumtype) && !cksumtype_is_unkeyed(ck.cksumtype) {
+        return Err(proto(err::GENERIC, "FIND_FAST"));
     }
     let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM)?;
     verify_checksum(armor_key, ck_usage, ck_data, ck.checksum.as_ref())
-        .map_err(|_| proto(err::MODIFIED, "FIND_FAST"))
+        .map_err(|_| proto(err::MODIFIED, "FIND_FAST"))?;
+    if !cksumtype_is_keyed(ck.cksumtype) {
+        return Err(proto(err::POLICY, "Unkeyed checksum used in fast_req"));
+    }
+    Ok(())
 }
 
 fn armor_key_from(

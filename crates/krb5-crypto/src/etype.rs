@@ -290,3 +290,9 @@ impl EncryptionType {
 pub const fn cksumtype_is_keyed(cksumtype: i32) -> bool {
     matches!(cksumtype, 12 | 15 | 16 | 17 | 18 | 19 | 20 | -137 | -138)
 }
+
+/// MIT `cksumtypes.c` unkeyed types (`CKSUM_UNKEYED`).
+#[must_use]
+pub const fn cksumtype_is_unkeyed(cksumtype: i32) -> bool {
+    matches!(cksumtype, 1 | 2 | 7 | 9 | 14)
+}

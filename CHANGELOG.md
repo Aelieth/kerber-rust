@@ -43,6 +43,14 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   ticket client is 36 `PROCESS_TGS` (`rd_req_dec.c`). MIT clients cannot
   emit these; live FAST gates stay green.
 
+- **W0c E3 (unit-red; MIT by source).** AS FAST `req_checksum` binds the
+  wire KDC-REQ-BODY (`do_as_req.c:526-531`); a re-encode is used only
+  when no raw packet exists. Verify runs before keyedness
+  (`fast_util.c:207-224`): unkeyed type with bad bytes is 41
+  `MODIFIED` `FIND_FAST`; unknown cksumtype is 60 `GENERIC` `FIND_FAST`.
+  MIT clients cannot emit these. Gates: `mit-fast-kdc-gate.sh`,
+  `rust-kinit-fast-gate.sh`.
+
 - **W0c E2 (MIT-gated).** Bootstrap sets `LOCKDOWN_KEYS` on krbtgt
   (`kdb5_create.c:465`; dump `8388608`) and K/M (`8388672` =
   `DISALLOW_ALL_TIX|LOCKDOWN_KEYS`). Remote delete/modify-clearing-the-bit/

@@ -229,7 +229,14 @@ fn issue_as_from(
     raw: Option<&[u8]>,
 ) -> Result<IssuedAs, Error> {
     let outer = &req.0.req_body;
-    let fast = unwrap_fast(store, req)?;
+    let encoded_fast_body;
+    let fast_body: &[u8] = if let Some(slice) = raw.and_then(kdc_req_body_der) {
+        slice
+    } else {
+        encoded_fast_body = encode(outer)?;
+        &encoded_fast_body
+    };
+    let fast = unwrap_fast(store, req, fast_body)?;
     let inner_owned: Option<KdcReqBody> = match fast.as_ref() {
         Some(f) => Some(decode(&f.inner_body)?),
         None => None,

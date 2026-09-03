@@ -1032,6 +1032,26 @@ fn fast_as_unkeyed_checksum_is_policy() {
 }
 
 #[test]
+fn fast_as_unkeyed_type_with_bad_bytes_is_modified() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut req, _) = fast_as_prepared(&store, 908);
+    map_fx_fast_as(&mut req, |a| {
+        a.req_checksum.cksumtype = 1;
+        let mut ck = a.req_checksum.checksum.to_vec();
+        ck[0] ^= 0xff;
+        a.req_checksum.checksum = ck.into();
+    });
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("unkeyed + bad bytes");
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::MODIFIED);
+            assert_eq!(text.as_deref(), Some("FIND_FAST"));
+        }
+        other => panic!("expected 41 MODIFIED FIND_FAST, got {other:?}"),
+    }
+}
+
+#[test]
 fn fast_tgs_unkeyed_checksum_is_policy() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let mut tgs = fast_tgs_prepared(&store, 896);
@@ -1043,6 +1063,41 @@ fn fast_tgs_unkeyed_checksum_is_policy() {
             assert_eq!(text.as_deref(), Some("Unkeyed checksum used in fast_req"));
         }
         other => panic!("expected 12 POLICY unkeyed, got {other:?}"),
+    }
+}
+
+#[test]
+fn fast_tgs_unkeyed_type_with_bad_bytes_is_modified() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let mut tgs = fast_tgs_prepared(&store, 910);
+    map_fx_fast_tgs(&mut tgs, |a| {
+        a.req_checksum.cksumtype = 7;
+        let mut ck = a.req_checksum.checksum.to_vec();
+        ck[0] ^= 0xff;
+        a.req_checksum.checksum = ck.into();
+    });
+    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("unkeyed + bad bytes");
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::MODIFIED);
+            assert_eq!(text.as_deref(), Some("FIND_FAST"));
+        }
+        other => panic!("expected 41 MODIFIED FIND_FAST, got {other:?}"),
+    }
+}
+
+#[test]
+fn fast_as_unknown_cksumtype_matches_mit() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut req, _) = fast_as_prepared(&store, 912);
+    map_fx_fast_as(&mut req, |a| a.req_checksum.cksumtype = 99);
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("unknown cksumtype");
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::GENERIC);
+            assert_eq!(text.as_deref(), Some("FIND_FAST"));
+        }
+        other => panic!("expected 60 GENERIC FIND_FAST, got {other:?}"),
     }
 }
 
@@ -1088,6 +1143,141 @@ fn fast_as_checksum_ignores_pa_tgs_req() {
         }
         other => panic!("expected 41 MODIFIED FIND_FAST, got {other:?}"),
     }
+}
+
+fn der_take(input: &[u8]) -> Option<(u8, usize, &[u8], &[u8])> {
+    let tag = *input.first()?;
+    let first = *input.get(1)?;
+    let (hlen, ln) = if first < 128 {
+        (1usize, usize::from(first))
+    } else if first == 0x81 && input.len() >= 3 {
+        (2, usize::from(input[2]))
+    } else if first == 0x82 && input.len() >= 4 {
+        (3, usize::from(u16::from_be_bytes([input[2], input[3]])))
+    } else {
+        return None;
+    };
+    let start = 1 + hlen;
+    let end = start.checked_add(ln)?;
+    let inner = input.get(start..end)?;
+    let rest = input.get(end..)?;
+    Some((tag, start, inner, rest))
+}
+
+fn bump_der_len(buf: &mut [u8], tag_off: usize) -> Option<()> {
+    let first = *buf.get(tag_off + 1)?;
+    if first < 128 {
+        buf[tag_off + 1] = first + 1;
+        return Some(());
+    }
+    if first == 0x81 {
+        buf[tag_off + 2] += 1;
+        return Some(());
+    }
+    if first == 0x82 {
+        let n = u16::from_be_bytes([buf[tag_off + 2], buf[tag_off + 3]]) + 1;
+        buf[tag_off + 2..tag_off + 4].copy_from_slice(&n.to_be_bytes());
+        return Some(());
+    }
+    None
+}
+
+fn long_form_kdc_body(raw: &[u8]) -> Option<Vec<u8>> {
+    let (tag, app_hdr, app, _) = der_take(raw)?;
+    if tag != 0x6a {
+        return None;
+    }
+    let (t, seq_hdr, seq, _) = der_take(app)?;
+    if t != 0x30 {
+        return None;
+    }
+    let seq_abs = app_hdr;
+    let mut off = seq_abs + seq_hdr;
+    let mut cur = seq;
+    while !cur.is_empty() {
+        let (tag, h, inner, rest) = der_take(cur)?;
+        if tag == 0xa4 {
+            if inner.len() < 2 || inner[0] != 0x30 || inner[1] >= 128 {
+                return None;
+            }
+            let a4_abs = off;
+            let seq30_abs = off + h;
+            let mut out = raw.to_vec();
+            let old_ln = out[seq30_abs + 1];
+            out.splice(seq30_abs + 1..seq30_abs + 2, [0x81, old_ln]);
+            bump_der_len(&mut out, a4_abs)?;
+            bump_der_len(&mut out, seq_abs)?;
+            bump_der_len(&mut out, 0)?;
+            return Some(out);
+        }
+        off += h + inner.len();
+        cur = rest;
+    }
+    None
+}
+
+#[test]
+fn fast_as_checksum_binds_wire_body() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (req, akey) = fast_as_prepared(&store, 914);
+    let raw = encode(&req).expect("der");
+    let Some(mut wire) = long_form_kdc_body(&raw) else {
+        panic!("could not expand KDC-REQ-BODY length");
+    };
+    let decoded = decode::<krb5_types::AsReq>(&wire);
+    assert!(
+        decoded.is_ok(),
+        "decoder must accept the expanded body (shape of the wire-bind test): {decoded:?}"
+    );
+    let canon = encode(&decoded.unwrap().0.req_body).expect("re-encode");
+    let (tag, _, app, _) = der_take(&wire).expect("app");
+    assert_eq!(tag, 0x6a);
+    let (t, _, seq, _) = der_take(app).expect("seq");
+    let body_seq = if t == 0x30 { seq } else { app };
+    let mut cur = body_seq;
+    let mut body = None;
+    while let Some((tag, _, inner, rest)) = der_take(cur) {
+        if tag == 0xa4 {
+            body = Some(inner.to_vec());
+            break;
+        }
+        cur = rest;
+    }
+    let body = body.expect("body");
+    assert_ne!(
+        body, canon,
+        "wire body must differ from canonical re-encode"
+    );
+    let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM).unwrap();
+    let mic = checksum(&akey, ck_usage, &body).expect("mic");
+    let old = {
+        let armored = {
+            let pa = req
+                .0
+                .padata
+                .as_ref()
+                .unwrap()
+                .iter()
+                .find(|p| p.padata_type == pa::FX_FAST)
+                .expect("FAST");
+            let krb5_types::fast::PaFxFast::ArmoredData(a) =
+                decode(pa.padata_value.as_ref()).expect("fast");
+            a
+        };
+        armored.req_checksum.checksum.to_vec()
+    };
+    assert_eq!(old.len(), mic.len());
+    let pos = wire
+        .windows(old.len())
+        .position(|w| w == old.as_slice())
+        .expect("old mic");
+    wire[pos..pos + mic.len()].copy_from_slice(&mic);
+    let bytes = krb5_kdc::handle_request(&store, &wire).expect("reply");
+    assert_ne!(
+        bytes.first(),
+        Some(&0x7e),
+        "FAST wire checksum must not be KRB-ERROR"
+    );
 }
 
 #[test]
