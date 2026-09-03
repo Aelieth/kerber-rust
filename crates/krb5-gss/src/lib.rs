@@ -1939,11 +1939,7 @@ mod tests {
             &rcache,
         ) {
             Err(err) => {
-                let s = err.to_string();
-                assert!(
-                    s.contains("34") || s.contains("replay"),
-                    "expected 34 replay, got {err}"
-                );
+                assert_eq!(err.to_string(), "KRB-ERROR 34: authenticator replay");
             }
             Ok(_) => panic!("replayed AP-REQ must be 34"),
         }

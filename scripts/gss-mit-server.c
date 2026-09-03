@@ -6,6 +6,7 @@
 #include <gssapi/gssapi_krb5.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -90,6 +91,7 @@ int main(int argc, char **argv) {
     const char *keytab = argv[1];
     const char *ip = argv[2];
     int port = atoi(argv[3]);
+    signal(SIGPIPE, SIG_IGN);
     setenv("KRB5_KTNAME", keytab, 1);
 
     gss_buffer_desc nbuf = { strlen("host@testhost.kerber.test"),
@@ -137,7 +139,7 @@ int main(int argc, char **argv) {
     gss_name_t src = GSS_C_NO_NAME;
     gss_buffer_desc in = { 0, NULL };
     gss_buffer_desc out = { 0, NULL };
-    OM_uint32 maj, min, ret_flags = 0;
+    OM_uint32 maj, min, amin_err, ret_flags = 0;
     do {
         recv_token(fd, &in);
         maj = gss_accept_sec_context(
@@ -152,6 +154,7 @@ int main(int argc, char **argv) {
             &ret_flags,
             NULL,
             &deleg);
+        amin_err = min;
         free(in.value);
         in.value = NULL;
         in.length = 0;
@@ -161,7 +164,7 @@ int main(int argc, char **argv) {
         }
         if (maj != GSS_S_COMPLETE && maj != GSS_S_CONTINUE_NEEDED) {
             fflush(stderr);
-            die_gss("accept_sec_context", maj, min);
+            die_gss("accept_sec_context", maj, amin_err);
         }
     } while (maj == GSS_S_CONTINUE_NEEDED);
 

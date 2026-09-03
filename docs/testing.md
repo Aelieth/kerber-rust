@@ -110,9 +110,10 @@ with a KRB-CRED trailer must make MIT `gss-mit-server` print the same
 name. A MIT SPNEGO initiator (`gss_mech_spnego`) must complete
 `NegTokenResp` + `mechListMIC` and still unwrap `hello-from-mit-gss`.
 A captured initiator AP-REQ resent on a new connection is 34
-`REPEAT` (`authenticator replay`). MIT `gss-mit-server` in this
-harness accepted the dumped token (GSS cred rcache / `dfl` file2;
-W1-C). MIT `gss_wrap_iov`
+`REPEAT` (`authenticator replay`) on both the Rust acceptor and MIT
+`gss-mit-server` (KRB-ERROR 34, `Request is a replay`). MIT `dfl`
+file persistence across process restart is W1-C; Rust is in-memory.
+MIT `gss_wrap_iov`
 (HEADER|DATA|PADDING|TRAILER, and with `SIGN_ONLY`)
 must unwrap on the Rust acceptor; Rust `wrap_iov` concatenates to a
 token MIT `gss_unwrap_iov` STREAM accepts. The acceptor prints

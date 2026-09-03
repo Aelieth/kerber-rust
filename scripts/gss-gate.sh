@@ -119,6 +119,7 @@ echo "$REPLAY_LOG"
     log "gss.gate" "error" ',"error":"replayed AP-REQ did not log 34/replay"'
     exit 1
 }
+echo "$REPLAY_LOG" | grep -q 'accept_sec_context: KRB-ERROR 34: authenticator replay'
 CLIENTN="$(echo "$REPLAY_LOG" | grep -c 'gss-accept client=' || true)"
 if [ "$CLIENTN" -ne 1 ]; then
     echo "expected one gss-accept client= line, got $CLIENTN" >&2
@@ -327,22 +328,51 @@ docker exec -e KRB5CCNAME=/tmp/krb5cc_harness -e GSS_DUMP_TOKEN=/tmp/gss-apreq-m
 MIT1="$(docker exec "$NAME" cat /tmp/gss-mit-replay.log 2>/dev/null || true)"
 echo "$MIT1"
 echo "$MIT1" | grep -q 'mit-gss unwrap ok'
-set +e
-docker exec "$NAME" python3 -c 'import socket,struct; tok=open("/tmp/gss-apreq-mit","rb").read(); s=socket.create_connection(("127.0.0.1",4448),5); s.sendall(struct.pack(">I", len(tok))+tok); s.close()'
-set -e
+REPLAY_PY="$(docker exec "$NAME" python3 -c '
+import socket, struct, sys
+tok = open("/tmp/gss-apreq-mit", "rb").read()
+s = socket.create_connection(("127.0.0.1", 4448), 5)
+s.settimeout(5)
+s.sendall(struct.pack(">I", len(tok)) + tok)
+hdr = b""
+while len(hdr) < 4:
+    chunk = s.recv(4 - len(hdr))
+    if not chunk:
+        sys.exit("replay: no length prefix")
+    hdr += chunk
+n = struct.unpack(">I", hdr)[0]
+body = b""
+while len(body) < n:
+    chunk = s.recv(n - len(body))
+    if not chunk:
+        break
+    body += chunk
+print("replay_token_len=%d" % len(body))
+idx = body.find(b"\xa6\x03\x02\x01")
+if idx < 0:
+    sys.exit("replay: no KRB-ERROR error-code")
+code = body[idx + 4]
+print("krb_error_code=%d" % code)
+s.close()
+if code != 34:
+    sys.exit("replay: error-code %d != 34" % code)
+')"
+echo "$REPLAY_PY"
+echo "$REPLAY_PY" | grep -q 'krb_error_code=34'
 ok=0
 MIT2=""
 for _ in $(seq 1 20); do
     MIT2="$(docker exec "$NAME" cat /tmp/gss-mit-replay.log 2>/dev/null || true)"
-    if echo "$MIT2" | grep -qiE 'Request is a replay|replay'; then
+    if echo "$MIT2" | grep -q 'accept_sec_context:' && echo "$MIT2" | grep -q 'Request is a replay'; then
         ok=1
         break
     fi
     sleep 0.15
 done
 echo "$MIT2"
-if [ "$ok" != 1 ]; then
-    echo "settled live: MIT gss-mit-server accepted the dumped AP-REQ (GSS cred rcache / dfl file2; W1-C)"
-fi
+[ "$ok" = 1 ] || {
+    log "gss.gate" "error" ',"error":"MIT replay did not log accept_sec_context Request is a replay"'
+    exit 1
+}
 
 log "gss.gate" "ok" ",\"acceptor\":\"krb5-gss\",\"initiator\":\"mit-libgssapi\",\"deleg\":\"both\",\"spnego\":\"ok\",\"iov\":\"ok\",\"replay\":\"ok\""
