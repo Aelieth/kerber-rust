@@ -349,7 +349,10 @@ when that oracle is absent.
   `kadmind`. A TGT-based `kvno kadmin/changepw` / `kadmin/admin` is
   refused (`KDC policy rejects request`; KDC `TGT BASED NOT ALLOWED`)
   on both KDCs; `getprinc` shows `DISALLOW_TGT_BASED`/`LOCKDOWN_KEYS`;
-  remote `ktadd -norandkey` is `extract-keys`. Run twice.
+  remote `ktadd -norandkey` is `extract-keys`. After `+allow_tgs_req`,
+  a TGS-obtained `kadmin/changepw` ticket self-change is result 7
+  `Ticket must be derived from a password` on both kadminds
+  (`scripts/kpasswd-tgs-client.c`). Run twice.
   `scripts/rust-kpasswd-mit-gate.sh` is Rust `krb5-kpasswd` against
   MIT `kadmind` (AS-REQ sname `kadmin/changepw`; MIT
   `DISALLOW_TGT_BASED`).

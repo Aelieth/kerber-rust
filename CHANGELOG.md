@@ -22,6 +22,12 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0b D2 (MIT-gated).** kpasswd self-change without `INITIAL` is
+  RFC 3244 result 7 (`Ticket must be derived from a password`, MIT
+  `misc.c` / `schpw.c`). Admin-style changes (target ≠ client) ignore
+  INITIAL. `min_life` stays W1. Gate: `scripts/kpasswd-gate.sh`
+  `kpasswd-tgs-client.c` after `+allow_tgs_req`.
+
 - **W0b D1 (MIT-gated).** `kadmin/admin` and `kadmin/changepw` bootstrap
   with MIT `kadm5_create` attributes (`DISALLOW_TGT_BASED|LOCKDOWN_KEYS`;
   changepw also `PWCHANGE_SERVICE`). A TGT-based TGS is 12

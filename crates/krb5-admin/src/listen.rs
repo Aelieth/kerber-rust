@@ -394,7 +394,11 @@ pub fn handle_kpasswd_rfc3244(
         ok.authenticator.cname.components_joined(),
         String::from_utf8_lossy(ok.authenticator.crealm.as_bytes())
     );
-    let (code, text) = {
+    // MIT misc.c: self-change requires TKT_FLG_INITIAL (schpw.c → 7).
+    let self_change = targ == ok.ticket_part.cname;
+    let (code, text) = if self_change && !ok.ticket_part.flags.initial() {
+        (7u16, "Ticket must be derived from a password".into())
+    } else {
         let mut g = store
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);

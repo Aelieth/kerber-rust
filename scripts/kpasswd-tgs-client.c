@@ -1,0 +1,67 @@
+/* MIT krb5_change_password with a TGS-obtained kadmin/changepw ticket.
+ * Out-of-process only; compiled in the MIT image (gss-mit-*.c).
+ * usage: kpasswd-tgs-client <ccache> <realm> <newpw>
+ */
+#include <krb5.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+int main(int argc, char **argv) {
+    krb5_context ctx;
+    krb5_ccache cc;
+    krb5_principal princ;
+    krb5_creds in, *out = NULL;
+    krb5_error_code rc;
+    int result_code = -1;
+    krb5_data code_string = {0, 0, NULL};
+    krb5_data result_string = {0, 0, NULL};
+    char *realm;
+
+    if (argc != 4) {
+        fprintf(stderr, "usage: %s ccache realm newpw\n", argv[0]);
+        return 2;
+    }
+    realm = argv[2];
+    if ((rc = krb5_init_context(&ctx))) {
+        fprintf(stderr, "init: %d\n", rc);
+        return 1;
+    }
+    if ((rc = krb5_cc_resolve(ctx, argv[1], &cc))) {
+        fprintf(stderr, "cc_resolve: %d\n", rc);
+        return 1;
+    }
+    memset(&in, 0, sizeof(in));
+    if ((rc = krb5_cc_get_principal(ctx, cc, &in.client))) {
+        fprintf(stderr, "cc_get_principal: %d\n", rc);
+        return 1;
+    }
+    if ((rc = krb5_build_principal(ctx, &princ, (unsigned)strlen(realm), realm,
+                                   "kadmin", "changepw", (char *)NULL))) {
+        fprintf(stderr, "build_principal: %d\n", rc);
+        return 1;
+    }
+    in.server = princ;
+    if ((rc = krb5_get_credentials(ctx, 0, cc, &in, &out))) {
+        const char *m = krb5_get_error_message(ctx, rc);
+        fprintf(stderr, "get_credentials: %s\n", m);
+        krb5_free_error_message(ctx, m);
+        return 1;
+    }
+    rc = krb5_change_password(ctx, out, argv[3], &result_code, &code_string,
+                              &result_string);
+    printf("krb5_change_password_rc=%d\n", rc);
+    printf("result_code=%d\n", result_code);
+    printf("result_code_string=%.*s\n", (int)code_string.length,
+           code_string.data ? code_string.data : "");
+    printf("result_string=%.*s\n", (int)result_string.length,
+           result_string.data ? result_string.data : "");
+    krb5_free_data_contents(ctx, &code_string);
+    krb5_free_data_contents(ctx, &result_string);
+    krb5_free_creds(ctx, out);
+    krb5_free_principal(ctx, in.client);
+    krb5_free_principal(ctx, princ);
+    krb5_cc_close(ctx, cc);
+    krb5_free_context(ctx);
+    return rc ? 1 : 0;
+}

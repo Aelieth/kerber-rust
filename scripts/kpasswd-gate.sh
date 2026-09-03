@@ -37,7 +37,12 @@ trap cleanup EXIT
 docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc
 docker cp target/debug/krb5-kadmind "$NAME":/tmp/krb5-kadmind
 docker cp target/debug/krb5-kpasswd "$NAME":/tmp/krb5-kpasswd
+docker cp "$ROOT/scripts/kpasswd-tgs-client.c" "$NAME":/tmp/kpasswd-tgs-client.c
 docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kadmind /tmp/krb5-kpasswd
+if ! docker exec "$NAME" cc -o /tmp/kpasswd-tgs-client /tmp/kpasswd-tgs-client.c -lkrb5; then
+    log "kpasswd.gate" "error" ',"error":"cc kpasswd-tgs-client failed"'
+    exit 1
+fi
 
 docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
@@ -215,6 +220,27 @@ KTN="$(kadmin_q 'ktadd -norandkey -k /tmp/changepw.keytab kadmin/changepw')"
 echo "$KTN"
 echo "$KTN" | grep -F 'extract-keys'
 
+echo "==== TGS kpasswd self-change is INITIAL_FLAG_NEEDED (Rust) ===="
+kadmin_q 'modprinc +allow_tgs_req kadmin/changepw'
+docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
+    "$NAME" sh -c 'printf "rust-kpw\n" | kinit user@KERBER.TEST'
+nlog="$(docker exec "$NAME" sh -c 'wc -l < /tmp/kadmind.log' | tr -d '[:space:]')"
+set +e
+D2R="$(docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
+    "$NAME" /tmp/kpasswd-tgs-client FILE:/tmp/krb5cc_kpasswd KERBER.TEST d2-should-fail)"
+d2r_rc=$?
+set -e
+echo "$D2R"
+echo "$D2R" | grep -F 'result_code=7'
+echo "$D2R" | grep -F 'Ticket must be derived from a password'
+docker exec "$NAME" sh -c "tail -n +$((nlog + 1)) /tmp/kadmind.log" | grep -F 'Ticket must be derived from a password'
+if docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
+    "$NAME" sh -c 'printf "d2-should-fail\n" | kinit user@KERBER.TEST'; then
+    echo "TGS kpasswd changed the password" >&2
+    exit 1
+fi
+kadmin_q 'modprinc -allow_tgs_req kadmin/changepw'
+
 echo "==== Rust kadmind policy rejection is SOFTERROR ===="
 kadmin_q 'addpol -minlength 8 short8'
 kadmin_q 'modprinc -policy short8 user'
@@ -252,6 +278,7 @@ if [ "$ok" != 1 ]; then
 fi
 echo "==== MIT krb5kdc FILE log ===="
 docker exec "$NAME_MIT" sh -c 'sed -i "s|kdc = STDERR|kdc = FILE:/tmp/krb5kdc.log|" /etc/krb5.conf'
+docker exec "$NAME_MIT" sh -c 'sed -i "s|admin_server = STDERR|admin_server = FILE:/tmp/kadmind.log|" /etc/krb5.conf'
 docker exec "$NAME_MIT" sh -c '
 for comm in /proc/[0-9]*/comm; do
     [ -f "$comm" ] || continue
@@ -277,7 +304,7 @@ if [ "$ok" != 1 ]; then
     log "kpasswd.gate" "error" ',"error":"MIT krb5kdc did not listen after log restart"'
     exit 1
 fi
-docker exec -d "$NAME_MIT" kadmind
+docker exec -d "$NAME_MIT" sh -c 'kadmind -nofork >/tmp/kadmind.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
     if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',464),0.3)" 2>/dev/null; then
@@ -338,6 +365,28 @@ docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw adminpassword admin/admin'
 MITKT="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'ktadd -norandkey -k /tmp/changepw.keytab kadmin/changepw' 2>&1 || true)"
 echo "$MITKT"
 echo "$MITKT" | grep -F 'extract-keys'
+
+echo "==== TGS kpasswd self-change is INITIAL_FLAG_NEEDED (MIT) ===="
+docker exec "$NAME_MIT" kadmin.local -q 'modprinc +allow_tgs_req kadmin/changepw'
+docker cp "$ROOT/scripts/kpasswd-tgs-client.c" "$NAME_MIT":/tmp/kpasswd-tgs-client.c
+if ! docker exec "$NAME_MIT" cc -o /tmp/kpasswd-tgs-client /tmp/kpasswd-tgs-client.c -lkrb5; then
+    log "kpasswd.gate" "error" ',"error":"cc MIT kpasswd-tgs-client failed"'
+    exit 1
+fi
+docker exec "$NAME_MIT" sh -c 'export KRB5CCNAME=FILE:/tmp/krb5cc_d2; printf "userpassword\n" | kinit user@KERBER.TEST'
+set +e
+D2M="$(docker exec "$NAME_MIT" sh -c 'export KRB5CCNAME=FILE:/tmp/krb5cc_d2; /tmp/kpasswd-tgs-client FILE:/tmp/krb5cc_d2 KERBER.TEST d2-should-fail')"
+d2m_rc=$?
+set -e
+echo "$D2M"
+echo "$D2M" | grep -F 'result_code=7'
+echo "$D2M" | grep -F 'Ticket must be derived from a password'
+echo "==== MIT kadmind.log ===="
+docker exec "$NAME_MIT" sh -c 'cat /tmp/kadmind.log 2>/dev/null || true'
+if ! docker exec "$NAME_MIT" grep -F 'Ticket must be derived from a password' /tmp/kadmind.log 2>/dev/null; then
+    echo "MIT kadmind klog not in FILE (result_string is the equality bar)"
+fi
+docker exec "$NAME_MIT" kadmin.local -q 'modprinc -allow_tgs_req kadmin/changepw'
 
 docker exec "$NAME_MIT" kadmin.local -q 'addpol -minlength 8 short8'
 docker exec "$NAME_MIT" kadmin.local -q 'modprinc -policy short8 user'
