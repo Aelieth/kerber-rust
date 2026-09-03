@@ -560,9 +560,9 @@ fn issue_tgs_from(
         &encoded_body
     };
     // MIT kdc_process_tgs_req (PROCESS_TGS) before kdc_find_fast.
-    let header = process_tgs_header(store, req, body_der)?;
     let pa_tgs = extract_pa_tgs(req.0.padata.as_deref())
         .ok_or_else(|| proto(err::PREAUTH_FAILED, "no PA-TGS-REQ"))?;
+    let header = process_tgs_header(store, pa_tgs.as_ref(), body_der)?;
     let tgs_fast = unwrap_fast_tgs(
         req.0.padata.as_deref(),
         pa_tgs.as_ref(),
@@ -580,12 +580,10 @@ fn issue_tgs_from(
 
 fn process_tgs_header(
     store: &dyn PrincipalRead,
-    req: &TgsReq,
+    ap_raw: &[u8],
     body_der: &[u8],
 ) -> Result<HeaderTgt, Error> {
-    let ap_raw = extract_pa_tgs(req.0.padata.as_deref())
-        .ok_or_else(|| proto(err::PREAUTH_FAILED, "no PA-TGS-REQ"))?;
-    let ap: krb5_types::ApReq = decode(ap_raw.as_ref())?;
+    let ap: krb5_types::ApReq = decode(ap_raw)?;
     if !ap.ticket.sname.is_krbtgt_for(store.realm()) {
         return Err(proto(err::NOT_US, "presented ticket is not a TGT"));
     }
@@ -603,7 +601,7 @@ fn process_tgs_header(
         .validate()
         .map_err(|_| proto(err::GENERIC, "cusec"))?;
     if authenticator.cname != enc_tkt.cname {
-        return Err(proto(err::BAD_INTEGRITY, "TGS authenticator mismatch"));
+        return Err(proto(err::BADMATCH, "PROCESS_TGS"));
     }
     if let Some(ck) = &authenticator.cksum {
         let ck_usage = KeyUsage::new(ku::TGS_REQ_AUTH_CKSUM)?;

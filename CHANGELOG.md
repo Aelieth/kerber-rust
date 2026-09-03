@@ -22,6 +22,14 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0b D3 (unit-red; MIT by source).** A bad FAST `req_checksum` is 41
+  `MODIFIED` `FIND_FAST` (`fast_util.c`). An unkeyed checksum type is 12
+  `Unkeyed checksum used in fast_req`. Unknown armor type is 24
+  `Unknown FAST armor type %d`. The AS checksum covers the outer
+  `KDC-REQ-BODY` only (`do_as_req.c`). TGS authenticator client ≠
+  ticket client is 36 `PROCESS_TGS` (`rd_req_dec.c`). MIT clients cannot
+  emit these; live FAST gates stay green.
+
 - **W0b D2 (MIT-gated).** kpasswd self-change without `INITIAL` is
   RFC 3244 result 7 (`Ticket must be derived from a password`, MIT
   `misc.c` / `schpw.c`). Admin-style changes (target ≠ client) ignore

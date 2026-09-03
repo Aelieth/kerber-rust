@@ -74,6 +74,15 @@ A local non-krbtgt armor ticket is 26 `SERVER_NOMATCH`.
 A presented-TGT krbtgt with `DISALLOW_SVR` or `DISALLOW_ALL_TIX` is 7
 `PROCESS_TGS` (`kdc_util.c:390-393`).
 
+FAST `req_checksum` that fails verify is 41 `MODIFIED` `FIND_FAST`. An
+unkeyed checksum type is 12 `Unkeyed checksum used in fast_req`
+(CRC32 1, RSA-MD4 2, RSA-MD5 7, NIST-SHA 9, SHA-1 14; MIT
+`cksumtypes.c`). The AS checksum covers the outer `KDC-REQ-BODY` only.
+Unknown armor type is 24 `Unknown FAST armor type %d`. TGS authenticator
+client ≠ ticket client is 36 `PROCESS_TGS`. Explicit TGS AP-REQ armor
+is 24 even without a subkey; MIT only rejects it when a subkey is
+present (`fast_util.c:159-166`).
+
 `kadmin/admin` and `kadmin/changepw` are bootstrapped with MIT
 `kadm5_create` attributes: both `DISALLOW_TGT_BASED|LOCKDOWN_KEYS`;
 changepw also `PWCHANGE_SERVICE`. A TGS from a TGT is 12

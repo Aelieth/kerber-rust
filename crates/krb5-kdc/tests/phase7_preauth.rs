@@ -943,6 +943,250 @@ fn tgs_fast_without_subkey_is_preauth_failed() {
     }
 }
 
+fn map_fx_fast_as(
+    req: &mut krb5_types::AsReq,
+    f: impl FnOnce(&mut krb5_types::fast::KrbFastArmoredReq),
+) {
+    let pa = req
+        .0
+        .padata
+        .as_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|p| p.padata_type == pa::FX_FAST)
+        .expect("FAST");
+    let krb5_types::fast::PaFxFast::ArmoredData(mut armored) =
+        decode(pa.padata_value.as_ref()).expect("fast");
+    f(&mut armored);
+    pa.padata_value = encode(&krb5_types::fast::PaFxFast::ArmoredData(armored))
+        .expect("re-encode")
+        .into();
+}
+
+fn map_fx_fast_tgs(
+    req: &mut krb5_types::TgsReq,
+    f: impl FnOnce(&mut krb5_types::fast::KrbFastArmoredReq),
+) {
+    let pa = req
+        .0
+        .padata
+        .as_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|p| p.padata_type == pa::FX_FAST)
+        .expect("FAST");
+    let krb5_types::fast::PaFxFast::ArmoredData(mut armored) =
+        decode(pa.padata_value.as_ref()).expect("fast");
+    f(&mut armored);
+    pa.padata_value = encode(&krb5_types::fast::PaFxFast::ArmoredData(armored))
+        .expect("re-encode")
+        .into();
+}
+
+fn fast_as_prepared(store: &PrincipalStore, nonce: u32) -> (krb5_types::AsReq, ProtocolKey) {
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = user_key();
+    let armor_as = issue_tgt(store, TEST_USER, TEST_USER_PASSWORD, nonce);
+    let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x47u8; 32])
+        .expect("subkey");
+    let armor_ap = build_fast_armor(
+        armor_as.rep.0.ticket.clone(),
+        &armor_as.session_key,
+        &ascii(TEST_REALM),
+        &cname,
+        Some(&sub),
+    )
+    .expect("armor AP-REQ");
+    let akey = armor_key(&armor_as.session_key, Some(&sub)).expect("armor key");
+    let mut req = as_req(cname, TEST_REALM, nonce + 1, None).unwrap();
+    attach_fast(
+        &mut req,
+        &armor_ap,
+        &akey,
+        vec![pa_enc_timestamp(&key).expect("pa")],
+    )
+    .expect("FAST wrap");
+    (req, akey)
+}
+
+fn fast_tgs_prepared(store: &PrincipalStore, nonce: u32) -> krb5_types::TgsReq {
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let issued = issue_tgt(store, TEST_USER, TEST_USER_PASSWORD, nonce);
+    let mut tgs = tgs_req(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        nonce + 1,
+    )
+    .unwrap();
+    let inner = tgs.0.req_body.clone();
+    wrap_tgs_fast(&mut tgs, &issued.session_key, inner).expect("TGS FAST");
+    tgs
+}
+
+#[test]
+fn fast_as_bad_req_checksum_is_modified() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut req, _) = fast_as_prepared(&store, 890);
+    map_fx_fast_as(&mut req, |a| {
+        let mut ck = a.req_checksum.checksum.to_vec();
+        ck[0] ^= 0xff;
+        a.req_checksum.checksum = ck.into();
+    });
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("bad FAST checksum");
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::MODIFIED);
+            assert_eq!(text.as_deref(), Some("FIND_FAST"));
+        }
+        other => panic!("expected 41 MODIFIED FIND_FAST, got {other:?}"),
+    }
+}
+
+#[test]
+fn fast_tgs_bad_req_checksum_is_modified() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let mut tgs = fast_tgs_prepared(&store, 892);
+    map_fx_fast_tgs(&mut tgs, |a| {
+        let mut ck = a.req_checksum.checksum.to_vec();
+        ck[0] ^= 0xff;
+        a.req_checksum.checksum = ck.into();
+    });
+    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("bad FAST checksum");
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::MODIFIED);
+            assert_eq!(text.as_deref(), Some("FIND_FAST"));
+        }
+        other => panic!("expected 41 MODIFIED FIND_FAST, got {other:?}"),
+    }
+}
+
+#[test]
+fn fast_as_unkeyed_checksum_is_policy() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut req, _) = fast_as_prepared(&store, 894);
+    map_fx_fast_as(&mut req, |a| a.req_checksum.cksumtype = 1);
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("unkeyed FAST checksum");
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::POLICY);
+            assert_eq!(text.as_deref(), Some("Unkeyed checksum used in fast_req"));
+        }
+        other => panic!("expected 12 POLICY unkeyed, got {other:?}"),
+    }
+}
+
+#[test]
+fn fast_tgs_unkeyed_checksum_is_policy() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let mut tgs = fast_tgs_prepared(&store, 896);
+    map_fx_fast_tgs(&mut tgs, |a| a.req_checksum.cksumtype = 7);
+    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("unkeyed FAST checksum");
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::POLICY);
+            assert_eq!(text.as_deref(), Some("Unkeyed checksum used in fast_req"));
+        }
+        other => panic!("expected 12 POLICY unkeyed, got {other:?}"),
+    }
+}
+
+#[test]
+fn fast_as_unknown_armor_type_is_preauth_failed() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut req, _) = fast_as_prepared(&store, 898);
+    map_fx_fast_as(&mut req, |a| {
+        a.armor.as_mut().expect("armor").armor_type = 99;
+    });
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("unknown armor");
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::PREAUTH_FAILED);
+            assert_eq!(text.as_deref(), Some("Unknown FAST armor type 99"));
+        }
+        other => panic!("expected 24 Unknown FAST armor type, got {other:?}"),
+    }
+}
+
+#[test]
+fn fast_as_checksum_ignores_pa_tgs_req() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut req, akey) = fast_as_prepared(&store, 900);
+    let dummy = b"dummy-pa-tgs-req-not-the-body";
+    let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM).unwrap();
+    let mic = checksum(&akey, ck_usage, dummy).expect("mic");
+    map_fx_fast_as(&mut req, |a| {
+        a.req_checksum.checksum = mic.into();
+    });
+    req.0.padata.as_mut().unwrap().insert(
+        0,
+        PaData {
+            padata_type: pa::TGS_REQ,
+            padata_value: dummy.to_vec().into(),
+        },
+    );
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("body-only FAST checksum");
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::MODIFIED);
+            assert_eq!(text.as_deref(), Some("FIND_FAST"));
+        }
+        other => panic!("expected 41 MODIFIED FIND_FAST, got {other:?}"),
+    }
+}
+
+#[test]
+fn tgs_authenticator_cname_mismatch_is_badmatch() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 904);
+    let mut tgs = tgs_req(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        905,
+    )
+    .unwrap();
+    let pa = tgs
+        .0
+        .padata
+        .as_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|p| p.padata_type == pa::TGS_REQ)
+        .expect("PA-TGS-REQ");
+    let mut ap: ApReq = decode(pa.padata_value.as_ref()).expect("ap");
+    let auth_usage = KeyUsage::new(ku::TGS_REQ_AUTHENTICATOR).unwrap();
+    let auth_plain = decrypt(
+        &issued.session_key,
+        auth_usage,
+        ap.authenticator.cipher.as_ref(),
+    )
+    .expect("auth");
+    let mut authenticator: krb5_types::Authenticator = decode(&auth_plain).expect("authenticator");
+    authenticator.cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
+    let auth_der = encode(&authenticator).expect("auth der");
+    ap.authenticator.cipher = encrypt(&issued.session_key, auth_usage, &auth_der)
+        .expect("enc")
+        .into();
+    pa.padata_value = encode(&ap).expect("ap").into();
+    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("cname mismatch");
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::BADMATCH);
+            assert_eq!(text.as_deref(), Some("PROCESS_TGS"));
+        }
+        other => panic!("expected 36 BADMATCH PROCESS_TGS, got {other:?}"),
+    }
+}
+
 #[test]
 fn spake_challenge_then_as_rep() {
     let (store, _) = bootstrap_documented().expect("bootstrap");

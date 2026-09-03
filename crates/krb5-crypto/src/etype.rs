@@ -284,3 +284,9 @@ impl EncryptionType {
         }
     }
 }
+
+/// MIT `krb5_c_is_keyed_cksum`: types in `cksumtypes.c` without `CKSUM_UNKEYED`.
+#[must_use]
+pub const fn cksumtype_is_keyed(cksumtype: i32) -> bool {
+    matches!(cksumtype, 12 | 15 | 16 | 17 | 18 | 19 | 20 | -137 | -138)
+}

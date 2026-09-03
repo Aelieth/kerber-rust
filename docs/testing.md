@@ -137,7 +137,10 @@ armor AP-REQ). Reverse FAST: `scripts/mit-fast-kdc-gate.sh` is MIT
 `kinit -T` + `kvno` against the Rust KDC (TRACE upgrades on
 `PA_FX_FAST`; KDC log ≥2 `KrbFastResponse`). Forged-realm armor
 (`krb5-forge-tgt --keep-cipher --claim-realm`) is 35 `NOT_US` on
-both MIT and Rust (`The ticket isn't for us`). Reverse PKINIT:
+both MIT and Rust (`The ticket isn't for us`). Unit-red FAST negatives
+(`phase7_preauth.rs`): bad `req_checksum` is 41, unkeyed is 12, unknown
+armor type is 24, AS checksum ignores a dummy PA-TGS-REQ, TGS
+authenticator cname mismatch is 36. MIT clients cannot emit these. Reverse PKINIT:
 `scripts/rust-kinit-pkinit-gate.sh` is Rust `kinit --pkinit FILE:` against
 MIT KDC (`pkinit.so` + KDC cert + `id-pkinit-san`); it **fails** if the
 plugin is missing. MIT `klist` names `user@KERBER.TEST`. A follow-up

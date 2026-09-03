@@ -2,10 +2,10 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256, checksum, decrypt, dh_generate,
-    dh_group_for_prime, dh_shared, encrypt, krb_fx_cf2, octetstring2key, p256_generate,
-    p256_shared, pkinit_kdf_agile, spake_derive_key, spake_kdc_keygen, spake_result_wbytes,
-    spake_thash_update, spake_wbytes, verify_checksum,
+    EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256, checksum, cksumtype_is_keyed, decrypt,
+    dh_generate, dh_group_for_prime, dh_shared, encrypt, krb_fx_cf2, octetstring2key,
+    p256_generate, p256_shared, pkinit_kdf_agile, spake_derive_key, spake_kdc_keygen,
+    spake_result_wbytes, spake_thash_update, spake_wbytes, verify_checksum,
 };
 use krb5_protocol::{ReplayCache, ReplayKey};
 use krb5_types::{
@@ -28,11 +28,11 @@ pub(crate) struct FastOk {
 /// Unwrap PA-FX-FAST from an AS-REQ.
 pub(crate) fn unwrap_fast(store: &dyn PrincipalRead, req: &AsReq) -> Result<Option<FastOk>, Error> {
     let body_der = encode(&req.0.req_body)?;
-    unwrap_fast_padata(store, req.0.padata.as_deref(), &body_der)
+    unwrap_fast_as(store, req.0.padata.as_deref(), &body_der)
 }
 
-/// Unwrap PA-FX-FAST from AS or TGS padata.
-pub(crate) fn unwrap_fast_padata(
+/// Unwrap PA-FX-FAST from AS padata. Checksum is the outer KDC-REQ-BODY only.
+pub(crate) fn unwrap_fast_as(
     store: &dyn PrincipalRead,
     padata: Option<&[PaData]>,
     body_der: &[u8],
@@ -44,17 +44,8 @@ pub(crate) fn unwrap_fast_padata(
         Ok(krb5_types::fast::PaFxFast::ArmoredData(w)) => w,
         _ => decode::<krb5_types::fast::KrbFastArmoredReq>(raw)?,
     };
-    let armor_key = armor_key_from(store, &armored, padata)?;
-    let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM)?;
-    // AS: RFC 6113 checksums KDC-REQ-BODY. TGS (MIT 1.22): PA-TGS-REQ AP-REQ.
-    let ck_data = find_pa(padata, pa::TGS_REQ).unwrap_or(body_der);
-    verify_checksum(
-        &armor_key,
-        ck_usage,
-        ck_data,
-        armored.req_checksum.checksum.as_ref(),
-    )
-    .map_err(|_| proto(err::INAPP_CKSUM, "FAST req-checksum"))?;
+    let armor_key = armor_key_from(store, &armored)?;
+    verify_fast_req_checksum(&armor_key, body_der, &armored.req_checksum)?;
     let enc_usage = KeyUsage::new(ku::FAST_ENC)?;
     let plain = decrypt(&armor_key, enc_usage, armored.enc_fast_req.cipher.as_ref())?;
     let inner: krb5_types::fast::KrbFastReq = decode(&plain)?;
@@ -100,14 +91,7 @@ pub(crate) fn unwrap_fast_tgs(
         EncryptionType::from_iana(sub.keytype).or_else(|_| EncryptionType::known(sub.keytype))?;
     let subk = ProtocolKey::from_bytes(st, sub.keyvalue.as_ref())?;
     let armor_key = krb_fx_cf2(&subk, session, b"subkeyarmor", b"ticketarmor")?;
-    let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM)?;
-    verify_checksum(
-        &armor_key,
-        ck_usage,
-        pa_tgs_raw,
-        armored.req_checksum.checksum.as_ref(),
-    )
-    .map_err(|_| proto(err::INAPP_CKSUM, "FIND_FAST"))?;
+    verify_fast_req_checksum(&armor_key, pa_tgs_raw, &armored.req_checksum)?;
     let enc_usage = KeyUsage::new(ku::FAST_ENC)?;
     let plain = decrypt(&armor_key, enc_usage, armored.enc_fast_req.cipher.as_ref())?;
     let inner: krb5_types::fast::KrbFastReq = decode(&plain)?;
@@ -157,16 +141,31 @@ fn take_der(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
     Some((tag, inner, rest))
 }
 
+fn verify_fast_req_checksum(
+    armor_key: &ProtocolKey,
+    ck_data: &[u8],
+    ck: &krb5_types::Checksum,
+) -> Result<(), Error> {
+    if !cksumtype_is_keyed(ck.cksumtype) {
+        return Err(proto(err::POLICY, "Unkeyed checksum used in fast_req"));
+    }
+    let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM)?;
+    verify_checksum(armor_key, ck_usage, ck_data, ck.checksum.as_ref())
+        .map_err(|_| proto(err::MODIFIED, "FIND_FAST"))
+}
+
 fn armor_key_from(
     store: &dyn PrincipalRead,
     armored: &krb5_types::fast::KrbFastArmoredReq,
-    _outer_padata: Option<&[PaData]>,
 ) -> Result<ProtocolKey, Error> {
     let Some(armor) = armored.armor.as_ref() else {
         return Err(proto(err::PREAUTH_FAILED, "FAST armor required"));
     };
     if armor.armor_type != krb5_types::fast::ARMOR_AP_REQUEST {
-        return Err(proto(err::PREAUTH_FAILED, "unsupported FAST armor"));
+        return Err(proto(
+            err::PREAUTH_FAILED,
+            &format!("Unknown FAST armor type {}", armor.armor_type),
+        ));
     }
     armor_key_from_ap(store, armor.armor_value.as_ref())
 }
