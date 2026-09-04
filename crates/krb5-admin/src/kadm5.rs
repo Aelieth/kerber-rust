@@ -89,6 +89,8 @@ const KADM5_PASS_Q_TOOSHORT: u32 = 43_787_542;
 const KADM5_PASS_Q_CLASS: u32 = 43_787_543;
 /// MIT `ovk` 25.
 const KADM5_PASS_REUSE: u32 = 43_787_545;
+/// MIT `ovk` 2 (`KADM5_AUTH_ADD`).
+const KADM5_AUTH_ADD: u32 = 43_787_522;
 /// MIT `ovk` 3 (`KADM5_AUTH_MODIFY`).
 const KADM5_AUTH_MODIFY: u32 = 43_787_523;
 /// MIT `ovk` 4 (`KADM5_AUTH_DELETE`).
@@ -609,7 +611,11 @@ const AT_PW_HIST_KVNO: u32 = 18;
 const AT_PW_HIST: u32 = 19;
 
 fn dispatch_iprop(store: &SharedStore, acl: &Acl, actor: &str, proc: u32, args: &[u8]) -> Vec<u8> {
-    if proc != IPROP_NULL && acl.check(actor, krb5_kdc::AdminOp::Propagate).is_err() {
+    if proc != IPROP_NULL
+        && acl
+            .check(actor, krb5_kdc::AdminOp::Propagate, None)
+            .is_err()
+    {
         return encode_incr_result(krb5_kdc::IPROP_PERM_DENIED, 0, &[], None);
     }
     match proc {
@@ -1353,6 +1359,11 @@ fn write_store(
     Ok(g)
 }
 
+fn acl_id(name: &PrincipalName, actor: &str) -> String {
+    let realm = actor.rsplit_once('@').map_or("", |(_, r)| r);
+    format!("{}@{realm}", name.components_joined())
+}
+
 fn dispatch_kadm5(
     store: &SharedStore,
     acl: &Acl,
@@ -1371,7 +1382,11 @@ fn dispatch_kadm5(
         }
         GET_PRINCIPAL => {
             let (name, _mask) = parse_get(args)?;
-            if acl.check(actor, krb5_kdc::AdminOp::Inquire).is_err() {
+            let tid = acl_id(&name, actor);
+            if acl
+                .check(actor, krb5_kdc::AdminOp::Inquire, Some(&tid))
+                .is_err()
+            {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_GET));
             }
             let g = match write_store(store, API_V2) {
@@ -1393,7 +1408,7 @@ fn dispatch_kadm5(
             }
         }
         GET_PRINCS => {
-            if acl.check(actor, krb5_kdc::AdminOp::Inquire).is_err() {
+            if acl.check(actor, krb5_kdc::AdminOp::Inquire, None).is_err() {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_GET));
             }
             let expr = parse_gprincs(args)?;
@@ -1428,7 +1443,11 @@ fn dispatch_kadm5(
         }
         MODIFY_PRINCIPAL => {
             let (name, mask, fields) = parse_modify(args)?;
-            if acl.check(actor, krb5_kdc::AdminOp::Modify).is_err() {
+            let tid = acl_id(&name, actor);
+            if acl
+                .check(actor, krb5_kdc::AdminOp::Modify, Some(&tid))
+                .is_err()
+            {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_MODIFY));
             }
             let mut g = match write_store(store, API_V2) {
@@ -1463,17 +1482,34 @@ fn dispatch_kadm5(
                 policy,
                 clear_policy,
             ) {
-                Ok(()) => Ok(generic_ret(API_V2, 0)),
+                Ok(()) => {
+                    if let Some(rs) = acl.restrictions(actor, Some(&tid))
+                        && let Err(e) = g.impose_acl_restrictions(&name, rs)
+                    {
+                        return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
+                    }
+                    Ok(generic_ret(API_V2, 0))
+                }
                 Err(e) => Ok(generic_ret(API_V2, kadm5_code(&Error::from(e)))),
             }
         }
         CREATE_PRINCIPAL | CREATE_PRINCIPAL3 => {
             let (name, pass, policy) = parse_create(args, proc == CREATE_PRINCIPAL3)?;
+            let tid = acl_id(&name, actor);
+            if acl
+                .check(actor, krb5_kdc::AdminOp::Create, Some(&tid))
+                .is_err()
+            {
+                return Ok(generic_ret(API_V2, KADM5_AUTH_ADD));
+            }
             let mut g = match write_store(store, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
+            let rs = acl.restrictions(actor, Some(&tid));
+            let skip_policy = rs.is_some_and(|r| r.clear_policy || r.policy.is_some());
             if let Some(ref pol) = policy
+                && !skip_policy
                 && let Err(e) = g.check_named_policy(pol, pass.as_bytes())
             {
                 return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
@@ -1483,7 +1519,8 @@ fn dispatch_kadm5(
             drop(sess);
             match created {
                 Ok(()) => {
-                    if let Some(pol) = policy
+                    if !skip_policy
+                        && let Some(pol) = policy
                         && let Err(e) = g.set_principal_policy(&name, Some(pol))
                     {
                         return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
@@ -1496,8 +1533,10 @@ fn dispatch_kadm5(
         RENAME_PRINCIPAL => {
             let (old, new) = parse_rename(args)?;
             // MIT server_stubs.c:700-712: ACL (AUTH_INSUFFICIENT) then lockdown (AUTH_DELETE).
-            if acl.check(actor, krb5_kdc::AdminOp::Create).is_err()
-                || acl.check(actor, krb5_kdc::AdminOp::Delete).is_err()
+            // auth_acl.c:638-648: delete on src and add on dest without restrictions.
+            if acl
+                .check_rename(actor, &acl_id(&old, actor), &acl_id(&new, actor))
+                .is_err()
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_INSUFFICIENT));
             }
@@ -1526,7 +1565,15 @@ fn dispatch_kadm5(
                 let actor_name = PrincipalName::new(PrincipalName::NT_UNKNOWN, left.split('/'));
                 krb5_types::principal_compare(&name, g.realm(), &actor_name, arealm)
             });
-            if !self_change && acl.check(actor, krb5_kdc::AdminOp::ChangePassword).is_err() {
+            if !self_change
+                && acl
+                    .check(
+                        actor,
+                        krb5_kdc::AdminOp::ChangePassword,
+                        Some(&acl_id(&name, actor)),
+                    )
+                    .is_err()
+            {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
             }
             let lockdown = match g.get_name(&name) {
@@ -1543,7 +1590,7 @@ fn dispatch_kadm5(
         }
         CREATE_POLICY => {
             let (api, pol, _mask) = parse_policy_arg(args)?;
-            if acl.check(actor, krb5_kdc::AdminOp::Create).is_err() {
+            if acl.check(actor, krb5_kdc::AdminOp::Create, None).is_err() {
                 return Ok(generic_ret(api, KADM5_AUTH_GET));
             }
             if pol.name.is_empty() {
@@ -1561,7 +1608,7 @@ fn dispatch_kadm5(
         }
         DELETE_POLICY => {
             let (api, name) = parse_policy_name(args)?;
-            if acl.check(actor, krb5_kdc::AdminOp::Delete).is_err() {
+            if acl.check(actor, krb5_kdc::AdminOp::Delete, None).is_err() {
                 return Ok(generic_ret(api, KADM5_AUTH_GET));
             }
             let mut g = match write_store(store, api) {
@@ -1576,7 +1623,7 @@ fn dispatch_kadm5(
         }
         MODIFY_POLICY => {
             let (api, rec, mask) = parse_policy_arg(args)?;
-            if acl.check(actor, krb5_kdc::AdminOp::Modify).is_err() {
+            if acl.check(actor, krb5_kdc::AdminOp::Modify, None).is_err() {
                 return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
             }
             let mut g = match write_store(store, api) {
@@ -1591,7 +1638,7 @@ fn dispatch_kadm5(
         }
         GET_POLICY => {
             let (api, name) = parse_policy_name(args)?;
-            if acl.check(actor, krb5_kdc::AdminOp::Inquire).is_err() {
+            if acl.check(actor, krb5_kdc::AdminOp::Inquire, None).is_err() {
                 return Ok(generic_ret(api, KADM5_AUTH_GET));
             }
             let g = store
@@ -1604,7 +1651,7 @@ fn dispatch_kadm5(
         }
         GET_POLS => {
             let (api, expr) = parse_gpols(args);
-            if acl.check(actor, krb5_kdc::AdminOp::Inquire).is_err() {
+            if acl.check(actor, krb5_kdc::AdminOp::Inquire, None).is_err() {
                 return Ok(generic_ret(api, KADM5_AUTH_GET));
             }
             let g = store
@@ -1622,7 +1669,14 @@ fn dispatch_kadm5(
         }
         CHRAND_PRINCIPAL | CHRAND_PRINCIPAL3 => {
             let name = parse_chrand(args, proc == CHRAND_PRINCIPAL3)?;
-            if acl.check(actor, krb5_kdc::AdminOp::ChangePassword).is_err() {
+            if acl
+                .check(
+                    actor,
+                    krb5_kdc::AdminOp::ChangePassword,
+                    Some(&acl_id(&name, actor)),
+                )
+                .is_err()
+            {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
             }
             let mut g = match write_store(store, API_V2) {
@@ -1641,7 +1695,14 @@ fn dispatch_kadm5(
         }
         EXTRACT_KEYS => {
             let (api, name, kvno) = parse_extract(args)?;
-            if acl.check(actor, krb5_kdc::AdminOp::Extract).is_err() {
+            if acl
+                .check(
+                    actor,
+                    krb5_kdc::AdminOp::Extract,
+                    Some(&acl_id(&name, actor)),
+                )
+                .is_err()
+            {
                 return Ok(generic_ret(api, KADM5_AUTH_EXTRACT));
             }
             let g = match write_store(store, api) {
@@ -1665,7 +1726,14 @@ fn dispatch_kadm5(
         }
         PURGEKEYS => {
             let (api, name, keepkvno) = parse_purgekeys(args)?;
-            if acl.check(actor, krb5_kdc::AdminOp::Modify).is_err() {
+            if acl
+                .check(
+                    actor,
+                    krb5_kdc::AdminOp::Modify,
+                    Some(&acl_id(&name, actor)),
+                )
+                .is_err()
+            {
                 return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
             }
             let mut g = match write_store(store, API_V2) {
@@ -1694,7 +1762,14 @@ fn dispatch_kadm5(
         }
         SETKEY_PRINCIPAL | SETKEY_PRINCIPAL3 | SETKEY_PRINCIPAL4 => {
             let (api, name, keys, keepold) = parse_setkey(args, proc)?;
-            if acl.check(actor, krb5_kdc::AdminOp::SetKey).is_err() {
+            if acl
+                .check(
+                    actor,
+                    krb5_kdc::AdminOp::SetKey,
+                    Some(&acl_id(&name, actor)),
+                )
+                .is_err()
+            {
                 return Ok(generic_ret(api, KADM5_AUTH_SETKEY));
             }
             let mut g = match write_store(store, API_V2) {
@@ -1715,7 +1790,14 @@ fn dispatch_kadm5(
         }
         GET_STRINGS => {
             let (api, name) = parse_gstrings(args)?;
-            if acl.check(actor, krb5_kdc::AdminOp::Inquire).is_err() {
+            if acl
+                .check(
+                    actor,
+                    krb5_kdc::AdminOp::Inquire,
+                    Some(&acl_id(&name, actor)),
+                )
+                .is_err()
+            {
                 return Ok(generic_ret(api, KADM5_AUTH_GET));
             }
             let g = match write_store(store, api) {
@@ -1729,7 +1811,14 @@ fn dispatch_kadm5(
         }
         SET_STRING => {
             let (api, name, key, value) = parse_sstring(args)?;
-            if acl.check(actor, krb5_kdc::AdminOp::Modify).is_err() {
+            if acl
+                .check(
+                    actor,
+                    krb5_kdc::AdminOp::Modify,
+                    Some(&acl_id(&name, actor)),
+                )
+                .is_err()
+            {
                 return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
             }
             if key.is_empty() {
@@ -2462,7 +2551,7 @@ mod tests {
         assert_eq!(r.u32().unwrap(), API_V2);
         assert_eq!(r.u32().unwrap(), 0);
         assert_eq!(r.u32().unwrap(), KADM5_PRIVS);
-        let star = Acl::parse("admin@KERBER.TEST *\n");
+        let star = Acl::parse("admin@KERBER.TEST *\n").expect("acl");
         let star_out = dispatch_kadm5(&store, &star, &actor, GET_PRIVS, &[]).unwrap();
         let mut r = XdrR::new(&star_out);
         assert_eq!(r.u32().unwrap(), API_V2);
@@ -2472,7 +2561,7 @@ mod tests {
             0x3F,
             "MIT * does not include extract (0x40)"
         );
-        let limited = Acl::parse("admin@KERBER.TEST *\nlimited@KERBER.TEST i\n");
+        let limited = Acl::parse("admin@KERBER.TEST *\nlimited@KERBER.TEST i\n").expect("acl");
         let out = dispatch_kadm5(&store, &limited, "limited@KERBER.TEST", GET_PRIVS, &[]).unwrap();
         let mut r = XdrR::new(&out);
         assert_eq!(r.u32().unwrap(), API_V2);
@@ -2532,7 +2621,7 @@ mod tests {
             assert_eq!(p.rid, rid);
             assert_eq!(p.best_key().unwrap().key.as_bytes(), key.as_slice());
         }
-        let add_only = Acl::parse("admin@KERBER.TEST a\n");
+        let add_only = Acl::parse("admin@KERBER.TEST a\n").expect("acl");
         let mut w2 = XdrW::default();
         w2.u32(API_V2);
         w2.nullstring(Some(&format!("renameto@{TEST_REALM}")));
@@ -2947,7 +3036,7 @@ mod tests {
     #[test]
     fn extract_keys_acl_is_auth_extract() {
         let (store, _acl, _actor) = setup();
-        let limited = Acl::parse("admin@KERBER.TEST *\nlimited@KERBER.TEST i\n");
+        let limited = Acl::parse("admin@KERBER.TEST *\nlimited@KERBER.TEST i\n").expect("acl");
         let out = dispatch_kadm5(
             &store,
             &limited,
@@ -2957,7 +3046,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ret_code(&out), KADM5_AUTH_EXTRACT);
-        let star = Acl::parse("admin@KERBER.TEST *\n");
+        let star = Acl::parse("admin@KERBER.TEST *\n").expect("acl");
         let denied = dispatch_kadm5(
             &store,
             &star,
@@ -3151,7 +3240,7 @@ mod tests {
     #[test]
     fn purgekeys_acl_is_auth_modify() {
         let (store, _acl, _actor) = setup();
-        let limited = Acl::parse("limited@KERBER.TEST i\n");
+        let limited = Acl::parse("limited@KERBER.TEST i\n").expect("acl");
         let out = dispatch_kadm5(
             &store,
             &limited,
@@ -3345,7 +3434,7 @@ mod tests {
     #[test]
     fn setkey_acl_is_auth_setkey() {
         let (store, _acl, _actor) = setup();
-        let limited = Acl::parse("limited@KERBER.TEST i\n");
+        let limited = Acl::parse("limited@KERBER.TEST i\n").expect("acl");
         let out = dispatch_kadm5(
             &store,
             &limited,
@@ -3555,7 +3644,7 @@ mod tests {
             )
             .unwrap();
         }
-        let add_only = Acl::parse("admin@KERBER.TEST a\n");
+        let add_only = Acl::parse("admin@KERBER.TEST a\n").expect("acl");
         let mut w = XdrW::default();
         w.u32(API_V2);
         w.nullstring(Some("user@KERBER.TEST"));
@@ -3737,7 +3826,7 @@ mod tests {
     fn unauthorized_is_auth_even_if_missing_or_lockdown() {
         let (store, _acl, _actor) = setup();
         lockdown_user(&store);
-        let limited = Acl::parse("limited@KERBER.TEST i\n");
+        let limited = Acl::parse("limited@KERBER.TEST i\n").expect("acl");
         let actor = "limited@KERBER.TEST";
         let cases: [(u32, Vec<u8>, u32); 10] = [
             (
@@ -3800,7 +3889,7 @@ mod tests {
     #[test]
     fn chrand_acl_is_auth_changepw() {
         let (store, _acl, _actor) = setup();
-        let limited = Acl::parse("limited@KERBER.TEST i\n");
+        let limited = Acl::parse("limited@KERBER.TEST i\n").expect("acl");
         for name in ["user@KERBER.TEST", "no-such@KERBER.TEST"] {
             let out = dispatch_kadm5(
                 &store,
@@ -4156,7 +4245,7 @@ mod tests {
     #[test]
     fn iprop_get_updates_denies_actor_without_propagate() {
         let (store, _acl, _actor) = setup();
-        let limited = Acl::parse("admin@KERBER.TEST *\nuser@KERBER.TEST i\n");
+        let limited = Acl::parse("admin@KERBER.TEST *\nuser@KERBER.TEST i\n").expect("acl");
         let mut args = XdrW::default();
         args.u32(0);
         args.u32(0);

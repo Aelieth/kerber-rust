@@ -3,6 +3,15 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+fn unix_now() -> u32 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|d| u32::try_from(d.as_secs()).ok())
+        .unwrap_or(0)
+}
 
 #[cfg(test)]
 use std::cell::Cell;
@@ -27,7 +36,7 @@ pub const RID_KRBTGT: u32 = 502;
 /// First allocated RID for ordinary principals (AD-style).
 pub const RID_FIRST_USER: u32 = 1000;
 
-use crate::acl::{Acl, AdminOp};
+use crate::acl::{Acl, AdminOp, Restrictions};
 use crate::error::Error;
 use crate::kdb_dump::{TL_LAST_PWD_CHANGE, TL_MOD_PRINC};
 
@@ -44,6 +53,8 @@ pub const KDB_DISALLOW_TGT_BASED: u32 = 0x0000_0004;
 pub const KDB_DISALLOW_RENEWABLE: u32 = 0x0000_0008;
 /// MIT `KRB5_KDB_DISALLOW_PROXIABLE`.
 pub const KDB_DISALLOW_PROXIABLE: u32 = 0x0000_0010;
+/// MIT `KRB5_KDB_DISALLOW_DUP_SKEY`.
+pub const KDB_DISALLOW_DUP_SKEY: u32 = 0x0000_0020;
 /// MIT `KRB5_KDB_DISALLOW_ALL_TIX`.
 pub const KDB_DISALLOW_ALL_TIX: u32 = 0x0000_0040;
 /// MIT `KRB5_KDB_REQUIRES_PRE_AUTH`. Captured `getprinc` + dump field is **128**, not `0x8`.
@@ -975,12 +986,16 @@ impl PrincipalStore {
         name: &PrincipalName,
         password: &[u8],
     ) -> Result<(), Error> {
-        acl.check(actor, AdminOp::Create)?;
         let id = format!("{}@{}", name.components_joined(), self.realm);
+        acl.check(actor, AdminOp::Create, Some(&id))?;
         if self.map.contains_key(&id) {
             return Err(Error::AlreadyExists);
         }
-        self.insert_password(name, password)
+        self.insert_password(name, password)?;
+        if let Some(rs) = acl.restrictions(actor, Some(&id)) {
+            self.apply_acl_restrictions(&id, rs)?;
+        }
+        Ok(())
     }
 
     /// ACL-gated create of a random-key host (or other) principal.
@@ -994,8 +1009,8 @@ impl PrincipalStore {
         actor: &str,
         name: &PrincipalName,
     ) -> Result<(), Error> {
-        acl.check(actor, AdminOp::Create)?;
         let id = format!("{}@{}", name.components_joined(), self.realm);
+        acl.check(actor, AdminOp::Create, Some(&id))?;
         if self.map.contains_key(&id) {
             return Err(Error::AlreadyExists);
         }
@@ -1008,6 +1023,9 @@ impl PrincipalStore {
         }
         self.allow_s4u_from(name, &self_name);
         self.allow_s4u_to(name, &self_name);
+        if let Some(rs) = acl.restrictions(actor, Some(&id)) {
+            self.apply_acl_restrictions(&id, rs)?;
+        }
         if let Some(p) = self.map.get(&id) {
             self.note_ulog(id.clone(), false, Some(p.clone()));
         }
@@ -1128,9 +1146,9 @@ impl PrincipalStore {
         foreign_realm: &str,
         password: &[u8],
     ) -> Result<(), Error> {
-        acl.check(actor, AdminOp::Create)?;
         let name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", foreign_realm]);
         let id = format!("{}@{}", name.components_joined(), self.realm);
+        acl.check(actor, AdminOp::Create, Some(&id))?;
         if self.map.contains_key(&id) {
             return Err(Error::AlreadyExists);
         }
@@ -1157,9 +1175,9 @@ impl PrincipalStore {
         foreign_realm: &str,
         key: ProtocolKey,
     ) -> Result<(), Error> {
-        acl.check(actor, AdminOp::Create)?;
         let name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", foreign_realm]);
         let id = format!("{}@{}", name.components_joined(), self.realm);
+        acl.check(actor, AdminOp::Create, Some(&id))?;
         if self.map.contains_key(&id) {
             return Err(Error::AlreadyExists);
         }
@@ -1194,9 +1212,9 @@ impl PrincipalStore {
         foreign_realm: &str,
         key: ProtocolKey,
     ) -> Result<(), Error> {
-        acl.check(actor, AdminOp::Create)?;
         let name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", foreign_realm]);
         let id = format!("{}@{}", name.components_joined(), self.realm);
+        acl.check(actor, AdminOp::Create, Some(&id))?;
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         let kvno = p.keys.iter().map(|k| k.kvno).min().unwrap_or(1);
         p.keys.insert(0, KeyEntry::new(key.etype(), key, kvno));
@@ -1217,7 +1235,8 @@ impl PrincipalStore {
         name: &PrincipalName,
         password: &[u8],
     ) -> Result<(), Error> {
-        acl.check(actor, AdminOp::ChangePassword)?;
+        let id = format!("{}@{}", name.components_joined(), self.realm);
+        acl.check(actor, AdminOp::ChangePassword, Some(&id))?;
         self.set_password(name, password)
     }
 
@@ -1227,8 +1246,8 @@ impl PrincipalStore {
     ///
     /// [`Error::AclDenied`] or [`Error::NotFound`].
     pub fn delete(&mut self, acl: &Acl, actor: &str, name: &PrincipalName) -> Result<(), Error> {
-        acl.check(actor, AdminOp::Delete)?;
         let id = format!("{}@{}", name.components_joined(), self.realm);
+        acl.check(actor, AdminOp::Delete, Some(&id))?;
         self.remove_id_inner(&id)
     }
 
@@ -1248,10 +1267,9 @@ impl PrincipalStore {
         old: &PrincipalName,
         new: &PrincipalName,
     ) -> Result<(), Error> {
-        acl.check(actor, AdminOp::Create)?;
-        acl.check(actor, AdminOp::Delete)?;
         let old_id = format!("{}@{}", old.components_joined(), self.realm);
         let new_id = format!("{}@{}", new.components_joined(), self.realm);
+        acl.check_rename(actor, &old_id, &new_id)?;
         if self.map.contains_key(&new_id) {
             return Err(Error::AlreadyExists);
         }
@@ -1277,7 +1295,8 @@ impl PrincipalStore {
         actor: &str,
         name: &PrincipalName,
     ) -> Result<Keytab, Error> {
-        acl.check(actor, AdminOp::Ktadd)?;
+        let id = format!("{}@{}", name.components_joined(), self.realm);
+        acl.check(actor, AdminOp::Ktadd, Some(&id))?;
         let p = self.get_name(name).ok_or(Error::NotFound)?;
         if p.attributes & KDB_LOCKDOWN_KEYS != 0 {
             return Err(Error::AclDenied);
@@ -1601,6 +1620,27 @@ impl PrincipalStore {
         let snap = p.clone();
         self.note_ulog(id, false, Some(snap));
         self.save_if_configured()
+    }
+
+    /// Impose kadm5.acl restrictions after create/modify (`auth.c` `impose_restrictions`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    pub fn impose_acl_restrictions(
+        &mut self,
+        name: &PrincipalName,
+        rs: &Restrictions,
+    ) -> Result<(), Error> {
+        let id = format!("{}@{}", name.components_joined(), self.realm);
+        self.apply_acl_restrictions(&id, rs)?;
+        self.save_if_configured()
+    }
+
+    fn apply_acl_restrictions(&mut self, id: &str, rs: &Restrictions) -> Result<(), Error> {
+        let p = self.map.get_mut(id).ok_or(Error::NotFound)?;
+        rs.apply_to(p, unix_now());
+        Ok(())
     }
 
     /// Iterate principals (persistence).
@@ -2293,7 +2333,7 @@ mod tests {
             .map(|k| (k.etype.to_iana(), k.kvno, k.key.as_bytes().to_vec()))
             .collect();
         assert_eq!(after_keys, keys);
-        let add_only = Acl::parse("admin@KERBER.TEST a\n");
+        let add_only = Acl::parse("admin@KERBER.TEST a\n").expect("acl");
         store
             .create_password(&acl, &actor, &old, b"rename-secret")
             .unwrap();

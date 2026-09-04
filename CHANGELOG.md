@@ -22,6 +22,26 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0f I1.** kadm5.acl target patterns and restrictions match MIT
+  `auth_acl.c`: grammar `<principal> <opstring> [<target>
+  [<restrictions>]]`; `*` target is any; `match_princ` same component
+  count/realm/`*` and `*N` back-references; first client **and** target
+  match; rename is `Delete` on src **and** `Create` on dest **and** that
+  add entry has no restrictions; `-clearpolicy`/`-policy`/`-maxlife`/
+  `-maxrenewlife`/`-expire`/`-pwexpire`/`+flag`/`-flag` imposed on
+  create/modify; unparseable target or unknown restriction is a load
+  error (`acl_init`). `*`/`x` still exclude `e`. Settled live: `user*`
+  is a literal (`match_data`); `*@REALM` scopes single-component names;
+  AUTH_ADD text is `add_principal: Operation requires ``add'' privilege
+  while creating "svc/x@KERBER.TEST".`. Units:
+  `acl_target_pattern_scopes_add_and_delete`,
+  `acl_target_backreference_matches_own_instance`,
+  `acl_rename_needs_delete_on_src_and_add_on_dest_without_restrictions`,
+  `acl_restriction_clearpolicy_is_imposed`,
+  `acl_unknown_restriction_is_load_error`, `acl_target_star_is_any`,
+  `kpasswd_acl_c_honours_target_pattern`. Gate: `scripts/kadmin-gate.sh`
+  both legs.
+
 - **W0e H8.** Ledger F4 gains `check_anon`/`restrict_anon`,
   `NEEDED_HW_PREAUTH` 25, and admin-unlock; phantom gate cells are
   `proposed` per clause; five real tests are un-`proposed`; armor

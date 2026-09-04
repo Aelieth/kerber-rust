@@ -494,7 +494,11 @@ fn handle_kpasswd_from(
         )
     } else if !self_change
         && acl
-            .check(&client, krb5_kdc::AdminOp::ChangePassword)
+            .check(
+                &client,
+                krb5_kdc::AdminOp::ChangePassword,
+                Some(&target_unparsed),
+            )
             .is_err()
     {
         (

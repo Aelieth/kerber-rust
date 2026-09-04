@@ -110,7 +110,20 @@ maps lockdown to the privilege codes MIT kadmind remaps in
 `KADM5_AUTH_DELETE`, modify that clears the bit `KADM5_AUTH_MODIFY`,
 rename of the source `KADM5_AUTH_DELETE` after the ACL check.
 Unauthorised rename is `KADM5_AUTH_INSUFFICIENT` first
-(`server_stubs.c:700-712`). Purgekeys stays
+(`server_stubs.c:700-712`). kadm5.acl lines are
+`<principal> <opstring> [<target> [<restrictions>]]`
+(`auth_acl.c:330-338`). A target of `*` is any principal; otherwise
+`match_princ` (`:472-492`) requires the same component count and realm
+and matches each component with `*` (whole component only; `user*` is
+a literal) and `*N` back-references from the client pattern. The first
+entry whose client **and** target match wins (`find_entry` `:497-524`).
+Rename is `ACL_DELETE` on src **and** `ACL_ADD` on dest **and** the add
+entry carries no restrictions (`:638-648`). Restrictions
+(`-clearpolicy`, `-policy`, `-maxlife`, `-maxrenewlife`, `-expire`,
+`-pwexpire`, `+flag`/`-flag`) are imposed on create/modify
+(`auth.c:211-272`). An unparseable target or unknown restriction token
+is a load error (`acl_init`); kadmind refuses the file. `*`/`x` still
+exclude extract (`e`). Purgekeys stays
 `KADM5_PROTECT_KEYS` (stricter than MIT, which has no lockdown check).
 `kadmin.local` ktadd ignores lockdown like MIT. Create-time name
 special-casing keeps `PWCHANGE_SERVICE` only (`create_principal` has

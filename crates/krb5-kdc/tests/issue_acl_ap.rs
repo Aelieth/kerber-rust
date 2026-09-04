@@ -120,41 +120,153 @@ fn acl_deny_non_admin_create_delete_ktadd() {
     assert_eq!(err, Error::AclDenied);
     let err = store.delete(&acl, &user, &documented_host()).unwrap_err();
     assert_eq!(err, Error::AclDenied);
-    assert!(acl.check(&user, AdminOp::Create).is_err());
+    assert!(acl.check(&user, AdminOp::Create, None).is_err());
 }
 
 #[test]
 fn acl_parse_kadm5_style() {
-    let acl = Acl::parse("admin@KERBER.TEST *\nuser@KERBER.TEST i\n# comment\n");
-    assert!(acl.check("admin@KERBER.TEST", AdminOp::Create).is_ok());
-    assert!(acl.check("admin@KERBER.TEST", AdminOp::Modify).is_ok());
-    assert!(acl.check("admin@KERBER.TEST", AdminOp::SetKey).is_ok());
-    assert!(acl.check("admin@KERBER.TEST", AdminOp::Inquire).is_ok());
+    let acl = Acl::parse("admin@KERBER.TEST *\nuser@KERBER.TEST i\n# comment\n").expect("acl");
+    assert!(
+        acl.check("admin@KERBER.TEST", AdminOp::Create, None)
+            .is_ok()
+    );
+    assert!(
+        acl.check("admin@KERBER.TEST", AdminOp::Modify, None)
+            .is_ok()
+    );
+    assert!(
+        acl.check("admin@KERBER.TEST", AdminOp::SetKey, None)
+            .is_ok()
+    );
+    assert!(
+        acl.check("admin@KERBER.TEST", AdminOp::Inquire, None)
+            .is_ok()
+    );
     assert_eq!(
-        acl.check("admin@KERBER.TEST", AdminOp::Extract)
+        acl.check("admin@KERBER.TEST", AdminOp::Extract, None)
             .unwrap_err(),
         Error::AclDenied,
         "MIT * / x does not grant extract"
     );
     assert_eq!(
-        acl.check("user@KERBER.TEST", AdminOp::Ktadd).unwrap_err(),
+        acl.check("user@KERBER.TEST", AdminOp::Ktadd, None)
+            .unwrap_err(),
         Error::AclDenied
     );
-    assert!(acl.check("user@KERBER.TEST", AdminOp::Inquire).is_ok());
+    assert!(
+        acl.check("user@KERBER.TEST", AdminOp::Inquire, None)
+            .is_ok()
+    );
     assert_eq!(
-        acl.check("user@KERBER.TEST", AdminOp::Create).unwrap_err(),
+        acl.check("user@KERBER.TEST", AdminOp::Create, None)
+            .unwrap_err(),
         Error::AclDenied
     );
     assert_eq!(
-        acl.check("user@KERBER.TEST", AdminOp::Modify).unwrap_err(),
+        acl.check("user@KERBER.TEST", AdminOp::Modify, None)
+            .unwrap_err(),
         Error::AclDenied
     );
     assert_eq!(acl.privs("admin@KERBER.TEST"), 0x3F);
     assert_eq!(acl.privs("user@KERBER.TEST"), 0x01);
     assert_eq!(acl.privs("nobody@KERBER.TEST"), 0);
-    let with_e = Acl::parse("admin@KERBER.TEST *e\n");
-    assert!(with_e.check("admin@KERBER.TEST", AdminOp::Extract).is_ok());
+    let with_e = Acl::parse("admin@KERBER.TEST *e\n").expect("acl");
+    assert!(
+        with_e
+            .check("admin@KERBER.TEST", AdminOp::Extract, None)
+            .is_ok()
+    );
     assert_eq!(with_e.privs("admin@KERBER.TEST"), 0x7F);
+}
+
+#[test]
+fn acl_target_pattern_scopes_add_and_delete() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    // MIT match_data: `*` is a whole component; `user*` is a literal
+    // (settled live). `*@REALM` matches user2, not svc/x.
+    let acl = Acl::parse("scoped@KERBER.TEST ad *@KERBER.TEST\n").expect("acl");
+    let actor = "scoped@KERBER.TEST";
+    let user2 = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user2"]);
+    let svc = PrincipalName::new(PrincipalName::NT_SRV_INST, ["svc", "x"]);
+    store
+        .create_password(&acl, actor, &user2, b"user2-secret")
+        .expect("user2 in scope");
+    let err = store
+        .create_password(&acl, actor, &svc, b"svc-secret")
+        .unwrap_err();
+    assert_eq!(err, Error::AclDenied);
+    store
+        .delete(&acl, actor, &user2)
+        .expect("delete user2 in scope");
+}
+
+#[test]
+fn acl_target_backreference_matches_own_instance() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let acl = Acl::parse("*/admin@KERBER.TEST * */*1@KERBER.TEST\n").expect("acl");
+    let actor = "joe/admin@KERBER.TEST";
+    let own = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "joe"]);
+    let other = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "other"]);
+    store.create_host(&acl, actor, &own).expect("own instance");
+    assert_eq!(
+        store.create_host(&acl, actor, &other).unwrap_err(),
+        Error::AclDenied
+    );
+}
+
+#[test]
+fn acl_rename_needs_delete_on_src_and_add_on_dest_without_restrictions() {
+    let (mut store, admin_acl) = bootstrap_documented().expect("bootstrap");
+    let admin = documented_admin_id();
+    let user2 = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user2"]);
+    store
+        .create_password(&admin_acl, &admin, &user2, b"user2-secret")
+        .unwrap();
+    let acl = Acl::parse("scoped@KERBER.TEST ad *@KERBER.TEST\n").expect("acl");
+    let actor = "scoped@KERBER.TEST";
+    let svc = PrincipalName::new(PrincipalName::NT_SRV_INST, ["svc", "y"]);
+    assert_eq!(
+        store.rename(&acl, actor, &user2, &svc).unwrap_err(),
+        Error::AclDenied
+    );
+    let user3 = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user3"]);
+    store
+        .rename(&acl, actor, &user2, &user3)
+        .expect("user3 in scope");
+}
+
+#[test]
+fn acl_target_star_is_any() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let acl = Acl::parse("admin@KERBER.TEST a *\n").expect("acl");
+    let actor = "admin@KERBER.TEST";
+    let svc = PrincipalName::new(PrincipalName::NT_SRV_INST, ["svc", "any"]);
+    store
+        .create_host(&acl, actor, &svc)
+        .expect("* target is any");
+}
+
+#[test]
+fn kpasswd_acl_c_honours_target_pattern() {
+    let (mut store, admin_acl) = bootstrap_documented().expect("bootstrap");
+    let admin = documented_admin_id();
+    let user2 = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user2"]);
+    let svc = PrincipalName::new(PrincipalName::NT_SRV_INST, ["svc", "x"]);
+    store
+        .create_password(&admin_acl, &admin, &user2, b"user2-secret")
+        .unwrap();
+    store.create_host(&admin_acl, &admin, &svc).unwrap();
+    let acl = Acl::parse("pwadmin@KERBER.TEST c *@KERBER.TEST\n").expect("acl");
+    let actor = "pwadmin@KERBER.TEST";
+    store
+        .change_password(&acl, actor, &user2, b"user2-rotated")
+        .expect("cpw in scope");
+    assert_eq!(
+        store
+            .change_password(&acl, actor, &svc, b"svc-rotated")
+            .unwrap_err(),
+        Error::AclDenied
+    );
 }
 
 #[test]
@@ -490,18 +602,19 @@ fn hostile_keytab_does_not_panic() {
 fn kadmind_acl_follows_store_realm_or_acl_file() {
     let none = acl_for_store("PROD.KERBER.TEST", None).expect("default acl");
     assert!(
-        none.check("admin@PROD.KERBER.TEST", AdminOp::Create)
+        none.check("admin@PROD.KERBER.TEST", AdminOp::Create, None)
             .is_ok()
     );
     assert!(
         none.check(
             "kiprop/testhost.prod.kerber.test@PROD.KERBER.TEST",
-            AdminOp::Propagate
+            AdminOp::Propagate,
+            None,
         )
         .is_ok()
     );
     assert_eq!(
-        none.check("admin@KERBER.TEST", AdminOp::Create)
+        none.check("admin@KERBER.TEST", AdminOp::Create, None)
             .unwrap_err(),
         Error::AclDenied
     );
@@ -523,20 +636,20 @@ fn kadmind_acl_follows_store_realm_or_acl_file() {
     .unwrap();
     let file = acl_for_store("PROD.KERBER.TEST", Some(&path)).expect("file acl");
     assert!(
-        file.check("admin@PROD.KERBER.TEST", AdminOp::Create)
+        file.check("admin@PROD.KERBER.TEST", AdminOp::Create, None)
             .is_ok()
     );
     assert!(
-        file.check("operator@PROD.KERBER.TEST", AdminOp::Inquire)
+        file.check("operator@PROD.KERBER.TEST", AdminOp::Inquire, None)
             .is_ok()
     );
     assert_eq!(
-        file.check("admin@KERBER.TEST", AdminOp::Create)
+        file.check("admin@KERBER.TEST", AdminOp::Create, None)
             .unwrap_err(),
         Error::AclDenied
     );
     assert_eq!(
-        file.check("operator@PROD.KERBER.TEST", AdminOp::Create)
+        file.check("operator@PROD.KERBER.TEST", AdminOp::Create, None)
             .unwrap_err(),
         Error::AclDenied
     );
@@ -558,11 +671,12 @@ fn acl_file_without_realm_admin_add_is_discarded_not_merged() {
     std::fs::write(&path, "operator@PROD.KERBER.TEST *\n").unwrap();
     let acl = acl_for_store("PROD.KERBER.TEST", Some(&path)).expect("discard to default");
     assert!(
-        acl.check("admin@PROD.KERBER.TEST", AdminOp::Create).is_ok(),
+        acl.check("admin@PROD.KERBER.TEST", AdminOp::Create, None)
+            .is_ok(),
         "realm admin must keep * after discard"
     );
     assert_eq!(
-        acl.check("operator@PROD.KERBER.TEST", AdminOp::Create)
+        acl.check("operator@PROD.KERBER.TEST", AdminOp::Create, None)
             .unwrap_err(),
         Error::AclDenied,
         "operator grant must not merge in when the file is discarded"
@@ -573,11 +687,15 @@ fn acl_file_without_realm_admin_add_is_discarded_not_merged() {
 #[test]
 fn documented_kadm5_acl_file_shape() {
     let text = include_str!("../../../harness/kadm5.acl");
-    let acl = Acl::parse(text);
+    let acl = Acl::parse(text).expect("acl");
     // Harness ACL lists */admin@KERBER.TEST with *.
-    assert!(acl.check("foo/admin@KERBER.TEST", AdminOp::Create).is_ok());
+    assert!(
+        acl.check("foo/admin@KERBER.TEST", AdminOp::Create, None)
+            .is_ok()
+    );
     assert_eq!(
-        acl.check("user@KERBER.TEST", AdminOp::Create).unwrap_err(),
+        acl.check("user@KERBER.TEST", AdminOp::Create, None)
+            .unwrap_err(),
         Error::AclDenied
     );
 }

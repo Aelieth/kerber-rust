@@ -22,6 +22,8 @@ pub enum Error {
     },
     /// Actor is not permitted this admin operation.
     AclDenied,
+    /// kadm5.acl load failed (`acl_init`).
+    AclParse(String),
     /// Principal already exists.
     AlreadyExists,
     /// Principal is not in the store.
@@ -49,6 +51,7 @@ impl fmt::Display for Error {
                 None => write!(f, "KDC error {code}"),
             },
             Self::AclDenied => write!(f, "ACL denied"),
+            Self::AclParse(s) => write!(f, "ACL parse: {s}"),
             Self::AlreadyExists => write!(f, "principal exists"),
             Self::NotFound => write!(f, "principal not found"),
             Self::Rng => write!(f, "rng failed"),

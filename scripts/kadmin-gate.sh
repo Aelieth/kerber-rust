@@ -65,6 +65,8 @@ docker exec "$NAME" sh -c 'cat >/tmp/kadm5.acl <<EOF
 admin@KERBER.TEST *e
 extract/admin@KERBER.TEST *e
 norename@KERBER.TEST acilm
+scoped@KERBER.TEST ad *@KERBER.TEST
+restricted@KERBER.TEST a *@KERBER.TEST -clearpolicy
 EOF'
 
 docker exec -d \
@@ -412,6 +414,40 @@ if echo "$EXTKT" | grep -qiE 'extract-keys|AUTH_EXTRACT|Operation requires|while
     exit 1
 fi
 
+echo "==== ACL target pattern scoped addprinc user2 / svc/x ===="
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw scoped-secret scoped'
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw restricted-secret restricted'
+ADD_U2="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p scoped@KERBER.TEST -w scoped-secret -q 'addprinc -pw x user2' 2>&1 || true)"
+echo "$ADD_U2"
+echo "$ADD_U2" | grep -F 'Principal "user2@KERBER.TEST" created.'
+ADD_SVC="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p scoped@KERBER.TEST -w scoped-secret -q 'addprinc -pw x svc/x' 2>&1 || true)"
+echo "$ADD_SVC"
+echo "$ADD_SVC" | grep -F $'add_principal: Operation requires ``add\'\' privilege while creating "svc/x@KERBER.TEST".'
+if echo "$ADD_SVC" | grep -q 'Principal "svc/x@KERBER.TEST" created.'; then
+    echo "scoped addprinc svc/x succeeded (ACL target ignored)" >&2
+    exit 1
+fi
+REN_SVC="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p scoped@KERBER.TEST -w scoped-secret -q 'renprinc -force user2 svc/y' 2>&1 || true)"
+echo "$REN_SVC"
+echo "$REN_SVC" | grep -F 'Insufficient authorization for operation'
+REN_U3="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p scoped@KERBER.TEST -w scoped-secret -q 'renprinc -force user2 user3' 2>&1 || true)"
+echo "$REN_U3"
+echo "$REN_U3" | grep -qiE 'renamed to "user3@KERBER.TEST"|Principal "user2@KERBER.TEST" renamed'
+ADD_U9="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p restricted@KERBER.TEST -w restricted-secret -q 'addprinc -pw x -policy short8 user9' 2>&1 || true)"
+echo "$ADD_U9"
+echo "$ADD_U9" | grep -F 'Principal "user9@KERBER.TEST" created.'
+GET_U9="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc user9' 2>&1 || true)"
+echo "$GET_U9"
+echo "$GET_U9" | grep -F 'Policy: [none]'
+
 echo "==== MIT kadmin delprinc extra ===="
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'delprinc -force extra'
@@ -439,7 +475,9 @@ fi
 docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw extract-secret extract/admin'
 docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw adminpassword admin/admin'
 docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw norename-secret norename'
-docker exec "$NAME_MIT" sh -c 'printf "%s\n" "*/admin@KERBER.TEST *e" "extract/admin@KERBER.TEST *e" "norename@KERBER.TEST acilm" > /var/kerberos/krb5kdc/kadm5.acl'
+docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw scoped-secret scoped'
+docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw restricted-secret restricted'
+docker exec "$NAME_MIT" sh -c 'printf "%s\n" "*/admin@KERBER.TEST *e" "extract/admin@KERBER.TEST *e" "norename@KERBER.TEST acilm" "scoped@KERBER.TEST ad *@KERBER.TEST" "restricted@KERBER.TEST a *@KERBER.TEST -clearpolicy" > /var/kerberos/krb5kdc/kadm5.acl'
 docker exec "$NAME_MIT" sh -c '
 for comm in /proc/[0-9]*/comm; do
     [ -f "$comm" ] || continue
@@ -499,6 +537,26 @@ for run in 1 2; do
 done
 MITGETTGT="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc krbtgt/KERBER.TEST')"
 echo "$MITGETTGT" | grep -F 'Principal: krbtgt/KERBER.TEST@KERBER.TEST'
+
+echo "==== MIT ACL target pattern scoped addprinc user2 / svc/x ===="
+MIT_U2="$(docker exec "$NAME_MIT" kadmin -p scoped -w scoped-secret -q 'addprinc -pw x user2' 2>&1 || true)"
+echo "$MIT_U2"
+echo "$MIT_U2" | grep -F 'Principal "user2@KERBER.TEST" created.'
+MIT_SVC="$(docker exec "$NAME_MIT" kadmin -p scoped -w scoped-secret -q 'addprinc -pw x svc/x' 2>&1 || true)"
+echo "$MIT_SVC"
+echo "$MIT_SVC" | grep -F $'add_principal: Operation requires ``add\'\' privilege while creating "svc/x@KERBER.TEST".'
+MIT_REN_SVC="$(docker exec "$NAME_MIT" kadmin -p scoped -w scoped-secret -q 'renprinc -force user2 svc/y' 2>&1 || true)"
+echo "$MIT_REN_SVC"
+echo "$MIT_REN_SVC" | grep -F 'Insufficient authorization for operation'
+MIT_REN_U3="$(docker exec "$NAME_MIT" kadmin -p scoped -w scoped-secret -q 'renprinc -force user2 user3' 2>&1 || true)"
+echo "$MIT_REN_U3"
+echo "$MIT_REN_U3" | grep -F 'Principal "user2@KERBER.TEST" renamed to "user3@KERBER.TEST".'
+MIT_U9="$(docker exec "$NAME_MIT" kadmin -p restricted -w restricted-secret -q 'addprinc -pw x -policy short8 user9' 2>&1 || true)"
+echo "$MIT_U9"
+echo "$MIT_U9" | grep -F 'Principal "user9@KERBER.TEST" created.'
+MIT_GET_U9="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc user9')"
+echo "$MIT_GET_U9"
+echo "$MIT_GET_U9" | grep -F 'Policy: [none]'
 
 echo "==== MIT purgekeys krbtgt succeeds (no lockdown check) ===="
 MITPURGE="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'purgekeys krbtgt/KERBER.TEST' 2>&1 || true)"

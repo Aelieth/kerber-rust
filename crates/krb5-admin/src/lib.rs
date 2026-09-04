@@ -41,7 +41,7 @@ pub fn load_acl_file(actor: &str, path: Option<&std::path::Path>) -> Result<Acl,
     match path {
         Some(p) => {
             let t = std::fs::read_to_string(p).map_err(|e| format!("ACL {}: {e}", p.display()))?;
-            Ok(Acl::parse(&t))
+            Acl::parse(&t).map_err(|e| e.to_string())
         }
         None => Ok(Acl::allow_admin(actor)),
     }
@@ -225,6 +225,10 @@ impl<'a> AdminSession<'a> {
         self.store.reload_if_stale().map_err(Error::from)
     }
 
+    fn target_id(&self, name: &PrincipalName) -> String {
+        format!("{}@{}", name.components_joined(), self.store.realm())
+    }
+
     /// Create a password principal (ACL `add`).
     ///
     /// # Errors
@@ -256,8 +260,9 @@ impl<'a> AdminSession<'a> {
     /// ACL or not found.
     pub fn chrand(&mut self, name: &PrincipalName) -> Result<(), Error> {
         self.reload()?;
+        let tid = self.target_id(name);
         self.acl
-            .check(&self.actor, AdminOp::ChangePassword)
+            .check(&self.actor, AdminOp::ChangePassword, Some(&tid))
             .map_err(Error::from)?;
         self.store.chrand(name).map(|_| ()).map_err(Error::from)
     }
@@ -320,12 +325,13 @@ impl<'a> AdminSession<'a> {
         write: impl FnOnce(&Keytab) -> Result<(), String>,
     ) -> Result<Keytab, Error> {
         self.reload()?;
+        let tid = self.target_id(name);
         self.acl
-            .check(&self.actor, AdminOp::Ktadd)
+            .check(&self.actor, AdminOp::Ktadd, Some(&tid))
             .map_err(Error::from)?;
         if rotate {
             self.acl
-                .check(&self.actor, AdminOp::ChangePassword)
+                .check(&self.actor, AdminOp::ChangePassword, Some(&tid))
                 .map_err(Error::from)?;
         }
         self.store
@@ -351,8 +357,9 @@ impl<'a> AdminSession<'a> {
             krb5_types::principal_compare(name, store_realm, &actor, arealm)
         });
         if !self_change {
+            let tid = self.target_id(name);
             self.acl
-                .check(&self.actor, AdminOp::ChangePassword)
+                .check(&self.actor, AdminOp::ChangePassword, Some(&tid))
                 .map_err(Error::from)?;
         }
         self.store.set_password(name, password).map_err(Error::from)
@@ -391,12 +398,19 @@ impl<'a> AdminSession<'a> {
         attributes: Option<u32>,
     ) -> Result<(), Error> {
         self.reload()?;
+        let tid = self.target_id(name);
         self.acl
-            .check(&self.actor, AdminOp::Modify)
+            .check(&self.actor, AdminOp::Modify, Some(&tid))
             .map_err(Error::from)?;
         self.store
             .apply_admin_fields(name, attributes, None, None, None, None, false)
-            .map_err(Error::from)
+            .map_err(Error::from)?;
+        if let Some(rs) = self.acl.restrictions(&self.actor, Some(&tid)) {
+            self.store
+                .impose_acl_restrictions(name, rs)
+                .map_err(Error::from)?;
+        }
+        Ok(())
     }
 
     /// `modprinc -policy`.
@@ -406,12 +420,19 @@ impl<'a> AdminSession<'a> {
     /// ACL or not found.
     pub fn set_policy(&mut self, name: &PrincipalName, policy: &str) -> Result<(), Error> {
         self.reload()?;
+        let tid = self.target_id(name);
         self.acl
-            .check(&self.actor, AdminOp::Modify)
+            .check(&self.actor, AdminOp::Modify, Some(&tid))
             .map_err(Error::from)?;
         self.store
             .apply_admin_fields(name, None, None, None, None, Some(policy.to_owned()), false)
-            .map_err(Error::from)
+            .map_err(Error::from)?;
+        if let Some(rs) = self.acl.restrictions(&self.actor, Some(&tid)) {
+            self.store
+                .impose_acl_restrictions(name, rs)
+                .map_err(Error::from)?;
+        }
+        Ok(())
     }
 
     /// `addpol`.
@@ -2323,7 +2344,10 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         assert!(load_acl_file("admin@KERBER.TEST", Some(&path)).is_err());
         let acl = load_acl_file("admin@KERBER.TEST", None).unwrap();
-        assert!(acl.check("admin@KERBER.TEST", AdminOp::Create).is_ok());
+        assert!(
+            acl.check("admin@KERBER.TEST", AdminOp::Create, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -2331,7 +2355,10 @@ mod tests {
         let path = std::env::temp_dir().join(format!("krb5-acl-ok-{}", std::process::id()));
         std::fs::write(&path, "admin@KERBER.TEST *\n").unwrap();
         let acl = load_acl_file("other@KERBER.TEST", Some(&path)).unwrap();
-        assert!(acl.check("admin@KERBER.TEST", AdminOp::Create).is_ok());
+        assert!(
+            acl.check("admin@KERBER.TEST", AdminOp::Create, None)
+                .is_ok()
+        );
         let _ = std::fs::remove_file(&path);
     }
 

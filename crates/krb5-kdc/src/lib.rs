@@ -21,7 +21,7 @@ mod plugins;
 mod preauth;
 mod store;
 
-pub use acl::{Acl, AclEntry, AdminOp};
+pub use acl::{Acl, AclEntry, AdminOp, Restrictions};
 pub use ad::{
     decrypt_ticket_part, pac_from_ticket_part, sign_pac, ticket_checksum_der, verify_pac,
     verify_pac_signatures, wrap_win2k_pac,
@@ -129,16 +129,16 @@ pub fn acl_for_store(realm: &str, acl_file: Option<&std::path::Path>) -> Result<
     let default = Acl::parse(&format!(
         "{} *\nkiprop/*@{realm} p\n",
         admin_id_for_realm(realm)
-    ));
+    ))?;
     let Some(path) = acl_file else {
         return Ok(default);
     };
     let text = std::fs::read_to_string(path)
         .map_err(|e| Error::Crypto(format!("acl_file {}: {e}", path.display())))?;
-    let parsed = Acl::parse(&text);
+    let parsed = Acl::parse(&text)?;
     // MIT harness `*/admin@REALM` does not match `admin@REALM`; discard the file whole.
     if parsed
-        .check(&admin_id_for_realm(realm), AdminOp::Create)
+        .check(&admin_id_for_realm(realm), AdminOp::Create, None)
         .is_ok()
     {
         Ok(parsed)

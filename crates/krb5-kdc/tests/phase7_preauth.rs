@@ -148,17 +148,17 @@ fn kpasswd_bumps_kvno_single_active_and_switches_password() {
 #[test]
 fn kpasswd_denied_without_changepw_acl() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    let acl = Acl::parse("admin@KERBER.TEST a\n");
+    let acl = Acl::parse("admin@KERBER.TEST a\n").expect("acl");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let err = store
         .change_password(&acl, "admin@KERBER.TEST", &cname, b"x")
         .unwrap_err();
     assert_eq!(err, Error::AclDenied);
     assert!(
-        acl.check("admin@KERBER.TEST", AdminOp::ChangePassword)
+        acl.check("admin@KERBER.TEST", AdminOp::ChangePassword, None)
             .is_err()
     );
-    let acl_c = Acl::parse("admin@KERBER.TEST c\n");
+    let acl_c = Acl::parse("admin@KERBER.TEST c\n").expect("acl");
     store
         .change_password(&acl_c, "admin@KERBER.TEST", &cname, b"ok-pass")
         .expect("c bit allows cpw");
