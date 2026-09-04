@@ -519,30 +519,37 @@ fn hmac_md5_simple(key: &[u8], data: &[u8]) -> Result<Vec<u8>, Error> {
     Ok(mac.finalize().into_bytes().to_vec())
 }
 
-/// RFC 4757 HMAC-MD5-ARCFOUR checksum (cksumtype -138).
+/// RFC 4757 HMAC-MD5-ARCFOUR (`-138`) / MD5-HMAC-ARCFOUR (`-137`).
 ///
-/// MS-SFU PA-FOR-USER uses this with the TGT session key even when that
-/// key is AES (MIT `krb5int_hmacmd5_checksum`). Key length must be ≤ 64.
+/// MIT `checksum_hmac_md5.c:53-66`: `-138` signs with HMAC(key,
+/// `"signaturekey\0"`); `-137` uses the raw key. Usage map is
+/// `enc_rc4.c:17-35`.
 ///
 /// # Errors
 ///
 /// Key longer than the MD5 block, or HMAC setup failure.
-pub fn hmac_md5_arcfour_checksum(key: &[u8], usage: u32, message: &[u8]) -> Result<Vec<u8>, Error> {
+pub fn hmac_md5_arcfour_checksum(
+    key: &[u8],
+    usage: u32,
+    message: &[u8],
+    ctype: i32,
+) -> Result<Vec<u8>, Error> {
     use md5::{Digest, Md5};
     if key.len() > 64 {
         return Err(Error::InvalidKeyLength);
     }
-    let mapped = match usage {
-        3 | 9 => 8,
-        23 => 13,
-        n => n,
+    let mapped = crate::weak::arcfour_translate_usage(usage);
+    let ksign = if ctype == -137 {
+        None
+    } else {
+        Some(hmac_md5_simple(key, b"signaturekey\0")?)
     };
-    let ksign = hmac_md5_simple(key, b"signaturekey\0")?;
+    let mac_key = ksign.as_deref().unwrap_or(key);
     let mut hasher = Md5::new();
     hasher.update(mapped.to_le_bytes());
     hasher.update(message);
     let hashval = hasher.finalize();
-    hmac_md5_simple(&ksign, &hashval)
+    hmac_md5_simple(mac_key, &hashval)
 }
 
 /// Constant-time verify of a keyed checksum.
@@ -701,7 +708,7 @@ fn keyed_checksum_for_type(
     ctype: i32,
 ) -> Result<Vec<u8>, Error> {
     match ctype {
-        -137 | -138 => hmac_md5_arcfour_checksum(key.as_bytes(), usage.get(), message),
+        -137 | -138 => hmac_md5_arcfour_checksum(key.as_bytes(), usage.get(), message, ctype),
         _ => {
             let etype = cksumtype_compute_etype(ctype)?;
             let tmp = ProtocolKey::from_bytes(etype, key.as_bytes())?;
@@ -740,5 +747,24 @@ fn emit(
             duration_us,
             outcome = "ok",
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use md5::{Digest, Md5};
+
+    #[test]
+    fn verify_checksum_type_md5_hmac_rc4_uses_raw_key() {
+        let key = ProtocolKey::from_bytes(EncryptionType::Rc4Hmac, &[0x11u8; 16]).unwrap();
+        let usage = KeyUsage::new(9).unwrap();
+        let msg = b"kerber-rust-i2";
+        let mut hasher = Md5::new();
+        hasher.update(9u32.to_le_bytes());
+        hasher.update(msg);
+        let hashval = hasher.finalize();
+        let expected = hmac_md5_simple(key.as_bytes(), &hashval).unwrap();
+        verify_checksum_type(&key, usage, msg, -137, &expected).expect("raw-key -137");
     }
 }

@@ -296,6 +296,17 @@ mod tests {
     }
 
     #[test]
+    fn arcfour_usage_9_is_9() {
+        let k = crate::ops::string_to_key(EncryptionType::Rc4Hmac, b"password", b"", None).unwrap();
+        let u9 = crate::etype::KeyUsage::new(9).unwrap();
+        let u8 = crate::etype::KeyUsage::new(8).unwrap();
+        let conf = [9u8; 8];
+        let a = crate::weak::rc4_encrypt_with_conf(&k, u9, &conf, b"x").unwrap();
+        let b = crate::weak::rc4_encrypt_with_conf(&k, u8, &conf, b"x").unwrap();
+        assert_ne!(a, b, "enc_rc4.c:26 case 9 returns 9");
+    }
+
+    #[test]
     fn camellia_ciphertext_differs_from_aes() {
         let cam = crate::ops::string_to_key(
             EncryptionType::Camellia128CtsCmac,

@@ -22,6 +22,17 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0f I2.** cksumtype `-137` (`MD5_HMAC_ARCFOUR`) is HMAC(raw key,
+  MD5(le32(usage) ‖ msg)) with no `signaturekey` KS
+  (`checksum_hmac_md5.c:53-66`); `-138` still derives KS. RC4 usage map
+  is `3→8, 9→9, 23→13` (`enc_rc4.c:17-35`) in checksum and encryption
+  paths. Units: `verify_checksum_type_md5_hmac_rc4_uses_raw_key`,
+  `arcfour_usage_9_is_9`. Live: this MIT 1.22.2 image returns
+  `KDC has no support for encryption type` for an rc4-only `kinit`
+  even with `allow_rc4` and `supported_enctypes` `rc4-hmac:normal`;
+  Rust bootstrap has no rc4 long-term keys, so the KDC cannot mint
+  rc4 session keys.
+
 - **W0f I1.** kadm5.acl target patterns and restrictions match MIT
   `auth_acl.c`: grammar `<principal> <opstring> [<target>
   [<restrictions>]]`; `*` target is any; `match_princ` same component

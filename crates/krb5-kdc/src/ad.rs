@@ -286,8 +286,12 @@ pub(crate) fn s4u2self_client(
     let data = krb5_types::s4u::pa_for_user_cksum_data(&pa.user_name, realm, pkg);
     let usage = KeyUsage::new(ku::PA_FOR_USER)?;
     let mic = checksum(tgt_session, usage, &data)?;
-    let hmac_md5 =
-        krb5_crypto::hmac_md5_arcfour_checksum(tgt_session.as_bytes(), ku::PA_FOR_USER, &data)?;
+    let hmac_md5 = krb5_crypto::hmac_md5_arcfour_checksum(
+        tgt_session.as_bytes(),
+        ku::PA_FOR_USER,
+        &data,
+        -138,
+    )?;
     let got = pa.cksum.checksum.as_ref();
     if got != mic.as_slice() && got != hmac_md5.as_slice() {
         return Err(proto(err::INAPP_CKSUM, "PA-FOR-USER"));

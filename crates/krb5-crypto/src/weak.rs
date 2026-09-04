@@ -84,13 +84,18 @@ fn hmac_md5(key: &[u8], data: &[u8]) -> Result<Vec<u8>, Error> {
     Ok(mac.finalize().into_bytes().to_vec())
 }
 
-/// RFC 4757 usage translation (MIT `map_arcfour_gss`).
-fn rc4_usage(usage: KeyUsage) -> u32 {
-    match usage.get() {
-        3 | 9 => 8,
+/// MIT `enc_rc4.c:17-35` `krb5int_arcfour_translate_usage`.
+pub(crate) fn arcfour_translate_usage(usage: u32) -> u32 {
+    match usage {
+        3 => 8,
+        9 => 9,
         23 => 13,
         n => n,
     }
+}
+
+fn rc4_usage(usage: KeyUsage) -> u32 {
+    arcfour_translate_usage(usage.get())
 }
 
 fn apply_rc4(key: &[u8], data: &mut [u8]) -> Result<(), Error> {
