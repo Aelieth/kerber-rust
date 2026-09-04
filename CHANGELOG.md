@@ -22,6 +22,17 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0f I5.** Malformed kpasswd pre-AP-REQ datagrams (inconsistent
+  length, unknown version, truncated) produce no reply, matching MIT
+  `schpw.c:62-68,76-82` `goto bailout` and `dispatch`
+  `respond(..., NULL)`. The UDP path logs MIT com_err text
+  (`Message stream modified` / `Requested protocol version not
+  supported`) plus `- while dispatching (udp)` (`net-server.c:1103`).
+  Units: `kpasswd_unknown_version_is_bad_version`,
+  `kpasswd_inconsistent_length_is_malformed`. Gate:
+  `scripts/kpasswd-gate.sh` raw datagram both legs (timeout + pinned
+  log; no `hex=` on Rust).
+
 - **W0f I4.** FAST unwrap is decrypt → decode → verify like
   `fast_util.c:191-222`. Every unwrap error including store/`other`
   wires `FIND_FAST`; provider-mismatch detail is MIT `Bad encryption
@@ -88,15 +99,11 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   x` both legs.
 
 - **W0e H6.** kpasswd validates the length prefix and version before
-  AP-REQ work like `process_chpw_request` (`schpw.c:60-82`): `plen !=
-  len` is result 1 `Request length was inconsistent`; `vno ∉ {1,
-  0xff80}` is result 6 `Request contained unknown protocol version
-  number %d`. Those replies are framed KRB-ERROR `ap_rep_len=0` with
-  the result in `e_data` like `chpwfail` (`schpw.c:290-345`). MIT
-  1.22.2 `goto bailout` and `dispatch` sends no reply; Rust implements
-  the chpwfail framing. `ChangePasswdData` is decoded only for
-  `0xff80` (decode failure is result 1); vno-1 valid DER stays a
-  password. Units: `kpasswd_unknown_version_is_bad_version`,
+  AP-REQ work like `process_chpw_request` (`schpw.c:60-82`). W0f I5
+  drops those datagrams like MIT `goto bailout` / `dispatch`
+  `respond(..., NULL)` instead of framing a KRB-ERROR. `ChangePasswdData`
+  is decoded only for `0xff80` (decode failure is result 1); vno-1 valid
+  DER stays a password. Units: `kpasswd_unknown_version_is_bad_version`,
   `kpasswd_inconsistent_length_is_malformed`,
   `kpasswd_vno1_der_stays_password`,
   `kpasswd_setpw_decode_failure_is_malformed`. Gate:

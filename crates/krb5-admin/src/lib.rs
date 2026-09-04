@@ -587,21 +587,6 @@ mod tests {
         req
     }
 
-    fn kpasswd_framed_edata(rep: &[u8]) -> (i32, u16, Vec<u8>) {
-        use krb5_asn1::decode;
-        use krb5_types::KrbError;
-        assert!(rep.len() > 6, "framed reply");
-        assert_eq!(u16::from_be_bytes([rep[4], rep[5]]), 0, "ap_rep_len=0");
-        let err: KrbError = decode(&rep[6..]).expect("KRB-ERROR");
-        let edata = err.e_data.expect("e_data");
-        assert!(edata.len() >= 2, "result+text");
-        (
-            err.error_code,
-            u16::from_be_bytes([edata[0], edata[1]]),
-            edata[2..].to_vec(),
-        )
-    }
-
     fn changepw_tgs_ticket(
         store: &krb5_kdc::PrincipalStore,
         user: &PrincipalName,
@@ -1729,7 +1714,6 @@ mod tests {
     #[test]
     fn kpasswd_unknown_version_is_bad_version() {
         use krb5_kdc::{documented_changepw, shared_dump as shared_store};
-        use krb5_types::err;
 
         let (store, acl) = bootstrap_documented().unwrap();
         let cpw_key = store
@@ -1741,21 +1725,18 @@ mod tests {
             .clone();
         let req = [0u8, 6, 0, 2, 0, 0];
         let shared = shared_store(store);
-        let rep = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req)
-            .expect("framed BAD_VERSION");
-        let (proto, result, text) = kpasswd_framed_edata(&rep);
-        assert_eq!(proto, err::BAD_PVNO);
-        assert_eq!(result, 6);
-        assert_eq!(
-            text,
-            b"Request contained unknown protocol version number 2".to_vec()
+        let err = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req)
+            .expect_err("MIT dispatch sends no reply");
+        assert!(
+            err.to_string()
+                .contains("Requested protocol version not supported"),
+            "{err}"
         );
     }
 
     #[test]
     fn kpasswd_inconsistent_length_is_malformed() {
         use krb5_kdc::{documented_changepw, shared_dump as shared_store};
-        use krb5_types::err;
 
         let (store, acl) = bootstrap_documented().unwrap();
         let cpw_key = store
@@ -1767,12 +1748,9 @@ mod tests {
             .clone();
         let req = [0u8, 99, 0, 1, 0, 0];
         let shared = shared_store(store);
-        let rep = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req)
-            .expect("framed MALFORMED");
-        let (proto, result, text) = kpasswd_framed_edata(&rep);
-        assert_eq!(proto, err::MODIFIED);
-        assert_eq!(result, 1);
-        assert_eq!(text, b"Request length was inconsistent".to_vec());
+        let err = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req)
+            .expect_err("MIT dispatch sends no reply");
+        assert!(err.to_string().contains("Message stream modified"), "{err}");
     }
 
     #[test]

@@ -13,10 +13,7 @@ use krb5_kdc::{SharedDump as SharedStore, save_store};
 use krb5_protocol::{
     ReplayCache, build_ap_rep, build_krb_priv_with_seq, unwrap_krb_priv_ex, verify_ap_req,
 };
-use krb5_types::{
-    ChangePasswdData, EncryptionKey, KerberosTime, KrbError, Microseconds, PrincipalName, ascii,
-    err, principal_compare,
-};
+use krb5_types::{ChangePasswdData, EncryptionKey, PrincipalName, principal_compare};
 
 use crate::{AdminSession, Error, Op};
 
@@ -374,40 +371,6 @@ const UNK_PRINC_PRIV: &str =
     "Password not changed.\nPrincipal does not exist while trying to change password.\n";
 const DECODE_FAIL: &str = "Failed decoding ChangePasswdData";
 
-fn kpasswd_preauth_error(
-    store: &SharedStore,
-    proto: i32,
-    result: u16,
-    text: &str,
-) -> Result<Vec<u8>, Error> {
-    let realm = {
-        let g = store
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        g.realm().to_owned()
-    };
-    let mut edata = Vec::with_capacity(2 + text.len());
-    edata.extend_from_slice(&result.to_be_bytes());
-    edata.extend_from_slice(text.as_bytes());
-    let err = KrbError {
-        pvno: KrbError::PVNO,
-        msg_type: KrbError::MSG_TYPE,
-        ctime: None,
-        cusec: None,
-        stime: KerberosTime::now(),
-        susec: Microseconds::ZERO,
-        error_code: proto,
-        crealm: None,
-        cname: None,
-        realm: ascii(&realm),
-        sname: PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "changepw"]),
-        e_text: None,
-        e_data: Some(edata.into()),
-    };
-    let der = encode(&err).map_err(|e| Error::Inner(e.to_string()))?;
-    Ok(frame_kpasswd_rep(&[], &der))
-}
-
 fn handle_kpasswd_from(
     store: &SharedStore,
     acl: &krb5_kdc::Acl,
@@ -422,16 +385,14 @@ fn handle_kpasswd_from(
     }
     let plen = usize::from(u16::from_be_bytes([raw[0], raw[1]]));
     if plen != raw.len() {
-        return kpasswd_preauth_error(store, err::MODIFIED, 1, "Request length was inconsistent");
+        // MIT schpw.c:62-68 goto bailout; dispatch sends no datagram.
+        return Err(Error::Inner("Message stream modified".into()));
     }
     let ver = u16::from_be_bytes([raw[2], raw[3]]);
     if ver != 1 && ver != RFC3244_VERSION {
-        return kpasswd_preauth_error(
-            store,
-            err::BAD_PVNO,
-            6,
-            &format!("Request contained unknown protocol version number {ver}"),
-        );
+        return Err(Error::Inner(
+            "Requested protocol version not supported".into(),
+        ));
     }
     if raw.len() < 6 {
         return Err(Error::Inner("kpasswd truncated".into()));
@@ -630,6 +591,7 @@ pub fn serve_kpasswd_udp(
                         component = "krb5-admin",
                         outcome = "error",
                         error = %e,
+                        "{e} - while dispatching (udp)"
                     ),
                 }
             }

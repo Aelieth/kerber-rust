@@ -18,9 +18,8 @@ log() {
         "$1" "$CORRELATION_ID" "$2" "${3:-}"
 }
 
-# Raw UDP kpasswd: vno 0x0002 → result 6; plen != len → result 1.
-# MIT schpw.c:60-82 sets those results then goto bailout; dispatch sends
-# no reply. Rust frames KRB-ERROR ap_rep_len=0 with e_data like chpwfail.
+# Raw UDP kpasswd: vno 0x0002 / plen != len. MIT schpw.c:60-82 sets
+# numresult then goto bailout; dispatch logs com_err and sends no datagram.
 kpasswd_raw() {
     local ctn=$1 kind=$2
     docker exec "$ctn" python3 -c '
@@ -53,19 +52,40 @@ if b"Request length was inconsistent" in data:
 ' "$kind"
 }
 
+# MIT schpw.c goto bailout; dispatch logs com_err and sends no framed reply.
 pin_kpasswd_raw_rust() {
-    local run
+    local run nlog OUT rc
     for run in 1 2; do
+        nlog="$(docker exec "$NAME" sh -c 'wc -l < /tmp/kadmind.log' | tr -d '[:space:]')"
         echo "---- Rust raw vno $run ----"
+        set +e
         OUT="$(kpasswd_raw "$NAME" vno)"
+        rc=$?
+        set -e
         echo "$OUT"
-        echo "$OUT" | grep -F 'result=6'
-        echo "$OUT" | grep -F 'text=unknown_version'
+        [ "$rc" -eq 2 ]
+        echo "$OUT" | grep -F timeout
+        if echo "$OUT" | grep -F 'hex='; then
+            echo "Rust framed a malformed kpasswd datagram" >&2
+            exit 1
+        fi
+        docker exec "$NAME" sh -c "tail -n +$((nlog + 1)) /tmp/kadmind.log" \
+            | grep -F 'Requested protocol version not supported - while dispatching (udp)'
+        nlog="$(docker exec "$NAME" sh -c 'wc -l < /tmp/kadmind.log' | tr -d '[:space:]')"
         echo "---- Rust raw len $run ----"
+        set +e
         OUT="$(kpasswd_raw "$NAME" len)"
+        rc=$?
+        set -e
         echo "$OUT"
-        echo "$OUT" | grep -F 'result=1'
-        echo "$OUT" | grep -F 'text=inconsistent_length'
+        [ "$rc" -eq 2 ]
+        echo "$OUT" | grep -F timeout
+        if echo "$OUT" | grep -F 'hex='; then
+            echo "Rust framed a malformed kpasswd datagram" >&2
+            exit 1
+        fi
+        docker exec "$NAME" sh -c "tail -n +$((nlog + 1)) /tmp/kadmind.log" \
+            | grep -F 'Message stream modified - while dispatching (udp)'
     done
 }
 
