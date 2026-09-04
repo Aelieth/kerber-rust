@@ -33,6 +33,8 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   `acl_flag_aliases_parse`, `acl_comment_only_at_column_zero`,
   `acl_backslash_continuation`, `acl_allow_admin_rejects_unparseable`.
   Gate: `scripts/kadmin-gate.sh` `*D` / admin-less / `aZ` both legs.
+  Harness `kadm5.acl` lists `admin@KERBER.TEST`, `*/admin@`, and
+  `kiprop/*` `p` (the file is the ACL; no fallback).
 
 - **W0f I8.** Ledger header recount 244 = 116+67+61 (exact 54 ·
   deviation 96). AS time/flag anchors are `issue.rs:1697-1734`.

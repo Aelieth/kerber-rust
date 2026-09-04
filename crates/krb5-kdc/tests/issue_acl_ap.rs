@@ -719,6 +719,14 @@ fn documented_kadm5_acl_file_shape() {
         acl.check("foo/admin@KERBER.TEST", AdminOp::Create, None)
             .is_ok()
     );
+    assert!(
+        acl.check(
+            "kiprop/testhost.kerber.test@KERBER.TEST",
+            AdminOp::Propagate,
+            None,
+        )
+        .is_ok()
+    );
     assert_eq!(
         acl.check("user@KERBER.TEST", AdminOp::Create, None)
             .unwrap_err(),
