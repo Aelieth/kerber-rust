@@ -137,7 +137,7 @@ start-realm in the service loop; acceptor kvno / transited re-check;
 ERROR-level `asn1.decode`/`crypto.decrypt` on expected failures.
 W1-C: kpasswd result-code strings (version/length + `chpwfail` framing landed W0e H6); kadmind chpw log `from <addr>`;
 `kprop.rs` per-connection rcache; `dfl` restart cell; min_life/dictionary;
-kadm5 ACL denial codes; policy-rejection text.
+kadm5 ACL denial codes (rename AUTH_INSUFFICIENT-before-lockdown landed W0e H7); policy-rejection text.
 
 OTP kdcpreauth, PA-S4U-X509-USER, PKINIT freshness, anonymous PKINIT stay
 deferred with those promotion oracles (Batch D / user non-goal).

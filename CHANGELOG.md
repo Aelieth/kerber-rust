@@ -22,6 +22,14 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0e H7.** kadm5 rename checks ACL before lockdown like
+  `rename_principal_2_svc` (`server_stubs.c:700-712`): unauthorised
+  rename is `KADM5_AUTH_INSUFFICIENT` (43787525) `Insufficient
+  authorization for operation`, not `AUTH_DELETE`. Unit:
+  `rename_unauthorised_lockdown_is_auth_insufficient`. Gate:
+  `scripts/kadmin-gate.sh` ACL-without-`d` `renprinc krbtgt/KERBER.TEST
+  x` both legs.
+
 - **W0e H6.** kpasswd validates the length prefix and version before
   AP-REQ work like `process_chpw_request` (`schpw.c:60-82`): `plen !=
   len` is result 1 `Request length was inconsistent`; `vno ∉ {1,

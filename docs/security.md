@@ -106,7 +106,9 @@ maps lockdown to the privilege codes MIT kadmind remaps in
 `server_stubs.c`: extract `KADM5_AUTH_EXTRACT`, chpass
 `KADM5_AUTH_CHANGEPW`, setkey `KADM5_AUTH_SETKEY`, delete
 `KADM5_AUTH_DELETE`, modify that clears the bit `KADM5_AUTH_MODIFY`,
-rename of the source `KADM5_AUTH_DELETE`. Purgekeys stays
+rename of the source `KADM5_AUTH_DELETE` after the ACL check.
+Unauthorised rename is `KADM5_AUTH_INSUFFICIENT` first
+(`server_stubs.c:700-712`). Purgekeys stays
 `KADM5_PROTECT_KEYS` (stricter than MIT, which has no lockdown check).
 `kadmin.local` ktadd ignores lockdown like MIT. Create-time name
 special-casing keeps `PWCHANGE_SERVICE` only (`create_principal` has

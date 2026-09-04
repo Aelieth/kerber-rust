@@ -93,6 +93,8 @@ const KADM5_PASS_REUSE: u32 = 43_787_545;
 const KADM5_AUTH_MODIFY: u32 = 43_787_523;
 /// MIT `ovk` 4 (`KADM5_AUTH_DELETE`).
 const KADM5_AUTH_DELETE: u32 = 43_787_524;
+/// MIT `ovk` 5 (`KADM5_AUTH_INSUFFICIENT`).
+const KADM5_AUTH_INSUFFICIENT: u32 = 43_787_525;
 /// MIT `ovk` 1 (`KADM5_AUTH_GET`).
 const KADM5_AUTH_GET: u32 = 43_787_521;
 /// MIT `ovk` 45 (`KADM5_AUTH_CHANGEPW`).
@@ -1493,6 +1495,12 @@ fn dispatch_kadm5(
         }
         RENAME_PRINCIPAL => {
             let (old, new) = parse_rename(args)?;
+            // MIT server_stubs.c:700-712: ACL (AUTH_INSUFFICIENT) then lockdown (AUTH_DELETE).
+            if acl.check(actor, krb5_kdc::AdminOp::Create).is_err()
+                || acl.check(actor, krb5_kdc::AdminOp::Delete).is_err()
+            {
+                return Ok(generic_ret(API_V2, KADM5_AUTH_INSUFFICIENT));
+            }
             let mut g = match write_store(store, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
@@ -2530,7 +2538,7 @@ mod tests {
         w2.nullstring(Some(&format!("renameto@{TEST_REALM}")));
         w2.nullstring(Some(&format!("renamefrom@{TEST_REALM}")));
         let denied = dispatch_kadm5(&shared, &add_only, &actor, RENAME_PRINCIPAL, &w2.b).unwrap();
-        assert_ne!(&denied[4..8], &0u32.to_be_bytes());
+        assert_eq!(ret_code(&denied), KADM5_AUTH_INSUFFICIENT);
         let g = shared.read().unwrap();
         assert!(g.get_name(&new).is_some());
         assert!(g.get_name(&old).is_none());
@@ -3527,6 +3535,33 @@ mod tests {
         w.nullstring(Some("renamed@KERBER.TEST"));
         let out = dispatch_kadm5(&store, &acl, &actor, RENAME_PRINCIPAL, &w.b).unwrap();
         assert_eq!(ret_code(&out), KADM5_AUTH_DELETE);
+        assert!(store.read().unwrap().get_name(&user).is_some());
+    }
+
+    #[test]
+    fn rename_unauthorised_lockdown_is_auth_insufficient() {
+        let (store, _acl, actor) = setup();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+        {
+            let mut g = store.write().unwrap();
+            g.apply_admin_fields(
+                &user,
+                Some(KDB_LOCKDOWN_KEYS),
+                None,
+                None,
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+        }
+        let add_only = Acl::parse("admin@KERBER.TEST a\n");
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some("user@KERBER.TEST"));
+        w.nullstring(Some("renamed@KERBER.TEST"));
+        let out = dispatch_kadm5(&store, &add_only, &actor, RENAME_PRINCIPAL, &w.b).unwrap();
+        assert_eq!(ret_code(&out), KADM5_AUTH_INSUFFICIENT);
         assert!(store.read().unwrap().get_name(&user).is_some());
     }
 

@@ -64,6 +64,7 @@ fi
 docker exec "$NAME" sh -c 'cat >/tmp/kadm5.acl <<EOF
 admin@KERBER.TEST *e
 extract/admin@KERBER.TEST *e
+norename@KERBER.TEST acilm
 EOF'
 
 docker exec -d \
@@ -376,6 +377,20 @@ RENCPW="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
 echo "$RENCPW"
 echo "$RENCPW" | grep -F "delete'' privilege"
 
+echo "==== ACL without d renprinc krbtgt is AUTH_INSUFFICIENT ===="
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw norename-secret norename'
+for run in 1 2; do
+    echo "---- Rust norename krbtgt $run ----"
+    RENACL="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+        "$NAME" kadmin -p norename@KERBER.TEST -w norename-secret -q 'renprinc -force krbtgt/KERBER.TEST x' 2>&1 || true)"
+    echo "$RENACL"
+    echo "$RENACL" | grep -F 'Insufficient authorization for operation'
+done
+GETTGT="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc krbtgt/KERBER.TEST' 2>&1 || true)"
+echo "$GETTGT" | grep -F 'Principal: krbtgt/KERBER.TEST@KERBER.TEST'
+
 echo "==== purgekeys krbtgt is protect-keys (Rust stricter) ===="
 PURGE_TGT="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'purgekeys krbtgt/KERBER.TEST' 2>&1 || true)"
@@ -423,7 +438,8 @@ if [ "$ok" != 1 ]; then
 fi
 docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw extract-secret extract/admin'
 docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw adminpassword admin/admin'
-docker exec "$NAME_MIT" sh -c 'printf "%s\n" "*/admin@KERBER.TEST *e" "extract/admin@KERBER.TEST *e" > /var/kerberos/krb5kdc/kadm5.acl'
+docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw norename-secret norename'
+docker exec "$NAME_MIT" sh -c 'printf "%s\n" "*/admin@KERBER.TEST *e" "extract/admin@KERBER.TEST *e" "norename@KERBER.TEST acilm" > /var/kerberos/krb5kdc/kadm5.acl'
 docker exec "$NAME_MIT" sh -c '
 for comm in /proc/[0-9]*/comm; do
     [ -f "$comm" ] || continue
@@ -473,6 +489,16 @@ echo "$MITMOD" | grep -F "modify'' privilege"
 MITREN="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'renprinc -force kadmin/changepw kadmin/changepw2' 2>&1 || true)"
 echo "$MITREN"
 echo "$MITREN" | grep -F "delete'' privilege"
+
+echo "==== MIT ACL without d renprinc krbtgt is AUTH_INSUFFICIENT ===="
+for run in 1 2; do
+    echo "---- MIT norename krbtgt $run ----"
+    MITRENACL="$(docker exec "$NAME_MIT" kadmin -p norename -w norename-secret -q 'renprinc -force krbtgt/KERBER.TEST x' 2>&1 || true)"
+    echo "$MITRENACL"
+    echo "$MITRENACL" | grep -F 'Insufficient authorization for operation'
+done
+MITGETTGT="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc krbtgt/KERBER.TEST')"
+echo "$MITGETTGT" | grep -F 'Principal: krbtgt/KERBER.TEST@KERBER.TEST'
 
 echo "==== MIT purgekeys krbtgt succeeds (no lockdown check) ===="
 MITPURGE="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'purgekeys krbtgt/KERBER.TEST' 2>&1 || true)"
