@@ -24,8 +24,7 @@ esac
 
 BASE="$(git rev-parse --verify "$1^{commit}")"
 shift
-CMD=("$1")
-shift
+CMD=("$@")
 WT="$KERBER_SCRATCH/red-at-${BASE:0:12}"
 TARGET="$KERBER_SCRATCH/red-target-${BASE:0:12}"
 mkdir -p "$KERBER_SCRATCH"
@@ -45,20 +44,37 @@ mkdir -p "$WT/scripts/lib"
 if compgen -G "$ROOT/scripts/lib/*.sh" >/dev/null; then
     cp "$ROOT/scripts/lib/"*.sh "$WT/scripts/lib/"
 fi
+if compgen -G "$ROOT/scripts/lib/*.py" >/dev/null; then
+    cp "$ROOT/scripts/lib/"*.py "$WT/scripts/lib/"
+fi
 if compgen -G "$ROOT/scripts/*.c" >/dev/null; then
     cp "$ROOT/scripts/"*.c "$WT/scripts/"
 fi
 if compgen -G "$ROOT/scripts/*.py" >/dev/null; then
     cp "$ROOT/scripts/"*.py "$WT/scripts/"
 fi
+if [ -d "$ROOT/harness" ]; then
+    rm -rf "$WT/harness"
+    cp -a "$ROOT/harness" "$WT/harness"
+fi
+git -C "$WT" add -A >/dev/null
+TREE="$(git -C "$WT" write-tree)"
 
 echo "==== red-at-sha provenance ===="
 echo "base_sha=$BASE"
+echo "tree_sha=$TREE"
+echo "command=${CMD[*]}"
 echo "worktree=$WT"
 echo "CARGO_TARGET_DIR=$TARGET"
 echo "==== probe sha256 ===="
 if [ -f "$WT/scripts/kpasswd-tgs-client.c" ]; then
     sha256sum "$WT/scripts/kpasswd-tgs-client.c"
+fi
+if [ -f "$WT/scripts/lib/analyze-kdc-slo.py" ]; then
+    sha256sum "$WT/scripts/lib/analyze-kdc-slo.py"
+fi
+if [ -f "$WT/harness/kadm5.acl" ]; then
+    sha256sum "$WT/harness/kadm5.acl"
 fi
 if [ -f "$ROOT/${CMD[0]}" ]; then
     sha256sum "$ROOT/${CMD[0]}"
@@ -73,6 +89,7 @@ BUILD_LOG="$KERBER_SCRATCH/red-at-${BASE:0:12}-build.log"
         -p krb5-client --bin krb5-kinit 2>&1 | tee "$BUILD_LOG"
 ) || {
     echo "red-at-sha: cargo build failed at $BASE" >&2
+    echo "gate_rc=1"
     exit 1
 }
 grep -E 'Compiling|Finished' "$BUILD_LOG" || true
@@ -98,16 +115,23 @@ run_from_wt() {
     bash "$script" "$@"
 }
 
+set +e
 if [ "${CMD[0]}" = "scripts/kpasswd-gate.sh" ] \
     || [ "${CMD[0]}" = "scripts/kadmin-gate.sh" ] \
     || [[ "${CMD[0]}" == scripts/*-gate.sh ]]; then
-    run_from_wt "${CMD[0]}" "$@"
+    run_from_wt "${CMD[@]}"
+    rc=$?
 elif [ "${CMD[0]}" = "cargo" ]; then
     cd "$WT"
     export CARGO_TARGET_DIR="$TARGET"
-    cargo "$@"
+    cargo "${CMD[@]:1}"
+    rc=$?
 else
     cd "$WT"
     export CARGO_TARGET_DIR="$TARGET"
-    "${CMD[@]}" "$@"
+    "${CMD[@]}"
+    rc=$?
 fi
+set -e
+echo "gate_rc=$rc"
+exit "$rc"

@@ -51,6 +51,15 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   refuses a non-`kiprop` acceptor with RPC `AUTH_TOOWEAK`. Unit:
   `changepw_service_listprincs_is_auth_list`.
 
+- **W1-H J6.** `scripts/red-at-sha.sh` copies `scripts/lib/*.py` and
+  the whole `harness/` tree from HEAD into the historical worktree,
+  echoes `command=`, stamps `base_sha=` and `tree_sha=` (`git
+  write-tree` after the overlay), and prints `gate_rc=`. W0f greens
+  recaptured under `working/logs/audit-polish-0902/w1h/` with the
+  tested-tree SHA; `i3`/`i4-unit-green` are real runs; `ci-I*.json`
+  are raw Actions API bodies; assembled `w0d/e1|e2-live-red-*.log`
+  deleted.
+
 - **W1-H J7.** Session key type is `select_session_keytype` /
   `dbentry_supports_enctype`: the server's `session_enctypes` string
   attribute, else AES256-sha1 assumed, else a long-term key;
