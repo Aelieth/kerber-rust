@@ -78,10 +78,28 @@ fi
 docker cp target/debug/krb5-kinit "$NAME":/tmp/krb5-kinit
 docker exec "$NAME" chmod +x /tmp/krb5-kinit
 
+PROXY=1888
+docker cp "$ROOT/scripts/lib/kdc-error-proxy.py" "$NAME":/tmp/kdc-error-proxy.py
+docker exec -d "$NAME" python3 /tmp/kdc-error-proxy.py "$PROXY" 127.0.0.1 88 /tmp/spake-91.txt
+sleep 0.2
+docker exec "$NAME" sh -c "cat >/tmp/spake-proxy-krb5.conf <<EOF
+[libdefaults]
+    default_realm = KERBER.TEST
+    dns_lookup_kdc = false
+    dns_lookup_realm = false
+    rdns = false
+    preferred_preauth_types = 151
+    spake_preauth_groups = P-256
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1:${PROXY}
+    }
+EOF"
+
 echo "==== Rust kinit --spake vs MIT KDC ===="
 docker exec "$NAME" sh -c 'cat /dev/null > /tmp/mit-kdc.trace' || true
 set +e
-OUT="$(docker exec -e KRB5_PASSWORD=userpassword "$NAME" \
+OUT="$(docker exec -e KRB5_PASSWORD=userpassword -e KRB5_CONFIG=/tmp/spake-proxy-krb5.conf "$NAME" \
     /tmp/krb5-kinit --spake -c /tmp/krb5cc_spake user@KERBER.TEST 2>&1)"
 rc=$?
 set -e
@@ -104,5 +122,10 @@ if ! echo "$TRACE" | grep -Eq 'SPAKE response received|SPAKE derived K'; then
     exit 1
 fi
 echo "$TRACE" | grep -E 'SPAKE response received|SPAKE derived K'
-log "spake.client.gate" "ok" ',"mode":"rust-kinit","pa_type":151,"group":2,"principal":"user@KERBER.TEST"'
+SPAKE91="$(docker exec "$NAME" cat /tmp/spake-91.txt 2>/dev/null || true)"
+echo "==== SPAKE 91 e_text (Rust kinit vs MIT KDC) ===="
+echo "$SPAKE91"
+echo "$SPAKE91" | grep -F 'error_code=91'
+echo "$SPAKE91" | grep -F 'e_text=PREAUTH_FAILED'
+log "spake.client.gate" "ok" ',"mode":"rust-kinit","pa_type":151,"group":2,"principal":"user@KERBER.TEST","e_text":"PREAUTH_FAILED"'
 exit 0

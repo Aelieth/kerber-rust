@@ -396,9 +396,10 @@ fn issue_as_body(
             hw_preauth = true;
         }
         Some(PreauthAction::Challenge(e_data)) => {
+            // do_as_req.c:439-442,809: status PREAUTH_FAILED even for 91.
             return Err(Error::Protocol {
                 code: err::MORE_PREAUTH_DATA_REQUIRED,
-                text: Some("SPAKE challenge".into()),
+                text: Some(status::PREAUTH_FAILED.to_owned()),
                 e_data: Some(e_data),
                 detail: None,
             });

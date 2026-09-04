@@ -179,9 +179,12 @@ raw PDUs under `tests/traces/`.
 SPAKE: `scripts/spake-gate.sh` runs MIT `kinit` against the Rust KDC
 with `preferred_preauth_types = 151` and `spake_preauth_groups = P-256`.
 It fails unless TRACE contains `pa_type` 151 and group 2, and `klist`
-shows `user@KERBER.TEST`. Reverse: `scripts/rust-kinit-spake-gate.sh`
+shows `user@KERBER.TEST`. First-round KRB-ERROR **91** `e_text` is
+`PREAUTH_FAILED` (`do_as_req.c:439-442,809`) both legs
+(`scripts/lib/kdc-error-proxy.py`). Reverse: `scripts/rust-kinit-spake-gate.sh`
 is Rust `kinit --spake` against MIT KDC (`spake_preauth_groups = P-256`)
-and MIT `klist` `user@KERBER.TEST`. FAST: `scripts/rust-kinit-fast-gate.sh`
+and MIT `klist` `user@KERBER.TEST`, with the same 91 `PREAUTH_FAILED`
+pin. FAST: `scripts/rust-kinit-fast-gate.sh`
 is Rust `kinit --fast --armor-ccache` against MIT; the AS-REQ carries
 PA-FX-FAST and MIT `klist` names `user@KERBER.TEST`. MIT 1.22.2 KDC TRACE
 does **not** print `FX-FAST`; the gate asserts `Decrypted AP-REQ` (the
@@ -390,7 +393,12 @@ when that oracle is absent.
   `setstr`/`getstrs`, `renprinc -force`
   `renamefrom`→`renameto` then `getprinc` new / old fails / `kinit -k`
   new, `delprinc` then `getprinc` error. Rename uses `-randkey` (MIT
-  default-salt password keys may not `kinit` after rename). Run twice.
+  default-salt password keys may not `kinit` after rename). Crafted
+  `kadm5_init_with_password(..., KADM5_CHANGEPW_SERVICE)` listprincs
+  is `KADM5_AUTH_LIST` (`Operation requires ``list'' privilege`) on
+  both kadminds (`scripts/kadm5-changepw-rpc.c`); stock `kadmin` never
+  selects `kadmin/changepw` (`kadmin.c:418-421`, `client_init.c:411`).
+  Run twice.
 - `scripts/kadmin-local-gate.sh` — Rust `krb5-kadmin-local` `addprinc`
   extra2 and `host/slashhost` on dump/stash; MIT `kadmin` getprinc
   names `extra2@KERBER.TEST` and `host/slashhost@KERBER.TEST` (slash

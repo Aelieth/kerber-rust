@@ -162,8 +162,12 @@ getprinc/getstrs (and own-policy getpol) follow `auth_self.c:38-75`.
 Self key change without an INITIAL ticket is `KADM5_AUTH_INITIAL`
 (`server_stubs.c:368-381`). `get_privs` returns `~0`
 (`server_misc.c:146-158`). `kadmin.local` applies no ACL (`KRB5_ACL_FILE`
-is kadmind-only). A `kadmin/changepw` GSS acceptor may only perform
-self key-change/get ops (`CHANGEPW_SERVICE`, `server_stubs.c:28-32`).
+is kadmind-only). A `kadmin/changepw` GSS acceptor is
+`CHANGEPW_SERVICE` (`server_stubs.c:28-32`): every stub denies with
+MIT's code except self `chpass`/`chrand`/`getprinc`
+(`changepw_not_self`, `:348-354`) and getpol of the caller's own
+policy (`:1401-1403`). `getstrs` and `purgekeys` use
+`CHANGEPW_SERVICE` (even self is denied).
 iprop requires a `kiprop` acceptor (`ipropd_svc.c:457-548`) or the
 RPC reply is `AUTH_TOOWEAK`. Purgekeys stays
 `KADM5_PROTECT_KEYS` (stricter than MIT, which has no lockdown check).

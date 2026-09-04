@@ -58,16 +58,17 @@ case "$LISTEN" in
     *:8888*) PORT=8888 ;;
 esac
 
+PROXY=1888
+docker cp "$ROOT/scripts/lib/kdc-error-proxy.py" "$NAME":/tmp/kdc-error-proxy.py
+docker exec -d "$NAME" python3 /tmp/kdc-error-proxy.py "$PROXY" 127.0.0.1 "$PORT" /tmp/spake-91.txt
+sleep 0.2
+
+docker exec "$NAME" sh -c "sed -i 's/kdc = 127.0.0.1\$/kdc = 127.0.0.1:${PROXY}/' /etc/krb5.conf"
 docker exec "$NAME" sh -c "cat >> /etc/krb5.conf <<EOF
 
 [libdefaults]
     preferred_preauth_types = 151
     spake_preauth_groups = P-256
-
-[realms]
-    KERBER.TEST = {
-        kdc = 127.0.0.1:${PORT}
-    }
 EOF"
 
 echo "==== MIT kinit SPAKE ===="
@@ -96,5 +97,16 @@ if ! echo "$TRACE" | grep -Eq 'group[[:space:]]*2|group=2|SPAKE challenge with g
     log "spake.gate" "error" ',"error":"kinit succeeded without SPAKE group 2"'
     exit 1
 fi
-log "spake.gate" "ok" ',"mode":"mit-kinit","pa_type":151,"group":2,"principal":"user@KERBER.TEST"'
+SPAKE91="$(docker exec "$NAME" cat /tmp/spake-91.txt 2>/dev/null || true)"
+echo "==== SPAKE 91 e_text (MIT kinit vs Rust KDC) ===="
+echo "$SPAKE91"
+echo "$SPAKE91" | grep -F 'error_code=91'
+echo "$SPAKE91" | grep -F 'e_text=PREAUTH_FAILED'
+if echo "$SPAKE91" | grep -F 'e_text=SPAKE challenge'; then
+    echo "SPAKE 91 e_text was prose SPAKE challenge" >&2
+    exit 1
+fi
+KDCLOG="$(docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true)"
+echo "$KDCLOG" | grep -F '"code":91,"e_text":"PREAUTH_FAILED"'
+log "spake.gate" "ok" ',"mode":"mit-kinit","pa_type":151,"group":2,"principal":"user@KERBER.TEST","e_text":"PREAUTH_FAILED"'
 exit 0

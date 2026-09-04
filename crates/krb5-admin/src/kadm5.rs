@@ -1447,6 +1447,10 @@ fn changepw_acceptor(ctx: &GssContext) -> bool {
         .is_some_and(|n| n.components_joined() == "kadmin/changepw")
 }
 
+fn changepw_not_self(changepw: bool, actor: &str, name: &PrincipalName, realm: &str) -> bool {
+    changepw && !is_self(actor, name, realm)
+}
+
 fn kiprop_acceptor(ctx: &GssContext) -> bool {
     ctx.acceptor.as_ref().is_some_and(|n| {
         n.components_joined()
@@ -1496,10 +1500,11 @@ fn dispatch_kadm5_ticket(
         GET_PRINCIPAL => {
             let (name, _mask) = parse_get(args)?;
             let tid = acl_id(&name, &realm);
-            if acl
-                .check(actor, krb5_kdc::AdminOp::Inquire, Some(&tid))
-                .is_err()
-                && !is_self(actor, &name, &realm)
+            if changepw_not_self(changepw, actor, &name, &realm)
+                || (acl
+                    .check(actor, krb5_kdc::AdminOp::Inquire, Some(&tid))
+                    .is_err()
+                    && !is_self(actor, &name, &realm))
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_GET));
             }
@@ -1540,6 +1545,9 @@ fn dispatch_kadm5_ticket(
         }
         DELETE_PRINCIPAL => {
             let name = parse_one_princ(args)?;
+            if changepw {
+                return Ok(generic_ret(API_V2, KADM5_AUTH_DELETE));
+            }
             let mut g = match write_store(store, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
@@ -1559,9 +1567,10 @@ fn dispatch_kadm5_ticket(
         MODIFY_PRINCIPAL => {
             let (name, mask, fields) = parse_modify(args)?;
             let tid = acl_id(&name, &realm);
-            if acl
-                .check(actor, krb5_kdc::AdminOp::Modify, Some(&tid))
-                .is_err()
+            if changepw
+                || acl
+                    .check(actor, krb5_kdc::AdminOp::Modify, Some(&tid))
+                    .is_err()
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_MODIFY));
             }
@@ -1650,9 +1659,10 @@ fn dispatch_kadm5_ticket(
             let (old, new) = parse_rename(args)?;
             // MIT server_stubs.c:700-712: ACL (AUTH_INSUFFICIENT) then lockdown (AUTH_DELETE).
             // auth_acl.c:638-648: delete on src and add on dest without restrictions.
-            if acl
-                .check_rename(actor, &acl_id(&old, &realm), &acl_id(&new, &realm))
-                .is_err()
+            if changepw
+                || acl
+                    .check_rename(actor, &acl_id(&old, &realm), &acl_id(&new, &realm))
+                    .is_err()
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_INSUFFICIENT));
             }
@@ -1707,7 +1717,7 @@ fn dispatch_kadm5_ticket(
         }
         CREATE_POLICY => {
             let (api, pol, _mask) = parse_policy_arg(args)?;
-            if acl.check(actor, krb5_kdc::AdminOp::Create, None).is_err() {
+            if changepw || acl.check(actor, krb5_kdc::AdminOp::Create, None).is_err() {
                 return Ok(generic_ret(api, KADM5_AUTH_ADD));
             }
             if pol.name.is_empty() {
@@ -1725,7 +1735,7 @@ fn dispatch_kadm5_ticket(
         }
         DELETE_POLICY => {
             let (api, name) = parse_policy_name(args)?;
-            if acl.check(actor, krb5_kdc::AdminOp::Delete, None).is_err() {
+            if changepw || acl.check(actor, krb5_kdc::AdminOp::Delete, None).is_err() {
                 return Ok(generic_ret(api, KADM5_AUTH_DELETE));
             }
             let mut g = match write_store(store, api) {
@@ -1740,7 +1750,7 @@ fn dispatch_kadm5_ticket(
         }
         MODIFY_POLICY => {
             let (api, rec, mask) = parse_policy_arg(args)?;
-            if acl.check(actor, krb5_kdc::AdminOp::Modify, None).is_err() {
+            if changepw || acl.check(actor, krb5_kdc::AdminOp::Modify, None).is_err() {
                 return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
             }
             let mut g = match write_store(store, api) {
@@ -1762,7 +1772,7 @@ fn dispatch_kadm5_ticket(
                 let n = PrincipalName::new(PrincipalName::NT_UNKNOWN, left.split('/'));
                 g.get_name(&n).and_then(|p| p.pw_policy.clone())
             });
-            if acl.check(actor, krb5_kdc::AdminOp::Inquire, None).is_err()
+            if (changepw || acl.check(actor, krb5_kdc::AdminOp::Inquire, None).is_err())
                 && own_pol.as_deref() != Some(name.as_str())
             {
                 return Ok(generic_ret(api, KADM5_AUTH_GET));
@@ -1792,14 +1802,15 @@ fn dispatch_kadm5_ticket(
         }
         CHRAND_PRINCIPAL | CHRAND_PRINCIPAL3 => {
             let name = parse_chrand(args, proc == CHRAND_PRINCIPAL3)?;
-            if acl
-                .check(
-                    actor,
-                    krb5_kdc::AdminOp::ChangePassword,
-                    Some(&acl_id(&name, &realm)),
-                )
-                .is_err()
-                && !is_self(actor, &name, &realm)
+            if changepw_not_self(changepw, actor, &name, &realm)
+                || (acl
+                    .check(
+                        actor,
+                        krb5_kdc::AdminOp::ChangePassword,
+                        Some(&acl_id(&name, &realm)),
+                    )
+                    .is_err()
+                    && !is_self(actor, &name, &realm))
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
             }
@@ -1854,14 +1865,15 @@ fn dispatch_kadm5_ticket(
         }
         PURGEKEYS => {
             let (api, name, keepkvno) = parse_purgekeys(args)?;
-            if acl
-                .check(
-                    actor,
-                    krb5_kdc::AdminOp::Modify,
-                    Some(&acl_id(&name, &realm)),
-                )
-                .is_err()
-                && !is_self(actor, &name, &realm)
+            if changepw
+                || (acl
+                    .check(
+                        actor,
+                        krb5_kdc::AdminOp::Modify,
+                        Some(&acl_id(&name, &realm)),
+                    )
+                    .is_err()
+                    && !is_self(actor, &name, &realm))
             {
                 return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
             }
@@ -1920,14 +1932,15 @@ fn dispatch_kadm5_ticket(
         }
         GET_STRINGS => {
             let (api, name) = parse_gstrings(args)?;
-            if acl
-                .check(
-                    actor,
-                    krb5_kdc::AdminOp::Inquire,
-                    Some(&acl_id(&name, &realm)),
-                )
-                .is_err()
-                && !is_self(actor, &name, &realm)
+            if changepw
+                || (acl
+                    .check(
+                        actor,
+                        krb5_kdc::AdminOp::Inquire,
+                        Some(&acl_id(&name, &realm)),
+                    )
+                    .is_err()
+                    && !is_self(actor, &name, &realm))
             {
                 return Ok(generic_ret(api, KADM5_AUTH_GET));
             }
@@ -1942,13 +1955,14 @@ fn dispatch_kadm5_ticket(
         }
         SET_STRING => {
             let (api, name, key, value) = parse_sstring(args)?;
-            if acl
-                .check(
-                    actor,
-                    krb5_kdc::AdminOp::Modify,
-                    Some(&acl_id(&name, &realm)),
-                )
-                .is_err()
+            if changepw
+                || acl
+                    .check(
+                        actor,
+                        krb5_kdc::AdminOp::Modify,
+                        Some(&acl_id(&name, &realm)),
+                    )
+                    .is_err()
             {
                 return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
             }
@@ -2815,12 +2829,177 @@ mod tests {
         assert_eq!(ret_code(&out), KADM5_AUTH_INITIAL);
     }
 
+    fn getprinc_args(name: &str) -> Vec<u8> {
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some(name));
+        w.u32(u32::MAX);
+        w.b
+    }
+
+    fn modify_args(name: &str) -> Vec<u8> {
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some(name));
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(3600);
+        w.u32(1);
+        w.u32(0);
+        w.u32(0);
+        w.u32(1);
+        w.u32(1);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(1);
+        w.u32(0);
+        w.u32(KADM5_ATTRIBUTES);
+        w.b
+    }
+
+    fn setstr_args(name: &str, key: &str, value: &str) -> Vec<u8> {
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some(name));
+        w.nullstring(Some(key));
+        w.nullstring(Some(value));
+        w.b
+    }
+
+    fn cpw_dispatch(
+        store: &krb5_kdc::SharedDump,
+        acl: &Acl,
+        actor: &str,
+        proc: u32,
+        args: &[u8],
+    ) -> Vec<u8> {
+        dispatch_kadm5_ticket(store, acl, actor, proc, args, true, true).unwrap()
+    }
+
     #[test]
     fn changepw_service_listprincs_is_auth_list() {
         let (store, acl, actor) = setup();
-        let out = dispatch_kadm5_ticket(&store, &acl, &actor, GET_PRINCS, &list_args(), true, true)
-            .unwrap();
+        let out = cpw_dispatch(&store, &acl, &actor, GET_PRINCS, &list_args());
         assert_eq!(ret_code(&out), KADM5_AUTH_LIST);
+    }
+
+    #[test]
+    fn changepw_service_denies_non_self_ops() {
+        let (store, acl, _actor) = setup();
+        let user = "user@KERBER.TEST";
+        let other = "admin@KERBER.TEST";
+        let mut rename = XdrW::default();
+        rename.u32(API_V2);
+        rename.nullstring(Some(user));
+        rename.nullstring(Some("renamed@KERBER.TEST"));
+        let cases: &[(u32, Vec<u8>, u32)] = &[
+            (GET_PRINCS, list_args(), KADM5_AUTH_LIST),
+            (GET_POLS, list_args(), KADM5_AUTH_LIST),
+            (GET_PRINCIPAL, getprinc_args(user), KADM5_AUTH_GET),
+            (DELETE_PRINCIPAL, encode_named(user), KADM5_AUTH_DELETE),
+            (MODIFY_PRINCIPAL, modify_args(user), KADM5_AUTH_MODIFY),
+            (RENAME_PRINCIPAL, rename.b.clone(), KADM5_AUTH_INSUFFICIENT),
+            (
+                CHPASS_PRINCIPAL,
+                chpass_args(user, "nope"),
+                KADM5_AUTH_CHANGEPW,
+            ),
+            (CHRAND_PRINCIPAL, encode_named(user), KADM5_AUTH_CHANGEPW),
+            (CREATE_POLICY, encode_named("cpwpol"), KADM5_AUTH_ADD),
+            (DELETE_POLICY, encode_named("cpwpol"), KADM5_AUTH_DELETE),
+            (MODIFY_POLICY, encode_named("cpwpol"), KADM5_AUTH_MODIFY),
+            (GET_POLICY, encode_named("cpwpol"), KADM5_AUTH_GET),
+            (PURGEKEYS, encode_named(user), KADM5_AUTH_MODIFY),
+            (GET_STRINGS, encode_named(user), KADM5_AUTH_GET),
+            (
+                SET_STRING,
+                setstr_args(user, "note", "x"),
+                KADM5_AUTH_MODIFY,
+            ),
+            (EXTRACT_KEYS, extract_args(user, 0), KADM5_AUTH_EXTRACT),
+        ];
+        for (proc, args, want) in cases {
+            let out = cpw_dispatch(&store, &acl, other, *proc, args);
+            assert_eq!(ret_code(&out), *want, "changepw proc {proc} want {want}");
+        }
+    }
+
+    #[test]
+    fn changepw_service_self_getprinc_is_ok() {
+        let (store, acl, _actor) = setup();
+        let out = cpw_dispatch(
+            &store,
+            &acl,
+            "user@KERBER.TEST",
+            GET_PRINCIPAL,
+            &getprinc_args("user@KERBER.TEST"),
+        );
+        assert_eq!(ret_code(&out), 0);
+    }
+
+    #[test]
+    fn changepw_service_self_getstrs_is_auth_get() {
+        let (store, acl, _actor) = setup();
+        let out = cpw_dispatch(
+            &store,
+            &acl,
+            "user@KERBER.TEST",
+            GET_STRINGS,
+            &encode_named("user@KERBER.TEST"),
+        );
+        assert_eq!(ret_code(&out), KADM5_AUTH_GET);
+    }
+
+    #[test]
+    fn changepw_service_self_purgekeys_is_auth_modify() {
+        let (store, acl, _actor) = setup();
+        let out = cpw_dispatch(
+            &store,
+            &acl,
+            "user@KERBER.TEST",
+            PURGEKEYS,
+            &encode_named("user@KERBER.TEST"),
+        );
+        assert_eq!(ret_code(&out), KADM5_AUTH_MODIFY);
+    }
+
+    #[test]
+    fn changepw_service_own_policy_getpol_is_ok() {
+        let (store, acl, actor) = setup();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+        {
+            let mut g = store.write().unwrap();
+            g.put_policy(krb5_kdc::NamedPolicy::new("userpol"));
+            g.set_principal_policy(&user, Some("userpol".into()))
+                .unwrap();
+        }
+        let out = cpw_dispatch(
+            &store,
+            &acl,
+            "user@KERBER.TEST",
+            GET_POLICY,
+            &encode_named("userpol"),
+        );
+        assert_eq!(ret_code(&out), 0);
+        let denied = cpw_dispatch(&store, &acl, &actor, GET_POLICY, &encode_named("userpol"));
+        assert_eq!(ret_code(&denied), KADM5_AUTH_GET);
+    }
+
+    #[test]
+    fn changepw_service_getprivs_is_ok() {
+        let (store, acl, actor) = setup();
+        let out = cpw_dispatch(&store, &acl, &actor, GET_PRIVS, &[]);
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), API_V2);
+        assert_eq!(r.u32().unwrap(), 0);
+        assert_eq!(r.u32().unwrap(), !0);
     }
 
     #[test]

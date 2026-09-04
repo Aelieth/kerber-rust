@@ -1794,9 +1794,13 @@ fn spake_challenge_then_as_rep() {
     let e_data = match err {
         Error::Protocol {
             code,
+            text,
             e_data: Some(e_data),
             ..
-        } if code == err::MORE_PREAUTH_DATA_REQUIRED => e_data,
+        } if code == err::MORE_PREAUTH_DATA_REQUIRED => {
+            assert_eq!(text.as_deref(), Some("PREAUTH_FAILED"));
+            e_data
+        }
         Error::PreauthRequired { e_data } => e_data,
         other => panic!("expected SPAKE challenge, got {other:?}"),
     };
@@ -1837,6 +1841,22 @@ fn spake_challenge_then_as_rep() {
     let plain = decrypt(&spake_key, usage, issued.rep.0.enc_part.cipher.as_ref()).expect("enc");
     let enc = decode_enc_part(&plain);
     assert_eq!(enc.nonce, 302);
+}
+
+#[test]
+fn handle_request_spake_91_e_text_is_preauth_failed() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let req = as_req(cname, TEST_REALM, 391, Some(vec![pa_spake_support()])).unwrap();
+    let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
+    let e: KrbError = decode(&bytes).expect("KRB-ERROR");
+    assert_eq!(e.error_code, err::MORE_PREAUTH_DATA_REQUIRED);
+    let text = e
+        .e_text
+        .as_ref()
+        .and_then(|t| std::str::from_utf8(t.as_bytes()).ok());
+    assert_eq!(text, Some("PREAUTH_FAILED"));
+    assert_ne!(text, Some("SPAKE challenge"));
 }
 
 #[test]

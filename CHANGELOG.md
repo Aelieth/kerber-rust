@@ -51,6 +51,22 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   refuses a non-`kiprop` acceptor with RPC `AUTH_TOOWEAK`. Unit:
   `changepw_service_listprincs_is_auth_list`.
 
+- **W1-H skeptic residues.** SPAKE first-round KRB-ERROR **91**
+  `e_text` is MIT `PREAUTH_FAILED` (`do_as_req.c:439-442,809`), not
+  prose `SPAKE challenge`. Unit:
+  `handle_request_spake_91_e_text_is_preauth_failed`. Live both legs
+  via `scripts/lib/kdc-error-proxy.py` in `spake-gate.sh` /
+  `rust-kinit-spake-gate.sh`. Every kadm5 stub applies
+  `CHANGEPW_SERVICE` / `changepw_not_self` like
+  `server_stubs.c` (`getstrs`/`purgekeys` deny even self; getprinc
+  self and getpol of own policy still allowed). Units:
+  `changepw_service_denies_non_self_ops`,
+  `changepw_service_self_getprinc_is_ok`,
+  `changepw_service_self_getstrs_is_auth_get`,
+  `changepw_service_self_purgekeys_is_auth_modify`,
+  `changepw_service_own_policy_getpol_is_ok`. Live crafted
+  `kadm5-changepw-rpc.c` listprincs is `KADM5_AUTH_LIST` both legs.
+
 - **W1-H J8.** Ledger rust sites are `file.rs symbol` (optional
   `:N` inside the function). `ci-policy.py` `check_ledger_anchors`
   resolves `fn symbol` under `crates/` and, for `exact` rows, checks

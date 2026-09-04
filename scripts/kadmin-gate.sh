@@ -20,6 +20,29 @@ log() {
         "$1" "$CORRELATION_ID" "$2" "${3:-}"
 }
 
+compile_kadm5_changepw() {
+    local ctn=$1
+    docker cp "$ROOT/scripts/kadm5-changepw-rpc.c" "$ctn":/tmp/kadm5-changepw-rpc.c
+    if ! docker exec "$ctn" cc -o /tmp/kadm5-changepw-rpc /tmp/kadm5-changepw-rpc.c \
+        -lkadm5clnt_mit -lgssrpc -lgssapi_krb5 -lkrb5 -lk5crypto -lcom_err 2>/tmp/kadm5-cc.err
+    then
+        if ! docker exec "$ctn" cc -o /tmp/kadm5-changepw-rpc /tmp/kadm5-changepw-rpc.c \
+            -lkadm5clnt -lgssrpc -lgssapi_krb5 -lkrb5 -lcom_err 2>>/tmp/kadm5-cc.err
+        then
+            cat /tmp/kadm5-cc.err >&2 || true
+            docker exec "$ctn" cat /tmp/kadm5-cc.err >&2 || true
+            log "kadmin.gate" "error" ',"error":"kadm5-changepw-rpc compile failed"'
+            exit 1
+        fi
+    fi
+}
+
+kadm5_changepw_list() {
+    local ctn=$1 client=$2 pass=$3
+    docker exec -e KRB5_CONFIG="${4:-/etc/krb5.conf}" "$ctn" \
+        /tmp/kadm5-changepw-rpc "$client" "$pass" KERBER.TEST listprincs
+}
+
 kadmind_auth_too_weak() {
     local ctn=$1
     docker exec "$ctn" python3 -c '
@@ -134,6 +157,37 @@ EOF'
 echo "==== kinit admin ===="
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf -e KRB5_TRACE=/dev/stderr \
     "$NAME" sh -c 'printf "adminpassword\n" | kinit admin@KERBER.TEST'
+
+echo "==== knob search: stock kadmin never selects kadmin/changepw ===="
+HELP="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" kadmin --help 2>&1 || true)"
+echo "$HELP"
+if echo "$HELP" | grep -qi changepw; then
+    echo "kadmin --help mentioned changepw (CLI has no CHANGEPW_SERVICE flag)" >&2
+    exit 1
+fi
+KADMIN_TRACE="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf -e KRB5_TRACE=/dev/stderr \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'listprincs' 2>&1 || true)"
+echo "$KADMIN_TRACE"
+echo "$KADMIN_TRACE" | grep -F 'Setting initial creds service to kadmin/admin'
+if echo "$KADMIN_TRACE" | grep -F 'Setting initial creds service to kadmin/changepw'; then
+    echo "stock kadmin selected kadmin/changepw as GSS service" >&2
+    exit 1
+fi
+echo "kadmin.c:418-421 svcname = ADMIN_SERVICE or NULL; client_init.c:411 NULL -> kadmin/admin"
+
+echo "==== crafted RPC listprincs over kadmin/changepw vs Rust kadmind ===="
+compile_kadm5_changepw "$NAME"
+CPW_LIST="$(kadm5_changepw_list "$NAME" admin@KERBER.TEST adminpassword /tmp/kadmin-krb5.conf 2>&1 || true)"
+echo "$CPW_LIST"
+echo "$CPW_LIST" | grep -F 'init_code=0'
+echo "$CPW_LIST" | grep -F 'list_code=43787564'
+echo "$CPW_LIST" | grep -F $'Operation requires ``list\'\' privilege'
+if echo "$CPW_LIST" | grep -q 'list_count=' && echo "$CPW_LIST" | grep -qv 'list_count=0'; then
+    if echo "$CPW_LIST" | grep -q 'list_code=0'; then
+        echo "changepw listprincs succeeded: $CPW_LIST" >&2
+        exit 1
+    fi
+fi
 echo "==== MIT kadmin addprinc extra ===="
 ADD="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf -e KRB5_TRACE=/dev/stderr \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw extra-secret extra' 2>&1 || true)"
@@ -651,6 +705,18 @@ if [ "$ok" != 1 ]; then
 fi
 echo "==== MIT kadmind AUTH_NONE is AUTH_TOOWEAK ===="
 kadmind_auth_too_weak "$NAME_MIT"
+
+echo "==== crafted RPC listprincs over kadmin/changepw vs MIT kadmind ===="
+compile_kadm5_changepw "$NAME_MIT"
+MIT_CPW_LIST="$(kadm5_changepw_list "$NAME_MIT" admin/admin adminpassword /etc/krb5.conf 2>&1 || true)"
+echo "$MIT_CPW_LIST"
+echo "$MIT_CPW_LIST" | grep -F 'init_code=0'
+echo "$MIT_CPW_LIST" | grep -F 'list_code=43787564'
+echo "$MIT_CPW_LIST" | grep -F $'Operation requires ``list\'\' privilege'
+if echo "$MIT_CPW_LIST" | grep -q 'list_code=0'; then
+    echo "MIT changepw listprincs succeeded: $MIT_CPW_LIST" >&2
+    exit 1
+fi
 MITTGT="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc krbtgt/KERBER.TEST')"
 echo "$MITTGT"
 echo "$MITTGT" | grep -F 'LOCKDOWN_KEYS'
