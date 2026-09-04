@@ -27,8 +27,8 @@ use krb5_types::pac::{
 };
 use krb5_types::{
     ApReq, Checksum, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, EncryptedData,
-    EncryptionKey, KdcOptions, KerberosTime, MethodData, Microseconds, PaData, PaEncTsEnc,
-    PrincipalName, ascii, err, flag_bit, ku, pa,
+    EncryptionKey, KdcOptions, KerberosTime, KrbError, MethodData, Microseconds, PaData,
+    PaEncTsEnc, PrincipalName, ascii, err, flag_bit, ku, pa,
 };
 
 fn password_key(name: &str, password: &[u8]) -> ProtocolKey {
@@ -1496,6 +1496,110 @@ fn tgs_authenticator_bad_bytes_is_bad_integrity() {
     });
     let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("bad TGS checksum");
     assert_process_tgs(err, err::BAD_INTEGRITY);
+}
+
+fn assert_krb_error(bytes: &[u8], code: i32, e_text: &str) {
+    assert_eq!(bytes.first(), Some(&0x7e), "expected KRB-ERROR");
+    let e: KrbError = decode(bytes).expect("KrbError");
+    assert_eq!(e.error_code, code);
+    let text = e
+        .e_text
+        .as_ref()
+        .and_then(|t| std::str::from_utf8(t.as_bytes()).ok());
+    assert_eq!(text, Some(e_text));
+}
+
+fn tgs_wire_reply(store: &PrincipalStore, tgs: &krb5_types::TgsReq) -> Vec<u8> {
+    krb5_kdc::handle_request(store, &encode(tgs).expect("der")).expect("reply")
+}
+
+#[test]
+fn tgs_authenticator_cksum_provider_mismatch_is_generic() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 940);
+    let mut tgs = tgs_req(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        941,
+    )
+    .unwrap();
+    map_tgs_authenticator_cksum(&mut tgs, &issued.session_key, |ck| {
+        ck.cksumtype = 15;
+        ck.checksum = vec![0u8; 12].into();
+    });
+    let bytes = tgs_wire_reply(&store, &tgs);
+    assert_krb_error(&bytes, err::GENERIC, "PROCESS_TGS");
+}
+
+#[test]
+fn tgs_authenticator_cksum_wrong_length_is_generic() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 942);
+    let mut tgs = tgs_req(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        943,
+    )
+    .unwrap();
+    map_tgs_authenticator_cksum(&mut tgs, &issued.session_key, |ck| {
+        let mut b = ck.checksum.to_vec();
+        b.pop();
+        ck.checksum = b.into();
+    });
+    let bytes = tgs_wire_reply(&store, &tgs);
+    assert_krb_error(&bytes, err::GENERIC, "PROCESS_TGS");
+}
+
+#[test]
+fn tgs_authenticator_missing_checksum_is_process_tgs() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 944);
+    let mut tgs = tgs_req(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        945,
+    )
+    .unwrap();
+    let pa = tgs
+        .0
+        .padata
+        .as_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|p| p.padata_type == pa::TGS_REQ)
+        .expect("PA-TGS-REQ");
+    let mut ap: ApReq = decode(pa.padata_value.as_ref()).expect("ap");
+    let auth_usage = KeyUsage::new(ku::TGS_REQ_AUTHENTICATOR).unwrap();
+    let auth_plain = decrypt(
+        &issued.session_key,
+        auth_usage,
+        ap.authenticator.cipher.as_ref(),
+    )
+    .expect("auth");
+    let mut authenticator: krb5_types::Authenticator = decode(&auth_plain).expect("authenticator");
+    authenticator.cksum = None;
+    let auth_der = encode(&authenticator).expect("auth der");
+    ap.authenticator.cipher = encrypt(&issued.session_key, auth_usage, &auth_der)
+        .expect("enc")
+        .into();
+    pa.padata_value = encode(&ap).expect("ap").into();
+    let bytes = tgs_wire_reply(&store, &tgs);
+    assert_krb_error(&bytes, err::INAPP_CKSUM, "PROCESS_TGS");
 }
 
 #[test]

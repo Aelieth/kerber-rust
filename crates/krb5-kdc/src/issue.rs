@@ -641,12 +641,14 @@ fn process_tgs_header(
             ck.cksumtype,
             ck.checksum.as_ref(),
         )
-        .map_err(|_| proto(err::BAD_INTEGRITY, "PROCESS_TGS"))?;
+        .map_err(|e| match e {
+            krb5_crypto::Error::UnsupportedChecksum(_) | krb5_crypto::Error::BadChecksumSize => {
+                proto(err::GENERIC, "PROCESS_TGS")
+            }
+            _ => proto(err::BAD_INTEGRITY, "PROCESS_TGS"),
+        })?;
     } else {
-        return Err(proto(
-            err::INAPP_CKSUM,
-            "TGS authenticator missing checksum",
-        ));
+        return Err(proto(err::INAPP_CKSUM, "PROCESS_TGS"));
     }
     Ok(HeaderTgt {
         ap,

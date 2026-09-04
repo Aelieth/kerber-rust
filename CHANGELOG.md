@@ -22,6 +22,15 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0f I3.** TGS authenticator checksum provider mismatch and wrong
+  MAC length return wire 60 `PROCESS_TGS` like `errcode_to_protocol`
+  (`kdc_util.c:130-136,691-697`). Missing checksum keeps 50
+  `INAPP_CKSUM` with wire `e_text` `PROCESS_TGS` (`kdc_util.c:232-235`).
+  Units assert a decoded `KrbError`:
+  `tgs_authenticator_cksum_provider_mismatch_is_generic`,
+  `tgs_authenticator_cksum_wrong_length_is_generic`,
+  `tgs_authenticator_missing_checksum_is_process_tgs`.
+
 - **W0f I2.** cksumtype `-137` (`MD5_HMAC_ARCFOUR`) is HMAC(raw key,
   MD5(le32(usage) ‖ msg)) with no `signaturekey` KS
   (`checksum_hmac_md5.c:53-66`); `-138` still derives KS. RC4 usage map
