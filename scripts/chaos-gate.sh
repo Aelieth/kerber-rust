@@ -50,25 +50,34 @@ RIP="$(prod_ip_of "$REPLICA")"
 prod_stage_loadgen || die "stage loadgen"
 
 echo "==== netem delay/loss/reorder on primary eth0 ===="
-if ! docker exec "$PRIMARY" sh -c 'command -v tc >/dev/null'; then
-    unavailable "NETEM_UNAVAILABLE: tc not installed in node"
+NETEM_OK=0
+if docker exec "$PRIMARY" sh -c 'command -v tc >/dev/null'; then
+    if docker exec "$PRIMARY" tc qdisc add dev eth0 root netem delay 50ms 10ms loss 2% reorder 5% 25% 2>"$OUT/netem.err"; then
+        NETEM_OK=1
+        echo "netem applied" | tee "$OUT/netem.log"
+        if ! prod_mit_sample netem | tee "$OUT/mit-netem.log"; then
+            docker exec "$PRIMARY" tc qdisc del dev eth0 root 2>/dev/null || true
+            die "MIT kinit/kvno failed under netem"
+        fi
+        echo "MIT completed under netem" | tee -a "$OUT/netem.log"
+        docker exec "$PRIMARY" tc qdisc del dev eth0 root 2>/dev/null || true
+        echo "netem: MIT ok, no panic" | tee -a "$OUT/netem.log"
+    else
+        echo "NETEM_UNAVAILABLE: tc qdisc failed (need CAP_NET_ADMIN)" | tee "$OUT/netem-unavailable.log"
+        cat "$OUT/netem.err" >>"$OUT/netem-unavailable.log" || true
+        [ -s "$OUT/netem-unavailable.log" ]
+    fi
+else
+    echo "NETEM_UNAVAILABLE: tc not installed in node" | tee "$OUT/netem-unavailable.log"
+    [ -s "$OUT/netem-unavailable.log" ]
 fi
-if ! docker exec "$PRIMARY" tc qdisc add dev eth0 root netem delay 50ms 10ms loss 2% reorder 5% 25% 2>"$OUT/netem.err"; then
-    cat "$OUT/netem.err" >>"$OUT/netem-unavailable.log" || true
-    unavailable "NETEM_UNAVAILABLE: tc qdisc failed (need CAP_NET_ADMIN)"
-fi
-NETEM_OK=1
-echo "netem applied" | tee "$OUT/netem.log"
-if ! prod_mit_sample netem | tee "$OUT/mit-netem.log"; then
-    docker exec "$PRIMARY" tc qdisc del dev eth0 root 2>/dev/null || true
-    die "MIT kinit/kvno failed under netem"
-fi
-docker exec "$PRIMARY" tc qdisc del dev eth0 root 2>/dev/null || true
 docker cp "$PRIMARY":/tmp/kdc.log "$OUT/kdc-netem.log" 2>/dev/null || true
 if grep -qi panic "$OUT/kdc-netem.log" 2>/dev/null; then
     die "panic under netem"
 fi
-echo "netem: MIT ok, no panic" | tee -a "$OUT/netem.log"
+if [ "${KERBER_REQUIRE_NETEM:-0}" = "1" ] && [ "$NETEM_OK" != "1" ]; then
+    die "KERBER_REQUIRE_NETEM=1 but netem was not applied"
+fi
 
 echo "==== low memory cap $MEM_CAP under load ===="
 if docker update --memory "$MEM_CAP" --memory-swap "$MEM_CAP" "$PRIMARY" 2>"$OUT/mem-update.err"; then

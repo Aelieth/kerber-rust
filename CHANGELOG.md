@@ -51,6 +51,18 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   refuses a non-`kiprop` acceptor with RPC `AUTH_TOOWEAK`. Unit:
   `changepw_service_listprincs_is_auth_list`.
 
+- **W1-H J5.** `chaos-gate.sh` reads `KERBER_REQUIRE_NETEM=1` and
+  dies unless netem was applied; otherwise it skips netem and still
+  runs the memory and failover cells. `prod-gate.sh` missing
+  tcpdump/sudo is `unavailable` (exit 2) with
+  `pcap-unavailable.log`. `stress-gate.sh` no longer uses a no-op
+  `mid_rc=0` to appease the detector. `ci-policy.py` treats an arm
+  as asserting only on `exit`/`die`/`return`/`break`/`continue`/
+  `unavailable`, `log … error`, or `[`/`test`/`grep`/`cmp` — not a
+  bare assignment — and inspects `{ … }`, `( … )`, and heredocs.
+  `check_ledger_tally` fails when the A1/A2/A3 total line is missing
+  or the section split does not match a recount.
+
 - **W1-H J6.** `scripts/red-at-sha.sh` copies `scripts/lib/*.py` and
   the whole `harness/` tree from HEAD into the historical worktree,
   echoes `command=`, stamps `base_sha=` and `tree_sha=` (`git

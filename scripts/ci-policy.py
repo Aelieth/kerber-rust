@@ -227,13 +227,32 @@ _ELSE = re.compile(r"^\s*else\b")
 _FI = re.compile(r"^\s*fi\b")
 _ASSERT_IN_IF = re.compile(
     r"""(?x)
-    \b(exit|die|return|break|continue)\b
-    | log\s+\S+\s+error
-    | (?:^|[\s;])[A-Za-z_][A-Za-z0-9_]*=
+    \b(exit|die|return|break|continue|unavailable)\b
+    | log\s+\S+\s+(?:error|"error")
+    | (?:^|[\s;|&])(?:test\b|grep\b|cmp\b)
+    | (?:^|[\s;|&])\[
     """
 )
-_NOISE_ONLY = re.compile(r"^(?:echo|printf|true)\b|^:(?:\s|$)")
+_NOISE_ONLY = re.compile(r"^(?:echo|printf|true|cat)\b|^:(?:\s|$)")
+_ASSIGN_ONLY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _QUOTED = re.compile(r"""('([^'\\]|\\.)*'|"([^"\\]|\\.)*")""")
+_HEREDOC = re.compile(
+    r"(?:cat\s+)?<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n.*?^\1\s*$",
+    re.M | re.S,
+)
+_BRACE_GROUP = re.compile(r"\{([^{}]*)\}(?:\s*(?:>>?|\|)\s*\S+)?")
+_PAREN_GROUP = re.compile(r"(?<!\$)\(([^()]*)\)(?:\s*(?:>>?|\|)\s*\S+)?")
+
+
+def _flatten_arm(body: str) -> str:
+    """Unwrap `{...}`, `(...)`, and heredocs so wrappers cannot hide echo-only."""
+    body = _HEREDOC.sub("echo heredoc", body)
+    prev = None
+    while prev != body:
+        prev = body
+        body = _BRACE_GROUP.sub(lambda m: m.group(1), body)
+        body = _PAREN_GROUP.sub(lambda m: m.group(1), body)
+    return body
 
 
 def _fold_continuations(text: str) -> str:
@@ -279,14 +298,20 @@ def _strip_quoted(s: str) -> str:
 
 
 def _echo_only_body(body: str) -> bool:
+    body = _flatten_arm(body)
     stmts = [
-        ln.strip()
+        ln.strip().rstrip(";")
         for ln in body.splitlines()
         if ln.strip() and not ln.strip().startswith("#")
     ]
     if not stmts:
         return False
-    if not all(_NOISE_ONLY.match(s) for s in stmts):
+    # A bare assignment is not an assert, but it is also not an
+    # informational skip. Ignore it when judging echo-only.
+    actionable = [s for s in stmts if not _ASSIGN_ONLY.match(s)]
+    if not actionable:
+        return False
+    if not all(_NOISE_ONLY.match(s) for s in actionable):
         return False
     stripped = _strip_quoted(body)
     if _ASSERT_IN_IF.search(stripped):
@@ -532,6 +557,40 @@ _HEADER_TOTAL = re.compile(
 )
 
 
+def recount_ledger_sections(text: str) -> dict[str, int]:
+    """Row counts under `## A1` / `## A2` / `## A3` headings."""
+    counts = {"A1": 0, "A2": 0, "A3": 0}
+    section: str | None = None
+    for line in text.splitlines():
+        if re.match(r"^## A1\b", line):
+            section = "A1"
+            continue
+        if re.match(r"^## A2\b", line):
+            section = "A2"
+            continue
+        if re.match(r"^## A3\b", line):
+            section = "A3"
+            continue
+        if re.match(r"^## ", line):
+            section = None
+            continue
+        if section is None:
+            continue
+        if (
+            not line.startswith("|")
+            or "MIT file:line" in line
+            or line.startswith("| ---")
+        ):
+            continue
+        cols = _split_ledger_row(line)
+        if len(cols) < 7:
+            continue
+        if cols[5] == "verdict":
+            continue
+        counts[section] += 1
+    return counts
+
+
 def recount_ledger_verdicts(text: str) -> dict[str, int]:
     counts = {k: 0 for k in _VERDICT_KEYS}
     for line in text.splitlines():
@@ -582,14 +641,22 @@ def check_ledger_tally(text: str | None = None) -> None:
             f"{want} != recount {got}"
         )
     total = _HEADER_TOTAL.search(text)
-    if total:
-        header_n, a1, a2, a3 = (int(g) for g in total.groups())
-        n = sum(got.values())
-        if header_n != n or header_n != a1 + a2 + a3:
-            _die(
-                f"docs/mit-parity-ledger.md total {header_n} "
-                f"= A1 {a1} + A2 {a2} + A3 {a3} != recount {n}"
-            )
+    if not total:
+        _die("docs/mit-parity-ledger.md missing A1/A2/A3 total line")
+    header_n, a1, a2, a3 = (int(g) for g in total.groups())
+    n = sum(got.values())
+    if header_n != n or header_n != a1 + a2 + a3:
+        _die(
+            f"docs/mit-parity-ledger.md total {header_n} "
+            f"= A1 {a1} + A2 {a2} + A3 {a3} != recount {n}"
+        )
+    sec = recount_ledger_sections(text)
+    want_sec = {"A1": a1, "A2": a2, "A3": a3}
+    if sec != want_sec:
+        _die(
+            f"docs/mit-parity-ledger.md section split "
+            f"header {want_sec} != recount {sec}"
+        )
 
 
 def check_working_gitignored() -> None:
@@ -719,6 +786,27 @@ jobs:
     redir_echo = 'if true; then\n    echo skip > /tmp/x\nfi\n'
     if not informational_if_starts(redir_echo):
         raise AssertionError("echo > file without assert must be a violation")
+    assign_echo = 'if true; then\n    n=1\n    echo skip\nfi\n'
+    if not informational_if_starts(assign_echo):
+        raise AssertionError("assignment must not excuse echo-only")
+    brace_echo = 'if true; then\n    { echo x; } > /tmp/x\nfi\n'
+    if not informational_if_starts(brace_echo):
+        raise AssertionError("{ echo; } redirect must be a violation")
+    subshell_echo = 'if true; then\n    ( echo x ) > /tmp/x\nfi\n'
+    if not informational_if_starts(subshell_echo):
+        raise AssertionError("( echo ) redirect must be a violation")
+    heredoc = 'if true; then\n    cat <<EOF > /tmp/x\nhi\nEOF\nfi\n'
+    if not informational_if_starts(heredoc):
+        raise AssertionError("heredoc arm must be a violation")
+    cmp_ok = 'if true; then\n    cmp -s a b\nfi\n'
+    if informational_if_starts(cmp_ok):
+        raise AssertionError("cmp arm must assert")
+    test_ok = 'if true; then\n    [ "$x" = 1 ]\nfi\n'
+    if informational_if_starts(test_ok):
+        raise AssertionError("[ ] arm must assert")
+    unavail_ok = 'if true; then\n    unavailable "x"\nfi\n'
+    if informational_if_starts(unavail_ok):
+        raise AssertionError("unavailable arm must assert")
 
     class _Alarm(Exception):
         pass
@@ -820,9 +908,12 @@ jobs:
         "**1** = A1 1 + A2 0 + A3 0.\n"
         "exact 1 · stricter-documented 0 · deviation 0 ·\n"
         "absent 0 · deferred 0.\n"
+        "## A1 — tgs\n"
         "| MIT file:line | check | MIT | Rust | e_text | verdict | proof |\n"
         "| --- | --- | --- | --- | --- | --- | --- |\n"
         "| kdc_util.c:1 | x | y | z | w | exact | diffsend `unknown-cname` |\n"
+        "## A2 — as\n"
+        "## A3 — fast\n"
     )
     check_ledger_tally(ledger_tally_ok)
     ledger_tally_bad = ledger_tally_ok.replace(
@@ -830,6 +921,33 @@ jobs:
         "exact 49 · stricter-documented 0 · deviation 95 ·",
     )
     _must_die(check_ledger_tally, ledger_tally_bad)
+    ledger_tally_no_total = (
+        "Counts:\n"
+        "exact 1 · stricter-documented 0 · deviation 0 ·\n"
+        "absent 0 · deferred 0.\n"
+        "| MIT file:line | check | MIT | Rust | e_text | verdict | proof |\n"
+        "| --- | --- | --- | --- | --- | --- |\n"
+        "| kdc_util.c:1 | x | y | z | w | exact | diffsend `unknown-cname` |\n"
+    )
+    _must_die(check_ledger_tally, ledger_tally_no_total)
+    ledger_tally_ok_sections = (
+        "Counts:\n"
+        "**1** = A1 1 + A2 0 + A3 0.\n"
+        "exact 1 · stricter-documented 0 · deviation 0 ·\n"
+        "absent 0 · deferred 0.\n"
+        "## A1 — tgs\n"
+        "| MIT file:line | check | MIT | Rust | e_text | verdict | proof |\n"
+        "| --- | --- | --- | --- | --- | --- |\n"
+        "| kdc_util.c:1 | x | y | z | w | exact | diffsend `unknown-cname` |\n"
+        "## A2 — as\n"
+        "## A3 — fast\n"
+    )
+    check_ledger_tally(ledger_tally_ok_sections)
+    ledger_tally_wrong_split = ledger_tally_ok_sections.replace(
+        "**1** = A1 1 + A2 0 + A3 0.",
+        "**1** = A1 0 + A2 1 + A3 0.",
+    )
+    _must_die(check_ledger_tally, ledger_tally_wrong_split)
     not_ci = Workflow(
         pathlib.Path("not-ci.yml"),
         "name: x\non:\n  push:\njobs:\n  test:\n    timeout-minutes: 1\n    steps:\n      - run: echo hi\n",
