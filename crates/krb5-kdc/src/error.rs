@@ -80,12 +80,22 @@ impl From<krb5_protocol::Error> for Error {
     fn from(e: krb5_protocol::Error) -> Self {
         match e {
             krb5_protocol::Error::KrbError { code, text } => Self::Protocol {
-                code,
+                code: errcode_to_protocol(code),
                 text,
                 e_data: None,
                 detail: None,
             },
             other => Self::Crypto(other.to_string()),
         }
+    }
+}
+
+/// MIT `kdc_util.c:691-697` `errcode_to_protocol`.
+#[must_use]
+pub fn errcode_to_protocol(code: i32) -> i32 {
+    if (0..=128).contains(&code) {
+        code
+    } else {
+        krb5_types::err::GENERIC
     }
 }

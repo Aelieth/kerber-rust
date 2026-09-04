@@ -466,6 +466,22 @@ fn handle_request_empty_is_dropped() {
 }
 
 #[test]
+fn unknown_client_e_text_is_client_not_found() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["nosuchuser"]);
+    let req = as_req(cname, TEST_REALM, 9, None).unwrap();
+    let bytes = encode(&req).unwrap();
+    let reply = krb5_kdc::handle_request(&store, &bytes).expect("KRB-ERROR");
+    let e: KrbError = decode(&reply).expect("KRB-ERROR");
+    assert_eq!(e.error_code, err::C_PRINCIPAL_UNKNOWN);
+    let text = e
+        .e_text
+        .as_ref()
+        .and_then(|t| std::str::from_utf8(t.as_bytes()).ok());
+    assert_eq!(text, Some("CLIENT_NOT_FOUND"));
+}
+
+#[test]
 fn non_ascii_realm_is_krb_error_not_panic() {
     let store = PrincipalStore::new("CAFÉ.TEST");
     let r = std::panic::catch_unwind(|| krb5_kdc::handle_request(&store, &[]));

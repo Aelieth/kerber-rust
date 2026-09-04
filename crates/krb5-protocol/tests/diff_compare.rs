@@ -101,9 +101,11 @@ fn sample_parts(
 
 #[test]
 fn krb_error_volatile_only_passes_stable_mismatch_fails() {
-    let rust = sample_error(err::C_PRINCIPAL_UNKNOWN, 0, "rust-text");
-    let mit = sample_error(err::C_PRINCIPAL_UNKNOWN, 7, "mit-text");
-    compare_krb_error(&rust, &mit).expect("time/e_text must be masked");
+    let rust = sample_error(err::C_PRINCIPAL_UNKNOWN, 0, "CLIENT_NOT_FOUND");
+    let mit = sample_error(err::C_PRINCIPAL_UNKNOWN, 7, "CLIENT_NOT_FOUND");
+    compare_krb_error(&rust, &mit).expect("times must be masked");
+    let other = sample_error(err::C_PRINCIPAL_UNKNOWN, 0, "unknown client");
+    compare_krb_error(&rust, &other).expect_err("e_text mismatch must fail");
 
     let bad = sample_error(err::S_PRINCIPAL_UNKNOWN, 0, "x");
     let err = compare_krb_error(&rust, &bad).expect_err("error_code mismatch must fail");

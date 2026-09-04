@@ -19,6 +19,7 @@ mod mkey;
 mod persist;
 mod plugins;
 mod preauth;
+mod status;
 mod store;
 
 pub use acl::{Acl, AclEntry, AdminOp, Restrictions};

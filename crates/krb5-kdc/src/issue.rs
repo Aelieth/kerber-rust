@@ -23,8 +23,10 @@ use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::plugins::{PreauthAction, current_policy, run_as_preauth};
 use crate::preauth::{
-    FastOk, fast_finished, find_pa, make_cookie, unwrap_fast, unwrap_fast_tgs, wrap_fast_rep,
+    FastOk, fast_finished, find_pa, make_cookie, proto, proto_d, unwrap_fast, unwrap_fast_tgs,
+    wrap_fast_rep,
 };
+use crate::status;
 use crate::store::{
     KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED, KDB_DISALLOW_PROXIABLE,
     KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_NO_AUTH_DATA_REQUIRED,
@@ -172,7 +174,13 @@ fn as_reply(
     match issue_as_from(store, req, Some(raw)) {
         Ok(issued) => Ok((encode(&issued.rep)?, None)),
         Err(Error::PreauthRequired { e_data }) => Ok((
-            encode_krb_error(store, err::PREAUTH_REQUIRED, None, Some(e_data), body),
+            encode_krb_error(
+                store,
+                err::PREAUTH_REQUIRED,
+                Some(status::NEEDED_PREAUTH),
+                Some(e_data),
+                body,
+            ),
             None,
         )),
         Err(Error::Protocol {
@@ -184,17 +192,35 @@ fn as_reply(
             encode_krb_error(store, code, text.as_deref(), e_data, body),
             detail.filter(|s| !s.is_empty()),
         )),
-        Err(Error::Crypto(_)) => Ok((
-            encode_krb_error(store, err::PREAUTH_FAILED, Some("preauth"), None, body),
-            None,
+        Err(Error::Crypto(d)) => Ok((
+            encode_krb_error(
+                store,
+                err::PREAUTH_FAILED,
+                Some(status::PREAUTH_FAILED),
+                None,
+                body,
+            ),
+            Some(d).filter(|s| !s.is_empty()),
         )),
-        Err(Error::Asn1(_)) => Ok((
-            encode_krb_error(store, err::GENERIC, Some("asn1"), None, body),
-            None,
+        Err(Error::Asn1(d)) => Ok((
+            encode_krb_error(
+                store,
+                err::GENERIC,
+                Some(status::UNKNOWN_REASON),
+                None,
+                body,
+            ),
+            Some(d).filter(|s| !s.is_empty()),
         )),
         Err(e) => Ok((
-            encode_krb_error(store, err::GENERIC, Some(&e.to_string()), None, body),
-            None,
+            encode_krb_error(
+                store,
+                err::GENERIC,
+                Some(status::LOOKING_UP_CLIENT),
+                None,
+                body,
+            ),
+            Some(e.to_string()).filter(|s| !s.is_empty()),
         )),
     }
 }
@@ -216,17 +242,23 @@ fn tgs_reply(
             encode_krb_error(store, code, text.as_deref(), e_data, body),
             detail.filter(|s| !s.is_empty()),
         )),
-        Err(Error::Crypto(_)) => Ok((
-            encode_krb_error(store, err::BAD_INTEGRITY, Some("integrity"), None, body),
-            None,
+        Err(Error::Crypto(d)) => Ok((
+            encode_krb_error(
+                store,
+                err::BAD_INTEGRITY,
+                Some(status::PROCESS_TGS),
+                None,
+                body,
+            ),
+            Some(d).filter(|s| !s.is_empty()),
         )),
-        Err(Error::Asn1(_)) => Ok((
-            encode_krb_error(store, err::GENERIC, Some("asn1"), None, body),
-            None,
+        Err(Error::Asn1(d)) => Ok((
+            encode_krb_error(store, err::GENERIC, Some(status::PROCESS_TGS), None, body),
+            Some(d).filter(|s| !s.is_empty()),
         )),
         Err(e) => Ok((
-            encode_krb_error(store, err::GENERIC, Some(&e.to_string()), None, body),
-            None,
+            encode_krb_error(store, err::GENERIC, Some(status::PROCESS_TGS), None, body),
+            Some(e.to_string()).filter(|s| !s.is_empty()),
         )),
     }
 }
@@ -274,18 +306,18 @@ fn issue_as_body(
         check_fast_options(&f.fast_options)?;
     }
     if utf8_realm(&body.realm)? != store.realm() {
-        return Err(proto(err::C_PRINCIPAL_UNKNOWN, "wrong realm"));
+        return Err(proto(err::C_PRINCIPAL_UNKNOWN, status::CLIENT_NOT_FOUND));
     }
     if body.kdc_options.unsupported_bits() != 0 {
-        return Err(proto(err::BADOPTION, "unsupported KDCOptions"));
+        return Err(proto(err::BADOPTION, status::INVALID_AS_OPTIONS));
     }
     let req_cname = body
         .cname
         .clone()
-        .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, "no cname"))?;
+        .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, status::NULL_CLIENT))?;
     let client = store
         .fetch_name(&req_cname)?
-        .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, "unknown client"))?;
+        .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, status::CLIENT_NOT_FOUND))?;
     let cname = if req_cname.name_type == PrincipalName::NT_ENTERPRISE
         || body.kdc_options.bit(flag_bit::CANONICALIZE)
     {
@@ -308,13 +340,13 @@ fn issue_as_body(
     let in_lockout_window =
         duration == 0 || (last_failed > 0 && now < last_failed.saturating_add(duration));
     if client.locked || (count_locked && in_lockout_window) {
-        return Err(proto(err::CLIENT_REVOKED, "locked"));
+        return Err(proto(err::CLIENT_REVOKED, status::CLIENT_LOCKED_OUT));
     }
     current_policy().check_as(store, &client)?;
     let etype = select_etype(&body.etype, &client, store.policy().allow_weak_crypto)?;
     let ckey = client
         .key_for(etype)
-        .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, "no client key"))?;
+        .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, status::CANT_FIND_CLIENT_KEY))?;
     let encoded_body;
     let body_der: &[u8] = if let Some(slice) = raw.and_then(kdc_req_body_der) {
         slice
@@ -394,7 +426,7 @@ fn issue_as_body(
         return Err(preauth_required(store, &client));
     }
     if attr(&client, KDB_REQUIRES_HW_AUTH) && !hw_preauth {
-        return Err(proto(err::PREAUTH_FAILED, "NO HW PREAUTH"));
+        return Err(proto(err::PREAUTH_FAILED, status::NO_HW_PREAUTH));
     }
 
     let sname = body
@@ -403,17 +435,17 @@ fn issue_as_body(
         .unwrap_or_else(|| PrincipalName::krbtgt(store.realm()));
     let server = store
         .fetch_name(&sname)?
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "unknown server"))?;
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::SERVER_NOT_FOUND))?;
     let skey = server
         .key_for(etype)
         .or_else(|| server.best_key())
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no server key"))?;
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::FINDING_SERVER_KEY))?;
     check_db_times(Some(&client), &server)?;
     check_as_policy_flags(&client, &server, body)?;
     if let Some(from) = &body.from
         && from.unix_seconds() > body.till.unix_seconds()
     {
-        return Err(proto(err::NEVER_VALID, "from after till"));
+        return Err(proto(err::NEVER_VALID, status::UNKNOWN_REASON));
     }
     let session = random_key(etype)?;
     let now = KerberosTime::now();
@@ -450,14 +482,14 @@ fn issue_as_body(
     let end = starttime
         .add_seconds(i64::try_from(life).unwrap_or(i64::MAX))
         .or_else(|_| starttime.add_hours(10))
-        .map_err(|_| proto(err::NEVER_VALID, "endtime"))?;
+        .map_err(|_| proto(err::NEVER_VALID, status::UNKNOWN_REASON))?;
     let include_pac = !attr(&server, KDB_NO_AUTH_DATA_REQUIRED);
     let krbtgt_p = store
         .fetch_krbtgt()?
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::GET_LOCAL_TGT))?;
     let krbtgt_key = krbtgt_p
         .best_key()
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::GET_LOCAL_TGT))?;
     let pac_kdc = if sname.is_krbtgt_for(store.realm()) {
         skey.key.clone()
     } else {
@@ -596,7 +628,7 @@ fn issue_tgs_from(
     };
     // MIT kdc_process_tgs_req (PROCESS_TGS) before kdc_find_fast.
     let pa_tgs = extract_pa_tgs(req.0.padata.as_deref())
-        .ok_or_else(|| proto(err::PREAUTH_FAILED, "no PA-TGS-REQ"))?;
+        .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PROCESS_TGS))?;
     let header = process_tgs_header(store, pa_tgs.as_ref(), body_der)?;
     let tgs_fast = unwrap_fast_tgs(
         req.0.padata.as_deref(),
@@ -620,7 +652,7 @@ fn process_tgs_header(
 ) -> Result<HeaderTgt, Error> {
     let ap: krb5_types::ApReq = decode(ap_raw)?;
     if !ap.ticket.sname.is_krbtgt_for(store.realm()) {
-        return Err(proto(err::NOT_US, "presented ticket is not a TGT"));
+        return Err(proto(err::NOT_US, status::BAD_TGS_SERVER_NAME));
     }
     let tkt_etype = EncryptionType::from_iana(ap.ticket.enc_part.etype)
         .or_else(|_| EncryptionType::known(ap.ticket.enc_part.etype))?;
@@ -634,20 +666,20 @@ fn process_tgs_header(
     authenticator
         .cusec
         .validate()
-        .map_err(|_| proto(err::GENERIC, "cusec"))?;
+        .map_err(|_| proto(err::GENERIC, status::PROCESS_TGS))?;
     let auth_realm = utf8_realm(&authenticator.crealm)?;
     let tkt_realm = utf8_realm(&enc_tkt.crealm)?;
     if !krb5_types::principal_compare(&authenticator.cname, auth_realm, &enc_tkt.cname, tkt_realm) {
-        return Err(proto(err::BADMATCH, "PROCESS_TGS"));
+        return Err(proto(err::BADMATCH, status::PROCESS_TGS));
     }
     if let Some(ck) = &authenticator.cksum {
         // MIT kdc_util.c:112-140 comp_cksum: unknown 15, not coll-proof 50,
         // verify fail 31. 1.22.2 sets CKSUM_NOT_COLL_PROOF on no row.
         if !cksumtype_is_known(ck.cksumtype) {
-            return Err(proto(err::SUMTYPE_NOSUPP, "PROCESS_TGS"));
+            return Err(proto(err::SUMTYPE_NOSUPP, status::PROCESS_TGS));
         }
         if !cksumtype_is_coll_proof(ck.cksumtype) {
-            return Err(proto(err::INAPP_CKSUM, "PROCESS_TGS"));
+            return Err(proto(err::INAPP_CKSUM, status::PROCESS_TGS));
         }
         let ck_usage = KeyUsage::new(ku::TGS_REQ_AUTH_CKSUM)?;
         verify_checksum_type(
@@ -659,12 +691,12 @@ fn process_tgs_header(
         )
         .map_err(|e| match e {
             krb5_crypto::Error::UnsupportedChecksum(_) | krb5_crypto::Error::BadChecksumSize => {
-                proto(err::GENERIC, "PROCESS_TGS")
+                proto(err::GENERIC, status::PROCESS_TGS)
             }
-            _ => proto(err::BAD_INTEGRITY, "PROCESS_TGS"),
+            _ => proto(err::BAD_INTEGRITY, status::PROCESS_TGS),
         })?;
     } else {
-        return Err(proto(err::INAPP_CKSUM, "PROCESS_TGS"));
+        return Err(proto(err::INAPP_CKSUM, status::PROCESS_TGS));
     }
     Ok(HeaderTgt {
         ap,
@@ -687,7 +719,7 @@ fn issue_tgs_body(
         check_fast_options(&f.fast_options)?;
     }
     if body.kdc_options.unsupported_bits() != 0 {
-        return Err(proto(err::BADOPTION, "unsupported KDCOptions"));
+        return Err(proto(err::BADOPTION, status::UNKNOWN_REASON));
     }
     let tgs_padata = if let Some(f) = tgs_fast {
         Some(f.inner_padata.as_slice())
@@ -705,7 +737,7 @@ fn issue_tgs_body(
     let renew = body.kdc_options.bit(flag_bit::RENEW);
     let validate = body.kdc_options.bit(flag_bit::VALIDATE);
     if renew && validate {
-        return Err(proto(err::BADOPTION, "RENEW with VALIDATE"));
+        return Err(proto(err::BADOPTION, status::TICKET_NOT_RENEWABLE));
     }
     check_ticket_times(store, &enc_tkt, renew, validate)?;
     let rkey = ReplayKey {
@@ -720,25 +752,25 @@ fn issue_tgs_body(
         auth_hash: ReplayCache::hash_authenticator(ap.authenticator.cipher.as_ref()),
     };
     if store.tgs_replay().check_and_store(rkey) {
-        return Err(proto(err::REPEAT, "TGS authenticator replay"));
+        return Err(proto(err::REPEAT, status::PROCESS_TGS));
     }
     let sname = body
         .sname
         .clone()
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no sname"))?;
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::NULL_SERVER))?;
     // MIT get_local_tgt requires krbtgt/<body.realm>@<body.realm> in the KDB
     // before search_sprinc. A single-realm KDC answers 60 GET_LOCAL_TGT.
     let req_realm = utf8_realm(&body.realm)?.to_owned();
     if req_realm != store.realm() {
-        return Err(proto(err::GENERIC, "GET_LOCAL_TGT"));
+        return Err(proto(err::GENERIC, status::GET_LOCAL_TGT));
     }
     if (renew || validate) && sname != ap.ticket.sname {
-        return Err(proto(err::BADOPTION, "RENEW/VALIDATE server mismatch"));
+        return Err(proto(err::BADOPTION, status::RENEW_SERVER_MISMATCH));
     }
     current_policy().check_tgs(store, &sname)?;
     let server = store
         .fetch_name(&sname)?
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "unknown server"))?;
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::LOOKING_UP_SERVER))?;
     let want = body
         .etype
         .iter()
@@ -746,7 +778,7 @@ fn issue_tgs_body(
     let skey = want
         .and_then(|e| server.key_for(e))
         .or_else(|| server.best_key())
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no server key"))?;
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::FINDING_SERVER_KEY))?;
     let tgs_client = store.fetch_name(&enc_tkt.cname)?;
     // MIT TGS checks the server only; a valid TGT still issues after client expiry.
     check_db_times(None, &server)?;
@@ -759,11 +791,9 @@ fn issue_tgs_body(
         let header_cross = utf8_realm(&ap.ticket.realm)? != store.realm();
         let is_referral = sname.is_krbtgt() && !sname.is_krbtgt_for(store.realm());
         let local_user = if realm == store.realm() {
-            Some(
-                store
-                    .fetch_name(&user)?
-                    .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, "S4U2Self"))?,
-            )
+            Some(store.fetch_name(&user)?.ok_or_else(|| {
+                proto(err::C_PRINCIPAL_UNKNOWN, status::UNKNOWN_S4U2SELF_PRINCIPAL)
+            })?)
         } else {
             None
         };
@@ -775,7 +805,7 @@ fn issue_tgs_body(
         if !is_referral && !is_self {
             return Err(proto(
                 err::BADMATCH,
-                "INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH",
+                status::INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH,
             ));
         }
         check_tgs_s4u2self(body, local_user.is_some(), header_cross, is_referral)?;
@@ -808,15 +838,15 @@ fn issue_tgs_body(
     // MIT check_tgs_lineage: a local user on a foreign TGT is POLICY
     // (skipped for S4U2Self).
     if crealm == store.realm() && is_crossrealm && !s4u2self {
-        return Err(proto(err::POLICY, "INVALID LINEAGE"));
+        return Err(proto(err::POLICY, status::INVALID_LINEAGE));
     }
     if is_crossrealm {
         if transited.tr_type != 1 {
-            return Err(proto(err::TRTYPE_NOSUPP, "VALIDATE_TRANSIT_TYPE"));
+            return Err(proto(err::TRTYPE_NOSUPP, status::VALIDATE_TRANSIT_TYPE));
         }
         transited = transited
             .append_realm(prev_hop, crealm, req_realm.as_str())
-            .map_err(|_| proto(err::ILL_CR_TKT, "ADD_TO_TRANSITED_LIST"))?;
+            .map_err(|_| proto(err::ILL_CR_TKT, status::ADD_TO_TRANSITED_LIST))?;
     }
     let transit_checked = if crealm == "WELLKNOWN:ANONYMOUS" {
         true
@@ -831,7 +861,7 @@ fn issue_tgs_body(
     let inherited_t = (renew || validate) && enc_tkt.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED);
     let set_transited_flag = !skip_transited && transit_checked;
     if !(inherited_t || set_transited_flag) && store.policy().reject_bad_transit {
-        return Err(proto(err::POLICY, "BAD_TRANSIT"));
+        return Err(proto(err::POLICY, status::BAD_TRANSIT));
     }
     let session = random_key(skey.etype)?;
     let now = KerberosTime::now();
@@ -842,7 +872,7 @@ fn issue_tgs_body(
     let ticket_renew_till;
     if renew {
         if !enc_tkt.flags.renewable() {
-            return Err(proto(err::BADOPTION, "TICKET NOT RENEWABLE"));
+            return Err(proto(err::BADOPTION, status::TICKET_NOT_RENEWABLE));
         }
         authtime = enc_tkt.authtime.clone();
         starttime = now.clone();
@@ -923,10 +953,10 @@ fn issue_tgs_body(
     }
     let krbtgt_p = store
         .fetch_krbtgt()?
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::GET_LOCAL_TGT))?;
     let krbtgt_key = krbtgt_p
         .best_key()
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::GET_LOCAL_TGT))?;
     // Referral TGT PAC 16/19/7 must be keyed with the inter-realm key
     // the foreign KDC holds (Windows TDO inbound), not the local krbtgt.
     let pac_kdc = if sname.is_krbtgt() && !sname.is_krbtgt_for(store.realm()) {
@@ -1046,14 +1076,14 @@ fn decrypt_presented_tgt(
         store.fetch_krbtgt()?
     } else {
         let name = PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", ticket_realm])
-            .map_err(|_| proto(err::S_PRINCIPAL_UNKNOWN, "PROCESS_TGS"))?;
+            .map_err(|_| proto(err::S_PRINCIPAL_UNKNOWN, status::PROCESS_TGS))?;
         store.fetch_name(&name)?
     };
     let Some(p) = princ else {
-        return Err(proto(err::S_PRINCIPAL_UNKNOWN, "PROCESS_TGS"));
+        return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::PROCESS_TGS));
     };
     if attr(&p, KDB_DISALLOW_ALL_TIX) || attr(&p, KDB_DISALLOW_SVR) {
-        return Err(proto(err::S_PRINCIPAL_UNKNOWN, "PROCESS_TGS"));
+        return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::PROCESS_TGS));
     }
     let usage = KeyUsage::new(ku::TICKET)?;
     let cipher = ap.ticket.enc_part.cipher.as_ref();
@@ -1074,7 +1104,7 @@ fn decrypt_presented_tgt(
             return Ok((part, key.clone(), plain));
         }
     }
-    Err(proto(err::BAD_INTEGRITY, "PROCESS_TGS"))
+    Err(proto(err::BAD_INTEGRITY, status::PROCESS_TGS))
 }
 
 fn check_ticket_times(
@@ -1087,40 +1117,40 @@ fn check_ticket_times(
     let skew = store.policy().skew;
     if validate {
         if !tkt.flags.invalid() {
-            return Err(proto(err::BADOPTION, "VALIDATE VALID TICKET"));
+            return Err(proto(err::BADOPTION, status::VALIDATE_VALID_TICKET));
         }
         let start = tkt.starttime.as_ref().unwrap_or(&tkt.authtime);
         if now.delta_seconds(start) < -skew {
-            return Err(proto(err::TKT_NYV, "NOT_YET_VALID"));
+            return Err(proto(err::TKT_NYV, status::NOT_YET_VALID));
         }
         if tkt.endtime.delta_seconds(&now) < -skew {
-            return Err(proto(err::TKT_EXPIRED, "expired"));
+            return Err(proto(err::TKT_EXPIRED, status::TKT_EXPIRED));
         }
         return Ok(());
     }
     if tkt.flags.invalid() {
-        return Err(proto(err::TKT_NYV, "INVALID"));
+        return Err(proto(err::TKT_NYV, status::TICKET_NOT_VALID));
     }
     if let Some(start) = &tkt.starttime
         && now.delta_seconds(start) < -skew
     {
-        return Err(proto(err::TKT_NYV, "not yet valid"));
+        return Err(proto(err::TKT_NYV, status::NOT_YET_VALID));
     }
     if renew {
         if !tkt.flags.renewable() {
-            return Err(proto(err::BADOPTION, "TICKET NOT RENEWABLE"));
+            return Err(proto(err::BADOPTION, status::TICKET_NOT_RENEWABLE));
         }
         match &tkt.renew_till {
             Some(till) if till.unix_seconds() <= now.unix_seconds() => {
-                return Err(proto(err::TKT_EXPIRED, "renew_till"));
+                return Err(proto(err::TKT_EXPIRED, status::TKT_EXPIRED));
             }
-            None => return Err(proto(err::TKT_EXPIRED, "renew_till")),
+            None => return Err(proto(err::TKT_EXPIRED, status::TKT_EXPIRED)),
             Some(_) => {}
         }
         return Ok(());
     }
     if tkt.endtime.delta_seconds(&now) < -skew {
-        return Err(proto(err::TKT_EXPIRED, "expired"));
+        return Err(proto(err::TKT_EXPIRED, status::TKT_EXPIRED));
     }
     Ok(())
 }
@@ -1164,8 +1194,13 @@ fn mint_ticket(
         part.authorization_data = Some(placeholder);
         let checksum_der = encode(&part)?;
         let ident = if let Some(b) = logon_override {
-            let v = parse_kerb_validation_info(b)
-                .map_err(|e| proto(err::BAD_INTEGRITY, &format!("PAC logon: {e}")))?;
+            let v = parse_kerb_validation_info(b).map_err(|e| {
+                proto_d(
+                    err::BAD_INTEGRITY,
+                    status::HEADER_PAC,
+                    format!("PAC logon: {e}"),
+                )
+            })?;
             PacIdentity {
                 sam: v.effective_name.value,
                 realm: crealm.to_owned(),
@@ -1284,7 +1319,7 @@ fn select_etype(
             return Ok(e);
         }
     }
-    Err(proto(err::ETYPE_NOSUPP, "no common etype"))
+    Err(proto(err::ETYPE_NOSUPP, status::BAD_ENCRYPTION_TYPE))
 }
 
 pub(crate) fn extract_enc_timestamp(padata: Option<&[PaData]>) -> Option<&OctetString> {
@@ -1323,16 +1358,17 @@ fn verify_encrypted_challenge(
     )?;
     let usage = KeyUsage::new(ku::ENC_CHALLENGE_CLIENT)?;
     let plain = decrypt(&chal, usage, enc.cipher.as_ref())
-        .map_err(|_| proto(err::PREAUTH_FAILED, "encrypted challenge"))?;
+        .map_err(|_| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
     let ts: PaEncTsEnc =
-        decode(&plain).map_err(|_| proto(err::PREAUTH_FAILED, "encrypted challenge der"))?;
+        decode(&plain).map_err(|_| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
     if let Some(u) = ts.pausec {
-        u.validate().map_err(|_| proto(err::GENERIC, "pausec"))?;
+        u.validate()
+            .map_err(|_| proto(err::GENERIC, status::PREAUTH_FAILED))?;
     }
     let now = i64::from(KerberosTime::now().unix_seconds());
     let then = i64::from(ts.patimestamp.unix_seconds());
     if (now - then).abs() > store.policy().skew {
-        return Err(proto(err::SKEW, "encrypted challenge skew"));
+        return Err(proto(err::SKEW, status::PREAUTH_FAILED));
     }
     let rkey = ReplayKey {
         client: client.id(),
@@ -1342,7 +1378,7 @@ fn verify_encrypted_challenge(
         auth_hash: ReplayCache::hash_authenticator(blob),
     };
     if store.pa_replay().check_and_store(rkey) {
-        return Err(proto(err::REPEAT, "encrypted challenge replay"));
+        return Err(proto(err::REPEAT, status::PREAUTH_FAILED));
     }
     Ok(())
 }
@@ -1386,12 +1422,13 @@ pub(crate) fn verify_enc_timestamp(
     let plain = decrypt(key, usage, enc.cipher.as_ref())?;
     let ts: PaEncTsEnc = decode(&plain)?;
     if let Some(u) = ts.pausec {
-        u.validate().map_err(|_| proto(err::GENERIC, "pausec"))?;
+        u.validate()
+            .map_err(|_| proto(err::GENERIC, status::PREAUTH_FAILED))?;
     }
     let now = i64::from(KerberosTime::now().unix_seconds());
     let then = i64::from(ts.patimestamp.unix_seconds());
     if (now - then).abs() > store.policy().skew {
-        return Err(proto(err::SKEW, "PA-ENC-TIMESTAMP skew"));
+        return Err(proto(err::SKEW, status::PREAUTH_FAILED));
     }
     let rkey = ReplayKey {
         client: client.id(),
@@ -1401,7 +1438,7 @@ pub(crate) fn verify_enc_timestamp(
         auth_hash: ReplayCache::hash_authenticator(blob),
     };
     if store.pa_replay().check_and_store(rkey) {
-        return Err(proto(err::REPEAT, "PA-ENC-TIMESTAMP replay"));
+        return Err(proto(err::REPEAT, status::PREAUTH_FAILED));
     }
     Ok(())
 }
@@ -1456,20 +1493,26 @@ fn wrap_as_fast(
             e_data,
             detail,
         } => (code, text, e_data.unwrap_or_default(), None, detail),
-        Error::Crypto(_) => (
+        Error::Crypto(d) => (
             err::PREAUTH_FAILED,
-            Some("preauth".into()),
+            Some(status::PREAUTH_FAILED.to_owned()),
             Vec::new(),
             None,
-            None,
+            Some(d).filter(|s| !s.is_empty()),
         ),
-        Error::Asn1(_) => (err::GENERIC, Some("asn1".into()), Vec::new(), None, None),
+        Error::Asn1(d) => (
+            err::GENERIC,
+            Some(status::UNKNOWN_REASON.to_owned()),
+            Vec::new(),
+            None,
+            Some(d).filter(|s| !s.is_empty()),
+        ),
         other => (
             err::GENERIC,
-            Some(other.to_string()),
+            Some(status::UNKNOWN_REASON.to_owned()),
             Vec::new(),
             None,
-            None,
+            Some(other.to_string()).filter(|s| !s.is_empty()),
         ),
     };
     let inner_err = encode_krb_error(
@@ -1569,7 +1612,7 @@ fn encode_krb_error(
         .unwrap_or_else(|| store.realm().to_owned());
     let realm = match krb5_types::try_ascii(&realm_s) {
         Ok(r) => r,
-        Err(_) => match krb5_types::try_ascii("INVALID") {
+        Err(_) => match krb5_types::try_ascii(status::TICKET_NOT_VALID) {
             Ok(r) => r,
             Err(_) => return Vec::new(),
         },
@@ -1580,7 +1623,10 @@ fn encode_krb_error(
         match PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", realm_s.as_str()]) {
             Ok(n) => n,
             Err(_) => {
-                match PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", "INVALID"]) {
+                match PrincipalName::try_new(
+                    PrincipalName::NT_SRV_INST,
+                    ["krbtgt", status::TICKET_NOT_VALID],
+                ) {
                     Ok(n) => n,
                     Err(_) => return Vec::new(),
                 }
@@ -1606,7 +1652,7 @@ fn encode_krb_error(
 }
 
 fn ks(s: &str) -> Result<krb5_types::KerberosString, Error> {
-    krb5_types::try_ascii(s).map_err(|_| proto(err::GENERIC, "non-ascii realm"))
+    krb5_types::try_ascii(s).map_err(|_| proto(err::GENERIC, status::UNKNOWN_REASON))
 }
 
 fn renew_till_for(
@@ -1682,15 +1728,6 @@ fn take_der(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
     Some((tag, inner, rest))
 }
 
-fn proto(code: i32, text: &str) -> Error {
-    Error::Protocol {
-        code,
-        text: Some(text.to_owned()),
-        e_data: None,
-        detail: None,
-    }
-}
-
 /// MIT `check_tgs_s4u2self` (`tgs_policy.c`) option and realm-combination checks.
 fn check_tgs_s4u2self(
     body: &krb5_types::KdcReqBody,
@@ -1699,16 +1736,19 @@ fn check_tgs_s4u2self(
     is_referral: bool,
 ) -> Result<(), Error> {
     if s4u2self_as_invalid_options(body) {
-        return Err(proto(err::BADOPTION, "INVALID S4U2SELF OPTIONS"));
+        return Err(proto(err::BADOPTION, status::INVALID_S4U2SELF_OPTIONS));
     }
     if !header_cross && is_referral {
-        return Err(proto(err::S_PRINCIPAL_UNKNOWN, "LOOKING_UP_SERVER"));
+        return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::LOOKING_UP_SERVER));
     }
     if local_user && header_cross && !is_referral {
-        return Err(proto(err::C_PRINCIPAL_UNKNOWN, "NOT_CROSS_REALM_REQUEST"));
+        return Err(proto(
+            err::C_PRINCIPAL_UNKNOWN,
+            status::NOT_CROSS_REALM_REQUEST,
+        ));
     }
     if !local_user && !header_cross {
-        return Err(proto(err::POLICY, "S4U2SELF_CLIENT_NOT_OURS"));
+        return Err(proto(err::POLICY, status::S4U2SELF_CLIENT_NOT_OURS));
     }
     Ok(())
 }
@@ -1724,7 +1764,7 @@ fn s4u2self_as_invalid_options(body: &krb5_types::KdcReqBody) -> bool {
 
 fn check_s4u2self_locked(for_p: &Principal, server: &Principal) -> Result<(), Error> {
     if for_p.locked || attr(for_p, KDB_DISALLOW_ALL_TIX) {
-        return Err(proto(err::CLIENT_REVOKED, "S4U2Self locked"));
+        return Err(proto(err::CLIENT_REVOKED, status::CLIENT_LOCKED_OUT));
     }
     check_db_times(Some(for_p), server)
 }
@@ -1734,16 +1774,16 @@ fn check_db_times(client: Option<&Principal>, server: &Principal) -> Result<(), 
     let now = crate::store::unix_now_u32();
     if let Some(c) = client {
         if c.expiration != 0 && now > c.expiration {
-            return Err(proto(err::NAME_EXP, "CLIENT EXPIRED"));
+            return Err(proto(err::NAME_EXP, status::CLIENT_EXPIRED));
         }
         let needchange = attr(c, KDB_REQUIRES_PWCHANGE);
         let pw_lapsed = c.pw_expire != 0 && now > c.pw_expire;
         if (needchange || pw_lapsed) && server.attributes & KDB_PWCHANGE_SERVICE == 0 {
-            return Err(proto(err::KEY_EXPIRED, "CLIENT KEY EXPIRED"));
+            return Err(proto(err::KEY_EXPIRED, status::CLIENT_KEY_EXPIRED));
         }
     }
     if server.expiration != 0 && now > server.expiration {
-        return Err(proto(err::SERVICE_EXP, "SERVICE EXPIRED"));
+        return Err(proto(err::SERVICE_EXP, status::SERVICE_EXPIRED));
     }
     Ok(())
 }
@@ -1758,15 +1798,15 @@ fn check_as_policy_flags(
     body: &krb5_types::KdcReqBody,
 ) -> Result<(), Error> {
     if attr(server, KDB_DISALLOW_ALL_TIX) {
-        return Err(proto(err::S_PRINCIPAL_UNKNOWN, "SERVICE LOCKED OUT"));
+        return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::SERVICE_LOCKED_OUT));
     }
     if attr(server, KDB_DISALLOW_SVR) && !body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY) {
-        return Err(proto(err::MUST_USE_USER2USER, "SERVICE NOT ALLOWED"));
+        return Err(proto(err::MUST_USE_USER2USER, status::SERVICE_NOT_ALLOWED));
     }
     if (body.kdc_options.bit(flag_bit::MAY_POSTDATE) || body.kdc_options.bit(flag_bit::POSTDATED))
         && (attr(client, KDB_DISALLOW_POSTDATED) || attr(server, KDB_DISALLOW_POSTDATED))
     {
-        return Err(proto(err::CANNOT_POSTDATE, "POSTDATE NOT ALLOWED"));
+        return Err(proto(err::CANNOT_POSTDATE, status::POSTDATE_NOT_ALLOWED));
     }
     Ok(())
 }
@@ -1778,22 +1818,22 @@ fn check_tgs_policy_flags(
     tkt: &EncTicketPart,
 ) -> Result<(), Error> {
     if attr(server, KDB_DISALLOW_ALL_TIX) {
-        return Err(proto(err::S_PRINCIPAL_UNKNOWN, "SERVER LOCKED OUT"));
+        return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::SERVER_LOCKED_OUT));
     }
     if attr(server, KDB_DISALLOW_SVR) && !body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY) {
-        return Err(proto(err::MUST_USE_USER2USER, "SERVER NOT ALLOWED"));
+        return Err(proto(err::MUST_USE_USER2USER, status::SERVER_NOT_ALLOWED));
     }
     if attr(server, KDB_DISALLOW_TGT_BASED) && header_is_tgt {
-        return Err(proto(err::POLICY, "TGT BASED NOT ALLOWED"));
+        return Err(proto(err::POLICY, status::TGT_BASED_NOT_ALLOWED));
     }
     if attr(server, KDB_REQUIRES_HW_AUTH) && !tkt.flags.bit(flag_bit::HW_AUTHENT) {
-        return Err(proto(err::GENERIC, "NO HW PREAUTH"));
+        return Err(proto(err::GENERIC, status::NO_HW_PREAUTH));
     }
     if attr(server, KDB_DISALLOW_POSTDATED)
         && (body.kdc_options.bit(flag_bit::MAY_POSTDATE)
             || body.kdc_options.bit(flag_bit::POSTDATED))
     {
-        return Err(proto(err::CANNOT_POSTDATE, "NON-POSTDATABLE TICKET"));
+        return Err(proto(err::CANNOT_POSTDATE, status::NON_POSTDATABLE_TICKET));
     }
     Ok(())
 }
@@ -1822,5 +1862,5 @@ fn apply_disallow_flags(
 }
 
 fn utf8_realm(r: &krb5_types::Realm) -> Result<&str, Error> {
-    std::str::from_utf8(r.as_bytes()).map_err(|_| proto(err::GENERIC, "non-ascii realm"))
+    std::str::from_utf8(r.as_bytes()).map_err(|_| proto(err::GENERIC, status::UNKNOWN_REASON))
 }

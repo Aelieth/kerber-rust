@@ -15,6 +15,7 @@ use krb5_types::{
 
 use crate::error::Error;
 use crate::kdb::{PrincipalRead, lookup_principal_id};
+use crate::status;
 use crate::store::Principal;
 
 pub(crate) struct FastOk {
@@ -271,10 +272,10 @@ fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<Protoco
 pub(crate) fn make_cookie(store: &dyn PrincipalRead, payload: &[u8]) -> Result<Vec<u8>, Error> {
     let krbtgt_p = store
         .fetch_krbtgt()?
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::GET_LOCAL_TGT))?;
     let krbtgt = krbtgt_p
         .best_key()
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::GET_LOCAL_TGT))?;
     let usage = KeyUsage::new(ku::FAST_COOKIE)?;
     encrypt(&krbtgt.key, usage, payload).map_err(Error::from)
 }
@@ -282,12 +283,12 @@ pub(crate) fn make_cookie(store: &dyn PrincipalRead, payload: &[u8]) -> Result<V
 pub(crate) fn open_cookie(store: &dyn PrincipalRead, blob: &[u8]) -> Result<Vec<u8>, Error> {
     let krbtgt_p = store
         .fetch_krbtgt()?
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::GET_LOCAL_TGT))?;
     let krbtgt = krbtgt_p
         .best_key()
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::GET_LOCAL_TGT))?;
     let usage = KeyUsage::new(ku::FAST_COOKIE)?;
-    decrypt(&krbtgt.key, usage, blob).map_err(|_| proto(err::PREAUTH_FAILED, "bad cookie"))
+    decrypt(&krbtgt.key, usage, blob).map_err(|_| proto(err::PREAUTH_FAILED, status::READ_COOKIE))
 }
 
 /// Wrap KrbFastResponse into PA-FX-FAST padata.
@@ -348,10 +349,10 @@ pub(crate) fn process_spake(
     let msg: krb5_types::spake::PaSpake = decode(raw)?;
     if let krb5_types::spake::PaSpake::Response(resp) = &msg {
         let cookie = find_pa(padata, pa::FX_COOKIE)
-            .ok_or_else(|| proto(err::PREAUTH_FAILED, "SPAKE cookie"))?;
+            .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
         let secret = open_cookie(store, cookie)?;
         if secret.len() != 64 {
-            return Err(proto(err::PREAUTH_FAILED, "SPAKE cookie"));
+            return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
         }
         let mut sec = [0u8; 32];
         sec.copy_from_slice(&secret[..32]);
@@ -371,11 +372,11 @@ pub(crate) fn process_spake(
         )?;
         let usage = KeyUsage::new(ku::SPAKE)?;
         let factor_der = decrypt(&k1, usage, resp.factor.cipher.as_ref())
-            .map_err(|_| proto(err::PREAUTH_FAILED, "SPAKE factor"))?;
+            .map_err(|_| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
         let factor = decode::<krb5_types::spake::SpakeSecondFactor>(&factor_der)
-            .map_err(|_| proto(err::PREAUTH_FAILED, "SPAKE factor der"))?;
+            .map_err(|_| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
         if factor.factor_type != 1 {
-            return Err(proto(err::PREAUTH_FAILED, "SPAKE factor type"));
+            return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
         }
         let k0 = spake_derive_key(
             ikey,
@@ -445,11 +446,11 @@ pub(crate) fn process_pkinit(
     let cms = match decode::<krb5_types::pkinit::PaPkAsReq>(raw) {
         Ok(req) => req.signed_auth_pack.as_ref().to_vec(),
         Err(_) => krb5_types::pkinit::parse_pa_pk_as_req_cms(raw)
-            .ok_or_else(|| proto(err::PREAUTH_FAILED, "PKINIT PA-PK-AS-REQ"))?,
+            .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?,
     };
     let ca = store
         .pkinit_ca()
-        .ok_or_else(|| proto(err::PREAUTH_FAILED, "PKINIT not configured"))?;
+        .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
     let verified = krb5_types::pkinit::cms_verify_full(&cms, &ca.ca_cert).map_err(|e| {
         tracing::error!(
             event = "kdc.pkinit",
@@ -458,7 +459,7 @@ pub(crate) fn process_pkinit(
             error = e,
             cms_len = cms.len()
         );
-        proto(err::PREAUTH_FAILED, "PKINIT CMS")
+        proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED)
     })?;
     let req_cname = decode::<AsReq>(as_req_der)
         .ok()
@@ -471,7 +472,7 @@ pub(crate) fn process_pkinit(
             outcome = "error",
             error = "pkinit eContentType"
         );
-        return Err(proto(err::PREAUTH_FAILED, "PKINIT eContentType"));
+        return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
     }
     if let Err(e) = krb5_types::pkinit::require_client_pkinit_cert(&verified.cert, cname, realm) {
         tracing::error!(
@@ -480,7 +481,7 @@ pub(crate) fn process_pkinit(
             outcome = "error",
             error = e
         );
-        return Err(proto(err::PREAUTH_FAILED, "PKINIT client cert"));
+        return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
     }
     let inner = verified.e_content;
     if let Err(e) = krb5_types::pkinit::authpack_pa_checksum_ok(&inner, body_der) {
@@ -490,7 +491,7 @@ pub(crate) fn process_pkinit(
             outcome = "error",
             error = e
         );
-        return Err(proto(err::PREAUTH_FAILED, "PKINIT paChecksum"));
+        return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
     }
     let (ctime, cusec) = krb5_types::pkinit::parse_authpack_freshness(&inner).ok_or_else(|| {
         tracing::error!(
@@ -499,11 +500,11 @@ pub(crate) fn process_pkinit(
             outcome = "error",
             error = "pkinit ctime"
         );
-        proto(err::PREAUTH_FAILED, "PKINIT AuthPack time")
+        proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED)
     })?;
     let now = i64::from(KerberosTime::now().unix_seconds());
     if (now - i64::from(ctime)).abs() > store.policy().skew {
-        return Err(proto(err::SKEW, "PKINIT ctime"));
+        return Err(proto(err::SKEW, status::PREAUTH_FAILED));
     }
     let rkey = ReplayKey {
         client: lookup_principal_id(cname, realm),
@@ -513,7 +514,7 @@ pub(crate) fn process_pkinit(
         auth_hash: ReplayCache::hash_authenticator(&cms),
     };
     if store.pa_replay().check_and_store(rkey) {
-        return Err(proto(err::PREAUTH_FAILED, "PKINIT replay"));
+        return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
     }
     let (nonce, spki) = krb5_types::pkinit::parse_authpack(&inner).ok_or_else(|| {
         tracing::error!(
@@ -524,7 +525,7 @@ pub(crate) fn process_pkinit(
             inner_len = inner.len(),
             inner_tag = inner.first().copied().unwrap_or(0)
         );
-        proto(err::PREAUTH_FAILED, "PKINIT AuthPack")
+        proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED)
     })?;
     let agile = krb5_types::pkinit::authpack_wants_sha256_kdf(&inner);
     let (z, info) = if let Some(peer) = krb5_types::pkinit::decode_ec_spki(&spki) {
@@ -552,7 +553,7 @@ pub(crate) fn process_pkinit(
         );
         let kp = dh_generate(group)?;
         let shared = dh_shared(group, &kp.secret, &y)
-            .map_err(|_| proto(err::DH_KEY_PARAMETERS_NOT_ACCEPTED, "PKINIT DH peer"))?;
+            .map_err(|_| proto(err::DH_KEY_PARAMETERS_NOT_ACCEPTED, status::PREAUTH_FAILED))?;
         let z = pad_z(&shared, p.len());
         let info = krb5_types::pkinit::encode_kdc_dh_key_info(&kp.public_der, nonce);
         (z, info)
@@ -569,7 +570,7 @@ pub(crate) fn process_pkinit(
     };
     let wrapped_pub = ca
         .sign_cms_typed(&info, "krbtgt", krb5_types::pkinit::ECONTENT_DHKEY, realm)
-        .ok_or_else(|| proto(err::PREAUTH_FAILED, "PKINIT CMS wrap"))?;
+        .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
     let rep = krb5_types::pkinit::PaPkAsRep::DhInfo(krb5_types::pkinit::DhRepInfo {
         dh_signed_data: wrapped_pub.into(),
         server_dh_nonce: None,
@@ -580,7 +581,7 @@ pub(crate) fn process_pkinit(
             &pa_bytes,
             krb5_types::pkinit::KDF_AH_SHA256_OID,
         )
-        .ok_or_else(|| proto(err::PREAUTH_FAILED, "PKINIT kdf encode"))?;
+        .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
     }
     let reply_key = if agile {
         tracing::info!(
@@ -640,19 +641,28 @@ pub(crate) fn find_pa(padata: Option<&[PaData]>, ty: i32) -> Option<&[u8]> {
     })
 }
 
-pub(crate) fn proto(code: i32, text: &str) -> Error {
+pub(crate) fn proto(code: i32, status: &'static str) -> Error {
     Error::Protocol {
         code,
-        text: Some(text.to_owned()),
+        text: Some(status.to_owned()),
         e_data: None,
         detail: None,
+    }
+}
+
+pub(crate) fn proto_d(code: i32, status: &'static str, detail: impl Into<String>) -> Error {
+    Error::Protocol {
+        code,
+        text: Some(status.to_owned()),
+        e_data: None,
+        detail: Some(detail.into()),
     }
 }
 
 pub(crate) fn proto_fast(code: i32, detail: impl Into<String>) -> Error {
     Error::Protocol {
         code,
-        text: Some("FIND_FAST".into()),
+        text: Some(crate::status::FIND_FAST.to_owned()),
         e_data: None,
         detail: Some(detail.into()),
     }
@@ -676,15 +686,15 @@ fn dh_params_not_accepted() -> Error {
     }];
     proto_e(
         err::DH_KEY_PARAMETERS_NOT_ACCEPTED,
-        "PKINIT SPKI",
+        crate::status::PREAUTH_FAILED,
         encode(&method).unwrap_or_default(),
     )
 }
 
-pub(crate) fn proto_e(code: i32, text: &str, e_data: Vec<u8>) -> Error {
+pub(crate) fn proto_e(code: i32, status: &'static str, e_data: Vec<u8>) -> Error {
     Error::Protocol {
         code,
-        text: Some(text.to_owned()),
+        text: Some(status.to_owned()),
         e_data: Some(e_data),
         detail: None,
     }
@@ -704,7 +714,7 @@ pub(crate) fn fast_finished(
         timestamp: KerberosTime::now(),
         usec: Microseconds::ZERO,
         crealm: krb5_types::try_ascii(crealm)
-            .map_err(|_| proto(err::GENERIC, "non-ascii realm"))?,
+            .map_err(|_| proto(err::GENERIC, status::UNKNOWN_REASON))?,
         cname: cname.clone(),
         ticket_checksum: krb5_types::Checksum {
             cksumtype: armor_key.etype().checksum_type(),

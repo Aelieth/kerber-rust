@@ -14,7 +14,8 @@ use krb5_types::{
 
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
-use crate::preauth::{find_pa, proto};
+use crate::preauth::{find_pa, proto, proto_d};
+use crate::status;
 
 /// AD-IF-RELEVANT wrapping AD-WIN2K-PAC `pac_bytes`.
 ///
@@ -166,8 +167,13 @@ pub fn verify_pac_signatures(
     kdc: Option<&ProtocolKey>,
     enc_tkt_der: Option<&[u8]>,
 ) -> Result<(), Error> {
-    let pac = krb5_types::pac::Pac::parse(pac_bytes)
-        .map_err(|e| proto(err::BAD_INTEGRITY, &format!("PAC parse: {e}")))?;
+    let pac = krb5_types::pac::Pac::parse(pac_bytes).map_err(|e| {
+        proto_d(
+            err::BAD_INTEGRITY,
+            status::HEADER_PAC,
+            format!("PAC parse: {e}"),
+        )
+    })?;
     let server_mac = verify_pac_sig(
         server,
         &pac.bytes_for_checksum(),
@@ -198,34 +204,33 @@ fn verify_pac_sig<'a>(
     buffer_type: u32,
 ) -> Result<&'a [u8], Error> {
     let Some(buf) = buf else {
-        return Err(proto(err::BAD_INTEGRITY, "PAC missing checksum"));
+        return Err(proto(err::BAD_INTEGRITY, status::HEADER_PAC));
     };
     if buf.len() < 4 {
-        return Err(proto(err::GENERIC, "PAC checksum length"));
+        return Err(proto(err::GENERIC, status::HEADER_PAC));
     }
     let cksumtype = i32::from_le_bytes(
         buf[0..4]
             .try_into()
-            .map_err(|_| proto(err::GENERIC, "PAC checksum"))?,
+            .map_err(|_| proto(err::GENERIC, status::HEADER_PAC))?,
     );
     if buffer_type == PAC_SERVER_CHECKSUM && cksumtype == 14 {
-        return Err(proto(err::SUMTYPE_NOSUPP, "PAC server SHA-1"));
+        return Err(proto(err::SUMTYPE_NOSUPP, status::HEADER_PAC));
     }
     if !cksumtype_is_keyed(cksumtype) {
-        return Err(proto(err::GENERIC, "PAC unkeyed checksum"));
+        return Err(proto(err::GENERIC, status::HEADER_PAC));
     }
     let Some(want) = checksum_output_size(cksumtype) else {
-        return Err(proto(err::GENERIC, "PAC checksum type"));
+        return Err(proto(err::GENERIC, status::HEADER_PAC));
     };
     if want > buf.len() - 4 {
-        return Err(proto(err::GENERIC, "PAC checksum length"));
+        return Err(proto(err::GENERIC, status::HEADER_PAC));
     }
     let mac = &buf[4..4 + want];
     let usage = KeyUsage::new(ku::KERB_NON_KERB_CKSUM_SALT)?;
     verify_checksum_type(key, usage, data, cksumtype, mac).map_err(|e| match e {
-        krb5_crypto::Error::Integrity => proto(err::MODIFIED, "PAC checksum"),
-        krb5_crypto::Error::BadChecksumSize => proto(err::GENERIC, "PAC checksum length"),
-        _ => proto(err::GENERIC, "PAC checksum"),
+        krb5_crypto::Error::Integrity => proto(err::MODIFIED, status::HEADER_PAC),
+        _ => proto(err::GENERIC, status::HEADER_PAC),
     })?;
     Ok(mac)
 }
@@ -267,8 +272,13 @@ pub(crate) fn presented_tgt_logon(
         return Ok(None);
     };
     verify_pac_signatures(&pac, ticket_key, None, None)?;
-    let parsed = krb5_types::pac::Pac::parse(&pac)
-        .map_err(|e| proto(err::BAD_INTEGRITY, &format!("TGT PAC: {e}")))?;
+    let parsed = krb5_types::pac::Pac::parse(&pac).map_err(|e| {
+        proto_d(
+            err::BAD_INTEGRITY,
+            status::HEADER_PAC,
+            format!("TGT PAC: {e}"),
+        )
+    })?;
     let der = ticket_checksum_input(enc_tkt_plain, part)?;
     if utf8(&part.crealm) == realm {
         if verify_pac_signatures(&pac, ticket_key, Some(ticket_key), Some(&der)).is_err() {
@@ -283,7 +293,7 @@ pub(crate) fn presented_tgt_logon(
     }
     let logon = parsed
         .buffer(krb5_types::pac::PAC_LOGON_INFO)
-        .ok_or_else(|| proto(err::BAD_INTEGRITY, "TGT PAC logon"))?
+        .ok_or_else(|| proto(err::BAD_INTEGRITY, status::HEADER_PAC))?
         .to_vec();
     Ok(Some(logon))
 }
@@ -337,9 +347,11 @@ pub(crate) fn s4u2self_client(
         pa.cksum.checksum.as_ref(),
     )
     .map_err(|e| match e {
-        krb5_crypto::Error::InappChecksum => proto(err::INAPP_CKSUM, "INVALID_S4U2SELF_CHECKSUM"),
-        krb5_crypto::Error::Integrity => proto(err::MODIFIED, "INVALID_S4U2SELF_CHECKSUM"),
-        _ => proto(err::GENERIC, "INVALID_S4U2SELF_CHECKSUM"),
+        krb5_crypto::Error::InappChecksum => {
+            proto(err::INAPP_CKSUM, status::INVALID_S4U2SELF_CHECKSUM)
+        }
+        krb5_crypto::Error::Integrity => proto(err::MODIFIED, status::INVALID_S4U2SELF_CHECKSUM),
+        _ => proto(err::GENERIC, status::INVALID_S4U2SELF_CHECKSUM),
     })?;
     Ok(Some((pa.user_name, realm.to_owned())))
 }
@@ -366,7 +378,7 @@ pub(crate) fn s4u2proxy_client(
     let mut rbcd = false;
     if let Some(raw) = find_pa(padata, pa::PAC_OPTIONS) {
         let opts: krb5_types::s4u::PaPacOptions =
-            decode(raw).map_err(|_| proto(err::BADOPTION, "PA-PAC-OPTIONS"))?;
+            decode(raw).map_err(|_| proto(err::BADOPTION, status::INVALID_S4U2PROXY_OPTIONS))?;
         rbcd = opts.resource_based_constrained_delegation();
     }
     let extra = tgs
@@ -375,63 +387,65 @@ pub(crate) fn s4u2proxy_client(
         .additional_tickets
         .as_ref()
         .and_then(|v| v.first())
-        .ok_or_else(|| proto(err::BADOPTION, "S4U2Proxy needs additional-ticket"))?;
+        .ok_or_else(|| proto(err::BADOPTION, status::NO_2ND_TKT))?;
     if extra.sname != *tgt_cname {
-        return Err(proto(
-            err::BADOPTION,
-            "evidence sname must match TGT client",
-        ));
+        return Err(proto(err::BADOPTION, status::EVIDENCE_TICKET_MISMATCH));
     }
     let server = store
         .fetch_name(&extra.sname)?
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "evidence server"))?;
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::SECOND_TKT_SERVER))?;
     let skey = server
         .best_key()
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "evidence key"))?;
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::SECOND_TKT_SERVER))?;
     let usage = KeyUsage::new(ku::TICKET)?;
     let plain = decrypt(&skey.key, usage, extra.enc_part.cipher.as_ref())?;
     let part: EncTicketPart = decode(&plain)?;
     if !part.flags.forwardable() {
-        return Err(proto(
-            err::BADOPTION,
-            "S4U2Proxy evidence ticket is not forwardable",
-        ));
+        return Err(proto(err::BADOPTION, status::EVIDENCE_TKT_NOT_FORWARDABLE));
     }
     let dest = tgs
         .0
         .req_body
         .sname
         .as_ref()
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "S4U2Proxy sname"))?;
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::EVIDENCE_TICKET_MISMATCH))?;
     if rbcd {
-        let target = store
-            .fetch_name(dest)?
-            .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "S4U2Proxy target"))?;
+        let target = store.fetch_name(dest)?.ok_or_else(|| {
+            proto(
+                err::S_PRINCIPAL_UNKNOWN,
+                status::UNSUPPORTED_S4U2PROXY_REQUEST,
+            )
+        })?;
         let from = extra.sname.components_joined();
         if !target.s4u_allowed_from.iter().any(|n| n == &from) {
-            return Err(proto(err::BADOPTION, "RBCD not allowed"));
+            return Err(proto(err::BADOPTION, status::INVALID_S4U2PROXY_OPTIONS));
         }
     } else {
         let want = dest.components_joined();
         if !server.s4u_allowed_to.iter().any(|n| n == &want) {
-            return Err(proto(err::BADOPTION, "constrained delegation not allowed"));
+            return Err(proto(err::BADOPTION, status::NOT_ALLOWED_TO_DELEGATE));
         }
     }
     let pac = pac_from_ticket_part(&part)
-        .ok_or_else(|| proto(err::BAD_INTEGRITY, "S4U2Proxy evidence PAC"))?;
+        .ok_or_else(|| proto(err::BAD_INTEGRITY, status::S4U2PROXY_NO_STKT_PAC))?;
     let krbtgt_p = store
         .fetch_krbtgt()?
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::GET_LOCAL_TGT))?;
     let krbtgt = krbtgt_p
         .best_key()
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::GET_LOCAL_TGT))?;
     let der = ticket_checksum_input(&plain, &part)?;
     verify_pac_signatures(&pac, &skey.key, Some(&krbtgt.key), Some(&der))?;
-    let parsed = krb5_types::pac::Pac::parse(&pac)
-        .map_err(|e| proto(err::BAD_INTEGRITY, &format!("evidence PAC: {e}")))?;
+    let parsed = krb5_types::pac::Pac::parse(&pac).map_err(|e| {
+        proto_d(
+            err::BAD_INTEGRITY,
+            status::SECOND_TKT_PAC,
+            format!("evidence PAC: {e}"),
+        )
+    })?;
     let logon = parsed
         .buffer(krb5_types::pac::PAC_LOGON_INFO)
-        .ok_or_else(|| proto(err::BAD_INTEGRITY, "evidence PAC logon"))?
+        .ok_or_else(|| proto(err::BAD_INTEGRITY, status::SECOND_TKT_PAC))?
         .to_vec();
     Ok(Some((part.cname, logon)))
 }
@@ -455,13 +469,13 @@ pub(crate) fn u2u_session(
         .additional_tickets
         .as_ref()
         .and_then(|v| v.first())
-        .ok_or_else(|| proto(err::BADOPTION, "U2U needs additional-ticket"))?;
+        .ok_or_else(|| proto(err::BADOPTION, status::NO_2ND_TKT))?;
     let krbtgt_p = store
         .fetch_krbtgt()?
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::GET_LOCAL_TGT))?;
     let krbtgt = krbtgt_p
         .best_key()
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, "no krbtgt"))?;
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::GET_LOCAL_TGT))?;
     let usage = KeyUsage::new(ku::TICKET)?;
     let plain = decrypt(&krbtgt.key, usage, extra.enc_part.cipher.as_ref())?;
     let part: EncTicketPart = decode(&plain)?;

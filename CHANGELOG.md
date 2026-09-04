@@ -51,6 +51,18 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   refuses a non-`kiprop` acceptor with RPC `AUTH_TOOWEAK`. Unit:
   `changepw_service_listprincs_is_auth_list`.
 
+- **W1-H J3.** KRB-ERROR `e_text` is the MIT status word
+  (`do_as_req.c` / `do_tgs_req.c` / `tgs_policy.c` / `kdc_util.c`).
+  `errcode_to_protocol` maps internal codes outside 0..=128 to 60.
+  Catch-alls carry the stage word (`PREAUTH_FAILED`, `PROCESS_TGS`,
+  `LOOKING_UP_CLIENT`, `UNKNOWN_REASON`) with the message in `detail`.
+  `diffsend` compares `error_code` and `e_text`. Units:
+  `unknown_client_e_text_is_client_not_found`;
+  `krb_error_volatile_only_passes_stable_mismatch_fails` (e_text).
+  Gate: `scripts/differential-gate.sh` pins `CLIENT_NOT_FOUND`,
+  `BAD_ENCRYPTION_TYPE`, `NEEDED_PREAUTH`, `PREAUTH_FAILED`,
+  `SERVER_NOT_FOUND`, `BAD TGS SERVER NAME`.
+
 - **W1-H J4.** Listeners match MIT on malformed input: KDC drops
   empty/undecodable/unknown-tag (`dispatch.c`), UDP oversize is
   `RESPONSE_TOO_BIG` 52, over-long TCP length is `FIELD_TOOLONG` 61,

@@ -422,14 +422,14 @@ when that oracle is absent.
 - `scripts/differential-gate.sh` — one dump, two live KDCs (Rust `:8888`,
   MIT 1.22.2 `krb5kdc` `:88`). `examples/diffsend.rs` encodes each
   AS/TGS case **once** and TCP-exchanges the same bytes to both.
-  KRB-ERROR compares `error_code`/`realm`/`sname` (mask
-  `stime`/`susec`/`ctime`/`cusec`/`e_text`; PREAUTH `e_data` is
+  KRB-ERROR compares `error_code`/`realm`/`sname`/`e_text` (mask
+  `stime`/`susec`/`ctime`/`cusec`; PREAUTH `e_data` is
   structural; extra FAST/SPAKE PA types are mechanism ads; MIT
   ETYPE-INFO2 must be a subset of the Rust set — MIT lists the
   chosen etype, Rust lists every key). A foreign-realm AS-REQ is MIT `C_PRINCIPAL_UNKNOWN(6)`
-  echoing the requested realm/sname, not RFC `WRONG_REALM(68)`.
+  `CLIENT_NOT_FOUND`, not RFC `WRONG_REALM(68)`.
   A TGS with a non-krbtgt presented ticket is MIT `NOT_US(35)`
-  ("The ticket isn't for us"), not `NO_TGT(67)`.
+  `BAD TGS SERVER NAME`.
   AS-REP/TGS-REP decrypt, null volatiles, and compare the
   stable set. Ticket flags compare the full flag word; only named
   whitelist bits (renewable, canonicalize) are masked. Un-whitelisted
@@ -448,6 +448,9 @@ when that oracle is absent.
     is default-policy, not an inability to set the flag.
   - `mit-as-padata` — MIT adds `PA-ETYPE-INFO2` / `PA-SUPPORTED-ENCTYPES`
     on replies; those types are filtered before compare.
+  - `mit-order-tgs-times` — MIT fails expired/NYV header tickets
+    inside `PROCESS_TGS` (`rd_req`); Rust's `check_ticket_times`
+    uses `TKT_EXPIRED` / `NOT_YET_VALID`. Same error_code.
   - `mit-as-enc-app-26` — MIT wraps AS enc-part as APPLICATION 26
     (RFC 4120 is 25); decode accepts 25/26/untagged.
   - `mit-as-enc-kvno` — MIT omits AS-REP enc-part kvno; Rust sets kvno 1.

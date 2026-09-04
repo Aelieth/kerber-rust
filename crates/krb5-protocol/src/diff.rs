@@ -1,6 +1,7 @@
 //! Compare MIT vs Rust KDC replies after masking volatiles.
 //!
-//! KRB-ERROR mask: `stime`/`susec`/`ctime`/`cusec`/`e_text`. PREAUTH_REQUIRED
+//! KRB-ERROR mask: `stime`/`susec`/`ctime`/`cusec`. `e_text` is compared.
+//! PREAUTH_REQUIRED
 //! `e_data` is structural (METHOD-DATA types, ETYPE-INFO2 etypes; salt/order
 //! may differ). Success nulls session key, times, `last_req`, both
 //! `enc_part.cipher`s, and PAC auth-data. [`Whitelist`] names known MIT
@@ -52,7 +53,7 @@ pub struct CompareOk {
     pub mit_as_enc_app26: bool,
 }
 
-/// Stable KRB-ERROR fields (time/`e_text` stripped).
+/// Stable KRB-ERROR fields (times stripped; `e_text` is the MIT status word).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StableKrbError {
     /// Protocol version.
@@ -65,6 +66,8 @@ pub struct StableKrbError {
     pub realm: String,
     /// Error sname (`krbtgt/REALM` typically).
     pub sname: String,
+    /// MIT status word (`e_text`).
+    pub e_text: String,
 }
 
 /// Stable AS/TGS fields after volatile-null.
@@ -108,7 +111,7 @@ fn ks(r: &krb5_types::KerberosString) -> String {
     String::from_utf8_lossy(r.as_bytes()).into_owned()
 }
 
-/// Mask time/`e_text` and keep `error_code` + `realm` + `sname`.
+/// Mask times; keep `error_code`, `realm`, `sname`, and `e_text`.
 #[must_use]
 pub fn stable_krb_error(e: &KrbError) -> StableKrbError {
     StableKrbError {
@@ -117,6 +120,7 @@ pub fn stable_krb_error(e: &KrbError) -> StableKrbError {
         error_code: e.error_code,
         realm: ks(&e.realm),
         sname: e.sname.components_joined(),
+        e_text: e.e_text.as_ref().map(ks).unwrap_or_default(),
     }
 }
 
