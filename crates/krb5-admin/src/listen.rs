@@ -13,7 +13,10 @@ use krb5_kdc::{SharedDump as SharedStore, save_store};
 use krb5_protocol::{
     ReplayCache, build_ap_rep, build_krb_priv_with_seq, unwrap_krb_priv_ex, verify_ap_req,
 };
-use krb5_types::{ChangePasswdData, EncryptionKey, PrincipalName, principal_compare};
+use krb5_types::{
+    ChangePasswdData, EncryptionKey, KerberosTime, KrbError, Microseconds, PrincipalName, err,
+    principal_compare,
+};
 
 use crate::{AdminSession, Error, Op};
 
@@ -330,6 +333,43 @@ fn frame_kpasswd_rep(ap_rep: &[u8], priv_der: &[u8]) -> Vec<u8> {
     out
 }
 
+fn kpasswd_proto_code(e: &krb5_protocol::Error) -> i32 {
+    match e {
+        krb5_protocol::Error::KrbError { code, .. } if *code > 127 => err::GENERIC,
+        krb5_protocol::Error::KrbError { code, .. } => *code,
+        _ => err::BAD_INTEGRITY,
+    }
+}
+
+fn kpasswd_chpwfail_error(
+    realm: &str,
+    code: i32,
+    result: u16,
+    text: &str,
+) -> Result<Vec<u8>, Error> {
+    let mut e_data = Vec::from(result.to_be_bytes());
+    e_data.extend_from_slice(text.as_bytes());
+    let realm_s = krb5_types::try_ascii(realm).map_err(|e| Error::Inner(e.to_string()))?;
+    let sname = PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "changepw"]);
+    let pdu = KrbError {
+        pvno: KrbError::PVNO,
+        msg_type: KrbError::MSG_TYPE,
+        ctime: None,
+        cusec: None,
+        stime: KerberosTime::now(),
+        susec: Microseconds::ZERO,
+        error_code: code,
+        crealm: None,
+        cname: None,
+        realm: realm_s,
+        sname,
+        e_text: None,
+        e_data: Some(e_data.into()),
+    };
+    let der = encode(&pdu).map_err(|e| Error::Inner(e.to_string()))?;
+    Ok(frame_kpasswd_rep(&[], &der))
+}
+
 fn kpasswd_success_rep(
     session: &ProtocolKey,
     priv_key: &ProtocolKey,
@@ -403,21 +443,34 @@ fn handle_kpasswd_from(
     }
     let ap_req = &raw[6..6 + ap_len];
     let priv_raw = &raw[6 + ap_len..];
-    let ok = verify_ap_req(ap_req, service_key, replay).map_err(|e| Error::Inner(e.to_string()))?;
-    let session = protocol_key_from_enc(&ok.ticket_part.key)?;
-    let priv_key = match &ok.authenticator.subkey {
-        Some(sk) => protocol_key_from_enc(sk)?,
-        None => session.clone(),
-    };
-    let user_data = unwrap_krb_priv_ex(&priv_key, priv_raw, replay, false, false)
-        .map_err(|e| Error::Inner(e.to_string()))?;
-    let ticket_crealm = String::from_utf8_lossy(ok.ticket_part.crealm.as_bytes()).into_owned();
     let store_realm = {
         let g = store
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         g.realm().to_owned()
     };
+    let ok = match verify_ap_req(ap_req, service_key, replay) {
+        Ok(v) => v,
+        Err(e) => {
+            return kpasswd_chpwfail_error(
+                &store_realm,
+                kpasswd_proto_code(&e),
+                3,
+                "Failed reading application request",
+            );
+        }
+    };
+    let session = protocol_key_from_enc(&ok.ticket_part.key)?;
+    let priv_key = match &ok.authenticator.subkey {
+        Some(sk) => protocol_key_from_enc(sk)?,
+        None => session.clone(),
+    };
+    let Ok(user_data) = unwrap_krb_priv_ex(&priv_key, priv_raw, replay, false, false) else {
+        let mut body = Vec::from(2u16.to_be_bytes());
+        body.extend_from_slice(b"Failed decrypting request");
+        return kpasswd_success_rep(&session, &priv_key, &ok.authenticator, &body);
+    };
+    let ticket_crealm = String::from_utf8_lossy(ok.ticket_part.crealm.as_bytes()).into_owned();
     let (targ, targ_realm, newpass) = if ver == RFC3244_VERSION {
         if let Ok(cpw) = decode::<ChangePasswdData>(&user_data) {
             let name = cpw.targname.unwrap_or_else(|| ok.ticket_part.cname.clone());
@@ -570,11 +623,11 @@ pub fn serve_kpasswd_udp(
     shutdown: Arc<AtomicBool>,
 ) -> io::Result<()> {
     sock.set_read_timeout(Some(Duration::from_millis(200)))?;
-    let replay = ReplayCache::new();
     let mut buf = vec![0u8; 65_535];
     while !shutdown.load(Ordering::Relaxed) {
         match sock.recv_from(&mut buf) {
             Ok((n, peer)) => {
+                let replay = ReplayCache::new();
                 match handle_kpasswd_from(
                     &store,
                     &acl,
@@ -621,7 +674,6 @@ pub fn serve_kpasswd_tcp(
     shutdown: Arc<AtomicBool>,
 ) -> io::Result<()> {
     listener.set_nonblocking(true)?;
-    let replay = ReplayCache::new();
     while !shutdown.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((mut stream, peer)) => {
@@ -629,6 +681,7 @@ pub fn serve_kpasswd_tcp(
                 let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
                 match read_len_pref(&mut stream, 64 * 1024) {
                     Ok(body) => {
+                        let replay = ReplayCache::new();
                         match handle_kpasswd_from(
                             &store,
                             &acl,
@@ -645,6 +698,7 @@ pub fn serve_kpasswd_tcp(
                                 component = "krb5-admin",
                                 outcome = "error",
                                 error = %e,
+                                error_suffix = "while dispatching (tcp)",
                             ),
                         }
                     }

@@ -49,6 +49,8 @@ const MSG_REPLY: u32 = 1;
 const MSG_ACCEPTED: u32 = 0;
 const MSG_DENIED: u32 = 1;
 const SUCCESS: u32 = 0;
+const PROC_UNAVAIL: u32 = 3;
+const GARBAGE_ARGS: u32 = 4;
 const REJECT_AUTH_ERROR: u32 = 1;
 const AUTH_TOOWEAK: u32 = 5;
 
@@ -278,16 +280,8 @@ fn handle_rpc(
     }
 
     if cred_flavor != FLAVOR_GSS {
-        // ONC RPC ping (AUTH_NONE / AUTH_UNIX NULLPROC).
-        tracing::info!(
-            event = krb5_log::events::ADMIN,
-            component = "krb5-admin",
-            outcome = "ok",
-            detail = "rpc probe",
-            flavor = cred_flavor,
-            proc,
-        );
-        return Ok(rpc_reply_clear(xid, &[]));
+        // kadm_rpc_svc.c:80-87: only AUTH_GSSAPI / RPCSEC_GSS.
+        return Ok(rpc_reply_weakauth(xid));
     }
     let gcred = parse_gcred(&cred)?;
     if gcred.version != RPCSEC_GSS_VERS {
@@ -347,18 +341,20 @@ fn handle_rpc(
     if iprop && !kiprop_acceptor(ctx) {
         return Ok(rpc_reply_weakauth(xid));
     }
-    let result = if iprop {
-        dispatch_iprop(store, acl, &actor, proc, args)
-    } else {
-        dispatch_kadm5_ticket(
-            store,
-            acl,
-            &actor,
-            proc,
-            args,
-            ctx.ticket_is_initial(),
-            changepw_acceptor(ctx),
-        )?
+    let result = match kadm5_or_iprop(
+        store,
+        acl,
+        &actor,
+        proc,
+        args,
+        ctx.ticket_is_initial(),
+        changepw_acceptor(ctx),
+        iprop,
+    ) {
+        Ok(b) => b,
+        Err(Error::GarbageArgs) => return Ok(rpc_reply_accepted(xid, GARBAGE_ARGS)),
+        Err(Error::ProcUnavail) => return Ok(rpc_reply_accepted(xid, PROC_UNAVAIL)),
+        Err(e) => return Err(e),
     };
     let mut inner = Vec::with_capacity(4 + result.len());
     inner.extend_from_slice(&seq.to_be_bytes());
@@ -519,18 +515,20 @@ fn handle_auth_gssapi(
     if iprop && !kiprop_acceptor(&st.ctx) {
         return Ok(rpc_reply_weakauth(xid));
     }
-    let result = if iprop {
-        dispatch_iprop(store, acl, &actor, proc, kadm_args)
-    } else {
-        dispatch_kadm5_ticket(
-            store,
-            acl,
-            &actor,
-            proc,
-            kadm_args,
-            st.ctx.ticket_is_initial(),
-            changepw_acceptor(&st.ctx),
-        )?
+    let result = match kadm5_or_iprop(
+        store,
+        acl,
+        &actor,
+        proc,
+        kadm_args,
+        st.ctx.ticket_is_initial(),
+        changepw_acceptor(&st.ctx),
+        iprop,
+    ) {
+        Ok(b) => b,
+        Err(Error::GarbageArgs) => return Ok(rpc_reply_accepted(xid, GARBAGE_ARGS)),
+        Err(Error::ProcUnavail) => return Ok(rpc_reply_accepted(xid, PROC_UNAVAIL)),
+        Err(e) => return Err(e),
     };
     let mut inner = Vec::with_capacity(4 + result.len());
     inner.extend_from_slice(&st.seq.to_be_bytes());
@@ -569,6 +567,43 @@ fn rpc_reply_weakauth(xid: u32) -> Vec<u8> {
     w.u32(REJECT_AUTH_ERROR);
     w.u32(AUTH_TOOWEAK);
     w.b
+}
+
+fn rpc_reply_accepted(xid: u32, stat: u32) -> Vec<u8> {
+    let mut w = XdrW::default();
+    w.u32(xid);
+    w.u32(MSG_REPLY);
+    w.u32(MSG_ACCEPTED);
+    w.u32(FLAVOR_NONE);
+    w.opaque(&[]);
+    w.u32(stat);
+    w.b
+}
+
+#[allow(clippy::too_many_arguments)]
+fn kadm5_or_iprop(
+    store: &SharedStore,
+    acl: &Acl,
+    actor: &str,
+    proc: u32,
+    args: &[u8],
+    initial: bool,
+    changepw: bool,
+    iprop: bool,
+) -> Result<Vec<u8>, Error> {
+    if proc == 0 {
+        return Ok(Vec::new());
+    }
+    if iprop {
+        if !matches!(
+            proc,
+            IPROP_GET_UPDATES | IPROP_FULL_RESYNC | IPROP_FULL_RESYNC_EXT
+        ) {
+            return Err(Error::ProcUnavail);
+        }
+        return Ok(dispatch_iprop(store, acl, actor, proc, args));
+    }
+    dispatch_kadm5_ticket(store, acl, actor, proc, args, initial, changepw)
 }
 
 fn rpc_reply_clear(xid: u32, body: &[u8]) -> Vec<u8> {
@@ -1450,7 +1485,7 @@ fn dispatch_kadm5_ticket(
 ) -> Result<Vec<u8>, Error> {
     let realm = store_realm(store);
     match proc {
-        0 | INIT => Ok(generic_ret(API_V2, 0)),
+        INIT => Ok(generic_ret(API_V2, 0)),
         GET_PRIVS => {
             let mut w = XdrW::default();
             w.u32(API_V2);
@@ -1929,7 +1964,7 @@ fn dispatch_kadm5_ticket(
                 Err(e) => Ok(generic_ret(api, kadm5_code(&Error::from(e)))),
             }
         }
-        _ => Ok(generic_ret(API_V2, KADM5_FAILURE)),
+        _ => Err(Error::ProcUnavail),
     }
 }
 
@@ -1937,6 +1972,7 @@ fn kadm5_code(e: &Error) -> u32 {
     let s = match e {
         Error::AclDenied => return KADM5_AUTH_GET,
         Error::NotFound => return KADM5_UNK_PRINC,
+        Error::GarbageArgs | Error::ProcUnavail => return KADM5_FAILURE,
         Error::PasswordPolicy(s) | Error::Inner(s) => s.as_str(),
     };
     if s.contains("min_length") {
@@ -2492,7 +2528,7 @@ impl<'a> XdrR<'a> {
 
     fn need(&self, n: usize) -> Result<(), Error> {
         if self.i.saturating_add(n) > self.b.len() {
-            Err(Error::Inner("xdr truncated".into()))
+            Err(Error::GarbageArgs)
         } else {
             Ok(())
         }
@@ -2632,11 +2668,60 @@ mod tests {
     }
 
     #[test]
-    fn unknown_proc_is_kadm5_failure_not_seven() {
+    fn unknown_proc_is_proc_unavail() {
         let (store, acl, actor) = setup();
-        let out = dispatch_kadm5(&store, &acl, &actor, 99, &[]).unwrap();
-        assert_eq!(ret_code(&out), KADM5_FAILURE);
-        assert_ne!(ret_code(&out), 7);
+        let err = dispatch_kadm5(&store, &acl, &actor, 99, &[]).unwrap_err();
+        assert_eq!(err, Error::ProcUnavail);
+    }
+
+    #[test]
+    fn truncated_getprinc_is_garbage_args() {
+        let (store, acl, actor) = setup();
+        let err = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &[]).unwrap_err();
+        assert_eq!(err, Error::GarbageArgs);
+    }
+
+    fn rpc_call(xid: u32, prog: u32, vers: u32, proc: u32, flavor: u32) -> Vec<u8> {
+        let mut w = XdrW::default();
+        w.u32(xid);
+        w.u32(MSG_CALL);
+        w.u32(RPC_VERSION);
+        w.u32(prog);
+        w.u32(vers);
+        w.u32(proc);
+        w.u32(flavor);
+        w.opaque(&[]);
+        w.u32(FLAVOR_NONE);
+        w.opaque(&[]);
+        w.b
+    }
+
+    #[test]
+    fn auth_none_is_auth_too_weak() {
+        let (store, acl, _) = setup();
+        let server = krb5_kdc::documented_kadmin();
+        let rec = rpc_call(7, KADM_PROG, KADM_VERS, 99, FLAVOR_NONE);
+        let mut gss = None;
+        let mut agss = None;
+        let out = handle_rpc(
+            &store,
+            &acl,
+            &[],
+            &server,
+            "KERBER.TEST",
+            &[],
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &rec,
+        )
+        .unwrap();
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), 7);
+        assert_eq!(r.u32().unwrap(), MSG_REPLY);
+        assert_eq!(r.u32().unwrap(), MSG_DENIED);
+        assert_eq!(r.u32().unwrap(), REJECT_AUTH_ERROR);
+        assert_eq!(r.u32().unwrap(), AUTH_TOOWEAK);
     }
 
     #[test]

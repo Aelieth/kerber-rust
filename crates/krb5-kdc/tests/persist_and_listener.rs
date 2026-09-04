@@ -364,13 +364,11 @@ fn persist_legacy_kdb3_still_loads_sid() {
 }
 
 #[test]
-fn listener_empty_and_truncated_get_krb_error() {
+fn listener_empty_and_truncated_are_dropped() {
     let (store, _) = bootstrap_documented().unwrap();
     for payload in [&[][..], &[0x6a], &[0xff; 8]] {
         let reply = handle_request(&store, payload).unwrap();
-        assert!(!reply.is_empty());
-        let e: krb5_types::KrbError = decode(&reply).unwrap();
-        assert!(e.error_code != 0);
+        assert!(reply.is_empty(), "MIT dispatch drops garbage");
     }
 }
 
@@ -421,6 +419,7 @@ fn tcp_worker_cap_drops_excess_connections() {
             ListenLimits {
                 max_tcp_workers: 1,
                 max_tcp_request: 4096,
+                max_dgram_reply_size: krb5_kdc::MAX_DGRAM_REPLY,
                 io_timeout: Duration::from_secs(2),
             },
         );
@@ -467,6 +466,7 @@ fn listener_chaos_udp_garbage_then_valid() {
             ListenLimits {
                 max_tcp_workers: 4,
                 max_tcp_request: 4096,
+                max_dgram_reply_size: krb5_kdc::MAX_DGRAM_REPLY,
                 io_timeout: Duration::from_millis(200),
             },
         );

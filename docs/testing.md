@@ -450,8 +450,6 @@ when that oracle is absent.
     on replies; those types are filtered before compare.
   - `mit-as-enc-app-26` — MIT wraps AS enc-part as APPLICATION 26
     (RFC 4120 is 25); decode accepts 25/26/untagged.
-  - `mit-drop-garbage-pdu` — MIT 1.22.2 closes TCP on truncated DER;
-    Rust replies `KRB_ERR_GENERIC(60)`.
   - `mit-as-enc-kvno` — MIT omits AS-REP enc-part kvno; Rust sets kvno 1.
   - `mit-extra-ticket-flags` — MIT sets canonicalize (bit 15) on issued
     tickets; that bit is masked. Any other un-whitelisted flag bit

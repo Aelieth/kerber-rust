@@ -133,7 +133,7 @@ echo "$DIFF" | grep -q '"case":"wrong-realm","outcome":"ok","error_code":6' || d
 echo "$DIFF" | grep -q '"case":"pauser-no-preauth","outcome":"ok","error_code":25' || die "missing PREAUTH_REQUIRED(25)"
 echo "$DIFF" | grep -q '"case":"skewed-timestamp","outcome":"ok","error_code":37' || die "missing SKEW(37)"
 echo "$DIFF" | grep -q '"case":"unknown-sname","outcome":"ok","error_code":7' || die "missing S_PRINCIPAL_UNKNOWN(7)"
-echo "$DIFF" | grep -q '"case":"garbage-pdu","outcome":"ok","error_code":60' || die "missing GENERIC(60)"
+echo "$DIFF" | grep -q '"case":"garbage-pdu","outcome":"ok","rust_tag":"drop","mit_tag":"drop"' || die "garbage-pdu was not both-drop"
 echo "$DIFF" | grep -q '"case":"tgs-not-a-tgt","outcome":"ok","error_code":35' || die "missing NOT_US(35)"
 echo "$DIFF" | grep -q '"case":"tgt-expired","outcome":"ok","error_code":32' || die "missing TKT_EXPIRED(32)"
 echo "$DIFF" | grep -q '"case":"tgt-nyv","outcome":"ok","error_code":33' || die "missing TKT_NYV(33)"

@@ -17,6 +17,38 @@ log() {
         "$1" "$CORRELATION_ID" "$2" "${3:-}"
 }
 
+kpropd_junk_ap_req() {
+    local port=$1
+    docker exec "$NAME" python3 -c '
+import socket, struct, sys
+port = int(sys.argv[1])
+
+def wr(s, data):
+    s.sendall(struct.pack(">I", len(data)) + data)
+
+def rd(s):
+    hdr = s.recv(4)
+    assert len(hdr) == 4, hdr
+    n = struct.unpack(">I", hdr)[0]
+    data = b""
+    while len(data) < n:
+        chunk = s.recv(n - len(data))
+        assert chunk, "eof"
+        data += chunk
+    return data
+
+s = socket.create_connection(("127.0.0.1", port), 2)
+wr(s, b"KRB5_SENDAUTH_V1.0\0")
+wr(s, b"kprop5_01\0")
+ack = s.recv(1)
+assert ack == b"\x00", ack
+wr(s, b"\xff\x00\x01")
+msg = rd(s)
+print("tag=%02x len=%d" % (msg[0], len(msg)))
+assert msg[:1] == b"\x7e", msg[:8]
+' "$port"
+}
+
 kill_comm() {
     local comm="$1"
     docker exec "$NAME" sh -c '
@@ -137,6 +169,9 @@ if [ "$ok" != 1 ]; then
     exit 1
 fi
 
+echo "==== Rust kpropd junk AP-REQ is KRB-ERROR ===="
+kpropd_junk_ap_req 754
+
 echo "==== MIT kprop localhost ===="
 KPROP="$(docker exec -e KRB5_CONFIG=/tmp/kprop-krb5.conf \
     "$NAME" kprop -f /tmp/dump -s /tmp/host.keytab -P 754 -d localhost 2>&1 || true)"
@@ -192,6 +227,25 @@ fi
 KLIST="$(docker exec -e KRB5_CONFIG=/tmp/kprop-krb5.conf "$NAME" klist)"
 echo "$KLIST"
 echo "$KLIST" | grep -q 'user@KERBER.TEST'
+
+echo "==== MIT kpropd junk AP-REQ is KRB-ERROR ===="
+kill_comm krb5-kpropd
+kill_comm kpropd
+docker exec -d "$NAME" sh -c 'kpropd -S -d -a /tmp/kpropd.acl -P 1754 -f /tmp/from_junk.dump -p "$(command -v kdb5_util)" >/tmp/kpropd-mit.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" grep -Eq 'ready|waiting for a kprop' /tmp/kpropd-mit.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kpropd-mit.log >&2 || true
+    log "kprop.gate" "error" ',"error":"MIT kpropd did not listen"'
+    exit 1
+fi
+kpropd_junk_ap_req 1754
 
 log "kprop.gate" "ok" ',"dump_version":7,"direction":"mit-kprop-to-rust-kpropd"'
 exit 0

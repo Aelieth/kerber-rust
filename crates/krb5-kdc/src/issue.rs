@@ -54,8 +54,8 @@ pub struct IssuedTgs {
 
 /// Dispatch one UDP/TCP payload (AS-REQ or TGS-REQ) to the issue path.
 ///
-/// Every request yields a byte reply: success PDU or KRB-ERROR. Crypto and
-/// ASN.1 failures become `KDC_ERR_PREAUTH_FAILED` / generic KRB-ERROR.
+/// Empty, undecodable, and unknown-tag datagrams yield an empty reply
+/// (MIT `dispatch.c` + `net-server.c` drop). Other failures are a KRB-ERROR.
 ///
 /// # Errors
 ///
@@ -72,6 +72,17 @@ pub fn handle_request(store: &dyn PrincipalRead, raw: &[u8]) -> Result<Vec<u8>, 
     let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
     match result {
         Ok((bytes, detail)) => {
+            if bytes.is_empty() {
+                tracing::error!(
+                    event = krb5_log::events::KDC_ISSUE,
+                    correlation_id = krb5_log::current_correlation_id(),
+                    component = "krb5-kdc",
+                    duration_us,
+                    outcome = "error",
+                    error = "while dispatching",
+                );
+                return Ok(bytes);
+            }
             if bytes.starts_with(&[0x7e]) {
                 let (code, mut e_text) = krb_error_log_fields(&bytes);
                 if code == err::PREAUTH_REQUIRED && e_text.is_empty() {
@@ -129,32 +140,27 @@ fn log_krb_error(duration_us: u64, code: i32, e_text: &str, detail: Option<&str>
 }
 
 fn handle_inner(store: &dyn PrincipalRead, raw: &[u8]) -> Result<(Vec<u8>, Option<String>), Error> {
+    // MIT dispatch.c:145-153: not AS/TGS or decode fail → no response.
     if raw.is_empty() {
-        return Ok((
-            encode_krb_error(store, err::GENERIC, Some("empty"), None, None),
-            None,
-        ));
+        return Ok((Vec::new(), None));
     }
     match raw[0] {
         0x6a => match decode::<AsReq>(raw) {
             Ok(req) => as_reply(store, &req, raw),
-            Err(_) => Ok((
-                encode_krb_error(store, err::GENERIC, Some("asn1"), None, None),
-                None,
-            )),
+            Err(_) => Ok((Vec::new(), None)),
         },
         0x6c => match decode::<TgsReq>(raw) {
             Ok(req) => tgs_reply(store, &req, raw),
-            Err(_) => Ok((
-                encode_krb_error(store, err::GENERIC, Some("asn1"), None, None),
-                None,
-            )),
+            Err(_) => Ok((Vec::new(), None)),
         },
-        _ => Ok((
-            encode_krb_error(store, err::BAD_PVNO, Some("unexpected PDU"), None, None),
-            None,
-        )),
+        _ => Ok((Vec::new(), None)),
     }
+}
+
+/// KRB-ERROR with empty text (`make_too_big_error` / `make_toolong_error`).
+#[must_use]
+pub fn kdc_error_bytes(store: &dyn PrincipalRead, code: i32) -> Vec<u8> {
+    encode_krb_error(store, code, None, None, None)
 }
 
 fn as_reply(

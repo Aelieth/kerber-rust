@@ -20,7 +20,7 @@ uses a per-context sequence window in addition to that cache.
 | Replay — PA-ENC-TIMESTAMP | `verify_enc_timestamp` (`issue.rs`) `pa_replay` | `pa_enc_timestamp_replay_is_repeat` |
 | Replay — KRB-SAFE / PRIV / CRED | `safe_priv.rs` `check_and_store` on unwrap | `messages.rs` unwrap path; `ReplayCache` unit tests |
 | Replay — GSS wrap/MIC sequence | `krb5-gss` `accept_seq` (`recv_window`) | `wrap_mic_replay_inside_window_is_rejected` |
-| Replay — GSS acceptor AP-REQ | `accept_sec_context` shared `ReplayCache`. Rust is per listener (kadmind holds three: kadm5, kpasswd UDP, kpasswd TCP), in-memory, 300 s. MIT `dfl` file persists across restarts (`rc_file2.c:165-195`; W1-C cell). MIT kadmind's kpasswd path has no rcache (`schpw.c:110-111`); Rust's three listener caches are stricter. | `accept_same_token_twice_is_repeat`; `gss-gate.sh` replay cell (MIT KRB-ERROR 34 `Request is a replay`) |
+| Replay — GSS acceptor AP-REQ | `accept_sec_context` shared `ReplayCache`. kadm5 RPC holds one in-memory cache (300 s). MIT `dfl` file persists across restarts (`rc_file2.c:165-195`; W1-C cell). kpasswd uses a fresh `ReplayCache` per datagram like MIT `schpw.c:110-111` (a UDP retransmit is answered). | `accept_same_token_twice_is_repeat`; `gss-gate.sh` replay cell (MIT KRB-ERROR 34 `Request is a replay`); `kpasswd-gate.sh` retransmit |
 | Replay cache window / cap / poison | `ReplayCache::check_and_store` | `replay::tests::{window_prune_is_not_replay, cap_evicts_oldest_not_grow, poison_fails_closed}` |
 | Zeroize-on-drop — protocol keys | `ProtocolKey` `Drop` (`krb5-crypto` `key.rs`) | Drop impl; `ProtocolKey` is every stash / keytab / ccache key |
 | Zeroize-on-drop — derived keys | `DerivedKeys` `Drop` (`derive.rs`) | Drop impl; used on every encrypt/decrypt |

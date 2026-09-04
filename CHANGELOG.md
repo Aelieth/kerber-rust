@@ -51,6 +51,23 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   refuses a non-`kiprop` acceptor with RPC `AUTH_TOOWEAK`. Unit:
   `changepw_service_listprincs_is_auth_list`.
 
+- **W1-H J4.** Listeners match MIT on malformed input: KDC drops
+  empty/undecodable/unknown-tag (`dispatch.c`), UDP oversize is
+  `RESPONSE_TOO_BIG` 52, over-long TCP length is `FIELD_TOOLONG` 61,
+  kpasswd post-AP-REQ failures answer `chpwfail` (AUTHERROR 3 /
+  HARDERROR 2) with no per-listener rcache (`schpw.c:110-111`), kprop
+  AP-REQ failure is a KRB-ERROR (`recvauth.c`), kadmind unknown-proc
+  is RPC `PROC_UNAVAIL` / truncated XDR `GARBAGE_ARGS` / non-GSS
+  `AUTH_TOOWEAK`. Units: `handle_request_empty_is_dropped`,
+  `udp_oversize_reply_is_response_too_big`,
+  `tcp_oversize_length_is_field_toolong`,
+  `kpasswd_bad_ap_req_is_chpwfail_autherror`,
+  `kpropd_ap_req_fail_is_krb_error`, `unknown_proc_is_proc_unavail`,
+  `truncated_getprinc_is_garbage_args`, `auth_none_is_auth_too_weak`.
+  Gates: `differential-gate.sh` `garbage-pdu` both-drop;
+  `kpasswd-gate.sh` bad-AP-REQ/retransmit; `kprop-gate.sh` junk
+  AP-REQ; `kadmin-gate.sh` AUTH_NONE `AUTH_TOOWEAK`.
+
 - **W1-H J2.** Every checksum is verified by declared type, length,
   and keyed/coll-proof class (`krb5_c_verify_checksum`).
   `verify_checksum` is gone; `verify_checksum_type` is the only

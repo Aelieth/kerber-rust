@@ -20,6 +20,29 @@ log() {
         "$1" "$CORRELATION_ID" "$2" "${3:-}"
 }
 
+kadmind_auth_too_weak() {
+    local ctn=$1
+    docker exec "$ctn" python3 -c '
+import socket, struct
+s = socket.create_connection(("127.0.0.1", 749), 2)
+xid, call, rpcvers, prog, vers, proc = 0x12345678, 0, 2, 2112, 2, 99
+body = struct.pack(">10I", xid, call, rpcvers, prog, vers, proc, 0, 0, 0, 0)
+s.sendall(struct.pack(">I", 0x80000000 | len(body)) + body)
+hdr = s.recv(4)
+assert len(hdr) == 4, hdr
+n = struct.unpack(">I", hdr)[0] & 0x7FFFFFFF
+data = b""
+while len(data) < n:
+    chunk = s.recv(n - len(data))
+    assert chunk, "eof"
+    data += chunk
+# xid, REPLY, DENIED, AUTH_ERROR, AUTH_TOOWEAK
+got = struct.unpack(">5I", data[:20])
+print("rpc=" + ",".join(str(x) for x in got))
+assert got == (xid, 1, 1, 1, 5), got
+'
+}
+
 if ! command -v docker >/dev/null 2>&1; then
     log "kadmin.gate" "error" ',"error":"docker not available"'
     exit 1
@@ -90,6 +113,9 @@ if [ "$ok" != 1 ]; then
     log "kadmin.gate" "error" ',"error":"kadmind did not listen"'
     exit 1
 fi
+
+echo "==== Rust kadmind AUTH_NONE is AUTH_TOOWEAK ===="
+kadmind_auth_too_weak "$NAME"
 
 docker exec "$NAME" sh -c 'cat >/tmp/kadmin-krb5.conf <<EOF
 [libdefaults]
@@ -623,6 +649,8 @@ if [ "$ok" != 1 ]; then
     log "kadmin.gate" "error" ',"error":"MIT kadmind did not listen"'
     exit 1
 fi
+echo "==== MIT kadmind AUTH_NONE is AUTH_TOOWEAK ===="
+kadmind_auth_too_weak "$NAME_MIT"
 MITTGT="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc krbtgt/KERBER.TEST')"
 echo "$MITTGT"
 echo "$MITTGT" | grep -F 'LOCKDOWN_KEYS'

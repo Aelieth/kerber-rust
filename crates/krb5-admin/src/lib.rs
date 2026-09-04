@@ -150,6 +150,12 @@ pub enum Error {
     /// Password rejected by named policy.
     #[error("password policy: {0}")]
     PasswordPolicy(String),
+    /// ONC RPC `GARBAGE_ARGS` (`kadm_rpc_svc.c` `svcerr_decode`).
+    #[error("rpc garbage args")]
+    GarbageArgs,
+    /// ONC RPC `PROC_UNAVAIL` (`kadm_rpc_svc.c` `svcerr_noproc`).
+    #[error("rpc proc unavail")]
+    ProcUnavail,
     /// Wrapped KDC error.
     #[error("{0}")]
     Inner(String),
@@ -1752,6 +1758,86 @@ mod tests {
         let err = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req)
             .expect_err("MIT dispatch sends no reply");
         assert!(err.to_string().contains("Message stream modified"), "{err}");
+    }
+
+    #[test]
+    fn kpasswd_bad_ap_req_is_chpwfail_autherror() {
+        use krb5_asn1::decode;
+        use krb5_kdc::{documented_changepw, shared_dump as shared_store};
+        use krb5_types::KrbError;
+
+        let (store, acl) = bootstrap_documented().unwrap();
+        let cpw_key = store
+            .get_name(&documented_changepw())
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let req = encode_kpasswd_req(&[0, 1, 2, 3], &[]);
+        let shared = shared_store(store);
+        let r1 = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req)
+            .expect("chpwfail");
+        let r2 = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req)
+            .expect("retransmit");
+        for rep in [&r1, &r2] {
+            assert!(rep.len() > 6);
+            assert_eq!(&rep[4..6], &[0, 0], "AP-REP length 0");
+            let e: KrbError = decode(&rep[6..]).expect("framed KRB-ERROR");
+            let data = e.e_data.as_ref().expect("e_data");
+            assert!(data.len() >= 2 && data.as_ref()[0] == 0 && data.as_ref()[1] == 3);
+            assert!(data.as_ref()[2..].starts_with(b"Failed reading application request"));
+        }
+    }
+
+    #[test]
+    fn kpasswd_bad_priv_after_ap_req_is_harderror() {
+        use krb5_kdc::{TEST_REALM, TEST_USER, documented_changepw, shared_dump as shared_store};
+        use krb5_protocol::{build_ap_req, unwrap_krb_priv_ex};
+
+        let (store, acl) = bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+        let user_key = store
+            .get_name(&user)
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let as_out = changepw_as_ticket(&store, &user, &user_key, 77);
+        let cpw_key = store
+            .get_name(&documented_changepw())
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let ap = build_ap_req(
+            as_out.rep.0.ticket.clone(),
+            &as_out.session_key,
+            &krb5_types::ascii(TEST_REALM),
+            &user,
+        )
+        .unwrap();
+        let req = encode_kpasswd_req(&krb5_asn1::encode(&ap).unwrap(), b"not-priv");
+        let shared = shared_store(store);
+        let rep = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req)
+            .expect("PRIV fail after AP-REQ");
+        let (ap_rep, priv_rep) = parse_kpasswd_rep(&rep).expect("AP-REP + KRB-PRIV");
+        assert!(!ap_rep.is_empty());
+        let user_data = unwrap_krb_priv_ex(
+            &as_out.session_key,
+            &priv_rep,
+            &ReplayCache::new(),
+            false,
+            false,
+        )
+        .unwrap();
+        assert!(
+            user_data.len() >= 2 && user_data[0] == 0 && user_data[1] == 2,
+            "HARDERROR [0,2], got {user_data:?}"
+        );
+        assert_eq!(&user_data[2..], b"Failed decrypting request");
     }
 
     #[test]

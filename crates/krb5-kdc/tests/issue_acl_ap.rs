@@ -459,12 +459,10 @@ fn pa_enc_timestamp_replay_is_repeat() {
 }
 
 #[test]
-fn handle_request_empty_is_error() {
+fn handle_request_empty_is_dropped() {
     let store = PrincipalStore::new(TEST_REALM);
-    let reply = krb5_kdc::handle_request(&store, &[]).expect("always a byte reply");
-    assert!(!reply.is_empty());
-    let e: krb5_types::KrbError = decode(&reply).expect("KRB-ERROR");
-    assert_eq!(e.error_code, err::GENERIC);
+    let reply = krb5_kdc::handle_request(&store, &[]).expect("drop is empty");
+    assert!(reply.is_empty());
 }
 
 #[test]
@@ -472,9 +470,8 @@ fn non_ascii_realm_is_krb_error_not_panic() {
     let store = PrincipalStore::new("CAFÉ.TEST");
     let r = std::panic::catch_unwind(|| krb5_kdc::handle_request(&store, &[]));
     assert!(r.is_ok(), "untrusted realm must not panic ascii()");
-    let reply = r.unwrap().expect("always a byte reply");
-    let e: krb5_types::KrbError = decode(&reply).expect("KRB-ERROR");
-    assert_eq!(e.error_code, err::GENERIC);
+    let reply = r.unwrap().expect("drop");
+    assert!(reply.is_empty());
 }
 
 #[test]

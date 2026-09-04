@@ -106,6 +106,14 @@ fn expect_error(cfg: &Cfg, case: &str, req: &[u8], code: i32) -> Result<(), Stri
     Ok(())
 }
 
+fn tcp_or_drop(addr: &KdcAddr, req: &[u8]) -> Option<Vec<u8>> {
+    match exchange_on_tcp(addr, req) {
+        Ok(b) if b.is_empty() => None,
+        Ok(b) => Some(b),
+        Err(_) => None,
+    }
+}
+
 fn expect_garbage(cfg: &Cfg, req: &[u8]) -> Result<(), String> {
     write_der(&cfg.out, "garbage-pdu.req.der", req);
     println!(
@@ -113,44 +121,29 @@ fn expect_garbage(cfg: &Cfg, req: &[u8]) -> Result<(), String> {
         sha1_hex(req),
         req.len()
     );
-    let rust = exchange_on_tcp(&cfg.rust, req).map_err(|e| format!("garbage-pdu rust: {e}"))?;
-    write_der(&cfg.out, "garbage-pdu.rust.der", &rust);
-    if rust.first() != Some(&0x7e) {
-        return Err(format!(
-            "garbage-pdu: rust tag {:02x} want 0x7e",
-            rust.first().unwrap_or(&0)
-        ));
+    let rust = tcp_or_drop(&cfg.rust, req);
+    let mit = tcp_or_drop(&cfg.mit, req);
+    if let Some(ref b) = rust {
+        write_der(&cfg.out, "garbage-pdu.rust.der", b);
     }
-    let re: KrbError = decode(&rust).map_err(|e| format!("garbage-pdu rust decode: {e}"))?;
-    if re.error_code != err::GENERIC {
-        return Err(format!(
-            "garbage-pdu: rust error_code {} want GENERIC",
-            re.error_code
-        ));
+    if let Some(ref b) = mit {
+        write_der(&cfg.out, "garbage-pdu.mit.der", b);
     }
-    match exchange_on_tcp(&cfg.mit, req) {
-        Ok(mit) => {
-            write_der(&cfg.out, "garbage-pdu.mit.der", &mit);
-            if mit.first() != Some(&0x7e) {
-                return Err(format!(
-                    "garbage-pdu: mit tag {:02x} want 0x7e",
-                    mit.first().unwrap_or(&0)
-                ));
-            }
-            let me: KrbError = decode(&mit).map_err(|e| format!("garbage-pdu mit decode: {e}"))?;
-            compare_krb_error(&re, &me).map_err(|e| format!("garbage-pdu: {e}"))?;
+    match (rust.as_deref(), mit.as_deref()) {
+        (None, None) => {
             println!(
-                r#"{{"event":"diffsend","case":"garbage-pdu","outcome":"ok","error_code":60,"rust_tag":"0x7e","mit_tag":"0x7e"}}"#
+                r#"{{"event":"diffsend","case":"garbage-pdu","outcome":"ok","rust_tag":"drop","mit_tag":"drop"}}"#
             );
+            Ok(())
         }
-        Err(_) => {
-            // MIT 1.22.2 closes TCP on truncated DER instead of KRB-ERROR.
-            println!(
-                r#"{{"event":"diffsend","case":"garbage-pdu","outcome":"ok","error_code":60,"rust_tag":"0x7e","mit_tag":"drop","whitelist":["mit-drop-garbage-pdu"]}}"#
-            );
-        }
+        (r, m) => Err(format!(
+            "garbage-pdu: want both drop, rust={} mit={}",
+            r.map(|b| format!("{:02x}", b.first().unwrap_or(&0)))
+                .unwrap_or_else(|| "drop".into()),
+            m.map(|b| format!("{:02x}", b.first().unwrap_or(&0)))
+                .unwrap_or_else(|| "drop".into()),
+        )),
     }
-    Ok(())
 }
 
 fn client_key(

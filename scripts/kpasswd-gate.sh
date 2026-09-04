@@ -31,6 +31,10 @@ if kind == "vno":
     pkt = struct.pack(">HHH", 6, 2, 0)
 elif kind == "len":
     pkt = struct.pack(">HHH", 99, 1, 0)
+elif kind == "apreq":
+    # schpw.c:89 uses `>=` so AP-REQ must leave at least one PRIV byte
+    # or MIT goto bailout (no datagram). Junk AP-REQ then chpwfail.
+    pkt = struct.pack(">HHH", 11, 1, 4) + b"junk" + b"x"
 else:
     raise SystemExit("kind")
 s.sendto(pkt, ("127.0.0.1", 464))
@@ -45,11 +49,30 @@ if b"\x00\x06Request contained unknown protocol version number 2" in data:
     print("result=6")
 if b"\x00\x01Request length was inconsistent" in data:
     print("result=1")
+if b"Failed reading application request" in data:
+    print("result=3")
+    print("text=autherror")
 if b"Request contained unknown protocol version number 2" in data:
     print("text=unknown_version")
 if b"Request length was inconsistent" in data:
     print("text=inconsistent_length")
 ' "$kind"
+}
+
+pin_kpasswd_apreq_retransmit() {
+    local ctn=$1 label=$2 run OUT rc
+    for run in 1 2; do
+        echo "---- $label bad AP-REQ $run ----"
+        set +e
+        OUT="$(kpasswd_raw "$ctn" apreq)"
+        rc=$?
+        set -e
+        echo "$OUT"
+        [ "$rc" -eq 0 ]
+        echo "$OUT" | grep -F 'ap_len=0'
+        echo "$OUT" | grep -F 'result=3'
+        echo "$OUT" | grep -F 'text=autherror'
+    done
 }
 
 # MIT schpw.c goto bailout; dispatch logs com_err and sends no framed reply.
@@ -165,9 +188,14 @@ if [ "$ok" != 1 ]; then
     exit 1
 fi
 
+docker exec "$NAME" sh -c 'cat >/tmp/kadm5.acl <<EOF
+admin@KERBER.TEST *
+*/admin@KERBER.TEST *
+EOF'
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_ACL_FILE=/tmp/kadm5.acl \
     "$NAME" sh -c '/tmp/krb5-kadmind 127.0.0.1:749 >/tmp/kadmind.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
@@ -402,6 +430,8 @@ docker exec "$NAME" sh -c "tail -n +$((nlog + 1)) /tmp/kadmind.log" | grep -q 'c
 
 echo "==== Rust kpasswd raw vno/length (schpw.c:60-82) ===="
 pin_kpasswd_raw_rust
+echo "==== Rust kpasswd bad AP-REQ retransmit (schpw.c:126-136,110-111) ===="
+pin_kpasswd_apreq_retransmit "$NAME" "Rust"
 
 echo "==== MIT kadmind policy rejection is SOFTERROR ===="
 docker run -d --name "$NAME_MIT" "$IMAGE" >/dev/null
@@ -585,6 +615,8 @@ echo "$MITPOL" | grep -F 'New password is too short'
 
 echo "==== MIT kpasswd raw vno/length (schpw.c:60-82; bailout, no framed reply) ===="
 pin_kpasswd_raw_mit
+echo "==== MIT kpasswd bad AP-REQ retransmit (schpw.c:126-136,110-111) ===="
+pin_kpasswd_apreq_retransmit "$NAME_MIT" "MIT"
 
 log "kpasswd.gate" "ok" ',"principal":"user@KERBER.TEST","op":"kpasswd+kinit","softerror":true'
 exit 0

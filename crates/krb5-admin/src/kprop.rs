@@ -18,7 +18,7 @@ use krb5_protocol::{
     build_krb_safe_ex, unwrap_krb_priv_chained, verify_ap_rep, verify_ap_req_ex,
     verify_krb_safe_checksum,
 };
-use krb5_types::{PrincipalName, Ticket};
+use krb5_types::{KerberosTime, KrbError, Microseconds, PrincipalName, Ticket, err};
 
 use crate::Error;
 
@@ -246,7 +246,8 @@ pub fn kpropd_recvauth(
     let ok = match verify_ap_req_ex(&ap_raw, &params, &replay, None) {
         Ok(v) => v,
         Err(e) => {
-            let _ = write_message(stream, &[]);
+            let der = kprop_rd_req_error(&e, expected_realm, expected_server);
+            let _ = write_message(stream, &der);
             return Err(Error::Inner(e.to_string()));
         }
     };
@@ -283,6 +284,47 @@ pub fn kpropd_recvauth(
 
 fn kpropd_client_allowed(client: &str, allowed: Option<&[String]>) -> bool {
     allowed.is_some_and(|patterns| patterns.iter().any(|p| Acl::name_matches(p, client)))
+}
+
+/// MIT `recvauth.c:150-188`: AP-REQ failure is a length-prefixed KRB-ERROR.
+fn kprop_rd_req_error(
+    e: &krb5_protocol::Error,
+    realm: Option<&str>,
+    server: Option<&PrincipalName>,
+) -> Vec<u8> {
+    let code = match e {
+        krb5_protocol::Error::KrbError { code, .. } if *code > 127 => err::GENERIC,
+        krb5_protocol::Error::KrbError { code, .. } => *code,
+        _ => err::BAD_INTEGRITY,
+    };
+    let realm_s = realm.unwrap_or("????");
+    let realm_ks = match krb5_types::try_ascii(realm_s) {
+        Ok(r) => r,
+        Err(_) => match krb5_types::try_ascii("INVALID") {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        },
+    };
+    let sname = server
+        .cloned()
+        .unwrap_or_else(|| PrincipalName::new(PrincipalName::NT_UNKNOWN, ["????"]));
+    let text = e.to_string();
+    let pdu = KrbError {
+        pvno: KrbError::PVNO,
+        msg_type: KrbError::MSG_TYPE,
+        ctime: None,
+        cusec: None,
+        stime: KerberosTime::now(),
+        susec: Microseconds::ZERO,
+        error_code: code,
+        crealm: None,
+        cname: None,
+        realm: realm_ks,
+        sname,
+        e_text: krb5_types::try_ascii(&text).ok(),
+        e_data: None,
+    };
+    encode(&pdu).unwrap_or_default()
 }
 
 /// Receive dump bytes after [`kpropd_recvauth`].
@@ -588,5 +630,55 @@ mod tests {
             iprop_poll_once(&master, &mut empty),
             IpropPoll::FullResync(_)
         ));
+    }
+
+    #[test]
+    fn kpropd_ap_req_fail_is_krb_error() {
+        use std::io::Read;
+        use std::net::{TcpListener, TcpStream};
+        use std::thread;
+        use std::time::Duration;
+
+        use krb5_asn1::decode;
+        use krb5_kdc::{TEST_REALM, bootstrap_documented, documented_host};
+
+        let (store, _) = bootstrap_documented().unwrap();
+        let host = documented_host();
+        let host_keys: Vec<_> = store
+            .get_name(&host)
+            .unwrap()
+            .keys
+            .iter()
+            .map(|k| k.key.clone())
+            .collect();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let host_for_server = host.clone();
+        let join = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            kpropd_recvauth(
+                &mut stream,
+                &host_keys,
+                Some(&host_for_server),
+                Some(TEST_REALM),
+                None,
+            )
+        });
+        thread::sleep(Duration::from_millis(20));
+        let mut client = TcpStream::connect(addr).unwrap();
+        write_message(&mut client, SENDAUTH_VERSION).unwrap();
+        write_message(&mut client, KPROP_PROT_VERSION).unwrap();
+        let mut ack = [0u8; 1];
+        client.read_exact(&mut ack).unwrap();
+        assert_eq!(ack[0], 0);
+        write_message(&mut client, &[0xff, 0x00, 0x01]).unwrap();
+        let err_msg = read_message(&mut client).unwrap();
+        assert_eq!(err_msg.first().copied(), Some(0x7e), "recvauth KRB-ERROR");
+        let e: KrbError = decode(&err_msg).expect("KRB-ERROR");
+        assert_ne!(e.error_code, 0);
+        assert!(
+            join.join().expect("thread").is_err(),
+            "recvauth must fail after junk AP-REQ"
+        );
     }
 }

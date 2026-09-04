@@ -59,6 +59,8 @@ pub const BIND_CANDIDATES: &[&str] = &["127.0.0.1:88", "127.0.0.1:8888"];
 pub const MAX_TCP_WORKERS: usize = 32;
 /// Default maximum KDC TCP request body (bytes). Kerberos PDUs are small.
 pub const MAX_TCP_REQUEST: usize = 64 * 1024;
+/// MIT `MAX_DGRAM_SIZE` / `kdc_max_dgram_reply_size` default (`osconf.hin`).
+pub const MAX_DGRAM_REPLY: usize = 65_536;
 
 /// Resource caps and I/O timeouts for [`serve_until`].
 #[derive(Clone, Copy, Debug)]
@@ -67,6 +69,8 @@ pub struct ListenLimits {
     pub max_tcp_workers: usize,
     /// Maximum TCP length-prefix body.
     pub max_tcp_request: usize,
+    /// UDP reply cap; over is KRB-ERROR 52 (`dispatch.c:54-63`).
+    pub max_dgram_reply_size: usize,
     /// Read/write timeout for a single TCP exchange, and UDP recv poll.
     pub io_timeout: Duration,
 }
@@ -76,6 +80,7 @@ impl Default for ListenLimits {
         Self {
             max_tcp_workers: MAX_TCP_WORKERS,
             max_tcp_request: MAX_TCP_REQUEST,
+            max_dgram_reply_size: MAX_DGRAM_REPLY,
             io_timeout: Duration::from_secs(5),
         }
     }
@@ -211,7 +216,7 @@ pub fn serve_until(
     let tcp_store = store;
     let udp_flag = Arc::clone(&shutdown);
     let tcp_flag = Arc::clone(&shutdown);
-    let udp_thread = thread::spawn(move || udp_loop(&udp_store, udp, &udp_flag));
+    let udp_thread = thread::spawn(move || udp_loop(&udp_store, udp, &udp_flag, limits));
     let tcp_thread = thread::spawn(move || tcp_loop(&tcp_store, tcp, &tcp_flag, limits));
     let _ = udp_thread.join();
     let _ = tcp_thread.join();
@@ -219,7 +224,7 @@ pub fn serve_until(
 }
 
 #[allow(clippy::needless_pass_by_value)] // UDP socket is owned by the worker thread
-fn udp_loop(store: &SharedStore, sock: UdpSocket, shutdown: &AtomicBool) {
+fn udp_loop(store: &SharedStore, sock: UdpSocket, shutdown: &AtomicBool, limits: ListenLimits) {
     let mut buf = vec![0u8; 65_535];
     while !shutdown.load(Ordering::Relaxed) {
         match sock.recv_from(&mut buf) {
@@ -229,7 +234,15 @@ fn udp_loop(store: &SharedStore, sock: UdpSocket, shutdown: &AtomicBool) {
                     read_store(store, |s| handle_request(s, &payload))
                 }));
                 match reply {
-                    Ok(Ok(reply)) => {
+                    Ok(Ok(mut reply)) => {
+                        if reply.is_empty() {
+                            continue;
+                        }
+                        if reply.len() > limits.max_dgram_reply_size {
+                            reply = read_store(store, |s| {
+                                crate::kdc_error_bytes(s, krb5_types::err::RESPONSE_TOO_BIG)
+                            });
+                        }
                         if let Err(e) = sock.send_to(&reply, peer) {
                             tracing::error!(
                                 event = krb5_log::events::KDC_TRANSPORT,
@@ -362,10 +375,23 @@ fn handle_tcp(
         Err(e) => return Err(e),
     }
     let n = usize::try_from(u32::from_be_bytes(hdr)).unwrap_or(usize::MAX);
-    if n == 0 || n > max_body {
+    if n == 0 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("invalid TCP length {n}"),
+        ));
+    }
+    if n > max_body {
+        let reply = read_store(store, |s| {
+            crate::kdc_error_bytes(s, krb5_types::err::FIELD_TOOLONG)
+        });
+        let len = u32::try_from(reply.len()).unwrap_or(0);
+        let _ = stream.write_all(&len.to_be_bytes());
+        let _ = stream.write_all(&reply);
+        let _ = stream.flush();
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("error constructing KRB_ERR_FIELD_TOOLONG error! length {n}"),
         ));
     }
     let mut req = vec![0u8; n];
@@ -385,12 +411,22 @@ fn handle_tcp(
     })) {
         Ok(Ok(r)) => r,
         Ok(Err(e)) => {
+            tracing::error!(
+                event = krb5_log::events::KDC_ISSUE,
+                component = "krb5-kdc",
+                outcome = "error",
+                error = %e,
+                error_suffix = "while dispatching (tcp)",
+            );
             return Err(io::Error::new(io::ErrorKind::InvalidData, e.to_string()));
         }
         Err(_) => {
             return Err(io::Error::other("request panic isolated"));
         }
     };
+    if reply.is_empty() {
+        return Ok(());
+    }
     let len = u32::try_from(reply.len())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "reply too large"))?;
     stream.write_all(&len.to_be_bytes())?;
@@ -421,7 +457,7 @@ mod tests {
     }
 
     #[test]
-    fn tcp_oversize_length_is_rejected() {
+    fn tcp_oversize_length_is_field_toolong() {
         let (store, _) = bootstrap_documented().unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
@@ -433,10 +469,50 @@ mod tests {
         let mut c = std::net::TcpStream::connect(addr).unwrap();
         c.write_all(&64u32.to_be_bytes()).unwrap();
         c.write_all(&[0u8; 8]).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
         let mut hdr = [0u8; 4];
-        c.set_read_timeout(Some(Duration::from_millis(400)))
-            .unwrap();
-        assert!(c.read_exact(&mut hdr).is_err());
+        c.read_exact(&mut hdr).expect("FIELD_TOOLONG length");
+        let n = u32::from_be_bytes(hdr) as usize;
+        let mut body = vec![0u8; n];
+        c.read_exact(&mut body).expect("FIELD_TOOLONG body");
+        let e: krb5_types::KrbError = decode(&body).expect("KRB-ERROR");
+        assert_eq!(e.error_code, err::FIELD_TOOLONG);
+    }
+
+    #[test]
+    fn udp_oversize_reply_is_response_too_big() {
+        let (store, _) = bootstrap_documented().unwrap();
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr = udp.local_addr().unwrap();
+        let tcp = TcpListener::bind(addr).unwrap();
+        let flag = Arc::new(AtomicBool::new(false));
+        let store = shared_store(store);
+        let f2 = Arc::clone(&flag);
+        thread::spawn(move || {
+            let _ = serve_until(
+                store,
+                udp,
+                tcp,
+                f2,
+                ListenLimits {
+                    max_tcp_workers: 2,
+                    max_tcp_request: 4096,
+                    max_dgram_reply_size: 10,
+                    io_timeout: Duration::from_millis(200),
+                },
+            );
+        });
+        let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+        let req = crate::as_req(cname, crate::TEST_REALM, 1, None).unwrap();
+        let bytes = encode(&req).unwrap();
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        sock.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        sock.send_to(&bytes, addr).unwrap();
+        let mut buf = [0u8; 4096];
+        let n = sock.recv(&mut buf).unwrap();
+        let e: krb5_types::KrbError = decode(&buf[..n]).unwrap();
+        assert_eq!(e.error_code, err::RESPONSE_TOO_BIG);
+        flag.store(true, Ordering::SeqCst);
     }
 
     #[test]
@@ -457,6 +533,7 @@ mod tests {
                 ListenLimits {
                     max_tcp_workers: 2,
                     max_tcp_request: 4096,
+                    max_dgram_reply_size: MAX_DGRAM_REPLY,
                     io_timeout: Duration::from_millis(50),
                 },
             )
