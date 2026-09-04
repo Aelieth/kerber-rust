@@ -6,6 +6,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# shellcheck disable=SC1091
+. "$ROOT/scripts/lib/provenance.sh"
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-kadmin-gate"
@@ -24,12 +26,12 @@ compile_kadm5_changepw() {
     local ctn=$1
     docker cp "$ROOT/scripts/kadm5-changepw-rpc.c" "$ctn":/tmp/kadm5-changepw-rpc.c
     if ! docker exec "$ctn" cc -o /tmp/kadm5-changepw-rpc /tmp/kadm5-changepw-rpc.c \
-        -lkadm5clnt_mit -lgssrpc -lgssapi_krb5 -lkrb5 -lk5crypto -lcom_err 2>/tmp/kadm5-cc.err
+        -lkadm5clnt_mit -lgssrpc -lgssapi_krb5 -lkrb5 -lk5crypto -lcom_err 2>"$SCRATCH/kadm5-cc.err"
     then
         if ! docker exec "$ctn" cc -o /tmp/kadm5-changepw-rpc /tmp/kadm5-changepw-rpc.c \
-            -lkadm5clnt -lgssrpc -lgssapi_krb5 -lkrb5 -lcom_err 2>>/tmp/kadm5-cc.err
+            -lkadm5clnt -lgssrpc -lgssapi_krb5 -lkrb5 -lcom_err 2>>"$SCRATCH/kadm5-cc.err"
         then
-            cat /tmp/kadm5-cc.err >&2 || true
+            cat "$SCRATCH/kadm5-cc.err" >&2 || true
             docker exec "$ctn" cat /tmp/kadm5-cc.err >&2 || true
             log "kadmin.gate" "error" ',"error":"kadm5-changepw-rpc compile failed"'
             exit 1

@@ -3,6 +3,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# shellcheck disable=SC1091
+. "$ROOT/scripts/lib/provenance.sh"
 
 cargo build -p krb5-kdc --bin krb5-kdc -p krb5-client --bin krb5-kinit
 

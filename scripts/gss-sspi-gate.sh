@@ -5,6 +5,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# shellcheck disable=SC1091
+. "$ROOT/scripts/lib/provenance.sh"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-gss-sspi-gate}"
 mkdir -p "$SCRATCH"

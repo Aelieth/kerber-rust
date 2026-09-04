@@ -273,6 +273,8 @@ jobs:
         run: ./scripts/s4u-mit-gate.sh
       - name: kcm-gate (Rust KCM vs sssd-kcm + MIT klist)
         run: ./scripts/kcm-gate.sh
+      - name: rc4-session-gate (allow_rc4 session_enctypes both directions)
+        run: ./scripts/rc4-session-gate.sh
 
   slo:
     runs-on: ubuntu-latest

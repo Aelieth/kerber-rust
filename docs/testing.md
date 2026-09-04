@@ -25,6 +25,18 @@ coverage checklist (`file:line` → Rust line or `deviation:`),
 red-at-HEAD artefacts: `working/` is gitignored. `__pycache__/` is
 gitignored.
 
+Every `scripts/*-gate.sh` and `scripts/red-at-sha.sh` sources
+`scripts/lib/provenance.sh` **before the first cell**. The helper
+prints `head_sha=`, `tree_sha=` (temporary-index `git add -A -- .
+':!working'` then `write-tree`), `dirty=`, `captured_at=`, the MIT
+image id/created, and the SHA-256 of `harness/kadm5.acl` in the tree
+versus inside `kerber-rust-mit-kdc:1.22.2`. A hash mismatch dies
+`stale MIT image; rebuild from harness/`. An artefact without this
+stamp is not evidence. A "settled live" claim must name its log
+file. Gate scripts write host files only under `KERBER_SCRATCH`
+(`ci-policy` fails a literal host `>/tmp/` write outside a
+`KERBER_SCRATCH:-/tmp/…` default).
+
 Red-at-HEAD artefact contract (captured under
 `working/logs/…/<item>-red-at-head.log`): the file is captured tool
 output of the failing unit or live cell, not a paraphrase. Write
@@ -34,11 +46,12 @@ Retroactive red is `scripts/red-at-sha.sh <base-sha> <gate-script>
 under an absolute `KERBER_SCRATCH`, a provenance header (`base_sha=`,
 `tree_sha=` from `git write-tree` after the overlay, `command=`,
 worktree, probe sha256, `Compiling`/`Finished`, binary SHA-256s,
-`gate_rc=`), HEAD `scripts/lib/*.{sh,py}`, `scripts/*.{c,py}`, and
-the whole `harness/` tree copied into the worktree so probes and
-docker builds are current, then the current gate script against
-those binaries. The worktree is removed and `git worktree prune`d on
-EXIT (the target dir stays).
+`gate_rc=`), HEAD `scripts/lib/*.{sh,py}`, `scripts/*.sh`,
+`scripts/*.{c,py}`, and the whole `harness/` tree copied into the
+worktree **before** `write-tree` so `tree_sha=` describes the tree
+that ran, then the current gate script against those binaries. The
+worktree is removed and `git worktree prune`d on EXIT (the target
+dir stays).
 Archive the captured output under `working/logs/…` and the scratch.
 Both legs of a text-equality cell assert pinned literals (never
 capture-from-MIT). Every branch asserts: no `if` whose body is only

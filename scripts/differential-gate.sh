@@ -4,6 +4,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# shellcheck disable=SC1091
+. "$ROOT/scripts/lib/provenance.sh"
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-differential-gate"

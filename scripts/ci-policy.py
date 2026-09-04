@@ -494,6 +494,119 @@ def check_no_informational_gates() -> None:
             _die(f"{rel} informational if at line {hits[0]}")
 
 
+_PROVENANCE_SRC = re.compile(
+    r"""\.\s+["']\$ROOT/scripts/lib/provenance\.sh["']"""
+)
+_HOST_TMP_REDIR = re.compile(r"(?:^|[\s;|&])(?:\d*)>>?\s*/tmp/")
+_HEREDOC_DELIM = re.compile(r"""<<[-]?\s*['\"]?(\w+)['\"]?""")
+
+
+def check_gate_provenance(text: str | None = None, name: str = "gate.sh") -> None:
+    """Every *-gate.sh and red-at-sha.sh must source the stamp helper."""
+    if text is not None:
+        if not _PROVENANCE_SRC.search(text):
+            _die(f"{name} must source scripts/lib/provenance.sh")
+        return
+    missing: list[str] = []
+    for path in sorted(SCRIPTS.glob("*-gate.sh")):
+        if not _PROVENANCE_SRC.search(path.read_text()):
+            missing.append(path.name)
+    ras = SCRIPTS / "red-at-sha.sh"
+    if ras.is_file() and not _PROVENANCE_SRC.search(ras.read_text()):
+        missing.append(ras.name)
+    if missing:
+        _die(f"must source scripts/lib/provenance.sh: {missing}")
+
+
+def host_tmp_write_lines(text: str) -> list[int]:
+    """Host-level `>/tmp/` redirects, skipping quotes and heredocs."""
+    hits: list[int] = []
+    in_sq = in_dq = False
+    heredoc_end: str | None = None
+    for i, line in enumerate(text.splitlines(), 1):
+        if heredoc_end is not None:
+            if line.strip() == heredoc_end:
+                heredoc_end = None
+            continue
+        started_sq, started_dq = in_sq, in_dq
+        buf: list[str] = []
+        k = 0
+        n = len(line)
+        while k < n:
+            ch = line[k]
+            if in_sq:
+                if ch == "'":
+                    in_sq = False
+                k += 1
+                continue
+            if in_dq:
+                if ch == "\\" and k + 1 < n:
+                    k += 2
+                    continue
+                if ch == '"':
+                    in_dq = False
+                k += 1
+                continue
+            if ch == "'":
+                in_sq = True
+                k += 1
+                continue
+            if ch == '"':
+                in_dq = True
+                k += 1
+                continue
+            if ch == "#":
+                break
+            buf.append(ch)
+            k += 1
+        code = "".join(buf)
+        if not started_sq and not started_dq and _HEREDOC_DELIM.search(line):
+            m = _HEREDOC_DELIM.search(line)
+            if m:
+                heredoc_end = m.group(1)
+        if "KERBER_SCRATCH:-" in code:
+            continue
+        if _HOST_TMP_REDIR.search(code):
+            hits.append(i)
+    return hits
+
+
+def check_no_host_tmp_writes(text: str | None = None, name: str = "gate.sh") -> None:
+    """No host `/tmp/` writes in gate scripts outside KERBER_SCRATCH defaults."""
+    if text is not None:
+        hits = host_tmp_write_lines(text)
+        if hits:
+            _die(f"{name} host /tmp write at line {hits[0]}")
+        return
+    for path in sorted(SCRIPTS.glob("*-gate.sh")):
+        hits = host_tmp_write_lines(path.read_text())
+        if hits:
+            _die(f"{path.name} host /tmp write at line {hits[0]}")
+
+
+def check_red_at_sha_overlay_order(text: str | None = None) -> None:
+    """`scripts/*.sh` must be copied before `write-tree` so tree_sha includes the gate."""
+    if text is None:
+        path = SCRIPTS / "red-at-sha.sh"
+        if not path.is_file():
+            _die("missing scripts/red-at-sha.sh")
+        text = path.read_text()
+    write = -1
+    cp = -1
+    offset = 0
+    for line in text.splitlines(True):
+        code = line.split("#", 1)[0]
+        if write < 0 and "write-tree" in code:
+            write = offset
+        if cp < 0 and re.search(r'cp\s+"\$ROOT/scripts/"\*\.sh', code):
+            cp = offset
+        offset += len(line)
+    if write < 0:
+        _die("red-at-sha.sh has no write-tree")
+    if cp < 0 or cp > write:
+        _die("red-at-sha.sh must overlay scripts/*.sh before write-tree")
+
+
 def _split_ledger_row(line: str) -> list[str]:
     inner = line.strip()
     if inner.startswith("|"):
@@ -1069,6 +1182,26 @@ jobs:
     check_ci_nextest_split(not_ci)
     check_ci_no_workspace_cargo_test(not_ci)
 
+    check_gate_provenance('. "$ROOT/scripts/lib/provenance.sh"\n', "ok-gate.sh")
+    _must_die(check_gate_provenance, "#!/bin/bash\necho hi\n", "no-prov-gate.sh")
+    check_no_host_tmp_writes(
+        'SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-x-gate}"\n'
+        "docker exec n sh -c 'cat >/tmp/in-container'\n",
+        "ok-tmp-gate.sh",
+    )
+    _must_die(
+        check_no_host_tmp_writes,
+        "cc -o x x.c 2>/tmp/kadm5-cc.err\n",
+        "kadmin-gate.sh",
+    )
+    check_red_at_sha_overlay_order(
+        'cp "$ROOT/scripts/"*.sh "$WT/scripts/"\nTREE="$(git write-tree)"\n'
+    )
+    _must_die(
+        check_red_at_sha_overlay_order,
+        'TREE="$(git write-tree)"\ncp "$ROOT/scripts/"*.sh "$WT/scripts/"\n',
+    )
+
 
 def main() -> None:
     _self_test()
@@ -1093,6 +1226,9 @@ def main() -> None:
     check_full_run_scheduled(workflows)
     check_gate_membership(workflows)
     check_no_informational_gates()
+    check_gate_provenance()
+    check_no_host_tmp_writes()
+    check_red_at_sha_overlay_order()
     check_working_gitignored()
     check_ledger_proof_column()
     check_ledger_tally()

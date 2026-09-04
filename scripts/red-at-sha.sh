@@ -2,12 +2,21 @@
 # Rebuild a historical SHA in a KERBER_SCRATCH worktree and run a gate or
 # command against those binaries. Provenance header is printed first.
 # Usage: scripts/red-at-sha.sh <base-sha> <gate-script-or-command> [args]
+#        scripts/red-at-sha.sh --overlay-probe <base-sha> <rel-path>
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# shellcheck disable=SC1091
+. "$ROOT/scripts/lib/provenance.sh"
+
+PROBE=0
+if [ "${1:-}" = "--overlay-probe" ]; then
+    PROBE=1
+    shift
+fi
 
 if [ "$#" -lt 2 ]; then
-    echo "usage: $0 <base-sha> <gate-script-or-command> [args]" >&2
+    echo "usage: $0 [--overlay-probe] <base-sha> <gate-script-or-command> [args]" >&2
     exit 2
 fi
 if [ -z "${KERBER_SCRATCH:-}" ]; then
@@ -39,13 +48,17 @@ cleanup() {
 trap cleanup EXIT
 
 # HEAD probes/helpers overlay the base-SHA tree so docker cp from $ROOT
-# inside the gate (resolved from $0 in the worktree) is current.
+# inside the gate (resolved from $0 in the worktree) is current. Gate
+# scripts must land before write-tree so tree_sha describes what ran.
 mkdir -p "$WT/scripts/lib"
 if compgen -G "$ROOT/scripts/lib/*.sh" >/dev/null; then
     cp "$ROOT/scripts/lib/"*.sh "$WT/scripts/lib/"
 fi
 if compgen -G "$ROOT/scripts/lib/*.py" >/dev/null; then
     cp "$ROOT/scripts/lib/"*.py "$WT/scripts/lib/"
+fi
+if compgen -G "$ROOT/scripts/"*.sh >/dev/null; then
+    cp "$ROOT/scripts/"*.sh "$WT/scripts/"
 fi
 if compgen -G "$ROOT/scripts/*.c" >/dev/null; then
     cp "$ROOT/scripts/"*.c "$WT/scripts/"
@@ -59,6 +72,24 @@ if [ -d "$ROOT/harness" ]; then
 fi
 git -C "$WT" add -A >/dev/null
 TREE="$(git -C "$WT" write-tree)"
+
+if [ "$PROBE" = 1 ]; then
+    rel="${CMD[0]}"
+    src_blob="$(git -C "$ROOT" hash-object "$ROOT/$rel")"
+    tree_blob="$(git -C "$WT" rev-parse "$TREE:$rel")"
+    echo "==== red-at-sha provenance ===="
+    echo "base_sha=$BASE"
+    echo "tree_sha=$TREE"
+    echo "command=--overlay-probe $rel"
+    echo "src_blob=$src_blob"
+    echo "tree_blob=$tree_blob"
+    if [ "$src_blob" = "$tree_blob" ]; then
+        echo "overlay_match=yes"
+    else
+        echo "overlay_match=no"
+    fi
+    exit 0
+fi
 
 echo "==== red-at-sha provenance ===="
 echo "base_sha=$BASE"

@@ -6,6 +6,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# shellcheck disable=SC1091
+. "$ROOT/scripts/lib/provenance.sh"
 
 IMAGE="${HEIMDAL_IMAGE:-kerber-rust-heimdal-kdc:latest}"
 NAME_H2R="kerber-rust-heimdal-h2r"
