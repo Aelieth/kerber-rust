@@ -14,7 +14,7 @@ uses a per-context sequence window in addition to that cache.
 | Protection | Code site | Test |
 | --- | --- | --- |
 | Constant-time MAC / checksum | `krb5-crypto` `mac_verify` (`derive.rs`); callers `ops.rs` decrypt/checksum, `weak.rs` RC4/DES | `decrypt_bad_mac_is_error` (`krb5-crypto/tests/known_answer.rs`) |
-| Constant-time PAC signature | `krb5-types` `verify_sig_buf` (`pac.rs`); KDC `verify_pac` / `verify_pac_signatures` | `crates/krb5-kdc/tests/ad_pac.rs` `verify_pac_signatures` |
+| Constant-time PAC signature | `verify_checksum_type` over PAC `SignatureType` (`ad.rs` `verify_pac_sig`; `pac.c:478-514`) | `crates/krb5-kdc/tests/ad_pac.rs` `verify_pac_signatures` / `pac_sha1_server_checksum_is_sumtype_nosupp` |
 | Replay — AP-REQ authenticator | `verify_ap_req` (`krb5-protocol` `ap_req.rs`) | `ap_req_valid_truncated_wrong_key_replay` |
 | Replay — TGS authenticator | `issue_tgs` (`krb5-kdc` `issue.rs`) `tgs_replay` | `tgs_authenticator_replay_is_repeat` |
 | Replay — PA-ENC-TIMESTAMP | `verify_enc_timestamp` (`issue.rs`) `pa_replay` | `pa_enc_timestamp_replay_is_repeat` |
@@ -73,6 +73,22 @@ FAST armor decrypt binds keys to the armor `ticket.realm` (MIT
 A local non-krbtgt armor ticket is 26 `SERVER_NOMATCH`.
 A presented-TGT krbtgt with `DISALLOW_SVR` or `DISALLOW_ALL_TIX` is 7
 `PROCESS_TGS` (`kdc_util.c:390-393`).
+
+Checksums are verified by the declared `cksumtype` (`verify_checksum.c`):
+type 0 substitutes the key's mandatory type, `output_size` is
+`KRB5_BAD_MSIZE`, unkeyed/not coll-proof is 50 (`rd_safe.c:70-74`,
+`kdc_util.c:1244`). KRB-SAFE checksums the dummy (zeroed-cksum) encoding
+first, then the body. GSS wrap-without-conf requires `EC == cksumsize`;
+MIC fillers are 0xFF and the header is reconstructed (`util_crypt.c:322-334`).
+A GSS authenticator checksum that is not 0x8003 is verified over empty
+data (`accept_sec_context.c:494-511`); 0x8003 shorter than 24 is
+`GSS_S_BAD_BINDINGS`. PA-FOR-USER unkeyed is 50 and a bad MAC is 41
+(`INVALID_S4U2SELF_CHECKSUM`). PAC SHA-1 on the server checksum is 15
+(`pac.c:496-497`). The FAST client verifies `ticket_checksum`
+(`fast.c:543-551`). PA-REQ-ENC-PA-REP (149) is produced when the AS-REQ
+advertises it; the kinit client verify of 149 is not wired until the
+client also sends the empty padata (RFC 6806 F7) so MIT KDCs that set
+`enc-pa-rep` without returning 149 are not rejected.
 
 FAST `req_checksum` is verified over the wire KDC-REQ-BODY (field 4)
 when a raw packet is present (`do_as_req.c:526-531`); socketless tests

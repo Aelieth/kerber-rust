@@ -196,6 +196,52 @@ fn fast_as_exchange_strengthen_and_finished() {
     let enc = decode_enc_part(&plain);
     assert_eq!(enc.nonce, 202);
     assert!(enc.flags.pre_authent());
+    let finished = fast.finished.expect("finished");
+    krb5_protocol::verify_fast_finished(&akey, &issued.rep.0.ticket, &finished)
+        .expect("FAST finished");
+    let mut bad = finished.clone();
+    let mut mac = bad.ticket_checksum.checksum.to_vec();
+    mac[0] ^= 0xff;
+    bad.ticket_checksum.checksum = mac.into();
+    match krb5_protocol::verify_fast_finished(&akey, &issued.rep.0.ticket, &bad) {
+        Err(e) => assert!(
+            e.to_string().contains("Ticket modified"),
+            "tampered finished: {e}"
+        ),
+        Ok(()) => panic!("tampered FAST finished must fail"),
+    }
+}
+
+#[test]
+fn as_req_enc_pa_rep_is_verified() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = user_key();
+    let mut padata = vec![pa_enc_timestamp(&key).expect("pa")];
+    padata.push(PaData {
+        padata_type: pa::REQ_ENC_PA_REP,
+        padata_value: Vec::new().into(),
+    });
+    let req = as_req(cname, TEST_REALM, 205, Some(padata)).unwrap();
+    let wire = encode(&req).expect("der");
+    let bytes = krb5_kdc::handle_request(&store, &wire).expect("reply");
+    let rep: krb5_types::AsRep = decode(&bytes).expect("AS-REP");
+    let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
+    let plain = decrypt(&key, usage, rep.0.enc_part.cipher.as_ref()).expect("enc");
+    let enc = decode_enc_part(&plain);
+    assert!(enc.flags.enc_pa_rep(), "RFC 6806 enc-pa-rep");
+    krb5_protocol::verify_req_enc_pa_rep(&enc, &key, &wire).expect("pa 149");
+    let mut bad = enc.clone();
+    if let Some(epa) = bad.encrypted_pa_data.as_mut()
+        && let Some(p) = epa.iter_mut().find(|p| p.padata_type == pa::REQ_ENC_PA_REP)
+    {
+        let mut ck: Checksum = decode(p.padata_value.as_ref()).expect("ck");
+        let mut mac = ck.checksum.to_vec();
+        mac[0] ^= 0xff;
+        ck.checksum = mac.into();
+        p.padata_value = encode(&ck).expect("re").into();
+    }
+    assert!(krb5_protocol::verify_req_enc_pa_rep(&bad, &key, &wire).is_err());
 }
 
 #[test]
@@ -3076,7 +3122,47 @@ fn s4u2self_bad_checksum_rejected() {
     .expect("TGS-REQ");
     let bytes = krb5_kdc::handle_request(&store, &encode(&tgs).expect("der")).expect("reply");
     let e: krb5_types::KrbError = decode(&bytes).expect("KRB-ERROR");
+    assert_eq!(e.error_code, err::MODIFIED);
+    let text = e
+        .e_text
+        .as_ref()
+        .and_then(|t| std::str::from_utf8(t.as_bytes()).ok());
+    assert_eq!(text, Some("INVALID_S4U2SELF_CHECKSUM"));
+}
+
+#[test]
+fn s4u2self_unkeyed_cksumtype_is_inapp() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
+    let tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 903);
+    let mut pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).expect("PA-FOR-USER");
+    let mut for_user: krb5_types::s4u::PaForUser =
+        decode(pa.padata_value.as_ref()).expect("PaForUser");
+    for_user.cksum.cksumtype = 7;
+    pa.padata_value = encode(&for_user).expect("re-encode").into();
+    let tgs = tgs_req_ex(
+        tgt.rep.0.ticket.clone(),
+        &tgt.session_key,
+        TEST_REALM,
+        &user,
+        documented_host(),
+        TEST_REALM,
+        904,
+        KdcOptions::forwardable(),
+        None,
+        vec![pa],
+        pref_etypes(),
+    )
+    .expect("TGS-REQ");
+    let bytes = krb5_kdc::handle_request(&store, &encode(&tgs).expect("der")).expect("reply");
+    let e: krb5_types::KrbError = decode(&bytes).expect("KRB-ERROR");
     assert_eq!(e.error_code, err::INAPP_CKSUM);
+    let text = e
+        .e_text
+        .as_ref()
+        .and_then(|t| std::str::from_utf8(t.as_bytes()).ok());
+    assert_eq!(text, Some("INVALID_S4U2SELF_CHECKSUM"));
 }
 
 #[test]
@@ -3829,7 +3915,7 @@ fn tgs_rejects_corrupt_foreign_referral_pac() {
     )
     .expect("TGS-REQ");
     match krb5_kdc::issue_tgs(&foreign, &tgs) {
-        Err(Error::Protocol { code, .. }) => assert_eq!(code, err::BAD_INTEGRITY),
+        Err(Error::Protocol { code, .. }) => assert_eq!(code, err::MODIFIED),
         other => panic!("corrupt server checksum must fail, got {other:?}"),
     }
 
@@ -3847,7 +3933,7 @@ fn tgs_rejects_corrupt_foreign_referral_pac() {
     )
     .expect("TGS-REQ");
     match krb5_kdc::issue_tgs(&foreign, &tgs16) {
-        Err(Error::Protocol { code, .. }) => assert_eq!(code, err::BAD_INTEGRITY),
+        Err(Error::Protocol { code, .. }) => assert_eq!(code, err::MODIFIED),
         other => panic!("corrupt type-16 checksum must fail, got {other:?}"),
     }
 }

@@ -4,16 +4,16 @@ use std::time::Instant;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    EncryptionType, KeyUsage, ProtocolKey, cksumtype_is_coll_proof, cksumtype_is_known, decrypt,
-    encrypt, krb_fx_cf2, verify_checksum_type,
+    EncryptionType, KeyUsage, ProtocolKey, checksum, cksumtype_is_coll_proof, cksumtype_is_known,
+    decrypt, encrypt, krb_fx_cf2, verify_checksum_type,
 };
 use krb5_protocol::{ReplayCache, ReplayKey};
 use krb5_types::pac::{PacIdentity, parse_kerb_validation_info};
 use krb5_types::{
-    AsRep, AsReq, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, EncryptedData,
-    EncryptionKey, EtypeInfo2, EtypeInfo2Entry, KdcReqBody, KerberosTime, KrbError, LastReqValue,
-    MethodData, Microseconds, OctetString, PaData, PaEncTsEnc, PrincipalName, TgsRep, TgsReq,
-    Ticket, TicketFlags, TransitedEncoding, err, flag_bit, ku, pa,
+    AsRep, AsReq, Checksum, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart,
+    EncryptedData, EncryptionKey, EtypeInfo2, EtypeInfo2Entry, KdcReqBody, KerberosTime, KrbError,
+    LastReqValue, MethodData, Microseconds, OctetString, PaData, PaEncTsEnc, PrincipalName, TgsRep,
+    TgsReq, Ticket, TicketFlags, TransitedEncoding, err, flag_bit, ku, pa,
 };
 
 use crate::ad::{
@@ -435,6 +435,11 @@ fn issue_as_body(
             .with_bit(flag_bit::INVALID, true);
     }
     flags = apply_disallow_flags(flags, Some(&client), &server);
+    let want_enc_pa = find_pa(req.0.padata.as_deref(), pa::REQ_ENC_PA_REP).is_some()
+        || fast.is_some_and(|f| find_pa(Some(&f.inner_padata), pa::REQ_ENC_PA_REP).is_some());
+    if want_enc_pa && raw.is_some() {
+        flags = flags.with_bit(flag_bit::ENC_PA_REP, true);
+    }
     let life = requested_life(store, &client, body, &starttime);
     let end = starttime
         .add_seconds(i64::try_from(life).unwrap_or(i64::MAX))
@@ -487,18 +492,6 @@ fn issue_as_body(
         Some(&server),
         body.rtime.as_ref(),
     );
-    let enc_part = enc_rep_part(
-        &session,
-        fast.map_or(body.nonce, |f| f.nonce),
-        &now,
-        &now,
-        &starttime,
-        &end,
-        store.realm(),
-        &sname,
-        flags,
-        renew_till,
-    )?;
     let mut reply_key = as_rep_key.clone();
     let mut outer_padata = extra_padata;
     if let Some(f) = fast {
@@ -513,6 +506,23 @@ fn issue_as_body(
             f.nonce,
             Some(finished),
         )?];
+    }
+    let mut enc_part = enc_rep_part(
+        &session,
+        fast.map_or(body.nonce, |f| f.nonce),
+        &now,
+        &now,
+        &starttime,
+        &end,
+        store.realm(),
+        &sname,
+        flags,
+        renew_till,
+    )?;
+    if enc_part.flags.enc_pa_rep()
+        && let Some(pkt) = raw
+    {
+        enc_part.encrypted_pa_data = Some(enc_pa_rep_padata(&reply_key, pkt)?);
     }
     let enc_der = encode(&EncAsRepPart(enc_part))?;
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART)?;
@@ -1216,6 +1226,26 @@ fn enc_rep_part(
         caddr: None,
         encrypted_pa_data: None,
     })
+}
+
+/// MIT `kdc_handle_protected_negotiation` (`kdc_util.c:1768-1806`).
+fn enc_pa_rep_padata(reply_key: &ProtocolKey, req_pkt: &[u8]) -> Result<Vec<PaData>, Error> {
+    let usage = KeyUsage::new(ku::AS_REQ)?;
+    let mic = checksum(reply_key, usage, req_pkt)?;
+    let ck = Checksum {
+        cksumtype: reply_key.etype().checksum_type(),
+        checksum: mic.into(),
+    };
+    Ok(vec![
+        PaData {
+            padata_type: pa::REQ_ENC_PA_REP,
+            padata_value: encode(&ck)?.into(),
+        },
+        PaData {
+            padata_type: pa::FX_FAST,
+            padata_value: Vec::new().into(),
+        },
+    ])
 }
 
 fn encryption_key(key: &ProtocolKey) -> EncryptionKey {

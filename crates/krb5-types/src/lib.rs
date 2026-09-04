@@ -462,6 +462,12 @@ impl TicketFlags {
         self.bit(flag_bit::INVALID)
     }
 
+    /// RFC 6806 `enc-pa-rep` (bit 15).
+    #[must_use]
+    pub fn enc_pa_rep(&self) -> bool {
+        self.bit(flag_bit::ENC_PA_REP)
+    }
+
     /// Set RFC bit `n`.
     #[must_use]
     pub fn with_bit(mut self, n: usize, on: bool) -> Self {

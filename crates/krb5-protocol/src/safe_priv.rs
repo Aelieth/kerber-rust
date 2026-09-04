@@ -4,12 +4,13 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    CipherState, KeyUsage, ProtocolKey, checksum, decrypt, decrypt_with_state, encrypt,
-    encrypt_with_state, verify_checksum,
+    CipherState, KeyUsage, ProtocolKey, checksum, cksumtype_is_coll_proof, cksumtype_is_keyed,
+    cksumtype_is_known, decrypt, decrypt_with_state, encrypt, encrypt_with_state,
+    verify_checksum_type,
 };
 use krb5_types::{
-    EncKrbCredPart, EncKrbPrivPart, EncryptedData, HostAddress, KerberosTime, KrbCred, KrbCredInfo,
-    KrbPriv, KrbSafe, KrbSafeBody, Microseconds, OctetString, Ticket, ku,
+    Checksum, EncKrbCredPart, EncKrbPrivPart, EncryptedData, HostAddress, KerberosTime, KrbCred,
+    KrbCredInfo, KrbPriv, KrbSafe, KrbSafeBody, Microseconds, OctetString, Ticket, err, ku,
 };
 
 use crate::error::Error;
@@ -115,9 +116,7 @@ pub fn unwrap_krb_safe_ex(
     require_time: bool,
 ) -> Result<Vec<u8>, Error> {
     let msg: KrbSafe = decode(raw)?;
-    let body_der = encode(&msg.safe_body)?;
-    let usage = KeyUsage::new(ku::KRB_SAFE_CKSUM)?;
-    verify_checksum(session, usage, &body_der, msg.cksum.checksum.as_ref())?;
+    verify_krb_safe_checksum(session, &msg)?;
     accept_fresh(
         replay,
         "SAFE",
@@ -140,6 +139,48 @@ enum FreshPolicy {
     HashOnly,
     /// MIT `kprop` (`DO_SEQUENCE` only): seq required, timestamp optional.
     SeqOnly,
+}
+
+/// MIT `rd_safe.c:66-107`: known + coll-proof + keyed, dummy encoding, body fallback.
+///
+/// # Errors
+///
+/// [`Error::KrbError`] 15 / 50 / 41.
+pub fn verify_krb_safe_checksum(session: &ProtocolKey, msg: &KrbSafe) -> Result<(), Error> {
+    let ctype = msg.cksum.cksumtype;
+    if !cksumtype_is_known(ctype) {
+        return Err(Error::KrbError {
+            code: err::SUMTYPE_NOSUPP,
+            text: Some("checksum type".into()),
+        });
+    }
+    if !cksumtype_is_coll_proof(ctype) || !cksumtype_is_keyed(ctype) {
+        return Err(Error::KrbError {
+            code: err::INAPP_CKSUM,
+            text: Some("inapp checksum".into()),
+        });
+    }
+    let usage = KeyUsage::new(ku::KRB_SAFE_CKSUM)?;
+    let mac = msg.cksum.checksum.as_ref();
+    let dummy = {
+        let mut d = msg.clone();
+        d.cksum = Checksum {
+            cksumtype: 0,
+            checksum: Vec::new().into(),
+        };
+        encode(&d)?
+    };
+    if verify_checksum_type(session, usage, &dummy, ctype, mac).is_ok() {
+        return Ok(());
+    }
+    let body = encode(&msg.safe_body)?;
+    if verify_checksum_type(session, usage, &body, ctype, mac).is_ok() {
+        return Ok(());
+    }
+    Err(Error::KrbError {
+        code: err::MODIFIED,
+        text: Some("safe checksum".into()),
+    })
 }
 
 fn fresh_policy(require_seq: bool, require_time: bool) -> FreshPolicy {
@@ -434,5 +475,40 @@ mod tests {
         let (_, part) = unwrap_krb_cred(&key, &raw, &cache).unwrap();
         assert!(part.timestamp.is_some());
         assert!(unwrap_krb_cred(&key, &raw, &cache).is_err());
+    }
+
+    #[test]
+    fn safe_unkeyed_cksumtype_is_inapp() {
+        let key = session();
+        let mut msg = build_krb_safe(&key, b"body").unwrap();
+        msg.cksum.cksumtype = 7;
+        match verify_krb_safe_checksum(&key, &msg) {
+            Err(Error::KrbError { code, .. }) => assert_eq!(code, err::INAPP_CKSUM),
+            other => panic!("unkeyed SAFE must be 50, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn safe_unknown_cksumtype_is_sumtype_nosupp() {
+        let key = session();
+        let mut msg = build_krb_safe(&key, b"body").unwrap();
+        msg.cksum.cksumtype = 1;
+        match verify_krb_safe_checksum(&key, &msg) {
+            Err(Error::KrbError { code, .. }) => assert_eq!(code, err::SUMTYPE_NOSUPP),
+            other => panic!("unknown SAFE type must be 15, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn safe_bad_mac_is_modified() {
+        let key = session();
+        let mut msg = build_krb_safe(&key, b"body").unwrap();
+        let mut mac = msg.cksum.checksum.to_vec();
+        mac[0] ^= 0xff;
+        msg.cksum.checksum = mac.into();
+        match verify_krb_safe_checksum(&key, &msg) {
+            Err(Error::KrbError { code, .. }) => assert_eq!(code, err::MODIFIED),
+            other => panic!("bad SAFE MAC must be 41, got {other:?}"),
+        }
     }
 }

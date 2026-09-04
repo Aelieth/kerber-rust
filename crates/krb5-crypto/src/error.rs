@@ -28,6 +28,8 @@ pub enum Error {
     UnsupportedChecksum(i32),
     /// `cksum->length != output_size` (`verify_checksum.c` `KRB5_BAD_MSIZE`).
     BadChecksumSize,
+    /// Not keyed / not collision-proof (`rd_safe.c` / `kdc_util.c` `INAPP_CKSUM`).
+    InappChecksum,
     /// Operating-system CSPRNG failed while generating a confounder.
     Rng,
     /// PBKDF2 iteration count exceeds the local resource limit.
@@ -52,6 +54,7 @@ impl fmt::Display for Error {
             Self::Integrity => write!(f, "integrity check failed"),
             Self::UnsupportedChecksum(n) => write!(f, "unsupported checksum type {n}"),
             Self::BadChecksumSize => write!(f, "checksum length does not match output size"),
+            Self::InappChecksum => write!(f, "inappropriate checksum type"),
             Self::Rng => write!(f, "failed to generate random confounder"),
             Self::IterationLimit => write!(f, "PBKDF2 iteration count exceeds local limit"),
         }

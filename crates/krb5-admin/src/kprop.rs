@@ -16,6 +16,7 @@ use krb5_kdc::{Acl, PrincipalStore, dump_store, dump_store_iprop, load_dump, sav
 use krb5_protocol::{
     ApVerifyParams, ReplayCache, build_ap_rep, build_ap_req_mutual_seq, build_krb_priv_chained,
     build_krb_safe_ex, unwrap_krb_priv_chained, verify_ap_rep, verify_ap_req_ex,
+    verify_krb_safe_checksum,
 };
 use krb5_types::{PrincipalName, Ticket};
 
@@ -140,72 +141,6 @@ fn session_from_ticket(ok: &krb5_protocol::ApVerifyOk) -> Result<ProtocolKey, Er
     protocol_key_from_enc(&ok.ticket_part.key)
 }
 
-/// Inner bytes of an EXPLICIT context tag `n` inside a SEQUENCE (or APPLICATION).
-fn der_explicit_context(seq: &[u8], n: u8) -> Result<&[u8], Error> {
-    let mut inner = der_unwrap_constructed(seq)?;
-    // APPLICATION wrapping an extra UNIVERSAL SEQUENCE.
-    if inner.first() == Some(&0x30) {
-        inner = der_unwrap_constructed(inner)?;
-    }
-    let mut i = 0;
-    while i < inner.len() {
-        let (hdr, tag, constructed, len) = der_head(&inner[i..])?;
-        let start = i + hdr;
-        let end = start
-            .checked_add(len)
-            .ok_or_else(|| Error::Inner("der".into()))?;
-        if end > inner.len() {
-            return Err(Error::Inner("der truncated".into()));
-        }
-        let ctx = 0x80 | if constructed { 0x20 } else { 0 } | n;
-        if tag == ctx {
-            return if constructed {
-                der_unwrap_constructed(&inner[start..end])
-            } else {
-                Ok(&inner[start..end])
-            };
-        }
-        i = end;
-    }
-    Err(Error::Inner(format!("der missing context {n}")))
-}
-
-fn der_unwrap_constructed(data: &[u8]) -> Result<&[u8], Error> {
-    let (hdr, _tag, constructed, len) = der_head(data)?;
-    if !constructed {
-        return Err(Error::Inner("der not constructed".into()));
-    }
-    let end = hdr
-        .checked_add(len)
-        .ok_or_else(|| Error::Inner("der".into()))?;
-    data.get(hdr..end)
-        .ok_or_else(|| Error::Inner("der body".into()))
-}
-
-fn der_head(data: &[u8]) -> Result<(usize, u8, bool, usize), Error> {
-    if data.is_empty() {
-        return Err(Error::Inner("der empty".into()));
-    }
-    let tag = data[0];
-    let constructed = tag & 0x20 != 0;
-    if data.len() < 2 {
-        return Err(Error::Inner("der short".into()));
-    }
-    let l0 = data[1];
-    if l0 < 0x80 {
-        return Ok((2, tag, constructed, usize::from(l0)));
-    }
-    let n = usize::from(l0 & 0x7f);
-    if n == 0 || n > 4 || data.len() < 2 + n {
-        return Err(Error::Inner("der length".into()));
-    }
-    let mut len = 0usize;
-    for b in &data[2..2 + n] {
-        len = (len << 8) | usize::from(*b);
-    }
-    Ok((2 + n, tag, constructed, len))
-}
-
 /// MIT `create_krbsafe`: checksum the full KRB-SAFE encoding with a
 /// zero-type/zero-length checksum, then replace the checksum.
 fn mit_safe_dummy_der(msg: &krb5_types::KrbSafe) -> Result<Vec<u8>, Error> {
@@ -222,18 +157,7 @@ fn verify_safe_user_data(
     raw: &[u8],
 ) -> Result<(Vec<u8>, Option<u32>), Error> {
     let msg: krb5_types::KrbSafe = decode(raw).map_err(|e| Error::Inner(e.to_string()))?;
-    let usage = krb5_crypto::KeyUsage::new(krb5_types::ku::KRB_SAFE_CKSUM)
-        .map_err(|e| Error::Inner(e.to_string()))?;
-    let dummy = mit_safe_dummy_der(&msg)?;
-    let ck = msg.cksum.checksum.as_ref();
-    let body = encode(&msg.safe_body).map_err(|e| Error::Inner(e.to_string()))?;
-    let orig = der_explicit_context(raw, 2).ok();
-    let ok = krb5_crypto::verify_checksum(session, usage, &dummy, ck).is_ok()
-        || krb5_crypto::verify_checksum(session, usage, &body, ck).is_ok()
-        || orig.is_some_and(|o| krb5_crypto::verify_checksum(session, usage, o, ck).is_ok());
-    if !ok {
-        return Err(Error::Inner("safe checksum: integrity check failed".into()));
-    }
+    verify_krb_safe_checksum(session, &msg).map_err(|e| Error::Inner(e.to_string()))?;
     Ok((msg.safe_body.user_data.to_vec(), msg.safe_body.seq_number))
 }
 

@@ -9,8 +9,8 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, decrypt_cts, encrypt,
-    encrypt_with_confounder, integrity_mac, verify_checksum,
+    EncryptionType, KeyUsage, ProtocolKey, checksum, checksum_output_size, decrypt, decrypt_cts,
+    encrypt, encrypt_with_confounder, integrity_mac, verify_checksum_type,
 };
 use krb5_protocol::{ReplayCache, build_ap_rep, build_ap_req_with_cksum, unwrap_krb_cred};
 use krb5_types::{
@@ -366,12 +366,13 @@ impl GssContext {
         };
         let mut want_mutual = ok.mutual_required;
         let mut delegated = None;
-        let mut gss_flags = GSS_C_INTEG | GSS_C_CONF | GSS_C_REPLAY | GSS_C_SEQUENCE;
-        if let Some(ck) = &ok.authenticator.cksum
-            && ck.cksumtype == GSS_CHECKSUM_TYPE
-        {
-            check_channel_bindings(ck.checksum.as_ref(), channel_bindings)?;
-            if ck.checksum.as_ref().len() >= 24 {
+        let mut gss_flags = 0u32;
+        if let Some(ck) = &ok.authenticator.cksum {
+            if ck.cksumtype == GSS_CHECKSUM_TYPE {
+                if ck.checksum.as_ref().len() < 24 {
+                    return Err(Error::ChannelBindings);
+                }
+                check_channel_bindings(ck.checksum.as_ref(), channel_bindings)?;
                 let mut f = [0u8; 4];
                 f.copy_from_slice(&ck.checksum.as_ref()[20..24]);
                 let flags = u32::from_le_bytes(f);
@@ -384,6 +385,15 @@ impl GssContext {
                     &ticket_session,
                     &ctx.replay,
                 )?;
+            } else {
+                let key = subkey.as_ref().unwrap_or(&ticket_session);
+                let usage = KeyUsage::new(ku::AP_REQ_AUTH_CKSUM)?;
+                verify_checksum_type(key, usage, b"", ck.cksumtype, ck.checksum.as_ref())
+                    .map_err(|e| map_gss_cksum(&e))?;
+                gss_flags = GSS_C_REPLAY | GSS_C_SEQUENCE;
+                if ok.mutual_required {
+                    gss_flags |= GSS_C_MUTUAL;
+                }
             }
         }
         if want_mutual {
@@ -495,24 +505,21 @@ impl GssContext {
         let usage = seal_usage(!self.initiator);
         let key = self.recv_key(header[2])?;
         if header[2] & FLAG_SEALED == 0 {
-            // RFC 4121 wrap without confidentiality: header | data | checksum.
+            let ctype = key.etype().checksum_type();
+            let cksumsize = checksum_output_size(ctype).ok_or(Error::Truncated)?;
             let ec = usize::from(u16::from_be_bytes(
                 header[4..6].try_into().map_err(|_| Error::Truncated)?,
             ));
-            if payload.len() < ec {
+            if cksumsize > payload.len() || ec != cksumsize {
                 return Err(Error::Truncated);
             }
-            let split = payload.len() - ec;
+            let split = payload.len() - cksumsize;
             let data = &payload[..split];
             let mac = &payload[split..];
-            let mut h = header;
-            h[4] = 0;
-            h[5] = 0;
-            h[6] = 0;
-            h[7] = 0;
+            let ckhdr = rfc4121_ckhdr(TOK_WRAP, header[2], seq, false);
             let mut to_ck = data.to_vec();
-            to_ck.extend_from_slice(&h);
-            verify_checksum(key, usage, &to_ck, mac).map_err(|_| Error::Integrity)?;
+            to_ck.extend_from_slice(&ckhdr);
+            verify_checksum_type(key, usage, &to_ck, ctype, mac).map_err(|e| map_gss_cksum(&e))?;
             self.accept_seq(seq)?;
             return Ok(data.to_vec());
         }
@@ -566,11 +573,21 @@ impl GssContext {
             return Err(Error::Truncated);
         }
         let seq = u64::from_be_bytes(inner[8..16].try_into().map_err(|_| Error::Truncated)?);
+        if inner[3] != 0xFF || inner[4..8] != [0xFF; 4] {
+            return Err(Error::Truncated);
+        }
+        let sender_is_acceptor = inner[2] & FLAG_SENT_BY_ACCEPTOR != 0;
+        if sender_is_acceptor != self.initiator {
+            return Err(Error::Integrity);
+        }
         let usage = sign_usage(!self.initiator);
         let key = self.recv_key(inner[2])?;
+        let ctype = key.etype().checksum_type();
+        let ckhdr = rfc4121_ckhdr(TOK_MIC, inner[2], seq, true);
         let mut buf = data.to_vec();
-        buf.extend_from_slice(&inner[..16]);
-        verify_checksum(key, usage, &buf, &inner[16..]).map_err(|_| Error::Integrity)?;
+        buf.extend_from_slice(&ckhdr);
+        verify_checksum_type(key, usage, &buf, ctype, &inner[16..])
+            .map_err(|e| map_gss_cksum(&e))?;
         self.accept_seq(seq)?;
         Ok(())
     }
@@ -1409,6 +1426,26 @@ fn apply_send_rrc(tok: &mut [u8], rrc: u16) -> Result<(), Error> {
     Ok(())
 }
 
+fn map_gss_cksum(e: &krb5_crypto::Error) -> Error {
+    match e {
+        krb5_crypto::Error::BadChecksumSize => Error::Truncated,
+        _ => Error::Integrity,
+    }
+}
+
+fn rfc4121_ckhdr(toktype: [u8; 2], flags: u8, seq: u64, mic: bool) -> [u8; 16] {
+    let mut h = [0u8; 16];
+    h[0] = toktype[0];
+    h[1] = toktype[1];
+    h[2] = flags;
+    h[3] = 0xFF;
+    if mic {
+        h[4..8].copy_from_slice(&0xFFFF_FFFFu32.to_be_bytes());
+    }
+    h[8..16].copy_from_slice(&seq.to_be_bytes());
+    h
+}
+
 fn wrap_header(initiator: bool, sealed: bool, seq: u64) -> [u8; 16] {
     let mut h = [0u8; 16];
     h[0] = TOK_WRAP[0];
@@ -2007,6 +2044,84 @@ mod tests {
         assert_eq!(tok[2] & FLAG_SEALED, 0);
         let plain = acc.unwrap(&tok).unwrap();
         assert_eq!(plain, 1u32.to_be_bytes());
+    }
+
+    #[test]
+    fn wrap_integ_wrong_ec_is_truncated() {
+        let (mut init, mut acc) = contexts();
+        let mut tok = init.wrap_integ(b"ec").unwrap();
+        tok[5] = tok[5].wrapping_add(1);
+        assert!(matches!(acc.unwrap(&tok), Err(Error::Truncated)));
+    }
+
+    #[test]
+    fn verify_mic_bad_filler_is_truncated() {
+        let (mut init, mut acc) = contexts();
+        let mut mic = init.get_mic(b"mic").unwrap();
+        mic[3] = 0x00;
+        assert!(matches!(
+            acc.verify_mic(b"mic", &mic),
+            Err(Error::Truncated)
+        ));
+    }
+
+    #[test]
+    fn accept_short_8003_is_channel_bindings() {
+        let (_as_out, tgs_out, skey, cname) = user_host();
+        let cksum = Checksum {
+            cksumtype: GSS_CHECKSUM_TYPE,
+            checksum: vec![0u8; 8].into(),
+        };
+        let ap = build_ap_req_with_cksum(
+            tgs_out.rep.0.ticket.clone(),
+            &tgs_out.session_key,
+            &ascii(TEST_REALM),
+            &cname,
+            ApOptions::none(),
+            Some(cksum),
+            None,
+        )
+        .unwrap();
+        let token = gss_wrap_app(TOK_AP_REQ, &encode(&ap).unwrap());
+        match GssContext::accept_sec_context(
+            &token,
+            std::slice::from_ref(&skey),
+            None,
+            Some(&documented_host()),
+            Some(TEST_REALM),
+            &ReplayCache::new(),
+        ) {
+            Err(Error::ChannelBindings) => {}
+            Err(err) => panic!("short 0x8003 must be ChannelBindings, got {err}"),
+            Ok(_) => panic!("short 0x8003 must be ChannelBindings"),
+        }
+    }
+
+    #[test]
+    fn accept_non_8003_over_data_is_bad_sig() {
+        let (_as_out, tgs_out, skey, cname) = user_host();
+        let ap = krb5_protocol::build_ap_req_opts(
+            tgs_out.rep.0.ticket.clone(),
+            &tgs_out.session_key,
+            &ascii(TEST_REALM),
+            &cname,
+            ApOptions::none(),
+            Some(b"not-empty"),
+        )
+        .unwrap();
+        let token = gss_wrap_app(TOK_AP_REQ, &encode(&ap).unwrap());
+        match GssContext::accept_sec_context(
+            &token,
+            std::slice::from_ref(&skey),
+            None,
+            Some(&documented_host()),
+            Some(TEST_REALM),
+            &ReplayCache::new(),
+        ) {
+            Err(Error::Integrity) => {}
+            Err(err) => panic!("non-0x8003 over data must be Integrity, got {err}"),
+            Ok(_) => panic!("non-0x8003 over data must be Integrity"),
+        }
     }
 
     #[test]

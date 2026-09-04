@@ -1,14 +1,15 @@
 //! Protocol message tests: AP-REP, SAFE/PRIV/CRED, DER tags.
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, KeyUsage, string_to_key};
+use krb5_crypto::{EncryptionType, KeyUsage, string_to_key, unkeyed_checksum};
 use krb5_kdc::{
     S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
     documented_host, pa_enc_timestamp, tgs_req,
 };
 use krb5_protocol::{
-    ReplayCache, build_ap_rep, build_ap_req, build_krb_cred, build_krb_priv, build_krb_safe,
-    unwrap_krb_priv, unwrap_krb_safe, verify_ap_rep, verify_ap_req,
+    ReplayCache, build_ap_rep, build_ap_req, build_ap_req_opts, build_krb_cred, build_krb_priv,
+    build_krb_safe, unwrap_krb_priv, unwrap_krb_safe, verify_ap_rep, verify_ap_req,
+    verify_ap_req_ex,
 };
 use krb5_types::{EncAsRepPart, PrincipalName, ascii, ku};
 
@@ -97,6 +98,76 @@ fn ap_rep_mutual_and_safe_priv() {
     )
     .unwrap();
     assert_eq!(encode(&cred).unwrap()[0], 0x76); // APPLICATION 22
+}
+
+#[test]
+fn ap_req_checksum_uses_declared_type() {
+    let (store, acl) = bootstrap_documented().unwrap();
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = client_key();
+    let req = as_req(
+        cname.clone(),
+        TEST_REALM,
+        11,
+        Some(vec![pa_enc_timestamp(&key).unwrap()]),
+    )
+    .unwrap();
+    let as_out = krb5_kdc::issue_as(&store, &req).unwrap();
+    let tgs = tgs_req(
+        as_out.rep.0.ticket.clone(),
+        &as_out.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        12,
+    )
+    .unwrap();
+    let tgs_out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
+    let app = b"j2-app-cksum";
+    let mut ap = build_ap_req_opts(
+        tgs_out.rep.0.ticket.clone(),
+        &tgs_out.session_key,
+        &ascii(TEST_REALM),
+        &cname,
+        krb5_types::ApOptions::none(),
+        Some(app),
+    )
+    .unwrap();
+    let mac = unkeyed_checksum(7, app).unwrap();
+    let mut auth: krb5_types::Authenticator = {
+        let usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR).unwrap();
+        let plain = krb5_crypto::decrypt(
+            &tgs_out.session_key,
+            usage,
+            ap.authenticator.cipher.as_ref(),
+        )
+        .unwrap();
+        decode(&plain).unwrap()
+    };
+    auth.cksum = Some(krb5_types::Checksum {
+        cksumtype: 7,
+        checksum: mac.into(),
+    });
+    let usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR).unwrap();
+    ap.authenticator.cipher =
+        krb5_crypto::encrypt(&tgs_out.session_key, usage, &encode(&auth).unwrap())
+            .unwrap()
+            .into();
+    let raw = encode(&ap).unwrap();
+    let kt = store
+        .export_keytab(&acl, &krb5_kdc::documented_admin_id(), &documented_host())
+        .unwrap();
+    let params = krb5_protocol::ApVerifyParams {
+        keys: std::slice::from_ref(&kt.entries[0].key),
+        kvno: None,
+        expected_server: None,
+        expected_realm: None,
+        skew: krb5_protocol::DEFAULT_SKEW,
+        addresses: None,
+        now: None,
+    };
+    verify_ap_req_ex(&raw, &params, &ReplayCache::new(), Some(app)).expect("declared RSA-MD5");
 }
 
 #[test]

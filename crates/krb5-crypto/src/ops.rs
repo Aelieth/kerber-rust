@@ -552,23 +552,9 @@ pub fn hmac_md5_arcfour_checksum(
     hmac_md5_simple(mac_key, &hashval)
 }
 
-/// Constant-time verify of a keyed checksum.
-///
-/// # Errors
-///
-/// Returns [`Error::Integrity`] when the MAC does not match.
-pub fn verify_checksum(
-    key: &ProtocolKey,
-    usage: KeyUsage,
-    message: &[u8],
-    mac: &[u8],
-) -> Result<(), Error> {
-    let expected = checksum_inner(key, usage, message)?;
-    mac_verify(mac, &expected)
-}
-
 /// MIT `cksumtypes.c` `output_size`. Unknown types are `None`.
-fn cksumtype_output_size(cksumtype: i32) -> Option<usize> {
+#[must_use]
+pub fn checksum_output_size(cksumtype: i32) -> Option<usize> {
     match cksumtype {
         2 | 7 | 17..=19 | -137 | -138 => Some(16),
         9 | 12 | 14 => Some(20),
@@ -621,7 +607,7 @@ pub fn verify_checksum_type(
     } else {
         cksumtype
     };
-    let Some(want) = cksumtype_output_size(ctype) else {
+    let Some(want) = checksum_output_size(ctype) else {
         return Err(Error::UnsupportedChecksum(ctype));
     };
     if mac.len() != want {
@@ -641,6 +627,52 @@ pub fn verify_checksum_type(
     }
     let expected = keyed_checksum_for_type(key, usage, message, ctype)?;
     mac_verify(mac, &expected)
+}
+
+/// `krb5_c_is_keyed_cksum` then [`verify_checksum_type`] (`kdc_util.c:1244`, `pac.c:499`).
+///
+/// The keyed gate uses the declared type; `cksumtype` 0 is not keyed.
+///
+/// # Errors
+///
+/// [`Error::InappChecksum`] when the declared type is unkeyed; otherwise
+/// the same as [`verify_checksum_type`].
+pub fn verify_checksum_keyed(
+    key: &ProtocolKey,
+    usage: KeyUsage,
+    message: &[u8],
+    cksumtype: i32,
+    mac: &[u8],
+) -> Result<(), Error> {
+    if !crate::etype::cksumtype_is_keyed(cksumtype) {
+        return Err(Error::InappChecksum);
+    }
+    verify_checksum_type(key, usage, message, cksumtype, mac)
+}
+
+/// `krb5_c_valid_cksumtype` + coll-proof + keyed, then [`verify_checksum_type`]
+/// (`rd_safe.c:66-74`).
+///
+/// # Errors
+///
+/// Unknown type [`Error::UnsupportedChecksum`]; not coll-proof or not
+/// keyed [`Error::InappChecksum`]; otherwise [`verify_checksum_type`].
+pub fn verify_checksum_collproof(
+    key: &ProtocolKey,
+    usage: KeyUsage,
+    message: &[u8],
+    cksumtype: i32,
+    mac: &[u8],
+) -> Result<(), Error> {
+    if !crate::etype::cksumtype_is_known(cksumtype) {
+        return Err(Error::UnsupportedChecksum(cksumtype));
+    }
+    if !crate::etype::cksumtype_is_coll_proof(cksumtype)
+        || !crate::etype::cksumtype_is_keyed(cksumtype)
+    {
+        return Err(Error::InappChecksum);
+    }
+    verify_checksum_type(key, usage, message, cksumtype, mac)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -766,5 +798,47 @@ mod tests {
         let hashval = hasher.finalize();
         let expected = hmac_md5_simple(key.as_bytes(), &hashval).unwrap();
         verify_checksum_type(&key, usage, msg, -137, &expected).expect("raw-key -137");
+    }
+
+    #[test]
+    fn verify_checksum_type_honours_declared_unkeyed() {
+        let key =
+            ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x42u8; 32]).unwrap();
+        let usage = KeyUsage::new(15).unwrap();
+        let msg = b"j2-declared-type";
+        let mac = unkeyed_checksum(7, msg).unwrap();
+        verify_checksum_type(&key, usage, msg, 7, &mac).expect("RSA-MD5 over AES key");
+        assert!(matches!(
+            verify_checksum_type(&key, usage, msg, 7, &mac[..15]),
+            Err(Error::BadChecksumSize)
+        ));
+    }
+
+    #[test]
+    fn verify_checksum_keyed_rejects_unkeyed_declared() {
+        let key =
+            ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x42u8; 32]).unwrap();
+        let usage = KeyUsage::new(17).unwrap();
+        let msg = b"j2-keyed";
+        let mac = unkeyed_checksum(7, msg).unwrap();
+        assert!(matches!(
+            verify_checksum_keyed(&key, usage, msg, 7, &mac),
+            Err(Error::InappChecksum)
+        ));
+        assert!(matches!(
+            verify_checksum_keyed(&key, usage, msg, 0, &mac),
+            Err(Error::InappChecksum)
+        ));
+    }
+
+    #[test]
+    fn verify_checksum_collproof_rejects_unknown() {
+        let key =
+            ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x42u8; 32]).unwrap();
+        let usage = KeyUsage::new(15).unwrap();
+        assert!(matches!(
+            verify_checksum_collproof(&key, usage, b"x", 1, b""),
+            Err(Error::UnsupportedChecksum(1))
+        ));
     }
 }

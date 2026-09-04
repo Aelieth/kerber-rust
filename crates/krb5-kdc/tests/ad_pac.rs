@@ -242,7 +242,7 @@ fn flip_pac_mac(pac_bytes: &[u8], kind: u32) -> Vec<u8> {
 }
 
 #[test]
-fn signed_pac_tampered_kdc_and_full_checksums_are_bad_integrity() {
+fn signed_pac_tampered_kdc_and_full_checksums_are_modified() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let user = store.get_name(&cname).unwrap().best_key().unwrap();
@@ -289,17 +289,47 @@ fn signed_pac_tampered_kdc_and_full_checksums_are_bad_integrity() {
     let flipped7 = flip_pac_mac(&signed, PAC_PRIVSVR_CHECKSUM);
     match verify_pac_signatures(&flipped7, &host.key, Some(&krbtgt.key), Some(&der)) {
         Err(Error::Protocol { code, .. }) => {
-            assert_eq!(code, err::BAD_INTEGRITY, "type-7 MAC flip");
+            assert_eq!(code, err::MODIFIED, "type-7 MAC flip");
         }
-        other => panic!("expected BAD_INTEGRITY for type 7, got {other:?}"),
+        other => panic!("expected MODIFIED for type 7, got {other:?}"),
     }
 
     let flipped19 = flip_pac_mac(&signed, PAC_FULL_CHECKSUM);
     match verify_pac_signatures(&flipped19, &host.key, Some(&krbtgt.key), Some(&der)) {
         Err(Error::Protocol { code, .. }) => {
-            assert_eq!(code, err::BAD_INTEGRITY, "type-19 MAC flip");
+            assert_eq!(code, err::MODIFIED, "type-19 MAC flip");
         }
-        other => panic!("expected BAD_INTEGRITY for type 19, got {other:?}"),
+        other => panic!("expected MODIFIED for type 19, got {other:?}"),
+    }
+}
+
+#[test]
+fn pac_sha1_server_checksum_is_sumtype_nosupp() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let user = store.get_name(&cname).unwrap().best_key().unwrap();
+    let req = as_req(
+        cname.clone(),
+        TEST_REALM,
+        713,
+        Some(vec![pa_enc_timestamp(&user.key).expect("pa")]),
+    )
+    .unwrap();
+    let as_out = krb5_kdc::issue_as(&store, &req).expect("AS");
+    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
+    let tgt_part = decrypt_ticket_part(&krbtgt.key, &as_out.rep.0.ticket).expect("TGT");
+    let pac_bytes = pac_from_ticket_part(&tgt_part).expect("PAC");
+    let mut parsed = Pac::parse(&pac_bytes).expect("parse");
+    let buf = parsed
+        .buffers
+        .iter_mut()
+        .find(|b| b.kind == PAC_SERVER_CHECKSUM)
+        .expect("server");
+    buf.data[0..4].copy_from_slice(&14i32.to_le_bytes());
+    let rewritten = parsed.to_bytes();
+    match verify_pac_signatures(&rewritten, &krbtgt.key, None, None) {
+        Err(Error::Protocol { code, .. }) => assert_eq!(code, err::SUMTYPE_NOSUPP),
+        other => panic!("SHA-1 server checksum must be 15, got {other:?}"),
     }
 }
 

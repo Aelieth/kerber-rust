@@ -5,10 +5,11 @@ use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256, checksum, decrypt, encrypt,
     krb_fx_cf2, octetstring2key, p256_generate, p256_shared, pkinit_kdf_agile, spake_derive_key,
     spake_public_wbytes, spake_result_wbytes, spake_thash_update, spake_wbytes,
+    verify_checksum_type,
 };
 use krb5_types::{
-    ApOptions, ApReq, AsReq, Authenticator, Checksum, EncryptedData, EncryptionKey, KerberosFlags,
-    KerberosTime, Microseconds, PaData, PrincipalName, Realm, Ticket, ku, pa,
+    ApOptions, ApReq, AsReq, Authenticator, Checksum, EncKdcRepPart, EncryptedData, EncryptionKey,
+    KerberosFlags, KerberosTime, Microseconds, PaData, PrincipalName, Realm, Ticket, ku, pa,
 };
 
 use crate::error::Error;
@@ -140,6 +141,52 @@ pub fn fx_fast_padata(
         padata_type: pa::FX_FAST,
         padata_value: encode(&krb5_types::fast::PaFxFast::ArmoredData(armored))?.into(),
     })
+}
+
+/// MIT `fast.c:543-551`: verify `KrbFastFinished.ticket_checksum` over the ticket DER.
+///
+/// # Errors
+///
+/// [`Error::ReplyMismatch`] when the checksum is absent or does not match.
+pub fn verify_fast_finished(
+    armor_key: &ProtocolKey,
+    ticket: &Ticket,
+    finished: &krb5_types::fast::KrbFastFinished,
+) -> Result<(), Error> {
+    let tder = encode(ticket)?;
+    let usage = KeyUsage::new(ku::FAST_FINISHED)?;
+    verify_checksum_type(
+        armor_key,
+        usage,
+        &tder,
+        finished.ticket_checksum.cksumtype,
+        finished.ticket_checksum.checksum.as_ref(),
+    )
+    .map_err(|_| Error::ReplyMismatch("Ticket modified in KDC reply".into()))
+}
+
+/// MIT `fast.c:648-664`: PA-REQ-ENC-PA-REP over the AS-REQ when `enc-pa-rep` is set.
+///
+/// # Errors
+///
+/// [`Error::ReplyMismatch`] (`KRB5_KDCREP_MODIFIED`) on a missing or bad checksum.
+pub fn verify_req_enc_pa_rep(
+    enc: &EncKdcRepPart,
+    key: &ProtocolKey,
+    as_req: &[u8],
+) -> Result<(), Error> {
+    if !enc.flags.enc_pa_rep() {
+        return Ok(());
+    }
+    let pa = enc
+        .encrypted_pa_data
+        .as_ref()
+        .and_then(|v| v.iter().find(|p| p.padata_type == pa::REQ_ENC_PA_REP))
+        .ok_or_else(|| Error::ReplyMismatch("Ticket modified in KDC reply".into()))?;
+    let ck: Checksum = decode(pa.padata_value.as_ref())?;
+    let usage = KeyUsage::new(ku::AS_REQ)?;
+    verify_checksum_type(key, usage, as_req, ck.cksumtype, ck.checksum.as_ref())
+        .map_err(|_| Error::ReplyMismatch("Ticket modified in KDC reply".into()))
 }
 
 /// Decrypt PA-FX-FAST on an AS-REP into [`krb5_types::fast::KrbFastResponse`].

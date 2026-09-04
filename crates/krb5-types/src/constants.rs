@@ -186,6 +186,8 @@ pub mod ku {
     pub const ENC_CHALLENGE_CLIENT: u32 = 54;
     /// RFC 6113 KEY_USAGE_ENC_CHALLENGE_KDC.
     pub const ENC_CHALLENGE_KDC: u32 = 55;
+    /// RFC 6806 checksum of the AS-REQ (`KRB5_KEYUSAGE_AS_REQ`).
+    pub const AS_REQ: u32 = 56;
     /// SPAKE factor encryption (MIT `KRB5_KEYUSAGE_SPAKE`).
     pub const SPAKE: u32 = 65;
 }
@@ -248,6 +250,8 @@ pub mod pa {
     pub const OTP_PIN_CHANGE: i32 = 144;
     /// PA-PKINIT-KX.
     pub const PKINIT_KX: i32 = 147;
+    /// PA-REQ-ENC-PA-REP (RFC 6806).
+    pub const REQ_ENC_PA_REP: i32 = 149;
     /// PA-SPAKE.
     pub const SPAKE: i32 = 151;
     /// PA-REDHAT-IDP-OAUTH2.
@@ -300,8 +304,10 @@ pub mod flag_bit {
     pub const OK_AS_DELEGATE: usize = 13;
     /// canonicalize(15) on KDCOptions; CNAME-IN-ADDL-TKT is 14
     pub const CNAME_IN_ADDL_TKT: usize = 14;
-    /// canonicalize(15)
+    /// canonicalize(15) (KDCOptions). TicketFlags bit 15 is RFC 6806 `enc-pa-rep`.
     pub const CANONICALIZE: usize = 15;
+    /// RFC 6806 `enc-pa-rep` (TicketFlags bit 15).
+    pub const ENC_PA_REP: usize = 15;
     /// anonymous(16)
     pub const ANONYMOUS: usize = 16;
     /// disable-transited-check(26)

@@ -51,6 +51,25 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   refuses a non-`kiprop` acceptor with RPC `AUTH_TOOWEAK`. Unit:
   `changepw_service_listprincs_is_auth_list`.
 
+- **W1-H J2.** Every checksum is verified by declared type, length,
+  and keyed/coll-proof class (`krb5_c_verify_checksum`).
+  `verify_checksum` is gone; `verify_checksum_type` is the only
+  verifier, with `verify_checksum_keyed` / `verify_checksum_collproof`
+  wrappers. Sites: AP-REQ authenticator, KRB-SAFE (`rd_safe.c` dummy
+  then body), kprop, GSS wrap-without-conf `EC==cksumsize` and MIC
+  fillers/direction/reconstructed header, GSS non-0x8003 over empty
+  data and short 0x8003 `BAD_BINDINGS`, PA-FOR-USER (unkeyed 50 /
+  bad MAC 41 `INVALID_S4U2SELF_CHECKSUM`), PAC SignatureType
+  (SHA-1 server 15, unkeyed 60, MAC 41), client FAST-finished.
+  Units: `verify_checksum_type_honours_declared_unkeyed`,
+  `verify_checksum_keyed_rejects_unkeyed_declared`,
+  `safe_unkeyed_cksumtype_is_inapp`, `wrap_integ_wrong_ec_is_truncated`,
+  `verify_mic_bad_filler_is_truncated`, `accept_short_8003_is_channel_bindings`,
+  `s4u2self_unkeyed_cksumtype_is_inapp`, `s4u2self_bad_checksum_rejected`
+  (41), `pac_sha1_server_checksum_is_sumtype_nosupp`,
+  `fast_as_exchange_strengthen_and_finished` (tamper),
+  `as_req_enc_pa_rep_is_verified`, `ap_req_checksum_uses_declared_type`.
+
 - **W0f I8.** Ledger header recount 244 = 116+67+61 (exact 54 ·
   deviation 96). AS time/flag anchors are `issue.rs:1697-1734`.
   `diffsend` names in the ORDER/FAST/AD-FX-ARMOR rows are backticked

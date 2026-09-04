@@ -71,9 +71,9 @@ if ! docker exec -e KRB5_TRACE=/tmp/fast.trace "$NAME" \
 fi
 TRACE="$(docker exec "$NAME" cat /tmp/fast.trace)"
 echo "$TRACE"
-if ! echo "$TRACE" | grep -F 'Upgrading to FAST due to presence of PA_FX_FAST'; then
+if ! echo "$TRACE" | grep -E 'Upgrading to FAST due to presence of PA_FX_FAST|Using FAST due to armor ccache negotiation result'; then
     echo "$TRACE" >&2
-    log "fast.kdc.gate" "error" ',"error":"kinit -T did not upgrade to FAST from PA_FX_FAST"'
+    log "fast.kdc.gate" "error" ',"error":"kinit -T did not use FAST"'
     exit 1
 fi
 KLIST="$(docker exec "$NAME" klist -c /tmp/krb5cc_fast)"

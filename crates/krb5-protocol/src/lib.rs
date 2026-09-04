@@ -66,13 +66,13 @@ pub use preauth::{
     apply_strengthen, armor_key, attach_fast, build_fast_armor, fx_fast_padata, pa_for_user,
     pa_pac_options, pa_pk_as_req, pa_pk_as_req_agile, pa_pk_as_req_cn, pa_pk_as_req_signed,
     pa_pk_as_req_spki, pa_spake_response, pa_spake_support, pkinit_reply_key,
-    pkinit_reply_key_agile, unwrap_fast_rep,
+    pkinit_reply_key_agile, unwrap_fast_rep, verify_fast_finished, verify_req_enc_pa_rep,
 };
 pub use replay::{ReplayCache, ReplayKey};
 pub use safe_priv::{
     build_krb_cred, build_krb_priv, build_krb_priv_chained, build_krb_priv_with_seq,
     build_krb_safe, build_krb_safe_ex, unwrap_krb_cred, unwrap_krb_priv, unwrap_krb_priv_chained,
-    unwrap_krb_priv_ex, unwrap_krb_safe, unwrap_krb_safe_ex,
+    unwrap_krb_priv_ex, unwrap_krb_safe, unwrap_krb_safe_ex, verify_krb_safe_checksum,
 };
 pub use secret_file::{destroy_secret_file, write_secret_file};
 pub use tgs::{

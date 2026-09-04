@@ -1,7 +1,13 @@
 //! PAC issuance and S4U2Self / S4U2Proxy / U2U.
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt};
+use krb5_crypto::{
+    EncryptionType, KeyUsage, ProtocolKey, checksum, checksum_output_size, cksumtype_is_keyed,
+    decrypt, verify_checksum_keyed, verify_checksum_type,
+};
+use krb5_types::pac::{
+    PAC_FULL_CHECKSUM, PAC_PRIVSVR_CHECKSUM, PAC_SERVER_CHECKSUM, PAC_TICKET_CHECKSUM,
+};
 use krb5_types::{
     AuthorizationDataValue, EncTicketPart, PaData, PrincipalName, TgsReq, Ticket, err, ku, pa,
 };
@@ -162,25 +168,66 @@ pub fn verify_pac_signatures(
 ) -> Result<(), Error> {
     let pac = krb5_types::pac::Pac::parse(pac_bytes)
         .map_err(|e| proto(err::BAD_INTEGRITY, &format!("PAC parse: {e}")))?;
-    let usage = KeyUsage::new(ku::KERB_NON_KERB_CKSUM_SALT)?;
-    let server_mac = checksum(server, usage, &pac.bytes_for_checksum())?;
-    krb5_types::pac::verify_server_checksum(&pac, &server_mac)
-        .map_err(|_| proto(err::BAD_INTEGRITY, "PAC server checksum"))?;
+    let server_mac = verify_pac_sig(
+        server,
+        &pac.bytes_for_checksum(),
+        pac.server_checksum(),
+        PAC_SERVER_CHECKSUM,
+    )?;
     let Some(kdc) = kdc else {
         return Ok(());
     };
-    let kdc_mac = checksum(kdc, usage, &server_mac)?;
-    krb5_types::pac::verify_sig_buf(pac.kdc_checksum(), &kdc_mac)
-        .map_err(|_| proto(err::BAD_INTEGRITY, "PAC kdc checksum"))?;
+    verify_pac_sig(kdc, server_mac, pac.kdc_checksum(), PAC_PRIVSVR_CHECKSUM)?;
     if let Some(der) = enc_tkt_der {
-        let ticket_mac = checksum(kdc, usage, der)?;
-        krb5_types::pac::verify_sig_buf(pac.ticket_checksum(), &ticket_mac)
-            .map_err(|_| proto(err::BAD_INTEGRITY, "PAC ticket checksum"))?;
-        let full_mac = checksum(kdc, usage, &pac.bytes_for_full_checksum())?;
-        krb5_types::pac::verify_sig_buf(pac.full_checksum(), &full_mac)
-            .map_err(|_| proto(err::BAD_INTEGRITY, "PAC full checksum"))?;
+        verify_pac_sig(kdc, der, pac.ticket_checksum(), PAC_TICKET_CHECKSUM)?;
+        verify_pac_sig(
+            kdc,
+            &pac.bytes_for_full_checksum(),
+            pac.full_checksum(),
+            PAC_FULL_CHECKSUM,
+        )?;
     }
     Ok(())
+}
+
+/// MIT `pac.c:478-514` `verify_checksum`: SignatureType, SHA-1-on-server, keyed, length.
+fn verify_pac_sig<'a>(
+    key: &ProtocolKey,
+    data: &[u8],
+    buf: Option<&'a [u8]>,
+    buffer_type: u32,
+) -> Result<&'a [u8], Error> {
+    let Some(buf) = buf else {
+        return Err(proto(err::BAD_INTEGRITY, "PAC missing checksum"));
+    };
+    if buf.len() < 4 {
+        return Err(proto(err::GENERIC, "PAC checksum length"));
+    }
+    let cksumtype = i32::from_le_bytes(
+        buf[0..4]
+            .try_into()
+            .map_err(|_| proto(err::GENERIC, "PAC checksum"))?,
+    );
+    if buffer_type == PAC_SERVER_CHECKSUM && cksumtype == 14 {
+        return Err(proto(err::SUMTYPE_NOSUPP, "PAC server SHA-1"));
+    }
+    if !cksumtype_is_keyed(cksumtype) {
+        return Err(proto(err::GENERIC, "PAC unkeyed checksum"));
+    }
+    let Some(want) = checksum_output_size(cksumtype) else {
+        return Err(proto(err::GENERIC, "PAC checksum type"));
+    };
+    if want > buf.len() - 4 {
+        return Err(proto(err::GENERIC, "PAC checksum length"));
+    }
+    let mac = &buf[4..4 + want];
+    let usage = KeyUsage::new(ku::KERB_NON_KERB_CKSUM_SALT)?;
+    verify_checksum_type(key, usage, data, cksumtype, mac).map_err(|e| match e {
+        krb5_crypto::Error::Integrity => proto(err::MODIFIED, "PAC checksum"),
+        krb5_crypto::Error::BadChecksumSize => proto(err::GENERIC, "PAC checksum length"),
+        _ => proto(err::GENERIC, "PAC checksum"),
+    })?;
+    Ok(mac)
 }
 
 /// DER of `part` with PAC `ad-data` replaced by a single zero byte.
@@ -246,10 +293,7 @@ fn checksum_ticket_sig(
     key: &ProtocolKey,
     der: &[u8],
 ) -> Result<(), Error> {
-    let usage = KeyUsage::new(ku::KERB_NON_KERB_CKSUM_SALT)?;
-    let mac = checksum(key, usage, der)?;
-    krb5_types::pac::verify_sig_buf(pac.ticket_checksum(), &mac)
-        .map_err(|_| proto(err::BAD_INTEGRITY, "PAC ticket checksum"))
+    verify_pac_sig(key, der, pac.ticket_checksum(), PAC_TICKET_CHECKSUM).map(|_| ())
 }
 
 /// Extract PAC bytes from EncTicketPart authorization-data.
@@ -285,17 +329,18 @@ pub(crate) fn s4u2self_client(
     let pkg = utf8(&pa.auth_package);
     let data = krb5_types::s4u::pa_for_user_cksum_data(&pa.user_name, realm, pkg);
     let usage = KeyUsage::new(ku::PA_FOR_USER)?;
-    let mic = checksum(tgt_session, usage, &data)?;
-    let hmac_md5 = krb5_crypto::hmac_md5_arcfour_checksum(
-        tgt_session.as_bytes(),
-        ku::PA_FOR_USER,
+    verify_checksum_keyed(
+        tgt_session,
+        usage,
         &data,
-        -138,
-    )?;
-    let got = pa.cksum.checksum.as_ref();
-    if got != mic.as_slice() && got != hmac_md5.as_slice() {
-        return Err(proto(err::INAPP_CKSUM, "PA-FOR-USER"));
-    }
+        pa.cksum.cksumtype,
+        pa.cksum.checksum.as_ref(),
+    )
+    .map_err(|e| match e {
+        krb5_crypto::Error::InappChecksum => proto(err::INAPP_CKSUM, "INVALID_S4U2SELF_CHECKSUM"),
+        krb5_crypto::Error::Integrity => proto(err::MODIFIED, "INVALID_S4U2SELF_CHECKSUM"),
+        _ => proto(err::GENERIC, "INVALID_S4U2SELF_CHECKSUM"),
+    })?;
     Ok(Some((pa.user_name, realm.to_owned())))
 }
 

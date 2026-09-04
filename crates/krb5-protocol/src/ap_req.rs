@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt, verify_checksum,
+    EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt, verify_checksum_type,
 };
 use krb5_types::{
     ApOptions, ApReq, Authenticator, EncTicketPart, EncryptedData, HostAddresses, KerberosTime,
@@ -348,7 +348,7 @@ fn verify_inner(
         && let Some(data) = app_cksum
     {
         let usage = KeyUsage::new(ku::AP_REQ_AUTH_CKSUM)?;
-        verify_checksum(&session, usage, data, ck.checksum.as_ref())?;
+        verify_checksum_type(&session, usage, data, ck.cksumtype, ck.checksum.as_ref())?;
     }
     let client = format!(
         "{}@{}",

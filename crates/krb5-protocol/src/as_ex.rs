@@ -18,6 +18,7 @@ use crate::error::Error;
 use crate::preauth::{
     apply_strengthen, armor_key, attach_fast, build_fast_armor, pa_pk_as_req_signed,
     pa_spake_response, pa_spake_support, pkinit_reply_key_agile, unwrap_fast_rep,
+    verify_fast_finished,
 };
 use crate::transport::{KdcAddr, exchange};
 
@@ -509,6 +510,10 @@ fn finish_fast_as(
         Some(sk) => apply_strengthen(sk, &client_key)?,
         None => client_key,
     };
+    let finished = fast.finished.as_ref().ok_or_else(|| {
+        Error::ReplyMismatch("FAST response missing finish message in KDC reply".into())
+    })?;
+    verify_fast_finished(akey, &rep.0.ticket, finished)?;
     finish_as_rep(
         rep,
         nonce,

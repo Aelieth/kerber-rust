@@ -50,10 +50,10 @@ pub use modp::{
     DhGroup, DhKeypair, OAKLEY_2048, OAKLEY_4096, dh_generate, dh_group_for_prime, dh_shared,
 };
 pub use ops::{
-    CipherState, checksum, decrypt, decrypt_cts, decrypt_with_state, encrypt,
+    CipherState, checksum, checksum_output_size, decrypt, decrypt_cts, decrypt_with_state, encrypt,
     encrypt_with_confounder, encrypt_with_state, hmac_md5_arcfour_checksum, integrity_mac,
-    kdb_decrypt_key, kdb_encrypt_key, string_to_key, unkeyed_checksum, verify_checksum,
-    verify_checksum_type,
+    kdb_decrypt_key, kdb_encrypt_key, string_to_key, unkeyed_checksum, verify_checksum_collproof,
+    verify_checksum_keyed, verify_checksum_type,
 };
 pub use prf::{prf, prf_plus};
 pub use spake::{
