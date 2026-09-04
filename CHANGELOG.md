@@ -22,6 +22,13 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0e H5.** `scripts/kpasswd-gate.sh` asserts every `helper_rc` and
+  that `extra` `addprinc` succeeded. `scripts/red-at-sha.sh` rebuilds
+  a historical SHA in a `KERBER_SCRATCH` worktree and writes a
+  provenance header (base SHA, worktree, `Compiling`/`Finished`,
+  binary SHA-256s). Retroactive e1/e2 reds at `6e2d0e4` were
+  re-captured with it.
+
 - **W0e H4.** `scripts/ci-policy.py` flags echo-only `then`/`elif`/`else`
   arms independently (mixed `exit`+`echo` chains fail), joins `||` /
   `&&` / `\\` continuations before matching the condition, scans
