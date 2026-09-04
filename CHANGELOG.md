@@ -22,6 +22,17 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0e H1 (MIT-gated).** FAST unwrap `Error::Crypto` / `Error::Asn1`
+  (corrupt `enc_fast_req`, malformed `KrbFastReq`) wire `FIND_FAST`
+  with protocol 31 / 60 (`do_as_req.c:531-535`,
+  `errcode_to_protocol` `kdc_util.c:691-698`). `kdc.issue` `detail`
+  is carried on `Error::Protocol` (no thread-local); empty `detail`
+  is omitted. MIT-leg pin `FIND_FAST: .*while handling ap-request
+  armor`. Units: `fast_as_corrupt_enc_fast_req_is_bad_integrity_find_fast`,
+  `fast_as_malformed_krbfastreq_is_generic_find_fast`,
+  `fast_tgs_corrupt_enc_fast_req_is_bad_integrity_find_fast`. Gate:
+  `scripts/mit-fast-kdc-gate.sh`.
+
 - **W0d G5.** `docs/mit-parity-ledger.md` is the W1-A KDC parity
   ledger with Part 0 applied: wire codes (`CLIENT EXPIRED` 1,
   `SERVICE EXPIRED` 2, req-body checksum 31, `MORE_PREAUTH` 91,
@@ -80,13 +91,14 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   `scripts/gss-gate.sh`. MIT `dfl` persistence across restart is W1-C.
 
 - **W0b D3 (unit-red; MIT by source).** A bad FAST `req_checksum` is 41
-  `MODIFIED` with MIT log message `FIND_FAST` (`fast_util.c`). An
-  unkeyed checksum type is 12 (MIT log `Unkeyed checksum used in
-  fast_req`). Unknown armor type is 24 (MIT log `Unknown FAST armor
-  type %d`). The AS checksum covers the outer `KDC-REQ-BODY` only
-  (`do_as_req.c`). TGS authenticator client ≠ ticket client is 36
-  `PROCESS_TGS` (`rd_req_dec.c`). MIT clients cannot emit these; live
-  FAST gates stay green. Wire `e_text` is the status word as of W0d G3.
+  `MODIFIED` wire `FIND_FAST`; MIT log message `FAST req_checksum
+  invalid; request modified` (`fast_util.c:207-224`). An unkeyed
+  checksum type is 12 (MIT log `Unkeyed checksum used in fast_req`).
+  Unknown armor type is 24 (MIT log `Unknown FAST armor type %d`).
+  The AS checksum covers the outer `KDC-REQ-BODY` only (`do_as_req.c`).
+  TGS authenticator client ≠ ticket client is 36 `PROCESS_TGS`
+  (`rd_req_dec.c`). MIT clients cannot emit these; live FAST gates
+  stay green. Wire `e_text` is the status word as of W0d G3.
 
 - **W0c E4.** `scripts/ci-policy.py` rejects echo-only `if !` bodies in
   gate scripts, requires `--profile ci` on every `cargo nextest run`,
@@ -172,10 +184,11 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 - **W0 C3 (MIT-gated).** Explicit FAST armor looks up the armor ticket
   by (`ticket.realm`, sname) first like MIT `rd_req`: foreign/missing
-  is 35 `NOT_US` `FAST armor TGT`; a local non-krbtgt armor is 26
-  `SERVER_NOMATCH`. `krb5-forge-tgt --keep-cipher` rewrites only DER
-  `ticket.realm` so MIT `kinit -T` still selects the armor cred. Gate:
-  `scripts/mit-fast-kdc-gate.sh` forged `kinit -T` vs MIT and Rust.
+  is 35 `NOT_US` wire `FIND_FAST` (log `detail` `FAST armor TGT`); a
+  local non-krbtgt armor is 26 `SERVER_NOMATCH`. `krb5-forge-tgt
+  --keep-cipher` rewrites only DER `ticket.realm` so MIT `kinit -T`
+  still selects the armor cred. Gate: `scripts/mit-fast-kdc-gate.sh`
+  forged `kinit -T` vs MIT and Rust.
 
 - **G9 Y4/Y5.** FAST armor decrypt selects keys by the armor ticket's
   realm. After the presented-TGT krbtgt entry is selected, `DISALLOW_SVR`

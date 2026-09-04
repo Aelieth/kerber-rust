@@ -237,7 +237,7 @@ fi
 echo "$MITF" | grep -q "The ticket isn't for us"
 MITASLOG="$(docker exec "$MITNAME" sh -c "tail -n +$((n + 1)) /tmp/mit-kdc.log")"
 echo "$MITASLOG"
-echo "$MITASLOG" | grep -q 'while handling ap-request armor'
+echo "$MITASLOG" | grep -qE 'FIND_FAST: .*while handling ap-request armor'
 
 log "fast.kdc.gate" "ok" ',"principal":"user@KERBER.TEST","mode":"mit-kinit-T"'
 exit 0

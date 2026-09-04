@@ -1,6 +1,5 @@
 //! AS and TGS ticket issuance as functions over the principal store.
 
-use std::cell::RefCell;
 use std::time::Instant;
 
 use krb5_asn1::{decode, encode};
@@ -31,18 +30,6 @@ use crate::store::{
     KDB_OK_AS_DELEGATE, KDB_OK_TO_AUTH_AS_DELEGATE, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH,
     KDB_REQUIRES_PWCHANGE, Principal, random_key, s2k_params,
 };
-
-thread_local! {
-    static ISSUE_DETAIL: RefCell<Option<String>> = const { RefCell::new(None) };
-}
-
-fn set_issue_detail(detail: Option<String>) {
-    ISSUE_DETAIL.with(|c| *c.borrow_mut() = detail);
-}
-
-fn take_issue_detail() -> Option<String> {
-    ISSUE_DETAIL.with(|c| c.borrow_mut().take())
-}
 
 /// Issued AS-REP plus the session key (for tests that decrypt the TGT).
 #[derive(Debug)]
@@ -78,165 +65,161 @@ pub fn handle_request(store: &dyn PrincipalRead, raw: &[u8]) -> Result<Vec<u8>, 
     let started = Instant::now();
     krb5_protocol::capture_pdu("kdc-req", raw);
     let result = handle_inner(store, raw);
-    if let Ok(bytes) = &result {
+    if let Ok((bytes, _)) = &result {
         krb5_protocol::capture_pdu("kdc-rep", bytes);
     }
     let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
-    let detail = take_issue_detail();
-    match &result {
-        Ok(bytes) if bytes.starts_with(&[0x7e]) => {
-            let (code, mut e_text) = krb_error_log_fields(bytes);
-            if code == err::PREAUTH_REQUIRED && e_text.is_empty() {
-                e_text = "NEEDED_PREAUTH".into();
+    match result {
+        Ok((bytes, detail)) => {
+            if bytes.starts_with(&[0x7e]) {
+                let (code, mut e_text) = krb_error_log_fields(&bytes);
+                if code == err::PREAUTH_REQUIRED && e_text.is_empty() {
+                    e_text = "NEEDED_PREAUTH".into();
+                }
+                log_krb_error(duration_us, code, &e_text, detail.as_deref());
+            } else {
+                tracing::info!(
+                    event = krb5_log::events::KDC_ISSUE,
+                    correlation_id = krb5_log::current_correlation_id(),
+                    component = "krb5-kdc",
+                    duration_us,
+                    outcome = "ok",
+                );
             }
-            tracing::info!(
+            Ok(bytes)
+        }
+        Err(e) => {
+            tracing::error!(
                 event = krb5_log::events::KDC_ISSUE,
                 correlation_id = krb5_log::current_correlation_id(),
                 component = "krb5-kdc",
                 duration_us,
-                outcome = "krb-error",
-                code,
-                e_text,
-                detail = detail.as_deref().unwrap_or(""),
+                outcome = "error",
+                error = %e,
             );
+            Err(e)
         }
-        Ok(_) => tracing::info!(
-            event = krb5_log::events::KDC_ISSUE,
-            correlation_id = krb5_log::current_correlation_id(),
-            component = "krb5-kdc",
-            duration_us,
-            outcome = "ok",
-        ),
-        Err(e) => tracing::error!(
-            event = krb5_log::events::KDC_ISSUE,
-            correlation_id = krb5_log::current_correlation_id(),
-            component = "krb5-kdc",
-            duration_us,
-            outcome = "error",
-            error = %e,
-        ),
     }
-    result
 }
 
-fn handle_inner(store: &dyn PrincipalRead, raw: &[u8]) -> Result<Vec<u8>, Error> {
+fn log_krb_error(duration_us: u64, code: i32, e_text: &str, detail: Option<&str>) {
+    if let Some(d) = detail.filter(|s| !s.is_empty()) {
+        tracing::info!(
+            event = krb5_log::events::KDC_ISSUE,
+            correlation_id = krb5_log::current_correlation_id(),
+            component = "krb5-kdc",
+            duration_us,
+            outcome = "krb-error",
+            code,
+            e_text,
+            detail = d,
+        );
+    } else {
+        tracing::info!(
+            event = krb5_log::events::KDC_ISSUE,
+            correlation_id = krb5_log::current_correlation_id(),
+            component = "krb5-kdc",
+            duration_us,
+            outcome = "krb-error",
+            code,
+            e_text,
+        );
+    }
+}
+
+fn handle_inner(store: &dyn PrincipalRead, raw: &[u8]) -> Result<(Vec<u8>, Option<String>), Error> {
     if raw.is_empty() {
-        return Ok(encode_krb_error(
-            store,
-            err::GENERIC,
-            Some("empty"),
-            None,
+        return Ok((
+            encode_krb_error(store, err::GENERIC, Some("empty"), None, None),
             None,
         ));
     }
     match raw[0] {
         0x6a => match decode::<AsReq>(raw) {
             Ok(req) => as_reply(store, &req, raw),
-            Err(_) => Ok(encode_krb_error(
-                store,
-                err::GENERIC,
-                Some("asn1"),
-                None,
+            Err(_) => Ok((
+                encode_krb_error(store, err::GENERIC, Some("asn1"), None, None),
                 None,
             )),
         },
         0x6c => match decode::<TgsReq>(raw) {
             Ok(req) => tgs_reply(store, &req, raw),
-            Err(_) => Ok(encode_krb_error(
-                store,
-                err::GENERIC,
-                Some("asn1"),
-                None,
+            Err(_) => Ok((
+                encode_krb_error(store, err::GENERIC, Some("asn1"), None, None),
                 None,
             )),
         },
-        _ => Ok(encode_krb_error(
-            store,
-            err::BAD_PVNO,
-            Some("unexpected PDU"),
-            None,
+        _ => Ok((
+            encode_krb_error(store, err::BAD_PVNO, Some("unexpected PDU"), None, None),
             None,
         )),
     }
 }
 
-fn as_reply(store: &dyn PrincipalRead, req: &AsReq, raw: &[u8]) -> Result<Vec<u8>, Error> {
+fn as_reply(
+    store: &dyn PrincipalRead,
+    req: &AsReq,
+    raw: &[u8],
+) -> Result<(Vec<u8>, Option<String>), Error> {
     let body = Some(&req.0.req_body);
     match issue_as_from(store, req, Some(raw)) {
-        Ok(issued) => Ok(encode(&issued.rep)?),
-        Err(Error::PreauthRequired { e_data }) => Ok(encode_krb_error(
-            store,
-            err::PREAUTH_REQUIRED,
+        Ok(issued) => Ok((encode(&issued.rep)?, None)),
+        Err(Error::PreauthRequired { e_data }) => Ok((
+            encode_krb_error(store, err::PREAUTH_REQUIRED, None, Some(e_data), body),
             None,
-            Some(e_data),
-            body,
         )),
         Err(Error::Protocol {
             code,
             text,
             e_data,
             detail,
-        }) => {
-            set_issue_detail(detail);
-            Ok(encode_krb_error(store, code, text.as_deref(), e_data, body))
-        }
-        Err(Error::Crypto(_)) => Ok(encode_krb_error(
-            store,
-            err::PREAUTH_FAILED,
-            Some("preauth"),
-            None,
-            body,
+        }) => Ok((
+            encode_krb_error(store, code, text.as_deref(), e_data, body),
+            detail.filter(|s| !s.is_empty()),
         )),
-        Err(Error::Asn1(_)) => Ok(encode_krb_error(
-            store,
-            err::GENERIC,
-            Some("asn1"),
+        Err(Error::Crypto(_)) => Ok((
+            encode_krb_error(store, err::PREAUTH_FAILED, Some("preauth"), None, body),
             None,
-            body,
         )),
-        Err(e) => Ok(encode_krb_error(
-            store,
-            err::GENERIC,
-            Some(&e.to_string()),
+        Err(Error::Asn1(_)) => Ok((
+            encode_krb_error(store, err::GENERIC, Some("asn1"), None, body),
             None,
-            body,
+        )),
+        Err(e) => Ok((
+            encode_krb_error(store, err::GENERIC, Some(&e.to_string()), None, body),
+            None,
         )),
     }
 }
 
-fn tgs_reply(store: &dyn PrincipalRead, req: &TgsReq, raw: &[u8]) -> Result<Vec<u8>, Error> {
+fn tgs_reply(
+    store: &dyn PrincipalRead,
+    req: &TgsReq,
+    raw: &[u8],
+) -> Result<(Vec<u8>, Option<String>), Error> {
     let body = Some(&req.0.req_body);
     match issue_tgs_from(store, req, Some(raw)) {
-        Ok(issued) => Ok(encode(&issued.rep)?),
+        Ok(issued) => Ok((encode(&issued.rep)?, None)),
         Err(Error::Protocol {
             code,
             text,
             e_data,
             detail,
-        }) => {
-            set_issue_detail(detail);
-            Ok(encode_krb_error(store, code, text.as_deref(), e_data, body))
-        }
-        Err(Error::Crypto(_)) => Ok(encode_krb_error(
-            store,
-            err::BAD_INTEGRITY,
-            Some("integrity"),
-            None,
-            body,
+        }) => Ok((
+            encode_krb_error(store, code, text.as_deref(), e_data, body),
+            detail.filter(|s| !s.is_empty()),
         )),
-        Err(Error::Asn1(_)) => Ok(encode_krb_error(
-            store,
-            err::GENERIC,
-            Some("asn1"),
+        Err(Error::Crypto(_)) => Ok((
+            encode_krb_error(store, err::BAD_INTEGRITY, Some("integrity"), None, body),
             None,
-            body,
         )),
-        Err(e) => Ok(encode_krb_error(
-            store,
-            err::GENERIC,
-            Some(&e.to_string()),
+        Err(Error::Asn1(_)) => Ok((
+            encode_krb_error(store, err::GENERIC, Some("asn1"), None, body),
             None,
-            body,
+        )),
+        Err(e) => Ok((
+            encode_krb_error(store, err::GENERIC, Some(&e.to_string()), None, body),
+            None,
         )),
     }
 }

@@ -973,6 +973,61 @@ fn fast_tgs_prepared(store: &PrincipalStore, nonce: u32) -> krb5_types::TgsReq {
 }
 
 #[test]
+fn fast_as_corrupt_enc_fast_req_is_bad_integrity_find_fast() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut req, _) = fast_as_prepared(&store, 916);
+    map_fx_fast_as(&mut req, |a| {
+        let mut c = a.enc_fast_req.cipher.to_vec();
+        c[0] ^= 0xff;
+        a.enc_fast_req.cipher = c.into();
+    });
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("corrupt enc_fast_req");
+    assert_find_fast(err, err::BAD_INTEGRITY, "integrity check failed");
+}
+
+#[test]
+fn fast_as_malformed_krbfastreq_is_generic_find_fast() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut req, akey) = fast_as_prepared(&store, 918);
+    let enc_usage = KeyUsage::new(ku::FAST_ENC).unwrap();
+    let cipher = encrypt(&akey, enc_usage, &[0x30, 0x01, 0x00]).expect("enc");
+    map_fx_fast_as(&mut req, |a| {
+        a.enc_fast_req.cipher = cipher.into();
+    });
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("malformed KrbFastReq");
+    match err {
+        Error::Protocol {
+            code,
+            text,
+            detail: d,
+            ..
+        } => {
+            assert_eq!(code, err::GENERIC);
+            assert_eq!(text.as_deref(), Some("FIND_FAST"));
+            let d = d.expect("detail");
+            assert!(
+                d.starts_with("DER decode failed"),
+                "detail {d:?} is not an ASN.1 decode"
+            );
+        }
+        other => panic!("expected 60 FIND_FAST ASN.1, got {other:?}"),
+    }
+}
+
+#[test]
+fn fast_tgs_corrupt_enc_fast_req_is_bad_integrity_find_fast() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let mut tgs = fast_tgs_prepared(&store, 920);
+    map_fx_fast_tgs(&mut tgs, |a| {
+        let mut c = a.enc_fast_req.cipher.to_vec();
+        c[0] ^= 0xff;
+        a.enc_fast_req.cipher = c.into();
+    });
+    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("corrupt TGS enc_fast_req");
+    assert_find_fast(err, err::BAD_INTEGRITY, "integrity check failed");
+}
+
+#[test]
 fn fast_as_bad_req_checksum_is_modified() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let (mut req, _) = fast_as_prepared(&store, 890);

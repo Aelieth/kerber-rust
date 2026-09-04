@@ -19,7 +19,7 @@ never install a subscriber. Tests and the harness do.
 | `error` | on failure | `Display` of the error (no key material) |
 | `code` | krb-error | RFC 4120 error-code on `kdc.issue` |
 | `e_text` | krb-error | MIT `log_tgs_req` status string (`PROCESS_TGS`, `GET_LOCAL_TGT`, `FIND_FAST`, …) |
-| `detail` | krb-error | MIT `k5_setmsg` text for FAST unwrap failures (not on the wire) |
+| `detail` | krb-error | MIT `k5_setmsg` text when MIT has one; otherwise Rust's own. Omitted when empty. Not on the wire. |
 
 Canonical `event` strings live in `krb5_log::events`.
 
@@ -27,7 +27,10 @@ Every request logs one `event=kdc.issue` line from `handle_request`
 at `info`, including `duration_us`. A **KRB-ERROR** PDU is
 `outcome=krb-error` plus `code` (RFC 4120 error-code) and `e_text`
 (MIT `log_tgs_req` status word, e.g. `BAD_TRANSIT`, `FIND_FAST`).
-FAST unwrap failures also log `detail` (MIT's `k5_setmsg` text).
+FAST unwrap failures also log `detail` when non-empty (MIT's
+`k5_setmsg` message where MIT has one; Rust's own otherwise). The
+critical-FAST-option `detail` (`FAST option`) is Rust's text — MIT
+has no `k5_setmsg` for `UNKNOWN_CRITICAL_FAST_OPTION`.
 Code 25 logs `e_text=NEEDED_PREAUTH`. Store-programming failures
 that cannot be encoded stay `outcome=error`.
 

@@ -40,6 +40,14 @@ pub(crate) fn unwrap_fast_as(
     padata: Option<&[PaData]>,
     body_der: &[u8],
 ) -> Result<Option<FastOk>, Error> {
+    unwrap_fast_as_inner(store, padata, body_der).map_err(map_fast_unwrap)
+}
+
+fn unwrap_fast_as_inner(
+    store: &dyn PrincipalRead,
+    padata: Option<&[PaData]>,
+    body_der: &[u8],
+) -> Result<Option<FastOk>, Error> {
     let Some(raw) = find_pa(padata, pa::FX_FAST) else {
         return Ok(None);
     };
@@ -66,6 +74,15 @@ pub(crate) fn unwrap_fast_as(
 /// MIT `kdc_find_fast` for TGS: armor from the PA-TGS-REQ decrypt, not a
 /// second ticket unwrap. Explicit AP-REQ armor is PREAUTH_FAILED.
 pub(crate) fn unwrap_fast_tgs(
+    padata: Option<&[PaData]>,
+    pa_tgs_raw: &[u8],
+    subkey: Option<&EncryptionKey>,
+    session: &ProtocolKey,
+) -> Result<Option<FastOk>, Error> {
+    unwrap_fast_tgs_inner(padata, pa_tgs_raw, subkey, session).map_err(map_fast_unwrap)
+}
+
+fn unwrap_fast_tgs_inner(
     padata: Option<&[PaData]>,
     pa_tgs_raw: &[u8],
     subkey: Option<&EncryptionKey>,
@@ -633,6 +650,16 @@ pub(crate) fn proto_fast(code: i32, detail: impl Into<String>) -> Error {
         text: Some("FIND_FAST".into()),
         e_data: None,
         detail: Some(detail.into()),
+    }
+}
+
+// MIT do_as_req.c:531-535 / kdc_util.c:691-698: any kdc_find_fast failure
+// is status FIND_FAST; decrypt → 31, ASN.1 → 60.
+fn map_fast_unwrap(err: Error) -> Error {
+    match err {
+        Error::Crypto(d) => proto_fast(err::BAD_INTEGRITY, d),
+        Error::Asn1(d) => proto_fast(err::GENERIC, d),
+        other => other,
     }
 }
 

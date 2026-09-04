@@ -87,6 +87,11 @@ MIT `cksumtypes.c`). CRC32 (1) has no table entry. Unknown type or
 TGS authenticator client ≠ ticket client is 36 `PROCESS_TGS`. Explicit
 TGS AP-REQ armor is 24 `FIND_FAST` even without a subkey; MIT only
 rejects it when a subkey is present (`fast_util.c:159-166`).
+Corrupt `enc_fast_req` is 31 `FIND_FAST`; malformed `KrbFastReq` is
+60 `FIND_FAST` (`do_as_req.c:531-535`). Log `detail` is MIT's
+`k5_setmsg` where MIT has one; the critical-FAST-option `detail`
+(`FAST option`) is Rust's own (`UNKNOWN_CRITICAL_FAST_OPTION` has
+no MIT `k5_setmsg`).
 
 `kadmin/admin` and `kadmin/changepw` are bootstrapped with MIT
 `kadm5_create` attributes: both `DISALLOW_TGT_BASED|LOCKDOWN_KEYS`;
