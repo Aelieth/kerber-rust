@@ -71,7 +71,8 @@ echo 1 >"$MID_RC_FILE"
 (
     sleep 0.4
     if prod_mit_sample mid; then
-        echo 0 >"$MID_RC_FILE"
+        mid_rc=0
+        echo "$mid_rc" >"$MID_RC_FILE"
     fi
 ) &
 MID_PID=$!

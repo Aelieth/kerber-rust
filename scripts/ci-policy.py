@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import pathlib
 import re
+import signal
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -256,16 +257,18 @@ def _join_shell_continuations(text: str) -> str:
     i = 0
     while i < len(lines):
         code = _code_without_comment(lines[i])
-        if i + 1 < len(lines) and (
-            code.endswith("\\") or re.search(r"(?:\|\||&&)\s*$", code)
-        ):
-            nxt = lines[i + 1].lstrip()
-            if code.endswith("\\"):
-                lines[i] = code[:-1].rstrip() + " " + nxt
-            else:
-                lines[i] = code + " " + nxt
-            lines[i + 1] = ""
-            continue
+        if code.endswith("\\") or re.search(r"(?:\|\||&&)\s*$", code):
+            j = i + 1
+            while j < len(lines) and not lines[j].strip():
+                j += 1
+            if j < len(lines):
+                nxt = lines[j].lstrip()
+                if code.endswith("\\"):
+                    lines[i] = code[:-1].rstrip() + " " + nxt
+                else:
+                    lines[i] = code + " " + nxt
+                lines[j] = ""
+                continue
         i += 1
     return "\n".join(lines)
 
@@ -285,10 +288,6 @@ def _echo_only_body(body: str) -> bool:
     if not all(_NOISE_ONLY.match(s) for s in stmts):
         return False
     stripped = _strip_quoted(body)
-    if "|" in stripped:
-        return False
-    if re.search(r">(?!&2)", stripped.replace(">&2", "")):
-        return False
     if _ASSERT_IN_IF.search(stripped):
         return False
     if re.search(r'log\s+\S+\s+"error"', body):
@@ -339,26 +338,21 @@ def informational_if_starts(text: str) -> list[int]:
         if not line.strip():
             continue
         if _IF_ONELINER.search(line):
-            then_m = re.search(
-                r";\s*then\b(.*?)(?:;\s*elif\b.*?;\s*then\b(.*?))*(?:;\s*else\b(.*))?;\s*fi\b",
-                line,
-            )
-            if then_m:
-                arms = [p for p in then_m.groups() if p is not None]
-                # Split remaining elif bodies the regex may have collapsed.
-                flat: list[str] = []
-                for a in arms:
-                    flat.extend(
-                        p for p in re.split(r";\s*elif\b.*?;\s*then\b", a) if p is not None
+            flat = [
+                m.group(1)
+                for m in re.finditer(
+                    r";\s*(?:then|elif\b.*?;\s*then|else)\b(.*?)(?=;\s*(?:elif\b|else\b|fi\b)|$)",
+                    line,
+                )
+            ]
+            if flat and any(_echo_only_body(p) for p in flat):
+                hits.append(i)
+                if stack:
+                    stack[-1][2].append(
+                        "echo x" if all(_echo_only_body(p) for p in flat) else "exit 1"
                     )
-                if flat and any(_echo_only_body(p) for p in flat):
-                    hits.append(i)
-                    if stack:
-                        stack[-1][2].append(
-                            "echo x" if all(_echo_only_body(p) for p in flat) else "exit 1"
-                        )
-                elif stack:
-                    stack[-1][2].append("exit 1")
+            elif stack:
+                stack[-1][2].append("exit 1")
             continue
         if re.match(r"^\s*elif\b", line):
             if stack:
@@ -521,6 +515,82 @@ def check_ledger_proof_column(text: str | None = None) -> None:
                     )
 
 
+_VERDICT_KEYS = (
+    "stricter-documented",
+    "exact",
+    "deviation",
+    "absent",
+    "deferred",
+)
+_HEADER_EXACT = re.compile(
+    r"exact\s+(\d+)\s*·\s*stricter-documented\s+(\d+)\s*·\s*deviation\s+(\d+)"
+)
+_HEADER_ABSENT = re.compile(r"absent\s+(\d+)\s*·\s*deferred\s+(\d+)")
+_HEADER_TOTAL = re.compile(
+    r"\*\*(\d+)\*\*\s*=\s*A1\s+(\d+)\s*\+\s*A2\s+(\d+)\s*\+\s*A3\s+(\d+)"
+)
+
+
+def recount_ledger_verdicts(text: str) -> dict[str, int]:
+    counts = {k: 0 for k in _VERDICT_KEYS}
+    for line in text.splitlines():
+        if (
+            not line.startswith("|")
+            or "MIT file:line" in line
+            or line.startswith("| ---")
+        ):
+            continue
+        cols = _split_ledger_row(line)
+        if len(cols) < 7:
+            continue
+        verdict = cols[5]
+        if verdict == "verdict":
+            continue
+        for key in _VERDICT_KEYS:
+            if (
+                verdict == key
+                or verdict.startswith(key + " ")
+                or verdict.startswith(key + "(")
+            ):
+                counts[key] += 1
+                break
+    return counts
+
+
+def check_ledger_tally(text: str | None = None) -> None:
+    """Header verdict counts must equal a recount of the table cells."""
+    if text is None:
+        if not LEDGER.is_file():
+            _die("missing docs/mit-parity-ledger.md")
+        text = LEDGER.read_text()
+    got = recount_ledger_verdicts(text)
+    exact = _HEADER_EXACT.search(text)
+    absent = _HEADER_ABSENT.search(text)
+    if not exact or not absent:
+        _die("docs/mit-parity-ledger.md missing verdict header tally")
+    want = {
+        "exact": int(exact.group(1)),
+        "stricter-documented": int(exact.group(2)),
+        "deviation": int(exact.group(3)),
+        "absent": int(absent.group(1)),
+        "deferred": int(absent.group(2)),
+    }
+    if got != want:
+        _die(
+            "docs/mit-parity-ledger.md tally header "
+            f"{want} != recount {got}"
+        )
+    total = _HEADER_TOTAL.search(text)
+    if total:
+        header_n, a1, a2, a3 = (int(g) for g in total.groups())
+        n = sum(got.values())
+        if header_n != n or header_n != a1 + a2 + a3:
+            _die(
+                f"docs/mit-parity-ledger.md total {header_n} "
+                f"= A1 {a1} + A2 {a2} + A3 {a3} != recount {n}"
+            )
+
+
 def check_working_gitignored() -> None:
     if not GITIGNORE.is_file():
         _die("missing .gitignore")
@@ -637,6 +707,45 @@ jobs:
     ok_mixed_no_echo = 'if X; then\n    exit 1\nelif Y; then\n    exit 2\nfi\n'
     if informational_if_starts(ok_mixed_no_echo):
         raise AssertionError("exit/exit chain must pass")
+    oneliner_elif = (
+        'if X; then exit 1; elif Y; then echo hi; elif Z; then exit 2; fi\n'
+    )
+    if informational_if_starts(oneliner_elif) != [1]:
+        raise AssertionError("one-line ≥2-elif middle echo must be a hit")
+    tee_echo = 'if true; then\n    echo skip | tee /tmp/x\nfi\n'
+    if not informational_if_starts(tee_echo):
+        raise AssertionError("echo | tee without assert must be a violation")
+    redir_echo = 'if true; then\n    echo skip > /tmp/x\nfi\n'
+    if not informational_if_starts(redir_echo):
+        raise AssertionError("echo > file without assert must be a violation")
+
+    class _Alarm(Exception):
+        pass
+
+    def _on_alarm(_signum, _frame) -> None:
+        raise _Alarm
+
+    three_or = (
+        'if [ "$a" = 1 ] ||\n'
+        '   [ "$b" = 2 ] ||\n'
+        '   [ "$c" = 3 ]; then\n'
+        " echo hi\n"
+        "fi\n"
+    )
+    old = signal.signal(signal.SIGALRM, _on_alarm)
+    signal.alarm(5)
+    try:
+        three_hits = informational_if_starts(three_or)
+    except _Alarm as exc:
+        raise AssertionError("3-way || join hung") from exc
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
+    if three_hits != [1]:
+        raise AssertionError(f"3-way || must be [1], got {three_hits}")
+    joined = _join_shell_continuations("a &&\nb &&\nc\n")
+    if "a && b && c" not in joined.replace("\n", " "):
+        raise AssertionError(f"3-way && join failed: {joined!r}")
 
     missing_profile = Workflow(
         pathlib.Path("ci.yml"),
@@ -705,6 +814,21 @@ jobs:
         "| kdc_util.c:1 | x | y | z | w | exact | proposed: diffsend `no-such-case`; kdc-lookaside-gate.sh |\n"
     )
     _must_die(check_ledger_proof_column, ledger_proposed_sibling)
+    ledger_tally_ok = (
+        "Counts:\n"
+        "**1** = A1 1 + A2 0 + A3 0.\n"
+        "exact 1 · stricter-documented 0 · deviation 0 ·\n"
+        "absent 0 · deferred 0.\n"
+        "| MIT file:line | check | MIT | Rust | e_text | verdict | proof |\n"
+        "| --- | --- | --- | --- | --- | --- | --- |\n"
+        "| kdc_util.c:1 | x | y | z | w | exact | diffsend `unknown-cname` |\n"
+    )
+    check_ledger_tally(ledger_tally_ok)
+    ledger_tally_bad = ledger_tally_ok.replace(
+        "exact 1 · stricter-documented 0 · deviation 0 ·",
+        "exact 49 · stricter-documented 0 · deviation 95 ·",
+    )
+    _must_die(check_ledger_tally, ledger_tally_bad)
     not_ci = Workflow(
         pathlib.Path("not-ci.yml"),
         "name: x\non:\n  push:\njobs:\n  test:\n    timeout-minutes: 1\n    steps:\n      - run: echo hi\n",
@@ -739,6 +863,7 @@ def main() -> None:
     check_no_informational_gates()
     check_working_gitignored()
     check_ledger_proof_column()
+    check_ledger_tally()
     print("ci-policy: ok")
 
 

@@ -22,6 +22,13 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0f I6.** `ci-policy` joins 2+ `||` / `&&` / `\\` continuations
+  without hanging; one-line `if` with ≥2 `elif` sees every arm;
+  `echo | tee` / `echo > file` is informational unless the arm also
+  asserts. `prod-gate.sh` / `chaos-gate.sh` skip arms assert or
+  `unavailable`. `check_ledger_tally` recounts verdict cells against
+  the header (241 = 116+67+58; exact 53 · deviation 94).
+
 - **W0f I5.** Malformed kpasswd pre-AP-REQ datagrams (inconsistent
   length, unknown version, truncated) produce no reply, matching MIT
   `schpw.c:62-68,76-82` `goto bailout` and `dispatch`

@@ -35,9 +35,9 @@ Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after Part 0 + W0e H8 `validate_as_request` sub-order row):
-**238** = A1 116 + A2 67 + A3 55.
-exact 49 · stricter-documented 11 · deviation 95 ·
+Counts (after Part 0 + W0e H8 `validate_as_request` sub-order row; I6 recount):
+**241** = A1 116 + A2 67 + A3 58.
+exact 53 · stricter-documented 11 · deviation 94 ·
 absent 68 · deferred 15.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +

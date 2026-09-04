@@ -50,8 +50,6 @@ if command -v tcpdump >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
     sudo -n tcpdump -i lo -n -U -w "$LO_PCAP" "port 18888" >/dev/null 2>"$OUT/tcpdump.err" &
     TCPDUMP_PID=$!
     sleep 0.2
-else
-    echo "tcpdump/sudo unavailable for loopback pcap" | tee "$OUT/pcap-unavailable.log"
 fi
 
 # Previous run's listener may still hold 18888 for a beat after trap.

@@ -10,8 +10,11 @@ Testing is continuous. Categories grow with the stages.
 echo-only `then`/`elif`/`else` arm in `scripts/*-gate.sh` or
 `scripts/lib/*.sh`, `"ci.yml"` path-equality). A mixed `exit`+`echo`
 chain is a hit. Multi-line `||` / `&&` / `\\` conditions are joined
-before matching. It cannot check red-at-HEAD artefacts: `working/` is
-gitignored. `__pycache__/` is gitignored.
+before matching (including 2+ continuations). `echo | tee` / `echo >
+file` is informational unless the arm also asserts. The ledger header
+tally must match a recount of the verdict cells. It cannot check
+red-at-HEAD artefacts: `working/` is gitignored. `__pycache__/` is
+gitignored.
 
 Red-at-HEAD artefact contract (captured under
 `working/logs/…/<item>-red-at-head.log`): the file is captured tool
@@ -34,7 +37,7 @@ that pins MIT text must say whether it is wire or log. The KDC MIT
 1.22.2 parity ledger is [`mit-parity-ledger.md`](mit-parity-ledger.md);
 a `proof` cell may name an existing gate script or `diffsend` case,
 or mark that clause `proposed` / `propose`. `proposed` scopes only
-the clause it precedes (semicolon-separated).
+the clause it is in (semicolon-separated).
 
 ## Normal / baseline
 
