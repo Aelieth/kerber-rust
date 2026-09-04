@@ -22,6 +22,13 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0f I7.** `scripts/red-at-sha.sh` copies `scripts/lib/*.sh` and
+  the gate's `scripts/*.c`/`*.py` from HEAD into the worktree, prints
+  the probe sha256, requires an absolute `KERBER_SCRATCH`, and prunes
+  the worktree on EXIT. e1/e2 at `6e2d0e4` recaptured verbatim
+  (`red-at-sha-e{1,2}.log`). Assembled `e1/e2-live-red-at-6e2d0e4.log`
+  deleted.
+
 - **W0f I6.** `ci-policy` joins 2+ `||` / `&&` / `\\` continuations
   without hanging; one-line `if` with ≥2 `elif` sees every arm;
   `echo | tee` / `echo > file` is informational unless the arm also
@@ -120,8 +127,9 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   that `extra` `addprinc` succeeded. `scripts/red-at-sha.sh` rebuilds
   a historical SHA in a `KERBER_SCRATCH` worktree and writes a
   provenance header (base SHA, worktree, `Compiling`/`Finished`,
-  binary SHA-256s). Retroactive e1/e2 reds at `6e2d0e4` were
-  re-captured with it.
+  binary SHA-256s). Retroactive e1/e2 reds at `6e2d0e4` are
+  `working/logs/audit-polish-0902/w0f/red-at-sha-e{1,2}.log`
+  (verbatim `red-at-sha.sh` stdout; W0f I7).
 
 - **W0e H4.** `scripts/ci-policy.py` flags echo-only `then`/`elif`/`else`
   arms independently (mixed `exit`+`echo` chains fail), joins `||` /

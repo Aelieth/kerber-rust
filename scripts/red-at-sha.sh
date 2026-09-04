@@ -14,6 +14,13 @@ if [ -z "${KERBER_SCRATCH:-}" ]; then
     echo "KERBER_SCRATCH is required" >&2
     exit 2
 fi
+case "$KERBER_SCRATCH" in
+    /*) ;;
+    *)
+        echo "KERBER_SCRATCH must be an absolute path" >&2
+        exit 2
+        ;;
+esac
 
 BASE="$(git rev-parse --verify "$1^{commit}")"
 shift
@@ -25,11 +32,37 @@ mkdir -p "$KERBER_SCRATCH"
 git worktree remove --force "$WT" 2>/dev/null || true
 rm -rf "$WT"
 git worktree add --detach "$WT" "$BASE"
+cleanup() {
+    cd "$ROOT" || true
+    git worktree remove --force "$WT" 2>/dev/null || true
+    git worktree prune || true
+}
+trap cleanup EXIT
+
+# HEAD probes/helpers overlay the base-SHA tree so docker cp from $ROOT
+# inside the gate (resolved from $0 in the worktree) is current.
+mkdir -p "$WT/scripts/lib"
+if compgen -G "$ROOT/scripts/lib/*.sh" >/dev/null; then
+    cp "$ROOT/scripts/lib/"*.sh "$WT/scripts/lib/"
+fi
+if compgen -G "$ROOT/scripts/*.c" >/dev/null; then
+    cp "$ROOT/scripts/"*.c "$WT/scripts/"
+fi
+if compgen -G "$ROOT/scripts/*.py" >/dev/null; then
+    cp "$ROOT/scripts/"*.py "$WT/scripts/"
+fi
 
 echo "==== red-at-sha provenance ===="
 echo "base_sha=$BASE"
 echo "worktree=$WT"
 echo "CARGO_TARGET_DIR=$TARGET"
+echo "==== probe sha256 ===="
+if [ -f "$WT/scripts/kpasswd-tgs-client.c" ]; then
+    sha256sum "$WT/scripts/kpasswd-tgs-client.c"
+fi
+if [ -f "$ROOT/${CMD[0]}" ]; then
+    sha256sum "$ROOT/${CMD[0]}"
+fi
 
 export CARGO_TARGET_DIR="$TARGET"
 BUILD_LOG="$KERBER_SCRATCH/red-at-${BASE:0:12}-build.log"

@@ -22,9 +22,12 @@ output of the failing unit or live cell, not a paraphrase. Write
 "unit-red only; MIT by source" when MIT clients cannot emit the cell.
 Retroactive red is `scripts/red-at-sha.sh <base-sha> <gate-script>
 [args]`: a `git worktree` at the base SHA with `CARGO_TARGET_DIR`
-under `KERBER_SCRATCH`, a provenance header (base SHA, worktree,
-`Compiling`/`Finished`, binary SHA-256s), then the current gate
-script against those binaries.
+under an absolute `KERBER_SCRATCH`, a provenance header (base SHA,
+worktree, probe sha256, `Compiling`/`Finished`, binary SHA-256s),
+HEAD `scripts/lib/*.sh` and `scripts/*.{c,py}` copied into the
+worktree so probes are current, then the current gate script against
+those binaries. The worktree is removed and `git worktree prune`d on
+EXIT (the target dir stays).
 Archive the captured output under `working/logs/…` and the scratch.
 Both legs of a text-equality cell assert pinned literals (never
 capture-from-MIT). Every branch asserts: no `if` whose body is only
