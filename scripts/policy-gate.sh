@@ -196,11 +196,11 @@ F1="$(fast_kinit)"
 echo "$F1"
 FTRACE="$(docker exec "$NAME" cat /tmp/fastlock.trace 2>/dev/null || true)"
 echo "$FTRACE"
-if ! echo "$FTRACE" | grep -F 'Upgrading to FAST due to presence of PA_FX_FAST'; then
+if ! echo "$FTRACE" | grep -E 'Upgrading to FAST due to presence of PA_FX_FAST|Using FAST due to armor ccache negotiation result'; then
     echo "$F1" >&2
     echo "$FTRACE" >&2
     docker exec "$NAME" cat /tmp/kdc.log >&2 || true
-    log "policy.gate" "error" ',"error":"FAST lockout kinit did not upgrade to FAST"'
+    log "policy.gate" "error" ',"error":"FAST lockout kinit did not use FAST"'
     exit 1
 fi
 echo "$F1" | grep -qiE 'revoked|CLIENT_REVOKED' && {
