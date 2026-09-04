@@ -95,7 +95,9 @@ Corrupt `enc_fast_req` is 31 `FIND_FAST`; malformed `KrbFastReq` is
 60 `FIND_FAST` (`do_as_req.c:531-535`). Log `detail` is MIT's
 `k5_setmsg` where MIT has one; the critical-FAST-option `detail`
 (`FAST option`) is Rust's own (`UNKNOWN_CRITICAL_FAST_OPTION` has
-no MIT `k5_setmsg`).
+no MIT `k5_setmsg`). Hide-client-names (FAST option bit 1) is
+refused as 93 `FIND_FAST`; MIT supports it (`k5-int.h:803`). Any
+critical bit 0..15 is 93 (MIT only rejects bits 0 and 2..15).
 
 `kadmin/admin` and `kadmin/changepw` are bootstrapped with MIT
 `kadm5_create` attributes: both `DISALLOW_TGT_BASED|LOCKDOWN_KEYS`;

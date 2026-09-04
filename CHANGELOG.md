@@ -22,6 +22,14 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0e H8.** Ledger F4 gains `check_anon`/`restrict_anon`,
+  `NEEDED_HW_PREAUTH` 25, and admin-unlock; phantom gate cells are
+  `proposed` per clause; five real tests are un-`proposed`; armor
+  NYV is 33; `validate_as_request` sub-order is a row; lookaside
+  stays in F5; oracle lines state `sha256sum -c`. `security.md`
+  records hide-client-names / critical FAST options. `docs/testing.md`
+  matches `ci-policy` after H4.
+
 - **W0e H7.** kadm5 rename checks ACL before lockdown like
   `rename_principal_2_svc` (`server_stubs.c:700-712`): unauthorised
   rename is `KADM5_AUTH_INSUFFICIENT` (43787525) `Insufficient
