@@ -297,3 +297,18 @@ pub const fn cksumtype_is_unkeyed(cksumtype: i32) -> bool {
     // MIT cksumtypes.c: MD4 2 / MD5 7 / NIST-SHA 9 / SHA1 14. CRC32 (1) has no entry.
     matches!(cksumtype, 2 | 7 | 9 | 14)
 }
+
+/// MIT `krb5_c_valid_cksumtype`: a row in `cksumtypes.c`.
+#[must_use]
+pub const fn cksumtype_is_known(cksumtype: i32) -> bool {
+    cksumtype_is_keyed(cksumtype) || cksumtype_is_unkeyed(cksumtype)
+}
+
+/// MIT `krb5_c_is_coll_proof_cksum` (`coll_proof_cksum.c:30-40`).
+///
+/// 1.22.2 sets `CKSUM_NOT_COLL_PROOF` on no table row, so every known
+/// type is collision-proof.
+#[must_use]
+pub const fn cksumtype_is_coll_proof(cksumtype: i32) -> bool {
+    cksumtype_is_known(cksumtype)
+}

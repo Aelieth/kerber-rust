@@ -22,6 +22,15 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0e H3 (unit-red; MIT by source).** TGS authenticator checksum
+  grades like `comp_cksum` (`kdc_util.c:112-140`): unknown type 15
+  `SUMTYPE_NOSUPP` `PROCESS_TGS`; not collision-proof 50 (1.22.2 sets
+  `CKSUM_NOT_COLL_PROOF` on no table row); bad bytes 31
+  `BAD_INTEGRITY` `PROCESS_TGS`. Units:
+  `tgs_authenticator_unknown_cksumtype_is_sumtype_nosupp`,
+  `tgs_authenticator_bad_bytes_is_bad_integrity`. MIT clients cannot
+  emit these.
+
 - **W0e H2 (unit-red; MIT by source).** Keyed checksum types match by
   enc provider like `verify_key` (`crypto_int.h:596-608`). `-138`
   HMAC-MD5-ARCFOUR has NULL enc (any key); `-137` is arcfour.

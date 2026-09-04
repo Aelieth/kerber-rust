@@ -460,7 +460,7 @@ fn tgs_bad_checksum_is_error() {
     tgs.0.req_body.nonce = 99; // body no longer matches authenticator checksum
     let bytes = krb5_kdc::handle_request(&store, &encode(&tgs).expect("der")).expect("reply");
     let e: krb5_types::KrbError = decode(&bytes).expect("KRB-ERROR");
-    assert_eq!(e.error_code, err::INAPP_CKSUM);
+    assert_eq!(e.error_code, err::BAD_INTEGRITY);
 }
 
 #[test]

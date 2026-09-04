@@ -4,7 +4,8 @@ use std::time::Instant;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, krb_fx_cf2, verify_checksum,
+    EncryptionType, KeyUsage, ProtocolKey, cksumtype_is_coll_proof, cksumtype_is_known, decrypt,
+    encrypt, krb_fx_cf2, verify_checksum_type,
 };
 use krb5_protocol::{ReplayCache, ReplayKey};
 use krb5_types::pac::{PacIdentity, parse_kerb_validation_info};
@@ -624,9 +625,23 @@ fn process_tgs_header(
         return Err(proto(err::BADMATCH, "PROCESS_TGS"));
     }
     if let Some(ck) = &authenticator.cksum {
+        // MIT kdc_util.c:112-140 comp_cksum: unknown 15, not coll-proof 50,
+        // verify fail 31. 1.22.2 sets CKSUM_NOT_COLL_PROOF on no row.
+        if !cksumtype_is_known(ck.cksumtype) {
+            return Err(proto(err::SUMTYPE_NOSUPP, "PROCESS_TGS"));
+        }
+        if !cksumtype_is_coll_proof(ck.cksumtype) {
+            return Err(proto(err::INAPP_CKSUM, "PROCESS_TGS"));
+        }
         let ck_usage = KeyUsage::new(ku::TGS_REQ_AUTH_CKSUM)?;
-        verify_checksum(&session, ck_usage, body_der, ck.checksum.as_ref())
-            .map_err(|_| proto(err::INAPP_CKSUM, "TGS req-body checksum"))?;
+        verify_checksum_type(
+            &session,
+            ck_usage,
+            body_der,
+            ck.cksumtype,
+            ck.checksum.as_ref(),
+        )
+        .map_err(|_| proto(err::BAD_INTEGRITY, "PROCESS_TGS"))?;
     } else {
         return Err(proto(
             err::INAPP_CKSUM,

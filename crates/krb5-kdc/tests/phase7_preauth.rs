@@ -1419,6 +1419,85 @@ fn fast_as_checksum_binds_wire_body() {
     );
 }
 
+fn map_tgs_authenticator_cksum(
+    tgs: &mut krb5_types::TgsReq,
+    session: &ProtocolKey,
+    f: impl FnOnce(&mut krb5_types::Checksum),
+) {
+    let pa = tgs
+        .0
+        .padata
+        .as_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|p| p.padata_type == pa::TGS_REQ)
+        .expect("PA-TGS-REQ");
+    let mut ap: ApReq = decode(pa.padata_value.as_ref()).expect("ap");
+    let auth_usage = KeyUsage::new(ku::TGS_REQ_AUTHENTICATOR).unwrap();
+    let auth_plain = decrypt(session, auth_usage, ap.authenticator.cipher.as_ref()).expect("auth");
+    let mut authenticator: krb5_types::Authenticator = decode(&auth_plain).expect("authenticator");
+    f(authenticator.cksum.as_mut().expect("cksum"));
+    let auth_der = encode(&authenticator).expect("auth der");
+    ap.authenticator.cipher = encrypt(session, auth_usage, &auth_der).expect("enc").into();
+    pa.padata_value = encode(&ap).expect("ap").into();
+}
+
+fn assert_process_tgs(err: Error, code: i32) {
+    match err {
+        Error::Protocol {
+            code: got, text, ..
+        } => {
+            assert_eq!(got, code);
+            assert_eq!(text.as_deref(), Some("PROCESS_TGS"));
+        }
+        other => panic!("expected {code} PROCESS_TGS, got {other:?}"),
+    }
+}
+
+#[test]
+fn tgs_authenticator_unknown_cksumtype_is_sumtype_nosupp() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 930);
+    let mut tgs = tgs_req(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        931,
+    )
+    .unwrap();
+    map_tgs_authenticator_cksum(&mut tgs, &issued.session_key, |ck| ck.cksumtype = 99);
+    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("unknown cksumtype");
+    assert_process_tgs(err, err::SUMTYPE_NOSUPP);
+}
+
+#[test]
+fn tgs_authenticator_bad_bytes_is_bad_integrity() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 932);
+    let mut tgs = tgs_req(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        933,
+    )
+    .unwrap();
+    map_tgs_authenticator_cksum(&mut tgs, &issued.session_key, |ck| {
+        let mut b = ck.checksum.to_vec();
+        b[0] ^= 0xff;
+        ck.checksum = b.into();
+    });
+    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("bad TGS checksum");
+    assert_process_tgs(err, err::BAD_INTEGRITY);
+}
+
 #[test]
 fn tgs_authenticator_cname_mismatch_is_badmatch() {
     let (store, _) = bootstrap_documented().expect("bootstrap");

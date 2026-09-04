@@ -41,7 +41,10 @@ pub use cf2::{
 };
 pub use derive::{DerivedKeys, derive_keys};
 pub use error::Error;
-pub use etype::{EncryptionType, KeyUsage, cksumtype_is_keyed, cksumtype_is_unkeyed};
+pub use etype::{
+    EncryptionType, KeyUsage, cksumtype_is_coll_proof, cksumtype_is_keyed, cksumtype_is_known,
+    cksumtype_is_unkeyed,
+};
 pub use key::ProtocolKey;
 pub use modp::{
     DhGroup, DhKeypair, OAKLEY_2048, OAKLEY_4096, dh_generate, dh_group_for_prime, dh_shared,
