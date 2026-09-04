@@ -22,6 +22,21 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0e H6.** kpasswd validates the length prefix and version before
+  AP-REQ work like `process_chpw_request` (`schpw.c:60-82`): `plen !=
+  len` is result 1 `Request length was inconsistent`; `vno ∉ {1,
+  0xff80}` is result 6 `Request contained unknown protocol version
+  number %d`. Those replies are framed KRB-ERROR `ap_rep_len=0` with
+  the result in `e_data` like `chpwfail` (`schpw.c:290-345`). MIT
+  1.22.2 `goto bailout` and `dispatch` sends no reply; Rust implements
+  the chpwfail framing. `ChangePasswdData` is decoded only for
+  `0xff80` (decode failure is result 1); vno-1 valid DER stays a
+  password. Units: `kpasswd_unknown_version_is_bad_version`,
+  `kpasswd_inconsistent_length_is_malformed`,
+  `kpasswd_vno1_der_stays_password`,
+  `kpasswd_setpw_decode_failure_is_malformed`. Gate:
+  `scripts/kpasswd-gate.sh` raw datagram both legs.
+
 - **W0e H5.** `scripts/kpasswd-gate.sh` asserts every `helper_rc` and
   that `extra` `addprinc` succeeded. `scripts/red-at-sha.sh` rebuilds
   a historical SHA in a `KERBER_SCRATCH` worktree and writes a

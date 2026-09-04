@@ -123,6 +123,13 @@ foreign-realm principal is result 2 with `chpass_util.c:136-140`
 change password.\n`). Admin-style changes ignore INITIAL. `min_life`
 is W1. Purgekeys of a locked-down principal is `KADM5_PROTECT_KEYS`
 (stricter than MIT, which has no lockdown check on purgekeys).
+Length prefix and version are checked before AP-REQ work
+(`schpw.c:60-82`): inconsistent length is result 1; unknown version
+is result 6 with MIT's `Request contained unknown protocol version
+number %d`. Rust frames those as KRB-ERROR `ap_rep_len=0` with the
+result in `e_data` like `chpwfail` (`schpw.c:290-345`). MIT 1.22.2
+`goto bailout` and sends no reply. `ChangePasswdData` is decoded
+only for version `0xff80`.
 
 ## Not in this matrix
 

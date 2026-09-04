@@ -18,6 +18,86 @@ log() {
         "$1" "$CORRELATION_ID" "$2" "${3:-}"
 }
 
+# Raw UDP kpasswd: vno 0x0002 → result 6; plen != len → result 1.
+# MIT schpw.c:60-82 sets those results then goto bailout; dispatch sends
+# no reply. Rust frames KRB-ERROR ap_rep_len=0 with e_data like chpwfail.
+kpasswd_raw() {
+    local ctn=$1 kind=$2
+    docker exec "$ctn" python3 -c '
+import socket, struct, sys
+kind = sys.argv[1]
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.settimeout(2.0)
+if kind == "vno":
+    pkt = struct.pack(">HHH", 6, 2, 0)
+elif kind == "len":
+    pkt = struct.pack(">HHH", 99, 1, 0)
+else:
+    raise SystemExit("kind")
+s.sendto(pkt, ("127.0.0.1", 464))
+try:
+    data, _ = s.recvfrom(4096)
+except socket.timeout:
+    print("timeout")
+    raise SystemExit(2)
+print("hex=" + data.hex())
+print("ap_len=" + str(struct.unpack(">H", data[4:6])[0] if len(data) >= 6 else -1))
+if b"\x00\x06Request contained unknown protocol version number 2" in data:
+    print("result=6")
+if b"\x00\x01Request length was inconsistent" in data:
+    print("result=1")
+if b"Request contained unknown protocol version number 2" in data:
+    print("text=unknown_version")
+if b"Request length was inconsistent" in data:
+    print("text=inconsistent_length")
+' "$kind"
+}
+
+pin_kpasswd_raw_rust() {
+    local run
+    for run in 1 2; do
+        echo "---- Rust raw vno $run ----"
+        OUT="$(kpasswd_raw "$NAME" vno)"
+        echo "$OUT"
+        echo "$OUT" | grep -F 'result=6'
+        echo "$OUT" | grep -F 'text=unknown_version'
+        echo "---- Rust raw len $run ----"
+        OUT="$(kpasswd_raw "$NAME" len)"
+        echo "$OUT"
+        echo "$OUT" | grep -F 'result=1'
+        echo "$OUT" | grep -F 'text=inconsistent_length'
+    done
+}
+
+# MIT schpw.c goto bailout; dispatch logs com_err and sends no framed reply.
+pin_kpasswd_raw_mit() {
+    local run nlog OUT rc
+    for run in 1 2; do
+        nlog="$(docker exec "$NAME_MIT" sh -c 'wc -l < /tmp/kadmind.log' | tr -d '[:space:]')"
+        echo "---- MIT raw vno $run ----"
+        set +e
+        OUT="$(kpasswd_raw "$NAME_MIT" vno)"
+        rc=$?
+        set -e
+        echo "$OUT"
+        [ "$rc" -eq 2 ]
+        echo "$OUT" | grep -F timeout
+        docker exec "$NAME_MIT" sh -c "tail -n +$((nlog + 1)) /tmp/kadmind.log" \
+            | grep -F 'Requested protocol version not supported - while dispatching (udp)'
+        nlog="$(docker exec "$NAME_MIT" sh -c 'wc -l < /tmp/kadmind.log' | tr -d '[:space:]')"
+        echo "---- MIT raw len $run ----"
+        set +e
+        OUT="$(kpasswd_raw "$NAME_MIT" len)"
+        rc=$?
+        set -e
+        echo "$OUT"
+        [ "$rc" -eq 2 ]
+        echo "$OUT" | grep -F timeout
+        docker exec "$NAME_MIT" sh -c "tail -n +$((nlog + 1)) /tmp/kadmind.log" \
+            | grep -F 'Message stream modified - while dispatching (udp)'
+    done
+}
+
 if ! command -v docker >/dev/null 2>&1; then
     log "kpasswd.gate" "error" ',"error":"docker not available"'
     exit 1
@@ -300,6 +380,9 @@ echo "$POL" | grep -qi 'Password change rejected'
 echo "$POL" | grep -F 'min_length 8'
 docker exec "$NAME" sh -c "tail -n +$((nlog + 1)) /tmp/kadmind.log" | grep -q 'chpw request'
 
+echo "==== Rust kpasswd raw vno/length (schpw.c:60-82) ===="
+pin_kpasswd_raw_rust
+
 echo "==== MIT kadmind policy rejection is SOFTERROR ===="
 docker run -d --name "$NAME_MIT" "$IMAGE" >/dev/null
 ok=0
@@ -479,6 +562,9 @@ if [ "$mit_rc" -ne 2 ]; then
 fi
 echo "$MITPOL" | grep -qi 'Password change rejected'
 echo "$MITPOL" | grep -F 'New password is too short'
+
+echo "==== MIT kpasswd raw vno/length (schpw.c:60-82; bailout, no framed reply) ===="
+pin_kpasswd_raw_mit
 
 log "kpasswd.gate" "ok" ',"principal":"user@KERBER.TEST","op":"kpasswd+kinit","softerror":true'
 exit 0

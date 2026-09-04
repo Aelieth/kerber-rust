@@ -13,7 +13,10 @@ use krb5_kdc::{SharedDump as SharedStore, save_store};
 use krb5_protocol::{
     ReplayCache, build_ap_rep, build_krb_priv_with_seq, unwrap_krb_priv_ex, verify_ap_req,
 };
-use krb5_types::{ChangePasswdData, EncryptionKey, PrincipalName, principal_compare};
+use krb5_types::{
+    ChangePasswdData, EncryptionKey, KerberosTime, KrbError, Microseconds, PrincipalName, ascii,
+    err, principal_compare,
+};
 
 use crate::{AdminSession, Error, Op};
 
@@ -363,15 +366,47 @@ pub fn handle_kpasswd_rfc3244(
     replay: &ReplayCache,
     raw: &[u8],
 ) -> Result<Vec<u8>, Error> {
-    if raw.len() < 6 {
-        return Err(Error::Inner("kpasswd truncated".into()));
-    }
     handle_kpasswd_from(store, acl, service_key, replay, raw, "127.0.0.1")
 }
 
 const RFC3244_VERSION: u16 = 0xff80;
 const UNK_PRINC_PRIV: &str =
     "Password not changed.\nPrincipal does not exist while trying to change password.\n";
+const DECODE_FAIL: &str = "Failed decoding ChangePasswdData";
+
+fn kpasswd_preauth_error(
+    store: &SharedStore,
+    proto: i32,
+    result: u16,
+    text: &str,
+) -> Result<Vec<u8>, Error> {
+    let realm = {
+        let g = store
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        g.realm().to_owned()
+    };
+    let mut edata = Vec::with_capacity(2 + text.len());
+    edata.extend_from_slice(&result.to_be_bytes());
+    edata.extend_from_slice(text.as_bytes());
+    let err = KrbError {
+        pvno: KrbError::PVNO,
+        msg_type: KrbError::MSG_TYPE,
+        ctime: None,
+        cusec: None,
+        stime: KerberosTime::now(),
+        susec: Microseconds::ZERO,
+        error_code: proto,
+        crealm: None,
+        cname: None,
+        realm: ascii(&realm),
+        sname: PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "changepw"]),
+        e_text: None,
+        e_data: Some(edata.into()),
+    };
+    let der = encode(&err).map_err(|e| Error::Inner(e.to_string()))?;
+    Ok(frame_kpasswd_rep(&[], &der))
+}
 
 fn handle_kpasswd_from(
     store: &SharedStore,
@@ -381,12 +416,27 @@ fn handle_kpasswd_from(
     raw: &[u8],
     from: &str,
 ) -> Result<Vec<u8>, Error> {
+    // MIT schpw.c:47-82: length then version before AP-REQ; ChangePasswdData only for 0xff80.
+    if raw.len() < 4 {
+        return Err(Error::Inner("kpasswd truncated".into()));
+    }
+    let plen = usize::from(u16::from_be_bytes([raw[0], raw[1]]));
+    if plen != raw.len() {
+        return kpasswd_preauth_error(store, err::MODIFIED, 1, "Request length was inconsistent");
+    }
+    let ver = u16::from_be_bytes([raw[2], raw[3]]);
+    if ver != 1 && ver != RFC3244_VERSION {
+        return kpasswd_preauth_error(
+            store,
+            err::BAD_PVNO,
+            6,
+            &format!("Request contained unknown protocol version number {ver}"),
+        );
+    }
     if raw.len() < 6 {
         return Err(Error::Inner("kpasswd truncated".into()));
     }
-    let _msglen = u16::from_be_bytes([raw[0], raw[1]]);
-    let ver = u16::from_be_bytes([raw[2], raw[3]]);
-    let ap_len = u16::from_be_bytes([raw[4], raw[5]]) as usize;
+    let ap_len = usize::from(u16::from_be_bytes([raw[4], raw[5]]));
     if 6 + ap_len > raw.len() {
         return Err(Error::Inner("kpasswd AP-REQ".into()));
     }
@@ -407,20 +457,26 @@ fn handle_kpasswd_from(
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         g.realm().to_owned()
     };
-    let (targ, targ_realm, newpass) = match decode::<ChangePasswdData>(&user_data) {
-        Ok(cpw) => {
+    let (targ, targ_realm, newpass) = if ver == RFC3244_VERSION {
+        if let Ok(cpw) = decode::<ChangePasswdData>(&user_data) {
             let name = cpw.targname.unwrap_or_else(|| ok.ticket_part.cname.clone());
             let realm = cpw.targrealm.as_ref().map_or_else(
                 || ticket_crealm.clone(),
                 |r| String::from_utf8_lossy(r.as_bytes()).into_owned(),
             );
             (name, realm, cpw.newpasswd.to_vec())
+        } else {
+            let mut body = Vec::with_capacity(2 + DECODE_FAIL.len());
+            body.extend_from_slice(&1u16.to_be_bytes());
+            body.extend_from_slice(DECODE_FAIL.as_bytes());
+            return kpasswd_success_rep(&session, &priv_key, &ok.authenticator, &body);
         }
-        Err(_) => (
+    } else {
+        (
             ok.ticket_part.cname.clone(),
             ticket_crealm.clone(),
             user_data,
-        ),
+        )
     };
     let client = format!(
         "{}@{}",
@@ -434,7 +490,7 @@ fn handle_kpasswd_from(
         (
             7u16,
             "Ticket must be derived from a password".to_owned(),
-            "Operation requires initial ticket",
+            "Operation requires initial ticket".to_owned(),
         )
     } else if !self_change
         && acl
@@ -444,29 +500,40 @@ fn handle_kpasswd_from(
         (
             5u16,
             "Unauthorized request".to_owned(),
-            "Operation requires ``change-password'' privilege",
+            "Operation requires ``change-password'' privilege".to_owned(),
         )
     } else if targ_realm != store_realm {
-        (2u16, UNK_PRINC_PRIV.to_owned(), "Principal does not exist")
+        (
+            2u16,
+            UNK_PRINC_PRIV.to_owned(),
+            "Principal does not exist".to_owned(),
+        )
     } else {
         let mut g = store
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut sess = AdminSession::local(&mut g, acl, client.clone());
         match sess.change_password(&targ, &newpass) {
-            Ok(()) => (0u16, String::new(), "success"),
-            Err(Error::PasswordPolicy(msg)) => (4, msg, "password policy"),
+            Ok(()) => (0u16, String::new(), "success".to_owned()),
+            Err(Error::PasswordPolicy(msg)) => (4, msg, "password policy".to_owned()),
             Err(Error::AclDenied) => (
                 5,
                 "Unauthorized request".to_owned(),
-                "Operation requires ``change-password'' privilege",
+                "Operation requires ``change-password'' privilege".to_owned(),
             ),
-            Err(Error::NotFound) => (2, UNK_PRINC_PRIV.to_owned(), "Principal does not exist"),
-            Err(e) => (
+            Err(Error::NotFound) => (
                 2,
-                format!("Password not changed.\n{e} while trying to change password.\n"),
-                "harderror",
+                UNK_PRINC_PRIV.to_owned(),
+                "Principal does not exist".to_owned(),
             ),
+            Err(e) => {
+                let msg = e.to_string();
+                (
+                    2,
+                    format!("Password not changed.\n{msg} while trying to change password.\n"),
+                    msg,
+                )
+            }
         }
     };
     let log_outcome = if code == 0 { "ok" } else { "error" };

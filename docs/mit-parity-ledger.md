@@ -135,7 +135,7 @@ Whitelist names the documented stricter rows.
 W1-B: `tgs_req_ex` FAST sibling; `get_dest_tgt` referral memory;
 start-realm in the service loop; acceptor kvno / transited re-check;
 ERROR-level `asn1.decode`/`crypto.decrypt` on expected failures.
-W1-C: kpasswd result-code strings; kadmind chpw log `from <addr>`;
+W1-C: kpasswd result-code strings (version/length + `chpwfail` framing landed W0e H6); kadmind chpw log `from <addr>`;
 `kprop.rs` per-connection rcache; `dfl` restart cell; min_life/dictionary;
 kadm5 ACL denial codes; policy-rejection text.
 
