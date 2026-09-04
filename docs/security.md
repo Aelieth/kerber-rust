@@ -133,7 +133,14 @@ store realm (`krb5_parse_name`). A readable ACL file is the ACL: it is
 not replaced when `admin@REALM` is absent (`acl_init:547-563`). An
 unparseable target or unknown restriction token is a load error
 (`acl_init`); kadmind refuses the file. `*`/`x` still
-exclude extract (`e`). Purgekeys stays
+exclude extract (`e`). `listprincs`/`listpols` require `l`
+(`KADM5_AUTH_LIST`, `server_stubs.c:814,1443`). addpol is
+`KADM5_AUTH_ADD`, delpol `KADM5_AUTH_DELETE`. Self cpw/chrand/purgekeys/
+getprinc/getstrs (and own-policy getpol) follow `auth_self.c:38-75`.
+Self key change without an INITIAL ticket is `KADM5_AUTH_INITIAL`
+(`server_stubs.c:368-381`). `get_privs` returns `~0`
+(`server_misc.c:146-158`). `kadmin.local` applies no ACL (`KRB5_ACL_FILE`
+is kadmind-only). Purgekeys stays
 `KADM5_PROTECT_KEYS` (stricter than MIT, which has no lockdown check).
 `kadmin.local` ktadd ignores lockdown like MIT. Create-time name
 special-casing keeps `PWCHANGE_SERVICE` only (`create_principal` has

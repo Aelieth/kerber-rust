@@ -117,18 +117,18 @@ echo "$UNK"
 test "$unkrc" -ne 0
 echo "$UNK" | grep -qi 'unknown flag'
 
-echo "==== KRB5_ACL_FILE unreadable is a hard error ===="
+echo "==== kadmin.local ignores KRB5_ACL_FILE ===="
 set +e
-ACLERR="$(docker exec \
+ACLOK="$(docker exec \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
     -e KRB5_ACL_FILE=/tmp/no-such-acl \
     "$NAME" /tmp/krb5-kadmin-local -q 'listprincs' 2>&1)"
 aclrc=$?
 set -e
-echo "$ACLERR"
-test "$aclrc" -ne 0
-echo "$ACLERR" | grep -qi 'ACL'
+echo "$ACLOK"
+test "$aclrc" -eq 0
+echo "$ACLOK" | grep -F 'user@KERBER.TEST'
 
 docker exec "$NAME" sh -c 'cat >/tmp/kadm5.acl <<EOF
 admin@KERBER.TEST *e

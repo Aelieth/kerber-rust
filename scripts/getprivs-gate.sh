@@ -124,17 +124,15 @@ echo "==== addprinc limited ===="
 ADD="$(kadmin_q admin@KERBER.TEST adminpassword 'addprinc -pw limited-secret limited')"
 echo "$ADD"
 
-echo "==== limited getprivs is GET only ===="
+echo "==== limited getprivs is all bits like MIT ~0 ===="
 docker exec -e KRB5_CONFIG=/tmp/getprivs-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
 docker exec -e KRB5_CONFIG=/tmp/getprivs-krb5.conf \
     "$NAME" sh -c 'printf "limited-secret\n" | kinit limited@KERBER.TEST'
 LIMP="$(kadmin_q limited@KERBER.TEST limited-secret getprivs)"
 echo "$LIMP"
 echo "$LIMP" | grep -qiE 'INQUIRE|GET'
-if echo "$LIMP" | grep -qiE 'ADD|MODIFY|DELETE|CHANGEPW|LIST'; then
-    echo "limited principal reported extra privileges: $LIMP" >&2
-    exit 1
-fi
+echo "$LIMP" | grep -qi ADD
+echo "$LIMP" | grep -qi MODIFY
 
 echo "==== limited cpw -randkey is AUTH_CHANGEPW ===="
 RAND="$(kadmin_q limited@KERBER.TEST limited-secret 'cpw -randkey user')"
@@ -149,5 +147,5 @@ if echo "$RAND" | grep -qiE 'randomized|changed'; then
     exit 1
 fi
 
-log "getprivs.gate" "ok" ',"admin_full":true,"limited_get_only":true,"limited_chrand_auth_changepw":true'
+log "getprivs.gate" "ok" ',"admin_full":true,"limited_getprivs_all_ones":true,"limited_chrand_auth_changepw":true'
 exit 0

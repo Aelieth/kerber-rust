@@ -36,6 +36,16 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   Harness `kadm5.acl` lists `admin@KERBER.TEST`, `*/admin@`, and
   `kiprop/*` `p` (the file is the ACL; no fallback).
 
+- **W1-H J1b.** kadm5 ops use MIT ACL bits and denial codes:
+  listprincs/listpols `l`/`AUTH_LIST`, addpol `AUTH_ADD`, delpol
+  `AUTH_DELETE`, self rules (`auth_self.c`), `AUTH_INITIAL` on
+  self-cpw/chrand with a TGS ticket, `get_privs` `~0`, `kadmin.local`
+  applies no ACL. Units: `listprincs_inquire_is_auth_list`,
+  `listprincs_list_is_ok`, `addpol_denied_is_auth_add`,
+  `delpol_denied_is_auth_delete`, `getprinc_self_without_acl_is_ok`,
+  `cpw_self_without_initial_is_auth_initial`, `get_privs_is_all_ones`.
+  Gate: `scripts/kadmin-gate.sh` list/addpol/self-getprinc both legs.
+
 - **W0f I8.** Ledger header recount 244 = 116+67+61 (exact 54 ·
   deviation 96). AS time/flag anchors are `issue.rs:1697-1734`.
   `diffsend` names in the ORDER/FAST/AD-FX-ARMOR rows are backticked

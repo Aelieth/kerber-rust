@@ -160,6 +160,8 @@ pub struct GssContext {
     spnego_mech_list: Option<Vec<u8>>,
     lifetime_end: u32,
     gss_flags: u32,
+    /// Ticket INITIAL flag (`gss_krb5_get_tkt_flags` / `TKT_FLG_INITIAL`).
+    ticket_initial: bool,
 }
 
 /// GSS IOV buffer type (MIT `gssapi_ext.h`).
@@ -284,6 +286,7 @@ impl GssContext {
                 spnego_mech_list: None,
                 lifetime_end: 0,
                 gss_flags: flags,
+                ticket_initial: false,
             },
             token,
         ))
@@ -326,6 +329,7 @@ impl GssContext {
             spnego_mech_list: None,
             lifetime_end: 0,
             gss_flags: 0,
+            ticket_initial: false,
         };
         let params = krb5_protocol::ApVerifyParams {
             expected_server,
@@ -398,6 +402,7 @@ impl GssContext {
             spnego_mech_list: None,
             lifetime_end: ok.ticket_part.endtime.unix_seconds(),
             gss_flags,
+            ticket_initial: ok.ticket_part.flags.initial(),
         };
         let mut ap_rep_tok = None;
         if want_mutual {
@@ -943,7 +948,14 @@ impl GssContext {
             },
             lifetime_end,
             gss_flags,
+            ticket_initial: false,
         })
+    }
+
+    /// MIT `gss_krb5_get_tkt_flags` INITIAL bit.
+    #[must_use]
+    pub fn ticket_is_initial(&self) -> bool {
+        self.ticket_initial
     }
 
     /// Remaining lifetime, GSS flags, and names.
@@ -2804,6 +2816,7 @@ mod tests {
             spnego_mech_list: None,
             lifetime_end: 0,
             gss_flags: GSS_C_INTEG | GSS_C_CONF,
+            ticket_initial: false,
         }
     }
 

@@ -10,8 +10,8 @@
 use std::io::{self, BufRead};
 use std::path::PathBuf;
 
-use krb5_admin::{AdminSession, KadminArgs, load_acl_file, parse_kadmin_args};
-use krb5_kdc::load_store;
+use krb5_admin::{AdminSession, KadminArgs, parse_kadmin_args};
+use krb5_kdc::{Acl, load_store};
 use krb5_protocol::{Keytab, parse_principal};
 use krb5_types::PrincipalName;
 
@@ -35,14 +35,9 @@ fn main() {
     });
     let actor = std::env::var("KRB5_KADMIN_PRINCIPAL")
         .unwrap_or_else(|_| format!("admin@{}", store.realm()));
-    let acl = load_acl_file(
-        &actor,
-        std::env::var_os("KRB5_ACL_FILE")
-            .as_deref()
-            .map(std::path::Path::new),
-    )
-    .unwrap_or_else(|e| {
-        eprintln!("kadmin.local: {e}");
+    // MIT kadmin.local does not read kadm5.acl (`KRB5_ACL_FILE` is kadmind-only).
+    let acl = Acl::parse("* *e\n").unwrap_or_else(|e| {
+        eprintln!("kadmin.local: acl: {e}");
         std::process::exit(1);
     });
     let mut sess = AdminSession::local(&mut store, &acl, actor);

@@ -68,6 +68,8 @@ norename@KERBER.TEST acilm
 scoped@KERBER.TEST ad *@KERBER.TEST
 restricted@KERBER.TEST a *@KERBER.TEST -clearpolicy
 nodel@KERBER.TEST *D
+ro@KERBER.TEST i
+rolist@KERBER.TEST l
 EOF'
 
 docker exec -d \
@@ -467,6 +469,32 @@ GET_V="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
 echo "$GET_V"
 echo "$GET_V" | grep -F 'Principal: victim'
 
+echo "==== ACL list vs inquire ===="
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw ro-secret ro'
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw rolist-secret rolist'
+LIST_I="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p ro@KERBER.TEST -w ro-secret -q 'listprincs' 2>&1 || true)"
+echo "$LIST_I"
+echo "$LIST_I" | grep -F $'get_principals: Operation requires ``list\'\' privilege while retrieving list.'
+if echo "$LIST_I" | grep -q 'user@KERBER.TEST'; then
+    echo "ro i listed principals: $LIST_I" >&2
+    exit 1
+fi
+LIST_L="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p rolist@KERBER.TEST -w rolist-secret -q 'listprincs' 2>&1 || true)"
+echo "$LIST_L"
+echo "$LIST_L" | grep -F 'user@KERBER.TEST'
+ADDPOL_D="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p ro@KERBER.TEST -w ro-secret -q 'addpol pol-ro' 2>&1 || true)"
+echo "$ADDPOL_D"
+echo "$ADDPOL_D" | grep -F $'add_policy: Operation requires ``add\'\' privilege while creating policy "pol-ro".'
+SELFGET="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p user@KERBER.TEST -w userpassword -q 'getprinc user' 2>&1 || true)"
+echo "$SELFGET"
+echo "$SELFGET" | grep -F 'Principal: user@KERBER.TEST'
+
 echo "==== MIT kadmin delprinc extra ===="
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'delprinc -force extra'
@@ -567,7 +595,9 @@ docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw scoped-secret scoped'
 docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw restricted-secret restricted'
 docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw nodel-secret nodel'
 docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw victim-secret victim'
-docker exec "$NAME_MIT" sh -c 'printf "%s\n" "*/admin@KERBER.TEST *e" "admin@KERBER.TEST *e" "extract/admin@KERBER.TEST *e" "norename@KERBER.TEST acilm" "scoped@KERBER.TEST ad *@KERBER.TEST" "restricted@KERBER.TEST a *@KERBER.TEST -clearpolicy" "nodel@KERBER.TEST *D" > /var/kerberos/krb5kdc/kadm5.acl'
+docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw ro-secret ro'
+docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw rolist-secret rolist'
+docker exec "$NAME_MIT" sh -c 'printf "%s\n" "*/admin@KERBER.TEST *e" "admin@KERBER.TEST *e" "extract/admin@KERBER.TEST *e" "norename@KERBER.TEST acilm" "scoped@KERBER.TEST ad *@KERBER.TEST" "restricted@KERBER.TEST a *@KERBER.TEST -clearpolicy" "nodel@KERBER.TEST *D" "ro@KERBER.TEST i" "rolist@KERBER.TEST l" > /var/kerberos/krb5kdc/kadm5.acl'
 docker exec "$NAME_MIT" sh -c '
 for comm in /proc/[0-9]*/comm; do
     [ -f "$comm" ] || continue
@@ -659,6 +689,20 @@ fi
 MIT_GET_V="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc victim')"
 echo "$MIT_GET_V"
 echo "$MIT_GET_V" | grep -F 'Principal: victim@KERBER.TEST'
+
+echo "==== MIT ACL list vs inquire ===="
+MIT_LIST_I="$(docker exec "$NAME_MIT" kadmin -p ro -w ro-secret -q 'listprincs' 2>&1 || true)"
+echo "$MIT_LIST_I"
+echo "$MIT_LIST_I" | grep -F $'get_principals: Operation requires ``list\'\' privilege while retrieving list.'
+MIT_LIST_L="$(docker exec "$NAME_MIT" kadmin -p rolist -w rolist-secret -q 'listprincs' 2>&1 || true)"
+echo "$MIT_LIST_L"
+echo "$MIT_LIST_L" | grep -F 'user@KERBER.TEST'
+MIT_ADDPOL="$(docker exec "$NAME_MIT" kadmin -p ro -w ro-secret -q 'addpol pol-ro' 2>&1 || true)"
+echo "$MIT_ADDPOL"
+echo "$MIT_ADDPOL" | grep -F $'add_policy: Operation requires ``add\'\' privilege while creating policy "pol-ro".'
+MIT_SELFGET="$(docker exec "$NAME_MIT" kadmin -p user -w userpassword -q 'getprinc user' 2>&1 || true)"
+echo "$MIT_SELFGET"
+echo "$MIT_SELFGET" | grep -F 'Principal: user@KERBER.TEST'
 
 echo "==== MIT purgekeys krbtgt succeeds (no lockdown check) ===="
 MITPURGE="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'purgekeys krbtgt/KERBER.TEST' 2>&1 || true)"
