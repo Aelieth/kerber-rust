@@ -103,7 +103,13 @@ provider (`crypto_int.h:596-608`): 15/19 aes128, 16/20 aes256, 12 des3,
 17/18 camellia, `-138` NULL (any key), `-137` arcfour. `-137` is
 HMAC(raw key, MD5(le32(usage) ‖ msg)); `-138` first derives
 HMAC(key, `"signaturekey\0"`) (`checksum_hmac_md5.c:53-66`). RC4
-usage translation is `3→8, 9→9, 23→13` (`enc_rc4.c:17-35`). `cksumtype` 0
+usage translation is `3→8, 9→9, 23→13` (`enc_rc4.c:17-35`). Session
+etype walks the request list like `select_session_keytype`
+(`kdc_util.c:1084-1112`): valid, permitted, `allow_des3`/`allow_rc4`,
+then `dbentry_supports_enctype` (`session_enctypes` attr, else
+AES256-sha1 assumed, else a long-term key). AS uses krbtgt; TGS uses
+the service. Ticket encryption stays the server long-term key. RC4
+`checksum()` is RFC 4757 type `-138`. `cksumtype` 0
 substitutes the key's mandatory type, then `is_keyed(0)` is 12.
 Unknown armor type is
 24 with wire `FIND_FAST` (log `detail` is `Unknown FAST armor type %d`).

@@ -554,12 +554,20 @@ _HEADER_EXACT = re.compile(
 _HEADER_ABSENT = re.compile(r"absent\s+(\d+)\s*·\s*deferred\s+(\d+)")
 _HEADER_TOTAL = re.compile(
     r"\*\*(\d+)\*\*\s*=\s*A1\s+(\d+)\s*\+\s*A2\s+(\d+)\s*\+\s*A3\s+(\d+)"
+    r"(?:\s*\+\s*A4\s+(\d+))?"
 )
+_RUST_ANCHOR = re.compile(
+    r"\b([A-Za-z0-9_-]+\.rs)\s+([A-Za-z_][A-Za-z0-9_]*)(?::(\d+))?\b"
+)
+_FN_DEF = re.compile(
+    r"^(\s*)(?:pub(?:\([^)]+\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\b"
+)
+_STATUS_QUOTE = re.compile(r"`([A-Z][A-Z0-9_][A-Z0-9_ /-]{1,})`")
 
 
 def recount_ledger_sections(text: str) -> dict[str, int]:
-    """Row counts under `## A1` / `## A2` / `## A3` headings."""
-    counts = {"A1": 0, "A2": 0, "A3": 0}
+    """Row counts under `## A1` / `## A2` / `## A3` / `## A4` headings."""
+    counts = {"A1": 0, "A2": 0, "A3": 0, "A4": 0}
     section: str | None = None
     for line in text.splitlines():
         if re.match(r"^## A1\b", line):
@@ -570,6 +578,9 @@ def recount_ledger_sections(text: str) -> dict[str, int]:
             continue
         if re.match(r"^## A3\b", line):
             section = "A3"
+            continue
+        if re.match(r"^## A4\b", line):
+            section = "A4"
             continue
         if re.match(r"^## ", line):
             section = None
@@ -643,20 +654,111 @@ def check_ledger_tally(text: str | None = None) -> None:
     total = _HEADER_TOTAL.search(text)
     if not total:
         _die("docs/mit-parity-ledger.md missing A1/A2/A3 total line")
-    header_n, a1, a2, a3 = (int(g) for g in total.groups())
+    header_n = int(total.group(1))
+    a1, a2, a3 = (int(total.group(i)) for i in (2, 3, 4))
+    a4 = int(total.group(5) or 0)
     n = sum(got.values())
-    if header_n != n or header_n != a1 + a2 + a3:
+    parts = a1 + a2 + a3 + a4
+    if header_n != n or header_n != parts:
         _die(
             f"docs/mit-parity-ledger.md total {header_n} "
-            f"= A1 {a1} + A2 {a2} + A3 {a3} != recount {n}"
+            f"= A1 {a1} + A2 {a2} + A3 {a3} + A4 {a4} != recount {n}"
         )
     sec = recount_ledger_sections(text)
-    want_sec = {"A1": a1, "A2": a2, "A3": a3}
+    want_sec = {"A1": a1, "A2": a2, "A3": a3, "A4": a4}
     if sec != want_sec:
         _die(
             f"docs/mit-parity-ledger.md section split "
             f"header {want_sec} != recount {sec}"
         )
+
+
+def _rust_sources() -> dict[str, list[pathlib.Path]]:
+    out: dict[str, list[pathlib.Path]] = {}
+    crates = ROOT / "crates"
+    if not crates.is_dir():
+        return out
+    for p in crates.rglob("*.rs"):
+        out.setdefault(p.name, []).append(p)
+    return out
+
+
+def _fn_span(path: pathlib.Path, symbol: str) -> tuple[int, int, str] | None:
+    lines = path.read_text(errors="replace").splitlines()
+    start = None
+    indent = 0
+    for i, line in enumerate(lines, 1):
+        m = _FN_DEF.match(line)
+        if m and m.group(2) == symbol:
+            start = i
+            indent = len(m.group(1))
+            break
+    if start is None:
+        return None
+    end = len(lines)
+    for i, line in enumerate(lines[start:], start + 1):
+        m = _FN_DEF.match(line)
+        if m and len(m.group(1)) <= indent:
+            end = i - 1
+            break
+    body = "\n".join(lines[start - 1 : end])
+    return start, end, body
+
+
+def check_ledger_anchors(text: str | None = None) -> None:
+    """Every `file.rs symbol` in the rust-site cell resolves to `fn symbol`."""
+    if text is None:
+        if not LEDGER.is_file():
+            _die("missing docs/mit-parity-ledger.md")
+        text = LEDGER.read_text()
+    sources = _rust_sources()
+    for i, line in enumerate(text.splitlines(), 1):
+        if (
+            not line.startswith("|")
+            or "MIT file:line" in line
+            or line.startswith("| ---")
+        ):
+            continue
+        cols = _split_ledger_row(line)
+        if len(cols) < 7 or cols[5] == "verdict":
+            continue
+        site, etext = cols[3], cols[4]
+        for m in _RUST_ANCHOR.finditer(site):
+            fname, symbol, lineno = m.group(1), m.group(2), m.group(3)
+            paths = sources.get(fname)
+            if not paths:
+                _die(f"docs/mit-parity-ledger.md:{i} {fname} not under crates/")
+            span = None
+            for p in paths:
+                span = _fn_span(p, symbol)
+                if span:
+                    break
+            if span is None:
+                # Prose like `issue.rs leaks` is not an anchor.
+                continue
+            start, end, body = span
+            if lineno:
+                n = int(lineno)
+                if not (start <= n <= end):
+                    _die(
+                        f"docs/mit-parity-ledger.md:{i} {fname}:{n} "
+                        f"is not inside fn {symbol} ({start}-{end})"
+                    )
+            if not (
+                cols[5] == "exact"
+                or cols[5].startswith("exact ")
+                or cols[5].startswith("exact(")
+            ):
+                continue
+            for q in _STATUS_QUOTE.findall(etext):
+                ident = re.sub(r"[^A-Z0-9]+", "_", q).strip("_")
+                if len(ident) < 8 or ("_" not in ident and " " not in q):
+                    continue
+                if q not in body and ident not in body:
+                    _die(
+                        f"docs/mit-parity-ledger.md:{i} `{q}` "
+                        f"not in {fname} fn {symbol}"
+                    )
 
 
 def check_working_gitignored() -> None:
@@ -948,6 +1050,17 @@ jobs:
         "**1** = A1 0 + A2 1 + A3 0.",
     )
     _must_die(check_ledger_tally, ledger_tally_wrong_split)
+    check_ledger_anchors(
+        "| MIT file:line | check | MIT | Rust | e_text | verdict | proof |\n"
+        "| --- | --- | --- | --- | --- | --- | --- |\n"
+        "| kdc_util.c:1 | x | y | none | — | absent | none |\n"
+    )
+    _must_die(
+        check_ledger_anchors,
+        "| MIT file:line | check | MIT | Rust | e_text | verdict | proof |\n"
+        "| --- | --- | --- | --- | --- | --- | --- |\n"
+        "| kdc_util.c:1 | x | y | missing.rs no_such_fn | `PROCESS_TGS` | exact | none |\n",
+    )
     not_ci = Workflow(
         pathlib.Path("not-ci.yml"),
         "name: x\non:\n  push:\njobs:\n  test:\n    timeout-minutes: 1\n    steps:\n      - run: echo hi\n",
@@ -983,6 +1096,7 @@ def main() -> None:
     check_working_gitignored()
     check_ledger_proof_column()
     check_ledger_tally()
+    check_ledger_anchors()
     print("ci-policy: ok")
 
 

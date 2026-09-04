@@ -15,8 +15,13 @@ file` is informational unless the arm also asserts (`exit`/`die`/
 `return`/`break`/`continue`/`unavailable`, `log … error`, or a
 comparison/`grep`/`test`/`cmp`). A bare assignment is not an assert.
 `{ … }`, `( … )`, and heredoc arms are inspected. The ledger header
-tally must match a recount of the verdict cells and the A1/A2/A3
-section split; a missing total line fails. It cannot check
+tally must match a recount of the verdict cells and the A1/A2/A3/A4
+section split; a missing total line fails. Rust-site cells that use
+`file.rs symbol` (optional `:N` inside the function) must resolve to
+`fn symbol` under `crates/`; `exact` rows' backticked MIT status
+words must appear in that function. Port commits carry a function
+coverage checklist (`file:line` → Rust line or `deviation:`),
+`Gates:`, and `Limitation:`. It cannot check
 red-at-HEAD artefacts: `working/` is gitignored. `__pycache__/` is
 gitignored.
 

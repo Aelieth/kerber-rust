@@ -51,6 +51,15 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   refuses a non-`kiprop` acceptor with RPC `AUTH_TOOWEAK`. Unit:
   `changepw_service_listprincs_is_auth_list`.
 
+- **W1-H J8.** Ledger rust sites are `file.rs symbol` (optional
+  `:N` inside the function). `ci-policy.py` `check_ledger_anchors`
+  resolves `fn symbol` under `crates/` and, for `exact` rows, checks
+  the backticked status word sits in that function. Six I8 rows moved
+  to `## A4 — kadmin/server/*.c, lib/kadm5/*`. Recount **244** =
+  A1 116 + A2 67 + A3 55 + A4 6 (exact 61 · deviation 91).
+  `enc_rc4.c` usage 9 regraded `exact` (J7 live rc4). W1-C prose no
+  longer claims W0e `chpwfail` framing.
+
 - **W1-H J5.** `chaos-gate.sh` reads `KERBER_REQUIRE_NETEM=1` and
   dies unless netem was applied; otherwise it skips netem and still
   runs the memory and failover cells. `prod-gate.sh` missing
