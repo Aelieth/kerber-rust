@@ -46,6 +46,11 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   `cpw_self_without_initial_is_auth_initial`, `get_privs_is_all_ones`.
   Gate: `scripts/kadmin-gate.sh` list/addpol/self-getprinc both legs.
 
+- **W1-H J1c.** GSS acceptor sname is stored on the context. Non-self
+  ops over `kadmin/changepw` are denied (`CHANGEPW_SERVICE`). iprop
+  refuses a non-`kiprop` acceptor with RPC `AUTH_TOOWEAK`. Unit:
+  `changepw_service_listprincs_is_auth_list`.
+
 - **W0f I8.** Ledger header recount 244 = 116+67+61 (exact 54 ·
   deviation 96). AS time/flag anchors are `issue.rs:1697-1734`.
   `diffsend` names in the ORDER/FAST/AD-FX-ARMOR rows are backticked

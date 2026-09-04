@@ -182,6 +182,8 @@ pub fn build_ap_req_with_cksum(
 pub struct ApVerifyOk {
     /// Decrypted ticket part.
     pub ticket_part: EncTicketPart,
+    /// Ticket server name (acceptor).
+    pub sname: krb5_types::PrincipalName,
     /// Decrypted authenticator.
     pub authenticator: Authenticator,
     /// Whether the initiator requested mutual authentication.
@@ -373,6 +375,7 @@ fn verify_inner(
     }
     Ok(ApVerifyOk {
         ticket_part,
+        sname: ap.ticket.sname.clone(),
         authenticator,
         mutual_required: ap.ap_options.wants_mutual(),
     })

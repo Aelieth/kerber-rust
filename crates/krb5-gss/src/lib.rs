@@ -162,6 +162,8 @@ pub struct GssContext {
     gss_flags: u32,
     /// Ticket INITIAL flag (`gss_krb5_get_tkt_flags` / `TKT_FLG_INITIAL`).
     ticket_initial: bool,
+    /// Ticket sname (`accept_sec_context` / CHANGEPW_SERVICE / kiprop).
+    pub acceptor: Option<krb5_types::PrincipalName>,
 }
 
 /// GSS IOV buffer type (MIT `gssapi_ext.h`).
@@ -287,6 +289,7 @@ impl GssContext {
                 lifetime_end: 0,
                 gss_flags: flags,
                 ticket_initial: false,
+                acceptor: None,
             },
             token,
         ))
@@ -330,6 +333,7 @@ impl GssContext {
             lifetime_end: 0,
             gss_flags: 0,
             ticket_initial: false,
+            acceptor: None,
         };
         let params = krb5_protocol::ApVerifyParams {
             expected_server,
@@ -403,6 +407,7 @@ impl GssContext {
             lifetime_end: ok.ticket_part.endtime.unix_seconds(),
             gss_flags,
             ticket_initial: ok.ticket_part.flags.initial(),
+            acceptor: Some(ok.sname.clone()),
         };
         let mut ap_rep_tok = None;
         if want_mutual {
@@ -949,6 +954,7 @@ impl GssContext {
             lifetime_end,
             gss_flags,
             ticket_initial: false,
+            acceptor: None,
         })
     }
 
@@ -2817,6 +2823,7 @@ mod tests {
             lifetime_end: 0,
             gss_flags: GSS_C_INTEG | GSS_C_CONF,
             ticket_initial: false,
+            acceptor: None,
         }
     }
 

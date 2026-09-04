@@ -154,7 +154,11 @@ fn main() {
 
 fn acceptor_keys(store: &PrincipalStore) -> Vec<ProtocolKey> {
     let mut keys = Vec::new();
-    for name in [documented_kadmin(), documented_kiprop()] {
+    for name in [
+        documented_kadmin(),
+        documented_changepw(),
+        documented_kiprop(),
+    ] {
         if let Some(p) = store.get_name(&name) {
             keys.extend(p.keys.iter().map(|k| k.key.clone()));
         }

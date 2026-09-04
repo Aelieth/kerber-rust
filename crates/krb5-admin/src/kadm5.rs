@@ -47,7 +47,10 @@ const GSS_PRIVACY: u32 = 3;
 const MSG_CALL: u32 = 0;
 const MSG_REPLY: u32 = 1;
 const MSG_ACCEPTED: u32 = 0;
+const MSG_DENIED: u32 = 1;
 const SUCCESS: u32 = 0;
+const REJECT_AUTH_ERROR: u32 = 1;
+const AUTH_TOOWEAK: u32 = 5;
 
 const CREATE_PRINCIPAL: u32 = 1;
 const DELETE_PRINCIPAL: u32 = 2;
@@ -341,10 +344,21 @@ fn handle_rpc(
     );
     let args = &plain[4..];
     let actor = ctx.client.clone().ok_or(Error::AclDenied)?;
+    if iprop && !kiprop_acceptor(ctx) {
+        return Ok(rpc_reply_weakauth(xid));
+    }
     let result = if iprop {
         dispatch_iprop(store, acl, &actor, proc, args)
     } else {
-        dispatch_kadm5_ticket(store, acl, &actor, proc, args, ctx.ticket_is_initial())?
+        dispatch_kadm5_ticket(
+            store,
+            acl,
+            &actor,
+            proc,
+            args,
+            ctx.ticket_is_initial(),
+            changepw_acceptor(ctx),
+        )?
     };
     let mut inner = Vec::with_capacity(4 + result.len());
     inner.extend_from_slice(&seq.to_be_bytes());
@@ -364,7 +378,7 @@ fn handle_auth_gssapi(
     store: &SharedStore,
     acl: &Acl,
     service_keys: &[ProtocolKey],
-    expected_server: &PrincipalName,
+    _expected_server: &PrincipalName,
     expected_realm: &str,
     agss: &mut Option<Agss>,
     xid: u32,
@@ -396,12 +410,11 @@ fn handle_auth_gssapi(
         let mut ar = XdrR::new(args);
         let arg_ver = ar.u32()?;
         let token = ar.opaque()?;
-        let server = if iprop { None } else { Some(expected_server) };
         let (ctx, out_tok) = match GssContext::accept_sec_context(
             &token,
             service_keys,
             None,
-            server,
+            None,
             Some(expected_realm),
             rcache,
         ) {
@@ -503,6 +516,9 @@ fn handle_auth_gssapi(
     }
     let kadm_args = &plain[4..];
     let actor = st.ctx.client.clone().ok_or(Error::AclDenied)?;
+    if iprop && !kiprop_acceptor(&st.ctx) {
+        return Ok(rpc_reply_weakauth(xid));
+    }
     let result = if iprop {
         dispatch_iprop(store, acl, &actor, proc, kadm_args)
     } else {
@@ -513,6 +529,7 @@ fn handle_auth_gssapi(
             proc,
             kadm_args,
             st.ctx.ticket_is_initial(),
+            changepw_acceptor(&st.ctx),
         )?
     };
     let mut inner = Vec::with_capacity(4 + result.len());
@@ -542,6 +559,16 @@ fn encode_init_res(
     w.u32(minor);
     w.opaque(token);
     w.opaque(signed_isn);
+}
+
+fn rpc_reply_weakauth(xid: u32) -> Vec<u8> {
+    let mut w = XdrW::default();
+    w.u32(xid);
+    w.u32(MSG_REPLY);
+    w.u32(MSG_DENIED);
+    w.u32(REJECT_AUTH_ERROR);
+    w.u32(AUTH_TOOWEAK);
+    w.b
 }
 
 fn rpc_reply_clear(xid: u32, body: &[u8]) -> Vec<u8> {
@@ -1379,6 +1406,20 @@ fn is_self(actor: &str, name: &PrincipalName, realm: &str) -> bool {
     krb5_types::principal_compare(name, realm, &actor_name, arealm)
 }
 
+fn changepw_acceptor(ctx: &GssContext) -> bool {
+    ctx.acceptor
+        .as_ref()
+        .is_some_and(|n| n.components_joined() == "kadmin/changepw")
+}
+
+fn kiprop_acceptor(ctx: &GssContext) -> bool {
+    ctx.acceptor.as_ref().is_some_and(|n| {
+        n.components_joined()
+            .split_once('/')
+            .is_some_and(|(c, _)| c == "kiprop")
+    })
+}
+
 fn store_realm(store: &SharedStore) -> String {
     store
         .read()
@@ -1395,7 +1436,7 @@ fn dispatch_kadm5(
     proc: u32,
     args: &[u8],
 ) -> Result<Vec<u8>, Error> {
-    dispatch_kadm5_ticket(store, acl, actor, proc, args, true)
+    dispatch_kadm5_ticket(store, acl, actor, proc, args, true, false)
 }
 
 fn dispatch_kadm5_ticket(
@@ -1405,6 +1446,7 @@ fn dispatch_kadm5_ticket(
     proc: u32,
     args: &[u8],
     initial: bool,
+    changepw: bool,
 ) -> Result<Vec<u8>, Error> {
     let realm = store_realm(store);
     match proc {
@@ -1445,7 +1487,7 @@ fn dispatch_kadm5_ticket(
             }
         }
         GET_PRINCS => {
-            if acl.check(actor, krb5_kdc::AdminOp::List, None).is_err() {
+            if changepw || acl.check(actor, krb5_kdc::AdminOp::List, None).is_err() {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_LIST));
             }
             let expr = parse_gprincs(args)?;
@@ -1534,9 +1576,10 @@ fn dispatch_kadm5_ticket(
         CREATE_PRINCIPAL | CREATE_PRINCIPAL3 => {
             let (name, pass, policy) = parse_create(args, proc == CREATE_PRINCIPAL3)?;
             let tid = acl_id(&name, &realm);
-            if acl
-                .check(actor, krb5_kdc::AdminOp::Create, Some(&tid))
-                .is_err()
+            if changepw
+                || acl
+                    .check(actor, krb5_kdc::AdminOp::Create, Some(&tid))
+                    .is_err()
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_ADD));
             }
@@ -1604,13 +1647,14 @@ fn dispatch_kadm5_ticket(
                 return Ok(generic_ret(API_V2, KADM5_AUTH_INITIAL));
             }
             if !self_change
-                && acl
-                    .check(
-                        actor,
-                        krb5_kdc::AdminOp::ChangePassword,
-                        Some(&acl_id(&name, &realm)),
-                    )
-                    .is_err()
+                && (changepw
+                    || acl
+                        .check(
+                            actor,
+                            krb5_kdc::AdminOp::ChangePassword,
+                            Some(&acl_id(&name, &realm)),
+                        )
+                        .is_err())
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
             }
@@ -1695,7 +1739,7 @@ fn dispatch_kadm5_ticket(
         }
         GET_POLS => {
             let (api, expr) = parse_gpols(args);
-            if acl.check(actor, krb5_kdc::AdminOp::List, None).is_err() {
+            if changepw || acl.check(actor, krb5_kdc::AdminOp::List, None).is_err() {
                 return Ok(generic_ret(api, KADM5_AUTH_LIST));
             }
             let g = store
@@ -1743,13 +1787,14 @@ fn dispatch_kadm5_ticket(
         }
         EXTRACT_KEYS => {
             let (api, name, kvno) = parse_extract(args)?;
-            if acl
-                .check(
-                    actor,
-                    krb5_kdc::AdminOp::Extract,
-                    Some(&acl_id(&name, &realm)),
-                )
-                .is_err()
+            if changepw
+                || acl
+                    .check(
+                        actor,
+                        krb5_kdc::AdminOp::Extract,
+                        Some(&acl_id(&name, &realm)),
+                    )
+                    .is_err()
             {
                 return Ok(generic_ret(api, KADM5_AUTH_EXTRACT));
             }
@@ -1811,13 +1856,14 @@ fn dispatch_kadm5_ticket(
         }
         SETKEY_PRINCIPAL | SETKEY_PRINCIPAL3 | SETKEY_PRINCIPAL4 => {
             let (api, name, keys, keepold) = parse_setkey(args, proc)?;
-            if acl
-                .check(
-                    actor,
-                    krb5_kdc::AdminOp::SetKey,
-                    Some(&acl_id(&name, &realm)),
-                )
-                .is_err()
+            if changepw
+                || acl
+                    .check(
+                        actor,
+                        krb5_kdc::AdminOp::SetKey,
+                        Some(&acl_id(&name, &realm)),
+                    )
+                    .is_err()
             {
                 return Ok(generic_ret(api, KADM5_AUTH_SETKEY));
             }
@@ -2678,9 +2724,18 @@ mod tests {
             CHPASS_PRINCIPAL,
             &w.b,
             false,
+            false,
         )
         .unwrap();
         assert_eq!(ret_code(&out), KADM5_AUTH_INITIAL);
+    }
+
+    #[test]
+    fn changepw_service_listprincs_is_auth_list() {
+        let (store, acl, actor) = setup();
+        let out = dispatch_kadm5_ticket(&store, &acl, &actor, GET_PRINCS, &list_args(), true, true)
+            .unwrap();
+        assert_eq!(ret_code(&out), KADM5_AUTH_LIST);
     }
 
     #[test]
