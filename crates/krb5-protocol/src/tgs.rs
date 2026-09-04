@@ -511,8 +511,7 @@ fn tgs_once(
         return Err(Error::NonceMismatch);
     }
     tgs_sname_ok(&requested, &inner.ticket.sname, &enc_part.sname)?;
-    let session_etype = EncryptionType::from_iana(enc_part.key.keytype)
-        .or_else(|_| EncryptionType::known(enc_part.key.keytype))?;
+    let session_etype = EncryptionType::known(enc_part.key.keytype)?;
     let session_key = ProtocolKey::from_bytes(session_etype, enc_part.key.keyvalue.as_ref())?;
     Ok(TgsOutcome {
         ticket: inner.ticket,

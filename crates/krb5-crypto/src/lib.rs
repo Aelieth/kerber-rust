@@ -43,7 +43,7 @@ pub use derive::{DerivedKeys, derive_keys};
 pub use error::Error;
 pub use etype::{
     EncryptionType, KeyUsage, cksumtype_is_coll_proof, cksumtype_is_keyed, cksumtype_is_known,
-    cksumtype_is_unkeyed,
+    cksumtype_is_unkeyed, default_enctype_list, parse_enctype_list, parse_keysalt_list,
 };
 pub use key::ProtocolKey;
 pub use modp::{

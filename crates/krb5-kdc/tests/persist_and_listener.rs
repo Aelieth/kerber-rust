@@ -145,6 +145,7 @@ fn reload_if_stale_sees_kadmin_create() {
     let (mut writer, acl) = bootstrap_documented().unwrap();
     save_store(&writer, &db, &stash).unwrap();
     let mut reader = load_store(&db, &stash).unwrap();
+    reader.policy.allow_rc4 = true;
     let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["extra"]);
     writer.persist_paths = Some((db.clone(), stash.clone()));
     writer
@@ -154,6 +155,10 @@ fn reload_if_stale_sees_kadmin_create() {
     assert!(
         reader.get_name(&extra).is_some(),
         "KDC must pick up kadmind create from the shared db"
+    );
+    assert!(
+        reader.policy.allow_rc4,
+        "kdc.conf allow_rc4 must survive dump reload"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

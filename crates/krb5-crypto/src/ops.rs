@@ -491,10 +491,7 @@ pub fn checksum(key: &ProtocolKey, usage: KeyUsage, message: &[u8]) -> Result<Ve
 fn checksum_inner(key: &ProtocolKey, usage: KeyUsage, message: &[u8]) -> Result<Vec<u8>, Error> {
     match key.etype() {
         EncryptionType::Rc4Hmac => {
-            let mut k = hmac_md5_simple(key.as_bytes(), &usage.get().to_le_bytes())?;
-            let out = hmac_md5_simple(&k, message)?;
-            k.zeroize();
-            Ok(out)
+            hmac_md5_arcfour_checksum(key.as_bytes(), usage.get(), message, -138)
         }
         EncryptionType::Des3CbcSha1 => {
             let kc = derive::dk_rfc3961(key.as_bytes(), &usage.derivation_constant(0x99))?;

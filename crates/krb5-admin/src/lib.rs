@@ -9,6 +9,7 @@ mod kadm5;
 mod kprop;
 mod listen;
 
+use krb5_crypto::EncryptionType;
 use krb5_kdc::{
     Acl, AdminOp, KDB_LOCKDOWN_KEYS, KDB_OK_TO_AUTH_AS_DELEGATE, KDB_REQUIRES_PRE_AUTH,
     NamedPolicy, PrincipalStore,
@@ -67,6 +68,8 @@ pub struct KadminArgs {
     pub attr_set: u32,
     /// `-attr` bits.
     pub attr_clear: u32,
+    /// `addprinc -e` keysalt list.
+    pub etypes: Vec<EncryptionType>,
 }
 
 /// MIT `+requires_preauth` (and the matching `-requires_preauth` clear).
@@ -117,6 +120,14 @@ pub fn parse_kadmin_args(parts: &[&str]) -> Result<KadminArgs, String> {
             "-k" => {
                 i += 1;
                 out.ktpath = Some(parts.get(i).copied().ok_or("-k needs a path")?.to_owned());
+            }
+            "-e" => {
+                i += 1;
+                let spec = parts.get(i).copied().ok_or("-e needs a keysalt list")?;
+                out.etypes = krb5_crypto::parse_keysalt_list(spec);
+                if out.etypes.is_empty() {
+                    return Err(format!("-e unknown keysalt {spec}"));
+                }
             }
             s if s.starts_with('+') => {
                 let bit = kadmin_attr_bit(&s[1..]).ok_or_else(|| format!("unknown flag {s}"))?;
@@ -242,9 +253,23 @@ impl<'a> AdminSession<'a> {
     ///
     /// [`Error::AclDenied`] when the actor is not permitted.
     pub fn create_password(&mut self, name: &PrincipalName, password: &[u8]) -> Result<(), Error> {
+        self.create_password_etypes(name, password, &[])
+    }
+
+    /// `addprinc -e`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AclDenied`] when the actor is not permitted.
+    pub fn create_password_etypes(
+        &mut self,
+        name: &PrincipalName,
+        password: &[u8],
+        etypes: &[EncryptionType],
+    ) -> Result<(), Error> {
         self.reload()?;
         self.store
-            .create_password(self.acl, &self.actor, name, password)
+            .create_password_etypes(self.acl, &self.actor, name, password, etypes)
             .map_err(Error::from)
     }
 
@@ -254,9 +279,22 @@ impl<'a> AdminSession<'a> {
     ///
     /// ACL or already exists.
     pub fn create_randkey(&mut self, name: &PrincipalName) -> Result<(), Error> {
+        self.create_randkey_etypes(name, &[])
+    }
+
+    /// `addprinc -randkey -e`.
+    ///
+    /// # Errors
+    ///
+    /// ACL or already exists.
+    pub fn create_randkey_etypes(
+        &mut self,
+        name: &PrincipalName,
+        etypes: &[EncryptionType],
+    ) -> Result<(), Error> {
         self.reload()?;
         self.store
-            .create_host(self.acl, &self.actor, name)
+            .create_host_etypes(self.acl, &self.actor, name, etypes)
             .map_err(Error::from)
     }
 
@@ -2466,6 +2504,9 @@ mod tests {
         assert_eq!(a.attr_set, KDB_LOCKDOWN_KEYS);
         let a = parse_kadmin_args(&["+ok_to_auth_as_delegate", "host/x"]).unwrap();
         assert_eq!(a.attr_set, KDB_OK_TO_AUTH_AS_DELEGATE);
+        let a = parse_kadmin_args(&["-e", "rc4-hmac:normal", "-pw", "x", "rc4user"]).unwrap();
+        assert_eq!(a.etypes, vec![EncryptionType::Rc4Hmac]);
+        assert_eq!(a.name, "rc4user");
     }
 
     fn max_kvno(store: &PrincipalStore, name: &PrincipalName) -> u32 {

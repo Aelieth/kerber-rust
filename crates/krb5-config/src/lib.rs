@@ -54,6 +54,10 @@ pub struct Krb5Conf {
     pub default_realm: Option<String>,
     /// `allow_weak_crypto`.
     pub allow_weak_crypto: bool,
+    /// `allow_rc4` (unset = false at the KDC unless kdc.conf set it).
+    pub allow_rc4: Option<bool>,
+    /// `allow_des3`.
+    pub allow_des3: Option<bool>,
     /// Clock skew in seconds (default 300).
     pub clockskew: u32,
     /// `dns_lookup_kdc`.
@@ -129,6 +133,14 @@ pub struct KdcConf {
     pub kdc_user: Option<String>,
     /// `allow_weak_crypto`.
     pub allow_weak_crypto: bool,
+    /// `allow_rc4` (`[libdefaults]` / `[kdcdefaults]`).
+    pub allow_rc4: Option<bool>,
+    /// `allow_des3`.
+    pub allow_des3: Option<bool>,
+    /// `permitted_enctypes` (empty = MIT DEFAULT).
+    pub permitted_enctypes: Vec<String>,
+    /// Realm `supported_enctypes` keysalt list.
+    pub supported_enctypes: Vec<String>,
     /// Per-principal `requires_preauth` default.
     pub requires_preauth: bool,
     /// `master_key_type` (MIT name, e.g. `aes256-cts-hmac-sha384-192`).
@@ -156,6 +168,10 @@ impl Default for KdcConf {
             key_stash_file: None,
             kdc_user: None,
             allow_weak_crypto: false,
+            allow_rc4: None,
+            allow_des3: None,
+            permitted_enctypes: Vec::new(),
+            supported_enctypes: Vec::new(),
             requires_preauth: true,
             master_key_type: None,
             db_library: None,
@@ -303,6 +319,9 @@ impl KdcConf {
             }
             if section == "kdcdefaults" {
                 parse_kdcdefaults(&mut conf, line);
+            }
+            if section == "libdefaults" {
+                parse_kdc_libdefaults(&mut conf, line);
             }
         }
         Ok(conf)
@@ -553,6 +572,12 @@ fn parse_libdefaults(conf: &mut Krb5Conf, seen: &mut BTreeSet<String>, line: &st
         "allow_weak_crypto" if take_first(seen, "allow_weak_crypto") => {
             conf.allow_weak_crypto = truthy(&v);
         }
+        "allow_rc4" if take_first(seen, "allow_rc4") => {
+            conf.allow_rc4 = Some(truthy(&v));
+        }
+        "allow_des3" if take_first(seen, "allow_des3") => {
+            conf.allow_des3 = Some(truthy(&v));
+        }
         "clockskew" if take_first(seen, "clockskew") => {
             conf.clockskew = parse_duration_secs(&v)
                 .and_then(|s| u32::try_from(s).ok())
@@ -667,9 +692,16 @@ fn parse_kdcdefaults(conf: &mut KdcConf, line: &str) {
                 .collect();
         }
         "allow_weak_crypto" => conf.allow_weak_crypto = truthy(&v),
+        "allow_rc4" => conf.allow_rc4 = Some(truthy(&v)),
+        "allow_des3" => conf.allow_des3 = Some(truthy(&v)),
+        "permitted_enctypes" => conf.permitted_enctypes = split_ws(&v),
         "reject_bad_transit" => conf.reject_bad_transit = truthy(&v),
         _ => {}
     }
+}
+
+fn parse_kdc_libdefaults(conf: &mut KdcConf, line: &str) {
+    parse_kdcdefaults(conf, line);
 }
 
 fn parse_kdc_realm_line(conf: &mut KdcConf, line: &str) {
@@ -687,6 +719,10 @@ fn parse_kdc_realm_line(conf: &mut KdcConf, line: &str) {
         "key_stash_file" => conf.key_stash_file = Some(PathBuf::from(v)),
         "kdc_user" => conf.kdc_user = Some(v),
         "allow_weak_crypto" => conf.allow_weak_crypto = truthy(&v),
+        "allow_rc4" => conf.allow_rc4 = Some(truthy(&v)),
+        "allow_des3" => conf.allow_des3 = Some(truthy(&v)),
+        "permitted_enctypes" => conf.permitted_enctypes = split_ws(&v),
+        "supported_enctypes" => conf.supported_enctypes = split_ws(&v),
         "requires_preauth" => conf.requires_preauth = truthy(&v),
         "master_key_type" => conf.master_key_type = Some(v),
         "database_module" | "db_library" => conf.db_library = Some(v),
@@ -1227,6 +1263,8 @@ mod tests {
         assert!(c.kdc_timeout.is_none());
         assert!(c.max_retries.is_none());
         assert!(!c.allow_weak_crypto);
+        assert!(c.allow_rc4.is_none());
+        assert!(c.allow_des3.is_none());
         assert_eq!(c.clockskew, 300);
         assert_eq!(c.kdcs["KERBER.TEST"][0].host, "127.0.0.1");
         assert_eq!(c.kdcs["KERBER.TEST"][0].port, 88);
@@ -1426,6 +1464,31 @@ mod tests {
         );
         assert_eq!(c.kdc_listen[0], "127.0.0.1:88");
         assert!(c.reject_bad_transit);
+        let rc4 = KdcConf::parse(
+            r"
+[libdefaults]
+    allow_rc4 = true
+    allow_des3 = yes
+    permitted_enctypes = aes256-cts arcfour-hmac
+
+[kdcdefaults]
+    allow_weak_crypto = true
+
+[realms]
+    KERBER.TEST = {
+        supported_enctypes = aes256-cts:normal rc4-hmac:normal
+    }
+",
+        )
+        .unwrap();
+        assert_eq!(rc4.allow_rc4, Some(true));
+        assert_eq!(rc4.allow_des3, Some(true));
+        assert!(rc4.allow_weak_crypto);
+        assert_eq!(rc4.permitted_enctypes, vec!["aes256-cts", "arcfour-hmac"]);
+        assert_eq!(
+            rc4.supported_enctypes,
+            vec!["aes256-cts:normal", "rc4-hmac:normal"]
+        );
         let mit = KdcConf::parse(
             r"
 [realms]

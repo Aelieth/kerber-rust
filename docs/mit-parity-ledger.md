@@ -26,8 +26,8 @@ Schema: `MIT file:line | check | MIT status + wire code | Rust site | Rust e_tex
 Verdict ∈ {exact, stricter-documented (`docs/security.md` row), absent,
 deviation, deferred (reason + promotion oracle)}. Proof `none` only
 with deferred. A named gate cell or `diffsend` case that does not exist
-is `proposed`. The twelve live `diffsend` cases are `garbage-pdu`,
-`unknown-cname`, `etype-nosupp`, `wrong-realm`, `pauser-no-preauth`,
+is `proposed`. The thirteen live `diffsend` cases are `garbage-pdu`,
+`unknown-cname`, `etype-nosupp`, `as-session-enctype`, `wrong-realm`, `pauser-no-preauth`,
 `skewed-timestamp`, `unknown-sname`, `as-success`, `tgs-success`,
 `tgs-not-a-tgt`, `tgt-expired`, `tgt-nyv`.
 
@@ -37,7 +37,7 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 
 Counts (after Part 0 + W0e H8 + W0f I8 recount):
 **244** = A1 116 + A2 67 + A3 61.
-exact 57 · stricter-documented 11 · deviation 95 ·
+exact 60 · stricter-documented 11 · deviation 92 ·
 absent 66 · deferred 15.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
@@ -252,7 +252,7 @@ mismatches, not extra statuses.
 | ORDER tgs_policy.c:746 vs :768 | svc_policy then S4U2Proxy policy then anon then KDB | MIT last is KDB | issue.rs:694 plugin **before** fetch/flags/S4U | plugin earlier | deviation | proposed: diffsend plugin+locked server |
 | ORDER tgs_policy.c:682 vs :746 | opts/times/nontgt **before** svc_policy | TGT NOT FORWARDABLE before SERVER LOCKED | issue.rs:709 flags before missing opts checks | svc flags early | deviation | proposed: diffsend FORWARDED+locked server |
 | do_tgs_req.c:898 | `check_indicators` require-auth | HIGHER_AUTHENTICATION_REQUIRED 12 | — | — | absent | proposed: diffsend `+require_auth` string attr |
-| do_tgs_req.c:358 `gen_session_key` | no session etype intersection | BAD_ENCRYPTION_TYPE 14 | issue.rs:698 `best_key` fallback | `no server key` 7 only if no keys; TGS does not use `select_etype` | deviation | proposed: diffsend TGS etype list disjoint from server (laxer) |
+| do_tgs_req.c:358 `gen_session_key` | no session etype intersection | BAD_ENCRYPTION_TYPE 14 | `select_session_keytype` on the service | `BAD_ENCRYPTION_TYPE` **14** | exact | `issue_acl_ap.rs::tgs_session_enctypes_attr_is_membership`; diffsend `as-session-enctype` |
 | do_tgs_req.c:1006 | `get_first_current_key` fail | FINDING_SERVER_KEY (often 60) | issue.rs:705 | `no server key` 7 | deviation | proposed: diffsend keyless service |
 | do_tgs_req.c:1046 | `handle_authdata` fail | HANDLE_AUTHDATA (varies) | issue.rs:1119 `mint_ticket` PAC | `PAC logon: {e}` 31 possible; no HANDLE_AUTHDATA | absent | proposed: diffsend TGS req authdata / PAC sign fail |
 | do_tgs_req.c:1103 | `return_enc_padata` fail | KDC_RETURN_ENC_PADATA | — | — | deferred | none (FAST+referral enc padata oracle) |
@@ -304,8 +304,8 @@ Wire = RFC 4120 protocol code (MIT `errcode_to_protocol`).
 | kdc_util.c:790-792 | server `DISALLOW_SVR` (AS) | `SERVICE NOT ALLOWED` **27** | `issue.rs:1727-1729` (skip if ENC_TKT_IN_SKEY — TGS exemption copied onto AS) | `SERVICE NOT ALLOWED` **27** (AS with ENC_TKT_IN_SKEY against DISALLOW_SVR **issues**) | deviation (security) | proposed: diffsend `as-service-not-allowed`; TGS `scripts/flags-gate.sh` DISALLOW_SVR |
 | kdc_util.c:700-712,796-797 | `restrict_anon` && anon client && !local TGS | `ANONYMOUS NOT ALLOWED` **12** | no `restrict_anon`; ANONYMOUS bit not in `unsupported_bits` allow-list | AS ANONYMOUS → `unsupported KDCOptions` **13** | absent | proposed: diffsend `as-anon-restrict`; `as-anonymous-principal` |
 | do_as_req.c:718-724 | `REQUEST_ANONYMOUS` && cname ≠ WELLKNOWN/ANONYMOUS | `VALIDATE_ANONYMOUS_PRINCIPAL` **13** | same: bit rejected before principal check | `unsupported KDCOptions` **13** | deviation | proposed: diffsend `as-anon-cname` |
-| do_as_req.c:641-648 | `select_session_keytype`==0 (server session_enctypes + permitted) | `BAD_ENCRYPTION_TYPE` **14** | `issue.rs:1211-1223` first requested etype with **client** long-term key | `no common etype` **14** | deviation | `issue_acl_ap.rs::no_common_etype_is_etype_nosupp`; `scripts/differential-gate.sh` etype-nosupp; proposed: diffsend `as-session-etype` |
-| kdc_util.c:1084-1112 | session etype vs server `session_enctypes` / AES256 default | 0 → BAD_ENCRYPTION_TYPE | session=`select_etype` (client key etype), not server session list | coupled to client key | deviation | proposed: diffsend `as-session-enctypes-attr` |
+| do_as_req.c:641-648 | `select_session_keytype`==0 (server session_enctypes + permitted) | `BAD_ENCRYPTION_TYPE` **14** | `select_session_keytype` on the AS server | `BAD_ENCRYPTION_TYPE` **14** | exact | `issue_acl_ap.rs::no_common_etype_is_etype_nosupp`; diffsend `as-session-enctype`; `scripts/differential-gate.sh` |
+| kdc_util.c:1084-1112 | session etype vs server `session_enctypes` / AES256 default | 0 → BAD_ENCRYPTION_TYPE | `dbentry_supports_enctype` (attr, else AES256-sha1, else long-term key) | membership, not client key | exact | `issue_acl_ap.rs::session_enctypes_attr_is_membership_not_client_key`; `session_enctypes_rc4_with_allow_rc4_issues_rc4_session` |
 | do_as_req.c:736-741 | `select_client_key` decrypt fail | `DECRYPT_CLIENT_KEY` + decrypt err | keys already in store; no runtime decrypt | — | deferred | none (dump-time decrypt only) |
 | do_as_req.c:747-751 | `kdc_fast_read_cookie` | `READ_COOKIE` | `preauth.rs:246-254` SPAKE/FAST cookie | `bad cookie` **24**; MIT `fast_util.c:610` **always returns 0** (status dead in 1.22.2) | absent | proposed: diffsend `as-mit1-cookie` |
 | do_as_req.c:439-442 | `check_padata` fail | `PREAUTH_FAILED` **24** (vague→**60**) | `as_reply` crypto→**24** `preauth`; EncTs/SPAKE/PKINIT own texts | not the string `PREAUTH_FAILED` | deviation | proposed: diffsend `as-bad-enc-ts-etext`; `issue_acl_ap.rs` wrong-password **24** |

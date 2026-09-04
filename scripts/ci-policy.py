@@ -31,6 +31,7 @@ DIFFSEND_CASES = frozenset(
         "garbage-pdu",
         "unknown-cname",
         "etype-nosupp",
+        "as-session-enctype",
         "wrong-realm",
         "pauser-no-preauth",
         "skewed-timestamp",

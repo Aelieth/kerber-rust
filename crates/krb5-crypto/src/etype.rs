@@ -255,17 +255,27 @@ impl EncryptionType {
         if let Ok(num) = n.parse::<i32>() {
             return Self::known(num);
         }
-        match n {
-            "aes128-cts-hmac-sha1-96" | "aes128-cts" => Ok(Self::Aes128CtsHmacSha196),
-            "aes256-cts-hmac-sha1-96" | "aes256-cts" => Ok(Self::Aes256CtsHmacSha196),
-            "aes128-cts-hmac-sha256-128" => Ok(Self::Aes128CtsHmacSha256128),
-            "aes256-cts-hmac-sha384-192" => Ok(Self::Aes256CtsHmacSha384192),
-            "des3-cbc-sha1" | "des3-cbc-sha1-kd" => Ok(Self::Des3CbcSha1),
-            "arcfour-hmac" | "rc4-hmac" => Ok(Self::Rc4Hmac),
+        match n.to_ascii_lowercase().as_str() {
+            "aes128-cts-hmac-sha1-96" | "aes128-cts" | "aes128-sha1" => {
+                Ok(Self::Aes128CtsHmacSha196)
+            }
+            "aes256-cts-hmac-sha1-96" | "aes256-cts" | "aes256-sha1" => {
+                Ok(Self::Aes256CtsHmacSha196)
+            }
+            "aes128-cts-hmac-sha256-128" | "aes128-sha2" => Ok(Self::Aes128CtsHmacSha256128),
+            "aes256-cts-hmac-sha384-192" | "aes256-sha2" => Ok(Self::Aes256CtsHmacSha384192),
+            "des3-cbc-sha1" | "des3-cbc-sha1-kd" | "des3-hmac-sha1" => Ok(Self::Des3CbcSha1),
+            "arcfour-hmac" | "rc4-hmac" | "arcfour-hmac-md5" => Ok(Self::Rc4Hmac),
             "camellia128-cts-cmac" | "camellia128-cts" => Ok(Self::Camellia128CtsCmac),
             "camellia256-cts-cmac" | "camellia256-cts" => Ok(Self::Camellia256CtsCmac),
             _ => Err(Error::UnsupportedEtype(0)),
         }
+    }
+
+    /// MIT `etype.c` `ETYPE_WEAK`. None of the implemented types set that flag.
+    #[must_use]
+    pub const fn is_mit_weak(self) -> bool {
+        false
     }
 
     /// RFC 8009 / RFC 6803 `enctype-name` prepended to the salt, or `None`
@@ -311,4 +321,134 @@ pub const fn cksumtype_is_known(cksumtype: i32) -> bool {
 #[must_use]
 pub const fn cksumtype_is_coll_proof(cksumtype: i32) -> bool {
     cksumtype_is_known(cksumtype)
+}
+
+/// MIT `default_enctype_list` (`init_ctx.c:59-66`).
+#[must_use]
+pub const fn default_enctype_list() -> [EncryptionType; 8] {
+    [
+        EncryptionType::Aes256CtsHmacSha196,
+        EncryptionType::Aes128CtsHmacSha196,
+        EncryptionType::Aes256CtsHmacSha384192,
+        EncryptionType::Aes128CtsHmacSha256128,
+        EncryptionType::Des3CbcSha1,
+        EncryptionType::Rc4Hmac,
+        EncryptionType::Camellia128CtsCmac,
+        EncryptionType::Camellia256CtsCmac,
+    ]
+}
+
+/// MIT `krb5int_parse_enctype_list`. Empty result is `None` (`KRB5_CONFIG_ETYPE_NOSUPP`).
+#[must_use]
+pub fn parse_enctype_list(profstr: &str, allow_weak: bool) -> Option<Vec<EncryptionType>> {
+    let mut list = Vec::new();
+    for token in profstr.split(|c: char| c.is_ascii_whitespace() || c == ',') {
+        let token = token.trim();
+        if token.is_empty() {
+            continue;
+        }
+        let (add, rest) = if let Some(r) = token.strip_prefix('+') {
+            (true, r)
+        } else if let Some(r) = token.strip_prefix('-') {
+            (false, r)
+        } else {
+            (true, token)
+        };
+        let key = rest.to_ascii_lowercase();
+        let family: Vec<EncryptionType> = match key.as_str() {
+            "default" => default_enctype_list().into_iter().collect(),
+            "des3" => vec![EncryptionType::Des3CbcSha1],
+            "aes" => vec![
+                EncryptionType::Aes256CtsHmacSha196,
+                EncryptionType::Aes128CtsHmacSha196,
+                EncryptionType::Aes256CtsHmacSha384192,
+                EncryptionType::Aes128CtsHmacSha256128,
+            ],
+            "rc4" => vec![EncryptionType::Rc4Hmac],
+            "camellia" => vec![
+                EncryptionType::Camellia256CtsCmac,
+                EncryptionType::Camellia128CtsCmac,
+            ],
+            _ => match EncryptionType::from_mit_name(&key) {
+                Ok(e) => vec![e],
+                Err(_) => continue,
+            },
+        };
+        for e in family {
+            if !allow_weak && e.is_mit_weak() {
+                continue;
+            }
+            if add {
+                if !list.contains(&e) {
+                    list.push(e);
+                }
+            } else {
+                list.retain(|x| *x != e);
+            }
+        }
+    }
+    if list.is_empty() { None } else { Some(list) }
+}
+
+/// MIT keysalt list (`aes256-cts:normal rc4-hmac:normal`). Unknown tokens are skipped.
+#[must_use]
+pub fn parse_keysalt_list(s: &str) -> Vec<EncryptionType> {
+    let mut out = Vec::new();
+    for tok in s.split(|c: char| c.is_ascii_whitespace() || c == ',') {
+        let tok = tok.trim();
+        if tok.is_empty() {
+            continue;
+        }
+        let et = tok.split_once(':').map_or(tok, |(e, _)| e);
+        if let Ok(e) = EncryptionType::from_mit_name(et)
+            && !out.contains(&e)
+        {
+            out.push(e);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_enctype_list_families_and_minus() {
+        let v = parse_enctype_list("aes -aes256-cts rc4-hmac", false).unwrap();
+        assert_eq!(
+            v,
+            vec![
+                EncryptionType::Aes128CtsHmacSha196,
+                EncryptionType::Aes256CtsHmacSha384192,
+                EncryptionType::Aes128CtsHmacSha256128,
+                EncryptionType::Rc4Hmac,
+            ]
+        );
+        assert!(parse_enctype_list("nosuch", false).is_none());
+        assert!(
+            parse_enctype_list("DEFAULT", false)
+                .unwrap()
+                .contains(&EncryptionType::Rc4Hmac)
+        );
+        assert_eq!(
+            parse_enctype_list("aes128-sha1,AES256-CTS", false).unwrap(),
+            vec![
+                EncryptionType::Aes128CtsHmacSha196,
+                EncryptionType::Aes256CtsHmacSha196,
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_keysalt_list_strips_salt() {
+        let v = parse_keysalt_list("aes256-cts-hmac-sha384-192:normal rc4-hmac:normal");
+        assert_eq!(
+            v,
+            vec![
+                EncryptionType::Aes256CtsHmacSha384192,
+                EncryptionType::Rc4Hmac,
+            ]
+        );
+    }
 }

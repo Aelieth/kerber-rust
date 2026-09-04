@@ -304,6 +304,14 @@ pub struct Policy {
     pub skew: i64,
     /// Allow weak etypes.
     pub allow_weak_crypto: bool,
+    /// MIT `allow_rc4` (session keys).
+    pub allow_rc4: bool,
+    /// MIT `allow_des3` (session keys).
+    pub allow_des3: bool,
+    /// MIT `permitted_enctypes`. `None` = DEFAULT (every implemented type).
+    pub permitted_enctypes: Option<Vec<EncryptionType>>,
+    /// MIT `supported_enctypes`. Empty = AES 17–20.
+    pub supported_enctypes: Vec<EncryptionType>,
     /// Default requires_preauth for new principals.
     pub requires_preauth: bool,
     /// `[capaths]` client → server → intermediates (`.` = direct).
@@ -320,6 +328,10 @@ impl Default for Policy {
             max_renewable_life_set: false,
             skew: 300,
             allow_weak_crypto: false,
+            allow_rc4: false,
+            allow_des3: false,
+            permitted_enctypes: None,
+            supported_enctypes: Vec::new(),
             requires_preauth: true,
             capaths: BTreeMap::new(),
             reject_bad_transit: true,
@@ -340,6 +352,24 @@ impl Policy {
         let permitted = permitted_transited(&self.capaths, crealm, srealm);
         hops.iter()
             .all(|h| h == crealm || h == srealm || permitted.iter().any(|p| p == h))
+    }
+
+    /// MIT `krb5_is_permitted_enctype`.
+    #[must_use]
+    pub fn etype_permitted(&self, e: EncryptionType) -> bool {
+        self.permitted_enctypes
+            .as_ref()
+            .is_none_or(|v| v.contains(&e))
+    }
+
+    /// Long-term keys minted by addprinc/cpw when `-e` is omitted.
+    #[must_use]
+    pub fn password_etypes(&self) -> Vec<EncryptionType> {
+        if self.supported_enctypes.is_empty() {
+            randkey_etypes().to_vec()
+        } else {
+            self.supported_enctypes.clone()
+        }
     }
 }
 
@@ -518,8 +548,10 @@ impl PrincipalStore {
         let mut loaded =
             crate::persist::load_store(&db, &stash).map_err(|e| Error::Crypto(e.to_string()))?;
         loaded.db_stamp = Some(stamp);
-        // Dump rows/policies/serial come from disk; lockout overlay, replay
-        // caches, and PKINIT CA are process-local.
+        // Dump rows/named-policies/serial come from disk; kdc.conf ticket
+        // policy, lockout overlay, replay caches, and PKINIT CA are process-local.
+        loaded.policy.clone_from(&self.policy);
+        loaded.domain_sid.clone_from(&self.domain_sid);
         loaded.as_fail = Arc::clone(&self.as_fail);
         loaded.env = std::mem::take(&mut self.env);
         *self = loaded;
@@ -785,6 +817,22 @@ impl PrincipalStore {
         self.policy.max_renewable_life = conf.max_renewable_life;
         self.policy.max_renewable_life_set = conf.max_renewable_life_set;
         self.policy.allow_weak_crypto = conf.allow_weak_crypto;
+        if let Some(v) = conf.allow_rc4 {
+            self.policy.allow_rc4 = v;
+        }
+        if let Some(v) = conf.allow_des3 {
+            self.policy.allow_des3 = v;
+        }
+        if !conf.permitted_enctypes.is_empty() {
+            self.policy.permitted_enctypes = krb5_crypto::parse_enctype_list(
+                &conf.permitted_enctypes.join(" "),
+                self.policy.allow_weak_crypto,
+            );
+        }
+        if !conf.supported_enctypes.is_empty() {
+            self.policy.supported_enctypes =
+                krb5_crypto::parse_keysalt_list(&conf.supported_enctypes.join(" "));
+        }
         self.policy.requires_preauth = conf.requires_preauth;
         self.policy.reject_bad_transit = conf.reject_bad_transit;
         if let Some(s) = conf.domain_sid.as_deref() {
@@ -801,6 +849,22 @@ impl PrincipalStore {
     /// `[capaths]` from krb5.conf / kdc.conf.
     pub fn set_capaths(&mut self, capaths: BTreeMap<String, BTreeMap<String, Vec<String>>>) {
         self.policy.capaths = capaths;
+    }
+
+    /// Overlay `[libdefaults]` `allow_rc4` / `allow_des3` / `permitted_enctypes`.
+    pub fn apply_libdefaults(&mut self, conf: &krb5_config::Krb5Conf) {
+        if let Some(v) = conf.allow_rc4 {
+            self.policy.allow_rc4 = v;
+        }
+        if let Some(v) = conf.allow_des3 {
+            self.policy.allow_des3 = v;
+        }
+        if !conf.permitted_enctypes.is_empty() {
+            self.policy.permitted_enctypes = krb5_crypto::parse_enctype_list(
+                &conf.permitted_enctypes.join(" "),
+                self.policy.allow_weak_crypto || conf.allow_weak_crypto,
+            );
+        }
     }
 
     /// Realm NT domain SID.
@@ -990,12 +1054,28 @@ impl PrincipalStore {
         name: &PrincipalName,
         password: &[u8],
     ) -> Result<(), Error> {
+        self.create_password_etypes(acl, actor, name, password, &[])
+    }
+
+    /// ACL-gated create with an explicit keysalt list (`addprinc -e`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AclDenied`] or [`Error::AlreadyExists`].
+    pub fn create_password_etypes(
+        &mut self,
+        acl: &Acl,
+        actor: &str,
+        name: &PrincipalName,
+        password: &[u8],
+        etypes: &[EncryptionType],
+    ) -> Result<(), Error> {
         let id = format!("{}@{}", name.components_joined(), self.realm);
         acl.check(actor, AdminOp::Create, Some(&id))?;
         if self.map.contains_key(&id) {
             return Err(Error::AlreadyExists);
         }
-        self.insert_password(name, password)?;
+        self.insert_password_etypes(name, password, etypes)?;
         if let Some(rs) = acl.restrictions(actor, Some(&id)) {
             self.apply_acl_restrictions(&id, rs)?;
         }
@@ -1013,12 +1093,32 @@ impl PrincipalStore {
         actor: &str,
         name: &PrincipalName,
     ) -> Result<(), Error> {
+        self.create_host_etypes(acl, actor, name, &[])
+    }
+
+    /// `addprinc -randkey -e`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AclDenied`] or [`Error::AlreadyExists`].
+    pub fn create_host_etypes(
+        &mut self,
+        acl: &Acl,
+        actor: &str,
+        name: &PrincipalName,
+        etypes: &[EncryptionType],
+    ) -> Result<(), Error> {
         let id = format!("{}@{}", name.components_joined(), self.realm);
         acl.check(actor, AdminOp::Create, Some(&id))?;
         if self.map.contains_key(&id) {
             return Err(Error::AlreadyExists);
         }
-        self.insert_randkey(name, &randkey_etypes())?;
+        let keys = if etypes.is_empty() {
+            self.policy.password_etypes()
+        } else {
+            etypes.to_vec()
+        };
+        self.insert_randkey(name, &keys)?;
         let self_name = name.components_joined();
         if self_name == "kadmin/changepw"
             && let Some(p) = self.map.get_mut(&id)
@@ -1079,17 +1179,8 @@ impl PrincipalStore {
             .as_ref()
             .and_then(|n| self.policies.get(n))
             .map_or(0, |pol| pol.history.saturating_sub(1));
-        let mut new_keys = Vec::new();
-        for etype in [
-            EncryptionType::Aes256CtsHmacSha196,
-            EncryptionType::Aes128CtsHmacSha196,
-            EncryptionType::Aes256CtsHmacSha384192,
-            EncryptionType::Aes128CtsHmacSha256128,
-        ] {
-            let params = s2k_params(etype);
-            let key = string_to_key(etype, password, &salt, Some(&params))?;
-            new_keys.push(KeyEntry::new(etype, key, next_kvno));
-        }
+        let new_keys =
+            keys_from_password(&self.policy.password_etypes(), password, &salt, next_kvno)?;
         self.replace_password_keys(&id, new_keys, depth, keepold)
     }
 
@@ -1397,18 +1488,22 @@ impl PrincipalStore {
     }
 
     fn insert_password(&mut self, name: &PrincipalName, password: &[u8]) -> Result<(), Error> {
+        self.insert_password_etypes(name, password, &[])
+    }
+
+    fn insert_password_etypes(
+        &mut self,
+        name: &PrincipalName,
+        password: &[u8],
+        etypes: &[EncryptionType],
+    ) -> Result<(), Error> {
         let salt = name.default_salt(&self.realm);
-        let mut keys = Vec::new();
-        for etype in [
-            EncryptionType::Aes256CtsHmacSha196,
-            EncryptionType::Aes128CtsHmacSha196,
-            EncryptionType::Aes256CtsHmacSha384192,
-            EncryptionType::Aes128CtsHmacSha256128,
-        ] {
-            let params = s2k_params(etype);
-            let key = string_to_key(etype, password, &salt, Some(&params))?;
-            keys.push(KeyEntry::new(etype, key, 1));
-        }
+        let use_etypes = if etypes.is_empty() {
+            self.policy.password_etypes()
+        } else {
+            etypes.to_vec()
+        };
+        let keys = keys_from_password(&use_etypes, password, &salt, 1)?;
         let mut p = Principal::from_keys(
             name.clone(),
             self.realm.clone(),
@@ -1493,7 +1588,8 @@ impl PrincipalStore {
             .unwrap_or(0)
             .saturating_add(1);
         let mut new_keys = Vec::new();
-        for etype in randkey_etypes() {
+        let etypes = self.policy.password_etypes();
+        for etype in etypes {
             new_keys.push(KeyEntry::new(etype, random_key(etype)?, next_kvno));
         }
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
@@ -2053,6 +2149,21 @@ fn randkey_etypes() -> [EncryptionType; 4] {
     ]
 }
 
+fn keys_from_password(
+    etypes: &[EncryptionType],
+    password: &[u8],
+    salt: &[u8],
+    kvno: u32,
+) -> Result<Vec<KeyEntry>, Error> {
+    let mut keys = Vec::new();
+    for etype in etypes {
+        let params = s2k_params(*etype);
+        let key = string_to_key(*etype, password, salt, Some(&params))?;
+        keys.push(KeyEntry::new(*etype, key, kvno));
+    }
+    Ok(keys)
+}
+
 /// s2kparams (4-byte big-endian iteration count) for `etype`.
 ///
 /// RFC 3962 default 4096; RFC 8009 default 32768. MIT 1.22 rejects the
@@ -2155,7 +2266,29 @@ mod tests {
         assert_eq!(store.policy.max_renewable_life, 2 * 86400);
         assert!(!store.policy.requires_preauth);
         assert!(store.policy.allow_weak_crypto);
+        assert!(!store.policy.allow_rc4);
         assert!(store.policy.reject_bad_transit);
+        let rc4 = krb5_config::KdcConf::parse(
+            r"
+[libdefaults]
+    allow_rc4 = true
+    permitted_enctypes = aes256-cts arcfour-hmac
+[realms]
+    KERBER.TEST = {
+        supported_enctypes = aes256-cts:normal rc4-hmac:normal
+    }
+",
+        )
+        .unwrap();
+        store.apply_kdc_conf(&rc4).unwrap();
+        assert!(store.policy.allow_rc4);
+        assert!(
+            store
+                .policy
+                .supported_enctypes
+                .contains(&EncryptionType::Rc4Hmac)
+        );
+        assert!(store.policy.etype_permitted(EncryptionType::Rc4Hmac));
     }
 
     #[test]

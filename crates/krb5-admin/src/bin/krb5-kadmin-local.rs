@@ -33,6 +33,16 @@ fn main() {
         eprintln!("kadmin.local: load: {e}");
         std::process::exit(1);
     });
+    if let Some(path) = krb5_config::kdc_conf_path()
+        && let Ok(c) = krb5_config::KdcConf::load_file(&path)
+        && let Err(e) = store.apply_kdc_conf(&c)
+    {
+        eprintln!("kadmin.local: kdc.conf: {e}");
+        std::process::exit(1);
+    }
+    if let Some(c) = krb5_config::load_krb5_conf() {
+        store.apply_libdefaults(&c);
+    }
     let actor = std::env::var("KRB5_KADMIN_PRINCIPAL")
         .unwrap_or_else(|_| format!("admin@{}", store.realm()));
     // MIT kadmin.local does not read kadm5.acl (`KRB5_ACL_FILE` is kadmind-only).
@@ -145,11 +155,21 @@ fn run(sess: &mut AdminSession<'_>, line: &str) -> Result<LineOutcome, String> {
             let a = parse_kadmin_args(&parts[1..])?;
             let name = parse_name(sess, &a.name)?;
             if a.randkey {
-                sess.create_randkey(&name).map_err(|e| e.to_string())?;
+                if a.etypes.is_empty() {
+                    sess.create_randkey(&name).map_err(|e| e.to_string())?;
+                } else {
+                    sess.create_randkey_etypes(&name, &a.etypes)
+                        .map_err(|e| e.to_string())?;
+                }
             } else {
                 let pw = a.pw.clone().map_or_else(password, Ok)?;
-                sess.create_password(&name, pw.as_bytes())
-                    .map_err(|e| e.to_string())?;
+                if a.etypes.is_empty() {
+                    sess.create_password(&name, pw.as_bytes())
+                        .map_err(|e| e.to_string())?;
+                } else {
+                    sess.create_password_etypes(&name, pw.as_bytes(), &a.etypes)
+                        .map_err(|e| e.to_string())?;
+                }
             }
             apply_optional_fields(sess, &name, &a).map(|()| LineOutcome::Next)
         }

@@ -129,6 +129,7 @@ fi
 echo "$DIFF" | grep -q '"same_request_bytes":true' || die "diffsend did not log same request bytes"
 echo "$DIFF" | grep -q '"case":"unknown-cname","outcome":"ok","error_code":6,"e_text":"CLIENT_NOT_FOUND"' || die "unknown-cname was not CLIENT_NOT_FOUND"
 echo "$DIFF" | grep -q '"case":"etype-nosupp","outcome":"ok","error_code":14,"e_text":"BAD_ENCRYPTION_TYPE"' || die "missing BAD_ENCRYPTION_TYPE"
+echo "$DIFF" | grep -q '"case":"as-session-enctype","outcome":"ok","error_code":14,"e_text":"BAD_ENCRYPTION_TYPE"' || die "missing as-session-enctype"
 echo "$DIFF" | grep -q '"case":"wrong-realm","outcome":"ok","error_code":6,"e_text":"CLIENT_NOT_FOUND"' || die "wrong-realm was not CLIENT_NOT_FOUND"
 echo "$DIFF" | grep -q '"case":"pauser-no-preauth","outcome":"ok","error_code":25' || die "missing PREAUTH_REQUIRED(25)"
 echo "$DIFF" | grep -q '"e_text":"NEEDED_PREAUTH"' || die "missing NEEDED_PREAUTH"
@@ -142,7 +143,7 @@ echo "$DIFF" | grep -q '"case":"as-success"' || die "missing as-success"
 echo "$DIFF" | grep -q '"case":"tgs-success"' || die "missing tgs-success"
 echo "$DIFF" | grep -q '"rust_tag":"0x6b"' || die "as-success missing AS-REP tag"
 echo "$DIFF" | grep -q '"rust_tag":"0x6d"' || die "tgs-success missing TGS-REP tag"
-echo "$DIFF" | grep -q '"outcome":"ok","cases":12' || die "diffsend did not finish 12 cases"
+echo "$DIFF" | grep -q '"outcome":"ok","cases":13' || die "diffsend did not finish 13 cases"
 
 docker cp "$NAME":/tmp/diff-corpus "$OUT/diff-corpus" 2>/dev/null || true
 docker cp "$NAME":/tmp/rust-kdc.log "$OUT/rust-kdc.log" 2>/dev/null || true

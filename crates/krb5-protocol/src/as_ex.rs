@@ -300,7 +300,7 @@ fn finish_as_rep_keys(
             expected_sname,
         );
     }
-    let want = EncryptionType::from_iana(rep.0.enc_part.etype).ok();
+    let want = EncryptionType::known(rep.0.enc_part.etype).ok();
     if let Some(k) = pick_key(keys, want)
         && let Ok(out) = finish_as_rep(
             rep.clone(),
@@ -547,7 +547,7 @@ fn fast_base_key(
     let (etype, salt, params) = match material {
         Some(m) => m,
         None => (
-            EncryptionType::from_iana(enc_etype).unwrap_or_else(|_| first_etype(etypes)),
+            EncryptionType::known(enc_etype).unwrap_or_else(|_| first_etype(etypes)),
             default_salt,
             None,
         ),
@@ -720,7 +720,7 @@ fn continue_pkinit(
     let reply = exchange(req.kdc, &wire)?;
     match classify(&reply)? {
         KdcMsg::AsRep(rep) => {
-            let etype = EncryptionType::from_iana(rep.0.enc_part.etype)?;
+            let etype = EncryptionType::known(rep.0.enc_part.etype)?;
             let reply_key = pkinit_reply_key_agile(
                 &kp.secret,
                 &rep.0.padata,
@@ -864,7 +864,7 @@ fn finish_as_rep(
 ) -> Result<AsOutcome, Error> {
     let inner = rep.0;
     let had_preauth = sent_preauth;
-    let etype = EncryptionType::from_iana(inner.enc_part.etype)?;
+    let etype = EncryptionType::known(inner.enc_part.etype)?;
     let key = if let Some(k) = client_key {
         k
     } else {
@@ -905,15 +905,7 @@ fn finish_as_rep(
     let now = i64::from(KerberosTime::now().unix_seconds());
     check_as_rep_times(&enc_part, now, 300)?;
     as_sname_eq(&enc_part.sname, expected_sname, "AS-REP sname mismatch")?;
-    let requested: Vec<i32> = EncryptionType::preferred()
-        .iter()
-        .map(|e| e.to_iana())
-        .collect();
-    if !requested.contains(&enc_part.key.keytype) && !requested.contains(&inner.enc_part.etype) {
-        return Err(Error::ReplyMismatch("AS-REP etype not in request".into()));
-    }
-    let session_etype = EncryptionType::from_iana(enc_part.key.keytype)
-        .or_else(|_| EncryptionType::known(enc_part.key.keytype))?;
+    let session_etype = EncryptionType::known(enc_part.key.keytype)?;
     let session_key = ProtocolKey::from_bytes(session_etype, enc_part.key.keyvalue.as_ref())?;
     Ok(AsOutcome {
         ticket: inner.ticket,
@@ -1141,7 +1133,7 @@ type S2kMaterial = (EncryptionType, Vec<u8>, Option<Vec<u8>>);
 fn first_etype(etypes: &[i32]) -> EncryptionType {
     etypes
         .first()
-        .and_then(|n| EncryptionType::from_iana(*n).ok())
+        .and_then(|n| EncryptionType::known(*n).ok())
         .unwrap_or(EncryptionType::Aes256CtsHmacSha196)
 }
 
@@ -1182,7 +1174,7 @@ fn select_s2k(
 fn pick_info2(info: &EtypeInfo2, default_salt: &[u8], etypes: &[i32]) -> Option<S2kMaterial> {
     let mut order: Vec<EncryptionType> = etypes
         .iter()
-        .filter_map(|n| EncryptionType::from_iana(*n).ok())
+        .filter_map(|n| EncryptionType::known(*n).ok())
         .collect();
     if order.is_empty() {
         order.extend(EncryptionType::preferred());
@@ -1203,7 +1195,7 @@ fn pick_info2(info: &EtypeInfo2, default_salt: &[u8], etypes: &[i32]) -> Option<
 fn pick_info(info: &EtypeInfo, default_salt: &[u8], etypes: &[i32]) -> Option<S2kMaterial> {
     let mut order: Vec<EncryptionType> = etypes
         .iter()
-        .filter_map(|n| EncryptionType::from_iana(*n).ok())
+        .filter_map(|n| EncryptionType::known(*n).ok())
         .collect();
     if order.is_empty() {
         order.extend(EncryptionType::preferred());

@@ -320,8 +320,7 @@ fn verify_inner(
             text: Some("address mismatch".into()),
         });
     }
-    let session_etype = EncryptionType::from_iana(ticket_part.key.keytype)
-        .or_else(|_| EncryptionType::known(ticket_part.key.keytype))?;
+    let session_etype = EncryptionType::known(ticket_part.key.keytype)?;
     let session = ProtocolKey::from_bytes(session_etype, ticket_part.key.keyvalue.as_ref())?;
     let auth_usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)?;
     let auth_plain = decrypt(&session, auth_usage, ap.authenticator.cipher.as_ref())?;

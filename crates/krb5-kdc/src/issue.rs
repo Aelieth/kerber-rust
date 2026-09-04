@@ -5,7 +5,7 @@ use std::time::Instant;
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, checksum, cksumtype_is_coll_proof, cksumtype_is_known,
-    decrypt, encrypt, krb_fx_cf2, verify_checksum_type,
+    decrypt, encrypt, krb_fx_cf2, parse_enctype_list, verify_checksum_type,
 };
 use krb5_protocol::{ReplayCache, ReplayKey};
 use krb5_types::pac::{PacIdentity, parse_kerb_validation_info};
@@ -31,7 +31,7 @@ use crate::store::{
     KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED, KDB_DISALLOW_PROXIABLE,
     KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_NO_AUTH_DATA_REQUIRED,
     KDB_OK_AS_DELEGATE, KDB_OK_TO_AUTH_AS_DELEGATE, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH,
-    KDB_REQUIRES_PWCHANGE, Principal, random_key, s2k_params,
+    KDB_REQUIRES_PWCHANGE, KeyEntry, Principal, random_key, s2k_params,
 };
 
 /// Issued AS-REP plus the session key (for tests that decrypt the TGT).
@@ -343,10 +343,17 @@ fn issue_as_body(
         return Err(proto(err::CLIENT_REVOKED, status::CLIENT_LOCKED_OUT));
     }
     current_policy().check_as(store, &client)?;
-    let etype = select_etype(&body.etype, &client, store.policy().allow_weak_crypto)?;
-    let ckey = client
-        .key_for(etype)
+    let sname = body
+        .sname
+        .clone()
+        .unwrap_or_else(|| PrincipalName::krbtgt(store.realm()));
+    let server = store
+        .fetch_name(&sname)?
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::SERVER_NOT_FOUND))?;
+    let session_etype = select_session_keytype(&server, &body.etype, store.policy())?;
+    let ckey = select_client_key(&client, &body.etype)
         .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, status::CANT_FIND_CLIENT_KEY))?;
+    let etype = ckey.etype;
     let encoded_body;
     let body_der: &[u8] = if let Some(slice) = raw.and_then(kdc_req_body_der) {
         slice
@@ -429,15 +436,8 @@ fn issue_as_body(
         return Err(proto(err::PREAUTH_FAILED, status::NO_HW_PREAUTH));
     }
 
-    let sname = body
-        .sname
-        .clone()
-        .unwrap_or_else(|| PrincipalName::krbtgt(store.realm()));
-    let server = store
-        .fetch_name(&sname)?
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::SERVER_NOT_FOUND))?;
     let skey = server
-        .key_for(etype)
+        .key_for(session_etype)
         .or_else(|| server.best_key())
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::FINDING_SERVER_KEY))?;
     check_db_times(Some(&client), &server)?;
@@ -447,7 +447,7 @@ fn issue_as_body(
     {
         return Err(proto(err::NEVER_VALID, status::UNKNOWN_REASON));
     }
-    let session = random_key(etype)?;
+    let session = random_key(session_etype)?;
     let now = KerberosTime::now();
     let mut starttime = now.clone();
     let mut flags = TicketFlags::initial_preauth();
@@ -771,14 +771,6 @@ fn issue_tgs_body(
     let server = store
         .fetch_name(&sname)?
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::LOOKING_UP_SERVER))?;
-    let want = body
-        .etype
-        .iter()
-        .find_map(|n| EncryptionType::from_iana_policy(*n, store.policy().allow_weak_crypto).ok());
-    let skey = want
-        .and_then(|e| server.key_for(e))
-        .or_else(|| server.best_key())
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::FINDING_SERVER_KEY))?;
     let tgs_client = store.fetch_name(&enc_tkt.cname)?;
     // MIT TGS checks the server only; a valid TGT still issues after client expiry.
     check_db_times(None, &server)?;
@@ -826,9 +818,19 @@ fn issue_tgs_body(
         evidence_logon = Some(logon);
     }
     let skip_transited = body.kdc_options.bit(flag_bit::DISABLE_TRANSITED_CHECK);
-    let (tkt_key, tkt_kvno, tkt_etype) = match u2u_session(store, req)? {
-        Some((k, kv, et)) => (k, kv, et),
-        None => (skey.key.clone(), skey.kvno, skey.etype),
+    let u2u = u2u_session(store, req)?;
+    let session_etype = match &u2u {
+        Some((_, _, et)) => *et,
+        None => select_session_keytype(&server, &body.etype, store.policy())?,
+    };
+    let (tkt_key, tkt_kvno, tkt_etype) = if let Some((k, kv, et)) = u2u {
+        (k, kv, et)
+    } else {
+        let skey = server
+            .key_for(session_etype)
+            .or_else(|| server.best_key())
+            .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::FINDING_SERVER_KEY))?;
+        (skey.key.clone(), skey.kvno, skey.etype)
     };
     let mut transited = enc_tkt.transited.clone();
     // MIT is_crossrealm: header TGT realm ≠ local KDC realm and ≠ client.
@@ -863,7 +865,7 @@ fn issue_tgs_body(
     if !(inherited_t || set_transited_flag) && store.policy().reject_bad_transit {
         return Err(proto(err::POLICY, status::BAD_TRANSIT));
     }
-    let session = random_key(skey.etype)?;
+    let session = random_key(session_etype)?;
     let now = KerberosTime::now();
     let authtime;
     let starttime;
@@ -1307,15 +1309,49 @@ fn supported_enctypes_pa(princ: &Principal) -> PaData {
     }
 }
 
-fn select_etype(
+fn select_client_key<'a>(princ: &'a Principal, requested: &[i32]) -> Option<&'a KeyEntry> {
+    for n in requested {
+        if let Ok(e) = EncryptionType::known(*n)
+            && let Some(k) = princ.key_for(e)
+        {
+            return Some(k);
+        }
+    }
+    None
+}
+
+fn dbentry_supports_enctype(server: &Principal, enctype: EncryptionType, allow_weak: bool) -> bool {
+    if let Some((_, raw)) = server
+        .string_attrs
+        .iter()
+        .find(|(k, _)| k == "session_enctypes")
+        && !raw.is_empty()
+        && let Some(list) = parse_enctype_list(raw, allow_weak)
+    {
+        return list.contains(&enctype);
+    }
+    enctype == EncryptionType::Aes256CtsHmacSha196 || server.key_for(enctype).is_some()
+}
+
+fn select_session_keytype(
+    server: &Principal,
     requested: &[i32],
-    princ: &Principal,
-    allow_weak: bool,
+    policy: &crate::store::Policy,
 ) -> Result<EncryptionType, Error> {
     for n in requested {
-        if let Ok(e) = EncryptionType::from_iana_policy(*n, allow_weak)
-            && princ.key_for(e).is_some()
-        {
+        let Ok(e) = EncryptionType::known(*n) else {
+            continue;
+        };
+        if !policy.etype_permitted(e) {
+            continue;
+        }
+        if e == EncryptionType::Des3CbcSha1 && !policy.allow_des3 {
+            continue;
+        }
+        if e == EncryptionType::Rc4Hmac && !policy.allow_rc4 {
+            continue;
+        }
+        if dbentry_supports_enctype(server, e, policy.allow_weak_crypto) {
             return Ok(e);
         }
     }
@@ -1565,10 +1601,15 @@ fn preauth_required(store: &dyn PrincipalRead, client: &Principal) -> Error {
         krb5_types::KerberosString::try_from(String::from_utf8_lossy(&client.salt).as_ref()).ok();
     let mut info: EtypeInfo2 = Vec::new();
     for k in &client.keys {
+        let s2kparams = if k.etype == EncryptionType::Rc4Hmac {
+            None
+        } else {
+            Some(s2k_params(k.etype).into())
+        };
         info.push(EtypeInfo2Entry {
             etype: k.etype.to_iana(),
             salt: salt.clone(),
-            s2kparams: Some(s2k_params(k.etype).into()),
+            s2kparams,
         });
     }
     let etype_info = PaData {

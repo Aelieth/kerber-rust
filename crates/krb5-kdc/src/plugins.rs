@@ -201,7 +201,7 @@ impl KdcPreauth for EncTsMod {
         store: &dyn PrincipalRead,
         client: &Principal,
         padata: Option<&[PaData]>,
-        ikey: &ProtocolKey,
+        _ikey: &ProtocolKey,
         _etype: krb5_crypto::EncryptionType,
         _as_req_der: &[u8],
         _body_der: &[u8],
@@ -213,16 +213,34 @@ impl KdcPreauth for EncTsMod {
         let Some(blob) = crate::issue::extract_enc_timestamp(padata) else {
             return Ok(None);
         };
-        match crate::issue::verify_enc_timestamp(store, client, ikey, blob.as_ref()) {
-            Ok(()) => {
-                store.record_as_outcome(cname, true);
-                Ok(Some(PreauthAction::EncTsOk))
-            }
-            Err(e) => {
-                store.record_as_outcome(cname, false);
-                Err(e)
+        let enc: krb5_types::EncryptedData = match krb5_asn1::decode(blob.as_ref()) {
+            Ok(e) => e,
+            Err(_) => return Ok(None),
+        };
+        let Ok(pa_et) = krb5_crypto::EncryptionType::known(enc.etype) else {
+            return Ok(None);
+        };
+        let keys: Vec<_> = client.keys.iter().filter(|k| k.etype == pa_et).collect();
+        if keys.is_empty() {
+            return Ok(None);
+        }
+        let mut last_err = None;
+        for k in keys {
+            match crate::issue::verify_enc_timestamp(store, client, &k.key, blob.as_ref()) {
+                Ok(()) => {
+                    store.record_as_outcome(cname, true);
+                    return Ok(Some(PreauthAction::EncTsOk));
+                }
+                Err(e) => last_err = Some(e),
             }
         }
+        store.record_as_outcome(cname, false);
+        Err(last_err.unwrap_or_else(|| {
+            crate::preauth::proto(
+                krb5_types::err::PREAUTH_FAILED,
+                crate::status::PREAUTH_FAILED,
+            )
+        }))
     }
 }
 

@@ -51,6 +51,29 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   refuses a non-`kiprop` acceptor with RPC `AUTH_TOOWEAK`. Unit:
   `changepw_service_listprincs_is_auth_list`.
 
+- **W1-H J7.** Session key type is `select_session_keytype` /
+  `dbentry_supports_enctype`: the server's `session_enctypes` string
+  attribute, else AES256-sha1 assumed, else a long-term key;
+  `allow_rc4` / `allow_des3` / `permitted_enctypes` from
+  `krb5-config`. AS uses krbtgt; TGS uses the service. Ticket
+  encryption stays the server long-term key. `insert_password` /
+  `addprinc -e` honour `supported_enctypes` including
+  `rc4-hmac:normal`. EncTs tries keys of the PA etype (optimistic
+  AES ENC-TS on an rc4-only client is `PREAUTH_REQUIRED`, not
+  `PREAUTH_FAILED`). ETYPE-INFO2 omits `s2kparams` for rc4. RC4
+  `checksum()` is RFC 4757 type -138. Dump reload keeps kdc.conf
+  ticket policy. The client parses KDC-issued etypes with `known()`
+  so an rc4 session is not `WeakEtypeRefused`. Units:
+  `session_enctypes_attr_is_membership_not_client_key`,
+  `session_enctypes_rc4_with_allow_rc4_issues_rc4_session`,
+  `allow_rc4_false_skips_rc4_session_even_if_requested`,
+  `tgs_session_enctypes_attr_is_membership`,
+  `insert_password_honours_supported_enctypes_rc4`,
+  `reload_if_stale_sees_kadmin_create` (`allow_rc4` survives). Gate:
+  `diffsend` `as-session-enctype`; live rc4 both directions
+  (MIT `kinit`+`kvno` against Rust = TGS-REP usage 9; Rust
+  `krb5-kinit`+`krb5-kvno` against MIT).
+
 - **W1-H J3.** KRB-ERROR `e_text` is the MIT status word
   (`do_as_req.c` / `do_tgs_req.c` / `tgs_policy.c` / `kdc_util.c`).
   `errcode_to_protocol` maps internal codes outside 0..=128 to 60.

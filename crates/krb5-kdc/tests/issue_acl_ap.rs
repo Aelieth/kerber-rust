@@ -553,10 +553,143 @@ fn no_common_etype_is_etype_nosupp() {
         Some(vec![pa_enc_timestamp(&key).expect("pa")]),
     )
     .unwrap();
-    req.0.req_body.etype = vec![23]; // rc4, not in store unless allow_weak
+    req.0.req_body.etype = vec![23]; // rc4 session refused unless allow_rc4 + session_enctypes
     let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
     let e: krb5_types::KrbError = decode(&bytes).expect("KRB-ERROR");
     assert_eq!(e.error_code, err::ETYPE_NOSUPP);
+    assert_eq!(
+        e.e_text
+            .as_ref()
+            .and_then(|s| std::str::from_utf8(s.as_bytes()).ok()),
+        Some("BAD_ENCRYPTION_TYPE")
+    );
+}
+
+#[test]
+fn session_enctypes_attr_is_membership_not_client_key() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    store
+        .set_string(
+            &PrincipalName::krbtgt(TEST_REALM),
+            "session_enctypes",
+            Some("aes128-cts"),
+        )
+        .expect("setstr");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = client_key();
+    let mut req = as_req(
+        cname,
+        TEST_REALM,
+        61,
+        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
+    )
+    .unwrap();
+    req.0.req_body.etype = vec![18, 17];
+    let out = krb5_kdc::issue_as(&store, &req).expect("AS");
+    assert_eq!(out.session_key.etype(), EncryptionType::Aes128CtsHmacSha196);
+}
+
+#[test]
+fn session_enctypes_rc4_with_allow_rc4_issues_rc4_session() {
+    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
+    store.policy.allow_rc4 = true;
+    store
+        .set_string(
+            &PrincipalName::krbtgt(TEST_REALM),
+            "session_enctypes",
+            Some("rc4-hmac"),
+        )
+        .expect("setstr");
+    let rc4user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["rc4user"]);
+    store
+        .create_password_etypes(
+            &acl,
+            &documented_admin_id(),
+            &rc4user,
+            b"rc4-secret",
+            &[EncryptionType::Rc4Hmac],
+        )
+        .expect("addprinc -e rc4");
+    let salt = rc4user.default_salt(TEST_REALM);
+    let key = string_to_key(EncryptionType::Rc4Hmac, b"rc4-secret", &salt, None).expect("s2k");
+    let mut req = as_req(
+        rc4user,
+        TEST_REALM,
+        62,
+        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
+    )
+    .unwrap();
+    req.0.req_body.etype = vec![23];
+    let out = krb5_kdc::issue_as(&store, &req).expect("AS");
+    assert_eq!(out.session_key.etype(), EncryptionType::Rc4Hmac);
+    assert_ne!(out.rep.0.ticket.enc_part.etype, 23);
+}
+
+#[test]
+fn allow_rc4_false_skips_rc4_session_even_if_requested() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = client_key();
+    let mut req = as_req(
+        cname,
+        TEST_REALM,
+        63,
+        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
+    )
+    .unwrap();
+    req.0.req_body.etype = vec![23, 18];
+    let out = krb5_kdc::issue_as(&store, &req).expect("AS");
+    assert_eq!(out.session_key.etype(), EncryptionType::Aes256CtsHmacSha196);
+}
+
+#[test]
+fn tgs_session_enctypes_attr_is_membership() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    store
+        .set_string(&documented_host(), "session_enctypes", Some("aes128-cts"))
+        .expect("setstr");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = client_key();
+    let req = as_req(
+        cname.clone(),
+        TEST_REALM,
+        64,
+        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
+    )
+    .unwrap();
+    let as_out = krb5_kdc::issue_as(&store, &req).expect("AS");
+    let tgs = tgs_req_ex(
+        as_out.rep.0.ticket.clone(),
+        &as_out.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        65,
+        KdcOptions::forwardable(),
+        None,
+        Vec::new(),
+        vec![18, 17],
+    )
+    .expect("tgs");
+    let tgs_out = krb5_kdc::issue_tgs(&store, &tgs).expect("TGS");
+    assert_eq!(
+        tgs_out.session_key.etype(),
+        EncryptionType::Aes128CtsHmacSha196
+    );
+}
+
+#[test]
+fn insert_password_honours_supported_enctypes_rc4() {
+    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
+    store.policy.supported_enctypes = vec![EncryptionType::Rc4Hmac];
+    let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["rc4only"]);
+    store
+        .create_password(&acl, &documented_admin_id(), &name, b"secret")
+        .expect("create");
+    let p = store.get_name(&name).expect("princ");
+    assert_eq!(p.keys.len(), 1);
+    assert_eq!(p.keys[0].etype, EncryptionType::Rc4Hmac);
 }
 
 #[test]

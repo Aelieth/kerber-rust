@@ -38,7 +38,7 @@ fn main() {
     args.retain(|a| a != "--test-realm");
 
     let kdc_conf = load_kdc_conf();
-    let (store, acl) = if test_realm {
+    let (mut store, acl) = if test_realm {
         bootstrap_documented().unwrap_or_else(|e| {
             eprintln!("krb5-kadmind: bootstrap: {e}");
             std::process::exit(1);
@@ -57,6 +57,16 @@ fn main() {
         });
         (store, acl)
     };
+    if let Some(conf) = &kdc_conf
+        && let Err(e) = store.apply_kdc_conf(conf)
+    {
+        eprintln!("krb5-kadmind: kdc.conf: {e}");
+        std::process::exit(1);
+    }
+    if let Some(c) = krb5_config::load_krb5_conf() {
+        store.set_capaths(c.capaths.clone());
+        store.apply_libdefaults(&c);
+    }
 
     let realm = store.realm().to_owned();
     let kadmin = documented_kadmin();

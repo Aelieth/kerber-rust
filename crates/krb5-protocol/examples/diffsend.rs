@@ -425,6 +425,20 @@ fn run() -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     expect_error(&cfg, "etype-nosupp", &req, err::ETYPE_NOSUPP)?;
 
+    let req = encode(
+        &as_req_sname(
+            user.clone(),
+            realm,
+            0x1000_000c,
+            None,
+            PrincipalName::krbtgt(realm),
+            vec![23],
+        )
+        .map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    expect_error(&cfg, "as-session-enctype", &req, err::ETYPE_NOSUPP)?;
+
     let req =
         encode(&as_req(user.clone(), "OTHER.TEST", 0x1000_0003, None).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
@@ -606,7 +620,7 @@ fn run() -> Result<(), String> {
         err::TKT_NYV,
     )?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":12}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":13}}"#);
     Ok(())
 }
 

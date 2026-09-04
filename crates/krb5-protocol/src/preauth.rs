@@ -220,8 +220,7 @@ pub fn apply_strengthen(
     strengthen: &EncryptionKey,
     base: &ProtocolKey,
 ) -> Result<ProtocolKey, Error> {
-    let et = EncryptionType::from_iana(strengthen.keytype)
-        .or_else(|_| EncryptionType::known(strengthen.keytype))?;
+    let et = EncryptionType::known(strengthen.keytype)?;
     let sk = ProtocolKey::from_bytes(et, strengthen.keyvalue.as_ref())?;
     krb_fx_cf2(&sk, base, b"strengthenkey", b"replykey").map_err(Into::into)
 }

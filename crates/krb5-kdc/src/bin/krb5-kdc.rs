@@ -112,7 +112,8 @@ fn main() {
         std::process::exit(2);
     }
     if let Some(c) = krb5_config::load_krb5_conf() {
-        store.set_capaths(c.capaths);
+        store.set_capaths(c.capaths.clone());
+        store.apply_libdefaults(&c);
     }
     let enable_pkinit =
         export_pkinit.is_some() || std::env::var("KRB5_ENABLE_PKINIT").ok().as_deref() == Some("1");
