@@ -1040,6 +1040,24 @@ fn fast_as_corrupt_enc_fast_req_is_bad_integrity_find_fast() {
     });
     let err = krb5_kdc::issue_as(&store, &req).expect_err("corrupt enc_fast_req");
     assert_find_fast(err, err::BAD_INTEGRITY, "integrity check failed");
+    let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
+    assert_krb_error(&bytes, err::BAD_INTEGRITY, "FIND_FAST");
+}
+
+#[test]
+fn fast_as_corrupt_enc_and_bad_checksum_is_bad_integrity() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut req, _) = fast_as_prepared(&store, 950);
+    map_fx_fast_as(&mut req, |a| {
+        let mut c = a.enc_fast_req.cipher.to_vec();
+        c[0] ^= 0xff;
+        a.enc_fast_req.cipher = c.into();
+        let mut ck = a.req_checksum.checksum.to_vec();
+        ck[0] ^= 0xff;
+        a.req_checksum.checksum = ck.into();
+    });
+    let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
+    assert_krb_error(&bytes, err::BAD_INTEGRITY, "FIND_FAST");
 }
 
 #[test]
@@ -1052,6 +1070,8 @@ fn fast_as_malformed_krbfastreq_is_generic_find_fast() {
         a.enc_fast_req.cipher = cipher.into();
     });
     let err = krb5_kdc::issue_as(&store, &req).expect_err("malformed KrbFastReq");
+    let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
+    assert_krb_error(&bytes, err::GENERIC, "FIND_FAST");
     match err {
         Error::Protocol {
             code,
@@ -1114,7 +1134,20 @@ fn fast_as_cross_provider_type_is_generic() {
     let (mut req, _) = fast_as_prepared(&store, 926);
     map_fx_fast_as(&mut req, |a| a.req_checksum.cksumtype = 15);
     let err = krb5_kdc::issue_as(&store, &req).expect_err("type 15 over aes256");
-    assert_find_fast(err, err::GENERIC, "unknown checksum type");
+    assert_find_fast(err, err::GENERIC, "Bad encryption type");
+    let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
+    assert_krb_error(&bytes, err::GENERIC, "FIND_FAST");
+}
+
+#[test]
+fn fast_as_provider_mismatch_detail_is_bad_enctype() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut req, _) = fast_as_prepared(&store, 952);
+    map_fx_fast_as(&mut req, |a| a.req_checksum.cksumtype = 15);
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("type 15 over aes256");
+    assert_find_fast(err, err::GENERIC, "Bad encryption type");
+    let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
+    assert_krb_error(&bytes, err::GENERIC, "FIND_FAST");
 }
 
 #[test]

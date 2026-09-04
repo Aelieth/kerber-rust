@@ -56,10 +56,11 @@ fn unwrap_fast_as_inner(
         _ => decode::<krb5_types::fast::KrbFastArmoredReq>(raw)?,
     };
     let armor_key = armor_key_from(store, &armored)?;
-    verify_fast_req_checksum(&armor_key, body_der, &armored.req_checksum)?;
+    // MIT fast_util.c:191-222: decrypt enc_fast_req → decode KrbFastReq → verify checksum.
     let enc_usage = KeyUsage::new(ku::FAST_ENC)?;
     let plain = decrypt(&armor_key, enc_usage, armored.enc_fast_req.cipher.as_ref())?;
     let inner: krb5_types::fast::KrbFastReq = decode(&plain)?;
+    verify_fast_req_checksum(&armor_key, body_der, &armored.req_checksum)?;
     let nonce = inner.req_body.nonce;
     let inner_body = fast_req_body_der(&plain).map_or_else(|| encode(&inner.req_body), Ok)?;
     Ok(Some(FastOk {
@@ -111,10 +112,10 @@ fn unwrap_fast_tgs_inner(
         EncryptionType::from_iana(sub.keytype).or_else(|_| EncryptionType::known(sub.keytype))?;
     let subk = ProtocolKey::from_bytes(st, sub.keyvalue.as_ref())?;
     let armor_key = krb_fx_cf2(&subk, session, b"subkeyarmor", b"ticketarmor")?;
-    verify_fast_req_checksum(&armor_key, pa_tgs_raw, &armored.req_checksum)?;
     let enc_usage = KeyUsage::new(ku::FAST_ENC)?;
     let plain = decrypt(&armor_key, enc_usage, armored.enc_fast_req.cipher.as_ref())?;
     let inner: krb5_types::fast::KrbFastReq = decode(&plain)?;
+    verify_fast_req_checksum(&armor_key, pa_tgs_raw, &armored.req_checksum)?;
     let nonce = inner.req_body.nonce;
     let inner_body = fast_req_body_der(&plain).map_or_else(|| encode(&inner.req_body), Ok)?;
     Ok(Some(FastOk {
@@ -178,8 +179,13 @@ fn verify_fast_req_checksum(
         ck.checksum.as_ref(),
     ) {
         Ok(()) => {}
-        Err(krb5_crypto::Error::UnsupportedChecksum(_)) => {
-            return Err(proto_fast(err::GENERIC, "unknown checksum type"));
+        Err(krb5_crypto::Error::UnsupportedChecksum(t)) => {
+            let detail = if cksumtype_is_keyed(t) {
+                "Bad encryption type"
+            } else {
+                "unknown checksum type"
+            };
+            return Err(proto_fast(err::GENERIC, detail));
         }
         Err(krb5_crypto::Error::BadChecksumSize) => {
             return Err(proto_fast(err::GENERIC, "checksum length"));
@@ -658,7 +664,8 @@ fn map_fast_unwrap(err: Error) -> Error {
     match err {
         Error::Crypto(d) => proto_fast(err::BAD_INTEGRITY, d),
         Error::Asn1(d) => proto_fast(err::GENERIC, d),
-        other => other,
+        p @ Error::Protocol { .. } => p,
+        other => proto_fast(err::GENERIC, other.to_string()),
     }
 }
 

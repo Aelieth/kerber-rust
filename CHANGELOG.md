@@ -22,6 +22,15 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0f I4.** FAST unwrap is decrypt → decode → verify like
+  `fast_util.c:191-222`. Every unwrap error including store/`other`
+  wires `FIND_FAST`; provider-mismatch detail is MIT `Bad encryption
+  type` (`krb5_err.et:254`). Units:
+  `fast_as_corrupt_enc_and_bad_checksum_is_bad_integrity` (31
+  `FIND_FAST` on a decoded PDU),
+  `fast_as_provider_mismatch_detail_is_bad_enctype`. H1/H2 tests also
+  assert the decoded `KrbError`.
+
 - **W0f I3.** TGS authenticator checksum provider mismatch and wrong
   MAC length return wire 60 `PROCESS_TGS` like `errcode_to_protocol`
   (`kdc_util.c:130-136,691-697`). Missing checksum keeps 50
