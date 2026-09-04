@@ -156,7 +156,7 @@ def _scripts_in_jobs(jobs: dict[str, Job], script: str) -> list[Job]:
 
 
 def check_ci(wf: Workflow) -> None:
-    if "ci.yml" not in wf.path.name:
+    if wf.path.name != "ci.yml":
         return
     if not wf.per_push:
         _die(f"{wf.path.name} is not a push/PR workflow")
@@ -238,6 +238,38 @@ def _fold_continuations(text: str) -> str:
     return re.sub(r"\\\n\s*", " ", text)
 
 
+def _code_without_comment(line: str) -> str:
+    in_s = in_d = False
+    for j, ch in enumerate(line):
+        if ch == "'" and not in_d:
+            in_s = not in_s
+        elif ch == '"' and not in_s:
+            in_d = not in_d
+        elif ch == "#" and not in_s and not in_d:
+            return line[:j].rstrip()
+    return line.rstrip()
+
+
+def _join_shell_continuations(text: str) -> str:
+    """Join `\\`, `||`, and `&&` continuations; blank the swallowed lines."""
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        code = _code_without_comment(lines[i])
+        if i + 1 < len(lines) and (
+            code.endswith("\\") or re.search(r"(?:\|\||&&)\s*$", code)
+        ):
+            nxt = lines[i + 1].lstrip()
+            if code.endswith("\\"):
+                lines[i] = code[:-1].rstrip() + " " + nxt
+            else:
+                lines[i] = code + " " + nxt
+            lines[i + 1] = ""
+            continue
+        i += 1
+    return "\n".join(lines)
+
+
 def _strip_quoted(s: str) -> str:
     return _QUOTED.sub(" ", s)
 
@@ -265,28 +297,28 @@ def _echo_only_body(body: str) -> bool:
 
 
 def informational_if_starts(text: str) -> list[int]:
-    """Line numbers of if-chains whose every arm is only echo/printf/: /true.
+    """Line numbers of if-chains with any echo-only then/elif/else arm.
 
     Nested `fi` is paired by depth so an inner `if` cannot pop the outer
-    frame. Quoted strings are stripped before token matching.
+    frame. Quoted strings are stripped before token matching. `||` / `&&`
+    / trailing `\\` continuations are joined before the condition match.
     """
+    text = _join_shell_continuations(text)
     hits: list[int] = []
     # frame: start_line, arms (completed), current arm lines
     stack: list[tuple[int, list[str], list[str]]] = []
-
-    def _arm_echo(lines: list[str]) -> bool:
-        return _echo_only_body("\n".join(lines))
 
     def _close_if(start: int, arms: list[str], current: list[str]) -> bool:
         blobs = list(arms)
         if current:
             blobs.append("\n".join(current))
-        informational = bool(blobs) and all(_echo_only_body(b) for b in blobs)
-        if informational:
+        any_echo = bool(blobs) and any(_echo_only_body(b) for b in blobs)
+        all_echo = bool(blobs) and all(_echo_only_body(b) for b in blobs)
+        if any_echo:
             hits.append(start)
         if stack:
-            stack[-1][2].append("echo x" if informational else "exit 1")
-        return informational
+            stack[-1][2].append("echo x" if all_echo else "exit 1")
+        return any_echo
 
     def _after_then(line: str) -> str:
         parts = re.split(r"\bthen\b", line, maxsplit=1)
@@ -307,13 +339,24 @@ def informational_if_starts(text: str) -> list[int]:
         if not line.strip():
             continue
         if _IF_ONELINER.search(line):
-            then_m = re.search(r";\s*then\b(.*?)(?:;\s*else\b(.*))?;\s*fi\b", line)
+            then_m = re.search(
+                r";\s*then\b(.*?)(?:;\s*elif\b.*?;\s*then\b(.*?))*(?:;\s*else\b(.*))?;\s*fi\b",
+                line,
+            )
             if then_m:
                 arms = [p for p in then_m.groups() if p is not None]
-                if arms and all(_echo_only_body(p) for p in arms):
+                # Split remaining elif bodies the regex may have collapsed.
+                flat: list[str] = []
+                for a in arms:
+                    flat.extend(
+                        p for p in re.split(r";\s*elif\b.*?;\s*then\b", a) if p is not None
+                    )
+                if flat and any(_echo_only_body(p) for p in flat):
                     hits.append(i)
                     if stack:
-                        stack[-1][2].append("echo x")
+                        stack[-1][2].append(
+                            "echo x" if all(_echo_only_body(p) for p in flat) else "exit 1"
+                        )
                 elif stack:
                     stack[-1][2].append("exit 1")
             continue
@@ -326,6 +369,11 @@ def informational_if_starts(text: str) -> list[int]:
                 extra = _after_then(line)
                 if extra:
                     stack[-1][2].append(extra)
+            continue
+        if re.match(r"^\s*then\b", line) and stack:
+            extra = _after_then(line)
+            if extra:
+                stack[-1][2].append(extra)
             continue
         if _IF_START.match(line):
             extra = _after_then(line)
@@ -362,7 +410,7 @@ def check_nextest_profile(workflows: list[Workflow]) -> None:
 
 
 def check_ci_nextest_split(wf: Workflow) -> None:
-    if "ci.yml" not in wf.path.name:
+    if wf.path.name != "ci.yml":
         return
     job = wf.jobs.get("test")
     if job is None:
@@ -376,7 +424,7 @@ def check_ci_nextest_split(wf: Workflow) -> None:
 
 
 def check_ci_no_workspace_cargo_test(wf: Workflow) -> None:
-    if "ci.yml" not in wf.path.name:
+    if wf.path.name != "ci.yml":
         return
     folded = _fold_continuations(wf.text)
     if _CARGO_TEST_WS.search(folded) or _CARGO_TEST_ALL.search(folded):
@@ -418,10 +466,12 @@ def check_gate_membership(workflows: list[Workflow]) -> None:
 
 
 def check_no_informational_gates() -> None:
-    for path in sorted(SCRIPTS.glob("*-gate.sh")):
+    paths = list(SCRIPTS.glob("*-gate.sh")) + list((SCRIPTS / "lib").glob("*.sh"))
+    for path in sorted(paths):
         hits = informational_if_starts(path.read_text())
         if hits:
-            _die(f"{path.name} informational if at line {hits[0]}")
+            rel = path.relative_to(ROOT)
+            _die(f"{rel} informational if at line {hits[0]}")
 
 
 def _split_ledger_row(line: str) -> list[str]:
@@ -451,23 +501,24 @@ def check_ledger_proof_column(text: str | None = None) -> None:
         if len(cols) < 7:
             continue
         proof = cols[6]
-        proposed = bool(re.search(r"\bproposed\b", proof, re.I))
-        for m in _LEDGER_DIFFSEND.finditer(proof):
-            case = m.group(1)
-            if case not in DIFFSEND_CASES and not proposed:
-                _die(
-                    f"docs/mit-parity-ledger.md:{i} proof names diffsend `{case}` "
-                    "which is not a live case (use proposed)"
-                )
-        for m in _LEDGER_GATE.finditer(proof):
-            name = m.group(1)
-            if not name.endswith(".sh"):
-                name = name + ".sh"
-            if name not in existing and not proposed:
-                _die(
-                    f"docs/mit-parity-ledger.md:{i} proof names {name} "
-                    "which is not in scripts/ (use proposed)"
-                )
+        for clause in (c.strip() for c in proof.split(";") if c.strip()):
+            proposed = bool(re.search(r"\bpropose(?:d)?\b", clause, re.I))
+            for m in _LEDGER_DIFFSEND.finditer(clause):
+                case = m.group(1)
+                if case not in DIFFSEND_CASES and not proposed:
+                    _die(
+                        f"docs/mit-parity-ledger.md:{i} proof names diffsend `{case}` "
+                        "which is not a live case (use proposed)"
+                    )
+            for m in _LEDGER_GATE.finditer(clause):
+                name = m.group(1)
+                if not name.endswith(".sh"):
+                    name = name + ".sh"
+                if name not in existing and not proposed:
+                    _die(
+                        f"docs/mit-parity-ledger.md:{i} proof names {name} "
+                        "which is not in scripts/ (use proposed)"
+                    )
 
 
 def check_working_gitignored() -> None:
@@ -571,6 +622,21 @@ jobs:
     oneliner = 'if [ "$ok" != 1 ]; then echo settled; fi\n'
     if not informational_if_starts(oneliner):
         raise AssertionError("one-liner echo-only must be a violation")
+    mixed = 'if X; then\n    exit 1\nelif Y; then\n    echo only\nfi\n'
+    if not informational_if_starts(mixed):
+        raise AssertionError("mixed exit/echo chain must be a violation")
+    echo_else_exit = 'if true; then\n    echo only\nelse\n    exit 0\nfi\n'
+    if not informational_if_starts(echo_else_exit):
+        raise AssertionError("echo then else exit must be a violation")
+    multi = 'if [ "$a" = 1 ] ||\n   [ "$b" = 2 ]; then\n    echo hi\nfi\n'
+    if not informational_if_starts(multi):
+        raise AssertionError("multi-line condition echo-only must be a violation")
+    helper_snip = 'if ! wait_ready; then\n    echo skip\nfi\n'
+    if not informational_if_starts(helper_snip):
+        raise AssertionError("helper-file echo-only snippet must be a violation")
+    ok_mixed_no_echo = 'if X; then\n    exit 1\nelif Y; then\n    exit 2\nfi\n'
+    if informational_if_starts(ok_mixed_no_echo):
+        raise AssertionError("exit/exit chain must pass")
 
     missing_profile = Workflow(
         pathlib.Path("ci.yml"),
@@ -633,6 +699,19 @@ jobs:
         "| kdc_util.c:1 | x | y | z | w | exact | kdc-lookaside-gate.sh |\n"
     )
     _must_die(check_ledger_proof_column, ledger_bad_gate)
+    ledger_proposed_sibling = (
+        "| MIT file:line | check | MIT | Rust | e_text | verdict | proof |\n"
+        "| --- | --- | --- | --- | --- | --- | --- |\n"
+        "| kdc_util.c:1 | x | y | z | w | exact | proposed: diffsend `no-such-case`; kdc-lookaside-gate.sh |\n"
+    )
+    _must_die(check_ledger_proof_column, ledger_proposed_sibling)
+    not_ci = Workflow(
+        pathlib.Path("not-ci.yml"),
+        "name: x\non:\n  push:\njobs:\n  test:\n    timeout-minutes: 1\n    steps:\n      - run: echo hi\n",
+    )
+    check_ci(not_ci)
+    check_ci_nextest_split(not_ci)
+    check_ci_no_workspace_cargo_test(not_ci)
 
 
 def main() -> None:

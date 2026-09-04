@@ -7,9 +7,11 @@ Testing is continuous. Categories grow with the stages.
 `scripts/ci-policy.py` enforces workflow YAML (fail-red jobs, nextest
 `--profile ci` on every invocation, no per-push `cargo test
 --workspace` or `cargo test --all`, `--no-run` + junit upload, no
-echo-only `if`/`elif`/`else` bodies in `scripts/*-gate.sh`). It cannot
-check red-at-HEAD artefacts: `working/` is gitignored. `__pycache__/`
-is gitignored.
+echo-only `then`/`elif`/`else` arm in `scripts/*-gate.sh` or
+`scripts/lib/*.sh`, `"ci.yml"` path-equality). A mixed `exit`+`echo`
+chain is a hit. Multi-line `||` / `&&` / `\\` conditions are joined
+before matching. It cannot check red-at-HEAD artefacts: `working/` is
+gitignored. `__pycache__/` is gitignored.
 
 Red-at-HEAD artefact contract (captured under
 `working/logs/…/<item>-red-at-head.log`): the file is captured tool
@@ -27,8 +29,9 @@ Wire `e_text` is MIT's status word (`do_as_req.c:806`,
 and land in the `kdc.issue` `detail` field, not on the wire. A cell
 that pins MIT text must say whether it is wire or log. The KDC MIT
 1.22.2 parity ledger is [`mit-parity-ledger.md`](mit-parity-ledger.md);
-a `proof` cell may name only an existing test function, gate script,
-or `diffsend` case, or the word `proposed`.
+a `proof` cell may name an existing gate script or `diffsend` case,
+or mark that clause `proposed` / `propose`. `proposed` scopes only
+the clause it precedes (semicolon-separated).
 
 ## Normal / baseline
 

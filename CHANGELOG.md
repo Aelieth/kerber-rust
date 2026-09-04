@@ -22,6 +22,14 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0e H4.** `scripts/ci-policy.py` flags echo-only `then`/`elif`/`else`
+  arms independently (mixed `exit`+`echo` chains fail), joins `||` /
+  `&&` / `\\` continuations before matching the condition, scans
+  `scripts/lib/*.sh`, and treats `"ci.yml"` as path-equality. Ledger
+  `proof` `proposed` scopes only the clause it precedes. Historical:
+  0 hits on 60 gates at `bafc5f2`; `gss-gate.sh:344` at `a9f0666`;
+  `kpasswd-gate.sh:387` at `6e2d0e4`; 0 at HEAD.
+
 - **W0e H3 (unit-red; MIT by source).** TGS authenticator checksum
   grades like `comp_cksum` (`kdc_util.c:112-140`): unknown type 15
   `SUMTYPE_NOSUPP` `PROCESS_TGS`; not collision-proof 50 (1.22.2 sets
