@@ -301,7 +301,10 @@ fn bootstrap_test_realm() -> PrincipalStore {
         std::process::exit(1);
     });
     let actor = format!("{TEST_ADMIN}@{realm}");
-    let acl = Acl::allow_admin(&actor);
+    let acl = Acl::allow_admin(&actor).unwrap_or_else(|e| {
+        eprintln!("krb5-kdc: acl: {e}");
+        std::process::exit(1);
+    });
     let host_inst = std::env::var("KRB5_TEST_HOST").unwrap_or_else(|_| {
         if realm == TEST_REALM {
             krb5_kdc::TEST_HOST.to_owned()

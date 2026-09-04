@@ -124,8 +124,15 @@ Rename is `ACL_DELETE` on src **and** `ACL_ADD` on dest **and** the add
 entry carries no restrictions (`:638-648`). Restrictions
 (`-clearpolicy`, `-policy`, `-maxlife`, `-maxrenewlife`, `-expire`,
 `-pwexpire`, `+flag`/`-flag`) are imposed on create/modify
-(`auth.c:211-272`). An unparseable target or unknown restriction token
-is a load error (`acl_init`); kadmind refuses the file. `*`/`x` still
+(`auth.c:211-272`). Flag names use MIT aliases, hyphen→underscore,
+case-fold, and `0x` hex (`str_conv.c:50-95,147-197`). Lower-case op
+letters grant and upper-case letters revoke (`auth_acl.c:276-282`);
+an unknown letter is a load error (`:286-291`). `#` comments only at
+column 0; `\` continues a line (`:120-160`). Realm-less names take the
+store realm (`krb5_parse_name`). A readable ACL file is the ACL: it is
+not replaced when `admin@REALM` is absent (`acl_init:547-563`). An
+unparseable target or unknown restriction token is a load error
+(`acl_init`); kadmind refuses the file. `*`/`x` still
 exclude extract (`e`). Purgekeys stays
 `KADM5_PROTECT_KEYS` (stricter than MIT, which has no lockdown check).
 `kadmin.local` ktadd ignores lockdown like MIT. Create-time name

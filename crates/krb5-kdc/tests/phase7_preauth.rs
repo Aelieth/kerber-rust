@@ -3693,7 +3693,7 @@ fn two_realm_pac_stores() -> (PrincipalStore, PrincipalStore, ProtocolKey, Princ
     .expect("foreign");
     foreign.set_domain_sid(RpcSid::nt_domain(11, 12, 13));
     let actor_b = format!("{TEST_ADMIN}@OTHER.TEST");
-    let acl_b = Acl::allow_admin(&actor_b);
+    let acl_b = Acl::allow_admin(&actor_b).expect("acl");
     let host_b = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "svc.other.test"]);
     foreign
         .create_host(&acl_b, &actor_b, &host_b)

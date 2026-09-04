@@ -1438,6 +1438,7 @@ fn dispatch_kadm5(
             let mut sess = AdminSession::local(&mut g, acl, actor);
             match sess.delete(&name) {
                 Ok(()) => Ok(generic_ret(API_V2, 0)),
+                Err(Error::AclDenied) => Ok(generic_ret(API_V2, KADM5_AUTH_DELETE)),
                 Err(e) => Ok(generic_ret(API_V2, kadm5_code(&e))),
             }
         }

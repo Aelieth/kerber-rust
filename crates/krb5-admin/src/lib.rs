@@ -41,9 +41,10 @@ pub fn load_acl_file(actor: &str, path: Option<&std::path::Path>) -> Result<Acl,
     match path {
         Some(p) => {
             let t = std::fs::read_to_string(p).map_err(|e| format!("ACL {}: {e}", p.display()))?;
-            Acl::parse(&t).map_err(|e| e.to_string())
+            let realm = actor.rsplit_once('@').map_or("", |(_, r)| r);
+            Acl::parse_with_realm(&t, realm).map_err(|e| e.to_string())
         }
-        None => Ok(Acl::allow_admin(actor)),
+        None => Acl::allow_admin(actor).map_err(|e| e.to_string()),
     }
 }
 

@@ -67,6 +67,7 @@ extract/admin@KERBER.TEST *e
 norename@KERBER.TEST acilm
 scoped@KERBER.TEST ad *@KERBER.TEST
 restricted@KERBER.TEST a *@KERBER.TEST -clearpolicy
+nodel@KERBER.TEST *D
 EOF'
 
 docker exec -d \
@@ -448,6 +449,24 @@ GET_U9="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
 echo "$GET_U9"
 echo "$GET_U9" | grep -F 'Policy: [none]'
 
+echo "==== ACL uppercase *D revokes delete ===="
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw nodel-secret nodel'
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw victim-secret victim'
+DEL_NODEL="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p nodel@KERBER.TEST -w nodel-secret -q 'delprinc -force victim' 2>&1 || true)"
+echo "$DEL_NODEL"
+echo "$DEL_NODEL" | grep -F $'delete_principal: Operation requires ``delete\'\' privilege while deleting principal "victim@KERBER.TEST"'
+if echo "$DEL_NODEL" | grep -qiE 'Principal "victim@KERBER.TEST" deleted|deleted.'; then
+    echo "nodel *D granted delete: $DEL_NODEL" >&2
+    exit 1
+fi
+GET_V="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc victim' 2>&1 || true)"
+echo "$GET_V"
+echo "$GET_V" | grep -F 'Principal: victim'
+
 echo "==== MIT kadmin delprinc extra ===="
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'delprinc -force extra'
@@ -455,6 +474,75 @@ DELGET="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc extra' 2>&1 || true)"
 echo "$DELGET"
 echo "$DELGET" | grep -qiE 'does not exist|not found|UNK_PRINC'
+
+echo "==== ACL file without admin@ is not replaced ===="
+docker exec "$NAME" sh -c '
+for comm in /proc/[0-9]*/comm; do
+    [ -f "$comm" ] || continue
+    read -r name < "$comm" || continue
+    if [ "$name" = "krb5-kadmind" ]; then
+        pid=${comm#/proc/}
+        pid=${pid%/comm}
+        kill "$pid" 2>/dev/null || true
+    fi
+done
+'
+sleep 0.4
+docker exec "$NAME" sh -c 'printf "%s\n" "scoped@KERBER.TEST ad *@KERBER.TEST" > /tmp/kadm5.acl'
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+    "$NAME" sh -c '/tmp/krb5-kadmind 127.0.0.1:749 >/tmp/kadmind-noadmin.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/kadmind-noadmin.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kadmind-noadmin.log >&2 || true
+    log "kadmin.gate" "error" ',"error":"kadmind did not listen after admin-less ACL"'
+    exit 1
+fi
+NOADMIN="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc user' 2>&1 || true)"
+echo "$NOADMIN"
+echo "$NOADMIN" | grep -F $'get_principal: Operation requires ``get\'\' privilege while retrieving "user@KERBER.TEST".'
+if echo "$NOADMIN" | grep -q 'Principal: user'; then
+    echo "admin-less ACL granted admin getprinc: $NOADMIN" >&2
+    exit 1
+fi
+
+echo "==== ACL unknown op letter refuses to start ===="
+docker exec "$NAME" sh -c '
+for comm in /proc/[0-9]*/comm; do
+    [ -f "$comm" ] || continue
+    read -r name < "$comm" || continue
+    if [ "$name" = "krb5-kadmind" ]; then
+        pid=${comm#/proc/}
+        pid=${pid%/comm}
+        kill "$pid" 2>/dev/null || true
+    fi
+done
+'
+sleep 0.4
+docker exec "$NAME" sh -c 'printf "%s\n" "bad@KERBER.TEST aZ" > /tmp/kadm5.acl'
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+    "$NAME" sh -c '/tmp/krb5-kadmind 127.0.0.1:749 >/tmp/kadmind-badacl.log 2>&1'
+sleep 1
+BADLOG="$(docker exec "$NAME" cat /tmp/kadmind-badacl.log 2>/dev/null || true)"
+echo "$BADLOG"
+echo "$BADLOG" | grep -F "Unrecognized ACL operation"
+if docker exec "$NAME" grep -q '^listening ' /tmp/kadmind-badacl.log 2>/dev/null; then
+    echo "kadmind started on unknown op letter" >&2
+    exit 1
+fi
 
 echo "==== MIT kadmind lockdown cells ===="
 docker run -d --name "$NAME_MIT" "$IMAGE" >/dev/null
@@ -477,7 +565,9 @@ docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw adminpassword admin/admin'
 docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw norename-secret norename'
 docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw scoped-secret scoped'
 docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw restricted-secret restricted'
-docker exec "$NAME_MIT" sh -c 'printf "%s\n" "*/admin@KERBER.TEST *e" "extract/admin@KERBER.TEST *e" "norename@KERBER.TEST acilm" "scoped@KERBER.TEST ad *@KERBER.TEST" "restricted@KERBER.TEST a *@KERBER.TEST -clearpolicy" > /var/kerberos/krb5kdc/kadm5.acl'
+docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw nodel-secret nodel'
+docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw victim-secret victim'
+docker exec "$NAME_MIT" sh -c 'printf "%s\n" "*/admin@KERBER.TEST *e" "admin@KERBER.TEST *e" "extract/admin@KERBER.TEST *e" "norename@KERBER.TEST acilm" "scoped@KERBER.TEST ad *@KERBER.TEST" "restricted@KERBER.TEST a *@KERBER.TEST -clearpolicy" "nodel@KERBER.TEST *D" > /var/kerberos/krb5kdc/kadm5.acl'
 docker exec "$NAME_MIT" sh -c '
 for comm in /proc/[0-9]*/comm; do
     [ -f "$comm" ] || continue
@@ -558,12 +648,86 @@ MIT_GET_U9="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc user9')"
 echo "$MIT_GET_U9"
 echo "$MIT_GET_U9" | grep -F 'Policy: [none]'
 
+echo "==== MIT ACL uppercase *D revokes delete ===="
+MIT_NODEL="$(docker exec "$NAME_MIT" kadmin -p nodel -w nodel-secret -q 'delprinc -force victim' 2>&1 || true)"
+echo "$MIT_NODEL"
+echo "$MIT_NODEL" | grep -F $'delete_principal: Operation requires ``delete\'\' privilege while deleting principal "victim@KERBER.TEST"'
+if echo "$MIT_NODEL" | grep -qiE 'Principal "victim@KERBER.TEST" deleted'; then
+    echo "MIT nodel *D granted delete: $MIT_NODEL" >&2
+    exit 1
+fi
+MIT_GET_V="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc victim')"
+echo "$MIT_GET_V"
+echo "$MIT_GET_V" | grep -F 'Principal: victim@KERBER.TEST'
+
 echo "==== MIT purgekeys krbtgt succeeds (no lockdown check) ===="
 MITPURGE="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'purgekeys krbtgt/KERBER.TEST' 2>&1 || true)"
 echo "$MITPURGE"
 echo "$MITPURGE" | grep -F 'Old keys for principal'
 if echo "$MITPURGE" | grep -qiE 'locked down|PROTECT_KEYS'; then
     echo "MIT purgekeys refused krbtgt: $MITPURGE" >&2
+    exit 1
+fi
+
+echo "==== MIT ACL file without admin is not replaced ===="
+docker exec "$NAME_MIT" sh -c '
+for comm in /proc/[0-9]*/comm; do
+    [ -f "$comm" ] || continue
+    read -r name < "$comm" || continue
+    if [ "$name" = "kadmind" ]; then
+        pid=${comm#/proc/}
+        pid=${pid%/comm}
+        kill "$pid" 2>/dev/null || true
+    fi
+done
+'
+sleep 0.4
+docker exec "$NAME_MIT" sh -c 'printf "%s\n" "scoped@KERBER.TEST ad *@KERBER.TEST" > /var/kerberos/krb5kdc/kadm5.acl'
+docker exec -d "$NAME_MIT" sh -c 'kadmind -nofork >/tmp/kadmind-noadmin.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME_MIT" cat /tmp/kadmind-noadmin.log >&2 || true
+    log "kadmin.gate" "error" ',"error":"MIT kadmind did not listen after admin-less ACL"'
+    exit 1
+fi
+MIT_NOADMIN="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'getprinc user' 2>&1 || true)"
+echo "$MIT_NOADMIN"
+echo "$MIT_NOADMIN" | grep -F $'get_principal: Operation requires ``get\'\' privilege while retrieving "user@KERBER.TEST".'
+if echo "$MIT_NOADMIN" | grep -q 'Principal: user'; then
+    echo "MIT admin-less ACL granted admin/admin getprinc: $MIT_NOADMIN" >&2
+    exit 1
+fi
+
+echo "==== MIT ACL unknown op letter refuses to start ===="
+docker exec "$NAME_MIT" sh -c '
+for comm in /proc/[0-9]*/comm; do
+    [ -f "$comm" ] || continue
+    read -r name < "$comm" || continue
+    if [ "$name" = "kadmind" ]; then
+        pid=${comm#/proc/}
+        pid=${pid%/comm}
+        kill "$pid" 2>/dev/null || true
+    fi
+done
+'
+sleep 0.4
+docker exec "$NAME_MIT" sh -c 'printf "%s\n" "bad@KERBER.TEST aZ" > /var/kerberos/krb5kdc/kadm5.acl'
+set +e
+docker exec "$NAME_MIT" sh -c 'timeout 3 kadmind -nofork >/tmp/kadmind-badacl.log 2>&1'
+set -e
+MIT_BAD="$(docker exec "$NAME_MIT" cat /tmp/kadmind-badacl.log 2>/dev/null || true)"
+echo "$MIT_BAD"
+echo "$MIT_BAD" | grep -F "Unrecognized ACL operation 'Z' in bad@KERBER.TEST aZ"
+echo "$MIT_BAD" | grep -F "while initializing ACL file, aborting"
+if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+    echo "MIT kadmind started on unknown op letter" >&2
     exit 1
 fi
 

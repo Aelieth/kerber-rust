@@ -22,7 +22,7 @@ fn realm_store(realm: &str, host: &str) -> (PrincipalStore, Acl, String, Princip
     )
     .expect("bootstrap");
     let actor = format!("{TEST_ADMIN}@{realm}");
-    let acl = Acl::allow_admin(&actor);
+    let acl = Acl::allow_admin(&actor).expect("acl");
     let hostn = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", host]);
     store.create_host(&acl, &actor, &hostn).expect("host");
     (store, acl, actor, hostn)

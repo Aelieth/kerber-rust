@@ -22,6 +22,18 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W1-H J1a.** kadm5.acl parse matches MIT `auth_acl.c`: upper-case
+  op letters revoke, unknown letters fail the load, `#` only at
+  column 0, `\` continuation, realm-less names take the store realm,
+  flag aliases/hex (`str_conv.c`), and a readable file is never
+  replaced by a full-power default. `Acl::allow_admin` is `Result`.
+  Units: `acl_uppercase_letter_revokes`,
+  `acl_unknown_op_letter_is_load_error`,
+  `acl_file_without_admin_is_not_replaced`, `acl_default_realm_applies`,
+  `acl_flag_aliases_parse`, `acl_comment_only_at_column_zero`,
+  `acl_backslash_continuation`, `acl_allow_admin_rejects_unparseable`.
+  Gate: `scripts/kadmin-gate.sh` `*D` / admin-less / `aZ` both legs.
+
 - **W0f I8.** Ledger header recount 244 = 116+67+61 (exact 54 ·
   deviation 96). AS time/flag anchors are `issue.rs:1697-1734`.
   `diffsend` names in the ORDER/FAST/AD-FX-ARMOR rows are backticked

@@ -657,9 +657,9 @@ fn kadmind_acl_follows_store_realm_or_acl_file() {
 }
 
 #[test]
-fn acl_file_without_realm_admin_add_is_discarded_not_merged() {
+fn acl_file_without_admin_is_not_replaced() {
     let dir = std::env::temp_dir().join(format!(
-        "kadmind-acl-discard-{}-{}",
+        "kadmind-acl-nofallback-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -669,17 +669,40 @@ fn acl_file_without_realm_admin_add_is_discarded_not_merged() {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("kadm5.acl");
     std::fs::write(&path, "operator@PROD.KERBER.TEST *\n").unwrap();
-    let acl = acl_for_store("PROD.KERBER.TEST", Some(&path)).expect("discard to default");
+    let acl = acl_for_store("PROD.KERBER.TEST", Some(&path)).expect("file as-is");
     assert!(
-        acl.check("admin@PROD.KERBER.TEST", AdminOp::Create, None)
-            .is_ok(),
-        "realm admin must keep * after discard"
+        acl.check("operator@PROD.KERBER.TEST", AdminOp::Create, None)
+            .is_ok()
     );
     assert_eq!(
-        acl.check("operator@PROD.KERBER.TEST", AdminOp::Create, None)
+        acl.check("admin@PROD.KERBER.TEST", AdminOp::Create, None)
             .unwrap_err(),
-        Error::AclDenied,
-        "operator grant must not merge in when the file is discarded"
+        Error::AclDenied
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn acl_default_realm_applies() {
+    let dir = std::env::temp_dir().join(format!(
+        "kadmind-acl-realm-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("kadm5.acl");
+    std::fs::write(&path, "admin *\noperator@PROD.KERBER.TEST i\n").unwrap();
+    let acl = acl_for_store("PROD.KERBER.TEST", Some(&path)).expect("realm default");
+    assert!(
+        acl.check("admin@PROD.KERBER.TEST", AdminOp::Create, None)
+            .is_ok()
+    );
+    assert!(
+        acl.check("operator@PROD.KERBER.TEST", AdminOp::Inquire, None)
+            .is_ok()
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -688,7 +711,10 @@ fn acl_file_without_realm_admin_add_is_discarded_not_merged() {
 fn documented_kadm5_acl_file_shape() {
     let text = include_str!("../../../harness/kadm5.acl");
     let acl = Acl::parse(text).expect("acl");
-    // Harness ACL lists */admin@KERBER.TEST with *.
+    assert!(
+        acl.check("admin@KERBER.TEST", AdminOp::Create, None)
+            .is_ok()
+    );
     assert!(
         acl.check("foo/admin@KERBER.TEST", AdminOp::Create, None)
             .is_ok()

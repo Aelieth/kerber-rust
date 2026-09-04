@@ -120,31 +120,22 @@ pub fn host_for_realm(realm: &str) -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", inst.as_str()])
 }
 
-/// Kadmind ACL: `acl_file` **replaces** the default when it grants `admin@<realm>` add; otherwise that admin with `*` (not a merge).
+/// Kadmind ACL: a readable `acl_file` is the ACL (`auth_acl.c` `acl_init`). No file is the documented default.
 ///
 /// # Errors
 ///
-/// Returns [`Error::Crypto`] when `acl_file` is set but unreadable.
+/// Returns [`Error::Crypto`] when `acl_file` is set but unreadable; [`Error::AclParse`] when the file does not load.
 pub fn acl_for_store(realm: &str, acl_file: Option<&std::path::Path>) -> Result<Acl, Error> {
-    let default = Acl::parse(&format!(
-        "{} *\nkiprop/*@{realm} p\n",
-        admin_id_for_realm(realm)
-    ))?;
+    let default = Acl::parse_with_realm(
+        &format!("{} *\nkiprop/*@{realm} p\n", admin_id_for_realm(realm)),
+        realm,
+    )?;
     let Some(path) = acl_file else {
         return Ok(default);
     };
     let text = std::fs::read_to_string(path)
         .map_err(|e| Error::Crypto(format!("acl_file {}: {e}", path.display())))?;
-    let parsed = Acl::parse(&text)?;
-    // MIT harness `*/admin@REALM` does not match `admin@REALM`; discard the file whole.
-    if parsed
-        .check(&admin_id_for_realm(realm), AdminOp::Create, None)
-        .is_ok()
-    {
-        Ok(parsed)
-    } else {
-        Ok(default)
-    }
+    Acl::parse_with_realm(&text, realm)
 }
 
 /// Bootstrap a named realm: krbtgt, user, admin, host, `kadmin/admin`, `kadmin/changepw`.
@@ -161,7 +152,7 @@ pub fn bootstrap_realm(
 ) -> Result<(PrincipalStore, Acl), Error> {
     let mut store = PrincipalStore::bootstrap(realm, user, user_password, admin, admin_password)?;
     let actor = admin_id_for_realm(realm);
-    let acl = Acl::allow_admin(&actor);
+    let acl = Acl::allow_admin(&actor)?;
     store.create_host(&acl, &actor, &host_for_realm(realm))?;
     store.create_host(&acl, &actor, &documented_kadmin())?;
     store.create_host(&acl, &actor, &documented_changepw())?;

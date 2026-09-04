@@ -4,8 +4,9 @@ use crate::error::Error;
 use crate::store::{
     KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_DUP_SKEY, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED,
     KDB_DISALLOW_PROXIABLE, KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED,
-    KDB_LOCKDOWN_KEYS, KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE, KDB_OK_TO_AUTH_AS_DELEGATE,
-    KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH, KDB_REQUIRES_PWCHANGE,
+    KDB_LOCKDOWN_KEYS, KDB_NEW_PRINC, KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE,
+    KDB_OK_TO_AUTH_AS_DELEGATE, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH,
+    KDB_REQUIRES_PWCHANGE, KDB_SUPPORT_DESMD5,
 };
 
 /// Mutating admin operations gated by the ACL.
@@ -150,30 +151,37 @@ impl Acl {
         Self::default()
     }
 
-    /// Parse kadm5.acl text. Unparseable target or unknown restriction is a load error
-    /// (`auth_acl.c` `acl_init`).
+    /// Parse kadm5.acl text (`auth_acl.c` `load_acl_file`).
     ///
     /// # Errors
     ///
-    /// [`Error::AclParse`] on syntax / restriction errors.
+    /// [`Error::AclParse`] on syntax, unknown op letter, or restriction errors.
     pub fn parse(text: &str) -> Result<Self, Error> {
+        Self::parse_with_realm(text, "")
+    }
+
+    /// Like [`Self::parse`] with MIT `krb5_parse_name` default realm.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AclParse`] on syntax, unknown op letter, or restriction errors.
+    pub fn parse_with_realm(text: &str, default_realm: &str) -> Result<Self, Error> {
         let mut entries = Vec::new();
-        for raw in text.lines() {
-            let line = raw.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            entries.push(parse_line(line)?);
+        for line in logical_lines(text) {
+            entries.push(parse_line(&line, default_realm)?);
         }
         Ok(Self { entries })
     }
 
     /// Allow `admin@REALM` every mutating op.
-    #[must_use]
-    pub fn allow_admin(admin: impl Into<String>) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AclParse`] when `admin` is not a principal name.
+    pub fn allow_admin(admin: impl Into<String>) -> Result<Self, Error> {
         let principal = admin.into();
-        let client = parse_princ_pat(&principal).ok();
-        Self {
+        let client = Some(parse_princ_pat(&principal)?);
+        Ok(Self {
             entries: vec![AclEntry {
                 principal,
                 add: true,
@@ -189,7 +197,7 @@ impl Acl {
                 target: None,
                 restrictions: None,
             }],
-        }
+        })
     }
 
     /// Check whether `actor` may perform `op` on `target` (`auth_acl.c` `acl_check`).
@@ -354,7 +362,48 @@ struct WildState {
     backref: Vec<String>,
 }
 
-fn parse_line(line: &str) -> Result<AclEntry, Error> {
+/// MIT `auth_acl.c:102-153` `get_line`: `\` continuation; `#` only at column 0.
+fn logical_lines(text: &str) -> Vec<String> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut buf = String::new();
+    let mut continuing = false;
+    for raw in text.split_inclusive('\n') {
+        let mut chunk = raw.strip_suffix('\n').unwrap_or(raw);
+        chunk = chunk.strip_suffix('\r').unwrap_or(chunk);
+        if continuing {
+            if let Some(stripped) = chunk.strip_suffix('\\') {
+                buf.push_str(stripped);
+                continue;
+            }
+            buf.push_str(chunk);
+            continuing = false;
+            if !buf.is_empty() && !buf.starts_with('#') {
+                out.push(std::mem::take(&mut buf));
+            } else {
+                buf.clear();
+            }
+            continue;
+        }
+        if let Some(stripped) = chunk.strip_suffix('\\') {
+            buf = stripped.to_string();
+            continuing = true;
+            continue;
+        }
+        if chunk.is_empty() || chunk.starts_with('#') {
+            continue;
+        }
+        out.push(chunk.to_owned());
+    }
+    if continuing && !buf.is_empty() && !buf.starts_with('#') {
+        out.push(buf);
+    }
+    out
+}
+
+fn parse_line(line: &str, default_realm: &str) -> Result<AclEntry, Error> {
     let (client_s, ops, target_s, rs_s) = split_fields(line);
     if client_s.is_empty() || ops.is_empty() {
         return Err(Error::AclParse(format!("syntax error: {line}")));
@@ -369,37 +418,43 @@ fn parse_line(line: &str) -> Result<AclEntry, Error> {
     let mut list = false;
     let mut propagate = false;
     for ch in ops.chars() {
-        match ch {
-            'a' | 'A' => add = true,
-            'd' | 'D' => delete = true,
-            'i' | 'I' => inquire = true,
-            'e' | 'E' => extract = true,
-            'c' | 'C' => changepw = true,
-            'm' | 'M' => modify = true,
-            's' | 'S' => setkey = true,
-            'l' | 'L' => list = true,
-            'p' | 'P' => propagate = true,
-            '*' | 'x' | 'X' => {
-                add = true;
-                delete = true;
-                inquire = true;
-                changepw = true;
-                modify = true;
-                setkey = true;
-                list = true;
-                propagate = true;
+        let rop = ch.to_ascii_lowercase();
+        let grant = rop == ch;
+        match rop {
+            'a' => add = grant,
+            'd' => delete = grant,
+            'i' => inquire = grant,
+            'e' => extract = grant,
+            'c' => changepw = grant,
+            'm' => modify = grant,
+            's' => setkey = grant,
+            'l' => list = grant,
+            'p' => propagate = grant,
+            '*' | 'x' => {
+                add = grant;
+                delete = grant;
+                inquire = grant;
+                changepw = grant;
+                modify = grant;
+                setkey = grant;
+                list = grant;
+                propagate = grant;
             }
-            _ => {}
+            _ => {
+                return Err(Error::AclParse(format!(
+                    "Unrecognized ACL operation '{ch}'"
+                )));
+            }
         }
     }
     let client = if client_s == "*" {
         None
     } else {
-        Some(parse_princ_pat(&client_s)?)
+        Some(parse_princ_pat_in(&client_s, default_realm)?)
     };
     let target = match target_s.as_deref() {
         None | Some("*") => None,
-        Some(t) => Some(parse_princ_pat(t)?),
+        Some(t) => Some(parse_princ_pat_in(t, default_realm)?),
     };
     let restrictions = match rs_s.as_deref() {
         None => None,
@@ -423,7 +478,8 @@ fn parse_line(line: &str) -> Result<AclEntry, Error> {
 }
 
 fn split_fields(line: &str) -> (String, String, Option<String>, Option<String>) {
-    let mut rest = line.trim_matches(ACL_WS.as_slice());
+    let line = line.trim_end_matches([' ', '\t', '\n', '\u{000c}', '\u{000b}', '\r']);
+    let mut rest = line;
     let mut take = || {
         rest = rest.trim_start_matches(ACL_WS.as_slice());
         if rest.is_empty() {
@@ -447,16 +503,20 @@ fn split_fields(line: &str) -> (String, String, Option<String>, Option<String>) 
 }
 
 fn parse_princ_pat(s: &str) -> Result<PrincPat, Error> {
+    parse_princ_pat_in(s, "")
+}
+
+fn parse_princ_pat_in(s: &str, default_realm: &str) -> Result<PrincPat, Error> {
     let (name, realm) = match s.rsplit_once('@') {
         Some((n, r)) => (n, r.to_owned()),
-        None => (s, String::new()),
+        None => (s, default_realm.to_owned()),
     };
     if name.is_empty() {
-        return Err(Error::AclParse(format!("cannot parse principal '{s}'")));
+        return Err(Error::AclParse(format!("Cannot parse principal '{s}'")));
     }
     let components: Vec<String> = name.split('/').map(str::to_owned).collect();
     if components.iter().any(String::is_empty) {
-        return Err(Error::AclParse(format!("cannot parse principal '{s}'")));
+        return Err(Error::AclParse(format!("Cannot parse principal '{s}'")));
     }
     Ok(PrincPat { components, realm })
 }
@@ -470,13 +530,7 @@ fn parse_restrictions(str: &str) -> Result<Restrictions, Error> {
     let mut i = 0;
     while i < tokens.len() {
         let token = tokens[i];
-        if let Some((bit, inverted)) = flagspec(token) {
-            let on = token.starts_with('+');
-            if on == inverted {
-                rs.forbid_attrs &= !bit;
-            } else {
-                rs.require_attrs |= bit;
-            }
+        if flagspec_to_mask(token, &mut rs.require_attrs, &mut rs.forbid_attrs) {
             i += 1;
             continue;
         }
@@ -512,29 +566,88 @@ fn parse_restrictions(str: &str) -> Result<Restrictions, Error> {
     Ok(rs)
 }
 
-fn flagspec(token: &str) -> Option<(u32, bool)> {
-    let name = token
-        .strip_prefix('+')
-        .or_else(|| token.strip_prefix('-'))?;
-    Some(match name {
-        "allow_postdated" => (KDB_DISALLOW_POSTDATED, true),
-        "allow_forwardable" => (KDB_DISALLOW_FORWARDABLE, true),
-        "allow_tgs_req" => (KDB_DISALLOW_TGT_BASED, true),
-        "allow_renewable" => (KDB_DISALLOW_RENEWABLE, true),
-        "allow_proxiable" => (KDB_DISALLOW_PROXIABLE, true),
-        "allow_dup_skey" => (KDB_DISALLOW_DUP_SKEY, true),
-        "allow_tix" => (KDB_DISALLOW_ALL_TIX, true),
-        "requires_preauth" => (KDB_REQUIRES_PRE_AUTH, false),
-        "requires_hwauth" => (KDB_REQUIRES_HW_AUTH, false),
-        "needchange" => (KDB_REQUIRES_PWCHANGE, false),
-        "allow_svr" => (KDB_DISALLOW_SVR, true),
-        "password_changing_service" => (KDB_PWCHANGE_SERVICE, false),
-        "ok_as_delegate" => (KDB_OK_AS_DELEGATE, false),
-        "ok_to_auth_as_delegate" => (KDB_OK_TO_AUTH_AS_DELEGATE, false),
-        "no_auth_data_required" => (KDB_NO_AUTH_DATA_REQUIRED, false),
-        "lockdown_keys" => (KDB_LOCKDOWN_KEYS, false),
-        _ => return None,
-    })
+/// MIT `str_conv.c:50-95`.
+const FLAG_TABLE: &[(&str, u32, bool)] = &[
+    ("allow_postdated", KDB_DISALLOW_POSTDATED, true),
+    ("postdateable", KDB_DISALLOW_POSTDATED, true),
+    ("disallow_postdated", KDB_DISALLOW_POSTDATED, false),
+    ("allow_forwardable", KDB_DISALLOW_FORWARDABLE, true),
+    ("forwardable", KDB_DISALLOW_FORWARDABLE, true),
+    ("disallow_forwardable", KDB_DISALLOW_FORWARDABLE, false),
+    ("allow_tgs_req", KDB_DISALLOW_TGT_BASED, true),
+    ("tgt_based", KDB_DISALLOW_TGT_BASED, true),
+    ("disallow_tgt_based", KDB_DISALLOW_TGT_BASED, false),
+    ("allow_renewable", KDB_DISALLOW_RENEWABLE, true),
+    ("renewable", KDB_DISALLOW_RENEWABLE, true),
+    ("disallow_renewable", KDB_DISALLOW_RENEWABLE, false),
+    ("allow_proxiable", KDB_DISALLOW_PROXIABLE, true),
+    ("proxiable", KDB_DISALLOW_PROXIABLE, true),
+    ("disallow_proxiable", KDB_DISALLOW_PROXIABLE, false),
+    ("allow_dup_skey", KDB_DISALLOW_DUP_SKEY, true),
+    ("dup_skey", KDB_DISALLOW_DUP_SKEY, true),
+    ("disallow_dup_skey", KDB_DISALLOW_DUP_SKEY, false),
+    ("allow_tickets", KDB_DISALLOW_ALL_TIX, true),
+    ("allow_tix", KDB_DISALLOW_ALL_TIX, true),
+    ("disallow_all_tix", KDB_DISALLOW_ALL_TIX, false),
+    ("preauth", KDB_REQUIRES_PRE_AUTH, false),
+    ("requires_pre_auth", KDB_REQUIRES_PRE_AUTH, false),
+    ("requires_preauth", KDB_REQUIRES_PRE_AUTH, false),
+    ("hwauth", KDB_REQUIRES_HW_AUTH, false),
+    ("requires_hw_auth", KDB_REQUIRES_HW_AUTH, false),
+    ("requires_hwauth", KDB_REQUIRES_HW_AUTH, false),
+    ("needchange", KDB_REQUIRES_PWCHANGE, false),
+    ("pwchange", KDB_REQUIRES_PWCHANGE, false),
+    ("requires_pwchange", KDB_REQUIRES_PWCHANGE, false),
+    ("allow_svr", KDB_DISALLOW_SVR, true),
+    ("service", KDB_DISALLOW_SVR, true),
+    ("disallow_svr", KDB_DISALLOW_SVR, false),
+    ("password_changing_service", KDB_PWCHANGE_SERVICE, false),
+    ("pwchange_service", KDB_PWCHANGE_SERVICE, false),
+    ("pwservice", KDB_PWCHANGE_SERVICE, false),
+    ("md5", KDB_SUPPORT_DESMD5, false),
+    ("support_desmd5", KDB_SUPPORT_DESMD5, false),
+    ("new_princ", KDB_NEW_PRINC, false),
+    ("ok_as_delegate", KDB_OK_AS_DELEGATE, false),
+    ("ok_to_auth_as_delegate", KDB_OK_TO_AUTH_AS_DELEGATE, false),
+    ("no_auth_data_required", KDB_NO_AUTH_DATA_REQUIRED, false),
+    ("lockdown_keys", KDB_LOCKDOWN_KEYS, false),
+];
+
+/// MIT `krb5_flagspec_to_mask` (`str_conv.c:170-198`).
+fn flagspec_to_mask(spec: &str, toset: &mut u32, toclear: &mut u32) -> bool {
+    let (req_neg, body) = if let Some(rest) = spec.strip_prefix('-') {
+        (true, rest)
+    } else if let Some(rest) = spec.strip_prefix('+') {
+        (false, rest)
+    } else {
+        (false, spec)
+    };
+    let s: String = body
+        .chars()
+        .map(|c| {
+            let c = if c == '-' { '_' } else { c };
+            c.to_ascii_lowercase()
+        })
+        .collect();
+    let (flag, mut invert) =
+        if let Some((_, flag, invert)) = FLAG_TABLE.iter().copied().find(|(n, _, _)| *n == s) {
+            (flag, invert)
+        } else if let Some(hex) = s.strip_prefix("0x") {
+            let digits: String = hex.chars().take_while(char::is_ascii_hexdigit).collect();
+            let flag = u32::from_str_radix(&digits, 16).unwrap_or(0);
+            (flag, false)
+        } else {
+            return false;
+        };
+    if req_neg {
+        invert = !invert;
+    }
+    if invert {
+        *toclear &= !flag;
+    } else {
+        *toset |= flag;
+    }
+    true
 }
 
 fn parse_deltat(s: &str) -> Option<u64> {
@@ -640,6 +753,75 @@ fn principal_matches(pattern: &str, actor: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn acl_uppercase_letter_revokes() {
+        let acl = Acl::parse("admin@KERBER.TEST *D\n").unwrap();
+        assert!(
+            acl.check("admin@KERBER.TEST", AdminOp::Create, None)
+                .is_ok()
+        );
+        assert_eq!(
+            acl.check("admin@KERBER.TEST", AdminOp::Delete, None)
+                .unwrap_err(),
+            Error::AclDenied
+        );
+        assert!(
+            acl.check("admin@KERBER.TEST", AdminOp::Inquire, None)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn acl_unknown_op_letter_is_load_error() {
+        let err = Acl::parse("bad@KERBER.TEST aZ\n").unwrap_err();
+        assert!(
+            err.to_string().contains("Unrecognized ACL operation 'Z'"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn acl_flag_aliases_parse() {
+        let acl = Acl::parse(
+            "admin@KERBER.TEST a *@KERBER.TEST -preauth +disallow_svr +0x80 -Allow-Tix\n",
+        )
+        .unwrap();
+        let rs = acl
+            .restrictions("admin@KERBER.TEST", Some("user@KERBER.TEST"))
+            .expect("rs");
+        assert_ne!(rs.require_attrs & KDB_DISALLOW_SVR, 0);
+        assert_ne!(rs.require_attrs & KDB_DISALLOW_ALL_TIX, 0);
+        assert_ne!(rs.require_attrs & KDB_REQUIRES_PRE_AUTH, 0);
+        assert_eq!(rs.forbid_attrs & KDB_REQUIRES_PRE_AUTH, 0);
+    }
+
+    #[test]
+    fn acl_comment_only_at_column_zero() {
+        let acl = Acl::parse("# full line\nadmin@KERBER.TEST a\n").unwrap();
+        assert!(
+            acl.check("admin@KERBER.TEST", AdminOp::Create, None)
+                .is_ok()
+        );
+        assert!(Acl::parse("   # not a comment\n").is_err());
+        assert!(Acl::parse("   \n").is_err());
+    }
+
+    #[test]
+    fn acl_backslash_continuation() {
+        let acl = Acl::parse("admin@KERBER.TEST \\\n a\n").unwrap();
+        assert!(
+            acl.check("admin@KERBER.TEST", AdminOp::Create, None)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn acl_allow_admin_rejects_unparseable() {
+        assert!(Acl::allow_admin("").is_err());
+        assert!(Acl::allow_admin("@KERBER.TEST").is_err());
+        assert!(Acl::allow_admin("a//b@KERBER.TEST").is_err());
+    }
 
     #[test]
     fn acl_unknown_restriction_is_load_error() {
