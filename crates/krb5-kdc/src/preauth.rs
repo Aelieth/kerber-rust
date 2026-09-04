@@ -2,10 +2,10 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256, checksum, cksumtype_is_keyed,
-    cksumtype_is_unkeyed, decrypt, dh_generate, dh_group_for_prime, dh_shared, encrypt, krb_fx_cf2,
-    octetstring2key, p256_generate, p256_shared, pkinit_kdf_agile, spake_derive_key,
-    spake_kdc_keygen, spake_result_wbytes, spake_thash_update, spake_wbytes, verify_checksum_type,
+    EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256, checksum, cksumtype_is_keyed, decrypt,
+    dh_generate, dh_group_for_prime, dh_shared, encrypt, krb_fx_cf2, octetstring2key,
+    p256_generate, p256_shared, pkinit_kdf_agile, spake_derive_key, spake_kdc_keygen,
+    spake_result_wbytes, spake_thash_update, spake_wbytes, verify_checksum_type,
 };
 use krb5_protocol::{ReplayCache, ReplayKey};
 use krb5_types::{
@@ -167,9 +167,8 @@ fn verify_fast_req_checksum(
     ck: &krb5_types::Checksum,
 ) -> Result<(), Error> {
     // MIT krb5_c_verify_checksum then krb5_c_is_keyed_cksum (fast_util.c:207-224).
-    if !cksumtype_is_keyed(ck.cksumtype) && !cksumtype_is_unkeyed(ck.cksumtype) {
-        return Err(proto_fast(err::GENERIC, "unknown checksum type"));
-    }
+    // Type 0 is not in the keyed/unkeyed tables; verify_checksum_type substitutes
+    // the key's mandatory type, then is_keyed(0) is false → 12.
     let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM)?;
     match verify_checksum_type(
         armor_key,

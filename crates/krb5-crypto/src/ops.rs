@@ -627,10 +627,87 @@ pub fn verify_checksum_type(
     if !crate::etype::cksumtype_is_keyed(ctype) {
         return Err(Error::UnsupportedChecksum(ctype));
     }
-    if ctype != key.etype().checksum_type() {
+    // MIT crypto_int.h:596-608 verify_key: keyed type with ctp->enc != NULL
+    // requires ktp->enc == ctp->enc; ctp->enc == NULL (-138) accepts any key.
+    if !keyed_cksum_accepts_key(ctype, key.etype()) {
         return Err(Error::UnsupportedChecksum(ctype));
     }
-    verify_checksum(key, usage, message, mac)
+    let expected = keyed_checksum_for_type(key, usage, message, ctype)?;
+    mac_verify(mac, &expected)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EncProv {
+    Aes128,
+    Aes256,
+    Des3,
+    Arcfour,
+    Camellia128,
+    Camellia256,
+}
+
+fn cksum_enc(ctype: i32) -> Option<EncProv> {
+    match ctype {
+        15 | 19 => Some(EncProv::Aes128),
+        16 | 20 => Some(EncProv::Aes256),
+        12 => Some(EncProv::Des3),
+        -137 => Some(EncProv::Arcfour),
+        17 => Some(EncProv::Camellia128),
+        18 => Some(EncProv::Camellia256),
+        _ => None,
+    }
+}
+
+fn key_enc(etype: EncryptionType) -> EncProv {
+    match etype {
+        EncryptionType::Aes128CtsHmacSha196 | EncryptionType::Aes128CtsHmacSha256128 => {
+            EncProv::Aes128
+        }
+        EncryptionType::Aes256CtsHmacSha196 | EncryptionType::Aes256CtsHmacSha384192 => {
+            EncProv::Aes256
+        }
+        EncryptionType::Des3CbcSha1 => EncProv::Des3,
+        EncryptionType::Rc4Hmac => EncProv::Arcfour,
+        EncryptionType::Camellia128CtsCmac => EncProv::Camellia128,
+        EncryptionType::Camellia256CtsCmac => EncProv::Camellia256,
+    }
+}
+
+fn keyed_cksum_accepts_key(ctype: i32, etype: EncryptionType) -> bool {
+    match cksum_enc(ctype) {
+        None => true,
+        Some(p) => key_enc(etype) == p,
+    }
+}
+
+fn cksumtype_compute_etype(ctype: i32) -> Result<EncryptionType, Error> {
+    match ctype {
+        15 => Ok(EncryptionType::Aes128CtsHmacSha196),
+        16 => Ok(EncryptionType::Aes256CtsHmacSha196),
+        19 => Ok(EncryptionType::Aes128CtsHmacSha256128),
+        20 => Ok(EncryptionType::Aes256CtsHmacSha384192),
+        12 => Ok(EncryptionType::Des3CbcSha1),
+        17 => Ok(EncryptionType::Camellia128CtsCmac),
+        18 => Ok(EncryptionType::Camellia256CtsCmac),
+        -137 => Ok(EncryptionType::Rc4Hmac),
+        _ => Err(Error::UnsupportedChecksum(ctype)),
+    }
+}
+
+fn keyed_checksum_for_type(
+    key: &ProtocolKey,
+    usage: KeyUsage,
+    message: &[u8],
+    ctype: i32,
+) -> Result<Vec<u8>, Error> {
+    match ctype {
+        -137 | -138 => hmac_md5_arcfour_checksum(key.as_bytes(), usage.get(), message),
+        _ => {
+            let etype = cksumtype_compute_etype(ctype)?;
+            let tmp = ProtocolKey::from_bytes(etype, key.as_bytes())?;
+            checksum_inner(&tmp, usage, message)
+        }
+    }
 }
 
 fn emit(

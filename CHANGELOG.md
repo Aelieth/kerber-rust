@@ -22,6 +22,17 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0e H2 (unit-red; MIT by source).** Keyed checksum types match by
+  enc provider like `verify_key` (`crypto_int.h:596-608`). `-138`
+  HMAC-MD5-ARCFOUR has NULL enc (any key); `-137` is arcfour.
+  Types 15/19 share aes128; 16/20 share aes256. `cksumtype` 0
+  substitutes the key's mandatory type, then FAST `is_keyed(0)` is
+  12 `FIND_FAST`. Units: `fast_as_arcfour_hmac_type_over_aes_key_wrong_bytes_is_modified`,
+  `fast_as_same_provider_type_wrong_bytes_is_modified`,
+  `fast_as_cross_provider_type_is_generic`,
+  `fast_as_cksumtype_zero_valid_mac_is_policy`. MIT clients cannot
+  emit these.
+
 - **W0e H1 (MIT-gated).** FAST unwrap `Error::Crypto` / `Error::Asn1`
   (corrupt `enc_fast_req`, malformed `KrbFastReq`) wire `FIND_FAST`
   with protocol 31 / 60 (`do_as_req.c:531-535`,

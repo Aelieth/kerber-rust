@@ -82,7 +82,11 @@ a failed verify is 41 `MODIFIED` wire `FIND_FAST`; an unkeyed type is
 only after verify succeeds (RSA-MD4 2, RSA-MD5 7, NIST-SHA 9, SHA-1 14;
 MIT `cksumtypes.c`). CRC32 (1) has no table entry. Unknown type or
 `output_size` length mismatch is 60 `GENERIC` wire `FIND_FAST`
-(`KRB5_BAD_ENCTYPE` / `KRB5_BAD_MSIZE`). Unknown armor type is
+(`KRB5_BAD_ENCTYPE` / `KRB5_BAD_MSIZE`). Keyed types match by enc
+provider (`crypto_int.h:596-608`): 15/19 aes128, 16/20 aes256, 12 des3,
+17/18 camellia, `-138` NULL (any key), `-137` arcfour. `cksumtype` 0
+substitutes the key's mandatory type, then `is_keyed(0)` is 12.
+Unknown armor type is
 24 with wire `FIND_FAST` (log `detail` is `Unknown FAST armor type %d`).
 TGS authenticator client ≠ ticket client is 36 `PROCESS_TGS`. Explicit
 TGS AP-REQ armor is 24 `FIND_FAST` even without a subkey; MIT only

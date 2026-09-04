@@ -954,6 +954,63 @@ fn fast_as_prepared(store: &PrincipalStore, nonce: u32) -> (krb5_types::AsReq, P
     (req, akey)
 }
 
+fn fast_as_prepared_etype(
+    store: &PrincipalStore,
+    nonce: u32,
+    etype: EncryptionType,
+) -> (krb5_types::AsReq, ProtocolKey) {
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = {
+        let salt = cname.default_salt(TEST_REALM);
+        string_to_key(
+            etype,
+            TEST_USER_PASSWORD,
+            &salt,
+            Some(&S2K_ITERS.to_be_bytes()),
+        )
+        .expect("s2k")
+    };
+    let armor_as = {
+        let req = as_req_sname(
+            cname.clone(),
+            TEST_REALM,
+            nonce,
+            Some(vec![pa_enc_timestamp(&key).expect("pa")]),
+            PrincipalName::krbtgt(TEST_REALM),
+            vec![etype.to_iana()],
+        )
+        .unwrap();
+        krb5_kdc::issue_as(store, &req).expect("AS")
+    };
+    let sub = ProtocolKey::from_bytes(etype, &vec![0x47u8; etype.key_len()]).expect("subkey");
+    let armor_ap = build_fast_armor(
+        armor_as.rep.0.ticket.clone(),
+        &armor_as.session_key,
+        &ascii(TEST_REALM),
+        &cname,
+        Some(&sub),
+    )
+    .expect("armor AP-REQ");
+    let akey = armor_key(&armor_as.session_key, Some(&sub)).expect("armor key");
+    let mut req = as_req_sname(
+        cname,
+        TEST_REALM,
+        nonce + 1,
+        None,
+        PrincipalName::krbtgt(TEST_REALM),
+        vec![etype.to_iana()],
+    )
+    .unwrap();
+    attach_fast(
+        &mut req,
+        &armor_ap,
+        &akey,
+        vec![pa_enc_timestamp(&key).expect("pa")],
+    )
+    .expect("FAST wrap");
+    (req, akey)
+}
+
 fn fast_tgs_prepared(store: &PrincipalStore, nonce: u32) -> krb5_types::TgsReq {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let issued = issue_tgt(store, TEST_USER, TEST_USER_PASSWORD, nonce);
@@ -1025,6 +1082,54 @@ fn fast_tgs_corrupt_enc_fast_req_is_bad_integrity_find_fast() {
     });
     let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("corrupt TGS enc_fast_req");
     assert_find_fast(err, err::BAD_INTEGRITY, "integrity check failed");
+}
+
+#[test]
+fn fast_as_arcfour_hmac_type_over_aes_key_wrong_bytes_is_modified() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut req, _) = fast_as_prepared(&store, 922);
+    map_fx_fast_as(&mut req, |a| {
+        a.req_checksum.cksumtype = -138;
+        a.req_checksum.checksum = vec![0xff; 16].into();
+    });
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("-138 over aes");
+    assert_find_fast(err, err::MODIFIED, "modified checksum");
+}
+
+#[test]
+fn fast_as_same_provider_type_wrong_bytes_is_modified() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut req, _) = fast_as_prepared_etype(&store, 924, EncryptionType::Aes128CtsHmacSha196);
+    map_fx_fast_as(&mut req, |a| {
+        a.req_checksum.cksumtype = 19;
+        a.req_checksum.checksum = vec![0xff; 16].into();
+    });
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("type 19 over aes128-sha1");
+    assert_find_fast(err, err::MODIFIED, "modified checksum");
+}
+
+#[test]
+fn fast_as_cross_provider_type_is_generic() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut req, _) = fast_as_prepared(&store, 926);
+    map_fx_fast_as(&mut req, |a| a.req_checksum.cksumtype = 15);
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("type 15 over aes256");
+    assert_find_fast(err, err::GENERIC, "unknown checksum type");
+}
+
+#[test]
+fn fast_as_cksumtype_zero_valid_mac_is_policy() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut req, akey) = fast_as_prepared(&store, 928);
+    let body = encode(&req.0.req_body).expect("body");
+    let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM).unwrap();
+    let mic = checksum(&akey, ck_usage, &body).expect("mic");
+    map_fx_fast_as(&mut req, |a| {
+        a.req_checksum.cksumtype = 0;
+        a.req_checksum.checksum = mic.into();
+    });
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("cksumtype 0");
+    assert_find_fast(err, err::POLICY, "Unkeyed checksum used in fast_req");
 }
 
 #[test]
