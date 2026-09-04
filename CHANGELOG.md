@@ -22,6 +22,14 @@ breadth). 1.1 is cut after the remaining polish/general pass.
 
 ### Added
 
+- **W0f I8.** Ledger header recount 244 = 116+67+61 (exact 54 ·
+  deviation 96). AS time/flag anchors are `issue.rs:1697-1734`.
+  `diffsend` names in the ORDER/FAST/AD-FX-ARMOR rows are backticked
+  `proposed`. New rows: kpasswd pre-AP-REQ drop (`exact`), acceptor/
+  KRB-SAFE/GSS declared-cksumtype ignore (W1-B/C `deviation`),
+  `kadm5_code` `AclDenied → AUTH_GET` (W1-C `deviation`). F1 is not
+  opened.
+
 - **W0f I7.** `scripts/red-at-sha.sh` copies `scripts/lib/*.sh` and
   the gate's `scripts/*.c`/`*.py` from HEAD into the worktree, prints
   the probe sha256, requires an absolute `KERBER_SCRATCH`, and prunes
