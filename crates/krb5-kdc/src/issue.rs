@@ -75,14 +75,6 @@ pub fn handle_request(store: &dyn PrincipalRead, raw: &[u8]) -> Result<Vec<u8>, 
     match result {
         Ok((bytes, detail)) => {
             if bytes.is_empty() {
-                tracing::error!(
-                    event = krb5_log::events::KDC_ISSUE,
-                    correlation_id = krb5_log::current_correlation_id(),
-                    component = "krb5-kdc",
-                    duration_us,
-                    outcome = "error",
-                    error = "while dispatching (udp)",
-                );
                 return Ok(bytes);
             }
             if bytes.starts_with(&[0x7e]) {

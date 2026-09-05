@@ -10,6 +10,25 @@ use std::time::Duration;
 use crate::issue::handle_request;
 use crate::kdb::Store;
 
+/// MIT `net-server.c:1101-1105`.
+const WHILE_DISPATCHING_UDP: &str = "while dispatching (udp)";
+/// MIT `net-server.c:1314-1315`.
+const WHILE_DISPATCHING_TCP: &str = "while dispatching (tcp)";
+
+fn log_dispatch_drop(udp: bool) {
+    tracing::error!(
+        event = krb5_log::events::KDC_ISSUE,
+        correlation_id = krb5_log::current_correlation_id(),
+        component = "krb5-kdc",
+        outcome = "error",
+        error = if udp {
+            WHILE_DISPATCHING_UDP
+        } else {
+            WHILE_DISPATCHING_TCP
+        },
+    );
+}
+
 /// Serving store: AS/TGS take a read lock; kadmind/kpasswd take a write lock
 /// so runtime mutations reach [`crate::persist::save_store`].
 pub type SharedStore = Arc<RwLock<Box<dyn Store>>>;
@@ -236,6 +255,7 @@ fn udp_loop(store: &SharedStore, sock: UdpSocket, shutdown: &AtomicBool, limits:
                 match reply {
                     Ok(Ok(mut reply)) => {
                         if reply.is_empty() {
+                            log_dispatch_drop(true);
                             continue;
                         }
                         if reply.len() > limits.max_dgram_reply_size {
@@ -259,6 +279,7 @@ fn udp_loop(store: &SharedStore, sock: UdpSocket, shutdown: &AtomicBool, limits:
                         component = "krb5-kdc",
                         outcome = "error",
                         error = %e,
+                        error_suffix = WHILE_DISPATCHING_UDP,
                     ),
                     Err(_) => tracing::error!(
                         event = krb5_log::events::KDC_TRANSPORT,
@@ -376,7 +397,6 @@ fn handle_tcp(
     }
     let n = usize::try_from(u32::from_be_bytes(hdr)).unwrap_or(usize::MAX);
     if n == 0 {
-        let _ = read_store(store, |s| handle_request(s, &[]));
         return Ok(());
     }
     if n > max_body {
@@ -414,7 +434,7 @@ fn handle_tcp(
                 component = "krb5-kdc",
                 outcome = "error",
                 error = %e,
-                error_suffix = "while dispatching (tcp)",
+                error_suffix = WHILE_DISPATCHING_TCP,
             );
             return Err(io::Error::new(io::ErrorKind::InvalidData, e.to_string()));
         }
@@ -423,6 +443,7 @@ fn handle_tcp(
         }
     };
     if reply.is_empty() {
+        log_dispatch_drop(false);
         return Ok(());
     }
     let len = u32::try_from(reply.len())
@@ -562,6 +583,73 @@ mod tests {
         assert!(
             c.read_exact(&mut hdr).is_err(),
             "zero-length must not reply"
+        );
+    }
+
+    #[test]
+    fn dispatch_suffixes_are_mit_net_server() {
+        assert_eq!(WHILE_DISPATCHING_UDP, "while dispatching (udp)");
+        assert_eq!(WHILE_DISPATCHING_TCP, "while dispatching (tcp)");
+    }
+
+    #[test]
+    fn log_dispatch_drop_udp_is_not_tcp() {
+        use std::sync::Mutex;
+        use tracing_subscriber::fmt::MakeWriter;
+
+        #[derive(Clone)]
+        struct Capture(Arc<Mutex<Vec<u8>>>);
+        impl Write for Capture {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> MakeWriter<'a> for Capture {
+            type Writer = Self;
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(Capture(Arc::clone(&buf)))
+            .with_ansi(false)
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            log_dispatch_drop(true);
+            log_dispatch_drop(false);
+            let (store, _) = bootstrap_documented().unwrap();
+            let _ = crate::handle_request(&store, &[]);
+        });
+        let logged = String::from_utf8_lossy(&buf.lock().unwrap()).into_owned();
+        assert!(
+            logged.contains(WHILE_DISPATCHING_UDP),
+            "listener UDP drop logs MIT suffix, got {logged}"
+        );
+        assert!(
+            logged.contains(WHILE_DISPATCHING_TCP),
+            "listener TCP drop logs MIT suffix, got {logged}"
+        );
+        let issue_only = {
+            let buf2 = Arc::new(Mutex::new(Vec::new()));
+            let sub2 = tracing_subscriber::fmt()
+                .with_writer(Capture(Arc::clone(&buf2)))
+                .with_ansi(false)
+                .finish();
+            tracing::subscriber::with_default(sub2, || {
+                let (store, _) = bootstrap_documented().unwrap();
+                let _ = crate::handle_request(&store, &[]);
+            });
+            String::from_utf8_lossy(&buf2.lock().unwrap()).into_owned()
+        };
+        assert!(
+            !issue_only.contains(WHILE_DISPATCHING_UDP),
+            "handle_request must not log (udp); got {issue_only}"
         );
     }
 
