@@ -760,16 +760,15 @@ fn handle_auth_gssapi(
     let Some(st) = agss.as_mut() else {
         return Ok(rpc_reply_auth_error(xid, AUTH_FAILED));
     };
-    if iprop {
-        return Ok(rpc_reply_weakauth(xid));
-    }
     if !client_handle.is_empty() && client_handle != st.handle {
         return Err(Error::Inner("auth_gssapi handle".into()));
     }
-
     if auth_msg && proc == AUTH_GSSAPI_DESTROY {
         *agss = None;
         return Ok(rpc_reply_clear(xid, &[]));
+    }
+    if iprop {
+        return Ok(rpc_reply_weakauth(xid));
     }
 
     if !st.established {
@@ -3877,24 +3876,14 @@ mod tests {
         (xid, r.u32().unwrap())
     }
 
-    fn admin_rpcsec_init() -> (
+    #[allow(clippy::type_complexity)]
+    fn admin_gss_token() -> (
         krb5_kdc::SharedDump,
         Acl,
         GssContext,
         Vec<u8>,
-        Option<RpcsecGss>,
-    ) {
-        admin_rpcsec_init_svc(GSS_PRIVACY)
-    }
-
-    fn admin_rpcsec_init_svc(
-        svc: u32,
-    ) -> (
-        krb5_kdc::SharedDump,
-        Acl,
-        GssContext,
-        Vec<u8>,
-        Option<RpcsecGss>,
+        ProtocolKey,
+        ProtocolKey,
     ) {
         use krb5_crypto::EncryptionType;
         use krb5_kdc::{TEST_REALM, documented_kadmin};
@@ -3927,7 +3916,7 @@ mod tests {
             let g = store.read().unwrap();
             krb5_kdc::issue_as(&*g, &as_req).unwrap()
         };
-        let (mut ctx, token) = GssContext::init_sec_context(
+        let (ctx, token) = GssContext::init_sec_context(
             as_out.rep.0.ticket.clone(),
             &as_out.session_key,
             &ascii(TEST_REALM),
@@ -3937,6 +3926,93 @@ mod tests {
             None,
         )
         .unwrap();
+        (store, acl, ctx, token, kadm_key, as_out.session_key)
+    }
+
+    #[test]
+    fn auth_gssapi_destroy_on_iprop_is_auth_layer() {
+        use krb5_kdc::TEST_REALM;
+        let (store, acl, _ctx, token, kadm_key, _session) = admin_gss_token();
+        let mut cred = XdrW::default();
+        cred.u32(AUTH_GSSAPI_CREDS_VERS);
+        cred.u32(1);
+        cred.opaque(&[]);
+        let mut args = XdrW::default();
+        args.u32(2);
+        args.opaque(&token);
+        let mut w = XdrW::default();
+        w.u32(13);
+        w.u32(MSG_CALL);
+        w.u32(RPC_VERSION);
+        w.u32(IPROP_PROG);
+        w.u32(IPROP_VERS);
+        w.u32(AUTH_GSSAPI_INIT);
+        w.u32(FLAVOR_AUTH_GSSAPI);
+        w.opaque(&cred.b);
+        w.u32(FLAVOR_NONE);
+        w.opaque(&[]);
+        w.b.extend_from_slice(&args.b);
+        let mut gss = None;
+        let mut agss = None;
+        let keys = [kadm_key];
+        let rc = krb5_protocol::ReplayCache::new();
+        let out = handle_rpc(
+            &store, &acl, &keys, TEST_REALM, b"hdl", &mut gss, &mut agss, &rc, &w.b,
+        )
+        .unwrap();
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), 13);
+        assert_eq!(r.u32().unwrap(), MSG_REPLY);
+        assert_eq!(r.u32().unwrap(), MSG_ACCEPTED);
+        assert!(agss.is_some());
+        let mut dcred = XdrW::default();
+        dcred.u32(AUTH_GSSAPI_CREDS_VERS);
+        dcred.u32(1);
+        dcred.opaque(&1u32.to_le_bytes());
+        let mut d = XdrW::default();
+        d.u32(14);
+        d.u32(MSG_CALL);
+        d.u32(RPC_VERSION);
+        d.u32(IPROP_PROG);
+        d.u32(IPROP_VERS);
+        d.u32(AUTH_GSSAPI_DESTROY);
+        d.u32(FLAVOR_AUTH_GSSAPI);
+        d.opaque(&dcred.b);
+        d.u32(FLAVOR_NONE);
+        d.opaque(&[]);
+        let out = handle_rpc(
+            &store, &acl, &keys, TEST_REALM, b"hdl", &mut gss, &mut agss, &rc, &d.b,
+        )
+        .unwrap();
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), 14);
+        assert_eq!(r.u32().unwrap(), MSG_REPLY);
+        assert_eq!(r.u32().unwrap(), MSG_ACCEPTED);
+        assert!(agss.is_none());
+    }
+
+    fn admin_rpcsec_init() -> (
+        krb5_kdc::SharedDump,
+        Acl,
+        GssContext,
+        Vec<u8>,
+        Option<RpcsecGss>,
+    ) {
+        admin_rpcsec_init_svc(GSS_PRIVACY)
+    }
+
+    fn admin_rpcsec_init_svc(
+        svc: u32,
+    ) -> (
+        krb5_kdc::SharedDump,
+        Acl,
+        GssContext,
+        Vec<u8>,
+        Option<RpcsecGss>,
+    ) {
+        use krb5_kdc::TEST_REALM;
+
+        let (store, acl, mut ctx, token, kadm_key, session) = admin_gss_token();
         let cred = rpcsec_cred(RPG_INIT, 0, svc, &[]);
         let mut arg = XdrW::default();
         arg.opaque(&token);
@@ -3969,7 +4045,7 @@ mod tests {
         let window = r.u32().unwrap();
         let out_tok = r.opaque().unwrap();
         if !out_tok.is_empty() {
-            ctx.process_ap_rep(&out_tok, &as_out.session_key).unwrap();
+            ctx.process_ap_rep(&out_tok, &session).unwrap();
         }
         ctx.allow_rpcsec_init_window();
         ctx.verify_mic(&window.to_be_bytes(), &verf).unwrap();

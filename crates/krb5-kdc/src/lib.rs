@@ -102,6 +102,12 @@ pub fn documented_kiprop() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_SRV_HST, ["kiprop", TEST_HOST])
 }
 
+/// `kadmin/history` as NT-SRV-INST (MIT `create_hist` key-history principal).
+#[must_use]
+pub fn documented_history() -> PrincipalName {
+    PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "history"])
+}
+
 /// `admin@KERBER.TEST` actor string.
 #[must_use]
 pub fn documented_admin_id() -> String {

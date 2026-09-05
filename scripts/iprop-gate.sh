@@ -168,6 +168,58 @@ docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec "$NAME" kdb5_util create -s -P masterpassword
 docker exec "$NAME" sh -c 'printf "host/testhost.kerber.test@KERBER.TEST\nkiprop/testhost.kerber.test@KERBER.TEST\n" >/tmp/kpropd.acl'
 kill_comm kpropd
+
+echo "==== MIT kpropd is denied by the Rust master when kiprop has no p (get_updates permission denied) ===="
+docker exec "$NAME" sh -c 'printf "%s\n" "admin@KERBER.TEST *" > /tmp/kadm5.acl'
+kill_comm krb5-kadmind
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+    "$NAME" sh -c '/tmp/krb5-kadmind 0.0.0.0:749 >/tmp/kadmind-nop.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/kadmind-nop.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kadmind-nop.log >&2 || true
+    log "iprop.gate" "error" ',"error":"kadmind did not listen with no-p ACL"'
+    exit 1
+fi
+KPROPD_DENY="$(docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf -e KRB5_KTNAME=/tmp/iprop.keytab \
+    "$NAME" sh -c 'timeout 25 kpropd -S -d -A testhost.kerber.test -a /tmp/kpropd.acl -P 754 -s /tmp/iprop.keytab -f /tmp/from_kprop.dump -p "$(command -v kdb5_util)" 2>&1' || true)"
+echo "$KPROPD_DENY"
+echo "$KPROPD_DENY" | grep -F 'get_updates permission denied'
+docker exec "$NAME" grep -F '"op":"propagate","error":"ACL denied"' /tmp/kadmind-nop.log
+docker exec "$NAME" sh -c 'cat >/tmp/kadm5.acl <<EOF
+admin@KERBER.TEST *
+kiprop/*@KERBER.TEST p
+EOF'
+kill_comm krb5-kadmind
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+    "$NAME" sh -c '/tmp/krb5-kadmind 0.0.0.0:749 >/tmp/kadmind.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/kadmind.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kadmind.log >&2 || true
+    log "iprop.gate" "error" ',"error":"kadmind did not listen after restoring p"'
+    exit 1
+fi
 docker exec -d \
     -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
     -e KRB5_KTNAME=/tmp/iprop.keytab \
@@ -190,12 +242,12 @@ fi
 echo "==== Rust kadmind rpc_flavor vs MIT kpropd ===="
 KADMLOG="$(docker exec "$NAME" cat /tmp/kadmind.log 2>/dev/null || true)"
 echo "$KADMLOG"
-echo "$KADMLOG" | grep -F '"rpc_flavor":"RPCSEC_GSS"' || {
-    echo "MIT kpropd did not negotiate RPCSEC_GSS against Rust kadmind" >&2
+echo "$KADMLOG" | grep -F '"prog":100423' | grep -F '"rpc_flavor":"RPCSEC_GSS"' || {
+    echo "MIT kpropd did not negotiate RPCSEC_GSS on IPROP_PROG against Rust kadmind" >&2
     exit 1
 }
-if echo "$KADMLOG" | grep -F '"rpc_flavor":"AUTH_GSSAPI"'; then
-    echo "MIT kpropd used AUTH_GSSAPI against Rust kadmind" >&2
+if echo "$KADMLOG" | grep -F '"prog":100423' | grep -F '"rpc_flavor":"AUTH_GSSAPI"'; then
+    echo "MIT kpropd used AUTH_GSSAPI on IPROP_PROG against Rust kadmind" >&2
     exit 1
 fi
 echo "rpc_flavor=RPCSEC_GSS"

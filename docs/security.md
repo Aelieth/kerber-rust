@@ -204,8 +204,14 @@ acceptor checks are realm-qualified in Rust through `acceptor_realm_ok`;
 the realm is bound at `accept_sec_context` and re-checked at the gate.
 iprop is RPCSEC_GSS only (`ipropd_svc.c:481-483`) with
 `kiprop/<host>` (`:508-516`); AUTH_GSSAPI INIT is the auth-layer
-SUCCESS/`no_dispatch` path (`svc_auth_gssapi.c:495-497`); DATA is
-`AUTH_TOOWEAK` once a context exists (`ipropd_svc.c:542-548`). The RPCSEC_GSS INIT reply verifier is
+SUCCESS/`no_dispatch` path (`svc_auth_gssapi.c:495-497`), DESTROY is
+likewise answered in the auth layer (`:616-623`), and DATA is
+`AUTH_TOOWEAK` once a context exists (`ipropd_svc.c:542-548`). A
+`kadmin/admin` RPCSEC acceptor on the iprop program is `AUTH_TOOWEAK`;
+`kiprop/<host>` dispatches. MIT accepts any KDB principal as an acceptor
+(`setup_kdb_keytab`) and gates by name; the Rust kadmind loads the four
+documented kadm5 principals (`kadmin/admin`, `kadmin/changepw`,
+`kadmin/history`, `kiprop/<host>`). The RPCSEC_GSS INIT reply verifier is
 `gss_get_mic(htonl(seq_window))` (`svc_auth_gss.c:271-286,496-504`).
 `_svcauth_gss` answers version mismatch as `AUTH_BADCRED`, INIT without
 NULLPROC as `AUTH_FAILED`, `accept_sec_context` / unknown `gc_proc` as

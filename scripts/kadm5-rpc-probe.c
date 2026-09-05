@@ -1,14 +1,16 @@
-/* RPCSEC_GSS reject-machine probe: after authgss_create establishes the
- * context, hand-frame a malformed GET_PRINCS DATA call and print the reply's
- * auth/accept status. Out-of-process only; compiled in the MIT 1.22.2 image.
- * The context handle and MICs come from libgssrpc; only the framing is by hand.
- * The header MIC is taken before the databody MIC so the GSS sequence numbers
- * match a normal client (svc_auth_gss.c expects the header seq first).
+/* RPCSEC_GSS / AUTH_GSSAPI probe for the kadmind reject machines. After a real
+ * libgssrpc handshake, hand-frame a DATA call and print the reply's auth or
+ * accept status. Out-of-process only; compiled in the MIT 1.22.2 image. The
+ * context handle and MICs come from libgssrpc; only the framing is by hand,
+ * with the header MIC taken before the databody MIC so the GSS sequence numbers
+ * match a normal client. iprop XDR is hand-encoded (kdb_last_t = 3 x u32).
  * usage: kadm5-rpc-probe <host> <service> <mode> [port]
- *   mode: valid | corrupt-verf | maxseq | wrong-handle | destroy-then-data | garbage-args
+ *   kadm5 (2112): valid | corrupt-verf | maxseq | wrong-handle | destroy-then-data | garbage-args
+ *   iprop (100423): iprop-valid (RPCSEC_GSS GET_UPDATES) | iprop-auth-gssapi (AUTH_GSSAPI GET_UPDATES)
  */
 #include <gssrpc/rpc.h>
 #include <gssrpc/auth_gss.h>
+#include <gssrpc/auth_gssapi.h>
 #include <gssapi/gssapi.h>
 #include <gssapi/gssapi_krb5.h>
 #include <kadm5/admin.h>
@@ -23,6 +25,9 @@
 #define KADM 2112
 #define KADMVERS 2
 #define GET_PRINCS 14
+#define IPROP_PROG 100423
+#define IPROP_VERS 1
+#define IPROP_GET_UPDATES 1
 #define KADMIND_PORT 749
 
 static int connect_to(const char *host, int port) {
@@ -78,12 +83,36 @@ static int read_full(int fd, unsigned char *p, size_t n) {
     return 0;
 }
 
+static bool_t xdr_kdb_last(XDR *x, void *p) {
+    uint32_t *v = p;
+    return xdr_u_int32(x, &v[0]) && xdr_u_int32(x, &v[1]) && xdr_u_int32(x, &v[2]);
+}
+
+static const char *auth_label(uint32_t why) {
+    switch (why) {
+    case 1:
+        return "AUTH_BADCRED";
+    case 2:
+        return "AUTH_REJECTEDCRED";
+    case 5:
+        return "AUTH_TOOWEAK";
+    case 7:
+        return "AUTH_FAILED";
+    case 13:
+        return "CREDPROBLEM";
+    case 14:
+        return "CTXPROBLEM";
+    default:
+        return "AUTH_ERROR";
+    }
+}
+
 /* Build and send one RPCSEC_GSS call. gc_proc: 0=DATA, 3=DESTROY. When body is
  * non-NULL the args are integrity-wrapped (opaque(seq‖body) + opaque(mic)). */
-static int send_call(int fd, gss_ctx_id_t ctx, uint32_t xid, uint32_t gc_proc,
-                     uint32_t rq_proc, uint32_t seq, const unsigned char *handle,
-                     size_t hlen, int corrupt_verf, const unsigned char *body,
-                     size_t bodylen) {
+static int send_call(int fd, gss_ctx_id_t ctx, uint32_t prog, uint32_t vers,
+                     uint32_t xid, uint32_t gc_proc, uint32_t rq_proc, uint32_t seq,
+                     const unsigned char *handle, size_t hlen, int corrupt_verf,
+                     const unsigned char *body, size_t bodylen) {
     unsigned char cred[1024];
     size_t ci = 0;
     xdr_u32(cred + ci, 1);
@@ -104,9 +133,9 @@ static int send_call(int fd, gss_ctx_id_t ctx, uint32_t xid, uint32_t gc_proc,
     hi += 4;
     xdr_u32(header + hi, 2);
     hi += 4;
-    xdr_u32(header + hi, KADM);
+    xdr_u32(header + hi, prog);
     hi += 4;
-    xdr_u32(header + hi, KADMVERS);
+    xdr_u32(header + hi, vers);
     hi += 4;
     xdr_u32(header + hi, rq_proc);
     hi += 4;
@@ -114,7 +143,6 @@ static int send_call(int fd, gss_ctx_id_t ctx, uint32_t xid, uint32_t gc_proc,
     hi += 4;
     hi += put_opaque(header + hi, cred, ci);
 
-    /* Header MIC first (GSS seq N). */
     gss_buffer_desc hbuf, hverf;
     OM_uint32 maj, min;
     hbuf.value = header;
@@ -129,7 +157,6 @@ static int send_call(int fd, gss_ctx_id_t ctx, uint32_t xid, uint32_t gc_proc,
     if (corrupt_verf && hverf.length > 0)
         ((unsigned char *)hverf.value)[hverf.length - 1] ^= 0xff;
 
-    /* Integrity args, MIC second (GSS seq N+1). */
     unsigned char args[512];
     size_t arglen = 0;
     gss_buffer_desc mic;
@@ -197,22 +224,7 @@ static void recv_report(int fd, const char *tag) {
     if (reply_stat == 1) {
         uint32_t rej = rd_u32(body + 12);
         code = rd_u32(body + 16);
-        if (rej == 1) {
-            if (code == 1)
-                label = "AUTH_BADCRED";
-            else if (code == 2)
-                label = "AUTH_REJECTEDCRED";
-            else if (code == 7)
-                label = "AUTH_FAILED";
-            else if (code == 13)
-                label = "CREDPROBLEM";
-            else if (code == 14)
-                label = "CTXPROBLEM";
-            else
-                label = "AUTH_ERROR";
-        } else {
-            label = "DENIED";
-        }
+        label = (rej == 1) ? auth_label(code) : "DENIED";
     } else {
         size_t off = 12;
         off += 4;
@@ -241,13 +253,16 @@ int main(int argc, char **argv) {
     char *service = argv[2];
     char *mode = argv[3];
     int port = (argc >= 5 && argv[4][0]) ? atoi(argv[4]) : KADMIND_PORT;
+    int iprop = strncmp(mode, "iprop-", 6) == 0;
+    uint32_t prog = iprop ? IPROP_PROG : KADM;
+    uint32_t vers = iprop ? IPROP_VERS : KADMVERS;
 
     int fd = connect_to(host, port);
     if (fd < 0) {
         printf("connect=fail\n");
         return 1;
     }
-    CLIENT *clnt = clnttcp_create(NULL, KADM, KADMVERS, &fd, 0, 0);
+    CLIENT *clnt = clnttcp_create(NULL, prog, vers, &fd, 0, 0);
     if (clnt == NULL) {
         printf("clnttcp_create=fail\n");
         return 1;
@@ -262,6 +277,34 @@ int main(int argc, char **argv) {
         printf("import_name=fail=%u\n", (unsigned)maj);
         return 1;
     }
+
+    uint32_t last[3] = {0, 0, 0};
+    if (!strcmp(mode, "iprop-auth-gssapi")) {
+        OM_uint32 gmaj = 0, gmin = 0;
+        clnt->cl_auth = auth_gssapi_create(clnt, &gmaj, &gmin, GSS_C_NO_CREDENTIAL, target,
+                                           (gss_OID)gss_mech_krb5,
+                                           GSS_C_MUTUAL_FLAG | GSS_C_REPLAY_FLAG, 0, NULL,
+                                           NULL, NULL);
+        if (clnt->cl_auth == NULL) {
+            printf("iprop-auth-gssapi label=INIT_FAIL major=%u\n", (unsigned)gmaj);
+            return 1;
+        }
+        printf("init_code=0\n");
+        struct timeval tv;
+        tv.tv_sec = 10;
+        tv.tv_usec = 0;
+        enum clnt_stat st = clnt_call(clnt, IPROP_GET_UPDATES, (xdrproc_t)xdr_kdb_last,
+                                      (caddr_t)last, (xdrproc_t)xdr_void, NULL, tv);
+        struct rpc_err err;
+        clnt_geterr(clnt, &err);
+        const char *label = (st == RPC_SUCCESS) ? "SUCCESS"
+                            : (st == RPC_AUTHERROR) ? auth_label((uint32_t)err.re_why)
+                                                     : "RPC_ERROR";
+        printf("iprop-auth-gssapi label=%s clnt_stat=%d why=%d\n", label, (int)st,
+               (int)err.re_why);
+        return 0;
+    }
+
     struct rpc_gss_sec sec;
     sec.mech = (gss_OID)gss_mech_krb5;
     sec.qop = GSS_C_QOP_DEFAULT;
@@ -290,31 +333,36 @@ int main(int argc, char **argv) {
     unsigned char lst[64];
     xdr_u32(lst, KADM5_API_VERSION_2);
     size_t lstlen = 4 + put_opaque(lst + 4, (const unsigned char *)"*", 2);
+    unsigned char kl[12];
+    memset(kl, 0, sizeof(kl));
 
-    if (!strcmp(mode, "corrupt-verf")) {
-        send_call(fd, pd.pd_ctx, 0x50524231, 0, GET_PRINCS, 1, handle, hlen, 1, lst, lstlen);
+    if (!strcmp(mode, "iprop-valid")) {
+        send_call(fd, pd.pd_ctx, prog, vers, 0x49505231, 0, IPROP_GET_UPDATES, 1, handle, hlen, 0, kl, sizeof(kl));
+        recv_report(fd, "iprop-valid");
+    } else if (!strcmp(mode, "corrupt-verf")) {
+        send_call(fd, pd.pd_ctx, prog, vers, 0x50524231, 0, GET_PRINCS, 1, handle, hlen, 1, lst, lstlen);
         recv_report(fd, "corrupt-verf");
     } else if (!strcmp(mode, "maxseq")) {
-        send_call(fd, pd.pd_ctx, 0x50524232, 0, GET_PRINCS, 0x80000001u, handle, hlen, 0, lst, lstlen);
+        send_call(fd, pd.pd_ctx, prog, vers, 0x50524232, 0, GET_PRINCS, 0x80000001u, handle, hlen, 0, lst, lstlen);
         recv_report(fd, "maxseq");
     } else if (!strcmp(mode, "wrong-handle")) {
         unsigned char wh[512];
         memcpy(wh, handle, hlen);
         if (hlen > 0)
             wh[hlen - 1] ^= 0xff;
-        send_call(fd, pd.pd_ctx, 0x50524233, 0, GET_PRINCS, 1, wh, hlen, 0, lst, lstlen);
+        send_call(fd, pd.pd_ctx, prog, vers, 0x50524233, 0, GET_PRINCS, 1, wh, hlen, 0, lst, lstlen);
         recv_report(fd, "wrong-handle");
     } else if (!strcmp(mode, "destroy-then-data")) {
-        send_call(fd, pd.pd_ctx, 0x50524234, 3, 0, 1, handle, hlen, 0, NULL, 0);
+        send_call(fd, pd.pd_ctx, prog, vers, 0x50524234, 3, 0, 1, handle, hlen, 0, NULL, 0);
         recv_report(fd, "destroy");
-        send_call(fd, pd.pd_ctx, 0x50524235, 0, GET_PRINCS, 2, handle, hlen, 0, lst, lstlen);
+        send_call(fd, pd.pd_ctx, prog, vers, 0x50524235, 0, GET_PRINCS, 2, handle, hlen, 0, lst, lstlen);
         recv_report(fd, "data-after-destroy");
     } else if (!strcmp(mode, "garbage-args")) {
         unsigned char junk[2] = {0x00, 0x01};
-        send_call(fd, pd.pd_ctx, 0x50524236, 0, GET_PRINCS, 1, handle, hlen, 0, junk, sizeof(junk));
+        send_call(fd, pd.pd_ctx, prog, vers, 0x50524236, 0, GET_PRINCS, 1, handle, hlen, 0, junk, sizeof(junk));
         recv_report(fd, "garbage-args");
     } else {
-        send_call(fd, pd.pd_ctx, 0x50524237, 0, GET_PRINCS, 1, handle, hlen, 0, lst, lstlen);
+        send_call(fd, pd.pd_ctx, prog, vers, 0x50524237, 0, GET_PRINCS, 1, handle, hlen, 0, lst, lstlen);
         recv_report(fd, "valid");
     }
     return 0;

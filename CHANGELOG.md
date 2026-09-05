@@ -6,6 +6,20 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-I sub-plan 04
+
+- **admin.** AUTH_GSSAPI DESTROY is answered in the auth layer before the
+  iprop flavor gate, like `svc_auth_gssapi.c:616-623`. `kadmin/history` joins
+  the kadmind acceptor keys, so a history-service INIT completes and the name
+  gate answers `AUTH_TOOWEAK` like MIT's KDB keytab.
+- **test.** The MIT harness kadmind serves the iprop program on `iprop_port`
+  2121 in `kadmin-gate.sh` (and, since gssrpc registers programs process-wide,
+  on the kadmind port too); the probe gains `iprop-valid` and
+  `iprop-auth-gssapi`; both legs assert the iprop program cells and the
+  kiprop-on-kadm5 and `kadmin/history` acceptor rejects. `iprop-gate.sh`
+  drives MIT `kpropd` against a no-`p` Rust master (`get_updates permission
+  denied`) and prog-qualifies the RPCSEC_GSS flavor check.
+
 ### W1-I sub-plan 03
 
 - **admin.** The kadmind no longer compares the RPCSEC_GSS context handle

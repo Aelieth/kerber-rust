@@ -20,7 +20,7 @@ use krb5_admin::{serve_kadm5_conn, serve_kpasswd_tcp, serve_kpasswd_udp};
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::{
     Acl, Error, PrincipalStore, acl_for_store, bootstrap_documented, default_acl_path,
-    documented_changepw, documented_kadmin, documented_kiprop, open_store,
+    documented_changepw, documented_history, documented_kadmin, documented_kiprop, open_store,
     shared_dump as shared_store,
 };
 use krb5_protocol::ReplayCache;
@@ -164,6 +164,7 @@ fn acceptor_keys(store: &PrincipalStore) -> Vec<ProtocolKey> {
         documented_kadmin(),
         documented_changepw(),
         documented_kiprop(),
+        documented_history(),
     ] {
         if let Some(p) = store.get_name(&name) {
             keys.extend(p.keys.iter().map(|k| k.key.clone()));
