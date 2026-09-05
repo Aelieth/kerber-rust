@@ -241,7 +241,7 @@ kadmin_q 'delprinc -force classuser' >/dev/null
 kadmin_q 'delpol -force class5' >/dev/null
 
 echo "==== MIT kadmin duration-only lockout ===="
-kadmin_q 'addpol -minlength 8 -minclasses 1 -history 0 -maxfailure 1 -lockoutduration 3s -failurecountinterval 0s durpol' >/dev/null
+kadmin_q 'addpol -minlength 8 -minclasses 1 -maxfailure 1 -lockoutduration 3s -failurecountinterval 0s durpol' >/dev/null
 DGET="$(kadmin_q 'getpol durpol')"
 echo "$DGET"
 echo "$DGET" | grep -qiE 'lockout duration: 0 days 00:00:03'
@@ -264,7 +264,7 @@ kadmin_q 'delprinc -force duruser' >/dev/null
 kadmin_q 'delpol -force durpol' >/dev/null
 
 echo "==== MIT kadmin interval-only failcnt reset ===="
-kadmin_q 'addpol -minlength 8 -minclasses 1 -history 0 -maxfailure 1 -lockoutduration 0s -failurecountinterval 2s intpol' >/dev/null
+kadmin_q 'addpol -minlength 8 -minclasses 1 -maxfailure 1 -lockoutduration 0s -failurecountinterval 2s intpol' >/dev/null
 IGET="$(kadmin_q 'getpol intpol')"
 echo "$IGET"
 echo "$IGET" | grep -qiE 'failure count reset interval: 0 days 00:00:02'
