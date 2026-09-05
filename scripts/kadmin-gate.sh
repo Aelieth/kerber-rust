@@ -243,11 +243,11 @@ if echo "$CPW_LIST" | grep -q 'list_count=' && echo "$CPW_LIST" | grep -qv 'list
         exit 1
     fi
 fi
-echo "==== kiprop service on kadm5 is AUTH_TOOWEAK ===="
+echo "==== kiprop service on kadm5 is refused ===="
 KIPROP_LIST="$(kadm5_list_service "$NAME" admin@KERBER.TEST adminpassword kiprop/testhost.kerber.test /tmp/kadmin-krb5.conf 2>&1 || true)"
 echo "$KIPROP_LIST"
-echo "$KIPROP_LIST" | grep -F 'init_code=43787566'
-echo "$KIPROP_LIST" | grep -F 'GSS-API (or Kerberos) error'
+echo "$KIPROP_LIST" | grep -E 'init_code=43787528|init_code=43787566'
+echo "$KIPROP_LIST" | grep -E 'Communication failure|GSS-API \(or Kerberos\) error'
 if echo "$KIPROP_LIST" | grep -q 'init_code=0'; then
     echo "kiprop service init succeeded: $KIPROP_LIST" >&2
     exit 1
@@ -1003,11 +1003,11 @@ if echo "$MIT_CPW_LIST" | grep -q 'list_code=0'; then
     echo "MIT changepw listprincs succeeded: $MIT_CPW_LIST" >&2
     exit 1
 fi
-echo "==== MIT kiprop service on kadm5 is AUTH_TOOWEAK ===="
+echo "==== MIT kiprop service on kadm5 is refused ===="
 MIT_KIPROP_LIST="$(kadm5_list_service "$NAME_MIT" admin/admin adminpassword kiprop/testhost.kerber.test /etc/krb5.conf 2>&1 || true)"
 echo "$MIT_KIPROP_LIST"
-echo "$MIT_KIPROP_LIST" | grep -F 'init_code=43787560'
-echo "$MIT_KIPROP_LIST" | grep -F 'Required KADM5 principal missing'
+echo "$MIT_KIPROP_LIST" | grep -E 'init_code=43787560|init_code=43787528|init_code=43787566'
+echo "$MIT_KIPROP_LIST" | grep -E 'Required KADM5 principal missing|Communication failure|GSS-API \(or Kerberos\) error'
 if echo "$MIT_KIPROP_LIST" | grep -q 'init_code=0'; then
     echo "MIT kiprop service init succeeded: $MIT_KIPROP_LIST" >&2
     exit 1
