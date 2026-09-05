@@ -39,6 +39,33 @@ def rd(s):
         data += chunk
     return data
 
+def tlv(data, i=0):
+    tag = data[i]
+    i += 1
+    l = data[i]
+    i += 1
+    if l & 0x80:
+        n = l & 0x7F
+        l = int.from_bytes(data[i : i + n], "big")
+        i += n
+    return tag, data[i : i + l], i + l
+
+def krb_error(der):
+    _, inner, _ = tlv(der)
+    _, seqb, _ = tlv(inner)
+    i = 0
+    fields = {}
+    while i < len(seqb):
+        t, v, i = tlv(seqb, i)
+        n = t & 0x1F
+        if t & 0x20 and v:
+            _, inner2, _ = tlv(v)
+            fields[n] = inner2
+        else:
+            fields[n] = v
+    code = int.from_bytes(fields.get(6, b"\x00"), "big")
+    return code, fields.get(11, b"")
+
 s = socket.create_connection(("127.0.0.1", port), 2)
 wr(s, b"KRB5_SENDAUTH_V1.0\0")
 wr(s, b"kprop5_01\0")
@@ -48,6 +75,11 @@ wr(s, b"\xff\x00\x01")
 msg = rd(s)
 print("tag=%02x len=%d" % (msg[0], len(msg)))
 assert msg[:1] == b"\x7e", msg[:8]
+code, etext = krb_error(msg)
+print("error_code=%d" % code)
+print("e_text_hex=" + etext.hex())
+assert code == 40, code
+assert etext == b"Invalid message type\x00", etext
 ' "$port"
 }
 

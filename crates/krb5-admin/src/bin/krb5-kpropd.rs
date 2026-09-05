@@ -20,7 +20,7 @@ use std::time::Duration;
 use krb5_admin::{KPROP_PORT, kpropd_handle_conn};
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::{documented_host, load_store};
-use krb5_protocol::Keytab;
+use krb5_protocol::{Keytab, ReplayCache};
 
 fn main() {
     let _ = tracing_subscriber::fmt()
@@ -60,6 +60,7 @@ fn main() {
     let stop = Arc::new(AtomicBool::new(false));
     let realm = kpropd_realm();
     let allowed = kpropd_acl();
+    let replay = ReplayCache::new();
     loop {
         if stop.load(Ordering::Relaxed) {
             break;
@@ -73,6 +74,7 @@ fn main() {
                 let db = db.clone();
                 let stash = stash.clone();
                 let allowed = allowed.clone();
+                let replay = replay.clone();
                 thread::spawn(move || {
                     match kpropd_handle_conn(
                         &mut stream,
@@ -83,6 +85,7 @@ fn main() {
                         &db,
                         &stash,
                         allowed.as_deref(),
+                        replay,
                     ) {
                         Ok(_) => println!("kprop ok"),
                         Err(e) => eprintln!("krb5-kpropd: {e}"),

@@ -1824,7 +1824,7 @@ mod tests {
             .unwrap()
             .key
             .clone();
-        let req = encode_kpasswd_req(&[0, 1, 2, 3], &[]);
+        let req = encode_kpasswd_req(&[0, 1, 2, 3], b"x");
         let shared = shared_store(store);
         let r1 = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req)
             .expect("chpwfail");
@@ -1834,10 +1834,32 @@ mod tests {
             assert!(rep.len() > 6);
             assert_eq!(&rep[4..6], &[0, 0], "AP-REP length 0");
             let e: KrbError = decode(&rep[6..]).expect("framed KRB-ERROR");
+            assert_eq!(e.error_code, krb5_types::err::GENERIC);
+            assert!(e.e_text.is_none());
+            assert_eq!(e.sname.name_type, PrincipalName::NT_PRINCIPAL);
             let data = e.e_data.as_ref().expect("e_data");
             assert!(data.len() >= 2 && data.as_ref()[0] == 0 && data.as_ref()[1] == 3);
             assert!(data.as_ref()[2..].starts_with(b"Failed reading application request"));
         }
+    }
+
+    #[test]
+    fn kpasswd_ap_req_fills_datagram_is_bailout() {
+        use krb5_kdc::{documented_changepw, shared_dump as shared_store};
+
+        let (store, acl) = bootstrap_documented().unwrap();
+        let cpw_key = store
+            .get_name(&documented_changepw())
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let req = encode_kpasswd_req(&[0, 1, 2, 3], &[]);
+        let shared = shared_store(store);
+        let err = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req)
+            .expect_err("schpw.c:89 >= is bailout");
+        assert!(err.to_string().contains("Message stream modified"), "{err}");
     }
 
     #[test]
@@ -2234,6 +2256,7 @@ mod tests {
                 &db,
                 &stash,
                 Some(allowed.as_slice()),
+                ReplayCache::new(),
             )
             .expect("kpropd_handle_conn");
             let _ = std::fs::remove_dir_all(&dir);
@@ -2343,6 +2366,7 @@ mod tests {
                 &db,
                 &stash,
                 Some(allowed.as_slice()),
+                ReplayCache::new(),
             )
             .unwrap_err();
             let _ = std::fs::remove_dir_all(&dir);
@@ -2433,6 +2457,7 @@ mod tests {
                 &db,
                 &stash,
                 None,
+                ReplayCache::new(),
             )
             .unwrap_err();
             let _ = std::fs::remove_dir_all(&dir);

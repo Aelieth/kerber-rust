@@ -326,24 +326,13 @@ fn frame_kpasswd_rep(ap_rep: &[u8], priv_der: &[u8]) -> Vec<u8> {
     out
 }
 
-fn kpasswd_proto_code(e: &krb5_protocol::Error) -> i32 {
-    match e {
-        krb5_protocol::Error::KrbError { code, .. } if *code > 127 => err::GENERIC,
-        krb5_protocol::Error::KrbError { code, .. } => *code,
-        _ => err::BAD_INTEGRITY,
-    }
-}
-
-fn kpasswd_chpwfail_error(
-    realm: &str,
-    code: i32,
-    result: u16,
-    text: &str,
-) -> Result<Vec<u8>, Error> {
+fn kpasswd_chpwfail_error(realm: &str, result: u16, text: &str) -> Result<Vec<u8>, Error> {
+    // schpw.c:273-345: alloc_data overwrites `ret` with 0, so
+    // `error -= ERROR_TABLE_BASE_krb5` wraps past KRB_ERR_MAX → 60.
     let mut e_data = Vec::from(result.to_be_bytes());
     e_data.extend_from_slice(text.as_bytes());
     let realm_s = krb5_types::try_ascii(realm).map_err(|e| Error::Inner(e.to_string()))?;
-    let sname = PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "changepw"]);
+    let sname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["kadmin", "changepw"]);
     let pdu = KrbError {
         pvno: KrbError::PVNO,
         msg_type: KrbError::MSG_TYPE,
@@ -351,7 +340,7 @@ fn kpasswd_chpwfail_error(
         cusec: None,
         stime: KerberosTime::now(),
         susec: Microseconds::ZERO,
-        error_code: code,
+        error_code: err::GENERIC,
         crealm: None,
         cname: None,
         realm: realm_s,
@@ -444,8 +433,9 @@ fn handle_kpasswd_from(
         return Err(Error::Inner("kpasswd truncated".into()));
     }
     let ap_len = usize::from(u16::from_be_bytes([raw[4], raw[5]]));
-    if 6 + ap_len > raw.len() {
-        return Err(Error::Inner("kpasswd AP-REQ".into()));
+    if 6 + ap_len >= raw.len() {
+        // schpw.c:89-95 `>=` (no PRIV byte) → bailout, no datagram.
+        return Err(Error::Inner("Message stream modified".into()));
     }
     let ap_req = &raw[6..6 + ap_len];
     let priv_raw = &raw[6 + ap_len..];
@@ -455,16 +445,8 @@ fn handle_kpasswd_from(
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         g.realm().to_owned()
     };
-    let ok = match verify_ap_req(ap_req, service_key, replay) {
-        Ok(v) => v,
-        Err(e) => {
-            return kpasswd_chpwfail_error(
-                &store_realm,
-                kpasswd_proto_code(&e),
-                3,
-                "Failed reading application request",
-            );
-        }
+    let Ok(ok) = verify_ap_req(ap_req, service_key, replay) else {
+        return kpasswd_chpwfail_error(&store_realm, 3, "Failed reading application request");
     };
     let session = protocol_key_from_enc(&ok.ticket_part.key)?;
     let priv_key = match &ok.authenticator.subkey {

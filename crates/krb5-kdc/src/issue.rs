@@ -81,7 +81,7 @@ pub fn handle_request(store: &dyn PrincipalRead, raw: &[u8]) -> Result<Vec<u8>, 
                     component = "krb5-kdc",
                     duration_us,
                     outcome = "error",
-                    error = "while dispatching",
+                    error = "while dispatching (udp)",
                 );
                 return Ok(bytes);
             }

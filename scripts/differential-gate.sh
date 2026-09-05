@@ -147,6 +147,159 @@ echo "$DIFF" | grep -q '"rust_tag":"0x6b"' || die "as-success missing AS-REP tag
 echo "$DIFF" | grep -q '"rust_tag":"0x6d"' || die "tgs-success missing TGS-REP tag"
 echo "$DIFF" | grep -q '"outcome":"ok","cases":13' || die "diffsend did not finish 13 cases"
 
+echo "==== 128 KiB padded AS-REQ and 1 MiB+1 TCP cap both legs ===="
+TCP_CAP="$(docker exec "$NAME" python3 -c '
+import socket, struct, time, sys
+
+def der_len(n):
+    if n < 128:
+        return bytes([n])
+    if n < 256:
+        return bytes([0x81, n])
+    if n < 65536:
+        return bytes([0x82, (n >> 8) & 0xFF, n & 0xFF])
+    return bytes([0x83, (n >> 16) & 0xFF, (n >> 8) & 0xFF, n & 0xFF])
+
+def tlv(tag, val):
+    return bytes([tag]) + der_len(len(val)) + val
+
+def parse_tlv(data, i=0):
+    tag = data[i]
+    i += 1
+    l = data[i]
+    i += 1
+    if l & 0x80:
+        n = l & 0x7F
+        l = int.from_bytes(data[i : i + n], "big")
+        i += n
+    return tag, data[i : i + l], i + l
+
+def ctx(n, val):
+    return tlv(0xA0 | n, val)
+
+def integer(n):
+    if n == 0:
+        return tlv(0x02, b"\x00")
+    b = n.to_bytes((n.bit_length() + 7) // 8, "big")
+    if b[0] & 0x80:
+        b = b"\x00" + b
+    return tlv(0x02, b)
+
+def gstr(s):
+    return tlv(0x1B, s.encode("ascii"))
+
+def seq(*parts):
+    return tlv(0x30, b"".join(parts))
+
+def pname(nt, *comps):
+    return seq(ctx(0, integer(nt)), ctx(1, seq(*[gstr(c) for c in comps])))
+
+def gtime(ts):
+    return tlv(0x18, time.strftime("%Y%m%d%H%M%SZ", time.gmtime(ts)).encode())
+
+def krb_error(der):
+    _, inner, _ = parse_tlv(der)
+    _, seqb, _ = parse_tlv(inner)
+    i = 0
+    fields = {}
+    while i < len(seqb):
+        t, v, i = parse_tlv(seqb, i)
+        n = t & 0x1F
+        if t & 0x20 and v:
+            _, inner2, _ = parse_tlv(v)
+            fields[n] = inner2
+        else:
+            fields[n] = v
+    code = int.from_bytes(fields.get(6, b"\x00"), "big")
+    return code, fields.get(11, b"")
+
+body = seq(
+    ctx(0, tlv(0x03, b"\x00\x00\x00\x00\x00")),
+    ctx(1, pname(1, "nosuch")),
+    ctx(2, gstr("KERBER.TEST")),
+    ctx(3, pname(2, "krbtgt", "KERBER.TEST")),
+    ctx(5, gtime(time.time() + 3600)),
+    ctx(7, integer(12345)),
+    ctx(8, seq(integer(18))),
+)
+
+def asreq_with_pad(pad):
+    padata = seq(seq(ctx(1, integer(9999)), ctx(2, tlv(0x04, b"\x00" * pad))))
+    inner = seq(ctx(1, integer(5)), ctx(2, integer(10)), ctx(3, padata), ctx(4, body))
+    return tlv(0x6A, inner)
+
+want = 128 * 1024
+pad = 1
+asreq = asreq_with_pad(pad)
+pad = max(1, want - len(asreq))
+asreq = asreq_with_pad(pad)
+while len(asreq) != want:
+    if len(asreq) > want:
+        pad -= len(asreq) - want
+    else:
+        pad += want - len(asreq)
+    if pad < 1:
+        raise SystemExit("pad")
+    asreq = asreq_with_pad(pad)
+
+def exchange(port, payload, timeout=8):
+    s = socket.create_connection(("127.0.0.1", port), 5)
+    s.settimeout(timeout)
+    s.sendall(struct.pack(">I", len(payload)) + payload)
+    hdr = b""
+    while len(hdr) < 4:
+        c = s.recv(4 - len(hdr))
+        if not c:
+            raise SystemExit("eof hdr port %d" % port)
+        hdr += c
+    n = struct.unpack(">I", hdr)[0]
+    body = b""
+    while len(body) < n:
+        c = s.recv(n - len(body))
+        if not c:
+            break
+        body += c
+    return body
+
+def exchange_len(port, n, timeout=8):
+    s = socket.create_connection(("127.0.0.1", port), 5)
+    s.settimeout(timeout)
+    s.sendall(struct.pack(">I", n))
+    hdr = b""
+    while len(hdr) < 4:
+        c = s.recv(4 - len(hdr))
+        if not c:
+            raise SystemExit("eof hdr port %d" % port)
+        hdr += c
+    ln = struct.unpack(">I", hdr)[0]
+    body = b""
+    while len(body) < ln:
+        c = s.recv(ln - len(body))
+        if not c:
+            break
+        body += c
+    return body
+
+for port, label in ((8888, "rust"), (88, "mit")):
+    der = exchange(port, asreq)
+    code, etext = krb_error(der)
+    print("%s_128k error_code=%d e_text=%r n=%d" % (label, code, etext, len(asreq)))
+    if code != 6 or etext != b"CLIENT_NOT_FOUND":
+        raise SystemExit("%s 128k want 6 CLIENT_NOT_FOUND" % label)
+    der = exchange_len(port, 1024 * 1024 + 1)
+    code, etext = krb_error(der)
+    print("%s_1mib error_code=%d e_text=%r" % (label, code, etext))
+    if code != 61:
+        raise SystemExit("%s 1MiB+1 want 61" % label)
+print("tcp_cap=ok")
+')"
+echo "$TCP_CAP"
+echo "$TCP_CAP" | grep -F 'rust_128k error_code=6' || die "rust 128KiB was not CLIENT_NOT_FOUND"
+echo "$TCP_CAP" | grep -F 'mit_128k error_code=6' || die "MIT 128KiB was not CLIENT_NOT_FOUND"
+echo "$TCP_CAP" | grep -F 'rust_1mib error_code=61' || die "rust 1MiB+1 was not FIELD_TOOLONG"
+echo "$TCP_CAP" | grep -F 'mit_1mib error_code=61' || die "MIT 1MiB+1 was not FIELD_TOOLONG"
+echo "$TCP_CAP" | grep -F 'tcp_cap=ok' || die "tcp cap cell did not finish"
+
 docker cp "$NAME":/tmp/diff-corpus "$OUT/diff-corpus" 2>/dev/null || true
 docker cp "$NAME":/tmp/rust-kdc.log "$OUT/rust-kdc.log" 2>/dev/null || true
 

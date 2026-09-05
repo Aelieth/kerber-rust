@@ -57,8 +57,8 @@ pub const BIND_CANDIDATES: &[&str] = &["127.0.0.1:88", "127.0.0.1:8888"];
 
 /// Default cap on concurrent TCP request handlers.
 pub const MAX_TCP_WORKERS: usize = 32;
-/// Default maximum KDC TCP request body (bytes). Kerberos PDUs are small.
-pub const MAX_TCP_REQUEST: usize = 64 * 1024;
+/// MIT `net-server.c:1278` `bufsiz` 1 MiB; FIELD_TOOLONG at `msglen > bufsiz-4`.
+pub const MAX_TCP_REQUEST: usize = 1024 * 1024 - 4;
 /// MIT `MAX_DGRAM_SIZE` / `kdc_max_dgram_reply_size` default (`osconf.hin`).
 pub const MAX_DGRAM_REPLY: usize = 65_536;
 
@@ -376,10 +376,8 @@ fn handle_tcp(
     }
     let n = usize::try_from(u32::from_be_bytes(hdr)).unwrap_or(usize::MAX);
     if n == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("invalid TCP length {n}"),
-        ));
+        let _ = read_store(store, |s| handle_request(s, &[]));
+        return Ok(());
     }
     if n > max_body {
         let reply = read_store(store, |s| {
@@ -477,6 +475,94 @@ mod tests {
         c.read_exact(&mut body).expect("FIELD_TOOLONG body");
         let e: krb5_types::KrbError = decode(&body).expect("KRB-ERROR");
         assert_eq!(e.error_code, err::FIELD_TOOLONG);
+    }
+
+    #[test]
+    fn tcp_max_request_is_one_mib_minus_four() {
+        assert_eq!(MAX_TCP_REQUEST, 1024 * 1024 - 4);
+    }
+
+    #[test]
+    fn tcp_one_mib_plus_one_is_field_toolong() {
+        let (store, _) = bootstrap_documented().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let store = shared_store(store);
+        thread::spawn(move || {
+            let (s, _) = listener.accept().unwrap();
+            let _ = handle_tcp(&store, s, MAX_TCP_REQUEST, Duration::from_secs(2));
+        });
+        let mut c = std::net::TcpStream::connect(addr).unwrap();
+        c.write_all(&(1024 * 1024 + 1u32).to_be_bytes()).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let mut hdr = [0u8; 4];
+        c.read_exact(&mut hdr).expect("FIELD_TOOLONG length");
+        let n = u32::from_be_bytes(hdr) as usize;
+        let mut body = vec![0u8; n];
+        c.read_exact(&mut body).expect("FIELD_TOOLONG body");
+        let e: krb5_types::KrbError = decode(&body).expect("KRB-ERROR");
+        assert_eq!(e.error_code, err::FIELD_TOOLONG);
+    }
+
+    #[test]
+    fn tcp_128kib_unknown_cname_is_client_not_found() {
+        use krb5_types::{OctetString, PaData};
+
+        let (store, _) = bootstrap_documented().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let store = shared_store(store);
+        thread::spawn(move || {
+            let (s, _) = listener.accept().unwrap();
+            let _ = handle_tcp(&store, s, MAX_TCP_REQUEST, Duration::from_secs(5));
+        });
+        let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["nosuch"]);
+        let mut req = crate::as_req(cname, crate::TEST_REALM, 1, None).unwrap();
+        req.0.padata = Some(vec![PaData {
+            padata_type: 9999,
+            padata_value: OctetString::from(vec![0u8; 128 * 1024]),
+        }]);
+        let bytes = encode(&req).unwrap();
+        assert!(bytes.len() > 128 * 1024);
+        assert!(bytes.len() <= MAX_TCP_REQUEST);
+        let mut c = std::net::TcpStream::connect(addr).unwrap();
+        c.write_all(&(u32::try_from(bytes.len()).unwrap()).to_be_bytes())
+            .unwrap();
+        c.write_all(&bytes).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut hdr = [0u8; 4];
+        c.read_exact(&mut hdr).expect("KRB-ERROR length");
+        let n = u32::from_be_bytes(hdr) as usize;
+        let mut body = vec![0u8; n];
+        c.read_exact(&mut body).expect("KRB-ERROR body");
+        let e: krb5_types::KrbError = decode(&body).expect("KRB-ERROR");
+        assert_eq!(e.error_code, err::C_PRINCIPAL_UNKNOWN);
+        let text = e
+            .e_text
+            .as_ref()
+            .and_then(|t| std::str::from_utf8(t.as_bytes()).ok());
+        assert_eq!(text, Some("CLIENT_NOT_FOUND"));
+    }
+
+    #[test]
+    fn tcp_zero_length_is_dropped() {
+        let (store, _) = bootstrap_documented().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let store = shared_store(store);
+        thread::spawn(move || {
+            let (s, _) = listener.accept().unwrap();
+            handle_tcp(&store, s, MAX_TCP_REQUEST, Duration::from_secs(2)).expect("zero-len drop");
+        });
+        let mut c = std::net::TcpStream::connect(addr).unwrap();
+        c.write_all(&0u32.to_be_bytes()).unwrap();
+        c.set_read_timeout(Some(Duration::from_millis(400)))
+            .unwrap();
+        let mut hdr = [0u8; 4];
+        assert!(
+            c.read_exact(&mut hdr).is_err(),
+            "zero-length must not reply"
+        );
     }
 
     #[test]

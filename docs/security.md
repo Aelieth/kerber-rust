@@ -216,13 +216,22 @@ is W1. Purgekeys of a locked-down principal is `KADM5_PROTECT_KEYS`
 Length prefix and version are checked before AP-REQ work
 (`schpw.c:47-82`). Inconsistent length, unknown version, and the
 truncated cases `goto bailout` (`:384-397`); `dispatch` calls
-`respond(..., NULL)` so no datagram is sent (`:424-435`). The UDP
-path logs MIT com_err text (`Message stream modified` /
-`Requested protocol version not supported`) plus
-`- while dispatching (udp)` (`net-server.c:1103`). Framing a
-KRB-ERROR here would be a 22–25× UDP reflector for a 6-byte
-spoofable datagram; MIT does not have that. `ChangePasswdData` is
-decoded only for version `0xff80`.
+`respond(..., NULL)` so no datagram is sent (`:424-435`). AP-REQ
+length `>=` remaining bytes (no PRIV) is that bailout (`:89-95`).
+Post-AP-REQ `chpwfail` (`:320-345`) is always `error_code` **60**
+(`alloc_data` zeros `ret` so `ERROR_TABLE_BASE_krb5` wraps past
+`KRB_ERR_MAX`), `client = NULL`, `server = kadmin/changepw@R`
+(`krb5_build_principal` NT_PRINCIPAL), empty `e_text`,
+`e_data = result‖text`. The UDP path logs MIT com_err text
+(`Message stream modified` / `Requested protocol version not
+supported`) plus `- while dispatching (udp)` (`net-server.c:1103`).
+Framing a KRB-ERROR here would be a 22–25× UDP reflector for a
+6-byte spoofable datagram; MIT does not have that.
+`ChangePasswdData` is decoded only for version `0xff80`. KDC TCP
+`bufsiz` is 1 MiB; `msglen > bufsiz-4` is **61** (`net-server.c:1278,
+1391-1414`). kpropd `recvauth` junk that is not APPLICATION 14 is
+**40** `Invalid message type` plus the trailing NUL (`rd_req.c:56-57`,
+`recvauth.c:165-170`).
 
 ## Not in this matrix
 

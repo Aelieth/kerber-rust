@@ -26,6 +26,34 @@ kpasswd_raw() {
     local ctn=$1 kind=$2
     docker exec "$ctn" python3 -c '
 import socket, struct, sys
+
+def tlv(data, i=0):
+    tag = data[i]
+    i += 1
+    l = data[i]
+    i += 1
+    if l & 0x80:
+        n = l & 0x7F
+        l = int.from_bytes(data[i : i + n], "big")
+        i += n
+    return tag, data[i : i + l], i + l
+
+def krb_error(der):
+    _, inner, _ = tlv(der)
+    _, seqb, _ = tlv(inner)
+    i = 0
+    fields = {}
+    while i < len(seqb):
+        t, v, i = tlv(seqb, i)
+        n = t & 0x1F
+        if t & 0x20 and v:
+            _, inner2, _ = tlv(v)
+            fields[n] = inner2
+        else:
+            fields[n] = v
+    code = int.from_bytes(fields.get(6, b"\x00"), "big")
+    return code, fields.get(11, b""), fields.get(12, b"")
+
 kind = sys.argv[1]
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 s.settimeout(2.0)
@@ -37,6 +65,8 @@ elif kind == "apreq":
     # schpw.c:89 uses `>=` so AP-REQ must leave at least one PRIV byte
     # or MIT goto bailout (no datagram). Junk AP-REQ then chpwfail.
     pkt = struct.pack(">HHH", 11, 1, 4) + b"junk" + b"x"
+elif kind == "fill":
+    pkt = struct.pack(">HHH", 10, 1, 4) + b"junk"
 else:
     raise SystemExit("kind")
 s.sendto(pkt, ("127.0.0.1", 464))
@@ -47,6 +77,10 @@ except socket.timeout:
     raise SystemExit(2)
 print("hex=" + data.hex())
 print("ap_len=" + str(struct.unpack(">H", data[4:6])[0] if len(data) >= 6 else -1))
+if len(data) >= 6 and struct.unpack(">H", data[4:6])[0] == 0:
+    code, etext, edata = krb_error(data[6:])
+    print("error_code=%d" % code)
+    print("e_data_hex=" + edata.hex())
 if b"\x00\x06Request contained unknown protocol version number 2" in data:
     print("result=6")
 if b"\x00\x01Request length was inconsistent" in data:
@@ -74,6 +108,26 @@ pin_kpasswd_apreq_retransmit() {
         echo "$OUT" | grep -F 'ap_len=0'
         echo "$OUT" | grep -F 'result=3'
         echo "$OUT" | grep -F 'text=autherror'
+        echo "$OUT" | grep -F 'error_code=60'
+        echo "$OUT" | grep -F 'e_data_hex=00034661696c65642072656164696e67206170706c69636174696f6e2072657175657374'
+    done
+}
+
+pin_kpasswd_fill_datagram() {
+    local ctn=$1 label=$2 run OUT rc
+    for run in 1 2; do
+        echo "---- $label fill-datagram AP-REQ $run ----"
+        set +e
+        OUT="$(kpasswd_raw "$ctn" fill)"
+        rc=$?
+        set -e
+        echo "$OUT"
+        [ "$rc" -eq 2 ]
+        echo "$OUT" | grep -F timeout
+        if echo "$OUT" | grep -F 'hex='; then
+            echo "$label framed a fill-the-datagram kpasswd AP-REQ" >&2
+            exit 1
+        fi
     done
 }
 
@@ -450,6 +504,8 @@ echo "==== Rust kpasswd raw vno/length (schpw.c:60-82) ===="
 pin_kpasswd_raw_rust
 echo "==== Rust kpasswd bad AP-REQ retransmit (schpw.c:126-136,110-111) ===="
 pin_kpasswd_apreq_retransmit "$NAME" "Rust"
+echo "==== Rust kpasswd fill-datagram AP-REQ (schpw.c:89-95) ===="
+pin_kpasswd_fill_datagram "$NAME" "Rust"
 
 echo "==== MIT kadmind policy rejection is SOFTERROR ===="
 docker run -d --name "$NAME_MIT" "$IMAGE" >/dev/null
@@ -650,6 +706,8 @@ echo "==== MIT kpasswd raw vno/length (schpw.c:60-82; bailout, no framed reply) 
 pin_kpasswd_raw_mit
 echo "==== MIT kpasswd bad AP-REQ retransmit (schpw.c:126-136,110-111) ===="
 pin_kpasswd_apreq_retransmit "$NAME_MIT" "MIT"
+echo "==== MIT kpasswd fill-datagram AP-REQ (schpw.c:89-95) ===="
+pin_kpasswd_fill_datagram "$NAME_MIT" "MIT"
 
 log "kpasswd.gate" "ok" ',"principal":"user@KERBER.TEST","op":"kpasswd+kinit","softerror":true'
 exit 0

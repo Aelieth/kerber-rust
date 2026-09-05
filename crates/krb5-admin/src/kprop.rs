@@ -218,6 +218,7 @@ pub fn kpropd_recvauth(
     expected_server: Option<&PrincipalName>,
     expected_realm: Option<&str>,
     allowed_clients: Option<&[String]>,
+    replay: ReplayCache,
 ) -> Result<KpropAuth, Error> {
     let ver = read_message(stream).map_err(|e| Error::Inner(e.to_string()))?;
     if ver.as_slice() != SENDAUTH_VERSION {
@@ -233,7 +234,6 @@ pub fn kpropd_recvauth(
         .write_all(&[0u8])
         .map_err(|e| Error::Inner(e.to_string()))?;
     let ap_raw = read_message(stream).map_err(|e| Error::Inner(e.to_string()))?;
-    let replay = ReplayCache::new();
     let params = ApVerifyParams {
         keys: host_keys,
         kvno: None,
@@ -246,7 +246,7 @@ pub fn kpropd_recvauth(
     let ok = match verify_ap_req_ex(&ap_raw, &params, &replay, None) {
         Ok(v) => v,
         Err(e) => {
-            let der = kprop_rd_req_error(&e, expected_realm, expected_server);
+            let der = kprop_rd_req_error(&ap_raw, &e, expected_realm, expected_server);
             let _ = write_message(stream, &der);
             return Err(Error::Inner(e.to_string()));
         }
@@ -286,17 +286,50 @@ fn kpropd_client_allowed(client: &str, allowed: Option<&[String]>) -> bool {
     allowed.is_some_and(|patterns| patterns.iter().any(|p| Acl::name_matches(p, client)))
 }
 
+/// MIT `krb5int_is_app_tag(dat, 14)` (`k5-int.h:1334-1336`).
+fn is_ap_req(raw: &[u8]) -> bool {
+    raw.first().is_some_and(|b| b & !0x20 == 0x4e)
+}
+
+fn recvauth_error_fields(raw: &[u8], e: &krb5_protocol::Error) -> (i32, String) {
+    if !is_ap_req(raw) {
+        return (err::MSG_TYPE, "Invalid message type".into());
+    }
+    match e {
+        krb5_protocol::Error::KrbError { code, .. } if *code > 127 => {
+            (err::GENERIC, recvauth_protocol_text(*code))
+        }
+        krb5_protocol::Error::KrbError { code, .. } => (*code, recvauth_protocol_text(*code)),
+        krb5_protocol::Error::Asn1(_) => (err::GENERIC, "ASN.1 parse error".into()),
+        _ => (err::GENERIC, e.to_string()),
+    }
+}
+
+fn recvauth_protocol_text(code: i32) -> String {
+    match code {
+        err::BAD_INTEGRITY => "Decrypt integrity check failed".into(),
+        err::BADVERSION => "Protocol version mismatch".into(),
+        err::MSG_TYPE => "Invalid message type".into(),
+        err::MODIFIED => "Message stream modified".into(),
+        err::GENERIC => "Generic error (see e-text)".into(),
+        _ => format!("KRB5 error code {code}"),
+    }
+}
+
+fn e_text_with_nul(text: &str) -> Option<krb5_types::KerberosString> {
+    let mut bytes = text.as_bytes().to_vec();
+    bytes.push(0);
+    krb5_types::kerberos_string_from_bytes(&bytes).ok()
+}
+
 /// MIT `recvauth.c:150-188`: AP-REQ failure is a length-prefixed KRB-ERROR.
 fn kprop_rd_req_error(
+    raw: &[u8],
     e: &krb5_protocol::Error,
     realm: Option<&str>,
     server: Option<&PrincipalName>,
 ) -> Vec<u8> {
-    let code = match e {
-        krb5_protocol::Error::KrbError { code, .. } if *code > 127 => err::GENERIC,
-        krb5_protocol::Error::KrbError { code, .. } => *code,
-        _ => err::BAD_INTEGRITY,
-    };
+    let (code, text) = recvauth_error_fields(raw, e);
     let realm_s = realm.unwrap_or("????");
     let realm_ks = match krb5_types::try_ascii(realm_s) {
         Ok(r) => r,
@@ -308,7 +341,6 @@ fn kprop_rd_req_error(
     let sname = server
         .cloned()
         .unwrap_or_else(|| PrincipalName::new(PrincipalName::NT_UNKNOWN, ["????"]));
-    let text = e.to_string();
     let pdu = KrbError {
         pvno: KrbError::PVNO,
         msg_type: KrbError::MSG_TYPE,
@@ -321,7 +353,7 @@ fn kprop_rd_req_error(
         cname: None,
         realm: realm_ks,
         sname,
-        e_text: krb5_types::try_ascii(&text).ok(),
+        e_text: e_text_with_nul(&text),
         e_data: None,
     };
     encode(&pdu).unwrap_or_default()
@@ -396,6 +428,7 @@ pub fn kpropd_handle_conn(
     db: &Path,
     stash: &Path,
     allowed_clients: Option<&[String]>,
+    replay: ReplayCache,
 ) -> Result<PrincipalStore, Error> {
     let mut auth = kpropd_recvauth(
         stream,
@@ -403,6 +436,7 @@ pub fn kpropd_handle_conn(
         expected_server,
         expected_realm,
         allowed_clients,
+        replay,
     )?;
     let dump = kpropd_recv_dump(stream, &mut auth)?;
     let store = kprop_load_bytes(&dump, master_password)?;
@@ -641,6 +675,7 @@ mod tests {
 
         use krb5_asn1::decode;
         use krb5_kdc::{TEST_REALM, bootstrap_documented, documented_host};
+        use krb5_protocol::ReplayCache;
 
         let (store, _) = bootstrap_documented().unwrap();
         let host = documented_host();
@@ -662,6 +697,7 @@ mod tests {
                 Some(&host_for_server),
                 Some(TEST_REALM),
                 None,
+                ReplayCache::new(),
             )
         });
         thread::sleep(Duration::from_millis(20));
@@ -675,7 +711,11 @@ mod tests {
         let err_msg = read_message(&mut client).unwrap();
         assert_eq!(err_msg.first().copied(), Some(0x7e), "recvauth KRB-ERROR");
         let e: KrbError = decode(&err_msg).expect("KRB-ERROR");
-        assert_ne!(e.error_code, 0);
+        assert_eq!(e.error_code, err::MSG_TYPE);
+        assert_eq!(
+            e.e_text.as_ref().map(krb5_types::KerberosString::as_bytes),
+            Some(b"Invalid message type\0".as_slice())
+        );
         assert!(
             join.join().expect("thread").is_err(),
             "recvauth must fail after junk AP-REQ"
