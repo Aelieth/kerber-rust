@@ -27,7 +27,7 @@ pub use kprop::{
 pub use listen::{
     KADMIND_PORT, KPASSWD_PORT, KPROP_PORT, dispatch_kadmind, encode_kadmind_req,
     encode_kpasswd_req, handle_kpasswd_rfc3244, kpasswd_udp_exchange_to, kprop_recv, kprop_send,
-    parse_kpasswd_rep, serve_kadmind, serve_kpasswd_tcp, serve_kpasswd_udp,
+    parse_kpasswd_rep, serve_kpasswd_tcp, serve_kpasswd_udp,
 };
 
 /// Load a kadm5 ACL file. `None` is MIT `kadmin.local` full privs for `actor`.
@@ -493,7 +493,11 @@ impl<'a> AdminSession<'a> {
     /// `addpol`.
     pub fn add_policy(&mut self, name: &str) {
         let _ = self.reload();
-        self.store.put_policy(NamedPolicy::new(name));
+        let mut p = NamedPolicy::new(name);
+        p.min_length = 1;
+        p.min_classes = 1;
+        p.history = 1;
+        self.store.put_policy(p);
     }
 
     /// `getpol`.

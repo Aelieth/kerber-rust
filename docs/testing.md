@@ -37,6 +37,14 @@ file. Gate scripts write host files only under `KERBER_SCRATCH`
 (`ci-policy` fails a literal host `>/tmp/` write outside a
 `KERBER_SCRATCH:-/tmp/…` default).
 
+Unit greens and parent reds go through `scripts/lib/unit-evidence.sh`:
+`unit_green <name> <nextest filter>` (stamped nextest) and
+`unit_red_at <parent> <name> <filter>` (`red-at-sha.sh` at the parent;
+a missing test filter is refused). INDEX links only files those
+helpers or the gates produced. Live settles use
+`scripts/lib/settle.sh <name> -- <command…>` (provenance, echoed
+command, verbatim output).
+
 Red-at-HEAD artefact contract (captured under
 `working/logs/…/<item>-red-at-head.log`): the file is captured tool
 output of the failing unit or live cell, not a paraphrase. Write

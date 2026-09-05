@@ -254,7 +254,9 @@ echo "$MIT_KLIST2" | grep -A1 'host/testhost' | grep -q 'arcfour-hmac' || die "M
 echo "host_skey_mit_vs_rust=$(skey_of_host "$MIT_KLIST2")"
 
 docker cp "$NAME":/tmp/rust-kdc.log "$OUT/rust-kdc.log" 2>/dev/null || true
-grep -q '"key_usage":9' "$OUT/rust-kdc.log" || die "rust TGS-REP log missing key_usage 9"
+KU9="$(grep '"key_usage":9' "$OUT/rust-kdc.log" || true)"
+echo "$KU9"
+echo "$KU9" | grep -q '"key_usage":9' || die "rust TGS-REP log missing key_usage 9"
 
 echo "==== B) Rust krb5-kinit+krb5-kvno against MIT KDC :88 ===="
 set +e

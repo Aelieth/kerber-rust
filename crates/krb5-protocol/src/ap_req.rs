@@ -184,6 +184,8 @@ pub struct ApVerifyOk {
     pub ticket_part: EncTicketPart,
     /// Ticket server name (acceptor).
     pub sname: krb5_types::PrincipalName,
+    /// Ticket realm (acceptor).
+    pub srealm: krb5_types::Realm,
     /// Decrypted authenticator.
     pub authenticator: Authenticator,
     /// Whether the initiator requested mutual authentication.
@@ -375,6 +377,7 @@ fn verify_inner(
     Ok(ApVerifyOk {
         ticket_part,
         sname: ap.ticket.sname.clone(),
+        srealm: ap.ticket.realm.clone(),
         authenticator,
         mutual_required: ap.ap_options.wants_mutual(),
     })

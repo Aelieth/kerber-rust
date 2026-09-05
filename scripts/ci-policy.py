@@ -14,9 +14,11 @@ ledger `proof` column.
 """
 from __future__ import annotations
 
+import os
 import pathlib
 import re
 import signal
+import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -497,7 +499,11 @@ def check_no_informational_gates() -> None:
 _PROVENANCE_SRC = re.compile(
     r"""\.\s+["']\$ROOT/scripts/lib/provenance\.sh["']"""
 )
-_HOST_TMP_REDIR = re.compile(r"(?:^|[\s;|&])(?:\d*)>>?\s*/tmp/")
+_HOST_TMP_REDIR = re.compile(
+    r"(?:^|[\s;|&])(?:\d*)>>?\s*/tmp/"
+    r"|(?:^|[\s;|&])(?:cp|tee|mv|mkdir|touch|install)\b[^\n;|&]*\s/tmp/"
+    r"|\$\([^)]*>>?\s*/tmp/"
+)
 _HEREDOC_DELIM = re.compile(r"""<<[-]?\s*['\"]?(\w+)['\"]?""")
 
 
@@ -565,6 +571,8 @@ def host_tmp_write_lines(text: str) -> list[int]:
             if m:
                 heredoc_end = m.group(1)
         if "KERBER_SCRATCH:-" in code:
+            continue
+        if "docker exec" in code or "docker run" in code:
             continue
         if _HOST_TMP_REDIR.search(code):
             hits.append(i)
@@ -894,6 +902,34 @@ def check_nextest() -> None:
         _die(".config/nextest.toml slow-timeout must terminate hangs")
 
 
+def check_unit_evidence_helper() -> None:
+    """K6: unit_green / unit_red_at exist; red refuses a missing test filter."""
+    path = SCRIPTS / "lib" / "unit-evidence.sh"
+    if not path.is_file():
+        _die("missing scripts/lib/unit-evidence.sh")
+    text = path.read_text()
+    if "unit_green" not in text or "unit_red_at" not in text:
+        _die("unit-evidence.sh missing unit_green/unit_red_at")
+    if "test filter required" not in text:
+        _die("unit_red_at must refuse a command without a test filter")
+    env = os.environ.copy()
+    env["KERBER_NO_IMAGE"] = "1"
+    env["ROOT"] = str(ROOT)
+    r = subprocess.run(
+        [
+            "bash",
+            "-c",
+            '. "$ROOT/scripts/lib/unit-evidence.sh"; unit_red_at',
+        ],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    if r.returncode == 0:
+        _die("unit_red_at accepted missing filter")
+
+
 def _must_die(fn, *args) -> None:
     err = sys.stderr
     sys.stderr = open("/dev/null", "w", encoding="utf-8")
@@ -1194,6 +1230,22 @@ jobs:
         "cc -o x x.c 2>/tmp/kadm5-cc.err\n",
         "kadmin-gate.sh",
     )
+    _must_die(
+        check_no_host_tmp_writes,
+        "cp x /tmp/foo\n",
+        "cp-tmp-gate.sh",
+    )
+    _must_die(
+        check_no_host_tmp_writes,
+        "tee /tmp/out.log\n",
+        "tee-tmp-gate.sh",
+    )
+    _must_die(
+        check_no_host_tmp_writes,
+        "echo $(cat >/tmp/x)\n",
+        "subshell-tmp-gate.sh",
+    )
+    check_unit_evidence_helper()
     check_red_at_sha_overlay_order(
         'cp "$ROOT/scripts/"*.sh "$WT/scripts/"\nTREE="$(git write-tree)"\n'
     )
@@ -1228,6 +1280,7 @@ def main() -> None:
     check_no_informational_gates()
     check_gate_provenance()
     check_no_host_tmp_writes()
+    check_unit_evidence_helper()
     check_red_at_sha_overlay_order()
     check_working_gitignored()
     check_ledger_proof_column()

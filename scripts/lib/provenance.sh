@@ -33,7 +33,17 @@ if command -v docker >/dev/null 2>&1; then
             echo "acl_sha256_image=$acl_sha256_image" >&2
             exit 1
         fi
+    elif [ "${KERBER_NO_IMAGE:-}" = 1 ]; then
+        image="unavailable"
+    else
+        echo "MIT image kerber-rust-mit-kdc:1.22.2 missing; rebuild from harness/ or set KERBER_NO_IMAGE=1" >&2
+        exit 1
     fi
+elif [ "${KERBER_NO_IMAGE:-}" = 1 ]; then
+    image="unavailable"
+else
+    echo "docker not available; set KERBER_NO_IMAGE=1 to stamp without the MIT image" >&2
+    exit 1
 fi
 echo "==== provenance ===="
 echo "head_sha=$head_sha"

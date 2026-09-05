@@ -101,51 +101,6 @@ fn kpasswd_udp_recv_until(
     }
 }
 
-/// Serve kadmind until `shutdown`. GSS AP-REQ authenticates each op.
-///
-/// # Errors
-///
-/// Bind / accept failures.
-#[allow(clippy::needless_pass_by_value)]
-pub fn serve_kadmind(
-    store: SharedStore,
-    acl: krb5_kdc::Acl,
-    service_key: ProtocolKey,
-    listener: TcpListener,
-    shutdown: Arc<AtomicBool>,
-) -> io::Result<()> {
-    listener.set_nonblocking(true)?;
-    let replay = ReplayCache::new();
-    while !shutdown.load(Ordering::Relaxed) {
-        match listener.accept() {
-            Ok((mut stream, _)) => {
-                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-                let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
-                match handle_kadmind_conn(&store, &acl, &service_key, &replay, &mut stream) {
-                    Ok(reply) => {
-                        let _ = write_len_pref(&mut stream, &reply);
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            event = krb5_log::events::ADMIN,
-                            component = "krb5-admin",
-                            outcome = "error",
-                            error = %e,
-                        );
-                        let _ = write_len_pref(&mut stream, &status_bytes(1));
-                    }
-                }
-            }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(20));
-            }
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-            Err(e) => return Err(e),
-        }
-    }
-    Ok(())
-}
-
 fn write_len_pref(stream: &mut TcpStream, body: &[u8]) -> io::Result<()> {
     let len = u32::try_from(body.len()).unwrap_or(0);
     stream.write_all(&len.to_be_bytes())?;
@@ -167,17 +122,6 @@ fn read_len_pref(stream: &mut TcpStream, max: usize) -> io::Result<Vec<u8>> {
 
 fn status_bytes(status: u32) -> Vec<u8> {
     status.to_be_bytes().to_vec()
-}
-
-fn handle_kadmind_conn(
-    store: &SharedStore,
-    acl: &krb5_kdc::Acl,
-    service_key: &ProtocolKey,
-    replay: &ReplayCache,
-    stream: &mut TcpStream,
-) -> Result<Vec<u8>, Error> {
-    let body = read_len_pref(stream, 64 * 1024).map_err(|e| Error::Inner(e.to_string()))?;
-    dispatch_kadmind(store, acl, service_key, replay, &body)
 }
 
 /// Version-1 kadmind body: `version, op, ap_len, ap-req, pay_len, payload`.

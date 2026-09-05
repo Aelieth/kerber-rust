@@ -32,7 +32,6 @@ compile_kadm5_changepw() {
             -lkadm5clnt -lgssrpc -lgssapi_krb5 -lkrb5 -lcom_err 2>>"$SCRATCH/kadm5-cc.err"
         then
             cat "$SCRATCH/kadm5-cc.err" >&2 || true
-            docker exec "$ctn" cat /tmp/kadm5-cc.err >&2 || true
             log "kadmin.gate" "error" ',"error":"kadm5-changepw-rpc compile failed"'
             exit 1
         fi
@@ -875,6 +874,29 @@ GETPRIVS="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
 echo "$GETPRIVS"
 echo "$GETPRIVS" | grep -qiE 'GET|ADD|MODIFY|DELETE'
 
+echo "==== getprinc user@OTHER.REALM is UNK_PRINC ===="
+FOREIGN="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc user@OTHER.REALM' 2>&1 || true)"
+echo "$FOREIGN"
+echo "$FOREIGN" | grep -F 'Principal does not exist'
+echo "==== addprinc user@OTHER.REALM ===="
+ADDFOR="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw x user@OTHER.REALM' 2>&1 || true)"
+echo "$ADDFOR"
+if echo "$ADDFOR" | grep -q 'Principal "user@OTHER.REALM" created'; then
+    echo "addprinc user@OTHER.REALM created a local principal: $ADDFOR" >&2
+    exit 1
+fi
+echo "==== unauthorised modprinc nosuch is UNK_PRINC ===="
+MODNS="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p user -w userpassword -q 'modprinc +requires_preauth nosuch' 2>&1 || true)"
+echo "$MODNS"
+echo "$MODNS" | grep -F 'Principal does not exist'
+if echo "$MODNS" | grep -qiE "requires \`\`modify'' privilege"; then
+    echo "unauthorised modprinc nosuch was AUTH_MODIFY: $MODNS" >&2
+    exit 1
+fi
+
 echo "==== unauthorised getprinc nosuch is UNK_PRINC ===="
 NOSUCH="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p user -w userpassword -q 'getprinc nosuch' 2>&1 || true)"
@@ -1339,6 +1361,22 @@ fi
 MIT_GETPRIVS="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'getprivs' 2>&1 || true)"
 echo "$MIT_GETPRIVS"
 echo "$MIT_GETPRIVS" | grep -qiE 'GET|ADD|MODIFY|DELETE'
+
+echo "==== MIT getprinc user@OTHER.REALM is UNK_PRINC ===="
+MIT_FOREIGN="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'getprinc user@OTHER.REALM' 2>&1 || true)"
+echo "$MIT_FOREIGN"
+echo "$MIT_FOREIGN" | grep -F 'Principal does not exist'
+echo "==== MIT addprinc user@OTHER.REALM ===="
+MIT_ADDFOR="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'addprinc -pw x user@OTHER.REALM' 2>&1 || true)"
+echo "$MIT_ADDFOR"
+if echo "$MIT_ADDFOR" | grep -q 'Principal "user@OTHER.REALM" created'; then
+    echo "MIT addprinc user@OTHER.REALM created: $MIT_ADDFOR" >&2
+    exit 1
+fi
+echo "==== MIT unauthorised modprinc nosuch is UNK_PRINC ===="
+MIT_MODNS="$(docker exec "$NAME_MIT" kadmin -p user -w userpassword -q 'modprinc +requires_preauth nosuch' 2>&1 || true)"
+echo "$MIT_MODNS"
+echo "$MIT_MODNS" | grep -F 'Principal does not exist'
 
 echo "==== MIT unauthorised getprinc nosuch is UNK_PRINC ===="
 MIT_NOSUCH="$(docker exec "$NAME_MIT" kadmin -p user -w userpassword -q 'getprinc nosuch' 2>&1 || true)"

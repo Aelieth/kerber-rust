@@ -164,6 +164,8 @@ pub struct GssContext {
     ticket_initial: bool,
     /// Ticket sname (`accept_sec_context` / CHANGEPW_SERVICE / kiprop).
     pub acceptor: Option<krb5_types::PrincipalName>,
+    /// Ticket realm (`check_rpcsec_auth` / `check_iprop_rpcsec_auth`).
+    pub ticket_realm: Option<String>,
 }
 
 /// GSS IOV buffer type (MIT `gssapi_ext.h`).
@@ -279,17 +281,14 @@ impl GssContext {
                 initiator: true,
                 rpcsec_init_window: false,
                 replay: ReplayCache::new(),
-                client: Some(format!(
-                    "{}@{}",
-                    cname.components_joined(),
-                    String::from_utf8_lossy(crealm.as_bytes())
-                )),
+                client: Some(cname.unparse_with_realm(&String::from_utf8_lossy(crealm.as_bytes()))),
                 delegated: None,
                 spnego_mech_list: None,
                 lifetime_end: 0,
                 gss_flags: flags,
                 ticket_initial: false,
                 acceptor: None,
+                ticket_realm: Some(String::from_utf8_lossy(crealm.as_bytes()).into_owned()),
             },
             token,
         ))
@@ -334,6 +333,7 @@ impl GssContext {
             gss_flags: 0,
             ticket_initial: false,
             acceptor: None,
+            ticket_realm: None,
         };
         let params = krb5_protocol::ApVerifyParams {
             expected_server,
@@ -345,11 +345,9 @@ impl GssContext {
             now: None,
         };
         let ok = krb5_protocol::verify_ap_req_ex(&inner[2..], &params, rcache, None)?;
-        let client = format!(
-            "{}@{}",
-            ok.authenticator.cname.unparse(),
-            String::from_utf8_lossy(ok.authenticator.crealm.as_bytes())
-        );
+        let crealm = String::from_utf8_lossy(ok.ticket_part.crealm.as_bytes()).into_owned();
+        let client = ok.authenticator.cname.unparse_with_realm(&crealm);
+        let srealm = String::from_utf8_lossy(ok.srealm.as_bytes()).into_owned();
         let ticket_session = ProtocolKey::from_bytes(
             EncryptionType::from_iana(ok.ticket_part.key.keytype)
                 .or_else(|_| EncryptionType::known(ok.ticket_part.key.keytype))?,
@@ -418,6 +416,7 @@ impl GssContext {
             gss_flags,
             ticket_initial: ok.ticket_part.flags.initial(),
             acceptor: Some(ok.sname.clone()),
+            ticket_realm: Some(srealm),
         };
         let mut ap_rep_tok = None;
         if want_mutual {
@@ -976,6 +975,7 @@ impl GssContext {
             gss_flags,
             ticket_initial: false,
             acceptor: None,
+            ticket_realm: None,
         })
     }
 
@@ -2969,6 +2969,7 @@ mod tests {
             gss_flags: GSS_C_INTEG | GSS_C_CONF,
             ticket_initial: false,
             acceptor: None,
+            ticket_realm: None,
         }
     }
 

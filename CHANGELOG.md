@@ -6,6 +6,27 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-I Round 2 (K6–K11)
+
+- **K6.** `provenance.sh` dies when docker or the MIT image is absent
+  unless `KERBER_NO_IMAGE=1`. `ci-policy` `_HOST_TMP_REDIR` matches
+  `cp|tee|mv|mkdir|touch|install … /tmp/` and `>/tmp/` in `$()`.
+  `scripts/lib/unit-evidence.sh` / `settle.sh`. `rc4-session-gate.sh`
+  echoes the `"key_usage":9` line. Dead `kadmin-gate.sh` host
+  `/tmp/kadm5-cc.err` cat removed.
+- **K7.** AUTH_GSSAPI-on-iprop INIT/DATA is `AUTH_TOOWEAK`. RPCSEC INIT
+  MIC of the sequence window. `check_rpcsec_auth` compares ticket
+  realm. IPROP on kadmind 749 stays a ledger `deviation` (MIT
+  `PROG_UNAVAIL`, Rust `AUTH_TOOWEAK`). `rpc.flavor=` log.
+- **K8.** stub_setup keeps the wire realm (`UNK_PRINC` for
+  `user@OTHER.REALM`). GSS client names use `unparse_with_realm`.
+- **K9.** kadm5 create-policy floors min length/classes/history to 1
+  when unspecified (`svr_policy.c`).
+- **K10.** RPCSEC `AUTH_BADCRED` / `CREDPROBLEM` / `CTXPROBLEM` replies
+  instead of dropping the connection. `serve_kadmind` v1 listener
+  removed. Empty KDC replies log at `debug`.
+- **K11.** Evidence INDEX/summary restamp at the landing SHA.
+
 The **1.1** line is *general-purpose MIT 1.22.2 completeness*: making the KDC
 behave like MIT across the board and stand alone as a client toolset. The
 roadmap is nine gated phases — **G1** faithfulness (enforce expiration +

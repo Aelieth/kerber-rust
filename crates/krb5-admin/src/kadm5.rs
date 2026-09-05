@@ -55,6 +55,12 @@ const PROC_UNAVAIL: u32 = 3;
 const GARBAGE_ARGS: u32 = 4;
 const REJECT_AUTH_ERROR: u32 = 1;
 const AUTH_TOOWEAK: u32 = 5;
+const AUTH_BADCRED: u32 = 1;
+const AUTH_FAILED: u32 = 7;
+/// MIT `gssrpc/auth.h` `RPCSEC_GSS_CREDPROBLEM`.
+const RPCSEC_GSS_CREDPROBLEM: u32 = 13;
+/// MIT `gssrpc/auth.h` `RPCSEC_GSS_CTXPROBLEM`.
+const RPCSEC_GSS_CTXPROBLEM: u32 = 14;
 /// MIT `svc_auth_gss.c:226` `sizeof(seqmask)*8`.
 const RPCSEC_SEQ_WINDOW: u32 = 32;
 
@@ -88,6 +94,10 @@ const EXTRACT_KEYS: u32 = 26;
 const KADM5_UNK_PRINC: u32 = 43_787_532;
 /// MIT `KADM5_UNK_POLICY`.
 const KADM5_UNK_POLICY: u32 = 43_787_533;
+const KADM5_BAD_CLASS: u32 = 43_787_535;
+const KADM5_BAD_LENGTH: u32 = 43_787_536;
+const KADM5_BAD_HISTORY: u32 = 43_787_540;
+const KADM5_BAD_MIN_PASS_LIFE: u32 = 43_787_541;
 /// MIT `KADM5_DUP`.
 const KADM5_DUP: u32 = 43_787_527;
 /// MIT `KADM5_FAILURE`.
@@ -269,6 +279,21 @@ fn handle_rpc(
     let verf_flavor = r.u32()?;
     let verf = r.opaque()?;
 
+    tracing::info!(
+        event = krb5_log::events::ADMIN,
+        component = "krb5-admin",
+        outcome = "ok",
+        detail = "rpc.flavor",
+        rpc_flavor = if cred_flavor == FLAVOR_GSS {
+            "RPCSEC_GSS"
+        } else if cred_flavor == FLAVOR_AUTH_GSSAPI {
+            "AUTH_GSSAPI"
+        } else {
+            "OTHER"
+        },
+        prog,
+    );
+
     // svc.c:486-520: AUTH_NONE is AUTH_OK, then program/version.
     let kadm = prog == KADM_PROG;
     let iprop = prog == IPROP_PROG;
@@ -303,9 +328,14 @@ fn handle_rpc(
         // kadm_rpc_svc.c:80-87: only AUTH_GSSAPI / RPCSEC_GSS.
         return Ok(rpc_reply_weakauth(xid));
     }
-    let gcred = parse_gcred(&cred)?;
+    let Ok(gcred) = parse_gcred(&cred) else {
+        return Ok(rpc_reply_auth_error(xid, AUTH_BADCRED));
+    };
     if gcred.version != RPCSEC_GSS_VERS {
-        return Err(Error::Inner("gssrpc version".into()));
+        return Ok(rpc_reply_auth_error(xid, AUTH_BADCRED));
+    }
+    if gcred.service != 0 && gcred.service != 1 && gcred.service != GSS_PRIVACY {
+        return Ok(rpc_reply_auth_error(xid, AUTH_BADCRED));
     }
 
     if gcred.proc == RPG_INIT || gcred.proc == RPG_CONTINUE {
@@ -335,18 +365,17 @@ fn handle_rpc(
         return Ok(rpc_reply_gss_verf(xid, &mic, &body.b));
     }
 
-    let ctx = gss
-        .as_mut()
-        .ok_or_else(|| Error::Inner("gss not established".into()))?;
-    if verf_flavor == FLAVOR_GSS {
-        ctx.verify_mic(&rec[..header_end], &verf)
-            .map_err(|e| Error::Inner(format!("rpc mic: {e}")))?;
+    let Some(ctx) = gss.as_mut() else {
+        return Ok(rpc_reply_auth_error(xid, RPCSEC_GSS_CTXPROBLEM));
+    };
+    if verf_flavor == FLAVOR_GSS && ctx.verify_mic(&rec[..header_end], &verf).is_err() {
+        return Ok(rpc_reply_auth_error(xid, RPCSEC_GSS_CREDPROBLEM));
     }
     if gcred.proc != RPG_DATA {
-        return Err(Error::Inner("gssrpc proc".into()));
+        return Ok(rpc_reply_auth_error(xid, AUTH_FAILED));
     }
     if gcred.service != GSS_PRIVACY {
-        return Err(Error::Inner("need privacy".into()));
+        return Ok(rpc_reply_auth_error(xid, AUTH_BADCRED));
     }
     let wrapped = r.opaque()?;
     let plain = ctx
@@ -593,12 +622,16 @@ fn encode_init_res(
 }
 
 fn rpc_reply_weakauth(xid: u32) -> Vec<u8> {
+    rpc_reply_auth_error(xid, AUTH_TOOWEAK)
+}
+
+fn rpc_reply_auth_error(xid: u32, stat: u32) -> Vec<u8> {
     let mut w = XdrW::default();
     w.u32(xid);
     w.u32(MSG_REPLY);
     w.u32(MSG_DENIED);
     w.u32(REJECT_AUTH_ERROR);
-    w.u32(AUTH_TOOWEAK);
+    w.u32(stat);
     w.b
 }
 
@@ -1550,9 +1583,10 @@ fn is_self(actor: &str, name: &PrincipalName, realm: &str) -> bool {
 }
 
 fn changepw_acceptor(ctx: &GssContext) -> bool {
-    ctx.acceptor
-        .as_ref()
-        .is_some_and(|n| n.components_joined() == "kadmin/changepw")
+    ctx.acceptor.as_ref().is_some_and(|n| {
+        let p = acceptor_parts(n);
+        p.len() == 2 && p[0] == "kadmin" && p[1] == "changepw"
+    })
 }
 
 fn changepw_not_self(changepw: bool, actor: &str, name: &PrincipalName, realm: &str) -> bool {
@@ -1567,8 +1601,8 @@ fn acceptor_parts(n: &PrincipalName) -> Vec<String> {
 }
 
 fn kadm5_auth_gssapi_ok(n: &PrincipalName) -> bool {
-    let s = n.components_joined();
-    s == "kadmin/admin" || s == "kadmin/changepw"
+    let p = acceptor_parts(n);
+    p.len() == 2 && p[0] == "kadmin" && (p[1] == "admin" || p[1] == "changepw")
 }
 
 fn kadm5_rpcsec_ok(n: &PrincipalName) -> bool {
@@ -1585,12 +1619,14 @@ fn check_auth_gssapi_names(ctx: &GssContext) -> bool {
     ctx.acceptor.as_ref().is_some_and(kadm5_auth_gssapi_ok)
 }
 
-fn check_rpcsec_auth(ctx: &GssContext, _store_realm: &str) -> bool {
-    ctx.acceptor.as_ref().is_some_and(kadm5_rpcsec_ok)
+fn check_rpcsec_auth(ctx: &GssContext, store_realm: &str) -> bool {
+    ctx.ticket_realm.as_deref() == Some(store_realm)
+        && ctx.acceptor.as_ref().is_some_and(kadm5_rpcsec_ok)
 }
 
-fn check_iprop_rpcsec_auth(ctx: &GssContext, _store_realm: &str) -> bool {
-    ctx.acceptor.as_ref().is_some_and(iprop_rpcsec_ok)
+fn check_iprop_rpcsec_auth(ctx: &GssContext, store_realm: &str) -> bool {
+    ctx.ticket_realm.as_deref() == Some(store_realm)
+        && ctx.acceptor.as_ref().is_some_and(iprop_rpcsec_ok)
 }
 
 fn store_realm(store: &SharedStore) -> String {
@@ -1887,13 +1923,17 @@ fn dispatch_kadm5_ticket(
             }
         }
         CREATE_POLICY => {
-            let (api, pol, _mask) = parse_policy_arg(args)?;
+            let (api, mut pol, mask) = parse_policy_arg(args)?;
             if changepw || acl.check(actor, krb5_kdc::AdminOp::Create, None).is_err() {
                 return Ok(generic_ret(api, KADM5_AUTH_ADD));
             }
             if pol.name.is_empty() {
                 return Ok(generic_ret(api, KADM5_UNK_POLICY));
             }
+            if let Some(code) = policy_floor_err(&pol, mask) {
+                return Ok(generic_ret(api, code));
+            }
+            apply_policy_floors(&mut pol, mask);
             let mut g = match write_store(store, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
@@ -2312,6 +2352,45 @@ fn merge_policy(
         existing.pw_lockout_duration = rec.pw_lockout_duration;
     }
     existing
+}
+
+const MIN_PW_LENGTH: u32 = 1;
+const MIN_PW_CLASSES: u32 = 1;
+const MAX_PW_CLASSES: u32 = 5;
+const MIN_PW_HISTORY: u32 = 1;
+
+fn policy_floor_err(pol: &krb5_kdc::NamedPolicy, mask: u32) -> Option<u32> {
+    if mask & KADM5_PW_MIN_LIFE != 0
+        && mask & KADM5_PW_MAX_LIFE != 0
+        && pol.pw_min_life > pol.pw_max_life
+        && pol.pw_max_life != 0
+    {
+        return Some(KADM5_BAD_MIN_PASS_LIFE);
+    }
+    if mask & KADM5_PW_MIN_LENGTH != 0 && pol.min_length < MIN_PW_LENGTH {
+        return Some(KADM5_BAD_LENGTH);
+    }
+    if mask & KADM5_PW_MIN_CLASSES != 0
+        && (pol.min_classes < MIN_PW_CLASSES || pol.min_classes > MAX_PW_CLASSES)
+    {
+        return Some(KADM5_BAD_CLASS);
+    }
+    if mask & KADM5_PW_HISTORY_NUM != 0 && pol.history < MIN_PW_HISTORY {
+        return Some(KADM5_BAD_HISTORY);
+    }
+    None
+}
+
+fn apply_policy_floors(pol: &mut krb5_kdc::NamedPolicy, mask: u32) {
+    if mask & KADM5_PW_MIN_LENGTH == 0 {
+        pol.min_length = MIN_PW_LENGTH;
+    }
+    if mask & KADM5_PW_MIN_CLASSES == 0 {
+        pol.min_classes = MIN_PW_CLASSES;
+    }
+    if mask & KADM5_PW_HISTORY_NUM == 0 {
+        pol.history = MIN_PW_HISTORY;
+    }
 }
 
 fn encode_policy_rec(w: &mut XdrW, api: u32, p: &krb5_kdc::NamedPolicy) {
@@ -3138,6 +3217,90 @@ mod tests {
         assert_eq!(r.u32().unwrap(), MSG_DENIED);
         assert_eq!(r.u32().unwrap(), REJECT_AUTH_ERROR);
         assert_eq!(r.u32().unwrap(), AUTH_TOOWEAK);
+    }
+
+    #[test]
+    fn rpcsec_bad_version_is_auth_badcred() {
+        let (store, acl, _) = setup();
+        let mut cred = XdrW::default();
+        cred.u32(99);
+        cred.u32(RPG_INIT);
+        cred.u32(0);
+        cred.u32(GSS_PRIVACY);
+        cred.opaque(&[]);
+        let mut w = XdrW::default();
+        w.u32(13);
+        w.u32(MSG_CALL);
+        w.u32(RPC_VERSION);
+        w.u32(KADM_PROG);
+        w.u32(KADM_VERS);
+        w.u32(0);
+        w.u32(FLAVOR_GSS);
+        w.opaque(&cred.b);
+        w.u32(FLAVOR_NONE);
+        w.opaque(&[]);
+        let mut gss = None;
+        let mut agss = None;
+        let out = handle_rpc(
+            &store,
+            &acl,
+            &[],
+            "KERBER.TEST",
+            &[],
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &w.b,
+        )
+        .unwrap();
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), 13);
+        assert_eq!(r.u32().unwrap(), MSG_REPLY);
+        assert_eq!(r.u32().unwrap(), MSG_DENIED);
+        assert_eq!(r.u32().unwrap(), REJECT_AUTH_ERROR);
+        assert_eq!(r.u32().unwrap(), AUTH_BADCRED);
+    }
+
+    #[test]
+    fn rpcsec_data_without_context_is_ctxproblem() {
+        let (store, acl, _) = setup();
+        let mut cred = XdrW::default();
+        cred.u32(RPCSEC_GSS_VERS);
+        cred.u32(RPG_DATA);
+        cred.u32(1);
+        cred.u32(GSS_PRIVACY);
+        cred.opaque(&[]);
+        let mut w = XdrW::default();
+        w.u32(14);
+        w.u32(MSG_CALL);
+        w.u32(RPC_VERSION);
+        w.u32(KADM_PROG);
+        w.u32(KADM_VERS);
+        w.u32(12);
+        w.u32(FLAVOR_GSS);
+        w.opaque(&cred.b);
+        w.u32(FLAVOR_NONE);
+        w.opaque(&[]);
+        let mut gss = None;
+        let mut agss = None;
+        let out = handle_rpc(
+            &store,
+            &acl,
+            &[],
+            "KERBER.TEST",
+            &[],
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &w.b,
+        )
+        .unwrap();
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), 14);
+        assert_eq!(r.u32().unwrap(), MSG_REPLY);
+        assert_eq!(r.u32().unwrap(), MSG_DENIED);
+        assert_eq!(r.u32().unwrap(), REJECT_AUTH_ERROR);
+        assert_eq!(r.u32().unwrap(), RPCSEC_GSS_CTXPROBLEM);
     }
 
     #[test]
@@ -5328,6 +5491,47 @@ mod tests {
         encode_policy_rec(&mut w, api, p);
         w.u32(mask);
         w.b
+    }
+
+    #[test]
+    fn create_policy_unspecified_floors_and_zero_history_is_bad() {
+        let (store, acl, actor) = setup();
+        let empty = krb5_kdc::NamedPolicy::new("floors");
+        let created = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            CREATE_POLICY,
+            &encode_cpol(API_V2, &empty, KADM5_POLICY),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&created), 0);
+        let g = store.read().unwrap();
+        let p = g.policies().get("floors").unwrap();
+        assert_eq!(p.min_length, 1);
+        assert_eq!(p.min_classes, 1);
+        assert_eq!(p.history, 1);
+        drop(g);
+        let zhist = krb5_kdc::NamedPolicy {
+            name: "zhist".into(),
+            min_length: 1,
+            min_classes: 1,
+            history: 0,
+            max_fail: 0,
+            pw_failcnt_interval: 0,
+            pw_lockout_duration: 0,
+            pw_min_life: 0,
+            pw_max_life: 0,
+        };
+        let bad = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            CREATE_POLICY,
+            &encode_cpol(API_V2, &zhist, KADM5_POLICY | KADM5_PW_HISTORY_NUM),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&bad), KADM5_BAD_HISTORY);
     }
 
     #[test]

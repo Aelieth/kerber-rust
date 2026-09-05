@@ -16,11 +16,11 @@ const WHILE_DISPATCHING_UDP: &str = "while dispatching (udp)";
 const WHILE_DISPATCHING_TCP: &str = "while dispatching (tcp)";
 
 fn log_dispatch_drop(udp: bool) {
-    tracing::error!(
+    tracing::debug!(
         event = krb5_log::events::KDC_ISSUE,
         correlation_id = krb5_log::current_correlation_id(),
         component = "krb5-kdc",
-        outcome = "error",
+        outcome = "ok",
         error = if udp {
             WHILE_DISPATCHING_UDP
         } else {
@@ -619,6 +619,7 @@ mod tests {
         let subscriber = tracing_subscriber::fmt()
             .with_writer(Capture(Arc::clone(&buf)))
             .with_ansi(false)
+            .with_max_level(tracing::Level::DEBUG)
             .finish();
         tracing::subscriber::with_default(subscriber, || {
             log_dispatch_drop(true);
