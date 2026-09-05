@@ -119,6 +119,40 @@ echo "$UNK"
 test "$unkrc" -ne 0
 echo "$UNK" | grep -qi 'unknown flag'
 
+echo "==== kadmin.local addpol flags + getpol layout ===="
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'addpol floors1'
+GETF="$(docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'getpol floors1')"
+echo "$GETF"
+echo "$GETF" | grep -F 'Policy: floors1'
+if echo "$GETF" | grep -q 'Policy: Policy:'; then
+    echo "doubled Policy: prefix: $GETF" >&2
+    exit 1
+fi
+echo "$GETF" | grep -F 'Minimum password length: 1'
+echo "$GETF" | grep -F 'Minimum number of password character classes: 1'
+echo "$GETF" | grep -F 'Number of old keys kept: 1'
+echo "$GETF" | grep -F 'Maximum password life: 0 days 00:00:00'
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'addpol -minlength 8 -minclasses 2 -history 3 -maxlife 1d -minlife 1h pflags'
+GETP="$(docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'getpol pflags')"
+echo "$GETP"
+echo "$GETP" | grep -F 'Minimum password length: 8'
+echo "$GETP" | grep -F 'Minimum number of password character classes: 2'
+echo "$GETP" | grep -F 'Number of old keys kept: 3'
+echo "$GETP" | grep -F 'Maximum password life: 1 day 00:00:00'
+echo "$GETP" | grep -F 'Minimum password life: 0 days 01:00:00'
+
 echo "==== kadmin.local ignores KRB5_ACL_FILE ===="
 set +e
 ACLOK="$(docker exec \

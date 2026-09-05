@@ -19,12 +19,17 @@ this project uses semantic versioning once a crate is published.
   realm. IPROP on kadmind 749 stays a ledger `deviation` (MIT
   `PROG_UNAVAIL`, Rust `AUTH_TOOWEAK`). `rpc.flavor=` log.
 - **K8.** stub_setup keeps the wire realm (`UNK_PRINC` for
-  `user@OTHER.REALM`). GSS client names use `unparse_with_realm`.
+  `user@OTHER.REALM`). GSS client names use `unparse_with_realm`. ACL
+  `get_line` strips only `\n` (CRLF `\\\r` is not continuation). Hex
+  flags truncate to 32 bits (`str_conv.c:150`).
 - **K9.** kadm5 create-policy floors min length/classes/history to 1
-  when unspecified (`svr_policy.c`).
+  when unspecified (`svr_policy.c`). `kadmin.local addpol` accepts MIT
+  flags; `getpol` prints `strdur` layout. kpasswd `result_code=4`.
 - **K10.** RPCSEC `AUTH_BADCRED` / `CREDPROBLEM` / `CTXPROBLEM` replies
-  instead of dropping the connection. `serve_kadmind` v1 listener
-  removed. Empty KDC replies log at `debug`.
+  instead of dropping the connection; those AUTH_ERROR replies precede
+  program match (`svc.c:486-497`). `serve_kadmind` v1 listener
+  removed. Empty KDC replies log at `debug`. kprop APPLICATION 14
+  ASN.1 fail is KRB-ERROR 60.
 - **K11.** Evidence INDEX/summary restamp at the landing SHA.
 
 The **1.1** line is *general-purpose MIT 1.22.2 completeness*: making the KDC

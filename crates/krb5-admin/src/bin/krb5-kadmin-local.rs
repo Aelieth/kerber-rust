@@ -10,7 +10,7 @@
 use std::io::{self, BufRead};
 use std::path::PathBuf;
 
-use krb5_admin::{AdminSession, KadminArgs, parse_kadmin_args};
+use krb5_admin::{AdminSession, KadminArgs, parse_kadmin_args, parse_policy_args};
 use krb5_kdc::{Acl, load_store};
 use krb5_protocol::Keytab;
 use krb5_types::PrincipalName;
@@ -209,14 +209,14 @@ fn run(sess: &mut AdminSession<'_>, line: &str) -> Result<LineOutcome, String> {
             apply_optional_fields(sess, &name, &a).map(|()| LineOutcome::Next)
         }
         Some("addpol" | "add_policy") => {
-            let n = parts.get(1).ok_or("addpol <name>")?;
-            sess.add_policy(n);
+            let a = parse_policy_args(&parts[1..])?;
+            sess.add_policy_ent(&a).map_err(|e| e.to_string())?;
             Ok(LineOutcome::Next)
         }
         Some("getpol" | "get_policy") => {
             let n = parts.get(1).ok_or("getpol <name>")?;
             let p = sess.get_policy(n).map_err(|e| e.to_string())?;
-            println!("Policy: {p}");
+            println!("{p}");
             Ok(LineOutcome::Next)
         }
         Some("setstr") => {
@@ -337,6 +337,37 @@ mod tests {
         assert_eq!(run_stdin(&mut sess, ["nope", "q"]), 1);
         assert_eq!(run_stdin(&mut sess, ["nope", "quit"]), 1);
         assert_eq!(run_stdin(&mut sess, ["nope", "exit"]), 1);
+    }
+
+    #[test]
+    fn addpol_flags_getpol_layout() {
+        let (mut store, acl) = sess_pair();
+        let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+        run(&mut sess, "addpol floors").unwrap();
+        let text = sess.get_policy("floors").unwrap();
+        assert!(text.starts_with("Policy: floors\n"), "{text}");
+        assert!(text.contains("Minimum password length: 1"), "{text}");
+        run(
+            &mut sess,
+            "addpol -minlength 8 -minclasses 2 -history 3 -maxlife 1d -minlife 1h pflags",
+        )
+        .unwrap();
+        let text = sess.get_policy("pflags").unwrap();
+        assert!(text.contains("Minimum password length: 8"), "{text}");
+        assert!(
+            text.contains("Minimum number of password character classes: 2"),
+            "{text}"
+        );
+        assert!(text.contains("Number of old keys kept: 3"), "{text}");
+        assert!(
+            text.contains("Maximum password life: 1 day 00:00:00"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Minimum password life: 0 days 01:00:00"),
+            "{text}"
+        );
+        assert!(run(&mut sess, "addpol -history 0 zhist").is_err());
     }
 
     #[test]

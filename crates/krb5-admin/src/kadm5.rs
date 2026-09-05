@@ -294,9 +294,32 @@ fn handle_rpc(
         prog,
     );
 
-    // svc.c:486-520: AUTH_NONE is AUTH_OK, then program/version.
     let kadm = prog == KADM_PROG;
     let iprop = prog == IPROP_PROG;
+    if cred_flavor == FLAVOR_GSS {
+        return handle_rpcsec_gss(
+            store,
+            acl,
+            service_keys,
+            expected_realm,
+            handle,
+            gss,
+            xid,
+            proc,
+            kadm,
+            iprop,
+            vers,
+            &cred,
+            verf_flavor,
+            &verf,
+            rec,
+            header_end,
+            r.rest(),
+            rcache,
+        );
+    }
+
+    // svc.c:486-520: AUTH_NONE is AUTH_OK, then program/version.
     if kadm && vers != KADM_VERS {
         return Ok(rpc_reply_mismatch(xid, KADM_VERS, KADM_VERS));
     }
@@ -324,11 +347,33 @@ fn handle_rpc(
         );
     }
 
-    if cred_flavor != FLAVOR_GSS {
-        // kadm_rpc_svc.c:80-87: only AUTH_GSSAPI / RPCSEC_GSS.
-        return Ok(rpc_reply_weakauth(xid));
-    }
-    let Ok(gcred) = parse_gcred(&cred) else {
+    // kadm_rpc_svc.c:80-87: only AUTH_GSSAPI / RPCSEC_GSS.
+    Ok(rpc_reply_weakauth(xid))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_rpcsec_gss(
+    store: &SharedStore,
+    acl: &Acl,
+    service_keys: &[ProtocolKey],
+    expected_realm: &str,
+    handle: &[u8],
+    gss: &mut Option<GssContext>,
+    xid: u32,
+    proc: u32,
+    kadm: bool,
+    iprop: bool,
+    vers: u32,
+    cred: &[u8],
+    verf_flavor: u32,
+    verf: &[u8],
+    rec: &[u8],
+    header_end: usize,
+    args: &[u8],
+    rcache: &ReplayCache,
+) -> Result<Vec<u8>, Error> {
+    let mut r = XdrR::new(args);
+    let Ok(gcred) = parse_gcred(cred) else {
         return Ok(rpc_reply_auth_error(xid, AUTH_BADCRED));
     };
     if gcred.version != RPCSEC_GSS_VERS {
@@ -340,8 +385,6 @@ fn handle_rpc(
 
     if gcred.proc == RPG_INIT || gcred.proc == RPG_CONTINUE {
         let token = r.opaque()?;
-        // RPCSEC_GSS: MIT kadmin uses kadmin/admin; kpropd uses kiprop/host
-        // on program 2112 then 100423. Bind by service key, not sname.
         let (mut ctx, out_tok) = GssContext::accept_sec_context(
             &token,
             service_keys,
@@ -353,11 +396,10 @@ fn handle_rpc(
         .map_err(|e| Error::Inner(e.to_string()))?;
         let mut body = XdrW::default();
         body.opaque(handle);
-        body.u32(0); // GSS_S_COMPLETE
+        body.u32(0);
         body.u32(0);
         body.u32(RPCSEC_SEQ_WINDOW);
         body.opaque(out_tok.as_deref().unwrap_or(&[]));
-        // MIT svc_auth_gss.c:496-504: xp_verf is MIC(htonl(gr_win)).
         let mic = ctx
             .get_mic(&RPCSEC_SEQ_WINDOW.to_be_bytes())
             .map_err(|e| Error::Inner(format!("rpcsec init mic: {e}")))?;
@@ -368,7 +410,7 @@ fn handle_rpc(
     let Some(ctx) = gss.as_mut() else {
         return Ok(rpc_reply_auth_error(xid, RPCSEC_GSS_CTXPROBLEM));
     };
-    if verf_flavor == FLAVOR_GSS && ctx.verify_mic(&rec[..header_end], &verf).is_err() {
+    if verf_flavor == FLAVOR_GSS && ctx.verify_mic(&rec[..header_end], verf).is_err() {
         return Ok(rpc_reply_auth_error(xid, RPCSEC_GSS_CREDPROBLEM));
     }
     if gcred.proc != RPG_DATA {
@@ -377,6 +419,17 @@ fn handle_rpc(
     if gcred.service != GSS_PRIVACY {
         return Ok(rpc_reply_auth_error(xid, AUTH_BADCRED));
     }
+
+    if kadm && vers != KADM_VERS {
+        return Ok(rpc_reply_mismatch(xid, KADM_VERS, KADM_VERS));
+    }
+    if iprop && vers != IPROP_VERS {
+        return Ok(rpc_reply_mismatch(xid, IPROP_VERS, IPROP_VERS));
+    }
+    if !kadm && !iprop {
+        return Ok(rpc_reply_accepted(xid, PROG_UNAVAIL));
+    }
+
     let wrapped = r.opaque()?;
     let plain = ctx
         .unwrap(&wrapped)
@@ -389,7 +442,7 @@ fn handle_rpc(
             .try_into()
             .map_err(|_| Error::Inner("seq".into()))?,
     );
-    let args = &plain[4..];
+    let kadm_args = &plain[4..];
     let actor = ctx.client.clone().ok_or(Error::AclDenied)?;
     if iprop {
         if !check_iprop_rpcsec_auth(ctx, expected_realm) {
@@ -403,7 +456,7 @@ fn handle_rpc(
         acl,
         &actor,
         proc,
-        args,
+        kadm_args,
         ctx.ticket_is_initial(),
         changepw_acceptor(ctx),
         iprop,
@@ -416,7 +469,6 @@ fn handle_rpc(
     let mut inner = Vec::with_capacity(4 + result.len());
     inner.extend_from_slice(&seq.to_be_bytes());
     inner.extend_from_slice(&result);
-    // RPCSEC_GSS peers (MIT libgssrpc) historically unwrap RRC=0.
     let wrap = ctx
         .wrap_with_rrc(&inner, 0)
         .map_err(|e| Error::Inner(format!("gss wrap: {e}")))?;
@@ -3262,6 +3314,48 @@ mod tests {
     }
 
     #[test]
+    fn rpcsec_unknown_program_bad_version_is_auth_badcred() {
+        let (store, acl, _) = setup();
+        let mut cred = XdrW::default();
+        cred.u32(99);
+        cred.u32(RPG_INIT);
+        cred.u32(0);
+        cred.u32(GSS_PRIVACY);
+        cred.opaque(&[]);
+        let mut w = XdrW::default();
+        w.u32(15);
+        w.u32(MSG_CALL);
+        w.u32(RPC_VERSION);
+        w.u32(99_999);
+        w.u32(1);
+        w.u32(0);
+        w.u32(FLAVOR_GSS);
+        w.opaque(&cred.b);
+        w.u32(FLAVOR_NONE);
+        w.opaque(&[]);
+        let mut gss = None;
+        let mut agss = None;
+        let out = handle_rpc(
+            &store,
+            &acl,
+            &[],
+            "KERBER.TEST",
+            &[],
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &w.b,
+        )
+        .unwrap();
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), 15);
+        assert_eq!(r.u32().unwrap(), MSG_REPLY);
+        assert_eq!(r.u32().unwrap(), MSG_DENIED);
+        assert_eq!(r.u32().unwrap(), REJECT_AUTH_ERROR);
+        assert_eq!(r.u32().unwrap(), AUTH_BADCRED);
+    }
+
+    #[test]
     fn rpcsec_data_without_context_is_ctxproblem() {
         let (store, acl, _) = setup();
         let mut cred = XdrW::default();
@@ -3297,6 +3391,48 @@ mod tests {
         .unwrap();
         let mut r = XdrR::new(&out);
         assert_eq!(r.u32().unwrap(), 14);
+        assert_eq!(r.u32().unwrap(), MSG_REPLY);
+        assert_eq!(r.u32().unwrap(), MSG_DENIED);
+        assert_eq!(r.u32().unwrap(), REJECT_AUTH_ERROR);
+        assert_eq!(r.u32().unwrap(), RPCSEC_GSS_CTXPROBLEM);
+    }
+
+    #[test]
+    fn rpcsec_unknown_program_data_without_context_is_ctxproblem() {
+        let (store, acl, _) = setup();
+        let mut cred = XdrW::default();
+        cred.u32(RPCSEC_GSS_VERS);
+        cred.u32(RPG_DATA);
+        cred.u32(1);
+        cred.u32(GSS_PRIVACY);
+        cred.opaque(&[]);
+        let mut w = XdrW::default();
+        w.u32(16);
+        w.u32(MSG_CALL);
+        w.u32(RPC_VERSION);
+        w.u32(99_999);
+        w.u32(1);
+        w.u32(12);
+        w.u32(FLAVOR_GSS);
+        w.opaque(&cred.b);
+        w.u32(FLAVOR_NONE);
+        w.opaque(&[]);
+        let mut gss = None;
+        let mut agss = None;
+        let out = handle_rpc(
+            &store,
+            &acl,
+            &[],
+            "KERBER.TEST",
+            &[],
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &w.b,
+        )
+        .unwrap();
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), 16);
         assert_eq!(r.u32().unwrap(), MSG_REPLY);
         assert_eq!(r.u32().unwrap(), MSG_DENIED);
         assert_eq!(r.u32().unwrap(), REJECT_AUTH_ERROR);

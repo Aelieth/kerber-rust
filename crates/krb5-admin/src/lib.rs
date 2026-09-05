@@ -72,6 +72,57 @@ pub struct KadminArgs {
     pub etypes: Vec<EncryptionType>,
 }
 
+/// Parsed `kadmin.local addpol` operands (`kadmin.c:1600-1689`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PolicyArgs {
+    /// Policy name (last argument).
+    pub name: String,
+    /// `-maxlife`.
+    pub pw_max_life: Option<u32>,
+    /// `-minlife`.
+    pub pw_min_life: Option<u32>,
+    /// `-minlength`.
+    pub min_length: Option<u32>,
+    /// `-minclasses`.
+    pub min_classes: Option<u32>,
+    /// `-history`.
+    pub history: Option<u32>,
+    /// `-maxfailure`.
+    pub max_fail: Option<u32>,
+    /// `-failurecountinterval`.
+    pub pw_failcnt_interval: Option<u32>,
+    /// `-lockoutduration`.
+    pub pw_lockout_duration: Option<u32>,
+}
+
+/// MIT `str_conv.c:147-152`: `strtoul(s, NULL, 16) & 0xffffffff`.
+fn hex_flag32(hex: &str) -> u32 {
+    let digits: String = hex.chars().take_while(char::is_ascii_hexdigit).collect();
+    let v = u64::from_str_radix(&digits, 16).unwrap_or(0);
+    u32::try_from(v & 0xffff_ffff).unwrap_or(0)
+}
+
+/// MIT `kadmin.c:118-138` `strdur`.
+#[must_use]
+pub fn strdur(duration: i64) -> String {
+    let (neg, mut rest) = if duration < 0 {
+        (true, duration.saturating_neg())
+    } else {
+        (false, duration)
+    };
+    let days = rest / 86_400;
+    rest %= 86_400;
+    let hours = rest / 3600;
+    rest %= 3600;
+    let minutes = rest / 60;
+    let seconds = rest % 60;
+    format!(
+        "{}{days} {} {hours:02}:{minutes:02}:{seconds:02}",
+        if neg { "-" } else { "" },
+        if days == 1 { "day" } else { "days" },
+    )
+}
+
 /// MIT `+requires_preauth` (and the matching `-requires_preauth` clear).
 #[must_use]
 pub fn kadmin_attr_bit(name: &str) -> Option<u32> {
@@ -130,8 +181,16 @@ pub fn parse_kadmin_args(parts: &[&str]) -> Result<KadminArgs, String> {
                 }
             }
             s if s.starts_with('+') => {
-                let bit = kadmin_attr_bit(&s[1..]).ok_or_else(|| format!("unknown flag {s}"))?;
-                out.attr_set |= bit;
+                if let Some(hex) = s[1..].strip_prefix("0x") {
+                    out.attr_set |= hex_flag32(hex);
+                } else {
+                    let bit =
+                        kadmin_attr_bit(&s[1..]).ok_or_else(|| format!("unknown flag {s}"))?;
+                    out.attr_set |= bit;
+                }
+            }
+            s if let Some(hex) = s.strip_prefix("-0x") => {
+                out.attr_clear |= hex_flag32(hex);
             }
             s if let Some(bit) = s.strip_prefix('-').and_then(kadmin_attr_bit) => {
                 out.attr_clear |= bit;
@@ -147,6 +206,63 @@ pub fn parse_kadmin_args(parts: &[&str]) -> Result<KadminArgs, String> {
         _ => return Err("extra argument".into()),
     }
     Ok(out)
+}
+
+/// Parse `addpol` flags. Last token is the policy name (`kadmin.c:1600-1695`).
+///
+/// # Errors
+///
+/// Missing name, missing option value, or unknown flag.
+pub fn parse_policy_args(parts: &[&str]) -> Result<PolicyArgs, String> {
+    if parts.is_empty() {
+        return Err("addpol <name>".into());
+    }
+    let mut out = PolicyArgs::default();
+    let mut i = 0;
+    while i + 1 < parts.len() {
+        let p = parts[i];
+        let val = parts
+            .get(i + 1)
+            .copied()
+            .ok_or_else(|| format!("{p} needs a value"))?;
+        match p {
+            "-maxlife" => out.pw_max_life = Some(parse_pol_interval(val)?),
+            "-minlife" => out.pw_min_life = Some(parse_pol_interval(val)?),
+            "-minlength" => {
+                out.min_length = Some(val.parse().map_err(|_| format!("-minlength {val}"))?);
+            }
+            "-minclasses" => {
+                out.min_classes = Some(val.parse().map_err(|_| format!("-minclasses {val}"))?);
+            }
+            "-history" => {
+                out.history = Some(val.parse().map_err(|_| format!("-history {val}"))?);
+            }
+            "-maxfailure" => {
+                out.max_fail = Some(val.parse().map_err(|_| format!("-maxfailure {val}"))?);
+            }
+            "-failurecountinterval" => {
+                out.pw_failcnt_interval = Some(parse_pol_interval(val)?);
+            }
+            "-lockoutduration" => {
+                out.pw_lockout_duration = Some(parse_pol_interval(val)?);
+            }
+            _ => return Err(format!("unknown flag {p}")),
+        }
+        i += 2;
+    }
+    if i != parts.len() - 1 {
+        return Err("addpol <name>".into());
+    }
+    parts[i].clone_into(&mut out.name);
+    if out.name.is_empty() || out.name.starts_with('-') {
+        return Err("addpol <name>".into());
+    }
+    Ok(out)
+}
+
+fn parse_pol_interval(s: &str) -> Result<u32, String> {
+    let v = krb5_types::deltat::parse(s).map_err(|_| format!("interval {s}"))?;
+    u32::try_from(v).map_err(|_| format!("interval {s}"))
 }
 
 /// Admin error.
@@ -492,15 +608,52 @@ impl<'a> AdminSession<'a> {
 
     /// `addpol`.
     pub fn add_policy(&mut self, name: &str) {
-        let _ = self.reload();
-        let mut p = NamedPolicy::new(name);
-        p.min_length = 1;
-        p.min_classes = 1;
-        p.history = 1;
-        self.store.put_policy(p);
+        let _ = self.add_policy_ent(&PolicyArgs {
+            name: name.to_owned(),
+            ..PolicyArgs::default()
+        });
     }
 
-    /// `getpol`.
+    /// `addpol` with MIT CLI flags (`svr_policy.c` floors).
+    ///
+    /// # Errors
+    ///
+    /// Explicit values below the MIT floors.
+    pub fn add_policy_ent(&mut self, a: &PolicyArgs) -> Result<(), Error> {
+        let _ = self.reload();
+        if let Some(0) = a.min_length {
+            return Err(Error::Inner("Invalid password length".into()));
+        }
+        if let Some(c) = a.min_classes
+            && !(1..=5).contains(&c)
+        {
+            return Err(Error::Inner("Invalid character class requirement".into()));
+        }
+        if let Some(0) = a.history {
+            return Err(Error::Inner("Invalid history count".into()));
+        }
+        if let (Some(min), Some(max)) = (a.pw_min_life, a.pw_max_life)
+            && min > max
+            && max != 0
+        {
+            return Err(Error::Inner(
+                "Password min life longer than max life".into(),
+            ));
+        }
+        let mut p = NamedPolicy::new(&a.name);
+        p.min_length = a.min_length.unwrap_or(1);
+        p.min_classes = a.min_classes.unwrap_or(1);
+        p.history = a.history.unwrap_or(1);
+        p.pw_max_life = a.pw_max_life.unwrap_or(0);
+        p.pw_min_life = a.pw_min_life.unwrap_or(0);
+        p.max_fail = a.max_fail.unwrap_or(0);
+        p.pw_failcnt_interval = a.pw_failcnt_interval.unwrap_or(0);
+        p.pw_lockout_duration = a.pw_lockout_duration.unwrap_or(0);
+        self.store.put_policy(p);
+        Ok(())
+    }
+
+    /// `getpol` (`kadmin.c:1794-1807` via `strdur`).
     ///
     /// # Errors
     ///
@@ -508,8 +661,16 @@ impl<'a> AdminSession<'a> {
     pub fn get_policy(&self, name: &str) -> Result<String, Error> {
         let p = self.store.policies().get(name).ok_or(Error::NotFound)?;
         Ok(format!(
-            "Policy: {}\nMaximum password life: {}\nMinimum password life: {}",
-            p.name, p.pw_max_life, p.pw_min_life
+            "Policy: {}\nMaximum password life: {}\nMinimum password life: {}\nMinimum password length: {}\nMinimum number of password character classes: {}\nNumber of old keys kept: {}\nMaximum password failures before lockout: {}\nPassword failure count reset interval: {}\nPassword lockout duration: {}",
+            p.name,
+            strdur(i64::from(p.pw_max_life)),
+            strdur(i64::from(p.pw_min_life)),
+            p.min_length,
+            p.min_classes,
+            p.history,
+            p.max_fail,
+            strdur(i64::from(p.pw_failcnt_interval)),
+            strdur(i64::from(p.pw_lockout_duration)),
         ))
     }
 
@@ -2548,6 +2709,51 @@ mod tests {
         let a = parse_kadmin_args(&["-e", "rc4-hmac:normal", "-pw", "x", "rc4user"]).unwrap();
         assert_eq!(a.etypes, vec![EncryptionType::Rc4Hmac]);
         assert_eq!(a.name, "rc4user");
+        let a = parse_kadmin_args(&["+0x1ffffffff", "wide"]).unwrap();
+        assert_eq!(a.attr_set, 0xffff_ffff);
+        assert_eq!(a.name, "wide");
+    }
+
+    #[test]
+    fn parse_policy_args_and_strdur() {
+        let a = parse_policy_args(&["-minlength", "8", "-minclasses", "2", "-history", "3", "p1"])
+            .unwrap();
+        assert_eq!(a.name, "p1");
+        assert_eq!(a.min_length, Some(8));
+        assert_eq!(a.min_classes, Some(2));
+        assert_eq!(a.history, Some(3));
+        let a = parse_policy_args(&["-maxlife", "1d", "-minlife", "1h", "life"]).unwrap();
+        assert_eq!(a.pw_max_life, Some(86_400));
+        assert_eq!(a.pw_min_life, Some(3600));
+        assert_eq!(strdur(0), "0 days 00:00:00");
+        assert_eq!(strdur(3600), "0 days 01:00:00");
+        assert_eq!(strdur(86_400), "1 day 00:00:00");
+        assert!(parse_policy_args(&["-bogus", "x", "p"]).is_err());
+        assert!(parse_policy_args(&[]).is_err());
+    }
+
+    #[test]
+    fn addpol_floors_and_getpol_layout() {
+        let (mut store, acl) = bootstrap_documented().unwrap();
+        let mut sess = AdminSession::local(&mut store, &acl, documented_admin_id());
+        sess.add_policy("floors");
+        let text = sess.get_policy("floors").unwrap();
+        assert!(text.starts_with("Policy: floors\n"), "{text}");
+        assert!(!text.contains("Policy: Policy:"), "{text}");
+        assert!(text.contains("Minimum password length: 1"), "{text}");
+        assert!(
+            text.contains("Minimum number of password character classes: 1"),
+            "{text}"
+        );
+        assert!(text.contains("Number of old keys kept: 1"), "{text}");
+        assert!(
+            text.contains("Maximum password life: 0 days 00:00:00"),
+            "{text}"
+        );
+        assert!(
+            sess.add_policy_ent(&parse_policy_args(&["-history", "0", "z"]).unwrap())
+                .is_err()
+        );
     }
 
     fn max_kvno(store: &PrincipalStore, name: &PrincipalName) -> u32 {

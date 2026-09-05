@@ -479,6 +479,19 @@ if [ "$kpmin_rc" -eq 0 ]; then
     echo "kpasswd min_life succeeded" >&2
     exit 1
 fi
+echo "==== kpasswd min_life is result_code=4 (Rust) ===="
+docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf -e KRB5CCNAME=FILE:/tmp/krb5cc_kpw4 \
+    "$NAME" sh -c 'printf "rust-kpw\n" | kinit user@KERBER.TEST'
+set +e
+KPMIN4="$(docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
+    -e KRB5CCNAME=FILE:/tmp/krb5cc_kpw4 -e KPASSWD_AS_PASSWORD=rust-kpw \
+    "$NAME" /tmp/kpasswd-tgs-client FILE:/tmp/krb5cc_kpw4 KERBER.TEST rust-kpw2)"
+kpmin4_rc=$?
+set -e
+echo "$KPMIN4"
+echo "helper_rc=$kpmin4_rc"
+[ "$kpmin4_rc" -eq 0 ]
+echo "$KPMIN4" | grep -F 'result_code=4'
 
 echo "==== Rust kadmind policy rejection is SOFTERROR ===="
 kadmin_q 'addpol -minlength 8 short8'
@@ -498,6 +511,19 @@ if [ "$pol_rc" -ne 2 ]; then
 fi
 echo "$POL" | grep -qi 'Password change rejected'
 echo "$POL" | grep -F 'min_length 8'
+echo "==== kpasswd policy is result_code=4 (Rust) ===="
+docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf -e KRB5CCNAME=FILE:/tmp/krb5cc_kpw4 \
+    "$NAME" sh -c 'printf "rust-kpw\n" | kinit user@KERBER.TEST'
+set +e
+POL4="$(docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
+    -e KRB5CCNAME=FILE:/tmp/krb5cc_kpw4 -e KPASSWD_AS_PASSWORD=rust-kpw \
+    "$NAME" /tmp/kpasswd-tgs-client FILE:/tmp/krb5cc_kpw4 KERBER.TEST abc)"
+pol4_rc=$?
+set -e
+echo "$POL4"
+echo "helper_rc=$pol4_rc"
+[ "$pol4_rc" -eq 0 ]
+echo "$POL4" | grep -F 'result_code=4'
 docker exec "$NAME" sh -c "tail -n +$((nlog + 1)) /tmp/kadmind.log" | grep -q 'chpw request'
 
 echo "==== Rust kpasswd raw vno/length (schpw.c:60-82) ===="
@@ -686,6 +712,16 @@ if [ "$mit_kpmin_rc" -eq 0 ]; then
     echo "MIT kpasswd min_life succeeded" >&2
     exit 1
 fi
+echo "==== MIT kpasswd min_life is result_code=4 ===="
+docker exec "$NAME_MIT" sh -c 'export KRB5CCNAME=FILE:/tmp/krb5cc_kpw4; printf "userpassword\n" | kinit user@KERBER.TEST'
+set +e
+MIT_KPMIN4="$(docker exec "$NAME_MIT" sh -c 'export KRB5CCNAME=FILE:/tmp/krb5cc_kpw4 KPASSWD_AS_PASSWORD=userpassword; /tmp/kpasswd-tgs-client FILE:/tmp/krb5cc_kpw4 KERBER.TEST user-new')"
+mit_kpmin4_rc=$?
+set -e
+echo "$MIT_KPMIN4"
+echo "helper_rc=$mit_kpmin4_rc"
+[ "$mit_kpmin4_rc" -eq 0 ]
+echo "$MIT_KPMIN4" | grep -F 'result_code=4'
 
 docker exec "$NAME_MIT" kadmin.local -q 'addpol -minlength 8 short8'
 docker exec "$NAME_MIT" kadmin.local -q 'modprinc -policy short8 user'
@@ -701,6 +737,16 @@ if [ "$mit_rc" -ne 2 ]; then
 fi
 echo "$MITPOL" | grep -qi 'Password change rejected'
 echo "$MITPOL" | grep -F 'New password is too short'
+echo "==== MIT kpasswd policy is result_code=4 ===="
+docker exec "$NAME_MIT" sh -c 'export KRB5CCNAME=FILE:/tmp/krb5cc_kpw4; printf "userpassword\n" | kinit user@KERBER.TEST'
+set +e
+MITPOL4="$(docker exec "$NAME_MIT" sh -c 'export KRB5CCNAME=FILE:/tmp/krb5cc_kpw4 KPASSWD_AS_PASSWORD=userpassword; /tmp/kpasswd-tgs-client FILE:/tmp/krb5cc_kpw4 KERBER.TEST abc')"
+mitpol4_rc=$?
+set -e
+echo "$MITPOL4"
+echo "helper_rc=$mitpol4_rc"
+[ "$mitpol4_rc" -eq 0 ]
+echo "$MITPOL4" | grep -F 'result_code=4'
 
 echo "==== MIT kpasswd raw vno/length (schpw.c:60-82; bailout, no framed reply) ===="
 pin_kpasswd_raw_mit

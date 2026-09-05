@@ -3,6 +3,7 @@
  * usage: kpasswd-tgs-client <ccache> <realm> <newpw>
  * KPASSWD_TARGNAME_TYPE=<n>: krb5_set_password with target->type = n.
  * KPASSWD_TARGET=name@realm: krb5_set_password with that principal.
+ * KPASSWD_AS_PASSWORD=<pw>: AS-REQ kadmin/changepw (INITIAL) instead of TGS.
  */
 #include <krb5.h>
 #include <stdio.h>
@@ -44,11 +45,32 @@ int main(int argc, char **argv) {
         return 1;
     }
     in.server = princ;
-    if ((rc = krb5_get_credentials(ctx, 0, cc, &in, &out))) {
-        const char *m = krb5_get_error_message(ctx, rc);
-        fprintf(stderr, "get_credentials: %s\n", m);
-        krb5_free_error_message(ctx, m);
-        return 1;
+    {
+        const char *as_pw = getenv("KPASSWD_AS_PASSWORD");
+        if (as_pw != NULL) {
+            krb5_get_init_creds_opt *opt = NULL;
+            out = calloc(1, sizeof(*out));
+            if (out == NULL)
+                return 1;
+            if ((rc = krb5_get_init_creds_opt_alloc(ctx, &opt))) {
+                fprintf(stderr, "opt_alloc: %d\n", rc);
+                return 1;
+            }
+            rc = krb5_get_init_creds_password(ctx, out, in.client, as_pw, NULL,
+                                              NULL, 0, "kadmin/changepw", opt);
+            krb5_get_init_creds_opt_free(ctx, opt);
+            if (rc) {
+                const char *m = krb5_get_error_message(ctx, rc);
+                fprintf(stderr, "get_init_creds: %s\n", m);
+                krb5_free_error_message(ctx, m);
+                return 1;
+            }
+        } else if ((rc = krb5_get_credentials(ctx, 0, cc, &in, &out))) {
+            const char *m = krb5_get_error_message(ctx, rc);
+            fprintf(stderr, "get_credentials: %s\n", m);
+            krb5_free_error_message(ctx, m);
+            return 1;
+        }
     }
     {
         const char *nt_env = getenv("KPASSWD_TARGNAME_TYPE");

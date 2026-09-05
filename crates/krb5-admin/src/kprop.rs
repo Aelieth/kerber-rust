@@ -300,8 +300,28 @@ fn recvauth_error_fields(raw: &[u8], e: &krb5_protocol::Error) -> (i32, String) 
             (err::GENERIC, recvauth_protocol_text(*code))
         }
         krb5_protocol::Error::KrbError { code, .. } => (*code, recvauth_protocol_text(*code)),
-        krb5_protocol::Error::Asn1(_) => (err::GENERIC, "ASN.1 parse error".into()),
+        krb5_protocol::Error::Asn1(s) => (err::GENERIC, asn1_com_err(s)),
         _ => (err::GENERIC, e.to_string()),
+    }
+}
+
+fn asn1_com_err(s: &str) -> String {
+    let l = s.to_ascii_lowercase();
+    if l.contains("missing") {
+        "ASN.1 structure is missing a required field".into()
+    } else if l.contains("overrun")
+        || l.contains("ended unexpectedly")
+        || l.contains("eof")
+        || l.contains("end of")
+        || l.contains("truncated")
+        || l.contains("need more data")
+        || l.contains("size(")
+    {
+        "ASN.1 encoding ended unexpectedly".into()
+    } else if l.contains("indefinite") {
+        "ASN.1 indefinite encoding".into()
+    } else {
+        "ASN.1 parse error".into()
     }
 }
 
@@ -667,6 +687,19 @@ mod tests {
     }
 
     #[test]
+    fn asn1_com_err_maps_mit_table() {
+        assert_eq!(
+            asn1_com_err("missing field"),
+            "ASN.1 structure is missing a required field"
+        );
+        assert_eq!(
+            asn1_com_err("Need more data to continue: Size(1)"),
+            "ASN.1 encoding ended unexpectedly"
+        );
+        assert_eq!(asn1_com_err("other"), "ASN.1 parse error");
+    }
+
+    #[test]
     fn kpropd_ap_req_fail_is_krb_error() {
         use std::io::Read;
         use std::net::{TcpListener, TcpStream};
@@ -719,6 +752,62 @@ mod tests {
         assert!(
             join.join().expect("thread").is_err(),
             "recvauth must fail after junk AP-REQ"
+        );
+    }
+
+    #[test]
+    fn kpropd_ap_req_asn1_fail_is_generic_60() {
+        use std::io::Read;
+        use std::net::{TcpListener, TcpStream};
+        use std::thread;
+        use std::time::Duration;
+
+        use krb5_asn1::decode;
+        use krb5_kdc::{TEST_REALM, bootstrap_documented, documented_host};
+        use krb5_protocol::ReplayCache;
+
+        let (store, _) = bootstrap_documented().unwrap();
+        let host = documented_host();
+        let host_keys: Vec<_> = store
+            .get_name(&host)
+            .unwrap()
+            .keys
+            .iter()
+            .map(|k| k.key.clone())
+            .collect();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let host_for_server = host.clone();
+        let join = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            kpropd_recvauth(
+                &mut stream,
+                &host_keys,
+                Some(&host_for_server),
+                Some(TEST_REALM),
+                None,
+                ReplayCache::new(),
+            )
+        });
+        thread::sleep(Duration::from_millis(20));
+        let mut client = TcpStream::connect(addr).unwrap();
+        write_message(&mut client, SENDAUTH_VERSION).unwrap();
+        write_message(&mut client, KPROP_PROT_VERSION).unwrap();
+        let mut ack = [0u8; 1];
+        client.read_exact(&mut ack).unwrap();
+        assert_eq!(ack[0], 0);
+        write_message(&mut client, &[0x6e, 0x00]).unwrap();
+        let err_msg = read_message(&mut client).unwrap();
+        assert_eq!(err_msg.first().copied(), Some(0x7e), "recvauth KRB-ERROR");
+        let e: KrbError = decode(&err_msg).expect("KRB-ERROR");
+        assert_eq!(e.error_code, err::GENERIC);
+        assert_eq!(
+            e.e_text.as_ref().map(krb5_types::KerberosString::as_bytes),
+            Some(b"ASN.1 encoding ended unexpectedly\0".as_slice())
+        );
+        assert!(
+            join.join().expect("thread").is_err(),
+            "recvauth must fail after APPLICATION-14 ASN.1 fail"
         );
     }
 }

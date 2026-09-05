@@ -377,8 +377,9 @@ fn logical_lines(text: &str) -> Vec<String> {
     let mut buf = String::new();
     let mut continuing = false;
     for raw in text.split_inclusive('\n') {
-        let mut chunk = raw.strip_suffix('\n').unwrap_or(raw);
-        chunk = chunk.strip_suffix('\r').unwrap_or(chunk);
+        // MIT get_line strips only `\n` (`auth_acl.c:136-140`); CRLF `\\\r`
+        // is not a continuation marker.
+        let chunk = raw.strip_suffix('\n').unwrap_or(raw);
         if continuing {
             if let Some(stripped) = chunk.strip_suffix('\\') {
                 buf.push_str(stripped);
@@ -633,9 +634,7 @@ fn flagspec_to_mask(spec: &str, toset: &mut u32, toclear: &mut u32) -> bool {
         if let Some((_, flag, invert)) = FLAG_TABLE.iter().copied().find(|(n, _, _)| *n == s) {
             (flag, invert)
         } else if let Some(hex) = s.strip_prefix("0x") {
-            let digits: String = hex.chars().take_while(char::is_ascii_hexdigit).collect();
-            let flag = u32::from_str_radix(&digits, 16).unwrap_or(0);
-            (flag, false)
+            (hex_flag32(hex), false)
         } else {
             return false;
         };
@@ -648,6 +647,13 @@ fn flagspec_to_mask(spec: &str, toset: &mut u32, toclear: &mut u32) -> bool {
         *toset |= flag;
     }
     true
+}
+
+/// MIT `str_conv.c:147-152`: `strtoul(s, NULL, 16) & 0xffffffff`.
+fn hex_flag32(hex: &str) -> u32 {
+    let digits: String = hex.chars().take_while(char::is_ascii_hexdigit).collect();
+    let v = u64::from_str_radix(&digits, 16).unwrap_or(0);
+    u32::try_from(v & 0xffff_ffff).unwrap_or(0)
 }
 
 fn parse_deltat(s: &str) -> Option<u64> {
@@ -779,6 +785,30 @@ mod tests {
             acl.check("admin@KERBER.TEST", AdminOp::Create, None)
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn acl_crlf_backslash_does_not_continue() {
+        let err = Acl::parse("admin@KERBER.TEST \\\r\n a\n").unwrap_err();
+        assert!(
+            err.to_string().contains("Unrecognized ACL operation"),
+            "{err}"
+        );
+        assert!(
+            Acl::parse("admin@KERBER.TEST a\r\n")
+                .unwrap()
+                .check("admin@KERBER.TEST", AdminOp::Create, None)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn acl_hex_flag_truncates_to_32bit() {
+        let acl = Acl::parse("admin@KERBER.TEST a *@KERBER.TEST +0x1ffffffff\n").unwrap();
+        let rs = acl
+            .restrictions("admin@KERBER.TEST", Some("user@KERBER.TEST"))
+            .expect("rs");
+        assert_eq!(rs.require_attrs, 0xffff_ffff);
     }
 
     #[test]

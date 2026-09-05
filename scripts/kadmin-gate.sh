@@ -114,6 +114,22 @@ got = exchange(call(xid, 2112, 99, 0))
 assert got is not None and got[:8] == [xid, 1, 0, 0, 0, 2, 2, 2], got
 got = exchange(call(0x33333333, 2112, 2, 12, mtype=1))
 assert got is None
+
+def xdr_u32(n):
+    return struct.pack(">I", n)
+
+def xdr_opaque(b):
+    pad = (4 - (len(b) % 4)) % 4
+    return xdr_u32(len(b)) + b + b"\x00" * pad
+
+cred = xdr_u32(99) + xdr_u32(1) + xdr_u32(0) + xdr_u32(3) + xdr_opaque(b"")
+xid = 0x44444444
+body = struct.pack(">6I", xid, 0, 2, 99999, 1, 0)
+body += xdr_u32(6) + xdr_opaque(cred)
+body += xdr_u32(0) + xdr_opaque(b"")
+got = exchange(body)
+assert got is not None and got[:5] == [xid, 1, 1, 1, 1], got
+print("rpcsec_unknown_auth_error=ok")
 print("framing=ok")
 '
 }
@@ -814,6 +830,22 @@ if docker exec "$NAME" grep -q '^listening ' /tmp/kadmind-badacl.log 2>/dev/null
     exit 1
 fi
 
+echo "==== ACL CRLF continuation refused ===="
+docker exec "$NAME" python3 -c 'open("/tmp/kadm5.acl","wb").write(b"admin@KERBER.TEST \\\r\n a\n")'
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+    "$NAME" sh -c '/tmp/krb5-kadmind 127.0.0.1:749 >/tmp/kadmind-crlf.log 2>&1'
+sleep 1
+CRLFLOG="$(docker exec "$NAME" cat /tmp/kadmind-crlf.log 2>/dev/null || true)"
+echo "$CRLFLOG"
+echo "$CRLFLOG" | grep -F "Unrecognized ACL operation"
+if docker exec "$NAME" grep -q '^listening ' /tmp/kadmind-crlf.log 2>/dev/null; then
+    echo "kadmind started on CRLF continuation ACL" >&2
+    exit 1
+fi
+
 echo "==== default ACL path missing refuses start ===="
 docker exec "$NAME" sh -c '
 for comm in /proc/[0-9]*/comm; do
@@ -896,6 +928,16 @@ if echo "$MODNS" | grep -qiE "requires \`\`modify'' privilege"; then
     echo "unauthorised modprinc nosuch was AUTH_MODIFY: $MODNS" >&2
     exit 1
 fi
+echo "==== unauthorised setstr nosuch is UNK_PRINC ===="
+SETNS="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p user -w userpassword -q 'setstr nosuch a b' 2>&1 || true)"
+echo "$SETNS"
+echo "$SETNS" | grep -F 'Principal does not exist'
+echo "==== unauthorised purgekeys nosuch is UNK_PRINC ===="
+PURNS="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p user -w userpassword -q 'purgekeys nosuch' 2>&1 || true)"
+echo "$PURNS"
+echo "$PURNS" | grep -F 'Principal does not exist'
 
 echo "==== unauthorised getprinc nosuch is UNK_PRINC ===="
 NOSUCH="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
@@ -915,6 +957,28 @@ GETPOL="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
 echo "$GETPOL"
 echo "$GETPOL" | grep -F 'Minimum password life: 0 days 01:00:00'
 echo "$GETPOL" | grep -F 'Maximum password life: 1 day 00:00:00'
+echo "$GETPOL" | grep -F 'Minimum password length: 1'
+echo "$GETPOL" | grep -F 'Minimum number of password character classes: 1'
+echo "$GETPOL" | grep -F 'Number of old keys kept: 1'
+echo "==== addpol name-only getpol floors 1/1/1 ===="
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addpol floors1'
+GETF="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getpol floors1' 2>&1 || true)"
+echo "$GETF"
+echo "$GETF" | grep -F 'Minimum password length: 1'
+echo "$GETF" | grep -F 'Minimum number of password character classes: 1'
+echo "$GETF" | grep -F 'Number of old keys kept: 1'
+echo "==== modprinc +0x1ffffffff truncates ===="
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw hex-secret hexu' || true
+HEXF="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'modprinc +0x1ffffffff hexu' 2>&1 || true)"
+echo "$HEXF"
+GETHEX="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc hexu' 2>&1 || true)"
+echo "$GETHEX"
+echo "$GETHEX" | grep -E 'Attributes:' | grep -F 'DISALLOW_ALL_TIX'
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'modprinc -policy life user'
 GETU="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
@@ -1318,6 +1382,20 @@ if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(
     exit 1
 fi
 
+echo "==== MIT ACL CRLF continuation refused ===="
+docker exec "$NAME_MIT" python3 -c 'open("/var/kerberos/krb5kdc/kadm5.acl","wb").write(b"admin@KERBER.TEST \\\r\n a\n")'
+set +e
+docker exec "$NAME_MIT" sh -c 'timeout 3 kadmind -nofork >/tmp/kadmind-crlf.log 2>&1'
+set -e
+MIT_CRLF="$(docker exec "$NAME_MIT" cat /tmp/kadmind-crlf.log 2>/dev/null || true)"
+echo "$MIT_CRLF"
+echo "$MIT_CRLF" | grep -F "Unrecognized ACL operation"
+echo "$MIT_CRLF" | grep -F "while initializing ACL file, aborting"
+if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+    echo "MIT kadmind started on CRLF continuation ACL" >&2
+    exit 1
+fi
+
 echo "==== MIT default ACL path missing refuses start ===="
 docker exec "$NAME_MIT" sh -c '
 python3 - <<PY
@@ -1378,6 +1456,15 @@ MIT_MODNS="$(docker exec "$NAME_MIT" kadmin -p user -w userpassword -q 'modprinc
 echo "$MIT_MODNS"
 echo "$MIT_MODNS" | grep -F 'Principal does not exist'
 
+echo "==== MIT unauthorised setstr nosuch is UNK_PRINC ===="
+MIT_SETNS="$(docker exec "$NAME_MIT" kadmin -p user -w userpassword -q 'setstr nosuch a b' 2>&1 || true)"
+echo "$MIT_SETNS"
+echo "$MIT_SETNS" | grep -F 'Principal does not exist'
+echo "==== MIT unauthorised purgekeys nosuch is UNK_PRINC ===="
+MIT_PURNS="$(docker exec "$NAME_MIT" kadmin -p user -w userpassword -q 'purgekeys nosuch' 2>&1 || true)"
+echo "$MIT_PURNS"
+echo "$MIT_PURNS" | grep -F 'Principal does not exist'
+
 echo "==== MIT unauthorised getprinc nosuch is UNK_PRINC ===="
 MIT_NOSUCH="$(docker exec "$NAME_MIT" kadmin -p user -w userpassword -q 'getprinc nosuch' 2>&1 || true)"
 echo "$MIT_NOSUCH"
@@ -1393,6 +1480,23 @@ MIT_GETPOL="$(docker exec "$NAME_MIT" kadmin.local -q 'getpol life' 2>&1 || true
 echo "$MIT_GETPOL"
 echo "$MIT_GETPOL" | grep -F 'Minimum password life: 0 days 01:00:00'
 echo "$MIT_GETPOL" | grep -F 'Maximum password life: 1 day 00:00:00'
+echo "$MIT_GETPOL" | grep -F 'Minimum password length: 1'
+echo "$MIT_GETPOL" | grep -F 'Minimum number of password character classes: 1'
+echo "$MIT_GETPOL" | grep -F 'Number of old keys kept: 1'
+echo "==== MIT addpol name-only getpol floors 1/1/1 ===="
+docker exec "$NAME_MIT" kadmin.local -q 'addpol floors1'
+MIT_GETF="$(docker exec "$NAME_MIT" kadmin.local -q 'getpol floors1' 2>&1 || true)"
+echo "$MIT_GETF"
+echo "$MIT_GETF" | grep -F 'Minimum password length: 1'
+echo "$MIT_GETF" | grep -F 'Minimum number of password character classes: 1'
+echo "$MIT_GETF" | grep -F 'Number of old keys kept: 1'
+echo "==== MIT modprinc +0x1ffffffff truncates ===="
+docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw hex-secret hexu' || true
+MIT_HEXF="$(docker exec "$NAME_MIT" kadmin.local -q 'modprinc +0x1ffffffff hexu' 2>&1 || true)"
+echo "$MIT_HEXF"
+MIT_GETHEX="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc hexu' 2>&1 || true)"
+echo "$MIT_GETHEX"
+echo "$MIT_GETHEX" | grep -E 'Attributes:' | grep -F 'DISALLOW_ALL_TIX'
 docker exec "$NAME_MIT" kadmin.local -q 'modprinc -policy life user'
 MIT_GETU="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc user' 2>&1 || true)"
 echo "$MIT_GETU"
