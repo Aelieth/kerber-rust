@@ -6,6 +6,28 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-I sub-plan 02
+
+- **admin.** The RPCSEC_GSS DATA path now dispatches on the negotiated service
+  like `authgss_prot.c`: NONE sends plain args; INTEGRITY sends
+  `databody_integ` plus a `gss_get_mic` `checksum` (verified with
+  `gss_verify_mic`, inner seq checked); PRIVACY keeps `gss_wrap`. The reply
+  mirrors it, so a real MIT libgssrpc client negotiating `rpc_gss_svc_integrity`
+  is accepted. `kadmin-gate.sh` runs an integrity `listprincs` on both legs.
+
+### W1-I sub-plan 01
+
+- **admin.** Route every kadm5 acceptor check — `changepw_acceptor`,
+  `check_auth_gssapi_names`, `check_rpcsec_auth`, `check_iprop_rpcsec_auth`
+  — through one realm gate `acceptor_realm_ok`, matching MIT's full
+  realm-qualified acceptor-name compare (`server_stubs.c:28-32`,
+  `ovsec_kadmd.c:468-477`). The realm is already bound at
+  `accept_sec_context`; the gate is parity and defense-in-depth.
+- **admin.** On an ACL parse failure the kadmind now logs MIT's second line
+  `<path>: syntax error at line N <text...>` (`auth_acl.c:418-422`) in
+  addition to the specific `parse_line` error, like `load_acl_file`.
+  `kadmin-gate.sh` asserts the full aZ/3dd text on both legs.
+
 ### W1-I Round 3 (K12–K17)
 
 - **K17.** Eight checkpoint gates ×2 at the Round 3 SHA; `unit_red_at

@@ -226,7 +226,9 @@ fn load_acl(conf: Option<&krb5_config::KdcConf>, realm: &str, db: &Path, stash: 
             Error::AclParse(s) => s,
             other => other.to_string(),
         };
-        eprintln!("krb5-kadmind: {msg}");
+        for line in msg.lines() {
+            eprintln!("krb5-kadmind: {line}");
+        }
         std::process::exit(1);
     })
 }

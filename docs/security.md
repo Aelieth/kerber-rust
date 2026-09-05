@@ -189,15 +189,19 @@ sets `pw_expiration`. Self `-keepold` clamps to `MAX_SELF_KEEPOLD` 5
 keychange (`:851-869`). `get_privs` returns `~0`
 (`server_misc.c:146-158`). `kadmin.local` applies no ACL (`KRB5_ACL_FILE`
 is kadmind-only). A `kadmin/changepw` GSS acceptor is
-`CHANGEPW_SERVICE` (`server_stubs.c:28-32`): every stub denies with
+`CHANGEPW_SERVICE` (`server_stubs.c:28-32`, a full realm-qualified
+name compare against `kadmin/changepw@REALM`): every stub denies with
 MIT's code except self `chpass`/`chrand`/`getprinc`
 (`changepw_not_self`, `:348-354`) and getpol of the caller's own
 policy (`:1401-1403`). `getstrs` and `purgekeys` use
 `CHANGEPW_SERVICE` (even self is denied).
-Kadmind AUTH_GSSAPI acceptors are `kadmin/admin` and
-`kadmin/changepw` (`ovsec_kadmd.c:477`). RPCSEC_GSS is
+Kadmind AUTH_GSSAPI acceptors are the realm-qualified `kadmin/admin@REALM`
+and `kadmin/changepw@REALM`, built with `params.realm`
+(`ovsec_kadmd.c:468-477`). RPCSEC_GSS is
 `check_rpcsec_auth` (`kadm_rpc_svc.c:324-331`): two components,
-realm match, `kadmin`, not `history`, else `svcerr_weakauth`.
+realm match, `kadmin`, not `history`, else `svcerr_weakauth`. All four
+acceptor checks are realm-qualified in Rust through `acceptor_realm_ok`;
+the realm is bound at `accept_sec_context` and re-checked at the gate.
 iprop is RPCSEC_GSS only (`ipropd_svc.c:481-483`) with
 `kiprop/<host>` (`:508-516`); AUTH_GSSAPI INIT is the auth-layer
 SUCCESS/`no_dispatch` path (`svc_auth_gssapi.c:495-497`); DATA is

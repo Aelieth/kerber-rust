@@ -285,6 +285,42 @@ struct RpcsecGss {
     svc: u32,
 }
 
+/// RPCSEC/AUTH_GSSAPI session for [`kadm5_handle_rpc`].
+#[derive(Default)]
+pub struct Kadm5RpcSession {
+    gss: Option<RpcsecGss>,
+    agss: Option<Agss>,
+}
+
+/// One ONC RPC record through [`handle_rpc`].
+///
+/// # Errors
+///
+/// Truncated record or I/O.
+#[allow(clippy::too_many_arguments)]
+pub fn kadm5_handle_rpc(
+    store: &SharedStore,
+    acl: &Acl,
+    service_keys: &[ProtocolKey],
+    expected_realm: &str,
+    handle: &[u8],
+    sess: &mut Kadm5RpcSession,
+    rcache: &ReplayCache,
+    rec: &[u8],
+) -> Result<Vec<u8>, Error> {
+    handle_rpc(
+        store,
+        acl,
+        service_keys,
+        expected_realm,
+        handle,
+        &mut sess.gss,
+        &mut sess.agss,
+        rcache,
+        rec,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn handle_rpc(
     store: &SharedStore,
@@ -495,19 +531,31 @@ fn handle_rpcsec_gss(
             if !kadm && !iprop {
                 return Ok(rpc_reply_accepted_verf(xid, Some(&mic), PROG_UNAVAIL));
             }
-            let kadm_args = if gd.svc == GSS_NONE {
-                r.rest().to_vec()
-            } else {
-                let Ok(wrapped) = r.opaque() else {
-                    return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
-                };
-                let Ok(plain) = gd.ctx.unwrap(&wrapped) else {
-                    return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
-                };
-                if plain.len() < 4 {
-                    return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
+            let kadm_args = match gd.svc {
+                GSS_NONE => r.rest().to_vec(),
+                GSS_INTEGRITY => {
+                    let (Ok(databody), Ok(checksum)) = (r.opaque(), r.opaque()) else {
+                        return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
+                    };
+                    if gd.ctx.verify_mic(&databody, &checksum).is_err()
+                        || databody.get(..4) != Some(gcred.seq_num.to_be_bytes().as_slice())
+                    {
+                        return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
+                    }
+                    databody[4..].to_vec()
                 }
-                plain[4..].to_vec()
+                _ => {
+                    let Ok(wrapped) = r.opaque() else {
+                        return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
+                    };
+                    let Ok(plain) = gd.ctx.unwrap(&wrapped) else {
+                        return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
+                    };
+                    if plain.len() < 4 {
+                        return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
+                    }
+                    plain[4..].to_vec()
+                }
             };
             Ok(rpcsec_dispatch(
                 store,
@@ -598,7 +646,7 @@ fn rpcsec_dispatch(
         proc,
         kadm_args,
         gd.ctx.ticket_is_initial(),
-        changepw_acceptor(&gd.ctx),
+        changepw_acceptor(&gd.ctx, expected_realm),
         iprop,
     ) {
         Ok(b) => b,
@@ -606,20 +654,31 @@ fn rpcsec_dispatch(
         Err(Error::ProcUnavail) => return rpc_reply_accepted_verf(xid, Some(mic), PROC_UNAVAIL),
         Err(_) => return rpc_reply_accepted_verf(xid, Some(mic), SYSTEM_ERR),
     };
-    if gd.svc == GSS_NONE {
-        return rpc_reply_gss_verf(xid, mic, &result);
-    }
-    let mut inner = Vec::with_capacity(4 + result.len());
-    inner.extend_from_slice(&seq.to_be_bytes());
-    inner.extend_from_slice(&result);
-    let wrap = if gd.svc == GSS_PRIVACY {
-        gd.ctx.wrap_with_rrc(&inner, 0)
-    } else {
-        gd.ctx.wrap_integ(&inner)
-    };
-    match wrap {
-        Ok(w) => rpc_reply_gss(xid, mic, &w),
-        Err(_) => rpc_reply_auth_error(xid, AUTH_FAILED),
+    match gd.svc {
+        GSS_NONE => rpc_reply_gss_verf(xid, mic, &result),
+        GSS_INTEGRITY => {
+            let mut databody = Vec::with_capacity(4 + result.len());
+            databody.extend_from_slice(&seq.to_be_bytes());
+            databody.extend_from_slice(&result);
+            match gd.ctx.get_mic(&databody) {
+                Ok(checksum) => {
+                    let mut body = XdrW::default();
+                    body.opaque(&databody);
+                    body.opaque(&checksum);
+                    rpc_reply_gss_verf(xid, mic, &body.b)
+                }
+                Err(_) => rpc_reply_auth_error(xid, AUTH_FAILED),
+            }
+        }
+        _ => {
+            let mut inner = Vec::with_capacity(4 + result.len());
+            inner.extend_from_slice(&seq.to_be_bytes());
+            inner.extend_from_slice(&result);
+            match gd.ctx.wrap_with_rrc(&inner, 0) {
+                Ok(w) => rpc_reply_gss(xid, mic, &w),
+                Err(_) => rpc_reply_auth_error(xid, AUTH_FAILED),
+            }
+        }
     }
 }
 
@@ -681,7 +740,7 @@ fn handle_auth_gssapi(
                 return Ok(rpc_reply_clear(xid, &body.b));
             }
         };
-        if !iprop && !check_auth_gssapi_names(&ctx) {
+        if !iprop && !check_auth_gssapi_names(&ctx, expected_realm) {
             return Ok(rpc_reply_weakauth(xid));
         }
         let mut isn = [0u8; 4];
@@ -771,7 +830,7 @@ fn handle_auth_gssapi(
     }
     let kadm_args = &plain[4..];
     let actor = st.ctx.client.clone().ok_or(Error::AclDenied)?;
-    if !check_auth_gssapi_names(&st.ctx) {
+    if !check_auth_gssapi_names(&st.ctx, expected_realm) {
         return Ok(rpc_reply_weakauth(xid));
     }
     let result = match kadm5_or_iprop(
@@ -781,7 +840,7 @@ fn handle_auth_gssapi(
         proc,
         kadm_args,
         st.ctx.ticket_is_initial(),
-        changepw_acceptor(&st.ctx),
+        changepw_acceptor(&st.ctx, expected_realm),
         iprop,
     ) {
         Ok(b) => b,
@@ -1796,11 +1855,24 @@ fn is_self(actor: &str, name: &PrincipalName, realm: &str) -> bool {
     krb5_types::principal_compare(name, realm, &actor_name, &arealm)
 }
 
-fn changepw_acceptor(ctx: &GssContext) -> bool {
-    ctx.acceptor.as_ref().is_some_and(|n| {
-        let p = acceptor_parts(n);
-        p.len() == 2 && p[0] == "kadmin" && p[1] == "changepw"
-    })
+fn acceptor_realm_ok(
+    acceptor: Option<&PrincipalName>,
+    ticket_realm: Option<&str>,
+    store_realm: &str,
+    pred: impl Fn(&PrincipalName) -> bool,
+) -> bool {
+    ticket_realm == Some(store_realm) && acceptor.is_some_and(pred)
+}
+
+/// CHANGEPW_SERVICE: realm-qualified `kadmin/changepw` acceptor.
+#[must_use]
+pub fn changepw_acceptor(ctx: &GssContext, store_realm: &str) -> bool {
+    acceptor_realm_ok(
+        ctx.acceptor.as_ref(),
+        ctx.ticket_realm.as_deref(),
+        store_realm,
+        kadm5_changepw_ok,
+    )
 }
 
 fn changepw_not_self(changepw: bool, actor: &str, name: &PrincipalName, realm: &str) -> bool {
@@ -1812,6 +1884,11 @@ fn acceptor_parts(n: &PrincipalName) -> Vec<String> {
         .iter()
         .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
         .collect()
+}
+
+fn kadm5_changepw_ok(n: &PrincipalName) -> bool {
+    let p = acceptor_parts(n);
+    p.len() == 2 && p[0] == "kadmin" && p[1] == "changepw"
 }
 
 fn kadm5_auth_gssapi_ok(n: &PrincipalName) -> bool {
@@ -1829,18 +1906,37 @@ fn iprop_rpcsec_ok(n: &PrincipalName) -> bool {
     p.len() == 2 && p[0] == "kiprop"
 }
 
-fn check_auth_gssapi_names(ctx: &GssContext) -> bool {
-    ctx.acceptor.as_ref().is_some_and(kadm5_auth_gssapi_ok)
+/// AUTH_GSSAPI acceptor names built with `params.realm`.
+#[must_use]
+pub fn check_auth_gssapi_names(ctx: &GssContext, store_realm: &str) -> bool {
+    acceptor_realm_ok(
+        ctx.acceptor.as_ref(),
+        ctx.ticket_realm.as_deref(),
+        store_realm,
+        kadm5_auth_gssapi_ok,
+    )
 }
 
-fn check_rpcsec_auth(ctx: &GssContext, store_realm: &str) -> bool {
-    ctx.ticket_realm.as_deref() == Some(store_realm)
-        && ctx.acceptor.as_ref().is_some_and(kadm5_rpcsec_ok)
+/// `kadm_rpc_svc.c` `check_rpcsec_auth`: realm-qualified kadm5 acceptor.
+#[must_use]
+pub fn check_rpcsec_auth(ctx: &GssContext, store_realm: &str) -> bool {
+    acceptor_realm_ok(
+        ctx.acceptor.as_ref(),
+        ctx.ticket_realm.as_deref(),
+        store_realm,
+        kadm5_rpcsec_ok,
+    )
 }
 
-fn check_iprop_rpcsec_auth(ctx: &GssContext, store_realm: &str) -> bool {
-    ctx.ticket_realm.as_deref() == Some(store_realm)
-        && ctx.acceptor.as_ref().is_some_and(iprop_rpcsec_ok)
+/// iprop acceptor: realm-qualified `kiprop`.
+#[must_use]
+pub fn check_iprop_rpcsec_auth(ctx: &GssContext, store_realm: &str) -> bool {
+    acceptor_realm_ok(
+        ctx.acceptor.as_ref(),
+        ctx.ticket_realm.as_deref(),
+        store_realm,
+        iprop_rpcsec_ok,
+    )
 }
 
 fn store_realm(store: &SharedStore) -> String {
@@ -3796,6 +3892,18 @@ mod tests {
         Vec<u8>,
         Option<RpcsecGss>,
     ) {
+        admin_rpcsec_init_svc(GSS_PRIVACY)
+    }
+
+    fn admin_rpcsec_init_svc(
+        svc: u32,
+    ) -> (
+        krb5_kdc::SharedDump,
+        Acl,
+        GssContext,
+        Vec<u8>,
+        Option<RpcsecGss>,
+    ) {
         use krb5_crypto::EncryptionType;
         use krb5_kdc::{TEST_REALM, documented_kadmin};
         use krb5_protocol::{as_req_sname, pa_enc_timestamp};
@@ -3837,7 +3945,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let cred = rpcsec_cred(RPG_INIT, 0, GSS_PRIVACY, &[]);
+        let cred = rpcsec_cred(RPG_INIT, 0, svc, &[]);
         let mut arg = XdrW::default();
         arg.opaque(&token);
         let rec = rpcsec_call(1, KADM_PROG, KADM_VERS, 0, &cred, FLAVOR_NONE, &[], &arg.b);
@@ -4247,6 +4355,153 @@ mod tests {
         let verf = r.opaque().unwrap();
         assert!(!verf.is_empty());
         assert_eq!(r.u32().unwrap(), GARBAGE_ARGS);
+    }
+
+    fn rpcsec_integ_rec(
+        ctx: &mut GssContext,
+        xid: u32,
+        proc: u32,
+        seq: u32,
+        handle: &[u8],
+        args: &[u8],
+        tamper: bool,
+    ) -> Vec<u8> {
+        let cred = rpcsec_cred(RPG_DATA, seq, GSS_INTEGRITY, handle);
+        let mut header = XdrW::default();
+        header.u32(xid);
+        header.u32(MSG_CALL);
+        header.u32(RPC_VERSION);
+        header.u32(KADM_PROG);
+        header.u32(KADM_VERS);
+        header.u32(proc);
+        header.u32(FLAVOR_GSS);
+        header.opaque(&cred);
+        let mic = ctx.get_mic(&header.b).unwrap();
+        let mut databody = Vec::with_capacity(4 + args.len());
+        databody.extend_from_slice(&seq.to_be_bytes());
+        databody.extend_from_slice(args);
+        let mut checksum = ctx.get_mic(&databody).unwrap();
+        if tamper {
+            *checksum.last_mut().unwrap() ^= 0xFF;
+        }
+        let mut arg = XdrW::default();
+        arg.opaque(&databody);
+        arg.opaque(&checksum);
+        rpcsec_call(
+            xid, KADM_PROG, KADM_VERS, proc, &cred, FLAVOR_GSS, &mic, &arg.b,
+        )
+    }
+
+    #[test]
+    fn rpcsec_integrity_data_round_trips() {
+        use krb5_kdc::TEST_REALM;
+        let (store, acl, mut ctx, handle, mut gss) = admin_rpcsec_init_svc(GSS_INTEGRITY);
+        let rec = rpcsec_integ_rec(&mut ctx, 40, GET_PRINCS, 1, &handle, &list_args(), false);
+        let mut agss = None;
+        let out = handle_rpc(
+            &store,
+            &acl,
+            &[],
+            TEST_REALM,
+            b"hdl",
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &rec,
+        )
+        .unwrap();
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), 40);
+        assert_eq!(r.u32().unwrap(), MSG_REPLY);
+        assert_eq!(r.u32().unwrap(), MSG_ACCEPTED);
+        assert_eq!(r.u32().unwrap(), FLAVOR_GSS);
+        let verf = r.opaque().unwrap();
+        assert_eq!(r.u32().unwrap(), SUCCESS);
+        ctx.verify_mic(&1u32.to_be_bytes(), &verf).unwrap();
+        let databody = r.opaque().unwrap();
+        let checksum = r.opaque().unwrap();
+        ctx.verify_mic(&databody, &checksum).unwrap();
+        assert_eq!(databody[..4], 1u32.to_be_bytes()[..]);
+        let mut body = XdrR::new(&databody[4..]);
+        assert_eq!(body.u32().unwrap(), API_V2);
+        assert_eq!(body.u32().unwrap(), 0);
+    }
+
+    #[test]
+    fn rpcsec_integrity_bad_checksum_is_garbage_args() {
+        use krb5_kdc::TEST_REALM;
+        let (store, acl, mut ctx, handle, mut gss) = admin_rpcsec_init_svc(GSS_INTEGRITY);
+        let rec = rpcsec_integ_rec(&mut ctx, 41, GET_PRINCS, 1, &handle, &list_args(), true);
+        let mut agss = None;
+        let out = handle_rpc(
+            &store,
+            &acl,
+            &[],
+            TEST_REALM,
+            b"hdl",
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &rec,
+        )
+        .unwrap();
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), 41);
+        assert_eq!(r.u32().unwrap(), MSG_REPLY);
+        assert_eq!(r.u32().unwrap(), MSG_ACCEPTED);
+        assert_eq!(r.u32().unwrap(), FLAVOR_GSS);
+        let _verf = r.opaque().unwrap();
+        assert_eq!(r.u32().unwrap(), GARBAGE_ARGS);
+    }
+
+    #[test]
+    fn rpcsec_none_service_data_is_plain_body() {
+        use krb5_kdc::TEST_REALM;
+        let (store, acl, mut ctx, handle, mut gss) = admin_rpcsec_init_svc(GSS_NONE);
+        let cred = rpcsec_cred(RPG_DATA, 1, GSS_NONE, &handle);
+        let mut header = XdrW::default();
+        header.u32(43);
+        header.u32(MSG_CALL);
+        header.u32(RPC_VERSION);
+        header.u32(KADM_PROG);
+        header.u32(KADM_VERS);
+        header.u32(GET_PRINCS);
+        header.u32(FLAVOR_GSS);
+        header.opaque(&cred);
+        let mic = ctx.get_mic(&header.b).unwrap();
+        let rec = rpcsec_call(
+            43,
+            KADM_PROG,
+            KADM_VERS,
+            GET_PRINCS,
+            &cred,
+            FLAVOR_GSS,
+            &mic,
+            &list_args(),
+        );
+        let mut agss = None;
+        let out = handle_rpc(
+            &store,
+            &acl,
+            &[],
+            TEST_REALM,
+            b"hdl",
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &rec,
+        )
+        .unwrap();
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), 43);
+        assert_eq!(r.u32().unwrap(), MSG_REPLY);
+        assert_eq!(r.u32().unwrap(), MSG_ACCEPTED);
+        assert_eq!(r.u32().unwrap(), FLAVOR_GSS);
+        let verf = r.opaque().unwrap();
+        assert_eq!(r.u32().unwrap(), SUCCESS);
+        ctx.verify_mic(&1u32.to_be_bytes(), &verf).unwrap();
+        assert_eq!(r.u32().unwrap(), API_V2);
+        assert_eq!(r.u32().unwrap(), 0);
     }
 
     #[test]
@@ -6871,6 +7126,77 @@ mod tests {
         assert!(iprop_rpcsec_ok(&kip));
         assert!(!iprop_rpcsec_ok(&admin));
         assert!(!iprop_rpcsec_ok(&one));
+        let realm = "KERBER.TEST";
+        let ctx = GssContext::for_kadm5_acceptor(admin, realm).unwrap();
+        assert!(check_rpcsec_auth(&ctx, realm));
+        let ctx = GssContext::for_kadm5_acceptor(hist, realm).unwrap();
+        assert!(!check_rpcsec_auth(&ctx, realm));
+        let ctx = GssContext::for_kadm5_acceptor(kip, realm).unwrap();
+        assert!(check_iprop_rpcsec_auth(&ctx, realm));
+        assert!(!check_rpcsec_auth(&ctx, realm));
+    }
+
+    #[test]
+    fn changepw_acceptor_requires_store_realm() {
+        let cpw = PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "changepw"]);
+        let realm = "KERBER.TEST";
+        assert!(acceptor_realm_ok(
+            Some(&cpw),
+            Some(realm),
+            realm,
+            kadm5_changepw_ok
+        ));
+        assert!(!acceptor_realm_ok(
+            Some(&cpw),
+            Some("OTHER.REALM"),
+            realm,
+            kadm5_changepw_ok
+        ));
+        assert!(!acceptor_realm_ok(
+            Some(&cpw),
+            None,
+            realm,
+            kadm5_changepw_ok
+        ));
+    }
+
+    #[test]
+    fn kadm5_auth_gssapi_ok_requires_store_realm() {
+        let admin = PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "admin"]);
+        let realm = "KERBER.TEST";
+        assert!(acceptor_realm_ok(
+            Some(&admin),
+            Some(realm),
+            realm,
+            kadm5_auth_gssapi_ok
+        ));
+        assert!(!acceptor_realm_ok(
+            Some(&admin),
+            Some("OTHER.REALM"),
+            realm,
+            kadm5_auth_gssapi_ok
+        ));
+    }
+
+    #[test]
+    fn kiprop_acceptor_requires_store_realm() {
+        let kip = PrincipalName::new(
+            PrincipalName::NT_SRV_HST,
+            ["kiprop", "testhost.kerber.test"],
+        );
+        let realm = "KERBER.TEST";
+        assert!(acceptor_realm_ok(
+            Some(&kip),
+            Some(realm),
+            realm,
+            iprop_rpcsec_ok
+        ));
+        assert!(!acceptor_realm_ok(
+            Some(&kip),
+            Some("OTHER.REALM"),
+            realm,
+            iprop_rpcsec_ok
+        ));
     }
 
     #[test]

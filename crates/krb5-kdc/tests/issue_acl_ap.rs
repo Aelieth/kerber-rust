@@ -824,6 +824,10 @@ fn acl_unknown_op_letter_includes_line_and_aborting() {
         "{msg}"
     );
     assert!(
+        msg.contains("syntax error at line 1 <bad@KERBER...>"),
+        "{msg}"
+    );
+    assert!(
         msg.contains("while initializing ACL file, aborting"),
         "{msg}"
     );

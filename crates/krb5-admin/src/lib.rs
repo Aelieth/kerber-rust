@@ -18,7 +18,11 @@ use krb5_protocol::{Keytab, ReplayCache, verify_ap_req};
 use krb5_types::PrincipalName;
 use thiserror::Error;
 
-pub use kadm5::{IpropPull, iprop_fullresync, iprop_pull, serve_kadm5_conn};
+pub use kadm5::{
+    IpropPull, Kadm5RpcSession, changepw_acceptor, check_auth_gssapi_names,
+    check_iprop_rpcsec_auth, check_rpcsec_auth, iprop_fullresync, iprop_pull, kadm5_handle_rpc,
+    serve_kadm5_conn,
+};
 pub use kprop::{
     IpropPoll, KpropAuth, iprop_poll_once, kprop_dump_bytes, kprop_dump_iprop,
     kprop_expired_ap_req, kprop_load_bytes, kprop_send_dump, kprop_send_store,

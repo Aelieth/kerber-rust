@@ -50,6 +50,34 @@ kadm5_list_service() {
         /tmp/kadm5-changepw-rpc --service "$svc" "$client" "$pass" KERBER.TEST listprincs
 }
 
+compile_kadm5_integrity() {
+    local ctn=$1
+    docker cp "$ROOT/scripts/kadm5-integrity-rpc.c" "$ctn":/tmp/kadm5-integrity-rpc.c
+    if ! docker exec "$ctn" cc -o /tmp/kadm5-integrity-rpc /tmp/kadm5-integrity-rpc.c \
+        -lkadm5clnt_mit -lgssrpc -lgssapi_krb5 -lkrb5 -lk5crypto -lcom_err 2>"$SCRATCH/kadm5-int-cc.err"
+    then
+        cat "$SCRATCH/kadm5-int-cc.err" >&2 || true
+        log "kadmin.gate" "error" ',"error":"kadm5-integrity-rpc compile failed"'
+        exit 1
+    fi
+}
+
+# kadmin/admin is DISALLOW_TGT_BASED, so kinit -S takes an initial service
+# ticket the RPCSEC_GSS acceptor accepts.
+kadm5_integrity_list() {
+    local ctn=$1 client=$2 pass=$3 svc=$4 conf=${5:-/etc/krb5.conf} port=${6:-749}
+    docker exec -e KRB5_CONFIG="$conf" "$ctn" sh -c \
+        "printf '%s\n' '$pass' | kinit -S kadmin/admin@KERBER.TEST -c /tmp/int-cc '$client'" >/dev/null 2>&1 || true
+    docker exec -e KRB5_CONFIG="$conf" -e KRB5CCNAME=/tmp/int-cc "$ctn" \
+        /tmp/kadm5-integrity-rpc 127.0.0.1 kadmin/admin@KERBER.TEST "$svc" "$port"
+}
+
+start_integ_tamper_proxy() {
+    local ctn=$1
+    docker cp "$ROOT/scripts/integ-tamper-proxy.py" "$ctn":/tmp/integ-tamper-proxy.py
+    docker exec -d "$ctn" python3 /tmp/integ-tamper-proxy.py
+}
+
 kadmind_auth_too_weak() {
     local ctn=$1
     docker exec "$ctn" python3 -c '
@@ -425,6 +453,31 @@ echo "$KADM_IPROP"
 echo "$KADM_IPROP" | grep -F 'kadmin_on_iprop kind=init label=SUCCESS'
 echo "$KADM_IPROP" | grep -F 'kadmin_on_iprop kind=data label=AUTH_FAILED'
 echo "$KADM_IPROP" | grep -F 'kadmin_on_iprop kind=auth_none label=AUTH_TOOWEAK'
+echo "==== RPCSEC_GSS integrity service listprincs vs Rust kadmind ===="
+compile_kadm5_integrity "$NAME"
+INT_LIST="$(kadm5_integrity_list "$NAME" admin@KERBER.TEST adminpassword integrity /tmp/kadmin-krb5.conf 2>&1 || true)"
+echo "$INT_LIST"
+echo "$INT_LIST" | grep -F 'init_code=0'
+echo "$INT_LIST" | grep -F 'svc=2'
+echo "$INT_LIST" | grep -F 'clnt_stat=0'
+echo "$INT_LIST" | grep -F 'list_code=0'
+if echo "$INT_LIST" | grep -qE 'count=0$'; then
+    echo "Rust integrity listprincs returned no principals" >&2
+    exit 1
+fi
+echo "==== RPCSEC_GSS integrity tampered checksum vs Rust kadmind ===="
+start_integ_tamper_proxy "$NAME"
+sleep 0.3
+INT_TAMPER="$(kadm5_integrity_list "$NAME" admin@KERBER.TEST adminpassword integrity /tmp/kadmin-krb5.conf 1749 2>&1 || true)"
+echo "$INT_TAMPER"
+if echo "$INT_TAMPER" | grep -qF 'list_code=0'; then
+    echo "Rust accepted tampered integrity checksum: $INT_TAMPER" >&2
+    exit 1
+fi
+echo "$INT_TAMPER" | grep -E 'clnt_stat=11|garbage_args=1|accept_stat=4' || {
+    echo "Rust tampered integrity checksum was not refused: $INT_TAMPER" >&2
+    exit 1
+}
 echo "==== MIT kadmin addprinc extra ===="
 ADD="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf -e KRB5_TRACE=/dev/stderr \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw extra-secret extra' 2>&1 || true)"
@@ -912,6 +965,7 @@ sleep 1
 BADLOG="$(docker exec "$NAME" cat /tmp/kadmind-badacl.log 2>/dev/null || true)"
 echo "$BADLOG"
 echo "$BADLOG" | grep -F "Unrecognized ACL operation 'Z' in bad@KERBER.TEST aZ"
+echo "$BADLOG" | grep -F "syntax error at line 1 <bad@KERBER...>"
 echo "$BADLOG" | grep -F "while initializing ACL file, aborting"
 if docker exec "$NAME" grep -q '^listening ' /tmp/kadmind-badacl.log 2>/dev/null; then
     echo "kadmind started on unknown op letter" >&2
@@ -1272,7 +1326,8 @@ docker exec \
 set -e
 BADDELTA="$(docker exec "$NAME" cat /tmp/kadmind-3dd.log 2>/dev/null || true)"
 echo "$BADDELTA"
-echo "$BADDELTA" | grep -F 'invalid restrictions'
+echo "$BADDELTA" | grep -F 'invalid restrictions: -maxlife 3dd'
+echo "$BADDELTA" | grep -F 'syntax error at line 1 <admin@KERB...>'
 echo "$BADDELTA" | grep -F 'while initializing ACL file, aborting'
 if docker exec "$NAME" grep -q '^listening ' /tmp/kadmind-3dd.log 2>/dev/null; then
     echo "kadmind started with -maxlife 3dd" >&2
@@ -1396,6 +1451,31 @@ if echo "$MIT_KADM_IPROP" | grep -q 'kind=auth_none label=SUCCESS'; then
     echo "MIT AUTH_NONE IPROP succeeded (IPROP served on 749): $MIT_KADM_IPROP" >&2
     exit 1
 fi
+echo "==== MIT RPCSEC_GSS integrity service listprincs ===="
+compile_kadm5_integrity "$NAME_MIT"
+MIT_INT_LIST="$(kadm5_integrity_list "$NAME_MIT" admin/admin adminpassword integrity /etc/krb5.conf 2>&1 || true)"
+echo "$MIT_INT_LIST"
+echo "$MIT_INT_LIST" | grep -F 'init_code=0'
+echo "$MIT_INT_LIST" | grep -F 'svc=2'
+echo "$MIT_INT_LIST" | grep -F 'clnt_stat=0'
+echo "$MIT_INT_LIST" | grep -F 'list_code=0'
+if echo "$MIT_INT_LIST" | grep -qE 'count=0$'; then
+    echo "MIT integrity listprincs returned no principals" >&2
+    exit 1
+fi
+echo "==== MIT RPCSEC_GSS integrity tampered checksum ===="
+start_integ_tamper_proxy "$NAME_MIT"
+sleep 0.3
+MIT_INT_TAMPER="$(kadm5_integrity_list "$NAME_MIT" admin/admin adminpassword integrity /etc/krb5.conf 1749 2>&1 || true)"
+echo "$MIT_INT_TAMPER"
+if echo "$MIT_INT_TAMPER" | grep -qF 'list_code=0'; then
+    echo "MIT accepted tampered integrity checksum: $MIT_INT_TAMPER" >&2
+    exit 1
+fi
+echo "$MIT_INT_TAMPER" | grep -E 'clnt_stat=11|garbage_args=1|accept_stat=4' || {
+    echo "MIT tampered integrity checksum was not refused: $MIT_INT_TAMPER" >&2
+    exit 1
+}
 echo "==== MIT kadmin/history service on kadm5 ===="
 docker exec "$NAME_MIT" kadmin.local -q 'addpol -history 2 g3bhist' || true
 docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw hist-secret -policy g3bhist histee' || true
@@ -1565,6 +1645,7 @@ set -e
 MIT_BAD="$(docker exec "$NAME_MIT" cat /tmp/kadmind-badacl.log 2>/dev/null || true)"
 echo "$MIT_BAD"
 echo "$MIT_BAD" | grep -F "Unrecognized ACL operation 'Z' in bad@KERBER.TEST aZ"
+echo "$MIT_BAD" | grep -F "syntax error at line 1 <bad@KERBER...>"
 echo "$MIT_BAD" | grep -F "while initializing ACL file, aborting"
 if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
     echo "MIT kadmind started on unknown op letter" >&2
@@ -1867,7 +1948,8 @@ docker exec "$NAME_MIT" sh -c 'timeout 3 kadmind -nofork >/tmp/kadmind-3dd.log 2
 set -e
 MIT_BADDELTA="$(docker exec "$NAME_MIT" cat /tmp/kadmind-3dd.log 2>/dev/null || true)"
 echo "$MIT_BADDELTA"
-echo "$MIT_BADDELTA" | grep -F 'invalid restrictions'
+echo "$MIT_BADDELTA" | grep -F 'invalid restrictions: -maxlife 3dd'
+echo "$MIT_BADDELTA" | grep -F 'syntax error at line 1 <admin@KERB...>'
 echo "$MIT_BADDELTA" | grep -F 'while initializing ACL file, aborting'
 if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
     echo "MIT kadmind started with -maxlife 3dd" >&2

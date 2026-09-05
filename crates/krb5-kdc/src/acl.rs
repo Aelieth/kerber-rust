@@ -9,6 +9,13 @@ use crate::store::{
     KDB_REQUIRES_PWCHANGE, KDB_SUPPORT_DESMD5,
 };
 
+#[derive(Debug, Clone)]
+pub(crate) struct AclSyntaxError {
+    pub(crate) lineno: usize,
+    pub(crate) line: String,
+    pub(crate) message: String,
+}
+
 /// Mutating admin operations gated by the ACL.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AdminOp {
@@ -172,9 +179,26 @@ impl Acl {
     ///
     /// [`Error::AclParse`] on syntax, unknown op letter, or restriction errors.
     pub fn parse_with_realm(text: &str, default_realm: &str) -> Result<Self, Error> {
+        Self::parse_located(text, default_realm).map_err(|e| Error::AclParse(e.message))
+    }
+
+    pub(crate) fn parse_located(text: &str, default_realm: &str) -> Result<Self, AclSyntaxError> {
         let mut entries = Vec::new();
-        for line in logical_lines(text) {
-            entries.push(parse_line(&line, default_realm)?);
+        for (lineno, line) in logical_lines_numbered(text) {
+            match parse_line(&line, default_realm) {
+                Ok(entry) => entries.push(entry),
+                Err(e) => {
+                    let message = match e {
+                        Error::AclParse(s) => s,
+                        other => other.to_string(),
+                    };
+                    return Err(AclSyntaxError {
+                        lineno,
+                        line,
+                        message,
+                    });
+                }
+            }
         }
         Ok(Self { entries })
     }
@@ -369,14 +393,17 @@ struct WildState {
 }
 
 /// MIT `auth_acl.c:102-153` `get_line`: `\` continuation; `#` only at column 0.
-fn logical_lines(text: &str) -> Vec<String> {
+fn logical_lines_numbered(text: &str) -> Vec<(usize, String)> {
     if text.is_empty() {
         return Vec::new();
     }
     let mut out = Vec::new();
     let mut buf = String::new();
     let mut continuing = false;
+    let mut start = 0usize;
+    let mut phys = 0usize;
     for raw in text.split_inclusive('\n') {
+        phys += 1;
         // MIT get_line strips only `\n` (`auth_acl.c:136-140`); CRLF `\\\r`
         // is not a continuation marker.
         let chunk = raw.strip_suffix('\n').unwrap_or(raw);
@@ -388,7 +415,7 @@ fn logical_lines(text: &str) -> Vec<String> {
             buf.push_str(chunk);
             continuing = false;
             if !buf.is_empty() && !buf.starts_with('#') {
-                out.push(std::mem::take(&mut buf));
+                out.push((start, std::mem::take(&mut buf)));
             } else {
                 buf.clear();
             }
@@ -397,15 +424,16 @@ fn logical_lines(text: &str) -> Vec<String> {
         if let Some(stripped) = chunk.strip_suffix('\\') {
             buf = stripped.to_string();
             continuing = true;
+            start = phys;
             continue;
         }
         if chunk.is_empty() || chunk.starts_with('#') {
             continue;
         }
-        out.push(chunk.to_owned());
+        out.push((phys, chunk.to_owned()));
     }
     if continuing && !buf.is_empty() && !buf.starts_with('#') {
-        out.push(buf);
+        out.push((start, buf));
     }
     out
 }

@@ -168,6 +168,38 @@ pub struct GssContext {
     pub ticket_realm: Option<String>,
 }
 
+impl GssContext {
+    /// Acceptor identity for kadm5 name/realm gates (no usable session).
+    ///
+    /// # Errors
+    ///
+    /// Dummy AES-256 key construction.
+    pub fn for_kadm5_acceptor(
+        acceptor: PrincipalName,
+        ticket_realm: impl Into<String>,
+    ) -> Result<Self, Error> {
+        Ok(Self {
+            session: ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0u8; 32])?,
+            acceptor_subkey: None,
+            send_seq: 0,
+            recv_seq: 0,
+            recv_seen: false,
+            recv_window: std::collections::HashSet::new(),
+            initiator: false,
+            rpcsec_init_window: false,
+            replay: ReplayCache::new(),
+            client: None,
+            delegated: None,
+            spnego_mech_list: None,
+            lifetime_end: 0,
+            gss_flags: 0,
+            ticket_initial: false,
+            acceptor: Some(acceptor),
+            ticket_realm: Some(ticket_realm.into()),
+        })
+    }
+}
+
 /// GSS IOV buffer type (MIT `gssapi_ext.h`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IovType {
