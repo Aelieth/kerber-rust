@@ -644,9 +644,6 @@ fn handle_auth_gssapi(
     if version != AUTH_GSSAPI_CREDS_VERS {
         return Err(Error::Inner("auth_gssapi creds version".into()));
     }
-    if iprop {
-        return Ok(rpc_reply_weakauth(xid));
-    }
     tracing::info!(
         event = krb5_log::events::ADMIN,
         component = "krb5-admin",
@@ -706,9 +703,12 @@ fn handle_auth_gssapi(
         return Ok(rpc_reply_clear(xid, &body.b));
     }
 
-    let st = agss
-        .as_mut()
-        .ok_or_else(|| Error::Inner("auth_gssapi not established".into()))?;
+    let Some(st) = agss.as_mut() else {
+        return Ok(rpc_reply_auth_error(xid, AUTH_FAILED));
+    };
+    if iprop {
+        return Ok(rpc_reply_weakauth(xid));
+    }
     if !client_handle.is_empty() && client_handle != st.handle {
         return Err(Error::Inner("auth_gssapi handle".into()));
     }
@@ -3373,7 +3373,7 @@ mod tests {
     }
 
     #[test]
-    fn auth_gssapi_on_iprop_data_is_auth_too_weak() {
+    fn auth_gssapi_on_iprop_data_is_auth_failed() {
         let (store, acl, _) = setup();
         let mut cred = XdrW::default();
         cred.u32(AUTH_GSSAPI_CREDS_VERS);
@@ -3409,11 +3409,11 @@ mod tests {
         assert_eq!(r.u32().unwrap(), MSG_REPLY);
         assert_eq!(r.u32().unwrap(), MSG_DENIED);
         assert_eq!(r.u32().unwrap(), REJECT_AUTH_ERROR);
-        assert_eq!(r.u32().unwrap(), AUTH_TOOWEAK);
+        assert_eq!(r.u32().unwrap(), AUTH_FAILED);
     }
 
     #[test]
-    fn auth_gssapi_on_iprop_init_is_auth_too_weak() {
+    fn auth_gssapi_on_iprop_init_is_success() {
         let (store, acl, _) = setup();
         let mut cred = XdrW::default();
         cred.u32(AUTH_GSSAPI_CREDS_VERS);
@@ -3451,9 +3451,10 @@ mod tests {
         let mut r = XdrR::new(&out);
         assert_eq!(r.u32().unwrap(), 12);
         assert_eq!(r.u32().unwrap(), MSG_REPLY);
-        assert_eq!(r.u32().unwrap(), MSG_DENIED);
-        assert_eq!(r.u32().unwrap(), REJECT_AUTH_ERROR);
-        assert_eq!(r.u32().unwrap(), AUTH_TOOWEAK);
+        assert_eq!(r.u32().unwrap(), MSG_ACCEPTED);
+        assert_eq!(r.u32().unwrap(), FLAVOR_NONE);
+        let _verf = r.opaque().unwrap();
+        assert_eq!(r.u32().unwrap(), SUCCESS);
     }
 
     #[test]

@@ -8,6 +8,11 @@ this project uses semantic versioning once a crate is published.
 
 ### W1-I Round 3 (K12–K17)
 
+- **K15.** AUTH_GSSAPI INIT on IPROP_PROG is auth-layer SUCCESS
+  (`svc_auth_gssapi.c` `no_dispatch`); DATA without a context is
+  `AUTH_FAILED`; established DATA is `AUTH_TOOWEAK`. Gate cells pin
+  one `init_code` per leg (no `43787528|43787566` alternation) and
+  `iprop-gate.sh` dies if MIT kpropd logs `AUTH_GSSAPI` against Rust.
 - **K14.** RPCSEC_GSS `_svcauth_gss`: INIT requires NULLPROC;
   `accept_sec_context` fail is `AUTH_REJECTEDCRED`; DATA without
   context / bad MIC / unknown handle is `CREDPROBLEM`; sequence

@@ -413,8 +413,8 @@ fi
 echo "==== kiprop service on kadm5 is refused ===="
 KIPROP_LIST="$(kadm5_list_service "$NAME" admin@KERBER.TEST adminpassword kiprop/testhost.kerber.test /tmp/kadmin-krb5.conf 2>&1 || true)"
 echo "$KIPROP_LIST"
-echo "$KIPROP_LIST" | grep -E 'init_code=43787528|init_code=43787566'
-echo "$KIPROP_LIST" | grep -E 'Communication failure|GSS-API \(or Kerberos\) error'
+echo "$KIPROP_LIST" | grep -F 'init_code=43787528'
+echo "$KIPROP_LIST" | grep -F 'Communication failure'
 if echo "$KIPROP_LIST" | grep -q 'init_code=0'; then
     echo "kiprop service init succeeded: $KIPROP_LIST" >&2
     exit 1
@@ -422,8 +422,8 @@ fi
 echo "==== AUTH_GSSAPI INIT IPROP_PROG on kadmind 749 (kadmin-on-iprop) ===="
 KADM_IPROP="$(kadmind_iprop_auth_gssapi "$NAME" 2>&1 || true)"
 echo "$KADM_IPROP"
-echo "$KADM_IPROP" | grep -F 'kadmin_on_iprop kind=init label=AUTH_TOOWEAK'
-echo "$KADM_IPROP" | grep -F 'kadmin_on_iprop kind=data label=AUTH_TOOWEAK'
+echo "$KADM_IPROP" | grep -F 'kadmin_on_iprop kind=init label=SUCCESS'
+echo "$KADM_IPROP" | grep -F 'kadmin_on_iprop kind=data label=AUTH_FAILED'
 echo "$KADM_IPROP" | grep -F 'kadmin_on_iprop kind=auth_none label=AUTH_TOOWEAK'
 echo "==== MIT kadmin addprinc extra ===="
 ADD="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf -e KRB5_TRACE=/dev/stderr \
@@ -575,8 +575,8 @@ if echo "$HIST_GET" | grep -qiE 'does not exist|not found|UNK_PRINC'; then
 fi
 HIST_LIST="$(kadm5_list_service "$NAME" admin@KERBER.TEST adminpassword kadmin/history /tmp/kadmin-krb5.conf 2>&1 || true)"
 echo "$HIST_LIST"
-echo "$HIST_LIST" | grep -E 'init_code=43787528|init_code=43787566'
-echo "$HIST_LIST" | grep -E 'Communication failure|GSS-API \(or Kerberos\) error'
+echo "$HIST_LIST" | grep -F 'init_code=43787566'
+echo "$HIST_LIST" | grep -F 'GSS-API (or Kerberos) error'
 if echo "$HIST_LIST" | grep -q 'init_code=0'; then
     echo "kadmin/history init succeeded: $HIST_LIST" >&2
     exit 1
@@ -1317,8 +1317,8 @@ fi
 echo "==== MIT kiprop service on kadm5 is refused ===="
 MIT_KIPROP_LIST="$(kadm5_list_service "$NAME_MIT" admin/admin adminpassword kiprop/testhost.kerber.test /etc/krb5.conf 2>&1 || true)"
 echo "$MIT_KIPROP_LIST"
-echo "$MIT_KIPROP_LIST" | grep -E 'init_code=43787560|init_code=43787528|init_code=43787566'
-echo "$MIT_KIPROP_LIST" | grep -E 'Required KADM5 principal missing|Communication failure|GSS-API \(or Kerberos\) error'
+echo "$MIT_KIPROP_LIST" | grep -F 'init_code=43787560'
+echo "$MIT_KIPROP_LIST" | grep -F 'Required KADM5 principal missing'
 if echo "$MIT_KIPROP_LIST" | grep -q 'init_code=0'; then
     echo "MIT kiprop service init succeeded: $MIT_KIPROP_LIST" >&2
     exit 1
@@ -1326,8 +1326,8 @@ fi
 echo "==== MIT AUTH_GSSAPI INIT IPROP_PROG on kadmind 749 (kadmin-on-iprop) ===="
 MIT_KADM_IPROP="$(kadmind_iprop_auth_gssapi "$NAME_MIT" 2>&1 || true)"
 echo "$MIT_KADM_IPROP"
-echo "$MIT_KADM_IPROP" | grep -F 'kadmin_on_iprop kind=init label='
-echo "$MIT_KADM_IPROP" | grep -F 'kadmin_on_iprop kind=data label='
+echo "$MIT_KADM_IPROP" | grep -F 'kadmin_on_iprop kind=init label=SUCCESS'
+echo "$MIT_KADM_IPROP" | grep -F 'kadmin_on_iprop kind=data label=AUTH_FAILED'
 echo "$MIT_KADM_IPROP" | grep -F 'kadmin_on_iprop kind=auth_none label=PROG_UNAVAIL'
 if echo "$MIT_KADM_IPROP" | grep -q 'kind=auth_none label=SUCCESS'; then
     echo "MIT AUTH_NONE IPROP succeeded (IPROP served on 749): $MIT_KADM_IPROP" >&2
@@ -1346,8 +1346,8 @@ if echo "$MIT_HIST_GET" | grep -qiE 'does not exist|not found|UNK_PRINC'; then
 fi
 MIT_HIST_LIST="$(kadm5_list_service "$NAME_MIT" admin/admin adminpassword kadmin/history /etc/krb5.conf 2>&1 || true)"
 echo "$MIT_HIST_LIST"
-echo "$MIT_HIST_LIST" | grep -E 'init_code=43787528|init_code=43787566'
-echo "$MIT_HIST_LIST" | grep -E 'Communication failure|GSS-API \(or Kerberos\) error'
+echo "$MIT_HIST_LIST" | grep -F 'init_code=43787528'
+echo "$MIT_HIST_LIST" | grep -F 'Communication failure'
 if echo "$MIT_HIST_LIST" | grep -q 'init_code=0'; then
     echo "MIT kadmin/history init succeeded: $MIT_HIST_LIST" >&2
     exit 1

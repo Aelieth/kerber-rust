@@ -187,6 +187,18 @@ if echo "$IPROP_LOG" | grep -qiE 'Program not registered|PROG_UNAVAIL'; then
     log "iprop.gate" "error" ',"error":"MIT kpropd -A: IPROP program not served"'
     exit 1
 fi
+echo "==== Rust kadmind rpc_flavor vs MIT kpropd ===="
+KADMLOG="$(docker exec "$NAME" cat /tmp/kadmind.log 2>/dev/null || true)"
+echo "$KADMLOG"
+echo "$KADMLOG" | grep -F '"rpc_flavor":"RPCSEC_GSS"' || {
+    echo "MIT kpropd did not negotiate RPCSEC_GSS against Rust kadmind" >&2
+    exit 1
+}
+if echo "$KADMLOG" | grep -F '"rpc_flavor":"AUTH_GSSAPI"'; then
+    echo "MIT kpropd used AUTH_GSSAPI against Rust kadmind" >&2
+    exit 1
+fi
+echo "rpc_flavor=RPCSEC_GSS"
 
 echo "==== hosts / listeners ===="
 docker exec "$NAME" cat /etc/hosts || true
