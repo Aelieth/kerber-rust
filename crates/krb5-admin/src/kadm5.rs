@@ -55,6 +55,8 @@ const PROC_UNAVAIL: u32 = 3;
 const GARBAGE_ARGS: u32 = 4;
 const REJECT_AUTH_ERROR: u32 = 1;
 const AUTH_TOOWEAK: u32 = 5;
+/// MIT `svc_auth_gss.c:226` `sizeof(seqmask)*8`.
+const RPCSEC_SEQ_WINDOW: u32 = 32;
 
 const CREATE_PRINCIPAL: u32 = 1;
 const DELETE_PRINCIPAL: u32 = 2;
@@ -310,7 +312,7 @@ fn handle_rpc(
         let token = r.opaque()?;
         // RPCSEC_GSS: MIT kadmin uses kadmin/admin; kpropd uses kiprop/host
         // on program 2112 then 100423. Bind by service key, not sname.
-        let (ctx, out_tok) = GssContext::accept_sec_context(
+        let (mut ctx, out_tok) = GssContext::accept_sec_context(
             &token,
             service_keys,
             None,
@@ -319,14 +321,18 @@ fn handle_rpc(
             rcache,
         )
         .map_err(|e| Error::Inner(e.to_string()))?;
-        *gss = Some(ctx);
         let mut body = XdrW::default();
         body.opaque(handle);
         body.u32(0); // GSS_S_COMPLETE
         body.u32(0);
-        body.u32(1); // seq_window
+        body.u32(RPCSEC_SEQ_WINDOW);
         body.opaque(out_tok.as_deref().unwrap_or(&[]));
-        return Ok(rpc_reply_clear(xid, &body.b));
+        // MIT svc_auth_gss.c:496-504: xp_verf is MIC(htonl(gr_win)).
+        let mic = ctx
+            .get_mic(&RPCSEC_SEQ_WINDOW.to_be_bytes())
+            .map_err(|e| Error::Inner(format!("rpcsec init mic: {e}")))?;
+        *gss = Some(ctx);
+        return Ok(rpc_reply_gss_verf(xid, &mic, &body.b));
     }
 
     let ctx = gss
@@ -413,6 +419,9 @@ fn handle_auth_gssapi(
     if version != AUTH_GSSAPI_CREDS_VERS {
         return Err(Error::Inner("auth_gssapi creds version".into()));
     }
+    if iprop && !(auth_msg && (proc == AUTH_GSSAPI_INIT || proc == AUTH_GSSAPI_CONTINUE_INIT)) {
+        return Ok(rpc_reply_weakauth(xid));
+    }
     tracing::info!(
         event = krb5_log::events::ADMIN,
         component = "krb5-admin",
@@ -449,11 +458,7 @@ fn handle_auth_gssapi(
                 return Ok(rpc_reply_clear(xid, &body.b));
             }
         };
-        if iprop {
-            if !check_iprop_rpcsec_auth(&ctx, expected_realm) {
-                return Ok(rpc_reply_weakauth(xid));
-            }
-        } else if !check_auth_gssapi_names(&ctx) {
+        if !iprop && !check_auth_gssapi_names(&ctx) {
             return Ok(rpc_reply_weakauth(xid));
         }
         let mut isn = [0u8; 4];
@@ -540,11 +545,7 @@ fn handle_auth_gssapi(
     }
     let kadm_args = &plain[4..];
     let actor = st.ctx.client.clone().ok_or(Error::AclDenied)?;
-    if iprop {
-        if !check_iprop_rpcsec_auth(&st.ctx, expected_realm) {
-            return Ok(rpc_reply_weakauth(xid));
-        }
-    } else if !check_auth_gssapi_names(&st.ctx) {
+    if !check_auth_gssapi_names(&st.ctx) {
         return Ok(rpc_reply_weakauth(xid));
     }
     let result = match kadm5_or_iprop(
@@ -658,6 +659,18 @@ fn rpc_reply_clear(xid: u32, body: &[u8]) -> Vec<u8> {
     w.u32(MSG_ACCEPTED);
     w.u32(FLAVOR_NONE);
     w.opaque(&[]);
+    w.u32(SUCCESS);
+    w.b.extend_from_slice(body);
+    w.b
+}
+
+fn rpc_reply_gss_verf(xid: u32, mic: &[u8], body: &[u8]) -> Vec<u8> {
+    let mut w = XdrW::default();
+    w.u32(xid);
+    w.u32(MSG_REPLY);
+    w.u32(MSG_ACCEPTED);
+    w.u32(FLAVOR_GSS);
+    w.opaque(mic);
     w.u32(SUCCESS);
     w.b.extend_from_slice(body);
     w.b
@@ -1584,7 +1597,11 @@ fn dispatch_kadm5_ticket(
             Ok(w.b)
         }
         GET_PRINCIPAL => {
-            let (name, _mask) = parse_get(args)?;
+            let (name, prealm, _mask) = parse_get(args)?;
+            let realm = if prealm.is_empty() { realm } else { prealm };
+            if realm != store_realm(store) {
+                return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
+            }
             let g = match write_store(store, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
@@ -1652,6 +1669,13 @@ fn dispatch_kadm5_ticket(
         }
         MODIFY_PRINCIPAL => {
             let (name, mask, fields) = parse_modify(args)?;
+            let mut g = match write_store(store, API_V2) {
+                Ok(g) => g,
+                Err(rep) => return Ok(rep),
+            };
+            if g.get_name(&name).is_none() {
+                return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
+            }
             let tid = acl_id(&name, &realm);
             if changepw
                 || acl
@@ -1660,10 +1684,6 @@ fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_MODIFY));
             }
-            let mut g = match write_store(store, API_V2) {
-                Ok(g) => g,
-                Err(rep) => return Ok(rep),
-            };
             if mask & KADM5_ATTRIBUTES != 0
                 && fields.attributes & KDB_LOCKDOWN_KEYS == 0
                 && g.get_name(&name)
@@ -1889,7 +1909,7 @@ fn dispatch_kadm5_ticket(
             Ok(encode_pols(api, &names))
         }
         CHRAND_PRINCIPAL | CHRAND_PRINCIPAL3 => {
-            let name = parse_chrand(args, proc == CHRAND_PRINCIPAL3)?;
+            let (name, keepold) = parse_chrand(args, proc == CHRAND_PRINCIPAL3)?;
             let mut g = match write_store(store, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
@@ -1916,7 +1936,8 @@ fn dispatch_kadm5_ticket(
             if self_change && let Err(e) = g.check_min_life(&name) {
                 return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
             }
-            match g.chrand(&name) {
+            let n = clamp_self_keepold(self_change, keepold);
+            match g.chrand_keepold_n(&name, n) {
                 Ok(keys) => {
                     let hide = g
                         .get_name(&name)
@@ -1928,6 +1949,13 @@ fn dispatch_kadm5_ticket(
         }
         EXTRACT_KEYS => {
             let (api, name, kvno) = parse_extract(args)?;
+            let g = match write_store(store, api) {
+                Ok(g) => g,
+                Err(rep) => return Ok(rep),
+            };
+            let Some(p) = g.get_name(&name) else {
+                return Ok(generic_ret(api, KADM5_UNK_PRINC));
+            };
             if changepw
                 || acl
                     .check(
@@ -1939,13 +1967,6 @@ fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(api, KADM5_AUTH_EXTRACT));
             }
-            let g = match write_store(store, api) {
-                Ok(g) => g,
-                Err(rep) => return Ok(rep),
-            };
-            let Some(p) = g.get_name(&name) else {
-                return Ok(generic_ret(api, KADM5_UNK_PRINC));
-            };
             if p.attributes & KDB_LOCKDOWN_KEYS != 0 {
                 return Ok(generic_ret(api, KADM5_AUTH_EXTRACT));
             }
@@ -1960,6 +1981,13 @@ fn dispatch_kadm5_ticket(
         }
         PURGEKEYS => {
             let (api, name, keepkvno) = parse_purgekeys(args)?;
+            let mut g = match write_store(store, API_V2) {
+                Ok(g) => g,
+                Err(rep) => return Ok(rep),
+            };
+            if g.get_name(&name).is_none() {
+                return Ok(generic_ret(api, KADM5_UNK_PRINC));
+            }
             if changepw
                 || (acl
                     .check(
@@ -1972,14 +2000,9 @@ fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
             }
-            let mut g = match write_store(store, API_V2) {
-                Ok(g) => g,
-                Err(rep) => return Ok(rep),
-            };
-            let lockdown = match g.get_name(&name) {
-                None => return Ok(generic_ret(api, KADM5_UNK_PRINC)),
-                Some(p) => p.attributes & KDB_LOCKDOWN_KEYS != 0,
-            };
+            let lockdown = g
+                .get_name(&name)
+                .is_some_and(|p| p.attributes & KDB_LOCKDOWN_KEYS != 0);
             if lockdown {
                 return Ok(generic_ret(api, KADM5_PROTECT_KEYS));
             }
@@ -1998,6 +2021,13 @@ fn dispatch_kadm5_ticket(
         }
         SETKEY_PRINCIPAL | SETKEY_PRINCIPAL3 | SETKEY_PRINCIPAL4 => {
             let (api, name, keys, keepold) = parse_setkey(args, proc)?;
+            let mut g = match write_store(store, API_V2) {
+                Ok(g) => g,
+                Err(rep) => return Ok(rep),
+            };
+            if g.get_name(&name).is_none() {
+                return Ok(generic_ret(api, KADM5_UNK_PRINC));
+            }
             if changepw
                 || acl
                     .check(
@@ -2009,18 +2039,14 @@ fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(api, KADM5_AUTH_SETKEY));
             }
-            let mut g = match write_store(store, API_V2) {
-                Ok(g) => g,
-                Err(rep) => return Ok(rep),
-            };
-            let lockdown = match g.get_name(&name) {
-                None => return Ok(generic_ret(api, KADM5_UNK_PRINC)),
-                Some(p) => p.attributes & KDB_LOCKDOWN_KEYS != 0,
-            };
+            let lockdown = g
+                .get_name(&name)
+                .is_some_and(|p| p.attributes & KDB_LOCKDOWN_KEYS != 0);
             if lockdown {
                 return Ok(generic_ret(api, KADM5_AUTH_SETKEY));
             }
-            match g.set_keys(&name, keys, keepold) {
+            let n = clamp_self_keepold(is_self(actor, &name, &realm), keepold);
+            match g.set_keys(&name, keys, n) {
                 Ok(()) => Ok(generic_ret(api, 0)),
                 Err(e) => Ok(generic_ret(api, kadm5_code(&Error::from(e)))),
             }
@@ -2053,6 +2079,13 @@ fn dispatch_kadm5_ticket(
         }
         SET_STRING => {
             let (api, name, key, value) = parse_sstring(args)?;
+            let mut g = match write_store(store, API_V2) {
+                Ok(g) => g,
+                Err(rep) => return Ok(rep),
+            };
+            if g.get_name(&name).is_none() {
+                return Ok(generic_ret(api, KADM5_UNK_PRINC));
+            }
             if changepw
                 || acl
                     .check(
@@ -2067,10 +2100,6 @@ fn dispatch_kadm5_ticket(
             if key.is_empty() {
                 return Ok(generic_ret(api, KADM5_FAILURE));
             }
-            let mut g = match write_store(store, API_V2) {
-                Ok(g) => g,
-                Err(rep) => return Ok(rep),
-            };
             match g.set_string(&name, &key, value.as_deref()) {
                 Ok(()) => Ok(generic_ret(api, 0)),
                 Err(e) => Ok(generic_ret(api, kadm5_code(&Error::from(e)))),
@@ -2278,12 +2307,12 @@ fn parse_chpass(args: &[u8], v3: bool) -> Result<(PrincipalName, String, bool), 
     Ok((princ, pass, keepold))
 }
 
-fn parse_get(args: &[u8]) -> Result<(PrincipalName, u32), Error> {
+fn parse_get(args: &[u8]) -> Result<(PrincipalName, String, u32), Error> {
     let mut r = XdrR::new(args);
     let _api = r.u32()?;
-    let princ = r.principal()?;
+    let (princ, prealm) = r.principal_realm()?;
     let mask = r.u32().unwrap_or(u32::MAX);
-    Ok((princ, mask))
+    Ok((princ, prealm, mask))
 }
 
 fn parse_gprincs(args: &[u8]) -> Result<Option<String>, Error> {
@@ -2397,15 +2426,18 @@ fn parse_extract(args: &[u8]) -> Result<(u32, PrincipalName, u32), Error> {
     Ok((api, princ, kvno))
 }
 
-fn parse_chrand(args: &[u8], v3: bool) -> Result<PrincipalName, Error> {
+fn parse_chrand(args: &[u8], v3: bool) -> Result<(PrincipalName, bool), Error> {
     let mut r = XdrR::new(args);
     let _api = r.u32()?;
     let princ = r.principal()?;
-    if v3 {
-        let _keepold = r.u32().unwrap_or(0);
+    let keepold = if v3 {
+        let k = r.u32().unwrap_or(0) != 0;
         let _ = r.skip_array_i32_pairs();
-    }
-    Ok(princ)
+        k
+    } else {
+        false
+    };
+    Ok((princ, keepold))
 }
 
 struct ModFields {
@@ -2696,12 +2728,14 @@ impl<'a> XdrR<'a> {
     }
 
     fn principal(&mut self) -> Result<PrincipalName, Error> {
+        Ok(self.principal_realm()?.0)
+    }
+
+    fn principal_realm(&mut self) -> Result<(PrincipalName, String), Error> {
         let s = self
             .nullstring()?
             .ok_or_else(|| Error::Inner("null principal".into()))?;
-        krb5_types::principal_from_unparsed(&s, "")
-            .map(|(n, _)| n)
-            .map_err(|e| Error::Inner(e.to_string()))
+        krb5_types::principal_from_unparsed(&s, "").map_err(|e| Error::Inner(e.to_string()))
     }
 
     fn skip_array_i32_pairs(&mut self) -> Result<(), Error> {
@@ -2934,6 +2968,154 @@ mod tests {
         )
         .unwrap();
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn auth_gssapi_on_iprop_data_is_auth_too_weak() {
+        let (store, acl, _) = setup();
+        let mut cred = XdrW::default();
+        cred.u32(AUTH_GSSAPI_CREDS_VERS);
+        cred.u32(0);
+        cred.opaque(&[]);
+        let mut w = XdrW::default();
+        w.u32(11);
+        w.u32(MSG_CALL);
+        w.u32(RPC_VERSION);
+        w.u32(IPROP_PROG);
+        w.u32(IPROP_VERS);
+        w.u32(IPROP_GET_UPDATES);
+        w.u32(FLAVOR_AUTH_GSSAPI);
+        w.opaque(&cred.b);
+        w.u32(FLAVOR_NONE);
+        w.opaque(&[]);
+        let mut gss = None;
+        let mut agss = None;
+        let out = handle_rpc(
+            &store,
+            &acl,
+            &[],
+            "KERBER.TEST",
+            &[],
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &w.b,
+        )
+        .unwrap();
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), 11);
+        assert_eq!(r.u32().unwrap(), MSG_REPLY);
+        assert_eq!(r.u32().unwrap(), MSG_DENIED);
+        assert_eq!(r.u32().unwrap(), REJECT_AUTH_ERROR);
+        assert_eq!(r.u32().unwrap(), AUTH_TOOWEAK);
+    }
+
+    #[test]
+    fn rpc_reply_gss_verf_is_rpcsec_gss_mic() {
+        let out = rpc_reply_gss_verf(3, b"mic-bytes", b"init-body");
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), 3);
+        assert_eq!(r.u32().unwrap(), MSG_REPLY);
+        assert_eq!(r.u32().unwrap(), MSG_ACCEPTED);
+        assert_eq!(r.u32().unwrap(), FLAVOR_GSS);
+        assert_eq!(r.opaque().unwrap(), b"mic-bytes");
+        assert_eq!(r.u32().unwrap(), SUCCESS);
+        assert_eq!(r.rest(), b"init-body");
+    }
+
+    #[test]
+    fn rpcsec_init_reply_mic_is_window() {
+        use krb5_crypto::EncryptionType;
+        use krb5_kdc::{TEST_REALM, documented_kadmin};
+        use krb5_protocol::{as_req_sname, pa_enc_timestamp};
+        use krb5_types::ascii;
+
+        let (store, acl, _) = setup();
+        let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["admin"]);
+        let kadm = documented_kadmin();
+        let (admin_key, kadm_key) = {
+            let g = store.read().unwrap();
+            (
+                g.get_name(&admin).unwrap().best_key().unwrap().key.clone(),
+                g.get_name(&kadm).unwrap().best_key().unwrap().key.clone(),
+            )
+        };
+        let as_req = as_req_sname(
+            admin.clone(),
+            TEST_REALM,
+            7,
+            Some(vec![pa_enc_timestamp(&admin_key).unwrap()]),
+            kadm.clone(),
+            EncryptionType::preferred()
+                .iter()
+                .map(|e| e.to_iana())
+                .collect(),
+        )
+        .unwrap();
+        let as_out = {
+            let g = store.read().unwrap();
+            krb5_kdc::issue_as(&*g, &as_req).unwrap()
+        };
+        let (mut ctx, token) = GssContext::init_sec_context(
+            as_out.rep.0.ticket.clone(),
+            &as_out.session_key,
+            &ascii(TEST_REALM),
+            &admin,
+            true,
+            None,
+            None,
+        )
+        .unwrap();
+        let mut cred = XdrW::default();
+        cred.u32(RPCSEC_GSS_VERS);
+        cred.u32(RPG_INIT);
+        cred.u32(0);
+        cred.u32(GSS_PRIVACY);
+        cred.opaque(&[]);
+        let mut arg = XdrW::default();
+        arg.opaque(&token);
+        let mut w = XdrW::default();
+        w.u32(12);
+        w.u32(MSG_CALL);
+        w.u32(RPC_VERSION);
+        w.u32(IPROP_PROG);
+        w.u32(IPROP_VERS);
+        w.u32(IPROP_NULL);
+        w.u32(FLAVOR_GSS);
+        w.opaque(&cred.b);
+        w.u32(FLAVOR_NONE);
+        w.opaque(&[]);
+        w.b.extend_from_slice(&arg.b);
+        let mut gss = None;
+        let mut agss = None;
+        let out = handle_rpc(
+            &store,
+            &acl,
+            &[kadm_key],
+            TEST_REALM,
+            b"hdl",
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &w.b,
+        )
+        .unwrap();
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), 12);
+        assert_eq!(r.u32().unwrap(), MSG_REPLY);
+        assert_eq!(r.u32().unwrap(), MSG_ACCEPTED);
+        assert_eq!(r.u32().unwrap(), FLAVOR_GSS);
+        let verf = r.opaque().unwrap();
+        assert!(!verf.is_empty(), "INIT verifier must be MIC of the window");
+        assert_eq!(r.u32().unwrap(), SUCCESS);
+        let _handle = r.opaque().unwrap();
+        assert_eq!(r.u32().unwrap(), 0);
+        let _minor = r.u32().unwrap();
+        let window = r.u32().unwrap();
+        assert_eq!(window, RPCSEC_SEQ_WINDOW);
+        let _out_tok = r.opaque().unwrap();
+        ctx.verify_mic(&window.to_be_bytes(), &verf)
+            .expect("INIT xp_verf is MIC(htonl(window))");
     }
 
     #[test]
@@ -3544,6 +3726,97 @@ mod tests {
         assert_ne!(ret_code(&out), KADM5_AUTH_GET);
     }
 
+    #[test]
+    fn getprinc_foreign_realm_is_unk_princ() {
+        let (store, acl, actor) = setup();
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some("user@OTHER.REALM"));
+        w.u32(u32::MAX);
+        let out = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &w.b).unwrap();
+        assert_eq!(ret_code(&out), KADM5_UNK_PRINC);
+        let mut loc = XdrW::default();
+        loc.u32(API_V2);
+        loc.nullstring(Some("user@KERBER.TEST"));
+        loc.u32(u32::MAX);
+        let ok = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &loc.b).unwrap();
+        assert_eq!(ret_code(&ok), 0);
+    }
+
+    fn stub_unk_before_acl(proc: u32, args: &[u8], not_auth: u32) {
+        let (store, _acl, _actor) = setup();
+        let none = Acl::parse("nobody@KERBER.TEST a\n").expect("acl");
+        let out = dispatch_kadm5(&store, &none, "user@KERBER.TEST", proc, args)
+            .unwrap_or_else(|e| panic!("proc {proc} dispatch {e:?}"));
+        assert_eq!(ret_code(&out), KADM5_UNK_PRINC, "proc {proc}");
+        assert_ne!(
+            ret_code(&out),
+            not_auth,
+            "proc {proc} must not be ACL-first"
+        );
+    }
+
+    fn modify_rec(name: &str) -> Vec<u8> {
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some(name));
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(3600);
+        w.u32(1);
+        w.u32(0);
+        w.u32(0);
+        w.u32(1);
+        w.u32(1);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(1);
+        w.u32(0);
+        w.u32(KADM5_ATTRIBUTES);
+        w.b
+    }
+
+    #[test]
+    fn stub_setup_unk_before_acl_on_modify_setkey_purge_extract_setstr() {
+        stub_unk_before_acl(
+            EXTRACT_KEYS,
+            &extract_args("nosuch@KERBER.TEST", 0),
+            KADM5_AUTH_EXTRACT,
+        );
+        stub_unk_before_acl(
+            MODIFY_PRINCIPAL,
+            &modify_rec("nosuch@KERBER.TEST"),
+            KADM5_AUTH_MODIFY,
+        );
+        let mut pk = XdrW::default();
+        pk.u32(API_V2);
+        pk.nullstring(Some("nosuch@KERBER.TEST"));
+        pk.u32(0);
+        stub_unk_before_acl(PURGEKEYS, &pk.b, KADM5_AUTH_MODIFY);
+        let mut sk = XdrW::default();
+        sk.u32(API_V2);
+        sk.nullstring(Some("nosuch@KERBER.TEST"));
+        sk.u32(0);
+        sk.u32(0);
+        sk.u32(1);
+        sk.u32(18);
+        sk.opaque(&[0xEFu8; 32]);
+        stub_unk_before_acl(SETKEY_PRINCIPAL3, &sk.b, KADM5_AUTH_SETKEY);
+        let mut ss = XdrW::default();
+        ss.u32(API_V2);
+        ss.nullstring(Some("nosuch@KERBER.TEST"));
+        ss.nullstring(Some("k"));
+        ss.nullstring(Some("v"));
+        stub_unk_before_acl(SET_STRING, &ss.b, KADM5_AUTH_MODIFY);
+    }
+
     fn extract_args(name: &str, kvno: u32) -> Vec<u8> {
         let mut w = XdrW::default();
         w.u32(API_V2);
@@ -3802,6 +4075,38 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ret_code(&out), KADM5_AUTH_CHANGEPW);
+    }
+
+    #[test]
+    fn chrand3_self_keepold_clamps_to_five() {
+        let (store, acl, actor) = setup();
+        let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["selfchrand"]);
+        {
+            let mut g = store.write().unwrap();
+            g.create_password(&acl, &actor, &name, b"keep-0").unwrap();
+        }
+        for i in 1..=6 {
+            let mut w = XdrW::default();
+            w.u32(API_V2);
+            w.nullstring(Some("selfchrand@KERBER.TEST"));
+            w.u32(1);
+            w.u32(0);
+            let out = dispatch_kadm5(
+                &store,
+                &acl,
+                "selfchrand@KERBER.TEST",
+                CHRAND_PRINCIPAL3,
+                &w.b,
+            )
+            .unwrap();
+            assert_eq!(ret_code(&out), 0, "chrand {i}");
+        }
+        let g = store.read().unwrap();
+        let p = g.get_name(&name).unwrap();
+        let mut kvnos: Vec<u32> = p.keys.iter().map(|k| k.kvno).collect();
+        kvnos.sort_unstable();
+        kvnos.dedup();
+        assert!(kvnos.len() <= 5, "self chrand keepold cap: {kvnos:?}");
     }
 
     #[test]
@@ -4641,7 +4946,7 @@ mod tests {
             (
                 EXTRACT_KEYS,
                 extract_args("no-such@KERBER.TEST", 0),
-                KADM5_AUTH_EXTRACT,
+                KADM5_UNK_PRINC,
             ),
             (
                 PURGEKEYS,
@@ -4651,7 +4956,7 @@ mod tests {
             (
                 PURGEKEYS,
                 purgekeys_args("no-such@KERBER.TEST", -1),
-                KADM5_AUTH_MODIFY,
+                KADM5_UNK_PRINC,
             ),
             (
                 SETKEY_PRINCIPAL,
@@ -4661,7 +4966,7 @@ mod tests {
             (
                 SETKEY_PRINCIPAL,
                 setkey16_args("no-such@KERBER.TEST", 18, &[0xABu8; 32]),
-                KADM5_AUTH_SETKEY,
+                KADM5_UNK_PRINC,
             ),
             (
                 CHPASS_PRINCIPAL,

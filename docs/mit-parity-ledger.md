@@ -35,9 +35,9 @@ Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after W1-I K5b RPC framing):
-**251** = A1 116 + A2 67 + A3 55 + A4 13.
-exact 68 · stricter-documented 11 · deviation 91 ·
+Counts (after W1-I iprop flavor + INIT verifier):
+**252** = A1 116 + A2 67 + A3 55 + A4 14.
+exact 68 · stricter-documented 11 · deviation 92 ·
 absent 66 · deferred 15.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
@@ -429,8 +429,9 @@ checksum/rc4/declared-cksumtype rows that sat under A3.
 | svc.c:328-367,486-520; rpc_callmsg.c:107-108; kadm_rpc_svc.c:80-88 | kadmind RPC: unknown program `PROG_UNAVAIL`; 2112 wrong vers `PROG_MISMATCH` low/high 2; AUTH_NONE `AUTH_TOOWEAK`; REPLY-typed no reply | accepted 1 / accepted 2+2+2 / denied AUTH_TOOWEAK 5 / idle | kadm5.rs handle_rpc | same | exact | `bad_program_is_prog_unavail`; `kadm_vers_99_is_prog_mismatch_2_2`; `reply_typed_rpc_is_no_reply`; `scripts/kadmin-gate.sh` framing both legs |
 | ap_req.rs:349; safe_priv.rs:120; gss `lib.rs:505,563` | acceptor / KRB-SAFE / GSS verify uses session checksum, ignores declared cksumtype | MIT `krb5_c_verify_checksum` matches `ctp` | ops.rs verify_checksum_type | declared type unused | deviation | W1-B/C; proposed: unit per site |
 | kadm5_code `AclDenied` | add/delete ACL denial | MIT `AUTH_ADD` / `AUTH_DELETE` | `kadm5.rs dispatch_kadm5_ticket` | `AclDenied` → `AUTH_GET` (create path now `AUTH_ADD`) | deviation | W1-C; `acl_target_pattern_scopes_add_and_delete` (create is AUTH_ADD) |
-| kadm_rpc_svc.c:80-88,324-331 | kadm5 acceptor: AUTH_GSSAPI or `check_rpcsec_auth` (2 comps, realm, `kadmin`, not `history`) else `svcerr_weakauth` | RPC AUTH_TOOWEAK | kadm5.rs check_rpcsec_auth; kadm5.rs kadm5_rpcsec_ok | kiprop/history/1-comp weakauth | exact | `check_rpcsec_auth_rejects_kiprop_history_and_one_component`; `scripts/kadmin-gate.sh` kiprop `--service` both legs |
-| ipropd_svc.c:481-516,542-548 | iprop flavor RPCSEC_GSS; 2 comps; `kiprop`; else `svcerr_weakauth` | RPC AUTH_TOOWEAK | kadm5.rs check_iprop_rpcsec_auth | AUTH_GSSAPI-on-iprop and kadmin-on-iprop weakauth | exact | `check_rpcsec_auth_rejects_kiprop_history_and_one_component` |
+| kadm_rpc_svc.c:80-88,324-331 | kadm5 acceptor: AUTH_GSSAPI or `check_rpcsec_auth` (2 comps, realm, `kadmin`, not `history`) else `svcerr_weakauth` | RPC AUTH_TOOWEAK | kadm5.rs check_rpcsec_auth; kadm5.rs kadm5_rpcsec_ok | kiprop/history/1-comp weakauth; realm at `accept_sec_context` | exact | `check_rpcsec_auth_rejects_kiprop_history_and_one_component`; `scripts/kadmin-gate.sh` kiprop `--service` both legs |
+| ipropd_svc.c:481-516,542-548 | iprop flavor RPCSEC_GSS; 2 comps; `kiprop`; else `svcerr_weakauth` | RPC AUTH_TOOWEAK | kadm5.rs handle_auth_gssapi; kadm5.rs check_iprop_rpcsec_auth | AUTH_GSSAPI-on-iprop DATA is AUTH_TOOWEAK | exact | `auth_gssapi_on_iprop_data_is_auth_too_weak`; `rpcsec_init_reply_mic_is_window` |
+| ovsec_kadmd.c:155-169 | KADM 2112 on `kadmind_port`; IPROP 100423 on `iprop_port` | PROG_UNAVAIL on 749 for 100423 | kadm5.rs handle_rpc | 100423 served on 749; AUTH_NONE is AUTH_TOOWEAK | deviation | `settle-iprop-flavor.log` MIT 749 AUTH_NONE 100423 `PROG_UNAVAIL`; Rust `auth_none` on 2112 |
 | ipropd_svc.c:312-320; iprop.x:208-211 | full-resync deny is `kdb_fullresync_result_t` `{lastentry, ret}` | UPDATE_PERM_DENIED | kadm5.rs dispatch_iprop; kadm5.rs encode_fullresync_status | same XDR | exact | `iprop_fullresync_deny_is_fullresync_result` |
-| parse.c:62-102; unparse.c:85-134; x-deltat.y:149-171; t_deltat.c:46-126; server_stubs.c:296-301 | parse/unparse quoting; `string_to_deltat`; `UNK_PRINC` before ACL | `KADM5_UNK_PRINC` | name.rs parse_name; deltat.rs parse; kadm5.rs dispatch_kadm5_ticket | `\/` `\@`; `12:34` loads; `3dd` refuses | exact | `parse_unparse_escapes`; `t_deltat_c_vectors`; `acl_star_admin_does_not_match_escaped_slash`; `getprinc_missing_unauthorised_is_unk_princ`; `scripts/kadmin-gate.sh` 12:34/3dd/`foo\/admin`/nosuch both legs |
+| parse.c:62-102; unparse.c:85-134; x-deltat.y:149-171; t_deltat.c:46-126; server_stubs.c:262-303 | parse/unparse quoting; `string_to_deltat`; `stub_setup` lookup → `UNK_PRINC` before ACL | `KADM5_UNK_PRINC` | name.rs parse_name; deltat.rs parse; kadm5.rs dispatch_kadm5_ticket | `\/` `\@`; missing target is UNK on GET/MODIFY/SETKEY/PURGE/EXTRACT/SET_STRING | exact | `stub_setup_unk_before_acl_on_modify_setkey_purge_extract_setstr`; `getprinc_foreign_realm_is_unk_princ`; `scripts/kadmin-gate.sh` 12:34/3dd/`foo\/admin`/nosuch both legs |
 | server_stubs.c:368-400,851-869; misc.c:60-121 | `check_self_keychange` / `check_min_life` / `clamp_self_keepold` 5; chpass lockdown→ACL→self | `KADM5_PASS_TOOSOON` | kadm5.rs kadm5_code; store.rs check_min_life | min_life self; admin ignores; keepold 5 | exact | `policy_min_max_life_round_trip_and_min_life`; `self_keepold_clamps_to_five`; `scripts/kadmin-gate.sh` getpol/cpw; `scripts/kpasswd-gate.sh` minlife |

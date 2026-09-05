@@ -1650,6 +1650,19 @@ impl PrincipalStore {
     ///
     /// [`Error::NotFound`] or RNG failure.
     pub fn chrand(&mut self, name: &PrincipalName) -> Result<Vec<KeyEntry>, Error> {
+        self.chrand_keepold_n(name, 0)
+    }
+
+    /// [`Self::chrand`] with MIT `keepold` (0 / 1 / N versions).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] or RNG failure.
+    pub fn chrand_keepold_n(
+        &mut self,
+        name: &PrincipalName,
+        keepold: u32,
+    ) -> Result<Vec<KeyEntry>, Error> {
         let id = crate::kdb::lookup_principal_id(name, &self.realm);
         let existing = self.map.get(&id).ok_or(Error::NotFound)?;
         let next_kvno = existing
@@ -1666,7 +1679,13 @@ impl PrincipalStore {
         }
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
-            p.keys.clone_from(&new_keys);
+            let old = std::mem::replace(&mut p.keys, new_keys.clone());
+            if keepold > 0 {
+                p.keys.extend(old);
+                if keepold > 1 {
+                    cap_key_versions(&mut p.keys, keepold);
+                }
+            }
             stamp_admin_tl(p, true);
         }
         self.apply_pw_max_life(name)?;
@@ -1703,8 +1722,8 @@ impl PrincipalStore {
 
     /// Replace keys with caller-supplied material (`kadm5_setkey_principal`).
     ///
-    /// `kvno == 0` on every entry picks the next version. `keepold` retains
-    /// prior kvnos in [`Principal::keys`].
+    /// `kvno == 0` on every entry picks the next version. `keepold` is MIT's
+    /// integer: 0 discard, 1 keep all, N keep N versions including the new.
     ///
     /// # Errors
     ///
@@ -1714,43 +1733,49 @@ impl PrincipalStore {
         &mut self,
         name: &PrincipalName,
         mut keys: Vec<KeyEntry>,
-        keepold: bool,
+        keepold: u32,
     ) -> Result<(), Error> {
         if keys.is_empty() {
             return Err(Error::Crypto("setkey empty".into()));
         }
         let id = crate::kdb::lookup_principal_id(name, &self.realm);
-        let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
-        let want = keys[0].kvno;
-        if keys.iter().any(|k| k.kvno != want) {
-            return Err(Error::Crypto("setkey kvno".into()));
-        }
-        let kvno = if want == 0 {
-            p.keys
-                .iter()
-                .chain(p.key_history.iter())
-                .map(|k| k.kvno)
-                .max()
-                .unwrap_or(0)
-                .saturating_add(1)
-        } else {
-            if keepold && p.keys.iter().any(|k| k.kvno == want) {
+        {
+            let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+            let want = keys[0].kvno;
+            if keys.iter().any(|k| k.kvno != want) {
                 return Err(Error::Crypto("setkey kvno".into()));
             }
-            want
-        };
-        for k in &mut keys {
-            k.kvno = kvno;
+            let kvno = if want == 0 {
+                p.keys
+                    .iter()
+                    .chain(p.key_history.iter())
+                    .map(|k| k.kvno)
+                    .max()
+                    .unwrap_or(0)
+                    .saturating_add(1)
+            } else {
+                if keepold > 0 && p.keys.iter().any(|k| k.kvno == want) {
+                    return Err(Error::Crypto("setkey kvno".into()));
+                }
+                want
+            };
+            for k in &mut keys {
+                k.kvno = kvno;
+            }
+            if keepold > 0 {
+                let old = std::mem::replace(&mut p.keys, keys);
+                p.keys.extend(old);
+                if keepold > 1 {
+                    cap_key_versions(&mut p.keys, keepold);
+                }
+            } else {
+                p.keys = keys;
+            }
+            stamp_admin_tl(p, true);
+            let snap = p.clone();
+            self.note_ulog(id, false, Some(snap));
         }
-        if keepold {
-            let old = std::mem::replace(&mut p.keys, keys);
-            p.keys.extend(old);
-        } else {
-            p.keys = keys;
-        }
-        stamp_admin_tl(p, true);
-        let snap = p.clone();
-        self.note_ulog(id, false, Some(snap));
+        self.apply_pw_max_life(name)?;
         self.save_if_configured()
     }
 
@@ -2346,7 +2371,7 @@ mod tests {
         store.debug_insert(p);
         let key = random_key(etype).unwrap();
         store
-            .set_keys(&user, vec![KeyEntry::new(etype, key, 0)], false)
+            .set_keys(&user, vec![KeyEntry::new(etype, key, 0)], 0)
             .unwrap();
         let after = store.get_name(&user).unwrap();
         assert_ne!(
