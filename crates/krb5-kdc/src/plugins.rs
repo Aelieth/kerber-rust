@@ -604,6 +604,7 @@ mod tests {
             pw_lockout_duration: 0,
             pw_min_life: 0,
             pw_max_life: 0,
+            allowed_keysalts: None,
         });
         store
             .set_principal_policy(&user, Some("lock".into()))

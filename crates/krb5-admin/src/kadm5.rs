@@ -2505,6 +2505,7 @@ fn parse_policy_arg(args: &[u8]) -> Result<(u32, krb5_kdc::NamedPolicy, u32), Er
             pw_lockout_duration,
             pw_min_life: min_life,
             pw_max_life: max_life,
+            allowed_keysalts: None,
         },
         mask,
     ))
@@ -6467,6 +6468,7 @@ mod tests {
             pw_lockout_duration: 0,
             pw_min_life: 0,
             pw_max_life: 0,
+            allowed_keysalts: None,
         };
         let bad = dispatch_kadm5(
             &store,
@@ -6629,6 +6631,7 @@ mod tests {
             pw_lockout_duration: 0,
             pw_min_life: 0,
             pw_max_life: 0,
+            allowed_keysalts: None,
         };
         let mask = KADM5_POLICY | KADM5_PW_MIN_LENGTH | KADM5_PW_MIN_CLASSES | KADM5_PW_MAX_FAILURE;
         let created = dispatch_kadm5(

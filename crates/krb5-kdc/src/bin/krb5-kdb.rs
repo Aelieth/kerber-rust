@@ -212,6 +212,7 @@ fn cmd_addpol(name: &str) {
         pw_lockout_duration: 0,
         pw_min_life: 0,
         pw_max_life: 0,
+        allowed_keysalts: None,
     });
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     if store.get_name(&user).is_some() {

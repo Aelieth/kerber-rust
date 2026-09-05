@@ -631,6 +631,7 @@ mod tests {
             pw_lockout_duration: 0,
             pw_min_life: 0,
             pw_max_life: 0,
+            allowed_keysalts: None,
         });
         dump.set_principal_policy(&user, Some("strict".into()))
             .unwrap();

@@ -429,9 +429,10 @@ pub fn write_dump(store: &PrincipalStore, mkey: &ProtocolKey) -> Result<String, 
         if let Some(pol) = store.policies().get(&n) {
             // MIT dump version 7 is r1.11: r1.8 nine counters, then
             // attributes/max_life/max_renewable/allowed_keysalts/n_tl_data.
+            let ks = pol.allowed_keysalts.as_deref().unwrap_or("-");
             let _ = writeln!(
                 out,
-                "policy\t{}\t{}\t{}\t{}\t{}\t{}\t0\t{}\t{}\t{}\t0\t0\t0\t-\t0",
+                "policy\t{}\t{}\t{}\t{}\t{}\t{}\t0\t{}\t{}\t{}\t0\t0\t0\t{ks}\t0",
                 pol.name,
                 pol.pw_min_life,
                 pol.pw_max_life,
@@ -477,19 +478,24 @@ pub fn write_dump_path_etype(
 }
 
 fn parse_policy_rest(rest: &str) -> NamedPolicy {
-    let mut it = rest.split('\t');
-    let name = it.next().unwrap_or("").to_owned();
-    let nums: Vec<u32> = it.filter_map(|s| s.parse().ok()).collect();
+    let parts: Vec<&str> = rest.split('\t').collect();
+    let num = |i: usize| parts.get(i).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let ks = parts.get(13).copied().unwrap_or("-");
     NamedPolicy {
-        name,
-        pw_min_life: nums.first().copied().unwrap_or(0),
-        pw_max_life: nums.get(1).copied().unwrap_or(0),
-        min_length: nums.get(2).copied().unwrap_or(0),
-        min_classes: nums.get(3).copied().unwrap_or(0),
-        history: nums.get(4).copied().unwrap_or(0),
-        max_fail: nums.get(6).copied().unwrap_or(0),
-        pw_failcnt_interval: nums.get(7).copied().unwrap_or(0),
-        pw_lockout_duration: nums.get(8).copied().unwrap_or(0),
+        name: parts.first().copied().unwrap_or("").to_owned(),
+        pw_min_life: num(1),
+        pw_max_life: num(2),
+        min_length: num(3),
+        min_classes: num(4),
+        history: num(5),
+        max_fail: num(7),
+        pw_failcnt_interval: num(8),
+        pw_lockout_duration: num(9),
+        allowed_keysalts: if ks.is_empty() || ks == "-" {
+            None
+        } else {
+            Some(ks.to_owned())
+        },
     }
 }
 
@@ -1105,6 +1111,7 @@ mod tests {
             pw_lockout_duration: 60,
             pw_min_life: 3600,
             pw_max_life: 86400,
+            allowed_keysalts: Some("aes256-cts:normal".into()),
         });
         let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
         store
@@ -1113,7 +1120,7 @@ mod tests {
         let text = dump_store(&store, b"masterpassword").unwrap();
         assert!(
             text.lines()
-                .any(|l| l.starts_with("policy\tstrict\t") && l.ends_with("\t-\t0")),
+                .any(|l| l.starts_with("policy\tstrict\t") && l.contains("\taes256-cts:normal\t")),
             "dump must emit MIT r1.11 policy records: {text}"
         );
         let again = load_dump(&text, b"masterpassword").unwrap();
@@ -1126,6 +1133,7 @@ mod tests {
         assert_eq!(pol.pw_lockout_duration, 60);
         assert_eq!(pol.pw_min_life, 3600);
         assert_eq!(pol.pw_max_life, 86400);
+        assert_eq!(pol.allowed_keysalts.as_deref(), Some("aes256-cts:normal"));
         assert_eq!(
             again.get_name(&user).unwrap().pw_policy.as_deref(),
             Some("strict")

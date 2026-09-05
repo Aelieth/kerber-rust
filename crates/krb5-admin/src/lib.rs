@@ -94,6 +94,8 @@ pub struct PolicyArgs {
     pub pw_failcnt_interval: Option<u32>,
     /// `-lockoutduration`.
     pub pw_lockout_duration: Option<u32>,
+    /// `-allowedkeysalts` (`kadmin.c:1669`).
+    pub allowed_keysalts: Option<String>,
 }
 
 /// MIT `str_conv.c:147-152`: `strtoul(s, NULL, 16) & 0xffffffff`.
@@ -246,6 +248,12 @@ pub fn parse_policy_args(parts: &[&str]) -> Result<PolicyArgs, String> {
             }
             "-lockoutduration" => {
                 out.pw_lockout_duration = Some(parse_pol_interval(val)?);
+            }
+            "-allowedkeysalts" => {
+                if val.contains('\t') || krb5_crypto::parse_keysalt_list(val).is_empty() {
+                    return Err(format!("-allowedkeysalts {val}"));
+                }
+                out.allowed_keysalts = Some(val.to_owned());
             }
             _ => return Err(format!("unknown flag {p}")),
         }
@@ -650,6 +658,7 @@ impl<'a> AdminSession<'a> {
         p.max_fail = a.max_fail.unwrap_or(0);
         p.pw_failcnt_interval = a.pw_failcnt_interval.unwrap_or(0);
         p.pw_lockout_duration = a.pw_lockout_duration.unwrap_or(0);
+        p.allowed_keysalts.clone_from(&a.allowed_keysalts);
         self.store.put_policy(p);
         Ok(())
     }
@@ -707,6 +716,9 @@ impl<'a> AdminSession<'a> {
         if let Some(v) = a.pw_lockout_duration {
             p.pw_lockout_duration = v;
         }
+        if a.allowed_keysalts.is_some() {
+            p.allowed_keysalts.clone_from(&a.allowed_keysalts);
+        }
         self.store.put_policy(p);
         Ok(())
     }
@@ -736,7 +748,7 @@ impl<'a> AdminSession<'a> {
     /// [`Error::NotFound`].
     pub fn get_policy(&self, name: &str) -> Result<String, Error> {
         let p = self.store.policies().get(name).ok_or(Error::NotFound)?;
-        Ok(format!(
+        let mut text = format!(
             "Policy: {}\nMaximum password life: {}\nMinimum password life: {}\nMinimum password length: {}\nMinimum number of password character classes: {}\nNumber of old keys kept: {}\nMaximum password failures before lockout: {}\nPassword failure count reset interval: {}\nPassword lockout duration: {}",
             p.name,
             strdur(i64::from(p.pw_max_life)),
@@ -747,7 +759,12 @@ impl<'a> AdminSession<'a> {
             p.max_fail,
             strdur(i64::from(p.pw_failcnt_interval)),
             strdur(i64::from(p.pw_lockout_duration)),
-        ))
+        );
+        if let Some(ks) = p.allowed_keysalts.as_deref() {
+            text.push_str("\nAllowed key/salt types: ");
+            text.push_str(ks);
+        }
+        Ok(text)
     }
 
     /// `setstr`.
@@ -1796,6 +1813,7 @@ mod tests {
             pw_lockout_duration: 0,
             pw_min_life: 0,
             pw_max_life: 0,
+            allowed_keysalts: None,
         });
         store
             .set_principal_policy(&user, Some("short8".into()))
@@ -2829,6 +2847,19 @@ mod tests {
         assert!(
             sess.add_policy_ent(&parse_policy_args(&["-history", "0", "z"]).unwrap())
                 .is_err()
+        );
+        assert!(
+            !text.contains("Allowed key/salt types:"),
+            "MIT omits the line when allowed_keysalts is NULL: {text}"
+        );
+        sess.add_policy_ent(
+            &parse_policy_args(&["-allowedkeysalts", "aes256-cts:normal", "ksalt"]).unwrap(),
+        )
+        .unwrap();
+        let ks = sess.get_policy("ksalt").unwrap();
+        assert!(
+            ks.contains("Allowed key/salt types: aes256-cts:normal"),
+            "{ks}"
         );
     }
 

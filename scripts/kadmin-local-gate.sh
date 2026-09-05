@@ -152,6 +152,20 @@ echo "$GETP" | grep -F 'Minimum number of password character classes: 2'
 echo "$GETP" | grep -F 'Number of old keys kept: 3'
 echo "$GETP" | grep -F 'Maximum password life: 1 day 00:00:00'
 echo "$GETP" | grep -F 'Minimum password life: 0 days 01:00:00'
+if echo "$GETF" | grep -q 'Allowed key/salt types:'; then
+    echo "getpol floors1 printed Allowed key/salt types (MIT omits NULL): $GETF" >&2
+    exit 1
+fi
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'addpol -allowedkeysalts aes256-cts:normal ksalt'
+GETK="$(docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'getpol ksalt')"
+echo "$GETK"
+echo "$GETK" | grep -F 'Allowed key/salt types: aes256-cts:normal'
 echo "==== kadmin.local modpol/listpols/delpol ===="
 docker exec \
     -e KRB5_KDC_DB=/tmp/principal \

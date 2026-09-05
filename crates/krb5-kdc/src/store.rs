@@ -277,6 +277,8 @@ pub struct NamedPolicy {
     pub pw_min_life: u32,
     /// MIT `pw_max_life` seconds; 0 = no password expiration.
     pub pw_max_life: u32,
+    /// MIT `osa_policy_ent.allowed_keysalts`; `None` is NULL (getpol omits the line).
+    pub allowed_keysalts: Option<String>,
 }
 
 impl NamedPolicy {
@@ -293,6 +295,7 @@ impl NamedPolicy {
             pw_lockout_duration: 0,
             pw_min_life: 0,
             pw_max_life: 0,
+            allowed_keysalts: None,
         }
     }
 }
@@ -2941,6 +2944,7 @@ mod tests {
             pw_lockout_duration: 0,
             pw_min_life: 0,
             pw_max_life: 0,
+            allowed_keysalts: None,
         });
         store
             .set_principal_policy(&user, Some("strict".into()))
@@ -3021,6 +3025,7 @@ mod tests {
             pw_lockout_duration: 0,
             pw_min_life: 0,
             pw_max_life: 0,
+            allowed_keysalts: None,
         });
         store
             .set_principal_policy(&user, Some("five".into()))
@@ -3049,6 +3054,7 @@ mod tests {
             pw_lockout_duration: 0,
             pw_min_life: 0,
             pw_max_life: 0,
+            allowed_keysalts: None,
         });
         store
             .set_principal_policy(&user, Some("h1".into()))
@@ -3073,6 +3079,7 @@ mod tests {
             pw_lockout_duration: 0,
             pw_min_life: 0,
             pw_max_life: 0,
+            allowed_keysalts: None,
         });
         store
             .set_principal_policy(&user, Some("h2".into()))
@@ -3176,6 +3183,7 @@ mod tests {
             pw_lockout_duration: 1,
             pw_min_life: 0,
             pw_max_life: 0,
+            allowed_keysalts: None,
         });
         store
             .set_principal_policy(&user, Some("dur".into()))
@@ -3237,6 +3245,7 @@ mod tests {
             pw_lockout_duration: 0,
             pw_min_life: 0,
             pw_max_life: 0,
+            allowed_keysalts: None,
         });
         store
             .set_principal_policy(&user, Some("intv".into()))

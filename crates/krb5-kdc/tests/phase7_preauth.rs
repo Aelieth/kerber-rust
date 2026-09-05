@@ -392,6 +392,7 @@ fn encrypted_challenge_wrong_key_locks_at_max_fail() {
         pw_lockout_duration: 0,
         pw_min_life: 0,
         pw_max_life: 0,
+        allowed_keysalts: None,
     });
     store
         .set_principal_policy(&user, Some("chalock".into()))

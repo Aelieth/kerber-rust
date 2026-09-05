@@ -37,6 +37,8 @@ this project uses semantic versioning once a crate is published.
   `REQUIRES_PWCHANGE` and `fail_auth_count`. Self keepold is exactly
   5; non-self keepold=1 is unbounded. Purgekeys on a locked-down
   target is allowed. kadmin.local `modpol`/`listpols`/`delpol`.
+  `getpol` prints `Allowed key/salt types:` only when
+  `allowed_keysalts` is set (`kadmin.c:1808-1809`).
 - **K12.** `red-at-sha.sh --inject` copies named HEAD files before
   `write-tree`. `unit_red_at` refuses a call with no files.
   `settle.sh` tees and refuses `grep` of an existing file. Parent
