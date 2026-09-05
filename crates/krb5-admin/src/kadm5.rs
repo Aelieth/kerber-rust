@@ -419,7 +419,7 @@ fn handle_auth_gssapi(
     if version != AUTH_GSSAPI_CREDS_VERS {
         return Err(Error::Inner("auth_gssapi creds version".into()));
     }
-    if iprop && !(auth_msg && (proc == AUTH_GSSAPI_INIT || proc == AUTH_GSSAPI_CONTINUE_INIT)) {
+    if iprop {
         return Ok(rpc_reply_weakauth(xid));
     }
     tracing::info!(
@@ -1072,6 +1072,41 @@ pub fn iprop_pull(
     })
 }
 
+/// RPCSEC_GSS `IPROP_FULL_RESYNC` against program 100423.
+///
+/// # Errors
+///
+/// GSS, RPC, XDR, or crypto failures.
+pub fn iprop_fullresync(
+    stream: &mut TcpStream,
+    ticket: Ticket,
+    session: &ProtocolKey,
+    crealm: &krb5_types::Realm,
+    cname: &PrincipalName,
+) -> Result<u32, Error> {
+    let (mut ctx, token) =
+        GssContext::init_sec_context(ticket, session, crealm, cname, true, None, None)
+            .map_err(|e| Error::Inner(e.to_string()))?;
+    let mut xid = 1u32;
+    let handle = rpcsec_init(stream, &mut ctx, session, &token, &mut xid)?;
+    let body = rpcsec_data(
+        stream,
+        &mut ctx,
+        &handle,
+        &mut xid,
+        1,
+        IPROP_PROG,
+        IPROP_VERS,
+        IPROP_FULL_RESYNC,
+        &[],
+    )?;
+    let mut r = XdrR::new(&body);
+    let _last = r.u32()?;
+    let _sec = r.u32()?;
+    let _usec = r.u32()?;
+    r.u32()
+}
+
 fn rpcsec_init(
     stream: &mut TcpStream,
     ctx: &mut GssContext,
@@ -1566,6 +1601,14 @@ fn store_realm(store: &SharedStore) -> String {
         .to_owned()
 }
 
+fn unk_foreign(prealm: &str, store_realm: &str, api: u32) -> Option<Vec<u8>> {
+    if !prealm.is_empty() && prealm != store_realm {
+        Some(generic_ret(api, KADM5_UNK_PRINC))
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 fn dispatch_kadm5(
     store: &SharedStore,
@@ -1647,7 +1690,10 @@ fn dispatch_kadm5_ticket(
             Ok(encode_gprincs(&ids))
         }
         DELETE_PRINCIPAL => {
-            let name = parse_one_princ(args)?;
+            let (name, prealm) = parse_one_princ(args)?;
+            if let Some(rep) = unk_foreign(&prealm, &realm, API_V2) {
+                return Ok(rep);
+            }
             if changepw {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_DELETE));
             }
@@ -1668,7 +1714,10 @@ fn dispatch_kadm5_ticket(
             }
         }
         MODIFY_PRINCIPAL => {
-            let (name, mask, fields) = parse_modify(args)?;
+            let (name, prealm, mask, fields) = parse_modify(args)?;
+            if let Some(rep) = unk_foreign(&prealm, &realm, API_V2) {
+                return Ok(rep);
+            }
             let mut g = match write_store(store, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
@@ -1724,7 +1773,10 @@ fn dispatch_kadm5_ticket(
             }
         }
         CREATE_PRINCIPAL | CREATE_PRINCIPAL3 => {
-            let (name, pass, policy) = parse_create(args, proc == CREATE_PRINCIPAL3)?;
+            let (name, prealm, pass, policy) = parse_create(args, proc == CREATE_PRINCIPAL3)?;
+            if let Some(rep) = unk_foreign(&prealm, &realm, API_V2) {
+                return Ok(rep);
+            }
             let tid = acl_id(&name, &realm);
             if changepw
                 || acl
@@ -1762,7 +1814,13 @@ fn dispatch_kadm5_ticket(
             }
         }
         RENAME_PRINCIPAL => {
-            let (old, new) = parse_rename(args)?;
+            let (old, old_realm, new, new_realm) = parse_rename(args)?;
+            if let Some(rep) = unk_foreign(&old_realm, &realm, API_V2) {
+                return Ok(rep);
+            }
+            if let Some(rep) = unk_foreign(&new_realm, &realm, API_V2) {
+                return Ok(rep);
+            }
             // MIT server_stubs.c:700-712: ACL (AUTH_INSUFFICIENT) then lockdown (AUTH_DELETE).
             // auth_acl.c:638-648: delete on src and add on dest without restrictions.
             if changepw
@@ -1788,7 +1846,10 @@ fn dispatch_kadm5_ticket(
             }
         }
         CHPASS_PRINCIPAL | CHPASS_PRINCIPAL3 => {
-            let (name, pass, keepold) = parse_chpass(args, proc == CHPASS_PRINCIPAL3)?;
+            let (name, prealm, pass, keepold) = parse_chpass(args, proc == CHPASS_PRINCIPAL3)?;
+            if let Some(rep) = unk_foreign(&prealm, &realm, API_V2) {
+                return Ok(rep);
+            }
             let mut g = match write_store(store, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
@@ -1909,7 +1970,10 @@ fn dispatch_kadm5_ticket(
             Ok(encode_pols(api, &names))
         }
         CHRAND_PRINCIPAL | CHRAND_PRINCIPAL3 => {
-            let (name, keepold) = parse_chrand(args, proc == CHRAND_PRINCIPAL3)?;
+            let (name, prealm, keepold) = parse_chrand(args, proc == CHRAND_PRINCIPAL3)?;
+            if let Some(rep) = unk_foreign(&prealm, &realm, API_V2) {
+                return Ok(rep);
+            }
             let mut g = match write_store(store, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
@@ -1948,7 +2012,10 @@ fn dispatch_kadm5_ticket(
             }
         }
         EXTRACT_KEYS => {
-            let (api, name, kvno) = parse_extract(args)?;
+            let (api, name, prealm, kvno) = parse_extract(args)?;
+            if let Some(rep) = unk_foreign(&prealm, &realm, api) {
+                return Ok(rep);
+            }
             let g = match write_store(store, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
@@ -1980,7 +2047,10 @@ fn dispatch_kadm5_ticket(
             Ok(encode_extract_keys(api, p, kvno))
         }
         PURGEKEYS => {
-            let (api, name, keepkvno) = parse_purgekeys(args)?;
+            let (api, name, prealm, keepkvno) = parse_purgekeys(args)?;
+            if let Some(rep) = unk_foreign(&prealm, &realm, api) {
+                return Ok(rep);
+            }
             let mut g = match write_store(store, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
@@ -2020,7 +2090,10 @@ fn dispatch_kadm5_ticket(
             }
         }
         SETKEY_PRINCIPAL | SETKEY_PRINCIPAL3 | SETKEY_PRINCIPAL4 => {
-            let (api, name, keys, keepold) = parse_setkey(args, proc)?;
+            let (api, name, prealm, keys, keepold) = parse_setkey(args, proc)?;
+            if let Some(rep) = unk_foreign(&prealm, &realm, api) {
+                return Ok(rep);
+            }
             let mut g = match write_store(store, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
@@ -2052,7 +2125,10 @@ fn dispatch_kadm5_ticket(
             }
         }
         GET_STRINGS => {
-            let (api, name) = parse_gstrings(args)?;
+            let (api, name, prealm) = parse_gstrings(args)?;
+            if let Some(rep) = unk_foreign(&prealm, &realm, api) {
+                return Ok(rep);
+            }
             let g = match write_store(store, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
@@ -2078,7 +2154,10 @@ fn dispatch_kadm5_ticket(
             }
         }
         SET_STRING => {
-            let (api, name, key, value) = parse_sstring(args)?;
+            let (api, name, prealm, key, value) = parse_sstring(args)?;
+            if let Some(rep) = unk_foreign(&prealm, &realm, api) {
+                return Ok(rep);
+            }
             let mut g = match write_store(store, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
@@ -2279,23 +2358,26 @@ fn encode_pols(api: u32, names: &[String]) -> Vec<u8> {
     w.b
 }
 
-fn parse_create(args: &[u8], v3: bool) -> Result<(PrincipalName, String, Option<String>), Error> {
+fn parse_create(
+    args: &[u8],
+    v3: bool,
+) -> Result<(PrincipalName, String, String, Option<String>), Error> {
     let mut r = XdrR::new(args);
     let _api = r.u32()?;
-    let princ = r.principal()?;
+    let (princ, prealm) = r.principal_realm()?;
     let policy = skip_principal_ent_rest(&mut r)?;
     let _mask = r.u32()?;
     if v3 {
         r.skip_array_i32_pairs()?;
     }
     let pass = r.nullstring()?.unwrap_or_default();
-    Ok((princ, pass, policy))
+    Ok((princ, prealm, pass, policy))
 }
 
-fn parse_chpass(args: &[u8], v3: bool) -> Result<(PrincipalName, String, bool), Error> {
+fn parse_chpass(args: &[u8], v3: bool) -> Result<(PrincipalName, String, String, bool), Error> {
     let mut r = XdrR::new(args);
     let _api = r.u32()?;
-    let princ = r.principal()?;
+    let (princ, prealm) = r.principal_realm()?;
     let keepold = if v3 {
         let k = r.u32()? != 0;
         r.skip_array_i32_pairs()?;
@@ -2304,7 +2386,7 @@ fn parse_chpass(args: &[u8], v3: bool) -> Result<(PrincipalName, String, bool), 
         false
     };
     let pass = r.nullstring()?.unwrap_or_default();
-    Ok((princ, pass, keepold))
+    Ok((princ, prealm, pass, keepold))
 }
 
 fn parse_get(args: &[u8]) -> Result<(PrincipalName, String, u32), Error> {
@@ -2321,35 +2403,35 @@ fn parse_gprincs(args: &[u8]) -> Result<Option<String>, Error> {
     r.nullstring()
 }
 
-fn parse_one_princ(args: &[u8]) -> Result<PrincipalName, Error> {
+fn parse_one_princ(args: &[u8]) -> Result<(PrincipalName, String), Error> {
     let mut r = XdrR::new(args);
     let _api = r.u32()?;
-    r.principal()
+    r.principal_realm()
 }
 
-fn parse_rename(args: &[u8]) -> Result<(PrincipalName, PrincipalName), Error> {
+fn parse_rename(args: &[u8]) -> Result<(PrincipalName, String, PrincipalName, String), Error> {
     let mut r = XdrR::new(args);
     let _api = r.u32()?;
-    let old = r.principal()?;
-    let new = r.principal()?;
-    Ok((old, new))
+    let (old, old_realm) = r.principal_realm()?;
+    let (new, new_realm) = r.principal_realm()?;
+    Ok((old, old_realm, new, new_realm))
 }
 
-fn parse_purgekeys(args: &[u8]) -> Result<(u32, PrincipalName, i32), Error> {
+fn parse_purgekeys(args: &[u8]) -> Result<(u32, PrincipalName, String, i32), Error> {
     let mut r = XdrR::new(args);
     let api = r.u32()?;
-    let princ = r.principal()?;
+    let (princ, prealm) = r.principal_realm()?;
     let keep = i32::from_be_bytes(r.u32().unwrap_or(u32::MAX).to_be_bytes());
-    Ok((api, princ, keep))
+    Ok((api, princ, prealm, keep))
 }
 
 fn parse_setkey(
     args: &[u8],
     proc: u32,
-) -> Result<(u32, PrincipalName, Vec<krb5_kdc::KeyEntry>, bool), Error> {
+) -> Result<(u32, PrincipalName, String, Vec<krb5_kdc::KeyEntry>, bool), Error> {
     let mut r = XdrR::new(args);
     let api = r.u32()?;
-    let princ = r.principal()?;
+    let (princ, prealm) = r.principal_realm()?;
     let keepold = if proc == SETKEY_PRINCIPAL {
         false
     } else {
@@ -2386,22 +2468,25 @@ fn parse_setkey(
         }
         keys.push(ke);
     }
-    Ok((api, princ, keys, keepold))
+    Ok((api, princ, prealm, keys, keepold))
 }
 
-fn parse_gstrings(args: &[u8]) -> Result<(u32, PrincipalName), Error> {
+fn parse_gstrings(args: &[u8]) -> Result<(u32, PrincipalName, String), Error> {
     let mut r = XdrR::new(args);
     let api = r.u32()?;
-    Ok((api, r.principal()?))
+    let (princ, prealm) = r.principal_realm()?;
+    Ok((api, princ, prealm))
 }
 
-fn parse_sstring(args: &[u8]) -> Result<(u32, PrincipalName, String, Option<String>), Error> {
+fn parse_sstring(
+    args: &[u8],
+) -> Result<(u32, PrincipalName, String, String, Option<String>), Error> {
     let mut r = XdrR::new(args);
     let api = r.u32()?;
-    let princ = r.principal()?;
+    let (princ, prealm) = r.principal_realm()?;
     let key = r.nullstring()?.unwrap_or_default();
     let value = r.nullstring()?;
-    Ok((api, princ, key, value))
+    Ok((api, princ, prealm, key, value))
 }
 
 fn encode_gstrings(api: u32, attrs: &[(String, String)]) -> Vec<u8> {
@@ -2418,18 +2503,18 @@ fn encode_gstrings(api: u32, attrs: &[(String, String)]) -> Vec<u8> {
     w.b
 }
 
-fn parse_extract(args: &[u8]) -> Result<(u32, PrincipalName, u32), Error> {
+fn parse_extract(args: &[u8]) -> Result<(u32, PrincipalName, String, u32), Error> {
     let mut r = XdrR::new(args);
     let api = r.u32()?;
-    let princ = r.principal()?;
+    let (princ, prealm) = r.principal_realm()?;
     let kvno = r.u32().unwrap_or(0);
-    Ok((api, princ, kvno))
+    Ok((api, princ, prealm, kvno))
 }
 
-fn parse_chrand(args: &[u8], v3: bool) -> Result<(PrincipalName, bool), Error> {
+fn parse_chrand(args: &[u8], v3: bool) -> Result<(PrincipalName, String, bool), Error> {
     let mut r = XdrR::new(args);
     let _api = r.u32()?;
-    let princ = r.principal()?;
+    let (princ, prealm) = r.principal_realm()?;
     let keepold = if v3 {
         let k = r.u32().unwrap_or(0) != 0;
         let _ = r.skip_array_i32_pairs();
@@ -2437,7 +2522,7 @@ fn parse_chrand(args: &[u8], v3: bool) -> Result<(PrincipalName, bool), Error> {
     } else {
         false
     };
-    Ok((princ, keepold))
+    Ok((princ, prealm, keepold))
 }
 
 struct ModFields {
@@ -2448,10 +2533,10 @@ struct ModFields {
     policy: Option<String>,
 }
 
-fn parse_modify(args: &[u8]) -> Result<(PrincipalName, u32, ModFields), Error> {
+fn parse_modify(args: &[u8]) -> Result<(PrincipalName, String, u32, ModFields), Error> {
     let mut r = XdrR::new(args);
     let _api = r.u32()?;
-    let princ = r.principal()?;
+    let (princ, prealm) = r.principal_realm()?;
     let expire = r.u32()?;
     let _last_pwd = r.u32()?;
     let pw_expire = r.u32()?;
@@ -2496,6 +2581,7 @@ fn parse_modify(args: &[u8]) -> Result<(PrincipalName, u32, ModFields), Error> {
     let mask = r.u32().unwrap_or(0);
     Ok((
         princ,
+        prealm,
         mask,
         ModFields {
             expire,
@@ -3011,6 +3097,50 @@ mod tests {
     }
 
     #[test]
+    fn auth_gssapi_on_iprop_init_is_auth_too_weak() {
+        let (store, acl, _) = setup();
+        let mut cred = XdrW::default();
+        cred.u32(AUTH_GSSAPI_CREDS_VERS);
+        cred.u32(1);
+        cred.opaque(&[]);
+        let mut args = XdrW::default();
+        args.u32(2);
+        args.opaque(&[]);
+        let mut w = XdrW::default();
+        w.u32(12);
+        w.u32(MSG_CALL);
+        w.u32(RPC_VERSION);
+        w.u32(IPROP_PROG);
+        w.u32(IPROP_VERS);
+        w.u32(AUTH_GSSAPI_INIT);
+        w.u32(FLAVOR_AUTH_GSSAPI);
+        w.opaque(&cred.b);
+        w.u32(FLAVOR_NONE);
+        w.opaque(&[]);
+        w.b.extend_from_slice(&args.b);
+        let mut gss = None;
+        let mut agss = None;
+        let out = handle_rpc(
+            &store,
+            &acl,
+            &[],
+            "KERBER.TEST",
+            &[],
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &w.b,
+        )
+        .unwrap();
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), 12);
+        assert_eq!(r.u32().unwrap(), MSG_REPLY);
+        assert_eq!(r.u32().unwrap(), MSG_DENIED);
+        assert_eq!(r.u32().unwrap(), REJECT_AUTH_ERROR);
+        assert_eq!(r.u32().unwrap(), AUTH_TOOWEAK);
+    }
+
+    #[test]
     fn rpc_reply_gss_verf_is_rpcsec_gss_mic() {
         let out = rpc_reply_gss_verf(3, b"mic-bytes", b"init-body");
         let mut r = XdrR::new(&out);
@@ -3388,9 +3518,11 @@ mod tests {
         w.u32(API_V2);
         w.nullstring(Some("old@KERBER.TEST"));
         w.nullstring(Some("new@KERBER.TEST"));
-        let (old, new) = parse_rename(&w.b).unwrap();
+        let (old, old_realm, new, new_realm) = parse_rename(&w.b).unwrap();
         assert_eq!(old.components_joined(), "old");
+        assert_eq!(old_realm, "KERBER.TEST");
         assert_eq!(new.components_joined(), "new");
+        assert_eq!(new_realm, "KERBER.TEST");
     }
 
     #[test]
@@ -3741,6 +3873,42 @@ mod tests {
         loc.u32(u32::MAX);
         let ok = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &loc.b).unwrap();
         assert_eq!(ret_code(&ok), 0);
+    }
+
+    #[test]
+    fn modify_foreign_realm_existing_user_is_unk_princ() {
+        let (store, acl, actor) = setup();
+        let before = {
+            let g = store.read().unwrap();
+            g.get_name(&PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]))
+                .unwrap()
+                .attributes
+        };
+        let out = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            MODIFY_PRINCIPAL,
+            &modify_rec("user@OTHER.REALM"),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&out), KADM5_UNK_PRINC);
+        let after = {
+            let g = store.read().unwrap();
+            g.get_name(&PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]))
+                .unwrap()
+                .attributes
+        };
+        assert_eq!(after, before);
+        let local = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            MODIFY_PRINCIPAL,
+            &modify_rec("user@KERBER.TEST"),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&local), 0);
     }
 
     fn stub_unk_before_acl(proc: u32, args: &[u8], not_auth: u32) {

@@ -18,7 +18,7 @@ use krb5_protocol::{Keytab, ReplayCache, verify_ap_req};
 use krb5_types::PrincipalName;
 use thiserror::Error;
 
-pub use kadm5::{IpropPull, iprop_pull, serve_kadm5_conn};
+pub use kadm5::{IpropPull, iprop_fullresync, iprop_pull, serve_kadm5_conn};
 pub use kprop::{
     IpropPoll, KpropAuth, iprop_poll_once, kprop_dump_bytes, kprop_dump_iprop, kprop_load_bytes,
     kprop_send_dump, kprop_send_store, kprop_send_store_iprop, kprop_sendauth, kpropd_handle_conn,

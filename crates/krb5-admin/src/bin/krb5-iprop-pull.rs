@@ -1,6 +1,6 @@
 //! IPROP_GET_UPDATES client (ONC RPC program 100423, RPCSEC_GSS).
 //!
-//! Usage: `krb5-iprop-pull [--last-sno N] [--last-time SEC USEC] [--load-dump PATH] [host:port]`
+//! Usage: `krb5-iprop-pull [--full-resync] [--last-sno N] [--last-time SEC USEC] [--load-dump PATH] [host:port]`
 //!
 //! `--load-dump` writes `KRB5_KDC_DB` / `KRB5_KDC_STASH` from a MIT dump
 //! (version 7 or `ipropx`). A host argument then pulls serial-delta.
@@ -11,7 +11,7 @@
 use std::net::TcpStream;
 use std::path::PathBuf;
 
-use krb5_admin::iprop_pull;
+use krb5_admin::{iprop_fullresync, iprop_pull};
 use krb5_kdc::{load_dump_path, load_store, save_store};
 use krb5_protocol::{Keytab, as_exchange_key, tgs_exchange};
 use krb5_types::PrincipalName;
@@ -30,6 +30,7 @@ fn main() {
     let mut last_usec: u32 = 0;
     let mut dump: Option<PathBuf> = None;
     let mut target: Option<String> = None;
+    let mut full_resync = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -52,6 +53,7 @@ fn main() {
                     std::process::exit(2);
                 });
             }
+            "--full-resync" => full_resync = true,
             "--load-dump" => {
                 dump = Some(PathBuf::from(
                     args.next().unwrap_or_else(|| need_arg("--load-dump")),
@@ -168,6 +170,21 @@ fn main() {
         eprintln!("krb5-iprop-pull: connect {target}: {e}");
         std::process::exit(1);
     });
+    if full_resync {
+        let status = iprop_fullresync(
+            &mut stream,
+            tgs.ticket,
+            &tgs.session_key,
+            &krb5_types::ascii(&realm),
+            &ent.name,
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("krb5-iprop-pull: full-resync: {e}");
+            std::process::exit(1);
+        });
+        println!("fullresync_status={status}");
+        std::process::exit(i32::from(status != krb5_kdc::IPROP_OK));
+    }
     let pulled = iprop_pull(
         &mut stream,
         tgs.ticket,
@@ -220,7 +237,7 @@ fn need_arg(flag: &str) -> String {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: krb5-iprop-pull [--last-sno N] [--last-time SEC USEC] [--load-dump PATH] [host:port]"
+        "usage: krb5-iprop-pull [--full-resync] [--last-sno N] [--last-time SEC USEC] [--load-dump PATH] [host:port]"
     );
     std::process::exit(2);
 }

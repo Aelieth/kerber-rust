@@ -119,6 +119,74 @@ print("framing=ok")
 '
 }
 
+kadmind_iprop_auth_gssapi() {
+    local ctn=$1
+    docker exec "$ctn" python3 -c '
+import socket, struct
+
+def xdr_u32(n):
+    return struct.pack(">I", n)
+
+def xdr_opaque(b):
+    pad = (4 - (len(b) % 4)) % 4
+    return xdr_u32(len(b)) + b + b"\x00" * pad
+
+def classify(words):
+    if len(words) >= 5 and words[1] == 1 and words[2] == 1:
+        st = words[4]
+        return {1: "AUTH_BADCRED", 5: "AUTH_TOOWEAK", 7: "AUTH_FAILED"}.get(st, "AUTH_%d" % st)
+    if len(words) >= 6 and words[1] == 1 and words[2] == 0:
+        st = words[5]
+        return {0: "SUCCESS", 1: "PROG_UNAVAIL", 2: "PROG_MISMATCH"}.get(st, "ACCEPT_%d" % st)
+    return "other"
+
+def exchange(body):
+    s = socket.create_connection(("127.0.0.1", 749), 2)
+    s.settimeout(2)
+    s.sendall(struct.pack(">I", 0x80000000 | len(body)) + body)
+    hdr = s.recv(4)
+    if len(hdr) != 4:
+        return []
+    n = struct.unpack(">I", hdr)[0] & 0x7FFFFFFF
+    data = b""
+    while len(data) < n:
+        chunk = s.recv(n - len(data))
+        if not chunk:
+            break
+        data += chunk
+    nw = len(data) // 4
+    return list(struct.unpack(">" + "I" * nw, data[: nw * 4])) if nw else []
+
+def emit(kind, words):
+    rpc = ",".join(str(x) for x in words[:8]) if words else "timeout_or_eof"
+    print("rpc=" + rpc)
+    print("kadmin_on_iprop kind=%s label=%s" % (kind, classify(words) if words else "eof"))
+
+# AUTH_GSSAPI INIT, IPROP_PROG 100423 (auth-layer INIT; MIT 749 may SUCCESS).
+xid = 0x41475353
+cred = xdr_u32(2) + xdr_u32(1) + xdr_opaque(b"")
+args = xdr_u32(2) + xdr_opaque(b"")
+body = struct.pack(">6I", xid, 0, 2, 100423, 1, 1)
+body += xdr_u32(300001) + xdr_opaque(cred)
+body += xdr_u32(0) + xdr_opaque(b"")
+body += args
+emit("init", exchange(body))
+
+# AUTH_GSSAPI DATA, IPROP_GET_UPDATES (flavor gate; no GSS context).
+xid = 0x41475354
+cred = xdr_u32(2) + xdr_u32(0) + xdr_opaque(b"")
+body = struct.pack(">6I", xid, 0, 2, 100423, 1, 1)
+body += xdr_u32(300001) + xdr_opaque(cred)
+body += xdr_u32(0) + xdr_opaque(b"")
+emit("data", exchange(body))
+
+# AUTH_NONE IPROP: MIT kadmind 749 is PROG_UNAVAIL; Rust serves 100423 as AUTH_TOOWEAK.
+xid = 0x11111111
+body = struct.pack(">10I", xid, 0, 2, 100423, 1, 0, 0, 0, 0, 0)
+emit("auth_none", exchange(body))
+'
+}
+
 if ! command -v docker >/dev/null 2>&1; then
     log "kadmin.gate" "error" ',"error":"docker not available"'
     exit 1
@@ -252,6 +320,12 @@ if echo "$KIPROP_LIST" | grep -q 'init_code=0'; then
     echo "kiprop service init succeeded: $KIPROP_LIST" >&2
     exit 1
 fi
+echo "==== AUTH_GSSAPI INIT IPROP_PROG on kadmind 749 (kadmin-on-iprop) ===="
+KADM_IPROP="$(kadmind_iprop_auth_gssapi "$NAME" 2>&1 || true)"
+echo "$KADM_IPROP"
+echo "$KADM_IPROP" | grep -F 'kadmin_on_iprop kind=init label=AUTH_TOOWEAK'
+echo "$KADM_IPROP" | grep -F 'kadmin_on_iprop kind=data label=AUTH_TOOWEAK'
+echo "$KADM_IPROP" | grep -F 'kadmin_on_iprop kind=auth_none label=AUTH_TOOWEAK'
 echo "==== MIT kadmin addprinc extra ===="
 ADD="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf -e KRB5_TRACE=/dev/stderr \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw extra-secret extra' 2>&1 || true)"
@@ -387,6 +461,31 @@ docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
 KLISTP="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" klist)"
 echo "$KLISTP"
 echo "$KLISTP" | grep -q 'purgee@KERBER.TEST'
+
+echo "==== kadmin/history service on kadm5 ===="
+HIST_GET="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc kadmin/history' 2>&1 || true)"
+echo "$HIST_GET"
+if echo "$HIST_GET" | grep -qiE 'does not exist|not found|UNK_PRINC'; then
+    docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+        "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q \
+        'addprinc -randkey kadmin/history' || true
+    HIST_GET="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+        "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc kadmin/history' 2>&1 || true)"
+    echo "$HIST_GET"
+fi
+HIST_LIST="$(kadm5_list_service "$NAME" admin@KERBER.TEST adminpassword kadmin/history /tmp/kadmin-krb5.conf 2>&1 || true)"
+echo "$HIST_LIST"
+echo "$HIST_LIST" | grep -E 'init_code=43787528|init_code=43787566'
+echo "$HIST_LIST" | grep -E 'Communication failure|GSS-API \(or Kerberos\) error'
+if echo "$HIST_LIST" | grep -q 'init_code=0'; then
+    echo "kadmin/history init succeeded: $HIST_LIST" >&2
+    exit 1
+fi
+if echo "$HIST_LIST" | grep -qiE 'DISALLOW_ALL_TIX|AUTH_TOOWEAK'; then
+    echo "kadmin/history was DISALLOW_ALL_TIX or AUTH_TOOWEAK: $HIST_LIST" >&2
+    exit 1
+fi
 
 echo "==== MIT kadmin listprincs ===="
 LIST="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
@@ -1010,6 +1109,39 @@ echo "$MIT_KIPROP_LIST" | grep -E 'init_code=43787560|init_code=43787528|init_co
 echo "$MIT_KIPROP_LIST" | grep -E 'Required KADM5 principal missing|Communication failure|GSS-API \(or Kerberos\) error'
 if echo "$MIT_KIPROP_LIST" | grep -q 'init_code=0'; then
     echo "MIT kiprop service init succeeded: $MIT_KIPROP_LIST" >&2
+    exit 1
+fi
+echo "==== MIT AUTH_GSSAPI INIT IPROP_PROG on kadmind 749 (kadmin-on-iprop) ===="
+MIT_KADM_IPROP="$(kadmind_iprop_auth_gssapi "$NAME_MIT" 2>&1 || true)"
+echo "$MIT_KADM_IPROP"
+echo "$MIT_KADM_IPROP" | grep -F 'kadmin_on_iprop kind=init label='
+echo "$MIT_KADM_IPROP" | grep -F 'kadmin_on_iprop kind=data label='
+echo "$MIT_KADM_IPROP" | grep -F 'kadmin_on_iprop kind=auth_none label=PROG_UNAVAIL'
+if echo "$MIT_KADM_IPROP" | grep -q 'kind=auth_none label=SUCCESS'; then
+    echo "MIT AUTH_NONE IPROP succeeded (IPROP served on 749): $MIT_KADM_IPROP" >&2
+    exit 1
+fi
+echo "==== MIT kadmin/history service on kadm5 ===="
+docker exec "$NAME_MIT" kadmin.local -q 'addpol -history 2 g3bhist' || true
+docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw hist-secret -policy g3bhist histee' || true
+docker exec "$NAME_MIT" kadmin.local -q 'cpw -pw hist-rotated histee' || true
+MIT_HIST_GET="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc kadmin/history' 2>&1 || true)"
+echo "$MIT_HIST_GET"
+if echo "$MIT_HIST_GET" | grep -qiE 'does not exist|not found|UNK_PRINC'; then
+    docker exec "$NAME_MIT" kadmin.local -q 'addprinc -randkey kadmin/history' || true
+    MIT_HIST_GET="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc kadmin/history' 2>&1 || true)"
+    echo "$MIT_HIST_GET"
+fi
+MIT_HIST_LIST="$(kadm5_list_service "$NAME_MIT" admin/admin adminpassword kadmin/history /etc/krb5.conf 2>&1 || true)"
+echo "$MIT_HIST_LIST"
+echo "$MIT_HIST_LIST" | grep -E 'init_code=43787528|init_code=43787566'
+echo "$MIT_HIST_LIST" | grep -E 'Communication failure|GSS-API \(or Kerberos\) error'
+if echo "$MIT_HIST_LIST" | grep -q 'init_code=0'; then
+    echo "MIT kadmin/history init succeeded: $MIT_HIST_LIST" >&2
+    exit 1
+fi
+if echo "$MIT_HIST_LIST" | grep -qiE 'DISALLOW_ALL_TIX|AUTH_TOOWEAK'; then
+    echo "MIT kadmin/history was DISALLOW_ALL_TIX or AUTH_TOOWEAK: $MIT_HIST_LIST" >&2
     exit 1
 fi
 MITTGT="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc krbtgt/KERBER.TEST')"

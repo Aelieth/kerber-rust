@@ -144,6 +144,26 @@ docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q \
     'ktadd -k /tmp/iprop.keytab kiprop/testhost.kerber.test host/testhost.kerber.test'
 
+echo "==== full-resync deny is kdb_fullresync_result_t (Rust) ===="
+docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q \
+    'ktadd -k /tmp/user-iprop.keytab user'
+DENY="$(docker exec \
+    -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_KPROP_KEYTAB=/tmp/user-iprop.keytab \
+    -e KRB5_KDC=127.0.0.1 \
+    -e KRB5_IPROP_HOST=testhost.kerber.test \
+    "$NAME" /tmp/krb5-iprop-pull --full-resync testhost.kerber.test:749 2>&1 || true)"
+echo "$DENY"
+echo "$DENY" | grep -F 'fullresync_status=5'
+if echo "$DENY" | grep -q 'fullresync_status=0'; then
+    echo "Rust full-resync deny granted: $DENY" >&2
+    exit 1
+fi
+
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec "$NAME" kdb5_util create -s -P masterpassword
 docker exec "$NAME" sh -c 'printf "host/testhost.kerber.test@KERBER.TEST\nkiprop/testhost.kerber.test@KERBER.TEST\n" >/tmp/kpropd.acl'
@@ -409,6 +429,25 @@ LOAD="$(docker exec \
     "$NAME" /tmp/krb5-iprop-pull --load-dump /tmp/mit.dump 2>&1 || true)"
 echo "$LOAD"
 echo "$LOAD" | grep -q 'iprop dump'
+
+echo "==== full-resync deny is kdb_fullresync_result_t (MIT) ===="
+docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf \
+    "$NAME" kadmin.local -q 'ktadd -k /tmp/user-iprop.keytab user'
+MIT_DENY="$(docker exec \
+    -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_DB=/tmp/rust-replica \
+    -e KRB5_KDC_STASH=/tmp/rust-replica.stash \
+    -e KRB5_KPROP_KEYTAB=/tmp/user-iprop.keytab \
+    -e KRB5_KDC=127.0.0.1 \
+    -e KRB5_IPROP_HOST=testhost.kerber.test \
+    "$NAME" /tmp/krb5-iprop-pull --full-resync testhost.kerber.test:2121 2>&1 || true)"
+echo "$MIT_DENY"
+echo "$MIT_DENY" | grep -F 'fullresync_status=5'
+if echo "$MIT_DENY" | grep -q 'fullresync_status=0'; then
+    echo "MIT full-resync deny granted: $MIT_DENY" >&2
+    exit 1
+fi
 
 echo "==== mutate MIT master: extra2 + setstr ===="
 docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf \

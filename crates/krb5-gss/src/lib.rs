@@ -399,7 +399,7 @@ impl GssContext {
         if want_mutual {
             gss_flags |= GSS_C_MUTUAL;
         }
-        let sess = subkey.unwrap_or(ticket_session);
+        let sess = subkey.unwrap_or_else(|| ticket_session.clone());
         let base = ok.authenticator.seq_number.unwrap_or(0);
         let out = Self {
             session: sess,
@@ -421,7 +421,8 @@ impl GssContext {
         };
         let mut ap_rep_tok = None;
         if want_mutual {
-            let ap_rep = build_ap_rep(&out.session, &ok.authenticator, None, Some(0))?;
+            // MIT `krb5_mk_rep` encrypts EncAPRepPart with the ticket session.
+            let ap_rep = build_ap_rep(&ticket_session, &ok.authenticator, None, Some(0))?;
             let der = encode(&ap_rep)?;
             ap_rep_tok = Some(gss_wrap_app(TOK_AP_REP, &der));
         }
@@ -447,7 +448,10 @@ impl GssContext {
         }
         let ap: ApRep = decode(&inner[2..])?;
         let usage = KeyUsage::new(ku::AP_REP_ENC_PART)?;
-        let plain = decrypt(ticket_session, usage, ap.enc_part.cipher.as_ref())?;
+        let cipher = ap.enc_part.cipher.as_ref();
+        // MIT `init_sec_context.c:785-794`: ticket session, then subkey.
+        let plain = decrypt(ticket_session, usage, cipher)
+            .or_else(|_| decrypt(&self.session, usage, cipher))?;
         let part: EncApRepPart = decode(&plain)?;
         if let Some(sk) = part.subkey {
             let et = EncryptionType::from_iana(sk.keytype)
@@ -2499,6 +2503,32 @@ mod tests {
         let wrapped =
             mit_shaped_wrap_flags(&sub, false, 0, b"subkey", FLAG_ACCEPTOR_SUBKEY).unwrap();
         assert_eq!(init.unwrap(&wrapped).unwrap(), b"subkey");
+    }
+
+    #[test]
+    fn mutual_ap_rep_decrypts_with_ticket_session() {
+        let (_as_out, tgs_out, skey, cname) = user_host();
+        let (mut init, token) = GssContext::init_sec_context(
+            tgs_out.rep.0.ticket.clone(),
+            &tgs_out.session_key,
+            &ascii(TEST_REALM),
+            &cname,
+            true,
+            None,
+            None,
+        )
+        .unwrap();
+        let (_acc, ap_rep) = GssContext::accept_sec_context(
+            &token,
+            std::slice::from_ref(&skey),
+            None,
+            Some(&documented_host()),
+            Some(TEST_REALM),
+            &ReplayCache::new(),
+        )
+        .unwrap();
+        let tok = ap_rep.expect("mutual AP-REP");
+        init.process_ap_rep(&tok, &tgs_out.session_key).unwrap();
     }
 
     #[test]
