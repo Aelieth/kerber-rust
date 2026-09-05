@@ -273,6 +273,10 @@ pub struct NamedPolicy {
     pub pw_failcnt_interval: u32,
     /// Seconds the lock lasts after `last_failed` (0 = until a successful AS).
     pub pw_lockout_duration: u32,
+    /// MIT `pw_min_life` seconds (`osa_policy_ent`).
+    pub pw_min_life: u32,
+    /// MIT `pw_max_life` seconds; 0 = no password expiration.
+    pub pw_max_life: u32,
 }
 
 impl NamedPolicy {
@@ -287,6 +291,8 @@ impl NamedPolicy {
             max_fail: 0,
             pw_failcnt_interval: 0,
             pw_lockout_duration: 0,
+            pw_min_life: 0,
+            pw_max_life: 0,
         }
     }
 }
@@ -1147,7 +1153,36 @@ impl PrincipalStore {
         self.set_password_keepold(name, password, false)
     }
 
-    /// Password change; `keepold` keeps prior key_data kvnos (MIT `cpw -keepold`).
+    /// MIT `check_min_life` (`misc.c:60-121`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] or [`Error::PassTooSoon`].
+    pub fn check_min_life(&self, name: &PrincipalName) -> Result<(), Error> {
+        let p = self.get_name(name).ok_or(Error::NotFound)?;
+        if p.attributes & KDB_REQUIRES_PWCHANGE != 0 {
+            return Ok(());
+        }
+        let Some(pol_name) = p.pw_policy.as_ref() else {
+            return Ok(());
+        };
+        let Some(pol) = self.policies.get(pol_name) else {
+            return Ok(());
+        };
+        if pol.pw_min_life == 0 {
+            return Ok(());
+        }
+        let last = last_pwd_unix(p);
+        let now = unix_now_u32();
+        if now.saturating_sub(last) < pol.pw_min_life {
+            return Err(Error::PassTooSoon {
+                until: last.saturating_add(pol.pw_min_life),
+            });
+        }
+        Ok(())
+    }
+
+    /// Password change; `keepold` is MIT's count (0 discard, 1 all, n cap).
     ///
     /// # Errors
     ///
@@ -1157,6 +1192,20 @@ impl PrincipalStore {
         name: &PrincipalName,
         password: &[u8],
         keepold: bool,
+    ) -> Result<(), Error> {
+        self.set_password_keepold_n(name, password, u32::from(keepold))
+    }
+
+    /// [`Self::set_password_keepold`] with MIT's integer keepold.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] when the principal is missing.
+    pub fn set_password_keepold_n(
+        &mut self,
+        name: &PrincipalName,
+        password: &[u8],
+        keepold: u32,
     ) -> Result<(), Error> {
         self.check_password_quality(name, password)?;
         let id = crate::kdb::lookup_principal_id(name, &self.realm);
@@ -1181,7 +1230,27 @@ impl PrincipalStore {
             .map_or(0, |pol| pol.history.saturating_sub(1));
         let new_keys =
             keys_from_password(&self.policy.password_etypes(), password, &salt, next_kvno)?;
-        self.replace_password_keys(&id, new_keys, depth, keepold)
+        self.replace_password_keys(&id, new_keys, depth, keepold)?;
+        self.apply_pw_max_life(name)
+    }
+
+    fn apply_pw_max_life(&mut self, name: &PrincipalName) -> Result<(), Error> {
+        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        let now = unix_now_u32();
+        let max_life = {
+            let p = self.map.get(&id).ok_or(Error::NotFound)?;
+            p.pw_policy
+                .as_ref()
+                .and_then(|n| self.policies.get(n))
+                .map_or(0, |pol| pol.pw_max_life)
+        };
+        let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+        p.pw_expire = if max_life == 0 {
+            0
+        } else {
+            now.saturating_add(max_life)
+        };
+        Ok(())
     }
 
     fn replace_password_keys(
@@ -1189,14 +1258,17 @@ impl PrincipalStore {
         id: &str,
         new_keys: Vec<KeyEntry>,
         depth: u32,
-        keepold: bool,
+        keepold: u32,
     ) -> Result<(), Error> {
         let p = self.map.get_mut(id).ok_or(Error::NotFound)?;
         let old = std::mem::replace(&mut p.keys, new_keys);
         p.key_history.extend(old.iter().cloned());
         p.key_history = prune_key_history(std::mem::take(&mut p.key_history), depth);
-        if keepold {
+        if keepold > 0 {
             p.keys.extend(old);
+            if keepold > 1 {
+                cap_key_versions(&mut p.keys, keepold);
+            }
         }
         stamp_admin_tl(p, true);
         let snap = p.clone();
@@ -1592,11 +1664,14 @@ impl PrincipalStore {
         for etype in etypes {
             new_keys.push(KeyEntry::new(etype, random_key(etype)?, next_kvno));
         }
-        let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
-        p.keys.clone_from(&new_keys);
-        stamp_admin_tl(p, true);
-        let snap = p.clone();
-        self.note_ulog(id, false, Some(snap));
+        {
+            let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+            p.keys.clone_from(&new_keys);
+            stamp_admin_tl(p, true);
+        }
+        self.apply_pw_max_life(name)?;
+        let snap = self.map.get(&id).cloned();
+        self.note_ulog(id, false, snap);
         #[cfg(test)]
         if FAIL_NEXT_CHRAND_SAVE.with(Cell::get) {
             FAIL_NEXT_CHRAND_SAVE.with(|c| c.set(false));
@@ -1696,29 +1771,36 @@ impl PrincipalStore {
         clear_policy: bool,
     ) -> Result<(), Error> {
         let id = crate::kdb::lookup_principal_id(name, &self.realm);
-        let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
-        if let Some(a) = attributes {
-            p.attributes = a;
-            p.requires_preauth = a & KDB_REQUIRES_PRE_AUTH != 0;
-            p.locked = a & KDB_DISALLOW_ALL_TIX != 0;
+        let apply_max = policy.is_some() && !clear_policy && pw_expire.is_none();
+        {
+            let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+            if let Some(a) = attributes {
+                p.attributes = a;
+                p.requires_preauth = a & KDB_REQUIRES_PRE_AUTH != 0;
+                p.locked = a & KDB_DISALLOW_ALL_TIX != 0;
+            }
+            if let Some(m) = max_life {
+                p.max_life = m;
+            }
+            if let Some(e) = expiration {
+                p.expiration = e;
+            }
+            if let Some(e) = pw_expire {
+                p.pw_expire = e;
+            }
+            if clear_policy {
+                p.pw_policy = None;
+                p.pw_expire = 0;
+            } else if let Some(pol) = policy {
+                p.pw_policy = Some(pol);
+            }
+            stamp_admin_tl(p, false);
         }
-        if let Some(m) = max_life {
-            p.max_life = m;
+        if apply_max {
+            self.apply_pw_max_life(name)?;
         }
-        if let Some(e) = expiration {
-            p.expiration = e;
-        }
-        if let Some(e) = pw_expire {
-            p.pw_expire = e;
-        }
-        if clear_policy {
-            p.pw_policy = None;
-        } else if let Some(pol) = policy {
-            p.pw_policy = Some(pol);
-        }
-        stamp_admin_tl(p, false);
-        let snap = p.clone();
-        self.note_ulog(id, false, Some(snap));
+        let snap = self.map.get(&id).cloned();
+        self.note_ulog(id, false, snap);
         self.save_if_configured()
     }
 
@@ -1746,6 +1828,18 @@ impl PrincipalStore {
     /// Iterate principals (persistence).
     pub(crate) fn debug_principals(&self) -> impl Iterator<Item = &Principal> {
         self.map.values()
+    }
+
+    /// Set `TL_LAST_PWD_CHANGE` (tests / min_life).
+    pub fn set_last_pwd_unix(&mut self, name: &PrincipalName, ts: u32) {
+        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        if let Some(p) = self.map.get_mut(&id) {
+            p.tl_data.retain(|t| t.ty != TL_LAST_PWD_CHANGE);
+            p.tl_data.push(TlData {
+                ty: TL_LAST_PWD_CHANGE,
+                contents: ts.to_le_bytes().to_vec(),
+            });
+        }
     }
 
     /// Insert a fully-formed principal (persistence / dump load; no ulog).
@@ -1797,10 +1891,13 @@ impl PrincipalStore {
         policy: Option<String>,
     ) -> Result<(), Error> {
         let id = crate::kdb::lookup_principal_id(name, &self.realm);
-        let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
-        p.pw_policy = policy;
-        let snap = p.clone();
-        self.note_ulog(id, false, Some(snap));
+        {
+            let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+            p.pw_policy = policy;
+        }
+        self.apply_pw_max_life(name)?;
+        let snap = self.map.get(&id).cloned();
+        self.note_ulog(id, false, snap);
         self.save_if_configured()
     }
 
@@ -2029,6 +2126,24 @@ impl PrincipalStore {
             self.next_rid = rid.saturating_add(1);
         }
     }
+}
+
+fn last_pwd_unix(p: &Principal) -> u32 {
+    p.tl_data
+        .iter()
+        .find(|t| t.ty == TL_LAST_PWD_CHANGE)
+        .and_then(|t| t.contents.get(..4))
+        .and_then(|b| b.try_into().ok())
+        .map_or(0, u32::from_le_bytes)
+}
+
+fn cap_key_versions(keys: &mut Vec<KeyEntry>, n: u32) {
+    let mut kvnos: Vec<u32> = keys.iter().map(|k| k.kvno).collect();
+    kvnos.sort_unstable();
+    kvnos.dedup();
+    kvnos.reverse();
+    let keep: std::collections::HashSet<u32> = kvnos.into_iter().take(n as usize).collect();
+    keys.retain(|k| keep.contains(&k.kvno));
 }
 
 pub(crate) fn prune_key_history(keys: Vec<KeyEntry>, depth: u32) -> Vec<KeyEntry> {
@@ -2492,6 +2607,8 @@ mod tests {
             max_fail: 3,
             pw_failcnt_interval: 0,
             pw_lockout_duration: 0,
+            pw_min_life: 0,
+            pw_max_life: 0,
         });
         store
             .set_principal_policy(&user, Some("strict".into()))
@@ -2570,6 +2687,8 @@ mod tests {
             max_fail: 0,
             pw_failcnt_interval: 0,
             pw_lockout_duration: 0,
+            pw_min_life: 0,
+            pw_max_life: 0,
         });
         store
             .set_principal_policy(&user, Some("five".into()))
@@ -2596,6 +2715,8 @@ mod tests {
             max_fail: 0,
             pw_failcnt_interval: 0,
             pw_lockout_duration: 0,
+            pw_min_life: 0,
+            pw_max_life: 0,
         });
         store
             .set_principal_policy(&user, Some("h1".into()))
@@ -2618,6 +2739,8 @@ mod tests {
             max_fail: 0,
             pw_failcnt_interval: 0,
             pw_lockout_duration: 0,
+            pw_min_life: 0,
+            pw_max_life: 0,
         });
         store
             .set_principal_policy(&user, Some("h2".into()))
@@ -2719,6 +2842,8 @@ mod tests {
             max_fail: 1,
             pw_failcnt_interval: 0,
             pw_lockout_duration: 1,
+            pw_min_life: 0,
+            pw_max_life: 0,
         });
         store
             .set_principal_policy(&user, Some("dur".into()))
@@ -2778,6 +2903,8 @@ mod tests {
             max_fail: 1,
             pw_failcnt_interval: 1,
             pw_lockout_duration: 0,
+            pw_min_life: 0,
+            pw_max_life: 0,
         });
         store
             .set_principal_policy(&user, Some("intv".into()))

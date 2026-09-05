@@ -602,6 +602,8 @@ mod tests {
             max_fail: 1,
             pw_failcnt_interval: 0,
             pw_lockout_duration: 0,
+            pw_min_life: 0,
+            pw_max_life: 0,
         });
         store
             .set_principal_policy(&user, Some("lock".into()))

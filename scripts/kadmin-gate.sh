@@ -739,6 +739,59 @@ if echo "$NOSUCH" | grep -qiE "requires \`\`get'' privilege"; then
     exit 1
 fi
 
+echo "==== policy min/max life getpol ===="
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addpol -minlife 1h -maxlife 1d life'
+GETPOL="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getpol life' 2>&1 || true)"
+echo "$GETPOL"
+echo "$GETPOL" | grep -F 'Minimum password life: 0 days 01:00:00'
+echo "$GETPOL" | grep -F 'Maximum password life: 1 day 00:00:00'
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'modprinc -policy life user'
+GETU="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc user' 2>&1 || true)"
+echo "$GETU"
+echo "$GETU" | grep -F 'Password expiration date:'
+echo "$GETU" | grep -F 'Password expiration date:' | grep -qv '\[never\]'
+echo "==== self cpw min_life is PASS_TOOSOON ===="
+CPW1="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p user -w userpassword -q 'cpw -pw user-new1 user' 2>&1 || true)"
+echo "$CPW1"
+echo "$CPW1" | grep -F "Current password's minimum life has not expired"
+CPW2="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p user -w userpassword -q 'cpw -pw user-new2 user' 2>&1 || true)"
+echo "$CPW2"
+echo "$CPW2" | grep -F "Current password's minimum life has not expired"
+echo "==== admin cpw ignores min_life ===="
+CPWA="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'cpw -pw userpassword user' 2>&1 || true)"
+echo "$CPWA"
+if echo "$CPWA" | grep -qiE 'minimum life|too soon|too recently'; then
+    echo "admin cpw hit min_life: $CPWA" >&2
+    exit 1
+fi
+echo "==== self keepold clamps to 5 ===="
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw keep-0 keepoldself'
+pw=keep-0
+for i in 1 2 3 4 5 6; do
+    nxt="keep-$i"
+    KEEP="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+        "$NAME" kadmin -p keepoldself -w "$pw" -q "cpw -keepold -pw $nxt keepoldself" 2>&1 || true)"
+    echo "$KEEP"
+    pw=$nxt
+done
+KEEPG="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc keepoldself' 2>&1 || true)"
+echo "$KEEPG"
+nkeys="$(echo "$KEEPG" | sed -n 's/^Key: vno \([0-9][0-9]*\).*/\1/p' | sort -u | wc -l | tr -d ' ')"
+echo "keepold_kvnos=$nkeys"
+if [ "$nkeys" -gt 5 ]; then
+    echo "self keepold exceeded 5: $KEEPG" >&2
+    exit 1
+fi
+
 echo "==== addprinc foo\\/admin then ACL */admin denies ===="
 ADDESC="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw slashsecret foo\/admin' 2>&1 || true)"
@@ -1112,6 +1165,49 @@ echo "$MIT_NOSUCH"
 echo "$MIT_NOSUCH" | grep -F 'Principal does not exist'
 if echo "$MIT_NOSUCH" | grep -qiE "requires \`\`get'' privilege"; then
     echo "MIT unauthorised getprinc nosuch was AUTH_GET: $MIT_NOSUCH" >&2
+    exit 1
+fi
+
+echo "==== MIT policy min/max life getpol ===="
+docker exec "$NAME_MIT" kadmin.local -q 'addpol -minlife 1h -maxlife 1d life'
+MIT_GETPOL="$(docker exec "$NAME_MIT" kadmin.local -q 'getpol life' 2>&1 || true)"
+echo "$MIT_GETPOL"
+echo "$MIT_GETPOL" | grep -F 'Minimum password life: 0 days 01:00:00'
+echo "$MIT_GETPOL" | grep -F 'Maximum password life: 1 day 00:00:00'
+docker exec "$NAME_MIT" kadmin.local -q 'modprinc -policy life user'
+MIT_GETU="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc user' 2>&1 || true)"
+echo "$MIT_GETU"
+echo "$MIT_GETU" | grep -F 'Password expiration date:'
+echo "$MIT_GETU" | grep -F 'Password expiration date:' | grep -qv '\[never\]'
+echo "==== MIT self cpw min_life is PASS_TOOSOON ===="
+MIT_CPW1="$(docker exec "$NAME_MIT" kadmin -p user -w userpassword -q 'cpw -pw user-new1 user' 2>&1 || true)"
+echo "$MIT_CPW1"
+echo "$MIT_CPW1" | grep -F "Current password's minimum life has not expired"
+MIT_CPW2="$(docker exec "$NAME_MIT" kadmin -p user -w userpassword -q 'cpw -pw user-new2 user' 2>&1 || true)"
+echo "$MIT_CPW2"
+echo "$MIT_CPW2" | grep -F "Current password's minimum life has not expired"
+echo "==== MIT admin cpw ignores min_life ===="
+MIT_CPWA="$(docker exec "$NAME_MIT" kadmin.local -q 'cpw -pw userpassword user' 2>&1 || true)"
+echo "$MIT_CPWA"
+if echo "$MIT_CPWA" | grep -qiE 'minimum life|too soon|too recently'; then
+    echo "MIT admin cpw hit min_life: $MIT_CPWA" >&2
+    exit 1
+fi
+echo "==== MIT self keepold clamps to 5 ===="
+docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw keep-0 keepoldself'
+pw=keep-0
+for i in 1 2 3 4 5 6; do
+    nxt="keep-$i"
+    KEEP="$(docker exec "$NAME_MIT" kadmin -p keepoldself -w "$pw" -q "cpw -keepold -pw $nxt keepoldself" 2>&1 || true)"
+    echo "$KEEP"
+    pw=$nxt
+done
+MIT_KEEPG="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc keepoldself' 2>&1 || true)"
+echo "$MIT_KEEPG"
+nkeys="$(echo "$MIT_KEEPG" | sed -n 's/^Key: vno \([0-9][0-9]*\).*/\1/p' | sort -u | wc -l | tr -d ' ')"
+echo "mit_keepold_kvnos=$nkeys"
+if [ "$nkeys" -gt 5 ]; then
+    echo "MIT self keepold exceeded 5: $MIT_KEEPG" >&2
     exit 1
 fi
 

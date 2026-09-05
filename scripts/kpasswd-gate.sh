@@ -410,6 +410,22 @@ echo "$D2O" | grep -F 'result_code=5'
 echo "$D2O" | grep -F 'Unauthorized request'
 kadmin_q 'modprinc -allow_tgs_req kadmin/changepw'
 
+echo "==== kpasswd min_life is SOFTERROR ===="
+kadmin_q 'addpol -minlife 1h minlife'
+kadmin_q 'modprinc -policy minlife user'
+set +e
+KPMIN="$(docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf "$NAME" \
+    sh -c 'printf "rust-kpw\nrust-kpw2\nrust-kpw2\n" | kpasswd user@KERBER.TEST' 2>&1)"
+kpmin_rc=$?
+set -e
+echo "$KPMIN"
+echo "kpasswd_minlife_rc=$kpmin_rc"
+echo "$KPMIN" | grep -F 'Password cannot be changed because it was changed too recently'
+if [ "$kpmin_rc" -eq 0 ]; then
+    echo "kpasswd min_life succeeded" >&2
+    exit 1
+fi
+
 echo "==== Rust kadmind policy rejection is SOFTERROR ===="
 kadmin_q 'addpol -minlength 8 short8'
 kadmin_q 'modprinc -policy short8 user'
@@ -599,6 +615,21 @@ echo "helper_rc=$d2mo_rc"
 echo "$D2MO" | grep -F 'result_code=5'
 echo "$D2MO" | grep -F 'Unauthorized request'
 docker exec "$NAME_MIT" kadmin.local -q 'modprinc -allow_tgs_req kadmin/changepw'
+
+echo "==== MIT kpasswd min_life is SOFTERROR ===="
+docker exec "$NAME_MIT" kadmin.local -q 'addpol -minlife 1h minlife'
+docker exec "$NAME_MIT" kadmin.local -q 'modprinc -policy minlife user'
+set +e
+MIT_KPMIN="$(docker exec "$NAME_MIT" sh -c 'printf "userpassword\nuser-new\nuser-new\n" | kpasswd user@KERBER.TEST' 2>&1)"
+mit_kpmin_rc=$?
+set -e
+echo "$MIT_KPMIN"
+echo "mit_kpasswd_minlife_rc=$mit_kpmin_rc"
+echo "$MIT_KPMIN" | grep -F 'Password cannot be changed because it was changed too recently'
+if [ "$mit_kpmin_rc" -eq 0 ]; then
+    echo "MIT kpasswd min_life succeeded" >&2
+    exit 1
+fi
 
 docker exec "$NAME_MIT" kadmin.local -q 'addpol -minlength 8 short8'
 docker exec "$NAME_MIT" kadmin.local -q 'modprinc -policy short8 user'

@@ -32,6 +32,11 @@ pub enum Error {
     Rng,
     /// Password rejected by named policy.
     PasswordPolicy(String),
+    /// `KADM5_PASS_TOOSOON`: min_life not elapsed. `until` is unix seconds.
+    PassTooSoon {
+        /// `last_pwd_change + pw_min_life`.
+        until: u32,
+    },
     /// Request PDU was not AS-REQ or TGS-REQ.
     UnexpectedPdu,
     /// Client must retry with PA-ENC-TIMESTAMP; `e_data` is METHOD-DATA.
@@ -56,6 +61,9 @@ impl fmt::Display for Error {
             Self::NotFound => write!(f, "principal not found"),
             Self::Rng => write!(f, "rng failed"),
             Self::PasswordPolicy(s) => write!(f, "password policy: {s}"),
+            Self::PassTooSoon { .. } => {
+                write!(f, "Current password's minimum life has not expired")
+            }
             Self::UnexpectedPdu => write!(f, "unexpected PDU"),
             Self::PreauthRequired { .. } => write!(f, "preauth required"),
         }

@@ -175,7 +175,13 @@ exclude extract (`e`). `listprincs`/`listpols` require `l`
 `KADM5_AUTH_ADD`, delpol `KADM5_AUTH_DELETE`. Self cpw/chrand/purgekeys/
 getprinc/getstrs (and own-policy getpol) follow `auth_self.c:38-75`.
 Self key change without an INITIAL ticket is `KADM5_AUTH_INITIAL`
-(`server_stubs.c:368-381`). `get_privs` returns `~0`
+(`server_stubs.c:368-381`). Policy `pw_min_life` / `pw_max_life` round-trip
+on `getpol`. Self chpass/chrand/kpasswd run `check_min_life`
+(`misc.c:60-121`): `KADM5_PASS_TOOSOON` / kpasswd result 4 unless
+`REQUIRES_PWCHANGE`; a non-self admin ignores min_life. `pw_max_life`
+sets `pw_expiration`. Self `-keepold` clamps to `MAX_SELF_KEEPOLD` 5
+(`server_stubs.c:391-399`). Chpass order is lockdown → ACL → self
+keychange (`:851-869`). `get_privs` returns `~0`
 (`server_misc.c:146-158`). `kadmin.local` applies no ACL (`KRB5_ACL_FILE`
 is kadmind-only). A `kadmin/changepw` GSS acceptor is
 `CHANGEPW_SERVICE` (`server_stubs.c:28-32`): every stub denies with

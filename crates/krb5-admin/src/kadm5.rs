@@ -94,6 +94,8 @@ const KADM5_PASS_Q_TOOSHORT: u32 = 43_787_542;
 const KADM5_PASS_Q_CLASS: u32 = 43_787_543;
 /// MIT `ovk` 25.
 const KADM5_PASS_REUSE: u32 = 43_787_545;
+/// MIT `ovk` 26 (`KADM5_PASS_TOOSOON`).
+const KADM5_PASS_TOOSOON: u32 = 43_787_546;
 /// MIT `ovk` 2 (`KADM5_AUTH_ADD`).
 const KADM5_AUTH_ADD: u32 = 43_787_522;
 /// MIT `ovk` 3 (`KADM5_AUTH_MODIFY`).
@@ -122,6 +124,10 @@ const KADM5_ATTRIBUTES: u32 = 0x0000_0010;
 const KADM5_MAX_LIFE: u32 = 0x0000_0020;
 const KADM5_PRINC_EXPIRE_TIME: u32 = 0x0000_0002;
 const KADM5_PW_EXPIRATION: u32 = 0x0000_0004;
+/// MIT `KADM5_PW_MAX_LIFE`.
+const KADM5_PW_MAX_LIFE: u32 = 0x0000_4000;
+/// MIT `KADM5_PW_MIN_LIFE`.
+const KADM5_PW_MIN_LIFE: u32 = 0x0000_8000;
 const KADM5_POLICY: u32 = 0x0000_0800;
 const KADM5_POLICY_CLR: u32 = 0x0000_1000;
 const KADM5_PW_MIN_LENGTH: u32 = 0x0001_0000;
@@ -1447,6 +1453,18 @@ fn parse_actor(actor: &str) -> Option<(PrincipalName, String)> {
     krb5_types::principal_from_unparsed(actor, "").ok()
 }
 
+const MAX_SELF_KEEPOLD: u32 = 5;
+
+fn clamp_self_keepold(self_change: bool, keepold: bool) -> u32 {
+    if !keepold {
+        0
+    } else if self_change {
+        MAX_SELF_KEEPOLD
+    } else {
+        1
+    }
+}
+
 fn is_self(actor: &str, name: &PrincipalName, realm: &str) -> bool {
     let Some((actor_name, arealm)) = parse_actor(actor) else {
         return false;
@@ -1726,10 +1744,14 @@ fn dispatch_kadm5_ticket(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            let self_change = is_self(actor, &name, g.realm());
-            if self_change && !initial {
-                return Ok(generic_ret(API_V2, KADM5_AUTH_INITIAL));
+            let lockdown = match g.get_name(&name) {
+                None => return Ok(generic_ret(API_V2, KADM5_UNK_PRINC)),
+                Some(p) => p.attributes & KDB_LOCKDOWN_KEYS != 0,
+            };
+            if lockdown {
+                return Ok(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
             }
+            let self_change = is_self(actor, &name, g.realm());
             if !self_change
                 && (changepw
                     || acl
@@ -1742,14 +1764,14 @@ fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
             }
-            let lockdown = match g.get_name(&name) {
-                None => return Ok(generic_ret(API_V2, KADM5_UNK_PRINC)),
-                Some(p) => p.attributes & KDB_LOCKDOWN_KEYS != 0,
-            };
-            if lockdown {
-                return Ok(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
+            if self_change && !initial {
+                return Ok(generic_ret(API_V2, KADM5_AUTH_INITIAL));
             }
-            match g.set_password_keepold(&name, pass.as_bytes(), keepold) {
+            if self_change && let Err(e) = g.check_min_life(&name) {
+                return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
+            }
+            let n = clamp_self_keepold(self_change, keepold);
+            match g.set_password_keepold_n(&name, pass.as_bytes(), n) {
                 Ok(()) => Ok(generic_ret(API_V2, 0)),
                 Err(e) => Ok(generic_ret(API_V2, kadm5_code(&Error::from(e)))),
             }
@@ -1839,6 +1861,14 @@ fn dispatch_kadm5_ticket(
         }
         CHRAND_PRINCIPAL | CHRAND_PRINCIPAL3 => {
             let name = parse_chrand(args, proc == CHRAND_PRINCIPAL3)?;
+            let mut g = match write_store(store, API_V2) {
+                Ok(g) => g,
+                Err(rep) => return Ok(rep),
+            };
+            if g.get_name(&name).is_none() {
+                return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
+            }
+            let self_change = is_self(actor, &name, g.realm());
             if changepw_not_self(changepw, actor, &name, &realm)
                 || (acl
                     .check(
@@ -1847,17 +1877,16 @@ fn dispatch_kadm5_ticket(
                         Some(&acl_id(&name, &realm)),
                     )
                     .is_err()
-                    && !is_self(actor, &name, &realm))
+                    && !self_change)
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
             }
-            if is_self(actor, &name, &realm) && !initial {
+            if self_change && !initial {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_INITIAL));
             }
-            let mut g = match write_store(store, API_V2) {
-                Ok(g) => g,
-                Err(rep) => return Ok(rep),
-            };
+            if self_change && let Err(e) = g.check_min_life(&name) {
+                return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
+            }
             match g.chrand(&name) {
                 Ok(keys) => {
                     let hide = g
@@ -2026,6 +2055,7 @@ fn kadm5_code(e: &Error) -> u32 {
     let s = match e {
         Error::AclDenied => return KADM5_AUTH_GET,
         Error::NotFound => return KADM5_UNK_PRINC,
+        Error::PassTooSoon { .. } => return KADM5_PASS_TOOSOON,
         Error::GarbageArgs | Error::ProcUnavail => return KADM5_FAILURE,
         Error::PasswordPolicy(s) | Error::Inner(s) => s.as_str(),
     };
@@ -2065,8 +2095,8 @@ fn parse_policy_arg(args: &[u8]) -> Result<(u32, krb5_kdc::NamedPolicy, u32), Er
     let mut r = XdrR::new(args);
     let api = r.u32()?;
     let name = r.nullstring()?.unwrap_or_default();
-    let _min_life = r.u32().unwrap_or(0);
-    let _max_life = r.u32().unwrap_or(0);
+    let min_life = r.u32().unwrap_or(0);
+    let max_life = r.u32().unwrap_or(0);
     let min_length = r.u32().unwrap_or(0);
     let min_classes = r.u32().unwrap_or(0);
     let history = r.u32().unwrap_or(0);
@@ -2108,6 +2138,8 @@ fn parse_policy_arg(args: &[u8]) -> Result<(u32, krb5_kdc::NamedPolicy, u32), Er
             max_fail,
             pw_failcnt_interval,
             pw_lockout_duration,
+            pw_min_life: min_life,
+            pw_max_life: max_life,
         },
         mask,
     ))
@@ -2118,6 +2150,12 @@ fn merge_policy(
     rec: &krb5_kdc::NamedPolicy,
     mask: u32,
 ) -> krb5_kdc::NamedPolicy {
+    if mask & KADM5_PW_MIN_LIFE != 0 {
+        existing.pw_min_life = rec.pw_min_life;
+    }
+    if mask & KADM5_PW_MAX_LIFE != 0 {
+        existing.pw_max_life = rec.pw_max_life;
+    }
     if mask & KADM5_PW_MIN_LENGTH != 0 {
         existing.min_length = rec.min_length;
     }
@@ -2141,8 +2179,8 @@ fn merge_policy(
 
 fn encode_policy_rec(w: &mut XdrW, api: u32, p: &krb5_kdc::NamedPolicy) {
     w.nullstring(Some(&p.name));
-    w.u32(0);
-    w.u32(0);
+    w.u32(p.pw_min_life);
+    w.u32(p.pw_max_life);
     w.u32(p.min_length);
     w.u32(p.min_classes);
     w.u32(p.history);
@@ -3519,6 +3557,171 @@ mod tests {
     }
 
     #[test]
+    fn policy_min_max_life_round_trip_and_min_life() {
+        let (store, acl, actor) = setup();
+        let mut pol = krb5_kdc::NamedPolicy::new("life");
+        pol.pw_min_life = 3600;
+        pol.pw_max_life = 86400;
+        let mask = KADM5_POLICY | KADM5_PW_MIN_LIFE | KADM5_PW_MAX_LIFE;
+        let created = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            CREATE_POLICY,
+            &encode_cpol(API_V2, &pol, mask),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&created), 0);
+        let mut gq = XdrW::default();
+        gq.u32(API_V2);
+        gq.nullstring(Some("life"));
+        let got = dispatch_kadm5(&store, &acl, &actor, GET_POLICY, &gq.b).unwrap();
+        assert_eq!(ret_code(&got), 0);
+        let mut r = XdrR::new(&got);
+        assert_eq!(r.u32().unwrap(), API_V2);
+        assert_eq!(r.u32().unwrap(), 0);
+        assert_eq!(r.nullstring().unwrap().as_deref(), Some("life"));
+        assert_eq!(r.u32().unwrap(), 3600);
+        assert_eq!(r.u32().unwrap(), 86400);
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [krb5_kdc::TEST_USER]);
+        {
+            let mut g = store.write().unwrap();
+            g.set_principal_policy(&user, Some("life".into())).unwrap();
+            assert!(g.get_name(&user).unwrap().pw_expire > 0);
+            g.set_last_pwd_unix(&user, 1);
+        }
+        let once = dispatch_kadm5(
+            &store,
+            &acl,
+            "user@KERBER.TEST",
+            CHPASS_PRINCIPAL,
+            &chpass_args("user@KERBER.TEST", "user-rotated"),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&once), 0);
+        let twice = dispatch_kadm5(
+            &store,
+            &acl,
+            "user@KERBER.TEST",
+            CHPASS_PRINCIPAL,
+            &chpass_args("user@KERBER.TEST", "user-rotated2"),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&twice), KADM5_PASS_TOOSOON);
+        let admin = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            CHPASS_PRINCIPAL,
+            &chpass_args("user@KERBER.TEST", "admin-rotated"),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&admin), 0);
+    }
+
+    #[test]
+    fn min_life_requires_pwchange_bypasses() {
+        let (store, acl, _actor) = setup();
+        let mut pol = krb5_kdc::NamedPolicy::new("soon");
+        pol.pw_min_life = 3600;
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [krb5_kdc::TEST_USER]);
+        {
+            let mut g = store.write().unwrap();
+            g.put_policy(pol);
+            g.set_principal_policy(&user, Some("soon".into())).unwrap();
+            g.set_password(&user, b"need-change").unwrap();
+            g.apply_admin_fields(
+                &user,
+                Some(krb5_kdc::KDB_REQUIRES_PWCHANGE),
+                None,
+                None,
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+        }
+        let out = dispatch_kadm5(
+            &store,
+            &acl,
+            "user@KERBER.TEST",
+            CHPASS_PRINCIPAL,
+            &chpass_args("user@KERBER.TEST", "changed-now"),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&out), 0);
+    }
+
+    #[test]
+    fn chpass_lockdown_self_is_auth_changepw_before_initial() {
+        let (store, acl, actor) = setup();
+        let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["lockedself"]);
+        {
+            let mut g = store.write().unwrap();
+            g.create_password(&acl, &actor, &name, b"lock-secret")
+                .unwrap();
+            g.apply_admin_fields(
+                &name,
+                Some(krb5_kdc::KDB_LOCKDOWN_KEYS),
+                None,
+                None,
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+        }
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some("lockedself@KERBER.TEST"));
+        w.nullstring(Some("new-secret"));
+        let out = dispatch_kadm5_ticket(
+            &store,
+            &acl,
+            "lockedself@KERBER.TEST",
+            CHPASS_PRINCIPAL,
+            &w.b,
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(ret_code(&out), KADM5_AUTH_CHANGEPW);
+    }
+
+    #[test]
+    fn self_keepold_clamps_to_five() {
+        let (store, acl, actor) = setup();
+        let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["selfkeep"]);
+        {
+            let mut g = store.write().unwrap();
+            g.create_password(&acl, &actor, &name, b"keep-0").unwrap();
+        }
+        for i in 1..=6 {
+            let mut w = XdrW::default();
+            w.u32(API_V2);
+            w.nullstring(Some("selfkeep@KERBER.TEST"));
+            w.u32(1);
+            w.u32(0);
+            w.nullstring(Some(&format!("keep-{i}")));
+            let out = dispatch_kadm5(
+                &store,
+                &acl,
+                "selfkeep@KERBER.TEST",
+                CHPASS_PRINCIPAL3,
+                &w.b,
+            )
+            .unwrap();
+            assert_eq!(ret_code(&out), 0, "cpw {i}");
+        }
+        let g = store.read().unwrap();
+        let p = g.get_name(&name).unwrap();
+        let mut kvnos: Vec<u32> = p.keys.iter().map(|k| k.kvno).collect();
+        kvnos.sort_unstable();
+        kvnos.dedup();
+        assert!(kvnos.len() <= 5, "self keepold cap: {kvnos:?}");
+    }
+
+    #[test]
     fn extract_keys_acl_is_auth_extract() {
         let (store, _acl, _actor) = setup();
         let limited = Acl::parse("admin@KERBER.TEST *\nlimited@KERBER.TEST i\n").expect("acl");
@@ -4352,7 +4555,7 @@ mod tests {
             (
                 CHPASS_PRINCIPAL,
                 chpass_args("no-such@KERBER.TEST", "nope"),
-                KADM5_AUTH_CHANGEPW,
+                KADM5_UNK_PRINC,
             ),
             (
                 CHRAND_PRINCIPAL,
@@ -4362,7 +4565,7 @@ mod tests {
             (
                 CHRAND_PRINCIPAL,
                 encode_named("no-such@KERBER.TEST"),
-                KADM5_AUTH_CHANGEPW,
+                KADM5_UNK_PRINC,
             ),
         ];
         for (proc, args, want) in cases {
@@ -4375,19 +4578,26 @@ mod tests {
     fn chrand_acl_is_auth_changepw() {
         let (store, _acl, _actor) = setup();
         let limited = Acl::parse("limited@KERBER.TEST i\n").expect("acl");
-        for name in ["user@KERBER.TEST", "no-such@KERBER.TEST"] {
-            let out = dispatch_kadm5(
-                &store,
-                &limited,
-                "limited@KERBER.TEST",
-                CHRAND_PRINCIPAL,
-                &encode_named(name),
-            )
-            .unwrap();
-            let code = ret_code(&out);
-            assert_eq!(code, KADM5_AUTH_CHANGEPW, "{name}");
-            assert_ne!(code, KADM5_AUTH_GET, "chrand must not be AUTH_GET: {name}");
-        }
+        let out = dispatch_kadm5(
+            &store,
+            &limited,
+            "limited@KERBER.TEST",
+            CHRAND_PRINCIPAL,
+            &encode_named("user@KERBER.TEST"),
+        )
+        .unwrap();
+        let code = ret_code(&out);
+        assert_eq!(code, KADM5_AUTH_CHANGEPW);
+        assert_ne!(code, KADM5_AUTH_GET);
+        let missing = dispatch_kadm5(
+            &store,
+            &limited,
+            "limited@KERBER.TEST",
+            CHRAND_PRINCIPAL,
+            &encode_named("no-such@KERBER.TEST"),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&missing), KADM5_UNK_PRINC);
     }
 
     #[test]
@@ -4542,6 +4752,8 @@ mod tests {
             max_fail: 2,
             pw_failcnt_interval: 0,
             pw_lockout_duration: 0,
+            pw_min_life: 0,
+            pw_max_life: 0,
         };
         let mask = KADM5_POLICY | KADM5_PW_MIN_LENGTH | KADM5_PW_MIN_CLASSES | KADM5_PW_MAX_FAILURE;
         let created = dispatch_kadm5(

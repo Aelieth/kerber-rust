@@ -161,6 +161,12 @@ pub enum Error {
     /// Password rejected by named policy.
     #[error("password policy: {0}")]
     PasswordPolicy(String),
+    /// `KADM5_PASS_TOOSOON`.
+    #[error("Current password's minimum life has not expired")]
+    PassTooSoon {
+        /// Unix time when a change is allowed.
+        until: u32,
+    },
     /// ONC RPC `GARBAGE_ARGS` (`kadm_rpc_svc.c` `svcerr_decode`).
     #[error("rpc garbage args")]
     GarbageArgs,
@@ -178,6 +184,7 @@ impl From<krb5_kdc::Error> for Error {
             krb5_kdc::Error::AclDenied => Self::AclDenied,
             krb5_kdc::Error::NotFound => Self::NotFound,
             krb5_kdc::Error::PasswordPolicy(s) => Self::PasswordPolicy(s),
+            krb5_kdc::Error::PassTooSoon { until } => Self::PassTooSoon { until },
             other => Self::Inner(other.to_string()),
         }
     }
@@ -401,6 +408,9 @@ impl<'a> AdminSession<'a> {
             krb5_types::principal_from_unparsed(&self.actor, "").is_ok_and(|(actor, arealm)| {
                 krb5_types::principal_compare(name, store_realm, &actor, &arealm)
             });
+        if self_change {
+            self.store.check_min_life(name).map_err(Error::from)?;
+        }
         if !self_change {
             let tid = self.target_id(name);
             self.acl
@@ -492,11 +502,11 @@ impl<'a> AdminSession<'a> {
     ///
     /// [`Error::NotFound`].
     pub fn get_policy(&self, name: &str) -> Result<String, Error> {
-        self.store
-            .policies()
-            .get(name)
-            .map(|p| p.name.clone())
-            .ok_or(Error::NotFound)
+        let p = self.store.policies().get(name).ok_or(Error::NotFound)?;
+        Ok(format!(
+            "Policy: {}\nMaximum password life: {}\nMinimum password life: {}",
+            p.name, p.pw_max_life, p.pw_min_life
+        ))
     }
 
     /// `setstr`.
@@ -1543,6 +1553,8 @@ mod tests {
             max_fail: 0,
             pw_failcnt_interval: 0,
             pw_lockout_duration: 0,
+            pw_min_life: 0,
+            pw_max_life: 0,
         });
         store
             .set_principal_policy(&user, Some("short8".into()))

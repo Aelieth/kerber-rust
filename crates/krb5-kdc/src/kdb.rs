@@ -629,6 +629,8 @@ mod tests {
             max_fail: 3,
             pw_failcnt_interval: 0,
             pw_lockout_duration: 0,
+            pw_min_life: 0,
+            pw_max_life: 0,
         });
         dump.set_principal_policy(&user, Some("strict".into()))
             .unwrap();

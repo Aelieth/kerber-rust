@@ -210,6 +210,8 @@ fn cmd_addpol(name: &str) {
         max_fail: 1,
         pw_failcnt_interval: 0,
         pw_lockout_duration: 0,
+        pw_min_life: 0,
+        pw_max_life: 0,
     });
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     if store.get_name(&user).is_some() {

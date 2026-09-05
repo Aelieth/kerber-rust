@@ -404,6 +404,19 @@ const UNK_PRINC_PRIV: &str =
     "Password not changed.\nPrincipal does not exist while trying to change password.\n";
 const DECODE_FAIL: &str = "Failed decoding ChangePasswdData";
 
+fn too_soon_text(until: u32) -> String {
+    let when = krb5_types::KerberosTime::from_unix_seconds(until)
+        .0
+        .format("%a %b %e %H:%M:%S %Y")
+        .to_string();
+    format!(
+        "Password cannot be changed because it was changed too recently.\n\
+Please wait until {when} before you change it.\n\
+If you need to change your password before then, contact your system\n\
+security administrator."
+    )
+}
+
 fn handle_kpasswd_from(
     store: &SharedStore,
     acl: &krb5_kdc::Acl,
@@ -523,6 +536,11 @@ fn handle_kpasswd_from(
         match sess.change_password(&targ, &newpass) {
             Ok(()) => (0u16, String::new(), "success".to_owned()),
             Err(Error::PasswordPolicy(msg)) => (4, msg, "password policy".to_owned()),
+            Err(Error::PassTooSoon { until }) => (
+                4,
+                too_soon_text(until),
+                "Current password's minimum life has not expired".to_owned(),
+            ),
             Err(Error::AclDenied) => (
                 5,
                 "Unauthorized request".to_owned(),
