@@ -15,17 +15,12 @@ pub const WHILE_DISPATCHING_UDP: &str = "while dispatching (udp)";
 /// MIT `net-server.c:1314-1315`.
 pub const WHILE_DISPATCHING_TCP: &str = "while dispatching (tcp)";
 
-fn log_dispatch_drop(udp: bool) {
+fn log_dispatch_drop(_udp: bool) {
     tracing::debug!(
         event = krb5_log::events::KDC_ISSUE,
         correlation_id = krb5_log::current_correlation_id(),
         component = "krb5-kdc",
         outcome = "ok",
-        error = if udp {
-            WHILE_DISPATCHING_UDP
-        } else {
-            WHILE_DISPATCHING_TCP
-        },
     );
 }
 
@@ -629,12 +624,12 @@ mod tests {
         });
         let logged = String::from_utf8_lossy(&buf.lock().unwrap()).into_owned();
         assert!(
-            logged.contains(WHILE_DISPATCHING_UDP),
-            "listener UDP drop logs MIT suffix, got {logged}"
+            !logged.contains(WHILE_DISPATCHING_UDP),
+            "empty drop is silent of while dispatching (udp); got {logged}"
         );
         assert!(
-            logged.contains(WHILE_DISPATCHING_TCP),
-            "listener TCP drop logs MIT suffix, got {logged}"
+            !logged.contains(WHILE_DISPATCHING_TCP),
+            "empty drop is silent of while dispatching (tcp); got {logged}"
         );
         let issue_only = {
             let buf2 = Arc::new(Mutex::new(Vec::new()));

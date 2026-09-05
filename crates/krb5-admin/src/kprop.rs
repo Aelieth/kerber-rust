@@ -11,14 +11,17 @@ use std::net::TcpStream;
 use std::path::Path;
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{CipherState, EncryptionType, ProtocolKey};
+use krb5_crypto::{CipherState, EncryptionType, KeyUsage, ProtocolKey, encrypt};
 use krb5_kdc::{Acl, PrincipalStore, dump_store, dump_store_iprop, load_dump, save_store};
 use krb5_protocol::{
     ApVerifyParams, ReplayCache, build_ap_rep, build_ap_req_mutual_seq, build_krb_priv_chained,
     build_krb_safe_ex, unwrap_krb_priv_chained, verify_ap_rep, verify_ap_req_ex,
     verify_krb_safe_checksum,
 };
-use krb5_types::{KerberosTime, KrbError, Microseconds, PrincipalName, Ticket, err};
+use krb5_types::{
+    EncTicketPart, EncryptedData, EncryptionKey, KerberosTime, KrbError, Microseconds,
+    PrincipalName, Ticket, TicketFlags, TransitedEncoding, err, ku,
+};
 
 use crate::Error;
 
@@ -328,12 +331,82 @@ fn asn1_com_err(s: &str) -> String {
 fn recvauth_protocol_text(code: i32) -> String {
     match code {
         err::BAD_INTEGRITY => "Decrypt integrity check failed".into(),
+        err::NOKEY => "Service key not available".into(),
+        err::TKT_EXPIRED => "Ticket expired".into(),
+        err::TKT_NYV => "Ticket not yet valid".into(),
+        err::REPEAT => "Request is a replay".into(),
+        err::NOT_US => "The ticket isn't for us".into(),
+        err::BADMATCH => "Ticket/authenticator don't match".into(),
+        err::BADADDR => "Incorrect net address".into(),
+        err::SKEW => "Clock skew too great".into(),
         err::BADVERSION => "Protocol version mismatch".into(),
         err::MSG_TYPE => "Invalid message type".into(),
         err::MODIFIED => "Message stream modified".into(),
+        err::BADORDER => "Message out of order".into(),
+        err::ILL_CR_TKT => "Illegal cross-realm ticket".into(),
+        err::BADKEYVER => "Key version is not available".into(),
+        err::MUT_FAIL => "Mutual authentication failed".into(),
+        err::BADDIRECTION => "Incorrect message direction".into(),
+        err::METHOD => "Alternative authentication method required".into(),
+        err::BADSEQ => "Incorrect sequence number in message".into(),
+        err::INAPP_CKSUM => "Inappropriate type of checksum in message".into(),
         err::GENERIC => "Generic error (see e-text)".into(),
         _ => format!("KRB5 error code {code}"),
     }
+}
+
+/// AP-REQ whose ticket `endtime` is 400s in the past (beyond the 300s skew).
+///
+/// # Errors
+///
+/// Crypto or DER failures.
+pub fn kprop_expired_ap_req(
+    host_key: &ProtocolKey,
+    kvno: u32,
+    host: &PrincipalName,
+    realm: &str,
+) -> Result<Vec<u8>, Error> {
+    let now = KerberosTime::now();
+    let past = now
+        .add_seconds(-400)
+        .map_err(|e| Error::Inner(e.to_string()))?;
+    let mut kb = vec![0u8; host_key.etype().key_len()];
+    getrandom::getrandom(&mut kb).map_err(|e| Error::Inner(e.to_string()))?;
+    let session =
+        ProtocolKey::from_bytes(host_key.etype(), &kb).map_err(|e| Error::Inner(e.to_string()))?;
+    let realm_ks = krb5_types::try_ascii(realm).map_err(|e| Error::Inner(e.to_string()))?;
+    let part = EncTicketPart {
+        flags: TicketFlags::initial_preauth(),
+        key: EncryptionKey {
+            keytype: session.etype().to_iana(),
+            keyvalue: session.as_bytes().to_vec().into(),
+        },
+        crealm: realm_ks.clone(),
+        cname: host.clone(),
+        transited: TransitedEncoding::empty(),
+        authtime: past.clone(),
+        starttime: Some(past.clone()),
+        endtime: past,
+        renew_till: None,
+        caddr: None,
+        authorization_data: None,
+    };
+    let der = encode(&part).map_err(|e| Error::Inner(e.to_string()))?;
+    let usage = KeyUsage::new(ku::TICKET).map_err(|e| Error::Inner(e.to_string()))?;
+    let cipher = encrypt(host_key, usage, &der).map_err(|e| Error::Inner(e.to_string()))?;
+    let ticket = Ticket {
+        tkt_vno: Ticket::VNO,
+        realm: realm_ks.clone(),
+        sname: host.clone(),
+        enc_part: EncryptedData {
+            etype: host_key.etype().to_iana(),
+            kvno: Some(kvno),
+            cipher: cipher.into(),
+        },
+    };
+    let ap = build_ap_req_mutual_seq(ticket, &session, &realm_ks, host, 1)
+        .map_err(|e| Error::Inner(e.to_string()))?;
+    encode(&ap).map_err(|e| Error::Inner(e.to_string()))
 }
 
 fn e_text_with_nul(text: &str) -> Option<krb5_types::KerberosString> {
@@ -684,6 +757,73 @@ mod tests {
             iprop_poll_once(&master, &mut empty),
             IpropPoll::FullResync(_)
         ));
+    }
+
+    #[test]
+    fn recvauth_tkt_expired_is_mit_error_message() {
+        assert_eq!(recvauth_protocol_text(err::TKT_EXPIRED), "Ticket expired");
+        assert_eq!(
+            recvauth_protocol_text(err::NOKEY),
+            "Service key not available"
+        );
+        assert_eq!(
+            recvauth_protocol_text(err::BADMATCH),
+            "Ticket/authenticator don't match"
+        );
+    }
+
+    #[test]
+    fn kpropd_expired_ticket_is_32_ticket_expired() {
+        use std::io::Read;
+        use std::net::{TcpListener, TcpStream};
+        use std::thread;
+        use std::time::Duration;
+
+        use krb5_asn1::decode;
+        use krb5_kdc::{TEST_REALM, bootstrap_documented, documented_host};
+        use krb5_protocol::ReplayCache;
+
+        let (store, _) = bootstrap_documented().unwrap();
+        let host = documented_host();
+        let host_ent = store.get_name(&host).unwrap();
+        let host_key = host_ent.best_key().unwrap().key.clone();
+        let kvno = host_ent.best_key().unwrap().kvno;
+        let ap = kprop_expired_ap_req(&host_key, kvno, &host, TEST_REALM).unwrap();
+        let host_keys: Vec<_> = host_ent.keys.iter().map(|k| k.key.clone()).collect();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let host_for_server = host.clone();
+        let join = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            kpropd_recvauth(
+                &mut stream,
+                &host_keys,
+                Some(&host_for_server),
+                Some(TEST_REALM),
+                None,
+                ReplayCache::new(),
+            )
+        });
+        thread::sleep(Duration::from_millis(20));
+        let mut client = TcpStream::connect(addr).unwrap();
+        write_message(&mut client, SENDAUTH_VERSION).unwrap();
+        write_message(&mut client, KPROP_PROT_VERSION).unwrap();
+        let mut ack = [0u8; 1];
+        client.read_exact(&mut ack).unwrap();
+        assert_eq!(ack[0], 0);
+        write_message(&mut client, &ap).unwrap();
+        let err_msg = read_message(&mut client).unwrap();
+        assert_eq!(err_msg.first().copied(), Some(0x7e), "recvauth KRB-ERROR");
+        let e: KrbError = decode(&err_msg).expect("KRB-ERROR");
+        assert_eq!(e.error_code, err::TKT_EXPIRED);
+        assert_eq!(
+            e.e_text.as_ref().map(krb5_types::KerberosString::as_bytes),
+            Some(b"Ticket expired\0".as_slice())
+        );
+        assert!(
+            join.join().expect("thread").is_err(),
+            "recvauth must fail after expired AP-REQ"
+        );
     }
 
     #[test]

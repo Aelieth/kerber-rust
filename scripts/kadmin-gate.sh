@@ -112,8 +112,28 @@ assert got is not None and got[:6] == [xid, 1, 0, 0, 0, 1], got
 xid = 0x22222222
 got = exchange(call(xid, 2112, 99, 0))
 assert got is not None and got[:8] == [xid, 1, 0, 0, 0, 2, 2, 2], got
-got = exchange(call(0x33333333, 2112, 2, 12, mtype=1))
-assert got is None
+
+s = socket.create_connection(("127.0.0.1", 749), 2)
+s.settimeout(2.0)
+s.sendall(rec(call(0x33333333, 2112, 2, 12, mtype=1)))
+r, _, _ = select.select([s], [], [], 0.4)
+assert not r, "REPLY-typed call must stay idle"
+xid = 0x33333334
+s.sendall(rec(call(xid, 2112, 2, 0)))
+r, _, _ = select.select([s], [], [], 2.0)
+assert r, "NULLPROC after REPLY on the same socket"
+hdr = s.recv(4)
+assert hdr, "eof after REPLY then NULLPROC"
+n = struct.unpack(">I", hdr)[0] & 0x7FFFFFFF
+data = b""
+while len(data) < n:
+    chunk = s.recv(n - len(data))
+    assert chunk, "eof"
+    data += chunk
+words = list(struct.unpack(">" + "I" * (len(data) // 4), data[: len(data) - (len(data) % 4)]))
+print("rpc=" + ",".join(str(x) for x in words[:8]))
+assert words[:5] == [xid, 1, 1, 1, 5], words
+s.close()
 
 def xdr_u32(n):
     return struct.pack(">I", n)
@@ -121,6 +141,15 @@ def xdr_u32(n):
 def xdr_opaque(b):
     pad = (4 - (len(b) % 4)) % 4
     return xdr_u32(len(b)) + b + b"\x00" * pad
+
+def gss_call(xid, prog, vers, proc, gc_proc, gc_seq=0, gc_svc=3, handle=b"", token=None):
+    cred = xdr_u32(1) + xdr_u32(gc_proc) + xdr_u32(gc_seq) + xdr_u32(gc_svc) + xdr_opaque(handle)
+    body = struct.pack(">6I", xid, 0, 2, prog, vers, proc)
+    body += xdr_u32(6) + xdr_opaque(cred)
+    body += xdr_u32(0) + xdr_opaque(b"")
+    if token is not None:
+        body += xdr_opaque(token)
+    return exchange(body)
 
 cred = xdr_u32(99) + xdr_u32(1) + xdr_u32(0) + xdr_u32(3) + xdr_opaque(b"")
 xid = 0x44444444
@@ -130,8 +159,61 @@ body += xdr_u32(0) + xdr_opaque(b"")
 got = exchange(body)
 assert got is not None and got[:5] == [xid, 1, 1, 1, 1], got
 print("rpcsec_unknown_auth_error=ok")
+
+got = gss_call(0x55555551, 2112, 2, 12, 1)
+assert got is not None and got[:5] == [0x55555551, 1, 1, 1, 7], got
+print("rpcsec_init_non_nullproc=AUTH_FAILED")
+
+got = gss_call(0x55555552, 2112, 2, 12, 0)
+assert got is not None and got[:5] == [0x55555552, 1, 1, 1, 13], got
+print("rpcsec_data_no_context=CREDPROBLEM")
+
+got = gss_call(0x55555553, 2112, 2, 0, 99)
+assert got is not None and got[:5] == [0x55555553, 1, 1, 1, 2], got
+print("rpcsec_unknown_gc_proc=AUTH_REJECTEDCRED")
+
+got = gss_call(0x55555554, 2112, 2, 0, 1, token=b"\xff\x00")
+assert got is not None and got[:5] == [0x55555554, 1, 1, 1, 2], got
+print("rpcsec_init_garbage=AUTH_REJECTEDCRED")
+
+got = gss_call(0x55555555, 2112, 2, 0, 3)
+assert got is not None and got[:5] == [0x55555555, 1, 1, 1, 13], got
+print("rpcsec_destroy_no_context=CREDPROBLEM")
+
 print("framing=ok")
 '
+}
+
+assert_k14_rpcsec() {
+    local out=$1
+    echo "$out" | grep -F 'rpcsec_unknown_auth_error=ok' || {
+        echo "missing AUTH_BADCRED cell: $out" >&2
+        exit 1
+    }
+    echo "$out" | grep -F 'rpcsec_init_non_nullproc=AUTH_FAILED' || {
+        echo "missing INIT non-NULLPROC AUTH_FAILED: $out" >&2
+        exit 1
+    }
+    echo "$out" | grep -F 'rpcsec_data_no_context=CREDPROBLEM' || {
+        echo "missing DATA no-context CREDPROBLEM: $out" >&2
+        exit 1
+    }
+    echo "$out" | grep -F 'rpcsec_unknown_gc_proc=AUTH_REJECTEDCRED' || {
+        echo "missing unknown gc_proc AUTH_REJECTEDCRED: $out" >&2
+        exit 1
+    }
+    echo "$out" | grep -F 'rpcsec_init_garbage=AUTH_REJECTEDCRED' || {
+        echo "missing INIT garbage AUTH_REJECTEDCRED: $out" >&2
+        exit 1
+    }
+    echo "$out" | grep -F 'rpcsec_destroy_no_context=CREDPROBLEM' || {
+        echo "missing DESTROY no-context CREDPROBLEM: $out" >&2
+        exit 1
+    }
+    echo "$out" | grep -F 'framing=ok' || {
+        echo "missing framing=ok: $out" >&2
+        exit 1
+    }
 }
 
 kadmind_iprop_auth_gssapi() {
@@ -276,7 +358,9 @@ fi
 echo "==== Rust kadmind AUTH_NONE is AUTH_TOOWEAK ===="
 kadmind_auth_too_weak "$NAME"
 echo "==== Rust kadmind RPC PROG_UNAVAIL / PROG_MISMATCH / REPLY ===="
-kadmind_rpc_framing "$NAME"
+RUST_FRAMING="$(kadmind_rpc_framing "$NAME")"
+echo "$RUST_FRAMING"
+assert_k14_rpcsec "$RUST_FRAMING"
 
 docker exec "$NAME" sh -c 'cat >/tmp/kadmin-krb5.conf <<EOF
 [libdefaults]
@@ -1215,7 +1299,9 @@ fi
 echo "==== MIT kadmind AUTH_NONE is AUTH_TOOWEAK ===="
 kadmind_auth_too_weak "$NAME_MIT"
 echo "==== MIT kadmind RPC PROG_UNAVAIL / PROG_MISMATCH / REPLY ===="
-kadmind_rpc_framing "$NAME_MIT"
+MIT_FRAMING="$(kadmind_rpc_framing "$NAME_MIT")"
+echo "$MIT_FRAMING"
+assert_k14_rpcsec "$MIT_FRAMING"
 
 echo "==== crafted RPC listprincs over kadmin/changepw vs MIT kadmind ===="
 compile_kadm5_changepw "$NAME_MIT"

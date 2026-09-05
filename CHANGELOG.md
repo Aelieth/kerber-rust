@@ -8,6 +8,13 @@ this project uses semantic versioning once a crate is published.
 
 ### W1-I Round 3 (K12–K17)
 
+- **K14.** RPCSEC_GSS `_svcauth_gss`: INIT requires NULLPROC;
+  `accept_sec_context` fail is `AUTH_REJECTEDCRED`; DATA without
+  context / bad MIC / unknown handle is `CREDPROBLEM`; sequence
+  window / `gc_seq > MAXSEQ` is `CTXPROBLEM`; DESTROY then drop;
+  unknown `gc_proc` is `AUTH_REJECTEDCRED`; NONE/INTEGRITY/PRIVACY
+  accepted. Empty KDC drop is silent of `while dispatching`. kprop
+  `e_text` uses MIT `error_message()` including `Ticket expired`.
 - **K13.** `kadm5_modify_policy` validates the merged record
   (`BAD_LENGTH` / `BAD_CLASS` / `BAD_HISTORY` / `BAD_MIN_PASS_LIFE`).
   Create is DUP before floors. `pw_expiration` on modify is

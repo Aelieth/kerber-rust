@@ -43,7 +43,14 @@ const RPCSEC_GSS_VERS: u32 = 1;
 const RPG_DATA: u32 = 0;
 const RPG_INIT: u32 = 1;
 const RPG_CONTINUE: u32 = 2;
+const RPG_DESTROY: u32 = 3;
+/// RFC 2203 / MIT `auth_gss.h` `rpc_gss_svc_t` (none=1, integrity=2, privacy=3).
+const GSS_NONE: u32 = 1;
+const GSS_INTEGRITY: u32 = 2;
 const GSS_PRIVACY: u32 = 3;
+const AUTH_REJECTEDCRED: u32 = 2;
+const MAXSEQ: u32 = 0x8000_0000;
+const SYSTEM_ERR: u32 = 5;
 const MSG_CALL: u32 = 0;
 const MSG_REPLY: u32 = 1;
 const MSG_ACCEPTED: u32 = 0;
@@ -190,7 +197,7 @@ pub fn serve_kadm5_conn(
     rcache: ReplayCache,
     mut stream: TcpStream,
 ) -> io::Result<()> {
-    let mut gss: Option<GssContext> = None;
+    let mut gss: Option<RpcsecGss> = None;
     let mut agss: Option<Agss> = None;
     let handle = random_handle();
     loop {
@@ -269,6 +276,14 @@ struct Agss {
     seq: u32,
 }
 
+struct RpcsecGss {
+    ctx: GssContext,
+    handle: Vec<u8>,
+    seqlast: u32,
+    seqmask: u32,
+    svc: u32,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn handle_rpc(
     store: &SharedStore,
@@ -276,7 +291,7 @@ fn handle_rpc(
     service_keys: &[ProtocolKey],
     expected_realm: &str,
     handle: &[u8],
-    gss: &mut Option<GssContext>,
+    gss: &mut Option<RpcsecGss>,
     agss: &mut Option<Agss>,
     rcache: &ReplayCache,
     rec: &[u8],
@@ -372,14 +387,14 @@ fn handle_rpc(
     Ok(rpc_reply_weakauth(xid))
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::unnecessary_wraps)]
 fn handle_rpcsec_gss(
     store: &SharedStore,
     acl: &Acl,
     service_keys: &[ProtocolKey],
     expected_realm: &str,
     handle: &[u8],
-    gss: &mut Option<GssContext>,
+    gss: &mut Option<RpcsecGss>,
     xid: u32,
     proc: u32,
     kadm: bool,
@@ -393,6 +408,7 @@ fn handle_rpcsec_gss(
     args: &[u8],
     rcache: &ReplayCache,
 ) -> Result<Vec<u8>, Error> {
+    let _ = verf_flavor;
     let mut r = XdrR::new(args);
     let Ok(gcred) = parse_gcred(cred) else {
         return Ok(rpc_reply_auth_error(xid, AUTH_BADCRED));
@@ -400,77 +416,179 @@ fn handle_rpcsec_gss(
     if gcred.version != RPCSEC_GSS_VERS {
         return Ok(rpc_reply_auth_error(xid, AUTH_BADCRED));
     }
-    if gcred.service != 0 && gcred.service != 1 && gcred.service != GSS_PRIVACY {
+    if gcred.service != GSS_NONE && gcred.service != GSS_INTEGRITY && gcred.service != GSS_PRIVACY {
         return Ok(rpc_reply_auth_error(xid, AUTH_BADCRED));
     }
 
-    if gcred.proc == RPG_INIT || gcred.proc == RPG_CONTINUE {
-        let token = r.opaque()?;
-        let (mut ctx, out_tok) = GssContext::accept_sec_context(
-            &token,
-            service_keys,
-            None,
-            None,
-            Some(expected_realm),
-            rcache,
-        )
-        .map_err(|e| Error::Inner(e.to_string()))?;
-        let mut body = XdrW::default();
-        body.opaque(handle);
-        body.u32(0);
-        body.u32(0);
-        body.u32(RPCSEC_SEQ_WINDOW);
-        body.opaque(out_tok.as_deref().unwrap_or(&[]));
-        let mic = ctx
-            .get_mic(&RPCSEC_SEQ_WINDOW.to_be_bytes())
-            .map_err(|e| Error::Inner(format!("rpcsec init mic: {e}")))?;
-        *gss = Some(ctx);
-        return Ok(rpc_reply_gss_verf(xid, &mic, &body.b));
-    }
-
-    let Some(ctx) = gss.as_mut() else {
+    if let Some(gd) = gss.as_mut()
+        && (gcred.seq_num > MAXSEQ || !seq_window_ok(gd, gcred.seq_num))
+    {
         return Ok(rpc_reply_auth_error(xid, RPCSEC_GSS_CTXPROBLEM));
-    };
-    if verf_flavor == FLAVOR_GSS && ctx.verify_mic(&rec[..header_end], verf).is_err() {
-        return Ok(rpc_reply_auth_error(xid, RPCSEC_GSS_CREDPROBLEM));
-    }
-    if gcred.proc != RPG_DATA {
-        return Ok(rpc_reply_auth_error(xid, AUTH_FAILED));
-    }
-    if gcred.service != GSS_PRIVACY {
-        return Ok(rpc_reply_auth_error(xid, AUTH_BADCRED));
     }
 
-    if kadm && vers != KADM_VERS {
-        return Ok(rpc_reply_mismatch(xid, KADM_VERS, KADM_VERS));
-    }
-    if iprop && vers != IPROP_VERS {
-        return Ok(rpc_reply_mismatch(xid, IPROP_VERS, IPROP_VERS));
-    }
-    if !kadm && !iprop {
-        return Ok(rpc_reply_accepted(xid, PROG_UNAVAIL));
-    }
-
-    let wrapped = r.opaque()?;
-    let plain = ctx
-        .unwrap(&wrapped)
-        .map_err(|e| Error::Inner(format!("gss unwrap: {e}")))?;
-    if plain.len() < 4 {
-        return Err(Error::Inner("wrapped seq".into()));
-    }
-    let seq = u32::from_be_bytes(
-        plain[..4]
-            .try_into()
-            .map_err(|_| Error::Inner("seq".into()))?,
-    );
-    let kadm_args = &plain[4..];
-    let actor = ctx.client.clone().ok_or(Error::AclDenied)?;
-    if iprop {
-        if !check_iprop_rpcsec_auth(ctx, expected_realm) {
-            return Ok(rpc_reply_weakauth(xid));
+    match gcred.proc {
+        RPG_INIT | RPG_CONTINUE => {
+            if proc != 0 {
+                return Ok(rpc_reply_auth_error(xid, AUTH_FAILED));
+            }
+            let Ok(token) = r.opaque() else {
+                return Ok(rpc_reply_auth_error(xid, AUTH_REJECTEDCRED));
+            };
+            let Ok((mut ctx, out_tok)) = GssContext::accept_sec_context(
+                &token,
+                service_keys,
+                None,
+                None,
+                Some(expected_realm),
+                rcache,
+            ) else {
+                return Ok(rpc_reply_auth_error(xid, AUTH_REJECTEDCRED));
+            };
+            let mut body = XdrW::default();
+            body.opaque(handle);
+            body.u32(0);
+            body.u32(0);
+            body.u32(RPCSEC_SEQ_WINDOW);
+            body.opaque(out_tok.as_deref().unwrap_or(&[]));
+            let Ok(mic) = ctx.get_mic(&RPCSEC_SEQ_WINDOW.to_be_bytes()) else {
+                return Ok(rpc_reply_auth_error(xid, AUTH_FAILED));
+            };
+            *gss = Some(RpcsecGss {
+                ctx,
+                handle: handle.to_vec(),
+                seqlast: 0,
+                seqmask: 0,
+                svc: gcred.service,
+            });
+            Ok(rpc_reply_gss_verf(xid, &mic, &body.b))
         }
-    } else if !check_rpcsec_auth(ctx, expected_realm) {
-        return Ok(rpc_reply_weakauth(xid));
+        RPG_DATA => {
+            let Some(gd) = gss.as_mut() else {
+                return Ok(rpc_reply_auth_error(xid, RPCSEC_GSS_CREDPROBLEM));
+            };
+            if !gcred.handle.is_empty() && gcred.handle != gd.handle {
+                return Ok(rpc_reply_auth_error(xid, RPCSEC_GSS_CREDPROBLEM));
+            }
+            if gd.ctx.verify_mic(&rec[..header_end], verf).is_err() {
+                return Ok(rpc_reply_auth_error(xid, RPCSEC_GSS_CREDPROBLEM));
+            }
+            let Ok(mic) = gd.ctx.get_mic(&gcred.seq_num.to_be_bytes()) else {
+                return Ok(rpc_reply_auth_error(xid, AUTH_FAILED));
+            };
+            if kadm && vers != KADM_VERS {
+                return Ok(rpc_reply_mismatch_verf(
+                    xid,
+                    Some(&mic),
+                    KADM_VERS,
+                    KADM_VERS,
+                ));
+            }
+            if iprop && vers != IPROP_VERS {
+                return Ok(rpc_reply_mismatch_verf(
+                    xid,
+                    Some(&mic),
+                    IPROP_VERS,
+                    IPROP_VERS,
+                ));
+            }
+            if !kadm && !iprop {
+                return Ok(rpc_reply_accepted_verf(xid, Some(&mic), PROG_UNAVAIL));
+            }
+            let kadm_args = if gd.svc == GSS_NONE {
+                r.rest().to_vec()
+            } else {
+                let Ok(wrapped) = r.opaque() else {
+                    return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
+                };
+                let Ok(plain) = gd.ctx.unwrap(&wrapped) else {
+                    return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
+                };
+                if plain.len() < 4 {
+                    return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
+                }
+                plain[4..].to_vec()
+            };
+            Ok(rpcsec_dispatch(
+                store,
+                acl,
+                gd,
+                xid,
+                proc,
+                &kadm_args,
+                iprop,
+                expected_realm,
+                &mic,
+                gcred.seq_num,
+            ))
+        }
+        RPG_DESTROY => {
+            if proc != 0 {
+                return Ok(rpc_reply_auth_error(xid, AUTH_FAILED));
+            }
+            let Some(gd) = gss.as_mut() else {
+                return Ok(rpc_reply_auth_error(xid, RPCSEC_GSS_CREDPROBLEM));
+            };
+            if !gcred.handle.is_empty() && gcred.handle != gd.handle {
+                return Ok(rpc_reply_auth_error(xid, RPCSEC_GSS_CREDPROBLEM));
+            }
+            if gd.ctx.verify_mic(&rec[..header_end], verf).is_err() {
+                return Ok(rpc_reply_auth_error(xid, RPCSEC_GSS_CREDPROBLEM));
+            }
+            let mic = gd
+                .ctx
+                .get_mic(&gcred.seq_num.to_be_bytes())
+                .unwrap_or_default();
+            *gss = None;
+            Ok(rpc_reply_gss_verf(xid, &mic, &[]))
+        }
+        _ => Ok(rpc_reply_auth_error(xid, AUTH_REJECTEDCRED)),
+    }
+}
+
+fn seq_window_ok(gd: &mut RpcsecGss, seq: u32) -> bool {
+    let offset = i64::from(gd.seqlast) - i64::from(seq);
+    if offset < 0 {
+        let shift = u32::try_from(-offset).unwrap_or(u32::MAX);
+        gd.seqlast = seq;
+        if shift >= 32 {
+            gd.seqmask = 0;
+        } else {
+            gd.seqmask <<= shift;
+        }
+        gd.seqmask |= 1;
+        true
+    } else {
+        let off = u32::try_from(offset).unwrap_or(u32::MAX);
+        if off >= RPCSEC_SEQ_WINDOW || (gd.seqmask & (1 << off)) != 0 {
+            return false;
+        }
+        gd.seqmask |= 1 << off;
+        true
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn rpcsec_dispatch(
+    store: &SharedStore,
+    acl: &Acl,
+    gd: &mut RpcsecGss,
+    xid: u32,
+    proc: u32,
+    kadm_args: &[u8],
+    iprop: bool,
+    expected_realm: &str,
+    mic: &[u8],
+    seq: u32,
+) -> Vec<u8> {
+    let Some(actor) = gd.ctx.client.clone() else {
+        return rpc_reply_weakauth(xid);
+    };
+    if iprop {
+        if !check_iprop_rpcsec_auth(&gd.ctx, expected_realm) {
+            return rpc_reply_weakauth(xid);
+        }
+    } else if !check_rpcsec_auth(&gd.ctx, expected_realm) {
+        return rpc_reply_weakauth(xid);
     }
     let result = match kadm5_or_iprop(
         store,
@@ -478,25 +596,30 @@ fn handle_rpcsec_gss(
         &actor,
         proc,
         kadm_args,
-        ctx.ticket_is_initial(),
-        changepw_acceptor(ctx),
+        gd.ctx.ticket_is_initial(),
+        changepw_acceptor(&gd.ctx),
         iprop,
     ) {
         Ok(b) => b,
-        Err(Error::GarbageArgs) => return Ok(rpc_reply_accepted(xid, GARBAGE_ARGS)),
-        Err(Error::ProcUnavail) => return Ok(rpc_reply_accepted(xid, PROC_UNAVAIL)),
-        Err(e) => return Err(e),
+        Err(Error::GarbageArgs) => return rpc_reply_accepted_verf(xid, Some(mic), GARBAGE_ARGS),
+        Err(Error::ProcUnavail) => return rpc_reply_accepted_verf(xid, Some(mic), PROC_UNAVAIL),
+        Err(_) => return rpc_reply_accepted_verf(xid, Some(mic), SYSTEM_ERR),
     };
+    if gd.svc == GSS_NONE {
+        return rpc_reply_gss_verf(xid, mic, &result);
+    }
     let mut inner = Vec::with_capacity(4 + result.len());
     inner.extend_from_slice(&seq.to_be_bytes());
     inner.extend_from_slice(&result);
-    let wrap = ctx
-        .wrap_with_rrc(&inner, 0)
-        .map_err(|e| Error::Inner(format!("gss wrap: {e}")))?;
-    let mic = ctx
-        .get_mic(&seq.to_be_bytes())
-        .map_err(|e| Error::Inner(format!("gss mic: {e}")))?;
-    Ok(rpc_reply_gss(xid, &mic, &wrap))
+    let wrap = if gd.svc == GSS_PRIVACY {
+        gd.ctx.wrap_with_rrc(&inner, 0)
+    } else {
+        gd.ctx.wrap_integ(&inner)
+    };
+    match wrap {
+        Ok(w) => rpc_reply_gss(xid, mic, &w),
+        Err(_) => rpc_reply_auth_error(xid, AUTH_FAILED),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -709,23 +832,39 @@ fn rpc_reply_auth_error(xid: u32, stat: u32) -> Vec<u8> {
 }
 
 fn rpc_reply_accepted(xid: u32, stat: u32) -> Vec<u8> {
+    rpc_reply_accepted_verf(xid, None, stat)
+}
+
+fn write_rpc_verf(w: &mut XdrW, verf: Option<&[u8]>) {
+    if let Some(mic) = verf {
+        w.u32(FLAVOR_GSS);
+        w.opaque(mic);
+    } else {
+        w.u32(FLAVOR_NONE);
+        w.opaque(&[]);
+    }
+}
+
+fn rpc_reply_accepted_verf(xid: u32, verf: Option<&[u8]>, stat: u32) -> Vec<u8> {
     let mut w = XdrW::default();
     w.u32(xid);
     w.u32(MSG_REPLY);
     w.u32(MSG_ACCEPTED);
-    w.u32(FLAVOR_NONE);
-    w.opaque(&[]);
+    write_rpc_verf(&mut w, verf);
     w.u32(stat);
     w.b
 }
 
 fn rpc_reply_mismatch(xid: u32, low: u32, high: u32) -> Vec<u8> {
+    rpc_reply_mismatch_verf(xid, None, low, high)
+}
+
+fn rpc_reply_mismatch_verf(xid: u32, verf: Option<&[u8]>, low: u32, high: u32) -> Vec<u8> {
     let mut w = XdrW::default();
     w.u32(xid);
     w.u32(MSG_REPLY);
     w.u32(MSG_ACCEPTED);
-    w.u32(FLAVOR_NONE);
-    w.opaque(&[]);
+    write_rpc_verf(&mut w, verf);
     w.u32(PROG_MISMATCH);
     w.u32(low);
     w.u32(high);
@@ -809,9 +948,9 @@ fn rpc_reply_agss(xid: u32, verf: &[u8], body: &[u8]) -> Vec<u8> {
 struct Gcred {
     version: u32,
     proc: u32,
-    #[allow(dead_code)]
     seq_num: u32,
     service: u32,
+    handle: Vec<u8>,
 }
 
 fn parse_gcred(data: &[u8]) -> Result<Gcred, Error> {
@@ -821,6 +960,7 @@ fn parse_gcred(data: &[u8]) -> Result<Gcred, Error> {
         proc: r.u32()?,
         seq_num: r.u32()?,
         service: r.u32()?,
+        handle: r.opaque().unwrap_or_default(),
     })
 }
 
@@ -3401,7 +3541,49 @@ mod tests {
     }
 
     #[test]
-    fn rpcsec_data_without_context_is_ctxproblem() {
+    fn rpcsec_init_non_nullproc_is_auth_failed() {
+        let (store, acl, _) = setup();
+        let mut cred = XdrW::default();
+        cred.u32(RPCSEC_GSS_VERS);
+        cred.u32(RPG_INIT);
+        cred.u32(0);
+        cred.u32(GSS_PRIVACY);
+        cred.opaque(&[]);
+        let mut w = XdrW::default();
+        w.u32(21);
+        w.u32(MSG_CALL);
+        w.u32(RPC_VERSION);
+        w.u32(KADM_PROG);
+        w.u32(KADM_VERS);
+        w.u32(12);
+        w.u32(FLAVOR_GSS);
+        w.opaque(&cred.b);
+        w.u32(FLAVOR_NONE);
+        w.opaque(&[]);
+        let mut gss = None;
+        let mut agss = None;
+        let out = handle_rpc(
+            &store,
+            &acl,
+            &[],
+            "KERBER.TEST",
+            &[],
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &w.b,
+        )
+        .unwrap();
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), 21);
+        assert_eq!(r.u32().unwrap(), MSG_REPLY);
+        assert_eq!(r.u32().unwrap(), MSG_DENIED);
+        assert_eq!(r.u32().unwrap(), REJECT_AUTH_ERROR);
+        assert_eq!(r.u32().unwrap(), AUTH_FAILED);
+    }
+
+    #[test]
+    fn rpcsec_data_without_context_is_credproblem() {
         let (store, acl, _) = setup();
         let mut cred = XdrW::default();
         cred.u32(RPCSEC_GSS_VERS);
@@ -3439,11 +3621,11 @@ mod tests {
         assert_eq!(r.u32().unwrap(), MSG_REPLY);
         assert_eq!(r.u32().unwrap(), MSG_DENIED);
         assert_eq!(r.u32().unwrap(), REJECT_AUTH_ERROR);
-        assert_eq!(r.u32().unwrap(), RPCSEC_GSS_CTXPROBLEM);
+        assert_eq!(r.u32().unwrap(), RPCSEC_GSS_CREDPROBLEM);
     }
 
     #[test]
-    fn rpcsec_unknown_program_data_without_context_is_ctxproblem() {
+    fn rpcsec_unknown_program_data_without_context_is_credproblem() {
         let (store, acl, _) = setup();
         let mut cred = XdrW::default();
         cred.u32(RPCSEC_GSS_VERS);
@@ -3481,7 +3663,7 @@ mod tests {
         assert_eq!(r.u32().unwrap(), MSG_REPLY);
         assert_eq!(r.u32().unwrap(), MSG_DENIED);
         assert_eq!(r.u32().unwrap(), REJECT_AUTH_ERROR);
-        assert_eq!(r.u32().unwrap(), RPCSEC_GSS_CTXPROBLEM);
+        assert_eq!(r.u32().unwrap(), RPCSEC_GSS_CREDPROBLEM);
     }
 
     #[test]
@@ -3590,6 +3772,511 @@ mod tests {
         let _out_tok = r.opaque().unwrap();
         ctx.verify_mic(&window.to_be_bytes(), &verf)
             .expect("INIT xp_verf is MIC(htonl(window))");
+    }
+
+    fn rpcsec_cred(proc: u32, seq: u32, svc: u32, handle: &[u8]) -> Vec<u8> {
+        let mut cred = XdrW::default();
+        cred.u32(RPCSEC_GSS_VERS);
+        cred.u32(proc);
+        cred.u32(seq);
+        cred.u32(svc);
+        cred.opaque(handle);
+        cred.b
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn rpcsec_call(
+        xid: u32,
+        prog: u32,
+        vers: u32,
+        proc: u32,
+        cred: &[u8],
+        verf_flavor: u32,
+        verf: &[u8],
+        args: &[u8],
+    ) -> Vec<u8> {
+        let mut w = XdrW::default();
+        w.u32(xid);
+        w.u32(MSG_CALL);
+        w.u32(RPC_VERSION);
+        w.u32(prog);
+        w.u32(vers);
+        w.u32(proc);
+        w.u32(FLAVOR_GSS);
+        w.opaque(cred);
+        w.u32(verf_flavor);
+        w.opaque(verf);
+        w.b.extend_from_slice(args);
+        w.b
+    }
+
+    fn decode_denied(out: &[u8]) -> (u32, u32) {
+        let mut r = XdrR::new(out);
+        let xid = r.u32().unwrap();
+        assert_eq!(r.u32().unwrap(), MSG_REPLY);
+        assert_eq!(r.u32().unwrap(), MSG_DENIED);
+        assert_eq!(r.u32().unwrap(), REJECT_AUTH_ERROR);
+        (xid, r.u32().unwrap())
+    }
+
+    fn admin_rpcsec_init() -> (
+        krb5_kdc::SharedDump,
+        Acl,
+        GssContext,
+        Vec<u8>,
+        Option<RpcsecGss>,
+    ) {
+        use krb5_crypto::EncryptionType;
+        use krb5_kdc::{TEST_REALM, documented_kadmin};
+        use krb5_protocol::{as_req_sname, pa_enc_timestamp};
+        use krb5_types::ascii;
+
+        let (store, acl, _) = setup();
+        let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["admin"]);
+        let kadm = documented_kadmin();
+        let (admin_key, kadm_key) = {
+            let g = store.read().unwrap();
+            (
+                g.get_name(&admin).unwrap().best_key().unwrap().key.clone(),
+                g.get_name(&kadm).unwrap().best_key().unwrap().key.clone(),
+            )
+        };
+        let as_req = as_req_sname(
+            admin.clone(),
+            TEST_REALM,
+            7,
+            Some(vec![pa_enc_timestamp(&admin_key).unwrap()]),
+            kadm.clone(),
+            EncryptionType::preferred()
+                .iter()
+                .map(|e| e.to_iana())
+                .collect(),
+        )
+        .unwrap();
+        let as_out = {
+            let g = store.read().unwrap();
+            krb5_kdc::issue_as(&*g, &as_req).unwrap()
+        };
+        let (mut ctx, token) = GssContext::init_sec_context(
+            as_out.rep.0.ticket.clone(),
+            &as_out.session_key,
+            &ascii(TEST_REALM),
+            &admin,
+            true,
+            None,
+            None,
+        )
+        .unwrap();
+        let cred = rpcsec_cred(RPG_INIT, 0, GSS_PRIVACY, &[]);
+        let mut arg = XdrW::default();
+        arg.opaque(&token);
+        let rec = rpcsec_call(1, KADM_PROG, KADM_VERS, 0, &cred, FLAVOR_NONE, &[], &arg.b);
+        let mut gss = None;
+        let mut agss = None;
+        let keys = [kadm_key];
+        let out = handle_rpc(
+            &store,
+            &acl,
+            &keys,
+            TEST_REALM,
+            b"hdl",
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &rec,
+        )
+        .unwrap();
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), 1);
+        assert_eq!(r.u32().unwrap(), MSG_REPLY);
+        assert_eq!(r.u32().unwrap(), MSG_ACCEPTED);
+        assert_eq!(r.u32().unwrap(), FLAVOR_GSS);
+        let verf = r.opaque().unwrap();
+        assert_eq!(r.u32().unwrap(), SUCCESS);
+        let handle = r.opaque().unwrap();
+        let _major = r.u32().unwrap();
+        let _minor = r.u32().unwrap();
+        let window = r.u32().unwrap();
+        let out_tok = r.opaque().unwrap();
+        if !out_tok.is_empty() {
+            ctx.process_ap_rep(&out_tok, &as_out.session_key).unwrap();
+        }
+        ctx.allow_rpcsec_init_window();
+        ctx.verify_mic(&window.to_be_bytes(), &verf).unwrap();
+        assert!(gss.is_some());
+        (store, acl, ctx, handle, gss)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn rpcsec_data_rec(
+        ctx: &mut GssContext,
+        xid: u32,
+        prog: u32,
+        vers: u32,
+        proc: u32,
+        seq: u32,
+        handle: &[u8],
+        args: &[u8],
+        wrap: bool,
+    ) -> Vec<u8> {
+        let cred = rpcsec_cred(RPG_DATA, seq, GSS_PRIVACY, handle);
+        let mut header = XdrW::default();
+        header.u32(xid);
+        header.u32(MSG_CALL);
+        header.u32(RPC_VERSION);
+        header.u32(prog);
+        header.u32(vers);
+        header.u32(proc);
+        header.u32(FLAVOR_GSS);
+        header.opaque(&cred);
+        let mic = ctx.get_mic(&header.b).unwrap();
+        let mut arg = XdrW::default();
+        if wrap {
+            let mut inner = Vec::with_capacity(4 + args.len());
+            inner.extend_from_slice(&seq.to_be_bytes());
+            inner.extend_from_slice(args);
+            let w = ctx.wrap_with_rrc(&inner, 0).unwrap();
+            arg.opaque(&w);
+        } else {
+            arg.b.extend_from_slice(args);
+        }
+        rpcsec_call(xid, prog, vers, proc, &cred, FLAVOR_GSS, &mic, &arg.b)
+    }
+
+    #[test]
+    fn rpcsec_unknown_gc_proc_is_rejectedcred() {
+        let (store, acl, _) = setup();
+        let cred = rpcsec_cred(99, 0, GSS_PRIVACY, &[]);
+        let rec = rpcsec_call(22, KADM_PROG, KADM_VERS, 0, &cred, FLAVOR_NONE, &[], &[]);
+        let mut gss = None;
+        let mut agss = None;
+        let out = handle_rpc(
+            &store,
+            &acl,
+            &[],
+            "KERBER.TEST",
+            &[],
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &rec,
+        )
+        .unwrap();
+        let (xid, why) = decode_denied(&out);
+        assert_eq!(xid, 22);
+        assert_eq!(why, AUTH_REJECTEDCRED);
+    }
+
+    #[test]
+    fn rpcsec_init_garbage_token_is_rejectedcred() {
+        let (store, acl, _) = setup();
+        let cred = rpcsec_cred(RPG_INIT, 0, GSS_PRIVACY, &[]);
+        let mut arg = XdrW::default();
+        arg.opaque(&[0xff, 0x00]);
+        let rec = rpcsec_call(23, KADM_PROG, KADM_VERS, 0, &cred, FLAVOR_NONE, &[], &arg.b);
+        let mut gss = None;
+        let mut agss = None;
+        let out = handle_rpc(
+            &store,
+            &acl,
+            &[],
+            "KERBER.TEST",
+            &[],
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &rec,
+        )
+        .unwrap();
+        let (xid, why) = decode_denied(&out);
+        assert_eq!(xid, 23);
+        assert_eq!(why, AUTH_REJECTEDCRED);
+        assert!(gss.is_none());
+    }
+
+    #[test]
+    fn rpcsec_destroy_without_context_is_credproblem() {
+        let (store, acl, _) = setup();
+        let cred = rpcsec_cred(RPG_DESTROY, 1, GSS_PRIVACY, &[]);
+        let rec = rpcsec_call(24, KADM_PROG, KADM_VERS, 0, &cred, FLAVOR_NONE, &[], &[]);
+        let mut gss = None;
+        let mut agss = None;
+        let out = handle_rpc(
+            &store,
+            &acl,
+            &[],
+            "KERBER.TEST",
+            &[],
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &rec,
+        )
+        .unwrap();
+        let (xid, why) = decode_denied(&out);
+        assert_eq!(xid, 24);
+        assert_eq!(why, RPCSEC_GSS_CREDPROBLEM);
+    }
+
+    #[test]
+    fn rpcsec_bad_mic_is_credproblem() {
+        use krb5_kdc::TEST_REALM;
+        let (store, acl, _ctx, handle, mut gss) = admin_rpcsec_init();
+        let cred = rpcsec_cred(RPG_DATA, 1, GSS_PRIVACY, &handle);
+        let rec = rpcsec_call(
+            25,
+            KADM_PROG,
+            KADM_VERS,
+            GET_PRIVS,
+            &cred,
+            FLAVOR_GSS,
+            b"not-a-mic",
+            &[],
+        );
+        let mut agss = None;
+        let out = handle_rpc(
+            &store,
+            &acl,
+            &[],
+            TEST_REALM,
+            b"hdl",
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &rec,
+        )
+        .unwrap();
+        let (xid, why) = decode_denied(&out);
+        assert_eq!(xid, 25);
+        assert_eq!(why, RPCSEC_GSS_CREDPROBLEM);
+    }
+
+    #[test]
+    fn rpcsec_seq_over_maxseq_is_ctxproblem() {
+        use krb5_kdc::TEST_REALM;
+        let (store, acl, mut ctx, handle, mut gss) = admin_rpcsec_init();
+        let rec = rpcsec_data_rec(
+            &mut ctx,
+            26,
+            KADM_PROG,
+            KADM_VERS,
+            GET_PRIVS,
+            MAXSEQ.saturating_add(1),
+            &handle,
+            &[],
+            true,
+        );
+        let mut agss = None;
+        let out = handle_rpc(
+            &store,
+            &acl,
+            &[],
+            TEST_REALM,
+            b"hdl",
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &rec,
+        )
+        .unwrap();
+        let (xid, why) = decode_denied(&out);
+        assert_eq!(xid, 26);
+        assert_eq!(why, RPCSEC_GSS_CTXPROBLEM);
+    }
+
+    #[test]
+    fn rpcsec_seq_replay_is_ctxproblem() {
+        use krb5_kdc::TEST_REALM;
+        let (store, acl, mut ctx, handle, mut gss) = admin_rpcsec_init();
+        let rec1 = rpcsec_data_rec(
+            &mut ctx,
+            27,
+            KADM_PROG,
+            KADM_VERS,
+            GET_PRIVS,
+            1,
+            &handle,
+            &[],
+            true,
+        );
+        let mut agss = None;
+        let out1 = handle_rpc(
+            &store,
+            &acl,
+            &[],
+            TEST_REALM,
+            b"hdl",
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &rec1,
+        )
+        .unwrap();
+        let mut r = XdrR::new(&out1);
+        assert_eq!(r.u32().unwrap(), 27);
+        assert_eq!(r.u32().unwrap(), MSG_REPLY);
+        assert_eq!(r.u32().unwrap(), MSG_ACCEPTED);
+        let rec2 = rpcsec_data_rec(
+            &mut ctx,
+            28,
+            KADM_PROG,
+            KADM_VERS,
+            GET_PRIVS,
+            1,
+            &handle,
+            &[],
+            true,
+        );
+        let out2 = handle_rpc(
+            &store,
+            &acl,
+            &[],
+            TEST_REALM,
+            b"hdl",
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &rec2,
+        )
+        .unwrap();
+        let (xid, why) = decode_denied(&out2);
+        assert_eq!(xid, 28);
+        assert_eq!(why, RPCSEC_GSS_CTXPROBLEM);
+    }
+
+    #[test]
+    fn rpcsec_destroy_then_data_is_credproblem() {
+        use krb5_kdc::TEST_REALM;
+        let (store, acl, mut ctx, handle, mut gss) = admin_rpcsec_init();
+        let cred = rpcsec_cred(RPG_DESTROY, 1, GSS_PRIVACY, &handle);
+        let mut header = XdrW::default();
+        header.u32(29);
+        header.u32(MSG_CALL);
+        header.u32(RPC_VERSION);
+        header.u32(KADM_PROG);
+        header.u32(KADM_VERS);
+        header.u32(0);
+        header.u32(FLAVOR_GSS);
+        header.opaque(&cred);
+        let mic = ctx.get_mic(&header.b).unwrap();
+        let rec = rpcsec_call(29, KADM_PROG, KADM_VERS, 0, &cred, FLAVOR_GSS, &mic, &[]);
+        let mut agss = None;
+        let out = handle_rpc(
+            &store,
+            &acl,
+            &[],
+            TEST_REALM,
+            b"hdl",
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &rec,
+        )
+        .unwrap();
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), 29);
+        assert_eq!(r.u32().unwrap(), MSG_REPLY);
+        assert_eq!(r.u32().unwrap(), MSG_ACCEPTED);
+        assert!(gss.is_none(), "DESTROY drops the context");
+        let rec2 = rpcsec_data_rec(
+            &mut ctx,
+            30,
+            KADM_PROG,
+            KADM_VERS,
+            GET_PRIVS,
+            2,
+            &handle,
+            &[],
+            true,
+        );
+        let out2 = handle_rpc(
+            &store,
+            &acl,
+            &[],
+            TEST_REALM,
+            b"hdl",
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &rec2,
+        )
+        .unwrap();
+        let (xid, why) = decode_denied(&out2);
+        assert_eq!(xid, 30);
+        assert_eq!(why, RPCSEC_GSS_CREDPROBLEM);
+    }
+
+    #[test]
+    fn rpcsec_unknown_program_data_carries_xp_verf() {
+        use krb5_kdc::TEST_REALM;
+        let (store, acl, mut ctx, handle, mut gss) = admin_rpcsec_init();
+        let rec = rpcsec_data_rec(&mut ctx, 31, 99_999, 1, 0, 1, &handle, &[], true);
+        let mut agss = None;
+        let out = handle_rpc(
+            &store,
+            &acl,
+            &[],
+            TEST_REALM,
+            b"hdl",
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &rec,
+        )
+        .unwrap();
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), 31);
+        assert_eq!(r.u32().unwrap(), MSG_REPLY);
+        assert_eq!(r.u32().unwrap(), MSG_ACCEPTED);
+        assert_eq!(r.u32().unwrap(), FLAVOR_GSS);
+        let verf = r.opaque().unwrap();
+        assert!(!verf.is_empty(), "PROG_UNAVAIL carries xp_verf");
+        assert_eq!(r.u32().unwrap(), PROG_UNAVAIL);
+        ctx.verify_mic(&1u32.to_be_bytes(), &verf)
+            .expect("DATA xp_verf is MIC(htonl(seq))");
+    }
+
+    #[test]
+    fn rpcsec_unwrap_fail_is_garbage_args_with_verf() {
+        use krb5_kdc::TEST_REALM;
+        let (store, acl, mut ctx, handle, mut gss) = admin_rpcsec_init();
+        let cred = rpcsec_cred(RPG_DATA, 1, GSS_PRIVACY, &handle);
+        let mut header = XdrW::default();
+        header.u32(32);
+        header.u32(MSG_CALL);
+        header.u32(RPC_VERSION);
+        header.u32(KADM_PROG);
+        header.u32(KADM_VERS);
+        header.u32(GET_PRIVS);
+        header.u32(FLAVOR_GSS);
+        header.opaque(&cred);
+        let mic = ctx.get_mic(&header.b).unwrap();
+        let mut arg = XdrW::default();
+        arg.opaque(b"\x00\x01");
+        let rec = rpcsec_call(
+            32, KADM_PROG, KADM_VERS, GET_PRIVS, &cred, FLAVOR_GSS, &mic, &arg.b,
+        );
+        let mut agss = None;
+        let out = handle_rpc(
+            &store,
+            &acl,
+            &[],
+            TEST_REALM,
+            b"hdl",
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &rec,
+        )
+        .unwrap();
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), 32);
+        assert_eq!(r.u32().unwrap(), MSG_REPLY);
+        assert_eq!(r.u32().unwrap(), MSG_ACCEPTED);
+        assert_eq!(r.u32().unwrap(), FLAVOR_GSS);
+        let verf = r.opaque().unwrap();
+        assert!(!verf.is_empty());
+        assert_eq!(r.u32().unwrap(), GARBAGE_ARGS);
     }
 
     #[test]

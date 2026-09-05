@@ -197,6 +197,13 @@ iprop is RPCSEC_GSS only (`ipropd_svc.c:481-483`) with
 `kiprop/<host>` (`:508-516`); AUTH_GSSAPI-on-iprop (INIT and DATA) is
 `AUTH_TOOWEAK`. The RPCSEC_GSS INIT reply verifier is
 `gss_get_mic(htonl(seq_window))` (`svc_auth_gss.c:271-286,496-504`).
+`_svcauth_gss` answers version mismatch as `AUTH_BADCRED`, INIT without
+NULLPROC as `AUTH_FAILED`, `accept_sec_context` / unknown `gc_proc` as
+`AUTH_REJECTEDCRED`, DATA/DESTROY header MIC failure as `CREDPROBLEM`,
+and `gc_seq > MAXSEQ` / window replay as `CTXPROBLEM`; DESTROY then
+drops the context (`:449-547`). Accepted/mismatch replies carry
+`xp_verf` (`svc.c:342,361`). Empty KDC drops are silent of
+`while dispatching` when the issue code is 0 (`net-server.c:1101-1105`).
 A full-resync deny is `kdb_fullresync_result_t`
 (`ipropd_svc.c:312-320`, `iprop.x:208-211`). Purgekeys of a
 locked-down principal is allowed (`server_stubs.c:1495-1530`).

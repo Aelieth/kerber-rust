@@ -35,9 +35,9 @@ Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after W1-I K13 policy modify + purgekeys):
-**255** = A1 116 + A2 67 + A3 55 + A4 17.
-exact 71 · stricter-documented 11 · deviation 92 ·
+Counts (after W1-I K14 RPCSEC state machine):
+**258** = A1 116 + A2 67 + A3 55 + A4 20.
+exact 74 · stricter-documented 11 · deviation 92 ·
 absent 66 · deferred 15.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
@@ -438,3 +438,6 @@ checksum/rc4/declared-cksumtype rows that sat under A3.
 | svr_policy.c:70-96,292-322 | create DUP before floors; modify validates merged `pw_max_life` / length / class / history | `BAD_POLICY` / `BAD_MASK` / `BAD_LENGTH` / `BAD_CLASS` / `BAD_HISTORY` / `BAD_MIN_PASS_LIFE` | kadm5.rs policy_floor_err; kadm5.rs MODIFY_POLICY | same codes on merged record | exact | `modify_policy_below_floor_is_bad_length`; `modify_policy_min_life_over_merged_max_is_bad_min_pass_life`; `create_policy_dup_before_floors` |
 | server_stubs.c:1495-1530; svr_principal.c:1937 | purgekeys has no lockdown check | 0 | kadm5.rs PURGEKEYS | allowed on locked-down target | exact | `purgekeys_locked_down_target_is_allowed` |
 | kdb_cpw.c:116-137 | keepold 1 = unbounded; self clamp 5 | n/a | kadm5.rs clamp_self_keepold; store.rs cap_key_versions | self == 5; non-self keepold=1 > 5 | exact | `self_keepold_clamps_to_five`; `non_self_keepold_is_unbounded` |
+| svc_auth_gss.c:449-547 | RPCSEC version `AUTH_BADCRED`; INIT NULLPROC; accept fail `AUTH_REJECTEDCRED`; DATA validate `CREDPROBLEM`; seq window `CTXPROBLEM`; DESTROY; unknown proc `AUTH_REJECTEDCRED` | AUTH_ERROR 1/2/13/14 | kadm5.rs handle_rpcsec_gss | same replies, connection kept | exact | `rpcsec_bad_version_is_auth_badcred`; `rpcsec_data_without_context_is_credproblem`; `rpcsec_init_non_nullproc_is_auth_failed`; `rpcsec_unknown_gc_proc_is_rejectedcred`; `rpcsec_seq_over_maxseq_is_ctxproblem`; `rpcsec_destroy_then_data_is_credproblem`; `scripts/kadmin-gate.sh` rpcsec_state both legs |
+| recvauth.c:168; krb5_err.et:75-88 | kprop `e_text` is `error_message()` + NUL | 32 `Ticket expired\0` | kprop.rs recvauth_protocol_text | MIT com_err strings | exact | `recvauth_tkt_expired_is_mit_error_message`; `kpropd_expired_ticket_is_32_ticket_expired`; `scripts/kprop-gate.sh` expired AP-REQ both legs |
+| net-server.c:1101-1105 | empty drop silent (no `while dispatching` when code 0) | none | kdc/listen.rs log_dispatch_drop | debug without suffix | exact | `log_dispatch_drop_udp_is_not_tcp` |

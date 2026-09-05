@@ -84,6 +84,75 @@ assert etext.rstrip(b"\x00") == b"ASN.1 encoding ended unexpectedly", etext
 ' "$port"
 }
 
+kpropd_expired_ap_req() {
+    local port=$1
+    docker exec "$NAME" sh -c 'hn=$(hostname); /tmp/kprop-expired-apreq /tmp/host.keytab "host/${hn}" KERBER.TEST >/tmp/expired.apreq'
+    docker exec "$NAME" python3 -c '
+import socket, struct, sys
+port = int(sys.argv[1])
+ap = open("/tmp/expired.apreq", "rb").read()
+assert ap[:1] == b"\x6e", ap[:8]
+
+def wr(s, data):
+    s.sendall(struct.pack(">I", len(data)) + data)
+
+def rd(s):
+    hdr = s.recv(4)
+    assert len(hdr) == 4, hdr
+    n = struct.unpack(">I", hdr)[0]
+    data = b""
+    while len(data) < n:
+        chunk = s.recv(n - len(data))
+        assert chunk, "eof"
+        data += chunk
+    return data
+
+def tlv(data, i=0):
+    tag = data[i]
+    i += 1
+    l = data[i]
+    i += 1
+    if l & 0x80:
+        n = l & 0x7F
+        l = int.from_bytes(data[i : i + n], "big")
+        i += n
+    return tag, data[i : i + l], i + l
+
+def krb_error(der):
+    _, inner, _ = tlv(der)
+    _, seqb, _ = tlv(inner)
+    i = 0
+    fields = {}
+    while i < len(seqb):
+        t, v, i = tlv(seqb, i)
+        n = t & 0x1F
+        if t & 0x20 and v:
+            _, inner2, _ = tlv(v)
+            fields[n] = inner2
+        else:
+            fields[n] = v
+    code = int.from_bytes(fields.get(6, b"\x00"), "big")
+    return code, fields.get(11, b"")
+
+s = socket.create_connection(("127.0.0.1", port), 2)
+wr(s, b"KRB5_SENDAUTH_V1.0\0")
+wr(s, b"kprop5_01\0")
+ack = s.recv(1)
+assert ack == b"\x00", ack
+wr(s, ap)
+msg = rd(s)
+print("tag=%02x len=%d" % (msg[0], len(msg)))
+assert msg[:1] == b"\x7e", msg[:8]
+code, etext = krb_error(msg)
+print("error_code=%d" % code)
+print("e_text_hex=" + etext.hex())
+print("e_text=" + etext.decode("ascii", "replace"))
+assert code == 32, code
+assert etext == b"Ticket expired\x00", etext
+print("expired_ticket=32")
+' "$port"
+}
+
 kpropd_junk_ap_req() {
     local port=$1
     docker exec "$NAME" python3 -c '
@@ -170,7 +239,7 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 2
 fi
 
-cargo build -p krb5-kdc --bin krb5-kdc -p krb5-admin --bin krb5-kpropd
+cargo build -p krb5-kdc --bin krb5-kdc -p krb5-admin --bin krb5-kpropd --example kprop-expired-apreq
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
@@ -194,7 +263,8 @@ fi
 
 docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc
 docker cp target/debug/krb5-kpropd "$NAME":/tmp/krb5-kpropd
-docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kpropd
+docker cp target/debug/examples/kprop-expired-apreq "$NAME":/tmp/kprop-expired-apreq
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kpropd /tmp/kprop-expired-apreq
 
 docker exec "$NAME" sh -c 'cat >/tmp/kprop-krb5.conf <<EOF
 [libdefaults]
@@ -272,6 +342,8 @@ echo "==== Rust kpropd junk AP-REQ is KRB-ERROR ===="
 kpropd_junk_ap_req 754
 echo "==== Rust kpropd APPLICATION-14 ASN.1 fail is 60 ===="
 kpropd_asn1_ap_req 754
+echo "==== Rust kpropd expired AP-REQ is 32 Ticket expired ===="
+kpropd_expired_ap_req 754
 
 echo "==== MIT kprop localhost ===="
 KPROP="$(docker exec -e KRB5_CONFIG=/tmp/kprop-krb5.conf \
@@ -332,7 +404,7 @@ echo "$KLIST" | grep -q 'user@KERBER.TEST'
 echo "==== MIT kpropd junk AP-REQ is KRB-ERROR ===="
 kill_comm krb5-kpropd
 kill_comm kpropd
-docker exec -d "$NAME" sh -c 'kpropd -S -d -a /tmp/kpropd.acl -P 1754 -f /tmp/from_junk.dump -p "$(command -v kdb5_util)" >/tmp/kpropd-mit.log 2>&1'
+docker exec -d -e KRB5_CONFIG=/tmp/kprop-krb5.conf "$NAME" sh -c 'kpropd -S -d -s /tmp/host.keytab -a /tmp/kpropd.acl -P 1754 -f /tmp/from_junk.dump -p "$(command -v kdb5_util)" >/tmp/kpropd-mit.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
     if docker exec "$NAME" grep -Eq 'ready|waiting for a kprop' /tmp/kpropd-mit.log 2>/dev/null; then
@@ -349,6 +421,8 @@ fi
 kpropd_junk_ap_req 1754
 echo "==== MIT kpropd APPLICATION-14 ASN.1 fail is 60 ===="
 kpropd_asn1_ap_req 1754
+echo "==== MIT kpropd expired AP-REQ is 32 Ticket expired ===="
+kpropd_expired_ap_req 1754
 
 log "kprop.gate" "ok" ',"dump_version":7,"direction":"mit-kprop-to-rust-kpropd"'
 exit 0
