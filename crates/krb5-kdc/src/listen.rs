@@ -11,9 +11,9 @@ use crate::issue::handle_request;
 use crate::kdb::Store;
 
 /// MIT `net-server.c:1101-1105`.
-const WHILE_DISPATCHING_UDP: &str = "while dispatching (udp)";
+pub const WHILE_DISPATCHING_UDP: &str = "while dispatching (udp)";
 /// MIT `net-server.c:1314-1315`.
-const WHILE_DISPATCHING_TCP: &str = "while dispatching (tcp)";
+pub const WHILE_DISPATCHING_TCP: &str = "while dispatching (tcp)";
 
 fn log_dispatch_drop(udp: bool) {
     tracing::debug!(

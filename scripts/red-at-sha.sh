@@ -1,22 +1,54 @@
 #!/usr/bin/env bash
 # Rebuild a historical SHA in a KERBER_SCRATCH worktree and run a gate or
 # command against those binaries. Provenance header is printed first.
-# Usage: scripts/red-at-sha.sh <base-sha> <gate-script-or-command> [args]
-#        scripts/red-at-sha.sh --overlay-probe <base-sha> <rel-path>
+# Usage: scripts/red-at-sha.sh [--overlay-probe] [--inject FILE ...] -- <base-sha> <command...>
+#        scripts/red-at-sha.sh [--overlay-probe] <base-sha> <command...>
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-# shellcheck disable=SC1091
-. "$ROOT/scripts/lib/provenance.sh"
 
 PROBE=0
-if [ "${1:-}" = "--overlay-probe" ]; then
-    PROBE=1
-    shift
-fi
+INJECT=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --overlay-probe)
+            PROBE=1
+            shift
+            ;;
+        --inject)
+            shift
+            saw=0
+            while [ $# -gt 0 ] && [ "$1" != "--" ]; do
+                case "$1" in
+                    --overlay-probe|--inject)
+                        echo "red-at-sha.sh: $1 is not an inject path" >&2
+                        exit 2
+                        ;;
+                esac
+                INJECT+=("$1")
+                saw=1
+                shift
+            done
+            if [ "$saw" = 0 ]; then
+                echo "red-at-sha.sh: --inject requires at least one path" >&2
+                exit 2
+            fi
+            if [ "${1:-}" = "--" ]; then
+                shift
+            fi
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
 
 if [ "$#" -lt 2 ]; then
-    echo "usage: $0 [--overlay-probe] <base-sha> <gate-script-or-command> [args]" >&2
+    echo "usage: $0 [--overlay-probe] [--inject FILE ...] -- <base-sha> <command...>" >&2
     exit 2
 fi
 if [ -z "${KERBER_SCRATCH:-}" ]; then
@@ -30,6 +62,9 @@ case "$KERBER_SCRATCH" in
         exit 2
         ;;
 esac
+
+# shellcheck disable=SC1091
+. "$ROOT/scripts/lib/provenance.sh"
 
 BASE="$(git rev-parse --verify "$1^{commit}")"
 shift
@@ -70,9 +105,27 @@ if [ -d "$ROOT/harness" ]; then
     rm -rf "$WT/harness"
     cp -a "$ROOT/harness" "$WT/harness"
 fi
+for rel in "${INJECT[@]}"; do
+    case "$rel" in
+        /*|*..*)
+            echo "red-at-sha.sh: inject path must be repo-relative: $rel" >&2
+            exit 2
+            ;;
+    esac
+    if [ ! -f "$ROOT/$rel" ]; then
+        echo "red-at-sha.sh: inject path is not a file at HEAD: $rel" >&2
+        exit 2
+    fi
+    mkdir -p "$WT/$(dirname "$rel")"
+    cp "$ROOT/$rel" "$WT/$rel"
+done
 git -C "$WT" add -A >/dev/null
 TREE="$(git -C "$WT" write-tree)"
 
+cmd_show=()
+if [ ${#INJECT[@]} -gt 0 ]; then
+    cmd_show+=(--inject "${INJECT[@]}" --)
+fi
 if [ "$PROBE" = 1 ]; then
     rel="${CMD[0]}"
     src_blob="$(git -C "$ROOT" hash-object "$ROOT/$rel")"
@@ -80,7 +133,8 @@ if [ "$PROBE" = 1 ]; then
     echo "==== red-at-sha provenance ===="
     echo "base_sha=$BASE"
     echo "tree_sha=$TREE"
-    echo "command=--overlay-probe $rel"
+    echo "command=${cmd_show[*]} --overlay-probe $rel"
+    echo "inject=${INJECT[*]}"
     echo "src_blob=$src_blob"
     echo "tree_blob=$tree_blob"
     if [ "$src_blob" = "$tree_blob" ]; then
@@ -94,7 +148,8 @@ fi
 echo "==== red-at-sha provenance ===="
 echo "base_sha=$BASE"
 echo "tree_sha=$TREE"
-echo "command=${CMD[*]}"
+echo "command=${cmd_show[*]} ${CMD[*]}"
+echo "inject=${INJECT[*]}"
 echo "worktree=$WT"
 echo "CARGO_TARGET_DIR=$TARGET"
 echo "==== probe sha256 ===="
@@ -112,25 +167,33 @@ if [ -f "$ROOT/${CMD[0]}" ]; then
 fi
 
 export CARGO_TARGET_DIR="$TARGET"
-BUILD_LOG="$KERBER_SCRATCH/red-at-${BASE:0:12}-build.log"
-(
-    cd "$WT"
-    cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-forge-tgt \
-        -p krb5-admin --bin krb5-kadmind --bin krb5-kpasswd \
-        -p krb5-client --bin krb5-kinit 2>&1 | tee "$BUILD_LOG"
-) || {
-    echo "red-at-sha: cargo build failed at $BASE" >&2
-    echo "gate_rc=1"
-    exit 1
-}
-grep -E 'Compiling|Finished' "$BUILD_LOG" || true
-echo "==== binary sha256 ===="
-for b in krb5-kdc krb5-kadmind krb5-kpasswd krb5-kinit krb5-forge-tgt; do
-    f="$TARGET/debug/$b"
-    if [ -f "$f" ]; then
-        sha256sum "$f"
-    fi
-done
+NEED_BINS=0
+if [[ "${CMD[0]}" == scripts/*-gate.sh ]]; then
+    NEED_BINS=1
+fi
+if [ "$NEED_BINS" = 1 ]; then
+    BUILD_LOG="$KERBER_SCRATCH/red-at-${BASE:0:12}-build.log"
+    (
+        cd "$WT"
+        cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-forge-tgt \
+            -p krb5-admin --bin krb5-kadmind --bin krb5-kpasswd \
+            -p krb5-client --bin krb5-kinit 2>&1 | tee "$BUILD_LOG"
+    ) || {
+        echo "red-at-sha: cargo build failed at $BASE" >&2
+        echo "gate_rc=1"
+        exit 1
+    }
+    grep -E 'Compiling|Finished' "$BUILD_LOG" || true
+    echo "==== binary sha256 ===="
+    for b in krb5-kdc krb5-kadmind krb5-kpasswd krb5-kinit krb5-forge-tgt; do
+        f="$TARGET/debug/$b"
+        if [ -f "$f" ]; then
+            sha256sum "$f"
+        fi
+    done
+else
+    echo "skip_binary_build=${CMD[0]}"
+fi
 
 run_from_wt() {
     local script="$1"
@@ -147,9 +210,7 @@ run_from_wt() {
 }
 
 set +e
-if [ "${CMD[0]}" = "scripts/kpasswd-gate.sh" ] \
-    || [ "${CMD[0]}" = "scripts/kadmin-gate.sh" ] \
-    || [[ "${CMD[0]}" == scripts/*-gate.sh ]]; then
+if [[ "${CMD[0]}" == scripts/*-gate.sh ]]; then
     run_from_wt "${CMD[@]}"
     rc=$?
 elif [ "${CMD[0]}" = "cargo" ]; then
@@ -157,6 +218,7 @@ elif [ "${CMD[0]}" = "cargo" ]; then
     export CARGO_TARGET_DIR="$TARGET"
     cargo "${CMD[@]:1}"
     rc=$?
+    echo "cargo_test_rc=$rc"
 else
     cd "$WT"
     export CARGO_TARGET_DIR="$TARGET"

@@ -39,27 +39,30 @@ file. Gate scripts write host files only under `KERBER_SCRATCH`
 
 Unit greens and parent reds go through `scripts/lib/unit-evidence.sh`:
 `unit_green <name> <nextest filter>` (stamped nextest) and
-`unit_red_at <parent> <name> <filter>` (`red-at-sha.sh` at the parent;
-a missing test filter is refused). INDEX links only files those
-helpers or the gates produced. Live settles use
-`scripts/lib/settle.sh <name> -- <command…>` (provenance, echoed
-command, verbatim output).
+`unit_red_at <parent> <name> <filter> <files…>` (`red-at-sha.sh
+--inject` copies those HEAD files into the parent worktree **before**
+`write-tree`; a missing test filter or a call with no files is
+refused). INDEX links only files those helpers or the gates produced.
+Live settles use `scripts/lib/settle.sh <name> -- <command…>`
+(provenance, echoed command, `2>&1 | tee`; a `grep` of an existing
+file is refused).
 
 Red-at-HEAD artefact contract (captured under
 `working/logs/…/<item>-red-at-head.log`): the file is captured tool
 output of the failing unit or live cell, not a paraphrase. Write
 "unit-red only; MIT by source" when MIT clients cannot emit the cell.
-Retroactive red is `scripts/red-at-sha.sh <base-sha> <gate-script>
-[args]`: a `git worktree` at the base SHA with `CARGO_TARGET_DIR`
-under an absolute `KERBER_SCRATCH`, a provenance header (`base_sha=`,
-`tree_sha=` from `git write-tree` after the overlay, `command=`,
-worktree, probe sha256, `Compiling`/`Finished`, binary SHA-256s,
-`gate_rc=`), HEAD `scripts/lib/*.{sh,py}`, `scripts/*.sh`,
+Retroactive red is `scripts/red-at-sha.sh [--inject FILE ...] --
+<base-sha> <gate-script-or-command>`: a `git worktree` at the base
+SHA with `CARGO_TARGET_DIR` under an absolute `KERBER_SCRATCH`, a
+provenance header (`base_sha=`, `tree_sha=` from `git write-tree`
+after the overlay and any `--inject` copies, `command=` including
+`--inject` when used, worktree, probe sha256, `gate_rc=` /
+`cargo_test_rc=`), HEAD `scripts/lib/*.{sh,py}`, `scripts/*.sh`,
 `scripts/*.{c,py}`, and the whole `harness/` tree copied into the
 worktree **before** `write-tree` so `tree_sha=` describes the tree
-that ran, then the current gate script against those binaries. The
-worktree is removed and `git worktree prune`d on EXIT (the target
-dir stays).
+that ran. `--inject` with no files is refused. Binary rebuild is
+only for `scripts/*-gate.sh`. The worktree is removed and
+`git worktree prune`d on EXIT (the target dir stays).
 Archive the captured output under `working/logs/…` and the scratch.
 Both legs of a text-equality cell assert pinned literals (never
 capture-from-MIT). Every branch asserts: no `if` whose body is only

@@ -21,9 +21,13 @@ unit_red_at() {
     local filter=$3
     shift 3 || true
     if [ -z "$parent" ] || [ -z "$name" ] || [ -z "$filter" ]; then
-        echo "unit_red_at: test filter required: unit_red_at <parent> <name> <filter> [files…]" >&2
+        echo "unit_red_at: test filter required: unit_red_at <parent> <name> <filter> <files…>" >&2
         return 2
     fi
-    echo "==== unit_red_at parent=$parent name=$name filter=$filter ===="
-    scripts/red-at-sha.sh "$parent" cargo test --workspace "$filter"
+    if [ "$#" -eq 0 ]; then
+        echo "unit_red_at: inject files required: unit_red_at <parent> <name> <filter> <files…>" >&2
+        return 2
+    fi
+    echo "==== unit_red_at parent=$parent name=$name filter=$filter inject=$* ===="
+    scripts/red-at-sha.sh --inject "$@" -- "$parent" cargo test --workspace "$filter"
 }

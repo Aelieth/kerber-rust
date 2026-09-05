@@ -6,6 +6,31 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-I Round 3 (K12–K17)
+
+- **K12.** `red-at-sha.sh --inject` copies named HEAD files before
+  `write-tree`. `unit_red_at` refuses a call with no files.
+  `settle.sh` tees and refuses `grep` of an existing file. Parent
+  reds of K3/K5a/K5b/`4031ab7`/`b211cbf` are real failing tests.
+
+### W1-I (K1–K5)
+
+- **K1.** `provenance.sh` stamps every gate; `red-at-sha.sh` overlays
+  `scripts/*.sh` before `write-tree`; `rc4-session-gate.sh`; no host
+  `/tmp` writes in gates.
+- **K2a.** ACL default `<kdc dir>/kadm5.acl`; missing file refuses
+  start; empty `acl_file=` is self-only.
+- **K2b.** `check_rpcsec_auth` / `check_iprop_rpcsec_auth`; full-resync
+  deny is `kdb_fullresync_result_t`.
+- **K3.** `parse_name` / `unparse_name` / `deltat::parse` like MIT
+  `parse.c` / `unparse.c` / `x-deltat.y`.
+- **K4.** `check_min_life`, `clamp_self_keepold`, policy
+  `pw_min_life` / `pw_max_life`.
+- **K5a.** kpasswd `chpwfail` 60; TCP 1 MiB−4; kprop `recvauth`
+  `error_message()` + NUL.
+- **K5b.** RPC `PROG_UNAVAIL` / `PROG_MISMATCH`; REPLY keeps the
+  connection.
+
 ### W1-I Round 2 (K6–K11)
 
 - **K6.** `provenance.sh` dies when docker or the MIT image is absent

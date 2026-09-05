@@ -903,7 +903,7 @@ def check_nextest() -> None:
 
 
 def check_unit_evidence_helper() -> None:
-    """K6: unit_green / unit_red_at exist; red refuses a missing test filter."""
+    """K6/K12: unit_green / unit_red_at exist; red refuses a missing filter or files."""
     path = SCRIPTS / "lib" / "unit-evidence.sh"
     if not path.is_file():
         _die("missing scripts/lib/unit-evidence.sh")
@@ -912,6 +912,10 @@ def check_unit_evidence_helper() -> None:
         _die("unit-evidence.sh missing unit_green/unit_red_at")
     if "test filter required" not in text:
         _die("unit_red_at must refuse a command without a test filter")
+    if "inject files required" not in text:
+        _die("unit_red_at must refuse a command without inject files")
+    if "--inject" not in text:
+        _die("unit_red_at must pass --inject to red-at-sha.sh")
     env = os.environ.copy()
     env["KERBER_NO_IMAGE"] = "1"
     env["ROOT"] = str(ROOT)
@@ -928,6 +932,145 @@ def check_unit_evidence_helper() -> None:
     )
     if r.returncode == 0:
         _die("unit_red_at accepted missing filter")
+    r = subprocess.run(
+        [
+            "bash",
+            "-c",
+            '. "$ROOT/scripts/lib/unit-evidence.sh"; unit_red_at HEAD k12 filter',
+        ],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    if r.returncode == 0:
+        _die("unit_red_at accepted missing inject files")
+    err = (r.stderr or b"") + (r.stdout or b"")
+    if b"inject files required" not in err:
+        _die("unit_red_at missing-files refusal did not mention inject files")
+    r = subprocess.run(
+        [
+            "bash",
+            str(SCRIPTS / "red-at-sha.sh"),
+            "--inject",
+            "--",
+            "HEAD",
+            "true",
+        ],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    if r.returncode == 0:
+        _die("red-at-sha.sh --inject with no files was accepted")
+
+
+def check_settle_helper() -> None:
+    """K12: settle.sh tees and refuses grep of an existing file."""
+    path = SCRIPTS / "lib" / "settle.sh"
+    if not path.is_file():
+        _die("missing scripts/lib/settle.sh")
+    text = path.read_text()
+    if "tee" not in text:
+        _die("settle.sh must tee command output")
+    if "pipefail" not in text:
+        _die("settle.sh must set pipefail around tee")
+    if "grep of a file is not a live settle" not in text:
+        _die("settle.sh must refuse grep of a file")
+    env = os.environ.copy()
+    env["KERBER_NO_IMAGE"] = "1"
+    existing = ROOT / "scripts" / "ci-policy.py"
+    r = subprocess.run(
+        [
+            "bash",
+            str(path),
+            "k12-grep",
+            "--",
+            "grep",
+            "-F",
+            "ci-policy: ok",
+            str(existing),
+        ],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    if r.returncode == 0:
+        _die("settle.sh accepted grep of an existing file")
+    err = (r.stderr or b"").decode("utf-8", "replace")
+    if "grep of a file is not a live settle" not in err:
+        _die("settle.sh grep refusal text missing")
+
+
+def check_red_at_sha_inject(text: str | None = None) -> None:
+    """K12: --inject copies named HEAD files before write-tree."""
+    if text is None:
+        path = SCRIPTS / "red-at-sha.sh"
+        if not path.is_file():
+            _die("missing scripts/red-at-sha.sh")
+        text = path.read_text()
+    if "--inject" not in text:
+        _die("red-at-sha.sh must support --inject")
+    if 'cp "$ROOT/$rel" "$WT/$rel"' not in text:
+        _die("red-at-sha.sh --inject must copy HEAD files into the worktree")
+    write = -1
+    cp = -1
+    offset = 0
+    for line in text.splitlines(True):
+        code = line.split("#", 1)[0]
+        if write < 0 and "write-tree" in code:
+            write = offset
+        if cp < 0 and 'cp "$ROOT/$rel" "$WT/$rel"' in code:
+            cp = offset
+        offset += len(line)
+    if write < 0 or cp < 0 or cp > write:
+        _die("red-at-sha.sh must copy --inject files before write-tree")
+    env = os.environ.copy()
+    env["KERBER_NO_IMAGE"] = "1"
+    probe = subprocess.run(
+        ["git", "rev-parse", "--verify", "0d58023^{commit}"],
+        cwd=ROOT,
+        capture_output=True,
+        check=False,
+    )
+    inj = "crates/krb5-types/tests/k3_parse_deltat.rs"
+    if probe.returncode != 0 or not (ROOT / inj).is_file():
+        return
+    scratch = pathlib.Path(
+        subprocess.check_output(["mktemp", "-d"], text=True).strip()
+    )
+    env["KERBER_SCRATCH"] = str(scratch)
+    try:
+        r = subprocess.run(
+            [
+                "bash",
+                str(SCRIPTS / "red-at-sha.sh"),
+                "--overlay-probe",
+                "--inject",
+                inj,
+                "--",
+                "0d58023",
+                inj,
+            ],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        out = (r.stdout or "") + (r.stderr or "")
+        if r.returncode != 0:
+            _die(f"red-at-sha --inject overlay-probe failed: {out[-500:]}")
+        if "--inject" not in out:
+            _die("red-at-sha --inject overlay-probe log missing --inject")
+        if "overlay_match=yes" not in out:
+            _die("red-at-sha --inject did not land HEAD file in write-tree")
+        if "tree_sha=" not in out:
+            _die("red-at-sha --inject overlay-probe missing tree_sha=")
+    finally:
+        subprocess.run(["rm", "-rf", str(scratch)], check=False)
 
 
 def _must_die(fn, *args) -> None:
@@ -1246,12 +1389,18 @@ jobs:
         "subshell-tmp-gate.sh",
     )
     check_unit_evidence_helper()
+    check_settle_helper()
+    check_red_at_sha_inject()
     check_red_at_sha_overlay_order(
         'cp "$ROOT/scripts/"*.sh "$WT/scripts/"\nTREE="$(git write-tree)"\n'
     )
     _must_die(
         check_red_at_sha_overlay_order,
         'TREE="$(git write-tree)"\ncp "$ROOT/scripts/"*.sh "$WT/scripts/"\n',
+    )
+    _must_die(
+        check_red_at_sha_inject,
+        '--inject\nTREE="$(git write-tree)"\ncp "$ROOT/$rel" "$WT/$rel"\n',
     )
 
 
@@ -1281,6 +1430,8 @@ def main() -> None:
     check_gate_provenance()
     check_no_host_tmp_writes()
     check_unit_evidence_helper()
+    check_settle_helper()
+    check_red_at_sha_inject()
     check_red_at_sha_overlay_order()
     check_working_gitignored()
     check_ledger_proof_column()
