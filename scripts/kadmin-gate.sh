@@ -654,13 +654,16 @@ GETTGT="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc krbtgt/KERBER.TEST' 2>&1 || true)"
 echo "$GETTGT" | grep -F 'Principal: krbtgt/KERBER.TEST@KERBER.TEST'
 
-echo "==== purgekeys krbtgt is protect-keys (Rust stricter) ===="
+echo "==== purgekeys krbtgt succeeds (no lockdown check) ===="
 PURGE_TGT="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'purgekeys krbtgt/KERBER.TEST' 2>&1 || true)"
 echo "$PURGE_TGT"
-echo "$PURGE_TGT" | grep -F 'locked down'
-if echo "$PURGE_TGT" | grep -qi 'Old keys for principal'; then
-    echo "purgekeys cleared locked-down krbtgt keys: $PURGE_TGT" >&2
+echo "$PURGE_TGT" | grep -F 'Old keys for principal' || {
+    echo "purgekeys krbtgt missed success: $PURGE_TGT" >&2
+    exit 1
+}
+if echo "$PURGE_TGT" | grep -qiE 'locked down|PROTECT_KEYS'; then
+    echo "purgekeys refused krbtgt: $PURGE_TGT" >&2
     exit 1
 fi
 
@@ -969,6 +972,24 @@ echo "$GETF"
 echo "$GETF" | grep -F 'Minimum password length: 1'
 echo "$GETF" | grep -F 'Minimum number of password character classes: 1'
 echo "$GETF" | grep -F 'Number of old keys kept: 1'
+echo "==== modpol -minlength 0 is BAD_LENGTH ===="
+MOD0="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'modpol -minlength 0 floors1' 2>&1 || true)"
+echo "$MOD0"
+echo "$MOD0" | grep -F 'Invalid password length' || {
+    echo "modpol -minlength 0 missed BAD_LENGTH: $MOD0" >&2
+    exit 1
+}
+echo "==== modpol minlife over maxlife is BAD_MIN_PASS_LIFE ===="
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addpol -maxlife 1d max1d'
+MODM="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'modpol -minlife 2d max1d' 2>&1 || true)"
+echo "$MODM"
+echo "$MODM" | grep -F 'Password minimum life is greater than password maximum life' || {
+    echo "modpol min>max missed BAD_MIN_PASS_LIFE: $MODM" >&2
+    exit 1
+}
 echo "==== modprinc +0x1ffffffff truncates ===="
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw hex-secret hexu' || true
@@ -995,14 +1016,21 @@ CPW2="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p user -w userpassword -q 'cpw -pw user-new2 user' 2>&1 || true)"
 echo "$CPW2"
 echo "$CPW2" | grep -F "Current password's minimum life has not expired"
-echo "==== admin cpw ignores min_life ===="
+echo "==== admin cpw new password then reuse ===="
 CPWA="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'cpw -pw userpassword user' 2>&1 || true)"
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'cpw -pw user-admin-new user' 2>&1 || true)"
 echo "$CPWA"
-if echo "$CPWA" | grep -qiE 'minimum life|too soon|too recently'; then
-    echo "admin cpw hit min_life: $CPWA" >&2
+if echo "$CPWA" | grep -qiE 'minimum life|too soon|too recently|Cannot reuse'; then
+    echo "admin cpw new password failed: $CPWA" >&2
     exit 1
 fi
+CPWR="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'cpw -pw user-admin-new user' 2>&1 || true)"
+echo "$CPWR"
+echo "$CPWR" | grep -F 'Cannot reuse password' || {
+    echo "admin cpw reuse missed: $CPWR" >&2
+    exit 1
+}
 echo "==== self keepold clamps to 5 ===="
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw keep-0 keepoldself'
@@ -1019,8 +1047,20 @@ KEEPG="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
 echo "$KEEPG"
 nkeys="$(echo "$KEEPG" | sed -n 's/^Key: vno \([0-9][0-9]*\).*/\1/p' | sort -u | wc -l | tr -d ' ')"
 echo "keepold_kvnos=$nkeys"
-if [ "$nkeys" -gt 5 ]; then
-    echo "self keepold exceeded 5: $KEEPG" >&2
+if [ "$nkeys" != 5 ]; then
+    echo "self keepold not 5: $nkeys $KEEPG" >&2
+    exit 1
+fi
+echo "==== purgekeys locked-down target is allowed ===="
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw lock-secret lockp' || true
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'modprinc +lockdown_keys lockp'
+PURGE_L="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'purgekeys lockp' 2>&1 || true)"
+echo "$PURGE_L"
+if echo "$PURGE_L" | grep -qiE 'protect|lockdown|Operation requires'; then
+    echo "purgekeys lockdown denied: $PURGE_L" >&2
     exit 1
 fi
 
@@ -1490,6 +1530,21 @@ echo "$MIT_GETF"
 echo "$MIT_GETF" | grep -F 'Minimum password length: 1'
 echo "$MIT_GETF" | grep -F 'Minimum number of password character classes: 1'
 echo "$MIT_GETF" | grep -F 'Number of old keys kept: 1'
+echo "==== MIT modpol -minlength 0 is BAD_LENGTH ===="
+MIT_MOD0="$(docker exec "$NAME_MIT" kadmin.local -q 'modpol -minlength 0 floors1' 2>&1 || true)"
+echo "$MIT_MOD0"
+echo "$MIT_MOD0" | grep -F 'Invalid password length' || {
+    echo "MIT modpol -minlength 0 missed BAD_LENGTH: $MIT_MOD0" >&2
+    exit 1
+}
+echo "==== MIT modpol minlife over maxlife is BAD_MIN_PASS_LIFE ===="
+docker exec "$NAME_MIT" kadmin.local -q 'addpol -maxlife 1d max1d'
+MIT_MODM="$(docker exec "$NAME_MIT" kadmin.local -q 'modpol -minlife 2d max1d' 2>&1 || true)"
+echo "$MIT_MODM"
+echo "$MIT_MODM" | grep -F 'Password minimum life is greater than password maximum life' || {
+    echo "MIT modpol min>max missed BAD_MIN_PASS_LIFE: $MIT_MODM" >&2
+    exit 1
+}
 echo "==== MIT modprinc +0x1ffffffff truncates ===="
 docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw hex-secret hexu' || true
 MIT_HEXF="$(docker exec "$NAME_MIT" kadmin.local -q 'modprinc +0x1ffffffff hexu' 2>&1 || true)"
@@ -1509,13 +1564,19 @@ echo "$MIT_CPW1" | grep -F "Current password's minimum life has not expired"
 MIT_CPW2="$(docker exec "$NAME_MIT" kadmin -p user -w userpassword -q 'cpw -pw user-new2 user' 2>&1 || true)"
 echo "$MIT_CPW2"
 echo "$MIT_CPW2" | grep -F "Current password's minimum life has not expired"
-echo "==== MIT admin cpw ignores min_life ===="
-MIT_CPWA="$(docker exec "$NAME_MIT" kadmin.local -q 'cpw -pw userpassword user' 2>&1 || true)"
+echo "==== MIT admin cpw new password then reuse ===="
+MIT_CPWA="$(docker exec "$NAME_MIT" kadmin.local -q 'cpw -pw user-admin-new user' 2>&1 || true)"
 echo "$MIT_CPWA"
-if echo "$MIT_CPWA" | grep -qiE 'minimum life|too soon|too recently'; then
-    echo "MIT admin cpw hit min_life: $MIT_CPWA" >&2
+if echo "$MIT_CPWA" | grep -qiE 'minimum life|too soon|too recently|Cannot reuse'; then
+    echo "MIT admin cpw new password failed: $MIT_CPWA" >&2
     exit 1
 fi
+MIT_CPWR="$(docker exec "$NAME_MIT" kadmin.local -q 'cpw -pw user-admin-new user' 2>&1 || true)"
+echo "$MIT_CPWR"
+echo "$MIT_CPWR" | grep -F 'Cannot reuse password' || {
+    echo "MIT admin cpw reuse missed: $MIT_CPWR" >&2
+    exit 1
+}
 echo "==== MIT self keepold clamps to 5 ===="
 docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw keep-0 keepoldself'
 pw=keep-0
@@ -1529,8 +1590,17 @@ MIT_KEEPG="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc keepoldself' 2>&1
 echo "$MIT_KEEPG"
 nkeys="$(echo "$MIT_KEEPG" | sed -n 's/^Key: vno \([0-9][0-9]*\).*/\1/p' | sort -u | wc -l | tr -d ' ')"
 echo "mit_keepold_kvnos=$nkeys"
-if [ "$nkeys" -gt 5 ]; then
-    echo "MIT self keepold exceeded 5: $MIT_KEEPG" >&2
+if [ "$nkeys" != 5 ]; then
+    echo "MIT self keepold not 5: $nkeys $MIT_KEEPG" >&2
+    exit 1
+fi
+echo "==== MIT purgekeys locked-down target is allowed ===="
+docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw lock-secret lockp' || true
+docker exec "$NAME_MIT" kadmin.local -q 'modprinc +lockdown_keys lockp'
+MIT_PURGE_L="$(docker exec "$NAME_MIT" kadmin.local -q 'purgekeys lockp' 2>&1 || true)"
+echo "$MIT_PURGE_L"
+if echo "$MIT_PURGE_L" | grep -qiE 'protect|lockdown|Operation requires'; then
+    echo "MIT purgekeys lockdown denied: $MIT_PURGE_L" >&2
     exit 1
 fi
 

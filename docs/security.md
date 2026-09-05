@@ -198,8 +198,8 @@ iprop is RPCSEC_GSS only (`ipropd_svc.c:481-483`) with
 `AUTH_TOOWEAK`. The RPCSEC_GSS INIT reply verifier is
 `gss_get_mic(htonl(seq_window))` (`svc_auth_gss.c:271-286,496-504`).
 A full-resync deny is `kdb_fullresync_result_t`
-(`ipropd_svc.c:312-320`, `iprop.x:208-211`). Purgekeys stays
-`KADM5_PROTECT_KEYS` (stricter than MIT, which has no lockdown check).
+(`ipropd_svc.c:312-320`, `iprop.x:208-211`). Purgekeys of a
+locked-down principal is allowed (`server_stubs.c:1495-1530`).
 Kadmind ONC RPC (`svc.c:486-520`) answers `PROG_UNAVAIL` for an
 unknown program, `PROG_MISMATCH` with low=high=`KADMVERS` 2 for
 program 2112 and a wrong version, and `AUTH_TOOWEAK` for AUTH_NONE
@@ -219,8 +219,8 @@ other principal is result 5 `Unauthorized request`
 foreign-realm principal is result 2 with `chpass_util.c:136-140`
 (`Password not changed.\nPrincipal does not exist while trying to
 change password.\n`). Admin-style changes ignore INITIAL. `min_life`
-is W1. Purgekeys of a locked-down principal is `KADM5_PROTECT_KEYS`
-(stricter than MIT, which has no lockdown check on purgekeys).
+is W1. Purgekeys of a locked-down principal is allowed
+(`server_stubs.c:1495-1530`, `svr_principal.c:1937`).
 Length prefix and version are checked before AP-REQ work
 (`schpw.c:47-82`). Inconsistent length, unknown version, and the
 truncated cases `goto bailout` (`:384-397`); `dispatch` calls

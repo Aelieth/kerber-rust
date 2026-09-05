@@ -649,8 +649,86 @@ impl<'a> AdminSession<'a> {
         p.max_fail = a.max_fail.unwrap_or(0);
         p.pw_failcnt_interval = a.pw_failcnt_interval.unwrap_or(0);
         p.pw_lockout_duration = a.pw_lockout_duration.unwrap_or(0);
+        if self.store.policies().contains_key(&a.name) {
+            return Err(Error::Inner("Principal or policy already exists".into()));
+        }
         self.store.put_policy(p);
         Ok(())
+    }
+
+    /// `modpol` (`svr_policy.c:292-322` on the merged record).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] or a floor/lifetime error.
+    pub fn modify_policy_ent(&mut self, a: &PolicyArgs) -> Result<(), Error> {
+        let _ = self.reload();
+        let mut p = self
+            .store
+            .policies()
+            .get(&a.name)
+            .cloned()
+            .ok_or(Error::NotFound)?;
+        if let Some(0) = a.min_length {
+            return Err(Error::Inner("Invalid password length".into()));
+        }
+        if let Some(c) = a.min_classes
+            && !(1..=5).contains(&c)
+        {
+            return Err(Error::Inner("Invalid character class requirement".into()));
+        }
+        if let Some(0) = a.history {
+            return Err(Error::Inner("Invalid history count".into()));
+        }
+        if let Some(v) = a.pw_max_life {
+            p.pw_max_life = v;
+        }
+        if let Some(v) = a.pw_min_life {
+            p.pw_min_life = v;
+        }
+        if p.pw_min_life > p.pw_max_life && p.pw_max_life != 0 && a.pw_min_life.is_some() {
+            return Err(Error::Inner(
+                "Password min life longer than max life".into(),
+            ));
+        }
+        if let Some(v) = a.min_length {
+            p.min_length = v;
+        }
+        if let Some(v) = a.min_classes {
+            p.min_classes = v;
+        }
+        if let Some(v) = a.history {
+            p.history = v;
+        }
+        if let Some(v) = a.max_fail {
+            p.max_fail = v;
+        }
+        if let Some(v) = a.pw_failcnt_interval {
+            p.pw_failcnt_interval = v;
+        }
+        if let Some(v) = a.pw_lockout_duration {
+            p.pw_lockout_duration = v;
+        }
+        self.store.put_policy(p);
+        Ok(())
+    }
+
+    /// `delpol`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    pub fn delete_policy(&mut self, name: &str) -> Result<(), Error> {
+        let _ = self.reload();
+        self.store.delete_policy(name).map_err(Error::from)
+    }
+
+    /// `listpols`.
+    #[must_use]
+    pub fn list_policies(&self) -> Vec<String> {
+        let mut n: Vec<String> = self.store.policies().keys().cloned().collect();
+        n.sort();
+        n
     }
 
     /// `getpol` (`kadmin.c:1794-1807` via `strdur`).

@@ -219,6 +219,22 @@ fn run(sess: &mut AdminSession<'_>, line: &str) -> Result<LineOutcome, String> {
             println!("{p}");
             Ok(LineOutcome::Next)
         }
+        Some("modpol" | "modify_policy") => {
+            let a = parse_policy_args(&parts[1..])?;
+            sess.modify_policy_ent(&a).map_err(|e| e.to_string())?;
+            Ok(LineOutcome::Next)
+        }
+        Some("delpol" | "delete_policy") => {
+            let n = parts.get(1).ok_or("delpol <name>")?;
+            sess.delete_policy(n).map_err(|e| e.to_string())?;
+            Ok(LineOutcome::Next)
+        }
+        Some("listpols" | "list_policies") => {
+            for n in sess.list_policies() {
+                println!("{n}");
+            }
+            Ok(LineOutcome::Next)
+        }
         Some("setstr") => {
             let princ = parts.get(1).ok_or("setstr <princ> <key> <val>")?;
             let key = parts.get(2).ok_or("setstr key")?;
@@ -368,6 +384,16 @@ mod tests {
             "{text}"
         );
         assert!(run(&mut sess, "addpol -history 0 zhist").is_err());
+        run(&mut sess, "modpol -minlength 10 pflags").unwrap();
+        let text = sess.get_policy("pflags").unwrap();
+        assert!(text.contains("Minimum password length: 10"), "{text}");
+        assert!(run(&mut sess, "modpol -minlength 0 pflags").is_err());
+        run(&mut sess, "addpol extra").unwrap();
+        let listed = sess.list_policies();
+        assert!(listed.iter().any(|n| n == "pflags"), "{listed:?}");
+        assert!(listed.iter().any(|n| n == "extra"), "{listed:?}");
+        run(&mut sess, "delpol extra").unwrap();
+        assert!(!sess.list_policies().iter().any(|n| n == "extra"));
     }
 
     #[test]

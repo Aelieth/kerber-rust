@@ -8,6 +8,13 @@ this project uses semantic versioning once a crate is published.
 
 ### W1-I Round 3 (K12–K17)
 
+- **K13.** `kadm5_modify_policy` validates the merged record
+  (`BAD_LENGTH` / `BAD_CLASS` / `BAD_HISTORY` / `BAD_MIN_PASS_LIFE`).
+  Create is DUP before floors. `pw_expiration` on modify is
+  `last_pwd_change + pw_max_life`. `set_keys` clears
+  `REQUIRES_PWCHANGE` and `fail_auth_count`. Self keepold is exactly
+  5; non-self keepold=1 is unbounded. Purgekeys on a locked-down
+  target is allowed. kadmin.local `modpol`/`listpols`/`delpol`.
 - **K12.** `red-at-sha.sh --inject` copies named HEAD files before
   `write-tree`. `unit_red_at` refuses a call with no files.
   `settle.sh` tees and refuses `grep` of an existing file. Parent

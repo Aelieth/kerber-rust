@@ -94,8 +94,10 @@ const EXTRACT_KEYS: u32 = 26;
 const KADM5_UNK_PRINC: u32 = 43_787_532;
 /// MIT `KADM5_UNK_POLICY`.
 const KADM5_UNK_POLICY: u32 = 43_787_533;
+const KADM5_BAD_MASK: u32 = 43_787_534;
 const KADM5_BAD_CLASS: u32 = 43_787_535;
 const KADM5_BAD_LENGTH: u32 = 43_787_536;
+const KADM5_BAD_POLICY: u32 = 43_787_537;
 const KADM5_BAD_HISTORY: u32 = 43_787_540;
 const KADM5_BAD_MIN_PASS_LIFE: u32 = 43_787_541;
 /// MIT `KADM5_DUP`.
@@ -132,8 +134,6 @@ const KADM5_AUTH_SETKEY: u32 = 43_787_570;
 const KADM5_SETKEY_BAD_KVNO: u32 = 43_787_579;
 /// MIT `ovk` 60 (`KADM5_AUTH_EXTRACT`).
 const KADM5_AUTH_EXTRACT: u32 = 43_787_580;
-/// MIT `ovk` 61 (`KADM5_PROTECT_KEYS`).
-const KADM5_PROTECT_KEYS: u32 = 43_787_581;
 const KADM5_ATTRIBUTES: u32 = 0x0000_0010;
 const KADM5_MAX_LIFE: u32 = 0x0000_0020;
 const KADM5_PRINC_EXPIRE_TIME: u32 = 0x0000_0002;
@@ -150,6 +150,27 @@ const KADM5_PW_HISTORY_NUM: u32 = 0x0004_0000;
 const KADM5_PW_MAX_FAILURE: u32 = 0x0010_0000;
 const KADM5_PW_FAILURE_COUNT_INTERVAL: u32 = 0x0020_0000;
 const KADM5_PW_LOCKOUT_DURATION: u32 = 0x0040_0000;
+const KADM5_REF_COUNT: u32 = 0x0008_0000;
+const KADM5_POLICY_ATTRIBUTES: u32 = 0x0080_0000;
+const KADM5_POLICY_MAX_LIFE: u32 = 0x0100_0000;
+const KADM5_POLICY_MAX_RLIFE: u32 = 0x0200_0000;
+const KADM5_POLICY_ALLOWED_KEYSALTS: u32 = 0x0400_0000;
+const KADM5_POLICY_TL_DATA: u32 = 0x0800_0000;
+const ALL_POLICY_MASK: u32 = KADM5_POLICY
+    | KADM5_PW_MAX_LIFE
+    | KADM5_PW_MIN_LIFE
+    | KADM5_PW_MIN_LENGTH
+    | KADM5_PW_MIN_CLASSES
+    | KADM5_PW_HISTORY_NUM
+    | KADM5_REF_COUNT
+    | KADM5_PW_MAX_FAILURE
+    | KADM5_PW_FAILURE_COUNT_INTERVAL
+    | KADM5_PW_LOCKOUT_DURATION
+    | KADM5_POLICY_ATTRIBUTES
+    | KADM5_POLICY_MAX_LIFE
+    | KADM5_POLICY_MAX_RLIFE
+    | KADM5_POLICY_ALLOWED_KEYSALTS
+    | KADM5_POLICY_TL_DATA;
 
 /// OpenVision/MIT `KADM5_API_VERSION_2`.
 const API_V2: u32 = 0x1234_5702;
@@ -1979,13 +2000,12 @@ fn dispatch_kadm5_ticket(
             if changepw || acl.check(actor, krb5_kdc::AdminOp::Create, None).is_err() {
                 return Ok(generic_ret(api, KADM5_AUTH_ADD));
             }
-            if pol.name.is_empty() {
-                return Ok(generic_ret(api, KADM5_UNK_POLICY));
-            }
-            if let Some(code) = policy_floor_err(&pol, mask) {
+            if let Some(code) = policy_name_err(&pol.name) {
                 return Ok(generic_ret(api, code));
             }
-            apply_policy_floors(&mut pol, mask);
+            if let Some(code) = policy_mask_err(mask, true) {
+                return Ok(generic_ret(api, code));
+            }
             let mut g = match write_store(store, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
@@ -1993,6 +2013,10 @@ fn dispatch_kadm5_ticket(
             if g.policies().contains_key(&pol.name) {
                 return Ok(generic_ret(api, KADM5_DUP));
             }
+            if let Some(code) = policy_floor_err(&pol, mask) {
+                return Ok(generic_ret(api, code));
+            }
+            apply_policy_floors(&mut pol, mask);
             g.put_policy(pol);
             Ok(generic_ret(api, 0))
         }
@@ -2016,6 +2040,12 @@ fn dispatch_kadm5_ticket(
             if changepw || acl.check(actor, krb5_kdc::AdminOp::Modify, None).is_err() {
                 return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
             }
+            if let Some(code) = policy_name_err(&rec.name) {
+                return Ok(generic_ret(api, code));
+            }
+            if let Some(code) = policy_mask_err(mask, false) {
+                return Ok(generic_ret(api, code));
+            }
             let mut g = match write_store(store, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
@@ -2023,7 +2053,11 @@ fn dispatch_kadm5_ticket(
             let Some(existing) = g.policies().get(&rec.name).cloned() else {
                 return Ok(generic_ret(api, KADM5_UNK_POLICY));
             };
-            g.put_policy(merge_policy(existing, &rec, mask));
+            let merged = merge_policy(existing, &rec, mask);
+            if let Some(code) = policy_floor_err(&merged, mask) {
+                return Ok(generic_ret(api, code));
+            }
+            g.put_policy(merged);
             Ok(generic_ret(api, 0))
         }
         GET_POLICY => {
@@ -2161,12 +2195,6 @@ fn dispatch_kadm5_ticket(
                     && !is_self(actor, &name, &realm))
             {
                 return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
-            }
-            let lockdown = g
-                .get_name(&name)
-                .is_some_and(|p| p.attributes & KDB_LOCKDOWN_KEYS != 0);
-            if lockdown {
-                return Ok(generic_ret(api, KADM5_PROTECT_KEYS));
             }
             match g.purgekeys(&name, keepkvno) {
                 Ok(()) => {
@@ -2411,12 +2439,29 @@ const MIN_PW_CLASSES: u32 = 1;
 const MAX_PW_CLASSES: u32 = 5;
 const MIN_PW_HISTORY: u32 = 1;
 
+fn policy_name_err(name: &str) -> Option<u32> {
+    if name.is_empty() || name.bytes().any(|b| !(b' '..=b'~').contains(&b)) {
+        return Some(KADM5_BAD_POLICY);
+    }
+    None
+}
+
+fn policy_mask_err(mask: u32, create: bool) -> Option<u32> {
+    if mask & !ALL_POLICY_MASK != 0 {
+        return Some(KADM5_BAD_MASK);
+    }
+    if create {
+        if mask & KADM5_POLICY == 0 {
+            return Some(KADM5_BAD_MASK);
+        }
+    } else if mask & KADM5_POLICY != 0 {
+        return Some(KADM5_BAD_MASK);
+    }
+    None
+}
+
 fn policy_floor_err(pol: &krb5_kdc::NamedPolicy, mask: u32) -> Option<u32> {
-    if mask & KADM5_PW_MIN_LIFE != 0
-        && mask & KADM5_PW_MAX_LIFE != 0
-        && pol.pw_min_life > pol.pw_max_life
-        && pol.pw_max_life != 0
-    {
+    if mask & KADM5_PW_MIN_LIFE != 0 && pol.pw_min_life > pol.pw_max_life && pol.pw_max_life != 0 {
         return Some(KADM5_BAD_MIN_PASS_LIFE);
     }
     if mask & KADM5_PW_MIN_LENGTH != 0 && pol.min_length < MIN_PW_LENGTH {
@@ -4573,7 +4618,7 @@ mod tests {
         let mut kvnos: Vec<u32> = p.keys.iter().map(|k| k.kvno).collect();
         kvnos.sort_unstable();
         kvnos.dedup();
-        assert!(kvnos.len() <= 5, "self chrand keepold cap: {kvnos:?}");
+        assert_eq!(kvnos.len(), 5, "self chrand keepold cap: {kvnos:?}");
     }
 
     #[test]
@@ -4606,7 +4651,7 @@ mod tests {
         let mut kvnos: Vec<u32> = p.keys.iter().map(|k| k.kvno).collect();
         kvnos.sort_unstable();
         kvnos.dedup();
-        assert!(kvnos.len() <= 5, "self keepold cap: {kvnos:?}");
+        assert_eq!(kvnos.len(), 5, "self keepold cap: {kvnos:?}");
     }
 
     #[test]
@@ -4829,7 +4874,7 @@ mod tests {
     }
 
     #[test]
-    fn purgekeys_lockdown_is_protect_keys() {
+    fn purgekeys_locked_down_target_is_allowed() {
         let (store, acl, actor) = setup();
         let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
         {
@@ -4853,7 +4898,7 @@ mod tests {
             &purgekeys_args("user@KERBER.TEST", -1),
         )
         .unwrap();
-        assert_eq!(ret_code(&out), KADM5_PROTECT_KEYS);
+        assert_eq!(ret_code(&out), 0);
     }
 
     fn setkey16_args(name: &str, etype: i32, key: &[u8]) -> Vec<u8> {
@@ -5668,6 +5713,143 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ret_code(&bad), KADM5_BAD_HISTORY);
+    }
+
+    #[test]
+    fn modify_policy_below_floor_is_bad_length() {
+        let (store, acl, actor) = setup();
+        let pol = krb5_kdc::NamedPolicy::new("fl");
+        assert_eq!(
+            ret_code(
+                &dispatch_kadm5(
+                    &store,
+                    &acl,
+                    &actor,
+                    CREATE_POLICY,
+                    &encode_cpol(API_V2, &pol, KADM5_POLICY),
+                )
+                .unwrap()
+            ),
+            0
+        );
+        let mut rec = pol.clone();
+        rec.min_length = 0;
+        let bad = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            MODIFY_POLICY,
+            &encode_cpol(API_V2, &rec, KADM5_PW_MIN_LENGTH),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&bad), KADM5_BAD_LENGTH);
+        rec.min_length = 1;
+        rec.min_classes = 0;
+        let badc = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            MODIFY_POLICY,
+            &encode_cpol(API_V2, &rec, KADM5_PW_MIN_CLASSES),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&badc), KADM5_BAD_CLASS);
+        rec.min_classes = 1;
+        rec.history = 0;
+        let badh = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            MODIFY_POLICY,
+            &encode_cpol(API_V2, &rec, KADM5_PW_HISTORY_NUM),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&badh), KADM5_BAD_HISTORY);
+    }
+
+    #[test]
+    fn modify_policy_min_life_over_merged_max_is_bad_min_pass_life() {
+        let (store, acl, actor) = setup();
+        let mut pol = krb5_kdc::NamedPolicy::new("life");
+        pol.pw_max_life = 86_400;
+        assert_eq!(
+            ret_code(
+                &dispatch_kadm5(
+                    &store,
+                    &acl,
+                    &actor,
+                    CREATE_POLICY,
+                    &encode_cpol(API_V2, &pol, KADM5_POLICY | KADM5_PW_MAX_LIFE),
+                )
+                .unwrap()
+            ),
+            0
+        );
+        pol.pw_min_life = 172_800;
+        let bad = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            MODIFY_POLICY,
+            &encode_cpol(API_V2, &pol, KADM5_PW_MIN_LIFE),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&bad), KADM5_BAD_MIN_PASS_LIFE);
+    }
+
+    #[test]
+    fn create_policy_dup_before_floors() {
+        let (store, acl, actor) = setup();
+        let pol = krb5_kdc::NamedPolicy::new("dup");
+        assert_eq!(
+            ret_code(
+                &dispatch_kadm5(
+                    &store,
+                    &acl,
+                    &actor,
+                    CREATE_POLICY,
+                    &encode_cpol(API_V2, &pol, KADM5_POLICY),
+                )
+                .unwrap()
+            ),
+            0
+        );
+        let mut z = pol.clone();
+        z.history = 0;
+        let dup = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            CREATE_POLICY,
+            &encode_cpol(API_V2, &z, KADM5_POLICY | KADM5_PW_HISTORY_NUM),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&dup), KADM5_DUP);
+    }
+
+    #[test]
+    fn non_self_keepold_is_unbounded() {
+        let (store, acl, actor) = setup();
+        let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+        for i in 1..=6 {
+            let mut w = XdrW::default();
+            w.u32(API_V2);
+            w.nullstring(Some("user@KERBER.TEST"));
+            w.u32(1);
+            w.u32(0);
+            w.nullstring(Some(&format!("admin-keep-{i}")));
+            let out = dispatch_kadm5(&store, &acl, &actor, CHPASS_PRINCIPAL3, &w.b).unwrap();
+            assert_eq!(ret_code(&out), 0, "admin keepold {i}");
+        }
+        let g = store.read().unwrap();
+        let p = g.get_name(&name).unwrap();
+        let mut kvnos: Vec<u32> = p.keys.iter().map(|k| k.kvno).collect();
+        kvnos.sort_unstable();
+        kvnos.dedup();
+        assert!(
+            kvnos.len() > 5,
+            "non-self keepold=1 is unbounded: {kvnos:?}"
+        );
     }
 
     #[test]

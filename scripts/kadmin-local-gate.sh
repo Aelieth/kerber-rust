@@ -152,6 +152,41 @@ echo "$GETP" | grep -F 'Minimum number of password character classes: 2'
 echo "$GETP" | grep -F 'Number of old keys kept: 3'
 echo "$GETP" | grep -F 'Maximum password life: 1 day 00:00:00'
 echo "$GETP" | grep -F 'Minimum password life: 0 days 01:00:00'
+echo "==== kadmin.local modpol/listpols/delpol ===="
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'modpol -minlength 10 pflags'
+GETPM="$(docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'getpol pflags')"
+echo "$GETPM"
+echo "$GETPM" | grep -F 'Minimum password length: 10'
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'addpol extra'
+LISTP="$(docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'listpols')"
+echo "$LISTP"
+echo "$LISTP" | grep -F 'pflags'
+echo "$LISTP" | grep -F 'extra'
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'delpol extra'
+LISTP2="$(docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'listpols')"
+echo "$LISTP2"
+if echo "$LISTP2" | grep -Fx extra; then
+    echo "delpol extra left extra in listpols: $LISTP2" >&2
+    exit 1
+fi
 
 echo "==== kadmin.local ignores KRB5_ACL_FILE ===="
 set +e

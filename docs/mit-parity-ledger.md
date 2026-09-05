@@ -35,9 +35,9 @@ Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after W1-I iprop flavor + INIT verifier):
-**252** = A1 116 + A2 67 + A3 55 + A4 14.
-exact 68 · stricter-documented 11 · deviation 92 ·
+Counts (after W1-I K13 policy modify + purgekeys):
+**255** = A1 116 + A2 67 + A3 55 + A4 17.
+exact 71 · stricter-documented 11 · deviation 92 ·
 absent 66 · deferred 15.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
@@ -435,3 +435,6 @@ checksum/rc4/declared-cksumtype rows that sat under A3.
 | ipropd_svc.c:312-320; iprop.x:208-211 | full-resync deny is `kdb_fullresync_result_t` `{lastentry, ret}` | UPDATE_PERM_DENIED | kadm5.rs dispatch_iprop; kadm5.rs encode_fullresync_status | same XDR | exact | `iprop_fullresync_deny_is_fullresync_result`; `scripts/iprop-gate.sh` `fullresync_status=5` both legs |
 | parse.c:62-102; unparse.c:85-134; x-deltat.y:149-171; t_deltat.c:46-126; server_stubs.c:262-303 | parse/unparse quoting; `string_to_deltat`; `stub_setup` lookup → `UNK_PRINC` before ACL | `KADM5_UNK_PRINC` | name.rs parse_name; deltat.rs parse; kadm5.rs dispatch_kadm5_ticket | `\/` `\@`; missing target is UNK on GET/MODIFY/SETKEY/PURGE/EXTRACT/SET_STRING | exact | `stub_setup_unk_before_acl_on_modify_setkey_purge_extract_setstr`; `getprinc_foreign_realm_is_unk_princ`; `scripts/kadmin-gate.sh` 12:34/3dd/`foo\/admin`/nosuch both legs |
 | server_stubs.c:368-400,851-869; misc.c:60-121 | `check_self_keychange` / `check_min_life` / `clamp_self_keepold` 5; chpass lockdown→ACL→self | `KADM5_PASS_TOOSOON` | kadm5.rs kadm5_code; store.rs check_min_life | min_life self; admin ignores; keepold 5 | exact | `policy_min_max_life_round_trip_and_min_life`; `self_keepold_clamps_to_five`; `scripts/kadmin-gate.sh` getpol/cpw; `scripts/kpasswd-gate.sh` minlife |
+| svr_policy.c:70-96,292-322 | create DUP before floors; modify validates merged `pw_max_life` / length / class / history | `BAD_POLICY` / `BAD_MASK` / `BAD_LENGTH` / `BAD_CLASS` / `BAD_HISTORY` / `BAD_MIN_PASS_LIFE` | kadm5.rs policy_floor_err; kadm5.rs MODIFY_POLICY | same codes on merged record | exact | `modify_policy_below_floor_is_bad_length`; `modify_policy_min_life_over_merged_max_is_bad_min_pass_life`; `create_policy_dup_before_floors` |
+| server_stubs.c:1495-1530; svr_principal.c:1937 | purgekeys has no lockdown check | 0 | kadm5.rs PURGEKEYS | allowed on locked-down target | exact | `purgekeys_locked_down_target_is_allowed` |
+| kdb_cpw.c:116-137 | keepold 1 = unbounded; self clamp 5 | n/a | kadm5.rs clamp_self_keepold; store.rs cap_key_versions | self == 5; non-self keepold=1 > 5 | exact | `self_keepold_clamps_to_five`; `non_self_keepold_is_unbounded` |

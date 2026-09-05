@@ -1231,12 +1231,14 @@ impl PrincipalStore {
         let new_keys =
             keys_from_password(&self.policy.password_etypes(), password, &salt, next_kvno)?;
         self.replace_password_keys(&id, new_keys, depth, keepold)?;
-        self.apply_pw_max_life(name)
+        self.apply_pw_max_life(name)?;
+        let snap = self.map.get(&id).cloned();
+        self.note_ulog(id, false, snap);
+        self.save_if_configured()
     }
 
     fn apply_pw_max_life(&mut self, name: &PrincipalName) -> Result<(), Error> {
         let id = crate::kdb::lookup_principal_id(name, &self.realm);
-        let now = unix_now_u32();
         let max_life = {
             let p = self.map.get(&id).ok_or(Error::NotFound)?;
             p.pw_policy
@@ -1248,7 +1250,7 @@ impl PrincipalStore {
         p.pw_expire = if max_life == 0 {
             0
         } else {
-            now.saturating_add(max_life)
+            last_pwd_unix(p).saturating_add(max_life)
         };
         Ok(())
     }
@@ -1270,10 +1272,10 @@ impl PrincipalStore {
                 cap_key_versions(&mut p.keys, keepold);
             }
         }
+        p.attributes &= !KDB_REQUIRES_PWCHANGE;
+        p.fail_auth_count = 0;
         stamp_admin_tl(p, true);
-        let snap = p.clone();
-        self.note_ulog(id.to_owned(), false, Some(snap));
-        self.save_if_configured()
+        Ok(())
     }
 
     /// Set lockout and password-expiry, then persist when `persist_paths` is set.
@@ -1771,11 +1773,13 @@ impl PrincipalStore {
             } else {
                 p.keys = keys;
             }
+            p.attributes &= !KDB_REQUIRES_PWCHANGE;
+            p.fail_auth_count = 0;
             stamp_admin_tl(p, true);
-            let snap = p.clone();
-            self.note_ulog(id, false, Some(snap));
         }
         self.apply_pw_max_life(name)?;
+        let snap = self.map.get(&id).cloned();
+        self.note_ulog(id, false, snap);
         self.save_if_configured()
     }
 
@@ -2384,6 +2388,39 @@ mod tests {
             1_000,
             "setkey must stamp mod"
         );
+    }
+
+    #[test]
+    fn set_keys_clears_requires_pwchange_and_fail_count() {
+        let (mut store, _) = crate::bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+        let mut p = store.get_name(&user).unwrap().clone();
+        p.attributes |= KDB_REQUIRES_PWCHANGE;
+        p.fail_auth_count = 4;
+        let etype = p.best_key().unwrap().etype;
+        let key = p.best_key().unwrap().key.clone();
+        store.debug_insert(p);
+        store
+            .set_keys(&user, vec![KeyEntry::new(etype, key, 0)], 0)
+            .unwrap();
+        let after = store.get_name(&user).unwrap();
+        assert_eq!(after.attributes & KDB_REQUIRES_PWCHANGE, 0);
+        assert_eq!(after.fail_auth_count, 0);
+    }
+
+    #[test]
+    fn pw_expiration_on_modify_is_last_pwd_change_plus_max_life() {
+        let (mut store, _) = crate::bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+        let mut pol = NamedPolicy::new("life");
+        pol.pw_max_life = 3600;
+        store.put_policy(pol);
+        store.set_last_pwd_unix(&user, 1_000_000);
+        store
+            .apply_admin_fields(&user, None, None, None, None, Some("life".into()), false)
+            .unwrap();
+        let after = store.get_name(&user).unwrap();
+        assert_eq!(after.pw_expire, 1_000_000 + 3600);
     }
 
     #[test]
