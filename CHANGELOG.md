@@ -8,6 +8,10 @@ this project uses semantic versioning once a crate is published.
 
 ### W1-I Round 3 (K12–K17)
 
+- **K17.** Eight checkpoint gates ×2 at the Round 3 SHA; `unit_red_at
+  --inject` reds for K12–K16 parents; INDEX/claim-audit/isolation;
+  `add_policy_ent` DUP before floors like `svr_policy.c`; kadmin-gate
+  diffs the two legs' `getprivs` lines.
 - **K16.** `stub_setup` with `rec_out == NULL` authorises CREATE/DELETE/RENAME
   on the request principal (including a foreign realm). Authorised
   `addprinc user@OTHER.REALM` stores that realm. ACL unknown op is

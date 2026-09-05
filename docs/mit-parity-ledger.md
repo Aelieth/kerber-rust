@@ -35,9 +35,9 @@ Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after W1-I K14 RPCSEC state machine):
-**258** = A1 116 + A2 67 + A3 55 + A4 20.
-exact 74 · stricter-documented 11 · deviation 92 ·
+Counts (after W1-I K17 rc4-session tkt row):
+**259** = A1 116 + A2 67 + A3 55 + A4 21.
+exact 74 · stricter-documented 11 · deviation 93 ·
 absent 66 · deferred 15.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
@@ -441,3 +441,4 @@ checksum/rc4/declared-cksumtype rows that sat under A3.
 | svc_auth_gss.c:449-547 | RPCSEC version `AUTH_BADCRED`; INIT NULLPROC; accept fail `AUTH_REJECTEDCRED`; DATA validate `CREDPROBLEM`; seq window `CTXPROBLEM`; DESTROY; unknown proc `AUTH_REJECTEDCRED` | AUTH_ERROR 1/2/13/14 | kadm5.rs handle_rpcsec_gss | same replies, connection kept | exact | `rpcsec_bad_version_is_auth_badcred`; `rpcsec_data_without_context_is_credproblem`; `rpcsec_init_non_nullproc_is_auth_failed`; `rpcsec_unknown_gc_proc_is_rejectedcred`; `rpcsec_seq_over_maxseq_is_ctxproblem`; `rpcsec_destroy_then_data_is_credproblem`; `scripts/kadmin-gate.sh` rpcsec_state both legs |
 | recvauth.c:168; krb5_err.et:75-88 | kprop `e_text` is `error_message()` + NUL | 32 `Ticket expired\0` | kprop.rs recvauth_protocol_text | MIT com_err strings | exact | `recvauth_tkt_expired_is_mit_error_message`; `kpropd_expired_ticket_is_32_ticket_expired`; `scripts/kprop-gate.sh` expired AP-REQ both legs |
 | net-server.c:1101-1105 | empty drop silent (no `while dispatching` when code 0) | none | kdc/listen.rs log_dispatch_drop | debug without suffix | exact | `log_dispatch_drop_udp_is_not_tcp` |
+| rc4-session-gate.sh (session skey vs tkt etype) | both directions `kinit`+`kvno` with `session_enctypes=rc4-hmac`; skey `arcfour-hmac`; tkt etype recorded until L4a | skey arcfour both legs | scripts/rc4-session-gate.sh | skey `arcfour-hmac`; tkt MIT `aes256-cts-hmac-sha384-192` vs Rust `aes256-cts-hmac-sha1-96` | deviation | `scripts/rc4-session-gate.sh` `skey=arcfour-hmac`; tkt inequality until L4a / W1-J |

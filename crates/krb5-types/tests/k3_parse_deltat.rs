@@ -20,4 +20,5 @@ fn deltat_t_c_vectors_and_hhmm() {
     assert_eq!(deltat::parse("3d").unwrap(), 3 * 24 * 3600);
     assert!(deltat::parse("3dd").is_err());
     assert_eq!(deltat::parse("42").unwrap(), 42);
+    assert_eq!(deltat::parse("42x").unwrap(), 42);
 }

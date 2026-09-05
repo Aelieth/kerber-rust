@@ -1628,6 +1628,14 @@ fi
 MIT_GETPRIVS="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'getprivs' 2>&1 || true)"
 echo "$MIT_GETPRIVS"
 echo "$MIT_GETPRIVS" | grep -qiE 'GET|ADD|MODIFY|DELETE'
+RUST_PRIV="$(echo "$GETPRIVS" | grep -i 'current privileges' || true)"
+MIT_PRIV="$(echo "$MIT_GETPRIVS" | grep -i 'current privileges' || true)"
+echo "getprivs_rust=$RUST_PRIV"
+echo "getprivs_mit=$MIT_PRIV"
+if [ -z "$RUST_PRIV" ] || [ "$RUST_PRIV" != "$MIT_PRIV" ]; then
+    echo "getprivs legs differ: rust=[$RUST_PRIV] mit=[$MIT_PRIV]" >&2
+    exit 1
+fi
 
 echo "==== MIT getprinc user@OTHER.REALM is UNK_PRINC ===="
 MIT_FOREIGN="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'getprinc user@OTHER.REALM' 2>&1 || true)"

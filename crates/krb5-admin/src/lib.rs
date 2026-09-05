@@ -619,6 +619,9 @@ impl<'a> AdminSession<'a> {
     /// Explicit values below the MIT floors.
     pub fn add_policy_ent(&mut self, a: &PolicyArgs) -> Result<(), Error> {
         let _ = self.reload();
+        if self.store.policies().contains_key(&a.name) {
+            return Err(Error::Inner("Principal or policy already exists".into()));
+        }
         if let Some(0) = a.min_length {
             return Err(Error::Inner("Invalid password length".into()));
         }
@@ -647,9 +650,6 @@ impl<'a> AdminSession<'a> {
         p.max_fail = a.max_fail.unwrap_or(0);
         p.pw_failcnt_interval = a.pw_failcnt_interval.unwrap_or(0);
         p.pw_lockout_duration = a.pw_lockout_duration.unwrap_or(0);
-        if self.store.policies().contains_key(&a.name) {
-            return Err(Error::Inner("Principal or policy already exists".into()));
-        }
         self.store.put_policy(p);
         Ok(())
     }
