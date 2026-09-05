@@ -1,7 +1,8 @@
 /* MIT libkadm5 client authenticating to kadmin/changepw (CHANGEPW_SERVICE).
  * Out-of-process only; compiled in the MIT 1.22.2 image.
  * usage: kadm5-changepw-rpc [--service princ] <client> <password> <realm> <op> [arg]
- * op: listprincs | getprinc <name>
+ * op: listprincs | getprinc <name> | randkey-keepold <n> | setkey-keepold <n>
+ *     | addpol-minlife-unmasked-max <policy>
  */
 #include <kadm5/admin.h>
 #include <com_err.h>
@@ -78,6 +79,52 @@ int main(int argc, char **argv) {
         if (ret == 0)
             kadm5_free_principal_ent(handle, &rec);
         krb5_free_principal(ctx, p);
+    } else if ((strcmp(op, "randkey-keepold") == 0 || strcmp(op, "setkey-keepold") == 0) &&
+               argc - argi >= 5) {
+        /* Repeat a keepold key change on the one authenticated handle (self). */
+        krb5_principal p;
+        int n = atoi(argv[argi + 4]);
+        int i;
+        ret = krb5_parse_name(ctx, client, &p);
+        if (ret) {
+            printf("parse_code=%ld\n", (long)ret);
+            kadm5_destroy(handle);
+            krb5_free_context(ctx);
+            return 1;
+        }
+        for (i = 1; i <= n; i++) {
+            if (strcmp(op, "randkey-keepold") == 0) {
+                krb5_keyblock *kb = NULL;
+                int nk = 0, k;
+                ret = kadm5_randkey_principal_3(handle, p, 1, 0, NULL, &kb, &nk);
+                for (k = 0; k < nk; k++)
+                    krb5_free_keyblock_contents(ctx, &kb[k]);
+                free(kb);
+            } else {
+                kadm5_key_data kd;
+                unsigned char raw[32];
+                memset(&kd, 0, sizeof(kd));
+                memset(raw, (unsigned char)i, sizeof(raw));
+                kd.key.magic = KV5M_KEYBLOCK;
+                kd.key.enctype = ENCTYPE_AES256_CTS_HMAC_SHA1_96;
+                kd.key.length = sizeof(raw);
+                kd.key.contents = raw;
+                ret = kadm5_setkey_principal_4(handle, p, 1, &kd, 1);
+            }
+            printf("%s[%d]=%ld\n", op, i, (long)ret);
+            if (ret)
+                break;
+        }
+        krb5_free_principal(ctx, p);
+    } else if (strcmp(op, "addpol-minlife-unmasked-max") == 0 && argc - argi >= 5) {
+        /* pw_max_life is on the wire but not in the mask; MIT ignores it. */
+        kadm5_policy_ent_rec ent;
+        memset(&ent, 0, sizeof(ent));
+        ent.policy = argv[argi + 4];
+        ent.pw_min_life = 3600;
+        ent.pw_max_life = 1;
+        ret = kadm5_create_policy(handle, &ent, KADM5_POLICY | KADM5_PW_MIN_LIFE);
+        printf("addpol_code=%ld\n", (long)ret);
     } else {
         fprintf(stderr, "unknown op\n");
         kadm5_destroy(handle);

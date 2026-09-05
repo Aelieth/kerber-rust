@@ -24,8 +24,7 @@ pub fn parse(s: &str) -> Result<i32, DeltatError> {
     let b = s.as_bytes();
     let mut i = 0;
     let v = deltat(b, &mut i)?;
-    skip_ws(b, &mut i);
-    if i != b.len() && mylex_token(b[i]) {
+    if i != b.len() && (mylex_token(b[i]) || matches!(b[i], b' ' | b'\t' | b'\n')) {
         return Err(DeltatError);
     }
     Ok(v)

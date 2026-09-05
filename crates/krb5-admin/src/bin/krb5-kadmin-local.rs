@@ -7,7 +7,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
-use std::io::{self, BufRead};
+use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
 use krb5_admin::{AdminSession, KadminArgs, parse_kadmin_args, parse_policy_args};
@@ -55,7 +55,7 @@ fn main() {
         std::process::exit(run_stdin_reader(&mut sess, io::stdin().lock()));
     }
     for c in queued {
-        match run(&mut sess, &c) {
+        match run(&mut sess, &c, &mut io::stdin().lock()) {
             Ok(LineOutcome::Next) => {}
             Ok(LineOutcome::Quit) => break,
             Err(e) => {
@@ -92,7 +92,7 @@ where
 {
     let mut failed = false;
     for line in lines {
-        match run(sess, line.as_ref()) {
+        match run(sess, line.as_ref(), &mut io::empty()) {
             Ok(LineOutcome::Next) => {}
             Ok(LineOutcome::Quit) => break,
             Err(e) => {
@@ -104,11 +104,14 @@ where
     i32::from(failed)
 }
 
-fn run_stdin_reader<R: BufRead>(sess: &mut AdminSession<'_>, reader: R) -> i32 {
+fn run_stdin_reader<R: BufRead>(sess: &mut AdminSession<'_>, mut reader: R) -> i32 {
     let mut failed = false;
-    for line in reader.lines() {
-        let line = match line {
-            Ok(s) => s,
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {}
             Err(e) => {
                 eprintln!("kadmin.local: {e}");
                 failed = true;
@@ -117,8 +120,8 @@ fn run_stdin_reader<R: BufRead>(sess: &mut AdminSession<'_>, reader: R) -> i32 {
                 }
                 break;
             }
-        };
-        match run(sess, &line) {
+        }
+        match run(sess, &line, &mut reader) {
             Ok(LineOutcome::Next) => {}
             Ok(LineOutcome::Quit) => break,
             Err(e) => {
@@ -130,12 +133,71 @@ fn run_stdin_reader<R: BufRead>(sess: &mut AdminSession<'_>, reader: R) -> i32 {
     i32::from(failed)
 }
 
-fn run(sess: &mut AdminSession<'_>, line: &str) -> Result<LineOutcome, String> {
+fn ss_parse(line: &str) -> Result<Vec<String>, String> {
+    let mut argv = Vec::new();
+    let mut cur = String::new();
+    let mut in_token = false;
+    let mut quoted = false;
+    let mut it = line.chars().peekable();
+    while let Some(c) = it.next() {
+        if quoted {
+            if c != '"' {
+                cur.push(c);
+            } else if it.peek() == Some(&'"') {
+                it.next();
+                cur.push('"');
+            } else {
+                quoted = false;
+            }
+        } else if c == '"' {
+            quoted = true;
+            in_token = true;
+        } else if c == ' ' || c == '\t' {
+            if in_token {
+                argv.push(std::mem::take(&mut cur));
+                in_token = false;
+            }
+        } else {
+            in_token = true;
+            cur.push(c);
+        }
+    }
+    if quoted {
+        return Err("Unbalanced quotes in command line".into());
+    }
+    if in_token {
+        argv.push(cur);
+    }
+    Ok(argv)
+}
+
+fn force_arg<'a>(args: &[&'a str], usage: &str) -> Result<(bool, &'a str), String> {
+    match args {
+        [name] => Ok((false, name)),
+        ["-force", name] => Ok((true, name)),
+        _ => Err(usage.into()),
+    }
+}
+
+fn confirm_delete(what: &str, name: &str, input: &mut dyn BufRead) -> bool {
+    print!("Are you sure you want to delete the {what} \"{name}\"? (yes/no): ");
+    let _ = io::stdout().flush();
+    let mut reply = String::new();
+    let _ = input.read_line(&mut reply);
+    reply == "yes\n"
+}
+
+fn run(
+    sess: &mut AdminSession<'_>,
+    line: &str,
+    input: &mut dyn BufRead,
+) -> Result<LineOutcome, String> {
     let line = line.trim();
     if line.is_empty() || line.starts_with('#') {
         return Ok(LineOutcome::Next);
     }
-    let parts: Vec<&str> = line.split_whitespace().collect();
+    let argv = ss_parse(line)?;
+    let parts: Vec<&str> = argv.iter().map(String::as_str).collect();
     match parts.first().copied() {
         Some("q" | "quit" | "exit") => Ok(LineOutcome::Quit),
         Some("listprincs" | "list_principals") => {
@@ -174,11 +236,20 @@ fn run(sess: &mut AdminSession<'_>, line: &str) -> Result<LineOutcome, String> {
             apply_optional_fields(sess, &name, &a).map(|()| LineOutcome::Next)
         }
         Some("delprinc" | "delete_principal") => {
-            let spec = parts.get(1).ok_or("delprinc <name>")?;
+            let (force, spec) =
+                force_arg(&parts[1..], "usage: delete_principal [-force] principal")?;
             let name = parse_name(sess, spec)?;
-            sess.delete(&name)
-                .map_err(|e| e.to_string())
-                .map(|()| LineOutcome::Next)
+            let canon = name.unparse_with_realm(sess.realm());
+            if !force && !confirm_delete("principal", &canon, input) {
+                eprintln!("Principal \"{canon}\" not deleted");
+                return Ok(LineOutcome::Next);
+            }
+            sess.delete(&name).map_err(|e| e.to_string())?;
+            println!("Principal \"{canon}\" deleted.");
+            println!(
+                "Make sure that you have removed this principal from all ACLs before reusing."
+            );
+            Ok(LineOutcome::Next)
         }
         Some("cpw" | "change_password") => {
             let a = parse_kadmin_args(&parts[1..])?;
@@ -225,7 +296,11 @@ fn run(sess: &mut AdminSession<'_>, line: &str) -> Result<LineOutcome, String> {
             Ok(LineOutcome::Next)
         }
         Some("delpol" | "delete_policy") => {
-            let n = parts.get(1).ok_or("delpol <name>")?;
+            let (force, n) = force_arg(&parts[1..], "usage: delete_policy [-force] policy")?;
+            if !force && !confirm_delete("policy", n, input) {
+                eprintln!("Policy \"{n}\" not deleted.");
+                return Ok(LineOutcome::Next);
+            }
             sess.delete_policy(n).map_err(|e| e.to_string())?;
             Ok(LineOutcome::Next)
         }
@@ -321,19 +396,71 @@ mod tests {
         krb5_kdc::bootstrap_documented().unwrap()
     }
 
+    fn q(sess: &mut AdminSession<'_>, line: &str) -> Result<LineOutcome, String> {
+        run(sess, line, &mut io::empty())
+    }
+
+    #[test]
+    fn delete_prompts_unless_forced() {
+        let (mut store, acl) = sess_pair();
+        let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+        q(&mut sess, "addpol keep").unwrap();
+        q(&mut sess, "delpol keep").unwrap();
+        assert!(sess.get_policy("keep").is_ok());
+        run(&mut sess, "delpol keep", &mut io::Cursor::new("yes\n")).unwrap();
+        assert!(sess.get_policy("keep").is_err());
+        q(&mut sess, "addpol gone").unwrap();
+        q(&mut sess, "delpol -force gone").unwrap();
+        assert!(sess.get_policy("gone").is_err());
+        assert!(q(&mut sess, "delpol -force a b").is_err());
+        q(&mut sess, "delprinc user").unwrap();
+        assert!(q(&mut sess, "getprinc user").is_ok());
+        q(&mut sess, "delprinc -force user").unwrap();
+        assert!(q(&mut sess, "getprinc user").is_err());
+    }
+
+    #[test]
+    fn ss_parse_quotes_like_parse_c() {
+        assert_eq!(
+            ss_parse("addpol -maxlife \"1d \" tws").unwrap(),
+            ["addpol", "-maxlife", "1d ", "tws"]
+        );
+        assert_eq!(ss_parse("addpol \"a\"\"b\"").unwrap(), ["addpol", "a\"b"]);
+        assert_eq!(ss_parse("getpol \"\"").unwrap(), ["getpol", ""]);
+        assert_eq!(ss_parse("  getpol\ttws  ").unwrap(), ["getpol", "tws"]);
+        assert_eq!(
+            ss_parse("getpol \"tws").unwrap_err(),
+            "Unbalanced quotes in command line"
+        );
+    }
+
+    #[test]
+    fn quoted_interval_keeps_trailing_whitespace() {
+        let (mut store, acl) = sess_pair();
+        let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+        q(&mut sess, "addpol -maxlife \"1d \" tws").unwrap();
+        assert!(
+            sess.get_policy("tws")
+                .unwrap()
+                .contains("Maximum password life: 1 day 00:00:00")
+        );
+        assert!(q(&mut sess, "addpol -maxlife \"42 \" tws2").is_err());
+        assert!(sess.get_policy("tws2").is_err());
+    }
+
     #[test]
     fn unknown_verb_is_error() {
         let (mut store, acl) = sess_pair();
         let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
-        assert!(run(&mut sess, "nope").is_err());
+        assert!(q(&mut sess, "nope").is_err());
     }
 
     #[test]
     fn getstrs_prints_set_attr() {
         let (mut store, acl) = sess_pair();
         let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
-        run(&mut sess, "setstr user m5k m5v").unwrap();
-        run(&mut sess, "getstrs user").unwrap();
+        q(&mut sess, "setstr user m5k m5v").unwrap();
+        q(&mut sess, "getstrs user").unwrap();
         let attrs = sess
             .string_attrs(&krb5_types::PrincipalName::new(
                 krb5_types::PrincipalName::NT_PRINCIPAL,
@@ -359,11 +486,11 @@ mod tests {
     fn addpol_flags_getpol_layout() {
         let (mut store, acl) = sess_pair();
         let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
-        run(&mut sess, "addpol floors").unwrap();
+        q(&mut sess, "addpol floors").unwrap();
         let text = sess.get_policy("floors").unwrap();
         assert!(text.starts_with("Policy: floors\n"), "{text}");
         assert!(text.contains("Minimum password length: 1"), "{text}");
-        run(
+        q(
             &mut sess,
             "addpol -minlength 8 -minclasses 2 -history 3 -maxlife 1d -minlife 1h pflags",
         )
@@ -383,16 +510,16 @@ mod tests {
             text.contains("Minimum password life: 0 days 01:00:00"),
             "{text}"
         );
-        assert!(run(&mut sess, "addpol -history 0 zhist").is_err());
-        run(&mut sess, "modpol -minlength 10 pflags").unwrap();
+        assert!(q(&mut sess, "addpol -history 0 zhist").is_err());
+        q(&mut sess, "modpol -minlength 10 pflags").unwrap();
         let text = sess.get_policy("pflags").unwrap();
         assert!(text.contains("Minimum password length: 10"), "{text}");
-        assert!(run(&mut sess, "modpol -minlength 0 pflags").is_err());
-        run(&mut sess, "addpol extra").unwrap();
+        assert!(q(&mut sess, "modpol -minlength 0 pflags").is_err());
+        q(&mut sess, "addpol extra").unwrap();
         let listed = sess.list_policies();
         assert!(listed.iter().any(|n| n == "pflags"), "{listed:?}");
         assert!(listed.iter().any(|n| n == "extra"), "{listed:?}");
-        run(&mut sess, "delpol extra").unwrap();
+        q(&mut sess, "delpol -force extra").unwrap();
         assert!(!sess.list_policies().iter().any(|n| n == "extra"));
     }
 
@@ -402,7 +529,7 @@ mod tests {
         let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
         assert_eq!(run_stdin(&mut sess, ["q"]), 0);
         assert_eq!(run_stdin(&mut sess, ["q", "nope"]), 0);
-        assert!(matches!(run(&mut sess, "quit"), Ok(LineOutcome::Quit)));
+        assert!(matches!(q(&mut sess, "quit"), Ok(LineOutcome::Quit)));
     }
 
     #[test]

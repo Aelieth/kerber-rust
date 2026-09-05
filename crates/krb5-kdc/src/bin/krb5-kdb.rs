@@ -47,6 +47,13 @@ fn main() {
         cmd_setstr(&args[1], &args[2], &args[3]);
         return;
     }
+    if cmd == "setlastpwd" {
+        if args.len() != 3 {
+            usage();
+        }
+        cmd_setlastpwd(&args[1], &args[2]);
+        return;
+    }
     if args.len() != 2 {
         usage();
     }
@@ -71,7 +78,7 @@ fn main() {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: krb5-kdb load <dump>\n       krb5-kdb dump <dump> [--from-dump <mit-dump>]\n       krb5-kdb create <realm>\n       krb5-kdb addpol <name>\n       krb5-kdb setstr <princ> <key> <value>"
+        "usage: krb5-kdb load <dump>\n       krb5-kdb dump <dump> [--from-dump <mit-dump>]\n       krb5-kdb create <realm>\n       krb5-kdb addpol <name>\n       krb5-kdb setstr <princ> <key> <value>\n       krb5-kdb setlastpwd <princ> <unix-seconds>"
     );
     std::process::exit(2);
 }
@@ -258,6 +265,31 @@ fn cmd_setstr(princ: &str, key: &str, value: &str) {
         std::process::exit(1);
     });
     println!("ok setstr {princ} {key}");
+}
+
+fn cmd_setlastpwd(princ: &str, secs: &str) {
+    let ts: u32 = secs.parse().unwrap_or_else(|_| {
+        eprintln!("krb5-kdb: setlastpwd wants unix seconds");
+        std::process::exit(2);
+    });
+    let (db, stash) = db_and_stash();
+    let mut store = load_store(&db, &stash).unwrap_or_else(|e| {
+        eprintln!("krb5-kdb: load store: {e}");
+        std::process::exit(1);
+    });
+    let name = match krb5_types::principal_from_unparsed(princ, "") {
+        Ok((n, _)) => n,
+        Err(e) => {
+            eprintln!("krb5-kdb: {e}");
+            std::process::exit(2);
+        }
+    };
+    store.set_last_pwd_unix(&name, ts);
+    save_store(&store, &db, &stash).unwrap_or_else(|e| {
+        eprintln!("krb5-kdb: save store: {e}");
+        std::process::exit(1);
+    });
+    println!("ok setlastpwd {princ} {ts}");
 }
 
 fn db_and_stash() -> (PathBuf, PathBuf) {

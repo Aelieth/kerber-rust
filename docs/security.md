@@ -157,8 +157,10 @@ store realm (`krb5_parse_name`). Principal strings use
 components allowed, `foo@` keeps an empty realm. ACL `*/admin@R`
 does not match a one-component `foo/admin`. Restriction durations
 are `krb5_string_to_deltat` (`x-deltat.y`); `12:34` loads,
-`42x` is 42 s (`mylex` default is `YYEOF`), and `3dd` is
-`invalid restrictions`. CREATE/DELETE/RENAME authorise on the
+`42x` is 42 s (`mylex` default is `YYEOF`), `3dd` is
+`invalid restrictions`, and trailing whitespace is `tok_WS`
+(`x-deltat.y:225`): `42 ` is invalid while `1d ` is absorbed by the
+`opt_s` slot after `d`/`h`/`m` (`:146,169-170`). CREATE/DELETE/RENAME authorise on the
 request principal with no lookup (`server_stubs.c:262-303`,
 `rec_out == NULL`). An authorised `addprinc user@OTHER.REALM`
 creates that principal in the local KDB. Unknown ACL op letters
@@ -184,11 +186,19 @@ Self key change without an INITIAL ticket is `KADM5_AUTH_INITIAL`
 on `getpol`. Self chpass/chrand/kpasswd run `check_min_life`
 (`misc.c:60-121`): `KADM5_PASS_TOOSOON` / kpasswd result 4 unless
 `REQUIRES_PWCHANGE`; a non-self admin ignores min_life. `pw_max_life`
-sets `pw_expiration`. Self `-keepold` clamps to `MAX_SELF_KEEPOLD` 5
-(`server_stubs.c:391-399`). Chpass order is lockdown → ACL → self
+sets `pw_expiration` (`-policy` from `last_pwd_change`, cpw from now;
+`svr_principal.c:614-625,1336`). Self `-keepold` clamps to
+`MAX_SELF_KEEPOLD` 5 (`server_stubs.c:391-399`) for chpass, chrand and
+setkey alike as a version count (`kdb_cpw.c:117-137`). MIT 1.22.2
+`kadm5_setkey_principal_4` copies the old keys but never advances
+`n_new_key_data` past the new ones (`svr_principal.c:1695-1710`), so its
+setkey `-keepold` drops every old key; kerber-rust keeps them (deviation,
+pinned on both legs by `scripts/kadmin-gate.sh`). Chpass order is lockdown → ACL → self
 keychange (`:851-869`). `get_privs` returns `~0`
 (`server_misc.c:146-158`). `kadmin.local` applies no ACL (`KRB5_ACL_FILE`
-is kadmind-only). A `kadmin/changepw` GSS acceptor is
+is kadmind-only) and exits 1 after a failed verb where MIT exits 0
+outside script mode (`ss_wrapper.c:66-76`, `kadmin.c:89-99`; stricter,
+so scripted runs fail loud). A `kadmin/changepw` GSS acceptor is
 `CHANGEPW_SERVICE` (`server_stubs.c:28-32`, a full realm-qualified
 name compare against `kadmin/changepw@REALM`): every stub denies with
 MIT's code except self `chpass`/`chrand`/`getprinc`

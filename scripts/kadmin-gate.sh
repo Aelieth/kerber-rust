@@ -367,7 +367,7 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
-cargo build -p krb5-kdc --bin krb5-kdc -p krb5-admin --bin krb5-kadmind
+cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-kdb -p krb5-admin --bin krb5-kadmind
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
@@ -379,8 +379,9 @@ cleanup() { docker rm -f "$NAME" "$NAME_MIT" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc
+docker cp target/debug/krb5-kdb "$NAME":/tmp/krb5-kdb
 docker cp target/debug/krb5-kadmind "$NAME":/tmp/krb5-kadmind
-docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kadmind
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb /tmp/krb5-kadmind
 
 docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
@@ -414,6 +415,9 @@ ro@KERBER.TEST i
 rolist@KERBER.TEST l
 EOF'
 
+echo "==== backdate user last_pwd_change to 1000000000 before kadmind loads the store ===="
+docker exec -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kdb setlastpwd user 1000000000
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
@@ -1074,7 +1078,7 @@ fi
 
 echo "==== default ACL path present loads ===="
 docker exec "$NAME" sh -c 'mv /tmp/kadm5.acl.bak /tmp/kadm5.acl'
-docker exec "$NAME" sh -c 'printf "%s\n" "admin@KERBER.TEST *" "kiprop/*@KERBER.TEST p" > /tmp/kadm5.acl'
+docker exec "$NAME" sh -c 'printf "%s\n" "admin@KERBER.TEST *" "kiprop/*@KERBER.TEST p" "keepoldset@KERBER.TEST s" > /tmp/kadm5.acl'
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
@@ -1214,19 +1218,14 @@ GETU="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
 echo "$GETU"
 echo "$GETU" | grep -F 'Password expiration date:'
 echo "$GETU" | grep -F 'Password expiration date:' | grep -qv '\[never\]'
-echo "==== self cpw min_life is PASS_TOOSOON ===="
-CPW1="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p user -w userpassword -q 'cpw -pw user-new1 user' 2>&1 || true)"
-echo "$CPW1"
-echo "$CPW1" | grep -F "Current password's minimum life has not expired"
-CPW2="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p user -w userpassword -q 'cpw -pw user-new2 user' 2>&1 || true)"
-echo "$CPW2"
-echo "$CPW2" | grep -F "Current password's minimum life has not expired"
 echo "==== admin cpw new password then reuse ===="
 CPWA="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'cpw -pw user-admin-new user' 2>&1 || true)"
 echo "$CPWA"
+echo "$CPWA" | grep -F 'Password for "user@KERBER.TEST" changed.'
+GETU2="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc user' 2>&1 || true)"
+echo "$GETU2" | grep -F 'Password expiration date:' | grep -v 2001 | grep -qv '\[never\]'
 if echo "$CPWA" | grep -qiE 'minimum life|too soon|too recently|Cannot reuse'; then
     echo "admin cpw new password failed: $CPWA" >&2
     exit 1
@@ -1238,6 +1237,15 @@ echo "$CPWR" | grep -F 'Cannot reuse password' || {
     echo "admin cpw reuse missed: $CPWR" >&2
     exit 1
 }
+echo "==== self cpw min_life is PASS_TOOSOON after the admin cpw ===="
+CPW1="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p user -w user-admin-new -q 'cpw -pw user-new1 user' 2>&1 || true)"
+echo "$CPW1"
+echo "$CPW1" | grep -F "Current password's minimum life has not expired"
+CPW2="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p user -w user-admin-new -q 'cpw -pw user-new2 user' 2>&1 || true)"
+echo "$CPW2"
+echo "$CPW2" | grep -F "Current password's minimum life has not expired"
 echo "==== self keepold clamps to 5 ===="
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw keep-0 keepoldself'
@@ -1258,6 +1266,39 @@ if [ "$nkeys" != 5 ]; then
     echo "self keepold not 5: $nkeys $KEEPG" >&2
     exit 1
 fi
+echo "==== self cpw -randkey -keepold x6 and setkey -keepold x6 clamp to 5 kvnos ===="
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw rand-0 keepoldrand'
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw set-0 keepoldset'
+RANDK="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" \
+    /tmp/kadm5-changepw-rpc --service kadmin/admin keepoldrand rand-0 KERBER.TEST randkey-keepold 6 2>&1 || true)"
+echo "$RANDK"
+echo "$RANDK" | grep -F 'randkey-keepold[6]=0'
+SETK="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" \
+    /tmp/kadm5-changepw-rpc --service kadmin/admin keepoldset set-0 KERBER.TEST setkey-keepold 6 2>&1 || true)"
+echo "$SETK"
+echo "$SETK" | grep -F 'setkey-keepold[6]=0'
+for p in keepoldrand keepoldset; do
+    KG="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+        "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q "getprinc $p" 2>&1 || true)"
+    nk="$(echo "$KG" | sed -n 's/^Key: vno \([0-9][0-9]*\).*/\1/p' | sort -u | wc -l | tr -d ' ')"
+    echo "${p}_kvnos=$nk"
+    if [ "$nk" != 5 ]; then
+        echo "$p keepold x6 not clamped to 5: $nk $KG" >&2
+        exit 1
+    fi
+done
+echo "==== create_policy ignores an unmasked pw_max_life (KADM5_PW_MIN_LIFE only) ===="
+UNM="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" \
+    /tmp/kadm5-changepw-rpc --service kadmin/admin admin adminpassword KERBER.TEST addpol-minlife-unmasked-max nomax 2>&1 || true)"
+echo "$UNM"
+echo "$UNM" | grep -F 'addpol_code=0'
+GETNM="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getpol nomax' 2>&1 || true)"
+echo "$GETNM"
+echo "$GETNM" | grep -F 'Maximum password life: 0 days 00:00:00'
+echo "$GETNM" | grep -F 'Minimum password life: 0 days 01:00:00'
 echo "==== purgekeys locked-down target is allowed ===="
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw lock-secret lockp' || true
@@ -1438,6 +1479,26 @@ docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw victim-secret victim'
 docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw ro-secret ro'
 docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw rolist-secret rolist'
 docker exec "$NAME_MIT" sh -c 'printf "%s\n" "*/admin@KERBER.TEST *e" "admin@KERBER.TEST *e" "extract/admin@KERBER.TEST *e" "norename@KERBER.TEST acilm" "scoped@KERBER.TEST ad *@KERBER.TEST" "restricted@KERBER.TEST a *@KERBER.TEST -clearpolicy" "nodel@KERBER.TEST *D" "ro@KERBER.TEST i" "rolist@KERBER.TEST l" > /var/kerberos/krb5kdc/kadm5.acl'
+echo "==== MIT backdate user last_pwd_change to 1000000000 (kdb5_util dump, edit tl-data 1, load) ===="
+docker exec "$NAME_MIT" sh -c 'kdb5_util dump /tmp/bd.dump >/dev/null 2>&1'
+docker exec -i "$NAME_MIT" python3 - <<'PY'
+import struct
+lines = open("/tmp/bd.dump").read().split("\n")
+out = []
+for l in lines:
+    if l.startswith("princ") and "\tuser@KERBER.TEST\t" in l:
+        f = l.split("\t")
+        for i in range(15, len(f) - 2):
+            if f[i] == "1" and f[i + 1] == "4" and len(f[i + 2]) == 8:
+                f[i + 2] = struct.pack("<I", 1000000000).hex()
+                break
+        l = "\t".join(f)
+    out.append(l)
+open("/tmp/bd.dump", "w").write("\n".join(out))
+PY
+docker exec "$NAME_MIT" sh -c 'kdb5_util load /tmp/bd.dump >/dev/null 2>&1'
+MIT_BD="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc user' 2>&1 || true)"
+echo "$MIT_BD" | grep -F 'Last password change: Sun Sep 09 01:46:40 UTC 2001'
 docker exec "$NAME_MIT" sh -c '
 for comm in /proc/[0-9]*/comm; do
     [ -f "$comm" ] || continue
@@ -1761,7 +1822,7 @@ fi
 echo "==== MIT default ACL path present loads ===="
 docker exec "$NAME_MIT" sh -c '
 mkdir -p /var/krb5kdc
-printf "%s\n" "admin@KERBER.TEST *" "*/admin@KERBER.TEST *" "kiprop/*@KERBER.TEST p" > /var/krb5kdc/kadm5.acl
+printf "%s\n" "admin@KERBER.TEST *" "*/admin@KERBER.TEST *" "kiprop/*@KERBER.TEST p" "keepoldset@KERBER.TEST s" > /var/krb5kdc/kadm5.acl
 '
 docker exec -d "$NAME_MIT" sh -c 'kadmind -nofork >/tmp/kadmind-defaultacl.log 2>&1'
 ok=0
@@ -1856,6 +1917,9 @@ echo "$MIT_GETF"
 echo "$MIT_GETF" | grep -F 'Minimum password length: 1'
 echo "$MIT_GETF" | grep -F 'Minimum number of password character classes: 1'
 echo "$MIT_GETF" | grep -F 'Number of old keys kept: 1'
+echo "==== getpol output is identical on both legs (life, floors1) ===="
+diff <(echo "$GETPOL" | grep -v '^Authenticating') <(echo "$MIT_GETPOL" | grep -v -e '^Authenticating' -e 'No dictionary file')
+diff <(echo "$GETF" | grep -v '^Authenticating') <(echo "$MIT_GETF" | grep -v -e '^Authenticating' -e 'No dictionary file')
 echo "==== MIT modpol -minlength 0 is BAD_LENGTH ===="
 MIT_MOD0="$(docker exec "$NAME_MIT" kadmin.local -q 'modpol -minlength 0 floors1' 2>&1 || true)"
 echo "$MIT_MOD0"
@@ -1883,26 +1947,34 @@ MIT_GETU="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc user' 2>&1 || true
 echo "$MIT_GETU"
 echo "$MIT_GETU" | grep -F 'Password expiration date:'
 echo "$MIT_GETU" | grep -F 'Password expiration date:' | grep -qv '\[never\]'
-echo "==== MIT self cpw min_life is PASS_TOOSOON ===="
-MIT_CPW1="$(docker exec "$NAME_MIT" kadmin -p user -w userpassword -q 'cpw -pw user-new1 user' 2>&1 || true)"
-echo "$MIT_CPW1"
-echo "$MIT_CPW1" | grep -F "Current password's minimum life has not expired"
-MIT_CPW2="$(docker exec "$NAME_MIT" kadmin -p user -w userpassword -q 'cpw -pw user-new2 user' 2>&1 || true)"
-echo "$MIT_CPW2"
-echo "$MIT_CPW2" | grep -F "Current password's minimum life has not expired"
+echo "==== backdated last_pwd_change + maxlife 1d: expiration identical on both legs ===="
+echo "$GETU" | grep -F 'Last password change: Sun Sep 09 01:46:40 UTC 2001'
+echo "$MIT_GETU" | grep -F 'Last password change: Sun Sep 09 01:46:40 UTC 2001'
+diff <(echo "$GETU" | grep -F 'Password expiration date:') <(echo "$MIT_GETU" | grep -F 'Password expiration date:')
+echo "$MIT_GETU" | grep -F 'Password expiration date: Mon Sep 10 01:46:40 UTC 2001'
 echo "==== MIT admin cpw new password then reuse ===="
-MIT_CPWA="$(docker exec "$NAME_MIT" kadmin.local -q 'cpw -pw user-admin-new user' 2>&1 || true)"
+MIT_CPWA="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'cpw -pw user-admin-new user' 2>&1 || true)"
 echo "$MIT_CPWA"
+echo "$MIT_CPWA" | grep -F 'Password for "user@KERBER.TEST" changed.'
+MIT_GETU2="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc user' 2>&1 || true)"
+echo "$MIT_GETU2" | grep -F 'Password expiration date:' | grep -v 2001 | grep -qv '\[never\]'
 if echo "$MIT_CPWA" | grep -qiE 'minimum life|too soon|too recently|Cannot reuse'; then
     echo "MIT admin cpw new password failed: $MIT_CPWA" >&2
     exit 1
 fi
-MIT_CPWR="$(docker exec "$NAME_MIT" kadmin.local -q 'cpw -pw user-admin-new user' 2>&1 || true)"
+MIT_CPWR="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'cpw -pw user-admin-new user' 2>&1 || true)"
 echo "$MIT_CPWR"
 echo "$MIT_CPWR" | grep -F 'Cannot reuse password' || {
     echo "MIT admin cpw reuse missed: $MIT_CPWR" >&2
     exit 1
 }
+echo "==== MIT self cpw min_life is PASS_TOOSOON after the admin cpw ===="
+MIT_CPW1="$(docker exec "$NAME_MIT" kadmin -p user -w user-admin-new -q 'cpw -pw user-new1 user' 2>&1 || true)"
+echo "$MIT_CPW1"
+echo "$MIT_CPW1" | grep -F "Current password's minimum life has not expired"
+MIT_CPW2="$(docker exec "$NAME_MIT" kadmin -p user -w user-admin-new -q 'cpw -pw user-new2 user' 2>&1 || true)"
+echo "$MIT_CPW2"
+echo "$MIT_CPW2" | grep -F "Current password's minimum life has not expired"
 echo "==== MIT self keepold clamps to 5 ===="
 docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw keep-0 keepoldself'
 pw=keep-0
@@ -1920,10 +1992,43 @@ if [ "$nkeys" != 5 ]; then
     echo "MIT self keepold not 5: $nkeys $MIT_KEEPG" >&2
     exit 1
 fi
+echo "==== MIT self cpw -randkey -keepold x6 and setkey -keepold x6 clamp to 5 kvnos ===="
+docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw rand-0 keepoldrand'
+docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw set-0 keepoldset'
+MIT_RANDK="$(docker exec "$NAME_MIT" /tmp/kadm5-changepw-rpc --service kadmin/admin keepoldrand rand-0 KERBER.TEST randkey-keepold 6 2>&1 || true)"
+echo "$MIT_RANDK"
+echo "$MIT_RANDK" | grep -F 'randkey-keepold[6]=0'
+MIT_SETK="$(docker exec "$NAME_MIT" /tmp/kadm5-changepw-rpc --service kadmin/admin keepoldset set-0 KERBER.TEST setkey-keepold 6 2>&1 || true)"
+echo "$MIT_SETK"
+echo "$MIT_SETK" | grep -F 'setkey-keepold[6]=0'
+MIT_RANDG="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc keepoldrand' 2>&1 || true)"
+nk="$(echo "$MIT_RANDG" | sed -n 's/^Key: vno \([0-9][0-9]*\).*/\1/p' | sort -u | wc -l | tr -d ' ')"
+echo "mit_keepoldrand_kvnos=$nk"
+if [ "$nk" != 5 ]; then
+    echo "MIT keepoldrand randkey keepold x6 not clamped to 5: $nk $MIT_RANDG" >&2
+    exit 1
+fi
+echo "==== MIT 1.22.2 setkey keepold drops the old keys (svr_principal.c n_new_key_data); pinned as the deviation ===="
+MIT_SETG="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc keepoldset' 2>&1 || true)"
+echo "$MIT_SETG"
+nk="$(echo "$MIT_SETG" | sed -n 's/^Key: vno \([0-9][0-9]*\).*/\1/p' | sort -u | wc -l | tr -d ' ')"
+echo "mit_keepoldset_kvnos=$nk"
+if [ "$nk" != 1 ]; then
+    echo "MIT setkey keepold x6 no longer drops old keys (deviation row is stale): $nk $MIT_SETG" >&2
+    exit 1
+fi
+echo "$MIT_SETG" | grep -F 'Key: vno 7,'
+echo "==== MIT create_policy ignores an unmasked pw_max_life (KADM5_PW_MIN_LIFE only) ===="
+MIT_UNM="$(docker exec "$NAME_MIT" /tmp/kadm5-changepw-rpc --service kadmin/admin admin/admin adminpassword KERBER.TEST addpol-minlife-unmasked-max nomax 2>&1 || true)"
+echo "$MIT_UNM"
+echo "$MIT_UNM" | grep -F 'addpol_code=0'
+MIT_GETNM="$(docker exec "$NAME_MIT" kadmin.local -q 'getpol nomax' 2>&1 || true)"
+echo "$MIT_GETNM"
+diff <(echo "$GETNM" | grep -v '^Authenticating') <(echo "$MIT_GETNM" | grep -v -e '^Authenticating' -e 'No dictionary file')
 echo "==== MIT purgekeys locked-down target is allowed ===="
 docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw lock-secret lockp' || true
 docker exec "$NAME_MIT" kadmin.local -q 'modprinc +lockdown_keys lockp'
-MIT_PURGE_L="$(docker exec "$NAME_MIT" kadmin.local -q 'purgekeys lockp' 2>&1 || true)"
+MIT_PURGE_L="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'purgekeys lockp' 2>&1 || true)"
 echo "$MIT_PURGE_L"
 if echo "$MIT_PURGE_L" | grep -qiE 'protect|lockdown|Operation requires'; then
     echo "MIT purgekeys lockdown denied: $MIT_PURGE_L" >&2

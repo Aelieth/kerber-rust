@@ -22,3 +22,14 @@ fn deltat_t_c_vectors_and_hhmm() {
     assert_eq!(deltat::parse("42").unwrap(), 42);
     assert_eq!(deltat::parse("42x").unwrap(), 42);
 }
+
+#[test]
+fn deltat_trailing_whitespace_is_tok_ws() {
+    assert_eq!(deltat::parse("1d ").unwrap(), 86400);
+    assert_eq!(deltat::parse("1h ").unwrap(), 3600);
+    assert_eq!(deltat::parse(" 42").unwrap(), 42);
+    assert_eq!(deltat::parse("1d  x").unwrap(), 86400);
+    for s in ["42 ", "1s ", "1d5s ", "1:2 ", "1d 5"] {
+        assert!(deltat::parse(s).is_err(), "{s:?}");
+    }
+}

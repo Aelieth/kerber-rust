@@ -6,6 +6,28 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-I sub-plan 05
+
+- **admin.** `create_policy` checks DUP before the non-printable-name check and
+  zeroes unset lifetimes, so an unmasked `pw_max_life` on the wire is ignored
+  and `BAD_MIN_PASS_LIFE` needs both mask bits like `svr_policy.c:83-109`.
+  `krb5_string_to_deltat` treats trailing whitespace as `tok_WS`: only the
+  `opt_s: ws` slot after a `d`/`h`/`m` unit absorbs it, so `"42 "`, `"1s "` and
+  `"1d5s "` are refused while `"1d "` is accepted. `kadmin.local -q` tokenises
+  like `ss_parse` (`util/ss/parse.c`): `"` quotes, `""` is a literal quote,
+  and an open quote is `Unbalanced quotes in command line`.
+- **kdb.** `krb5-kdb setlastpwd <princ> <unix-seconds>` (gate-only backdate).
+- **test.** `kadmin-gate.sh` backdates `user` on both legs (Rust `setlastpwd`,
+  MIT `kdb5_util dump`/edit tl-data 1/`load`) and diffs `Last password change`,
+  `Password expiration date` and the full `getpol` output across legs; the
+  admin cpw success line, purgekeys on a lockdown target, and an unmasked
+  `pw_max_life` create run through RPC clients on both legs; `cpw -randkey
+  -keepold` ×6 as self clamps to 5 kvnos on both legs; `setkey -keepold` ×6 as
+  self keeps 5 on Rust while MIT 1.22.2 keeps only the newest key
+  (`svr_principal.c` never advances `n_new_key_data` past the new keys; pinned
+  as a deviation cell). `kadmin-local-gate.sh` mirrors the policy sequence
+  and a quoted `"1d "`/`"42 "` `-maxlife` through MIT `kadmin.local` and diffs.
+
 ### W1-I sub-plan 04
 
 - **admin.** AUTH_GSSAPI DESTROY is answered in the auth layer before the

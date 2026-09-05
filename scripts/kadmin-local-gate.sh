@@ -191,7 +191,7 @@ echo "$LISTP" | grep -F 'extra'
 docker exec \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
-    "$NAME" /tmp/krb5-kadmin-local -q 'delpol extra'
+    "$NAME" /tmp/krb5-kadmin-local -q 'delpol -force extra'
 LISTP2="$(docker exec \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
@@ -201,6 +201,93 @@ if echo "$LISTP2" | grep -Fx extra; then
     echo "delpol extra left extra in listpols: $LISTP2" >&2
     exit 1
 fi
+
+echo "==== MIT kadmin.local: identical addpol/getpol/modpol/listpols/delpol sequence, diffed ===="
+docker exec "$NAME" sh -c 'kdb5_util create -s -P masterpassword >/dev/null 2>&1'
+mit_local() {
+    docker exec "$NAME" kadmin.local -q "$1" 2>&1 | { grep -v -e '^Authenticating' -e 'No dictionary file' || true; }
+}
+mit_local 'addpol floors1' >/dev/null
+diff <(echo "$GETF" | grep -v '^Authenticating') <(mit_local 'getpol floors1')
+mit_local 'addpol -minlength 8 -minclasses 2 -history 3 -maxlife 1d -minlife 1h pflags' >/dev/null
+diff <(echo "$GETP" | grep -v '^Authenticating') <(mit_local 'getpol pflags')
+mit_local 'addpol -allowedkeysalts aes256-cts:normal ksalt' >/dev/null
+diff <(echo "$GETK" | grep -v '^Authenticating') <(mit_local 'getpol ksalt')
+mit_local 'modpol -minlength 10 pflags' >/dev/null
+diff <(echo "$GETPM" | grep -v '^Authenticating') <(mit_local 'getpol pflags')
+mit_local 'addpol extra' >/dev/null
+diff <(echo "$LISTP" | grep -v '^Authenticating' | sort) <(mit_local 'listpols' | sort)
+mit_local 'delpol -force extra' >/dev/null
+diff <(echo "$LISTP2" | grep -v '^Authenticating' | sort) <(mit_local 'listpols' | sort)
+echo "mit_kadmin_local_diff=identical"
+
+echo "==== deltat trailing whitespace: \"1d \" accepted, \"42 \" refused, on both legs ===="
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'addpol -maxlife "1d " tws'
+TWS="$(docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'getpol tws')"
+echo "$TWS"
+echo "$TWS" | grep -F 'Maximum password life: 1 day 00:00:00'
+mit_local 'addpol -maxlife "1d " tws' >/dev/null
+diff <(echo "$TWS" | grep -v '^Authenticating') <(mit_local 'getpol tws')
+set +e
+TWSBAD="$(docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'addpol -maxlife "42 " tws2' 2>&1)"
+twsrc=$?
+set -e
+echo "$TWSBAD"
+test "$twsrc" -ne 0
+mit_local 'addpol -maxlife "42 " tws2' | grep -F 'Invalid date specification "42 ".'
+LISTT="$(docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'listpols')"
+diff <(echo "$LISTT" | grep -v '^Authenticating' | sort) <(mit_local 'listpols' | sort)
+echo "$LISTT" | grep -Fx tws
+if echo "$LISTT" | grep -Fx tws2; then
+    echo "addpol -maxlife \"42 \" created tws2: $LISTT" >&2
+    exit 1
+fi
+
+echo "==== delpol/delprinc prompt: EOF reply keeps the object, yes deletes, on both legs ===="
+rust_local() {
+    docker exec -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
+        "$NAME" /tmp/krb5-kadmin-local -q "$1" 2>&1
+}
+prompt_lines() { sed 's/(yes\/no): /(yes\/no): \n/' | sed '/^$/d' | sort; }
+PDEL="$(rust_local 'delpol tws')"
+echo "$PDEL"
+diff <(echo "$PDEL" | prompt_lines) <(mit_local 'delpol tws' | prompt_lines)
+echo "$PDEL" | grep -F 'Policy "tws" not deleted.'
+rust_local 'addprinc -pw delme-secret delme' >/dev/null
+mit_local 'addprinc -pw delme-secret delme' >/dev/null
+PDELP="$(rust_local 'delprinc delme')"
+echo "$PDELP"
+diff <(echo "$PDELP" | prompt_lines) <(mit_local 'delprinc delme' | prompt_lines)
+echo "$PDELP" | grep -F 'Principal "delme@KERBER.TEST" not deleted'
+YDEL="$(printf 'yes\n' | docker exec -i -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'delprinc delme' 2>&1)"
+echo "$YDEL"
+MIT_YDEL="$(printf 'yes\n' | docker exec -i "$NAME" kadmin.local -q 'delprinc delme' 2>&1 \
+    | { grep -v -e '^Authenticating' -e 'No dictionary file' || true; })"
+diff <(echo "$YDEL" | prompt_lines) <(echo "$MIT_YDEL" | prompt_lines)
+echo "$YDEL" | grep -F 'Principal "delme@KERBER.TEST" deleted.'
+printf 'yes\n' | docker exec -i -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'delpol tws' >/dev/null
+printf 'yes\n' | docker exec -i "$NAME" kadmin.local -q 'delpol tws' >/dev/null 2>&1
+LISTD="$(rust_local 'listpols')"
+diff <(echo "$LISTD" | sort) <(mit_local 'listpols' | sort)
+if echo "$LISTD" | grep -Fx tws; then
+    echo "delpol tws answered yes left tws: $LISTD" >&2
+    exit 1
+fi
+docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1'
 
 echo "==== kadmin.local ignores KRB5_ACL_FILE ===="
 set +e
@@ -546,7 +633,7 @@ echo "==== addprinc -randkey kadmin/changepw keeps PWCHANGE_SERVICE ===="
 docker exec \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
-    "$NAME" /tmp/krb5-kadmin-local -q 'delprinc kadmin/changepw'
+    "$NAME" /tmp/krb5-kadmin-local -q 'delprinc -force kadmin/changepw'
 docker exec \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \

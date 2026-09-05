@@ -2217,9 +2217,6 @@ fn dispatch_kadm5_ticket(
             if changepw || acl.check(actor, krb5_kdc::AdminOp::Create, None).is_err() {
                 return Ok(generic_ret(api, KADM5_AUTH_ADD));
             }
-            if let Some(code) = policy_name_err(&pol.name) {
-                return Ok(generic_ret(api, code));
-            }
             if let Some(code) = policy_mask_err(mask, true) {
                 return Ok(generic_ret(api, code));
             }
@@ -2229,6 +2226,15 @@ fn dispatch_kadm5_ticket(
             };
             if g.policies().contains_key(&pol.name) {
                 return Ok(generic_ret(api, KADM5_DUP));
+            }
+            if let Some(code) = policy_name_err(&pol.name) {
+                return Ok(generic_ret(api, code));
+            }
+            if mask & KADM5_PW_MAX_LIFE == 0 {
+                pol.pw_max_life = 0;
+            }
+            if mask & KADM5_PW_MIN_LIFE == 0 {
+                pol.pw_min_life = 0;
             }
             if let Some(code) = policy_floor_err(&pol, mask) {
                 return Ok(generic_ret(api, code));
@@ -5780,6 +5786,72 @@ mod tests {
     }
 
     #[test]
+    fn setkey_self_keepold_clamps_to_five() {
+        let (store, acl, actor) = setup();
+        let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["selfset"]);
+        {
+            let mut g = store.write().unwrap();
+            g.create_password(&acl, &actor, &name, b"set-0").unwrap();
+        }
+        let self_acl = Acl::parse("selfset@KERBER.TEST s\n").unwrap();
+        for i in 1..=6u8 {
+            let out = dispatch_kadm5(
+                &store,
+                &self_acl,
+                "selfset@KERBER.TEST",
+                SETKEY_PRINCIPAL4,
+                &setkey4_args("selfset@KERBER.TEST", true, 0, 18, &[i; 32], 0, &[]),
+            )
+            .unwrap();
+            assert_eq!(ret_code(&out), 0, "setkey {i}");
+        }
+        let g = store.read().unwrap();
+        let mut kvnos: Vec<u32> = g
+            .get_name(&name)
+            .unwrap()
+            .keys
+            .iter()
+            .map(|k| k.kvno)
+            .collect();
+        kvnos.sort_unstable();
+        kvnos.dedup();
+        assert_eq!(kvnos.len(), 5, "self setkey keepold cap: {kvnos:?}");
+    }
+
+    #[test]
+    fn create_policy_min_life_without_max_is_ok() {
+        let (store, acl, actor) = setup();
+        let mut pol = krb5_kdc::NamedPolicy::new("minonly");
+        pol.pw_min_life = 3600;
+        pol.pw_max_life = 1;
+        let out = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            CREATE_POLICY,
+            &encode_cpol(API_V2, &pol, KADM5_POLICY | KADM5_PW_MIN_LIFE),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&out), 0);
+    }
+
+    #[test]
+    fn create_policy_dup_checked_before_name() {
+        let (store, acl, actor) = setup();
+        let pol = krb5_kdc::NamedPolicy::new("bad\u{1}name");
+        store.write().unwrap().put_policy(pol.clone());
+        let out = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            CREATE_POLICY,
+            &encode_cpol(API_V2, &pol, KADM5_POLICY),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&out), KADM5_DUP);
+    }
+
+    #[test]
     fn extract_keys_acl_is_auth_extract() {
         let (store, _acl, _actor) = setup();
         let limited = Acl::parse("admin@KERBER.TEST *\nlimited@KERBER.TEST i\n").expect("acl");
@@ -6193,7 +6265,7 @@ mod tests {
     }
 
     #[test]
-    fn setkey_lockdown_is_protect_keys() {
+    fn setkey_lockdown_is_auth_setkey() {
         let (store, acl, actor) = setup();
         let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
         {
@@ -6841,56 +6913,47 @@ mod tests {
         assert_eq!(ret_code(&bad), KADM5_BAD_HISTORY);
     }
 
-    #[test]
-    fn modify_policy_below_floor_is_bad_length() {
+    fn modify_policy_floor_code(mask: u32, set: impl Fn(&mut krb5_kdc::NamedPolicy)) -> u32 {
         let (store, acl, actor) = setup();
         let pol = krb5_kdc::NamedPolicy::new("fl");
-        assert_eq!(
-            ret_code(
-                &dispatch_kadm5(
-                    &store,
-                    &acl,
-                    &actor,
-                    CREATE_POLICY,
-                    &encode_cpol(API_V2, &pol, KADM5_POLICY),
-                )
-                .unwrap()
-            ),
-            0
-        );
-        let mut rec = pol.clone();
-        rec.min_length = 0;
-        let bad = dispatch_kadm5(
+        let created = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            CREATE_POLICY,
+            &encode_cpol(API_V2, &pol, KADM5_POLICY),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&created), 0);
+        let mut rec = pol;
+        set(&mut rec);
+        let out = dispatch_kadm5(
             &store,
             &acl,
             &actor,
             MODIFY_POLICY,
-            &encode_cpol(API_V2, &rec, KADM5_PW_MIN_LENGTH),
+            &encode_cpol(API_V2, &rec, mask),
         )
         .unwrap();
-        assert_eq!(ret_code(&bad), KADM5_BAD_LENGTH);
-        rec.min_length = 1;
-        rec.min_classes = 0;
-        let badc = dispatch_kadm5(
-            &store,
-            &acl,
-            &actor,
-            MODIFY_POLICY,
-            &encode_cpol(API_V2, &rec, KADM5_PW_MIN_CLASSES),
-        )
-        .unwrap();
-        assert_eq!(ret_code(&badc), KADM5_BAD_CLASS);
-        rec.min_classes = 1;
-        rec.history = 0;
-        let badh = dispatch_kadm5(
-            &store,
-            &acl,
-            &actor,
-            MODIFY_POLICY,
-            &encode_cpol(API_V2, &rec, KADM5_PW_HISTORY_NUM),
-        )
-        .unwrap();
-        assert_eq!(ret_code(&badh), KADM5_BAD_HISTORY);
+        ret_code(&out)
+    }
+
+    #[test]
+    fn modify_policy_below_floor_is_bad_length() {
+        let code = modify_policy_floor_code(KADM5_PW_MIN_LENGTH, |p| p.min_length = 0);
+        assert_eq!(code, KADM5_BAD_LENGTH);
+    }
+
+    #[test]
+    fn modify_policy_below_floor_is_bad_class() {
+        let code = modify_policy_floor_code(KADM5_PW_MIN_CLASSES, |p| p.min_classes = 0);
+        assert_eq!(code, KADM5_BAD_CLASS);
+    }
+
+    #[test]
+    fn modify_policy_below_floor_is_bad_history() {
+        let code = modify_policy_floor_code(KADM5_PW_HISTORY_NUM, |p| p.history = 0);
+        assert_eq!(code, KADM5_BAD_HISTORY);
     }
 
     #[test]
