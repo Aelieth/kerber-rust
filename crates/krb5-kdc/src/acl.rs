@@ -449,7 +449,7 @@ fn parse_line(line: &str, default_realm: &str) -> Result<AclEntry, Error> {
             }
             _ => {
                 return Err(Error::AclParse(format!(
-                    "Unrecognized ACL operation '{ch}'"
+                    "Unrecognized ACL operation '{ch}' in {line}"
                 )));
             }
         }
@@ -747,7 +747,8 @@ mod tests {
     fn acl_unknown_op_letter_is_load_error() {
         let err = Acl::parse("bad@KERBER.TEST aZ\n").unwrap_err();
         assert!(
-            err.to_string().contains("Unrecognized ACL operation 'Z'"),
+            err.to_string()
+                .contains("Unrecognized ACL operation 'Z' in bad@KERBER.TEST aZ"),
             "{err}"
         );
     }

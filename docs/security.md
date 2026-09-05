@@ -156,8 +156,13 @@ store realm (`krb5_parse_name`). Principal strings use
 `unparse.c:85-134`): `\/` `\@` `\\` `\t` `\n` `\b` `\0`, empty
 components allowed, `foo@` keeps an empty realm. ACL `*/admin@R`
 does not match a one-component `foo/admin`. Restriction durations
-are `krb5_string_to_deltat` (`x-deltat.y`); `12:34` loads and
-`3dd` is `invalid restrictions`. Unauthorised `getprinc` of a
+are `krb5_string_to_deltat` (`x-deltat.y`); `12:34` loads,
+`42x` is 42 s (`mylex` default is `YYEOF`), and `3dd` is
+`invalid restrictions`. CREATE/DELETE/RENAME authorise on the
+request principal with no lookup (`server_stubs.c:262-303`,
+`rec_out == NULL`). An authorised `addprinc user@OTHER.REALM`
+creates that principal in the local KDB. Unknown ACL op letters
+are `Unrecognized ACL operation '%c' in %s` (`auth_acl.c:286-290`). Unauthorised `getprinc` of a
 missing principal is `KADM5_UNK_PRINC` (`stub_setup` `:296-301`)
 before ACL. A readable ACL file is the ACL: it is
 not replaced when `admin@REALM` is absent (`acl_init:547-563`). With no

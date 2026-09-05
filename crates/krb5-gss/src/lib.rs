@@ -1353,14 +1353,14 @@ fn extract_delegated(
     }
     let part = part.ok_or(Error::Integrity)?;
     let info = part.1.ticket_info.first().ok_or(Error::Truncated)?;
-    let name = info
-        .pname
-        .as_ref()
-        .map_or(String::new(), PrincipalName::components_joined);
     let realm = info.prealm.as_ref().map_or_else(String::new, |r| {
         String::from_utf8_lossy(r.as_bytes()).into_owned()
     });
-    Ok(Some(format!("{name}@{realm}")))
+    let name = info
+        .pname
+        .as_ref()
+        .map_or_else(String::new, |n| n.unparse_with_realm(&realm));
+    Ok(Some(name))
 }
 
 fn check_channel_bindings(cksum: &[u8], local: Option<&ChannelBindings>) -> Result<(), Error> {

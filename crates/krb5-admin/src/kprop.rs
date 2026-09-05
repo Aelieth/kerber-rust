@@ -255,7 +255,7 @@ pub fn kpropd_recvauth(
         }
     };
     let crealm = String::from_utf8_lossy(ok.authenticator.crealm.as_bytes());
-    let client = format!("{}@{crealm}", ok.authenticator.cname.components_joined());
+    let client = ok.authenticator.cname.unparse_with_realm(&crealm);
     if !kpropd_client_allowed(&client, allowed_clients) {
         let _ = write_message(stream, &[]);
         return Err(Error::AclDenied);

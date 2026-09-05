@@ -25,10 +25,14 @@ pub fn parse(s: &str) -> Result<i32, DeltatError> {
     let mut i = 0;
     let v = deltat(b, &mut i)?;
     skip_ws(b, &mut i);
-    if i != b.len() {
+    if i != b.len() && mylex_token(b[i]) {
         return Err(DeltatError);
     }
     Ok(v)
+}
+
+fn mylex_token(c: u8) -> bool {
+    matches!(c, b'-' | b':' | b'd' | b'h' | b'm' | b's' | b'0'..=b'9')
 }
 
 fn skip_ws(b: &[u8], i: &mut usize) {
@@ -246,6 +250,7 @@ mod tests {
         bad("3:-4");
         good("3:4", 3 * H + 4 * M);
         good("42", 42);
+        good("42x", 42);
         bad("1-2");
         good("2147483647s", 2147483647);
         bad("2147483648s");

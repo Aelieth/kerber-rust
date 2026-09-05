@@ -991,8 +991,14 @@ impl PrincipalStore {
     /// Lookup by name components in this realm.
     #[must_use]
     pub fn get_name(&self, name: &PrincipalName) -> Option<&Principal> {
+        self.get_in_realm(name, &self.realm)
+    }
+
+    /// Lookup `name@princ_realm` (MIT `kdb_get_entry` uses the request realm).
+    #[must_use]
+    pub fn get_in_realm(&self, name: &PrincipalName, princ_realm: &str) -> Option<&Principal> {
         self.map
-            .get(&crate::kdb::lookup_principal_id(name, &self.realm))
+            .get(&crate::kdb::lookup_principal_id(name, princ_realm))
     }
 
     /// PEM of the PKINIT test CA for MIT `pkinit_anchors = FILE:`.
@@ -1076,16 +1082,50 @@ impl PrincipalStore {
         password: &[u8],
         etypes: &[EncryptionType],
     ) -> Result<(), Error> {
-        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        let realm = self.realm.clone();
+        self.create_password_etypes_in(acl, actor, name, &realm, password, etypes)
+    }
+
+    /// [`Self::create_password_etypes`] storing `name@princ_realm`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AclDenied`] or [`Error::AlreadyExists`].
+    pub fn create_password_etypes_in(
+        &mut self,
+        acl: &Acl,
+        actor: &str,
+        name: &PrincipalName,
+        princ_realm: &str,
+        password: &[u8],
+        etypes: &[EncryptionType],
+    ) -> Result<(), Error> {
+        let id = crate::kdb::lookup_principal_id(name, princ_realm);
         acl.check(actor, AdminOp::Create, Some(&id))?;
-        if self.map.contains_key(&id) {
-            return Err(Error::AlreadyExists);
-        }
-        self.insert_password_etypes(name, password, etypes)?;
+        self.insert_new_password(name, princ_realm, password, etypes)?;
         if let Some(rs) = acl.restrictions(actor, Some(&id)) {
             self.apply_acl_restrictions(&id, rs)?;
         }
         Ok(())
+    }
+
+    /// Insert without ACL (`kadm5_create_principal_3` after stub_auth).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AlreadyExists`].
+    pub fn insert_new_password(
+        &mut self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        password: &[u8],
+        etypes: &[EncryptionType],
+    ) -> Result<(), Error> {
+        let id = crate::kdb::lookup_principal_id(name, princ_realm);
+        if self.map.contains_key(&id) {
+            return Err(Error::AlreadyExists);
+        }
+        self.insert_password_etypes(name, princ_realm, password, etypes)
     }
 
     /// ACL-gated create of a random-key host (or other) principal.
@@ -1159,7 +1199,18 @@ impl PrincipalStore {
     ///
     /// [`Error::NotFound`] or [`Error::PassTooSoon`].
     pub fn check_min_life(&self, name: &PrincipalName) -> Result<(), Error> {
-        let p = self.get_name(name).ok_or(Error::NotFound)?;
+        self.check_min_life_in(name, &self.realm)
+    }
+
+    /// [`Self::check_min_life`] for `name@princ_realm`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] or [`Error::PassTooSoon`].
+    pub fn check_min_life_in(&self, name: &PrincipalName, princ_realm: &str) -> Result<(), Error> {
+        let p = self
+            .get_in_realm(name, princ_realm)
+            .ok_or(Error::NotFound)?;
         if p.attributes & KDB_REQUIRES_PWCHANGE != 0 {
             return Ok(());
         }
@@ -1207,8 +1258,24 @@ impl PrincipalStore {
         password: &[u8],
         keepold: u32,
     ) -> Result<(), Error> {
+        let realm = self.realm.clone();
+        self.set_password_keepold_n_in(name, &realm, password, keepold)
+    }
+
+    /// [`Self::set_password_keepold_n`] for `name@princ_realm`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] when the principal is missing.
+    pub fn set_password_keepold_n_in(
+        &mut self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        password: &[u8],
+        keepold: u32,
+    ) -> Result<(), Error> {
         self.check_password_quality(name, password)?;
-        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        let id = crate::kdb::lookup_principal_id(name, princ_realm);
         let Some(existing) = self.map.get(&id) else {
             return Err(Error::NotFound);
         };
@@ -1231,14 +1298,18 @@ impl PrincipalStore {
         let new_keys =
             keys_from_password(&self.policy.password_etypes(), password, &salt, next_kvno)?;
         self.replace_password_keys(&id, new_keys, depth, keepold)?;
-        self.apply_pw_max_life(name)?;
+        self.apply_pw_max_life_in(name, princ_realm)?;
         let snap = self.map.get(&id).cloned();
         self.note_ulog(id, false, snap);
         self.save_if_configured()
     }
 
-    fn apply_pw_max_life(&mut self, name: &PrincipalName) -> Result<(), Error> {
-        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+    fn apply_pw_max_life_in(
+        &mut self,
+        name: &PrincipalName,
+        princ_realm: &str,
+    ) -> Result<(), Error> {
+        let id = crate::kdb::lookup_principal_id(name, princ_realm);
         let max_life = {
             let p = self.map.get(&id).ok_or(Error::NotFound)?;
             p.pw_policy
@@ -1415,9 +1486,34 @@ impl PrincipalStore {
     ///
     /// [`Error::AclDenied`] or [`Error::NotFound`].
     pub fn delete(&mut self, acl: &Acl, actor: &str, name: &PrincipalName) -> Result<(), Error> {
-        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        let realm = self.realm.clone();
+        self.delete_in(acl, actor, name, &realm)
+    }
+
+    /// [`Self::delete`] of `name@princ_realm`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AclDenied`] or [`Error::NotFound`].
+    pub fn delete_in(
+        &mut self,
+        acl: &Acl,
+        actor: &str,
+        name: &PrincipalName,
+        princ_realm: &str,
+    ) -> Result<(), Error> {
+        let id = crate::kdb::lookup_principal_id(name, princ_realm);
         acl.check(actor, AdminOp::Delete, Some(&id))?;
         self.remove_id_inner(&id)
+    }
+
+    /// Drop `name@princ_realm` with no ACL (stub already authorised).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    pub fn remove_in(&mut self, name: &PrincipalName, princ_realm: &str) -> Result<(), Error> {
+        self.remove_id_inner(&crate::kdb::lookup_principal_id(name, princ_realm))
     }
 
     /// Rename a principal. Requires add and delete ACL privs (MIT).
@@ -1436,14 +1532,50 @@ impl PrincipalStore {
         old: &PrincipalName,
         new: &PrincipalName,
     ) -> Result<(), Error> {
-        let old_id = crate::kdb::lookup_principal_id(old, &self.realm);
-        let new_id = crate::kdb::lookup_principal_id(new, &self.realm);
+        let realm = self.realm.clone();
+        self.rename_in(acl, actor, old, &realm, new, &realm)
+    }
+
+    /// [`Self::rename`] with request realms.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AclDenied`], [`Error::NotFound`], or [`Error::AlreadyExists`].
+    pub fn rename_in(
+        &mut self,
+        acl: &Acl,
+        actor: &str,
+        old: &PrincipalName,
+        old_realm: &str,
+        new: &PrincipalName,
+        new_realm: &str,
+    ) -> Result<(), Error> {
+        let old_id = crate::kdb::lookup_principal_id(old, old_realm);
+        let new_id = crate::kdb::lookup_principal_id(new, new_realm);
         acl.check_rename(actor, &old_id, &new_id)?;
+        self.rename_unchecked(old, old_realm, new, new_realm)
+    }
+
+    /// Rename after stub ACL (`server_stubs.c:700-712`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] or [`Error::AlreadyExists`].
+    pub fn rename_unchecked(
+        &mut self,
+        old: &PrincipalName,
+        old_realm: &str,
+        new: &PrincipalName,
+        new_realm: &str,
+    ) -> Result<(), Error> {
+        let old_id = crate::kdb::lookup_principal_id(old, old_realm);
+        let new_id = crate::kdb::lookup_principal_id(new, new_realm);
         if self.map.contains_key(&new_id) {
             return Err(Error::AlreadyExists);
         }
         let mut p = self.map.remove(&old_id).ok_or(Error::NotFound)?;
         p.name = new.clone();
+        new_realm.clone_into(&mut p.realm);
         self.note_ulog(old_id, true, None);
         self.note_ulog(p.id(), false, Some(p.clone()));
         self.map.insert(p.id(), p);
@@ -1562,16 +1694,18 @@ impl PrincipalStore {
     }
 
     fn insert_password(&mut self, name: &PrincipalName, password: &[u8]) -> Result<(), Error> {
-        self.insert_password_etypes(name, password, &[])
+        let realm = self.realm.clone();
+        self.insert_password_etypes(name, &realm, password, &[])
     }
 
     fn insert_password_etypes(
         &mut self,
         name: &PrincipalName,
+        princ_realm: &str,
         password: &[u8],
         etypes: &[EncryptionType],
     ) -> Result<(), Error> {
-        let salt = name.default_salt(&self.realm);
+        let salt = name.default_salt(princ_realm);
         let use_etypes = if etypes.is_empty() {
             self.policy.password_etypes()
         } else {
@@ -1580,7 +1714,7 @@ impl PrincipalStore {
         let keys = keys_from_password(&use_etypes, password, &salt, 1)?;
         let mut p = Principal::from_keys(
             name.clone(),
-            self.realm.clone(),
+            princ_realm.to_owned(),
             keys,
             salt,
             self.policy.requires_preauth,
@@ -1665,7 +1799,22 @@ impl PrincipalStore {
         name: &PrincipalName,
         keepold: u32,
     ) -> Result<Vec<KeyEntry>, Error> {
-        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        let realm = self.realm.clone();
+        self.chrand_keepold_n_in(name, &realm, keepold)
+    }
+
+    /// [`Self::chrand_keepold_n`] for `name@princ_realm`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] or RNG failure.
+    pub fn chrand_keepold_n_in(
+        &mut self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        keepold: u32,
+    ) -> Result<Vec<KeyEntry>, Error> {
+        let id = crate::kdb::lookup_principal_id(name, princ_realm);
         let existing = self.map.get(&id).ok_or(Error::NotFound)?;
         let next_kvno = existing
             .keys
@@ -1690,7 +1839,7 @@ impl PrincipalStore {
             }
             stamp_admin_tl(p, true);
         }
-        self.apply_pw_max_life(name)?;
+        self.apply_pw_max_life_in(name, princ_realm)?;
         let snap = self.map.get(&id).cloned();
         self.note_ulog(id, false, snap);
         #[cfg(test)]
@@ -1709,7 +1858,22 @@ impl PrincipalStore {
     ///
     /// [`Error::NotFound`].
     pub fn purgekeys(&mut self, name: &PrincipalName, keepkvno: i32) -> Result<(), Error> {
-        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        let realm = self.realm.clone();
+        self.purgekeys_in(name, &realm, keepkvno)
+    }
+
+    /// [`Self::purgekeys`] for `name@princ_realm`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    pub fn purgekeys_in(
+        &mut self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        keepkvno: i32,
+    ) -> Result<(), Error> {
+        let id = crate::kdb::lookup_principal_id(name, princ_realm);
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         let keep = if keepkvno <= 0 {
             p.keys.iter().map(|k| k.kvno).max().unwrap_or(0)
@@ -1734,13 +1898,30 @@ impl PrincipalStore {
     pub fn set_keys(
         &mut self,
         name: &PrincipalName,
+        keys: Vec<KeyEntry>,
+        keepold: u32,
+    ) -> Result<(), Error> {
+        let realm = self.realm.clone();
+        self.set_keys_in(name, &realm, keys, keepold)
+    }
+
+    /// [`Self::set_keys`] for `name@princ_realm`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`], or [`Error::Crypto`] when `keepold` collides with
+    /// an existing kvno.
+    pub fn set_keys_in(
+        &mut self,
+        name: &PrincipalName,
+        princ_realm: &str,
         mut keys: Vec<KeyEntry>,
         keepold: u32,
     ) -> Result<(), Error> {
         if keys.is_empty() {
             return Err(Error::Crypto("setkey empty".into()));
         }
-        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        let id = crate::kdb::lookup_principal_id(name, princ_realm);
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
             let want = keys[0].kvno;
@@ -1777,7 +1958,7 @@ impl PrincipalStore {
             p.fail_auth_count = 0;
             stamp_admin_tl(p, true);
         }
-        self.apply_pw_max_life(name)?;
+        self.apply_pw_max_life_in(name, princ_realm)?;
         let snap = self.map.get(&id).cloned();
         self.note_ulog(id, false, snap);
         self.save_if_configured()
@@ -1799,7 +1980,37 @@ impl PrincipalStore {
         policy: Option<String>,
         clear_policy: bool,
     ) -> Result<(), Error> {
-        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        let realm = self.realm.clone();
+        self.apply_admin_fields_in(
+            name,
+            &realm,
+            attributes,
+            max_life,
+            expiration,
+            pw_expire,
+            policy,
+            clear_policy,
+        )
+    }
+
+    /// [`Self::apply_admin_fields`] for `name@princ_realm`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_admin_fields_in(
+        &mut self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        attributes: Option<u32>,
+        max_life: Option<u64>,
+        expiration: Option<u32>,
+        pw_expire: Option<u32>,
+        policy: Option<String>,
+        clear_policy: bool,
+    ) -> Result<(), Error> {
+        let id = crate::kdb::lookup_principal_id(name, princ_realm);
         let apply_max = policy.is_some() && !clear_policy && pw_expire.is_none();
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
@@ -1826,7 +2037,7 @@ impl PrincipalStore {
             stamp_admin_tl(p, false);
         }
         if apply_max {
-            self.apply_pw_max_life(name)?;
+            self.apply_pw_max_life_in(name, princ_realm)?;
         }
         let snap = self.map.get(&id).cloned();
         self.note_ulog(id, false, snap);
@@ -1843,7 +2054,22 @@ impl PrincipalStore {
         name: &PrincipalName,
         rs: &Restrictions,
     ) -> Result<(), Error> {
-        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        let realm = self.realm.clone();
+        self.impose_acl_restrictions_in(name, &realm, rs)
+    }
+
+    /// [`Self::impose_acl_restrictions`] for `name@princ_realm`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    pub fn impose_acl_restrictions_in(
+        &mut self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        rs: &Restrictions,
+    ) -> Result<(), Error> {
+        let id = crate::kdb::lookup_principal_id(name, princ_realm);
         self.apply_acl_restrictions(&id, rs)?;
         self.save_if_configured()
     }
@@ -1919,12 +2145,27 @@ impl PrincipalStore {
         name: &PrincipalName,
         policy: Option<String>,
     ) -> Result<(), Error> {
-        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        let realm = self.realm.clone();
+        self.set_principal_policy_in(name, &realm, policy)
+    }
+
+    /// [`Self::set_principal_policy`] for `name@princ_realm`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    pub fn set_principal_policy_in(
+        &mut self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        policy: Option<String>,
+    ) -> Result<(), Error> {
+        let id = crate::kdb::lookup_principal_id(name, princ_realm);
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
             p.pw_policy = policy;
         }
-        self.apply_pw_max_life(name)?;
+        self.apply_pw_max_life_in(name, princ_realm)?;
         let snap = self.map.get(&id).cloned();
         self.note_ulog(id, false, snap);
         self.save_if_configured()
@@ -1936,7 +2177,20 @@ impl PrincipalStore {
     ///
     /// [`Error::NotFound`].
     pub fn get_strings(&self, name: &PrincipalName) -> Result<Vec<(String, String)>, Error> {
-        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        self.get_strings_in(name, &self.realm)
+    }
+
+    /// [`Self::get_strings`] for `name@princ_realm`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    pub fn get_strings_in(
+        &self,
+        name: &PrincipalName,
+        princ_realm: &str,
+    ) -> Result<Vec<(String, String)>, Error> {
+        let id = crate::kdb::lookup_principal_id(name, princ_realm);
         let p = self.map.get(&id).ok_or(Error::NotFound)?;
         Ok(p.string_attrs.clone())
     }
@@ -1952,7 +2206,23 @@ impl PrincipalStore {
         key: &str,
         value: Option<&str>,
     ) -> Result<(), Error> {
-        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        let realm = self.realm.clone();
+        self.set_string_in(name, &realm, key, value)
+    }
+
+    /// [`Self::set_string`] for `name@princ_realm`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    pub fn set_string_in(
+        &mut self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        key: &str,
+        value: Option<&str>,
+    ) -> Result<(), Error> {
+        let id = crate::kdb::lookup_principal_id(name, princ_realm);
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         p.string_attrs.retain(|(k, _)| k != key);
         if let Some(v) = value {

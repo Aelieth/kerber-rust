@@ -8,6 +8,12 @@ this project uses semantic versioning once a crate is published.
 
 ### W1-I Round 3 (K12–K17)
 
+- **K16.** `stub_setup` with `rec_out == NULL` authorises CREATE/DELETE/RENAME
+  on the request principal (including a foreign realm). Authorised
+  `addprinc user@OTHER.REALM` stores that realm. ACL unknown op is
+  `Unrecognized ACL operation '%c' in %s`. `krb5_string_to_deltat`
+  leftover unknown chars are EOF (`42x` is 42 s; `3dd` is still
+  `invalid restrictions`).
 - **K15.** AUTH_GSSAPI INIT on IPROP_PROG is auth-layer SUCCESS
   (`svc_auth_gssapi.c` `no_dispatch`); DATA without a context is
   `AUTH_FAILED`; established DATA is `AUTH_TOOWEAK`. Gate cells pin

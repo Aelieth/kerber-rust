@@ -911,7 +911,8 @@ docker exec -d \
 sleep 1
 BADLOG="$(docker exec "$NAME" cat /tmp/kadmind-badacl.log 2>/dev/null || true)"
 echo "$BADLOG"
-echo "$BADLOG" | grep -F "Unrecognized ACL operation"
+echo "$BADLOG" | grep -F "Unrecognized ACL operation 'Z' in bad@KERBER.TEST aZ"
+echo "$BADLOG" | grep -F "while initializing ACL file, aborting"
 if docker exec "$NAME" grep -q '^listening ' /tmp/kadmind-badacl.log 2>/dev/null; then
     echo "kadmind started on unknown op letter" >&2
     exit 1
@@ -998,12 +999,31 @@ FOREIGN="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc user@OTHER.REALM' 2>&1 || true)"
 echo "$FOREIGN"
 echo "$FOREIGN" | grep -F 'Principal does not exist'
-echo "==== addprinc user@OTHER.REALM ===="
+echo "==== addprinc user@OTHER.REALM creates ===="
 ADDFOR="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw x user@OTHER.REALM' 2>&1 || true)"
 echo "$ADDFOR"
-if echo "$ADDFOR" | grep -q 'Principal "user@OTHER.REALM" created'; then
-    echo "addprinc user@OTHER.REALM created a local principal: $ADDFOR" >&2
+echo "$ADDFOR" | grep -F 'Principal "user@OTHER.REALM" created' || {
+    echo "addprinc user@OTHER.REALM did not create: $ADDFOR" >&2
+    exit 1
+}
+GETFOR="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc user@OTHER.REALM' 2>&1 || true)"
+echo "$GETFOR"
+echo "$GETFOR" | grep -F 'Principal: user@OTHER.REALM' || {
+    echo "getprinc user@OTHER.REALM after create missed: $GETFOR" >&2
+    exit 1
+}
+echo "==== denied addprinc user@OTHER.REALM is add privilege ===="
+DENYFOR="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p user -w userpassword -q 'addprinc -pw x denied@OTHER.REALM' 2>&1 || true)"
+echo "$DENYFOR"
+echo "$DENYFOR" | grep -F $'add_principal: Operation requires ``add\'\' privilege while creating "denied@OTHER.REALM".' || {
+    echo "denied addprinc missed add privilege: $DENYFOR" >&2
+    exit 1
+}
+if echo "$DENYFOR" | grep -q 'Principal "denied@OTHER.REALM" created'; then
+    echo "denied addprinc created: $DENYFOR" >&2
     exit 1
 fi
 echo "==== unauthorised modprinc nosuch is UNK_PRINC ===="
@@ -1187,6 +1207,48 @@ if [ "$ok" != 1 ]; then
     exit 1
 fi
 
+echo "==== ACL -maxlife 42x loads as 42s ===="
+docker exec "$NAME" sh -c '
+for comm in /proc/[0-9]*/comm; do
+    [ -f "$comm" ] || continue
+    read -r name < "$comm" || continue
+    if [ "$name" = "krb5-kadmind" ]; then
+        pid=${comm#/proc/}
+        pid=${pid%/comm}
+        kill "$pid" 2>/dev/null || true
+    fi
+done
+'
+sleep 0.4
+docker exec "$NAME" sh -c 'printf "%s\n" "admin@KERBER.TEST * *@KERBER.TEST -maxlife 42x" "kiprop/*@KERBER.TEST p" > /tmp/kadm5.acl'
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+    "$NAME" sh -c '/tmp/krb5-kadmind 127.0.0.1:749 >/tmp/kadmind-42x.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/kadmind-42x.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kadmind-42x.log >&2 || true
+    log "kadmin.gate" "error" ',"error":"kadmind did not listen with -maxlife 42x"'
+    exit 1
+fi
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw x life42' || true
+LIFE42="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc life42' 2>&1 || true)"
+echo "$LIFE42"
+echo "$LIFE42" | grep -F 'Maximum ticket life: 0 days 00:00:42' || {
+    echo "42x did not apply 42s max life: $LIFE42" >&2
+    exit 1
+}
+
 echo "==== ACL -maxlife 3dd refuses ===="
 docker exec "$NAME" sh -c '
 for comm in /proc/[0-9]*/comm; do
@@ -1211,6 +1273,7 @@ set -e
 BADDELTA="$(docker exec "$NAME" cat /tmp/kadmind-3dd.log 2>/dev/null || true)"
 echo "$BADDELTA"
 echo "$BADDELTA" | grep -F 'invalid restrictions'
+echo "$BADDELTA" | grep -F 'while initializing ACL file, aborting'
 if docker exec "$NAME" grep -q '^listening ' /tmp/kadmind-3dd.log 2>/dev/null; then
     echo "kadmind started with -maxlife 3dd" >&2
     exit 1
@@ -1546,7 +1609,7 @@ fi
 echo "==== MIT default ACL path present loads ===="
 docker exec "$NAME_MIT" sh -c '
 mkdir -p /var/krb5kdc
-printf "%s\n" "admin@KERBER.TEST *" "kiprop/*@KERBER.TEST p" > /var/krb5kdc/kadm5.acl
+printf "%s\n" "admin@KERBER.TEST *" "*/admin@KERBER.TEST *" "kiprop/*@KERBER.TEST p" > /var/krb5kdc/kadm5.acl
 '
 docker exec -d "$NAME_MIT" sh -c 'kadmind -nofork >/tmp/kadmind-defaultacl.log 2>&1'
 ok=0
@@ -1570,11 +1633,28 @@ echo "==== MIT getprinc user@OTHER.REALM is UNK_PRINC ===="
 MIT_FOREIGN="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'getprinc user@OTHER.REALM' 2>&1 || true)"
 echo "$MIT_FOREIGN"
 echo "$MIT_FOREIGN" | grep -F 'Principal does not exist'
-echo "==== MIT addprinc user@OTHER.REALM ===="
+echo "==== MIT addprinc user@OTHER.REALM creates ===="
 MIT_ADDFOR="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'addprinc -pw x user@OTHER.REALM' 2>&1 || true)"
 echo "$MIT_ADDFOR"
-if echo "$MIT_ADDFOR" | grep -q 'Principal "user@OTHER.REALM" created'; then
-    echo "MIT addprinc user@OTHER.REALM created: $MIT_ADDFOR" >&2
+echo "$MIT_ADDFOR" | grep -F 'Principal "user@OTHER.REALM" created' || {
+    echo "MIT addprinc user@OTHER.REALM did not create: $MIT_ADDFOR" >&2
+    exit 1
+}
+MIT_GETFOR="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'getprinc user@OTHER.REALM' 2>&1 || true)"
+echo "$MIT_GETFOR"
+echo "$MIT_GETFOR" | grep -F 'Principal: user@OTHER.REALM' || {
+    echo "MIT getprinc user@OTHER.REALM after create missed: $MIT_GETFOR" >&2
+    exit 1
+}
+echo "==== MIT denied addprinc user@OTHER.REALM is add privilege ===="
+MIT_DENYFOR="$(docker exec "$NAME_MIT" kadmin -p user -w userpassword -q 'addprinc -pw x denied@OTHER.REALM' 2>&1 || true)"
+echo "$MIT_DENYFOR"
+echo "$MIT_DENYFOR" | grep -F $'add_principal: Operation requires ``add\'\' privilege while creating "denied@OTHER.REALM".' || {
+    echo "MIT denied addprinc missed add privilege: $MIT_DENYFOR" >&2
+    exit 1
+}
+if echo "$MIT_DENYFOR" | grep -q 'Principal "denied@OTHER.REALM" created'; then
+    echo "MIT denied addprinc created: $MIT_DENYFOR" >&2
     exit 1
 fi
 echo "==== MIT unauthorised modprinc nosuch is UNK_PRINC ===="
@@ -1723,6 +1803,42 @@ if [ "$ok" != 1 ]; then
     log "kadmin.gate" "error" ',"error":"MIT kadmind did not listen with -maxlife 12:34"'
     exit 1
 fi
+
+echo "==== MIT ACL -maxlife 42x loads as 42s ===="
+docker exec "$NAME_MIT" sh -c '
+for comm in /proc/[0-9]*/comm; do
+    [ -f "$comm" ] || continue
+    read -r name < "$comm" || continue
+    if [ "$name" = "kadmind" ]; then
+        pid=${comm#/proc/}
+        pid=${pid%/comm}
+        kill "$pid" 2>/dev/null || true
+    fi
+done
+'
+sleep 0.4
+docker exec "$NAME_MIT" sh -c 'printf "%s\n" "admin@KERBER.TEST * *@KERBER.TEST -maxlife 42x" "*/admin@KERBER.TEST * *@KERBER.TEST -maxlife 42x" > /var/krb5kdc/kadm5.acl'
+docker exec -d "$NAME_MIT" sh -c 'kadmind -nofork >/tmp/kadmind-42x.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME_MIT" cat /tmp/kadmind-42x.log >&2 || true
+    log "kadmin.gate" "error" ',"error":"MIT kadmind did not listen with -maxlife 42x"'
+    exit 1
+fi
+docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'addprinc -pw x life42' || true
+MIT_LIFE42="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'getprinc life42' 2>&1 || true)"
+echo "$MIT_LIFE42"
+echo "$MIT_LIFE42" | grep -F 'Maximum ticket life: 0 days 00:00:42' || {
+    echo "MIT 42x did not apply 42s max life: $MIT_LIFE42" >&2
+    exit 1
+}
 
 echo "==== MIT ACL -maxlife 3dd refuses ===="
 docker exec "$NAME_MIT" sh -c '

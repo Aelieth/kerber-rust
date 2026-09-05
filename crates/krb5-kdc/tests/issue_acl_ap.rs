@@ -806,6 +806,31 @@ fn acl_default_path_is_kdc_dir_kadm5_acl() {
 }
 
 #[test]
+fn acl_unknown_op_letter_includes_line_and_aborting() {
+    let dir = std::env::temp_dir().join(format!(
+        "acl-az-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos())
+    ));
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("kadm5.acl");
+    std::fs::write(&path, "bad@KERBER.TEST aZ\n").unwrap();
+    let err = acl_for_store("KERBER.TEST", Some(&path)).expect_err("aZ");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Unrecognized ACL operation 'Z' in bad@KERBER.TEST aZ"),
+        "{msg}"
+    );
+    assert!(
+        msg.contains("while initializing ACL file, aborting"),
+        "{msg}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn acl_missing_default_file_refuses_start() {
     let path = std::path::Path::new("/no/such/kadm5.acl");
     let err = acl_for_store("KERBER.TEST", Some(path)).expect_err("missing");

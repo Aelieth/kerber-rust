@@ -17,6 +17,7 @@ use krb5_kdc::{
 use krb5_protocol::ReplayCache;
 use krb5_types::{PrincipalName, Ticket};
 
+#[cfg(test)]
 use crate::AdminSession;
 use crate::Error;
 
@@ -1850,11 +1851,11 @@ fn store_realm(store: &SharedStore) -> String {
         .to_owned()
 }
 
-fn unk_foreign(prealm: &str, store_realm: &str, api: u32) -> Option<Vec<u8>> {
-    if !prealm.is_empty() && prealm != store_realm {
-        Some(generic_ret(api, KADM5_UNK_PRINC))
+fn req_realm(prealm: &str, store_realm: &str) -> String {
+    if prealm.is_empty() {
+        store_realm.to_owned()
     } else {
-        None
+        prealm.to_owned()
     }
 }
 
@@ -1890,23 +1891,20 @@ fn dispatch_kadm5_ticket(
         }
         GET_PRINCIPAL => {
             let (name, prealm, _mask) = parse_get(args)?;
-            let realm = if prealm.is_empty() { realm } else { prealm };
-            if realm != store_realm(store) {
-                return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
-            }
+            let req = req_realm(&prealm, &realm);
             let g = match write_store(store, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            match g.get_name(&name) {
+            match g.get_in_realm(&name, &req) {
                 None => Ok(generic_ret(API_V2, KADM5_UNK_PRINC)),
                 Some(p) => {
-                    let tid = acl_id(&name, &realm);
-                    if changepw_not_self(changepw, actor, &name, &realm)
+                    let tid = acl_id(&name, &req);
+                    if changepw_not_self(changepw, actor, &name, &req)
                         || (acl
                             .check(actor, krb5_kdc::AdminOp::Inquire, Some(&tid))
                             .is_err()
-                            && !is_self(actor, &name, &realm))
+                            && !is_self(actor, &name, &req))
                     {
                         return Ok(generic_ret(API_V2, KADM5_AUTH_GET));
                     }
@@ -1940,41 +1938,39 @@ fn dispatch_kadm5_ticket(
         }
         DELETE_PRINCIPAL => {
             let (name, prealm) = parse_one_princ(args)?;
-            if let Some(rep) = unk_foreign(&prealm, &realm, API_V2) {
-                return Ok(rep);
-            }
-            if changepw {
+            let req = req_realm(&prealm, &realm);
+            if changepw
+                || acl
+                    .check(actor, krb5_kdc::AdminOp::Delete, Some(&acl_id(&name, &req)))
+                    .is_err()
+            {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_DELETE));
             }
             let mut g = match write_store(store, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            if g.get_name(&name)
+            if g.get_in_realm(&name, &req)
                 .is_some_and(|p| p.attributes & KDB_LOCKDOWN_KEYS != 0)
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_DELETE));
             }
-            let mut sess = AdminSession::local(&mut g, acl, actor);
-            match sess.delete(&name) {
+            match g.remove_in(&name, &req) {
                 Ok(()) => Ok(generic_ret(API_V2, 0)),
-                Err(Error::AclDenied) => Ok(generic_ret(API_V2, KADM5_AUTH_DELETE)),
-                Err(e) => Ok(generic_ret(API_V2, kadm5_code(&e))),
+                Err(e) => Ok(generic_ret(API_V2, kadm5_code(&Error::from(e)))),
             }
         }
         MODIFY_PRINCIPAL => {
             let (name, prealm, mask, fields) = parse_modify(args)?;
-            if let Some(rep) = unk_foreign(&prealm, &realm, API_V2) {
-                return Ok(rep);
-            }
+            let req = req_realm(&prealm, &realm);
             let mut g = match write_store(store, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            if g.get_name(&name).is_none() {
+            if g.get_in_realm(&name, &req).is_none() {
                 return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
             }
-            let tid = acl_id(&name, &realm);
+            let tid = acl_id(&name, &req);
             if changepw
                 || acl
                     .check(actor, krb5_kdc::AdminOp::Modify, Some(&tid))
@@ -1984,7 +1980,7 @@ fn dispatch_kadm5_ticket(
             }
             if mask & KADM5_ATTRIBUTES != 0
                 && fields.attributes & KDB_LOCKDOWN_KEYS == 0
-                && g.get_name(&name)
+                && g.get_in_realm(&name, &req)
                     .is_some_and(|p| p.attributes & KDB_LOCKDOWN_KEYS != 0)
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_MODIFY));
@@ -2001,8 +1997,9 @@ fn dispatch_kadm5_ticket(
             } else {
                 None
             };
-            match g.apply_admin_fields(
+            match g.apply_admin_fields_in(
                 &name,
+                &req,
                 attributes,
                 max_life,
                 expiration,
@@ -2012,7 +2009,7 @@ fn dispatch_kadm5_ticket(
             ) {
                 Ok(()) => {
                     if let Some(rs) = acl.restrictions(actor, Some(&tid))
-                        && let Err(e) = g.impose_acl_restrictions(&name, rs)
+                        && let Err(e) = g.impose_acl_restrictions_in(&name, &req, rs)
                     {
                         return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
                     }
@@ -2023,10 +2020,8 @@ fn dispatch_kadm5_ticket(
         }
         CREATE_PRINCIPAL | CREATE_PRINCIPAL3 => {
             let (name, prealm, pass, policy) = parse_create(args, proc == CREATE_PRINCIPAL3)?;
-            if let Some(rep) = unk_foreign(&prealm, &realm, API_V2) {
-                return Ok(rep);
-            }
-            let tid = acl_id(&name, &realm);
+            let req = req_realm(&prealm, &realm);
+            let tid = acl_id(&name, &req);
             if changepw
                 || acl
                     .check(actor, krb5_kdc::AdminOp::Create, Some(&tid))
@@ -2046,35 +2041,33 @@ fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
             }
-            let mut sess = AdminSession::local(&mut g, acl, actor);
-            let created = sess.create_password(&name, pass.as_bytes());
-            drop(sess);
-            match created {
+            match g.insert_new_password(&name, &req, pass.as_bytes(), &[]) {
                 Ok(()) => {
+                    if let Some(rs) = rs
+                        && let Err(e) = g.impose_acl_restrictions_in(&name, &req, rs)
+                    {
+                        return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
+                    }
                     if !skip_policy
                         && let Some(pol) = policy
-                        && let Err(e) = g.set_principal_policy(&name, Some(pol))
+                        && let Err(e) = g.set_principal_policy_in(&name, &req, Some(pol))
                     {
                         return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
                     }
                     Ok(generic_ret(API_V2, 0))
                 }
-                Err(e) => Ok(generic_ret(API_V2, kadm5_code(&e))),
+                Err(e) => Ok(generic_ret(API_V2, kadm5_code(&Error::from(e)))),
             }
         }
         RENAME_PRINCIPAL => {
             let (old, old_realm, new, new_realm) = parse_rename(args)?;
-            if let Some(rep) = unk_foreign(&old_realm, &realm, API_V2) {
-                return Ok(rep);
-            }
-            if let Some(rep) = unk_foreign(&new_realm, &realm, API_V2) {
-                return Ok(rep);
-            }
+            let old_req = req_realm(&old_realm, &realm);
+            let new_req = req_realm(&new_realm, &realm);
             // MIT server_stubs.c:700-712: ACL (AUTH_INSUFFICIENT) then lockdown (AUTH_DELETE).
             // auth_acl.c:638-648: delete on src and add on dest without restrictions.
             if changepw
                 || acl
-                    .check_rename(actor, &acl_id(&old, &realm), &acl_id(&new, &realm))
+                    .check_rename(actor, &acl_id(&old, &old_req), &acl_id(&new, &new_req))
                     .is_err()
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_INSUFFICIENT));
@@ -2083,41 +2076,38 @@ fn dispatch_kadm5_ticket(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            if g.get_name(&old)
+            if g.get_in_realm(&old, &old_req)
                 .is_some_and(|p| p.attributes & KDB_LOCKDOWN_KEYS != 0)
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_DELETE));
             }
-            let mut sess = AdminSession::local(&mut g, acl, actor);
-            match sess.rename(&old, &new) {
+            match g.rename_unchecked(&old, &old_req, &new, &new_req) {
                 Ok(()) => Ok(generic_ret(API_V2, 0)),
-                Err(e) => Ok(generic_ret(API_V2, kadm5_code(&e))),
+                Err(e) => Ok(generic_ret(API_V2, kadm5_code(&Error::from(e)))),
             }
         }
         CHPASS_PRINCIPAL | CHPASS_PRINCIPAL3 => {
             let (name, prealm, pass, keepold) = parse_chpass(args, proc == CHPASS_PRINCIPAL3)?;
-            if let Some(rep) = unk_foreign(&prealm, &realm, API_V2) {
-                return Ok(rep);
-            }
+            let req = req_realm(&prealm, &realm);
             let mut g = match write_store(store, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            let lockdown = match g.get_name(&name) {
+            let lockdown = match g.get_in_realm(&name, &req) {
                 None => return Ok(generic_ret(API_V2, KADM5_UNK_PRINC)),
                 Some(p) => p.attributes & KDB_LOCKDOWN_KEYS != 0,
             };
             if lockdown {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_CHANGEPW));
             }
-            let self_change = is_self(actor, &name, g.realm());
+            let self_change = is_self(actor, &name, &req);
             if !self_change
                 && (changepw
                     || acl
                         .check(
                             actor,
                             krb5_kdc::AdminOp::ChangePassword,
-                            Some(&acl_id(&name, &realm)),
+                            Some(&acl_id(&name, &req)),
                         )
                         .is_err())
             {
@@ -2126,11 +2116,11 @@ fn dispatch_kadm5_ticket(
             if self_change && !initial {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_INITIAL));
             }
-            if self_change && let Err(e) = g.check_min_life(&name) {
+            if self_change && let Err(e) = g.check_min_life_in(&name, &req) {
                 return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
             }
             let n = clamp_self_keepold(self_change, keepold);
-            match g.set_password_keepold_n(&name, pass.as_bytes(), n) {
+            match g.set_password_keepold_n_in(&name, &req, pass.as_bytes(), n) {
                 Ok(()) => Ok(generic_ret(API_V2, 0)),
                 Err(e) => Ok(generic_ret(API_V2, kadm5_code(&Error::from(e)))),
             }
@@ -2237,23 +2227,21 @@ fn dispatch_kadm5_ticket(
         }
         CHRAND_PRINCIPAL | CHRAND_PRINCIPAL3 => {
             let (name, prealm, keepold) = parse_chrand(args, proc == CHRAND_PRINCIPAL3)?;
-            if let Some(rep) = unk_foreign(&prealm, &realm, API_V2) {
-                return Ok(rep);
-            }
+            let req = req_realm(&prealm, &realm);
             let mut g = match write_store(store, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            if g.get_name(&name).is_none() {
+            if g.get_in_realm(&name, &req).is_none() {
                 return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
             }
-            let self_change = is_self(actor, &name, g.realm());
-            if changepw_not_self(changepw, actor, &name, &realm)
+            let self_change = is_self(actor, &name, &req);
+            if changepw_not_self(changepw, actor, &name, &req)
                 || (acl
                     .check(
                         actor,
                         krb5_kdc::AdminOp::ChangePassword,
-                        Some(&acl_id(&name, &realm)),
+                        Some(&acl_id(&name, &req)),
                     )
                     .is_err()
                     && !self_change)
@@ -2263,14 +2251,14 @@ fn dispatch_kadm5_ticket(
             if self_change && !initial {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_INITIAL));
             }
-            if self_change && let Err(e) = g.check_min_life(&name) {
+            if self_change && let Err(e) = g.check_min_life_in(&name, &req) {
                 return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
             }
             let n = clamp_self_keepold(self_change, keepold);
-            match g.chrand_keepold_n(&name, n) {
+            match g.chrand_keepold_n_in(&name, &req, n) {
                 Ok(keys) => {
                     let hide = g
-                        .get_name(&name)
+                        .get_in_realm(&name, &req)
                         .is_some_and(|p| p.attributes & KDB_LOCKDOWN_KEYS != 0);
                     Ok(encode_chrand(if hide { &[] } else { &keys }))
                 }
@@ -2279,14 +2267,12 @@ fn dispatch_kadm5_ticket(
         }
         EXTRACT_KEYS => {
             let (api, name, prealm, kvno) = parse_extract(args)?;
-            if let Some(rep) = unk_foreign(&prealm, &realm, api) {
-                return Ok(rep);
-            }
+            let req = req_realm(&prealm, &realm);
             let g = match write_store(store, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            let Some(p) = g.get_name(&name) else {
+            let Some(p) = g.get_in_realm(&name, &req) else {
                 return Ok(generic_ret(api, KADM5_UNK_PRINC));
             };
             if changepw
@@ -2294,7 +2280,7 @@ fn dispatch_kadm5_ticket(
                     .check(
                         actor,
                         krb5_kdc::AdminOp::Extract,
-                        Some(&acl_id(&name, &realm)),
+                        Some(&acl_id(&name, &req)),
                     )
                     .is_err()
             {
@@ -2314,29 +2300,23 @@ fn dispatch_kadm5_ticket(
         }
         PURGEKEYS => {
             let (api, name, prealm, keepkvno) = parse_purgekeys(args)?;
-            if let Some(rep) = unk_foreign(&prealm, &realm, api) {
-                return Ok(rep);
-            }
+            let req = req_realm(&prealm, &realm);
             let mut g = match write_store(store, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            if g.get_name(&name).is_none() {
+            if g.get_in_realm(&name, &req).is_none() {
                 return Ok(generic_ret(api, KADM5_UNK_PRINC));
             }
             if changepw
                 || (acl
-                    .check(
-                        actor,
-                        krb5_kdc::AdminOp::Modify,
-                        Some(&acl_id(&name, &realm)),
-                    )
+                    .check(actor, krb5_kdc::AdminOp::Modify, Some(&acl_id(&name, &req)))
                     .is_err()
-                    && !is_self(actor, &name, &realm))
+                    && !is_self(actor, &name, &req))
             {
                 return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
             }
-            match g.purgekeys(&name, keepkvno) {
+            match g.purgekeys_in(&name, &req, keepkvno) {
                 Ok(()) => {
                     tracing::info!(
                         event = krb5_log::events::ADMIN,
@@ -2351,49 +2331,41 @@ fn dispatch_kadm5_ticket(
         }
         SETKEY_PRINCIPAL | SETKEY_PRINCIPAL3 | SETKEY_PRINCIPAL4 => {
             let (api, name, prealm, keys, keepold) = parse_setkey(args, proc)?;
-            if let Some(rep) = unk_foreign(&prealm, &realm, api) {
-                return Ok(rep);
-            }
+            let req = req_realm(&prealm, &realm);
             let mut g = match write_store(store, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            if g.get_name(&name).is_none() {
+            if g.get_in_realm(&name, &req).is_none() {
                 return Ok(generic_ret(api, KADM5_UNK_PRINC));
             }
-            if changepw
-                || acl
-                    .check(
-                        actor,
-                        krb5_kdc::AdminOp::SetKey,
-                        Some(&acl_id(&name, &realm)),
-                    )
-                    .is_err()
-            {
-                return Ok(generic_ret(api, KADM5_AUTH_SETKEY));
-            }
             let lockdown = g
-                .get_name(&name)
+                .get_in_realm(&name, &req)
                 .is_some_and(|p| p.attributes & KDB_LOCKDOWN_KEYS != 0);
             if lockdown {
                 return Ok(generic_ret(api, KADM5_AUTH_SETKEY));
             }
-            let n = clamp_self_keepold(is_self(actor, &name, &realm), keepold);
-            match g.set_keys(&name, keys, n) {
+            if changepw
+                || acl
+                    .check(actor, krb5_kdc::AdminOp::SetKey, Some(&acl_id(&name, &req)))
+                    .is_err()
+            {
+                return Ok(generic_ret(api, KADM5_AUTH_SETKEY));
+            }
+            let n = clamp_self_keepold(is_self(actor, &name, &req), keepold);
+            match g.set_keys_in(&name, &req, keys, n) {
                 Ok(()) => Ok(generic_ret(api, 0)),
                 Err(e) => Ok(generic_ret(api, kadm5_code(&Error::from(e)))),
             }
         }
         GET_STRINGS => {
             let (api, name, prealm) = parse_gstrings(args)?;
-            if let Some(rep) = unk_foreign(&prealm, &realm, api) {
-                return Ok(rep);
-            }
+            let req = req_realm(&prealm, &realm);
             let g = match write_store(store, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            if g.get_name(&name).is_none() {
+            if g.get_in_realm(&name, &req).is_none() {
                 return Ok(generic_ret(api, KADM5_UNK_PRINC));
             }
             if changepw
@@ -2401,37 +2373,31 @@ fn dispatch_kadm5_ticket(
                     .check(
                         actor,
                         krb5_kdc::AdminOp::Inquire,
-                        Some(&acl_id(&name, &realm)),
+                        Some(&acl_id(&name, &req)),
                     )
                     .is_err()
-                    && !is_self(actor, &name, &realm))
+                    && !is_self(actor, &name, &req))
             {
                 return Ok(generic_ret(api, KADM5_AUTH_GET));
             }
-            match g.get_strings(&name) {
+            match g.get_strings_in(&name, &req) {
                 Ok(attrs) => Ok(encode_gstrings(api, &attrs)),
                 Err(e) => Ok(generic_ret(api, kadm5_code(&Error::from(e)))),
             }
         }
         SET_STRING => {
             let (api, name, prealm, key, value) = parse_sstring(args)?;
-            if let Some(rep) = unk_foreign(&prealm, &realm, api) {
-                return Ok(rep);
-            }
+            let req = req_realm(&prealm, &realm);
             let mut g = match write_store(store, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            if g.get_name(&name).is_none() {
+            if g.get_in_realm(&name, &req).is_none() {
                 return Ok(generic_ret(api, KADM5_UNK_PRINC));
             }
             if changepw
                 || acl
-                    .check(
-                        actor,
-                        krb5_kdc::AdminOp::Modify,
-                        Some(&acl_id(&name, &realm)),
-                    )
+                    .check(actor, krb5_kdc::AdminOp::Modify, Some(&acl_id(&name, &req)))
                     .is_err()
             {
                 return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
@@ -2439,7 +2405,7 @@ fn dispatch_kadm5_ticket(
             if key.is_empty() {
                 return Ok(generic_ret(api, KADM5_FAILURE));
             }
-            match g.set_string(&name, &key, value.as_deref()) {
+            match g.set_string_in(&name, &req, &key, value.as_deref()) {
                 Ok(()) => Ok(generic_ret(api, 0)),
                 Err(e) => Ok(generic_ret(api, kadm5_code(&Error::from(e)))),
             }
@@ -2464,6 +2430,8 @@ fn kadm5_code(e: &Error) -> u32 {
         KADM5_PASS_REUSE
     } else if s.contains("setkey kvno") {
         KADM5_SETKEY_BAD_KVNO
+    } else if s.contains("principal exists") {
+        KADM5_DUP
     } else {
         KADM5_FAILURE
     }
@@ -4943,6 +4911,104 @@ mod tests {
         assert_eq!(ret_code(&local), 0);
     }
 
+    fn create_rec(name: &str, pass: &str) -> Vec<u8> {
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some(name));
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(3600);
+        w.u32(1);
+        w.u32(0);
+        w.u32(0);
+        w.u32(1);
+        w.u32(1);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(1);
+        w.u32(0);
+        w.u32(0);
+        w.nullstring(Some(pass));
+        w.b
+    }
+
+    #[test]
+    fn create_foreign_realm_authorises_first() {
+        let (store, _acl, _actor) = setup();
+        let none = Acl::parse("nobody@KERBER.TEST a\n").expect("acl");
+        let out = dispatch_kadm5(
+            &store,
+            &none,
+            "user@KERBER.TEST",
+            CREATE_PRINCIPAL,
+            &create_rec("user@OTHER.REALM", "x"),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&out), KADM5_AUTH_ADD);
+        assert_ne!(ret_code(&out), KADM5_UNK_PRINC);
+        let del = dispatch_kadm5(
+            &store,
+            &none,
+            "user@KERBER.TEST",
+            DELETE_PRINCIPAL,
+            &encode_named("user@OTHER.REALM"),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&del), KADM5_AUTH_DELETE);
+        assert_ne!(ret_code(&del), KADM5_UNK_PRINC);
+        let mut ren_args = XdrW::default();
+        ren_args.u32(API_V2);
+        ren_args.nullstring(Some("user@OTHER.REALM"));
+        ren_args.nullstring(Some("x@OTHER.REALM"));
+        let ren = dispatch_kadm5(
+            &store,
+            &none,
+            "user@KERBER.TEST",
+            RENAME_PRINCIPAL,
+            &ren_args.b,
+        )
+        .unwrap();
+        assert_eq!(ret_code(&ren), KADM5_AUTH_INSUFFICIENT);
+        assert_ne!(ret_code(&ren), KADM5_UNK_PRINC);
+    }
+
+    #[test]
+    fn create_foreign_realm_then_getprinc() {
+        let (store, acl, actor) = setup();
+        let created = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            CREATE_PRINCIPAL,
+            &create_rec("user@OTHER.REALM", "x"),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&created), 0);
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some("user@OTHER.REALM"));
+        w.u32(u32::MAX);
+        let got = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &w.b).unwrap();
+        assert_eq!(ret_code(&got), 0);
+        let mut r = XdrR::new(&got);
+        assert_eq!(r.u32().unwrap(), API_V2);
+        assert_eq!(r.u32().unwrap(), 0);
+        assert_eq!(r.nullstring().unwrap().as_deref(), Some("user@OTHER.REALM"));
+        let local = {
+            let g = store.read().unwrap();
+            g.get_name(&PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]))
+                .map(krb5_kdc::Principal::id)
+        };
+        assert_eq!(local.as_deref(), Some("user@KERBER.TEST"));
+    }
+
     fn stub_unk_before_acl(proc: u32, args: &[u8], not_auth: u32) {
         let (store, _acl, _actor) = setup();
         let none = Acl::parse("nobody@KERBER.TEST a\n").expect("acl");
@@ -5009,6 +5075,16 @@ mod tests {
         sk.u32(18);
         sk.opaque(&[0xEFu8; 32]);
         stub_unk_before_acl(SETKEY_PRINCIPAL3, &sk.b, KADM5_AUTH_SETKEY);
+        stub_unk_before_acl(
+            SETKEY_PRINCIPAL,
+            &setkey16_args("nosuch@KERBER.TEST", 18, &[0xEFu8; 32]),
+            KADM5_AUTH_SETKEY,
+        );
+        stub_unk_before_acl(
+            SETKEY_PRINCIPAL4,
+            &setkey4_args("nosuch@KERBER.TEST", false, 1, 18, &[0xEFu8; 32], 0, &[]),
+            KADM5_AUTH_SETKEY,
+        );
         let mut ss = XdrW::default();
         ss.u32(API_V2);
         ss.nullstring(Some("nosuch@KERBER.TEST"));

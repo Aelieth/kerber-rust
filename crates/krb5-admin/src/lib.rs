@@ -345,11 +345,8 @@ impl<'a> AdminSession<'a> {
     ) -> Result<Self, Error> {
         let ok =
             verify_ap_req(ap_req, service_key, replay).map_err(|e| Error::Inner(e.to_string()))?;
-        let actor = format!(
-            "{}@{}",
-            ok.authenticator.cname.components_joined(),
-            String::from_utf8_lossy(ok.authenticator.crealm.as_bytes())
-        );
+        let crealm = String::from_utf8_lossy(ok.authenticator.crealm.as_bytes());
+        let actor = ok.authenticator.cname.unparse_with_realm(&crealm);
         Ok(Self { store, acl, actor })
     }
 

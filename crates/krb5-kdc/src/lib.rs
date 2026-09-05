@@ -157,7 +157,10 @@ pub fn acl_for_store(realm: &str, acl_file: Option<&std::path::Path>) -> Result<
             )));
         }
     };
-    Acl::parse_with_realm(&text, realm)
+    Acl::parse_with_realm(&text, realm).map_err(|e| match e {
+        Error::AclParse(s) => Error::AclParse(format!("{s} while initializing ACL file, aborting")),
+        other => other,
+    })
 }
 
 /// Bootstrap a named realm: krbtgt, user, admin, host, `kadmin/admin`, `kadmin/changepw`.
