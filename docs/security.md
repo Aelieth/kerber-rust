@@ -211,7 +211,10 @@ SUCCESS/`no_dispatch` path (`svc_auth_gssapi.c:495-497`); DATA is
 NULLPROC as `AUTH_FAILED`, `accept_sec_context` / unknown `gc_proc` as
 `AUTH_REJECTEDCRED`, DATA/DESTROY header MIC failure as `CREDPROBLEM`,
 and `gc_seq > MAXSEQ` / window replay as `CTXPROBLEM`; DESTROY then
-drops the context (`:449-547`). Accepted/mismatch replies carry
+drops the context (`:449-547`). The context is selected by the
+connection, so `gc_handle` is not compared (`:385-419`): a DATA with a
+wrong handle but a valid header MIC dispatches, matching MIT.
+Accepted/mismatch replies carry
 `xp_verf` (`svc.c:342,361`). Empty KDC drops are silent of
 `while dispatching` when the issue code is 0 (`net-server.c:1101-1105`).
 A full-resync deny is `kdb_fullresync_result_t`

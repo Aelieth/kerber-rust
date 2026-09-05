@@ -72,6 +72,52 @@ kadm5_integrity_list() {
         /tmp/kadm5-integrity-rpc 127.0.0.1 kadmin/admin@KERBER.TEST "$svc" "$port"
 }
 
+compile_kadm5_probe() {
+    local ctn=$1
+    docker cp "$ROOT/scripts/kadm5-rpc-probe.c" "$ctn":/tmp/kadm5-rpc-probe.c
+    if ! docker exec "$ctn" cc -o /tmp/kadm5-rpc-probe /tmp/kadm5-rpc-probe.c \
+        -lkadm5clnt_mit -lgssrpc -lgssapi_krb5 -lkrb5 -lk5crypto -lcom_err 2>"$SCRATCH/kadm5-probe-cc.err"
+    then
+        cat "$SCRATCH/kadm5-probe-cc.err" >&2 || true
+        log "kadmin.gate" "error" ',"error":"kadm5-rpc-probe compile failed"'
+        exit 1
+    fi
+}
+
+kadm5_probe() {
+    local ctn=$1 client=$2 mode=$3 conf=${4:-/etc/krb5.conf}
+    docker exec -e KRB5_CONFIG="$conf" "$ctn" sh -c \
+        "printf 'adminpassword\n' | kinit -S kadmin/admin@KERBER.TEST -c /tmp/probe-cc '$client'" >/dev/null 2>&1 || true
+    docker exec -e KRB5_CONFIG="$conf" -e KRB5CCNAME=/tmp/probe-cc "$ctn" \
+        /tmp/kadm5-rpc-probe 127.0.0.1 kadmin/admin@KERBER.TEST "$mode"
+}
+
+# RPCSEC_GSS reject machine (svc_auth_gss.c): each malformed DATA call yields the
+# same auth/accept status on MIT and Rust. gc_handle is not compared on either.
+rpcsec_reject_cells() {
+    local ctn=$1 client=$2 conf=$3 out
+    compile_kadm5_probe "$ctn"
+    out="$(kadm5_probe "$ctn" "$client" valid "$conf" 2>&1 || true)"
+    echo "$out"
+    echo "$out" | grep -F 'valid label=SUCCESS'
+    out="$(kadm5_probe "$ctn" "$client" corrupt-verf "$conf" 2>&1 || true)"
+    echo "$out"
+    echo "$out" | grep -F 'corrupt-verf label=CREDPROBLEM'
+    out="$(kadm5_probe "$ctn" "$client" maxseq "$conf" 2>&1 || true)"
+    echo "$out"
+    echo "$out" | grep -F 'maxseq label=CTXPROBLEM'
+    out="$(kadm5_probe "$ctn" "$client" wrong-handle "$conf" 2>&1 || true)"
+    echo "$out"
+    echo "$out" | grep -F 'wrong-handle label=SUCCESS'
+    out="$(kadm5_probe "$ctn" "$client" destroy-then-data "$conf" 2>&1 || true)"
+    echo "$out"
+    echo "$out" | grep -F 'destroy label=SUCCESS'
+    echo "$out" | grep -F 'data-after-destroy label=CREDPROBLEM'
+    out="$(kadm5_probe "$ctn" "$client" garbage-args "$conf" 2>&1 || true)"
+    echo "$out"
+    echo "$out" | grep -F 'garbage-args label=GARBAGE_ARGS'
+}
+
 start_integ_tamper_proxy() {
     local ctn=$1
     docker cp "$ROOT/scripts/integ-tamper-proxy.py" "$ctn":/tmp/integ-tamper-proxy.py
@@ -478,6 +524,8 @@ echo "$INT_TAMPER" | grep -E 'clnt_stat=11|garbage_args=1|accept_stat=4' || {
     echo "Rust tampered integrity checksum was not refused: $INT_TAMPER" >&2
     exit 1
 }
+echo "==== RPCSEC_GSS reject machine vs Rust kadmind ===="
+rpcsec_reject_cells "$NAME" admin@KERBER.TEST /tmp/kadmin-krb5.conf
 echo "==== MIT kadmin addprinc extra ===="
 ADD="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf -e KRB5_TRACE=/dev/stderr \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw extra-secret extra' 2>&1 || true)"
@@ -1476,6 +1524,8 @@ echo "$MIT_INT_TAMPER" | grep -E 'clnt_stat=11|garbage_args=1|accept_stat=4' || 
     echo "MIT tampered integrity checksum was not refused: $MIT_INT_TAMPER" >&2
     exit 1
 }
+echo "==== RPCSEC_GSS reject machine vs MIT kadmind ===="
+rpcsec_reject_cells "$NAME_MIT" admin/admin /etc/krb5.conf
 echo "==== MIT kadmin/history service on kadm5 ===="
 docker exec "$NAME_MIT" kadmin.local -q 'addpol -history 2 g3bhist' || true
 docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw hist-secret -policy g3bhist histee' || true

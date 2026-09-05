@@ -279,7 +279,6 @@ struct Agss {
 
 struct RpcsecGss {
     ctx: GssContext,
-    handle: Vec<u8>,
     seqlast: u32,
     seqmask: u32,
     svc: u32,
@@ -492,7 +491,6 @@ fn handle_rpcsec_gss(
             };
             *gss = Some(RpcsecGss {
                 ctx,
-                handle: handle.to_vec(),
                 seqlast: 0,
                 seqmask: 0,
                 svc: gcred.service,
@@ -503,9 +501,8 @@ fn handle_rpcsec_gss(
             let Some(gd) = gss.as_mut() else {
                 return Ok(rpc_reply_auth_error(xid, RPCSEC_GSS_CREDPROBLEM));
             };
-            if !gcred.handle.is_empty() && gcred.handle != gd.handle {
-                return Ok(rpc_reply_auth_error(xid, RPCSEC_GSS_CREDPROBLEM));
-            }
+            // MIT does not compare gc_handle (svc_auth_gss.c); the per-connection
+            // context and the header MIC authenticate the request.
             if gd.ctx.verify_mic(&rec[..header_end], verf).is_err() {
                 return Ok(rpc_reply_auth_error(xid, RPCSEC_GSS_CREDPROBLEM));
             }
@@ -577,9 +574,6 @@ fn handle_rpcsec_gss(
             let Some(gd) = gss.as_mut() else {
                 return Ok(rpc_reply_auth_error(xid, RPCSEC_GSS_CREDPROBLEM));
             };
-            if !gcred.handle.is_empty() && gcred.handle != gd.handle {
-                return Ok(rpc_reply_auth_error(xid, RPCSEC_GSS_CREDPROBLEM));
-            }
             if gd.ctx.verify_mic(&rec[..header_end], verf).is_err() {
                 return Ok(rpc_reply_auth_error(xid, RPCSEC_GSS_CREDPROBLEM));
             }
@@ -1010,7 +1004,6 @@ struct Gcred {
     proc: u32,
     seq_num: u32,
     service: u32,
-    handle: Vec<u8>,
 }
 
 fn parse_gcred(data: &[u8]) -> Result<Gcred, Error> {
@@ -1020,7 +1013,6 @@ fn parse_gcred(data: &[u8]) -> Result<Gcred, Error> {
         proc: r.u32()?,
         seq_num: r.u32()?,
         service: r.u32()?,
-        handle: r.opaque().unwrap_or_default(),
     })
 }
 
@@ -4127,6 +4119,43 @@ mod tests {
         let (xid, why) = decode_denied(&out);
         assert_eq!(xid, 25);
         assert_eq!(why, RPCSEC_GSS_CREDPROBLEM);
+    }
+
+    #[test]
+    fn rpcsec_wrong_handle_data_is_dispatched() {
+        use krb5_kdc::TEST_REALM;
+        let (store, acl, mut ctx, _handle, mut gss) = admin_rpcsec_init();
+        let rec = rpcsec_data_rec(
+            &mut ctx,
+            50,
+            KADM_PROG,
+            KADM_VERS,
+            GET_PRIVS,
+            1,
+            b"WRONGHDL",
+            &[],
+            true,
+        );
+        let mut agss = None;
+        let out = handle_rpc(
+            &store,
+            &acl,
+            &[],
+            TEST_REALM,
+            b"hdl",
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &rec,
+        )
+        .unwrap();
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), 50);
+        assert_eq!(r.u32().unwrap(), MSG_REPLY);
+        assert_eq!(r.u32().unwrap(), MSG_ACCEPTED);
+        assert_eq!(r.u32().unwrap(), FLAVOR_GSS);
+        let _verf = r.opaque().unwrap();
+        assert_eq!(r.u32().unwrap(), SUCCESS);
     }
 
     #[test]

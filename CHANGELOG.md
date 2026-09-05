@@ -6,6 +6,17 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-I sub-plan 03
+
+- **admin.** The kadmind no longer compares the RPCSEC_GSS context handle
+  (`gc_handle`) on DATA/DESTROY, matching MIT `_svcauth_gss` (the per-connection
+  context and the header MIC authenticate the request). `RpcsecGss.handle` and
+  `Gcred.handle` are dropped.
+- **test.** `scripts/kadm5-rpc-probe.c` hand-frames malformed RPCSEC_GSS calls
+  after a real libgssrpc handshake; `kadmin-gate.sh` drives the reject machine
+  (valid, corrupt-verf, maxseq, wrong-handle, destroy-then-data, garbage-args)
+  and asserts the same auth/accept status on the MIT and Rust kadminds.
+
 ### W1-I sub-plan 02
 
 - **admin.** The RPCSEC_GSS DATA path now dispatches on the negotiated service
