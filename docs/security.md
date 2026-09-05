@@ -175,8 +175,14 @@ MIT's code except self `chpass`/`chrand`/`getprinc`
 (`changepw_not_self`, `:348-354`) and getpol of the caller's own
 policy (`:1401-1403`). `getstrs` and `purgekeys` use
 `CHANGEPW_SERVICE` (even self is denied).
-iprop requires a `kiprop` acceptor (`ipropd_svc.c:457-548`) or the
-RPC reply is `AUTH_TOOWEAK`. Purgekeys stays
+Kadmind AUTH_GSSAPI acceptors are `kadmin/admin` and
+`kadmin/changepw` (`ovsec_kadmd.c:477`). RPCSEC_GSS is
+`check_rpcsec_auth` (`kadm_rpc_svc.c:324-331`): two components,
+realm match, `kadmin`, not `history`, else `svcerr_weakauth`.
+iprop is RPCSEC_GSS only (`ipropd_svc.c:481-483`) with
+`kiprop/<host>` (`:508-516`); kadmin-on-iprop and AUTH_GSSAPI-on-iprop
+are `AUTH_TOOWEAK`. A full-resync deny is `kdb_fullresync_result_t`
+(`ipropd_svc.c:312-320`, `iprop.x:208-211`). Purgekeys stays
 `KADM5_PROTECT_KEYS` (stricter than MIT, which has no lockdown check).
 `kadmin.local` ktadd ignores lockdown like MIT. Create-time name
 special-casing keeps `PWCHANGE_SERVICE` only (`create_principal` has

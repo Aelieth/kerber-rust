@@ -1,6 +1,6 @@
 /* MIT libkadm5 client authenticating to kadmin/changepw (CHANGEPW_SERVICE).
  * Out-of-process only; compiled in the MIT 1.22.2 image.
- * usage: kadm5-changepw-rpc <client> <password> <realm> <op> [arg]
+ * usage: kadm5-changepw-rpc [--service princ] <client> <password> <realm> <op> [arg]
  * op: listprincs | getprinc <name>
  */
 #include <kadm5/admin.h>
@@ -18,15 +18,21 @@ int main(int argc, char **argv) {
     char **princs = NULL;
     int count = 0;
     char *client, *pass, *realm, *op;
+    char *service = KADM5_CHANGEPW_SERVICE;
+    int argi = 1;
 
-    if (argc < 5) {
-        fprintf(stderr, "usage: %s client password realm op [arg]\n", argv[0]);
+    if (argc >= 3 && strcmp(argv[1], "--service") == 0) {
+        service = argv[2];
+        argi = 3;
+    }
+    if (argc - argi < 4) {
+        fprintf(stderr, "usage: %s [--service princ] client password realm op [arg]\n", argv[0]);
         return 2;
     }
-    client = argv[1];
-    pass = argv[2];
-    realm = argv[3];
-    op = argv[4];
+    client = argv[argi];
+    pass = argv[argi + 1];
+    realm = argv[argi + 2];
+    op = argv[argi + 3];
 
     ret = kadm5_init_krb5_context(&ctx);
     if (ret) {
@@ -38,7 +44,7 @@ int main(int argc, char **argv) {
     params.realm = realm;
     params.admin_server = "127.0.0.1";
 
-    ret = kadm5_init_with_password(ctx, client, pass, KADM5_CHANGEPW_SERVICE,
+    ret = kadm5_init_with_password(ctx, client, pass, service,
                                    &params, KADM5_STRUCT_VERSION,
                                    KADM5_API_VERSION_2, NULL, &handle);
     printf("init_code=%ld\n", (long)ret);
@@ -55,11 +61,11 @@ int main(int argc, char **argv) {
         printf("list_count=%d\n", count);
         if (ret == 0)
             kadm5_free_name_list(handle, princs, count);
-    } else if (strcmp(op, "getprinc") == 0 && argc >= 6) {
+    } else if (strcmp(op, "getprinc") == 0 && argc - argi >= 5) {
         krb5_principal p;
         kadm5_principal_ent_rec rec;
         memset(&rec, 0, sizeof(rec));
-        ret = krb5_parse_name(ctx, argv[5], &p);
+        ret = krb5_parse_name(ctx, argv[argi + 4], &p);
         if (ret) {
             printf("parse_code=%ld\n", (long)ret);
             kadm5_destroy(handle);

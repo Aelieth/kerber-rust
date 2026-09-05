@@ -45,6 +45,12 @@ kadm5_changepw_list() {
         /tmp/kadm5-changepw-rpc "$client" "$pass" KERBER.TEST listprincs
 }
 
+kadm5_list_service() {
+    local ctn=$1 client=$2 pass=$3 svc=$4
+    docker exec -e KRB5_CONFIG="${5:-/etc/krb5.conf}" "$ctn" \
+        /tmp/kadm5-changepw-rpc --service "$svc" "$client" "$pass" KERBER.TEST listprincs
+}
+
 kadmind_auth_too_weak() {
     local ctn=$1
     docker exec "$ctn" python3 -c '
@@ -189,6 +195,15 @@ if echo "$CPW_LIST" | grep -q 'list_count=' && echo "$CPW_LIST" | grep -qv 'list
         echo "changepw listprincs succeeded: $CPW_LIST" >&2
         exit 1
     fi
+fi
+echo "==== kiprop service on kadm5 is AUTH_TOOWEAK ===="
+KIPROP_LIST="$(kadm5_list_service "$NAME" admin@KERBER.TEST adminpassword kiprop/testhost.kerber.test /tmp/kadmin-krb5.conf 2>&1 || true)"
+echo "$KIPROP_LIST"
+echo "$KIPROP_LIST" | grep -F 'init_code=43787566'
+echo "$KIPROP_LIST" | grep -F 'GSS-API (or Kerberos) error'
+if echo "$KIPROP_LIST" | grep -q 'init_code=0'; then
+    echo "kiprop service init succeeded: $KIPROP_LIST" >&2
+    exit 1
 fi
 echo "==== MIT kadmin addprinc extra ===="
 ADD="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf -e KRB5_TRACE=/dev/stderr \
@@ -777,6 +792,15 @@ echo "$MIT_CPW_LIST" | grep -F 'list_code=43787564'
 echo "$MIT_CPW_LIST" | grep -F $'Operation requires ``list\'\' privilege'
 if echo "$MIT_CPW_LIST" | grep -q 'list_code=0'; then
     echo "MIT changepw listprincs succeeded: $MIT_CPW_LIST" >&2
+    exit 1
+fi
+echo "==== MIT kiprop service on kadm5 is AUTH_TOOWEAK ===="
+MIT_KIPROP_LIST="$(kadm5_list_service "$NAME_MIT" admin/admin adminpassword kiprop/testhost.kerber.test /etc/krb5.conf 2>&1 || true)"
+echo "$MIT_KIPROP_LIST"
+echo "$MIT_KIPROP_LIST" | grep -F 'init_code=43787560'
+echo "$MIT_KIPROP_LIST" | grep -F 'Required KADM5 principal missing'
+if echo "$MIT_KIPROP_LIST" | grep -q 'init_code=0'; then
+    echo "MIT kiprop service init succeeded: $MIT_KIPROP_LIST" >&2
     exit 1
 fi
 MITTGT="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc krbtgt/KERBER.TEST')"

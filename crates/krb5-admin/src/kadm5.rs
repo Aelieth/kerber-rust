@@ -145,7 +145,6 @@ pub fn serve_kadm5_conn(
     store: SharedStore,
     acl: Acl,
     service_keys: Vec<ProtocolKey>,
-    expected_server: PrincipalName,
     expected_realm: String,
     rcache: ReplayCache,
     mut stream: TcpStream,
@@ -163,7 +162,6 @@ pub fn serve_kadm5_conn(
             &store,
             &acl,
             &service_keys,
-            &expected_server,
             &expected_realm,
             &handle,
             &mut gss,
@@ -232,7 +230,6 @@ fn handle_rpc(
     store: &SharedStore,
     acl: &Acl,
     service_keys: &[ProtocolKey],
-    expected_server: &PrincipalName,
     expected_realm: &str,
     handle: &[u8],
     gss: &mut Option<GssContext>,
@@ -261,12 +258,14 @@ fn handle_rpc(
     let verf_flavor = r.u32()?;
     let verf = r.opaque()?;
 
+    if iprop && cred_flavor != FLAVOR_GSS {
+        return Ok(rpc_reply_weakauth(xid));
+    }
     if cred_flavor == FLAVOR_AUTH_GSSAPI {
         return handle_auth_gssapi(
             store,
             acl,
             service_keys,
-            expected_server,
             expected_realm,
             agss,
             xid,
@@ -301,6 +300,14 @@ fn handle_rpc(
             rcache,
         )
         .map_err(|e| Error::Inner(e.to_string()))?;
+        let ok = if iprop {
+            check_iprop_rpcsec_auth(&ctx, expected_realm)
+        } else {
+            check_rpcsec_auth(&ctx, expected_realm)
+        };
+        if !ok {
+            return Ok(rpc_reply_weakauth(xid));
+        }
         *gss = Some(ctx);
         let mut body = XdrW::default();
         body.opaque(handle);
@@ -338,7 +345,11 @@ fn handle_rpc(
     );
     let args = &plain[4..];
     let actor = ctx.client.clone().ok_or(Error::AclDenied)?;
-    if iprop && !kiprop_acceptor(ctx) {
+    if iprop {
+        if !check_iprop_rpcsec_auth(ctx, expected_realm) {
+            return Ok(rpc_reply_weakauth(xid));
+        }
+    } else if !check_rpcsec_auth(ctx, expected_realm) {
         return Ok(rpc_reply_weakauth(xid));
     }
     let result = match kadm5_or_iprop(
@@ -374,7 +385,6 @@ fn handle_auth_gssapi(
     store: &SharedStore,
     acl: &Acl,
     service_keys: &[ProtocolKey],
-    _expected_server: &PrincipalName,
     expected_realm: &str,
     agss: &mut Option<Agss>,
     xid: u32,
@@ -428,6 +438,9 @@ fn handle_auth_gssapi(
                 return Ok(rpc_reply_clear(xid, &body.b));
             }
         };
+        if iprop || !check_auth_gssapi_names(&ctx) {
+            return Ok(rpc_reply_weakauth(xid));
+        }
         let mut isn = [0u8; 4];
         let _ = getrandom::getrandom(&mut isn);
         let seq = u32::from_le_bytes(isn);
@@ -512,7 +525,7 @@ fn handle_auth_gssapi(
     }
     let kadm_args = &plain[4..];
     let actor = st.ctx.client.clone().ok_or(Error::AclDenied)?;
-    if iprop && !kiprop_acceptor(&st.ctx) {
+    if iprop || !check_auth_gssapi_names(&st.ctx) {
         return Ok(rpc_reply_weakauth(xid));
     }
     let result = match kadm5_or_iprop(
@@ -686,7 +699,11 @@ fn dispatch_iprop(store: &SharedStore, acl: &Acl, actor: &str, proc: u32, args: 
             .check(actor, krb5_kdc::AdminOp::Propagate, None)
             .is_err()
     {
-        return encode_incr_result(krb5_kdc::IPROP_PERM_DENIED, 0, &[], None);
+        return if proc == IPROP_FULL_RESYNC || proc == IPROP_FULL_RESYNC_EXT {
+            encode_fullresync_status(0, krb5_kdc::IPROP_PERM_DENIED)
+        } else {
+            encode_incr_result(krb5_kdc::IPROP_PERM_DENIED, 0, &[], None)
+        };
     }
     match proc {
         IPROP_NULL => Vec::new(),
@@ -932,11 +949,15 @@ fn encode_incr_result(
     w.b
 }
 
-fn encode_fullresync(last: u32) -> Vec<u8> {
+fn encode_fullresync_status(last: u32, status: u32) -> Vec<u8> {
     let mut w = XdrW::default();
     encode_kdb_last(&mut w, last);
-    w.u32(krb5_kdc::IPROP_OK);
+    w.u32(status);
     w.b
+}
+
+fn encode_fullresync(last: u32) -> Vec<u8> {
+    encode_fullresync_status(last, krb5_kdc::IPROP_OK)
 }
 
 /// Outcome of [`iprop_pull`].
@@ -1451,12 +1472,38 @@ fn changepw_not_self(changepw: bool, actor: &str, name: &PrincipalName, realm: &
     changepw && !is_self(actor, name, realm)
 }
 
-fn kiprop_acceptor(ctx: &GssContext) -> bool {
-    ctx.acceptor.as_ref().is_some_and(|n| {
-        n.components_joined()
-            .split_once('/')
-            .is_some_and(|(c, _)| c == "kiprop")
-    })
+fn acceptor_parts(n: &PrincipalName) -> Vec<String> {
+    n.name_string
+        .iter()
+        .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
+        .collect()
+}
+
+fn kadm5_auth_gssapi_ok(n: &PrincipalName) -> bool {
+    let s = n.components_joined();
+    s == "kadmin/admin" || s == "kadmin/changepw"
+}
+
+fn kadm5_rpcsec_ok(n: &PrincipalName) -> bool {
+    let p = acceptor_parts(n);
+    p.len() == 2 && p[0] == "kadmin" && p[1] != "history"
+}
+
+fn iprop_rpcsec_ok(n: &PrincipalName) -> bool {
+    let p = acceptor_parts(n);
+    p.len() == 2 && p[0] == "kiprop"
+}
+
+fn check_auth_gssapi_names(ctx: &GssContext) -> bool {
+    ctx.acceptor.as_ref().is_some_and(kadm5_auth_gssapi_ok)
+}
+
+fn check_rpcsec_auth(ctx: &GssContext, _store_realm: &str) -> bool {
+    ctx.acceptor.as_ref().is_some_and(kadm5_rpcsec_ok)
+}
+
+fn check_iprop_rpcsec_auth(ctx: &GssContext, _store_realm: &str) -> bool {
+    ctx.acceptor.as_ref().is_some_and(iprop_rpcsec_ok)
 }
 
 fn store_realm(store: &SharedStore) -> String {
@@ -2713,7 +2760,6 @@ mod tests {
     #[test]
     fn auth_none_is_auth_too_weak() {
         let (store, acl, _) = setup();
-        let server = krb5_kdc::documented_kadmin();
         let rec = rpc_call(7, KADM_PROG, KADM_VERS, 99, FLAVOR_NONE);
         let mut gss = None;
         let mut agss = None;
@@ -2721,7 +2767,6 @@ mod tests {
             &store,
             &acl,
             &[],
-            &server,
             "KERBER.TEST",
             &[],
             &mut gss,
@@ -4700,6 +4745,49 @@ mod tests {
         );
         let (st_ok, _, _, _, _) = decode_incr_result(&ok, None).unwrap();
         assert_ne!(st_ok, krb5_kdc::IPROP_PERM_DENIED);
+    }
+
+    #[test]
+    fn check_rpcsec_auth_rejects_kiprop_history_and_one_component() {
+        let admin = PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "admin"]);
+        let cpw = PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "changepw"]);
+        let hist = PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "history"]);
+        let kip = PrincipalName::new(
+            PrincipalName::NT_SRV_HST,
+            ["kiprop", "testhost.kerber.test"],
+        );
+        let one = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["kadmin"]);
+        assert!(kadm5_rpcsec_ok(&admin));
+        assert!(kadm5_rpcsec_ok(&cpw));
+        assert!(!kadm5_rpcsec_ok(&hist));
+        assert!(!kadm5_rpcsec_ok(&kip));
+        assert!(!kadm5_rpcsec_ok(&one));
+        assert!(kadm5_auth_gssapi_ok(&admin));
+        assert!(kadm5_auth_gssapi_ok(&cpw));
+        assert!(!kadm5_auth_gssapi_ok(&hist));
+        assert!(!kadm5_auth_gssapi_ok(&kip));
+        assert!(iprop_rpcsec_ok(&kip));
+        assert!(!iprop_rpcsec_ok(&admin));
+        assert!(!iprop_rpcsec_ok(&one));
+    }
+
+    #[test]
+    fn iprop_fullresync_deny_is_fullresync_result() {
+        let (store, _acl, _actor) = setup();
+        let limited = Acl::parse("admin@KERBER.TEST *\nuser@KERBER.TEST i\n").expect("acl");
+        let denied = dispatch_iprop(&store, &limited, "user@KERBER.TEST", IPROP_FULL_RESYNC, &[]);
+        let want = encode_fullresync_status(0, krb5_kdc::IPROP_PERM_DENIED);
+        assert_eq!(denied, want);
+        let incr = encode_incr_result(krb5_kdc::IPROP_PERM_DENIED, 0, &[], None);
+        assert_ne!(denied, incr);
+        let ok = dispatch_iprop(
+            &store,
+            &limited,
+            "admin@KERBER.TEST",
+            IPROP_FULL_RESYNC,
+            &[],
+        );
+        assert_eq!(ok, encode_fullresync(store.read().unwrap().serial()));
     }
 
     #[test]

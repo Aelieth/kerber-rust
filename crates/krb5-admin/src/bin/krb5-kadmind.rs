@@ -67,7 +67,6 @@ fn main() {
     }
 
     let realm = store.realm().to_owned();
-    let kadmin = documented_kadmin();
     let changepw = documented_changepw();
     if acceptor_keys(&store).is_empty() {
         eprintln!("krb5-kadmind: no kadmin/admin keys");
@@ -142,11 +141,10 @@ fn main() {
                     acceptor_keys(&g)
                 };
                 let acl = acl.clone();
-                let kadmin = kadmin.clone();
                 let realm = realm.clone();
                 let rcache = rcache.clone();
                 thread::spawn(move || {
-                    let _ = serve_kadm5_conn(store, acl, keys, kadmin, realm, rcache, stream);
+                    let _ = serve_kadm5_conn(store, acl, keys, realm, rcache, stream);
                 });
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
