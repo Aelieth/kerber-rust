@@ -2636,15 +2636,14 @@ impl<'a> XdrR<'a> {
         let s = self
             .nullstring()?
             .ok_or_else(|| Error::Inner("null principal".into()))?;
-        let (comps, _realm) =
-            krb5_types::parse_name(&s, "").map_err(|e| Error::Inner(e.to_string()))?;
-        let ntype = if comps.len() > 1 {
+        let (user, _realm) = s.split_once('@').unwrap_or((s.as_str(), ""));
+        let parts: Vec<&str> = user.split('/').collect();
+        let ntype = if parts.len() > 1 {
             PrincipalName::NT_SRV_INST
         } else {
             PrincipalName::NT_PRINCIPAL
         };
-        PrincipalName::try_new(ntype, comps.iter().map(String::as_str))
-            .map_err(|e| Error::Inner(e.to_string()))
+        PrincipalName::try_new(ntype, parts).map_err(|e| Error::Inner(e.to_string()))
     }
 
     fn skip_array_i32_pairs(&mut self) -> Result<(), Error> {
