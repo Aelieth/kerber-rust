@@ -401,7 +401,7 @@ impl PrincipalRead for MemoryStore {
             .map_or(0, |pol| pol.max_fail)
     }
     fn record_as_outcome(&self, name: &PrincipalName, ok: bool) {
-        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let id = lookup_principal_id(name, &self.realm);
         let fallback = self
             .map
             .get(&id)
@@ -444,7 +444,7 @@ impl PrincipalRead for MemoryStore {
             .and_then(|n| self.policies.get(n).cloned())
     }
     fn clear_as_fail_count(&self, name: &PrincipalName) {
-        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let id = lookup_principal_id(name, &self.realm);
         let fallback = self
             .map
             .get(&id)

@@ -1136,6 +1136,15 @@ mod tests {
         store
             .create_password(&acl, &actor, &name, b"slash-secret")
             .unwrap();
+        assert!(
+            store.get_name(&name).is_some(),
+            "create and get_name must share the unparsed id"
+        );
+        let two = PrincipalName::new(PrincipalName::NT_SRV_INST, ["foo", "admin"]);
+        assert!(store.get_name(&two).is_none());
+        store
+            .set_password_keepold(&name, b"slash-rotated", false)
+            .unwrap();
         let text = dump_store(&store, b"masterpassword").unwrap();
         assert!(
             text.contains(r"foo\/admin@"),
@@ -1143,7 +1152,6 @@ mod tests {
         );
         let again = load_dump(&text, b"masterpassword").unwrap();
         assert!(again.get_name(&name).is_some(), "one-component foo/admin");
-        let two = PrincipalName::new(PrincipalName::NT_SRV_INST, ["foo", "admin"]);
         assert!(again.get_name(&two).is_none());
     }
 

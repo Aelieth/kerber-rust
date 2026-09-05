@@ -898,7 +898,7 @@ impl PrincipalStore {
 
     /// Permit `from` to S4U2Proxy to `name` (RBCD allow-list).
     pub fn allow_s4u_from(&mut self, name: &PrincipalName, from: &str) {
-        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let id = crate::kdb::lookup_principal_id(name, &self.realm);
         if let Some(p) = self.map.get_mut(&id) {
             p.s4u_allowed_from.push(from.to_owned());
         }
@@ -906,7 +906,7 @@ impl PrincipalStore {
 
     /// Permit `name` to S4U2Proxy to `to` (classic constrained delegation).
     pub fn allow_s4u_to(&mut self, name: &PrincipalName, to: &str) {
-        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let id = crate::kdb::lookup_principal_id(name, &self.realm);
         if let Some(p) = self.map.get_mut(&id) {
             p.s4u_allowed_to.push(to.to_owned());
         }
@@ -1070,7 +1070,7 @@ impl PrincipalStore {
         password: &[u8],
         etypes: &[EncryptionType],
     ) -> Result<(), Error> {
-        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let id = crate::kdb::lookup_principal_id(name, &self.realm);
         acl.check(actor, AdminOp::Create, Some(&id))?;
         if self.map.contains_key(&id) {
             return Err(Error::AlreadyExists);
@@ -1108,7 +1108,7 @@ impl PrincipalStore {
         name: &PrincipalName,
         etypes: &[EncryptionType],
     ) -> Result<(), Error> {
-        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let id = crate::kdb::lookup_principal_id(name, &self.realm);
         acl.check(actor, AdminOp::Create, Some(&id))?;
         if self.map.contains_key(&id) {
             return Err(Error::AlreadyExists);
@@ -1159,7 +1159,7 @@ impl PrincipalStore {
         keepold: bool,
     ) -> Result<(), Error> {
         self.check_password_quality(name, password)?;
-        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let id = crate::kdb::lookup_principal_id(name, &self.realm);
         let Some(existing) = self.map.get(&id) else {
             return Err(Error::NotFound);
         };
@@ -1215,7 +1215,7 @@ impl PrincipalStore {
         locked: bool,
         pw_expire: u32,
     ) -> Result<(), Error> {
-        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let id = crate::kdb::lookup_principal_id(name, &self.realm);
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         p.locked = locked;
         p.pw_expire = pw_expire;
@@ -1242,7 +1242,7 @@ impl PrincipalStore {
         password: &[u8],
     ) -> Result<(), Error> {
         let name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", foreign_realm]);
-        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let id = crate::kdb::lookup_principal_id(&name, &self.realm);
         acl.check(actor, AdminOp::Create, Some(&id))?;
         if self.map.contains_key(&id) {
             return Err(Error::AlreadyExists);
@@ -1271,7 +1271,7 @@ impl PrincipalStore {
         key: ProtocolKey,
     ) -> Result<(), Error> {
         let name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", foreign_realm]);
-        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let id = crate::kdb::lookup_principal_id(&name, &self.realm);
         acl.check(actor, AdminOp::Create, Some(&id))?;
         if self.map.contains_key(&id) {
             return Err(Error::AlreadyExists);
@@ -1308,7 +1308,7 @@ impl PrincipalStore {
         key: ProtocolKey,
     ) -> Result<(), Error> {
         let name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", foreign_realm]);
-        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let id = crate::kdb::lookup_principal_id(&name, &self.realm);
         acl.check(actor, AdminOp::Create, Some(&id))?;
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         let kvno = p.keys.iter().map(|k| k.kvno).min().unwrap_or(1);
@@ -1330,7 +1330,7 @@ impl PrincipalStore {
         name: &PrincipalName,
         password: &[u8],
     ) -> Result<(), Error> {
-        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let id = crate::kdb::lookup_principal_id(name, &self.realm);
         acl.check(actor, AdminOp::ChangePassword, Some(&id))?;
         self.set_password(name, password)
     }
@@ -1341,7 +1341,7 @@ impl PrincipalStore {
     ///
     /// [`Error::AclDenied`] or [`Error::NotFound`].
     pub fn delete(&mut self, acl: &Acl, actor: &str, name: &PrincipalName) -> Result<(), Error> {
-        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let id = crate::kdb::lookup_principal_id(name, &self.realm);
         acl.check(actor, AdminOp::Delete, Some(&id))?;
         self.remove_id_inner(&id)
     }
@@ -1362,8 +1362,8 @@ impl PrincipalStore {
         old: &PrincipalName,
         new: &PrincipalName,
     ) -> Result<(), Error> {
-        let old_id = format!("{}@{}", old.components_joined(), self.realm);
-        let new_id = format!("{}@{}", new.components_joined(), self.realm);
+        let old_id = crate::kdb::lookup_principal_id(old, &self.realm);
+        let new_id = crate::kdb::lookup_principal_id(new, &self.realm);
         acl.check_rename(actor, &old_id, &new_id)?;
         if self.map.contains_key(&new_id) {
             return Err(Error::AlreadyExists);
@@ -1390,7 +1390,7 @@ impl PrincipalStore {
         actor: &str,
         name: &PrincipalName,
     ) -> Result<Keytab, Error> {
-        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let id = crate::kdb::lookup_principal_id(name, &self.realm);
         acl.check(actor, AdminOp::Ktadd, Some(&id))?;
         let p = self.get_name(name).ok_or(Error::NotFound)?;
         if p.attributes & KDB_LOCKDOWN_KEYS != 0 {
@@ -1578,7 +1578,7 @@ impl PrincipalStore {
     ///
     /// [`Error::NotFound`] or RNG failure.
     pub fn chrand(&mut self, name: &PrincipalName) -> Result<Vec<KeyEntry>, Error> {
-        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let id = crate::kdb::lookup_principal_id(name, &self.realm);
         let existing = self.map.get(&id).ok_or(Error::NotFound)?;
         let next_kvno = existing
             .keys
@@ -1613,7 +1613,7 @@ impl PrincipalStore {
     ///
     /// [`Error::NotFound`].
     pub fn purgekeys(&mut self, name: &PrincipalName, keepkvno: i32) -> Result<(), Error> {
-        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let id = crate::kdb::lookup_principal_id(name, &self.realm);
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         let keep = if keepkvno <= 0 {
             p.keys.iter().map(|k| k.kvno).max().unwrap_or(0)
@@ -1644,7 +1644,7 @@ impl PrincipalStore {
         if keys.is_empty() {
             return Err(Error::Crypto("setkey empty".into()));
         }
-        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let id = crate::kdb::lookup_principal_id(name, &self.realm);
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         let want = keys[0].kvno;
         if keys.iter().any(|k| k.kvno != want) {
@@ -1695,7 +1695,7 @@ impl PrincipalStore {
         policy: Option<String>,
         clear_policy: bool,
     ) -> Result<(), Error> {
-        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let id = crate::kdb::lookup_principal_id(name, &self.realm);
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         if let Some(a) = attributes {
             p.attributes = a;
@@ -1732,7 +1732,7 @@ impl PrincipalStore {
         name: &PrincipalName,
         rs: &Restrictions,
     ) -> Result<(), Error> {
-        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let id = crate::kdb::lookup_principal_id(name, &self.realm);
         self.apply_acl_restrictions(&id, rs)?;
         self.save_if_configured()
     }
@@ -1796,7 +1796,7 @@ impl PrincipalStore {
         name: &PrincipalName,
         policy: Option<String>,
     ) -> Result<(), Error> {
-        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let id = crate::kdb::lookup_principal_id(name, &self.realm);
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         p.pw_policy = policy;
         let snap = p.clone();
@@ -1810,7 +1810,7 @@ impl PrincipalStore {
     ///
     /// [`Error::NotFound`].
     pub fn get_strings(&self, name: &PrincipalName) -> Result<Vec<(String, String)>, Error> {
-        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let id = crate::kdb::lookup_principal_id(name, &self.realm);
         let p = self.map.get(&id).ok_or(Error::NotFound)?;
         Ok(p.string_attrs.clone())
     }
@@ -1826,7 +1826,7 @@ impl PrincipalStore {
         key: &str,
         value: Option<&str>,
     ) -> Result<(), Error> {
-        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let id = crate::kdb::lookup_principal_id(name, &self.realm);
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         p.string_attrs.retain(|(k, _)| k != key);
         if let Some(v) = value {
@@ -1939,7 +1939,7 @@ impl PrincipalStore {
 
     /// Zero the overlay fail count without stamping last_success (interval reset).
     pub fn clear_as_fail_count(&self, name: &PrincipalName) {
-        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let id = crate::kdb::lookup_principal_id(name, &self.realm);
         let fallback = self
             .map
             .get(&id)
@@ -1962,7 +1962,7 @@ impl PrincipalStore {
 
     /// Record AS password outcome (interior-mutable; dump writes the overlay).
     pub fn record_as_outcome(&self, name: &PrincipalName, ok: bool) {
-        let id = format!("{}@{}", name.components_joined(), self.realm);
+        let id = crate::kdb::lookup_principal_id(name, &self.realm);
         let fallback = self
             .map
             .get(&id)
