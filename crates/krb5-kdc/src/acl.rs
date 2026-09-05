@@ -151,6 +151,12 @@ impl Acl {
         Self::default()
     }
 
+    /// Self-only: `acl_init(NULL)` → `KRB5_PLUGIN_NO_HANDLE` (`auth_acl.c:554-555`).
+    #[must_use]
+    pub fn none() -> Self {
+        Self::new()
+    }
+
     /// Parse kadm5.acl text (`auth_acl.c` `load_acl_file`).
     ///
     /// # Errors

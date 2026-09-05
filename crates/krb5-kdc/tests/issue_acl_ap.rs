@@ -7,8 +7,8 @@ use krb5_kdc::{
     KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_LOCKDOWN_KEYS,
     KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH,
     KDB_REQUIRES_PWCHANGE, PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
-    acl_for_store, as_req, bootstrap_documented, documented_admin_id, documented_changepw,
-    documented_host, documented_kadmin, pa_enc_timestamp, tgs_req,
+    acl_for_store, as_req, bootstrap_documented, default_acl_path, documented_admin_id,
+    documented_changepw, documented_host, documented_kadmin, pa_enc_timestamp, tgs_req,
 };
 use krb5_protocol::Keytab;
 use krb5_protocol::{ReplayCache, as_req_sname, build_ap_req, tgs_req_ex, verify_ap_req};
@@ -746,22 +746,19 @@ fn hostile_keytab_does_not_panic() {
 
 #[test]
 fn kadmind_acl_follows_store_realm_or_acl_file() {
-    let none = acl_for_store("PROD.KERBER.TEST", None).expect("default acl");
-    assert!(
+    let none = acl_for_store("PROD.KERBER.TEST", None).expect("self-only");
+    assert_eq!(
         none.check("admin@PROD.KERBER.TEST", AdminOp::Create, None)
-            .is_ok()
+            .unwrap_err(),
+        Error::AclDenied
     );
-    assert!(
+    assert_eq!(
         none.check(
             "kiprop/testhost.prod.kerber.test@PROD.KERBER.TEST",
             AdminOp::Propagate,
             None,
         )
-        .is_ok()
-    );
-    assert_eq!(
-        none.check("admin@KERBER.TEST", AdminOp::Create, None)
-            .unwrap_err(),
+        .unwrap_err(),
         Error::AclDenied
     );
 
@@ -800,6 +797,40 @@ fn kadmind_acl_follows_store_realm_or_acl_file() {
         Error::AclDenied
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn acl_default_path_is_kdc_dir_kadm5_acl() {
+    let p = default_acl_path(std::path::Path::new("/var/lib/krb5kdc"));
+    assert_eq!(p, std::path::PathBuf::from("/var/lib/krb5kdc/kadm5.acl"));
+}
+
+#[test]
+fn acl_missing_default_file_refuses_start() {
+    let path = std::path::Path::new("/no/such/kadm5.acl");
+    let err = acl_for_store("KERBER.TEST", Some(path)).expect_err("missing");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Cannot open /no/such/kadm5.acl: No such file or directory while initializing ACL file, aborting"),
+        "{msg}"
+    );
+}
+
+#[test]
+fn acl_none_is_self_only_for_embed() {
+    let acl = Acl::none();
+    assert_eq!(
+        acl.check("admin@KERBER.TEST", AdminOp::Create, None)
+            .unwrap_err(),
+        Error::AclDenied
+    );
+    assert_eq!(
+        acl_for_store("KERBER.TEST", Some(std::path::Path::new("")))
+            .expect("empty")
+            .check("admin@KERBER.TEST", AdminOp::Create, None)
+            .unwrap_err(),
+        Error::AclDenied
+    );
 }
 
 #[test]

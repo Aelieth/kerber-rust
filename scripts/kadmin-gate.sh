@@ -654,6 +654,66 @@ if docker exec "$NAME" grep -q '^listening ' /tmp/kadmind-badacl.log 2>/dev/null
     exit 1
 fi
 
+echo "==== default ACL path missing refuses start ===="
+docker exec "$NAME" sh -c '
+for comm in /proc/[0-9]*/comm; do
+    [ -f "$comm" ] || continue
+    read -r name < "$comm" || continue
+    if [ "$name" = "krb5-kadmind" ]; then
+        pid=${comm#/proc/}
+        pid=${pid%/comm}
+        kill "$pid" 2>/dev/null || true
+    fi
+done
+'
+sleep 0.4
+docker exec "$NAME" sh -c '
+python3 - <<PY
+from pathlib import Path
+p = Path("/etc/krb5kdc/kdc.conf")
+p.write_text("".join(ln for ln in p.read_text().splitlines(True) if "acl_file" not in ln))
+PY
+mv /tmp/kadm5.acl /tmp/kadm5.acl.bak 2>/dev/null || true
+'
+set +e
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" sh -c 'timeout 3 /tmp/krb5-kadmind 127.0.0.1:749 >/tmp/kadmind-noacl.log 2>&1'
+set -e
+NOACL="$(docker exec "$NAME" cat /tmp/kadmind-noacl.log 2>/dev/null || true)"
+echo "$NOACL"
+echo "$NOACL" | grep -F 'Cannot open /tmp/kadm5.acl: No such file or directory while initializing ACL file, aborting'
+if docker exec "$NAME" grep -q '^listening ' /tmp/kadmind-noacl.log 2>/dev/null; then
+    echo "kadmind started with no ACL file" >&2
+    exit 1
+fi
+
+echo "==== default ACL path present loads ===="
+docker exec "$NAME" sh -c 'mv /tmp/kadm5.acl.bak /tmp/kadm5.acl'
+docker exec "$NAME" sh -c 'printf "%s\n" "admin@KERBER.TEST *" "kiprop/*@KERBER.TEST p" > /tmp/kadm5.acl'
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" sh -c '/tmp/krb5-kadmind 127.0.0.1:749 >/tmp/kadmind-defaultacl.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/kadmind-defaultacl.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kadmind-defaultacl.log >&2 || true
+    log "kadmin.gate" "error" ',"error":"kadmind did not listen on default ACL path"'
+    exit 1
+fi
+GETPRIVS="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprivs' 2>&1 || true)"
+echo "$GETPRIVS"
+echo "$GETPRIVS" | grep -qiE 'GET|ADD|MODIFY|DELETE'
+
 echo "==== MIT kadmind lockdown cells ===="
 docker run -d --name "$NAME_MIT" "$IMAGE" >/dev/null
 ok=0
@@ -870,6 +930,50 @@ if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(
     echo "MIT kadmind started on unknown op letter" >&2
     exit 1
 fi
+
+echo "==== MIT default ACL path missing refuses start ===="
+docker exec "$NAME_MIT" sh -c '
+python3 - <<PY
+from pathlib import Path
+p = Path("/etc/krb5kdc/kdc.conf")
+p.write_text("".join(ln for ln in p.read_text().splitlines(True) if "acl_file" not in ln))
+PY
+mv /var/kerberos/krb5kdc/kadm5.acl /tmp/kadm5.acl.bak 2>/dev/null || true
+rm -f /var/krb5kdc/kadm5.acl
+'
+set +e
+docker exec "$NAME_MIT" sh -c 'timeout 3 kadmind -nofork >/tmp/kadmind-noacl.log 2>&1'
+set -e
+MIT_NOACL="$(docker exec "$NAME_MIT" cat /tmp/kadmind-noacl.log 2>/dev/null || true)"
+echo "$MIT_NOACL"
+echo "$MIT_NOACL" | grep -F 'Cannot open /var/krb5kdc/kadm5.acl: No such file or directory while initializing ACL file, aborting'
+if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+    echo "MIT kadmind started with no ACL file" >&2
+    exit 1
+fi
+
+echo "==== MIT default ACL path present loads ===="
+docker exec "$NAME_MIT" sh -c '
+mkdir -p /var/krb5kdc
+printf "%s\n" "admin@KERBER.TEST *" "kiprop/*@KERBER.TEST p" > /var/krb5kdc/kadm5.acl
+'
+docker exec -d "$NAME_MIT" sh -c 'kadmind -nofork >/tmp/kadmind-defaultacl.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME_MIT" cat /tmp/kadmind-defaultacl.log >&2 || true
+    log "kadmin.gate" "error" ',"error":"MIT kadmind did not listen on default ACL path"'
+    exit 1
+fi
+MIT_GETPRIVS="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'getprivs' 2>&1 || true)"
+echo "$MIT_GETPRIVS"
+echo "$MIT_GETPRIVS" | grep -qiE 'GET|ADD|MODIFY|DELETE'
 
 log "kadmin.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"addprinc+cpw+get+list+mod+chrand+norandkey+lockdown+purgekeys+setstr+renprinc+del"'
 exit 0

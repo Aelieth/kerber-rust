@@ -121,21 +121,42 @@ pub fn host_for_realm(realm: &str) -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", inst.as_str()])
 }
 
-/// Kadmind ACL: a readable `acl_file` is the ACL (`auth_acl.c` `acl_init`). No file is the documented default.
+/// Default `acl_file` (`osconf.hin:106` `KDC_DIR "/kadm5.acl"`).
+#[must_use]
+pub fn default_acl_path(kdc_dir: &std::path::Path) -> std::path::PathBuf {
+    kdc_dir.join("kadm5.acl")
+}
+
+/// Load `acl_file` (`auth_acl.c` `acl_init` / `load_acl_file`).
+///
+/// `None` or an empty path is self-only (`ovsec_kadmd.c:497` empty → NULL;
+/// `acl_init` `:554-555` → `KRB5_PLUGIN_NO_HANDLE`). A missing path is MIT
+/// `Cannot open … while initializing ACL file`.
 ///
 /// # Errors
 ///
-/// Returns [`Error::Crypto`] when `acl_file` is set but unreadable; [`Error::AclParse`] when the file does not load.
+/// [`Error::AclParse`] when the file cannot be read or does not load.
 pub fn acl_for_store(realm: &str, acl_file: Option<&std::path::Path>) -> Result<Acl, Error> {
-    let default = Acl::parse_with_realm(
-        &format!("{} *\nkiprop/*@{realm} p\n", admin_id_for_realm(realm)),
-        realm,
-    )?;
     let Some(path) = acl_file else {
-        return Ok(default);
+        return Ok(Acl::none());
     };
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| Error::Crypto(format!("acl_file {}: {e}", path.display())))?;
+    if path.as_os_str().is_empty() {
+        return Ok(Acl::none());
+    }
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) => {
+            let why = if e.kind() == std::io::ErrorKind::NotFound {
+                "No such file or directory".to_string()
+            } else {
+                e.to_string()
+            };
+            return Err(Error::AclParse(format!(
+                "Cannot open {}: {why} while initializing ACL file, aborting",
+                path.display()
+            )));
+        }
+    };
     Acl::parse_with_realm(&text, realm)
 }
 

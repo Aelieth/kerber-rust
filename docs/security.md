@@ -152,7 +152,14 @@ letters grant and upper-case letters revoke (`auth_acl.c:276-282`);
 an unknown letter is a load error (`:286-291`). `#` comments only at
 column 0; `\` continues a line (`:120-160`). Realm-less names take the
 store realm (`krb5_parse_name`). A readable ACL file is the ACL: it is
-not replaced when `admin@REALM` is absent (`acl_init:547-563`). An
+not replaced when `admin@REALM` is absent (`acl_init:547-563`). With no
+`KRB5_ACL_FILE` and no kdc.conf `acl_file`, kadmind loads
+`<kdc dir>/kadm5.acl` (`alt_prof.c:509-510`, `osconf.hin:106`). A
+missing or unreadable file is `fail_to_start` (`ovsec_kadmd.c:497-500`,
+`auth_acl.c:398-406`): `Cannot open PATH: No such file or directory
+while initializing ACL file, aborting`. An empty `acl_file` is
+`acl_init(NULL)` (`ovsec_kadmd.c:497`) → self rules only
+(`auth_acl.c:554-555`); the embed API is `Acl::none()`. An
 unparseable target or unknown restriction token is a load error
 (`acl_init`); kadmind refuses the file. `*`/`x` still
 exclude extract (`e`). `listprincs`/`listpols` require `l`
