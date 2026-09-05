@@ -513,17 +513,11 @@ fn parse_princ_pat(s: &str) -> Result<PrincPat, Error> {
 }
 
 fn parse_princ_pat_in(s: &str, default_realm: &str) -> Result<PrincPat, Error> {
-    let (name, realm) = match s.rsplit_once('@') {
-        Some((n, r)) => (n, r.to_owned()),
-        None => (s, default_realm.to_owned()),
-    };
-    if name.is_empty() {
+    if s.is_empty() {
         return Err(Error::AclParse(format!("Cannot parse principal '{s}'")));
     }
-    let components: Vec<String> = name.split('/').map(str::to_owned).collect();
-    if components.iter().any(String::is_empty) {
-        return Err(Error::AclParse(format!("Cannot parse principal '{s}'")));
-    }
+    let (components, realm) = krb5_types::parse_name(s, default_realm)
+        .map_err(|_| Error::AclParse(format!("Cannot parse principal '{s}'")))?;
     Ok(PrincPat { components, realm })
 }
 
@@ -657,43 +651,8 @@ fn flagspec_to_mask(spec: &str, toset: &mut u32, toclear: &mut u32) -> bool {
 }
 
 fn parse_deltat(s: &str) -> Option<u64> {
-    if let Ok(n) = s.parse::<u64>() {
-        return Some(n);
-    }
-    let mut total = 0u64;
-    let mut num = 0u64;
-    let mut seen = false;
-    let mut have_unit = false;
-    for c in s.chars() {
-        if c.is_ascii_digit() {
-            num = num
-                .saturating_mul(10)
-                .saturating_add(u64::from(c as u8 - b'0'));
-            seen = true;
-            have_unit = false;
-        } else {
-            let mul = match c {
-                's' | 'S' => 1,
-                'm' | 'M' => 60,
-                'h' | 'H' => 3600,
-                'd' | 'D' => 86400,
-                'w' | 'W' => 7 * 86400,
-                _ => return None,
-            };
-            total = total.saturating_add(num.saturating_mul(mul));
-            num = 0;
-            have_unit = true;
-        }
-    }
-    if !seen {
-        return None;
-    }
-    if !have_unit && num != 0 {
-        total = total.saturating_add(num);
-    } else if !have_unit {
-        return None;
-    }
-    Some(total)
+    let v = krb5_types::deltat::parse(s).ok()?;
+    u64::try_from(v).ok()
 }
 
 fn match_data(pat: &str, actual: &str, targetflag: bool, ws: Option<&mut WildState>) -> bool {
@@ -825,8 +784,59 @@ mod tests {
     #[test]
     fn acl_allow_admin_rejects_unparseable() {
         assert!(Acl::allow_admin("").is_err());
-        assert!(Acl::allow_admin("@KERBER.TEST").is_err());
-        assert!(Acl::allow_admin("a//b@KERBER.TEST").is_err());
+        assert!(Acl::allow_admin(r"foo\").is_err());
+        assert!(Acl::allow_admin("a//b@KERBER.TEST").is_ok());
+    }
+
+    #[test]
+    fn acl_maxlife_colon_loads() {
+        let acl = Acl::parse("admin@KERBER.TEST a *@KERBER.TEST -maxlife 12:34\n").unwrap();
+        let rs = acl
+            .restrictions("admin@KERBER.TEST", Some("user@KERBER.TEST"))
+            .expect("rs");
+        assert_eq!(rs.max_life, Some(12 * 3600 + 34 * 60));
+    }
+
+    #[test]
+    fn acl_maxlife_3dd_refuses() {
+        let err = Acl::parse("admin@KERBER.TEST a *@KERBER.TEST -maxlife 3dd\n").unwrap_err();
+        assert!(err.to_string().contains("invalid restrictions"), "{err}");
+    }
+
+    #[test]
+    fn acl_star_admin_does_not_match_escaped_slash() {
+        let acl = Acl::parse("*/admin@KERBER.TEST *\n").unwrap();
+        assert_eq!(
+            acl.check(r"foo\/admin@KERBER.TEST", AdminOp::Create, None)
+                .unwrap_err(),
+            Error::AclDenied
+        );
+        assert!(
+            acl.check("admin/admin@KERBER.TEST", AdminOp::Create, None)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn acl_target_realm_is_compared() {
+        let acl = Acl::parse("admin@KERBER.TEST a *@OTHER.REALM\n").unwrap();
+        assert!(
+            acl.check(
+                "admin@KERBER.TEST",
+                AdminOp::Create,
+                Some("user@OTHER.REALM")
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            acl.check(
+                "admin@KERBER.TEST",
+                AdminOp::Create,
+                Some("user@KERBER.TEST")
+            )
+            .unwrap_err(),
+            Error::AclDenied
+        );
     }
 
     #[test]

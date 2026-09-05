@@ -225,40 +225,23 @@ pub fn parse_principal(spec: &str) -> Result<(PrincipalName, String), String> {
 /// Returns a message when the spec has no `@` (non-enterprise) or a
 /// component is not IA5.
 pub fn parse_principal_ex(spec: &str, enterprise: bool) -> Result<(PrincipalName, String), String> {
-    let (user, realm) = if enterprise {
-        match spec.find('@') {
-            None => (spec, ""),
-            Some(first) => match spec[first + 1..].find('@') {
-                None => (spec, ""),
-                Some(rel) => {
-                    let at = first + 1 + rel;
-                    (&spec[..at], &spec[at + 1..])
-                }
-            },
-        }
-    } else {
-        spec.rsplit_once('@')
-            .ok_or_else(|| format!("principal must be name@REALM, got {spec}"))?
-    };
-    if user.is_empty() || (!enterprise && realm.is_empty()) {
+    let p = krb5_types::parse_name_ex(spec, "", enterprise).map_err(|e| e.to_string())?;
+    if p.components.first().is_some_and(String::is_empty) && p.components.len() == 1 {
         return Err("empty principal component".into());
     }
-    if !user.is_ascii() || !realm.is_ascii() {
-        return Err("non-ASCII principal".into());
+    if !enterprise && !p.has_realm {
+        return Err(format!("principal must be name@REALM, got {spec}"));
     }
-    if enterprise {
-        return PrincipalName::try_new(PrincipalName::NT_ENTERPRISE, [user])
-            .map(|n| (n, realm.to_owned()))
-            .map_err(|e| e.to_string());
+    if !enterprise && p.realm.is_empty() {
+        return Err("empty principal component".into());
     }
-    let parts: Vec<&str> = user.split('/').collect();
-    let ntype = if parts.len() > 1 {
-        PrincipalName::NT_SRV_INST
+    let ntype = if enterprise {
+        PrincipalName::NT_ENTERPRISE
     } else {
-        PrincipalName::NT_PRINCIPAL
+        krb5_types::infer_name_type(&p.components)
     };
-    PrincipalName::try_new(ntype, parts)
-        .map(|n| (n, realm.to_owned()))
+    PrincipalName::try_new(ntype, p.components)
+        .map(|n| (n, p.realm))
         .map_err(|e| e.to_string())
 }
 

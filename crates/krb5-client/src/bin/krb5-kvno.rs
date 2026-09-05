@@ -118,12 +118,12 @@ fn run(
         let (sname, srealm) = if service.contains('@') {
             parse_principal(service)?
         } else {
-            let parts: Vec<&str> = service.split('/').collect();
-            let host_realm = parts.get(1).and_then(|h| {
+            let (comps, _) = krb5_types::parse_name(service, "").map_err(|e| e.to_string())?;
+            let host_realm = comps.get(1).and_then(|h| {
                 krb5_config::load_krb5_conf().and_then(|c| c.realm_for_host(h).map(str::to_owned))
             });
             (
-                PrincipalName::try_new(PrincipalName::NT_PRINCIPAL, parts)
+                PrincipalName::try_new(krb5_types::infer_name_type(&comps), comps)
                     .map_err(|e| e.to_string())?,
                 host_realm.unwrap_or(crealm.clone()),
             )

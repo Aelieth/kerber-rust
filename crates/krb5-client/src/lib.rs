@@ -17,7 +17,7 @@ use krb5_protocol::{
     kcm_store, kcm_store_keep_default, memory_destroy, memory_retrieve, memory_store,
     parse_principal_ex, tgs_exchange_path, tgs_renew,
 };
-use krb5_types::{PrincipalName, Ticket};
+use krb5_types::Ticket;
 use zeroize::Zeroize;
 
 pub use krb5_protocol::{
@@ -387,12 +387,8 @@ fn kinit_inner(
     let mut tgs_out = None;
     let mut tgs_err: Option<String> = None;
     if let Some(svc) = params.service {
-        let (svc_name, svc_realm) = match svc.rsplit_once('@') {
-            Some((n, r)) => (n, r.to_owned()),
-            None => (svc, realm_s.clone()),
-        };
-        let parts: Vec<&str> = svc_name.split('/').collect();
-        let sname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, parts);
+        let (sname, svc_realm) =
+            krb5_types::principal_from_unparsed(svc, &realm_s).map_err(|e| e.to_string())?;
         match tgs_exchange_path(&resolved, &as_out, sname, &svc_realm, false) {
             Ok((tgs, path)) => {
                 for p in path {

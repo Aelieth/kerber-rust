@@ -35,11 +35,11 @@ pub fn lookup_principal_id(name: &PrincipalName, realm: &str) -> String {
             if suffix == realm {
                 return format!("{user}@{realm}");
             }
-            return format!("{raw}@{realm}");
+            return krb5_types::unparse_name(std::slice::from_ref(&raw), realm);
         }
-        return format!("{raw}@{realm}");
+        return krb5_types::unparse_name(std::slice::from_ref(&raw), realm);
     }
-    format!("{}@{}", name.components_joined(), realm)
+    name.unparse_with_realm(realm)
 }
 
 /// Process-local KDC state (replay + PKINIT CA). Not dump/persist rows.

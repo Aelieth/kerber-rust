@@ -43,12 +43,15 @@ fn parse_principal_splits_realm() {
 }
 
 #[test]
-fn parse_principal_slash_is_srv_inst() {
+fn parse_principal_slash_infers_principal() {
     let (n, r) = parse_principal("host/slashhost@KERBER.TEST").unwrap();
     assert_eq!(r, "KERBER.TEST");
-    assert_eq!(n.name_type, PrincipalName::NT_SRV_INST);
+    assert_eq!(n.name_type, PrincipalName::NT_PRINCIPAL);
     assert_eq!(n.name_string.len(), 2);
     assert_eq!(n.components_joined(), "host/slashhost");
+    let (n, _) = parse_principal(r"foo\/admin@KERBER.TEST").unwrap();
+    assert_eq!(n.name_string.len(), 1);
+    assert_eq!(n.unparse(), r"foo\/admin");
 }
 
 #[test]

@@ -19,8 +19,10 @@ use zeroize::Zeroize;
 pub use rasn::types::{BitString, GeneralizedTime, OctetString};
 
 mod constants;
+pub mod deltat;
 pub mod extra;
 pub mod fast;
+mod name;
 mod name_error;
 pub mod pac;
 pub mod pkinit;
@@ -31,6 +33,10 @@ pub use constants::{ap_bit, err, flag_bit, ku, pa};
 pub use extra::{
     ApRep, ChangePasswdData, EncApRepPart, EncKrbCredPart, EncKrbPrivPart, KrbCred, KrbCredInfo,
     KrbPriv, KrbSafe, KrbSafeBody,
+};
+pub use name::{
+    ParsedName, infer_name_type, parse_name, parse_name_ex, principal_from_unparsed,
+    principal_from_unparsed_ex, quote_component, unparse_components, unparse_name,
 };
 pub use name_error::{NameError, TimeError};
 
@@ -170,6 +176,8 @@ impl PrincipalName {
     pub const NT_SRV_HST: i32 = 3;
     /// NT-ENTERPRISE (10), RFC 6806. One component, typically `user@REALM`.
     pub const NT_ENTERPRISE: i32 = 10;
+    /// NT-WELLKNOWN (11), RFC 6111.
+    pub const NT_WELLKNOWN: i32 = 11;
 
     /// Build a principal from a name type and GeneralString components.
     ///
@@ -241,6 +249,25 @@ impl PrincipalName {
             .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
             .collect::<Vec<_>>()
             .join("/")
+    }
+
+    /// MIT `krb5_unparse_name` quoting of components (`unparse.c`).
+    #[must_use]
+    pub fn unparse(&self) -> String {
+        crate::unparse_components(&self.component_strings())
+    }
+
+    /// Quoted components `@` quoted realm (`unparse.c`).
+    #[must_use]
+    pub fn unparse_with_realm(&self, realm: &str) -> String {
+        crate::unparse_name(&self.component_strings(), realm)
+    }
+
+    fn component_strings(&self) -> Vec<String> {
+        self.name_string
+            .iter()
+            .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
+            .collect()
     }
 
     /// RFC 4120 default salt: realm concatenated with name components.

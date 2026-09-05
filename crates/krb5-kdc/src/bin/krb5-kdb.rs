@@ -237,12 +237,12 @@ fn cmd_setstr(princ: &str, key: &str, value: &str) {
         eprintln!("krb5-kdb: load store: {e}");
         std::process::exit(1);
     });
-    let user = princ.split_once('@').map_or(princ, |(u, _)| u);
-    let parts: Vec<&str> = user.split('/').collect();
-    let name = if parts.len() > 1 {
-        PrincipalName::new(PrincipalName::NT_SRV_INST, parts)
-    } else {
-        PrincipalName::new(PrincipalName::NT_PRINCIPAL, parts)
+    let name = match krb5_types::principal_from_unparsed(princ, "") {
+        Ok((n, _)) => n,
+        Err(e) => {
+            eprintln!("krb5-kdb: {e}");
+            std::process::exit(2);
+        }
     };
     store
         .set_string(&name, key, Some(value))

@@ -964,16 +964,16 @@ fn san_general(names: &[Vec<u8>]) -> Vec<u8> {
 }
 
 fn other_name_pkinit(principal: &str) -> Vec<u8> {
-    let (name, realm) = principal
-        .rsplit_once('@')
-        .unwrap_or((principal, "KERBER.TEST"));
-    let parts: Vec<&str> = name.split('/').collect();
-    let ntype = if parts.len() > 1 {
-        crate::PrincipalName::NT_SRV_INST
-    } else {
-        crate::PrincipalName::NT_PRINCIPAL
-    };
-    let kn = encode_krb5_principal_name(realm, ntype, &parts);
+    let parsed = crate::parse_name_ex(principal, "KERBER.TEST", false)
+        .or_else(|_| crate::parse_name_ex(principal, "KERBER.TEST", true))
+        .unwrap_or_else(|_| crate::ParsedName {
+            components: vec![principal.to_owned()],
+            realm: "KERBER.TEST".into(),
+            has_realm: false,
+        });
+    let ntype = crate::infer_name_type(&parsed.components);
+    let refs: Vec<&str> = parsed.components.iter().map(String::as_str).collect();
+    let kn = encode_krb5_principal_name(&parsed.realm, ntype, &refs);
     let oid = oid_der(&[0x2b, 0x06, 0x01, 0x05, 0x02, 0x02]);
     let value = tlv(0xa0, &kn);
     tlv(0xa0, &[oid, value].concat())

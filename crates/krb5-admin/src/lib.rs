@@ -244,7 +244,7 @@ impl<'a> AdminSession<'a> {
     }
 
     fn target_id(&self, name: &PrincipalName) -> String {
-        format!("{}@{}", name.components_joined(), self.store.realm())
+        name.unparse_with_realm(self.store.realm())
     }
 
     /// Create a password principal (ACL `add`).
@@ -397,10 +397,10 @@ impl<'a> AdminSession<'a> {
     pub fn change_password(&mut self, name: &PrincipalName, password: &[u8]) -> Result<(), Error> {
         self.reload()?;
         let store_realm = self.store.realm();
-        let self_change = self.actor.rsplit_once('@').is_some_and(|(left, arealm)| {
-            let actor = PrincipalName::new(PrincipalName::NT_UNKNOWN, left.split('/'));
-            krb5_types::principal_compare(name, store_realm, &actor, arealm)
-        });
+        let self_change =
+            krb5_types::principal_from_unparsed(&self.actor, "").is_ok_and(|(actor, arealm)| {
+                krb5_types::principal_compare(name, store_realm, &actor, &arealm)
+            });
         if !self_change {
             let tid = self.target_id(name);
             self.acl
@@ -429,7 +429,7 @@ impl<'a> AdminSession<'a> {
     /// [`Error::NotFound`].
     pub fn get_principal_id(&self, name: &PrincipalName) -> Result<String, Error> {
         let p = self.store.get_name(name).ok_or(Error::NotFound)?;
-        Ok(format!("{}@{}", p.name.components_joined(), p.realm))
+        Ok(p.id())
     }
 
     /// `modprinc` attributes only.

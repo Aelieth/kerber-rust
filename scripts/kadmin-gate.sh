@@ -729,6 +729,113 @@ GETPRIVS="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
 echo "$GETPRIVS"
 echo "$GETPRIVS" | grep -qiE 'GET|ADD|MODIFY|DELETE'
 
+echo "==== unauthorised getprinc nosuch is UNK_PRINC ===="
+NOSUCH="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p user -w userpassword -q 'getprinc nosuch' 2>&1 || true)"
+echo "$NOSUCH"
+echo "$NOSUCH" | grep -F 'Principal does not exist'
+if echo "$NOSUCH" | grep -qiE "requires \`\`get'' privilege"; then
+    echo "unauthorised getprinc nosuch was AUTH_GET: $NOSUCH" >&2
+    exit 1
+fi
+
+echo "==== addprinc foo\\/admin then ACL */admin denies ===="
+ADDESC="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw slashsecret foo\/admin' 2>&1 || true)"
+echo "$ADDESC"
+echo "$ADDESC" | grep -F 'created'
+
+echo "==== ACL -maxlife 12:34 loads ===="
+docker exec "$NAME" sh -c '
+for comm in /proc/[0-9]*/comm; do
+    [ -f "$comm" ] || continue
+    read -r name < "$comm" || continue
+    if [ "$name" = "krb5-kadmind" ]; then
+        pid=${comm#/proc/}
+        pid=${pid%/comm}
+        kill "$pid" 2>/dev/null || true
+    fi
+done
+'
+sleep 0.4
+docker exec "$NAME" sh -c 'printf "%s\n" "admin@KERBER.TEST * *@KERBER.TEST -maxlife 12:34" "kiprop/*@KERBER.TEST p" > /tmp/kadm5.acl'
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+    "$NAME" sh -c '/tmp/krb5-kadmind 127.0.0.1:749 >/tmp/kadmind-maxlife.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/kadmind-maxlife.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kadmind-maxlife.log >&2 || true
+    log "kadmin.gate" "error" ',"error":"kadmind did not listen with -maxlife 12:34"'
+    exit 1
+fi
+
+echo "==== ACL -maxlife 3dd refuses ===="
+docker exec "$NAME" sh -c '
+for comm in /proc/[0-9]*/comm; do
+    [ -f "$comm" ] || continue
+    read -r name < "$comm" || continue
+    if [ "$name" = "krb5-kadmind" ]; then
+        pid=${comm#/proc/}
+        pid=${pid%/comm}
+        kill "$pid" 2>/dev/null || true
+    fi
+done
+'
+sleep 0.4
+docker exec "$NAME" sh -c 'printf "%s\n" "admin@KERBER.TEST * *@KERBER.TEST -maxlife 3dd" > /tmp/kadm5.acl'
+set +e
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+    "$NAME" sh -c 'timeout 3 /tmp/krb5-kadmind 127.0.0.1:749 >/tmp/kadmind-3dd.log 2>&1'
+set -e
+BADDELTA="$(docker exec "$NAME" cat /tmp/kadmind-3dd.log 2>/dev/null || true)"
+echo "$BADDELTA"
+echo "$BADDELTA" | grep -F 'invalid restrictions'
+if docker exec "$NAME" grep -q '^listening ' /tmp/kadmind-3dd.log 2>/dev/null; then
+    echo "kadmind started with -maxlife 3dd" >&2
+    exit 1
+fi
+
+echo "==== ACL */admin does not match foo\\/admin ===="
+docker exec "$NAME" sh -c 'printf "%s\n" "*/admin@KERBER.TEST *" > /tmp/kadm5.acl'
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+    "$NAME" sh -c '/tmp/krb5-kadmind 127.0.0.1:749 >/tmp/kadmind-esc.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/kadmind-esc.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kadmind-esc.log >&2 || true
+    log "kadmin.gate" "error" ',"error":"kadmind did not listen with */admin ACL"'
+    exit 1
+fi
+ESCDENY="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p 'foo\/admin' -w slashsecret -q 'listprincs' 2>&1 || true)"
+echo "$ESCDENY"
+echo "$ESCDENY" | grep -F $'Operation requires ``list\'\' privilege'
+if echo "$ESCDENY" | grep -q 'user@KERBER.TEST'; then
+    echo "foo\\/admin matched */admin: $ESCDENY" >&2
+    exit 1
+fi
+
 echo "==== MIT kadmind lockdown cells ===="
 docker run -d --name "$NAME_MIT" "$IMAGE" >/dev/null
 ok=0
@@ -998,6 +1105,99 @@ fi
 MIT_GETPRIVS="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'getprivs' 2>&1 || true)"
 echo "$MIT_GETPRIVS"
 echo "$MIT_GETPRIVS" | grep -qiE 'GET|ADD|MODIFY|DELETE'
+
+echo "==== MIT unauthorised getprinc nosuch is UNK_PRINC ===="
+MIT_NOSUCH="$(docker exec "$NAME_MIT" kadmin -p user -w userpassword -q 'getprinc nosuch' 2>&1 || true)"
+echo "$MIT_NOSUCH"
+echo "$MIT_NOSUCH" | grep -F 'Principal does not exist'
+if echo "$MIT_NOSUCH" | grep -qiE "requires \`\`get'' privilege"; then
+    echo "MIT unauthorised getprinc nosuch was AUTH_GET: $MIT_NOSUCH" >&2
+    exit 1
+fi
+
+echo "==== MIT addprinc foo\\/admin then ACL */admin denies ===="
+MIT_ADDESC="$(docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw slashsecret foo\/admin' 2>&1 || true)"
+echo "$MIT_ADDESC"
+echo "$MIT_ADDESC" | grep -F 'created'
+
+echo "==== MIT ACL -maxlife 12:34 loads ===="
+docker exec "$NAME_MIT" sh -c '
+for comm in /proc/[0-9]*/comm; do
+    [ -f "$comm" ] || continue
+    read -r name < "$comm" || continue
+    if [ "$name" = "kadmind" ]; then
+        pid=${comm#/proc/}
+        pid=${pid%/comm}
+        kill "$pid" 2>/dev/null || true
+    fi
+done
+'
+sleep 0.4
+docker exec "$NAME_MIT" sh -c 'printf "%s\n" "admin@KERBER.TEST * *@KERBER.TEST -maxlife 12:34" "*/admin@KERBER.TEST *" > /var/krb5kdc/kadm5.acl'
+docker exec -d "$NAME_MIT" sh -c 'kadmind -nofork >/tmp/kadmind-maxlife.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME_MIT" cat /tmp/kadmind-maxlife.log >&2 || true
+    log "kadmin.gate" "error" ',"error":"MIT kadmind did not listen with -maxlife 12:34"'
+    exit 1
+fi
+
+echo "==== MIT ACL -maxlife 3dd refuses ===="
+docker exec "$NAME_MIT" sh -c '
+for comm in /proc/[0-9]*/comm; do
+    [ -f "$comm" ] || continue
+    read -r name < "$comm" || continue
+    if [ "$name" = "kadmind" ]; then
+        pid=${comm#/proc/}
+        pid=${pid%/comm}
+        kill "$pid" 2>/dev/null || true
+    fi
+done
+'
+sleep 0.4
+docker exec "$NAME_MIT" sh -c 'printf "%s\n" "admin@KERBER.TEST * *@KERBER.TEST -maxlife 3dd" > /var/krb5kdc/kadm5.acl'
+set +e
+docker exec "$NAME_MIT" sh -c 'timeout 3 kadmind -nofork >/tmp/kadmind-3dd.log 2>&1'
+set -e
+MIT_BADDELTA="$(docker exec "$NAME_MIT" cat /tmp/kadmind-3dd.log 2>/dev/null || true)"
+echo "$MIT_BADDELTA"
+echo "$MIT_BADDELTA" | grep -F 'invalid restrictions'
+echo "$MIT_BADDELTA" | grep -F 'while initializing ACL file, aborting'
+if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+    echo "MIT kadmind started with -maxlife 3dd" >&2
+    exit 1
+fi
+
+echo "==== MIT ACL */admin does not match foo\\/admin ===="
+docker exec "$NAME_MIT" sh -c 'printf "%s\n" "*/admin@KERBER.TEST *" > /var/krb5kdc/kadm5.acl'
+docker exec -d "$NAME_MIT" sh -c 'kadmind -nofork >/tmp/kadmind-esc.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME_MIT" cat /tmp/kadmind-esc.log >&2 || true
+    log "kadmin.gate" "error" ',"error":"MIT kadmind did not listen with */admin ACL"'
+    exit 1
+fi
+MIT_ESCDENY="$(docker exec "$NAME_MIT" kadmin -p 'foo\/admin' -w slashsecret -q 'listprincs' 2>&1 || true)"
+echo "$MIT_ESCDENY"
+echo "$MIT_ESCDENY" | grep -F $'Operation requires ``list\'\' privilege'
+if echo "$MIT_ESCDENY" | grep -q 'user@KERBER.TEST'; then
+    echo "MIT foo\\/admin matched */admin: $MIT_ESCDENY" >&2
+    exit 1
+fi
 
 log "kadmin.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"addprinc+cpw+get+list+mod+chrand+norandkey+lockdown+purgekeys+setstr+renprinc+del"'
 exit 0

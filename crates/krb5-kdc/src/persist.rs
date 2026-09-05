@@ -15,8 +15,8 @@ use crate::mkey::{harness_master_etype, master_key_from_password};
 use crate::store::{KeyEntry, Principal, PrincipalStore, S2K_ITERS, UlogEntry};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt};
 use krb5_protocol::write_secret_file;
-use krb5_types::PrincipalName;
 use krb5_types::pac::RpcSid;
+use krb5_types::{PrincipalName, parse_name};
 
 const DUMP_PREFIX: &[u8] = b"kdb5_util load_dump version ";
 
@@ -308,7 +308,7 @@ fn serialize_plain(store: &PrincipalStore) -> Vec<u8> {
     let n = u32::try_from(store_debug_count(store)).unwrap_or(0);
     out.extend_from_slice(&n.to_be_bytes());
     for p in store_iter(store) {
-        put_str(&mut out, &p.name.components_joined());
+        put_str(&mut out, &p.name.unparse());
         out.extend_from_slice(&p.name.name_type.to_be_bytes());
         put_bytes(&mut out, &p.salt);
         out.push(u8::from(p.requires_preauth));
@@ -358,8 +358,9 @@ fn parse_plain(plain: &[u8], v2: bool, v3: bool) -> Result<PrincipalStore, Persi
                 .map_err(|e| PersistError::Crypto(e.to_string()))?;
             keys.push(KeyEntry::new(etype, key, kvno));
         }
-        let parts: Vec<&str> = name_s.split('/').collect();
-        let name = PrincipalName::try_new(ntype, parts)
+        let (comps, _) =
+            parse_name(&name_s, "").map_err(|e| PersistError::Format(e.to_string()))?;
+        let name = PrincipalName::try_new(ntype, comps)
             .map_err(|e| PersistError::Format(e.to_string()))?;
         if v2 && i < plain.len() {
             // KDB2 stored a unused SPAKE `w`; skip the length-prefixed blob.

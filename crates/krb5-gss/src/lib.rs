@@ -347,7 +347,7 @@ impl GssContext {
         let ok = krb5_protocol::verify_ap_req_ex(&inner[2..], &params, rcache, None)?;
         let client = format!(
             "{}@{}",
-            ok.authenticator.cname.components_joined(),
+            ok.authenticator.cname.unparse(),
             String::from_utf8_lossy(ok.authenticator.crealm.as_bytes())
         );
         let ticket_session = ProtocolKey::from_bytes(

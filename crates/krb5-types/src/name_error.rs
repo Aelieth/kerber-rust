@@ -14,6 +14,9 @@ pub enum NameError {
     /// Empty name component or realm.
     #[error("empty principal component")]
     Empty,
+    /// Trailing `\` or other `parse.c` malformation.
+    #[error("malformed principal name")]
+    Malformed,
 }
 
 /// Failure to represent a Kerberos time or microseconds value.

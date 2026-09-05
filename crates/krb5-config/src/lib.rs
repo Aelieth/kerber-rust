@@ -754,43 +754,16 @@ fn parse_endpoint(v: &str) -> Endpoint {
     Endpoint::kdc(v)
 }
 
-/// Parse MIT `krb5_string_to_deltat` (`10h`, `7d`, `300`, `1h30m`).
+/// Parse MIT `krb5_string_to_deltat` (`x-deltat.y`).
 #[must_use]
 pub fn parse_deltat(v: &str) -> Option<u64> {
     parse_duration_secs(v)
 }
 
-/// Parse `10h`, `7d`, `300`, `1h30m`.
 fn parse_duration_secs(v: &str) -> Option<u64> {
-    if let Ok(n) = v.parse::<u64>() {
-        return Some(n);
-    }
-    let mut total = 0u64;
-    let mut num = 0u64;
-    let mut seen = false;
-    for c in v.chars() {
-        if c.is_ascii_digit() {
-            seen = true;
-            num = num
-                .saturating_mul(10)
-                .saturating_add(u64::from(c as u8 - b'0'));
-        } else if !c.is_whitespace() {
-            let mul = match c {
-                's' | 'S' => 1,
-                'm' | 'M' => 60,
-                'h' | 'H' => 3600,
-                'd' | 'D' => 86400,
-                'w' | 'W' => 86400 * 7,
-                _ => return None,
-            };
-            total = total.saturating_add(num.saturating_mul(mul));
-            num = 0;
-        }
-    }
-    if !seen {
-        return None;
-    }
-    Some(total.saturating_add(num))
+    krb5_types::deltat::parse(v)
+        .ok()
+        .and_then(|n| u64::try_from(n).ok())
 }
 
 /// MIT `KRB5_CC_UNKNOWN_TYPE`.

@@ -17,8 +17,8 @@ use std::path::Path;
 
 use krb5_crypto::{EncryptionType, ProtocolKey, kdb_decrypt_key, kdb_encrypt_key};
 use krb5_protocol::write_secret_file;
-use krb5_types::PrincipalName;
 use krb5_types::pac::RpcSid;
+use krb5_types::{PrincipalName, infer_name_type, parse_name};
 
 use crate::error::Error as KdcError;
 use crate::mkey::{MASTER_NAME, harness_master_etype, master_key_from_password};
@@ -685,21 +685,19 @@ fn encode_hex(bytes: &[u8]) -> String {
 }
 
 fn parse_unparsed(s: &str) -> Result<(PrincipalName, String), DumpError> {
-    let (left, realm) = s
-        .rsplit_once('@')
-        .ok_or_else(|| DumpError::Format(format!("missing realm in {s}")))?;
-    if realm.is_empty() || left.is_empty() {
+    let (comps, realm) =
+        parse_name(s, "").map_err(|e| DumpError::Format(format!("principal {s}: {e}")))?;
+    if realm.is_empty() || (comps.len() == 1 && comps[0].is_empty()) {
         return Err(DumpError::Format(format!("empty principal {s}")));
     }
-    let parts: Vec<&str> = left.split('/').collect();
-    let ntype = match parts.as_slice() {
-        ["host", _] => PrincipalName::NT_SRV_HST,
-        [_] | ["K", "M"] => PrincipalName::NT_PRINCIPAL,
-        _ => PrincipalName::NT_SRV_INST,
+    let ntype = if comps.len() == 2 && comps[0] == "host" {
+        PrincipalName::NT_SRV_HST
+    } else {
+        infer_name_type(&comps)
     };
     let name =
-        PrincipalName::try_new(ntype, parts).map_err(|e| DumpError::Format(e.to_string()))?;
-    Ok((name, realm.to_owned()))
+        PrincipalName::try_new(ntype, comps).map_err(|e| DumpError::Format(e.to_string()))?;
+    Ok((name, realm))
 }
 
 fn mkvno_from_tl(tl: &[TlData]) -> u16 {
@@ -738,7 +736,7 @@ fn write_princ_record(
     mkey: &ProtocolKey,
     store: &PrincipalStore,
 ) -> Result<(), DumpError> {
-    let name = format!("{}@{}", p.name.components_joined(), p.realm);
+    let name = p.id();
     let max_life = if p.max_life == 0 {
         u32::try_from(store.policy.max_life).unwrap_or(u32::MAX)
     } else {
@@ -1125,6 +1123,28 @@ mod tests {
             Some("strict")
         );
         assert_eq!(again.serial(), store.serial());
+    }
+
+    #[test]
+    fn dump_round_trip_keeps_slash_in_component() {
+        use crate::{bootstrap_documented, dump_store, load_dump};
+        use krb5_types::PrincipalName;
+
+        let (mut store, acl) = bootstrap_documented().unwrap();
+        let actor = crate::documented_admin_id();
+        let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["foo/admin"]);
+        store
+            .create_password(&acl, &actor, &name, b"slash-secret")
+            .unwrap();
+        let text = dump_store(&store, b"masterpassword").unwrap();
+        assert!(
+            text.contains(r"foo\/admin@"),
+            "dump must unparse slash-in-component: {text}"
+        );
+        let again = load_dump(&text, b"masterpassword").unwrap();
+        assert!(again.get_name(&name).is_some(), "one-component foo/admin");
+        let two = PrincipalName::new(PrincipalName::NT_SRV_INST, ["foo", "admin"]);
+        assert!(again.get_name(&two).is_none());
     }
 
     #[test]

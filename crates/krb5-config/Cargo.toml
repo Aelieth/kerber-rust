@@ -9,6 +9,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+krb5-types.workspace = true
 krb5-log.workspace = true
 nix.workspace = true
 thiserror.workspace = true

@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use krb5_admin::{AdminSession, KadminArgs, parse_kadmin_args};
 use krb5_kdc::{Acl, load_store};
-use krb5_protocol::{Keytab, parse_principal};
+use krb5_protocol::Keytab;
 use krb5_types::PrincipalName;
 
 fn main() {
@@ -270,12 +270,9 @@ fn merge_write_keytab(path: &std::path::Path, added: &Keytab) -> Result<(), Stri
 }
 
 fn parse_name(sess: &AdminSession<'_>, spec: &str) -> Result<PrincipalName, String> {
-    let full = if spec.contains('@') {
-        spec.to_owned()
-    } else {
-        format!("{}@{}", spec, sess.realm())
-    };
-    parse_principal(&full).map(|(n, _)| n)
+    krb5_types::principal_from_unparsed(spec, sess.realm())
+        .map(|(n, _)| n)
+        .map_err(|e| e.to_string())
 }
 
 fn password() -> Result<String, String> {

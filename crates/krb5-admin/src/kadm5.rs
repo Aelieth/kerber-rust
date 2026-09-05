@@ -1372,15 +1372,7 @@ fn decode_princ(r: &mut XdrR<'_>) -> Result<(PrincipalName, String), Error> {
 }
 
 fn parse_unparsed(s: &str) -> Result<(PrincipalName, String), Error> {
-    let (left, realm) = s.split_once('@').unwrap_or((s, ""));
-    let parts: Vec<&str> = left.split('/').collect();
-    let ntype = if parts.len() > 1 {
-        PrincipalName::NT_SRV_HST
-    } else {
-        PrincipalName::NT_PRINCIPAL
-    };
-    let name = PrincipalName::try_new(ntype, parts).map_err(|e| Error::Inner(e.to_string()))?;
-    Ok((name, realm.to_owned()))
+    krb5_types::principal_from_unparsed(s, "").map_err(|e| Error::Inner(e.to_string()))
 }
 
 fn decode_keydata(r: &mut XdrR<'_>, mkey: Option<&ProtocolKey>) -> Result<Vec<KeyEntry>, Error> {
@@ -1448,15 +1440,18 @@ fn write_store(
 }
 
 fn acl_id(name: &PrincipalName, realm: &str) -> String {
-    format!("{}@{realm}", name.components_joined())
+    name.unparse_with_realm(realm)
+}
+
+fn parse_actor(actor: &str) -> Option<(PrincipalName, String)> {
+    krb5_types::principal_from_unparsed(actor, "").ok()
 }
 
 fn is_self(actor: &str, name: &PrincipalName, realm: &str) -> bool {
-    let Some((left, arealm)) = actor.rsplit_once('@') else {
+    let Some((actor_name, arealm)) = parse_actor(actor) else {
         return false;
     };
-    let actor_name = PrincipalName::new(PrincipalName::NT_UNKNOWN, left.split('/'));
-    krb5_types::principal_compare(name, realm, &actor_name, arealm)
+    krb5_types::principal_compare(name, realm, &actor_name, &arealm)
 }
 
 fn changepw_acceptor(ctx: &GssContext) -> bool {
@@ -1812,10 +1807,8 @@ fn dispatch_kadm5_ticket(
             let g = store
                 .read()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let own_pol = actor.rsplit_once('@').and_then(|(left, _)| {
-                let n = PrincipalName::new(PrincipalName::NT_UNKNOWN, left.split('/'));
-                g.get_name(&n).and_then(|p| p.pw_policy.clone())
-            });
+            let own_pol = parse_actor(actor)
+                .and_then(|(n, _)| g.get_name(&n).and_then(|p| p.pw_policy.clone()));
             if (changepw || acl.check(actor, krb5_kdc::AdminOp::Inquire, None).is_err())
                 && own_pol.as_deref() != Some(name.as_str())
             {
@@ -1976,6 +1969,13 @@ fn dispatch_kadm5_ticket(
         }
         GET_STRINGS => {
             let (api, name) = parse_gstrings(args)?;
+            let g = match write_store(store, api) {
+                Ok(g) => g,
+                Err(rep) => return Ok(rep),
+            };
+            if g.get_name(&name).is_none() {
+                return Ok(generic_ret(api, KADM5_UNK_PRINC));
+            }
             if changepw
                 || (acl
                     .check(
@@ -1988,10 +1988,6 @@ fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(api, KADM5_AUTH_GET));
             }
-            let g = match write_store(store, api) {
-                Ok(g) => g,
-                Err(rep) => return Ok(rep),
-            };
             match g.get_strings(&name) {
                 Ok(attrs) => Ok(encode_gstrings(api, &attrs)),
                 Err(e) => Ok(generic_ret(api, kadm5_code(&Error::from(e)))),
@@ -2636,14 +2632,9 @@ impl<'a> XdrR<'a> {
         let s = self
             .nullstring()?
             .ok_or_else(|| Error::Inner("null principal".into()))?;
-        let (user, _realm) = s.split_once('@').unwrap_or((s.as_str(), ""));
-        let parts: Vec<&str> = user.split('/').collect();
-        let ntype = if parts.len() > 1 {
-            PrincipalName::NT_SRV_INST
-        } else {
-            PrincipalName::NT_PRINCIPAL
-        };
-        PrincipalName::try_new(ntype, parts).map_err(|e| Error::Inner(e.to_string()))
+        krb5_types::principal_from_unparsed(&s, "")
+            .map(|(n, _)| n)
+            .map_err(|e| Error::Inner(e.to_string()))
     }
 
     fn skip_array_i32_pairs(&mut self) -> Result<(), Error> {
@@ -2716,6 +2707,17 @@ mod tests {
             r3.principal().unwrap()
         };
         assert_eq!(p.components_joined(), "alice");
+    }
+
+    #[test]
+    fn xdr_principal_parse_name_escapes() {
+        let mut w = XdrW::default();
+        w.nullstring(Some(r"foo\/admin@KERBER.TEST"));
+        let mut r = XdrR::new(&w.b);
+        let p = r.principal().unwrap();
+        assert_eq!(p.name_string.len(), 1);
+        assert_eq!(p.unparse(), r"foo\/admin");
+        assert_eq!(p.components_joined(), "foo/admin");
     }
 
     #[test]
@@ -3373,6 +3375,19 @@ mod tests {
         w.u32(u32::MAX);
         let out = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &w.b).unwrap();
         assert_eq!(ret_code(&out), KADM5_UNK_PRINC);
+    }
+
+    #[test]
+    fn getprinc_missing_unauthorised_is_unk_princ() {
+        let (store, _acl, _actor) = setup();
+        let none = Acl::parse("nobody@KERBER.TEST a\n").expect("acl");
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some("nosuch@KERBER.TEST"));
+        w.u32(u32::MAX);
+        let out = dispatch_kadm5(&store, &none, "user@KERBER.TEST", GET_PRINCIPAL, &w.b).unwrap();
+        assert_eq!(ret_code(&out), KADM5_UNK_PRINC);
+        assert_ne!(ret_code(&out), KADM5_AUTH_GET);
     }
 
     fn extract_args(name: &str, kvno: u32) -> Vec<u8> {

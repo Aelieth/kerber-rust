@@ -412,10 +412,10 @@ fn hierarchical_intermediates(client: &str, server: &str) -> Vec<String> {
 }
 
 impl Principal {
-    /// `name@REALM` lookup key.
+    /// `name@REALM` lookup key (`krb5_unparse_name`).
     #[must_use]
     pub fn id(&self) -> String {
-        format!("{}@{}", self.name.components_joined(), self.realm)
+        crate::kdb::lookup_principal_id(&self.name, &self.realm)
     }
 
     /// First key of `etype`, if present (highest kvno preferred).

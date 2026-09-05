@@ -35,9 +35,9 @@ Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after W1-I K2b acceptor rows):
-**247** = A1 116 + A2 67 + A3 55 + A4 9.
-exact 64 · stricter-documented 11 · deviation 91 ·
+Counts (after W1-I K3 parse/unparse/deltat):
+**248** = A1 116 + A2 67 + A3 55 + A4 10.
+exact 65 · stricter-documented 11 · deviation 91 ·
 absent 66 · deferred 15.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
@@ -430,3 +430,4 @@ checksum/rc4/declared-cksumtype rows that sat under A3.
 | kadm_rpc_svc.c:80-88,324-331 | kadm5 acceptor: AUTH_GSSAPI or `check_rpcsec_auth` (2 comps, realm, `kadmin`, not `history`) else `svcerr_weakauth` | RPC AUTH_TOOWEAK | kadm5.rs check_rpcsec_auth; kadm5.rs kadm5_rpcsec_ok | kiprop/history/1-comp weakauth | exact | `check_rpcsec_auth_rejects_kiprop_history_and_one_component`; `scripts/kadmin-gate.sh` kiprop `--service` both legs |
 | ipropd_svc.c:481-516,542-548 | iprop flavor RPCSEC_GSS; 2 comps; `kiprop`; else `svcerr_weakauth` | RPC AUTH_TOOWEAK | kadm5.rs check_iprop_rpcsec_auth | AUTH_GSSAPI-on-iprop and kadmin-on-iprop weakauth | exact | `check_rpcsec_auth_rejects_kiprop_history_and_one_component` |
 | ipropd_svc.c:312-320; iprop.x:208-211 | full-resync deny is `kdb_fullresync_result_t` `{lastentry, ret}` | UPDATE_PERM_DENIED | kadm5.rs dispatch_iprop; kadm5.rs encode_fullresync_status | same XDR | exact | `iprop_fullresync_deny_is_fullresync_result` |
+| parse.c:62-102; unparse.c:85-134; x-deltat.y:149-171; t_deltat.c:46-126; server_stubs.c:296-301 | parse/unparse quoting; `string_to_deltat`; `UNK_PRINC` before ACL | `KADM5_UNK_PRINC` | name.rs parse_name; deltat.rs parse; kadm5.rs dispatch_kadm5_ticket | `\/` `\@`; `12:34` loads; `3dd` refuses | exact | `parse_unparse_escapes`; `t_deltat_c_vectors`; `acl_star_admin_does_not_match_escaped_slash`; `getprinc_missing_unauthorised_is_unk_princ`; `scripts/kadmin-gate.sh` 12:34/3dd/`foo\/admin`/nosuch both legs |

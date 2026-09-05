@@ -284,15 +284,8 @@ fn split_name_pass(payload: &[u8]) -> Result<(PrincipalName, &[u8]), Error> {
         .position(|b| *b == 0)
         .ok_or_else(|| Error::Inner("name\\0password".into()))?;
     let name_s = std::str::from_utf8(&payload[..z]).map_err(|e| Error::Inner(e.to_string()))?;
-    let (user, realm) = name_s.split_once('@').unwrap_or((name_s, ""));
-    let parts: Vec<&str> = user.split('/').collect();
-    let ntype = if parts.len() > 1 {
-        PrincipalName::NT_SRV_INST
-    } else {
-        PrincipalName::NT_PRINCIPAL
-    };
-    let name = PrincipalName::try_new(ntype, parts).map_err(|e| Error::Inner(e.to_string()))?;
-    let _ = realm;
+    let (name, _realm) =
+        krb5_types::principal_from_unparsed(name_s, "").map_err(|e| Error::Inner(e.to_string()))?;
     Ok((name, &payload[z + 1..]))
 }
 
@@ -492,12 +485,8 @@ fn handle_kpasswd_from(
             user_data,
         )
     };
-    let client = format!(
-        "{}@{}",
-        ok.ticket_part.cname.components_joined(),
-        ticket_crealm
-    );
-    let target_unparsed = format!("{}@{targ_realm}", targ.components_joined());
+    let client = ok.ticket_part.cname.unparse_with_realm(&ticket_crealm);
+    let target_unparsed = targ.unparse_with_realm(&targ_realm);
     // MIT misc.c:33-54: compare first, INITIAL, auth(OP_CPW), then DB.
     let self_change = principal_compare(&targ, &targ_realm, &ok.ticket_part.cname, &ticket_crealm);
     let (code, text, log_err) = if self_change && !ok.ticket_part.flags.initial() {

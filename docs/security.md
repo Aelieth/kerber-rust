@@ -151,7 +151,15 @@ case-fold, and `0x` hex (`str_conv.c:50-95,147-197`). Lower-case op
 letters grant and upper-case letters revoke (`auth_acl.c:276-282`);
 an unknown letter is a load error (`:286-291`). `#` comments only at
 column 0; `\` continues a line (`:120-160`). Realm-less names take the
-store realm (`krb5_parse_name`). A readable ACL file is the ACL: it is
+store realm (`krb5_parse_name`). Principal strings use
+`krb5_parse_name` / `krb5_unparse_name` (`parse.c:62-102`,
+`unparse.c:85-134`): `\/` `\@` `\\` `\t` `\n` `\b` `\0`, empty
+components allowed, `foo@` keeps an empty realm. ACL `*/admin@R`
+does not match a one-component `foo/admin`. Restriction durations
+are `krb5_string_to_deltat` (`x-deltat.y`); `12:34` loads and
+`3dd` is `invalid restrictions`. Unauthorised `getprinc` of a
+missing principal is `KADM5_UNK_PRINC` (`stub_setup` `:296-301`)
+before ACL. A readable ACL file is the ACL: it is
 not replaced when `admin@REALM` is absent (`acl_init:547-563`). With no
 `KRB5_ACL_FILE` and no kdc.conf `acl_file`, kadmind loads
 `<kdc dir>/kadm5.acl` (`alt_prof.c:509-510`, `osconf.hin:106`). A
