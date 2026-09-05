@@ -258,9 +258,6 @@ fn handle_rpc(
     let verf_flavor = r.u32()?;
     let verf = r.opaque()?;
 
-    if iprop && cred_flavor != FLAVOR_GSS {
-        return Ok(rpc_reply_weakauth(xid));
-    }
     if cred_flavor == FLAVOR_AUTH_GSSAPI {
         return handle_auth_gssapi(
             store,
@@ -300,14 +297,6 @@ fn handle_rpc(
             rcache,
         )
         .map_err(|e| Error::Inner(e.to_string()))?;
-        let ok = if iprop {
-            check_iprop_rpcsec_auth(&ctx, expected_realm)
-        } else {
-            check_rpcsec_auth(&ctx, expected_realm)
-        };
-        if !ok {
-            return Ok(rpc_reply_weakauth(xid));
-        }
         *gss = Some(ctx);
         let mut body = XdrW::default();
         body.opaque(handle);
@@ -438,7 +427,11 @@ fn handle_auth_gssapi(
                 return Ok(rpc_reply_clear(xid, &body.b));
             }
         };
-        if iprop || !check_auth_gssapi_names(&ctx) {
+        if iprop {
+            if !check_iprop_rpcsec_auth(&ctx, expected_realm) {
+                return Ok(rpc_reply_weakauth(xid));
+            }
+        } else if !check_auth_gssapi_names(&ctx) {
             return Ok(rpc_reply_weakauth(xid));
         }
         let mut isn = [0u8; 4];
@@ -525,7 +518,11 @@ fn handle_auth_gssapi(
     }
     let kadm_args = &plain[4..];
     let actor = st.ctx.client.clone().ok_or(Error::AclDenied)?;
-    if iprop || !check_auth_gssapi_names(&st.ctx) {
+    if iprop {
+        if !check_iprop_rpcsec_auth(&st.ctx, expected_realm) {
+            return Ok(rpc_reply_weakauth(xid));
+        }
+    } else if !check_auth_gssapi_names(&st.ctx) {
         return Ok(rpc_reply_weakauth(xid));
     }
     let result = match kadm5_or_iprop(
@@ -1546,21 +1543,22 @@ fn dispatch_kadm5_ticket(
         }
         GET_PRINCIPAL => {
             let (name, _mask) = parse_get(args)?;
-            let tid = acl_id(&name, &realm);
-            if changepw_not_self(changepw, actor, &name, &realm)
-                || (acl
-                    .check(actor, krb5_kdc::AdminOp::Inquire, Some(&tid))
-                    .is_err()
-                    && !is_self(actor, &name, &realm))
-            {
-                return Ok(generic_ret(API_V2, KADM5_AUTH_GET));
-            }
             let g = match write_store(store, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
             match g.get_name(&name) {
+                None => Ok(generic_ret(API_V2, KADM5_UNK_PRINC)),
                 Some(p) => {
+                    let tid = acl_id(&name, &realm);
+                    if changepw_not_self(changepw, actor, &name, &realm)
+                        || (acl
+                            .check(actor, krb5_kdc::AdminOp::Inquire, Some(&tid))
+                            .is_err()
+                            && !is_self(actor, &name, &realm))
+                    {
+                        return Ok(generic_ret(API_V2, KADM5_AUTH_GET));
+                    }
                     tracing::info!(
                         event = krb5_log::events::ADMIN,
                         component = "krb5-admin",
@@ -1570,7 +1568,6 @@ fn dispatch_kadm5_ticket(
                     );
                     Ok(encode_gprinc(p))
                 }
-                None => Ok(generic_ret(API_V2, KADM5_UNK_PRINC)),
             }
         }
         GET_PRINCS => {
@@ -2639,14 +2636,15 @@ impl<'a> XdrR<'a> {
         let s = self
             .nullstring()?
             .ok_or_else(|| Error::Inner("null principal".into()))?;
-        let (user, _realm) = s.split_once('@').unwrap_or((s.as_str(), ""));
-        let parts: Vec<&str> = user.split('/').collect();
-        let ntype = if parts.len() > 1 {
+        let (comps, _realm) =
+            krb5_types::parse_name(&s, "").map_err(|e| Error::Inner(e.to_string()))?;
+        let ntype = if comps.len() > 1 {
             PrincipalName::NT_SRV_INST
         } else {
             PrincipalName::NT_PRINCIPAL
         };
-        PrincipalName::try_new(ntype, parts).map_err(|e| Error::Inner(e.to_string()))
+        PrincipalName::try_new(ntype, comps.iter().map(String::as_str))
+            .map_err(|e| Error::Inner(e.to_string()))
     }
 
     fn skip_array_i32_pairs(&mut self) -> Result<(), Error> {
