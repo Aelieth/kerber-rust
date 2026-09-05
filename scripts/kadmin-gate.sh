@@ -74,6 +74,51 @@ assert got == (xid, 1, 1, 1, 5), got
 '
 }
 
+kadmind_rpc_framing() {
+    local ctn=$1
+    docker exec "$ctn" python3 -c '
+import select, socket, struct
+
+def rec(body):
+    return struct.pack(">I", 0x80000000 | len(body)) + body
+
+def call(xid, prog, vers, proc, mtype=0, rpcvers=2):
+    return struct.pack(">10I", xid, mtype, rpcvers, prog, vers, proc, 0, 0, 0, 0)
+
+def exchange(pkt, timeout=2.0):
+    s = socket.create_connection(("127.0.0.1", 749), 2)
+    s.settimeout(timeout)
+    s.sendall(rec(pkt))
+    r, _, _ = select.select([s], [], [], timeout)
+    if not r:
+        print("timeout")
+        return None
+    hdr = s.recv(4)
+    if not hdr:
+        print("eof")
+        return None
+    n = struct.unpack(">I", hdr)[0] & 0x7FFFFFFF
+    data = b""
+    while len(data) < n:
+        chunk = s.recv(n - len(data))
+        assert chunk, "eof"
+        data += chunk
+    words = list(struct.unpack(">" + "I" * (len(data) // 4), data[: len(data) - (len(data) % 4)]))
+    print("rpc=" + ",".join(str(x) for x in words[:8]))
+    return words
+
+xid = 0x11111111
+got = exchange(call(xid, 99999, 1, 0))
+assert got is not None and got[:6] == [xid, 1, 0, 0, 0, 1], got
+xid = 0x22222222
+got = exchange(call(xid, 2112, 99, 0))
+assert got is not None and got[:8] == [xid, 1, 0, 0, 0, 2, 2, 2], got
+got = exchange(call(0x33333333, 2112, 2, 12, mtype=1))
+assert got is None
+print("framing=ok")
+'
+}
+
 if ! command -v docker >/dev/null 2>&1; then
     log "kadmin.gate" "error" ',"error":"docker not available"'
     exit 1
@@ -147,6 +192,8 @@ fi
 
 echo "==== Rust kadmind AUTH_NONE is AUTH_TOOWEAK ===="
 kadmind_auth_too_weak "$NAME"
+echo "==== Rust kadmind RPC PROG_UNAVAIL / PROG_MISMATCH / REPLY ===="
+kadmind_rpc_framing "$NAME"
 
 docker exec "$NAME" sh -c 'cat >/tmp/kadmin-krb5.conf <<EOF
 [libdefaults]
@@ -942,6 +989,8 @@ if [ "$ok" != 1 ]; then
 fi
 echo "==== MIT kadmind AUTH_NONE is AUTH_TOOWEAK ===="
 kadmind_auth_too_weak "$NAME_MIT"
+echo "==== MIT kadmind RPC PROG_UNAVAIL / PROG_MISMATCH / REPLY ===="
+kadmind_rpc_framing "$NAME_MIT"
 
 echo "==== crafted RPC listprincs over kadmin/changepw vs MIT kadmind ===="
 compile_kadm5_changepw "$NAME_MIT"

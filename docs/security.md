@@ -198,6 +198,12 @@ iprop is RPCSEC_GSS only (`ipropd_svc.c:481-483`) with
 are `AUTH_TOOWEAK`. A full-resync deny is `kdb_fullresync_result_t`
 (`ipropd_svc.c:312-320`, `iprop.x:208-211`). Purgekeys stays
 `KADM5_PROTECT_KEYS` (stricter than MIT, which has no lockdown check).
+Kadmind ONC RPC (`svc.c:486-520`) answers `PROG_UNAVAIL` for an
+unknown program, `PROG_MISMATCH` with low=high=`KADMVERS` 2 for
+program 2112 and a wrong version, and `AUTH_TOOWEAK` for AUTH_NONE
+on a matching program (`kadm_rpc_svc.c:80-88`). A REPLY-typed
+message fails `xdr_callmsg` (`rpc_callmsg.c:107-108`) so no reply
+is sent and the connection is kept.
 `kadmin.local` ktadd ignores lockdown like MIT. Create-time name
 special-casing keeps `PWCHANGE_SERVICE` only (`create_principal` has
 none of the `kdb5_util create` bits).

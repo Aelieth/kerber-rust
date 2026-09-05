@@ -35,9 +35,9 @@ Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after W1-I K5a chpwfail/TCP/kprop):
-**250** = A1 116 + A2 67 + A3 55 + A4 12.
-exact 67 · stricter-documented 11 · deviation 91 ·
+Counts (after W1-I K5b RPC framing):
+**251** = A1 116 + A2 67 + A3 55 + A4 13.
+exact 68 · stricter-documented 11 · deviation 91 ·
 absent 66 · deferred 15.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
@@ -426,6 +426,7 @@ checksum/rc4/declared-cksumtype rows that sat under A3.
 | enc_rc4.c:17-35 | RC4 usage `3→8, 9→9, 23→13` | n/a | weak.rs arcfour_translate_usage | 9 is 9 | exact | `arcfour_usage_9_is_9`; live rc4 both directions `w1h/rc4-1.log` / `rc4-2.log` (TGS-REP usage 9) |
 | schpw.c:47-82,89-95,110-111,126-166,273-350,384-397; net-server.c:1103 | kpasswd pre-AP-REQ bailout (no datagram); AP-REQ `>=` remaining is bailout; AP-REQ fail `chpwfail` AUTHERROR 3 with `error_code` **60**; PRIV fail after AP-REQ KRB-PRIV HARDERROR 2; no per-listener rcache | no datagram / framed `chpwfail` 60 / two replies on UDP retransmit | listen.rs handle_kpasswd_from | **60**; empty `e_text`; `e_data` result‖text | exact | `kpasswd_bad_ap_req_is_chpwfail_autherror`; `kpasswd_ap_req_fills_datagram_is_bailout`; `scripts/kpasswd-gate.sh` raw + fill + retransmit both legs |
 | recvauth.c:132-138,150-186; rd_req.c:56-57 | kpropd junk AP-REQ: not APPLICATION 14 → `KRB_AP_ERR_MSG_TYPE`; else `problem - ERROR_TABLE_BASE_krb5` > 127 → **60**; `e_text = error_message` + NUL | **40** `Invalid message type\0` for `\xff\x00\x01` | kprop.rs kprop_rd_req_error | **40** + NUL | exact | `kpropd_ap_req_fail_is_krb_error`; `scripts/kprop-gate.sh` junk AP-REQ both legs |
+| svc.c:328-367,486-520; rpc_callmsg.c:107-108; kadm_rpc_svc.c:80-88 | kadmind RPC: unknown program `PROG_UNAVAIL`; 2112 wrong vers `PROG_MISMATCH` low/high 2; AUTH_NONE `AUTH_TOOWEAK`; REPLY-typed no reply | accepted 1 / accepted 2+2+2 / denied AUTH_TOOWEAK 5 / idle | kadm5.rs handle_rpc | same | exact | `bad_program_is_prog_unavail`; `kadm_vers_99_is_prog_mismatch_2_2`; `reply_typed_rpc_is_no_reply`; `scripts/kadmin-gate.sh` framing both legs |
 | ap_req.rs:349; safe_priv.rs:120; gss `lib.rs:505,563` | acceptor / KRB-SAFE / GSS verify uses session checksum, ignores declared cksumtype | MIT `krb5_c_verify_checksum` matches `ctp` | ops.rs verify_checksum_type | declared type unused | deviation | W1-B/C; proposed: unit per site |
 | kadm5_code `AclDenied` | add/delete ACL denial | MIT `AUTH_ADD` / `AUTH_DELETE` | `kadm5.rs dispatch_kadm5_ticket` | `AclDenied` → `AUTH_GET` (create path now `AUTH_ADD`) | deviation | W1-C; `acl_target_pattern_scopes_add_and_delete` (create is AUTH_ADD) |
 | kadm_rpc_svc.c:80-88,324-331 | kadm5 acceptor: AUTH_GSSAPI or `check_rpcsec_auth` (2 comps, realm, `kadmin`, not `history`) else `svcerr_weakauth` | RPC AUTH_TOOWEAK | kadm5.rs check_rpcsec_auth; kadm5.rs kadm5_rpcsec_ok | kiprop/history/1-comp weakauth | exact | `check_rpcsec_auth_rejects_kiprop_history_and_one_component`; `scripts/kadmin-gate.sh` kiprop `--service` both legs |

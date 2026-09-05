@@ -49,6 +49,8 @@ const MSG_REPLY: u32 = 1;
 const MSG_ACCEPTED: u32 = 0;
 const MSG_DENIED: u32 = 1;
 const SUCCESS: u32 = 0;
+const PROG_UNAVAIL: u32 = 1;
+const PROG_MISMATCH: u32 = 2;
 const PROC_UNAVAIL: u32 = 3;
 const GARBAGE_ARGS: u32 = 4;
 const REJECT_AUTH_ERROR: u32 = 1;
@@ -187,6 +189,9 @@ pub fn serve_kadm5_conn(
                 return Err(io::Error::other(e.to_string()));
             }
         };
+        if reply.is_empty() {
+            continue;
+        }
         write_record(&mut stream, &reply)?;
     }
 }
@@ -247,22 +252,33 @@ fn handle_rpc(
     let xid = r.u32()?;
     let mtype = r.u32()?;
     if mtype != MSG_CALL {
-        return Err(Error::Inner("rpc not CALL".into()));
+        return Ok(Vec::new());
     }
     let rpcvers = r.u32()?;
+    if rpcvers != RPC_VERSION {
+        return Ok(Vec::new());
+    }
     let prog = r.u32()?;
     let vers = r.u32()?;
     let proc = r.u32()?;
-    let kadm = prog == KADM_PROG && vers == KADM_VERS;
-    let iprop = prog == IPROP_PROG && vers == IPROP_VERS;
-    if rpcvers != RPC_VERSION || !(kadm || iprop) {
-        return Err(Error::Inner("rpc program".into()));
-    }
     let cred_flavor = r.u32()?;
     let cred = r.opaque()?;
     let header_end = r.i;
     let verf_flavor = r.u32()?;
     let verf = r.opaque()?;
+
+    // svc.c:486-520: AUTH_NONE is AUTH_OK, then program/version.
+    let kadm = prog == KADM_PROG;
+    let iprop = prog == IPROP_PROG;
+    if kadm && vers != KADM_VERS {
+        return Ok(rpc_reply_mismatch(xid, KADM_VERS, KADM_VERS));
+    }
+    if iprop && vers != IPROP_VERS {
+        return Ok(rpc_reply_mismatch(xid, IPROP_VERS, IPROP_VERS));
+    }
+    if !kadm && !iprop {
+        return Ok(rpc_reply_accepted(xid, PROG_UNAVAIL));
+    }
 
     if cred_flavor == FLAVOR_AUTH_GSSAPI {
         return handle_auth_gssapi(
@@ -593,6 +609,19 @@ fn rpc_reply_accepted(xid: u32, stat: u32) -> Vec<u8> {
     w.u32(FLAVOR_NONE);
     w.opaque(&[]);
     w.u32(stat);
+    w.b
+}
+
+fn rpc_reply_mismatch(xid: u32, low: u32, high: u32) -> Vec<u8> {
+    let mut w = XdrW::default();
+    w.u32(xid);
+    w.u32(MSG_REPLY);
+    w.u32(MSG_ACCEPTED);
+    w.u32(FLAVOR_NONE);
+    w.opaque(&[]);
+    w.u32(PROG_MISMATCH);
+    w.u32(low);
+    w.u32(high);
     w.b
 }
 
@@ -2818,6 +2847,93 @@ mod tests {
         assert_eq!(r.u32().unwrap(), MSG_DENIED);
         assert_eq!(r.u32().unwrap(), REJECT_AUTH_ERROR);
         assert_eq!(r.u32().unwrap(), AUTH_TOOWEAK);
+    }
+
+    #[test]
+    fn bad_program_is_prog_unavail() {
+        let (store, acl, _) = setup();
+        let rec = rpc_call(8, 99_999, 1, 0, FLAVOR_NONE);
+        let mut gss = None;
+        let mut agss = None;
+        let out = handle_rpc(
+            &store,
+            &acl,
+            &[],
+            "KERBER.TEST",
+            &[],
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &rec,
+        )
+        .unwrap();
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), 8);
+        assert_eq!(r.u32().unwrap(), MSG_REPLY);
+        assert_eq!(r.u32().unwrap(), MSG_ACCEPTED);
+        assert_eq!(r.u32().unwrap(), FLAVOR_NONE);
+        assert_eq!(r.opaque().unwrap().len(), 0);
+        assert_eq!(r.u32().unwrap(), PROG_UNAVAIL);
+    }
+
+    #[test]
+    fn kadm_vers_99_is_prog_mismatch_2_2() {
+        let (store, acl, _) = setup();
+        let rec = rpc_call(9, KADM_PROG, 99, 0, FLAVOR_NONE);
+        let mut gss = None;
+        let mut agss = None;
+        let out = handle_rpc(
+            &store,
+            &acl,
+            &[],
+            "KERBER.TEST",
+            &[],
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &rec,
+        )
+        .unwrap();
+        let mut r = XdrR::new(&out);
+        assert_eq!(r.u32().unwrap(), 9);
+        assert_eq!(r.u32().unwrap(), MSG_REPLY);
+        assert_eq!(r.u32().unwrap(), MSG_ACCEPTED);
+        assert_eq!(r.u32().unwrap(), FLAVOR_NONE);
+        assert_eq!(r.opaque().unwrap().len(), 0);
+        assert_eq!(r.u32().unwrap(), PROG_MISMATCH);
+        assert_eq!(r.u32().unwrap(), KADM_VERS);
+        assert_eq!(r.u32().unwrap(), KADM_VERS);
+    }
+
+    #[test]
+    fn reply_typed_rpc_is_no_reply() {
+        let (store, acl, _) = setup();
+        let mut w = XdrW::default();
+        w.u32(10);
+        w.u32(MSG_REPLY);
+        w.u32(RPC_VERSION);
+        w.u32(KADM_PROG);
+        w.u32(KADM_VERS);
+        w.u32(12);
+        w.u32(FLAVOR_NONE);
+        w.opaque(&[]);
+        w.u32(FLAVOR_NONE);
+        w.opaque(&[]);
+        let mut gss = None;
+        let mut agss = None;
+        let out = handle_rpc(
+            &store,
+            &acl,
+            &[],
+            "KERBER.TEST",
+            &[],
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            &w.b,
+        )
+        .unwrap();
+        assert!(out.is_empty());
     }
 
     #[test]
