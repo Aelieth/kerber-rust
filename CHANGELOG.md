@@ -6,6 +6,19 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-J Round 2 V5 / V3
+
+- **protocol.** `build_krb_safe_ex` checksums the full KRB-SAFE with a
+  spliced zero checksum (`create_krbsafe`, `mk_safe.c:68-80`) — MIT's
+  primary verify branch — instead of the body alone, so a Rust-originated
+  KRB-SAFE no longer relies on MIT's RFC 1510 fallback. Documented as
+  fail-closed deviations (no product path exercises them): the
+  `k5_privsafe_check_addrs` local-address walk and its KRB-PRIV caller
+  (`privsafe.c:366-375`, `rd_priv.c:77-78`; no r-address is emitted), and
+  the GSS sequence window enforced unconditionally where
+  `g_seqstate_check` skips it when unnegotiated (`util_seqstate.c:84-117`;
+  MIT peers always negotiate replay/sequence).
+
 ### W1-J Round 2 V6
 
 - **protocol.** The TGS-REP enc-part decoder goes through

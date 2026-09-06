@@ -78,7 +78,16 @@ pub fn build_krb_safe_ex(
     };
     let body_der = encode(&body)?;
     let usage = KeyUsage::new(ku::KRB_SAFE_CKSUM)?;
-    let mic = checksum(session, usage, &body_der)?;
+    // MIT `create_krbsafe` (`mk_safe.c:68-80`) checksums the full KRB-SAFE with a
+    // zero checksum spliced in — the verifier's primary branch (`rd_safe.c`);
+    // body-only was accepted only via the RFC 1510 fallback.
+    let dummy = encode_safe_with_body(
+        KrbSafe::PVNO,
+        KrbSafe::MSG_TYPE,
+        &body_der,
+        &zero_safe_cksum(),
+    )?;
+    let mic = checksum(session, usage, &dummy)?;
     Ok(KrbSafe {
         pvno: KrbSafe::PVNO,
         msg_type: KrbSafe::MSG_TYPE,

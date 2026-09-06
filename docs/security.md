@@ -81,7 +81,20 @@ type 0 substitutes the key's mandatory type, `output_size` is
 checksum) encoding that splices the received KRB-SAFE-BODY
 (`encode_krb5_safe_with_body`), then the saved body (RFC 1510). A
 non-APPLICATION-20 tag is 40 `MSG_TYPE`. Sender/receiver addresses are
-checked before the checksum (`privsafe.c:312-382`). GSS wrap-without-conf requires `EC == cksumsize`;
+checked before the checksum (`privsafe.c:312-382`). Two `k5_privsafe_check_addrs`
+arms are deliberately laxer, fail-closed on the real wire: when no local address
+is set MIT walks `krb5_os_localaddr` and rejects a non-local r-address
+(`privsafe.c:366-375`), and MIT also runs the check on KRB-PRIV (`rd_priv.c:77-78`);
+Rust accepts an r-address when no local address is supplied and does not run the
+check on the KRB-PRIV path, because no product path (kprop, kpasswd) emits an
+r-address and the protocol crate has no OS address enumeration. The GSS sequence
+window (`accept_seq`) is enforced unconditionally where MIT's `g_seqstate_check`
+returns `GSS_S_COMPLETE` when neither replay nor sequence was negotiated
+(`util_seqstate.c:84-117`); Rust is stricter (it never delivers an out-of-order
+token), and MIT peers always negotiate replay/sequence so the window is enforced
+identically for them. `build_krb_safe_ex` checksums the full KRB-SAFE with a
+spliced zero checksum (`create_krbsafe`, `mk_safe.c:68-80`), MIT's primary verify
+branch, rather than the body alone. GSS wrap-without-conf requires `EC == cksumsize`;
 MIC fillers are 0xFF and the header is reconstructed (`util_crypt.c:322-334`).
 A GSS authenticator checksum that is not 0x8003 is verified over empty
 data with the ticket session key (`accept_sec_context.c:494-511`,

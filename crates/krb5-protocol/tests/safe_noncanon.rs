@@ -145,3 +145,26 @@ fn accept_noncanonical_seq_integer_body() {
         b"safe-noncanon"
     );
 }
+
+#[test]
+fn build_krb_safe_signs_the_full_dummy_not_the_body_alone() {
+    // MIT `create_krbsafe` checksums the full KRB-SAFE with a zero checksum
+    // spliced (`mk_safe.c:68-80`), the verifier's primary branch; a body-only
+    // MAC is accepted only via the RFC 1510 fallback.
+    let key = session();
+    let msg = build_krb_safe_ex(&key, b"primary-branch", Some(2), true).unwrap();
+    let raw = encode(&msg).unwrap();
+    let body = body_der(&raw);
+    let usage = KeyUsage::new(ku::KRB_SAFE_CKSUM).unwrap();
+    let body_mac = checksum(&key, usage, &body).unwrap();
+    assert_ne!(
+        msg.cksum.checksum.as_ref(),
+        body_mac.as_slice(),
+        "the checksum must be over the spliced KRB-SAFE, not the body alone"
+    );
+    let cache = ReplayCache::new();
+    assert_eq!(
+        unwrap_krb_safe(&key, &raw, &cache).unwrap(),
+        b"primary-branch"
+    );
+}
