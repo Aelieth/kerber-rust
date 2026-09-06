@@ -6,6 +6,15 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-J L5a-2 (AS KRB-ERROR client echo)
+
+- **kdc.** The AS KRB-ERROR now echoes the requested `crealm` and `cname` like
+  MIT `prepare_error_as` (`do_as_req.c:806-808`, `errpkt.client =
+  request->client`); Rust had left both `None`. `scripts/differential-gate.sh`
+  compares `crealm`/`cname` on every AS error case (`expect_error`'s
+  `check_client`). The TGS header-ticket client, FAST client-hiding, and the
+  `errcode_to_protocol` code-table adjustments remain for the rest of L5a-2.
+
 ### W1-J L3b (client FAST negotiation)
 
 - **client.** The AS client now advertises an empty PA-AS-FRESHNESS (150) and

@@ -77,6 +77,19 @@ fn send_both(cfg: &Cfg, case: &str, req: &[u8]) -> Result<(Vec<u8>, Vec<u8>), St
 }
 
 fn expect_error(cfg: &Cfg, case: &str, req: &[u8], code: i32) -> Result<(), String> {
+    expect_error_client(cfg, case, req, code, true)
+}
+
+// AS errors echo the requested client (prepare_error_as); TGS errors use the
+// header ticket's client, which the diffsend request does not carry — so TGS
+// error cases pass check_client=false.
+fn expect_error_client(
+    cfg: &Cfg,
+    case: &str,
+    req: &[u8],
+    code: i32,
+    check_client: bool,
+) -> Result<(), String> {
     let (rust, mit) = send_both(cfg, case, req)?;
     if rust.first() != Some(&0x7e) {
         return Err(format!(
@@ -107,6 +120,23 @@ fn expect_error(cfg: &Cfg, case: &str, req: &[u8], code: i32) -> Result<(), Stri
     };
     let rust_text = et(&re);
     compare_krb_error(&re, &me).map_err(|e| format!("{case}: {e}"))?;
+    if check_client {
+        let cn = |e: &KrbError| e.cname.as_ref().map(PrincipalName::components_joined);
+        let cr = |e: &KrbError| {
+            e.crealm
+                .as_ref()
+                .map(|r| String::from_utf8_lossy(r.as_bytes()).into_owned())
+        };
+        if cn(&re) != cn(&me) || cr(&re) != cr(&me) {
+            return Err(format!(
+                "{case}: client rust=({:?},{:?}) mit=({:?},{:?})",
+                cr(&re),
+                cn(&re),
+                cr(&me),
+                cn(&me)
+            ));
+        }
+    }
     println!(
         r#"{{"event":"diffsend","case":"{case}","outcome":"ok","error_code":{},"e_text":"{rust_text}","rust_tag":"0x7e","mit_tag":"0x7e"}}"#,
         re.error_code
@@ -584,11 +614,12 @@ fn run() -> Result<(), String> {
         0x1000_0008,
     )
     .map_err(|e| e.to_string())?;
-    expect_error(
+    expect_error_client(
         &cfg,
         "tgs-not-a-tgt",
         &encode(&not_tgt).map_err(|e| e.to_string())?,
         err::NOT_US,
+        false,
     )?;
 
     let expired = mint_tgt(
@@ -614,11 +645,12 @@ fn run() -> Result<(), String> {
         0x1000_0009,
     )
     .map_err(|e| e.to_string())?;
-    expect_error(
+    expect_error_client(
         &cfg,
         "tgt-expired",
         &encode(&tgs_exp).map_err(|e| e.to_string())?,
         err::TKT_EXPIRED,
+        false,
     )?;
 
     let nyv = mint_tgt(
@@ -636,11 +668,12 @@ fn run() -> Result<(), String> {
     )?;
     let tgs_nyv =
         tgs_req(nyv, &sess, realm, &user, host, realm, 0x1000_000a).map_err(|e| e.to_string())?;
-    expect_error(
+    expect_error_client(
         &cfg,
         "tgt-nyv",
         &encode(&tgs_nyv).map_err(|e| e.to_string())?,
         err::TKT_NYV,
+        false,
     )?;
 
     println!(r#"{{"event":"diffsend","outcome":"ok","cases":14}}"#);
