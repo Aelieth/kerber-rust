@@ -35,9 +35,9 @@ Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after W1-J L5a-1 TGS PROCESS_TGS times):
-**303** = A1 116 + A2 71 + A3 58 + A4 58.
-exact 110 · stricter-documented 12 · deviation 97 ·
+Counts (after W1-J L4a AS-REP reply kvno):
+**304** = A1 116 + A2 72 + A3 58 + A4 58.
+exact 111 · stricter-documented 12 · deviation 97 ·
 absent 66 · deferred 18.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
@@ -346,6 +346,7 @@ Wire = RFC 4120 protocol code (MIT `errcode_to_protocol`).
 | lockout.c:102-104 | not locked if `last_admin_unlock >= last_failed` | n/a | `store.rs create_host` `set_status(locked=false)` clears `KDB_DISALLOW_ALL_TIX` only; `clear_as_fail_count` is called **only** from `issue.rs issue_as_from` | stays 18 `locked` when `pw_lockout_duration == 0` | absent | proposed: unit `unlock_clears_failcount`; `kadmin-gate.sh` unlock cell |
 | do_as_req.c:579-580,598-599 | `KRB5_KDB_CANTLOCK_DB` on client/server lookup | no status; `KRB5KDC_ERR_SVC_UNAVAILABLE` **29** | `kdb.rs` `fetch_name` `Err` | **60** `e.to_string()` | absent | proposed: diffsend `as-db-locked`; deferred if no lockable KDB |
 | do_as_req.c:236-241 | `fetch_last_req_info` + `get_key_exp(client)` into AS-REP enc-part | no status (reply fields) | `issue.rs mint_ticket` | `last_req` hardcoded `lr_type: 0`/now; `key_expiration: None` | absent | MIT `kinit` password-expiry warning; proposed `expire-gate.sh` warn cell |
+| do_as_req.c:322-330 | `reply.enc_part.kvno = client_key->key_data_kvno` is set **after** `krb5_encode_kdc_rep`, so the wire AS-REP enc-part carries no kvno | no status (reply field) | `krb5-kdc/issue.rs issue_as_body` | AS-REP enc-part `kvno` `None`; ticket enc-part keeps the server kvno | exact | `as_rep_enc_part_carries_no_kvno_like_mit`; `scripts/differential-gate.sh` `as-success` no `mit-as-enc-kvno` whitelist |
 | do_as_req.c:709-712 | `starttime == authtime` → omit `starttime` | no status | `issue.rs check_ticket_times,1183` | `starttime` always `Some(..)` | deviation | CHANGELOG G7 `klist starttime==0`; proposed `client-gate.sh` cell |
 | do_as_req.c:656-664 | CANONICALIZE + both TGS principals → ticket sname = `server->princ` | no status | `issue.rs issue_as_body` mints the **requested** `sname` | requested sname echoed | absent | proposed `rust-kinit-enterprise-gate.sh` canonicalize cell |
 | kdc_util.c:1612-1615 | S4U2Self clears impersonated client's `pw_expiration` + `REQUIRES_PWCHANGE` (as Windows does) | n/a (exemption) | `issue.rs encode_krb_error` `check_s4u2self_locked` → `check_db_times` enforces both | **23** `CLIENT KEY EXPIRED` where MIT issues | deviation (stricter, undocumented) | proposed `s4u-mit-gate.sh` expired-user cell + `docs/security.md` row |

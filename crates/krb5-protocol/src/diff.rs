@@ -289,9 +289,6 @@ fn whitelist_hits(
     if rust_enc.flags.bit(flag_bit::CANONICALIZE) != mit_enc.flags.bit(flag_bit::CANONICALIZE) {
         hits.push("mit-extra-ticket-flags");
     }
-    if rust.enc_part.kvno != mit.enc_part.kvno {
-        hits.push("mit-as-enc-kvno");
-    }
     hits
 }
 

@@ -6,6 +6,16 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-J L4a
+
+- **kdc.** The AS-REP enc-part no longer carries a `kvno`. MIT assigns
+  `reply.enc_part.kvno` only after `krb5_encode_kdc_rep` (`do_as_req.c:329`),
+  so the wire reply has no kvno; Rust was emitting the client key's kvno on a
+  no-preauth AS. The `mit-as-enc-kvno` differential whitelist is removed and
+  `scripts/differential-gate.sh` `as-success` compares the enc-part kvno equal
+  on both legs.
+
+
 ### W1-J L5a-1
 
 - **kdc.** An expired or not-yet-valid TGS header ticket now reports status

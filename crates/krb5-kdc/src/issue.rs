@@ -567,11 +567,9 @@ fn issue_as_body(
     let enc_der = encode_enc_kdc_rep_part(enc_part)?;
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART)?;
     let cipher = encrypt(&reply_key, usage, &enc_der)?;
-    let kvno = if skip_timestamp {
-        None
-    } else {
-        Some(ckey.kvno)
-    };
+    // MIT sets reply.enc_part.kvno only after krb5_encode_kdc_rep (do_as_req.c:329),
+    // so the wire AS-REP enc-part carries no kvno.
+    let kvno = None;
     let padata = if outer_padata.is_empty() {
         None
     } else {

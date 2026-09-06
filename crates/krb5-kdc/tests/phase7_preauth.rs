@@ -207,6 +207,28 @@ fn fast_as_exchange_strengthen_and_finished() {
 }
 
 #[test]
+fn as_rep_enc_part_carries_no_kvno_like_mit() {
+    // MIT sets reply.enc_part.kvno only after krb5_encode_kdc_rep, so the wire
+    // AS-REP enc-part has no kvno (do_as_req.c:329).
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    // A no-preauth AS keeps skip_timestamp false, so it exercises the reply kvno.
+    let attrs = store.get_name(&cname).unwrap().attributes & !krb5_kdc::KDB_REQUIRES_PRE_AUTH;
+    store
+        .apply_admin_fields(&cname, Some(attrs), None, None, None, None, false)
+        .unwrap();
+    let req = as_req(cname, TEST_REALM, 206, None).unwrap();
+    let bytes = krb5_kdc::handle_request(&store, &encode(&req).unwrap()).expect("reply");
+    let rep: krb5_types::AsRep = decode(&bytes).expect("AS-REP");
+    assert!(
+        rep.0.enc_part.kvno.is_none(),
+        "AS-REP enc-part must carry no kvno"
+    );
+    // The ticket's own enc-part keeps the server key kvno.
+    assert!(rep.0.ticket.enc_part.kvno.is_some());
+}
+
+#[test]
 fn as_req_enc_pa_rep_is_verified() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
