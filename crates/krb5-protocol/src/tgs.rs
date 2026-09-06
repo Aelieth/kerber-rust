@@ -288,6 +288,7 @@ fn tgs_as_tgt(prev: &AsOutcome, out: TgsOutcome) -> AsOutcome {
         session_key: out.session_key,
         cname: prev.cname.clone(),
         crealm: prev.crealm.clone(),
+        fast_avail: prev.fast_avail,
     }
 }
 
@@ -658,6 +659,7 @@ mod tests {
             session_key: session(),
             cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
             crealm: ascii(instance),
+            fast_avail: false,
         }
     }
 
@@ -697,6 +699,7 @@ mod tests {
             session_key: session(),
             cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
             crealm: ascii("KERBER.TEST"),
+            fast_avail: false,
         }
     }
 

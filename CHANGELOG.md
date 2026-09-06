@@ -6,6 +6,18 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-J L3b (client FAST negotiation)
+
+- **client.** The AS client now advertises an empty PA-AS-FRESHNESS (150) and
+  PA-REQ-ENC-PA-REP (149) on every AS-REQ like MIT `info_pa_permitted`
+  (`get_in_tkt.c:1365-1372`); verifies the KDC's enc-pa-rep checksum over the
+  AS-REQ under the reply key and rejects a missing or bad checksum with
+  `KRB5_KDCREP_MODIFIED` like `krb5int_fast_verify_nego` (`fast.c:635-675`); and
+  records RFC 6806 FAST availability on the outcome (`AsOutcome::fast_avail`)
+  from the echoed PA-FX-FAST. `scripts/mit-fast-kdc-gate.sh` pins that a plain
+  MIT kinit against the Rust KDC traces `FAST negotiation: available`. Persisting
+  `fast_avail` to the ccache config is deferred to the round-up.
+
 ### W1-K M2b (delete the differential whitelist)
 
 - **ci/protocol.** The differential oracle no longer has a case-name

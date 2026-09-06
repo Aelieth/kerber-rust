@@ -28,6 +28,14 @@ path = "tests/messages.rs"
 name = "safe_noncanon"
 path = "tests/safe_noncanon.rs"
 
+[[test]]
+name = "l3b_fast_nego"
+path = "tests/l3b_fast_nego.rs"
+
+[[test]]
+name = "l3b_fast_avail"
+path = "tests/l3b_fast_avail.rs"
+
 [dependencies]
 chrono.workspace = true
 getrandom.workspace = true

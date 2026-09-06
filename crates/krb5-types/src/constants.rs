@@ -252,6 +252,8 @@ pub mod pa {
     pub const PKINIT_KX: i32 = 147;
     /// PA-REQ-ENC-PA-REP (RFC 6806).
     pub const REQ_ENC_PA_REP: i32 = 149;
+    /// PA-AS-FRESHNESS (RFC 8070).
+    pub const AS_FRESHNESS: i32 = 150;
     /// PA-SPAKE.
     pub const SPAKE: i32 = 151;
     /// PA-REDHAT-IDP-OAUTH2.

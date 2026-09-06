@@ -37,6 +37,9 @@ pub struct AsOutcome {
     pub cname: PrincipalName,
     /// Client realm as returned by the KDC.
     pub crealm: krb5_types::Realm,
+    /// RFC 6806 FAST negotiation: the enc-padata carried PA-FX-FAST, so the KDC
+    /// supports FAST (MIT records `fast_avail` in the ccache).
+    pub fast_avail: bool,
 }
 
 /// Parameters for an AS-REQ.
@@ -228,6 +231,7 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
                 req.realm,
                 req.canonicalize,
                 &req_sname(req),
+                Some(&wire),
             )
         }
         KdcMsg::Error(e) if e.error_code == err::SKEW => {
@@ -248,6 +252,7 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
                         req.realm,
                         req.canonicalize,
                         &req_sname(req),
+                        Some(&wire),
                     )
                 }
                 KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
@@ -286,6 +291,7 @@ fn finish_as_rep_keys(
     realm: &str,
     canonicalize: bool,
     expected_sname: &PrincipalName,
+    req_der: Option<&[u8]>,
 ) -> Result<AsOutcome, Error> {
     if keys.is_empty() {
         return finish_as_rep(
@@ -298,6 +304,7 @@ fn finish_as_rep_keys(
             false,
             canonicalize,
             expected_sname,
+            req_der,
         );
     }
     let want = EncryptionType::known(rep.0.enc_part.etype).ok();
@@ -312,6 +319,7 @@ fn finish_as_rep_keys(
             false,
             canonicalize,
             expected_sname,
+            req_der,
         )
     {
         return Ok(out);
@@ -328,6 +336,7 @@ fn finish_as_rep_keys(
             false,
             canonicalize,
             expected_sname,
+            req_der,
         ) {
             Ok(out) => return Ok(out),
             Err(e) => last = e,
@@ -381,6 +390,7 @@ fn continue_preauth(
             true,
             req.canonicalize,
             &req_sname(req),
+            Some(&wire),
         ),
         KdcMsg::Error(e) if e.error_code == err::SKEW => {
             let skew_time = e.stime.clone();
@@ -399,6 +409,7 @@ fn continue_preauth(
                     true,
                     req.canonicalize,
                     &req_sname(req),
+                    Some(&wire),
                 ),
                 KdcMsg::Error(e) => classify_kdc_error(&e),
                 KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
@@ -421,6 +432,7 @@ fn continue_preauth(
                     true,
                     req.canonicalize,
                     &req_sname(req),
+                    Some(&wire),
                 ),
                 KdcMsg::Error(e) => classify_kdc_error(&e),
                 KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
@@ -524,6 +536,7 @@ fn finish_fast_as(
         sent_preauth,
         req.canonicalize,
         &req_sname(req),
+        None,
     )
 }
 
@@ -687,6 +700,7 @@ fn send_spake_response(
             true,
             req.canonicalize,
             &req_sname(req),
+            Some(&wire),
         ),
         KdcMsg::Error(e) => classify_kdc_error(&e),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
@@ -709,7 +723,7 @@ fn continue_pkinit(
     h.update(&body_der);
     let sha1 = h.finalize();
     let pa = pa_pk_as_req_signed(&kp.public, &pk.cert, &pk.key, nonce, &sha1)?;
-    req2.0.padata = Some(vec![pa]);
+    req2.0.padata.get_or_insert_with(Vec::new).push(pa);
     let wire = encode(&req2)?;
     tracing::info!(
         event = "client.pkinit",
@@ -740,6 +754,7 @@ fn continue_pkinit(
                 true,
                 req.canonicalize,
                 &req_sname(req),
+                Some(&wire),
             )
         }
         KdcMsg::Error(e) => classify_kdc_error(&e),
@@ -861,6 +876,7 @@ fn finish_as_rep(
     sent_preauth: bool,
     canonicalize: bool,
     expected_sname: &PrincipalName,
+    req_der: Option<&[u8]>,
 ) -> Result<AsOutcome, Error> {
     let inner = rep.0;
     let had_preauth = sent_preauth;
@@ -876,6 +892,13 @@ fn finish_as_rep(
     let enc_part = decode_enc_as(&plain)?;
     if enc_part.nonce != nonce {
         return Err(Error::NonceMismatch);
+    }
+    // MIT krb5int_fast_verify_nego (fast.c:635-675): a ticket with enc-pa-rep
+    // must carry a PA-REQ-ENC-PA-REP checksum over the AS-REQ under the reply
+    // key, else KRB5_KDCREP_MODIFIED. The FAST path passes None; FAST armor
+    // already integrity-protects the exchange.
+    if let Some(rd) = req_der {
+        crate::preauth::verify_req_enc_pa_rep(&enc_part, &key, rd)?;
     }
     if inner.cname != *cname {
         let enterprise = cname.name_type == PrincipalName::NT_ENTERPRISE;
@@ -907,6 +930,11 @@ fn finish_as_rep(
     as_sname_eq(&enc_part.sname, expected_sname, "AS-REP sname mismatch")?;
     let session_etype = EncryptionType::known(enc_part.key.keytype)?;
     let session_key = ProtocolKey::from_bytes(session_etype, enc_part.key.keyvalue.as_ref())?;
+    let fast_avail = enc_part.flags.enc_pa_rep()
+        && enc_part
+            .encrypted_pa_data
+            .as_ref()
+            .is_some_and(|v| v.iter().any(|p| p.padata_type == pa::FX_FAST));
     Ok(AsOutcome {
         ticket: inner.ticket,
         enc_part,
@@ -914,6 +942,7 @@ fn finish_as_rep(
         session_key,
         cname: inner.cname,
         crealm: inner.crealm,
+        fast_avail,
     })
 }
 
@@ -1001,10 +1030,22 @@ fn build_as_req(
     sname: &PrincipalName,
 ) -> Result<AsReq, Error> {
     let realm_s = krb5_types::try_ascii(realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?;
+    // MIT get_in_tkt.c:1365-1372 info_pa_permitted: every AS-REQ advertises an
+    // empty PA-AS-FRESHNESS then PA-REQ-ENC-PA-REP so the KDC echoes an
+    // enc-pa-rep checksum (verified by krb5int_fast_verify_nego).
+    let mut pa_list = padata.unwrap_or_default();
+    pa_list.push(PaData {
+        padata_type: pa::AS_FRESHNESS,
+        padata_value: Vec::new().into(),
+    });
+    pa_list.push(PaData {
+        padata_type: pa::REQ_ENC_PA_REP,
+        padata_value: Vec::new().into(),
+    });
     Ok(AsReq(KdcReq {
         pvno: KdcReq::PVNO,
         msg_type: KdcReq::MSG_AS_REQ,
-        padata,
+        padata: Some(pa_list),
         req_body: KdcReqBody {
             kdc_options,
             cname: Some(cname.clone()),

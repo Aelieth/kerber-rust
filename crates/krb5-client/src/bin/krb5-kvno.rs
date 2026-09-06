@@ -166,6 +166,7 @@ fn run(
         session_key: session,
         cname: cred.client.1.clone(),
         crealm: cred.client.0.clone(),
+        fast_avail: false,
     };
     let tgs = if let Some(who) = for_user {
         let (uname, urealm) = if who.contains('@') {

@@ -37,8 +37,8 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 
 Counts (after W1-J L3a enc-pa-rep ticket flag):
 **305** = A1 117 + A2 72 + A3 58 + A4 58.
-exact 114 · stricter-documented 12 · deviation 96 ·
-absent 65 · deferred 18.
+exact 115 · stricter-documented 12 · deviation 96 ·
+absent 64 · deferred 18.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
 A2 10 (9 report rows + the `kdc_util.c:144-191` split) + A3 10 = 28
@@ -365,7 +365,7 @@ are RFC 4120/6113 integers. After W0d G3, FAST unwrap failures wire
 | MIT file:line | check (condition) | MIT status + wire code | Rust site | Rust e_text + code | verdict | proof |
 | --- | --- | --- | --- | --- | --- | --- |
 | kdc_preauth.c:999-1000 | PREAUTH_REQUIRED hint: empty PA-FX-FAST (136) first, then ETYPE-INFO (11), then 19, then modules | no status; METHOD-DATA `[136, (11), 19, modules]` | krb5-kdc/plugins.rs process_as:78 (FastMod); krb5-kdc/issue.rs kdc_encrypted_challenge | n/a (e_data 136); order `[136, 16, 109, 151, 2, 19]` — 19 last | deviation (order) | `ca_enabled_preauth_required_method_data_types`; `scripts/mit-fast-kdc-gate.sh` |
-| kdc_util.c:1768-1801 + :822-824; do_as_req.c:316-320 | RFC 6806 FAST nego: if PA 149, enc_padata 149 cksum + empty 136; ticket flag ENC_PA_REP | success silent; fail `KDC_RETURN_ENC_PADATA` | issue.rs mint_ticket `encrypted_pa_data: None`; ENC_PA_REP bit now set on every ticket (L3a) | MIT kinit writes no `fast_avail`/`pa_type` (client fast.c:626-671) | absent | proposed: `scripts/mit-fast-nego-gate.sh` (kinit then `klist -C` `fast_avail`); proposed: diffsend `enc_padata` |
+| kdc_util.c:1768-1801; get_in_tkt.c:1365-1372; fast.c:635-675 | RFC 6806 FAST nego: the client sends empty PA-AS-FRESHNESS/PA-REQ-ENC-PA-REP; the KDC echoes a PA-REQ-ENC-PA-REP checksum (usage 56) + empty PA-FX-FAST when 149 is present; the client verifies the checksum and records `fast_avail` from the echoed 136 | `KDCREP_MODIFIED` on a missing/bad checksum | issue.rs enc_pa_rep_padata (echo); as_ex.rs build_as_req + finish_as_rep (150/149 then verify); AsOutcome fast_avail | ccache `fast_avail` config write deferred (round-up) | exact | `as_exchange_rejects_reply_missing_enc_pa_rep_checksum`, `as_exchange_records_fast_availability`; `scripts/mit-fast-kdc-gate.sh` MIT plain kinit traces `FAST negotiation: available` |
 | kdc_preauth.c:1003-1004 + :767-799 | get_preauth_hint_list add_etype_info: one PA-ETYPE-INFO2 entry for the chosen client key | chosen client etype | issue.rs preauth_required (one entry, `ckey` etype) | one entry = chosen etype | exact | `preauth_required_hint_lists_one_etype_info2_entry_like_mit`; `differential-gate.sh` `pauser-no-preauth` compares the ETYPE-INFO2 etype set exactly on both legs |
 | kdc_preauth.c:779-823 | PA-ETYPE-INFO (11) + PW-SALT (3) for pre-info2 clients | in hint + AS-REP if !key_modified | none in KDC issue/plugins | absent | absent | proposed: diffsend old-enctype AS; propose `scripts/mit-etype-info-gate.sh` |
 | kdc_preauth.c:1141-1170 | MORE_PREAUTH_DATA_REQUIRED: add ETYPE-INFO2 unless cookie already seen | **91** `MORE_PREAUTH_DATA_REQUIRED` + PA 19 (unless cookie already seen); `e_text` `PREAUTH_FAILED` (`do_as_req.c:439-442,809`) | `issue.rs issue_as_body` `MORE_PREAUTH_DATA_REQUIRED` | SPAKE challenge **91** `MORE_PREAUTH_DATA_REQUIRED` `PREAUTH_FAILED`; no extra 19 | deviation (no extra 19) | `handle_request_spake_91_e_text_is_preauth_failed`; `scripts/spake-gate.sh`; `scripts/rust-kinit-spake-gate.sh`; proposed: diffsend 91 e_data |

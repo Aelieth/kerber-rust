@@ -490,6 +490,7 @@ fn outcome_from_cred(
         session_key: session,
         cname: cred.client.1.clone(),
         crealm: cred.client.0.clone(),
+        fast_avail: false,
     })
 }
 
