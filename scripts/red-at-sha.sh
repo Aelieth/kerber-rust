@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Rebuild a historical SHA in a KERBER_SCRATCH worktree and run a gate or
 # command against those binaries. Provenance header is printed first.
-# Usage: scripts/red-at-sha.sh [--overlay-probe] [--inject FILE ...] -- <base-sha> <command...>
+# Usage: scripts/red-at-sha.sh [--overlay-probe] [--no-overlay] [--inject FILE ...] -- <base-sha> <command...>
 #        scripts/red-at-sha.sh [--overlay-probe] <base-sha> <command...>
+# --no-overlay keeps the base tree's scripts/ and harness/ (a red for the tooling itself).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 PROBE=0
+OVERLAY=1
 INJECT=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -15,12 +17,16 @@ while [ $# -gt 0 ]; do
             PROBE=1
             shift
             ;;
+        --no-overlay)
+            OVERLAY=0
+            shift
+            ;;
         --inject)
             shift
             saw=0
             while [ $# -gt 0 ] && [ "$1" != "--" ]; do
                 case "$1" in
-                    --overlay-probe|--inject)
+                    --overlay-probe|--no-overlay|--inject)
                         echo "red-at-sha.sh: $1 is not an inject path" >&2
                         exit 2
                         ;;
@@ -48,7 +54,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ "$#" -lt 2 ]; then
-    echo "usage: $0 [--overlay-probe] [--inject FILE ...] -- <base-sha> <command...>" >&2
+    echo "usage: $0 [--overlay-probe] [--no-overlay] [--inject FILE ...] -- <base-sha> <command...>" >&2
     exit 2
 fi
 if [ -z "${KERBER_SCRATCH:-}" ]; then
@@ -85,25 +91,27 @@ trap cleanup EXIT
 # HEAD probes/helpers overlay the base-SHA tree so docker cp from $ROOT
 # inside the gate (resolved from $0 in the worktree) is current. Gate
 # scripts must land before write-tree so tree_sha describes what ran.
-mkdir -p "$WT/scripts/lib"
-if compgen -G "$ROOT/scripts/lib/*.sh" >/dev/null; then
-    cp "$ROOT/scripts/lib/"*.sh "$WT/scripts/lib/"
-fi
-if compgen -G "$ROOT/scripts/lib/*.py" >/dev/null; then
-    cp "$ROOT/scripts/lib/"*.py "$WT/scripts/lib/"
-fi
-if compgen -G "$ROOT/scripts/"*.sh >/dev/null; then
-    cp "$ROOT/scripts/"*.sh "$WT/scripts/"
-fi
-if compgen -G "$ROOT/scripts/*.c" >/dev/null; then
-    cp "$ROOT/scripts/"*.c "$WT/scripts/"
-fi
-if compgen -G "$ROOT/scripts/*.py" >/dev/null; then
-    cp "$ROOT/scripts/"*.py "$WT/scripts/"
-fi
-if [ -d "$ROOT/harness" ]; then
-    rm -rf "$WT/harness"
-    cp -a "$ROOT/harness" "$WT/harness"
+if [ "$OVERLAY" = 1 ]; then
+    mkdir -p "$WT/scripts/lib"
+    if compgen -G "$ROOT/scripts/lib/*.sh" >/dev/null; then
+        cp "$ROOT/scripts/lib/"*.sh "$WT/scripts/lib/"
+    fi
+    if compgen -G "$ROOT/scripts/lib/*.py" >/dev/null; then
+        cp "$ROOT/scripts/lib/"*.py "$WT/scripts/lib/"
+    fi
+    if compgen -G "$ROOT/scripts/"*.sh >/dev/null; then
+        cp "$ROOT/scripts/"*.sh "$WT/scripts/"
+    fi
+    if compgen -G "$ROOT/scripts/*.c" >/dev/null; then
+        cp "$ROOT/scripts/"*.c "$WT/scripts/"
+    fi
+    if compgen -G "$ROOT/scripts/*.py" >/dev/null; then
+        cp "$ROOT/scripts/"*.py "$WT/scripts/"
+    fi
+    if [ -d "$ROOT/harness" ]; then
+        rm -rf "$WT/harness"
+        cp -a "$ROOT/harness" "$WT/harness"
+    fi
 fi
 for rel in "${INJECT[@]}"; do
     case "$rel" in
@@ -123,6 +131,9 @@ git -C "$WT" add -A >/dev/null
 TREE="$(git -C "$WT" write-tree)"
 
 cmd_show=()
+if [ "$OVERLAY" = 0 ]; then
+    cmd_show+=(--no-overlay)
+fi
 if [ ${#INJECT[@]} -gt 0 ]; then
     cmd_show+=(--inject "${INJECT[@]}" --)
 fi

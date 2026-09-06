@@ -13,7 +13,10 @@ this project uses semantic versioning once a crate is published.
   or vanished, and a `bash -c` string that invokes one; `ci-policy.py` pins
   the four refusals and a live `bash -c`.
 - **test.** `getpol_prints_allowed_keysalts_only_when_set` (injectable red for
-  `7381c3c` at `e6561f9`).
+  `7381c3c` at `e6561f9`); `rpcsec_wrong_handle_with_valid_mic_dispatches`
+  (injectable red for `c795351` at `946b434`). `red-at-sha.sh --no-overlay`
+  keeps the base tree's helpers so a tooling red (the K6 ci-policy fixtures
+  at `2ec7dfb`) is possible.
 - **docs.** Ledger `dispatch.c:145-153` row describes the listener drop path
   (`listen.rs:18-25`, debug event without the `while dispatching` suffix).
 

@@ -310,3 +310,27 @@ fn rpcsec_integrity_bad_checksum_is_garbage_args() {
     let _ = take_opaque(&out, &mut i);
     assert_eq!(take_u32(&out, &mut i), GARBAGE_ARGS);
 }
+
+#[test]
+fn rpcsec_wrong_handle_with_valid_mic_dispatches() {
+    let (store, acl, mut ctx, _handle, mut sess) = init_svc(GSS_INTEGRITY);
+    let rec = integ_rec(&mut ctx, 42, 1, b"not-the-handle", &list_args(), false);
+    let out = kadm5_handle_rpc(
+        &store,
+        &acl,
+        &[],
+        TEST_REALM,
+        b"hdl",
+        &mut sess,
+        &ReplayCache::new(),
+        &rec,
+    )
+    .unwrap();
+    let mut i = 0;
+    assert_eq!(take_u32(&out, &mut i), 42);
+    assert_eq!(take_u32(&out, &mut i), MSG_REPLY);
+    assert_eq!(take_u32(&out, &mut i), MSG_ACCEPTED);
+    assert_eq!(take_u32(&out, &mut i), FLAVOR_GSS);
+    let _ = take_opaque(&out, &mut i);
+    assert_eq!(take_u32(&out, &mut i), SUCCESS);
+}

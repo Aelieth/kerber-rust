@@ -63,7 +63,12 @@ fn getpol_prints_allowed_keysalts_only_when_set() {
         ..PolicyArgs::default()
     })
     .unwrap();
-    assert!(!sess.get_policy("plain").unwrap().contains("Allowed key/salt types:"));
+    assert!(
+        !sess
+            .get_policy("plain")
+            .unwrap()
+            .contains("Allowed key/salt types:")
+    );
     assert!(
         sess.get_policy("ksalt")
             .unwrap()

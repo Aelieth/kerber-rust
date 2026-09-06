@@ -51,7 +51,7 @@ Red-at-HEAD artefact contract (captured under
 `working/logs/…/<item>-red-at-head.log`): the file is captured tool
 output of the failing unit or live cell, not a paraphrase. Write
 "unit-red only; MIT by source" when MIT clients cannot emit the cell.
-Retroactive red is `scripts/red-at-sha.sh [--inject FILE ...] --
+Retroactive red is `scripts/red-at-sha.sh [--no-overlay] [--inject FILE ...] --
 <base-sha> <gate-script-or-command>`: a `git worktree` at the base
 SHA with `CARGO_TARGET_DIR` under an absolute `KERBER_SCRATCH`, a
 provenance header (`base_sha=`, `tree_sha=` from `git write-tree`
@@ -66,7 +66,9 @@ only for `scripts/*-gate.sh`. The worktree is removed and
 Archive the captured output under `working/logs/…` and the scratch.
 Both legs of a text-equality cell assert pinned literals (never
 capture-from-MIT). Every branch asserts: no `if` whose body is only
-`echo`.
+`echo`. `--no-overlay` keeps the base tree's own `scripts/` and `harness/` so a
+red for the tooling itself (a ci-policy fixture against an old helper) is
+possible; the default overlays HEAD's helpers.
 
 Summary claims are checked by `scripts/claim-audit.py [--evidence-dir DIR]
 [--stamp] SUMMARY…`: every `script:line` reference in a "Settled live"
