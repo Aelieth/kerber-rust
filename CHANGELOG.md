@@ -6,6 +6,16 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-K M1b
+
+- **ci.** A required `ledger-mit` job fetches the SHA-pinned MIT 1.22.2 source
+  (the same tarball `harness/Dockerfile` builds) and runs `scripts/ci-policy.py`
+  with `KERBER_MIT_SRC` set, so `check_ledger_mit_cites` verifies every ledger
+  MIT `file:line` and status word against the real tree in CI. Previously the
+  check was opt-in and never ran in CI; a broken MIT cite now fails a required
+  job instead of being silently accepted.
+
+
 ### W1-K M4c (partial)
 
 - **client/admin.** `krb5-klist -e` prefixes `DEPRECATED:` on a deprecated

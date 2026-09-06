@@ -73,6 +73,27 @@ jobs:
       - name: cargo-vet
         run: cargo vet --locked
 
+  ledger-mit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Fetch MIT 1.22.2 source (SHA-pinned, same as harness/Dockerfile)
+        run: |
+          set -euo pipefail
+          url=https://web.mit.edu/kerberos/dist/krb5/1.22/krb5-1.22.2.tar.gz
+          sha=3243ffbc8ea4d4ac22ddc7dd2a1dc54c57874c40648b60ff97009763554eaf13
+          for attempt in 1 2 3; do
+            if wget -q -O /tmp/krb5.tar.gz "$url"; then break; fi
+            sleep $((attempt * 5))
+          done
+          echo "$sha  /tmp/krb5.tar.gz" | sha256sum -c -
+          mkdir -p /tmp/krb5-src
+          tar -xzf /tmp/krb5.tar.gz -C /tmp/krb5-src
+          echo "KERBER_MIT_SRC=/tmp/krb5-src/krb5-1.22.2/src" >> "$GITHUB_ENV"
+      - name: Verify MIT-side ledger anchors against the 1.22.2 tree
+        run: python3 scripts/ci-policy.py
+
   mit-image:
     runs-on: ubuntu-latest
     timeout-minutes: 30
