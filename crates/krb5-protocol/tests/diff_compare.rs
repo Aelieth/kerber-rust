@@ -1,6 +1,6 @@
 //! Fail-red fixture for the shipped differential compare path.
 
-use crate::diff::{Whitelist, compare_krb_error, compare_preauth_e_data, compare_stable_rep};
+use crate::diff::{compare_krb_error, compare_preauth_e_data, compare_stable_rep};
 use krb5_asn1::encode;
 use krb5_types::{
     EncKdcRepPart, EncTicketPart, EncryptedData, EncryptionKey, EtypeInfo2, EtypeInfo2Entry,
@@ -118,14 +118,13 @@ fn krb_error_volatile_only_passes_stable_mismatch_fails() {
 
 #[test]
 fn success_volatile_only_passes_cname_mismatch_fails() {
-    let wl = Whitelist::default();
     let (r_rep, r_enc, r_tkt) = sample_parts("user", 0xaa, 0);
     let (m_rep, m_enc, m_tkt) = sample_parts("user", 0xbb, 11);
-    compare_stable_rep(&r_rep, &r_enc, &r_tkt, &m_rep, &m_enc, &m_tkt, &wl)
+    compare_stable_rep(&r_rep, &r_enc, &r_tkt, &m_rep, &m_enc, &m_tkt)
         .expect("session key/times/cipher must be nulled");
 
     let (bad_rep, bad_enc, bad_tkt) = sample_parts("other", 0xbb, 11);
-    let err = compare_stable_rep(&r_rep, &r_enc, &r_tkt, &bad_rep, &bad_enc, &bad_tkt, &wl)
+    let err = compare_stable_rep(&r_rep, &r_enc, &r_tkt, &bad_rep, &bad_enc, &bad_tkt)
         .expect_err("cname mismatch must fail");
     assert!(
         err.0.contains("stable-rep mismatch"),
@@ -184,26 +183,34 @@ fn etype_info2_requires_exact_etype_set() {
 
 #[test]
 fn ticket_flag_bit_differences_fail_red() {
-    let wl = Whitelist::default();
     let (r_rep, r_enc, r_tkt) = sample_parts("user", 0xaa, 0);
 
-    // The enc-pa-rep bit (== CANONICALIZE bit 15) is no longer whitelisted:
-    // MIT sets it on every ticket, so a divergence must fail red (W1-J L3a).
+    // The enc-pa-rep bit (== CANONICALIZE bit 15) is compared: MIT sets it on
+    // every ticket, so a divergence must fail red (W1-J L3a).
     let (m_rep, mut m_enc, mut m_tkt) = sample_parts("user", 0xbb, 11);
     m_enc.flags = m_enc.flags.with_bit(flag_bit::ENC_PA_REP, true);
     m_tkt.flags = m_tkt.flags.with_bit(flag_bit::ENC_PA_REP, true);
-    let err = compare_stable_rep(&r_rep, &r_enc, &r_tkt, &m_rep, &m_enc, &m_tkt, &wl)
+    let err = compare_stable_rep(&r_rep, &r_enc, &r_tkt, &m_rep, &m_enc, &m_tkt)
         .expect_err("enc-pa-rep bit is compared, not masked");
     assert!(err.0.contains("stable-rep mismatch"), "{}", err.0);
 
     let (b_rep, mut b_enc, mut b_tkt) = sample_parts("user", 0xbb, 11);
     b_enc.flags = b_enc.flags.with_bit(flag_bit::PROXY, true);
     b_tkt.flags = b_tkt.flags.with_bit(flag_bit::PROXY, true);
-    let err = compare_stable_rep(&r_rep, &r_enc, &r_tkt, &b_rep, &b_enc, &b_tkt, &wl)
-        .expect_err("PROXY is not a named whitelist bit");
+    let err = compare_stable_rep(&r_rep, &r_enc, &r_tkt, &b_rep, &b_enc, &b_tkt)
+        .expect_err("PROXY is compared like every bit");
     assert!(
         err.0.contains("stable-rep mismatch"),
-        "un-whitelisted flag bit must fail red: {}",
+        "any flag-bit difference must fail red: {}",
         err.0
     );
+
+    // With the whitelist mechanism deleted (W1-K M2b), the RENEWABLE bit is no
+    // longer masked; a renewable divergence must also fail red.
+    let (n_rep, mut n_enc, mut n_tkt) = sample_parts("user", 0xbb, 11);
+    n_enc.flags = n_enc.flags.with_bit(flag_bit::RENEWABLE, true);
+    n_tkt.flags = n_tkt.flags.with_bit(flag_bit::RENEWABLE, true);
+    let err = compare_stable_rep(&r_rep, &r_enc, &r_tkt, &n_rep, &n_enc, &n_tkt)
+        .expect_err("RENEWABLE is compared, not masked");
+    assert!(err.0.contains("stable-rep mismatch"), "{}", err.0);
 }

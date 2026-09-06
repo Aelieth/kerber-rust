@@ -16,7 +16,7 @@ use std::process;
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, string_to_key};
 use krb5_protocol::{
-    KdcAddr, Keytab, Whitelist, as_req, as_req_sname, compare_krb_error, compare_stable_rep,
+    KdcAddr, Keytab, as_req, as_req_sname, compare_krb_error, compare_stable_rep,
     decode_enc_kdc_rep, exchange_on_tcp, pa_enc_timestamp, pa_enc_timestamp_at, tgs_req,
 };
 use krb5_types::{
@@ -106,10 +106,7 @@ fn expect_error(cfg: &Cfg, case: &str, req: &[u8], code: i32) -> Result<(), Stri
             .to_owned()
     };
     let rust_text = et(&re);
-    match compare_krb_error(&re, &me) {
-        Ok(_) => {}
-        Err(e) => return Err(format!("{case}: {e}")),
-    }
+    compare_krb_error(&re, &me).map_err(|e| format!("{case}: {e}"))?;
     println!(
         r#"{{"event":"diffsend","case":"{case}","outcome":"ok","error_code":{},"e_text":"{rust_text}","rust_tag":"0x7e","mit_tag":"0x7e"}}"#,
         re.error_code
@@ -287,17 +284,14 @@ fn expect_as_ok(
     let (rr, re, rt, rtag, session) = decrypt_as(&rust, &cfg.user_pw, cname, &cfg.realm, tkt_kt)?;
     let (mr, me, mt, mtag, mit_session) =
         decrypt_as(&mit, &cfg.user_pw, cname, &cfg.realm, tkt_kt)?;
-    let wl = Whitelist::default();
-    let ok = compare_stable_rep(&rr, &re, &rt, &mr, &me, &mt, &wl)
-        .map_err(|e| format!("{case}: {e}"))?;
+    compare_stable_rep(&rr, &re, &rt, &mr, &me, &mt).map_err(|e| format!("{case}: {e}"))?;
     if rtag != 0x7a || mtag != 0x7a {
         return Err(format!(
             "{case}: enc-part tag rust=0x{rtag:02x} mit=0x{mtag:02x} want 0x7a"
         ));
     }
     println!(
-        r#"{{"event":"diffsend","case":"{case}","outcome":"ok","rust_tag":"0x6b","mit_tag":"0x6b","rust_enc_tag":"0x7a","mit_enc_tag":"0x7a","whitelist":{:?}}}"#,
-        ok.whitelisted
+        r#"{{"event":"diffsend","case":"{case}","outcome":"ok","rust_tag":"0x6b","mit_tag":"0x6b","rust_enc_tag":"0x7a","mit_enc_tag":"0x7a"}}"#
     );
     Ok((session, rr.ticket, mit_session, mr.ticket))
 }
@@ -556,17 +550,14 @@ fn run() -> Result<(), String> {
         .ok_or_else(|| "KERBER_HOST_KEYTAB required for TGS compare".to_string())?;
     let (rr, re, rt, rtag) = decrypt_tgs(&tr, &sess, svc)?;
     let (mr, me, mt, mtag) = decrypt_tgs(&tm, &sess, svc)?;
-    let wl = Whitelist::default();
-    let ok = compare_stable_rep(&rr, &re, &rt, &mr, &me, &mt, &wl)
-        .map_err(|e| format!("tgs-success: {e}"))?;
+    compare_stable_rep(&rr, &re, &rt, &mr, &me, &mt).map_err(|e| format!("tgs-success: {e}"))?;
     if rtag != 0x7a || mtag != 0x7a {
         return Err(format!(
             "tgs-success: enc-part tag rust=0x{rtag:02x} mit=0x{mtag:02x} want 0x7a"
         ));
     }
     println!(
-        r#"{{"event":"diffsend","case":"tgs-success","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","rust_enc_tag":"0x7a","mit_enc_tag":"0x7a","whitelist":{:?}}}"#,
-        ok.whitelisted
+        r#"{{"event":"diffsend","case":"tgs-success","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","rust_enc_tag":"0x7a","mit_enc_tag":"0x7a"}}"#
     );
 
     let (hkey, hkvno) = keytab_for(svc, 20)?;

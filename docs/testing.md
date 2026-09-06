@@ -511,16 +511,17 @@ when that oracle is absent.
   AS/TGS case **once** and TCP-exchanges the same bytes to both.
   KRB-ERROR compares `error_code`/`realm`/`sname`/`e_text` (mask
   `stime`/`susec`/`ctime`/`cusec`; PREAUTH `e_data` is
-  structural; extra FAST/SPAKE PA types are mechanism ads; MIT
-  ETYPE-INFO2 must be a subset of the Rust set — MIT lists the
-  chosen etype, Rust lists every key). A foreign-realm AS-REQ is MIT `C_PRINCIPAL_UNKNOWN(6)`
+  structural; extra FAST/SPAKE PA types are mechanism ads; the
+  ETYPE-INFO2 etype sets must be equal — MIT and Rust both list the
+  chosen client key). A foreign-realm AS-REQ is MIT `C_PRINCIPAL_UNKNOWN(6)`
   `CLIENT_NOT_FOUND`, not RFC `WRONG_REALM(68)`.
   A TGS with a non-krbtgt presented ticket is MIT `NOT_US(35)`
   `BAD TGS SERVER NAME`.
   AS-REP/TGS-REP decrypt, null volatiles, and compare the
-  stable set. Ticket flags compare the full flag word; only named
-  whitelist bits (renewable, canonicalize) are masked. Un-whitelisted
-  divergence is fail-red. Honest `exit 2`
+  stable set. Ticket flags compare the full flag word with no masking;
+  any divergence is fail-red. There is no case-name whitelist: the gate
+  fails if a diffsend line carries a `"whitelist"` key, and `ci-policy`
+  bans the whitelist mechanism identifiers (W1-K M2b). Honest `exit 2`
   only when docker/MIT image is absent. In CI (bare `run:`).
   Compare lives behind `krb5-protocol` feature `diff` (`examples/diffsend`
   and the unit fixture); it is not on the default public API.
@@ -528,22 +529,11 @@ when that oracle is absent.
   exported krbtgt key (etype 20, empty `tr-type` 1). A live Rust PAC
   TGT is `PROCESS_TGS` at MIT; an MIT PAC TGT fails Rust type-16
   verify. PAC copy/re-sign is not exercised on this path.
-  **Whitelist (with justification):**
-  - `mit-renewable-flags` — MIT default policy issues renewable
-    tickets (`kdb-dump-gate` `klist` `renew until`). Rust *does*
-    issue renewable when the client requests it; the remaining gap
-    is default-policy, not an inability to set the flag.
-  - `mit-order-tgs-times` — MIT fails expired/NYV header tickets
-    inside `PROCESS_TGS` (`rd_req`); Rust's `check_ticket_times`
-    uses `TKT_EXPIRED` / `NOT_YET_VALID`. Same error_code.
-  - `mit-as-enc-kvno` — MIT omits AS-REP enc-part kvno; Rust sets kvno 1.
-  - `mit-extra-ticket-flags` — MIT sets canonicalize (bit 15) on issued
-    tickets; that bit is masked. Any other un-whitelisted flag bit
-    fails red. Same-realm TGS sets `TRANSITED_POLICY_CHECKED` (bit 12)
-    when the transited check ran, matching MIT; it is not whitelisted.
-    Default `reject_bad_transit` rejects `DISABLE_TRANSITED_CHECK` as
-    POLICY (12); `reject_bad_transit=false` accepts with T off.
-    AS-REP TGTs do not set bit 12.
+  **Transited flag:** a same-realm TGS sets `TRANSITED_POLICY_CHECKED`
+  (bit 12) when the transited check ran, matching MIT; the full flag-word
+  compare covers it. Default `reject_bad_transit` rejects
+  `DISABLE_TRANSITED_CHECK` as POLICY (12); `reject_bad_transit=false`
+  accepts with the check off. AS-REP TGTs do not set bit 12.
 - `scripts/kprop-gate.sh` — MIT `kprop` of a version-7 dump to
   `krb5-kpropd` on 754 (`kprop5_01` sendauth, KRB-SAFE size, KRB-PRIV
   32768-byte chunks), then MIT `kinit user` against the replica Rust

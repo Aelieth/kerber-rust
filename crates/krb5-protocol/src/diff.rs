@@ -4,29 +4,11 @@
 //! PREAUTH_REQUIRED
 //! `e_data` is structural (METHOD-DATA types, ETYPE-INFO2 etypes; salt/order
 //! may differ). Success nulls session key, times, `last_req`, both
-//! `enc_part.cipher`s, and PAC auth-data. [`Whitelist`] names known MIT
-//! divergences; anything else is fail-red.
+//! `enc_part.cipher`s, and PAC auth-data. Any other field difference is
+//! fail-red.
 
 use krb5_asn1::decode;
-use krb5_types::flag_bit;
-use krb5_types::{
-    EncKdcRepPart, EncTicketPart, EtypeInfo2, KdcRep, KrbError, MethodData, TicketFlags, err, pa,
-};
-
-/// Named MIT/Rust divergences that must not fail the gate.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Whitelist {
-    /// MIT default policy issues renewable; Rust only when the client asks.
-    pub mit_renewable_flags: bool,
-}
-
-impl Default for Whitelist {
-    fn default() -> Self {
-        Self {
-            mit_renewable_flags: true,
-        }
-    }
-}
+use krb5_types::{EncKdcRepPart, EncTicketPart, EtypeInfo2, KdcRep, KrbError, MethodData, err, pa};
 
 /// Stable-field mismatch (or decode failure).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,13 +21,6 @@ impl std::fmt::Display for DiffError {
 }
 
 impl std::error::Error for DiffError {}
-
-/// Result of a successful compare, including whitelist hits that fired.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct CompareOk {
-    /// Whitelist entry names that actually differed (`mit-renewable-flags`, …).
-    pub whitelisted: Vec<&'static str>,
-}
 
 /// Stable KRB-ERROR fields (times stripped; `e_text` is the MIT status word).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,9 +66,9 @@ pub struct StableRep {
     pub transited_tr_type: i32,
     /// Transited contents.
     pub transited_contents: Vec<u8>,
-    /// TicketFlags with renewable cleared when whitelisted.
+    /// TicketFlags as a big-endian bitmask.
     pub flags: u32,
-    /// Reply padata types after dropping whitelisted MIT types.
+    /// Reply outer padata types, sorted.
     pub padata_types: Vec<i32>,
     /// Ticket EncTicketPart crealm.
     pub tkt_crealm: String,
@@ -123,7 +98,7 @@ pub fn stable_krb_error(e: &KrbError) -> StableKrbError {
 /// # Errors
 ///
 /// Stable fields differ, or PREAUTH `e_data` is not structurally equal.
-pub fn compare_krb_error(rust: &KrbError, mit: &KrbError) -> Result<CompareOk, DiffError> {
+pub fn compare_krb_error(rust: &KrbError, mit: &KrbError) -> Result<(), DiffError> {
     let a = stable_krb_error(rust);
     let b = stable_krb_error(mit);
     if a != b {
@@ -137,7 +112,7 @@ pub fn compare_krb_error(rust: &KrbError, mit: &KrbError) -> Result<CompareOk, D
             mit.e_data.as_ref().map(std::convert::AsRef::as_ref),
         )?;
     }
-    Ok(CompareOk::default())
+    Ok(())
 }
 
 /// Structural METHOD-DATA / ETYPE-INFO2 compare (order and salt ignored).
@@ -208,18 +183,6 @@ pub fn decode_enc_kdc_rep(plain: &[u8]) -> Result<EncKdcRepPart, DiffError> {
     krb5_asn1::decode_enc_kdc_rep_part(plain).map_err(|e| DiffError(e.to_string()))
 }
 
-fn named_flag_mask(wl: &Whitelist) -> u32 {
-    let mut m = 0u32;
-    if wl.mit_renewable_flags {
-        m |= 1 << (31 - flag_bit::RENEWABLE);
-    }
-    m
-}
-
-fn masked_flags(f: &TicketFlags, wl: &Whitelist) -> u32 {
-    f.to_u32() & !named_flag_mask(wl)
-}
-
 fn padata_types(rep: &KdcRep) -> Vec<i32> {
     let mut v: Vec<i32> = rep
         .padata
@@ -232,12 +195,7 @@ fn padata_types(rep: &KdcRep) -> Vec<i32> {
 
 /// Null volatiles and project the stable AS/TGS set.
 #[must_use]
-pub fn stable_rep(
-    rep: &KdcRep,
-    enc: &EncKdcRepPart,
-    ticket: &EncTicketPart,
-    wl: &Whitelist,
-) -> StableRep {
+pub fn stable_rep(rep: &KdcRep, enc: &EncKdcRepPart, ticket: &EncTicketPart) -> StableRep {
     StableRep {
         pvno: rep.pvno,
         msg_type: rep.msg_type,
@@ -251,34 +209,18 @@ pub fn stable_rep(
         sname: enc.sname.components_joined(),
         transited_tr_type: ticket.transited.tr_type,
         transited_contents: ticket.transited.contents.as_ref().to_vec(),
-        flags: masked_flags(&enc.flags, wl),
+        flags: enc.flags.to_u32(),
         padata_types: padata_types(rep),
         tkt_crealm: ks(&ticket.crealm),
         tkt_cname: ticket.cname.components_joined(),
     }
 }
 
-fn whitelist_hits(
-    rust_enc: &EncKdcRepPart,
-    mit_enc: &EncKdcRepPart,
-    wl: &Whitelist,
-) -> Vec<&'static str> {
-    let mut hits = Vec::new();
-    if wl.mit_renewable_flags {
-        let rf = rust_enc.flags.renewable();
-        let mf = mit_enc.flags.renewable();
-        if rf != mf {
-            hits.push("mit-renewable-flags");
-        }
-    }
-    hits
-}
-
-/// Compare decrypted AS/TGS replies under [`Whitelist`].
+/// Compare decrypted AS/TGS replies field by field.
 ///
 /// # Errors
 ///
-/// Un-whitelisted stable-field mismatch.
+/// Any stable-field mismatch.
 pub fn compare_stable_rep(
     rust_rep: &KdcRep,
     rust_enc: &EncKdcRepPart,
@@ -286,10 +228,9 @@ pub fn compare_stable_rep(
     mit_rep: &KdcRep,
     mit_enc: &EncKdcRepPart,
     mit_tkt: &EncTicketPart,
-    wl: &Whitelist,
-) -> Result<CompareOk, DiffError> {
-    let mut a = stable_rep(rust_rep, rust_enc, rust_tkt, wl);
-    let mut b = stable_rep(mit_rep, mit_enc, mit_tkt, wl);
+) -> Result<(), DiffError> {
+    let mut a = stable_rep(rust_rep, rust_enc, rust_tkt);
+    let mut b = stable_rep(mit_rep, mit_enc, mit_tkt);
     if a.enc_part_kvno != b.enc_part_kvno
         && (a.enc_part_kvno.is_none() || b.enc_part_kvno.is_none())
     {
@@ -301,7 +242,5 @@ pub fn compare_stable_rep(
             "stable-rep mismatch rust={a:?} mit={b:?}"
         )));
     }
-    Ok(CompareOk {
-        whitelisted: whitelist_hits(rust_enc, mit_enc, wl),
-    })
+    Ok(())
 }

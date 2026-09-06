@@ -716,6 +716,32 @@ def check_no_informational_gates() -> None:
             _die(f"{rel} informational if at line {hits[0]}")
 
 
+# W1-K M2b: after the differential oracle's whitelist mechanism is deleted, no
+# case may be excused by name. Ban the mechanism identifiers from the diffsend
+# driver and the gate scripts. The tokens are case-precise so a gate's runtime
+# assertion that the output has no `"whitelist"` key is not itself flagged.
+_CASE_WHITELIST = re.compile(r"\bWhitelist\b|whitelisted|whitelist_hits|skip_cases|known_diff")
+
+
+def check_no_case_whitelists(text: str | None = None, name: str = "diffsend.rs") -> None:
+    """Fail if a differential whitelist mechanism reappears."""
+
+    def scan(txt: str, rel: str) -> None:
+        for i, line in enumerate(txt.splitlines(), 1):
+            m = _CASE_WHITELIST.search(line)
+            if m:
+                _die(f"{rel}:{i} banned differential whitelist token {m.group(0)!r} (M2b)")
+
+    if text is not None:
+        scan(text, name)
+        return
+    diffsend = ROOT / "crates/krb5-protocol/examples/diffsend.rs"
+    if diffsend.is_file():
+        scan(diffsend.read_text(), "crates/krb5-protocol/examples/diffsend.rs")
+    for path in sorted(SCRIPTS.glob("*-gate.sh")):
+        scan(path.read_text(), str(path.relative_to(ROOT)))
+
+
 _PROVENANCE_SRC = re.compile(
     r"""\.\s+["']\$ROOT/scripts/lib/provenance\.sh["']"""
 )
@@ -2042,6 +2068,26 @@ jobs:
 
     check_gate_provenance('. "$ROOT/scripts/lib/provenance.sh"\n', "ok-gate.sh")
     _must_die(check_gate_provenance, "#!/bin/bash\necho hi\n", "no-prov-gate.sh")
+    check_no_case_whitelists(
+        'compare_stable_rep(&rr, &re, &rt, &mr, &me, &mt)?;\n'
+        'if echo "$DIFF" | grep -q \'"whitelist"\'; then die "banned"; fi\n',
+        "ok-diffsend.rs",
+    )
+    _must_die(
+        check_no_case_whitelists,
+        "let wl = Whitelist::default();\n",
+        "wl-diffsend.rs",
+    )
+    _must_die(
+        check_no_case_whitelists,
+        'println!("whitelist:{:?}", ok.whitelisted);\n',
+        "field-diffsend.rs",
+    )
+    _must_die(
+        check_no_case_whitelists,
+        "for c in skip_cases; do :; done\n",
+        "skip-gate.sh",
+    )
     check_no_host_tmp_writes(
         'SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-x-gate}"\n'
         "docker exec n sh -c 'cat >/tmp/in-container'\n",
@@ -2106,6 +2152,7 @@ def main() -> None:
     check_full_run_scheduled(workflows)
     check_gate_membership(workflows)
     check_no_informational_gates()
+    check_no_case_whitelists()
     check_gate_provenance()
     check_no_host_tmp_writes()
     check_unit_evidence_helper()

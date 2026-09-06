@@ -53,8 +53,8 @@ pub use ccache_mem::{memory_destroy, memory_retrieve, memory_store};
 pub use ccmarshal::FCC_TAG_DELTATIME;
 #[cfg(feature = "diff")]
 pub use diff::{
-    CompareOk, DiffError, StableKrbError, StableRep, Whitelist, compare_krb_error,
-    compare_preauth_e_data, compare_stable_rep, decode_enc_kdc_rep, stable_krb_error, stable_rep,
+    DiffError, StableKrbError, StableRep, compare_krb_error, compare_preauth_e_data,
+    compare_stable_rep, decode_enc_kdc_rep, stable_krb_error, stable_rep,
 };
 pub use error::Error;
 pub use kcm::{

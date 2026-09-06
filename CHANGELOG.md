@@ -6,6 +6,19 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-K M2b (delete the differential whitelist)
+
+- **ci/protocol.** The differential oracle no longer has a case-name
+  whitelist. Every named mask was removed by its owning item (L0, L3a, L4a,
+  L4b, L5a-1); M2b deletes the mechanism itself: `Whitelist`, `CompareOk`,
+  `whitelist_hits`, and the `named_flag_mask` renewable mask in
+  `crates/krb5-protocol/src/diff.rs`. `compare_stable_rep` now compares every
+  stable field with no masking (the renewable and canonicalize flag bits
+  included) and returns `()`. `examples/diffsend.rs` drops the `"whitelist"`
+  output key; `scripts/differential-gate.sh` fails if any diffsend line
+  carries one; and a new `scripts/ci-policy.py` rule bans the whitelist
+  mechanism identifiers from the diffsend driver and the gate scripts.
+
 ### W1-J L4b (AS/TGS reply padata)
 
 - **kdc.** The AS-REP and TGS-REP no longer carry `PA-SUPPORTED-ENCTYPES`
