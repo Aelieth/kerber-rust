@@ -814,6 +814,11 @@ echo "$DELCPW" | grep -F "delete'' privilege"
 GETCPW="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc kadmin/changepw' 2>&1 || true)"
 echo "$GETCPW" | grep -q 'Principal: kadmin/changepw@KERBER.TEST'
+echo "==== kadmin/admin is DISALLOW_TGT_BASED (server_stubs.c CHANGEPW_SERVICE acceptor takes an initial ticket) ===="
+GETADM="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc kadmin/admin' 2>&1 || true)"
+echo "$GETADM"
+echo "$GETADM" | grep -E '^Attributes:' | grep -F 'DISALLOW_TGT_BASED'
 
 echo "==== modprinc -lockdown_keys kadmin/changepw is modify privilege ===="
 MODCPW="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
@@ -1631,6 +1636,10 @@ echo "$MIT_HIST_PROBE" | grep -F 'valid label=AUTH_TOOWEAK'
 echo "==== kadmin/history getprinc shape: Rust vs MIT ===="
 echo "$HIST_GET" | grep -E 'Attributes:|Maximum ticket life' | sed 's/^/rust: /'
 echo "$MIT_HIST_GET" | grep -E 'Attributes:|Maximum ticket life' | sed 's/^/mit:  /'
+echo "==== MIT kadmin/admin is DISALLOW_TGT_BASED ===="
+MIT_GETADM="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc kadmin/admin' 2>&1 || true)"
+echo "$MIT_GETADM"
+echo "$MIT_GETADM" | grep -E '^Attributes:' | grep -F 'DISALLOW_TGT_BASED'
 MITTGT="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc krbtgt/KERBER.TEST')"
 echo "$MITTGT"
 echo "$MITTGT" | grep -F 'LOCKDOWN_KEYS'

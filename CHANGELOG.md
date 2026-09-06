@@ -17,6 +17,9 @@ this project uses semantic versioning once a crate is published.
   (injectable red for `c795351` at `946b434`). `red-at-sha.sh --no-overlay`
   keeps the base tree's helpers so a tooling red (the K6 ci-policy fixtures
   at `2ec7dfb`) is possible.
+  `tests/j3_unknown_client.rs` restores the W1-H J3 assertion red (fails at
+  `0d28e62`, passes at HEAD). `kadmin-gate.sh` asserts `DISALLOW_TGT_BASED`
+  on `kadmin/admin` on both legs.
 - **docs.** Ledger `dispatch.c:145-153` row describes the listener drop path
   (`listen.rs:18-25`, debug event without the `while dispatching` suffix).
 
