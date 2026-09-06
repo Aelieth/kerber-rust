@@ -35,9 +35,9 @@ Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after W1-K M4c DEPRECATED display + glob filters + Acl::privs removed):
+Counts (after W1-J L5a-1 TGS PROCESS_TGS times):
 **303** = A1 116 + A2 71 + A3 58 + A4 58.
-exact 109 · stricter-documented 12 · deviation 98 ·
+exact 110 · stricter-documented 12 · deviation 97 ·
 absent 66 · deferred 18.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
@@ -164,7 +164,7 @@ mismatches, not extra statuses.
 | kdc_util.c:379 | header ticket server KDB NOENTRY | PROCESS_TGS 7 | issue.rs issue_tgs_body | `PROCESS_TGS` 7 | exact | `tgs_fast_forged_ticket_realm_is_process_tgs`; `mit-fast-kdc-gate.sh`; `capaths-transit-gate.sh` forged realm |
 | kdc_util.c:390 | header krbtgt `DISALLOW_SVR`/`DISALLOW_ALL_TIX` | PROCESS_TGS 7 | issue.rs issue_tgs_body | `PROCESS_TGS` 7 | exact | `tgs_krbtgt_disallow_all_tix_is_process_tgs`; `tgs_local_krbtgt_disallow_svr_is_process_tgs`; `capaths-transit-gate.sh` DISALLOW_ALL_TIX |
 | kdc_util.c:337 | header ticket decrypt/rd_req fail | PROCESS_TGS 31 (typical `BAD_INTEGRITY`) | krb5-kdc/issue.rs decrypt_presented_tgt | `PROCESS_TGS` 31 | exact | proposed: diffsend (no unit asserts 31+text) |
-| rd_req_dec.c:627 | header endtime/nyv inside PROCESS_TGS (`krb5int_validate_times`) | PROCESS_TGS 32/33 | issue.rs requested_life,1078 expired; **issue.rs requested_life** NYV | `expired` 32 / `not yet valid` 33 | deviation | `tgs_renew_after_endtime_still_issues`; proposed: diffsend |
+| rd_req_dec.c:627 | header endtime/nyv inside PROCESS_TGS (`krb5int_validate_times`, called by `kdc_process_tgs_req`; status set do_tgs_req.c:623) | PROCESS_TGS 32/33 | krb5-kdc/issue.rs check_ticket_times | `PROCESS_TGS` 32 / `PROCESS_TGS` 33 | exact | `tgs_renew_after_endtime_still_issues` (code 32 + e_text PROCESS_TGS); `scripts/differential-gate.sh` `tgt-expired`/`tgt-nyv` `e_text:PROCESS_TGS` on both legs, no whitelist |
 | rd_req_dec.c:530-532 | authenticator cname/crealm ≠ ticket client | PROCESS_TGS 36 `BADMATCH` | issue.rs process_tgs_header | `PROCESS_TGS` 36 | exact | `tgs_authenticator_cname_mismatch_is_badmatch`; `tgs_authenticator_crealm_mismatch_is_badmatch`; docs/security.md |
 | do_tgs_req.c:609 | `msg_type != TGS_REQ` | no status (retval `BADMSGTYPE`) | issue.rs handle_request | not TGS path | deferred | proposed: diffsend non-12 application tag |
 | do_tgs_req.c:623 | `kdc_process_tgs_req` any fail | PROCESS_TGS + inner code | issue.rs process_tgs_header | `PROCESS_TGS` + inner code | exact | `phase7_preauth.rs` PROCESS_TGS cells; `capaths.rs` PROCESS_TGS |

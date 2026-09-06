@@ -1133,7 +1133,9 @@ fn check_ticket_times(
     if let Some(start) = &tkt.starttime
         && now.delta_seconds(start) < -skew
     {
-        return Err(proto(err::TKT_NYV, status::NOT_YET_VALID));
+        // MIT krb5int_validate_times runs inside kdc_process_tgs_req (rd_req),
+        // so a not-yet-valid header ticket reports PROCESS_TGS (do_tgs_req.c:623).
+        return Err(proto(err::TKT_NYV, status::PROCESS_TGS));
     }
     if renew {
         if !tkt.flags.renewable() {
@@ -1149,7 +1151,8 @@ fn check_ticket_times(
         return Ok(());
     }
     if tkt.endtime.delta_seconds(&now) < -skew {
-        return Err(proto(err::TKT_EXPIRED, status::TKT_EXPIRED));
+        // Same rd_req stage: an expired header ticket is PROCESS_TGS.
+        return Err(proto(err::TKT_EXPIRED, status::PROCESS_TGS));
     }
     Ok(())
 }

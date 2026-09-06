@@ -1275,7 +1275,15 @@ fn tgs_renew_after_endtime_still_issues() {
     let issued = renewable_as(&store, 95);
     std::thread::sleep(std::time::Duration::from_secs(2));
     let err = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 96)).unwrap_err();
-    assert_eq!(proto_code(err), err::TKT_EXPIRED);
+    // MIT reports an expired header ticket at the rd_req stage: code 32 with
+    // e_text PROCESS_TGS (do_tgs_req.c:623), not TKT_EXPIRED.
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::TKT_EXPIRED);
+            assert_eq!(text.as_deref(), Some("PROCESS_TGS"));
+        }
+        other => panic!("expected Protocol, got {other:?}"),
+    }
     krb5_kdc::issue_tgs(&store, &renew_tgs(&issued, 97)).expect("RENEW after endtime");
 }
 

@@ -106,17 +106,8 @@ fn expect_error(cfg: &Cfg, case: &str, req: &[u8], code: i32) -> Result<(), Stri
             .to_owned()
     };
     let rust_text = et(&re);
-    let mit_text = et(&me);
     match compare_krb_error(&re, &me) {
         Ok(_) => {}
-        Err(_) if matches!(case, "tgt-expired" | "tgt-nyv") && re.error_code == me.error_code => {
-            // MIT fails times inside PROCESS_TGS (rd_req); Rust in tgs_policy.
-            println!(
-                r#"{{"event":"diffsend","case":"{case}","outcome":"ok","error_code":{},"rust_e_text":"{rust_text}","mit_e_text":"{mit_text}","whitelist":["mit-order-tgs-times"]}}"#,
-                re.error_code
-            );
-            return Ok(());
-        }
         Err(e) => return Err(format!("{case}: {e}")),
     }
     println!(

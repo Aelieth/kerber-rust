@@ -6,6 +6,17 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-J L5a-1
+
+- **kdc.** An expired or not-yet-valid TGS header ticket now reports status
+  `PROCESS_TGS` (e_text) like MIT, which validates ticket times inside
+  `kdc_process_tgs_req`/`rd_req` (`krb5int_validate_times`, status set at
+  `do_tgs_req.c:623`); the wire code is unchanged (32 / 33). The renew branch
+  is untouched, so renew-after-endtime still issues. The `mit-order-tgs-times`
+  differential whitelist is removed; `scripts/differential-gate.sh` now
+  compares the `tgt-expired`/`tgt-nyv` e_text equal on both legs.
+
+
 ### W1-K M1b
 
 - **ci.** A required `ledger-mit` job fetches the SHA-pinned MIT 1.22.2 source
