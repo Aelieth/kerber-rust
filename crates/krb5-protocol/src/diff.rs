@@ -106,7 +106,9 @@ pub fn compare_krb_error(rust: &KrbError, mit: &KrbError) -> Result<(), DiffErro
             "krb-error stable mismatch rust={a:?} mit={b:?}"
         )));
     }
-    if a.error_code == err::PREAUTH_REQUIRED {
+    // MIT finish_preauth (do_as_req.c:443-447) attaches the get_preauth_hint_list
+    // e_data to PREAUTH_FAILED (24) as well as PREAUTH_REQUIRED (25).
+    if a.error_code == err::PREAUTH_REQUIRED || a.error_code == err::PREAUTH_FAILED {
         compare_preauth_e_data(
             rust.e_data.as_ref().map(std::convert::AsRef::as_ref),
             mit.e_data.as_ref().map(std::convert::AsRef::as_ref),

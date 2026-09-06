@@ -291,6 +291,37 @@ fn as_enc_timestamp_wrong_etype_is_preauth_failed_like_mit() {
 }
 
 #[test]
+fn as_preauth_failed_carries_the_hint_list_like_mit() {
+    // MIT finish_preauth (do_as_req.c:443-447) attaches the get_preauth_hint_list
+    // e_data to a PREAUTH_FAILED (24) so the client can retry with the right
+    // salt/etype.
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let ed = EncryptedData {
+        etype: 16,
+        kvno: None,
+        cipher: vec![0u8; 32].into(),
+    };
+    let pa = PaData {
+        padata_type: pa::ENC_TIMESTAMP,
+        padata_value: encode(&ed).unwrap().into(),
+    };
+    let req = as_req(cname, TEST_REALM, 263, Some(vec![pa])).unwrap();
+    let bytes = krb5_kdc::handle_request(&store, &encode(&req).unwrap()).expect("reply");
+    let e: KrbError = decode(&bytes).expect("KRB-ERROR");
+    assert_eq!(e.error_code, err::PREAUTH_FAILED);
+    let hint = e
+        .e_data
+        .as_ref()
+        .expect("PREAUTH_FAILED carries hint e_data");
+    let method: MethodData = decode(hint.as_ref()).expect("METHOD-DATA");
+    assert!(
+        method.iter().any(|p| p.padata_type == pa::ETYPE_INFO2),
+        "hint carries ETYPE-INFO2"
+    );
+}
+
+#[test]
 fn preauth_required_hint_lists_one_etype_info2_entry_like_mit() {
     // get_preauth_hint_list emits a single ETYPE-INFO2 entry for the selected
     // client key (add_etype_info -> make_etype_info), not one entry per key.

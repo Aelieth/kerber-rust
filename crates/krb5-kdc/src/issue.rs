@@ -387,7 +387,9 @@ fn issue_as_body(
         &as_req_der,
         pa_body,
         &cname,
-    )? {
+    )
+    .map_err(|e| attach_preauth_hint(store, &client, ckey, e))?
+    {
         Some(PreauthAction::Pkinit { key, pa }) => {
             as_rep_key = key;
             extra_padata.push(pa);
@@ -1651,12 +1653,12 @@ fn wrap_as_fast(
     }
 }
 
-fn preauth_required(store: &dyn PrincipalRead, client: &Principal, ckey: &KeyEntry) -> Error {
+/// `get_preauth_hint_list` METHOD-DATA: the advertise list plus one ETYPE-INFO2
+/// entry for the selected client key (salt from the canonical client, empty
+/// s2kparams, `_make_etype_info_entry`).
+fn preauth_hint_edata(store: &dyn PrincipalRead, client: &Principal, ckey: &KeyEntry) -> Vec<u8> {
     let salt =
         krb5_types::KerberosString::try_from(String::from_utf8_lossy(&client.salt).as_ref()).ok();
-    // get_preauth_hint_list -> add_etype_info -> make_etype_info: one ETYPE-INFO2
-    // entry for the selected client key, salt from the canonical client, empty
-    // s2kparams (_make_etype_info_entry).
     let info: EtypeInfo2 = vec![EtypeInfo2Entry {
         etype: ckey.etype.to_iana(),
         salt,
@@ -1668,8 +1670,39 @@ fn preauth_required(store: &dyn PrincipalRead, client: &Principal, ckey: &KeyEnt
     };
     let mut method: MethodData = crate::plugins::advertise_preauth(store, client);
     method.push(etype_info);
-    let e_data = encode(&method).unwrap_or_default();
-    Error::PreauthRequired { e_data }
+    encode(&method).unwrap_or_default()
+}
+
+fn preauth_required(store: &dyn PrincipalRead, client: &Principal, ckey: &KeyEntry) -> Error {
+    Error::PreauthRequired {
+        e_data: preauth_hint_edata(store, client, ckey),
+    }
+}
+
+/// MIT `finish_preauth` (`do_as_req.c:443-447`): a PREAUTH_FAILED (24) error
+/// carries the same `get_preauth_hint_list` e_data as PREAUTH_REQUIRED, so the
+/// client can retry with the right salt/etype. Other preauth codes (e.g. SKEW)
+/// carry none.
+fn attach_preauth_hint(
+    store: &dyn PrincipalRead,
+    client: &Principal,
+    ckey: &KeyEntry,
+    e: Error,
+) -> Error {
+    match e {
+        Error::Protocol {
+            code,
+            text,
+            e_data: None,
+            detail,
+        } if code == err::PREAUTH_FAILED => Error::Protocol {
+            code,
+            text,
+            e_data: Some(preauth_hint_edata(store, client, ckey)),
+            detail,
+        },
+        other => other,
+    }
 }
 
 fn krb_error_log_fields(bytes: &[u8]) -> (i32, String) {

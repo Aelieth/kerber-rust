@@ -13,8 +13,13 @@ this project uses semantic versioning once a crate is published.
   like `validate_as_request` (`kdc_util.c:762-766`); Rust had merged it into
   the lapsed-pw-expiration `CLIENT KEY EXPIRED` branch. `differential-gate.sh`
   gains an `as-needchange` case against a new `pwchgu` (needchange, no preauth)
-  dump principal, `23`/`REQUIRED PWCHANGE` on both legs. The 24 hint list and
-  the rest of `validate_as_request`'s check order remain.
+  dump principal, `23`/`REQUIRED PWCHANGE` on both legs.
+- **kdc.** A PREAUTH_FAILED (24) AS error now carries the `get_preauth_hint_list`
+  e_data like MIT `finish_preauth` (`do_as_req.c:443-447`), so the client can
+  retry with the right salt/etype; a SKEW (37) still carries none. The
+  differential oracle compares the hint e_data structurally for 24 as well as
+  25, gated by `as-optimistic-encts-wrong-etype`. The rest of
+  `validate_as_request`'s check order remains.
 
 ### W1-J L5a-2 (AS KRB-ERROR client echo)
 
