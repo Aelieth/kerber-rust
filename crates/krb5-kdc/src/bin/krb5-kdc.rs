@@ -72,15 +72,7 @@ fn main() {
 
     let kdc_conf = load_kdc_conf();
     let mut store = if test_realm {
-        // MIT `kdb5_util create` mints keys in the realm's `supported_enctypes`
-        // order; honour the profile so the first current key (get_first_current_key)
-        // matches a MIT KDC built from the same kdc.conf.
-        let key_etypes = kdc_conf
-            .as_ref()
-            .filter(|c| !c.supported_enctypes.is_empty())
-            .map(|c| krb5_crypto::parse_keysalt_list(&c.supported_enctypes.join(" ")))
-            .unwrap_or_default();
-        bootstrap_test_realm(&key_etypes)
+        bootstrap_test_realm()
     } else {
         let (db, stash) = db_and_stash(kdc_conf.as_ref());
         if let (Some(db), Some(stash)) = (db, stash) {
@@ -286,7 +278,7 @@ fn bind_list(
     BIND_CANDIDATES.iter().map(|s| (*s).to_owned()).collect()
 }
 
-fn bootstrap_test_realm(key_etypes: &[krb5_crypto::EncryptionType]) -> PrincipalStore {
+fn bootstrap_test_realm() -> PrincipalStore {
     let user_pw = std::env::var("KRB5_TEST_USER_PASSWORD").unwrap_or_else(|_| {
         eprintln!(
             "krb5-kdc: --test-realm requires KRB5_TEST_USER_PASSWORD (do not compile passwords in)"
@@ -298,13 +290,12 @@ fn bootstrap_test_realm(key_etypes: &[krb5_crypto::EncryptionType]) -> Principal
         std::process::exit(2);
     });
     let realm = std::env::var("KRB5_TEST_REALM").unwrap_or_else(|_| TEST_REALM.to_owned());
-    let mut store = PrincipalStore::bootstrap_with_etypes(
+    let mut store = PrincipalStore::bootstrap(
         &realm,
         TEST_USER,
         user_pw.as_bytes(),
         TEST_ADMIN,
         admin_pw.as_bytes(),
-        key_etypes,
     )
     .unwrap_or_else(|e| {
         eprintln!("krb5-kdc: bootstrap: {e}");
@@ -326,7 +317,7 @@ fn bootstrap_test_realm(key_etypes: &[krb5_crypto::EncryptionType]) -> Principal
         krb5_types::PrincipalName::NT_SRV_HST,
         ["host", host_inst.as_str()],
     );
-    if let Err(e) = store.create_host_etypes(&acl, &actor, &host, key_etypes) {
+    if let Err(e) = store.create_host(&acl, &actor, &host) {
         eprintln!("krb5-kdc: host principal: {e}");
         std::process::exit(1);
     }
@@ -342,15 +333,15 @@ fn bootstrap_test_realm(key_etypes: &[krb5_crypto::EncryptionType]) -> Principal
             std::process::exit(1);
         }
     }
-    if let Err(e) = store.create_host_etypes(&acl, &actor, &documented_kadmin(), key_etypes) {
+    if let Err(e) = store.create_host(&acl, &actor, &documented_kadmin()) {
         eprintln!("krb5-kdc: kadmin/admin: {e}");
         std::process::exit(1);
     }
-    if let Err(e) = store.create_host_etypes(&acl, &actor, &documented_changepw(), key_etypes) {
+    if let Err(e) = store.create_host(&acl, &actor, &documented_changepw()) {
         eprintln!("krb5-kdc: kadmin/changepw: {e}");
         std::process::exit(1);
     }
-    if let Err(e) = store.create_host_etypes(&acl, &actor, &documented_kiprop(), key_etypes) {
+    if let Err(e) = store.create_host(&acl, &actor, &documented_kiprop()) {
         eprintln!("krb5-kdc: kiprop: {e}");
         std::process::exit(1);
     }

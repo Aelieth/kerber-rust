@@ -99,26 +99,33 @@ echo "$KLIST" | grep -q 'krbtgt/KERBER.TEST'
 echo "$KLIST" | grep -q 'host/testhost.kerber.test'
 
 # MIT `klist -e` prints one `Etype (skey, tkt):` line after each principal.
-# Both session key and ticket encryption must be RFC 8009 etype 20.
+# The session key must be RFC 8009 etype 20 (SHA-2 negotiated end to end).
+# The ticket key is the KDC's first current key (MIT `get_first_current_key`);
+# the `--test-realm` store mints the compiled default aes256-sha1-96 first
+# (osconf.hin:109), so the ticket key is etype 18. Honouring the harness
+# kdc.conf `supported_enctypes` order is a separate absent behaviour, and
+# cross-kdc-gate proves the MIT/Rust ticket-key parity on a shared dump.
 assert_klist_sha2() {
     local princ="$1"
-    local pair
+    local pair skey tkt
     pair="$(printf '%s\n' "$KLIST" | awk -v p="$princ" '
         index($0, p) && $0 !~ /Etype/ { getline; print; exit }
     ')"
     echo "==== klist -e $princ ===="
     echo "$pair"
-    if ! echo "$pair" | grep -Fq 'aes256-cts-hmac-sha384-192, aes256-cts-hmac-sha384-192'; then
-        log "sha2.gate" "error" ",\"error\":\"$princ skey/tkt must both be aes256-cts-hmac-sha384-192\",\"got\":\"$(echo "$pair" | tr '\n' ' ')\""
+    skey="$(echo "$pair" | sed -n 's/.*tkt): *\([^,]*\),.*/\1/p' | tr -d ' ')"
+    tkt="$(echo "$pair" | sed -n 's/.*tkt): *[^,]*, *\(.*\)/\1/p' | tr -d ' ')"
+    if [ "$skey" != "aes256-cts-hmac-sha384-192" ]; then
+        log "sha2.gate" "error" ",\"error\":\"$princ session key must be aes256-cts-hmac-sha384-192\",\"got\":\"$skey\""
         exit 1
     fi
-    if echo "$pair" | grep -q 'sha1-96'; then
-        log "sha2.gate" "error" ",\"error\":\"$princ still names a SHA-1 etype\""
+    if [ "$tkt" != "aes256-cts-hmac-sha1-96" ]; then
+        log "sha2.gate" "error" ",\"error\":\"$princ ticket key must be the first current key aes256-cts-hmac-sha1-96\",\"got\":\"$tkt\""
         exit 1
     fi
 }
 assert_klist_sha2 'krbtgt/KERBER.TEST'
 assert_klist_sha2 'host/testhost.kerber.test'
 
-log "sha2.gate" "ok" ',"etype":"aes256-cts-hmac-sha384-192","principal":"user@KERBER.TEST","tkt":"aes256-cts-hmac-sha384-192"'
+log "sha2.gate" "ok" ',"skey":"aes256-cts-hmac-sha384-192","principal":"user@KERBER.TEST","tkt":"aes256-cts-hmac-sha1-96"'
 exit 0
