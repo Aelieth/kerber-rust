@@ -6,6 +6,18 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-J L3a (enc-pa-rep flag)
+
+- **kdc.** Every issued AS and TGS ticket now sets the `TKT_FLG_ENC_PA_REP`
+  flag like MIT `get_ticket_flags` (`kdc_util.c:824`), independent of whether
+  the client sent PA-REQ-ENC-PA-REP; the enc-pa-rep padata stays request-keyed.
+  The `mit-extra-ticket-flags` differential whitelist and its flag masking are
+  removed, so `scripts/differential-gate.sh` compares the ticket flags in full
+  (the enc-pa-rep bit included) on both legs. The remaining `get_ticket_flags`
+  bits (FORWARDED, PROXY, MAY_POSTDATE, POSTDATED, ANONYMOUS, HW_AUTH) are still
+  a documented deviation.
+
+
 ### W1-J L4a
 
 - **kdc.** The AS-REP enc-part no longer carries a `kvno`. MIT assigns

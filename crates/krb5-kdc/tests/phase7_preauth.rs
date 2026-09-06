@@ -207,6 +207,33 @@ fn fast_as_exchange_strengthen_and_finished() {
 }
 
 #[test]
+fn every_ticket_sets_enc_pa_rep_flag_without_padata() {
+    // MIT get_ticket_flags sets TKT_FLG_ENC_PA_REP on every ticket; the
+    // enc-pa-rep padata is added only when the client asked (PA 149).
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let attrs = store.get_name(&cname).unwrap().attributes & !krb5_kdc::KDB_REQUIRES_PRE_AUTH;
+    store
+        .apply_admin_fields(&cname, Some(attrs), None, None, None, None, false)
+        .unwrap();
+    let key = user_key();
+    let req = as_req(cname, TEST_REALM, 207, None).unwrap();
+    let bytes = krb5_kdc::handle_request(&store, &encode(&req).unwrap()).expect("reply");
+    let rep: krb5_types::AsRep = decode(&bytes).expect("AS-REP");
+    let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
+    let plain = decrypt(&key, usage, rep.0.enc_part.cipher.as_ref()).expect("enc");
+    let enc = decode_enc_part(&plain);
+    assert!(
+        enc.flags.enc_pa_rep(),
+        "enc-pa-rep flag set on every ticket"
+    );
+    assert!(
+        enc.encrypted_pa_data.is_none(),
+        "no enc-pa-rep padata without PA 149"
+    );
+}
+
+#[test]
 fn as_rep_enc_part_carries_no_kvno_like_mit() {
     // MIT sets reply.enc_part.kvno only after krb5_encode_kdc_rep, so the wire
     // AS-REP enc-part has no kvno (do_as_req.c:329).

@@ -175,20 +175,18 @@ fn etype_info2_mit_subset_of_rust_passes_superset_fails() {
 }
 
 #[test]
-fn unwhitelisted_ticket_flag_bit_fails_canonicalize_is_masked() {
+fn ticket_flag_bit_differences_fail_red() {
     let wl = Whitelist::default();
     let (r_rep, r_enc, r_tkt) = sample_parts("user", 0xaa, 0);
 
+    // The enc-pa-rep bit (== CANONICALIZE bit 15) is no longer whitelisted:
+    // MIT sets it on every ticket, so a divergence must fail red (W1-J L3a).
     let (m_rep, mut m_enc, mut m_tkt) = sample_parts("user", 0xbb, 11);
-    m_enc.flags = m_enc.flags.with_bit(flag_bit::CANONICALIZE, true);
-    m_tkt.flags = m_tkt.flags.with_bit(flag_bit::CANONICALIZE, true);
-    let ok = compare_stable_rep(&r_rep, &r_enc, &r_tkt, &m_rep, &m_enc, &m_tkt, &wl)
-        .expect("canonicalize is a named whitelist bit");
-    assert!(
-        ok.whitelisted.contains(&"mit-extra-ticket-flags"),
-        "canonicalize divergence must hit the named whitelist: {:?}",
-        ok.whitelisted
-    );
+    m_enc.flags = m_enc.flags.with_bit(flag_bit::ENC_PA_REP, true);
+    m_tkt.flags = m_tkt.flags.with_bit(flag_bit::ENC_PA_REP, true);
+    let err = compare_stable_rep(&r_rep, &r_enc, &r_tkt, &m_rep, &m_enc, &m_tkt, &wl)
+        .expect_err("enc-pa-rep bit is compared, not masked");
+    assert!(err.0.contains("stable-rep mismatch"), "{}", err.0);
 
     let (b_rep, mut b_enc, mut b_tkt) = sample_parts("user", 0xbb, 11);
     b_enc.flags = b_enc.flags.with_bit(flag_bit::PROXY, true);

@@ -469,11 +469,11 @@ fn issue_as_body(
             .with_bit(flag_bit::INVALID, true);
     }
     flags = apply_disallow_flags(flags, Some(&client), &server);
+    // MIT get_ticket_flags sets TKT_FLG_ENC_PA_REP on every issued ticket
+    // (kdc_util.c:824), independent of whether PA-REQ-ENC-PA-REP was sent.
+    flags = flags.with_bit(flag_bit::ENC_PA_REP, true);
     let want_enc_pa = find_pa(req.0.padata.as_deref(), pa::REQ_ENC_PA_REP).is_some()
         || fast.is_some_and(|f| find_pa(Some(&f.inner_padata), pa::REQ_ENC_PA_REP).is_some());
-    if want_enc_pa && raw.is_some() {
-        flags = flags.with_bit(flag_bit::ENC_PA_REP, true);
-    }
     let life = requested_life(store, &client, body, &starttime);
     let end = starttime
         .add_seconds(i64::try_from(life).unwrap_or(i64::MAX))
@@ -559,9 +559,9 @@ fn issue_as_body(
         flags,
         renew_till,
     )?;
-    if enc_part.flags.enc_pa_rep()
-        && let Some(pkt) = raw
-    {
+    // The flag is always set; the enc-pa-rep padata is added only when the
+    // client asked for it (kdc_handle_protected_negotiation).
+    if want_enc_pa && let Some(pkt) = raw {
         enc_part.encrypted_pa_data = Some(enc_pa_rep_padata(&reply_key, pkt)?);
     }
     let enc_der = encode_enc_kdc_rep_part(enc_part)?;
@@ -916,7 +916,7 @@ fn issue_tgs_body(
         {
             end = capped;
         }
-        flags = TicketFlags::none();
+        flags = TicketFlags::none().with_bit(flag_bit::ENC_PA_REP, true);
         if set_transited_flag {
             flags = flags.with_bit(flag_bit::TRANSITED_POLICY_CHECKED, true);
         }

@@ -210,7 +210,7 @@ pub fn decode_enc_kdc_rep(plain: &[u8]) -> Result<EncKdcRepPart, DiffError> {
 }
 
 fn named_flag_mask(wl: &Whitelist) -> u32 {
-    let mut m = 1u32 << (31 - flag_bit::CANONICALIZE);
+    let mut m = 0u32;
     if wl.mit_renewable_flags {
         m |= 1 << (31 - flag_bit::RENEWABLE);
     }
@@ -285,9 +285,6 @@ fn whitelist_hits(
         if raw_r != raw_m {
             hits.push("mit-as-padata");
         }
-    }
-    if rust_enc.flags.bit(flag_bit::CANONICALIZE) != mit_enc.flags.bit(flag_bit::CANONICALIZE) {
-        hits.push("mit-extra-ticket-flags");
     }
     hits
 }
