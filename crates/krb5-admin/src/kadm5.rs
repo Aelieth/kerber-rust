@@ -545,10 +545,12 @@ fn handle_rpcsec_gss(
                     let Ok(wrapped) = r.opaque() else {
                         return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
                     };
-                    let Ok(plain) = gd.ctx.unwrap(&wrapped) else {
+                    // rpc_gss_svc_privacy: the body must be sealed
+                    // (authgss_prot.c:238-240 rejects conf_state != TRUE).
+                    let Ok((plain, conf)) = gd.ctx.unwrap_conf(&wrapped) else {
                         return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
                     };
-                    if plain.len() < 4 {
+                    if !conf || plain.len() < 4 {
                         return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
                     }
                     plain[4..].to_vec()
@@ -1532,9 +1534,12 @@ fn rpcsec_data(
             .map_err(|e| Error::Inner(format!("rpcsec reply mic: {e}")))?;
     }
     let wrapped = r.opaque()?;
-    let plain = ctx
-        .unwrap(&wrapped)
+    let (plain, conf) = ctx
+        .unwrap_conf(&wrapped)
         .map_err(|e| Error::Inner(format!("rpcsec unwrap: {e}")))?;
+    if !conf {
+        return Err(Error::Inner("rpcsec privacy reply not sealed".into()));
+    }
     if plain.len() < 4 {
         return Err(Error::Inner("rpcsec wrap seq".into()));
     }

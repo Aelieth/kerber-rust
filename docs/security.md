@@ -89,7 +89,15 @@ data with the ticket session key (`accept_sec_context.c:494-511`,
 0x8003 shorter than 24 is `GSS_S_BAD_BINDINGS`; `cb_len != 16` is
 `GSS_S_FAILURE`. An all-zero token CB is accepted when the acceptor has
 bindings; a mismatch is `GSS_S_BAD_BINDINGS`; a match sets
-`GSS_C_CHANNEL_BOUND_FLAG`. Token flags are masked with `INITIATOR_FLAGS`.
+`GSS_C_CHANNEL_BOUND_FLAG`. Token flags are masked with `INITIATOR_FLAGS`;
+storing a delegated credential sets `GSS_C_DELEG_FLAG`
+(`accept_sec_context.c:571-577`), the established context sets
+`GSS_C_PROT_READY_FLAG` (`:1089`), a `GSS_EXTS_FINISHED` extension and a
+bad forwarded KRB-CRED are `GSS_S_FAILURE` (`:380-384`, `:571-574`), and
+RRC is reduced modulo the payload length (`unwrap.c:255-263`). `unwrap`
+reports `conf_state`; the RPCSEC_GSS privacy service rejects an
+integrity-only body (`authgss_prot.c:238-240`), so a client that
+negotiated `rpc_gss_svc_privacy` cannot downgrade to an unsealed request.
 PA-FOR-USER unkeyed is 50 and a bad MAC is 41
 (`INVALID_S4U2SELF_CHECKSUM`). PAC SHA-1 on the server checksum is 15
 (`pac.c:496-497`). PAC signatures are verified over the received bytes

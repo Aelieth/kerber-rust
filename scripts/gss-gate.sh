@@ -151,6 +151,12 @@ DELEG_LOG="$(docker exec "$NAME" cat /tmp/gss-accept-deleg.log 2>/dev/null || tr
 echo "$DELEG_LOG"
 echo "$DELEG_LOG" | grep -q 'gss-accept unwrap ok'
 echo "$DELEG_LOG" | grep -q 'gss-accept delegated=user@KERBER.TEST'
+RUST_DELEG_FLAGS="$(echo "$DELEG_LOG" | sed -n 's/.*gss-accept inquire flags=\([0-9]*\) lifetime=.*/\1/p' | head -1)"
+echo "rust_acceptor_deleg_flags=$RUST_DELEG_FLAGS"
+[ $((${RUST_DELEG_FLAGS:-0} & 1)) -ne 0 ] || {
+    log "gss.gate" "error" ',"error":"Rust acceptor stored a delegation without GSS_C_DELEG_FLAG"'
+    exit 1
+}
 
 echo "==== compile MIT acceptor helper ===="
 docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
@@ -223,6 +229,12 @@ MIT_ACC="$(docker exec "$NAME" cat /tmp/gss-mit-server.log 2>/dev/null || true)"
 echo "$MIT_ACC"
 echo "$MIT_ACC" | grep -q 'mit-gss unwrap ok hello-from-rust-gss'
 echo "$MIT_ACC" | grep -q 'mit-gss delegated=user@KERBER.TEST'
+MIT_DELEG_FLAGS="$(echo "$MIT_ACC" | sed -n 's/.*mit-gss inquire flags=\([0-9]*\) lifetime=.*/\1/p' | head -1)"
+echo "mit_acceptor_deleg_flags=$MIT_DELEG_FLAGS"
+[ $((${MIT_DELEG_FLAGS:-0} & 1)) -ne 0 ] || {
+    log "gss.gate" "error" ',"error":"MIT acceptor deleg flag not set (unexpected)"'
+    exit 1
+}
 
 echo "==== MIT SPNEGO initiator vs Rust acceptor ===="
 docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'

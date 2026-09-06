@@ -4,7 +4,7 @@ use krb5_asn1::encode;
 use krb5_crypto::{EncryptionType, KeyUsage, checksum, string_to_key};
 use krb5_gss::{
     ChannelBindings, Error, GSS_C_CHANNEL_BOUND, GSS_C_DELEG, GSS_C_INTEG, GSS_C_MUTUAL,
-    GSS_C_REPLAY, GSS_C_SEQUENCE, GSS_C_TRANS, GSS_CHECKSUM_TYPE, GssContext,
+    GSS_C_PROT_READY, GSS_C_REPLAY, GSS_C_SEQUENCE, GSS_C_TRANS, GSS_CHECKSUM_TYPE, GssContext,
 };
 use krb5_kdc::{
     S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
@@ -104,7 +104,10 @@ fn accept_no_checksum_is_flags_zero_and_no_ap_rep() {
     )
     .unwrap();
     assert!(rep.is_none());
-    assert_eq!(acc.inquire_context().flags & !GSS_C_TRANS, 0);
+    assert_eq!(
+        acc.inquire_context().flags & !(GSS_C_TRANS | GSS_C_PROT_READY),
+        0
+    );
 }
 
 #[test]

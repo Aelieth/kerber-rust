@@ -6,6 +6,17 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-J Round 2 V2
+
+- **gss/admin.** The callers of `unwrap_v3` and `process_checksum` now match
+  MIT 1.22.2. `unwrap` reports `conf_state` and the RPCSEC_GSS privacy
+  service rejects an integrity-only body (`authgss_prot.c:238-240`), so a
+  client cannot downgrade `rpc_gss_svc_privacy` to an unsealed request.
+  Storing a delegated credential sets `GSS_C_DELEG_FLAG`, the established
+  context sets `GSS_C_PROT_READY_FLAG`, a `GSS_EXTS_FINISHED` extension and
+  a bad forwarded KRB-CRED are `GSS_S_FAILURE`, and RRC is reduced modulo
+  the payload length so a token MIT accepts is no longer rejected.
+
 ### W1-J Round 2 V4
 
 - **types/kdc.** PAC shape follows MIT 1.22.2 `k5_pac_should_have_ticket_signature`:

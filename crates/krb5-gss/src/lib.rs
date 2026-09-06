@@ -49,6 +49,8 @@ pub const GSS_C_SEQUENCE: u32 = 8;
 pub const GSS_C_CONF: u32 = 16;
 /// RFC 2744 `GSS_C_INTEG_FLAG`.
 pub const GSS_C_INTEG: u32 = 32;
+/// RFC 2744 `GSS_C_PROT_READY_FLAG` (per-message protection available).
+pub const GSS_C_PROT_READY: u32 = 128;
 /// RFC 2744 `GSS_C_TRANS_FLAG` (context is exportable).
 pub const GSS_C_TRANS: u32 = 256;
 /// MIT `GSS_C_CHANNEL_BOUND_FLAG` (`gssapi_ext.h`).
@@ -68,6 +70,7 @@ const INITIATOR_FLAGS: u32 = GSS_C_INTEG
     | GSS_C_IDENTIFY
     | GSS_C_EXTENDED_ERROR;
 const KRB5_GSS_FOR_CREDS: u16 = 1;
+const GSS_EXTS_FINISHED: u32 = 2;
 const EXPORT_MAGIC: &[u8; 4] = b"K5G1";
 const EXPORT_VERSION: u8 = 1;
 const AES_CONFOUNDER: usize = 16;
@@ -439,6 +442,9 @@ impl GssContext {
         if dce_style {
             gss_flags |= GSS_C_MUTUAL | GSS_C_DCE;
         }
+        // MIT sets GSS_C_PROT_READY_FLAG on the established single-leg context
+        // (accept_sec_context.c:1089).
+        gss_flags |= GSS_C_PROT_READY;
         let want_mutual = gss_flags & GSS_C_MUTUAL != 0;
         let sess = subkey.unwrap_or_else(|| ticket_session.clone());
         let base = ok.authenticator.seq_number.unwrap_or(0);
@@ -579,10 +585,21 @@ impl GssContext {
     ///
     /// Integrity, truncated tokens, or sequence mismatch.
     pub fn unwrap(&mut self, token: &[u8]) -> Result<Vec<u8>, Error> {
+        Ok(self.unwrap_v3(token)?.0)
+    }
+
+    /// Like [`Self::unwrap`] but also returns whether the token was sealed
+    /// (`conf_state`, MIT `unwrap.c:363-364`); the RPCSEC_GSS privacy service
+    /// rejects an integrity-only body (`authgss_prot.c:238-240`).
+    ///
+    /// # Errors
+    ///
+    /// Integrity, truncated tokens, or sequence mismatch.
+    pub fn unwrap_conf(&mut self, token: &[u8]) -> Result<(Vec<u8>, bool), Error> {
         self.unwrap_v3(token)
     }
 
-    fn unwrap_v3(&mut self, token: &[u8]) -> Result<Vec<u8>, Error> {
+    fn unwrap_v3(&mut self, token: &[u8]) -> Result<(Vec<u8>, bool), Error> {
         let owned = message_token(token)?;
         let inner = owned.as_slice();
         if inner.len() < 16 || inner[..2] != TOK_WRAP {
@@ -603,6 +620,7 @@ impl GssContext {
         let payload = rotate_rrc(&inner[16..], rrc);
         let usage = seal_usage(!self.initiator);
         let key = self.recv_key(flags)?;
+        let conf = flags & FLAG_SEALED != 0;
         let msg = if flags & FLAG_SEALED == 0 {
             let ctype = key.etype().checksum_type();
             let cksumsize = checksum_output_size(ctype).ok_or(Error::Truncated)?;
@@ -632,7 +650,7 @@ impl GssContext {
             plain[..n].to_vec()
         };
         self.accept_seq(seq)?;
-        Ok(msg)
+        Ok((msg, conf))
     }
 
     /// MIC (integrity only). RFC 4121 §4.2.6.1 token.
@@ -1482,10 +1500,20 @@ fn process_checksum(
                     return Err(Error::Inner("gss failure".into()));
                 }
                 delegated = extract_delegated(raw, token_flags, subkey, ticket_session, replay)?;
+                if delegated.is_some() {
+                    flags_out |= GSS_C_DELEG;
+                }
                 rest = &rest[option_len..];
             }
             while !rest.is_empty() {
                 if rest.len() < 8 {
+                    return Err(Error::Inner("gss failure".into()));
+                }
+                let ext_type =
+                    u32::from_be_bytes(rest[0..4].try_into().map_err(|_| Error::Truncated)?);
+                // MIT kg_process_extension: GSS_EXTS_FINISHED is IAKERB-only; a
+                // plain krb5 acceptor fails it (accept_sec_context.c:380-384).
+                if ext_type == GSS_EXTS_FINISHED {
                     return Err(Error::Inner("gss failure".into()));
                 }
                 let option_len = usize::try_from(u32::from_be_bytes(
@@ -1566,7 +1594,7 @@ fn extract_delegated(
     if part.is_none() {
         part = unwrap_krb_cred(ticket_session, raw, replay).ok();
     }
-    let part = part.ok_or(Error::Integrity)?;
+    let part = part.ok_or_else(|| Error::Inner("gss failure".into()))?;
     let info = part.1.ticket_info.first().ok_or(Error::Truncated)?;
     let realm = info.prealm.as_ref().map_or_else(String::new, |r| {
         String::from_utf8_lossy(r.as_bytes()).into_owned()
@@ -1595,8 +1623,11 @@ fn sign_usage(initiator: bool) -> KeyUsage {
 }
 
 fn rotate_rrc(cipher: &[u8], rrc: u16) -> Vec<u8> {
-    let n = usize::from(rrc);
-    if n == 0 || n >= cipher.len() {
+    if cipher.is_empty() {
+        return cipher.to_vec();
+    }
+    let n = usize::from(rrc) % cipher.len();
+    if n == 0 {
         return cipher.to_vec();
     }
     let split = cipher.len() - n;
@@ -1611,8 +1642,12 @@ fn apply_send_rrc(tok: &mut [u8], rrc: u16) -> Result<(), Error> {
         return Err(Error::Truncated);
     }
     tok[6..8].copy_from_slice(&rrc.to_be_bytes());
-    let n = usize::from(rrc);
-    if n == 0 || n >= tok.len() - 16 {
+    let clen = tok.len() - 16;
+    if clen == 0 {
+        return Ok(());
+    }
+    let n = usize::from(rrc) % clen;
+    if n == 0 {
         return Ok(());
     }
     let cipher = tok[16..].to_vec();
@@ -3015,8 +3050,8 @@ mod tests {
             panic!("plaintext EncKrbCredPart must not populate delegated()")
         };
         assert!(
-            matches!(err, Error::Integrity),
-            "plaintext KRB-CRED must be Integrity, got {err}"
+            matches!(err, Error::Inner(ref m) if m == "gss failure"),
+            "plaintext KRB-CRED is GSS_S_FAILURE like accept_sec_context.c:571-574, got {err}"
         );
     }
 
