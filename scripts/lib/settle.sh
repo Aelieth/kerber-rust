@@ -12,15 +12,27 @@ fi
 name=$1
 shift 2
 
+readers='grep|egrep|fgrep|rg|zgrep|sed|cat|awk|head|tail'
 base=$(basename -- "$1")
-if [ "$base" = "grep" ] || [ "$base" = "egrep" ] || [ "$base" = "fgrep" ]; then
-    for a in "$@"; do
-        if [ -f "$a" ]; then
-            echo "settle.sh: grep of a file is not a live settle" >&2
+case "$base" in
+    grep|egrep|fgrep|rg|zgrep|sed|cat|awk|head|tail)
+        for a in "$@"; do
+            case "$a" in
+                -*) continue ;;
+                */*|*.log|*.txt|*.json|*.md|*.c|*.h|*.y|*.rs|*.sh|*.py) ;;
+                *) [ -f "$a" ] || continue ;;
+            esac
+            echo "settle.sh: $base of a file is not a live settle ($a)" >&2
+            exit 2
+        done
+        ;;
+    bash|sh|dash|zsh|ksh)
+        if [ "${2:-}" = "-c" ] && printf '%s' "${3:-}" | grep -Eq "(^|[^[:alnum:]_/.-])($readers)([[:space:]]|$)"; then
+            echo "settle.sh: $base -c with a file reader is not a live settle" >&2
             exit 2
         fi
-    done
-fi
+        ;;
+esac
 
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"

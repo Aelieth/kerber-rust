@@ -6,6 +6,17 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-I sub-plan 07
+
+- **tooling.** `scripts/lib/settle.sh` refuses every file reader (`grep`,
+  `rg`, `zgrep`, `sed`, `cat`, `awk`, `head`, `tail`) given a path, existing
+  or vanished, and a `bash -c` string that invokes one; `ci-policy.py` pins
+  the four refusals and a live `bash -c`.
+- **test.** `getpol_prints_allowed_keysalts_only_when_set` (injectable red for
+  `7381c3c` at `e6561f9`).
+- **docs.** Ledger `dispatch.c:145-153` row describes the listener drop path
+  (`listen.rs:18-25`, debug event without the `while dispatching` suffix).
+
 ### W1-I sub-plan 06
 
 - **tooling.** `scripts/claim-audit.py` checks a summary's "Settled live"

@@ -46,3 +46,27 @@ fn modify_policy_below_floor_is_bad_length() {
         .unwrap_err();
     assert!(err.to_string().contains("Invalid password length"), "{err}");
 }
+
+#[test]
+fn getpol_prints_allowed_keysalts_only_when_set() {
+    let (mut store, acl) = bootstrap_documented().unwrap();
+    let actor = documented_admin_id();
+    let mut sess = AdminSession::local(&mut store, &acl, actor);
+    sess.add_policy_ent(&PolicyArgs {
+        name: "plain".into(),
+        ..PolicyArgs::default()
+    })
+    .unwrap();
+    sess.add_policy_ent(&PolicyArgs {
+        name: "ksalt".into(),
+        allowed_keysalts: Some("aes256-cts:normal".into()),
+        ..PolicyArgs::default()
+    })
+    .unwrap();
+    assert!(!sess.get_policy("plain").unwrap().contains("Allowed key/salt types:"));
+    assert!(
+        sess.get_policy("ksalt")
+            .unwrap()
+            .contains("Allowed key/salt types: aes256-cts:normal")
+    );
+}

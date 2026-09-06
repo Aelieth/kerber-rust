@@ -968,7 +968,7 @@ def check_unit_evidence_helper() -> None:
 
 
 def check_settle_helper() -> None:
-    """K12: settle.sh tees and refuses grep of an existing file."""
+    """K12/U7: settle.sh tees and refuses file readers (grep/rg/sed/cat, bash -c, vanished paths)."""
     path = SCRIPTS / "lib" / "settle.sh"
     if not path.is_file():
         _die("missing scripts/lib/settle.sh")
@@ -977,8 +977,8 @@ def check_settle_helper() -> None:
         _die("settle.sh must tee command output")
     if "pipefail" not in text:
         _die("settle.sh must set pipefail around tee")
-    if "grep of a file is not a live settle" not in text:
-        _die("settle.sh must refuse grep of a file")
+    if "of a file is not a live settle" not in text:
+        _die("settle.sh must refuse readers of a file")
     env = os.environ.copy()
     env["KERBER_NO_IMAGE"] = "1"
     existing = ROOT / "scripts" / "ci-policy.py"
@@ -1003,6 +1003,33 @@ def check_settle_helper() -> None:
     err = (r.stderr or b"").decode("utf-8", "replace")
     if "grep of a file is not a live settle" not in err:
         _die("settle.sh grep refusal text missing")
+    refusals = [
+        (["bash", "-c", f"grep -F ok {existing}"], "bash -c grep"),
+        (["rg", "ok", str(existing)], "rg of a file"),
+        (["sed", "-n", "1p", str(existing)], "sed -n of a file"),
+        (["grep", "-F", "ok", "/tmp/kerber-vanished-settle/gate.log"], "grep of a vanished path"),
+    ]
+    for cmd, what in refusals:
+        r = subprocess.run(
+            ["bash", str(path), "k12-reader", "--", *cmd],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            check=False,
+        )
+        if r.returncode == 0:
+            _die(f"settle.sh accepted {what}")
+        if b"not a live settle" not in (r.stderr or b""):
+            _die(f"settle.sh refusal text missing for {what}")
+    r = subprocess.run(
+        ["bash", str(path), "k12-live", "--", "bash", "-c", "printf live"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    if r.returncode != 0 or b"live" not in (r.stdout or b""):
+        _die("settle.sh refused a live bash -c command")
 
 
 def check_red_at_sha_inject(text: str | None = None) -> None:
