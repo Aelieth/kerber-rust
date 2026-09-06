@@ -35,9 +35,9 @@ Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after W1-J L3a enc-pa-rep ticket flag):
+Counts (after W1-J L5a-3 AS_INVALID_OPTIONS regrade):
 **308** = A1 117 + A2 74 + A3 59 + A4 58.
-exact 119 · stricter-documented 12 · deviation 95 ·
+exact 120 · stricter-documented 12 · deviation 94 ·
 absent 64 · deferred 18.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
@@ -296,7 +296,7 @@ Wire = RFC 4120 protocol code (MIT `errcode_to_protocol`).
 | do_as_req.c:611-615 | client/server DB *entry* realms differ (needs a multi-realm KDB) | `REFERRAL` **68** `WRONG_REALM` | `issue.rs tgs_reply` | `wrong realm` **6** (`body.realm≠store`, before lookup) — different trigger | deferred (multi-realm KDB; promotion: KDB returning different entry realms) | reachable body.realm cell is diffsend `wrong-realm` (6/6 green) |
 | do_as_req.c:618-623 | `get_local_tgt` fail (AS) | `GET_LOCAL_TGT` + KDB err | `issue.rs issue_as_body` mint `fetch_krbtgt` | `no krbtgt` **7** (not this status) | absent | proposed: diffsend `as-missing-krbtgt` |
 | do_tgs_req.c:649-654 | `get_local_tgt` on `sprinc->realm` | `GET_LOCAL_TGT` + KDB err | `issue.rs issue_as_body` | `GET_LOCAL_TGT` **60** if `body.realm≠store` | exact | `phase7_preauth.rs`; `capaths.rs`; `docs/security.md:60-63` |
-| kdc_util.c:727-729 | AS `kdc_options & AS_INVALID_OPTIONS` (FORWARDED/PROXY/RENEW/VALIDATE/ENC_TKT_IN_SKEY/CNAME_IN_ADDL_TKT) | `INVALID AS OPTIONS` **13** | `issue.rs tgs_reply` `unsupported_bits` includes those bits as supported | AS with VALIDATE/FORWARDED **succeeds** | deviation (security) | proposed: diffsend `as-invalid-opts`; proposed as-invalid-options-gate |
+| kdc_util.c:727-729 | AS `kdc_options & AS_INVALID_OPTIONS` (FORWARDED/PROXY/RENEW/VALIDATE/ENC_TKT_IN_SKEY/CNAME_IN_ADDL_TKT) | `INVALID AS OPTIONS` **13** | `issue.rs issue_as_body` `as_invalid_bits` | `INVALID AS OPTIONS` **13** | exact | `scripts/differential-gate.sh` `as-invalid-opts` (RENEW) is 13 both legs; `as_req_with_tgs_only_option_is_invalid_as_options` |
 | kdc_util.c:733-738 | `now > client.expiration` | `CLIENT EXPIRED` **1** (vague→**60**) | `issue.rs check_db_times` | `CLIENT EXPIRED` **1** | exact | `issue_acl_ap.rs::as_rejects_expired_principal_before_expired_password`; `scripts/expire-gate.sh` |
 | kdc_util.c:743-749 | `now > pw_expiration` && !PWCHANGE_SERVICE | `CLIENT KEY EXPIRED` **23** | `issue.rs check_db_times` `pw_lapsed` | `CLIENT KEY EXPIRED` **23** | exact | `issue_acl_ap.rs::as_rejects_expired_password_unless_pwchange_service`; `scripts/expire-gate.sh` |
 | kdc_util.c:762-765 | `REQUIRES_PWCHANGE` && !PWCHANGE_SERVICE | `REQUIRED PWCHANGE` **23** | `issue.rs check_db_times` own branch after SERVICE EXPIRED | `REQUIRED PWCHANGE` **23** | exact | `scripts/differential-gate.sh` `as-needchange` (pwchgu) is `23`/`REQUIRED PWCHANGE` on both legs; `issue_acl_ap.rs::as_needchange_is_key_expired_unless_changepw` (status) |

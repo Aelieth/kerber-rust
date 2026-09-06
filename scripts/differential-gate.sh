@@ -148,7 +148,8 @@ echo "$DIFF" | grep -q '"rust_tag":"0x6d"' || die "tgs-success missing TGS-REP t
 echo "$DIFF" | grep -q '"case":"as-success".*"rust_enc_tag":"0x7a".*"mit_enc_tag":"0x7a"' || die "as-success enc-part not APPLICATION 26 both legs"
 echo "$DIFF" | grep -q '"case":"tgs-success".*"rust_enc_tag":"0x7a".*"mit_enc_tag":"0x7a"' || die "tgs-success enc-part not APPLICATION 26 both legs"
 echo "$DIFF" | grep -q '"case":"as-optimistic-encts-wrong-etype","outcome":"ok","error_code":24' || die "as-optimistic-encts-wrong-etype not code 24 on both legs"
-echo "$DIFF" | grep -q '"outcome":"ok","cases":15' || die "diffsend did not finish 15 cases"
+echo "$DIFF" | grep -q '"case":"as-invalid-opts","outcome":"ok","error_code":13' || die "as-invalid-opts (RENEW) not code 13 on both legs"
+echo "$DIFF" | grep -q '"outcome":"ok","cases":16' || die "diffsend did not finish 16 cases"
 # W1-K M2b: the differential oracle has no case-name whitelist; no diffsend line
 # may carry a "whitelist" key.
 if echo "$DIFF" | grep -q '"whitelist"'; then

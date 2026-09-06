@@ -6,8 +6,16 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
-### W1-J L5a-3 (validate_as_request: REQUIRED PWCHANGE)
+### W1-J L5a-3 (validate_as_request: AS_INVALID_OPTIONS, REQUIRED PWCHANGE)
 
+- **kdc.** An AS-REQ that sets a TGS-only `kdc-option` (`FORWARDED`, `PROXY`,
+  `RENEW`, `VALIDATE`, `ENC-TKT-IN-SKEY`, or `CNAME-IN-ADDL-TKT`) is now
+  rejected with `INVALID AS OPTIONS` (code BADOPTION 13) like
+  `validate_as_request` (`kdc_util.c:727-729`, `AS_INVALID_OPTIONS`); Rust's
+  `unsupported_bits` counted those bits as supported, so the AS silently issued
+  a ticket. A new `KdcOptions::as_invalid_bits` masks them in `issue_as_body`.
+  `differential-gate.sh` gains an `as-invalid-opts` case (`RENEW`), `13`/`INVALID
+  AS OPTIONS` on both legs.
 - **kdc.** A client with `REQUIRES_PWCHANGE` now fails with MIT's distinct
   status `REQUIRED PWCHANGE` (code KEY_EXP 23) checked after SERVICE EXPIRED,
   like `validate_as_request` (`kdc_util.c:762-766`); Rust had merged it into

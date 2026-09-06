@@ -1057,6 +1057,18 @@ fn as_needchange_is_key_expired_unless_changepw() {
 }
 
 #[test]
+fn as_req_with_tgs_only_option_is_invalid_as_options() {
+    // MIT AS_INVALID_OPTIONS (kdc_util.h:456-463): a TGS-only KDC option (RENEW)
+    // in an AS-REQ is INVALID AS OPTIONS / BADOPTION (13), not a ticket.
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let mut req = as_req(cname, TEST_REALM, 51, None).unwrap();
+    req.0.req_body.kdc_options = req.0.req_body.kdc_options.with_bit(flag_bit::RENEW, true);
+    let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
+    assert_eq!(proto_code(err), err::BADOPTION);
+}
+
+#[test]
 fn as_zero_expiration_still_issues() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);

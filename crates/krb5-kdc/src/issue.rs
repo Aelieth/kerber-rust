@@ -306,7 +306,7 @@ fn issue_as_body(
     if utf8_realm(&body.realm)? != store.realm() {
         return Err(proto(err::C_PRINCIPAL_UNKNOWN, status::CLIENT_NOT_FOUND));
     }
-    if body.kdc_options.unsupported_bits() != 0 {
+    if body.kdc_options.as_invalid_bits() != 0 || body.kdc_options.unsupported_bits() != 0 {
         return Err(proto(err::BADOPTION, status::INVALID_AS_OPTIONS));
     }
     let req_cname = body

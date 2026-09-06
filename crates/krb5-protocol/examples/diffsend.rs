@@ -494,6 +494,17 @@ fn run() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     expect_error(&cfg, "as-needchange", &req, err::KEY_EXPIRED)?;
 
+    // MIT AS_INVALID_OPTIONS (kdc_util.h:456-463): a TGS-only option (RENEW) in
+    // an AS-REQ is INVALID AS OPTIONS / BADOPTION (13) on both legs.
+    let mut inv = as_req(user.clone(), realm, 0x1000_0010, None).map_err(|e| e.to_string())?;
+    inv.0.req_body.kdc_options = inv
+        .0
+        .req_body
+        .kdc_options
+        .with_bit(krb5_types::flag_bit::RENEW, true);
+    let req = encode(&inv).map_err(|e| e.to_string())?;
+    expect_error(&cfg, "as-invalid-opts", &req, err::BADOPTION)?;
+
     // PA-ENC-TIMESTAMP declaring des3 (etype 16), which pauser has no key for:
     // enc_ts_verify krb5_dbe_search_enctype misses -> KRB5_KDB_NO_MATCHING_KEY
     // -> KDC_ERR_PREAUTH_FAILED (24) on both legs.
@@ -684,7 +695,7 @@ fn run() -> Result<(), String> {
         true,
     )?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":15}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":16}}"#);
     Ok(())
 }
 

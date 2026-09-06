@@ -563,6 +563,19 @@ impl KdcOptions {
             | (1u32 << (31 - flag_bit::VALIDATE));
         self.to_u32() & !supported
     }
+
+    /// MIT `AS_INVALID_OPTIONS` (`kdc_util.h:456-463`): TGS-only options that
+    /// are invalid in an AS-REQ.
+    #[must_use]
+    pub fn as_invalid_bits(&self) -> u32 {
+        let mask = (1u32 << (31 - flag_bit::FORWARDED))
+            | (1u32 << (31 - flag_bit::PROXY))
+            | (1u32 << (31 - flag_bit::RENEW))
+            | (1u32 << (31 - flag_bit::VALIDATE))
+            | (1u32 << (31 - flag_bit::ENC_TKT_IN_SKEY))
+            | (1u32 << (31 - flag_bit::CNAME_IN_ADDL_TKT));
+        self.to_u32() & mask
+    }
 }
 
 impl TicketFlags {
