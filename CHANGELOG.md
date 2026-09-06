@@ -6,6 +6,13 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-J Round 2 V6
+
+- **protocol.** The TGS-REP enc-part decoder goes through
+  `decode_enc_kdc_rep_part` (APPLICATION 26 then 25 then untagged, MIT
+  `kdc_rep_dc.c:69`) instead of 26-then-untagged, converting the caller
+  L0 left behind; a MIT/Heimdal TGS-REP tagged RFC 25 now decodes.
+
 ### W1-J Round 2 V2
 
 - **gss/admin.** The callers of `unwrap_v3` and `process_checksum` now match

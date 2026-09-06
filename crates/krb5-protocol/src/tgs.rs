@@ -6,9 +6,8 @@ use std::time::Instant;
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt};
 use krb5_types::{
-    ApOptions, ApReq, Authenticator, Checksum, EncKdcRepPart, EncTgsRepPart, EncryptedData,
-    KdcOptions, KdcReq, KdcReqBody, KerberosTime, PaData, PrincipalName, TgsRep, TgsReq, Ticket,
-    flag_bit, ku, pa,
+    ApOptions, ApReq, Authenticator, Checksum, EncKdcRepPart, EncryptedData, KdcOptions, KdcReq,
+    KdcReqBody, KerberosTime, PaData, PrincipalName, TgsRep, TgsReq, Ticket, flag_bit, ku, pa,
 };
 
 use crate::as_ex::AsOutcome;
@@ -503,10 +502,10 @@ fn tgs_once(
     let TgsRep(inner) = decode::<TgsRep>(&reply)?;
     let usage = KeyUsage::new(ku::TGS_REP_ENC_PART)?;
     let plain = decrypt(&tgt.session_key, usage, inner.enc_part.cipher.as_ref())?;
-    let enc_part = match decode::<EncTgsRepPart>(&plain) {
-        Ok(EncTgsRepPart(p)) => p,
-        _ => decode::<EncKdcRepPart>(&plain)?,
-    };
+    // MIT `kdc_rep_dc.c:69` decodes the TGS-REP enc-part with
+    // `decode_krb5_enc_kdc_rep_part` (APPLICATION 26 then 25 then untagged).
+    let enc_part =
+        krb5_asn1::decode_enc_kdc_rep_part(&plain).map_err(|e| Error::Asn1(e.to_string()))?;
     if enc_part.nonce != nonce {
         return Err(Error::NonceMismatch);
     }
