@@ -6,6 +6,23 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-J Round 2 V1
+
+- **ci/docs.** `ci-policy.py` verifies the ledger claim, not its punctuation:
+  Rust e_text status words are checked backticked or bare, an `exact` row
+  without one must name an existing proof, the MIT column must cite a MIT
+  file, a symbol defined twice in a file needs `:N`, and `KERBER_MIT_SRC`
+  checks every MIT cite and status word against the 1.22.2 tree (opt-in
+  until W1-K §M1b). The informational-arm detector walks `case` arms and
+  treats a test whose `||` branch does not assert, a `grep` of an
+  echo-written file, `/bin/echo` and `log_*` as noise; `log … skip` is
+  excused only for the `KERBER_REQUIRE_` it names. `claim-audit.py` takes
+  the oracle leg only from container variables, Samba/Heimdal/AD gates or
+  an oracle settle (a Rust-side gate run is not a leg) and requires tooling
+  bullets to name their fixture line. Ledger: four de-quoted statuses
+  restored, seven rows moved to the MIT-cite schema, five duplicate-symbol
+  anchors disambiguated, four aggregate rows given real proofs.
+
 ### W1-J L2b
 
 - **protocol/admin.** KRB-SAFE verify matches MIT 1.22.2 `rd_safe.c`:

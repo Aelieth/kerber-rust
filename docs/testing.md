@@ -14,11 +14,15 @@ before matching (including 2+ continuations). Each arm is tokenised
 (assignments, redirections, quotes, `$(…)` stripped): an assertion is a
 **command** in {`exit`, `die`, `return`, `break`, `continue`,
 `unavailable`, `log … error`} or a test (`[`, `[[`, `test`, `grep`,
-`cmp`) not followed by `|| true` and not a self-tautology (a `[ -s F ]`
-of a file the arm just wrote, `cmp -s /dev/null /dev/null`, `echo lit |
-grep`). Words in echo arguments and filenames never count. `log …
-skip` is accepted only when a `KERBER_REQUIRE_` die exists in the same
-script. `{ … }`, `( … )`, and heredoc arms are inspected. The ledger header
+`cmp`) whose `||` branch, if any, itself asserts (`|| true`, `|| :`,
+`|| { echo skip; }` swallow the test) and that is not a self-tautology
+(a `[ -s F ]` of a file the arm just wrote, a `grep` of a file the arm
+wrote with `echo`, `cmp -s /dev/null /dev/null`, `echo lit | grep`).
+Words in echo arguments and filenames never count; `/bin/echo` and
+`log_*` helpers are noise. `case` arms are walked like `if` arms. `log …
+skip` is accepted only when the arm names a `KERBER_REQUIRE_`
+requirement that a `die` in the same script enforces. `{ … }`, `( … )`,
+and heredoc arms are inspected. The ledger header
 tally must match a recount of the verdict cells and the A1/A2/A3/A4
 section split; a missing total line fails. Rust-site cells that use
 `file.rs symbol` (optional crate prefix `krb5-kdc/issue.rs fn_name`,
@@ -26,10 +30,16 @@ optional `:N` after the symbol) must resolve to an item (`fn`,
 `const fn`, `async fn`, `unsafe fn`, `struct`, `enum`, `const`,
 `static`) under `crates/*/src`. A bare basename is an error unless
 that file is unique across crates; an unresolvable symbol dies (no
-silent skip). `exact` rows must carry an anchor. Backticked MIT
-status words and Rust e_text (including short forms with `_` such as
-`TKT_NYV` / `NOT_US`) must appear in the union of the resolved item
-bodies; the ledger must run at least 75 such quote checks.
+silent skip); a symbol defined more than once in a file needs `:N`
+inside the intended definition. The MIT column must cite a MIT file
+(or say `n/a` / `absent`). `exact` rows must carry an anchor and verify
+their claim: every Rust e_text status word — backticked, or a bare
+`WORD_WORD` identifier — must appear in the union of the resolved item
+bodies, and a row with no such word must name a proof unit, `diffsend`
+case or gate that exists. With `KERBER_MIT_SRC=<1.22.2 src>` every MIT
+cite must name a file of that tree and every MIT status word must be an
+identifier there, a `_`-suffix of one (the RFC form `PADATA_TYPE_NOSUPP`)
+or a quoted status string; CI wires the tree in W1-K §M1b.
 Port commits carry a function
 coverage checklist (`file:line` → Rust line or `deviation:`),
 `Gates:`, and `Limitation:`. It cannot check
@@ -90,9 +100,13 @@ a function of that script which does); a single-line reference must itself
 sit within one line of that assertion (a `script:12-20` range covers the
 assertion). Every bullet must name a cell on each leg from container
 variables (`"$NAME"`, `NAME_MIT`, `MIT_`/`RUST_`, `mit_local`,
-`kadmin.local`, `kdb5_util`) or `diff <(` — cell-header prose is not a
-leg — or a live `settle.sh` artefact, and every named artefact must exist, be stamped and
-carry a quoted value. `ci-policy` runs its fixtures; the audit runs it on the
+`kadmin.local`, `kdb5_util`; a cell in a Samba, Heimdal or AD gate
+carries the oracle leg) or `diff <(` — cell-header prose is not a
+leg — or an oracle `settle.sh` artefact whose `cmd=` runs a MIT, Samba
+or Heimdal tool (a Rust-side gate run is not a leg); a tooling bullet
+(references into `scripts/*.py`) must name the `_self_test` fixture line
+that exercises the rule; and every named artefact must exist, be stamped
+and carry a quoted value. `ci-policy` runs its fixtures; the audit runs it on the
 landed summary with `--stamp` into the evidence directory.
 
 Wire `e_text` is MIT's status word (`do_as_req.c:806`,

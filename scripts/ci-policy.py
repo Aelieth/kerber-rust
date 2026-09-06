@@ -21,6 +21,7 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
@@ -358,7 +359,41 @@ def _cmd_word(stage: str) -> str:
     return (s.split() or [""])[0]
 
 
-def _is_tautology(cmd: str, stage: str, written: set[str], stmt: str) -> bool:
+_LOGICAL_OPS = ("||", "&&")
+_REQUIRE_NAME = re.compile(r"KERBER_REQUIRE_([A-Z0-9_]+)")
+_CASE_START = re.compile(r"^\s*case\b.*\bin\s*$")
+_ESAC = re.compile(r"^\s*esac\b")
+_CASE_ARM = re.compile(r"^\s*\(?[^()$]*\)\s*(.*)$")
+
+
+def _split_logical(stmt: str) -> list[tuple[str, str]]:
+    """`(op, part)` pieces split on `||` / `&&` outside quotes; the first op is empty."""
+    parts: list[tuple[str, str]] = []
+    buf: list[str] = []
+    op = ""
+    in_s = in_d = False
+    i = 0
+    while i < len(stmt):
+        ch = stmt[i]
+        if ch == "'" and not in_d:
+            in_s = not in_s
+        elif ch == '"' and not in_s:
+            in_d = not in_d
+        elif not in_s and not in_d and stmt[i : i + 2] in _LOGICAL_OPS:
+            parts.append((op, "".join(buf).strip()))
+            buf = []
+            op = stmt[i : i + 2]
+            i += 2
+            continue
+        buf.append(ch)
+        i += 1
+    parts.append((op, "".join(buf).strip()))
+    return [(o, x) for o, x in parts if x]
+
+
+def _is_tautology(
+    cmd: str, stage: str, written: set[str], noise_written: frozenset[str], stmt: str
+) -> bool:
     if cmd in {"[", "[[", "test"}:
         for w in written:
             if w and w in stage and re.search(r"(?:^|[\s[])-[sfe]\b", stage):
@@ -373,60 +408,78 @@ def _is_tautology(cmd: str, stage: str, written: set[str], stmt: str) -> bool:
         echo = re.search(r"\becho\b(.*)\|\s*(?:e|f)?grep\b", stmt)
         if echo is not None and "$" not in echo.group(1):
             return True
+        if any(w and w in stage for w in noise_written):
+            return True
     return False
 
 
-def _stmt_kind(stmt: str, written: set[str]) -> str:
-    """`assert`, `work`, or `noise` (includes fake asserts)."""
-    core = _OR_TRUE.sub("", stmt.strip()).strip()
-    or_true = core != stmt.strip().rstrip()
-    if not or_true:
-        or_true = bool(_OR_TRUE.search(stmt.strip()))
-        if or_true:
-            core = _OR_TRUE.sub("", stmt.strip()).strip()
-    stages = [p.strip() for p in _PIPE.split(core) if p.strip()] or [core]
+def _part_kind(part: str, written: set[str], noise_written: frozenset[str]) -> str:
+    stages = [s.strip() for s in _PIPE.split(part) if s.strip()] or [part]
     kinds: list[str] = []
     for stage in stages:
         if not stage or _ASSIGN_ONLY.match(stage):
             continue
-        cmd = _cmd_word(stage)
+        cmd = _cmd_word(stage).rsplit("/", 1)[-1]
         if not cmd:
             continue
-        if cmd == "log":
-            if _LOG_ERROR.search(stage):
-                kinds.append("assert")
-            else:
-                kinds.append("noise")
-            continue
-        if cmd in _ASSERT_CMDS:
-            kinds.append("noise" if or_true else "assert")
-            continue
-        if cmd in _TEST_CMDS:
-            if or_true or _is_tautology(cmd, stage, written, core):
-                kinds.append("noise")
-            else:
-                kinds.append("assert")
-            continue
-        if cmd in _NOISE_CMDS or _NOISE_ONLY.match(stage):
+        if cmd == "log" or cmd.startswith("log_"):
+            kinds.append("assert" if re.search(r"\berror\b", stage) else "noise")
+        elif cmd in _ASSERT_CMDS:
+            kinds.append("assert")
+        elif cmd in _TEST_CMDS:
+            taut = _is_tautology(cmd, stage, written, noise_written, part)
+            kinds.append("noise" if taut else "assert")
+        elif cmd in _NOISE_CMDS or _NOISE_ONLY.match(stage):
             kinds.append("noise")
-            continue
-        kinds.append("work")
-    if not kinds:
-        return "noise"
-    if any(k in {"assert", "work"} for k in kinds):
-        return "assert" if "assert" in kinds else "work"
+        else:
+            kinds.append("work")
+    if "assert" in kinds:
+        return "assert"
+    if "work" in kinds:
+        return "work"
     return "noise"
+
+
+def _stmt_kind(stmt: str, written: set[str], noise_written: frozenset[str] = frozenset()) -> str:
+    """`assert`, `work`, or `noise`; a test whose `||` branch does not assert is noise."""
+    parts = _split_logical(stmt.strip())
+    if not parts:
+        return "noise"
+    kinds = [_part_kind(x, written, noise_written) for _, x in parts]
+    for i in range(1, len(parts)):
+        if kinds[i - 1] != "assert":
+            continue
+        if parts[i][0] == "||":
+            kinds[i - 1] = "assert" if kinds[i] == "assert" else "noise"
+        elif kinds[i] != "assert":
+            kinds[i - 1] = kinds[i]
+    if "assert" in kinds:
+        return "assert"
+    if "work" in kinds:
+        return "work"
+    return "noise"
+
+
+def _noise_written(stmts: list[str]) -> frozenset[str]:
+    noise: set[str] = set()
+    work: set[str] = set()
+    for s in stmts:
+        for _, part in _split_logical(s):
+            targets = _written_paths(part)
+            if not targets:
+                continue
+            cmd = _cmd_word(part).rsplit("/", 1)[-1]
+            (noise if cmd in _NOISE_CMDS else work).update(targets)
+    return frozenset(noise - work)
 
 
 def _echo_only_body(body: str, script: str = "") -> bool:
     """True when the arm is an informational skip, not a real assert or work."""
     flat = _flatten_arm(body)
-    if (
-        _REQUIRE_DIE.search(script)
-        and re.search(r"\bdie\b", script)
-        and _LOG_SKIP.search(flat)
-    ):
-        return False
+    if _LOG_SKIP.search(flat) and re.search(r"\bdie\b", script):
+        low = flat.lower()
+        if any(name.lower() in low for name in _REQUIRE_NAME.findall(script)):
+            return False
     stmts: list[str] = []
     for ln in flat.splitlines():
         s = ln.strip()
@@ -436,11 +489,51 @@ def _echo_only_body(body: str, script: str = "") -> bool:
     if not stmts:
         return False
     written = _written_paths(flat)
+    noise_written = _noise_written(stmts)
     actionable = [s for s in stmts if not _ASSIGN_ONLY.match(s)]
     if not actionable:
         return False
-    kinds = [_stmt_kind(s, written) for s in actionable]
-    return all(k == "noise" for k in kinds)
+    return all(_stmt_kind(s, written, noise_written) == "noise" for s in actionable)
+
+
+def _case_informational_starts(text: str) -> list[int]:
+    hits: list[int] = []
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        if not _CASE_START.match(lines[i]):
+            i += 1
+            continue
+        start = i + 1
+        depth = 1
+        arms: list[list[str]] = []
+        cur: list[str] | None = None
+        j = i + 1
+        while j < len(lines):
+            line = lines[j]
+            if _CASE_START.match(line):
+                depth += 1
+            elif _ESAC.match(line):
+                depth -= 1
+                if depth == 0:
+                    break
+            elif depth == 1:
+                m = _CASE_ARM.match(line)
+                if cur is None and m:
+                    cur = [m.group(1)] if m.group(1).strip() else []
+                elif cur is not None:
+                    cur.append(line)
+                if cur is not None and line.rstrip().endswith(";;"):
+                    cur[-1] = cur[-1].rstrip()[:-2]
+                    arms.append(cur)
+                    cur = None
+            j += 1
+        if cur:
+            arms.append(cur)
+        if any(_echo_only_body("\n".join(a), text) for a in arms if "\n".join(a).strip()):
+            hits.append(start)
+        i = j + 1
+    return hits
 
 
 def informational_if_starts(text: str) -> list[int]:
@@ -450,9 +543,11 @@ def informational_if_starts(text: str) -> list[int]:
     frame. Each arm is tokenised: assignments, redirections, quotes and
     `$(…)` do not supply assertion words. An assertion is a command in
     {exit, die, return, break, continue, unavailable, log … error} or a
-    test (`[`, `[[`, `test`, `grep`, `cmp`) not followed by `|| true` and
-    not a self-tautology. `log … skip` is accepted only when a
-    `KERBER_REQUIRE_` die exists in the same script.
+    test (`[`, `[[`, `test`, `grep`, `cmp`) whose `||` branch, if any,
+    asserts, and that is not a self-tautology (a `grep` of a file the arm
+    wrote with `echo` is one). `case` arms are walked like `if` arms.
+    `log … skip` is accepted only when the arm names a `KERBER_REQUIRE_`
+    requirement that a `die` in the same script enforces.
     """
     text = _join_shell_continuations(text)
     hits: list[int] = []
@@ -541,7 +636,8 @@ def informational_if_starts(text: str) -> list[int]:
             continue
         if stack:
             stack[-1][2].append(line)
-    return hits
+    hits.extend(_case_informational_starts(text))
+    return sorted(set(hits))
 
 
 def check_nextest_profile(workflows: list[Workflow]) -> None:
@@ -812,6 +908,50 @@ _ITEM_DEF = re.compile(
     r"\s+([A-Za-z_][A-Za-z0-9_]*)\b"
 )
 _STATUS_QUOTE = re.compile(r"`([A-Z][A-Z0-9_][A-Z0-9_ /-]{1,})`")
+_BARE_STATUS = re.compile(r"(?<![`\w])([A-Z][A-Z0-9]*_[A-Z0-9_]+)(?![`\w])")
+_MIT_CITE = re.compile(r"\b[\w.-]+\.(?:c|h|y|et|x|hin)\b")
+_MIT_NA = re.compile(r"^\s*(?:n/a|absent|—|-|RFC\s*\d)", re.I)
+_PROOF_UNIT = re.compile(r"`([a-z][a-z0-9]*(?:_[a-z0-9]+)+)`")
+_PROOF_CASE = re.compile(r"`([a-z][a-z0-9]*(?:-[a-z0-9]+)+)`")
+_PROOF_GATE = re.compile(r"\b([\w-]+-gate\.sh)\b")
+_FN_NAMES: set[str] | None = None
+_CASE_TEXT: str | None = None
+
+
+def _status_tokens(text: str) -> list[str]:
+    """Backticked ALL-CAPS status words plus bare `WORD_WORD` identifiers."""
+    toks = _STATUS_QUOTE.findall(text)
+    toks += _BARE_STATUS.findall(_STATUS_QUOTE.sub(" ", text))
+    return toks
+
+
+def _fn_names() -> set[str]:
+    global _FN_NAMES
+    if _FN_NAMES is None:
+        names: set[str] = set()
+        for src in (ROOT / "crates").rglob("*.rs"):
+            names.update(re.findall(r"\bfn\s+([a-z_][a-z0-9_]*)", src.read_text(errors="replace")))
+        _FN_NAMES = names
+    return _FN_NAMES
+
+
+def _case_text() -> str:
+    global _CASE_TEXT
+    if _CASE_TEXT is None:
+        parts = [q.read_text(errors="replace") for q in (ROOT / "scripts").glob("*-gate.sh")]
+        diffsend = ROOT / "crates/krb5-protocol/examples/diffsend.rs"
+        if diffsend.is_file():
+            parts.append(diffsend.read_text(errors="replace"))
+        _CASE_TEXT = "\n".join(parts)
+    return _CASE_TEXT
+
+
+def _proof_exists(proof: str) -> bool:
+    if any(n in _fn_names() for n in _PROOF_UNIT.findall(proof)):
+        return True
+    if any((ROOT / "scripts" / g).is_file() for g in _PROOF_GATE.findall(proof)):
+        return True
+    return any(f'"{c}"' in _case_text() or f"'{c}'" in _case_text() for c in _PROOF_CASE.findall(proof))
 _CRATE_ALIASES = {
     "kdc": "krb5-kdc",
     "admin": "krb5-admin",
@@ -1001,16 +1141,19 @@ def _code_without_line_comment(line: str) -> str:
     return "".join(out)
 
 
-def _item_span(path: pathlib.Path, symbol: str) -> tuple[int, int, str] | None:
+def _item_spans(path: pathlib.Path, symbol: str) -> list[tuple[int, int, str]]:
+    """Every brace-matched definition of `symbol` in `path`, in file order."""
     lines = path.read_text(errors="replace").splitlines()
-    start = None
-    for i, line in enumerate(lines, 1):
-        m = _ITEM_DEF.match(line)
-        if m and m.group(2) == symbol:
-            start = i
-            break
-    if start is None:
-        return None
+    starts = [i for i, line in enumerate(lines, 1) if (m := _ITEM_DEF.match(line)) and m.group(2) == symbol]
+    return [_span_from(lines, s) for s in starts]
+
+
+def _item_span(path: pathlib.Path, symbol: str) -> tuple[int, int, str] | None:
+    spans = _item_spans(path, symbol)
+    return spans[0] if len(spans) == 1 else None
+
+
+def _span_from(lines: list[str], start: int) -> tuple[int, int, str]:
     depth = 0
     seen_brace = False
     end = start
@@ -1058,7 +1201,14 @@ def _resolve_src(
 
 
 def check_ledger_anchors(text: str | None = None) -> None:
-    """Every rust-site `file.rs symbol` resolves; exact rows quote-check the body."""
+    """Every rust-site `file.rs symbol[:N]` resolves to one item; exact rows verify their claim.
+
+    The MIT column must cite a MIT file (or say n/a / absent). An `exact` row's
+    e_text status words (backticked, or bare `WORD_WORD` identifiers) must occur
+    in the anchored item body; a row with no such word must name a proof unit,
+    diffsend case or gate that exists. A symbol defined more than once in a file
+    needs `:N` inside the intended definition.
+    """
     checking_file = text is None
     if text is None:
         if not LEDGER.is_file():
@@ -1078,6 +1228,8 @@ def check_ledger_anchors(text: str | None = None) -> None:
             continue
         site, etext = cols[3], cols[4]
         where = f"docs/mit-parity-ledger.md:{i}"
+        if not (_MIT_CITE.search(cols[0]) or _MIT_NA.match(cols[0])):
+            _die(f"{where} MIT column names no MIT file: {cols[0].strip()}")
         bodies: list[str] = []
         saw_symbol = False
         for m in _RUST_ANCHOR.finditer(site):
@@ -1088,32 +1240,92 @@ def check_ledger_anchors(text: str | None = None) -> None:
                 continue
             saw_symbol = True
             path = _resolve_src(m.group("crate"), fname, by_crate, by_base, where)
-            span = _item_span(path, symbol)
-            if span is None:
+            spans = _item_spans(path, symbol)
+            if not spans:
                 _die(f"{where} {fname} {symbol} is not an item in {path}")
-            start, end, body = span
-            bodies.append(body)
             if lineno:
                 n = int(lineno)
-                if not (start <= n <= end):
-                    _die(
-                        f"{where} {fname}:{n} is not inside {symbol} "
-                        f"({start}-{end})"
-                    )
+                inside = [s for s in spans if s[0] <= n <= s[1]]
+                if not inside:
+                    ranges = ", ".join(f"{s[0]}-{s[1]}" for s in spans)
+                    _die(f"{where} {fname}:{n} is not inside {symbol} ({ranges})")
+                spans = inside
+            if len(spans) > 1:
+                starts = ", ".join(str(s[0]) for s in spans)
+                _die(
+                    f"{where} {fname} {symbol} is defined {len(spans)} times "
+                    f"(lines {starts}); add :N inside the intended item"
+                )
+            bodies.append(spans[0][2])
         if _is_exact_verdict(cols[5]):
             if not saw_symbol:
                 _die(f"{where} exact row has no rust-site anchor")
             joined = "\n".join(bodies)
-            quoted = f"{cols[2]} {etext}"
-            for q in _STATUS_QUOTE.findall(quoted):
+            checked = 0
+            for q in _status_tokens(etext):
                 ident = re.sub(r"[^A-Z0-9]+", "_", q).strip("_")
-                if "_" not in ident and " " not in q:
-                    continue
-                n_quote += 1
+                checked += 1
                 if q not in joined and ident not in joined:
                     _die(f"{where} `{q}` not in rust-site item body")
-    if checking_file and n_quote < 75:
-        _die(f"docs/mit-parity-ledger.md quote checks {n_quote} < 75")
+            n_quote += checked
+            if checked == 0 and not _proof_exists(cols[6]):
+                _die(f"{where} exact row verifies nothing: no e_text status word, no existing proof unit or cell")
+    if checking_file and n_quote == 0:
+        _die("docs/mit-parity-ledger.md executed no quote checks")
+
+
+_MIT_CITE_FILE = re.compile(r"\b([\w.-]+\.(?:c|h|y|et|x|hin))\b")
+_MIT_IDENTS: dict[str, tuple[set[str], set[str], set[str]]] = {}
+
+
+def _mit_index(src: pathlib.Path) -> tuple[set[str], set[str], set[str]]:
+    """Basenames, identifiers and quoted status strings of a MIT source tree."""
+    key = str(src)
+    if key not in _MIT_IDENTS:
+        names: set[str] = set()
+        idents: set[str] = set()
+        strings: set[str] = set()
+        suffixes: set[str] = set()
+        for f in src.rglob("*"):
+            if f.suffix not in {".c", ".h", ".y", ".et", ".x", ".hin"} or not f.is_file():
+                continue
+            names.add(f.name)
+            body = f.read_text(errors="replace")
+            idents.update(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", body))
+            strings.update(re.findall(r'"([A-Z][A-Z0-9 _/-]+)"', body))
+        for ident in idents:
+            parts = ident.split("_")
+            suffixes.update("_".join(parts[k:]) for k in range(1, len(parts)))
+        _MIT_IDENTS[key] = (names, idents | suffixes, strings)
+    return _MIT_IDENTS[key]
+
+
+def check_ledger_mit_cites(text: str | None = None, src: pathlib.Path | None = None) -> None:
+    """Every MIT cite names a file of the tree; every MIT status word is an identifier there, a `_`-suffix of one, or a status string."""
+    if src is None:
+        env = os.environ.get("KERBER_MIT_SRC")
+        if not env:
+            return
+        src = pathlib.Path(env)
+    if not src.is_dir():
+        _die(f"KERBER_MIT_SRC {src} is not a directory")
+    if text is None:
+        text = LEDGER.read_text()
+    names, idents, strings = _mit_index(src)
+    for i, line in enumerate(text.splitlines(), 1):
+        if not line.startswith("|") or "MIT file:line" in line or line.startswith("| ---"):
+            continue
+        cols = _split_ledger_row(line)
+        if len(cols) < 7 or cols[5] == "verdict":
+            continue
+        where = f"docs/mit-parity-ledger.md:{i}"
+        for f in _MIT_CITE_FILE.findall(cols[0]):
+            if f not in names:
+                _die(f"{where} MIT cite {f} is not a file under {src}")
+        for tok in _status_tokens(cols[2]):
+            ident = re.sub(r"[^A-Z0-9]+", "_", tok).strip("_")
+            if tok not in strings and ident not in idents and tok.strip() not in idents:
+                _die(f"{where} MIT status `{tok}` is neither an identifier nor a status string in {src}")
 
 
 def check_working_gitignored() -> None:
@@ -1299,9 +1511,7 @@ def check_red_at_sha_inject(text: str | None = None) -> None:
     inj = "crates/krb5-types/tests/k3_parse_deltat.rs"
     if probe.returncode != 0 or not (ROOT / inj).is_file():
         return
-    scratch = pathlib.Path(
-        subprocess.check_output(["mktemp", "-d"], text=True).strip()
-    )
+    scratch = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
     env["KERBER_SCRATCH"] = str(scratch)
     try:
         r = subprocess.run(
@@ -1343,10 +1553,16 @@ def _claim_audit_module():
     return mod
 
 
+def _scratch_root() -> pathlib.Path:
+    base = pathlib.Path(os.environ.get("KERBER_SCRATCH") or ROOT / "target" / "ci-policy")
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
 def check_claim_audit() -> None:
     """Round 3: claim-audit.py fails a non-asserting line, a log-only bullet and a grep settle."""
     mod = _claim_audit_module()
-    root = pathlib.Path(subprocess.check_output(["mktemp", "-d"], text=True).strip())
+    root = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
     try:
         (root / "scripts").mkdir()
         pad = 'echo "---- pad ----"\n' * 4
@@ -1365,8 +1581,12 @@ def check_claim_audit() -> None:
         ev.mkdir()
         stamp = "head_sha=0\ntree_sha=0\n"
         (ev / "good.log").write_text(stamp + "value=1\n")
-        (ev / "settle-live.log").write_text(stamp + "cmd=docker exec x sh -c true\nvalue=1\n")
+        (ev / "settle-live.log").write_text(stamp + "cmd=docker exec x kinit user\nvalue=1\n")
         (ev / "settle-grep.log").write_text(stamp + "cmd=grep -F value=1 /tmp/x.log\nvalue=1\n")
+        (ev / "settle-run.log").write_text(stamp + "cmd=scripts/fx-gate.sh\nvalue=1\n")
+        (root / "scripts" / "fx-policy.py").write_text(
+            "def check():\n    if bad:\n        _die('value=1 wrong')\n\n\ndef _self_test():\n    _must_die(check, 'value=1')\n"
+        )
         head = "## Settled live (every bullet names the asserting cell on both legs)\n\n"
 
         def rows(bullet: str):
@@ -1399,7 +1619,18 @@ def check_claim_audit() -> None:
         )
         live = "- **Live settle:** `value=1` at `scripts/fx-gate.sh:9`; `settle-live.log`.\n"
         if any(r[1] != "ok" for r in rows(live)):
-            _die(f"claim-audit refused a live settle as the MIT leg: {rows(live)}")
+            _die(f"claim-audit refused an oracle settle as the MIT leg: {rows(live)}")
+        must_fail(
+            "- **Gate-run settle:** `value=1` at `scripts/fx-gate.sh:9`; `settle-run.log`.\n",
+            "takes a Rust-side gate run as the MIT leg",
+        )
+        must_fail(
+            "- **Tooling without fixture:** `value=1` at `scripts/fx-policy.py:3`.\n",
+            "names a tooling die site without its fixture",
+        )
+        tooling = "- **Tooling with fixture:** `value=1` at `scripts/fx-policy.py:3` / `:7`.\n"
+        if any(r[1] != "ok" for r in rows(tooling)):
+            _die(f"claim-audit refused a tooling claim with its fixture: {rows(tooling)}")
     finally:
         subprocess.run(["rm", "-rf", str(root)], check=False)
 
@@ -1549,6 +1780,41 @@ jobs:
     ):
         if not informational_if_starts(snippet):
             raise AssertionError(f"counter-example {i} must be informational")
+    for i, snippet in enumerate(
+        (
+            'if true; then\n    grep -q x f || { echo skip; }\nfi\n',
+            'if true; then\n    grep -q x f || :\nfi\n',
+            'if true; then\n    echo skip > "$OUT/x.log"\n    grep -q skip "$OUT/x.log"\nfi\n',
+            'if true; then\n    /bin/echo skip\nfi\n',
+            'if true; then\n    log_info "skipping"\nfi\n',
+            'if true; then\n    [ -n "$x" ] && echo skip\nfi\n',
+            'case "$x" in\n    *) echo skip ;;\nesac\n',
+            'case "$x" in\n    a)\n        echo skip\n        ;;\n    *) die x ;;\nesac\n',
+        )
+    ):
+        if not informational_if_starts(snippet):
+            raise AssertionError(f"round-2 counter-example {i} must be informational")
+    for i, snippet in enumerate(
+        (
+            'if true; then\n    grep -q x f || die x\nfi\n',
+            'if true; then\n    [ -n "$x" ] && exit 1\nfi\n',
+            'if true; then\n    docker exec c true > "$OUT/x.log"\n    grep -q ok "$OUT/x.log"\nfi\n',
+            'if true; then\n    grep -q x f || { log "g" "error" x; exit 1; }\nfi\n',
+            'case "$x" in\n    *) die x ;;\nesac\n',
+        )
+    ):
+        if informational_if_starts(snippet):
+            raise AssertionError(f"round-2 positive control {i} must assert")
+    skip_scoped = (
+        'if [ "${KERBER_REQUIRE_NETEM:-0}" = 1 ]; then\n'
+        '    die "required"\n'
+        "fi\n"
+        "if true; then\n"
+        '    log "g" "skip" "foo missing"\n'
+        "fi\n"
+    )
+    if not informational_if_starts(skip_scoped):
+        raise AssertionError("a skip that names no enforced requirement must be informational")
     skip_require = (
         'if [ "${KERBER_REQUIRE_NETEM:-0}" = 1 ]; then\n'
         '    die "required"\n'
@@ -1704,16 +1970,19 @@ jobs:
         "**1** = A1 0 + A2 1 + A3 0.",
     )
     _must_die(check_ledger_tally, ledger_tally_wrong_split)
-    def _row(site: str, etext: str = "—", verdict: str = "exact") -> str:
+    def _row(site: str, etext: str = "—", verdict: str = "exact", proof: str = "none") -> str:
         return (
             "| MIT file:line | check | MIT | Rust | e_text | verdict | proof |\n"
             "| --- | --- | --- | --- | --- | --- | --- |\n"
-            f"| kdc_util.c:1 | x | y | {site} | {etext} | {verdict} | none |\n"
+            f"| kdc_util.c:1 | x | y | {site} | {etext} | {verdict} | {proof} |\n"
         )
 
+    unit = "`udp_oversize_reply_is_response_too_big`"
+
     check_ledger_anchors(_row("none", verdict="absent"))
-    check_ledger_anchors(_row("krb5-kdc/listen.rs handle_tcp"))
-    check_ledger_anchors(_row("krb5-kdc/listen.rs MAX_TCP_REQUEST"))
+    check_ledger_anchors(_row("krb5-kdc/listen.rs handle_tcp", proof=unit))
+    check_ledger_anchors(_row("krb5-kdc/listen.rs MAX_TCP_REQUEST", proof="`kdc-gate.sh:1`"))
+    check_ledger_anchors(_row("krb5-kdc/listen.rs handle_tcp", proof="`as-success`"))
     check_ledger_anchors(
         _row("krb5-kdc/status.rs NEEDED_PREAUTH", "`NEEDED_PREAUTH`")
     )
@@ -1721,6 +1990,33 @@ jobs:
         _row("krb5-kdc/preauth.rs armor_key_from_ap", "`NOT_US` / `TKT_NYV`")
     )
     _must_die(check_ledger_anchors, _row("missing.rs no_such_fn", "`PROCESS_TGS`"))
+    fake_mit = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    try:
+        (fake_mit / "kdc").mkdir()
+        (fake_mit / "kdc" / "kdc_util.c").write_text('int x = KRB_ERR_RESPONSE_TOO_BIG;\nstatus = "CLIENT KEY EXPIRED";\n')
+        mit_row = _row("krb5-kdc/listen.rs handle_tcp", proof=unit).replace("| x | y |", "| x | `KRB_ERR_RESPONSE_TOO_BIG` `CLIENT KEY EXPIRED` |")
+        check_ledger_mit_cites(mit_row, fake_mit)
+        check_ledger_mit_cites(mit_row.replace("KRB_ERR_RESPONSE_TOO_BIG", "RESPONSE_TOO_BIG"), fake_mit)
+        _must_die(check_ledger_mit_cites, mit_row.replace("KRB_ERR_RESPONSE_TOO_BIG", "RESPONSE_TOO_BI"), fake_mit)
+        _must_die(check_ledger_mit_cites, mit_row.replace("CLIENT KEY EXPIRED", "CLIENT KEY EXPIRE"), fake_mit)
+        _must_die(check_ledger_mit_cites, mit_row.replace("kdc_util.c:1", "no_such.c:1"), fake_mit)
+    finally:
+        subprocess.run(["rm", "-rf", str(fake_mit)], check=False)
+    _must_die(check_ledger_anchors, _row("krb5-kdc/plugins.rs advertise", verdict="absent"))
+    check_ledger_anchors(_row("krb5-kdc/plugins.rs advertise:100", verdict="absent"))
+    _must_die(check_ledger_anchors, _row("krb5-kdc/plugins.rs advertise:1", verdict="absent"))
+    _must_die(check_ledger_anchors, _row("krb5-kdc/listen.rs handle_tcp", "no status word"))
+    _must_die(check_ledger_anchors, _row("krb5-kdc/listen.rs handle_tcp", proof="`no_such_unit_anywhere`"))
+    check_ledger_anchors(_row("krb5-kdc/listen.rs handle_tcp", "no status word", proof=unit))
+    _must_die(check_ledger_anchors, _row("krb5-kdc/listen.rs handle_tcp", "NOT_A_REAL_STATUS 60"))
+    check_ledger_anchors(_row("krb5-kdc/listen.rs handle_tcp", "FIELD_TOOLONG 52"))
+    _must_die(
+        check_ledger_anchors,
+        _row("krb5-kdc/listen.rs handle_tcp", "`TKT_NYV`").replace("| kdc_util.c:1 |", "| issue.rs:1 |"),
+    )
+    check_ledger_anchors(
+        _row("krb5-kdc/listen.rs handle_tcp", "x", "absent").replace("| kdc_util.c:1 |", "| n/a (harness) |")
+    )
     _must_die(check_ledger_anchors, _row("issue.rs no_such_fn_at_all"))
     _must_die(check_ledger_anchors, _row("krb5-kdc/listen.rs handle_tcp:1"))
     _must_die(check_ledger_anchors, _row("listen.rs handle_tcp"))
@@ -1820,6 +2116,7 @@ def main() -> None:
     check_ledger_proof_column()
     check_ledger_tally()
     check_ledger_anchors()
+    check_ledger_mit_cites()
     check_claim_audit()
     print("ci-policy: ok")
 

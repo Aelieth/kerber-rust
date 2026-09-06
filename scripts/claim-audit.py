@@ -15,9 +15,12 @@ to a function of the same script whose body asserts.  A bullet passes
 when every reference passes, it names a cell on each leg (Rust and MIT,
 from container variables around the line — `"$NAME"`, `NAME_MIT`,
 `MIT_`/`RUST_`, `mit_local`, `kadmin.local`, `kdb5_util`; a `diff <(`
-line is both) or a live settle artefact (its `cmd=` is not grep/sed/cat
-of a file), and every artefact
-exists, is stamped (`head_sha=` and `tree_sha=`) and carries a quoted value.
+line is both; a cell in a Samba, Heimdal or AD gate carries the oracle
+leg) or an oracle settle artefact (its `cmd=` runs a MIT,
+Samba or Heimdal tool — a Rust-side gate run is not a leg), a tooling
+bullet (references into `scripts/*.py`) names a fixture line or a line
+inside a check that runs the tool, and every artefact exists, is stamped (`head_sha=`
+and `tree_sha=`) and carries a quoted value.
 
 usage: claim-audit.py [--evidence-dir DIR] [--stamp] SUMMARY...
 """
@@ -39,7 +42,7 @@ CITE_RE = re.compile(r"^[\w./-]+\.(?:c|h|y|et|x|rs|md|txt)(?::[\d,-]+)?$")
 UNIT_RE = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$")
 ASSERT_RE = re.compile(
     r"grep -[a-zA-Z]*[qFEx]\b|diff <\(|\bdie\b|\bexit [1-9]|^\s*\[{1,2} |\bif \[|\belif \[|^\s*test "
-    r"|\|\| \{|^\s*assert\b|raise SystemExit|\b_die\(",
+    r"|\|\| \{|^\s*assert\b|raise SystemExit|\b_die\(|_must_die\(|must_fail\(|_must_pass\(|raise AssertionError",
     re.M,
 )
 FUNC_RE = re.compile(r"^(\w+)\(\) \{$", re.M)
@@ -51,6 +54,18 @@ RUST_RE = re.compile(
     r'"\$NAME"|\$NAME\b(?!_MIT)|\bRUST_|\brust_'
 )
 SOURCE_CMDS = {"grep", "egrep", "fgrep", "rg", "sed", "cat", "head", "tail", "awk"}
+ORACLE_TOOLS = {
+    "kinit", "kvno", "klist", "kdestroy", "kpasswd", "kadmin", "kadmin.local", "kadmind", "kdb5_util",
+    "krb5kdc", "kprop", "kpropd", "kproplog", "ktutil", "gss-mit-client", "gss-mit-server",
+    "rd-safe-oracle", "kadm5-changepw-rpc", "kadm5_probe", "samba-tool", "ndrdump", "ldbsearch",
+    "smbclient", "net", "kimpersonate",
+}
+ORACLE_RE = re.compile(r"mit|oracle|samba|heimdal", re.I)
+ORACLE_GATE_RE = re.compile(r"(?:samba|heimdal|ad-)[\w-]*-gate\.sh$")
+DOCKER_OPT_ARG = {"-e", "--env", "-w", "--workdir", "-u", "--user", "--entrypoint", "--name", "--network"}
+FIXTURE_RE = re.compile(r"_must_die\(|must_fail\(|_must_pass\(|\bassert\b|raise AssertionError")
+PROBE_RE = re.compile(r"subprocess\.(?:run|check_output|Popen)\(|_must_die\(|must_fail\(|\bassert\b")
+DEF_RE = re.compile(r"^(?:def |[A-Za-z_])")
 HEADER = "asserting cell"
 
 
@@ -173,6 +188,15 @@ def asserting_text(root: pathlib.Path, path: str, window: str) -> str | None:
     return "\n".join([window, *called])
 
 
+def enclosing_def(lines: tuple[str, ...], lineno: int) -> str:
+    """Body of the top-level `def` that contains `lineno` (1-based); empty when none."""
+    start = next((i for i in range(lineno - 1, -1, -1) if lines[i].startswith("def ")), None)
+    if start is None:
+        return ""
+    end = next((i for i in range(start + 1, len(lines)) if DEF_RE.match(lines[i])), len(lines))
+    return "\n".join(lines[start:end])
+
+
 def value_in(values: list[str], text: str) -> bool:
     flat = " ".join(text.split())
     for v in values:
@@ -195,12 +219,42 @@ def read_text(p: pathlib.Path) -> str:
     return p.read_bytes().decode("utf-8", "replace")
 
 
-def settle_is_live(text: str) -> bool | None:
+def settle_tool(cmd: str) -> str:
+    """The program a settle really ran: through `docker exec … NAME tool` and `sh -c '…'`."""
+    words = cmd.split()
+    if words and pathlib.Path(words[0]).name == "docker":
+        rest = words[1:]
+        if rest and rest[0] in {"exec", "run"}:
+            rest = rest[1:]
+        while rest and rest[0].startswith("-"):
+            rest = rest[2:] if rest[0] in DOCKER_OPT_ARG else rest[1:]
+        words = rest[1:]
+    if len(words) >= 3 and words[0] in {"sh", "bash", "dash"} and words[1] == "-c":
+        words = words[2].strip("'\"").split()
+    return pathlib.Path(words[0]).name if words else ""
+
+
+def settle_kind(text: str) -> str | None:
+    """`oracle`, `run` or `reader` for a settle's `cmd=` line; None without one.
+
+    A `sh -c` whose script continues on the following lines is an oracle
+    when that script runs an oracle tool.
+    """
     m = re.search(r"^cmd=(.*)$", text, re.M)
     if not m:
         return None
-    words = m.group(1).split()
-    return bool(words) and pathlib.Path(words[0]).name not in SOURCE_CMDS
+    tool = settle_tool(m.group(1))
+    if tool in {"sh", "bash", "dash"} and m.group(1).rstrip().endswith("-c"):
+        body = text[m.end():].split("\n====", 1)[0].split("\n\n", 1)[0]
+        words = set(re.findall(r"[\w.-]+", body))
+        if words & ORACLE_TOOLS or any(ORACLE_RE.search(w) for w in words):
+            return "oracle"
+        return "run"
+    if not tool or tool in SOURCE_CMDS:
+        return "reader"
+    if tool in ORACLE_TOOLS or ORACLE_RE.search(tool):
+        return "oracle"
+    return "run"
 
 
 def resolve_artefact(root: pathlib.Path, evidence: pathlib.Path | None, name: str) -> pathlib.Path | None:
@@ -213,6 +267,8 @@ def resolve_artefact(root: pathlib.Path, evidence: pathlib.Path | None, name: st
 def check_bullet(b: Bullet, root: pathlib.Path, evidence: pathlib.Path | None) -> None:
     legs: set[str] = set()
     gate_refs = 0
+    tool_refs = 0
+    fixture_ref = False
     passing = 0
     for path, a, z in b.refs:
         lines = script_lines(root, path)
@@ -235,11 +291,18 @@ def check_bullet(b: Bullet, root: pathlib.Path, evidence: pathlib.Path | None) -
             b.reasons.append(f"{path}:{a} asserts none of the quoted values")
             continue
         passing += 1
+        if path.endswith(".py"):
+            tool_refs += 1
+            fixture_ref = fixture_ref or bool(
+                FIXTURE_RE.search(window) or PROBE_RE.search(enclosing_def(lines, a))
+            )
         if path.endswith("-gate.sh"):
             gate_refs += 1
             here = {n for n, rx in (("mit", MIT_RE), ("rust", RUST_RE)) if rx.search(window)}
             if "diff <(" in window:
                 here |= {"mit", "rust"}
+            if ORACLE_GATE_RE.search(path):
+                here.add("mit")
             legs |= here
             b.notes.append(f"{path}:{a}-{z} legs={','.join(sorted(here)) or '-'}")
     for u in b.units:
@@ -257,18 +320,22 @@ def check_bullet(b: Bullet, root: pathlib.Path, evidence: pathlib.Path | None) -
         if b.values and not value_in(b.values, text):
             b.reasons.append(f"artefact {name} carries none of the quoted values")
         if p.name.startswith("settle-"):
-            live = settle_is_live(text)
-            if live is None:
+            kind = settle_kind(text)
+            if kind is None:
                 b.reasons.append(f"settle {name} has no cmd= line")
-            elif live:
+            elif kind == "reader":
+                b.reasons.append(f"settle {name} is a source excerpt, not a live settle")
+            elif kind == "oracle":
                 live_settle = True
             else:
-                b.reasons.append(f"settle {name} is a source excerpt, not a live settle")
+                b.notes.append(f"settle {name} is a gate run, not an oracle leg")
     if passing == 0:
         b.reasons.append("names no asserting cell")
     elif gate_refs and not ({"rust", "mit"} <= legs or ("rust" in legs and live_settle)):
         missing = ", ".join(sorted({"rust", "mit"} - legs))
-        b.reasons.append(f"no cell on the {missing} leg and no live settle")
+        b.reasons.append(f"no cell on the {missing} leg and no oracle settle")
+    elif not gate_refs and tool_refs and not fixture_ref:
+        b.reasons.append("tooling claim names no fixture line")
 
 
 def audit_text(
