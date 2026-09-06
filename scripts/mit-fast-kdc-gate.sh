@@ -67,9 +67,9 @@ fi
 # krb5int_fast_verify_nego traces "FAST negotiation: available". A bad checksum
 # would instead be KRB5_KDCREP_MODIFIED; a missing PA-FX-FAST, "unavailable".
 echo "==== MIT plain kinit negotiated FAST availability from the Rust KDC ===="
-ARMOR_TRACE="$(docker exec "$NAME" cat /tmp/armor.trace)"
-if ! echo "$ARMOR_TRACE" | grep -F 'FAST negotiation: available'; then
-    echo "$ARMOR_TRACE" >&2
+MIT_ARMOR_TRACE="$(docker exec "$NAME" cat /tmp/armor.trace)"
+if ! echo "$MIT_ARMOR_TRACE" | grep -F 'FAST negotiation: available'; then
+    echo "$MIT_ARMOR_TRACE" >&2
     log "fast.kdc.gate" "error" ',"error":"plain kinit did not negotiate FAST availability"'
     exit 1
 fi
