@@ -6,6 +6,16 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-J L1b
+
+- **gss.** `process_checksum` matches MIT 1.22.2 `accept_sec_context.c`:
+  a missing authenticator checksum yields flags 0 and no AP-REP; a
+  non-0x8003 checksum is verified over empty data with the ticket session
+  key; `cb_len != 16` is failure; an all-zero token CB is accepted when
+  the acceptor has bindings; mismatch is channel-bindings; matching CB
+  sets `GSS_C_CHANNEL_BOUND`. `gss-gate.sh` pins no-checksum / CB accept /
+  CB mismatch on both legs.
+
 ### W1-J L1a
 
 - **gss.** `unwrap_v3` / `verify_enc_header` match MIT 1.22.2 `unwrap.c`:

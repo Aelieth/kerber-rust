@@ -35,9 +35,9 @@ Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after W1-J L1a unwrap_v3):
-**281** = A1 116 + A2 68 + A3 55 + A4 42.
-exact 88 · stricter-documented 12 · deviation 99 ·
+Counts (after W1-J L1b process_checksum):
+**282** = A1 116 + A2 68 + A3 55 + A4 43.
+exact 90 · stricter-documented 12 · deviation 98 ·
 absent 67 · deferred 15.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
@@ -429,7 +429,8 @@ checksum/rc4/declared-cksumtype rows that sat under A3.
 | recvauth.c:132-138,150-186; rd_req.c:56-57 | kpropd junk AP-REQ: not APPLICATION 14 → `KRB_AP_ERR_MSG_TYPE`; else `problem - ERROR_TABLE_BASE_krb5` > 127 → **60**; `e_text = error_message` + NUL | **40** `Invalid message type\0` for `\xff\x00\x01` | kprop.rs kprop_rd_req_error | **40** + NUL | exact | `kpropd_ap_req_fail_is_krb_error`; `scripts/kprop-gate.sh` junk AP-REQ both legs |
 | svc.c:328-367,486-520; rpc_callmsg.c:107-108; kadm_rpc_svc.c:80-88 | kadmind RPC: unknown program `PROG_UNAVAIL`; 2112 wrong vers `PROG_MISMATCH` low/high 2; AUTH_NONE `AUTH_TOOWEAK`; REPLY-typed no reply | accepted 1 / accepted 2+2+2 / denied AUTH_TOOWEAK 5 / idle | kadm5.rs handle_rpc | same | exact | `bad_program_is_prog_unavail`; `kadm_vers_99_is_prog_mismatch_2_2`; `reply_typed_rpc_is_no_reply`; `scripts/kadmin-gate.sh` framing both legs |
 | crypto_int.h:596-608; krb5_c_verify_checksum | declared cksumtype `ctp` selects the verifier | n/a | krb5-crypto/ops.rs verify_checksum_type | declared type used | exact | `verify_checksum_type_honours_declared_unkeyed`; `verify_checksum_type_md5_hmac_rc4_uses_raw_key` |
-| rd_req_dec.c:748-749 | AP-REQ authenticator checksum keyed with the ticket session key; app checksum supplied by the acceptor | n/a | krb5-protocol/ap_req.rs verify_ap_req_ex | session key; `app_cksum` is still `None` from the GSS acceptor (L1b) | deviation | W1-J L1b; `verify_ap_req` path |
+| rd_req_dec.c:748-749 | AP-REQ authenticator checksum keyed with the ticket session key; GSS acceptor supplies empty `app_cksum` so a non-0x8003 type is verified over empty data | n/a | krb5-protocol/ap_req.rs verify_inner | session key; 0x8003 skipped | exact | `accept_non_8003_over_data_is_bad_sig`; `accept_non_8003_empty_with_subkey_uses_session_key` |
+| accept_sec_context.c:464-618 | `process_checksum`: missing cksum → flags 0 and no AP-REP; non-0x8003 REPLAY\|SEQUENCE\|MUTUAL from AP options; 0x8003 `cb_len != 16` failure; all-zero token CB accepted; mismatch channel bindings; `INITIATOR_FLAGS`; `GSS_C_CHANNEL_BOUND`; `option_id == 1`; skip unknown extensions; CBT authdata | n/a | krb5-gss/lib.rs process_checksum | `gss failure`; `gss channel bindings`; CHANNEL_BOUND 0x0800 | exact | `accept_no_checksum_is_flags_zero_and_no_ap_rep`; `accept_zero_token_cb_with_acceptor_cb_is_ok`; `scripts/gss-gate.sh` no-checksum / CB / mismatch cells both legs |
 | rd_safe.c:43-125 | KRB-SAFE checksum over the received body DER (`krb5_safe_with_body`) | n/a | krb5-protocol/safe_priv.rs unwrap_krb_safe_ex; krb5-protocol/safe_priv.rs verify_krb_safe_checksum | re-encodes a clone with a zeroed checksum (L2b) | deviation | W1-J L2b |
 | unwrap.c:191-240,272-371 | GSS wrap unwrap: direction, filler, EC strip, `verify_enc_header` (RRC not compared) | n/a | krb5-gss/lib.rs unwrap_v3 | direction Integrity; filler/EC Truncated; EC stripped | exact | `unwrap_conf_ec_padding_is_stripped`; `unwrap_direction_flipped_is_bad_sig`; `scripts/gss-gate.sh` DCE + mutation cells both legs |
 | server_stubs.c: add/delete ACL denial | add/delete ACL denial | `KADM5_AUTH_ADD` / `KADM5_AUTH_DELETE` | krb5-admin/kadm5.rs dispatch_kadm5_ticket | create path `AUTH_ADD`; some denials still `AUTH_GET` | deviation | W1-C; `acl_target_pattern_scopes_add_and_delete` (create is AUTH_ADD) |

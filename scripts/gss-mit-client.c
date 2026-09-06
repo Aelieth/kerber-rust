@@ -104,6 +104,14 @@ int main(int argc, char **argv) {
     OM_uint32 ret_flags = 0;
     const char *dump_path = getenv("GSS_DUMP_TOKEN");
     int dumped = 0;
+    struct gss_channel_bindings_struct cb = { 0 };
+    gss_channel_bindings_t cbt = GSS_C_NO_CHANNEL_BINDINGS;
+    const char *cbapp = getenv("GSS_CHANNEL_BINDINGS");
+    if (cbapp && cbapp[0]) {
+        cb.application_data.value = (void *)cbapp;
+        cb.application_data.length = strlen(cbapp);
+        cbt = &cb;
+    }
     do {
         maj = gss_init_sec_context(
             &min,
@@ -115,7 +123,7 @@ int main(int argc, char **argv) {
                 | (want_deleg ? GSS_C_DELEG_FLAG : 0)
                 | (want_dce ? GSS_C_DCE_STYLE : 0),
             0,
-            GSS_C_NO_CHANNEL_BINDINGS,
+            cbt,
             (in.length ? &in : GSS_C_NO_BUFFER),
             NULL,
             &out,

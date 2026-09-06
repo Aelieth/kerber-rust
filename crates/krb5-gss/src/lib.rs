@@ -14,8 +14,9 @@ use krb5_crypto::{
 };
 use krb5_protocol::{ReplayCache, build_ap_rep, build_ap_req_with_cksum, unwrap_krb_cred};
 use krb5_types::{
-    ApOptions, ApRep, Checksum, EncApRepPart, EncKrbCredPart, EncryptedData, EncryptionKey,
-    KerberosTime, KrbCred, KrbCredInfo, Microseconds, PrincipalName, Realm, Ticket, ku,
+    ApOptions, ApRep, AuthorizationData, AuthorizationDataValue, Checksum, EncApRepPart,
+    EncKrbCredPart, EncryptedData, EncryptionKey, KerberosTime, KrbCred, KrbCredInfo, Microseconds,
+    PrincipalName, Realm, Ticket, ku, pa,
 };
 use thiserror::Error;
 
@@ -50,8 +51,22 @@ pub const GSS_C_CONF: u32 = 16;
 pub const GSS_C_INTEG: u32 = 32;
 /// RFC 2744 `GSS_C_TRANS_FLAG` (context is exportable).
 pub const GSS_C_TRANS: u32 = 256;
+/// MIT `GSS_C_CHANNEL_BOUND_FLAG` (`gssapi_ext.h`).
+pub const GSS_C_CHANNEL_BOUND: u32 = 0x0800;
 /// MIT `GSS_C_DCE_STYLE` (`gssapi_ext.h`).
 pub const GSS_C_DCE: u32 = 0x1000;
+/// MIT `GSS_C_IDENTIFY_FLAG`.
+pub const GSS_C_IDENTIFY: u32 = 0x2000;
+/// MIT `GSS_C_EXTENDED_ERROR_FLAG`.
+pub const GSS_C_EXTENDED_ERROR: u32 = 0x4000;
+const INITIATOR_FLAGS: u32 = GSS_C_INTEG
+    | GSS_C_CONF
+    | GSS_C_MUTUAL
+    | GSS_C_REPLAY
+    | GSS_C_SEQUENCE
+    | GSS_C_DCE
+    | GSS_C_IDENTIFY
+    | GSS_C_EXTENDED_ERROR;
 const KRB5_GSS_FOR_CREDS: u16 = 1;
 const EXPORT_MAGIC: &[u8; 4] = b"K5G1";
 const EXPORT_VERSION: u8 = 1;
@@ -388,7 +403,13 @@ impl GssContext {
             addresses: None,
             now: None,
         };
-        let ok = krb5_protocol::verify_ap_req_ex(&inner[2..], &params, rcache, None)?;
+        let ok = match krb5_protocol::verify_ap_req_ex(&inner[2..], &params, rcache, Some(b"")) {
+            Ok(v) => v,
+            Err(krb5_protocol::Error::Crypto(s)) if s.contains("integrity") => {
+                return Err(Error::Integrity);
+            }
+            Err(e) => return Err(e.into()),
+        };
         let crealm = String::from_utf8_lossy(ok.ticket_part.crealm.as_bytes()).into_owned();
         let client = ok.authenticator.cname.unparse_with_realm(&crealm);
         let srealm = String::from_utf8_lossy(ok.srealm.as_bytes()).into_owned();
@@ -406,45 +427,19 @@ impl GssContext {
         } else {
             None
         };
-        let mut want_mutual = ok.mutual_required;
-        let mut delegated = None;
-        let mut gss_flags = 0u32;
-        if let Some(ck) = &ok.authenticator.cksum {
-            if ck.cksumtype == GSS_CHECKSUM_TYPE {
-                if ck.checksum.as_ref().len() < 24 {
-                    return Err(Error::ChannelBindings);
-                }
-                check_channel_bindings(ck.checksum.as_ref(), channel_bindings)?;
-                let mut f = [0u8; 4];
-                f.copy_from_slice(&ck.checksum.as_ref()[20..24]);
-                let flags = u32::from_le_bytes(f);
-                gss_flags = flags;
-                want_mutual |= flags & GSS_C_MUTUAL != 0;
-                delegated = extract_delegated(
-                    ck.checksum.as_ref(),
-                    flags,
-                    subkey.as_ref(),
-                    &ticket_session,
-                    &ctx.replay,
-                )?;
-            } else {
-                let key = subkey.as_ref().unwrap_or(&ticket_session);
-                let usage = KeyUsage::new(ku::AP_REQ_AUTH_CKSUM)?;
-                verify_checksum_type(key, usage, b"", ck.cksumtype, ck.checksum.as_ref())
-                    .map_err(|e| map_gss_cksum(&e))?;
-                gss_flags = GSS_C_REPLAY | GSS_C_SEQUENCE;
-                if ok.mutual_required {
-                    gss_flags |= GSS_C_MUTUAL;
-                }
-            }
-        }
-        if want_mutual {
-            gss_flags |= GSS_C_MUTUAL;
-        }
+        let (mut gss_flags, delegated) = process_checksum(
+            ok.authenticator.cksum.as_ref(),
+            ok.mutual_required,
+            channel_bindings,
+            &ticket_session,
+            subkey.as_ref(),
+            &ctx.replay,
+            ok.authenticator.authorization_data.as_ref(),
+        )?;
         if dce_style {
-            want_mutual = true;
             gss_flags |= GSS_C_MUTUAL | GSS_C_DCE;
         }
+        let want_mutual = gss_flags & GSS_C_MUTUAL != 0;
         let sess = subkey.unwrap_or_else(|| ticket_session.clone());
         let base = ok.authenticator.seq_number.unwrap_or(0);
         let out = Self {
@@ -1428,6 +1423,122 @@ fn krb_cred_for_deleg(ticket_session: &ProtocolKey, deleg: &DelegCred) -> Result
     Ok(encode(&cred)?)
 }
 
+fn process_checksum(
+    cksum: Option<&Checksum>,
+    ap_mutual: bool,
+    acceptor_cb: Option<&ChannelBindings>,
+    ticket_session: &ProtocolKey,
+    subkey: Option<&ProtocolKey>,
+    replay: &ReplayCache,
+    authdata: Option<&AuthorizationData>,
+) -> Result<(u32, Option<String>), Error> {
+    let mut flags_out = 0u32;
+    let mut delegated = None;
+    let mut cb_match = false;
+    match cksum {
+        None => {}
+        Some(ck) if ck.cksumtype != GSS_CHECKSUM_TYPE => {
+            flags_out = GSS_C_REPLAY | GSS_C_SEQUENCE;
+            if ap_mutual {
+                flags_out |= GSS_C_MUTUAL;
+            }
+        }
+        Some(ck) => {
+            let raw = ck.checksum.as_ref();
+            if raw.len() < 24 {
+                return Err(Error::ChannelBindings);
+            }
+            let cb_len = u32::from_le_bytes(raw[0..4].try_into().map_err(|_| Error::Truncated)?);
+            if cb_len != 16 {
+                return Err(Error::Inner("gss failure".into()));
+            }
+            let token_cb = &raw[4..20];
+            if let Some(local) = acceptor_cb {
+                let expect = ChannelBindings::bnd_hash(Some(local));
+                let token_cb_present = token_cb.iter().any(|&b| b != 0);
+                cb_match = token_cb == expect.as_slice();
+                if token_cb_present && !cb_match {
+                    return Err(Error::ChannelBindings);
+                }
+            }
+            let token_flags =
+                u32::from_le_bytes(raw[20..24].try_into().map_err(|_| Error::Truncated)?);
+            flags_out = token_flags & INITIATOR_FLAGS;
+            if cb_match {
+                flags_out |= GSS_C_CHANNEL_BOUND;
+            }
+            let mut rest = &raw[24..];
+            if rest.len() >= 4 && token_flags & GSS_C_DELEG != 0 {
+                let option_id =
+                    u16::from_le_bytes(rest[..2].try_into().map_err(|_| Error::Truncated)?);
+                let option_len = usize::from(u16::from_le_bytes(
+                    rest[2..4].try_into().map_err(|_| Error::Truncated)?,
+                ));
+                rest = &rest[4..];
+                if rest.len() < option_len {
+                    return Err(Error::Inner("gss failure".into()));
+                }
+                if option_id != KRB5_GSS_FOR_CREDS {
+                    return Err(Error::Inner("gss failure".into()));
+                }
+                delegated = extract_delegated(raw, token_flags, subkey, ticket_session, replay)?;
+                rest = &rest[option_len..];
+            }
+            while !rest.is_empty() {
+                if rest.len() < 8 {
+                    return Err(Error::Inner("gss failure".into()));
+                }
+                let option_len = usize::try_from(u32::from_be_bytes(
+                    rest[4..8].try_into().map_err(|_| Error::Truncated)?,
+                ))
+                .map_err(|_| Error::Truncated)?;
+                rest = &rest[8..];
+                if rest.len() < option_len {
+                    return Err(Error::Inner("gss failure".into()));
+                }
+                rest = &rest[option_len..];
+            }
+        }
+    }
+    let client_cbt = authenticator_cbt(authdata)?;
+    if client_cbt && acceptor_cb.is_some() && !cb_match {
+        return Err(Error::ChannelBindings);
+    }
+    Ok((flags_out, delegated))
+}
+
+fn authenticator_cbt(authdata: Option<&AuthorizationData>) -> Result<bool, Error> {
+    const AD_AP_OPTIONS: i32 = 143;
+    const KERB_AP_OPTIONS_CBT: u32 = 0x4000;
+    fn find(els: &[AuthorizationDataValue]) -> Result<Option<[u8; 4]>, Error> {
+        let mut hit = None;
+        for el in els {
+            if el.ad_type == pa::AD_IF_RELEVANT {
+                let inner: AuthorizationData = decode(el.ad_data.as_ref())?;
+                if let Some(d) = find(&inner)? {
+                    return Ok(Some(d));
+                }
+            } else if el.ad_type == AD_AP_OPTIONS {
+                if hit.is_some() {
+                    return Err(Error::Inner("gss failure".into()));
+                }
+                if el.ad_data.len() != 4 {
+                    return Err(Error::Inner("gss failure".into()));
+                }
+                let mut b = [0u8; 4];
+                b.copy_from_slice(el.ad_data.as_ref());
+                hit = Some(b);
+            }
+        }
+        Ok(hit)
+    }
+    let Some(data) = find(authdata.map_or(&[][..], |a| a.as_slice()))? else {
+        return Ok(false);
+    };
+    let v = u32::from_le_bytes(data);
+    Ok(v & KERB_AP_OPTIONS_CBT != 0)
+}
+
 fn extract_delegated(
     cksum: &[u8],
     flags: u32,
@@ -1465,27 +1576,6 @@ fn extract_delegated(
         .as_ref()
         .map_or_else(String::new, |n| n.unparse_with_realm(&realm));
     Ok(Some(name))
-}
-
-fn check_channel_bindings(cksum: &[u8], local: Option<&ChannelBindings>) -> Result<(), Error> {
-    // RFC 4121: GSS_C_NO_CHANNEL_BINDINGS on the acceptor ignores the token.
-    let Some(local) = local else {
-        return Ok(());
-    };
-    if cksum.len() < 24 {
-        return Err(Error::ChannelBindings);
-    }
-    let lgth = u32::from_le_bytes(cksum[0..4].try_into().map_err(|_| Error::Truncated)?);
-    if lgth != 16 {
-        return Err(Error::ChannelBindings);
-    }
-    let mut got = [0u8; 16];
-    got.copy_from_slice(&cksum[4..20]);
-    let expect = ChannelBindings::bnd_hash(Some(local));
-    if got != expect {
-        return Err(Error::ChannelBindings);
-    }
-    Ok(())
 }
 
 fn seal_usage(initiator: bool) -> KeyUsage {
@@ -2814,8 +2904,8 @@ mod tests {
             panic!("hostile Dlgth must not accept")
         };
         assert!(
-            matches!(err, Error::Truncated),
-            "hostile Dlgth must be Truncated, got {err}"
+            matches!(&err, Error::Inner(s) if s.contains("gss failure")),
+            "hostile Dlgth must be gss failure, got {err}"
         );
     }
 

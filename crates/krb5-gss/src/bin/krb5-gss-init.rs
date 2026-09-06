@@ -8,11 +8,12 @@
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::time::Duration;
 
-use krb5_asn1::decode;
-use krb5_gss::{DelegCred, GssContext, IovBuf, IovType};
-use krb5_protocol::FileCcache;
-use krb5_types::Ticket;
+use krb5_asn1::{decode, encode};
+use krb5_gss::{ChannelBindings, DelegCred, GssContext, IovBuf, IovType, KRB5_OID};
+use krb5_protocol::{FileCcache, build_ap_req_with_cksum};
+use krb5_types::{ApOptions, Ticket};
 
 fn main() {
     let mut ccache = None::<String>;
@@ -21,6 +22,9 @@ fn main() {
     let mut port = 4444u16;
     let mut deleg = false;
     let mut mutate = None::<String>;
+    let mut bind_data = None::<String>;
+    let mut no_checksum = false;
+    let mut accept_only = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -38,12 +42,15 @@ fn main() {
             }
             "--deleg" => deleg = true,
             "--mutate" => mutate = args.next(),
+            "--channel-bindings" => bind_data = args.next(),
+            "--no-checksum" => no_checksum = true,
+            "--accept-only" => accept_only = true,
             _ => {}
         }
     }
     let (Some(cc_path), Some(host_name)) = (ccache, host) else {
         eprintln!(
-            "usage: krb5-gss-init --ccache PATH --host HOST [--ip IP] [--port PORT] [--deleg] [--mutate direction|filler|ec]"
+            "usage: krb5-gss-init --ccache PATH --host HOST [--ip IP] [--port PORT] [--deleg] [--mutate direction|filler|ec] [--channel-bindings DATA] [--no-checksum] [--accept-only]"
         );
         std::process::exit(2);
     };
@@ -91,22 +98,58 @@ fn main() {
     } else {
         None
     };
+    let cb = bind_data.as_ref().map(|s| ChannelBindings {
+        application_data: s.as_bytes().to_vec(),
+        ..ChannelBindings::default()
+    });
+    let addr = format!("{ip}:{port}");
+    let mut stream = TcpStream::connect(&addr).unwrap_or_else(|e| {
+        eprintln!("connect {addr}: {e}");
+        std::process::exit(1);
+    });
+    if no_checksum {
+        let ap = build_ap_req_with_cksum(
+            ticket,
+            &svc_key,
+            &svc.client.0,
+            &svc.client.1,
+            ApOptions::mutual_required(),
+            None,
+            None,
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("build_ap_req: {e}");
+            std::process::exit(1);
+        });
+        let inner = encode(&ap).unwrap_or_else(|e| {
+            eprintln!("encode AP-REQ: {e}");
+            std::process::exit(1);
+        });
+        let token = wrap_app(&inner);
+        eprintln!("gss-init AP-REQ bytes={}", token.len());
+        write_token(&mut stream, &token).unwrap_or_else(|e| {
+            eprintln!("write AP-REQ: {e}");
+            std::process::exit(1);
+        });
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+        if read_token(&mut stream).is_ok() {
+            println!("gss-init ap-rep=yes");
+            std::process::exit(1);
+        }
+        println!("gss-init ap-rep=none");
+        return;
+    }
     let (mut ctx, token) = GssContext::init_sec_context(
         ticket,
         &svc_key,
         &svc.client.0,
         &svc.client.1,
         true,
-        None,
+        cb.as_ref(),
         deleg_cred.as_ref(),
     )
     .unwrap_or_else(|e| {
         eprintln!("init_sec_context: {e}");
-        std::process::exit(1);
-    });
-    let addr = format!("{ip}:{port}");
-    let mut stream = TcpStream::connect(&addr).unwrap_or_else(|e| {
-        eprintln!("connect {addr}: {e}");
         std::process::exit(1);
     });
     eprintln!("gss-init AP-REQ bytes={}", token.len());
@@ -118,10 +161,14 @@ fn main() {
         eprintln!("read AP-REP: {e}");
         std::process::exit(1);
     });
+    println!("gss-init ap-rep=yes");
     ctx.process_ap_rep(&ap_rep, &svc_key).unwrap_or_else(|e| {
         eprintln!("process_ap_rep: {e}");
         std::process::exit(1);
     });
+    if accept_only {
+        return;
+    }
     let mut wrapped = wrap_iov_token(&mut ctx, b"hello-from-rust-gss").unwrap_or_else(|e| {
         eprintln!("wrap: {e}");
         std::process::exit(1);
@@ -150,6 +197,28 @@ fn main() {
         std::process::exit(1);
     });
     println!("gss-init wrap sent hello-from-rust-gss");
+}
+
+fn wrap_app(inner: &[u8]) -> Vec<u8> {
+    let mut body = der_tlv(0x06, KRB5_OID);
+    body.extend_from_slice(&[0x01, 0x00]);
+    body.extend_from_slice(inner);
+    der_tlv(0x60, &body)
+}
+
+fn der_tlv(tag: u8, body: &[u8]) -> Vec<u8> {
+    let mut out = vec![tag];
+    if body.len() < 128 {
+        out.push(u8::try_from(body.len()).unwrap_or(u8::MAX));
+    } else if body.len() < 256 {
+        out.push(0x81);
+        out.push(u8::try_from(body.len()).unwrap_or(u8::MAX));
+    } else {
+        out.push(0x82);
+        out.extend_from_slice(&(u16::try_from(body.len()).unwrap_or(u16::MAX)).to_be_bytes());
+    }
+    out.extend_from_slice(body);
+    out
 }
 
 fn wrap_iov_token(ctx: &mut GssContext, msg: &[u8]) -> Result<Vec<u8>, krb5_gss::Error> {

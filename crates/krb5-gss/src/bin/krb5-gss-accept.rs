@@ -1,7 +1,7 @@
 //! GSS acceptor for out-of-process MIT `gss-client` interop (RFC 4121).
 //!
 //! Speaks the MIT `gss-sample` TCP framing: 4-byte length prefix then token.
-//! Usage: `krb5-gss-accept --keytab PATH [--listen HOST:PORT]`
+//! Usage: `krb5-gss-accept --keytab PATH [--listen HOST:PORT] [--channel-bindings DATA] [--accept-only]`
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -10,7 +10,7 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::time::Duration;
 
-use krb5_gss::{GssContext, IovBuf, IovType};
+use krb5_gss::{ChannelBindings, GssContext, IovBuf, IovType};
 use krb5_protocol::{Keytab, ReplayCache};
 
 fn main() {
@@ -25,6 +25,8 @@ fn main() {
     let mut keytab = None::<String>;
     let mut listen = "127.0.0.1:4444".to_owned();
     let mut assoc = Vec::new();
+    let mut bindings = None::<ChannelBindings>;
+    let mut accept_only = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -39,11 +41,22 @@ fn main() {
                     assoc = v.into_bytes();
                 }
             }
+            "--channel-bindings" => {
+                if let Some(v) = args.next() {
+                    bindings = Some(ChannelBindings {
+                        application_data: v.into_bytes(),
+                        ..ChannelBindings::default()
+                    });
+                }
+            }
+            "--accept-only" => accept_only = true,
             _ => {}
         }
     }
     let Some(kt_path) = keytab else {
-        eprintln!("usage: krb5-gss-accept --keytab PATH [--listen HOST:PORT]");
+        eprintln!(
+            "usage: krb5-gss-accept --keytab PATH [--listen HOST:PORT] [--channel-bindings DATA] [--accept-only]"
+        );
         std::process::exit(2);
     };
     let bytes = std::fs::read(&kt_path).unwrap_or_else(|e| {
@@ -93,7 +106,7 @@ fn main() {
             match krb5_gss::spnego_accept(
                 &tok,
                 &service_keys,
-                None,
+                bindings.as_ref(),
                 Some(&ent.name),
                 Some(realm),
                 &rcache,
@@ -109,7 +122,7 @@ fn main() {
             GssContext::accept_sec_context(
                 &inner,
                 &service_keys,
-                None,
+                bindings.as_ref(),
                 Some(&ent.name),
                 Some(realm),
                 &rcache,
@@ -134,6 +147,18 @@ fn main() {
                 "gss-accept inquire flags={} lifetime={}",
                 q.flags, q.lifetime
             );
+        }
+        println!(
+            "gss-accept ap-rep={}",
+            if ap_rep.is_some() { "yes" } else { "none" }
+        );
+        if accept_only {
+            if let Some(rep) = ap_rep
+                && let Err(e) = write_token(&mut stream, &rep)
+            {
+                eprintln!("write AP-REP: {e}");
+            }
+            continue;
         }
         if ctx.is_dce_style() {
             if let Some(rep) = ap_rep.take()

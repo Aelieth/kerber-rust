@@ -140,6 +140,15 @@ int main(int argc, char **argv) {
     gss_buffer_desc in = { 0, NULL };
     gss_buffer_desc out = { 0, NULL };
     OM_uint32 maj, min, amin_err, ret_flags = 0;
+    int ap_rep_sent = 0;
+    struct gss_channel_bindings_struct cb = { 0 };
+    gss_channel_bindings_t cbt = GSS_C_NO_CHANNEL_BINDINGS;
+    const char *cbapp = getenv("GSS_CHANNEL_BINDINGS");
+    if (cbapp && cbapp[0]) {
+        cb.application_data.value = (void *)cbapp;
+        cb.application_data.length = strlen(cbapp);
+        cbt = &cb;
+    }
     do {
         recv_token(fd, &in);
         maj = gss_accept_sec_context(
@@ -147,7 +156,7 @@ int main(int argc, char **argv) {
             &ctx,
             acred,
             &in,
-            GSS_C_NO_CHANNEL_BINDINGS,
+            cbt,
             &src,
             NULL,
             &out,
@@ -160,6 +169,7 @@ int main(int argc, char **argv) {
         in.length = 0;
         if (out.length) {
             send_token(fd, &out);
+            ap_rep_sent = 1;
             gss_release_buffer(&min, &out);
         }
         if (maj != GSS_S_COMPLETE && maj != GSS_S_CONTINUE_NEEDED) {
@@ -191,6 +201,15 @@ int main(int argc, char **argv) {
         if (maj == GSS_S_COMPLETE) {
             fprintf(stderr, "mit-gss inquire flags=%u lifetime=%u\n", flags, lifetime);
         }
+    }
+    fprintf(stderr, "mit-gss ap-rep=%s\n", ap_rep_sent ? "yes" : "none");
+    if (getenv("GSS_ACCEPT_ONLY")) {
+        gss_delete_sec_context(&min, &ctx, GSS_C_NO_BUFFER);
+        if (src != GSS_C_NO_NAME) {
+            gss_release_name(&min, &src);
+        }
+        close(fd);
+        continue;
     }
 
     recv_token(fd, &in);

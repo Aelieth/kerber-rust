@@ -525,4 +525,156 @@ gss_mutate_cell direction 'unwrap: gss integrity' 'invalid Message Integrity Che
 gss_mutate_cell filler 'unwrap: gss truncated' 'Invalid token was supplied'
 gss_mutate_cell ec 'unwrap: gss truncated' 'Invalid token was supplied'
 
-log "gss.gate" "ok" ",\"acceptor\":\"krb5-gss\",\"initiator\":\"mit-libgssapi\",\"deleg\":\"both\",\"spnego\":\"ok\",\"iov\":\"ok\",\"replay\":\"ok\",\"dce\":\"ok\""
+gss_listen() {
+    local log=$1
+    local what=$2
+    ok=0
+    for _ in $(seq 1 20); do
+        if docker exec "$NAME" grep -q 'listening' "$log" 2>/dev/null; then
+            ok=1
+            break
+        fi
+        sleep 0.15
+    done
+    [ "$ok" = 1 ] || {
+        docker exec "$NAME" cat "$log" >&2 || true
+        log "gss.gate" "error" ",\"error\":\"$what did not listen\""
+        exit 1
+    }
+}
+
+echo "==== Rust initiator no-checksum vs Rust acceptor ===="
+docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
+docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
+sleep 0.2
+docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /etc/krb5kdc/testhost.keytab --listen 127.0.0.1:4444 --accept-only >/tmp/gss-accept-nc.log 2>&1'
+gss_listen /tmp/gss-accept-nc.log "gss-accept no-checksum"
+RUST_GSS_INIT=/tmp/krb5-gss-init
+RUST_GSS_ACCEPT=/tmp/krb5-gss-accept
+docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
+    "$RUST_GSS_INIT" --ccache /tmp/krb5cc_harness --host testhost.kerber.test \
+    --ip 127.0.0.1 --port 4444 --no-checksum --accept-only
+RUST_NC="$(docker exec "$NAME" cat /tmp/gss-accept-nc.log 2>/dev/null || true)"
+echo "$RUST_NC"
+echo "$RUST_NC" | grep -q 'gss-accept ap-rep=none' || {
+    log "gss.gate" "error" ',"error":"rust no-checksum still sent AP-REP"'
+    exit 1
+}
+RUST_NC_FLAGS="$(echo "$RUST_NC" | sed -n 's/.*gss-accept inquire flags=\([0-9]*\) lifetime=.*/\1/p' | head -1)"
+[ $((${RUST_NC_FLAGS:-1} & 2)) -eq 0 ]
+[ $((${RUST_NC_FLAGS:-1} & 2048)) -eq 0 ]
+
+echo "==== Rust initiator no-checksum vs MIT acceptor ===="
+docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
+docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
+sleep 0.2
+docker exec -d \
+    -e KRB5_KTNAME=/etc/krb5kdc/testhost.keytab \
+    -e GSS_ACCEPT_ONLY=1 \
+    "$NAME" sh -c '/tmp/gss-mit-server /etc/krb5kdc/testhost.keytab 127.0.0.1 4452 >/tmp/gss-mit-nc.log 2>&1'
+gss_listen /tmp/gss-mit-nc.log "mit-gss-server no-checksum"
+RUST_GSS_INIT=/tmp/krb5-gss-init
+MIT_GSS_SERVER=/tmp/gss-mit-server
+docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
+    "$RUST_GSS_INIT" --ccache /tmp/krb5cc_harness --host testhost.kerber.test \
+    --ip 127.0.0.1 --port 4452 --no-checksum --accept-only
+MIT_NC="$(docker exec "$NAME" cat /tmp/gss-mit-nc.log 2>/dev/null || true)"
+echo "$MIT_NC"
+echo "$MIT_NC" | grep -q 'mit-gss ap-rep=none' || {
+    log "gss.gate" "error" ',"error":"mit no-checksum still sent AP-REP"'
+    exit 1
+}
+MIT_NC_FLAGS="$(echo "$MIT_NC" | sed -n 's/.*mit-gss inquire flags=\([0-9]*\) lifetime=.*/\1/p' | head -1)"
+[ $((${MIT_NC_FLAGS:-1} & 2)) -eq 0 ]
+[ $((${MIT_NC_FLAGS:-1} & 2048)) -eq 0 ]
+
+echo "==== MIT initiator no CB vs Rust acceptor with CB ===="
+docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
+docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
+sleep 0.2
+docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /etc/krb5kdc/testhost.keytab --listen 127.0.0.1:4444 --channel-bindings acceptor-bind >/tmp/gss-accept-cb.log 2>&1'
+gss_listen /tmp/gss-accept-cb.log "gss-accept cb"
+MIT_GSS_CLIENT=/tmp/gss-mit-client
+RUST_GSS_ACCEPT=/tmp/krb5-gss-accept
+docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
+    "$MIT_GSS_CLIENT" testhost.kerber.test host "$MSG" 127.0.0.1 4444
+RUST_CB="$(docker exec "$NAME" cat /tmp/gss-accept-cb.log 2>/dev/null || true)"
+echo "$RUST_CB"
+echo "$RUST_CB" | grep -q 'gss-accept unwrap ok' || {
+    log "gss.gate" "error" ',"error":"rust acceptor CB rejected initiator without CB"'
+    exit 1
+}
+RUST_CB_FLAGS="$(echo "$RUST_CB" | sed -n 's/.*gss-accept inquire flags=\([0-9]*\) lifetime=.*/\1/p' | head -1)"
+[ $((${RUST_CB_FLAGS:-2048} & 2048)) -eq 0 ]
+
+echo "==== Rust initiator no CB vs MIT acceptor with CB ===="
+docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
+docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
+sleep 0.2
+docker exec -d \
+    -e KRB5_KTNAME=/etc/krb5kdc/testhost.keytab \
+    -e GSS_CHANNEL_BINDINGS=acceptor-bind \
+    "$NAME" sh -c '/tmp/gss-mit-server /etc/krb5kdc/testhost.keytab 127.0.0.1 4453 >/tmp/gss-mit-cb.log 2>&1'
+gss_listen /tmp/gss-mit-cb.log "mit-gss-server cb"
+RUST_GSS_INIT=/tmp/krb5-gss-init
+MIT_GSS_SERVER=/tmp/gss-mit-server
+docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
+    "$RUST_GSS_INIT" --ccache /tmp/krb5cc_harness --host testhost.kerber.test \
+    --ip 127.0.0.1 --port 4453
+MIT_CB="$(docker exec "$NAME" cat /tmp/gss-mit-cb.log 2>/dev/null || true)"
+echo "$MIT_CB"
+echo "$MIT_CB" | grep -q 'mit-gss unwrap ok hello-from-rust-gss' || {
+    log "gss.gate" "error" ',"error":"mit acceptor CB rejected initiator without CB"'
+    exit 1
+}
+MIT_CB_FLAGS="$(echo "$MIT_CB" | sed -n 's/.*mit-gss inquire flags=\([0-9]*\) lifetime=.*/\1/p' | head -1)"
+[ $((${MIT_CB_FLAGS:-2048} & 2048)) -eq 0 ]
+
+echo "==== MIT initiator CB mismatch vs Rust acceptor ===="
+docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
+docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
+sleep 0.2
+docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /etc/krb5kdc/testhost.keytab --listen 127.0.0.1:4444 --channel-bindings tls-b >/tmp/gss-accept-cbm.log 2>&1'
+gss_listen /tmp/gss-accept-cbm.log "gss-accept cb mismatch"
+MIT_GSS_CLIENT=/tmp/gss-mit-client
+RUST_GSS_ACCEPT=/tmp/krb5-gss-accept
+docker exec -e KRB5CCNAME=/tmp/krb5cc_harness -e GSS_CHANNEL_BINDINGS=tls-a "$NAME" \
+    "$MIT_GSS_CLIENT" testhost.kerber.test host "$MSG" 127.0.0.1 4444 || true
+RUST_CBM="$(docker exec "$NAME" cat /tmp/gss-accept-cbm.log 2>/dev/null || true)"
+echo "$RUST_CBM"
+echo "$RUST_CBM" | grep -q 'gss channel bindings' || {
+    log "gss.gate" "error" ',"error":"rust acceptor CB mismatch did not reject"'
+    exit 1
+}
+
+echo "==== Rust initiator CB mismatch vs MIT acceptor ===="
+docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
+docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
+sleep 0.2
+docker exec -d \
+    -e KRB5_KTNAME=/etc/krb5kdc/testhost.keytab \
+    -e GSS_CHANNEL_BINDINGS=tls-b \
+    "$NAME" sh -c '/tmp/gss-mit-server /etc/krb5kdc/testhost.keytab 127.0.0.1 4454 >/tmp/gss-mit-cbm.log 2>&1'
+gss_listen /tmp/gss-mit-cbm.log "mit-gss-server cb mismatch"
+RUST_GSS_INIT=/tmp/krb5-gss-init
+MIT_GSS_SERVER=/tmp/gss-mit-server
+docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
+    "$RUST_GSS_INIT" --ccache /tmp/krb5cc_harness --host testhost.kerber.test \
+    --ip 127.0.0.1 --port 4454 --channel-bindings tls-a || true
+ok=0
+MIT_CBM=""
+for _ in $(seq 1 20); do
+    MIT_CBM="$(docker exec "$NAME" cat /tmp/gss-mit-cbm.log 2>/dev/null || true)"
+    if echo "$MIT_CBM" | grep -q 'Incorrect channel bindings were supplied'; then
+        ok=1
+        break
+    fi
+    sleep 0.15
+done
+echo "$MIT_CBM"
+[ "$ok" = 1 ] || {
+    log "gss.gate" "error" ',"error":"mit acceptor CB mismatch did not reject"'
+    exit 1
+}
+
+log "gss.gate" "ok" ",\"acceptor\":\"krb5-gss\",\"initiator\":\"mit-libgssapi\",\"deleg\":\"both\",\"spnego\":\"ok\",\"iov\":\"ok\",\"replay\":\"ok\",\"dce\":\"ok\",\"process_checksum\":\"ok\""

@@ -81,8 +81,13 @@ type 0 substitutes the key's mandatory type, `output_size` is
 first, then the body. GSS wrap-without-conf requires `EC == cksumsize`;
 MIC fillers are 0xFF and the header is reconstructed (`util_crypt.c:322-334`).
 A GSS authenticator checksum that is not 0x8003 is verified over empty
-data (`accept_sec_context.c:494-511`); 0x8003 shorter than 24 is
-`GSS_S_BAD_BINDINGS`. PA-FOR-USER unkeyed is 50 and a bad MAC is 41
+data with the ticket session key (`accept_sec_context.c:494-511`,
+`rd_req_dec.c:748-749`). Missing checksum: flags 0 and no AP-REP.
+0x8003 shorter than 24 is `GSS_S_BAD_BINDINGS`; `cb_len != 16` is
+`GSS_S_FAILURE`. An all-zero token CB is accepted when the acceptor has
+bindings; a mismatch is `GSS_S_BAD_BINDINGS`; a match sets
+`GSS_C_CHANNEL_BOUND_FLAG`. Token flags are masked with `INITIATOR_FLAGS`.
+PA-FOR-USER unkeyed is 50 and a bad MAC is 41
 (`INVALID_S4U2SELF_CHECKSUM`). PAC SHA-1 on the server checksum is 15
 (`pac.c:496-497`). The FAST client verifies `ticket_checksum`
 (`fast.c:543-551`). PA-REQ-ENC-PA-REP (149) is produced when the AS-REQ

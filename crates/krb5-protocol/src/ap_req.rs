@@ -347,6 +347,7 @@ fn verify_inner(
     }
     if let Some(ck) = &authenticator.cksum
         && let Some(data) = app_cksum
+        && ck.cksumtype != 0x8003
     {
         let usage = KeyUsage::new(ku::AP_REQ_AUTH_CKSUM)?;
         verify_checksum_type(&session, usage, data, ck.cksumtype, ck.checksum.as_ref())?;
