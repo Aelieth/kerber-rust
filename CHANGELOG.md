@@ -6,6 +6,16 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-J L5a-3 (validate_as_request: REQUIRED PWCHANGE)
+
+- **kdc.** A client with `REQUIRES_PWCHANGE` now fails with MIT's distinct
+  status `REQUIRED PWCHANGE` (code KEY_EXP 23) checked after SERVICE EXPIRED,
+  like `validate_as_request` (`kdc_util.c:762-766`); Rust had merged it into
+  the lapsed-pw-expiration `CLIENT KEY EXPIRED` branch. `differential-gate.sh`
+  gains an `as-needchange` case against a new `pwchgu` (needchange, no preauth)
+  dump principal, `23`/`REQUIRED PWCHANGE` on both legs. The 24 hint list and
+  the rest of `validate_as_request`'s check order remain.
+
 ### W1-J L5a-2 (AS KRB-ERROR client echo)
 
 - **kdc.** The AS KRB-ERROR now echoes the requested `crealm` and `cname` like

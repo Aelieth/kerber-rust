@@ -1866,18 +1866,25 @@ fn check_s4u2self_locked(for_p: &Principal, server: &Principal) -> Result<(), Er
 /// MIT `validate_as_request`: 0 = never; principal expiry before password expiry.
 fn check_db_times(client: Option<&Principal>, server: &Principal) -> Result<(), Error> {
     let now = crate::store::unix_now_u32();
+    let pwchange_svc = server.attributes & KDB_PWCHANGE_SERVICE != 0;
     if let Some(c) = client {
         if c.expiration != 0 && now > c.expiration {
             return Err(proto(err::NAME_EXP, status::CLIENT_EXPIRED));
         }
-        let needchange = attr(c, KDB_REQUIRES_PWCHANGE);
-        let pw_lapsed = c.pw_expire != 0 && now > c.pw_expire;
-        if (needchange || pw_lapsed) && server.attributes & KDB_PWCHANGE_SERVICE == 0 {
+        if c.pw_expire != 0 && now > c.pw_expire && !pwchange_svc {
             return Err(proto(err::KEY_EXPIRED, status::CLIENT_KEY_EXPIRED));
         }
     }
     if server.expiration != 0 && now > server.expiration {
         return Err(proto(err::SERVICE_EXP, status::SERVICE_EXPIRED));
+    }
+    // MIT checks REQUIRES_PWCHANGE after SERVICE EXPIRED, with its own status
+    // (kdc_util.c:762-766); a lapsed pw_expire above is CLIENT KEY EXPIRED.
+    if let Some(c) = client
+        && attr(c, KDB_REQUIRES_PWCHANGE)
+        && !pwchange_svc
+    {
+        return Err(proto(err::KEY_EXPIRED, status::REQUIRED_PWCHANGE));
     }
     Ok(())
 }

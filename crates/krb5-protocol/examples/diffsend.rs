@@ -486,6 +486,14 @@ fn run() -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     expect_error(&cfg, "skewed-timestamp", &req, err::SKEW)?;
 
+    // pwchgu has REQUIRES_PWCHANGE and no preauth; a bare AS-REQ is
+    // validate_as_request "REQUIRED PWCHANGE" / KEY_EXP (23) on both legs, with
+    // its own status distinct from a lapsed pw_expire's "CLIENT KEY EXPIRED".
+    let pwchgu = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["pwchgu"]);
+    let req = encode(&as_req(pwchgu, realm, 0x1000_000f, None).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    expect_error(&cfg, "as-needchange", &req, err::KEY_EXPIRED)?;
+
     // PA-ENC-TIMESTAMP declaring des3 (etype 16), which pauser has no key for:
     // enc_ts_verify krb5_dbe_search_enctype misses -> KRB5_KDB_NO_MATCHING_KEY
     // -> KDC_ERR_PREAUTH_FAILED (24) on both legs.
@@ -676,7 +684,7 @@ fn run() -> Result<(), String> {
         true,
     )?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":14}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":15}}"#);
     Ok(())
 }
 
