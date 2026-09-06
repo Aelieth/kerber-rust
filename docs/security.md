@@ -89,7 +89,13 @@ bindings; a mismatch is `GSS_S_BAD_BINDINGS`; a match sets
 `GSS_C_CHANNEL_BOUND_FLAG`. Token flags are masked with `INITIATOR_FLAGS`.
 PA-FOR-USER unkeyed is 50 and a bad MAC is 41
 (`INVALID_S4U2SELF_CHECKSUM`). PAC SHA-1 on the server checksum is 15
-(`pac.c:496-497`). The FAST client verifies `ticket_checksum`
+(`pac.c:496-497`). PAC signatures are verified over the received bytes
+(`pac.c:478-579`): a copy zeros the server and privsvr payloads in place;
+privsvr covers the whole server-checksum buffer minus the 4-byte type
+(RODCIdentifier trailer included); a missing buffer is 60 `GENERIC`; a
+failed server checksum does not abort before privsvr. Ticket checksum
+(`pac.c:640-673`) is over the recoded EncTicketPart with PAC ad-data
+`0x00`. The FAST client verifies `ticket_checksum`
 (`fast.c:543-551`). PA-REQ-ENC-PA-REP (149) is produced when the AS-REQ
 advertises it; the kinit client verify of 149 is not wired until the
 client also sends the empty padata (RFC 6806 F7) so MIT KDCs that set

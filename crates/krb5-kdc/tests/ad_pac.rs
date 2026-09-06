@@ -6,13 +6,11 @@
 use std::path::{Path, PathBuf};
 
 use krb5_asn1::decode;
-use krb5_crypto::{KeyUsage, checksum};
 use krb5_kdc::{
     Error, TEST_REALM, TEST_USER, bootstrap_documented, decrypt_ticket_part, documented_host,
     pac_from_ticket_part, sign_pac, ticket_checksum_der, verify_pac, verify_pac_signatures,
 };
 use krb5_protocol::{FileCcache, Keytab, as_req, pa_enc_timestamp, tgs_req};
-use krb5_types::ku;
 use krb5_types::pac::{
     PAC_ATTRIBUTES_INFO, PAC_CLIENT_INFO, PAC_FULL_CHECKSUM, PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM,
     PAC_REQUESTER_SID, PAC_SERVER_CHECKSUM, PAC_TICKET_CHECKSUM, PAC_UPN_DNS_INFO, Pac,
@@ -124,9 +122,6 @@ fn captured_pac_server_checksum_usage_17() {
     let logon = pac.buffer(PAC_LOGON_INFO).expect("logon");
     let v = parse_kerb_validation_info(logon).expect("NDR");
     assert_eq!(v.effective_name.value, "kbruser");
-    let usage = KeyUsage::new(ku::KERB_NON_KERB_CKSUM_SALT).expect("usage 17");
-    let mac = checksum(&key, usage, &pac.bytes_for_checksum()).expect("server mac");
-    krb5_types::pac::verify_server_checksum(&pac, &mac).expect("AD server checksum");
     verify_pac_signatures(&pac_bytes, &key, None, None).expect("server-only verify");
 }
 

@@ -6,8 +6,6 @@
 
 use std::fmt::Write as _;
 
-use subtle::ConstantTimeEq;
-
 /// PAC buffer type: logon info (`KERB_VALIDATION_INFO`).
 pub const PAC_LOGON_INFO: u32 = 1;
 /// PAC buffer type: credentials.
@@ -68,6 +66,19 @@ pub struct PacBuffer {
     pub kind: u32,
     /// Buffer payload (not including the header).
     pub data: Vec<u8>,
+    offset: usize,
+}
+
+impl PacBuffer {
+    /// Buffer with no received-byte offset (builder / signer).
+    #[must_use]
+    pub fn new(kind: u32, data: Vec<u8>) -> Self {
+        Self {
+            kind,
+            data,
+            offset: 0,
+        }
+    }
 }
 
 /// Parsed PAC.
@@ -77,6 +88,7 @@ pub struct Pac {
     pub version: u32,
     /// Buffers in file order.
     pub buffers: Vec<PacBuffer>,
+    raw: Vec<u8>,
 }
 
 /// PAC parse / verify failure.
@@ -103,6 +115,16 @@ impl std::fmt::Display for PacError {
 impl std::error::Error for PacError {}
 
 impl Pac {
+    /// PAC assembled for signing (no received-byte copy).
+    #[must_use]
+    pub fn built(version: u32, buffers: Vec<PacBuffer>) -> Self {
+        Self {
+            version,
+            buffers,
+            raw: Vec::new(),
+        }
+    }
+
     /// Parse a PACTYPE blob.
     ///
     /// # Errors
@@ -145,9 +167,14 @@ impl Pac {
             buffers.push(PacBuffer {
                 kind,
                 data: bytes[offset..offset + size].to_vec(),
+                offset,
             });
         }
-        Ok(Self { version, buffers })
+        Ok(Self {
+            version,
+            buffers,
+            raw: bytes.to_vec(),
+        })
     }
 
     /// Serialize as PACTYPE (little-endian).
@@ -209,6 +236,50 @@ impl Pac {
         clone.to_bytes()
     }
 
+    /// Copy of the received PAC with signature payloads of `kinds` zeroed in
+    /// place (MIT `zero_signature`). Falls back to a re-encode when this PAC
+    /// was built rather than parsed.
+    ///
+    /// # Errors
+    ///
+    /// Missing buffer or truncated signature.
+    pub fn received_zeroed(&self, kinds: &[u32]) -> Result<Vec<u8>, PacError> {
+        if self.raw.is_empty() {
+            for kind in kinds {
+                if !self.buffers.iter().any(|b| b.kind == *kind) {
+                    return Err(PacError::MissingBuffer);
+                }
+            }
+            return Ok(self.bytes_zeroing(kinds));
+        }
+        let mut copy = self.raw.clone();
+        self.zero_in(&mut copy, kinds)?;
+        Ok(copy)
+    }
+
+    fn zero_in(&self, copy: &mut [u8], kinds: &[u32]) -> Result<(), PacError> {
+        for kind in kinds {
+            let b = self
+                .buffers
+                .iter()
+                .find(|b| b.kind == *kind)
+                .ok_or(PacError::MissingBuffer)?;
+            if b.data.len() < 4 {
+                return Err(PacError::Truncated);
+            }
+            let start = b.offset.checked_add(4).ok_or(PacError::Truncated)?;
+            let end = b
+                .offset
+                .checked_add(b.data.len())
+                .ok_or(PacError::Truncated)?;
+            if end > copy.len() || start > end {
+                return Err(PacError::Truncated);
+            }
+            copy[start..end].fill(0);
+        }
+        Ok(())
+    }
+
     /// Server checksum buffer payload, if present.
     #[must_use]
     pub fn server_checksum(&self) -> Option<&[u8]> {
@@ -241,35 +312,6 @@ fn zero_signature_payload(data: &mut [u8]) {
             *b = 0;
         }
     }
-}
-
-/// Verify the server checksum (HMAC over the PAC with signatures 6/7 zeroed).
-///
-/// # Errors
-///
-/// Returns [`PacError::Integrity`] on mismatch, [`PacError::MissingBuffer`]
-/// when the server checksum is absent.
-pub fn verify_server_checksum(pac: &Pac, expected: &[u8]) -> Result<(), PacError> {
-    verify_sig_buf(pac.server_checksum(), expected)
-}
-
-/// Verify a signature buffer (`SignatureType` + MAC) against `expected` MAC.
-///
-/// # Errors
-///
-/// Missing buffer or mismatch.
-pub fn verify_sig_buf(got: Option<&[u8]>, expected: &[u8]) -> Result<(), PacError> {
-    let Some(got) = got else {
-        return Err(PacError::MissingBuffer);
-    };
-    if got.len() < 4 + expected.len() {
-        return Err(PacError::Integrity);
-    }
-    let sig = &got[4..4 + expected.len()];
-    if !bool::from(sig.ct_eq(expected)) {
-        return Err(PacError::Integrity);
-    }
-    Ok(())
 }
 
 /// Build a signature buffer: little-endian type + MAC bytes.

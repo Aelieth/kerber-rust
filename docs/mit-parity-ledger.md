@@ -35,9 +35,9 @@ Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after W1-J L1b process_checksum):
-**282** = A1 116 + A2 68 + A3 55 + A4 43.
-exact 90 · stricter-documented 12 · deviation 98 ·
+Counts (after W1-J L2a PAC received bytes):
+**284** = A1 116 + A2 68 + A3 55 + A4 45.
+exact 92 · stricter-documented 12 · deviation 98 ·
 absent 67 · deferred 15.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
@@ -433,6 +433,8 @@ checksum/rc4/declared-cksumtype rows that sat under A3.
 | accept_sec_context.c:464-618 | `process_checksum`: missing cksum → flags 0 and no AP-REP; non-0x8003 REPLAY\|SEQUENCE\|MUTUAL from AP options; 0x8003 `cb_len != 16` failure; all-zero token CB accepted; mismatch channel bindings; `INITIATOR_FLAGS`; `GSS_C_CHANNEL_BOUND`; `option_id == 1`; skip unknown extensions; CBT authdata | n/a | krb5-gss/lib.rs process_checksum | `gss failure`; `gss channel bindings`; CHANNEL_BOUND 0x0800 | exact | `accept_no_checksum_is_flags_zero_and_no_ap_rep`; `accept_zero_token_cb_with_acceptor_cb_is_ok`; `scripts/gss-gate.sh` no-checksum / CB / mismatch cells both legs |
 | rd_safe.c:43-125 | KRB-SAFE checksum over the received body DER (`krb5_safe_with_body`) | n/a | krb5-protocol/safe_priv.rs unwrap_krb_safe_ex; krb5-protocol/safe_priv.rs verify_krb_safe_checksum | re-encodes a clone with a zeroed checksum (L2b) | deviation | W1-J L2b |
 | unwrap.c:191-240,272-371 | GSS wrap unwrap: direction, filler, EC strip, `verify_enc_header` (RRC not compared) | n/a | krb5-gss/lib.rs unwrap_v3 | direction Integrity; filler/EC Truncated; EC stripped | exact | `unwrap_conf_ec_padding_is_stripped`; `unwrap_direction_flipped_is_bad_sig`; `scripts/gss-gate.sh` DCE + mutation cells both legs |
+| pac.c:478-579 | `verify_pac_checksums` over the received PAC; zero server+privsvr in a copy; privsvr over the server buffer minus the 4-byte type (RODC trailer kept); missing buffer ENOENT; server verify does not abort before privsvr | HEADER_PAC 41 `MODIFIED` / 60 `GENERIC` | krb5-kdc/ad.rs verify_pac_checksums; krb5-kdc/ad.rs verify_pac_sig; krb5-types/pac.rs received_zeroed | `HEADER_PAC` 41 `MODIFIED` / 60 `GENERIC` | exact | `accept_rodc_trailer_privsvr_covers_server_buffer_minus_type`; `accept_missing_privsvr_buffer_is_generic_60`; `accept_t_pac_saved_pac_verifies`; `accept_wrong_server_key_still_checks_privsvr` |
+| pac.c:640-673 | ticket checksum over the recoded EncTicketPart with PAC ad-data a single 0x00, then `verify_pac_checksums` with `expect_full` | HEADER_PAC | krb5-kdc/ad.rs verify_pac_signatures; krb5-kdc/ad.rs ticket_checksum_der | `HEADER_PAC` | exact | `issued_pac_self_verifies_all_four_signatures`; `accept_t_pac_saved_pac_verifies` |
 | server_stubs.c: add/delete ACL denial | add/delete ACL denial | `KADM5_AUTH_ADD` / `KADM5_AUTH_DELETE` | krb5-admin/kadm5.rs dispatch_kadm5_ticket | create path `AUTH_ADD`; some denials still `AUTH_GET` | deviation | W1-C; `acl_target_pattern_scopes_add_and_delete` (create is AUTH_ADD) |
 | kadm_rpc_svc.c:80-88,324-331 | kadm5 acceptor: AUTH_GSSAPI or `check_rpcsec_auth` (2 comps, realm, `kadmin`, not `history`) else `svcerr_weakauth` | RPC AUTH_TOOWEAK | kadm5.rs check_rpcsec_auth via acceptor_realm_ok; kadm5.rs kadm5_rpcsec_ok | kiprop/history/1-comp weakauth; realm-qualified (`ticket_realm == store_realm`), bound at `accept_sec_context` and re-checked at the gate | exact | `check_rpcsec_auth_rejects_kiprop_history_and_one_component` (calls `check_rpcsec_auth` / `check_iprop_rpcsec_auth`); `crates/krb5-admin/tests/sp01_acceptor.rs`; `scripts/kadmin-gate.sh` kiprop `--service` both legs |
 | server_stubs.c:28-32; ovsec_kadmd.c:468-477 | CHANGEPW_SERVICE compares the full realm-qualified acceptor name (`cmp_gss_names` = `gss_compare_name`) vs `kadmin/changepw@<realm>`; AUTH_GSSAPI names built with `params.realm`; `gss_oldchangepw_name` unset | n/a (authz predicate) | kadm5.rs changepw_acceptor; kadm5.rs check_auth_gssapi_names via acceptor_realm_ok | realm-qualified; realm bound at accept, unreachable via foreign ticket (INIT-fail first) | exact | `changepw_acceptor_requires_store_realm`; `kadm5_auth_gssapi_ok_requires_store_realm` (foreign-realm cell not realizable — `working/logs/audit-polish-0902/sub-plan-01/notes-acceptor-realm.md`) |

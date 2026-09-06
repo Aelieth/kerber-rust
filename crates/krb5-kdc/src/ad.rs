@@ -61,47 +61,44 @@ pub fn sign_pac(
             identity.rid,
         ),
     };
-    let mut pac = krb5_types::pac::Pac {
-        version: 0,
-        buffers: vec![
-            krb5_types::pac::PacBuffer {
-                kind: krb5_types::pac::PAC_LOGON_INFO,
-                data: logon,
-            },
-            krb5_types::pac::PacBuffer {
-                kind: krb5_types::pac::PAC_CLIENT_INFO,
-                data: krb5_types::pac::client_info_buffer(authtime, &cname.components_joined()),
-            },
-            krb5_types::pac::PacBuffer {
-                kind: krb5_types::pac::PAC_UPN_DNS_INFO,
-                data: krb5_types::pac::upn_dns_buffer(identity),
-            },
-            krb5_types::pac::PacBuffer {
-                kind: krb5_types::pac::PAC_ATTRIBUTES_INFO,
-                data: krb5_types::pac::attributes_info_buffer(),
-            },
-            krb5_types::pac::PacBuffer {
-                kind: krb5_types::pac::PAC_REQUESTER_SID,
-                data: krb5_types::pac::requester_sid_buffer(&identity.client_sid()),
-            },
-            krb5_types::pac::PacBuffer {
-                kind: krb5_types::pac::PAC_TICKET_CHECKSUM,
-                data: krb5_types::pac::signature_buffer(kdc_type, &kdc_zeros),
-            },
-            krb5_types::pac::PacBuffer {
-                kind: krb5_types::pac::PAC_FULL_CHECKSUM,
-                data: krb5_types::pac::signature_buffer(kdc_type, &kdc_zeros),
-            },
-            krb5_types::pac::PacBuffer {
-                kind: krb5_types::pac::PAC_SERVER_CHECKSUM,
-                data: krb5_types::pac::signature_buffer(server_type, &server_zeros),
-            },
-            krb5_types::pac::PacBuffer {
-                kind: krb5_types::pac::PAC_PRIVSVR_CHECKSUM,
-                data: krb5_types::pac::signature_buffer(kdc_type, &kdc_zeros),
-            },
+    let mut pac = krb5_types::pac::Pac::built(
+        0,
+        vec![
+            krb5_types::pac::PacBuffer::new(krb5_types::pac::PAC_LOGON_INFO, logon),
+            krb5_types::pac::PacBuffer::new(
+                krb5_types::pac::PAC_CLIENT_INFO,
+                krb5_types::pac::client_info_buffer(authtime, &cname.components_joined()),
+            ),
+            krb5_types::pac::PacBuffer::new(
+                krb5_types::pac::PAC_UPN_DNS_INFO,
+                krb5_types::pac::upn_dns_buffer(identity),
+            ),
+            krb5_types::pac::PacBuffer::new(
+                krb5_types::pac::PAC_ATTRIBUTES_INFO,
+                krb5_types::pac::attributes_info_buffer(),
+            ),
+            krb5_types::pac::PacBuffer::new(
+                krb5_types::pac::PAC_REQUESTER_SID,
+                krb5_types::pac::requester_sid_buffer(&identity.client_sid()),
+            ),
+            krb5_types::pac::PacBuffer::new(
+                krb5_types::pac::PAC_TICKET_CHECKSUM,
+                krb5_types::pac::signature_buffer(kdc_type, &kdc_zeros),
+            ),
+            krb5_types::pac::PacBuffer::new(
+                krb5_types::pac::PAC_FULL_CHECKSUM,
+                krb5_types::pac::signature_buffer(kdc_type, &kdc_zeros),
+            ),
+            krb5_types::pac::PacBuffer::new(
+                krb5_types::pac::PAC_SERVER_CHECKSUM,
+                krb5_types::pac::signature_buffer(server_type, &server_zeros),
+            ),
+            krb5_types::pac::PacBuffer::new(
+                krb5_types::pac::PAC_PRIVSVR_CHECKSUM,
+                krb5_types::pac::signature_buffer(kdc_type, &kdc_zeros),
+            ),
         ],
-    };
+    );
     let usage = KeyUsage::new(ku::KERB_NON_KERB_CKSUM_SALT)?;
     // 1. Ticket checksum over EncTicketPart with PAC ad-data = 0x00.
     let ticket_mac = checksum(kdc, usage, enc_tkt_der)?;
@@ -127,8 +124,13 @@ pub fn sign_pac(
         server_type,
         &server_mac,
     );
-    // 4. KDC checksum over the server MAC bytes.
-    let kdc_mac = checksum(kdc, usage, &server_mac)?;
+    let server_buf = pac
+        .server_checksum()
+        .ok_or_else(|| proto(err::GENERIC, status::HEADER_PAC))?;
+    if server_buf.len() < 4 {
+        return Err(proto(err::GENERIC, status::HEADER_PAC));
+    }
+    let kdc_mac = checksum(kdc, usage, &server_buf[4..])?;
     set_sig(
         &mut pac,
         krb5_types::pac::PAC_PRIVSVR_CHECKSUM,
@@ -174,26 +176,56 @@ pub fn verify_pac_signatures(
             format!("PAC parse: {e}"),
         )
     })?;
-    let server_mac = verify_pac_sig(
-        server,
-        &pac.bytes_for_checksum(),
-        pac.server_checksum(),
-        PAC_SERVER_CHECKSUM,
-    )?;
-    let Some(kdc) = kdc else {
-        return Ok(());
-    };
-    verify_pac_sig(kdc, server_mac, pac.kdc_checksum(), PAC_PRIVSVR_CHECKSUM)?;
-    if let Some(der) = enc_tkt_der {
+    if let (Some(kdc), Some(der)) = (kdc, enc_tkt_der) {
         verify_pac_sig(kdc, der, pac.ticket_checksum(), PAC_TICKET_CHECKSUM)?;
-        verify_pac_sig(
-            kdc,
-            &pac.bytes_for_full_checksum(),
-            pac.full_checksum(),
-            PAC_FULL_CHECKSUM,
-        )?;
     }
-    Ok(())
+    verify_pac_checksums(&pac, server, kdc, enc_tkt_der.is_some())
+}
+
+fn map_pac_err(e: &krb5_types::pac::PacError) -> Error {
+    match e {
+        krb5_types::pac::PacError::MissingBuffer | krb5_types::pac::PacError::Truncated => {
+            proto(err::GENERIC, status::HEADER_PAC)
+        }
+        krb5_types::pac::PacError::Integrity => proto(err::MODIFIED, status::HEADER_PAC),
+    }
+}
+
+fn verify_pac_checksums(
+    pac: &krb5_types::pac::Pac,
+    server: &ProtocolKey,
+    kdc: Option<&ProtocolKey>,
+    expect_full: bool,
+) -> Result<(), Error> {
+    let mut copy = pac
+        .received_zeroed(&[PAC_SERVER_CHECKSUM, PAC_PRIVSVR_CHECKSUM])
+        .map_err(|e| map_pac_err(&e))?;
+    let mut last =
+        verify_pac_sig(server, &copy, pac.server_checksum(), PAC_SERVER_CHECKSUM).map(|_| ());
+    let Some(kdc) = kdc else {
+        return last;
+    };
+    if expect_full {
+        copy = pac
+            .received_zeroed(&[PAC_SERVER_CHECKSUM, PAC_PRIVSVR_CHECKSUM, PAC_FULL_CHECKSUM])
+            .map_err(|e| map_pac_err(&e))?;
+        last = verify_pac_sig(kdc, &copy, pac.full_checksum(), PAC_FULL_CHECKSUM).map(|_| ());
+        last?;
+    }
+    let server_buf = pac
+        .server_checksum()
+        .ok_or_else(|| proto(err::GENERIC, status::HEADER_PAC))?;
+    if server_buf.len() < 4 {
+        return Err(proto(err::GENERIC, status::HEADER_PAC));
+    }
+    last = verify_pac_sig(
+        kdc,
+        &server_buf[4..],
+        pac.kdc_checksum(),
+        PAC_PRIVSVR_CHECKSUM,
+    )
+    .map(|_| ());
+    last
 }
 
 /// MIT `pac.c:478-514` `verify_checksum`: SignatureType, SHA-1-on-server, keyed, length.
@@ -204,7 +236,7 @@ fn verify_pac_sig<'a>(
     buffer_type: u32,
 ) -> Result<&'a [u8], Error> {
     let Some(buf) = buf else {
-        return Err(proto(err::BAD_INTEGRITY, status::HEADER_PAC));
+        return Err(proto(err::GENERIC, status::HEADER_PAC));
     };
     if buf.len() < 4 {
         return Err(proto(err::GENERIC, status::HEADER_PAC));

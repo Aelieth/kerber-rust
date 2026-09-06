@@ -6,6 +6,16 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-J L2a
+
+- **types/kdc.** PAC `verify_pac_checksums` matches MIT 1.22.2 `pac.c`:
+  checksums run over the received PAC bytes; privsvr covers the server
+  buffer minus the 4-byte type (RODC trailer kept); a missing buffer is
+  60; a failed server checksum is overwritten by a valid privsvr
+  result. Ticket checksum stays over the recoded EncTicketPart with PAC
+  ad-data `0x00`. MIT `t_pac.c` `saved_pac` / S4U / fuzz vectors land
+  under `crates/krb5-kdc/tests/data/`.
+
 ### W1-J L1b
 
 - **gss.** `process_checksum` matches MIT 1.22.2 `accept_sec_context.c`:
