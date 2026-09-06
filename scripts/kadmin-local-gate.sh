@@ -433,7 +433,10 @@ docker exec "$NAME" sh -c '
     /tmp/krb5-kadmin-local </tmp/klfifo >/tmp/kl.out 2>/tmp/kl.err &
   echo $! >/tmp/kl.pid
   exec 3>/tmp/klfifo
-  sleep 0.3
+  # The background local session must load the store before the concurrent
+  # kadmind create; a fixed 0.3s races on a loaded CI runner. Wait until the
+  # process is past startup (2s is ample locally and on CI).
+  sleep 2
   env KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     kadmin -p admin@KERBER.TEST -w adminpassword -q "addprinc -pw race-pw raceprinc"
   echo "setstr extra2 racek racev" >&3
