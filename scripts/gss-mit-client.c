@@ -58,6 +58,7 @@ int main(int argc, char **argv) {
     int want_deleg = 0;
     int want_iov = 0;
     int want_sign = 0;
+    int want_dce = 0;
     gss_OID mech = (gss_OID)gss_mech_krb5;
     if (argc >= 7) {
         if (strcmp(argv[6], "deleg") == 0) {
@@ -69,6 +70,9 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[6], "sign") == 0) {
             want_iov = 1;
             want_sign = 1;
+        } else if (strcmp(argv[6], "dce") == 0) {
+            want_dce = 1;
+            want_iov = 1;
         }
     }
 
@@ -108,7 +112,8 @@ int main(int argc, char **argv) {
             target,
             mech,
             GSS_C_MUTUAL_FLAG | GSS_C_CONF_FLAG | GSS_C_INTEG_FLAG
-                | (want_deleg ? GSS_C_DELEG_FLAG : 0),
+                | (want_deleg ? GSS_C_DELEG_FLAG : 0)
+                | (want_dce ? GSS_C_DCE_STYLE : 0),
             0,
             GSS_C_NO_CHANNEL_BINDINGS,
             (in.length ? &in : GSS_C_NO_BUFFER),
@@ -215,11 +220,14 @@ int main(int argc, char **argv) {
                 p += iov[i].buffer.length;
             }
         }
+        unsigned char *hdr = wrapped.value;
+        unsigned ec = total >= 6 ? ((unsigned)hdr[4] << 8) | hdr[5] : 0;
         send_token(fd, &wrapped);
+        fprintf(stderr, "mit-gss wrap_iov sent %s sign=%d dce=%d ec=%u\n",
+            msg, want_sign, want_dce, ec);
         free(wrapped.value);
         gss_release_iov_buffer(&min, iov, n);
         free(payload);
-        fprintf(stderr, "mit-gss wrap_iov sent %s sign=%d\n", msg, want_sign);
     } else {
         gss_buffer_desc payload = { strlen(msg), (void *)msg };
         gss_buffer_desc wrapped = { 0, NULL };

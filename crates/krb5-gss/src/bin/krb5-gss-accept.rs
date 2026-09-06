@@ -115,7 +115,7 @@ fn main() {
                 &rcache,
             )
         };
-        let (mut ctx, ap_rep) = match accepted {
+        let (mut ctx, mut ap_rep) = match accepted {
             Ok(v) => v,
             Err(e) => {
                 eprintln!("accept_sec_context: {e}");
@@ -134,6 +134,27 @@ fn main() {
                 "gss-accept inquire flags={} lifetime={}",
                 q.flags, q.lifetime
             );
+        }
+        if ctx.is_dce_style() {
+            if let Some(rep) = ap_rep.take()
+                && let Err(e) = write_token(&mut stream, &rep)
+            {
+                eprintln!("write AP-REP: {e}");
+                continue;
+            }
+            match read_token(&mut stream) {
+                Ok(extra) => {
+                    if let Err(e) = ctx.accept_dce(&extra) {
+                        eprintln!("accept_dce: {e}");
+                        continue;
+                    }
+                    println!("gss-accept dce ok");
+                }
+                Err(e) => {
+                    eprintln!("read dce: {e}");
+                    continue;
+                }
+            }
         }
         let exported = match ctx.export_sec_context() {
             Ok(e) => e,
@@ -196,7 +217,7 @@ fn unwrap_iov_token(
     wrap: &[u8],
     assoc: &[u8],
 ) -> Result<Vec<u8>, krb5_gss::Error> {
-    if wrap.first() != Some(&0x05) {
+    if assoc.is_empty() || wrap.first() != Some(&0x05) {
         return ctx.unwrap(wrap);
     }
     let sealed = wrap.get(2).copied().unwrap_or(0) & 0x02 != 0;

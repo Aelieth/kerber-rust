@@ -377,4 +377,152 @@ echo "$MIT2"
     exit 1
 }
 
-log "gss.gate" "ok" ",\"acceptor\":\"krb5-gss\",\"initiator\":\"mit-libgssapi\",\"deleg\":\"both\",\"spnego\":\"ok\",\"iov\":\"ok\",\"replay\":\"ok\""
+docker cp "$ROOT/scripts/gss-mit-client.c" "$NAME":/tmp/gss-mit-client.c
+if ! docker exec "$NAME" cc -o /tmp/gss-mit-client /tmp/gss-mit-client.c -lgssapi_krb5 -lkrb5; then
+    log "gss.gate" "error" ',"error":"cc gss-mit-client dce rebuild failed"'
+    exit 1
+fi
+docker cp "$ROOT/scripts/gss-mit-server.c" "$NAME":/tmp/gss-mit-server.c
+if ! docker exec "$NAME" cc -o /tmp/gss-mit-server /tmp/gss-mit-server.c -lgssapi_krb5 -lkrb5; then
+    log "gss.gate" "error" ',"error":"cc gss-mit-server dce rebuild failed"'
+    exit 1
+fi
+
+echo "==== MIT DCE wrap_iov vs Rust unwrap ===="
+docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
+docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
+sleep 0.2
+docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /etc/krb5kdc/testhost.keytab --listen 127.0.0.1:4444 >/tmp/gss-accept-dce.log 2>&1'
+ok=0
+for _ in $(seq 1 20); do
+    if docker exec "$NAME" grep -q 'listening' /tmp/gss-accept-dce.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.15
+done
+[ "$ok" = 1 ] || {
+    docker exec "$NAME" cat /tmp/gss-accept-dce.log >&2 || true
+    log "gss.gate" "error" ',"error":"gss-accept did not listen for dce"'
+    exit 1
+}
+MIT_GSS_CLIENT=/tmp/gss-mit-client
+RUST_GSS_ACCEPT=/tmp/krb5-gss-accept
+docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
+    "$MIT_GSS_CLIENT" testhost.kerber.test host "$MSG" 127.0.0.1 4444 dce
+DCE_LOG="$(docker exec "$NAME" cat /tmp/gss-accept-dce.log 2>/dev/null || true)"
+echo "$DCE_LOG"
+echo "$DCE_LOG" | grep -q 'gss-accept dce ok'
+echo "$DCE_LOG" | grep -q "gss-accept plaintext=$MSG"
+echo "$DCE_LOG" | grep -q "gss-accept unwrap ok bytes=${#MSG}"
+
+echo "==== MIT DCE wrap_iov vs MIT unwrap ===="
+docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
+docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
+sleep 0.2
+docker exec -d \
+    -e KRB5_KTNAME=/etc/krb5kdc/testhost.keytab \
+    "$NAME" sh -c '/tmp/gss-mit-server /etc/krb5kdc/testhost.keytab 127.0.0.1 4450 >/tmp/gss-mit-server-dce.log 2>&1'
+ok=0
+for _ in $(seq 1 20); do
+    if docker exec "$NAME" grep -q 'listening' /tmp/gss-mit-server-dce.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.15
+done
+[ "$ok" = 1 ] || {
+    docker exec "$NAME" cat /tmp/gss-mit-server-dce.log >&2 || true
+    log "gss.gate" "error" ',"error":"mit-gss-server dce did not listen"'
+    exit 1
+}
+MIT_GSS_CLIENT=/tmp/gss-mit-client
+MIT_GSS_SERVER=/tmp/gss-mit-server
+docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
+    "$MIT_GSS_CLIENT" testhost.kerber.test host "$MSG" 127.0.0.1 4450 dce
+MIT_DCE="$(docker exec "$NAME" cat /tmp/gss-mit-server-dce.log 2>/dev/null || true)"
+echo "$MIT_DCE"
+echo "$MIT_DCE" | grep -q "mit-gss unwrap ok $MSG"
+echo "$MIT_DCE" | grep -q "mit-gss unwrap bytes=${#MSG}"
+
+gss_mutate_cell() {
+    local kind=$1
+    local rust_pat=$2
+    local mit_pat=$3
+    echo "==== Rust initiator mutate $kind vs Rust acceptor ===="
+    docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
+    docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
+    sleep 0.2
+    docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /etc/krb5kdc/testhost.keytab --listen 127.0.0.1:4444 >/tmp/gss-accept-mut.log 2>&1'
+    ok=0
+    for _ in $(seq 1 20); do
+        if docker exec "$NAME" grep -q 'listening' /tmp/gss-accept-mut.log 2>/dev/null; then
+            ok=1
+            break
+        fi
+        sleep 0.15
+    done
+    [ "$ok" = 1 ] || {
+        docker exec "$NAME" cat /tmp/gss-accept-mut.log >&2 || true
+        log "gss.gate" "error" ",\"error\":\"gss-accept did not listen for mutate $kind\""
+        exit 1
+    }
+    RUST_GSS_INIT=/tmp/krb5-gss-init
+    RUST_GSS_ACCEPT=/tmp/krb5-gss-accept
+    docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
+        "$RUST_GSS_INIT" --ccache /tmp/krb5cc_harness --host testhost.kerber.test \
+        --ip 127.0.0.1 --port 4444 --mutate "$kind"
+    MUT_LOG="$(docker exec "$NAME" cat /tmp/gss-accept-mut.log 2>/dev/null || true)"
+    echo "$MUT_LOG"
+    echo "$MUT_LOG" | grep -q "$rust_pat" || {
+        log "gss.gate" "error" ",\"error\":\"rust mutate $kind did not reject\""
+        exit 1
+    }
+    echo "==== Rust initiator mutate $kind vs MIT acceptor ===="
+    docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
+    docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
+    sleep 0.2
+    docker exec -d \
+        -e KRB5_KTNAME=/etc/krb5kdc/testhost.keytab \
+        "$NAME" sh -c "/tmp/gss-mit-server /etc/krb5kdc/testhost.keytab 127.0.0.1 4451 >/tmp/gss-mit-mut.log 2>&1"
+    ok=0
+    for _ in $(seq 1 20); do
+        if docker exec "$NAME" grep -q 'listening' /tmp/gss-mit-mut.log 2>/dev/null; then
+            ok=1
+            break
+        fi
+        sleep 0.15
+    done
+    [ "$ok" = 1 ] || {
+        docker exec "$NAME" cat /tmp/gss-mit-mut.log >&2 || true
+        log "gss.gate" "error" ",\"error\":\"mit-gss-server mutate $kind did not listen\""
+        exit 1
+    }
+    RUST_GSS_INIT=/tmp/krb5-gss-init
+    MIT_GSS_SERVER=/tmp/gss-mit-server
+    docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
+        "$RUST_GSS_INIT" --ccache /tmp/krb5cc_harness --host testhost.kerber.test \
+        --ip 127.0.0.1 --port 4451 --mutate "$kind" || true
+    ok=0
+    MIT_MUT=""
+    for _ in $(seq 1 20); do
+        MIT_MUT="$(docker exec "$NAME" cat /tmp/gss-mit-mut.log 2>/dev/null || true)"
+        if echo "$MIT_MUT" | grep -q "$mit_pat"; then
+            ok=1
+            break
+        fi
+        sleep 0.15
+    done
+    echo "$MIT_MUT"
+    [ "$ok" = 1 ] || {
+        log "gss.gate" "error" ",\"error\":\"mit mutate $kind did not reject\""
+        exit 1
+    }
+}
+
+# MIT gss_display_status texts settled live in the mutation cells below.
+gss_mutate_cell direction 'unwrap: gss integrity' 'invalid Message Integrity Check'
+gss_mutate_cell filler 'unwrap: gss truncated' 'Invalid token was supplied'
+gss_mutate_cell ec 'unwrap: gss truncated' 'Invalid token was supplied'
+
+log "gss.gate" "ok" ",\"acceptor\":\"krb5-gss\",\"initiator\":\"mit-libgssapi\",\"deleg\":\"both\",\"spnego\":\"ok\",\"iov\":\"ok\",\"replay\":\"ok\",\"dce\":\"ok\""

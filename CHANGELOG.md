@@ -6,6 +6,13 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-J L1a
+
+- **gss.** `unwrap_v3` / `verify_enc_header` match MIT 1.22.2 `unwrap.c`:
+  filler `0xFF`, direction, RRC rotate, confidential `plain.len - ec - 16`,
+  non-conf `ec == cksumsize`. `gss-gate.sh` pins DCE-style wrap_iov plaintext
+  on both legs and mutation rejects (direction / filler / EC).
+
 ### W1-J L0
 
 - **kdc/client.** AS and TGS EncKDCRepPart are encoded with APPLICATION 26

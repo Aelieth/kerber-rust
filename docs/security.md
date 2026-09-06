@@ -124,6 +124,17 @@ no MIT `k5_setmsg`). Hide-client-names (FAST option bit 1) is
 refused as 93 `FIND_FAST`; MIT supports it (`k5-int.h:803`). Any
 critical bit 0..15 is 93 (MIT only rejects bits 0 and 2..15).
 
+### W1-J L1a — GSS unwrap_v3 / verify_enc_header
+
+MIT `unwrap.c` `unwrap_v3` checks toktype, filler `0xFF`, and direction
+(`FLAG_SENDER_IS_ACCEPTOR` vs `initiate` → `GSS_S_BAD_SIG`). Confidential
+tokens decrypt then `verify_enc_header` (toktype, flags, filler, EC, seq;
+RRC bytes are not compared) and return `plain.len - ec - 16`. Non-conf
+requires `ec == cksumsize`. Rust `unwrap_v3` is that function for wrap and
+the no-SIGN_ONLY wrap_iov path. DCE-style wrap_iov (real EC padding) is
+pinned by `gss-gate.sh`. DCE handshake (`kg_accept_dce`) is only the extra
+token needed for that cell; SIGN_ONLY + DCE trailer EC is out of this item.
+
 ### W1-J L0 — EncKDCRepPart APPLICATION 26
 
 MIT encodes both EncASRepPart and EncTGSRepPart with application tag 26

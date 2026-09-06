@@ -194,21 +194,35 @@ int main(int argc, char **argv) {
     }
 
     recv_token(fd, &in);
-    gss_iov_buffer_desc iov[2];
-    iov[0].type = GSS_IOV_BUFFER_TYPE_STREAM;
-    iov[0].buffer = in;
-    iov[1].type = GSS_IOV_BUFFER_TYPE_DATA | GSS_IOV_BUFFER_FLAG_ALLOCATE;
-    iov[1].buffer.value = NULL;
-    iov[1].buffer.length = 0;
     int conf = 0;
-    maj = gss_unwrap_iov(&min, ctx, &conf, NULL, iov, 2);
-    if (maj != GSS_S_COMPLETE) {
-        die_gss("unwrap_iov", maj, min);
+    if (ret_flags & GSS_C_DCE_STYLE) {
+        gss_buffer_desc out = GSS_C_EMPTY_BUFFER;
+        maj = gss_unwrap(&min, ctx, &in, &out, &conf, NULL);
+        if (maj != GSS_S_COMPLETE) {
+            die_gss("unwrap", maj, min);
+        }
+        fprintf(stderr, "mit-gss unwrap ok %.*s\n",
+            (int)out.length, (char *)out.value);
+        fprintf(stderr, "mit-gss unwrap bytes=%zu\n", out.length);
+        gss_release_buffer(&min, &out);
+        free(in.value);
+    } else {
+        gss_iov_buffer_desc iov[2];
+        iov[0].type = GSS_IOV_BUFFER_TYPE_STREAM;
+        iov[0].buffer = in;
+        iov[1].type = GSS_IOV_BUFFER_TYPE_DATA | GSS_IOV_BUFFER_FLAG_ALLOCATE;
+        iov[1].buffer.value = NULL;
+        iov[1].buffer.length = 0;
+        maj = gss_unwrap_iov(&min, ctx, &conf, NULL, iov, 2);
+        if (maj != GSS_S_COMPLETE) {
+            die_gss("unwrap_iov", maj, min);
+        }
+        fprintf(stderr, "mit-gss unwrap ok %.*s\n",
+            (int)iov[1].buffer.length, (char *)iov[1].buffer.value);
+        fprintf(stderr, "mit-gss unwrap bytes=%zu\n", iov[1].buffer.length);
+        gss_release_iov_buffer(&min, iov, 2);
+        free(in.value);
     }
-    fprintf(stderr, "mit-gss unwrap ok %.*s\n",
-        (int)iov[1].buffer.length, (char *)iov[1].buffer.value);
-    gss_release_iov_buffer(&min, iov, 2);
-    free(in.value);
     gss_delete_sec_context(&min, &ctx, GSS_C_NO_BUFFER);
     if (src != GSS_C_NO_NAME) {
         gss_release_name(&min, &src);

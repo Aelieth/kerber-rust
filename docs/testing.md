@@ -220,6 +220,9 @@ MIT `gss_wrap_iov`
 must unwrap on the Rust acceptor; Rust `wrap_iov` concatenates to a
 token MIT `gss_unwrap_iov` STREAM accepts. The acceptor prints
 `gss-accept import ok` and `inquire flags=` with lifetime > 0.
+`GSS_C_DCE_STYLE` wrap_iov (real EC padding) must unwrap to the sent
+bytes on both legs; Rust-initiator direction/filler/EC mutations are
+rejected on both acceptors.
 
 PKINIT: `scripts/pkinit-gate.sh` **fails** unless MIT `pkinit.so` is
 present and MIT `kinit -X X509_user_identity=FILE:` succeeds against

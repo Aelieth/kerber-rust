@@ -50,6 +50,8 @@ pub const GSS_C_CONF: u32 = 16;
 pub const GSS_C_INTEG: u32 = 32;
 /// RFC 2744 `GSS_C_TRANS_FLAG` (context is exportable).
 pub const GSS_C_TRANS: u32 = 256;
+/// MIT `GSS_C_DCE_STYLE` (`gssapi_ext.h`).
+pub const GSS_C_DCE: u32 = 0x1000;
 const KRB5_GSS_FOR_CREDS: u16 = 1;
 const EXPORT_MAGIC: &[u8; 4] = b"K5G1";
 const EXPORT_VERSION: u8 = 1;
@@ -166,6 +168,9 @@ pub struct GssContext {
     pub acceptor: Option<krb5_types::PrincipalName>,
     /// Ticket realm (`check_rpcsec_auth` / `check_iprop_rpcsec_auth`).
     pub ticket_realm: Option<String>,
+    /// Ticket session for DCE third-leg `krb5_rd_rep_dce`.
+    ap_rep_key: Option<ProtocolKey>,
+    dce_style: bool,
 }
 
 impl GssContext {
@@ -196,6 +201,8 @@ impl GssContext {
             ticket_initial: false,
             acceptor: Some(acceptor),
             ticket_realm: Some(ticket_realm.into()),
+            ap_rep_key: None,
+            dce_style: false,
         })
     }
 }
@@ -321,6 +328,8 @@ impl GssContext {
                 ticket_initial: false,
                 acceptor: None,
                 ticket_realm: Some(String::from_utf8_lossy(crealm.as_bytes()).into_owned()),
+                ap_rep_key: None,
+                dce_style: false,
             },
             token,
         ))
@@ -344,7 +353,8 @@ impl GssContext {
         rcache: &ReplayCache,
     ) -> Result<(Self, Option<Vec<u8>>), Error> {
         let first = service_keys.first().ok_or(Error::Truncated)?;
-        let inner = gss_unwrap_app(token)?;
+        let dce_style = token.first() != Some(&0x60);
+        let inner = ap_req_token(token)?;
         if inner.len() < 2 || inner[..2] != TOK_AP_REQ {
             return Err(Error::Truncated);
         }
@@ -366,6 +376,8 @@ impl GssContext {
             ticket_initial: false,
             acceptor: None,
             ticket_realm: None,
+            ap_rep_key: None,
+            dce_style,
         };
         let params = krb5_protocol::ApVerifyParams {
             expected_server,
@@ -429,6 +441,10 @@ impl GssContext {
         if want_mutual {
             gss_flags |= GSS_C_MUTUAL;
         }
+        if dce_style {
+            want_mutual = true;
+            gss_flags |= GSS_C_MUTUAL | GSS_C_DCE;
+        }
         let sess = subkey.unwrap_or_else(|| ticket_session.clone());
         let base = ok.authenticator.seq_number.unwrap_or(0);
         let out = Self {
@@ -449,15 +465,56 @@ impl GssContext {
             ticket_initial: ok.ticket_part.flags.initial(),
             acceptor: Some(ok.sname.clone()),
             ticket_realm: Some(srealm),
+            ap_rep_key: if dce_style {
+                Some(ticket_session.clone())
+            } else {
+                None
+            },
+            dce_style,
         };
         let mut ap_rep_tok = None;
         if want_mutual {
             // MIT `krb5_mk_rep` encrypts EncAPRepPart with the ticket session.
             let ap_rep = build_ap_rep(&ticket_session, &ok.authenticator, None, Some(0))?;
             let der = encode(&ap_rep)?;
-            ap_rep_tok = Some(gss_wrap_app(TOK_AP_REP, &der));
+            ap_rep_tok = Some(if dce_style {
+                der
+            } else {
+                gss_wrap_app(TOK_AP_REP, &der)
+            });
         }
         Ok((out, ap_rep_tok))
+    }
+
+    /// MIT `kg_accept_dce` / `krb5_rd_rep_dce`.
+    ///
+    /// # Errors
+    ///
+    /// Truncated token, decrypt, sequence, or unexpected subkey.
+    pub fn accept_dce(&mut self, token: &[u8]) -> Result<(), Error> {
+        if !self.dce_style {
+            return Err(Error::Truncated);
+        }
+        let key = self.ap_rep_key.as_ref().ok_or(Error::Truncated)?;
+        let ap: ApRep = decode(token)?;
+        let usage = KeyUsage::new(ku::AP_REP_ENC_PART)?;
+        let plain = decrypt(key, usage, ap.enc_part.cipher.as_ref())?;
+        let part: EncApRepPart = decode(&plain)?;
+        if part.subkey.is_some() {
+            return Err(Error::Integrity);
+        }
+        let seq = part.seq_number.unwrap_or(0);
+        if u64::from(seq) != self.send_seq {
+            return Err(Error::Integrity);
+        }
+        self.ap_rep_key = None;
+        Ok(())
+    }
+
+    /// True when the initial token was a raw DCE AP-REQ.
+    #[must_use]
+    pub fn is_dce_style(&self) -> bool {
+        self.dce_style
     }
 
     /// Consume the MIT CFX AP-REP token (acceptor subkey).
@@ -518,7 +575,7 @@ impl GssContext {
     pub fn wrap(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, Error> {
         // MIT 1.22.2 libgssapi_krb5 wrap tokens use RRC=0 (observed in
         // gss-gate). wrap_with_rrc(16) remains for SSPI in-place decrypt.
-        self.wrap_with_rrc_inner(plaintext, 0)
+        self.wrap_conf_inner(plaintext, 0, 0)
     }
 
     /// Unwrap a wrap token. Sequence numbers are checked.
@@ -527,6 +584,10 @@ impl GssContext {
     ///
     /// Integrity, truncated tokens, or sequence mismatch.
     pub fn unwrap(&mut self, token: &[u8]) -> Result<Vec<u8>, Error> {
+        self.unwrap_v3(token)
+    }
+
+    fn unwrap_v3(&mut self, token: &[u8]) -> Result<Vec<u8>, Error> {
         let owned = message_token(token)?;
         let inner = owned.as_slice();
         if inner.len() < 16 || inner[..2] != TOK_WRAP {
@@ -534,49 +595,49 @@ impl GssContext {
         }
         let mut header = [0u8; 16];
         header.copy_from_slice(&inner[..16]);
-        let seq = u64::from_be_bytes(header[8..16].try_into().map_err(|_| Error::Truncated)?);
+        let flags = header[2];
+        if header[3] != 0xFF {
+            return Err(Error::Truncated);
+        }
+        check_direction(flags, self.initiator)?;
+        let ec = usize::from(u16::from_be_bytes(
+            header[4..6].try_into().map_err(|_| Error::Truncated)?,
+        ));
         let rrc = u16::from_be_bytes(header[6..8].try_into().map_err(|_| Error::Truncated)?);
+        let seq = u64::from_be_bytes(header[8..16].try_into().map_err(|_| Error::Truncated)?);
         let payload = rotate_rrc(&inner[16..], rrc);
         let usage = seal_usage(!self.initiator);
-        let key = self.recv_key(header[2])?;
-        if header[2] & FLAG_SEALED == 0 {
+        let key = self.recv_key(flags)?;
+        let msg = if flags & FLAG_SEALED == 0 {
             let ctype = key.etype().checksum_type();
             let cksumsize = checksum_output_size(ctype).ok_or(Error::Truncated)?;
-            let ec = usize::from(u16::from_be_bytes(
-                header[4..6].try_into().map_err(|_| Error::Truncated)?,
-            ));
             if cksumsize > payload.len() || ec != cksumsize {
                 return Err(Error::Truncated);
             }
             let split = payload.len() - cksumsize;
             let data = &payload[..split];
             let mac = &payload[split..];
-            let ckhdr = rfc4121_ckhdr(TOK_WRAP, header[2], seq, false);
+            let ckhdr = rfc4121_ckhdr(TOK_WRAP, flags, seq, false);
             let mut to_ck = data.to_vec();
             to_ck.extend_from_slice(&ckhdr);
             verify_checksum_type(key, usage, &to_ck, ctype, mac).map_err(|e| map_gss_cksum(&e))?;
-            self.accept_seq(seq)?;
-            return Ok(data.to_vec());
-        }
-        let plain = decrypt(key, usage, &payload).map_err(|e| {
-            if matches!(e, krb5_crypto::Error::Integrity) {
-                Error::Integrity
-            } else {
-                Error::from(e)
+            data.to_vec()
+        } else {
+            let plain = decrypt(key, usage, &payload).map_err(|e| {
+                if matches!(e, krb5_crypto::Error::Integrity) {
+                    Error::Integrity
+                } else {
+                    Error::from(e)
+                }
+            })?;
+            if !verify_enc_header(&plain, flags, ec, seq) {
+                return Err(Error::Truncated);
             }
-        })?;
-        if plain.len() < 16 {
-            return Err(Error::Truncated);
-        }
-        let (msg, trail) = plain.split_at(plain.len() - 16);
-        let mut expected = header;
-        expected[6] = 0;
-        expected[7] = 0;
-        if trail != expected {
-            return Err(Error::Integrity);
-        }
+            let n = plain.len() - ec - 16;
+            plain[..n].to_vec()
+        };
         self.accept_seq(seq)?;
-        Ok(msg.to_vec())
+        Ok(msg)
     }
 
     /// MIC (integrity only). RFC 4121 §4.2.6.1 token.
@@ -611,10 +672,7 @@ impl GssContext {
         if inner[3] != 0xFF || inner[4..8] != [0xFF; 4] {
             return Err(Error::Truncated);
         }
-        let sender_is_acceptor = inner[2] & FLAG_SENT_BY_ACCEPTOR != 0;
-        if sender_is_acceptor != self.initiator {
-            return Err(Error::Integrity);
-        }
+        check_direction(inner[2], self.initiator)?;
         let usage = sign_usage(!self.initiator);
         let key = self.recv_key(inner[2])?;
         let ctype = key.etype().checksum_type();
@@ -645,7 +703,16 @@ impl GssContext {
     ///
     /// Crypto failures.
     pub fn wrap_with_rrc(&mut self, plaintext: &[u8], rrc: u16) -> Result<Vec<u8>, Error> {
-        self.wrap_with_rrc_inner(plaintext, rrc)
+        self.wrap_conf_inner(plaintext, 0, rrc)
+    }
+
+    /// Confidential wrap with RFC 4121 EC padding (`unwrap.c` `out.len = plain - ec - 16`).
+    ///
+    /// # Errors
+    ///
+    /// Crypto failures.
+    pub fn wrap_with_ec(&mut self, plaintext: &[u8], ec: u16) -> Result<Vec<u8>, Error> {
+        self.wrap_conf_inner(plaintext, ec, 0)
     }
 
     /// Wrap without confidentiality (`gss_seal` conf=0). AUTH_GSSAPI
@@ -669,12 +736,14 @@ impl GssContext {
         Ok(tok)
     }
 
-    fn wrap_with_rrc_inner(&mut self, plaintext: &[u8], rrc: u16) -> Result<Vec<u8>, Error> {
+    fn wrap_conf_inner(&mut self, plaintext: &[u8], ec: u16, rrc: u16) -> Result<Vec<u8>, Error> {
         let usage = seal_usage(self.initiator);
         let (key, extra) = self.send_key();
         let mut header = wrap_header(self.initiator, true, self.send_seq);
         header[2] |= extra;
+        header[4..6].copy_from_slice(&ec.to_be_bytes());
         let mut to_enc = plaintext.to_vec();
+        to_enc.extend(vec![0xFF; usize::from(ec)]);
         to_enc.extend_from_slice(&header);
         let cipher = encrypt(key, usage, &to_enc)?;
         self.send_seq = self.send_seq.wrapping_add(1);
@@ -830,13 +899,17 @@ impl GssContext {
         }
         let mut tok_hdr = [0u8; 16];
         tok_hdr.copy_from_slice(&header[..16]);
-        if tok_hdr[..2] != TOK_WRAP || tok_hdr[2] & FLAG_SEALED == 0 {
+        if tok_hdr[..2] != TOK_WRAP || tok_hdr[2] & FLAG_SEALED == 0 || tok_hdr[3] != 0xFF {
             return Err(Error::Truncated);
         }
+        check_direction(tok_hdr[2], self.initiator)?;
         let rrc = u16::from_be_bytes(tok_hdr[6..8].try_into().map_err(|_| Error::Truncated)?);
         if rrc != 0 {
             return Err(Error::Truncated);
         }
+        let ec = usize::from(u16::from_be_bytes(
+            tok_hdr[4..6].try_into().map_err(|_| Error::Truncated)?,
+        ));
         let key = self.recv_key(tok_hdr[2])?.clone();
         require_aes(key.etype())?;
         let hmac_len = key.etype().hmac_output_len();
@@ -865,7 +938,11 @@ impl GssContext {
         if plain.len() < 16 {
             return Err(Error::Truncated);
         }
-        let (msg, trail) = plain.split_at(plain.len() - 16);
+        let seq = u64::from_be_bytes(tok_hdr[8..16].try_into().map_err(|_| Error::Truncated)?);
+        if !verify_enc_header(&plain, tok_hdr[2], ec, seq) {
+            return Err(Error::Truncated);
+        }
+        let (msg, _) = plain.split_at(plain.len() - 16);
         if !rfc8009 {
             let hmac_in = iov_hmac_input(iov, false, &conf, &[], &tok_hdr, Some(msg))?;
             let expect = integrity_mac(&key, usage, &hmac_in)?;
@@ -873,13 +950,6 @@ impl GssContext {
                 return Err(Error::Integrity);
             }
         }
-        let mut expected = tok_hdr;
-        expected[6] = 0;
-        expected[7] = 0;
-        if trail != expected {
-            return Err(Error::Integrity);
-        }
-        let seq = u64::from_be_bytes(tok_hdr[8..16].try_into().map_err(|_| Error::Truncated)?);
         self.accept_seq(seq)?;
         write_iov_data(iov, msg)
     }
@@ -1008,6 +1078,8 @@ impl GssContext {
             ticket_initial: false,
             acceptor: None,
             ticket_realm: None,
+            ap_rep_key: None,
+            dce_style: false,
         })
     }
 
@@ -1482,6 +1554,32 @@ fn rfc4121_ckhdr(toktype: [u8; 2], flags: u8, seq: u64, mic: bool) -> [u8; 16] {
     h
 }
 
+fn check_direction(flags: u8, initiator: bool) -> Result<(), Error> {
+    let sender_is_acceptor = flags & FLAG_SENT_BY_ACCEPTOR != 0;
+    if sender_is_acceptor == initiator {
+        Ok(())
+    } else {
+        Err(Error::Integrity)
+    }
+}
+
+fn verify_enc_header(plain: &[u8], flags: u8, ec: usize, seq: u64) -> bool {
+    if plain.len() < 16 + ec {
+        return false;
+    }
+    let h = &plain[plain.len() - 16..];
+    let hdr_ec = u16::from_be_bytes([h[4], h[5]]);
+    let Ok(hdr_seq) = h[8..16].try_into().map(u64::from_be_bytes) else {
+        return false;
+    };
+    h[0] == TOK_WRAP[0]
+        && h[1] == TOK_WRAP[1]
+        && h[2] == flags
+        && h[3] == 0xFF
+        && usize::from(hdr_ec) == ec
+        && hdr_seq == seq
+}
+
 fn wrap_header(initiator: bool, sealed: bool, seq: u64) -> [u8; 16] {
     let mut h = [0u8; 16];
     h[0] = TOK_WRAP[0];
@@ -1519,6 +1617,16 @@ fn message_token(token: &[u8]) -> Result<Vec<u8>, Error> {
     } else {
         Ok(token.to_vec())
     }
+}
+
+fn ap_req_token(token: &[u8]) -> Result<Vec<u8>, Error> {
+    if token.first() == Some(&0x60) {
+        return gss_unwrap_app(token);
+    }
+    let mut inner = Vec::with_capacity(2 + token.len());
+    inner.extend_from_slice(&TOK_AP_REQ);
+    inner.extend_from_slice(token);
+    Ok(inner)
 }
 
 fn gss_wrap_app(tok_id: [u8; 2], inner: &[u8]) -> Vec<u8> {
@@ -3002,6 +3110,8 @@ mod tests {
             ticket_initial: false,
             acceptor: None,
             ticket_realm: None,
+            ap_rep_key: None,
+            dce_style: false,
         }
     }
 

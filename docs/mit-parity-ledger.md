@@ -35,9 +35,9 @@ Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after W1-J L0 APPLICATION 26):
+Counts (after W1-J L1a unwrap_v3):
 **281** = A1 116 + A2 68 + A3 55 + A4 42.
-exact 87 · stricter-documented 12 · deviation 100 ·
+exact 88 · stricter-documented 12 · deviation 99 ·
 absent 67 · deferred 15.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
@@ -431,7 +431,7 @@ checksum/rc4/declared-cksumtype rows that sat under A3.
 | crypto_int.h:596-608; krb5_c_verify_checksum | declared cksumtype `ctp` selects the verifier | n/a | krb5-crypto/ops.rs verify_checksum_type | declared type used | exact | `verify_checksum_type_honours_declared_unkeyed`; `verify_checksum_type_md5_hmac_rc4_uses_raw_key` |
 | rd_req_dec.c:748-749 | AP-REQ authenticator checksum keyed with the ticket session key; app checksum supplied by the acceptor | n/a | krb5-protocol/ap_req.rs verify_ap_req_ex | session key; `app_cksum` is still `None` from the GSS acceptor (L1b) | deviation | W1-J L1b; `verify_ap_req` path |
 | rd_safe.c:43-125 | KRB-SAFE checksum over the received body DER (`krb5_safe_with_body`) | n/a | krb5-protocol/safe_priv.rs unwrap_krb_safe_ex; krb5-protocol/safe_priv.rs verify_krb_safe_checksum | re-encodes a clone with a zeroed checksum (L2b) | deviation | W1-J L2b |
-| unwrap.c:191-240,272-371 | GSS wrap unwrap: direction, filler, EC strip, `verify_enc_header` | n/a | krb5-gss/lib.rs unwrap | no direction check; EC not subtracted; header byte-compared (L1a) | deviation | W1-J L1a |
+| unwrap.c:191-240,272-371 | GSS wrap unwrap: direction, filler, EC strip, `verify_enc_header` (RRC not compared) | n/a | krb5-gss/lib.rs unwrap_v3 | direction Integrity; filler/EC Truncated; EC stripped | exact | `unwrap_conf_ec_padding_is_stripped`; `unwrap_direction_flipped_is_bad_sig`; `scripts/gss-gate.sh` DCE + mutation cells both legs |
 | server_stubs.c: add/delete ACL denial | add/delete ACL denial | `KADM5_AUTH_ADD` / `KADM5_AUTH_DELETE` | krb5-admin/kadm5.rs dispatch_kadm5_ticket | create path `AUTH_ADD`; some denials still `AUTH_GET` | deviation | W1-C; `acl_target_pattern_scopes_add_and_delete` (create is AUTH_ADD) |
 | kadm_rpc_svc.c:80-88,324-331 | kadm5 acceptor: AUTH_GSSAPI or `check_rpcsec_auth` (2 comps, realm, `kadmin`, not `history`) else `svcerr_weakauth` | RPC AUTH_TOOWEAK | kadm5.rs check_rpcsec_auth via acceptor_realm_ok; kadm5.rs kadm5_rpcsec_ok | kiprop/history/1-comp weakauth; realm-qualified (`ticket_realm == store_realm`), bound at `accept_sec_context` and re-checked at the gate | exact | `check_rpcsec_auth_rejects_kiprop_history_and_one_component` (calls `check_rpcsec_auth` / `check_iprop_rpcsec_auth`); `crates/krb5-admin/tests/sp01_acceptor.rs`; `scripts/kadmin-gate.sh` kiprop `--service` both legs |
 | server_stubs.c:28-32; ovsec_kadmd.c:468-477 | CHANGEPW_SERVICE compares the full realm-qualified acceptor name (`cmp_gss_names` = `gss_compare_name`) vs `kadmin/changepw@<realm>`; AUTH_GSSAPI names built with `params.realm`; `gss_oldchangepw_name` unset | n/a (authz predicate) | kadm5.rs changepw_acceptor; kadm5.rs check_auth_gssapi_names via acceptor_realm_ok | realm-qualified; realm bound at accept, unreachable via foreign ticket (INIT-fail first) | exact | `changepw_acceptor_requires_store_realm`; `kadm5_auth_gssapi_ok_requires_store_realm` (foreign-realm cell not realizable — `working/logs/audit-polish-0902/sub-plan-01/notes-acceptor-realm.md`) |

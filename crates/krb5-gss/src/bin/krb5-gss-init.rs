@@ -20,6 +20,7 @@ fn main() {
     let mut ip = "127.0.0.1".to_owned();
     let mut port = 4444u16;
     let mut deleg = false;
+    let mut mutate = None::<String>;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -36,12 +37,13 @@ fn main() {
                 }
             }
             "--deleg" => deleg = true,
+            "--mutate" => mutate = args.next(),
             _ => {}
         }
     }
     let (Some(cc_path), Some(host_name)) = (ccache, host) else {
         eprintln!(
-            "usage: krb5-gss-init --ccache PATH --host HOST [--ip IP] [--port PORT] [--deleg]"
+            "usage: krb5-gss-init --ccache PATH --host HOST [--ip IP] [--port PORT] [--deleg] [--mutate direction|filler|ec]"
         );
         std::process::exit(2);
     };
@@ -120,10 +122,29 @@ fn main() {
         eprintln!("process_ap_rep: {e}");
         std::process::exit(1);
     });
-    let wrapped = wrap_iov_token(&mut ctx, b"hello-from-rust-gss").unwrap_or_else(|e| {
+    let mut wrapped = wrap_iov_token(&mut ctx, b"hello-from-rust-gss").unwrap_or_else(|e| {
         eprintln!("wrap: {e}");
         std::process::exit(1);
     });
+    if let Some(kind) = mutate.as_deref() {
+        if wrapped.len() < 16 {
+            eprintln!("mutate: token too short");
+            std::process::exit(1);
+        }
+        match kind {
+            "direction" => wrapped[2] ^= 0x01,
+            "filler" => wrapped[3] = 0x00,
+            "ec" => {
+                let ec = u16::from_be_bytes([wrapped[4], wrapped[5]]).wrapping_add(1);
+                wrapped[4..6].copy_from_slice(&ec.to_be_bytes());
+            }
+            other => {
+                eprintln!("unknown mutate {other}");
+                std::process::exit(2);
+            }
+        }
+        eprintln!("gss-init mutate={kind}");
+    }
     write_token(&mut stream, &wrapped).unwrap_or_else(|e| {
         eprintln!("write wrap: {e}");
         std::process::exit(1);
