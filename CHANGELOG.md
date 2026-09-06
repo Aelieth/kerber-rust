@@ -6,6 +6,18 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-K M1a
+
+- **ci/docs.** `scripts/ci-policy.py` `check_ledger_anchors` dies on an
+  unresolvable or ambiguous rust-site, crate-qualifies anchors, brace-matches
+  item spans (`fn` / `const` / `struct` / `enum` / `static`), requires every
+  `exact` row to carry an anchor, and quote-checks MIT status and Rust e_text
+  (including short forms such as `TKT_NYV`). Unowned ledger rows are pointed
+  at the real items or regraded; A4 rows for `acl_init`/default `acl_file`,
+  `ipropx_resync`, `get_privs`, `CREATE_ALIAS` (absent until M3a), and the
+  AUTH_GSSAPI `FLAVOR_NONE` / arg-version residues. Tally 280. `docs/security.md`
+  names the W1-I surface.
+
 ### W1-I sub-plan 07
 
 - **tooling.** `scripts/lib/settle.sh` refuses every file reader (`grep`,

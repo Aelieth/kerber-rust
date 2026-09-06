@@ -124,6 +124,15 @@ no MIT `k5_setmsg`). Hide-client-names (FAST option bit 1) is
 refused as 93 `FIND_FAST`; MIT supports it (`k5-int.h:803`). Any
 critical bit 0..15 is 93 (MIT only rejects bits 0 and 2..15).
 
+### W1-I — kadmind acceptors, RPCSEC_GSS, iprop, K13 policy, kadmin.local
+
+The W1-I surface is the kadmind AUTH_GSSAPI acceptors, the RPCSEC_GSS
+state machine (`_svcauth_gss` / `check_rpcsec_auth`), the iprop
+program (`ipropx_resync` / `kiprop`), K13 policy (`pw_min_life` /
+`pw_max_life` / `krb5_string_to_deltat`), and `kadmin.local` (no ACL;
+exit 1 after a failed verb). The paragraphs below pin that surface
+against MIT 1.22.2.
+
 `kadmin/admin` and `kadmin/changepw` are bootstrapped with MIT
 `kadm5_create` attributes: both `DISALLOW_TGT_BASED|LOCKDOWN_KEYS`;
 changepw also `PWCHANGE_SERVICE`. A TGS from a TGT is 12

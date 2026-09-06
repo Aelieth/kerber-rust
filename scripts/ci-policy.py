@@ -679,12 +679,28 @@ _HEADER_TOTAL = re.compile(
     r"(?:\s*\+\s*A4\s+(\d+))?"
 )
 _RUST_ANCHOR = re.compile(
-    r"\b([A-Za-z0-9_-]+\.rs)\s+([A-Za-z_][A-Za-z0-9_]*)(?::(\d+))?\b"
+    r"(?:`)?(?:(?P<crate>[A-Za-z0-9_-]+)/(?:src/)?)?(?P<file>[A-Za-z0-9_-]+\.rs)"
+    r"\s+(?:`)?(?P<symbol>[A-Za-z_][A-Za-z0-9_]*)(?:`)?"
+    r"(?::(?P<symline>\d+))?"
 )
-_FN_DEF = re.compile(
-    r"^(\s*)(?:pub(?:\([^)]+\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\b"
+_ITEM_DEF = re.compile(
+    r"^(\s*)(?:pub(?:\([^)]+\))?\s+)*"
+    r"(?:(?:(?:async|const|unsafe)\s+)+fn|fn|struct|enum|const|static)"
+    r"\s+([A-Za-z_][A-Za-z0-9_]*)\b"
 )
 _STATUS_QUOTE = re.compile(r"`([A-Z][A-Z0-9_][A-Z0-9_ /-]{1,})`")
+_CRATE_ALIASES = {
+    "kdc": "krb5-kdc",
+    "admin": "krb5-admin",
+    "gss": "krb5-gss",
+    "types": "krb5-types",
+    "protocol": "krb5-protocol",
+    "crypto": "krb5-crypto",
+    "client": "krb5-client",
+    "asn1": "krb5-asn1",
+    "log": "krb5-log",
+    "config": "krb5-config",
+}
 
 
 def recount_ledger_sections(text: str) -> dict[str, int]:
@@ -795,45 +811,138 @@ def check_ledger_tally(text: str | None = None) -> None:
         )
 
 
-def _rust_sources() -> dict[str, list[pathlib.Path]]:
-    out: dict[str, list[pathlib.Path]] = {}
+def _is_exact_verdict(verdict: str) -> bool:
+    return (
+        verdict == "exact"
+        or verdict.startswith("exact ")
+        or verdict.startswith("exact(")
+    )
+
+
+def _normalize_crate(name: str | None) -> str | None:
+    if not name:
+        return None
+    return _CRATE_ALIASES.get(name, name)
+
+
+def _src_index() -> tuple[dict[str, dict[str, pathlib.Path]], dict[str, list[str]]]:
+    """`crates/<crate>/src/**/*.rs` keyed by crate then basename."""
+    by_crate: dict[str, dict[str, pathlib.Path]] = {}
+    by_base: dict[str, list[str]] = {}
     crates = ROOT / "crates"
     if not crates.is_dir():
-        return out
-    for p in crates.rglob("*.rs"):
-        out.setdefault(p.name, []).append(p)
-    return out
+        return by_crate, by_base
+    for crate_dir in sorted(crates.iterdir()):
+        src = crate_dir / "src"
+        if not crate_dir.is_dir() or not src.is_dir():
+            continue
+        crate = crate_dir.name
+        for p in src.rglob("*.rs"):
+            files = by_crate.setdefault(crate, {})
+            prev = files.get(p.name)
+            if prev is not None and prev != p:
+                _die(f"duplicate {p.name} under crates/{crate}/src")
+            files[p.name] = p
+            if crate not in by_base.setdefault(p.name, []):
+                by_base[p.name].append(crate)
+    return by_crate, by_base
 
 
-def _fn_span(path: pathlib.Path, symbol: str) -> tuple[int, int, str] | None:
+def _code_without_line_comment(line: str) -> str:
+    out: list[str] = []
+    in_str = False
+    quote = ""
+    i = 0
+    while i < len(line):
+        c = line[i]
+        if in_str:
+            out.append(c)
+            if c == "\\" and i + 1 < len(line):
+                out.append(line[i + 1])
+                i += 2
+                continue
+            if c == quote:
+                in_str = False
+            i += 1
+            continue
+        if c in "\"'":
+            in_str = True
+            quote = c
+            out.append(c)
+            i += 1
+            continue
+        if c == "/" and i + 1 < len(line) and line[i + 1] == "/":
+            break
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _item_span(path: pathlib.Path, symbol: str) -> tuple[int, int, str] | None:
     lines = path.read_text(errors="replace").splitlines()
     start = None
-    indent = 0
     for i, line in enumerate(lines, 1):
-        m = _FN_DEF.match(line)
+        m = _ITEM_DEF.match(line)
         if m and m.group(2) == symbol:
             start = i
-            indent = len(m.group(1))
             break
     if start is None:
         return None
-    end = len(lines)
-    for i, line in enumerate(lines[start:], start + 1):
-        m = _FN_DEF.match(line)
-        if m and len(m.group(1)) <= indent:
-            end = i - 1
+    depth = 0
+    seen_brace = False
+    end = start
+    for i, line in enumerate(lines[start - 1 :], start):
+        code = _code_without_line_comment(line)
+        if not seen_brace and "{" not in code:
+            if ";" in code:
+                end = i
+                break
+            end = i
+            continue
+        for c in code:
+            if c == "{":
+                depth += 1
+                seen_brace = True
+            elif c == "}":
+                depth -= 1
+        end = i
+        if seen_brace and depth <= 0:
             break
     body = "\n".join(lines[start - 1 : end])
     return start, end, body
 
 
+def _resolve_src(
+    crate: str | None,
+    fname: str,
+    by_crate: dict[str, dict[str, pathlib.Path]],
+    by_base: dict[str, list[str]],
+    where: str,
+) -> pathlib.Path:
+    crate_n = _normalize_crate(crate)
+    if crate_n:
+        files = by_crate.get(crate_n)
+        if not files or fname not in files:
+            _die(f"{where} {crate_n}/{fname} not under crates/{crate_n}/src")
+        return files[fname]
+    crates_for = by_base.get(fname) or []
+    if not crates_for:
+        _die(f"{where} {fname} not under crates/*/src")
+    if len(crates_for) > 1:
+        opts = ", ".join(f"{c}/{fname}" for c in sorted(crates_for))
+        _die(f"{where} {fname} is ambiguous; qualify as {opts}")
+    return by_crate[crates_for[0]][fname]
+
+
 def check_ledger_anchors(text: str | None = None) -> None:
-    """Every `file.rs symbol` in the rust-site cell resolves to `fn symbol`."""
+    """Every rust-site `file.rs symbol` resolves; exact rows quote-check the body."""
+    checking_file = text is None
     if text is None:
         if not LEDGER.is_file():
             _die("missing docs/mit-parity-ledger.md")
         text = LEDGER.read_text()
-    sources = _rust_sources()
+    by_crate, by_base = _src_index()
+    n_quote = 0
     for i, line in enumerate(text.splitlines(), 1):
         if (
             not line.startswith("|")
@@ -845,42 +954,43 @@ def check_ledger_anchors(text: str | None = None) -> None:
         if len(cols) < 7 or cols[5] == "verdict":
             continue
         site, etext = cols[3], cols[4]
+        where = f"docs/mit-parity-ledger.md:{i}"
+        bodies: list[str] = []
+        saw_symbol = False
         for m in _RUST_ANCHOR.finditer(site):
-            fname, symbol, lineno = m.group(1), m.group(2), m.group(3)
-            paths = sources.get(fname)
-            if not paths:
-                _die(f"docs/mit-parity-ledger.md:{i} {fname} not under crates/")
-            span = None
-            for p in paths:
-                span = _fn_span(p, symbol)
-                if span:
-                    break
-            if span is None:
-                # Prose like `issue.rs leaks` is not an anchor.
+            fname = m.group("file")
+            symbol = m.group("symbol")
+            lineno = m.group("symline")
+            if not symbol:
                 continue
+            saw_symbol = True
+            path = _resolve_src(m.group("crate"), fname, by_crate, by_base, where)
+            span = _item_span(path, symbol)
+            if span is None:
+                _die(f"{where} {fname} {symbol} is not an item in {path}")
             start, end, body = span
+            bodies.append(body)
             if lineno:
                 n = int(lineno)
                 if not (start <= n <= end):
                     _die(
-                        f"docs/mit-parity-ledger.md:{i} {fname}:{n} "
-                        f"is not inside fn {symbol} ({start}-{end})"
+                        f"{where} {fname}:{n} is not inside {symbol} "
+                        f"({start}-{end})"
                     )
-            if not (
-                cols[5] == "exact"
-                or cols[5].startswith("exact ")
-                or cols[5].startswith("exact(")
-            ):
-                continue
-            for q in _STATUS_QUOTE.findall(etext):
+        if _is_exact_verdict(cols[5]):
+            if not saw_symbol:
+                _die(f"{where} exact row has no rust-site anchor")
+            joined = "\n".join(bodies)
+            quoted = f"{cols[2]} {etext}"
+            for q in _STATUS_QUOTE.findall(quoted):
                 ident = re.sub(r"[^A-Z0-9]+", "_", q).strip("_")
-                if len(ident) < 8 or ("_" not in ident and " " not in q):
+                if "_" not in ident and " " not in q:
                     continue
-                if q not in body and ident not in body:
-                    _die(
-                        f"docs/mit-parity-ledger.md:{i} `{q}` "
-                        f"not in {fname} fn {symbol}"
-                    )
+                n_quote += 1
+                if q not in joined and ident not in joined:
+                    _die(f"{where} `{q}` not in rust-site item body")
+    if checking_file and n_quote < 75:
+        _die(f"docs/mit-parity-ledger.md quote checks {n_quote} < 75")
 
 
 def check_working_gitignored() -> None:
@@ -1436,17 +1546,38 @@ jobs:
         "**1** = A1 0 + A2 1 + A3 0.",
     )
     _must_die(check_ledger_tally, ledger_tally_wrong_split)
+    def _row(site: str, etext: str = "—", verdict: str = "exact") -> str:
+        return (
+            "| MIT file:line | check | MIT | Rust | e_text | verdict | proof |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            f"| kdc_util.c:1 | x | y | {site} | {etext} | {verdict} | none |\n"
+        )
+
+    check_ledger_anchors(_row("none", verdict="absent"))
+    check_ledger_anchors(_row("krb5-kdc/listen.rs handle_tcp"))
+    check_ledger_anchors(_row("krb5-kdc/listen.rs MAX_TCP_REQUEST"))
     check_ledger_anchors(
-        "| MIT file:line | check | MIT | Rust | e_text | verdict | proof |\n"
-        "| --- | --- | --- | --- | --- | --- | --- |\n"
-        "| kdc_util.c:1 | x | y | none | — | absent | none |\n"
+        _row("krb5-kdc/status.rs NEEDED_PREAUTH", "`NEEDED_PREAUTH`")
     )
+    check_ledger_anchors(
+        _row("krb5-kdc/preauth.rs armor_key_from_ap", "`NOT_US` / `TKT_NYV`")
+    )
+    _must_die(check_ledger_anchors, _row("missing.rs no_such_fn", "`PROCESS_TGS`"))
+    _must_die(check_ledger_anchors, _row("issue.rs no_such_fn_at_all"))
+    _must_die(check_ledger_anchors, _row("krb5-kdc/listen.rs handle_tcp:1"))
+    _must_die(check_ledger_anchors, _row("listen.rs handle_tcp"))
+    _must_die(check_ledger_anchors, _row("lib.rs propagate", verdict="deviation"))
+    _must_die(check_ledger_anchors, _row("none"))
     _must_die(
         check_ledger_anchors,
-        "| MIT file:line | check | MIT | Rust | e_text | verdict | proof |\n"
-        "| --- | --- | --- | --- | --- | --- | --- |\n"
-        "| kdc_util.c:1 | x | y | missing.rs no_such_fn | `PROCESS_TGS` | exact | none |\n",
+        _row("krb5-kdc/listen.rs handle_tcp", "`TKT_NYV`"),
     )
+    handle_span = _item_span(ROOT / "crates/krb5-kdc/src/listen.rs", "handle_tcp")
+    if handle_span is None or handle_span[0] != 372 or handle_span[1] != 450:
+        raise AssertionError(f"handle_tcp span must be brace-matched 372-450, got {handle_span}")
+    max_span = _item_span(ROOT / "crates/krb5-kdc/src/listen.rs", "MAX_TCP_REQUEST")
+    if max_span is None:
+        raise AssertionError("MAX_TCP_REQUEST const must resolve")
     not_ci = Workflow(
         pathlib.Path("not-ci.yml"),
         "name: x\non:\n  push:\njobs:\n  test:\n    timeout-minutes: 1\n    steps:\n      - run: echo hi\n",

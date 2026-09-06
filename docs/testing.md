@@ -17,9 +17,16 @@ comparison/`grep`/`test`/`cmp`). A bare assignment is not an assert.
 `{ … }`, `( … )`, and heredoc arms are inspected. The ledger header
 tally must match a recount of the verdict cells and the A1/A2/A3/A4
 section split; a missing total line fails. Rust-site cells that use
-`file.rs symbol` (optional `:N` inside the function) must resolve to
-`fn symbol` under `crates/`; `exact` rows' backticked MIT status
-words must appear in that function. Port commits carry a function
+`file.rs symbol` (optional crate prefix `krb5-kdc/issue.rs fn_name`,
+optional `:N` after the symbol) must resolve to an item (`fn`,
+`const fn`, `async fn`, `unsafe fn`, `struct`, `enum`, `const`,
+`static`) under `crates/*/src`. A bare basename is an error unless
+that file is unique across crates; an unresolvable symbol dies (no
+silent skip). `exact` rows must carry an anchor. Backticked MIT
+status words and Rust e_text (including short forms with `_` such as
+`TKT_NYV` / `NOT_US`) must appear in the union of the resolved item
+bodies; the ledger must run at least 75 such quote checks.
+Port commits carry a function
 coverage checklist (`file:line` → Rust line or `deviation:`),
 `Gates:`, and `Limitation:`. It cannot check
 red-at-HEAD artefacts: `working/` is gitignored. `__pycache__/` is
