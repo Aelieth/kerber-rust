@@ -505,6 +505,14 @@ fn run() -> Result<(), String> {
     let req = encode(&inv).map_err(|e| e.to_string())?;
     expect_error(&cfg, "as-invalid-opts", &req, err::BADOPTION)?;
 
+    // pwprau requires preauth AND needs a password change. MIT validate_as_request
+    // (do_as_req.c:630) runs before check_padata (:758), so a bare AS-REQ is
+    // "REQUIRED PWCHANGE" / KEY_EXP (23), not "NEEDED_PREAUTH" (25), on both legs.
+    let pwprau = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["pwprau"]);
+    let req = encode(&as_req(pwprau, realm, 0x1000_0011, None).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    expect_error(&cfg, "as-validate-before-preauth", &req, err::KEY_EXPIRED)?;
+
     // PA-ENC-TIMESTAMP declaring des3 (etype 16), which pauser has no key for:
     // enc_ts_verify krb5_dbe_search_enctype misses -> KRB5_KDB_NO_MATCHING_KEY
     // -> KDC_ERR_PREAUTH_FAILED (24) on both legs.
@@ -695,7 +703,7 @@ fn run() -> Result<(), String> {
         true,
     )?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":16}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":17}}"#);
     Ok(())
 }
 

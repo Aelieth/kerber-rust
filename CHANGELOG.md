@@ -6,8 +6,21 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
-### W1-J L5a-3 (validate_as_request: AS_INVALID_OPTIONS, REQUIRED PWCHANGE)
+### W1-J L5a-3 (validate_as_request: order, AS_INVALID_OPTIONS, REQUIRED PWCHANGE)
 
+- **kdc.** The AS policy checks now run as one ordered `validate_as_request`
+  (`kdc_util.c:727-800`) after the client/server lookup and **before** preauth,
+  matching MIT (`do_as_req.c:630` precedes `check_padata` at `:758`). Rust had
+  checked the client lockout first and the expiry/pwchange/postdate/service
+  checks only after preauth, so a preauth-required client that also needed a
+  password change (or had an expired password, or was expired) got
+  `NEEDED_PREAUTH` (25) where MIT returns the validate status (23/1). The
+  DISALLOW_ALL_TIX client-lockout and the failcount lockout are now split into
+  MIT's positions (client-lockout after the expiry/postdate checks, failcount
+  last). `differential-gate.sh` gains an `as-validate-before-preauth` case (a
+  preauth+needchange `pwprau` principal), `23`/`REQUIRED PWCHANGE` on both legs.
+  Ledger rows `kdc_util.c:778-780`, the order row, and the failcount row regrade
+  deviation → exact.
 - **kdc.** An AS-REQ that sets a TGS-only `kdc-option` (`FORWARDED`, `PROXY`,
   `RENEW`, `VALIDATE`, `ENC-TKT-IN-SKEY`, or `CNAME-IN-ADDL-TKT`) is now
   rejected with `INVALID AS OPTIONS` (code BADOPTION 13) like

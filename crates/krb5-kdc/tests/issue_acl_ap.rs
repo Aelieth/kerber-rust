@@ -6,9 +6,10 @@ use krb5_kdc::{
     Acl, AdminOp, Error, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED,
     KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_LOCKDOWN_KEYS,
     KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH,
-    KDB_REQUIRES_PWCHANGE, PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
-    acl_for_store, as_req, bootstrap_documented, default_acl_path, documented_admin_id,
-    documented_changepw, documented_host, documented_kadmin, pa_enc_timestamp, tgs_req,
+    KDB_REQUIRES_PRE_AUTH, KDB_REQUIRES_PWCHANGE, PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER,
+    TEST_USER_PASSWORD, acl_for_store, as_req, bootstrap_documented, default_acl_path,
+    documented_admin_id, documented_changepw, documented_host, documented_kadmin, pa_enc_timestamp,
+    tgs_req,
 };
 use krb5_protocol::Keytab;
 use krb5_protocol::{ReplayCache, as_req_sname, build_ap_req, tgs_req_ex, verify_ap_req};
@@ -1066,6 +1067,28 @@ fn as_req_with_tgs_only_option_is_invalid_as_options() {
     req.0.req_body.kdc_options = req.0.req_body.kdc_options.with_bit(flag_bit::RENEW, true);
     let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
     assert_eq!(proto_code(err), err::BADOPTION);
+}
+
+#[test]
+fn as_validate_runs_before_preauth_like_process_as_req() {
+    // MIT process_as_req calls validate_as_request (do_as_req.c:630) before
+    // check_padata (:758). A preauth-required client that needs a password
+    // change gets REQUIRED PWCHANGE (23), not PREAUTH_REQUIRED (25).
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    or_attr(
+        &mut store,
+        &cname,
+        KDB_REQUIRES_PRE_AUTH | KDB_REQUIRES_PWCHANGE,
+    );
+    let req = as_req(cname, TEST_REALM, 52, None).unwrap();
+    let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
+    let (code, text) = match err {
+        Error::Protocol { code, text, .. } => (code, text),
+        other => panic!("want Protocol, got {other:?}"),
+    };
+    assert_eq!(code, err::KEY_EXPIRED);
+    assert_eq!(text.as_deref(), Some("REQUIRED PWCHANGE"));
 }
 
 #[test]

@@ -306,9 +306,6 @@ fn issue_as_body(
     if utf8_realm(&body.realm)? != store.realm() {
         return Err(proto(err::C_PRINCIPAL_UNKNOWN, status::CLIENT_NOT_FOUND));
     }
-    if body.kdc_options.as_invalid_bits() != 0 || body.kdc_options.unsupported_bits() != 0 {
-        return Err(proto(err::BADOPTION, status::INVALID_AS_OPTIONS));
-    }
     let req_cname = body
         .cname
         .clone()
@@ -323,24 +320,6 @@ fn issue_as_body(
     } else {
         req_cname.clone()
     };
-    let mut fails = store.fail_auth_of(&client);
-    let max_fail = store.max_fail_for(&client);
-    let last_failed = store.last_failed_of(&client);
-    let now = crate::store::unix_now_u32();
-    let (interval, duration) = store
-        .named_policy_for(&client)
-        .map_or((0, 0), |p| (p.pw_failcnt_interval, p.pw_lockout_duration));
-    if interval > 0 && last_failed > 0 && now >= last_failed.saturating_add(interval) {
-        store.clear_as_fail_count(&client.name);
-        fails = 0;
-    }
-    let count_locked = max_fail > 0 && fails >= max_fail;
-    let in_lockout_window =
-        duration == 0 || (last_failed > 0 && now < last_failed.saturating_add(duration));
-    if client.locked || (count_locked && in_lockout_window) {
-        return Err(proto(err::CLIENT_REVOKED, status::CLIENT_LOCKED_OUT));
-    }
-    current_policy().check_as(store, &client)?;
     let sname = body
         .sname
         .clone()
@@ -348,6 +327,9 @@ fn issue_as_body(
     let server = store
         .fetch_name(&sname)?
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::SERVER_NOT_FOUND))?;
+    // MIT validate_as_request runs after the client/server lookups and before
+    // preauth (do_as_req.c:630 precedes check_padata at :758).
+    validate_as_request(store, &client, &server, body)?;
     let session_etype = select_session_keytype(&server, &body.etype, store.policy())?;
     let ckey = select_client_key(&client, &body.etype)
         .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, status::CANT_FIND_CLIENT_KEY))?;
@@ -443,8 +425,6 @@ fn issue_as_body(
     let skey = server
         .first_current_key()
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::FINDING_SERVER_KEY))?;
-    check_db_times(Some(&client), &server)?;
-    check_as_policy_flags(&client, &server, body)?;
     if let Some(from) = &body.from
         && from.unix_seconds() > body.till.unix_seconds()
     {
@@ -1926,23 +1906,65 @@ fn attr(p: &Principal, bit: u32) -> bool {
     p.attributes & bit != 0
 }
 
-fn check_as_policy_flags(
+/// MIT `validate_as_request` (`kdc_util.c:716-800`): the AS policy checks in
+/// MIT's order, run after the client/server lookups and before preauth
+/// (`do_as_req.c:630` precedes `check_padata` at `:758`), so a preauth-required
+/// client that trips a check gets that status, not NEEDED_PREAUTH. The
+/// `krb5_db_check_policy_as` failcount lockout is the last check.
+fn validate_as_request(
+    store: &dyn PrincipalRead,
     client: &Principal,
     server: &Principal,
     body: &krb5_types::KdcReqBody,
 ) -> Result<(), Error> {
-    if attr(server, KDB_DISALLOW_ALL_TIX) {
-        return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::SERVICE_LOCKED_OUT));
+    if body.kdc_options.as_invalid_bits() != 0 || body.kdc_options.unsupported_bits() != 0 {
+        return Err(proto(err::BADOPTION, status::INVALID_AS_OPTIONS));
     }
-    if attr(server, KDB_DISALLOW_SVR) && !body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY) {
-        return Err(proto(err::MUST_USE_USER2USER, status::SERVICE_NOT_ALLOWED));
+    let now = crate::store::unix_now_u32();
+    let pwchange_svc = attr(server, KDB_PWCHANGE_SERVICE);
+    if client.expiration != 0 && now > client.expiration {
+        return Err(proto(err::NAME_EXP, status::CLIENT_EXPIRED));
+    }
+    if client.pw_expire != 0 && now > client.pw_expire && !pwchange_svc {
+        return Err(proto(err::KEY_EXPIRED, status::CLIENT_KEY_EXPIRED));
+    }
+    if server.expiration != 0 && now > server.expiration {
+        return Err(proto(err::SERVICE_EXP, status::SERVICE_EXPIRED));
+    }
+    if attr(client, KDB_REQUIRES_PWCHANGE) && !pwchange_svc {
+        return Err(proto(err::KEY_EXPIRED, status::REQUIRED_PWCHANGE));
     }
     if (body.kdc_options.bit(flag_bit::MAY_POSTDATE) || body.kdc_options.bit(flag_bit::POSTDATED))
         && (attr(client, KDB_DISALLOW_POSTDATED) || attr(server, KDB_DISALLOW_POSTDATED))
     {
         return Err(proto(err::CANNOT_POSTDATE, status::POSTDATE_NOT_ALLOWED));
     }
-    Ok(())
+    if attr(client, KDB_DISALLOW_ALL_TIX) {
+        return Err(proto(err::CLIENT_REVOKED, status::CLIENT_LOCKED_OUT));
+    }
+    if attr(server, KDB_DISALLOW_ALL_TIX) {
+        return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::SERVICE_LOCKED_OUT));
+    }
+    if attr(server, KDB_DISALLOW_SVR) && !body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY) {
+        return Err(proto(err::MUST_USE_USER2USER, status::SERVICE_NOT_ALLOWED));
+    }
+    let mut fails = store.fail_auth_of(client);
+    let max_fail = store.max_fail_for(client);
+    let last_failed = store.last_failed_of(client);
+    let (interval, duration) = store
+        .named_policy_for(client)
+        .map_or((0, 0), |p| (p.pw_failcnt_interval, p.pw_lockout_duration));
+    if interval > 0 && last_failed > 0 && now >= last_failed.saturating_add(interval) {
+        store.clear_as_fail_count(&client.name);
+        fails = 0;
+    }
+    let count_locked = max_fail > 0 && fails >= max_fail;
+    let in_lockout_window =
+        duration == 0 || (last_failed > 0 && now < last_failed.saturating_add(duration));
+    if count_locked && in_lockout_window {
+        return Err(proto(err::CLIENT_REVOKED, status::CLIENT_LOCKED_OUT));
+    }
+    current_policy().check_as(store, client)
 }
 
 fn check_tgs_policy_flags(
