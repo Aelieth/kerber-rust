@@ -2673,6 +2673,9 @@ fn merge_policy(
     if mask & KADM5_PW_LOCKOUT_DURATION != 0 {
         existing.pw_lockout_duration = rec.pw_lockout_duration;
     }
+    if mask & KADM5_POLICY_ALLOWED_KEYSALTS != 0 {
+        existing.allowed_keysalts.clone_from(&rec.allowed_keysalts);
+    }
     existing
 }
 
@@ -2681,7 +2684,98 @@ const MIN_PW_CLASSES: u32 = 1;
 const MAX_PW_CLASSES: u32 = 5;
 const MIN_PW_HISTORY: u32 = 1;
 
-fn policy_name_err(name: &str) -> Option<u32> {
+/// MIT `kadm_err.et` text for a policy validation code (kadmin.local `com_err`).
+pub(crate) fn policy_text(code: u32) -> &'static str {
+    match code {
+        KADM5_DUP => "Principal or policy already exists",
+        KADM5_UNK_POLICY => "Policy does not exist",
+        KADM5_BAD_POLICY => "Illegal policy name",
+        KADM5_BAD_MIN_PASS_LIFE => "Password minimum life is greater than password maximum life",
+        KADM5_BAD_LENGTH => "Invalid password length",
+        KADM5_BAD_CLASS => "Invalid number of character classes",
+        KADM5_BAD_HISTORY => "Invalid password history count",
+        _ => "Operation failed",
+    }
+}
+
+/// Build an `osa_policy_ent` and its mask from CLI `PolicyArgs`.
+pub(crate) fn build_policy(a: &crate::PolicyArgs) -> (krb5_kdc::NamedPolicy, u32) {
+    let mut p = krb5_kdc::NamedPolicy::new(&a.name);
+    let mut mask = 0u32;
+    if let Some(v) = a.pw_max_life {
+        p.pw_max_life = v;
+        mask |= KADM5_PW_MAX_LIFE;
+    }
+    if let Some(v) = a.pw_min_life {
+        p.pw_min_life = v;
+        mask |= KADM5_PW_MIN_LIFE;
+    }
+    if let Some(v) = a.min_length {
+        p.min_length = v;
+        mask |= KADM5_PW_MIN_LENGTH;
+    }
+    if let Some(v) = a.min_classes {
+        p.min_classes = v;
+        mask |= KADM5_PW_MIN_CLASSES;
+    }
+    if let Some(v) = a.history {
+        p.history = v;
+        mask |= KADM5_PW_HISTORY_NUM;
+    }
+    if let Some(v) = a.max_fail {
+        p.max_fail = v;
+        mask |= KADM5_PW_MAX_FAILURE;
+    }
+    if let Some(v) = a.pw_failcnt_interval {
+        p.pw_failcnt_interval = v;
+        mask |= KADM5_PW_FAILURE_COUNT_INTERVAL;
+    }
+    if let Some(v) = a.pw_lockout_duration {
+        p.pw_lockout_duration = v;
+        mask |= KADM5_PW_LOCKOUT_DURATION;
+    }
+    if a.allowed_keysalts.is_some() {
+        p.allowed_keysalts.clone_from(&a.allowed_keysalts);
+        mask |= KADM5_POLICY_ALLOWED_KEYSALTS;
+    }
+    (p, mask)
+}
+
+/// `kadm5_create_policy` for kadmin.local: DUP -> name -> min>max -> length ->
+/// classes -> history (`svr_policy.c`). Returns the MIT `com_err` text on failure.
+pub(crate) fn create_policy_local(
+    exists: bool,
+    a: &crate::PolicyArgs,
+) -> Result<krb5_kdc::NamedPolicy, &'static str> {
+    let (mut pol, mask) = build_policy(a);
+    if exists {
+        return Err(policy_text(KADM5_DUP));
+    }
+    if let Some(code) = policy_name_err(&a.name) {
+        return Err(policy_text(code));
+    }
+    if let Some(code) = policy_floor_err(&pol, mask) {
+        return Err(policy_text(code));
+    }
+    apply_policy_floors(&mut pol, mask);
+    Ok(pol)
+}
+
+/// `kadm5_modify_policy` for kadmin.local: merge the masked fields onto the
+/// existing policy, then the same floor checks (no name check).
+pub(crate) fn modify_policy_local(
+    existing: &krb5_kdc::NamedPolicy,
+    a: &crate::PolicyArgs,
+) -> Result<krb5_kdc::NamedPolicy, &'static str> {
+    let (rec, mask) = build_policy(a);
+    let merged = merge_policy(existing.clone(), &rec, mask);
+    if let Some(code) = policy_floor_err(&merged, mask) {
+        return Err(policy_text(code));
+    }
+    Ok(merged)
+}
+
+pub(crate) fn policy_name_err(name: &str) -> Option<u32> {
     if name.is_empty() || name.bytes().any(|b| !(b' '..=b'~').contains(&b)) {
         return Some(KADM5_BAD_POLICY);
     }
@@ -2702,7 +2796,7 @@ fn policy_mask_err(mask: u32, create: bool) -> Option<u32> {
     None
 }
 
-fn policy_floor_err(pol: &krb5_kdc::NamedPolicy, mask: u32) -> Option<u32> {
+pub(crate) fn policy_floor_err(pol: &krb5_kdc::NamedPolicy, mask: u32) -> Option<u32> {
     if mask & KADM5_PW_MIN_LIFE != 0 && pol.pw_min_life > pol.pw_max_life && pol.pw_max_life != 0 {
         return Some(KADM5_BAD_MIN_PASS_LIFE);
     }
@@ -2720,7 +2814,7 @@ fn policy_floor_err(pol: &krb5_kdc::NamedPolicy, mask: u32) -> Option<u32> {
     None
 }
 
-fn apply_policy_floors(pol: &mut krb5_kdc::NamedPolicy, mask: u32) {
+pub(crate) fn apply_policy_floors(pol: &mut krb5_kdc::NamedPolicy, mask: u32) {
     if mask & KADM5_PW_MIN_LENGTH == 0 {
         pol.min_length = MIN_PW_LENGTH;
     }

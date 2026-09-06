@@ -279,22 +279,53 @@ fn run(
             let name = parse_name(sess, &a.name)?;
             apply_optional_fields(sess, &name, &a).map(|()| LineOutcome::Next)
         }
-        Some("addpol" | "add_policy") => {
-            let a = parse_policy_args(&parts[1..])?;
-            sess.add_policy_ent(&a).map_err(|e| e.to_string())?;
+        Some("alias" | "add_alias") => {
+            if parts.len() != 3 {
+                eprintln!("usage: add_alias alias_principal target_principal");
+                return Ok(LineOutcome::Next);
+            }
+            let (alias, alias_realm) = parse_name_realm(sess, parts[1])?;
+            let (target, target_realm) = parse_name_realm(sess, parts[2])?;
+            let acanon = alias.unparse_with_realm(&alias_realm);
+            let tcanon = target.unparse_with_realm(&target_realm);
+            match sess.create_alias(&alias, &alias_realm, &target, &target_realm) {
+                Ok(()) => println!("Principal \"{acanon}\" aliased to \"{tcanon}\"."),
+                Err(e) => eprintln!(
+                    "add_alias: {e} while aliasing principal \"{acanon}\" to \"{tcanon}\""
+                ),
+            }
             Ok(LineOutcome::Next)
         }
+        Some("addpol" | "add_policy") => match parse_policy_args(&parts[1..]) {
+            Ok(a) => {
+                if let Err(e) = sess.add_policy_ent(&a) {
+                    eprintln!("add_policy: {e} while creating policy \"{}\".", a.name);
+                }
+                Ok(LineOutcome::Next)
+            }
+            Err(msg) => {
+                addmodpol_usage("add_policy", &msg);
+                Ok(LineOutcome::Next)
+            }
+        },
         Some("getpol" | "get_policy") => {
             let n = parts.get(1).ok_or("getpol <name>")?;
             let p = sess.get_policy(n).map_err(|e| e.to_string())?;
             println!("{p}");
             Ok(LineOutcome::Next)
         }
-        Some("modpol" | "modify_policy") => {
-            let a = parse_policy_args(&parts[1..])?;
-            sess.modify_policy_ent(&a).map_err(|e| e.to_string())?;
-            Ok(LineOutcome::Next)
-        }
+        Some("modpol" | "modify_policy") => match parse_policy_args(&parts[1..]) {
+            Ok(a) => {
+                if let Err(e) = sess.modify_policy_ent(&a) {
+                    eprintln!("modify_policy: {e} while modifying policy \"{}\".", a.name);
+                }
+                Ok(LineOutcome::Next)
+            }
+            Err(msg) => {
+                addmodpol_usage("modify_policy", &msg);
+                Ok(LineOutcome::Next)
+            }
+        },
         Some("delpol" | "delete_policy") => {
             let (force, n) = force_arg(&parts[1..], "usage: delete_policy [-force] policy")?;
             if !force && !confirm_delete("policy", n, input) {
@@ -358,6 +389,28 @@ fn merge_write_keytab(path: &std::path::Path, added: &Keytab) -> Result<(), Stri
         kt.version = 0x0502;
     }
     kt.write_file(path).map_err(|e| e.to_string())
+}
+
+fn parse_name_realm(
+    sess: &AdminSession<'_>,
+    spec: &str,
+) -> Result<(PrincipalName, String), String> {
+    krb5_types::principal_from_unparsed(spec, sess.realm()).map_err(|e| e.to_string())
+}
+
+/// MIT `kadmin_addmodpol_usage` (`kadmin.c:1699-1708`): the date message (if the
+/// failure was an interval) then the options block.
+fn addmodpol_usage(func: &str, msg: &str) {
+    if msg.starts_with("Invalid date specification") || msg.starts_with("Interval specification") {
+        eprintln!("{msg}");
+    }
+    eprintln!("usage; {func} [options] policy");
+    eprintln!("\toptions are:");
+    eprintln!("\t\t[-maxlife time] [-minlife time] [-minlength length]");
+    eprintln!("\t\t[-minclasses number] [-history number]");
+    eprintln!("\t\t[-maxfailure number] [-failurecountinterval time]");
+    eprintln!("\t\t[-allowedkeysalts keysalts]");
+    eprintln!("\t\t[-lockoutduration time]");
 }
 
 fn parse_name(sess: &AdminSession<'_>, spec: &str) -> Result<PrincipalName, String> {
@@ -444,7 +497,9 @@ mod tests {
                 .unwrap()
                 .contains("Maximum password life: 1 day 00:00:00")
         );
-        assert!(q(&mut sess, "addpol -maxlife \"42 \" tws2").is_err());
+        // MIT kadmin.local prints the error and continues (exit 0); the policy
+        // is not created.
+        q(&mut sess, "addpol -maxlife \"42 \" tws2").unwrap();
         assert!(sess.get_policy("tws2").is_err());
     }
 
@@ -510,11 +565,17 @@ mod tests {
             text.contains("Minimum password life: 0 days 01:00:00"),
             "{text}"
         );
-        assert!(q(&mut sess, "addpol -history 0 zhist").is_err());
+        q(&mut sess, "addpol -history 0 zhist").unwrap();
+        assert!(sess.get_policy("zhist").is_err());
         q(&mut sess, "modpol -minlength 10 pflags").unwrap();
         let text = sess.get_policy("pflags").unwrap();
         assert!(text.contains("Minimum password length: 10"), "{text}");
-        assert!(q(&mut sess, "modpol -minlength 0 pflags").is_err());
+        q(&mut sess, "modpol -minlength 0 pflags").unwrap();
+        assert!(
+            sess.get_policy("pflags")
+                .unwrap()
+                .contains("Minimum password length: 10")
+        );
         q(&mut sess, "addpol extra").unwrap();
         let listed = sess.list_policies();
         assert!(listed.iter().any(|n| n == "pflags"), "{listed:?}");

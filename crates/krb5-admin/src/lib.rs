@@ -12,7 +12,7 @@ mod listen;
 use krb5_crypto::EncryptionType;
 use krb5_kdc::{
     Acl, AdminOp, KDB_LOCKDOWN_KEYS, KDB_OK_TO_AUTH_AS_DELEGATE, KDB_REQUIRES_PRE_AUTH,
-    NamedPolicy, PrincipalStore,
+    PrincipalStore,
 };
 use krb5_protocol::{Keytab, ReplayCache, verify_ap_req};
 use krb5_types::PrincipalName;
@@ -274,8 +274,13 @@ pub fn parse_policy_args(parts: &[&str]) -> Result<PolicyArgs, String> {
 }
 
 fn parse_pol_interval(s: &str) -> Result<u32, String> {
-    let v = krb5_types::deltat::parse(s).map_err(|_| format!("interval {s}"))?;
-    u32::try_from(v).map_err(|_| format!("interval {s}"))
+    // MIT parse_interval (kadmin.c:170-195): krb5_string_to_deltat, else getdate.y
+    // (natural-language dates are the deferred getdate.y gap). The error text is
+    // parse_date's `Invalid date specification "%s".`.
+    krb5_types::deltat::parse(s)
+        .ok()
+        .and_then(|v| u32::try_from(v).ok())
+        .ok_or_else(|| format!("Invalid date specification \"{s}\"."))
 }
 
 /// Admin error.
@@ -478,6 +483,30 @@ impl<'a> AdminSession<'a> {
             .map_err(Error::from)
     }
 
+    /// `alias` (`kadmin_addalias`): create an alias stub for `target`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] wrapping `KADM5_ALIAS_REALM` or `KADM5_DUP`.
+    pub fn create_alias(
+        &mut self,
+        alias: &PrincipalName,
+        alias_realm: &str,
+        target: &PrincipalName,
+        target_realm: &str,
+    ) -> Result<(), Error> {
+        self.reload()?;
+        self.store
+            .create_alias_in(alias, alias_realm, target, target_realm)
+            .map_err(|e| match e {
+                // MIT KADM5_DUP text (kadm5_create_alias / kdb_get_entry).
+                krb5_kdc::Error::AlreadyExists => {
+                    Error::Inner("Principal or policy already exists".into())
+                }
+                other => Error::from(other),
+            })
+    }
+
     /// Over-the-wire ktadd (ACL `e` / extract).
     ///
     /// # Errors
@@ -631,39 +660,10 @@ impl<'a> AdminSession<'a> {
     /// Explicit values below the MIT floors.
     pub fn add_policy_ent(&mut self, a: &PolicyArgs) -> Result<(), Error> {
         let _ = self.reload();
-        if self.store.policies().contains_key(&a.name) {
-            return Err(Error::Inner("Principal or policy already exists".into()));
-        }
-        if let Some(0) = a.min_length {
-            return Err(Error::Inner("Invalid password length".into()));
-        }
-        if let Some(c) = a.min_classes
-            && !(1..=5).contains(&c)
-        {
-            return Err(Error::Inner("Invalid character class requirement".into()));
-        }
-        if let Some(0) = a.history {
-            return Err(Error::Inner("Invalid history count".into()));
-        }
-        if let (Some(min), Some(max)) = (a.pw_min_life, a.pw_max_life)
-            && min > max
-            && max != 0
-        {
-            return Err(Error::Inner(
-                "Password min life longer than max life".into(),
-            ));
-        }
-        let mut p = NamedPolicy::new(&a.name);
-        p.min_length = a.min_length.unwrap_or(1);
-        p.min_classes = a.min_classes.unwrap_or(1);
-        p.history = a.history.unwrap_or(1);
-        p.pw_max_life = a.pw_max_life.unwrap_or(0);
-        p.pw_min_life = a.pw_min_life.unwrap_or(0);
-        p.max_fail = a.max_fail.unwrap_or(0);
-        p.pw_failcnt_interval = a.pw_failcnt_interval.unwrap_or(0);
-        p.pw_lockout_duration = a.pw_lockout_duration.unwrap_or(0);
-        p.allowed_keysalts.clone_from(&a.allowed_keysalts);
-        self.store.put_policy(p);
+        let exists = self.store.policies().contains_key(&a.name);
+        let pol =
+            crate::kadm5::create_policy_local(exists, a).map_err(|t| Error::Inner(t.to_owned()))?;
+        self.store.put_policy(pol);
         Ok(())
     }
 
@@ -674,56 +674,15 @@ impl<'a> AdminSession<'a> {
     /// [`Error::NotFound`] or a floor/lifetime error.
     pub fn modify_policy_ent(&mut self, a: &PolicyArgs) -> Result<(), Error> {
         let _ = self.reload();
-        let mut p = self
+        let existing = self
             .store
             .policies()
             .get(&a.name)
             .cloned()
-            .ok_or(Error::NotFound)?;
-        if let Some(0) = a.min_length {
-            return Err(Error::Inner("Invalid password length".into()));
-        }
-        if let Some(c) = a.min_classes
-            && !(1..=5).contains(&c)
-        {
-            return Err(Error::Inner("Invalid character class requirement".into()));
-        }
-        if let Some(0) = a.history {
-            return Err(Error::Inner("Invalid history count".into()));
-        }
-        if let Some(v) = a.pw_max_life {
-            p.pw_max_life = v;
-        }
-        if let Some(v) = a.pw_min_life {
-            p.pw_min_life = v;
-        }
-        if p.pw_min_life > p.pw_max_life && p.pw_max_life != 0 && a.pw_min_life.is_some() {
-            return Err(Error::Inner(
-                "Password min life longer than max life".into(),
-            ));
-        }
-        if let Some(v) = a.min_length {
-            p.min_length = v;
-        }
-        if let Some(v) = a.min_classes {
-            p.min_classes = v;
-        }
-        if let Some(v) = a.history {
-            p.history = v;
-        }
-        if let Some(v) = a.max_fail {
-            p.max_fail = v;
-        }
-        if let Some(v) = a.pw_failcnt_interval {
-            p.pw_failcnt_interval = v;
-        }
-        if let Some(v) = a.pw_lockout_duration {
-            p.pw_lockout_duration = v;
-        }
-        if a.allowed_keysalts.is_some() {
-            p.allowed_keysalts.clone_from(&a.allowed_keysalts);
-        }
-        self.store.put_policy(p);
+            .ok_or_else(|| Error::Inner("Policy does not exist".into()))?;
+        let pol = crate::kadm5::modify_policy_local(&existing, a)
+            .map_err(|t| Error::Inner(t.to_owned()))?;
+        self.store.put_policy(pol);
         Ok(())
     }
 

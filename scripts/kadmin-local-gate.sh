@@ -234,16 +234,14 @@ echo "$TWS"
 echo "$TWS" | grep -F 'Maximum password life: 1 day 00:00:00'
 mit_local 'addpol -maxlife "1d " tws' >/dev/null
 diff <(echo "$TWS" | grep -v '^Authenticating') <(mit_local 'getpol tws')
-set +e
 TWSBAD="$(docker exec \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
     "$NAME" /tmp/krb5-kadmin-local -q 'addpol -maxlife "42 " tws2' 2>&1)"
-twsrc=$?
-set -e
 echo "$TWSBAD"
-test "$twsrc" -ne 0
-mit_local 'addpol -maxlife "42 " tws2' | grep -F 'Invalid date specification "42 ".'
+# MIT prints the date error and continues (exit 0); the first line is identical.
+echo "$TWSBAD" | grep -Fx 'Invalid date specification "42 ".'
+diff <(echo "$TWSBAD" | head -1) <(mit_local 'addpol -maxlife "42 " tws2' 2>&1 | head -1)
 LISTT="$(docker exec \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
@@ -682,5 +680,39 @@ O3L="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" klist)"
 echo "$O3L"
 echo "$O3L" | grep -q 'user@KERBER.TEST'
 
-log "kadmin.local.gate" "ok" ',"principal":"extra2@KERBER.TEST,host/slashhost@KERBER.TEST,randsvc,ktone,kttwo,raceprinc,lockee,gldlock,krbtgt"'
+echo "==== kadmin.local alias verb, identical to MIT ===="
+docker exec -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -pw canon-secret canon' >/dev/null
+mit_local 'addprinc -pw canon-secret canon' >/dev/null
+RAL="$(rust_local 'alias av1 canon')"
+echo "$RAL"
+echo "$RAL" | grep -Fx 'Principal "av1@KERBER.TEST" aliased to "canon@KERBER.TEST".'
+diff <(echo "$RAL") <(mit_local 'alias av1 canon')
+# getprinc through the alias returns the target's record on each leg (the full
+# MIT-format getprinc printer is M4c; compare alias vs target within a leg).
+diff <(rust_local 'getprinc av1') <(rust_local 'getprinc canon')
+diff <(mit_local 'getprinc av1') <(mit_local 'getprinc canon')
+diff <(rust_local 'alias av1 canon' 2>&1) <(mit_local 'alias av1 canon' 2>&1)
+diff <(rust_local 'alias bad x@OTHER.REALM' 2>&1) <(mit_local 'alias bad x@OTHER.REALM' 2>&1)
+diff <(rust_local 'alias justone' 2>&1) <(mit_local 'alias justone' 2>&1)
+
+echo "==== policy validation order and texts, identical to MIT ===="
+# min>max BEFORE length (MIT kadm5_create_policy), and the exact kadm_err texts.
+diff <(rust_local 'addpol -minlength 0 -minlife 2h -maxlife 1h ordr' 2>&1) \
+     <(mit_local 'addpol -minlength 0 -minlife 2h -maxlife 1h ordr' 2>&1)
+diff <(rust_local 'addpol -minclasses 6 cls' 2>&1) <(mit_local 'addpol -minclasses 6 cls' 2>&1)
+diff <(rust_local 'addpol -history 0 h0' 2>&1) <(mit_local 'addpol -history 0 h0' 2>&1)
+rust_local 'addpol mpol' >/dev/null
+mit_local 'addpol mpol' >/dev/null
+diff <(rust_local 'modpol -minlife 2h -maxlife 1h mpol' 2>&1) \
+     <(mit_local 'modpol -minlife 2h -maxlife 1h mpol' 2>&1)
+diff <(rust_local 'modpol nosuchpol' 2>&1) <(mit_local 'modpol nosuchpol' 2>&1)
+for pol in ordr cls h0; do
+    if rust_local 'listpols' | grep -Fx "$pol"; then
+        echo "rejected policy $pol was created" >&2
+        exit 1
+    fi
+done
+
+log "kadmin.local.gate" "ok" ',"principal":"extra2@KERBER.TEST,host/slashhost@KERBER.TEST,randsvc,ktone,kttwo,raceprinc,lockee,gldlock,krbtgt","verb":"alias+policy-order"'
 exit 0

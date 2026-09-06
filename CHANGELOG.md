@@ -6,6 +6,22 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-K M3b
+
+- **admin.** kadmin.local grows the `alias`/`add_alias` verb
+  (`kadmin_addalias`) with MIT's `usage:`/success/`com_err` texts, and the
+  local `addpol`/`modpol` path now routes through the same validators as
+  kadmind (`kadm5_create_policy` order DUP → name → min>max → length →
+  classes → history, with the exact `kadm_err.et` texts `Invalid number of
+  character classes` / `Invalid password history count` / `Password minimum
+  life is greater than password maximum life`). `parse_interval` reports
+  `Invalid date specification "…".` and the addmodpol usage block. Like MIT,
+  a failed `addpol`/`modpol`/`alias` prints the error and exits 0. The
+  `getdate.y` natural-language interval is recorded as a deferred ledger row.
+  Verified on `scripts/kadmin-local-gate.sh` (alias and policy-order/text
+  cells diffed against MIT `kadmin.local` on both legs).
+
+
 ### W1-K M3a
 
 - **admin/kdc.** `create_alias` (kadmin proc 27) like `create_alias_2_svc`

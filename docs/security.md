@@ -281,9 +281,14 @@ setkey `-keepold` drops every old key; kerber-rust keeps them (deviation,
 pinned on both legs by `scripts/kadmin-gate.sh`). Chpass order is lockdown → ACL → self
 keychange (`:851-869`). `get_privs` returns `~0`
 (`server_misc.c:146-158`). `kadmin.local` applies no ACL (`KRB5_ACL_FILE`
-is kadmind-only) and exits 1 after a failed verb where MIT exits 0
+is kadmind-only). `addpol`/`modpol`/`alias` print a `com_err` line and
+exit 0 like MIT (`kadmin.c`); other verbs still exit 1 where MIT exits 0
 outside script mode (`ss_wrapper.c:66-76`, `kadmin.c:89-99`; stricter,
-so scripted runs fail loud). A `kadmin/changepw` GSS acceptor is
+so scripted runs fail loud). The `alias` verb and the shared policy
+create/modify path (`kadm5_create_policy` order min>max → length →
+classes → history, `kadm_err.et` texts) landed in W1-K M3b; the
+`getdate.y` natural-language interval (`1 day ago`) is a deferred gap
+(`parse_pol_interval` accepts only `krb5_string_to_deltat`). A `kadmin/changepw` GSS acceptor is
 `CHANGEPW_SERVICE` (`server_stubs.c:28-32`, a full realm-qualified
 name compare against `kadmin/changepw@REALM`): every stub denies with
 MIT's code except self `chpass`/`chrand`/`getprinc`
