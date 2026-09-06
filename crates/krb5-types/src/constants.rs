@@ -266,8 +266,6 @@ pub mod pa {
     pub const AD_AND_OR: i32 = 5;
     /// AD-MANDATORY-FOR-KDC.
     pub const AD_MANDATORY_FOR_KDC: i32 = 8;
-    /// PA-SUPPORTED-ENCTYPES (Windows).
-    pub const SUPPORTED_ENCTYPES: i32 = 165;
     /// PA-PAC-OPTIONS.
     pub const PAC_OPTIONS: i32 = 167;
 }

@@ -364,7 +364,7 @@ fn issue_as_body(
         None => body_der,
     };
 
-    let mut extra_padata: Vec<PaData> = vec![supported_enctypes_pa(&client)];
+    let mut extra_padata: Vec<PaData> = Vec::new();
     let mut as_rep_key = ckey.key.clone();
     let mut skip_timestamp = false;
     let mut hw_preauth = false;
@@ -1007,23 +1007,18 @@ fn issue_tgs_body(
     };
     let usage = KeyUsage::new(enc_usage)?;
     let cipher = encrypt(&enc_key, usage, &enc_der)?;
-    let mut tgs_pa = Vec::new();
-    if let Some(client_p) = store.fetch_name(&ticket_cname)? {
-        tgs_pa.push(supported_enctypes_pa(&client_p));
-    }
     let padata = if let Some(f) = tgs_fast {
         let finished = fast_finished(&f.armor_key, &ticket, &ticket_cname, &ticket_crealm)?;
+        let inner: Vec<PaData> = Vec::new();
         Some(vec![wrap_fast_rep(
             &f.armor_key,
-            tgs_pa,
+            inner,
             None,
             f.nonce,
             Some(finished),
         )?])
-    } else if tgs_pa.is_empty() {
-        None
     } else {
-        Some(tgs_pa)
+        None
     };
     let rep = TgsRep(krb5_types::KdcRep {
         pvno: krb5_types::KdcRep::PVNO,
@@ -1349,17 +1344,6 @@ fn as_rep_key_info(client: &Principal, ckey: &KeyEntry, requested: &[i32]) -> Ve
         });
     }
     out
-}
-
-fn supported_enctypes_pa(princ: &Principal) -> PaData {
-    PaData {
-        padata_type: pa::SUPPORTED_ENCTYPES,
-        padata_value: princ
-            .supported_enctypes_mask()
-            .to_le_bytes()
-            .to_vec()
-            .into(),
-    }
 }
 
 fn select_client_key<'a>(princ: &'a Principal, requested: &[i32]) -> Option<&'a KeyEntry> {

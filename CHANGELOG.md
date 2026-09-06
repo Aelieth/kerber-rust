@@ -6,6 +6,20 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-J L4b (AS/TGS reply padata)
+
+- **kdc.** The AS-REP and TGS-REP no longer carry `PA-SUPPORTED-ENCTYPES`
+  (padata type 165). MIT 1.22.2 `return_padata` (`kdc_preauth.c:1394-1506`)
+  emits only `add_etype_info`/`add_pw_salt` output, and MIT 1.22.2 defines no
+  type 165 anywhere; the field was a Windows/MS-KILE-only extension. Rust now
+  matches MIT's outer padata set exactly: `PA-ETYPE-INFO2` always, plus
+  `PA-ETYPE-INFO` and `PW-SALT` for a des3/rc4-only request. The dead
+  `supported_enctypes_mask` helper and the `SUPPORTED_ENCTYPES` constant are
+  removed. The `mit-as-padata` differential whitelist and its padata filtering
+  are removed, so `scripts/differential-gate.sh` `as-success`/`tgs-success`
+  compare the full outer padata-type set on both legs (`whitelist:[]`).
+
+
 ### W1-J L3a (enc-pa-rep flag)
 
 - **kdc.** Every issued AS and TGS ticket now sets the `TKT_FLG_ENC_PA_REP`

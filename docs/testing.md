@@ -533,8 +533,6 @@ when that oracle is absent.
     tickets (`kdb-dump-gate` `klist` `renew until`). Rust *does*
     issue renewable when the client requests it; the remaining gap
     is default-policy, not an inability to set the flag.
-  - `mit-as-padata` — MIT adds `PA-ETYPE-INFO2` / `PA-SUPPORTED-ENCTYPES`
-    on replies; those types are filtered before compare.
   - `mit-order-tgs-times` — MIT fails expired/NYV header tickets
     inside `PROCESS_TGS` (`rd_req`); Rust's `check_ticket_times`
     uses `TKT_EXPIRED` / `NOT_YET_VALID`. Same error_code.

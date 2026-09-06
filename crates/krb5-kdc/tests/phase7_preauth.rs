@@ -234,6 +234,34 @@ fn every_ticket_sets_enc_pa_rep_flag_without_padata() {
 }
 
 #[test]
+fn as_rep_outer_padata_is_etype_info2_only_like_mit() {
+    // MIT return_padata adds PA-ETYPE-INFO2 (plus PA-ETYPE-INFO + PW-SALT for a
+    // des3/rc4-only request); MIT 1.22.2 never emits PA-SUPPORTED-ENCTYPES (165).
+    // TEST_USER has aes keys, so a modern request yields exactly PA-ETYPE-INFO2.
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 208);
+    let mut types: Vec<i32> = issued
+        .rep
+        .0
+        .padata
+        .as_ref()
+        .expect("outer padata")
+        .iter()
+        .map(|p| p.padata_type)
+        .collect();
+    types.sort_unstable();
+    assert_eq!(
+        types,
+        vec![pa::ETYPE_INFO2],
+        "MIT emits only PA-ETYPE-INFO2 for a modern request"
+    );
+    assert!(
+        !types.contains(&165),
+        "MIT 1.22.2 never emits PA-SUPPORTED-ENCTYPES (165)"
+    );
+}
+
+#[test]
 fn as_rep_enc_part_carries_no_kvno_like_mit() {
     // MIT sets reply.enc_part.kvno only after krb5_encode_kdc_rep, so the wire
     // AS-REP enc-part has no kvno (do_as_req.c:329).
@@ -3284,38 +3312,6 @@ fn tgs_referral_uses_interrealm_key_and_transited() {
             .is_empty(),
         "first-hop referral transited excludes client realm: {:?}",
         part.transited.realms_for(TEST_REALM, "OTHER.TEST")
-    );
-}
-
-#[test]
-fn as_rep_advertises_supported_enctypes() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 53);
-    let pa = issued.rep.0.padata.as_ref().expect("padata");
-    let raw = pa
-        .iter()
-        .find(|p| p.padata_type == pa::SUPPORTED_ENCTYPES)
-        .expect("PA-SUPPORTED-ENCTYPES")
-        .padata_value
-        .as_ref();
-    assert!(raw.len() >= 4);
-    let bits = u32::from_le_bytes(raw[..4].try_into().unwrap());
-    let user = store
-        .get_name(&PrincipalName::new(
-            PrincipalName::NT_PRINCIPAL,
-            [TEST_USER],
-        ))
-        .unwrap();
-    let expect = user.supported_enctypes_mask();
-    assert_eq!(bits, expect, "bits must match keys on the principal");
-    assert_ne!(
-        bits, 0x18,
-        "must not be the static AES-SHA1 mask; SHA-2 keys are present"
-    );
-    assert_eq!(
-        bits & 0x18,
-        0x18,
-        "AES-SHA1 17/18 still advertised when those keys exist"
     );
 }
 

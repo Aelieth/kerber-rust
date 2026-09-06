@@ -18,15 +18,12 @@ use krb5_types::{
 pub struct Whitelist {
     /// MIT default policy issues renewable; Rust only when the client asks.
     pub mit_renewable_flags: bool,
-    /// MIT adds PA-ETYPE-INFO2 / PA-SUPPORTED-ENCTYPES on AS/TGS replies.
-    pub mit_as_padata: bool,
 }
 
 impl Default for Whitelist {
     fn default() -> Self {
         Self {
             mit_renewable_flags: true,
-            mit_as_padata: true,
         }
     }
 }
@@ -221,16 +218,11 @@ fn masked_flags(f: &TicketFlags, wl: &Whitelist) -> u32 {
     f.to_u32() & !named_flag_mask(wl)
 }
 
-fn padata_types_filtered(rep: &KdcRep, drop_mit: bool) -> Vec<i32> {
+fn padata_types(rep: &KdcRep) -> Vec<i32> {
     let mut v: Vec<i32> = rep
         .padata
         .as_ref()
-        .map(|p| {
-            p.iter()
-                .map(|d| d.padata_type)
-                .filter(|t| !drop_mit || (*t != pa::ETYPE_INFO2 && *t != pa::SUPPORTED_ENCTYPES))
-                .collect()
-        })
+        .map(|p| p.iter().map(|d| d.padata_type).collect())
         .unwrap_or_default();
     v.sort_unstable();
     v
@@ -258,15 +250,13 @@ pub fn stable_rep(
         transited_tr_type: ticket.transited.tr_type,
         transited_contents: ticket.transited.contents.as_ref().to_vec(),
         flags: masked_flags(&enc.flags, wl),
-        padata_types: padata_types_filtered(rep, wl.mit_as_padata),
+        padata_types: padata_types(rep),
         tkt_crealm: ks(&ticket.crealm),
         tkt_cname: ticket.cname.components_joined(),
     }
 }
 
 fn whitelist_hits(
-    rust: &KdcRep,
-    mit: &KdcRep,
     rust_enc: &EncKdcRepPart,
     mit_enc: &EncKdcRepPart,
     wl: &Whitelist,
@@ -277,13 +267,6 @@ fn whitelist_hits(
         let mf = mit_enc.flags.renewable();
         if rf != mf {
             hits.push("mit-renewable-flags");
-        }
-    }
-    if wl.mit_as_padata {
-        let raw_r = padata_types_filtered(rust, false);
-        let raw_m = padata_types_filtered(mit, false);
-        if raw_r != raw_m {
-            hits.push("mit-as-padata");
         }
     }
     hits
@@ -317,6 +300,6 @@ pub fn compare_stable_rep(
         )));
     }
     Ok(CompareOk {
-        whitelisted: whitelist_hits(rust_rep, mit_rep, rust_enc, mit_enc, wl),
+        whitelisted: whitelist_hits(rust_enc, mit_enc, wl),
     })
 }
