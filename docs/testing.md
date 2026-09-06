@@ -68,6 +68,15 @@ Both legs of a text-equality cell assert pinned literals (never
 capture-from-MIT). Every branch asserts: no `if` whose body is only
 `echo`.
 
+Summary claims are checked by `scripts/claim-audit.py [--evidence-dir DIR]
+[--stamp] SUMMARY…`: every `script:line` reference in a "Settled live"
+bullet must carry an assertion on one of the bullet's quoted values (or call
+a function of that script which does), every bullet must name a cell on each
+leg (container markers around the line; a `diff <(` line is both) or a live
+`settle.sh` artefact, and every named artefact must exist, be stamped and
+carry a quoted value. `ci-policy` runs its fixtures; the audit runs it on the
+landed summary with `--stamp` into the evidence directory.
+
 Wire `e_text` is MIT's status word (`do_as_req.c:806`,
 `do_tgs_req.c:205-206`). MIT `k5_setmsg` texts are KDC-log messages
 and land in the `kdc.issue` `detail` field, not on the wire. A cell

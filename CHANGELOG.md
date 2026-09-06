@@ -6,6 +6,16 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-I sub-plan 06
+
+- **tooling.** `scripts/claim-audit.py` checks a summary's "Settled live"
+  section: every `script:line` reference must carry an assertion on one of the
+  bullet's quoted values (or call a function that does), every bullet must name
+  a cell on each leg or a live `settle.sh` artefact, and every named artefact
+  must exist, be stamped and carry a quoted value. `ci-policy.py` runs its
+  fixtures (a non-asserting line, a log-only bullet, a grep settle, a one-leg
+  bullet all fail; a live settle counts as the MIT leg).
+
 ### W1-I sub-plan 05
 
 - **admin.** `create_policy` checks DUP before the non-printable-name check and

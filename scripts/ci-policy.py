@@ -14,6 +14,7 @@ ledger `proof` column.
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import pathlib
 import re
@@ -1073,6 +1074,72 @@ def check_red_at_sha_inject(text: str | None = None) -> None:
         subprocess.run(["rm", "-rf", str(scratch)], check=False)
 
 
+def _claim_audit_module():
+    spec = importlib.util.spec_from_file_location("claim_audit", SCRIPTS / "claim-audit.py")
+    if spec is None or spec.loader is None:
+        _die("missing scripts/claim-audit.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def check_claim_audit() -> None:
+    """Round 3: claim-audit.py fails a non-asserting line, a log-only bullet and a grep settle."""
+    mod = _claim_audit_module()
+    root = pathlib.Path(subprocess.check_output(["mktemp", "-d"], text=True).strip())
+    try:
+        (root / "scripts").mkdir()
+        pad = 'echo "---- pad ----"\n' * 4
+        (root / "scripts" / "fx-gate.sh").write_text(
+            'NAME="rust"\nNAME_MIT="mit"\n'
+            + pad
+            + 'echo "==== value ===="\nOUT="$(docker exec "$NAME" true)"\n'
+            + "echo \"$OUT\" | grep -F 'value=1'\n"
+            + pad
+            + 'MIT_OUT="$(docker exec "$NAME_MIT" true)"\n'
+            + "echo \"$MIT_OUT\" | grep -F 'value=1'\n"
+            + pad
+            + 'echo "value=1 printed only"\n'
+        )
+        ev = root / "logs"
+        ev.mkdir()
+        stamp = "head_sha=0\ntree_sha=0\n"
+        (ev / "good.log").write_text(stamp + "value=1\n")
+        (ev / "settle-live.log").write_text(stamp + "cmd=docker exec x sh -c true\nvalue=1\n")
+        (ev / "settle-grep.log").write_text(stamp + "cmd=grep -F value=1 /tmp/x.log\nvalue=1\n")
+        head = "## Settled live (every bullet names the asserting cell on both legs)\n\n"
+
+        def rows(bullet: str):
+            return mod.audit_text(head + bullet, root, ev)
+
+        def must_fail(bullet: str, why: str) -> None:
+            bad = [r for r in rows(bullet) if r[1] != "ok"]
+            if not bad:
+                _die(f"claim-audit passed a bullet that {why}")
+
+        good = "- **Both legs:** `value=1` at `scripts/fx-gate.sh:9` / `:15`; live `good.log`.\n"
+        if any(r[1] != "ok" for r in rows(good)):
+            _die(f"claim-audit failed a valid bullet: {rows(good)}")
+        must_fail(
+            "- **Echo only:** `value=1` at `scripts/fx-gate.sh:20` / `:15`.\n",
+            "names a non-asserting line",
+        )
+        must_fail("- **Log only:** `value=1` in `good.log`.\n", "names only a log")
+        must_fail(
+            "- **Grep settle:** `value=1` at `scripts/fx-gate.sh:9`; `settle-grep.log`.\n",
+            "names a grep settle",
+        )
+        must_fail(
+            "- **One leg:** `value=1` at `scripts/fx-gate.sh:9`.\n",
+            "names a cell on one leg only",
+        )
+        live = "- **Live settle:** `value=1` at `scripts/fx-gate.sh:9`; `settle-live.log`.\n"
+        if any(r[1] != "ok" for r in rows(live)):
+            _die(f"claim-audit refused a live settle as the MIT leg: {rows(live)}")
+    finally:
+        subprocess.run(["rm", "-rf", str(root)], check=False)
+
+
 def _must_die(fn, *args) -> None:
     err = sys.stderr
     sys.stderr = open("/dev/null", "w", encoding="utf-8")
@@ -1437,6 +1504,7 @@ def main() -> None:
     check_ledger_proof_column()
     check_ledger_tally()
     check_ledger_anchors()
+    check_claim_audit()
     print("ci-policy: ok")
 
 
