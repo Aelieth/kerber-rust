@@ -54,6 +54,10 @@ fn main() {
         cmd_alias(&args[1], &args[2]);
         return;
     }
+    if cmd == "stash" {
+        cmd_stash();
+        return;
+    }
     if cmd == "setlastpwd" {
         if args.len() != 3 {
             usage();
@@ -85,7 +89,7 @@ fn main() {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: krb5-kdb load <dump>\n       krb5-kdb dump <dump> [--from-dump <mit-dump>]\n       krb5-kdb create <realm>\n       krb5-kdb addpol <name>\n       krb5-kdb setstr <princ> <key> <value>\n       krb5-kdb alias <alias> <target>\n       krb5-kdb setlastpwd <princ> <unix-seconds>"
+        "usage: krb5-kdb load <dump>\n       krb5-kdb dump <dump> [--from-dump <mit-dump>]\n       krb5-kdb create <realm>\n       krb5-kdb addpol <name>\n       krb5-kdb setstr <princ> <key> <value>\n       krb5-kdb alias <alias> <target>\n       krb5-kdb stash\n       krb5-kdb setlastpwd <princ> <unix-seconds>"
     );
     std::process::exit(2);
 }
@@ -272,6 +276,21 @@ fn cmd_setstr(princ: &str, key: &str, value: &str) {
         std::process::exit(1);
     });
     println!("ok setstr {princ} {key}");
+}
+
+fn cmd_stash() {
+    // krb5_util stash: read the master key (existing stash or KRB5_MASTER_PASSWORD)
+    // and (re)write the stash in keytab format via save_store.
+    let (db, stash) = db_and_stash();
+    let store = load_store(&db, &stash).unwrap_or_else(|e| {
+        eprintln!("krb5-kdb: load store: {e}");
+        std::process::exit(1);
+    });
+    save_store(&store, &db, &stash).unwrap_or_else(|e| {
+        eprintln!("krb5-kdb: stash: {e}");
+        std::process::exit(1);
+    });
+    println!("ok stash realm={}", store.realm());
 }
 
 fn cmd_alias(alias: &str, target: &str) {

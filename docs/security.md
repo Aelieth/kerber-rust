@@ -62,6 +62,11 @@ A TGS-REQ whose `body.realm` is not a realm this KDC serves is 60
 multi-realm MIT KDC may answer 68 `WRONG_REALM` from `dispatch.c`).
 Destination RENEW/VALIDATE is not exempt.
 
+The master-key stash `.k5.REALM` is a FILE keytab with one `K/M@REALM`
+entry (etype and kvno embedded, MIT `krb5_def_store_mkey_list`); loading reads
+the keytab first, then a legacy raw-key stash, rewriting it in keytab format on
+the next save. This removes the blind etype trial the raw format required.
+
 Principal aliases resolve like `krb5_db_get_principal` (`kdb5.c:800-840`):
 an alias stub is a keyless `DISALLOW_ALL_TIX` entry whose only content is
 `KRB5_TL_ALIAS_TARGET`, followed up to `MAX_ALIAS_DEPTH` (10) hops to the

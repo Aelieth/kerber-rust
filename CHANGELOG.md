@@ -6,6 +6,19 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-K M4b
+
+- **kdc (on-disk format change).** The master-key stash `.k5.REALM` is now a
+  FILE keytab with a single `K/M@REALM` entry (etype and kvno embedded), like
+  MIT `krb5_def_store_mkey_list`; loading tries the keytab first
+  (`krb5_db_def_fetch_mkey_keytab`, one decrypt with the embedded etype) and
+  falls back to the legacy raw-key stash (`krb5_db_def_fetch_mkey_stash`),
+  rewriting it in keytab format on the next save. A `krb5-kdb stash` subcommand
+  (re)writes the stash. Existing raw stashes keep loading; no operator action
+  is needed. MIT `klist -k` reads the Rust stash's `K/M` entry (verified on
+  `scripts/kdb-dump-gate.sh`).
+
+
 ### W1-K M3b
 
 - **admin.** kadmin.local grows the `alias`/`add_alias` verb

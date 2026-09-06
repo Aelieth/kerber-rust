@@ -577,3 +577,66 @@ fn bounded_stress_handle_request() {
     assert_eq!(total_as, 64, "every concurrent AS must succeed");
     assert_eq!(total_tgs, 64, "every concurrent TGS must succeed");
 }
+
+#[test]
+fn stash_is_keytab_format_and_reads_back_the_master() {
+    // MIT krb5_def_store_mkey_list writes a FILE keytab with one K/M@REALM
+    // entry; klist -k / kdb5_util read it. The Rust stash matches (etype/kvno
+    // embedded, so load is a single decrypt, not a blind etype trial).
+    let dir = std::env::temp_dir().join(format!("krb5-stash-kt-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let db = dir.join("principal");
+    let stash = dir.join(".k5.KERBER.TEST");
+    let (store, _) = bootstrap_documented().unwrap();
+    save_store(&store, &db, &stash).unwrap();
+    let bytes = std::fs::read(&stash).unwrap();
+    assert_eq!(&bytes[..2], &[0x05, 0x02], "keytab v2 magic");
+    let kt = krb5_protocol::Keytab::parse(&bytes).unwrap();
+    let km = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["K", "M"]);
+    let entry = kt.entries.iter().find(|e| e.name == km).expect("K/M entry");
+    assert_eq!(entry.realm.as_bytes(), TEST_REALM.as_bytes());
+    assert_eq!(entry.kvno, 1);
+    assert!(matches!(
+        entry.key.etype(),
+        EncryptionType::Aes256CtsHmacSha384192 | EncryptionType::Aes256CtsHmacSha196
+    ));
+    let krbtgt = store
+        .krbtgt()
+        .unwrap()
+        .best_key()
+        .unwrap()
+        .key
+        .as_bytes()
+        .to_vec();
+    let loaded = load_store(&db, &stash).unwrap();
+    assert_eq!(
+        loaded.krbtgt().unwrap().best_key().unwrap().key.as_bytes(),
+        krbtgt.as_slice()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn legacy_raw_stash_loads_then_is_rewritten_as_keytab() {
+    let dir = std::env::temp_dir().join(format!("krb5-stash-raw-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let db = dir.join("principal");
+    let stash = dir.join(".k5.KERBER.TEST");
+    let (store, _) = bootstrap_documented().unwrap();
+    save_store(&store, &db, &stash).unwrap();
+    // Derive the legacy raw stash from the keytab the save just wrote (the bare
+    // master-key bytes with no keytab framing).
+    let kt = krb5_protocol::Keytab::parse(&std::fs::read(&stash).unwrap()).unwrap();
+    let km = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["K", "M"]);
+    let master = kt.entries.iter().find(|e| e.name == km).unwrap();
+    std::fs::write(&stash, master.key.as_bytes()).unwrap();
+    assert_ne!(&std::fs::read(&stash).unwrap()[..2], &[0x05, 0x02]);
+    // A raw stash still loads (krb5_db_def_fetch_mkey fallback).
+    let loaded = load_store(&db, &stash).unwrap();
+    // Saving rewrites it in keytab format.
+    save_store(&loaded, &db, &stash).unwrap();
+    let bytes = std::fs::read(&stash).unwrap();
+    assert_eq!(&bytes[..2], &[0x05, 0x02], "raw stash rewritten as keytab");
+    load_store(&db, &stash).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}

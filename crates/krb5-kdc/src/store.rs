@@ -641,6 +641,9 @@ impl PrincipalStore {
         if let Some((_, stash)) = &self.persist_paths
             && let Ok(bytes) = std::fs::read(stash)
         {
+            if let Some(k) = crate::persist::stash_keytab_key(&bytes) {
+                return Some(k);
+            }
             for et in [
                 krb5_crypto::EncryptionType::Aes256CtsHmacSha384192,
                 krb5_crypto::EncryptionType::Aes256CtsHmacSha196,

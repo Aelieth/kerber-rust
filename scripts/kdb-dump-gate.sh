@@ -89,6 +89,24 @@ echo "$LOAD_A"
 echo "$LOAD_A" | grep -q 'ok load version=7'
 echo "$LOAD_A" | grep -q 'realm=KERBER.TEST'
 
+echo "==== Rust stash is keytab format; MIT klist -k reads the K/M entry ===="
+# krb5_db_def_fetch_mkey: the stash is a FILE keytab with one K/M@REALM entry.
+docker exec "$NAME" sh -c 'head -c2 /tmp/stash | od -An -tx1' | grep -q '05 02'
+KMKT="$(docker exec "$NAME" klist -k -e -t -K /tmp/stash 2>&1)"
+echo "$KMKT" | sed 's/(0x[0-9a-f]*)/(0x<redacted>)/'
+echo "$KMKT" | grep -q 'K/M@KERBER.TEST'
+echo "$KMKT" | grep -q 'aes256-cts-hmac-sha384-192'
+# krb5-kdb stash rewrites the same file idempotently.
+STASHCMD="$(docker exec \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kdb stash 2>&1 || true)"
+echo "$STASHCMD"
+echo "$STASHCMD" | grep -q 'ok stash realm=KERBER.TEST'
+docker exec "$NAME" klist -k -t -K /tmp/stash 2>&1 | grep -q 'K/M@KERBER.TEST'
+
+echo "==== Rust KDC loads the keytab stash with no ERROR log ===="
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
@@ -105,6 +123,12 @@ done
 if [ "$ok" != 1 ]; then
     docker exec "$NAME" cat /tmp/kdc.log >&2 || true
     log "kdb.dump.gate" "error" ',"error":"rust kdc did not listen"'
+    exit 1
+fi
+
+if docker exec "$NAME" grep -q '"level":"ERROR"' /tmp/kdc.log 2>/dev/null; then
+    docker exec "$NAME" grep '"level":"ERROR"' /tmp/kdc.log >&2 || true
+    log "kdb.dump.gate" "error" ',"error":"rust KDC logged ERROR loading the keytab stash"'
     exit 1
 fi
 

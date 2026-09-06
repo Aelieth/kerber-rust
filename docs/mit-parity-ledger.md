@@ -35,9 +35,9 @@ Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after W1-K M3b kadmin.local alias verb + shared policy path):
-**299** = A1 116 + A2 71 + A3 58 + A4 54.
-exact 106 · stricter-documented 12 · deviation 98 ·
+Counts (after W1-K M4b keytab-format stash):
+**300** = A1 116 + A2 71 + A3 58 + A4 55.
+exact 107 · stricter-documented 12 · deviation 98 ·
 absent 66 · deferred 17.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
@@ -482,4 +482,5 @@ checksum/rc4/declared-cksumtype rows that sat under A3.
 | kadm_rpc.h `CREATE_ALIAS` 27; server_stubs.c:1727-1758; svr_principal.c:2051-2087; auth_acl.c:723-734 | `create_alias_2_svc` (CHANGEPW deny, `acl_addalias`, no lockdown) / `kadm5_create_alias` (realm compare, DUP resolves, target may be absent) / `acl_addalias` (ADD on alias w/o restrictions AND MODIFY on target) | proc 27; `KADM5_AUTH_INSUFFICIENT` / `KADM5_ALIAS_REALM` / `KADM5_DUP` | krb5-admin/kadm5.rs CREATE_ALIAS 2517; store.rs create_alias_in 1180; acl.rs check_addalias 290 | same codes | exact | `m3a_alias.rs` acl matrix + codes; `scripts/kadmin-gate.sh:369-484` `alias_cells` both legs (`:674` / `:1683`) |
 | svc.c:342,361; svc_auth_gssapi.c:495-497 | AUTH_GSSAPI accepted/mismatch replies carry `FLAVOR_NONE` + empty verifier (`rpc_reply_clear`); RPCSEC accepted/mismatch use `xp_verf` | AUTH_GSSAPI verf none | krb5-admin/kadm5.rs rpc_reply_clear; krb5-admin/kadm5.rs rpc_reply_accepted | AUTH_GSSAPI INIT is `FLAVOR_NONE`; RPCSEC DATA carries `xp_verf` | deviation | `auth_gssapi_on_iprop_init_is_success`; RPCSEC `rpcsec_unknown_program_data_carries_xp_verf` |
 | svc_auth_gssapi.c:326-341 | GSSAPI_INIT arg version: 1/2 → reply version 1 (compat warning); 3/4 echoed; other `AUTH_BADCRED` | AUTH_BADCRED on unknown | krb5-admin/kadm5.rs handle_auth_gssapi | `arg_ver` echoed; no v1/v2 downgrade; unknown version not `AUTH_BADCRED` | deviation | proposed: AUTH_GSSAPI init-arg version cell |
+| kdb_default.c:111-215,356-380 `krb5_def_store_mkey_list` / `krb5_db_def_fetch_mkey` | the master-key stash is a FILE keytab with one `K/M@REALM` entry (etype + kvno embedded); fetch tries the keytab (`krb5_db_def_fetch_mkey_keytab`) then the raw stash (`krb5_db_def_fetch_mkey_stash`) | n/a | krb5-kdc/persist.rs stash_keytab_key; krb5-kdc/persist.rs master_for_save; krb5-kdc/persist.rs existing_stash_key | keytab format written; keytab-first read (etype from the file, no blind trial), legacy raw rewritten on the next save | exact | `stash_is_keytab_format_and_reads_back_the_master`; `legacy_raw_stash_loads_then_is_rewritten_as_keytab`; `scripts/kdb-dump-gate.sh` MIT `klist -k` reads the Rust `K/M@KERBER.TEST` keytab stash + `krb5-kdb stash` |
 | alt_prof.c:497-506 `supported_enctypes` (`kadm5_get_config_params` keysalts) | key generation order and salts for `kdb5_util create` / `addprinc` without `-e` follow the realm's `supported_enctypes` | n/a | krb5-kdc/store.rs password_etypes (`randkey_etypes()` default; the profile value is never read) | n/a | absent (`--test-realm` and `kdb create` mint 18,17,20,19 where the harness kdc.conf says 20,19,18,17; the cross-KDC gate uses one dump so both KDCs agree) | proposed: profile `supported_enctypes` → `store.supported_enctypes`; round-up R1 |

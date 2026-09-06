@@ -2,8 +2,10 @@
 //!
 //! New writes are dump text (`kdb5_util load_dump version 7`). SID/RID live
 //! in dump `tl_data` (`TL_KERBER_SID`). Legacy `KDB1`/`KDB2`/`KDB3`
-//! ciphertext still loads for one release. The stash remains the raw master
-//! key; it is not rewritten as MIT `.k5.REALM`.
+//! ciphertext still loads for one release. The stash is a keytab-format
+//! `.k5.REALM` (a single `K/M@REALM` entry, MIT `krb5_def_store_mkey_list`);
+//! a legacy raw-key stash still loads (`krb5_db_def_fetch_mkey`) and is
+//! rewritten in keytab format on the next save.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -14,7 +16,7 @@ use crate::kdb_dump::{load_dump_mkey, write_dump};
 use crate::mkey::{harness_master_etype, master_key_from_password};
 use crate::store::{KeyEntry, Principal, PrincipalStore, S2K_ITERS, UlogEntry};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt};
-use krb5_protocol::write_secret_file;
+use krb5_protocol::{Keytab, write_secret_file};
 use krb5_types::pac::RpcSid;
 use krb5_types::{PrincipalName, parse_name};
 
@@ -200,7 +202,30 @@ pub fn save_store_legacy_kdb3(
     Ok(())
 }
 
+/// Master key from a keytab-format stash (`krb5_db_def_fetch_mkey_keytab`):
+/// the `K/M@REALM` entry, etype embedded. `None` for a legacy raw stash.
+pub(crate) fn stash_keytab_key(bytes: &[u8]) -> Option<ProtocolKey> {
+    let kt = Keytab::parse(bytes).ok()?;
+    let km = PrincipalName::new(PrincipalName::NT_PRINCIPAL, crate::mkey::MASTER_NAME);
+    kt.entries.into_iter().find(|e| e.name == km).map(|e| e.key)
+}
+
+/// Keytab-format stash bytes for `master` (`krb5_def_store_mkey_list`): one
+/// `K/M@REALM` entry at kvno 1.
+fn stash_keytab_bytes(realm: &str, master: &ProtocolKey) -> Result<Vec<u8>, PersistError> {
+    let realm_a = krb5_types::try_ascii(realm).map_err(|e| PersistError::Format(e.to_string()))?;
+    let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, crate::mkey::MASTER_NAME);
+    Ok(Keytab::single(realm_a, name, 1, master.clone()).to_bytes())
+}
+
 fn load_dump_with_stash(text: &str, stash: &[u8]) -> Result<PrincipalStore, PersistError> {
+    // krb5_db_def_fetch_mkey: keytab format first (etype known, one decrypt),
+    // then the legacy raw stash (trial over the two harness etypes).
+    if let Some(mkey) = stash_keytab_key(stash)
+        && let Ok(store) = load_dump_mkey(text, &mkey)
+    {
+        return Ok(store);
+    }
     for etype in stash_etypes() {
         let Ok(mkey) = ProtocolKey::from_bytes(etype, stash) else {
             continue;
@@ -240,7 +265,13 @@ fn master_for_save(
     stash_path: &Path,
 ) -> Result<ProtocolKey, PersistError> {
     if stash_path.exists() {
-        return existing_stash_key(db_path, stash_path);
+        let master = existing_stash_key(db_path, stash_path)?;
+        // Rewrite a legacy raw-key stash in keytab format (one release later
+        // the raw fallback goes).
+        if stash_keytab_key(&fs::read(stash_path)?).is_none() {
+            write_secret_file(stash_path, &stash_keytab_bytes(store.realm(), &master)?)?;
+        }
+        return Ok(master);
     }
     let master = if let Ok(pw) = std::env::var("KRB5_MASTER_PASSWORD") {
         let etype = persist_master_etype();
@@ -248,12 +279,15 @@ fn master_for_save(
     } else {
         random_master()?
     };
-    write_secret_file(stash_path, master.as_bytes())?;
+    write_secret_file(stash_path, &stash_keytab_bytes(store.realm(), &master)?)?;
     Ok(master)
 }
 
 fn existing_stash_key(db_path: &Path, stash_path: &Path) -> Result<ProtocolKey, PersistError> {
     let bytes = fs::read(stash_path)?;
+    if let Some(mkey) = stash_keytab_key(&bytes) {
+        return Ok(mkey);
+    }
     if let Ok(blob) = fs::read(db_path)
         && blob.starts_with(DUMP_PREFIX)
         && let Ok(text) = std::str::from_utf8(&blob)
