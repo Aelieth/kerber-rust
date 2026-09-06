@@ -2,8 +2,8 @@
 
 use krb5_crypto::{KeyUsage, ProtocolKey, checksum};
 use krb5_kdc::{
-    TEST_REALM, TEST_USER, bootstrap_documented, documented_host, sign_pac, ticket_checksum_der,
-    verify_pac_signatures,
+    PacTicket, TEST_REALM, TEST_USER, bootstrap_documented, documented_host, sign_pac,
+    ticket_checksum_der, verify_pac_signatures,
 };
 use krb5_protocol::{as_req, pa_enc_timestamp};
 use krb5_types::PrincipalName;
@@ -34,9 +34,12 @@ fn signed_as_pac() -> (Vec<u8>, ProtocolKey, ProtocolKey) {
     let signed = sign_pac(
         &cname,
         part.authtime.unix_seconds(),
-        &host.key,
-        &krbtgt.key,
-        &der,
+        &PacTicket {
+            server: &host.key,
+            kdc: &krbtgt.key,
+            enc_tkt_der: &der,
+            is_service_tkt: true,
+        },
         &ident,
         None,
     )
@@ -85,5 +88,6 @@ fn accept_rodc_trailer_privsvr_covers_server_buffer_minus_type() {
         rebuilt.buffers = out_bufs;
         rebuilt.to_bytes()
     };
-    verify_pac_signatures(&out, &server, Some(&kdc), None).expect("RODC trailer PAC verifies");
+    verify_pac_signatures(&out, &server, Some(&kdc), None, false)
+        .expect("RODC trailer PAC verifies");
 }

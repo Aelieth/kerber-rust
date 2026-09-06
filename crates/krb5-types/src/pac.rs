@@ -34,6 +34,10 @@ pub const PAC_ATTRIBUTES_INFO: u32 = 17;
 pub const PAC_REQUESTER_SID: u32 = 18;
 /// PAC buffer type: extended KDC / full PAC checksum (CVE-2022-37967).
 pub const PAC_FULL_CHECKSUM: u32 = 19;
+/// MIT `pac.c` `MAX_BUFFERS`.
+pub const MAX_BUFFERS: usize = 4096;
+/// MIT `PAC_ALIGNMENT`: every buffer starts on an 8-byte boundary.
+pub const PAC_ALIGNMENT: usize = 8;
 
 /// Signature type HMAC-MD5 (RC4). RFC 4757 cksumtype -138.
 pub const CKSUM_HMAC_MD5: i32 = -138;
@@ -100,6 +104,8 @@ pub enum PacError {
     Integrity,
     /// Required buffer missing.
     MissingBuffer,
+    /// Header, buffer table or buffer placement that MIT `krb5_pac_parse` refuses.
+    Malformed,
 }
 
 impl std::fmt::Display for PacError {
@@ -108,6 +114,7 @@ impl std::fmt::Display for PacError {
             Self::Truncated => write!(f, "PAC truncated"),
             Self::Integrity => write!(f, "PAC integrity check failed"),
             Self::MissingBuffer => write!(f, "PAC missing required buffer"),
+            Self::Malformed => write!(f, "PAC malformed"),
         }
     }
 }
@@ -137,12 +144,20 @@ impl Pac {
         let c_buffers =
             u32::from_le_bytes(bytes[0..4].try_into().map_err(|_| PacError::Truncated)?);
         let version = u32::from_le_bytes(bytes[4..8].try_into().map_err(|_| PacError::Truncated)?);
+        if version != 0 {
+            return Err(PacError::Malformed);
+        }
+        let count = usize::try_from(c_buffers).map_err(|_| PacError::Malformed)?;
+        if !(1..=MAX_BUFFERS).contains(&count) {
+            return Err(PacError::Malformed);
+        }
+        let header_len = 8 + 16 * count;
+        if bytes.len() < header_len {
+            return Err(PacError::Truncated);
+        }
         let mut buffers = Vec::new();
         let mut off = 8usize;
-        for _ in 0..c_buffers {
-            if off + 16 > bytes.len() {
-                return Err(PacError::Truncated);
-            }
+        for _ in 0..count {
             let kind = u32::from_le_bytes(
                 bytes[off..off + 4]
                     .try_into()
@@ -161,8 +176,12 @@ impl Pac {
             ))
             .map_err(|_| PacError::Truncated)?;
             off += 16;
-            if offset.checked_add(size).is_none_or(|e| e > bytes.len()) {
-                return Err(PacError::Truncated);
+            if offset % PAC_ALIGNMENT != 0
+                || offset < header_len
+                || offset > bytes.len()
+                || size > bytes.len() - offset
+            {
+                return Err(PacError::Malformed);
             }
             buffers.push(PacBuffer {
                 kind,
@@ -212,6 +231,20 @@ impl Pac {
             .map(|b| b.data.as_slice())
     }
 
+    /// MIT `k5_pac_locate_buffer`: the buffer of `kind`, refused when it occurs twice.
+    ///
+    /// # Errors
+    ///
+    /// `Malformed` for a duplicate type.
+    pub fn unique_buffer(&self, kind: u32) -> Result<Option<&[u8]>, PacError> {
+        let mut hits = self.buffers.iter().filter(|b| b.kind == kind);
+        let first = hits.next();
+        if hits.next().is_some() {
+            return Err(PacError::Malformed);
+        }
+        Ok(first.map(|b| b.data.as_slice()))
+    }
+
     /// Zero server (6) and KDC (7) signature payloads. Ticket (16) and full
     /// (19) checksums stay populated — that is the AD server-checksum region.
     #[must_use]
@@ -259,11 +292,11 @@ impl Pac {
 
     fn zero_in(&self, copy: &mut [u8], kinds: &[u32]) -> Result<(), PacError> {
         for kind in kinds {
-            let b = self
-                .buffers
-                .iter()
-                .find(|b| b.kind == *kind)
-                .ok_or(PacError::MissingBuffer)?;
+            let mut hits = self.buffers.iter().filter(|b| b.kind == *kind);
+            let b = hits.next().ok_or(PacError::MissingBuffer)?;
+            if hits.next().is_some() {
+                return Err(PacError::Malformed);
+            }
             if b.data.len() < 4 {
                 return Err(PacError::Truncated);
             }
@@ -281,27 +314,39 @@ impl Pac {
     }
 
     /// Server checksum buffer payload, if present.
-    #[must_use]
-    pub fn server_checksum(&self) -> Option<&[u8]> {
-        self.buffer(PAC_SERVER_CHECKSUM)
+    ///
+    /// # Errors
+    ///
+    /// `Malformed` when the type occurs twice.
+    pub fn server_checksum(&self) -> Result<Option<&[u8]>, PacError> {
+        self.unique_buffer(PAC_SERVER_CHECKSUM)
     }
 
     /// KDC checksum buffer payload, if present.
-    #[must_use]
-    pub fn kdc_checksum(&self) -> Option<&[u8]> {
-        self.buffer(PAC_PRIVSVR_CHECKSUM)
+    ///
+    /// # Errors
+    ///
+    /// `Malformed` when the type occurs twice.
+    pub fn kdc_checksum(&self) -> Result<Option<&[u8]>, PacError> {
+        self.unique_buffer(PAC_PRIVSVR_CHECKSUM)
     }
 
     /// Ticket checksum (type 16) payload, if present.
-    #[must_use]
-    pub fn ticket_checksum(&self) -> Option<&[u8]> {
-        self.buffer(PAC_TICKET_CHECKSUM)
+    ///
+    /// # Errors
+    ///
+    /// `Malformed` when the type occurs twice.
+    pub fn ticket_checksum(&self) -> Result<Option<&[u8]>, PacError> {
+        self.unique_buffer(PAC_TICKET_CHECKSUM)
     }
 
     /// Full PAC checksum (type 19) payload, if present.
-    #[must_use]
-    pub fn full_checksum(&self) -> Option<&[u8]> {
-        self.buffer(PAC_FULL_CHECKSUM)
+    ///
+    /// # Errors
+    ///
+    /// `Malformed` when the type occurs twice.
+    pub fn full_checksum(&self) -> Result<Option<&[u8]>, PacError> {
+        self.unique_buffer(PAC_FULL_CHECKSUM)
     }
 }
 

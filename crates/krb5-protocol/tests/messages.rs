@@ -678,6 +678,7 @@ fn fast_client_continue_uses_etype20_from_info2() {
     let addr = udp.local_addr().unwrap();
     let tcp = std::net::TcpListener::bind(addr).unwrap();
     let port = addr.port();
+    let tgt_first = store.krbtgt().unwrap().first_current_key().unwrap().etype;
     let store = shared_store(store);
     thread::spawn(move || {
         let _ = serve(store, udp, tcp);
@@ -709,7 +710,11 @@ fn fast_client_continue_uses_etype20_from_info2() {
     .expect("FAST client continuation at etype 20");
     assert_eq!(out.session_key.etype(), sha2);
     assert_eq!(out.client_key.etype(), sha2);
-    assert_eq!(out.ticket.enc_part.etype, sha2.to_iana());
+    assert_eq!(
+        out.ticket.enc_part.etype,
+        tgt_first.to_iana(),
+        "ticket key is the first current krbtgt key, not the negotiated etype"
+    );
     assert!(out.enc_part.flags.pre_authent());
 }
 

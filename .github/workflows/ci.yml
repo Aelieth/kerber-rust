@@ -172,6 +172,8 @@ jobs:
         run: ./scripts/kprop-reverse-gate.sh
       - name: rd-safe-oracle-gate (MIT krb5_rd_safe non-canonical body)
         run: ./scripts/rd-safe-oracle-gate.sh
+      - name: cross-kdc-gate (MIT TGT to Rust TGS and back on one dump)
+        run: ./scripts/cross-kdc-gate.sh
       - name: iprop-gate (MIT kpropd -A vs Rust kadmind + serial-delta)
         run: ./scripts/iprop-gate.sh
       - name: expire-gate (MIT kinit NAME_EXP / KEY_EXPIRED / PWCHANGE_SERVICE)

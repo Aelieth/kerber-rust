@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 
 use krb5_asn1::decode;
 use krb5_kdc::{
-    Error, TEST_REALM, TEST_USER, bootstrap_documented, decrypt_ticket_part, documented_host,
-    pac_from_ticket_part, sign_pac, ticket_checksum_der, verify_pac, verify_pac_signatures,
+    Error, PacTicket, TEST_REALM, TEST_USER, bootstrap_documented, decrypt_ticket_part,
+    documented_host, pac_from_ticket_part, sign_pac, ticket_checksum_der, verify_pac,
+    verify_pac_signatures,
 };
 use krb5_protocol::{FileCcache, Keytab, as_req, pa_enc_timestamp, tgs_req};
 use krb5_types::pac::{
@@ -122,7 +123,7 @@ fn captured_pac_server_checksum_usage_17() {
     let logon = pac.buffer(PAC_LOGON_INFO).expect("logon");
     let v = parse_kerb_validation_info(logon).expect("NDR");
     assert_eq!(v.effective_name.value, "kbruser");
-    verify_pac_signatures(&pac_bytes, &key, None, None).expect("server-only verify");
+    verify_pac_signatures(&pac_bytes, &key, None, None, true).expect("server-only verify");
 }
 
 #[test]
@@ -174,17 +175,21 @@ fn issued_pac_self_verifies_all_four_signatures() {
         PAC_REQUESTER_SID,
         PAC_SERVER_CHECKSUM,
         PAC_PRIVSVR_CHECKSUM,
-        PAC_TICKET_CHECKSUM,
-        PAC_FULL_CHECKSUM,
     ] {
         assert!(
             kinds.contains(&need),
             "issued PAC missing {need}: {kinds:?}"
         );
     }
+    for absent in [PAC_TICKET_CHECKSUM, PAC_FULL_CHECKSUM] {
+        assert!(
+            !kinds.contains(&absent),
+            "TGT PAC must not carry {absent} (pac_sign.c:239-243): {kinds:?}"
+        );
+    }
     let der = ticket_checksum_der(&tgt_part).expect("zeroed PAC DER");
-    verify_pac_signatures(&tgt_pac, &krbtgt.key, Some(&krbtgt.key), Some(&der))
-        .expect("TGT all four");
+    verify_pac_signatures(&tgt_pac, &krbtgt.key, Some(&krbtgt.key), Some(&der), false)
+        .expect("TGT server+privsvr");
 
     let tgs = tgs_req(
         as_out.rep.0.ticket.clone(),
@@ -205,23 +210,27 @@ fn issued_pac_self_verifies_all_four_signatures() {
     let svc = decrypt_ticket_part(&host.key, &tgs_out.rep.0.ticket).expect("svc");
     let pac = pac_from_ticket_part(&svc).expect("svc PAC");
     let der = ticket_checksum_der(&svc).expect("svc zeroed");
-    verify_pac_signatures(&pac, &host.key, Some(&krbtgt.key), Some(&der)).expect("svc all four");
-    verify_pac(&pac, &host.key, &krbtgt.key).expect("server+kdc");
+    verify_pac_signatures(&pac, &host.key, Some(&krbtgt.key), Some(&der), true)
+        .expect("svc all four");
+    verify_pac(&pac, &host.key, &krbtgt.key, true).expect("server+kdc");
 
     let ident = store.pac_identity(&cname, TEST_REALM);
     let signed = sign_pac(
         &cname,
         tgt_part.authtime.unix_seconds(),
-        &host.key,
-        &krbtgt.key,
-        &der,
+        &PacTicket {
+            server: &host.key,
+            kdc: &krbtgt.key,
+            enc_tkt_der: &der,
+            is_service_tkt: true,
+        },
         &ident,
         None,
     )
     .expect("sign");
     // Re-sign uses the service-ticket checksum input, so ticket/full will
     // not match that EncTicketPart; server+kdc still must.
-    verify_pac(&signed, &host.key, &krbtgt.key).expect("re-sign server+kdc");
+    verify_pac(&signed, &host.key, &krbtgt.key, true).expect("re-sign server+kdc");
 }
 
 fn flip_pac_mac(pac_bytes: &[u8], kind: u32) -> Vec<u8> {
@@ -272,17 +281,20 @@ fn signed_pac_tampered_kdc_and_full_checksums_are_modified() {
     let signed = sign_pac(
         &cname,
         svc.authtime.unix_seconds(),
-        &host.key,
-        &krbtgt.key,
-        &der,
+        &PacTicket {
+            server: &host.key,
+            kdc: &krbtgt.key,
+            enc_tkt_der: &der,
+            is_service_tkt: true,
+        },
         &ident,
         None,
     )
     .expect("sign");
-    verify_pac_signatures(&signed, &host.key, Some(&krbtgt.key), Some(&der)).expect("clean");
+    verify_pac_signatures(&signed, &host.key, Some(&krbtgt.key), Some(&der), true).expect("clean");
 
     let flipped7 = flip_pac_mac(&signed, PAC_PRIVSVR_CHECKSUM);
-    match verify_pac_signatures(&flipped7, &host.key, Some(&krbtgt.key), Some(&der)) {
+    match verify_pac_signatures(&flipped7, &host.key, Some(&krbtgt.key), Some(&der), true) {
         Err(Error::Protocol { code, .. }) => {
             assert_eq!(code, err::MODIFIED, "type-7 MAC flip");
         }
@@ -290,7 +302,7 @@ fn signed_pac_tampered_kdc_and_full_checksums_are_modified() {
     }
 
     let flipped19 = flip_pac_mac(&signed, PAC_FULL_CHECKSUM);
-    match verify_pac_signatures(&flipped19, &host.key, Some(&krbtgt.key), Some(&der)) {
+    match verify_pac_signatures(&flipped19, &host.key, Some(&krbtgt.key), Some(&der), true) {
         Err(Error::Protocol { code, .. }) => {
             assert_eq!(code, err::MODIFIED, "type-19 MAC flip");
         }
@@ -322,7 +334,7 @@ fn pac_sha1_server_checksum_is_sumtype_nosupp() {
         .expect("server");
     buf.data[0..4].copy_from_slice(&14i32.to_le_bytes());
     let rewritten = parsed.to_bytes();
-    match verify_pac_signatures(&rewritten, &krbtgt.key, None, None) {
+    match verify_pac_signatures(&rewritten, &krbtgt.key, None, None, false) {
         Err(Error::Protocol { code, .. }) => assert_eq!(code, err::SUMTYPE_NOSUPP),
         other => panic!("SHA-1 server checksum must be 15, got {other:?}"),
     }
@@ -335,12 +347,12 @@ fn captured_ticket_checksum_structurally_present() {
         return;
     };
     let pac = Pac::parse(&pac_bytes).expect("parse");
-    assert!(pac.ticket_checksum().is_some());
-    assert!(pac.full_checksum().is_some());
+    assert!(pac.ticket_checksum().expect("unique").is_some());
+    assert!(pac.full_checksum().expect("unique").is_some());
     // krbtgt key is not held; only the server checksum is key-verifiable.
     let der = ticket_checksum_der(&part).expect("der");
     assert!(
-        verify_pac_signatures(&pac_bytes, &key, None, Some(&der)).is_ok(),
+        verify_pac_signatures(&pac_bytes, &key, None, Some(&der), true).is_ok(),
         "server checksum still holds when ticket-checksum DER is supplied without krbtgt"
     );
 }

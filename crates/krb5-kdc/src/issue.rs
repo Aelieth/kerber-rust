@@ -430,8 +430,7 @@ fn issue_as_body(
     }
 
     let skey = server
-        .key_for(session_etype)
-        .or_else(|| server.best_key())
+        .first_current_key()
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::FINDING_SERVER_KEY))?;
     check_db_times(Some(&client), &server)?;
     check_as_policy_flags(&client, &server, body)?;
@@ -601,7 +600,6 @@ struct HeaderTgt {
     ap: krb5_types::ApReq,
     enc_tkt: EncTicketPart,
     tgt_key: ProtocolKey,
-    tgt_plain: Vec<u8>,
     session: ProtocolKey,
     authenticator: krb5_types::Authenticator,
 }
@@ -649,7 +647,7 @@ fn process_tgs_header(
     }
     let tkt_etype = EncryptionType::from_iana(ap.ticket.enc_part.etype)
         .or_else(|_| EncryptionType::known(ap.ticket.enc_part.etype))?;
-    let (enc_tkt, tgt_key, tgt_plain) = decrypt_presented_tgt(store, &ap, tkt_etype)?;
+    let (enc_tkt, tgt_key, _) = decrypt_presented_tgt(store, &ap, tkt_etype)?;
     let sess_etype = EncryptionType::from_iana(enc_tkt.key.keytype)
         .or_else(|_| EncryptionType::known(enc_tkt.key.keytype))?;
     let session = ProtocolKey::from_bytes(sess_etype, enc_tkt.key.keyvalue.as_ref())?;
@@ -695,7 +693,6 @@ fn process_tgs_header(
         ap,
         enc_tkt,
         tgt_key,
-        tgt_plain,
         session,
         authenticator,
     })
@@ -723,7 +720,6 @@ fn issue_tgs_body(
         ap,
         enc_tkt,
         tgt_key,
-        tgt_plain,
         session: tgt_session,
         authenticator,
     } = header;
@@ -806,8 +802,7 @@ fn issue_tgs_body(
     } else if let Some((cn, logon)) = s4u2proxy_client(store, req, &enc_tkt.cname, tgs_padata)? {
         ticket_cname = cn;
         evidence_logon = Some(logon);
-    } else if let Some(logon) = presented_tgt_logon(&enc_tkt, &tgt_key, &tgt_plain, store.realm())?
-    {
+    } else if let Some(logon) = presented_tgt_logon(&enc_tkt, &tgt_key)? {
         evidence_logon = Some(logon);
     }
     let skip_transited = body.kdc_options.bit(flag_bit::DISABLE_TRANSITED_CHECK);
@@ -820,8 +815,7 @@ fn issue_tgs_body(
         (k, kv, et)
     } else {
         let skey = server
-            .key_for(session_etype)
-            .or_else(|| server.best_key())
+            .first_current_key()
             .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::FINDING_SERVER_KEY))?;
         (skey.key.clone(), skey.kvno, skey.etype)
     };
@@ -1208,9 +1202,12 @@ fn mint_ticket(
         let pac = sign_pac(
             cname,
             authtime.unix_seconds(),
-            service_key,
-            kdc_key,
-            &checksum_der,
+            &crate::ad::PacTicket {
+                server: service_key,
+                kdc: kdc_key,
+                enc_tkt_der: &checksum_der,
+                is_service_tkt: crate::ad::should_have_ticket_signature(sname),
+            },
             &ident,
             logon_override,
         )?;

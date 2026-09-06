@@ -2,7 +2,7 @@
 
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, checksum};
 use krb5_kdc::{
-    Error, TEST_REALM, TEST_USER, bootstrap_documented, documented_host, sign_pac,
+    Error, PacTicket, TEST_REALM, TEST_USER, bootstrap_documented, documented_host, sign_pac,
     ticket_checksum_der, verify_pac_signatures,
 };
 use krb5_protocol::{as_req, pa_enc_timestamp};
@@ -37,9 +37,12 @@ fn signed_as_pac() -> (Vec<u8>, ProtocolKey, ProtocolKey) {
     let signed = sign_pac(
         &cname,
         part.authtime.unix_seconds(),
-        &host.key,
-        &krbtgt.key,
-        &der,
+        &PacTicket {
+            server: &host.key,
+            kdc: &krbtgt.key,
+            enc_tkt_der: &der,
+            is_service_tkt: true,
+        },
         &ident,
         None,
     )
@@ -85,7 +88,7 @@ fn accept_missing_privsvr_buffer_is_generic_60() {
     let mut parsed = Pac::parse(&signed).unwrap();
     parsed.buffers.retain(|b| b.kind != PAC_PRIVSVR_CHECKSUM);
     let out = parsed.to_bytes();
-    match verify_pac_signatures(&out, &server, Some(&kdc), None) {
+    match verify_pac_signatures(&out, &server, Some(&kdc), None, false) {
         Err(Error::Protocol { code, .. }) => assert_eq!(code, err::GENERIC),
         other => panic!("expected GENERIC 60, got {other:?}"),
     }
@@ -96,7 +99,7 @@ fn accept_t_pac_saved_pac_verifies() {
     let bytes = include_bytes!("data/t_pac_saved.bin");
     let member = samba_member_key();
     let kdc = samba_kdc_key();
-    verify_pac_signatures(bytes, &member, Some(&kdc), None).expect("t_pac saved_pac");
+    verify_pac_signatures(bytes, &member, Some(&kdc), None, false).expect("t_pac saved_pac");
     let pac = Pac::parse(bytes).unwrap();
     let kinds: Vec<u32> = pac.buffers.iter().map(|b| b.kind).collect();
     assert_eq!(
@@ -111,7 +114,7 @@ fn accept_t_pac_saved_pac_verifies() {
     let recoded = pac.to_bytes();
     if recoded.as_slice() != bytes.as_slice() {
         assert!(
-            verify_pac_signatures(&recoded, &member, Some(&kdc), None).is_err(),
+            verify_pac_signatures(&recoded, &member, Some(&kdc), None, false).is_err(),
             "re-encode must not satisfy checksums over the received layout"
         );
     }
@@ -141,20 +144,21 @@ fn accept_t_pac_s4u_pacs_verify_server_only() {
         } else {
             s4u_srv_key()
         };
-        verify_pac_signatures(bytes, &server, None, None).expect("t_pac s4u_pac");
+        verify_pac_signatures(bytes, &server, None, None, false).expect("t_pac s4u_pac");
     }
 }
 
 #[test]
 fn accept_t_pac_fuzz_blobs_parse_or_truncate() {
-    assert_eq!(
-        Pac::parse(include_bytes!("data/t_pac_fuzz1.bin")),
-        Err(PacError::Truncated)
-    );
-    assert_eq!(
-        Pac::parse(include_bytes!("data/t_pac_fuzz2.bin")),
-        Err(PacError::Truncated)
-    );
+    for blob in [
+        include_bytes!("data/t_pac_fuzz1.bin").as_slice(),
+        include_bytes!("data/t_pac_fuzz2.bin").as_slice(),
+    ] {
+        assert!(matches!(
+            Pac::parse(blob),
+            Err(PacError::Truncated | PacError::Malformed)
+        ));
+    }
 }
 
 #[test]
@@ -163,7 +167,7 @@ fn accept_wrong_server_key_still_checks_privsvr() {
     let mut wrong = server.as_bytes().to_vec();
     wrong[0] ^= 0xff;
     let wrong_key = ProtocolKey::from_bytes(server.etype(), &wrong).unwrap();
-    verify_pac_signatures(&signed, &wrong_key, Some(&kdc), None)
+    verify_pac_signatures(&signed, &wrong_key, Some(&kdc), None, true)
         .expect("MIT overwrites a failed server checksum with a valid privsvr result");
 }
 
@@ -200,6 +204,6 @@ fn accept_noncanonical_buffer_order_still_verifies() {
         rebuilt.buffers = out_bufs;
         rebuilt.to_bytes()
     };
-    verify_pac_signatures(&out, &server, Some(&kdc), None)
+    verify_pac_signatures(&out, &server, Some(&kdc), None, false)
         .expect("swapped buffer order still verifies");
 }

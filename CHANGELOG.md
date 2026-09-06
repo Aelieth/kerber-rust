@@ -6,6 +6,22 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-J Round 2 V4
+
+- **types/kdc.** PAC shape follows MIT 1.22.2 `k5_pac_should_have_ticket_signature`:
+  ticket (16) and full (19) checksums are signed and verified only for
+  service tickets; a presented TGT is verified on its server signature
+  alone (`kdc_util.c:597-602`); the S4U evidence ticket retries the two
+  previous krbtgt kvnos. `Pac::parse` refuses what `krb5_pac_parse`
+  refuses (version, buffer count, alignment, header overlap) and a
+  duplicate buffer type is 60. The ticket key is the first key of the
+  highest kvno (`get_first_current_key`), not the key matching the
+  session etype, so MIT's KDB keytab decrypts Rust-issued TGTs. New
+  `scripts/cross-kdc-gate.sh`: MIT and Rust TGTs accepted by the other
+  TGS on one dump, TGT enc-part etype equal on both legs. `sign_pac` takes
+  a `PacTicket`. A presented TGT whose PAC has no LOGON_INFO (MIT's db2
+  minimal PAC) is accepted.
+
 ### W1-J Round 2 V1
 
 - **ci/docs.** `ci-policy.py` verifies the ledger claim, not its punctuation:

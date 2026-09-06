@@ -436,6 +436,19 @@ impl Principal {
             .max_by_key(|k| k.kvno)
     }
 
+    /// MIT `get_first_current_key`: the first stored key of the highest kvno.
+    #[must_use]
+    pub fn first_current_key(&self) -> Option<&KeyEntry> {
+        let kvno = self.keys.iter().map(|k| k.kvno).max()?;
+        self.first_key_at_kvno(kvno)
+    }
+
+    /// The first stored key of `kvno` (MIT `krb5_dbe_find_enctype(-1, -1, kvno)`).
+    #[must_use]
+    pub fn first_key_at_kvno(&self, kvno: u32) -> Option<&KeyEntry> {
+        self.keys.iter().find(|k| k.kvno == kvno)
+    }
+
     /// Key matching `etype` and `kvno`.
     #[must_use]
     pub fn key_for_kvno(&self, etype: EncryptionType, kvno: u32) -> Option<&KeyEntry> {
@@ -1442,8 +1455,9 @@ impl PrincipalStore {
     /// Extra inter-realm key used only to decrypt tickets the peer issued.
     ///
     /// Windows TDOs derive inbound and outbound AES keys from the same
-    /// password with different salts. Insert at the front so [`Principal::best_key`]
-    /// (highest kvno, last among ties) stays the issue key.
+    /// password with different salts. The decrypt key sits one kvno below the
+    /// issue key so [`Principal::first_current_key`] and [`Principal::best_key`]
+    /// stay the issue key; ticket decryption tries every stored key.
     ///
     /// # Errors
     ///
@@ -1459,7 +1473,13 @@ impl PrincipalStore {
         let id = crate::kdb::lookup_principal_id(&name, &self.realm);
         acl.check(actor, AdminOp::Create, Some(&id))?;
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
-        let kvno = p.keys.iter().map(|k| k.kvno).min().unwrap_or(1);
+        let kvno = p
+            .keys
+            .iter()
+            .map(|k| k.kvno)
+            .min()
+            .unwrap_or(1)
+            .saturating_sub(1);
         p.keys.insert(0, KeyEntry::new(key.etype(), key, kvno));
         let snap = p.clone();
         self.note_ulog(id, false, Some(snap));

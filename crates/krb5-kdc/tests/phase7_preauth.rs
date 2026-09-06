@@ -9,7 +9,7 @@ use krb5_crypto::{
     encrypt, krb_fx_cf2, octetstring2key, p256_generate, string_to_key, unkeyed_checksum,
 };
 use krb5_kdc::{
-    Acl, AdminOp, Error, KDB_DISALLOW_ALL_TIX, KDB_OK_TO_AUTH_AS_DELEGATE, NamedPolicy,
+    Acl, AdminOp, Error, KDB_DISALLOW_ALL_TIX, KDB_OK_TO_AUTH_AS_DELEGATE, NamedPolicy, PacTicket,
     PrincipalStore, RID_FIRST_USER, S2K_ITERS, TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM,
     TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented, decrypt_ticket_part,
     documented_admin_id, documented_host, pa_enc_timestamp, pac_from_ticket_part, sign_pac,
@@ -22,7 +22,7 @@ use krb5_protocol::{
     unwrap_fast_rep,
 };
 use krb5_types::pac::{
-    PAC_LOGON_INFO, PAC_SERVER_CHECKSUM, PAC_TICKET_CHECKSUM, Pac, RpcSid,
+    PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM, PAC_SERVER_CHECKSUM, Pac, RpcSid,
     parse_kerb_validation_info, zero_pac_ad_data,
 };
 use krb5_types::{
@@ -2530,7 +2530,7 @@ fn as_and_tgs_tickets_carry_verifiable_pac() {
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let tgt_part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("TGT");
     let pac = pac_from_ticket_part(&tgt_part).expect("PAC on TGT");
-    verify_pac(&pac, &krbtgt.key, &krbtgt.key).expect("TGT PAC");
+    verify_pac(&pac, &krbtgt.key, &krbtgt.key, false).expect("TGT PAC");
 
     let tgs = tgs_req(
         issued.rep.0.ticket.clone(),
@@ -2550,19 +2550,22 @@ fn as_and_tgs_tickets_carry_verifiable_pac() {
         .unwrap();
     let svc = decrypt_ticket_part(&host.key, &tgs_out.rep.0.ticket).expect("svc");
     let pac = pac_from_ticket_part(&svc).expect("PAC on service ticket");
-    verify_pac(&pac, &host.key, &krbtgt.key).expect("service PAC");
+    verify_pac(&pac, &host.key, &krbtgt.key, true).expect("service PAC");
     let ident = store.pac_identity(&cname, TEST_REALM);
     let signed = sign_pac(
         &cname,
         tgt_part.authtime.unix_seconds(),
-        &host.key,
-        &krbtgt.key,
-        &[],
+        &PacTicket {
+            server: &host.key,
+            kdc: &krbtgt.key,
+            enc_tkt_der: &[],
+            is_service_tkt: true,
+        },
         &ident,
         None,
     )
     .expect("sign");
-    verify_pac(&signed, &host.key, &krbtgt.key).expect("re-sign");
+    verify_pac(&signed, &host.key, &krbtgt.key, true).expect("re-sign");
 }
 
 fn issue_host_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
@@ -2622,7 +2625,7 @@ fn s4u2self_impersonates_user() {
     assert!(part.flags.forwardable());
     let pac = pac_from_ticket_part(&part).expect("PAC");
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    verify_pac(&pac, &hostk.key, &krbtgt.key).expect("S4U PAC");
+    verify_pac(&pac, &hostk.key, &krbtgt.key, true).expect("S4U PAC");
     let parsed = Pac::parse(&pac).expect("PAC");
     let logon =
         parse_kerb_validation_info(parsed.buffer(PAC_LOGON_INFO).expect("logon")).expect("NDR");
@@ -3499,7 +3502,7 @@ fn interrealm_issue_key_is_not_the_peer_accept_key() {
         krb5_types::pac::RpcSid::dummy_domain().to_sddl()
     );
     let der = ticket_checksum_der(&part).expect("der");
-    verify_pac_signatures(&pac, &issue_key, Some(&issue_key), Some(&der))
+    verify_pac_signatures(&pac, &issue_key, Some(&issue_key), Some(&der), false)
         .expect("referral PAC signed with inter-realm key");
 }
 
@@ -3560,10 +3563,11 @@ fn issue_as_and_tgs_with_etype_20_mint_sha2_tickets() {
     .unwrap();
     let as_out = krb5_kdc::issue_as(&store, &req).expect("AS etype 20");
     assert_eq!(as_out.session_key.etype(), sha2);
+    let krbtgt_first = store.krbtgt().unwrap().first_current_key().unwrap().etype;
     assert_eq!(
         as_out.rep.0.ticket.enc_part.etype,
-        sha2.to_iana(),
-        "TGT EncryptedData.etype must be 20, not best_key() SHA-1"
+        krbtgt_first.to_iana(),
+        "TGT EncryptedData.etype is the first current krbtgt key (get_first_current_key), not the session etype"
     );
     let tgs = tgs_req_ex(
         as_out.rep.0.ticket.clone(),
@@ -3581,10 +3585,16 @@ fn issue_as_and_tgs_with_etype_20_mint_sha2_tickets() {
     .expect("TGS etype 20");
     let tgs_out = krb5_kdc::issue_tgs(&store, &tgs).expect("TGS etype 20");
     assert_eq!(tgs_out.session_key.etype(), sha2);
+    let host_first = store
+        .get_name(&documented_host())
+        .unwrap()
+        .first_current_key()
+        .unwrap()
+        .etype;
     assert_eq!(
         tgs_out.rep.0.ticket.enc_part.etype,
-        sha2.to_iana(),
-        "host ticket EncryptedData.etype must be 20"
+        host_first.to_iana(),
+        "host ticket EncryptedData.etype is the first current service key"
     );
 }
 
@@ -3936,11 +3946,11 @@ fn tgs_rejects_corrupt_foreign_referral_pac() {
         other => panic!("corrupt server checksum must fail, got {other:?}"),
     }
 
-    let mut part16 = decrypt_ticket_part(&ir, &referral.rep.0.ticket).expect("referral enc");
-    flip_pac_sig(&mut part16, PAC_TICKET_CHECKSUM);
-    let bad_16 = rewrap_ticket(&referral.rep.0.ticket, &part16, &ir);
-    let tgs16 = tgs_req(
-        bad_16,
+    let mut part7 = decrypt_ticket_part(&ir, &referral.rep.0.ticket).expect("referral enc");
+    flip_pac_sig(&mut part7, PAC_PRIVSVR_CHECKSUM);
+    let bad_7 = rewrap_ticket(&referral.rep.0.ticket, &part7, &ir);
+    let tgs7 = tgs_req(
+        bad_7,
         &referral.session_key,
         TEST_REALM,
         &cname,
@@ -3949,10 +3959,9 @@ fn tgs_rejects_corrupt_foreign_referral_pac() {
         9203,
     )
     .expect("TGS-REQ");
-    match krb5_kdc::issue_tgs(&foreign, &tgs16) {
-        Err(Error::Protocol { code, .. }) => assert_eq!(code, err::MODIFIED),
-        other => panic!("corrupt type-16 checksum must fail, got {other:?}"),
-    }
+    krb5_kdc::issue_tgs(&foreign, &tgs7).expect(
+        "only the server signature of a TGS-principal ticket is checked (kdc_util.c:597-602)",
+    );
 }
 
 #[test]
@@ -4005,6 +4014,12 @@ fn type16_checksum_uses_original_enc_tkt_bytes() {
         from_bytes, reencoded,
         "self-issued rasn DER must match original-bytes PAC zero"
     );
-    verify_pac_signatures(&pac, &krbtgt.key, Some(&krbtgt.key), Some(&from_bytes))
-        .expect("type-16 over original bytes");
+    verify_pac_signatures(
+        &pac,
+        &krbtgt.key,
+        Some(&krbtgt.key),
+        Some(&from_bytes),
+        false,
+    )
+    .expect("type-16 over original bytes");
 }

@@ -96,7 +96,15 @@ PA-FOR-USER unkeyed is 50 and a bad MAC is 41
 (`pac.c:478-579`): a copy zeros the server and privsvr payloads in place;
 privsvr covers the whole server-checksum buffer minus the 4-byte type
 (RODCIdentifier trailer included); a missing buffer is 60 `GENERIC`; a
-failed server checksum does not abort before privsvr. Ticket checksum
+failed server checksum does not abort before privsvr. Ticket (16) and
+full (19) checksums exist only on service tickets
+(`k5_pac_should_have_ticket_signature`, `pac.c:583-592`,
+`pac_sign.c:239-243`); a presented TGT is checked on its server
+signature alone with the key that opened it (`kdc_util.c:597-602`), so
+MIT-issued TGTs are accepted and Rust-issued TGTs are accepted by MIT
+(`scripts/cross-kdc-gate.sh`). `krb5_pac_parse` refusals (version,
+buffer count, 8-byte alignment, header overlap) and duplicate buffer
+types are 60 (`pac.c:281-317,137-147`). Ticket checksum
 (`pac.c:640-673`) is over the recoded EncTicketPart with PAC ad-data
 `0x00`. The FAST client verifies `ticket_checksum`
 (`fast.c:543-551`). PA-REQ-ENC-PA-REP (149) is produced when the AS-REQ

@@ -2,7 +2,8 @@
 # MIT kinit+kvno against Rust KDC and Rust krb5-kinit+krb5-kvno against MIT,
 # with session_enctypes=rc4-hmac on krbtgt and host/testhost.kerber.test.
 # Isolation: in-container; never touches host /etc/krb5.conf.
-# tkt etype inequality is recorded, not asserted (L4a / W1-J).
+# tkt etype is recorded here; scripts/cross-kdc-gate.sh asserts it on one dump
+# (this Rust store is minted with the default key order, supported_enctypes unread).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
