@@ -26,9 +26,9 @@ use krb5_types::pac::{
     parse_kerb_validation_info, zero_pac_ad_data,
 };
 use krb5_types::{
-    ApReq, Checksum, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, EncryptedData,
-    EncryptionKey, KdcOptions, KerberosTime, KrbError, MethodData, Microseconds, PaData,
-    PaEncTsEnc, PrincipalName, ascii, err, flag_bit, ku, pa,
+    ApReq, Checksum, EncKdcRepPart, EncTicketPart, EncryptedData, EncryptionKey, KdcOptions,
+    KerberosTime, KrbError, MethodData, Microseconds, PaData, PaEncTsEnc, PrincipalName, ascii,
+    err, flag_bit, ku, pa,
 };
 
 fn password_key(name: &str, password: &[u8]) -> ProtocolKey {
@@ -60,13 +60,7 @@ fn pkinit_as_req(
 }
 
 fn decode_enc_part(plain: &[u8]) -> EncKdcRepPart {
-    if let Ok(EncAsRepPart(p)) = decode::<EncAsRepPart>(plain) {
-        return p;
-    }
-    if let Ok(EncTgsRepPart(p)) = decode::<EncTgsRepPart>(plain) {
-        return p;
-    }
-    decode::<EncKdcRepPart>(plain).expect("enc-part")
+    krb5_asn1::decode_enc_kdc_rep_part(plain).expect("enc-part")
 }
 
 fn pref_etypes() -> Vec<i32> {
@@ -192,7 +186,7 @@ fn fast_as_exchange_strengthen_and_finished() {
     assert_eq!(reply.as_bytes(), issued.as_rep_key.as_bytes());
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
     let plain = decrypt(&reply, usage, issued.rep.0.enc_part.cipher.as_ref()).expect("AS enc");
-    assert_eq!(plain.first().copied(), Some(0x79));
+    assert_eq!(plain.first().copied(), Some(0x7a));
     let enc = decode_enc_part(&plain);
     assert_eq!(enc.nonce, 202);
     assert!(enc.flags.pre_authent());

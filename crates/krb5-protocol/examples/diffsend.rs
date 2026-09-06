@@ -207,7 +207,7 @@ fn decrypt_as(
         krb5_types::KdcRep,
         krb5_types::EncKdcRepPart,
         EncTicketPart,
-        bool,
+        u8,
         ProtocolKey,
     ),
     String,
@@ -222,7 +222,8 @@ fn decrypt_as(
     let ckey = client_key(rep.enc_part.etype, pw, cname, realm)?;
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART).map_err(|e| e.to_string())?;
     let plain = decrypt(&ckey, usage, rep.enc_part.cipher.as_ref()).map_err(|e| e.to_string())?;
-    let (enc, app26) = decode_enc_kdc_rep(&plain).map_err(|e| e.to_string())?;
+    let enc = decode_enc_kdc_rep(&plain).map_err(|e| e.to_string())?;
+    let enc_tag = plain.first().copied().unwrap_or(0);
     let t_usage = KeyUsage::new(ku::TICKET).map_err(|e| e.to_string())?;
     let (tkt_key, _) = keytab_for(tkt_kt, rep.ticket.enc_part.etype)?;
     let tplain = decrypt(tkt_key, t_usage, rep.ticket.enc_part.cipher.as_ref())
@@ -233,14 +234,22 @@ fn decrypt_as(
         .map_err(|e| e.to_string())?;
     let session =
         ProtocolKey::from_bytes(sess_et, enc.key.keyvalue.as_ref()).map_err(|e| e.to_string())?;
-    Ok((rep, enc, tkt, app26, session))
+    Ok((rep, enc, tkt, enc_tag, session))
 }
 
 fn decrypt_tgs(
     raw: &[u8],
     session: &ProtocolKey,
     svc_kt: &Keytab,
-) -> Result<(krb5_types::KdcRep, krb5_types::EncKdcRepPart, EncTicketPart), String> {
+) -> Result<
+    (
+        krb5_types::KdcRep,
+        krb5_types::EncKdcRepPart,
+        EncTicketPart,
+        u8,
+    ),
+    String,
+> {
     if raw.first() != Some(&0x6d) {
         if raw.first() == Some(&0x7e)
             && let Ok(e) = decode::<KrbError>(raw)
@@ -263,13 +272,14 @@ fn decrypt_tgs(
     let TgsRep(rep) = decode::<TgsRep>(raw).map_err(|e| e.to_string())?;
     let usage = KeyUsage::new(ku::TGS_REP_ENC_PART).map_err(|e| e.to_string())?;
     let plain = decrypt(session, usage, rep.enc_part.cipher.as_ref()).map_err(|e| e.to_string())?;
-    let (enc, _) = decode_enc_kdc_rep(&plain).map_err(|e| e.to_string())?;
+    let enc = decode_enc_kdc_rep(&plain).map_err(|e| e.to_string())?;
+    let enc_tag = plain.first().copied().unwrap_or(0);
     let t_usage = KeyUsage::new(ku::TICKET).map_err(|e| e.to_string())?;
     let (svc_key, _) = keytab_for(svc_kt, rep.ticket.enc_part.etype)?;
     let tplain = decrypt(svc_key, t_usage, rep.ticket.enc_part.cipher.as_ref())
         .map_err(|e| format!("service ticket decrypt: {e}"))?;
     let tkt: EncTicketPart = decode(&tplain).map_err(|e| e.to_string())?;
-    Ok((rep, enc, tkt))
+    Ok((rep, enc, tkt, enc_tag))
 }
 
 fn expect_as_ok(
@@ -283,17 +293,19 @@ fn expect_as_ok(
         .as_ref()
         .ok_or_else(|| "KERBER_KRBTGT_KEYTAB required for success compare".to_string())?;
     let (rust, mit) = send_both(cfg, case, req)?;
-    let (rr, re, rt, r26, session) = decrypt_as(&rust, &cfg.user_pw, cname, &cfg.realm, tkt_kt)?;
-    let (mr, me, mt, m26, mit_session) = decrypt_as(&mit, &cfg.user_pw, cname, &cfg.realm, tkt_kt)?;
+    let (rr, re, rt, rtag, session) = decrypt_as(&rust, &cfg.user_pw, cname, &cfg.realm, tkt_kt)?;
+    let (mr, me, mt, mtag, mit_session) =
+        decrypt_as(&mit, &cfg.user_pw, cname, &cfg.realm, tkt_kt)?;
     let wl = Whitelist::default();
-    let mut ok = compare_stable_rep(&rr, &re, &rt, &mr, &me, &mt, &wl)
+    let ok = compare_stable_rep(&rr, &re, &rt, &mr, &me, &mt, &wl)
         .map_err(|e| format!("{case}: {e}"))?;
-    if m26 && !r26 {
-        ok.whitelisted.push("mit-as-enc-app-26");
-        ok.mit_as_enc_app26 = true;
+    if rtag != 0x7a || mtag != 0x7a {
+        return Err(format!(
+            "{case}: enc-part tag rust=0x{rtag:02x} mit=0x{mtag:02x} want 0x7a"
+        ));
     }
     println!(
-        r#"{{"event":"diffsend","case":"{case}","outcome":"ok","rust_tag":"0x6b","mit_tag":"0x6b","whitelist":{:?}}}"#,
+        r#"{{"event":"diffsend","case":"{case}","outcome":"ok","rust_tag":"0x6b","mit_tag":"0x6b","rust_enc_tag":"0x7a","mit_enc_tag":"0x7a","whitelist":{:?}}}"#,
         ok.whitelisted
     );
     Ok((session, rr.ticket, mit_session, mr.ticket))
@@ -527,13 +539,18 @@ fn run() -> Result<(), String> {
         .host
         .as_ref()
         .ok_or_else(|| "KERBER_HOST_KEYTAB required for TGS compare".to_string())?;
-    let (rr, re, rt) = decrypt_tgs(&tr, &sess, svc)?;
-    let (mr, me, mt) = decrypt_tgs(&tm, &sess, svc)?;
+    let (rr, re, rt, rtag) = decrypt_tgs(&tr, &sess, svc)?;
+    let (mr, me, mt, mtag) = decrypt_tgs(&tm, &sess, svc)?;
     let wl = Whitelist::default();
     let ok = compare_stable_rep(&rr, &re, &rt, &mr, &me, &mt, &wl)
         .map_err(|e| format!("tgs-success: {e}"))?;
+    if rtag != 0x7a || mtag != 0x7a {
+        return Err(format!(
+            "tgs-success: enc-part tag rust=0x{rtag:02x} mit=0x{mtag:02x} want 0x7a"
+        ));
+    }
     println!(
-        r#"{{"event":"diffsend","case":"tgs-success","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","whitelist":{:?}}}"#,
+        r#"{{"event":"diffsend","case":"tgs-success","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","rust_enc_tag":"0x7a","mit_enc_tag":"0x7a","whitelist":{:?}}}"#,
         ok.whitelisted
     );
 

@@ -7,8 +7,8 @@ use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, p256_generate, string_to_key,
 };
 use krb5_types::{
-    AsRep, AsReq, EncAsRepPart, EncKdcRepPart, EncryptedData, EtypeInfo, EtypeInfo2, KdcOptions,
-    KdcReq, KdcReqBody, KerberosTime, KrbError, MethodData, PaData, PaEncTsEnc, PrincipalName, err,
+    AsRep, AsReq, EncKdcRepPart, EncryptedData, EtypeInfo, EtypeInfo2, KdcOptions, KdcReq,
+    KdcReqBody, KerberosTime, KrbError, MethodData, PaData, PaEncTsEnc, PrincipalName, err,
     flag_bit, ku, pa,
 };
 use sha1::{Digest, Sha1};
@@ -950,25 +950,7 @@ pub(crate) fn check_as_rep_times(
 }
 
 fn decode_enc_as(plain: &[u8]) -> Result<EncKdcRepPart, Error> {
-    // RFC 4120 §5.4.2: EncASRepPart is APPLICATION 25 (0x79). MIT 1.22.2
-    // kdc still wraps the AS enc-part as APPLICATION 26; accept that only
-    // as a documented interop fallback, then the untagged SEQUENCE.
-    if let Ok(EncAsRepPart(part)) = decode::<EncAsRepPart>(plain) {
-        return Ok(part);
-    }
-    if plain.first() == Some(&0x7a)
-        && let Ok(krb5_types::EncTgsRepPart(part)) = decode::<krb5_types::EncTgsRepPart>(plain)
-    {
-        return Ok(part);
-    }
-    if let Ok(part) = decode::<EncKdcRepPart>(plain) {
-        return Ok(part);
-    }
-    Err(Error::Asn1(format!(
-        "enc-part der tag={:02x} len={} (plaintext omitted)",
-        plain.first().copied().unwrap_or(0),
-        plain.len()
-    )))
+    krb5_asn1::decode_enc_kdc_rep_part(plain).map_err(|e| Error::Asn1(e.to_string()))
 }
 
 fn salt_cname(cname: &PrincipalName) -> PrincipalName {
@@ -1245,7 +1227,8 @@ fn emit(event: &'static str, correlation_id: &str, started: Instant, err: Option
 mod decode_enc_as_tests {
     use super::*;
     use krb5_types::{
-        EncTgsRepPart, EncryptionKey, OctetString, TicketFlags, ascii, kerberos_time_from_utc_z,
+        EncAsRepPart, EncTgsRepPart, EncryptionKey, OctetString, TicketFlags, ascii,
+        kerberos_time_from_utc_z,
     };
 
     fn sample_part() -> EncKdcRepPart {
@@ -1271,19 +1254,16 @@ mod decode_enc_as_tests {
     }
 
     #[test]
-    fn prefers_rfc_application_25() {
+    fn application_26_and_rfc_25_and_untagged() {
         let part = sample_part();
-        let der = encode(&EncAsRepPart(part.clone())).expect("encode 25");
-        assert_eq!(der.first().copied(), Some(0x79), "APPLICATION 25");
-        assert_eq!(decode_enc_as(&der).expect("decode 25"), part);
-    }
-
-    #[test]
-    fn mit_application_26_only_when_tag_is_7a() {
-        let part = sample_part();
-        let der = encode(&EncTgsRepPart(part.clone())).expect("encode 26");
-        assert_eq!(der.first().copied(), Some(0x7a), "APPLICATION 26");
-        assert_eq!(decode_enc_as(&der).expect("MIT 26 fallback"), part);
+        let der26 = encode(&EncTgsRepPart(part.clone())).expect("encode 26");
+        assert_eq!(der26.first().copied(), Some(0x7a), "APPLICATION 26");
+        assert_eq!(decode_enc_as(&der26).expect("decode 26"), part);
+        let der25 = encode(&EncAsRepPart(part.clone())).expect("encode 25");
+        assert_eq!(der25.first().copied(), Some(0x79), "APPLICATION 25");
+        assert_eq!(decode_enc_as(&der25).expect("decode 25"), part);
+        let untagged = encode(&part).expect("untagged");
+        assert_eq!(decode_enc_as(&untagged).expect("untagged"), part);
         let other = [0x62, 0x03, 0x02, 0x01, 0x00];
         assert!(decode_enc_as(&other).is_err());
     }

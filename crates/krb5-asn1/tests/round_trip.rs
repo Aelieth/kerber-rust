@@ -161,9 +161,24 @@ fn round_trip_core_types() {
     assert_round_trip(&sample_enc_kdc_rep());
     assert_round_trip(&krb5_types::AsReq(sample_kdc_req()));
     assert_round_trip(&krb5_types::EncAsRepPart(sample_enc_kdc_rep()));
+    assert_round_trip(&krb5_types::EncTgsRepPart(sample_enc_kdc_rep()));
     assert_round_trip(&sample_enc_ticket_part());
     let enc_tkt = encode(&sample_enc_ticket_part()).unwrap();
     assert_eq!(enc_tkt[0], 0x63, "EncTicketPart is APPLICATION 3");
+}
+
+#[test]
+fn decode_enc_kdc_rep_part_accepts_26_then_25_then_untagged() {
+    install_json_tracing();
+    let part = sample_enc_kdc_rep();
+    let d26 = encode(&krb5_types::EncTgsRepPart(part.clone())).unwrap();
+    assert_eq!(d26[0], 0x7a, "APPLICATION 26");
+    assert_eq!(krb5_asn1::decode_enc_kdc_rep_part(&d26).unwrap(), part);
+    let d25 = encode(&krb5_types::EncAsRepPart(part.clone())).unwrap();
+    assert_eq!(d25[0], 0x79, "APPLICATION 25");
+    assert_eq!(krb5_asn1::decode_enc_kdc_rep_part(&d25).unwrap(), part);
+    let untagged = encode(&part).unwrap();
+    assert_eq!(krb5_asn1::decode_enc_kdc_rep_part(&untagged).unwrap(), part);
 }
 
 fn sample_enc_ticket_part() -> krb5_types::EncTicketPart {

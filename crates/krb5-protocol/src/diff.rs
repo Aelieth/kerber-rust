@@ -10,8 +10,7 @@
 use krb5_asn1::decode;
 use krb5_types::flag_bit;
 use krb5_types::{
-    EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, EtypeInfo2, KdcRep, KrbError,
-    MethodData, TicketFlags, err, pa,
+    EncKdcRepPart, EncTicketPart, EtypeInfo2, KdcRep, KrbError, MethodData, TicketFlags, err, pa,
 };
 
 /// Named MIT/Rust divergences that must not fail the gate.
@@ -49,8 +48,6 @@ impl std::error::Error for DiffError {}
 pub struct CompareOk {
     /// Whitelist entry names that actually differed (`mit-renewable-flags`, …).
     pub whitelisted: Vec<&'static str>,
-    /// MIT AS enc-part used APPLICATION 26 (RFC 4120 is 25).
-    pub mit_as_enc_app26: bool,
 }
 
 /// Stable KRB-ERROR fields (times stripped; `e_text` is the MIT status word).
@@ -203,28 +200,13 @@ fn etype_info2_etypes(m: &MethodData) -> Result<Vec<i32>, DiffError> {
     Ok(out)
 }
 
-/// Decode EncKDCRepPart, accepting APPLICATION 25, MIT's 26, or untagged.
+/// Decode EncKDCRepPart: APPLICATION 26, then 25, then untagged.
 ///
 /// # Errors
 ///
 /// No recognized DER tag.
-pub fn decode_enc_kdc_rep(plain: &[u8]) -> Result<(EncKdcRepPart, bool), DiffError> {
-    if let Ok(EncAsRepPart(part)) = decode::<EncAsRepPart>(plain) {
-        return Ok((part, false));
-    }
-    if plain.first() == Some(&0x7a)
-        && let Ok(EncTgsRepPart(part)) = decode::<EncTgsRepPart>(plain)
-    {
-        return Ok((part, true));
-    }
-    if let Ok(part) = decode::<EncKdcRepPart>(plain) {
-        return Ok((part, false));
-    }
-    Err(DiffError(format!(
-        "enc-part der tag={:02x} len={}",
-        plain.first().copied().unwrap_or(0),
-        plain.len()
-    )))
+pub fn decode_enc_kdc_rep(plain: &[u8]) -> Result<EncKdcRepPart, DiffError> {
+    krb5_asn1::decode_enc_kdc_rep_part(plain).map_err(|e| DiffError(e.to_string()))
 }
 
 fn named_flag_mask(wl: &Whitelist) -> u32 {
@@ -342,6 +324,5 @@ pub fn compare_stable_rep(
     }
     Ok(CompareOk {
         whitelisted: whitelist_hits(rust_rep, mit_rep, rust_enc, mit_enc, wl),
-        mit_as_enc_app26: false,
     })
 }

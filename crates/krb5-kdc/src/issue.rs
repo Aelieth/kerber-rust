@@ -10,10 +10,10 @@ use krb5_crypto::{
 use krb5_protocol::{ReplayCache, ReplayKey};
 use krb5_types::pac::{PacIdentity, parse_kerb_validation_info};
 use krb5_types::{
-    AsRep, AsReq, Checksum, EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart,
-    EncryptedData, EncryptionKey, EtypeInfo2, EtypeInfo2Entry, KdcReqBody, KerberosTime, KrbError,
-    LastReqValue, MethodData, Microseconds, OctetString, PaData, PaEncTsEnc, PrincipalName, TgsRep,
-    TgsReq, Ticket, TicketFlags, TransitedEncoding, err, flag_bit, ku, pa,
+    AsRep, AsReq, Checksum, EncKdcRepPart, EncTgsRepPart, EncTicketPart, EncryptedData,
+    EncryptionKey, EtypeInfo2, EtypeInfo2Entry, KdcReqBody, KerberosTime, KrbError, LastReqValue,
+    MethodData, Microseconds, OctetString, PaData, PaEncTsEnc, PrincipalName, TgsRep, TgsReq,
+    Ticket, TicketFlags, TransitedEncoding, err, flag_bit, ku, pa,
 };
 
 use crate::ad::{
@@ -555,7 +555,7 @@ fn issue_as_body(
     {
         enc_part.encrypted_pa_data = Some(enc_pa_rep_padata(&reply_key, pkt)?);
     }
-    let enc_der = encode(&EncAsRepPart(enc_part))?;
+    let enc_der = encode_enc_kdc_rep_part(enc_part)?;
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART)?;
     let cipher = encrypt(&reply_key, usage, &enc_der)?;
     let kvno = if skip_timestamp {
@@ -992,7 +992,7 @@ fn issue_tgs_body(
         flags,
         ticket_renew_till,
     )?;
-    let enc_der = encode(&EncTgsRepPart(enc_part))?;
+    let enc_der = encode_enc_kdc_rep_part(enc_part)?;
     let (enc_key, enc_usage) = if let Some(sub) = authenticator.subkey {
         let st = EncryptionType::from_iana(sub.keytype)
             .or_else(|_| EncryptionType::known(sub.keytype))?;
@@ -1229,6 +1229,10 @@ fn mint_ticket(
             cipher: cipher.into(),
         },
     })
+}
+
+fn encode_enc_kdc_rep_part(part: EncKdcRepPart) -> Result<Vec<u8>, Error> {
+    Ok(encode(&EncTgsRepPart(part))?)
 }
 
 #[allow(clippy::too_many_arguments)]

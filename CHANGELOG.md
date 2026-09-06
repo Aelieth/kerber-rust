@@ -6,6 +6,15 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-J L0
+
+- **kdc/client.** AS and TGS EncKDCRepPart are encoded with APPLICATION 26
+  (`encode_krb5_enc_kdc_rep_part` / `enc_tgs_rep_part`), matching MIT
+  1.22.2 `asn1_k_encode.c`. Decode tries 26, then RFC 25, then untagged,
+  without an ERROR log on the tag fallback. The `mit-as-enc-app-26`
+  diffsend whitelist is gone; `differential-gate.sh` pins enc-part tag
+  `0x7a` on both legs.
+
 ### W1-K M2a
 
 - **ci.** `scripts/ci-policy.py` tokenises informational-if arms

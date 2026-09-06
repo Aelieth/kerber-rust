@@ -54,6 +54,30 @@ pub fn decode<T: Decode>(bytes: &[u8]) -> Result<T, Error> {
     decode_named(bytes, std::any::type_name::<T>())
 }
 
+/// MIT `decode_krb5_enc_kdc_rep_part`: APPLICATION 26, then 25, then untagged.
+///
+/// Failed tag probes are silent (`ASN1_BAD_ID` is not an ERROR log).
+///
+/// # Errors
+///
+/// Returns [`Error::Decode`] when none of the three forms decode.
+pub fn decode_enc_kdc_rep_part(bytes: &[u8]) -> Result<EncKdcRepPart, Error> {
+    if let Ok(EncTgsRepPart(part)) = rasn::der::decode(bytes) {
+        return Ok(part);
+    }
+    if let Ok(EncAsRepPart(part)) = rasn::der::decode(bytes) {
+        return Ok(part);
+    }
+    if let Ok(part) = rasn::der::decode(bytes) {
+        return Ok(part);
+    }
+    Err(Error::Decode(format!(
+        "enc-part der tag={:02x} len={}",
+        bytes.first().copied().unwrap_or(0),
+        bytes.len()
+    )))
+}
+
 /// Encode and immediately decode, used by tests and the consumer.
 ///
 /// # Errors

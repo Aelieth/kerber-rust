@@ -124,6 +124,13 @@ no MIT `k5_setmsg`). Hide-client-names (FAST option bit 1) is
 refused as 93 `FIND_FAST`; MIT supports it (`k5-int.h:803`). Any
 critical bit 0..15 is 93 (MIT only rejects bits 0 and 2..15).
 
+### W1-J L0 — EncKDCRepPart APPLICATION 26
+
+MIT encodes both EncASRepPart and EncTGSRepPart with application tag 26
+(`asn1_k_encode.c:1127-1133`) and decodes 26 then 25. Rust matches that
+on emit and decode. Other Kerberos clients that accept only RFC
+APPLICATION 25 are out of this item's scope.
+
 ### W1-I — kadmind acceptors, RPCSEC_GSS, iprop, K13 policy, kadmin.local
 
 The W1-I surface is the kadmind AUTH_GSSAPI acceptors, the RPCSEC_GSS

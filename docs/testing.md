@@ -521,8 +521,6 @@ when that oracle is absent.
   - `mit-order-tgs-times` — MIT fails expired/NYV header tickets
     inside `PROCESS_TGS` (`rd_req`); Rust's `check_ticket_times`
     uses `TKT_EXPIRED` / `NOT_YET_VALID`. Same error_code.
-  - `mit-as-enc-app-26` — MIT wraps AS enc-part as APPLICATION 26
-    (RFC 4120 is 25); decode accepts 25/26/untagged.
   - `mit-as-enc-kvno` — MIT omits AS-REP enc-part kvno; Rust sets kvno 1.
   - `mit-extra-ticket-flags` — MIT sets canonicalize (bit 15) on issued
     tickets; that bit is masked. Any other un-whitelisted flag bit

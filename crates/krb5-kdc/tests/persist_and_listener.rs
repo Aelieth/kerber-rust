@@ -12,7 +12,7 @@ use krb5_kdc::{
     documented_admin_id, documented_host, handle_request, load_store, pa_enc_timestamp, save_store,
     serve, shared_store, tgs_req,
 };
-use krb5_types::{AsRep, EncAsRepPart, PrincipalName, err, ku};
+use krb5_types::{AsRep, PrincipalName, err, ku};
 
 #[test]
 fn persist_survives_restart_without_key_regen() {
@@ -320,7 +320,7 @@ fn persist_dump_v7_issues_as_with_string_to_key() {
     let as_rep: AsRep = decode(&rep).unwrap();
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
     let plain = decrypt(&key, usage, as_rep.0.enc_part.cipher.as_ref()).unwrap();
-    let EncAsRepPart(_) = decode(&plain).unwrap();
+    let _ = krb5_asn1::decode_enc_kdc_rep_part(&plain).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -540,7 +540,7 @@ fn bounded_stress_handle_request() {
                 let as_rep: AsRep = decode(&rep).unwrap();
                 let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
                 let plain = decrypt(&key, usage, as_rep.0.enc_part.cipher.as_ref()).unwrap();
-                let EncAsRepPart(part) = decode(&plain).unwrap();
+                let part = krb5_asn1::decode_enc_kdc_rep_part(&plain).unwrap();
                 let session = ProtocolKey::from_bytes(
                     EncryptionType::from_iana(part.key.keytype).unwrap(),
                     part.key.keyvalue.as_ref(),

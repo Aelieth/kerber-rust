@@ -145,6 +145,8 @@ echo "$DIFF" | grep -q '"case":"as-success"' || die "missing as-success"
 echo "$DIFF" | grep -q '"case":"tgs-success"' || die "missing tgs-success"
 echo "$DIFF" | grep -q '"rust_tag":"0x6b"' || die "as-success missing AS-REP tag"
 echo "$DIFF" | grep -q '"rust_tag":"0x6d"' || die "tgs-success missing TGS-REP tag"
+echo "$DIFF" | grep -q '"case":"as-success".*"rust_enc_tag":"0x7a".*"mit_enc_tag":"0x7a"' || die "as-success enc-part not APPLICATION 26 both legs"
+echo "$DIFF" | grep -q '"case":"tgs-success".*"rust_enc_tag":"0x7a".*"mit_enc_tag":"0x7a"' || die "tgs-success enc-part not APPLICATION 26 both legs"
 echo "$DIFF" | grep -q '"outcome":"ok","cases":13' || die "diffsend did not finish 13 cases"
 
 echo "==== 128 KiB padded AS-REQ and 1 MiB+1 TCP cap both legs ===="

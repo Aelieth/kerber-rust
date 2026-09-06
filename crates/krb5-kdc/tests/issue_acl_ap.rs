@@ -13,8 +13,8 @@ use krb5_kdc::{
 use krb5_protocol::Keytab;
 use krb5_protocol::{ReplayCache, as_req_sname, build_ap_req, tgs_req_ex, verify_ap_req};
 use krb5_types::{
-    EncAsRepPart, EncKdcRepPart, EncTgsRepPart, EncTicketPart, KdcOptions, KerberosTime, KrbError,
-    OctetString, PrincipalName, ascii, err, flag_bit, ku,
+    EncKdcRepPart, EncTicketPart, KdcOptions, KerberosTime, KrbError, OctetString, PrincipalName,
+    ascii, err, flag_bit, ku,
 };
 
 fn client_key() -> ProtocolKey {
@@ -30,13 +30,7 @@ fn client_key() -> ProtocolKey {
 }
 
 fn decode_enc_part(plain: &[u8]) -> EncKdcRepPart {
-    if let Ok(EncAsRepPart(p)) = decode::<EncAsRepPart>(plain) {
-        return p;
-    }
-    if let Ok(EncTgsRepPart(p)) = decode::<EncTgsRepPart>(plain) {
-        return p;
-    }
-    decode::<EncKdcRepPart>(plain).expect("enc-part")
+    krb5_asn1::decode_enc_kdc_rep_part(plain).expect("enc-part")
 }
 
 #[test]
@@ -507,8 +501,8 @@ fn as_rep_flags_are_initial_and_preauth_not_renewable() {
     let plain = decrypt(&key, usage, issued.rep.0.enc_part.cipher.as_ref()).expect("dec");
     assert_eq!(
         plain.first().copied(),
-        Some(0x79),
-        "APPLICATION 25 EncASRepPart"
+        Some(0x7a),
+        "APPLICATION 26 EncKDCRepPart"
     );
     let enc = decode_enc_part(&plain);
     assert!(enc.flags.initial());

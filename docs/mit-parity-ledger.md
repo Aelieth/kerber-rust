@@ -35,9 +35,9 @@ Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after W1-K M1a verifier + unowned-row fix):
-**280** = A1 116 + A2 67 + A3 55 + A4 42.
-exact 86 · stricter-documented 12 · deviation 100 ·
+Counts (after W1-J L0 APPLICATION 26):
+**281** = A1 116 + A2 68 + A3 55 + A4 42.
+exact 87 · stricter-documented 12 · deviation 100 ·
 absent 67 · deferred 15.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
@@ -348,6 +348,7 @@ Wire = RFC 4120 protocol code (MIT `errcode_to_protocol`).
 | do_as_req.c:656-664 | CANONICALIZE + both TGS principals → ticket sname = `server->princ` | no status | `issue.rs issue_as_body` mints the **requested** `sname` | requested sname echoed | absent | proposed `rust-kinit-enterprise-gate.sh` canonicalize cell |
 | kdc_util.c:1612-1615 | S4U2Self clears impersonated client's `pw_expiration` + `REQUIRES_PWCHANGE` (as Windows does) | n/a (exemption) | `issue.rs encode_krb_error` `check_s4u2self_locked` → `check_db_times` enforces both | **23** `CLIENT KEY EXPIRED` where MIT issues | deviation (stricter, undocumented) | proposed `s4u-mit-gate.sh` expired-user cell + `docs/security.md` row |
 | asn1_k_encode.c:30 | `pvno != 5` | decode error `KRB5KDC_ERR_BAD_PVNO` **3** → dispatch drop | krb5-types/lib.rs KdcReq `pvno` decoded, never read | accepted; AS-REP issued | deviation (security: Rust issues what MIT drops) | proposed: diffsend `as-bad-pvno` (sibling of the msg-type row) |
+| asn1_k_encode.c:1127-1148 | encode EncKDCRepPart as APPLICATION 26 for AS and TGS; decode 26 then 25 | n/a (success) | krb5-kdc/issue.rs encode_enc_kdc_rep_part; krb5-kdc/issue.rs issue_as_from; krb5-asn1/lib.rs decode_enc_kdc_rep_part; krb5-protocol/as_ex.rs decode_enc_as | EncTgsRepPart tag 26 both AS and TGS; RFC 25 still accepted on decode | exact | diffsend `as-success`; diffsend `tgs-success`; `scripts/differential-gate.sh`; other clients that require RFC APPLICATION 25 are out of scope |
 
 ## A3 — kdc_preauth*.c / fast_util.c / kdc_authdata.c / cammac.c / kdc_log.c
 

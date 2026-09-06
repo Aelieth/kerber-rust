@@ -11,7 +11,7 @@ use krb5_protocol::{
     build_krb_safe, unwrap_krb_priv, unwrap_krb_safe, verify_ap_rep, verify_ap_req,
     verify_ap_req_ex,
 };
-use krb5_types::{EncAsRepPart, PrincipalName, ascii, ku};
+use krb5_types::{EncTgsRepPart, PrincipalName, ascii, ku};
 
 fn client_key() -> krb5_crypto::ProtocolKey {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -25,7 +25,7 @@ fn client_key() -> krb5_crypto::ProtocolKey {
 }
 
 #[test]
-fn as_rep_enc_part_is_application_25() {
+fn as_rep_enc_part_is_application_26() {
     let (store, _) = bootstrap_documented().unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = client_key();
@@ -39,8 +39,8 @@ fn as_rep_enc_part_is_application_25() {
     let issued = krb5_kdc::issue_as(&store, &req).unwrap();
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
     let plain = krb5_crypto::decrypt(&key, usage, issued.rep.0.enc_part.cipher.as_ref()).unwrap();
-    assert_eq!(plain[0], 0x79, "APPLICATION 25");
-    let _: EncAsRepPart = decode(&plain).expect("EncASRepPart");
+    assert_eq!(plain[0], 0x7a, "APPLICATION 26");
+    let _: EncTgsRepPart = decode(&plain).expect("EncTGSRepPart");
 }
 
 #[test]
