@@ -110,6 +110,13 @@ impl EncryptionType {
         }
     }
 
+    /// MIT `krb5int_c_deprecated_enctype` (`etypes.c`): des3-cbc-sha1 and
+    /// arcfour-hmac (and, absent from this enum, des3-cbc-raw / arcfour-exp).
+    #[must_use]
+    pub const fn is_deprecated(self) -> bool {
+        matches!(self, Self::Des3CbcSha1 | Self::Rc4Hmac)
+    }
+
     /// DES3, RC4, and Camellia are behind `allow_weak_crypto`.
     #[must_use]
     pub const fn is_weak(self) -> bool {
@@ -411,6 +418,14 @@ pub fn parse_keysalt_list(s: &str) -> Vec<EncryptionType> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn deprecated_set_matches_mit() {
+        assert!(EncryptionType::Des3CbcSha1.is_deprecated());
+        assert!(EncryptionType::Rc4Hmac.is_deprecated());
+        assert!(!EncryptionType::Aes256CtsHmacSha384192.is_deprecated());
+        assert!(!EncryptionType::Aes256CtsHmacSha196.is_deprecated());
+    }
+
     use super::*;
 
     #[test]

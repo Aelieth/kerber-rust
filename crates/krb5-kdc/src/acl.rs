@@ -305,40 +305,6 @@ impl Acl {
             .and_then(|e| e.restrictions.as_ref())
     }
 
-    /// MIT `kadm5_get_privs` mask for `actor` (`KADM5_PRIV_*`, 0 if none).
-    #[must_use]
-    pub fn privs(&self, actor: &str) -> u32 {
-        for e in &self.entries {
-            if !client_matches(e, actor) {
-                continue;
-            }
-            let mut bits = 0u32;
-            if e.inquire {
-                bits |= 0x01;
-            }
-            if e.add {
-                bits |= 0x02;
-            }
-            if e.modify {
-                bits |= 0x04;
-            }
-            if e.delete {
-                bits |= 0x08;
-            }
-            if e.list {
-                bits |= 0x10;
-            }
-            if e.changepw {
-                bits |= 0x20;
-            }
-            if e.extract {
-                bits |= 0x40;
-            }
-            return bits;
-        }
-        0
-    }
-
     /// kadm5.acl principal glob (`*/admin@REALM`, `host/*@REALM`).
     #[must_use]
     pub fn name_matches(pattern: &str, actor: &str) -> bool {
@@ -744,16 +710,6 @@ fn match_princ(
         }
     }
     true
-}
-
-fn client_matches(e: &AclEntry, actor: &str) -> bool {
-    let Ok(actor_pat) = parse_princ_pat(actor) else {
-        return false;
-    };
-    match e.client {
-        None => true,
-        Some(ref c) => match_princ(c, &actor_pat, false, None),
-    }
 }
 
 fn principal_matches(pattern: &str, actor: &str) -> bool {

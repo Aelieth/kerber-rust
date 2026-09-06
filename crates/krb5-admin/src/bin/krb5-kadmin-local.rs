@@ -201,7 +201,12 @@ fn run(
     match parts.first().copied() {
         Some("q" | "quit" | "exit") => Ok(LineOutcome::Quit),
         Some("listprincs" | "list_principals") => {
-            for id in sess.list_ids() {
+            let g = parts.get(1).copied();
+            if g.is_some_and(|g| g.ends_with('\\')) {
+                eprintln!("get_principals: Invalid argument while retrieving list.");
+                return Ok(LineOutcome::Next);
+            }
+            for id in sess.list_ids_glob(g) {
                 println!("{id}");
             }
             Ok(LineOutcome::Next)
@@ -336,7 +341,12 @@ fn run(
             Ok(LineOutcome::Next)
         }
         Some("listpols" | "list_policies") => {
-            for n in sess.list_policies() {
+            let g = parts.get(1).copied();
+            if g.is_some_and(|g| g.ends_with('\\')) {
+                eprintln!("get_policies: Invalid argument while retrieving list.");
+                return Ok(LineOutcome::Next);
+            }
+            for n in sess.list_policies_glob(g) {
                 println!("{n}");
             }
             Ok(LineOutcome::Next)

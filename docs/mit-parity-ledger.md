@@ -35,10 +35,10 @@ Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after W1-K M4b keytab-format stash):
-**300** = A1 116 + A2 71 + A3 58 + A4 55.
-exact 107 · stricter-documented 12 · deviation 98 ·
-absent 66 · deferred 17.
+Counts (after W1-K M4c DEPRECATED display + glob filters + Acl::privs removed):
+**303** = A1 116 + A2 71 + A3 58 + A4 58.
+exact 109 · stricter-documented 12 · deviation 98 ·
+absent 66 · deferred 18.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
 A2 10 (9 report rows + the `kdc_util.c:144-191` split) + A3 10 = 28
@@ -479,6 +479,9 @@ checksum/rc4/declared-cksumtype rows that sat under A3.
 | alt_prof.c:509-510; ovsec_kadmd.c:497-500 | default `acl_file` is `KDC_DIR/kadm5.acl`; empty string → NULL → `acl_init` no-handle (refuse to start if the default file is missing) | start fail / self-only | krb5-kdc/lib.rs default_acl_path; krb5-kdc/lib.rs acl_for_store | default path; empty/`None` is self-only (`Acl::none`) | exact | `acl_for_store` tests in `issue_acl_ap.rs`; `scripts/kadmin-gate.sh` missing ACL refuse |
 | ipropd_svc.c:258,508-516 | `ipropx_resync`: RPCSEC_GSS only; acceptor 2 comps, `kiprop`, realm | RPC `AUTH_TOOWEAK` | krb5-admin/kadm5.rs check_iprop_rpcsec_auth; krb5-admin/kadm5.rs dispatch_iprop; krb5-admin/kadm5.rs rpc_reply_weakauth | same gate; `kiprop` RPCSEC dispatches | exact | `kiprop_acceptor_requires_store_realm`; `scripts/kadmin-gate.sh` iprop program cells |
 | server_misc.c:146-158 | `kadm5_get_privs` returns `*privs = ~0` | all-ones | krb5-admin/kadm5.rs GET_PRIVS; krb5-admin/kadm5.rs dispatch_kadm5_ticket | `GET_PRIVS` returns `~0` | exact | `get_privs_is_all_ones` |
+| svr_iters.c:29-115 `glob_to_regexp` | `listprincs`/`listpols` filter is an anchored glob (`?`=one, `*`=run, `[...]`=class, `\x`=literal); a principal glob with no `@` gets an implicit `@*`; a trailing `\` is `EINVAL` | matched names | krb5-admin/kadm5.rs glob_is_match; krb5-admin/kadm5.rs glob_expand; krb5-admin/lib.rs list_ids_glob; krb5-admin/lib.rs list_policies_glob | same matches (RPC and kadmin.local); `*1` matches a1/a11/xa1 not a10 | exact | `get_princs_glob_matches_svr_iters`; `glob_matches_like_svr_iters`; `scripts/kadmin-local-gate.sh` listprincs/listpols glob diffs on both legs |
+| clients/klist/klist.c:588-602 `etype_string` | a `DEPRECATED:` prefix on a deprecated enctype (des3/arcfour) in `klist -e` | display | krb5-crypto/etype.rs is_deprecated; krb5-client/krb5-klist.rs etype_display | `DEPRECATED:arcfour-hmac` on the `Etype (skey, tkt)` line | exact | `deprecated_set_matches_mit`; `scripts/rc4-session-gate.sh` `DEPRECATED:arcfour-hmac` on both legs |
+| server_stubs.c:402-459 `log_unauth` / `log_done` | `Unauthorized request: %s, %s, client=%s, service=%s, addr=%s` / `Request: %s, %s, %s, client=…` per stub | syslog text | krb5-admin/kadm5.rs dispatch_kadm5_ticket (actor only) | no service/addr plumbing into the dispatch | deferred | none (promotion: thread `service`/`addr` through the RPC accept path; MIT kadmind log is the oracle) |
 | kadm_rpc.h `CREATE_ALIAS` 27; server_stubs.c:1727-1758; svr_principal.c:2051-2087; auth_acl.c:723-734 | `create_alias_2_svc` (CHANGEPW deny, `acl_addalias`, no lockdown) / `kadm5_create_alias` (realm compare, DUP resolves, target may be absent) / `acl_addalias` (ADD on alias w/o restrictions AND MODIFY on target) | proc 27; `KADM5_AUTH_INSUFFICIENT` / `KADM5_ALIAS_REALM` / `KADM5_DUP` | krb5-admin/kadm5.rs CREATE_ALIAS 2517; store.rs create_alias_in 1180; acl.rs check_addalias 290 | same codes | exact | `m3a_alias.rs` acl matrix + codes; `scripts/kadmin-gate.sh:369-484` `alias_cells` both legs (`:674` / `:1683`) |
 | svc.c:342,361; svc_auth_gssapi.c:495-497 | AUTH_GSSAPI accepted/mismatch replies carry `FLAVOR_NONE` + empty verifier (`rpc_reply_clear`); RPCSEC accepted/mismatch use `xp_verf` | AUTH_GSSAPI verf none | krb5-admin/kadm5.rs rpc_reply_clear; krb5-admin/kadm5.rs rpc_reply_accepted | AUTH_GSSAPI INIT is `FLAVOR_NONE`; RPCSEC DATA carries `xp_verf` | deviation | `auth_gssapi_on_iprop_init_is_success`; RPCSEC `rpcsec_unknown_program_data_carries_xp_verf` |
 | svc_auth_gssapi.c:326-341 | GSSAPI_INIT arg version: 1/2 → reply version 1 (compat warning); 3/4 echoed; other `AUTH_BADCRED` | AUTH_BADCRED on unknown | krb5-admin/kadm5.rs handle_auth_gssapi | `arg_ver` echoed; no v1/v2 downgrade; unknown version not `AUTH_BADCRED` | deviation | proposed: AUTH_GSSAPI init-arg version cell |

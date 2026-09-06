@@ -714,5 +714,25 @@ for pol in ordr cls h0; do
     fi
 done
 
-log "kadmin.local.gate" "ok" ',"principal":"extra2@KERBER.TEST,host/slashhost@KERBER.TEST,randsvc,ktone,kttwo,raceprinc,lockee,gldlock,krbtgt","verb":"alias+policy-order"'
+echo "==== listprincs / listpols glob filters, identical to MIT ===="
+for pr in ga1 ga2 gb1; do
+    rust_local "addprinc -pw gx $pr" >/dev/null
+    mit_local "addprinc -pw gx $pr" >/dev/null
+done
+for g in 'ga*' 'g?1' '*1' '[gb]a*' 'ga1@*' 'ga.1'; do
+    diff <(rust_local "listprincs $g" | grep -v '^Authenticating' | sort) \
+         <(mit_local "listprincs $g" | sort)
+done
+diff <(rust_local 'listprincs ga\\' 2>&1 | grep -v '^Authenticating') \
+     <(mit_local 'listprincs ga\\' 2>&1)
+for pl in gpol1 gpolx gp2; do
+    rust_local "addpol $pl" >/dev/null
+    mit_local "addpol $pl" >/dev/null
+done
+for g in 'gpol*' '*x' 'gp?' 'gpol1' '*@*'; do
+    diff <(rust_local "listpols $g" | grep -v '^Authenticating' | sort) \
+         <(mit_local "listpols $g" | sort)
+done
+
+log "kadmin.local.gate" "ok" ',"principal":"extra2@KERBER.TEST,host/slashhost@KERBER.TEST,randsvc,ktone,kttwo,raceprinc,lockee,gldlock,krbtgt","verb":"alias+policy-order+glob"'
 exit 0

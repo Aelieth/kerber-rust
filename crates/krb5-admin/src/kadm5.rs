@@ -2025,12 +2025,14 @@ fn dispatch_kadm5_ticket(
             let g = store
                 .read()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let glob = expr.as_deref().unwrap_or("*");
+            if glob.ends_with('\\') {
+                return Ok(generic_ret(API_V2, EINVAL));
+            }
             let mut ids = g.ids();
-            if let Some(e) = expr.as_deref()
-                && e != "*"
-                && !e.is_empty()
-            {
-                ids.retain(|id| id.contains(e.trim_end_matches('*')));
+            if glob != "*" && !glob.is_empty() {
+                let pat = glob_expand(glob, true);
+                ids.retain(|id| glob_is_match(pat.as_bytes(), id.as_bytes()));
             }
             Ok(encode_gprincs(&ids))
         }
@@ -2320,11 +2322,13 @@ fn dispatch_kadm5_ticket(
                 .read()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let mut names: Vec<_> = g.policies().keys().cloned().collect();
-            if let Some(e) = expr.as_deref()
-                && e != "*"
-                && !e.is_empty()
-            {
-                names.retain(|n| n.contains(e.trim_end_matches('*')));
+            let glob = expr.as_deref().unwrap_or("*");
+            if glob.ends_with('\\') {
+                return Ok(generic_ret(api, EINVAL));
+            }
+            if glob != "*" && !glob.is_empty() {
+                let pat = glob_expand(glob, false);
+                names.retain(|n| glob_is_match(pat.as_bytes(), n.as_bytes()));
             }
             names.sort();
             Ok(encode_pols(api, &names))
@@ -2909,6 +2913,113 @@ fn parse_get(args: &[u8]) -> Result<(PrincipalName, String, u32), Error> {
     Ok((princ, prealm, mask))
 }
 
+/// MIT `glob_to_regexp` EINVAL for a trailing backslash (`svr_iters.c:63-64`).
+const EINVAL: u32 = 22;
+
+/// Append `@*` when a principal glob has no realm (`svr_iters.c` implicit `@*`).
+pub(crate) fn glob_expand(glob: &str, append_realm: bool) -> String {
+    if append_realm && !glob.contains('@') {
+        format!("{glob}@*")
+    } else {
+        glob.to_owned()
+    }
+}
+
+/// `glob_to_regexp` + `regexec` (`svr_iters.c:41-115`) as a direct anchored
+/// matcher: `?`=one, `*`=run, `[...]`=class, `\\x`=literal.
+pub(crate) fn glob_is_match(pattern: &[u8], text: &[u8]) -> bool {
+    let (mut p, mut t) = (0usize, 0usize);
+    let (mut star_p, mut star_t): (Option<usize>, usize) = (None, 0);
+    while t < text.len() {
+        let mut matched = false;
+        if p < pattern.len() {
+            match pattern[p] {
+                b'?' => {
+                    p += 1;
+                    t += 1;
+                    matched = true;
+                }
+                b'*' => {
+                    star_p = Some(p);
+                    star_t = t;
+                    p += 1;
+                    matched = true;
+                }
+                b'[' => {
+                    if let Some((ok, np)) = glob_class(&pattern[p..], text[t]) {
+                        if ok {
+                            p += np;
+                            t += 1;
+                            matched = true;
+                        }
+                    } else if pattern[p] == text[t] {
+                        p += 1;
+                        t += 1;
+                        matched = true;
+                    }
+                }
+                b'\\' if p + 1 < pattern.len() => {
+                    if pattern[p + 1] == text[t] {
+                        p += 2;
+                        t += 1;
+                        matched = true;
+                    }
+                }
+                c => {
+                    if c == text[t] {
+                        p += 1;
+                        t += 1;
+                        matched = true;
+                    }
+                }
+            }
+        }
+        if matched {
+            continue;
+        }
+        if let Some(sp) = star_p {
+            p = sp + 1;
+            star_t += 1;
+            t = star_t;
+        } else {
+            return false;
+        }
+    }
+    while p < pattern.len() && pattern[p] == b'*' {
+        p += 1;
+    }
+    p == pattern.len()
+}
+
+/// Match one `[...]` class at the start of `pat`; `Some((matched, consumed))`
+/// or `None` when the class is malformed (treat `[` as a literal).
+fn glob_class(pat: &[u8], c: u8) -> Option<(bool, usize)> {
+    let mut i = 1;
+    let negate = pat.get(i) == Some(&b'^');
+    if negate {
+        i += 1;
+    }
+    let mut matched = false;
+    let start = i;
+    while i < pat.len() && (pat[i] != b']' || i == start) {
+        if i + 2 < pat.len() && pat[i + 1] == b'-' && pat[i + 2] != b']' {
+            if pat[i] <= c && c <= pat[i + 2] {
+                matched = true;
+            }
+            i += 3;
+        } else {
+            if pat[i] == c {
+                matched = true;
+            }
+            i += 1;
+        }
+    }
+    if i >= pat.len() || pat[i] != b']' {
+        return None;
+    }
+    Some((matched != negate, i + 1))
+}
+
 fn parse_gprincs(args: &[u8]) -> Result<Option<String>, Error> {
     let mut r = XdrR::new(args);
     let _api = r.u32()?;
@@ -3384,6 +3495,34 @@ impl XdrW {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn glob_matches_like_svr_iters() {
+        use super::{glob_expand, glob_is_match};
+        let m = |g: &str, realm: bool, t: &str| {
+            glob_is_match(glob_expand(g, realm).as_bytes(), t.as_bytes())
+        };
+        // Principals: implicit @* so "a*" matches a1@REALM.
+        assert!(m("a*", true, "a1@KERBER.TEST"));
+        assert!(m("a?", true, "a1@KERBER.TEST"));
+        assert!(!m("a?", true, "a10@KERBER.TEST"));
+        // "*1" matches a1/a11/xa1, not a10 (ends in 0 before @).
+        assert!(m("*1", true, "a1@KERBER.TEST"));
+        assert!(m("*1", true, "a11@KERBER.TEST"));
+        assert!(m("*1", true, "xa1@KERBER.TEST"));
+        assert!(!m("*1", true, "a10@KERBER.TEST"));
+        assert!(m("[ab]1*", true, "a10@KERBER.TEST"));
+        assert!(!m("[ab]1*", true, "c10@KERBER.TEST"));
+        assert!(m("*@KERBER.TEST", true, "a1@KERBER.TEST"));
+        assert!(!m("a.1", true, "a11@KERBER.TEST"));
+        // Policies: no realm append.
+        assert!(m("*x", false, "p1x"));
+        assert!(m("*x", false, "px"));
+        assert!(!m("*x", false, "p2"));
+        assert!(m("p?", false, "px"));
+        assert!(!m("p?", false, "p1x"));
+        assert!(!m("*@*", false, "p1x"));
+    }
+
     use super::*;
 
     #[test]

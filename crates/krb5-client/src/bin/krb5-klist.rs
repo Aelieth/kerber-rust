@@ -110,11 +110,13 @@ fn format_cred(out: &mut String, cred: &CcacheCred, show_flags: bool, show_etype
     if show_etype {
         let skey = cred
             .session_key()
-            .map_or("unknown", |k| k.etype().to_mit_name());
+            .ok()
+            .map(|k| k.etype())
+            .map_or("unknown".to_owned(), etype_display);
         let tkt = decode::<Ticket>(&cred.ticket)
             .ok()
             .and_then(|t| EncryptionType::known(t.enc_part.etype).ok())
-            .map_or("unknown", EncryptionType::to_mit_name);
+            .map_or("unknown".to_owned(), etype_display);
         let _ = writeln!(out, "\tEtype (skey, tkt): {skey}, {tkt}");
     }
     if let Some(ts) = cred_ticket_server(cred) {
@@ -127,6 +129,16 @@ fn cred_ticket_server(cred: &CcacheCred) -> Option<String> {
     let tkt_s = FileCcache::format_principal(&tkt.realm, &tkt.sname);
     let cred_s = FileCcache::format_principal(&cred.server.0, &cred.server.1);
     (tkt_s != cred_s).then_some(tkt_s)
+}
+
+/// MIT `etype_string` (`klist.c`): a `DEPRECATED:` prefix for a deprecated etype.
+fn etype_display(etype: EncryptionType) -> String {
+    let prefix = if etype.is_deprecated() {
+        "DEPRECATED:"
+    } else {
+        ""
+    };
+    format!("{prefix}{}", etype.to_mit_name())
 }
 
 fn fmt_unix(t: u32) -> String {

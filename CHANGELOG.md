@@ -6,6 +6,21 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-K M4c (partial)
+
+- **client/admin.** `krb5-klist -e` prefixes `DEPRECATED:` on a deprecated
+  enctype like MIT `klist.c etype_string` (`EncryptionType::is_deprecated`
+  covers des3-cbc-sha1 and arcfour-hmac). `listprincs`/`listpols` filter with
+  MIT `glob_to_regexp` semantics (`?`/`*`/`[...]`/`\`, implicit `@*` for
+  principals, `EINVAL` on a trailing `\`) instead of a substring match, on
+  both the kadmind RPC path and kadmin.local. The dead `Acl::privs` is removed
+  (the wire `GET_PRIVS` already returns `~0`). Verified on
+  `scripts/rc4-session-gate.sh` (the `DEPRECATED:arcfour-hmac` `Etype` line on
+  both legs) and `scripts/kadmin-local-gate.sh` (glob list diffs). The
+  `log_unauth`/`log_done` kadmind log lines are deferred (they need service and
+  address plumbing through the RPC dispatch).
+
+
 ### W1-K M4b
 
 - **kdc (on-disk format change).** The master-key stash `.k5.REALM` is now a

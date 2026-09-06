@@ -287,6 +287,19 @@ echo "$RUST_KLIST2" | grep -q 'host/testhost.kerber.test' || die "Rust kvno did 
 echo "$RUST_KLIST2" | grep -A1 'host/testhost' | grep -q 'arcfour-hmac' || die "Rust host skey is not arcfour"
 echo "host_skey_rust_vs_mit=$(skey_of_host "$RUST_KLIST2")"
 
+echo "==== C) DEPRECATED: display parity on the klist -e session etype line ===="
+# MIT klist.c etype_string prepends DEPRECATED: for arcfour-hmac; the Rust
+# krb5-klist must do the same, so both legs print the identical skey token.
+et_line() { printf '%s\n' "$1" | grep -F 'Etype (skey, tkt):' | head -1 | sed 's/^[[:space:]]*//'; }
+MIT_ETLINE="$(et_line "$MIT_KLIST")"
+RUST_ETLINE="$(et_line "$RUST_KLIST")"
+echo "mit_vs_rust:  $MIT_ETLINE"
+echo "rust_vs_mit:  $RUST_ETLINE"
+echo "$MIT_ETLINE" | grep -q 'Etype (skey, tkt): DEPRECATED:arcfour-hmac,' ||
+    die "MIT klist session etype is not DEPRECATED:arcfour-hmac"
+echo "$RUST_ETLINE" | grep -q 'Etype (skey, tkt): DEPRECATED:arcfour-hmac,' ||
+    die "Rust klist session etype is not DEPRECATED:arcfour-hmac"
+
 docker exec "$NAME" cat /tmp/mit-kinit-rustkdc.trace 2>/dev/null | tee "$OUT/mit-kinit-rustkdc.trace" | grep -E 'usage|arcfour|enctype' | head -40 || true
 docker cp "$NAME":/tmp/mit-kdc.log "$OUT/mit-kdc.log" 2>/dev/null || true
 

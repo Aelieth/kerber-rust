@@ -161,16 +161,12 @@ fn acl_parse_kadm5_style() {
             .unwrap_err(),
         Error::AclDenied
     );
-    assert_eq!(acl.privs("admin@KERBER.TEST"), 0x3F);
-    assert_eq!(acl.privs("user@KERBER.TEST"), 0x01);
-    assert_eq!(acl.privs("nobody@KERBER.TEST"), 0);
     let with_e = Acl::parse("admin@KERBER.TEST *e\n").expect("acl");
     assert!(
         with_e
             .check("admin@KERBER.TEST", AdminOp::Extract, None)
             .is_ok()
     );
-    assert_eq!(with_e.privs("admin@KERBER.TEST"), 0x7F);
 }
 
 #[test]
