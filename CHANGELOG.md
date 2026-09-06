@@ -6,6 +6,14 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-K M2a
+
+- **ci.** `scripts/ci-policy.py` tokenises informational-if arms
+  (command position, `|| true`, self-tautology); `scripts/chaos-gate.sh`
+  no-netem arms `log … skip` and rely on `KERBER_REQUIRE_NETEM`.
+  `scripts/claim-audit.py` takes legs from container variables only; a
+  single-line reference must sit within one line of an assertion.
+
 ### W1-K M1a
 
 - **ci/docs.** `scripts/ci-policy.py` `check_ledger_anchors` dies on an

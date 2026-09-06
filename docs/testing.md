@@ -10,11 +10,15 @@ Testing is continuous. Categories grow with the stages.
 echo-only `then`/`elif`/`else` arm in `scripts/*-gate.sh` or
 `scripts/lib/*.sh`, `"ci.yml"` path-equality). A mixed `exit`+`echo`
 chain is a hit. Multi-line `||` / `&&` / `\\` conditions are joined
-before matching (including 2+ continuations). `echo | tee` / `echo >
-file` is informational unless the arm also asserts (`exit`/`die`/
-`return`/`break`/`continue`/`unavailable`, `log … error`, or a
-comparison/`grep`/`test`/`cmp`). A bare assignment is not an assert.
-`{ … }`, `( … )`, and heredoc arms are inspected. The ledger header
+before matching (including 2+ continuations). Each arm is tokenised
+(assignments, redirections, quotes, `$(…)` stripped): an assertion is a
+**command** in {`exit`, `die`, `return`, `break`, `continue`,
+`unavailable`, `log … error`} or a test (`[`, `[[`, `test`, `grep`,
+`cmp`) not followed by `|| true` and not a self-tautology (a `[ -s F ]`
+of a file the arm just wrote, `cmp -s /dev/null /dev/null`, `echo lit |
+grep`). Words in echo arguments and filenames never count. `log …
+skip` is accepted only when a `KERBER_REQUIRE_` die exists in the same
+script. `{ … }`, `( … )`, and heredoc arms are inspected. The ledger header
 tally must match a recount of the verdict cells and the A1/A2/A3/A4
 section split; a missing total line fails. Rust-site cells that use
 `file.rs symbol` (optional crate prefix `krb5-kdc/issue.rs fn_name`,
@@ -50,6 +54,8 @@ Unit greens and parent reds go through `scripts/lib/unit-evidence.sh`:
 --inject` copies those HEAD files into the parent worktree **before**
 `write-tree`; a missing test filter or a call with no files is
 refused). INDEX links only files those helpers or the gates produced.
+W1-J and W1-K units live under `crates/*/tests/` so `unit_red_at
+--inject` can fail them at the parent.
 Live settles use `scripts/lib/settle.sh <name> -- <command…>`
 (provenance, echoed command, `2>&1 | tee`; a `grep` of an existing
 file is refused).
@@ -80,9 +86,12 @@ possible; the default overlays HEAD's helpers.
 Summary claims are checked by `scripts/claim-audit.py [--evidence-dir DIR]
 [--stamp] SUMMARY…`: every `script:line` reference in a "Settled live"
 bullet must carry an assertion on one of the bullet's quoted values (or call
-a function of that script which does), every bullet must name a cell on each
-leg (container markers around the line; a `diff <(` line is both) or a live
-`settle.sh` artefact, and every named artefact must exist, be stamped and
+a function of that script which does); a single-line reference must itself
+sit within one line of that assertion (a `script:12-20` range covers the
+assertion). Every bullet must name a cell on each leg from container
+variables (`"$NAME"`, `NAME_MIT`, `MIT_`/`RUST_`, `mit_local`,
+`kadmin.local`, `kdb5_util`) or `diff <(` — cell-header prose is not a
+leg — or a live `settle.sh` artefact, and every named artefact must exist, be stamped and
 carry a quoted value. `ci-policy` runs its fixtures; the audit runs it on the
 landed summary with `--stamp` into the evidence directory.
 

@@ -65,13 +65,13 @@ if docker exec "$PRIMARY" sh -c 'command -v tc >/dev/null'; then
         docker exec "$PRIMARY" tc qdisc del dev eth0 root 2>/dev/null || true
         echo "netem: MIT ok, no panic" | tee -a "$OUT/netem.log"
     else
+        log "chaos.gate" "skip" ",\"reason\":\"netem qdisc unavailable\""
         echo "NETEM_UNAVAILABLE: tc qdisc failed (need CAP_NET_ADMIN)" | tee "$OUT/netem-unavailable.log"
         cat "$OUT/netem.err" >>"$OUT/netem-unavailable.log" || true
-        [ -s "$OUT/netem-unavailable.log" ]
     fi
 else
+    log "chaos.gate" "skip" ",\"reason\":\"tc not installed\""
     echo "NETEM_UNAVAILABLE: tc not installed in node" | tee "$OUT/netem-unavailable.log"
-    [ -s "$OUT/netem-unavailable.log" ]
 fi
 docker cp "$PRIMARY":/tmp/kdc.log "$OUT/kdc-netem.log" 2>/dev/null || true
 if grep -qi panic "$OUT/kdc-netem.log" 2>/dev/null; then

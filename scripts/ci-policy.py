@@ -228,23 +228,28 @@ _IF_ONELINER = re.compile(
 _IF_START = re.compile(r"^\s*(if|elif)\b")
 _ELSE = re.compile(r"^\s*else\b")
 _FI = re.compile(r"^\s*fi\b")
-_ASSERT_IN_IF = re.compile(
-    r"""(?x)
-    \b(exit|die|return|break|continue|unavailable)\b
-    | log\s+\S+\s+(?:error|"error")
-    | (?:^|[\s;|&])(?:test\b|grep\b|cmp\b)
-    | (?:^|[\s;|&])\[
-    """
-)
-_NOISE_ONLY = re.compile(r"^(?:echo|printf|true|cat)\b|^:(?:\s|$)")
+_NOISE_ONLY = re.compile(r"^(?:echo|printf|true|cat|tee)\b|^:(?:\s|$)")
 _ASSIGN_ONLY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _QUOTED = re.compile(r"""('([^'\\]|\\.)*'|"([^"\\]|\\.)*")""")
+_ASSERT_CMDS = frozenset(
+    {"exit", "die", "return", "break", "continue", "unavailable"}
+)
+_TEST_CMDS = frozenset({"[", "[[", "test", "grep", "egrep", "fgrep", "cmp"})
+_NOISE_CMDS = frozenset({"echo", "printf", "true", "cat", "tee", ":"})
+_REQUIRE_DIE = re.compile(r"KERBER_REQUIRE_")
+_LOG_ERROR = re.compile(r"""log\s+\S+\s+(?:error|"error")""")
+_LOG_SKIP = re.compile(r"""log\s+\S+\s+(?:skip|"skip")""")
+_OR_TRUE = re.compile(r"\|\|\s*true\s*$")
+_PIPE = re.compile(r"(?<!\|)\|(?!\|)")
+_REDIR = re.compile(r"(?:\d*)(?:>>?|<)\s*(\S+)")
+_TEE_FILE = re.compile(r"\btee(?:\s+-a)?\s+(\S+)")
+_DOLLAR_PAREN = re.compile(r"\$\([^()]*\)")
 _HEREDOC = re.compile(
     r"(?:cat\s+)?<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n.*?^\1\s*$",
     re.M | re.S,
 )
-_BRACE_GROUP = re.compile(r"\{([^{}]*)\}(?:\s*(?:>>?|\|)\s*\S+)?")
-_PAREN_GROUP = re.compile(r"(?<!\$)\(([^()]*)\)(?:\s*(?:>>?|\|)\s*\S+)?")
+_BRACE_GROUP = re.compile(r"\{([^{}]*)\}(?:\s*(?:>>?|\|(?!\|))\s*\S+)?")
+_PAREN_GROUP = re.compile(r"(?<!\$)\(([^()]*)\)(?:\s*(?:>>?|\|(?!\|))\s*\S+)?")
 
 
 def _flatten_arm(body: str) -> str:
@@ -300,36 +305,154 @@ def _strip_quoted(s: str) -> str:
     return _QUOTED.sub(" ", s)
 
 
-def _echo_only_body(body: str) -> bool:
-    body = _flatten_arm(body)
-    stmts = [
-        ln.strip().rstrip(";")
-        for ln in body.splitlines()
-        if ln.strip() and not ln.strip().startswith("#")
-    ]
+def _split_semi(line: str) -> list[str]:
+    """Split on `;` that are not inside quotes."""
+    out: list[str] = []
+    buf: list[str] = []
+    in_s = in_d = False
+    for ch in line:
+        if ch == "'" and not in_d:
+            in_s = not in_s
+            buf.append(ch)
+        elif ch == '"' and not in_s:
+            in_d = not in_d
+            buf.append(ch)
+        elif ch == ";" and not in_s and not in_d:
+            piece = "".join(buf).strip()
+            if piece:
+                out.append(piece)
+            buf = []
+        else:
+            buf.append(ch)
+    piece = "".join(buf).strip()
+    if piece:
+        out.append(piece)
+    return out or ([line.strip()] if line.strip() else [])
+
+
+def _written_paths(body: str) -> set[str]:
+    found: set[str] = set()
+    for rx in (_TEE_FILE, _REDIR):
+        for m in rx.finditer(body):
+            tok = m.group(1)
+            found.add(tok)
+            found.add(tok.strip("'\""))
+    return found
+
+
+def _cmd_word(stage: str) -> str:
+    s = _DOLLAR_PAREN.sub(" ", stage.strip())
+    while True:
+        m = re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=\S*\s+", s)
+        if not m:
+            break
+        s = s[m.end() :]
+    s = _QUOTED.sub(lambda m: m.group(0) if "$" in m.group(0) else " ", s)
+    s = re.sub(r"(?:\d*)(?:>>?|<)\s*\S+", " ", s)
+    s = re.sub(r"\d*>&?\d+", " ", s)
+    s = s.strip()
+    if s.startswith("[["):
+        return "[["
+    if s.startswith("["):
+        return "["
+    return (s.split() or [""])[0]
+
+
+def _is_tautology(cmd: str, stage: str, written: set[str], stmt: str) -> bool:
+    if cmd in {"[", "[[", "test"}:
+        for w in written:
+            if w and w in stage and re.search(r"(?:^|[\s[])-[sfe]\b", stage):
+                return True
+        if "$" not in stage:
+            return True
+    if cmd == "cmp":
+        args = [a for a in _QUOTED.sub(" ", stage).split()[1:] if not a.startswith("-")]
+        if len(args) >= 2 and (args[0] == args[1] or args[:2] == ["/dev/null", "/dev/null"]):
+            return True
+    if cmd in {"grep", "egrep", "fgrep"}:
+        echo = re.search(r"\becho\b(.*)\|\s*(?:e|f)?grep\b", stmt)
+        if echo is not None and "$" not in echo.group(1):
+            return True
+    return False
+
+
+def _stmt_kind(stmt: str, written: set[str]) -> str:
+    """`assert`, `work`, or `noise` (includes fake asserts)."""
+    core = _OR_TRUE.sub("", stmt.strip()).strip()
+    or_true = core != stmt.strip().rstrip()
+    if not or_true:
+        or_true = bool(_OR_TRUE.search(stmt.strip()))
+        if or_true:
+            core = _OR_TRUE.sub("", stmt.strip()).strip()
+    stages = [p.strip() for p in _PIPE.split(core) if p.strip()] or [core]
+    kinds: list[str] = []
+    for stage in stages:
+        if not stage or _ASSIGN_ONLY.match(stage):
+            continue
+        cmd = _cmd_word(stage)
+        if not cmd:
+            continue
+        if cmd == "log":
+            if _LOG_ERROR.search(stage):
+                kinds.append("assert")
+            else:
+                kinds.append("noise")
+            continue
+        if cmd in _ASSERT_CMDS:
+            kinds.append("noise" if or_true else "assert")
+            continue
+        if cmd in _TEST_CMDS:
+            if or_true or _is_tautology(cmd, stage, written, core):
+                kinds.append("noise")
+            else:
+                kinds.append("assert")
+            continue
+        if cmd in _NOISE_CMDS or _NOISE_ONLY.match(stage):
+            kinds.append("noise")
+            continue
+        kinds.append("work")
+    if not kinds:
+        return "noise"
+    if any(k in {"assert", "work"} for k in kinds):
+        return "assert" if "assert" in kinds else "work"
+    return "noise"
+
+
+def _echo_only_body(body: str, script: str = "") -> bool:
+    """True when the arm is an informational skip, not a real assert or work."""
+    flat = _flatten_arm(body)
+    if (
+        _REQUIRE_DIE.search(script)
+        and re.search(r"\bdie\b", script)
+        and _LOG_SKIP.search(flat)
+    ):
+        return False
+    stmts: list[str] = []
+    for ln in flat.splitlines():
+        s = ln.strip()
+        if not s or s.startswith("#"):
+            continue
+        stmts.extend(_split_semi(s))
     if not stmts:
         return False
-    # A bare assignment is not an assert, but it is also not an
-    # informational skip. Ignore it when judging echo-only.
+    written = _written_paths(flat)
     actionable = [s for s in stmts if not _ASSIGN_ONLY.match(s)]
     if not actionable:
         return False
-    if not all(_NOISE_ONLY.match(s) for s in actionable):
-        return False
-    stripped = _strip_quoted(body)
-    if _ASSERT_IN_IF.search(stripped):
-        return False
-    if re.search(r'log\s+\S+\s+"error"', body):
-        return False
-    return True
+    kinds = [_stmt_kind(s, written) for s in actionable]
+    return all(k == "noise" for k in kinds)
 
 
 def informational_if_starts(text: str) -> list[int]:
     """Line numbers of if-chains with any echo-only then/elif/else arm.
 
     Nested `fi` is paired by depth so an inner `if` cannot pop the outer
-    frame. Quoted strings are stripped before token matching. `||` / `&&`
-    / trailing `\\` continuations are joined before the condition match.
+    frame. Each arm is tokenised: assignments, redirections, quotes and
+    `$(…)` do not supply assertion words. An assertion is a command in
+    {exit, die, return, break, continue, unavailable, log … error} or a
+    test (`[`, `[[`, `test`, `grep`, `cmp`) not followed by `|| true` and
+    not a self-tautology. `log … skip` is accepted only when a
+    `KERBER_REQUIRE_` die exists in the same script.
     """
     text = _join_shell_continuations(text)
     hits: list[int] = []
@@ -340,8 +463,8 @@ def informational_if_starts(text: str) -> list[int]:
         blobs = list(arms)
         if current:
             blobs.append("\n".join(current))
-        any_echo = bool(blobs) and any(_echo_only_body(b) for b in blobs)
-        all_echo = bool(blobs) and all(_echo_only_body(b) for b in blobs)
+        any_echo = bool(blobs) and any(_echo_only_body(b, text) for b in blobs)
+        all_echo = bool(blobs) and all(_echo_only_body(b, text) for b in blobs)
         if any_echo:
             hits.append(start)
         if stack:
@@ -374,11 +497,11 @@ def informational_if_starts(text: str) -> list[int]:
                     line,
                 )
             ]
-            if flat and any(_echo_only_body(p) for p in flat):
+            if flat and any(_echo_only_body(p, text) for p in flat):
                 hits.append(i)
                 if stack:
                     stack[-1][2].append(
-                        "echo x" if all(_echo_only_body(p) for p in flat) else "exit 1"
+                        "echo x" if all(_echo_only_body(p, text) for p in flat) else "exit 1"
                     )
             elif stack:
                 stack[-1][2].append("exit 1")
@@ -1230,7 +1353,7 @@ def check_claim_audit() -> None:
         (root / "scripts" / "fx-gate.sh").write_text(
             'NAME="rust"\nNAME_MIT="mit"\n'
             + pad
-            + 'echo "==== value ===="\nOUT="$(docker exec "$NAME" true)"\n'
+            + 'echo "==== value ===="  # MIT omits NULL\nOUT="$(docker exec "$NAME" true)"\n'
             + "echo \"$OUT\" | grep -F 'value=1'\n"
             + pad
             + 'MIT_OUT="$(docker exec "$NAME_MIT" true)"\n'
@@ -1269,6 +1392,10 @@ def check_claim_audit() -> None:
         must_fail(
             "- **One leg:** `value=1` at `scripts/fx-gate.sh:9`.\n",
             "names a cell on one leg only",
+        )
+        must_fail(
+            "- **Far window:** `value=1` at `scripts/fx-gate.sh:12` / `:15`.\n",
+            "a reference three lines from an assertion",
         )
         live = "- **Live settle:** `value=1` at `scripts/fx-gate.sh:9`; `settle-live.log`.\n"
         if any(r[1] != "ok" for r in rows(live)):
@@ -1405,6 +1532,37 @@ jobs:
     unavail_ok = 'if true; then\n    unavailable "x"\nfi\n'
     if informational_if_starts(unavail_ok):
         raise AssertionError("unavailable arm must assert")
+    for i, snippet in enumerate(
+        (
+            'if true; then\n    y=$( grep foo bar )\n    echo skip\nfi\n',
+            'if true; then\n    echo see grep output\nfi\n',
+            'if true; then\n    echo skip > test.log\nfi\n',
+            'if true; then\n    echo run test suite\nfi\n',
+            'if true; then\n    echo tcpdump unavailable\nfi\n',
+            'if true; then\n    echo will exit later\nfi\n',
+            'if true; then\n    ( exit 1 ) || true\n    echo skip\nfi\n',
+            'if true; then\n    echo skip | grep -q skip\nfi\n',
+            'if true; then\n    echo skip\n    test -n "x"\nfi\n',
+            'if true; then\n    echo skip\n    cmp -s /dev/null /dev/null\nfi\n',
+            'if true; then\n    echo skip | tee /tmp/x\n    [ -s /tmp/x ]\nfi\n',
+        )
+    ):
+        if not informational_if_starts(snippet):
+            raise AssertionError(f"counter-example {i} must be informational")
+    skip_require = (
+        'if [ "${KERBER_REQUIRE_NETEM:-0}" = 1 ]; then\n'
+        '    die "required"\n'
+        "fi\n"
+        "if true; then\n"
+        '    log "g" "skip" "netem"\n'
+        "    echo hi\n"
+        "fi\n"
+    )
+    if informational_if_starts(skip_require):
+        raise AssertionError("log skip with REQUIRE die must pass")
+    skip_bare = 'if true; then\n    log "g" "skip" "netem"\n    echo hi\nfi\n'
+    if not informational_if_starts(skip_bare):
+        raise AssertionError("log skip without REQUIRE die must be informational")
 
     class _Alarm(Exception):
         pass

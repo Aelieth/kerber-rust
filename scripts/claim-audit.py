@@ -7,12 +7,16 @@ Backtick spans are cell references (`scripts/x-gate.sh:12`, `x-gate.sh:12-20`,
 underscore, a `fn` under crates/), MIT cites (`file.c:1-2`), artefacts (`*.log`,
 `*.json` in the evidence dir the summary names) or quoted values.
 
-A reference passes when its lines (+-3) carry an assertion on one of the
-bullet's quoted values: `grep -q/-F/-E/-x`, `diff <(`, `die`, `exit 1`, `[ ]`,
-`test`, a Python `assert`, or a call to a function of the same script whose
-body asserts.  A bullet passes when every reference passes, it names a cell on
-each leg (Rust and MIT, by the container markers around the line; a `diff <(`
-line is both) or a live settle artefact (its `cmd=` is not grep/sed/cat of a file), and every artefact
+A reference passes when its line sits within one line of an assertion
+on one of the quoted values (or the reference is a range that covers
+the assertion, or a function of that script which does): `grep -q/-F/-E/-x`,
+`diff <(`, `die`, `exit 1`, `[ ]`, `test`, a Python `assert`, or a call
+to a function of the same script whose body asserts.  A bullet passes
+when every reference passes, it names a cell on each leg (Rust and MIT,
+from container variables around the line — `"$NAME"`, `NAME_MIT`,
+`MIT_`/`RUST_`, `mit_local`, `kadmin.local`, `kdb5_util`; a `diff <(`
+line is both) or a live settle artefact (its `cmd=` is not grep/sed/cat
+of a file), and every artefact
 exists, is stamped (`head_sha=` and `tree_sha=`) and carries a quoted value.
 
 usage: claim-audit.py [--evidence-dir DIR] [--stamp] SUMMARY...
@@ -34,14 +38,17 @@ ARTEFACT_RE = re.compile(r"^[\w./{},-]+\.(?:log|json)$")
 CITE_RE = re.compile(r"^[\w./-]+\.(?:c|h|y|et|x|rs|md|txt)(?::[\d,-]+)?$")
 UNIT_RE = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$")
 ASSERT_RE = re.compile(
-    r"grep -[a-zA-Z]*[qFEx]\b|diff <\(|\bdie\b|\bexit [1-9]|^\s*\[{1,2} |^\s*test "
+    r"grep -[a-zA-Z]*[qFEx]\b|diff <\(|\bdie\b|\bexit [1-9]|^\s*\[{1,2} |\bif \[|\belif \[|^\s*test "
     r"|\|\| \{|^\s*assert\b|raise SystemExit|\b_die\(",
     re.M,
 )
 FUNC_RE = re.compile(r"^(\w+)\(\) \{$", re.M)
-MIT_RE = re.compile(r"NAME_MIT|\bMIT[_ ]|\bmit_|\bMIT\b|kadmin\.local|kdb5_util")
+MIT_RE = re.compile(
+    r'"\$NAME_MIT"|\$NAME_MIT\b|\bMIT_|\bmit_local\b|\bmit_|\bkadmin\.local\b'
+    r"|\bkdb5_util\b|(?<!-)kpropd\b|(?<!-)kprop\b"
+)
 RUST_RE = re.compile(
-    r'"\$NAME"|\$NAME\b(?!_MIT)|\bRUST_|\brust_|\bRust\b|/tmp/krb5-|krb5-kadmin-local'
+    r'"\$NAME"|\$NAME\b(?!_MIT)|\bRUST_|\brust_'
 )
 SOURCE_CMDS = {"grep", "egrep", "fgrep", "rg", "sed", "cat", "head", "tail", "awk"}
 HEADER = "asserting cell"
@@ -215,7 +222,11 @@ def check_bullet(b: Bullet, root: pathlib.Path, evidence: pathlib.Path | None) -
         if a < 1 or z > len(lines) or z < a:
             b.reasons.append(f"{path}:{a}-{z} out of range")
             continue
-        window = "\n".join(lines[max(0, a - 4) : min(len(lines), z + 3)])
+        if a == z:
+            lo, hi = max(0, a - 2), min(len(lines), z + 1)
+        else:
+            lo, hi = max(0, a - 1), min(len(lines), z)
+        window = "\n".join(lines[lo:hi])
         text = asserting_text(root, path, window)
         if text is None:
             b.reasons.append(f"{path}:{a} asserts nothing")
