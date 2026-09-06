@@ -35,10 +35,10 @@ Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after W1-J Round 2 V4 PAC shape + first current key):
-**295** = A1 116 + A2 70 + A3 58 + A4 51.
-exact 101 · stricter-documented 12 · deviation 98 ·
-absent 68 · deferred 16.
+Counts (after W1-K M3a create_alias + AS-REP key-info):
+**296** = A1 116 + A2 71 + A3 58 + A4 51.
+exact 104 · stricter-documented 12 · deviation 98 ·
+absent 66 · deferred 16.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
 A2 10 (9 report rows + the `kdc_util.c:144-191` split) + A3 10 = 28
@@ -275,6 +275,8 @@ mismatches, not extra statuses.
 
 ## A2 — do_as_req.c / kdc_util.c / policy.c / replay.c / dispatch.c
 
+| kdb5.c:2826-2895; kdb5.c:800-840 | `krb5_dbe_make_alias_entry` / `krb5_dbe_read_alias`; `krb5_db_get_principal` follows `KRB5_TL_ALIAS_TARGET` up to `MAX_ALIAS_DEPTH`=10 (>10 → NOENTRY), returns the canonical entry; `do_as_req.c:681-687` keeps the requested cname unless CANONICALIZE | n/a (DB layer) | krb5-kdc/store.rs alias_target, resolve_id; kdb.rs resolve_alias_id; issue.rs 313 cname | alias resolves to target; requested cname kept, `-C` canonicalizes; self/depth-11 unresolved → client not found | exact | `alias.rs` chain/self/as-cname; `scripts/kdb-dump-gate.sh:135,281` MIT↔Rust `kinit a1`/`kinit -C`/`kinit a2` both directions |
+
 MIT 1.22.2 `src/kdc/{do_as_req,kdc_util,policy,replay,dispatch}.c` vs
 `crates/krb5-kdc/src/{issue,listen,store,preauth,ad,plugins}.rs`.
 Wire = RFC 4120 protocol code (MIT `errcode_to_protocol`).
@@ -286,7 +288,7 @@ Wire = RFC 4120 protocol code (MIT `errcode_to_protocol`).
 | do_as_req.c:551-554 | `request->client == NULL` | `NULL_CLIENT` **6** | `issue.rs tgs_reply` | `no cname` **6** | deviation | proposed: diffsend `as-null-cname` |
 | do_as_req.c:562-565 | `request->server == NULL` | `NULL_SERVER` **7** — unreachable live (sname-less AS-REQ dies at `dispatch.c:154` and is **dropped**) | `issue.rs issue_as_body` | AS synthesizes `krbtgt`; TGS `no sname` **7** | deviation (MIT drops / unreachable single-realm) | proposed: diffsend `as-null-sname` |
 | do_as_req.c:581-587 | client `KRB5_KDB_NOENTRY` | `CLIENT_NOT_FOUND` **6** (vague→**60**) | `issue.rs tgs_reply` | `unknown client` **6** | deviation | diffsend `unknown-cname`; `scripts/rust-kinit-enterprise-gate.sh` |
-| do_as_req.c:588-590 | client DB err ≠ NOENTRY | `LOOKING_UP_CLIENT` + com_err | krb5-kdc/kdb.rs fetch_name:96 `Err` | `as_reply` **60** `e.to_string()` | absent | proposed: diffsend `as-client-db-err` |
+| do_as_req.c:588-590 | client DB err ≠ NOENTRY | `LOOKING_UP_CLIENT` + com_err | krb5-kdc/kdb.rs fetch_name:121 `Err` | `as_reply` **60** `e.to_string()` | absent | proposed: diffsend `as-client-db-err` |
 | do_as_req.c:600-603 | server `KRB5_KDB_NOENTRY` | `SERVER_NOT_FOUND` **7** | `issue.rs issue_as_body` | `unknown server` **7** | deviation | diffsend `unknown-sname` |
 | do_as_req.c:604-606 | AS server DB err ≠ NOENTRY | `LOOKING_UP_SERVER` + com_err | no AS analogue | — | absent | proposed: diffsend `as-server-db-err` |
 | tgs_policy.c:298-302 | S4U `!cross && referral` | `LOOKING_UP_SERVER` **7** | `issue.rs issue_tgs_body` | `LOOKING_UP_SERVER` **7** | exact | `phase7_preauth.rs` S4U LOOKING_UP_SERVER |
@@ -414,7 +416,7 @@ are RFC 4120/6113 integers. After W0d G3, FAST unwrap failures wire
 | fast_util.c:588-590, :610 | non-`MIT1` or undecryptable cookie is **silently ignored** (`return 0` at :610 — the `PREAUTH_EXPIRED` set at :598 is dead code in 1.22.2) | none | krb5-kdc/preauth.rs armor_key_from_ap / :314-318 | `bad cookie` 24 / `SPAKE cookie` 24 | deviation (stricter; fail-closed on an opaque echoed blob) | proposed: unit `garbage_cookie_is_ignored` |
 | do_tgs_req.c:767 (`get_auth_indicators`, kdc_authdata.c:340-380) | extract verified auth indicators from the header ticket | `GET_AUTH_INDICATORS` | none | absent | absent | proposed: diffsend truncated CAMMAC; seed absent list |
 | kdc_authdata.c:484-493 | no PAC when the realm sets `disable_pac`, or the reply ticket is ANONYMOUS (still adds indicators) | skip PAC | issue.rs issue_as_body, :893 gate on `KDB_NO_AUTH_DATA_REQUIRED` only | always PAC | absent | proposed: unit; folds into F2/F5 |
-| kdc_preauth.c:1476-1493 | AS-REP `padata` gets ETYPE-INFO2 (+PW-SALT for pre-info2 clients) **only when the reply key was not replaced** (`key_modified`) | `KDC_RETURN_PADATA` | issue.rs supported_enctypes_pa | absent | absent | refines the existing `return_padata` row; `diff.rs mit_as_padata` whitelist |
+| kdc_preauth.c:769-829,1487-1495 | `add_etype_info`/`add_pw_salt`: AS-REP `padata` gets PA-ETYPE-INFO2 always, PA-ETYPE-INFO + PW-SALT for a des3/rc4-only request, **only when the reply key was not replaced** (`key_modified`); single entry, salt from the canonical client (`_make_etype_info_entry`) | `KDC_RETURN_PADATA` | issue.rs as_rep_key_info, enctype_requires_etype_info_2 | ETYPE-INFO2 + salt of the reply key; skipped on PKINIT/SPAKE | exact | `alias.rs as_rep_via_alias_carries_the_target_salt_in_etype_info2`; `scripts/kdb-dump-gate.sh:135` MIT `kinit a1` derives the target salt. Rust still adds PA 165 (L4b decision); `diff.rs mit_as_padata` whitelist |
 | kdc_authdata.c:562; pac_sign.c:368-410,239-243; pac.c:583-592 `k5_pac_should_have_ticket_signature` | ticket (16) and full (19) checksums only for service tickets, never for `krbtgt/*` or `kadmin/changepw` | n/a (issue side) | krb5-kdc/ad.rs should_have_ticket_signature; krb5-kdc/ad.rs sign_pac; krb5-kdc/ad.rs verify_pac_signatures | n/a | exact | `tgt_pac_carries_no_ticket_or_full_checksum`; `tgt_pac_verifies_without_ticket_or_full_checksum`; `ticket_signature_predicate_matches_mit`; `scripts/cross-kdc-gate.sh` both directions |
 | pac.c:281-317 `krb5_pac_parse` | version 0; 1..4096 buffers; 8-byte aligned offsets not inside the header, size within the PAC | EINVAL/ERANGE → 60 `GENERIC` | krb5-types/pac.rs parse; krb5-kdc/ad.rs map_pac_err | `HEADER_PAC` 60 `GENERIC` | exact | `pac_parse_rules.rs`; `accept_t_pac_fuzz_blobs_parse_or_truncate` |
 | pac.c:137-147 `k5_pac_locate_buffer` | a buffer type present twice is EINVAL | EINVAL → 60 `GENERIC` | krb5-types/pac.rs unique_buffer; krb5-kdc/ad.rs verify_pac_checksums | `HEADER_PAC` 60 `GENERIC` | exact | `duplicate_signature_buffer_is_generic_60` |
@@ -474,7 +476,7 @@ checksum/rc4/declared-cksumtype rows that sat under A3.
 | alt_prof.c:509-510; ovsec_kadmd.c:497-500 | default `acl_file` is `KDC_DIR/kadm5.acl`; empty string → NULL → `acl_init` no-handle (refuse to start if the default file is missing) | start fail / self-only | krb5-kdc/lib.rs default_acl_path; krb5-kdc/lib.rs acl_for_store | default path; empty/`None` is self-only (`Acl::none`) | exact | `acl_for_store` tests in `issue_acl_ap.rs`; `scripts/kadmin-gate.sh` missing ACL refuse |
 | ipropd_svc.c:258,508-516 | `ipropx_resync`: RPCSEC_GSS only; acceptor 2 comps, `kiprop`, realm | RPC `AUTH_TOOWEAK` | krb5-admin/kadm5.rs check_iprop_rpcsec_auth; krb5-admin/kadm5.rs dispatch_iprop; krb5-admin/kadm5.rs rpc_reply_weakauth | same gate; `kiprop` RPCSEC dispatches | exact | `kiprop_acceptor_requires_store_realm`; `scripts/kadmin-gate.sh` iprop program cells |
 | server_misc.c:146-158 | `kadm5_get_privs` returns `*privs = ~0` | all-ones | krb5-admin/kadm5.rs GET_PRIVS; krb5-admin/kadm5.rs dispatch_kadm5_ticket | `GET_PRIVS` returns `~0` | exact | `get_privs_is_all_ones` |
-| kadm_rpc.h `CREATE_ALIAS` 27; server_stubs.c:1727-1758; svr_principal.c:2051-2087 | `create_alias_2_svc` / `kadm5_create_alias` / `acl_addalias` | proc 27 | krb5-admin/kadm5.rs EXTRACT_KEYS (last proc is 26); `ProcUnavail` | no alias TL-data, no AS resolution | absent | proposed: `scripts/kadmin-gate.sh` alias cell (W1-K M3a) |
+| kadm_rpc.h `CREATE_ALIAS` 27; server_stubs.c:1727-1758; svr_principal.c:2051-2087; auth_acl.c:723-734 | `create_alias_2_svc` (CHANGEPW deny, `acl_addalias`, no lockdown) / `kadm5_create_alias` (realm compare, DUP resolves, target may be absent) / `acl_addalias` (ADD on alias w/o restrictions AND MODIFY on target) | proc 27; `KADM5_AUTH_INSUFFICIENT` / `KADM5_ALIAS_REALM` / `KADM5_DUP` | krb5-admin/kadm5.rs CREATE_ALIAS 2517; store.rs create_alias_in 1180; acl.rs check_addalias 290 | same codes | exact | `m3a_alias.rs` acl matrix + codes; `scripts/kadmin-gate.sh:369-484` `alias_cells` both legs (`:674` / `:1683`) |
 | svc.c:342,361; svc_auth_gssapi.c:495-497 | AUTH_GSSAPI accepted/mismatch replies carry `FLAVOR_NONE` + empty verifier (`rpc_reply_clear`); RPCSEC accepted/mismatch use `xp_verf` | AUTH_GSSAPI verf none | krb5-admin/kadm5.rs rpc_reply_clear; krb5-admin/kadm5.rs rpc_reply_accepted | AUTH_GSSAPI INIT is `FLAVOR_NONE`; RPCSEC DATA carries `xp_verf` | deviation | `auth_gssapi_on_iprop_init_is_success`; RPCSEC `rpcsec_unknown_program_data_carries_xp_verf` |
 | svc_auth_gssapi.c:326-341 | GSSAPI_INIT arg version: 1/2 → reply version 1 (compat warning); 3/4 echoed; other `AUTH_BADCRED` | AUTH_BADCRED on unknown | krb5-admin/kadm5.rs handle_auth_gssapi | `arg_ver` echoed; no v1/v2 downgrade; unknown version not `AUTH_BADCRED` | deviation | proposed: AUTH_GSSAPI init-arg version cell |
 | alt_prof.c:497-506 `supported_enctypes` (`kadm5_get_config_params` keysalts) | key generation order and salts for `kdb5_util create` / `addprinc` without `-e` follow the realm's `supported_enctypes` | n/a | krb5-kdc/store.rs password_etypes (`randkey_etypes()` default; the profile value is never read) | n/a | absent (`--test-realm` and `kdb create` mint 18,17,20,19 where the harness kdc.conf says 20,19,18,17; the cross-KDC gate uses one dump so both KDCs agree) | proposed: profile `supported_enctypes` → `store.supported_enctypes`; round-up R1 |

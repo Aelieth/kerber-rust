@@ -38,7 +38,7 @@ pub const RID_FIRST_USER: u32 = 1000;
 
 use crate::acl::{Acl, AdminOp, Restrictions};
 use crate::error::Error;
-use crate::kdb_dump::{TL_LAST_PWD_CHANGE, TL_MOD_PRINC};
+use crate::kdb_dump::{TL_ALIAS_TARGET, TL_KADM_DATA, TL_LAST_PWD_CHANGE, TL_MOD_PRINC};
 
 /// Default PBKDF2 iteration count advertised in ETYPE-INFO2 (RFC 3962 default).
 pub const S2K_ITERS: u32 = 4096;
@@ -81,6 +81,8 @@ pub const KDB_NO_AUTH_DATA_REQUIRED: u32 = 0x0040_0000;
 pub const KDB_LOCKDOWN_KEYS: u32 = 0x0080_0000;
 /// MIT `KRB5_KDB_V1_BASE_LENGTH` (dump `len` field).
 pub const KDB_V1_BASE_LENGTH: u32 = 38;
+/// `kdb5.c` `MAX_ALIAS_DEPTH`: alias hops `krb5_db_get_principal` follows.
+pub const MAX_ALIAS_DEPTH: usize = 10;
 
 /// Long-term key for one etype.
 #[derive(Clone, Debug)]
@@ -427,6 +429,19 @@ impl Principal {
         crate::kdb::lookup_principal_id(&self.name, &self.realm)
     }
 
+    /// Target of an alias stub (`krb5_dbe_read_alias`): the NUL-terminated
+    /// unparsed name in `KRB5_TL_ALIAS_TARGET`. An unterminated value is
+    /// MIT `KRB5_KDB_TRUNCATED_RECORD` and resolves to nothing.
+    #[must_use]
+    pub fn alias_target(&self) -> Option<String> {
+        let tl = self.tl_data.iter().find(|t| t.ty == TL_ALIAS_TARGET)?;
+        let (nul, target) = tl.contents.split_last()?;
+        if *nul != 0 {
+            return None;
+        }
+        String::from_utf8(target.to_vec()).ok()
+    }
+
     /// First key of `etype`, if present (highest kvno preferred).
     #[must_use]
     pub fn key_for(&self, etype: EncryptionType) -> Option<&KeyEntry> {
@@ -768,11 +783,7 @@ impl PrincipalStore {
     /// Incremental kdbe has no SID (vendor `0x4B0x` is stripped). A new
     /// replica row with `rid==0` must not PAC as `RID_FIRST_USER`.
     fn assign_iprop_rid(&mut self, mut p: Principal) -> Principal {
-        if p.rid == 0 {
-            p.rid = self.alloc_rid(&p.name);
-        } else {
-            self.bump_next_rid(p.rid);
-        }
+        self.settle_rid(&mut p);
         p
     }
 
@@ -998,10 +1009,25 @@ impl PrincipalStore {
         Ok(store)
     }
 
-    /// Lookup `name@realm`.
+    /// Lookup `name@realm`, following alias stubs like `krb5_db_get_principal`.
     #[must_use]
     pub fn get(&self, id: &str) -> Option<&Principal> {
+        self.map.get(&self.resolve_id(id)?)
+    }
+
+    /// The stored record itself, alias stubs included (`kdb5_util dump` view).
+    #[must_use]
+    pub fn get_raw(&self, id: &str) -> Option<&Principal> {
         self.map.get(id)
+    }
+
+    fn resolve_id(&self, id: &str) -> Option<String> {
+        crate::kdb::resolve_alias_id(&self.realm, |k| self.map.get(k), id)
+    }
+
+    fn canonical_id(&self, name: &PrincipalName, princ_realm: &str) -> Result<String, Error> {
+        self.resolve_id(&crate::kdb::lookup_principal_id(name, princ_realm))
+            .ok_or(Error::NotFound)
     }
 
     /// Lookup by name components in this realm.
@@ -1013,8 +1039,7 @@ impl PrincipalStore {
     /// Lookup `name@princ_realm` (MIT `kdb_get_entry` uses the request realm).
     #[must_use]
     pub fn get_in_realm(&self, name: &PrincipalName, princ_realm: &str) -> Option<&Principal> {
-        self.map
-            .get(&crate::kdb::lookup_principal_id(name, princ_realm))
+        self.get(&crate::kdb::lookup_principal_id(name, princ_realm))
     }
 
     /// PEM of the PKINIT test CA for MIT `pkinit_anchors = FILE:`.
@@ -1138,10 +1163,58 @@ impl PrincipalStore {
         etypes: &[EncryptionType],
     ) -> Result<(), Error> {
         let id = crate::kdb::lookup_principal_id(name, princ_realm);
-        if self.map.contains_key(&id) {
+        if self.get(&id).is_some() {
             return Err(Error::AlreadyExists);
         }
         self.insert_password_etypes(name, princ_realm, password, etypes)
+    }
+
+    /// `kadm5_create_alias` (`svr_principal.c:2051-2087`): an alias stub is
+    /// a keyless `DISALLOW_ALL_TIX` entry whose only content is
+    /// `KRB5_TL_ALIAS_TARGET`. The target need not exist; the alias name must
+    /// not resolve to anything.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AliasRealm`] or [`Error::AlreadyExists`].
+    pub fn create_alias_in(
+        &mut self,
+        alias: &PrincipalName,
+        alias_realm: &str,
+        target: &PrincipalName,
+        target_realm: &str,
+    ) -> Result<(), Error> {
+        if alias_realm != target_realm {
+            return Err(Error::AliasRealm);
+        }
+        let id = crate::kdb::lookup_principal_id(alias, alias_realm);
+        if self.get(&id).is_some() {
+            return Err(Error::AlreadyExists);
+        }
+        let mut p = Principal::from_keys(
+            alias.clone(),
+            alias_realm.to_owned(),
+            Vec::new(),
+            Vec::new(),
+            false,
+            0,
+            true,
+            0,
+        );
+        p.tl_data.push(TlData {
+            ty: TL_KADM_DATA,
+            contents: empty_kadm_data(),
+        });
+        stamp_admin_tl(&mut p, false);
+        let mut contents = target.unparse_with_realm(target_realm).into_bytes();
+        contents.push(0);
+        p.tl_data.push(TlData {
+            ty: TL_ALIAS_TARGET,
+            contents,
+        });
+        self.note_ulog(id.clone(), false, Some(p.clone()));
+        self.map.insert(id, p);
+        self.save_if_configured()
     }
 
     /// ACL-gated create of a random-key host (or other) principal.
@@ -1172,7 +1245,7 @@ impl PrincipalStore {
     ) -> Result<(), Error> {
         let id = crate::kdb::lookup_principal_id(name, &self.realm);
         acl.check(actor, AdminOp::Create, Some(&id))?;
-        if self.map.contains_key(&id) {
+        if self.get(&id).is_some() {
             return Err(Error::AlreadyExists);
         }
         let keys = if etypes.is_empty() {
@@ -1291,7 +1364,7 @@ impl PrincipalStore {
         keepold: u32,
     ) -> Result<(), Error> {
         self.check_password_quality(name, password)?;
-        let id = crate::kdb::lookup_principal_id(name, princ_realm);
+        let id = self.canonical_id(name, princ_realm)?;
         let Some(existing) = self.map.get(&id) else {
             return Err(Error::NotFound);
         };
@@ -1325,7 +1398,7 @@ impl PrincipalStore {
         name: &PrincipalName,
         princ_realm: &str,
     ) -> Result<(), Error> {
-        let id = crate::kdb::lookup_principal_id(name, princ_realm);
+        let id = self.canonical_id(name, princ_realm)?;
         let max_life = {
             let p = self.map.get(&id).ok_or(Error::NotFound)?;
             p.pw_policy
@@ -1376,7 +1449,7 @@ impl PrincipalStore {
         locked: bool,
         pw_expire: u32,
     ) -> Result<(), Error> {
-        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        let id = self.canonical_id(name, &self.realm)?;
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         p.locked = locked;
         p.pw_expire = pw_expire;
@@ -1405,7 +1478,7 @@ impl PrincipalStore {
         let name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", foreign_realm]);
         let id = crate::kdb::lookup_principal_id(&name, &self.realm);
         acl.check(actor, AdminOp::Create, Some(&id))?;
-        if self.map.contains_key(&id) {
+        if self.get(&id).is_some() {
             return Err(Error::AlreadyExists);
         }
         self.insert_password(&name, password)?;
@@ -1434,7 +1507,7 @@ impl PrincipalStore {
         let name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", foreign_realm]);
         let id = crate::kdb::lookup_principal_id(&name, &self.realm);
         acl.check(actor, AdminOp::Create, Some(&id))?;
-        if self.map.contains_key(&id) {
+        if self.get(&id).is_some() {
             return Err(Error::AlreadyExists);
         }
         let salt = name.default_salt(&self.realm);
@@ -1472,6 +1545,7 @@ impl PrincipalStore {
         let name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", foreign_realm]);
         let id = crate::kdb::lookup_principal_id(&name, &self.realm);
         acl.check(actor, AdminOp::Create, Some(&id))?;
+        let id = self.resolve_id(&id).ok_or(Error::NotFound)?;
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         let kvno = p
             .keys
@@ -1593,8 +1667,17 @@ impl PrincipalStore {
     ) -> Result<(), Error> {
         let old_id = crate::kdb::lookup_principal_id(old, old_realm);
         let new_id = crate::kdb::lookup_principal_id(new, new_realm);
-        if self.map.contains_key(&new_id) {
+        if self.get(&new_id).is_some() {
             return Err(Error::AlreadyExists);
+        }
+        if self
+            .map
+            .get(&old_id)
+            .ok_or(Error::NotFound)?
+            .alias_target()
+            .is_some()
+        {
+            return Err(Error::AliasUnsupported);
         }
         let mut p = self.map.remove(&old_id).ok_or(Error::NotFound)?;
         p.name = new.clone();
@@ -1837,7 +1920,7 @@ impl PrincipalStore {
         princ_realm: &str,
         keepold: u32,
     ) -> Result<Vec<KeyEntry>, Error> {
-        let id = crate::kdb::lookup_principal_id(name, princ_realm);
+        let id = self.canonical_id(name, princ_realm)?;
         let existing = self.map.get(&id).ok_or(Error::NotFound)?;
         let next_kvno = existing
             .keys
@@ -1896,7 +1979,7 @@ impl PrincipalStore {
         princ_realm: &str,
         keepkvno: i32,
     ) -> Result<(), Error> {
-        let id = crate::kdb::lookup_principal_id(name, princ_realm);
+        let id = self.canonical_id(name, princ_realm)?;
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         let keep = if keepkvno <= 0 {
             p.keys.iter().map(|k| k.kvno).max().unwrap_or(0)
@@ -1944,7 +2027,7 @@ impl PrincipalStore {
         if keys.is_empty() {
             return Err(Error::Crypto("setkey empty".into()));
         }
-        let id = crate::kdb::lookup_principal_id(name, princ_realm);
+        let id = self.canonical_id(name, princ_realm)?;
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
             let want = keys[0].kvno;
@@ -2033,7 +2116,7 @@ impl PrincipalStore {
         policy: Option<String>,
         clear_policy: bool,
     ) -> Result<(), Error> {
-        let id = crate::kdb::lookup_principal_id(name, princ_realm);
+        let id = self.canonical_id(name, princ_realm)?;
         let apply_max = policy.is_some() && !clear_policy && pw_expire.is_none();
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
@@ -2092,7 +2175,7 @@ impl PrincipalStore {
         princ_realm: &str,
         rs: &Restrictions,
     ) -> Result<(), Error> {
-        let id = crate::kdb::lookup_principal_id(name, princ_realm);
+        let id = self.canonical_id(name, princ_realm)?;
         self.apply_acl_restrictions(&id, rs)?;
         self.save_if_configured()
     }
@@ -2110,7 +2193,9 @@ impl PrincipalStore {
 
     /// Set `TL_LAST_PWD_CHANGE` (tests / min_life).
     pub fn set_last_pwd_unix(&mut self, name: &PrincipalName, ts: u32) {
-        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        let Ok(id) = self.canonical_id(name, &self.realm) else {
+            return;
+        };
         if let Some(p) = self.map.get_mut(&id) {
             p.tl_data.retain(|t| t.ty != TL_LAST_PWD_CHANGE);
             p.tl_data.push(TlData {
@@ -2122,10 +2207,7 @@ impl PrincipalStore {
 
     /// Insert a fully-formed principal (persistence / dump load; no ulog).
     pub(crate) fn debug_insert(&mut self, mut p: Principal) {
-        if p.rid == 0 {
-            p.rid = self.alloc_rid(&p.name);
-        }
-        self.bump_next_rid(p.rid);
+        self.settle_rid(&mut p);
         self.map.insert(p.id(), p);
     }
 
@@ -2183,7 +2265,7 @@ impl PrincipalStore {
         princ_realm: &str,
         policy: Option<String>,
     ) -> Result<(), Error> {
-        let id = crate::kdb::lookup_principal_id(name, princ_realm);
+        let id = self.canonical_id(name, princ_realm)?;
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
             p.pw_policy = policy;
@@ -2213,8 +2295,9 @@ impl PrincipalStore {
         name: &PrincipalName,
         princ_realm: &str,
     ) -> Result<Vec<(String, String)>, Error> {
-        let id = crate::kdb::lookup_principal_id(name, princ_realm);
-        let p = self.map.get(&id).ok_or(Error::NotFound)?;
+        let p = self
+            .get_in_realm(name, princ_realm)
+            .ok_or(Error::NotFound)?;
         Ok(p.string_attrs.clone())
     }
 
@@ -2245,7 +2328,7 @@ impl PrincipalStore {
         key: &str,
         value: Option<&str>,
     ) -> Result<(), Error> {
-        let id = crate::kdb::lookup_principal_id(name, princ_realm);
+        let id = self.canonical_id(name, princ_realm)?;
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
         p.string_attrs.retain(|(k, _)| k != key);
         if let Some(v) = value {
@@ -2358,7 +2441,7 @@ impl PrincipalStore {
 
     /// Zero the overlay fail count without stamping last_success (interval reset).
     pub fn clear_as_fail_count(&self, name: &PrincipalName) {
-        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        let id = self.lockout_id(name);
         let fallback = self
             .map
             .get(&id)
@@ -2379,9 +2462,14 @@ impl PrincipalStore {
         }
     }
 
+    fn lockout_id(&self, name: &PrincipalName) -> String {
+        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        self.resolve_id(&id).unwrap_or(id)
+    }
+
     /// Record AS password outcome (interior-mutable; dump writes the overlay).
     pub fn record_as_outcome(&self, name: &PrincipalName, ok: bool) {
-        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        let id = self.lockout_id(name);
         let fallback = self
             .map
             .get(&id)
@@ -2418,13 +2506,17 @@ impl PrincipalStore {
     }
 
     fn put_principal(&mut self, mut p: Principal) {
-        if p.rid == 0 {
-            p.rid = self.alloc_rid(&p.name);
-        }
-        self.bump_next_rid(p.rid);
+        self.settle_rid(&mut p);
         let id = p.id();
         self.note_ulog(id.clone(), false, Some(p.clone()));
         self.map.insert(id, p);
+    }
+
+    fn settle_rid(&mut self, p: &mut Principal) {
+        if p.rid == 0 && p.alias_target().is_none() {
+            p.rid = self.alloc_rid(&p.name);
+        }
+        self.bump_next_rid(p.rid);
     }
 
     fn alloc_rid(&mut self, name: &PrincipalName) -> u32 {
@@ -2479,6 +2571,15 @@ pub(crate) fn prune_key_history(keys: Vec<KeyEntry>, depth: u32) -> Vec<KeyEntry
     keys.into_iter()
         .filter(|k| keep.contains(&k.kvno))
         .collect()
+}
+
+/// `xdr_osa_princ_ent_rec` of a zeroed record: version `OSA_ADB_PRINC_VERSION_1`,
+/// empty policy, `aux_attributes`, `old_key_next`, `admin_history_kvno`,
+/// empty `old_keys` (`kdb_put_entry` on `kadm5_create_alias`).
+fn empty_kadm_data() -> Vec<u8> {
+    let mut v = 0x1234_5c01u32.to_be_bytes().to_vec();
+    v.resize(24, 0);
+    v
 }
 
 fn stamp_admin_tl(p: &mut Principal, pwd_change: bool) {

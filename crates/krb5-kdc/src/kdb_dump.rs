@@ -42,6 +42,8 @@ pub const TL_KADM_DATA: i32 = 3;
 pub const TL_MKVNO: i32 = 8;
 /// `KRB5_TL_STRING_ATTRS`.
 pub const TL_STRING_ATTRS: i32 = 0x000b;
+/// `KRB5_TL_ALIAS_TARGET`: NUL-terminated unparsed target of an alias stub.
+pub const TL_ALIAS_TARGET: i32 = 0x000c;
 /// `KRB5_TL_ACTKVNO`.
 pub const TL_ACTKVNO: i32 = 9;
 /// Private `tl_data` type: domain SID + RID (MIT has no SID; opaque round-trip).
@@ -747,16 +749,17 @@ fn write_princ_record(
     store: &PrincipalStore,
 ) -> Result<(), DumpError> {
     let name = p.id();
-    let max_life = if p.max_life == 0 {
-        u32::try_from(store.policy.max_life).unwrap_or(u32::MAX)
-    } else {
-        u32::try_from(p.max_life).unwrap_or(u32::MAX)
+    let lifetime = |own: u64, policy: u64| {
+        if p.alias_target().is_some() {
+            0
+        } else if own == 0 {
+            u32::try_from(policy).unwrap_or(u32::MAX)
+        } else {
+            u32::try_from(own).unwrap_or(u32::MAX)
+        }
     };
-    let max_rlife = if p.max_renewable_life == 0 {
-        u32::try_from(store.policy.max_renewable_life).unwrap_or(u32::MAX)
-    } else {
-        u32::try_from(p.max_renewable_life).unwrap_or(u32::MAX)
-    };
+    let max_life = lifetime(p.max_life, store.policy.max_life);
+    let max_rlife = lifetime(p.max_renewable_life, store.policy.max_renewable_life);
     let mut tl = if p.tl_data.is_empty() {
         synthesize_tl(
             &p.realm,
@@ -845,7 +848,9 @@ fn write_princ_record(
 
 fn merge_sid_tl(tl: &mut Vec<TlData>, domain: &RpcSid, rid: u32) {
     tl.retain(|t| t.ty != TL_KERBER_SID);
-    tl.push(encode_sid_tl(domain, rid));
+    if rid != 0 {
+        tl.push(encode_sid_tl(domain, rid));
+    }
 }
 
 fn merge_string_attrs_tl(tl: &mut Vec<TlData>, attrs: &[(String, String)]) {

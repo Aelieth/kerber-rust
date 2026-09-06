@@ -28,6 +28,10 @@ pub enum Error {
     AlreadyExists,
     /// Principal is not in the store.
     NotFound,
+    /// `KADM5_ALIAS_REALM`: alias and target realms differ.
+    AliasRealm,
+    /// `KRB5_KDB_ALIAS_UNSUPPORTED`: the operation's source is an alias stub.
+    AliasUnsupported,
     /// CSPRNG failed.
     Rng,
     /// Password rejected by named policy.
@@ -59,6 +63,10 @@ impl fmt::Display for Error {
             Self::AclParse(s) => write!(f, "ACL parse: {s}"),
             Self::AlreadyExists => write!(f, "principal exists"),
             Self::NotFound => write!(f, "principal not found"),
+            Self::AliasRealm => write!(f, "Alias target must be within the same realm"),
+            Self::AliasUnsupported => {
+                write!(f, "Operation unsupported on alias principal name")
+            }
             Self::Rng => write!(f, "rng failed"),
             Self::PasswordPolicy(s) => write!(f, "password policy: {s}"),
             Self::PassTooSoon { .. } => {

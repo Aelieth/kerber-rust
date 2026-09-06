@@ -35,10 +35,10 @@ pub use kdb::{
 };
 pub use kdb_dump::{
     DumpError, DumpFile, DumpKeyData, DumpKeySlot, DumpPrincipal, KDB_DUMP_VERSION,
-    KDB_DUMP_VERSION_R18, TL_KADM_DATA, TL_KERBER_HIST, TL_KERBER_POLICY, TL_KERBER_SERIAL,
-    TL_KERBER_SID, TL_LAST_PWD_CHANGE, TL_MKVNO, TL_MOD_PRINC, TL_STRING_ATTRS, dump_store,
-    dump_store_etype, dump_store_iprop, load_dump, load_dump_etype, load_dump_mkey, load_dump_path,
-    parse_dump, write_dump, write_dump_path, write_dump_path_etype,
+    KDB_DUMP_VERSION_R18, TL_ALIAS_TARGET, TL_KADM_DATA, TL_KERBER_HIST, TL_KERBER_POLICY,
+    TL_KERBER_SERIAL, TL_KERBER_SID, TL_LAST_PWD_CHANGE, TL_MKVNO, TL_MOD_PRINC, TL_STRING_ATTRS,
+    dump_store, dump_store_etype, dump_store_iprop, load_dump, load_dump_etype, load_dump_mkey,
+    load_dump_path, parse_dump, write_dump, write_dump_path, write_dump_path_etype,
 };
 pub use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 pub use listen::{
@@ -58,7 +58,7 @@ pub use store::{
     KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_LOCKDOWN_KEYS,
     KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE, KDB_OK_TO_AUTH_AS_DELEGATE,
     KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH, KDB_REQUIRES_PWCHANGE,
-    KDB_V1_BASE_LENGTH, KeyEntry, NamedPolicy, Policy, Principal, PrincipalStore,
+    KDB_V1_BASE_LENGTH, KeyEntry, MAX_ALIAS_DEPTH, NamedPolicy, Policy, Principal, PrincipalStore,
     RID_ADMINISTRATOR, RID_FIRST_USER, RID_KRBTGT, S2K_ITERS, TlData, UlogEntry, random_key,
     s2k_params,
 };

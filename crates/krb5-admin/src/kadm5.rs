@@ -97,6 +97,7 @@ const PURGEKEYS: u32 = 22;
 const GET_STRINGS: u32 = 23;
 const SET_STRING: u32 = 24;
 const EXTRACT_KEYS: u32 = 26;
+const CREATE_ALIAS: u32 = 27;
 
 /// MIT `KADM5_UNK_PRINC`.
 const KADM5_UNK_PRINC: u32 = 43_787_532;
@@ -128,6 +129,11 @@ const KADM5_AUTH_MODIFY: u32 = 43_787_523;
 const KADM5_AUTH_DELETE: u32 = 43_787_524;
 /// MIT `ovk` 5 (`KADM5_AUTH_INSUFFICIENT`).
 const KADM5_AUTH_INSUFFICIENT: u32 = 43_787_525;
+/// MIT `ovk` 63 (`KADM5_ALIAS_REALM`).
+const KADM5_ALIAS_REALM: u32 = 43_787_583;
+/// MIT `KRB5_KDB_ALIAS_UNSUPPORTED` (`kdb5_err.et`, -1780008402) as the
+/// `kadm5_ret_t` the client decodes.
+const KRB5_KDB_ALIAS_UNSUPPORTED: u32 = 2_514_958_894;
 /// MIT `ovk` 1 (`KADM5_AUTH_GET`).
 const KADM5_AUTH_GET: u32 = 43_787_521;
 /// MIT `ovk` 44 (`KADM5_AUTH_LIST`).
@@ -2508,6 +2514,31 @@ fn dispatch_kadm5_ticket(
                 Err(e) => Ok(generic_ret(api, kadm5_code(&Error::from(e)))),
             }
         }
+        CREATE_ALIAS => {
+            let (alias, alias_realm, target, target_realm) = parse_alias(args)?;
+            let alias_req = req_realm(&alias_realm, &realm);
+            let target_req = req_realm(&target_realm, &realm);
+            // server_stubs.c:1727-1758: CHANGEPW deny, acl_addalias, no lockdown check.
+            if changepw
+                || acl
+                    .check_addalias(
+                        actor,
+                        &acl_id(&alias, &alias_req),
+                        &acl_id(&target, &target_req),
+                    )
+                    .is_err()
+            {
+                return Ok(generic_ret(API_V2, KADM5_AUTH_INSUFFICIENT));
+            }
+            let mut g = match write_store(store, API_V2) {
+                Ok(g) => g,
+                Err(rep) => return Ok(rep),
+            };
+            match g.create_alias_in(&alias, &alias_req, &target, &target_req) {
+                Ok(()) => Ok(generic_ret(API_V2, 0)),
+                Err(e) => Ok(generic_ret(API_V2, kadm5_code(&Error::from(e)))),
+            }
+        }
         _ => Err(Error::ProcUnavail),
     }
 }
@@ -2530,6 +2561,10 @@ fn kadm5_code(e: &Error) -> u32 {
         KADM5_SETKEY_BAD_KVNO
     } else if s.contains("principal exists") {
         KADM5_DUP
+    } else if s == "Alias target must be within the same realm" {
+        KADM5_ALIAS_REALM
+    } else if s == "Operation unsupported on alias principal name" {
+        KRB5_KDB_ALIAS_UNSUPPORTED
     } else {
         KADM5_FAILURE
     }
@@ -2798,6 +2833,11 @@ fn parse_rename(args: &[u8]) -> Result<(PrincipalName, String, PrincipalName, St
     let (old, old_realm) = r.principal_realm()?;
     let (new, new_realm) = r.principal_realm()?;
     Ok((old, old_realm, new, new_realm))
+}
+
+/// `xdr_calias_arg` (`kadm_rpc_xdr.c:1214-1227`): api version, alias, target.
+fn parse_alias(args: &[u8]) -> Result<(PrincipalName, String, PrincipalName, String), Error> {
+    parse_rename(args)
 }
 
 fn parse_purgekeys(args: &[u8]) -> Result<(u32, PrincipalName, String, i32), Error> {

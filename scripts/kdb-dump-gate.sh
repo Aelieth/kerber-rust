@@ -68,12 +68,23 @@ docker exec "$NAME" sh -c 'cat >/tmp/kdb-krb5.conf <<EOF
     }
 EOF'
 
-echo "==== half A: krb5-kdb load MIT dump ===="
+echo "==== half A: MIT kadmin.local aliases user, kdb5_util re-dumps ===="
+docker exec "$NAME" kdb5_util create -s -P masterpassword
+docker exec "$NAME" kdb5_util load /tmp/mit.dump
+docker exec "$NAME" kadmin.local -q 'alias a1 user' 2>&1 | grep -F 'Principal "a1@KERBER.TEST" aliased to "user@KERBER.TEST".'
+docker exec "$NAME" kdb5_util dump /tmp/mit-alias.dump
+ALIAS_LINE="$(docker exec "$NAME" grep -F 'a1@KERBER.TEST' /tmp/mit-alias.dump)"
+echo "$ALIAS_LINE"
+echo "$ALIAS_LINE" | grep -qE '^princ	38	14	3	0	0	a1@KERBER.TEST	64	0	0	0	0	0	0	0	'
+echo "$ALIAS_LINE" | grep -q '	12	17	75736572404b45524245522e5445535400	'
+docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1'
+
+echo "==== half A: krb5-kdb load MIT dump (with the alias) ===="
 LOAD_A="$(docker exec \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
-    "$NAME" /tmp/krb5-kdb load /tmp/mit.dump)"
+    "$NAME" /tmp/krb5-kdb load /tmp/mit-alias.dump)"
 echo "$LOAD_A"
 echo "$LOAD_A" | grep -q 'ok load version=7'
 echo "$LOAD_A" | grep -q 'realm=KERBER.TEST'
@@ -120,6 +131,20 @@ fi
 KLIST_AP="$(docker exec -e KRB5_CONFIG=/tmp/kdb-krb5.conf "$NAME" klist)"
 echo "$KLIST_AP"
 echo "$KLIST_AP" | grep -q 'pauser@KERBER.TEST'
+
+echo "==== half A: MIT kinit a1 (MIT-written alias stub) against Rust KDC ===="
+docker exec -e KRB5_CONFIG=/tmp/kdb-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+if ! docker exec -e KRB5_CONFIG=/tmp/kdb-krb5.conf -e KRB5_TRACE=/dev/stderr \
+    "$NAME" sh -c 'printf "userpassword\n" | kinit a1@KERBER.TEST'; then
+    docker exec "$NAME" cat /tmp/kdc.log >&2 || true
+    log "kdb.dump.gate" "error" ',"error":"half A MIT kinit a1 failed"'
+    exit 1
+fi
+KLIST_A1="$(docker exec -e KRB5_CONFIG=/tmp/kdb-krb5.conf "$NAME" klist)"
+echo "$KLIST_A1"
+echo "$KLIST_A1" | grep -F 'Default principal: a1@KERBER.TEST'
+docker exec -e KRB5_CONFIG=/tmp/kdb-krb5.conf "$NAME" sh -c 'printf "userpassword\n" | kinit -C a1@KERBER.TEST'
+docker exec -e KRB5_CONFIG=/tmp/kdb-krb5.conf "$NAME" klist | grep -F 'Default principal: user@KERBER.TEST'
 
 echo "==== half B: MIT load of the running KDC at-rest file ===="
 # Stop the Rust KDC so MIT krb5kdc can bind :88. Match /proc/PID/comm only
@@ -177,6 +202,16 @@ echo "$SETSTR"
 echo "$SETSTR" | grep -q 'ok setstr user note'
 docker exec "$NAME" grep -q '6e6f74650068656c6c6f2d67336400' /tmp/principal
 
+echo "==== half B: seed a Rust-written alias stub on the Rust dump ===="
+ALIAS_B="$(docker exec \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kdb alias a2 user 2>&1 || true)"
+echo "$ALIAS_B"
+echo "$ALIAS_B" | grep -q 'ok alias a2 user'
+docker exec "$NAME" grep -E '^princ	38	14	3	0	0	a2@KERBER.TEST	64	0	0	0	0	0	0	0	' /tmp/principal | grep -q '	12	17	75736572404b45524245522e5445535400	'
+
 echo "==== half B: MIT kdb5_util load + krb5kdc ===="
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec "$NAME" kdb5_util create -s -P masterpassword
@@ -192,6 +227,9 @@ echo "$GETPOL" | grep -q 'Policy: lockme'
 GETSTRS="$(docker exec "$NAME" kadmin.local -q 'getstrs user' 2>&1 || true)"
 echo "$GETSTRS"
 echo "$GETSTRS" | grep -q 'note: hello-g3d'
+GETA2="$(docker exec "$NAME" kadmin.local -q 'getprinc a2' 2>&1 || true)"
+echo "$GETA2"
+echo "$GETA2" | grep -F 'Principal: user@KERBER.TEST'
 STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc; sleep 0.4' 2>&1 || true)"
 echo "$STARTLOG"
 ok=0
@@ -240,4 +278,15 @@ KLIST_BP="$(docker exec -e KRB5_CONFIG=/tmp/kdb-krb5.conf "$NAME" klist)"
 echo "$KLIST_BP"
 echo "$KLIST_BP" | grep -q 'pauser@KERBER.TEST'
 
-log "kdb.dump.gate" "ok" ',"dump_version":7,"halves":"A+B"'
+echo "==== half B: MIT kinit a2 (Rust-written alias stub) against MIT KDC ===="
+docker exec -e KRB5_CONFIG=/tmp/kdb-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+if ! docker exec -e KRB5_CONFIG=/tmp/kdb-krb5.conf \
+    "$NAME" sh -c 'printf "userpassword\n" | kinit a2@KERBER.TEST'; then
+    log "kdb.dump.gate" "error" ',"error":"half B MIT kinit a2 failed"'
+    exit 1
+fi
+KLIST_B2="$(docker exec -e KRB5_CONFIG=/tmp/kdb-krb5.conf "$NAME" klist)"
+echo "$KLIST_B2"
+echo "$KLIST_B2" | grep -F 'Default principal: a2@KERBER.TEST'
+
+log "kdb.dump.gate" "ok" ',"dump_version":7,"halves":"A+B","alias":"both directions"'

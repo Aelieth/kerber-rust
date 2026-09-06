@@ -281,6 +281,23 @@ impl Acl {
         Ok(())
     }
 
+    /// Alias: add on `alias` with no restrictions and modify on `target`
+    /// (`auth_acl.c:723-734` `acl_addalias`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AclDenied`].
+    pub fn check_addalias(&self, actor: &str, alias: &str, target: &str) -> Result<(), Error> {
+        self.check(actor, AdminOp::Create, Some(alias))?;
+        if self
+            .find(actor, Some(alias))
+            .is_some_and(|e| e.restrictions.is_some())
+        {
+            return deny(actor, AdminOp::Create);
+        }
+        self.check(actor, AdminOp::Modify, Some(target))
+    }
+
     /// Restrictions on the matching entry, if any.
     #[must_use]
     pub fn restrictions(&self, actor: &str, target: Option<&str>) -> Option<&Restrictions> {

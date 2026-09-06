@@ -6,6 +6,21 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-K M3a
+
+- **admin/kdc.** `create_alias` (kadmin proc 27) like `create_alias_2_svc`
+  / `kadm5_create_alias` / `acl_addalias`: an alias stub is a keyless
+  `DISALLOW_ALL_TIX` entry carrying `KRB5_TL_ALIAS_TARGET`, and every
+  `PrincipalStore` lookup resolves it up to `MAX_ALIAS_DEPTH` (10) hops like
+  `krb5_db_get_principal`. The AS keeps the requested cname unless
+  CANONICALIZE is set, and the AS-REP now carries PA-ETYPE-INFO2 with the
+  canonical client's salt (`add_etype_info`/`add_pw_salt`) so `kinit` under an
+  alias derives the target key. `krb5-kadmin-local` and `krb5-kdb alias` mint
+  stubs; dump v7 round-trips them (MIT `kdb5_util` ↔ Rust both directions).
+  Verified live on `scripts/kadmin-gate.sh` (alias cells, both legs) and
+  `scripts/kdb-dump-gate.sh` (MIT-written and Rust-written alias kinit).
+
+
 ### W1-J Round 2 V5 / V3
 
 - **protocol.** `build_krb_safe_ex` checksums the full KRB-SAFE with a

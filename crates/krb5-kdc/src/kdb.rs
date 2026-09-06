@@ -17,7 +17,9 @@ use krb5_types::pkinit::PkinitCa;
 
 use crate::error::Error;
 use crate::persist::{PersistError, load_store};
-use crate::store::{NamedPolicy, Policy, Principal, PrincipalStore, RID_FIRST_USER};
+use crate::store::{
+    MAX_ALIAS_DEPTH, NamedPolicy, Policy, Principal, PrincipalStore, RID_FIRST_USER,
+};
 
 /// Map a wire name to a `user@REALM` store id.
 ///
@@ -40,6 +42,29 @@ pub fn lookup_principal_id(name: &PrincipalName, realm: &str) -> String {
         return krb5_types::unparse_name(std::slice::from_ref(&raw), realm);
     }
     name.unparse_with_realm(realm)
+}
+
+/// `krb5_db_get_principal` (`kdb5.c:800-840`): follow alias stubs up to
+/// [`MAX_ALIAS_DEPTH`] hops and return the canonical id, `None` past the
+/// depth, on a missing hop or an unparsable target.
+pub fn resolve_alias_id<'a>(
+    realm: &str,
+    lookup: impl Fn(&str) -> Option<&'a Principal>,
+    id: &str,
+) -> Option<String> {
+    let mut id = id.to_owned();
+    let mut p = lookup(&id)?;
+    let mut depth = 0usize;
+    while let Some(target) = p.alias_target() {
+        depth += 1;
+        if depth > MAX_ALIAS_DEPTH {
+            return None;
+        }
+        let (name, target_realm) = krb5_types::principal_from_unparsed(&target, realm).ok()?;
+        id = lookup_principal_id(&name, &target_realm);
+        p = lookup(&id)?;
+    }
+    Some(id)
 }
 
 /// Process-local KDC state (replay + PKINIT CA). Not dump/persist rows.
@@ -353,7 +378,8 @@ impl PrincipalRead for MemoryStore {
     }
     fn fetch(&self, id: &str) -> Result<Option<Principal>, Error> {
         self.lookups.fetch_add(1, Ordering::SeqCst);
-        Ok(self.map.get(id).cloned())
+        let id = resolve_alias_id(&self.realm, |k| self.map.get(k), id);
+        Ok(id.and_then(|id| self.map.get(&id).cloned()))
     }
     fn krbtgt_keys(&self) -> Result<Vec<ProtocolKey>, Error> {
         let mut out = Vec::new();

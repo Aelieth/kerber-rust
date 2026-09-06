@@ -62,6 +62,21 @@ A TGS-REQ whose `body.realm` is not a realm this KDC serves is 60
 multi-realm MIT KDC may answer 68 `WRONG_REALM` from `dispatch.c`).
 Destination RENEW/VALIDATE is not exempt.
 
+Principal aliases resolve like `krb5_db_get_principal` (`kdb5.c:800-840`):
+an alias stub is a keyless `DISALLOW_ALL_TIX` entry whose only content is
+`KRB5_TL_ALIAS_TARGET`, followed up to `MAX_ALIAS_DEPTH` (10) hops to the
+canonical entry; a longer or self-referential chain is `NOENTRY`. Every
+`krb5_db_get_principal` caller resolves (AS/TGS lookup, kadm5 modify/cpw/
+delete-through-alias), so an alias is a live name for its target; kadmin's
+`getprinc` prints the target's record. The AS keeps the requested name in the
+ticket unless CANONICALIZE is set (`do_as_req.c:681-687`), and the AS-REP
+carries PA-ETYPE-INFO2 with the *canonical* client's salt
+(`_make_etype_info_entry`), so `kinit` under an alias derives the target key.
+`create_alias` needs unrestricted ADD on the alias and MODIFY on the target
+(`acl_addalias`); the target need not exist and a dangling alias is
+overwritable (MIT emergent behavior); `renprinc` of an alias is
+`KRB5_KDB_ALIAS_UNSUPPORTED`.
+
 A cross-realm TGT whose client realm is this KDC (`check_tgs_lineage`)
 is 12 `INVALID LINEAGE` even when `reject_bad_transit = false`.
 S4U2Self is exempt (MIT `tgs_policy.c`). S4U2Self server match is by

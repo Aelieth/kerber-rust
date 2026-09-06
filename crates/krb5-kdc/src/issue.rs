@@ -11,9 +11,10 @@ use krb5_protocol::{ReplayCache, ReplayKey};
 use krb5_types::pac::{PacIdentity, parse_kerb_validation_info};
 use krb5_types::{
     AsRep, AsReq, Checksum, EncKdcRepPart, EncTgsRepPart, EncTicketPart, EncryptedData,
-    EncryptionKey, EtypeInfo2, EtypeInfo2Entry, KdcReqBody, KerberosTime, KrbError, LastReqValue,
-    MethodData, Microseconds, OctetString, PaData, PaEncTsEnc, PrincipalName, TgsRep, TgsReq,
-    Ticket, TicketFlags, TransitedEncoding, err, flag_bit, ku, pa,
+    EncryptionKey, EtypeInfo, EtypeInfo2, EtypeInfo2Entry, EtypeInfoEntry, KdcReqBody,
+    KerberosString, KerberosTime, KrbError, LastReqValue, MethodData, Microseconds, OctetString,
+    PaData, PaEncTsEnc, PrincipalName, TgsRep, TgsReq, Ticket, TicketFlags, TransitedEncoding, err,
+    flag_bit, ku, pa,
 };
 
 use crate::ad::{
@@ -367,6 +368,7 @@ fn issue_as_body(
     let mut as_rep_key = ckey.key.clone();
     let mut skip_timestamp = false;
     let mut hw_preauth = false;
+    let mut reply_key_replaced = false;
     let as_req_der = match raw {
         Some(r) => r.to_vec(),
         None => encode(req)?,
@@ -386,6 +388,7 @@ fn issue_as_body(
             extra_padata.push(pa);
             skip_timestamp = true;
             hw_preauth = true;
+            reply_key_replaced = true;
         }
         Some(PreauthAction::Challenge(e_data)) => {
             // do_as_req.c:439-442,809: status PREAUTH_FAILED even for 91.
@@ -399,6 +402,7 @@ fn issue_as_body(
         Some(PreauthAction::SpakeDone(k)) => {
             as_rep_key = k;
             skip_timestamp = true;
+            reply_key_replaced = true;
         }
         Some(PreauthAction::EncTsOk) => {
             skip_timestamp = true;
@@ -524,6 +528,12 @@ fn issue_as_body(
     );
     let mut reply_key = as_rep_key.clone();
     let mut outer_padata = extra_padata;
+    // return_padata add_etype_info/add_pw_salt (kdc_preauth.c:769-829,1487-1495):
+    // key-info follows the reply key unless a module replaced it. RFC 4120
+    // 5.2.7.5 forbids describing a replaced reply key.
+    if !reply_key_replaced {
+        outer_padata.extend(as_rep_key_info(&client, ckey, &body.etype));
+    }
     if let Some(f) = fast {
         let sk = random_key(etype)?;
         reply_key = krb_fx_cf2(&sk, &as_rep_key, b"strengthenkey", b"replykey")?;
@@ -1290,6 +1300,54 @@ fn encryption_key(key: &ProtocolKey) -> EncryptionKey {
         keytype: key.etype().to_iana(),
         keyvalue: OctetString::from(key.as_bytes().to_vec()),
     }
+}
+
+/// `enctype_requires_etype_info_2` (`kdc_util.c:1663-1674`): every valid
+/// enctype except des3-cbc-sha1/raw and rc4-hmac/exp.
+fn enctype_requires_etype_info_2(etype: i32) -> bool {
+    matches!(
+        EncryptionType::known(etype),
+        Ok(e) if !matches!(e, EncryptionType::Des3CbcSha1 | EncryptionType::Rc4Hmac)
+    )
+}
+
+/// AS-REP key-info like `add_etype_info`/`add_pw_salt` (`kdc_preauth.c:769-829`):
+/// PA-ETYPE-INFO2 for every client, PA-ETYPE-INFO + PW-SALT added when the
+/// request carries only legacy (des3/rc4) enctypes. The single entry's salt is
+/// the canonical client's (`_make_etype_info_entry` uses `client->princ`), so a
+/// `kinit` under an alias derives the target's key.
+fn as_rep_key_info(client: &Principal, ckey: &KeyEntry, requested: &[i32]) -> Vec<PaData> {
+    let mut out = Vec::new();
+    let salt = KerberosString::try_from(String::from_utf8_lossy(&client.salt).as_ref()).ok();
+    let etype = ckey.etype.to_iana();
+    if !requested.iter().copied().any(enctype_requires_etype_info_2) {
+        let info: EtypeInfo = vec![EtypeInfoEntry {
+            etype,
+            salt: salt.as_ref().map(|s| s.as_bytes().to_vec().into()),
+        }];
+        if let Ok(der) = encode(&info) {
+            out.push(PaData {
+                padata_type: pa::ETYPE_INFO,
+                padata_value: der.into(),
+            });
+        }
+        out.push(PaData {
+            padata_type: pa::PW_SALT,
+            padata_value: client.salt.clone().into(),
+        });
+    }
+    let info2: EtypeInfo2 = vec![EtypeInfo2Entry {
+        etype,
+        salt,
+        s2kparams: None,
+    }];
+    if let Ok(der) = encode(&info2) {
+        out.push(PaData {
+            padata_type: pa::ETYPE_INFO2,
+            padata_value: der.into(),
+        });
+    }
+    out
 }
 
 fn supported_enctypes_pa(princ: &Principal) -> PaData {
