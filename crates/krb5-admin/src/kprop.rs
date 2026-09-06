@@ -159,8 +159,8 @@ fn verify_safe_user_data(
     session: &ProtocolKey,
     raw: &[u8],
 ) -> Result<(Vec<u8>, Option<u32>), Error> {
-    let msg: krb5_types::KrbSafe = decode(raw).map_err(|e| Error::Inner(e.to_string()))?;
-    verify_krb_safe_checksum(session, &msg).map_err(|e| Error::Inner(e.to_string()))?;
+    let msg = verify_krb_safe_checksum(session, raw, None, None)
+        .map_err(|e| Error::Inner(e.to_string()))?;
     Ok((msg.safe_body.user_data.to_vec(), msg.safe_body.seq_number))
 }
 

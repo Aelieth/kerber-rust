@@ -35,9 +35,9 @@ Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after W1-J L2a PAC received bytes):
+Counts (after W1-J L2b KRB-SAFE received body):
 **284** = A1 116 + A2 68 + A3 55 + A4 45.
-exact 92 · stricter-documented 12 · deviation 98 ·
+exact 93 · stricter-documented 12 · deviation 97 ·
 absent 67 · deferred 15.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
@@ -431,7 +431,7 @@ checksum/rc4/declared-cksumtype rows that sat under A3.
 | crypto_int.h:596-608; krb5_c_verify_checksum | declared cksumtype `ctp` selects the verifier | n/a | krb5-crypto/ops.rs verify_checksum_type | declared type used | exact | `verify_checksum_type_honours_declared_unkeyed`; `verify_checksum_type_md5_hmac_rc4_uses_raw_key` |
 | rd_req_dec.c:748-749 | AP-REQ authenticator checksum keyed with the ticket session key; GSS acceptor supplies empty `app_cksum` so a non-0x8003 type is verified over empty data | n/a | krb5-protocol/ap_req.rs verify_inner | session key; 0x8003 skipped | exact | `accept_non_8003_over_data_is_bad_sig`; `accept_non_8003_empty_with_subkey_uses_session_key` |
 | accept_sec_context.c:464-618 | `process_checksum`: missing cksum → flags 0 and no AP-REP; non-0x8003 REPLAY\|SEQUENCE\|MUTUAL from AP options; 0x8003 `cb_len != 16` failure; all-zero token CB accepted; mismatch channel bindings; `INITIATOR_FLAGS`; `GSS_C_CHANNEL_BOUND`; `option_id == 1`; skip unknown extensions; CBT authdata | n/a | krb5-gss/lib.rs process_checksum | `gss failure`; `gss channel bindings`; CHANNEL_BOUND 0x0800 | exact | `accept_no_checksum_is_flags_zero_and_no_ap_rep`; `accept_zero_token_cb_with_acceptor_cb_is_ok`; `scripts/gss-gate.sh` no-checksum / CB / mismatch cells both legs |
-| rd_safe.c:43-125 | KRB-SAFE checksum over the received body DER (`krb5_safe_with_body`) | n/a | krb5-protocol/safe_priv.rs unwrap_krb_safe_ex; krb5-protocol/safe_priv.rs verify_krb_safe_checksum | re-encodes a clone with a zeroed checksum (L2b) | deviation | W1-J L2b |
+| rd_safe.c:43-125 | KRB-SAFE checksum over the received body DER (`krb5_safe_with_body`); APPLICATION 20 is required; `k5_privsafe_check_addrs` before checksum; dummy then RFC 1510 body | n/a | krb5-protocol/safe_priv.rs unwrap_krb_safe_ex; krb5-protocol/safe_priv.rs verify_krb_safe_checksum; krb5-protocol/safe_priv.rs check_privsafe_addrs | dummy then body; 40 `MSG_TYPE` / 38 `BADADDR` / 15 `SUMTYPE_NOSUPP` / 50 `INAPP_CKSUM` / 41 `MODIFIED` | exact | `accept_noncanonical_seq_integer_body`; `reject_non_safe_application_tag_is_msg_type_40`; `scripts/rd-safe-oracle-gate.sh` `SAFE_NONCANON_BODY_OK`; `scripts/kprop-gate.sh` `SUCCEEDED` both legs |
 | unwrap.c:191-240,272-371 | GSS wrap unwrap: direction, filler, EC strip, `verify_enc_header` (RRC not compared) | n/a | krb5-gss/lib.rs unwrap_v3 | direction Integrity; filler/EC Truncated; EC stripped | exact | `unwrap_conf_ec_padding_is_stripped`; `unwrap_direction_flipped_is_bad_sig`; `scripts/gss-gate.sh` DCE + mutation cells both legs |
 | pac.c:478-579 | `verify_pac_checksums` over the received PAC; zero server+privsvr in a copy; privsvr over the server buffer minus the 4-byte type (RODC trailer kept); missing buffer ENOENT; server verify does not abort before privsvr | HEADER_PAC 41 `MODIFIED` / 60 `GENERIC` | krb5-kdc/ad.rs verify_pac_checksums; krb5-kdc/ad.rs verify_pac_sig; krb5-types/pac.rs received_zeroed | `HEADER_PAC` 41 `MODIFIED` / 60 `GENERIC` | exact | `accept_rodc_trailer_privsvr_covers_server_buffer_minus_type`; `accept_missing_privsvr_buffer_is_generic_60`; `accept_t_pac_saved_pac_verifies`; `accept_wrong_server_key_still_checks_privsvr` |
 | pac.c:640-673 | ticket checksum over the recoded EncTicketPart with PAC ad-data a single 0x00, then `verify_pac_checksums` with `expect_full` | HEADER_PAC | krb5-kdc/ad.rs verify_pac_signatures; krb5-kdc/ad.rs ticket_checksum_der | `HEADER_PAC` | exact | `issued_pac_self_verifies_all_four_signatures`; `accept_t_pac_saved_pac_verifies` |

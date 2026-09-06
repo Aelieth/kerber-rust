@@ -115,8 +115,7 @@ pub fn unwrap_krb_safe_ex(
     require_seq: bool,
     require_time: bool,
 ) -> Result<Vec<u8>, Error> {
-    let msg: KrbSafe = decode(raw)?;
-    verify_krb_safe_checksum(session, &msg)?;
+    let msg = verify_krb_safe_checksum(session, raw, None, None)?;
     accept_fresh(
         replay,
         "SAFE",
@@ -141,12 +140,30 @@ enum FreshPolicy {
     SeqOnly,
 }
 
-/// MIT `rd_safe.c:66-107`: known + coll-proof + keyed, dummy encoding, body fallback.
+/// MIT `rd_safe.c:43-125`: APPLICATION 20, saved body DER, addrs, dummy, body fallback.
 ///
 /// # Errors
 ///
-/// [`Error::KrbError`] 15 / 50 / 41.
-pub fn verify_krb_safe_checksum(session: &ProtocolKey, msg: &KrbSafe) -> Result<(), Error> {
+/// [`Error::KrbError`] 40 / 38 / 15 / 50 / 41.
+pub fn verify_krb_safe_checksum(
+    session: &ProtocolKey,
+    raw: &[u8],
+    remote: Option<&HostAddress>,
+    local: Option<&HostAddress>,
+) -> Result<KrbSafe, Error> {
+    if !is_krb_safe(raw) {
+        return Err(Error::KrbError {
+            code: err::MSG_TYPE,
+            text: Some("Invalid message type".into()),
+        });
+    }
+    let (msg, body_der) = decode_safe_with_body(raw)?;
+    if msg.msg_type != KrbSafe::MSG_TYPE {
+        return Err(Error::KrbError {
+            code: err::MSG_TYPE,
+            text: Some("Invalid message type".into()),
+        });
+    }
     let ctype = msg.cksum.cksumtype;
     if !cksumtype_is_known(ctype) {
         return Err(Error::KrbError {
@@ -160,27 +177,165 @@ pub fn verify_krb_safe_checksum(session: &ProtocolKey, msg: &KrbSafe) -> Result<
             text: Some("inapp checksum".into()),
         });
     }
+    check_privsafe_addrs(
+        &msg.safe_body.s_address,
+        msg.safe_body.r_address.as_ref(),
+        remote,
+        local,
+    )?;
     let usage = KeyUsage::new(ku::KRB_SAFE_CKSUM)?;
     let mac = msg.cksum.checksum.as_ref();
-    let dummy = {
-        let mut d = msg.clone();
-        d.cksum = Checksum {
-            cksumtype: 0,
-            checksum: Vec::new().into(),
-        };
-        encode(&d)?
-    };
+    let dummy = encode_safe_with_body(msg.pvno, msg.msg_type, &body_der, &zero_safe_cksum())?;
     if verify_checksum_type(session, usage, &dummy, ctype, mac).is_ok() {
-        return Ok(());
+        return Ok(msg);
     }
-    let body = encode(&msg.safe_body)?;
-    if verify_checksum_type(session, usage, &body, ctype, mac).is_ok() {
-        return Ok(());
+    if verify_checksum_type(session, usage, &body_der, ctype, mac).is_ok() {
+        return Ok(msg);
     }
     Err(Error::KrbError {
         code: err::MODIFIED,
         text: Some("safe checksum".into()),
     })
+}
+
+/// MIT `k5_privsafe_check_addrs` (`privsafe.c:312-382`).
+///
+/// # Errors
+///
+/// [`Error::KrbError`] 38 when a supplied comparison address does not match.
+pub fn check_privsafe_addrs(
+    msg_s: &HostAddress,
+    msg_r: Option<&HostAddress>,
+    remote: Option<&HostAddress>,
+    local: Option<&HostAddress>,
+) -> Result<(), Error> {
+    if let Some(want) = remote
+        && want != msg_s
+    {
+        return Err(Error::KrbError {
+            code: err::BADADDR,
+            text: Some("Incorrect net address".into()),
+        });
+    }
+    let Some(got_r) = msg_r else {
+        return Ok(());
+    };
+    if let Some(want) = local
+        && want != got_r
+    {
+        return Err(Error::KrbError {
+            code: err::BADADDR,
+            text: Some("Incorrect net address".into()),
+        });
+    }
+    Ok(())
+}
+
+fn is_krb_safe(raw: &[u8]) -> bool {
+    raw.first().is_some_and(|b| b & !0x20 == 0x54)
+}
+
+fn zero_safe_cksum() -> Checksum {
+    Checksum {
+        cksumtype: 0,
+        checksum: Vec::new().into(),
+    }
+}
+
+fn decode_safe_with_body(raw: &[u8]) -> Result<(KrbSafe, Vec<u8>), Error> {
+    let msg: KrbSafe = decode(raw)?;
+    let body = safe_body_der(raw).ok_or_else(|| Error::Asn1("KRB-SAFE-BODY".into()))?;
+    Ok((msg, body))
+}
+
+fn safe_body_der(raw: &[u8]) -> Option<Vec<u8>> {
+    let (_, app) = der_take(raw)?;
+    let (_, seq) = der_take(app)?;
+    let mut rest = seq;
+    while !rest.is_empty() {
+        let (tag, inner, next) = der_take_rest(rest)?;
+        if tag & 0x1f == 2 {
+            return Some(inner.to_vec());
+        }
+        rest = next;
+    }
+    None
+}
+
+fn encode_safe_with_body(
+    pvno: i32,
+    msg_type: i32,
+    body: &[u8],
+    cksum: &Checksum,
+) -> Result<Vec<u8>, Error> {
+    let cksum_der = encode(cksum)?;
+    let mut seq = Vec::new();
+    seq.extend(ctx_explicit(0, &der_i32(pvno)));
+    seq.extend(ctx_explicit(1, &der_i32(msg_type)));
+    seq.extend(ctx_explicit(2, body));
+    seq.extend(ctx_explicit(3, &cksum_der));
+    Ok(tlv(0x74, &tlv(0x30, &seq)))
+}
+
+fn ctx_explicit(n: u8, inner: &[u8]) -> Vec<u8> {
+    tlv(0xa0 | n, inner)
+}
+
+fn der_i32(v: i32) -> Vec<u8> {
+    let mut b = v.to_be_bytes().to_vec();
+    while b.len() > 1 && ((b[0] == 0 && b[1] < 0x80) || (b[0] == 0xff && b[1] >= 0x80)) {
+        b.remove(0);
+    }
+    tlv(0x02, &b)
+}
+
+fn tlv(tag: u8, content: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(2 + content.len());
+    out.push(tag);
+    out.extend(der_len(content.len()));
+    out.extend_from_slice(content);
+    out
+}
+
+fn der_len(n: usize) -> Vec<u8> {
+    if n < 0x80 {
+        return vec![n as u8];
+    }
+    let b = n.to_be_bytes();
+    let start = b.iter().position(|x| *x != 0).unwrap_or(b.len() - 1);
+    let raw = &b[start..];
+    let mut out = vec![0x80 | raw.len() as u8];
+    out.extend_from_slice(raw);
+    out
+}
+
+fn der_take(input: &[u8]) -> Option<(u8, &[u8])> {
+    let (tag, inner, _) = der_take_rest(input)?;
+    Some((tag, inner))
+}
+
+fn der_take_rest(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
+    let tag = *input.first()?;
+    let (ln, hdr) = der_len_at(input, 1)?;
+    let start = 1 + hdr;
+    let end = start.checked_add(ln)?;
+    Some((tag, input.get(start..end)?, input.get(end..)?))
+}
+
+fn der_len_at(data: &[u8], off: usize) -> Option<(usize, usize)> {
+    let b = *data.get(off)?;
+    if b < 0x80 {
+        return Some((b as usize, 1));
+    }
+    let nbytes = (b & 0x7f) as usize;
+    if nbytes == 0 || nbytes > 4 || off + 1 + nbytes > data.len() {
+        return None;
+    }
+    let mut n = 0usize;
+    for i in 0..nbytes {
+        n = (n << 8) | usize::from(*data.get(off + 1 + i)?);
+    }
+    Some((n, 1 + nbytes))
 }
 
 fn fresh_policy(require_seq: bool, require_time: bool) -> FreshPolicy {
@@ -482,7 +637,7 @@ mod tests {
         let key = session();
         let mut msg = build_krb_safe(&key, b"body").unwrap();
         msg.cksum.cksumtype = 7;
-        match verify_krb_safe_checksum(&key, &msg) {
+        match verify_krb_safe_checksum(&key, &encode(&msg).unwrap(), None, None) {
             Err(Error::KrbError { code, .. }) => assert_eq!(code, err::INAPP_CKSUM),
             other => panic!("unkeyed SAFE must be 50, got {other:?}"),
         }
@@ -493,7 +648,7 @@ mod tests {
         let key = session();
         let mut msg = build_krb_safe(&key, b"body").unwrap();
         msg.cksum.cksumtype = 1;
-        match verify_krb_safe_checksum(&key, &msg) {
+        match verify_krb_safe_checksum(&key, &encode(&msg).unwrap(), None, None) {
             Err(Error::KrbError { code, .. }) => assert_eq!(code, err::SUMTYPE_NOSUPP),
             other => panic!("unknown SAFE type must be 15, got {other:?}"),
         }
@@ -506,9 +661,82 @@ mod tests {
         let mut mac = msg.cksum.checksum.to_vec();
         mac[0] ^= 0xff;
         msg.cksum.checksum = mac.into();
-        match verify_krb_safe_checksum(&key, &msg) {
+        match verify_krb_safe_checksum(&key, &encode(&msg).unwrap(), None, None) {
             Err(Error::KrbError { code, .. }) => assert_eq!(code, err::MODIFIED),
             other => panic!("bad SAFE MAC must be 41, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn safe_dummy_with_saved_body_matches_rasn_zero_cksum() {
+        let key = session();
+        let msg = build_krb_safe(&key, b"dummy-eq").unwrap();
+        let raw = encode(&msg).unwrap();
+        let (decoded, body) = decode_safe_with_body(&raw).unwrap();
+        let mut rasn_dummy = decoded.clone();
+        rasn_dummy.cksum = zero_safe_cksum();
+        let rasn_der = encode(&rasn_dummy).unwrap();
+        let swb = encode_safe_with_body(decoded.pvno, decoded.msg_type, &body, &zero_safe_cksum())
+            .unwrap();
+        assert_eq!(rasn_der, swb);
+    }
+
+    fn v4(a: u8, b: u8, c: u8, d: u8) -> HostAddress {
+        HostAddress {
+            addr_type: 2,
+            address: OctetString::from(vec![a, b, c, d]),
+        }
+    }
+
+    fn code_of(e: Error) -> i32 {
+        match e {
+            Error::KrbError { code, .. } => code,
+            other => panic!("expected KrbError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reject_non_safe_application_tag_is_msg_type_40() {
+        let key = session();
+        let raw = encode(&build_krb_safe(&key, b"tag").unwrap()).unwrap();
+        for tag in [0x6e_u8, 0x75] {
+            let mut bad = raw.clone();
+            bad[0] = tag;
+            assert_eq!(
+                code_of(verify_krb_safe_checksum(&key, &bad, None, None).unwrap_err()),
+                err::MSG_TYPE
+            );
+        }
+    }
+
+    #[test]
+    fn check_privsafe_addrs_sender_mismatch_is_badaddr() {
+        let local = v4(127, 0, 0, 1);
+        let other = v4(10, 0, 0, 1);
+        check_privsafe_addrs(&local, None, Some(&local), None).unwrap();
+        assert_eq!(
+            code_of(check_privsafe_addrs(&local, None, Some(&other), None).unwrap_err()),
+            err::BADADDR
+        );
+    }
+
+    #[test]
+    fn check_privsafe_addrs_receiver_mismatch_is_badaddr() {
+        let local = v4(127, 0, 0, 1);
+        let other = v4(10, 0, 0, 1);
+        check_privsafe_addrs(&local, Some(&local), None, Some(&local)).unwrap();
+        assert_eq!(
+            code_of(check_privsafe_addrs(&local, Some(&local), None, Some(&other)).unwrap_err()),
+            err::BADADDR
+        );
+    }
+
+    #[test]
+    fn accept_seq_number_at_least_2_31() {
+        let key = session();
+        let msg = build_krb_safe_ex(&key, b"high-seq", Some(1 << 31), true).unwrap();
+        let raw = encode(&msg).unwrap();
+        let cache = ReplayCache::new();
+        assert_eq!(unwrap_krb_safe(&key, &raw, &cache).unwrap(), b"high-seq");
     }
 }

@@ -71,8 +71,9 @@ pub use preauth::{
 pub use replay::{ReplayCache, ReplayKey};
 pub use safe_priv::{
     build_krb_cred, build_krb_priv, build_krb_priv_chained, build_krb_priv_with_seq,
-    build_krb_safe, build_krb_safe_ex, unwrap_krb_cred, unwrap_krb_priv, unwrap_krb_priv_chained,
-    unwrap_krb_priv_ex, unwrap_krb_safe, unwrap_krb_safe_ex, verify_krb_safe_checksum,
+    build_krb_safe, build_krb_safe_ex, check_privsafe_addrs, unwrap_krb_cred, unwrap_krb_priv,
+    unwrap_krb_priv_chained, unwrap_krb_priv_ex, unwrap_krb_safe, unwrap_krb_safe_ex,
+    verify_krb_safe_checksum,
 };
 pub use secret_file::{destroy_secret_file, write_secret_file};
 pub use tgs::{

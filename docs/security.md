@@ -77,8 +77,11 @@ A presented-TGT krbtgt with `DISALLOW_SVR` or `DISALLOW_ALL_TIX` is 7
 Checksums are verified by the declared `cksumtype` (`verify_checksum.c`):
 type 0 substitutes the key's mandatory type, `output_size` is
 `KRB5_BAD_MSIZE`, unkeyed/not coll-proof is 50 (`rd_safe.c:70-74`,
-`kdc_util.c:1244`). KRB-SAFE checksums the dummy (zeroed-cksum) encoding
-first, then the body. GSS wrap-without-conf requires `EC == cksumsize`;
+`kdc_util.c:1244`). KRB-SAFE checksums the dummy (zero-type/zero-length
+checksum) encoding that splices the received KRB-SAFE-BODY
+(`encode_krb5_safe_with_body`), then the saved body (RFC 1510). A
+non-APPLICATION-20 tag is 40 `MSG_TYPE`. Sender/receiver addresses are
+checked before the checksum (`privsafe.c:312-382`). GSS wrap-without-conf requires `EC == cksumsize`;
 MIC fillers are 0xFF and the header is reconstructed (`util_crypt.c:322-334`).
 A GSS authenticator checksum that is not 0x8003 is verified over empty
 data with the ticket session key (`accept_sec_context.c:494-511`,

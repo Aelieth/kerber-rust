@@ -6,6 +6,14 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-J L2b
+
+- **protocol/admin.** KRB-SAFE verify matches MIT 1.22.2 `rd_safe.c`:
+  APPLICATION 20 (`MSG_TYPE` 40), `k5_privsafe_check_addrs` before the
+  checksum, dummy encoding splices the received KRB-SAFE-BODY, then the
+  RFC 1510 body-only fallback. kprop send still checksums `encode_krb5_safe`
+  with a zero checksum (`create_krbsafe`).
+
 ### W1-J L2a
 
 - **types/kdc.** PAC `verify_pac_checksums` matches MIT 1.22.2 `pac.c`:

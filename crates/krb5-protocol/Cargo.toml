@@ -24,6 +24,10 @@ path = "tests/golden_traces.rs"
 name = "messages"
 path = "tests/messages.rs"
 
+[[test]]
+name = "safe_noncanon"
+path = "tests/safe_noncanon.rs"
+
 [dependencies]
 chrono.workspace = true
 getrandom.workspace = true
