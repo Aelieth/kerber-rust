@@ -158,20 +158,28 @@ fn method_edata(etypes: &[i32]) -> Vec<u8> {
 }
 
 #[test]
-fn etype_info2_mit_subset_of_rust_passes_superset_fails() {
-    let rust = method_edata(&[17, 18, 19, 20]);
-    let mit = method_edata(&[18]);
-    compare_preauth_e_data(Some(&rust), Some(&mit)).expect("MIT ⊆ Rust must pass");
+fn etype_info2_requires_exact_etype_set() {
+    // MIT's hint (get_preauth_hint_list) and Rust's both list one entry for
+    // the selected client key, so the etype sets must be equal.
+    let one = method_edata(&[18]);
+    compare_preauth_e_data(Some(&one), Some(&one)).expect("equal etype sets pass");
 
-    let mit_extra = method_edata(&[18, 23]);
-    let rust_chosen = method_edata(&[18]);
-    let err = compare_preauth_e_data(Some(&rust_chosen), Some(&mit_extra))
-        .expect_err("MIT etype outside the Rust set must fail");
+    // Rust listing every key (a superset) no longer passes.
+    let rust_super = method_edata(&[17, 18, 19, 20]);
+    let mit_one = method_edata(&[18]);
+    let err = compare_preauth_e_data(Some(&rust_super), Some(&mit_one))
+        .expect_err("a Rust superset must now fail");
     assert!(
         err.0.contains("ETYPE-INFO2"),
         "shipped compare must name the etype mismatch: {}",
         err.0
     );
+
+    // MIT etype outside the Rust set still fails.
+    let rust_one = method_edata(&[18]);
+    let mit_extra = method_edata(&[18, 23]);
+    compare_preauth_e_data(Some(&rust_one), Some(&mit_extra))
+        .expect_err("MIT etype outside the Rust set must fail");
 }
 
 #[test]

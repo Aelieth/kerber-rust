@@ -32,7 +32,7 @@ use crate::store::{
     KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED, KDB_DISALLOW_PROXIABLE,
     KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_NO_AUTH_DATA_REQUIRED,
     KDB_OK_AS_DELEGATE, KDB_OK_TO_AUTH_AS_DELEGATE, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH,
-    KDB_REQUIRES_PWCHANGE, KeyEntry, Principal, random_key, s2k_params,
+    KDB_REQUIRES_PWCHANGE, KeyEntry, Principal, random_key,
 };
 
 /// Issued AS-REP plus the session key (for tests that decrypt the TGT).
@@ -427,7 +427,7 @@ fn issue_as_body(
         }
     }
     if client.requires_preauth && !skip_timestamp {
-        return Err(preauth_required(store, &client));
+        return Err(preauth_required(store, &client, ckey));
     }
     if attr(&client, KDB_REQUIRES_HW_AUTH) && !hw_preauth {
         return Err(proto(err::PREAUTH_FAILED, status::NO_HW_PREAUTH));
@@ -1633,22 +1633,17 @@ fn wrap_as_fast(
     }
 }
 
-fn preauth_required(store: &dyn PrincipalRead, client: &Principal) -> Error {
+fn preauth_required(store: &dyn PrincipalRead, client: &Principal, ckey: &KeyEntry) -> Error {
     let salt =
         krb5_types::KerberosString::try_from(String::from_utf8_lossy(&client.salt).as_ref()).ok();
-    let mut info: EtypeInfo2 = Vec::new();
-    for k in &client.keys {
-        let s2kparams = if k.etype == EncryptionType::Rc4Hmac {
-            None
-        } else {
-            Some(s2k_params(k.etype).into())
-        };
-        info.push(EtypeInfo2Entry {
-            etype: k.etype.to_iana(),
-            salt: salt.clone(),
-            s2kparams,
-        });
-    }
+    // get_preauth_hint_list -> add_etype_info -> make_etype_info: one ETYPE-INFO2
+    // entry for the selected client key, salt from the canonical client, empty
+    // s2kparams (_make_etype_info_entry).
+    let info: EtypeInfo2 = vec![EtypeInfo2Entry {
+        etype: ckey.etype.to_iana(),
+        salt,
+        s2kparams: None,
+    }];
     let etype_info = PaData {
         padata_type: pa::ETYPE_INFO2,
         padata_value: encode(&info).map_or_else(|_| Vec::new().into(), Into::into),

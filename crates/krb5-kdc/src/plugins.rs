@@ -217,13 +217,13 @@ impl KdcPreauth for EncTsMod {
             Ok(e) => e,
             Err(_) => return Ok(None),
         };
-        let Ok(pa_et) = krb5_crypto::EncryptionType::known(enc.etype) else {
-            return Ok(None);
+        // enc_ts_verify (kdc_preauth_encts.c:74-116): krb5_dbe_search_enctype
+        // over the declared etype; a miss is KRB5_KDB_NO_MATCHING_KEY, remapped
+        // to KRB5KDC_ERR_PREAUTH_FAILED (24). An unknown etype matches no key.
+        let keys: Vec<_> = match krb5_crypto::EncryptionType::known(enc.etype) {
+            Ok(pa_et) => client.keys.iter().filter(|k| k.etype == pa_et).collect(),
+            Err(_) => Vec::new(),
         };
-        let keys: Vec<_> = client.keys.iter().filter(|k| k.etype == pa_et).collect();
-        if keys.is_empty() {
-            return Ok(None);
-        }
         let mut last_err = None;
         for k in keys {
             match crate::issue::verify_enc_timestamp(store, client, &k.key, blob.as_ref()) {

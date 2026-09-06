@@ -262,6 +262,56 @@ fn as_rep_outer_padata_is_etype_info2_only_like_mit() {
 }
 
 #[test]
+fn as_enc_timestamp_wrong_etype_is_preauth_failed_like_mit() {
+    // enc_ts_verify (kdc_preauth_encts.c): no client key of the declared etype
+    // is KRB5_KDB_NO_MATCHING_KEY, remapped to KDC_ERR_PREAUTH_FAILED (24), not
+    // a NEEDED_PREAUTH round trip.
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let user = store.get_name(&cname).unwrap();
+    assert!(
+        !user
+            .keys
+            .iter()
+            .any(|k| k.etype == EncryptionType::Des3CbcSha1),
+        "premise: TEST_USER has no des3 key"
+    );
+    let ed = EncryptedData {
+        etype: 16,
+        kvno: None,
+        cipher: vec![0u8; 32].into(),
+    };
+    let pa = PaData {
+        padata_type: pa::ENC_TIMESTAMP,
+        padata_value: encode(&ed).unwrap().into(),
+    };
+    let req = as_req(cname, TEST_REALM, 261, Some(vec![pa])).unwrap();
+    let e = krb5_kdc::issue_as(&store, &req).expect_err("wrong-etype timestamp");
+    assert_eq!(issue_code(e), err::PREAUTH_FAILED);
+}
+
+#[test]
+fn preauth_required_hint_lists_one_etype_info2_entry_like_mit() {
+    // get_preauth_hint_list emits a single ETYPE-INFO2 entry for the selected
+    // client key (add_etype_info -> make_etype_info), not one entry per key.
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let req = as_req(cname, TEST_REALM, 262, None).unwrap();
+    let bytes = krb5_kdc::handle_request(&store, &encode(&req).unwrap()).expect("reply");
+    let ke: KrbError = decode(&bytes).expect("KRB-ERROR");
+    assert_eq!(ke.error_code, err::PREAUTH_REQUIRED);
+    let method: MethodData =
+        decode(ke.e_data.as_ref().expect("e_data").as_ref()).expect("METHOD-DATA");
+    let info2 = method
+        .iter()
+        .find(|p| p.padata_type == pa::ETYPE_INFO2)
+        .expect("ETYPE-INFO2 hint");
+    let entries: krb5_types::EtypeInfo2 =
+        decode(info2.padata_value.as_ref()).expect("decode ETYPE-INFO2");
+    assert_eq!(entries.len(), 1, "MIT hint lists exactly one entry");
+}
+
+#[test]
 fn as_rep_enc_part_carries_no_kvno_like_mit() {
     // MIT sets reply.enc_part.kvno only after krb5_encode_kdc_rep, so the wire
     // AS-REP enc-part has no kvno (do_as_req.c:329).

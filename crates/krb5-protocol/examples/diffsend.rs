@@ -20,8 +20,8 @@ use krb5_protocol::{
     decode_enc_kdc_rep, exchange_on_tcp, pa_enc_timestamp, pa_enc_timestamp_at, tgs_req,
 };
 use krb5_types::{
-    AsRep, EncTicketPart, EncryptedData, EncryptionKey, KerberosTime, KrbError, PrincipalName,
-    TgsRep, Ticket, TicketFlags, TransitedEncoding, err, ku,
+    AsRep, EncTicketPart, EncryptedData, EncryptionKey, KerberosTime, KrbError, PaData,
+    PrincipalName, TgsRep, Ticket, TicketFlags, TransitedEncoding, err, ku, pa,
 };
 use sha1::{Digest, Sha1};
 
@@ -462,6 +462,30 @@ fn run() -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     expect_error(&cfg, "skewed-timestamp", &req, err::SKEW)?;
 
+    // PA-ENC-TIMESTAMP declaring des3 (etype 16), which pauser has no key for:
+    // enc_ts_verify krb5_dbe_search_enctype misses -> KRB5_KDB_NO_MATCHING_KEY
+    // -> KDC_ERR_PREAUTH_FAILED (24) on both legs.
+    let ed = EncryptedData {
+        etype: 16,
+        kvno: None,
+        cipher: vec![0u8; 32].into(),
+    };
+    let enc_ts_pa = PaData {
+        padata_type: pa::ENC_TIMESTAMP,
+        padata_value: encode(&ed).map_err(|e| e.to_string())?.into(),
+    };
+    let req = encode(
+        &as_req(pauser.clone(), realm, 0x1000_000e, Some(vec![enc_ts_pa]))
+            .map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    expect_error(
+        &cfg,
+        "as-optimistic-encts-wrong-etype",
+        &req,
+        err::PREAUTH_FAILED,
+    )?;
+
     let req = encode(
         &as_req_sname(
             user.clone(),
@@ -628,7 +652,7 @@ fn run() -> Result<(), String> {
         err::TKT_NYV,
     )?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":13}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":14}}"#);
     Ok(())
 }
 

@@ -168,10 +168,12 @@ pub fn compare_preauth_e_data(a: Option<&[u8]>, b: Option<&[u8]>) -> Result<(), 
             "ETYPE-INFO2 empty rust={ea:?} mit={eb:?}"
         )));
     }
-    // MIT lists the chosen etype; Rust lists every key. Require MIT ⊆ Rust.
-    if eb.iter().any(|e| !ea.contains(e)) {
+    // get_preauth_hint_list emits one ETYPE-INFO2 entry for the selected
+    // client key (add_etype_info → make_etype_info); Rust matches, so the
+    // etype sets are equal.
+    if ea != eb {
         return Err(DiffError(format!(
-            "ETYPE-INFO2 mit not subset of rust rust={ea:?} mit={eb:?}"
+            "ETYPE-INFO2 etype set rust={ea:?} mit={eb:?}"
         )));
     }
     Ok(())

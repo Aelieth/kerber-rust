@@ -18,6 +18,15 @@ this project uses semantic versioning once a crate is published.
   removed. The `mit-as-padata` differential whitelist and its padata filtering
   are removed, so `scripts/differential-gate.sh` `as-success`/`tgs-success`
   compare the full outer padata-type set on both legs (`whitelist:[]`).
+- **kdc.** A PA-ENC-TIMESTAMP whose declared enctype the client has no key for
+  is now `KDC_ERR_PREAUTH_FAILED` (24), matching MIT `enc_ts_verify`
+  (`kdc_preauth_encts.c:74-116`, `KRB5_KDB_NO_MATCHING_KEY` remapped to 24);
+  Rust had returned NEEDED_PREAUTH (25). The NEEDED_PREAUTH hint now lists a
+  single ETYPE-INFO2 entry for the selected client key like MIT
+  `get_preauth_hint_list` (`kdc_preauth.c:1003`), so the differential oracle
+  `compare_preauth_e_data` compares the etype set exactly (the `MIT ⊆ Rust`
+  leniency is removed). `scripts/differential-gate.sh` gains the
+  `as-optimistic-encts-wrong-etype` case (24 on both legs).
 
 
 ### W1-J L3a (enc-pa-rep flag)
