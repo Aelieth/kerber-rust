@@ -223,7 +223,12 @@ fn tgs_reply(
     req: &TgsReq,
     raw: &[u8],
 ) -> Result<(Vec<u8>, Option<String>), Error> {
-    let body = Some(&req.0.req_body);
+    // MIT prepare_error_tgs (do_tgs_req.c:201-204): errpkt.client is the header
+    // ticket's client when it decrypts, else NULL. The TGS-REQ body carries no
+    // cname, so derive it for the error.
+    let mut ebody = req.0.req_body.clone();
+    ebody.cname = tgs_header_client(store, req);
+    let body = Some(&ebody);
     match issue_tgs_from(store, req, Some(raw)) {
         Ok(issued) => Ok((encode(&issued.rep)?, None)),
         Err(Error::Protocol {
@@ -1413,6 +1418,19 @@ fn extract_pa_tgs(padata: Option<&[PaData]>) -> Option<&OctetString> {
             None
         }
     })
+}
+
+/// Header-ticket client for a TGS KRB-ERROR (`prepare_error_tgs`
+/// `errpkt.client`): the presented ticket's client when it decrypts, else
+/// `None` (MIT's `NULL`).
+fn tgs_header_client(store: &dyn PrincipalRead, req: &TgsReq) -> Option<PrincipalName> {
+    let pa_tgs = extract_pa_tgs(req.0.padata.as_deref())?;
+    let ap: krb5_types::ApReq = decode(pa_tgs.as_ref()).ok()?;
+    let etype = EncryptionType::from_iana(ap.ticket.enc_part.etype)
+        .or_else(|_| EncryptionType::known(ap.ticket.enc_part.etype))
+        .ok()?;
+    let (enc_tkt, _, _) = decrypt_presented_tgt(store, &ap, etype).ok()?;
+    Some(enc_tkt.cname)
 }
 
 fn verify_encrypted_challenge(

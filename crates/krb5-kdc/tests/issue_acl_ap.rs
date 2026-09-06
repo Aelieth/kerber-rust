@@ -712,6 +712,43 @@ fn tgs_bad_checksum_is_error() {
 }
 
 #[test]
+fn tgs_error_echoes_the_header_ticket_client_like_prepare_error_tgs() {
+    // MIT prepare_error_tgs (do_tgs_req.c:201-204) sets errpkt.client to the
+    // decrypted header ticket's client, so a TGS KRB-ERROR carries the TGT
+    // client's cname even though the TGS-REQ body has none.
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = client_key();
+    let req = as_req(
+        cname.clone(),
+        TEST_REALM,
+        8,
+        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
+    )
+    .unwrap();
+    let as_out = krb5_kdc::issue_as(&store, &req).expect("AS");
+    let mut tgs = tgs_req(
+        as_out.rep.0.ticket.clone(),
+        &as_out.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        9,
+    )
+    .expect("tgs");
+    tgs.0.req_body.nonce = 99; // corrupt so the TGS errors after the TGT decrypts
+    let bytes = krb5_kdc::handle_request(&store, &encode(&tgs).expect("der")).expect("reply");
+    let e: krb5_types::KrbError = decode(&bytes).expect("KRB-ERROR");
+    assert_eq!(e.error_code, err::BAD_INTEGRITY);
+    assert_eq!(
+        e.cname.as_ref(),
+        Some(&cname),
+        "cname is the header ticket client"
+    );
+}
+
+#[test]
 fn hostile_keytab_does_not_panic() {
     use std::panic::catch_unwind;
     let min_hole = {

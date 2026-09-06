@@ -36,8 +36,8 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
 Counts (after W1-J L3a enc-pa-rep ticket flag):
-**306** = A1 117 + A2 73 + A3 58 + A4 58.
-exact 116 · stricter-documented 12 · deviation 96 ·
+**307** = A1 117 + A2 74 + A3 58 + A4 58.
+exact 117 · stricter-documented 12 · deviation 96 ·
 absent 64 · deferred 18.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
@@ -312,7 +312,8 @@ Wire = RFC 4120 protocol code (MIT `errcode_to_protocol`).
 | do_as_req.c:736-741 | `select_client_key` decrypt fail | `DECRYPT_CLIENT_KEY` + decrypt err | keys already in store; no runtime decrypt | — | deferred | none (dump-time decrypt only) |
 | do_as_req.c:747-751 | `kdc_fast_read_cookie` | `READ_COOKIE` | `krb5-kdc/preauth.rs armor_key_from_ap` SPAKE/FAST cookie | `bad cookie` **24**; MIT `fast_util.c:610` **always returns 0** (status dead in 1.22.2) | absent | proposed: diffsend `as-mit1-cookie` |
 | do_as_req.c:439-442 | `check_padata` fail | `PREAUTH_FAILED` **24** (vague→**60**) | `as_reply` crypto→**24** `preauth`; EncTs/SPAKE/PKINIT own texts | not the string `PREAUTH_FAILED` | deviation | proposed: diffsend `as-bad-enc-ts-etext`; `issue_acl_ap.rs` wrong-password **24** |
-| do_as_req.c:806-808 | `prepare_error_as` sets `errpkt.client = request->client`, so the AS KRB-ERROR echoes the requested `crealm`/`cname` | no status (reply fields) | issue.rs encode_krb_error `crealm`/`cname` from the request body | AS crealm/cname echoed; TGS header-ticket client + FAST client-hiding deferred | exact | `as_error_echoes_the_requested_client_like_prepare_error_as`; `differential-gate.sh` AS error cases compare `crealm`/`cname` on both legs (`expect_error` `check_client`) |
+| do_as_req.c:806-808 | `prepare_error_as` sets `errpkt.client = request->client`, so the AS KRB-ERROR echoes the requested `crealm`/`cname` | no status (reply fields) | issue.rs encode_krb_error `crealm`/`cname` from the request body | AS crealm/cname echoed; FAST client-hiding deferred | exact | `as_error_echoes_the_requested_client_like_prepare_error_as`; `differential-gate.sh` AS error cases compare `crealm`/`cname` on both legs (`expect_error` `check_client`) |
+| do_tgs_req.c:201-204 | `prepare_error_tgs` sets `errpkt.client` to the decrypted header ticket's client, else `NULL` | no status (reply fields) | issue.rs tgs_reply `tgs_header_client` sets the error body cname | TGS errors echo the TGT client; a service ticket the KDC rejects before decrypt has none (`tgs-not-a-tgt`) | exact | `tgs_error_echoes_the_header_ticket_client_like_prepare_error_tgs`; `differential-gate.sh` `tgt-expired`/`tgt-nyv` compare `crealm`/`cname` on both legs |
 | kdc_preauth.c:743-749; do_as_req.c:455-457 | missing PRE_AUTH / HW_AUTH after padata | `NEEDED_PREAUTH` **25** / `NEEDED_HW_PREAUTH` **25** | krb5-kdc/issue.rs as_reply (wire `NEEDED_PREAUTH` since J3); HW still `NO HW PREAUTH` **24** | `NEEDED_PREAUTH` **25** on the wire; HW **24** vs MIT **25** | deviation | `issue_acl_ap.rs::as_hw_auth_required_rejects_enc_ts`; `scripts/flags-gate.sh` |
 | tgs_policy.c:174-177 | TGS server REQUIRES_HW_AUTH && !HW_AUTHENT | `NO HW PREAUTH` **60** | `issue.rs issue_as_body` | `NO HW PREAUTH` **60** | exact | `issue_acl_ap.rs::tgs_requires_hw_auth_without_hw_flag` |
 | do_as_req.c:218-221 | `check_kdcpolicy_as` plugin | plugin `*status` | `plugins.rs run_as_preauth` `DefaultPolicy::check_as` Ok; `issue.rs issue_as_from` **before** preauth | `kdcpolicy` **12** only if DenyPolicy | absent | proposed: diffsend `as-kdcpolicy-plugin` |

@@ -80,9 +80,9 @@ fn expect_error(cfg: &Cfg, case: &str, req: &[u8], code: i32) -> Result<(), Stri
     expect_error_client(cfg, case, req, code, true)
 }
 
-// AS errors echo the requested client (prepare_error_as); TGS errors use the
-// header ticket's client, which the diffsend request does not carry — so TGS
-// error cases pass check_client=false.
+// AS errors echo the requested client (prepare_error_as); a TGS error uses the
+// decrypted header ticket's client. tgs-not-a-tgt presents a service ticket the
+// Rust KDC rejects before decrypt (no client), so it passes check_client=false.
 fn expect_error_client(
     cfg: &Cfg,
     case: &str,
@@ -650,7 +650,7 @@ fn run() -> Result<(), String> {
         "tgt-expired",
         &encode(&tgs_exp).map_err(|e| e.to_string())?,
         err::TKT_EXPIRED,
-        false,
+        true,
     )?;
 
     let nyv = mint_tgt(
@@ -673,7 +673,7 @@ fn run() -> Result<(), String> {
         "tgt-nyv",
         &encode(&tgs_nyv).map_err(|e| e.to_string())?,
         err::TKT_NYV,
-        false,
+        true,
     )?;
 
     println!(r#"{{"event":"diffsend","outcome":"ok","cases":14}}"#);

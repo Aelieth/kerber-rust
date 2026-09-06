@@ -12,7 +12,12 @@ this project uses semantic versioning once a crate is published.
   MIT `prepare_error_as` (`do_as_req.c:806-808`, `errpkt.client =
   request->client`); Rust had left both `None`. `scripts/differential-gate.sh`
   compares `crealm`/`cname` on every AS error case (`expect_error`'s
-  `check_client`). The TGS header-ticket client, FAST client-hiding, and the
+  `check_client`).
+- **kdc.** A TGS KRB-ERROR now echoes the decrypted header ticket's client like
+  MIT `prepare_error_tgs` (`do_tgs_req.c:201-204`); `tgs_reply` derives it with
+  `tgs_header_client` and the gate compares `crealm`/`cname` on `tgt-expired`
+  and `tgt-nyv`. A service ticket the KDC rejects before decrypt (`tgs-not-a-tgt`,
+  which needs a fuller `kdc_get_server_key`), FAST client-hiding, and the
   `errcode_to_protocol` code-table adjustments remain for the rest of L5a-2.
 
 ### W1-J L3b (client FAST negotiation)
