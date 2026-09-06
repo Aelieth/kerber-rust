@@ -33,13 +33,15 @@ fn take(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
 fn tlv(tag: u8, content: &[u8]) -> Vec<u8> {
     let n = content.len();
     let mut out = vec![tag];
-    if n < 0x80 {
-        out.push(n as u8);
+    if let Ok(b) = u8::try_from(n)
+        && b < 0x80
+    {
+        out.push(b);
     } else {
         let b = n.to_be_bytes();
         let start = b.iter().position(|x| *x != 0).unwrap_or(b.len() - 1);
         let raw = &b[start..];
-        out.push(0x80 | raw.len() as u8);
+        out.push(0x80 | u8::try_from(raw.len()).unwrap_or(8));
         out.extend_from_slice(raw);
     }
     out.extend_from_slice(content);

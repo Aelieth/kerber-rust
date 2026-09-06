@@ -298,13 +298,16 @@ fn tlv(tag: u8, content: &[u8]) -> Vec<u8> {
 }
 
 fn der_len(n: usize) -> Vec<u8> {
-    if n < 0x80 {
-        return vec![n as u8];
+    if let Ok(b) = u8::try_from(n)
+        && b < 0x80
+    {
+        return vec![b];
     }
     let b = n.to_be_bytes();
     let start = b.iter().position(|x| *x != 0).unwrap_or(b.len() - 1);
     let raw = &b[start..];
-    let mut out = vec![0x80 | raw.len() as u8];
+    let nlen = u8::try_from(raw.len()).unwrap_or(8);
+    let mut out = vec![0x80 | nlen];
     out.extend_from_slice(raw);
     out
 }
