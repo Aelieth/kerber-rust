@@ -37,8 +37,8 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 
 Counts (after W1-J Round 2 V4 PAC shape + first current key):
 **290** = A1 116 + A2 70 + A3 58 + A4 46.
-exact 99 · stricter-documented 12 · deviation 95 ·
-absent 68 · deferred 16.
+exact 100 · stricter-documented 12 · deviation 95 ·
+absent 67 · deferred 16.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
 A2 10 (9 report rows + the `kdc_util.c:144-191` split) + A3 10 = 28
@@ -472,4 +472,4 @@ checksum/rc4/declared-cksumtype rows that sat under A3.
 | kadm_rpc.h `CREATE_ALIAS` 27; server_stubs.c:1727-1758; svr_principal.c:2051-2087 | `create_alias_2_svc` / `kadm5_create_alias` / `acl_addalias` | proc 27 | krb5-admin/kadm5.rs EXTRACT_KEYS (last proc is 26); `ProcUnavail` | no alias TL-data, no AS resolution | absent | proposed: `scripts/kadmin-gate.sh` alias cell (W1-K M3a) |
 | svc.c:342,361; svc_auth_gssapi.c:495-497 | AUTH_GSSAPI accepted/mismatch replies carry `FLAVOR_NONE` + empty verifier (`rpc_reply_clear`); RPCSEC accepted/mismatch use `xp_verf` | AUTH_GSSAPI verf none | krb5-admin/kadm5.rs rpc_reply_clear; krb5-admin/kadm5.rs rpc_reply_accepted | AUTH_GSSAPI INIT is `FLAVOR_NONE`; RPCSEC DATA carries `xp_verf` | deviation | `auth_gssapi_on_iprop_init_is_success`; RPCSEC `rpcsec_unknown_program_data_carries_xp_verf` |
 | svc_auth_gssapi.c:326-341 | GSSAPI_INIT arg version: 1/2 → reply version 1 (compat warning); 3/4 echoed; other `AUTH_BADCRED` | AUTH_BADCRED on unknown | krb5-admin/kadm5.rs handle_auth_gssapi | `arg_ver` echoed; no v1/v2 downgrade; unknown version not `AUTH_BADCRED` | deviation | proposed: AUTH_GSSAPI init-arg version cell |
-| alt_prof.c:497-506 `supported_enctypes` (`kadm5_get_config_params` keysalts) | key generation order and salts for `kdb5_util create` / `addprinc` without `-e` follow the realm's `supported_enctypes` | n/a | krb5-kdc/store.rs password_etypes (`randkey_etypes()` default; the profile value is never read) | n/a | absent (`--test-realm` and `kdb create` mint 18,17,20,19 where the harness kdc.conf says 20,19,18,17; the cross-KDC gate uses one dump so both KDCs agree) | proposed: profile `supported_enctypes` → `store.supported_enctypes`; round-up R1 |
+| alt_prof.c:654; osconf.hin:109 `KRB5_DEFAULT_SUPPORTED_ENCTYPES` | key generation order for `kdb5_util create` follows the realm's `supported_enctypes` (compiled default `aes256-sha1-96` first) | n/a | krb5-kdc/store.rs bootstrap_with_etypes; krb5-kdc/bin/krb5-kdc.rs (profile `supported_enctypes` → key order) | n/a | exact | `scripts/sha2-gate.sh` krbtgt/host tkt `aes256-cts-hmac-sha384-192` (harness kdc.conf 20-first); `scripts/rc4-session-gate.sh`; `scripts/cross-kdc-gate.sh` |

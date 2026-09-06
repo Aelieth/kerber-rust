@@ -983,17 +983,50 @@ impl PrincipalStore {
         admin: &str,
         admin_password: &[u8],
     ) -> Result<Self, Error> {
+        Self::bootstrap_with_etypes(
+            realm,
+            user,
+            user_password,
+            admin,
+            admin_password,
+            &randkey_etypes(),
+        )
+    }
+
+    /// [`Self::bootstrap`] minting every key in `key_etypes`, in that order,
+    /// like MIT's `kdb5_util create` following the realm's `supported_enctypes`.
+    ///
+    /// # Errors
+    ///
+    /// Key generation or store insertion.
+    pub fn bootstrap_with_etypes(
+        realm: &str,
+        user: &str,
+        user_password: &[u8],
+        admin: &str,
+        admin_password: &[u8],
+        key_etypes: &[EncryptionType],
+    ) -> Result<Self, Error> {
+        let etypes = if key_etypes.is_empty() {
+            randkey_etypes().to_vec()
+        } else {
+            key_etypes.to_vec()
+        };
         let mut store = Self::new(realm);
-        store.insert_randkey(&PrincipalName::krbtgt(realm), &randkey_etypes())?;
+        store.insert_randkey(&PrincipalName::krbtgt(realm), &etypes)?;
         let tgt = PrincipalName::krbtgt(realm);
         store.apply_admin_fields(&tgt, Some(KDB_LOCKDOWN_KEYS), None, None, None, None, false)?;
-        store.insert_password(
+        store.insert_password_etypes(
             &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [user]),
+            realm,
             user_password,
+            &etypes,
         )?;
-        store.insert_password(
+        store.insert_password_etypes(
             &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [admin]),
+            realm,
             admin_password,
+            &etypes,
         )?;
         Ok(store)
     }

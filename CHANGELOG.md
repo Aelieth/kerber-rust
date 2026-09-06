@@ -20,7 +20,10 @@ this project uses semantic versioning once a crate is published.
   `scripts/cross-kdc-gate.sh`: MIT and Rust TGTs accepted by the other
   TGS on one dump, TGT enc-part etype equal on both legs. `sign_pac` takes
   a `PacTicket`. A presented TGT whose PAC has no LOGON_INFO (MIT's db2
-  minimal PAC) is accepted.
+  minimal PAC) is accepted. The `--test-realm` KDC mints keys in the
+  profile's `supported_enctypes` order (`kdb5_util create` parity,
+  `bootstrap_with_etypes`) so the first current key matches a MIT KDC
+  built from the same kdc.conf.
 
 ### W1-J Round 2 V1
 
