@@ -126,6 +126,11 @@ assert_no_error_log "$OUT"
 KLIST="$(docker exec "$NAME" klist -c /tmp/krb5cc_spake 2>/dev/null || true)"
 echo "$KLIST"
 echo "$KLIST" | grep -q 'user@KERBER.TEST'
+echo "==== Rust kinit recorded fast_avail and pa_type (SPAKE) like write_out_ccache ===="
+KLISTC="$(docker exec "$NAME" klist -C -c /tmp/krb5cc_spake 2>/dev/null || true)"
+echo "$KLISTC"
+echo "$KLISTC" | grep -F 'config: fast_avail(krbtgt/KERBER.TEST@KERBER.TEST) = yes'
+echo "$KLISTC" | grep -F 'config: pa_type(krbtgt/KERBER.TEST@KERBER.TEST) = 151'
 TRACE="$(docker exec "$NAME" cat /tmp/mit-kdc.trace 2>/dev/null || true)"
 if ! echo "$TRACE" | grep -Eq 'SPAKE response received|SPAKE derived K'; then
     echo "$TRACE" >&2

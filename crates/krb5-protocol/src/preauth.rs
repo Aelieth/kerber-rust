@@ -85,11 +85,18 @@ pub fn attach_fast(
     armor_key: &ProtocolKey,
     inner_padata: Vec<PaData>,
 ) -> Result<(), Error> {
+    // MIT krb5int_fast_prep_req: the whole request, padata included (the
+    // modules' padata first, then the info_pa_permitted pair 150/149 the
+    // builder already appended), becomes the FAST-REQ; the outer carries
+    // only PA-FX-FAST. The KDC swaps the inner request in (kdc_find_fast),
+    // so the enc-pa-rep negotiation works through the armor too.
+    let mut inner = inner_padata;
+    inner.extend(req.0.padata.take().unwrap_or_default());
     req.0.padata = Some(vec![fx_fast_padata(
         Some(armor),
         armor_key,
         &req.0.req_body,
-        inner_padata,
+        inner,
     )?]);
     Ok(())
 }

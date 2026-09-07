@@ -289,6 +289,7 @@ fn tgs_as_tgt(prev: &AsOutcome, out: TgsOutcome) -> AsOutcome {
         cname: prev.cname.clone(),
         crealm: prev.crealm.clone(),
         fast_avail: prev.fast_avail,
+        pa_type: prev.pa_type,
     }
 }
 
@@ -660,6 +661,7 @@ mod tests {
             cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
             crealm: ascii(instance),
             fast_avail: false,
+            pa_type: None,
         }
     }
 
@@ -700,6 +702,7 @@ mod tests {
             cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
             crealm: ascii("KERBER.TEST"),
             fast_avail: false,
+            pa_type: None,
         }
     }
 

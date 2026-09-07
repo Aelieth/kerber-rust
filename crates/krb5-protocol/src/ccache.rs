@@ -173,20 +173,20 @@ impl FileCcache {
         }
     }
 
-    /// Insert an `X-CACHECONF:krb5_ccache_conf_data/{key}` entry (etype 0).
-    pub fn set_config(&mut self, key: &str, value: &[u8]) {
-        self.creds.retain(|c| {
-            !(c.is_config()
-                && c.server
-                    .1
-                    .name_string
-                    .get(1)
-                    .is_some_and(|s| s.as_bytes() == key.as_bytes()))
-        });
+    /// MIT `krb5_cc_set_config` (`ccfns.c k5_build_conf_principals`): an
+    /// `X-CACHECONF:` entry named `krb5_ccache_conf_data/{key}[/{principal}]`
+    /// (etype 0, the value in the ticket field), replacing an existing one.
+    pub fn set_config(&mut self, principal: Option<&str>, key: &str, value: &[u8]) {
+        let mut comps = vec!["krb5_ccache_conf_data", key];
+        if let Some(p) = principal {
+            comps.push(p);
+        }
+        let name = PrincipalName::new(PrincipalName::NT_UNKNOWN, comps.clone());
+        self.creds
+            .retain(|c| !(c.is_config() && c.server.1.name_string == name.name_string));
         let Ok(conf_realm) = krb5_types::kerberos_string_from_bytes(b"X-CACHECONF:") else {
             return;
         };
-        let name = PrincipalName::new(PrincipalName::NT_UNKNOWN, ["krb5_ccache_conf_data", key]);
         self.creds.push(CcacheCred {
             client: self.primary.clone(),
             server: (conf_realm, name),

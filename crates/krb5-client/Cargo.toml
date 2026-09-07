@@ -42,3 +42,6 @@ zeroize.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+krb5-kdc.workspace = true

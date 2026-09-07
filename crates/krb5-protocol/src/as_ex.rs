@@ -40,6 +40,9 @@ pub struct AsOutcome {
     /// RFC 6806 FAST negotiation: the enc-padata carried PA-FX-FAST, so the KDC
     /// supports FAST (MIT records `fast_avail` in the ccache).
     pub fast_avail: bool,
+    /// The preauth type that produced the reply (MIT `selected_preauth_type`,
+    /// recorded as the ccache `pa_type` config); `None` without preauth.
+    pub pa_type: Option<i32>,
 }
 
 /// Parameters for an AS-REQ.
@@ -301,7 +304,7 @@ fn finish_as_rep_keys(
             password,
             cname,
             realm,
-            false,
+            None,
             canonicalize,
             expected_sname,
             req_der,
@@ -316,7 +319,7 @@ fn finish_as_rep_keys(
             password,
             cname,
             realm,
-            false,
+            None,
             canonicalize,
             expected_sname,
             req_der,
@@ -333,7 +336,7 @@ fn finish_as_rep_keys(
             password,
             cname,
             realm,
-            false,
+            None,
             canonicalize,
             expected_sname,
             req_der,
@@ -387,7 +390,7 @@ fn continue_preauth(
             req.password,
             &req.cname,
             req.realm,
-            true,
+            Some(pa::ENC_TIMESTAMP),
             req.canonicalize,
             &req_sname(req),
             Some(&wire),
@@ -406,7 +409,7 @@ fn continue_preauth(
                     req.password,
                     &req.cname,
                     req.realm,
-                    true,
+                    Some(pa::ENC_TIMESTAMP),
                     req.canonicalize,
                     &req_sname(req),
                     Some(&wire),
@@ -429,7 +432,7 @@ fn continue_preauth(
                     req.password,
                     &req.cname,
                     req.realm,
-                    true,
+                    Some(pa::ENC_TIMESTAMP),
                     req.canonicalize,
                     &req_sname(req),
                     Some(&wire),
@@ -461,9 +464,10 @@ fn continue_fast(
     let ap = fast_armor_ap(armor, &sub)?;
     let mut probe = build_as_req_from(req, nonce, till.clone(), None, etypes)?;
     attach_fast(&mut probe, &ap, &akey, Vec::new())?;
-    let reply = exchange(req.kdc, &encode(&probe)?)?;
+    let wire = encode(&probe)?;
+    let reply = exchange(req.kdc, &wire)?;
     match classify(&reply)? {
-        KdcMsg::AsRep(rep) => finish_fast_as(req, keys, nonce, etypes, &akey, None, rep),
+        KdcMsg::AsRep(rep) => finish_fast_as(req, keys, nonce, etypes, &akey, None, rep, &wire),
         KdcMsg::Error(e) => {
             let (inner, cookie) = fast_error_material(&akey, &e);
             if inner.error_code != err::PREAUTH_REQUIRED && e.error_code != err::PREAUTH_REQUIRED {
@@ -482,11 +486,19 @@ fn continue_fast(
             let ap = fast_armor_ap(armor, &sub)?;
             let mut req2 = build_as_req_from(req, nonce, till, None, etypes)?;
             attach_fast(&mut req2, &ap, &akey, inner_pa)?;
-            let reply = exchange(req.kdc, &encode(&req2)?)?;
+            let wire = encode(&req2)?;
+            let reply = exchange(req.kdc, &wire)?;
             match classify(&reply)? {
-                KdcMsg::AsRep(rep) => {
-                    finish_fast_as(req, keys, nonce, etypes, &akey, Some(client_key), rep)
-                }
+                KdcMsg::AsRep(rep) => finish_fast_as(
+                    req,
+                    keys,
+                    nonce,
+                    etypes,
+                    &akey,
+                    Some(client_key),
+                    rep,
+                    &wire,
+                ),
                 KdcMsg::Error(e) => classify_kdc_error(&fast_error_material(&akey, &e).0),
                 KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
             }
@@ -495,6 +507,7 @@ fn continue_fast(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finish_fast_as(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
@@ -503,6 +516,7 @@ fn finish_fast_as(
     akey: &ProtocolKey,
     client_key: Option<ProtocolKey>,
     rep: AsRep,
+    wire: &[u8],
 ) -> Result<AsOutcome, Error> {
     let fast = unwrap_fast_rep(akey, &rep.0.padata)?;
     let sent_preauth = client_key.is_some();
@@ -533,10 +547,12 @@ fn finish_fast_as(
         req.password,
         &req.cname,
         req.realm,
-        sent_preauth,
+        sent_preauth.then_some(pa::ENC_TIMESTAMP),
         req.canonicalize,
         &req_sname(req),
-        None,
+        // MIT verifies the enc-pa-rep checksum under FAST too, over the
+        // outer request with the (strengthened) reply key.
+        Some(wire),
     )
 }
 
@@ -704,7 +720,7 @@ fn send_spake_response(
             req.password,
             &req.cname,
             req.realm,
-            true,
+            Some(pa::SPAKE),
             req.canonicalize,
             &req_sname(req),
             Some(&wire),
@@ -758,7 +774,7 @@ fn continue_pkinit(
                 req.password,
                 &req.cname,
                 req.realm,
-                true,
+                Some(pa::PK_AS_REQ),
                 req.canonicalize,
                 &req_sname(req),
                 Some(&wire),
@@ -880,13 +896,13 @@ fn finish_as_rep(
     password: &[u8],
     cname: &PrincipalName,
     realm: &str,
-    sent_preauth: bool,
+    pa_type: Option<i32>,
     canonicalize: bool,
     expected_sname: &PrincipalName,
     req_der: Option<&[u8]>,
 ) -> Result<AsOutcome, Error> {
     let inner = rep.0;
-    let had_preauth = sent_preauth;
+    let had_preauth = pa_type.is_some();
     let etype = EncryptionType::known(inner.enc_part.etype)?;
     let key = if let Some(k) = client_key {
         k
@@ -901,9 +917,8 @@ fn finish_as_rep(
         return Err(Error::NonceMismatch);
     }
     // MIT krb5int_fast_verify_nego (fast.c:635-675): a ticket with enc-pa-rep
-    // must carry a PA-REQ-ENC-PA-REP checksum over the AS-REQ under the reply
-    // key, else KRB5_KDCREP_MODIFIED. The FAST path passes None; FAST armor
-    // already integrity-protects the exchange.
+    // must carry a PA-REQ-ENC-PA-REP checksum over the AS-REQ (the outer
+    // request under FAST) under the reply key, else KRB5_KDCREP_MODIFIED.
     if let Some(rd) = req_der {
         crate::preauth::verify_req_enc_pa_rep(&enc_part, &key, rd)?;
     }
@@ -950,6 +965,7 @@ fn finish_as_rep(
         cname: inner.cname,
         crealm: inner.crealm,
         fast_avail,
+        pa_type,
     })
 }
 

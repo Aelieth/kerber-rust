@@ -116,6 +116,17 @@ assert_no_error_log "$OUT"
 KLIST="$(docker exec "$NAME" klist -c /tmp/krb5cc_fast 2>/dev/null || true)"
 echo "$KLIST"
 echo "$KLIST" | grep -q 'user@KERBER.TEST'
+# write_out_ccache: fast_avail is recorded because the KDC echoed PA-FX-FAST
+# inside the FAST reply; user needs no preauth here, so like MIT no pa_type
+# entry is written (save_selected_preauth_type returns on KRB5_PADATA_NONE).
+echo "==== Rust kinit --fast recorded fast_avail (and no pa_type without preauth) like write_out_ccache ===="
+KLISTC="$(docker exec "$NAME" klist -C -c /tmp/krb5cc_fast 2>/dev/null || true)"
+echo "$KLISTC"
+echo "$KLISTC" | grep -F 'config: fast_avail(krbtgt/KERBER.TEST@KERBER.TEST) = yes'
+if echo "$KLISTC" | grep -q 'config: pa_type('; then
+    echo "pa_type recorded without a selected preauth type" >&2
+    exit 1
+fi
 TRACE="$(docker exec "$NAME" cat /tmp/mit-kdc.trace 2>/dev/null || true)"
 if ! echo "$TRACE" | grep -Fq 'Decrypted AP-REQ'; then
     echo "$TRACE" >&2

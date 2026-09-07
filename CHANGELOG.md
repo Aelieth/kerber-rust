@@ -8,6 +8,19 @@ this project uses semantic versioning once a crate is published.
 
 ### Round-up R1 (residue sweep)
 
+- **client.** `kinit` records `fast_avail = yes` (when the KDC echoed
+  PA-FX-FAST) and the selected preauth type as `pa_type` in the ccache, as
+  `X-CACHECONF:` config entries keyed by the TGT's server and stored ahead of
+  the credentials, like MIT `write_out_ccache`; MIT `klist -C` lists them in a
+  Rust-written cache exactly as in its own. `FileCcache::set_config` takes the
+  principal the entry is keyed by. (The L3b deferral.)
+- **client.** Under FAST the advertised PA-AS-FRESHNESS/PA-REQ-ENC-PA-REP
+  were dropped from the FAST-REQ (the armor wrapper replaced the padata list,
+  the SPAKE bug's twin), so a FAST kinit never negotiated availability; the
+  inner request now carries them like `krb5int_fast_prep_req`, and the
+  client verifies the KDC's enc-pa-rep checksum over the outer request with
+  the strengthened reply key like `krb5int_fast_verify_nego` (it skipped the
+  check under FAST). A FAST kinit records `fast_avail` too.
 - **kdc/admin.** Password history is stored the way MIT stores it. Every
   principal's `KRB5_TL_KADM_DATA` is now the XDR `osa_princ_ent_rec`
   (`adb_xdr.c`): the bound policy and `KADM5_POLICY`, `old_key_next`,

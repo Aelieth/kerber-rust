@@ -8,8 +8,8 @@ use std::time::Duration;
 use krb5_kdc::{
     TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, serve, shared_store,
 };
-use krb5_protocol::{AsRequest, AsTicketOpts, KdcAddr, as_exchange};
-use krb5_types::PrincipalName;
+use krb5_protocol::{AsRequest, AsTicketOpts, FastArmor, KdcAddr, as_exchange};
+use krb5_types::{PrincipalName, pa};
 
 #[test]
 fn as_exchange_records_fast_availability() {
@@ -45,4 +45,60 @@ fn as_exchange_records_fast_availability() {
     // The client advertised PA-149; the KDC echoed a valid checksum (else
     // as_exchange would fail KDCREP_MODIFIED) plus PA-FX-FAST.
     assert!(out.fast_avail, "PA-FX-FAST echoed => fast_avail");
+}
+
+fn request<'a>(
+    cname: &PrincipalName,
+    kdc: &'a KdcAddr,
+    armor: Option<&'a FastArmor>,
+) -> AsRequest<'a> {
+    AsRequest {
+        cname: cname.clone(),
+        realm: TEST_REALM,
+        password: TEST_USER_PASSWORD,
+        kdc,
+        want_spake: false,
+        fast_armor: armor,
+        pkinit: None,
+        canonicalize: false,
+        sname: None,
+        etypes: None,
+        ticket: AsTicketOpts::default(),
+    }
+}
+
+#[test]
+fn fast_exchange_negotiates_through_the_armor_like_mit() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let addr = udp.local_addr().unwrap();
+    let tcp = std::net::TcpListener::bind(addr).unwrap();
+    let port = addr.port();
+    let store = shared_store(store);
+    thread::spawn(move || {
+        let _ = serve(store, udp, tcp);
+    });
+    thread::sleep(Duration::from_millis(50));
+    let kdc = KdcAddr {
+        host: "127.0.0.1".into(),
+        port,
+    };
+    // The documented user requires preauth: encrypted timestamp (2) is the
+    // selected preauth type MIT would record as pa_type.
+    let plain = as_exchange(&request(&cname, &kdc, None)).expect("plain AS exchange");
+    assert!(plain.fast_avail);
+    assert_eq!(plain.pa_type, Some(pa::ENC_TIMESTAMP));
+    let armor = FastArmor {
+        ticket: plain.ticket.clone(),
+        session: plain.session_key.clone(),
+        crealm: plain.crealm.clone(),
+        cname: plain.cname.clone(),
+    };
+    // Under FAST the advertised 150/149 travel inside the FAST-REQ, the KDC
+    // swaps the inner request in, and the client verifies the echo over the
+    // outer request with the strengthened reply key (krb5int_fast_verify_nego).
+    let fast = as_exchange(&request(&cname, &kdc, Some(&armor))).expect("FAST AS exchange");
+    assert!(fast.fast_avail, "PA-FX-FAST echoed inside the FAST reply");
+    assert_eq!(fast.pa_type, Some(pa::ENC_TIMESTAMP));
 }

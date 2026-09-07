@@ -412,7 +412,19 @@ fn kinit_inner(
             Err(e) => tgs_err = Some(e.to_string()),
         }
     }
-    let cache = FileCcache::new((as_out.crealm.clone(), as_out.cname.clone()), creds);
+    // MIT write_out_ccache (get_in_tkt.c:1617-1640): fast_avail and the
+    // selected pa_type are ccache config entries keyed by the TGT's server,
+    // stored ahead of the credentials.
+    let mut cache = FileCcache::new((as_out.crealm.clone(), as_out.cname.clone()), Vec::new());
+    let tgt_realm = String::from_utf8_lossy(as_out.ticket.realm.as_bytes()).into_owned();
+    let tgt_server = as_out.ticket.sname.unparse_with_realm(&tgt_realm);
+    if as_out.fast_avail {
+        cache.set_config(Some(&tgt_server), "fast_avail", b"yes");
+    }
+    if let Some(t) = as_out.pa_type {
+        cache.set_config(Some(&tgt_server), "pa_type", t.to_string().as_bytes());
+    }
+    cache.creds.extend(creds);
     if let Some(e) = tgs_err {
         tracing::error!(
             event = "client.tgs",
@@ -491,6 +503,7 @@ fn outcome_from_cred(
         cname: cred.client.1.clone(),
         crealm: cred.client.0.clone(),
         fast_avail: false,
+        pa_type: None,
     })
 }
 

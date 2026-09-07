@@ -74,6 +74,14 @@ if ! echo "$MIT_ARMOR_TRACE" | grep -F 'FAST negotiation: available'; then
     exit 1
 fi
 
+# MIT write_out_ccache: the negotiated availability and the selected preauth
+# type are ccache config entries keyed by the TGT's server (klist -C shows them).
+echo "==== MIT plain kinit recorded fast_avail and pa_type against the Rust KDC ===="
+ARMOR_CONF="$(docker exec "$NAME" klist -C -c /tmp/krb5cc_armor)"
+echo "$ARMOR_CONF"
+echo "$ARMOR_CONF" | grep -F 'config: fast_avail(krbtgt/KERBER.TEST@KERBER.TEST) = yes'
+echo "$ARMOR_CONF" | grep -F 'config: pa_type(krbtgt/KERBER.TEST@KERBER.TEST) = 2'
+
 echo "==== MIT kinit -T FAST against Rust KDC ===="
 docker exec "$NAME" sh -c 'cat /dev/null >/tmp/fast.trace'
 if ! docker exec -e KRB5_TRACE=/tmp/fast.trace "$NAME" \
