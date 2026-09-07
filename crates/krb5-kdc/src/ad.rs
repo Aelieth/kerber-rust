@@ -356,6 +356,43 @@ pub(crate) fn presented_tgt_logon(
         .map(<[u8]>::to_vec))
 }
 
+/// MS-PAC 4.1.2.2 SID filtering for a cross-realm subject: a trusted realm may
+/// assert only its own SIDs, never SIDs from the local domain. Returns the
+/// subject's `LOGON_INFO` with every local-domain SID removed from the extra
+/// SIDs and resource groups (the foreign realm's own SIDs and well-known SIDs
+/// such as `S-1-18-1` are kept); `Err(POLICY)` when the base identity itself
+/// claims the local domain, since nothing foreign is left to keep.
+///
+/// # Errors
+///
+/// [`Error::Proto`] `POLICY` when the `LOGON_INFO` is undecodable or its base
+/// domain is the local domain.
+pub(crate) fn filter_cross_realm_logon(
+    logon: &[u8],
+    local_domain: &krb5_types::pac::RpcSid,
+) -> Result<Vec<u8>, Error> {
+    let mut kvi = krb5_types::pac::parse_kerb_validation_info(logon).map_err(|e| {
+        proto_d(
+            err::POLICY,
+            status::INVALID_LINEAGE,
+            format!("cross-realm PAC: {e}"),
+        )
+    })?;
+    if kvi.logon_domain_id.is_in_domain(local_domain) {
+        return Err(proto(err::POLICY, status::INVALID_LINEAGE));
+    }
+    kvi.extra_sids.retain(|e| !e.sid.is_in_domain(local_domain));
+    if kvi
+        .resource_group_domain_sid
+        .as_ref()
+        .is_some_and(|s| s.is_in_domain(local_domain))
+    {
+        kvi.resource_group_domain_sid = None;
+        kvi.resource_groups.clear();
+    }
+    Ok(kvi.to_ndr())
+}
+
 /// Extract PAC bytes from EncTicketPart authorization-data.
 pub fn pac_from_ticket_part(part: &EncTicketPart) -> Option<Vec<u8>> {
     let ad = part.authorization_data.as_ref()?;

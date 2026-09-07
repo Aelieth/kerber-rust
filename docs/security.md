@@ -29,6 +29,7 @@ uses a per-context sequence window in addition to that cache.
 | 0600 secret files | `write_secret_file` (`secret_file.rs`); keytab, ccache, dump, stash | `persist_survives_restart_without_key_regen` (save_store) |
 | Product 0-unsafe | Workspace lint `unsafe_code = "forbid"`; `#![forbid(unsafe_code)]` on every library crate | compile (`clippy -D warnings`); `scripts/geiger.sh` |
 | iprop keys never sent in the clear | `dispatch_iprop` GET_UPDATES answers `UPDATE_ERROR` (`kadm5.rs`, `krb5_kdc::IPROP_ERROR`) when `iprop_master_key` is `None`, rather than ship the store's plaintext keys | `iprop_get_updates_refuses_plaintext_keys_without_master_key` |
+| Cross-realm PAC SID filtering | `filter_cross_realm_logon` (`ad.rs`) drops local-domain SIDs from a cross-realm subject's `LOGON_INFO`; `issue.rs` calls it when the header ticket is from a foreign realm | `cross_realm_pac_drops_local_domain_sids_keeps_foreign`, `cross_realm_pac_claiming_local_domain_base_is_policy` (`crates/krb5-kdc/tests/capaths.rs`) |
 
 `DISABLE_TRANSITED_CHECK` and ticket flags are protocol policy, not
 timing. There is no injectable clock; replay windows use
@@ -144,7 +145,18 @@ full (19) checksums exist only on service tickets
 `pac_sign.c:239-243`); a presented TGT is checked on its server
 signature alone with the key that opened it (`kdc_util.c:597-602`), so
 MIT-issued TGTs are accepted and Rust-issued TGTs are accepted by MIT
-(`scripts/cross-kdc-gate.sh`). `krb5_pac_parse` refusals (version,
+(`scripts/cross-kdc-gate.sh`). Because that server signature is the
+shared inter-realm key, a trusted realm could otherwise forge a
+`LOGON_INFO` asserting the local domain's Domain Admins or RID 500.
+On a reissue whose header ticket is from a foreign realm, MS-PAC SID
+filtering (`filter_cross_realm_logon`) drops every SID under the local
+domain from the subject's extra SIDs and resource groups, keeping the
+foreign realm's own SIDs and well-known SIDs (`S-1-18-1`); a base
+identity that itself claims the local domain is refused `POLICY`. This
+matches an Active Directory domain controller and is stricter than
+MIT with the db2 KDB, which carries no cross-realm `LOGON_INFO` at all.
+`scripts/samba-realtrust-gate.sh` shows the legitimate reverse PAC
+keeping the foreign Samba domain SID through the Rust KDC. `krb5_pac_parse` refusals (version,
 buffer count, 8-byte alignment, header overlap) and duplicate buffer
 types are 60 (`pac.c:281-317,137-147`). Ticket checksum
 (`pac.c:640-673`) is over the recoded EncTicketPart with PAC ad-data

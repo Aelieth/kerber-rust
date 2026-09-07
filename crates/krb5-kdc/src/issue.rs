@@ -798,7 +798,15 @@ fn issue_tgs_body(
         ticket_cname = cn;
         evidence_logon = Some(logon);
     } else if let Some(logon) = presented_tgt_logon(&enc_tkt, &tgt_key)? {
-        evidence_logon = Some(logon);
+        // A cross-realm subject's PAC comes from a trusted realm; MS-PAC SID
+        // filtering forbids it from asserting local-domain SIDs (a foreign
+        // realm claiming the local domain's Domain Admins or RID 500). A local
+        // subject's own domain SIDs are legitimate and pass through unchanged.
+        evidence_logon = Some(if utf8_realm(&ap.ticket.realm)? == store.realm() {
+            logon
+        } else {
+            crate::ad::filter_cross_realm_logon(&logon, store.domain_sid())?
+        });
     }
     let skip_transited = body.kdc_options.bit(flag_bit::DISABLE_TRANSITED_CHECK);
     let u2u = u2u_session(store, req)?;

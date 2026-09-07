@@ -1074,3 +1074,148 @@ fn s4u2self_cross_tgt_local_server_foreign_user_issues() {
         "A.TEST"
     );
 }
+
+// R2-S1: a cross-realm subject's PAC is SID-filtered on reissue — SIDs under
+// the local domain (a trusted realm forging local Domain Admins) are dropped;
+// the foreign realm's own SIDs and well-known SIDs are kept. Red at the
+// parent, which copies the presented PAC's LOGON_INFO verbatim.
+#[test]
+fn cross_realm_pac_drops_local_domain_sids_keeps_foreign() {
+    use krb5_kdc::{PacTicket, pac_from_ticket_part, sign_pac, wrap_win2k_pac};
+    use krb5_types::pac::{
+        ExtraSid, KerbValidationInfo, PAC_LOGON_INFO, Pac, PacIdentity, RpcSid,
+        parse_kerb_validation_info,
+    };
+
+    let (_a, _b, mut c, ir, host_c, bc) = three_realm();
+    c.policy.reject_bad_transit = false;
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let local = c.domain_sid().clone();
+    let foreign = RpcSid::nt_domain(4242, 4243, 4244);
+    let admins = local.with_rid(512); // local "Domain Admins" the foreign realm forged
+    let wellknown = RpcSid::from_sddl("S-1-18-1").expect("wk"); // asserted-identity, kept
+    let foreign_grp = foreign.with_rid(1106); // the trusted realm's own group, kept
+
+    let mut kvi = KerbValidationInfo::for_client(TEST_USER, "B.TEST", &foreign, 1105);
+    kvi.extra_sids = vec![
+        ExtraSid {
+            sid: admins.clone(),
+            attributes: 7,
+        },
+        ExtraSid {
+            sid: wellknown.clone(),
+            attributes: 7,
+        },
+        ExtraSid {
+            sid: foreign_grp.clone(),
+            attributes: 7,
+        },
+    ];
+    let logon = kvi.to_ndr();
+    let ident = PacIdentity {
+        sam: TEST_USER.to_owned(),
+        realm: "B.TEST".to_owned(),
+        domain_sid: foreign.clone(),
+        rid: 1105,
+    };
+    // Server-sign with the B<->C trust key, which the reissuer verifies.
+    let pac = sign_pac(
+        &cname,
+        0,
+        &PacTicket {
+            server: &ir,
+            kdc: &ir,
+            enc_tkt_der: &[0],
+            is_service_tkt: false,
+        },
+        &ident,
+        Some(&logon),
+    )
+    .expect("sign");
+
+    let mut t = bc.rep.0.ticket.clone();
+    let mut part = decrypt_ticket_part(&ir, &t).expect("bc");
+    part.cname = cname.clone();
+    part.crealm = krb5_types::try_ascii("B.TEST").expect("realm");
+    part.authorization_data = Some(wrap_win2k_pac(&pac).expect("wrap"));
+    reseal(&ir, &mut t, &part);
+
+    let req = tgs_req(
+        t,
+        &bc.session_key,
+        "B.TEST",
+        &cname,
+        host_c.clone(),
+        "C.TEST",
+        991,
+    )
+    .expect("tgs");
+    let out = krb5_kdc::issue_tgs(&c, &req).expect("cross-realm reissue");
+
+    let host_key = c.get_name(&host_c).unwrap().best_key().unwrap().key.clone();
+    let re_part = decrypt_ticket_part(&host_key, &out.rep.0.ticket).expect("svc enc");
+    let re_pac = pac_from_ticket_part(&re_part).expect("reissued PAC");
+    let re_logon =
+        parse_kerb_validation_info(Pac::parse(&re_pac).unwrap().buffer(PAC_LOGON_INFO).unwrap())
+            .expect("reissued NDR");
+
+    assert_eq!(re_logon.logon_domain_id, foreign, "foreign base kept");
+    assert!(
+        !re_logon.extra_sids.iter().any(|e| e.sid == admins),
+        "forged local Domain Admins must be filtered: {:?}",
+        re_logon.extra_sids
+    );
+    assert!(
+        re_logon.extra_sids.iter().any(|e| e.sid == wellknown),
+        "well-known S-1-18-1 kept"
+    );
+    assert!(
+        re_logon.extra_sids.iter().any(|e| e.sid == foreign_grp),
+        "foreign realm's own SID kept"
+    );
+}
+
+// R2-S1: a cross-realm PAC whose base identity itself claims the local domain
+// (a foreign realm forging a local RID-500 account) has nothing foreign to
+// keep, so the reissue is refused POLICY. Red at the parent, which issues it.
+#[test]
+fn cross_realm_pac_claiming_local_domain_base_is_policy() {
+    use krb5_kdc::{PacTicket, sign_pac, wrap_win2k_pac};
+    use krb5_types::pac::{KerbValidationInfo, PacIdentity};
+
+    let (_a, _b, mut c, ir, host_c, bc) = three_realm();
+    c.policy.reject_bad_transit = false;
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let local = c.domain_sid().clone();
+    let kvi = KerbValidationInfo::for_client(TEST_USER, "B.TEST", &local, 500);
+    let logon = kvi.to_ndr();
+    let ident = PacIdentity {
+        sam: TEST_USER.to_owned(),
+        realm: "B.TEST".to_owned(),
+        domain_sid: local.clone(),
+        rid: 500,
+    };
+    let pac = sign_pac(
+        &cname,
+        0,
+        &PacTicket {
+            server: &ir,
+            kdc: &ir,
+            enc_tkt_der: &[0],
+            is_service_tkt: false,
+        },
+        &ident,
+        Some(&logon),
+    )
+    .expect("sign");
+    let mut t = bc.rep.0.ticket.clone();
+    let mut part = decrypt_ticket_part(&ir, &t).expect("bc");
+    part.cname = cname.clone();
+    part.crealm = krb5_types::try_ascii("B.TEST").expect("realm");
+    part.authorization_data = Some(wrap_win2k_pac(&pac).expect("wrap"));
+    reseal(&ir, &mut t, &part);
+    let req = tgs_req(t, &bc.session_key, "B.TEST", &cname, host_c, "C.TEST", 992).expect("tgs");
+    let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
+    assert_eq!(code, err::POLICY);
+    assert_eq!(text.as_deref(), Some("INVALID LINEAGE"));
+}

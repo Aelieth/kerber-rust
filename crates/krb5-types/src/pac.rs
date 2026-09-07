@@ -479,6 +479,17 @@ impl RpcSid {
         s
     }
 
+    /// True when `self` is `domain` itself or an account/group under it
+    /// (`domain`'s sub-authorities are a prefix of `self`'s, same authority).
+    /// Well-known SIDs under another identifier authority (e.g. `S-1-18-1`)
+    /// are never "in" an NT-authority domain.
+    #[must_use]
+    pub fn is_in_domain(&self, domain: &RpcSid) -> bool {
+        self.identifier_authority == domain.identifier_authority
+            && self.sub_authority.len() >= domain.sub_authority.len()
+            && self.sub_authority[..domain.sub_authority.len()] == domain.sub_authority[..]
+    }
+
     /// MS-DTYP packet SID (revision, count, authority, sub-authorities).
     #[must_use]
     pub fn to_ms_dtyp(&self) -> Vec<u8> {
