@@ -259,6 +259,16 @@ rust_local() {
         "$NAME" /tmp/krb5-kadmin-local -q "$1" 2>&1
 }
 prompt_lines() { sed 's/(yes\/no): /(yes\/no): \n/' | sed '/^$/d' | sort; }
+# Diff two already-captured strings; on any mismatch print BOTH legs (cat -A,
+# newlines as |) in one ::error annotation the public CI API can show, then
+# die. Sequential capture removes concurrent process-substitution as a variable.
+dl() {
+    if [ "$2" != "$3" ]; then
+        printf '::error file=scripts/kadmin-local-gate.sh::%s differs: rust=[%s] mit=[%s]\n' \
+            "$1" "$(printf '%s' "$2" | cat -A | tr '\n' '|')" "$(printf '%s' "$3" | cat -A | tr '\n' '|')" >&2
+        exit 1
+    fi
+}
 PDEL="$(rust_local 'delpol tws')"
 echo "$PDEL"
 diff <(echo "$PDEL" | prompt_lines) <(mit_local 'delpol tws' | prompt_lines)
@@ -690,26 +700,24 @@ mit_local 'addprinc -pw canon-secret canon' >/dev/null
 RAL="$(rust_local 'alias av1 canon')"
 echo "$RAL"
 echo "$RAL" | grep -Fx 'Principal "av1@KERBER.TEST" aliased to "canon@KERBER.TEST".'
-diff <(echo "$RAL") <(mit_local 'alias av1 canon')
+dl alias-first "$RAL" "$(mit_local 'alias av1 canon')"
 # getprinc through the alias returns the target's record on each leg (the full
 # MIT-format getprinc printer is M4c; compare alias vs target within a leg).
-diff <(rust_local 'getprinc av1') <(rust_local 'getprinc canon')
-diff <(mit_local 'getprinc av1') <(mit_local 'getprinc canon')
-diff <(rust_local 'alias av1 canon' 2>&1) <(mit_local 'alias av1 canon' 2>&1)
-diff <(rust_local 'alias bad x@OTHER.REALM' 2>&1) <(mit_local 'alias bad x@OTHER.REALM' 2>&1)
-diff <(rust_local 'alias justone' 2>&1) <(mit_local 'alias justone' 2>&1)
+dl getprinc-alias-rust "$(rust_local 'getprinc av1')" "$(rust_local 'getprinc canon')"
+dl getprinc-alias-mit "$(mit_local 'getprinc av1')" "$(mit_local 'getprinc canon')"
+dl alias-dup "$(rust_local 'alias av1 canon' 2>&1)" "$(mit_local 'alias av1 canon' 2>&1)"
+dl alias-badrealm "$(rust_local 'alias bad x@OTHER.REALM' 2>&1)" "$(mit_local 'alias bad x@OTHER.REALM' 2>&1)"
+dl alias-justone "$(rust_local 'alias justone' 2>&1)" "$(mit_local 'alias justone' 2>&1)"
 
 echo "==== policy validation order and texts, identical to MIT ===="
 # min>max BEFORE length (MIT kadm5_create_policy), and the exact kadm_err texts.
-diff <(rust_local 'addpol -minlength 0 -minlife 2h -maxlife 1h ordr' 2>&1) \
-     <(mit_local 'addpol -minlength 0 -minlife 2h -maxlife 1h ordr' 2>&1)
-diff <(rust_local 'addpol -minclasses 6 cls' 2>&1) <(mit_local 'addpol -minclasses 6 cls' 2>&1)
-diff <(rust_local 'addpol -history 0 h0' 2>&1) <(mit_local 'addpol -history 0 h0' 2>&1)
+dl addpol-order "$(rust_local 'addpol -minlength 0 -minlife 2h -maxlife 1h ordr' 2>&1)" "$(mit_local 'addpol -minlength 0 -minlife 2h -maxlife 1h ordr' 2>&1)"
+dl addpol-minclasses "$(rust_local 'addpol -minclasses 6 cls' 2>&1)" "$(mit_local 'addpol -minclasses 6 cls' 2>&1)"
+dl addpol-history0 "$(rust_local 'addpol -history 0 h0' 2>&1)" "$(mit_local 'addpol -history 0 h0' 2>&1)"
 rust_local 'addpol mpol' >/dev/null
 mit_local 'addpol mpol' >/dev/null
-diff <(rust_local 'modpol -minlife 2h -maxlife 1h mpol' 2>&1) \
-     <(mit_local 'modpol -minlife 2h -maxlife 1h mpol' 2>&1)
-diff <(rust_local 'modpol nosuchpol' 2>&1) <(mit_local 'modpol nosuchpol' 2>&1)
+dl modpol-order "$(rust_local 'modpol -minlife 2h -maxlife 1h mpol' 2>&1)" "$(mit_local 'modpol -minlife 2h -maxlife 1h mpol' 2>&1)"
+dl modpol-nosuch "$(rust_local 'modpol nosuchpol' 2>&1)" "$(mit_local 'modpol nosuchpol' 2>&1)"
 for pol in ordr cls h0; do
     if rust_local 'listpols' | grep -Fx "$pol"; then
         echo "rejected policy $pol was created" >&2
@@ -723,18 +731,15 @@ for pr in ga1 ga2 gb1; do
     mit_local "addprinc -pw gx $pr" >/dev/null
 done
 for g in 'ga*' 'g?1' '*1' '[gb]a*' 'ga1@*' 'ga.1'; do
-    diff <(rust_local "listprincs $g" | grep -v '^Authenticating' | sort) \
-         <(mit_local "listprincs $g" | sort)
+    dl "listprincs-$g" "$(rust_local "listprincs $g" | grep -v '^Authenticating' | sort)" "$(mit_local "listprincs $g" | sort)"
 done
-diff <(rust_local 'listprincs ga\\' 2>&1 | grep -v '^Authenticating') <(mit_local 'listprincs ga\\' 2>&1) || { printf '::error file=scripts/kadmin-local-gate.sh,line=729::listprincs ga\\\\ differs: rust=[%s] mit=[%s]\n' "$(rust_local 'listprincs ga\\' 2>&1 | grep -v '^Authenticating' | cat -A | tr '\n' '|')" "$(mit_local 'listprincs ga\\' 2>&1 | cat -A | tr '\n' '|')"; exit 1; }
-# On a CI red the annotation above carries both legs' exact output (cat -A), which the public API can show.
+dl 'listprincs-ga-backslash' "$(rust_local 'listprincs ga\\' 2>&1 | grep -v '^Authenticating')" "$(mit_local 'listprincs ga\\' 2>&1)"
 for pl in gpol1 gpolx gp2; do
     rust_local "addpol $pl" >/dev/null
     mit_local "addpol $pl" >/dev/null
 done
 for g in 'gpol*' '*x' 'gp?' 'gpol1' '*@*'; do
-    diff <(rust_local "listpols $g" | grep -v '^Authenticating' | sort) \
-         <(mit_local "listpols $g" | sort)
+    dl "listpols-$g" "$(rust_local "listpols $g" | grep -v '^Authenticating' | sort)" "$(mit_local "listpols $g" | sort)"
 done
 
 log "kadmin.local.gate" "ok" ',"principal":"extra2@KERBER.TEST,host/slashhost@KERBER.TEST,randsvc,ktone,kttwo,raceprinc,lockee,gldlock,krbtgt","verb":"alias+policy-order+glob"'
