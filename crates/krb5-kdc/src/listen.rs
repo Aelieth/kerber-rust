@@ -166,8 +166,13 @@ pub struct ListenLimits {
     pub max_tcp_request: usize,
     /// UDP reply cap; over is KRB-ERROR 52 (`dispatch.c:54-63`).
     pub max_dgram_reply_size: usize,
-    /// Read/write timeout for a single TCP exchange, and UDP recv poll.
+    /// Read/write timeout for a single TCP exchange.
     pub io_timeout: Duration,
+    /// How often the UDP loop wakes to check the shutdown flag. Short so
+    /// SIGTERM/SIGINT is honoured promptly (MIT's krb5kdc select() is signal-
+    /// interruptible); it does not affect request latency (recv returns on
+    /// data) or the TCP exchange timeout.
+    pub shutdown_poll: Duration,
 }
 
 impl Default for ListenLimits {
@@ -177,6 +182,7 @@ impl Default for ListenLimits {
             max_tcp_request: MAX_TCP_REQUEST,
             max_dgram_reply_size: MAX_DGRAM_REPLY,
             io_timeout: Duration::from_secs(5),
+            shutdown_poll: Duration::from_millis(250),
         }
     }
 }
@@ -305,7 +311,8 @@ pub fn serve_until(
     shutdown: Arc<AtomicBool>,
     limits: ListenLimits,
 ) -> io::Result<()> {
-    udp.set_read_timeout(Some(limits.io_timeout))?;
+    // The UDP read timeout is the shutdown-check interval, not an I/O deadline.
+    udp.set_read_timeout(Some(limits.shutdown_poll))?;
     tcp.set_nonblocking(true)?;
     let cache: SharedCache = Arc::new(Mutex::new(Lookaside::new()));
     let udp_store = Arc::clone(&store);
@@ -786,6 +793,7 @@ mod tests {
                     max_tcp_request: 4096,
                     max_dgram_reply_size: 10,
                     io_timeout: Duration::from_millis(200),
+                    shutdown_poll: Duration::from_millis(50),
                 },
             );
         });
@@ -822,6 +830,7 @@ mod tests {
                     max_tcp_request: 4096,
                     max_dgram_reply_size: MAX_DGRAM_REPLY,
                     io_timeout: Duration::from_millis(50),
+                    shutdown_poll: Duration::from_millis(50),
                 },
             )
         });

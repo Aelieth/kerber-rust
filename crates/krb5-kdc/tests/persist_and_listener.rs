@@ -493,6 +493,7 @@ fn tcp_worker_cap_drops_excess_connections() {
                 max_tcp_request: 4096,
                 max_dgram_reply_size: krb5_kdc::MAX_DGRAM_REPLY,
                 io_timeout: Duration::from_secs(2),
+                shutdown_poll: Duration::from_millis(50),
             },
         );
     });
@@ -540,6 +541,7 @@ fn listener_chaos_udp_garbage_then_valid() {
                 max_tcp_request: 4096,
                 max_dgram_reply_size: krb5_kdc::MAX_DGRAM_REPLY,
                 io_timeout: Duration::from_millis(200),
+                shutdown_poll: Duration::from_millis(50),
             },
         );
     });
@@ -703,4 +705,47 @@ fn legacy_raw_stash_loads_then_is_rewritten_as_keytab() {
     assert_eq!(&bytes[..2], &[0x05, 0x02], "raw stash rewritten as keytab");
     load_store(&db, &stash).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// R2-S7: the UDP loop polls the shutdown flag on a short interval, so
+// serve_until returns promptly on SIGTERM/SIGINT instead of after the (much
+// longer) TCP exchange timeout.
+#[test]
+fn serve_until_honours_shutdown_within_the_poll_interval() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Instant;
+
+    use krb5_kdc::{ListenLimits, serve_until};
+
+    let (store, _) = bootstrap_documented().unwrap();
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let addr = udp.local_addr().unwrap();
+    let tcp = std::net::TcpListener::bind(addr).unwrap();
+    let flag = Arc::new(AtomicBool::new(false));
+    let store = shared_store(store);
+    let f2 = Arc::clone(&flag);
+    let handle = thread::spawn(move || {
+        let _ = serve_until(
+            store,
+            udp,
+            tcp,
+            f2,
+            ListenLimits {
+                max_tcp_workers: 4,
+                max_tcp_request: 4096,
+                max_dgram_reply_size: krb5_kdc::MAX_DGRAM_REPLY,
+                io_timeout: Duration::from_secs(5),
+                shutdown_poll: Duration::from_millis(100),
+            },
+        );
+    });
+    thread::sleep(Duration::from_millis(60));
+    let t0 = Instant::now();
+    flag.store(true, Ordering::SeqCst);
+    handle.join().unwrap();
+    assert!(
+        t0.elapsed() < Duration::from_secs(2),
+        "shutdown must be honoured within ~shutdown_poll, not io_timeout: {:?}",
+        t0.elapsed()
+    );
 }
