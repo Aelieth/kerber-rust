@@ -607,20 +607,27 @@ pub fn verify_checksum_type(
     let Some(want) = checksum_output_size(ctype) else {
         return Err(Error::UnsupportedChecksum(ctype));
     };
-    if mac.len() != want {
-        return Err(Error::BadChecksumSize);
-    }
+    // MIT `krb5_c_verify_checksum_iov` (`verify_checksum.c:53-68`) finds the
+    // cksumtype and runs `verify_key` (the keyed/provider gate) BEFORE checking
+    // the length, so an unsupported keyed type is `UnsupportedChecksum` even
+    // when the mac length is also wrong.
     if crate::etype::cksumtype_is_unkeyed(ctype) {
+        if mac.len() != want {
+            return Err(Error::BadChecksumSize);
+        }
         let expected = unkeyed_checksum(ctype, message)?;
         return mac_verify(mac, &expected);
     }
     if !crate::etype::cksumtype_is_keyed(ctype) {
         return Err(Error::UnsupportedChecksum(ctype));
     }
-    // MIT crypto_int.h:596-608 verify_key: keyed type with ctp->enc != NULL
-    // requires ktp->enc == ctp->enc; ctp->enc == NULL (-138) accepts any key.
+    // verify_key: keyed type with ctp->enc != NULL requires ktp->enc ==
+    // ctp->enc; ctp->enc == NULL (-138) accepts any key (`crypto_int.h:596-608`).
     if !keyed_cksum_accepts_key(ctype, key.etype()) {
         return Err(Error::UnsupportedChecksum(ctype));
+    }
+    if mac.len() != want {
+        return Err(Error::BadChecksumSize);
     }
     let expected = keyed_checksum_for_type(key, usage, message, ctype)?;
     mac_verify(mac, &expected)
@@ -795,6 +802,20 @@ mod tests {
         let hashval = hasher.finalize();
         let expected = hmac_md5_simple(key.as_bytes(), &hashval).unwrap();
         verify_checksum_type(&key, usage, msg, -137, &expected).expect("raw-key -137");
+    }
+
+    #[test]
+    fn verify_checksum_type_checks_the_key_before_the_length() {
+        // cksumtype 16 (hmac-sha1-96-aes256) requires an aes256 key; with an
+        // aes128 key and a wrong-length mac MIT verify_key fails first, so the
+        // result is UnsupportedChecksum, not BadChecksumSize.
+        let key =
+            ProtocolKey::from_bytes(EncryptionType::Aes128CtsHmacSha196, &[0x33u8; 16]).unwrap();
+        let usage = KeyUsage::new(2).unwrap();
+        assert!(matches!(
+            verify_checksum_type(&key, usage, b"m", 16, &[0u8; 3]),
+            Err(Error::UnsupportedChecksum(16))
+        ));
     }
 
     #[test]
