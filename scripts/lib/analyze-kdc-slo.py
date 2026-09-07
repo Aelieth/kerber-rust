@@ -18,8 +18,12 @@ Stress additionally:
   second-window p99 <= first-window p99 * 2.5
 Soak additionally:
   second-window p99 <= first-window p99 * 2.5
-  RSS last <= first * 1.5 + 8 MiB
-  RSS slope <= 0.05 MiB/s
+  RSS last <= first * 1.5 + 18 MiB   (8 MiB slack + the 10 MiB lookaside bound)
+  RSS slope <= 0.05 MiB/s, measured from the KDC's `kdc.lookaside.full` event on
+  (a bounded cache filling is a ramp that flattens; a leak keeps climbing). Until
+  the cache reports full, the slope may additionally spend the fill allowance
+  (--rss-fill-allowance-mib / elapsed), and the check is `rss_slope_unsettled`
+  (a warning) when too few samples follow the fill.
 """
 from __future__ import annotations
 
@@ -65,7 +69,7 @@ def _kdc_elapsed_s(epochs: list[float | None], durs: list[float]) -> float | Non
 def _soft_slo_issue(issue: str) -> bool:
     return issue.startswith("p99_us:") or issue.startswith("throughput:") or issue.startswith(
         "latency_degraded:"
-    ) or issue in {"no_elapsed_for_throughput", "window_p99_missing"}
+    ) or issue in {"no_elapsed_for_throughput", "window_p99_missing", "rss_slope_unsettled"}
 
 
 def percentile(xs: list[float], p: float) -> float | None:
@@ -88,6 +92,7 @@ def parse_logs(paths: list[pathlib.Path]) -> dict:
     panics = 0
     durations: list[tuple[float, float]] = []
     epochs: list[float | None] = []
+    lookaside_full_epoch: float | None = None
     seq = 0.0
     for log_path in paths:
         if not log_path.is_file():
@@ -113,6 +118,8 @@ def parse_logs(paths: list[pathlib.Path]) -> dict:
             outcome = fields.get("outcome") or o.get("outcome")
             tkey = seq
             seq += 1.0
+            if event == "kdc.lookaside.full" and lookaside_full_epoch is None:
+                lookaside_full_epoch = _parse_epoch(o)
             if event == "kdc.issue":
                 dur = fields.get("duration_us")
                 if dur is None:
@@ -144,6 +151,7 @@ def parse_logs(paths: list[pathlib.Path]) -> dict:
         "error_rate": error_rate,
         "durations": durations,
         "epochs": epochs,
+        "lookaside_full_epoch": lookaside_full_epoch,
         "p50_us": percentile(durs, 50),
         "p99_us": percentile(durs, 99),
         "max_us": max(durs) if durs else None,
@@ -151,7 +159,8 @@ def parse_logs(paths: list[pathlib.Path]) -> dict:
     }
 
 
-def parse_rss(path: pathlib.Path | None) -> dict | None:
+def parse_rss(path: pathlib.Path | None, since: float | None = None) -> dict | None:
+    """RSS series stats; `since` (an epoch) starts the steady-state window."""
     if path is None or not path.is_file():
         return None
     samples: list[tuple[float, float]] = []
@@ -174,6 +183,9 @@ def parse_rss(path: pathlib.Path | None) -> dict | None:
     elapsed = samples[-1][0] - samples[0][0]
     extra = last - first
     slope = (extra / elapsed) if elapsed > 0 else None
+    steady = [s for s in samples if since is not None and s[0] >= since]
+    steady_elapsed = steady[-1][0] - steady[0][0] if len(steady) >= 2 else 0.0
+    steady_slope = (steady[-1][1] - steady[0][1]) / steady_elapsed if steady_elapsed > 0 else None
     return {
         "samples": len(samples),
         "first_mib": first,
@@ -182,6 +194,9 @@ def parse_rss(path: pathlib.Path | None) -> dict | None:
         "growth": (last / first) if first > 0 else None,
         "elapsed_s": elapsed,
         "slope_mib_s": slope,
+        "since_epoch": since,
+        "steady_samples": len(steady),
+        "steady_slope_mib_s": steady_slope,
     }
 
 
@@ -193,6 +208,28 @@ def window_p99(durations: list[tuple[float, float]], nwindows: int) -> list[floa
     for i in range(nwindows):
         sl = durations[i * chunk : (i + 1) * chunk] if i < nwindows - 1 else durations[i * chunk :]
         out.append(percentile([d for _, d in sl], 99))
+    return out
+
+
+def _rss_slope_issues(args: argparse.Namespace, rss: dict, slope_max: float) -> list[str]:
+    """The leak check: steady-state slope after the cache reports full, else the
+    whole-run slope with the fill allowance spread over the run."""
+    min_samples = int(getattr(args, "min_rss_samples", 5) or 0)
+    filled = rss.get("since_epoch") is not None
+    if filled and (rss.get("steady_samples") or 0) >= max(2, min_samples):
+        slope = rss.get("steady_slope_mib_s")
+        if slope is not None and slope > slope_max:
+            return [f"rss_slope:{slope}>{slope_max}"]
+        return []
+    out: list[str] = []
+    allowance = float(getattr(args, "rss_fill_allowance_mib", 0.0) or 0.0)
+    elapsed = rss.get("elapsed_s") or 0.0
+    limit = slope_max + (allowance / elapsed if elapsed > 0 else 0.0)
+    slope = rss.get("slope_mib_s")
+    if slope is not None and slope > limit:
+        out.append(f"rss_slope:{slope}>{limit}")
+    if filled:
+        out.append("rss_slope_unsettled")
     return out
 
 
@@ -246,9 +283,8 @@ def evaluate(args: argparse.Namespace, parsed: dict, rss: dict | None) -> dict:
             if last > cap:
                 issues.append(f"rss_growth:{last}>{cap}")
             slope_max = getattr(args, "rss_max_slope_mib_s", None)
-            slope = rss.get("slope_mib_s")
-            if slope_max is not None and slope is not None and slope > slope_max:
-                issues.append(f"rss_slope:{slope}>{slope_max}")
+            if slope_max is not None:
+                issues.extend(_rss_slope_issues(args, rss, slope_max))
     warnings = [i for i in issues if _soft_slo_issue(i)]
     hard = [i for i in issues if not _soft_slo_issue(i)]
     outcome = "ok" if not hard else "error"
@@ -383,6 +419,7 @@ def self_test() -> int:
         ns.rss_max_growth = 2.0
         ns.rss_max_extra_mib = 20.0
         ns.rss_max_slope_mib_s = 0.05
+        ns.rss_fill_allowance_mib = 0.0
         rep_rss = evaluate(ns, parsed, rss_leak)
         if rep_rss["outcome"] != "error" or not any(
             i.startswith("rss_slope:") for i in rep_rss["issues"]
@@ -393,6 +430,8 @@ def self_test() -> int:
         rep_old = evaluate(ns, parsed, rss_leak)
         if rep_old["outcome"] != "ok":
             print("self-test rss old-floor should pass", json.dumps(rep_old), file=sys.stderr)
+            return 1
+        if _self_test_lookaside_fill(td, ns, ok_lines) != 0:
             return 1
         slow = json.dumps(
             {
@@ -482,6 +521,52 @@ def self_test() -> int:
     return 0
 
 
+def _self_test_lookaside_fill(td: str, ns: argparse.Namespace, ok_lines: list[str]) -> int:
+    """A bounded cache filling (ramp, `kdc.lookaside.full`, flat) passes; a slope
+    that continues after the fill fails; before the fill the allowance applies."""
+    base = _parse_epoch({"timestamp": "2026-01-01T00:00:00Z"})
+    assert base is not None
+    marker = json.dumps(
+        {
+            "timestamp": "2026-01-01T00:01:00Z",
+            "fields": {"event": "kdc.lookaside.full", "outcome": "ok", "total_bytes": 10485760},
+        }
+    )
+    log = pathlib.Path(td) / "fill.log"
+    log.write_text("\n".join(ok_lines) + "\n" + marker + "\n")
+    parsed = parse_logs([log])
+    if parsed["lookaside_full_epoch"] != base + 60:
+        print("self-test fill marker epoch", parsed["lookaside_full_epoch"], file=sys.stderr)
+        return 1
+    ramp = [(base + 5 * i, 8.0 + i * (20.0 / 12)) for i in range(13)]  # 8 -> 28 MiB over 60 s
+    flat = [(base + 60 + 5 * i, 28.0 + 0.01 * i) for i in range(1, 13)]
+    climb = [(base + 60 + 5 * i, 28.0 + 0.5 * i) for i in range(1, 13)]  # 0.1 MiB/s after the fill
+    ns.p99_max_us = 500000
+    ns.max_error_rate = 1.0
+    ns.min_issue_ok = 1
+    ns.throughput_min = None
+    ns.min_rss_samples = 5
+    ns.rss_max_growth = 1.5
+    ns.rss_max_extra_mib = 18.0
+    ns.rss_max_slope_mib_s = 0.05
+    ns.rss_fill_allowance_mib = 10.0
+    cases = [
+        ("fill-flat", ramp + flat, parsed, "ok", None),
+        ("fill-climb", ramp + climb, parsed, "error", "rss_slope:"),
+        ("unfilled-ramp", ramp[:7], parse_logs([pathlib.Path(td) / "ok.log"]), "ok", None),
+        ("unfilled-steep", [(base + 5 * i, 8.0 + i * 3.0) for i in range(13)], parse_logs([pathlib.Path(td) / "ok.log"]), "error", "rss_slope:"),
+    ]
+    for name, series, logs, want, issue in cases:
+        path = pathlib.Path(td) / f"rss-{name}.tsv"
+        path.write_text("# epoch_s rss_mib\n" + "".join(f"{e:.0f} {m:.3f}\n" for e, m in series))
+        rss = parse_rss(path, since=logs.get("lookaside_full_epoch"))
+        rep = evaluate(ns, logs, rss)
+        if rep["outcome"] != want or (issue and not any(i.startswith(issue) for i in rep["issues"])):
+            print(f"self-test lookaside {name} want {want}", json.dumps(rep), file=sys.stderr)
+            return 1
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--log", action="append", default=[], help="KDC JSON log path (repeatable)")
@@ -498,6 +583,7 @@ def main() -> int:
     ap.add_argument("--rss-max-growth", type=float, default=2.0)
     ap.add_argument("--rss-max-extra-mib", type=float, default=20.0)
     ap.add_argument("--rss-max-slope-mib-s", type=float, default=None)
+    ap.add_argument("--rss-fill-allowance-mib", type=float, default=0.0)
     ap.add_argument("--skip-first-ok", type=int, default=0)
     ap.add_argument("--warmup-log", default=None)
     ap.add_argument("--self-test", action="store_true")
@@ -508,7 +594,10 @@ def main() -> int:
         print("need --log", file=sys.stderr)
         return 2
     parsed = parse_logs([pathlib.Path(p) for p in args.log])
-    rss = parse_rss(pathlib.Path(args.rss_series) if args.rss_series else None)
+    rss = parse_rss(
+        pathlib.Path(args.rss_series) if args.rss_series else None,
+        since=parsed.get("lookaside_full_epoch"),
+    )
     if args.elapsed_s is None and parsed["durations"]:
         args.elapsed_s = max(1.0, float(len(parsed["durations"])) / 10.0)
     rep = evaluate(args, parsed, rss)

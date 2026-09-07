@@ -19,6 +19,16 @@ this project uses semantic versioning once a crate is published.
   second-round support request orders the cookie before PA-SPAKE the same way.
   `scripts/lib/kdc-padata-proxy.py` (new) prints the padata types of every
   forwarded KDC-REQ for live settles.
+- **kdc/test.** The lookaside held every request's bytes twice (the map key
+  and the eviction FIFO); they are now one shared allocation, so the cache's
+  memory tracks MIT's `req_packet + reply_packet + sizeof(entry)` accounting
+  (`replay.c`). The KDC logs `kdc.lookaside.full` once when the 10 MiB bound
+  first forces an eviction, and `scripts/lib/analyze-kdc-slo.py` judges the
+  RSS slope from that event on (a bounded cache filling is a ramp that
+  flattens; a leak keeps climbing), spending a `--rss-fill-allowance-mib`
+  before it. `scripts/soak-gate.sh` runs 120 s and allows
+  `first×1.5 + 18 MiB` (8 MiB slack + the lookaside bound); it was red since
+  `32bb4d5` because the 8 MiB allowance predated the cache.
 
 ### W1-K M4c (kadmind operation logging)
 

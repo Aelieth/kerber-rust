@@ -572,9 +572,12 @@ when that oracle is absent.
   (including a kadmin-created host). `KERBER_REQUIRE_NETEM=1` in CI
   dies unless netem applied; after kill, `State.Running=false`. Own CI
   job (`chaos`), `continue-on-error`.
-- `scripts/soak-gate.sh` — C2c: sustained moderate load (~70 s in CI,
+- `scripts/soak-gate.sh` — C2c: sustained moderate load (~120 s in CI,
   300 s scheduled in `.github/workflows/soak.yml`). RSS last ≤ first×1.5
-  + 8 MiB and slope ≤ 0.05 MiB/s; window-over-window `duration_us` p99
+  + 18 MiB (8 MiB slack + the 10 MiB lookaside bound of `kdc/replay.c`)
+  and slope ≤ 0.05 MiB/s judged from the KDC's `kdc.lookaside.full` log
+  event on (before it, the fill allowance is spread over the run; too few
+  post-fill samples is the warning `rss_slope_unsettled`); window-over-window `duration_us` p99
   must not degrade by more than 2.5×; error-rate 0; panics 0;
   `correlation_id` on issue-ok. `KERBER_REQUIRE_REAL_PCAP=1` fails
   unless the client tcpdump archive is present. Archives logs + pcap +

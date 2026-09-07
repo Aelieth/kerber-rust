@@ -8,6 +8,7 @@
 //! processing does.
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// MIT `STALE_TIME` (`replay.c:59`): two minutes.
@@ -39,16 +40,21 @@ pub enum Check {
 }
 
 /// A bounded request→reply cache with stale-entry and total-size eviction.
+/// The request bytes are held once, shared by the map and the FIFO, so memory
+/// tracks MIT's accounting (`req_packet + reply_packet + sizeof(entry)`).
 pub struct Lookaside {
-    map: HashMap<Vec<u8>, Entry>,
+    map: HashMap<Arc<[u8]>, Entry>,
     /// `(key, generation)` in insertion order; the FIFO MIT keeps in `expiration_queue`.
     /// Superseded pairs (whose generation no longer matches the map) are skipped
     /// lazily during eviction rather than removed eagerly.
-    order: VecDeque<(Vec<u8>, u64)>,
+    order: VecDeque<(Arc<[u8]>, u64)>,
     total: usize,
     next_gen: u64,
     max_size: usize,
     stale: Duration,
+    /// Set once the size cap first forces an eviction; the KDC log line lets a
+    /// soak tell the cache filling (bounded) from a leak (unbounded).
+    full_logged: bool,
 }
 
 impl Default for Lookaside {
@@ -74,6 +80,7 @@ impl Lookaside {
             next_gen: 0,
             max_size,
             stale,
+            full_logged: false,
         }
     }
 
@@ -111,10 +118,11 @@ impl Lookaside {
         self.evict(size);
         let generation = self.next_gen;
         self.next_gen += 1;
-        self.order.push_back((req.to_vec(), generation));
+        let key: Arc<[u8]> = Arc::from(req);
+        self.order.push_back((Arc::clone(&key), generation));
         self.total += size;
         self.map.insert(
-            req.to_vec(),
+            key,
             Entry {
                 timein: Instant::now(),
                 reply: reply.map(<[u8]>::to_vec),
@@ -124,12 +132,27 @@ impl Lookaside {
         );
     }
 
+    fn note_full(&mut self) {
+        if self.full_logged {
+            return;
+        }
+        self.full_logged = true;
+        tracing::info!(
+            event = "kdc.lookaside.full",
+            component = "krb5-kdc",
+            outcome = "ok",
+            total_bytes = self.total,
+            max_bytes = self.max_size,
+            entries = self.map.len(),
+        );
+    }
+
     /// MIT `kdc_insert_lookaside`'s purge loop: from the oldest end, drop stale
     /// entries and keep dropping until `incoming` fits under `max_size`.
     fn evict(&mut self, incoming: usize) {
         let now = Instant::now();
         while let Some((key, generation)) = self.order.front().cloned() {
-            match self.map.get(&key) {
+            match self.map.get(&*key) {
                 None => {
                     self.order.pop_front();
                 }
@@ -142,9 +165,12 @@ impl Lookaside {
                         break;
                     }
                     let size = e.size;
-                    self.map.remove(&key);
+                    self.map.remove(&*key);
                     self.order.pop_front();
                     self.total -= size;
+                    if !stale {
+                        self.note_full();
+                    }
                 }
             }
         }
@@ -200,6 +226,18 @@ mod tests {
     }
 
     #[test]
+    fn the_request_bytes_are_held_once_for_the_map_and_the_fifo() {
+        let mut c = Lookaside::new();
+        c.check_or_mark(b"req");
+        c.finish(b"req", Some(b"reply"));
+        let (key, _) = c.order.back().expect("queued");
+        // One allocation: the FIFO entry and the map key (the marker's key was
+        // dropped by finish).
+        assert_eq!(Arc::strong_count(key), 2);
+        assert!(c.map.contains_key(&**key));
+    }
+
+    #[test]
     fn the_total_size_cap_evicts_oldest_first() {
         // Room for ~2 entries of overhead + 3-byte key + 10-byte reply.
         let cap = (ENTRY_OVERHEAD + 13) * 2 + 5;
@@ -211,5 +249,16 @@ mod tests {
         // The oldest ("aaa") is evicted; the newest two remain.
         assert!(matches!(c.check_or_mark(b"aaa"), Check::Fresh));
         assert!(matches!(c.check_or_mark(b"ccc"), Check::Hit(_)));
+        assert!(c.full_logged, "a size-cap eviction is logged once");
+    }
+
+    #[test]
+    fn stale_eviction_alone_does_not_report_a_full_cache() {
+        let mut c = Lookaside::with_limits(MAX_SIZE, Duration::from_millis(1));
+        c.check_or_mark(b"old");
+        c.finish(b"old", Some(b"r"));
+        std::thread::sleep(Duration::from_millis(5));
+        c.check_or_mark(b"new");
+        assert!(!c.full_logged);
     }
 }
