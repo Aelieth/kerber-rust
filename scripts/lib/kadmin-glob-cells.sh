@@ -22,13 +22,13 @@ glob_cells() {
     for g in 'ga*' 'g?1' '[gb]a*' 'ga1@*' 'ga.1' 'ga\\' '[[:digit:]]*'; do
         {
             echo "== listprincs $g"
-            kg "listprincs $g" | grep -v '^Authenticating' | sort
+            kg "listprincs $g" | { grep -v '^Authenticating' || true; } | sort
         } >>"$out"
     done
     for g in 'gpol*' 'gp?' 'gpol1'; do
         {
             echo "== listpols $g"
-            kg "listpols $g" | grep -v '^Authenticating' | sort
+            kg "listpols $g" | { grep -v '^Authenticating' || true; } | sort
         } >>"$out"
     done
     cat "$out"

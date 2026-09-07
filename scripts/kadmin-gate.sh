@@ -784,6 +784,19 @@ HIST_BEFORE="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
 echo "$HIST_BEFORE"
 echo "$HIST_BEFORE" | grep -F 'Principal does not exist while retrieving "kadmin/history@KERBER.TEST".'
 
+echo "==== a failed short-password cpw still creates kadmin/history (before passwd_check) ===="
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addpol -minlength 8 -history 2 a8pol'
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw a8-initial-secret -policy a8pol a8u'
+A8CPW="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'cpw -pw sh a8u' 2>&1 || true)"
+echo "$A8CPW"
+echo "$A8CPW" | grep -F 'Password is too short while changing password for "a8u@KERBER.TEST".'
+A8HIST="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc kadmin/history' 2>&1 || true)"
+echo "$A8HIST" | grep -F 'Principal: kadmin/history@KERBER.TEST'
+
 echo "==== MIT kadmin purgekeys ===="
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addpol -history 2 g3bhist'
@@ -1763,6 +1776,14 @@ echo "==== MIT kadmin/history service on kadm5 ===="
 MIT_HIST_BEFORE="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc kadmin/history' 2>&1 || true)"
 echo "$MIT_HIST_BEFORE"
 echo "$MIT_HIST_BEFORE" | grep -F 'Principal does not exist while retrieving "kadmin/history@KERBER.TEST".'
+
+docker exec "$NAME_MIT" kadmin.local -q 'addpol -minlength 8 -history 2 a8pol' || true
+docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw a8-initial-secret -policy a8pol a8u' || true
+MIT_A8CPW="$(docker exec "$NAME_MIT" kadmin.local -q 'cpw -pw sh a8u' 2>&1 || true)"
+echo "$MIT_A8CPW"
+echo "$MIT_A8CPW" | grep -F 'Password is too short while changing password for "a8u@KERBER.TEST".'
+MIT_A8HIST="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc kadmin/history' 2>&1 || true)"
+echo "$MIT_A8HIST" | grep -F 'Principal: kadmin/history@KERBER.TEST'
 docker exec "$NAME_MIT" kadmin.local -q 'addpol -history 2 g3bhist' || true
 docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw hist-secret -policy g3bhist histee' || true
 docker exec "$NAME_MIT" kadmin.local -q 'cpw -pw hist-rotated histee' || true

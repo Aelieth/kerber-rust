@@ -1418,8 +1418,25 @@ impl PrincipalStore {
         password: &[u8],
         keepold: u32,
     ) -> Result<(), Error> {
-        self.check_password_quality(name, password)?;
         let id = self.canonical_id(name, princ_realm)?;
+        // MIT `kadm5_chpass_principal_3`: a bound policy (`have_pol`) fetches
+        // the history key — creating `kadmin/history` on first use — and
+        // records the old keys BEFORE `passwd_check`, so a chpass rejected for
+        // quality still leaves `kadmin/history` created; `pw_history_num` counts
+        // the current password inside N, so history=1 keeps no old keys.
+        let nhist = self
+            .map
+            .get(&id)
+            .ok_or(Error::NotFound)?
+            .pw_policy
+            .as_ref()
+            .and_then(|n| self.policies.get(n))
+            .map(|pol| pol.history);
+        let hist = match nhist {
+            Some(_) => Some(self.ensure_history_principal()?),
+            None => None,
+        };
+        self.check_password_quality(name, password)?;
         let Some(existing) = self.map.get(&id) else {
             return Err(Error::NotFound);
         };
@@ -1432,19 +1449,6 @@ impl PrincipalStore {
             .max()
             .unwrap_or(0)
             .saturating_add(1);
-        // MIT `kadm5_chpass_principal_3`: a bound policy (`have_pol`) fetches
-        // the history key — creating `kadmin/history` on first use — and
-        // records the old keys; `pw_history_num` counts the current password
-        // inside N, so history=1 keeps no old keys (A→B→A is allowed).
-        let nhist = existing
-            .pw_policy
-            .as_ref()
-            .and_then(|n| self.policies.get(n))
-            .map(|pol| pol.history);
-        let hist = match nhist {
-            Some(_) => Some(self.ensure_history_principal()?),
-            None => None,
-        };
         let new_keys =
             keys_from_password(&self.policy.password_etypes(), password, &salt, next_kvno)?;
         self.replace_password_keys(&id, new_keys, nhist.zip(hist), keepold)?;
@@ -3431,6 +3435,35 @@ mod tests {
                 .any(|e| e.name.starts_with("kadmin/history@"))
         );
         assert!(entries.iter().any(|e| e.name.starts_with("user@")));
+    }
+
+    #[test]
+    fn kadmin_history_is_created_before_a_rejected_quality_chpass() {
+        // MIT kadm5_chpass_principal_3 fetches the history key (creating
+        // kadmin/history) before passwd_check, so a chpass rejected for a
+        // short password still leaves kadmin/history created.
+        let (mut store, _) = crate::bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+        let mut pol = NamedPolicy::new("minlen");
+        pol.min_length = 8;
+        pol.history = 2;
+        store.put_policy(pol);
+        store
+            .set_principal_policy(&user, Some("minlen".into()))
+            .unwrap();
+        let hist = PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "history"]);
+        assert!(
+            store.get_name(&hist).is_none(),
+            "kadmin/history not created until the first policy chpass"
+        );
+        assert!(
+            store.set_password(&user, b"short").is_err(),
+            "a too-short password is rejected"
+        );
+        assert!(
+            store.get_name(&hist).is_some(),
+            "kadmin/history is created before the quality check (MIT order)"
+        );
     }
 
     #[test]
