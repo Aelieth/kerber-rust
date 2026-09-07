@@ -125,8 +125,10 @@ data with the ticket session key (`accept_sec_context.c:494-511`,
 `GSS_S_FAILURE`. An all-zero token CB is accepted when the acceptor has
 bindings; a mismatch is `GSS_S_BAD_BINDINGS`; a match sets
 `GSS_C_CHANNEL_BOUND_FLAG`. Token flags are masked with `INITIATOR_FLAGS`;
-storing a delegated credential sets `GSS_C_DELEG_FLAG`
-(`accept_sec_context.c:571-577`), the established context sets
+a forwarded KRB-CRED sets `GSS_C_DELEG_FLAG` and the acceptor keeps only
+the delegated client name, not a usable credential handle (stricter than
+MIT `rd_and_store_for_creds`, `accept_sec_context.c:571-577`); the
+established context sets
 `GSS_C_PROT_READY_FLAG` (`:1089`), a `GSS_EXTS_FINISHED` extension and a
 bad forwarded KRB-CRED are `GSS_S_FAILURE` (`:380-384`, `:571-574`), and
 RRC is reduced modulo the payload length (`unwrap.c:255-263`). `unwrap`
@@ -162,9 +164,11 @@ types are 60 (`pac.c:281-317,137-147`). Ticket checksum
 (`pac.c:640-673`) is over the recoded EncTicketPart with PAC ad-data
 `0x00`. The FAST client verifies `ticket_checksum`
 (`fast.c:543-551`). PA-REQ-ENC-PA-REP (149) is produced when the AS-REQ
-advertises it; the kinit client verify of 149 is not wired until the
-client also sends the empty padata (RFC 6806 F7) so MIT KDCs that set
-`enc-pa-rep` without returning 149 are not rejected.
+advertises it; since the R0a SPAKE-padata fix the kinit client always
+appends the empty PA-AS-FRESHNESS (150) and PA-REQ-ENC-PA-REP (149) on
+every AS-REQ (`as_ex.rs build_as_req`) and verifies the returned 149
+checksum (`fast.c:646-666`), so a KDC that sets `enc-pa-rep` without
+returning 149 is rejected `KDCREP_MODIFIED`.
 
 FAST `req_checksum` is verified over the wire KDC-REQ-BODY (field 4)
 when a raw packet is present (`do_as_req.c:526-531`); socketless tests
