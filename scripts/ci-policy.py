@@ -1581,9 +1581,11 @@ def check_claim_audit() -> None:
         ev.mkdir()
         stamp = "head_sha=0\ntree_sha=0\n"
         (ev / "good.log").write_text(stamp + "value=1\n")
-        (ev / "settle-live.log").write_text(stamp + "cmd=docker exec x kinit user\nvalue=1\n")
-        (ev / "settle-grep.log").write_text(stamp + "cmd=grep -F value=1 /tmp/x.log\nvalue=1\n")
-        (ev / "settle-run.log").write_text(stamp + "cmd=scripts/fx-gate.sh\nvalue=1\n")
+        (ev / "settle-live.log").write_text(stamp + "==== settle live ====\ncmd=docker exec x kinit user\nvalue=1\n")
+        (ev / "settle-grep.log").write_text(stamp + "==== settle grep ====\ncmd=grep -F value=1 /tmp/x.log\nvalue=1\n")
+        (ev / "settle-run.log").write_text(stamp + "==== settle run ====\ncmd=scripts/fx-gate.sh\nvalue=1\n")
+        (ev / "settle-nobanner.log").write_text(stamp + "cmd=docker exec x kinit user\nvalue=1\n")
+        (ev / "settle-commit.log").write_text(stamp + "==== settle commit ====\ncmd=docker exec c sh -c\ncommit value=1\n")
         (root / "scripts" / "fx-policy.py").write_text(
             "def check():\n    if bad:\n        _die('value=1 wrong')\n\n\ndef _self_test():\n    _must_die(check, 'value=1')\n"
         )
@@ -1623,6 +1625,14 @@ def check_claim_audit() -> None:
         must_fail(
             "- **Gate-run settle:** `value=1` at `scripts/fx-gate.sh:9`; `settle-run.log`.\n",
             "takes a Rust-side gate run as the MIT leg",
+        )
+        must_fail(
+            "- **No-banner settle:** `value=1` at `scripts/fx-gate.sh:9`; `settle-nobanner.log`.\n",
+            "takes a settle without the settle.sh banner",
+        )
+        must_fail(
+            "- **Commit-not-oracle:** `value=1` at `scripts/fx-gate.sh:9`; `settle-commit.log`.\n",
+            "matches 'commit' as an oracle word",
         )
         must_fail(
             "- **Tooling without fixture:** `value=1` at `scripts/fx-policy.py:3`.\n",

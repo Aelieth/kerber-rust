@@ -60,7 +60,7 @@ ORACLE_TOOLS = {
     "rd-safe-oracle", "kadm5-changepw-rpc", "kadm5_probe", "samba-tool", "ndrdump", "ldbsearch",
     "smbclient", "net", "kimpersonate",
 }
-ORACLE_RE = re.compile(r"mit|oracle|samba|heimdal", re.I)
+ORACLE_RE = re.compile(r"\b(?:mit|oracle|samba|heimdal)\b", re.I)
 ORACLE_GATE_RE = re.compile(r"(?:samba|heimdal|ad-)[\w-]*-gate\.sh$")
 DOCKER_OPT_ARG = {"-e", "--env", "-w", "--workdir", "-u", "--user", "--entrypoint", "--name", "--network"}
 FIXTURE_RE = re.compile(r"_must_die\(|must_fail\(|_must_pass\(|\bassert\b|raise AssertionError")
@@ -320,6 +320,8 @@ def check_bullet(b: Bullet, root: pathlib.Path, evidence: pathlib.Path | None) -
         if b.values and not value_in(b.values, text):
             b.reasons.append(f"artefact {name} carries none of the quoted values")
         if p.name.startswith("settle-"):
+            if not re.search(r"^==== settle .* ====$", text, re.M):
+                b.reasons.append(f"settle {name} lacks the settle.sh banner")
             kind = settle_kind(text)
             if kind is None:
                 b.reasons.append(f"settle {name} has no cmd= line")
