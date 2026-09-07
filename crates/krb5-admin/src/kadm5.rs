@@ -3806,8 +3806,14 @@ mod tests {
         // MIT regcomp fails these (EINVAL from kadm5_get_either).
         assert!(!glob_pattern_ok("[abc"), "unterminated bracket");
         assert!(!glob_pattern_ok("ga\\"), "trailing backslash");
-        assert!(!glob_pattern_ok("ga\\\\"), "trailing escaped backslash (Rust does not unescape)");
-        assert!(!glob_pattern_ok("a[[:digit:]"), "unterminated class bracket");
+        assert!(
+            !glob_pattern_ok("ga\\\\"),
+            "trailing escaped backslash (Rust does not unescape)"
+        );
+        assert!(
+            !glob_pattern_ok("a[[:digit:]"),
+            "unterminated class bracket"
+        );
         // Valid patterns compile.
         assert!(glob_pattern_ok("ga*"));
         assert!(glob_pattern_ok("[abc]"));
