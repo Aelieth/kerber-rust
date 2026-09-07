@@ -2309,7 +2309,7 @@ if echo "$MIT_ESCDENY" | grep -q 'user@KERBER.TEST'; then
 fi
 
 echo "==== glob lists: Rust kadmind vs MIT kadmind ===="
-diff "$SCRATCH/glob-rust.txt" "$SCRATCH/glob-mit.txt"
+diff "$SCRATCH/glob-rust.txt" "$SCRATCH/glob-mit.txt" || { echo "glob lists differ between the Rust kadmind and MIT kadmind" >&2; exit 1; }
 
 log "kadmin.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"addprinc+cpw+get+list+mod+chrand+norandkey+lockdown+purgekeys+setstr+renprinc+del+alias"'
 exit 0

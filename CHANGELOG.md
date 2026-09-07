@@ -35,8 +35,9 @@ this project uses semantic versioning once a crate is published.
   every entry as a principal, so a marker made MIT kpropd fail
   `Malformed representation of principal` and drop the whole batch. Policies
   reach a replica by full resync, as with MIT. `scripts/iprop-gate.sh` now
-  propagates a password change under a history policy and has the MIT
-  kpropd replica refuse the old password itself.
+  creates a policy on the master after the replica's resync (its marker must
+  stay off the wire), propagates a password change under a history policy,
+  and has the MIT kpropd replica refuse the old password itself.
 - **kdc/admin.** Password history is stored the way MIT stores it. Every
   principal's `KRB5_TL_KADM_DATA` is now the XDR `osa_princ_ent_rec`
   (`adb_xdr.c`): the bound policy and `KADM5_POLICY`, `old_key_next`,

@@ -401,9 +401,9 @@ fi
 
 echo "==== password history propagates: MIT kpropd applies the KADM_DATA record under kadmin/history ===="
 # kdb_convert.c: the admin record travels inside AT_TL_DATA and a changed
-# history as AT_PW_HIST/AT_PW_HIST_KVNO; the replica must then refuse the
-# remembered password itself, with the same kadmin.local text as a primary.
-for q in 'addprinc -pw i3cret1 -policy ihp ihist' 'cpw -pw i3cret2 ihist'; do
+# history as AT_PW_HIST/AT_PW_HIST_KVNO; a policy created meanwhile never
+# travels (kdb5.c), and the replica refuses the remembered password itself.
+for q in 'addpol -history 2 ihp2' 'addprinc -pw i3cret1 -policy ihp ihist' 'cpw -pw i3cret2 ihist'; do
     docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
         "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q "$q" 2>&1 | grep -v '^Authenticating' || true
 done
