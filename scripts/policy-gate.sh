@@ -309,13 +309,17 @@ DELGET="$(kadmin_q 'getpol lockme')"
 echo "$DELGET"
 echo "$DELGET" | grep -qiE 'does not exist|not found|UNK|unknown policy'
 
-echo "==== MIT kdb5_util load of history-N dump (TL_KERBER_HIST 0x4B04) ===="
-if ! docker exec "$NAME" grep -q $'\t19204\t' /tmp/principal; then
-    docker exec "$NAME" grep -n 'histuser\|19204\|4[Bb]04' /tmp/principal >&2 || true
-    log "policy.gate" "error" ',"error":"rust dump missing TL_KERBER_HIST 0x4B04"'
+echo "==== MIT kdb5_util load of history-N dump (KRB5_TL_KADM_DATA under kadmin/history) ===="
+# The history lives in MIT's own record (tl_data type 3, osa_princ_ent_rec
+# with old_keys under the kadmin/history key), not a private type.
+HISTLINE="$(docker exec "$NAME" grep -E $'^princ\t[0-9]+\t[0-9]+\t[0-9]+\t[0-9]+\t[0-9]+\thistuser@KERBER.TEST\t' /tmp/principal)"
+echo "$HISTLINE" | cut -c1-160
+echo "$HISTLINE" | grep -q $'\t3\t'
+if docker exec "$NAME" grep -q $'\t19204\t' /tmp/principal; then
+    log "policy.gate" "error" ',"error":"rust dump still carries the private TL_KERBER_HIST 0x4B04"'
     exit 1
 fi
-echo "rust dump has TL_KERBER_HIST 0x4B04 (19204)"
+docker exec "$NAME" grep -q 'kadmin/history@KERBER.TEST' /tmp/principal
 # Stop rust KDC/kadmind so MIT krb5kdc can bind :88 and load the dump.
 docker exec "$NAME" sh -c '
 for comm in /proc/[0-9]*/comm; do
@@ -354,14 +358,23 @@ fi
 GETH="$(docker exec "$NAME" kadmin.local -q 'getprinc histuser' 2>&1 || true)"
 echo "$GETH"
 echo "$GETH" | grep -q 'Principal: histuser@KERBER.TEST'
+echo "$GETH" | grep -q 'Policy: histn'
+# MIT reads the history Rust wrote: the current (Hist-pw0) and the one
+# remembered old password (Hist-pw2) are reuses, Hist-pw1 fell out of the
+# window; then MIT continues the same ring.
+echo "==== MIT enforces the history Rust recorded, and continues its ring ===="
+for reused in Hist-pw2 Hist-pw0; do
+    MR="$(docker exec "$NAME" kadmin.local -q "cpw -pw $reused histuser" 2>&1 || true)"
+    echo "$MR"
+    echo "$MR" | grep -F 'Cannot reuse password while changing password for "histuser@KERBER.TEST".'
+done
+docker exec "$NAME" kadmin.local -q 'cpw -pw Hist-pw1 histuser' 2>&1 | grep -F 'Password for "histuser@KERBER.TEST" changed.'
+MR2="$(docker exec "$NAME" kadmin.local -q 'cpw -pw Hist-pw0 histuser' 2>&1 || true)"
+echo "$MR2"
+echo "$MR2" | grep -F 'Cannot reuse password while changing password for "histuser@KERBER.TEST".'
 DUMPH="$(docker exec "$NAME" kdb5_util dump /tmp/mit-hist.dump 2>&1 || true)"
 echo "$DUMPH"
-if ! docker exec "$NAME" grep -q $'\t19204\t' /tmp/mit-hist.dump; then
-    docker exec "$NAME" grep -n 'histuser\|19204' /tmp/mit-hist.dump >&2 || true
-    log "policy.gate" "error" ',"error":"MIT dump dropped TL_KERBER_HIST 0x4B04"'
-    exit 1
-fi
-echo "MIT dump preserved TL_KERBER_HIST 0x4B04 (19204)"
+docker exec "$NAME" grep -E $'^princ\t[0-9]+\t[0-9]+\t[0-9]+\t[0-9]+\t[0-9]+\thistuser@KERBER.TEST\t' /tmp/mit-hist.dump | grep -q $'\t3\t'
 STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc; sleep 0.4' 2>&1 || true)"
 echo "$STARTLOG"
 ok=0
@@ -378,7 +391,7 @@ if [ "$ok" != 1 ]; then
 fi
 docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
 if ! docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
-    "$NAME" sh -c 'printf "Hist-pw0\n" | kinit histuser@KERBER.TEST'; then
+    "$NAME" sh -c 'printf "Hist-pw1\n" | kinit histuser@KERBER.TEST'; then
     log "policy.gate" "error" ',"error":"MIT kinit histuser after kdb5_util load failed"'
     exit 1
 fi
