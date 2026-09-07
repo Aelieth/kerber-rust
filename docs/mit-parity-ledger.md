@@ -36,8 +36,8 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
 Counts (after the round-up's password-history port):
-**320** = A1 117 + A2 76 + A3 61 + A4 66.
-exact 137 · stricter-documented 11 · deviation 91 ·
+**321** = A1 117 + A2 77 + A3 61 + A4 66.
+exact 138 · stricter-documented 11 · deviation 91 ·
 absent 63 · deferred 18.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
@@ -311,6 +311,7 @@ Wire = RFC 4120 protocol code (MIT `errcode_to_protocol`).
 | do_as_req.c:641-648 | `select_session_keytype`==0 (server session_enctypes + permitted) | `BAD_ENCRYPTION_TYPE` **14** | krb5-kdc/issue.rs select_session_keytype on the AS server | `BAD_ENCRYPTION_TYPE` **14** | exact | `issue_acl_ap.rs::no_common_etype_is_etype_nosupp`; diffsend `as-session-enctype`; `scripts/differential-gate.sh` |
 | kdc_util.c:1084-1112 | session etype vs server `session_enctypes` / AES256 default | 0 → BAD_ENCRYPTION_TYPE | krb5-kdc/issue.rs dbentry_supports_enctype (attr, else AES256-sha1, else long-term key) | membership, not client key | exact | `issue_acl_ap.rs::session_enctypes_attr_is_membership_not_client_key`; `session_enctypes_rc4_with_allow_rc4_issues_rc4_session` |
 | init_ctx.c:88-97,218-232 `get_boolean`; init_ctx.c:515-530 `krb5_get_permitted_enctypes` | `allow_weak_crypto`, `allow_des3`, `allow_rc4` and `permitted_enctypes` come from `[libdefaults]` only — the KDC's own context, not `[kdcdefaults]` or a realm stanza | an rc4-only client is refused (`BAD_ENCRYPTION_TYPE` 14) when `allow_rc4` sits under `[kdcdefaults]` alone | krb5-config/lib.rs parse_kdc_libdefaults | same sections (a `[libdefaults]` inside kdc.conf counts, as in MIT's merged profile) | exact | `libdefaults_only_enctype_knobs` (krb5-config units); `scripts/rc4-session-gate.sh:342-350` MIT kinit rc4user against both KDCs prints the same `KDC has no support for encryption type` after `allow_rc4` is removed from `[libdefaults]` |
+| main.c:257-261,622-626 | `kdc_ports`/`kdc_tcp_ports`/`kdc_listen` (and `reject_bad_transit`) read from `[kdcdefaults]` or a realm stanza only, never `[libdefaults]` | n/a (config) | krb5-config/lib.rs parse_kdc_libdefaults handles only the four enctype knobs, with no fallthrough to `parse_kdcdefaults` (R2-P8) | a `[kdcdefaults]` knob placed under `[libdefaults]` is ignored (default kept) | exact | `libdefaults_does_not_honour_kdcdefaults_knobs` (krb5-config units) |
 | do_as_req.c:736-741 | `select_client_key` decrypt fail | `DECRYPT_CLIENT_KEY` + decrypt err | keys already in store; no runtime decrypt | — | deferred | none (dump-time decrypt only) |
 | do_as_req.c:747-751 | `kdc_fast_read_cookie` | `READ_COOKIE` | `krb5-kdc/preauth.rs armor_key_from_ap` SPAKE/FAST cookie | `bad cookie` **24**; MIT `fast_util.c:610` **always returns 0** (status dead in 1.22.2) | absent | proposed: diffsend `as-mit1-cookie` |
 | do_as_req.c:439-442 | `check_padata` fail | `PREAUTH_FAILED` **24** (vague→**60**) | `as_reply` crypto→**24** `preauth`; EncTs/SPAKE/PKINIT own texts | not the string `PREAUTH_FAILED` | deviation | proposed: diffsend `as-bad-enc-ts-etext`; `issue_acl_ap.rs` wrong-password **24** |

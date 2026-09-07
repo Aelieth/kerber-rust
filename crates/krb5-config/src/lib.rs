@@ -709,7 +709,11 @@ fn parse_kdc_libdefaults(conf: &mut KdcConf, line: &str) {
         "allow_rc4" => conf.allow_rc4 = Some(truthy(&v)),
         "allow_des3" => conf.allow_des3 = Some(truthy(&v)),
         "permitted_enctypes" => conf.permitted_enctypes = split_ws(&v),
-        _ => parse_kdcdefaults(conf, line),
+        // MIT reads kdc_ports/kdc_tcp_ports/reject_bad_transit only from
+        // [kdcdefaults] or a realm stanza (main.c:257-261,622-626), never
+        // [libdefaults]; no fallthrough, so a kdcdefaults knob placed under
+        // [libdefaults] is ignored like MIT.
+        _ => {}
     }
 }
 
@@ -1519,6 +1523,40 @@ mod tests {
             mit.database_name.as_deref(),
             Some(std::path::Path::new("/var/lib/krb5kdc/principal"))
         );
+    }
+
+    #[test]
+    fn libdefaults_does_not_honour_kdcdefaults_knobs() {
+        // MIT reads kdc_ports/kdc_tcp_ports/reject_bad_transit only from
+        // [kdcdefaults] or a realm stanza (main.c:257-261,622-626); a copy
+        // under [libdefaults] is ignored (R2-P8: no fallthrough).
+        let lib = KdcConf::parse(
+            r"
+[libdefaults]
+    kdc_ports = 12345
+    kdc_tcp_ports = 12345
+    reject_bad_transit = false
+    allow_rc4 = true
+",
+        )
+        .unwrap();
+        // The kdcdefaults knobs under [libdefaults] are ignored: defaults kept.
+        assert_eq!(lib.kdc_listen, vec!["127.0.0.1:88".to_string()]);
+        assert_eq!(lib.kdc_tcp_listen, vec!["127.0.0.1:88".to_string()]);
+        assert!(lib.reject_bad_transit, "reject_bad_transit default kept");
+        // The four enctype knobs under [libdefaults] are still honoured.
+        assert_eq!(lib.allow_rc4, Some(true));
+        // The same knobs under [kdcdefaults] ARE honoured.
+        let kdc = KdcConf::parse(
+            r"
+[kdcdefaults]
+    kdc_ports = 12345
+    reject_bad_transit = false
+",
+        )
+        .unwrap();
+        assert_eq!(kdc.kdc_listen, vec!["127.0.0.1:12345".to_string()]);
+        assert!(!kdc.reject_bad_transit);
     }
 
     #[test]
