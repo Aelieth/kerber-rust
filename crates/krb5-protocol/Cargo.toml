@@ -36,6 +36,10 @@ path = "tests/l3b_fast_nego.rs"
 name = "l3b_fast_avail"
 path = "tests/l3b_fast_avail.rs"
 
+[[test]]
+name = "r0a_spake_padata"
+path = "tests/r0a_spake_padata.rs"
+
 [dependencies]
 chrono.workspace = true
 getrandom.workspace = true

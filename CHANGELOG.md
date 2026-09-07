@@ -6,6 +6,20 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### Round-up R0 (clear CI)
+
+- **client.** The SPAKE response AS-REQ replaced its padata list with
+  `[PA-SPAKE, PA-FX-COOKIE]`, dropping the PA-AS-FRESHNESS/PA-REQ-ENC-PA-REP
+  pair W1-J L3b advertises on every AS-REQ; MIT's KDC then echoed no enc-pa-rep
+  checksum (`kdc_util.c:1780-1783`) and the client rejected the reply with
+  `KRB5_KDCREP_MODIFIED`. CI was red at `rust-kinit-spake-gate` for every push
+  from `e5d9e28` to `a8563e1`. The final request now carries the cookie, the
+  PA-SPAKE response, then 150 and 149, in MIT's order (`k5_preauth` copies the
+  cookie first, `init_creds_step_request` appends the pair last), and the
+  second-round support request orders the cookie before PA-SPAKE the same way.
+  `scripts/lib/kdc-padata-proxy.py` (new) prints the padata types of every
+  forwarded KDC-REQ for live settles.
+
 ### W1-K M4c (kadmind operation logging)
 
 - **admin.** kadmind now logs every operation like MIT `log_done`/`log_unauth`

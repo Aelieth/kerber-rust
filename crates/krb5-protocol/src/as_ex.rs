@@ -631,10 +631,11 @@ fn continue_spake(
     if spake_challenge(&method)?.is_some() {
         return send_spake_response(req, keys, nonce, till, etypes, err, &support);
     }
-    let mut padata = vec![support.clone()];
+    let mut padata = Vec::new();
     if let Some(c) = find_pa(&method, pa::FX_COOKIE) {
         padata.push(c.clone());
     }
+    padata.push(support.clone());
     let second = build_as_req_from(req, nonce, till.clone(), Some(padata), etypes)?;
     let wire = encode(&second)?;
     let reply = exchange(req.kdc, &wire)?;
@@ -686,7 +687,13 @@ fn send_spake_response(
         chal.pubkey.as_ref(),
         &body_der,
     )?;
-    req2.0.padata = Some(vec![resp, cookie]);
+    // MIT k5_preauth copies the FX-COOKIE first, then the module's PA-SPAKE,
+    // and init_creds_step_request appends the info_pa_permitted pair (150,
+    // 149) that build_as_req already put on the list; replacing the list here
+    // dropped 149, so the KDC echoed no enc-pa-rep checksum (KDCREP_MODIFIED).
+    let mut padata = vec![cookie, resp];
+    padata.extend(req2.0.padata.take().unwrap_or_default());
+    req2.0.padata = Some(padata);
     let wire = encode(&req2)?;
     let reply = exchange(req.kdc, &wire)?;
     match classify(&reply)? {
