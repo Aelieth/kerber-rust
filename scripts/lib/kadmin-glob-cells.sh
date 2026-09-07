@@ -19,7 +19,7 @@ glob_cells() {
     done
     echo "==== $leg glob: listprincs / listpols patterns ===="
     : >"$out"
-    for g in 'ga*' 'g?1' '[gb]a*' 'ga1@*' 'ga.1' 'ga\\'; do
+    for g in 'ga*' 'g?1' '[gb]a*' 'ga1@*' 'ga.1' 'ga\\' '[[:digit:]]*'; do
         {
             echo "== listprincs $g"
             kg "listprincs $g" | grep -v '^Authenticating' | sort

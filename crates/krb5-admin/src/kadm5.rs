@@ -2251,7 +2251,7 @@ fn dispatch_kadm5_ticket(
                 .read()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let glob = expr.as_deref().unwrap_or("*");
-            if glob.ends_with('\\') {
+            if !glob_pattern_ok(glob) {
                 return Ok(generic_ret(API_V2, EINVAL));
             }
             let mut ids = g.ids();
@@ -2548,7 +2548,7 @@ fn dispatch_kadm5_ticket(
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let mut names: Vec<_> = g.policies().keys().cloned().collect();
             let glob = expr.as_deref().unwrap_or("*");
-            if glob.ends_with('\\') {
+            if !glob_pattern_ok(glob) {
                 return Ok(generic_ret(api, EINVAL));
             }
             if glob != "*" && !glob.is_empty() {
@@ -3141,6 +3141,77 @@ fn parse_get(args: &[u8]) -> Result<(PrincipalName, String, u32), Error> {
 /// MIT `glob_to_regexp` EINVAL for a trailing backslash (`svr_iters.c:63-64`).
 const EINVAL: u32 = 22;
 
+/// MIT compiles the glob to a POSIX BRE with `regcomp` (`svr_iters.c:175`); a
+/// pattern that fails to compile (trailing `\\`, an unterminated `[...]`) is
+/// `EINVAL` from `kadm5_get_either`. This mirrors that pre-flight.
+#[must_use]
+pub fn glob_pattern_ok(glob: &str) -> bool {
+    // MIT's `ss_parse` unescapes a `\\` pair before `glob_to_regexp`; the Rust
+    // tokenizer does not, so a pattern ending in a backslash is `EINVAL` either
+    // way (a lone trailing `\` fails `regcomp`; MIT unescapes a `\\` pair to a
+    // lone trailing `\` and then fails).
+    if glob.ends_with('\\') {
+        return false;
+    }
+    let b = glob.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'\\' => {
+                if i + 1 >= b.len() {
+                    return false;
+                }
+                i += 2;
+            }
+            b'[' => {
+                let mut j = i + 1;
+                if b.get(j) == Some(&b'^') {
+                    j += 1;
+                }
+                if b.get(j) == Some(&b']') {
+                    j += 1;
+                }
+                while j < b.len() && b[j] != b']' {
+                    if b[j] == b'[' && b.get(j + 1) == Some(&b':') {
+                        j += 2;
+                        while j + 1 < b.len() && !(b[j] == b':' && b[j + 1] == b']') {
+                            j += 1;
+                        }
+                        if j + 1 >= b.len() {
+                            return false;
+                        }
+                        j += 2;
+                    } else {
+                        j += 1;
+                    }
+                }
+                if j >= b.len() {
+                    return false;
+                }
+                i = j + 1;
+            }
+            _ => i += 1,
+        }
+    }
+    true
+}
+
+/// POSIX character classes MIT's BRE accepts inside `[...]`.
+fn posix_class_match(name: &[u8], c: u8) -> bool {
+    match name {
+        b"digit" => c.is_ascii_digit(),
+        b"alpha" => c.is_ascii_alphabetic(),
+        b"alnum" => c.is_ascii_alphanumeric(),
+        b"upper" => c.is_ascii_uppercase(),
+        b"lower" => c.is_ascii_lowercase(),
+        b"space" => c.is_ascii_whitespace(),
+        b"blank" => c == b' ' || c == b'\t',
+        b"punct" => c.is_ascii_punctuation(),
+        b"xdigit" => c.is_ascii_hexdigit(),
+        _ => false,
+    }
+}
+
 /// Append `@*` when a principal glob has no realm (`svr_iters.c` implicit `@*`).
 pub(crate) fn glob_expand(glob: &str, append_realm: bool) -> String {
     if append_realm && !glob.contains('@') {
@@ -3227,7 +3298,16 @@ fn glob_class(pat: &[u8], c: u8) -> Option<(bool, usize)> {
     let mut matched = false;
     let start = i;
     while i < pat.len() && (pat[i] != b']' || i == start) {
-        if i + 2 < pat.len() && pat[i + 1] == b'-' && pat[i + 2] != b']' {
+        if pat[i] == b'[' && pat.get(i + 1) == Some(&b':') {
+            let mut k = i + 2;
+            while k + 1 < pat.len() && !(pat[k] == b':' && pat[k + 1] == b']') {
+                k += 1;
+            }
+            if posix_class_match(&pat[i + 2..k], c) {
+                matched = true;
+            }
+            i = k + 2;
+        } else if i + 2 < pat.len() && pat[i + 1] == b'-' && pat[i + 2] != b']' {
             if pat[i] <= c && c <= pat[i + 2] {
                 matched = true;
             }
@@ -3720,6 +3800,26 @@ impl XdrW {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn glob_rejects_malformed_and_matches_posix_classes() {
+        use super::{glob_is_match, glob_pattern_ok};
+        // MIT regcomp fails these (EINVAL from kadm5_get_either).
+        assert!(!glob_pattern_ok("[abc"), "unterminated bracket");
+        assert!(!glob_pattern_ok("ga\\"), "trailing backslash");
+        assert!(!glob_pattern_ok("ga\\\\"), "trailing escaped backslash (Rust does not unescape)");
+        assert!(!glob_pattern_ok("a[[:digit:]"), "unterminated class bracket");
+        // Valid patterns compile.
+        assert!(glob_pattern_ok("ga*"));
+        assert!(glob_pattern_ok("[abc]"));
+        assert!(glob_pattern_ok("[[:digit:]]a*"));
+        assert!(glob_pattern_ok("[]abc]"));
+        // POSIX classes match like MIT's BRE.
+        assert!(glob_is_match(b"[[:digit:]]", b"5"));
+        assert!(!glob_is_match(b"[[:digit:]]", b"a"));
+        assert!(glob_is_match(b"[[:alpha:]]x", b"gx"));
+        assert!(!glob_is_match(b"[[:digit:]]a*", b"ga1"));
+    }
+
     #[test]
     fn glob_matches_like_svr_iters() {
         use super::{glob_expand, glob_is_match};

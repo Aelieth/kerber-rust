@@ -750,9 +750,12 @@ for pr in ga1 ga2 gb1; do
     rust_local "addprinc -pw gx $pr" >/dev/null
     mit_local "addprinc -pw gx $pr" >/dev/null
 done
-for g in 'ga*' 'g?1' '*1' '[gb]a*' 'ga1@*' 'ga.1'; do
+for g in 'ga*' 'g?1' '*1' '[gb]a*' 'ga1@*' 'ga.1' '[[:digit:]]*'; do
     dl "listprincs-$g" "$(rust_local "listprincs $g" | grep -v '^Authenticating' | sort)" "$(mit_local "listprincs $g" | sort)"
 done
+dl listprincs-malformed-bracket \
+    "$(rust_local 'listprincs [abc' 2>&1 | grep -F 'Invalid argument')" \
+    "$(mit_local 'listprincs [abc' 2>&1 | grep -F 'Invalid argument')"
 dl 'listprincs-ga-backslash' "$(rust_local 'listprincs ga\\' 2>&1 | grep -v '^Authenticating')" "$(mit_local 'listprincs ga\\' 2>&1)"
 for pl in gpol1 gpolx gp2; do
     rust_local "addpol $pl" >/dev/null

@@ -202,7 +202,7 @@ fn run(
         Some("q" | "quit" | "exit") => Ok(LineOutcome::Quit),
         Some("listprincs" | "list_principals") => {
             let g = parts.get(1).copied();
-            if g.is_some_and(|g| g.ends_with('\\')) {
+            if g.is_some_and(|g| !krb5_admin::glob_pattern_ok(g)) {
                 eprintln!("get_principals: Invalid argument while retrieving list.");
                 return Ok(LineOutcome::Next);
             }
@@ -375,7 +375,7 @@ fn run(
         }
         Some("listpols" | "list_policies") => {
             let g = parts.get(1).copied();
-            if g.is_some_and(|g| g.ends_with('\\')) {
+            if g.is_some_and(|g| !krb5_admin::glob_pattern_ok(g)) {
                 eprintln!("get_policies: Invalid argument while retrieving list.");
                 return Ok(LineOutcome::Next);
             }
