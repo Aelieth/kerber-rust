@@ -479,10 +479,13 @@ fn continue_fast(
                 || string_to_key(etype, req.password, &salt, params.as_deref()),
                 Ok,
             )?;
-            let mut inner_pa = vec![pa_enc_timestamp(&client_key)?];
+            // MIT k5_preauth copies the FX-COOKIE (copy_cookie) before the
+            // preauth module's PA data, so the cookie leads the inner padata.
+            let mut inner_pa = Vec::new();
             if let Some(c) = cookie {
                 inner_pa.push(c);
             }
+            inner_pa.push(pa_enc_timestamp(&client_key)?);
             let ap = fast_armor_ap(armor, &sub)?;
             let mut req2 = build_as_req_from(req, nonce, till, None, etypes)?;
             attach_fast(&mut req2, &ap, &akey, inner_pa)?;
@@ -746,7 +749,9 @@ fn continue_pkinit(
     h.update(&body_der);
     let sha1 = h.finalize();
     let pa = pa_pk_as_req_signed(&kp.public, &pk.cert, &pk.key, nonce, &sha1)?;
-    req2.0.padata.get_or_insert_with(Vec::new).push(pa);
+    // MIT appends PA-AS-FRESHNESS/PA-REQ-ENC-PA-REP (150/149) after the preauth
+    // module's PA data, so PA-PK-AS-REQ (16) leads the list.
+    req2.0.padata.get_or_insert_with(Vec::new).insert(0, pa);
     let wire = encode(&req2)?;
     tracing::info!(
         event = "client.pkinit",
