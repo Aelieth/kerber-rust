@@ -290,6 +290,10 @@ pub struct UlogEntry {
 const ULOG_CAP: usize = 1024;
 /// MIT `UPDATE_OK`.
 pub const IPROP_OK: u32 = 0;
+/// MIT `UPDATE_ERROR`: the master could not build the update (here: no master
+/// key to wrap the plaintext keys the Rust store holds, so it refuses rather
+/// than ship them in the clear).
+pub const IPROP_ERROR: u32 = 1;
 /// MIT `UPDATE_FULL_RESYNC_NEEDED`.
 pub const IPROP_FULL_RESYNC: u32 = 2;
 /// MIT `UPDATE_NIL`.

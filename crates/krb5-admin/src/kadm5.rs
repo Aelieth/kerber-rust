@@ -1201,7 +1201,22 @@ fn dispatch_iprop(store: &SharedStore, acl: &Acl, actor: &str, proc: u32, args: 
                 .read()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let (status, last, entries) = g.iprop_get(last_sno);
-            encode_incr_result(status, last, &entries, g.iprop_master_key().as_ref())
+            let mkey = g.iprop_master_key();
+            // MIT ships each key as the master-key ciphertext already stored in
+            // the KDB (`kdb_convert.c` copies `key_data_contents`). The Rust
+            // store holds plaintext keys, so it wraps them under the master key
+            // at ship time; with no master key available it must refuse the
+            // update rather than send keys in the clear. (`iprop_master_key`
+            // falls back to the stash, `KRB5_MASTER_PASSWORD`, then the `K/M`
+            // principal, so this is reached only when none of those exist.)
+            if mkey.is_none()
+                && entries
+                    .iter()
+                    .any(|e| e.princ.as_ref().is_some_and(|p| !p.keys.is_empty()))
+            {
+                return encode_incr_result(krb5_kdc::IPROP_ERROR, 0, &[], None);
+            }
+            encode_incr_result(status, last, &entries, mkey.as_ref())
         }
         IPROP_FULL_RESYNC | IPROP_FULL_RESYNC_EXT => {
             let g = store
@@ -7707,9 +7722,37 @@ mod tests {
         assert_eq!(ret_code(&missing), KADM5_UNK_POLICY);
     }
 
+    // Give a shared store a real master key the iprop encoder can wrap keys
+    // with: `save_store` writes a keytab stash for the fresh bootstrap, then
+    // `persist_paths` points `iprop_master_key` at it. Without this a store has
+    // no master key and the encoder refuses to ship keys (see the negative test).
+    fn seed_master_key(store: &krb5_kdc::SharedDump) {
+        let dir = std::env::temp_dir().join(format!(
+            "krb5-iprop-mk-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos()),
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let db = dir.join("principal");
+        let stash = dir.join("stash");
+        {
+            let g = store
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            krb5_kdc::save_store(&g, &db, &stash).expect("write master stash");
+        }
+        let mut g = store
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        g.persist_paths = Some((db, stash));
+    }
+
     #[test]
     fn iprop_get_updates_full_resync_then_delta() {
         let (store, acl, actor) = setup();
+        seed_master_key(&store);
         let last = {
             let g = store.read().unwrap();
             g.serial()
@@ -7771,6 +7814,47 @@ mod tests {
                 .iter()
                 .any(|e| e.name.contains("iproprpc") && e.princ.is_some()),
             "decode must recover the new principal: {entries:?}"
+        );
+    }
+
+    // MIT ships each key as the master-key ciphertext it already stores
+    // (`kdb_convert.c`); the Rust store holds plaintext, so with no master key
+    // the GET_UPDATES encoder must answer UPDATE_ERROR rather than send the
+    // keys in the clear. A store with no stash, no `KRB5_MASTER_PASSWORD` and
+    // no `K/M` principal (the default in-memory bootstrap) is exactly that.
+    #[test]
+    fn iprop_get_updates_refuses_plaintext_keys_without_master_key() {
+        let (store, acl, actor) = setup();
+        assert!(
+            store.read().unwrap().iprop_master_key().is_none(),
+            "the bootstrap store must have no master key for this test"
+        );
+        let last = store.read().unwrap().serial();
+        let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["plainkey"]);
+        {
+            let mut g = store.write().unwrap();
+            g.create_password(&acl, &actor, &extra, b"plain-secret")
+                .unwrap();
+        }
+        let mut delta = XdrW::default();
+        delta.u32(last);
+        delta.u32(0);
+        delta.u32(0);
+        let out = dispatch_iprop(&store, &acl, &actor, IPROP_GET_UPDATES, &delta.b);
+        let (st, _, _, _, entries) = decode_incr_result(&out, None).unwrap();
+        assert_eq!(
+            st,
+            krb5_kdc::IPROP_ERROR,
+            "no master key must yield UPDATE_ERROR, not a keyed reply"
+        );
+        assert!(entries.is_empty(), "the error reply ships no entries");
+        assert!(
+            !out.windows(4).any(|w| w == AT_KEYDATA.to_be_bytes()),
+            "the reply must carry no AT_KEYDATA"
+        );
+        assert!(
+            !out.windows(b"plainkey".len()).any(|w| w == b"plainkey"),
+            "the reply must not name the keyed principal"
         );
     }
 
