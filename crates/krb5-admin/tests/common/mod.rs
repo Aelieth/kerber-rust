@@ -161,6 +161,7 @@ pub fn init_client(
         &mut sess,
         &ReplayCache::new(),
         &rec,
+        "127.0.0.1",
     )
     .unwrap();
     let mut i = 0;
@@ -238,6 +239,7 @@ pub fn data_call(
         &mut c.sess,
         &ReplayCache::new(),
         &rec,
+        "127.0.0.1",
     )
     .unwrap();
     let mut i = 0;

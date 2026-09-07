@@ -669,7 +669,20 @@ ADD="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf -e KRB5_TRACE=/dev/stder
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw extra-secret extra' 2>&1 || true)"
 echo "$ADD"
 echo "==== kadmind log ===="
-docker exec "$NAME" cat /tmp/kadmind.log 2>/dev/null || true
+sleep 0.3
+KADMIND_LOG="$(docker exec "$NAME" cat /tmp/kadmind.log 2>/dev/null || true)"
+echo "$KADMIND_LOG"
+# M4c: MIT log_done / log_unauth (server_stubs.c:403-459). The successful admin
+# addprinc logs "Request: ... success" and the changepw listprincs denial logs
+# "Unauthorized request: ...", each with client/service/addr. Settled live in
+# working/logs/audit-polish-0902/w1k/m4c-kadmind-log-settle.log.
+echo "$KADMIND_LOG" \
+    | grep -F 'Request: kadm5_create_principal, extra@KERBER.TEST, success, client=admin@KERBER.TEST, service=kadmin/admin@KERBER.TEST, addr=' \
+    || { echo "Rust kadmind did not log the create like MIT log_done" >&2; exit 1; }
+echo "$KADMIND_LOG" \
+    | grep -F 'Unauthorized request: kadm5_get_principals' \
+    | grep -F 'client=admin@KERBER.TEST' | grep -F 'service=kadmin/changepw@KERBER.TEST' \
+    || { echo "Rust kadmind did not log the denied list like MIT log_unauth" >&2; exit 1; }
 
 alias_cells "$NAME" /tmp/kadmin-krb5.conf admin@KERBER.TEST rust
 echo "==== kdc log (tail) ===="

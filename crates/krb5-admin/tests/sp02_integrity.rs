@@ -53,6 +53,7 @@ fn rpcsec_integrity_request_is_databody_plus_mic() {
         &mut sess,
         &ReplayCache::new(),
         &rec,
+        "127.0.0.1",
     )
     .unwrap();
     let mut i = 0;
@@ -77,6 +78,7 @@ fn rpcsec_integrity_reply_is_databody_plus_mic() {
         &mut sess,
         &ReplayCache::new(),
         &rec,
+        "127.0.0.1",
     )
     .unwrap();
     let mut i = 0;
@@ -122,6 +124,7 @@ fn rpcsec_none_service_body_is_plain() {
         &mut sess,
         &ReplayCache::new(),
         &rec,
+        "127.0.0.1",
     )
     .unwrap();
     let mut i = 0;
@@ -149,6 +152,7 @@ fn rpcsec_integrity_bad_checksum_is_garbage_args() {
         &mut sess,
         &ReplayCache::new(),
         &rec,
+        "127.0.0.1",
     )
     .unwrap();
     let mut i = 0;
@@ -173,6 +177,7 @@ fn rpcsec_wrong_handle_with_valid_mic_dispatches() {
         &mut sess,
         &ReplayCache::new(),
         &rec,
+        "127.0.0.1",
     )
     .unwrap();
     let mut i = 0;

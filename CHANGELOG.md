@@ -6,6 +6,20 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-K M4c (kadmind operation logging)
+
+- **admin.** kadmind now logs every operation like MIT `log_done`/`log_unauth`
+  (`server_stubs.c:403-459`): a completed op emits `Request: <op>, <target>,
+  <success|result>, client=…, service=…, addr=…` and an ACL-denied op emits
+  `Unauthorized request: <op>, <target>, client=…, service=…, addr=…`, at info
+  level. The `service` (acceptor principal) comes from the GSS context and the
+  `addr` from the connection's peer address, both newly threaded into
+  `rpcsec_dispatch`; the op name and target follow MIT's per-stub strings and
+  `prime_arg`. This closes the M4c residue that was deferred for lack of
+  service/addr plumbing. `kadmin-gate.sh` asserts the create-success and the
+  changepw-list-denied lines in the Rust kadmind log, matching a live MIT
+  kadmind settle.
+
 ### W1-J L5b (lookaside reply cache)
 
 - **kdc.** The listener now keeps a lookaside reply cache like MIT
