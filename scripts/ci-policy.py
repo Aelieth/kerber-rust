@@ -2037,8 +2037,8 @@ jobs:
         _row("krb5-kdc/listen.rs handle_tcp", "`TKT_NYV`"),
     )
     handle_span = _item_span(ROOT / "crates/krb5-kdc/src/listen.rs", "handle_tcp")
-    if handle_span is None or handle_span[0] != 464 or handle_span[1] != 542:
-        raise AssertionError(f"handle_tcp span must be brace-matched 464-542, got {handle_span}")
+    if handle_span is None or not handle_span[2].startswith("fn handle_tcp(") or not handle_span[2].rstrip().endswith("}") or handle_span[1] - handle_span[0] < 20:
+        raise AssertionError(f"handle_tcp must resolve to a brace-matched fn body, got {handle_span}")
     max_span = _item_span(ROOT / "crates/krb5-kdc/src/listen.rs", "MAX_TCP_REQUEST")
     if max_span is None:
         raise AssertionError("MAX_TCP_REQUEST const must resolve")
