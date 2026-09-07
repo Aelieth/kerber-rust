@@ -205,7 +205,16 @@ fi
 echo "==== MIT kadmin.local: identical addpol/getpol/modpol/listpols/delpol sequence, diffed ===="
 docker exec "$NAME" sh -c 'kdb5_util create -s -P masterpassword >/dev/null 2>&1'
 mit_local() {
-    docker exec "$NAME" kadmin.local -q "$1" 2>&1 | { grep -v -e '^Authenticating' -e 'No dictionary file' || true; }
+    # kadmin.local prints the "Authenticating as principal ... with password."
+    # banner to stdout and com_err errors to stderr; under 2>&1 the banner can
+    # interleave into the middle of an error line on a loaded runner, which the
+    # old line-start grep could not strip (the cause of the CI kadmin-local
+    # flake). `sed -z` removes both artefacts wherever they land, rejoining a
+    # line the banner split, and leaves interactive prompts (no trailing
+    # newline) intact.
+    docker exec "$NAME" kadmin.local -q "$1" 2>&1 \
+        | sed -z -e 's/Authenticating as principal [^\n]*with password\.\n//g' \
+                 -e 's/[^\n]*No dictionary file specified[^\n]*\n//g'
 }
 mit_local 'addpol floors1' >/dev/null
 diff <(echo "$GETF" | grep -v '^Authenticating') <(mit_local 'getpol floors1')
