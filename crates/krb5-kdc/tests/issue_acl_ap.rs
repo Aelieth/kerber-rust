@@ -1070,6 +1070,57 @@ fn as_req_with_tgs_only_option_is_invalid_as_options() {
 }
 
 #[test]
+fn as_request_reserved_option_bit_is_ignored_like_mit() {
+    // MIT validate_as_request tests AS_INVALID_OPTIONS only (kdc_util.c:727); a
+    // reserved KDCOptions bit (RFC bit 17) is neither rejected nor acted on.
+    // Before this parity fix the Rust KDC refused any unknown bit as BADOPTION
+    // at validate, ahead of preauth. Now the bit passes validate, so a
+    // preauth-required client reaches PREAUTH_REQUIRED, not BADOPTION.
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    or_attr(&mut store, &cname, KDB_REQUIRES_PRE_AUTH);
+    let mut req = as_req(cname, TEST_REALM, 53, None).unwrap();
+    req.0.req_body.kdc_options = req.0.req_body.kdc_options.with_bit(17, true);
+    match krb5_kdc::issue_as(&store, &req).unwrap_err() {
+        Error::PreauthRequired { .. } => {}
+        Error::Protocol { code, .. } => {
+            panic!("reserved bit must pass validate_as_request, got protocol code {code}")
+        }
+        other => panic!("want PreauthRequired, got {other:?}"),
+    }
+}
+
+#[test]
+fn as_request_anonymous_from_named_client_is_validate_anonymous_principal() {
+    // do_as_req.c:717-724: REQUEST_ANONYMOUS demands the anonymous principal; a
+    // named client is KRB5KDC_ERR_BADOPTION "VALIDATE_ANONYMOUS_PRINCIPAL",
+    // fired after preauth (validate_as_request lets the bit through, unlike a
+    // TGS-only option). A valid PA-ENC-TIMESTAMP takes us past preauth so the
+    // reply-phase check runs.
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = client_key();
+    let mut req = as_req(
+        cname,
+        TEST_REALM,
+        54,
+        Some(vec![pa_enc_timestamp(&key).expect("pa-ts")]),
+    )
+    .unwrap();
+    req.0.req_body.kdc_options = req
+        .0
+        .req_body
+        .kdc_options
+        .with_bit(flag_bit::ANONYMOUS, true);
+    let (code, text) = match krb5_kdc::issue_as(&store, &req).unwrap_err() {
+        Error::Protocol { code, text, .. } => (code, text),
+        other => panic!("want Protocol, got {other:?}"),
+    };
+    assert_eq!(code, err::BADOPTION);
+    assert_eq!(text.as_deref(), Some("VALIDATE_ANONYMOUS_PRINCIPAL"));
+}
+
+#[test]
 fn as_validate_runs_before_preauth_like_process_as_req() {
     // MIT process_as_req calls validate_as_request (do_as_req.c:630) before
     // check_padata (:758). A preauth-required client that needs a password

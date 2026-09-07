@@ -421,6 +421,16 @@ fn issue_as_body(
     if attr(&client, KDB_REQUIRES_HW_AUTH) && !hw_preauth {
         return Err(proto(err::PREAUTH_FAILED, status::NO_HW_PREAUTH));
     }
+    // do_as_req.c:717-724: REQUEST_ANONYMOUS demands the anonymous principal;
+    // a named client asking for anonymity is KRB5KDC_ERR_BADOPTION
+    // "VALIDATE_ANONYMOUS_PRINCIPAL". MIT runs this in the reply-building phase
+    // after preauth, so a preauth-required client still gets PREAUTH_REQUIRED
+    // first. This KDC issues no anonymous tickets, so the client is never the
+    // anonymous principal and the option is refused here (validate_as_request
+    // deliberately lets the bit through, matching kdc_util.c:727).
+    if body.kdc_options.bit(flag_bit::ANONYMOUS) && !is_anonymous_principal(&req_cname) {
+        return Err(proto(err::BADOPTION, status::VALIDATE_ANONYMOUS_PRINCIPAL));
+    }
 
     let skey = server
         .first_current_key()
@@ -1871,6 +1881,15 @@ fn check_tgs_s4u2self(
     Ok(())
 }
 
+/// MIT `krb5_anonymous_principal`: the WELLKNOWN/ANONYMOUS name, compared by
+/// components only like `krb5_principal_compare_any_realm` (do_as_req.c:719).
+fn is_anonymous_principal(name: &PrincipalName) -> bool {
+    name.components_eq(&PrincipalName::new(
+        PrincipalName::NT_WELLKNOWN,
+        ["WELLKNOWN", "ANONYMOUS"],
+    ))
+}
+
 fn s4u2self_as_invalid_options(body: &krb5_types::KdcReqBody) -> bool {
     body.kdc_options.bit(flag_bit::FORWARDED)
         || body.kdc_options.bit(flag_bit::PROXY)
@@ -1928,7 +1947,12 @@ fn validate_as_request(
     server: &Principal,
     body: &krb5_types::KdcReqBody,
 ) -> Result<(), Error> {
-    if body.kdc_options.as_invalid_bits() != 0 || body.kdc_options.unsupported_bits() != 0 {
+    // MIT tests only AS_INVALID_OPTIONS here (kdc_util.c:727), the TGS-only
+    // options FORWARDED/PROXY/RENEW/VALIDATE/ENC-TKT-IN-SKEY/CNAME-IN-ADDL-TKT.
+    // It does not reject other unknown or reserved KDCOption bits; those pass
+    // and take effect elsewhere or not at all (e.g. REQUEST_ANONYMOUS proceeds
+    // to the reply-phase anonymous-principal check in issue_as_body).
+    if body.kdc_options.as_invalid_bits() != 0 {
         return Err(proto(err::BADOPTION, status::INVALID_AS_OPTIONS));
     }
     let now = crate::store::unix_now_u32();

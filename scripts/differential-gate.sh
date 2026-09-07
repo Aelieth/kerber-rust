@@ -149,9 +149,10 @@ echo "$DIFF" | grep -q '"case":"as-success".*"rust_enc_tag":"0x7a".*"mit_enc_tag
 echo "$DIFF" | grep -q '"case":"tgs-success".*"rust_enc_tag":"0x7a".*"mit_enc_tag":"0x7a"' || die "tgs-success enc-part not APPLICATION 26 both legs"
 echo "$DIFF" | grep -q '"case":"as-optimistic-encts-wrong-etype","outcome":"ok","error_code":24' || die "as-optimistic-encts-wrong-etype not code 24 on both legs"
 echo "$DIFF" | grep -q '"case":"as-invalid-opts","outcome":"ok","error_code":13' || die "as-invalid-opts (RENEW) not code 13 on both legs"
+echo "$DIFF" | grep -q '"case":"as-request-anonymous","outcome":"ok","error_code":13,"e_text":"VALIDATE_ANONYMOUS_PRINCIPAL"' || die "as-request-anonymous not code 13 e_text VALIDATE_ANONYMOUS_PRINCIPAL on both legs"
 echo "$DIFF" | grep -q '"case":"as-validate-before-preauth","outcome":"ok","error_code":23' || die "as-validate-before-preauth (preauth+needchange) not code 23 on both legs"
 echo "$DIFF" | grep -q '"case":"as-retransmit","outcome":"ok","rust_retransmit_identical":true,"mit_retransmit_identical":true' || die "as-retransmit reply not identical from the lookaside on both legs"
-echo "$DIFF" | grep -q '"outcome":"ok","cases":18' || die "diffsend did not finish 18 cases"
+echo "$DIFF" | grep -q '"outcome":"ok","cases":19' || die "diffsend did not finish 19 cases"
 # W1-K M2b: the differential oracle has no case-name whitelist; no diffsend line
 # may carry a "whitelist" key.
 if echo "$DIFF" | grep -q '"whitelist"'; then

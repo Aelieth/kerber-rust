@@ -613,6 +613,24 @@ fn run() -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     expect_retransmit(&cfg, "as-retransmit", &as_req_rt)?;
 
+    // do_as_req.c:717-724: REQUEST_ANONYMOUS with a named (non-anonymous)
+    // client is KRB5KDC_ERR_BADOPTION "VALIDATE_ANONYMOUS_PRINCIPAL", reached
+    // only after preauth because validate_as_request tests AS_INVALID_OPTIONS
+    // only (kdc_util.c:727) and lets the bit through, unlike the TGS-only
+    // options in as-invalid-opts. Both legs send code 13 with the same wire
+    // status; before R2-P3 the Rust KDC refused the bit early as "INVALID AS
+    // OPTIONS", so the e_text diverged from MIT here.
+    let pa_anon = pa_enc_timestamp(&ukey).map_err(|e| e.to_string())?;
+    let mut anon =
+        as_req(user.clone(), realm, 0x1000_0013, Some(vec![pa_anon])).map_err(|e| e.to_string())?;
+    anon.0.req_body.kdc_options = anon
+        .0
+        .req_body
+        .kdc_options
+        .with_bit(krb5_types::flag_bit::ANONYMOUS, true);
+    let req = encode(&anon).map_err(|e| e.to_string())?;
+    expect_error(&cfg, "as-request-anonymous", &req, err::BADOPTION)?;
+
     let tkt_kt = cfg
         .krbtgt
         .as_ref()
@@ -751,7 +769,7 @@ fn run() -> Result<(), String> {
         true,
     )?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":18}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":19}}"#);
     Ok(())
 }
 

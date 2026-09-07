@@ -53,6 +53,7 @@ the UTF-8 transited row below is mixed on absurd inputs.
 | Encode-side X.500 RDN compression | MIT `add_to_transited` may emit compressed RDN form | Encode stays uncompressed (`from_realms`) | Deferred; decode still expands MIT compressed contents |
 | Hierarchical intermediates on ≥512-byte realm | MIT `walk_rtree.c` copies every tween unbounded | Empty permitted set (nothing allowed) | **STRICTER** on absurd `crealm`/`srealm` |
 | TGS realm octets that are not UTF-8 | MIT uses the bytes | `GENERIC` `non-ascii realm` | fail-closed (was the literal `KERBER.TEST`) |
+| Unknown TGS KDCOptions bit | The TGS acts only on the options it recognises (RENEWABLE / RENEWABLE-OK / POSTDATE / FORWARDED / PROXY / ENC-TKT-IN-SKEY) and ignores unknown or reserved KDCOption bits (`do_tgs_req.c`) | `issue_tgs_body` refuses any bit outside the honoured set with `BADOPTION` (`unsupported_bits`) | **STRICTER** than MIT (a TGT-authenticated request carrying an unknown option is anomalous; fail closed). The AS twin is now exact: `validate_as_request` tests `AS_INVALID_OPTIONS` only, and `do_as_req.c:718` then handles REQUEST_ANONYMOUS |
 
 ### Parity decisions (not deviations)
 
