@@ -9,6 +9,11 @@ the public GitHub REST API answers unauthenticated with run, job and step conclu
 `GITHUB_TOKEN`). Check it after every push; a job stops at its first red step, so every gate behind
 that step has no CI evidence until the run is green again.
 
+Evidence directories under `working/logs/<archive>/` each carry an `INDEX.md` naming every file with a one-line
+"what"; `python3 scripts/index-check.py <dir>…` (or `--all <root>`) prints `files=N unnamed=M` per directory and
+exits 1 when a file is unnamed (backticked names and table first cells count, `{a,b}` braces expand, a named
+directory covers its files, `scratch/` trees are never evidence). Run it before a summary cites the directory.
+
 `scripts/ci-policy.py` enforces workflow YAML (fail-red jobs, nextest
 `--profile ci` on every invocation, no per-push `cargo test
 --workspace` or `cargo test --all`, `--no-run` + junit upload, no
