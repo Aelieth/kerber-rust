@@ -1219,3 +1219,37 @@ fn cross_realm_pac_claiming_local_domain_base_is_policy() {
     assert_eq!(code, err::POLICY);
     assert_eq!(text.as_deref(), Some("INVALID LINEAGE"));
 }
+
+// R2-P2: MIT svc_pol_fns order (tgs_policy.c:60-63) runs deny_opts before
+// deny_all, so a service that is both DISALLOW_ALL_TIX and DISALLOW_POSTDATED
+// answers a postdate request with NON-POSTDATABLE TICKET, not SERVER LOCKED
+// OUT. Red at parent (which returned SERVER LOCKED OUT).
+#[test]
+fn tgs_service_deny_opts_precedes_deny_all() {
+    use krb5_kdc::KDB_DISALLOW_POSTDATED;
+    let (mut store, _, _, host) = realm_store("C.TEST", "svc.c.test");
+    let a =
+        store.get_name(&host).unwrap().attributes | KDB_DISALLOW_ALL_TIX | KDB_DISALLOW_POSTDATED;
+    store
+        .apply_admin_fields(&host, Some(a), None, None, None, None, false)
+        .unwrap();
+    let tgt = as_tgt(&store, "C.TEST", 973);
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let req = tgs_req_ex(
+        tgt.rep.0.ticket.clone(),
+        &tgt.session_key,
+        "C.TEST",
+        &cname,
+        host.clone(),
+        "C.TEST",
+        974,
+        KdcOptions::forwardable().with_bit(flag_bit::MAY_POSTDATE, true),
+        None,
+        Vec::new(),
+        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
+    )
+    .expect("tgs");
+    let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&store, &req));
+    assert_eq!(code, err::CANNOT_POSTDATE, "deny_opts (postdate) wins");
+    assert_eq!(text.as_deref(), Some("NON-POSTDATABLE TICKET"));
+}

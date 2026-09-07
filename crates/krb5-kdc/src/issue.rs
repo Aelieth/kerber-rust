@@ -757,8 +757,11 @@ fn issue_tgs_body(
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::LOOKING_UP_SERVER))?;
     let tgs_client = store.fetch_name(&enc_tkt.cname)?;
     // MIT TGS checks the server only; a valid TGT still issues after client expiry.
-    check_db_times(None, &server)?;
+    // MIT runs the service flag rules (deny_opts/deny_all/reqd_flags) before
+    // check_tgs_svc_time, so a locked-out or postdate-denied service is caught
+    // before an expiry.
     check_tgs_policy_flags(&server, body, ap.ticket.sname.is_krbtgt(), &enc_tkt)?;
+    check_db_times(None, &server)?;
     let mut ticket_cname = enc_tkt.cname.clone();
     let mut ticket_crealm = utf8_realm(&enc_tkt.crealm)?.to_owned();
     let mut evidence_logon = None;
@@ -1981,6 +1984,17 @@ fn check_tgs_policy_flags(
     header_is_tgt: bool,
     tkt: &EncTicketPart,
 ) -> Result<(), Error> {
+    // MIT `svc_pol_fns` order (`tgs_policy.c:60-63`): deny_opts, then deny_all,
+    // then reqd_flags (time is `check_db_times`, run last by the caller). The
+    // order is observable when a service sets several attributes at once.
+    // deny_opts:
+    if attr(server, KDB_DISALLOW_POSTDATED)
+        && (body.kdc_options.bit(flag_bit::MAY_POSTDATE)
+            || body.kdc_options.bit(flag_bit::POSTDATED))
+    {
+        return Err(proto(err::CANNOT_POSTDATE, status::NON_POSTDATABLE_TICKET));
+    }
+    // deny_all:
     if attr(server, KDB_DISALLOW_ALL_TIX) {
         return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::SERVER_LOCKED_OUT));
     }
@@ -1990,14 +2004,9 @@ fn check_tgs_policy_flags(
     if attr(server, KDB_DISALLOW_TGT_BASED) && header_is_tgt {
         return Err(proto(err::POLICY, status::TGT_BASED_NOT_ALLOWED));
     }
+    // reqd_flags:
     if attr(server, KDB_REQUIRES_HW_AUTH) && !tkt.flags.bit(flag_bit::HW_AUTHENT) {
         return Err(proto(err::GENERIC, status::NO_HW_PREAUTH));
-    }
-    if attr(server, KDB_DISALLOW_POSTDATED)
-        && (body.kdc_options.bit(flag_bit::MAY_POSTDATE)
-            || body.kdc_options.bit(flag_bit::POSTDATED))
-    {
-        return Err(proto(err::CANNOT_POSTDATE, status::NON_POSTDATABLE_TICKET));
     }
     Ok(())
 }
