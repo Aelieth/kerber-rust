@@ -188,7 +188,9 @@ pub fn save_store_legacy_kdb3(
     let master = if stash_path.exists() {
         load_stash_etype(stash_path, EncryptionType::Aes256CtsHmacSha196)?
     } else {
-        let m = random_master()?;
+        // The KDB3 stash is a raw aes256-cts-hmac-sha1-96 key by format.
+        let m = crate::store::random_key(EncryptionType::Aes256CtsHmacSha196)
+            .map_err(|e| PersistError::Crypto(e.to_string()))?;
         write_secret_file(stash_path, m.as_bytes())?;
         m
     };
@@ -331,7 +333,7 @@ fn load_stash_etype(path: &Path, etype: EncryptionType) -> Result<ProtocolKey, P
 }
 
 fn random_master() -> Result<ProtocolKey, PersistError> {
-    crate::store::random_key(EncryptionType::Aes256CtsHmacSha196)
+    crate::store::random_key(persist_master_etype())
         .map_err(|e| PersistError::Crypto(e.to_string()))
 }
 

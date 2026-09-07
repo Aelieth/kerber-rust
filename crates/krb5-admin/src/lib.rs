@@ -612,6 +612,15 @@ impl<'a> AdminSession<'a> {
         Ok(p.id())
     }
 
+    /// The record `getprinc` prints (`kadm5_get_principal`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    pub fn get_principal_record(&self, name: &PrincipalName) -> Result<krb5_kdc::Principal, Error> {
+        self.store.get_name(name).cloned().ok_or(Error::NotFound)
+    }
+
     /// `modprinc` attributes only.
     ///
     /// # Errors

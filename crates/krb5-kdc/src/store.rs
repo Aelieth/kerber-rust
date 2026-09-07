@@ -38,7 +38,11 @@ pub const RID_FIRST_USER: u32 = 1000;
 
 use crate::acl::{Acl, AdminOp, Restrictions};
 use crate::error::Error;
-use crate::kdb_dump::{TL_ALIAS_TARGET, TL_KADM_DATA, TL_LAST_PWD_CHANGE, TL_MOD_PRINC};
+use crate::kdb_dump::{
+    TL_ALIAS_TARGET, TL_KADM_DATA, TL_KERBER_HIST, TL_KERBER_POLICY, TL_LAST_PWD_CHANGE,
+    TL_MOD_PRINC,
+};
+use crate::osa::{INITIAL_HIST_KVNO, KADM5_POLICY, OsaKeyData, OsaPrincEnt};
 
 /// Default PBKDF2 iteration count advertised in ETYPE-INFO2 (RFC 3962 default).
 pub const S2K_ITERS: u32 = 4096;
@@ -122,6 +126,46 @@ pub struct TlData {
     pub contents: Vec<u8>,
 }
 
+/// The kadm5 admin record MIT keeps in `KRB5_TL_KADM_DATA` (`osa_princ_ent_rec`)
+/// beside the bound policy: `aux_attributes`, the history ring position, the
+/// history key's kvno, and the old passwords' keys as stored (encrypted under
+/// that history key; [`Principal::key_history`] is their decrypted view).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KadmData {
+    /// `aux_attributes` (`KADM5_POLICY` follows [`Principal::pw_policy`]).
+    pub aux_attributes: u32,
+    /// `old_key_next`.
+    pub old_key_next: u32,
+    /// `admin_history_kvno`.
+    pub admin_history_kvno: u32,
+    /// `old_keys`, one entry per old password, as MIT stores them.
+    pub old_keys: Vec<Vec<OsaKeyData>>,
+}
+
+impl Default for KadmData {
+    fn default() -> Self {
+        Self {
+            aux_attributes: 0,
+            old_key_next: 0,
+            admin_history_kvno: INITIAL_HIST_KVNO,
+            old_keys: Vec::new(),
+        }
+    }
+}
+
+impl KadmData {
+    /// The record's fields from a decoded `KRB5_TL_KADM_DATA`.
+    #[must_use]
+    pub fn from_osa(osa: &OsaPrincEnt) -> Self {
+        Self {
+            aux_attributes: osa.aux_attributes,
+            old_key_next: osa.old_key_next,
+            admin_history_kvno: osa.admin_history_kvno,
+            old_keys: osa.old_keys.clone(),
+        }
+    }
+}
+
 /// One realm principal.
 #[derive(Clone, Debug)]
 pub struct Principal {
@@ -172,6 +216,8 @@ pub struct Principal {
     pub s4u_allowed_to: Vec<String>,
     /// Bound named password policy (`policy\t` / kadm5).
     pub pw_policy: Option<String>,
+    /// MIT's `KRB5_TL_KADM_DATA` record (policy bit, history ring and keys).
+    pub kadm: KadmData,
     /// MIT string attributes (`setstr` / `KRB5_TL_STRING_ATTRS`).
     pub string_attrs: Vec<(String, String)>,
 }
@@ -220,6 +266,7 @@ impl Principal {
             s4u_allowed_from: Vec::new(),
             s4u_allowed_to: Vec::new(),
             pw_policy: None,
+            kadm: KadmData::default(),
             string_attrs: Vec::new(),
         }
     }
@@ -731,6 +778,7 @@ impl PrincipalStore {
                 self.serial.store(e.sno, Ordering::SeqCst);
             }
         }
+        self.resolve_history_all();
         let _ = self.save_if_configured();
     }
 
@@ -747,6 +795,7 @@ impl PrincipalStore {
         }
         if m.tl_data.is_empty() {
             m.tl_data.clone_from(&old.tl_data);
+            m.kadm = old.kadm.clone();
         }
         if m.pw_policy.is_none() {
             m.pw_policy.clone_from(&old.pw_policy);
@@ -1357,16 +1406,22 @@ impl PrincipalStore {
             .max()
             .unwrap_or(0)
             .saturating_add(1);
-        // MIT `pw_history_num` counts the current password inside N, so
-        // history=1 keeps no old keys (A→B→A is allowed).
-        let depth = existing
+        // MIT `kadm5_chpass_principal_3`: a bound policy (`have_pol`) fetches
+        // the history key — creating `kadmin/history` on first use — and
+        // records the old keys; `pw_history_num` counts the current password
+        // inside N, so history=1 keeps no old keys (A→B→A is allowed).
+        let nhist = existing
             .pw_policy
             .as_ref()
             .and_then(|n| self.policies.get(n))
-            .map_or(0, |pol| pol.history.saturating_sub(1));
+            .map(|pol| pol.history);
+        let hist = match nhist {
+            Some(_) => Some(self.ensure_history_principal()?),
+            None => None,
+        };
         let new_keys =
             keys_from_password(&self.policy.password_etypes(), password, &salt, next_kvno)?;
-        self.replace_password_keys(&id, new_keys, depth, keepold)?;
+        self.replace_password_keys(&id, new_keys, nhist.zip(hist), keepold)?;
         self.apply_pw_max_life_in(name, princ_realm)?;
         let snap = self.map.get(&id).cloned();
         self.note_ulog(id, false, snap);
@@ -1399,13 +1454,15 @@ impl PrincipalStore {
         &mut self,
         id: &str,
         new_keys: Vec<KeyEntry>,
-        depth: u32,
+        history: Option<(u32, (u32, ProtocolKey))>,
         keepold: u32,
     ) -> Result<(), Error> {
         let p = self.map.get_mut(id).ok_or(Error::NotFound)?;
         let old = std::mem::replace(&mut p.keys, new_keys);
-        p.key_history.extend(old.iter().cloned());
-        p.key_history = prune_key_history(std::mem::take(&mut p.key_history), depth);
+        if let Some((nhist, (hist_kvno, hist_key))) = history {
+            record_history(p, &old, nhist, hist_kvno, &hist_key)?;
+            refresh_kadm_tl(p);
+        }
         if keepold > 0 {
             p.keys.extend(old);
             if keepold > 1 {
@@ -2117,8 +2174,10 @@ impl PrincipalStore {
             if clear_policy {
                 p.pw_policy = None;
                 p.pw_expire = 0;
+                refresh_kadm_tl(p);
             } else if let Some(pol) = policy {
                 p.pw_policy = Some(pol);
+                refresh_kadm_tl(p);
             }
             stamp_admin_tl(p, false);
         }
@@ -2249,6 +2308,7 @@ impl PrincipalStore {
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
             p.pw_policy = policy;
+            refresh_kadm_tl(p);
         }
         self.apply_pw_max_life_in(name, princ_realm)?;
         let snap = self.map.get(&id).cloned();
@@ -2485,6 +2545,62 @@ impl PrincipalStore {
         }
     }
 
+    /// The current `kadmin/history` key and its kvno (`kdb_get_hist_key`
+    /// without the creation), if the principal exists.
+    #[must_use]
+    pub fn history_key(&self) -> Option<(u32, ProtocolKey)> {
+        let p = self.get_name(&crate::documented_history())?;
+        let k = p.keys.iter().max_by_key(|k| k.kvno)?;
+        Some((k.kvno, k.key.clone()))
+    }
+
+    /// MIT `kdb_get_hist_key` + `create_hist` (`server_kdb.c:140-188`): the
+    /// history key, creating `kadmin/history` on first use with MIT's shape —
+    /// `max_life` 64 s (`KRB5_KDB_DISALLOW_ALL_TIX` assigned to `max_life`),
+    /// no attributes, one random key of the master enctype at kvno 2.
+    ///
+    /// # Errors
+    ///
+    /// Random-key generation failures.
+    pub(crate) fn ensure_history_principal(&mut self) -> Result<(u32, ProtocolKey), Error> {
+        if let Some(h) = self.history_key() {
+            return Ok(h);
+        }
+        let name = crate::documented_history();
+        let etype = self
+            .get(&format!("K/M@{}", self.realm))
+            .and_then(|km| km.keys.first().map(|k| k.etype))
+            .unwrap_or_else(crate::mkey::harness_master_etype);
+        let key = random_key(etype)?;
+        let salt = name.default_salt(&self.realm);
+        let mut p = Principal::from_keys(
+            name,
+            self.realm.clone(),
+            vec![KeyEntry::new(etype, key.clone(), INITIAL_HIST_KVNO)],
+            salt,
+            false,
+            64,
+            false,
+            0,
+        );
+        p.max_renewable_life = self.policy.max_renewable_life;
+        refresh_kadm_tl(&mut p);
+        stamp_admin_tl(&mut p, true);
+        self.put_principal(p);
+        Ok((INITIAL_HIST_KVNO, key))
+    }
+
+    /// Decrypt every principal's stored history with the history key (the
+    /// reading half of `kdb_get_hist_key` + `check_pw_reuse`); a record whose
+    /// `admin_history_kvno` is not the current history kvno stays unreadable,
+    /// as MIT treats it.
+    pub(crate) fn resolve_history_all(&mut self) {
+        let hist = self.history_key();
+        for p in self.map.values_mut() {
+            resolve_history(p, hist.as_ref());
+        }
+    }
+
     fn put_principal(&mut self, mut p: Principal) {
         self.settle_rid(&mut p);
         let id = p.id();
@@ -2551,6 +2667,101 @@ pub(crate) fn prune_key_history(keys: Vec<KeyEntry>, depth: u32) -> Vec<KeyEntry
     keys.into_iter()
         .filter(|k| keep.contains(&k.kvno))
         .collect()
+}
+
+fn resolve_history(p: &mut Principal, hist: Option<&(u32, ProtocolKey)>) {
+    if p.kadm.old_keys.is_empty() || !p.key_history.is_empty() {
+        return;
+    }
+    let Some((kvno, key)) = hist else {
+        return;
+    };
+    if *kvno != p.kadm.admin_history_kvno {
+        return;
+    }
+    let osa = OsaPrincEnt {
+        old_key_next: p.kadm.old_key_next,
+        old_keys: p.kadm.old_keys.clone(),
+        ..OsaPrincEnt::default()
+    };
+    p.key_history = osa
+        .old_keys_oldest_first()
+        .into_iter()
+        .flat_map(|e| crate::osa::decrypt_entry(e, key))
+        .collect();
+}
+
+/// MIT `create_history_entry` + `add_to_history`: the replaced keys of the
+/// most recent kvno become one history entry under the history key; a history
+/// key newer than the record's resets the ring; `pw_history_num` counts the
+/// current password, so `nhist - 1` entries are kept, oldest dropped first.
+fn record_history(
+    p: &mut Principal,
+    old: &[KeyEntry],
+    nhist: u32,
+    hist_kvno: u32,
+    hist_key: &ProtocolKey,
+) -> Result<(), Error> {
+    if p.kadm.admin_history_kvno != hist_kvno {
+        p.key_history.clear();
+        p.kadm.old_keys.clear();
+        p.kadm.old_key_next = 0;
+        p.kadm.admin_history_kvno = hist_kvno;
+    }
+    if nhist <= 1 {
+        return Ok(());
+    }
+    let top = old.iter().map(|k| k.kvno).max().unwrap_or(0);
+    let recent: Vec<KeyEntry> = old.iter().filter(|k| k.kvno == top).cloned().collect();
+    if recent.is_empty() {
+        return Ok(());
+    }
+    let entry =
+        crate::osa::history_entry(&recent, hist_key).map_err(|e| Error::Crypto(e.to_string()))?;
+    let keep = (nhist - 1) as usize;
+    let mut entries: Vec<Vec<OsaKeyData>> = OsaPrincEnt {
+        old_key_next: p.kadm.old_key_next,
+        old_keys: std::mem::take(&mut p.kadm.old_keys),
+        ..OsaPrincEnt::default()
+    }
+    .old_keys_oldest_first()
+    .into_iter()
+    .cloned()
+    .collect();
+    entries.push(entry);
+    while entries.len() > keep {
+        entries.remove(0);
+    }
+    p.kadm.old_key_next = u32::try_from(entries.len() % keep).unwrap_or(0);
+    p.kadm.old_keys = entries;
+    p.key_history.extend(recent);
+    p.key_history = prune_key_history(std::mem::take(&mut p.key_history), nhist - 1);
+    Ok(())
+}
+
+/// Re-encode the principal's `KRB5_TL_KADM_DATA` from its policy binding and
+/// history record (MIT `kdb_put_entry`), retiring the private policy/history
+/// `tl_data` older Rust dumps carried.
+pub(crate) fn refresh_kadm_tl(p: &mut Principal) {
+    let bound = p.pw_policy.as_deref().is_some_and(|s| !s.is_empty());
+    p.kadm.aux_attributes = if bound {
+        p.kadm.aux_attributes | KADM5_POLICY
+    } else {
+        p.kadm.aux_attributes & !KADM5_POLICY
+    };
+    let rec = OsaPrincEnt {
+        policy: p.pw_policy.clone().filter(|s| !s.is_empty()),
+        aux_attributes: p.kadm.aux_attributes,
+        old_key_next: p.kadm.old_key_next,
+        admin_history_kvno: p.kadm.admin_history_kvno,
+        old_keys: p.kadm.old_keys.clone(),
+    };
+    p.tl_data
+        .retain(|t| t.ty != TL_KADM_DATA && t.ty != TL_KERBER_POLICY && t.ty != TL_KERBER_HIST);
+    p.tl_data.push(TlData {
+        ty: TL_KADM_DATA,
+        contents: rec.encode(),
+    });
 }
 
 /// `xdr_osa_princ_ent_rec` of a zeroed record: version `OSA_ADB_PRINC_VERSION_1`,
@@ -3211,12 +3422,25 @@ mod tests {
         );
         let text = crate::dump_store(&store, b"masterpassword").unwrap();
         assert!(
-            text.contains("\t19204\t"),
-            "dump must emit TL_KERBER_HIST 0x4B04: {text}"
+            !text.contains("\t19204\t"),
+            "history lives in KRB5_TL_KADM_DATA, not the private 0x4B04: {text}"
+        );
+        assert_eq!(
+            p.kadm.old_keys.len(),
+            1,
+            "history=2 stores one old password"
         );
         let again = crate::load_dump(&text, b"masterpassword").unwrap();
+        assert!(
+            again.get_name(&crate::documented_history()).is_some(),
+            "kadmin/history was created on the first policy chpass and dumped"
+        );
         let p2 = again.get_name(&user).unwrap();
-        assert!(!p2.key_history.is_empty(), "hist tl_data must round-trip");
+        assert!(
+            !p2.key_history.is_empty(),
+            "KADM_DATA old_keys round-trip under the history key"
+        );
+        assert_eq!(p2.kadm, p.kadm);
     }
 
     #[test]

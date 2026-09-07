@@ -6,6 +6,38 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### Round-up R1 (residue sweep)
+
+- **kdc/admin.** Password history is stored the way MIT stores it. Every
+  principal's `KRB5_TL_KADM_DATA` is now the XDR `osa_princ_ent_rec`
+  (`adb_xdr.c`): the bound policy and `KADM5_POLICY`, `old_key_next`,
+  `admin_history_kvno`, and `old_keys` — one entry per remembered password,
+  its key data encrypted under the `kadmin/history` key like
+  `create_history_entry`/`add_to_history` (`svr_principal.c`). The history
+  principal is created lazily on the first password change of a
+  policy-bound principal with `create_hist`'s shape (`server_kdb.c`: max life
+  64 s, no attributes, one key of the master enctype at kvno 2). Before this,
+  Rust kept the policy name and the history in private `tl_data` types under
+  the master key, so a MIT `kdb5_util load` of a Rust dump (or a Rust load of
+  a MIT dump) lost the policy binding and the reuse history, and iprop shipped
+  history entries MIT could not decrypt. Older Rust dumps still load (the
+  private types are read and retired on the next change).
+  `scripts/kdb-dump-gate.sh` now proves both directions (Rust refuses MIT's
+  old password after loading MIT's dump; MIT refuses Rust's after loading
+  Rust's; `Policy:` and the `kadmin/history` shape agree), and
+  `scripts/kadmin-gate.sh` asserts the lazy creation and the shape on both
+  legs instead of creating the principal itself. The MIT dump fixture
+  `tests/traces/kdb/mit-dump-v7-history.txt` is the oracle for the codec.
+- **admin.** `krb5-kadmin-local` prints the whole `getprinc` record like
+  `kadmin_getprinc` (dates, lifetimes, keys with `DEPRECATED:`, `MKey`,
+  `Attributes:` names, `Policy:`) — it printed only the principal line — and
+  uses MIT's `add_principal`/`change_password` texts (`Principal "…"
+  created.`, `Password for "…" changed.`, `change_password: Cannot reuse
+  password while changing password for "…".`), continuing after a failed
+  verb like `com_err`. A realm created without `master_key_type` now gets
+  MIT's default aes256-cts-hmac-sha384-192 master key (it got
+  aes256-cts-hmac-sha1-96), which is also what the history key inherits.
+
 ### Round-up R0 (clear CI)
 
 - **client.** The SPAKE response AS-REQ replaced its padata list with

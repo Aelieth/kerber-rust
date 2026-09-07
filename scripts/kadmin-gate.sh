@@ -778,6 +778,12 @@ if docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     exit 1
 fi
 
+echo "==== kadmin/history does not exist before the first policy chpass (create_hist is lazy) ===="
+HIST_BEFORE="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc kadmin/history' 2>&1 || true)"
+echo "$HIST_BEFORE"
+echo "$HIST_BEFORE" | grep -F 'Principal does not exist while retrieving "kadmin/history@KERBER.TEST".'
+
 echo "==== MIT kadmin purgekeys ===="
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addpol -history 2 g3bhist'
@@ -815,18 +821,11 @@ KLISTP="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" klist)"
 echo "$KLISTP"
 echo "$KLISTP" | grep -q 'purgee@KERBER.TEST'
 
-echo "==== kadmin/history service on kadm5 ===="
+echo "==== kadmin/history service on kadm5 (created by the purgee chpass like kdb_get_hist_key) ===="
 HIST_GET="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc kadmin/history' 2>&1 || true)"
 echo "$HIST_GET"
-if echo "$HIST_GET" | grep -qiE 'does not exist|not found|UNK_PRINC'; then
-    docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-        "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q \
-        'addprinc -randkey kadmin/history' || true
-    HIST_GET="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-        "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc kadmin/history' 2>&1 || true)"
-    echo "$HIST_GET"
-fi
+echo "$HIST_GET" | grep -F 'Principal: kadmin/history@KERBER.TEST'
 HIST_PROBE="$(kadm5_probe "$NAME" admin@KERBER.TEST valid /tmp/kadmin-krb5.conf kadmin/history@KERBER.TEST 2>&1 || true)"
 echo "$HIST_PROBE"
 echo "$HIST_PROBE" | grep -F 'valid label=AUTH_TOOWEAK'
@@ -1761,22 +1760,25 @@ echo "$MIT_INT_TAMPER" | grep -E 'clnt_stat=11|garbage_args=1|accept_stat=4' || 
 echo "==== RPCSEC_GSS reject machine vs MIT kadmind ===="
 rpcsec_reject_cells "$NAME_MIT" admin/admin /etc/krb5.conf
 echo "==== MIT kadmin/history service on kadm5 ===="
+MIT_HIST_BEFORE="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc kadmin/history' 2>&1 || true)"
+echo "$MIT_HIST_BEFORE"
+echo "$MIT_HIST_BEFORE" | grep -F 'Principal does not exist while retrieving "kadmin/history@KERBER.TEST".'
 docker exec "$NAME_MIT" kadmin.local -q 'addpol -history 2 g3bhist' || true
 docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw hist-secret -policy g3bhist histee' || true
 docker exec "$NAME_MIT" kadmin.local -q 'cpw -pw hist-rotated histee' || true
 MIT_HIST_GET="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc kadmin/history' 2>&1 || true)"
 echo "$MIT_HIST_GET"
-if echo "$MIT_HIST_GET" | grep -qiE 'does not exist|not found|UNK_PRINC'; then
-    docker exec "$NAME_MIT" kadmin.local -q 'addprinc -randkey kadmin/history' || true
-    MIT_HIST_GET="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc kadmin/history' 2>&1 || true)"
-    echo "$MIT_HIST_GET"
-fi
+echo "$MIT_HIST_GET" | grep -F 'Principal: kadmin/history@KERBER.TEST'
 MIT_HIST_PROBE="$(kadm5_probe "$NAME_MIT" admin/admin valid /etc/krb5.conf kadmin/history@KERBER.TEST 2>&1 || true)"
 echo "$MIT_HIST_PROBE"
 echo "$MIT_HIST_PROBE" | grep -F 'valid label=AUTH_TOOWEAK'
-echo "==== kadmin/history getprinc shape: Rust vs MIT ===="
-echo "$HIST_GET" | grep -E 'Attributes:|Maximum ticket life' | sed 's/^/rust: /'
-echo "$MIT_HIST_GET" | grep -E 'Attributes:|Maximum ticket life' | sed 's/^/mit:  /'
+echo "==== kadmin/history getprinc shape: Rust vs MIT (create_hist: max_life 64 s, no attributes, one key at kvno 2, no policy) ===="
+hist_shape() { grep -E '^(Expiration date|Password expiration date|Maximum ticket life|Maximum renewable life|Attributes|Number of keys|Key: vno|MKey: vno|Policy):?' ; }
+echo "$HIST_GET" | hist_shape | sed 's/^/rust: /'
+echo "$MIT_HIST_GET" | hist_shape | sed 's/^/mit:  /'
+diff <(echo "$HIST_GET" | hist_shape) <(echo "$MIT_HIST_GET" | hist_shape)
+echo "$HIST_GET" | grep -F 'Maximum ticket life: 0 days 00:01:04'
+echo "$HIST_GET" | grep -F 'Key: vno 2, aes256-cts-hmac-sha384-192'
 echo "==== MIT kadmin/admin is DISALLOW_TGT_BASED ===="
 MIT_GETADM="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc kadmin/admin' 2>&1 || true)"
 echo "$MIT_GETADM"

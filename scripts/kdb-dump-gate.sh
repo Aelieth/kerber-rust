@@ -34,7 +34,7 @@ if [ ! -f "$GOLDEN" ]; then
     exit 1
 fi
 
-cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-kdb
+cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-kdb -p krb5-admin --bin krb5-kadmin-local
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
@@ -52,8 +52,14 @@ trap cleanup EXIT
 
 docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc
 docker cp target/debug/krb5-kdb "$NAME":/tmp/krb5-kdb
+docker cp target/debug/krb5-kadmin-local "$NAME":/tmp/krb5-kadmin-local
 docker cp "$GOLDEN" "$NAME":/tmp/mit.dump
-docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb /tmp/krb5-kadmin-local
+rust_local() {
+    docker exec -e KRB5_MASTER_PASSWORD=masterpassword -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
+        "$NAME" /tmp/krb5-kadmin-local -q "$1" 2>&1
+}
+hist_shape() { grep -E '^(Expiration date|Password expiration date|Maximum ticket life|Maximum renewable life|Attributes|Number of keys|Key: vno|MKey: vno|Policy):?' ; }
 
 docker exec "$NAME" sh -c 'cat >/tmp/kdb-krb5.conf <<EOF
 [libdefaults]
@@ -72,6 +78,13 @@ echo "==== half A: MIT kadmin.local aliases user, kdb5_util re-dumps ===="
 docker exec "$NAME" kdb5_util create -s -P masterpassword
 docker exec "$NAME" kdb5_util load /tmp/mit.dump
 docker exec "$NAME" kadmin.local -q 'alias a1 user' 2>&1 | grep -F 'Principal "a1@KERBER.TEST" aliased to "user@KERBER.TEST".'
+echo "==== half A: MIT records a password history (KADM_DATA old_keys under kadmin/history) ===="
+docker exec "$NAME" kadmin.local -q 'addpol -history 3 hp' 2>&1 | grep -v dictionary
+docker exec "$NAME" kadmin.local -q 'addprinc -pw s3cret1 -policy hp histee' 2>&1 | grep -F 'Principal "histee@KERBER.TEST" created.'
+docker exec "$NAME" kadmin.local -q 'cpw -pw s3cret2 histee' 2>&1 | grep -F 'Password for "histee@KERBER.TEST" changed.'
+MIT_HIST_A="$(docker exec "$NAME" kadmin.local -q 'getprinc kadmin/history' 2>&1 || true)"
+echo "$MIT_HIST_A"
+echo "$MIT_HIST_A" | grep -F 'Principal: kadmin/history@KERBER.TEST'
 docker exec "$NAME" kdb5_util dump /tmp/mit-alias.dump
 ALIAS_LINE="$(docker exec "$NAME" grep -F 'a1@KERBER.TEST' /tmp/mit-alias.dump)"
 echo "$ALIAS_LINE"
@@ -88,6 +101,22 @@ LOAD_A="$(docker exec \
 echo "$LOAD_A"
 echo "$LOAD_A" | grep -q 'ok load version=7'
 echo "$LOAD_A" | grep -q 'realm=KERBER.TEST'
+
+echo "==== half A: Rust reads MIT's history — the old password is a reuse, the policy is bound, kadmin/history keeps MIT's shape ===="
+REUSE_A="$(rust_local 'cpw -pw s3cret1 histee' || true)"
+echo "$REUSE_A"
+echo "$REUSE_A" | grep -F 'Cannot reuse password while changing password for "histee@KERBER.TEST".'
+if rust_local 'cpw -pw s3cret1 histee' | grep -qF 'changed.'; then
+    echo "Rust accepted MIT's old password s3cret1" >&2
+    exit 1
+fi
+GETH_A="$(rust_local 'getprinc histee')"
+echo "$GETH_A"
+echo "$GETH_A" | grep -F 'Policy: hp'
+RUST_HIST_A="$(rust_local 'getprinc kadmin/history')"
+echo "$RUST_HIST_A"
+diff <(echo "$RUST_HIST_A" | hist_shape) <(echo "$MIT_HIST_A" | hist_shape)
+rust_local 'cpw -pw s3cret3 histee' | grep -F 'changed.'
 
 echo "==== Rust stash is keytab format; MIT klist -k reads the K/M entry ===="
 # krb5_db_def_fetch_mkey: the stash is a FILE keytab with one K/M@REALM entry.
@@ -236,6 +265,15 @@ echo "$ALIAS_B"
 echo "$ALIAS_B" | grep -q 'ok alias a2 user'
 docker exec "$NAME" grep -E '^princ	38	14	3	0	0	a2@KERBER.TEST	64	0	0	0	0	0	0	0	' /tmp/principal | grep -q '	12	17	75736572404b45524245522e5445535400	'
 
+echo "==== half B: seed a Rust-written password history on the Rust dump ===="
+rust_local 'addpol -history 3 hpb' | grep -v dictionary || true
+rust_local 'addprinc -pw b3cret1 -policy hpb histb' | grep -F 'Principal "histb@KERBER.TEST" created.'
+rust_local 'cpw -pw b3cret2 histb' | grep -F 'Password for "histb@KERBER.TEST" changed.'
+RUST_HIST_B="$(rust_local 'getprinc kadmin/history')"
+echo "$RUST_HIST_B"
+echo "$RUST_HIST_B" | grep -F 'Principal: kadmin/history@KERBER.TEST'
+docker exec "$NAME" grep -q 'histb@KERBER.TEST' /tmp/principal
+
 echo "==== half B: MIT kdb5_util load + krb5kdc ===="
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec "$NAME" kdb5_util create -s -P masterpassword
@@ -254,6 +292,18 @@ echo "$GETSTRS" | grep -q 'note: hello-g3d'
 GETA2="$(docker exec "$NAME" kadmin.local -q 'getprinc a2' 2>&1 || true)"
 echo "$GETA2"
 echo "$GETA2" | grep -F 'Principal: user@KERBER.TEST'
+
+echo "==== half B: MIT reads Rust's history — the old password is a reuse, the policy is bound, kadmin/history has the Rust shape ===="
+REUSE_B="$(docker exec "$NAME" kadmin.local -q 'cpw -pw b3cret1 histb' 2>&1 || true)"
+echo "$REUSE_B"
+echo "$REUSE_B" | grep -F 'Cannot reuse password while changing password for "histb@KERBER.TEST".'
+GETH_B="$(docker exec "$NAME" kadmin.local -q 'getprinc histb' 2>&1 || true)"
+echo "$GETH_B"
+echo "$GETH_B" | grep -F 'Policy: hpb'
+MIT_HIST_B="$(docker exec "$NAME" kadmin.local -q 'getprinc kadmin/history' 2>&1 || true)"
+echo "$MIT_HIST_B"
+diff <(echo "$MIT_HIST_B" | hist_shape) <(echo "$RUST_HIST_B" | hist_shape)
+docker exec "$NAME" kadmin.local -q 'cpw -pw b3cret3 histb' 2>&1 | grep -F 'changed.'
 STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc; sleep 0.4' 2>&1 || true)"
 echo "$STARTLOG"
 ok=0

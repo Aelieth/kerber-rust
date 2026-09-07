@@ -22,9 +22,10 @@ use krb5_types::{PrincipalName, infer_name_type, parse_name};
 
 use crate::error::Error as KdcError;
 use crate::mkey::{MASTER_NAME, harness_master_etype, master_key_from_password};
+use crate::osa::OsaPrincEnt;
 use crate::store::{
-    KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PRE_AUTH, KeyEntry, NamedPolicy,
-    Principal, PrincipalStore, TlData,
+    KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PRE_AUTH, KadmData, KeyEntry,
+    NamedPolicy, Principal, PrincipalStore, TlData,
 };
 
 /// MIT 1.22.2 default (`kdb5_util load_dump version 7`).
@@ -195,6 +196,7 @@ impl DumpFile {
         for line in &self.policies {
             store.load_policy(parse_policy_rest(line));
         }
+        store.resolve_history_all();
         if let Some(sid) = domain {
             store.set_domain_sid(sid);
         }
@@ -258,7 +260,15 @@ impl DumpPrincipal {
         let requires_preauth = self.attributes & KDB_REQUIRES_PRE_AUTH != 0;
         let locked = self.attributes & KDB_DISALLOW_ALL_TIX != 0;
         let (sid, rid) = parse_sid_tl(&self.tl_data)?;
-        let pw_policy = policy_from_tl(&self.tl_data);
+        // MIT keeps the policy binding and the password history in
+        // `KRB5_TL_KADM_DATA`; the private 0x4B02/0x4B04 types are older Rust dumps.
+        let osa = OsaPrincEnt::from_tl(&self.tl_data)
+            .map_err(|e| DumpError::Format(format!("{}: {e}", self.name)))?;
+        let pw_policy = osa
+            .as_ref()
+            .and_then(|o| o.bound_policy().map(str::to_owned))
+            .or_else(|| policy_from_tl(&self.tl_data));
+        let kadm = osa.as_ref().map(KadmData::from_osa).unwrap_or_default();
         let string_attrs = attrs_from_tl(&self.tl_data);
         Ok((
             Principal {
@@ -285,6 +295,7 @@ impl DumpPrincipal {
                 s4u_allowed_from: Vec::new(),
                 s4u_allowed_to: Vec::new(),
                 pw_policy,
+                kadm,
                 string_attrs,
             },
             sid,
@@ -771,9 +782,11 @@ fn write_princ_record(
         p.tl_data.clone()
     };
     merge_sid_tl(&mut tl, store.domain_sid(), p.rid);
-    merge_policy_tl(&mut tl, p.pw_policy.as_deref());
+    merge_kadm_tl(&mut tl, p);
     merge_string_attrs_tl(&mut tl, &p.string_attrs);
-    merge_hist_tl(&mut tl, &p.key_history, mkey)?;
+    if p.kadm.old_keys.is_empty() {
+        merge_hist_tl(&mut tl, &p.key_history, mkey)?;
+    }
     if p.name.components_joined() == "K/M" {
         merge_serial_tl(&mut tl, store.serial());
     }
@@ -891,6 +904,20 @@ fn attrs_from_tl(tl: &[TlData]) -> Vec<(String, String)> {
     out
 }
 
+/// A principal with a policy or a history record carries `KRB5_TL_KADM_DATA`
+/// (`kdb_put_entry`); one that never had either keeps whatever it loaded with.
+fn merge_kadm_tl(tl: &mut Vec<TlData>, p: &Principal) {
+    let has_kadm = tl.iter().any(|t| t.ty == TL_KADM_DATA);
+    if has_kadm || p.pw_policy.is_none() && p.kadm.old_keys.is_empty() {
+        return;
+    }
+    let mut fresh = p.clone();
+    crate::store::refresh_kadm_tl(&mut fresh);
+    tl.retain(|t| t.ty != TL_KERBER_POLICY);
+    tl.extend(fresh.tl_data.into_iter().filter(|t| t.ty == TL_KADM_DATA));
+}
+
+#[allow(dead_code)]
 fn merge_policy_tl(tl: &mut Vec<TlData>, policy: Option<&str>) {
     tl.retain(|t| t.ty != TL_KERBER_POLICY);
     if let Some(name) = policy.filter(|s| !s.is_empty()) {

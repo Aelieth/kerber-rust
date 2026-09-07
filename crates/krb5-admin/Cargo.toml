@@ -9,6 +9,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+chrono.workspace = true
 krb5-asn1.workspace = true
 krb5-config.workspace = true
 getrandom.workspace = true

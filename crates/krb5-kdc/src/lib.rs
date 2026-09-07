@@ -17,6 +17,7 @@ mod kdb_dump;
 mod listen;
 mod lookaside;
 mod mkey;
+mod osa;
 mod persist;
 mod plugins;
 mod preauth;
@@ -48,6 +49,10 @@ pub use listen::{
     drop_privileges, drop_privileges_to, serve, serve_until, shared_dump, shared_store,
 };
 pub use mkey::{MASTER_NAME, harness_master_etype, master_key_from_password};
+pub use osa::{
+    INITIAL_HIST_KVNO, KADM5_POLICY, OsaError, OsaKeyData, OsaPrincEnt,
+    decrypt_entry as decrypt_history_entry, history_entry as encrypt_history_entry,
+};
 pub use persist::{PersistError, load_store, save_store, save_store_legacy_kdb3};
 pub use plugins::{
     DemoPolicy, DemoPreauth, DenyPolicy, KdcPolicy, KdcPreauth, clear_thread_policy,
@@ -59,9 +64,9 @@ pub use store::{
     KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_LOCKDOWN_KEYS,
     KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE, KDB_OK_TO_AUTH_AS_DELEGATE,
     KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH, KDB_REQUIRES_PWCHANGE,
-    KDB_V1_BASE_LENGTH, KeyEntry, MAX_ALIAS_DEPTH, NamedPolicy, Policy, Principal, PrincipalStore,
-    RID_ADMINISTRATOR, RID_FIRST_USER, RID_KRBTGT, S2K_ITERS, TlData, UlogEntry, random_key,
-    s2k_params,
+    KDB_V1_BASE_LENGTH, KadmData, KeyEntry, MAX_ALIAS_DEPTH, NamedPolicy, Policy, Principal,
+    PrincipalStore, RID_ADMINISTRATOR, RID_FIRST_USER, RID_KRBTGT, S2K_ITERS, TlData, UlogEntry,
+    random_key, s2k_params,
 };
 
 use krb5_types::PrincipalName;

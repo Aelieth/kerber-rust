@@ -214,31 +214,50 @@ fn run(
         Some("getprinc" | "get_principal") => {
             let spec = parts.get(1).ok_or("getprinc <name>")?;
             let name = parse_name(sess, spec)?;
-            let p = sess.get_principal_id(&name).map_err(|e| e.to_string())?;
-            println!("Principal: {p}");
+            let canon = name.unparse_with_realm(sess.realm());
+            match sess.get_principal_record(&name) {
+                Ok(p) => print_getprinc(&p),
+                Err(e) => eprintln!(
+                    "get_principal: {} while retrieving \"{canon}\".",
+                    kadm_err_text(&e)
+                ),
+            }
             Ok(LineOutcome::Next)
         }
         Some("addprinc" | "add_principal") => {
             let a = parse_kadmin_args(&parts[1..])?;
             let name = parse_name(sess, &a.name)?;
-            if a.randkey {
+            let canon = name.unparse_with_realm(sess.realm());
+            // MIT kadmin_addprinc (kadmin.c:1281-1355): the policy note goes to
+            // stderr, a failure is com_err("add_principal", …) and the
+            // session continues, success is `Principal "…" created.`.
+            if a.policy.is_none() {
+                eprintln!("No policy specified for {canon}; defaulting to no policy");
+            }
+            let created = if a.randkey {
                 if a.etypes.is_empty() {
-                    sess.create_randkey(&name).map_err(|e| e.to_string())?;
+                    sess.create_randkey(&name)
                 } else {
                     sess.create_randkey_etypes(&name, &a.etypes)
-                        .map_err(|e| e.to_string())?;
                 }
             } else {
                 let pw = a.pw.clone().map_or_else(password, Ok)?;
                 if a.etypes.is_empty() {
                     sess.create_password(&name, pw.as_bytes())
-                        .map_err(|e| e.to_string())?;
                 } else {
                     sess.create_password_etypes(&name, pw.as_bytes(), &a.etypes)
-                        .map_err(|e| e.to_string())?;
                 }
+            };
+            if let Err(e) = created {
+                eprintln!(
+                    "add_principal: {} while creating \"{canon}\".",
+                    kadm_err_text(&e)
+                );
+                return Ok(LineOutcome::Next);
             }
-            apply_optional_fields(sess, &name, &a).map(|()| LineOutcome::Next)
+            apply_optional_fields(sess, &name, &a)?;
+            println!("Principal \"{canon}\" created.");
+            Ok(LineOutcome::Next)
         }
         Some("delprinc" | "delete_principal") => {
             let (force, spec) =
@@ -259,16 +278,23 @@ fn run(
         Some("cpw" | "change_password") => {
             let a = parse_kadmin_args(&parts[1..])?;
             let name = parse_name(sess, &a.name)?;
-            if a.randkey {
+            let canon = name.unparse_with_realm(sess.realm());
+            let done = if a.randkey {
                 sess.chrand(&name)
-                    .map_err(|e| e.to_string())
-                    .map(|()| LineOutcome::Next)
             } else {
                 let pw = a.pw.clone().map_or_else(password, Ok)?;
                 sess.change_password(&name, pw.as_bytes())
-                    .map_err(|e| e.to_string())
-                    .map(|()| LineOutcome::Next)
+            };
+            match done {
+                Ok(()) if a.randkey => println!("Key for \"{canon}\" randomized."),
+                Ok(()) => println!("Password for \"{canon}\" changed."),
+                // MIT kadmin.c:926,963: com_err("change_password", …).
+                Err(e) => eprintln!(
+                    "change_password: {} while changing password for \"{canon}\".",
+                    kadm_err_text(&e)
+                ),
             }
+            Ok(LineOutcome::Next)
         }
         Some("ktadd") => {
             let a = parse_kadmin_args(&parts[1..])?;
@@ -408,6 +434,172 @@ fn parse_name_realm(
     krb5_types::principal_from_unparsed(spec, sess.realm()).map_err(|e| e.to_string())
 }
 
+/// MIT `kadmin_getprinc` (`kadmin.c`): the record as `kadmin` prints it. The
+/// fields come from the same places the kadm5 `get_principal` reply is built
+/// from, so the local and the RPC view agree.
+fn print_getprinc(p: &krb5_kdc::Principal) {
+    let tl_u32 = |ty: i32| {
+        p.tl_data
+            .iter()
+            .find(|t| t.ty == ty)
+            .and_then(|t| t.contents.get(..4))
+            .map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    let never = |t: u32| {
+        if t == 0 {
+            "[never]".to_owned()
+        } else {
+            strdate(t)
+        }
+    };
+    println!("Principal: {}", p.id());
+    println!("Expiration date: {}", never(p.expiration));
+    println!("Last password change: {}", never(tl_u32(1)));
+    println!("Password expiration date: {}", never(p.pw_expire));
+    println!("Maximum ticket life: {}", strdur(p.max_life));
+    println!("Maximum renewable life: {}", strdur(p.max_renewable_life));
+    println!(
+        "Last modified: {} (kadmin/admin@{})",
+        strdate(tl_u32(2)),
+        p.realm
+    );
+    println!("Last successful authentication: {}", never(p.last_success));
+    println!("Last failed authentication: {}", never(p.last_failed));
+    println!("Failed password attempts: {}", p.fail_auth_count);
+    println!("Number of keys: {}", p.keys.len());
+    for k in &p.keys {
+        let deprecated = if k.etype.is_deprecated() {
+            "DEPRECATED:"
+        } else {
+            ""
+        };
+        let salt = match k.salt_type {
+            Some(t) if t != 0 => format!(":{}", salttype_name(t)),
+            _ => String::new(),
+        };
+        println!(
+            "Key: vno {}, {deprecated}{}{salt}",
+            k.kvno,
+            k.etype.to_mit_name()
+        );
+    }
+    println!("MKey: vno {}", p.mkvno);
+    println!("Attributes:{}", flags_to_string(p.attributes));
+    println!(
+        "Policy: {}",
+        p.pw_policy
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("[none]")
+    );
+}
+
+/// `strdate`: `strftime("%a %b %d %H:%M:%S %Z %Y")` of the local time. Without
+/// a zone database the zone prints as `UTC` at offset zero, else as `+hh:mm`.
+fn strdate(when: u32) -> String {
+    let Some(t) = chrono::DateTime::from_timestamp(i64::from(when), 0) else {
+        return "(error)".to_owned();
+    };
+    let local = t.with_timezone(&chrono::Local);
+    let zone = if local.offset().local_minus_utc() == 0 {
+        "UTC".to_owned()
+    } else {
+        local.format("%Z").to_string()
+    };
+    format!(
+        "{} {zone} {}",
+        local.format("%a %b %d %H:%M:%S"),
+        local.format("%Y")
+    )
+}
+
+/// `strdur`: `%d days %02d:%02d:%02d` (`day` when it is exactly one).
+fn strdur(duration: u64) -> String {
+    let days = duration / 86_400;
+    let rest = duration % 86_400;
+    format!(
+        "{days} {} {:02}:{:02}:{:02}",
+        if days == 1 { "day" } else { "days" },
+        rest / 3600,
+        rest % 3600 / 60,
+        rest % 60
+    )
+}
+
+/// `krb5_flags_to_strings` (`str_conv.c outflags`): one name per set bit, in
+/// bit order, each preceded by a space.
+fn flags_to_string(attributes: u32) -> String {
+    const NAMES: [Option<&str>; 24] = [
+        Some("DISALLOW_POSTDATED"),
+        Some("DISALLOW_FORWARDABLE"),
+        Some("DISALLOW_TGT_BASED"),
+        Some("DISALLOW_RENEWABLE"),
+        Some("DISALLOW_PROXIABLE"),
+        Some("DISALLOW_DUP_SKEY"),
+        Some("DISALLOW_ALL_TIX"),
+        Some("REQUIRES_PRE_AUTH"),
+        Some("REQUIRES_HW_AUTH"),
+        Some("REQUIRES_PWCHANGE"),
+        None,
+        None,
+        Some("DISALLOW_SVR"),
+        Some("PWCHANGE_SERVICE"),
+        Some("SUPPORT_DESMD5"),
+        Some("NEW_PRINC"),
+        None,
+        None,
+        None,
+        None,
+        Some("OK_AS_DELEGATE"),
+        Some("OK_TO_AUTH_AS_DELEGATE"),
+        Some("NO_AUTH_DATA_REQUIRED"),
+        Some("LOCKDOWN_KEYS"),
+    ];
+    let mut out = String::new();
+    for (bit, name) in NAMES.iter().enumerate() {
+        if attributes & (1 << bit) != 0 {
+            out.push(' ');
+            if let Some(n) = name {
+                out.push_str(n);
+            } else {
+                use std::fmt::Write as _;
+                let _ = write!(out, "0x{:x}", 1u32 << bit);
+            }
+        }
+    }
+    out
+}
+
+/// `krb5_salttype_to_string` names.
+fn salttype_name(t: i32) -> String {
+    match t {
+        0 => "normal".into(),
+        1 => "v4".into(),
+        2 => "norealm".into(),
+        3 => "onlyrealm".into(),
+        4 => "special".into(),
+        5 => "afs3".into(),
+        other => format!("<Salt type 0x{other:x}>"),
+    }
+}
+
+/// MIT `kadm_err.et` texts for the errors a password change reports.
+fn kadm_err_text(e: &krb5_admin::Error) -> String {
+    match e {
+        krb5_admin::Error::PasswordPolicy(s) if s.contains("min_length") => {
+            "Password is too short".into()
+        }
+        krb5_admin::Error::PasswordPolicy(s) if s.contains("min_classes") => {
+            "Password does not contain enough character classes".into()
+        }
+        krb5_admin::Error::PasswordPolicy(s) if s.contains("history") => {
+            "Cannot reuse password".into()
+        }
+        krb5_admin::Error::NotFound => "Principal does not exist".into(),
+        other => other.to_string(),
+    }
+}
+
 /// MIT `kadmin_addmodpol_usage` (`kadmin.c:1699-1708`): the date message (if the
 /// failure was an interval) then the options block.
 fn addmodpol_usage(func: &str, msg: &str) {
@@ -479,7 +671,12 @@ mod tests {
         q(&mut sess, "delprinc user").unwrap();
         assert!(q(&mut sess, "getprinc user").is_ok());
         q(&mut sess, "delprinc -force user").unwrap();
-        assert!(q(&mut sess, "getprinc user").is_err());
+        // MIT kadmin reports a missing principal with com_err and continues.
+        assert!(q(&mut sess, "getprinc user").is_ok());
+        assert!(
+            sess.get_principal_id(&PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]))
+                .is_err()
+        );
     }
 
     #[test]

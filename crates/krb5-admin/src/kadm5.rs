@@ -11,8 +11,8 @@ use krb5_crypto::{EncryptionType, ProtocolKey, kdb_decrypt_key};
 use krb5_gss::GssContext;
 use krb5_kdc::{
     Acl, KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH,
-    KeyEntry, Principal, SharedDump as SharedStore, TL_LAST_PWD_CHANGE, TL_MOD_PRINC,
-    TL_STRING_ATTRS, TlData,
+    KadmData, KeyEntry, OsaKeyData, OsaPrincEnt, Principal, SharedDump as SharedStore,
+    TL_LAST_PWD_CHANGE, TL_MOD_PRINC, TL_STRING_ATTRS, TlData,
 };
 use krb5_protocol::ReplayCache;
 use krb5_types::{PrincipalName, Ticket};
@@ -1254,6 +1254,59 @@ fn encode_keydata(
     }
 }
 
+/// `kdbe_key_t` of stored key data (history entries stay under the history
+/// key, as MIT ships them).
+fn encode_keydata_raw(w: &mut XdrW, keys: &[OsaKeyData]) {
+    w.u32(u32::try_from(keys.len()).unwrap_or(0));
+    for k in keys {
+        let slots = usize::from(k.ver.clamp(1, 2));
+        w.u32(u32::from(k.ver));
+        w.u32(u32::from(k.kvno));
+        w.u32(u32::try_from(slots).unwrap_or(0));
+        for t in &k.types[..slots] {
+            w.u32(i32::from(*t).cast_unsigned());
+        }
+        w.u32(u32::try_from(slots).unwrap_or(0));
+        for c in &k.contents[..slots] {
+            w.opaque(c);
+        }
+    }
+}
+
+fn decode_keydata_raw(r: &mut XdrR<'_>) -> Result<Vec<OsaKeyData>, Error> {
+    let n = r.u32()? as usize;
+    let mut keys = Vec::with_capacity(n.min(16));
+    for _ in 0..n {
+        let ver = u16::try_from(r.u32()?).unwrap_or(u16::MAX);
+        let kvno = u16::try_from(r.u32()?).unwrap_or(u16::MAX);
+        let n_enc = r.u32()? as usize;
+        let mut all_types = Vec::with_capacity(n_enc.min(4));
+        for _ in 0..n_enc {
+            all_types.push(i16::try_from(r.u32()?.cast_signed()).unwrap_or(0));
+        }
+        let n_cont = r.u32()? as usize;
+        let mut all_contents = Vec::with_capacity(n_cont.min(4));
+        for _ in 0..n_cont {
+            all_contents.push(r.opaque()?);
+        }
+        let mut types = [0i16; 2];
+        for (slot, t) in types.iter_mut().zip(&all_types) {
+            *slot = *t;
+        }
+        let mut contents: [Vec<u8>; 2] = [Vec::new(), Vec::new()];
+        for (slot, c) in contents.iter_mut().zip(all_contents) {
+            *slot = c;
+        }
+        keys.push(OsaKeyData {
+            ver,
+            kvno,
+            types,
+            contents,
+        });
+    }
+    Ok(keys)
+}
+
 fn kdbe_tl(p: &krb5_kdc::Principal) -> Vec<TlData> {
     let mut tl = p.tl_data.clone();
     tl.retain(|t| t.ty != TL_STRING_ATTRS && !(0x4B00..=0x4BFF).contains(&t.ty));
@@ -1385,10 +1438,15 @@ fn encode_kdbe(w: &mut XdrW, p: &krb5_kdc::Principal, mkey: Option<&krb5_crypto:
         encode_utf8str(&mut body, pol);
         n += 1;
     }
-    if !p.key_history.is_empty() {
+    if !p.kadm.old_keys.is_empty() {
+        body.u32(AT_PW_HIST_KVNO);
+        body.u32(p.kadm.admin_history_kvno);
+        n += 1;
         body.u32(AT_PW_HIST);
-        body.u32(1);
-        encode_keydata(&mut body, &p.key_history, mkey, &p.salt);
+        body.u32(u32::try_from(p.kadm.old_keys.len()).unwrap_or(0));
+        for entry in &p.kadm.old_keys {
+            encode_keydata_raw(&mut body, entry);
+        }
         n += 1;
     }
     let now = u32::try_from(
@@ -1789,7 +1847,8 @@ fn decode_kdbe(
     let mut parsed_name: Option<(PrincipalName, String)> = None;
     let mut keys = Vec::new();
     let mut tl_data = Vec::new();
-    let mut key_history = Vec::new();
+    let mut old_keys: Vec<Vec<OsaKeyData>> = Vec::new();
+    let mut hist_kvno = None;
     let mut pw_last_change = None;
     for _ in 0..n {
         let tag = r.u32()?;
@@ -1814,9 +1873,10 @@ fn decode_kdbe(
             }
             AT_LEN => db_entry_len = r.u32()?,
             AT_PW_LAST_CHANGE => pw_last_change = Some(r.u32()?),
-            AT_MOD_TIME | AT_PW_HIST_KVNO => {
+            AT_MOD_TIME => {
                 let _ = r.u32()?;
             }
+            AT_PW_HIST_KVNO => hist_kvno = Some(r.u32()?),
             AT_PW_POLICY => {
                 let s = r.opaque()?;
                 pw_policy = Some(String::from_utf8_lossy(&s).into_owned());
@@ -1830,7 +1890,7 @@ fn decode_kdbe(
             AT_PW_HIST => {
                 let nh = r.u32()? as usize;
                 for _ in 0..nh {
-                    key_history.extend(decode_keydata(r, mkey)?);
+                    old_keys.push(decode_keydata_raw(r)?);
                 }
             }
             _ => {
@@ -1855,11 +1915,23 @@ fn decode_kdbe(
     let requires_preauth = attributes & KDB_REQUIRES_PRE_AUTH != 0;
     let locked = attributes & KDB_DISALLOW_ALL_TIX != 0;
     let salt = name.default_salt(&realm);
+    // MIT carries the admin record inside AT_TL_DATA (`KRB5_TL_KADM_DATA`) and,
+    // for a changed entry, the history as AT_PW_HIST / AT_PW_HIST_KVNO.
+    let osa = OsaPrincEnt::from_tl(&tl_data).map_err(|e| Error::Inner(e.to_string()))?;
+    let mut kadm = osa.as_ref().map(KadmData::from_osa).unwrap_or_default();
+    if !old_keys.is_empty() {
+        kadm.old_keys = old_keys;
+        kadm.old_key_next = 0;
+    }
+    if let Some(k) = hist_kvno {
+        kadm.admin_history_kvno = k;
+    }
+    let pw_policy = pw_policy.or_else(|| osa.and_then(|o| o.bound_policy().map(str::to_owned)));
     Ok(Some(Principal {
         name,
         realm,
         keys,
-        key_history,
+        key_history: Vec::new(),
         salt,
         requires_preauth,
         max_life,
@@ -1879,6 +1951,7 @@ fn decode_kdbe(
         s4u_allowed_from: Vec::new(),
         s4u_allowed_to: Vec::new(),
         pw_policy,
+        kadm,
         string_attrs,
     }))
 }
@@ -7882,7 +7955,24 @@ mod tests {
         let mut r = XdrR::new(&w.b);
         let got = decode_kdbe(&mut r, None, &p.id()).unwrap().unwrap();
         assert_eq!(got.string_attrs, p.string_attrs);
-        assert_eq!(got.key_history.len(), p.key_history.len());
+        // History travels as the stored entries under the history key
+        // (AT_PW_HIST / AT_PW_HIST_KVNO); the replica decrypts them once the
+        // update is applied beside its kadmin/history.
+        assert_eq!(got.kadm, p.kadm);
+        assert!(got.key_history.is_empty());
+        {
+            let mut g = store.write().unwrap();
+            let next = g.serial() + 1;
+            g.apply_updates(&[krb5_kdc::UlogEntry {
+                sno: next,
+                time: 0,
+                name: p.id(),
+                deleted: false,
+                princ: Some(got.clone()),
+            }]);
+            let applied = g.get_name(&name).unwrap();
+            assert_eq!(applied.key_history.len(), p.key_history.len());
+        }
         assert_eq!(got.keys[0].key.as_bytes(), p.keys[0].key.as_bytes());
         assert_eq!(got.pw_policy.as_deref(), Some("g4apol"));
         assert_eq!(got.last_success, 111);
