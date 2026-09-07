@@ -768,10 +768,13 @@ impl PrincipalStore {
         // MIT never logs policy changes (kdb5.c krb5_db_create_policy /
         // put_policy / delete_policy add no ulog entry; kpropd's ulog_replay
         // knows principals only), so policies reach a replica by full resync.
-        // The local `policy:` markers only advance the serial.
+        // The local `policy:<name>` markers only advance the serial. A policy
+        // name cannot contain `@` (svr_policy) and a principal id always ends
+        // in `@REALM`, so the `@` distinguishes a marker from a principal
+        // literally named `policy:...@REALM` (which must NOT be filtered).
         let entries = entries
             .into_iter()
-            .filter(|e| !e.name.starts_with("policy:"))
+            .filter(|e| !e.name.starts_with("policy:") || e.name.contains('@'))
             .collect();
         (IPROP_OK, cur, entries)
     }
@@ -3420,6 +3423,18 @@ mod tests {
             .set_principal_policy(&user, Some("ipol".into()))
             .unwrap();
         store.set_password(&user, b"Ipol-pw1").unwrap();
+        // A principal literally named `policy:svc` must still ship (its id
+        // carries @REALM; only the marker `policy:ipol` is filtered).
+        let acl = Acl::allow_admin(&crate::documented_admin_id()).unwrap();
+        let colliding = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["policy:svc"]);
+        store
+            .create_password(
+                &acl,
+                &crate::documented_admin_id(),
+                &colliding,
+                b"collide-pw",
+            )
+            .unwrap();
         let (status, last, entries) = store.iprop_get(before);
         assert_eq!(status, IPROP_OK);
         assert_eq!(
@@ -3428,7 +3443,17 @@ mod tests {
             "the policy marker still advances the serial"
         );
         assert!(!entries.is_empty());
-        assert!(entries.iter().all(|e| !e.name.starts_with("policy:")));
+        // The bare marker `policy:ipol` (no @) is filtered; the principal
+        // `policy:svc@REALM` is not.
+        assert!(
+            entries
+                .iter()
+                .all(|e| !e.name.starts_with("policy:") || e.name.contains('@'))
+        );
+        assert!(
+            entries.iter().any(|e| e.name.starts_with("policy:svc@")),
+            "a principal named policy:svc must not be filtered: {entries:?}"
+        );
         assert!(
             entries
                 .iter()
