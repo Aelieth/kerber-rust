@@ -675,7 +675,7 @@ echo "$KADMIND_LOG"
 # M4c: MIT log_done / log_unauth (server_stubs.c:403-459). The successful admin
 # addprinc logs "Request: ... success" and the changepw listprincs denial logs
 # "Unauthorized request: ...", each with client/service/addr. Settled live in
-# working/logs/audit-polish-0902/w1k/m4c-kadmind-log-settle.log.
+# a live MIT kadmind settle (working/logs/audit-polish-0902/w1k/settle-m4c-kadmind-log.log).
 echo "$KADMIND_LOG" \
     | grep -F 'Request: kadm5_create_principal, extra@KERBER.TEST, success, client=admin@KERBER.TEST, service=kadmin/admin@KERBER.TEST, addr=' \
     || { echo "Rust kadmind did not log the create like MIT log_done" >&2; exit 1; }
