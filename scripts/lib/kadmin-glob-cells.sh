@@ -33,5 +33,9 @@ glob_cells() {
     done
     cat "$out"
     grep -qx 'ga1@KERBER.TEST' "$out"
+    # R2-T8: the malformed glob 'ga\' (after ss_parse unescaping) is EINVAL on
+    # both legs; assert the MIT diagnostic text is actually present, not merely
+    # that the two legs' output happens to match (which a silent empty would).
+    grep -qF 'Invalid argument' "$out"
 }
 

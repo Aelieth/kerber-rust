@@ -72,7 +72,21 @@ def main(argv: list[str]) -> int:
         return 2
     if argv[0] == "--all":
         root = pathlib.Path(argv[1])
-        dirs = sorted(p.parent for p in root.rglob("INDEX.md") if "scratch" not in p.parts)
+        indexed = {
+            p.parent for p in root.rglob("INDEX.md") if "scratch" not in p.parts
+        }
+        # R2-T4: also flag a directory that holds files (outside scratch/) but is
+        # covered by no INDEX.md at its level or any ancestor -- otherwise such
+        # orphan evidence is never checked, only dirs that already have an index.
+        orphans: set[pathlib.Path] = set()
+        for p in root.rglob("*"):
+            if not p.is_file() or p.name == "INDEX.md":
+                continue
+            if "scratch" in p.relative_to(root).parts:
+                continue
+            if not any(anc in indexed for anc in (p.parent, *p.parent.parents)):
+                orphans.add(p.parent)
+        dirs = sorted(indexed | orphans)
     else:
         dirs = [pathlib.Path(a) for a in argv]
     rc = 0

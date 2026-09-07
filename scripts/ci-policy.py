@@ -1432,6 +1432,9 @@ def check_settle_helper() -> None:
         _die("settle.sh must refuse readers of a file")
     env = os.environ.copy()
     env["KERBER_NO_IMAGE"] = "1"
+    # The dev tree is dirty while iterating; the self-test exercises settle.sh's
+    # tee/refusal logic, not the R2-T8 dirty guard (checked before it in CI).
+    env["KERBER_SETTLE_ALLOW_DIRTY"] = "1"
     existing = ROOT / "scripts" / "ci-policy.py"
     r = subprocess.run(
         [
