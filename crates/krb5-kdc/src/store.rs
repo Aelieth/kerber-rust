@@ -745,8 +745,17 @@ impl PrincipalStore {
         if last_sno == 0 {
             return (IPROP_FULL_RESYNC, cur, Vec::new());
         }
-        if last_sno >= cur {
+        if last_sno == cur {
             return (IPROP_NIL, cur, Vec::new());
+        }
+        // MIT `get_sno_status` (`kdb_log.c:142-165`): a replica whose serial is
+        // AHEAD of the master's (a primary restored from an older dump, or a
+        // replica repointed at a different primary) is `UPDATE_FULL_RESYNC_NEEDED`,
+        // never `UPDATE_NIL`. (MIT also resyncs when `last_sno`'s timestamp does
+        // not match the ulog entry's — a reused serial; the Rust replica does not
+        // yet thread `last_time`, tracked as a residual.)
+        if last_sno > cur {
+            return (IPROP_FULL_RESYNC, cur, Vec::new());
         }
         let entries = self.updates_after(last_sno);
         if entries.is_empty() {
@@ -3657,6 +3666,12 @@ mod tests {
         );
         assert_eq!(master.iprop_get(0).0, IPROP_FULL_RESYNC);
         assert_eq!(master.iprop_get(sno0).0, IPROP_NIL);
+        // A replica ahead of the master (rollback) must full-resync, not NIL.
+        assert_eq!(
+            master.iprop_get(sno0 + 100).0,
+            IPROP_FULL_RESYNC,
+            "a replica serial past the master's must resync"
+        );
 
         let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["iproped"]);
         master
