@@ -16,10 +16,10 @@ use krb5_kdc::{
     tgs_req, ticket_checksum_der, verify_pac, verify_pac_signatures, wrap_win2k_pac,
 };
 use krb5_protocol::{
-    apply_strengthen, armor_key, as_req_sname, attach_fast, build_fast_armor, pa_for_user,
-    pa_pac_options, pa_pk_as_req, pa_pk_as_req_agile, pa_pk_as_req_cn, pa_pk_as_req_spki,
-    pa_spake_response, pa_spake_support, pkinit_reply_key, pkinit_reply_key_agile, tgs_req_ex,
-    unwrap_fast_rep,
+    apply_strengthen, armor_key, as_req_sname, attach_fast, attach_fast_with_options,
+    build_fast_armor, pa_for_user, pa_pac_options, pa_pk_as_req, pa_pk_as_req_agile,
+    pa_pk_as_req_cn, pa_pk_as_req_spki, pa_spake_response, pa_spake_support, pkinit_reply_key,
+    pkinit_reply_key_agile, tgs_req_ex, unwrap_fast_rep,
 };
 use krb5_types::pac::{
     PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM, PAC_SERVER_CHECKSUM, Pac, RpcSid,
@@ -204,6 +204,52 @@ fn fast_as_exchange_strengthen_and_finished() {
         ),
         Ok(()) => panic!("tampered FAST finished must fail"),
     }
+}
+
+#[test]
+fn fast_hide_client_names_returns_the_anonymous_outer_client() {
+    // MIT kdc_fast_hide_client (fast_util.c:444) + do_as_req.c:324: a FAST
+    // request that sets KRB5_FAST_OPTION_HIDE_CLIENT_NAMES (RFC 6113 bit 1) is
+    // answered with the anonymous principal WELLKNOWN/ANONYMOUS@WELLKNOWN:
+    // ANONYMOUS as the outer reply client; the real client stays inside the
+    // FAST-armored reply, which still strengthens and finishes. Before R2-P4
+    // the KDC refused the option as UNKNOWN_CRITICAL_FAST_OPTION.
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = user_key();
+    let armor_as = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 221);
+    let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x37u8; 32])
+        .expect("subkey");
+    let armor_ap = build_fast_armor(
+        armor_as.rep.0.ticket.clone(),
+        &armor_as.session_key,
+        &ascii(TEST_REALM),
+        &cname,
+        Some(&sub),
+    )
+    .expect("armor AP-REQ");
+    let akey = armor_key(&armor_as.session_key, Some(&sub)).expect("armor key");
+    let inner = vec![pa_enc_timestamp(&key).expect("pa")];
+    let mut opts = krb5_types::fast::fast_options_none();
+    opts.set(1, true); // hide-client-names
+    let mut req = as_req(cname.clone(), TEST_REALM, 222, None).unwrap();
+    attach_fast_with_options(&mut req, &armor_ap, &akey, inner, &opts).expect("FAST wrap");
+    let issued = krb5_kdc::issue_as(&store, &req).expect("FAST AS with hide-client-names");
+    assert_eq!(
+        issued.rep.0.cname.components_joined(),
+        "WELLKNOWN/ANONYMOUS",
+        "outer cname hidden"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(issued.rep.0.crealm.as_bytes()),
+        "WELLKNOWN:ANONYMOUS",
+        "outer crealm hidden"
+    );
+    let fast = unwrap_fast_rep(&akey, &issued.rep.0.padata).expect("FAST rep");
+    assert!(
+        fast.finished.is_some(),
+        "FAST finished still present when hiding"
+    );
 }
 
 #[test]
@@ -649,22 +695,19 @@ fn wrap_as_fast_bit(
 
 #[test]
 fn unknown_critical_fast_option_is_refused() {
+    // MIT UNSUPPORTED_CRITICAL_FAST_OPTIONS = 0xbfff0000: RFC bits 0 and 2..15
+    // are refused; only bit 1 (hide-client-names) is honoured (R2-P4).
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let err = wrap_as_fast_bit(&store, 840, 2).expect_err("critical option");
     assert_eq!(issue_code(err), err::UNKNOWN_CRITICAL_FAST_OPTION);
+    let err0 = wrap_as_fast_bit(&store, 848, 0).expect_err("bit 0 reserved critical");
+    assert_eq!(issue_code(err0), err::UNKNOWN_CRITICAL_FAST_OPTION);
 }
 
 #[test]
 fn noncritical_fast_option_bit_16_is_ignored() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     wrap_as_fast_bit(&store, 842, 16).expect("bit 16 is not unknown-critical");
-}
-
-#[test]
-fn hide_client_names_is_refused() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
-    let err = wrap_as_fast_bit(&store, 844, 1).expect_err("bit 1 hide-client-names");
-    assert_eq!(issue_code(err), err::UNKNOWN_CRITICAL_FAST_OPTION);
 }
 
 #[test]

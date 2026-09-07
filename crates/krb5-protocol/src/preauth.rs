@@ -85,6 +85,29 @@ pub fn attach_fast(
     armor_key: &ProtocolKey,
     inner_padata: Vec<PaData>,
 ) -> Result<(), Error> {
+    attach_fast_with_options(
+        req,
+        armor,
+        armor_key,
+        inner_padata,
+        &krb5_types::fast::fast_options_none(),
+    )
+}
+
+/// [`attach_fast`] with an explicit `FastOptions` (RFC 6113 bit 1
+/// hide-client-names, etc.). The KDC honours hide-client-names by returning
+/// the anonymous principal as the outer reply client (MIT `kdc_fast_hide_client`).
+///
+/// # Errors
+///
+/// Crypto or DER failures.
+pub fn attach_fast_with_options(
+    req: &mut AsReq,
+    armor: &ApReq,
+    armor_key: &ProtocolKey,
+    inner_padata: Vec<PaData>,
+    fast_options: &krb5_types::fast::FastOptions,
+) -> Result<(), Error> {
     // MIT krb5int_fast_prep_req: the whole request, padata included (the
     // modules' padata first, then the info_pa_permitted pair 150/149 the
     // builder already appended), becomes the FAST-REQ; the outer carries
@@ -97,6 +120,7 @@ pub fn attach_fast(
         armor_key,
         &req.0.req_body,
         inner,
+        fast_options,
     )?]);
     Ok(())
 }
@@ -113,12 +137,13 @@ pub fn fx_fast_padata(
     armor_key: &ProtocolKey,
     req_body: &krb5_types::KdcReqBody,
     inner_padata: Vec<PaData>,
+    fast_options: &krb5_types::fast::FastOptions,
 ) -> Result<PaData, Error> {
     let body_der = encode(req_body)?;
     let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM)?;
     let mic = checksum(armor_key, ck_usage, &body_der)?;
     let inner = krb5_types::fast::KrbFastReq {
-        fast_options: krb5_types::fast::fast_options_none(),
+        fast_options: fast_options.clone(),
         padata: inner_padata,
         req_body: req_body.clone(),
     };

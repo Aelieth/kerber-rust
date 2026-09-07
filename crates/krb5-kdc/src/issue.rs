@@ -572,12 +572,21 @@ fn issue_as_body(
     } else {
         Some(outer_padata)
     };
+    // do_as_req.c:324: with FAST hide-client-names the outer reply client is
+    // the anonymous principal (WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS); the
+    // real client is carried only inside the FAST-armored reply. Non-FAST or
+    // unset leaves the true cname/crealm.
+    let (rep_crealm, rep_cname) = if fast.is_some_and(|f| fast_hides_client(&f.fast_options)) {
+        (ks(ANONYMOUS_REALM)?, anonymous_principal_name())
+    } else {
+        (ks(store.realm())?, cname)
+    };
     let rep = AsRep(krb5_types::KdcRep {
         pvno: krb5_types::KdcRep::PVNO,
         msg_type: krb5_types::KdcRep::MSG_AS_REP,
         padata,
-        crealm: ks(store.realm())?,
-        cname,
+        crealm: rep_crealm,
+        cname: rep_cname,
         ticket,
         enc_part: EncryptedData {
             etype: reply_key.etype().to_iana(),
@@ -1537,12 +1546,19 @@ pub(crate) fn verify_enc_timestamp(
     Ok(())
 }
 
+/// RFC 6113 bit 1 (`KRB5_FAST_OPTION_HIDE_CLIENT_NAMES`, MIT 0x40000000): the
+/// only non-reserved critical FAST option, honoured rather than refused.
+const FAST_HIDE_CLIENT_NAMES_BIT: usize = 1;
+
 fn check_fast_options(opts: &krb5_types::fast::FastOptions) -> Result<(), Error> {
-    // MIT UNSUPPORTED_CRITICAL_FAST_OPTIONS = 0xbfff0000 (RFC bits 0, 2..15).
-    // Bit 1 (hide-client-names) is known in MIT; we refuse it (anonymous
-    // cname in the AS reply is a non-goal) rather than issue silently.
+    // MIT fast_util.c:226 rejects only UNSUPPORTED_CRITICAL_FAST_OPTIONS =
+    // 0xbfff0000 (RFC bits 0 and 2..15). Bit 1 (hide-client-names) is honoured
+    // (kdc_fast_hide_client), so it is skipped here rather than refused.
     let n = opts.len().min(16);
     for i in 0..n {
+        if i == FAST_HIDE_CLIENT_NAMES_BIT {
+            continue;
+        }
         if opts[i] {
             return Err(crate::preauth::proto_fast(
                 err::UNKNOWN_CRITICAL_FAST_OPTION,
@@ -1551,6 +1567,21 @@ fn check_fast_options(opts: &krb5_types::fast::FastOptions) -> Result<(), Error>
         }
     }
     Ok(())
+}
+
+/// MIT `kdc_fast_hide_client` (fast_util.c:444): the request set RFC 6113
+/// bit 1, so the reply's outer client name/realm become the anonymous principal.
+fn fast_hides_client(opts: &krb5_types::fast::FastOptions) -> bool {
+    opts.len() > FAST_HIDE_CLIENT_NAMES_BIT && opts[FAST_HIDE_CLIENT_NAMES_BIT]
+}
+
+/// MIT `KRB5_ANONYMOUS_REALMSTR` (krb5.hin:305): the anonymous principal's realm.
+const ANONYMOUS_REALM: &str = "WELLKNOWN:ANONYMOUS";
+
+/// MIT `krb5_anonymous_principal`: `WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS`.
+/// The realm is [`ANONYMOUS_REALM`].
+fn anonymous_principal_name() -> PrincipalName {
+    PrincipalName::new(PrincipalName::NT_WELLKNOWN, ["WELLKNOWN", "ANONYMOUS"])
 }
 
 fn wrap_as_fast(
@@ -1884,10 +1915,7 @@ fn check_tgs_s4u2self(
 /// MIT `krb5_anonymous_principal`: the WELLKNOWN/ANONYMOUS name, compared by
 /// components only like `krb5_principal_compare_any_realm` (do_as_req.c:719).
 fn is_anonymous_principal(name: &PrincipalName) -> bool {
-    name.components_eq(&PrincipalName::new(
-        PrincipalName::NT_WELLKNOWN,
-        ["WELLKNOWN", "ANONYMOUS"],
-    ))
+    name.components_eq(&anonymous_principal_name())
 }
 
 fn s4u2self_as_invalid_options(body: &krb5_types::KdcReqBody) -> bool {

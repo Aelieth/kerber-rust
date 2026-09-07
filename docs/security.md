@@ -203,8 +203,19 @@ Corrupt `enc_fast_req` is 31 `FIND_FAST`; malformed `KrbFastReq` is
 `k5_setmsg` where MIT has one; the critical-FAST-option `detail`
 (`FAST option`) is Rust's own (`UNKNOWN_CRITICAL_FAST_OPTION` has
 no MIT `k5_setmsg`). Hide-client-names (FAST option bit 1) is
-refused as 93 `FIND_FAST`; MIT supports it (`k5-int.h:803`). Any
-critical bit 0..15 is 93 (MIT only rejects bits 0 and 2..15).
+honoured (R2-P4): the AS-REP outer client becomes the anonymous
+principal `WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS`
+(`kdc_fast_hide_client`, `do_as_req.c:324`). Only critical bits 0 and
+2..15 are refused as 93 `FIND_FAST` (`UNSUPPORTED_CRITICAL_FAST_OPTIONS`
+`0xbfff0000`, `k5-int.h:802-803`).
+
+**FAST hide-client-names scope:** the AS-REP *success* reply is
+anonymized; the FAST *error* reply and the TGS-REP / TGS error are not
+yet (`do_as_req.c:831`, `do_tgs_req.c:235,1111`), because the outer
+KRB-ERROR is built from the request body without the FAST hide flag. A
+hide-client-names request that then errors, or a hidden TGS, still
+exposes the client name in the outer reply — a documented residual
+(ledger `do_as_req.c:831` row).
 
 ### W1-J L1a — GSS unwrap_v3 / verify_enc_header
 
