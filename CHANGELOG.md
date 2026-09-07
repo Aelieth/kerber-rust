@@ -8,6 +8,12 @@ this project uses semantic versioning once a crate is published.
 
 ### Round-up R1 (residue sweep)
 
+- **tooling.** `scripts/claim-recite.py` moves a summary's `script:line` citations
+  from the tree they were written against to HEAD by line content and ordinal
+  (choosing, per file, the candidate SHA where the most citations assert) and,
+  with `--widen N`, extends a citation of a cell's command to its asserting
+  line; the round-up's evidence review used it to bring the W1-I summaries back
+  under `claim-audit.py` after later gates grew above their cells.
 - **test/ci.** A gate that dies silently under `set -e` now names its cell:
   `scripts/lib/provenance.sh` installs an `ERR` trap that prints
   `::error file=scripts/<gate>.sh,line=N::<command>`, which GitHub stores as a

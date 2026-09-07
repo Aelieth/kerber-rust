@@ -15,6 +15,15 @@ and `if` conditions are not annotated, and `log … error; exit 1` paths speak f
 a job stops at its first red step, so every gate behind that step has no CI evidence until the run is
 green again.
 
+A summary's `script:line` citations are moved to the current tree with `python3 scripts/claim-recite.py --at SHA
+[--at SHA …] [--widen N] [--apply] SUMMARY.md`: per file it keeps the one candidate SHA at which the most
+citations point at an asserting window (the tree the summary was written against), maps each cited range to
+the working tree by exact line content and ordinal (the Rust-leg cell before its MIT-leg copy), and with
+`--widen N` extends a citation of a cell's command to the line that asserts one of the bullet's quoted values.
+It never invents a cell: a range that no longer matches line for line is reported and left alone, and a
+citation that already passes `claim-audit.py` is untouched. Run `claim-audit.py` afterwards; the re-cite is
+the step before an archive freezes a summary.
+
 Evidence directories under `working/logs/<archive>/` each carry an `INDEX.md` naming every file with a one-line
 "what"; `python3 scripts/index-check.py <dir>…` (or `--all <root>`) prints `files=N unnamed=M` per directory and
 exits 1 when a file is unnamed (backticked names and table first cells count, `{a,b}` braces expand, a named
