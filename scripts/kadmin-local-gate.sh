@@ -395,8 +395,8 @@ echo "$KLISTK"
 echo "$KLISTK" | grep -q 'ktone@KERBER.TEST'
 echo "$KLISTK" | grep -q 'kttwo@KERBER.TEST'
 
-docker exec "$NAME" sh -c 'kill $(pidof krb5-kadmind) 2>/dev/null || true'
-sleep 0.3
+docker exec "$NAME" sh -c 'kill $(pidof krb5-kadmind) 2>/dev/null || true; for _ in $(seq 1 40); do pidof krb5-kadmind >/dev/null || break; sleep 0.25; done; rm -f /tmp/kadmind.log'
+docker exec "$NAME" sh -c '! pidof krb5-kadmind >/dev/null'
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
@@ -508,8 +508,8 @@ docker exec \
 LK="$(docker exec "$NAME" klist -k /tmp/lockee.keytab)"
 echo "$LK"
 echo "$LK" | grep -q 'lockee@KERBER.TEST'
-docker exec "$NAME" sh -c 'kill $(pidof krb5-kadmind) 2>/dev/null || true'
-sleep 0.3
+docker exec "$NAME" sh -c 'kill $(pidof krb5-kadmind) 2>/dev/null || true; for _ in $(seq 1 40); do pidof krb5-kadmind >/dev/null || break; sleep 0.25; done; rm -f /tmp/kadmind.log'
+docker exec "$NAME" sh -c '! pidof krb5-kadmind >/dev/null'
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
@@ -639,8 +639,8 @@ docker exec \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
     "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey kadmin/changepw'
-docker exec "$NAME" sh -c 'kill $(pidof krb5-kadmind) 2>/dev/null || true'
-sleep 0.3
+docker exec "$NAME" sh -c 'kill $(pidof krb5-kadmind) 2>/dev/null || true; for _ in $(seq 1 40); do pidof krb5-kadmind >/dev/null || break; sleep 0.25; done; rm -f /tmp/kadmind.log'
+docker exec "$NAME" sh -c '! pidof krb5-kadmind >/dev/null'
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \

@@ -5,9 +5,15 @@ Testing is continuous. Categories grow with the stages.
 ## Gate discipline
 
 CI status is read from the terminal with `python3 scripts/ci-status.py [-n RUNS] [--sha SHA] [--jobs]`:
-the public GitHub REST API answers unauthenticated with run, job and step conclusions (job logs need
-`GITHUB_TOKEN`). Check it after every push; a job stops at its first red step, so every gate behind
-that step has no CI evidence until the run is green again.
+the public GitHub REST API answers unauthenticated with run, job and step conclusions and with the
+check-run annotations (job logs need `GITHUB_TOKEN`). Every gate sources `scripts/lib/provenance.sh`,
+whose `ERR` trap turns a silent `set -e` death into a `::error file=scripts/<gate>.sh,line=N::…` line
+naming the failing command; GitHub stores it as an annotation and `ci-status.py` prints it under the
+failed job, so a red step names its cell without the log. Deliberate failures under `set +e`, `||`, `!`
+and `if` conditions are not annotated, and `log … error; exit 1` paths speak for themselves.
+`scripts/gate-err-trap-selftest.sh` (the `audit` job) keeps the trap honest. Check CI after every push;
+a job stops at its first red step, so every gate behind that step has no CI evidence until the run is
+green again.
 
 Evidence directories under `working/logs/<archive>/` each carry an `INDEX.md` naming every file with a one-line
 "what"; `python3 scripts/index-check.py <dir>…` (or `--all <root>`) prints `files=N unnamed=M` per directory and

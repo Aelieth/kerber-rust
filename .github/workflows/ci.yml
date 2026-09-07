@@ -17,6 +17,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: CI policy
         run: python3 scripts/ci-policy.py
+      - name: gate ERR-trap self-test (silent gate deaths become annotations)
+        run: ./scripts/gate-err-trap-selftest.sh
       - name: fmt
         run: cargo fmt --all -- --check
       - name: clippy

@@ -8,6 +8,16 @@ this project uses semantic versioning once a crate is published.
 
 ### Round-up R1 (residue sweep)
 
+- **test/ci.** A gate that dies silently under `set -e` now names its cell:
+  `scripts/lib/provenance.sh` installs an `ERR` trap that prints
+  `::error file=scripts/<gate>.sh,line=N::<command>`, which GitHub stores as a
+  check-run annotation readable without a token; `scripts/ci-status.py` prints
+  those annotations under a failed job, and `scripts/gate-err-trap-selftest.sh`
+  guards the trap in the `audit` job. `scripts/kadmin-local-gate.sh` restarts
+  the kadmind by waiting for the old process to exit and removing its log
+  before the relaunch, so the readiness poll can no longer match the previous
+  process's `listening` line (the likely cause of the job's intermittent red at
+  that step, twice in three runs, never reproduced locally).
 - **client.** `kinit` records `fast_avail = yes` (when the KDC echoed
   PA-FX-FAST) and the selected preauth type as `pa_type` in the ccache, as
   `X-CACHECONF:` config entries keyed by the TGT's server and stored ahead of

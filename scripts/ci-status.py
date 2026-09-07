@@ -3,9 +3,10 @@
 
 usage: ci-status.py [-n RUNS] [--workflow NAME] [--sha SHA] [--jobs] [--repo OWNER/NAME]
 
-Reads the public REST API without a token (run, job and step conclusions are
-public for a public repository); `GITHUB_TOKEN` in the environment is sent
-when present. Exit status is 0 when the newest listed run of the selected
+Reads the public REST API without a token (run, job and step conclusions and
+the check-run annotations — the gates' `::error file=,line=` lines — are
+public for a public repository; job logs are not); `GITHUB_TOKEN` in the
+environment is sent when present. Exit status is 0 when the newest listed run of the selected
 workflow succeeded, 1 when it failed, 2 when it is still running or unknown.
 """
 from __future__ import annotations
@@ -42,6 +43,23 @@ def get(path: str) -> dict:
     req = urllib.request.Request(API + path, headers=headers)
     with urllib.request.urlopen(req, timeout=60) as resp:
         return json.load(resp)
+
+
+def annotations(repo: str, job: dict) -> list[str]:
+    """The failure annotations of a job, minus the runner's generic exit line."""
+    try:
+        notes = get(f"/repos/{repo}/check-runs/{job['id']}/annotations")
+    except urllib.error.URLError:
+        return []
+    out = []
+    for a in notes if isinstance(notes, list) else []:
+        if a.get("annotation_level") != "failure":
+            continue
+        msg = (a.get("message") or "").strip()
+        if msg.startswith("Process completed with exit code"):
+            continue
+        out.append(f"{a.get('path')}:{a.get('start_line')}: {msg}")
+    return out
 
 
 def failing_steps(job: dict) -> list[str]:
@@ -87,6 +105,9 @@ def main() -> int:
                 jstate = j["conclusion"] or j["status"]
                 if args.jobs or bad or jstate not in ("success", "skipped"):
                     print(f"    {j['name']}: {jstate}{note}")
+                if bad:
+                    for line in annotations(args.repo, j):
+                        print(f"        {line}")
     newest = selected[0]
     if newest["conclusion"] == "success":
         return 0

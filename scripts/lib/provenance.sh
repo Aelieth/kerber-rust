@@ -1,6 +1,21 @@
 # Stamp every gate artefact with the tested tree. Source after `cd "$ROOT"`.
 # shellcheck shell=bash
 
+# A silent `set -e` death names its cell: the failing command becomes a GitHub
+# workflow `::error` line (a check-run annotation, readable without a token by
+# `scripts/ci-status.py`) that also reads as plain text locally. Deliberate
+# failures under `set +e` are skipped; `log … error; exit 1` paths already say
+# what failed on their own line.
+_gate_err() {
+    local status=$1 line=$2 cmd=$3 src=$4
+    case $- in *e*) ;; *) return 0 ;; esac
+    src=${src#"$PWD"/}
+    src=${src#./}
+    printf '::error file=%s,line=%s::%s: exit %s at line %s: %s\n' \
+        "$src" "$line" "${src##*/}" "$status" "$line" "$cmd"
+}
+trap '_gate_err "$?" "$LINENO" "$BASH_COMMAND" "${BASH_SOURCE[0]}"' ERR
+
 head_sha="$(git rev-parse HEAD)"
 _prov_idx="$(mktemp)"
 rm -f "$_prov_idx"
