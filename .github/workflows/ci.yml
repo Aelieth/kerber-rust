@@ -11,6 +11,10 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
+        with:
+          # R2-T3: full history so ci-policy's red-at-sha overlay-probe can see
+          # its historical base SHA (a shallow depth-1 clone cannot).
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -80,6 +84,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # R2-T3: overlay-probe needs the historical base SHA
       - name: Fetch MIT 1.22.2 source (SHA-pinned, same as harness/Dockerfile)
         run: |
           set -euo pipefail

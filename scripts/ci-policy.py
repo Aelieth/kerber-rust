@@ -1305,6 +1305,12 @@ def check_ledger_mit_cites(text: str | None = None, src: pathlib.Path | None = N
     if src is None:
         env = os.environ.get("KERBER_MIT_SRC")
         if not env:
+            # R2-T8: don't skip the MIT-anchor verification silently.
+            print(
+                "ci-policy: KERBER_MIT_SRC unset — skipping MIT-anchor "
+                "verification (ledger-mit job sets it)",
+                file=sys.stderr,
+            )
             return
         src = pathlib.Path(env)
     if not src.is_dir():
@@ -1510,6 +1516,13 @@ def check_red_at_sha_inject(text: str | None = None) -> None:
     )
     inj = "crates/krb5-types/tests/k3_parse_deltat.rs"
     if probe.returncode != 0 or not (ROOT / inj).is_file():
+        # R2-T3: a shallow CI checkout (fetch-depth 1) cannot see the historical
+        # base, so the probe cannot run. Say so loudly rather than pass silently.
+        print(
+            "ci-policy: SKIP red-at-sha overlay-probe: base 0d58023 not fetched "
+            "(shallow clone?) or fixture missing — set fetch-depth: 0",
+            file=sys.stderr,
+        )
         return
     scratch = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
     env["KERBER_SCRATCH"] = str(scratch)
@@ -2050,6 +2063,33 @@ jobs:
     check_ci_nextest_split(not_ci)
     check_ci_no_workspace_cargo_test(not_ci)
 
+    # R2-T2: red fixtures for check_ci's rules and check_nightly. The not_ci
+    # call above returns at the ci.yml name guard and exercised none of the
+    # _die rules; these (named ci.yml to pass that guard) do.
+    def _ci(body: str) -> Workflow:
+        return Workflow(pathlib.Path("ci.yml"), body)
+
+    _soft = (
+        "jobs:\n  slo:\n    continue-on-error: true\n"
+        "  chaos:\n    continue-on-error: true\n"
+        "  soak:\n    continue-on-error: true\n"
+    )
+    _must_die(check_ci, _ci("on:\n  workflow_dispatch:\n" + _soft))  # not push/PR
+    _must_die(
+        check_ci,
+        _ci("on:\n  push:\n  schedule:\n    - cron: '0 0 * * *'\n" + _soft),
+    )  # scheduled
+    _must_die(
+        check_ci,
+        _ci("on:\n  push:\n" + _soft + "  rogue:\n    continue-on-error: true\n"),
+    )  # extra continue-on-error job
+    _must_die(
+        check_ci,
+        _ci("on:\n  push:\njobs:\n  test:\n    timeout-minutes: 30\n"),
+    )  # missing the soft jobs
+    _must_die(check_ci, _ci("on:\n  push:\n" + _soft))  # missing timeout job 'test'
+    _must_die(check_nightly, [])  # no scheduled workflow runs a nightly-blocking gate
+
     check_gate_provenance('. "$ROOT/scripts/lib/provenance.sh"\n', "ok-gate.sh")
     _must_die(check_gate_provenance, "#!/bin/bash\necho hi\n", "no-prov-gate.sh")
     check_no_case_whitelists(
@@ -2136,6 +2176,13 @@ def check_no_case_whitelists(text: str | None = None, name: str = "diffsend.rs")
     if diffsend.is_file():
         scan(diffsend.read_text(), "crates/krb5-protocol/examples/diffsend.rs")
     for path in sorted(SCRIPTS.glob("*-gate.sh")):
+        scan(path.read_text(), str(path.relative_to(ROOT)))
+    # R2-T7: the differential compare itself (diff.rs) and the shared gate
+    # helpers are where a case-name whitelist would most plausibly reappear, so
+    # scan them too, not only the driver and the top-level gates.
+    for path in sorted((ROOT / "crates/krb5-protocol/src").glob("*.rs")):
+        scan(path.read_text(), str(path.relative_to(ROOT)))
+    for path in sorted((SCRIPTS / "lib").glob("*.sh")):
         scan(path.read_text(), str(path.relative_to(ROOT)))
 
 
