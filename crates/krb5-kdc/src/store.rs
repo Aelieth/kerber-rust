@@ -899,7 +899,9 @@ impl PrincipalStore {
         self.policy.max_life = conf.max_life;
         self.policy.max_renewable_life = conf.max_renewable_life;
         self.policy.max_renewable_life_set = conf.max_renewable_life_set;
-        self.policy.allow_weak_crypto = conf.allow_weak_crypto;
+        if let Some(v) = conf.allow_weak_crypto {
+            self.policy.allow_weak_crypto = v;
+        }
         if let Some(v) = conf.allow_rc4 {
             self.policy.allow_rc4 = v;
         }
@@ -936,6 +938,9 @@ impl PrincipalStore {
 
     /// Overlay `[libdefaults]` `allow_rc4` / `allow_des3` / `permitted_enctypes`.
     pub fn apply_libdefaults(&mut self, conf: &krb5_config::Krb5Conf) {
+        // krb5.conf [libdefaults] is the base; kdc.conf overrides it (applied
+        // last in the KDC bin), so `allow_weak_crypto` here reaches the KDC.
+        self.policy.allow_weak_crypto = conf.allow_weak_crypto;
         if let Some(v) = conf.allow_rc4 {
             self.policy.allow_rc4 = v;
         }
@@ -3027,6 +3032,32 @@ mod tests {
             .unwrap();
         let after = store.get_name(&user).unwrap();
         assert_eq!(after.pw_expire, 1_000_000 + 3600);
+    }
+
+    #[test]
+    fn kdc_conf_wins_over_krb5_conf_for_enctype_knobs() {
+        // MIT builds the KDC profile with kdc.conf before krb5.conf, so a knob
+        // in both is the kdc.conf value. The bin applies krb5.conf first.
+        let mut store = PrincipalStore::new("KERBER.TEST");
+        let krb5 = krb5_config::Krb5Conf::parse(
+            "[libdefaults]\n allow_rc4 = false\n allow_weak_crypto = true\n",
+        )
+        .unwrap();
+        store.apply_libdefaults(&krb5);
+        assert!(
+            store.policy.allow_weak_crypto,
+            "krb5.conf allow_weak_crypto must reach the KDC"
+        );
+        let kdc = krb5_config::KdcConf::parse("[libdefaults]\n allow_rc4 = true\n").unwrap();
+        store.apply_kdc_conf(&kdc).unwrap();
+        assert!(
+            store.policy.allow_rc4,
+            "kdc.conf allow_rc4 wins over krb5.conf"
+        );
+        assert!(
+            store.policy.allow_weak_crypto,
+            "kdc.conf did not set allow_weak_crypto, so krb5.conf's value survives"
+        );
     }
 
     #[test]

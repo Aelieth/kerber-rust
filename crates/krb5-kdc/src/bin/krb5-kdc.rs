@@ -105,15 +105,18 @@ fn main() {
             std::process::exit(1);
         });
     }
+    // MIT builds the KDC profile with kdc.conf before krb5.conf, so kdc.conf
+    // wins (`init_os_ctx.c add_kdc_config_file`). Apply krb5.conf [libdefaults]
+    // first as the base, then let kdc.conf override.
+    if let Some(c) = krb5_config::load_krb5_conf() {
+        store.set_capaths(c.capaths.clone());
+        store.apply_libdefaults(&c);
+    }
     if let Some(conf) = &kdc_conf
         && let Err(e) = store.apply_kdc_conf(conf)
     {
         eprintln!("krb5-kdc: kdc.conf: {e}");
         std::process::exit(2);
-    }
-    if let Some(c) = krb5_config::load_krb5_conf() {
-        store.set_capaths(c.capaths.clone());
-        store.apply_libdefaults(&c);
     }
     let enable_pkinit =
         export_pkinit.is_some() || std::env::var("KRB5_ENABLE_PKINIT").ok().as_deref() == Some("1");

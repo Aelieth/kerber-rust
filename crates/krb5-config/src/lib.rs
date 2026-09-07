@@ -132,7 +132,7 @@ pub struct KdcConf {
     /// User to drop to after binding a privileged port.
     pub kdc_user: Option<String>,
     /// `allow_weak_crypto`.
-    pub allow_weak_crypto: bool,
+    pub allow_weak_crypto: Option<bool>,
     /// `allow_rc4` (`[libdefaults]` / `[kdcdefaults]`).
     pub allow_rc4: Option<bool>,
     /// `allow_des3`.
@@ -167,7 +167,7 @@ impl Default for KdcConf {
             acl_file: None,
             key_stash_file: None,
             kdc_user: None,
-            allow_weak_crypto: false,
+            allow_weak_crypto: None,
             allow_rc4: None,
             allow_des3: None,
             permitted_enctypes: Vec::new(),
@@ -705,7 +705,7 @@ fn parse_kdc_libdefaults(conf: &mut KdcConf, line: &str) {
         return;
     };
     match k.to_ascii_lowercase().as_str() {
-        "allow_weak_crypto" => conf.allow_weak_crypto = truthy(&v),
+        "allow_weak_crypto" => conf.allow_weak_crypto = Some(truthy(&v)),
         "allow_rc4" => conf.allow_rc4 = Some(truthy(&v)),
         "allow_des3" => conf.allow_des3 = Some(truthy(&v)),
         "permitted_enctypes" => conf.permitted_enctypes = split_ws(&v),
@@ -1461,8 +1461,8 @@ mod tests {
         .unwrap();
         assert_eq!(rc4.allow_rc4, Some(true));
         assert_eq!(rc4.allow_des3, Some(true));
-        assert!(
-            !rc4.allow_weak_crypto,
+        assert_eq!(
+            rc4.allow_weak_crypto, None,
             "[kdcdefaults] allow_weak_crypto is ignored like MIT's get_boolean(LIBDEFAULTS)"
         );
         assert_eq!(rc4.permitted_enctypes, vec!["aes256-cts", "arcfour-hmac"]);
@@ -1484,7 +1484,7 @@ mod tests {
         .unwrap();
         assert_eq!(elsewhere.allow_rc4, None);
         assert_eq!(elsewhere.allow_des3, None);
-        assert!(!elsewhere.allow_weak_crypto);
+        assert_eq!(elsewhere.allow_weak_crypto, None);
         assert!(elsewhere.permitted_enctypes.is_empty());
         assert_eq!(
             rc4.supported_enctypes,
