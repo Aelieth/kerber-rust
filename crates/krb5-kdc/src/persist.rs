@@ -314,9 +314,21 @@ fn existing_stash_key(db_path: &Path, stash_path: &Path) -> Result<ProtocolKey, 
 }
 
 fn persist_master_etype() -> EncryptionType {
-    std::env::var("KRB5_MASTER_ETYPE")
-        .ok()
-        .and_then(|s| EncryptionType::from_mit_name(&s).ok())
+    // KRB5_MASTER_ETYPE, then kdc.conf `master_key_type`, like `krb5-kdb`'s
+    // create path (`krb5-kdb.rs master_etype`); previously this path ignored
+    // `master_key_type`. MIT's `DEFAULT_KDC_ENCTYPE` when unset is
+    // aes256-cts-hmac-sha1-96 (`osconf.hin`); Rust keeps the stronger
+    // aes256-cts-hmac-sha384-192 (a documented deviation, `docs/security.md`).
+    let raw = std::env::var("KRB5_MASTER_ETYPE").ok().or_else(|| {
+        krb5_config::env_kdc_config()
+            .and_then(|p| krb5_config::KdcConf::load_file(p).ok())
+            .and_then(|c| c.master_key_type)
+    });
+    master_etype_or_default(raw.as_deref())
+}
+
+fn master_etype_or_default(raw: Option<&str>) -> EncryptionType {
+    raw.and_then(|s| EncryptionType::from_mit_name(s).ok())
         .unwrap_or_else(harness_master_etype)
 }
 
@@ -515,4 +527,31 @@ fn take_bytes(b: &[u8], i: &mut usize) -> Result<Vec<u8>, PersistError> {
 fn take_str(b: &[u8], i: &mut usize) -> Result<String, PersistError> {
     let v = take_bytes(b, i)?;
     String::from_utf8(v).map_err(|_| PersistError::Format("utf8".into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{harness_master_etype, master_etype_or_default};
+    use krb5_crypto::EncryptionType;
+
+    #[test]
+    fn master_key_type_is_honored_and_defaults_stronger_than_mit() {
+        // MIT's DEFAULT_KDC_ENCTYPE (master_key_type unset) is
+        // aes256-cts-hmac-sha1-96 (settled live); Rust keeps the stronger
+        // aes256-cts-hmac-sha384-192 as its default.
+        assert_eq!(master_etype_or_default(None), harness_master_etype());
+        assert_eq!(
+            master_etype_or_default(None),
+            EncryptionType::Aes256CtsHmacSha384192
+        );
+        // A configured master_key_type is honored on the persist path.
+        assert_eq!(
+            master_etype_or_default(Some("aes256-cts-hmac-sha1-96")),
+            EncryptionType::Aes256CtsHmacSha196
+        );
+        assert_eq!(
+            master_etype_or_default(Some("aes256-cts-hmac-sha384-192")),
+            EncryptionType::Aes256CtsHmacSha384192
+        );
+    }
 }

@@ -43,6 +43,7 @@ the UTF-8 transited row below is mixed on absurd inputs.
 
 | Deviation | MIT | Rust | Why |
 | --- | --- | --- | --- |
+| Master-key type default | `DEFAULT_KDC_ENCTYPE` = aes256-cts-hmac-sha1-96 (`osconf.hin:90`) when `master_key_type` is unset | Honours `master_key_type` when set; defaults to the stronger aes256-cts-hmac-sha384-192 when unset (`persist.rs persist_master_etype`, `krb5-kdb.rs master_etype`) | **STRICTER** than MIT |
 | Transited field-count cap | Checker has no comma cap; add path clamps rebuilt encoding at 499 bytes so a 300-hop path cannot be *built* | More than 256 commas (raw comma bytes, including escaped `\,`) is `TooManyFields` (POLICY on the non-add path) | **STRICTER** than MIT |
 | Transited hop-emission cap | No hop cap; `process_intermediates` streams callbacks at O(1) memory | More than 4096 emitted hops is `TooManyFields` (`MAX_TRANSIT_HOPS`) | **STRICTER** than MIT |
 | Transited component bounds | Raw field ≤ 511 unescaped bytes; joined ≤ 512 (`chk_trans.c` `MAXLEN`) | Same (511 raw / 512 joined); over is `FieldTooLong` out of band | MIT-exact |
