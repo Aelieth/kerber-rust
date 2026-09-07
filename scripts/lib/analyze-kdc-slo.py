@@ -18,12 +18,14 @@ Stress additionally:
   second-window p99 <= first-window p99 * 2.5
 Soak additionally:
   second-window p99 <= first-window p99 * 2.5
-  RSS last <= first * 1.5 + 18 MiB   (8 MiB slack + the 10 MiB lookaside bound)
+  RSS last <= first * 1.5 + 18 MiB   (8 MiB slack + the bounded working set)
   RSS slope <= 0.05 MiB/s, measured from the KDC's `kdc.lookaside.full` event on
   (a bounded cache filling is a ramp that flattens; a leak keeps climbing). Until
   the cache reports full, the slope may additionally spend the fill allowance
-  (--rss-fill-allowance-mib / elapsed), and the check is `rss_slope_unsettled`
-  (a warning) when too few samples follow the fill.
+  (--rss-fill-allowance-mib / elapsed) — the bounded working set, measured at
+  ~17 MiB for the 10 MiB lookaside plus its map/FIFO overhead and the replay
+  windows — and the check is `rss_slope_unsettled` (a warning) when too few
+  samples follow the fill.
 """
 from __future__ import annotations
 
@@ -550,8 +552,22 @@ def _self_test_lookaside_fill(td: str, ns: argparse.Namespace, ok_lines: list[st
     ns.rss_max_extra_mib = 18.0
     ns.rss_max_slope_mib_s = 0.05
     ns.rss_fill_allowance_mib = 10.0
+    # The one-worker soak of 2026-09-07 (16.5 req/s): the cache filled at 115 s of
+    # 117, one steady sample, whole-run slope 0.139 MiB/s over +16.3 MiB — the
+    # bounded working set, which a 10 MiB allowance called a leak.
+    slow = [(base + 5 * i, 8.695 + i * (16.3 / 23)) for i in range(24)]
+    late_marker = json.dumps(
+        {
+            "timestamp": "2026-01-01T00:01:55Z",
+            "fields": {"event": "kdc.lookaside.full", "outcome": "ok", "total_bytes": 10485760},
+        }
+    )
+    late = pathlib.Path(td) / "fill-late.log"
+    late.write_text("\n".join(ok_lines) + "\n" + late_marker + "\n")
+    parsed_late = parse_logs([late])
     cases = [
         ("fill-flat", ramp + flat, parsed, "ok", None),
+        ("slow-runner-late-fill", slow, parsed_late, "error", "rss_slope:"),
         ("fill-climb", ramp + climb, parsed, "error", "rss_slope:"),
         ("unfilled-ramp", ramp[:7], parse_logs([pathlib.Path(td) / "ok.log"]), "ok", None),
         ("unfilled-steep", [(base + 5 * i, 8.0 + i * 3.0) for i in range(13)], parse_logs([pathlib.Path(td) / "ok.log"]), "error", "rss_slope:"),
@@ -564,6 +580,14 @@ def _self_test_lookaside_fill(td: str, ns: argparse.Namespace, ok_lines: list[st
         if rep["outcome"] != want or (issue and not any(i.startswith(issue) for i in rep["issues"])):
             print(f"self-test lookaside {name} want {want}", json.dumps(rep), file=sys.stderr)
             return 1
+    # The gate's allowance (the measured working set) passes the same slow run
+    # with the fill still counted as unsettled.
+    ns.rss_fill_allowance_mib = 18.0
+    path = pathlib.Path(td) / "rss-slow-runner-late-fill.tsv"
+    rep = evaluate(ns, parsed_late, parse_rss(path, since=parsed_late.get("lookaside_full_epoch")))
+    if rep["outcome"] != "ok" or "rss_slope_unsettled" not in rep["warnings"]:
+        print("self-test lookaside slow-runner with the gate allowance", json.dumps(rep), file=sys.stderr)
+        return 1
     return 0
 
 

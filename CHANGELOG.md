@@ -27,8 +27,10 @@ this project uses semantic versioning once a crate is published.
   RSS slope from that event on (a bounded cache filling is a ramp that
   flattens; a leak keeps climbing), spending a `--rss-fill-allowance-mib`
   before it. `scripts/soak-gate.sh` runs 120 s and allows
-  `first×1.5 + 18 MiB` (8 MiB slack + the lookaside bound); it was red since
-  `32bb4d5` because the 8 MiB allowance predated the cache.
+  `first×1.5 + 18 MiB` (8 MiB slack + the bounded working set — the 10 MiB
+  lookaside plus its overhead and the replay windows, measured at ~17 MiB —
+  which is also the pre-fill allowance); it was red since `32bb4d5` because
+  the 8 MiB allowance predated the cache.
 - **ci.** `scripts/ci-status.py` (new) prints recent GitHub Actions runs with
   per-job conclusions and the first failing step from the public REST API (no
   `gh`, no token needed; exit 0/1/2 = newest run green/red/pending). CI had been
