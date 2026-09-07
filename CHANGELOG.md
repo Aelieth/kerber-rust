@@ -6,6 +6,38 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### Round-up R2 (re-audit fixes)
+
+The R2 re-audit's product, security, tooling, and ledger findings, one item
+per commit, each MIT-settled with a red-at-parent gate or unit.
+
+- **kdc/protocol — parity.** The SPAKE client refuses a challenge whose factor
+  list offers no SF-NONE, like `spake_client.c` (P6). The AS tests only
+  `AS_INVALID_OPTIONS` and refuses a `REQUEST_ANONYMOUS` from a named client
+  with `VALIDATE_ANONYMOUS_PRINCIPAL` after preauth, like `do_as_req.c` (P3;
+  differential `as-request-anonymous`). FAST `hide-client-names` is honoured:
+  the AS-REP outer client becomes the anonymous principal (P4). The AS ticket
+  and enc-part server name are canonicalized under `-C` for a krbtgt alias
+  (P7). `[libdefaults]` no longer honours `[kdcdefaults]`-only knobs like
+  `kdc_ports` (P8).
+- **kdc/kadmind — DoS hardening.** At the concurrent-connection cap (45, MIT's
+  `max_stream_data_connections`) a new KDC TCP connection evicts the oldest
+  live one rather than being refused (S6, `ConnRegistry`). kadmind reuses that
+  registry, bounds the accumulated RPC record at 1 MiB, and sets a write
+  timeout, so a pre-auth client cannot exhaust threads or memory (S3).
+- **tooling.** ci-policy gained red fixtures for its `check_ci`/`check_nightly`
+  rules, loud skips for the overlay-probe (with `fetch-depth: 0`) and the
+  MIT-anchor check, and a wider whitelist-ban scan (T2/T3/T7/T8);
+  `index-check --all` flags directories with files but no covering INDEX (T4);
+  `settle.sh` refuses a dirty tree and the glob cell asserts the MIT
+  `Invalid argument` text (T8). The `handle_tcp` self-test pin is now
+  drift-proof (S7 follow-up).
+- **docs.** The MIT-parity ledger consolidated its R2 regrades — the iprop
+  wire divergence, the enc-challenge replay code, the vestigial policy-dump
+  fields, and the FAST `pa_type` are recorded as documented deviations (D1);
+  `docs/security.md` gained rows for the cross-realm PAC filter, the kadmind
+  caps, the TGS unknown-option stance, and the FAST hide-client-names scope.
+
 ### Round-up R1 (residue sweep)
 
 - **tooling.** `scripts/claim-recite.py` moves a summary's `script:line` citations
