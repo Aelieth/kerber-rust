@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The provenance lib's ERR trap must annotate a silent `set -e` death with the
 # gate file and line, and stay quiet for deliberate failures. Runs in the
-# `audit` job; no container needed (KERBER_NO_IMAGE=1 stamps without one).
+# `test` job; no container needed (KERBER_NO_IMAGE=1 stamps without one).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"

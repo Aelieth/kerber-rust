@@ -11,7 +11,7 @@ whose `ERR` trap turns a silent `set -e` death into a `::error file=scripts/<gat
 naming the failing command; GitHub stores it as an annotation and `ci-status.py` prints it under the
 failed job, so a red step names its cell without the log. Deliberate failures under `set +e`, `||`, `!`
 and `if` conditions are not annotated, and `log … error; exit 1` paths speak for themselves.
-`scripts/gate-err-trap-selftest.sh` (the `audit` job) keeps the trap honest. Check CI after every push;
+`scripts/gate-err-trap-selftest.sh` (the `test` job) keeps the trap honest. Check CI after every push;
 a job stops at its first red step, so every gate behind that step has no CI evidence until the run is
 green again.
 

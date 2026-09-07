@@ -726,8 +726,8 @@ for g in 'ga*' 'g?1' '*1' '[gb]a*' 'ga1@*' 'ga.1'; do
     diff <(rust_local "listprincs $g" | grep -v '^Authenticating' | sort) \
          <(mit_local "listprincs $g" | sort)
 done
-diff <(rust_local 'listprincs ga\\' 2>&1 | grep -v '^Authenticating') \
-     <(mit_local 'listprincs ga\\' 2>&1)
+diff <(rust_local 'listprincs ga\\' 2>&1 | grep -v '^Authenticating') <(mit_local 'listprincs ga\\' 2>&1) || { printf '::error file=scripts/kadmin-local-gate.sh,line=729::listprincs ga\\\\ differs: rust=[%s] mit=[%s]\n' "$(rust_local 'listprincs ga\\' 2>&1 | grep -v '^Authenticating' | cat -A | tr '\n' '|')" "$(mit_local 'listprincs ga\\' 2>&1 | cat -A | tr '\n' '|')"; exit 1; }
+# On a CI red the annotation above carries both legs' exact output (cat -A), which the public API can show.
 for pl in gpol1 gpolx gp2; do
     rust_local "addpol $pl" >/dev/null
     mit_local "addpol $pl" >/dev/null
