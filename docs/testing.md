@@ -4,6 +4,11 @@ Testing is continuous. Categories grow with the stages.
 
 ## Gate discipline
 
+CI status is read from the terminal with `python3 scripts/ci-status.py [-n RUNS] [--sha SHA] [--jobs]`:
+the public GitHub REST API answers unauthenticated with run, job and step conclusions (job logs need
+`GITHUB_TOKEN`). Check it after every push; a job stops at its first red step, so every gate behind
+that step has no CI evidence until the run is green again.
+
 `scripts/ci-policy.py` enforces workflow YAML (fail-red jobs, nextest
 `--profile ci` on every invocation, no per-push `cargo test
 --workspace` or `cargo test --all`, `--no-run` + junit upload, no
