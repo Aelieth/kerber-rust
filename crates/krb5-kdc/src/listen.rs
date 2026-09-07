@@ -1,9 +1,10 @@
 //! Thin UDP/TCP 88 listener around [`crate::issue::handle_request`].
 
+use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::panic::AssertUnwindSafe;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::thread;
 use std::time::Duration;
@@ -150,8 +151,10 @@ fn read_store<R>(store: &SharedStore, f: impl FnOnce(&dyn Store) -> R) -> R {
 /// to listen on all interfaces.
 pub const BIND_CANDIDATES: &[&str] = &["127.0.0.1:88", "127.0.0.1:8888"];
 
-/// Default cap on concurrent TCP request handlers.
-pub const MAX_TCP_WORKERS: usize = 32;
+/// Default cap on concurrent TCP request handlers. MIT
+/// `max_stream_data_connections` (`net-server.c:85`); at the cap a new
+/// connection evicts the oldest rather than being refused.
+pub const MAX_TCP_WORKERS: usize = 45;
 /// MIT `net-server.c:1278` `bufsiz` 1 MiB; FIELD_TOOLONG at `msglen > bufsiz-4`.
 pub const MAX_TCP_REQUEST: usize = 1024 * 1024 - 4;
 /// MIT `MAX_DGRAM_SIZE` / `kdc_max_dgram_reply_size` default (`osconf.hin`).
@@ -407,30 +410,21 @@ fn tcp_loop(
     limits: ListenLimits,
     cache: &SharedCache,
 ) {
-    let workers = Arc::new(AtomicUsize::new(0));
+    let registry = ConnRegistry::new(limits.max_tcp_workers);
     while !shutdown.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, _)) => {
-                let current = workers.load(Ordering::SeqCst);
-                if current >= limits.max_tcp_workers {
-                    tracing::error!(
-                        event = krb5_log::events::KDC_TRANSPORT,
-                        correlation_id = krb5_log::current_correlation_id(),
-                        component = "krb5-kdc",
-                        outcome = "error",
-                        error = "tcp worker cap",
-                    );
-                    drop(stream);
-                    continue;
-                }
-                workers.fetch_add(1, Ordering::SeqCst);
+                // MIT net-server.c:1281-1282: accept the connection and, when
+                // over the cap, evict the oldest live stream
+                // (kill_lru_stream_connection) rather than refuse the newcomer.
+                let seq = registry.register(&stream);
                 let store = Arc::clone(store);
-                let workers_g = Arc::clone(&workers);
+                let registry_g = Arc::clone(&registry);
                 let cache = Arc::clone(cache);
                 let max_body = limits.max_tcp_request;
                 let timeout = limits.io_timeout;
                 thread::spawn(move || {
-                    let _guard = WorkerGuard(workers_g);
+                    let _guard = ConnGuard(registry_g, seq);
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         handle_tcp(&store, stream, max_body, timeout, &cache)
                     }));
@@ -549,11 +543,68 @@ fn handle_tcp(
 }
 
 /// Decrements the TCP worker counter on drop, including unwind.
-struct WorkerGuard(Arc<AtomicUsize>);
+/// Live TCP connections, so the accept loop can evict the oldest when the cap
+/// is reached (MIT `kill_lru_stream_connection`, `net-server.c:1192-1282`)
+/// rather than refusing the newcomer. Each entry keeps a `try_clone` of the
+/// stream purely to `shutdown` it from the accept thread, which unblocks the
+/// victim worker's `read` so it exits and deregisters itself.
+struct ConnRegistry {
+    cap: usize,
+    inner: Mutex<ConnInner>,
+}
 
-impl Drop for WorkerGuard {
+struct ConnInner {
+    next_seq: u64,
+    live: BTreeMap<u64, Option<TcpStream>>,
+}
+
+impl ConnRegistry {
+    fn new(cap: usize) -> Arc<Self> {
+        Arc::new(Self {
+            cap: cap.max(1),
+            inner: Mutex::new(ConnInner {
+                next_seq: 0,
+                live: BTreeMap::new(),
+            }),
+        })
+    }
+
+    /// Register `stream`, evicting the oldest live connection(s) while over the
+    /// cap. Returns the sequence number the worker deregisters on exit.
+    fn register(&self, stream: &TcpStream) -> u64 {
+        let clone = stream.try_clone().ok();
+        let mut g = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        let seq = g.next_seq;
+        g.next_seq = g.next_seq.wrapping_add(1);
+        g.live.insert(seq, clone);
+        // MIT increments by one per accept and kills one LRU; loop defensively
+        // in case the cap was crossed by more than one. Never evict the
+        // newcomer (its seq is the largest).
+        while g.live.len() > self.cap {
+            let Some(oldest) = g.live.keys().next().copied() else {
+                break;
+            };
+            if oldest == seq {
+                break;
+            }
+            if let Some(victim) = g.live.remove(&oldest).flatten() {
+                let _ = victim.shutdown(Shutdown::Both);
+            }
+        }
+        seq
+    }
+
+    fn deregister(&self, seq: u64) {
+        let mut g = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        g.live.remove(&seq);
+    }
+}
+
+struct ConnGuard(Arc<ConnRegistry>, u64);
+
+impl Drop for ConnGuard {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
+        self.0.deregister(self.1);
     }
 }
 
@@ -849,14 +900,79 @@ mod tests {
     }
 
     #[test]
-    fn tcp_worker_guard_releases_slot_on_panic() {
-        let n = Arc::new(AtomicUsize::new(0));
-        n.fetch_add(1, Ordering::SeqCst);
+    fn tcp_conn_guard_deregisters_on_panic() {
+        let reg = ConnRegistry::new(2);
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = TcpStream::connect(addr).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let seq = reg.register(&server);
+        assert_eq!(reg.inner.lock().unwrap().live.len(), 1);
+        let reg2 = Arc::clone(&reg);
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = WorkerGuard(Arc::clone(&n));
+            let _guard = ConnGuard(reg2, seq);
             panic!("isolated");
         }));
         assert!(r.is_err());
-        assert_eq!(n.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            reg.inner.lock().unwrap().live.len(),
+            0,
+            "guard deregistered the slot on panic"
+        );
+        drop(client);
+        drop(server);
+    }
+
+    #[test]
+    fn tcp_over_cap_evicts_the_oldest_connection() {
+        // MIT net-server.c:1281-1282: at the cap a new TCP connection evicts the
+        // oldest live stream (kill_lru_stream_connection), not the newcomer.
+        // With cap 2, a third connection shuts down the first; its read = EOF.
+        use std::io::Read as _;
+        let (store, _) = bootstrap_documented().unwrap();
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr = udp.local_addr().unwrap();
+        let tcp = TcpListener::bind(addr).unwrap();
+        let flag = Arc::new(AtomicBool::new(false));
+        let store = shared_store(store);
+        let f2 = Arc::clone(&flag);
+        let server = thread::spawn(move || {
+            let _ = serve_until(
+                store,
+                udp,
+                tcp,
+                f2,
+                ListenLimits {
+                    max_tcp_workers: 2,
+                    max_tcp_request: 4096,
+                    max_dgram_reply_size: MAX_DGRAM_REPLY,
+                    // Large so the worker read does not time out during the test;
+                    // the only reason c1 sees EOF is eviction.
+                    io_timeout: Duration::from_secs(30),
+                    shutdown_poll: Duration::from_millis(50),
+                },
+            );
+        });
+        // Three connections that never send a full request; each worker blocks
+        // on the 4-byte length prefix. Space them so the accept/register order
+        // is c1, c2, c3.
+        let mut c1 = TcpStream::connect(addr).unwrap();
+        thread::sleep(Duration::from_millis(80));
+        let c2 = TcpStream::connect(addr).unwrap();
+        thread::sleep(Duration::from_millis(80));
+        let c3 = TcpStream::connect(addr).unwrap();
+        thread::sleep(Duration::from_millis(150));
+        // c1 (oldest) was evicted: the server shut it down, so a read returns EOF.
+        c1.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let mut buf = [0u8; 1];
+        match c1.read(&mut buf) {
+            Ok(0) => {}
+            Ok(n) => panic!("c1 returned {n} bytes, expected EOF from eviction"),
+            Err(e) => panic!("c1 was not evicted (read: {e})"),
+        }
+        flag.store(true, Ordering::SeqCst);
+        drop(c2);
+        drop(c3);
+        let _ = server.join();
     }
 }

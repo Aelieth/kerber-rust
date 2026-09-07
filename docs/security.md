@@ -411,7 +411,10 @@ Framing a KRB-ERROR here would be a 22–25× UDP reflector for a
 6-byte spoofable datagram; MIT does not have that.
 `ChangePasswdData` is decoded only for version `0xff80`. KDC TCP
 `bufsiz` is 1 MiB; `msglen > bufsiz-4` is **61** (`net-server.c:1278,
-1391-1414`). kpropd `recvauth` junk that is not APPLICATION 14 is
+1391-1414`). Concurrent KDC TCP connections are capped at 45
+(`max_stream_data_connections`); at the cap a new connection evicts the
+oldest live one (`kill_lru_stream_connection`, `net-server.c:1192-1282`)
+rather than being refused, so a slow-loris cannot starve the newcomer. kpropd `recvauth` junk that is not APPLICATION 14 is
 **40** `Invalid message type` plus the trailing NUL (`rd_req.c:56-57`,
 `recvauth.c:165-170`).
 
