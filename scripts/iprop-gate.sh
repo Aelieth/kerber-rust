@@ -269,6 +269,13 @@ echo "kpropd FULL_RESYNC wait ok=$ok"
 echo "==== kpropd-iprop.log (pre-kprop) ===="
 docker exec "$NAME" cat /tmp/kpropd-iprop.log 2>/dev/null || true
 
+# Policies never travel in the ulog (kdb5.c logs principals only), so the
+# history policy must be in the full dump the replica loads first.
+docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addpol -history 3 ihp' 2>&1 | grep -v '^Authenticating' || true
+docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getpol ihp' 2>&1 | grep -F 'Policy: ihp'
+
 echo "==== first contact: Rust kprop -i dump (ipropx last_sno) ===="
 KPROP="$(docker exec \
     -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
@@ -391,6 +398,36 @@ if [ "$ok" != 1 ]; then
     log "iprop.gate" "error" ',"error":"MIT replica missing extra after serial-delta (GET_UPDATES)"'
     exit 1
 fi
+
+echo "==== password history propagates: MIT kpropd applies the KADM_DATA record under kadmin/history ===="
+# kdb_convert.c: the admin record travels inside AT_TL_DATA and a changed
+# history as AT_PW_HIST/AT_PW_HIST_KVNO; the replica must then refuse the
+# remembered password itself, with the same kadmin.local text as a primary.
+for q in 'addprinc -pw i3cret1 -policy ihp ihist' 'cpw -pw i3cret2 ihist'; do
+    docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+        "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q "$q" 2>&1 | grep -v '^Authenticating' || true
+done
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" kadmin.local -q 'getprinc ihist' 2>/dev/null | grep -q 'Policy: ihp'; then
+        ok=1
+        break
+    fi
+    sleep 1
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" kadmin.local -q 'getprinc ihist' 2>&1 || true
+    docker exec "$NAME" cat /tmp/kpropd-iprop.log >&2 || true
+    log "iprop.gate" "error" ',"error":"MIT replica missing ihist with its policy after the history chpass"'
+    exit 1
+fi
+REPL_HIST="$(docker exec "$NAME" kadmin.local -q 'getprinc kadmin/history' 2>&1 || true)"
+echo "$REPL_HIST"
+echo "$REPL_HIST" | grep -F 'Principal: kadmin/history@KERBER.TEST'
+REPL_REUSE="$(docker exec "$NAME" kadmin.local -q 'cpw -pw i3cret1 ihist' 2>&1 || true)"
+echo "$REPL_REUSE"
+echo "$REPL_REUSE" | grep -F 'Cannot reuse password while changing password for "ihist@KERBER.TEST".'
+docker exec "$NAME" kadmin.local -q 'cpw -pw i3cret3 ihist' 2>&1 | grep -F 'Password for "ihist@KERBER.TEST" changed.'
 
 echo "==== MIT kinit extra on replica after delta ===="
 kill_comm krb5-kdc

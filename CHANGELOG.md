@@ -29,6 +29,14 @@ this project uses semantic versioning once a crate is published.
 - **test.** `scripts/kadmin-gate.sh` lists `listprincs`/`listpols` glob patterns
   through the kadm5 RPC on both the Rust and the MIT kadmind and diffs them
   (the W1-K M4c glob port had only a kadmin.local cell).
+- **admin.** The kadmind's `GET_UPDATES` reply no longer ships the store's
+  `policy:` ulog markers: MIT never logs policy changes (`kdb5.c` calls
+  `ulog_add_update` for principals only) and its kpropd's `ulog_replay` parses
+  every entry as a principal, so a marker made MIT kpropd fail
+  `Malformed representation of principal` and drop the whole batch. Policies
+  reach a replica by full resync, as with MIT. `scripts/iprop-gate.sh` now
+  propagates a password change under a history policy and has the MIT
+  kpropd replica refuse the old password itself.
 - **kdc/admin.** Password history is stored the way MIT stores it. Every
   principal's `KRB5_TL_KADM_DATA` is now the XDR `osa_princ_ent_rec`
   (`adb_xdr.c`): the bound policy and `KADM5_POLICY`, `old_key_next`,

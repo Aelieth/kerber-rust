@@ -752,6 +752,14 @@ impl PrincipalStore {
         if last_sno.saturating_add(1) < first {
             return (IPROP_FULL_RESYNC, cur, Vec::new());
         }
+        // MIT never logs policy changes (kdb5.c krb5_db_create_policy /
+        // put_policy / delete_policy add no ulog entry; kpropd's ulog_replay
+        // knows principals only), so policies reach a replica by full resync.
+        // The local `policy:` markers only advance the serial.
+        let entries = entries
+            .into_iter()
+            .filter(|e| !e.name.starts_with("policy:"))
+            .collect();
         (IPROP_OK, cur, entries)
     }
 
@@ -3013,12 +3021,14 @@ mod tests {
         let mut store = PrincipalStore::new("KERBER.TEST");
         let conf = krb5_config::KdcConf::parse(
             r"
+[libdefaults]
+    allow_weak_crypto = yes
+
 [realms]
     KERBER.TEST = {
         max_life = 1h 30m
         max_renewable_life = 2d 0h 0m 0s
         requires_preauth = no
-        allow_weak_crypto = yes
     }
 ",
         )
@@ -3350,6 +3360,33 @@ mod tests {
             store.check_password_quality(&user, b"Aa1!aaa ").is_ok(),
             "space is MIT class other (5th)"
         );
+    }
+
+    #[test]
+    fn iprop_get_ships_principals_only_like_ulog_get_entries() {
+        let (mut store, _) = crate::bootstrap_documented().unwrap();
+        let before = store.serial();
+        store.put_policy(NamedPolicy::new("ipol"));
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+        store
+            .set_principal_policy(&user, Some("ipol".into()))
+            .unwrap();
+        store.set_password(&user, b"Ipol-pw1").unwrap();
+        let (status, last, entries) = store.iprop_get(before);
+        assert_eq!(status, IPROP_OK);
+        assert_eq!(
+            last,
+            store.serial(),
+            "the policy marker still advances the serial"
+        );
+        assert!(!entries.is_empty());
+        assert!(entries.iter().all(|e| !e.name.starts_with("policy:")));
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.name.starts_with("kadmin/history@"))
+        );
+        assert!(entries.iter().any(|e| e.name.starts_with("user@")));
     }
 
     #[test]
