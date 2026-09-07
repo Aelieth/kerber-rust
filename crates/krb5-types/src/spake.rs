@@ -8,6 +8,9 @@ use crate::EncryptedData;
 pub const GROUP_EDWARDS25519: i32 = 1;
 /// SPAKE group: P-256.
 pub const GROUP_P256: i32 = 2;
+/// SPAKE second-factor type SF-NONE (no second factor), MIT iana.h
+/// `SPAKE_SF_NONE`.
+pub const SF_NONE: i32 = 1;
 
 /// SPAKESecondFactor ::= SEQUENCE { type, data, replacement }
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]

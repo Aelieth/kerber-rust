@@ -689,6 +689,15 @@ fn send_spake_response(
             chal.group
         )));
     }
+    // MIT spake_client.c:221: without second-factor support the only
+    // answerable challenge is one that offers SF-NONE; a challenge whose
+    // factor list omits it is KRB5KDC_ERR_PREAUTH_FAILED there, so refuse it
+    // rather than deriving a key against a factor set we cannot satisfy.
+    if !spake_contains_sf_none(&chal) {
+        return Err(Error::ReplyMismatch(
+            "SPAKE challenge offers no SF-NONE factor".into(),
+        ));
+    }
     let cookie = find_pa(&method, pa::FX_COOKIE)
         .cloned()
         .ok_or_else(|| Error::ReplyMismatch("SPAKE FX_COOKIE missing".into()))?;
@@ -799,6 +808,14 @@ fn method_from_error(err: &KrbError) -> Result<MethodData, Error> {
 
 fn find_pa(method: &[PaData], ty: i32) -> Option<&PaData> {
     method.iter().find(|p| p.padata_type == ty)
+}
+
+/// MIT `contains_sf_none` (spake_client.c:51): true when the challenge lists
+/// the SF-NONE second factor, the only factor type this client can answer.
+fn spake_contains_sf_none(chal: &krb5_types::spake::SpakeChallenge) -> bool {
+    chal.factors
+        .iter()
+        .any(|f| f.factor_type == krb5_types::spake::SF_NONE)
 }
 
 fn spake_challenge(
@@ -1377,5 +1394,42 @@ mod as_sname_tests {
     fn changepw_sname_is_accepted() {
         let cpw = PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "changepw"]);
         as_sname_eq(&cpw, &cpw, "AS-REP sname mismatch").unwrap();
+    }
+}
+
+#[cfg(test)]
+mod spake_factor_tests {
+    use super::spake_contains_sf_none;
+    use krb5_types::OctetString;
+    use krb5_types::spake::{GROUP_P256, SF_NONE, SpakeChallenge, SpakeSecondFactor};
+
+    fn challenge(factor_types: &[i32]) -> SpakeChallenge {
+        SpakeChallenge {
+            group: GROUP_P256,
+            pubkey: OctetString::from(vec![0u8; 33]),
+            factors: factor_types
+                .iter()
+                .map(|&t| SpakeSecondFactor {
+                    factor_type: t,
+                    data: None,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn sf_none_present_is_answerable() {
+        // MIT contains_sf_none returns TRUE, so the client proceeds.
+        assert!(spake_contains_sf_none(&challenge(&[SF_NONE])));
+        // ... even when other factor types sit alongside it.
+        assert!(spake_contains_sf_none(&challenge(&[7, SF_NONE, 9])));
+    }
+
+    #[test]
+    fn no_sf_none_is_refused() {
+        // MIT spake_client.c:221 returns KRB5KDC_ERR_PREAUTH_FAILED: a factor
+        // list without SF-NONE (or an empty one) offers nothing we can answer.
+        assert!(!spake_contains_sf_none(&challenge(&[])));
+        assert!(!spake_contains_sf_none(&challenge(&[2, 7])));
     }
 }
