@@ -548,7 +548,7 @@ fn handle_tcp(
 /// rather than refusing the newcomer. Each entry keeps a `try_clone` of the
 /// stream purely to `shutdown` it from the accept thread, which unblocks the
 /// victim worker's `read` so it exits and deregisters itself.
-struct ConnRegistry {
+pub struct ConnRegistry {
     cap: usize,
     inner: Mutex<ConnInner>,
 }
@@ -559,7 +559,9 @@ struct ConnInner {
 }
 
 impl ConnRegistry {
-    fn new(cap: usize) -> Arc<Self> {
+    /// New registry capped at `cap` concurrent connections (min 1).
+    #[must_use]
+    pub fn new(cap: usize) -> Arc<Self> {
         Arc::new(Self {
             cap: cap.max(1),
             inner: Mutex::new(ConnInner {
@@ -570,8 +572,9 @@ impl ConnRegistry {
     }
 
     /// Register `stream`, evicting the oldest live connection(s) while over the
-    /// cap. Returns the sequence number the worker deregisters on exit.
-    fn register(&self, stream: &TcpStream) -> u64 {
+    /// cap. Returns the sequence number the worker deregisters on exit (via
+    /// [`ConnGuard`]).
+    pub fn register(&self, stream: &TcpStream) -> u64 {
         let clone = stream.try_clone().ok();
         let mut g = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         let seq = g.next_seq;
@@ -600,7 +603,9 @@ impl ConnRegistry {
     }
 }
 
-struct ConnGuard(Arc<ConnRegistry>, u64);
+/// Deregisters a connection's registry slot when the worker thread ends,
+/// including on panic. Construct one per accepted connection.
+pub struct ConnGuard(pub Arc<ConnRegistry>, pub u64);
 
 impl Drop for ConnGuard {
     fn drop(&mut self) {

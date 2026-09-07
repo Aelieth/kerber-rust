@@ -36,8 +36,8 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
 Counts (after the round-up's password-history port):
-**322** = A1 117 + A2 78 + A3 61 + A4 66.
-exact 139 · stricter-documented 11 · deviation 91 ·
+**323** = A1 117 + A2 79 + A3 61 + A4 66.
+exact 139 · stricter-documented 12 · deviation 91 ·
 absent 63 · deferred 18.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
@@ -349,6 +349,7 @@ Wire = RFC 4120 protocol code (MIT `errcode_to_protocol`).
 | kdc_util.c:169-171 | no PA-TGS-REQ (`KRB5_PADATA_AP_REQ`) — split from the rcache row | PROCESS_TGS 16 `PADATA_TYPE_NOSUPP` | issue.rs issue_as_body | `no PA-TGS-REQ` 24 | deviation (code 24 vs 16) | proposed: diffsend; proposed: MIT-client `kdc-gate.sh` cell |
 | kdc_util.c:1881-1913; net-server.c:1278,1391-1414 | TCP `bufsiz` 1 MiB; length prefix > `bufsiz-4` | no status; `KRB_ERR_FIELD_TOOLONG` **61**; 128 KiB AS-REQ is dispatched | krb5-kdc/listen.rs handle_tcp; krb5-kdc/listen.rs MAX_TCP_REQUEST; krb5-kdc/status.rs CLIENT_NOT_FOUND | **61** above cap (`MAX_TCP_REQUEST`); 128 KiB **6** `CLIENT_NOT_FOUND` | exact | `tcp_one_mib_plus_one_is_field_toolong`; `tcp_128kib_unknown_cname_is_client_not_found`; `scripts/differential-gate.sh` both legs |
 | net-server.c:85,1192-1282 (`max_stream_data_connections` 45; `kill_lru_stream_connection`) | at the cap a newly accepted stream evicts the oldest live connection, not the newcomer | no status (connection kill) | krb5-kdc/listen.rs tcp_loop; krb5-kdc/listen.rs ConnRegistry | oldest live stream shut down while the newcomer is served; `max_tcp_workers` default 45 (R2-S6) | exact | `tcp_over_cap_evicts_the_oldest_connection`; `tcp_conn_guard_deregisters_on_panic` |
+| net-server.c:85,1571-1572,683,1278 | kadmind runs through the same net-server: RPC connections capped at 45 with LRU eviction, `SO_KEEPALIVE`, a fixed 1 MiB per-connection buffer streamed (not accumulated) | n/a (transport) | krb5-kdc/listen.rs ConnRegistry (reused by kadmind, cap 45 + evict) with a 5 s write timeout; krb5-admin/kadm5.rs read_record; krb5-admin/kadm5.rs MAX_KADM5_RECORD | connection cap + LRU eviction like MIT; the accumulated record is bounded at 1 MiB and a 5 s write timeout is set (stricter than MIT's streaming buffer + keepalive); no short read timeout, so an interactive session is not broken (R2-S3) | stricter-documented (`docs/security.md` "kadmind connection caps") | `read_record_bounds_the_total_accumulated_size`; `scripts/kadmin-gate.sh` both legs still function |
 | kdc_util.c:800-803; lockout.c:92-113 | `krb5_db_check_policy_as` failcount lockout — **last** check in `validate_as_request` | `CLIENT LOCKED OUT` **18** | `issue.rs validate_as_request` failcount block + `current_policy().check_as`, last after the DISALLOW checks | `CLIENT LOCKED OUT` **18** | exact | `store.rs::failed_as_stamps_last_failed`; `krb5-kdc store::tests::lockout_duration_only_unlocks_after_sleep` |
 | lockout.c:102-104 | not locked if `last_admin_unlock >= last_failed` | n/a | `store.rs create_host` `set_status(locked=false)` clears `KDB_DISALLOW_ALL_TIX` only; `clear_as_fail_count` is called **only** from `issue.rs issue_as_from` | stays 18 `locked` when `pw_lockout_duration == 0` | absent | proposed: unit `unlock_clears_failcount`; `kadmin-gate.sh` unlock cell |
 | do_as_req.c:579-580,598-599 | `KRB5_KDB_CANTLOCK_DB` on client/server lookup | no status; `KRB5KDC_ERR_SVC_UNAVAILABLE` **29** | `kdb.rs` `fetch_name` `Err` | **60** `e.to_string()` | absent | proposed: diffsend `as-db-locked`; deferred if no lockable KDB |

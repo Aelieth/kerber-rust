@@ -254,6 +254,13 @@ fn random_handle() -> Vec<u8> {
     h.to_vec()
 }
 
+/// Total accumulated record cap. MIT drives kadmind over the net-server's fixed
+/// 1 MiB per-connection buffer (`net-server.c:1278`) and processes the RPC as it
+/// streams; Rust buffers the whole record, so it bounds the accumulated total to
+/// the same size rather than letting a pre-auth client chain fragments without
+/// limit (R2-S3).
+const MAX_KADM5_RECORD: usize = 1024 * 1024;
+
 fn read_record(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
     let mut out = Vec::new();
     loop {
@@ -262,7 +269,7 @@ fn read_record(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
         let n = u32::from_be_bytes(hdr);
         let last = n & LAST_FRAG != 0;
         let len = (n & !LAST_FRAG) as usize;
-        if len > 1024 * 1024 {
+        if len > MAX_KADM5_RECORD || out.len().saturating_add(len) > MAX_KADM5_RECORD {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "rpc record"));
         }
         let mut chunk = vec![0u8; len];
@@ -3800,6 +3807,38 @@ impl XdrW {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn read_record_bounds_the_total_accumulated_size() {
+        // R2-S3: a pre-auth client that chains fragments without ever setting
+        // LAST_FRAG must not accumulate unbounded memory. Two 600 KiB non-last
+        // fragments sum to 1.2 MiB, over the 1 MiB total cap, so read_record
+        // errors on the second fragment (parent: no total cap -> it waits for
+        // more and hits EOF, a different error kind).
+        use std::io::Write as _;
+        use std::net::{TcpListener, TcpStream};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let writer = std::thread::spawn(move || {
+            if let Ok(mut c) = TcpStream::connect(addr) {
+                let frag = vec![0u8; 600 * 1024];
+                let hdr = u32::try_from(frag.len()).unwrap().to_be_bytes(); // no LAST_FRAG
+                let _ = c.write_all(&hdr);
+                let _ = c.write_all(&frag);
+                let _ = c.write_all(&hdr);
+                let _ = c.write_all(&frag);
+            }
+        });
+        let (mut server, _) = listener.accept().unwrap();
+        let err = super::read_record(&mut server).unwrap_err();
+        assert_eq!(
+            err.kind(),
+            std::io::ErrorKind::InvalidData,
+            "total record over 1 MiB is rejected"
+        );
+        drop(server);
+        let _ = writer.join();
+    }
+
     #[test]
     fn glob_rejects_malformed_and_matches_posix_classes() {
         use super::{glob_is_match, glob_pattern_ok};

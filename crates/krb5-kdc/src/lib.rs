@@ -44,9 +44,10 @@ pub use kdb_dump::{
 };
 pub use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 pub use listen::{
-    BIND_CANDIDATES, ListenLimits, MAX_DGRAM_REPLY, MAX_TCP_REQUEST, MAX_TCP_WORKERS, SharedDump,
-    SharedStore, WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP, bind_preferred, bind_udp_tcp,
-    drop_privileges, drop_privileges_to, serve, serve_until, shared_dump, shared_store,
+    BIND_CANDIDATES, ConnGuard, ConnRegistry, ListenLimits, MAX_DGRAM_REPLY, MAX_TCP_REQUEST,
+    MAX_TCP_WORKERS, SharedDump, SharedStore, WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP,
+    bind_preferred, bind_udp_tcp, drop_privileges, drop_privileges_to, serve, serve_until,
+    shared_dump, shared_store,
 };
 pub use mkey::{MASTER_NAME, harness_master_etype, master_key_from_password};
 pub use osa::{
