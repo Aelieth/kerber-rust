@@ -734,6 +734,17 @@ for pol in ordr cls h0; do
     fi
 done
 
+echo "==== getprinc names a deleted bound policy [does not exist], both legs ===="
+for leg in rust_local mit_local; do
+    "$leg" 'addpol gonep' >/dev/null
+    "$leg" 'addprinc -pw dnp-secret -policy gonep dnepu' >/dev/null
+    "$leg" 'delpol -force gonep' >/dev/null
+done
+dl getprinc-dead-policy \
+    "$(rust_local 'getprinc dnepu' | grep '^Policy:')" \
+    "$(mit_local 'getprinc dnepu' | grep '^Policy:')"
+rust_local 'getprinc dnepu' | grep -Fx 'Policy: gonep [does not exist]'
+
 echo "==== listprincs / listpols glob filters, identical to MIT ===="
 for pr in ga1 ga2 gb1; do
     rust_local "addprinc -pw gx $pr" >/dev/null

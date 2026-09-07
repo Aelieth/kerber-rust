@@ -216,7 +216,14 @@ fn run(
             let name = parse_name(sess, spec)?;
             let canon = name.unparse_with_realm(sess.realm());
             match sess.get_principal_record(&name) {
-                Ok(p) => print_getprinc(&p),
+                Ok(p) => {
+                    let policy_missing = p
+                        .pw_policy
+                        .as_deref()
+                        .filter(|s| !s.is_empty())
+                        .is_some_and(|pol| sess.get_policy(pol).is_err());
+                    print_getprinc(&p, policy_missing);
+                }
                 Err(e) => eprintln!(
                     "get_principal: {} while retrieving \"{canon}\".",
                     kadm_err_text(&e)
@@ -437,7 +444,7 @@ fn parse_name_realm(
 /// MIT `kadmin_getprinc` (`kadmin.c`): the record as `kadmin` prints it. The
 /// fields come from the same places the kadm5 `get_principal` reply is built
 /// from, so the local and the RPC view agree.
-fn print_getprinc(p: &krb5_kdc::Principal) {
+fn print_getprinc(p: &krb5_kdc::Principal, policy_missing: bool) {
     let tl_u32 = |ty: i32| {
         p.tl_data
             .iter()
@@ -485,13 +492,13 @@ fn print_getprinc(p: &krb5_kdc::Principal) {
     }
     println!("MKey: vno {}", p.mkvno);
     println!("Attributes:{}", flags_to_string(p.attributes));
-    println!(
-        "Policy: {}",
-        p.pw_policy
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .unwrap_or("[none]")
-    );
+    // MIT `kadmin_getprinc` (`kadmin.c:1543-1546`) appends ` [does not exist]`
+    // when the bound policy has been deleted.
+    match p.pw_policy.as_deref().filter(|s| !s.is_empty()) {
+        Some(pol) if policy_missing => println!("Policy: {pol} [does not exist]"),
+        Some(pol) => println!("Policy: {pol}"),
+        None => println!("Policy: [none]"),
+    }
 }
 
 /// `strdate`: `strftime("%a %b %d %H:%M:%S %Z %Y")` of the local time. Without
@@ -556,15 +563,18 @@ fn flags_to_string(attributes: u32) -> String {
         Some("LOCKDOWN_KEYS"),
     ];
     let mut out = String::new();
-    for (bit, name) in NAMES.iter().enumerate() {
-        if attributes & (1 << bit) != 0 {
-            out.push(' ');
-            if let Some(n) = name {
-                out.push_str(n);
-            } else {
-                use std::fmt::Write as _;
-                let _ = write!(out, "0x{:x}", 1u32 << bit);
-            }
+    // MIT `krb5_flags_to_strings` loops all 32 bits and prints an unnamed bit
+    // as `0x%08lx` (`str_conv.c:214`).
+    for bit in 0..32u32 {
+        if attributes & (1u32 << bit) == 0 {
+            continue;
+        }
+        out.push(' ');
+        if let Some(n) = NAMES.get(bit as usize).copied().flatten() {
+            out.push_str(n);
+        } else {
+            use std::fmt::Write as _;
+            let _ = write!(out, "0x{:08x}", 1u32 << bit);
         }
     }
     out
@@ -572,13 +582,14 @@ fn flags_to_string(attributes: u32) -> String {
 
 /// `krb5_salttype_to_string` names.
 fn salttype_name(t: i32) -> String {
+    // MIT 1.22.2 `salttype_table` (`str_conv.c`) has only normal/norealm/
+    // onlyrealm/special; V4 (1) and AFS3 (5) are compiled out, so they print as
+    // `<Salt type 0x..>`.
     match t {
         0 => "normal".into(),
-        1 => "v4".into(),
         2 => "norealm".into(),
         3 => "onlyrealm".into(),
         4 => "special".into(),
-        5 => "afs3".into(),
         other => format!("<Salt type 0x{other:x}>"),
     }
 }
