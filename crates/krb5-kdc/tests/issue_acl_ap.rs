@@ -1121,6 +1121,67 @@ fn as_request_anonymous_from_named_client_is_validate_anonymous_principal() {
 }
 
 #[test]
+fn as_canonicalize_issues_the_krbtgt_under_the_canonical_db_name() {
+    // do_as_req.c:660-666: CANONICALIZE on a krbtgt request whose requested and
+    // DB server are both TGS principals issues the ticket (and, per :243, the
+    // enc-part) under the canonical DB name -- Windows short-realm aliases.
+    // krbtgt/SHORT aliases krbtgt/KERBER.TEST here.
+    let short = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "SHORT"]);
+    let canonical = PrincipalName::krbtgt(TEST_REALM);
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let etypes = vec![EncryptionType::Aes256CtsHmacSha196.to_iana()];
+    let issue = |canon: bool, nonce: u32| -> krb5_kdc::IssuedAs {
+        let (mut store, _) = bootstrap_documented().expect("bootstrap");
+        store
+            .create_alias_in(&short, TEST_REALM, &canonical, TEST_REALM)
+            .expect("krbtgt alias");
+        let mut req = as_req_sname(
+            cname.clone(),
+            TEST_REALM,
+            nonce,
+            Some(vec![pa_enc_timestamp(&client_key()).expect("pa-ts")]),
+            short.clone(),
+            etypes.clone(),
+        )
+        .unwrap();
+        if canon {
+            req.0.req_body.kdc_options = req
+                .0
+                .req_body
+                .kdc_options
+                .with_bit(flag_bit::CANONICALIZE, true);
+        }
+        krb5_kdc::issue_as(&store, &req).expect("AS")
+    };
+    // CANONICALIZE: ticket server AND enc-part server become the canonical name.
+    let canon = issue(true, 61);
+    assert_eq!(
+        canon.rep.0.ticket.sname.components_joined(),
+        canonical.components_joined(),
+        "ticket server canonicalized"
+    );
+    let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
+    let plain = decrypt(
+        &canon.as_rep_key,
+        usage,
+        canon.rep.0.enc_part.cipher.as_ref(),
+    )
+    .expect("enc");
+    assert_eq!(
+        decode_enc_part(&plain).sname.components_joined(),
+        canonical.components_joined(),
+        "enc-part server follows the ticket (do_as_req.c:243)"
+    );
+    // Without CANONICALIZE the requested alias name is kept.
+    let kept = issue(false, 62);
+    assert_eq!(
+        kept.rep.0.ticket.sname.components_joined(),
+        short.components_joined(),
+        "requested alias name kept without CANONICALIZE"
+    );
+}
+
+#[test]
 fn as_validate_runs_before_preauth_like_process_as_req() {
     // MIT process_as_req calls validate_as_request (do_as_req.c:630) before
     // check_padata (:758). A preauth-required client that needs a password

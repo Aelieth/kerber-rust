@@ -81,6 +81,10 @@ delete-through-alias), so an alias is a live name for its target; kadmin's
 ticket unless CANONICALIZE is set (`do_as_req.c:681-687`), and the AS-REP
 carries PA-ETYPE-INFO2 with the *canonical* client's salt
 (`_make_etype_info_entry`), so `kinit` under an alias derives the target key.
+The AS *server* name is canonicalized on the same condition, and only for a
+krbtgt request whose requested and DB server are both TGS principals: the
+ticket sname and `reply_encpart.server` then carry the canonical DB name
+(`do_as_req.c:660-666,243`), matching Windows short-realm aliasing.
 `create_alias` needs unrestricted ADD on the alias and MODIFY on the target
 (`acl_addalias`); the target need not exist and a dangling alias is
 overwritable (MIT emergent behavior); `renprinc` of an alias is

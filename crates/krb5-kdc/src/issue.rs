@@ -488,13 +488,25 @@ fn issue_as_body(
     } else {
         krbtgt_key.key.clone()
     };
+    // do_as_req.c:660-666: with CANONICALIZE a krbtgt request is issued under
+    // the canonical DB server name (Windows short-realm aliases), and
+    // reply_encpart.server follows the ticket server (do_as_req.c:243). Any
+    // other request keeps the requested server name.
+    let ticket_sname = if body.kdc_options.bit(flag_bit::CANONICALIZE)
+        && sname.is_krbtgt()
+        && server.name.is_krbtgt()
+    {
+        server.name.clone()
+    } else {
+        sname.clone()
+    };
     let ticket = mint_ticket(
         &skey.key,
         skey.kvno,
         skey.etype,
         &session,
         store.realm(),
-        &sname,
+        &ticket_sname,
         store.realm(),
         &cname,
         &now,
@@ -552,7 +564,7 @@ fn issue_as_body(
         &starttime,
         &end,
         store.realm(),
-        &sname,
+        &ticket_sname,
         flags,
         renew_till,
     )?;

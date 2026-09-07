@@ -37,8 +37,8 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 
 Counts (after the round-up's password-history port):
 **320** = A1 117 + A2 76 + A3 61 + A4 66.
-exact 136 · stricter-documented 11 · deviation 91 ·
-absent 64 · deferred 18.
+exact 137 · stricter-documented 11 · deviation 91 ·
+absent 63 · deferred 18.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
 A2 10 (9 report rows + the `kdc_util.c:144-191` split) + A3 10 = 28
@@ -353,7 +353,7 @@ Wire = RFC 4120 protocol code (MIT `errcode_to_protocol`).
 | do_as_req.c:236-241 | `fetch_last_req_info` + `get_key_exp(client)` into AS-REP enc-part | no status (reply fields) | `issue.rs mint_ticket` | `last_req` hardcoded `lr_type: 0`/now; `key_expiration: None` | absent | MIT `kinit` password-expiry warning; proposed `expire-gate.sh` warn cell |
 | do_as_req.c:322-330 | `reply.enc_part.kvno = client_key->key_data_kvno` is set **after** `krb5_encode_kdc_rep`, so the wire AS-REP enc-part carries no kvno | no status (reply field) | `krb5-kdc/issue.rs issue_as_body` | AS-REP enc-part `kvno` `None`; ticket enc-part keeps the server kvno | exact | `as_rep_enc_part_carries_no_kvno_like_mit`; `scripts/differential-gate.sh` `as-success` no `mit-as-enc-kvno` whitelist |
 | do_as_req.c:709-712 | `starttime == authtime` → omit `starttime` | no status | `issue.rs check_ticket_times,1183` | `starttime` always `Some(..)` | deviation | CHANGELOG G7 `klist starttime==0`; proposed `client-gate.sh` cell |
-| do_as_req.c:656-664 | CANONICALIZE + both TGS principals → ticket sname = `server->princ` | no status | `issue.rs issue_as_body` mints the **requested** `sname` | requested sname echoed | absent | proposed `rust-kinit-enterprise-gate.sh` canonicalize cell |
+| do_as_req.c:660-666; do_as_req.c:243 | CANONICALIZE + both TGS principals → ticket sname = `server->princ`; `reply_encpart.server` follows the ticket server | no status | `issue.rs issue_as_body` computes `ticket_sname` = the DB server name when CANONICALIZE and both requested/DB servers are krbtgt (R2-P7), used for both the ticket and the enc-part | canonical sname on the ticket and enc-part; requested sname otherwise | exact | `as_canonicalize_issues_the_krbtgt_under_the_canonical_db_name` (krbtgt/SHORT alias → krbtgt/KERBER.TEST with `-C`, requested name kept without) |
 | kdc_util.c:1612-1615 | S4U2Self clears impersonated client's `pw_expiration` + `REQUIRES_PWCHANGE` (as Windows does) | n/a (exemption) | `issue.rs encode_krb_error` `check_s4u2self_locked` → `check_db_times` enforces both | **23** `CLIENT KEY EXPIRED` where MIT issues | deviation (stricter, undocumented) | proposed `s4u-mit-gate.sh` expired-user cell + `docs/security.md` row |
 | asn1_k_encode.c:30 | `pvno != 5` | decode error `KRB5KDC_ERR_BAD_PVNO` **3** → dispatch drop | krb5-types/lib.rs KdcReq `pvno` decoded, never read | accepted; AS-REP issued | deviation (security: Rust issues what MIT drops) | proposed: diffsend `as-bad-pvno` (sibling of the msg-type row) |
 | asn1_k_encode.c:1127-1148 | encode EncKDCRepPart as APPLICATION 26 for AS and TGS; decode 26 then 25 | n/a (success) | krb5-kdc/issue.rs encode_enc_kdc_rep_part; krb5-kdc/issue.rs issue_as_from; krb5-asn1/lib.rs decode_enc_kdc_rep_part; krb5-protocol/as_ex.rs decode_enc_as | EncTgsRepPart tag 26 both AS and TGS; RFC 25 still accepted on decode | exact | diffsend `as-success`; diffsend `tgs-success`; `scripts/differential-gate.sh`; other clients that require RFC APPLICATION 25 are out of scope |
