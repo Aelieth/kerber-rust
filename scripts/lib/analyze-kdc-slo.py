@@ -18,14 +18,14 @@ Stress additionally:
   second-window p99 <= first-window p99 * 2.5
 Soak additionally:
   second-window p99 <= first-window p99 * 2.5
-  RSS last <= first * 1.5 + 18 MiB   (8 MiB slack + the bounded working set)
-  RSS slope <= 0.05 MiB/s, measured from the KDC's `kdc.lookaside.full` event on
-  (a bounded cache filling is a ramp that flattens; a leak keeps climbing). Until
-  the cache reports full, the slope may additionally spend the fill allowance
-  (--rss-fill-allowance-mib / elapsed) — the bounded working set, measured at
-  ~17 MiB for the 10 MiB lookaside plus its map/FIFO overhead and the replay
-  windows — and the check is `rss_slope_unsettled` (a warning) when too few
-  samples follow the fill.
+  RSS last <= first * 1.5 + 33 MiB   (8 MiB slack + the bounded working set)
+  RSS slope <= 0.05 MiB/s over the steady window, which starts at the later of
+  the KDC's `kdc.lookaside.full` event and --rss-steady-after-s into the run
+  (the replay caches' 5-minute window; a bounded working set fills then
+  flattens, a leak keeps climbing). Before the steady window the slope may
+  spend the working set (--rss-fill-allowance-mib / elapsed); too few steady
+  samples is the warning `rss_slope_unsettled`, so a run shorter than the
+  window is judged by the growth cap alone.
 """
 from __future__ import annotations
 
@@ -161,8 +161,11 @@ def parse_logs(paths: list[pathlib.Path]) -> dict:
     }
 
 
-def parse_rss(path: pathlib.Path | None, since: float | None = None) -> dict | None:
-    """RSS series stats; `since` (an epoch) starts the steady-state window."""
+def parse_rss(
+    path: pathlib.Path | None, since: float | None = None, steady_after_s: float = 0.0
+) -> dict | None:
+    """RSS series stats; the steady window starts at the later of `since` (an
+    epoch, the cache-full event) and `steady_after_s` into the series."""
     if path is None or not path.is_file():
         return None
     samples: list[tuple[float, float]] = []
@@ -185,6 +188,8 @@ def parse_rss(path: pathlib.Path | None, since: float | None = None) -> dict | N
     elapsed = samples[-1][0] - samples[0][0]
     extra = last - first
     slope = (extra / elapsed) if elapsed > 0 else None
+    if steady_after_s > 0:
+        since = max(since or 0.0, samples[0][0] + steady_after_s)
     steady = [s for s in samples if since is not None and s[0] >= since]
     steady_elapsed = steady[-1][0] - steady[0][0] if len(steady) >= 2 else 0.0
     steady_slope = (steady[-1][1] - steady[0][1]) / steady_elapsed if steady_elapsed > 0 else None
@@ -580,6 +585,39 @@ def _self_test_lookaside_fill(td: str, ns: argparse.Namespace, ok_lines: list[st
         if rep["outcome"] != want or (issue and not any(i.startswith(issue) for i in rep["issues"])):
             print(f"self-test lookaside {name} want {want}", json.dumps(rep), file=sys.stderr)
             return 1
+    # The 300 s soak of 2026-09-07 (33 req/s): lookaside full at 58 s, then the
+    # replay caches fill their 5-minute window at ~0.03 MiB/s (8.6 -> 33.1 MiB),
+    # flattening only near 300 s. With the steady window after 300 s the run is
+    # judged by the growth cap (unsettled slope); a leak after the window fails.
+    replay = [(base + 5 * i, 8.6 + min(i * 5, 58) * 0.29 + max(0, i * 5 - 58) * 0.033) for i in range(61)]
+    marker58 = json.dumps(
+        {
+            "timestamp": "2026-01-01T00:00:58Z",
+            "fields": {"event": "kdc.lookaside.full", "outcome": "ok", "total_bytes": 10485760},
+        }
+    )
+    log58 = pathlib.Path(td) / "fill-58.log"
+    log58.write_text("\n".join(ok_lines) + "\n" + marker58 + "\n")
+    parsed58 = parse_logs([log58])
+    top = replay[-1][1]
+    flat_after = replay + [(base + 300 + 5 * i, top + 0.01 * i) for i in range(1, 37)]
+    leak_after = replay + [(base + 300 + 5 * i, top + 0.5 * i) for i in range(1, 37)]
+    ns.rss_max_extra_mib = 33.0
+    ns.rss_fill_allowance_mib = 33.0
+    for name, series, want, issue, warn in (
+        ("replay-300s", replay, "ok", None, "rss_slope_unsettled"),
+        ("replay-480s-flat", flat_after, "ok", None, None),
+        ("replay-480s-leak", leak_after, "error", "rss_slope:", None),
+    ):
+        path = pathlib.Path(td) / f"rss-{name}.tsv"
+        path.write_text("# epoch_s rss_mib\n" + "".join(f"{e:.0f} {m:.3f}\n" for e, m in series))
+        rss = parse_rss(path, since=parsed58.get("lookaside_full_epoch"), steady_after_s=300.0)
+        rep = evaluate(ns, parsed58, rss)
+        bad = rep["outcome"] != want or (issue and not any(i.startswith(issue) for i in rep["issues"]))
+        if bad or (warn and warn not in rep["warnings"]) or (not warn and rep["warnings"]):
+            print(f"self-test replay-window {name} want {want}", json.dumps(rep), file=sys.stderr)
+            return 1
+    ns.rss_max_extra_mib = 18.0
     # The gate's allowance (the measured working set) passes the same slow run
     # with the fill still counted as unsettled.
     ns.rss_fill_allowance_mib = 18.0
@@ -608,6 +646,7 @@ def main() -> int:
     ap.add_argument("--rss-max-extra-mib", type=float, default=20.0)
     ap.add_argument("--rss-max-slope-mib-s", type=float, default=None)
     ap.add_argument("--rss-fill-allowance-mib", type=float, default=0.0)
+    ap.add_argument("--rss-steady-after-s", type=float, default=0.0)
     ap.add_argument("--skip-first-ok", type=int, default=0)
     ap.add_argument("--warmup-log", default=None)
     ap.add_argument("--self-test", action="store_true")
@@ -621,6 +660,7 @@ def main() -> int:
     rss = parse_rss(
         pathlib.Path(args.rss_series) if args.rss_series else None,
         since=parsed.get("lookaside_full_epoch"),
+        steady_after_s=args.rss_steady_after_s,
     )
     if args.elapsed_s is None and parsed["durations"]:
         args.elapsed_s = max(1.0, float(len(parsed["durations"])) / 10.0)

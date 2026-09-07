@@ -40,6 +40,6 @@ jobs:
         run: docker build -f harness/prod/Dockerfile -t kerber-rust-prod-node:latest .
       - name: soak-gate (scheduled window)
         env:
-          KERBER_SOAK_SECONDS: "300"
+          KERBER_SOAK_SECONDS: "480"
           KERBER_REQUIRE_REAL_PCAP: "1"
         run: ./scripts/soak-gate.sh

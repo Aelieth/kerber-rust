@@ -583,13 +583,16 @@ when that oracle is absent.
   dies unless netem applied; after kill, `State.Running=false`. Own CI
   job (`chaos`), `continue-on-error`.
 - `scripts/soak-gate.sh` — C2c: sustained moderate load (~120 s in CI,
-  300 s scheduled in `.github/workflows/soak.yml`). RSS last ≤ first×1.5
-  + 18 MiB (8 MiB slack + the bounded working set: the 10 MiB lookaside
-  of `kdc/replay.c` plus its map/FIFO overhead and the replay windows,
-  measured at ~17 MiB) and slope ≤ 0.05 MiB/s judged from the KDC's
-  `kdc.lookaside.full` log event on (before it the same 18 MiB working
-  set is spread over the run; too few post-fill samples is the warning
-  `rss_slope_unsettled`); window-over-window `duration_us` p99
+  480 s scheduled in `.github/workflows/soak.yml`). RSS last ≤ first×1.5
+  + 33 MiB (8 MiB slack + the bounded working set: the 10 MiB lookaside
+  of `kdc/replay.c`, ~17 MiB real with its map/FIFO overhead, plus the two
+  replay caches over their 5-minute window, ~8 MiB at soak load — 25 MiB
+  measured at 300 s) and slope ≤ 0.05 MiB/s over the steady window, which
+  starts once the KDC has logged `kdc.lookaside.full` and 300 s have
+  elapsed (before that the working set is spread over the run; a run too
+  short for a steady window is judged by the cap and warns
+  `rss_slope_unsettled`, so the 120 s per-push soak checks boundedness and
+  the scheduled 480 s soak checks the steady slope); window-over-window `duration_us` p99
   must not degrade by more than 2.5×; error-rate 0; panics 0;
   `correlation_id` on issue-ok. `KERBER_REQUIRE_REAL_PCAP=1` fails
   unless the client tcpdump archive is present. Archives logs + pcap +

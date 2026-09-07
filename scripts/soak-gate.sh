@@ -112,10 +112,12 @@ if [ "${KERBER_REQUIRE_REAL_PCAP:-0}" = "1" ]; then
 fi
 docker cp "$PRIMARY":/tmp/kdc.log "$OUT/kdc1.log"
 
-# RSS allowance = 8 MiB slack + the bounded working set (the 10 MiB lookaside of
-# kdc/replay.c LOOKASIDE_MAX_SIZE plus its map/FIFO overhead and the replay
-# windows, measured at ~17 MiB); the slope is judged after the KDC logs
-# kdc.lookaside.full and may spend the same working set before it.
+# RSS allowance = 8 MiB slack + the bounded working set: the 10 MiB lookaside of
+# kdc/replay.c LOOKASIDE_MAX_SIZE (~17 MiB real with its map/FIFO overhead) plus
+# the two replay caches over their 5-minute window (~8 MiB at soak load),
+# measured 25 MiB at 300 s. The slope is judged over the steady window, which
+# starts once the KDC has logged kdc.lookaside.full AND the replay window has
+# elapsed; a shorter run is judged by the cap alone (rss_slope_unsettled).
 python3 "$ROOT/scripts/lib/analyze-kdc-slo.py" \
     --log "$OUT/kdc1.log" \
     --out "$OUT/slo.json" \
@@ -128,8 +130,9 @@ python3 "$ROOT/scripts/lib/analyze-kdc-slo.py" \
     --rss-series "$OUT/rss.tsv" \
     --min-rss-samples 5 \
     --rss-max-growth "${KERBER_SLO_RSS_MAX_GROWTH:-1.5}" \
-    --rss-max-extra-mib "${KERBER_SLO_RSS_MAX_EXTRA_MIB:-18}" \
-    --rss-fill-allowance-mib "${KERBER_SLO_RSS_FILL_ALLOWANCE_MIB:-18}" \
+    --rss-max-extra-mib "${KERBER_SLO_RSS_MAX_EXTRA_MIB:-33}" \
+    --rss-fill-allowance-mib "${KERBER_SLO_RSS_FILL_ALLOWANCE_MIB:-33}" \
+    --rss-steady-after-s "${KERBER_SLO_RSS_STEADY_AFTER_S:-300}" \
     --rss-max-slope-mib-s "${KERBER_SLO_RSS_MAX_SLOPE_MIB_S:-0.05}" \
     || die "soak SLO/RSS analysis failed"
 
