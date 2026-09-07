@@ -303,5 +303,75 @@ echo "$RUST_ETLINE" | grep -q 'Etype (skey, tkt): DEPRECATED:arcfour-hmac,' ||
 docker exec "$NAME" cat /tmp/mit-kinit-rustkdc.trace 2>/dev/null | tee "$OUT/mit-kinit-rustkdc.trace" | grep -E 'usage|arcfour|enctype' | head -40 || true
 docker cp "$NAME":/tmp/mit-kdc.log "$OUT/mit-kdc.log" 2>/dev/null || true
 
-log "rc4.session" "ok" ',"mit_vs_rust":"kinit+kvno","rust_vs_mit":"kinit+kvno","skey":"arcfour-hmac","kvno_rc":0'
+echo "==== D) allow_rc4 under [kdcdefaults] alone is ignored: both KDCs refuse the rc4-only client ===="
+# MIT reads allow_rc4 / allow_weak_crypto from [libdefaults] only (init_ctx.c
+# get_boolean); the copy this gate put under kdc.conf [kdcdefaults] must not
+# enable rc4 on its own. The clients keep offering rc4 through their own
+# config so the refusal is the KDC's decision.
+docker exec -i "$NAME" python3 - <<'PY'
+from pathlib import Path
+c = Path("/etc/krb5.conf").read_text()
+c = c.replace("    allow_rc4 = true\n", "").replace("    allow_weak_crypto = true\n", "")
+Path("/etc/krb5.conf").write_text(c)
+rc = c.replace("[libdefaults]", "[libdefaults]\n    allow_rc4 = true\n    allow_weak_crypto = true", 1)
+Path("/tmp/krb5-88-rc4.conf").write_text(rc)
+Path("/tmp/krb5-8888-rc4.conf").write_text(rc.replace("kdc = 127.0.0.1\n", "kdc = 127.0.0.1:8888\n"))
+PY
+docker exec "$NAME" grep -q allow_rc4 /etc/krb5kdc/kdc.conf || die "kdc.conf lost allow_rc4"
+if docker exec "$NAME" grep -q allow_rc4 /etc/krb5.conf; then
+    die "krb5.conf still carries allow_rc4"
+fi
+kill_comm krb5kdc
+wait_port_free 88 || die "MIT krb5kdc still bound :88 after kill (D)"
+docker exec -d \
+    -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
+    -e KRB5_CONFIG=/etc/krb5.conf \
+    "$NAME" sh -c 'krb5kdc >/tmp/mit-kdc-d.log 2>&1'
+wait_port 88 || die "MIT krb5kdc did not listen (D)"
+# The Rust KDC's UDP loop leaves the shutdown flag unread until its read
+# timeout, so a plain kill can keep :8888 bound; kill -9 like policy-gate, and
+# relaunch on the persisted DB without --test-realm like restart-gate.
+docker exec "$NAME" sh -c '
+for comm in /proc/[0-9]*/comm; do
+    [ -f "$comm" ] || continue
+    read -r n < "$comm" || continue
+    if [ "$n" = krb5-kdc ]; then
+        pid=${comm#/proc/}
+        kill -9 "${pid%/comm}" 2>/dev/null || true
+    fi
+done
+'
+sleep 0.5
+wait_port_free 8888 || die "rust kdc still bound :8888 after kill (D)"
+docker exec -d \
+    -e KRB5_TEST_USER_PASSWORD=userpassword \
+    -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
+    -e KRB5_CONFIG=/etc/krb5.conf \
+    "$NAME" sh -c '/tmp/krb5-kdc 127.0.0.1:8888 >/tmp/rust-kdc-d.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/rust-kdc-d.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+[ "$ok" = 1 ] || {
+    docker exec "$NAME" cat /tmp/rust-kdc-d.log >&2 || true
+    die "rust kdc did not listen on 8888 (D)"
+}
+MIT_D="$(docker exec -e KRB5_CONFIG=/tmp/krb5-88-rc4.conf \
+    "$NAME" sh -c 'printf "%s\n" rc4-secret | kinit -c /tmp/d-mit.cc rc4user@KERBER.TEST' 2>&1 || true)"
+RUST_D="$(docker exec -e KRB5_CONFIG=/tmp/krb5-8888-rc4.conf \
+    "$NAME" sh -c 'printf "%s\n" rc4-secret | kinit -c /tmp/d-rust.cc rc4user@KERBER.TEST' 2>&1 || true)"
+echo "mit:  $MIT_D"
+echo "rust: $RUST_D"
+echo "$MIT_D" | grep -F 'kinit: KDC has no support for encryption type while getting initial credentials' ||
+    die "MIT KDC honoured [kdcdefaults] allow_rc4 (the premise is wrong): $MIT_D"
+[ "$MIT_D" = "$RUST_D" ] || die "rc4-only client with allow_rc4 only under [kdcdefaults]: MIT and Rust replies differ"
+
+log "rc4.session" "ok" ',"mit_vs_rust":"kinit+kvno","rust_vs_mit":"kinit+kvno","skey":"arcfour-hmac","kvno_rc":0,"kdcdefaults_allow_rc4":"ignored"'
 echo "rc4-session-gate both directions ok"

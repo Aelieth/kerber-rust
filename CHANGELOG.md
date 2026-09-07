@@ -21,6 +21,14 @@ this project uses semantic versioning once a crate is published.
   client verifies the KDC's enc-pa-rep checksum over the outer request with
   the strengthened reply key like `krb5int_fast_verify_nego` (it skipped the
   check under FAST). A FAST kinit records `fast_avail` too.
+- **config.** `allow_weak_crypto`, `allow_rc4`, `allow_des3` and
+  `permitted_enctypes` are read from `[libdefaults]` only, like MIT's
+  `init_ctx.c`; a copy under `[kdcdefaults]` or a realm stanza is ignored (the
+  KDC used to honour it). `scripts/rc4-session-gate.sh` proves both KDCs refuse
+  an rc4-only client when `allow_rc4` lives only under `[kdcdefaults]`.
+- **test.** `scripts/kadmin-gate.sh` lists `listprincs`/`listpols` glob patterns
+  through the kadm5 RPC on both the Rust and the MIT kadmind and diffs them
+  (the W1-K M4c glob port had only a kadmin.local cell).
 - **kdc/admin.** Password history is stored the way MIT stores it. Every
   principal's `KRB5_TL_KADM_DATA` is now the XDR `osa_princ_ent_rec`
   (`adb_xdr.c`): the bound policy and `KADM5_POLICY`, `old_key_next`,

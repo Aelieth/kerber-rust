@@ -691,17 +691,26 @@ fn parse_kdcdefaults(conf: &mut KdcConf, line: &str) {
                 })
                 .collect();
         }
-        "allow_weak_crypto" => conf.allow_weak_crypto = truthy(&v),
-        "allow_rc4" => conf.allow_rc4 = Some(truthy(&v)),
-        "allow_des3" => conf.allow_des3 = Some(truthy(&v)),
-        "permitted_enctypes" => conf.permitted_enctypes = split_ws(&v),
         "reject_bad_transit" => conf.reject_bad_transit = truthy(&v),
         _ => {}
     }
 }
 
+/// MIT reads the enctype policy knobs from `[libdefaults]` only
+/// (`init_ctx.c get_boolean`, `krb5_get_permitted_enctypes`); a copy under
+/// `[kdcdefaults]` or a realm stanza is ignored, so the KDC's own context
+/// sees what every krb5 library on the host sees.
 fn parse_kdc_libdefaults(conf: &mut KdcConf, line: &str) {
-    parse_kdcdefaults(conf, line);
+    let Some((k, v)) = split_kv(line) else {
+        return;
+    };
+    match k.to_ascii_lowercase().as_str() {
+        "allow_weak_crypto" => conf.allow_weak_crypto = truthy(&v),
+        "allow_rc4" => conf.allow_rc4 = Some(truthy(&v)),
+        "allow_des3" => conf.allow_des3 = Some(truthy(&v)),
+        "permitted_enctypes" => conf.permitted_enctypes = split_ws(&v),
+        _ => parse_kdcdefaults(conf, line),
+    }
 }
 
 fn parse_kdc_realm_line(conf: &mut KdcConf, line: &str) {
@@ -718,10 +727,6 @@ fn parse_kdc_realm_line(conf: &mut KdcConf, line: &str) {
         "acl_file" => conf.acl_file = Some(PathBuf::from(v)),
         "key_stash_file" => conf.key_stash_file = Some(PathBuf::from(v)),
         "kdc_user" => conf.kdc_user = Some(v),
-        "allow_weak_crypto" => conf.allow_weak_crypto = truthy(&v),
-        "allow_rc4" => conf.allow_rc4 = Some(truthy(&v)),
-        "allow_des3" => conf.allow_des3 = Some(truthy(&v)),
-        "permitted_enctypes" => conf.permitted_enctypes = split_ws(&v),
         "supported_enctypes" => conf.supported_enctypes = split_ws(&v),
         "requires_preauth" => conf.requires_preauth = truthy(&v),
         "master_key_type" => conf.master_key_type = Some(v),
@@ -1456,8 +1461,31 @@ mod tests {
         .unwrap();
         assert_eq!(rc4.allow_rc4, Some(true));
         assert_eq!(rc4.allow_des3, Some(true));
-        assert!(rc4.allow_weak_crypto);
+        assert!(
+            !rc4.allow_weak_crypto,
+            "[kdcdefaults] allow_weak_crypto is ignored like MIT's get_boolean(LIBDEFAULTS)"
+        );
         assert_eq!(rc4.permitted_enctypes, vec!["aes256-cts", "arcfour-hmac"]);
+        let elsewhere = KdcConf::parse(
+            r"
+[kdcdefaults]
+    allow_rc4 = true
+    allow_des3 = true
+    permitted_enctypes = arcfour-hmac
+
+[realms]
+    KERBER.TEST = {
+        allow_rc4 = true
+        allow_weak_crypto = true
+        permitted_enctypes = arcfour-hmac
+    }
+",
+        )
+        .unwrap();
+        assert_eq!(elsewhere.allow_rc4, None);
+        assert_eq!(elsewhere.allow_des3, None);
+        assert!(!elsewhere.allow_weak_crypto);
+        assert!(elsewhere.permitted_enctypes.is_empty());
         assert_eq!(
             rc4.supported_enctypes,
             vec!["aes256-cts:normal", "rc4-hmac:normal"]
