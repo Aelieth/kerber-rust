@@ -15,6 +15,7 @@ mod issue;
 mod kdb;
 mod kdb_dump;
 mod listen;
+mod lookaside;
 mod mkey;
 mod persist;
 mod plugins;

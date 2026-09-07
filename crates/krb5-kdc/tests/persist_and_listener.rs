@@ -404,6 +404,70 @@ fn udp_listener_answers_wrong_password() {
 }
 
 #[test]
+fn listener_retransmit_resends_the_cached_reply_like_replay_c() {
+    // MIT kdc/replay.c lookaside (dispatch.c:114-140): an identical request
+    // resent to the listener is answered from the cache, so the second reply is
+    // byte-for-byte the first, not a freshly minted AS-REP (new session key) or a
+    // PA-ENC-TIMESTAMP replay error.
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    let (store, _) = bootstrap_documented().unwrap();
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let addr = udp.local_addr().unwrap();
+    let tcp = std::net::TcpListener::bind(addr).unwrap();
+    let store = shared_store(store);
+    thread::spawn(move || {
+        let _ = serve(store, udp, tcp);
+    });
+    thread::sleep(Duration::from_millis(50));
+
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let salt = cname.default_salt(TEST_REALM);
+    let key = string_to_key(
+        EncryptionType::Aes256CtsHmacSha196,
+        TEST_USER_PASSWORD,
+        &salt,
+        Some(&S2K_ITERS.to_be_bytes()),
+    )
+    .unwrap();
+    let req = as_req(
+        cname,
+        TEST_REALM,
+        88,
+        Some(vec![pa_enc_timestamp(&key).unwrap()]),
+    )
+    .unwrap();
+    let bytes = encode(&req).unwrap();
+
+    let send = |b: &[u8]| -> Vec<u8> {
+        let mut s = TcpStream::connect(addr).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let len = u32::try_from(b.len()).unwrap();
+        s.write_all(&len.to_be_bytes()).unwrap();
+        s.write_all(b).unwrap();
+        s.flush().unwrap();
+        let mut hdr = [0u8; 4];
+        s.read_exact(&mut hdr).unwrap();
+        let n = u32::from_be_bytes(hdr) as usize;
+        let mut buf = vec![0u8; n];
+        s.read_exact(&mut buf).unwrap();
+        buf
+    };
+
+    let first = send(&bytes);
+    assert_eq!(
+        first.first().copied(),
+        Some(0x6b),
+        "first request issues an AS-REP"
+    );
+    let second = send(&bytes);
+    assert_eq!(
+        second, first,
+        "the retransmit is answered from the lookaside cache byte-for-byte"
+    );
+}
+
+#[test]
 fn tcp_worker_cap_drops_excess_connections() {
     use std::io::{Read, Write};
     use std::net::TcpStream;

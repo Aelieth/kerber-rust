@@ -2,13 +2,16 @@
 
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::thread;
 use std::time::Duration;
 
+use crate::Error;
 use crate::issue::handle_request;
 use crate::kdb::Store;
+use crate::lookaside::{Check, Lookaside};
 
 /// MIT `net-server.c:1101-1105`.
 pub const WHILE_DISPATCHING_UDP: &str = "while dispatching (udp)";
@@ -22,6 +25,84 @@ fn log_dispatch_drop(_udp: bool) {
         component = "krb5-kdc",
         outcome = "ok",
     );
+}
+
+/// The lookaside reply cache (MIT `kdc/replay.c`), shared across the UDP and
+/// TCP listener threads.
+pub type SharedCache = Arc<Mutex<Lookaside>>;
+
+fn lock_cache(cache: &Mutex<Lookaside>) -> std::sync::MutexGuard<'_, Lookaside> {
+    cache.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// MIT `dispatch.c:126-127`: a retransmit answered from the cache.
+fn log_dispatch_resend() {
+    tracing::info!(
+        event = krb5_log::events::KDC_ISSUE,
+        correlation_id = krb5_log::current_correlation_id(),
+        component = "krb5-kdc",
+        outcome = "retransmit",
+        detail = "resending previous response",
+    );
+}
+
+/// MIT `dispatch.c:130-132`: a duplicate arriving during processing is dropped.
+fn log_dispatch_inflight_drop() {
+    tracing::info!(
+        event = krb5_log::events::KDC_ISSUE,
+        correlation_id = krb5_log::current_correlation_id(),
+        component = "krb5-kdc",
+        outcome = "discard",
+        detail = "dropping repeated request during processing",
+    );
+}
+
+/// Outcome of running a request through the lookaside cache.
+enum Dispatch {
+    /// Bytes to send (empty means the KDC produced no response: drop).
+    Send(Vec<u8>),
+    /// A duplicate of an in-flight request: drop it silently (MIT DISCARD).
+    Drop,
+    /// The request handler returned an internal error.
+    Error(Error),
+    /// The request handler panicked (isolated by the caller).
+    Panic,
+}
+
+/// MIT `dispatch()` with the `replay.c` lookaside: resend a cached reply, drop
+/// an in-flight duplicate, or process a fresh request under an in-progress
+/// marker and cache its reply. The marker is dropped and only a produced reply
+/// is cached, like `finish_dispatch_cache`.
+fn dispatch_via_cache(store: &SharedStore, cache: &Mutex<Lookaside>, req: &[u8]) -> Dispatch {
+    match lock_cache(cache).check_or_mark(req) {
+        Check::Hit(reply) => {
+            log_dispatch_resend();
+            return Dispatch::Send(reply);
+        }
+        Check::InProgress => {
+            log_dispatch_inflight_drop();
+            return Dispatch::Drop;
+        }
+        Check::Fresh => {}
+    }
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        read_store(store, |s| handle_request(s, req))
+    }));
+    match result {
+        Ok(Ok(reply)) => {
+            let cached: Option<&[u8]> = (!reply.is_empty()).then_some(reply.as_slice());
+            lock_cache(cache).finish(req, cached);
+            Dispatch::Send(reply)
+        }
+        Ok(Err(e)) => {
+            lock_cache(cache).finish(req, None);
+            Dispatch::Error(e)
+        }
+        Err(_) => {
+            lock_cache(cache).finish(req, None);
+            Dispatch::Panic
+        }
+    }
 }
 
 /// Serving store: AS/TGS take a read lock; kadmind/kpasswd take a write lock
@@ -226,29 +307,37 @@ pub fn serve_until(
 ) -> io::Result<()> {
     udp.set_read_timeout(Some(limits.io_timeout))?;
     tcp.set_nonblocking(true)?;
+    let cache: SharedCache = Arc::new(Mutex::new(Lookaside::new()));
     let udp_store = Arc::clone(&store);
     let tcp_store = store;
     let udp_flag = Arc::clone(&shutdown);
     let tcp_flag = Arc::clone(&shutdown);
-    let udp_thread = thread::spawn(move || udp_loop(&udp_store, udp, &udp_flag, limits));
-    let tcp_thread = thread::spawn(move || tcp_loop(&tcp_store, tcp, &tcp_flag, limits));
+    let udp_cache = Arc::clone(&cache);
+    let tcp_cache = cache;
+    let udp_thread =
+        thread::spawn(move || udp_loop(&udp_store, udp, &udp_flag, limits, &udp_cache));
+    let tcp_thread =
+        thread::spawn(move || tcp_loop(&tcp_store, tcp, &tcp_flag, limits, &tcp_cache));
     let _ = udp_thread.join();
     let _ = tcp_thread.join();
     Ok(())
 }
 
 #[allow(clippy::needless_pass_by_value)] // UDP socket is owned by the worker thread
-fn udp_loop(store: &SharedStore, sock: UdpSocket, shutdown: &AtomicBool, limits: ListenLimits) {
+fn udp_loop(
+    store: &SharedStore,
+    sock: UdpSocket,
+    shutdown: &AtomicBool,
+    limits: ListenLimits,
+    cache: &Mutex<Lookaside>,
+) {
     let mut buf = vec![0u8; 65_535];
     while !shutdown.load(Ordering::Relaxed) {
         match sock.recv_from(&mut buf) {
             Ok((n, peer)) => {
                 let payload = buf[..n].to_vec();
-                let reply = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    read_store(store, |s| handle_request(s, &payload))
-                }));
-                match reply {
-                    Ok(Ok(mut reply)) => {
+                match dispatch_via_cache(store, cache, &payload) {
+                    Dispatch::Send(mut reply) => {
                         if reply.is_empty() {
                             log_dispatch_drop(true);
                             continue;
@@ -268,7 +357,8 @@ fn udp_loop(store: &SharedStore, sock: UdpSocket, shutdown: &AtomicBool, limits:
                             );
                         }
                     }
-                    Ok(Err(e)) => tracing::error!(
+                    Dispatch::Drop => {}
+                    Dispatch::Error(e) => tracing::error!(
                         event = krb5_log::events::KDC_ISSUE,
                         correlation_id = krb5_log::current_correlation_id(),
                         component = "krb5-kdc",
@@ -276,7 +366,7 @@ fn udp_loop(store: &SharedStore, sock: UdpSocket, shutdown: &AtomicBool, limits:
                         error = %e,
                         error_suffix = WHILE_DISPATCHING_UDP,
                     ),
-                    Err(_) => tracing::error!(
+                    Dispatch::Panic => tracing::error!(
                         event = krb5_log::events::KDC_TRANSPORT,
                         correlation_id = krb5_log::current_correlation_id(),
                         component = "krb5-kdc",
@@ -308,6 +398,7 @@ fn tcp_loop(
     listener: TcpListener,
     shutdown: &AtomicBool,
     limits: ListenLimits,
+    cache: &SharedCache,
 ) {
     let workers = Arc::new(AtomicUsize::new(0));
     while !shutdown.load(Ordering::Relaxed) {
@@ -328,12 +419,13 @@ fn tcp_loop(
                 workers.fetch_add(1, Ordering::SeqCst);
                 let store = Arc::clone(store);
                 let workers_g = Arc::clone(&workers);
+                let cache = Arc::clone(cache);
                 let max_body = limits.max_tcp_request;
                 let timeout = limits.io_timeout;
                 thread::spawn(move || {
                     let _guard = WorkerGuard(workers_g);
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        handle_tcp(&store, stream, max_body, timeout)
+                        handle_tcp(&store, stream, max_body, timeout, &cache)
                     }));
                     match result {
                         Ok(Ok(())) => {}
@@ -374,6 +466,7 @@ fn handle_tcp(
     mut stream: TcpStream,
     max_body: usize,
     timeout: Duration,
+    cache: &Mutex<Lookaside>,
 ) -> io::Result<()> {
     stream.set_read_timeout(Some(timeout))?;
     stream.set_write_timeout(Some(timeout))?;
@@ -419,11 +512,10 @@ fn handle_tcp(
         }
         Err(e) => return Err(e),
     }
-    let reply = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        read_store(store, |s| handle_request(s, &req))
-    })) {
-        Ok(Ok(r)) => r,
-        Ok(Err(e)) => {
+    let reply = match dispatch_via_cache(store, cache, &req) {
+        Dispatch::Send(r) => r,
+        Dispatch::Drop => return Ok(()),
+        Dispatch::Error(e) => {
             tracing::error!(
                 event = krb5_log::events::KDC_ISSUE,
                 component = "krb5-kdc",
@@ -433,7 +525,7 @@ fn handle_tcp(
             );
             return Err(io::Error::new(io::ErrorKind::InvalidData, e.to_string()));
         }
-        Err(_) => {
+        Dispatch::Panic => {
             return Err(io::Error::other("request panic isolated"));
         }
     };
@@ -478,7 +570,13 @@ mod tests {
         let store = shared_store(store);
         thread::spawn(move || {
             let (s, _) = listener.accept().unwrap();
-            let _ = handle_tcp(&store, s, 32, Duration::from_secs(2));
+            let _ = handle_tcp(
+                &store,
+                s,
+                32,
+                Duration::from_secs(2),
+                &Mutex::new(Lookaside::new()),
+            );
         });
         let mut c = std::net::TcpStream::connect(addr).unwrap();
         c.write_all(&64u32.to_be_bytes()).unwrap();
@@ -506,7 +604,13 @@ mod tests {
         let store = shared_store(store);
         thread::spawn(move || {
             let (s, _) = listener.accept().unwrap();
-            let _ = handle_tcp(&store, s, MAX_TCP_REQUEST, Duration::from_secs(2));
+            let _ = handle_tcp(
+                &store,
+                s,
+                MAX_TCP_REQUEST,
+                Duration::from_secs(2),
+                &Mutex::new(Lookaside::new()),
+            );
         });
         let mut c = std::net::TcpStream::connect(addr).unwrap();
         c.write_all(&(1024 * 1024 + 1u32).to_be_bytes()).unwrap();
@@ -530,7 +634,13 @@ mod tests {
         let store = shared_store(store);
         thread::spawn(move || {
             let (s, _) = listener.accept().unwrap();
-            let _ = handle_tcp(&store, s, MAX_TCP_REQUEST, Duration::from_secs(5));
+            let _ = handle_tcp(
+                &store,
+                s,
+                MAX_TCP_REQUEST,
+                Duration::from_secs(5),
+                &Mutex::new(Lookaside::new()),
+            );
         });
         let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["nosuch"]);
         let mut req = crate::as_req(cname, crate::TEST_REALM, 1, None).unwrap();
@@ -568,7 +678,14 @@ mod tests {
         let store = shared_store(store);
         thread::spawn(move || {
             let (s, _) = listener.accept().unwrap();
-            handle_tcp(&store, s, MAX_TCP_REQUEST, Duration::from_secs(2)).expect("zero-len drop");
+            handle_tcp(
+                &store,
+                s,
+                MAX_TCP_REQUEST,
+                Duration::from_secs(2),
+                &Mutex::new(Lookaside::new()),
+            )
+            .expect("zero-len drop");
         });
         let mut c = std::net::TcpStream::connect(addr).unwrap();
         c.write_all(&0u32.to_be_bytes()).unwrap();

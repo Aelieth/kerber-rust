@@ -35,9 +35,9 @@ Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after W1-J L5a-3 validate_as_request order regrade):
+Counts (after W1-J L5b lookaside reply cache):
 **308** = A1 117 + A2 74 + A3 59 + A4 58.
-exact 123 · stricter-documented 12 · deviation 91 ·
+exact 124 · stricter-documented 12 · deviation 90 ·
 absent 64 · deferred 18.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
@@ -101,9 +101,9 @@ Implement `get_ticket_flags` (`kdc_util.c:813`). `TGT NOT
 FORWARDABLE/PROXIABLE/POSTDATABLE` 13. Ticket addresses.
 `check_tgs_nontgt` 26 + `check_tgs_tgt` after decrypt and only when
 `NON_TGT_OPTION` is clear. `NOT_YET_VALID` without skew.
-`NON-POSTDATABLE` only on `ALLOW_POSTDATE`. Lookaside consequence
-(UDP TGS retransmit → 34) is a deviation here; the cache itself stays
-deferred.
+`NON-POSTDATABLE` only on `ALLOW_POSTDATE`. The lookaside reply cache is
+now implemented (`lookaside.rs`), so an identical retransmit is answered
+from the cache on both UDP and TCP.
 
 ### F6 CAMMAC + HANDLE_AUTHDATA (security, latent)
 
@@ -339,7 +339,7 @@ Wire = RFC 4120 protocol code (MIT `errcode_to_protocol`).
 | do_tgs_req.c:617-675 vs issue.rs:666-697 | **ORDER TGS**: MIT PROCESS_TGS(rd_req times, no rcache)→FAST→NULL_SERVER→**GET_LOCAL_TGT→HEADER_PAC→search_sprinc**→S4U→…→`check_tgs_times`. Rust PROCESS_TGS(no times)→FAST→**check_ticket_times→tgs_replay→GET_LOCAL_TGT→search_sprinc** | times/RENEW-not-renewable **after** search_sprinc | times+replay **before** GET_LOCAL_TGT | RENEW/VALIDATE/expired can 32/13 before 60/7 | deviation | proposed: diffsend `tgs-renew-unrenewable-foreign-realm`; proposed: diffsend `tgs-expired-vs-unknown-sname` |
 | do_as_req.c:577-762 vs issue.rs:259-394 | **ORDER AS**: MIT NULL_C/S→lookup c/s→REFERRAL→GET_LOCAL_TGT→**validate_as (expiry then lockout)**→etype→anon→client key→cookie→**preauth**. Rust realm→opts→client→**lockout**→etype→**preauth**→HW→**then** server→times→flags | lockout after expiry; preauth after server+policy | lockout first; preauth before server/times | locked client never hits NAME_EXP; bad EncTs never hits unknown server | deviation | proposed: diffsend `as-expired-and-locked`; `as-bad-pa-unknown-server` |
 | ORDER kdc_util.c:727-800 `validate_as_request` | INVALID OPTIONS → CLIENT EXPIRED → CLIENT KEY EXPIRED → SERVICE EXPIRED → REQUIRED PWCHANGE → POSTDATE → CLIENT LOCKED → SERVICE LOCKED → SERVICE NOT ALLOWED → failcount, all before preauth (`do_as_req.c:630` precedes `check_padata` `:758`) | same statuses | `issue.rs validate_as_request` called after the server lookup and before preauth | same ordered block before preauth, so a preauth-required client that trips a check gets that validate status rather than the preauth-required reply (the anonymous check is absent — no anon AS) | exact | `scripts/differential-gate.sh` `as-validate-before-preauth` (preauth+needchange `pwprau`) is `23`/`REQUIRED PWCHANGE` both legs; `issue_acl_ap.rs::as_validate_runs_before_preauth_like_process_as_req` |
-| replay.c:59,166-187; dispatch.c:114-141 | lookaside: hash full pkt; in-progress NULL→drop; hit resend success only (`dispatch.c:82`); stale 2 min. MIT TGS has no rcache (`kdc_util.c:190-191`) | cached TGS-REP on UDP retransmit; KRB-ERRORs recomputed | krb5-kdc/issue.rs handle_request per datagram; no pkt cache | identical UDP TGS retransmit → **34** (rcache without lookaside) | deviation (UDP TGS retransmit → 34); the cache itself stays deferred | proposed: unit + proposed: diffsend `udp-retransmit-lookaside`; proposed kdc-lookaside-gate.sh |
+| replay.c whole; dispatch.c:114-140 | lookaside: hash full request bytes; in-progress NULL marker → duplicate DISCARD-dropped; a produced reply (AS-REP **or** KRB-ERROR, `dispatch.c:82` code 0 after `prepare_error`) resent on retransmit; stale 2 min; 10 MiB cap, oldest-first eviction | resend the cached reply | krb5-kdc/lookaside.rs; krb5-kdc/listen.rs dispatch_via_cache (UDP + TCP, one shared cache) | identical request resent → byte-for-byte the first reply | exact | `scripts/differential-gate.sh` `as-retransmit` identical on both legs; `persist_and_listener.rs::listener_retransmit_resends_the_cached_reply_like_replay_c`; `lookaside.rs` unit tests |
 | dispatch.c:177-209 | UDP reply > `max_dgram_reply_size` (default 65536, path dead unless configured down) | `KRB_ERR_RESPONSE_TOO_BIG` **52** | krb5-kdc/listen.rs udp_loop | **52** when `max_dgram_reply_size` is under the reply | exact | `udp_oversize_reply_is_response_too_big` |
 | dispatch.c:145-153 | empty / undecodable / unknown-tag pkt | no packet (`response == NULL` → `net-server.c:1101-1105` drop); status `MSG_TYPE` is not on the wire | krb5-kdc/listen.rs log_dispatch_drop; krb5-kdc/issue.rs handle_inner | an empty reply is dropped with a debug `kdc.issue` event, `outcome=ok` and no suffix; TCP writes nothing; `while dispatching (udp)` / `(tcp)` (`:14-16`) is the `error_suffix` of an error reply only (`:277`, `:432`) | exact | diffsend `garbage-pdu`; `handle_request_empty_is_dropped`; `log_dispatch_drop_udp_is_not_tcp` |
 | dispatch.c:154-157 | `setup_server_realm` NULL | **68** `WRONG_REALM` — unreachable on a single-realm KDC (`main.c:127-132`); never on the wire | single-realm; AS **6** `wrong realm`; TGS **60** `GET_LOCAL_TGT` | same | deviation (MIT drops / unreachable single-realm) | `docs/security.md:60-63`; diffsend `wrong-realm` |

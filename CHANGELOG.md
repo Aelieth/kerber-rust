@@ -6,6 +6,22 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-J L5b (lookaside reply cache)
+
+- **kdc.** The listener now keeps a lookaside reply cache like MIT
+  `kdc/replay.c`: a retransmitted request, keyed by its exact bytes, is answered
+  from the cache instead of re-processed, so the reply is byte-for-byte the
+  first (a fresh AS-REP would carry a new random session key, and a preauth or
+  TGS authenticator replay would otherwise error). A duplicate arriving while
+  the first is still being processed is dropped (MIT `KRB5KDC_ERR_DISCARD`);
+  entries older than two minutes are purged and the cache is capped at 10 MiB,
+  oldest first. The cache is shared across the UDP and TCP threads and wraps
+  `handle_request` in the listener, so direct `issue_as`/`issue_tgs` callers
+  (the authenticator/PA replay-cache tests) are unaffected.
+  `differential-gate.sh` gains an `as-retransmit` case: the same request sent
+  twice yields an identical reply on both legs. Ledger row `replay.c`/
+  `dispatch.c` regrades deviation → exact.
+
 ### W1-J L5a-3 (validate_as_request: order, AS_INVALID_OPTIONS, REQUIRED PWCHANGE)
 
 - **kdc.** The AS policy checks now run as one ordered `validate_as_request`

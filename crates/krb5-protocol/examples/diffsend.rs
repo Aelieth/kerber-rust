@@ -300,6 +300,45 @@ fn decrypt_tgs(
     Ok((rep, enc, tkt, enc_tag))
 }
 
+// MIT kdc/replay.c lookaside (dispatch.c:114-140): the identical request resent
+// is answered from the cache, so the second reply is byte-for-byte the first on
+// both legs. Without the cache a fresh AS-REP carries a new random session key.
+fn expect_retransmit(cfg: &Cfg, case: &str, req: &[u8]) -> Result<(), String> {
+    let (r1, m1) = send_both(cfg, case, req)?;
+    let r2 = exchange_on_tcp(&cfg.rust, req).map_err(|e| format!("{case} rust#2: {e}"))?;
+    let m2 = exchange_on_tcp(&cfg.mit, req).map_err(|e| format!("{case} mit#2: {e}"))?;
+    if r1.first() != Some(&0x6b) {
+        return Err(format!(
+            "{case}: rust first reply tag {:02x} want AS-REP 0x6b",
+            r1.first().unwrap_or(&0)
+        ));
+    }
+    if m1.first() != Some(&0x6b) {
+        return Err(format!(
+            "{case}: mit first reply tag {:02x} want AS-REP 0x6b",
+            m1.first().unwrap_or(&0)
+        ));
+    }
+    if r2 != r1 {
+        return Err(format!(
+            "{case}: rust retransmit differs (len {} vs {})",
+            r2.len(),
+            r1.len()
+        ));
+    }
+    if m2 != m1 {
+        return Err(format!(
+            "{case}: mit retransmit differs (len {} vs {})",
+            m2.len(),
+            m1.len()
+        ));
+    }
+    println!(
+        r#"{{"event":"diffsend","case":"{case}","outcome":"ok","rust_retransmit_identical":true,"mit_retransmit_identical":true,"reply_tag":"0x6b"}}"#
+    );
+    Ok(())
+}
+
 fn expect_as_ok(
     cfg: &Cfg,
     case: &str,
@@ -565,6 +604,15 @@ fn run() -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     let _ = expect_as_ok(&cfg, "as-success", &as_req_ok, &user)?;
 
+    // A distinct preauth AS-REQ (fresh nonce) sent twice: the lookaside resends
+    // the first reply, so the retransmit is identical on both legs.
+    let pa_rt = pa_enc_timestamp(&ukey).map_err(|e| e.to_string())?;
+    let as_req_rt = encode(
+        &as_req(user.clone(), realm, 0x1000_0012, Some(vec![pa_rt])).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    expect_retransmit(&cfg, "as-retransmit", &as_req_rt)?;
+
     let tkt_kt = cfg
         .krbtgt
         .as_ref()
@@ -703,7 +751,7 @@ fn run() -> Result<(), String> {
         true,
     )?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":17}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":18}}"#);
     Ok(())
 }
 
