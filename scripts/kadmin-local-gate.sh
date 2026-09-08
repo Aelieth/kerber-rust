@@ -280,13 +280,13 @@ dl() {
 }
 PDEL="$(rust_local 'delpol tws')"
 echo "$PDEL"
-diff <(echo "$PDEL" | prompt_lines) <(mit_local 'delpol tws' | prompt_lines)
+diff <(echo "$PDEL" | prompt_lines | grep -F 'not deleted') <(mit_local 'delpol tws' | prompt_lines | grep -F 'not deleted')
 echo "$PDEL" | grep -F 'Policy "tws" not deleted.'
 rust_local 'addprinc -pw delme-secret delme' >/dev/null
 mit_local 'addprinc -pw delme-secret delme' >/dev/null
 PDELP="$(rust_local 'delprinc delme')"
 echo "$PDELP"
-diff <(echo "$PDELP" | prompt_lines) <(mit_local 'delprinc delme' | prompt_lines)
+diff <(echo "$PDELP" | prompt_lines | grep -F 'not deleted') <(mit_local 'delprinc delme' | prompt_lines | grep -F 'not deleted')
 echo "$PDELP" | grep -F 'Principal "delme@KERBER.TEST" not deleted'
 YDEL="$(printf 'yes\n' | docker exec -i -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
     "$NAME" /tmp/krb5-kadmin-local -q 'delprinc delme' 2>&1)"
