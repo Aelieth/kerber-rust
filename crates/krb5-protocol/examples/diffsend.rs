@@ -21,8 +21,9 @@ use krb5_protocol::{
     pa_enc_timestamp_at, tgs_req,
 };
 use krb5_types::{
-    AsRep, EncTicketPart, EncryptedData, EncryptionKey, KerberosTime, KrbError, PaData,
-    PrincipalName, TgsRep, Ticket, TicketFlags, TransitedEncoding, err, ku, pa,
+    ApReq, AsRep, AuthorizationDataValue, EncTicketPart, EncryptedData, EncryptionKey,
+    KerberosTime, KrbError, PaData, PrincipalName, TgsRep, Ticket, TicketFlags, TransitedEncoding,
+    err, ku, pa,
 };
 use sha1::{Digest, Sha1};
 
@@ -377,6 +378,23 @@ fn mint_tgt(
     window: (KerberosTime, KerberosTime),
     flags: TicketFlags,
 ) -> Result<Ticket, String> {
+    mint_tgt_ad(
+        krbtgt, kvno, cname, realm, sname, session, window, flags, None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn mint_tgt_ad(
+    krbtgt: &ProtocolKey,
+    kvno: u32,
+    cname: &PrincipalName,
+    realm: &str,
+    sname: &PrincipalName,
+    session: &ProtocolKey,
+    window: (KerberosTime, KerberosTime),
+    flags: TicketFlags,
+    authorization_data: Option<krb5_types::AuthorizationData>,
+) -> Result<Ticket, String> {
     let (start, end) = window;
     let part = EncTicketPart {
         flags,
@@ -395,7 +413,7 @@ fn mint_tgt(
         endtime: end,
         renew_till: None,
         caddr: None,
-        authorization_data: None,
+        authorization_data,
     };
     let der = encode(&part).map_err(|e| e.to_string())?;
     let usage = KeyUsage::new(ku::TICKET).map_err(|e| e.to_string())?;
@@ -760,8 +778,8 @@ fn run() -> Result<(), String> {
         ),
         TicketFlags::initial_preauth(),
     )?;
-    let tgs_nyv =
-        tgs_req(nyv, &sess, realm, &user, host, realm, 0x1000_000a).map_err(|e| e.to_string())?;
+    let tgs_nyv = tgs_req(nyv, &sess, realm, &user, host.clone(), realm, 0x1000_000a)
+        .map_err(|e| e.to_string())?;
     expect_error_client(
         &cfg,
         "tgt-nyv",
@@ -804,7 +822,94 @@ fn run() -> Result<(), String> {
         err::POLICY,
     )?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":20}}"#);
+    // A′-1 item 3: header ticket or authenticator carrying AD-FX-ARMOR 71.
+    // MIT kdc_util.c:217-229 → 12 PROCESS_TGS. Nothing in 1.22.2 emits 71.
+    let inner_ad = encode(&vec![AuthorizationDataValue {
+        ad_type: pa::AD_FX_ARMOR,
+        ad_data: Vec::<u8>::new().into(),
+    }])
+    .map_err(|e| e.to_string())?;
+    let fx_ad = vec![AuthorizationDataValue {
+        ad_type: pa::AD_IF_RELEVANT,
+        ad_data: inner_ad.into(),
+    }];
+    let fx_tgt = mint_tgt_ad(
+        tkt_key,
+        tkt_kvno,
+        &user,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        (
+            now.clone(),
+            now.add_hours(10).unwrap_or_else(|_| now.clone()),
+        ),
+        TicketFlags::initial_preauth(),
+        Some(fx_ad),
+    )?;
+    let fx_tgs = tgs_req(
+        fx_tgt,
+        &sess,
+        realm,
+        &user,
+        host.clone(),
+        realm,
+        0x1000_0021,
+    )
+    .map_err(|e| e.to_string())?;
+    expect_error_client(
+        &cfg,
+        "armor-ap-req-as-pa-tgs-req",
+        &encode(&fx_tgs).map_err(|e| e.to_string())?,
+        err::POLICY,
+        true,
+    )?;
+
+    let auth_tgt = mint_tgt(
+        tkt_key,
+        tkt_kvno,
+        &user,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        (
+            now.clone(),
+            now.add_hours(10).unwrap_or_else(|_| now.clone()),
+        ),
+        TicketFlags::initial_preauth(),
+    )?;
+    let mut auth_tgs = tgs_req(auth_tgt, &sess, realm, &user, host, realm, 0x1000_0022)
+        .map_err(|e| e.to_string())?;
+    let pa_tgs = auth_tgs
+        .0
+        .padata
+        .as_mut()
+        .and_then(|p| p.iter_mut().find(|x| x.padata_type == pa::TGS_REQ))
+        .ok_or_else(|| "no PA-TGS-REQ".to_string())?;
+    let mut ap: ApReq = decode(pa_tgs.padata_value.as_ref()).map_err(|e| e.to_string())?;
+    let auth_usage = KeyUsage::new(ku::TGS_REQ_AUTHENTICATOR).map_err(|e| e.to_string())?;
+    let auth_plain =
+        decrypt(&sess, auth_usage, ap.authenticator.cipher.as_ref()).map_err(|e| e.to_string())?;
+    let mut authenticator: krb5_types::Authenticator =
+        decode(&auth_plain).map_err(|e| e.to_string())?;
+    authenticator.authorization_data = Some(vec![AuthorizationDataValue {
+        ad_type: pa::AD_FX_ARMOR,
+        ad_data: Vec::<u8>::new().into(),
+    }]);
+    let auth_der = encode(&authenticator).map_err(|e| e.to_string())?;
+    ap.authenticator.cipher = encrypt(&sess, auth_usage, &auth_der)
+        .map_err(|e| e.to_string())?
+        .into();
+    pa_tgs.padata_value = encode(&ap).map_err(|e| e.to_string())?.into();
+    expect_error_client(
+        &cfg,
+        "tgs-ad-fx-armor-authenticator",
+        &encode(&auth_tgs).map_err(|e| e.to_string())?,
+        err::POLICY,
+        true,
+    )?;
+
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":22}}"#);
     Ok(())
 }
 

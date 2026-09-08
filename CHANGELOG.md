@@ -13,6 +13,11 @@ this project uses semantic versioning once a crate is published.
   AP-REQ armor whose authenticator has no subkey is 12 `FIND_FAST`; TGS
   explicit armor with a PA-TGS-REQ subkey stays 24. diffsend
   `fast-armor-no-subkey` sends the same bytes to both KDCs.
+- **kdc.** A PA-TGS-REQ whose header ticket or authenticator carries
+  AD-FX-ARMOR (71), including inside IF-RELEVANT, is 12 `PROCESS_TGS`
+  (`kdc_util.c:217-229`, `authdata_dec.c:115-181`). Nothing in 1.22.2
+  emits 71. diffsend `armor-ap-req-as-pa-tgs-req` and
+  `tgs-ad-fx-armor-authenticator`.
 
 ### Round-up R2 (re-audit fixes)
 

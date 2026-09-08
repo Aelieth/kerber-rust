@@ -10,11 +10,11 @@ use krb5_crypto::{
 use krb5_protocol::{ReplayCache, ReplayKey};
 use krb5_types::pac::{PacIdentity, parse_kerb_validation_info};
 use krb5_types::{
-    AsRep, AsReq, Checksum, EncKdcRepPart, EncTgsRepPart, EncTicketPart, EncryptedData,
-    EncryptionKey, EtypeInfo, EtypeInfo2, EtypeInfo2Entry, EtypeInfoEntry, KdcReqBody,
-    KerberosString, KerberosTime, KrbError, LastReqValue, MethodData, Microseconds, OctetString,
-    PaData, PaEncTsEnc, PrincipalName, TgsRep, TgsReq, Ticket, TicketFlags, TransitedEncoding, err,
-    flag_bit, ku, pa,
+    AsRep, AsReq, AuthorizationData, AuthorizationDataValue, Checksum, EncKdcRepPart,
+    EncTgsRepPart, EncTicketPart, EncryptedData, EncryptionKey, EtypeInfo, EtypeInfo2,
+    EtypeInfo2Entry, EtypeInfoEntry, KdcReqBody, KerberosString, KerberosTime, KrbError,
+    LastReqValue, MethodData, Microseconds, OctetString, PaData, PaEncTsEnc, PrincipalName, TgsRep,
+    TgsReq, Ticket, TicketFlags, TransitedEncoding, err, flag_bit, ku, pa,
 };
 
 use crate::ad::{
@@ -690,6 +690,22 @@ fn process_tgs_header(
     if !krb5_types::principal_compare(&authenticator.cname, auth_realm, &enc_tkt.cname, tkt_realm) {
         return Err(proto(err::BADMATCH, status::PROCESS_TGS));
     }
+    // MIT kdc_util.c:217-229: after rd_req, before the authenticator checksum.
+    match fx_armor_present(
+        enc_tkt.authorization_data.as_deref(),
+        authenticator.authorization_data.as_deref(),
+    ) {
+        Ok(true) => {
+            return Err(proto_d(
+                err::POLICY,
+                status::PROCESS_TGS,
+                "ticket valid only as FAST armor",
+            ));
+        }
+        Ok(false) => {}
+        Err(Error::Asn1(_)) => return Err(proto(err::GENERIC, status::PROCESS_TGS)),
+        Err(e) => return Err(e),
+    }
     if let Some(ck) = &authenticator.cksum {
         // MIT kdc_util.c:112-140 comp_cksum: unknown 15, not coll-proof 50,
         // verify fail 31. 1.22.2 sets CKSUM_NOT_COLL_PROOF on no row.
@@ -723,6 +739,57 @@ fn process_tgs_header(
         session,
         authenticator,
     })
+}
+
+/// MIT `krb5_find_authdata` (`authdata_dec.c:115-181`): recurse into
+/// IF-RELEVANT only; authenticator AD skips KDC-issued container types.
+fn fx_armor_present(
+    ticket_ad: Option<&[AuthorizationDataValue]>,
+    authenticator_ad: Option<&[AuthorizationDataValue]>,
+) -> Result<bool, Error> {
+    if let Some(ad) = ticket_ad
+        && find_authdata(ad, pa::AD_FX_ARMOR, false)?
+    {
+        return Ok(true);
+    }
+    if let Some(ad) = authenticator_ad
+        && find_authdata(ad, pa::AD_FX_ARMOR, true)?
+    {
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn find_authdata(
+    in_ad: &[AuthorizationDataValue],
+    ad_type: i32,
+    from_ap_req: bool,
+) -> Result<bool, Error> {
+    for ad in in_ad {
+        if ad.ad_type == pa::AD_IF_RELEVANT {
+            let inner: AuthorizationData = decode(ad.ad_data.as_ref())?;
+            if find_authdata(&inner, ad_type, from_ap_req)? {
+                return Ok(true);
+            }
+            continue;
+        }
+        if from_ap_req
+            && matches!(
+                ad.ad_type,
+                pa::AD_SIGNTICKET
+                    | pa::AD_KDC_ISSUED
+                    | pa::AD_WIN2K_PAC
+                    | pa::AD_CAMMAC
+                    | pa::AD_AUTH_INDICATOR
+            )
+        {
+            continue;
+        }
+        if ad.ad_type == ad_type {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn issue_tgs_body(

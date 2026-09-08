@@ -46,6 +46,8 @@ DIFFSEND_CASES = frozenset(
         "tgt-expired",
         "tgt-nyv",
         "fast-armor-no-subkey",
+        "armor-ap-req-as-pa-tgs-req",
+        "tgs-ad-fx-armor-authenticator",
     }
 )
 _LEDGER_GATE = re.compile(r"(?:scripts/)?([A-Za-z0-9._-]+-gate(?:\.sh)?)")

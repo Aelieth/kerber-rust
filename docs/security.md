@@ -206,7 +206,11 @@ TGS AP-REQ armor with a PA-TGS-REQ subkey is 24 `FIND_FAST` (log
 `Ap-request armor not permitted with TGS`); without that subkey the KDC
 runs `armor_ap_request` (`fast_util.c:159-166`). AP-REQ armor whose
 authenticator has no subkey is 12 `FIND_FAST` (log `ap-request armor
-without subkey`, `fast_util.c:70-77`) on both AS and TGS.
+without subkey`, `fast_util.c:70-77`) on both AS and TGS. A PA-TGS-REQ
+header ticket or authenticator carrying AD-FX-ARMOR (71) — including
+inside IF-RELEVANT — is 12 `PROCESS_TGS` (`kdc_util.c:217-229`); 1.22.2
+never emits 71 (RFC 6113 §5.4.1 defence in depth). The FAST armor AP-REQ
+is not scanned.
 Corrupt `enc_fast_req` is 31 `FIND_FAST`; malformed `KrbFastReq` is
 60 `FIND_FAST` (`do_as_req.c:531-535`). Log `detail` is MIT's
 `k5_setmsg` where MIT has one; the critical-FAST-option `detail`

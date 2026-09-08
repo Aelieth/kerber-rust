@@ -26,9 +26,9 @@ use krb5_types::pac::{
     parse_kerb_validation_info, zero_pac_ad_data,
 };
 use krb5_types::{
-    ApReq, Checksum, EncKdcRepPart, EncTicketPart, EncryptedData, EncryptionKey, KdcOptions,
-    KerberosTime, KrbError, MethodData, Microseconds, PaData, PaEncTsEnc, PrincipalName, ascii,
-    err, flag_bit, ku, pa,
+    ApReq, AuthorizationDataValue, Checksum, EncKdcRepPart, EncTicketPart, EncryptedData,
+    EncryptionKey, KdcOptions, KerberosTime, KrbError, MethodData, Microseconds, PaData,
+    PaEncTsEnc, PrincipalName, ascii, err, flag_bit, ku, pa,
 };
 
 fn password_key(name: &str, password: &[u8]) -> ProtocolKey {
@@ -1271,6 +1271,130 @@ fn tgs_fast_explicit_armor_without_any_subkey_is_policy() {
     .expect("TGS FAST explicit armor");
     let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("armor without subkey");
     assert_find_fast(err, err::POLICY, "ap-request armor without subkey");
+}
+
+fn fx_armor_ad() -> AuthorizationDataValue {
+    AuthorizationDataValue {
+        ad_type: pa::AD_FX_ARMOR,
+        ad_data: Vec::<u8>::new().into(),
+    }
+}
+
+fn reencrypt_tgt(store: &PrincipalStore, ticket: &mut krb5_types::Ticket, part: &EncTicketPart) {
+    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
+    let plain = encode(part).expect("enc-tkt");
+    let usage = KeyUsage::new(ku::TICKET).unwrap();
+    ticket.enc_part.cipher = encrypt(&krbtgt.key, usage, &plain).expect("ticket").into();
+}
+
+fn assert_process_tgs_policy(err: Error, detail: &str) {
+    match err {
+        Error::Protocol {
+            code,
+            text,
+            detail: d,
+            ..
+        } => {
+            assert_eq!(code, err::POLICY);
+            assert_eq!(text.as_deref(), Some("PROCESS_TGS"));
+            assert_eq!(d.as_deref(), Some(detail));
+        }
+        other => panic!("expected 12 PROCESS_TGS {detail}, got {other:?}"),
+    }
+}
+
+#[test]
+fn tgs_header_ticket_ad_fx_armor_is_policy() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 886);
+    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
+    let mut part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("TGT");
+    part.authorization_data = Some(vec![fx_armor_ad()]);
+    let mut ticket = issued.rep.0.ticket.clone();
+    reencrypt_tgt(&store, &mut ticket, &part);
+    let tgs = tgs_req(
+        ticket,
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        887,
+    )
+    .unwrap();
+    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("AD-FX-ARMOR in ticket");
+    assert_process_tgs_policy(err, "ticket valid only as FAST armor");
+}
+
+#[test]
+fn tgs_header_ticket_if_relevant_ad_fx_armor_is_policy() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 888);
+    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
+    let mut part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("TGT");
+    let inner = encode(&vec![fx_armor_ad()]).expect("inner AD");
+    part.authorization_data = Some(vec![AuthorizationDataValue {
+        ad_type: pa::AD_IF_RELEVANT,
+        ad_data: inner.into(),
+    }]);
+    let mut ticket = issued.rep.0.ticket.clone();
+    reencrypt_tgt(&store, &mut ticket, &part);
+    let tgs = tgs_req(
+        ticket,
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        889,
+    )
+    .unwrap();
+    let bytes = krb5_kdc::handle_request(&store, &encode(&tgs).expect("der")).expect("reply");
+    assert_krb_error(&bytes, err::POLICY, "PROCESS_TGS");
+}
+
+#[test]
+fn tgs_header_authenticator_ad_fx_armor_is_policy() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 890);
+    let mut tgs = tgs_req(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        891,
+    )
+    .unwrap();
+    let pa = tgs
+        .0
+        .padata
+        .as_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|p| p.padata_type == pa::TGS_REQ)
+        .expect("PA-TGS-REQ");
+    let mut ap: ApReq = decode(pa.padata_value.as_ref()).expect("ap");
+    let auth_usage = KeyUsage::new(ku::TGS_REQ_AUTHENTICATOR).unwrap();
+    let auth_plain = decrypt(
+        &issued.session_key,
+        auth_usage,
+        ap.authenticator.cipher.as_ref(),
+    )
+    .expect("auth");
+    let mut authenticator: krb5_types::Authenticator = decode(&auth_plain).expect("authenticator");
+    authenticator.authorization_data = Some(vec![fx_armor_ad()]);
+    let der = encode(&authenticator).expect("auth der");
+    ap.authenticator.cipher = encrypt(&issued.session_key, auth_usage, &der)
+        .expect("enc auth")
+        .into();
+    pa.padata_value = encode(&ap).expect("ap").into();
+    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("AD-FX-ARMOR in authenticator");
+    assert_process_tgs_policy(err, "ticket valid only as FAST armor");
 }
 
 fn map_fx_fast_as(

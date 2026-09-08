@@ -268,6 +268,14 @@ pub mod pa {
     pub const AD_AND_OR: i32 = 5;
     /// AD-MANDATORY-FOR-KDC.
     pub const AD_MANDATORY_FOR_KDC: i32 = 8;
+    /// AD-FX-ARMOR (RFC 6113 §5.4.1).
+    pub const AD_FX_ARMOR: i32 = 71;
+    /// AD-CAMMAC.
+    pub const AD_CAMMAC: i32 = 96;
+    /// AD-AUTHENTICATION-INDICATOR.
+    pub const AD_AUTH_INDICATOR: i32 = 97;
+    /// AD-SIGNTICKET (deprecated; PAC).
+    pub const AD_SIGNTICKET: i32 = 512;
     /// PA-PAC-OPTIONS.
     pub const PAC_OPTIONS: i32 = 167;
 }

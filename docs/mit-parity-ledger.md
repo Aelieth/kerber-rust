@@ -26,12 +26,12 @@ Schema: `MIT file:line | check | MIT status + wire code | Rust site | Rust e_tex
 Verdict ∈ {exact, stricter-documented (`docs/security.md` row), absent,
 deviation, deferred (reason + promotion oracle)}. Proof `none` only
 with deferred. A named gate cell or `diffsend` case that does not exist
-is `proposed`. The twenty live `diffsend` cases are `garbage-pdu`,
+is `proposed`. The twenty-two live `diffsend` cases are `garbage-pdu`,
 `unknown-cname`, `etype-nosupp`, `as-session-enctype`, `wrong-realm`, `pauser-no-preauth`,
 `skewed-timestamp`, `as-needchange`, `as-invalid-opts`, `as-validate-before-preauth`,
 `as-optimistic-encts-wrong-etype`, `unknown-sname`, `as-success`, `as-retransmit`,
 `as-request-anonymous`, `tgs-success`, `tgs-not-a-tgt`, `tgt-expired`, `tgt-nyv`,
-`fast-armor-no-subkey`.
+`fast-armor-no-subkey`, `armor-ap-req-as-pa-tgs-req`, `tgs-ad-fx-armor-authenticator`.
 
 Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
@@ -39,8 +39,8 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 
 Counts (after the round-up's password-history port):
 **325** = A1 117 + A2 79 + A3 62 + A4 67.
-exact 141 · stricter-documented 9 · deviation 94 ·
-absent 63 · deferred 18.
+exact 143 · stricter-documented 9 · deviation 94 ·
+absent 61 · deferred 18.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
 A2 10 (9 report rows + the `kdc_util.c:144-191` split) + A3 10 = 28
@@ -60,7 +60,9 @@ a short plan when reached.
    `FIND_FAST`, detail `ap-request armor without subkey`. TGS explicit armor
    with a PA-TGS-REQ subkey stays 24. MIT clients always send a subkey.
 2. `kdc: Refuse a header ticket or authenticator carrying AD-FX-ARMOR like kdc_process_tgs_req` —
-   `kdc_util.c:218-228` → 12 `PROCESS_TGS` (detail `ticket valid only as FAST armor`).
+   **landed (A′-1 item 3).** `kdc_util.c:217-229` → 12 `PROCESS_TGS` (detail
+   `ticket valid only as FAST armor`). Recurses into IF-RELEVANT only
+   (`authdata_dec.c:115-181`). Nothing in 1.22.2 emits 71.
 3. `kdc: Bind PA-FX-COOKIE to the client and expire it at 600 seconds like kdc_fast_make_cookie` —
    `MIT1` ‖ kvno ‖ enc(prf+(local TGT key, `COOKIE` ‖ unparsed client), ku 513);
    non-`MIT1` ignored (`:588-590,:610`). The ku-54 / ENC_CHALLENGE_CLIENT
@@ -267,7 +269,7 @@ mismatches, not extra statuses.
 | do_tgs_req.c:1012 (VALIDATE and RENEW as one mask) | RENEW and VALIDATE together | MIT no dedicated status (opts interact) | issue.rs process_tgs_header | `RENEW with VALIDATE` 13 | deviation | `tgs_renew_and_validate_together_is_badoption` |
 | asn1_k_encode.c:103-106 (realm decoded as octets) | TGS realm not UTF-8 | MIT uses bytes | issue.rs kdc_req_body_der | `non-ascii realm` 60 | stricter-documented | docs/security.md TGS realm octets; `tgs_non_ascii_ticket_realm_is_process_tgs` |
 | do_tgs_req.c:721 `decrypt_2ndtkt` vs tgs_policy.c:710 | 2nd ticket decrypt in gather, before constraints | 2ND_TKT_* then U2U/S4U policy | issue.rs issue_tgs_body/755 after lineage-adjacent S4U | later; U2U after S4U2Proxy | deviation | proposed: diffsend both flags set |
-| kdc_util.c:222-228 | header ticket/authenticator carries `KRB5_AUTHDATA_FX_ARMOR` (armor-only ticket used as a TGT) | PROCESS_TGS 12 (log `ticket valid only as FAST armor`) | `process_tgs_header` issue.rs issue_as_body | no FX_ARMOR scan anywhere in `crates/krb5-kdc` | absent (security) | proposed: unit + diffsend armor-marked TGT as PA-TGS-REQ (mirror MIT `t_ad_fx_armor.c`) |
+| kdc_util.c:217-229 | header ticket/authenticator carries `KRB5_AUTHDATA_FX_ARMOR` (armor-only ticket used as a TGT) | PROCESS_TGS 12 (log `ticket valid only as FAST armor`) | issue.rs process_tgs_header; issue.rs fx_armor_present | PROCESS_TGS 12 (detail `ticket valid only as FAST armor`) | exact | `tgs_header_ticket_ad_fx_armor_is_policy`; `tgs_header_ticket_if_relevant_ad_fx_armor_is_policy`; `tgs_header_authenticator_ad_fx_armor_is_policy`; diffsend `armor-ap-req-as-pa-tgs-req`; diffsend `tgs-ad-fx-armor-authenticator` |
 | kdc_util.c:813 `get_ticket_flags` | `OPTS2FLAGS` + `COPY_TKT_FLAGS` on the issued ticket (FORWARDED, PROXY, MAY_POSTDATE, POSTDATED+INVALID, HW_AUTH, ENC_PA_REP, ANONYMOUS) | n/a (flags, not an error) | issue.rs issue_tgs_body, 874-879 | sets TRANSITED/PRE_AUTHENT/FORWARDABLE/RENEWABLE/PROXIABLE/OK_AS_DELEGATE/ENC_PA_REP; still never FORWARDED, PROXY, MAY_POSTDATE, POSTDATED(+INVALID), ANONYMOUS, HW_AUTH | deviation | proposed: `flags-gate.sh` cell asserting `f`/`p`/`d`/`H` on a TGS ticket |
 | kdc_util.c:824 `\| TKT_FLG_ENC_PA_REP` | every issued AS/TGS ticket sets the enc-pa-rep flag (RFC 6806); the enc-pa-rep padata is separate (added only when PA 149 is present) | n/a (flag) | krb5-kdc/issue.rs issue_as_body; krb5-kdc/issue.rs issue_tgs_body | ENC_PA_REP on every ticket; padata request-keyed | exact | `every_ticket_sets_enc_pa_rep_flag_without_padata`; `scripts/differential-gate.sh` `as-success`/`tgs-success` no `mit-extra-ticket-flags` whitelist |
 | do_tgs_req.c:1019-1027 | ticket addresses: `req->addresses` for FORWARDED/PROXY, else header `caddrs` | n/a | issue.rs check_ticket_times (and 1188) `caddr: None` | addresses always dropped | deviation (laxer: address-restricted TGT → address-free service ticket) | proposed: unit + diffsend addressful TGT |
@@ -422,7 +424,7 @@ are RFC 4120/6113 integers. After W0d G3, FAST unwrap failures wire
 | kdc_preauth.c:826-871 + :508-564 | PA-AS-FRESHNESS token 600s | PREAUTH_EXPIRED | none | absent | deferred | none (PA-AS-FRESHNESS / Batch D) |
 | kdc_preauth.c:902-904 | empty hint list LOG_INFO | INFO | krb5-kdc/plugins.rs advertise_preauth always ads 136+2+19(+151) | n/a | exact | `ca_enabled_preauth_required_method_data_types` |
 | n/a (harness compare; `diff.rs:130-138`) | PREAUTH_REQUIRED compare requires only 2+19; extras are “mechanism ads (Rust SPAKE 151 vs MIT FAST 133/136)” | n/a | the compare tolerates missing 133 and treats 136 as optional vs MIT cookie | not a wire check | deviation | proposed: diffsend; **require 136**; add 133 once cookie shipped |
-| kdc_util.c:218-227 | header ticket **or** authenticator carries AD-FX-ARMOR (71) → ticket usable only as FAST armor (same family as A1 `kdc_util.c:222-228`) | `PROCESS_TGS` 12 POLICY (msg `ticket valid only as FAST armor`, log-only) | none — no `FX_ARMOR` in `crates/` | absent | absent (security) | proposed: unit mirroring MIT `lib/krb5/krb/t_ad_fx_armor.c`; proposed: diffsend `armor-ap-req-as-pa-tgs-req` |
+| kdc_util.c:217-229 | header ticket **or** authenticator carries AD-FX-ARMOR (71) → ticket usable only as FAST armor (same family as A1 `kdc_util.c:217-229`) | `PROCESS_TGS` 12 POLICY (msg `ticket valid only as FAST armor`, log-only) | issue.rs process_tgs_header; issue.rs fx_armor_present; issue.rs find_authdata | PROCESS_TGS 12 (detail `ticket valid only as FAST armor`); IF-RELEVANT recurse; not applied to FAST armor AP-REQ | exact | `tgs_header_ticket_if_relevant_ad_fx_armor_is_policy`; diffsend `armor-ap-req-as-pa-tgs-req` |
 | fast_util.c:62-67 | armor AP-REQ ticket server ≠ local TGS (`krb5_principal_compare_any_realm`) | `FIND_FAST` 26 SERVER_NOMATCH (log `ap-request armor for something other than the local TGS`) | krb5-kdc/preauth.rs proto_fast | `FIND_FAST` 26 (G3; detail `FAST armor TGT`) | exact | `fast_as_armor_for_host_ticket_is_server_nomatch`; `docs/security.md:71-73` |
 | fast_util.c:53-59 | armor `krb5_rd_req` failure (bad key / unknown server / expired) | `FIND_FAST` + inner code (log `%s while handling ap-request armor`) | krb5-kdc/preauth.rs proto_fast | `FIND_FAST` 35 / 31 / 33 / 32 (G3; NYV is 33; H1 corrupt enc is 31) | exact | `explicit_as_armor_invalid_tgt_is_tkt_nyv`; `fast_as_corrupt_enc_fast_req_is_bad_integrity_find_fast`; proposed: diffsend |
 | fast_util.c:167-170 | unknown FAST armor type | `FIND_FAST` 24 (log `Unknown FAST armor type %d`) | krb5-kdc/preauth.rs proto_fast | `FIND_FAST` 24 (G3; detail `Unknown FAST armor type {}`) | exact | `fast_as_unknown_armor_type_is_preauth_failed`; `docs/security.md:84-85` |
