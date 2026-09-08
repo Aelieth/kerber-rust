@@ -156,6 +156,29 @@ fn method_edata(etypes: &[i32]) -> Vec<u8> {
     encode(&md).expect("METHOD-DATA")
 }
 
+fn method_edata_hw(etypes: &[i32]) -> Vec<u8> {
+    let info: EtypeInfo2 = etypes
+        .iter()
+        .map(|&etype| EtypeInfo2Entry {
+            etype,
+            salt: None,
+            s2kparams: None,
+        })
+        .collect();
+    let info_der = encode(&info).expect("ETYPE-INFO2");
+    let md: MethodData = vec![
+        PaData {
+            padata_type: pa::FX_FAST,
+            padata_value: vec![].into(),
+        },
+        PaData {
+            padata_type: pa::ETYPE_INFO2,
+            padata_value: info_der.into(),
+        },
+    ];
+    encode(&md).expect("METHOD-DATA")
+}
+
 #[test]
 fn etype_info2_requires_exact_etype_set() {
     // MIT's hint (get_preauth_hint_list) and Rust's both list one entry for
@@ -179,6 +202,11 @@ fn etype_info2_requires_exact_etype_set() {
     let mit_extra = method_edata(&[18, 23]);
     compare_preauth_e_data(Some(&rust_one), Some(&mit_extra))
         .expect_err("MIT etype outside the Rust set must fail");
+
+    let hw = method_edata_hw(&[18]);
+    compare_preauth_e_data(Some(&hw), Some(&hw)).expect("hw_only both omit ENC_TIMESTAMP");
+    compare_preauth_e_data(Some(&one), Some(&hw))
+        .expect_err("ENC_TIMESTAMP present on only one side");
 }
 
 #[test]

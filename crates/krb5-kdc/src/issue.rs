@@ -22,6 +22,7 @@ use crate::ad::{
 };
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
+use crate::kdb_dump::TL_LAST_ADMIN_UNLOCK;
 use crate::plugins::{PreauthAction, current_policy, run_as_preauth};
 use crate::preauth::{
     FastOk, fast_finished, find_pa, make_cookie, proto, proto_d, unwrap_fast, unwrap_fast_tgs,
@@ -342,7 +343,7 @@ fn issue_as_body(
     validate_as_request(store, &client, &server, body)?;
     let session_etype = select_session_keytype(&server, &body.etype, store.policy())?;
     let ckey = select_client_key(&client, &body.etype)
-        .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, status::CANT_FIND_CLIENT_KEY))?;
+        .ok_or_else(|| proto(err::ETYPE_NOSUPP, status::CANT_FIND_CLIENT_KEY))?;
     let etype = ckey.etype;
     let encoded_body;
     let body_der: &[u8] = if let Some(slice) = raw.and_then(kdc_req_body_der) {
@@ -429,7 +430,12 @@ fn issue_as_body(
         return Err(preauth_required(store, &client, ckey));
     }
     if attr(&client, KDB_REQUIRES_HW_AUTH) && !hw_preauth {
-        return Err(proto(err::PREAUTH_FAILED, status::NO_HW_PREAUTH));
+        return Err(Error::Protocol {
+            code: err::PREAUTH_REQUIRED,
+            text: Some(status::NEEDED_HW_PREAUTH.to_owned()),
+            e_data: Some(preauth_hint_edata(store, &client, ckey)),
+            detail: None,
+        });
     }
     // do_as_req.c:717-724: REQUEST_ANONYMOUS demands the anonymous principal;
     // a named client asking for anonymity is KRB5KDC_ERR_BADOPTION
@@ -444,7 +450,7 @@ fn issue_as_body(
 
     let skey = server
         .first_current_key()
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::FINDING_SERVER_KEY))?;
+        .ok_or_else(|| proto(err::GENERIC, status::FINDING_SERVER_KEY))?;
     if let Some(from) = &body.from
         && from.unix_seconds() > body.till.unix_seconds()
     {
@@ -489,10 +495,10 @@ fn issue_as_body(
     let include_pac = !attr(&server, KDB_NO_AUTH_DATA_REQUIRED);
     let krbtgt_p = store
         .fetch_krbtgt()?
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::GET_LOCAL_TGT))?;
+        .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
     let krbtgt_key = krbtgt_p
         .best_key()
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::GET_LOCAL_TGT))?;
+        .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
     let pac_kdc = if sname.is_krbtgt_for(store.realm()) {
         skey.key.clone()
     } else {
@@ -937,7 +943,7 @@ fn issue_tgs_body(
     } else {
         let skey = server
             .first_current_key()
-            .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::FINDING_SERVER_KEY))?;
+            .ok_or_else(|| proto(err::GENERIC, status::FINDING_SERVER_KEY))?;
         (skey.key.clone(), skey.kvno, skey.etype)
     };
     let mut transited = enc_tkt.transited.clone();
@@ -1063,10 +1069,10 @@ fn issue_tgs_body(
     }
     let krbtgt_p = store
         .fetch_krbtgt()?
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::GET_LOCAL_TGT))?;
+        .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
     let krbtgt_key = krbtgt_p
         .best_key()
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::GET_LOCAL_TGT))?;
+        .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
     // Referral TGT PAC 16/19/7 must be keyed with the inter-realm key
     // the foreign KDC holds (Windows TDO inbound), not the local krbtgt.
     let pac_kdc = if sname.is_krbtgt() && !sname.is_krbtgt_for(store.realm()) {
@@ -2101,6 +2107,13 @@ fn attr(p: &Principal, bit: u32) -> bool {
     p.attributes & bit != 0
 }
 
+fn last_admin_unlock(p: &Principal) -> Option<u32> {
+    // KRB5_TL_LAST_ADMIN_UNLOCK (0x0700): 4-byte LE unix timestamp.
+    let tl = p.tl_data.iter().find(|t| t.ty == TL_LAST_ADMIN_UNLOCK)?;
+    let b: [u8; 4] = tl.contents.get(..4)?.try_into().ok()?;
+    Some(u32::from_le_bytes(b))
+}
+
 /// MIT `validate_as_request` (`kdc_util.c:716-800`): the AS policy checks in
 /// MIT's order, run after the client/server lookups and before preauth
 /// (`do_as_req.c:630` precedes `check_padata` at `:758`), so a preauth-required
@@ -2161,6 +2174,11 @@ fn validate_as_request(
     let count_locked = max_fail > 0 && fails >= max_fail;
     let in_lockout_window =
         duration == 0 || (last_failed > 0 && now < last_failed.saturating_add(duration));
+    if let Some(unlock) = last_admin_unlock(client)
+        && last_failed <= unlock
+    {
+        return current_policy().check_as(store, client);
+    }
     if count_locked && in_lockout_window {
         return Err(proto(err::CLIENT_REVOKED, status::CLIENT_LOCKED_OUT));
     }

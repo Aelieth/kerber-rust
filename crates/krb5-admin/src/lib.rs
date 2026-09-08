@@ -75,6 +75,8 @@ pub struct KadminArgs {
     pub attr_clear: u32,
     /// `addprinc -e` keysalt list.
     pub etypes: Vec<EncryptionType>,
+    /// `modprinc -unlock`.
+    pub unlock: bool,
 }
 
 /// Parsed `kadmin.local addpol` operands (`kadmin.c:1600-1689`).
@@ -155,6 +157,7 @@ pub fn parse_kadmin_args(parts: &[&str]) -> Result<KadminArgs, String> {
         match p {
             "-randkey" => out.randkey = true,
             "-norandkey" => out.norandkey = true,
+            "-unlock" => out.unlock = true,
             "-pw" => {
                 i += 1;
                 out.pw = Some(
@@ -645,6 +648,20 @@ impl<'a> AdminSession<'a> {
                 .map_err(Error::from)?;
         }
         Ok(())
+    }
+
+    /// `modprinc -unlock`.
+    ///
+    /// # Errors
+    ///
+    /// ACL or not found.
+    pub fn admin_unlock(&mut self, name: &PrincipalName) -> Result<(), Error> {
+        self.reload()?;
+        let tid = self.target_id(name);
+        self.acl
+            .check(&self.actor, AdminOp::Modify, Some(&tid))
+            .map_err(Error::from)?;
+        self.store.admin_unlock(name).map_err(Error::from)
     }
 
     /// `modprinc -policy`.
@@ -2809,6 +2826,8 @@ mod tests {
         let a = parse_kadmin_args(&["-e", "rc4-hmac:normal", "-pw", "x", "rc4user"]).unwrap();
         assert_eq!(a.etypes, vec![EncryptionType::Rc4Hmac]);
         assert_eq!(a.name, "rc4user");
+        let a = parse_kadmin_args(&["-unlock", "locked"]).unwrap();
+        assert!(a.unlock);
         let a = parse_kadmin_args(&["+0x1ffffffff", "wide"]).unwrap();
         assert_eq!(a.attr_set, 0xffff_ffff);
         assert_eq!(a.name, "wide");

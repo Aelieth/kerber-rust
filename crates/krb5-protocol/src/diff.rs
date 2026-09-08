@@ -129,14 +129,21 @@ pub fn compare_preauth_e_data(a: Option<&[u8]>, b: Option<&[u8]>) -> Result<(), 
     let mb: MethodData = decode(b).map_err(|e| DiffError(format!("mit METHOD-DATA: {e}")))?;
     let ta = pa_types(&ma);
     let tb = pa_types(&mb);
-    // ENC_TIMESTAMP + ETYPE-INFO2 are the comparable hints. Extra types are
-    // mechanism ads (Rust SPAKE 151 vs MIT FAST 133/136).
-    for need in [pa::ENC_TIMESTAMP, pa::ETYPE_INFO2] {
-        if !ta.contains(&need) || !tb.contains(&need) {
-            return Err(DiffError(format!(
-                "PREAUTH METHOD-DATA missing {need} rust={ta:?} mit={tb:?}"
-            )));
-        }
+    // ETYPE-INFO2 is always in get_preauth_hint_list. ENC_TIMESTAMP is a
+    // module hint skipped under hw_only (`kdc_preauth.c:956-957`); both
+    // sides must agree on whether it is present.
+    if !ta.contains(&pa::ETYPE_INFO2) || !tb.contains(&pa::ETYPE_INFO2) {
+        return Err(DiffError(format!(
+            "PREAUTH METHOD-DATA missing {} rust={ta:?} mit={tb:?}",
+            pa::ETYPE_INFO2
+        )));
+    }
+    let a2 = ta.contains(&pa::ENC_TIMESTAMP);
+    let b2 = tb.contains(&pa::ENC_TIMESTAMP);
+    if a2 != b2 {
+        return Err(DiffError(format!(
+            "PREAUTH METHOD-DATA ENC_TIMESTAMP rust={ta:?} mit={tb:?}"
+        )));
     }
     let ea = etype_info2_etypes(&ma)?;
     let eb = etype_info2_etypes(&mb)?;

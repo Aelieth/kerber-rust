@@ -35,6 +35,8 @@ pub const KDB_DUMP_VERSION_R18: u32 = 6;
 
 /// `KRB5_TL_LAST_PWD_CHANGE`.
 pub const TL_LAST_PWD_CHANGE: i32 = 1;
+/// `KRB5_TL_LAST_ADMIN_UNLOCK` (0x0700): 4-byte LE unix timestamp.
+pub const TL_LAST_ADMIN_UNLOCK: i32 = 0x0700;
 /// `KRB5_TL_MOD_PRINC`.
 pub const TL_MOD_PRINC: i32 = 2;
 /// `KRB5_TL_KADM_DATA`.

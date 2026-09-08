@@ -651,6 +651,9 @@ fn apply_optional_fields(
     if let Some(pol) = &a.policy {
         sess.set_policy(name, pol).map_err(|e| e.to_string())?;
     }
+    if a.unlock {
+        sess.admin_unlock(name).map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 

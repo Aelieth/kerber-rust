@@ -2329,6 +2329,94 @@ if echo "$MIT_ESCDENY" | grep -q 'user@KERBER.TEST'; then
     exit 1
 fi
 
+echo "==== MIT kadmin modprinc -unlock against Rust kadmind ===="
+docker exec "$NAME" sh -c '
+for comm in /proc/[0-9]*/comm; do
+    [ -f "$comm" ] || continue
+    read -r name < "$comm" || continue
+    if [ "$name" = "krb5-kadmind" ]; then
+        pid=${comm#/proc/}
+        pid=${pid%/comm}
+        kill "$pid" 2>/dev/null || true
+    fi
+done
+'
+sleep 0.4
+docker exec "$NAME" sh -c 'printf "%s\n" "admin@KERBER.TEST *" > /tmp/kadm5.acl'
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+    "$NAME" sh -c '/tmp/krb5-kadmind 127.0.0.1:749 >/tmp/kadmind-unlock.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/kadmind-unlock.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kadmind-unlock.log >&2 || true
+    log "kadmin.gate" "error" ',"error":"kadmind did not listen for unlock"'
+    exit 1
+fi
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addpol -maxfailure 1 -lockoutduration 0s unlockpol'
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw unlock-secret -policy unlockpol unlocku'
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" sh -c 'printf "wrong-secret\n" | kinit unlocku@KERBER.TEST' >/dev/null 2>&1 || true
+LOCKED="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" sh -c 'printf "unlock-secret\n" | kinit unlocku@KERBER.TEST' 2>&1 || true)"
+echo "$LOCKED"
+echo "$LOCKED" | grep -qiE 'revoked|locked out|CLIENT_REVOKED' || {
+    echo "unlocku was not locked after one failure: $LOCKED" >&2
+    exit 1
+}
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'modprinc -unlock unlocku'
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" sh -c 'printf "unlock-secret\n" | kinit unlocku@KERBER.TEST'
+UNL="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" klist)"
+echo "$UNL"
+echo "$UNL" | grep -q 'unlocku@KERBER.TEST'
+docker exec -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" /tmp/krb5-kdb dump /tmp/unlock.dump
+docker exec "$NAME" grep unlocku /tmp/unlock.dump | grep -F $'\t1792\t' || {
+    echo "Rust dump missing TL 1792 on unlocku" >&2
+    docker exec "$NAME" grep unlocku /tmp/unlock.dump >&2 || true
+    exit 1
+}
+
+echo "==== MIT kadmin modprinc -unlock against MIT kadmind ===="
+docker exec "$NAME_MIT" kadmin.local -q 'addpol -maxfailure 1 -lockoutduration 0s -failurecountinterval 0s unlockpol'
+docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw unlock-secret -policy unlockpol +requires_preauth unlocku'
+docker exec "$NAME_MIT" kadmin.local -q 'getprinc unlocku'
+MIT_WRONG="$(docker exec "$NAME_MIT" sh -c 'printf "wrong-secret\n" | kinit unlocku@KERBER.TEST' 2>&1 || true)"
+echo "$MIT_WRONG"
+docker exec "$NAME_MIT" kadmin.local -q 'getprinc unlocku'
+MIT_LOCKED="$(docker exec "$NAME_MIT" sh -c 'printf "unlock-secret\n" | kinit unlocku@KERBER.TEST' 2>&1 || true)"
+echo "$MIT_LOCKED"
+echo "$MIT_LOCKED" | grep -qiE 'revoked|locked out|CLIENT_REVOKED' || {
+    echo "MIT unlocku was not locked after one failure: $MIT_LOCKED" >&2
+    exit 1
+}
+docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'modprinc -unlock unlocku'
+docker exec "$NAME_MIT" kdestroy -A >/dev/null 2>&1 || true
+docker exec "$NAME_MIT" sh -c 'printf "unlock-secret\n" | kinit unlocku@KERBER.TEST'
+MIT_UNL="$(docker exec "$NAME_MIT" klist)"
+echo "$MIT_UNL"
+echo "$MIT_UNL" | grep -q 'unlocku@KERBER.TEST'
+docker exec "$NAME_MIT" kdb5_util dump /tmp/unlock-mit.dump
+docker exec "$NAME_MIT" grep unlocku /tmp/unlock-mit.dump | grep -F $'\t1792\t' || {
+    echo "MIT dump missing TL 1792 on unlocku" >&2
+    docker exec "$NAME_MIT" grep unlocku /tmp/unlock-mit.dump >&2 || true
+    exit 1
+}
+
 echo "==== glob lists: Rust kadmind vs MIT kadmind ===="
 diff "$SCRATCH/glob-rust.txt" "$SCRATCH/glob-mit.txt" || { echo "glob lists differ between the Rust kadmind and MIT kadmind" >&2; exit 1; }
 

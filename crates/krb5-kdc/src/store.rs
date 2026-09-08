@@ -39,8 +39,8 @@ pub const RID_FIRST_USER: u32 = 1000;
 use crate::acl::{Acl, AdminOp, Restrictions};
 use crate::error::Error;
 use crate::kdb_dump::{
-    TL_ALIAS_TARGET, TL_KADM_DATA, TL_KERBER_HIST, TL_KERBER_POLICY, TL_LAST_PWD_CHANGE,
-    TL_MOD_PRINC,
+    TL_ALIAS_TARGET, TL_KADM_DATA, TL_KERBER_HIST, TL_KERBER_POLICY, TL_LAST_ADMIN_UNLOCK,
+    TL_LAST_PWD_CHANGE, TL_MOD_PRINC,
 };
 use crate::osa::{INITIAL_HIST_KVNO, KADM5_POLICY, OsaKeyData, OsaPrincEnt};
 
@@ -1530,6 +1530,87 @@ impl PrincipalStore {
         }
         let snap = p.clone();
         self.note_ulog(id, false, Some(snap));
+        self.save_if_configured()
+    }
+
+    /// MIT `unlock_princ`: fail_auth_count = 0 and `KRB5_TL_LAST_ADMIN_UNLOCK`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    pub fn admin_unlock(&mut self, name: &PrincipalName) -> Result<(), Error> {
+        self.admin_unlock_in(name, &self.realm.clone())
+    }
+
+    /// [`Self::admin_unlock`] for `name@princ_realm`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    pub fn admin_unlock_in(
+        &mut self,
+        name: &PrincipalName,
+        princ_realm: &str,
+    ) -> Result<(), Error> {
+        let id = self.canonical_id(name, princ_realm)?;
+        let now = unix_now();
+        {
+            let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+            p.fail_auth_count = 0;
+            p.tl_data.retain(|t| t.ty != TL_LAST_ADMIN_UNLOCK);
+            p.tl_data.push(TlData {
+                ty: TL_LAST_ADMIN_UNLOCK,
+                contents: now.to_le_bytes().to_vec(),
+            });
+        }
+        self.clear_as_fail_count(name);
+        let snap = self.map.get(&id).cloned();
+        self.note_ulog(id, false, snap);
+        self.save_if_configured()
+    }
+
+    /// Zero `fail_auth_count` without rewriting TL data (`kadm5_modify_principal`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    pub fn clear_fail_auth_count_in(
+        &mut self,
+        name: &PrincipalName,
+        princ_realm: &str,
+    ) -> Result<(), Error> {
+        let id = self.canonical_id(name, princ_realm)?;
+        {
+            let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+            p.fail_auth_count = 0;
+        }
+        self.clear_as_fail_count(name);
+        let snap = self.map.get(&id).cloned();
+        self.note_ulog(id, false, snap);
+        self.save_if_configured()
+    }
+
+    /// Merge client-supplied `tl_data` (`kadm5_modify_principal` `KADM5_TL_DATA`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    pub fn merge_tl_data_in(
+        &mut self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        tls: &[TlData],
+    ) -> Result<(), Error> {
+        let id = self.canonical_id(name, princ_realm)?;
+        {
+            let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+            for tl in tls {
+                p.tl_data.retain(|t| t.ty != tl.ty);
+                p.tl_data.push(tl.clone());
+            }
+        }
+        let snap = self.map.get(&id).cloned();
+        self.note_ulog(id, false, snap);
         self.save_if_configured()
     }
 
@@ -4112,5 +4193,213 @@ mod tests {
             let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755));
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn as_cant_find_client_key_is_etype_nosupp() {
+        use krb5_types::err;
+        let (mut store, _) = crate::bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+        let mut p = store.get_name(&user).unwrap().clone();
+        p.keys
+            .retain(|k| k.etype == EncryptionType::Aes256CtsHmacSha384192);
+        p.requires_preauth = false;
+        p.attributes &= !KDB_REQUIRES_PRE_AUTH;
+        store.debug_insert(p);
+        let req = as_req_sname_etype(&user, 18).unwrap();
+        let err = crate::issue_as(&store, &req).unwrap_err();
+        match err {
+            Error::Protocol { code, text, .. } => {
+                assert_eq!(code, err::ETYPE_NOSUPP);
+                assert_eq!(text.as_deref(), Some("CANT_FIND_CLIENT_KEY"));
+            }
+            other => panic!("expected 14 CANT_FIND_CLIENT_KEY, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn as_no_server_key_is_finding_server_key() {
+        use krb5_protocol::{as_req, pa_enc_timestamp};
+        use krb5_types::err;
+        let (mut store, _) = crate::bootstrap_documented().unwrap();
+        let krbtgt = PrincipalName::krbtgt(crate::TEST_REALM);
+        let mut p = store.get_name(&krbtgt).unwrap().clone();
+        p.keys.clear();
+        store.debug_insert(p);
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+        let key = {
+            let u = store.get_name(&user).unwrap();
+            u.key_for(EncryptionType::Aes256CtsHmacSha196)
+                .unwrap()
+                .key
+                .clone()
+        };
+        let req = as_req(
+            user,
+            crate::TEST_REALM,
+            501,
+            Some(vec![pa_enc_timestamp(&key).unwrap()]),
+        )
+        .unwrap();
+        let err = crate::issue_as(&store, &req).unwrap_err();
+        match err {
+            Error::Protocol { code, text, .. } => {
+                assert_eq!(code, err::GENERIC);
+                assert_eq!(text.as_deref(), Some("FINDING_SERVER_KEY"));
+            }
+            other => panic!("expected 60 FINDING_SERVER_KEY, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn admin_unlock_clears_failcount_lockout() {
+        use krb5_protocol::{as_req, pa_enc_timestamp};
+        use krb5_types::err;
+        let (mut store, _) = crate::bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+        store.put_policy(NamedPolicy {
+            name: "lock".into(),
+            min_length: 1,
+            min_classes: 1,
+            history: 0,
+            max_fail: 1,
+            pw_failcnt_interval: 0,
+            pw_lockout_duration: 0,
+            pw_min_life: 0,
+            pw_max_life: 0,
+            allowed_keysalts: None,
+        });
+        store
+            .set_principal_policy(&user, Some("lock".into()))
+            .unwrap();
+        store.record_as_outcome(&user, false);
+        let key = store
+            .get_name(&user)
+            .unwrap()
+            .key_for(EncryptionType::Aes256CtsHmacSha196)
+            .unwrap()
+            .key
+            .clone();
+        let req = as_req(
+            user.clone(),
+            crate::TEST_REALM,
+            502,
+            Some(vec![pa_enc_timestamp(&key).unwrap()]),
+        )
+        .unwrap();
+        let err = crate::issue_as(&store, &req).unwrap_err();
+        match err {
+            Error::Protocol { code, text, .. } => {
+                assert_eq!(code, err::CLIENT_REVOKED);
+                assert_eq!(text.as_deref(), Some("CLIENT LOCKED OUT"));
+            }
+            other => panic!("expected 18 CLIENT LOCKED OUT, got {other:?}"),
+        }
+        store.admin_unlock(&user).unwrap();
+        crate::issue_as(&store, &req).expect("unlocked");
+        let p = store.get_name(&user).unwrap();
+        assert!(
+            p.tl_data
+                .iter()
+                .any(|t| t.ty == TL_LAST_ADMIN_UNLOCK && t.contents.len() == 4),
+            "dump-visible 1792"
+        );
+    }
+
+    #[test]
+    fn last_admin_unlock_skips_failcount_lockout() {
+        use krb5_protocol::{as_req, pa_enc_timestamp};
+        let (mut store, _) = crate::bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+        store.put_policy(NamedPolicy {
+            name: "lock".into(),
+            min_length: 1,
+            min_classes: 1,
+            history: 0,
+            max_fail: 1,
+            pw_failcnt_interval: 0,
+            pw_lockout_duration: 0,
+            pw_min_life: 0,
+            pw_max_life: 0,
+            allowed_keysalts: None,
+        });
+        store
+            .set_principal_policy(&user, Some("lock".into()))
+            .unwrap();
+        let mut p = store.get_name(&user).unwrap().clone();
+        p.fail_auth_count = 1;
+        p.last_failed = 100;
+        p.tl_data.retain(|t| t.ty != TL_LAST_ADMIN_UNLOCK);
+        p.tl_data.push(TlData {
+            ty: TL_LAST_ADMIN_UNLOCK,
+            contents: 200u32.to_le_bytes().to_vec(),
+        });
+        store.debug_insert(p);
+        let key = store
+            .get_name(&user)
+            .unwrap()
+            .key_for(EncryptionType::Aes256CtsHmacSha196)
+            .unwrap()
+            .key
+            .clone();
+        let req = as_req(
+            user,
+            crate::TEST_REALM,
+            504,
+            Some(vec![pa_enc_timestamp(&key).unwrap()]),
+        )
+        .unwrap();
+        crate::issue_as(&store, &req).expect("TL 1792 after last_failed");
+    }
+
+    #[test]
+    fn as_missing_krbtgt_is_get_local_tgt() {
+        use krb5_protocol::{as_req_sname, pa_enc_timestamp};
+        use krb5_types::err;
+        let (mut store, _) = crate::bootstrap_documented().unwrap();
+        let krbtgt = PrincipalName::krbtgt(crate::TEST_REALM);
+        let mut p = store.get_name(&krbtgt).unwrap().clone();
+        p.keys.clear();
+        store.debug_insert(p);
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+        let host = crate::documented_host();
+        let key = store
+            .get_name(&user)
+            .unwrap()
+            .key_for(EncryptionType::Aes256CtsHmacSha196)
+            .unwrap()
+            .key
+            .clone();
+        let req = as_req_sname(
+            user,
+            crate::TEST_REALM,
+            503,
+            Some(vec![pa_enc_timestamp(&key).unwrap()]),
+            host,
+            vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
+        )
+        .unwrap();
+        let err = crate::issue_as(&store, &req).unwrap_err();
+        match err {
+            Error::Protocol { code, text, .. } => {
+                assert_eq!(code, err::GENERIC);
+                assert_eq!(text.as_deref(), Some("GET_LOCAL_TGT"));
+            }
+            other => panic!("expected 60 GET_LOCAL_TGT, got {other:?}"),
+        }
+    }
+
+    fn as_req_sname_etype(
+        cname: &PrincipalName,
+        etype: i32,
+    ) -> Result<krb5_types::AsReq, krb5_protocol::Error> {
+        krb5_protocol::as_req_sname(
+            cname.clone(),
+            crate::TEST_REALM,
+            500,
+            None,
+            PrincipalName::krbtgt(crate::TEST_REALM),
+            vec![etype],
+        )
     }
 }

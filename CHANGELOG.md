@@ -32,6 +32,12 @@ this project uses semantic versioning once a crate is published.
   labeled kvno (kvno 0 retries ≤ 3). diffsend `as-bad-msg-type`,
   `as-bad-pvno`, `tgs-bad-msg-type`, `as-service-not-allowed`,
   `tgs-ap-options`, `tgs-header-kvno-zero`.
+- **kdc/admin.** AS error codes match `errcode_to_protocol`: missing HW
+  preauth is 25 `NEEDED_HW_PREAUTH` with the hw_only hint list; no
+  matching client key is 14 `CANT_FIND_CLIENT_KEY`; no server/krbtgt
+  key is 60 `FINDING_SERVER_KEY` / `GET_LOCAL_TGT`. `modprinc -unlock`
+  stores `KRB5_TL_LAST_ADMIN_UNLOCK` (1792, 4-byte LE) and zeroes
+  fail_auth_count. diffsend `as-hw-preauth`.
 
 ### Round-up R2 (re-audit fixes)
 

@@ -54,6 +54,7 @@ DIFFSEND_CASES = frozenset(
         "as-service-not-allowed",
         "tgs-ap-options",
         "tgs-header-kvno-zero",
+        "as-hw-preauth",
     }
 )
 _LEDGER_GATE = re.compile(r"(?:scripts/)?([A-Za-z0-9._-]+-gate(?:\.sh)?)")
@@ -2038,7 +2039,7 @@ jobs:
     finally:
         subprocess.run(["rm", "-rf", str(fake_mit)], check=False)
     _must_die(check_ledger_anchors, _row("krb5-kdc/plugins.rs advertise", verdict="absent"))
-    check_ledger_anchors(_row("krb5-kdc/plugins.rs advertise:100", verdict="absent"))
+    check_ledger_anchors(_row("krb5-kdc/plugins.rs advertise:107", verdict="absent"))
     _must_die(check_ledger_anchors, _row("krb5-kdc/plugins.rs advertise:1", verdict="absent"))
     _must_die(check_ledger_anchors, _row("krb5-kdc/listen.rs handle_tcp", "no status word"))
     _must_die(check_ledger_anchors, _row("krb5-kdc/listen.rs handle_tcp", proof="`no_such_unit_anywhere`"))

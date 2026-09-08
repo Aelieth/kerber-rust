@@ -9,7 +9,7 @@ use krb5_types::{PaData, PrincipalName, pa};
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::preauth::{SpakeStep, process_pkinit, process_spake};
-use crate::store::Principal;
+use crate::store::{KDB_REQUIRES_HW_AUTH, Principal};
 
 /// Outcome of one preauth module on an AS-REQ.
 #[derive(Debug)]
@@ -37,6 +37,11 @@ pub trait KdcPreauth: Send + Sync {
     fn pa_types(&self) -> &'static [i32];
     /// METHOD-DATA offers for PREAUTH_REQUIRED.
     fn advertise(&self, store: &dyn PrincipalRead, _client: &Principal) -> Vec<PaData>;
+    /// MIT `PA_HARDWARE` (`kdcpreauth_plugin.h`). FAST is still advertised
+    /// under `hw_only` (`kdc_preauth.c:999-1001`).
+    fn hardware(&self) -> bool {
+        false
+    }
     /// Process AS padata. `None` = not this module's request.
     ///
     /// # Errors
@@ -92,6 +97,9 @@ impl KdcPreauth for FastMod {
 impl KdcPreauth for PkinitMod {
     fn name(&self) -> &'static str {
         "pkinit"
+    }
+    fn hardware(&self) -> bool {
+        true
     }
     fn pa_types(&self) -> &'static [i32] {
         &[pa::PK_AS_REQ]
@@ -329,8 +337,12 @@ pub fn preauth_modules() -> Vec<Arc<dyn KdcPreauth>> {
 
 /// METHOD-DATA from every registered module plus ETYPE-INFO2 from the caller.
 pub fn advertise_preauth(store: &dyn PrincipalRead, client: &Principal) -> Vec<PaData> {
+    let hw_only = client.attributes & KDB_REQUIRES_HW_AUTH != 0;
     let mut out = Vec::new();
     for m in preauth_modules() {
+        if hw_only && m.name() != "fast" && !m.hardware() {
+            continue;
+        }
         out.extend(m.advertise(store, client));
     }
     out

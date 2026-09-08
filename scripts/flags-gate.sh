@@ -179,7 +179,7 @@ echo "==== REQUIRES_HW_AUTH: kinit PREAUTH_FAILED ===="
 kadmin_q 'modprinc +requires_hwauth flaguser'
 HW="$(kinit_try 'printf "flag-secret\n" | kinit flaguser@KERBER.TEST')"
 echo "$HW"
-echo "$HW" | grep -qiE "Password incorrect|preauthentication failed|PREAUTH_FAILED|Generic error"
+echo "$HW" | grep -qiE "Password incorrect|preauthentication fail|PREAUTH_FAILED|Generic error|Additional pre-authentication required|NEEDED_HW_PREAUTH"
 if echo "$HW" | grep -qiE 'Authenticated|Ticket cache'; then
     echo "REQUIRES_HW_AUTH principal obtained a ticket" >&2
     exit 1

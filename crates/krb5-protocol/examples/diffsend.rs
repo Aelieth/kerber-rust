@@ -1103,7 +1103,16 @@ fn run() -> Result<(), String> {
         &encode(&z_tgs).map_err(|e| e.to_string())?,
     )?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":28}}"#);
+    let hwuser = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["hwuser"]);
+    expect_error(
+        &cfg,
+        "as-hw-preauth",
+        &encode(&as_req(hwuser, realm, 0x1000_0029, None).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?,
+        err::PREAUTH_REQUIRED,
+    )?;
+
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":29}}"#);
     Ok(())
 }
 

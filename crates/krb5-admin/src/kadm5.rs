@@ -149,6 +149,9 @@ const KADM5_SETKEY_BAD_KVNO: u32 = 43_787_579;
 /// MIT `ovk` 60 (`KADM5_AUTH_EXTRACT`).
 const KADM5_AUTH_EXTRACT: u32 = 43_787_580;
 const KADM5_ATTRIBUTES: u32 = 0x0000_0010;
+const KADM5_FAIL_AUTH_COUNT: u32 = 0x0001_0000;
+const KADM5_TL_DATA: u32 = 0x0004_0000;
+const KADM5_BAD_SERVER_PARAMS: u32 = 43_787_563;
 const KADM5_MAX_LIFE: u32 = 0x0000_0020;
 const KADM5_PRINC_EXPIRE_TIME: u32 = 0x0000_0002;
 const KADM5_PW_EXPIRATION: u32 = 0x0000_0004;
@@ -2340,6 +2343,19 @@ fn dispatch_kadm5_ticket(
                 clear_policy,
             ) {
                 Ok(()) => {
+                    if mask & KADM5_FAIL_AUTH_COUNT != 0 && fields.fail_auth_count != 0 {
+                        return Ok(generic_ret(API_V2, KADM5_BAD_SERVER_PARAMS));
+                    }
+                    if mask & KADM5_TL_DATA != 0
+                        && let Err(e) = g.merge_tl_data_in(&name, &req, &fields.tl_data)
+                    {
+                        return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
+                    }
+                    if mask & KADM5_FAIL_AUTH_COUNT != 0
+                        && let Err(e) = g.clear_fail_auth_count_in(&name, &req)
+                    {
+                        return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
+                    }
                     if let Some(rs) = acl.restrictions(actor, Some(&tid))
                         && let Err(e) = g.impose_acl_restrictions_in(&name, &req, rs)
                     {
@@ -3471,6 +3487,8 @@ struct ModFields {
     max_life: u32,
     attributes: u32,
     policy: Option<String>,
+    fail_auth_count: u32,
+    tl_data: Vec<TlData>,
 }
 
 fn parse_modify(args: &[u8]) -> Result<(PrincipalName, String, u32, ModFields), Error> {
@@ -3494,18 +3512,20 @@ fn parse_modify(args: &[u8]) -> Result<(PrincipalName, String, u32, ModFields), 
     r.u32()?; // max_rlife
     r.u32()?; // last_success
     r.u32()?; // last_failed
-    r.u32()?; // fail_auth_count
+    let fail_auth_count = r.u32()?;
     let n_key = r.u32()?;
     let _n_tl = r.u32()?;
     let tl_null = r.u32()?;
+    let mut tl_data = Vec::new();
     if tl_null == 0 {
         loop {
             let more = r.u32()?;
             if more == 0 {
                 break;
             }
-            r.u32()?;
-            let _ = r.opaque()?;
+            let ty = r.u32()?.cast_signed();
+            let contents = r.opaque()?;
+            tl_data.push(TlData { ty, contents });
         }
     }
     let n = r.u32().unwrap_or(0);
@@ -3529,6 +3549,8 @@ fn parse_modify(args: &[u8]) -> Result<(PrincipalName, String, u32, ModFields), 
             max_life,
             attributes,
             policy,
+            fail_auth_count,
+            tl_data,
         },
     ))
 }

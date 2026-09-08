@@ -14,8 +14,8 @@ use krb5_kdc::{
 use krb5_protocol::Keytab;
 use krb5_protocol::{ReplayCache, as_req_sname, build_ap_req, tgs_req_ex, verify_ap_req};
 use krb5_types::{
-    EncKdcRepPart, EncTicketPart, KdcOptions, KerberosTime, KrbError, OctetString, PrincipalName,
-    ascii, err, flag_bit, ku,
+    EncKdcRepPart, EncTicketPart, KdcOptions, KerberosTime, KrbError, MethodData, OctetString,
+    PrincipalName, ascii, err, flag_bit, ku, pa,
 };
 
 fn client_key() -> ProtocolKey {
@@ -1324,7 +1324,24 @@ fn as_hw_auth_required_rejects_enc_ts() {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     or_attr(&mut store, &cname, KDB_REQUIRES_HW_AUTH);
     let err = krb5_kdc::issue_as(&store, &user_as_req(63)).unwrap_err();
-    assert_eq!(proto_code(err), err::PREAUTH_FAILED);
+    match err {
+        Error::Protocol {
+            code, text, e_data, ..
+        } => {
+            assert_eq!(code, err::PREAUTH_REQUIRED);
+            assert_eq!(text.as_deref(), Some("NEEDED_HW_PREAUTH"));
+            let method: MethodData =
+                decode(e_data.as_deref().expect("hint e_data")).expect("METHOD-DATA");
+            let types: Vec<i32> = method.iter().map(|p| p.padata_type).collect();
+            assert!(types.contains(&pa::FX_FAST), "{types:?}");
+            assert!(types.contains(&pa::ETYPE_INFO2), "{types:?}");
+            assert!(
+                !types.contains(&pa::ENC_TIMESTAMP) && !types.contains(&pa::SPAKE),
+                "hw_only skips non-hardware modules: {types:?}"
+            );
+        }
+        other => panic!("expected 25 NEEDED_HW_PREAUTH, got {other:?}"),
+    }
 }
 
 #[test]
