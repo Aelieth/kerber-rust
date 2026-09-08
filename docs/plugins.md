@@ -30,9 +30,11 @@ circular update log. kadmind serves MIT program **100423**
 MIT `kdb_incr_update_t` over RPCSEC_GSS (`krb5-iprop-pull` or
 `iprop_poll_once`). `kdb_last_t` must echo the dump-header
 timestamp or MIT returns `UPDATE_FULL_RESYNC_NEEDED`. Incremental
-kdbe decode leaves `key_history` empty (private `TL_KERBER_HIST`
-`0x4B04` over MIT kdbe is interop-sensitive). History depth
-propagates via full-resync dump, not serial-delta iprop.
+kdbe carries the password history as MIT's `AT_PW_HIST` entries plus
+the `osa_princ_ent_rec` record inside `AT_TL_DATA` (`KRB5_TL_KADM_DATA`),
+decrypted under the `kadmin/history` key on apply (`scripts/iprop-gate.sh`
+history cell); policies themselves reach a replica only by full resync,
+as with MIT (`kdb5.c` logs principals only).
 
 Gates: `scripts/policy-gate.sh` (MIT `kadmin` policies + `kinit`
 `CLIENT_REVOKED`, minclasses 5, lockout time, history-N);

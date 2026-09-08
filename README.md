@@ -94,10 +94,13 @@ gated against real MIT before it counts as done:
 | **G8** | **ccache breadth — landed.** FILE/DIR/MEMORY/KCM; `KEYRING:` is rejected (`Unknown credential cache type`). Gates: `ccache-gate`, `kcm-gate` |
 | **G9** | **Config breadth — landed.** `[capaths]`, key `[libdefaults]` knobs, `include`/`includedir`. Gates: `capaths-transit-gate`, `knobs-gate`, `config-include-gate` |
 
-G5 (GSS) and G8 (KEYRING ccache) are hard requirements: kerber-rust is meant
-to host real client networks that already use SSH GSSAPI delegation, HTTP
-`Negotiate`, NFSv4 `RPCSEC_GSS`, and KEYRING-backed tickets. Beyond 1.1 lies
-the pure-Rust KDC embed into [KLLDAP](docs/integration-klldap.md).
+G5 (GSS) is a hard requirement: kerber-rust is meant to host real client
+networks that already use SSH GSSAPI delegation, HTTP `Negotiate`, and NFSv4
+`RPCSEC_GSS`. `KEYRING:` ccaches are a post-embed item (kernel keyrings need
+a shim under `forbid(unsafe_code)`; the fleet default is FILE, see
+[docs/kcm-nfs-verdict.md](docs/kcm-nfs-verdict.md)), so `KEYRING:` is refused
+as an unknown cache type until then. Beyond 1.1 lies the pure-Rust KDC embed
+into [KLLDAP](docs/integration-klldap.md).
 
 ## Build and test
 
