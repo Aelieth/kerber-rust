@@ -8,10 +8,10 @@ use std::process::Command;
 
 use krb5_crypto::{EncryptionType, KeyUsage, kdb_decrypt_key, string_to_key};
 use krb5_kdc::{
-    KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_TGT_BASED, KDB_DUMP_VERSION, KDB_LOCKDOWN_KEYS,
-    KDB_PWCHANGE_SERVICE, KDB_REQUIRES_PRE_AUTH, TL_LAST_PWD_CHANGE, TL_MOD_PRINC,
-    bootstrap_documented, dump_store, dump_store_iprop, load_dump, master_key_from_password,
-    parse_dump,
+    KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_DUMP_VERSION,
+    KDB_LOCKDOWN_KEYS, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_PRE_AUTH, TL_LAST_PWD_CHANGE,
+    TL_MOD_PRINC, bootstrap_documented, dump_store, dump_store_iprop, load_dump,
+    master_key_from_password, parse_dump,
 };
 use krb5_types::PrincipalName;
 
@@ -65,6 +65,7 @@ fn parse_golden_pins_header_field_order_and_requires_preauth() {
         "user@KERBER.TEST",
         "pauser@KERBER.TEST",
         "host/testhost.kerber.test@KERBER.TEST",
+        "nosvr@KERBER.TEST",
     ] {
         assert!(dump.princ(name).is_some(), "missing {name}");
     }
@@ -83,6 +84,8 @@ fn parse_golden_pins_header_field_order_and_requires_preauth() {
     let host = dump.princ("host/testhost.kerber.test@KERBER.TEST").unwrap();
     assert_eq!(host.db_len, 38);
     assert_eq!(host.keys.len(), 4);
+    let nosvr = dump.princ("nosvr@KERBER.TEST").unwrap();
+    assert_eq!(nosvr.attributes, KDB_DISALLOW_SVR);
 }
 
 #[test]
@@ -343,7 +346,7 @@ fn krb5_kdb_cli_load_and_dump_content() {
         "load stdout must report version: {load_out}"
     );
     assert!(
-        load_out.contains("principals=9"),
+        load_out.contains("principals=10"),
         "load stdout must report principal count: {load_out}"
     );
     assert!(load_out.contains("realm=KERBER.TEST"));

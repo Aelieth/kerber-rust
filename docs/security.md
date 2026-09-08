@@ -102,7 +102,11 @@ FAST armor decrypt binds keys to the armor `ticket.realm` (MIT
 `fast_util.c` `rd_req`); forged-realm armor is 35 `NOT_US` (`rd_req`).
 A local non-krbtgt armor ticket is 26 `SERVER_NOMATCH`.
 A presented-TGT krbtgt with `DISALLOW_SVR` or `DISALLOW_ALL_TIX` is 7
-`PROCESS_TGS` (`kdc_util.c:390-393`).
+`PROCESS_TGS` (`kdc_util.c:390-393`). AS `DISALLOW_SVR` is 27
+`SERVICE NOT ALLOWED` with no ENC-TKT-IN-SKEY exemption
+(`kdc_util.c:790-793`); that bit is already `INVALID AS OPTIONS` 13
+on an AS-REQ. Header-ticket decrypt uses only the labeled kvno, with
+at most three tries when kvno is 0 (`kdc_rd_ap_req`).
 
 Checksums are verified by the declared `cksumtype` (`verify_checksum.c`):
 type 0 substitutes the key's mandatory type, `output_size` is

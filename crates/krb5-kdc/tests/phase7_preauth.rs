@@ -9,11 +9,12 @@ use krb5_crypto::{
     encrypt, krb_fx_cf2, octetstring2key, p256_generate, prf_plus, string_to_key, unkeyed_checksum,
 };
 use krb5_kdc::{
-    Acl, AdminOp, Error, KDB_DISALLOW_ALL_TIX, KDB_OK_TO_AUTH_AS_DELEGATE, NamedPolicy, PacTicket,
-    PrincipalStore, RID_FIRST_USER, S2K_ITERS, TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM,
-    TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented, decrypt_ticket_part,
-    documented_admin_id, documented_host, pa_enc_timestamp, pac_from_ticket_part, sign_pac,
-    tgs_req, ticket_checksum_der, verify_pac, verify_pac_signatures, wrap_win2k_pac,
+    Acl, AdminOp, Error, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_SVR, KDB_OK_TO_AUTH_AS_DELEGATE,
+    NamedPolicy, PacTicket, PrincipalStore, RID_FIRST_USER, S2K_ITERS, TEST_ADMIN,
+    TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
+    decrypt_ticket_part, documented_admin_id, documented_host, pa_enc_timestamp,
+    pac_from_ticket_part, sign_pac, tgs_req, ticket_checksum_der, verify_pac,
+    verify_pac_signatures, wrap_win2k_pac,
 };
 use krb5_protocol::{
     apply_strengthen, armor_key, as_req_sname, attach_fast, attach_fast_with_options,
@@ -2535,6 +2536,179 @@ fn handle_request_spake_91_e_text_is_preauth_failed() {
 }
 
 #[test]
+fn as_bad_msg_type_is_validate_message_type() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let mut req = as_req(cname, TEST_REALM, 410, None).unwrap();
+    req.0.msg_type = krb5_types::KdcReq::MSG_TGS_REQ;
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("bad msg_type");
+    match err {
+        Error::Protocol {
+            code, text, e_data, ..
+        } => {
+            assert_eq!(code, err::GENERIC);
+            assert_eq!(text.as_deref(), Some("VALIDATE_MESSAGE_TYPE"));
+            assert!(e_data.is_none(), "no cookie");
+        }
+        other => panic!("expected 60 VALIDATE_MESSAGE_TYPE, got {other:?}"),
+    }
+    let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
+    assert_krb_error(&bytes, err::GENERIC, "VALIDATE_MESSAGE_TYPE");
+    let e: KrbError = decode(&bytes).expect("KRB-ERROR");
+    assert!(e.cname.is_some(), "requested cname echoed");
+    assert!(e.e_data.is_none(), "no cookie");
+}
+
+#[test]
+fn as_bad_pvno_is_dropped() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let mut req = as_req(cname, TEST_REALM, 411, None).unwrap();
+    req.0.pvno = 4;
+    let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
+    assert!(bytes.is_empty(), "pvno != 5 is dropped");
+}
+
+#[test]
+fn tgs_bad_msg_type_is_unknown_reason_without_cname() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 412);
+    let mut tgs = tgs_req(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        413,
+    )
+    .unwrap();
+    tgs.0.msg_type = krb5_types::KdcReq::MSG_AS_REQ;
+    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("bad TGS msg_type");
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::GENERIC);
+            assert_eq!(text.as_deref(), Some("UNKNOWN_REASON"));
+        }
+        other => panic!("expected 60 UNKNOWN_REASON, got {other:?}"),
+    }
+    let bytes = krb5_kdc::handle_request(&store, &encode(&tgs).expect("der")).expect("reply");
+    let e: KrbError = decode(&bytes).expect("KRB-ERROR");
+    assert_eq!(e.error_code, err::GENERIC);
+    let text = e
+        .e_text
+        .as_ref()
+        .and_then(|t| std::str::from_utf8(t.as_bytes()).ok());
+    assert_eq!(text, Some("UNKNOWN_REASON"));
+    assert!(e.cname.is_none(), "no cname");
+    assert_eq!(e.sname, documented_host());
+}
+
+#[test]
+fn tgs_ap_options_use_session_key_is_policy() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 414);
+    let mut tgs = tgs_req(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        415,
+    )
+    .unwrap();
+    let pa = tgs
+        .0
+        .padata
+        .as_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|p| p.padata_type == pa::TGS_REQ)
+        .expect("PA-TGS-REQ");
+    let mut ap: ApReq = decode(pa.padata_value.as_ref()).expect("ap");
+    ap.ap_options = krb5_types::ApOptions::mutual_required();
+    pa.padata_value = encode(&ap).expect("ap").into();
+    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("MUTUAL_REQUIRED");
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::POLICY);
+            assert_eq!(text.as_deref(), Some("PROCESS_TGS"));
+        }
+        other => panic!("expected 12 PROCESS_TGS, got {other:?}"),
+    }
+}
+
+#[test]
+fn as_disallow_svr_is_service_not_allowed() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let host = documented_host();
+    let attrs = store.get_name(&host).unwrap().attributes | KDB_DISALLOW_SVR;
+    store
+        .apply_admin_fields(&host, Some(attrs), None, None, None, None, false)
+        .unwrap();
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let req = as_req_sname(cname, TEST_REALM, 416, None, host, pref_etypes()).unwrap();
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("DISALLOW_SVR");
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::MUST_USE_USER2USER);
+            assert_eq!(text.as_deref(), Some("SERVICE NOT ALLOWED"));
+        }
+        other => panic!("expected 27 SERVICE NOT ALLOWED, got {other:?}"),
+    }
+}
+
+#[test]
+fn tgs_header_unknown_kvno_is_generic() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 417);
+    let mut tkt = issued.rep.0.ticket.clone();
+    tkt.enc_part.kvno = Some(99);
+    let tgs = tgs_req(
+        tkt,
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        418,
+    )
+    .unwrap();
+    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("unknown kvno");
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::GENERIC);
+            assert_eq!(text.as_deref(), Some("PROCESS_TGS"));
+        }
+        other => panic!("expected 60 PROCESS_TGS, got {other:?}"),
+    }
+}
+
+#[test]
+fn tgs_header_kvno_zero_issues() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 419);
+    let mut tkt = issued.rep.0.ticket.clone();
+    tkt.enc_part.kvno = Some(0);
+    let tgs = tgs_req(
+        tkt,
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        420,
+    )
+    .unwrap();
+    krb5_kdc::issue_tgs(&store, &tgs).expect("kvno 0 retries");
+}
+
+#[test]
 fn pkinit_advertised_in_method_data_when_ca_enabled() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     store.enable_pkinit_ca().expect("PKINIT CA");
@@ -2580,8 +2754,9 @@ fn ca_enabled_preauth_required_method_data_types() {
             pa::SPAKE,
             pa::ENC_TIMESTAMP,
             pa::ETYPE_INFO2,
+            pa::FX_COOKIE,
         ],
-        "CA-enabled METHOD-DATA types must pin [136, 16, 109, 151, 2, 19]"
+        "CA-enabled METHOD-DATA types must pin [136, 16, 109, 151, 2, 19, 133]"
     );
     let again = encode(&method).expect("re-encode");
     let round: MethodData = decode(&again).expect("decode encode");

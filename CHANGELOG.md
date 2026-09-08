@@ -23,6 +23,15 @@ this project uses semantic versioning once a crate is published.
   wrong-client cookies are ignored (`kdc_fast_read_cookie` returns 0).
   Empty module state is the 3-byte `MIT` cookie. TGS FAST errors carry
   no cookie.
+- **kdc.** AS/TGS entry validation matches `process_as_req` /
+  `gather_tgs_req_info` / `kdc_rd_ap_req`: AS `msg_type` ≠ 10 is 60
+  `VALIDATE_MESSAGE_TYPE`; pvno ≠ 5 is dropped; TGS `msg_type` ≠ 12 is
+  60 `UNKNOWN_REASON` with no cname; AS `DISALLOW_SVR` is 27 with no
+  ENC-TKT-IN-SKEY exemption; TGS AP-REQ `USE_SESSION_KEY` /
+  `MUTUAL_REQUIRED` is 12 `PROCESS_TGS`; header decrypt binds the
+  labeled kvno (kvno 0 retries ≤ 3). diffsend `as-bad-msg-type`,
+  `as-bad-pvno`, `tgs-bad-msg-type`, `as-service-not-allowed`,
+  `tgs-ap-options`, `tgs-header-kvno-zero`.
 
 ### Round-up R2 (re-audit fixes)
 

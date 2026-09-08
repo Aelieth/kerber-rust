@@ -141,10 +141,12 @@ fn handle_inner(store: &dyn PrincipalRead, raw: &[u8]) -> Result<(Vec<u8>, Optio
     }
     match raw[0] {
         0x6a => match decode::<AsReq>(raw) {
+            Ok(req) if req.0.pvno != krb5_types::KdcReq::PVNO => Ok((Vec::new(), None)),
             Ok(req) => as_reply(store, &req, raw),
             Err(_) => Ok((Vec::new(), None)),
         },
         0x6c => match decode::<TgsReq>(raw) {
+            Ok(req) if req.0.pvno != krb5_types::KdcReq::PVNO => Ok((Vec::new(), None)),
             Ok(req) => tgs_reply(store, &req, raw),
             Err(_) => Ok((Vec::new(), None)),
         },
@@ -224,10 +226,15 @@ fn tgs_reply(
     raw: &[u8],
 ) -> Result<(Vec<u8>, Option<String>), Error> {
     // MIT prepare_error_tgs (do_tgs_req.c:201-204): errpkt.client is the header
-    // ticket's client when it decrypts, else NULL. The TGS-REQ body carries no
-    // cname, so derive it for the error.
+    // ticket's client when it decrypts, else NULL. gather_tgs_req_info returns
+    // before kdc_process_tgs_req when msg_type != 12, so that error has no
+    // cname. The TGS-REQ body carries no cname, so derive it for the error.
     let mut ebody = req.0.req_body.clone();
-    ebody.cname = tgs_header_client(store, req);
+    ebody.cname = if req.0.msg_type == krb5_types::KdcReq::MSG_TGS_REQ {
+        tgs_header_client(store, req)
+    } else {
+        None
+    };
     let body = Some(&ebody);
     match issue_tgs_from(store, req, Some(raw)) {
         Ok(issued) => Ok((encode(&issued.rep)?, None)),
@@ -283,6 +290,9 @@ fn issue_as_from(
         encoded_fast_body = encode(outer)?;
         &encoded_fast_body
     };
+    if req.0.msg_type != krb5_types::KdcReq::MSG_AS_REQ {
+        return Err(proto(err::GENERIC, status::VALIDATE_MESSAGE_TYPE));
+    }
     let fast = unwrap_fast(store, req, fast_body)?;
     let inner_owned: Option<KdcReqBody> = match fast.as_ref() {
         Some(f) => Some(decode(&f.inner_body)?),
@@ -644,6 +654,9 @@ fn issue_tgs_from(
         &encoded_body
     };
     // MIT kdc_process_tgs_req (PROCESS_TGS) before kdc_find_fast.
+    if req.0.msg_type != krb5_types::KdcReq::MSG_TGS_REQ {
+        return Err(proto(err::GENERIC, status::UNKNOWN_REASON));
+    }
     let pa_tgs = extract_pa_tgs(req.0.padata.as_deref())
         .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PROCESS_TGS))?;
     let header = process_tgs_header(store, pa_tgs.as_ref(), body_der)?;
@@ -669,6 +682,9 @@ fn process_tgs_header(
     body_der: &[u8],
 ) -> Result<HeaderTgt, Error> {
     let ap: krb5_types::ApReq = decode(ap_raw)?;
+    if ap.ap_options.use_session_key() || ap.ap_options.wants_mutual() {
+        return Err(proto(err::POLICY, status::PROCESS_TGS));
+    }
     if !ap.ticket.sname.is_krbtgt_for(store.realm()) {
         return Err(proto(err::NOT_US, status::BAD_TGS_SERVER_NAME));
     }
@@ -1158,7 +1174,7 @@ fn decrypt_presented_tgt(
     ap: &krb5_types::ApReq,
     tkt_etype: EncryptionType,
 ) -> Result<(EncTicketPart, ProtocolKey, Vec<u8>), Error> {
-    // MIT kdc_get_server_key: only keys of ticket.server (name and realm).
+    // MIT kdc_get_server_key (kdc_util.c:360-409): ticket.server, DISALLOW → 7.
     // Incoming interrealm keys are stored as krbtgt/<ticket.realm>@<local>.
     let ticket_realm = utf8_realm(&ap.ticket.realm)?;
     let princ = if ticket_realm == store.realm() {
@@ -1174,26 +1190,64 @@ fn decrypt_presented_tgt(
     if attr(&p, KDB_DISALLOW_ALL_TIX) || attr(&p, KDB_DISALLOW_SVR) {
         return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::PROCESS_TGS));
     }
+    // MIT kdc_rd_ap_req (kdc_util.c:295-348): local TGS search_enctype = -1;
+    // kvno 0 retries at most three times, decrementing the found kvno.
+    let local_tgs = ap.ticket.sname.is_krbtgt_for(store.realm());
+    let search_enctype = if local_tgs { None } else { Some(tkt_etype) };
+    let ticket_kvno = ap.ticket.enc_part.kvno.unwrap_or(0);
+    let mut kvno = ticket_kvno;
+    let mut tries = 3u32;
     let usage = KeyUsage::new(ku::TICKET)?;
     let cipher = ap.ticket.enc_part.cipher.as_ref();
-    let kvno = ap.ticket.enc_part.kvno;
-    let mut keys = Vec::new();
-    if let Some(v) = kvno
-        && let Some(k) = p.key_for_kvno(tkt_etype, v)
-    {
-        keys.push(k.key.clone());
-    }
-    for k in &p.keys {
-        keys.push(k.key.clone());
-    }
-    for key in &keys {
-        if let Ok(plain) = decrypt(key, usage, cipher)
-            && let Ok(part) = decode::<EncTicketPart>(&plain)
-        {
-            return Ok((part, key.clone(), plain));
+    loop {
+        let last = match find_server_key(&p, search_enctype, kvno) {
+            Ok((key, found)) => {
+                kvno = found;
+                if let Ok(plain) = decrypt(&key, usage, cipher)
+                    && let Ok(part) = decode::<EncTicketPart>(&plain)
+                {
+                    return Ok((part, key, plain));
+                }
+                proto(err::BAD_INTEGRITY, status::PROCESS_TGS)
+            }
+            Err(e) => e,
+        };
+        if ticket_kvno != 0 || kvno <= 1 || tries <= 1 {
+            return Err(last);
         }
+        kvno -= 1;
+        tries -= 1;
     }
-    Err(proto(err::BAD_INTEGRITY, status::PROCESS_TGS))
+}
+
+/// MIT `find_server_key` (`kdc_util.c:417-457`). kvno 0 means any kvno.
+/// No matching key, or a requested etype that is not similar, is
+/// `KRB5_KDB_NO_MATCHING_KEY` / `KRB5_KDB_NO_PERMITTED_KEY` → 60 `PROCESS_TGS`.
+fn find_server_key(
+    p: &Principal,
+    search_enctype: Option<EncryptionType>,
+    kvno: u32,
+) -> Result<(ProtocolKey, u32), Error> {
+    let key = if kvno == 0 {
+        match search_enctype {
+            Some(e) => p.key_for(e),
+            None => p.first_current_key(),
+        }
+    } else {
+        match search_enctype {
+            Some(e) => p.keys.iter().find(|k| k.etype == e && k.kvno == kvno),
+            None => p.first_key_at_kvno(kvno),
+        }
+    };
+    let Some(k) = key else {
+        return Err(proto(err::GENERIC, status::PROCESS_TGS));
+    };
+    if let Some(want) = search_enctype
+        && want != k.etype
+    {
+        return Err(proto(err::GENERIC, status::PROCESS_TGS));
+    }
+    Ok((k.key.clone(), k.kvno))
 }
 
 fn check_ticket_times(
@@ -1518,6 +1572,11 @@ fn extract_pa_tgs(padata: Option<&[PaData]>) -> Option<&OctetString> {
 fn tgs_header_client(store: &dyn PrincipalRead, req: &TgsReq) -> Option<PrincipalName> {
     let pa_tgs = extract_pa_tgs(req.0.padata.as_deref())?;
     let ap: krb5_types::ApReq = decode(pa_tgs.as_ref()).ok()?;
+    // MIT kdc_process_tgs_req refuses USE_SESSION_KEY / MUTUAL_REQUIRED
+    // before rd_req, so the error has no decrypted client.
+    if ap.ap_options.use_session_key() || ap.ap_options.wants_mutual() {
+        return None;
+    }
     let etype = EncryptionType::from_iana(ap.ticket.enc_part.etype)
         .or_else(|_| EncryptionType::known(ap.ticket.enc_part.etype))
         .ok()?;
@@ -2086,7 +2145,7 @@ fn validate_as_request(
     if attr(server, KDB_DISALLOW_ALL_TIX) {
         return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::SERVICE_LOCKED_OUT));
     }
-    if attr(server, KDB_DISALLOW_SVR) && !body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY) {
+    if attr(server, KDB_DISALLOW_SVR) {
         return Err(proto(err::MUST_USE_USER2USER, status::SERVICE_NOT_ALLOWED));
     }
     let mut fails = store.fail_auth_of(client);

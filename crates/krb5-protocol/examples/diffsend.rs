@@ -21,7 +21,7 @@ use krb5_protocol::{
     pa_enc_timestamp_at, tgs_req,
 };
 use krb5_types::{
-    ApReq, AsRep, AuthorizationDataValue, EncTicketPart, EncryptedData, EncryptionKey,
+    ApOptions, ApReq, AsRep, AuthorizationDataValue, EncTicketPart, EncryptedData, EncryptionKey,
     KerberosTime, KrbError, PaData, PrincipalName, TgsRep, Ticket, TicketFlags, TransitedEncoding,
     err, ku, pa,
 };
@@ -188,6 +188,62 @@ fn expect_garbage(cfg: &Cfg, req: &[u8]) -> Result<(), String> {
             ),
         )),
     }
+}
+
+fn expect_drop(cfg: &Cfg, case: &str, req: &[u8]) -> Result<(), String> {
+    write_der(&cfg.out, &format!("{case}.req.der"), req);
+    println!(
+        r#"{{"event":"diffsend","case":"{case}","req_sha1":"{}","req_len":{},"same_request_bytes":true}}"#,
+        sha1_hex(req),
+        req.len()
+    );
+    let rust = tcp_or_drop(&cfg.rust, req);
+    let mit = tcp_or_drop(&cfg.mit, req);
+    if let Some(ref b) = rust {
+        write_der(&cfg.out, &format!("{case}.rust.der"), b);
+    }
+    if let Some(ref b) = mit {
+        write_der(&cfg.out, &format!("{case}.mit.der"), b);
+    }
+    match (rust.as_deref(), mit.as_deref()) {
+        (None, None) => {
+            println!(
+                r#"{{"event":"diffsend","case":"{case}","outcome":"ok","rust_tag":"drop","mit_tag":"drop"}}"#
+            );
+            Ok(())
+        }
+        (r, m) => Err(format!(
+            "{case}: want both drop, rust={} mit={}",
+            r.map_or_else(
+                || "drop".into(),
+                |b| format!("{:02x}", b.first().unwrap_or(&0))
+            ),
+            m.map_or_else(
+                || "drop".into(),
+                |b| format!("{:02x}", b.first().unwrap_or(&0))
+            ),
+        )),
+    }
+}
+
+fn expect_tgs_rep(cfg: &Cfg, case: &str, req: &[u8]) -> Result<(), String> {
+    let (rust, mit) = send_both(cfg, case, req)?;
+    if rust.first() != Some(&0x6d) {
+        return Err(format!(
+            "{case}: rust tag {:02x} want 0x6d",
+            rust.first().unwrap_or(&0)
+        ));
+    }
+    if mit.first() != Some(&0x6d) {
+        return Err(format!(
+            "{case}: mit tag {:02x} want 0x6d",
+            mit.first().unwrap_or(&0)
+        ));
+    }
+    println!(
+        r#"{{"event":"diffsend","case":"{case}","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"}}"#
+    );
+    Ok(())
 }
 
 fn client_key(
@@ -878,8 +934,16 @@ fn run() -> Result<(), String> {
         ),
         TicketFlags::initial_preauth(),
     )?;
-    let mut auth_tgs = tgs_req(auth_tgt, &sess, realm, &user, host, realm, 0x1000_0022)
-        .map_err(|e| e.to_string())?;
+    let mut auth_tgs = tgs_req(
+        auth_tgt,
+        &sess,
+        realm,
+        &user,
+        host.clone(),
+        realm,
+        0x1000_0022,
+    )
+    .map_err(|e| e.to_string())?;
     let pa_tgs = auth_tgs
         .0
         .padata
@@ -909,7 +973,137 @@ fn run() -> Result<(), String> {
         true,
     )?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":22}}"#);
+    // A′-1 item 4: AS/TGS entry validation (do_as_req.c:513-517, dispatch.c:145-158,
+    // do_tgs_req.c:609-610, kdc_util.c:179-184,790-793, kdc_rd_ap_req kvno 0).
+    let mut bad_as = as_req(user.clone(), realm, 0x1000_0023, None).map_err(|e| e.to_string())?;
+    bad_as.0.msg_type = krb5_types::KdcReq::MSG_TGS_REQ;
+    expect_error(
+        &cfg,
+        "as-bad-msg-type",
+        &encode(&bad_as).map_err(|e| e.to_string())?,
+        err::GENERIC,
+    )?;
+
+    let mut bad_pv = as_req(user.clone(), realm, 0x1000_0024, None).map_err(|e| e.to_string())?;
+    bad_pv.0.pvno = 4;
+    expect_drop(
+        &cfg,
+        "as-bad-pvno",
+        &encode(&bad_pv).map_err(|e| e.to_string())?,
+    )?;
+
+    let mut bad_tgs = tgs_req(
+        mint_tgt(
+            tkt_key,
+            tkt_kvno,
+            &user,
+            realm,
+            &krbtgt_sname,
+            &sess,
+            (
+                now.clone(),
+                now.add_hours(10).unwrap_or_else(|_| now.clone()),
+            ),
+            TicketFlags::initial_preauth(),
+        )?,
+        &sess,
+        realm,
+        &user,
+        host.clone(),
+        realm,
+        0x1000_0025,
+    )
+    .map_err(|e| e.to_string())?;
+    bad_tgs.0.msg_type = krb5_types::KdcReq::MSG_AS_REQ;
+    expect_error_client(
+        &cfg,
+        "tgs-bad-msg-type",
+        &encode(&bad_tgs).map_err(|e| e.to_string())?,
+        err::GENERIC,
+        false,
+    )?;
+
+    let nosvr = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["nosvr"]);
+    expect_error(
+        &cfg,
+        "as-service-not-allowed",
+        &encode(
+            &as_req_sname(
+                user.clone(),
+                realm,
+                0x1000_0026,
+                None,
+                nosvr,
+                etypes.clone(),
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::MUST_USE_USER2USER,
+    )?;
+
+    let mut opt_tgs = tgs_req(
+        mint_tgt(
+            tkt_key,
+            tkt_kvno,
+            &user,
+            realm,
+            &krbtgt_sname,
+            &sess,
+            (
+                now.clone(),
+                now.add_hours(10).unwrap_or_else(|_| now.clone()),
+            ),
+            TicketFlags::initial_preauth(),
+        )?,
+        &sess,
+        realm,
+        &user,
+        host.clone(),
+        realm,
+        0x1000_0027,
+    )
+    .map_err(|e| e.to_string())?;
+    let opt_pa = opt_tgs
+        .0
+        .padata
+        .as_mut()
+        .and_then(|p| p.iter_mut().find(|x| x.padata_type == pa::TGS_REQ))
+        .ok_or_else(|| "no PA-TGS-REQ".to_string())?;
+    let mut opt_ap: ApReq = decode(opt_pa.padata_value.as_ref()).map_err(|e| e.to_string())?;
+    opt_ap.ap_options = ApOptions::mutual_required();
+    opt_pa.padata_value = encode(&opt_ap).map_err(|e| e.to_string())?.into();
+    expect_error_client(
+        &cfg,
+        "tgs-ap-options",
+        &encode(&opt_tgs).map_err(|e| e.to_string())?,
+        err::POLICY,
+        false,
+    )?;
+
+    let mut z_tkt = mint_tgt(
+        tkt_key,
+        tkt_kvno,
+        &user,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        (
+            now.clone(),
+            now.add_hours(10).unwrap_or_else(|_| now.clone()),
+        ),
+        TicketFlags::initial_preauth(),
+    )?;
+    z_tkt.enc_part.kvno = Some(0);
+    let z_tgs =
+        tgs_req(z_tkt, &sess, realm, &user, host, realm, 0x1000_0028).map_err(|e| e.to_string())?;
+    expect_tgs_rep(
+        &cfg,
+        "tgs-header-kvno-zero",
+        &encode(&z_tgs).map_err(|e| e.to_string())?,
+    )?;
+
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":28}}"#);
     Ok(())
 }
 
