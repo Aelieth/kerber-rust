@@ -1020,7 +1020,7 @@ fn run() -> Result<(), String> {
         "tgs-bad-msg-type",
         &encode(&bad_tgs).map_err(|e| e.to_string())?,
         err::GENERIC,
-        false,
+        true,
     )?;
 
     let nosvr = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["nosvr"]);
@@ -1078,7 +1078,7 @@ fn run() -> Result<(), String> {
         "tgs-ap-options",
         &encode(&opt_tgs).map_err(|e| e.to_string())?,
         err::POLICY,
-        false,
+        true,
     )?;
 
     let mut z_tkt = mint_tgt(

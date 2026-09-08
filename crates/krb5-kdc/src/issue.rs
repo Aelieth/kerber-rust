@@ -1932,6 +1932,7 @@ fn encode_krb_error(
             }
         }
     };
+    let cname = body.and_then(|b| b.cname.clone());
     let pdu = KrbError {
         pvno: KrbError::PVNO,
         msg_type: KrbError::MSG_TYPE,
@@ -1940,11 +1941,12 @@ fn encode_krb_error(
         stime: KerberosTime::now(),
         susec: Microseconds::ZERO,
         error_code: code,
-        // MIT prepare_error_as (do_as_req.c:806-808) sets errpkt.client =
-        // request->client, so the AS KRB-ERROR echoes the requested client
-        // realm/name. (TGS uses the header ticket's client; deferred.)
-        crealm: Some(realm.clone()),
-        cname: body.and_then(|b| b.cname.clone()),
+        // MIT prepare_error_as echoes request->client. prepare_error_tgs
+        // sets errpkt.client from the decrypted header ticket, else NULL;
+        // opt_realm_of_principal omits crealm when client is NULL
+        // (do_tgs_req.c:201-204, asn1_k_encode.c:919).
+        crealm: cname.as_ref().map(|_| realm.clone()),
+        cname,
         realm,
         sname,
         e_text: text.and_then(|t| krb5_types::try_ascii(t).ok()),

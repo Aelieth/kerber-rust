@@ -42,9 +42,11 @@ this project uses semantic versioning once a crate is published.
   matching client key is 14 `CANT_FIND_CLIENT_KEY`; no server/krbtgt
   key is 60 `FINDING_SERVER_KEY` / `GET_LOCAL_TGT`. S4U2Proxy PAC and
   U2U second-ticket local-TGT misses are 60 `GET_LOCAL_TGT` (not 7).
-  `kdc_rd_ap_req` kvno 0 walks back at most three keys. `modprinc
+  `kdc_rd_ap_req` kvno 0 walks back at most three keys. A TGS KRB-ERROR
+  with no decrypted client omits `cname` and `crealm`. `modprinc
   -unlock` stores `KRB5_TL_LAST_ADMIN_UNLOCK` (1792, 4-byte LE) and
-  zeroes fail_auth_count. diffsend `as-hw-preauth`.
+  zeroes fail_auth_count. diffsend `as-hw-preauth`, `tgs-bad-msg-type`,
+  `tgs-ap-options`.
 
 ### Round-up R2 (re-audit fixes)
 

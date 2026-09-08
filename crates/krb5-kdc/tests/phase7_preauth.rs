@@ -2765,6 +2765,7 @@ fn tgs_bad_msg_type_is_unknown_reason_without_cname() {
         .and_then(|t| std::str::from_utf8(t.as_bytes()).ok());
     assert_eq!(text, Some("UNKNOWN_REASON"));
     assert!(e.cname.is_none(), "no cname");
+    assert!(e.crealm.is_none(), "no crealm when client is NULL");
     assert_eq!(e.sname, documented_host());
 }
 
