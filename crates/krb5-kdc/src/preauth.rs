@@ -4,7 +4,7 @@ use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256, checksum, cksumtype_is_keyed, decrypt,
     dh_generate, dh_group_for_prime, dh_shared, encrypt, krb_fx_cf2, octetstring2key,
-    p256_generate, p256_shared, pkinit_kdf_agile, spake_derive_key, spake_kdc_keygen,
+    p256_generate, p256_shared, pkinit_kdf_agile, prf_plus, spake_derive_key, spake_kdc_keygen,
     spake_result_wbytes, spake_thash_update, spake_wbytes, verify_checksum_type,
 };
 use krb5_protocol::{ReplayCache, ReplayKey};
@@ -245,27 +245,100 @@ fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<Protoco
     krb_fx_cf2(&subk, &session, b"subkeyarmor", b"ticketarmor").map_err(Error::from)
 }
 
-/// Encrypt a FAST cookie (client id + SPAKE secret or empty).
-pub(crate) fn make_cookie(store: &dyn PrincipalRead, payload: &[u8]) -> Result<Vec<u8>, Error> {
-    let krbtgt_p = store
-        .fetch_krbtgt()?
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::GET_LOCAL_TGT))?;
-    let krbtgt = krbtgt_p
-        .best_key()
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::GET_LOCAL_TGT))?;
-    let usage = KeyUsage::new(ku::FAST_COOKIE)?;
-    encrypt(&krbtgt.key, usage, payload).map_err(Error::from)
+const COOKIE_LIFETIME: i32 = 600;
+const COOKIE_MAGIC: &[u8] = b"MIT1";
+
+fn derive_cookie_key(
+    tgt_key: &ProtocolKey,
+    client: &PrincipalName,
+    realm: &str,
+) -> Result<ProtocolKey, Error> {
+    let princ = client.unparse_with_realm(realm);
+    let mut seed = Vec::with_capacity(6 + princ.len());
+    seed.extend_from_slice(b"COOKIE");
+    seed.extend_from_slice(princ.as_bytes());
+    let rnd = prf_plus(tgt_key, &seed, tgt_key.etype().key_len())?;
+    ProtocolKey::from_bytes(tgt_key.etype(), &rnd).map_err(Error::from)
 }
 
-pub(crate) fn open_cookie(store: &dyn PrincipalRead, blob: &[u8]) -> Result<Vec<u8>, Error> {
+/// MIT `kdc_fast_make_cookie` (`fast_util.c:655-721`). Empty contents → `MIT`.
+pub(crate) fn make_cookie(
+    store: &dyn PrincipalRead,
+    client: &PrincipalName,
+    contents: &[PaData],
+) -> Result<Vec<u8>, Error> {
+    let t = i32::try_from(KerberosTime::now().unix_seconds()).unwrap_or(0);
+    make_cookie_at(store, client, contents, t)
+}
+
+pub(crate) fn make_cookie_at(
+    store: &dyn PrincipalRead,
+    client: &PrincipalName,
+    contents: &[PaData],
+    time: i32,
+) -> Result<Vec<u8>, Error> {
     let krbtgt_p = store
         .fetch_krbtgt()?
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::GET_LOCAL_TGT))?;
     let krbtgt = krbtgt_p
         .best_key()
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::GET_LOCAL_TGT))?;
-    let usage = KeyUsage::new(ku::FAST_COOKIE)?;
-    decrypt(&krbtgt.key, usage, blob).map_err(|_| proto(err::PREAUTH_FAILED, status::READ_COOKIE))
+    if contents.is_empty() {
+        return Ok(b"MIT".to_vec());
+    }
+    let key = derive_cookie_key(&krbtgt.key, client, store.realm())?;
+    let der = encode(&krb5_types::fast::SecureCookie {
+        time,
+        data: contents.to_vec(),
+    })?;
+    let usage = KeyUsage::new(ku::PA_FX_COOKIE)?;
+    let cipher = encrypt(&key, usage, &der)?;
+    let mut out = Vec::with_capacity(8 + cipher.len());
+    out.extend_from_slice(COOKIE_MAGIC);
+    out.extend_from_slice(&krbtgt.kvno.to_be_bytes());
+    out.extend_from_slice(&cipher);
+    Ok(out)
+}
+
+/// MIT `kdc_fast_read_cookie` (`fast_util.c:545-611`): errors leave the
+/// state empty and return 0 (never 24).
+pub(crate) fn open_cookie(
+    store: &dyn PrincipalRead,
+    client: &PrincipalName,
+    blob: &[u8],
+) -> Result<Vec<PaData>, Error> {
+    if blob.len() <= 8 || !blob.starts_with(COOKIE_MAGIC) {
+        return Ok(Vec::new());
+    }
+    let kvno = u32::from_be_bytes([blob[4], blob[5], blob[6], blob[7]]);
+    let Some(krbtgt_p) = store.fetch_krbtgt()? else {
+        return Ok(Vec::new());
+    };
+    let Some(ke) = krbtgt_p
+        .keys
+        .iter()
+        .find(|k| k.kvno == kvno)
+        .or_else(|| krbtgt_p.best_key())
+    else {
+        return Ok(Vec::new());
+    };
+    let Ok(key) = derive_cookie_key(&ke.key, client, store.realm()) else {
+        return Ok(Vec::new());
+    };
+    let Ok(usage) = KeyUsage::new(ku::PA_FX_COOKIE) else {
+        return Ok(Vec::new());
+    };
+    let Ok(plain) = decrypt(&key, usage, &blob[8..]) else {
+        return Ok(Vec::new());
+    };
+    let Ok(cookie) = decode::<krb5_types::fast::SecureCookie>(&plain) else {
+        return Ok(Vec::new());
+    };
+    let now = i32::try_from(KerberosTime::now().unix_seconds()).unwrap_or(0);
+    if now.saturating_sub(cookie.time) > COOKIE_LIFETIME {
+        return Ok(Vec::new());
+    }
+    Ok(cookie.data)
 }
 
 /// Wrap KrbFastResponse into PA-FX-FAST padata.
@@ -312,7 +385,7 @@ pub(crate) enum SpakeStep {
 
 pub(crate) fn process_spake(
     store: &dyn PrincipalRead,
-    _client: &Principal,
+    client: &Principal,
     padata: Option<&[PaData]>,
     ikey: &ProtocolKey,
     body_der: &[u8],
@@ -321,13 +394,18 @@ pub(crate) fn process_spake(
         return Ok(None);
     };
     if raw.is_empty() {
-        return send_spake_challenge(store, ikey, &[]);
+        return send_spake_challenge(store, &client.name, ikey, &[]);
     }
     let msg: krb5_types::spake::PaSpake = decode(raw)?;
     if let krb5_types::spake::PaSpake::Response(resp) = &msg {
         let cookie = find_pa(padata, pa::FX_COOKIE)
             .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
-        let secret = open_cookie(store, cookie)?;
+        let inner = open_cookie(store, &client.name, cookie)?;
+        let secret = inner
+            .iter()
+            .find(|p| p.padata_type == pa::SPAKE)
+            .map(|p| p.padata_value.as_ref())
+            .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
         if secret.len() != 64 {
             return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
         }
@@ -367,13 +445,14 @@ pub(crate) fn process_spake(
         return Ok(Some(SpakeStep::Done(k0)));
     }
     if matches!(msg, krb5_types::spake::PaSpake::Support(_)) {
-        return send_spake_challenge(store, ikey, raw);
+        return send_spake_challenge(store, &client.name, ikey, raw);
     }
     Ok(None)
 }
 
 fn send_spake_challenge(
     store: &dyn PrincipalRead,
+    client: &PrincipalName,
     ikey: &ProtocolKey,
     support_der: &[u8],
 ) -> Result<Option<SpakeStep>, Error> {
@@ -393,7 +472,14 @@ fn send_spake_challenge(
     let mut cookie_pt = Vec::with_capacity(64);
     cookie_pt.extend_from_slice(&secret);
     cookie_pt.extend_from_slice(&thash);
-    let cookie = make_cookie(store, &cookie_pt)?;
+    let cookie = make_cookie(
+        store,
+        client,
+        &[PaData {
+            padata_type: pa::SPAKE,
+            padata_value: cookie_pt.into(),
+        }],
+    )?;
     let method: MethodData = vec![
         PaData {
             padata_type: pa::SPAKE,

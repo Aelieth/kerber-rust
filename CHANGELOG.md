@@ -18,6 +18,11 @@ this project uses semantic versioning once a crate is published.
   (`kdc_util.c:217-229`, `authdata_dec.c:115-181`). Nothing in 1.22.2
   emits 71. diffsend `armor-ap-req-as-pa-tgs-req` and
   `tgs-ad-fx-armor-authenticator`.
+- **kdc.** PA-FX-COOKIE is MIT1 ‖ kvno ‖ enc(PRF+ of the local TGT key
+  over `COOKIE`‖unparsed client, ku 513, 600 s). Garbage, expired, and
+  wrong-client cookies are ignored (`kdc_fast_read_cookie` returns 0).
+  Empty module state is the 3-byte `MIT` cookie. TGS FAST errors carry
+  no cookie.
 
 ### Round-up R2 (re-audit fixes)
 

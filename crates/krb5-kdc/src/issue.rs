@@ -1720,6 +1720,8 @@ fn wrap_as_fast(
             Some(other.to_string()).filter(|s| !s.is_empty()),
         ),
     };
+    let mut padata =
+        as_preauth.unwrap_or_else(|| decode::<MethodData>(&inner_ed).unwrap_or_default());
     let inner_err = encode_krb_error(
         store,
         code,
@@ -1731,20 +1733,10 @@ fn wrap_as_fast(
         },
         Some(body),
     );
-    let mut padata = vec![PaData {
+    padata.push(PaData {
         padata_type: pa::FX_ERROR,
         padata_value: inner_err.into(),
-    }];
-    match make_cookie(store, b"fast") {
-        Ok(c) => padata.push(PaData {
-            padata_type: pa::FX_COOKIE,
-            padata_value: c.into(),
-        }),
-        Err(e) => return e,
-    }
-    if let Some(method) = as_preauth {
-        padata.extend(method);
-    }
+    });
     match wrap_fast_rep(&f.armor_key, padata, None, f.nonce, None) {
         Ok(pa) => match encode(&vec![pa]) {
             Ok(outer) => {
@@ -1782,6 +1774,12 @@ fn preauth_hint_edata(store: &dyn PrincipalRead, client: &Principal, ckey: &KeyE
     };
     let mut method: MethodData = crate::plugins::advertise_preauth(store, client);
     method.push(etype_info);
+    if let Ok(c) = make_cookie(store, &client.name, &[]) {
+        method.push(PaData {
+            padata_type: pa::FX_COOKIE,
+            padata_value: c.into(),
+        });
+    }
     encode(&method).unwrap_or_default()
 }
 

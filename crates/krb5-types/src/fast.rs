@@ -94,6 +94,15 @@ pub struct KrbFastArmoredRep {
     pub enc_fast_rep: EncryptedData,
 }
 
+/// MIT `SecureCookie` (`asn1_k_encode.c:1683-1688`): untagged SEQUENCE.
+#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+pub struct SecureCookie {
+    /// Unix timestamp when the cookie was minted.
+    pub time: i32,
+    /// Module cookie values (PA-DATA list).
+    pub data: SequenceOf<crate::PaData>,
+}
+
 /// PA-FX-FAST ::= CHOICE { armored-data [0] KrbFastArmoredReq }
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 #[rasn(choice)]

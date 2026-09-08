@@ -6,7 +6,7 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     EncryptionType, KeyUsage, OAKLEY_2048, ProtocolKey, checksum, decrypt, dh_generate, dh_shared,
-    encrypt, krb_fx_cf2, octetstring2key, p256_generate, string_to_key, unkeyed_checksum,
+    encrypt, krb_fx_cf2, octetstring2key, p256_generate, prf_plus, string_to_key, unkeyed_checksum,
 };
 use krb5_kdc::{
     Acl, AdminOp, Error, KDB_DISALLOW_ALL_TIX, KDB_OK_TO_AUTH_AS_DELEGATE, NamedPolicy, PacTicket,
@@ -2304,6 +2304,218 @@ fn spake_challenge_then_as_rep() {
     let plain = decrypt(&spake_key, usage, issued.rep.0.enc_part.cipher.as_ref()).expect("enc");
     let enc = decode_enc_part(&plain);
     assert_eq!(enc.nonce, 302);
+    let cookie_bytes = cookie.padata_value.as_ref();
+    assert!(
+        cookie_bytes.starts_with(b"MIT1"),
+        "SPAKE cookie is MIT1 not a raw blob"
+    );
+}
+
+#[test]
+fn spake_garbage_cookie_is_preauth_failed() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = store
+        .get_name(&cname)
+        .expect("user")
+        .key_for(EncryptionType::Aes256CtsHmacSha196)
+        .expect("aes256-sha1 key")
+        .key
+        .clone();
+    let support = pa_spake_support();
+    let req1 = as_req(cname.clone(), TEST_REALM, 303, Some(vec![support.clone()])).unwrap();
+    let err = krb5_kdc::issue_as(&store, &req1).unwrap_err();
+    let e_data = match err {
+        Error::Protocol {
+            code,
+            e_data: Some(e_data),
+            ..
+        } if code == err::MORE_PREAUTH_DATA_REQUIRED => e_data,
+        Error::PreauthRequired { e_data } => e_data,
+        other => panic!("expected SPAKE challenge, got {other:?}"),
+    };
+    let method: MethodData = decode(&e_data).expect("METHOD-DATA");
+    let spa = method
+        .iter()
+        .find(|p| p.padata_type == pa::SPAKE)
+        .expect("PA-SPAKE");
+    let mut cookie = method
+        .iter()
+        .find(|p| p.padata_type == pa::FX_COOKIE)
+        .expect("cookie")
+        .padata_value
+        .as_ref()
+        .to_vec();
+    assert!(
+        cookie.starts_with(b"MIT1"),
+        "SPAKE cookie is MIT1 not a raw blob"
+    );
+    cookie[0] ^= 0xff;
+    let msg: krb5_types::spake::PaSpake = decode(spa.padata_value.as_ref()).expect("PaSpake");
+    let chal = match msg {
+        krb5_types::spake::PaSpake::Challenge(c) => c,
+        other => panic!("expected SPAKE challenge, got {other:?}"),
+    };
+    let mut req2 = as_req(cname, TEST_REALM, 304, None).unwrap();
+    let body_der = encode(&req2.0.req_body).expect("body");
+    let (resp, _) = pa_spake_response(
+        &key,
+        support.padata_value.as_ref(),
+        spa.padata_value.as_ref(),
+        chal.pubkey.as_ref(),
+        &body_der,
+    )
+    .expect("resp");
+    req2.0.padata = Some(vec![
+        resp,
+        krb5_types::PaData {
+            padata_type: pa::FX_COOKIE,
+            padata_value: cookie.into(),
+        },
+    ]);
+    let err = krb5_kdc::issue_as(&store, &req2).expect_err("garbage cookie");
+    match err {
+        Error::Protocol { code, .. } => assert_eq!(code, err::PREAUTH_FAILED),
+        other => panic!("expected 24, got {other:?}"),
+    }
+}
+
+#[test]
+fn spake_cookie_for_user_ignored_for_admin() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
+    let user_key = store
+        .get_name(&user)
+        .expect("user")
+        .key_for(EncryptionType::Aes256CtsHmacSha196)
+        .expect("aes256-sha1 key")
+        .key
+        .clone();
+    let support = pa_spake_support();
+    let req1 = as_req(user.clone(), TEST_REALM, 305, Some(vec![support.clone()])).unwrap();
+    let err = krb5_kdc::issue_as(&store, &req1).unwrap_err();
+    let e_data = match err {
+        Error::Protocol {
+            code,
+            e_data: Some(e_data),
+            ..
+        } if code == err::MORE_PREAUTH_DATA_REQUIRED => e_data,
+        Error::PreauthRequired { e_data } => e_data,
+        other => panic!("expected SPAKE challenge, got {other:?}"),
+    };
+    let method: MethodData = decode(&e_data).expect("METHOD-DATA");
+    let spa = method
+        .iter()
+        .find(|p| p.padata_type == pa::SPAKE)
+        .expect("PA-SPAKE");
+    let cookie = method
+        .iter()
+        .find(|p| p.padata_type == pa::FX_COOKIE)
+        .expect("cookie");
+    let msg: krb5_types::spake::PaSpake = decode(spa.padata_value.as_ref()).expect("PaSpake");
+    let chal = match msg {
+        krb5_types::spake::PaSpake::Challenge(c) => c,
+        other => panic!("expected SPAKE challenge, got {other:?}"),
+    };
+    let mut req2 = as_req(admin, TEST_REALM, 306, None).unwrap();
+    let body_der = encode(&req2.0.req_body).expect("body");
+    let (resp, _) = pa_spake_response(
+        &user_key,
+        support.padata_value.as_ref(),
+        spa.padata_value.as_ref(),
+        chal.pubkey.as_ref(),
+        &body_der,
+    )
+    .expect("resp");
+    req2.0.padata = Some(vec![
+        resp,
+        krb5_types::PaData {
+            padata_type: pa::FX_COOKIE,
+            padata_value: cookie.padata_value.clone(),
+        },
+    ]);
+    let err = krb5_kdc::issue_as(&store, &req2).expect_err("wrong-client cookie");
+    match err {
+        Error::Protocol { code, .. } => assert_eq!(code, err::PREAUTH_FAILED),
+        other => panic!("expected 24, got {other:?}"),
+    }
+}
+
+#[test]
+fn spake_expired_cookie_is_preauth_failed() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = store
+        .get_name(&cname)
+        .expect("user")
+        .key_for(EncryptionType::Aes256CtsHmacSha196)
+        .expect("aes256-sha1 key")
+        .key
+        .clone();
+    let support = pa_spake_support();
+    let req1 = as_req(cname.clone(), TEST_REALM, 307, Some(vec![support.clone()])).unwrap();
+    let err = krb5_kdc::issue_as(&store, &req1).unwrap_err();
+    let e_data = match err {
+        Error::Protocol {
+            code,
+            e_data: Some(e_data),
+            ..
+        } if code == err::MORE_PREAUTH_DATA_REQUIRED => e_data,
+        Error::PreauthRequired { e_data } => e_data,
+        other => panic!("expected SPAKE challenge, got {other:?}"),
+    };
+    let method: MethodData = decode(&e_data).expect("METHOD-DATA");
+    let spa = method
+        .iter()
+        .find(|p| p.padata_type == pa::SPAKE)
+        .expect("PA-SPAKE");
+    let cookie = method
+        .iter()
+        .find(|p| p.padata_type == pa::FX_COOKIE)
+        .expect("cookie");
+    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
+    let princ = cname.unparse_with_realm(TEST_REALM);
+    let mut seed = b"COOKIE".to_vec();
+    seed.extend_from_slice(princ.as_bytes());
+    let rnd = prf_plus(&krbtgt.key, &seed, krbtgt.key.etype().key_len()).expect("prf+");
+    let ckey = ProtocolKey::from_bytes(krbtgt.key.etype(), &rnd).expect("cookie key");
+    let usage = KeyUsage::new(ku::PA_FX_COOKIE).unwrap();
+    let blob = cookie.padata_value.as_ref();
+    let plain = decrypt(&ckey, usage, &blob[8..]).expect("open");
+    let mut sc: krb5_types::fast::SecureCookie = decode(&plain).expect("SecureCookie");
+    sc.time = i32::try_from(KerberosTime::now().unix_seconds()).unwrap() - 700;
+    let der = encode(&sc).expect("cookie der");
+    let cipher = encrypt(&ckey, usage, &der).expect("enc");
+    let mut expired = blob[..8].to_vec();
+    expired.extend_from_slice(&cipher);
+    let msg: krb5_types::spake::PaSpake = decode(spa.padata_value.as_ref()).expect("PaSpake");
+    let chal = match msg {
+        krb5_types::spake::PaSpake::Challenge(c) => c,
+        other => panic!("expected SPAKE challenge, got {other:?}"),
+    };
+    let mut req2 = as_req(cname, TEST_REALM, 308, None).unwrap();
+    let body_der = encode(&req2.0.req_body).expect("body");
+    let (resp, _) = pa_spake_response(
+        &key,
+        support.padata_value.as_ref(),
+        spa.padata_value.as_ref(),
+        chal.pubkey.as_ref(),
+        &body_der,
+    )
+    .expect("resp");
+    req2.0.padata = Some(vec![
+        resp,
+        krb5_types::PaData {
+            padata_type: pa::FX_COOKIE,
+            padata_value: expired.into(),
+        },
+    ]);
+    let err = krb5_kdc::issue_as(&store, &req2).expect_err("expired cookie");
+    match err {
+        Error::Protocol { code, .. } => assert_eq!(code, err::PREAUTH_FAILED),
+        other => panic!("expected 24, got {other:?}"),
+    }
 }
 
 #[test]

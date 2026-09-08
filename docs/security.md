@@ -210,7 +210,9 @@ without subkey`, `fast_util.c:70-77`) on both AS and TGS. A PA-TGS-REQ
 header ticket or authenticator carrying AD-FX-ARMOR (71) — including
 inside IF-RELEVANT — is 12 `PROCESS_TGS` (`kdc_util.c:217-229`); 1.22.2
 never emits 71 (RFC 6113 §5.4.1 defence in depth). The FAST armor AP-REQ
-is not scanned.
+is not scanned. PA-FX-COOKIE is bound to the unparsed client with PRF+
+and expires at 600 s (`fast_util.c:465-721`, ku 513); a garbage, expired,
+or wrong-client cookie is ignored, matching MIT's `return 0`.
 Corrupt `enc_fast_req` is 31 `FIND_FAST`; malformed `KrbFastReq` is
 60 `FIND_FAST` (`do_as_req.c:531-535`). Log `detail` is MIT's
 `k5_setmsg` where MIT has one; the critical-FAST-option `detail`
