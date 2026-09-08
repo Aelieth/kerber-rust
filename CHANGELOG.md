@@ -34,6 +34,9 @@ this project uses semantic versioning once a crate is published.
   labeled kvno (kvno 0 retries ≤ 3). diffsend `as-bad-msg-type`,
   `as-bad-pvno`, `tgs-bad-msg-type`, `as-service-not-allowed`,
   `tgs-ap-options`, `tgs-header-kvno-zero`.
+- **admin.** `kadm5_modify_principal` / create refuse `tl_data_type < 256`
+  (`KADM5_BAD_TL_TYPE`) and a non-zero `fail_auth_count`
+  (`KADM5_BAD_SERVER_PARAMS`) before any store write.
 - **kdc/admin.** AS error codes match `errcode_to_protocol`: missing HW
   preauth is 25 `NEEDED_HW_PREAUTH` with the hw_only hint list; no
   matching client key is 14 `CANT_FIND_CLIENT_KEY`; no server/krbtgt

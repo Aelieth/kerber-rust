@@ -125,6 +125,55 @@ int main(int argc, char **argv) {
         ent.pw_max_life = 1;
         ret = kadm5_create_policy(handle, &ent, KADM5_POLICY | KADM5_PW_MIN_LIFE);
         printf("addpol_code=%ld\n", (long)ret);
+    } else if ((strcmp(op, "modify-tl-reserved") == 0 ||
+                strcmp(op, "modify-failcount") == 0) &&
+               argc - argi >= 5) {
+        krb5_principal p;
+        kadm5_principal_ent_rec rec, after;
+        krb5_tl_data tl;
+        unsigned char tlbuf[4] = {1, 2, 3, 4};
+        long mask;
+        memset(&rec, 0, sizeof(rec));
+        memset(&after, 0, sizeof(after));
+        ret = krb5_parse_name(ctx, argv[argi + 4], &p);
+        if (ret) {
+            printf("parse_code=%ld\n", (long)ret);
+            kadm5_destroy(handle);
+            krb5_free_context(ctx);
+            return 1;
+        }
+        ret = kadm5_get_principal(handle, p, &rec, KADM5_PRINCIPAL | KADM5_MAX_LIFE);
+        printf("get_before_code=%ld max_life=%lu\n", (long)ret, (unsigned long)rec.max_life);
+        if (ret) {
+            krb5_free_principal(ctx, p);
+            kadm5_destroy(handle);
+            krb5_free_context(ctx);
+            return 1;
+        }
+        rec.max_life += 60;
+        if (strcmp(op, "modify-failcount") == 0) {
+            rec.fail_auth_count = 1;
+            mask = KADM5_MAX_LIFE | KADM5_FAIL_AUTH_COUNT;
+        } else {
+            memset(&tl, 0, sizeof(tl));
+            tl.tl_data_type = 3;
+            tl.tl_data_length = 4;
+            tl.tl_data_contents = tlbuf;
+            rec.tl_data = &tl;
+            rec.n_tl_data = 1;
+            mask = KADM5_MAX_LIFE | KADM5_TL_DATA;
+        }
+        ret = kadm5_modify_principal(handle, &rec, mask);
+        printf("modify_code=%ld\n", (long)ret);
+        printf("modify_msg=%s\n", error_message(ret));
+        rec.tl_data = NULL;
+        rec.n_tl_data = 0;
+        kadm5_free_principal_ent(handle, &rec);
+        ret = kadm5_get_principal(handle, p, &after, KADM5_PRINCIPAL | KADM5_MAX_LIFE);
+        printf("get_after_code=%ld max_life=%lu\n", (long)ret, (unsigned long)after.max_life);
+        if (ret == 0)
+            kadm5_free_principal_ent(handle, &after);
+        krb5_free_principal(ctx, p);
     } else {
         fprintf(stderr, "unknown op\n");
         kadm5_destroy(handle);

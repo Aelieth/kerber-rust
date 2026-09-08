@@ -2417,6 +2417,42 @@ docker exec "$NAME_MIT" grep unlocku /tmp/unlock-mit.dump | grep -F $'\t1792\t' 
     exit 1
 }
 
+echo "==== kadm5 modify reserved TL type and nonzero failcount both kadminds ===="
+kadm5_modify_validate() {
+    local ctn=$1 client=$2 conf=$3 princ=$4
+    local tl fc before after
+    tl="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" \
+        /tmp/kadm5-changepw-rpc --service kadmin/admin "$client" adminpassword KERBER.TEST \
+        modify-tl-reserved "$princ" 2>&1 || true)"
+    echo "$ctn tl: $tl"
+    echo "$tl" | grep -q 'modify_code=43787567' || {
+        echo "$ctn reserved TL did not return KADM5_BAD_TL_TYPE: $tl" >&2
+        exit 1
+    }
+    before="$(echo "$tl" | sed -n 's/.*get_before_code=0 max_life=\([0-9][0-9]*\).*/\1/p')"
+    after="$(echo "$tl" | sed -n 's/.*get_after_code=0 max_life=\([0-9][0-9]*\).*/\1/p')"
+    [ -n "$before" ] && [ "$before" = "$after" ] || {
+        echo "$ctn reserved TL changed max_life: $tl" >&2
+        exit 1
+    }
+    fc="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" \
+        /tmp/kadm5-changepw-rpc --service kadmin/admin "$client" adminpassword KERBER.TEST \
+        modify-failcount "$princ" 2>&1 || true)"
+    echo "$ctn failcount: $fc"
+    echo "$fc" | grep -q 'modify_code=43787563' || {
+        echo "$ctn failcount did not return KADM5_BAD_SERVER_PARAMS: $fc" >&2
+        exit 1
+    }
+    before="$(echo "$fc" | sed -n 's/.*get_before_code=0 max_life=\([0-9][0-9]*\).*/\1/p')"
+    after="$(echo "$fc" | sed -n 's/.*get_after_code=0 max_life=\([0-9][0-9]*\).*/\1/p')"
+    [ -n "$before" ] && [ "$before" = "$after" ] || {
+        echo "$ctn failcount changed max_life: $fc" >&2
+        exit 1
+    }
+}
+kadm5_modify_validate "$NAME" admin /tmp/kadmin-krb5.conf user@KERBER.TEST
+kadm5_modify_validate "$NAME_MIT" admin/admin /etc/krb5.conf user@KERBER.TEST
+
 echo "==== glob lists: Rust kadmind vs MIT kadmind ===="
 diff "$SCRATCH/glob-rust.txt" "$SCRATCH/glob-mit.txt" || { echo "glob lists differ between the Rust kadmind and MIT kadmind" >&2; exit 1; }
 

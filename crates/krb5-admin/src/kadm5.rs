@@ -152,6 +152,8 @@ const KADM5_ATTRIBUTES: u32 = 0x0000_0010;
 const KADM5_FAIL_AUTH_COUNT: u32 = 0x0001_0000;
 const KADM5_TL_DATA: u32 = 0x0004_0000;
 const KADM5_BAD_SERVER_PARAMS: u32 = 43_787_563;
+/// MIT `ovk` 47 (`KADM5_BAD_TL_TYPE`, `kadm_err.et:54`).
+const KADM5_BAD_TL_TYPE: u32 = 43_787_567;
 const KADM5_MAX_LIFE: u32 = 0x0000_0020;
 const KADM5_PRINC_EXPIRE_TIME: u32 = 0x0000_0002;
 const KADM5_PW_EXPIRATION: u32 = 0x0000_0004;
@@ -2332,6 +2334,13 @@ fn dispatch_kadm5_ticket(
             } else {
                 None
             };
+            // MIT svr_principal.c:581-588,671-675: refuse before kdb_put_entry.
+            if mask & KADM5_TL_DATA != 0 && fields.tl_data.iter().any(|t| t.ty < 256) {
+                return Ok(generic_ret(API_V2, KADM5_BAD_TL_TYPE));
+            }
+            if mask & KADM5_FAIL_AUTH_COUNT != 0 && fields.fail_auth_count != 0 {
+                return Ok(generic_ret(API_V2, KADM5_BAD_SERVER_PARAMS));
+            }
             match g.apply_admin_fields_in(
                 &name,
                 &req,
@@ -2343,9 +2352,6 @@ fn dispatch_kadm5_ticket(
                 clear_policy,
             ) {
                 Ok(()) => {
-                    if mask & KADM5_FAIL_AUTH_COUNT != 0 && fields.fail_auth_count != 0 {
-                        return Ok(generic_ret(API_V2, KADM5_BAD_SERVER_PARAMS));
-                    }
                     if mask & KADM5_TL_DATA != 0
                         && let Err(e) = g.merge_tl_data_in(&name, &req, &fields.tl_data)
                     {
@@ -2367,9 +2373,9 @@ fn dispatch_kadm5_ticket(
             }
         }
         CREATE_PRINCIPAL | CREATE_PRINCIPAL3 => {
-            let (name, prealm, pass, policy) = parse_create(args, proc == CREATE_PRINCIPAL3)?;
-            let req = req_realm(&prealm, &realm);
-            let tid = acl_id(&name, &req);
+            let c = parse_create(args, proc == CREATE_PRINCIPAL3)?;
+            let req = req_realm(&c.prealm, &realm);
+            let tid = acl_id(&c.name, &req);
             if changepw
                 || acl
                     .check(actor, krb5_kdc::AdminOp::Create, Some(&tid))
@@ -2377,28 +2383,36 @@ fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_ADD));
             }
+            if c.mask & KADM5_TL_DATA != 0 && c.tl_data.iter().any(|t| t.ty < 256) {
+                return Ok(generic_ret(API_V2, KADM5_BAD_TL_TYPE));
+            }
             let mut g = match write_store(store, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
             let rs = acl.restrictions(actor, Some(&tid));
             let skip_policy = rs.is_some_and(|r| r.clear_policy || r.policy.is_some());
-            if let Some(ref pol) = policy
+            if let Some(ref pol) = c.policy
                 && !skip_policy
-                && let Err(e) = g.check_named_policy(pol, pass.as_bytes())
+                && let Err(e) = g.check_named_policy(pol, c.pass.as_bytes())
             {
                 return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
             }
-            match g.insert_new_password(&name, &req, pass.as_bytes(), &[]) {
+            match g.insert_new_password(&c.name, &req, c.pass.as_bytes(), &[]) {
                 Ok(()) => {
+                    if c.mask & KADM5_TL_DATA != 0
+                        && let Err(e) = g.merge_tl_data_in(&c.name, &req, &c.tl_data)
+                    {
+                        return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
+                    }
                     if let Some(rs) = rs
-                        && let Err(e) = g.impose_acl_restrictions_in(&name, &req, rs)
+                        && let Err(e) = g.impose_acl_restrictions_in(&c.name, &req, rs)
                     {
                         return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
                     }
                     if !skip_policy
-                        && let Some(pol) = policy
-                        && let Err(e) = g.set_principal_policy_in(&name, &req, Some(pol))
+                        && let Some(pol) = c.policy
+                        && let Err(e) = g.set_principal_policy_in(&c.name, &req, Some(pol))
                     {
                         return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
                     }
@@ -3122,20 +3136,33 @@ fn encode_pols(api: u32, names: &[String]) -> Vec<u8> {
     w.b
 }
 
-fn parse_create(
-    args: &[u8],
-    v3: bool,
-) -> Result<(PrincipalName, String, String, Option<String>), Error> {
+struct CreateFields {
+    name: PrincipalName,
+    prealm: String,
+    pass: String,
+    policy: Option<String>,
+    tl_data: Vec<TlData>,
+    mask: u32,
+}
+
+fn parse_create(args: &[u8], v3: bool) -> Result<CreateFields, Error> {
     let mut r = XdrR::new(args);
     let _api = r.u32()?;
-    let (princ, prealm) = r.principal_realm()?;
-    let policy = skip_principal_ent_rest(&mut r)?;
-    let _mask = r.u32()?;
+    let (name, prealm) = r.principal_realm()?;
+    let (policy, tl_data) = skip_principal_ent_rest(&mut r)?;
+    let mask = r.u32()?;
     if v3 {
         r.skip_array_i32_pairs()?;
     }
     let pass = r.nullstring()?.unwrap_or_default();
-    Ok((princ, prealm, pass, policy))
+    Ok(CreateFields {
+        name,
+        prealm,
+        pass,
+        policy,
+        tl_data,
+        mask,
+    })
 }
 
 fn parse_chpass(args: &[u8], v3: bool) -> Result<(PrincipalName, String, String, bool), Error> {
@@ -3669,7 +3696,7 @@ fn encode_extract_keys(api: u32, p: &krb5_kdc::Principal, kvno: u32) -> Vec<u8> 
 }
 
 /// After the leading principal, skip the rest of `kadm5_principal_ent_rec`.
-fn skip_principal_ent_rest(r: &mut XdrR<'_>) -> Result<Option<String>, Error> {
+fn skip_principal_ent_rest(r: &mut XdrR<'_>) -> Result<(Option<String>, Vec<TlData>), Error> {
     // 4 timestamps/deltats: expire, last_pwd, pw_expire, max_life
     for _ in 0..4 {
         r.u32()?;
@@ -3691,14 +3718,16 @@ fn skip_principal_ent_rest(r: &mut XdrR<'_>) -> Result<Option<String>, Error> {
     let n_key = r.u32()?; // int16 via xdr_int
     let _n_tl = r.u32()?;
     let tl_null = r.u32()?;
+    let mut tl_data = Vec::new();
     if tl_null == 0 {
         loop {
             let more = r.u32()?;
             if more == 0 {
                 break;
             }
-            r.u32()?; // type (int16 via xdr_int)
-            let _ = r.opaque()?;
+            let ty = r.u32()?.cast_signed();
+            let contents = r.opaque()?;
+            tl_data.push(TlData { ty, contents });
         }
     }
     // xdr_array of key_data_nocontents
@@ -3714,7 +3743,7 @@ fn skip_principal_ent_rest(r: &mut XdrR<'_>) -> Result<Option<String>, Error> {
             r.u32()?; // type[1]
         }
     }
-    Ok(policy)
+    Ok((policy, tl_data))
 }
 
 struct XdrR<'a> {
