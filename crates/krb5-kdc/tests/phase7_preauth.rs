@@ -12,7 +12,7 @@ use krb5_kdc::{
     Acl, AdminOp, Error, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_SVR, KDB_OK_TO_AUTH_AS_DELEGATE,
     NamedPolicy, PacTicket, PrincipalStore, RID_FIRST_USER, S2K_ITERS, TEST_ADMIN,
     TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
-    decrypt_ticket_part, documented_admin_id, documented_host, pa_enc_timestamp,
+    decrypt_ticket_part, documented_admin_id, documented_host, load_dump_path, pa_enc_timestamp,
     pac_from_ticket_part, sign_pac, tgs_req, ticket_checksum_der, verify_pac,
     verify_pac_signatures, wrap_win2k_pac,
 };
@@ -839,6 +839,46 @@ fn explicit_as_armor_expired_tgt_is_tkt_expired() {
     .expect("FAST wrap");
     let err = krb5_kdc::issue_as(&store, &fast_req).expect_err("expired armor");
     assert_eq!(issue_code(err), err::TKT_EXPIRED);
+}
+
+#[test]
+fn explicit_as_armor_future_starttime_is_tkt_nyv() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = user_key();
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 856);
+    let krbtgt = store.krbtgt().unwrap().first_current_key().unwrap();
+    let mut part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("TGT");
+    part.starttime = Some(KerberosTime::now().add_seconds(3600).unwrap());
+    let plain = encode(&part).expect("enc-tkt");
+    let usage = KeyUsage::new(ku::TICKET).unwrap();
+    let cipher = encrypt(&krbtgt.key, usage, &plain).expect("ticket");
+    let mut ticket = issued.rep.0.ticket.clone();
+    ticket.enc_part.cipher = cipher.into();
+    let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x4au8; 32])
+        .expect("subkey");
+    let armor_ap = build_fast_armor(
+        ticket,
+        &issued.session_key,
+        &ascii(TEST_REALM),
+        &cname,
+        Some(&sub),
+    )
+    .expect("armor");
+    let akey = armor_key(&issued.session_key, Some(&sub)).expect("akey");
+    let mut fast_req = as_req(cname, TEST_REALM, 857, None).unwrap();
+    let inner = fast_req.0.req_body.clone();
+    wrap_fast_split_opts(
+        &mut fast_req,
+        &armor_ap,
+        &akey,
+        vec![pa_enc_timestamp(&key).expect("pa")],
+        inner,
+        krb5_types::fast::fast_options_none(),
+    )
+    .expect("FAST wrap");
+    let err = krb5_kdc::issue_as(&store, &fast_req).expect_err("future starttime armor");
+    assert_find_fast(err, err::TKT_NYV, "FAST armor NYV");
 }
 
 #[test]
@@ -2310,6 +2350,129 @@ fn spake_challenge_then_as_rep() {
         cookie_bytes.starts_with(b"MIT1"),
         "SPAKE cookie is MIT1 not a raw blob"
     );
+}
+
+fn golden_dump_store() -> PrincipalStore {
+    let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/traces/kdb/mit-dump-v7.txt");
+    load_dump_path(&p, b"masterpassword").expect("golden dump")
+}
+
+fn spake_round1(
+    store: &PrincipalStore,
+    nonce: u32,
+) -> (
+    ProtocolKey,
+    PaData,
+    Vec<u8>,
+    krb5_types::spake::SpakeChallenge,
+) {
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = store
+        .get_name(&cname)
+        .expect("user")
+        .key_for(EncryptionType::Aes256CtsHmacSha196)
+        .expect("aes256-sha1 key")
+        .key
+        .clone();
+    let support = pa_spake_support();
+    let req1 = as_req(cname, TEST_REALM, nonce, Some(vec![support.clone()])).unwrap();
+    let err = krb5_kdc::issue_as(store, &req1).unwrap_err();
+    let e_data = match err {
+        Error::Protocol {
+            code,
+            e_data: Some(e_data),
+            ..
+        } if code == err::MORE_PREAUTH_DATA_REQUIRED => e_data,
+        Error::PreauthRequired { e_data } => e_data,
+        other => panic!("expected SPAKE challenge, got {other:?}"),
+    };
+    let method: MethodData = decode(&e_data).expect("METHOD-DATA");
+    let spa = method
+        .iter()
+        .find(|p| p.padata_type == pa::SPAKE)
+        .expect("PA-SPAKE")
+        .clone();
+    let cookie = method
+        .iter()
+        .find(|p| p.padata_type == pa::FX_COOKIE)
+        .expect("cookie")
+        .padata_value
+        .as_ref()
+        .to_vec();
+    let msg: krb5_types::spake::PaSpake = decode(spa.padata_value.as_ref()).expect("PaSpake");
+    let chal = match msg {
+        krb5_types::spake::PaSpake::Challenge(c) => c,
+        other => panic!("expected SPAKE challenge, got {other:?}"),
+    };
+    (key, spa, cookie, chal)
+}
+
+#[test]
+fn spake_cookie_round_trips_on_golden_dump() {
+    let store = golden_dump_store();
+    let krbtgt = store.krbtgt().expect("krbtgt");
+    let first = krbtgt.first_current_key().expect("first current");
+    let best = krbtgt.best_key().expect("best");
+    assert_ne!(
+        first.etype, best.etype,
+        "golden dump stores 20,19,18,17 so first_current ≠ best_key"
+    );
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let support = pa_spake_support();
+    let (key, spa, cookie, chal) = spake_round1(&store, 321);
+    assert!(cookie.starts_with(b"MIT1"), "SPAKE cookie is MIT1");
+    let mut req2 = as_req(cname, TEST_REALM, 322, None).unwrap();
+    let body_der = encode(&req2.0.req_body).expect("body");
+    let (resp, spake_key) = pa_spake_response(
+        &key,
+        support.padata_value.as_ref(),
+        spa.padata_value.as_ref(),
+        chal.pubkey.as_ref(),
+        &body_der,
+    )
+    .expect("resp");
+    req2.0.padata = Some(vec![
+        resp,
+        krb5_types::PaData {
+            padata_type: pa::FX_COOKIE,
+            padata_value: cookie.into(),
+        },
+    ]);
+    let issued = krb5_kdc::issue_as(&store, &req2).expect("SPAKE AS on golden dump");
+    assert_eq!(issued.as_rep_key.as_bytes(), spake_key.as_bytes());
+}
+
+#[test]
+fn spake_unknown_cookie_kvno_is_preauth_failed() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let support = pa_spake_support();
+    let (key, spa, mut cookie, chal) = spake_round1(&store, 323);
+    assert!(cookie.starts_with(b"MIT1") && cookie.len() > 8);
+    cookie[4..8].copy_from_slice(&0xffff_ffff_u32.to_be_bytes());
+    let mut req2 = as_req(cname, TEST_REALM, 324, None).unwrap();
+    let body_der = encode(&req2.0.req_body).expect("body");
+    let (resp, _) = pa_spake_response(
+        &key,
+        support.padata_value.as_ref(),
+        spa.padata_value.as_ref(),
+        chal.pubkey.as_ref(),
+        &body_der,
+    )
+    .expect("resp");
+    req2.0.padata = Some(vec![
+        resp,
+        krb5_types::PaData {
+            padata_type: pa::FX_COOKIE,
+            padata_value: cookie.into(),
+        },
+    ]);
+    let err = krb5_kdc::issue_as(&store, &req2).expect_err("unknown kvno cookie");
+    match err {
+        Error::Protocol { code, .. } => assert_eq!(code, err::PREAUTH_FAILED),
+        other => panic!("expected 24, got {other:?}"),
+    }
 }
 
 #[test]

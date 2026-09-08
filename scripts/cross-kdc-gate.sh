@@ -163,5 +163,51 @@ if grep -q 'PROCESS_TGS' "$OUT/mit-kdc.log"; then
     die "MIT krb5kdc logged PROCESS_TGS during the cross-KDC exchange"
 fi
 
-log "cross.kdc.gate" "ok" ",\"tgt_etype\":\"$MIT_TGT_ETYPE\",\"directions\":4"
+echo "==== MIT kinit SPAKE P-256 on the golden dump both KDCs ===="
+docker exec "$NAME" python3 -c '
+from pathlib import Path
+for src, dst in (("/tmp/rust-krb5.conf", "/tmp/spake-rust-krb5.conf"), ("/tmp/mit-krb5.conf", "/tmp/spake-mit-krb5.conf")):
+    t = Path(src).read_text()
+    if "spake_preauth_groups" not in t:
+        t = t.replace("[libdefaults]", "[libdefaults]\n    spake_preauth_groups = P-256\n    preferred_preauth_types = 151", 1)
+    Path(dst).write_text(t)
+'
+# MIT krb5kdc reads spake_preauth_groups from [libdefaults] (krb5.conf).
+docker exec "$NAME" python3 -c '
+from pathlib import Path
+p = Path("/etc/krb5.conf")
+t = p.read_text()
+if "spake_preauth_groups" not in t:
+    t = t.replace("[libdefaults]", "[libdefaults]\n    spake_preauth_groups = P-256", 1)
+Path("/tmp/spake-kdc-krb5.conf").write_text(t)
+'
+docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
+sleep 0.3
+STARTLOG="$(docker exec "$NAME" sh -c 'KRB5_CONFIG=/tmp/spake-kdc-krb5.conf krb5kdc -n >/tmp/mit-kdc.log 2>&1 & sleep 0.5; cat /tmp/mit-kdc.log' 2>&1 || true)"
+echo "$STARTLOG"
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+[ "$ok" = 1 ] || die "MIT krb5kdc did not listen on 88 after SPAKE groups"
+spake_kinit_via() {
+    local side=$1 listing
+    docker exec -e KRB5CCNAME="$CC" "$NAME" kdestroy -A >/dev/null 2>&1 || true
+    if ! docker exec -e KRB5_CONFIG="/tmp/spake-${side}-krb5.conf" -e KRB5CCNAME="$CC" "$NAME" \
+        sh -c 'printf "preauthpw\n" | kinit pauser@KERBER.TEST'; then
+        kdc_logs
+        die "SPAKE kinit via $side KDC failed"
+    fi
+    listing="$(docker exec -e KRB5_CONFIG="/tmp/spake-${side}-krb5.conf" -e KRB5CCNAME="$CC" "$NAME" klist -C 2>&1 || true)"
+    echo "$listing"
+    echo "$listing" | grep -q 'pa_type.*= 151' || die "SPAKE kinit via $side (rust_kdc or mit_kdc) missing pa_type 151"
+}
+spake_kinit_via rust
+spake_kinit_via mit
+
+log "cross.kdc.gate" "ok" ",\"tgt_etype\":\"$MIT_TGT_ETYPE\",\"directions\":4,\"spake_pa_type\":151"
 echo "cross-kdc-gate ok"

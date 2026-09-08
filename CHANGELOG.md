@@ -18,11 +18,13 @@ this project uses semantic versioning once a crate is published.
   (`kdc_util.c:217-229`, `authdata_dec.c:115-181`). Nothing in 1.22.2
   emits 71. diffsend `armor-ap-req-as-pa-tgs-req` and
   `tgs-ad-fx-armor-authenticator`.
-- **kdc.** PA-FX-COOKIE is MIT1 ‖ kvno ‖ enc(PRF+ of the local TGT key
-  over `COOKIE`‖unparsed client, ku 513, 600 s). Garbage, expired, and
-  wrong-client cookies are ignored (`kdc_fast_read_cookie` returns 0).
-  Empty module state is the 3-byte `MIT` cookie. TGS FAST errors carry
-  no cookie.
+- **kdc.** PA-FX-COOKIE is MIT1 ‖ kvno ‖ enc(PRF+ of the first current
+  local TGT key over `COOKIE`‖unparsed client, ku 513, 600 s). Mint and
+  read use `get_first_current_key`; an unknown kvno is ignored. Garbage,
+  expired, and wrong-client cookies are ignored (`kdc_fast_read_cookie`
+  returns 0). Empty module state is the 3-byte `MIT` cookie. TGS FAST
+  errors carry no cookie. Armor AP-REQ `starttime` in the future is 33
+  `FIND_FAST`.
 - **kdc.** AS/TGS entry validation matches `process_as_req` /
   `gather_tgs_req_info` / `kdc_rd_ap_req`: AS `msg_type` ≠ 10 is 60
   `VALIDATE_MESSAGE_TYPE`; pvno ≠ 5 is dropped; TGS `msg_type` ≠ 12 is

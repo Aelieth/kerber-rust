@@ -64,6 +64,31 @@ pub fn prf_plus(key: &ProtocolKey, seed: &[u8], len: usize) -> Result<Vec<u8>, E
     Ok(out)
 }
 
+/// MIT `krb5_c_derive_prfplus` (`cf2.c:82-121`): PRF+ of `keybytes`, then rand2key.
+///
+/// # Errors
+///
+/// PRF or key-length failures.
+pub fn derive_prfplus(key: &ProtocolKey, input: &[u8]) -> Result<ProtocolKey, Error> {
+    let et = key.etype();
+    let mut rnd = prf_plus(key, input, et.keybytes())?;
+    let out = if et == EncryptionType::Des3CbcSha1 {
+        if rnd.len() != 21 {
+            rnd.zeroize();
+            return Err(Error::InvalidKeyLength);
+        }
+        let raw = crate::weak::des3_random_to_key(&rnd);
+        let k = ProtocolKey::from_bytes(et, &raw);
+        rnd.zeroize();
+        k?
+    } else {
+        let k = ProtocolKey::from_bytes(et, &rnd);
+        rnd.zeroize();
+        k?
+    };
+    Ok(out)
+}
+
 fn prf_aes_sha1(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
     let mut hasher = Sha1::new();
     hasher.update(input);
@@ -143,6 +168,9 @@ mod tests {
         appended.push(1);
         let wrong = prf(&key, &appended).unwrap();
         assert_ne!(plus, wrong, "counter must be prepended, not appended");
+        let derived = derive_prfplus(&key, b"pepper").unwrap();
+        let direct = prf_plus(&key, b"pepper", key.etype().key_len()).unwrap();
+        assert_eq!(derived.as_bytes(), direct.as_slice());
     }
 
     #[test]

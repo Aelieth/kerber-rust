@@ -147,6 +147,15 @@ impl EncryptionType {
         }
     }
 
+    /// MIT `enc->keybytes`: PRF+ / random-to-key input size (`crypto_int.h:95-97`).
+    #[must_use]
+    pub const fn keybytes(self) -> usize {
+        match self {
+            Self::Des3CbcSha1 => 21,
+            _ => self.key_len(),
+        }
+    }
+
     /// Truncated HMAC / CMAC length in octets.
     #[must_use]
     pub const fn hmac_output_len(self) -> usize {

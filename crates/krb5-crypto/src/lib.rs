@@ -55,7 +55,7 @@ pub use ops::{
     kdb_decrypt_key, kdb_encrypt_key, string_to_key, unkeyed_checksum, verify_checksum_collproof,
     verify_checksum_keyed, verify_checksum_type,
 };
-pub use prf::{prf, prf_plus};
+pub use prf::{derive_prfplus, prf, prf_plus};
 pub use spake::{
     SPAKE_GROUP_P256, spake_decode_point, spake_derive_key, spake_finish, spake_kdc_keygen,
     spake_m_bytes, spake_n_bytes, spake_public, spake_public_wbytes, spake_result_wbytes,

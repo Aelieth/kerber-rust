@@ -3,9 +3,9 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256, checksum, cksumtype_is_keyed, decrypt,
-    dh_generate, dh_group_for_prime, dh_shared, encrypt, krb_fx_cf2, octetstring2key,
-    p256_generate, p256_shared, pkinit_kdf_agile, prf_plus, spake_derive_key, spake_kdc_keygen,
-    spake_result_wbytes, spake_thash_update, spake_wbytes, verify_checksum_type,
+    derive_prfplus, dh_generate, dh_group_for_prime, dh_shared, encrypt, krb_fx_cf2,
+    octetstring2key, p256_generate, p256_shared, pkinit_kdf_agile, spake_derive_key,
+    spake_kdc_keygen, spake_result_wbytes, spake_thash_update, spake_wbytes, verify_checksum_type,
 };
 use krb5_protocol::{ReplayCache, ReplayKey};
 use krb5_types::{
@@ -206,9 +206,6 @@ fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<Protoco
     let Some(p) = store.fetch_name(&ap.ticket.sname)? else {
         return Err(proto_fast(err::NOT_US, "FAST armor TGT"));
     };
-    if !ap.ticket.sname.is_krbtgt_for(store.realm()) {
-        return Err(proto_fast(err::SERVER_NOMATCH, "FAST armor TGT"));
-    }
     let mut enc_tkt: Option<krb5_types::EncTicketPart> = None;
     for k in &p.keys {
         if let Ok(plain) = decrypt(&k.key, tkt_usage, cipher)
@@ -223,8 +220,17 @@ fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<Protoco
         return Err(proto_fast(err::TKT_NYV, "FAST armor INVALID"));
     }
     let now = i64::from(krb5_types::KerberosTime::now().unix_seconds());
+    let skew = store.policy().skew;
+    let start = enc_tkt.starttime.as_ref().unwrap_or(&enc_tkt.authtime);
+    if i64::from(start.unix_seconds()) > now + skew {
+        return Err(proto_fast(err::TKT_NYV, "FAST armor NYV"));
+    }
     if i64::from(enc_tkt.endtime.unix_seconds()) < now {
         return Err(proto_fast(err::TKT_EXPIRED, "FAST armor expired"));
+    }
+    // MIT armor_ap_request: 26 only after rd_req decrypts (`fast_util.c:51-68`).
+    if !ap.ticket.sname.is_krbtgt_for(store.realm()) {
+        return Err(proto_fast(err::SERVER_NOMATCH, "FAST armor TGT"));
     }
     let etype = EncryptionType::from_iana(enc_tkt.key.keytype)
         .or_else(|_| EncryptionType::known(enc_tkt.key.keytype))?;
@@ -257,8 +263,7 @@ fn derive_cookie_key(
     let mut seed = Vec::with_capacity(6 + princ.len());
     seed.extend_from_slice(b"COOKIE");
     seed.extend_from_slice(princ.as_bytes());
-    let rnd = prf_plus(tgt_key, &seed, tgt_key.etype().key_len())?;
-    ProtocolKey::from_bytes(tgt_key.etype(), &rnd).map_err(Error::from)
+    derive_prfplus(tgt_key, &seed).map_err(Error::from)
 }
 
 /// MIT `kdc_fast_make_cookie` (`fast_util.c:655-721`). Empty contents → `MIT`.
@@ -277,15 +282,16 @@ pub(crate) fn make_cookie_at(
     contents: &[PaData],
     time: i32,
 ) -> Result<Vec<u8>, Error> {
-    let krbtgt_p = store
-        .fetch_krbtgt()?
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::GET_LOCAL_TGT))?;
-    let krbtgt = krbtgt_p
-        .best_key()
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::GET_LOCAL_TGT))?;
+    // MIT kdc_fast_make_cookie: empty contents or no TGT key → 3-byte MIT (`:673-676`).
     if contents.is_empty() {
         return Ok(b"MIT".to_vec());
     }
+    let Ok(Some(krbtgt_p)) = store.fetch_krbtgt() else {
+        return Ok(b"MIT".to_vec());
+    };
+    let Some(krbtgt) = krbtgt_p.first_current_key() else {
+        return Ok(b"MIT".to_vec());
+    };
     let key = derive_cookie_key(&krbtgt.key, client, store.realm())?;
     let der = encode(&krb5_types::fast::SecureCookie {
         time,
@@ -306,39 +312,40 @@ pub(crate) fn open_cookie(
     store: &dyn PrincipalRead,
     client: &PrincipalName,
     blob: &[u8],
-) -> Result<Vec<PaData>, Error> {
+) -> Vec<PaData> {
     if blob.len() <= 8 || !blob.starts_with(COOKIE_MAGIC) {
-        return Ok(Vec::new());
+        return Vec::new();
     }
     let kvno = u32::from_be_bytes([blob[4], blob[5], blob[6], blob[7]]);
-    let Some(krbtgt_p) = store.fetch_krbtgt()? else {
-        return Ok(Vec::new());
+    let Ok(Some(krbtgt_p)) = store.fetch_krbtgt() else {
+        return Vec::new();
     };
-    let Some(ke) = krbtgt_p
-        .keys
-        .iter()
-        .find(|k| k.kvno == kvno)
-        .or_else(|| krbtgt_p.best_key())
-    else {
-        return Ok(Vec::new());
+    let current = krbtgt_p.first_current_key();
+    let ke = if current.is_some_and(|k| k.kvno == kvno) {
+        current
+    } else {
+        krbtgt_p.first_key_at_kvno(kvno)
+    };
+    let Some(ke) = ke else {
+        return Vec::new();
     };
     let Ok(key) = derive_cookie_key(&ke.key, client, store.realm()) else {
-        return Ok(Vec::new());
+        return Vec::new();
     };
     let Ok(usage) = KeyUsage::new(ku::PA_FX_COOKIE) else {
-        return Ok(Vec::new());
+        return Vec::new();
     };
     let Ok(plain) = decrypt(&key, usage, &blob[8..]) else {
-        return Ok(Vec::new());
+        return Vec::new();
     };
     let Ok(cookie) = decode::<krb5_types::fast::SecureCookie>(&plain) else {
-        return Ok(Vec::new());
+        return Vec::new();
     };
     let now = i32::try_from(KerberosTime::now().unix_seconds()).unwrap_or(0);
     if now.saturating_sub(cookie.time) > COOKIE_LIFETIME {
-        return Ok(Vec::new());
+        return Vec::new();
     }
-    Ok(cookie.data)
+    cookie.data
 }
 
 /// Wrap KrbFastResponse into PA-FX-FAST padata.
@@ -400,7 +407,7 @@ pub(crate) fn process_spake(
     if let krb5_types::spake::PaSpake::Response(resp) = &msg {
         let cookie = find_pa(padata, pa::FX_COOKIE)
             .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
-        let inner = open_cookie(store, &client.name, cookie)?;
+        let inner = open_cookie(store, &client.name, cookie);
         let secret = inner
             .iter()
             .find(|p| p.padata_type == pa::SPAKE)

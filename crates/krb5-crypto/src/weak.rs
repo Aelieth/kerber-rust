@@ -227,7 +227,7 @@ pub(crate) fn des3_string_to_key(password: &[u8], salt: &[u8]) -> Result<Protoco
 /// RFC 3961 §6.3.1 DES3random-to-key: three 56-bit groups, last output
 /// byte collects input LSBs in reverse order, then odd parity (+ weak-key
 /// correction as in §6.2).
-fn des3_random_to_key(raw21: &[u8]) -> [u8; 24] {
+pub(crate) fn des3_random_to_key(raw21: &[u8]) -> [u8; 24] {
     let mut out = [0u8; 24];
     for i in 0..3 {
         let p = &raw21[i * 7..i * 7 + 7];
