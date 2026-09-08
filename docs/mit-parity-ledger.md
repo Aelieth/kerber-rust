@@ -26,11 +26,12 @@ Schema: `MIT file:line | check | MIT status + wire code | Rust site | Rust e_tex
 Verdict ∈ {exact, stricter-documented (`docs/security.md` row), absent,
 deviation, deferred (reason + promotion oracle)}. Proof `none` only
 with deferred. A named gate cell or `diffsend` case that does not exist
-is `proposed`. The nineteen live `diffsend` cases are `garbage-pdu`,
+is `proposed`. The twenty live `diffsend` cases are `garbage-pdu`,
 `unknown-cname`, `etype-nosupp`, `as-session-enctype`, `wrong-realm`, `pauser-no-preauth`,
 `skewed-timestamp`, `as-needchange`, `as-invalid-opts`, `as-validate-before-preauth`,
 `as-optimistic-encts-wrong-etype`, `unknown-sname`, `as-success`, `as-retransmit`,
-`as-request-anonymous`, `tgs-success`, `tgs-not-a-tgt`, `tgt-expired`, `tgt-nyv`.
+`as-request-anonymous`, `tgs-success`, `tgs-not-a-tgt`, `tgt-expired`, `tgt-nyv`,
+`fast-armor-no-subkey`.
 
 Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
@@ -38,7 +39,7 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 
 Counts (after the round-up's password-history port):
 **325** = A1 117 + A2 79 + A3 62 + A4 67.
-exact 138 · stricter-documented 11 · deviation 95 ·
+exact 141 · stricter-documented 9 · deviation 94 ·
 absent 63 · deferred 18.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
@@ -54,9 +55,10 @@ a short plan when reached.
 ### F1 FAST armor / AD-FX-ARMOR / cookie (security)
 
 1. `kdc: Refuse FAST armor without an authenticator subkey like armor_ap_request` —
-   AS explicit armor (`fast_util.c:70-76`) and TGS-without-subkey
-   (`:157-166`): 12, e_text `FIND_FAST`, detail `ap-request armor without subkey`.
-   Rust falls back to the TGT session. MIT clients always send a subkey.
+   **landed (A′-1 item 1).** AS explicit armor (`fast_util.c:70-76`) and TGS
+   explicit armor without a PA-TGS-REQ subkey (`:157-166`): 12, e_text
+   `FIND_FAST`, detail `ap-request armor without subkey`. TGS explicit armor
+   with a PA-TGS-REQ subkey stays 24. MIT clients always send a subkey.
 2. `kdc: Refuse a header ticket or authenticator carrying AD-FX-ARMOR like kdc_process_tgs_req` —
    `kdc_util.c:218-228` → 12 `PROCESS_TGS` (detail `ticket valid only as FAST armor`).
 3. `kdc: Bind PA-FX-COOKIE to the client and expire it at 600 seconds like kdc_fast_make_cookie` —
@@ -170,7 +172,7 @@ mismatches, not extra statuses.
 | do_tgs_req.c:609-610,1202-1221 | `msg_type != TGS_REQ` (`gather_tgs_req_info` returns `KRB5_BADMSGTYPE`; `process_tgs_req` sets the status and answers through `prepare_error_tgs`) | `UNKNOWN_REASON` 60 (no cname; sname echoed) | issue.rs handle_request | dispatch on the outer APPLICATION tag only; `msg_type` decoded and never read | deferred (W1 A′-1 item 4) | proposed: diffsend `tgs-bad-msg-type` (60 `UNKNOWN_REASON` on both legs) |
 | do_tgs_req.c:623 | `kdc_process_tgs_req` any fail | PROCESS_TGS + inner code | issue.rs process_tgs_header | `PROCESS_TGS` + inner code | exact | `phase7_preauth.rs` PROCESS_TGS cells; `capaths.rs` PROCESS_TGS |
 | do_tgs_req.c:637 | `kdc_find_fast` fail | FIND_FAST + inner code (41/12/24/60/93); MIT log is the `k5_setmsg` text | krb5-kdc/preauth.rs verify_fast_req_checksum; krb5-kdc/preauth.rs proto_fast; krb5-kdc/issue.rs issue_as_body | FIND_FAST + inner code (G3; detail = previous message) | exact | `fast_tgs_unkeyed_type_with_bad_bytes_is_modified`; docs/security.md FAST req_checksum |
-| do_tgs_req.c:637 + fast_util.c:159 | explicit AP-REQ FAST armor on TGS | FIND_FAST 24 only if subkey present (log `Ap-request armor not permitted with TGS`) | krb5-kdc/preauth.rs unwrap_fast_tgs | FIND_FAST 24 even without subkey (G3) | stricter-documented | `tgs_fast_explicit_armor_is_preauth_failed`; docs/security.md FAST TGS AP-REQ armor |
+| do_tgs_req.c:637 + fast_util.c:159 | explicit AP-REQ FAST armor on TGS | FIND_FAST 24 only if subkey present (log `Ap-request armor not permitted with TGS`); without subkey, `armor_ap_request` | krb5-kdc/preauth.rs kdc_find_fast; krb5-kdc/preauth.rs unwrap_fast_tgs; krb5-kdc/preauth.rs proto_fast | FIND_FAST 24 with PA-TGS-REQ subkey; without it, `armor_ap_request` (12 if that armor has no subkey) | exact | `tgs_fast_explicit_armor_is_preauth_failed`; `tgs_fast_explicit_armor_without_pa_tgs_subkey_is_accepted`; `tgs_fast_explicit_armor_without_any_subkey_is_policy`; docs/security.md FAST TGS AP-REQ armor |
 | do_tgs_req.c:642 | FAST inner body `server == NULL` | NULL_SERVER 7 | issue.rs process_tgs_header | `no sname` 7 | deviation | proposed: diffsend FAST inner without sname |
 | do_tgs_req.c:649 `get_local_tgt` kdc_util.c:486 | no `krbtgt/<body.realm>@<body.realm>` | GET_LOCAL_TGT 60 (`KDB_NOENTRY`→GENERIC) | issue.rs issue_tgs_body | `GET_LOCAL_TGT` 60 | exact | `tgs_local_sname_unknown_body_realm_is_get_local_tgt`; `phase7_preauth.rs` GET_LOCAL_TGT; `capaths-transit-gate.sh` GARBAGE.EXAMPLE / dest RENEW |
 | ORDER do_tgs_req.c:649 vs tgs_policy.c:687 | GET_LOCAL_TGT before `check_tgs_times` | 60 then times | issue.rs process_tgs_header then :689 | times (`NOT_YET_VALID`/`expired`/`INVALID`) then 60 | deviation | proposed: diffsend: foreign `body.realm` + INVALID/NYV TGT (MIT 60, Rust 33/32) |
@@ -398,10 +400,10 @@ are RFC 4120/6113 integers. After W0d G3, FAST unwrap failures wire
 | kdc_preauth.c:1578-1609 | PA-PAC-REQUEST (128) include_pac; default TRUE | omit PAC if false | issue.rs issue_as_body/893 only `NO_AUTH_DATA_REQUIRED` | always PAC | deviation | propose `scripts/ad-windows-gate.sh` / unit PA-PAC-REQUEST=false |
 | fast_util.c:207-224 (post-E3) | verify req_checksum **then** keyed-cksum | bad bytes 41 FIND_FAST; unkeyed 12 FIND_FAST (log `Unkeyed checksum used in fast_req`); unknown type 60 FIND_FAST; keyed types match by enc provider (`crypto_int.h:596-608`); cksumtype 0 → mandatory then `is_keyed(0)` → 12 | krb5-kdc/preauth.rs verify_fast_req_checksum; krb5-kdc/preauth.rs proto_fast; krb5-crypto/ops.rs verify_checksum_type | 41/12/60 FIND_FAST (G2+G3+H2; detail holds the MIT log text) | exact | `fast_as_rsa_md5_unkeyed_is_policy`; `fast_as_unkeyed_type_with_bad_bytes_is_modified`; `fast_as_crc32_checksum_is_generic`; `fast_as_short_mac_is_generic`; `fast_as_arcfour_hmac_type_over_aes_key_wrong_bytes_is_modified`; `fast_as_same_provider_type_wrong_bytes_is_modified`; `fast_as_cross_provider_type_is_generic`; `fast_as_cksumtype_zero_valid_mac_is_policy`; proposed diffsend `-138`/type-0 |
 | do_as_req.c:526-532 | AS checksum over wire KDC-REQ-BODY (field 4) | `FIND_FAST` | krb5-kdc/preauth.rs proto_fast | `FIND_FAST` | exact | E3; `scripts/mit-fast-kdc-gate.sh` |
-| fast_util.c:159-163 | TGS explicit AP-REQ armor **with** tgs_subkey | FIND_FAST 24 (log `Ap-request armor not permitted with TGS`) | krb5-kdc/preauth.rs unwrap_fast_tgs always reject armor; krb5-kdc/preauth.rs proto_fast | FIND_FAST 24 (G3; detail is the previous e_text) | exact | `tgs_fast_explicit_armor_is_preauth_failed` |
-| fast_util.c:157-166 | TGS explicit AP-REQ armor **without** tgs_subkey → `armor_ap_request` | may succeed or FIND_FAST 12 (log `ap-request armor without subkey`) | krb5-kdc/preauth.rs unwrap_fast_tgs still 24 | preauth.rs:81-86 still FIND_FAST 24 | stricter-documented | docs/security.md:86-88; proposed unit `tgs_fast_explicit_armor_no_subkey` + mit-fast-kdc-gate cell |
-| fast_util.c:180-184 | TGS FAST, no armor, no subkey | FIND_FAST 24 (log `No armor key but FAST armored request present`) | krb5-kdc/preauth.rs unwrap_fast_tgs_inner; krb5-kdc/preauth.rs proto_fast | FIND_FAST 24 (G3) | exact | `tgs_fast_without_subkey_is_preauth_failed` |
-| fast_util.c:70-76 | AS AP-REQ armor missing authenticator subkey | FIND_FAST 12 POLICY (log `ap-request armor without subkey`) | krb5-kdc/preauth.rs armor_key_from_ap `Ok(session)` | accepts; armor=TGT session (`preauth.rs:225-231` `Ok(session)`) | deviation (security) | proposed: unit + `scripts/mit-fast-kdc-gate.sh` no-subkey armor (MIT clients always send a subkey) |
+| fast_util.c:159-163 | TGS explicit AP-REQ armor **with** tgs_subkey | FIND_FAST 24 (log `Ap-request armor not permitted with TGS`) | krb5-kdc/preauth.rs kdc_find_fast; krb5-kdc/preauth.rs proto_fast | FIND_FAST 24 (detail `Ap-request armor not permitted with TGS`) | exact | `tgs_fast_explicit_armor_is_preauth_failed` |
+| fast_util.c:157-166 | TGS explicit AP-REQ armor **without** tgs_subkey → `armor_ap_request` | may succeed or FIND_FAST 12 (log `ap-request armor without subkey`) | krb5-kdc/preauth.rs kdc_find_fast; krb5-kdc/preauth.rs armor_key_from_ap | `armor_ap_request`; 12 when the armor authenticator has no subkey | exact | `tgs_fast_explicit_armor_without_pa_tgs_subkey_is_accepted`; `tgs_fast_explicit_armor_without_any_subkey_is_policy`; docs/security.md FAST TGS AP-REQ armor |
+| fast_util.c:180-184 | TGS FAST, no armor, no subkey | FIND_FAST 24 (log `No armor key but FAST armored request present`) | krb5-kdc/preauth.rs kdc_find_fast; krb5-kdc/preauth.rs proto_fast | FIND_FAST 24 (G3) | exact | `tgs_fast_without_subkey_is_preauth_failed` |
+| fast_util.c:70-76 | AS AP-REQ armor missing authenticator subkey | FIND_FAST 12 POLICY (log `ap-request armor without subkey`) | krb5-kdc/preauth.rs armor_key_from_ap; krb5-kdc/preauth.rs proto_fast | FIND_FAST 12 (detail `ap-request armor without subkey`) | exact | `fast_as_armor_without_subkey_is_policy`; diffsend `fast-armor-no-subkey` |
 | fast_util.c:277-355 + :427-440 | FAST reply always strengthen_key; CF2 replykey (`kdc_fast_response_handle_padata` / `kdc_fast_handle_reply_key`; no `kdc_fast_strengthen_reply_key` symbol). MIT client copies existing_key when strengthen_key is NULL | silent | AS issue.rs issue_as_body exact; TGS issue.rs issue_tgs_body `strengthen=None`, enc with subkey/session | same | deviation (parity, not interop-breaking) | `fast_as_exchange_strengthen_and_finished` (AS only); proposed TGS strengthen pin in mit-fast-kdc-gate |
 | fast_util.c:443-447; do_as_req.c:324-325 | `kdc_fast_hide_client`: hide-client-names (bit 1) makes the outer AS-REP client the anonymous principal `WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS` | anonymous outer client on the AS-REP | issue.rs issue_as_body sets the outer AS-REP cname/crealm to the anonymous principal when the FAST request set bit 1 (R2-P4); the real client stays inside the FAST reply | anonymous outer client on the AS-REP | exact (AS-REP success path; FAST error/TGS-REP hiding is the deferred row below) | `fast_hide_client_names_returns_the_anonymous_outer_client`; docs/security.md |
 | kdc_preauth.c:1092-1133 | filter_preauth_error: unknown → 24 | 24 default | krb5-kdc/issue.rs verify_enc_timestamp; krb5-kdc/issue.rs verify_encrypted_challenge | **34** `REPEAT` on a replayed enc-challenge blob vs MIT's **24** — a different wire code, not just a stricter one | deviation (R2-D1: the replay cache answers before `filter_preauth_error` runs) | `encrypted_challenge_replayed_blob_is_repeat`; security.md |

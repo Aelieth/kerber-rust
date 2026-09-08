@@ -41,13 +41,29 @@ pub(crate) fn unwrap_fast_as(
     padata: Option<&[PaData]>,
     body_der: &[u8],
 ) -> Result<Option<FastOk>, Error> {
-    unwrap_fast_as_inner(store, padata, body_der).map_err(map_fast_unwrap)
+    kdc_find_fast(store, padata, body_der, None, None).map_err(map_fast_unwrap)
 }
 
-fn unwrap_fast_as_inner(
+/// MIT `kdc_find_fast` for TGS: armor from the PA-TGS-REQ subkey, or
+/// `armor_ap_request` when explicit AP-REQ armor is present without that subkey.
+pub(crate) fn unwrap_fast_tgs(
     store: &dyn PrincipalRead,
     padata: Option<&[PaData]>,
-    body_der: &[u8],
+    pa_tgs_raw: &[u8],
+    subkey: Option<&EncryptionKey>,
+    session: &ProtocolKey,
+) -> Result<Option<FastOk>, Error> {
+    kdc_find_fast(store, padata, pa_tgs_raw, subkey, Some(session)).map_err(map_fast_unwrap)
+}
+
+/// MIT `kdc_find_fast` (`fast_util.c:126-247`). Inner `msg_type` is the outer
+/// APPLICATION tag in Rust (AS vs TGS dispatch already happened).
+fn kdc_find_fast(
+    store: &dyn PrincipalRead,
+    padata: Option<&[PaData]>,
+    checksummed_data: &[u8],
+    tgs_subkey: Option<&EncryptionKey>,
+    tgs_session: Option<&ProtocolKey>,
 ) -> Result<Option<FastOk>, Error> {
     let Some(raw) = find_pa(padata, pa::FX_FAST) else {
         return Ok(None);
@@ -56,67 +72,44 @@ fn unwrap_fast_as_inner(
         Ok(krb5_types::fast::PaFxFast::ArmoredData(w)) => w,
         _ => decode::<krb5_types::fast::KrbFastArmoredReq>(raw)?,
     };
-    let armor_key = armor_key_from(store, &armored)?;
-    // MIT fast_util.c:191-222: decrypt enc_fast_req → decode KrbFastReq → verify checksum.
-    let enc_usage = KeyUsage::new(ku::FAST_ENC)?;
-    let plain = decrypt(&armor_key, enc_usage, armored.enc_fast_req.cipher.as_ref())?;
-    let inner: krb5_types::fast::KrbFastReq = decode(&plain)?;
-    verify_fast_req_checksum(&armor_key, body_der, &armored.req_checksum)?;
-    let nonce = inner.req_body.nonce;
-    let inner_body = fast_req_body_der(&plain).map_or_else(|| encode(&inner.req_body), Ok)?;
-    Ok(Some(FastOk {
-        armor_key,
-        inner_padata: inner.padata,
-        inner_body,
-        nonce,
-        fast_options: inner.fast_options,
-    }))
-}
-
-/// MIT `kdc_find_fast` for TGS: armor from the PA-TGS-REQ decrypt, not a
-/// second ticket unwrap. Explicit AP-REQ armor is PREAUTH_FAILED.
-pub(crate) fn unwrap_fast_tgs(
-    padata: Option<&[PaData]>,
-    pa_tgs_raw: &[u8],
-    subkey: Option<&EncryptionKey>,
-    session: &ProtocolKey,
-) -> Result<Option<FastOk>, Error> {
-    unwrap_fast_tgs_inner(padata, pa_tgs_raw, subkey, session).map_err(map_fast_unwrap)
-}
-
-fn unwrap_fast_tgs_inner(
-    padata: Option<&[PaData]>,
-    pa_tgs_raw: &[u8],
-    subkey: Option<&EncryptionKey>,
-    session: &ProtocolKey,
-) -> Result<Option<FastOk>, Error> {
-    let Some(raw) = find_pa(padata, pa::FX_FAST) else {
-        return Ok(None);
-    };
-    let armored = match decode::<krb5_types::fast::PaFxFast>(raw) {
-        Ok(krb5_types::fast::PaFxFast::ArmoredData(w)) => w,
-        _ => decode::<krb5_types::fast::KrbFastArmoredReq>(raw)?,
-    };
-    if armored.armor.is_some() {
-        return Err(proto_fast(
-            err::PREAUTH_FAILED,
-            "Ap-request armor not permitted with TGS",
-        ));
+    let mut armor_key = None;
+    if let Some(armor) = armored.armor.as_ref() {
+        if armor.armor_type == krb5_types::fast::ARMOR_AP_REQUEST {
+            if tgs_subkey.is_some() {
+                return Err(proto_fast(
+                    err::PREAUTH_FAILED,
+                    "Ap-request armor not permitted with TGS",
+                ));
+            }
+            armor_key = Some(armor_key_from_ap(store, armor.armor_value.as_ref())?);
+        } else {
+            return Err(proto_fast(
+                err::PREAUTH_FAILED,
+                format!("Unknown FAST armor type {}", armor.armor_type),
+            ));
+        }
     }
-    let Some(sub) = subkey else {
-        return Err(proto_fast(
-            err::PREAUTH_FAILED,
-            "No armor key but FAST armored request present",
-        ));
+    let armor_key = match armor_key {
+        Some(k) => k,
+        None => match (tgs_subkey, tgs_session) {
+            (Some(sub), Some(session)) => {
+                let st = EncryptionType::from_iana(sub.keytype)
+                    .or_else(|_| EncryptionType::known(sub.keytype))?;
+                let subk = ProtocolKey::from_bytes(st, sub.keyvalue.as_ref())?;
+                krb_fx_cf2(&subk, session, b"subkeyarmor", b"ticketarmor")?
+            }
+            _ => {
+                return Err(proto_fast(
+                    err::PREAUTH_FAILED,
+                    "No armor key but FAST armored request present",
+                ));
+            }
+        },
     };
-    let st =
-        EncryptionType::from_iana(sub.keytype).or_else(|_| EncryptionType::known(sub.keytype))?;
-    let subk = ProtocolKey::from_bytes(st, sub.keyvalue.as_ref())?;
-    let armor_key = krb_fx_cf2(&subk, session, b"subkeyarmor", b"ticketarmor")?;
     let enc_usage = KeyUsage::new(ku::FAST_ENC)?;
     let plain = decrypt(&armor_key, enc_usage, armored.enc_fast_req.cipher.as_ref())?;
     let inner: krb5_types::fast::KrbFastReq = decode(&plain)?;
-    verify_fast_req_checksum(&armor_key, pa_tgs_raw, &armored.req_checksum)?;
+    verify_fast_req_checksum(&armor_key, checksummed_data, &armored.req_checksum)?;
     let nonce = inner.req_body.nonce;
     let inner_body = fast_req_body_der(&plain).map_or_else(|| encode(&inner.req_body), Ok)?;
     Ok(Some(FastOk {
@@ -199,22 +192,6 @@ fn verify_fast_req_checksum(
     Ok(())
 }
 
-fn armor_key_from(
-    store: &dyn PrincipalRead,
-    armored: &krb5_types::fast::KrbFastArmoredReq,
-) -> Result<ProtocolKey, Error> {
-    let Some(armor) = armored.armor.as_ref() else {
-        return Err(proto_fast(err::PREAUTH_FAILED, "FAST armor required"));
-    };
-    if armor.armor_type != krb5_types::fast::ARMOR_AP_REQUEST {
-        return Err(proto_fast(
-            err::PREAUTH_FAILED,
-            format!("Unknown FAST armor type {}", armor.armor_type),
-        ));
-    }
-    armor_key_from_ap(store, armor.armor_value.as_ref())
-}
-
 fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<ProtocolKey, Error> {
     let ap: krb5_types::ApReq = decode(ap_raw)?;
     let tkt_usage = KeyUsage::new(ku::TICKET)?;
@@ -259,13 +236,13 @@ fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<Protoco
     if (now - then).abs() > store.policy().skew {
         return Err(proto_fast(err::SKEW, "FAST armor authenticator"));
     }
-    if let Some(sub) = authenticator.subkey {
-        let st = EncryptionType::from_iana(sub.keytype)
-            .or_else(|_| EncryptionType::known(sub.keytype))?;
-        let subk = ProtocolKey::from_bytes(st, sub.keyvalue.as_ref())?;
-        return krb_fx_cf2(&subk, &session, b"subkeyarmor", b"ticketarmor").map_err(Error::from);
-    }
-    Ok(session)
+    let Some(sub) = authenticator.subkey else {
+        return Err(proto_fast(err::POLICY, "ap-request armor without subkey"));
+    };
+    let st =
+        EncryptionType::from_iana(sub.keytype).or_else(|_| EncryptionType::known(sub.keytype))?;
+    let subk = ProtocolKey::from_bytes(st, sub.keyvalue.as_ref())?;
+    krb_fx_cf2(&subk, &session, b"subkeyarmor", b"ticketarmor").map_err(Error::from)
 }
 
 /// Encrypt a FAST cookie (client id + SPAKE secret or empty).

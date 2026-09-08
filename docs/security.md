@@ -202,8 +202,11 @@ substitutes the key's mandatory type, then `is_keyed(0)` is 12.
 Unknown armor type is
 24 with wire `FIND_FAST` (log `detail` is `Unknown FAST armor type %d`).
 TGS authenticator client ≠ ticket client is 36 `PROCESS_TGS`. Explicit
-TGS AP-REQ armor is 24 `FIND_FAST` even without a subkey; MIT only
-rejects it when a subkey is present (`fast_util.c:159-166`).
+TGS AP-REQ armor with a PA-TGS-REQ subkey is 24 `FIND_FAST` (log
+`Ap-request armor not permitted with TGS`); without that subkey the KDC
+runs `armor_ap_request` (`fast_util.c:159-166`). AP-REQ armor whose
+authenticator has no subkey is 12 `FIND_FAST` (log `ap-request armor
+without subkey`, `fast_util.c:70-77`) on both AS and TGS.
 Corrupt `enc_fast_req` is 31 `FIND_FAST`; malformed `KrbFastReq` is
 60 `FIND_FAST` (`do_as_req.c:531-535`). Log `detail` is MIT's
 `k5_setmsg` where MIT has one; the critical-FAST-option `detail`

@@ -648,6 +648,7 @@ fn issue_tgs_from(
         .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PROCESS_TGS))?;
     let header = process_tgs_header(store, pa_tgs.as_ref(), body_der)?;
     let tgs_fast = unwrap_fast_tgs(
+        store,
         req.0.padata.as_deref(),
         pa_tgs.as_ref(),
         header.authenticator.subkey.as_ref(),

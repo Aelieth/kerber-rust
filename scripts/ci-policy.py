@@ -45,6 +45,7 @@ DIFFSEND_CASES = frozenset(
         "tgs-not-a-tgt",
         "tgt-expired",
         "tgt-nyv",
+        "fast-armor-no-subkey",
     }
 )
 _LEDGER_GATE = re.compile(r"(?:scripts/)?([A-Za-z0-9._-]+-gate(?:\.sh)?)")

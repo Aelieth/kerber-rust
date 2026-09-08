@@ -1017,6 +1017,65 @@ fn wrap_tgs_fast_no_subkey(
     Ok(())
 }
 
+fn wrap_tgs_fast_explicit_armor(
+    req: &mut krb5_types::TgsReq,
+    armor_ticket: krb5_types::Ticket,
+    armor_session: &ProtocolKey,
+    cname: &PrincipalName,
+    inner_body: krb5_types::KdcReqBody,
+    armor_sub: Option<&ProtocolKey>,
+) -> Result<(), krb5_protocol::Error> {
+    let ap_raw = req
+        .0
+        .padata
+        .as_ref()
+        .and_then(|p| p.iter().find(|x| x.padata_type == pa::TGS_REQ))
+        .map(|p| p.padata_value.as_ref().to_vec())
+        .ok_or_else(|| krb5_protocol::Error::Asn1("no PA-TGS-REQ".into()))?;
+    let armor_ap = build_fast_armor(
+        armor_ticket,
+        armor_session,
+        &ascii(TEST_REALM),
+        cname,
+        armor_sub,
+    )?;
+    let akey = armor_key(armor_session, armor_sub)?;
+    let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM)?;
+    let mic = checksum(&akey, ck_usage, &ap_raw)?;
+    let inner = krb5_types::fast::KrbFastReq {
+        fast_options: krb5_types::fast::fast_options_none(),
+        padata: Vec::new(),
+        req_body: inner_body,
+    };
+    let inner_der = encode(&inner).map_err(|e| krb5_protocol::Error::Asn1(e.to_string()))?;
+    let enc_usage = KeyUsage::new(ku::FAST_ENC)?;
+    let cipher = encrypt(&akey, enc_usage, &inner_der)?;
+    let armor_der = encode(&armor_ap).map_err(|e| krb5_protocol::Error::Asn1(e.to_string()))?;
+    let armored = krb5_types::fast::KrbFastArmoredReq {
+        armor: Some(krb5_types::fast::KrbFastArmor {
+            armor_type: krb5_types::fast::ARMOR_AP_REQUEST,
+            armor_value: armor_der.into(),
+        }),
+        req_checksum: Checksum {
+            cksumtype: akey.etype().checksum_type(),
+            checksum: mic.into(),
+        },
+        enc_fast_req: EncryptedData {
+            etype: akey.etype().to_iana(),
+            kvno: None,
+            cipher: cipher.into(),
+        },
+    };
+    let pa = krb5_types::PaData {
+        padata_type: pa::FX_FAST,
+        padata_value: encode(&krb5_types::fast::PaFxFast::ArmoredData(armored))
+            .map_err(|e| krb5_protocol::Error::Asn1(e.to_string()))?
+            .into(),
+    };
+    req.0.padata.get_or_insert_with(Vec::new).push(pa);
+    Ok(())
+}
+
 #[test]
 fn tgs_fast_forged_ticket_realm_is_process_tgs() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
@@ -1130,6 +1189,88 @@ fn tgs_fast_without_subkey_is_preauth_failed() {
         err::PREAUTH_FAILED,
         "No armor key but FAST armored request present",
     );
+}
+
+#[test]
+fn fast_as_armor_without_subkey_is_policy() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let armor_as = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 880);
+    let armor_ap = build_fast_armor(
+        armor_as.rep.0.ticket.clone(),
+        &armor_as.session_key,
+        &ascii(TEST_REALM),
+        &cname,
+        None,
+    )
+    .expect("armor AP-REQ");
+    let akey = armor_key(&armor_as.session_key, None).expect("armor key");
+    let mut req = as_req(cname, TEST_REALM, 881, None).unwrap();
+    attach_fast(&mut req, &armor_ap, &akey, Vec::new()).expect("FAST wrap");
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("no subkey");
+    assert_find_fast(err, err::POLICY, "ap-request armor without subkey");
+    let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
+    assert_krb_error(&bytes, err::POLICY, "FIND_FAST");
+}
+
+#[test]
+fn tgs_fast_explicit_armor_without_pa_tgs_subkey_is_accepted() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 882);
+    let mut tgs = tgs_req(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        883,
+    )
+    .unwrap();
+    let inner = tgs.0.req_body.clone();
+    let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x53u8; 32])
+        .expect("armor subkey");
+    wrap_tgs_fast_explicit_armor(
+        &mut tgs,
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        &cname,
+        inner,
+        Some(&sub),
+    )
+    .expect("TGS FAST explicit armor");
+    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("explicit armor without PA-TGS-REQ subkey");
+    assert_eq!(out.rep.0.ticket.sname, documented_host());
+}
+
+#[test]
+fn tgs_fast_explicit_armor_without_any_subkey_is_policy() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 884);
+    let mut tgs = tgs_req(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        885,
+    )
+    .unwrap();
+    let inner = tgs.0.req_body.clone();
+    wrap_tgs_fast_explicit_armor(
+        &mut tgs,
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        &cname,
+        inner,
+        None,
+    )
+    .expect("TGS FAST explicit armor");
+    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("armor without subkey");
+    assert_find_fast(err, err::POLICY, "ap-request armor without subkey");
 }
 
 fn map_fx_fast_as(

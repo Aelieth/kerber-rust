@@ -6,6 +6,14 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-A′ A′-1 (FAST armor)
+
+- **kdc.** `kdc_find_fast` / `armor_ap_request` are ported whole
+  (`fast_util.c:35-90,126-247`): AS (and TGS-without-PA-TGS-REQ-subkey)
+  AP-REQ armor whose authenticator has no subkey is 12 `FIND_FAST`; TGS
+  explicit armor with a PA-TGS-REQ subkey stays 24. diffsend
+  `fast-armor-no-subkey` sends the same bytes to both KDCs.
+
 ### Round-up R2 (re-audit fixes)
 
 The R2 re-audit's product, security, tooling, and ledger findings, one item

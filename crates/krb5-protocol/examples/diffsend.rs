@@ -16,8 +16,9 @@ use std::process;
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, string_to_key};
 use krb5_protocol::{
-    KdcAddr, Keytab, as_req, as_req_sname, compare_krb_error, compare_stable_rep,
-    decode_enc_kdc_rep, exchange_on_tcp, pa_enc_timestamp, pa_enc_timestamp_at, tgs_req,
+    KdcAddr, Keytab, armor_key, as_req, as_req_sname, attach_fast, build_fast_armor,
+    compare_krb_error, compare_stable_rep, decode_enc_kdc_rep, exchange_on_tcp, pa_enc_timestamp,
+    pa_enc_timestamp_at, tgs_req,
 };
 use krb5_types::{
     AsRep, EncTicketPart, EncryptedData, EncryptionKey, KerberosTime, KrbError, PaData,
@@ -769,7 +770,41 @@ fn run() -> Result<(), String> {
         true,
     )?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":19}}"#);
+    // A′-1 item 1: AS FAST AP-REQ armor without authenticator subkey.
+    // MIT armor_ap_request (fast_util.c:70-77) → 12 FIND_FAST. MIT clients
+    // always send a subkey, so this forge is the both-legs oracle.
+    let armor_tkt = mint_tgt(
+        tkt_key,
+        tkt_kvno,
+        &user,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        (
+            now.clone(),
+            now.add_hours(10).unwrap_or_else(|_| now.clone()),
+        ),
+        TicketFlags::initial_preauth(),
+    )?;
+    let armor_ap = build_fast_armor(
+        armor_tkt,
+        &sess,
+        &krb5_types::try_ascii(realm).map_err(|e| e.to_string())?,
+        &user,
+        None,
+    )
+    .map_err(|e| e.to_string())?;
+    let akey = armor_key(&sess, None).map_err(|e| e.to_string())?;
+    let mut fast_req = as_req(user.clone(), realm, 0x1000_0020, None).map_err(|e| e.to_string())?;
+    attach_fast(&mut fast_req, &armor_ap, &akey, Vec::new()).map_err(|e| e.to_string())?;
+    expect_error(
+        &cfg,
+        "fast-armor-no-subkey",
+        &encode(&fast_req).map_err(|e| e.to_string())?,
+        err::POLICY,
+    )?;
+
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":20}}"#);
     Ok(())
 }
 
