@@ -1184,7 +1184,7 @@ fn decrypt_presented_tgt(
     // Incoming interrealm keys are stored as krbtgt/<ticket.realm>@<local>.
     let ticket_realm = utf8_realm(&ap.ticket.realm)?;
     let princ = if ticket_realm == store.realm() {
-        store.fetch_krbtgt()?
+        store.fetch_name(&ap.ticket.sname)?
     } else {
         let name = PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", ticket_realm])
             .map_err(|_| proto(err::S_PRINCIPAL_UNKNOWN, status::PROCESS_TGS))?;

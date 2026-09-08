@@ -163,8 +163,8 @@ expect_s4u_host_mismatch() {
     docker exec -e KRB5_CONFIG="$conf" "$NAME" kdestroy -c "$cc" >/dev/null 2>&1 || true
 }
 
-expect_s4u_host_mismatch "MIT KDC" /tmp/s4u-mit.conf 127.0.0.1 /tmp/mit-kdc.log /tmp/krb5cc_s4u_mit
-expect_s4u_host_mismatch "Rust KDC" /tmp/s4u-krb5.conf 127.0.0.1:8888 /tmp/kdc.log /tmp/krb5cc_s4u
+expect_s4u_host_mismatch "mit_kdc" /tmp/s4u-mit.conf 127.0.0.1 /tmp/mit-kdc.log /tmp/krb5cc_s4u_mit
+expect_s4u_host_mismatch "rust_kdc" /tmp/s4u-krb5.conf 127.0.0.1:8888 /tmp/kdc.log /tmp/krb5cc_s4u
 
 echo "==== kinit -f -k host/testhost.kerber.test ===="
 docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf -e KRB5_TRACE=/dev/stderr \

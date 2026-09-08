@@ -517,10 +517,10 @@ pub(crate) fn s4u2proxy_client(
         .ok_or_else(|| proto(err::BAD_INTEGRITY, status::S4U2PROXY_NO_STKT_PAC))?;
     let krbtgt_p = store
         .fetch_krbtgt()?
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::GET_LOCAL_TGT))?;
+        .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
     let krbtgt = krbtgt_p
         .first_current_key()
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::GET_LOCAL_TGT))?;
+        .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
     let der = ticket_checksum_input(&plain, &part)?;
     let service = should_have_ticket_signature(&extra.sname);
     let mut verified =
@@ -576,10 +576,10 @@ pub(crate) fn u2u_session(
         .ok_or_else(|| proto(err::BADOPTION, status::NO_2ND_TKT))?;
     let krbtgt_p = store
         .fetch_krbtgt()?
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::GET_LOCAL_TGT))?;
+        .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
     let krbtgt = krbtgt_p
-        .best_key()
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::GET_LOCAL_TGT))?;
+        .first_current_key()
+        .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
     let usage = KeyUsage::new(ku::TICKET)?;
     let plain = decrypt(&krbtgt.key, usage, extra.enc_part.cipher.as_ref())?;
     let part: EncTicketPart = decode(&plain)?;

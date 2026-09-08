@@ -40,9 +40,11 @@ this project uses semantic versioning once a crate is published.
 - **kdc/admin.** AS error codes match `errcode_to_protocol`: missing HW
   preauth is 25 `NEEDED_HW_PREAUTH` with the hw_only hint list; no
   matching client key is 14 `CANT_FIND_CLIENT_KEY`; no server/krbtgt
-  key is 60 `FINDING_SERVER_KEY` / `GET_LOCAL_TGT`. `modprinc -unlock`
-  stores `KRB5_TL_LAST_ADMIN_UNLOCK` (1792, 4-byte LE) and zeroes
-  fail_auth_count. diffsend `as-hw-preauth`.
+  key is 60 `FINDING_SERVER_KEY` / `GET_LOCAL_TGT`. S4U2Proxy PAC and
+  U2U second-ticket local-TGT misses are 60 `GET_LOCAL_TGT` (not 7).
+  `kdc_rd_ap_req` kvno 0 walks back at most three keys. `modprinc
+  -unlock` stores `KRB5_TL_LAST_ADMIN_UNLOCK` (1792, 4-byte LE) and
+  zeroes fail_auth_count. diffsend `as-hw-preauth`.
 
 ### Round-up R2 (re-audit fixes)
 
