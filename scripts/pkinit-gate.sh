@@ -121,7 +121,58 @@ if [ "$rc" -eq 0 ]; then
         exit 1
     fi
     echo "$KDCLOG" | grep 'pkinit client san'
-    log "pkinit.gate" "ok" ',"mode":"mit-kinit","kdf":"rfc8636-sha256","mit_plugin":"present","san_mismatch":"refused"'
+
+    echo "==== rust_kdc MIT kinit pkinit_dh_min_bits=P-384 TYPED-DATA + cookie ===="
+    rust_kdc_pkinit_dh1024() {
+        local proxy=1888
+        docker cp "$ROOT/scripts/lib/kdc-error-proxy.py" "$NAME":/tmp/kdc-error-proxy.py
+        docker cp "$ROOT/scripts/lib/openssl-seclevel0.cnf" "$NAME":/tmp/openssl-seclevel0.cnf
+        docker exec "$NAME" rm -f /tmp/pkinit-65.txt
+        docker exec -d "$NAME" python3 /tmp/kdc-error-proxy.py "$proxy" 127.0.0.1 "$PORT" /tmp/pkinit-65.txt
+        sleep 0.4
+        docker exec "$NAME" sh -c "cat > /tmp/krb5-dh1024.conf <<EOF
+[libdefaults]
+    default_realm = KERBER.TEST
+    dns_lookup_kdc = false
+    preferred_preauth_types = 16
+    pkinit_eku_checking = none
+    pkinit_kdc_hostname = kerber.test
+    pkinit_dh_min_bits = P-384
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1:${proxy}
+        pkinit_anchors = FILE:/tmp/pkinit/ca.pem
+        pkinit_eku_checking = none
+        pkinit_kdc_hostname = kerber.test
+        pkinit_dh_min_bits = P-384
+    }
+EOF"
+        set +e
+        docker exec \
+            -e KRB5_CONFIG=/tmp/krb5-dh1024.conf \
+            -e OPENSSL_CONF=/tmp/openssl-seclevel0.cnf \
+            -e KRB5_TRACE=/dev/stderr \
+            "$NAME" timeout 20 kinit -X X509_user_identity=FILE:/tmp/pkinit/user.pem user@KERBER.TEST
+        set -e
+        local out
+        out="$(docker exec "$NAME" cat /tmp/pkinit-65.txt 2>/dev/null || true)"
+        echo "$out"
+        echo "$out" | grep -F 'error_code=65' || {
+            echo "rust_kdc PKINIT DH-min P-384 did not return protocol 65: $out" >&2
+            exit 1
+        }
+        echo "$out" | grep -F 'e_data_encoding=typed' || {
+            echo "rust_kdc PKINIT 65 e_data is not TYPED-DATA: $out" >&2
+            exit 1
+        }
+        echo "$out" | grep -F '109' | grep -q '133' || {
+            echo "rust_kdc PKINIT 65 missing TD-DH-PARAMETERS 109 or FX-COOKIE 133: $out" >&2
+            exit 1
+        }
+    }
+    rust_kdc_pkinit_dh1024
+
+    log "pkinit.gate" "ok" ',"mode":"mit-kinit","kdf":"rfc8636-sha256","mit_plugin":"present","san_mismatch":"refused","dh_typed":"typed+cookie"'
     exit 0
 fi
 echo "MIT kinit with FILE identity failed (rc=$rc)"

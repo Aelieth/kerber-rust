@@ -2,8 +2,9 @@
 //!
 //! KRB-ERROR mask: `stime`/`susec`/`ctime`/`cusec`. `e_text` is compared.
 //! PREAUTH_REQUIRED
-//! `e_data` is structural (METHOD-DATA types, ETYPE-INFO2 etypes; salt/order
-//! may differ). Success nulls session key, times, `last_req`, both
+//! `e_data` is structural (FX-FAST + FX-COOKIE required, ETYPE-INFO2 etypes;
+//! ENC_TIMESTAMP presence agrees; extra mechanism ads and 2-vs-19 order may
+//! differ). Success nulls session key, times, `last_req`, both
 //! `enc_part.cipher`s, and PAC auth-data. Any other field difference is
 //! fail-red.
 
@@ -117,11 +118,16 @@ pub fn compare_krb_error(rust: &KrbError, mit: &KrbError) -> Result<(), DiffErro
     Ok(())
 }
 
-/// Structural METHOD-DATA / ETYPE-INFO2 compare (order and salt ignored).
+/// Structural METHOD-DATA compare for PREAUTH 25/24 e_data.
+///
+/// Both legs must carry PA-FX-FAST (136) and PA-FX-COOKIE (133) in the
+/// hint list (`do_as_req.c:785-796`). ETYPE-INFO2 must be present with an
+/// equal etype set. ENC_TIMESTAMP presence must agree (`hw_only` omits it).
+/// Extra types (SPAKE 151) and the 2-vs-19 order are item 15, not this compare.
 ///
 /// # Errors
 ///
-/// Missing `e_data`, decode failure, or etype/pa-type set mismatch.
+/// Missing `e_data`, decode failure, missing 133/136, or etype/ENC_TIMESTAMP mismatch.
 pub fn compare_preauth_e_data(a: Option<&[u8]>, b: Option<&[u8]>) -> Result<(), DiffError> {
     let a = a.ok_or_else(|| DiffError("rust PREAUTH_REQUIRED missing e_data".into()))?;
     let b = b.ok_or_else(|| DiffError("mit PREAUTH_REQUIRED missing e_data".into()))?;
@@ -129,6 +135,18 @@ pub fn compare_preauth_e_data(a: Option<&[u8]>, b: Option<&[u8]>) -> Result<(), 
     let mb: MethodData = decode(b).map_err(|e| DiffError(format!("mit METHOD-DATA: {e}")))?;
     let ta = pa_types(&ma);
     let tb = pa_types(&mb);
+    if !ta.contains(&pa::FX_FAST) || !tb.contains(&pa::FX_FAST) {
+        return Err(DiffError(format!(
+            "PREAUTH METHOD-DATA missing {} rust={ta:?} mit={tb:?}",
+            pa::FX_FAST
+        )));
+    }
+    if !ta.contains(&pa::FX_COOKIE) || !tb.contains(&pa::FX_COOKIE) {
+        return Err(DiffError(format!(
+            "PREAUTH METHOD-DATA missing {} rust={ta:?} mit={tb:?}",
+            pa::FX_COOKIE
+        )));
+    }
     // ETYPE-INFO2 is always in get_preauth_hint_list. ENC_TIMESTAMP is a
     // module hint skipped under hw_only (`kdc_preauth.c:956-957`); both
     // sides must agree on whether it is present.
@@ -164,9 +182,7 @@ pub fn compare_preauth_e_data(a: Option<&[u8]>, b: Option<&[u8]>) -> Result<(), 
 }
 
 fn pa_types(m: &MethodData) -> Vec<i32> {
-    let mut v: Vec<i32> = m.iter().map(|p| p.padata_type).collect();
-    v.sort_unstable();
-    v
+    m.iter().map(|p| p.padata_type).collect()
 }
 
 fn etype_info2_etypes(m: &MethodData) -> Result<Vec<i32>, DiffError> {

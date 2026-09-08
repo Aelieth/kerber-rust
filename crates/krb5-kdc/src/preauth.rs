@@ -10,7 +10,7 @@ use krb5_crypto::{
 use krb5_protocol::{ReplayCache, ReplayKey};
 use krb5_types::{
     AsReq, EncryptedData, EncryptionKey, KerberosTime, MethodData, Microseconds, PaData,
-    PrincipalName, err, ku, pa,
+    PrincipalName, TypedData, TypedDataList, err, ku, pa,
 };
 
 use crate::error::Error;
@@ -612,7 +612,7 @@ pub(crate) fn process_pkinit(
                 error = "unknown DH prime",
                 p_len = p.len()
             );
-            dh_params_not_accepted()
+            dh_params_not_accepted(store, cname)
         })?;
         tracing::info!(
             event = "kdc.pkinit",
@@ -636,7 +636,7 @@ pub(crate) fn process_pkinit(
             spki_len = spki.len(),
             spki_tag = spki.first().copied().unwrap_or(0)
         );
-        return Err(dh_params_not_accepted());
+        return Err(dh_params_not_accepted(store, cname));
     };
     let wrapped_pub = ca
         .sign_cms_typed(&info, "krbtgt", krb5_types::pkinit::ECONTENT_DHKEY, realm)
@@ -749,16 +749,100 @@ fn map_fast_unwrap(err: Error) -> Error {
     }
 }
 
-fn dh_params_not_accepted() -> Error {
-    let method: MethodData = vec![PaData {
+fn dh_params_not_accepted(store: &dyn PrincipalRead, client: &PrincipalName) -> Error {
+    let mut method: MethodData = vec![PaData {
         padata_type: pa::TD_DH_PARAMETERS,
         padata_value: krb5_types::pkinit::encode_td_dh_p256().into(),
     }];
+    method = with_fx_cookie(store, Some(client), method);
     proto_e(
         err::DH_KEY_PARAMETERS_NOT_ACCEPTED,
         crate::status::PREAUTH_FAILED,
-        encode(&method).unwrap_or_default(),
+        encode_typed(&method),
     )
+}
+
+pub(crate) fn encode_typed(method: &MethodData) -> Vec<u8> {
+    let td: TypedDataList = method
+        .iter()
+        .map(|p| TypedData {
+            data_type: p.padata_type,
+            data_value: Some(p.padata_value.clone()),
+        })
+        .collect();
+    encode(&td).unwrap_or_default()
+}
+
+pub(crate) fn decode_edata_padata(ed: &[u8]) -> MethodData {
+    if let Ok(m) = decode::<MethodData>(ed)
+        && !m.is_empty()
+    {
+        return m;
+    }
+    decode::<TypedDataList>(ed)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|t| PaData {
+            padata_type: t.data_type,
+            padata_value: t.data_value.unwrap_or_else(|| Vec::<u8>::new().into()),
+        })
+        .collect()
+}
+
+pub(crate) fn with_fx_cookie(
+    store: &dyn PrincipalRead,
+    client: Option<&PrincipalName>,
+    mut method: MethodData,
+) -> MethodData {
+    if method.iter().any(|p| p.padata_type == pa::FX_COOKIE) {
+        return method;
+    }
+    let Some(c) = client else {
+        return method;
+    };
+    if let Ok(cookie) = make_cookie(store, c, &[]) {
+        method.push(PaData {
+            padata_type: pa::FX_COOKIE,
+            padata_value: cookie.into(),
+        });
+    }
+    method
+}
+
+/// MIT `prepare_error_as` (`do_as_req.c:785-814`): append PA-FX-COOKIE to every
+/// e_data-bearing AS error, then encode TYPED-DATA when the bytes already use
+/// tags [0]/[1] (PA_TYPED_E_DATA modules). FAST-wrapped outer e_data is left
+/// alone (`kdc_fast_handle_error` already replaced it).
+pub(crate) fn prepare_as_edata(
+    store: &dyn PrincipalRead,
+    client: Option<&PrincipalName>,
+    ed: &[u8],
+) -> Vec<u8> {
+    if let Ok(m) = decode::<MethodData>(ed) {
+        if m.len() == 1 && m.first().is_some_and(|p| p.padata_type == pa::FX_FAST) {
+            return ed.to_vec();
+        }
+        if m.is_empty() {
+            return ed.to_vec();
+        }
+        return encode(&with_fx_cookie(store, client, m)).unwrap_or_else(|_| ed.to_vec());
+    }
+    if let Ok(t) = decode::<TypedDataList>(ed) {
+        let method: MethodData = t
+            .into_iter()
+            .map(|e| PaData {
+                padata_type: e.data_type,
+                padata_value: e.data_value.unwrap_or_else(|| Vec::<u8>::new().into()),
+            })
+            .collect();
+        let n = method.len();
+        let method = with_fx_cookie(store, client, method);
+        if method.len() == n {
+            return ed.to_vec();
+        }
+        return encode_typed(&method);
+    }
+    ed.to_vec()
 }
 
 pub(crate) fn proto_e(code: i32, status: &'static str, e_data: Vec<u8>) -> Error {

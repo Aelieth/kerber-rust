@@ -76,6 +76,56 @@ def parse_kdc_req(pdu: bytes) -> tuple[int | None, list[int]]:
     return msg_type, types
 
 
+def parse_error_edata(pdu: bytes) -> tuple[int | None, str, list[int]]:
+    """(error_code, encoding, e_data types) of a KRB-ERROR (0x7e)."""
+    if not pdu or pdu[0] != 0x7E:
+        return None, "none", []
+    _, seq, _ = _tlv(pdu, 0)
+    if seq and seq[0] == 0x30:
+        _, seq, _ = _tlv(seq, 0)
+    code = None
+    edata = None
+    i = 0
+    while i < len(seq):
+        tag, val, i = _tlv(seq, i)
+        if tag & 0xC0 != 0x80:
+            continue
+        num = tag & 0x1F
+        inner = val
+        if tag & 0x20 and val:
+            _, inner, _ = _tlv(val, 0)
+        if num == 6:
+            code = _int(inner)
+        elif num == 12:
+            edata = inner
+    if not edata or edata[0] != 0x30:
+        return code, "none", []
+    _, body, _ = _tlv(edata, 0)
+    types: list[int] = []
+    enc = "unknown"
+    j = 0
+    while j < len(body):
+        _, pa, j = _tlv(body, j)
+        k = 0
+        t = None
+        while k < len(pa):
+            ptag, pval, k = _tlv(pa, k)
+            inner = pval
+            if ptag & 0x20 and pval:
+                _, inner, _ = _tlv(pval, 0)
+            n = ptag & 0x1F
+            if ptag & 0xC0 != 0x80:
+                continue
+            if n == 0:
+                enc = "typed"
+                t = _int(inner)
+            elif n == 1 and enc != "typed":
+                enc = "method"
+                t = _int(inner)
+        types.append(t if t is not None else -1)
+    return code, enc, types
+
+
 def main() -> int:
     if len(sys.argv) < 4:
         print("usage: kdc-padata-proxy.py listen-port kdc-host kdc-port [out]", file=sys.stderr)
@@ -108,6 +158,14 @@ def main() -> int:
             reply, _ = fwd.recvfrom(65535)
         except socket.timeout:
             continue
+        if reply[:1] == b"\x7e":
+            code, enc, etypes = parse_error_edata(reply)
+            rline = f"rep#{n} error_code={code} e_data_encoding={enc} e_data_types={etypes}\n"
+            sys.stdout.write(rline)
+            sys.stdout.flush()
+            if out_path:
+                with open(out_path, "a", encoding="ascii") as f:
+                    f.write(rline)
         srv.sendto(reply, addr)
 
 

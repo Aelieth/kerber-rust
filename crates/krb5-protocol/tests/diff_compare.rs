@@ -145,6 +145,10 @@ fn method_edata(etypes: &[i32]) -> Vec<u8> {
     let info_der = encode(&info).expect("ETYPE-INFO2");
     let md: MethodData = vec![
         PaData {
+            padata_type: pa::FX_FAST,
+            padata_value: vec![].into(),
+        },
+        PaData {
             padata_type: pa::ENC_TIMESTAMP,
             padata_value: vec![].into(),
         },
@@ -152,11 +156,42 @@ fn method_edata(etypes: &[i32]) -> Vec<u8> {
             padata_type: pa::ETYPE_INFO2,
             padata_value: info_der.into(),
         },
+        PaData {
+            padata_type: pa::FX_COOKIE,
+            padata_value: b"MIT".to_vec().into(),
+        },
     ];
     encode(&md).expect("METHOD-DATA")
 }
 
 fn method_edata_hw(etypes: &[i32]) -> Vec<u8> {
+    let info: EtypeInfo2 = etypes
+        .iter()
+        .map(|&etype| EtypeInfo2Entry {
+            etype,
+            salt: None,
+            s2kparams: None,
+        })
+        .collect();
+    let info_der = encode(&info).expect("ETYPE-INFO2");
+    let md: MethodData = vec![
+        PaData {
+            padata_type: pa::FX_FAST,
+            padata_value: vec![].into(),
+        },
+        PaData {
+            padata_type: pa::ETYPE_INFO2,
+            padata_value: info_der.into(),
+        },
+        PaData {
+            padata_type: pa::FX_COOKIE,
+            padata_value: b"MIT".to_vec().into(),
+        },
+    ];
+    encode(&md).expect("METHOD-DATA")
+}
+
+fn method_edata_no_cookie(etypes: &[i32]) -> Vec<u8> {
     let info: EtypeInfo2 = etypes
         .iter()
         .map(|&etype| EtypeInfo2Entry {
@@ -207,6 +242,20 @@ fn etype_info2_requires_exact_etype_set() {
     compare_preauth_e_data(Some(&hw), Some(&hw)).expect("hw_only both omit ENC_TIMESTAMP");
     compare_preauth_e_data(Some(&one), Some(&hw))
         .expect_err("ENC_TIMESTAMP present on only one side");
+}
+
+#[test]
+fn preauth_edata_requires_fx_cookie_and_fx_fast() {
+    let with = method_edata_hw(&[18]);
+    compare_preauth_e_data(Some(&with), Some(&with)).expect("[136, 19, 133] both legs");
+    let no_cookie = method_edata_no_cookie(&[18]);
+    let err = compare_preauth_e_data(Some(&with), Some(&no_cookie))
+        .expect_err("as-hw-preauth without 133 must fail");
+    assert!(
+        err.0.contains("133") || err.0.contains(&pa::FX_COOKIE.to_string()),
+        "compare must name the missing cookie: {}",
+        err.0
+    );
 }
 
 #[test]

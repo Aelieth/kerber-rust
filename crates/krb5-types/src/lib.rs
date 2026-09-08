@@ -97,6 +97,9 @@ pub type HostAddresses = SequenceOf<HostAddress>;
 pub type AuthorizationData = SequenceOf<AuthorizationDataValue>;
 /// METHOD-DATA ::= SEQUENCE OF PA-DATA
 pub type MethodData = SequenceOf<PaData>;
+/// TYPED-DATA ::= SEQUENCE OF SEQUENCE { data-type [0], data-value [1] OPTIONAL }
+/// (RFC 6113; MIT `encode_krb5_typed_data`, tags [0]/[1] not PA-DATA [1]/[2]).
+pub type TypedDataList = SequenceOf<TypedData>;
 /// KerberosFlags ::= BIT STRING (SIZE (32..MAX))
 pub type KerberosFlags = BitString;
 /// Microseconds ::= INTEGER (0..999999)
@@ -324,6 +327,15 @@ pub struct PaData {
     pub padata_type: i32,
     #[rasn(tag(explicit(2)))]
     pub padata_value: OctetString,
+}
+
+/// One TYPED-DATA element (`asn1_k_encode.c:1547-1556`).
+#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+pub struct TypedData {
+    #[rasn(tag(explicit(0)))]
+    pub data_type: i32,
+    #[rasn(tag(explicit(1)))]
+    pub data_value: Option<OctetString>,
 }
 
 /// Encrypted blob: etype, optional kvno, ciphertext.
@@ -2044,6 +2056,42 @@ mod tests {
         let (nonce, got) = pkinit::parse_authpack(&seq).expect("parse");
         assert_eq!(nonce, 0);
         assert_eq!(got, spki);
+    }
+
+    #[test]
+    fn typed_data_uses_rfc6113_tags_not_padata() {
+        // MIT encode_krb5_typed_data (asn1_k_encode.c:1547-1556): [0] Int32, [1] OCTET STRING.
+        let td: crate::TypedDataList = vec![crate::TypedData {
+            data_type: 13,
+            data_value: Some(b"pa-data".to_vec().into()),
+        }];
+        let der = rasn::der::encode(&td).expect("TYPED-DATA");
+        assert_eq!(der[0], 0x30);
+        let pa: crate::MethodData = vec![crate::PaData {
+            padata_type: 13,
+            padata_value: b"pa-data".to_vec().into(),
+        }];
+        let pa_der = rasn::der::encode(&pa).expect("METHOD-DATA");
+        assert_ne!(
+            der, pa_der,
+            "TYPED-DATA tags [0]/[1] must not match PA-DATA [1]/[2]"
+        );
+        let first_ctx = der.iter().copied().find(|b| b & 0xc0 == 0x80);
+        assert_eq!(
+            first_ctx,
+            Some(0xa0),
+            "data-type is [0] EXPLICIT, not PA-DATA [1]"
+        );
+        let pa_ctx = pa_der.iter().copied().find(|b| b & 0xc0 == 0x80);
+        assert_eq!(pa_ctx, Some(0xa1), "PA-DATA type is [1]");
+        let back = rasn::der::decode::<crate::TypedDataList>(&der).expect("round-trip");
+        assert_eq!(back[0].data_type, 13);
+        assert_eq!(back[0].data_value.as_deref(), Some(&b"pa-data"[..]));
+        let as_pa: crate::MethodData = rasn::der::decode(&der).unwrap_or_default();
+        assert!(
+            as_pa.is_empty(),
+            "TYPED-DATA must not decode as PA-DATA entries: {as_pa:?}"
+        );
     }
 
     #[test]

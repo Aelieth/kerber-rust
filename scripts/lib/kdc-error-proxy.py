@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""UDP proxy that prints the first KRB-ERROR error-code and e-text.
+"""UDP proxy that prints KRB-ERROR error-code, e-text, and e_data types.
 
 usage: kdc-error-proxy.py <listen-port> <kdc-host> <kdc-port> [out-file]
 """
@@ -35,19 +35,77 @@ def _skip_value(buf: bytes, i: int) -> int:
     return i + ln
 
 
-def parse_krb_error(pdu: bytes) -> tuple[int | None, str | None]:
+def _tlv(buf: bytes, i: int) -> tuple[int, bytes, int]:
+    tag = buf[i]
+    i += 1
+    if tag & 0x1F == 0x1F:
+        while buf[i] & 0x80:
+            i += 1
+        i += 1
+    ln, i = _read_len(buf, i)
+    return tag, buf[i : i + ln], i + ln
+
+
+def _int(val: bytes) -> int:
+    n = 0
+    for b in val:
+        n = (n << 8) | b
+    if val and val[0] & 0x80:
+        n -= 1 << (8 * len(val))
+    return n
+
+
+def _unwrap(val: bytes, constructed: bool) -> bytes:
+    if constructed and val:
+        _, inner, _ = _tlv(val, 0)
+        return inner
+    return val
+
+
+def parse_edata_types(edata: bytes) -> tuple[str, list[int]]:
+    """Return (encoding, types) for METHOD-DATA [1]/[2] or TYPED-DATA [0]/[1]."""
+    if not edata or edata[0] != 0x30:
+        return "none", []
+    _, seq, _ = _tlv(edata, 0)
+    if not seq:
+        return "empty", []
+    types: list[int] = []
+    enc = "unknown"
+    i = 0
+    while i < len(seq):
+        _, pa, i = _tlv(seq, i)
+        j = 0
+        t = None
+        while j < len(pa):
+            ptag, pval, j = _tlv(pa, j)
+            inner = _unwrap(pval, bool(ptag & 0x20))
+            num = ptag & 0x1F
+            if ptag & 0xC0 != 0x80:
+                continue
+            if num == 0:
+                enc = "typed"
+                t = _int(inner)
+            elif num == 1 and enc != "typed":
+                enc = "method"
+                t = _int(inner)
+        types.append(t if t is not None else -1)
+    return enc, types
+
+
+def parse_krb_error(pdu: bytes) -> tuple[int | None, str | None, str, list[int]]:
     if not pdu or pdu[0] != 0x7E:
-        return None, None
+        return None, None, "none", []
     ln, i = _read_len(pdu, 1)
     end = i + ln
     if end > len(pdu):
         end = len(pdu)
     if i >= end or pdu[i] != 0x30:
-        return None, None
+        return None, None, "none", []
     sln, i = _read_len(pdu, i + 1)
     seq_end = min(i + sln, end)
     code = None
     etext = None
+    edata = None
     while i < seq_end:
         if i >= len(pdu):
             break
@@ -62,23 +120,20 @@ def parse_krb_error(pdu: bytes) -> tuple[int | None, str | None]:
         val = pdu[i : i + vln]
         i += vln
         if constructed and val:
-            # context-specific EXPLICIT: unwrap one inner TLV
             inner = 1
             iln, inner = _read_len(val, 1)
             val = val[inner : inner + iln]
         if num == 6:
-            n = 0
-            for b in val:
-                n = (n << 8) | b
-            if val and val[0] & 0x80:
-                n -= 1 << (8 * len(val))
-            code = n
+            code = _int(val)
         elif num == 11:
             try:
                 etext = val.decode("ascii")
             except UnicodeDecodeError:
                 etext = val.decode("latin-1", "replace")
-    return code, etext
+        elif num == 12:
+            edata = val
+    enc, types = parse_edata_types(edata) if edata else ("none", [])
+    return code, etext, enc, types
 
 
 def main() -> int:
@@ -95,7 +150,9 @@ def main() -> int:
     srv.settimeout(30.0)
     fwd = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     fwd.settimeout(5.0)
-    seen91 = False
+    if out_path:
+        with open(out_path, "w", encoding="ascii"):
+            pass
     while True:
         try:
             data, addr = srv.recvfrom(65535)
@@ -107,15 +164,16 @@ def main() -> int:
         except socket.timeout:
             continue
         if reply[:1] == b"\x7e":
-            code, etext = parse_krb_error(reply)
-            line = f"error_code={code}\ne_text={etext}\n"
+            code, etext, enc, types = parse_krb_error(reply)
+            line = (
+                f"error_code={code}\ne_text={etext}\n"
+                f"e_data_encoding={enc}\ne_data_types={types}\n"
+            )
             sys.stdout.write(line)
             sys.stdout.flush()
-            if code == 91 and not seen91:
-                if out_path:
-                    with open(out_path, "w", encoding="ascii") as f:
-                        f.write(line)
-                seen91 = True
+            if out_path:
+                with open(out_path, "a", encoding="ascii") as f:
+                    f.write(line)
         srv.sendto(reply, addr)
 
 

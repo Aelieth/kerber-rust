@@ -25,8 +25,8 @@ use crate::kdb::PrincipalRead;
 use crate::kdb_dump::TL_LAST_ADMIN_UNLOCK;
 use crate::plugins::{PreauthAction, current_policy, run_as_preauth};
 use crate::preauth::{
-    FastOk, fast_finished, find_pa, make_cookie, proto, proto_d, unwrap_fast, unwrap_fast_tgs,
-    wrap_fast_rep,
+    FastOk, decode_edata_padata, fast_finished, find_pa, make_cookie, prepare_as_edata, proto,
+    proto_d, unwrap_fast, unwrap_fast_tgs, with_fx_cookie, wrap_fast_rep,
 };
 use crate::status;
 use crate::store::{
@@ -174,7 +174,11 @@ fn as_reply(
                 store,
                 err::PREAUTH_REQUIRED,
                 Some(status::NEEDED_PREAUTH),
-                Some(e_data),
+                Some(prepare_as_edata(
+                    store,
+                    req.0.req_body.cname.as_ref(),
+                    &e_data,
+                )),
                 body,
             ),
             None,
@@ -185,7 +189,13 @@ fn as_reply(
             e_data,
             detail,
         }) => Ok((
-            encode_krb_error(store, code, text.as_deref(), e_data, body),
+            encode_krb_error(
+                store,
+                code,
+                text.as_deref(),
+                e_data.map(|ed| prepare_as_edata(store, req.0.req_body.cname.as_ref(), &ed)),
+                body,
+            ),
             detail.filter(|s| !s.is_empty()),
         )),
         Err(Error::Crypto(d)) => Ok((
@@ -1785,19 +1795,12 @@ fn wrap_as_fast(
             Some(other.to_string()).filter(|s| !s.is_empty()),
         ),
     };
-    let mut padata =
-        as_preauth.unwrap_or_else(|| decode::<MethodData>(&inner_ed).unwrap_or_default());
-    let inner_err = encode_krb_error(
-        store,
-        code,
-        text.as_deref(),
-        if inner_ed.is_empty() {
-            None
-        } else {
-            Some(inner_ed)
-        },
-        Some(body),
-    );
+    let mut padata = as_preauth.unwrap_or_else(|| decode_edata_padata(&inner_ed));
+    padata = with_fx_cookie(store, body.cname.as_ref(), padata);
+    // MIT kdc_fast_handle_error (fast_util.c:384-386): the inner PA-FX-ERROR
+    // KRB-ERROR has empty e_data; the caller's e_data (plus cookie) travels
+    // as FAST inner padata next to FX-ERROR.
+    let inner_err = encode_krb_error(store, code, text.as_deref(), None, Some(body));
     padata.push(PaData {
         padata_type: pa::FX_ERROR,
         padata_value: inner_err.into(),
