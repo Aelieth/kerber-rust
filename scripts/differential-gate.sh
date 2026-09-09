@@ -95,6 +95,16 @@ echo "==== load identical dump into MIT krb5kdc on :88 ===="
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec "$NAME" kdb5_util create -s -P masterpassword
 docker exec "$NAME" kdb5_util load /tmp/mit.dump
+# Advertise SPAKE like the Rust KDC (always-on SpakeMod) so PREAUTH hint
+# multisets match. MIT krb5kdc reads spake_preauth_groups from [libdefaults].
+docker exec "$NAME" python3 -c '
+from pathlib import Path
+p = Path("/etc/krb5.conf")
+t = p.read_text()
+if "spake_preauth_groups" not in t:
+    t = t.replace("[libdefaults]", "[libdefaults]\n    spake_preauth_groups = P-256", 1)
+p.write_text(t)
+'
 STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc -n >/tmp/mit-kdc.log 2>&1 & sleep 0.5; cat /tmp/mit-kdc.log' 2>&1 || true)"
 echo "$STARTLOG"
 ok=0
@@ -108,6 +118,8 @@ done
 [ "$ok" = 1 ] || die "MIT krb5kdc did not listen on 88"
 echo "$STARTLOG" | grep -q 'Address already in use' && die "MIT krb5kdc could not bind :88"
 echo "$STARTLOG" | grep -q 'setting up network' || die "MIT krb5kdc did not start"
+echo "$STARTLOG" | grep -qi 'spake failed to initialize' && die "MIT SPAKE preauth did not initialize"
+
 
 echo "==== diffsend build-once/send-twice ===="
 set +e
