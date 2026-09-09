@@ -128,7 +128,9 @@ int main(int argc, char **argv) {
     } else if ((strcmp(op, "modify-tl-reserved") == 0 ||
                 strcmp(op, "modify-failcount") == 0 ||
                 strcmp(op, "modify-policy-clr") == 0 ||
-                strcmp(op, "create-failcount-mask") == 0) &&
+                strcmp(op, "create-failcount-mask") == 0 ||
+                strcmp(op, "create-tl-reserved") == 0 ||
+                strcmp(op, "create-tl-500") == 0) &&
                argc - argi >= 5) {
         krb5_principal p;
         kadm5_principal_ent_rec rec, after;
@@ -151,6 +153,43 @@ int main(int argc, char **argv) {
                                          "password");
             printf("create_code=%ld\n", (long)ret);
             printf("create_msg=%s\n", error_message(ret));
+            krb5_free_principal(ctx, p);
+            kadm5_destroy(handle);
+            krb5_free_context(ctx);
+            return 0;
+        }
+        if (strcmp(op, "create-tl-reserved") == 0 ||
+            strcmp(op, "create-tl-500") == 0) {
+            memset(&tl, 0, sizeof(tl));
+            tl.tl_data_type = (strcmp(op, "create-tl-500") == 0) ? 500 : 3;
+            tl.tl_data_length = 4;
+            tl.tl_data_contents = tlbuf;
+            rec.principal = p;
+            rec.tl_data = &tl;
+            rec.n_tl_data = 1;
+            ret = kadm5_create_principal(handle, &rec,
+                                         KADM5_PRINCIPAL | KADM5_TL_DATA,
+                                         "password");
+            printf("create_code=%ld\n", (long)ret);
+            printf("create_msg=%s\n", error_message(ret));
+            if (ret == 0 && strcmp(op, "create-tl-500") == 0) {
+                kadm5_principal_ent_rec got;
+                memset(&got, 0, sizeof(got));
+                ret = kadm5_get_principal(handle, p, &got,
+                                         KADM5_PRINCIPAL | KADM5_TL_DATA);
+                printf("get_code=%ld n_tl=%d", (long)ret, got.n_tl_data);
+                if (ret == 0) {
+                    krb5_tl_data *t;
+                    for (t = got.tl_data; t != NULL; t = t->tl_data_next)
+                        printf(" tl_type=%d", (int)t->tl_data_type);
+                    printf("\n");
+                    kadm5_free_principal_ent(handle, &got);
+                } else {
+                    printf("\n");
+                }
+            }
+            rec.tl_data = NULL;
+            rec.n_tl_data = 0;
             krb5_free_principal(ctx, p);
             kadm5_destroy(handle);
             krb5_free_context(ctx);

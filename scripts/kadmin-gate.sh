@@ -2473,6 +2473,27 @@ kadm5_modify_validate() {
         echo "$ctn create FAIL_AUTH_COUNT mask did not return KADM5_BAD_MASK: $create" >&2
         exit 1
     }
+    local ctl ok
+    ctl="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" \
+        /tmp/kadm5-changepw-rpc --service kadmin/admin "$client" adminpassword KERBER.TEST \
+        create-tl-reserved "r9tlbad@KERBER.TEST" 2>&1 || true)"
+    echo "$ctn create-tl-reserved: $ctl"
+    echo "$ctl" | grep -q 'create_code=43787567' || {
+        echo "$ctn create reserved TL did not return KADM5_BAD_TL_TYPE: $ctl" >&2
+        exit 1
+    }
+    ok="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" \
+        /tmp/kadm5-changepw-rpc --service kadmin/admin "$client" adminpassword KERBER.TEST \
+        create-tl-500 "r9tl500@KERBER.TEST" 2>&1 || true)"
+    echo "$ctn create-tl-500: $ok"
+    echo "$ok" | grep -q 'create_code=0' || {
+        echo "$ctn create TL 500 did not succeed: $ok" >&2
+        exit 1
+    }
+    echo "$ok" | grep -q 'tl_type=500' || {
+        echo "$ctn create TL 500 missing on getprinc: $ok" >&2
+        exit 1
+    }
 }
 kadm5_modify_validate "$NAME" admin /tmp/kadmin-krb5.conf user@KERBER.TEST
 kadm5_modify_validate "$NAME_MIT" admin/admin /etc/krb5.conf user@KERBER.TEST
