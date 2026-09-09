@@ -41,6 +41,8 @@ pub enum Error {
         /// `last_pwd_change + pw_min_life`.
         until: u32,
     },
+    /// `EINVAL` from `krb5_db_put_principal` / DB2 `db_args` (`kdb_db2.c:817-822`).
+    InvalidArgument(String),
     /// Request PDU was not AS-REQ or TGS-REQ.
     UnexpectedPdu,
     /// Client must retry with PA-ENC-TIMESTAMP; `e_data` is METHOD-DATA.
@@ -72,6 +74,7 @@ impl fmt::Display for Error {
             Self::PassTooSoon { .. } => {
                 write!(f, "Current password's minimum life has not expired")
             }
+            Self::InvalidArgument(s) => write!(f, "{s}"),
             Self::UnexpectedPdu => write!(f, "unexpected PDU"),
             Self::PreauthRequired { .. } => write!(f, "preauth required"),
         }

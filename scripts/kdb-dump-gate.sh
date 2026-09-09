@@ -79,9 +79,28 @@ print(f"nosvr_key_slots={len(keys['nosvr@KERBER.TEST'])}")
 print(f"hwuser_key_slots={len(keys['hwuser@KERBER.TEST'])}")
 if nosvr_eq or hw_eq:
     sys.exit(1)
+has_32767 = False
+for line in path.read_text().splitlines():
+    if not line.startswith("princ\t"):
+        continue
+    f = line.rstrip(";").split("\t")
+    try:
+        n_tl = int(f[3])
+    except (ValueError, IndexError):
+        continue
+    i = 15
+    for _ in range(n_tl):
+        if i >= len(f):
+            break
+        if f[i] == "32767":
+            has_32767 = True
+        i += 3
+print(f"golden_has_tl_32767={has_32767}")
+if has_32767:
+    sys.exit(1)
 PY
 then
-    echo "nosvr/hwuser keys clone user/pwprau" >&2
+    echo "nosvr/hwuser keys clone user/pwprau or golden has TL 32767" >&2
     exit 1
 fi
 docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb /tmp/krb5-kadmin-local

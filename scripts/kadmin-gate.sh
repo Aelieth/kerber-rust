@@ -2498,6 +2498,133 @@ kadm5_modify_validate() {
 kadm5_modify_validate "$NAME" admin /tmp/kadmin-krb5.conf user@KERBER.TEST
 kadm5_modify_validate "$NAME_MIT" admin/admin /etc/krb5.conf user@KERBER.TEST
 
+echo "==== both kadminds reject -x db_args; ACL before mask; KEY_DATA mask ===="
+kadm5_r12_restart_with_ro() {
+    local ctn=$1 is_mit=$2
+    if [ "$is_mit" = mit ]; then
+        docker exec "$ctn" sh -c '
+for comm in /proc/[0-9]*/comm; do
+    [ -f "$comm" ] || continue
+    read -r name < "$comm" || continue
+    if [ "$name" = "kadmind" ]; then
+        pid=${comm#/proc/}
+        pid=${pid%/comm}
+        kill "$pid" 2>/dev/null || true
+    fi
+done
+'
+        local i
+        for i in $(seq 1 40); do
+            if ! docker exec "$ctn" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+                break
+            fi
+            sleep 0.25
+        done
+        docker exec "$ctn" sh -c 'printf "%s\n" "*/admin@KERBER.TEST *" "admin@KERBER.TEST *" "ro@KERBER.TEST i" > /var/krb5kdc/kadm5.acl'
+        docker exec -d "$ctn" sh -c 'kadmind -nofork >/tmp/kadmind-r12.log 2>&1'
+        local ok=0
+        for i in $(seq 1 40); do
+            if docker exec "$ctn" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+                ok=1
+                break
+            fi
+            sleep 0.25
+        done
+        [ "$ok" = 1 ] || { docker exec "$ctn" cat /tmp/kadmind-r12.log >&2 || true; echo "MIT kadmind did not listen for r12" >&2; exit 1; }
+    else
+        docker exec "$ctn" sh -c '
+for comm in /proc/[0-9]*/comm; do
+    [ -f "$comm" ] || continue
+    read -r name < "$comm" || continue
+    if [ "$name" = "krb5-kadmind" ]; then
+        pid=${comm#/proc/}
+        pid=${pid%/comm}
+        kill "$pid" 2>/dev/null || true
+    fi
+done
+'
+        sleep 0.4
+        docker exec "$ctn" sh -c 'printf "%s\n" "admin@KERBER.TEST *" "ro@KERBER.TEST i" > /tmp/kadm5.acl'
+        docker exec -d \
+            -e KRB5_KDC_DB=/tmp/principal \
+            -e KRB5_KDC_STASH=/tmp/stash \
+            -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+            "$ctn" sh -c '/tmp/krb5-kadmind 127.0.0.1:749 >/tmp/kadmind-r12.log 2>&1'
+        local ok=0 i
+        for i in $(seq 1 40); do
+            if docker exec "$ctn" grep -q '^listening ' /tmp/kadmind-r12.log 2>/dev/null; then
+                ok=1
+                break
+            fi
+            sleep 0.25
+        done
+        [ "$ok" = 1 ] || { docker exec "$ctn" cat /tmp/kadmind-r12.log >&2 || true; echo "Rust kadmind did not listen for r12" >&2; exit 1; }
+    fi
+}
+kadm5_r12_db_args() {
+    local ctn=$1 client=$2 conf=$3 is_mit=$4
+    local kadm dumpcmd userline before after mod add getx ro kd
+    kadm() { docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword -q "$1" 2>&1 || true; }
+    before="$(kadm 'getprinc user' | grep -v -e '^Authenticating' -e 'No dictionary')"
+    mod="$(kadm 'modprinc -x foo=bar user')"
+    echo "$ctn modprinc -x: $mod"
+    echo "$mod" | grep -F 'Invalid argument while modifying "user@KERBER.TEST"' || {
+        echo "$ctn modprinc -x did not print Invalid argument: $mod" >&2
+        exit 1
+    }
+    after="$(kadm 'getprinc user' | grep -v -e '^Authenticating' -e 'No dictionary')"
+    [ "$before" = "$after" ] || {
+        echo "$ctn getprinc user changed after modprinc -x" >&2
+        printf '%s\n' "$before" "$after" >&2
+        exit 1
+    }
+    if [ "$is_mit" = mit ]; then
+        docker exec "$ctn" kdb5_util dump /tmp/r12.dump
+    else
+        docker exec -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
+            -e KRB5_MASTER_PASSWORD=masterpassword \
+            "$ctn" /tmp/krb5-kdb dump /tmp/r12.dump
+    fi
+    userline="$(docker exec "$ctn" grep -F $'\tuser@KERBER.TEST\t' /tmp/r12.dump || true)"
+    echo "$ctn user dump: $userline"
+    echo "$userline" | grep -F $'\t32767\t' && {
+        echo "$ctn dump still has TL 32767 on user" >&2
+        exit 1
+    }
+    add="$(kadm 'addprinc -pw x -x foo=bar r12x')"
+    echo "$ctn addprinc -x: $add"
+    echo "$add" | grep -F 'Invalid argument while creating' || {
+        echo "$ctn addprinc -x did not print Invalid argument: $add" >&2
+        exit 1
+    }
+    getx="$(kadm 'getprinc r12x')"
+    echo "$ctn getprinc r12x: $getx"
+    echo "$getx" | grep -qiE 'does not exist|not found|UNK_PRINC|Unknown' || {
+        echo "$ctn r12x exists after failed addprinc -x: $getx" >&2
+        exit 1
+    }
+    ro="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" \
+        /tmp/kadm5-changepw-rpc --service kadmin/admin ro@KERBER.TEST ro-secret KERBER.TEST \
+        modify-policy-clr user@KERBER.TEST 2>&1 || true)"
+    echo "$ctn ro modify-policy-clr: $ro"
+    echo "$ro" | grep -q 'modify_code=43787523' || {
+        echo "$ctn ro POLICY|POLICY_CLR was not KADM5_AUTH_MODIFY: $ro" >&2
+        exit 1
+    }
+    kd="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" \
+        /tmp/kadm5-changepw-rpc --service kadmin/admin "$client" adminpassword KERBER.TEST \
+        create-key-data-mask "r12key@KERBER.TEST" 2>&1 || true)"
+    echo "$ctn create-key-data-mask: $kd"
+    echo "$kd" | grep -q 'create_code=43787534' || {
+        echo "$ctn KEY_DATA mask did not return KADM5_BAD_MASK: $kd" >&2
+        exit 1
+    }
+}
+kadm5_r12_restart_with_ro "$NAME" rust
+kadm5_r12_restart_with_ro "$NAME_MIT" mit
+kadm5_r12_db_args "$NAME" admin /tmp/kadmin-krb5.conf rust
+kadm5_r12_db_args "$NAME_MIT" admin/admin /etc/krb5.conf mit
+
 echo "==== glob lists: Rust kadmind vs MIT kadmind ===="
 diff "$SCRATCH/glob-rust.txt" "$SCRATCH/glob-mit.txt" || { echo "glob lists differ between the Rust kadmind and MIT kadmind" >&2; exit 1; }
 

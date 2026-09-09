@@ -6,6 +6,7 @@
  */
 #include <kadm5/admin.h>
 #include <com_err.h>
+#include <kdb.h>
 #include <krb5.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -129,6 +130,7 @@ int main(int argc, char **argv) {
                 strcmp(op, "modify-failcount") == 0 ||
                 strcmp(op, "modify-policy-clr") == 0 ||
                 strcmp(op, "create-failcount-mask") == 0 ||
+                strcmp(op, "create-key-data-mask") == 0 ||
                 strcmp(op, "create-tl-reserved") == 0 ||
                 strcmp(op, "create-tl-500") == 0) &&
                argc - argi >= 5) {
@@ -153,6 +155,27 @@ int main(int argc, char **argv) {
                                          "password");
             printf("create_code=%ld\n", (long)ret);
             printf("create_msg=%s\n", error_message(ret));
+            krb5_free_principal(ctx, p);
+            kadm5_destroy(handle);
+            krb5_free_context(ctx);
+            return 0;
+        }
+        if (strcmp(op, "create-key-data-mask") == 0) {
+            krb5_key_data kd;
+            memset(&kd, 0, sizeof(kd));
+            kd.key_data_ver = 1;
+            kd.key_data_kvno = 1;
+            kd.key_data_type[0] = ENCTYPE_AES256_CTS_HMAC_SHA1_96;
+            rec.principal = p;
+            rec.n_key_data = 1;
+            rec.key_data = &kd;
+            ret = kadm5_create_principal(handle, &rec,
+                                         KADM5_PRINCIPAL | KADM5_KEY_DATA,
+                                         "password");
+            printf("create_code=%ld\n", (long)ret);
+            printf("create_msg=%s\n", error_message(ret));
+            rec.key_data = NULL;
+            rec.n_key_data = 0;
             krb5_free_principal(ctx, p);
             kadm5_destroy(handle);
             krb5_free_context(ctx);

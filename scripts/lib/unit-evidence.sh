@@ -111,7 +111,8 @@ unit_red_at() {
     echo "==== unit_red_at parent=$parent name=$name filter=${filter:---test stems} inject=$* ===="
     echo "red-at-parent=1"
     echo "expected_fail=${name_list[*]}"
-    local -a cargo_args=(cargo test --workspace)
+    # Workspace default is fail-fast: the second inject crate never runs.
+    local -a cargo_args=(cargo test --workspace --no-fail-fast)
     if [ -n "$filter" ]; then
         cargo_args+=("$filter")
     else

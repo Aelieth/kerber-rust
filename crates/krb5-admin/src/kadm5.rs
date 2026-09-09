@@ -11,7 +11,7 @@ use krb5_crypto::{EncryptionType, ProtocolKey, kdb_decrypt_key};
 use krb5_gss::GssContext;
 use krb5_kdc::{
     Acl, KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH,
-    KadmData, KeyEntry, OsaKeyData, OsaPrincEnt, Principal, SharedDump as SharedStore,
+    KadmData, KeyEntry, OsaKeyData, OsaPrincEnt, Principal, SharedDump as SharedStore, TL_DB_ARGS,
     TL_LAST_PWD_CHANGE, TL_MOD_PRINC, TL_STRING_ATTRS, TlData,
 };
 use krb5_protocol::ReplayCache;
@@ -2328,23 +2328,6 @@ fn dispatch_kadm5_ticket(
         MODIFY_PRINCIPAL => {
             let (name, prealm, mask, fields) = parse_modify(args)?;
             let req = req_realm(&prealm, &realm);
-            // MIT svr_principal.c:569-588,671-675: mask + TL + failcount before any write.
-            if let Some(code) = modify_princ_mask_err(mask, fields.policy.as_deref()) {
-                return Ok(generic_ret(API_V2, code));
-            }
-            if mask & KADM5_TL_DATA != 0 && fields.tl_data.iter().any(|t| t.ty < 256) {
-                return Ok(generic_ret(API_V2, KADM5_BAD_TL_TYPE));
-            }
-            if mask & KADM5_FAIL_AUTH_COUNT != 0 && fields.fail_auth_count != 0 {
-                return Ok(generic_ret(API_V2, KADM5_BAD_SERVER_PARAMS));
-            }
-            let mut g = match write_store(store, API_V2) {
-                Ok(g) => g,
-                Err(rep) => return Ok(rep),
-            };
-            if g.get_in_realm(&name, &req).is_none() {
-                return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
-            }
             let tid = acl_id(&name, &req);
             if changepw
                 || acl
@@ -2353,12 +2336,31 @@ fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_MODIFY));
             }
+            if let Some(code) = modify_princ_mask_err(mask, fields.policy.as_deref()) {
+                return Ok(generic_ret(API_V2, code));
+            }
+            let mut g = match write_store(store, API_V2) {
+                Ok(g) => g,
+                Err(rep) => return Ok(rep),
+            };
+            if g.get_in_realm(&name, &req).is_none() {
+                return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
+            }
             if mask & KADM5_ATTRIBUTES != 0
                 && fields.attributes & KDB_LOCKDOWN_KEYS == 0
                 && g.get_in_realm(&name, &req)
                     .is_some_and(|p| p.attributes & KDB_LOCKDOWN_KEYS != 0)
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_MODIFY));
+            }
+            if mask & KADM5_TL_DATA != 0 && fields.tl_data.iter().any(|t| t.ty < 256) {
+                return Ok(generic_ret(API_V2, KADM5_BAD_TL_TYPE));
+            }
+            if mask & KADM5_FAIL_AUTH_COUNT != 0 && fields.fail_auth_count != 0 {
+                return Ok(generic_ret(API_V2, KADM5_BAD_SERVER_PARAMS));
+            }
+            if mask & KADM5_TL_DATA != 0 && db_args_code(&fields.tl_data).is_some() {
+                return Ok(generic_ret(API_V2, EINVAL));
             }
             let attributes = (mask & KADM5_ATTRIBUTES != 0).then_some(fields.attributes);
             let max_life = (mask & KADM5_MAX_LIFE != 0).then_some(u64::from(fields.max_life));
@@ -2414,11 +2416,14 @@ fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_ADD));
             }
-            if let Some(code) = create_princ_mask_err(c.mask, c.policy.as_deref(), 0) {
+            if let Some(code) = create_princ_mask_err(c.mask, c.policy.as_deref(), c.n_key_data) {
                 return Ok(generic_ret(API_V2, code));
             }
             if c.mask & KADM5_TL_DATA != 0 && c.tl_data.iter().any(|t| t.ty < 256) {
                 return Ok(generic_ret(API_V2, KADM5_BAD_TL_TYPE));
+            }
+            if c.mask & KADM5_TL_DATA != 0 && db_args_code(&c.tl_data).is_some() {
+                return Ok(generic_ret(API_V2, EINVAL));
             }
             let mut g = match write_store(store, API_V2) {
                 Ok(g) => g,
@@ -2851,6 +2856,9 @@ fn kadm5_code(e: &Error) -> u32 {
         Error::GarbageArgs | Error::ProcUnavail => return KADM5_FAILURE,
         Error::PasswordPolicy(s) | Error::Inner(s) => s.as_str(),
     };
+    if s.starts_with("Unsupported argument") || s == "Invalid argument" {
+        return EINVAL;
+    }
     if s.contains("min_length") {
         KADM5_PASS_Q_TOOSHORT
     } else if s.contains("min_classes") {
@@ -3155,6 +3163,10 @@ fn modify_princ_mask_err(mask: u32, policy: Option<&str>) -> Option<u32> {
     None
 }
 
+fn db_args_code(tls: &[TlData]) -> Option<u32> {
+    tls.iter().any(|t| t.ty == TL_DB_ARGS).then_some(EINVAL)
+}
+
 /// MIT `xdr_krb5_int16` truncates `tl_data_type` before the `< 256` guard.
 #[allow(clippy::cast_possible_truncation)]
 fn xdr_tl_type(wire: u32) -> i32 {
@@ -3242,13 +3254,14 @@ struct CreateFields {
     policy: Option<String>,
     tl_data: Vec<TlData>,
     mask: u32,
+    n_key_data: u32,
 }
 
 fn parse_create(args: &[u8], v3: bool) -> Result<CreateFields, Error> {
     let mut r = XdrR::new(args);
     let _api = r.u32()?;
     let (name, prealm) = r.principal_realm()?;
-    let (policy, tl_data) = skip_principal_ent_rest(&mut r)?;
+    let (policy, tl_data, n_key_data) = skip_principal_ent_rest(&mut r)?;
     let mask = r.u32()?;
     if v3 {
         r.skip_array_i32_pairs()?;
@@ -3261,6 +3274,7 @@ fn parse_create(args: &[u8], v3: bool) -> Result<CreateFields, Error> {
         policy,
         tl_data,
         mask,
+        n_key_data,
     })
 }
 
@@ -3795,7 +3809,7 @@ fn encode_extract_keys(api: u32, p: &krb5_kdc::Principal, kvno: u32) -> Vec<u8> 
 }
 
 /// After the leading principal, skip the rest of `kadm5_principal_ent_rec`.
-fn skip_principal_ent_rest(r: &mut XdrR<'_>) -> Result<(Option<String>, Vec<TlData>), Error> {
+fn skip_principal_ent_rest(r: &mut XdrR<'_>) -> Result<(Option<String>, Vec<TlData>, u32), Error> {
     // 4 timestamps/deltats: expire, last_pwd, pw_expire, max_life
     for _ in 0..4 {
         r.u32()?;
@@ -3842,7 +3856,7 @@ fn skip_principal_ent_rest(r: &mut XdrR<'_>) -> Result<(Option<String>, Vec<TlDa
             r.u32()?; // type[1]
         }
     }
-    Ok((policy, tl_data))
+    Ok((policy, tl_data, n_key))
 }
 
 struct XdrR<'a> {
@@ -6261,16 +6275,11 @@ mod tests {
     }
 
     #[test]
-    fn stub_setup_unk_before_acl_on_modify_setkey_purge_extract_setstr() {
+    fn stub_setup_unk_before_acl_on_setkey_purge_extract_setstr() {
         stub_unk_before_acl(
             EXTRACT_KEYS,
             &extract_args("nosuch@KERBER.TEST", 0),
             KADM5_AUTH_EXTRACT,
-        );
-        stub_unk_before_acl(
-            MODIFY_PRINCIPAL,
-            &modify_rec("nosuch@KERBER.TEST"),
-            KADM5_AUTH_MODIFY,
         );
         let mut pk = XdrW::default();
         pk.u32(API_V2);

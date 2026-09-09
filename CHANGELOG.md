@@ -98,6 +98,15 @@ this project uses semantic versioning once a crate is published.
   real all-slot key comparisons; `ci-policy` finds `cases:N` anywhere and
   gains dump/cases fixtures; `status.rs` order + `READ_COOKIE` marked;
   `openssl-seclevel0.cnf` documents inert CipherString.
+- **admin/kdc (A′-1 Round 4 R12).** Every principal put strips
+  `KRB5_TL_DB_ARGS` (0x7fff) like `krb5_db_put_principal`; a leftover
+  `db_args` is EINVAL 22 `Unsupported argument "…" for db2` and the
+  entry/file is unchanged. `krb5-kdb load` of a dump with 32767 fails
+  with no partial store; iprop apply skips that record. Modify order is
+  ACL → mask → lookup → lockdown → TL/failcount → `db_args`. Create
+  decodes `n_key_data` so `KEY_DATA`+`n_key_data!=0` is `KADM5_BAD_MASK`.
+  Limitation: a successful modify with both admin fields and TL may still
+  write twice (documented).
 
 ### Round-up R2 (re-audit fixes)
 

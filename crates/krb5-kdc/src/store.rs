@@ -39,8 +39,8 @@ pub const RID_FIRST_USER: u32 = 1000;
 use crate::acl::{Acl, AdminOp, Restrictions};
 use crate::error::Error;
 use crate::kdb_dump::{
-    TL_ALIAS_TARGET, TL_KADM_DATA, TL_KERBER_HIST, TL_KERBER_POLICY, TL_LAST_ADMIN_UNLOCK,
-    TL_LAST_PWD_CHANGE, TL_MOD_PRINC,
+    TL_ALIAS_TARGET, TL_DB_ARGS, TL_KADM_DATA, TL_KERBER_HIST, TL_KERBER_POLICY,
+    TL_LAST_ADMIN_UNLOCK, TL_LAST_PWD_CHANGE, TL_MOD_PRINC,
 };
 use crate::osa::{INITIAL_HIST_KVNO, KADM5_POLICY, OsaKeyData, OsaPrincEnt};
 
@@ -124,6 +124,37 @@ pub struct TlData {
     pub ty: i32,
     /// Raw contents (length is `contents.len()`).
     pub contents: Vec<u8>,
+}
+
+/// `extract_db_args_from_tl_data` + DB2 reject (`kdb5.c:893-945`, `kdb_db2.c:817-822`).
+#[must_use]
+pub fn db_args_put_error(tl: &[TlData]) -> Option<Error> {
+    for t in tl {
+        if t.ty != TL_DB_ARGS {
+            continue;
+        }
+        if t.contents.last() != Some(&0) {
+            return Some(Error::InvalidArgument("Invalid argument".into()));
+        }
+        let s = String::from_utf8_lossy(&t.contents[..t.contents.len() - 1]);
+        return Some(Error::InvalidArgument(format!(
+            "Unsupported argument \"{s}\" for db2"
+        )));
+    }
+    None
+}
+
+/// Remove every `KRB5_TL_DB_ARGS` after [`db_args_put_error`].
+///
+/// # Errors
+///
+/// [`Error::InvalidArgument`] when any `0x7fff` is present or not NUL-terminated.
+pub fn strip_db_args(tl: &mut Vec<TlData>) -> Result<(), Error> {
+    if let Some(e) = db_args_put_error(tl) {
+        return Err(e);
+    }
+    tl.retain(|t| t.ty != TL_DB_ARGS);
+    Ok(())
 }
 
 /// The kadm5 admin record MIT keeps in `KRB5_TL_KADM_DATA` (`osa_princ_ent_rec`)
@@ -794,8 +825,10 @@ impl PrincipalStore {
                 } else {
                     p.clone()
                 };
-                let merged = self.assign_iprop_rid(merged);
-                self.map.insert(merged.id(), merged);
+                let mut merged = self.assign_iprop_rid(merged);
+                if strip_db_args(&mut merged.tl_data).is_ok() {
+                    self.map.insert(merged.id(), merged);
+                }
             }
             let cur = self.serial();
             if e.sno > cur {
@@ -1602,19 +1635,15 @@ impl PrincipalStore {
         tls: &[TlData],
     ) -> Result<(), Error> {
         let id = self.canonical_id(name, princ_realm)?;
-        {
-            let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
-            for tl in tls {
-                // MIT `krb5_dbe_update_tl_data` (`kdb5.c:2304`): DB_ARGS appends;
-                // every other type replaces.
-                if tl.ty != 0x7fff {
-                    p.tl_data.retain(|t| t.ty != tl.ty);
-                }
-                p.tl_data.push(tl.clone());
+        let mut p = self.map.get(&id).ok_or(Error::NotFound)?.clone();
+        for tl in tls {
+            if tl.ty != TL_DB_ARGS {
+                p.tl_data.retain(|t| t.ty != tl.ty);
             }
+            p.tl_data.push(tl.clone());
         }
-        let snap = self.map.get(&id).cloned();
-        self.note_ulog(id, false, snap);
+        strip_db_args(&mut p.tl_data)?;
+        self.put_principal(p);
         self.save_if_configured()
     }
 
@@ -2728,6 +2757,9 @@ impl PrincipalStore {
     }
 
     fn put_principal(&mut self, mut p: Principal) {
+        if strip_db_args(&mut p.tl_data).is_err() {
+            return;
+        }
         self.settle_rid(&mut p);
         let id = p.id();
         self.note_ulog(id.clone(), false, Some(p.clone()));

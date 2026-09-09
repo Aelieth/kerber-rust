@@ -33,6 +33,8 @@ pub const KDB_DUMP_VERSION: u32 = 7;
 /// Older `-r18` header. Princ records match version 7.
 pub const KDB_DUMP_VERSION_R18: u32 = 6;
 
+/// `KRB5_TL_DB_ARGS` (`kdb.h`); stripped at put (`kdb5.c:893-945`).
+pub const TL_DB_ARGS: i32 = 0x7fff;
 /// `KRB5_TL_LAST_PWD_CHANGE`.
 pub const TL_LAST_PWD_CHANGE: i32 = 1;
 /// `KRB5_TL_LAST_ADMIN_UNLOCK` (0x0700): 4-byte LE unix timestamp.
@@ -180,6 +182,11 @@ impl DumpFile {
     ///
     /// Crypto or name-parse failures.
     pub fn into_store(self, mkey: &ProtocolKey) -> Result<PrincipalStore, DumpError> {
+        for p in &self.princs {
+            if let Some(e) = crate::store::db_args_put_error(&p.tl_data) {
+                return Err(DumpError::Format(format!("{e} while storing {}", p.name)));
+            }
+        }
         let realm = self.realm()?.to_owned();
         let mut store = PrincipalStore::new(realm.clone());
         let mut domain: Option<RpcSid> = None;
@@ -783,6 +790,7 @@ fn write_princ_record(
     } else {
         p.tl_data.clone()
     };
+    tl.retain(|t| t.ty != TL_DB_ARGS);
     merge_sid_tl(&mut tl, store.domain_sid(), p.rid);
     merge_kadm_tl(&mut tl, p);
     merge_string_attrs_tl(&mut tl, &p.string_attrs);

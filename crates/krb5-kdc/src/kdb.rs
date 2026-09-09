@@ -18,7 +18,7 @@ use krb5_types::pkinit::PkinitCa;
 use crate::error::Error;
 use crate::persist::{PersistError, load_store};
 use crate::store::{
-    MAX_ALIAS_DEPTH, NamedPolicy, Policy, Principal, PrincipalStore, RID_FIRST_USER,
+    MAX_ALIAS_DEPTH, NamedPolicy, Policy, Principal, PrincipalStore, RID_FIRST_USER, strip_db_args,
 };
 
 /// Map a wire name to a `user@REALM` store id.
@@ -503,7 +503,8 @@ impl PrincipalRead for MemoryStore {
 }
 
 impl PrincipalWrite for MemoryStore {
-    fn put_principal(&mut self, p: Principal) -> Result<(), Error> {
+    fn put_principal(&mut self, mut p: Principal) -> Result<(), Error> {
+        strip_db_args(&mut p.tl_data)?;
         self.map.insert(p.id(), p);
         Ok(())
     }
@@ -585,7 +586,8 @@ impl PrincipalRead for PrincipalStore {
 }
 
 impl PrincipalWrite for PrincipalStore {
-    fn put_principal(&mut self, p: Principal) -> Result<(), Error> {
+    fn put_principal(&mut self, mut p: Principal) -> Result<(), Error> {
+        strip_db_args(&mut p.tl_data)?;
         self.debug_insert(p);
         Ok(())
     }
