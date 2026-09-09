@@ -124,6 +124,11 @@ this project uses semantic versioning once a crate is published.
   `unit_guard_dirty`, `unit-red-check.py`, `ci-status.py --save`
   in_progress/403/completed, a diffsend name-set mismatch, and
   artefact-scoped parent-red in `claim-audit.py`.
+- **docs/test (A′-1 Round 4 R15).** Round 3 truth pass: recaptured
+  `r10-unit-green` / r9 kadm5 parent-red / `ci-<sha>.txt`; summary
+  cites anchored by text; `kdb-dump-gate.sh` dies unless both dump
+  principals have `*_key_slots=4`. `a1-r2/INDEX.md` keeps the 47
+  evidence-check findings as history.
 
 ### Round-up R2 (re-audit fixes)
 

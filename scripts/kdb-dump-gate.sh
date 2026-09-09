@@ -79,6 +79,8 @@ print(f"nosvr_key_slots={len(keys['nosvr@KERBER.TEST'])}")
 print(f"hwuser_key_slots={len(keys['hwuser@KERBER.TEST'])}")
 if nosvr_eq or hw_eq:
     sys.exit(1)
+if len(keys["nosvr@KERBER.TEST"]) != 4 or len(keys["hwuser@KERBER.TEST"]) != 4:
+    sys.exit(1)
 has_32767 = False
 for line in path.read_text().splitlines():
     if not line.startswith("princ\t"):
