@@ -176,11 +176,16 @@ echo "$TGT" | grep -qiE "KDC policy rejects|POLICY"
 kadmin_q 'modprinc +allow_tgs_req host/testhost.kerber.test'
 
 echo "==== REQUIRES_HW_AUTH: kinit NEEDED_HW_PREAUTH ===="
+docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
 kadmin_q 'modprinc +requires_hwauth -requires_preauth flaguser'
-HW="$(kinit_try 'printf "flag-secret\n" | kinit flaguser@KERBER.TEST')"
+GETHW="$(kadmin_q 'getprinc flaguser')"
+echo "$GETHW"
+echo "$GETHW" | grep '^Attributes:' | grep -q 'REQUIRES_HW_AUTH'
+echo "$GETHW" | grep '^Attributes:' | grep -qv 'REQUIRES_PRE_AUTH'
+HW="$(kinit_try 'printf "flag-secret\n" | KRB5_TRACE=/dev/stderr kinit flaguser@KERBER.TEST')"
 echo "$HW"
-echo "$HW" | grep -qiE "Additional pre-authentication required|NEEDED_HW_PREAUTH"
-if echo "$HW" | grep -qiE 'Authenticated|Ticket cache'; then
+echo "$HW" | grep -q 'Received error from KDC:.*Additional pre-authentication required'
+if echo "$HW" | grep -q 'Ticket cache: FILE:'; then
     echo "REQUIRES_HW_AUTH principal obtained a ticket" >&2
     exit 1
 fi
