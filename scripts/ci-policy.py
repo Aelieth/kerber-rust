@@ -925,7 +925,7 @@ _LEDGER_CASES_HDR = re.compile(
 
 
 def check_diffsend_cases(ledger: str | None = None, gate: str | None = None) -> None:
-    """DIFFSEND_CASES, the ledger header list, and differential-gate.sh:155 agree."""
+    """DIFFSEND_CASES, the ledger header list, and differential-gate.sh cases:N agree."""
     if ledger is None:
         if not LEDGER.is_file():
             _die("missing docs/mit-parity-ledger.md")
@@ -947,22 +947,19 @@ def check_diffsend_cases(ledger: str | None = None, gate: str | None = None) -> 
         )
     if len(DIFFSEND_CASES) != 30:
         _die(f"DIFFSEND_CASES has {len(DIFFSEND_CASES)} names, want 30")
-    lines = gate.splitlines()
-    if len(lines) < 155:
-        _die("scripts/differential-gate.sh shorter than 155 lines")
-    m = re.search(r'"cases":(\d+)', lines[154])
+    m = re.search(r'"cases":(\d+)', gate)
     if not m:
-        _die("scripts/differential-gate.sh:155 missing cases:N")
+        _die("scripts/differential-gate.sh missing cases:N")
     n = int(m.group(1))
     if n != len(DIFFSEND_CASES):
         _die(
-            f"scripts/differential-gate.sh:155 cases:{n} != "
+            f"scripts/differential-gate.sh cases:{n} != "
             f"DIFFSEND_CASES {len(DIFFSEND_CASES)}"
         )
 
 
-def _dump_first_key_hex(line: str) -> tuple[str, str] | None:
-    """Name and first key-slot hex from a princ dump line, or None."""
+def _dump_key_hexes(line: str) -> tuple[str, tuple[str, ...]] | None:
+    """Name and every key_data slot-0 hex from a princ dump line, or None."""
     if not line.startswith("princ\t"):
         return None
     f = line.rstrip(";").split("\t")
@@ -970,12 +967,27 @@ def _dump_first_key_hex(line: str) -> tuple[str, str] | None:
         return None
     try:
         n_tl = int(f[3])
+        n_key = int(f[4])
     except ValueError:
         return None
     i = 15 + 3 * n_tl
-    if i + 4 >= len(f):
+    hexes: list[str] = []
+    for _ in range(n_key):
+        if i + 4 >= len(f):
+            return None
+        try:
+            ver = int(f[i])
+        except ValueError:
+            return None
+        # ver, kvno, then ver × (type, length, hex); slot 0 is the key.
+        i += 2
+        if i + 2 >= len(f):
+            return None
+        hexes.append(f[i + 2])
+        i += 3 * ver
+    if not hexes:
         return None
-    return f[6], f[i + 4]
+    return f[6], tuple(hexes)
 
 
 def check_golden_dump_unique_keys(text: str | None = None) -> None:
@@ -985,13 +997,13 @@ def check_golden_dump_unique_keys(text: str | None = None) -> None:
         if not path.is_file():
             _die("missing tests/traces/kdb/mit-dump-v7.txt")
         text = path.read_text()
-    keys: dict[str, str] = {}
+    keys: dict[str, tuple[str, ...]] = {}
     for line in text.splitlines():
-        parsed = _dump_first_key_hex(line)
+        parsed = _dump_key_hexes(line)
         if parsed is None:
             continue
-        name, hexkey = parsed
-        keys[name] = hexkey
+        name, hexes = parsed
+        keys[name] = hexes
     for need in (
         "user@KERBER.TEST",
         "nosvr@KERBER.TEST",
@@ -2205,58 +2217,68 @@ jobs:
         + ", ".join(f"`{c}`" for c in sorted(DIFFSEND_CASES))
         + ".\n"
     )
-    gate_30 = "\n" * 154 + 'echo "$DIFF" | grep -q \'"outcome":"ok","cases":30\' || die "x"\n'
+    gate_30 = 'echo "$DIFF" | grep -q \'"outcome":"ok","cases":30\' || die "x"\n'
     check_diffsend_cases(cases_hdr, gate_30)
     _must_die(check_diffsend_cases, "no header here", gate_30)
+    _must_die(check_diffsend_cases, cases_hdr, 'echo "no cases pin"\n')
+    gate_29 = 'echo "$DIFF" | grep -q \'"outcome":"ok","cases":29\' || die "x"\n'
+    _must_die(check_diffsend_cases, cases_hdr, gate_29)
 
-    def _princ_line(name: str, keyhex: str) -> str:
+    def _princ_line(name: str, *keyhexes: str) -> str:
         namelen = str(len(name))
-        klen = str(len(keyhex) // 2)
-        return (
-            "\t".join(
-                [
-                    "princ",
-                    "38",
-                    namelen,
-                    "0",
-                    "1",
-                    "0",
-                    name,
-                    "0",
-                    "0",
-                    "0",
-                    "0",
-                    "0",
-                    "0",
-                    "0",
-                    "0",
-                    "1",
-                    "1",
-                    "17",
-                    klen,
-                    keyhex,
-                    "-1",
-                ]
-            )
-            + "\n"
-        )
+        parts = [
+            "princ",
+            "38",
+            namelen,
+            "0",
+            str(len(keyhexes)),
+            "0",
+            name,
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+        ]
+        for keyhex in keyhexes:
+            klen = str(len(keyhex) // 2)
+            parts.extend(["1", "1", "17", klen, keyhex])
+        parts.append("-1")
+        return "\t".join(parts) + "\n"
 
     dump_unique = (
         "kdb5_util load_dump version 7\n"
-        + _princ_line("user@KERBER.TEST", "aa")
-        + _princ_line("nosvr@KERBER.TEST", "bb")
-        + _princ_line("hwuser@KERBER.TEST", "cc")
-        + _princ_line("pwprau@KERBER.TEST", "dd")
+        + _princ_line("user@KERBER.TEST", "aa", "ab", "ac", "ad")
+        + _princ_line("nosvr@KERBER.TEST", "ba", "bb", "bc", "bd")
+        + _princ_line("hwuser@KERBER.TEST", "ca", "cb", "cc", "cd")
+        + _princ_line("pwprau@KERBER.TEST", "da", "db", "dc", "dd")
     )
     check_golden_dump_unique_keys(dump_unique)
-    dump_clone = (
+    dump_clone_user = (
+        "kdb5_util load_dump version 7\n"
+        + _princ_line("user@KERBER.TEST", "aa", "ab", "ac", "ad")
+        + _princ_line("nosvr@KERBER.TEST", "aa", "ab", "ac", "ad")
+        + _princ_line("hwuser@KERBER.TEST", "ca", "cb", "cc", "cd")
+        + _princ_line("pwprau@KERBER.TEST", "da", "db", "dc", "dd")
+    )
+    _must_die(check_golden_dump_unique_keys, dump_clone_user)
+    dump_clone_hw = (
+        "kdb5_util load_dump version 7\n"
+        + _princ_line("user@KERBER.TEST", "aa", "ab", "ac", "ad")
+        + _princ_line("nosvr@KERBER.TEST", "ba", "bb", "bc", "bd")
+        + _princ_line("hwuser@KERBER.TEST", "da", "db", "dc", "dd")
+        + _princ_line("pwprau@KERBER.TEST", "da", "db", "dc", "dd")
+    )
+    _must_die(check_golden_dump_unique_keys, dump_clone_hw)
+    dump_missing = (
         "kdb5_util load_dump version 7\n"
         + _princ_line("user@KERBER.TEST", "aa")
-        + _princ_line("nosvr@KERBER.TEST", "aa")
-        + _princ_line("hwuser@KERBER.TEST", "cc")
-        + _princ_line("pwprau@KERBER.TEST", "dd")
+        + _princ_line("nosvr@KERBER.TEST", "ba")
     )
-    _must_die(check_golden_dump_unique_keys, dump_clone)
+    _must_die(check_golden_dump_unique_keys, dump_missing)
     ledger_tally_ok = (
         "Counts:\n"
         "**1** = A1 1 + A2 0 + A3 0.\n"

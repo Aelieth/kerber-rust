@@ -6,8 +6,8 @@
 
 pub const ADD_TO_TRANSITED_LIST: &str = "ADD_TO_TRANSITED_LIST";
 pub const BAD_ENCRYPTION_TYPE: &str = "BAD_ENCRYPTION_TYPE";
-pub const BAD_TRANSIT: &str = "BAD_TRANSIT";
 pub const BAD_TGS_SERVER_NAME: &str = "BAD TGS SERVER NAME";
+pub const BAD_TRANSIT: &str = "BAD_TRANSIT";
 pub const CANT_FIND_CLIENT_KEY: &str = "CANT_FIND_CLIENT_KEY";
 pub const CLIENT_EXPIRED: &str = "CLIENT EXPIRED";
 pub const CLIENT_KEY_EXPIRED: &str = "CLIENT KEY EXPIRED";
@@ -41,6 +41,9 @@ pub const NULL_SERVER: &str = "NULL_SERVER";
 pub const POSTDATE_NOT_ALLOWED: &str = "POSTDATE NOT ALLOWED";
 pub const PREAUTH_FAILED: &str = "PREAUTH_FAILED";
 pub const PROCESS_TGS: &str = "PROCESS_TGS";
+/// MIT `do_as_req.c:747-751` status; Rust's `open_cookie` ignores bad cookies
+/// like MIT's `return 0` path, so this word is never emitted.
+#[allow(dead_code)]
 pub const READ_COOKIE: &str = "READ_COOKIE";
 pub const RENEW_SERVER_MISMATCH: &str = "SERVER DIDN'T MATCH TICKET FOR RENEW/FORWARD/ETC";
 pub const REQUIRED_PWCHANGE: &str = "REQUIRED PWCHANGE";

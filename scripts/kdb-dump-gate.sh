@@ -54,7 +54,7 @@ docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmin-local" "$NAME":/tmp/krb5-kadmin-local
 docker cp "$GOLDEN" "$NAME":/tmp/mit.dump
-echo "==== golden dump nosvr/hwuser keys (kdb5_util dump) are MIT-derived, not clones of user/pwprau ===="
+echo "==== golden dump nosvr/hwuser keys are MIT-derived, not clones of user/pwprau ===="
 if ! python3 - "$ROOT/scripts/ci-policy.py" <<'PY'
 import importlib.util
 import sys
@@ -62,9 +62,23 @@ import sys
 spec = importlib.util.spec_from_file_location("ci_policy", sys.argv[1])
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
+path = mod.ROOT / "tests" / "traces" / "kdb" / "mit-dump-v7.txt"
+keys = {}
+for line in path.read_text().splitlines():
+    parsed = mod._dump_key_hexes(line)
+    if parsed is None:
+        continue
+    name, hexes = parsed
+    keys[name] = hexes
 mod.check_golden_dump_unique_keys()
-print("nosvr_keys_eq_user=False")
-print("hwuser_keys_eq_pwprau=False")
+nosvr_eq = keys["nosvr@KERBER.TEST"] == keys["user@KERBER.TEST"]
+hw_eq = keys["hwuser@KERBER.TEST"] == keys["pwprau@KERBER.TEST"]
+print(f"nosvr_keys_eq_user={nosvr_eq}")
+print(f"hwuser_keys_eq_pwprau={hw_eq}")
+print(f"nosvr_key_slots={len(keys['nosvr@KERBER.TEST'])}")
+print(f"hwuser_key_slots={len(keys['hwuser@KERBER.TEST'])}")
+if nosvr_eq or hw_eq:
+    sys.exit(1)
 PY
 then
     echo "nosvr/hwuser keys clone user/pwprau" >&2

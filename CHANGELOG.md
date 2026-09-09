@@ -92,6 +92,12 @@ this project uses semantic versioning once a crate is published.
   through `kdc-padata-proxy.py` on both legs of `mit-fast-kdc-gate.sh`.
 - **test (R10 tooling).** `unit_red_at --all` only passes `--test` for
   `tests/*.rs` injects so `Cargo.toml` overlays are not mistaken for stems.
+- **docs/test (A′-1 Round 3 R11).** Summary/ledger/INDEX truth pass:
+  `CANTLOCK_DB` one verdict; Settled-live line cites retargeted; ledger
+  U2U/kadm5/e_data rows graded by what is ported; `kdb-dump-gate` prints
+  real all-slot key comparisons; `ci-policy` finds `cases:N` anywhere and
+  gains dump/cases fixtures; `status.rs` order + `READ_COOKIE` marked;
+  `openssl-seclevel0.cnf` documents inert CipherString.
 
 ### Round-up R2 (re-audit fixes)
 

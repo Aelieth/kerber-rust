@@ -1,3 +1,8 @@
+# OpenSSL 3 config used by pkinit gates via OPENSSL_CONF.
+# CipherString under ssl_conf only affects libssl TLS; it does not lower the
+# libcrypto security level for DH/ECDH keygen. Kept so OPENSSL_CONF is a real
+# file (unset/missing paths warn); P-384/Oakley-1024 keygen still fails under
+# the image's default SECLEVEL — see pkinit-gate honesty (item 17).
 openssl_conf = openssl_init
 
 [openssl_init]
