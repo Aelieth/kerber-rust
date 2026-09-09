@@ -123,7 +123,10 @@ this project uses semantic versioning once a crate is published.
   replies so that 0x6b is visible. `ci-policy.py` fixtures cover
   `unit_guard_dirty`, `unit-red-check.py`, `ci-status.py --save`
   in_progress/403/completed, a diffsend name-set mismatch, and
-  artefact-scoped parent-red in `claim-audit.py`.
+  artefact-scoped parent-red in `claim-audit.py`. The R14
+  `unit_guard_dirty` fixtures set `KERBER_NO_IMAGE=1` so
+  `provenance.sh` does not require the MIT image (CI test /
+  ledger-mit jobs have docker but not `kerber-rust-mit-kdc:1.22.2`).
 - **docs/test (A′-1 Round 4 R15).** Round 3 truth pass: recaptured
   `r10-unit-green` / r9 kadm5 parent-red / `ci-<sha>.txt`; summary
   cites anchored by text; `kdb-dump-gate.sh` dies unless both dump

@@ -2489,7 +2489,7 @@ jobs:
     )
 
     env = os.environ.copy()
-    env["ROOT"] = str(ROOT)
+    env.update({"ROOT": str(ROOT), "KERBER_NO_IMAGE": "1"})
     dirty_refuse = subprocess.run(
         [
             "bash",
