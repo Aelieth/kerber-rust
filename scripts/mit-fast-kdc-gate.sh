@@ -193,7 +193,7 @@ docker exec -e KRB5_CONFIG=/tmp/krb5-fast-proxy.conf "$NAME" \
 set -e
 RUST_FAST_ERR="$(docker exec "$NAME" cat /tmp/fast-err-rust.txt 2>/dev/null || true)"
 echo "$RUST_FAST_ERR"
-echo "$RUST_FAST_ERR" | grep -E 'rep#[0-9]+ error_code=35 e_data_encoding=method e_data_types=\[' || {
+echo "$RUST_FAST_ERR" | grep -E 'rep#[0-9]+ error_code=35 e_data_encoding=none e_data_types=\[]' || {
     echo "rust FAST-error proxy line missing: $RUST_FAST_ERR" >&2
     exit 1
 }
@@ -307,7 +307,7 @@ docker exec -e KRB5_CONFIG=/tmp/krb5-fast-proxy.conf "$MITNAME" \
 set -e
 MIT_FAST_ERR="$(docker exec "$MITNAME" cat /tmp/fast-err-mit.txt 2>/dev/null || true)"
 echo "$MIT_FAST_ERR"
-echo "$MIT_FAST_ERR" | grep -E 'rep#[0-9]+ error_code=35 e_data_encoding=method e_data_types=\[' || {
+echo "$MIT_FAST_ERR" | grep -E 'rep#[0-9]+ error_code=35 e_data_encoding=none e_data_types=\[]' || {
     echo "MIT FAST-error proxy line missing: $MIT_FAST_ERR" >&2
     exit 1
 }
