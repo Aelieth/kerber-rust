@@ -2449,6 +2449,30 @@ kadm5_modify_validate() {
         echo "$ctn failcount changed max_life: $fc" >&2
         exit 1
     }
+    local mask
+    mask="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" \
+        /tmp/kadm5-changepw-rpc --service kadmin/admin "$client" adminpassword KERBER.TEST \
+        modify-policy-clr "$princ" 2>&1 || true)"
+    echo "$ctn policy-clr: $mask"
+    echo "$mask" | grep -q 'modify_code=43787534' || {
+        echo "$ctn POLICY|POLICY_CLR did not return KADM5_BAD_MASK: $mask" >&2
+        exit 1
+    }
+    before="$(echo "$mask" | sed -n 's/.*get_before_code=0 max_life=\([0-9][0-9]*\).*/\1/p')"
+    after="$(echo "$mask" | sed -n 's/.*get_after_code=0 max_life=\([0-9][0-9]*\).*/\1/p')"
+    [ -n "$before" ] && [ "$before" = "$after" ] || {
+        echo "$ctn POLICY|POLICY_CLR changed max_life: $mask" >&2
+        exit 1
+    }
+    local create
+    create="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" \
+        /tmp/kadm5-changepw-rpc --service kadmin/admin "$client" adminpassword KERBER.TEST \
+        create-failcount-mask "r9mask@KERBER.TEST" 2>&1 || true)"
+    echo "$ctn create-failcount-mask: $create"
+    echo "$create" | grep -q 'create_code=43787534' || {
+        echo "$ctn create FAIL_AUTH_COUNT mask did not return KADM5_BAD_MASK: $create" >&2
+        exit 1
+    }
 }
 kadm5_modify_validate "$NAME" admin /tmp/kadmin-krb5.conf user@KERBER.TEST
 kadm5_modify_validate "$NAME_MIT" admin/admin /etc/krb5.conf user@KERBER.TEST

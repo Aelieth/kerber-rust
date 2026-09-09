@@ -126,7 +126,9 @@ int main(int argc, char **argv) {
         ret = kadm5_create_policy(handle, &ent, KADM5_POLICY | KADM5_PW_MIN_LIFE);
         printf("addpol_code=%ld\n", (long)ret);
     } else if ((strcmp(op, "modify-tl-reserved") == 0 ||
-                strcmp(op, "modify-failcount") == 0) &&
+                strcmp(op, "modify-failcount") == 0 ||
+                strcmp(op, "modify-policy-clr") == 0 ||
+                strcmp(op, "create-failcount-mask") == 0) &&
                argc - argi >= 5) {
         krb5_principal p;
         kadm5_principal_ent_rec rec, after;
@@ -142,6 +144,18 @@ int main(int argc, char **argv) {
             krb5_free_context(ctx);
             return 1;
         }
+        if (strcmp(op, "create-failcount-mask") == 0) {
+            rec.principal = p;
+            ret = kadm5_create_principal(handle, &rec,
+                                         KADM5_PRINCIPAL | KADM5_FAIL_AUTH_COUNT,
+                                         "password");
+            printf("create_code=%ld\n", (long)ret);
+            printf("create_msg=%s\n", error_message(ret));
+            krb5_free_principal(ctx, p);
+            kadm5_destroy(handle);
+            krb5_free_context(ctx);
+            return 0;
+        }
         ret = kadm5_get_principal(handle, p, &rec, KADM5_PRINCIPAL | KADM5_MAX_LIFE);
         printf("get_before_code=%ld max_life=%lu\n", (long)ret, (unsigned long)rec.max_life);
         if (ret) {
@@ -154,6 +168,9 @@ int main(int argc, char **argv) {
         if (strcmp(op, "modify-failcount") == 0) {
             rec.fail_auth_count = 1;
             mask = KADM5_MAX_LIFE | KADM5_FAIL_AUTH_COUNT;
+        } else if (strcmp(op, "modify-policy-clr") == 0) {
+            rec.policy = (char *)"default";
+            mask = KADM5_MAX_LIFE | KADM5_POLICY | KADM5_POLICY_CLR;
         } else {
             memset(&tl, 0, sizeof(tl));
             tl.tl_data_type = 3;
@@ -168,6 +185,7 @@ int main(int argc, char **argv) {
         printf("modify_msg=%s\n", error_message(ret));
         rec.tl_data = NULL;
         rec.n_tl_data = 0;
+        rec.policy = NULL;
         kadm5_free_principal_ent(handle, &rec);
         ret = kadm5_get_principal(handle, p, &after, KADM5_PRINCIPAL | KADM5_MAX_LIFE);
         printf("get_after_code=%ld max_life=%lu\n", (long)ret, (unsigned long)after.max_life);

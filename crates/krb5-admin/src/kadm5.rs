@@ -151,18 +151,46 @@ const KADM5_AUTH_EXTRACT: u32 = 43_787_580;
 const KADM5_ATTRIBUTES: u32 = 0x0000_0010;
 const KADM5_FAIL_AUTH_COUNT: u32 = 0x0001_0000;
 const KADM5_TL_DATA: u32 = 0x0004_0000;
+const KADM5_KEY_DATA: u32 = 0x0002_0000;
 const KADM5_BAD_SERVER_PARAMS: u32 = 43_787_563;
 /// MIT `ovk` 47 (`KADM5_BAD_TL_TYPE`, `kadm_err.et:54`).
 const KADM5_BAD_TL_TYPE: u32 = 43_787_567;
 const KADM5_MAX_LIFE: u32 = 0x0000_0020;
+const KADM5_PRINCIPAL: u32 = 0x0000_0001;
 const KADM5_PRINC_EXPIRE_TIME: u32 = 0x0000_0002;
 const KADM5_PW_EXPIRATION: u32 = 0x0000_0004;
+const KADM5_LAST_PWD_CHANGE: u32 = 0x0000_0008;
+const KADM5_MOD_TIME: u32 = 0x0000_0040;
+const KADM5_MOD_NAME: u32 = 0x0000_0080;
+const KADM5_KVNO: u32 = 0x0000_0100;
+const KADM5_MKVNO: u32 = 0x0000_0200;
+const KADM5_AUX_ATTRIBUTES: u32 = 0x0000_0400;
+const KADM5_MAX_RLIFE: u32 = 0x0000_2000;
+const KADM5_LAST_SUCCESS: u32 = 0x0000_4000;
+const KADM5_LAST_FAILED: u32 = 0x0000_8000;
 /// MIT `KADM5_PW_MAX_LIFE`.
 const KADM5_PW_MAX_LIFE: u32 = 0x0000_4000;
 /// MIT `KADM5_PW_MIN_LIFE`.
 const KADM5_PW_MIN_LIFE: u32 = 0x0000_8000;
 const KADM5_POLICY: u32 = 0x0000_0800;
 const KADM5_POLICY_CLR: u32 = 0x0000_1000;
+const ALL_PRINC_MASK: u32 = KADM5_PRINCIPAL
+    | KADM5_PRINC_EXPIRE_TIME
+    | KADM5_PW_EXPIRATION
+    | KADM5_LAST_PWD_CHANGE
+    | KADM5_ATTRIBUTES
+    | KADM5_MAX_LIFE
+    | KADM5_MOD_TIME
+    | KADM5_MOD_NAME
+    | KADM5_KVNO
+    | KADM5_MKVNO
+    | KADM5_AUX_ATTRIBUTES
+    | KADM5_POLICY_CLR
+    | KADM5_POLICY
+    | KADM5_MAX_RLIFE
+    | KADM5_TL_DATA
+    | KADM5_KEY_DATA
+    | KADM5_FAIL_AUTH_COUNT;
 const KADM5_PW_MIN_LENGTH: u32 = 0x0001_0000;
 const KADM5_PW_MIN_CLASSES: u32 = 0x0002_0000;
 const KADM5_PW_HISTORY_NUM: u32 = 0x0004_0000;
@@ -2300,6 +2328,16 @@ fn dispatch_kadm5_ticket(
         MODIFY_PRINCIPAL => {
             let (name, prealm, mask, fields) = parse_modify(args)?;
             let req = req_realm(&prealm, &realm);
+            // MIT svr_principal.c:569-588,671-675: mask + TL + failcount before any write.
+            if let Some(code) = modify_princ_mask_err(mask, fields.policy.as_deref()) {
+                return Ok(generic_ret(API_V2, code));
+            }
+            if mask & KADM5_TL_DATA != 0 && fields.tl_data.iter().any(|t| t.ty < 256) {
+                return Ok(generic_ret(API_V2, KADM5_BAD_TL_TYPE));
+            }
+            if mask & KADM5_FAIL_AUTH_COUNT != 0 && fields.fail_auth_count != 0 {
+                return Ok(generic_ret(API_V2, KADM5_BAD_SERVER_PARAMS));
+            }
             let mut g = match write_store(store, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
@@ -2334,13 +2372,6 @@ fn dispatch_kadm5_ticket(
             } else {
                 None
             };
-            // MIT svr_principal.c:581-588,671-675: refuse before kdb_put_entry.
-            if mask & KADM5_TL_DATA != 0 && fields.tl_data.iter().any(|t| t.ty < 256) {
-                return Ok(generic_ret(API_V2, KADM5_BAD_TL_TYPE));
-            }
-            if mask & KADM5_FAIL_AUTH_COUNT != 0 && fields.fail_auth_count != 0 {
-                return Ok(generic_ret(API_V2, KADM5_BAD_SERVER_PARAMS));
-            }
             match g.apply_admin_fields_in(
                 &name,
                 &req,
@@ -2382,6 +2413,9 @@ fn dispatch_kadm5_ticket(
                     .is_err()
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_ADD));
+            }
+            if let Some(code) = create_princ_mask_err(c.mask, c.policy.as_deref(), 0) {
+                return Ok(generic_ret(API_V2, code));
             }
             if c.mask & KADM5_TL_DATA != 0 && c.tl_data.iter().any(|t| t.ty < 256) {
                 return Ok(generic_ret(API_V2, KADM5_BAD_TL_TYPE));
@@ -3062,6 +3096,71 @@ fn policy_mask_err(mask: u32, create: bool) -> Option<u32> {
     None
 }
 
+/// MIT `kadm5_create_principal` mask checks (`svr_principal.c:313-326`).
+fn create_princ_mask_err(mask: u32, policy: Option<&str>, n_key_data: u32) -> Option<u32> {
+    if mask & KADM5_PRINCIPAL == 0
+        || mask
+            & (KADM5_MOD_NAME
+                | KADM5_MOD_TIME
+                | KADM5_LAST_PWD_CHANGE
+                | KADM5_MKVNO
+                | KADM5_AUX_ATTRIBUTES
+                | KADM5_LAST_SUCCESS
+                | KADM5_LAST_FAILED
+                | KADM5_FAIL_AUTH_COUNT)
+            != 0
+    {
+        return Some(KADM5_BAD_MASK);
+    }
+    if mask & KADM5_KEY_DATA != 0 && n_key_data != 0 {
+        return Some(KADM5_BAD_MASK);
+    }
+    if mask & KADM5_POLICY != 0 && policy.is_none() {
+        return Some(KADM5_BAD_MASK);
+    }
+    if mask & KADM5_POLICY != 0 && mask & KADM5_POLICY_CLR != 0 {
+        return Some(KADM5_BAD_MASK);
+    }
+    if mask & !ALL_PRINC_MASK != 0 {
+        return Some(KADM5_BAD_MASK);
+    }
+    None
+}
+
+/// MIT `kadm5_modify_principal` mask checks (`svr_principal.c:569-580`).
+fn modify_princ_mask_err(mask: u32, policy: Option<&str>) -> Option<u32> {
+    if mask
+        & (KADM5_PRINCIPAL
+            | KADM5_LAST_PWD_CHANGE
+            | KADM5_MOD_TIME
+            | KADM5_MOD_NAME
+            | KADM5_MKVNO
+            | KADM5_AUX_ATTRIBUTES
+            | KADM5_KEY_DATA
+            | KADM5_LAST_SUCCESS
+            | KADM5_LAST_FAILED)
+        != 0
+    {
+        return Some(KADM5_BAD_MASK);
+    }
+    if mask & !ALL_PRINC_MASK != 0 {
+        return Some(KADM5_BAD_MASK);
+    }
+    if mask & KADM5_POLICY != 0 && policy.is_none() {
+        return Some(KADM5_BAD_MASK);
+    }
+    if mask & KADM5_POLICY != 0 && mask & KADM5_POLICY_CLR != 0 {
+        return Some(KADM5_BAD_MASK);
+    }
+    None
+}
+
+/// MIT `xdr_krb5_int16` truncates `tl_data_type` before the `< 256` guard.
+#[allow(clippy::cast_possible_truncation)]
+fn xdr_tl_type(wire: u32) -> i32 {
+    i32::from(wire as i16)
+}
+
 pub(crate) fn policy_floor_err(pol: &krb5_kdc::NamedPolicy, mask: u32) -> Option<u32> {
     if mask & KADM5_PW_MIN_LIFE != 0 && pol.pw_min_life > pol.pw_max_life && pol.pw_max_life != 0 {
         return Some(KADM5_BAD_MIN_PASS_LIFE);
@@ -3550,7 +3649,7 @@ fn parse_modify(args: &[u8]) -> Result<(PrincipalName, String, u32, ModFields), 
             if more == 0 {
                 break;
             }
-            let ty = r.u32()?.cast_signed();
+            let ty = xdr_tl_type(r.u32()?);
             let contents = r.opaque()?;
             tl_data.push(TlData { ty, contents });
         }
@@ -3725,7 +3824,7 @@ fn skip_principal_ent_rest(r: &mut XdrR<'_>) -> Result<(Option<String>, Vec<TlDa
             if more == 0 {
                 break;
             }
-            let ty = r.u32()?.cast_signed();
+            let ty = xdr_tl_type(r.u32()?);
             let contents = r.opaque()?;
             tl_data.push(TlData { ty, contents });
         }
@@ -6046,7 +6145,7 @@ mod tests {
         w.u32(0);
         w.u32(1);
         w.u32(0);
-        w.u32(0);
+        w.u32(KADM5_PRINCIPAL);
         w.nullstring(Some(pass));
         w.b
     }

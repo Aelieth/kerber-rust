@@ -1605,7 +1605,11 @@ impl PrincipalStore {
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
             for tl in tls {
-                p.tl_data.retain(|t| t.ty != tl.ty);
+                // MIT `krb5_dbe_update_tl_data` (`kdb5.c:2304`): DB_ARGS appends;
+                // every other type replaces.
+                if tl.ty != 0x7fff {
+                    p.tl_data.retain(|t| t.ty != tl.ty);
+                }
                 p.tl_data.push(tl.clone());
             }
         }

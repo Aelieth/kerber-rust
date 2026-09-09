@@ -69,6 +69,13 @@ this project uses semantic versioning once a crate is published.
   `claim-audit.py` rejects dirty/override oracle artefacts unless the
   bullet is a parent red; `scripts/evidence-check.py` flags unstamped,
   wrong-SHA, and unlabeled-dirty artefacts.
+- **admin/kdc (A′-1 Round 3 R9).** `KADM5_BAD_MASK` on create/modify
+  (`svr_principal.c:310-326,565-580`); `tl_data_type` decoded as int16
+  before the `< 256` guard; `merge_tl_data_in` appends `KRB5_TL_DB_ARGS`
+  (0x7fff). U2U missing second-ticket server is 7 `2ND_TKT_SERVER`
+  (`do_tgs_req.c:280-285`), not 60 `GET_LOCAL_TGT`. Limitation: modify
+  may still do more than one store write (documented deviation vs MIT's
+  single `kdb_put_entry`).
 
 ### Round-up R2 (re-audit fixes)
 

@@ -129,11 +129,14 @@ fn s4u2proxy_missing_local_tgt_is_get_local_tgt() {
 }
 
 #[test]
-fn u2u_missing_local_tgt_is_get_local_tgt() {
+fn u2u_missing_second_ticket_server_is_2nd_tkt_server() {
     let (store, _) = bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let user_tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 741);
     let admin_tgt = issue_tgt(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 742);
+    let mut second = admin_tgt.rep.0.ticket.clone();
+    // Outer sname does not exist; MIT `kdc_get_server_key` → 7 `2ND_TKT_SERVER`.
+    second.sname = PrincipalName::new(PrincipalName::NT_SRV_INST, ["no-such-2ndtkt", TEST_REALM]);
     let opts = KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true);
     let tgs = tgs_req_ex(
         user_tgt.rep.0.ticket.clone(),
@@ -144,15 +147,15 @@ fn u2u_missing_local_tgt_is_get_local_tgt() {
         TEST_REALM,
         743,
         opts,
-        Some(vec![admin_tgt.rep.0.ticket.clone()]),
+        Some(vec![second]),
         Vec::new(),
         pref_etypes(),
     )
     .unwrap();
-    let err = krb5_kdc::issue_tgs(&HideLocalTgt(&store), &tgs).unwrap_err();
+    let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
     let (code, text) = proto(&err);
-    assert_eq!(code, err::GENERIC);
-    assert_eq!(text, Some("GET_LOCAL_TGT"));
+    assert_eq!(code, err::S_PRINCIPAL_UNKNOWN);
+    assert_eq!(text, Some("2ND_TKT_SERVER"));
 }
 
 #[test]

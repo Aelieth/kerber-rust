@@ -574,14 +574,22 @@ pub(crate) fn u2u_session(
         .as_ref()
         .and_then(|v| v.first())
         .ok_or_else(|| proto(err::BADOPTION, status::NO_2ND_TKT))?;
-    let krbtgt_p = store
-        .fetch_krbtgt()?
-        .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
-    let krbtgt = krbtgt_p
-        .first_current_key()
+    // MIT `decrypt_2ndtkt` / `kdc_get_server_key(stkt)` — look up the second
+    // ticket's server, not the local TGT helper (`do_tgs_req.c:280-285`).
+    let server = store
+        .fetch_name(&extra.sname)?
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::SECOND_TKT_SERVER))?;
+    if server.attributes & (crate::KDB_DISALLOW_SVR | crate::KDB_DISALLOW_ALL_TIX) != 0 {
+        return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::SECOND_TKT_SERVER));
+    }
+    let tkt_etype = EncryptionType::from_iana(extra.enc_part.etype)
+        .or_else(|_| EncryptionType::known(extra.enc_part.etype))?;
+    let krbtgt = server
+        .key_for(tkt_etype)
         .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
     let usage = KeyUsage::new(ku::TICKET)?;
-    let plain = decrypt(&krbtgt.key, usage, extra.enc_part.cipher.as_ref())?;
+    let plain = decrypt(&krbtgt.key, usage, extra.enc_part.cipher.as_ref())
+        .map_err(|_| proto(err::MODIFIED, status::SECOND_TKT_DECRYPT))?;
     let part: EncTicketPart = decode(&plain)?;
     let etype = EncryptionType::from_iana(part.key.keytype)
         .or_else(|_| EncryptionType::known(part.key.keytype))?;
