@@ -35,10 +35,10 @@ run() {
 OUT="$(run silent)"
 echo "$OUT"
 # The line is the call site; the command text is the innermost one (bash's BASH_COMMAND).
-echo "$OUT" | grep -qF '::error file=scripts/probe-gate.sh,line=14::probe-gate.sh: exit 3 at line 14: '
+echo "$OUT" | grep -qF '::error file=scripts/probe-gate.sh,line=14,title=fixture::probe-gate.sh: exit 3 at line 14: '
 OUT="$(run capture)"
 echo "$OUT"
-echo "$OUT" | grep -qF '::error file=scripts/probe-gate.sh,line=15::probe-gate.sh: exit 1 at line 15: '
+echo "$OUT" | grep -qF '::error file=scripts/probe-gate.sh,line=15,title=fixture::probe-gate.sh: exit 1 at line 15: '
 OUT="$(run explicit)"
 echo "$OUT"
 if echo "$OUT" | grep -q '::error'; then

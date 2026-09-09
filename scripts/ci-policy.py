@@ -1459,19 +1459,25 @@ def check_nextest() -> None:
 
 
 def check_unit_evidence_helper() -> None:
-    """K6/K12: unit_green / unit_red_at exist; red refuses a missing filter or files."""
+    """R8: unit_green / unit_red_at exist; red refuses missing files; green refuses dirty."""
     path = SCRIPTS / "lib" / "unit-evidence.sh"
     if not path.is_file():
         _die("missing scripts/lib/unit-evidence.sh")
     text = path.read_text()
     if "unit_green" not in text or "unit_red_at" not in text:
         _die("unit-evidence.sh missing unit_green/unit_red_at")
-    if "test filter required" not in text:
-        _die("unit_red_at must refuse a command without a test filter")
     if "inject files required" not in text:
         _die("unit_red_at must refuse a command without inject files")
     if "--inject" not in text:
         _die("unit_red_at must pass --inject to red-at-sha.sh")
+    if "KERBER_UNIT_ALLOW_DIRTY" not in text:
+        _die("unit_green must honour KERBER_UNIT_ALLOW_DIRTY")
+    if "red-at-parent=1" not in text:
+        _die("unit_red_at must stamp red-at-parent=1")
+    if "_unit_test_names" not in text:
+        _die("unit_red_at must derive #[test] names from inject files")
+    if "refusing dirty tree" not in text:
+        _die("unit_green must refuse a dirty tree without KERBER_UNIT_ALLOW_DIRTY")
     env = os.environ.copy()
     env["KERBER_NO_IMAGE"] = "1"
     env["ROOT"] = str(ROOT)
@@ -1487,12 +1493,12 @@ def check_unit_evidence_helper() -> None:
         check=False,
     )
     if r.returncode == 0:
-        _die("unit_red_at accepted missing filter")
+        _die("unit_red_at accepted missing args")
     r = subprocess.run(
         [
             "bash",
             "-c",
-            '. "$ROOT/scripts/lib/unit-evidence.sh"; unit_red_at HEAD k12 filter',
+            '. "$ROOT/scripts/lib/unit-evidence.sh"; unit_red_at HEAD k12 --all',
         ],
         cwd=ROOT,
         env=env,
@@ -1523,7 +1529,7 @@ def check_unit_evidence_helper() -> None:
 
 
 def check_settle_helper() -> None:
-    """K12/U7: settle.sh tees and refuses file readers (grep/rg/sed/cat, bash -c, vanished paths)."""
+    """K12/U7/R8: settle.sh tees, refuses readers, stamps override= when dirty bypassed."""
     path = SCRIPTS / "lib" / "settle.sh"
     if not path.is_file():
         _die("missing scripts/lib/settle.sh")
@@ -1534,6 +1540,8 @@ def check_settle_helper() -> None:
         _die("settle.sh must set pipefail around tee")
     if "of a file is not a live settle" not in text:
         _die("settle.sh must refuse readers of a file")
+    if "override=KERBER_SETTLE_ALLOW_DIRTY" not in text:
+        _die("settle.sh must stamp override=KERBER_SETTLE_ALLOW_DIRTY when dirty is bypassed")
     env = os.environ.copy()
     env["KERBER_NO_IMAGE"] = "1"
     # The dev tree is dirty while iterating; the self-test exercises settle.sh's
@@ -1588,6 +1596,88 @@ def check_settle_helper() -> None:
     )
     if r.returncode != 0 or b"live" not in (r.stdout or b""):
         _die("settle.sh refused a live bash -c command")
+    out = (r.stdout or b"").decode("utf-8", "replace")
+    if "dirty=yes" in out and "override=KERBER_SETTLE_ALLOW_DIRTY" not in out:
+        _die("settle.sh dirty bypass must stamp override=KERBER_SETTLE_ALLOW_DIRTY")
+
+
+def check_evidence_check_tool() -> None:
+    """R8: evidence-check.py flags unstamped, wrong-SHA, and unlabeled dirty logs."""
+    path = SCRIPTS / "evidence-check.py"
+    if not path.is_file():
+        _die("missing scripts/evidence-check.py")
+    root = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    try:
+        (root / "ok.log").write_text(
+            "==== provenance ====\nhead_sha=abc1234deadbeef\ntree_sha=t1\ndirty=no\nok\n"
+        )
+        (root / "unstamped.log").write_text("no stamp\n")
+        (root / "wrongsha.log").write_text(
+            "head_sha=ffffffffffff\ntree_sha=t2\ndirty=no\n"
+        )
+        (root / "dirty.log").write_text(
+            "head_sha=abc1234deadbeef\ntree_sha=t3\ndirty=yes\n"
+        )
+        (root / "dirty-red.log").write_text(
+            "head_sha=abc1234deadbeef\ntree_sha=t4\ndirty=yes\nred-at-parent=1\n"
+        )
+        (root / "ci-bad.txt").write_text("ci-status: HTTP Error 403: rate limit exceeded\n")
+        r = subprocess.run(
+            [
+                sys.executable,
+                str(path),
+                str(root),
+                "--commits",
+                "abc1234",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if r.returncode == 0:
+            _die("evidence-check.py passed a fixture tree with known bad artefacts")
+        out = (r.stdout or "") + (r.stderr or "")
+        for name in ("unstamped.log", "wrongsha.log", "dirty.log", "ci-bad.txt"):
+            if name not in out:
+                _die(f"evidence-check.py missed {name}: {out}")
+        if "dirty.log: dirty=yes without" not in out:
+            _die(f"evidence-check.py must name the dirty label rule: {out}")
+        if any(ln.startswith("dirty-red.log:") for ln in out.splitlines()):
+            _die("evidence-check.py flagged a dirty log that carries red-at-parent=")
+        if any(ln.startswith("ok.log:") for ln in out.splitlines()):
+            _die(f"evidence-check.py flagged a good log: {out}")
+    finally:
+        subprocess.run(["rm", "-rf", str(root)], check=False)
+
+
+def check_ci_status_save() -> None:
+    """R8: ci-status.py --save exists and filters fixture annotations."""
+    path = SCRIPTS / "ci-status.py"
+    if not path.is_file():
+        _die("missing scripts/ci-status.py")
+    text = path.read_text()
+    if "--save" not in text:
+        _die("ci-status.py must support --save")
+    if "is_fixture_annotation" not in text:
+        _die("ci-status.py must filter title=fixture annotations")
+    if "probe-gate.sh" not in text:
+        _die("ci-status.py must filter probe-gate.sh fixture annotations")
+    if "403" not in text:
+        _die("ci-status.py --save must handle HTTP 403 rate limits")
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("ci_status_r8", path)
+    if spec is None or spec.loader is None:
+        _die("ci-status.py load failed")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    if not mod.is_fixture_annotation({"title": "fixture", "path": "x.sh"}):
+        _die("is_fixture_annotation must accept title=fixture")
+    if not mod.is_fixture_annotation({"title": "", "path": "scripts/probe-gate.sh"}):
+        _die("is_fixture_annotation must accept probe-gate.sh path")
+    if mod.is_fixture_annotation({"title": "", "path": "scripts/kadmin-gate.sh"}):
+        _die("is_fixture_annotation must not filter product gates")
 
 
 def check_red_at_sha_inject(text: str | None = None) -> None:
@@ -1701,11 +1791,22 @@ def check_claim_audit() -> None:
         ev.mkdir()
         stamp = "head_sha=0\ntree_sha=0\n"
         (ev / "good.log").write_text(stamp + "value=1\n")
-        (ev / "settle-live.log").write_text(stamp + "==== settle live ====\ncmd=docker exec x kinit user\nvalue=1\n")
-        (ev / "settle-grep.log").write_text(stamp + "==== settle grep ====\ncmd=grep -F value=1 /tmp/x.log\nvalue=1\n")
-        (ev / "settle-run.log").write_text(stamp + "==== settle run ====\ncmd=scripts/fx-gate.sh\nvalue=1\n")
-        (ev / "settle-nobanner.log").write_text(stamp + "cmd=docker exec x kinit user\nvalue=1\n")
-        (ev / "settle-commit.log").write_text(stamp + "==== settle commit ====\ncmd=docker exec c sh -c\ncommit value=1\n")
+        (ev / "settle-live.log").write_text(stamp + "dirty=no\n==== settle live ====\ncmd=docker exec x kinit user\nvalue=1\n")
+        (ev / "settle-grep.log").write_text(stamp + "dirty=no\n==== settle grep ====\ncmd=grep -F value=1 /tmp/x.log\nvalue=1\n")
+        (ev / "settle-run.log").write_text(stamp + "dirty=no\n==== settle run ====\ncmd=scripts/fx-gate.sh\nvalue=1\n")
+        (ev / "settle-nobanner.log").write_text(stamp + "dirty=no\ncmd=docker exec x kinit user\nvalue=1\n")
+        (ev / "settle-commit.log").write_text(stamp + "dirty=no\n==== settle commit ====\ncmd=docker exec c sh -c\ncommit value=1\n")
+        (ev / "settle-dirty.log").write_text(
+            stamp + "dirty=yes\n==== settle dirty ====\ncmd=docker exec x kinit user\nvalue=1\n"
+        )
+        (ev / "settle-override.log").write_text(
+            stamp
+            + "dirty=yes\noverride=KERBER_SETTLE_ALLOW_DIRTY\n==== settle ov ====\n"
+            + "cmd=docker exec x kinit user\nvalue=1\n"
+        )
+        (ev / "unit-red.log").write_text(
+            stamp + "dirty=yes\nred-at-parent=1\n==== unit_red_at ====\nvalue=1\n"
+        )
         (root / "scripts" / "fx-policy.py").write_text(
             "def check():\n    if bad:\n        _die('value=1 wrong')\n\n\ndef _self_test():\n    _must_die(check, 'value=1')\n"
         )
@@ -1742,6 +1843,24 @@ def check_claim_audit() -> None:
         live = "- **Live settle:** `value=1` at `scripts/fx-gate.sh:9`; `settle-live.log`.\n"
         if any(r[1] != "ok" for r in rows(live)):
             _die(f"claim-audit refused an oracle settle as the MIT leg: {rows(live)}")
+        must_fail(
+            "- **Dirty settle:** `value=1` at `scripts/fx-gate.sh:9`; `settle-dirty.log`.\n",
+            "takes a dirty=yes oracle without a parent-red label",
+        )
+        must_fail(
+            "- **Override settle:** `value=1` at `scripts/fx-gate.sh:9`; `settle-override.log`.\n",
+            "takes an override= oracle without a parent-red label",
+        )
+        parent_red = (
+            "- **Red at parent:** `value=1` at `scripts/fx-gate.sh:9` / `:15`; Red at parent `unit-red.log`.\n"
+        )
+        if any(r[1] != "ok" for r in rows(parent_red)):
+            _die(f"claim-audit refused a labelled parent-red dirty artefact: {rows(parent_red)}")
+        must_fail(
+            "- **Red at parent + dirty settle:** `value=1` at `scripts/fx-gate.sh:9` / `:15`; "
+            "Red at parent; `settle-dirty.log`.\n",
+            "lets a parent-red label excuse a dirty settle",
+        )
         must_fail(
             "- **Gate-run settle:** `value=1` at `scripts/fx-gate.sh:9`; `settle-run.log`.\n",
             "takes a Rust-side gate run as the MIT leg",
@@ -2303,6 +2422,8 @@ jobs:
     )
     check_unit_evidence_helper()
     check_settle_helper()
+    check_evidence_check_tool()
+    check_ci_status_save()
     check_red_at_sha_inject()
     check_red_at_sha_overlay_order(
         'cp "$ROOT/scripts/"*.sh "$WT/scripts/"\nTREE="$(git write-tree)"\n'
@@ -2378,6 +2499,8 @@ def main() -> None:
     check_no_host_tmp_writes()
     check_unit_evidence_helper()
     check_settle_helper()
+    check_evidence_check_tool()
+    check_ci_status_save()
     check_red_at_sha_inject()
     check_red_at_sha_overlay_order()
     check_working_gitignored()

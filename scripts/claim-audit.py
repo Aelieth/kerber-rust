@@ -66,6 +66,9 @@ DOCKER_OPT_ARG = {"-e", "--env", "-w", "--workdir", "-u", "--user", "--entrypoin
 FIXTURE_RE = re.compile(r"_must_die\(|must_fail\(|_must_pass\(|\bassert\b|raise AssertionError")
 PROBE_RE = re.compile(r"subprocess\.(?:run|check_output|Popen)\(|_must_die\(|must_fail\(|\bassert\b")
 DEF_RE = re.compile(r"^(?:def |[A-Za-z_])")
+PARENT_RED_RE = re.compile(
+    r"\b(?:red at parent|parent red|unit_red_at|red-at-parent|unit-red)\b", re.I
+)
 HEADER = "asserting cell"
 
 
@@ -309,6 +312,7 @@ def check_bullet(b: Bullet, root: pathlib.Path, evidence: pathlib.Path | None) -
         if not unit_exists(root, u):
             b.reasons.append(f"unit {u} not found under crates/")
     live_settle = False
+    parent_red = bool(PARENT_RED_RE.search(b.text))
     for name in b.artefacts:
         p = resolve_artefact(root, evidence, name)
         if p is None:
@@ -317,6 +321,17 @@ def check_bullet(b: Bullet, root: pathlib.Path, evidence: pathlib.Path | None) -
         text = read_text(p)
         if name.endswith(".log") and not ("head_sha=" in text and "tree_sha=" in text):
             b.reasons.append(f"artefact {name} is not stamped")
+        # Oracle settles must be dirty=no without override. Parent-red labels
+        # only excuse non-settle artefacts (unit-red logs), never a settle.
+        is_settle = p.name.startswith("settle-")
+        allows_dirty = (not is_settle) and (
+            parent_red or bool(re.search(r"^red-at-parent=", text, re.M))
+        )
+        if not allows_dirty:
+            if re.search(r"^override=", text, re.M):
+                b.reasons.append(f"artefact {name} carries override= (not labelled a parent red)")
+            if re.search(r"^dirty=yes\s*$", text, re.M):
+                b.reasons.append(f"artefact {name} is dirty=yes (not labelled a parent red)")
         if b.values and not value_in(b.values, text):
             b.reasons.append(f"artefact {name} carries none of the quoted values")
         if p.name.startswith("settle-"):

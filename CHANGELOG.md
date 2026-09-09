@@ -59,6 +59,16 @@ this project uses semantic versioning once a crate is published.
 - **docs/tooling.** Golden dump `nosvr`/`hwuser` rows are MIT
   `kadmin.local addprinc` captures with principal-derived keys.
   `ci-policy.py DIFFSEND_CASES` lists all 29 live diffsend names.
+- **test/ci (A′-1 Round 3 R8).** The evidence contract is mechanical:
+  `unit_green` refuses a dirty tree unless `KERBER_UNIT_ALLOW_DIRTY=1`
+  (stamps `override=`); `unit_red_at --all` derives every inject-file
+  `#[test]` and exits non-zero unless each FAILED at the parent
+  (`red-at-parent=1`); `settle.sh` stamps `override=KERBER_SETTLE_ALLOW_DIRTY`
+  when the dirty guard is bypassed; `ci-status.py --save` writes only
+  completed runs and drops `title=fixture` / `probe-gate.sh` annotations;
+  `claim-audit.py` rejects dirty/override oracle artefacts unless the
+  bullet is a parent red; `scripts/evidence-check.py` flags unstamped,
+  wrong-SHA, and unlabeled-dirty artefacts.
 
 ### Round-up R2 (re-audit fixes)
 

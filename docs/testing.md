@@ -84,16 +84,30 @@ file. Gate scripts write host files only under `KERBER_SCRATCH`
 `KERBER_SCRATCH:-/tmp/…` default).
 
 Unit greens and parent reds go through `scripts/lib/unit-evidence.sh`:
-`unit_green <name> <nextest filter>` (stamped nextest) and
-`unit_red_at <parent> <name> <filter> <files…>` (`red-at-sha.sh
+`unit_green <name> <nextest filter>` (stamped nextest; refuses `dirty != no`
+unless `KERBER_UNIT_ALLOW_DIRTY=1`, which prints `override=KERBER_UNIT_ALLOW_DIRTY`)
+and `unit_red_at <parent> <name> [--all|<filter>] <files…>` (`red-at-sha.sh
 --inject` copies those HEAD files into the parent worktree **before**
-`write-tree`; a missing test filter or a call with no files is
-refused). INDEX links only files those helpers or the gates produced.
+`write-tree`; a call with no files is refused). With `--all` (the default)
+the filter is every `#[test]` fn in the inject files; the helper exits
+non-zero unless each of those names **FAILED** at the parent (a green or
+filtered-out unit is a vacuous red). It stamps `red-at-parent=1`. INDEX
+links only files those helpers or the gates produced.
 W1-J and W1-K units live under `crates/*/tests/` so `unit_red_at
 --inject` can fail them at the parent.
 Live settles use `scripts/lib/settle.sh <name> -- <command…>`
 (provenance, echoed command, `2>&1 | tee`; a `grep` of an existing
-file is refused).
+file is refused). A dirty-tree bypass via `KERBER_SETTLE_ALLOW_DIRTY=1`
+prints `override=KERBER_SETTLE_ALLOW_DIRTY` into the artefact header.
+`scripts/ci-status.py --save SHA [--out DIR]` writes `ci-<sha>.txt` only
+from a **completed**, non-rate-limited run (retries with backoff; exit 2
+otherwise) and drops `title=fixture` / `probe-gate.sh` annotations from
+`scripts/gate-err-trap-selftest.sh`. `scripts/evidence-check.py <dir>
+--commits SHA…` flags every `.log`/`.txt` that is unstamped, whose
+`head_sha` is not a landed commit of the section, or whose `dirty=yes`
+lacks a `red-at-parent=` / `override=` label. `claim-audit.py` rejects an
+oracle artefact with `override=` or `dirty=yes` unless the bullet labels
+it a parent red.
 
 Red-at-HEAD artefact contract (captured under
 `working/logs/…/<item>-red-at-head.log`): the file is captured tool

@@ -38,10 +38,14 @@ esac
 . "$ROOT/scripts/lib/provenance.sh"
 # R2-T8: a settle must describe committed code, so refuse a dirty tree (working/
 # is already excluded from provenance.sh's dirty check). KERBER_SETTLE_ALLOW_DIRTY
-# overrides it for the ci-policy self-test, which runs on the dev tree.
-if [ "${KERBER_SETTLE_ALLOW_DIRTY:-}" != 1 ] && [ "${dirty:-yes}" != no ]; then
-    echo "settle.sh: refusing to settle a dirty tree (dirty=${dirty:-yes}); set KERBER_SETTLE_ALLOW_DIRTY=1 to override" >&2
-    exit 1
+# overrides it for the ci-policy self-test, which runs on the dev tree; the
+# override is stamped into the artefact so claim-audit / evidence-check see it.
+if [ "${dirty:-yes}" != no ]; then
+    if [ "${KERBER_SETTLE_ALLOW_DIRTY:-}" != 1 ]; then
+        echo "settle.sh: refusing to settle a dirty tree (dirty=${dirty:-yes}); set KERBER_SETTLE_ALLOW_DIRTY=1 to override" >&2
+        exit 1
+    fi
+    echo "override=KERBER_SETTLE_ALLOW_DIRTY"
 fi
 echo "==== settle $name ===="
 echo "cmd=$*"

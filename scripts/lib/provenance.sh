@@ -7,12 +7,17 @@
 # failures under `set +e` are skipped; `log … error; exit 1` paths already say
 # what failed on their own line.
 _gate_err() {
-    local status=$1 line=$2 cmd=$3 src=$4
+    local status=$1 line=$2 cmd=$3 src=$4 title=
     case $- in *e*) ;; *) return 0 ;; esac
     src=${src#"$PWD"/}
     src=${src#./}
-    printf '::error file=%s,line=%s::%s: exit %s at line %s: %s\n' \
-        "$src" "$line" "${src##*/}" "$status" "$line" "$cmd"
+    # gate-err-trap-selftest's probe-gate.sh is a fixture; tag so ci-status
+    # --save does not treat its ::error lines as product failures.
+    case "${src##*/}" in
+        probe-gate.sh) title=',title=fixture' ;;
+    esac
+    printf '::error file=%s,line=%s%s::%s: exit %s at line %s: %s\n' \
+        "$src" "$line" "$title" "${src##*/}" "$status" "$line" "$cmd"
 }
 trap '_gate_err "$?" "$LINENO" "$BASH_COMMAND" "${BASH_SOURCE[0]}"' ERR
 
