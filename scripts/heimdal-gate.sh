@@ -90,7 +90,7 @@ trap cleanup EXIT
 echo "==== Heimdal client vs Rust KDC ===="
 docker run -d --name "$NAME_H2R" --entrypoint sleep "$IMAGE" 3600 >/dev/null \
     || die "docker run $IMAGE (sleep) failed"
-docker cp target/debug/krb5-kdc "$NAME_H2R":/tmp/krb5-kdc \
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME_H2R":/tmp/krb5-kdc \
     || die "docker cp krb5-kdc failed"
 docker exec "$NAME_H2R" chmod +x /tmp/krb5-kdc
 docker exec -d \
@@ -156,7 +156,7 @@ docker logs "$NAME_R2H" 2>&1 || true
 docker logs "$NAME_R2H" 2>&1 | grep -q '"event":"heimdal.start"' \
     || die "missing heimdal.start JSON"
 
-docker cp target/debug/krb5-kinit "$NAME_R2H":/tmp/krb5-kinit \
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kinit" "$NAME_R2H":/tmp/krb5-kinit \
     || die "docker cp krb5-kinit failed"
 docker exec "$NAME_R2H" chmod +x /tmp/krb5-kinit
 if ! docker exec -e KRB5_PASSWORD=userpassword \

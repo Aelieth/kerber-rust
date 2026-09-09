@@ -56,8 +56,8 @@ if [ "$ok" -ne 1 ]; then
     exit 1
 fi
 
-docker cp target/debug/krb5-gss-accept "$NAME":/tmp/krb5-gss-accept
-docker cp target/debug/krb5-gss-init "$NAME":/tmp/krb5-gss-init
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-gss-accept" "$NAME":/tmp/krb5-gss-accept
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-gss-init" "$NAME":/tmp/krb5-gss-init
 docker exec "$NAME" chmod +x /tmp/krb5-gss-accept /tmp/krb5-gss-init
 
 kadmin_local() {

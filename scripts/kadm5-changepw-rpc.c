@@ -210,6 +210,7 @@ int main(int argc, char **argv) {
         } else if (strcmp(op, "modify-policy-clr") == 0) {
             rec.policy = (char *)"default";
             mask = KADM5_MAX_LIFE | KADM5_POLICY | KADM5_POLICY_CLR;
+            printf("mask_bits=0x%lx\n", (unsigned long)mask);
         } else {
             memset(&tl, 0, sizeof(tl));
             tl.tl_data_type = 3;

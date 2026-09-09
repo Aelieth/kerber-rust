@@ -76,8 +76,8 @@ if [ "$ok" != 1 ]; then
     exit 1
 fi
 
-docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc
-docker cp target/debug/krb5-kvno "$NAME":/tmp/krb5-kvno
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kvno" "$NAME":/tmp/krb5-kvno
 docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kvno
 
 docker exec -d \
@@ -209,7 +209,7 @@ echo "$LOCKED" | grep -qiE "credentials have been revoked|CLIENT_REVOKED"
 echo "==== without ok_to_auth_as_delegate clears F on S4U2Self ===="
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
-docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker exec "$NAME" chmod +x /tmp/krb5-kdc
 docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \

@@ -760,6 +760,25 @@ def check_gate_provenance(text: str | None = None, name: str = "gate.sh") -> Non
         _die(f"must source scripts/lib/provenance.sh: {missing}")
 
 
+def check_docker_cp_cargo_target() -> None:
+    """Gate docker cp must use ${CARGO_TARGET_DIR:-target}/debug (not a bare target/debug)."""
+    bare: list[str] = []
+    for path in sorted(SCRIPTS.glob("*-gate.sh")):
+        text = path.read_text()
+        if "docker cp target/debug/" in text:
+            bare.append(path.name)
+        if "docker cp" in text and "CARGO_TARGET_DIR:-target" not in text:
+            # Some gates only docker cp fixtures; require the expansion when copying binaries.
+            if re.search(r"docker cp .*krb5-|docker cp .*diffsend|docker cp .*examples/", text):
+                bare.append(path.name)
+    if bare:
+        _die(
+            "docker cp of cargo binaries must use "
+            "${CARGO_TARGET_DIR:-target}/debug: "
+            f"{sorted(set(bare))}"
+        )
+
+
 def host_tmp_write_lines(text: str) -> list[int]:
     """Host-level `>/tmp/` redirects, skipping quotes and heredocs."""
     hits: list[int] = []
@@ -2502,6 +2521,7 @@ def main() -> None:
     check_no_informational_gates()
     check_no_case_whitelists()
     check_gate_provenance()
+    check_docker_cp_cargo_target()
     check_no_host_tmp_writes()
     check_unit_evidence_helper()
     check_settle_helper()

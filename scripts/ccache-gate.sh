@@ -19,11 +19,11 @@ fi
 
 cargo build -p krb5-client --bin krb5-kinit --bin krb5-klist --bin krb5-kdestroy --bin krb5-kvno --bin krb5-kswitch
 cargo build -p krb5-protocol --example ccache-probe
-docker cp target/debug/krb5-kinit "$NAME":/tmp/krb5-kinit
-docker cp target/debug/krb5-klist "$NAME":/tmp/krb5-klist
-docker cp target/debug/krb5-kdestroy "$NAME":/tmp/krb5-kdestroy
-docker cp target/debug/krb5-kswitch "$NAME":/tmp/krb5-kswitch
-docker cp target/debug/examples/ccache-probe "$NAME":/tmp/ccache-probe
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kinit" "$NAME":/tmp/krb5-kinit
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-klist" "$NAME":/tmp/krb5-klist
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdestroy" "$NAME":/tmp/krb5-kdestroy
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kswitch" "$NAME":/tmp/krb5-kswitch
+docker cp "${CARGO_TARGET_DIR:-target}/debug/examples/ccache-probe" "$NAME":/tmp/ccache-probe
 docker cp "$ROOT/scripts/ccache-mit-remove.c" "$NAME":/tmp/ccache-mit-remove.c
 docker exec "$NAME" chmod +x /tmp/krb5-kinit /tmp/krb5-klist /tmp/krb5-kdestroy /tmp/krb5-kswitch /tmp/ccache-probe
 if ! docker exec "$NAME" cc -o /tmp/ccache-mit-remove /tmp/ccache-mit-remove.c -lkrb5; then

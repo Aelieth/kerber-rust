@@ -32,8 +32,8 @@ docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc
-docker cp target/debug/krb5-forge-tgt "$NAME":/tmp/krb5-forge-tgt
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-forge-tgt" "$NAME":/tmp/krb5-forge-tgt
 docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-forge-tgt
 docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
@@ -209,7 +209,7 @@ if [ "$ok" != 1 ]; then
     log "fast.kdc.gate" "error" ',"error":"MIT kdc did not listen"'
     exit 1
 fi
-docker cp target/debug/krb5-forge-tgt "$MITNAME":/tmp/krb5-forge-tgt
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-forge-tgt" "$MITNAME":/tmp/krb5-forge-tgt
 docker exec "$MITNAME" chmod +x /tmp/krb5-forge-tgt
 docker exec "$MITNAME" sh -c 'printf "userpassword\n" | kinit -c /tmp/krb5cc_armor user@KERBER.TEST'
 if ! docker exec -e KRB5_TRACE=/tmp/mit-fast.trace "$MITNAME" \

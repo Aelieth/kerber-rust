@@ -18,10 +18,10 @@ if ! docker ps -q --filter "name=^${NAME}$" | grep -q .; then
     exit 1
 fi
 cargo build -p krb5-client --bin krb5-kinit --bin krb5-klist --bin krb5-kdestroy --bin krb5-kvno
-docker cp target/debug/krb5-kinit "$NAME":/tmp/krb5-kinit
-docker cp target/debug/krb5-klist "$NAME":/tmp/krb5-klist
-docker cp target/debug/krb5-kdestroy "$NAME":/tmp/krb5-kdestroy
-docker cp target/debug/krb5-kvno "$NAME":/tmp/krb5-kvno
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kinit" "$NAME":/tmp/krb5-kinit
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-klist" "$NAME":/tmp/krb5-klist
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdestroy" "$NAME":/tmp/krb5-kdestroy
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kvno" "$NAME":/tmp/krb5-kvno
 docker exec "$NAME" chmod +x /tmp/krb5-kinit /tmp/krb5-klist /tmp/krb5-kdestroy /tmp/krb5-kvno
 docker exec "$NAME" mkdir -p /tmp/client-traces
 docker exec -e KRB5_PASSWORD=userpassword -e KERBER_CAPTURE_DIR=/tmp/client-traces \

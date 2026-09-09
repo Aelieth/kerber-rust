@@ -499,9 +499,9 @@ docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
 cleanup() { docker rm -f "$NAME" "$NAME_MIT" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc
-docker cp target/debug/krb5-kdb "$NAME":/tmp/krb5-kdb
-docker cp target/debug/krb5-kadmind "$NAME":/tmp/krb5-kadmind
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmind" "$NAME":/tmp/krb5-kadmind
 docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb /tmp/krb5-kadmind
 
 docker exec -d \

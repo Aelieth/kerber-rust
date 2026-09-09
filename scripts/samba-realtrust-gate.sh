@@ -183,8 +183,8 @@ if [ "${#ISSUE_KEY}" -ne 64 ]; then
     unavailable "s2k of TDO password did not yield 32-byte keys"
 fi
 
-docker cp target/debug/krb5-kdc "$NAME_A":/tmp/krb5-kdc
-docker cp target/debug/krb5-pac-extract "$NAME_A":/tmp/krb5-pac-extract
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME_A":/tmp/krb5-kdc
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-pac-extract" "$NAME_A":/tmp/krb5-pac-extract
 docker exec "$NAME_A" chmod +x /tmp/krb5-kdc /tmp/krb5-pac-extract
 
 docker exec "$NAME_A" sh -c "cat >/tmp/kdc.conf <<EOF

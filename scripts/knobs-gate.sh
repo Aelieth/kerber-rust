@@ -18,9 +18,9 @@ if ! docker ps -q --filter "name=^${NAME}$" | grep -q .; then
 fi
 
 cargo build -p krb5-client --bin krb5-kinit --bin krb5-klist --bin krb5-kvno -q
-docker cp target/debug/krb5-kinit "$NAME":/tmp/krb5-kinit
-docker cp target/debug/krb5-klist "$NAME":/tmp/krb5-klist
-docker cp target/debug/krb5-kvno "$NAME":/tmp/krb5-kvno
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kinit" "$NAME":/tmp/krb5-kinit
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-klist" "$NAME":/tmp/krb5-klist
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kvno" "$NAME":/tmp/krb5-kvno
 docker exec "$NAME" chmod +x /tmp/krb5-kinit /tmp/krb5-klist /tmp/krb5-kvno
 
 echo "==== MIT kinit pacing is unchanged by kdc_timeout/max_retries ===="

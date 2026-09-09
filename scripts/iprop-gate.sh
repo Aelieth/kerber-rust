@@ -64,12 +64,12 @@ if ! docker exec "$NAME" sh -c 'command -v kpropd >/dev/null && command -v kadmi
     exit 2
 fi
 
-docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc
-docker cp target/debug/krb5-pac-extract "$NAME":/tmp/krb5-pac-extract
-docker cp target/debug/krb5-kadmind "$NAME":/tmp/krb5-kadmind
-docker cp target/debug/krb5-kprop "$NAME":/tmp/krb5-kprop
-docker cp target/debug/krb5-kpropd "$NAME":/tmp/krb5-kpropd
-docker cp target/debug/krb5-iprop-pull "$NAME":/tmp/krb5-iprop-pull
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-pac-extract" "$NAME":/tmp/krb5-pac-extract
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmind" "$NAME":/tmp/krb5-kadmind
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kprop" "$NAME":/tmp/krb5-kprop
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kpropd" "$NAME":/tmp/krb5-kpropd
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-iprop-pull" "$NAME":/tmp/krb5-iprop-pull
 docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-pac-extract /tmp/krb5-kadmind /tmp/krb5-kprop /tmp/krb5-kpropd /tmp/krb5-iprop-pull
 docker exec "$NAME" sh -c 'cat >/tmp/kadm5.acl <<EOF
 admin@KERBER.TEST *

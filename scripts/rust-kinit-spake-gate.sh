@@ -85,7 +85,7 @@ if [ "$ok" != 1 ]; then
     exit 1
 fi
 
-docker cp target/debug/krb5-kinit "$NAME":/tmp/krb5-kinit
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kinit" "$NAME":/tmp/krb5-kinit
 docker exec "$NAME" chmod +x /tmp/krb5-kinit
 
 PROXY=1888

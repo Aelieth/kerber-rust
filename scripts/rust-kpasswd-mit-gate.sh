@@ -60,7 +60,7 @@ if [ "$ok" != 1 ]; then
     exit 1
 fi
 
-docker cp target/debug/krb5-kpasswd "$NAME":/tmp/krb5-kpasswd
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kpasswd" "$NAME":/tmp/krb5-kpasswd
 docker exec "$NAME" chmod +x /tmp/krb5-kpasswd
 
 echo "==== Rust kpasswd vs MIT kadmind ===="

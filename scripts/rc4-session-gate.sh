@@ -178,11 +178,11 @@ echo "$MIT_SELF_KLIST"
 echo "tkt_etype_mit_vs_mit=$(tkt_etype_of "$MIT_SELF_KLIST")"
 
 echo "==== start Rust KDC :8888 ===="
-docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc
-docker cp target/debug/krb5-kadmin-local "$NAME":/tmp/krb5-kadmin-local
-docker cp target/debug/krb5-kinit "$NAME":/tmp/krb5-kinit
-docker cp target/debug/krb5-kvno "$NAME":/tmp/krb5-kvno
-docker cp target/debug/krb5-klist "$NAME":/tmp/krb5-klist
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmin-local" "$NAME":/tmp/krb5-kadmin-local
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kinit" "$NAME":/tmp/krb5-kinit
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kvno" "$NAME":/tmp/krb5-kvno
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-klist" "$NAME":/tmp/krb5-klist
 docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kadmin-local /tmp/krb5-kinit /tmp/krb5-kvno /tmp/krb5-klist
 
 docker exec -d \

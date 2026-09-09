@@ -46,7 +46,7 @@ if [ "$ok" -ne 1 ]; then
     exit 1
 fi
 
-docker cp target/debug/krb5-ktutil "$NAME":/tmp/krb5-ktutil
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-ktutil" "$NAME":/tmp/krb5-ktutil
 docker exec "$NAME" chmod +x /tmp/krb5-ktutil
 
 echo "==== MIT ktadd then Rust ktutil list ===="

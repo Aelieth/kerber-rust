@@ -36,10 +36,10 @@ docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc
-docker cp target/debug/krb5-pac-extract "$NAME":/tmp/krb5-pac-extract
-docker cp target/debug/krb5-forge-tgt "$NAME":/tmp/krb5-forge-tgt
-docker cp target/debug/krb5-kvno "$NAME":/tmp/krb5-kvno
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-pac-extract" "$NAME":/tmp/krb5-pac-extract
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-forge-tgt" "$NAME":/tmp/krb5-forge-tgt
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kvno" "$NAME":/tmp/krb5-kvno
 docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-pac-extract /tmp/krb5-forge-tgt /tmp/krb5-kvno
 
 docker exec -i "$NAME" bash -s <<'CONF'

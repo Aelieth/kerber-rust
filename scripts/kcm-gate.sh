@@ -58,10 +58,10 @@ if ! docker exec "$KCM" test -S /run/.heim_org.h5l.kcm-socket; then
     exit 1
 fi
 
-docker cp target/debug/krb5-kinit "$KCM":/tmp/krb5-kinit
-docker cp target/debug/krb5-klist "$KCM":/tmp/krb5-klist
-docker cp target/debug/krb5-kdestroy "$KCM":/tmp/krb5-kdestroy
-docker cp target/debug/krb5-kswitch "$KCM":/tmp/krb5-kswitch
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kinit" "$KCM":/tmp/krb5-kinit
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-klist" "$KCM":/tmp/krb5-klist
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdestroy" "$KCM":/tmp/krb5-kdestroy
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kswitch" "$KCM":/tmp/krb5-kswitch
 docker cp "$ROOT/harness/kcm/krb5.conf" "$KCM":/etc/krb5.conf
 docker exec "$KCM" chmod +x /tmp/krb5-kinit /tmp/krb5-klist /tmp/krb5-kdestroy /tmp/krb5-kswitch
 

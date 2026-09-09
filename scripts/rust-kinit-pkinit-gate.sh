@@ -69,7 +69,7 @@ if [ -z "$PLUGIN" ]; then
     exit 1
 fi
 
-docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc-export
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc-export
 docker exec "$NAME" chmod +x /tmp/krb5-kdc-export
 docker exec "$NAME" mkdir -p /tmp/pkinit
 docker exec \
@@ -129,7 +129,7 @@ if [ "$ok" != 1 ]; then
     exit 1
 fi
 
-docker cp target/debug/krb5-kinit "$NAME":/tmp/krb5-kinit
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kinit" "$NAME":/tmp/krb5-kinit
 docker exec "$NAME" chmod +x /tmp/krb5-kinit
 
 echo "==== Rust kinit --pkinit vs MIT KDC ===="

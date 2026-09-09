@@ -246,3 +246,49 @@ fn create_tl_type_0x10003_is_bad_tl_type() {
             .is_none()
     );
 }
+
+#[test]
+fn modify_policy_clr_with_policy_name_is_bad_mask() {
+    let (store, _) = bootstrap_documented().unwrap();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let orig_life = store.get_name(&user).unwrap().max_life;
+    let acl = Acl::parse("admin@KERBER.TEST *\n").unwrap();
+    let store = shared_dump(store);
+    let mut c = init_client(
+        &store,
+        &acl,
+        &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]),
+        &documented_kadmin(),
+        GSS_INTEGRITY,
+    );
+    let mut w = Vec::new();
+    push_u32(&mut w, API_V2);
+    push_nullstring(&mut w, &format!("{TEST_USER}@{TEST_REALM}"));
+    push_u32(&mut w, 0);
+    push_u32(&mut w, 0);
+    push_u32(&mut w, 0);
+    push_u32(&mut w, 60);
+    push_u32(&mut w, 1);
+    push_u32(&mut w, 0);
+    push_u32(&mut w, 0);
+    push_u32(&mut w, 0);
+    push_u32(&mut w, 0);
+    push_nullstring(&mut w, "default");
+    push_u32(&mut w, 0);
+    push_u32(&mut w, 0);
+    push_u32(&mut w, 0);
+    push_u32(&mut w, 0);
+    push_u32(&mut w, 0);
+    push_u32(&mut w, 0);
+    push_u32(&mut w, 0);
+    push_u32(&mut w, 1);
+    push_u32(&mut w, 0);
+    push_u32(&mut w, KADM5_MAX_LIFE | KADM5_POLICY | KADM5_POLICY_CLR);
+    let (stat, body) = data_call(&mut c, &store, &acl, MODIFY_PRINCIPAL, &w);
+    assert_eq!(stat, SUCCESS);
+    assert_eq!(ret_code(&body), KADM5_BAD_MASK, "body code");
+    let g = store
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    assert_eq!(g.get_name(&user).unwrap().max_life, orig_life);
+}

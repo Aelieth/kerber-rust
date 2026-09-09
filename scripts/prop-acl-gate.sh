@@ -62,9 +62,9 @@ if ! docker exec "$NAME" sh -c 'command -v kprop >/dev/null'; then
     exit 2
 fi
 
-docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc
-docker cp target/debug/krb5-kpropd "$NAME":/tmp/krb5-kpropd
-docker cp target/debug/krb5-kadmind "$NAME":/tmp/krb5-kadmind
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kpropd" "$NAME":/tmp/krb5-kpropd
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmind" "$NAME":/tmp/krb5-kadmind
 docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kpropd /tmp/krb5-kadmind
 
 docker exec "$NAME" sh -c 'cat >/tmp/prop-krb5.conf <<EOF

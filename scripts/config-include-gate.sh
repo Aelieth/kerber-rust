@@ -19,9 +19,9 @@ if ! docker ps -q --filter "name=^${NAME}$" | grep -q .; then
 fi
 
 cargo build -p krb5-client --bin krb5-kinit --bin krb5-kvno --bin krb5-klist -q
-docker cp target/debug/krb5-kinit "$NAME":/tmp/krb5-kinit
-docker cp target/debug/krb5-kvno "$NAME":/tmp/krb5-kvno
-docker cp target/debug/krb5-klist "$NAME":/tmp/krb5-klist
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kinit" "$NAME":/tmp/krb5-kinit
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kvno" "$NAME":/tmp/krb5-kvno
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-klist" "$NAME":/tmp/krb5-klist
 docker exec "$NAME" chmod +x /tmp/krb5-kinit /tmp/krb5-kvno /tmp/krb5-klist
 
 docker exec -i "$NAME" bash -s <<'EOS'

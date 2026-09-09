@@ -70,8 +70,8 @@ if [ "$ok" != 1 ]; then
     unavailable "Samba AD KDC did not listen on UDP 88"
 fi
 
-docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc
-docker cp target/debug/krb5-pac-extract "$NAME":/tmp/krb5-pac-extract
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-pac-extract" "$NAME":/tmp/krb5-pac-extract
 docker cp harness/samba/pac_l1.py "$NAME":/tmp/pac_l1.py
 docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-pac-extract
 

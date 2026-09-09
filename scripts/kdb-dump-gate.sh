@@ -50,9 +50,9 @@ docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc
-docker cp target/debug/krb5-kdb "$NAME":/tmp/krb5-kdb
-docker cp target/debug/krb5-kadmin-local "$NAME":/tmp/krb5-kadmin-local
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmin-local" "$NAME":/tmp/krb5-kadmin-local
 docker cp "$GOLDEN" "$NAME":/tmp/mit.dump
 echo "==== golden dump nosvr/hwuser keys (kdb5_util dump) are MIT-derived, not clones of user/pwprau ===="
 if ! python3 - "$ROOT/scripts/ci-policy.py" <<'PY'

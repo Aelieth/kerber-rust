@@ -36,7 +36,7 @@ docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-if ! docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc; then
+if ! docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc; then
     log "kdc.gate" "error" ',"error":"docker cp krb5-kdc failed"'
     exit 1
 fi

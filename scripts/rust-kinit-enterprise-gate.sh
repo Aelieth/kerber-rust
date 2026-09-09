@@ -66,7 +66,7 @@ if [ "$ok" -ne 1 ]; then
     exit 1
 fi
 
-docker cp target/debug/krb5-kinit "$NAME":/tmp/krb5-kinit
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kinit" "$NAME":/tmp/krb5-kinit
 docker exec "$NAME" chmod +x /tmp/krb5-kinit
 
 echo "==== MIT kinit -E vs MIT KDC (db2 has no UPN alias) ===="
@@ -106,7 +106,7 @@ docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
 cleanup_kdc() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup_kdc EXIT
 
-docker cp target/debug/krb5-kdc "$NAME":/tmp/krb5-kdc
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker exec "$NAME" chmod +x /tmp/krb5-kdc
 docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \

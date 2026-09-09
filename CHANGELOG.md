@@ -77,8 +77,10 @@ this project uses semantic versioning once a crate is published.
   before the `< 256` guard; create-path reserved TL / type 500 probe cells;
   `merge_tl_data_in` appends `KRB5_TL_DB_ARGS` (0x7fff). U2U missing
   second-ticket server is 7 `2ND_TKT_SERVER` (`do_tgs_req.c:280-285`), not
-  60 `GET_LOCAL_TGT`. Limitation: modify may still do more than one store
-  write (documented deviation vs MIT's single `kdb_put_entry`).
+  60 `GET_LOCAL_TGT`. Gate `docker cp` uses `${CARGO_TARGET_DIR:-target}/debug`
+  so a Cursor/sandbox target dir cannot ship a stale kadmind. Limitation:
+  modify may still do more than one store write (documented deviation vs
+  MIT's single `kdb_put_entry`).
 
 ### Round-up R2 (re-audit fixes)
 
