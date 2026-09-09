@@ -55,10 +55,7 @@ docker cp target/debug/krb5-kdb "$NAME":/tmp/krb5-kdb
 docker cp target/debug/krb5-kadmin-local "$NAME":/tmp/krb5-kadmin-local
 docker cp "$GOLDEN" "$NAME":/tmp/mit.dump
 echo "==== golden dump nosvr/hwuser keys (kdb5_util dump) are MIT-derived, not clones of user/pwprau ===="
-python3 - "$ROOT/scripts/ci-policy.py" <<'PY' || {
-    echo "nosvr/hwuser keys clone user/pwprau" >&2
-    exit 1
-}
+if ! python3 - "$ROOT/scripts/ci-policy.py" <<'PY'
 import importlib.util
 import sys
 
@@ -69,6 +66,10 @@ mod.check_golden_dump_unique_keys()
 print("nosvr_keys_eq_user=False")
 print("hwuser_keys_eq_pwprau=False")
 PY
+then
+    echo "nosvr/hwuser keys clone user/pwprau" >&2
+    exit 1
+fi
 docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb /tmp/krb5-kadmin-local
 rust_local() {
     docker exec -e KRB5_MASTER_PASSWORD=masterpassword -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
