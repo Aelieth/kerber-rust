@@ -180,8 +180,8 @@ pub mod ku {
     pub const FAST_REP: u32 = 52;
     /// RFC 6113 FAST finished.
     pub const FAST_FINISHED: u32 = 53;
-    /// Cookie encrypted under the krbtgt key (local helper, not an RFC number).
-    /// Collision with ENC_CHALLENGE_CLIENT; MIT PA-FX-COOKIE is [`PA_FX_COOKIE`].
+    /// Unused: collision with ENC_CHALLENGE_CLIENT. MIT PA-FX-COOKIE is [`PA_FX_COOKIE`].
+    #[allow(dead_code)]
     pub const FAST_COOKIE: u32 = 54;
     /// MIT `KRB5_KEYUSAGE_PA_FX_COOKIE` (`krb5.hin:1006`).
     pub const PA_FX_COOKIE: u32 = 513;

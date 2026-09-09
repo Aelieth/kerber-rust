@@ -2639,12 +2639,20 @@ impl PrincipalStore {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let cur = g.get(&id).copied().unwrap_or(fallback);
         if ok {
+            let requires_preauth = self
+                .map
+                .get(&id)
+                .is_some_and(|p| p.attributes & KDB_REQUIRES_PRE_AUTH != 0);
             g.insert(
                 id,
                 AsFailState {
-                    count: 0,
+                    count: if requires_preauth { 0 } else { cur.count },
                     last_failed: cur.last_failed,
-                    last_success: now,
+                    last_success: if requires_preauth {
+                        now
+                    } else {
+                        cur.last_success
+                    },
                 },
             );
         } else {

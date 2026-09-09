@@ -52,8 +52,10 @@ this project uses semantic versioning once a crate is published.
   AS error carries PA-FX-COOKIE; PKINIT `dh_params_not_accepted` 65 is
   TYPED-DATA (tags [0]/[1]) plus cookie; FAST inner PA-FX-ERROR has empty
   e_data. `modprinc -unlock` stores `KRB5_TL_LAST_ADMIN_UNLOCK`
-  (1792, 4-byte LE) and zeroes fail_auth_count. diffsend
-  `as-hw-preauth`, `tgs-bad-msg-type`, `tgs-ap-options`.
+  (1792, 4-byte LE) and zeroes fail_auth_count. Absent unlock TL
+  reads as stamp 0 (`kdb5.c:1539-1545,1574-1576`). `record_as_outcome`
+  clears fail count only for `REQUIRES_PRE_AUTH` (`lockout.c:181-190`).
+  diffsend `as-hw-preauth`, `tgs-bad-msg-type`, `tgs-ap-options`.
 - **docs/tooling.** Golden dump `nosvr`/`hwuser` rows are MIT
   `kadmin.local addprinc` captures with principal-derived keys.
   `ci-policy.py DIFFSEND_CASES` lists all 29 live diffsend names.

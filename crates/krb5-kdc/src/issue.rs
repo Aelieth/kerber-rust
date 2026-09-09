@@ -2112,11 +2112,17 @@ fn attr(p: &Principal, bit: u32) -> bool {
     p.attributes & bit != 0
 }
 
-fn last_admin_unlock(p: &Principal) -> Option<u32> {
+fn last_admin_unlock(p: &Principal) -> u32 {
     // KRB5_TL_LAST_ADMIN_UNLOCK (0x0700): 4-byte LE unix timestamp.
-    let tl = p.tl_data.iter().find(|t| t.ty == TL_LAST_ADMIN_UNLOCK)?;
-    let b: [u8; 4] = tl.contents.get(..4)?.try_into().ok()?;
-    Some(u32::from_le_bytes(b))
+    // MIT krb5_dbe_lookup_last_admin_unlock: absent or short TL → stamp 0
+    // (kdb5.c:1539-1545,1574-1576). locked_check_p then !ts_after(last_failed, 0).
+    p.tl_data
+        .iter()
+        .find(|t| t.ty == TL_LAST_ADMIN_UNLOCK)
+        .and_then(|t| t.contents.get(..4))
+        .and_then(|b| <[u8; 4]>::try_from(b).ok())
+        .map(u32::from_le_bytes)
+        .unwrap_or(0)
 }
 
 /// MIT `validate_as_request` (`kdc_util.c:716-800`): the AS policy checks in
@@ -2179,9 +2185,7 @@ fn validate_as_request(
     let count_locked = max_fail > 0 && fails >= max_fail;
     let in_lockout_window =
         duration == 0 || (last_failed > 0 && now < last_failed.saturating_add(duration));
-    if let Some(unlock) = last_admin_unlock(client)
-        && last_failed <= unlock
-    {
+    if last_failed <= last_admin_unlock(client) {
         return current_policy().check_as(store, client);
     }
     if count_locked && in_lockout_window {
