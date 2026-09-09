@@ -6,7 +6,12 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
-### W1-A′ A′-1 (FAST armor)
+### W1-0
+
+- **docs.** W1-0 archive leftovers and the master-plan Active-W1 index
+  were already on disk; no KDC behavior change.
+
+### W1-A′-1
 
 - **kdc.** `kdc_find_fast` / `armor_ap_request` are ported whole
   (`fast_util.c:35-90,126-247`): AS (and TGS-without-PA-TGS-REQ-subkey)
@@ -49,6 +54,9 @@ this project uses semantic versioning once a crate is published.
   e_data. `modprinc -unlock` stores `KRB5_TL_LAST_ADMIN_UNLOCK`
   (1792, 4-byte LE) and zeroes fail_auth_count. diffsend
   `as-hw-preauth`, `tgs-bad-msg-type`, `tgs-ap-options`.
+- **docs/tooling.** Golden dump `nosvr`/`hwuser` rows are MIT
+  `kadmin.local addprinc` captures with principal-derived keys.
+  `ci-policy.py DIFFSEND_CASES` lists all 29 live diffsend names.
 
 ### Round-up R2 (re-audit fixes)
 

@@ -89,6 +89,17 @@ fn parse_golden_pins_header_field_order_and_requires_preauth() {
     assert_eq!(nosvr.attributes, KDB_DISALLOW_SVR);
     let hwuser = dump.princ("hwuser@KERBER.TEST").unwrap();
     assert_eq!(hwuser.attributes, KDB_REQUIRES_HW_AUTH);
+    let pwprau = dump.princ("pwprau@KERBER.TEST").unwrap();
+    assert_ne!(
+        nosvr.keys[0].slots[0].contents,
+        user.keys[0].slots[0].contents,
+        "nosvr keys must be MIT-derived, not a clone of user"
+    );
+    assert_ne!(
+        hwuser.keys[0].slots[0].contents,
+        pwprau.keys[0].slots[0].contents,
+        "hwuser keys must be MIT-derived, not a clone of pwprau"
+    );
 }
 
 #[test]

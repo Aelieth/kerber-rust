@@ -55,6 +55,12 @@ DIFFSEND_CASES = frozenset(
         "tgs-ap-options",
         "tgs-header-kvno-zero",
         "as-hw-preauth",
+        "as-needchange",
+        "as-invalid-opts",
+        "as-validate-before-preauth",
+        "as-optimistic-encts-wrong-etype",
+        "as-retransmit",
+        "as-request-anonymous",
     }
 )
 _LEDGER_GATE = re.compile(r"(?:scripts/)?([A-Za-z0-9._-]+-gate(?:\.sh)?)")
@@ -890,6 +896,94 @@ def check_ledger_proof_column(text: str | None = None) -> None:
                         f"docs/mit-parity-ledger.md:{i} proof names {name} "
                         "which is not in scripts/ (use proposed)"
                     )
+
+
+_LEDGER_CASES_HDR = re.compile(
+    r"The twenty-nine live `diffsend` cases are ((?:`[^`]+`(?:,\s*)?)+)",
+    re.S,
+)
+
+
+def check_diffsend_cases(ledger: str | None = None, gate: str | None = None) -> None:
+    """DIFFSEND_CASES, the ledger header list, and differential-gate.sh:155 agree."""
+    if ledger is None:
+        if not LEDGER.is_file():
+            _die("missing docs/mit-parity-ledger.md")
+        ledger = LEDGER.read_text()
+    gate_path = SCRIPTS / "differential-gate.sh"
+    if gate is None:
+        if not gate_path.is_file():
+            _die("missing scripts/differential-gate.sh")
+        gate = gate_path.read_text()
+    hdr = _LEDGER_CASES_HDR.search(ledger)
+    if not hdr:
+        _die("docs/mit-parity-ledger.md missing twenty-nine live diffsend cases list")
+    names = set(re.findall(r"`([^`]+)`", hdr.group(1)))
+    if names != set(DIFFSEND_CASES):
+        missing = sorted(DIFFSEND_CASES - names)
+        extra = sorted(names - DIFFSEND_CASES)
+        _die(
+            f"DIFFSEND_CASES vs ledger header: missing {missing} extra {extra}"
+        )
+    if len(DIFFSEND_CASES) != 29:
+        _die(f"DIFFSEND_CASES has {len(DIFFSEND_CASES)} names, want 29")
+    lines = gate.splitlines()
+    if len(lines) < 155:
+        _die("scripts/differential-gate.sh shorter than 155 lines")
+    m = re.search(r'"cases":(\d+)', lines[154])
+    if not m:
+        _die("scripts/differential-gate.sh:155 missing cases:N")
+    n = int(m.group(1))
+    if n != len(DIFFSEND_CASES):
+        _die(
+            f"scripts/differential-gate.sh:155 cases:{n} != "
+            f"DIFFSEND_CASES {len(DIFFSEND_CASES)}"
+        )
+
+
+def _dump_first_key_hex(line: str) -> tuple[str, str] | None:
+    """Name and first key-slot hex from a princ dump line, or None."""
+    if not line.startswith("princ\t"):
+        return None
+    f = line.rstrip(";").split("\t")
+    if len(f) < 16:
+        return None
+    try:
+        n_tl = int(f[3])
+    except ValueError:
+        return None
+    i = 15 + 3 * n_tl
+    if i + 4 >= len(f):
+        return None
+    return f[6], f[i + 4]
+
+
+def check_golden_dump_unique_keys(text: str | None = None) -> None:
+    """Golden dump nosvr/hwuser key blobs are MIT-derived, not clones of user/pwprau."""
+    if text is None:
+        path = ROOT / "tests" / "traces" / "kdb" / "mit-dump-v7.txt"
+        if not path.is_file():
+            _die("missing tests/traces/kdb/mit-dump-v7.txt")
+        text = path.read_text()
+    keys: dict[str, str] = {}
+    for line in text.splitlines():
+        parsed = _dump_first_key_hex(line)
+        if parsed is None:
+            continue
+        name, hexkey = parsed
+        keys[name] = hexkey
+    for need in (
+        "user@KERBER.TEST",
+        "nosvr@KERBER.TEST",
+        "hwuser@KERBER.TEST",
+        "pwprau@KERBER.TEST",
+    ):
+        if need not in keys:
+            _die(f"golden dump missing {need}")
+    if keys["nosvr@KERBER.TEST"] == keys["user@KERBER.TEST"]:
+        _die("nosvr keys clone user")
+    if keys["hwuser@KERBER.TEST"] == keys["pwprau@KERBER.TEST"]:
+        _die("hwuser keys clone pwprau")
 
 
 _VERDICT_KEYS = (
@@ -1961,6 +2055,63 @@ jobs:
         "| kdc_util.c:1 | x | y | z | w | exact | proposed: diffsend `no-such-case`; kdc-lookaside-gate.sh |\n"
     )
     _must_die(check_ledger_proof_column, ledger_proposed_sibling)
+    cases_hdr = (
+        "The twenty-nine live `diffsend` cases are "
+        + ", ".join(f"`{c}`" for c in sorted(DIFFSEND_CASES))
+        + ".\n"
+    )
+    gate_29 = "\n" * 154 + 'echo "$DIFF" | grep -q \'"outcome":"ok","cases":29\' || die "x"\n'
+    check_diffsend_cases(cases_hdr, gate_29)
+    _must_die(check_diffsend_cases, "no header here", gate_29)
+
+    def _princ_line(name: str, keyhex: str) -> str:
+        namelen = str(len(name))
+        klen = str(len(keyhex) // 2)
+        return (
+            "\t".join(
+                [
+                    "princ",
+                    "38",
+                    namelen,
+                    "0",
+                    "1",
+                    "0",
+                    name,
+                    "0",
+                    "0",
+                    "0",
+                    "0",
+                    "0",
+                    "0",
+                    "0",
+                    "0",
+                    "1",
+                    "1",
+                    "17",
+                    klen,
+                    keyhex,
+                    "-1",
+                ]
+            )
+            + "\n"
+        )
+
+    dump_unique = (
+        "kdb5_util load_dump version 7\n"
+        + _princ_line("user@KERBER.TEST", "aa")
+        + _princ_line("nosvr@KERBER.TEST", "bb")
+        + _princ_line("hwuser@KERBER.TEST", "cc")
+        + _princ_line("pwprau@KERBER.TEST", "dd")
+    )
+    check_golden_dump_unique_keys(dump_unique)
+    dump_clone = (
+        "kdb5_util load_dump version 7\n"
+        + _princ_line("user@KERBER.TEST", "aa")
+        + _princ_line("nosvr@KERBER.TEST", "aa")
+        + _princ_line("hwuser@KERBER.TEST", "cc")
+        + _princ_line("pwprau@KERBER.TEST", "dd")
+    )
+    _must_die(check_golden_dump_unique_keys, dump_clone)
     ledger_tally_ok = (
         "Counts:\n"
         "**1** = A1 1 + A2 0 + A3 0.\n"
@@ -2231,6 +2382,8 @@ def main() -> None:
     check_red_at_sha_overlay_order()
     check_working_gitignored()
     check_ledger_proof_column()
+    check_diffsend_cases()
+    check_golden_dump_unique_keys()
     check_ledger_tally()
     check_ledger_anchors()
     check_ledger_mit_cites()

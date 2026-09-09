@@ -2362,9 +2362,9 @@ if [ "$ok" != 1 ]; then
     exit 1
 fi
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addpol -maxfailure 1 -lockoutduration 0s unlockpol'
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addpol -maxfailure 1 -lockoutduration 0s -failurecountinterval 0s unlockpol'
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw unlock-secret -policy unlockpol unlocku'
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw unlock-secret -policy unlockpol +requires_preauth unlocku'
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" sh -c 'printf "wrong-secret\n" | kinit unlocku@KERBER.TEST' >/dev/null 2>&1 || true
 LOCKED="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
