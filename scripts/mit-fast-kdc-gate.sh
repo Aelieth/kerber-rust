@@ -182,6 +182,7 @@ docker exec "$NAME" sh -c "cat > /tmp/krb5-fast-proxy.conf <<EOF
 [libdefaults]
     default_realm = KERBER.TEST
     dns_lookup_kdc = false
+    udp_preference_limit = 4096
 [realms]
     KERBER.TEST = {
         kdc = 127.0.0.1:1891
@@ -296,6 +297,7 @@ docker exec "$MITNAME" sh -c "cat > /tmp/krb5-fast-proxy.conf <<EOF
 [libdefaults]
     default_realm = KERBER.TEST
     dns_lookup_kdc = false
+    udp_preference_limit = 4096
 [realms]
     KERBER.TEST = {
         kdc = 127.0.0.1:1891
@@ -316,6 +318,100 @@ echo "rust_fast_err_shape=$RUST_SHAPE"
 echo "mit_fast_err_shape=$MIT_SHAPE"
 if [ "$RUST_SHAPE" != "$MIT_SHAPE" ]; then
     echo "FAST-error outer e_data shape differs rust vs MIT" >&2
+    exit 1
+fi
+
+echo "==== Rust KDC: FAST wrong-password and unknown-server outer shapes ===="
+docker exec "$NAME" sh -c ':> /tmp/fast-err-rust.txt'
+set +e
+RUST_BADPW="$(docker exec -e KRB5_CONFIG=/tmp/krb5-fast-proxy.conf "$NAME" \
+    sh -c 'printf "wrongpassword\n" | kinit -T /tmp/krb5cc_armor -c /tmp/krb5cc_bad user@KERBER.TEST' 2>&1)"
+set -e
+echo "$RUST_BADPW"
+echo "$RUST_BADPW" | grep -q 'Password incorrect while getting initial credentials' || {
+    echo "rust FAST wrong-password client text missing: $RUST_BADPW" >&2
+    exit 1
+}
+RUST_BADPW_PROXY="$(docker exec "$NAME" cat /tmp/fast-err-rust.txt 2>/dev/null || true)"
+echo "$RUST_BADPW_PROXY"
+echo "$RUST_BADPW_PROXY" | grep -q '136' || {
+    echo "rust FAST wrong-password proxy missing 136: $RUST_BADPW_PROXY" >&2
+    exit 1
+}
+echo "$RUST_BADPW_PROXY" | grep -E 'rep#[0-9]+ error_code=25 e_data_encoding=method e_data_types=\[136\]' || {
+    echo "rust FAST wrong-password missing 25 method [136]: $RUST_BADPW_PROXY" >&2
+    exit 1
+}
+echo "$RUST_BADPW_PROXY" | grep -E 'rep#[0-9]+ error_code=24 e_data_encoding=method e_data_types=\[136\]' || {
+    echo "rust FAST wrong-password missing 24 method [136]: $RUST_BADPW_PROXY" >&2
+    exit 1
+}
+RUST_BADPW_SHAPE="$(echo "$RUST_BADPW_PROXY" | grep -E 'rep#[0-9]+ (error_code=|tag=)' | sed -E 's/^rep#[0-9]+ //' | sort -u || true)"
+
+docker exec "$NAME" sh -c ':> /tmp/fast-err-rust.txt'
+set +e
+RUST_NOSUCH="$(docker exec -e KRB5_CONFIG=/tmp/krb5-fast-proxy.conf "$NAME" \
+    kvno -c /tmp/krb5cc_fast nosuch/service 2>&1)"
+set -e
+echo "$RUST_NOSUCH"
+echo "$RUST_NOSUCH" | grep -F 'Server nosuch/service@KERBER.TEST not found in Kerberos database' || {
+    echo "rust FAST unknown-server client text missing: $RUST_NOSUCH" >&2
+    exit 1
+}
+RUST_NOSUCH_PROXY="$(docker exec "$NAME" cat /tmp/fast-err-rust.txt 2>/dev/null || true)"
+echo "$RUST_NOSUCH_PROXY"
+echo "$RUST_NOSUCH_PROXY" | grep -E 'rep#[0-9]+ error_code=7 e_data_encoding=method e_data_types=\[136\]' || {
+    echo "rust FAST unknown-server proxy line missing: $RUST_NOSUCH_PROXY" >&2
+    exit 1
+}
+RUST_NOSUCH_SHAPE="$(echo "$RUST_NOSUCH_PROXY" | grep -E 'rep#[0-9]+ error_code=' | sed -E 's/^rep#[0-9]+ //' | sort -u)"
+
+echo "==== MIT KDC: FAST wrong-password and unknown-server outer shapes ===="
+docker exec "$MITNAME" sh -c ':> /tmp/fast-err-mit.txt'
+set +e
+MIT_BADPW="$(docker exec -e KRB5_CONFIG=/tmp/krb5-fast-proxy.conf "$MITNAME" \
+    sh -c 'printf "wrongpassword\n" | kinit -T /tmp/krb5cc_armor -c /tmp/krb5cc_bad user@KERBER.TEST' 2>&1)"
+set -e
+echo "$MIT_BADPW"
+echo "$MIT_BADPW" | grep -q 'Password incorrect while getting initial credentials' || {
+    echo "MIT FAST wrong-password client text missing: $MIT_BADPW" >&2
+    exit 1
+}
+MIT_BADPW_PROXY="$(docker exec "$MITNAME" cat /tmp/fast-err-mit.txt 2>/dev/null || true)"
+echo "$MIT_BADPW_PROXY"
+echo "$MIT_BADPW_PROXY" | grep -q '136' || {
+    echo "MIT FAST wrong-password proxy missing 136: $MIT_BADPW_PROXY" >&2
+    exit 1
+}
+echo "$MIT_BADPW_PROXY" | grep -E 'rep#[0-9]+ tag=0x6b' || {
+    echo "MIT FAST wrong-password missing outer AS-REP 0x6b: $MIT_BADPW_PROXY" >&2
+    exit 1
+}
+MIT_BADPW_SHAPE="$(echo "$MIT_BADPW_PROXY" | grep -E 'rep#[0-9]+ (error_code=|tag=)' | sed -E 's/^rep#[0-9]+ //' | sort -u || true)"
+echo "rust_fast_badpw_shape=$RUST_BADPW_SHAPE"
+echo "mit_fast_badpw_shape=$MIT_BADPW_SHAPE"
+
+docker exec "$MITNAME" sh -c ':> /tmp/fast-err-mit.txt'
+set +e
+MIT_NOSUCH="$(docker exec -e KRB5_CONFIG=/tmp/krb5-fast-proxy.conf "$MITNAME" \
+    kvno -c /tmp/krb5cc_fast nosuch/service 2>&1)"
+set -e
+echo "$MIT_NOSUCH"
+echo "$MIT_NOSUCH" | grep -F 'Server nosuch/service@KERBER.TEST not found in Kerberos database' || {
+    echo "MIT FAST unknown-server client text missing: $MIT_NOSUCH" >&2
+    exit 1
+}
+MIT_NOSUCH_PROXY="$(docker exec "$MITNAME" cat /tmp/fast-err-mit.txt 2>/dev/null || true)"
+echo "$MIT_NOSUCH_PROXY"
+echo "$MIT_NOSUCH_PROXY" | grep -E 'rep#[0-9]+ error_code=7 e_data_encoding=method e_data_types=\[136\]' || {
+    echo "MIT FAST unknown-server proxy line missing: $MIT_NOSUCH_PROXY" >&2
+    exit 1
+}
+MIT_NOSUCH_SHAPE="$(echo "$MIT_NOSUCH_PROXY" | grep -E 'rep#[0-9]+ error_code=' | sed -E 's/^rep#[0-9]+ //' | sort -u)"
+echo "rust_fast_nosuch_shape=$RUST_NOSUCH_SHAPE"
+echo "mit_fast_nosuch_shape=$MIT_NOSUCH_SHAPE"
+if [ "$RUST_NOSUCH_SHAPE" != "$MIT_NOSUCH_SHAPE" ]; then
+    echo "FAST unknown-server outer shape differs rust vs MIT" >&2
     exit 1
 fi
 

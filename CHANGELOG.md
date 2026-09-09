@@ -113,6 +113,17 @@ this project uses semantic versioning once a crate is published.
   `diffsend` cases pin those words on both KDCs (33 live cases).
   Limitation: kvno-scoped search, `match_enctype`, PAC/`2ND_TKT_PAC`, and
   the S4U2Proxy evidence half stay item 9.
+- **test/ci (A′-1 Round 4 R14).** `mit-fast-kdc-gate.sh` pins a real FAST
+  error on both legs: TGS `nosuch/service` is `error_code=7
+  e_data_encoding=method e_data_types=[136]` (no cookie) equal on both;
+  wrong-password client text is `Password incorrect while getting
+  initial credentials` on both. MIT's AS FAST password error is outer
+  AS-REP `tag=0x6b`; Rust still emits KRB-ERROR 25 then 24 with method
+  `[136]` (FAST AS-REP wrap stays item 2). The UDP proxy logs non-0x7e
+  replies so that 0x6b is visible. `ci-policy.py` fixtures cover
+  `unit_guard_dirty`, `unit-red-check.py`, `ci-status.py --save`
+  in_progress/403/completed, a diffsend name-set mismatch, and
+  artefact-scoped parent-red in `claim-audit.py`.
 
 ### Round-up R2 (re-audit fixes)
 

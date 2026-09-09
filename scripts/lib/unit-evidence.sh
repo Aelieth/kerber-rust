@@ -31,13 +31,7 @@ for path in sys.argv[1:]:
 PY
 }
 
-unit_green() {
-    local name=$1
-    local filter=$2
-    if [ -z "$name" ] || [ -z "$filter" ]; then
-        echo "unit_green <name> <nextest filter>" >&2
-        return 2
-    fi
+unit_guard_dirty() {
     if [ "${dirty:-yes}" != no ]; then
         if [ "${KERBER_UNIT_ALLOW_DIRTY:-}" != 1 ]; then
             echo "unit_green: refusing dirty tree (dirty=${dirty:-yes}); set KERBER_UNIT_ALLOW_DIRTY=1 to override" >&2
@@ -45,6 +39,17 @@ unit_green() {
         fi
         echo "override=KERBER_UNIT_ALLOW_DIRTY"
     fi
+    return 0
+}
+
+unit_green() {
+    local name=$1
+    local filter=$2
+    if [ -z "$name" ] || [ -z "$filter" ]; then
+        echo "unit_green <name> <nextest filter>" >&2
+        return 2
+    fi
+    unit_guard_dirty || return 1
     echo "==== unit_green $name filter=$filter ===="
     cargo nextest run --workspace --profile ci -E "test($filter)"
 }
@@ -141,32 +146,7 @@ unit_red_at() {
     rc=$?
     set -e
     printf '%s\n' "$out"
-    if ! UNIT_RED_OUT="$out" UNIT_RED_NAMES="$names" python3 <<'PY'
-import os, re, sys
-out = os.environ["UNIT_RED_OUT"]
-names = [n for n in os.environ["UNIT_RED_NAMES"].splitlines() if n]
-passed, missing = [], []
-for t in names:
-    if re.search(rf"test .*\b{re.escape(t)}\b \.\.\. FAILED$", out, re.M):
-        continue
-    if re.search(rf"test .*\b{re.escape(t)}\b \.\.\. ok$", out, re.M):
-        passed.append(t)
-    else:
-        missing.append(t)
-if passed or missing:
-    for t in passed:
-        print(f"unit_red_at: vacuous red: {t} passed at parent", file=sys.stderr)
-    for t in missing:
-        print(f"unit_red_at: vacuous red: {t} did not FAIL at parent", file=sys.stderr)
-    print(
-        f"unit_red_at: require every inject #[test] FAILED "
-        f"(passed={len(passed)} missing={len(missing)})",
-        file=sys.stderr,
-    )
-    sys.exit(1)
-sys.exit(0)
-PY
-    then
+    if ! printf '%s\n' "$out" | python3 "$ROOT/scripts/lib/unit-red-check.py" "${name_list[@]}"; then
         echo "unit_red_at: vacuous red (cargo_rc=$rc)" >&2
         return 1
     fi

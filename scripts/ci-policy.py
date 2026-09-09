@@ -2488,6 +2488,185 @@ jobs:
         '--inject\nTREE="$(git write-tree)"\ncp "$ROOT/$rel" "$WT/$rel"\n',
     )
 
+    env = os.environ.copy()
+    env["ROOT"] = str(ROOT)
+    dirty_refuse = subprocess.run(
+        [
+            "bash",
+            "-c",
+            '. "$ROOT/scripts/lib/unit-evidence.sh"; dirty=yes; unit_guard_dirty',
+        ],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if dirty_refuse.returncode != 1:
+        _die("unit_guard_dirty must refuse dirty=yes without KERBER_UNIT_ALLOW_DIRTY")
+    dirty_allow = subprocess.run(
+        [
+            "bash",
+            "-c",
+            '. "$ROOT/scripts/lib/unit-evidence.sh"; dirty=yes; '
+            "KERBER_UNIT_ALLOW_DIRTY=1 unit_guard_dirty",
+        ],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if dirty_allow.returncode != 0 or "override=KERBER_UNIT_ALLOW_DIRTY" not in (
+        dirty_allow.stdout or ""
+    ):
+        _die("unit_guard_dirty must stamp override=KERBER_UNIT_ALLOW_DIRTY when allowed")
+    dirty_ok = subprocess.run(
+        [
+            "bash",
+            "-c",
+            '. "$ROOT/scripts/lib/unit-evidence.sh"; dirty=no; unit_guard_dirty',
+        ],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    if dirty_ok.returncode != 0:
+        _die("unit_guard_dirty must accept dirty=no")
+
+    red_py = SCRIPTS / "lib" / "unit-red-check.py"
+    if not red_py.is_file():
+        _die("missing scripts/lib/unit-red-check.py")
+    red_fail = subprocess.run(
+        [sys.executable, str(red_py), "foo"],
+        input="test foo ... FAILED\n",
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if red_fail.returncode != 0:
+        _die("unit-red-check.py must accept all FAILED")
+    red_pass = subprocess.run(
+        [sys.executable, str(red_py), "foo"],
+        input="test foo ... ok\n",
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if red_pass.returncode != 1 or "vacuous red" not in (red_pass.stderr or ""):
+        _die("unit-red-check.py must reject a passed test")
+    red_empty = subprocess.run(
+        [sys.executable, str(red_py), "foo"],
+        input="",
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if red_empty.returncode != 1:
+        _die("unit-red-check.py must reject empty cargo output")
+
+    hdr_mismatch = "The thirty-three live `diffsend` cases are `garbage-pdu`.\n"
+    _must_die(check_diffsend_cases, hdr_mismatch, gate_n)
+
+    spec = importlib.util.spec_from_file_location("ci_status_r14", SCRIPTS / "ci-status.py")
+    if spec is None or spec.loader is None:
+        _die("missing scripts/ci-status.py")
+    cistat = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cistat)
+    cistat.time.sleep = lambda _s: None
+    out_dir = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    try:
+
+        def _inprog(*_a, **_k):
+            return [
+                {
+                    "id": 1,
+                    "run_number": 1,
+                    "status": "in_progress",
+                    "conclusion": None,
+                    "head_sha": "abc1234deadbeef",
+                }
+            ]
+
+        cistat.fetch_runs = _inprog
+        rc = cistat.save_run("o/r", "ci", "abc1234", str(out_dir), retries=2)
+        if rc != 2 or (out_dir / "ci-abc1234.txt").exists():
+            _die("ci-status --save must exit 2 and write no file for in_progress")
+
+        import io
+        import urllib.error as _ue
+        from email.message import Message
+
+        def _403(*_a, **_k):
+            raise _ue.HTTPError(
+                "https://api.github.com",
+                403,
+                "rate limit",
+                Message(),
+                io.BytesIO(b""),
+            )
+
+        cistat.fetch_runs = _403
+        rc = cistat.save_run("o/r", "ci", "abc1234", str(out_dir), retries=3)
+        if rc != 2 or (out_dir / "ci-abc1234.txt").exists():
+            _die("ci-status --save must exit 2 and write no file after 403 ×N")
+
+        def _done(*_a, **_k):
+            return [
+                {
+                    "id": 9,
+                    "run_number": 2,
+                    "status": "completed",
+                    "conclusion": "success",
+                    "head_sha": "abc1234deadbeef",
+                }
+            ]
+
+        cistat.fetch_runs = _done
+        cistat.format_run = lambda *_a, **_k: ["run ok"]
+        rc = cistat.save_run("o/r", "ci", "abc1234", str(out_dir), retries=1)
+        saved = out_dir / "ci-abc1234.txt"
+        if rc != 0 or not saved.is_file() or "head_sha=" not in saved.read_text():
+            _die("ci-status --save must exit 0 with head_sha= for a completed run")
+    finally:
+        subprocess.run(["rm", "-rf", str(out_dir)], check=False)
+
+    camod = _claim_audit_module()
+    croot = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    try:
+        (croot / "scripts").mkdir()
+        pad = 'echo "---- pad ----"\n' * 4
+        (croot / "scripts" / "fx-gate.sh").write_text(
+            'NAME="rust"\nNAME_MIT="mit"\n'
+            + pad
+            + 'echo "==== value ===="  # MIT omits NULL\nOUT="$(docker exec "$NAME" true)"\n'
+            + "echo \"$OUT\" | grep -F 'value=1'\n"
+            + pad
+            + 'MIT_OUT="$(docker exec "$NAME_MIT" true)"\n'
+            + "echo \"$MIT_OUT\" | grep -F 'value=1'\n"
+        )
+        ev = croot / "logs"
+        ev.mkdir()
+        stamp = "head_sha=0\ntree_sha=0\n"
+        (ev / "x-unit-red.log").write_text(stamp + "dirty=yes\nvalue=1\n")
+        head = "## Settled live (every bullet names the asserting cell on both legs)\n\n"
+        bullet = (
+            "- **Text excuse only:** `value=1` at `scripts/fx-gate.sh:9` / `:15`; "
+            "Red at parent `x-unit-red.log`.\n"
+        )
+        rows = camod.audit_text(head + bullet, croot, ev)
+        if not any(r[1] != "ok" for r in rows):
+            _die("claim-audit must not take a parent-red text excuse without red-at-parent=")
+        (ev / "x-unit-red.log").write_text(
+            stamp + "dirty=yes\nred-at-parent=1\nvalue=1\n"
+        )
+        rows = camod.audit_text(head + bullet, croot, ev)
+        if any(r[1] != "ok" for r in rows):
+            _die(f"claim-audit refused a dirty unit-red with red-at-parent=: {rows}")
+    finally:
+        subprocess.run(["rm", "-rf", str(croot)], check=False)
+
 
 # W1-K M2b: after the differential oracle's whitelist mechanism is deleted, no
 # case may be excused by name. Ban the mechanism identifiers from the diffsend

@@ -4,7 +4,9 @@
 usage: kdc-padata-proxy.py <listen-port> <kdc-host> <kdc-port> [out-file]
 
 Each request line is `req#<n> msg_type=<10|12> padata=[<type>, ...]` in wire
-order (an absent padata field prints `padata=[]`).
+order (an absent padata field prints `padata=[]`). A KRB-ERROR reply is
+`rep#<n> error_code=… e_data_encoding=… e_data_types=…`; any other reply is
+`rep#<n> tag=0x.. len=…`; a 5 s KDC timeout is `rep#<n> timeout`.
 """
 from __future__ import annotations
 
@@ -157,15 +159,24 @@ def main() -> int:
         try:
             reply, _ = fwd.recvfrom(65535)
         except socket.timeout:
-            continue
-        if reply[:1] == b"\x7e":
-            code, enc, etypes = parse_error_edata(reply)
-            rline = f"rep#{n} error_code={code} e_data_encoding={enc} e_data_types={etypes}\n"
+            rline = f"rep#{n} timeout\n"
             sys.stdout.write(rline)
             sys.stdout.flush()
             if out_path:
                 with open(out_path, "a", encoding="ascii") as f:
                     f.write(rline)
+            continue
+        if reply[:1] == b"\x7e":
+            code, enc, etypes = parse_error_edata(reply)
+            rline = f"rep#{n} error_code={code} e_data_encoding={enc} e_data_types={etypes}\n"
+        else:
+            tag = reply[0] if reply else 0
+            rline = f"rep#{n} tag=0x{tag:02x} len={len(reply)}\n"
+        sys.stdout.write(rline)
+        sys.stdout.flush()
+        if out_path:
+            with open(out_path, "a", encoding="ascii") as f:
+                f.write(rline)
         srv.sendto(reply, addr)
 
 
