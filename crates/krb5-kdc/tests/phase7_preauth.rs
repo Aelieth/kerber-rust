@@ -2696,6 +2696,14 @@ fn handle_request_spake_91_e_text_is_preauth_failed() {
         .and_then(|t| std::str::from_utf8(t.as_bytes()).ok());
     assert_eq!(text, Some("PREAUTH_FAILED"));
     assert_ne!(text, Some("SPAKE challenge"));
+    let method: MethodData = decode(e.e_data.as_ref().expect("e_data").as_ref()).expect("METHOD");
+    let types: Vec<i32> = method.iter().map(|p| p.padata_type).collect();
+    assert!(
+        types.contains(&pa::SPAKE)
+            && types.contains(&pa::FX_COOKIE)
+            && types.contains(&pa::ETYPE_INFO2),
+        "91 without cookie: SPAKE+COOKIE+ETYPE-INFO2, got {types:?}"
+    );
 }
 
 #[test]

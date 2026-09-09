@@ -402,10 +402,30 @@ fn issue_as_body(
         }
         Some(PreauthAction::Challenge(e_data)) => {
             // do_as_req.c:439-442,809: status PREAUTH_FAILED even for 91.
+            // kdc_preauth.c:1141-1170 maybe_add_etype_info2: add PA-ETYPE-INFO2
+            // on a multi-round 91 unless the client already saw a cookie.
+            let mut method = decode_edata_padata(&e_data);
+            if find_pa(work_padata.as_deref(), pa::FX_COOKIE).is_none()
+                && !method.iter().any(|p| p.padata_type == pa::ETYPE_INFO2)
+            {
+                let salt =
+                    KerberosString::try_from(String::from_utf8_lossy(&client.salt).as_ref()).ok();
+                let info2: EtypeInfo2 = vec![EtypeInfo2Entry {
+                    etype: ckey.etype.to_iana(),
+                    salt,
+                    s2kparams: None,
+                }];
+                if let Ok(der) = encode(&info2) {
+                    method.push(PaData {
+                        padata_type: pa::ETYPE_INFO2,
+                        padata_value: der.into(),
+                    });
+                }
+            }
             return Err(Error::Protocol {
                 code: err::MORE_PREAUTH_DATA_REQUIRED,
                 text: Some(status::PREAUTH_FAILED.to_owned()),
-                e_data: Some(e_data),
+                e_data: Some(encode(&method).unwrap_or(e_data)),
                 detail: None,
             });
         }

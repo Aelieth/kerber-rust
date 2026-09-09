@@ -173,6 +173,32 @@ echo "$MM_NEW"
 echo "$MM_NEW" | grep -q '"code":35,"e_text":"FIND_FAST"'
 echo "$MM_NEW" | grep -q '"detail":"FAST armor TGT"'
 
+echo "==== Rust KDC: FAST-error outer e_data shape via kdc-padata-proxy ===="
+docker cp "$ROOT/scripts/lib/kdc-padata-proxy.py" "$NAME":/tmp/kdc-padata-proxy.py
+docker exec "$NAME" rm -f /tmp/fast-err-rust.txt
+docker exec -d "$NAME" python3 /tmp/kdc-padata-proxy.py 1891 127.0.0.1 88 /tmp/fast-err-rust.txt
+sleep 0.4
+docker exec "$NAME" sh -c "cat > /tmp/krb5-fast-proxy.conf <<EOF
+[libdefaults]
+    default_realm = KERBER.TEST
+    dns_lookup_kdc = false
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1:1891
+    }
+EOF"
+set +e
+docker exec -e KRB5_CONFIG=/tmp/krb5-fast-proxy.conf "$NAME" \
+    sh -c 'printf "userpassword\n" | kinit -T /tmp/krb5cc_armor_forged -c /tmp/krb5cc_forged2 user@KERBER.TEST' >/dev/null 2>&1
+set -e
+RUST_FAST_ERR="$(docker exec "$NAME" cat /tmp/fast-err-rust.txt 2>/dev/null || true)"
+echo "$RUST_FAST_ERR"
+echo "$RUST_FAST_ERR" | grep -E 'rep#[0-9]+ error_code=35 e_data_encoding=method e_data_types=\[' || {
+    echo "rust FAST-error proxy line missing: $RUST_FAST_ERR" >&2
+    exit 1
+}
+RUST_SHAPE="$(echo "$RUST_FAST_ERR" | grep -E 'rep#[0-9]+ error_code=' | head -1 | sed -E 's/^rep#[0-9]+ //')"
+
 echo "==== MIT KDC: forged-realm FAST armor is NOT_US ===="
 MITNAME="${NAME}-mit"
 docker rm -f "$MITNAME" >/dev/null 2>&1 || true
@@ -260,6 +286,38 @@ echo "$MITF" | grep -q "The ticket isn't for us"
 MITASLOG="$(docker exec "$MITNAME" sh -c "tail -n +$((n + 1)) /tmp/mit-kdc.log")"
 echo "$MITASLOG"
 echo "$MITASLOG" | grep -qE 'FIND_FAST: .*while handling ap-request armor'
+
+echo "==== MIT KDC: FAST-error outer e_data shape via kdc-padata-proxy ===="
+docker cp "$ROOT/scripts/lib/kdc-padata-proxy.py" "$MITNAME":/tmp/kdc-padata-proxy.py
+docker exec "$MITNAME" rm -f /tmp/fast-err-mit.txt
+docker exec -d "$MITNAME" python3 /tmp/kdc-padata-proxy.py 1891 127.0.0.1 88 /tmp/fast-err-mit.txt
+sleep 0.4
+docker exec "$MITNAME" sh -c "cat > /tmp/krb5-fast-proxy.conf <<EOF
+[libdefaults]
+    default_realm = KERBER.TEST
+    dns_lookup_kdc = false
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1:1891
+    }
+EOF"
+set +e
+docker exec -e KRB5_CONFIG=/tmp/krb5-fast-proxy.conf "$MITNAME" \
+    sh -c 'printf "userpassword\n" | kinit -T /tmp/krb5cc_armor_forged -c /tmp/krb5cc_forged2 user@KERBER.TEST' >/dev/null 2>&1
+set -e
+MIT_FAST_ERR="$(docker exec "$MITNAME" cat /tmp/fast-err-mit.txt 2>/dev/null || true)"
+echo "$MIT_FAST_ERR"
+echo "$MIT_FAST_ERR" | grep -E 'rep#[0-9]+ error_code=35 e_data_encoding=method e_data_types=\[' || {
+    echo "MIT FAST-error proxy line missing: $MIT_FAST_ERR" >&2
+    exit 1
+}
+MIT_SHAPE="$(echo "$MIT_FAST_ERR" | grep -E 'rep#[0-9]+ error_code=' | head -1 | sed -E 's/^rep#[0-9]+ //')"
+echo "rust_fast_err_shape=$RUST_SHAPE"
+echo "mit_fast_err_shape=$MIT_SHAPE"
+if [ "$RUST_SHAPE" != "$MIT_SHAPE" ]; then
+    echo "FAST-error outer e_data shape differs rust vs MIT" >&2
+    exit 1
+fi
 
 log "fast.kdc.gate" "ok" ',"principal":"user@KERBER.TEST","mode":"mit-kinit-T"'
 exit 0

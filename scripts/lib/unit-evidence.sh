@@ -105,6 +105,7 @@ unit_red_at() {
     if [ "$mode" = all ] || [ -z "$filter" ]; then
         # cargo test treats FILTER as a single substring — do not join with `|`.
         # Run every inject integration binary (tests/<stem>.rs → --test <stem>).
+        # Non-.rs injects (Cargo.toml, lib sources) are overlay-only.
         filter=""
     fi
     echo "==== unit_red_at parent=$parent name=$name filter=${filter:---test stems} inject=$* ===="
@@ -116,10 +117,22 @@ unit_red_at() {
     else
         local f stem
         for f in "$@"; do
+            case "$f" in
+                *.rs) ;;
+                *) continue ;;
+            esac
+            case "$f" in
+                */tests/*|tests/*) ;;
+                *) continue ;;
+            esac
             stem=$(basename -- "$f")
             stem=${stem%.rs}
             cargo_args+=(--test "$stem")
         done
+        if [ "${#cargo_args[@]}" -eq 3 ]; then
+            echo "unit_red_at: --all needs at least one tests/*.rs inject" >&2
+            return 2
+        fi
     fi
     local out rc
     set +e

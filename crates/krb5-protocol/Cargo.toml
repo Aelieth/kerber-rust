@@ -10,6 +10,7 @@ publish.workspace = true
 autotests = false
 
 [features]
+default = ["diff"]
 diff = []
 
 [[example]]
@@ -39,6 +40,11 @@ path = "tests/l3b_fast_avail.rs"
 [[test]]
 name = "r0a_spake_padata"
 path = "tests/r0a_spake_padata.rs"
+
+[[test]]
+name = "r10_edata_oracle"
+path = "tests/r10_edata_oracle.rs"
+required-features = ["diff"]
 
 [dependencies]
 chrono.workspace = true

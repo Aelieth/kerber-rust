@@ -1,11 +1,11 @@
 //! Fail-red fixture for the shipped differential compare path.
 
 use crate::diff::{compare_krb_error, compare_preauth_e_data, compare_stable_rep};
-use krb5_asn1::encode;
+use krb5_asn1::{decode, encode};
 use krb5_types::{
     EncKdcRepPart, EncTicketPart, EncryptedData, EncryptionKey, EtypeInfo2, EtypeInfo2Entry,
     KdcRep, KerberosTime, KrbError, MethodData, Microseconds, PaData, PrincipalName, Ticket,
-    TicketFlags, TransitedEncoding, err, flag_bit, pa,
+    TicketFlags, TransitedEncoding, TypedData, TypedDataList, err, flag_bit, pa,
 };
 
 fn sample_error(code: i32, stime_off: i64, text: &str) -> KrbError {
@@ -225,7 +225,7 @@ fn etype_info2_requires_exact_etype_set() {
     let rust_super = method_edata(&[17, 18, 19, 20]);
     let mit_one = method_edata(&[18]);
     let err = compare_preauth_e_data(Some(&rust_super), Some(&mit_one))
-        .expect_err("a Rust superset must now fail");
+        .expect_err("a Rust etype superset must now fail");
     assert!(
         err.0.contains("ETYPE-INFO2"),
         "shipped compare must name the etype mismatch: {}",
@@ -252,8 +252,74 @@ fn preauth_edata_requires_fx_cookie_and_fx_fast() {
     let err = compare_preauth_e_data(Some(&with), Some(&no_cookie))
         .expect_err("as-hw-preauth without 133 must fail");
     assert!(
-        err.0.contains("133") || err.0.contains(&pa::FX_COOKIE.to_string()),
+        err.0.contains("133")
+            || err.0.contains(&pa::FX_COOKIE.to_string())
+            || err.0.contains("multiset"),
         "compare must name the missing cookie: {}",
+        err.0
+    );
+}
+
+#[test]
+fn preauth_edata_type_multiset_rejects_extra_spake() {
+    let base = method_edata(&[18]);
+    let mut with_spake: MethodData = decode(&base).expect("METHOD-DATA");
+    with_spake.push(PaData {
+        padata_type: pa::SPAKE,
+        padata_value: vec![].into(),
+    });
+    let with = encode(&with_spake).expect("METHOD-DATA");
+    let err = compare_preauth_e_data(Some(&with), Some(&base))
+        .expect_err("SPAKE on only one leg must fail the multiset");
+    assert!(
+        err.0.contains("multiset"),
+        "compare must name the type multiset: {}",
+        err.0
+    );
+    compare_preauth_e_data(Some(&with), Some(&with)).expect("identical multisets pass");
+}
+
+#[test]
+fn preauth_edata_order_is_not_compared() {
+    let a = method_edata(&[18]);
+    let mut mb: MethodData = decode(&a).expect("METHOD-DATA");
+    mb.reverse();
+    let b = encode(&mb).expect("METHOD-DATA");
+    compare_preauth_e_data(Some(&a), Some(&b)).expect("order is item 15, multiset matches");
+}
+
+#[test]
+fn typed_edata_types_must_match() {
+    let td_a: TypedDataList = vec![
+        TypedData {
+            data_type: pa::TD_DH_PARAMETERS,
+            data_value: vec![1, 2, 3].into(),
+        },
+        TypedData {
+            data_type: pa::FX_COOKIE,
+            data_value: b"MIT".to_vec().into(),
+        },
+    ];
+    let td_b = td_a.clone();
+    let a = encode(&td_a).expect("TYPED-DATA");
+    let b = encode(&td_b).expect("TYPED-DATA");
+    compare_preauth_e_data(Some(&a), Some(&b)).expect("typed [109, 133] both legs");
+    let mut td_miss = td_a;
+    td_miss.pop();
+    let miss = encode(&td_miss).expect("TYPED-DATA");
+    compare_preauth_e_data(Some(&a), Some(&miss)).expect_err("typed multiset must match");
+}
+
+#[test]
+fn krb_error_crealm_cname_presence_is_compared() {
+    let mut rust = sample_error(err::GENERIC, 0, "UNKNOWN_REASON");
+    let mit = sample_error(err::GENERIC, 7, "UNKNOWN_REASON");
+    compare_krb_error(&rust, &mit).expect("both omit client");
+    rust.crealm = Some(krb5_types::try_ascii("KERBER.TEST").unwrap());
+    let err = compare_krb_error(&rust, &mit).expect_err("crealm presence must fail");
+    assert!(
+        err.0.contains("stable mismatch"),
+        "stable_krb_error must carry has_crealm: {}",
         err.0
     );
 }

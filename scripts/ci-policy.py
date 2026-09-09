@@ -55,6 +55,7 @@ DIFFSEND_CASES = frozenset(
         "tgs-ap-options",
         "tgs-header-kvno-zero",
         "as-hw-preauth",
+        "as-spake-round1",
         "as-needchange",
         "as-invalid-opts",
         "as-validate-before-preauth",
@@ -918,7 +919,7 @@ def check_ledger_proof_column(text: str | None = None) -> None:
 
 
 _LEDGER_CASES_HDR = re.compile(
-    r"The twenty-nine live `diffsend` cases are ((?:`[^`]+`(?:,\s*)?)+)",
+    r"The thirty live `diffsend` cases are ((?:`[^`]+`(?:,\s*)?)+)",
     re.S,
 )
 
@@ -936,7 +937,7 @@ def check_diffsend_cases(ledger: str | None = None, gate: str | None = None) -> 
         gate = gate_path.read_text()
     hdr = _LEDGER_CASES_HDR.search(ledger)
     if not hdr:
-        _die("docs/mit-parity-ledger.md missing twenty-nine live diffsend cases list")
+        _die("docs/mit-parity-ledger.md missing thirty live diffsend cases list")
     names = set(re.findall(r"`([^`]+)`", hdr.group(1)))
     if names != set(DIFFSEND_CASES):
         missing = sorted(DIFFSEND_CASES - names)
@@ -944,8 +945,8 @@ def check_diffsend_cases(ledger: str | None = None, gate: str | None = None) -> 
         _die(
             f"DIFFSEND_CASES vs ledger header: missing {missing} extra {extra}"
         )
-    if len(DIFFSEND_CASES) != 29:
-        _die(f"DIFFSEND_CASES has {len(DIFFSEND_CASES)} names, want 29")
+    if len(DIFFSEND_CASES) != 30:
+        _die(f"DIFFSEND_CASES has {len(DIFFSEND_CASES)} names, want 30")
     lines = gate.splitlines()
     if len(lines) < 155:
         _die("scripts/differential-gate.sh shorter than 155 lines")
@@ -2200,13 +2201,13 @@ jobs:
     )
     _must_die(check_ledger_proof_column, ledger_proposed_sibling)
     cases_hdr = (
-        "The twenty-nine live `diffsend` cases are "
+        "The thirty live `diffsend` cases are "
         + ", ".join(f"`{c}`" for c in sorted(DIFFSEND_CASES))
         + ".\n"
     )
-    gate_29 = "\n" * 154 + 'echo "$DIFF" | grep -q \'"outcome":"ok","cases":29\' || die "x"\n'
-    check_diffsend_cases(cases_hdr, gate_29)
-    _must_die(check_diffsend_cases, "no header here", gate_29)
+    gate_30 = "\n" * 154 + 'echo "$DIFF" | grep -q \'"outcome":"ok","cases":30\' || die "x"\n'
+    check_diffsend_cases(cases_hdr, gate_30)
+    _must_die(check_diffsend_cases, "no header here", gate_30)
 
     def _princ_line(name: str, keyhex: str) -> str:
         namelen = str(len(name))

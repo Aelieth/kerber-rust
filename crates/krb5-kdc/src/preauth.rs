@@ -767,7 +767,7 @@ pub(crate) fn encode_typed(method: &MethodData) -> Vec<u8> {
         .iter()
         .map(|p| TypedData {
             data_type: p.padata_type,
-            data_value: Some(p.padata_value.clone()),
+            data_value: p.padata_value.clone(),
         })
         .collect();
     encode(&td).unwrap_or_default()
@@ -784,7 +784,7 @@ pub(crate) fn decode_edata_padata(ed: &[u8]) -> MethodData {
         .into_iter()
         .map(|t| PaData {
             padata_type: t.data_type,
-            padata_value: t.data_value.unwrap_or_else(|| Vec::<u8>::new().into()),
+            padata_value: t.data_value,
         })
         .collect()
 }
@@ -832,7 +832,7 @@ pub(crate) fn prepare_as_edata(
             .into_iter()
             .map(|e| PaData {
                 padata_type: e.data_type,
-                padata_value: e.data_value.unwrap_or_else(|| Vec::<u8>::new().into()),
+                padata_value: e.data_value,
             })
             .collect();
         let n = method.len();

@@ -18,7 +18,7 @@ use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, strin
 use krb5_protocol::{
     KdcAddr, Keytab, armor_key, as_req, as_req_sname, attach_fast, build_fast_armor,
     compare_krb_error, compare_stable_rep, decode_enc_kdc_rep, exchange_on_tcp, pa_enc_timestamp,
-    pa_enc_timestamp_at, tgs_req,
+    pa_enc_timestamp_at, pa_spake_support, tgs_req,
 };
 use krb5_types::{
     ApOptions, ApReq, AsRep, AuthorizationDataValue, EncTicketPart, EncryptedData, EncryptionKey,
@@ -139,10 +139,42 @@ fn expect_error_client(
             ));
         }
     }
-    println!(
-        r#"{{"event":"diffsend","case":"{case}","outcome":"ok","error_code":{},"e_text":"{rust_text}","rust_tag":"0x7e","mit_tag":"0x7e"}}"#,
-        re.error_code
-    );
+    let edata_types = |e: &KrbError| -> String {
+        let Some(ed) = e.e_data.as_ref() else {
+            return String::new();
+        };
+        let mut types: Vec<i32> = if let Ok(m) = decode::<krb5_types::MethodData>(ed.as_ref())
+            && !m.is_empty()
+        {
+            m.iter().map(|p| p.padata_type).collect()
+        } else if let Ok(td) = decode::<krb5_types::TypedDataList>(ed.as_ref()) {
+            td.iter().map(|t| t.data_type).collect()
+        } else {
+            Vec::new()
+        };
+        types.sort_unstable();
+        let mut s = String::from("[");
+        for (i, t) in types.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            let _ = write!(s, "{t}");
+        }
+        s.push(']');
+        s
+    };
+    let types = edata_types(&re);
+    if types.is_empty() {
+        println!(
+            r#"{{"event":"diffsend","case":"{case}","outcome":"ok","error_code":{},"e_text":"{rust_text}","rust_tag":"0x7e","mit_tag":"0x7e"}}"#,
+            re.error_code
+        );
+    } else {
+        println!(
+            r#"{{"event":"diffsend","case":"{case}","outcome":"ok","error_code":{},"e_text":"{rust_text}","e_data_types":{types},"rust_tag":"0x7e","mit_tag":"0x7e"}}"#,
+            re.error_code
+        );
+    }
     Ok(())
 }
 
@@ -1112,7 +1144,24 @@ fn run() -> Result<(), String> {
         err::PREAUTH_REQUIRED,
     )?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":29}}"#);
+    // kdc_preauth.c:1141-1170: SPAKE support → 91 + ETYPE-INFO2 (no cookie yet).
+    expect_error(
+        &cfg,
+        "as-spake-round1",
+        &encode(
+            &as_req(
+                user.clone(),
+                realm,
+                0x1000_002a,
+                Some(vec![pa_spake_support()]),
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::MORE_PREAUTH_DATA_REQUIRED,
+    )?;
+
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":30}}"#);
     Ok(())
 }
 

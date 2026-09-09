@@ -330,12 +330,15 @@ pub struct PaData {
 }
 
 /// One TYPED-DATA element (`asn1_k_encode.c:1547-1556`).
+///
+/// MIT `DEFCNFIELD` always encodes `data-value` (possibly empty); it is not
+/// optional on the wire.
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct TypedData {
     #[rasn(tag(explicit(0)))]
     pub data_type: i32,
     #[rasn(tag(explicit(1)))]
-    pub data_value: Option<OctetString>,
+    pub data_value: OctetString,
 }
 
 /// Encrypted blob: etype, optional kvno, ciphertext.
@@ -2063,7 +2066,7 @@ mod tests {
         // MIT encode_krb5_typed_data (asn1_k_encode.c:1547-1556): [0] Int32, [1] OCTET STRING.
         let td: crate::TypedDataList = vec![crate::TypedData {
             data_type: 13,
-            data_value: Some(b"pa-data".to_vec().into()),
+            data_value: b"pa-data".to_vec().into(),
         }];
         let der = rasn::der::encode(&td).expect("TYPED-DATA");
         assert_eq!(der[0], 0x30);
@@ -2086,11 +2089,22 @@ mod tests {
         assert_eq!(pa_ctx, Some(0xa1), "PA-DATA type is [1]");
         let back = rasn::der::decode::<crate::TypedDataList>(&der).expect("round-trip");
         assert_eq!(back[0].data_type, 13);
-        assert_eq!(back[0].data_value.as_deref(), Some(&b"pa-data"[..]));
+        assert_eq!(back[0].data_value.as_ref(), &b"pa-data"[..]);
         let as_pa: crate::MethodData = rasn::der::decode(&der).unwrap_or_default();
         assert!(
             as_pa.is_empty(),
             "TYPED-DATA must not decode as PA-DATA entries: {as_pa:?}"
+        );
+        let empty: crate::TypedDataList = vec![crate::TypedData {
+            data_type: 109,
+            data_value: Vec::<u8>::new().into(),
+        }];
+        let empty_der = rasn::der::encode(&empty).expect("empty data-value");
+        assert!(
+            empty_der
+                .windows(2)
+                .any(|w| w == [0xa1, 0x02] || w[0] == 0xa1),
+            "DEFCNFIELD always encodes [1] data-value: {empty_der:02x?}"
         );
     }
 

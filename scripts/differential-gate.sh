@@ -152,7 +152,7 @@ echo "$DIFF" | grep -q '"case":"as-invalid-opts","outcome":"ok","error_code":13'
 echo "$DIFF" | grep -q '"case":"as-request-anonymous","outcome":"ok","error_code":13,"e_text":"VALIDATE_ANONYMOUS_PRINCIPAL"' || die "as-request-anonymous not code 13 e_text VALIDATE_ANONYMOUS_PRINCIPAL on both legs"
 echo "$DIFF" | grep -q '"case":"as-validate-before-preauth","outcome":"ok","error_code":23' || die "as-validate-before-preauth (preauth+needchange) not code 23 on both legs"
 echo "$DIFF" | grep -q '"case":"as-retransmit","outcome":"ok","rust_retransmit_identical":true,"mit_retransmit_identical":true' || die "as-retransmit reply not identical from the lookaside on both legs"
-echo "$DIFF" | grep -q '"outcome":"ok","cases":29' || die "diffsend did not finish 29 cases"
+echo "$DIFF" | grep -q '"outcome":"ok","cases":30' || die "diffsend did not finish 30 cases"
 echo "$DIFF" | grep -q '"case":"fast-armor-no-subkey","outcome":"ok","error_code":12,"e_text":"FIND_FAST"' || die "fast-armor-no-subkey not code 12 e_text FIND_FAST on both legs"
 echo "$DIFF" | grep -q '"case":"armor-ap-req-as-pa-tgs-req","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS"' || die "armor-ap-req-as-pa-tgs-req not code 12 e_text PROCESS_TGS on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-ad-fx-armor-authenticator","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS"' || die "tgs-ad-fx-armor-authenticator not code 12 e_text PROCESS_TGS on both legs"
@@ -162,7 +162,9 @@ echo "$DIFF" | grep -q '"case":"tgs-bad-msg-type","outcome":"ok","error_code":60
 echo "$DIFF" | grep -q '"case":"as-service-not-allowed","outcome":"ok","error_code":27,"e_text":"SERVICE NOT ALLOWED"' || die "as-service-not-allowed not code 27 e_text SERVICE NOT ALLOWED on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-ap-options","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS"' || die "tgs-ap-options not code 12 e_text PROCESS_TGS on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-header-kvno-zero","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"' || die "tgs-header-kvno-zero not TGS-REP on both legs"
-echo "$DIFF" | grep -q '"case":"as-hw-preauth","outcome":"ok","error_code":25,"e_text":"NEEDED_HW_PREAUTH"' || die "as-hw-preauth not code 25 e_text NEEDED_HW_PREAUTH on both legs"
+echo "$DIFF" | grep -q '"case":"as-hw-preauth","outcome":"ok","error_code":25,"e_text":"NEEDED_HW_PREAUTH","e_data_types":\[19,133,136\]' || die "as-hw-preauth not code 25 with e_data_types [19,133,136] on both legs"
+echo "$DIFF" | grep -q '"case":"as-spake-round1","outcome":"ok","error_code":91,"e_text":"PREAUTH_FAILED"' || die "as-spake-round1 not code 91 e_text PREAUTH_FAILED on both legs"
+echo "$DIFF" | grep -E '"case":"as-spake-round1".*"e_data_types":\[.*19.*133.*151.*\]' || die "as-spake-round1 e_data_types missing 19/133/151"
 # W1-K M2b: the differential oracle has no case-name whitelist; no diffsend line
 # may carry a "whitelist" key.
 if echo "$DIFF" | grep -q '"whitelist"'; then

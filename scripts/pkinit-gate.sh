@@ -122,7 +122,7 @@ if [ "$rc" -eq 0 ]; then
     fi
     echo "$KDCLOG" | grep 'pkinit client san'
 
-    echo "==== rust_kdc MIT kinit pkinit_dh_min_bits=P-384 TYPED-DATA + cookie ===="
+    echo "==== rust_kdc unsupported group P-384 → 65 TYPED-DATA shape (MIT accepts P-384 — item 17) ===="
     rust_kdc_pkinit_dh1024() {
         local proxy=1888
         docker cp "$ROOT/scripts/lib/kdc-error-proxy.py" "$NAME":/tmp/kdc-error-proxy.py

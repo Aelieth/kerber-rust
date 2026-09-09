@@ -1,15 +1,16 @@
 //! Compare MIT vs Rust KDC replies after masking volatiles.
 //!
 //! KRB-ERROR mask: `stime`/`susec`/`ctime`/`cusec`. `e_text` is compared.
-//! PREAUTH_REQUIRED
-//! `e_data` is structural (FX-FAST + FX-COOKIE required, ETYPE-INFO2 etypes;
-//! ENC_TIMESTAMP presence agrees; extra mechanism ads and 2-vs-19 order may
-//! differ). Success nulls session key, times, `last_req`, both
-//! `enc_part.cipher`s, and PAC auth-data. Any other field difference is
-//! fail-red.
+//! PREAUTH / MORE_PREAUTH / TYPED-DATA `e_data` is structural (type
+//! **multiset**; order stays item 15). Success nulls session key, times,
+//! `last_req`, both `enc_part.cipher`s, and PAC auth-data. Any other field
+//! difference is fail-red.
 
 use krb5_asn1::decode;
-use krb5_types::{EncKdcRepPart, EncTicketPart, EtypeInfo2, KdcRep, KrbError, MethodData, err, pa};
+use krb5_types::{
+    EncKdcRepPart, EncTicketPart, EtypeInfo2, KdcRep, KrbError, MethodData, PaData, TypedDataList,
+    err, pa,
+};
 
 /// Stable-field mismatch (or decode failure).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,6 +39,10 @@ pub struct StableKrbError {
     pub sname: String,
     /// MIT status word (`e_text`).
     pub e_text: String,
+    /// Whether `crealm` is present (R4: omit with a missing client).
+    pub has_crealm: bool,
+    /// Whether `cname` is present.
+    pub has_cname: bool,
 }
 
 /// Stable AS/TGS fields after volatile-null.
@@ -81,7 +86,7 @@ fn ks(r: &krb5_types::KerberosString) -> String {
     String::from_utf8_lossy(r.as_bytes()).into_owned()
 }
 
-/// Mask times; keep `error_code`, `realm`, `sname`, and `e_text`.
+/// Mask times; keep `error_code`, `realm`, `sname`, `e_text`, and client presence.
 #[must_use]
 pub fn stable_krb_error(e: &KrbError) -> StableKrbError {
     StableKrbError {
@@ -91,14 +96,16 @@ pub fn stable_krb_error(e: &KrbError) -> StableKrbError {
         realm: ks(&e.realm),
         sname: e.sname.components_joined(),
         e_text: e.e_text.as_ref().map(ks).unwrap_or_default(),
+        has_crealm: e.crealm.is_some(),
+        has_cname: e.cname.is_some(),
     }
 }
 
-/// Compare two KRB-ERRORs. PREAUTH_REQUIRED `e_data` is structural.
+/// Compare two KRB-ERRORs. PREAUTH / MORE_PREAUTH / TYPED e_data is structural.
 ///
 /// # Errors
 ///
-/// Stable fields differ, or PREAUTH `e_data` is not structurally equal.
+/// Stable fields differ, or e_data is not structurally equal.
 pub fn compare_krb_error(rust: &KrbError, mit: &KrbError) -> Result<(), DiffError> {
     let a = stable_krb_error(rust);
     let b = stable_krb_error(mit);
@@ -108,8 +115,15 @@ pub fn compare_krb_error(rust: &KrbError, mit: &KrbError) -> Result<(), DiffErro
         )));
     }
     // MIT finish_preauth (do_as_req.c:443-447) attaches the get_preauth_hint_list
-    // e_data to PREAUTH_FAILED (24) as well as PREAUTH_REQUIRED (25).
-    if a.error_code == err::PREAUTH_REQUIRED || a.error_code == err::PREAUTH_FAILED {
+    // e_data to PREAUTH_FAILED (24) as well as PREAUTH_REQUIRED (25). 91 carries
+    // module METHOD-DATA (+ maybe_add_etype_info2). 65 is TYPED-DATA.
+    if matches!(
+        a.error_code,
+        err::PREAUTH_REQUIRED
+            | err::PREAUTH_FAILED
+            | err::MORE_PREAUTH_DATA_REQUIRED
+            | err::DH_KEY_PARAMETERS_NOT_ACCEPTED
+    ) {
         compare_preauth_e_data(
             rust.e_data.as_ref().map(std::convert::AsRef::as_ref),
             mit.e_data.as_ref().map(std::convert::AsRef::as_ref),
@@ -118,71 +132,82 @@ pub fn compare_krb_error(rust: &KrbError, mit: &KrbError) -> Result<(), DiffErro
     Ok(())
 }
 
-/// Structural METHOD-DATA compare for PREAUTH 25/24 e_data.
+fn decode_edata(ed: &[u8]) -> Result<MethodData, DiffError> {
+    if let Ok(m) = decode::<MethodData>(ed)
+        && !m.is_empty()
+    {
+        return Ok(m);
+    }
+    let td: TypedDataList = decode(ed).map_err(|e| DiffError(format!("TYPED-DATA: {e}")))?;
+    if td.is_empty() {
+        return Err(DiffError("empty e_data METHOD/TYPED-DATA".into()));
+    }
+    Ok(td
+        .into_iter()
+        .map(|t| PaData {
+            padata_type: t.data_type,
+            padata_value: t.data_value,
+        })
+        .collect())
+}
+
+fn type_multiset(m: &MethodData) -> Vec<i32> {
+    let mut v: Vec<i32> = m.iter().map(|p| p.padata_type).collect();
+    v.sort_unstable();
+    v
+}
+
+/// Structural METHOD-DATA / TYPED-DATA compare for 25/24/91/65 e_data.
 ///
-/// Both legs must carry PA-FX-FAST (136) and PA-FX-COOKIE (133) in the
-/// hint list (`do_as_req.c:785-796`). ETYPE-INFO2 must be present with an
-/// equal etype set. ENC_TIMESTAMP presence must agree (`hw_only` omits it).
-/// Extra types (SPAKE 151) and the 2-vs-19 order are item 15, not this compare.
+/// Both legs' padata type **multisets** must match (order is item 15). When
+/// FX-FAST (136) is present (hint list), FX-COOKIE and ETYPE-INFO2 are
+/// required and the ETYPE-INFO2 etype sets must be equal. ENC_TIMESTAMP
+/// agreement is implied by the multiset.
 ///
 /// # Errors
 ///
-/// Missing `e_data`, decode failure, missing 133/136, or etype/ENC_TIMESTAMP mismatch.
+/// Missing `e_data`, decode failure, type-multiset mismatch, or etype mismatch.
 pub fn compare_preauth_e_data(a: Option<&[u8]>, b: Option<&[u8]>) -> Result<(), DiffError> {
-    let a = a.ok_or_else(|| DiffError("rust PREAUTH_REQUIRED missing e_data".into()))?;
-    let b = b.ok_or_else(|| DiffError("mit PREAUTH_REQUIRED missing e_data".into()))?;
-    let ma: MethodData = decode(a).map_err(|e| DiffError(format!("rust METHOD-DATA: {e}")))?;
-    let mb: MethodData = decode(b).map_err(|e| DiffError(format!("mit METHOD-DATA: {e}")))?;
-    let ta = pa_types(&ma);
-    let tb = pa_types(&mb);
-    if !ta.contains(&pa::FX_FAST) || !tb.contains(&pa::FX_FAST) {
+    let a = a.ok_or_else(|| DiffError("rust e_data missing".into()))?;
+    let b = b.ok_or_else(|| DiffError("mit e_data missing".into()))?;
+    let ma = decode_edata(a)?;
+    let mb = decode_edata(b)?;
+    let sa = type_multiset(&ma);
+    let sb = type_multiset(&mb);
+    if sa != sb {
         return Err(DiffError(format!(
-            "PREAUTH METHOD-DATA missing {} rust={ta:?} mit={tb:?}",
-            pa::FX_FAST
+            "PREAUTH e_data type multiset rust={sa:?} mit={sb:?}"
         )));
     }
-    if !ta.contains(&pa::FX_COOKIE) || !tb.contains(&pa::FX_COOKIE) {
-        return Err(DiffError(format!(
-            "PREAUTH METHOD-DATA missing {} rust={ta:?} mit={tb:?}",
-            pa::FX_COOKIE
-        )));
+    if sa.contains(&pa::FX_FAST) {
+        if !sa.contains(&pa::FX_COOKIE) {
+            return Err(DiffError(format!(
+                "PREAUTH METHOD-DATA missing {} rust={sa:?} mit={sb:?}",
+                pa::FX_COOKIE
+            )));
+        }
+        if !sa.contains(&pa::ETYPE_INFO2) {
+            return Err(DiffError(format!(
+                "PREAUTH METHOD-DATA missing {} rust={sa:?} mit={sb:?}",
+                pa::ETYPE_INFO2
+            )));
+        }
     }
-    // ETYPE-INFO2 is always in get_preauth_hint_list. ENC_TIMESTAMP is a
-    // module hint skipped under hw_only (`kdc_preauth.c:956-957`); both
-    // sides must agree on whether it is present.
-    if !ta.contains(&pa::ETYPE_INFO2) || !tb.contains(&pa::ETYPE_INFO2) {
-        return Err(DiffError(format!(
-            "PREAUTH METHOD-DATA missing {} rust={ta:?} mit={tb:?}",
-            pa::ETYPE_INFO2
-        )));
-    }
-    let a2 = ta.contains(&pa::ENC_TIMESTAMP);
-    let b2 = tb.contains(&pa::ENC_TIMESTAMP);
-    if a2 != b2 {
-        return Err(DiffError(format!(
-            "PREAUTH METHOD-DATA ENC_TIMESTAMP rust={ta:?} mit={tb:?}"
-        )));
-    }
-    let ea = etype_info2_etypes(&ma)?;
-    let eb = etype_info2_etypes(&mb)?;
-    if ea.is_empty() || eb.is_empty() {
-        return Err(DiffError(format!(
-            "ETYPE-INFO2 empty rust={ea:?} mit={eb:?}"
-        )));
-    }
-    // get_preauth_hint_list emits one ETYPE-INFO2 entry for the selected
-    // client key (add_etype_info → make_etype_info); Rust matches, so the
-    // etype sets are equal.
-    if ea != eb {
-        return Err(DiffError(format!(
-            "ETYPE-INFO2 etype set rust={ea:?} mit={eb:?}"
-        )));
+    if sa.contains(&pa::ETYPE_INFO2) {
+        let ea = etype_info2_etypes(&ma)?;
+        let eb = etype_info2_etypes(&mb)?;
+        if ea.is_empty() || eb.is_empty() {
+            return Err(DiffError(format!(
+                "ETYPE-INFO2 empty rust={ea:?} mit={eb:?}"
+            )));
+        }
+        if ea != eb {
+            return Err(DiffError(format!(
+                "ETYPE-INFO2 etype set rust={ea:?} mit={eb:?}"
+            )));
+        }
     }
     Ok(())
-}
-
-fn pa_types(m: &MethodData) -> Vec<i32> {
-    m.iter().map(|p| p.padata_type).collect()
 }
 
 fn etype_info2_etypes(m: &MethodData) -> Result<Vec<i32>, DiffError> {

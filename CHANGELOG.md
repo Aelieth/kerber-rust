@@ -58,7 +58,7 @@ this project uses semantic versioning once a crate is published.
   diffsend `as-hw-preauth`, `tgs-bad-msg-type`, `tgs-ap-options`.
 - **docs/tooling.** Golden dump `nosvr`/`hwuser` rows are MIT
   `kadmin.local addprinc` captures with principal-derived keys.
-  `ci-policy.py DIFFSEND_CASES` lists all 29 live diffsend names.
+  `ci-policy.py DIFFSEND_CASES` lists all 30 live diffsend names.
 - **test/ci (A′-1 Round 3 R8).** The evidence contract is mechanical:
   `unit_green` refuses a dirty tree unless `KERBER_UNIT_ALLOW_DIRTY=1`
   (stamps `override=`); `unit_red_at --all` derives every inject-file
@@ -81,6 +81,17 @@ this project uses semantic versioning once a crate is published.
   so a Cursor/sandbox target dir cannot ship a stale kadmind. Limitation:
   modify may still do more than one store write (documented deviation vs
   MIT's single `kdb_put_entry`).
+- **protocol/kdc (A′-1 Round 3 R10).** `compare_preauth_e_data` compares
+  type **multisets** for 25/24/91/65 (TYPED-DATA decoded); order stays
+  item 15. SPAKE 91 adds ETYPE-INFO2 unless a cookie was already seen
+  (`kdc_preauth.c:1141-1170`). `stable_krb_error` carries crealm/cname
+  presence. `TypedData.data_value` is mandatory on encode. diffsend
+  `as-spake-round1` (30 cases); `as-hw-preauth` asserts
+  `e_data_types:[19,133,136]`. Old-kvno cookie unit; pkinit P-384 cell
+  relabelled as shape-only (item 17); FAST-error outer e_data shape pinned
+  through `kdc-padata-proxy.py` on both legs of `mit-fast-kdc-gate.sh`.
+- **test (R10 tooling).** `unit_red_at --all` only passes `--test` for
+  `tests/*.rs` injects so `Cargo.toml` overlays are not mistaken for stems.
 
 ### Round-up R2 (re-audit fixes)
 
