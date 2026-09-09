@@ -170,7 +170,10 @@ fn create_fail_auth_count_mask_is_bad_mask() {
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     assert!(
-        g.get_name(&PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["r9create"]))
-            .is_none()
+        g.get_name(&PrincipalName::new(
+            PrincipalName::NT_PRINCIPAL,
+            ["r9create"]
+        ))
+        .is_none()
     );
 }
