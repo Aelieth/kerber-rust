@@ -103,14 +103,27 @@ unit_red_at() {
         [ -n "$t" ] && name_list+=("$t")
     done <<<"$names"
     if [ "$mode" = all ] || [ -z "$filter" ]; then
-        filter="$(IFS='|'; echo "${name_list[*]}")"
+        # cargo test treats FILTER as a single substring — do not join with `|`.
+        # Run every inject integration binary (tests/<stem>.rs → --test <stem>).
+        filter=""
     fi
-    echo "==== unit_red_at parent=$parent name=$name filter=$filter inject=$* ===="
+    echo "==== unit_red_at parent=$parent name=$name filter=${filter:---test stems} inject=$* ===="
     echo "red-at-parent=1"
     echo "expected_fail=${name_list[*]}"
+    local -a cargo_args=(cargo test --workspace)
+    if [ -n "$filter" ]; then
+        cargo_args+=("$filter")
+    else
+        local f stem
+        for f in "$@"; do
+            stem=$(basename -- "$f")
+            stem=${stem%.rs}
+            cargo_args+=(--test "$stem")
+        done
+    fi
     local out rc
     set +e
-    out="$(scripts/red-at-sha.sh --inject "$@" -- "$parent" cargo test --workspace "$filter" 2>&1)"
+    out="$(scripts/red-at-sha.sh --inject "$@" -- "$parent" "${cargo_args[@]}" 2>&1)"
     rc=$?
     set -e
     printf '%s\n' "$out"

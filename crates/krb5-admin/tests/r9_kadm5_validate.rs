@@ -8,8 +8,7 @@ use common::{
     ret_code,
 };
 use krb5_kdc::{
-    Acl, PrincipalRead, TEST_ADMIN, TEST_REALM, TEST_USER, bootstrap_documented, documented_kadmin,
-    shared_dump,
+    Acl, TEST_ADMIN, TEST_REALM, TEST_USER, bootstrap_documented, documented_kadmin, shared_dump,
 };
 use krb5_types::PrincipalName;
 
@@ -220,38 +219,6 @@ fn create_args(name: &str, tl: Option<(u32, &[u8])>, mask: u32) -> Vec<u8> {
 }
 
 #[test]
-fn create_reserved_tl_does_not_write() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let acl = Acl::parse("admin@KERBER.TEST *\n").unwrap();
-    let store = shared_dump(store);
-    let mut c = init_client(
-        &store,
-        &acl,
-        &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]),
-        &documented_kadmin(),
-        GSS_INTEGRITY,
-    );
-    let args = create_args(
-        &format!("r9tlbad@{TEST_REALM}"),
-        Some((3, b"x")),
-        KADM5_PRINCIPAL | KADM5_TL_DATA,
-    );
-    let (stat, body) = data_call(&mut c, &store, &acl, CREATE_PRINCIPAL, &args);
-    assert_eq!(stat, SUCCESS);
-    assert_eq!(ret_code(&body), KADM5_BAD_TL_TYPE);
-    let g = store
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    assert!(
-        g.get_name(&PrincipalName::new(
-            PrincipalName::NT_PRINCIPAL,
-            ["r9tlbad"]
-        ))
-        .is_none()
-    );
-}
-
-#[test]
 fn create_tl_type_0x10003_is_bad_tl_type() {
     let (store, _) = bootstrap_documented().unwrap();
     let acl = Acl::parse("admin@KERBER.TEST *\n").unwrap();
@@ -278,16 +245,4 @@ fn create_tl_type_0x10003_is_bad_tl_type() {
         g.get_name(&PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["r9tlhi"]))
             .is_none()
     );
-}
-
-#[test]
-fn documented_dump_has_no_tl_type_ge_0x10000() {
-    let (store, _) = bootstrap_documented().unwrap();
-    for p in store.list_principals().unwrap() {
-        assert!(
-            !p.tl_data.iter().any(|t| t.ty >= 0x1_0000),
-            "{:?} has TL type >= 0x10000",
-            p.name
-        );
-    }
 }

@@ -69,6 +69,9 @@ this project uses semantic versioning once a crate is published.
   `claim-audit.py` rejects dirty/override oracle artefacts unless the
   bullet is a parent red; `scripts/evidence-check.py` flags unstamped,
   wrong-SHA, and unlabeled-dirty artefacts.
+- **test/ci (A′-1 Round 3 R8 follow-up).** `unit_red_at --all` runs each
+  inject file as `cargo test --test <stem>` instead of joining names with
+  `|` (cargo treats that as one substring and skips every inject test).
 - **admin/kdc (A′-1 Round 3 R9).** `KADM5_BAD_MASK` on create/modify
   (`svr_principal.c:310-326,565-580`); `tl_data_type` decoded as int16
   before the `< 256` guard; create-path reserved TL / type 500 probe cells;

@@ -1476,6 +1476,12 @@ def check_unit_evidence_helper() -> None:
         _die("unit_red_at must stamp red-at-parent=1")
     if "_unit_test_names" not in text:
         _die("unit_red_at must derive #[test] names from inject files")
+    if '--test "$stem"' not in text and "--test \"$stem\"" not in text:
+        # Accept either quoting style from the shell helper.
+        if "--test" not in text or "stem=" not in text:
+            _die("unit_red_at --all must run cargo test --test <stem> per inject file")
+    if "IFS='|'" in text or 'IFS="|"' in text:
+        _die("unit_red_at must not join test names with | for cargo test")
     if "refusing dirty tree" not in text:
         _die("unit_green must refuse a dirty tree without KERBER_UNIT_ALLOW_DIRTY")
     env = os.environ.copy()

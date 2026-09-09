@@ -89,10 +89,12 @@ unless `KERBER_UNIT_ALLOW_DIRTY=1`, which prints `override=KERBER_UNIT_ALLOW_DIR
 and `unit_red_at <parent> <name> [--all|<filter>] <files…>` (`red-at-sha.sh
 --inject` copies those HEAD files into the parent worktree **before**
 `write-tree`; a call with no files is refused). With `--all` (the default)
-the filter is every `#[test]` fn in the inject files; the helper exits
-non-zero unless each of those names **FAILED** at the parent (a green or
-filtered-out unit is a vacuous red). It stamps `red-at-parent=1`. INDEX
-links only files those helpers or the gates produced.
+every `#[test]` fn in the inject files must **FAILED** at the parent; the
+helper runs `cargo test --test <stem>` for each inject `tests/<stem>.rs`
+(joining names with `|` is not a cargo OR and yields a vacuous red). An
+explicit filter still requires every inject-file test to appear as FAILED.
+It stamps `red-at-parent=1`. INDEX links only files those helpers or the
+gates produced.
 W1-J and W1-K units live under `crates/*/tests/` so `unit_red_at
 --inject` can fail them at the parent.
 Live settles use `scripts/lib/settle.sh <name> -- <command…>`
