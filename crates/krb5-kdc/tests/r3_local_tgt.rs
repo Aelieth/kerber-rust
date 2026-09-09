@@ -1,4 +1,4 @@
-//! Remaining `GET_LOCAL_TGT` sites (`ad.rs` S4U2Proxy PAC / U2U) wire 60,
+//! Remaining `GET_LOCAL_TGT` sites (`ad.rs` S4U2Proxy PAC) wire 60,
 //! and `kdc_rd_ap_req` kvno 0 decrypts the previous kvno (`kdc_util.c:325-346`).
 
 use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};

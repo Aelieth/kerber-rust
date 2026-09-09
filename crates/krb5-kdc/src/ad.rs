@@ -582,14 +582,17 @@ pub(crate) fn u2u_session(
     if server.attributes & (crate::KDB_DISALLOW_SVR | crate::KDB_DISALLOW_ALL_TIX) != 0 {
         return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::SECOND_TKT_SERVER));
     }
-    let tkt_etype = EncryptionType::from_iana(extra.enc_part.etype)
-        .or_else(|_| EncryptionType::known(extra.enc_part.etype))?;
+    let Ok(tkt_etype) = EncryptionType::from_iana(extra.enc_part.etype)
+        .or_else(|_| EncryptionType::known(extra.enc_part.etype))
+    else {
+        return Err(proto(err::GENERIC, status::SECOND_TKT_SERVER));
+    };
     let krbtgt = server
         .key_for(tkt_etype)
-        .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
+        .ok_or_else(|| proto(err::GENERIC, status::SECOND_TKT_SERVER))?;
     let usage = KeyUsage::new(ku::TICKET)?;
     let plain = decrypt(&krbtgt.key, usage, extra.enc_part.cipher.as_ref())
-        .map_err(|_| proto(err::MODIFIED, status::SECOND_TKT_DECRYPT))?;
+        .map_err(|_| proto(err::BAD_INTEGRITY, status::SECOND_TKT_DECRYPT))?;
     let part: EncTicketPart = decode(&plain)?;
     let etype = EncryptionType::from_iana(part.key.keytype)
         .or_else(|_| EncryptionType::known(part.key.keytype))?;

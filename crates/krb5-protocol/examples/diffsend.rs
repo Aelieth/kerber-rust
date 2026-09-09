@@ -18,12 +18,12 @@ use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, strin
 use krb5_protocol::{
     KdcAddr, Keytab, armor_key, as_req, as_req_sname, attach_fast, build_fast_armor,
     compare_krb_error, compare_stable_rep, decode_enc_kdc_rep, exchange_on_tcp, pa_enc_timestamp,
-    pa_enc_timestamp_at, pa_spake_support, tgs_req,
+    pa_enc_timestamp_at, pa_spake_support, tgs_req, tgs_req_ex,
 };
 use krb5_types::{
     ApOptions, ApReq, AsRep, AuthorizationDataValue, EncTicketPart, EncryptedData, EncryptionKey,
-    KerberosTime, KrbError, PaData, PrincipalName, TgsRep, Ticket, TicketFlags, TransitedEncoding,
-    err, ku, pa,
+    KdcOptions, KerberosTime, KrbError, PaData, PrincipalName, TgsRep, Ticket, TicketFlags,
+    TransitedEncoding, err, ku, pa,
 };
 use sha1::{Digest, Sha1};
 
@@ -1161,7 +1161,81 @@ fn run() -> Result<(), String> {
         err::MORE_PREAUTH_DATA_REQUIRED,
     )?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":30}}"#);
+    let second = mint_tgt(
+        tkt_key,
+        tkt_kvno,
+        &user,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        (
+            now.clone(),
+            now.add_hours(10).unwrap_or_else(|_| now.clone()),
+        ),
+        TicketFlags::initial_preauth(),
+    )?;
+    let u2u_tgs = |extra: Ticket, nonce: u32| -> Result<krb5_types::TgsReq, String> {
+        let opts = KdcOptions::forwardable().with_bit(krb5_types::flag_bit::ENC_TKT_IN_SKEY, true);
+        tgs_req_ex(
+            mint_tgt(
+                tkt_key,
+                tkt_kvno,
+                &user,
+                realm,
+                &krbtgt_sname,
+                &sess,
+                (
+                    now.clone(),
+                    now.add_hours(10).unwrap_or_else(|_| now.clone()),
+                ),
+                TicketFlags::initial_preauth(),
+            )?,
+            &sess,
+            realm,
+            &user,
+            user.clone(),
+            realm,
+            nonce,
+            opts,
+            Some(vec![extra]),
+            Vec::new(),
+            etypes.clone(),
+        )
+        .map_err(|e| e.to_string())
+    };
+
+    let mut unk = second.clone();
+    unk.sname = PrincipalName::new(PrincipalName::NT_SRV_INST, ["nosuch", "x"]);
+    expect_error(
+        &cfg,
+        "u2u-2nd-ticket-unknown-server",
+        &encode(&u2u_tgs(unk, 0x1000_002b)?).map_err(|e| e.to_string())?,
+        err::S_PRINCIPAL_UNKNOWN,
+    )?;
+
+    let mut bad_et = second.clone();
+    bad_et.enc_part.etype = 99;
+    expect_error(
+        &cfg,
+        "u2u-2nd-ticket-bad-etype",
+        &encode(&u2u_tgs(bad_et, 0x1000_002c)?).map_err(|e| e.to_string())?,
+        err::GENERIC,
+    )?;
+
+    let mut cor = second;
+    let mut cipher = cor.enc_part.cipher.as_ref().to_vec();
+    if let Some(b) = cipher.last_mut() {
+        *b ^= 1;
+    }
+    cor.enc_part.cipher = cipher.into();
+    expect_error(
+        &cfg,
+        "u2u-2nd-ticket-corrupt",
+        &encode(&u2u_tgs(cor, 0x1000_002d)?).map_err(|e| e.to_string())?,
+        err::BAD_INTEGRITY,
+    )?;
+
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":33}}"#);
     Ok(())
 }
 

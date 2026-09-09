@@ -107,6 +107,12 @@ this project uses semantic versioning once a crate is published.
   decodes `n_key_data` so `KEY_DATA`+`n_key_data!=0` is `KADM5_BAD_MASK`.
   Limitation: a successful modify with both admin fields and TL may still
   write twice (documented).
+- **kdc/protocol (A′-1 Round 4 R13).** `u2u_session` answers MIT
+  `decrypt_2ndtkt` statuses: no key / unknown etype of the second ticket
+  is 60 `2ND_TKT_SERVER`; decrypt failure is 31 `2ND_TKT_DECRYPT`. Three
+  `diffsend` cases pin those words on both KDCs (33 live cases).
+  Limitation: kvno-scoped search, `match_enctype`, PAC/`2ND_TKT_PAC`, and
+  the S4U2Proxy evidence half stay item 9.
 
 ### Round-up R2 (re-audit fixes)
 
