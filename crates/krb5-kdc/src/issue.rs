@@ -2121,8 +2121,7 @@ fn last_admin_unlock(p: &Principal) -> u32 {
         .find(|t| t.ty == TL_LAST_ADMIN_UNLOCK)
         .and_then(|t| t.contents.get(..4))
         .and_then(|b| <[u8; 4]>::try_from(b).ok())
-        .map(u32::from_le_bytes)
-        .unwrap_or(0)
+        .map_or(0, u32::from_le_bytes)
 }
 
 /// MIT `validate_as_request` (`kdc_util.c:716-800`): the AS policy checks in
