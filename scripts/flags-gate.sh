@@ -175,8 +175,8 @@ echo "$TGT"
 echo "$TGT" | grep -qiE "KDC policy rejects|POLICY"
 kadmin_q 'modprinc +allow_tgs_req host/testhost.kerber.test'
 
-echo "==== REQUIRES_HW_AUTH: kinit PREAUTH_FAILED ===="
-kadmin_q 'modprinc +requires_hwauth flaguser'
+echo "==== REQUIRES_HW_AUTH: kinit NEEDED_HW_PREAUTH ===="
+kadmin_q 'modprinc +requires_hwauth -requires_preauth flaguser'
 HW="$(kinit_try 'printf "flag-secret\n" | kinit flaguser@KERBER.TEST')"
 echo "$HW"
 echo "$HW" | grep -qiE "Additional pre-authentication required|NEEDED_HW_PREAUTH"
