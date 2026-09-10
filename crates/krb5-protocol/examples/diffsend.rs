@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, string_to_key};
+use krb5_crypto::{
+    EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt, string_to_key,
+};
 use krb5_kdc::{PacTicket, pac_from_ticket_part, sign_pac, ticket_checksum_der, wrap_win2k_pac};
 use krb5_protocol::{
     KdcAddr, Keytab, armor_key, as_req, as_req_sname, attach_fast, build_fast_armor,
@@ -24,9 +26,9 @@ use krb5_protocol::{
 };
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac, PacIdentity, RpcSid};
 use krb5_types::{
-    ApOptions, ApReq, AsRep, AuthorizationDataValue, EncTicketPart, EncryptedData, EncryptionKey,
-    HostAddress, KdcOptions, KerberosTime, KrbError, PaData, PaPacRequest, PrincipalName, TgsRep,
-    Ticket, TicketFlags, TransitedEncoding, err, flag_bit, ku, pa,
+    ApOptions, ApReq, AsRep, AuthorizationDataValue, Checksum, EncTicketPart, EncryptedData,
+    EncryptionKey, HostAddress, KdcOptions, KerberosTime, KrbError, PaData, PaPacRequest,
+    PrincipalName, TgsRep, Ticket, TicketFlags, TransitedEncoding, err, flag_bit, ku, pa,
 };
 use sha1::{Digest, Sha1};
 
@@ -391,6 +393,44 @@ fn decrypt_tgs(
         .map_err(|e| format!("service ticket decrypt: {e}"))?;
     let tkt: EncTicketPart = decode(&tplain).map_err(|e| e.to_string())?;
     Ok((rep, enc, tkt, enc_tag))
+}
+
+/// U2U TGS-REP: reply enc-part is the header session; the issued ticket is
+/// the second-ticket session (`do_tgs_req.c:997-1000,1056-1057`).
+fn decrypt_u2u(
+    raw: &[u8],
+    header_session: &ProtocolKey,
+    stkt_session: &ProtocolKey,
+) -> Result<(krb5_types::EncKdcRepPart, Ticket, EncTicketPart), String> {
+    if raw.first() != Some(&0x6d) {
+        if raw.first() == Some(&0x7e)
+            && let Ok(e) = decode::<KrbError>(raw)
+        {
+            let text = e
+                .e_text
+                .as_ref()
+                .and_then(|s| std::str::from_utf8(s.as_bytes()).ok())
+                .unwrap_or("");
+            return Err(format!(
+                "want TGS-REP 0x6d got KRB-ERROR {} {text}",
+                e.error_code
+            ));
+        }
+        return Err(format!(
+            "want TGS-REP 0x6d got {:02x}",
+            raw.first().unwrap_or(&0)
+        ));
+    }
+    let TgsRep(rep) = decode::<TgsRep>(raw).map_err(|e| e.to_string())?;
+    let usage = KeyUsage::new(ku::TGS_REP_ENC_PART).map_err(|e| e.to_string())?;
+    let plain =
+        decrypt(header_session, usage, rep.enc_part.cipher.as_ref()).map_err(|e| e.to_string())?;
+    let enc = decode_enc_kdc_rep(&plain).map_err(|e| e.to_string())?;
+    let t_usage = KeyUsage::new(ku::TICKET).map_err(|e| e.to_string())?;
+    let tplain = decrypt(stkt_session, t_usage, rep.ticket.enc_part.cipher.as_ref())
+        .map_err(|e| format!("u2u ticket decrypt: {e}"))?;
+    let tkt: EncTicketPart = decode(&tplain).map_err(|e| e.to_string())?;
+    Ok((enc, rep.ticket, tkt))
 }
 
 // MIT kdc/replay.c lookaside (dispatch.c:114-140): the identical request resent
@@ -2295,11 +2335,28 @@ fn run() -> Result<(), String> {
         )?,
         err::ETYPE_NOSUPP,
     )?;
-    expect_tgs_rep(
-        &cfg,
-        "u2u-success",
-        &u2u_to(
+    // Client offers AES128 only; stkt session is AES256. Ticket key = stkt
+    // session (`:997-1000`); reply session = select_session_keytype (`:352-355`).
+    let u2u_ok_etypes = vec![EncryptionType::Aes128CtsHmacSha196.to_iana()];
+    let u2u_ok = encode(
+        &tgs_req_ex(
+            mint_tgt(
+                tkt_key,
+                tkt_kvno,
+                &user,
+                realm,
+                &krbtgt_sname,
+                &sess,
+                window10.clone(),
+                TicketFlags::initial_preauth(),
+            )?,
+            &sess,
+            realm,
+            &user,
             host.clone(),
+            realm,
+            0x1000_005e,
+            u2u_opts.clone(),
             Some(vec![mint_tgt(
                 tkt_key,
                 tkt_kvno,
@@ -2310,9 +2367,38 @@ fn run() -> Result<(), String> {
                 window10.clone(),
                 TicketFlags::initial_preauth(),
             )?]),
-            0x1000_005e,
-        )?,
-    )?;
+            Vec::new(),
+            u2u_ok_etypes,
+        )
+        .map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    let (tr, tm) = send_both(&cfg, "u2u-success", &u2u_ok)?;
+    let (re, rtkt, _) = decrypt_u2u(&tr, &sess, &sess)?;
+    let (me, mtkt, _) = decrypt_u2u(&tm, &sess, &sess)?;
+    let want_reply = EncryptionType::Aes128CtsHmacSha196.to_iana();
+    let want_tkt = sess.etype().to_iana();
+    if rtkt.enc_part.kvno.is_some() || mtkt.enc_part.kvno.is_some() {
+        return Err(format!(
+            "u2u-success: ticket kvno rust={:?} mit={:?} want none",
+            rtkt.enc_part.kvno, mtkt.enc_part.kvno
+        ));
+    }
+    if rtkt.enc_part.etype != want_tkt || mtkt.enc_part.etype != want_tkt {
+        return Err(format!(
+            "u2u-success: ticket etype rust={} mit={} want {want_tkt}",
+            rtkt.enc_part.etype, mtkt.enc_part.etype
+        ));
+    }
+    if re.key.keytype != want_reply || me.key.keytype != want_reply {
+        return Err(format!(
+            "u2u-success: reply session rust={} mit={} want {want_reply}",
+            re.key.keytype, me.key.keytype
+        ));
+    }
+    println!(
+        r#"{{"event":"diffsend","case":"u2u-success","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","ticket_etype":{want_tkt},"reply_session_etype":{want_reply}}}"#
+    );
 
     let mismatch = mint_tgt_caddr(
         tkt_key,
@@ -2603,7 +2689,125 @@ fn run() -> Result<(), String> {
         err::BADMATCH,
     )?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":74}}"#);
+    let mut kvno_miss = mint_tgt(
+        tkt_key,
+        tkt_kvno,
+        &host,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        window10.clone(),
+        TicketFlags::initial_preauth(),
+    )?;
+    kvno_miss.enc_part.kvno = Some(99);
+    expect_error(
+        &cfg,
+        "u2u-2nd-ticket-kvno-miss",
+        &u2u_to(host.clone(), Some(vec![kvno_miss]), 0x1000_006a)?,
+        err::GENERIC,
+    )?;
+
+    let nosvr = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "nosvr.kerber.test"]);
+    expect_error(
+        &cfg,
+        "u2u-2nd-ticket-disallow-svr",
+        &u2u_to(
+            host.clone(),
+            Some(vec![mint_tgt(
+                tkt_key,
+                tkt_kvno,
+                &host,
+                realm,
+                &nosvr,
+                &sess,
+                window10.clone(),
+                TicketFlags::initial_preauth(),
+            )?]),
+            0x1000_006b,
+        )?,
+        err::S_PRINCIPAL_UNKNOWN,
+    )?;
+
+    let cert_id = krb5_types::s4u::S4uUserId {
+        nonce: 0x1000_006c,
+        user: None,
+        realm: krb5_types::try_ascii(realm).map_err(|e| e.to_string())?,
+        subject_cert: Some(b"cert".to_vec().into()),
+        options: Some(krb5_types::s4u::s4u_reply_key_usage_flags()),
+    };
+    let cert_der = encode(&cert_id).map_err(|e| e.to_string())?;
+    let cert_usage = KeyUsage::new(ku::PA_S4U_X509_USER_REQUEST).map_err(|e| e.to_string())?;
+    let cert_mic = checksum(&sess, cert_usage, &cert_der).map_err(|e| e.to_string())?;
+    let cert_pa = PaData {
+        padata_type: pa::FOR_X509_USER,
+        padata_value: encode(&krb5_types::s4u::PaS4uX509User {
+            user_id: cert_id,
+            cksum: Checksum {
+                cksumtype: sess.etype().checksum_type(),
+                checksum: cert_mic.into(),
+            },
+        })
+        .map_err(|e| e.to_string())?
+        .into(),
+    };
+    expect_error(
+        &cfg,
+        "s4u2self-cert-only",
+        &s4u_req(host_hdr(&host, false)?, vec![cert_pa], 0x1000_006c)?,
+        err::GENERIC,
+    )?;
+
+    let ftgt_addrs = vec![HostAddress {
+        addr_type: HostAddress::ADDRTYPE_INET,
+        address: vec![192, 0, 2, 2].into(),
+    }];
+    let ftgt = encode(
+        &tgs_req_ex_addr(
+            mint_tgt(
+                tkt_key,
+                tkt_kvno,
+                &user,
+                realm,
+                &krbtgt_sname,
+                &sess,
+                window10,
+                TicketFlags::initial_preauth().with_bit(flag_bit::FORWARDABLE, true),
+            )?,
+            &sess,
+            realm,
+            &user,
+            krbtgt_sname.clone(),
+            realm,
+            0x1000_006d,
+            KdcOptions::none().with_bit(flag_bit::FORWARDED, true),
+            None,
+            Vec::new(),
+            etypes.clone(),
+            Some(ftgt_addrs.clone()),
+        )
+        .map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    let (tr, tm) = send_both(&cfg, "tgs-forwarded-tgt-addresses", &ftgt)?;
+    let (_, re, rt, _) = decrypt_tgs(&tr, &sess, tkt_kt)?;
+    let (_, me, mt, _) = decrypt_tgs(&tm, &sess, tkt_kt)?;
+    if rt.caddr.as_ref() != Some(&ftgt_addrs) || mt.caddr.as_ref() != Some(&ftgt_addrs) {
+        return Err(format!(
+            "tgs-forwarded-tgt-addresses: ticket caddr rust={:?} mit={:?}",
+            rt.caddr, mt.caddr
+        ));
+    }
+    if re.caddr.as_ref() != Some(&ftgt_addrs) || me.caddr.as_ref() != Some(&ftgt_addrs) {
+        return Err(format!(
+            "tgs-forwarded-tgt-addresses: reply caddr rust={:?} mit={:?}",
+            re.caddr, me.caddr
+        ));
+    }
+    println!(
+        r#"{{"event":"diffsend","case":"tgs-forwarded-tgt-addresses","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"}}"#
+    );
+
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":78}}"#);
     Ok(())
 }
 

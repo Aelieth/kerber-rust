@@ -92,6 +92,13 @@ ADDDUP="$(docker exec \
     "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey +0x24 host/dupskey.kerber.test')"
 echo "$ADDDUP"
 echo "$ADDDUP" | grep -q 'created' || die "rust addprinc host/dupskey.kerber.test failed"
+ADDNOSVR="$(docker exec \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey +0x1000 host/nosvr.kerber.test')"
+echo "$ADDNOSVR"
+echo "$ADDNOSVR" | grep -q 'created' || die "rust addprinc host/nosvr.kerber.test failed"
 
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/rust.db \
@@ -125,6 +132,8 @@ docker exec "$NAME" kadmin.local -q 'addprinc -randkey host/locked.kerber.test'
 docker exec "$NAME" kadmin.local -q 'modprinc -allow_tix host/locked.kerber.test'
 docker exec "$NAME" kadmin.local -q 'addprinc -randkey host/dupskey.kerber.test'
 docker exec "$NAME" kadmin.local -q 'modprinc +disallow_dup_skey +disallow_tgt_based host/dupskey.kerber.test'
+docker exec "$NAME" kadmin.local -q 'addprinc -randkey host/nosvr.kerber.test'
+docker exec "$NAME" kadmin.local -q 'modprinc +disallow_svr host/nosvr.kerber.test'
 # Advertise SPAKE like the Rust KDC (always-on SpakeMod) so PREAUTH hint
 # multisets match. MIT krb5kdc reads spake_preauth_groups from [libdefaults].
 docker exec "$NAME" python3 -c '
@@ -194,7 +203,7 @@ echo "$DIFF" | grep -q '"case":"as-invalid-opts","outcome":"ok","error_code":13'
 echo "$DIFF" | grep -q '"case":"as-request-anonymous","outcome":"ok","error_code":13,"e_text":"VALIDATE_ANONYMOUS_PRINCIPAL","rust_tag":"0x7e","mit_tag":"0x7e"' || die "as-request-anonymous not code 13 e_text VALIDATE_ANONYMOUS_PRINCIPAL on both legs"
 echo "$DIFF" | grep -q '"case":"as-validate-before-preauth","outcome":"ok","error_code":23' || die "as-validate-before-preauth (preauth+needchange) not code 23 on both legs"
 echo "$DIFF" | grep -q '"case":"as-retransmit","outcome":"ok","rust_retransmit_identical":true,"mit_retransmit_identical":true' || die "as-retransmit reply not identical from the lookaside on both legs"
-echo "$DIFF" | grep -q '"outcome":"ok","cases":74' || die "diffsend did not finish 74 cases"
+echo "$DIFF" | grep -q '"outcome":"ok","cases":78' || die "diffsend did not finish 78 cases"
 echo "$DIFF" | grep -q '"case":"fast-armor-no-subkey","outcome":"ok","error_code":12,"e_text":"FIND_FAST","rust_tag":"0x7e","mit_tag":"0x7e"' || die "fast-armor-no-subkey not code 12 e_text FIND_FAST on both legs"
 echo "$DIFF" | grep -q '"case":"armor-ap-req-as-pa-tgs-req","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' || die "armor-ap-req-as-pa-tgs-req not code 12 e_text PROCESS_TGS on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-ad-fx-armor-authenticator","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' || die "tgs-ad-fx-armor-authenticator not code 12 e_text PROCESS_TGS on both legs"
@@ -251,6 +260,10 @@ echo "$DIFF" | grep -q '"case":"tgs-locked-pac-mismatch","outcome":"ok","error_c
 echo "$DIFF" | grep -q '"case":"u2u-dup-skey-tgt-based","outcome":"ok","error_code":12,"e_text":"DUP_SKEY DISALLOWED","rust_tag":"0x7e","mit_tag":"0x7e"' || die "u2u-dup-skey-tgt-based not code 12 e_text DUP_SKEY DISALLOWED on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-expired-addr-mismatch","outcome":"ok","error_code":38,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' || die "tgs-expired-addr-mismatch not code 38 e_text PROCESS_TGS on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-expired-badmatch","outcome":"ok","error_code":36,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' || die "tgs-expired-badmatch not code 36 e_text PROCESS_TGS on both legs"
+echo "$DIFF" | grep -q '"case":"u2u-2nd-ticket-kvno-miss","outcome":"ok","error_code":60,"e_text":"2ND_TKT_SERVER","rust_tag":"0x7e","mit_tag":"0x7e"' || die "u2u-2nd-ticket-kvno-miss not code 60 e_text 2ND_TKT_SERVER on both legs"
+echo "$DIFF" | grep -q '"case":"u2u-2nd-ticket-disallow-svr","outcome":"ok","error_code":7,"e_text":"2ND_TKT_SERVER","rust_tag":"0x7e","mit_tag":"0x7e"' || die "u2u-2nd-ticket-disallow-svr not code 7 e_text 2ND_TKT_SERVER on both legs"
+echo "$DIFF" | grep -q '"case":"s4u2self-cert-only","outcome":"ok","error_code":60,"e_text":"LOOKING_UP_S4U2SELF_PRINCIPAL","rust_tag":"0x7e","mit_tag":"0x7e"' || die "s4u2self-cert-only not code 60 e_text LOOKING_UP_S4U2SELF_PRINCIPAL on both legs"
+echo "$DIFF" | grep -q '"case":"tgs-forwarded-tgt-addresses","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"' || die "tgs-forwarded-tgt-addresses not TGS-REP on both legs"
 # W1-K M2b: the differential oracle has no case-name whitelist; no diffsend line
 # may carry a "whitelist" key.
 if echo "$DIFF" | grep -q '"whitelist"'; then

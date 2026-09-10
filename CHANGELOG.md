@@ -8,6 +8,12 @@ this project uses semantic versioning once a crate is published.
 
 ### W1-A′-2
 
+- **test.** diffsend 74 → 78: U2U success decrypts with the second-ticket
+  session key (kvno absent, ticket etype = stkt session, reply session
+  etype from `select_session_keytype` when the client omitted it);
+  `u2u-2nd-ticket-kvno-miss` (60), `u2u-2nd-ticket-disallow-svr` (7),
+  `s4u2self-cert-only` (60 `LOOKING_UP_S4U2SELF_PRINCIPAL` on MIT db2),
+  and FORWARDED TGT address copy.
 - **test.** A′-2 items 8–10 parent-red injects cover no-2nd-tkt, U2U combo,
   U2U kvno omission, and RENEW address copy. Copy-and-resign is an AD-like
   superset (MIT db2 copies CLIENT_INFO + DELEGATION_INFO only). Product
