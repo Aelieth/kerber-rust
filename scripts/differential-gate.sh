@@ -205,7 +205,7 @@ echo "$DIFF" | grep -q '"case":"as-service-not-allowed","outcome":"ok","error_co
 echo "$DIFF" | grep -q '"case":"tgs-ap-options","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' || die "tgs-ap-options not code 12 e_text PROCESS_TGS on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-header-kvno-zero","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"' || die "tgs-header-kvno-zero not TGS-REP on both legs"
 echo "$DIFF" | grep -q '"case":"as-hw-preauth","outcome":"ok","error_code":25,"e_text":"NEEDED_HW_PREAUTH","e_data_types":\[19,133,136\],"rust_tag":"0x7e","mit_tag":"0x7e"' || die "as-hw-preauth not code 25 with e_data_types [19,133,136] on both legs"
-echo "$DIFF" | grep -q '"case":"as-spake-round1","outcome":"ok","error_code":91,"e_text":"PREAUTH_FAILED","rust_tag":"0x7e","mit_tag":"0x7e"' || die "as-spake-round1 not code 91 e_text PREAUTH_FAILED on both legs"
+echo "$DIFF" | grep -q '"case":"as-spake-round1","outcome":"ok","error_code":91,"e_text":"PREAUTH_FAILED"' || die "as-spake-round1 not code 91 e_text PREAUTH_FAILED on both legs"
 echo "$DIFF" | grep -E '"case":"as-spake-round1".*"e_data_types":\[.*19.*133.*151.*\]' || die "as-spake-round1 e_data_types missing 19/133/151"
 echo "$DIFF" | grep -q '"case":"u2u-2nd-ticket-unknown-server","outcome":"ok","error_code":7,"e_text":"2ND_TKT_SERVER","rust_tag":"0x7e","mit_tag":"0x7e"' || die "u2u-2nd-ticket-unknown-server not code 7 e_text 2ND_TKT_SERVER on both legs"
 echo "$DIFF" | grep -q '"case":"u2u-2nd-ticket-bad-etype","outcome":"ok","error_code":60,"e_text":"2ND_TKT_SERVER","rust_tag":"0x7e","mit_tag":"0x7e"' || die "u2u-2nd-ticket-bad-etype not code 60 e_text 2ND_TKT_SERVER on both legs"
