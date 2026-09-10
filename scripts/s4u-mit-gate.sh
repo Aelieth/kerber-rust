@@ -560,9 +560,15 @@ docker exec "$NAME" sh -c 'cat >/tmp/test-kdc.conf <<EOF
                 flags = +ok-to-auth-as-delegate
                 keys = aes256-cts
             }
+            host/rbcd.kerber.test = {
+                keys = aes256-cts
+            }
         }
         delegation = {
             host/testhost.kerber.test = host/testhost.kerber.test
+        }
+        rbcd = {
+            host/rbcd.kerber.test@KERBER.TEST = host/testhost.kerber.test@KERBER.TEST
         }
     }
 [logging]
@@ -639,8 +645,11 @@ docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
     -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
     -e KRB5_EXPORT_KEYTAB=/tmp/host-r18.keytab \
+    -e KRB5_EXPORT_KEYTAB_EXTRA=/tmp/host-rbcd.keytab \
     -e KRB5_TEST_OK_TO_AUTH_AS_DELEGATE=1 \
     -e KRB5_TEST_S4U_TO=host/testhost.kerber.test \
+    -e KRB5_TEST_EXTRA_HOST=rbcd.kerber.test \
+    -e KRB5_TEST_S4U_FROM=host/testhost.kerber.test \
     "$NAME" sh -c '/tmp/krb5-kdc --test-realm --export-keytab /tmp/host-r18.keytab 127.0.0.1:8888 >/tmp/kdc-r18.log 2>&1'
 ok=0
 for _ in $(seq 1 80); do
@@ -689,6 +698,30 @@ echo "$RUST_PAC" | grep -qE 'pac_types=.*\b11\b'
 echo "$RUST_PAC" | grep -q 'proxy_target=host/testhost.kerber.test'
 echo "$RUST_PAC" | grep -q 'transited_services=host/testhost.kerber.test@KERBER.TEST'
 echo "MIT_testkdb_s4u2proxy_happy"
+
+echo "==== MIT test-KDB kvno -U user -P (RBCD) ===="
+docker exec -e KRB5_CONFIG=/tmp/test-krb5.conf -e KRB5_KDC_PROFILE=/tmp/test-kdc.conf \
+    "$NAME" kadmin.local -r KERBER.TEST -q \
+    'ktadd -norandkey -k /tmp/test-rbcd.kt host/rbcd.kerber.test'
+docker exec -e KRB5_CONFIG=/tmp/test-krb5.conf -e KRB5CCNAME=FILE:/tmp/krb5cc_mit_testkdb \
+    "$NAME" kvno -U user -P host/rbcd.kerber.test
+MIT_RBCD="$(docker exec "$NAME" /tmp/krb5-pac-extract --keytab /tmp/test-rbcd.kt \
+    --ccache /tmp/krb5cc_mit_testkdb --last --print-types --print-delegation)"
+echo "$MIT_RBCD"
+echo "$MIT_RBCD" | grep -qE 'pac_types=.*\b11\b'
+echo "$MIT_RBCD" | grep -q 'proxy_target=host/rbcd.kerber.test'
+echo "$MIT_RBCD" | grep -q 'transited_services=host/testhost.kerber.test@KERBER.TEST'
+
+echo "==== Rust kvno -U user -P (RBCD) ===="
+docker exec -e KRB5_CONFIG=/tmp/s4u-r18.conf -e KRB5CCNAME=FILE:/tmp/krb5cc_rust_s4u2p \
+    "$NAME" kvno -U user -P host/rbcd.kerber.test
+RUST_RBCD="$(docker exec "$NAME" /tmp/krb5-pac-extract --keytab /tmp/host-rbcd.keytab \
+    --ccache /tmp/krb5cc_rust_s4u2p --last --print-types --print-delegation)"
+echo "$RUST_RBCD"
+echo "$RUST_RBCD" | grep -qE 'pac_types=.*\b11\b'
+echo "$RUST_RBCD" | grep -q 'proxy_target=host/rbcd.kerber.test'
+echo "$RUST_RBCD" | grep -q 'transited_services=host/testhost.kerber.test@KERBER.TEST'
+echo "MIT_testkdb_s4u2proxy_rbcd"
 
 log "s4u.mit.gate" "ok" ',"principal":"host/testhost.kerber.test","for_client":"user@KERBER.TEST"'
 exit 0

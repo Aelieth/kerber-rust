@@ -8,6 +8,9 @@ this project uses semantic versioning once a crate is published.
 
 ### W1-A′-2
 
+- **test.** MIT test-KDB `kvno -U user -P host/rbcd` proves same-realm
+  RBCD (`allowed_to_delegate_from`) on both legs; rust `--test-realm`
+  grows `KRB5_TEST_EXTRA_HOST` / `KRB5_TEST_S4U_FROM`.
 - **test.** R18's rust-kdc restart kill is one line so
   `check_no_host_tmp_writes` does not treat the later container
   `>/tmp/kdc-r18.log` as a host write (CI 451–454 `ledger-mit` /

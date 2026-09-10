@@ -150,6 +150,28 @@ fn main() {
             }
         }
     }
+    if let (Ok(path), Ok(extra_inst)) = (
+        std::env::var("KRB5_EXPORT_KEYTAB_EXTRA"),
+        std::env::var("KRB5_TEST_EXTRA_HOST"),
+    ) {
+        let extra = krb5_types::PrincipalName::new(
+            krb5_types::PrincipalName::NT_SRV_HST,
+            ["host", extra_inst.as_str()],
+        );
+        match store.export_keytab_local(&extra) {
+            Ok(kt) => {
+                if let Err(e) = kt.write_file(&path) {
+                    eprintln!("krb5-kdc: export-keytab-extra {path}: {e}");
+                    std::process::exit(1);
+                }
+                println!("keytab-extra {path}");
+            }
+            Err(e) => {
+                eprintln!("krb5-kdc: export-keytab-extra: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
     if let Some(path) = export_krbtgt.as_ref() {
         let tgt = krb5_types::PrincipalName::krbtgt(store.realm());
         match store.export_keytab_local(&tgt) {
@@ -341,6 +363,24 @@ fn bootstrap_test_realm() -> PrincipalStore {
             let to = to.trim();
             if !to.is_empty() {
                 store.allow_s4u_to(&host, to);
+            }
+        }
+    }
+    if let Ok(extra_inst) = std::env::var("KRB5_TEST_EXTRA_HOST") {
+        let extra = krb5_types::PrincipalName::new(
+            krb5_types::PrincipalName::NT_SRV_HST,
+            ["host", extra_inst.as_str()],
+        );
+        if let Err(e) = store.create_host(&acl, &actor, &extra) {
+            eprintln!("krb5-kdc: extra host principal: {e}");
+            std::process::exit(1);
+        }
+        if let Ok(froms) = std::env::var("KRB5_TEST_S4U_FROM") {
+            for from in froms.split(',') {
+                let from = from.trim();
+                if !from.is_empty() {
+                    store.allow_s4u_from(&extra, from);
+                }
             }
         }
     }
