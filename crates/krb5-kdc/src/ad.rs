@@ -399,6 +399,7 @@ fn verify_pac_sig<'a>(
     let usage = KeyUsage::new(ku::KERB_NON_KERB_CKSUM_SALT)?;
     verify_checksum_type(key, usage, data, cksumtype, mac).map_err(|e| match e {
         krb5_crypto::Error::Integrity => proto(err::MODIFIED, status::HEADER_PAC),
+        krb5_crypto::Error::UnsupportedChecksum(_) => proto(err::ETYPE_NOSUPP, status::HEADER_PAC),
         _ => proto(err::GENERIC, status::HEADER_PAC),
     })?;
     Ok(mac)
@@ -463,7 +464,11 @@ pub(crate) fn get_verified_pac(
 }
 
 fn pac_verify_retryable(r: &Result<(), Error>) -> bool {
-    matches!(r, Err(Error::Protocol { code, .. }) if *code == err::MODIFIED)
+    matches!(
+        r,
+        Err(Error::Protocol { code, .. })
+            if *code == err::MODIFIED || *code == err::ETYPE_NOSUPP
+    )
 }
 
 fn try_verify_pac(

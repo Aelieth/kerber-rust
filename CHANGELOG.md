@@ -8,6 +8,12 @@ this project uses semantic versioning once a crate is published.
 
 ### W1-A′-2
 
+- **kdc.** TGS constraint slots run before service policy
+  (`tgs_policy.c:668-746`, `do_tgs_req.c:872-882`): lineage before U2U,
+  `check_normal_tgs_pac` before deny_all, `DUP_SKEY` in deny_opts before
+  `TGT BASED`. Header times run after BADMATCH/BADADDR
+  (`rd_req_dec.c:532-539,627`). Privsvr retry accepts `ETYPE_NOSUPP` as
+  well as `MODIFIED` (`kdc_util.c:610`).
 - **kdc.** S4U2Proxy issuance is proven against MIT's `plugins/kdb/test`
   KDB (`delegation = { … }` in the harness image). First hop writes
   `PAC_DELEGATION_INFO` (`kdc_authdata.c:382-439`). Cross-realm gather

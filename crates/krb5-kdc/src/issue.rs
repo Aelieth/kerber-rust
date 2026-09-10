@@ -766,7 +766,6 @@ fn process_tgs_header(
     let tkt_etype = EncryptionType::from_iana(ap.ticket.enc_part.etype)
         .or_else(|_| EncryptionType::known(ap.ticket.enc_part.etype))?;
     let (enc_tkt, tgt_key, _, header_server) = decrypt_presented_tgt(store, &ap, tkt_etype)?;
-    check_header_times_rd_req(store, &enc_tkt)?;
     let sess_etype = EncryptionType::from_iana(enc_tkt.key.keytype)
         .or_else(|_| EncryptionType::known(enc_tkt.key.keytype))?;
     let session = ProtocolKey::from_bytes(sess_etype, enc_tkt.key.keyvalue.as_ref())?;
@@ -788,6 +787,8 @@ fn process_tgs_header(
     {
         return Err(proto(err::BADADDR, status::PROCESS_TGS));
     }
+    // MIT rd_req_dec.c:627: times after BADMATCH/BADADDR.
+    check_header_times_rd_req(store, &enc_tkt)?;
     // MIT kdc_util.c:217-229: after rd_req, before the authenticator checksum.
     match fx_armor_present(
         enc_tkt.authorization_data.as_deref(),
@@ -969,12 +970,6 @@ fn issue_tgs_body(
         validate,
     )?;
     let tgs_client = store.fetch_name(&enc_tkt.cname)?;
-    // MIT TGS checks the server only; a valid TGT still issues after client expiry.
-    // MIT runs the service flag rules (deny_opts/deny_all/reqd_flags) before
-    // check_tgs_svc_time, so a locked-out or postdate-denied service is caught
-    // before an expiry.
-    check_tgs_policy_flags(&server, body, ap.ticket.sname.is_krbtgt(), &enc_tkt)?;
-    check_db_times(None, &server)?;
     let mut ticket_cname = enc_tkt.cname.clone();
     let mut ticket_crealm = utf8_realm(&enc_tkt.crealm)?.to_owned();
     let mut evidence_logon = None;
@@ -1025,6 +1020,10 @@ fn issue_tgs_body(
     let is_crossrealm = tgs_header_is_crossrealm(header_realm.as_str(), &server.realm);
     let local_tgt = store.fetch_krbtgt()?;
     let stkt = decrypt_2ndtkt(store, req, local_tgt.as_ref())?;
+    // MIT check_tgs_lineage before U2U (`tgs_policy.c:704-710`).
+    if utf8_realm(&enc_tkt.crealm)? == store.realm() && is_crossrealm && !s4u2self {
+        return Err(proto(err::POLICY, status::INVALID_LINEAGE));
+    }
     if body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY) {
         check_tgs_u2u(store, stkt.as_ref(), &server)?;
     }
@@ -1061,6 +1060,30 @@ fn issue_tgs_body(
         subject_authtime = st.part.authtime.clone();
         subject_pac.clone_from(&st.pac);
         s4u2proxy = true;
+    } else if !s4u2self {
+        crate::ad::check_normal_tgs_pac(&enc_tkt, header_pac.as_deref(), &server, is_crossrealm)?;
+        if let Some(logon) = header_pac.as_ref().and_then(|p| {
+            let parsed = krb5_types::pac::Pac::parse(p).ok()?;
+            parsed
+                .unique_buffer(krb5_types::pac::PAC_LOGON_INFO)
+                .ok()
+                .flatten()
+                .map(<[u8]>::to_vec)
+        }) {
+            evidence_logon = Some(if utf8_realm(&ap.ticket.realm)? == store.realm() {
+                logon
+            } else {
+                crate::ad::filter_cross_realm_logon(&logon, store.domain_sid())?
+            });
+        }
+    }
+    // MIT check_tgs_policy after constraints (`do_tgs_req.c:872-882`).
+    check_tgs_policy_flags(&server, body, ap.ticket.sname.is_krbtgt(), &enc_tkt)?;
+    check_db_times(None, &server)?;
+    if s4u2proxy {
+        let st = stkt
+            .as_ref()
+            .ok_or_else(|| proto(err::GENERIC, status::UNKNOWN_REASON))?;
         check_s4u2proxy_policy(
             tgs_padata,
             &sname,
@@ -1070,24 +1093,6 @@ fn issue_tgs_body(
             is_crossrealm,
             is_referral,
         )?;
-    } else if !s4u2self
-        && let Some(logon) = header_pac.as_ref().and_then(|p| {
-            let parsed = krb5_types::pac::Pac::parse(p).ok()?;
-            parsed
-                .unique_buffer(krb5_types::pac::PAC_LOGON_INFO)
-                .ok()
-                .flatten()
-                .map(<[u8]>::to_vec)
-        })
-    {
-        evidence_logon = Some(if utf8_realm(&ap.ticket.realm)? == store.realm() {
-            logon
-        } else {
-            crate::ad::filter_cross_realm_logon(&logon, store.domain_sid())?
-        });
-    }
-    if attr(&server, KDB_DISALLOW_DUP_SKEY) && body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY) {
-        return Err(proto(err::POLICY, status::DUP_SKEY_DISALLOWED));
     }
     let skip_transited = body.kdc_options.bit(flag_bit::DISABLE_TRANSITED_CHECK);
     let u2u = if body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY) {
@@ -1119,11 +1124,6 @@ fn issue_tgs_body(
     } else {
         header_crealm
     };
-    // MIT check_tgs_lineage: a local user on a foreign TGT is POLICY
-    // (skipped for S4U2Self).
-    if header_crealm == store.realm() && is_crossrealm && !s4u2self {
-        return Err(proto(err::POLICY, status::INVALID_LINEAGE));
-    }
     // MIT do_tgs_req.c:787-788: keep header transited when header-server
     // realm equals tkt_client realm.
     if is_crossrealm && prev_hop != tkt_client_realm {
@@ -1255,9 +1255,6 @@ fn issue_tgs_body(
             &krbtgt_key.key
         },
     )?;
-    if !s4u2self && !s4u2proxy {
-        crate::ad::check_normal_tgs_pac(&enc_tkt, header_pac.as_deref(), &server, is_crossrealm)?;
-    }
     let include_pac = include_pac_for_reply(
         store,
         &server,
@@ -2657,6 +2654,9 @@ fn check_tgs_policy_flags(
             || body.kdc_options.bit(flag_bit::POSTDATED))
     {
         return Err(proto(err::CANNOT_POSTDATE, status::NON_POSTDATABLE_TICKET));
+    }
+    if attr(server, KDB_DISALLOW_DUP_SKEY) && body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY) {
+        return Err(proto(err::POLICY, status::DUP_SKEY_DISALLOWED));
     }
     // deny_all:
     if attr(server, KDB_DISALLOW_ALL_TIX) {

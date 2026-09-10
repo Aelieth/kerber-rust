@@ -2485,7 +2485,125 @@ fn run() -> Result<(), String> {
         err::BADMATCH,
     )?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":70}}"#);
+    let locked = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "locked.kerber.test"]);
+    expect_error(
+        &cfg,
+        "tgs-locked-pac-mismatch",
+        &encode(
+            &tgs_req(
+                mint_signed_header(
+                    tkt_key,
+                    tkt_kvno,
+                    &user,
+                    realm,
+                    &krbtgt_sname,
+                    &sess,
+                    window10.clone(),
+                    TicketFlags::initial_preauth(),
+                    &other,
+                    false,
+                    None,
+                )?,
+                &sess,
+                realm,
+                &user,
+                locked,
+                realm,
+                0x1000_0066,
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::BADOPTION,
+    )?;
+
+    let dups = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "dupskey.kerber.test"]);
+    expect_error(
+        &cfg,
+        "u2u-dup-skey-tgt-based",
+        &u2u_to(
+            dups.clone(),
+            Some(vec![mint_tgt(
+                tkt_key,
+                tkt_kvno,
+                &dups,
+                realm,
+                &krbtgt_sname,
+                &sess,
+                window10.clone(),
+                TicketFlags::initial_preauth(),
+            )?]),
+            0x1000_0067,
+        )?,
+        err::POLICY,
+    )?;
+
+    let expired_win = (
+        now.add_seconds(-7200).unwrap_or_else(|_| now.clone()),
+        now.add_seconds(-3600).unwrap_or_else(|_| now.clone()),
+    );
+    expect_error(
+        &cfg,
+        "tgs-expired-addr-mismatch",
+        &encode(
+            &tgs_req(
+                mint_tgt_caddr(
+                    tkt_key,
+                    tkt_kvno,
+                    &user,
+                    realm,
+                    &krbtgt_sname,
+                    &sess,
+                    expired_win.clone(),
+                    TicketFlags::initial_preauth(),
+                    Some(vec![HostAddress {
+                        addr_type: HostAddress::ADDRTYPE_INET,
+                        address: vec![10, 0, 0, 1].into(),
+                    }]),
+                )?,
+                &sess,
+                realm,
+                &user,
+                host.clone(),
+                realm,
+                0x1000_0068,
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::BADADDR,
+    )?;
+
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["admin"]);
+    expect_error(
+        &cfg,
+        "tgs-expired-badmatch",
+        &encode(
+            &tgs_req(
+                mint_tgt(
+                    tkt_key,
+                    tkt_kvno,
+                    &user,
+                    realm,
+                    &krbtgt_sname,
+                    &sess,
+                    expired_win,
+                    TicketFlags::initial_preauth(),
+                )?,
+                &sess,
+                realm,
+                &admin,
+                host.clone(),
+                realm,
+                0x1000_0069,
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::BADMATCH,
+    )?;
+
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":74}}"#);
     Ok(())
 }
 

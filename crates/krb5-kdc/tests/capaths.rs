@@ -1290,9 +1290,13 @@ fn cross_realm_pac_claiming_local_domain_base_is_policy() {
         domain_sid: local.clone(),
         rid: 500,
     };
+    let mut t = bc.rep.0.ticket.clone();
+    let mut part = decrypt_ticket_part(&ir, &t).expect("bc");
+    part.cname = cname.clone();
+    part.crealm = krb5_types::try_ascii("B.TEST").expect("realm");
     let pac = sign_pac(
         &cname,
-        0,
+        part.authtime.unix_seconds(),
         &PacTicket {
             server: &ir,
             kdc: &ir,
@@ -1303,10 +1307,6 @@ fn cross_realm_pac_claiming_local_domain_base_is_policy() {
         Some(&logon),
     )
     .expect("sign");
-    let mut t = bc.rep.0.ticket.clone();
-    let mut part = decrypt_ticket_part(&ir, &t).expect("bc");
-    part.cname = cname.clone();
-    part.crealm = krb5_types::try_ascii("B.TEST").expect("realm");
     part.authorization_data = Some(wrap_win2k_pac(&pac).expect("wrap"));
     reseal(&ir, &mut t, &part);
     let req = tgs_req(t, &bc.session_key, "B.TEST", &cname, host_c, "C.TEST", 992).expect("tgs");
