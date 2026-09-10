@@ -460,5 +460,76 @@ set -e
 echo "$U2U_DUP_MIT"
 echo "$U2U_DUP_MIT" | grep -qiE "KDC policy rejects request|DUP_SKEY DISALLOWED"
 
+echo "==== MIT kinit -a then kvno via 127.0.0.1 rust ===="
+docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf \
+    "$NAME" sh -c 'printf "userpassword\n" | kinit -c /tmp/krb5cc_addr -a user@KERBER.TEST'
+KLIST_AR="$(docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf "$NAME" klist -a -n -c /tmp/krb5cc_addr)"
+echo "$KLIST_AR"
+echo "$KLIST_AR" | grep -qE 'Addresses: [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'
+set +e
+KVNO_AR="$(docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf -e KRB5CCNAME=FILE:/tmp/krb5cc_addr \
+    "$NAME" kvno host/testhost.kerber.test 2>&1)"
+set -e
+echo "$KVNO_AR"
+echo "$KVNO_AR" | grep -qiE "Incorrect net address|BADADDR|KRB5KRB_AP_ERR_BADADDR"
+
+echo "==== MIT kinit -a then kvno via 127.0.0.1 mit ===="
+docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
+    "$MITNAME" sh -c 'printf "userpassword\n" | kinit -c /tmp/krb5cc_addr -a user@KERBER.TEST'
+KLIST_AM="$(docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf "$MITNAME" klist -a -n -c /tmp/krb5cc_addr)"
+echo "$KLIST_AM"
+echo "$KLIST_AM" | grep -qE 'Addresses: [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'
+set +e
+KVNO_AM="$(docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf -e KRB5CCNAME=FILE:/tmp/krb5cc_addr \
+    "$MITNAME" kvno host/testhost.kerber.test 2>&1)"
+set -e
+echo "$KVNO_AM"
+echo "$KVNO_AM" | grep -qiE "Incorrect net address|BADADDR|KRB5KRB_AP_ERR_BADADDR"
+
+echo "==== MIT kinit -a + kvno via bridge rust ===="
+BRIDGE="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$NAME")"
+docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true'
+sleep 0.3
+docker exec -d \
+    -e KRB5_TEST_USER_PASSWORD=userpassword \
+    -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
+    -e KRB5_TEST_DISALLOW_DUP_SKEY=1 \
+    -e KRB5_EXPORT_KEYTAB=/tmp/host.keytab \
+    "$NAME" sh -c '/tmp/krb5-kdc --test-realm --export-keytab /tmp/host.keytab 0.0.0.0:8888 >/tmp/kdc-bridge.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/kdc-bridge.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kdc-bridge.log >&2 || true
+    log "s4u.mit.gate" "error" ',"error":"kdc did not listen on 0.0.0.0"'
+    exit 1
+fi
+docker exec "$NAME" sh -c "sed -i 's/kdc = 127.0.0.1.*/kdc = ${BRIDGE}:8888/' /tmp/s4u-krb5.conf"
+docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf \
+    "$NAME" sh -c 'printf "userpassword\n" | kinit -c /tmp/krb5cc_addrb -a user@KERBER.TEST'
+docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf -e KRB5CCNAME=FILE:/tmp/krb5cc_addrb \
+    "$NAME" kvno host/testhost.kerber.test
+KLIST_BR="$(docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf "$NAME" klist -a -n -c /tmp/krb5cc_addrb)"
+echo "$KLIST_BR"
+echo "$KLIST_BR" | grep -q 'host/testhost.kerber.test'
+echo "$KLIST_BR" | grep -qE 'Addresses: [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'
+
+echo "==== MIT kinit -a + kvno via bridge mit ===="
+MBRIDGE="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$MITNAME")"
+docker exec "$MITNAME" sh -c "sed -i 's/kdc = 127.0.0.1.*/kdc = ${MBRIDGE}/' /tmp/s4u-mit-oracle.conf"
+docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
+    "$MITNAME" sh -c 'printf "userpassword\n" | kinit -c /tmp/krb5cc_addrb -a user@KERBER.TEST'
+docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf -e KRB5CCNAME=FILE:/tmp/krb5cc_addrb \
+    "$MITNAME" kvno host/testhost.kerber.test
+KLIST_BM="$(docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf "$MITNAME" klist -a -n -c /tmp/krb5cc_addrb)"
+echo "$KLIST_BM"
+echo "$KLIST_BM" | grep -q 'host/testhost.kerber.test'
+echo "$KLIST_BM" | grep -qE 'Addresses: [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'
+
 log "s4u.mit.gate" "ok" ',"principal":"host/testhost.kerber.test","for_client":"user@KERBER.TEST"'
 exit 0

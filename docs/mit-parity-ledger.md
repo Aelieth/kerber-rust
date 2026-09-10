@@ -26,7 +26,7 @@ Schema: `MIT file:line | check | MIT status + wire code | Rust site | Rust e_tex
 Verdict ∈ {exact, stricter-documented (`docs/security.md` row), absent,
 deviation, deferred (reason + promotion oracle)}. Proof `none` only
 with deferred. A named gate cell or `diffsend` case that does not exist
-is `proposed`. The sixty-four live `diffsend` cases are `garbage-pdu`,
+is `proposed`. The sixty-six live `diffsend` cases are `garbage-pdu`,
 `unknown-cname`, `etype-nosupp`, `as-session-enctype`, `wrong-realm`, `pauser-no-preauth`,
 `skewed-timestamp`, `as-needchange`, `as-invalid-opts`, `as-validate-before-preauth`,
 `as-optimistic-encts-wrong-etype`, `unknown-sname`, `as-success`, `as-retransmit`,
@@ -45,15 +45,15 @@ is `proposed`. The sixty-four live `diffsend` cases are `garbage-pdu`,
 `s4u2proxy-header-pac`, `s4u2proxy-no-stkt-pac`, `s4u2proxy-evidence-mismatch`,
 `s4u2proxy-local-stkt-pac`, `u2u-no-2nd-tkt`, `u2u-2nd-ticket-not-tgs`,
 `u2u-2nd-ticket-mismatch`, `u2u-2nd-ticket-bad-pac`, `u2u-bad-etype`,
-`u2u-success`.
+`u2u-success`, `tgs-addr-mismatch`, `tgs-forwarded-addresses`.
 
 Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after A′-2 item 9):
-**328** = A1 117 + A2 80 + A3 63 + A4 68.
-exact 226 · stricter-documented 9 · deviation 50 ·
+Counts (after A′-2 item 10):
+**332** = A1 117 + A2 84 + A3 63 + A4 68.
+exact 230 · stricter-documented 10 · deviation 49 ·
 absent 30 · deferred 13.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
@@ -285,7 +285,11 @@ mismatches, not extra statuses.
 | kdc_util.c:217-229 | header ticket/authenticator carries `KRB5_AUTHDATA_FX_ARMOR` (armor-only ticket used as a TGT) | PROCESS_TGS 12 (log `ticket valid only as FAST armor`) | issue.rs process_tgs_header; issue.rs fx_armor_present | PROCESS_TGS 12 (detail `ticket valid only as FAST armor`) | exact | `tgs_header_ticket_ad_fx_armor_is_policy`; `tgs_header_ticket_if_relevant_ad_fx_armor_is_policy`; `tgs_header_authenticator_ad_fx_armor_is_policy`; diffsend `armor-ap-req-as-pa-tgs-req`; diffsend `tgs-ad-fx-armor-authenticator` |
 | kdc_util.c:813 `get_ticket_flags` | `OPTS2FLAGS` + `COPY_TKT_FLAGS` on the issued ticket (FORWARDED, PROXY, MAY_POSTDATE, POSTDATED+INVALID, HW_AUTH, ENC_PA_REP, ANONYMOUS) | n/a (flags, not an error) | issue.rs issue_tgs_body, 874-879 | sets TRANSITED/PRE_AUTHENT/FORWARDABLE/RENEWABLE/PROXIABLE/OK_AS_DELEGATE/ENC_PA_REP; still never FORWARDED, PROXY, MAY_POSTDATE, POSTDATED(+INVALID), ANONYMOUS, HW_AUTH | deviation | proposed: `flags-gate.sh` cell asserting `f`/`p`/`d`/`H` on a TGS ticket |
 | kdc_util.c:824 `\| TKT_FLG_ENC_PA_REP` | every issued AS/TGS ticket sets the enc-pa-rep flag (RFC 6806); the enc-pa-rep padata is separate (added only when PA 149 is present) | n/a (flag) | krb5-kdc/issue.rs issue_as_body; krb5-kdc/issue.rs issue_tgs_body | ENC_PA_REP on every ticket; padata request-keyed | exact | `every_ticket_sets_enc_pa_rep_flag_without_padata`; `scripts/differential-gate.sh` `as-success`/`tgs-success` no `mit-extra-ticket-flags` whitelist |
-| do_tgs_req.c:1019-1027 | ticket addresses: `req->addresses` for FORWARDED/PROXY, else header `caddrs` | n/a | issue.rs mint_ticket | addresses always dropped | deviation (laxer: address-restricted TGT → address-free service ticket) | proposed: unit + diffsend addressful TGT |
+| do_tgs_req.c:1019-1027 | ticket addresses: `req->addresses` for FORWARDED/PROXY, else header `caddrs`; RENEW/VALIDATE copy the header enc-part; reply `caddrs` only for FORWARDED/PROXY | n/a | issue.rs tgs_ticket_caddr / tgs_reply_caddr / mint_ticket | same copy rules; AS copies `request->addresses` onto ticket and reply | exact | diffsend `tgs-forwarded-addresses`; `a2_10_caddr.rs` |
+| kdc_util.c:197-200; rd_req_dec.c:536-540 | TGS sender vs header `caddrs` (`k5_sockaddr_to_address` then `krb5_address_search`) | 38 `BADADDR` `PROCESS_TGS` (header cname) | issue.rs process_tgs_header `address_search` | 38 `PROCESS_TGS`, header cname | exact | diffsend `tgs-addr-mismatch` |
+| addr_srch.c:55-59 | NULL list matches; a lone NetBIOS entry is empty | n/a (match) | issue.rs address_search | same | exact | `a2_10_caddr.rs` `tgs_netbios_only_caddr_matches` |
+| do_as_req.c:713,245 | AS copies `request->addresses` onto the ticket and `reply_encpart.caddrs` | n/a | issue.rs mint_ticket / enc_rep_part | same | exact | `a2_10_caddr.rs` `as_copies_request_addresses` |
+| rd_req_dec.c:536-540 (acceptor) | same `address_search` on AP-REQ | 38 `BADADDR` | krb5-protocol/ap_req.rs `verify_ap_req` list equality | whole-list compare when both sides present | stricter-documented | `docs/security.md` acceptor ticket addresses |
 | do_tgs_req.c:551-555 (`search_sprinc`) | `NO_REFERRAL_OPTION` (FORWARDED/PROXY/RENEW/VALIDATE/ENC_TKT_IN_SKEY) suppresses `KRB5_KDB_FLAG_REFERRAL_OK` | n/a (drops to LOOKING_UP_SERVER 7) | issue.rs check_tgs_constraints_skeleton | RENEW+CANONICALIZE issues the local TGT (no referral hop) | exact | `tgs_canonicalize_renew_issues_local_tgt`; diffsend `tgs-canonicalize-renew` |
 | do_tgs_req.c:919 `check_kdcpolicy_tgs` | kdcpolicy module deny / times rewrite (distinct from `krb5_db_check_policy_tgs`) | no status → `UNKNOWN_REASON`, module code | plugins.rs run_as_preauth (`check_as`/`check_tgs` only) | no kdcpolicy hook, no times rewrite | deferred | none (promotion: MIT kdcpolicy module oracle) |
 | do_tgs_req.c:686 | `is_crossrealm` = header-server-entry realm ≠ canonical server realm | n/a | issue.rs tgs_header_is_crossrealm | header ticket server realm ≠ canonical server realm | exact | `is_crossrealm_is_header_realm_vs_server_realm` |

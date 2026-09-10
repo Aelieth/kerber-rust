@@ -90,6 +90,8 @@ DIFFSEND_CASES = frozenset(
         "u2u-2nd-ticket-bad-pac",
         "u2u-bad-etype",
         "u2u-success",
+        "tgs-addr-mismatch",
+        "tgs-forwarded-addresses",
         "as-needchange",
         "as-invalid-opts",
         "as-validate-before-preauth",

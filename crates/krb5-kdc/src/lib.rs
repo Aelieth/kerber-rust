@@ -31,7 +31,7 @@ pub use ad::{
 };
 pub use error::Error;
 pub use issue::{
-    IssuedAs, IssuedTgs, handle_request, issue_as, issue_tgs, kdc_error_bytes,
+    IssuedAs, IssuedTgs, handle_request, handle_request_from, issue_as, issue_tgs, kdc_error_bytes,
     tgs_header_is_crossrealm,
 };
 pub use kdb::{

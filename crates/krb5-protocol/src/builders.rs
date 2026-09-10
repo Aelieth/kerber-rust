@@ -3,9 +3,9 @@
 use krb5_asn1::encode;
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, checksum, encrypt};
 use krb5_types::{
-    ApOptions, ApReq, AsReq, Authenticator, Checksum, EncryptedData, KdcOptions, KdcReq,
-    KdcReqBody, KerberosTime, Microseconds, PaData, PaEncTsEnc, PrincipalName, TgsReq, Ticket, ku,
-    pa,
+    ApOptions, ApReq, AsReq, Authenticator, Checksum, EncryptedData, HostAddresses, KdcOptions,
+    KdcReq, KdcReqBody, KerberosTime, Microseconds, PaData, PaEncTsEnc, PrincipalName, TgsReq,
+    Ticket, ku, pa,
 };
 
 use crate::error::Error;
@@ -162,6 +162,42 @@ pub fn tgs_req_ex(
     extra_padata: Vec<PaData>,
     etypes: Vec<i32>,
 ) -> Result<TgsReq, Error> {
+    tgs_req_ex_addr(
+        ticket,
+        session,
+        crealm,
+        cname,
+        sname,
+        realm,
+        nonce,
+        kdc_options,
+        additional_tickets,
+        extra_padata,
+        etypes,
+        None,
+    )
+}
+
+/// [`tgs_req_ex`] with request addresses (FORWARDED/PROXY / `kinit -a`).
+///
+/// # Errors
+///
+/// Returns crypto or DER failures.
+#[allow(clippy::too_many_arguments)]
+pub fn tgs_req_ex_addr(
+    ticket: Ticket,
+    session: &ProtocolKey,
+    crealm: &str,
+    cname: &PrincipalName,
+    sname: PrincipalName,
+    realm: &str,
+    nonce: u32,
+    kdc_options: KdcOptions,
+    additional_tickets: Option<Vec<Ticket>>,
+    extra_padata: Vec<PaData>,
+    etypes: Vec<i32>,
+    addresses: Option<HostAddresses>,
+) -> Result<TgsReq, Error> {
     let till = KerberosTime::now()
         .add_hours(10)
         .unwrap_or_else(|_| KerberosTime::now());
@@ -175,7 +211,7 @@ pub fn tgs_req_ex(
         rtime: None,
         nonce,
         etype: etypes,
-        addresses: None,
+        addresses,
         enc_authorization_data: None,
         additional_tickets,
     };

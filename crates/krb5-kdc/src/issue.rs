@@ -12,9 +12,10 @@ use krb5_types::pac::{PacIdentity, parse_kerb_validation_info};
 use krb5_types::{
     AsRep, AsReq, AuthorizationData, AuthorizationDataValue, Checksum, EncKdcRepPart,
     EncTgsRepPart, EncTicketPart, EncryptedData, EncryptionKey, EtypeInfo, EtypeInfo2,
-    EtypeInfo2Entry, EtypeInfoEntry, KdcReqBody, KerberosString, KerberosTime, KrbError,
-    LastReqValue, MethodData, Microseconds, OctetString, PaData, PaEncTsEnc, PrincipalName, TgsRep,
-    TgsReq, Ticket, TicketFlags, TransitedEncoding, err, flag_bit, ku, pa,
+    EtypeInfo2Entry, EtypeInfoEntry, HostAddress, HostAddresses, KdcReqBody, KerberosString,
+    KerberosTime, KrbError, LastReqValue, MethodData, Microseconds, OctetString, PaData,
+    PaEncTsEnc, PrincipalName, TgsRep, TgsReq, Ticket, TicketFlags, TransitedEncoding, err,
+    flag_bit, ku, pa,
 };
 
 use crate::ad::{
@@ -68,11 +69,24 @@ pub struct IssuedTgs {
 ///
 /// Only store-programming failures that cannot be encoded as KRB-ERROR.
 pub fn handle_request(store: &dyn PrincipalRead, raw: &[u8]) -> Result<Vec<u8>, Error> {
+    handle_request_from(store, raw, None)
+}
+
+/// Like [`handle_request`], with the UDP/TCP peer for TGS `BADADDR`.
+///
+/// # Errors
+///
+/// Same as [`handle_request`].
+pub fn handle_request_from(
+    store: &dyn PrincipalRead,
+    raw: &[u8],
+    sender: Option<&HostAddress>,
+) -> Result<Vec<u8>, Error> {
     let id = krb5_log::new_correlation_id();
     let _g = krb5_log::enter_correlation(id);
     let started = Instant::now();
     krb5_protocol::capture_pdu("kdc-req", raw);
-    let result = handle_inner(store, raw);
+    let result = handle_inner(store, raw, sender);
     if let Ok((bytes, _)) = &result {
         krb5_protocol::capture_pdu("kdc-rep", bytes);
     }
@@ -138,7 +152,11 @@ fn log_krb_error(duration_us: u64, code: i32, e_text: &str, detail: Option<&str>
     }
 }
 
-fn handle_inner(store: &dyn PrincipalRead, raw: &[u8]) -> Result<(Vec<u8>, Option<String>), Error> {
+fn handle_inner(
+    store: &dyn PrincipalRead,
+    raw: &[u8],
+    sender: Option<&HostAddress>,
+) -> Result<(Vec<u8>, Option<String>), Error> {
     // MIT dispatch.c:145-153: not AS/TGS or decode fail → no response.
     if raw.is_empty() {
         return Ok((Vec::new(), None));
@@ -151,7 +169,7 @@ fn handle_inner(store: &dyn PrincipalRead, raw: &[u8]) -> Result<(Vec<u8>, Optio
         },
         0x6c => match decode::<TgsReq>(raw) {
             Ok(req) if req.0.pvno != krb5_types::KdcReq::PVNO => Ok((Vec::new(), None)),
-            Ok(req) => tgs_reply(store, &req, raw),
+            Ok(req) => tgs_reply(store, &req, raw, sender),
             Err(_) => Ok((Vec::new(), None)),
         },
         _ => Ok((Vec::new(), None)),
@@ -238,6 +256,7 @@ fn tgs_reply(
     store: &dyn PrincipalRead,
     req: &TgsReq,
     raw: &[u8],
+    sender: Option<&HostAddress>,
 ) -> Result<(Vec<u8>, Option<String>), Error> {
     // MIT prepare_error_tgs (do_tgs_req.c:201-204): errpkt.client is the header
     // ticket's client when it decrypts, else NULL. gather_tgs_req_info returns
@@ -250,7 +269,7 @@ fn tgs_reply(
         None
     };
     let body = Some(&ebody);
-    match issue_tgs_from(store, req, Some(raw)) {
+    match issue_tgs_from(store, req, Some(raw), sender) {
         Ok(issued) => Ok((encode(&issued.rep)?, None)),
         Err(Error::Protocol {
             code,
@@ -586,6 +605,7 @@ fn issue_as_body(
         None,
         &starttime,
         None,
+        body.addresses.clone(),
     )?;
     let renew_till = renew_till_for(
         store,
@@ -628,6 +648,7 @@ fn issue_as_body(
         flags,
         renew_till,
         None,
+        body.addresses.clone(),
     )?;
     // The flag is always set; the enc-pa-rep padata is added only when the
     // client asked for it (kdc_handle_protected_negotiation).
@@ -680,7 +701,7 @@ fn issue_as_body(
 ///
 /// Bad authenticator, unknown server, or crypto/DER failures.
 pub fn issue_tgs(store: &dyn PrincipalRead, req: &TgsReq) -> Result<IssuedTgs, Error> {
-    issue_tgs_from(store, req, None)
+    issue_tgs_from(store, req, None, None)
 }
 
 struct HeaderTgt {
@@ -697,6 +718,7 @@ fn issue_tgs_from(
     store: &dyn PrincipalRead,
     req: &TgsReq,
     raw: Option<&[u8]>,
+    sender: Option<&HostAddress>,
 ) -> Result<IssuedTgs, Error> {
     let outer = &req.0.req_body;
     let encoded_body;
@@ -712,7 +734,7 @@ fn issue_tgs_from(
     }
     let pa_tgs = extract_pa_tgs(req.0.padata.as_deref())
         .ok_or_else(|| proto(err::PADATA_TYPE_NOSUPP, status::PROCESS_TGS))?;
-    let header = process_tgs_header(store, pa_tgs.as_ref(), body_der)?;
+    let header = process_tgs_header(store, pa_tgs.as_ref(), body_der, sender)?;
     let tgs_fast = unwrap_fast_tgs(
         store,
         req.0.padata.as_deref(),
@@ -733,6 +755,7 @@ fn process_tgs_header(
     store: &dyn PrincipalRead,
     ap_raw: &[u8],
     body_der: &[u8],
+    sender: Option<&HostAddress>,
 ) -> Result<HeaderTgt, Error> {
     let ap: krb5_types::ApReq = decode(ap_raw)?;
     if ap.ap_options.use_session_key() || ap.ap_options.wants_mutual() {
@@ -757,6 +780,12 @@ fn process_tgs_header(
     let tkt_realm = utf8_realm(&enc_tkt.crealm)?;
     if !krb5_types::principal_compare(&authenticator.cname, auth_realm, &enc_tkt.cname, tkt_realm) {
         return Err(proto(err::BADMATCH, status::PROCESS_TGS));
+    }
+    // MIT rd_req_dec.c:536-540: after client compare, before FX-ARMOR.
+    if let Some(remote) = sender
+        && !address_search(remote, enc_tkt.caddr.as_ref())
+    {
+        return Err(proto(err::BADADDR, status::PROCESS_TGS));
     }
     // MIT kdc_util.c:217-229: after rd_req, before the authenticator checksum.
     match fx_armor_present(
@@ -1256,6 +1285,7 @@ fn issue_tgs_body(
         } else {
             subject_pac.as_deref()
         },
+        tgs_ticket_caddr(body, renew, validate, &enc_tkt),
     )?;
     let mut s4u_rep_pa = None;
     let mut s4u_enc_pa = None;
@@ -1276,6 +1306,7 @@ fn issue_tgs_body(
         flags,
         ticket_renew_till,
         s4u_enc_pa,
+        tgs_reply_caddr(body, renew, validate),
     )?;
     let enc_der = encode_enc_kdc_rep_part(enc_part)?;
     let (enc_key, enc_usage) = if let Some(sub) = authenticator.subkey {
@@ -1644,6 +1675,43 @@ fn include_pac_p(padata: Option<&[PaData]>) -> bool {
     decode::<krb5_types::PaPacRequest>(raw).map_or(true, |p| p.include_pac)
 }
 
+/// MIT `addr_srch.c:55-59`: NULL matches; a lone NetBIOS list is empty.
+fn address_search(addr: &HostAddress, list: Option<&HostAddresses>) -> bool {
+    let Some(list) = list else {
+        return true;
+    };
+    if list.len() == 1 && list[0].addr_type == HostAddress::ADDRTYPE_NETBIOS {
+        return true;
+    }
+    list.iter().any(|a| a == addr)
+}
+
+/// MIT `do_tgs_req.c:1012-1027`.
+fn tgs_ticket_caddr(
+    body: &KdcReqBody,
+    renew: bool,
+    validate: bool,
+    header: &EncTicketPart,
+) -> Option<HostAddresses> {
+    if renew || validate {
+        header.caddr.clone()
+    } else if body.kdc_options.bit(flag_bit::FORWARDED) || body.kdc_options.bit(flag_bit::PROXY) {
+        body.addresses.clone()
+    } else {
+        header.caddr.clone()
+    }
+}
+
+fn tgs_reply_caddr(body: &KdcReqBody, renew: bool, validate: bool) -> Option<HostAddresses> {
+    let rewrite =
+        body.kdc_options.bit(flag_bit::FORWARDED) || body.kdc_options.bit(flag_bit::PROXY);
+    if renew || validate || !rewrite {
+        None
+    } else {
+        body.addresses.clone()
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn mint_ticket(
     service_key: &ProtocolKey,
@@ -1665,6 +1733,7 @@ fn mint_ticket(
     logon_override: Option<&[u8]>,
     starttime: &KerberosTime,
     subject_pac: Option<&[u8]>,
+    caddr: Option<HostAddresses>,
 ) -> Result<Ticket, Error> {
     let mut part = EncTicketPart {
         flags,
@@ -1676,7 +1745,7 @@ fn mint_ticket(
         starttime: Some(starttime.clone()),
         endtime: endtime.clone(),
         renew_till,
-        caddr: None,
+        caddr,
         authorization_data: None,
     };
     if include_pac {
@@ -1748,6 +1817,7 @@ fn enc_rep_part(
     flags: TicketFlags,
     renew_till: Option<KerberosTime>,
     encrypted_pa_data: Option<PaData>,
+    caddr: Option<HostAddresses>,
 ) -> Result<EncKdcRepPart, Error> {
     Ok(EncKdcRepPart {
         key: encryption_key(session),
@@ -1764,7 +1834,7 @@ fn enc_rep_part(
         renew_till,
         srealm: ks(realm)?,
         sname: sname.clone(),
-        caddr: None,
+        caddr,
         encrypted_pa_data: encrypted_pa_data.map(|p| vec![p]),
     })
 }

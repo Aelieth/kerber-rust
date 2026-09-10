@@ -20,12 +20,13 @@ use krb5_protocol::{
     KdcAddr, Keytab, armor_key, as_req, as_req_sname, attach_fast, build_fast_armor,
     compare_krb_error, compare_stable_rep, decode_enc_kdc_rep, exchange_on_tcp, pa_enc_timestamp,
     pa_enc_timestamp_at, pa_for_user, pa_s4u_x509_user, pa_spake_support, tgs_req, tgs_req_ex,
+    tgs_req_ex_addr,
 };
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac, PacIdentity, RpcSid};
 use krb5_types::{
     ApOptions, ApReq, AsRep, AuthorizationDataValue, EncTicketPart, EncryptedData, EncryptionKey,
-    KdcOptions, KerberosTime, KrbError, PaData, PaPacRequest, PrincipalName, TgsRep, Ticket,
-    TicketFlags, TransitedEncoding, err, flag_bit, ku, pa,
+    HostAddress, KdcOptions, KerberosTime, KrbError, PaData, PaPacRequest, PrincipalName, TgsRep,
+    Ticket, TicketFlags, TransitedEncoding, err, flag_bit, ku, pa,
 };
 use sha1::{Digest, Sha1};
 
@@ -471,6 +472,41 @@ fn mint_tgt(
     mint_tgt_ad(
         krbtgt, kvno, cname, realm, sname, session, window, flags, None,
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn mint_tgt_caddr(
+    krbtgt: &ProtocolKey,
+    kvno: u32,
+    cname: &PrincipalName,
+    realm: &str,
+    sname: &PrincipalName,
+    session: &ProtocolKey,
+    window: (KerberosTime, KerberosTime),
+    flags: TicketFlags,
+    caddr: Option<Vec<HostAddress>>,
+) -> Result<Ticket, String> {
+    let (start, end) = window;
+    let part = EncTicketPart {
+        flags,
+        key: EncryptionKey {
+            keytype: session.etype().to_iana(),
+            keyvalue: session.as_bytes().to_vec().into(),
+        },
+        crealm: krb5_types::try_ascii(realm).map_err(|e| e.to_string())?,
+        cname: cname.clone(),
+        transited: TransitedEncoding {
+            tr_type: 1,
+            contents: Vec::<u8>::new().into(),
+        },
+        authtime: start.clone(),
+        starttime: Some(start),
+        endtime: end,
+        renew_till: None,
+        caddr,
+        authorization_data: None,
+    };
+    seal_ticket(krbtgt, kvno, realm, sname, &part)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2278,7 +2314,101 @@ fn run() -> Result<(), String> {
         )?,
     )?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":64}}"#);
+    let mismatch = mint_tgt_caddr(
+        tkt_key,
+        tkt_kvno,
+        &user,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        window10.clone(),
+        TicketFlags::initial_preauth(),
+        Some(vec![HostAddress {
+            addr_type: HostAddress::ADDRTYPE_INET,
+            address: vec![10, 0, 0, 1].into(),
+        }]),
+    )?;
+    expect_error(
+        &cfg,
+        "tgs-addr-mismatch",
+        &encode(
+            &tgs_req(
+                mismatch,
+                &sess,
+                realm,
+                &user,
+                host.clone(),
+                realm,
+                0x1000_0060,
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::BADADDR,
+    )?;
+
+    let (hkey, hkvno) = keytab_for(
+        cfg.host
+            .as_ref()
+            .ok_or_else(|| "KERBER_HOST_KEYTAB required".to_string())?,
+        20,
+    )?;
+    let fwd_addrs = vec![HostAddress {
+        addr_type: HostAddress::ADDRTYPE_INET,
+        address: vec![192, 0, 2, 1].into(),
+    }];
+    let fwd_tkt = mint_tgt(
+        hkey,
+        hkvno,
+        &user,
+        realm,
+        &host,
+        &sess,
+        window10,
+        TicketFlags::initial_preauth().with_bit(flag_bit::FORWARDABLE, true),
+    )?;
+    let fwd = encode(
+        &tgs_req_ex_addr(
+            fwd_tkt,
+            &sess,
+            realm,
+            &user,
+            host.clone(),
+            realm,
+            0x1000_0061,
+            KdcOptions::none().with_bit(flag_bit::FORWARDED, true),
+            None,
+            Vec::new(),
+            etypes.clone(),
+            Some(fwd_addrs.clone()),
+        )
+        .map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    let (tr, tm) = send_both(&cfg, "tgs-forwarded-addresses", &fwd)?;
+    let svc = cfg
+        .host
+        .as_ref()
+        .ok_or_else(|| "KERBER_HOST_KEYTAB required".to_string())?;
+    let (_, re, rt, _) = decrypt_tgs(&tr, &sess, svc)?;
+    let (_, me, mt, _) = decrypt_tgs(&tm, &sess, svc)?;
+    if rt.caddr.as_ref() != Some(&fwd_addrs) || mt.caddr.as_ref() != Some(&fwd_addrs) {
+        return Err(format!(
+            "tgs-forwarded-addresses: ticket caddr rust={:?} mit={:?}",
+            rt.caddr, mt.caddr
+        ));
+    }
+    if re.caddr.as_ref() != Some(&fwd_addrs) || me.caddr.as_ref() != Some(&fwd_addrs) {
+        return Err(format!(
+            "tgs-forwarded-addresses: reply caddr rust={:?} mit={:?}",
+            re.caddr, me.caddr
+        ));
+    }
+    println!(
+        r#"{{"event":"diffsend","case":"tgs-forwarded-addresses","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"}}"#
+    );
+
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":66}}"#);
     Ok(())
 }
 

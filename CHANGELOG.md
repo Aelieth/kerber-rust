@@ -71,6 +71,15 @@ this project uses semantic versioning once a crate is published.
   `enc_part.kvno = 0`, which `DEFOPTIONALZEROTYPE` omits on the wire
   (a present INTEGER 0 breaks FAST finished). `DISALLOW_DUP_SKEY` is
   12 `DUP_SKEY DISALLOWED`. diffsend 64 cases.
+- **kdc.** Ticket addresses follow MIT AS/TGS copy rules
+  (`do_as_req.c:713,245`, `do_tgs_req.c:1012-1027`). The TGS binds the
+  UDP/TCP peer (`kdc_util.c:197-200`) with `krb5_address_search`
+  (`addr_srch.c:55-59`: NULL matches; a lone NetBIOS list is empty) and
+  rejects a mismatch as 38 `BADADDR` `PROCESS_TGS`. FORWARDED/PROXY
+  put the request addresses on the ticket and the reply; RENEW/VALIDATE
+  keep the header `caddrs` and omit them from the reply. diffsend 66
+  cases. The acceptor still compares whole address lists
+  (`docs/security.md`).
 - **test.** `a2_6_tgs_gather.rs` is the parent-red truth table.
   `a2_6_tgs_pac_extra.rs` covers PAC-REQUEST / `disable_pac` / privsvr /
   MIT-shape copy. `cross-kdc-gate.sh` compares MIT-TGT → Rust-TGS PAC

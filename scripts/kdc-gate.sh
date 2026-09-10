@@ -108,6 +108,71 @@ echo "$KLIST2"
 echo "$KLIST2" | grep -q 'user@KERBER.TEST'
 echo "$KLIST2" | grep -q 'host/testhost.kerber.test'
 
+echo "==== MIT kinit -a then kvno via 127.0.0.1 is BADADDR ===="
+docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
+if ! docker exec -e KRB5_TRACE=/dev/stderr "$NAME" sh -c 'printf "userpassword\n" | kinit -a user@KERBER.TEST'; then
+    log "kdc.gate" "error" ',"error":"MIT kinit -a failed"'
+    docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
+    exit 1
+fi
+KLISTA="$(docker exec "$NAME" klist -a -n)"
+echo "$KLISTA"
+echo "$KLISTA" | grep -qE 'Addresses: [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'
+set +e
+KVNOA="$(docker exec -e KRB5_TRACE=/dev/stderr "$NAME" kvno host/testhost.kerber.test 2>&1)"
+KVNOA_RC=$?
+set -e
+echo "$KVNOA"
+if [ "$KVNOA_RC" -eq 0 ]; then
+    log "kdc.gate" "error" ',"error":"kinit -a kvno via 127.0.0.1 unexpectedly succeeded"'
+    exit 1
+fi
+echo "$KVNOA" | grep -qiE "Incorrect net address|BADADDR|KRB5KRB_AP_ERR_BADADDR"
+
+echo "==== MIT kinit -a + kvno via bridge address ===="
+BRIDGE="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$NAME")"
+if [ -z "$BRIDGE" ]; then
+    log "kdc.gate" "error" ',"error":"no docker bridge address"'
+    exit 1
+fi
+docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true'
+sleep 0.3
+docker exec -d \
+    -e KRB5_TEST_USER_PASSWORD=userpassword \
+    -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
+    -e KERBER_CAPTURE_DIR=/tmp/traces \
+    "$NAME" sh -c "/tmp/krb5-kdc --test-realm 0.0.0.0:${PORT} >/tmp/kdc-bridge.log 2>&1"
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/kdc-bridge.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kdc-bridge.log >&2 || true
+    log "kdc.gate" "error" ',"error":"kdc did not listen on 0.0.0.0"'
+    exit 1
+fi
+docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
+docker exec "$NAME" sh -c "sed -i 's/kdc = 127.0.0.1.*/kdc = ${BRIDGE}:${PORT}/' /etc/krb5.conf"
+if ! docker exec -e KRB5_TRACE=/dev/stderr "$NAME" sh -c 'printf "userpassword\n" | kinit -a user@KERBER.TEST'; then
+    log "kdc.gate" "error" ',"error":"MIT kinit -a via bridge failed"'
+    docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
+    exit 1
+fi
+if ! docker exec -e KRB5_TRACE=/dev/stderr "$NAME" kvno host/testhost.kerber.test; then
+    log "kdc.gate" "error" ',"error":"MIT kvno via bridge failed"'
+    docker exec "$NAME" klist -a -n || true
+    docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
+    exit 1
+fi
+KLISTB="$(docker exec "$NAME" klist -a -n)"
+echo "$KLISTB"
+echo "$KLISTB" | grep -q 'host/testhost.kerber.test'
+echo "$KLISTB" | grep -qE 'Addresses: [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'
+
 TRACE_DST="${KERBER_TRACE_DST:-$ROOT/tests/traces}"
 mkdir -p "$TRACE_DST"
 docker cp "$NAME":/tmp/traces/. "$TRACE_DST/" 2>/dev/null || true

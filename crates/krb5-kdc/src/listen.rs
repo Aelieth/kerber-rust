@@ -10,9 +10,10 @@ use std::thread;
 use std::time::Duration;
 
 use crate::Error;
-use crate::issue::handle_request;
+use crate::issue::handle_request_from;
 use crate::kdb::Store;
 use crate::lookaside::{Check, Lookaside};
+use krb5_types::HostAddress;
 
 /// MIT `net-server.c:1101-1105`.
 pub const WHILE_DISPATCHING_UDP: &str = "while dispatching (udp)";
@@ -74,7 +75,12 @@ enum Dispatch {
 /// an in-flight duplicate, or process a fresh request under an in-progress
 /// marker and cache its reply. The marker is dropped and only a produced reply
 /// is cached, like `finish_dispatch_cache`.
-fn dispatch_via_cache(store: &SharedStore, cache: &Mutex<Lookaside>, req: &[u8]) -> Dispatch {
+fn dispatch_via_cache(
+    store: &SharedStore,
+    cache: &Mutex<Lookaside>,
+    req: &[u8],
+    sender: Option<&HostAddress>,
+) -> Dispatch {
     match lock_cache(cache).check_or_mark(req) {
         Check::Hit(reply) => {
             log_dispatch_resend();
@@ -87,7 +93,7 @@ fn dispatch_via_cache(store: &SharedStore, cache: &Mutex<Lookaside>, req: &[u8])
         Check::Fresh => {}
     }
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        read_store(store, |s| handle_request(s, req))
+        read_store(store, |s| handle_request_from(s, req, sender))
     }));
     match result {
         Ok(Ok(reply)) => {
@@ -346,7 +352,8 @@ fn udp_loop(
         match sock.recv_from(&mut buf) {
             Ok((n, peer)) => {
                 let payload = buf[..n].to_vec();
-                match dispatch_via_cache(store, cache, &payload) {
+                let sender = HostAddress::from_socket(peer);
+                match dispatch_via_cache(store, cache, &payload, Some(&sender)) {
                     Dispatch::Send(mut reply) => {
                         if reply.is_empty() {
                             log_dispatch_drop(true);
@@ -513,7 +520,14 @@ fn handle_tcp(
         }
         Err(e) => return Err(e),
     }
-    let reply = match dispatch_via_cache(store, cache, &req) {
+    let sender = stream.peer_addr().ok().map_or(
+        HostAddress {
+            addr_type: 0,
+            address: Vec::new().into(),
+        },
+        HostAddress::from_socket,
+    );
+    let reply = match dispatch_via_cache(store, cache, &req, Some(&sender)) {
         Dispatch::Send(r) => r,
         Dispatch::Drop => return Ok(()),
         Dispatch::Error(e) => {

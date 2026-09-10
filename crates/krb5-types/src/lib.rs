@@ -325,6 +325,39 @@ pub struct HostAddress {
     pub address: OctetString,
 }
 
+impl HostAddress {
+    /// MIT `ADDRTYPE_INET`.
+    pub const ADDRTYPE_INET: i32 = 2;
+    /// MIT `ADDRTYPE_NETBIOS`.
+    pub const ADDRTYPE_NETBIOS: i32 = 0x14;
+    /// MIT `ADDRTYPE_INET6`.
+    pub const ADDRTYPE_INET6: i32 = 0x18;
+
+    /// MIT `k5_sockaddr_to_address` (`addr.c:44-75`, `local_use` false).
+    #[must_use]
+    pub fn from_socket(addr: std::net::SocketAddr) -> Self {
+        match addr {
+            std::net::SocketAddr::V4(v) => Self {
+                addr_type: Self::ADDRTYPE_INET,
+                address: v.ip().octets().to_vec().into(),
+            },
+            std::net::SocketAddr::V6(v) => {
+                if let Some(v4) = v.ip().to_ipv4_mapped() {
+                    Self {
+                        addr_type: Self::ADDRTYPE_INET,
+                        address: v4.octets().to_vec().into(),
+                    }
+                } else {
+                    Self {
+                        addr_type: Self::ADDRTYPE_INET6,
+                        address: v.ip().octets().to_vec().into(),
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// One authorization-data element.
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct AuthorizationDataValue {
