@@ -19,7 +19,7 @@ use krb5_kdc::{PacTicket, pac_from_ticket_part, sign_pac, ticket_checksum_der, w
 use krb5_protocol::{
     KdcAddr, Keytab, armor_key, as_req, as_req_sname, attach_fast, build_fast_armor,
     compare_krb_error, compare_stable_rep, decode_enc_kdc_rep, exchange_on_tcp, pa_enc_timestamp,
-    pa_enc_timestamp_at, pa_spake_support, tgs_req, tgs_req_ex,
+    pa_enc_timestamp_at, pa_for_user, pa_s4u_x509_user, pa_spake_support, tgs_req, tgs_req_ex,
 };
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac, PacIdentity, RpcSid};
 use krb5_types::{
@@ -620,12 +620,34 @@ fn ad_types(part: &EncTicketPart) -> Vec<i32> {
     out
 }
 
+fn tgs_pa_types(raw: &[u8]) -> Result<Vec<i32>, String> {
+    let rep: TgsRep = decode(raw).map_err(|e| format!("TgsRep: {e}"))?;
+    Ok(rep
+        .0
+        .padata
+        .unwrap_or_default()
+        .iter()
+        .map(|p| p.padata_type)
+        .collect())
+}
+
 fn expect_tgs_ad(
     cfg: &Cfg,
     case: &str,
     req: &[u8],
     session: &ProtocolKey,
     want_pac: bool,
+) -> Result<(), String> {
+    expect_tgs_ad_pa(cfg, case, req, session, want_pac, None)
+}
+
+fn expect_tgs_ad_pa(
+    cfg: &Cfg,
+    case: &str,
+    req: &[u8],
+    session: &ProtocolKey,
+    want_pac: bool,
+    want_pa: Option<i32>,
 ) -> Result<(), String> {
     let (tr, tm) = send_both(cfg, case, req)?;
     let svc = cfg
@@ -646,9 +668,22 @@ fn expect_tgs_ad(
             ad_types(&mt)
         ));
     }
-    println!(
-        r#"{{"event":"diffsend","case":"{case}","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","issued_pac":{want_pac}}}"#
-    );
+    if let Some(pt) = want_pa {
+        let rpa = tgs_pa_types(&tr).map_err(|e| format!("{case} rust {e}"))?;
+        let mpa = tgs_pa_types(&tm).map_err(|e| format!("{case} mit {e}"))?;
+        if !rpa.contains(&pt) || !mpa.contains(&pt) {
+            return Err(format!(
+                "{case}: reply padata rust={rpa:?} mit={mpa:?} want {pt}"
+            ));
+        }
+        println!(
+            r#"{{"event":"diffsend","case":"{case}","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","issued_pac":{want_pac},"reply_padata":{pt}}}"#
+        );
+    } else {
+        println!(
+            r#"{{"event":"diffsend","case":"{case}","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","issued_pac":{want_pac}}}"#
+        );
+    }
     Ok(())
 }
 
@@ -1680,7 +1715,157 @@ fn run() -> Result<(), String> {
         true,
     )?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":41}}"#);
+    let host_flags = TicketFlags::initial_preauth().with_bit(flag_bit::FORWARDABLE, true);
+    let host_hdr = |pac_cname: &PrincipalName, flip: bool| -> Result<Ticket, String> {
+        mint_signed_header(
+            tkt_key,
+            tkt_kvno,
+            &host,
+            realm,
+            &krbtgt_sname,
+            &sess,
+            window10.clone(),
+            host_flags.clone(),
+            pac_cname,
+            flip,
+            None,
+        )
+    };
+    let s4u_req = |tkt: Ticket, extra: Vec<PaData>, nonce: u32| -> Result<Vec<u8>, String> {
+        encode(
+            &tgs_req_ex(
+                tkt,
+                &sess,
+                realm,
+                &host,
+                host.clone(),
+                realm,
+                nonce,
+                KdcOptions::forwardable(),
+                None,
+                extra,
+                etypes.clone(),
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())
+    };
+
+    let pacless_host = mint_tgt(
+        tkt_key,
+        tkt_kvno,
+        &host,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        window10.clone(),
+        host_flags.clone(),
+    )?;
+    expect_error(
+        &cfg,
+        "s4u2self-no-pac",
+        &s4u_req(
+            pacless_host,
+            vec![pa_for_user(&sess, user.clone(), realm).map_err(|e| e.to_string())?],
+            0x1000_0040,
+        )?,
+        err::TGT_REVOKED,
+    )?;
+
+    expect_error(
+        &cfg,
+        "s4u2self-pac-client-mismatch",
+        &s4u_req(
+            host_hdr(&user, false)?,
+            vec![pa_for_user(&sess, user.clone(), realm).map_err(|e| e.to_string())?],
+            0x1000_0041,
+        )?,
+        err::BADOPTION,
+    )?;
+
+    let mut bad130 =
+        pa_s4u_x509_user(&sess, user.clone(), realm, 0x1000_0042).map_err(|e| e.to_string())?;
+    let mut x509: krb5_types::s4u::PaS4uX509User =
+        decode(bad130.padata_value.as_ref()).map_err(|e| e.to_string())?;
+    let mut ck = x509.cksum.checksum.to_vec();
+    if let Some(b) = ck.first_mut() {
+        *b ^= 0xff;
+    }
+    x509.cksum.checksum = ck.into();
+    bad130.padata_value = encode(&x509).map_err(|e| e.to_string())?.into();
+    expect_error(
+        &cfg,
+        "pa-s4u-x509-user-bad-checksum",
+        &s4u_req(host_hdr(&host, false)?, vec![bad130], 0x1000_0042)?,
+        err::MODIFIED,
+    )?;
+
+    expect_error(
+        &cfg,
+        "pa-s4u-x509-user-nonce",
+        &s4u_req(
+            host_hdr(&host, false)?,
+            vec![pa_s4u_x509_user(&sess, user.clone(), realm, 0xdead).map_err(|e| e.to_string())?],
+            0x1000_0043,
+        )?,
+        err::MODIFIED,
+    )?;
+
+    expect_tgs_ad(
+        &cfg,
+        "pa-for-user-only",
+        &s4u_req(
+            host_hdr(&host, false)?,
+            vec![pa_for_user(&sess, user.clone(), realm).map_err(|e| e.to_string())?],
+            0x1000_0044,
+        )?,
+        &sess,
+        true,
+    )?;
+
+    let empty = PrincipalName::new(PrincipalName::NT_UNKNOWN, std::iter::empty::<&str>());
+    expect_error(
+        &cfg,
+        "pa-s4u-x509-user-empty",
+        &s4u_req(
+            host_hdr(&host, false)?,
+            vec![pa_s4u_x509_user(&sess, empty, realm, 0x1000_0045).map_err(|e| e.to_string())?],
+            0x1000_0045,
+        )?,
+        err::C_PRINCIPAL_UNKNOWN,
+    )?;
+
+    expect_error(
+        &cfg,
+        "pa-for-user-undecodable",
+        &s4u_req(
+            host_hdr(&host, false)?,
+            vec![PaData {
+                padata_type: pa::FOR_USER,
+                padata_value: b"\x30\x03\x01\x01".to_vec().into(),
+            }],
+            0x1000_0046,
+        )?,
+        err::GENERIC,
+    )?;
+
+    expect_tgs_ad_pa(
+        &cfg,
+        "pa-s4u-x509-user",
+        &s4u_req(
+            host_hdr(&host, false)?,
+            vec![
+                pa_s4u_x509_user(&sess, user.clone(), realm, 0x1000_0047)
+                    .map_err(|e| e.to_string())?,
+            ],
+            0x1000_0047,
+        )?,
+        &sess,
+        true,
+        Some(pa::FOR_X509_USER),
+    )?;
+
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":49}}"#);
     Ok(())
 }
 

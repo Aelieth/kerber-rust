@@ -639,6 +639,40 @@ pub fn pa_for_user(
     })
 }
 
+/// PA-S4U-X509-USER (padata 130). Checksum is ku 26 over the encoded user-id.
+///
+/// # Errors
+///
+/// Crypto or DER.
+pub fn pa_s4u_x509_user(
+    key: &ProtocolKey,
+    user: PrincipalName,
+    realm: &str,
+    nonce: u32,
+) -> Result<PaData, Error> {
+    let user_id = krb5_types::s4u::S4uUserId {
+        nonce: nonce as i32,
+        user: Some(user),
+        realm: krb5_types::try_ascii(realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?,
+        subject_cert: None,
+        options: Some(krb5_types::s4u::s4u_reply_key_usage_flags()),
+    };
+    let der = encode(&user_id)?;
+    let usage = KeyUsage::new(ku::PA_S4U_X509_USER_REQUEST)?;
+    let mic = checksum(key, usage, &der)?;
+    let body = krb5_types::s4u::PaS4uX509User {
+        user_id,
+        cksum: Checksum {
+            cksumtype: key.etype().checksum_type(),
+            checksum: mic.into(),
+        },
+    };
+    Ok(PaData {
+        padata_type: pa::FOR_X509_USER,
+        padata_value: encode(&body)?.into(),
+    })
+}
+
 /// PA-PAC-OPTIONS (padata 167). `rbcd` sets MS-KILE bit 3.
 ///
 /// # Errors

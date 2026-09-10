@@ -29,8 +29,22 @@ this project uses semantic versioning once a crate is published.
   Privsvr signing uses `get_first_current_key` of the local TGT, then
   `pac_privsvr_enctype` / PRF+ `pac_privsvr`. Transited appends only
   when `is_crossrealm` and the header server realm is not the client
-  realm. A cross-TGS header whose PAC is not the ticket client is
-  fail-closed 13 until item 8 (`verify_deleg_pac`). diffsend 41 cases.
+  realm. A regular TGS preserves the subject ticket `authtime`
+  (`do_tgs_req.c:826-827`) so copied CLIENT_INFO still matches at the
+  next hop. A cross-TGS header whose PAC is not the ticket client is
+  fail-closed 13 until item 8 (`verify_deleg_pac`).
+- **kdc.** S4U2Self is `kdc_process_s4u2self_req` + `check_tgs_s4u2self` +
+  `s4u2self_forwardable` + `kdc_make_s4u2self_rep` (`kdc_util.c:1232-1644`,
+  `tgs_policy.c:261-358`). PA-S4U-X509-USER (130) wins over PA-FOR-USER;
+  checksum ku 26 under the authenticator subkey else the TGT session;
+  nonce mismatch and a bad keyed checksum are 41; empty user+cert is 6;
+  a missing header PAC is 20; local PAC must be the impersonator, foreign
+  PAC the subject with realm; cert-only local is 60
+  `LOOKING_UP_S4U2SELF_PRINCIPAL` (db2 has no x509 hook); the impersonated
+  client's `pw_expiration` / `REQUIRES_PWCHANGE` are cleared. FORWARDABLE
+  stays set unless the service has `allowed_to_delegate` targets and
+  lacks `OK_TO_AUTH_AS_DELEGATE` (MIT db2 has no hook, so F stays).
+  Reply 130 only when the request carried 130. diffsend 49 cases.
 - **test.** `a2_6_tgs_gather.rs` is the parent-red truth table.
   `a2_6_tgs_pac_extra.rs` covers PAC-REQUEST / `disable_pac` / privsvr /
   MIT-shape copy. `cross-kdc-gate.sh` compares MIT-TGT → Rust-TGS PAC

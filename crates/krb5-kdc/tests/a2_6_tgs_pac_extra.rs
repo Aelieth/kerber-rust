@@ -238,6 +238,62 @@ fn tgs_from_local_tgt_keeps_subject_logon() {
 }
 
 #[test]
+fn tgs_preserves_subject_authtime() {
+    let (store, _) = bootstrap_documented().unwrap();
+    let as_out = issue_tgt(&store, 6160);
+    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
+    let mut part = decrypt_ticket_part(&krbtgt.key, &as_out.rep.0.ticket).unwrap();
+    let old = KerberosTime::from_unix_seconds(1_700_000_000);
+    part.authtime = old.clone();
+    let stub = Pac::built(
+        0,
+        vec![PacBuffer::new(
+            PAC_CLIENT_INFO,
+            client_info_buffer(old.unix_seconds(), &part.cname.components_joined()),
+        )],
+    )
+    .to_bytes();
+    part.authorization_data = Some(wrap_win2k_pac(&[0]).unwrap());
+    let der = ticket_checksum_der(&part).unwrap();
+    let ident = store.pac_identity(&part.cname, TEST_REALM);
+    let pac = sign_reply_pac(
+        &part.cname,
+        old.unix_seconds(),
+        &PacTicket {
+            server: &krbtgt.key,
+            kdc: &krbtgt.key,
+            enc_tkt_der: &der,
+            is_service_tkt: false,
+        },
+        &ident,
+        None,
+        Some(&stub),
+    )
+    .unwrap();
+    part.authorization_data = Some(wrap_win2k_pac(&pac).unwrap());
+    let tkt = rewrap(&as_out.rep.0.ticket, &part, &krbtgt.key);
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let tgs = tgs_req(
+        tkt,
+        &as_out.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        6161,
+    )
+    .unwrap();
+    let svc = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
+    let host = store
+        .get_name(&documented_host())
+        .unwrap()
+        .best_key()
+        .unwrap();
+    let svc_part = decrypt_ticket_part(&host.key, &svc.rep.0.ticket).unwrap();
+    assert_eq!(svc_part.authtime, old);
+}
+
+#[test]
 fn tgs_not_a_tgt_decrypts_and_names_client() {
     let (store, _) = bootstrap_documented().unwrap();
     let as_out = issue_tgt(&store, 6001);

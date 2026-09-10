@@ -1,7 +1,7 @@
 //! Capaths transited check on the shipped `issue_tgs` path.
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt};
 use krb5_kdc::{
     Acl, Error, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_SVR, PrincipalStore, TEST_ADMIN,
     TEST_ADMIN_PASSWORD, TEST_USER, TEST_USER_PASSWORD, as_req, decrypt_ticket_part,
@@ -209,6 +209,44 @@ fn three_hop_capaths_accept_and_reject() {
         !lax_part.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED),
         "failed check must not set T when reject_bad_transit is false"
     );
+}
+
+fn attach_client_info_pac(key: &ProtocolKey, part: &mut EncTicketPart, info_name: &str) {
+    use krb5_kdc::{PacTicket, sign_reply_pac, ticket_checksum_der, wrap_win2k_pac};
+    use krb5_types::pac::{
+        PAC_CLIENT_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer,
+    };
+    let stub = Pac::built(
+        0,
+        vec![PacBuffer::new(
+            PAC_CLIENT_INFO,
+            client_info_buffer(part.authtime.unix_seconds(), info_name),
+        )],
+    )
+    .to_bytes();
+    part.authorization_data = Some(wrap_win2k_pac(&[0]).expect("ph"));
+    let der = ticket_checksum_der(part).expect("der");
+    let ident = PacIdentity {
+        sam: part.cname.components_joined(),
+        realm: String::new(),
+        domain_sid: RpcSid::nt_domain(1, 2, 3),
+        rid: 1,
+    };
+    let pac = sign_reply_pac(
+        &part.cname,
+        part.authtime.unix_seconds(),
+        &PacTicket {
+            server: key,
+            kdc: key,
+            enc_tkt_der: &der,
+            is_service_tkt: false,
+        },
+        &ident,
+        None,
+        Some(&stub),
+    )
+    .expect("sign");
+    part.authorization_data = Some(wrap_win2k_pac(&pac).expect("wrap"));
 }
 
 fn reseal(key: &ProtocolKey, ticket: &mut Ticket, part: &EncTicketPart) {
@@ -899,9 +937,13 @@ fn s4u2self_referral_names_header_client() {
         981,
     )
     .expect("A B");
+    let mut t = ab.rep.0.ticket.clone();
+    let mut part = decrypt_ticket_part(&ir, &t).expect("ab");
+    attach_client_info_pac(&ir, &mut part, &format!("{TEST_ADMIN}@A.TEST"));
+    reseal(&ir, &mut t, &part);
     let pa = pa_for_user(&ab.session_key, admin, "A.TEST").expect("PA-FOR-USER");
     let req = tgs_req_ex(
-        ab.rep.0.ticket.clone(),
+        t,
         &ab.session_key,
         "A.TEST",
         &user,
@@ -1047,7 +1089,7 @@ fn s4u2self_cross_tgt_local_server_foreign_user_issues() {
     let mut part = decrypt_ticket_part(&ir, &t).expect("bc");
     part.cname = host_c.clone();
     part.crealm = krb5_types::try_ascii("C.TEST").expect("realm");
-    part.authorization_data = None;
+    attach_client_info_pac(&ir, &mut part, &format!("{TEST_ADMIN}@A.TEST"));
     reseal(&ir, &mut t, &part);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let pa = pa_for_user(&bc.session_key, admin, "A.TEST").expect("PA-FOR-USER");
@@ -1073,6 +1115,56 @@ fn s4u2self_cross_tgt_local_server_foreign_user_issues() {
         std::str::from_utf8(part.crealm.as_bytes()).unwrap(),
         "A.TEST"
     );
+}
+
+#[test]
+fn s4u2self_cross_tgt_cert_only_empty_name_is_invalid_xrealm() {
+    let (_a, _b, mut c, ir, host_c, bc) = three_realm();
+    c.policy.reject_bad_transit = false;
+    let mut t = bc.rep.0.ticket.clone();
+    let mut part = decrypt_ticket_part(&ir, &t).expect("bc");
+    part.cname = host_c.clone();
+    part.crealm = krb5_types::try_ascii("C.TEST").expect("realm");
+    part.authorization_data = None;
+    reseal(&ir, &mut t, &part);
+    let user_id = krb5_types::s4u::S4uUserId {
+        nonce: 988,
+        user: None,
+        realm: krb5_types::try_ascii("A.TEST").expect("realm"),
+        subject_cert: Some(b"cert".to_vec().into()),
+        options: Some(krb5_types::s4u::s4u_reply_key_usage_flags()),
+    };
+    let der = encode(&user_id).expect("id");
+    let usage = KeyUsage::new(ku::PA_S4U_X509_USER_REQUEST).unwrap();
+    let mic = checksum(&bc.session_key, usage, &der).expect("ck");
+    let body = krb5_types::s4u::PaS4uX509User {
+        user_id,
+        cksum: krb5_types::Checksum {
+            cksumtype: bc.session_key.etype().checksum_type(),
+            checksum: mic.into(),
+        },
+    };
+    let pa = krb5_types::PaData {
+        padata_type: pa::FOR_X509_USER,
+        padata_value: encode(&body).expect("130").into(),
+    };
+    let req = tgs_req_ex(
+        t,
+        &bc.session_key,
+        "C.TEST",
+        &host_c,
+        host_c.clone(),
+        "C.TEST",
+        988,
+        KdcOptions::forwardable(),
+        None,
+        vec![pa],
+        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
+    )
+    .expect("s4u");
+    let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
+    assert_eq!(code, err::POLICY);
+    assert_eq!(text.as_deref(), Some("INVALID_XREALM_S4U2SELF_REQUEST"));
 }
 
 // R2-S1: a cross-realm subject's PAC is SID-filtered on reissue — SIDs under

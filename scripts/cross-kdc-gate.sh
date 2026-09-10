@@ -213,9 +213,9 @@ echo "==== MIT-TGT → Rust-TGS PAC buffer types match MIT-TGT → MIT-TGS ===="
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-pac-extract" "$NAME":/tmp/krb5-pac-extract
 docker exec "$NAME" chmod +x /tmp/krb5-pac-extract
 docker exec "$NAME" kadmin.local -q 'ktadd -norandkey -k /tmp/host.kt host/testhost.kerber.test' \
-    >/tmp/cross-kdc-ktadd.out 2>&1 || die "ktadd -norandkey host failed"
+    >/dev/null 2>&1 || die "ktadd -norandkey host failed"
 docker exec "$NAME" kadmin.local -q 'ktadd -norandkey -k /tmp/krbtgt.kt krbtgt/KERBER.TEST' \
-    >/tmp/cross-kdc-ktadd-tgt.out 2>&1 || die "ktadd -norandkey krbtgt failed"
+    >/dev/null 2>&1 || die "ktadd -norandkey krbtgt failed"
 pac_types_via() {
     local tgs=$1
     kinit_via mit

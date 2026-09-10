@@ -78,6 +78,36 @@ def parse_kdc_req(pdu: bytes) -> tuple[int | None, list[int]]:
     return msg_type, types
 
 
+def parse_kdc_rep(pdu: bytes) -> tuple[int | None, list[int]]:
+    """(msg-type, [padata-type…]) of an AS-REP (0x6b) or TGS-REP (0x6d)."""
+    if not pdu or pdu[0] not in (0x6B, 0x6D):
+        return None, []
+    _, seq, _ = _tlv(pdu, 0)
+    _, body, _ = _tlv(seq, 0)
+    msg_type = None
+    types: list[int] = []
+    i = 0
+    while i < len(body):
+        tag, val, i = _tlv(body, i)
+        if tag & 0xC0 != 0x80:
+            continue
+        num = tag & 0x1F
+        _, inner, _ = _tlv(val, 0)
+        if num == 1:
+            msg_type = _int(inner)
+        elif num == 2:
+            j = 0
+            while j < len(inner):
+                _, pa, j = _tlv(inner, j)
+                k = 0
+                while k < len(pa):
+                    ptag, pval, k = _tlv(pa, k)
+                    if ptag == 0xA1:
+                        _, pt, _ = _tlv(pval, 0)
+                        types.append(_int(pt))
+    return msg_type, types
+
+
 def parse_error_edata(pdu: bytes) -> tuple[int | None, str, list[int]]:
     """(error_code, encoding, e_data types) of a KRB-ERROR (0x7e)."""
     if not pdu or pdu[0] != 0x7E:
@@ -169,6 +199,10 @@ def main() -> int:
         if reply[:1] == b"\x7e":
             code, enc, etypes = parse_error_edata(reply)
             rline = f"rep#{n} error_code={code} e_data_encoding={enc} e_data_types={etypes}\n"
+        elif reply[:1] in (b"\x6b", b"\x6d"):
+            _, types = parse_kdc_rep(reply)
+            tag = reply[0]
+            rline = f"rep#{n} tag=0x{tag:02x} padata={types} len={len(reply)}\n"
         else:
             tag = reply[0] if reply else 0
             rline = f"rep#{n} tag=0x{tag:02x} len={len(reply)}\n"

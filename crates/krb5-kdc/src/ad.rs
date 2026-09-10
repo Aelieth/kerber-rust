@@ -10,7 +10,8 @@ use krb5_types::pac::{
     PAC_TICKET_CHECKSUM, parse_client_info,
 };
 use krb5_types::{
-    AuthorizationDataValue, EncTicketPart, PaData, PrincipalName, TgsReq, Ticket, err, ku, pa,
+    AuthorizationDataValue, EncTicketPart, EncryptionKey, PaData, PrincipalName, TgsReq, Ticket,
+    err, ku, pa,
 };
 
 use crate::error::Error;
@@ -481,13 +482,32 @@ pub(crate) fn check_normal_tgs_pac(
 }
 
 fn pac_client_matches(pac: &krb5_types::pac::Pac, enc_tkt: &EncTicketPart) -> bool {
+    pac_client_info_eq(
+        pac,
+        enc_tkt.authtime.unix_seconds(),
+        &enc_tkt.cname.components_joined(),
+        None,
+    )
+}
+
+/// `k5_pac_validate_client`: `with_realm` compares `name@REALM`.
+pub(crate) fn pac_client_info_eq(
+    pac: &krb5_types::pac::Pac,
+    authtime: u32,
+    name: &str,
+    realm: Option<&str>,
+) -> bool {
     let Ok(Some(buf)) = pac.unique_buffer(PAC_CLIENT_INFO) else {
         return false;
     };
-    let Some((authtime, name)) = parse_client_info(buf) else {
+    let Some((got_time, got_name)) = parse_client_info(buf) else {
         return false;
     };
-    authtime == enc_tkt.authtime.unix_seconds() && name == enc_tkt.cname.components_joined()
+    let want = match realm {
+        Some(r) => format!("{name}@{r}"),
+        None => name.to_owned(),
+    };
+    got_time == authtime && got_name == want
 }
 
 /// MS-PAC 4.1.2.2 SID filtering for a cross-realm subject: a trusted realm may
@@ -547,15 +567,53 @@ pub fn pac_from_ticket_part(part: &EncTicketPart) -> Option<Vec<u8>> {
     None
 }
 
-/// S4U2Self: PA-FOR-USER impersonation.
-pub(crate) fn s4u2self_client(
+/// Result of `kdc_process_s4u2self_req` (`kdc_util.c:1556-1621`).
+pub(crate) struct S4u2Self {
+    pub user: PrincipalName,
+    pub realm: String,
+    pub local: Option<Principal>,
+    pub x509: Option<krb5_types::s4u::PaS4uX509User>,
+}
+
+/// S4U2Self: 130 wins over 129 (`kdc_util.c:1570-1586`).
+pub(crate) fn process_s4u2self_req(
+    store: &dyn PrincipalRead,
     tgt_session: &ProtocolKey,
+    tgs_subkey: Option<&EncryptionKey>,
     padata: Option<&[PaData]>,
-) -> Result<Option<(PrincipalName, String)>, Error> {
-    let Some(raw) = find_pa(padata, pa::FOR_USER) else {
-        return Ok(None);
-    };
-    let pa: krb5_types::s4u::PaForUser = decode(raw)?;
+    nonce: u32,
+) -> Result<Option<S4u2Self>, Error> {
+    if let Some(raw) = find_pa(padata, pa::FOR_X509_USER) {
+        let x509 = process_s4u_x509_user(raw, tgt_session, tgs_subkey, nonce)?;
+        return Ok(Some(s4u_from_userid(
+            store,
+            x509.user_id.clone(),
+            Some(x509),
+        )?));
+    }
+    if let Some(raw) = find_pa(padata, pa::FOR_USER) {
+        let pa: krb5_types::s4u::PaForUser =
+            decode(raw).map_err(|_| proto(err::GENERIC, status::DECODE_PA_FOR_USER))?;
+        verify_for_user_checksum(tgt_session, &pa)?;
+        let id = krb5_types::s4u::S4uUserId {
+            nonce: 0,
+            user: Some(pa.user_name),
+            realm: pa.user_realm,
+            subject_cert: None,
+            options: None,
+        };
+        return Ok(Some(s4u_from_userid(store, id, None)?));
+    }
+    Ok(None)
+}
+
+fn verify_for_user_checksum(
+    tgt_session: &ProtocolKey,
+    pa: &krb5_types::s4u::PaForUser,
+) -> Result<(), Error> {
+    if !cksumtype_is_keyed(pa.cksum.cksumtype) {
+        return Err(proto(err::INAPP_CKSUM, status::INVALID_S4U2SELF_CHECKSUM));
+    }
     let realm = utf8(&pa.user_realm);
     let pkg = utf8(&pa.auth_package);
     let data = krb5_types::s4u::pa_for_user_cksum_data(&pa.user_name, realm, pkg);
@@ -567,14 +625,195 @@ pub(crate) fn s4u2self_client(
         pa.cksum.cksumtype,
         pa.cksum.checksum.as_ref(),
     )
-    .map_err(|e| match e {
+    .map_err(map_s4u_cksum)
+}
+
+fn process_s4u_x509_user(
+    raw: &[u8],
+    tgt_session: &ProtocolKey,
+    tgs_subkey: Option<&EncryptionKey>,
+    nonce: u32,
+) -> Result<krb5_types::s4u::PaS4uX509User, Error> {
+    let req: krb5_types::s4u::PaS4uX509User =
+        decode(raw).map_err(|_| proto(err::GENERIC, status::DECODE_PA_S4U_X509_USER))?;
+    let key = x509_cksum_key(tgt_session, tgs_subkey)?;
+    if etype_requires_info2(key.etype()) && !cksumtype_is_keyed(req.cksum.cksumtype) {
+        return Err(proto(err::INAPP_CKSUM, status::INVALID_S4U2SELF_CHECKSUM));
+    }
+    if req.user_id.nonce as u32 != nonce {
+        return Err(proto(err::MODIFIED, status::INVALID_S4U2SELF_CHECKSUM));
+    }
+    let usage = KeyUsage::new(ku::PA_S4U_X509_USER_REQUEST)?;
+    let mut ok = false;
+    if let Some(scratch) = userid_der_from_pa(raw) {
+        ok = verify_checksum_keyed(
+            &key,
+            usage,
+            scratch,
+            req.cksum.cksumtype,
+            req.cksum.checksum.as_ref(),
+        )
+        .is_ok();
+    }
+    if !ok {
+        let data = encode(&req.user_id)?;
+        verify_checksum_keyed(
+            &key,
+            usage,
+            &data,
+            req.cksum.cksumtype,
+            req.cksum.checksum.as_ref(),
+        )
+        .map_err(map_s4u_cksum)?;
+    }
+    let empty_user = req
+        .user_id
+        .user
+        .as_ref()
+        .is_none_or(|n| n.name_string.is_empty());
+    let empty_cert = req
+        .user_id
+        .subject_cert
+        .as_ref()
+        .is_none_or(|c| c.is_empty());
+    if empty_user && empty_cert {
+        return Err(proto(
+            err::C_PRINCIPAL_UNKNOWN,
+            status::INVALID_S4U2SELF_REQUEST,
+        ));
+    }
+    Ok(req)
+}
+
+fn s4u_from_userid(
+    store: &dyn PrincipalRead,
+    id: krb5_types::s4u::S4uUserId,
+    x509: Option<krb5_types::s4u::PaS4uX509User>,
+) -> Result<S4u2Self, Error> {
+    let realm = utf8(&id.realm).to_owned();
+    let user = id.user.clone().unwrap_or_else(|| {
+        PrincipalName::new(PrincipalName::NT_UNKNOWN, std::iter::empty::<&str>())
+    });
+    let has_cert = id.subject_cert.as_ref().is_some_and(|c| !c.is_empty());
+    let mut local = None;
+    if realm == store.realm() {
+        if has_cert {
+            return Err(proto(err::GENERIC, status::LOOKING_UP_S4U2SELF_PRINCIPAL));
+        }
+        let mut p = store
+            .fetch_name(&user)?
+            .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, status::UNKNOWN_S4U2SELF_PRINCIPAL))?;
+        p.pw_expire = 0;
+        p.attributes &= !crate::store::KDB_REQUIRES_PWCHANGE;
+        local = Some(p);
+    }
+    Ok(S4u2Self {
+        user,
+        realm,
+        local,
+        x509,
+    })
+}
+
+fn map_s4u_cksum(e: krb5_crypto::Error) -> Error {
+    match e {
         krb5_crypto::Error::InappChecksum => {
             proto(err::INAPP_CKSUM, status::INVALID_S4U2SELF_CHECKSUM)
         }
         krb5_crypto::Error::Integrity => proto(err::MODIFIED, status::INVALID_S4U2SELF_CHECKSUM),
         _ => proto(err::GENERIC, status::INVALID_S4U2SELF_CHECKSUM),
+    }
+}
+
+fn x509_cksum_key(
+    tgt_session: &ProtocolKey,
+    tgs_subkey: Option<&EncryptionKey>,
+) -> Result<ProtocolKey, Error> {
+    if let Some(sub) = tgs_subkey {
+        let et = EncryptionType::from_iana(sub.keytype)
+            .or_else(|_| EncryptionType::known(sub.keytype))?;
+        return Ok(ProtocolKey::from_bytes(et, sub.keyvalue.as_ref())?);
+    }
+    Ok(tgt_session.clone())
+}
+
+fn etype_requires_info2(etype: EncryptionType) -> bool {
+    !matches!(etype, EncryptionType::Des3CbcSha1 | EncryptionType::Rc4Hmac)
+}
+
+fn userid_der_from_pa(raw: &[u8]) -> Option<&[u8]> {
+    let (_, seq, _) = take_der_slice(raw)?;
+    let mut cur = seq;
+    while !cur.is_empty() {
+        let (tag, inner, rest) = take_der_slice(cur)?;
+        if tag == 0xa0 {
+            return Some(inner);
+        }
+        cur = rest;
+    }
+    None
+}
+
+fn take_der_slice(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
+    let tag = *input.first()?;
+    let first = *input.get(1)?;
+    let (hlen, ln) = if first < 128 {
+        (1usize, usize::from(first))
+    } else if first == 0x81 && input.len() >= 3 {
+        (2, usize::from(input[2]))
+    } else if first == 0x82 && input.len() >= 4 {
+        (3, usize::from(u16::from_be_bytes([input[2], input[3]])))
+    } else {
+        return None;
+    };
+    let start = 1 + hlen;
+    let end = start.checked_add(ln)?;
+    Some((tag, input.get(start..end)?, input.get(end..)?))
+}
+
+/// Reply PA-S4U-X509-USER (`kdc_make_s4u2self_rep`).
+pub(crate) fn make_s4u2self_rep(
+    req: &krb5_types::s4u::PaS4uX509User,
+    tgt_session: &ProtocolKey,
+    tgs_subkey: Option<&EncryptionKey>,
+) -> Result<(PaData, Option<PaData>), Error> {
+    let key = x509_cksum_key(tgt_session, tgs_subkey)?;
+    let mut user_id = req.user_id.clone();
+    if !user_id.use_reply_key_usage() {
+        user_id.options = None;
+    } else {
+        user_id.options = Some(krb5_types::s4u::s4u_reply_key_usage_flags());
+    }
+    let der_id = encode(&user_id)?;
+    let usage = KeyUsage::new(if user_id.use_reply_key_usage() {
+        ku::PA_S4U_X509_USER_REPLY
+    } else {
+        ku::PA_S4U_X509_USER_REQUEST
     })?;
-    Ok(Some((pa.user_name, realm.to_owned())))
+    let mic = checksum(&key, usage, &der_id)?;
+    let rep = krb5_types::s4u::PaS4uX509User {
+        user_id,
+        cksum: krb5_types::Checksum {
+            cksumtype: req.cksum.cksumtype,
+            checksum: mic.into(),
+        },
+    };
+    let der = encode(&rep)?;
+    let pa = PaData {
+        padata_type: pa::FOR_X509_USER,
+        padata_value: der.into(),
+    };
+    let enc = if !etype_requires_info2(key.etype()) {
+        let mut bytes = req.cksum.checksum.as_ref().to_vec();
+        bytes.extend_from_slice(rep.cksum.checksum.as_ref());
+        Some(PaData {
+            padata_type: pa::FOR_X509_USER,
+            padata_value: bytes.into(),
+        })
+    } else {
+        None
+    };
+    Ok((pa, enc))
 }
 
 /// S4U2Proxy: evidence ticket in additional-tickets, cname from evidence.

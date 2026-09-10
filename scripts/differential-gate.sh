@@ -164,7 +164,7 @@ echo "$DIFF" | grep -q '"case":"as-invalid-opts","outcome":"ok","error_code":13'
 echo "$DIFF" | grep -q '"case":"as-request-anonymous","outcome":"ok","error_code":13,"e_text":"VALIDATE_ANONYMOUS_PRINCIPAL"' || die "as-request-anonymous not code 13 e_text VALIDATE_ANONYMOUS_PRINCIPAL on both legs"
 echo "$DIFF" | grep -q '"case":"as-validate-before-preauth","outcome":"ok","error_code":23' || die "as-validate-before-preauth (preauth+needchange) not code 23 on both legs"
 echo "$DIFF" | grep -q '"case":"as-retransmit","outcome":"ok","rust_retransmit_identical":true,"mit_retransmit_identical":true' || die "as-retransmit reply not identical from the lookaside on both legs"
-echo "$DIFF" | grep -q '"outcome":"ok","cases":41' || die "diffsend did not finish 41 cases"
+echo "$DIFF" | grep -q '"outcome":"ok","cases":49' || die "diffsend did not finish 49 cases"
 echo "$DIFF" | grep -q '"case":"fast-armor-no-subkey","outcome":"ok","error_code":12,"e_text":"FIND_FAST"' || die "fast-armor-no-subkey not code 12 e_text FIND_FAST on both legs"
 echo "$DIFF" | grep -q '"case":"armor-ap-req-as-pa-tgs-req","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS"' || die "armor-ap-req-as-pa-tgs-req not code 12 e_text PROCESS_TGS on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-ad-fx-armor-authenticator","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS"' || die "tgs-ad-fx-armor-authenticator not code 12 e_text PROCESS_TGS on both legs"
@@ -188,6 +188,14 @@ echo "$DIFF" | grep -q '"case":"tgs-renew-service-ticket","outcome":"ok","rust_t
 echo "$DIFF" | grep -q '"case":"tgs-proxy-krbtgt","outcome":"ok","error_code":13,"e_text":"CAN'\''T PROXY TGT"' || die "tgs-proxy-krbtgt not code 13 e_text CAN'T PROXY TGT on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-canonicalize-renew","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"' || die "tgs-canonicalize-renew not TGS-REP on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-expired-vs-unknown-sname","outcome":"ok","error_code":32,"e_text":"PROCESS_TGS"' || die "tgs-expired-vs-unknown-sname not code 32 e_text PROCESS_TGS on both legs"
+echo "$DIFF" | grep -q '"case":"s4u2self-no-pac","outcome":"ok","error_code":20,"e_text":"S4U2SELF_NO_PAC"' || die "s4u2self-no-pac not code 20 e_text S4U2SELF_NO_PAC on both legs"
+echo "$DIFF" | grep -q '"case":"s4u2self-pac-client-mismatch","outcome":"ok","error_code":13,"e_text":"S4U2SELF_LOCAL_PAC_CLIENT"' || die "s4u2self-pac-client-mismatch not code 13 e_text S4U2SELF_LOCAL_PAC_CLIENT on both legs"
+echo "$DIFF" | grep -q '"case":"pa-s4u-x509-user-bad-checksum","outcome":"ok","error_code":41,"e_text":"INVALID_S4U2SELF_CHECKSUM"' || die "pa-s4u-x509-user-bad-checksum not code 41 e_text INVALID_S4U2SELF_CHECKSUM on both legs"
+echo "$DIFF" | grep -q '"case":"pa-s4u-x509-user-nonce","outcome":"ok","error_code":41,"e_text":"INVALID_S4U2SELF_CHECKSUM"' || die "pa-s4u-x509-user-nonce not code 41 e_text INVALID_S4U2SELF_CHECKSUM on both legs"
+echo "$DIFF" | grep -q '"case":"pa-for-user-only","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"' || die "pa-for-user-only not TGS-REP on both legs"
+echo "$DIFF" | grep -q '"case":"pa-s4u-x509-user-empty","outcome":"ok","error_code":6,"e_text":"INVALID_S4U2SELF_REQUEST"' || die "pa-s4u-x509-user-empty not code 6 e_text INVALID_S4U2SELF_REQUEST on both legs"
+echo "$DIFF" | grep -q '"case":"pa-for-user-undecodable","outcome":"ok","error_code":60,"e_text":"DECODE_PA_FOR_USER"' || die "pa-for-user-undecodable not code 60 e_text DECODE_PA_FOR_USER on both legs"
+echo "$DIFF" | grep -q '"case":"pa-s4u-x509-user","outcome":"ok".*"reply_padata":130' || die "pa-s4u-x509-user not reply_padata 130 on both legs"
 # W1-K M2b: the differential oracle has no case-name whitelist; no diffsend line
 # may carry a "whitelist" key.
 if echo "$DIFF" | grep -q '"whitelist"'; then

@@ -1,8 +1,11 @@
-//! MS-SFU PA-FOR-USER (S4U2Self) and MS-KILE PA-PAC-OPTIONS.
+//! MS-SFU PA-FOR-USER / PA-S4U-X509-USER (S4U2Self) and MS-KILE PA-PAC-OPTIONS.
 
 use rasn::prelude::*;
 
-use crate::{Checksum, KerberosFlags, PrincipalName, Realm};
+use crate::{Checksum, KerberosFlags, OctetString, PrincipalName, Realm};
+
+/// [MS-SFU] `KRB5_S4U_OPTS_USE_REPLY_KEY_USAGE` (MIT `k5-int.h`: bit 2).
+pub const S4U_OPTS_USE_REPLY_KEY_USAGE: usize = 2;
 
 /// MS-KILE PA-PAC-OPTIONS flags bit: resource-based constrained delegation.
 pub const PAC_OPTIONS_RBCD: usize = 3;
@@ -22,6 +25,57 @@ pub struct PaForUser {
     /// Auth package, typically `Kerberos`.
     #[rasn(tag(explicit(3)))]
     pub auth_package: crate::KerberosString,
+}
+
+/// [MS-SFU] 2.2.2 `S4UUserID`.
+#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+pub struct S4uUserId {
+    /// TGS-REQ nonce.
+    #[rasn(tag(explicit(0)))]
+    pub nonce: i32,
+    /// Impersonated name; absent when `name-string` is empty (cert-only).
+    #[rasn(tag(explicit(1)))]
+    pub user: Option<PrincipalName>,
+    /// Impersonated realm (required).
+    #[rasn(tag(explicit(2)))]
+    pub realm: Realm,
+    /// Subject certificate (optional).
+    #[rasn(tag(explicit(3)))]
+    pub subject_cert: Option<OctetString>,
+    /// Options; bit 2 is `USE_REPLY_KEY_USAGE`.
+    #[rasn(tag(explicit(4)))]
+    pub options: Option<KerberosFlags>,
+}
+
+impl S4uUserId {
+    /// Whether `USE_REPLY_KEY_USAGE` (ku 27 on the reply) is set.
+    #[must_use]
+    pub fn use_reply_key_usage(&self) -> bool {
+        self.options.as_ref().is_some_and(|f| {
+            S4U_OPTS_USE_REPLY_KEY_USAGE < f.len() && f[S4U_OPTS_USE_REPLY_KEY_USAGE]
+        })
+    }
+}
+
+/// [MS-SFU] 2.2.2 `PA-S4U-X509-USER`.
+#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+pub struct PaS4uX509User {
+    /// User-id (checksummed).
+    #[rasn(tag(explicit(0)))]
+    pub user_id: S4uUserId,
+    /// Checksum over the encoded user-id (ku 26).
+    #[rasn(tag(explicit(1)))]
+    pub cksum: Checksum,
+}
+
+/// Flags with only `USE_REPLY_KEY_USAGE`.
+#[must_use]
+pub fn s4u_reply_key_usage_flags() -> KerberosFlags {
+    let mut flags = KerberosFlags::repeat(false, 32);
+    if S4U_OPTS_USE_REPLY_KEY_USAGE < flags.len() {
+        flags.set(S4U_OPTS_USE_REPLY_KEY_USAGE, true);
+    }
+    flags
 }
 
 /// Bytes checksummed for PA-FOR-USER (MIT/MS-SFU layout).

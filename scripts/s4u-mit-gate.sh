@@ -10,6 +10,7 @@ cd "$ROOT"
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-s4u-mit-gate"
+MITNAME="${NAME}-oracle"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-s4u-mit-gate}"
@@ -31,9 +32,12 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
 fi
 
-docker rm -f "$NAME" >/dev/null 2>&1 || true
+docker rm -f "$NAME" "$MITNAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" "$IMAGE" >/dev/null
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
+cleanup() {
+    docker rm -f "$NAME" >/dev/null 2>&1 || true
+    docker rm -f "$MITNAME" >/dev/null 2>&1 || true
+}
 trap cleanup EXIT
 
 ok=0
@@ -58,6 +62,7 @@ fi
 
 # The mismatch cell uses -U admin; the entrypoint only adds `user`.
 docker exec "$NAME" kadmin.local -q "addprinc -randkey admin" >/dev/null
+docker exec "$NAME" kadmin.local -q "addprinc -pw expirepw -pwexpire 19900101000000 expired" >/dev/null
 
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
 sleep 0.3
@@ -84,6 +89,7 @@ docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
     -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
     -e KRB5_TEST_LOCKED_USER=lock-secret \
+    -e KRB5_TEST_PW_EXPIRED_USER=expirepw \
     -e KRB5_EXPORT_KEYTAB=/tmp/host.keytab \
     -e KRB5_TEST_OK_TO_AUTH_AS_DELEGATE=1 \
     "$NAME" sh -c '/tmp/krb5-kdc --test-realm --export-keytab /tmp/host.keytab 127.0.0.1:8888 >/tmp/kdc.log 2>&1'
@@ -206,7 +212,7 @@ set -e
 echo "$LOCKED"
 echo "$LOCKED" | grep -qiE "credentials have been revoked|CLIENT_REVOKED"
 
-echo "==== without ok_to_auth_as_delegate clears F on S4U2Self ===="
+echo "==== without ok_to_auth_as_delegate keeps F on MIT db2 (no allowed_to_delegate hook) ===="
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
@@ -214,6 +220,8 @@ docker exec "$NAME" chmod +x /tmp/krb5-kdc
 docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
     -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
+    -e KRB5_TEST_PW_EXPIRED_USER=expirepw \
+    -e KRB5_TEST_CLEAR_S4U_TO=1 \
     -e KRB5_EXPORT_KEYTAB=/tmp/host.keytab \
     "$NAME" sh -c '/tmp/krb5-kdc --test-realm 127.0.0.1:88 >/tmp/kdc.log 2>&1 || /tmp/krb5-kdc --test-realm --export-keytab /tmp/host.keytab 127.0.0.1:8888 >/tmp/kdc.log 2>&1'
 ok=0
@@ -256,7 +264,105 @@ echo "$KLISTF"
 HOSTF2="$(echo "$KLISTF" | sed -n 's/.*for client user@KERBER.TEST, Flags: //p')"
 echo "s4u_flags_without_ok_to_auth=$HOSTF2"
 test -n "$HOSTF2"
-echo "$HOSTF2" | grep -qv F
+echo "$HOSTF2" | grep -q F
+
+echo "==== MIT kvno -U expired (pw expired; S4U still issues) ===="
+docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf \
+    "$NAME" kvno -U expired host/testhost.kerber.test
+KLISTE="$(docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf "$NAME" klist -f)"
+echo "$KLISTE"
+echo "$KLISTE" | grep -q 'for client expired@KERBER.TEST'
+
+echo "==== PA-S4U-X509-USER 130+129 on the wire (padata proxy) ===="
+docker cp "$ROOT/scripts/lib/kdc-padata-proxy.py" "$NAME":/tmp/kdc-padata-proxy.py
+PROXY_TO=88
+case "$LISTEN" in
+    *:8888*) PROXY_TO=8888 ;;
+esac
+docker exec -d "$NAME" python3 /tmp/kdc-padata-proxy.py 1892 127.0.0.1 "$PROXY_TO" /tmp/s4u-padata.txt
+sleep 0.3
+docker exec "$NAME" sh -c "sed 's/${KDC_LINE}/kdc = 127.0.0.1:1892/' /tmp/s4u-krb5.conf | sed '/forwardable = true/a\\    udp_preference_limit = 10000' > /tmp/s4u-proxy.conf"
+docker exec -e KRB5_CONFIG=/tmp/s4u-proxy.conf \
+    "$NAME" kinit -f -k -t /tmp/host.keytab host/testhost.kerber.test@KERBER.TEST
+docker exec -e KRB5_CONFIG=/tmp/s4u-proxy.conf \
+    "$NAME" kvno -U user host/testhost.kerber.test
+PADATA="$(docker exec "$NAME" cat /tmp/s4u-padata.txt)"
+echo "$PADATA"
+echo "$PADATA" | grep -E 'req#[0-9]+ msg_type=12 padata=\[' | grep -q '130'
+echo "$PADATA" | grep -E 'req#[0-9]+ msg_type=12 padata=\[' | grep -q '129'
+echo "$PADATA" | grep -E 'rep#[0-9]+ tag=0x6d' | grep -q '0x6d'
+
+echo "==== MIT KDC db2: keep F, expired user, reply 130 ===="
+docker rm -f "$MITNAME" >/dev/null 2>&1 || true
+docker run -d --name "$MITNAME" "$IMAGE" >/dev/null
+ok=0
+for _ in $(seq 1 90); do
+    logs="$(docker logs "$MITNAME" 2>&1 || true)"
+    if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"ok"'; then
+        ok=1
+        break
+    fi
+    if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"error"'; then
+        echo "$logs" >&2
+        log "s4u.mit.gate" "error" ',"error":"MIT oracle harness kinit failed"'
+        exit 1
+    fi
+    sleep 1
+done
+if [ "$ok" != 1 ]; then
+    log "s4u.mit.gate" "error" ',"error":"MIT oracle harness did not become ready"'
+    docker logs "$MITNAME" >&2 || true
+    exit 1
+fi
+docker exec "$MITNAME" kadmin.local -q "addprinc -pw expirepw expired"
+EXPOUT="$(docker exec "$MITNAME" kadmin.local -q "modprinc -pwexpire 1/1/1990 expired")"
+echo "$EXPOUT"
+echo "$EXPOUT" | grep -qi 'invalid date' && exit 1
+GETEXP="$(docker exec "$MITNAME" kadmin.local -q "getprinc expired")"
+echo "$GETEXP"
+echo "$GETEXP" | grep -i 'Password expiration date' | grep -qv never
+docker exec "$MITNAME" sh -c 'cat >/tmp/s4u-mit-oracle.conf <<EOF
+[libdefaults]
+    default_realm = KERBER.TEST
+    dns_lookup_kdc = false
+    dns_lookup_realm = false
+    rdns = false
+    forwardable = true
+    udp_preference_limit = 10000
+    default_ccache_name = FILE:/tmp/krb5cc_s4u_mit_oracle
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1
+    }
+EOF'
+docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
+    "$MITNAME" kinit -f -k -t /etc/krb5kdc/testhost.keytab host/testhost.kerber.test@KERBER.TEST
+docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
+    "$MITNAME" kvno -U user host/testhost.kerber.test
+KLISTM="$(docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf "$MITNAME" klist -f)"
+echo "$KLISTM"
+HOSTFM="$(echo "$KLISTM" | sed -n 's/.*for client user@KERBER.TEST.*Flags: //p')"
+echo "s4u_flags_mit_db2_without_ok_to_auth=$HOSTFM"
+test -n "$HOSTFM"
+echo "$HOSTFM" | grep -q F
+docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
+    "$MITNAME" kvno -U expired host/testhost.kerber.test
+KLISTME="$(docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf "$MITNAME" klist -f)"
+echo "$KLISTME"
+echo "$KLISTME" | grep -q 'for client expired@KERBER.TEST'
+docker cp "$ROOT/scripts/lib/kdc-padata-proxy.py" "$MITNAME":/tmp/kdc-padata-proxy.py
+docker exec -d "$MITNAME" python3 /tmp/kdc-padata-proxy.py 1892 127.0.0.1 88 /tmp/s4u-mit-padata.txt
+sleep 0.3
+docker exec "$MITNAME" sh -c "sed 's/kdc = 127.0.0.1/kdc = 127.0.0.1:1892/' /tmp/s4u-mit-oracle.conf > /tmp/s4u-mit-proxy.conf"
+docker exec -e KRB5_CONFIG=/tmp/s4u-mit-proxy.conf \
+    "$MITNAME" kinit -f -k -t /etc/krb5kdc/testhost.keytab host/testhost.kerber.test@KERBER.TEST
+docker exec -e KRB5_CONFIG=/tmp/s4u-mit-proxy.conf \
+    "$MITNAME" kvno -U user host/testhost.kerber.test
+MPADATA="$(docker exec "$MITNAME" cat /tmp/s4u-mit-padata.txt)"
+echo "$MPADATA"
+echo "$MPADATA" | grep -E 'req#[0-9]+ msg_type=12 padata=\[' | grep -q '130'
+echo "$MPADATA" | grep -E 'req#[0-9]+ msg_type=12 padata=\[' | grep -q '129'
+echo "$MPADATA" | grep -E 'rep#[0-9]+ tag=0x6d' | grep -q '0x6d'
 
 log "s4u.mit.gate" "ok" ',"principal":"host/testhost.kerber.test","for_client":"user@KERBER.TEST"'
 exit 0

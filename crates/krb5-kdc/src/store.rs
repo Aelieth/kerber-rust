@@ -1040,6 +1040,14 @@ impl PrincipalStore {
         }
     }
 
+    /// Drop classic S4U2Proxy targets (MIT db2 has none).
+    pub fn clear_s4u_to(&mut self, name: &PrincipalName) {
+        let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        if let Some(p) = self.map.get_mut(&id) {
+            p.s4u_allowed_to.clear();
+        }
+    }
+
     /// PAC identity for `name` in `crealm` (store RID, or `RID_FIRST_USER` if unknown).
     #[must_use]
     pub fn pac_identity(&self, name: &PrincipalName, crealm: &str) -> PacIdentity {

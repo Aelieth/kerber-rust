@@ -336,6 +336,9 @@ fn bootstrap_test_realm() -> PrincipalStore {
             std::process::exit(1);
         }
     }
+    if std::env::var("KRB5_TEST_CLEAR_S4U_TO").as_deref() == Ok("1") {
+        store.clear_s4u_to(&host);
+    }
     if let Err(e) = store.create_host(&acl, &actor, &documented_kadmin()) {
         eprintln!("krb5-kdc: kadmin/admin: {e}");
         std::process::exit(1);
@@ -419,6 +422,20 @@ fn bootstrap_test_realm() -> PrincipalStore {
         }
         if let Err(e) = store.set_status(&locked, true, 0) {
             eprintln!("krb5-kdc: lock user: {e}");
+            std::process::exit(1);
+        }
+    }
+    if let Ok(pw) = std::env::var("KRB5_TEST_PW_EXPIRED_USER")
+        && !pw.is_empty()
+    {
+        let expired =
+            krb5_types::PrincipalName::new(krb5_types::PrincipalName::NT_PRINCIPAL, ["expired"]);
+        if let Err(e) = store.create_password(&acl, &actor, &expired, pw.as_bytes()) {
+            eprintln!("krb5-kdc: expired user: {e}");
+            std::process::exit(1);
+        }
+        if let Err(e) = store.apply_admin_fields(&expired, None, None, None, Some(1), None, false) {
+            eprintln!("krb5-kdc: expire user: {e}");
             std::process::exit(1);
         }
     }

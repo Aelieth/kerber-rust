@@ -172,6 +172,10 @@ pub mod ku {
     pub const GSS_INITIATOR_SEAL: u32 = 24;
     /// GSS initiator sign (RFC 4121).
     pub const GSS_INITIATOR_SIGN: u32 = 25;
+    /// PA-S4U-X509-USER request checksum (`kdc_util.c:1374`).
+    pub const PA_S4U_X509_USER_REQUEST: u32 = 26;
+    /// PA-S4U-X509-USER reply checksum (`kdc_util.c:1479`).
+    pub const PA_S4U_X509_USER_REPLY: u32 = 27;
     /// RFC 6113 FAST request checksum.
     pub const FAST_REQ_CHKSUM: u32 = 50;
     /// RFC 6113 FAST encrypted request.

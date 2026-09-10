@@ -99,6 +99,11 @@ is 12 `INVALID LINEAGE` even when `reject_bad_transit = false`.
 S4U2Self is exempt (MIT `tgs_policy.c`). S4U2Self server match is by
 DB entry *and* realm (`is_client_db_alias`): a foreign TGT client with
 a colliding local name is 36 `INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH`.
+S4U2Self is not password authentication: the impersonated client's
+`pw_expiration` and `REQUIRES_PWCHANGE` are cleared (`kdc_util.c:1612-1615`).
+`s4u2self_forwardable` keeps FORWARDABLE when the KDB has no
+`allowed_to_delegate` hook (MIT db2); a non-empty target list without
+`OK_TO_AUTH_AS_DELEGATE` clears F.
 
 FAST armor decrypt binds keys to the armor `ticket.realm` (MIT
 `fast_util.c` `rd_req`); forged-realm armor is 35 `NOT_US` (`rd_req`).

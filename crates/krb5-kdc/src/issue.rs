@@ -17,7 +17,10 @@ use krb5_types::{
     TgsReq, Ticket, TicketFlags, TransitedEncoding, err, flag_bit, ku, pa,
 };
 
-use crate::ad::{s4u2proxy_client, s4u2self_client, u2u_session, wrap_win2k_pac};
+use crate::ad::{
+    S4u2Self, make_s4u2self_rep, pac_client_info_eq, process_s4u2self_req, s4u2proxy_client,
+    u2u_session, wrap_win2k_pac,
+};
 use crate::error::Error;
 use crate::kdb::{PrincipalRead, lookup_principal_id};
 use crate::kdb_dump::TL_LAST_ADMIN_UNLOCK;
@@ -622,6 +625,7 @@ fn issue_as_body(
         &ticket_sname,
         flags,
         renew_till,
+        None,
     )?;
     // The flag is always set; the enc-pa-rep padata is added only when the
     // client asked for it (kdc_handle_protected_negotiation).
@@ -942,17 +946,17 @@ fn issue_tgs_body(
     let mut ticket_crealm = utf8_realm(&enc_tkt.crealm)?.to_owned();
     let mut evidence_logon = None;
     let mut s4u2self = false;
-    if let Some((user, realm)) = s4u2self_client(&tgt_session, tgs_padata)? {
+    let mut s4u_x509 = None;
+    let mut s4u_referral = false;
+    if let Some(s4u) = process_s4u2self_req(
+        store,
+        &tgt_session,
+        authenticator.subkey.as_ref(),
+        tgs_padata,
+        body.nonce,
+    )? {
         let header_cross = utf8_realm(&ap.ticket.realm)? != store.realm();
         let is_referral = sname.is_krbtgt() && !sname.is_krbtgt_for(store.realm());
-        let local_user = if realm == store.realm() {
-            Some(store.fetch_name(&user)?.ok_or_else(|| {
-                proto(err::C_PRINCIPAL_UNKNOWN, status::UNKNOWN_S4U2SELF_PRINCIPAL)
-            })?)
-        } else {
-            None
-        };
-        // MIT is_client_db_alias: foreign crealm is KDB NOENTRY → mismatch.
         let is_self = utf8_realm(&enc_tkt.crealm)? == store.realm()
             && tgs_client
                 .as_ref()
@@ -963,16 +967,22 @@ fn issue_tgs_body(
                 status::INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH,
             ));
         }
-        check_tgs_s4u2self(body, local_user.is_some(), header_cross, is_referral)?;
-        if let Some(ref for_p) = local_user {
-            check_s4u2self_locked(for_p, &server)?;
-        }
+        check_tgs_s4u2self(
+            store,
+            body,
+            &s4u,
+            header_cross,
+            is_referral,
+            &enc_tkt,
+            header_pac.as_deref(),
+        )?;
         server.attributes &= !KDB_NO_AUTH_DATA_REQUIRED;
-        // Referral TGTs name the header client (MIT do_tgs_req.c:758-759).
         if !is_referral {
-            ticket_cname = user;
-            ticket_crealm = realm;
+            ticket_cname = s4u.user.clone();
+            ticket_crealm = s4u.realm.clone();
         }
+        s4u_x509 = s4u.x509;
+        s4u_referral = is_referral;
         s4u2self = true;
     } else if let Some((cn, logon)) = s4u2proxy_client(store, req, &enc_tkt.cname, tgs_padata)? {
         ticket_cname = cn;
@@ -1091,7 +1101,8 @@ fn issue_tgs_body(
             flags = flags.with_bit(flag_bit::TRANSITED_POLICY_CHECKED, true);
         }
     } else {
-        authtime = now.clone();
+        // MIT do_tgs_req.c:826-827: preserve subject authtime (CLIENT_INFO).
+        authtime = enc_tkt.authtime.clone();
         starttime = now.clone();
         end = enc_tkt.endtime.clone();
         let life = requested_life(store, &server, body, &now);
@@ -1129,8 +1140,8 @@ fn issue_tgs_body(
     if attr(&server, KDB_OK_AS_DELEGATE) {
         flags = flags.with_bit(flag_bit::OK_AS_DELEGATE, true);
     }
-    if s4u2self && !attr(&server, KDB_OK_TO_AUTH_AS_DELEGATE) {
-        flags = flags.with_bit(flag_bit::FORWARDABLE, false);
+    if s4u2self && !s4u_referral {
+        flags = s4u2self_forwardable(&server, flags);
     }
     let krbtgt_p = store
         .fetch_krbtgt()?
@@ -1184,6 +1195,13 @@ fn issue_tgs_body(
             header_pac.as_deref()
         },
     )?;
+    let mut s4u_rep_pa = None;
+    let mut s4u_enc_pa = None;
+    if let Some(ref x509) = s4u_x509 {
+        let (pa, enc) = make_s4u2self_rep(x509, &tgt_session, authenticator.subkey.as_ref())?;
+        s4u_rep_pa = Some(pa);
+        s4u_enc_pa = enc;
+    }
     let enc_part = enc_rep_part(
         &session,
         tgs_fast.map_or(body.nonce, |f| f.nonce),
@@ -1195,6 +1213,7 @@ fn issue_tgs_body(
         &sname,
         flags,
         ticket_renew_till,
+        s4u_enc_pa,
     )?;
     let enc_der = encode_enc_kdc_rep_part(enc_part)?;
     let (enc_key, enc_usage) = if let Some(sub) = authenticator.subkey {
@@ -1211,7 +1230,7 @@ fn issue_tgs_body(
     let cipher = encrypt(&enc_key, usage, &enc_der)?;
     let padata = if let Some(f) = tgs_fast {
         let finished = fast_finished(&f.armor_key, &ticket, &ticket_cname, &ticket_crealm)?;
-        let inner: Vec<PaData> = Vec::new();
+        let inner: Vec<PaData> = s4u_rep_pa.into_iter().collect();
         Some(vec![wrap_fast_rep(
             &f.armor_key,
             inner,
@@ -1220,7 +1239,7 @@ fn issue_tgs_body(
             Some(finished),
         )?])
     } else {
-        None
+        s4u_rep_pa.map(|p| vec![p])
     };
     let rep = TgsRep(krb5_types::KdcRep {
         pvno: krb5_types::KdcRep::PVNO,
@@ -1570,6 +1589,7 @@ fn enc_rep_part(
     sname: &PrincipalName,
     flags: TicketFlags,
     renew_till: Option<KerberosTime>,
+    encrypted_pa_data: Option<PaData>,
 ) -> Result<EncKdcRepPart, Error> {
     Ok(EncKdcRepPart {
         key: encryption_key(session),
@@ -1587,7 +1607,7 @@ fn enc_rep_part(
         srealm: ks(realm)?,
         sname: sname.clone(),
         caddr: None,
-        encrypted_pa_data: None,
+        encrypted_pa_data: encrypted_pa_data.map(|p| vec![p].into()),
     })
 }
 
@@ -2188,12 +2208,15 @@ fn take_der(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
     Some((tag, inner, rest))
 }
 
-/// MIT `check_tgs_s4u2self` (`tgs_policy.c`) option and realm-combination checks.
+/// MIT `check_tgs_s4u2self` (`tgs_policy.c:261-358`).
 fn check_tgs_s4u2self(
+    store: &dyn PrincipalRead,
     body: &krb5_types::KdcReqBody,
-    local_user: bool,
+    s4u: &S4u2Self,
     header_cross: bool,
     is_referral: bool,
+    enc_tkt: &EncTicketPart,
+    header_pac: Option<&[u8]>,
 ) -> Result<(), Error> {
     if s4u2self_as_invalid_options(body) {
         return Err(proto(err::BADOPTION, status::INVALID_S4U2SELF_OPTIONS));
@@ -2201,16 +2224,56 @@ fn check_tgs_s4u2self(
     if !header_cross && is_referral {
         return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::LOOKING_UP_SERVER));
     }
-    if local_user && header_cross && !is_referral {
+    if s4u.local.is_some() && header_cross && !is_referral {
         return Err(proto(
             err::C_PRINCIPAL_UNKNOWN,
             status::NOT_CROSS_REALM_REQUEST,
         ));
     }
-    if !local_user && !header_cross {
+    if s4u.local.is_none() && !header_cross {
         return Err(proto(err::POLICY, status::S4U2SELF_CLIENT_NOT_OURS));
     }
+    if s4u.local.is_none() && s4u.user.name_string.is_empty() {
+        return Err(proto(err::POLICY, status::INVALID_XREALM_S4U2SELF_REQUEST));
+    }
+    let Some(raw) = header_pac else {
+        return Err(proto(err::TGT_REVOKED, status::S4U2SELF_NO_PAC));
+    };
+    let parsed = krb5_types::pac::Pac::parse(raw)
+        .map_err(|_| proto(err::BADOPTION, status::S4U2SELF_LOCAL_PAC_CLIENT))?;
+    let authtime = enc_tkt.authtime.unix_seconds();
+    if let Some(ref client) = s4u.local {
+        if !pac_client_info_eq(&parsed, authtime, &enc_tkt.cname.components_joined(), None) {
+            return Err(proto(err::BADOPTION, status::S4U2SELF_LOCAL_PAC_CLIENT));
+        }
+        let empty = crate::store::Principal::from_keys(
+            PrincipalName::new(PrincipalName::NT_UNKNOWN, std::iter::empty::<&str>()),
+            String::new(),
+            Vec::new(),
+            Vec::new(),
+            false,
+            0,
+            false,
+            0,
+        );
+        validate_as_request(store, client, &empty, body)?;
+    } else if !pac_client_info_eq(
+        &parsed,
+        authtime,
+        &s4u.user.components_joined(),
+        Some(&s4u.realm),
+    ) {
+        return Err(proto(err::BADOPTION, status::S4U2SELF_FOREIGN_PAC_CLIENT));
+    }
     Ok(())
+}
+
+/// MIT `s4u2self_forwardable` (`kdc_util.c:1625-1644`).
+fn s4u2self_forwardable(server: &crate::store::Principal, flags: TicketFlags) -> TicketFlags {
+    if attr(server, KDB_OK_TO_AUTH_AS_DELEGATE) || server.s4u_allowed_to.is_empty() {
+        return flags;
+    }
+    flags.with_bit(flag_bit::FORWARDABLE, false)
 }
 
 /// MIT `krb5_anonymous_principal`: the WELLKNOWN/ANONYMOUS name, compared by
@@ -2226,13 +2289,6 @@ fn s4u2self_as_invalid_options(body: &krb5_types::KdcReqBody) -> bool {
         || body.kdc_options.bit(flag_bit::RENEW)
         || body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY)
         || body.kdc_options.bit(flag_bit::CNAME_IN_ADDL_TKT)
-}
-
-fn check_s4u2self_locked(for_p: &Principal, server: &Principal) -> Result<(), Error> {
-    if for_p.locked || attr(for_p, KDB_DISALLOW_ALL_TIX) {
-        return Err(proto(err::CLIENT_REVOKED, status::CLIENT_LOCKED_OUT));
-    }
-    check_db_times(Some(for_p), server)
 }
 
 /// MIT `validate_as_request`: 0 = never; principal expiry before password expiry.

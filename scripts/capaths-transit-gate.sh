@@ -1015,6 +1015,50 @@ wait_listen /tmp/kdc-c-skip-lax.log || {
 seed_c_tgt /tmp/krb5cc_rust_skip_b
 expect_skip_accept_t0 "Rust skip lax" /tmp/krb5cc_rust_skip_b host/svc.c.test@C.TEST /tmp/rust-c-skip-lax.kt
 
+echo "==== MIT kvno -U local S4U2Self on C ===="
+docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/kdc-c.pid)" 2>/dev/null || true'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',90),0.15)" 2>/dev/null; then
+        sleep 0.2
+        continue
+    fi
+    ok=1
+    break
+done
+[ "$ok" = 1 ]
+start_mit C.TEST /tmp/kdc-C.conf /tmp/mit-c-s4u.log /tmp/mit-c.pid
+wait_port 90 || {
+    docker exec "$NAME" cat /tmp/mit-c-s4u.log 2>/dev/null || true
+    log "capaths.gate" "error" ',"error":"MIT C for S4U did not listen"'
+    exit 1
+}
+docker exec "$NAME" sh -c "sed 's/default_realm = A.TEST/default_realm = C.TEST/' /tmp/client-capaths.conf > /tmp/s4u-c.conf"
+docker exec -e KRB5_CONFIG=/tmp/s4u-c.conf "$NAME" \
+    kinit -f -k -t /tmp/mit-c.host.kt -c /tmp/krb5cc_mit_s4u_kvno host/svc.c.test@C.TEST
+docker exec -e KRB5_CONFIG=/tmp/s4u-c.conf "$NAME" \
+    kvno -c /tmp/krb5cc_mit_s4u_kvno -U user host/svc.c.test
+MIT_S4U_KL="$(docker exec -e KRB5_CONFIG=/tmp/s4u-c.conf "$NAME" \
+    klist -f -c /tmp/krb5cc_mit_s4u_kvno)"
+echo "$MIT_S4U_KL"
+echo "$MIT_S4U_KL" | grep -q 'for client user@C.TEST'
+
+echo "==== MIT kvno -U cross-realm S4U2Self C host impersonates A user ===="
+set +e
+MIT_S4U_XR="$(docker exec -e KRB5_CONFIG=/tmp/s4u-c.conf "$NAME" \
+    kvno -c /tmp/krb5cc_mit_s4u_kvno -U user@A.TEST host/svc.c.test 2>&1)"
+mit_s4u_xr_rc=$?
+set -e
+echo "$MIT_S4U_XR"
+echo "mit_s4u_cross_rc=$mit_s4u_xr_rc"
+if [ "$mit_s4u_xr_rc" -eq 0 ]; then
+    echo "$MIT_S4U_XR" | grep -q 'host/svc.c.test'
+    docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+        klist -f -c /tmp/krb5cc_mit_s4u_kvno | grep -q 'for client user@A.TEST'
+else
+    echo "$MIT_S4U_XR" | grep -qiE "Cannot find KDC|Server not found|not found in Kerberos database|KDC policy rejects|S4U2SELF"
+fi
+
 log "capaths.gate" "ok" \
     ",\"path\":\"A.TEST>B.TEST>C.TEST\",\"permitted\":true,\"rejected\":true,\"transited_tr_type\":${MIT_TR_TYPE},\"transited_contents\":\"${MIT_TR_CONTENTS}\",\"transited_policy_checked\":true,\"reject_bad_transit_false\":true,\"disable_transited_check\":true"
 exit 0

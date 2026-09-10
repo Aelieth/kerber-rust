@@ -3701,8 +3701,9 @@ fn s4u2self_user_tgt_host_sname_is_badmatch() {
 
 #[test]
 fn s4u2self_clears_forwardable_without_ok_to_auth() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let host = documented_host();
+    store.allow_s4u_to(&host, "host/other.kerber.test");
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let tgt = issue_host_tgt(&store, 650);
     let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).expect("PA-FOR-USER");
