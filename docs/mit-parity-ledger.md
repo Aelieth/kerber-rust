@@ -45,7 +45,7 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 
 Counts (after A′-2 item 6):
 **327** = A1 117 + A2 79 + A3 63 + A4 68.
-exact 185 · stricter-documented 9 · deviation 68 ·
+exact 185 · stricter-documented 10 · deviation 67 ·
 absent 50 · deferred 15.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
@@ -184,7 +184,7 @@ mismatches, not extra statuses.
 | do_tgs_req.c:649 `get_local_tgt` kdc_util.c:486 | no `krbtgt/<body.realm>@<body.realm>` | GET_LOCAL_TGT 60 (`KDB_NOENTRY`→GENERIC) | issue.rs issue_tgs_body | `GET_LOCAL_TGT` 60 | exact | `tgs_local_sname_unknown_body_realm_is_get_local_tgt`; `phase7_preauth.rs` GET_LOCAL_TGT; `capaths-transit-gate.sh` GARBAGE.EXAMPLE / dest RENEW |
 | ORDER do_tgs_req.c:649 vs tgs_policy.c:687 | GET_LOCAL_TGT before `check_tgs_times` | 60 then times | issue.rs process_tgs_header then :689 | times (`NOT_YET_VALID`/`expired`/`INVALID`) then 60 | deviation | proposed: diffsend: foreign `body.realm` + INVALID/NYV TGT (MIT 60, Rust 33/32) |
 | do_tgs_req.c:662; kdc_util.c:597-602 | `get_verified_pac` for a TGS principal: only the server signature, with the key that opened the ticket | HEADER_PAC 41 `MODIFIED` (`verify_checksum`) / 60 `GENERIC` | krb5-kdc/ad.rs get_verified_pac | `HEADER_PAC` 41 `MODIFIED` / 60 `GENERIC` | exact | `tgs_corrupt_pac_before_unknown_sname_is_header_pac`; `tgs_rejects_corrupt_foreign_referral_pac`; `scripts/cross-kdc-gate.sh` MIT TGT → Rust TGS `kvno = 1` |
-| tgs_policy.c:622 `check_normal_tgs_pac` | PAC present but not client and not RBCD-deleg | HEADER_PAC 13 | krb5-kdc/ad.rs check_normal_tgs_pac | missing PAC ok; `HEADER_PAC` 13 on client mismatch | exact | `tgs_pac_client_mismatch_is_header_pac`; `tgs_without_pac_still_issues`; diffsend `tgs-pac-client-mismatch` |
+| tgs_policy.c:622 `check_normal_tgs_pac` | PAC present but not client and not RBCD-deleg; MIT `:618-620` accepts a cross-TGS header whose PAC verifies as a delegation PAC | HEADER_PAC 13 | krb5-kdc/ad.rs check_normal_tgs_pac | missing PAC ok; client mismatch 13; cross-TGS `verify_deleg_pac` slot fail-closed (item 8) | stricter-documented | `tgs_pac_client_mismatch_is_header_pac`; `tgs_without_pac_still_issues`; diffsend `tgs-pac-client-mismatch`; docs/security.md TGS cross-TGS deleg PAC |
 | ORDER do_tgs_req.c:657 vs :669 | HEADER_PAC before `search_sprinc` | PAC 41 then LOOKING_UP_SERVER | issue.rs issue_tgs_body HEADER_PAC then fetch_name | `HEADER_PAC` 41 before LOOKING_UP_SERVER | exact | diffsend `tgs-pac-corrupt-before-sname`; `tgs_corrupt_pac_before_unknown_sname_is_header_pac` |
 | do_tgs_req.c:536 `db_get_svc_princ` | server lookup fail | LOOKING_UP_SERVER 7 (remap :575) | issue.rs process_tgs_header | `unknown server` 7 | deviation | proposed: diffsend missing host; proposed: flags-gate.sh/kdc-gate.sh cell |
 | do_tgs_req.c:409 `find_alternate_tgs` | walk_realm_tree finds no intermediate TGS | UNKNOWN_SERVER 7 | no `find_alternate_tgs` | `unknown server` 7 (no realm-tree hop) | absent | proposed: diffsend `krbtgt/FAR` with only near hop; promote via `cross-realm-gate.sh` |
@@ -217,7 +217,7 @@ mismatches, not extra statuses.
 | tgs_policy.c:241 | `RENEW` and now > `renew_till` | TKT_EXPIRED 32 | issue.rs decrypt_presented_tgt | `renew_till` 32 | deviation | `tgs_renew_rejects_renew_till_not_after_now` (code); proposed: diffsend e_text |
 | tgs_policy.c:636 | `NON_TGT_OPTION` and `tkt.server != req.server` | SERVER DIDN'T MATCH TICKET FOR RENEW/FORWARD/ETC 26 | issue.rs check_tgs_constraints_skeleton | `SERVER DIDN'T MATCH TICKET FOR RENEW/FORWARD/ETC` 26 | exact | `tgs_renew_wrong_sname_is_badoption`; diffsend `tgs-renew-service-ticket` |
 | tgs_policy.c:642 | `PROXY` and req.server is TGS | CAN'T PROXY TGT 13 | issue.rs check_tgs_constraints_skeleton | `CAN'T PROXY TGT` 13 | exact | `tgs_proxy_krbtgt_is_cant_proxy_tgt`; diffsend `tgs-proxy-krbtgt` |
-| tgs_policy.c:657 | header server not TGS princ (normal TGS) | BAD TGS SERVER NAME 35 | issue.rs issue_as_body | `presented ticket is not a TGT` 35 | deviation | proposed: diffsend service ticket as PA-TGS-REQ |
+| tgs_policy.c:657 | header server not TGS princ (normal TGS) | BAD TGS SERVER NAME 35 | issue.rs check_tgs_constraints_skeleton | `BAD TGS SERVER NAME` 35 (header cname) | exact | `tgs_not_a_tgt_decrypts_and_names_client`; diffsend `tgs-not-a-tgt` `check_client=true` |
 | tgs_policy.c:662 | TGS instance ≠ `req.server.realm` | BAD TGS SERVER INSTANCE 35 | issue.rs issue_as_body/`GET_LOCAL_TGT` | not-a-TGT 35 or GET_LOCAL_TGT 60 | deviation | proposed: diffsend `krbtgt/OTHER` header vs local body.realm |
 | tgs_policy.c:275 | S4U2Self local server ≠ header client (`is_client_db_alias`) | INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH 36 | issue.rs issue_tgs_body | `INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH` 36 | exact | `s4u2self_user_tgt_host_sname_is_badmatch`; `s4u2self_cross_tgt_foreign_client_named_like_local_server_is_badmatch`; `s4u-mit-gate.sh`; `capaths-transit-gate.sh` S4U collision |
 | tgs_policy.c:281 | S4U2Self `AS_INVALID_OPTIONS` | INVALID S4U2SELF OPTIONS 13 | issue.rs check_tgs_s4u2self | `INVALID S4U2SELF OPTIONS` 13 | exact | proposed: diffsend S4U2Self+RENEW/U2U/CNAME-IN-ADDL-TKT |

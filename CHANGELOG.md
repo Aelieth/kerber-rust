@@ -29,7 +29,8 @@ this project uses semantic versioning once a crate is published.
   Privsvr signing uses `get_first_current_key` of the local TGT, then
   `pac_privsvr_enctype` / PRF+ `pac_privsvr`. Transited appends only
   when `is_crossrealm` and the header server realm is not the client
-  realm. diffsend 41 cases.
+  realm. A cross-TGS header whose PAC is not the ticket client is
+  fail-closed 13 until item 8 (`verify_deleg_pac`). diffsend 41 cases.
 - **test.** `a2_6_tgs_gather.rs` is the parent-red truth table.
   `a2_6_tgs_pac_extra.rs` covers PAC-REQUEST / `disable_pac` / privsvr /
   MIT-shape copy. `cross-kdc-gate.sh` compares MIT-TGT → Rust-TGS PAC
