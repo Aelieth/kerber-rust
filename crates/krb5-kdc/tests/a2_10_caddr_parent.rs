@@ -210,3 +210,25 @@ fn tgs_forwarded_copies_request_addresses() {
         Some(&want)
     );
 }
+
+#[test]
+fn tgs_renew_keeps_header_caddr() {
+    let (store, _) = bootstrap_documented().unwrap();
+    let addrs = vec![inet(192, 0, 2, 13)];
+    let tgt = as_with_addrs(&store, Some(addrs.clone()), 10130, true, true);
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let req = tgs_with_addr(
+        tgt.rep.0.ticket,
+        &tgt.session_key,
+        &user,
+        PrincipalName::krbtgt(TEST_REALM),
+        10131,
+        KdcOptions::none().with_bit(flag_bit::RENEW, true),
+        None,
+    );
+    let issued = krb5_kdc::issue_tgs(&store, &req).unwrap();
+    assert_eq!(
+        tkt_part(&store, &issued.rep.0.ticket).caddr.as_ref(),
+        Some(&addrs)
+    );
+}

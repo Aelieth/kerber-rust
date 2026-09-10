@@ -152,3 +152,15 @@ fn u2u_dup_skey_disallowed_is_policy() {
     assert_eq!(c, err::POLICY);
     assert_eq!(text.as_deref(), Some("DUP_SKEY DISALLOWED"));
 }
+
+#[test]
+fn u2u_host_tgt_issues_kvno_none() {
+    let (store, _) = bootstrap_documented().unwrap();
+    let extra = issue_host_tgt(&store, 9260);
+    let req = u2u_req(&store, documented_host(), extra.rep.0.ticket, 9261);
+    let out = krb5_kdc::issue_tgs(&store, &req).unwrap();
+    assert!(
+        out.rep.0.ticket.enc_part.kvno.is_none(),
+        "U2U ticket kvno must be omitted (MIT DEFOPTIONALZEROTYPE)"
+    );
+}

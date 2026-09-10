@@ -384,6 +384,7 @@ TGST_MIT="$(docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
 set -e
 echo "$TGST_MIT"
 echo "$TGST_MIT" | grep -qiE "KDC policy rejects request|NOT_ALLOWED_TO_DELEGATE"
+echo "MIT_s4u2proxy_tgs_target"
 
 echo "==== MIT kvno --u2u happy rust ===="
 docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf \
@@ -409,6 +410,7 @@ U2U_MIT="$(docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
     "$MITNAME" klist -c /tmp/krb5cc_u2u_user)"
 echo "$U2U_MIT"
 echo "$U2U_MIT" | grep -q 'host/testhost.kerber.test'
+echo "MIT_u2u_happy"
 
 echo "==== MIT kvno --u2u -allow_dup_skey rust ===="
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true'

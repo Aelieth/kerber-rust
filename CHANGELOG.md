@@ -8,6 +8,10 @@ this project uses semantic versioning once a crate is published.
 
 ### W1-A′-2
 
+- **test.** A′-2 items 8–10 parent-red injects cover no-2nd-tkt, U2U combo,
+  U2U kvno omission, and RENEW address copy. Copy-and-resign is an AD-like
+  superset (MIT db2 copies CLIENT_INFO + DELEGATION_INFO only). Product
+  acceptors pass `ApVerifyParams.addresses: None`.
 - **kdc.** TGS constraint slots run before service policy
   (`tgs_policy.c:668-746`, `do_tgs_req.c:872-882`): lineage before U2U,
   `check_normal_tgs_pac` before deny_all, `DUP_SKEY` in deny_opts before

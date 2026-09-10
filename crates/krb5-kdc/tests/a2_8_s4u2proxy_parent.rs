@@ -182,3 +182,68 @@ fn s4u2proxy_no_header_pac_is_tgt_revoked() {
     assert_eq!(c, err::TGT_REVOKED);
     assert_eq!(text.as_deref(), Some("S4U2PROXY_NO_HEADER_PAC"));
 }
+
+#[test]
+fn s4u2proxy_no_2nd_tkt_is_unknown_reason() {
+    let (store, _) = bootstrap_documented().unwrap();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let tgt = issue_tgt(&store, TEST_USER, 8250);
+    let req = tgs_req_ex(
+        tgt.rep.0.ticket,
+        &tgt.session_key,
+        TEST_REALM,
+        &user,
+        documented_host(),
+        TEST_REALM,
+        8251,
+        cname_addl(),
+        None,
+        Vec::new(),
+        pref_etypes(),
+    )
+    .unwrap();
+    let (c, text) = code(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
+    assert_eq!(c, err::GENERIC);
+    assert_eq!(text.as_deref(), Some("UNKNOWN_REASON"));
+}
+
+#[test]
+fn s4u2proxy_u2u_combo_is_invalid_options() {
+    let (store, _) = bootstrap_documented().unwrap();
+    let host = documented_host();
+    let hkey = store
+        .get_name(&host)
+        .unwrap()
+        .best_key()
+        .unwrap()
+        .key
+        .clone();
+    let host_as = as_req(
+        host.clone(),
+        TEST_REALM,
+        8260,
+        Some(vec![pa_enc_timestamp(&hkey).unwrap()]),
+    )
+    .unwrap();
+    let host_tgt = krb5_kdc::issue_as(&store, &host_as).unwrap();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let tgt = issue_tgt(&store, TEST_USER, 8262);
+    let opts = cname_addl().with_bit(flag_bit::ENC_TKT_IN_SKEY, true);
+    let req = tgs_req_ex(
+        tgt.rep.0.ticket,
+        &tgt.session_key,
+        TEST_REALM,
+        &user,
+        host.clone(),
+        TEST_REALM,
+        8263,
+        opts,
+        Some(vec![host_tgt.rep.0.ticket]),
+        Vec::new(),
+        pref_etypes(),
+    )
+    .unwrap();
+    let (c, text) = code(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
+    assert_eq!(c, err::BADOPTION);
+    assert_eq!(text.as_deref(), Some("INVALID_S4U2PROXY_OPTIONS"));
+}
