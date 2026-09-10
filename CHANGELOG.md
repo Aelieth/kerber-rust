@@ -61,6 +61,16 @@ this project uses semantic versioning once a crate is published.
   impersonator; RBCD is `s4u_allowed_from` on the resource; empty lists
   deny (MIT db2 hooks are NULL → `UNSUPPORTED_S4U2PROXY_REQUEST`).
   `decrypt_2ndtkt` is shared with U2U. diffsend 58 cases.
+- **kdc.** U2U is `check_tgs_u2u` + `get_2ndtkt_enctype` + ticket kvno 0
+  (`tgs_policy.c:575-598`, `do_tgs_req.c:310-328,997-1060`). No second
+  ticket is 13 `NO_2ND_TKT`; a service evidence ticket is 12
+  `2ND_TKT_NOT_TGS`; a TGT whose client is not the dest is 26
+  `2ND_TKT_MISMATCH`; a corrupt second-ticket PAC is 41 `2ND_TKT_PAC`;
+  an invalid session etype is 14 `BAD_ETYPE_IN_2ND_TKT`. The issued
+  ticket is encrypted in the second ticket's session key; MIT sets
+  `enc_part.kvno = 0`, which `DEFOPTIONALZEROTYPE` omits on the wire
+  (a present INTEGER 0 breaks FAST finished). `DISALLOW_DUP_SKEY` is
+  12 `DUP_SKEY DISALLOWED`. diffsend 64 cases.
 - **test.** `a2_6_tgs_gather.rs` is the parent-red truth table.
   `a2_6_tgs_pac_extra.rs` covers PAC-REQUEST / `disable_pac` / privsvr /
   MIT-shape copy. `cross-kdc-gate.sh` compares MIT-TGT → Rust-TGS PAC

@@ -14,10 +14,10 @@
 use std::path::PathBuf;
 
 use krb5_kdc::{
-    Acl, BIND_CANDIDATES, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_SVR, KDB_OK_TO_AUTH_AS_DELEGATE,
-    PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER, apply_kadm5_create_service_attrs,
-    bind_preferred, documented_changepw, documented_kadmin, documented_kiprop, drop_privileges,
-    open_store, serve, shared_store,
+    Acl, BIND_CANDIDATES, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_DUP_SKEY, KDB_DISALLOW_SVR,
+    KDB_OK_TO_AUTH_AS_DELEGATE, PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER,
+    apply_kadm5_create_service_attrs, bind_preferred, documented_changepw, documented_kadmin,
+    documented_kiprop, drop_privileges, open_store, serve, shared_store,
 };
 
 fn main() {
@@ -338,6 +338,18 @@ fn bootstrap_test_realm() -> PrincipalStore {
     }
     if std::env::var("KRB5_TEST_CLEAR_S4U_TO").as_deref() == Ok("1") {
         store.clear_s4u_to(&host);
+    }
+    if std::env::var("KRB5_TEST_DISALLOW_DUP_SKEY").as_deref() == Ok("1") {
+        let a = if let Some(p) = store.get_name(&host) {
+            p.attributes | KDB_DISALLOW_DUP_SKEY
+        } else {
+            eprintln!("krb5-kdc: host missing after create");
+            std::process::exit(1);
+        };
+        if let Err(e) = store.apply_admin_fields(&host, Some(a), None, None, None, None, false) {
+            eprintln!("krb5-kdc: disallow_dup_skey: {e}");
+            std::process::exit(1);
+        }
     }
     if let Err(e) = store.create_host(&acl, &actor, &documented_kadmin()) {
         eprintln!("krb5-kdc: kadmin/admin: {e}");

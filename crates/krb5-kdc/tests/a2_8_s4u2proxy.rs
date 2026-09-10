@@ -207,9 +207,24 @@ fn s4u2proxy_no_stkt_pac_is_modified() {
 #[test]
 fn s4u2proxy_u2u_combo_is_invalid_options() {
     let (store, _) = bootstrap_documented().unwrap();
-    let ev = evidence_for_user(&store, 8150);
+    let host = documented_host();
+    let hkey = store
+        .get_name(&host)
+        .unwrap()
+        .best_key()
+        .unwrap()
+        .key
+        .clone();
+    let host_as = as_req(
+        host.clone(),
+        TEST_REALM,
+        8150,
+        Some(vec![pa_enc_timestamp(&hkey).unwrap()]),
+    )
+    .unwrap();
+    let host_tgt = krb5_kdc::issue_as(&store, &host_as).unwrap();
     let opts = cname_addl().with_bit(flag_bit::ENC_TKT_IN_SKEY, true);
-    let req = proxy_req(&store, ev, documented_host(), opts, 8152);
+    let req = proxy_req(&store, host_tgt.rep.0.ticket, host, opts, 8152);
     let (c, text) = code(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::BADOPTION);
     assert_eq!(text.as_deref(), Some("INVALID_S4U2PROXY_OPTIONS"));

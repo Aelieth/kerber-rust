@@ -199,5 +199,35 @@ OKL="$(docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf "$NAME" klist)"
 echo "$OKL"
 echo "$OKL" | grep -q 'flaguser@KERBER.TEST'
 
-log "flags.gate" "ok" ',"disallow_all_tix":true,"disallow_forwardable":true,"ok_as_delegate":true,"disallow_svr":true,"disallow_tgt_based":true,"requires_hw_auth":true'
+echo "==== U2U kvno --u2u happy ===="
+kadmin_q 'ktadd -k /tmp/flags-host.kt host/testhost.kerber.test'
+docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf \
+    "$NAME" kinit -k -t /tmp/flags-host.kt -c /tmp/krb5cc_flags_host \
+    host/testhost.kerber.test@KERBER.TEST
+docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf \
+    "$NAME" sh -c 'printf "flag-secret\n" | kinit -c /tmp/krb5cc_flags_u2u flaguser@KERBER.TEST'
+docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf -e KRB5CCNAME=FILE:/tmp/krb5cc_flags_u2u \
+    "$NAME" kvno --u2u FILE:/tmp/krb5cc_flags_host host/testhost.kerber.test
+U2UOK="$(docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf \
+    "$NAME" klist -c /tmp/krb5cc_flags_u2u)"
+echo "$U2UOK"
+echo "$U2UOK" | grep -q 'host/testhost.kerber.test'
+
+echo "==== DISALLOW_DUP_SKEY: kvno --u2u POLICY ===="
+kadmin_q 'modprinc -allow_dup_skey host/testhost.kerber.test'
+docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf \
+    "$NAME" sh -c 'printf "flag-secret\n" | kinit -c /tmp/krb5cc_flags_u2u flaguser@KERBER.TEST'
+docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf \
+    "$NAME" kinit -k -t /tmp/flags-host.kt -c /tmp/krb5cc_flags_host \
+    host/testhost.kerber.test@KERBER.TEST
+set +e
+U2UDUP="$(docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf \
+    -e KRB5CCNAME=FILE:/tmp/krb5cc_flags_u2u \
+    "$NAME" kvno --u2u FILE:/tmp/krb5cc_flags_host host/testhost.kerber.test 2>&1)"
+set -e
+echo "$U2UDUP"
+echo "$U2UDUP" | grep -qiE "KDC policy rejects request|DUP_SKEY DISALLOWED"
+kadmin_q 'modprinc +allow_dup_skey host/testhost.kerber.test'
+
+log "flags.gate" "ok" ',"disallow_all_tix":true,"disallow_forwardable":true,"ok_as_delegate":true,"disallow_svr":true,"disallow_tgt_based":true,"requires_hw_auth":true,"disallow_dup_skey":true'
 exit 0

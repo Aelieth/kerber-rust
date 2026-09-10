@@ -4114,34 +4114,50 @@ fn s4u2proxy_rbcd_allowed_from_succeeds() {
 fn u2u_encrypts_ticket_in_additional_tgt_session() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let host = documented_host();
     let user_tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 801);
-    let admin_tgt = issue_tgt(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 802);
+    let host_key = store
+        .get_name(&host)
+        .unwrap()
+        .best_key()
+        .unwrap()
+        .key
+        .clone();
+    let host_as = as_req(
+        host.clone(),
+        TEST_REALM,
+        802,
+        Some(vec![pa_enc_timestamp(&host_key).expect("pa")]),
+    )
+    .unwrap();
+    let host_tgt = krb5_kdc::issue_as(&store, &host_as).expect("host TGT");
     let opts = KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true);
     let tgs = tgs_req_ex(
         user_tgt.rep.0.ticket.clone(),
         &user_tgt.session_key,
         TEST_REALM,
         &user,
-        documented_host(),
+        host,
         TEST_REALM,
         803,
         opts,
-        Some(vec![admin_tgt.rep.0.ticket.clone()]),
+        Some(vec![host_tgt.rep.0.ticket.clone()]),
         Vec::new(),
         pref_etypes(),
     )
     .expect("U2U TGS-REQ");
     let out = krb5_kdc::issue_tgs(&store, &tgs).expect("U2U");
-    let host = store
+    assert!(out.rep.0.ticket.enc_part.kvno.is_none());
+    let longterm = store
         .get_name(&documented_host())
         .unwrap()
         .best_key()
         .unwrap();
     assert!(
-        decrypt_ticket_part(&host.key, &out.rep.0.ticket).is_err(),
+        decrypt_ticket_part(&longterm.key, &out.rep.0.ticket).is_err(),
         "U2U ticket must not use the service long-term key"
     );
-    let part = decrypt_ticket_part(&admin_tgt.session_key, &out.rep.0.ticket).expect("U2U enc");
+    let part = decrypt_ticket_part(&host_tgt.session_key, &out.rep.0.ticket).expect("U2U enc");
     assert_eq!(part.cname.components_joined(), TEST_USER);
     assert_eq!(part.key.keyvalue.as_ref(), out.session_key.as_bytes());
 }

@@ -32,10 +32,11 @@ use crate::preauth::{
 };
 use crate::status;
 use crate::store::{
-    KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED, KDB_DISALLOW_PROXIABLE,
-    KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_NO_AUTH_DATA_REQUIRED,
-    KDB_OK_AS_DELEGATE, KDB_OK_TO_AUTH_AS_DELEGATE, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH,
-    KDB_REQUIRES_PWCHANGE, KeyEntry, Principal, random_key,
+    KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_DUP_SKEY, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED,
+    KDB_DISALLOW_PROXIABLE, KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED,
+    KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE, KDB_OK_TO_AUTH_AS_DELEGATE,
+    KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PWCHANGE, KeyEntry, Principal,
+    random_key,
 };
 
 /// Issued AS-REP plus the session key (for tests that decrypt the TGT).
@@ -993,6 +994,9 @@ fn issue_tgs_body(
     let is_crossrealm = tgs_header_is_crossrealm(header_realm.as_str(), &server.realm);
     let local_tgt = store.fetch_krbtgt()?;
     let stkt = decrypt_2ndtkt(store, req, local_tgt.as_ref())?;
+    if body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY) {
+        check_tgs_u2u(store, stkt.as_ref(), &server)?;
+    }
     if body.kdc_options.bit(flag_bit::CNAME_IN_ADDL_TKT) {
         // MIT `kau_make_tkt_id(stkt)` with a missing additional ticket is
         // EINVAL (`kdc_audit.c:154-155`) → 60 `UNKNOWN_REASON` before
@@ -1048,20 +1052,24 @@ fn issue_tgs_body(
             crate::ad::filter_cross_realm_logon(&logon, store.domain_sid())?
         });
     }
+    if attr(&server, KDB_DISALLOW_DUP_SKEY) && body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY) {
+        return Err(proto(err::POLICY, status::DUP_SKEY_DISALLOWED));
+    }
     let skip_transited = body.kdc_options.bit(flag_bit::DISABLE_TRANSITED_CHECK);
     let u2u = if body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY) {
         let st = stkt
             .as_ref()
             .ok_or_else(|| proto(err::BADOPTION, status::NO_2ND_TKT))?;
-        Some(u2u_from_stkt(st)?)
+        let offered = get_2ndtkt_enctype(body, st)?;
+        Some((u2u_from_stkt(st)?, offered))
     } else {
         None
     };
     let session_etype = match &u2u {
-        Some((_, _, et)) => *et,
-        None => select_session_keytype(&server, &body.etype, store.policy())?,
+        Some((_, Some(et))) => *et,
+        Some((_, None)) | None => select_session_keytype(&server, &body.etype, store.policy())?,
     };
-    let (tkt_key, tkt_kvno, tkt_etype) = if let Some((k, kv, et)) = u2u {
+    let (tkt_key, tkt_kvno, tkt_etype) = if let Some(((k, kv, et), _)) = u2u {
         (k, kv, et)
     } else {
         let skey = server
@@ -1392,9 +1400,47 @@ fn decrypt_presented_tgt(
     }
 }
 
-/// MIT `find_server_key` (`kdc_util.c:417-457`). kvno 0 means any kvno.
-/// No matching key, or a requested etype that is not similar, is
-/// `KRB5_KDB_NO_MATCHING_KEY` / `KRB5_KDB_NO_PERMITTED_KEY` → 60 `PROCESS_TGS`.
+/// MIT `check_tgs_u2u` (`tgs_policy.c:575-598`).
+fn check_tgs_u2u(
+    store: &dyn PrincipalRead,
+    stkt: Option<&SecondTicket>,
+    dest: &Principal,
+) -> Result<(), Error> {
+    let Some(st) = stkt else {
+        return Err(proto(err::BADOPTION, status::NO_2ND_TKT));
+    };
+    if !st.server.name.is_local_tgs_principal(&st.server.realm)
+        || !st.server.name.is_krbtgt_for(&dest.realm)
+    {
+        return Err(proto(err::POLICY, status::SECOND_TKT_NOT_TGS));
+    }
+    let crealm = utf8_realm(&st.part.crealm)?;
+    let id = lookup_principal_id(&st.part.cname, crealm);
+    let Some(client) = store.fetch(&id)? else {
+        return Err(proto(err::SERVER_NOMATCH, status::SECOND_TKT_MISMATCH));
+    };
+    if client.name != dest.name || client.realm != dest.realm {
+        return Err(proto(err::SERVER_NOMATCH, status::SECOND_TKT_MISMATCH));
+    }
+    Ok(())
+}
+
+/// MIT `get_2ndtkt_enctype` (`do_tgs_req.c:310-328`).
+fn get_2ndtkt_enctype(
+    body: &KdcReqBody,
+    st: &SecondTicket,
+) -> Result<Option<EncryptionType>, Error> {
+    let n = st.part.key.keytype;
+    let Ok(et) = EncryptionType::known(n) else {
+        return Err(proto(err::ETYPE_NOSUPP, status::BAD_ETYPE_IN_2ND_TKT));
+    };
+    if body.etype.contains(&n) {
+        Ok(Some(et))
+    } else {
+        Ok(None)
+    }
+}
+
 /// MIT `decrypt_2ndtkt` (`do_tgs_req.c:257-307`).
 fn decrypt_2ndtkt(
     store: &dyn PrincipalRead,
@@ -1449,6 +1495,9 @@ fn u2u_from_stkt(st: &SecondTicket) -> Result<(ProtocolKey, u32, EncryptionType)
     Ok((key, 0, etype))
 }
 
+/// MIT `find_server_key` (`kdc_util.c:417-457`). kvno 0 means any kvno.
+/// No matching key, or a requested etype that is not similar, is
+/// `KRB5_KDB_NO_MATCHING_KEY` / `KRB5_KDB_NO_PERMITTED_KEY` → 60 `PROCESS_TGS`.
 fn find_server_key(
     p: &Principal,
     search_enctype: Option<EncryptionType>,
@@ -1675,7 +1724,8 @@ fn mint_ticket(
         sname: sname.clone(),
         enc_part: EncryptedData {
             etype: service_etype.to_iana(),
-            kvno: Some(kvno),
+            // MIT DEFOPTIONALZEROTYPE(opt_kvno): 0 is omitted (U2U).
+            kvno: (kvno != 0).then_some(kvno),
             cipher: cipher.into(),
         },
     })

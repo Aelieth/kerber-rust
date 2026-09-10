@@ -2124,7 +2124,160 @@ fn run() -> Result<(), String> {
         err::BADOPTION,
     )?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":58}}"#);
+    let u2u_opts = KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true);
+    let u2u_to =
+        |dest: PrincipalName, extra: Option<Vec<Ticket>>, nonce: u32| -> Result<Vec<u8>, String> {
+            encode(
+                &tgs_req_ex(
+                    mint_tgt(
+                        tkt_key,
+                        tkt_kvno,
+                        &user,
+                        realm,
+                        &krbtgt_sname,
+                        &sess,
+                        window10.clone(),
+                        TicketFlags::initial_preauth(),
+                    )?,
+                    &sess,
+                    realm,
+                    &user,
+                    dest,
+                    realm,
+                    nonce,
+                    u2u_opts.clone(),
+                    extra,
+                    Vec::new(),
+                    etypes.clone(),
+                )
+                .map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())
+        };
+
+    expect_error(
+        &cfg,
+        "u2u-no-2nd-tkt",
+        &u2u_to(user.clone(), None, 0x1000_0059)?,
+        err::BADOPTION,
+    )?;
+    expect_error(
+        &cfg,
+        "u2u-2nd-ticket-not-tgs",
+        &u2u_to(
+            user.clone(),
+            Some(vec![mint_signed_stkt(
+                hkey,
+                hkvno,
+                tkt_key,
+                &user,
+                realm,
+                &host,
+                &sess,
+                window10.clone(),
+                TicketFlags::initial_preauth(),
+                &user,
+            )?]),
+            0x1000_005a,
+        )?,
+        err::POLICY,
+    )?;
+    expect_error(
+        &cfg,
+        "u2u-2nd-ticket-mismatch",
+        &u2u_to(
+            host.clone(),
+            Some(vec![mint_tgt(
+                tkt_key,
+                tkt_kvno,
+                &user,
+                realm,
+                &krbtgt_sname,
+                &sess,
+                window10.clone(),
+                TicketFlags::initial_preauth(),
+            )?]),
+            0x1000_005b,
+        )?,
+        err::SERVER_NOMATCH,
+    )?;
+    expect_error(
+        &cfg,
+        "u2u-2nd-ticket-bad-pac",
+        &u2u_to(
+            user.clone(),
+            Some(vec![mint_signed_header(
+                tkt_key,
+                tkt_kvno,
+                &user,
+                realm,
+                &krbtgt_sname,
+                &sess,
+                window10.clone(),
+                TicketFlags::initial_preauth(),
+                &user,
+                true,
+                None,
+            )?]),
+            0x1000_005c,
+        )?,
+        err::MODIFIED,
+    )?;
+    let bad_sess = EncTicketPart {
+        flags: TicketFlags::initial_preauth(),
+        key: EncryptionKey {
+            keytype: 99,
+            keyvalue: sess.as_bytes().to_vec().into(),
+        },
+        crealm: krb5_types::try_ascii(realm).map_err(|e| e.to_string())?,
+        cname: user.clone(),
+        transited: TransitedEncoding {
+            tr_type: 1,
+            contents: Vec::<u8>::new().into(),
+        },
+        authtime: window10.0.clone(),
+        starttime: Some(window10.0.clone()),
+        endtime: window10.1.clone(),
+        renew_till: None,
+        caddr: None,
+        authorization_data: None,
+    };
+    expect_error(
+        &cfg,
+        "u2u-bad-etype",
+        &u2u_to(
+            user.clone(),
+            Some(vec![seal_ticket(
+                tkt_key,
+                tkt_kvno,
+                realm,
+                &krbtgt_sname,
+                bad_sess,
+            )?]),
+            0x1000_005d,
+        )?,
+        err::ETYPE_NOSUPP,
+    )?;
+    expect_tgs_rep(
+        &cfg,
+        "u2u-success",
+        &u2u_to(
+            host.clone(),
+            Some(vec![mint_tgt(
+                tkt_key,
+                tkt_kvno,
+                &host,
+                realm,
+                &krbtgt_sname,
+                &sess,
+                window10.clone(),
+                TicketFlags::initial_preauth(),
+            )?]),
+            0x1000_005e,
+        )?,
+    )?;
+
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":64}}"#);
     Ok(())
 }
 

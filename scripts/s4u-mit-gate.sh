@@ -384,5 +384,81 @@ set -e
 echo "$TGST_MIT"
 echo "$TGST_MIT" | grep -qiE "KDC policy rejects request|NOT_ALLOWED_TO_DELEGATE"
 
+echo "==== MIT kvno --u2u happy rust ===="
+docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf \
+    "$NAME" sh -c 'printf "userpassword\n" | kinit -c /tmp/krb5cc_u2u_user user@KERBER.TEST'
+docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf \
+    "$NAME" kinit -k -t /tmp/host.keytab -c /tmp/krb5cc_u2u_host host/testhost.kerber.test@KERBER.TEST
+docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf -e KRB5CCNAME=FILE:/tmp/krb5cc_u2u_user \
+    "$NAME" kvno --u2u FILE:/tmp/krb5cc_u2u_host host/testhost.kerber.test
+U2U_RUST="$(docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf \
+    "$NAME" klist -c /tmp/krb5cc_u2u_user)"
+echo "$U2U_RUST"
+echo "$U2U_RUST" | grep -q 'host/testhost.kerber.test'
+
+echo "==== MIT kvno --u2u happy mit ===="
+docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
+    "$MITNAME" sh -c 'printf "userpassword\n" | kinit -c /tmp/krb5cc_u2u_user user@KERBER.TEST'
+docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
+    "$MITNAME" kinit -k -t /etc/krb5kdc/testhost.keytab -c /tmp/krb5cc_u2u_host \
+    host/testhost.kerber.test@KERBER.TEST
+docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf -e KRB5CCNAME=FILE:/tmp/krb5cc_u2u_user \
+    "$MITNAME" kvno --u2u FILE:/tmp/krb5cc_u2u_host host/testhost.kerber.test
+U2U_MIT="$(docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
+    "$MITNAME" klist -c /tmp/krb5cc_u2u_user)"
+echo "$U2U_MIT"
+echo "$U2U_MIT" | grep -q 'host/testhost.kerber.test'
+
+echo "==== MIT kvno --u2u -allow_dup_skey rust ===="
+docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true'
+sleep 0.3
+docker exec "$NAME" sh -c 'sed -i "s/kdc = 127.0.0.1.*/kdc = 127.0.0.1:8888/" /tmp/s4u-krb5.conf'
+docker exec -d \
+    -e KRB5_TEST_USER_PASSWORD=userpassword \
+    -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
+    -e KRB5_TEST_DISALLOW_DUP_SKEY=1 \
+    -e KRB5_EXPORT_KEYTAB=/tmp/host.keytab \
+    "$NAME" sh -c '/tmp/krb5-kdc --test-realm --export-keytab /tmp/host.keytab 127.0.0.1:8888 >/tmp/kdc-dup.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/kdc-dup.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kdc-dup.log >&2 || true
+    log "s4u.mit.gate" "error" ',"error":"kdc did not listen (dup_skey)"'
+    exit 1
+fi
+docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf \
+    "$NAME" sh -c 'printf "userpassword\n" | kinit -c /tmp/krb5cc_u2u_dup user@KERBER.TEST'
+docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf \
+    "$NAME" kinit -k -t /tmp/host.keytab -c /tmp/krb5cc_u2u_dup_host \
+    host/testhost.kerber.test@KERBER.TEST
+set +e
+U2U_DUP_RUST="$(docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf \
+    -e KRB5CCNAME=FILE:/tmp/krb5cc_u2u_dup \
+    "$NAME" kvno --u2u FILE:/tmp/krb5cc_u2u_dup_host host/testhost.kerber.test 2>&1)"
+set -e
+echo "$U2U_DUP_RUST"
+echo "$U2U_DUP_RUST" | grep -qiE "KDC policy rejects request|DUP_SKEY DISALLOWED"
+
+echo "==== MIT kvno --u2u -allow_dup_skey mit ===="
+docker exec "$MITNAME" kadmin.local -q "modprinc -allow_dup_skey host/testhost.kerber.test"
+docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
+    "$MITNAME" sh -c 'printf "userpassword\n" | kinit -c /tmp/krb5cc_u2u_dup user@KERBER.TEST'
+docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
+    "$MITNAME" kinit -k -t /etc/krb5kdc/testhost.keytab -c /tmp/krb5cc_u2u_dup_host \
+    host/testhost.kerber.test@KERBER.TEST
+set +e
+U2U_DUP_MIT="$(docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
+    -e KRB5CCNAME=FILE:/tmp/krb5cc_u2u_dup \
+    "$MITNAME" kvno --u2u FILE:/tmp/krb5cc_u2u_dup_host host/testhost.kerber.test 2>&1)"
+set -e
+echo "$U2U_DUP_MIT"
+echo "$U2U_DUP_MIT" | grep -qiE "KDC policy rejects request|DUP_SKEY DISALLOWED"
+
 log "s4u.mit.gate" "ok" ',"principal":"host/testhost.kerber.test","for_client":"user@KERBER.TEST"'
 exit 0
