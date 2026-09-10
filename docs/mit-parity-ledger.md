@@ -53,10 +53,10 @@ Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after A′-2 R17):
-**335** = A1 118 + A2 86 + A3 63 + A4 68.
-exact 233 · stricter-documented 10 · deviation 49 ·
-absent 30 · deferred 13.
+Counts (after A′-2 R18):
+**339** = A1 120 + A2 86 + A3 65 + A4 68.
+exact 239 · stricter-documented 10 · deviation 49 ·
+absent 28 · deferred 13.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
 A2 10 (9 report rows + the `kdc_util.c:144-191` split) + A3 10 = 28
@@ -211,7 +211,9 @@ mismatches, not extra statuses.
 | do_tgs_req.c:288 | 2nd ticket decrypt fail | 2ND_TKT_DECRYPT 31 typical | issue.rs decrypt_2ndtkt | U2U and S4U2Proxy corrupt cipher is **31** `2ND_TKT_DECRYPT` | exact | diffsend `u2u-2nd-ticket-corrupt`; `r13_u2u_status.rs` |
 | do_tgs_req.c:294 | 2nd ticket PAC verify fail | 2ND_TKT_PAC 41 | issue.rs decrypt_2ndtkt | `2ND_TKT_PAC` 41 on both U2U and S4U2Proxy evidence | exact | diffsend `u2u-2nd-ticket-bad-pac`; `u2u_bad_pac_is_modified`; `s4u2proxy_no_stkt_pac_is_modified` |
 | do_tgs_req.c:319 | 2nd ticket session etype invalid | BAD_ETYPE_IN_2ND_TKT 14 | issue.rs get_2ndtkt_enctype | `BAD_ETYPE_IN_2ND_TKT` 14 | exact | diffsend `u2u-bad-etype`; `u2u_bad_session_etype_is_etype_nosupp` |
-| do_tgs_req.c:740 | cross S4U2Proxy PAC client extract fail | RBCD_PAC_PRINC 13 | ad.rs rbcd_pac_client | `RBCD_PAC_PRINC` 13 | absent (code in tree; live Samba) | proposed: diffsend cross CNAME-IN-ADDL-TKT |
+| do_tgs_req.c:737-758,984-992 | cross S4U2Proxy identity from PAC (`get_pac_princ_with_realm`); `tkt_client` / subject switch to evidence | RBCD_PAC_PRINC 13 on PAC client without realm | issue.rs rbcd_pac_client before `check_tgs_s4u2proxy`; ticket cname/crealm from PAC; subject PAC/authtime from evidence | PAC realm is the issued crealm; client info on a final S4U ticket omits realm | exact | `a2_r18_cross_pac_without_realm_is_rbcd_pac_princ`; `a2_r18_cross_issues_pac_client_and_realm` |
+| do_tgs_req.c:740 | cross S4U2Proxy PAC client extract fail | RBCD_PAC_PRINC 13 | ad.rs rbcd_pac_client | `RBCD_PAC_PRINC` 13 | exact | `a2_r18_cross_pac_without_realm_is_rbcd_pac_princ` |
+| do_tgs_req.c:787-788 | transited vs `tkt_client` realm (not header crealm) | BAD_TRANSIT 12 when the PAC realm is not in capaths | issue.rs issue_tgs_body | `tkt_client_realm` is the PAC/evidence realm for S4U2Proxy | exact | `a2_r18_cross_tkt_client_realm_is_transited` |
 | do_tgs_req.c:767 | `get_auth_indicators` fail | GET_AUTH_INDICATORS (varies) | — | no CAMMAC extract | absent | proposed: diffsend truncated CAMMAC |
 | do_tgs_req.c:792 | header transited `tr_type != 1` on add path | VALIDATE_TRANSIT_TYPE 17 | issue.rs issue_tgs_body | `VALIDATE_TRANSIT_TYPE` 17 | exact | `transited_add_path_type_and_ill_formed` |
 | do_tgs_req.c:799 | `add_to_transited` fail | ADD_TO_TRANSITED_LIST 43 (`ILL_CR_TKT`; kdc_transit.c:214+) | issue.rs issue_tgs_body | `ADD_TO_TRANSITED_LIST` 43 | exact | `transited_add_path_type_and_ill_formed`; `capaths-compress-gate.sh` |
@@ -255,7 +257,7 @@ mismatches, not extra statuses.
 | tgs_policy.c:472 | S4U2Proxy evidence PAC missing | S4U2PROXY_NO_STKT_PAC 41 | ad.rs check_tgs_s4u2proxy | `S4U2PROXY_NO_STKT_PAC` 41 | exact | diffsend `s4u2proxy-no-stkt-pac`; `s4u2proxy_no_stkt_pac_is_modified` |
 | tgs_policy.c:480 | same-realm evidence server ≠ header client | EVIDENCE_TICKET_MISMATCH 26 | ad.rs check_tgs_s4u2proxy | `EVIDENCE_TICKET_MISMATCH` 26 | exact | diffsend `s4u2proxy-evidence-mismatch`; `s4u2proxy_evidence_mismatch_is_server_nomatch` |
 | tgs_policy.c:488 | same-realm evidence PAC ≠ evidence client | S4U2PROXY_LOCAL_STKT_PAC 13 | ad.rs check_tgs_s4u2proxy | `S4U2PROXY_LOCAL_STKT_PAC` 13 | exact | diffsend `s4u2proxy-local-stkt-pac` |
-| tgs_policy.c:503 | cross evidence not referral TGT to us | XREALM_EVIDENCE_TICKET_MISMATCH 13 | ad.rs check_tgs_s4u2proxy | `XREALM_EVIDENCE_TICKET_MISMATCH` 13 | absent (code in tree; live Samba) | proposed: diffsend; `samba-crossrealm-gate.sh` |
+| tgs_policy.c:501-503 | cross evidence client ≠ header client (`krb5_principal_compare`, name and realm) or not a referral TGT to us | XREALM_EVIDENCE_TICKET_MISMATCH 13 | ad.rs check_tgs_s4u2proxy | `XREALM_EVIDENCE_TICKET_MISMATCH` 13 | exact | `a2_r18_cross_stkt_realm_mismatch_is_xrealm` |
 | tgs_policy.c:512 + :365 `verify_deleg_pac` | cross evidence PAC deleg info | S4U2PROXY_CROSS_STKT_PAC 13 | ad.rs verify_deleg_pac | `S4U2PROXY_CROSS_STKT_PAC` 13 | absent (code in tree; live Samba) | proposed: diffsend; `samba-crossrealm-gate.sh` |
 | tgs_policy.c:541 | referral S4U2Proxy without PA-PAC-OPTIONS RBCD | UNSUPPORTED_S4U2PROXY_REQUEST 13 | ad.rs check_s4u2proxy_policy | `UNSUPPORTED_S4U2PROXY_REQUEST` 13 | exact (unit); live Samba | `s4u2proxy_honors_pac_options_rbcd` |
 | tgs_policy.c:569 | KDB deny RBCD/classic | NOT_ALLOWED_TO_DELEGATE 13 (same string as :449 but 13 not 12) | ad.rs check_s4u2proxy_policy | empty `s4u_allowed_to`/`from` is deny **13** `NOT_ALLOWED_TO_DELEGATE`; MIT db2 hooks are NULL → `UNSUPPORTED_S4U2PROXY_REQUEST` 13 | exact (our store); deviation (MIT db2 e_text) | `s4u2proxy_classic_denied_without_allowed_to`; `s4u2proxy_first_hop_adds_delegation_info` |
@@ -437,6 +439,8 @@ are RFC 4120/6113 integers. After W0d G3, FAST unwrap failures wire
 | kdc_authdata.c:576-627 | HANDLE_AUTHDATA order: copy TGS body AD → kdcauthdata plugins → copy TGT AD → handle_pac | POLICY 12 if AD-MANDATORY-FOR-KDC | no copy_request/copy_tgt; AD_MANDATORY_FOR_KDC const only | uncopied AD dropped | absent | proposed: TGS-body AD unit; proposed: diffsend `tgs-body-ad` |
 | kdc_authdata.c:300-336; cammac.c:55-127 | auth indicators → AD-97 inside CAMMAC (96) + IF-RELEVANT; ku 64 (`add_auth_indicators`) | ticket AD | no CAMMAC/AD-97 in crates | absent | absent | propose CAMMAC encode/verify unit |
 | cammac.c:134-175 | cammac_check_kdcver over EncTicketPart with CAMMAC elements as AD | ignore unverified CAMMAC | none | absent | deferred | none (promotion: CAMMAC create/verify) |
+| kdc_authdata.c:382-439 | first-hop local S4U2Proxy `update_delegation_info` | n/a (issue side) | ad.rs update_delegation_info | `proxy_target` without realm; transited hop is evidence server with realm | exact | `scripts/s4u-mit-gate.sh` `MIT_testkdb_s4u2proxy_happy`; `a2_r18_local_s4u2proxy_client_info_omits_realm` |
+| kdc_authdata.c:520-544 | local constrained: write DI; else copy DI; final S4U CLIENT_INFO omits realm | n/a (issue side) | ad.rs sign_reply_pac_s4u `s4u_final`; issue.rs first-hop update when `!is_crossrealm` | same; Rust S4U2Self mint still adds UPN/ATTRIBUTES/REQUESTER_SID (copied into the proxy PAC) | exact (DI + client info); deviation (extra PAC types) | `scripts/s4u-mit-gate.sh` `--print-delegation`; `a2_r18_cross_issues_pac_client_and_realm` |
 | kdc_authdata.c:517-564 vs :456-494 | PAC: issue_pac → **add_auth_indicators (CAMMAC)** → client/deleg info → sign PAC | CAMMAC in tkt before PAC sign | ad.rs wrap_win2k_pac sign_pac 16→19→6→7 only; mint_ticket placeholder then PAC | PAC-only; no CAMMAC | deviation | `crates/krb5-kdc/tests/ad_pac.rs`; samba-pac-*-gate.sh (PAC sigs only) |
 | kdc_authdata.c:488-494 | TGS: no PAC if subject_pac==NULL (still indicators) | skip PAC | issue.rs include_pac_for_reply | no PAC when the subject had none | exact | diffsend `tgs-from-pacless-tgt`; `tgs_without_pac_still_issues` |
 | do_tgs_req.c:657-664 | HEADER_PAC verify immediately after FAST unwrap | `HEADER_PAC` | krb5-kdc/ad.rs get_verified_pac; issue.rs issue_tgs_body | `HEADER_PAC` 41/13 | exact | diffsend `tgs-pac-corrupt-before-sname`; `tgs-pac-client-mismatch` |

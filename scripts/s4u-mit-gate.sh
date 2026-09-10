@@ -26,7 +26,7 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
-cargo build -p krb5-kdc --bin krb5-kdc -p krb5-client --bin krb5-kvno
+cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-pac-extract -p krb5-client --bin krb5-kvno
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
@@ -83,7 +83,8 @@ fi
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kvno" "$NAME":/tmp/krb5-kvno
-docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kvno
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-pac-extract" "$NAME":/tmp/krb5-pac-extract
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kvno /tmp/krb5-pac-extract
 
 docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
@@ -531,6 +532,165 @@ echo "$KLIST_BM"
 echo "$KLIST_BM" | grep -q 'host/testhost.kerber.test'
 echo "$KLIST_BM" | grep -qE 'Addresses: [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'
 echo "MIT_kinit_a_both_legs"
+
+echo "==== MIT test-KDB kvno -U user -P (classic S4U2Proxy happy) ===="
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-pac-extract" "$NAME":/tmp/krb5-pac-extract
+docker exec "$NAME" chmod +x /tmp/krb5-pac-extract
+docker exec "$NAME" sh -c 'cat >/tmp/test-kdc.conf <<EOF
+[kdcdefaults]
+    kdc_listen = 127.0.0.1:8890
+    kdc_tcp_listen = 127.0.0.1:8890
+[realms]
+    KERBER.TEST = {
+        database_module = test
+    }
+[dbmodules]
+    test = {
+        db_library = test
+        princs = {
+            krbtgt/KERBER.TEST = {
+                keys = aes256-cts
+            }
+            user = {
+                keys = aes256-cts
+            }
+            host/testhost.kerber.test = {
+                flags = +ok-to-auth-as-delegate
+                keys = aes256-cts
+            }
+        }
+        delegation = {
+            host/testhost.kerber.test = host/testhost.kerber.test
+        }
+    }
+[logging]
+    kdc = FILE:/tmp/mit-test.log
+EOF
+cat >/tmp/test-krb5.conf <<EOF
+[libdefaults]
+    default_realm = KERBER.TEST
+    dns_lookup_kdc = false
+    dns_lookup_realm = false
+    rdns = false
+    forwardable = true
+    default_ccache_name = FILE:/tmp/krb5cc_testkdb
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1:8890
+    }
+[dbmodules]
+    db_module_dir = /usr/lib/krb5/plugins/kdb
+EOF'
+docker exec -e KRB5_CONFIG=/tmp/test-krb5.conf -e KRB5_KDC_PROFILE=/tmp/test-kdc.conf \
+    "$NAME" kadmin.local -r KERBER.TEST -q \
+    'ktadd -norandkey -k /tmp/test-host.kt host/testhost.kerber.test'
+docker exec -d -e KRB5_CONFIG=/tmp/test-krb5.conf -e KRB5_KDC_PROFILE=/tmp/test-kdc.conf \
+    "$NAME" sh -c 'krb5kdc -n -P /tmp/mit-test.pid >/tmp/mit-test-stdout.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',8890),0.2)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/mit-test.log >&2 || true
+    docker exec "$NAME" cat /tmp/mit-test-stdout.log >&2 || true
+    log "s4u.mit.gate" "error" ',"error":"MIT test-KDB kdc did not listen"'
+    exit 1
+fi
+docker exec -e KRB5_CONFIG=/tmp/test-krb5.conf \
+    "$NAME" kinit -f -k -t /tmp/test-host.kt -c /tmp/krb5cc_mit_testkdb \
+    host/testhost.kerber.test@KERBER.TEST
+docker exec -e KRB5_CONFIG=/tmp/test-krb5.conf -e KRB5CCNAME=FILE:/tmp/krb5cc_mit_testkdb \
+    "$NAME" kvno -U user -P host/testhost.kerber.test
+MIT_TK="$(docker exec -e KRB5_CONFIG=/tmp/test-krb5.conf \
+    "$NAME" klist -f -c /tmp/krb5cc_mit_testkdb)"
+echo "$MIT_TK"
+echo "$MIT_TK" | grep -q 'for client user@KERBER.TEST'
+MIT_TF="$(echo "$MIT_TK" | sed -n 's/.*for client user@KERBER.TEST, Flags: //p' | tail -1)"
+echo "s4u2proxy_flags_mit_testkdb=$MIT_TF"
+test -n "$MIT_TF"
+echo "$MIT_TF" | grep -q F
+MIT_PAC="$(docker exec "$NAME" /tmp/krb5-pac-extract --keytab /tmp/test-host.kt \
+    --ccache /tmp/krb5cc_mit_testkdb --last --print-types --print-delegation)"
+echo "$MIT_PAC"
+echo "$MIT_PAC" | grep -q 'pac_types='
+echo "$MIT_PAC" | grep -qE 'pac_types=.*\b11\b'
+echo "$MIT_PAC" | grep -q 'proxy_target=host/testhost.kerber.test'
+echo "$MIT_PAC" | grep -q 'transited_services=host/testhost.kerber.test@KERBER.TEST'
+
+echo "==== Rust kvno -U user -P (classic S4U2Proxy happy) ===="
+docker exec "$NAME" sh -c 'for p in /proc/[0-9]*; do
+  comm=$(cat "$p/comm" 2>/dev/null) || continue
+  [ "$comm" = krb5-kdc ] || continue
+  kill -9 "${p#/proc/}" 2>/dev/null || true
+done'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',8888),0.15)" 2>/dev/null; then
+        sleep 0.2
+        continue
+    fi
+    ok=1
+    break
+done
+[ "$ok" = 1 ]
+docker exec -d \
+    -e KRB5_TEST_USER_PASSWORD=userpassword \
+    -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
+    -e KRB5_EXPORT_KEYTAB=/tmp/host-r18.keytab \
+    -e KRB5_TEST_OK_TO_AUTH_AS_DELEGATE=1 \
+    -e KRB5_TEST_S4U_TO=host/testhost.kerber.test \
+    "$NAME" sh -c '/tmp/krb5-kdc --test-realm --export-keytab /tmp/host-r18.keytab 127.0.0.1:8888 >/tmp/kdc-r18.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/kdc-r18.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kdc-r18.log >&2 || true
+    log "s4u.mit.gate" "error" ',"error":"Rust KDC for S4U2Proxy happy did not listen"'
+    exit 1
+fi
+docker exec "$NAME" sh -c 'cat >/tmp/s4u-r18.conf <<EOF
+[libdefaults]
+    default_realm = KERBER.TEST
+    dns_lookup_kdc = false
+    dns_lookup_realm = false
+    rdns = false
+    forwardable = true
+    default_ccache_name = FILE:/tmp/krb5cc_r18
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1:8888
+    }
+EOF'
+docker exec -e KRB5_CONFIG=/tmp/s4u-r18.conf \
+    "$NAME" kinit -f -k -t /tmp/host-r18.keytab -c /tmp/krb5cc_rust_s4u2p \
+    host/testhost.kerber.test@KERBER.TEST
+docker exec -e KRB5_CONFIG=/tmp/s4u-r18.conf -e KRB5CCNAME=FILE:/tmp/krb5cc_rust_s4u2p \
+    "$NAME" kvno -U user -P host/testhost.kerber.test
+RUST_TK="$(docker exec -e KRB5_CONFIG=/tmp/s4u-r18.conf \
+    "$NAME" klist -f -c /tmp/krb5cc_rust_s4u2p)"
+echo "$RUST_TK"
+echo "$RUST_TK" | grep -q 'for client user@KERBER.TEST'
+RUST_TF="$(echo "$RUST_TK" | sed -n 's/.*for client user@KERBER.TEST, Flags: //p' | tail -1)"
+echo "s4u2proxy_flags_rust=$RUST_TF"
+test -n "$RUST_TF"
+echo "$RUST_TF" | grep -q F
+RUST_PAC="$(docker exec "$NAME" /tmp/krb5-pac-extract --keytab /tmp/host-r18.keytab \
+    --ccache /tmp/krb5cc_rust_s4u2p --last --print-types --print-delegation)"
+echo "$RUST_PAC"
+echo "$RUST_PAC" | grep -q 'pac_types='
+echo "$RUST_PAC" | grep -qE 'pac_types=.*\b11\b'
+echo "$RUST_PAC" | grep -q 'proxy_target=host/testhost.kerber.test'
+echo "$RUST_PAC" | grep -q 'transited_services=host/testhost.kerber.test@KERBER.TEST'
+echo "MIT_testkdb_s4u2proxy_happy"
 
 log "s4u.mit.gate" "ok" ',"principal":"host/testhost.kerber.test","for_client":"user@KERBER.TEST"'
 exit 0

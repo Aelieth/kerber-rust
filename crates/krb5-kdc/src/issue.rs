@@ -606,6 +606,7 @@ fn issue_as_body(
         &starttime,
         None,
         body.addresses.clone(),
+        false,
     )?;
     let renew_till = renew_till_for(
         store,
@@ -1034,6 +1035,15 @@ fn issue_tgs_body(
         let Some(st) = stkt.as_ref() else {
             return Err(proto(err::GENERIC, status::UNKNOWN_REASON));
         };
+        if is_crossrealm {
+            let pac = st
+                .pac
+                .as_deref()
+                .ok_or_else(|| proto(err::BADOPTION, status::RBCD_PAC_PRINC))?;
+            let (cname, crealm) = rbcd_pac_client(pac)?;
+            ticket_cname = cname;
+            ticket_crealm = crealm;
+        }
         check_tgs_s4u2proxy(
             store,
             body,
@@ -1044,16 +1054,10 @@ fn issue_tgs_body(
             is_crossrealm,
             is_referral,
         )?;
-        if is_crossrealm {
-            let pac = st
-                .pac
-                .as_deref()
-                .ok_or_else(|| proto(err::BADOPTION, status::RBCD_PAC_PRINC))?;
-            ticket_cname = rbcd_pac_client(pac)?;
-        } else {
+        if !is_crossrealm {
             ticket_cname = st.part.cname.clone();
+            utf8_realm(&st.part.crealm)?.clone_into(&mut ticket_crealm);
         }
-        utf8_realm(&st.part.crealm)?.clone_into(&mut ticket_crealm);
         subject_authtime = st.part.authtime.clone();
         subject_pac.clone_from(&st.pac);
         s4u2proxy = true;
@@ -1109,27 +1113,34 @@ fn issue_tgs_body(
     };
     let mut transited = enc_tkt.transited.clone();
     let prev_hop = header_realm.as_str();
-    let crealm = utf8_realm(&enc_tkt.crealm)?;
+    let header_crealm = utf8_realm(&enc_tkt.crealm)?;
+    let tkt_client_realm = if s4u2self || s4u2proxy {
+        ticket_crealm.as_str()
+    } else {
+        header_crealm
+    };
     // MIT check_tgs_lineage: a local user on a foreign TGT is POLICY
     // (skipped for S4U2Self).
-    if crealm == store.realm() && is_crossrealm && !s4u2self {
+    if header_crealm == store.realm() && is_crossrealm && !s4u2self {
         return Err(proto(err::POLICY, status::INVALID_LINEAGE));
     }
-    // MIT do_tgs_req.c:787-789: keep the header transited when the header
-    // ticket server realm equals the client realm (implicit in the field).
-    if is_crossrealm && prev_hop != crealm {
+    // MIT do_tgs_req.c:787-788: keep header transited when header-server
+    // realm equals tkt_client realm.
+    if is_crossrealm && prev_hop != tkt_client_realm {
         if transited.tr_type != 1 {
             return Err(proto(err::TRTYPE_NOSUPP, status::VALIDATE_TRANSIT_TYPE));
         }
         transited = transited
-            .append_realm(prev_hop, crealm, req_realm.as_str())
+            .append_realm(prev_hop, tkt_client_realm, req_realm.as_str())
             .map_err(|_| proto(err::ILL_CR_TKT, status::ADD_TO_TRANSITED_LIST))?;
     }
-    let transit_checked = if crealm == "WELLKNOWN:ANONYMOUS" {
+    let transit_checked = if tkt_client_realm == "WELLKNOWN:ANONYMOUS" {
         true
     } else {
-        match transited.realms_for(crealm, req_realm.as_str()) {
-            Ok(h) => store.policy().transit_allowed(crealm, &req_realm, &h),
+        match transited.realms_for(tkt_client_realm, req_realm.as_str()) {
+            Ok(h) => store
+                .policy()
+                .transit_allowed(tkt_client_realm, &req_realm, &h),
             Err(_) => false,
         }
     };
@@ -1287,6 +1298,7 @@ fn issue_tgs_body(
             subject_pac.as_deref()
         },
         tgs_ticket_caddr(body, renew, validate, &enc_tkt),
+        s4u2self || s4u2proxy,
     )?;
     let mut s4u_rep_pa = None;
     let mut s4u_enc_pa = None;
@@ -1732,6 +1744,7 @@ fn mint_ticket(
     starttime: &KerberosTime,
     subject_pac: Option<&[u8]>,
     caddr: Option<HostAddresses>,
+    s4u_final: bool,
 ) -> Result<Ticket, Error> {
     let mut part = EncTicketPart {
         flags,
@@ -1767,7 +1780,7 @@ fn mint_ticket(
         } else {
             store.pac_identity(cname, crealm)
         };
-        let pac = crate::ad::sign_reply_pac(
+        let pac = crate::ad::sign_reply_pac_s4u(
             cname,
             authtime.unix_seconds(),
             &crate::ad::PacTicket {
@@ -1779,6 +1792,7 @@ fn mint_ticket(
             &ident,
             logon_override,
             subject_pac,
+            s4u_final,
         )?;
         part.authorization_data = Some(wrap_win2k_pac(&pac)?);
     }

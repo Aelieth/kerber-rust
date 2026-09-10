@@ -77,6 +77,26 @@ pub fn sign_pac(
     sign_reply_pac(cname, authtime, ticket, identity, logon_override, None)
 }
 
+pub(crate) fn sign_reply_pac_s4u(
+    cname: &PrincipalName,
+    authtime: u32,
+    ticket: &PacTicket<'_>,
+    identity: &krb5_types::pac::PacIdentity,
+    logon_override: Option<&[u8]>,
+    subject_pac: Option<&[u8]>,
+    s4u_final: bool,
+) -> Result<Vec<u8>, Error> {
+    sign_reply_pac_inner(
+        cname,
+        authtime,
+        ticket,
+        identity,
+        logon_override,
+        subject_pac,
+        s4u_final,
+    )
+}
+
 /// # Errors
 ///
 /// Crypto or DER failures while building checksums.
@@ -87,6 +107,26 @@ pub fn sign_reply_pac(
     identity: &krb5_types::pac::PacIdentity,
     logon_override: Option<&[u8]>,
     subject_pac: Option<&[u8]>,
+) -> Result<Vec<u8>, Error> {
+    sign_reply_pac_inner(
+        cname,
+        authtime,
+        ticket,
+        identity,
+        logon_override,
+        subject_pac,
+        false,
+    )
+}
+
+fn sign_reply_pac_inner(
+    cname: &PrincipalName,
+    authtime: u32,
+    ticket: &PacTicket<'_>,
+    identity: &krb5_types::pac::PacIdentity,
+    logon_override: Option<&[u8]>,
+    subject_pac: Option<&[u8]>,
+    s4u_final: bool,
 ) -> Result<Vec<u8>, Error> {
     let PacTicket {
         server,
@@ -115,6 +155,13 @@ pub fn sign_reply_pac(
                         krb5_types::pac::PacBuffer::new(PAC_LOGON_INFO, logon.to_vec()),
                     );
                 }
+            }
+        }
+        if s4u_final {
+            let info = krb5_types::pac::client_info_buffer(authtime, &cname.components_joined());
+            match buffers.iter_mut().find(|b| b.kind == PAC_CLIENT_INFO) {
+                Some(b) => b.data = info,
+                None => buffers.push(krb5_types::pac::PacBuffer::new(PAC_CLIENT_INFO, info)),
             }
         }
         krb5_types::pac::Pac::built(0, buffers)
@@ -914,6 +961,7 @@ pub(crate) fn check_tgs_s4u2proxy(
             || !st.server.name.is_cross_tgs_principal(&st.server.realm)
             || inst != dest_realm
             || st.part.cname != header.cname
+            || utf8(&st.part.crealm) != utf8(&header.crealm)
         {
             return Err(proto(
                 err::BADOPTION,
@@ -1047,15 +1095,15 @@ pub(crate) fn update_delegation_info(
 }
 
 /// MIT `get_pac_princ_with_realm` for cross-realm S4U2Proxy (`do_tgs_req.c:737-745`).
-pub(crate) fn rbcd_pac_client(pac: &[u8]) -> Result<PrincipalName, Error> {
+pub(crate) fn rbcd_pac_client(pac: &[u8]) -> Result<(PrincipalName, String), Error> {
     let parsed = krb5_types::pac::Pac::parse(pac)
         .map_err(|_| proto(err::BADOPTION, status::RBCD_PAC_PRINC))?;
-    let Some((user, _, _)) = pac_princ_with_realm(&parsed) else {
+    let Some((user, realm, _)) = pac_princ_with_realm(&parsed) else {
         return Err(proto(err::BADOPTION, status::RBCD_PAC_PRINC));
     };
-    Ok(PrincipalName::new(
-        PrincipalName::NT_MS_PRINCIPAL,
-        [user.as_str()],
+    Ok((
+        PrincipalName::new(PrincipalName::NT_MS_PRINCIPAL, [user.as_str()]),
+        realm,
     ))
 }
 

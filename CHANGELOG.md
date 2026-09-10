@@ -8,6 +8,14 @@ this project uses semantic versioning once a crate is published.
 
 ### W1-A′-2
 
+- **kdc.** S4U2Proxy issuance is proven against MIT's `plugins/kdb/test`
+  KDB (`delegation = { … }` in the harness image). First hop writes
+  `PAC_DELEGATION_INFO` (`kdc_authdata.c:382-439`). Cross-realm gather
+  takes the PAC client with realm before `check_tgs_s4u2proxy`
+  (`do_tgs_req.c:737-745`, `RBCD_PAC_PRINC`); ticket identity and
+  transited use that realm; final S4U CLIENT_INFO omits the realm.
+  Evidence vs header client compare includes realm
+  (`tgs_policy.c:501-502`). Oracle is MIT test-KDB, not Samba.
 - **kdc.** `create_host` / `addprinc -randkey` no longer seeds
   `allowed_to_delegate` to self (MIT db2 default). S4U2Self keeps F
   unless a target list is set and `OK_TO_AUTH_AS_DELEGATE` is clear.

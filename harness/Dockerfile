@@ -41,6 +41,14 @@ RUN wget -O krb5.tar.gz "${KRB5_URL}" \
            exit 1; \
        fi \
     && echo "MIT PKINIT plugin present: $plugin" \
+    && testdb="$(find plugins/kdb/test -name 'test.so' | head -1)" \
+    && if [ -z "$testdb" ]; then \
+           echo "ERROR: MIT test KDB plugin (test.so) was not built" >&2; \
+           exit 1; \
+       fi \
+    && mkdir -p /usr/lib/krb5/plugins/kdb \
+    && cp "$testdb" /usr/lib/krb5/plugins/kdb/test.so \
+    && echo "MIT test KDB plugin present: /usr/lib/krb5/plugins/kdb/test.so" \
     && cd / \
     && rm -rf /tmp/build
 

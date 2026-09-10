@@ -36,6 +36,8 @@ fn main() -> ExitCode {
     let mut print_rid = false;
     let mut print_transited = false;
     let mut print_types = false;
+    let mut print_delegation = false;
+    let mut last_host = false;
     let mut verify_privsvr = None;
     let mut i = 0usize;
     while i < args.len() {
@@ -76,6 +78,14 @@ fn main() -> ExitCode {
                 print_types = true;
                 i += 1;
             }
+            "--print-delegation" => {
+                print_delegation = true;
+                i += 1;
+            }
+            "--last" => {
+                last_host = true;
+                i += 1;
+            }
             "--verify-privsvr" => {
                 verify_privsvr = args.get(i + 1).cloned();
                 i += 2;
@@ -85,7 +95,7 @@ fn main() -> ExitCode {
                     "usage: krb5-pac-extract --keytab <kt> --ccache <cc> [--out <pac>] \
                      [--enc-tkt-out <der>] [--krbtgt-keytab <kt>] [--keys-out <txt>] \
                      [--print-rid] [--print-transited] [--print-types] \
-                     [--verify-privsvr <enctype>]"
+                     [--print-delegation] [--last] [--verify-privsvr <enctype>]"
                 );
                 return ExitCode::from(2);
             }
@@ -97,7 +107,12 @@ fn main() -> ExitCode {
         );
         return ExitCode::from(2);
     };
-    if out.is_none() && !print_transited && !print_types && verify_privsvr.is_none() {
+    if out.is_none()
+        && !print_transited
+        && !print_types
+        && !print_delegation
+        && verify_privsvr.is_none()
+    {
         eprintln!("usage: krb5-pac-extract --keytab <kt> --ccache <cc> --out <pac>");
         return ExitCode::from(2);
     }
@@ -127,57 +142,70 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    for cred in &cc.creds {
-        if cred.is_config() {
-            continue;
+    let host_creds: Vec<_> = cc
+        .creds
+        .iter()
+        .filter(|cred| !cred.is_config() && cred.server.1.components_joined().starts_with("host/"))
+        .collect();
+    let Some(cred) = (if last_host {
+        host_creds.last()
+    } else {
+        host_creds.first()
+    })
+    .copied() else {
+        eprintln!("krb5-pac-extract: no host/ ticket in ccache");
+        return ExitCode::from(1);
+    };
+    let sname = cred.server.1.components_joined();
+    let ticket: Ticket = match decode(&cred.ticket) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("krb5-pac-extract: ticket DER: {e}");
+            return ExitCode::from(1);
         }
-        let sname = cred.server.1.components_joined();
-        if !sname.starts_with("host/") {
+    };
+    for ent in &kt.entries {
+        let Ok(plain) = decrypt(&ent.key, usage, ticket.enc_part.cipher.as_ref()) else {
             continue;
-        }
-        let ticket: Ticket = match decode(&cred.ticket) {
-            Ok(t) => t,
-            Err(e) => {
-                eprintln!("krb5-pac-extract: ticket DER: {e}");
-                return ExitCode::from(1);
-            }
         };
-        for ent in &kt.entries {
-            let Ok(plain) = decrypt(&ent.key, usage, ticket.enc_part.cipher.as_ref()) else {
-                continue;
+        let Ok(part) = decode::<EncTicketPart>(&plain) else {
+            continue;
+        };
+        if print_transited {
+            let contents = String::from_utf8_lossy(part.transited.contents.as_ref());
+            let checked = i32::from(
+                part.flags
+                    .bit(krb5_types::flag_bit::TRANSITED_POLICY_CHECKED),
+            );
+            println!("transited_tr_type={}", part.transited.tr_type);
+            println!("transited_contents={contents}");
+            let crealm = std::str::from_utf8(part.crealm.as_bytes()).unwrap_or("");
+            let srealm = std::str::from_utf8(ticket.realm.as_bytes()).unwrap_or("");
+            let realms = match part.transited.realms_for(crealm, srealm) {
+                Ok(hops) => hops.join(","),
+                Err(e) => format!("<error: {e}>"),
             };
-            let Ok(part) = decode::<EncTicketPart>(&plain) else {
-                continue;
-            };
-            if print_transited {
-                let contents = String::from_utf8_lossy(part.transited.contents.as_ref());
-                let checked = i32::from(
-                    part.flags
-                        .bit(krb5_types::flag_bit::TRANSITED_POLICY_CHECKED),
-                );
-                println!("transited_tr_type={}", part.transited.tr_type);
-                println!("transited_contents={contents}");
-                let crealm = std::str::from_utf8(part.crealm.as_bytes()).unwrap_or("");
-                let srealm = std::str::from_utf8(ticket.realm.as_bytes()).unwrap_or("");
-                let realms = match part.transited.realms_for(crealm, srealm) {
-                    Ok(hops) => hops.join(","),
-                    Err(e) => format!("<error: {e}>"),
-                };
-                println!("transited_realms={realms}");
-                println!("transited_policy_checked={checked}");
-                if out.is_none() && !print_types && verify_privsvr.is_none() {
-                    return ExitCode::SUCCESS;
-                }
+            println!("transited_realms={realms}");
+            println!("transited_policy_checked={checked}");
+            if out.is_none() && !print_types && !print_delegation && verify_privsvr.is_none() {
+                return ExitCode::SUCCESS;
             }
-            let Some(pac) = pac_from_ticket_part(&part) else {
-                if print_transited && out.is_none() && !print_types && verify_privsvr.is_none() {
-                    return ExitCode::SUCCESS;
-                }
-                continue;
-            };
-            if print_types {
-                match krb5_types::pac::Pac::parse(&pac) {
-                    Ok(parsed) => {
+        }
+        let Some(pac) = pac_from_ticket_part(&part) else {
+            if print_transited
+                && out.is_none()
+                && !print_types
+                && !print_delegation
+                && verify_privsvr.is_none()
+            {
+                return ExitCode::SUCCESS;
+            }
+            continue;
+        };
+        if print_types || print_delegation {
+            match krb5_types::pac::Pac::parse(&pac) {
+                Ok(parsed) => {
+                    if print_types {
                         let mut kinds: Vec<u32> = parsed.buffers.iter().map(|b| b.kind).collect();
                         kinds.sort_unstable();
                         let joined = kinds
@@ -187,98 +215,115 @@ fn main() -> ExitCode {
                             .join(",");
                         println!("pac_types={joined}");
                     }
-                    Err(e) => {
-                        eprintln!("krb5-pac-extract: PAC parse: {e}");
-                        return ExitCode::from(1);
+                    if print_delegation {
+                        let Some(buf) = parsed
+                            .unique_buffer(krb5_types::pac::PAC_DELEGATION_INFO)
+                            .ok()
+                            .flatten()
+                        else {
+                            eprintln!("krb5-pac-extract: no PAC_DELEGATION_INFO");
+                            return ExitCode::from(1);
+                        };
+                        match krb5_types::pac::parse_delegation_info(buf) {
+                            Ok(di) => {
+                                println!("proxy_target={}", di.proxy_target);
+                                println!("transited_services={}", di.transited_services.join(","));
+                            }
+                            Err(e) => {
+                                eprintln!("krb5-pac-extract: DELEGATION_INFO: {e}");
+                                return ExitCode::from(1);
+                            }
+                        }
                     }
                 }
-            }
-            if let Some(etname) = &verify_privsvr {
-                let et = match EncryptionType::from_mit_name(etname) {
-                    Ok(e) => e,
-                    Err(e) => {
-                        eprintln!("krb5-pac-extract: privsvr enctype {etname}: {e}");
-                        return ExitCode::from(1);
-                    }
-                };
-                let Some(kdc) = kdc_key.as_ref() else {
-                    eprintln!("krb5-pac-extract: --verify-privsvr needs --krbtgt-keytab");
-                    return ExitCode::from(2);
-                };
-                let privsvr = match derive_prfplus_enctype(kdc, b"pac_privsvr", et) {
-                    Ok(k) => k,
-                    Err(e) => {
-                        eprintln!("krb5-pac-extract: derive pac_privsvr: {e}");
-                        return ExitCode::from(1);
-                    }
-                };
-                let der = match ticket_checksum_der(&part) {
-                    Ok(d) => d,
-                    Err(e) => {
-                        eprintln!("krb5-pac-extract: ticket checksum DER: {e}");
-                        return ExitCode::from(1);
-                    }
-                };
-                if let Err(e) =
-                    verify_pac_signatures(&pac, &ent.key, Some(&privsvr), Some(&der), true)
-                {
-                    eprintln!("krb5-pac-extract: privsvr verify: {e}");
+                Err(e) => {
+                    eprintln!("krb5-pac-extract: PAC parse: {e}");
                     return ExitCode::from(1);
                 }
-                println!("privsvr_ok={etname}");
             }
-            if out.is_none() && !print_rid {
-                return ExitCode::SUCCESS;
-            }
-            let Some(out_path) = out.as_ref() else {
-                return ExitCode::SUCCESS;
+        }
+        if let Some(etname) = &verify_privsvr {
+            let et = match EncryptionType::from_mit_name(etname) {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!("krb5-pac-extract: privsvr enctype {etname}: {e}");
+                    return ExitCode::from(1);
+                }
             };
-            if print_rid {
-                let rid = krb5_types::pac::Pac::parse(&pac).ok().and_then(|parsed| {
-                    parsed
-                        .buffer(krb5_types::pac::PAC_LOGON_INFO)
-                        .and_then(|b| krb5_types::pac::parse_kerb_validation_info(b).ok())
-                        .map(|v| v.user_id)
-                });
-                let Some(rid) = rid else {
-                    eprintln!("krb5-pac-extract: no PAC_LOGON_INFO");
-                    return ExitCode::from(1);
-                };
-                println!("pac_rid={rid}");
-            }
-            if fs::write(&out_path, &pac).is_err() {
-                eprintln!("krb5-pac-extract: write {out_path}");
-                return ExitCode::from(1);
-            }
-            if let Some(der_path) = &enc_tkt_out
-                && fs::write(der_path, &plain).is_err()
-            {
-                eprintln!("krb5-pac-extract: write {der_path}");
-                return ExitCode::from(1);
-            }
-            if let Some(keys_path) = &keys_out {
-                let etype = ent.key.etype().to_iana();
-                let server = hex_bytes(ent.key.as_bytes());
-                let kdc = kdc_key
-                    .as_ref()
-                    .map(|k| hex_bytes(k.as_bytes()))
-                    .unwrap_or_default();
-                let body = format!("etype={etype}\nserver={server}\nkdc={kdc}\n");
-                if fs::write(keys_path, body).is_err() {
-                    eprintln!("krb5-pac-extract: write {keys_path}");
+            let Some(kdc) = kdc_key.as_ref() else {
+                eprintln!("krb5-pac-extract: --verify-privsvr needs --krbtgt-keytab");
+                return ExitCode::from(2);
+            };
+            let privsvr = match derive_prfplus_enctype(kdc, b"pac_privsvr", et) {
+                Ok(k) => k,
+                Err(e) => {
+                    eprintln!("krb5-pac-extract: derive pac_privsvr: {e}");
                     return ExitCode::from(1);
                 }
+            };
+            let der = match ticket_checksum_der(&part) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("krb5-pac-extract: ticket checksum DER: {e}");
+                    return ExitCode::from(1);
+                }
+            };
+            if let Err(e) = verify_pac_signatures(&pac, &ent.key, Some(&privsvr), Some(&der), true)
+            {
+                eprintln!("krb5-pac-extract: privsvr verify: {e}");
+                return ExitCode::from(1);
             }
-            eprintln!(
-                "krb5-pac-extract: wrote {} PAC bytes for {sname}",
-                pac.len()
-            );
+            println!("privsvr_ok={etname}");
+        }
+        if out.is_none() && !print_rid {
             return ExitCode::SUCCESS;
         }
-        eprintln!("krb5-pac-extract: no PAC in {sname} (or key mismatch)");
-        return ExitCode::from(1);
+        let Some(out_path) = out.as_ref() else {
+            return ExitCode::SUCCESS;
+        };
+        if print_rid {
+            let rid = krb5_types::pac::Pac::parse(&pac).ok().and_then(|parsed| {
+                parsed
+                    .buffer(krb5_types::pac::PAC_LOGON_INFO)
+                    .and_then(|b| krb5_types::pac::parse_kerb_validation_info(b).ok())
+                    .map(|v| v.user_id)
+            });
+            let Some(rid) = rid else {
+                eprintln!("krb5-pac-extract: no PAC_LOGON_INFO");
+                return ExitCode::from(1);
+            };
+            println!("pac_rid={rid}");
+        }
+        if fs::write(&out_path, &pac).is_err() {
+            eprintln!("krb5-pac-extract: write {out_path}");
+            return ExitCode::from(1);
+        }
+        if let Some(der_path) = &enc_tkt_out
+            && fs::write(der_path, &plain).is_err()
+        {
+            eprintln!("krb5-pac-extract: write {der_path}");
+            return ExitCode::from(1);
+        }
+        if let Some(keys_path) = &keys_out {
+            let etype = ent.key.etype().to_iana();
+            let server = hex_bytes(ent.key.as_bytes());
+            let kdc = kdc_key
+                .as_ref()
+                .map(|k| hex_bytes(k.as_bytes()))
+                .unwrap_or_default();
+            let body = format!("etype={etype}\nserver={server}\nkdc={kdc}\n");
+            if fs::write(keys_path, body).is_err() {
+                eprintln!("krb5-pac-extract: write {keys_path}");
+                return ExitCode::from(1);
+            }
+        }
+        eprintln!(
+            "krb5-pac-extract: wrote {} PAC bytes for {sname}",
+            pac.len()
+        );
+        return ExitCode::SUCCESS;
     }
-    eprintln!("krb5-pac-extract: no host/ ticket in ccache");
+    eprintln!("krb5-pac-extract: no PAC in {sname} (or key mismatch)");
     ExitCode::from(1)
 }
 
