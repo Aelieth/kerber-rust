@@ -991,7 +991,7 @@ fn issue_tgs_body(
         body.nonce,
     )? {
         let header_cross = utf8_realm(&ap.ticket.realm)? != store.realm();
-        let is_referral = sname.is_krbtgt() && !sname.is_krbtgt_for(store.realm());
+        let is_referral = tgs_issuing_referral(&sname, req_realm.as_str(), &server);
         let is_self = utf8_realm(&enc_tkt.crealm)? == store.realm()
             && tgs_client
                 .as_ref()
@@ -1020,7 +1020,7 @@ fn issue_tgs_body(
         s4u_referral = is_referral;
         s4u2self = true;
     }
-    let is_referral = sname.is_krbtgt() && !sname.is_krbtgt_for(store.realm());
+    let is_referral = tgs_issuing_referral(&sname, req_realm.as_str(), &server);
     let is_crossrealm = tgs_header_is_crossrealm(header_realm.as_str(), &server.realm);
     let local_tgt = store.fetch_krbtgt()?;
     let stkt = decrypt_2ndtkt(store, req, local_tgt.as_ref())?;
@@ -1560,6 +1560,16 @@ fn check_header_times_rd_req(store: &dyn PrincipalRead, tkt: &EncTicketPart) -> 
 #[must_use]
 pub fn tgs_header_is_crossrealm(header_server_realm: &str, sprinc_realm: &str) -> bool {
     header_server_realm != sprinc_realm
+}
+
+/// MIT `do_tgs_req.c:680-682`: cross TGS **and** resolved ≠ requested.
+fn tgs_issuing_referral(
+    requested: &PrincipalName,
+    req_realm: &str,
+    resolved: &crate::store::Principal,
+) -> bool {
+    resolved.name.is_cross_tgs_principal(&resolved.realm)
+        && (resolved.name != *requested || resolved.realm != req_realm)
 }
 
 fn non_tgt_option(body: &KdcReqBody) -> bool {

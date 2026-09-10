@@ -961,13 +961,12 @@ fn s4u2self_referral_names_header_client() {
         vec![pa],
         vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
-    .expect("s4u referral");
-    let out = krb5_kdc::issue_tgs(&b, &req).expect("cross S4U referral");
-    let part = decrypt_ticket_part(&ir, &out.rep.0.ticket).expect("enc");
-    assert_eq!(part.cname.components_joined(), TEST_USER);
+    .expect("s4u explicit TGS");
+    let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&b, &req));
+    assert_eq!(code, err::BADMATCH);
     assert_eq!(
-        std::str::from_utf8(part.crealm.as_bytes()).unwrap(),
-        "A.TEST"
+        text.as_deref(),
+        Some("INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH")
     );
 }
 

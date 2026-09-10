@@ -1334,7 +1334,8 @@ impl PrincipalStore {
         self.create_host_etypes(acl, actor, name, &[])
     }
 
-    /// `addprinc -randkey -e`.
+    /// `addprinc -randkey -e`. Does not seed `allowed_to_delegate`
+    /// (MIT `addprinc -randkey` has no targets).
     ///
     /// # Errors
     ///
@@ -1364,7 +1365,6 @@ impl PrincipalStore {
             p.attributes |= KDB_PWCHANGE_SERVICE;
         }
         self.allow_s4u_from(name, &self_name);
-        self.allow_s4u_to(name, &self_name);
         if let Some(rs) = acl.restrictions(actor, Some(&id)) {
             self.apply_acl_restrictions(&id, rs)?;
         }

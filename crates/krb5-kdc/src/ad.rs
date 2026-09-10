@@ -768,12 +768,18 @@ pub(crate) fn make_s4u2self_rep(
     tgs_subkey: Option<&EncryptionKey>,
 ) -> Result<(PaData, Option<PaData>), Error> {
     let key = x509_cksum_key(tgt_session, tgs_subkey)?;
-    let mut user_id = req.user_id.clone();
-    if user_id.use_reply_key_usage() {
-        user_id.options = Some(krb5_types::s4u::s4u_reply_key_usage_flags());
-    } else {
-        user_id.options = None;
-    }
+    // MIT kdc_util.c:1467-1472 copies nonce, user, and masked options only.
+    let user_id = krb5_types::s4u::S4uUserId {
+        nonce: req.user_id.nonce,
+        user: req.user_id.user.clone(),
+        realm: req.user_id.realm.clone(),
+        subject_cert: None,
+        options: if req.user_id.use_reply_key_usage() {
+            Some(krb5_types::s4u::s4u_reply_key_usage_flags())
+        } else {
+            None
+        },
+    };
     let der_id = encode(&user_id)?;
     let usage = KeyUsage::new(if user_id.use_reply_key_usage() {
         ku::PA_S4U_X509_USER_REPLY
@@ -1083,4 +1089,34 @@ pub fn decrypt_ticket_part(key: &ProtocolKey, ticket: &Ticket) -> Result<EncTick
     let usage = KeyUsage::new(ku::TICKET)?;
     let plain = decrypt(key, usage, ticket.enc_part.cipher.as_ref())?;
     decode(&plain).map_err(Error::from)
+}
+
+#[cfg(test)]
+mod a2_r17_reply {
+    use super::*;
+    use krb5_types::s4u::{PaS4uX509User, S4uUserId, s4u_reply_key_usage_flags};
+
+    #[test]
+    fn a2_r17_reply_130_omits_subject_cert() {
+        let key =
+            ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x42; 32]).expect("key");
+        let req = PaS4uX509User {
+            user_id: S4uUserId {
+                nonce: 1,
+                user: Some(PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"])),
+                realm: krb5_types::try_ascii("KERBER.TEST").expect("realm"),
+                subject_cert: Some(b"cert".to_vec().into()),
+                options: Some(s4u_reply_key_usage_flags()),
+            },
+            cksum: krb5_types::Checksum {
+                cksumtype: key.etype().checksum_type(),
+                checksum: vec![0; 12].into(),
+            },
+        };
+        let (pa, _) = make_s4u2self_rep(&req, &key, None).expect("rep");
+        let rep: PaS4uX509User = decode(pa.padata_value.as_ref()).expect("decode");
+        assert!(rep.user_id.subject_cert.is_none());
+        assert_eq!(rep.user_id.nonce, 1);
+        assert!(rep.user_id.use_reply_key_usage());
+    }
 }

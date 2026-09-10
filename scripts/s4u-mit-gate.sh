@@ -92,6 +92,7 @@ docker exec -d \
     -e KRB5_TEST_PW_EXPIRED_USER=expirepw \
     -e KRB5_EXPORT_KEYTAB=/tmp/host.keytab \
     -e KRB5_TEST_OK_TO_AUTH_AS_DELEGATE=1 \
+    -e KRB5_TEST_S4U_TO=host/testhost.kerber.test \
     "$NAME" sh -c '/tmp/krb5-kdc --test-realm --export-keytab /tmp/host.keytab 127.0.0.1:8888 >/tmp/kdc.log 2>&1'
 
 ok=0
@@ -212,7 +213,7 @@ set -e
 echo "$LOCKED"
 echo "$LOCKED" | grep -qiE "credentials have been revoked|CLIENT_REVOKED"
 
-echo "==== without ok_to_auth_as_delegate keeps F on MIT db2 (no allowed_to_delegate hook) ===="
+echo "==== without ok_to_auth_as_delegate keeps F (no allowed_to_delegate targets) ===="
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
@@ -221,7 +222,6 @@ docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
     -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
     -e KRB5_TEST_PW_EXPIRED_USER=expirepw \
-    -e KRB5_TEST_CLEAR_S4U_TO=1 \
     -e KRB5_EXPORT_KEYTAB=/tmp/host.keytab \
     "$NAME" sh -c '/tmp/krb5-kdc --test-realm 127.0.0.1:88 >/tmp/kdc.log 2>&1 || /tmp/krb5-kdc --test-realm --export-keytab /tmp/host.keytab 127.0.0.1:8888 >/tmp/kdc.log 2>&1'
 ok=0

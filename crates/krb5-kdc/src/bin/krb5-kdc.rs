@@ -336,8 +336,13 @@ fn bootstrap_test_realm() -> PrincipalStore {
             std::process::exit(1);
         }
     }
-    if std::env::var("KRB5_TEST_CLEAR_S4U_TO").as_deref() == Ok("1") {
-        store.clear_s4u_to(&host);
+    if let Ok(targets) = std::env::var("KRB5_TEST_S4U_TO") {
+        for to in targets.split(',') {
+            let to = to.trim();
+            if !to.is_empty() {
+                store.allow_s4u_to(&host, to);
+            }
+        }
     }
     if std::env::var("KRB5_TEST_DISALLOW_DUP_SKEY").as_deref() == Ok("1") {
         let a = if let Some(p) = store.get_name(&host) {

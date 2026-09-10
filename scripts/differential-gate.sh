@@ -41,6 +41,7 @@ if [ ! -f "$GOLDEN" ]; then
 fi
 
 cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-kdb -q
+cargo build -p krb5-admin --bin krb5-kadmin-local -q
 cargo build -p krb5-protocol --example diffsend --features diff -q
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
@@ -57,9 +58,10 @@ trap cleanup EXIT
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmin-local" "$NAME":/tmp/krb5-kadmin-local
 docker cp "${CARGO_TARGET_DIR:-target}/debug/examples/diffsend" "$NAME":/tmp/diffsend
 docker cp "$GOLDEN" "$NAME":/tmp/mit.dump
-docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb /tmp/diffsend
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb /tmp/krb5-kadmin-local /tmp/diffsend
 
 echo "==== load identical dump into Rust KDC on :8888 ===="
 LOAD="$(docker exec \
@@ -69,6 +71,13 @@ LOAD="$(docker exec \
     "$NAME" /tmp/krb5-kdb load /tmp/mit.dump)"
 echo "$LOAD"
 echo "$LOAD" | grep -q 'ok load version=7' || die "rust kdb load failed"
+ADD="$(docker exec \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey krbtgt/OTHER.TEST')"
+echo "$ADD"
+echo "$ADD" | grep -q 'created' || die "rust addprinc krbtgt/OTHER.TEST failed"
 
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/rust.db \
@@ -95,6 +104,9 @@ echo "==== load identical dump into MIT krb5kdc on :88 ===="
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec "$NAME" kdb5_util create -s -P masterpassword
 docker exec "$NAME" kdb5_util load /tmp/mit.dump
+MITADD="$(docker exec "$NAME" kadmin.local -q 'addprinc -randkey krbtgt/OTHER.TEST@KERBER.TEST')"
+echo "$MITADD"
+echo "$MITADD" | grep -qi 'created' || die "MIT addprinc krbtgt/OTHER.TEST failed"
 # Advertise SPAKE like the Rust KDC (always-on SpakeMod) so PREAUTH hint
 # multisets match. MIT krb5kdc reads spake_preauth_groups from [libdefaults].
 docker exec "$NAME" python3 -c '
@@ -164,7 +176,7 @@ echo "$DIFF" | grep -q '"case":"as-invalid-opts","outcome":"ok","error_code":13'
 echo "$DIFF" | grep -q '"case":"as-request-anonymous","outcome":"ok","error_code":13,"e_text":"VALIDATE_ANONYMOUS_PRINCIPAL"' || die "as-request-anonymous not code 13 e_text VALIDATE_ANONYMOUS_PRINCIPAL on both legs"
 echo "$DIFF" | grep -q '"case":"as-validate-before-preauth","outcome":"ok","error_code":23' || die "as-validate-before-preauth (preauth+needchange) not code 23 on both legs"
 echo "$DIFF" | grep -q '"case":"as-retransmit","outcome":"ok","rust_retransmit_identical":true,"mit_retransmit_identical":true' || die "as-retransmit reply not identical from the lookaside on both legs"
-echo "$DIFF" | grep -q '"outcome":"ok","cases":67' || die "diffsend did not finish 67 cases"
+echo "$DIFF" | grep -q '"outcome":"ok","cases":70' || die "diffsend did not finish 70 cases"
 echo "$DIFF" | grep -q '"case":"fast-armor-no-subkey","outcome":"ok","error_code":12,"e_text":"FIND_FAST"' || die "fast-armor-no-subkey not code 12 e_text FIND_FAST on both legs"
 echo "$DIFF" | grep -q '"case":"armor-ap-req-as-pa-tgs-req","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS"' || die "armor-ap-req-as-pa-tgs-req not code 12 e_text PROCESS_TGS on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-ad-fx-armor-authenticator","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS"' || die "tgs-ad-fx-armor-authenticator not code 12 e_text PROCESS_TGS on both legs"
@@ -214,6 +226,9 @@ echo "$DIFF" | grep -q '"case":"u2u-success","outcome":"ok","rust_tag":"0x6d","m
 echo "$DIFF" | grep -q '"case":"tgs-addr-mismatch","outcome":"ok","error_code":38,"e_text":"PROCESS_TGS"' || die "tgs-addr-mismatch not code 38 e_text PROCESS_TGS on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-forwarded-addresses","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"' || die "tgs-forwarded-addresses not TGS-REP on both legs"
 echo "$DIFF" | grep -q '"case":"u2u-2nd-ticket-foreign-realm","outcome":"ok","error_code":7,"e_text":"2ND_TKT_SERVER"' || die "u2u-2nd-ticket-foreign-realm not code 7 e_text 2ND_TKT_SERVER on both legs"
+echo "$DIFF" | grep -q '"case":"s4u2self-renew-options","outcome":"ok","error_code":13,"e_text":"INVALID S4U2SELF OPTIONS"' || die "s4u2self-renew-options not code 13 e_text INVALID S4U2SELF OPTIONS on both legs"
+echo "$DIFF" | grep -q '"case":"pa-s4u-x509-user-truncated","outcome":"ok","error_code":60,"e_text":"DECODE_PA_S4U_X509_USER"' || die "pa-s4u-x509-user-truncated not code 60 e_text DECODE_PA_S4U_X509_USER on both legs"
+echo "$DIFF" | grep -q '"case":"s4u2self-krbtgt-other","outcome":"ok","error_code":36,"e_text":"INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH"' || die "s4u2self-krbtgt-other not code 36 e_text INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH on both legs"
 # W1-K M2b: the differential oracle has no case-name whitelist; no diffsend line
 # may carry a "whitelist" key.
 if echo "$DIFF" | grep -q '"whitelist"'; then

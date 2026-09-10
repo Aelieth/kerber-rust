@@ -2426,7 +2426,66 @@ fn run() -> Result<(), String> {
         err::S_PRINCIPAL_UNKNOWN,
     )?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":67}}"#);
+    expect_error(
+        &cfg,
+        "s4u2self-renew-options",
+        &encode(
+            &tgs_req_ex(
+                host_hdr(&host, false)?,
+                &sess,
+                realm,
+                &host,
+                host.clone(),
+                realm,
+                0x1000_0063,
+                KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true),
+                None,
+                vec![pa_for_user(&sess, user.clone(), realm).map_err(|e| e.to_string())?],
+                etypes.clone(),
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::BADOPTION,
+    )?;
+    expect_error(
+        &cfg,
+        "pa-s4u-x509-user-truncated",
+        &s4u_req(
+            host_hdr(&host, false)?,
+            vec![PaData {
+                padata_type: pa::FOR_X509_USER,
+                padata_value: b"\x30\x03\x01\x01".to_vec().into(),
+            }],
+            0x1000_0064,
+        )?,
+        err::GENERIC,
+    )?;
+    let other_tgs = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "OTHER.TEST"]);
+    expect_error(
+        &cfg,
+        "s4u2self-krbtgt-other",
+        &encode(
+            &tgs_req_ex(
+                host_hdr(&host, false)?,
+                &sess,
+                realm,
+                &host,
+                other_tgs,
+                realm,
+                0x1000_0065,
+                KdcOptions::forwardable(),
+                None,
+                vec![pa_for_user(&sess, user.clone(), realm).map_err(|e| e.to_string())?],
+                etypes.clone(),
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::BADMATCH,
+    )?;
+
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":70}}"#);
     Ok(())
 }
 

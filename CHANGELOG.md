@@ -8,6 +8,12 @@ this project uses semantic versioning once a crate is published.
 
 ### W1-A′-2
 
+- **kdc.** `create_host` / `addprinc -randkey` no longer seeds
+  `allowed_to_delegate` to self (MIT db2 default). S4U2Self keeps F
+  unless a target list is set and `OK_TO_AUTH_AS_DELEGATE` is clear.
+  `is_referral` is only entry substitution (`do_tgs_req.c:680-682`);
+  an explicit `krbtgt/OTHER` S4U2Self is 36. Reply PA-S4U-X509-USER
+  copies nonce/user/options only (`kdc_util.c:1467-1472`).
 - **kdc.** Incoming cross-realm trust is its own principal
   `krbtgt/<local>@<foreign>` (`kdc_util.c:377-379`). Header and second-ticket
   lookup use `ticket->server` with realm; there is no fallback to

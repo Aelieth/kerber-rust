@@ -1043,21 +1043,55 @@ MIT_S4U_KL="$(docker exec -e KRB5_CONFIG=/tmp/s4u-c.conf "$NAME" \
 echo "$MIT_S4U_KL"
 echo "$MIT_S4U_KL" | grep -q 'for client user@C.TEST'
 
-echo "==== MIT kvno -U cross-realm S4U2Self C host impersonates A user ===="
+echo "==== forged cross-realm S4U2Self C host impersonates user@A.TEST ===="
+n="$(docker exec "$NAME" sh -c 'wc -l < /tmp/mit-c.log' | tr -d '[:space:]')"
 set +e
 MIT_S4U_XR="$(docker exec -e KRB5_CONFIG=/tmp/s4u-c.conf "$NAME" \
-    kvno -c /tmp/krb5cc_mit_s4u_kvno -U user@A.TEST host/svc.c.test 2>&1)"
+    /tmp/krb5-kvno -c /tmp/krb5cc_mit_s4u_kvno -U user@A.TEST \
+    127.0.0.1:90 host/svc.c.test@C.TEST 2>&1)"
 mit_s4u_xr_rc=$?
 set -e
 echo "$MIT_S4U_XR"
-echo "mit_s4u_cross_rc=$mit_s4u_xr_rc"
-if [ "$mit_s4u_xr_rc" -eq 0 ]; then
-    echo "$MIT_S4U_XR" | grep -q 'host/svc.c.test'
-    docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
-        klist -f -c /tmp/krb5cc_mit_s4u_kvno | grep -q 'for client user@A.TEST'
-else
-    echo "$MIT_S4U_XR" | grep -qiE "Cannot find KDC|Server not found|not found in Kerberos database|KDC policy rejects|S4U2SELF"
-fi
+echo "MIT_s4u_cross_rc=$mit_s4u_xr_rc"
+echo "$MIT_S4U_XR" | grep -qi 'KDC policy rejects request'
+echo "$mit_s4u_xr_rc" | grep -qx 1
+MIT_S4U_XR_LOG="$(docker exec "$NAME" sh -c "tail -n +$((n + 1)) /tmp/mit-c.log")"
+echo "$MIT_S4U_XR_LOG"
+echo "$MIT_S4U_XR_LOG" | grep -q 'S4U2SELF_CLIENT_NOT_OURS'
+docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/mit-c.pid)" 2>/dev/null || true'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',90),0.15)" 2>/dev/null; then
+        sleep 0.2
+        continue
+    fi
+    ok=1
+    break
+done
+[ "$ok" = 1 ]
+start_c /tmp/kdc-c-allow.conf /tmp/kdc-c-s4u.log
+wait_listen /tmp/kdc-c-s4u.log || {
+    docker exec "$NAME" cat /tmp/kdc-c-s4u.log 2>/dev/null || true
+    log "capaths.gate" "error" ',"error":"Rust C for S4U cross did not listen"'
+    exit 1
+}
+docker exec -e KRB5_CONFIG=/tmp/s4u-c.conf "$NAME" \
+    kinit -f -k -t /tmp/rust-c.host.kt -c /tmp/krb5cc_rust_s4u_kvno host/svc.c.test@C.TEST
+n="$(docker exec "$NAME" sh -c 'wc -l < /tmp/kdc-c-s4u.log' | tr -d '[:space:]')"
+set +e
+RUST_S4U_XR="$(docker exec -e KRB5_CONFIG=/tmp/s4u-c.conf "$NAME" \
+    /tmp/krb5-kvno -c /tmp/krb5cc_rust_s4u_kvno -U user@A.TEST \
+    127.0.0.1:90 host/svc.c.test@C.TEST 2>&1)"
+rust_s4u_xr_rc=$?
+set -e
+echo "$RUST_S4U_XR"
+echo "rust_s4u_cross_rc=$rust_s4u_xr_rc"
+echo "$RUST_S4U_XR" | grep -qi 'KDC policy rejects request'
+echo "$rust_s4u_xr_rc" | grep -qx 1
+RUST_S4U_XR_LOG="$(docker exec "$NAME" sh -c "tail -n +$((n + 1)) /tmp/kdc-c-s4u.log")"
+echo "$RUST_S4U_XR_LOG"
+echo "$RUST_S4U_XR_LOG" | grep -q 'S4U2SELF_CLIENT_NOT_OURS'
+docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/kdc-c.pid)" 2>/dev/null || true'
 
 echo "==== foreign TGT RENEW of local krbtgt is 26 on MIT A and Rust A ===="
 docker exec "$NAME" sh -c 'for p in /proc/[0-9]*; do

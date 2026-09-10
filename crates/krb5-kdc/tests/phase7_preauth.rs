@@ -3728,7 +3728,7 @@ fn s4u2self_clears_forwardable_without_ok_to_auth() {
 }
 
 #[test]
-fn s4u2self_local_tgt_referral_is_looking_up_server() {
+fn s4u2self_explicit_cross_tgs_is_server_mismatch() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     let ir = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x11; 32]).unwrap();
     store
@@ -3755,10 +3755,13 @@ fn s4u2self_local_tgt_referral_is_looking_up_server() {
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
     match err {
         Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::S_PRINCIPAL_UNKNOWN);
-            assert_eq!(text.as_deref(), Some("LOOKING_UP_SERVER"));
+            assert_eq!(code, err::BADMATCH);
+            assert_eq!(
+                text.as_deref(),
+                Some("INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH")
+            );
         }
-        other => panic!("expected 7 LOOKING_UP_SERVER, got {other:?}"),
+        other => panic!("expected 36 SERVER_MISMATCH, got {other:?}"),
     }
 }
 

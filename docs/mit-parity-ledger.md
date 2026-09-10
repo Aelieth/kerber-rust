@@ -26,7 +26,7 @@ Schema: `MIT file:line | check | MIT status + wire code | Rust site | Rust e_tex
 Verdict ∈ {exact, stricter-documented (`docs/security.md` row), absent,
 deviation, deferred (reason + promotion oracle)}. Proof `none` only
 with deferred. A named gate cell or `diffsend` case that does not exist
-is `proposed`. The sixty-seven live `diffsend` cases are `garbage-pdu`,
+is `proposed`. The seventy live `diffsend` cases are `garbage-pdu`,
 `unknown-cname`, `etype-nosupp`, `as-session-enctype`, `wrong-realm`, `pauser-no-preauth`,
 `skewed-timestamp`, `as-needchange`, `as-invalid-opts`, `as-validate-before-preauth`,
 `as-optimistic-encts-wrong-etype`, `unknown-sname`, `as-success`, `as-retransmit`,
@@ -46,15 +46,16 @@ is `proposed`. The sixty-seven live `diffsend` cases are `garbage-pdu`,
 `s4u2proxy-local-stkt-pac`, `u2u-no-2nd-tkt`, `u2u-2nd-ticket-not-tgs`,
 `u2u-2nd-ticket-mismatch`, `u2u-2nd-ticket-bad-pac`, `u2u-bad-etype`,
 `u2u-success`, `tgs-addr-mismatch`, `tgs-forwarded-addresses`,
-`u2u-2nd-ticket-foreign-realm`.
+`u2u-2nd-ticket-foreign-realm`, `s4u2self-renew-options`,
+`pa-s4u-x509-user-truncated`, `s4u2self-krbtgt-other`.
 
 Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after A′-2 R16):
-**333** = A1 117 + A2 85 + A3 63 + A4 68.
-exact 231 · stricter-documented 10 · deviation 49 ·
+Counts (after A′-2 R17):
+**335** = A1 118 + A2 86 + A3 63 + A4 68.
+exact 233 · stricter-documented 10 · deviation 49 ·
 absent 30 · deferred 13.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
@@ -198,9 +199,10 @@ mismatches, not extra statuses.
 | do_tgs_req.c:536 `db_get_svc_princ` | server lookup fail | LOOKING_UP_SERVER 7 (remap :575) | issue.rs process_tgs_header | `unknown server` 7 | deviation | proposed: diffsend missing host; proposed: flags-gate.sh/kdc-gate.sh cell |
 | do_tgs_req.c:409 `find_alternate_tgs` | walk_realm_tree finds no intermediate TGS | UNKNOWN_SERVER 7 | no `find_alternate_tgs` | `unknown server` 7 (no realm-tree hop) | absent | proposed: diffsend `krbtgt/FAR` with only near hop; promote via `cross-realm-gate.sh` |
 | do_tgs_req.c:483 `find_referral_tgs` | host-based DNS referral | may issue `krbtgt/other` or fall through LOOKING_UP_SERVER | no hostbased/`host_realm` referral | explicit `krbtgt/OTHER` only (`tgs_canonicalize_issues_cross_realm_krbtgt`) | absent | proposed: diffsend `host/foo.other.test` + CANONICALIZE |
+| do_tgs_req.c:680-682 | `is_referral` = cross TGS **and** resolved ≠ requested | n/a (flag) | issue.rs tgs_issuing_referral | same; no `find_referral_tgs` so the flag is false until substitution exists; explicit `krbtgt/OTHER` is not a referral | exact | diffsend `s4u2self-krbtgt-other`; `a2_r17_explicit_cross_tgs_is_server_mismatch` |
 | kdc_util.c:1322 | PA-FOR-USER decode fail | DECODE_PA_FOR_USER (ASN.1 code→60 often) | krb5-kdc/ad.rs process_s4u2self_req | `DECODE_PA_FOR_USER` 60 | exact | diffsend `pa-for-user-undecodable`; `s4u2self_for_user_undecodable_is_generic` |
 | kdc_util.c:1328 | PA-FOR-USER checksum fail | INVALID_S4U2SELF_CHECKSUM 41 on verify failure / 50 unkeyed (`kdc_util.c:1245,1297`) | krb5-kdc/ad.rs verify_for_user_checksum | `INVALID_S4U2SELF_CHECKSUM` 41 / 50 unkeyed | exact | `s4u2self_bad_checksum_rejected`; diffsend `pa-s4u-x509-user-bad-checksum` |
-| kdc_util.c:1424 | PA-S4U-X509-USER decode | DECODE_PA_S4U_X509_USER | krb5-kdc/ad.rs process_s4u_x509_user | `DECODE_PA_S4U_X509_USER` 60 | exact | `s4u2self_x509_empty_is_invalid_request` (decode path); process_s4u_x509_user |
+| kdc_util.c:1424 | PA-S4U-X509-USER decode | DECODE_PA_S4U_X509_USER | krb5-kdc/ad.rs process_s4u_x509_user | `DECODE_PA_S4U_X509_USER` 60 | exact | diffsend `pa-s4u-x509-user-truncated`; `a2_r17_truncated_x509_is_decode` |
 | kdc_util.c:1435 | PA-S4U-X509-USER checksum | INVALID_S4U2SELF_CHECKSUM 41 on verify failure / 50 unkeyed | krb5-kdc/ad.rs process_s4u_x509_user | `INVALID_S4U2SELF_CHECKSUM` 41 / 50 unkeyed | exact | diffsend `pa-s4u-x509-user-bad-checksum`; diffsend `pa-s4u-x509-user-nonce` |
 | kdc_util.c:1443 | empty user and empty cert | INVALID_S4U2SELF_REQUEST 6 | krb5-kdc/ad.rs process_s4u_x509_user | `INVALID_S4U2SELF_REQUEST` 6 | exact | diffsend `pa-s4u-x509-user-empty`; `s4u2self_x509_empty_is_invalid_request` |
 | kdc_util.c:1605 | local S4U user KDB NOENTRY | UNKNOWN_S4U2SELF_PRINCIPAL 6 | krb5-kdc/ad.rs s4u_from_userid | `UNKNOWN_S4U2SELF_PRINCIPAL` 6 | exact | `s4u2self_unknown_for_user_is_refused`; `scripts/s4u-mit-gate.sh` |
@@ -229,14 +231,14 @@ mismatches, not extra statuses.
 | tgs_policy.c:657 | header server not TGS princ (normal TGS) | BAD TGS SERVER NAME 35 | issue.rs check_tgs_constraints_skeleton | `BAD TGS SERVER NAME` 35 (header cname) | exact | `tgs_not_a_tgt_decrypts_and_names_client`; diffsend `tgs-not-a-tgt` `check_client=true` |
 | tgs_policy.c:662 | TGS instance ≠ `req.server.realm` | BAD TGS SERVER INSTANCE 35 | issue.rs issue_as_body/`GET_LOCAL_TGT` | not-a-TGT 35 or GET_LOCAL_TGT 60 | deviation | proposed: diffsend `krbtgt/OTHER` header vs local body.realm |
 | tgs_policy.c:275 | S4U2Self local server ≠ header client (`is_client_db_alias`) | INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH 36 | issue.rs issue_tgs_body | `INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH` 36 | exact | `s4u2self_user_tgt_host_sname_is_badmatch`; `s4u2self_cross_tgt_foreign_client_named_like_local_server_is_badmatch`; `s4u-mit-gate.sh`; `capaths-transit-gate.sh` S4U collision |
-| tgs_policy.c:281 | S4U2Self `AS_INVALID_OPTIONS` | INVALID S4U2SELF OPTIONS 13 | issue.rs check_tgs_s4u2self | `INVALID S4U2SELF OPTIONS` 13 | exact | proposed: diffsend S4U2Self+RENEW/U2U/CNAME-IN-ADDL-TKT |
-| tgs_policy.c:298 | S4U2Self local TGT + referral | LOOKING_UP_SERVER 7 | issue.rs issue_tgs_body | `LOOKING_UP_SERVER` 7 | exact | `s4u2self_local_tgt_referral_is_looking_up_server` |
+| tgs_policy.c:281 | S4U2Self `AS_INVALID_OPTIONS` | INVALID S4U2SELF OPTIONS 13 | issue.rs check_tgs_s4u2self | `INVALID S4U2SELF OPTIONS` 13 | exact | diffsend `s4u2self-renew-options` (ENC_TKT_IN_SKEY; RENEW is `check_tgs_nontgt` first); `a2_r17_s4u2self_u2u_is_invalid_options` |
+| tgs_policy.c:298 | S4U2Self local TGT + referral (substitution only) | LOOKING_UP_SERVER 7 | issue.rs check_tgs_s4u2self | `LOOKING_UP_SERVER` 7 when `is_referral`; explicit `krbtgt/OTHER` is 36 | exact | diffsend `s4u2self-krbtgt-other`; `a2_r17_explicit_cross_tgs_is_server_mismatch` |
 | tgs_policy.c:307 | S4U2Self local user + cross TGT + not referral | NOT_CROSS_REALM_REQUEST 6 | issue.rs check_tgs_s4u2self | `NOT_CROSS_REALM_REQUEST` 6 | exact | `s4u2self_cross_tgt_local_user_local_server_is_not_cross_realm` |
 | tgs_policy.c:316 | S4U2Self foreign user + local TGT | S4U2SELF_CLIENT_NOT_OURS 12 | issue.rs check_tgs_s4u2self | `S4U2SELF_CLIENT_NOT_OURS` 12 | exact | `s4u2self_local_tgt_foreign_user_is_not_ours` |
 | tgs_policy.c:325 | S4U2Self foreign + empty user name (cert-only) | INVALID_XREALM_S4U2SELF_REQUEST 12 | issue.rs check_tgs_s4u2self | `INVALID_XREALM_S4U2SELF_REQUEST` 12 | exact | `s4u2self_cross_tgt_cert_only_empty_name_is_invalid_xrealm` |
 | tgs_policy.c:331 | S4U2Self header PAC missing | S4U2SELF_NO_PAC 20 | issue.rs check_tgs_s4u2self | `S4U2SELF_NO_PAC` 20 | exact | diffsend `s4u2self-no-pac`; `s4u2self_no_pac_is_tgt_revoked` |
 | tgs_policy.c:339 | S4U2Self local: PAC not impersonator | S4U2SELF_LOCAL_PAC_CLIENT 13 | issue.rs check_tgs_s4u2self | `S4U2SELF_LOCAL_PAC_CLIENT` 13 | exact | diffsend `s4u2self-pac-client-mismatch`; `s4u2self_local_pac_mismatch_is_badoption` |
-| tgs_policy.c:352 | S4U2Self foreign: PAC not subject+realm | S4U2SELF_FOREIGN_PAC_CLIENT 13 | issue.rs check_tgs_s4u2self | `S4U2SELF_FOREIGN_PAC_CLIENT` 13 | exact | `s4u2self_referral_names_header_client` (subject+realm CLIENT_INFO) |
+| tgs_policy.c:352 | S4U2Self foreign: PAC not subject+realm | S4U2SELF_FOREIGN_PAC_CLIENT 13 | issue.rs check_tgs_s4u2self | `S4U2SELF_FOREIGN_PAC_CLIENT` 13 | exact | `a2_r17_foreign_pac_client` |
 | tgs_policy.c:345 `validate_as_request` | S4U2Self local client expired | CLIENT EXPIRED 1 | issue.rs check_db_times | `CLIENT EXPIRED` 1 | exact | `s4u2self_expired_for_user_is_name_exp` (code) |
 | kdc_util.c:779 via tgs_policy.c:345 | S4U2Self local client `DISALLOW_ALL_TIX` | CLIENT LOCKED OUT 18 | issue.rs validate_as_request | `CLIENT LOCKED OUT` 18 | exact | `s4u2self_disabled_for_user_is_revoked` |
 | kdc_util.c:743 via tgs_policy.c:345 | S4U2Self pw expired / needchange | MIT clears pw_expire+needchange (kdc_util.c:1612) | krb5-kdc/ad.rs s4u_from_userid | n/a (clears `pw_expire` + `REQUIRES_PWCHANGE`) | exact | `s4u2self_pw_expired_user_still_issues`; `scripts/s4u-mit-gate.sh` expired cell |
@@ -353,11 +355,11 @@ Wire = RFC 4120 protocol code (MIT `errcode_to_protocol`).
 | do_as_req.c:346-347 | err && status==NULL | `UNKNOWN_REASON` | `proto()` always sets text; leftover **60** `e.to_string()` | no `UNKNOWN_REASON` | deferred | none (only if an AS path returns Protocol without text) |
 | kdc_util.c:1320-1323 | `decode_krb5_pa_for_user` fail | `DECODE_PA_FOR_USER` + ASN.1 | krb5-kdc/ad.rs process_s4u2self_req | `DECODE_PA_FOR_USER` **60** | exact | diffsend `pa-for-user-undecodable`; `s4u2self_for_user_undecodable_is_generic` |
 | kdc_util.c:1326-1330,1434-1438 | FOR-USER / S4U-X509 checksum fail | `INVALID_S4U2SELF_CHECKSUM` **41** failed verify / **50** unkeyed (both sites) | krb5-kdc/ad.rs verify_for_user_checksum | `INVALID_S4U2SELF_CHECKSUM` **41** / **50** unkeyed | exact | `phase7_preauth.rs::s4u2self_bad_checksum_rejected`; diffsend `pa-s4u-x509-user-bad-checksum` |
-| kdc_util.c:1422-1425 | `decode_krb5_pa_s4u_x509_user` fail | `DECODE_PA_S4U_X509_USER` | krb5-kdc/ad.rs process_s4u_x509_user | `DECODE_PA_S4U_X509_USER` **60** | exact | `s4u2self_x509_empty_is_invalid_request` |
+| kdc_util.c:1422-1425 | `decode_krb5_pa_s4u_x509_user` fail | `DECODE_PA_S4U_X509_USER` | krb5-kdc/ad.rs process_s4u_x509_user | `DECODE_PA_S4U_X509_USER` **60** | exact | diffsend `pa-s4u-x509-user-truncated`; `a2_r17_truncated_x509_is_decode` |
 | kdc_util.c:1441-1446 | empty user && empty subject_cert | `INVALID_S4U2SELF_REQUEST` **6** | krb5-kdc/ad.rs process_s4u_x509_user | `INVALID_S4U2SELF_REQUEST` **6** | exact | diffsend `pa-s4u-x509-user-empty`; `s4u2self_x509_empty_is_invalid_request` |
 | kdc_util.c:1604-1606 | S4U client `KDB_NOENTRY` | `UNKNOWN_S4U2SELF_PRINCIPAL` **6** | krb5-kdc/ad.rs s4u_from_userid | `UNKNOWN_S4U2SELF_PRINCIPAL` **6** | exact | `phase7_preauth.rs::s4u2self_unknown_for_user_is_refused`; `scripts/s4u-mit-gate.sh` |
 | kdc_util.c:1607-1609 | S4U client DB err ≠ NOENTRY (cert-only NOTSUPP on db2) | `LOOKING_UP_S4U2SELF_PRINCIPAL` + com_err | krb5-kdc/ad.rs s4u_from_userid | `LOOKING_UP_S4U2SELF_PRINCIPAL` **60** | exact | `s4u2self_x509_cert_only_local_is_looking_up` |
-| kdc_util.c:1453-1530 | `kdc_make_s4u2self_rep` PA-S4U-X509-USER in TGS-REP | no status (reply padata) | krb5-kdc/ad.rs make_s4u2self_rep | reply 130 when the request carried 130 | exact | `s4u2self_x509_issues_and_replies_130`; `s4u2self_for_user_only_omits_reply_130`; `scripts/s4u-mit-gate.sh` proxy cell |
+| kdc_util.c:1453-1530 | `kdc_make_s4u2self_rep` PA-S4U-X509-USER in TGS-REP | no status (reply padata) | krb5-kdc/ad.rs make_s4u2self_rep | reply 130 when the request carried 130; user-id is nonce/user/options only | exact | `s4u2self_x509_issues_and_replies_130`; `a2_r17_reply_130_omits_subject_cert`; `scripts/s4u-mit-gate.sh` proxy cell |
 | kdc_util.c:1534-1548; tgs_policy.c:273-276 | `is_client_db_alias` header client vs server | mismatch → `INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH` **36** | `issue.rs issue_tgs_body` name+realm | same **36** | exact | `phase7_preauth.rs`; `scripts/s4u-mit-gate.sh`; `docs/security.md:67-69` |
 | kdc_util.c:318-346 | `kdc_rd_ap_req` kvno==0: ≤3 tries, decrement kvno; local TGS `search_enctype=-1` | PROCESS_TGS / rd_req err | issue.rs decrypt_presented_tgt | kvno 0 retries ≤3; unknown kvno is 60 `PROCESS_TGS`; local TGS any etype at the labeled kvno; a ticket encrypted under kvno N−1 with labeled 0 decrypts | exact | `tgs_header_kvno_zero_issues`; `tgs_header_kvno_zero_decrypts_previous_kvno`; `tgs_header_unknown_kvno_is_generic`; diffsend `tgs-header-kvno-zero` |
 | kdc_util.c:370-398,438-448 | `kdc_get_server_key`: DISALLOW_SVR/ALL_TIX → 7; enctype-mismatch (`:438-448`) → 60 GENERIC (`KRB5_KDB_NO_PERMITTED_KEY` outside 0..128); cross-TGT `is_local_tgs_principal` name+realm + `krb5_c_enctype_compare` rewrite (`kdc_util.c:97-110,313-316`) | DISALLOW half **7**; enctype-mismatch half **60** | issue.rs decrypt_presented_tgt; issue.rs find_server_key | `PROCESS_TGS` **7** on DISALLOW (TGS or service header); no matching kvno/etype is **60** `PROCESS_TGS`; local TGS = instance equals ticket.server.realm; foreign ticket looks up `ticket.server` only (incoming `krbtgt/<local>@<foreign>`) | exact | `tgs_krbtgt_disallow_all_tix_is_process_tgs`; `tgs_disallow_svr_service_header_is_process_tgs`; `tgs_header_unknown_kvno_is_generic`; `a2_r16.rs` `a2_r16_foreign_header_decrypts_via_incoming_kvno`; `docs/security.md:74-75` |
@@ -382,7 +384,8 @@ Wire = RFC 4120 protocol code (MIT `errcode_to_protocol`).
 | do_as_req.c:709-712 | `starttime == authtime` → omit `starttime` | no status | issue.rs mint_ticket | `starttime` always `Some(..)` | deviation | CHANGELOG G7 `klist starttime==0`; proposed `client-gate.sh` cell |
 | do_as_req.c:660-666; do_as_req.c:243 | CANONICALIZE + both TGS principals → ticket sname = `server->princ`; `reply_encpart.server` follows the ticket server | no status | `issue.rs issue_as_body` computes `ticket_sname` = the DB server name when CANONICALIZE and both requested/DB servers are krbtgt (R2-P7), used for both the ticket and the enc-part | canonical sname on the ticket and enc-part; requested sname otherwise | exact | `as_canonicalize_issues_the_krbtgt_under_the_canonical_db_name` (krbtgt/SHORT alias → krbtgt/KERBER.TEST with `-C`, requested name kept without) |
 | kdc_util.c:1612-1615 | S4U2Self clears impersonated client's `pw_expiration` + `REQUIRES_PWCHANGE` (as Windows does) | n/a (exemption) | krb5-kdc/ad.rs s4u_from_userid | n/a (clears both, then `validate_as_request`) | exact | `s4u2self_pw_expired_user_still_issues`; `scripts/s4u-mit-gate.sh` expired cell |
-| kdc_util.c:1625-1644 | `s4u2self_forwardable`: keep F if `OK_TO_AUTH_AS_DELEGATE` or `check_allowed_to_delegate` is NOTSUPP/BADOPTION (db2 has no hook) | n/a (ticket flag) | issue.rs s4u2self_forwardable | keep F when `s4u_allowed_to` is empty; clear F when targets exist and no OK_TO_AUTH | exact | `s4u2self_keeps_forwardable_without_delegate_targets`; `s4u2self_clears_forwardable_without_ok_to_auth`; `scripts/s4u-mit-gate.sh` |
+| kdc_util.c:1467-1472 | `kdc_make_s4u2self_rep` copies nonce, user, masked options (no `subject_cert`) | n/a (reply padata 130) | ad.rs make_s4u2self_rep | rebuilds `S4uUserId` with nonce/user/realm/masked options; `subject_cert` omitted | exact | `a2_r17_reply_130_omits_subject_cert`; `a2_r17_reply_130_has_no_subject_cert`; diffsend `pa-s4u-x509-user` |
+| kdc_util.c:1625-1644 | `s4u2self_forwardable`: keep F if `OK_TO_AUTH_AS_DELEGATE` or `check_allowed_to_delegate` is NOTSUPP/BADOPTION (db2 has no hook) | n/a (ticket flag) | issue.rs s4u2self_forwardable | keep F when `s4u_allowed_to` is empty (`create_host` seeds none); clear F when targets exist and no OK_TO_AUTH | exact | `a2_r17_s4u2self_keeps_f_without_clearing_targets`; `s4u2self_clears_forwardable_without_ok_to_auth`; `scripts/s4u-mit-gate.sh` |
 | asn1_k_encode.c:30 | `pvno != 5` | decode error `KRB5KDC_ERR_BAD_PVNO` **3** → dispatch drop | issue.rs handle_inner | pvno ≠ 5 is dropped | exact | diffsend `as-bad-pvno`; `as_bad_pvno_is_dropped` |
 | asn1_k_encode.c:1127-1148 | encode EncKDCRepPart as APPLICATION 26 for AS and TGS; decode 26 then 25 | n/a (success) | krb5-kdc/issue.rs encode_enc_kdc_rep_part; krb5-kdc/issue.rs issue_as_from; krb5-asn1/lib.rs decode_enc_kdc_rep_part; krb5-protocol/as_ex.rs decode_enc_as | EncTgsRepPart tag 26 both AS and TGS; RFC 25 still accepted on decode | exact | diffsend `as-success`; diffsend `tgs-success`; `scripts/differential-gate.sh`; other clients that require RFC APPLICATION 25 are out of scope |
 | kdc_util.c:612-627 `get_verified_pac` | service ticket PAC: retry privsvr with the two previous krbtgt kvnos on `MODIFIED` | HEADER_PAC 41 `MODIFIED` after the retries | krb5-kdc/ad.rs get_verified_pac | `MODIFIED` 41 after two older kvnos | exact | `pac_shape.rs` (shape); S4U evidence path `scripts/ad-s4u-gate.sh` |
