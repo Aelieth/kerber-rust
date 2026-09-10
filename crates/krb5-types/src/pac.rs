@@ -409,6 +409,172 @@ fn unix_to_nt(unix: u32) -> u64 {
         .saturating_add(NT_UNIX_EPOCH)
 }
 
+/// MS-PAC 2.9 `S4U_DELEGATION_INFO`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct S4uDelegationInfo {
+    /// Proxy target without realm (`KRB5_PRINCIPAL_UNPARSE_NO_REALM`).
+    pub proxy_target: String,
+    /// Transited services with realm, oldest first.
+    pub transited_services: Vec<String>,
+}
+
+/// Encode `S4U_DELEGATION_INFO` (`kdc/ndr.c` `ndr_enc_delegation_info`).
+#[must_use]
+pub fn delegation_info_buffer(info: &S4uDelegationInfo) -> Vec<u8> {
+    let pt = enc_wchar(&info.proxy_target);
+    let tss: Vec<Vec<u8>> = info
+        .transited_services
+        .iter()
+        .map(|s| enc_wchar(s))
+        .collect();
+    let mut b = Vec::new();
+    b.extend_from_slice(&[0x01, 0x10, 0x08, 0x00]);
+    b.extend_from_slice(&0xcccc_ccccu32.to_le_bytes());
+    b.extend_from_slice(&0u32.to_le_bytes());
+    b.extend_from_slice(&0u32.to_le_bytes());
+    let mut ptr = 0u32;
+    write_ndr_ptr(&mut b, &mut ptr);
+    let pn = utf16_units(&info.proxy_target);
+    b.extend_from_slice(&(2 * pn).to_le_bytes());
+    b.extend_from_slice(&(2 * (pn + 1)).to_le_bytes());
+    write_ndr_ptr(&mut b, &mut ptr);
+    let n = u32::try_from(info.transited_services.len()).unwrap_or(0);
+    b.extend_from_slice(&n.to_le_bytes());
+    write_ndr_ptr(&mut b, &mut ptr);
+    b.extend_from_slice(&pt);
+    b.extend_from_slice(&n.to_le_bytes());
+    for (s, raw) in info.transited_services.iter().zip(&tss) {
+        let un = utf16_units(s);
+        b.extend_from_slice(&(2 * un).to_le_bytes());
+        b.extend_from_slice(&(2 * (un + 1)).to_le_bytes());
+        write_ndr_ptr(&mut b, &mut ptr);
+        let _ = raw;
+    }
+    for raw in &tss {
+        b.extend_from_slice(raw);
+    }
+    if !b.len().is_multiple_of(8) {
+        b.extend_from_slice(&0u32.to_le_bytes());
+    }
+    let payload = u32::try_from(b.len().saturating_sub(16)).unwrap_or(0);
+    b[8..12].copy_from_slice(&payload.to_le_bytes());
+    b
+}
+
+/// Decode `S4U_DELEGATION_INFO` (`kdc/ndr.c` `ndr_dec_delegation_info`).
+///
+/// # Errors
+///
+/// Truncated header, bad RPC version, or malformed NDR strings.
+pub fn parse_delegation_info(data: &[u8]) -> Result<S4uDelegationInfo, PacError> {
+    if data.len() < 16 {
+        return Err(PacError::Truncated);
+    }
+    if data[0] != 1 || data[1] != 0x10 || u16::from_le_bytes([data[2], data[3]]) != 8 {
+        return Err(PacError::Malformed);
+    }
+    let obj = u32::from_le_bytes(data[8..12].try_into().map_err(|_| PacError::Truncated)?);
+    if obj as usize != data.len().saturating_sub(16) {
+        return Err(PacError::Malformed);
+    }
+    let mut i = 16;
+    skip_u32(data, &mut i)?;
+    skip_u16(data, &mut i)?;
+    skip_u16(data, &mut i)?;
+    skip_u32(data, &mut i)?;
+    skip_u32(data, &mut i)?;
+    skip_u32(data, &mut i)?;
+    let proxy_target = dec_wchar(data, &mut i)?;
+    let n = read_u32(data, &mut i)? as usize;
+    if n > data.len() / 8 {
+        return Err(PacError::Malformed);
+    }
+    i = i.checked_add(8 * n).ok_or(PacError::Truncated)?;
+    let mut transited_services = Vec::with_capacity(n);
+    for _ in 0..n {
+        transited_services.push(dec_wchar(data, &mut i)?);
+    }
+    Ok(S4uDelegationInfo {
+        proxy_target,
+        transited_services,
+    })
+}
+
+fn utf16_units(s: &str) -> u16 {
+    u16::try_from(s.encode_utf16().count()).unwrap_or(u16::MAX)
+}
+
+fn write_ndr_ptr(b: &mut Vec<u8>, pointer: &mut u32) {
+    if *pointer == 0 {
+        *pointer = NDR_PTR_BASE;
+    }
+    b.extend_from_slice(&pointer.to_le_bytes());
+    *pointer = pointer.saturating_add(4);
+}
+
+fn enc_wchar(utf8: &str) -> Vec<u8> {
+    let units: Vec<u16> = utf8.encode_utf16().collect();
+    let n = u32::try_from(units.len()).unwrap_or(0);
+    let mut b = Vec::new();
+    b.extend_from_slice(&(n + 1).to_le_bytes());
+    b.extend_from_slice(&0u32.to_le_bytes());
+    b.extend_from_slice(&n.to_le_bytes());
+    for u in units {
+        b.extend_from_slice(&u.to_le_bytes());
+    }
+    if n % 2 == 1 {
+        b.extend_from_slice(&0u16.to_le_bytes());
+    }
+    b
+}
+
+fn dec_wchar(data: &[u8], i: &mut usize) -> Result<String, PacError> {
+    let _max = read_u32(data, i)?;
+    let _off = read_u32(data, i)?;
+    let actual = read_u32(data, i)? as usize;
+    let nbytes = actual.checked_mul(2).ok_or(PacError::Truncated)?;
+    let end = i.checked_add(nbytes).ok_or(PacError::Truncated)?;
+    if end > data.len() {
+        return Err(PacError::Truncated);
+    }
+    let units: Vec<u16> = data[*i..end]
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| u16::from_le_bytes(*c))
+        .collect();
+    *i = end;
+    if actual % 2 == 1 {
+        skip_u16(data, i)?;
+    }
+    String::from_utf16(&units).map_err(|_| PacError::Malformed)
+}
+
+fn read_u32(data: &[u8], i: &mut usize) -> Result<u32, PacError> {
+    let end = i.checked_add(4).ok_or(PacError::Truncated)?;
+    let v = u32::from_le_bytes(
+        data.get(*i..end)
+            .ok_or(PacError::Truncated)?
+            .try_into()
+            .map_err(|_| PacError::Truncated)?,
+    );
+    *i = end;
+    Ok(v)
+}
+
+fn skip_u32(data: &[u8], i: &mut usize) -> Result<(), PacError> {
+    read_u32(data, i).map(|_| ())
+}
+
+fn skip_u16(data: &[u8], i: &mut usize) -> Result<(), PacError> {
+    let end = i.checked_add(2).ok_or(PacError::Truncated)?;
+    if end > data.len() {
+        return Err(PacError::Truncated);
+    }
+    *i = end;
+    Ok(())
+}
+
 /// NDR32 `RPC_UNICODE_STRING` (embedded, Buffer deferred).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RpcUnicode {
@@ -1661,5 +1827,27 @@ mod tests {
             raw.as_slice(),
             "re-encode must match captured AD NDR"
         );
+    }
+
+    #[test]
+    fn ad2019_s4u_di_short_parses() {
+        let raw: &[u8] = &[
+            0x01, 0x10, 0x08, 0x00, 0xcc, 0xcc, 0xcc, 0xcc, 0xa0, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x2a, 0x00, 0x2c, 0x00, 0x04, 0x00, 0x02, 0x00,
+            0x01, 0x00, 0x00, 0x00, 0x08, 0x00, 0x02, 0x00, 0x16, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x15, 0x00, 0x00, 0x00, 0x73, 0x00, 0x76, 0x00, 0x63, 0x00, 0x32, 0x00,
+            0x2f, 0x00, 0x61, 0x00, 0x64, 0x00, 0x73, 0x00, 0x65, 0x00, 0x72, 0x00, 0x76, 0x00,
+            0x65, 0x00, 0x72, 0x00, 0x2e, 0x00, 0x61, 0x00, 0x64, 0x00, 0x2e, 0x00, 0x74, 0x00,
+            0x65, 0x00, 0x73, 0x00, 0x74, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3a, 0x00,
+            0x3c, 0x00, 0x0c, 0x00, 0x02, 0x00, 0x1e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x1d, 0x00, 0x00, 0x00, 0x73, 0x00, 0x76, 0x00, 0x63, 0x00, 0x31, 0x00, 0x2f, 0x00,
+            0x61, 0x00, 0x64, 0x00, 0x73, 0x00, 0x65, 0x00, 0x72, 0x00, 0x76, 0x00, 0x65, 0x00,
+            0x72, 0x00, 0x2e, 0x00, 0x61, 0x00, 0x64, 0x00, 0x2e, 0x00, 0x74, 0x00, 0x65, 0x00,
+            0x73, 0x00, 0x74, 0x00, 0x40, 0x00, 0x41, 0x00, 0x44, 0x00, 0x2e, 0x00, 0x54, 0x00,
+            0x45, 0x00, 0x53, 0x00, 0x54, 0x00, 0x00, 0x00,
+        ];
+        let di = parse_delegation_info(raw).expect("MIT t_ndr.c s4u_di_short");
+        assert_eq!(di.proxy_target, "svc2/adserver.ad.test");
+        assert_eq!(di.transited_services, vec!["svc1/adserver.ad.test@AD.TEST"]);
     }
 }

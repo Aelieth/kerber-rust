@@ -602,6 +602,58 @@ fn mint_signed_header(
     seal_ticket(key, kvno, realm, sname, part)
 }
 
+/// Service ticket: server checksum under `server`, privsvr under `kdc`.
+#[allow(clippy::too_many_arguments)]
+fn mint_signed_stkt(
+    server: &ProtocolKey,
+    server_kvno: u32,
+    kdc: &ProtocolKey,
+    cname: &PrincipalName,
+    realm: &str,
+    sname: &PrincipalName,
+    session: &ProtocolKey,
+    window: (KerberosTime, KerberosTime),
+    flags: TicketFlags,
+    pac_cname: &PrincipalName,
+) -> Result<Ticket, String> {
+    let (start, end) = window;
+    let mut part = EncTicketPart {
+        flags,
+        key: EncryptionKey {
+            keytype: session.etype().to_iana(),
+            keyvalue: session.as_bytes().to_vec().into(),
+        },
+        crealm: krb5_types::try_ascii(realm).map_err(|e| e.to_string())?,
+        cname: cname.clone(),
+        transited: TransitedEncoding {
+            tr_type: 1,
+            contents: Vec::<u8>::new().into(),
+        },
+        authtime: start.clone(),
+        starttime: Some(start.clone()),
+        endtime: end,
+        renew_till: None,
+        caddr: None,
+        authorization_data: Some(wrap_win2k_pac(&[0]).map_err(|e| e.to_string())?),
+    };
+    let der = ticket_checksum_der(&part).map_err(|e| e.to_string())?;
+    let pac = sign_pac(
+        pac_cname,
+        start.unix_seconds(),
+        &PacTicket {
+            server,
+            kdc,
+            enc_tkt_der: &der,
+            is_service_tkt: true,
+        },
+        &dummy_ident(&pac_cname.components_joined(), realm),
+        None,
+    )
+    .map_err(|e| e.to_string())?;
+    part.authorization_data = Some(wrap_win2k_pac(&pac).map_err(|e| e.to_string())?);
+    seal_ticket(server, server_kvno, realm, sname, part)
+}
+
 fn ad_types(part: &EncTicketPart) -> Vec<i32> {
     let mut out = Vec::new();
     let Some(ad) = part.authorization_data.as_ref() else {
@@ -1865,7 +1917,214 @@ fn run() -> Result<(), String> {
         Some(pa::FOR_X509_USER),
     )?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":49}}"#);
+    let svc = cfg
+        .host
+        .as_ref()
+        .ok_or_else(|| "KERBER_HOST_KEYTAB required for S4U2Proxy".to_string())?;
+    let (hkey, hkvno) = keytab_for(svc, 20)?;
+    let ev_flags = TicketFlags::initial_preauth().with_bit(flag_bit::FORWARDABLE, true);
+    let ev_ok = mint_signed_stkt(
+        hkey,
+        hkvno,
+        tkt_key,
+        &user,
+        realm,
+        &host,
+        &sess,
+        window10.clone(),
+        ev_flags.clone(),
+        &user,
+    )?;
+    let proxy_req = |header: Ticket,
+                     extra: Option<Vec<Ticket>>,
+                     dest: PrincipalName,
+                     opts: KdcOptions,
+                     nonce: u32|
+     -> Result<Vec<u8>, String> {
+        encode(
+            &tgs_req_ex(
+                header,
+                &sess,
+                realm,
+                &host,
+                dest,
+                realm,
+                nonce,
+                opts,
+                extra,
+                Vec::new(),
+                etypes.clone(),
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())
+    };
+    let addl = KdcOptions::forwardable().with_bit(flag_bit::CNAME_IN_ADDL_TKT, true);
+
+    expect_error(
+        &cfg,
+        "s4u2proxy-no-2nd-tkt",
+        &proxy_req(
+            host_hdr(&host, false)?,
+            None,
+            host.clone(),
+            addl.clone(),
+            0x1000_0050,
+        )?,
+        err::GENERIC,
+    )?;
+    let ev_nf = mint_signed_stkt(
+        hkey,
+        hkvno,
+        tkt_key,
+        &user,
+        realm,
+        &host,
+        &sess,
+        window10.clone(),
+        TicketFlags::initial_preauth(),
+        &user,
+    )?;
+    expect_error(
+        &cfg,
+        "s4u2proxy-not-forwardable",
+        &proxy_req(
+            host_hdr(&host, false)?,
+            Some(vec![ev_nf]),
+            host.clone(),
+            addl.clone(),
+            0x1000_0051,
+        )?,
+        err::BADOPTION,
+    )?;
+    expect_error(
+        &cfg,
+        "s4u2proxy-u2u-combo",
+        &proxy_req(
+            host_hdr(&host, false)?,
+            Some(vec![host_hdr(&host, false)?]),
+            host.clone(),
+            addl.clone().with_bit(flag_bit::ENC_TKT_IN_SKEY, true),
+            0x1000_0052,
+        )?,
+        err::BADOPTION,
+    )?;
+    expect_error(
+        &cfg,
+        "s4u2proxy-tgs-target",
+        &proxy_req(
+            host_hdr(&host, false)?,
+            Some(vec![ev_ok.clone()]),
+            krbtgt_sname.clone(),
+            addl.clone(),
+            0x1000_0053,
+        )?,
+        err::POLICY,
+    )?;
+    expect_error(
+        &cfg,
+        "s4u2proxy-no-header-pac",
+        &proxy_req(
+            mint_tgt(
+                tkt_key,
+                tkt_kvno,
+                &host,
+                realm,
+                &krbtgt_sname,
+                &sess,
+                window10.clone(),
+                host_flags.clone(),
+            )?,
+            Some(vec![ev_ok.clone()]),
+            host.clone(),
+            addl.clone(),
+            0x1000_0054,
+        )?,
+        err::TGT_REVOKED,
+    )?;
+    expect_error(
+        &cfg,
+        "s4u2proxy-header-pac",
+        &proxy_req(
+            host_hdr(&user, false)?,
+            Some(vec![ev_ok.clone()]),
+            host.clone(),
+            addl.clone(),
+            0x1000_0055,
+        )?,
+        err::BADOPTION,
+    )?;
+    let ev_nopac = mint_tgt(
+        hkey,
+        hkvno,
+        &user,
+        realm,
+        &host,
+        &sess,
+        window10.clone(),
+        ev_flags.clone(),
+    )?;
+    expect_error(
+        &cfg,
+        "s4u2proxy-no-stkt-pac",
+        &proxy_req(
+            host_hdr(&host, false)?,
+            Some(vec![ev_nopac]),
+            host.clone(),
+            addl.clone(),
+            0x1000_0056,
+        )?,
+        err::MODIFIED,
+    )?;
+    expect_error(
+        &cfg,
+        "s4u2proxy-evidence-mismatch",
+        &proxy_req(
+            host_hdr(&host, false)?,
+            Some(vec![mint_signed_header(
+                tkt_key,
+                tkt_kvno,
+                &user,
+                realm,
+                &krbtgt_sname,
+                &sess,
+                window10.clone(),
+                ev_flags.clone(),
+                &user,
+                false,
+                None,
+            )?]),
+            host.clone(),
+            addl.clone(),
+            0x1000_0057,
+        )?,
+        err::SERVER_NOMATCH,
+    )?;
+    expect_error(
+        &cfg,
+        "s4u2proxy-local-stkt-pac",
+        &proxy_req(
+            host_hdr(&host, false)?,
+            Some(vec![mint_signed_stkt(
+                hkey,
+                hkvno,
+                tkt_key,
+                &user,
+                realm,
+                &host,
+                &sess,
+                window10.clone(),
+                ev_flags,
+                &host,
+            )?]),
+            host.clone(),
+            addl,
+            0x1000_0058,
+        )?,
+        err::BADOPTION,
+    )?;
+
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":58}}"#);
     Ok(())
 }
 

@@ -44,7 +44,23 @@ this project uses semantic versioning once a crate is published.
   client's `pw_expiration` / `REQUIRES_PWCHANGE` are cleared. FORWARDABLE
   stays set unless the service has `allowed_to_delegate` targets and
   lacks `OK_TO_AUTH_AS_DELEGATE` (MIT db2 has no hook, so F stays).
-  Reply 130 only when the request carried 130. diffsend 49 cases.
+  Reply 130 only when the request carried 130.
+- **kdc.** S4U2Proxy is `check_tgs_s4u2proxy` + `check_s4u2proxy_policy` +
+  `verify_deleg_pac` (`tgs_policy.c:365-572`). No second ticket is 60
+  `UNKNOWN_REASON` (`kau_make_tkt_id` on a NULL evidence ticket);
+  `check_tgs_s4u2proxy` would say 13 `NO_2ND_TKT` after that. A
+  non-forwardable evidence ticket is 13
+  `EVIDENCE_TKT_NOT_FORWARDABLE`; CNAME-IN-ADDL-TKT plus U2U is 13
+  `INVALID_S4U2PROXY_OPTIONS`; a TGS target is 12 `NOT_ALLOWED_TO_DELEGATE`;
+  a missing header PAC is 20; a header PAC that is not the impersonator is
+  13 `S4U2PROXY_HEADER_PAC`; a missing evidence PAC is 41
+  `S4U2PROXY_NO_STKT_PAC`; same-realm evidence server ≠ header client is 26
+  `EVIDENCE_TICKET_MISMATCH`; evidence PAC ≠ evidence client is 13
+  `S4U2PROXY_LOCAL_STKT_PAC`. First hop writes `S4U_DELEGATION_INFO`
+  (`update_delegation_info`). Classic allow is `s4u_allowed_to` on the
+  impersonator; RBCD is `s4u_allowed_from` on the resource; empty lists
+  deny (MIT db2 hooks are NULL → `UNSUPPORTED_S4U2PROXY_REQUEST`).
+  `decrypt_2ndtkt` is shared with U2U. diffsend 58 cases.
 - **test.** `a2_6_tgs_gather.rs` is the parent-red truth table.
   `a2_6_tgs_pac_extra.rs` covers PAC-REQUEST / `disable_pac` / privsvr /
   MIT-shape copy. `cross-kdc-gate.sh` compares MIT-TGT → Rust-TGS PAC

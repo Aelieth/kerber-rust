@@ -364,5 +364,25 @@ echo "$MPADATA" | grep -E 'req#[0-9]+ msg_type=12 padata=\[' | grep -q '130'
 echo "$MPADATA" | grep -E 'req#[0-9]+ msg_type=12 padata=\[' | grep -q '129'
 echo "$MPADATA" | grep -E 'rep#[0-9]+ tag=0x6d' | grep -q '0x6d'
 
+echo "==== MIT kvno -U user -P krbtgt (TGS-target POLICY 12) rust ===="
+docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf \
+    "$NAME" kinit -f -k -t /tmp/host.keytab host/testhost.kerber.test@KERBER.TEST
+set +e
+TGST_RUST="$(docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf \
+    "$NAME" kvno -U user -P krbtgt/KERBER.TEST 2>&1)"
+set -e
+echo "$TGST_RUST"
+echo "$TGST_RUST" | grep -qiE "KDC policy rejects request|NOT_ALLOWED_TO_DELEGATE"
+
+echo "==== MIT kvno -U user -P krbtgt (TGS-target POLICY 12) mit ===="
+docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
+    "$MITNAME" kinit -f -k -t /etc/krb5kdc/testhost.keytab host/testhost.kerber.test@KERBER.TEST
+set +e
+TGST_MIT="$(docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
+    "$MITNAME" kvno -U user -P krbtgt/KERBER.TEST 2>&1)"
+set -e
+echo "$TGST_MIT"
+echo "$TGST_MIT" | grep -qiE "KDC policy rejects request|NOT_ALLOWED_TO_DELEGATE"
+
 log "s4u.mit.gate" "ok" ',"principal":"host/testhost.kerber.test","for_client":"user@KERBER.TEST"'
 exit 0

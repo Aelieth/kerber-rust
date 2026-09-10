@@ -651,7 +651,7 @@ pub fn pa_s4u_x509_user(
     nonce: u32,
 ) -> Result<PaData, Error> {
     let user_id = krb5_types::s4u::S4uUserId {
-        nonce: nonce as i32,
+        nonce: nonce.cast_signed(),
         user: Some(user),
         realm: krb5_types::try_ascii(realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?,
         subject_cert: None,

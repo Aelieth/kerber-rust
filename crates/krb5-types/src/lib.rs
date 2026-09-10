@@ -181,6 +181,8 @@ impl PrincipalName {
     pub const NT_ENTERPRISE: i32 = 10;
     /// NT-WELLKNOWN (11), RFC 6111.
     pub const NT_WELLKNOWN: i32 = 11;
+    /// `KRB5_NT_MS_PRINCIPAL` (−128). MIT `get_pac_princ_with_realm`.
+    pub const NT_MS_PRINCIPAL: i32 = -128;
 
     /// Build a principal from a name type and GeneralString components.
     ///

@@ -10,8 +10,8 @@ use krb5_types::pac::{
     PAC_TICKET_CHECKSUM, parse_client_info,
 };
 use krb5_types::{
-    AuthorizationDataValue, EncTicketPart, EncryptionKey, PaData, PrincipalName, TgsReq, Ticket,
-    err, ku, pa,
+    AuthorizationDataValue, EncTicketPart, EncryptionKey, PaData, PrincipalName, Ticket, err, ku,
+    pa,
 };
 
 use crate::error::Error;
@@ -370,16 +370,6 @@ pub fn ticket_checksum_der(part: &EncTicketPart) -> Result<Vec<u8>, Error> {
     encode(&clone).map_err(Error::from)
 }
 
-/// Type-16 input over the decrypted EncTicketPart bytes, PAC ad-data = 0x00.
-pub(crate) fn ticket_checksum_input(plain: &[u8], part: &EncTicketPart) -> Result<Vec<u8>, Error> {
-    if let Some(pac) = pac_from_ticket_part(part)
-        && let Some(z) = krb5_types::pac::zero_pac_ad_data(plain, &pac)
-    {
-        return Ok(z);
-    }
-    ticket_checksum_der(part)
-}
-
 /// MIT `get_verified_pac` (`kdc_util.c:589-630`): TGS header → server
 /// signature only; service header → privsvr + kvno−1/−2 retry.
 pub(crate) fn get_verified_pac(
@@ -475,8 +465,11 @@ pub(crate) fn check_normal_tgs_pac(
     if pac_client_matches(&parsed, enc_tkt) {
         return Ok(());
     }
-    if is_crossrealm && server.name.is_cross_tgs_principal(&server.realm) {
-        // `verify_deleg_pac` is A′-2 item 8; fail closed here.
+    if is_crossrealm
+        && server.name.is_cross_tgs_principal(&server.realm)
+        && verify_deleg_pac(&parsed, enc_tkt, None)
+    {
+        return Ok(());
     }
     Err(proto(err::BADOPTION, status::HEADER_PAC))
 }
@@ -585,11 +578,8 @@ pub(crate) fn process_s4u2self_req(
 ) -> Result<Option<S4u2Self>, Error> {
     if let Some(raw) = find_pa(padata, pa::FOR_X509_USER) {
         let x509 = process_s4u_x509_user(raw, tgt_session, tgs_subkey, nonce)?;
-        return Ok(Some(s4u_from_userid(
-            store,
-            x509.user_id.clone(),
-            Some(x509),
-        )?));
+        let id = x509.user_id.clone();
+        return Ok(Some(s4u_from_userid(store, &id, Some(x509))?));
     }
     if let Some(raw) = find_pa(padata, pa::FOR_USER) {
         let pa: krb5_types::s4u::PaForUser =
@@ -602,7 +592,7 @@ pub(crate) fn process_s4u2self_req(
             subject_cert: None,
             options: None,
         };
-        return Ok(Some(s4u_from_userid(store, id, None)?));
+        return Ok(Some(s4u_from_userid(store, &id, None)?));
     }
     Ok(None)
 }
@@ -625,7 +615,7 @@ fn verify_for_user_checksum(
         pa.cksum.cksumtype,
         pa.cksum.checksum.as_ref(),
     )
-    .map_err(map_s4u_cksum)
+    .map_err(|e| map_s4u_cksum(&e))
 }
 
 fn process_s4u_x509_user(
@@ -640,7 +630,7 @@ fn process_s4u_x509_user(
     if etype_requires_info2(key.etype()) && !cksumtype_is_keyed(req.cksum.cksumtype) {
         return Err(proto(err::INAPP_CKSUM, status::INVALID_S4U2SELF_CHECKSUM));
     }
-    if req.user_id.nonce as u32 != nonce {
+    if req.user_id.nonce.cast_unsigned() != nonce {
         return Err(proto(err::MODIFIED, status::INVALID_S4U2SELF_CHECKSUM));
     }
     let usage = KeyUsage::new(ku::PA_S4U_X509_USER_REQUEST)?;
@@ -664,7 +654,7 @@ fn process_s4u_x509_user(
             req.cksum.cksumtype,
             req.cksum.checksum.as_ref(),
         )
-        .map_err(map_s4u_cksum)?;
+        .map_err(|e| map_s4u_cksum(&e))?;
     }
     let empty_user = req
         .user_id
@@ -687,7 +677,7 @@ fn process_s4u_x509_user(
 
 fn s4u_from_userid(
     store: &dyn PrincipalRead,
-    id: krb5_types::s4u::S4uUserId,
+    id: &krb5_types::s4u::S4uUserId,
     x509: Option<krb5_types::s4u::PaS4uX509User>,
 ) -> Result<S4u2Self, Error> {
     let realm = utf8(&id.realm).to_owned();
@@ -715,7 +705,7 @@ fn s4u_from_userid(
     })
 }
 
-fn map_s4u_cksum(e: krb5_crypto::Error) -> Error {
+fn map_s4u_cksum(e: &krb5_crypto::Error) -> Error {
     match e {
         krb5_crypto::Error::InappChecksum => {
             proto(err::INAPP_CKSUM, status::INVALID_S4U2SELF_CHECKSUM)
@@ -779,10 +769,10 @@ pub(crate) fn make_s4u2self_rep(
 ) -> Result<(PaData, Option<PaData>), Error> {
     let key = x509_cksum_key(tgt_session, tgs_subkey)?;
     let mut user_id = req.user_id.clone();
-    if !user_id.use_reply_key_usage() {
-        user_id.options = None;
-    } else {
+    if user_id.use_reply_key_usage() {
         user_id.options = Some(krb5_types::s4u::s4u_reply_key_usage_flags());
+    } else {
+        user_id.options = None;
     }
     let der_id = encode(&user_id)?;
     let usage = KeyUsage::new(if user_id.use_reply_key_usage() {
@@ -803,174 +793,281 @@ pub(crate) fn make_s4u2self_rep(
         padata_type: pa::FOR_X509_USER,
         padata_value: der.into(),
     };
-    let enc = if !etype_requires_info2(key.etype()) {
+    let enc = if etype_requires_info2(key.etype()) {
+        None
+    } else {
         let mut bytes = req.cksum.checksum.as_ref().to_vec();
         bytes.extend_from_slice(rep.cksum.checksum.as_ref());
         Some(PaData {
             padata_type: pa::FOR_X509_USER,
             padata_value: bytes.into(),
         })
-    } else {
-        None
     };
     Ok((pa, enc))
 }
 
-/// S4U2Proxy: evidence ticket in additional-tickets, cname from evidence.
-///
-/// MS-SFU: the evidence ticket MUST be forwardable. PA-PAC-OPTIONS (167),
-/// when present, is decoded; a truncated or non-DER value is `BADOPTION`.
-/// The RBCD bit is read so the field is not ignored.
-pub(crate) fn s4u2proxy_client(
-    store: &dyn PrincipalRead,
-    tgs: &TgsReq,
-    tgt_cname: &PrincipalName,
-    padata: Option<&[PaData]>,
-) -> Result<Option<(PrincipalName, Vec<u8>)>, Error> {
-    if !tgs
-        .0
-        .req_body
-        .kdc_options
-        .bit(krb5_types::flag_bit::CNAME_IN_ADDL_TKT)
-    {
-        return Ok(None);
-    }
-    let mut rbcd = false;
-    if let Some(raw) = find_pa(padata, pa::PAC_OPTIONS) {
-        let opts: krb5_types::s4u::PaPacOptions =
-            decode(raw).map_err(|_| proto(err::BADOPTION, status::INVALID_S4U2PROXY_OPTIONS))?;
-        rbcd = opts.resource_based_constrained_delegation();
-    }
-    let extra = tgs
-        .0
-        .req_body
-        .additional_tickets
-        .as_ref()
-        .and_then(|v| v.first())
-        .ok_or_else(|| proto(err::BADOPTION, status::NO_2ND_TKT))?;
-    if extra.sname != *tgt_cname {
-        return Err(proto(err::BADOPTION, status::EVIDENCE_TICKET_MISMATCH));
-    }
-    let server = store
-        .fetch_name(&extra.sname)?
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::SECOND_TKT_SERVER))?;
-    let skey = server
-        .best_key()
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::SECOND_TKT_SERVER))?;
-    let usage = KeyUsage::new(ku::TICKET)?;
-    let plain = decrypt(&skey.key, usage, extra.enc_part.cipher.as_ref())?;
-    let part: EncTicketPart = decode(&plain)?;
-    if !part.flags.forwardable() {
-        return Err(proto(err::BADOPTION, status::EVIDENCE_TKT_NOT_FORWARDABLE));
-    }
-    let dest = tgs
-        .0
-        .req_body
-        .sname
-        .as_ref()
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::EVIDENCE_TICKET_MISMATCH))?;
-    if rbcd {
-        let target = store.fetch_name(dest)?.ok_or_else(|| {
-            proto(
-                err::S_PRINCIPAL_UNKNOWN,
-                status::UNSUPPORTED_S4U2PROXY_REQUEST,
-            )
-        })?;
-        let from = extra.sname.components_joined();
-        if !target.s4u_allowed_from.iter().any(|n| n == &from) {
-            return Err(proto(err::BADOPTION, status::INVALID_S4U2PROXY_OPTIONS));
-        }
-    } else {
-        let want = dest.components_joined();
-        if !server.s4u_allowed_to.iter().any(|n| n == &want) {
-            return Err(proto(err::BADOPTION, status::NOT_ALLOWED_TO_DELEGATE));
-        }
-    }
-    let pac = pac_from_ticket_part(&part)
-        .ok_or_else(|| proto(err::BAD_INTEGRITY, status::S4U2PROXY_NO_STKT_PAC))?;
-    let krbtgt_p = store
-        .fetch_krbtgt()?
-        .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
-    let krbtgt = krbtgt_p
-        .first_current_key()
-        .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
-    let der = ticket_checksum_input(&plain, &part)?;
-    let service = should_have_ticket_signature(&extra.sname);
-    let mut verified =
-        verify_pac_signatures(&pac, &skey.key, Some(&krbtgt.key), Some(&der), service);
-    let mut kvno = krbtgt.kvno.saturating_sub(1);
-    let mut tries = 2;
-    while let Err(Error::Protocol { code, .. }) = &verified
-        && *code == err::MODIFIED
-        && tries > 0
-        && kvno > 0
-    {
-        let Some(old) = krbtgt_p.first_key_at_kvno(kvno) else {
-            break;
-        };
-        verified = verify_pac_signatures(&pac, &skey.key, Some(&old.key), Some(&der), service);
-        tries -= 1;
-        kvno -= 1;
-    }
-    verified?;
-    let parsed = krb5_types::pac::Pac::parse(&pac).map_err(|e| {
-        proto_d(
-            err::BAD_INTEGRITY,
-            status::SECOND_TKT_PAC,
-            format!("evidence PAC: {e}"),
-        )
-    })?;
-    let logon = parsed
-        .buffer(krb5_types::pac::PAC_LOGON_INFO)
-        .ok_or_else(|| proto(err::BAD_INTEGRITY, status::SECOND_TKT_PAC))?
-        .to_vec();
-    Ok(Some((part.cname, logon)))
+/// Decrypted second ticket (`decrypt_2ndtkt`).
+pub(crate) struct SecondTicket {
+    pub part: EncTicketPart,
+    pub server: Principal,
+    pub pac: Option<Vec<u8>>,
 }
 
-/// U2U: encrypt ticket with additional-ticket session key.
-pub(crate) fn u2u_session(
-    store: &dyn PrincipalRead,
-    tgs: &TgsReq,
-) -> Result<Option<(ProtocolKey, u32, EncryptionType)>, Error> {
-    if !tgs
-        .0
-        .req_body
-        .kdc_options
-        .bit(krb5_types::flag_bit::ENC_TKT_IN_SKEY)
-    {
-        return Ok(None);
-    }
-    let extra = tgs
-        .0
-        .req_body
-        .additional_tickets
-        .as_ref()
-        .and_then(|v| v.first())
-        .ok_or_else(|| proto(err::BADOPTION, status::NO_2ND_TKT))?;
-    // MIT `decrypt_2ndtkt` / `kdc_get_server_key(stkt)` — look up the second
-    // ticket's server, not the local TGT helper (`do_tgs_req.c:280-285`).
-    let server = store
-        .fetch_name(&extra.sname)?
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::SECOND_TKT_SERVER))?;
-    if server.attributes & (crate::KDB_DISALLOW_SVR | crate::KDB_DISALLOW_ALL_TIX) != 0 {
-        return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::SECOND_TKT_SERVER));
-    }
-    let Ok(tkt_etype) = EncryptionType::from_iana(extra.enc_part.etype)
-        .or_else(|_| EncryptionType::known(extra.enc_part.etype))
-    else {
-        return Err(proto(err::GENERIC, status::SECOND_TKT_SERVER));
+/// MIT `verify_deleg_pac` (`tgs_policy.c:366-421`).
+pub(crate) fn verify_deleg_pac(
+    pac: &krb5_types::pac::Pac,
+    enc_tkt: &EncTicketPart,
+    target: Option<&PrincipalName>,
+) -> bool {
+    let Some((_, _, authtime)) = pac_princ_with_realm(pac) else {
+        return false;
     };
-    let krbtgt = server
-        .key_for(tkt_etype)
-        .ok_or_else(|| proto(err::GENERIC, status::SECOND_TKT_SERVER))?;
-    let usage = KeyUsage::new(ku::TICKET)?;
-    let plain = decrypt(&krbtgt.key, usage, extra.enc_part.cipher.as_ref())
-        .map_err(|_| proto(err::BAD_INTEGRITY, status::SECOND_TKT_DECRYPT))?;
-    let part: EncTicketPart = decode(&plain)?;
-    let etype = EncryptionType::from_iana(part.key.keytype)
-        .or_else(|_| EncryptionType::known(part.key.keytype))?;
-    let key = ProtocolKey::from_bytes(etype, part.key.keyvalue.as_ref())?;
-    Ok(Some((key, 0, etype)))
+    if authtime != enc_tkt.authtime.unix_seconds() {
+        return false;
+    }
+    let Ok(Some(buf)) = pac.unique_buffer(krb5_types::pac::PAC_DELEGATION_INFO) else {
+        return false;
+    };
+    let Ok(di) = krb5_types::pac::parse_delegation_info(buf) else {
+        return false;
+    };
+    if let Some(server) = target
+        && di.proxy_target != server.unparse()
+    {
+        return false;
+    }
+    let Some(last) = di.transited_services.last() else {
+        return false;
+    };
+    let crealm = std::str::from_utf8(enc_tkt.crealm.as_bytes()).unwrap_or("");
+    *last == enc_tkt.cname.unparse_with_realm(crealm)
+}
+
+fn pac_princ_with_realm(pac: &krb5_types::pac::Pac) -> Option<(String, String, u32)> {
+    let buf = pac.unique_buffer(PAC_CLIENT_INFO).ok().flatten()?;
+    let (authtime, name) = parse_client_info(buf)?;
+    let n = name.bytes().filter(|&b| b == b'@').count();
+    if n != 1 && n != 2 {
+        return None;
+    }
+    let (user, realm) = name.rsplit_once('@')?;
+    Some((user.to_owned(), realm.to_owned(), authtime))
+}
+
+/// MIT `check_tgs_s4u2proxy` (`tgs_policy.c:424-518`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn check_tgs_s4u2proxy(
+    store: &dyn PrincipalRead,
+    body: &krb5_types::KdcReqBody,
+    header: &EncTicketPart,
+    header_pac: Option<&[u8]>,
+    stkt: Option<&SecondTicket>,
+    dest_realm: &str,
+    is_crossrealm: bool,
+    is_referral: bool,
+) -> Result<(), Error> {
+    let Some(st) = stkt else {
+        return Err(proto(err::BADOPTION, status::NO_2ND_TKT));
+    };
+    if !st.part.flags.forwardable() {
+        return Err(proto(err::BADOPTION, status::EVIDENCE_TKT_NOT_FORWARDABLE));
+    }
+    if non_tgt_or_u2u(body) {
+        return Err(proto(err::BADOPTION, status::INVALID_S4U2PROXY_OPTIONS));
+    }
+    if body.sname.as_ref().is_some_and(PrincipalName::is_krbtgt) {
+        return Err(proto(err::POLICY, status::NOT_ALLOWED_TO_DELEGATE));
+    }
+    let Some(hpac) = header_pac else {
+        return Err(proto(err::TGT_REVOKED, status::S4U2PROXY_NO_HEADER_PAC));
+    };
+    let header_parsed = krb5_types::pac::Pac::parse(hpac)
+        .map_err(|_| proto(err::BADOPTION, status::S4U2PROXY_HEADER_PAC))?;
+    if !pac_client_info_eq(
+        &header_parsed,
+        header.authtime.unix_seconds(),
+        &header.cname.components_joined(),
+        None,
+    ) {
+        return Err(proto(err::BADOPTION, status::S4U2PROXY_HEADER_PAC));
+    }
+    let Some(spac) = st.pac.as_deref() else {
+        return Err(proto(err::MODIFIED, status::S4U2PROXY_NO_STKT_PAC));
+    };
+    let st_parsed = krb5_types::pac::Pac::parse(spac)
+        .map_err(|_| proto(err::BADOPTION, status::S4U2PROXY_LOCAL_STKT_PAC))?;
+    if is_crossrealm {
+        let inst = st
+            .server
+            .name
+            .name_string
+            .get(1)
+            .and_then(|i| std::str::from_utf8(i.as_bytes()).ok())
+            .unwrap_or("");
+        if is_referral
+            || !st.server.name.is_cross_tgs_principal(&st.server.realm)
+            || inst != dest_realm
+            || st.part.cname != header.cname
+        {
+            return Err(proto(
+                err::BADOPTION,
+                status::XREALM_EVIDENCE_TICKET_MISMATCH,
+            ));
+        }
+        if !verify_deleg_pac(&st_parsed, &st.part, body.sname.as_ref()) {
+            return Err(proto(err::BADOPTION, status::S4U2PROXY_CROSS_STKT_PAC));
+        }
+    } else {
+        if !is_client_db_alias(store, &st.server, &header.cname) {
+            return Err(proto(err::SERVER_NOMATCH, status::EVIDENCE_TICKET_MISMATCH));
+        }
+        if !pac_client_info_eq(
+            &st_parsed,
+            st.part.authtime.unix_seconds(),
+            &st.part.cname.components_joined(),
+            None,
+        ) {
+            return Err(proto(err::BADOPTION, status::S4U2PROXY_LOCAL_STKT_PAC));
+        }
+    }
+    Ok(())
+}
+
+fn non_tgt_or_u2u(body: &krb5_types::KdcReqBody) -> bool {
+    body.kdc_options.bit(krb5_types::flag_bit::FORWARDED)
+        || body.kdc_options.bit(krb5_types::flag_bit::PROXY)
+        || body.kdc_options.bit(krb5_types::flag_bit::RENEW)
+        || body.kdc_options.bit(krb5_types::flag_bit::VALIDATE)
+        || body.kdc_options.bit(krb5_types::flag_bit::ENC_TKT_IN_SKEY)
+}
+
+fn is_client_db_alias(store: &dyn PrincipalRead, entry: &Principal, princ: &PrincipalName) -> bool {
+    store
+        .fetch_name(princ)
+        .ok()
+        .flatten()
+        .is_some_and(|p| p.name == entry.name && p.realm == entry.realm)
+}
+
+/// MIT `check_s4u2proxy_policy` (`tgs_policy.c:522-572`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn check_s4u2proxy_policy(
+    padata: Option<&[PaData]>,
+    dest: &PrincipalName,
+    impersonator_name: &PrincipalName,
+    impersonator: &Principal,
+    resource: &Principal,
+    is_crossrealm: bool,
+    is_referral: bool,
+) -> Result<(), Error> {
+    let support_rbcd = pa_pac_rbcd(padata)?;
+    if is_referral {
+        if !support_rbcd {
+            return Err(proto(err::BADOPTION, status::UNSUPPORTED_S4U2PROXY_REQUEST));
+        }
+        return Ok(());
+    }
+    let mut policy_denial = false;
+    if support_rbcd {
+        if allowed_to_delegate_from(resource, impersonator_name) {
+            return Ok(());
+        }
+        policy_denial = true;
+    }
+    if !is_crossrealm {
+        if check_allowed_to_delegate(impersonator, dest) {
+            return Ok(());
+        }
+        policy_denial = true;
+    }
+    Err(proto(
+        err::BADOPTION,
+        if policy_denial {
+            status::NOT_ALLOWED_TO_DELEGATE
+        } else {
+            status::UNSUPPORTED_S4U2PROXY_REQUEST
+        },
+    ))
+}
+
+fn pa_pac_rbcd(padata: Option<&[PaData]>) -> Result<bool, Error> {
+    let Some(raw) = find_pa(padata, pa::PAC_OPTIONS) else {
+        return Ok(false);
+    };
+    let opts: krb5_types::s4u::PaPacOptions =
+        decode(raw).map_err(|_| proto(err::BADOPTION, status::INVALID_S4U2PROXY_OPTIONS))?;
+    Ok(opts.resource_based_constrained_delegation())
+}
+
+fn allowed_to_delegate_from(resource: &Principal, impersonator: &PrincipalName) -> bool {
+    let from = impersonator.components_joined();
+    resource.s4u_allowed_from.iter().any(|n| n == &from)
+}
+
+fn check_allowed_to_delegate(impersonator: &Principal, resource: &PrincipalName) -> bool {
+    let want = resource.components_joined();
+    impersonator.s4u_allowed_to.iter().any(|n| n == &want)
+}
+
+/// First-hop `update_delegation_info` (`kdc_authdata.c:382-439`).
+pub(crate) fn update_delegation_info(
+    subject_pac: &[u8],
+    proxy_target: &PrincipalName,
+    transited: &str,
+) -> Result<Vec<u8>, Error> {
+    let parsed = krb5_types::pac::Pac::parse(subject_pac).map_err(|e| map_pac_err(&e))?;
+    let mut di = match parsed.unique_buffer(krb5_types::pac::PAC_DELEGATION_INFO) {
+        Ok(Some(buf)) => {
+            krb5_types::pac::parse_delegation_info(buf).map_err(|e| map_pac_err(&e))?
+        }
+        _ => krb5_types::pac::S4uDelegationInfo {
+            proxy_target: String::new(),
+            transited_services: Vec::new(),
+        },
+    };
+    di.proxy_target = proxy_target.unparse();
+    di.transited_services.push(transited.to_owned());
+    let buf = krb5_types::pac::delegation_info_buffer(&di);
+    let mut buffers: Vec<krb5_types::pac::PacBuffer> = parsed
+        .buffers
+        .into_iter()
+        .filter(|b| b.kind != krb5_types::pac::PAC_DELEGATION_INFO)
+        .collect();
+    buffers.push(krb5_types::pac::PacBuffer::new(
+        krb5_types::pac::PAC_DELEGATION_INFO,
+        buf,
+    ));
+    Ok(krb5_types::pac::Pac::built(0, buffers).to_bytes())
+}
+
+/// MIT `get_pac_princ_with_realm` for cross-realm S4U2Proxy (`do_tgs_req.c:737-745`).
+pub(crate) fn rbcd_pac_client(pac: &[u8]) -> Result<PrincipalName, Error> {
+    let parsed = krb5_types::pac::Pac::parse(pac)
+        .map_err(|_| proto(err::BADOPTION, status::RBCD_PAC_PRINC))?;
+    let Some((user, _, _)) = pac_princ_with_realm(&parsed) else {
+        return Err(proto(err::BADOPTION, status::RBCD_PAC_PRINC));
+    };
+    Ok(PrincipalName::new(
+        PrincipalName::NT_MS_PRINCIPAL,
+        [user.as_str()],
+    ))
+}
+
+pub(crate) fn with_status(e: Error, st: &'static str) -> Error {
+    match e {
+        Error::Protocol {
+            code,
+            e_data,
+            detail,
+            ..
+        } => Error::Protocol {
+            code,
+            text: Some(st.to_owned()),
+            e_data,
+            detail,
+        },
+        other => other,
+    }
 }
 
 fn utf8(s: &krb5_types::KerberosString) -> &str {

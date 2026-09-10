@@ -18,8 +18,9 @@ use krb5_types::{
 };
 
 use crate::ad::{
-    S4u2Self, make_s4u2self_rep, pac_client_info_eq, process_s4u2self_req, s4u2proxy_client,
-    u2u_session, wrap_win2k_pac,
+    S4u2Self, SecondTicket, check_s4u2proxy_policy, check_tgs_s4u2proxy, make_s4u2self_rep,
+    pac_client_info_eq, process_s4u2self_req, rbcd_pac_client, update_delegation_info, with_status,
+    wrap_win2k_pac,
 };
 use crate::error::Error;
 use crate::kdb::{PrincipalRead, lookup_principal_id};
@@ -948,6 +949,9 @@ fn issue_tgs_body(
     let mut s4u2self = false;
     let mut s4u_x509 = None;
     let mut s4u_referral = false;
+    let mut s4u2proxy = false;
+    let mut subject_authtime = enc_tkt.authtime.clone();
+    let mut subject_pac = header_pac.clone();
     if let Some(s4u) = process_s4u2self_req(
         store,
         &tgt_session,
@@ -979,26 +983,65 @@ fn issue_tgs_body(
         server.attributes &= !KDB_NO_AUTH_DATA_REQUIRED;
         if !is_referral {
             ticket_cname = s4u.user.clone();
-            ticket_crealm = s4u.realm.clone();
+            ticket_crealm.clone_from(&s4u.realm);
         }
         s4u_x509 = s4u.x509;
         s4u_referral = is_referral;
         s4u2self = true;
-    } else if let Some((cn, logon)) = s4u2proxy_client(store, req, &enc_tkt.cname, tgs_padata)? {
-        ticket_cname = cn;
-        evidence_logon = Some(logon);
-    } else if let Some(logon) = header_pac.as_ref().and_then(|p| {
-        let parsed = krb5_types::pac::Pac::parse(p).ok()?;
-        parsed
-            .unique_buffer(krb5_types::pac::PAC_LOGON_INFO)
-            .ok()
-            .flatten()
-            .map(<[u8]>::to_vec)
-    }) {
-        // A cross-realm subject's PAC comes from a trusted realm; MS-PAC SID
-        // filtering forbids it from asserting local-domain SIDs (a foreign
-        // realm claiming the local domain's Domain Admins or RID 500). A local
-        // subject's own domain SIDs are legitimate and pass through unchanged.
+    }
+    let is_referral = sname.is_krbtgt() && !sname.is_krbtgt_for(store.realm());
+    let is_crossrealm = tgs_header_is_crossrealm(header_realm.as_str(), &server.realm);
+    let local_tgt = store.fetch_krbtgt()?;
+    let stkt = decrypt_2ndtkt(store, req, local_tgt.as_ref())?;
+    if body.kdc_options.bit(flag_bit::CNAME_IN_ADDL_TKT) {
+        // MIT `kau_make_tkt_id(stkt)` with a missing additional ticket is
+        // EINVAL (`kdc_audit.c:154-155`) → 60 `UNKNOWN_REASON` before
+        // `check_tgs_s4u2proxy` (`do_tgs_req.c:731-733`).
+        let Some(st) = stkt.as_ref() else {
+            return Err(proto(err::GENERIC, status::UNKNOWN_REASON));
+        };
+        check_tgs_s4u2proxy(
+            store,
+            body,
+            &enc_tkt,
+            header_pac.as_deref(),
+            Some(st),
+            &server.realm,
+            is_crossrealm,
+            is_referral,
+        )?;
+        if is_crossrealm {
+            let pac = st
+                .pac
+                .as_deref()
+                .ok_or_else(|| proto(err::BADOPTION, status::RBCD_PAC_PRINC))?;
+            ticket_cname = rbcd_pac_client(pac)?;
+        } else {
+            ticket_cname = st.part.cname.clone();
+        }
+        utf8_realm(&st.part.crealm)?.clone_into(&mut ticket_crealm);
+        subject_authtime = st.part.authtime.clone();
+        subject_pac.clone_from(&st.pac);
+        s4u2proxy = true;
+        check_s4u2proxy_policy(
+            tgs_padata,
+            &sname,
+            &enc_tkt.cname,
+            &st.server,
+            &server,
+            is_crossrealm,
+            is_referral,
+        )?;
+    } else if !s4u2self
+        && let Some(logon) = header_pac.as_ref().and_then(|p| {
+            let parsed = krb5_types::pac::Pac::parse(p).ok()?;
+            parsed
+                .unique_buffer(krb5_types::pac::PAC_LOGON_INFO)
+                .ok()
+                .flatten()
+                .map(<[u8]>::to_vec)
+        })
+    {
         evidence_logon = Some(if utf8_realm(&ap.ticket.realm)? == store.realm() {
             logon
         } else {
@@ -1006,7 +1049,14 @@ fn issue_tgs_body(
         });
     }
     let skip_transited = body.kdc_options.bit(flag_bit::DISABLE_TRANSITED_CHECK);
-    let u2u = u2u_session(store, req)?;
+    let u2u = if body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY) {
+        let st = stkt
+            .as_ref()
+            .ok_or_else(|| proto(err::BADOPTION, status::NO_2ND_TKT))?;
+        Some(u2u_from_stkt(st)?)
+    } else {
+        None
+    };
     let session_etype = match &u2u {
         Some((_, _, et)) => *et,
         None => select_session_keytype(&server, &body.etype, store.policy())?,
@@ -1020,10 +1070,8 @@ fn issue_tgs_body(
         (skey.key.clone(), skey.kvno, skey.etype)
     };
     let mut transited = enc_tkt.transited.clone();
-    // MIT do_tgs_req.c:684-690: header-server princ realm ≠ canonical server realm.
     let prev_hop = header_realm.as_str();
     let crealm = utf8_realm(&enc_tkt.crealm)?;
-    let is_crossrealm = tgs_header_is_crossrealm(prev_hop, &server.realm);
     // MIT check_tgs_lineage: a local user on a foreign TGT is POLICY
     // (skipped for S4U2Self).
     if crealm == store.realm() && is_crossrealm && !s4u2self {
@@ -1101,8 +1149,7 @@ fn issue_tgs_body(
             flags = flags.with_bit(flag_bit::TRANSITED_POLICY_CHECKED, true);
         }
     } else {
-        // MIT do_tgs_req.c:826-827: preserve subject authtime (CLIENT_INFO).
-        authtime = enc_tkt.authtime.clone();
+        authtime = subject_authtime.clone();
         starttime = now.clone();
         end = enc_tkt.endtime.clone();
         let life = requested_life(store, &server, body, &now);
@@ -1159,7 +1206,7 @@ fn issue_tgs_body(
             &krbtgt_key.key
         },
     )?;
-    if !s4u2self && !body.kdc_options.bit(flag_bit::CNAME_IN_ADDL_TKT) {
+    if !s4u2self && !s4u2proxy {
         crate::ad::check_normal_tgs_pac(&enc_tkt, header_pac.as_deref(), &server, is_crossrealm)?;
     }
     let include_pac = include_pac_for_reply(
@@ -1167,9 +1214,16 @@ fn issue_tgs_body(
         &server,
         tgs_padata,
         false,
-        header_pac.is_some(),
+        subject_pac.is_some(),
         flags.bit(flag_bit::ANONYMOUS),
     );
+    if s4u2proxy
+        && !is_crossrealm
+        && let (Some(raw), Some(st)) = (subject_pac.as_deref(), stkt.as_ref())
+    {
+        let hop = st.server.name.unparse_with_realm(&st.server.realm);
+        subject_pac = Some(update_delegation_info(raw, &sname, &hop)?);
+    }
     let ticket = mint_ticket(
         &tkt_key,
         tkt_kvno,
@@ -1189,10 +1243,10 @@ fn issue_tgs_body(
         include_pac,
         evidence_logon.as_deref(),
         &starttime,
-        if s4u2self || body.kdc_options.bit(flag_bit::CNAME_IN_ADDL_TKT) {
+        if s4u2self {
             None
         } else {
-            header_pac.as_deref()
+            subject_pac.as_deref()
         },
     )?;
     let mut s4u_rep_pa = None;
@@ -1341,6 +1395,60 @@ fn decrypt_presented_tgt(
 /// MIT `find_server_key` (`kdc_util.c:417-457`). kvno 0 means any kvno.
 /// No matching key, or a requested etype that is not similar, is
 /// `KRB5_KDB_NO_MATCHING_KEY` / `KRB5_KDB_NO_PERMITTED_KEY` → 60 `PROCESS_TGS`.
+/// MIT `decrypt_2ndtkt` (`do_tgs_req.c:257-307`).
+fn decrypt_2ndtkt(
+    store: &dyn PrincipalRead,
+    req: &TgsReq,
+    local_tgt: Option<&Principal>,
+) -> Result<Option<SecondTicket>, Error> {
+    let body = &req.0.req_body;
+    if !body.kdc_options.bit(flag_bit::CNAME_IN_ADDL_TKT)
+        && !body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY)
+    {
+        return Ok(None);
+    }
+    let Some(extra) = body.additional_tickets.as_ref().and_then(|v| v.first()) else {
+        return Ok(None);
+    };
+    let server = store
+        .fetch_name(&extra.sname)?
+        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::SECOND_TKT_SERVER))?;
+    if attr(&server, KDB_DISALLOW_ALL_TIX) || attr(&server, KDB_DISALLOW_SVR) {
+        return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::SECOND_TKT_SERVER));
+    }
+    let Ok(tkt_etype) = EncryptionType::from_iana(extra.enc_part.etype)
+        .or_else(|_| EncryptionType::known(extra.enc_part.etype))
+    else {
+        return Err(proto(err::GENERIC, status::SECOND_TKT_SERVER));
+    };
+    let kvno = extra.enc_part.kvno.unwrap_or(0);
+    let (key, _) = find_server_key(&server, Some(tkt_etype), kvno)
+        .map_err(|e| with_status(e, status::SECOND_TKT_SERVER))?;
+    let usage = KeyUsage::new(ku::TICKET)?;
+    let plain = decrypt(&key, usage, extra.enc_part.cipher.as_ref())
+        .map_err(|_| proto(err::BAD_INTEGRITY, status::SECOND_TKT_DECRYPT))?;
+    let part: EncTicketPart =
+        decode(&plain).map_err(|_| proto(err::BAD_INTEGRITY, status::SECOND_TKT_DECRYPT))?;
+    if extra.sname.is_krbtgt() {
+        let pac = crate::ad::get_verified_pac(&part, &key, &server, None)
+            .map_err(|e| with_status(e, status::SECOND_TKT_PAC))?;
+        return Ok(Some(SecondTicket { part, server, pac }));
+    }
+    let Some(tgt) = local_tgt else {
+        return Err(proto(err::GENERIC, status::GET_LOCAL_TGT));
+    };
+    let pac = crate::ad::get_verified_pac(&part, &key, &server, Some(tgt))
+        .map_err(|e| with_status(e, status::SECOND_TKT_PAC))?;
+    Ok(Some(SecondTicket { part, server, pac }))
+}
+
+fn u2u_from_stkt(st: &SecondTicket) -> Result<(ProtocolKey, u32, EncryptionType), Error> {
+    let etype = EncryptionType::from_iana(st.part.key.keytype)
+        .or_else(|_| EncryptionType::known(st.part.key.keytype))?;
+    let key = ProtocolKey::from_bytes(etype, st.part.key.keyvalue.as_ref())?;
+    Ok((key, 0, etype))
+}
+
 fn find_server_key(
     p: &Principal,
     search_enctype: Option<EncryptionType>,
@@ -1607,7 +1715,7 @@ fn enc_rep_part(
         srealm: ks(realm)?,
         sname: sname.clone(),
         caddr: None,
-        encrypted_pa_data: encrypted_pa_data.map(|p| vec![p].into()),
+        encrypted_pa_data: encrypted_pa_data.map(|p| vec![p]),
     })
 }
 

@@ -26,7 +26,7 @@ Schema: `MIT file:line | check | MIT status + wire code | Rust site | Rust e_tex
 Verdict ∈ {exact, stricter-documented (`docs/security.md` row), absent,
 deviation, deferred (reason + promotion oracle)}. Proof `none` only
 with deferred. A named gate cell or `diffsend` case that does not exist
-is `proposed`. The forty-nine live `diffsend` cases are `garbage-pdu`,
+is `proposed`. The fifty-eight live `diffsend` cases are `garbage-pdu`,
 `unknown-cname`, `etype-nosupp`, `as-session-enctype`, `wrong-realm`, `pauser-no-preauth`,
 `skewed-timestamp`, `as-needchange`, `as-invalid-opts`, `as-validate-before-preauth`,
 `as-optimistic-encts-wrong-etype`, `unknown-sname`, `as-success`, `as-retransmit`,
@@ -40,16 +40,19 @@ is `proposed`. The forty-nine live `diffsend` cases are `garbage-pdu`,
 `tgs-canonicalize-renew`, `tgs-expired-vs-unknown-sname`, `s4u2self-no-pac`,
 `s4u2self-pac-client-mismatch`, `pa-s4u-x509-user-bad-checksum`, `pa-s4u-x509-user-nonce`,
 `pa-for-user-only`, `pa-s4u-x509-user-empty`, `pa-for-user-undecodable`,
-`pa-s4u-x509-user`.
+`pa-s4u-x509-user`, `s4u2proxy-no-2nd-tkt`, `s4u2proxy-not-forwardable`,
+`s4u2proxy-u2u-combo`, `s4u2proxy-tgs-target`, `s4u2proxy-no-header-pac`,
+`s4u2proxy-header-pac`, `s4u2proxy-no-stkt-pac`, `s4u2proxy-evidence-mismatch`,
+`s4u2proxy-local-stkt-pac`.
 
 Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after A′-2 item 7):
+Counts (after A′-2 item 8):
 **328** = A1 117 + A2 80 + A3 63 + A4 68.
-exact 207 · stricter-documented 10 · deviation 59 ·
-absent 39 · deferred 13.
+exact 220 · stricter-documented 9 · deviation 52 ·
+absent 34 · deferred 13.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
 A2 10 (9 report rows + the `kdc_util.c:144-191` split) + A3 10 = 28
@@ -187,7 +190,7 @@ mismatches, not extra statuses.
 | do_tgs_req.c:649 `get_local_tgt` kdc_util.c:486 | no `krbtgt/<body.realm>@<body.realm>` | GET_LOCAL_TGT 60 (`KDB_NOENTRY`→GENERIC) | issue.rs issue_tgs_body | `GET_LOCAL_TGT` 60 | exact | `tgs_local_sname_unknown_body_realm_is_get_local_tgt`; `phase7_preauth.rs` GET_LOCAL_TGT; `capaths-transit-gate.sh` GARBAGE.EXAMPLE / dest RENEW |
 | ORDER do_tgs_req.c:649 vs tgs_policy.c:687 | GET_LOCAL_TGT before `check_tgs_times` | 60 then times | issue.rs issue_tgs_body | GET_LOCAL_TGT 60 before skeleton times; header `krb5int_validate_times` stays in PROCESS_TGS | deviation | proposed: diffsend: foreign `body.realm` + INVALID TGT (both 60 after PROCESS_TGS) |
 | do_tgs_req.c:662; kdc_util.c:597-602 | `get_verified_pac` for a TGS principal: only the server signature, with the key that opened the ticket | HEADER_PAC 41 `MODIFIED` (`verify_checksum`) / 60 `GENERIC` | krb5-kdc/ad.rs get_verified_pac | `HEADER_PAC` 41 `MODIFIED` / 60 `GENERIC` | exact | `tgs_corrupt_pac_before_unknown_sname_is_header_pac`; `tgs_rejects_corrupt_foreign_referral_pac`; `scripts/cross-kdc-gate.sh` MIT TGT → Rust TGS `kvno = 1` |
-| tgs_policy.c:622 `check_normal_tgs_pac` | PAC present but not client and not RBCD-deleg; MIT `:618-620` accepts a cross-TGS header whose PAC verifies as a delegation PAC | HEADER_PAC 13 | krb5-kdc/ad.rs check_normal_tgs_pac | missing PAC ok; client mismatch 13; cross-TGS `verify_deleg_pac` slot fail-closed (item 8) | stricter-documented | `tgs_pac_client_mismatch_is_header_pac`; `tgs_without_pac_still_issues`; diffsend `tgs-pac-client-mismatch`; docs/security.md TGS cross-TGS deleg PAC |
+| tgs_policy.c:622 `check_normal_tgs_pac` | PAC present but not client and not RBCD-deleg; MIT `:618-620` accepts a cross-TGS header whose PAC verifies as a delegation PAC | HEADER_PAC 13 | krb5-kdc/ad.rs check_normal_tgs_pac | missing PAC ok; client mismatch 13; cross-TGS `verify_deleg_pac` (`tgs_policy.c:366-421`) | exact (mismatch); live accept path is Samba | `tgs_pac_client_mismatch_is_header_pac`; `tgs_without_pac_still_issues`; diffsend `tgs-pac-client-mismatch`; docs/security.md TGS cross-TGS deleg PAC |
 | ORDER do_tgs_req.c:657 vs :669 | HEADER_PAC before `search_sprinc` | PAC 41 then LOOKING_UP_SERVER | krb5-kdc/ad.rs get_verified_pac; issue.rs issue_tgs_body | `HEADER_PAC` 41 before LOOKING_UP_SERVER | exact | diffsend `tgs-pac-corrupt-before-sname`; `tgs_corrupt_pac_before_unknown_sname_is_header_pac` |
 | do_tgs_req.c:536 `db_get_svc_princ` | server lookup fail | LOOKING_UP_SERVER 7 (remap :575) | issue.rs process_tgs_header | `unknown server` 7 | deviation | proposed: diffsend missing host; proposed: flags-gate.sh/kdc-gate.sh cell |
 | do_tgs_req.c:409 `find_alternate_tgs` | walk_realm_tree finds no intermediate TGS | UNKNOWN_SERVER 7 | no `find_alternate_tgs` | `unknown server` 7 (no realm-tree hop) | absent | proposed: diffsend `krbtgt/FAR` with only near hop; promote via `cross-realm-gate.sh` |
@@ -199,11 +202,11 @@ mismatches, not extra statuses.
 | kdc_util.c:1443 | empty user and empty cert | INVALID_S4U2SELF_REQUEST 6 | krb5-kdc/ad.rs process_s4u_x509_user | `INVALID_S4U2SELF_REQUEST` 6 | exact | diffsend `pa-s4u-x509-user-empty`; `s4u2self_x509_empty_is_invalid_request` |
 | kdc_util.c:1605 | local S4U user KDB NOENTRY | UNKNOWN_S4U2SELF_PRINCIPAL 6 | krb5-kdc/ad.rs s4u_from_userid | `UNKNOWN_S4U2SELF_PRINCIPAL` 6 | exact | `s4u2self_unknown_for_user_is_refused`; `scripts/s4u-mit-gate.sh` |
 | kdc_util.c:1608 | local S4U user lookup other error (cert-only `get_s4u_x509_principal` NOTSUPP on db2) | LOOKING_UP_S4U2SELF_PRINCIPAL 60 | krb5-kdc/ad.rs s4u_from_userid | `LOOKING_UP_S4U2SELF_PRINCIPAL` 60 | exact | `s4u2self_x509_cert_only_local_is_looking_up` |
-| do_tgs_req.c:283 | 2nd ticket server lookup/key | 2ND_TKT_SERVER (7 typical; no-key/unknown etype → 60) | ad.rs s4u2proxy_client / u2u ad.rs u2u_session | U2U missing/`DISALLOW` second-ticket server is **7** `2ND_TKT_SERVER`; no key of the ticket etype and unknown etype 99 are **60** `2ND_TKT_SERVER`; kvno-scoped search / `match_enctype` stay item 9 | exact (miss/DISALLOW/no-key/unknown etype); deviation (kvno/`match_enctype` → item 9) | `u2u_missing_second_ticket_server_is_2nd_tkt_server`; `r13_u2u_status.rs`; diffsend `u2u-2nd-ticket-unknown-server`; diffsend `u2u-2nd-ticket-bad-etype` |
-| do_tgs_req.c:288 | 2nd ticket decrypt fail | 2ND_TKT_DECRYPT 31 typical | ad.rs u2u_session; ad.rs s4u2proxy_client | U2U corrupt cipher is **31** `2ND_TKT_DECRYPT`; S4U2Proxy evidence decrypt stays item 9 | exact (U2U 31); deviation (S4U2Proxy → item 9) | diffsend `u2u-2nd-ticket-corrupt`; `r13_u2u_status.rs` |
-| do_tgs_req.c:294 | 2nd ticket PAC verify fail | 2ND_TKT_PAC 41 | ad.rs s4u2proxy_client S4U2Proxy; U2U skips PAC | `S4U2Proxy evidence PAC` 31; U2U none | deviation | proposed: diffsend U2U+bad PAC (security) |
+| do_tgs_req.c:283 | 2nd ticket server lookup/key | 2ND_TKT_SERVER (7 typical; no-key/unknown etype → 60) | issue.rs decrypt_2ndtkt | U2U and S4U2Proxy share `decrypt_2ndtkt`; missing/`DISALLOW` second-ticket server is **7** `2ND_TKT_SERVER`; no key of the ticket etype and unknown etype 99 are **60** `2ND_TKT_SERVER`; kvno-scoped search / `match_enctype` stay item 9 | exact (miss/DISALLOW/no-key/unknown etype); deviation (kvno/`match_enctype` → item 9) | `u2u_missing_second_ticket_server_is_2nd_tkt_server`; `r13_u2u_status.rs`; diffsend `u2u-2nd-ticket-unknown-server`; diffsend `u2u-2nd-ticket-bad-etype` |
+| do_tgs_req.c:288 | 2nd ticket decrypt fail | 2ND_TKT_DECRYPT 31 typical | issue.rs decrypt_2ndtkt | U2U and S4U2Proxy corrupt cipher is **31** `2ND_TKT_DECRYPT` | exact | diffsend `u2u-2nd-ticket-corrupt`; `r13_u2u_status.rs` |
+| do_tgs_req.c:294 | 2nd ticket PAC verify fail | 2ND_TKT_PAC 41 | issue.rs decrypt_2ndtkt | `2ND_TKT_PAC` 41 on both U2U and S4U2Proxy evidence | exact (path); live U2U+bad PAC still item 9 | `s4u2proxy_no_stkt_pac_is_modified` (missing PAC is `:472` 41, not this site); proposed: diffsend U2U+bad PAC |
 | do_tgs_req.c:319 | 2nd ticket session etype invalid | BAD_ETYPE_IN_2ND_TKT 14 | ad.rs s4u2proxy_client `from_iana` | crypto/known fail, not that e_text | absent | proposed: diffsend U2U bogus session etype |
-| do_tgs_req.c:740 | cross S4U2Proxy PAC client extract fail | RBCD_PAC_PRINC 13 | no `get_pac_princ_with_realm` | no cross-RBCD PAC princ | absent | proposed: diffsend cross CNAME-IN-ADDL-TKT |
+| do_tgs_req.c:740 | cross S4U2Proxy PAC client extract fail | RBCD_PAC_PRINC 13 | ad.rs rbcd_pac_client | `RBCD_PAC_PRINC` 13 | absent (code in tree; live Samba) | proposed: diffsend cross CNAME-IN-ADDL-TKT |
 | do_tgs_req.c:767 | `get_auth_indicators` fail | GET_AUTH_INDICATORS (varies) | — | no CAMMAC extract | absent | proposed: diffsend truncated CAMMAC |
 | do_tgs_req.c:792 | header transited `tr_type != 1` on add path | VALIDATE_TRANSIT_TYPE 17 | issue.rs issue_tgs_body | `VALIDATE_TRANSIT_TYPE` 17 | exact | `transited_add_path_type_and_ill_formed` |
 | do_tgs_req.c:799 | `add_to_transited` fail | ADD_TO_TRANSITED_LIST 43 (`ILL_CR_TKT`; kdc_transit.c:214+) | issue.rs issue_tgs_body | `ADD_TO_TRANSITED_LIST` 43 | exact | `transited_add_path_type_and_ill_formed`; `capaths-compress-gate.sh` |
@@ -238,19 +241,19 @@ mismatches, not extra statuses.
 | tgs_policy.c:580 | U2U without 2nd ticket | NO_2ND_TKT 13 | ad.rs s4u2proxy_client | `U2U needs additional-ticket` 13 | deviation | proposed: diffsend ENC_TKT_IN_SKEY no additional-ticket |
 | tgs_policy.c:587 | U2U 2nd ticket not local TGS | 2ND_TKT_NOT_TGS 12 | ad.rs s4u2proxy_client decrypt w/ local krbtgt only | no TGS-princ/instance check | absent | proposed: diffsend U2U service ticket as 2nd |
 | tgs_policy.c:593 | U2U 2nd ticket client ≠ requested server | 2ND_TKT_MISMATCH 26 | — | — | absent | proposed: diffsend U2U admin TGT for host sname (`u2u_encrypts_ticket_in_additional_tgt_session` does not assert match) |
-| tgs_policy.c:432 | S4U2Proxy without 2nd ticket | NO_2ND_TKT 13 | ad.rs pac_from_ticket_part | `S4U2Proxy needs additional-ticket` 13 | deviation | proposed: diffsend CNAME-IN-ADDL-TKT no ticket |
-| tgs_policy.c:436 | evidence not forwardable | EVIDENCE_TKT_NOT_FORWARDABLE 13 | ad.rs s4u2proxy_client | `S4U2Proxy evidence ticket is not forwardable` 13 | deviation | `s4u2proxy_rejects_non_forwardable_evidence` (code); proposed: s4u-mit-gate.sh |
-| tgs_policy.c:443 | S4U2Proxy + NON_TGT_OPTION or ENC_TKT_IN_SKEY | INVALID_S4U2PROXY_OPTIONS 13 | — | combo not rejected as that status | absent | proposed: diffsend CNAME-IN-ADDL-TKT+RENEW/U2U |
-| tgs_policy.c:449 | S4U2Proxy target is TGS princ | NOT_ALLOWED_TO_DELEGATE 12 | — | no TGT-target deny | absent | proposed: diffsend S4U2Proxy `krbtgt/REALM` |
-| tgs_policy.c:455 | S4U2Proxy header PAC missing | S4U2PROXY_NO_HEADER_PAC 20 | — | — | absent | proposed: diffsend (security) |
-| tgs_policy.c:460 | S4U2Proxy header PAC not impersonator | S4U2PROXY_HEADER_PAC 13 | — | — | absent | proposed: diffsend |
-| tgs_policy.c:472 | S4U2Proxy evidence PAC missing | S4U2PROXY_NO_STKT_PAC 41 | ad.rs s4u2proxy_client | `S4U2Proxy evidence PAC` 31 | deviation | proposed: diffsend |
-| tgs_policy.c:480 | same-realm evidence server ≠ header client | EVIDENCE_TICKET_MISMATCH 26 | ad.rs s4u2proxy_client | `evidence sname must match TGT client` 13 | deviation | proposed: diffsend; proposed: s4u-mit-gate.sh |
-| tgs_policy.c:488 | same-realm evidence PAC ≠ evidence client | S4U2PROXY_LOCAL_STKT_PAC 13 | ad.rs s4u2proxy_client signatures only | no PAC-client match status | absent | proposed: diffsend |
-| tgs_policy.c:503 | cross evidence not referral TGT to us | XREALM_EVIDENCE_TICKET_MISMATCH 13 | — | no cross-RBCD evidence TGT path | absent | proposed: diffsend |
-| tgs_policy.c:512 + :365 `verify_deleg_pac` | cross evidence PAC deleg info | S4U2PROXY_CROSS_STKT_PAC 13 | — | — | absent | proposed: diffsend |
-| tgs_policy.c:541 | referral S4U2Proxy without PA-PAC-OPTIONS RBCD | UNSUPPORTED_S4U2PROXY_REQUEST 13 | ad.rs pac_from_ticket_part RBCD bit; referral policy not MIT-shaped | `RBCD not allowed` / `constrained delegation not allowed` 13 | deviation | `s4u2proxy_classic_denied_without_allowed_to`; `s4u2proxy_honors_pac_options_rbcd` |
-| tgs_policy.c:569 | KDB deny RBCD/classic | NOT_ALLOWED_TO_DELEGATE 13 (same string as :449 but 13 not 12) | ad.rs s4u2proxy_client | `RBCD not allowed` / `constrained delegation not allowed` 13 | deviation | `s4u2proxy_classic_denied_without_allowed_to`; proposed: s4u-mit-gate.sh |
+| tgs_policy.c:432 / do_tgs_req.c:731 | S4U2Proxy without 2nd ticket | `check_tgs_s4u2proxy` would be NO_2ND_TKT 13; gather `kau_make_tkt_id(NULL)` is EINVAL → 60 UNKNOWN_REASON first | issue.rs issue_tgs_body | `UNKNOWN_REASON` 60 | exact | diffsend `s4u2proxy-no-2nd-tkt`; `s4u2proxy_no_2nd_tkt_is_unknown_reason` |
+| tgs_policy.c:436 | evidence not forwardable | EVIDENCE_TKT_NOT_FORWARDABLE 13 | ad.rs check_tgs_s4u2proxy | `EVIDENCE_TKT_NOT_FORWARDABLE` 13 | exact | diffsend `s4u2proxy-not-forwardable`; `s4u2proxy_rejects_non_forwardable_evidence` |
+| tgs_policy.c:443 | S4U2Proxy + NON_TGT_OPTION or ENC_TKT_IN_SKEY | INVALID_S4U2PROXY_OPTIONS 13 | ad.rs check_tgs_s4u2proxy | `INVALID_S4U2PROXY_OPTIONS` 13 (U2U combo; RENEW is `check_tgs_nontgt` first) | exact | diffsend `s4u2proxy-u2u-combo`; `s4u2proxy_u2u_combo_is_invalid_options` |
+| tgs_policy.c:449 | S4U2Proxy target is TGS princ | NOT_ALLOWED_TO_DELEGATE 12 | ad.rs check_tgs_s4u2proxy | `NOT_ALLOWED_TO_DELEGATE` 12 | exact | diffsend `s4u2proxy-tgs-target`; `s4u2proxy_tgs_target_is_policy`; `scripts/s4u-mit-gate.sh` `kvno -U user -P krbtgt` |
+| tgs_policy.c:455 | S4U2Proxy header PAC missing | S4U2PROXY_NO_HEADER_PAC 20 | ad.rs check_tgs_s4u2proxy | `S4U2PROXY_NO_HEADER_PAC` 20 | exact | diffsend `s4u2proxy-no-header-pac`; `s4u2proxy_no_header_pac_is_tgt_revoked` |
+| tgs_policy.c:460 | S4U2Proxy header PAC not impersonator | S4U2PROXY_HEADER_PAC 13 | ad.rs check_tgs_s4u2proxy | `S4U2PROXY_HEADER_PAC` 13 | exact | diffsend `s4u2proxy-header-pac` |
+| tgs_policy.c:472 | S4U2Proxy evidence PAC missing | S4U2PROXY_NO_STKT_PAC 41 | ad.rs check_tgs_s4u2proxy | `S4U2PROXY_NO_STKT_PAC` 41 | exact | diffsend `s4u2proxy-no-stkt-pac`; `s4u2proxy_no_stkt_pac_is_modified` |
+| tgs_policy.c:480 | same-realm evidence server ≠ header client | EVIDENCE_TICKET_MISMATCH 26 | ad.rs check_tgs_s4u2proxy | `EVIDENCE_TICKET_MISMATCH` 26 | exact | diffsend `s4u2proxy-evidence-mismatch`; `s4u2proxy_evidence_mismatch_is_server_nomatch` |
+| tgs_policy.c:488 | same-realm evidence PAC ≠ evidence client | S4U2PROXY_LOCAL_STKT_PAC 13 | ad.rs check_tgs_s4u2proxy | `S4U2PROXY_LOCAL_STKT_PAC` 13 | exact | diffsend `s4u2proxy-local-stkt-pac` |
+| tgs_policy.c:503 | cross evidence not referral TGT to us | XREALM_EVIDENCE_TICKET_MISMATCH 13 | ad.rs check_tgs_s4u2proxy | `XREALM_EVIDENCE_TICKET_MISMATCH` 13 | absent (code in tree; live Samba) | proposed: diffsend; `samba-crossrealm-gate.sh` |
+| tgs_policy.c:512 + :365 `verify_deleg_pac` | cross evidence PAC deleg info | S4U2PROXY_CROSS_STKT_PAC 13 | ad.rs verify_deleg_pac | `S4U2PROXY_CROSS_STKT_PAC` 13 | absent (code in tree; live Samba) | proposed: diffsend; `samba-crossrealm-gate.sh` |
+| tgs_policy.c:541 | referral S4U2Proxy without PA-PAC-OPTIONS RBCD | UNSUPPORTED_S4U2PROXY_REQUEST 13 | ad.rs check_s4u2proxy_policy | `UNSUPPORTED_S4U2PROXY_REQUEST` 13 | exact (unit); live Samba | `s4u2proxy_honors_pac_options_rbcd` |
+| tgs_policy.c:569 | KDB deny RBCD/classic | NOT_ALLOWED_TO_DELEGATE 13 (same string as :449 but 13 not 12) | ad.rs check_s4u2proxy_policy | empty `s4u_allowed_to`/`from` is deny **13** `NOT_ALLOWED_TO_DELEGATE`; MIT db2 hooks are NULL → `UNSUPPORTED_S4U2PROXY_REQUEST` 13 | exact (our store); deviation (MIT db2 e_text) | `s4u2proxy_classic_denied_without_allowed_to`; `s4u2proxy_first_hop_adds_delegation_info` |
 | tgs_policy.c:108 | `RENEWABLE` + server `DISALLOW_RENEWABLE` | NON-RENEWABLE TICKET 12 | issue.rs renew_till_for strips R | issues, flag cleared | deviation | `tgs_strips_renewable_when_server_disallow_renewable` (laxer) |
 | tgs_policy.c:110 | `ALLOW_POSTDATE` + server `DISALLOW_POSTDATED` | NON-POSTDATABLE TICKET 10 | issue.rs renew_till_for | `NON-POSTDATABLE TICKET` 10 (also fires on `POSTDATED` bit; MIT keys only on `KDC_OPT_ALLOW_POSTDATE`) | deviation (stricter; extra POSTDATED bit; no security.md row) | proposed: diffsend TGS MAY_POSTDATE + DISALLOW_POSTDATED; proposed security.md row |
 | tgs_policy.c:112 | `ENC_TKT_IN_SKEY` + `DISALLOW_DUP_SKEY` | DUP_SKEY DISALLOWED 12 | no `KDB_DISALLOW_DUP_SKEY` in store.rs | — | absent | proposed: diffsend; proposed: flags-gate.sh allow_dup_skey |

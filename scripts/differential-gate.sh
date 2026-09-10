@@ -164,7 +164,7 @@ echo "$DIFF" | grep -q '"case":"as-invalid-opts","outcome":"ok","error_code":13'
 echo "$DIFF" | grep -q '"case":"as-request-anonymous","outcome":"ok","error_code":13,"e_text":"VALIDATE_ANONYMOUS_PRINCIPAL"' || die "as-request-anonymous not code 13 e_text VALIDATE_ANONYMOUS_PRINCIPAL on both legs"
 echo "$DIFF" | grep -q '"case":"as-validate-before-preauth","outcome":"ok","error_code":23' || die "as-validate-before-preauth (preauth+needchange) not code 23 on both legs"
 echo "$DIFF" | grep -q '"case":"as-retransmit","outcome":"ok","rust_retransmit_identical":true,"mit_retransmit_identical":true' || die "as-retransmit reply not identical from the lookaside on both legs"
-echo "$DIFF" | grep -q '"outcome":"ok","cases":49' || die "diffsend did not finish 49 cases"
+echo "$DIFF" | grep -q '"outcome":"ok","cases":58' || die "diffsend did not finish 58 cases"
 echo "$DIFF" | grep -q '"case":"fast-armor-no-subkey","outcome":"ok","error_code":12,"e_text":"FIND_FAST"' || die "fast-armor-no-subkey not code 12 e_text FIND_FAST on both legs"
 echo "$DIFF" | grep -q '"case":"armor-ap-req-as-pa-tgs-req","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS"' || die "armor-ap-req-as-pa-tgs-req not code 12 e_text PROCESS_TGS on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-ad-fx-armor-authenticator","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS"' || die "tgs-ad-fx-armor-authenticator not code 12 e_text PROCESS_TGS on both legs"
@@ -196,6 +196,15 @@ echo "$DIFF" | grep -q '"case":"pa-for-user-only","outcome":"ok","rust_tag":"0x6
 echo "$DIFF" | grep -q '"case":"pa-s4u-x509-user-empty","outcome":"ok","error_code":6,"e_text":"INVALID_S4U2SELF_REQUEST"' || die "pa-s4u-x509-user-empty not code 6 e_text INVALID_S4U2SELF_REQUEST on both legs"
 echo "$DIFF" | grep -q '"case":"pa-for-user-undecodable","outcome":"ok","error_code":60,"e_text":"DECODE_PA_FOR_USER"' || die "pa-for-user-undecodable not code 60 e_text DECODE_PA_FOR_USER on both legs"
 echo "$DIFF" | grep -q '"case":"pa-s4u-x509-user","outcome":"ok".*"reply_padata":130' || die "pa-s4u-x509-user not reply_padata 130 on both legs"
+echo "$DIFF" | grep -q '"case":"s4u2proxy-no-2nd-tkt","outcome":"ok","error_code":60,"e_text":"UNKNOWN_REASON"' || die "s4u2proxy-no-2nd-tkt not code 60 e_text UNKNOWN_REASON on both legs"
+echo "$DIFF" | grep -q '"case":"s4u2proxy-not-forwardable","outcome":"ok","error_code":13,"e_text":"EVIDENCE_TKT_NOT_FORWARDABLE"' || die "s4u2proxy-not-forwardable not code 13 e_text EVIDENCE_TKT_NOT_FORWARDABLE on both legs"
+echo "$DIFF" | grep -q '"case":"s4u2proxy-u2u-combo","outcome":"ok","error_code":13,"e_text":"INVALID_S4U2PROXY_OPTIONS"' || die "s4u2proxy-u2u-combo not code 13 e_text INVALID_S4U2PROXY_OPTIONS on both legs"
+echo "$DIFF" | grep -q '"case":"s4u2proxy-tgs-target","outcome":"ok","error_code":12,"e_text":"NOT_ALLOWED_TO_DELEGATE"' || die "s4u2proxy-tgs-target not code 12 e_text NOT_ALLOWED_TO_DELEGATE on both legs"
+echo "$DIFF" | grep -q '"case":"s4u2proxy-no-header-pac","outcome":"ok","error_code":20,"e_text":"S4U2PROXY_NO_HEADER_PAC"' || die "s4u2proxy-no-header-pac not code 20 e_text S4U2PROXY_NO_HEADER_PAC on both legs"
+echo "$DIFF" | grep -q '"case":"s4u2proxy-header-pac","outcome":"ok","error_code":13,"e_text":"S4U2PROXY_HEADER_PAC"' || die "s4u2proxy-header-pac not code 13 e_text S4U2PROXY_HEADER_PAC on both legs"
+echo "$DIFF" | grep -q '"case":"s4u2proxy-no-stkt-pac","outcome":"ok","error_code":41,"e_text":"S4U2PROXY_NO_STKT_PAC"' || die "s4u2proxy-no-stkt-pac not code 41 e_text S4U2PROXY_NO_STKT_PAC on both legs"
+echo "$DIFF" | grep -q '"case":"s4u2proxy-evidence-mismatch","outcome":"ok","error_code":26,"e_text":"EVIDENCE_TICKET_MISMATCH"' || die "s4u2proxy-evidence-mismatch not code 26 e_text EVIDENCE_TICKET_MISMATCH on both legs"
+echo "$DIFF" | grep -q '"case":"s4u2proxy-local-stkt-pac","outcome":"ok","error_code":13,"e_text":"S4U2PROXY_LOCAL_STKT_PAC"' || die "s4u2proxy-local-stkt-pac not code 13 e_text S4U2PROXY_LOCAL_STKT_PAC on both legs"
 # W1-K M2b: the differential oracle has no case-name whitelist; no diffsend line
 # may carry a "whitelist" key.
 if echo "$DIFF" | grep -q '"whitelist"'; then
