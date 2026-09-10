@@ -4470,17 +4470,34 @@ fn interrealm_issue_key_is_not_the_peer_accept_key() {
         .create_interrealm_key(&acl, &documented_admin_id(), "AD.KERBER.TEST", issue_key)
         .expect("issue");
     store
-        .add_interrealm_decrypt_key(&acl, &documented_admin_id(), "AD.KERBER.TEST", accept_key)
+        .set_interrealm_decrypt_key(&acl, &documented_admin_id(), "AD.KERBER.TEST", accept_key)
         .expect("accept");
     let ir_name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "AD.KERBER.TEST"]);
     let ir = store.get_name(&ir_name).expect("ir");
-    assert_eq!(ir.keys.len(), 2);
+    assert_eq!(ir.keys.len(), 1);
     assert_eq!(
         ir.best_key().unwrap().key.as_bytes(),
         issue_bytes.as_slice(),
         "TGS issue must use the inbound AD key"
     );
-    assert!(ir.keys.iter().any(|k| k.key.as_bytes() == accept_bytes));
+    let incoming_id = krb5_kdc::lookup_principal_id(
+        &PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", TEST_REALM]),
+        "AD.KERBER.TEST",
+    );
+    let incoming = store.get(&incoming_id).expect("incoming trust");
+    assert_eq!(incoming.realm, "AD.KERBER.TEST");
+    assert!(
+        incoming
+            .keys
+            .iter()
+            .any(|k| k.key.as_bytes() == accept_bytes)
+    );
+    assert!(
+        !incoming
+            .keys
+            .iter()
+            .any(|k| k.key.as_bytes() == issue_bytes)
+    );
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 81);
     let tgs = tgs_req_ex(

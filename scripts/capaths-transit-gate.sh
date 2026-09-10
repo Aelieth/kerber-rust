@@ -881,7 +881,7 @@ for _ in $(seq 1 40); do
     break
 done
 [ "$ok" = 1 ]
-KRB5_TEST_DISALLOW_TIX=krbtgt/B.TEST start_c /tmp/kdc-c-allow.conf /tmp/kdc-c-disallow.log
+KRB5_TEST_DISALLOW_TIX=krbtgt/C.TEST@B.TEST start_c /tmp/kdc-c-allow.conf /tmp/kdc-c-disallow.log
 if ! wait_listen /tmp/kdc-c-disallow.log; then
     docker exec "$NAME" cat /tmp/kdc-c-disallow.log >&2 || true
     log "capaths.gate" "error" ',"error":"disallow KDC C did not listen"'
@@ -1058,6 +1058,118 @@ if [ "$mit_s4u_xr_rc" -eq 0 ]; then
 else
     echo "$MIT_S4U_XR" | grep -qiE "Cannot find KDC|Server not found|not found in Kerberos database|KDC policy rejects|S4U2SELF"
 fi
+
+echo "==== foreign TGT RENEW of local krbtgt is 26 on MIT A and Rust A ===="
+docker exec "$NAME" sh -c 'for p in /proc/[0-9]*; do
+  comm=$(cat "$p/comm" 2>/dev/null) || continue
+  [ "$comm" = krb5-kdc ] || continue
+  cmd=$(tr "\0" " " < "$p/cmdline" 2>/dev/null) || continue
+  echo "$cmd" | grep -q "/tmp/krb5-kdc --test-realm 127.0.0.1:88" || continue
+  kill -9 "${p#/proc/}" 2>/dev/null || true
+done'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.15)" 2>/dev/null; then
+        sleep 0.2
+        continue
+    fi
+    ok=1
+    break
+done
+[ "$ok" = 1 ]
+start_mit A.TEST /tmp/kdc-A.conf /tmp/mit-a-r16.log /tmp/mit-a.pid
+wait_port 88 || {
+    docker exec "$NAME" cat /tmp/mit-a-r16.log 2>/dev/null || true
+    log "capaths.gate" "error" ',"error":"MIT A for R16 RENEW did not listen"'
+    exit 1
+}
+docker exec \
+    -e KRB5_CONFIG=/tmp/client-capaths.conf \
+    -e KRB5_KDC_PROFILE=/tmp/kdc-A.conf \
+    "$NAME" kadmin.local -r A.TEST -q "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_PW} krbtgt/A.TEST@B.TEST"
+docker exec \
+    -e KRB5_CONFIG=/tmp/client-capaths.conf \
+    -e KRB5_KDC_PROFILE=/tmp/kdc-A.conf \
+    "$NAME" kadmin.local -r A.TEST -q "ktadd -norandkey -k /tmp/mit-a-krbtgt.kt krbtgt/A.TEST"
+MIT_A_TGT_KEY="$(docker exec "$NAME" /tmp/krb5-pac-extract --dump-keytab /tmp/mit-a-krbtgt.kt \
+    | awk '$1=="KEY"{print $3; exit}')"
+[ "${#MIT_A_TGT_KEY}" -eq 64 ]
+docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+    sh -c "printf 'userpassword\n' | kinit -r 7d -c /tmp/krb5cc_mit_r16 user@A.TEST"
+docker exec "$NAME" /tmp/krb5-forge-tgt \
+    --ccache /tmp/krb5cc_mit_r16 --out /tmp/krb5cc_mit_r16_xr \
+    --tgt krbtgt/A.TEST --claim-realm B.TEST \
+    --key-hex "${MIT_A_TGT_KEY}" \
+    --reseal-password "${XR_PW}" --reseal-principal 'krbtgt/A.TEST@B.TEST'
+set +e
+MIT_RENEW="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+    /tmp/krb5-kvno --renew --body-realm A.TEST -c /tmp/krb5cc_mit_r16_xr \
+    127.0.0.1:88 krbtgt/A.TEST@A.TEST 2>&1)"
+mit_renew_rc=$?
+set -e
+echo "MIT_renew_server_mismatch rc=${mit_renew_rc}"
+echo "$MIT_RENEW"
+if [ "$mit_renew_rc" -eq 0 ]; then
+    echo "MIT A RENEW of krbtgt/A@B as krbtgt/A@A must be 26" >&2
+    exit 1
+fi
+echo "$MIT_RENEW" | grep -q "SERVER DIDN'T MATCH TICKET FOR RENEW" || {
+    echo "MIT A R16: kvno missing SERVER DIDN'T MATCH TICKET FOR RENEW" >&2
+    exit 1
+}
+docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/mit-a.pid)" 2>/dev/null || true'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.15)" 2>/dev/null; then
+        sleep 0.2
+        continue
+    fi
+    ok=1
+    break
+done
+[ "$ok" = 1 ]
+docker exec -d \
+    -e KRB5_TEST_USER_PASSWORD=userpassword \
+    -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
+    -e KRB5_TEST_REALM=A.TEST \
+    -e KRB5_TEST_FOREIGN_REALM=B.TEST \
+    -e KRB5_TEST_INTERREALM_KEY="$XR_KEY" \
+    -e KRB5_TEST_HOST=svc.a.test \
+    -e KRB5_EXPORT_KRBTGT_KEYTAB=/tmp/rust-a-krbtgt.kt \
+    "$NAME" sh -c '/tmp/krb5-kdc --test-realm 127.0.0.1:88 >/tmp/kdc-a-r16.log 2>&1'
+if ! wait_listen /tmp/kdc-a-r16.log; then
+    docker exec "$NAME" cat /tmp/kdc-a-r16.log >&2 || true
+    log "capaths.gate" "error" ',"error":"Rust A for R16 RENEW did not listen"'
+    exit 1
+fi
+RUST_A_TGT_KEY="$(docker exec "$NAME" /tmp/krb5-pac-extract --dump-keytab /tmp/rust-a-krbtgt.kt \
+    | awk '$1=="KEY"{print $3; exit}')"
+[ "${#RUST_A_TGT_KEY}" -eq 64 ]
+docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+    sh -c "printf 'userpassword\n' | kinit -r 7d -c /tmp/krb5cc_rust_r16 user@A.TEST"
+docker exec "$NAME" /tmp/krb5-forge-tgt \
+    --ccache /tmp/krb5cc_rust_r16 --out /tmp/krb5cc_rust_r16_xr \
+    --tgt krbtgt/A.TEST --claim-realm B.TEST \
+    --key-hex "${RUST_A_TGT_KEY}" \
+    --reseal-key-hex "${XR_KEY}"
+set +e
+RUST_RENEW="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+    /tmp/krb5-kvno --renew --body-realm A.TEST -c /tmp/krb5cc_rust_r16_xr \
+    127.0.0.1:88 krbtgt/A.TEST@A.TEST 2>&1)"
+rust_renew_rc=$?
+set -e
+echo "rust_renew_server_mismatch rc=${rust_renew_rc}"
+echo "$RUST_RENEW"
+if [ "$rust_renew_rc" -eq 0 ]; then
+    echo "Rust A RENEW of krbtgt/A@B as krbtgt/A@A must be 26" >&2
+    docker exec "$NAME" cat /tmp/kdc-a-r16.log >&2 || true
+    exit 1
+fi
+echo "$RUST_RENEW" | grep -q "SERVER DIDN'T MATCH TICKET FOR RENEW" || {
+    echo "Rust A R16: kvno missing SERVER DIDN'T MATCH TICKET FOR RENEW" >&2
+    docker exec "$NAME" cat /tmp/kdc-a-r16.log >&2 || true
+    exit 1
+}
 
 log "capaths.gate" "ok" \
     ",\"path\":\"A.TEST>B.TEST>C.TEST\",\"permitted\":true,\"rejected\":true,\"transited_tr_type\":${MIT_TR_TYPE},\"transited_contents\":\"${MIT_TR_CONTENTS}\",\"transited_policy_checked\":true,\"reject_bad_transit_false\":true,\"disable_transited_check\":true"

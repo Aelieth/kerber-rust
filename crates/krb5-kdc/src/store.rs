@@ -1684,6 +1684,7 @@ impl PrincipalStore {
         if let Some(p) = self.map.get(&id) {
             self.note_ulog(id.clone(), false, Some(p.clone()));
         }
+        self.ensure_incoming_trust(foreign_realm);
         self.save_if_configured()
     }
 
@@ -1718,19 +1719,18 @@ impl PrincipalStore {
             0,
         );
         self.put_principal(p);
+        self.ensure_incoming_trust(foreign_realm);
         self.save_if_configured()
     }
 
-    /// Extra inter-realm key used only to decrypt tickets the peer issued.
+    /// Incoming trust `krbtgt/<local>@<foreign>` (MIT KDB naming).
     ///
-    /// Windows TDOs derive inbound and outbound AES keys from the same
-    /// password with different salts. The decrypt key sits one kvno below the
-    /// issue key so [`Principal::first_current_key`] and [`Principal::best_key`]
-    /// stay the issue key; ticket decryption tries every stored key.
+    /// `replace` drops keys already on that principal (the first
+    /// `KRB5_TEST_INTERREALM_KEY_ACCEPT` value). Further keys append.
     ///
     /// # Errors
     ///
-    /// [`Error::AclDenied`] or [`Error::NotFound`].
+    /// [`Error::AclDenied`].
     pub fn add_interrealm_decrypt_key(
         &mut self,
         acl: &Acl,
@@ -1738,22 +1738,86 @@ impl PrincipalStore {
         foreign_realm: &str,
         key: ProtocolKey,
     ) -> Result<(), Error> {
-        let name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", foreign_realm]);
-        let id = crate::kdb::lookup_principal_id(&name, &self.realm);
+        self.put_incoming_trust_key(acl, actor, foreign_realm, key, false)
+    }
+
+    /// Replace keys on the incoming trust principal.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AclDenied`].
+    pub fn set_interrealm_decrypt_key(
+        &mut self,
+        acl: &Acl,
+        actor: &str,
+        foreign_realm: &str,
+        key: ProtocolKey,
+    ) -> Result<(), Error> {
+        self.put_incoming_trust_key(acl, actor, foreign_realm, key, true)
+    }
+
+    fn put_incoming_trust_key(
+        &mut self,
+        acl: &Acl,
+        actor: &str,
+        foreign_realm: &str,
+        key: ProtocolKey,
+        replace: bool,
+    ) -> Result<(), Error> {
+        let name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", self.realm.as_str()]);
+        let id = crate::kdb::lookup_principal_id(&name, foreign_realm);
         acl.check(actor, AdminOp::Create, Some(&id))?;
-        let id = self.resolve_id(&id).ok_or(Error::NotFound)?;
-        let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
-        let kvno = p
-            .keys
-            .iter()
-            .map(|k| k.kvno)
-            .min()
-            .unwrap_or(1)
-            .saturating_sub(1);
-        p.keys.insert(0, KeyEntry::new(key.etype(), key, kvno));
-        let snap = p.clone();
-        self.note_ulog(id, false, Some(snap));
+        if let Some(p) = self.map.get_mut(&id) {
+            if replace {
+                p.keys.clear();
+                p.keys.push(KeyEntry::new(key.etype(), key, 1));
+            } else {
+                let kvno = p
+                    .keys
+                    .iter()
+                    .map(|k| k.kvno)
+                    .max()
+                    .unwrap_or(0)
+                    .saturating_add(1);
+                p.keys.push(KeyEntry::new(key.etype(), key, kvno));
+            }
+            let snap = p.clone();
+            self.note_ulog(id, false, Some(snap));
+            return self.save_if_configured();
+        }
+        let salt = name.default_salt(foreign_realm);
+        let p = Principal::from_keys(
+            name,
+            foreign_realm.to_owned(),
+            vec![KeyEntry::new(key.etype(), key, 1)],
+            salt,
+            false,
+            0,
+            false,
+            0,
+        );
+        self.put_principal(p);
         self.save_if_configured()
+    }
+
+    fn ensure_incoming_trust(&mut self, foreign_realm: &str) {
+        let out_name = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", foreign_realm]);
+        let out_id = crate::kdb::lookup_principal_id(&out_name, &self.realm);
+        let Some(out) = self.map.get(&out_id).cloned() else {
+            return;
+        };
+        let in_name =
+            PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", self.realm.as_str()]);
+        let in_id = crate::kdb::lookup_principal_id(&in_name, foreign_realm);
+        if self.map.contains_key(&in_id) {
+            return;
+        }
+        let mut incoming = out;
+        incoming.name = in_name;
+        foreign_realm.clone_into(&mut incoming.realm);
+        incoming.salt = incoming.name.default_salt(foreign_realm);
+        incoming.rid = 0;
+        self.put_principal(incoming);
     }
 
     /// ACL-gated password change (admin `c` / `*`).
@@ -2780,15 +2844,16 @@ impl PrincipalStore {
 
     fn settle_rid(&mut self, p: &mut Principal) {
         if p.rid == 0 && p.alias_target().is_none() {
-            p.rid = self.alloc_rid(&p.name);
+            if p.name.is_krbtgt_for(&self.realm) && p.realm == self.realm {
+                p.rid = RID_KRBTGT;
+            } else {
+                p.rid = self.alloc_rid(&p.name);
+            }
         }
         self.bump_next_rid(p.rid);
     }
 
     fn alloc_rid(&mut self, name: &PrincipalName) -> u32 {
-        if name.is_krbtgt_for(&self.realm) {
-            return RID_KRBTGT;
-        }
         if name.name_type == PrincipalName::NT_PRINCIPAL
             && name
                 .components_joined()

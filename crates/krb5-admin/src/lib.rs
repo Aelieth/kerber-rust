@@ -621,7 +621,23 @@ impl<'a> AdminSession<'a> {
     ///
     /// [`Error::NotFound`].
     pub fn get_principal_record(&self, name: &PrincipalName) -> Result<krb5_kdc::Principal, Error> {
-        self.store.get_name(name).cloned().ok_or(Error::NotFound)
+        self.get_principal_record_in(name, self.store.realm())
+    }
+
+    /// [`Self::get_principal_record`] for `name@princ_realm`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`].
+    pub fn get_principal_record_in(
+        &self,
+        name: &PrincipalName,
+        princ_realm: &str,
+    ) -> Result<krb5_kdc::Principal, Error> {
+        self.store
+            .get_in_realm(name, princ_realm)
+            .cloned()
+            .ok_or(Error::NotFound)
     }
 
     /// `modprinc` attributes only.

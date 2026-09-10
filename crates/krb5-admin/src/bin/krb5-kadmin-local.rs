@@ -213,9 +213,9 @@ fn run(
         }
         Some("getprinc" | "get_principal") => {
             let spec = parts.get(1).ok_or("getprinc <name>")?;
-            let name = parse_name(sess, spec)?;
-            let canon = name.unparse_with_realm(sess.realm());
-            match sess.get_principal_record(&name) {
+            let (name, realm) = parse_name_realm(sess, spec)?;
+            let canon = name.unparse_with_realm(&realm);
+            match sess.get_principal_record_in(&name, &realm) {
                 Ok(p) => {
                     let policy_missing = p
                         .pw_policy
@@ -667,6 +667,31 @@ mod tests {
 
     fn q(sess: &mut AdminSession<'_>, line: &str) -> Result<LineOutcome, String> {
         run(sess, line, &mut io::empty())
+    }
+
+    #[test]
+    fn a2_r16_getprinc_incoming_trust_uses_foreign_realm_id() {
+        let (mut store, acl) = sess_pair();
+        let ir = krb5_crypto::ProtocolKey::from_bytes(
+            krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
+            &[0x11u8; 32],
+        )
+        .unwrap();
+        store
+            .create_interrealm_key(&acl, &krb5_kdc::documented_admin_id(), "AD.KERBER.TEST", ir)
+            .unwrap();
+        {
+            let sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+            let name =
+                PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", krb5_kdc::TEST_REALM]);
+            let p = sess
+                .get_principal_record_in(&name, "AD.KERBER.TEST")
+                .expect("incoming");
+            assert_eq!(p.id(), "krbtgt/KERBER.TEST@AD.KERBER.TEST");
+            assert_eq!(p.realm, "AD.KERBER.TEST");
+        }
+        let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+        assert!(q(&mut sess, "getprinc krbtgt/KERBER.TEST@AD.KERBER.TEST").is_ok());
     }
 
     #[test]

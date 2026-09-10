@@ -8,14 +8,22 @@ this project uses semantic versioning once a crate is published.
 
 ### W1-A′-2
 
+- **kdc.** Incoming cross-realm trust is its own principal
+  `krbtgt/<local>@<foreign>` (`kdc_util.c:377-379`). Header and second-ticket
+  lookup use `ticket->server` with realm; there is no fallback to
+  `krbtgt/<ticket.realm>@local`. `check_tgs_nontgt` compares name and realm
+  (`tgs_policy.c:636`, 26). `KRB5_TEST_INTERREALM_KEY_ACCEPT` replaces the
+  incoming keys. The peers lane runs every gate with `if: always()`.
+  A copied Samba TGT PAC may carry `PAC_WAS_GIVEN_IMPLICITLY`; the L1
+  decoder accepts that flag as well as `PAC_WAS_REQUESTED`.
 - **kdc.** TGS gather follows `gather_tgs_req_info`: missing PA-TGS-REQ
   is 16 `PROCESS_TGS`; header times run inside PROCESS_TGS; local TGT
   then HEADER_PAC then `search_sprinc`. `is_crossrealm` is the header
   ticket server realm versus the canonical server realm. Non-TGS headers
   decrypt via `kdc_get_server_key` (DISALLOW_SVR → 7 `PROCESS_TGS`);
   `is_local_tgs_principal` compares the instance to the ticket server
-  realm; a foreign ticket looks up `ticket.server` then
-  `krbtgt/<ticket.realm>@local`. `check_tgs_constraints` slots run
+  realm; a foreign ticket looks up `ticket.server` only (incoming
+  `krbtgt/<local>@<foreign>`). `check_tgs_constraints` slots run
   opts/times then `check_tgs_nontgt` / `check_tgs_tgt` by
   `NON_TGT_OPTION` (RENEW of a service ticket issues; PROXY of a TGT is
   13 `CAN'T PROXY TGT`; name mismatch is 26). `get_verified_pac` checks

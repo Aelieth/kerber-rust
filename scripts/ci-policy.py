@@ -92,6 +92,7 @@ DIFFSEND_CASES = frozenset(
         "u2u-success",
         "tgs-addr-mismatch",
         "tgs-forwarded-addresses",
+        "u2u-2nd-ticket-foreign-realm",
         "as-needchange",
         "as-invalid-opts",
         "as-validate-before-preauth",

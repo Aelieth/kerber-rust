@@ -960,6 +960,7 @@ fn issue_tgs_body(
     check_tgs_constraints_skeleton(
         body,
         &ap.ticket.sname,
+        header_realm.as_str(),
         &enc_tkt,
         &sname,
         req_realm.as_str(),
@@ -1375,26 +1376,9 @@ fn decrypt_presented_tgt(
     ap: &krb5_types::ApReq,
     tkt_etype: EncryptionType,
 ) -> Result<(EncTicketPart, ProtocolKey, Vec<u8>, Principal), Error> {
-    // MIT kdc_get_server_key (kdc_util.c:360-409): ticket.server, DISALLOW → 7.
-    // Incoming interrealm keys are stored as krbtgt/<ticket.realm>@<local>.
+    // MIT kdc_get_server_key (kdc_util.c:377-379): ticket->server, no fallback.
     let ticket_realm = utf8_realm(&ap.ticket.realm)?;
-    let princ = if ticket_realm == store.realm() {
-        store.fetch_name(&ap.ticket.sname)?
-    } else {
-        store
-            .fetch(&lookup_principal_id(&ap.ticket.sname, ticket_realm))?
-            .map_or_else(
-                || {
-                    let name = PrincipalName::try_new(
-                        PrincipalName::NT_SRV_INST,
-                        ["krbtgt", ticket_realm],
-                    )
-                    .map_err(|_| proto(err::S_PRINCIPAL_UNKNOWN, status::PROCESS_TGS))?;
-                    store.fetch_name(&name)
-                },
-                |p| Ok(Some(p)),
-            )?
-    };
+    let princ = store.fetch(&lookup_principal_id(&ap.ticket.sname, ticket_realm))?;
     let Some(p) = princ else {
         return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::PROCESS_TGS));
     };
@@ -1487,8 +1471,9 @@ fn decrypt_2ndtkt(
     let Some(extra) = body.additional_tickets.as_ref().and_then(|v| v.first()) else {
         return Ok(None);
     };
+    let stkt_realm = utf8_realm(&extra.realm)?;
     let server = store
-        .fetch_name(&extra.sname)?
+        .fetch(&lookup_principal_id(&extra.sname, stkt_realm))?
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::SECOND_TKT_SERVER))?;
     if attr(&server, KDB_DISALLOW_ALL_TIX) || attr(&server, KDB_DISALLOW_SVR) {
         return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::SECOND_TKT_SERVER));
@@ -1584,9 +1569,11 @@ fn non_tgt_option(body: &KdcReqBody) -> bool {
         || body.kdc_options.bit(flag_bit::VALIDATE)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_tgs_constraints_skeleton(
     body: &KdcReqBody,
     header_sname: &PrincipalName,
+    header_realm: &str,
     enc_tkt: &EncTicketPart,
     req_sname: &PrincipalName,
     req_realm: &str,
@@ -1626,7 +1613,8 @@ fn check_tgs_constraints_skeleton(
         }
     }
     if non_tgt_option(body) {
-        if header_sname != req_sname {
+        // MIT tgs_policy.c:636: krb5_principal_compare includes the realm.
+        if header_sname != req_sname || header_realm != req_realm {
             return Err(proto(err::SERVER_NOMATCH, status::RENEW_SERVER_MISMATCH));
         }
         if body.kdc_options.bit(flag_bit::PROXY) && req_sname.is_krbtgt() {

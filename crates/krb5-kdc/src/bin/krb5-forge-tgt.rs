@@ -3,6 +3,7 @@
 //! Usage:
 //!   krb5-forge-tgt --ccache IN --out OUT --claim-realm REALM --tgt krbtgt/C.TEST --key-hex HEX
 //!   krb5-forge-tgt --ccache IN --out OUT --claim-realm REALM --tgt krbtgt/C.TEST --password PW --principal NAME
+//!   optional --reseal-key-hex / --reseal-password + --reseal-principal to encrypt with a different key
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -28,6 +29,9 @@ fn main() -> ExitCode {
     let mut tgt = None;
     let mut alias_as = None;
     let mut keep_cipher = false;
+    let mut reseal_hex = None;
+    let mut reseal_password = None;
+    let mut reseal_principal = None;
     let mut i = 0usize;
     while i < args.len() {
         match args[i].as_str() {
@@ -71,10 +75,23 @@ fn main() -> ExitCode {
                 keep_cipher = true;
                 i += 1;
             }
+            "--reseal-key-hex" => {
+                reseal_hex = args.get(i + 1).cloned();
+                i += 2;
+            }
+            "--reseal-password" => {
+                reseal_password = args.get(i + 1).cloned();
+                i += 2;
+            }
+            "--reseal-principal" => {
+                reseal_principal = args.get(i + 1).cloned();
+                i += 2;
+            }
             _ => {
                 eprintln!(
                     "usage: krb5-forge-tgt --ccache <in> --out <out> --tgt <krbtgt/REALM> \
                      (--claim-realm <realm> [--keep-cipher | --key-hex <hex> | --password <pw> --principal <name@REALM>] \
+                     [--reseal-key-hex <hex> | --reseal-password <pw> --reseal-principal <name@REALM>] \
                      | --alias-as <krbtgt/REALM@REALM>)"
                 );
                 return ExitCode::from(2);
@@ -112,6 +129,29 @@ fn main() -> ExitCode {
         },
         _ => {
             eprintln!("krb5-forge-tgt: need --key-hex or --password plus --principal");
+            return ExitCode::from(2);
+        }
+    };
+    let reseal = match (reseal_hex, reseal_password, reseal_principal) {
+        (None, None, None) => key.clone(),
+        (Some(hex), None, None) => match parse_hex_key(&hex) {
+            Ok(k) => k,
+            Err(e) => {
+                eprintln!("krb5-forge-tgt: reseal-key-hex: {e}");
+                return ExitCode::from(2);
+            }
+        },
+        (None, Some(pw), Some(princ)) => match key_from_password(&pw, &princ) {
+            Ok(k) => k,
+            Err(e) => {
+                eprintln!("krb5-forge-tgt: reseal-password: {e}");
+                return ExitCode::from(2);
+            }
+        },
+        _ => {
+            eprintln!(
+                "krb5-forge-tgt: reseal needs --reseal-key-hex or --reseal-password plus --reseal-principal"
+            );
             return ExitCode::from(2);
         }
     };
@@ -183,7 +223,7 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
         };
-        let cipher = match encrypt(&key, usage, &der) {
+        let cipher = match encrypt(&reseal, usage, &der) {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("krb5-forge-tgt: reseal: {e}");
@@ -191,6 +231,7 @@ fn main() -> ExitCode {
             }
         };
         ticket.enc_part.cipher = OctetString::from(cipher);
+        ticket.enc_part.etype = reseal.etype().to_iana();
         ticket.realm = claim_ks.clone();
         match encode(&ticket) {
             Ok(tkt) => cred.ticket = tkt,

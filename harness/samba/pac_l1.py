@@ -108,7 +108,9 @@ def main() -> int:
 
     attr = by_type[17]
     flags_len, flags = struct.unpack_from("<II", attr)
-    if flags_len != 2 or flags & 1 == 0:
+    # MS-PAC: PAC_WAS_REQUESTED (1) or PAC_WAS_GIVEN_IMPLICITLY (2).
+    # A Samba TGT copied through a Rust TGS often carries implicit-only.
+    if flags_len != 2 or flags & 3 == 0:
         print("L1_BAD_ATTRIBUTES", flags_len, flags)
         return 1
 

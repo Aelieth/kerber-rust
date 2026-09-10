@@ -52,6 +52,8 @@ pub const SE_GROUP_DEFAULT: u32 = 7;
 pub const USER_NORMAL_ACCOUNT: u32 = 0x10;
 /// PAC attributes: `PAC_WAS_REQUESTED`.
 pub const PAC_ATTRIBUTE_WAS_REQUESTED: u32 = 0x0000_0001;
+/// PAC attributes: `PAC_WAS_GIVEN_IMPLICITLY` (MS-PAC).
+pub const PAC_ATTRIBUTE_WAS_GIVEN_IMPLICITLY: u32 = 0x0000_0002;
 /// UPN/DNS: SAM name + SID extension present.
 pub const PAC_UPN_DNS_HAS_SAM_AND_SID: u32 = 0x0000_0002;
 /// `LOGON_EXTRA_SIDS`.

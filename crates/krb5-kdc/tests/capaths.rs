@@ -382,7 +382,7 @@ fn transited_add_path_bad_intermediates_is_policy() {
 }
 
 #[test]
-fn transited_cross_realm_renew_at_dest_checks_tr_type() {
+fn transited_cross_realm_renew_at_dest_is_server_nomatch() {
     let (_a, _b, c, ir, _host_c, bc) = three_realm();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let mut t = bc.rep.0.ticket.clone();
@@ -408,10 +408,13 @@ fn transited_cross_realm_renew_at_dest_checks_tr_type() {
     .expect("renew tgs");
     match krb5_kdc::issue_tgs(&c, &req) {
         Err(Error::Protocol { code, text, .. }) => {
-            assert_eq!(code, err::TRTYPE_NOSUPP);
-            assert_eq!(text.as_deref(), Some("VALIDATE_TRANSIT_TYPE"));
+            assert_eq!(code, err::SERVER_NOMATCH);
+            assert_eq!(
+                text.as_deref(),
+                Some("SERVER DIDN'T MATCH TICKET FOR RENEW/FORWARD/ETC")
+            );
         }
-        other => panic!("cross-realm RENEW at dest with tr_type≠1 must be 17, got {other:?}"),
+        other => panic!("cross-realm RENEW of krbtgt/C@B as krbtgt/C@C must be 26, got {other:?}"),
     }
 }
 
@@ -767,9 +770,9 @@ fn tgs_lineage_local_user_on_foreign_tgt_is_policy() {
 #[test]
 fn tgs_krbtgt_disallow_all_tix_is_process_tgs() {
     let (_a, _b, mut c, _ab, _bc, host_c, bctgt) = three_realm_distinct();
-    let irn = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "B.TEST"]);
-    let a = c.get_name(&irn).unwrap().attributes | KDB_DISALLOW_ALL_TIX;
-    c.apply_admin_fields(&irn, Some(a), None, None, None, None, false)
+    let irn = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "C.TEST"]);
+    let a = c.get_in_realm(&irn, "B.TEST").unwrap().attributes | KDB_DISALLOW_ALL_TIX;
+    c.apply_admin_fields_in(&irn, "B.TEST", Some(a), None, None, None, None, false)
         .unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let req = tgs_req(
@@ -840,9 +843,9 @@ fn tgs_local_krbtgt_disallow_svr_is_process_tgs() {
 #[test]
 fn tgs_cross_krbtgt_disallow_svr_is_process_tgs() {
     let (_a, _b, mut c, _ab, _bc, host_c, bctgt) = three_realm_distinct();
-    let irn = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "B.TEST"]);
-    let a = c.get_name(&irn).unwrap().attributes | KDB_DISALLOW_SVR;
-    c.apply_admin_fields(&irn, Some(a), None, None, None, None, false)
+    let irn = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "C.TEST"]);
+    let a = c.get_in_realm(&irn, "B.TEST").unwrap().attributes | KDB_DISALLOW_SVR;
+    c.apply_admin_fields_in(&irn, "B.TEST", Some(a), None, None, None, None, false)
         .unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let req = tgs_req(
@@ -861,7 +864,7 @@ fn tgs_cross_krbtgt_disallow_svr_is_process_tgs() {
 }
 
 #[test]
-fn transited_renew_at_dest_five_hundred_byte_add_path_is_43() {
+fn transited_renew_at_dest_mismatched_realm_is_26() {
     let (_a, _b, c, ir, _host_c, bc) = three_realm();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let mut t = bc.rep.0.ticket.clone();
@@ -892,8 +895,11 @@ fn transited_renew_at_dest_five_hundred_byte_add_path_is_43() {
     )
     .expect("renew tgs");
     let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
-    assert_eq!(code, err::ILL_CR_TKT);
-    assert_eq!(text.as_deref(), Some("ADD_TO_TRANSITED_LIST"));
+    assert_eq!(code, err::SERVER_NOMATCH);
+    assert_eq!(
+        text.as_deref(),
+        Some("SERVER DIDN'T MATCH TICKET FOR RENEW/FORWARD/ETC")
+    );
 }
 
 #[test]

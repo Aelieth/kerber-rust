@@ -2364,7 +2364,7 @@ fn run() -> Result<(), String> {
         realm,
         &host,
         &sess,
-        window10,
+        window10.clone(),
         TicketFlags::initial_preauth().with_bit(flag_bit::FORWARDABLE, true),
     )?;
     let fwd = encode(
@@ -2408,7 +2408,25 @@ fn run() -> Result<(), String> {
         r#"{{"event":"diffsend","case":"tgs-forwarded-addresses","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"}}"#
     );
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":66}}"#);
+    let mut foreign_stkt = mint_tgt(
+        tkt_key,
+        tkt_kvno,
+        &host,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        window10.clone(),
+        TicketFlags::initial_preauth(),
+    )?;
+    foreign_stkt.realm = krb5_types::try_ascii("OTHER.TEST").map_err(|e| e.to_string())?;
+    expect_error(
+        &cfg,
+        "u2u-2nd-ticket-foreign-realm",
+        &u2u_to(host.clone(), Some(vec![foreign_stkt]), 0x1000_0062)?,
+        err::S_PRINCIPAL_UNKNOWN,
+    )?;
+
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":67}}"#);
     Ok(())
 }
 

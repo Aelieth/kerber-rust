@@ -158,12 +158,13 @@ done; sleep 1'
 
 ISSUE_SALT='KERBER.TESTkrbtgtAD.KERBER.TEST'
 ACCEPT_SALT='AD.KERBER.TESTkrbtgtKERBER.TEST'
-ISSUE_KEY="$(./target/debug/krb5-pac-extract --s2k-hex "$TRUST_HEX" "$ISSUE_SALT")"
-ACCEPT_KEY="$(./target/debug/krb5-pac-extract --s2k-hex "$TRUST_HEX" "$ACCEPT_SALT")"
+PAC_EXTRACT="${CARGO_TARGET_DIR:-target}/debug/krb5-pac-extract"
+ISSUE_KEY="$("$PAC_EXTRACT" --s2k-hex "$TRUST_HEX" "$ISSUE_SALT")"
+ACCEPT_KEY="$("$PAC_EXTRACT" --s2k-hex "$TRUST_HEX" "$ACCEPT_SALT")"
 ACCEPT_KEYS="$ACCEPT_KEY,$ISSUE_KEY"
 if [ -n "${RAW_HEX:-}" ]; then
-    ACCEPT_KEYS="$ACCEPT_KEYS,$(./target/debug/krb5-pac-extract --s2k-hex "$RAW_HEX" "$ACCEPT_SALT")"
-    ACCEPT_KEYS="$ACCEPT_KEYS,$(./target/debug/krb5-pac-extract --s2k-hex "$RAW_HEX" "$ISSUE_SALT")"
+    ACCEPT_KEYS="$ACCEPT_KEYS,$("$PAC_EXTRACT" --s2k-hex "$RAW_HEX" "$ACCEPT_SALT")"
+    ACCEPT_KEYS="$ACCEPT_KEYS,$("$PAC_EXTRACT" --s2k-hex "$RAW_HEX" "$ISSUE_SALT")"
 fi
 # Prefer Samba-exported trust principal keys when exportkeytab works.
 set +e
@@ -177,7 +178,7 @@ docker cp "$NAME_B":/tmp/b-trust.kt "$SCRATCH/b-trust.kt" 2>/dev/null || true
 if [ -f "$SCRATCH/a-trust.kt" ]; then
     while read -r tag _et hex _rest; do
         [ "$tag" = KEY ] && [ "${#hex}" -eq 64 ] && ACCEPT_KEYS="$ACCEPT_KEYS,$hex"
-    done < <(./target/debug/krb5-pac-extract --dump-keytab "$SCRATCH/a-trust.kt" 2>/dev/null || true)
+    done < <("$PAC_EXTRACT" --dump-keytab "$SCRATCH/a-trust.kt" 2>/dev/null || true)
 fi
 if [ "${#ISSUE_KEY}" -ne 64 ]; then
     unavailable "s2k of TDO password did not yield 32-byte keys"
@@ -287,9 +288,15 @@ echo "$REV" | grep -q 'host/testhost.kerber.test'
 
 docker exec "$NAME_A" /tmp/krb5-pac-extract \
     --keytab /tmp/host.keytab --ccache /tmp/krb5cc_rt_rev --out /tmp/rev.pac
+set +e
 L1="$(docker exec "$NAME_A" python3 /tmp/pac_l1.py /tmp/rev.pac 2>&1)"
+l1_rc=$?
+set -e
 echo "$L1"
-echo "$L1" | grep -q L1_OK || { log "samba.realtrust" "error" ",\"error\":\"reverse-pac\""; exit 1; }
+if [ "$l1_rc" -ne 0 ] || ! echo "$L1" | grep -q L1_OK; then
+    log "samba.realtrust" "error" ",\"error\":\"reverse-pac\""
+    exit 1
+fi
 RID="$(echo "$L1" | awk '{for(i=1;i<=NF;i++) if($i=="rid") print $(i+1)}')"
 LOGON_SID="$(echo "$L1" | awk '{for(i=1;i<=NF;i++) if($i=="domain") print $(i+1)}')"
 echo "reverse PAC domain=$LOGON_SID rid=$RID (live kbruser $KBR_SID rid $KBR_RID, A $A_SID)"

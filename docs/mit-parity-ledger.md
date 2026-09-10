@@ -26,7 +26,7 @@ Schema: `MIT file:line | check | MIT status + wire code | Rust site | Rust e_tex
 Verdict ∈ {exact, stricter-documented (`docs/security.md` row), absent,
 deviation, deferred (reason + promotion oracle)}. Proof `none` only
 with deferred. A named gate cell or `diffsend` case that does not exist
-is `proposed`. The sixty-six live `diffsend` cases are `garbage-pdu`,
+is `proposed`. The sixty-seven live `diffsend` cases are `garbage-pdu`,
 `unknown-cname`, `etype-nosupp`, `as-session-enctype`, `wrong-realm`, `pauser-no-preauth`,
 `skewed-timestamp`, `as-needchange`, `as-invalid-opts`, `as-validate-before-preauth`,
 `as-optimistic-encts-wrong-etype`, `unknown-sname`, `as-success`, `as-retransmit`,
@@ -45,15 +45,16 @@ is `proposed`. The sixty-six live `diffsend` cases are `garbage-pdu`,
 `s4u2proxy-header-pac`, `s4u2proxy-no-stkt-pac`, `s4u2proxy-evidence-mismatch`,
 `s4u2proxy-local-stkt-pac`, `u2u-no-2nd-tkt`, `u2u-2nd-ticket-not-tgs`,
 `u2u-2nd-ticket-mismatch`, `u2u-2nd-ticket-bad-pac`, `u2u-bad-etype`,
-`u2u-success`, `tgs-addr-mismatch`, `tgs-forwarded-addresses`.
+`u2u-success`, `tgs-addr-mismatch`, `tgs-forwarded-addresses`,
+`u2u-2nd-ticket-foreign-realm`.
 
 Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after A′-2 item 10):
-**332** = A1 117 + A2 84 + A3 63 + A4 68.
-exact 230 · stricter-documented 10 · deviation 49 ·
+Counts (after A′-2 R16):
+**333** = A1 117 + A2 85 + A3 63 + A4 68.
+exact 231 · stricter-documented 10 · deviation 49 ·
 absent 30 · deferred 13.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
@@ -204,7 +205,7 @@ mismatches, not extra statuses.
 | kdc_util.c:1443 | empty user and empty cert | INVALID_S4U2SELF_REQUEST 6 | krb5-kdc/ad.rs process_s4u_x509_user | `INVALID_S4U2SELF_REQUEST` 6 | exact | diffsend `pa-s4u-x509-user-empty`; `s4u2self_x509_empty_is_invalid_request` |
 | kdc_util.c:1605 | local S4U user KDB NOENTRY | UNKNOWN_S4U2SELF_PRINCIPAL 6 | krb5-kdc/ad.rs s4u_from_userid | `UNKNOWN_S4U2SELF_PRINCIPAL` 6 | exact | `s4u2self_unknown_for_user_is_refused`; `scripts/s4u-mit-gate.sh` |
 | kdc_util.c:1608 | local S4U user lookup other error (cert-only `get_s4u_x509_principal` NOTSUPP on db2) | LOOKING_UP_S4U2SELF_PRINCIPAL 60 | krb5-kdc/ad.rs s4u_from_userid | `LOOKING_UP_S4U2SELF_PRINCIPAL` 60 | exact | `s4u2self_x509_cert_only_local_is_looking_up` |
-| do_tgs_req.c:283 | 2nd ticket server lookup/key | 2ND_TKT_SERVER (7 typical; no-key/unknown etype → 60) | issue.rs decrypt_2ndtkt | U2U and S4U2Proxy share `decrypt_2ndtkt`; missing/`DISALLOW` second-ticket server is **7** `2ND_TKT_SERVER`; no key of the ticket etype and unknown etype 99 are **60** `2ND_TKT_SERVER`; kvno 0 means any | exact | `u2u_missing_second_ticket_server_is_2nd_tkt_server`; `r13_u2u_status.rs`; diffsend `u2u-2nd-ticket-unknown-server`; diffsend `u2u-2nd-ticket-bad-etype` |
+| do_tgs_req.c:283 | 2nd ticket server lookup/key (`kdc_get_server_key` on `ticket->server`, realm included) | 2ND_TKT_SERVER (7 typical; no-key/unknown etype → 60) | issue.rs decrypt_2ndtkt | U2U and S4U2Proxy share `decrypt_2ndtkt`; lookup is `ticket.sname@ticket.realm` (no local-realm `fetch_name`); missing/`DISALLOW` second-ticket server is **7** `2ND_TKT_SERVER`; no key of the ticket etype and unknown etype 99 are **60** `2ND_TKT_SERVER`; kvno 0 means any | exact | `u2u_missing_second_ticket_server_is_2nd_tkt_server`; `a2_r16.rs` `a2_r16_u2u_second_ticket_foreign_realm_is_7`; diffsend `u2u-2nd-ticket-unknown-server`; diffsend `u2u-2nd-ticket-foreign-realm`; diffsend `u2u-2nd-ticket-bad-etype` |
 | do_tgs_req.c:288 | 2nd ticket decrypt fail | 2ND_TKT_DECRYPT 31 typical | issue.rs decrypt_2ndtkt | U2U and S4U2Proxy corrupt cipher is **31** `2ND_TKT_DECRYPT` | exact | diffsend `u2u-2nd-ticket-corrupt`; `r13_u2u_status.rs` |
 | do_tgs_req.c:294 | 2nd ticket PAC verify fail | 2ND_TKT_PAC 41 | issue.rs decrypt_2ndtkt | `2ND_TKT_PAC` 41 on both U2U and S4U2Proxy evidence | exact | diffsend `u2u-2nd-ticket-bad-pac`; `u2u_bad_pac_is_modified`; `s4u2proxy_no_stkt_pac_is_modified` |
 | do_tgs_req.c:319 | 2nd ticket session etype invalid | BAD_ETYPE_IN_2ND_TKT 14 | issue.rs get_2ndtkt_enctype | `BAD_ETYPE_IN_2ND_TKT` 14 | exact | diffsend `u2u-bad-etype`; `u2u_bad_session_etype_is_etype_nosupp` |
@@ -223,7 +224,7 @@ mismatches, not extra statuses.
 | tgs_policy.c:100 | TKT `INVALID` and not `VALIDATE` | TICKET NOT VALID 33 | issue.rs requested_life | `INVALID` 33 | deviation | `as_postdated_is_invalid_until_validate` (code); proposed: diffsend e_text |
 | tgs_policy.c:231 | `VALIDATE` and starttime > now | NOT_YET_VALID 33 | issue.rs check_tgs_constraints_skeleton | `NOT_YET_VALID` 33 (no skew) | exact | `tgs_validate_future_starttime_is_not_yet_valid` |
 | tgs_policy.c:241 | `RENEW` and now > `renew_till` | TKT_EXPIRED 32 | issue.rs decrypt_presented_tgt | `renew_till` 32 | deviation | `tgs_renew_rejects_renew_till_not_after_now` (code); proposed: diffsend e_text |
-| tgs_policy.c:636 | `NON_TGT_OPTION` and `tkt.server != req.server` | SERVER DIDN'T MATCH TICKET FOR RENEW/FORWARD/ETC 26 | issue.rs check_tgs_constraints_skeleton | `SERVER DIDN'T MATCH TICKET FOR RENEW/FORWARD/ETC` 26 | exact | `tgs_renew_wrong_sname_is_badoption`; diffsend `tgs-renew-service-ticket` |
+| tgs_policy.c:636 | `NON_TGT_OPTION` and `krb5_principal_compare(tkt->server, req->server)` (name **and** realm) | SERVER DIDN'T MATCH TICKET FOR RENEW/FORWARD/ETC 26 | issue.rs check_tgs_constraints_skeleton | name **or** realm mismatch is **26** `SERVER DIDN'T MATCH TICKET FOR RENEW/FORWARD/ETC` | exact | `tgs_renew_wrong_sname_is_badoption`; `a2_r16.rs` `a2_r16_cross_tgt_renew_realm_mismatch_is_26`; `scripts/capaths-transit-gate.sh` `MIT_renew_server_mismatch`; diffsend `tgs-renew-service-ticket` |
 | tgs_policy.c:642 | `PROXY` and req.server is TGS | CAN'T PROXY TGT 13 | issue.rs check_tgs_constraints_skeleton | `CAN'T PROXY TGT` 13 | exact | `tgs_proxy_krbtgt_is_cant_proxy_tgt`; diffsend `tgs-proxy-krbtgt` |
 | tgs_policy.c:657 | header server not TGS princ (normal TGS) | BAD TGS SERVER NAME 35 | issue.rs check_tgs_constraints_skeleton | `BAD TGS SERVER NAME` 35 (header cname) | exact | `tgs_not_a_tgt_decrypts_and_names_client`; diffsend `tgs-not-a-tgt` `check_client=true` |
 | tgs_policy.c:662 | TGS instance ≠ `req.server.realm` | BAD TGS SERVER INSTANCE 35 | issue.rs issue_as_body/`GET_LOCAL_TGT` | not-a-TGT 35 or GET_LOCAL_TGT 60 | deviation | proposed: diffsend `krbtgt/OTHER` header vs local body.realm |
@@ -359,7 +360,8 @@ Wire = RFC 4120 protocol code (MIT `errcode_to_protocol`).
 | kdc_util.c:1453-1530 | `kdc_make_s4u2self_rep` PA-S4U-X509-USER in TGS-REP | no status (reply padata) | krb5-kdc/ad.rs make_s4u2self_rep | reply 130 when the request carried 130 | exact | `s4u2self_x509_issues_and_replies_130`; `s4u2self_for_user_only_omits_reply_130`; `scripts/s4u-mit-gate.sh` proxy cell |
 | kdc_util.c:1534-1548; tgs_policy.c:273-276 | `is_client_db_alias` header client vs server | mismatch → `INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH` **36** | `issue.rs issue_tgs_body` name+realm | same **36** | exact | `phase7_preauth.rs`; `scripts/s4u-mit-gate.sh`; `docs/security.md:67-69` |
 | kdc_util.c:318-346 | `kdc_rd_ap_req` kvno==0: ≤3 tries, decrement kvno; local TGS `search_enctype=-1` | PROCESS_TGS / rd_req err | issue.rs decrypt_presented_tgt | kvno 0 retries ≤3; unknown kvno is 60 `PROCESS_TGS`; local TGS any etype at the labeled kvno; a ticket encrypted under kvno N−1 with labeled 0 decrypts | exact | `tgs_header_kvno_zero_issues`; `tgs_header_kvno_zero_decrypts_previous_kvno`; `tgs_header_unknown_kvno_is_generic`; diffsend `tgs-header-kvno-zero` |
-| kdc_util.c:370-398,438-448 | `kdc_get_server_key`: DISALLOW_SVR/ALL_TIX → 7; enctype-mismatch (`:438-448`) → 60 GENERIC (`KRB5_KDB_NO_PERMITTED_KEY` outside 0..128); cross-TGT `is_local_tgs_principal` name+realm + `krb5_c_enctype_compare` rewrite (`kdc_util.c:97-110,313-316`) | DISALLOW half **7**; enctype-mismatch half **60** | issue.rs decrypt_presented_tgt; issue.rs find_server_key | `PROCESS_TGS` **7** on DISALLOW (TGS or service header); no matching kvno/etype is **60** `PROCESS_TGS`; local TGS = instance equals ticket.server.realm; foreign ticket looks up `ticket.server` then `krbtgt/<ticket.realm>@local` | exact | `tgs_krbtgt_disallow_all_tix_is_process_tgs`; `tgs_disallow_svr_service_header_is_process_tgs`; `tgs_header_unknown_kvno_is_generic`; `docs/security.md:74-75` |
+| kdc_util.c:370-398,438-448 | `kdc_get_server_key`: DISALLOW_SVR/ALL_TIX → 7; enctype-mismatch (`:438-448`) → 60 GENERIC (`KRB5_KDB_NO_PERMITTED_KEY` outside 0..128); cross-TGT `is_local_tgs_principal` name+realm + `krb5_c_enctype_compare` rewrite (`kdc_util.c:97-110,313-316`) | DISALLOW half **7**; enctype-mismatch half **60** | issue.rs decrypt_presented_tgt; issue.rs find_server_key | `PROCESS_TGS` **7** on DISALLOW (TGS or service header); no matching kvno/etype is **60** `PROCESS_TGS`; local TGS = instance equals ticket.server.realm; foreign ticket looks up `ticket.server` only (incoming `krbtgt/<local>@<foreign>`) | exact | `tgs_krbtgt_disallow_all_tix_is_process_tgs`; `tgs_disallow_svr_service_header_is_process_tgs`; `tgs_header_unknown_kvno_is_generic`; `a2_r16.rs` `a2_r16_foreign_header_decrypts_via_incoming_kvno`; `docs/security.md:74-75` |
+| kdc_util.c:377-379 | `krb5_db_get_principal(ticket->server)` — no fallback to `krbtgt/<ticket.realm>@local` | PROCESS_TGS 7 on NOENTRY | issue.rs decrypt_presented_tgt; store.rs create_interrealm_key / set_interrealm_decrypt_key | incoming trust is its own principal `krbtgt/<local>@<foreign>`; header and second-ticket lookup use that id | exact | `a2_r16.rs` `a2_r16_incoming_trust_is_own_principal`; `a2_r16_incoming_trust_dump_load_round_trip`; `scripts/samba-crossrealm-gate.sh`; `scripts/samba-realtrust-gate.sh` |
 | kdc_util.c:144-191 | TGS AP-REQ replay cache (`auth_con_setflags 0` — MIT disables) | no rcache | issue.rs issue_tgs_body | TGS replay **34** `TGS authenticator replay` | stricter-documented | `issue_acl_ap.rs::tgs_authenticator_replay_is_repeat`; `docs/security.md:19` |
 | do_tgs_req.c:617-675 vs issue.rs:666-697 | **ORDER TGS**: MIT PROCESS_TGS(rd_req times, no rcache)→FAST→NULL_SERVER→**GET_LOCAL_TGT→HEADER_PAC→search_sprinc**→S4U→…→`check_tgs_times`. Rust PROCESS_TGS(rd_req times)→FAST→replay→NULL_SERVER→GET_LOCAL_TGT→HEADER_PAC→search→constraints | expired 32 / PAC 41 before LOOKING_UP_SERVER | issue.rs issue_tgs_body | same gather/PAC/search order; replay before GET_LOCAL_TGT is the existing stricter rcache | exact | diffsend `tgs-expired-vs-unknown-sname`; `tgs-pac-corrupt-before-sname`; `tgs_expired_beats_unknown_sname` |
 | do_as_req.c:577-762 vs issue.rs:259-394 | **ORDER AS**: MIT NULL_C/S→lookup c/s→REFERRAL→GET_LOCAL_TGT→**validate_as (expiry then lockout)**→etype→anon→client key→cookie→**preauth**. Rust realm→opts→client→**lockout**→etype→**preauth**→HW→**then** server→times→flags | lockout after expiry; preauth after server+policy | lockout first; preauth before server/times | locked client never hits NAME_EXP; bad EncTs never hits unknown server | deviation | proposed: diffsend `as-expired-and-locked`; `as-bad-pa-unknown-server` |

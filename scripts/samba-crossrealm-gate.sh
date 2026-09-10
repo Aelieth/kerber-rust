@@ -46,8 +46,9 @@ cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-pac-extract
 
 ISSUE_SALT='KERBER.TESTkrbtgtAD.KERBER.TEST'
 ACCEPT_SALT='AD.KERBER.TESTkrbtgtKERBER.TEST'
-ISSUE_KEY="$(./target/debug/krb5-pac-extract --s2k "$TRUST_PW" "$ISSUE_SALT")"
-ACCEPT_KEY="$(./target/debug/krb5-pac-extract --s2k "$TRUST_PW" "$ACCEPT_SALT")"
+PAC_EXTRACT="${CARGO_TARGET_DIR:-target}/debug/krb5-pac-extract"
+ISSUE_KEY="$("$PAC_EXTRACT" --s2k "$TRUST_PW" "$ISSUE_SALT")"
+ACCEPT_KEY="$("$PAC_EXTRACT" --s2k "$TRUST_PW" "$ACCEPT_SALT")"
 if [ "${#ISSUE_KEY}" -ne 64 ] || [ "${#ACCEPT_KEY}" -ne 64 ]; then
     unavailable "s2k did not yield 32-byte hex keys"
 fi

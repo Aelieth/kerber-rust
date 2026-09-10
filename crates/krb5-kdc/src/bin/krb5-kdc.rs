@@ -393,6 +393,7 @@ fn bootstrap_test_realm() -> PrincipalStore {
         // Peer-issued tickets (AD outbound) may use a second AES key
         // (Windows TDO inbound/outbound salts differ).
         if let Ok(hex2) = std::env::var("KRB5_TEST_INTERREALM_KEY_ACCEPT") {
+            let mut first = true;
             for part in hex2.split(',') {
                 let part = part.trim();
                 if part.is_empty() {
@@ -405,13 +406,17 @@ fn bootstrap_test_realm() -> PrincipalStore {
                             if foreign.is_empty() {
                                 continue;
                             }
-                            if let Err(e) =
+                            let put = if first {
+                                store.set_interrealm_decrypt_key(&acl, &actor, foreign, key.clone())
+                            } else {
                                 store.add_interrealm_decrypt_key(&acl, &actor, foreign, key.clone())
-                            {
+                            };
+                            if let Err(e) = put {
                                 eprintln!("krb5-kdc: inter-realm accept key {foreign}: {e}");
                                 std::process::exit(1);
                             }
                         }
+                        first = false;
                     }
                     Err(e) => {
                         eprintln!("krb5-kdc: KRB5_TEST_INTERREALM_KEY_ACCEPT: {e}");
@@ -462,17 +467,23 @@ fn apply_test_disallow(store: &mut PrincipalStore, env: &str, flag: u32) {
     if spec.is_empty() {
         return;
     }
-    let Some(name) = test_princ(spec) else {
+    let (name_spec, princ_realm) = match spec.rsplit_once('@') {
+        Some((n, r)) if !r.is_empty() => (n.trim(), r.to_owned()),
+        _ => (spec, store.realm().to_owned()),
+    };
+    let Some(name) = test_princ(name_spec) else {
         eprintln!("krb5-kdc: {env}: empty principal");
         std::process::exit(2);
     };
-    let a = if let Some(p) = store.get_name(&name) {
+    let a = if let Some(p) = store.get_in_realm(&name, &princ_realm) {
         p.attributes | flag
     } else {
         eprintln!("krb5-kdc: {env}: {spec} missing");
         std::process::exit(1);
     };
-    if let Err(e) = store.apply_admin_fields(&name, Some(a), None, None, None, None, false) {
+    if let Err(e) =
+        store.apply_admin_fields_in(&name, &princ_realm, Some(a), None, None, None, None, false)
+    {
         eprintln!("krb5-kdc: {env}: {e}");
         std::process::exit(1);
     }
