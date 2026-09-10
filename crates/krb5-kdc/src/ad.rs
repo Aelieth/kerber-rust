@@ -3,10 +3,11 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, checksum, checksum_output_size, cksumtype_is_keyed,
-    decrypt, verify_checksum_keyed, verify_checksum_type,
+    decrypt, derive_prfplus_enctype, verify_checksum_keyed, verify_checksum_type,
 };
 use krb5_types::pac::{
-    PAC_FULL_CHECKSUM, PAC_PRIVSVR_CHECKSUM, PAC_SERVER_CHECKSUM, PAC_TICKET_CHECKSUM,
+    PAC_CLIENT_INFO, PAC_FULL_CHECKSUM, PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM, PAC_SERVER_CHECKSUM,
+    PAC_TICKET_CHECKSUM, parse_client_info,
 };
 use krb5_types::{
     AuthorizationDataValue, EncTicketPart, PaData, PrincipalName, TgsReq, Ticket, err, ku, pa,
@@ -16,6 +17,7 @@ use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::preauth::{find_pa, proto, proto_d};
 use crate::status;
+use crate::store::Principal;
 
 /// AD-IF-RELEVANT wrapping AD-WIN2K-PAC `pac_bytes`.
 ///
@@ -49,7 +51,17 @@ pub struct PacTicket<'a> {
     pub is_service_tkt: bool,
 }
 
+fn is_pac_signature(kind: u32) -> bool {
+    matches!(
+        kind,
+        PAC_SERVER_CHECKSUM | PAC_PRIVSVR_CHECKSUM | PAC_TICKET_CHECKSUM | PAC_FULL_CHECKSUM
+    )
+}
+
 /// Sign a PAC: ticket (16), full (19), server (6), KDC (7). Key usage 17.
+///
+/// A regular TGS (`handle_pac`) copies the subject's non-checksum buffers and
+/// re-signs; `subject_pac` `None` mints a new AS/S4U PAC.
 ///
 /// # Errors
 ///
@@ -61,6 +73,20 @@ pub fn sign_pac(
     identity: &krb5_types::pac::PacIdentity,
     logon_override: Option<&[u8]>,
 ) -> Result<Vec<u8>, Error> {
+    sign_reply_pac(cname, authtime, ticket, identity, logon_override, None)
+}
+
+/// # Errors
+///
+/// Crypto or DER failures while building checksums.
+pub fn sign_reply_pac(
+    cname: &PrincipalName,
+    authtime: u32,
+    ticket: &PacTicket<'_>,
+    identity: &krb5_types::pac::PacIdentity,
+    logon_override: Option<&[u8]>,
+    subject_pac: Option<&[u8]>,
+) -> Result<Vec<u8>, Error> {
     let PacTicket {
         server,
         kdc,
@@ -71,37 +97,59 @@ pub fn sign_pac(
     let kdc_type = kdc.etype().checksum_type();
     let server_zeros = vec![0u8; server.etype().hmac_output_len()];
     let kdc_zeros = vec![0u8; kdc.etype().hmac_output_len()];
-    let logon = match logon_override {
-        Some(b) => b.to_vec(),
-        None => krb5_types::pac::logon_info_buffer(
-            &identity.sam,
-            &identity.realm,
-            &identity.domain_sid,
-            identity.rid,
-        ),
+    let mut pac = if let Some(raw) = subject_pac {
+        let parsed = krb5_types::pac::Pac::parse(raw).map_err(|e| map_pac_err(&e))?;
+        let mut buffers: Vec<krb5_types::pac::PacBuffer> = parsed
+            .buffers
+            .into_iter()
+            .filter(|b| !is_pac_signature(b.kind))
+            .map(|b| krb5_types::pac::PacBuffer::new(b.kind, b.data))
+            .collect();
+        if let Some(logon) = logon_override {
+            match buffers.iter_mut().find(|b| b.kind == PAC_LOGON_INFO) {
+                Some(b) => b.data = logon.to_vec(),
+                None => {
+                    buffers.insert(
+                        0,
+                        krb5_types::pac::PacBuffer::new(PAC_LOGON_INFO, logon.to_vec()),
+                    );
+                }
+            }
+        }
+        krb5_types::pac::Pac::built(0, buffers)
+    } else {
+        let logon = match logon_override {
+            Some(b) => b.to_vec(),
+            None => krb5_types::pac::logon_info_buffer(
+                &identity.sam,
+                &identity.realm,
+                &identity.domain_sid,
+                identity.rid,
+            ),
+        };
+        krb5_types::pac::Pac::built(
+            0,
+            vec![
+                krb5_types::pac::PacBuffer::new(PAC_LOGON_INFO, logon),
+                krb5_types::pac::PacBuffer::new(
+                    PAC_CLIENT_INFO,
+                    krb5_types::pac::client_info_buffer(authtime, &cname.components_joined()),
+                ),
+                krb5_types::pac::PacBuffer::new(
+                    krb5_types::pac::PAC_UPN_DNS_INFO,
+                    krb5_types::pac::upn_dns_buffer(identity),
+                ),
+                krb5_types::pac::PacBuffer::new(
+                    krb5_types::pac::PAC_ATTRIBUTES_INFO,
+                    krb5_types::pac::attributes_info_buffer(),
+                ),
+                krb5_types::pac::PacBuffer::new(
+                    krb5_types::pac::PAC_REQUESTER_SID,
+                    krb5_types::pac::requester_sid_buffer(&identity.client_sid()),
+                ),
+            ],
+        )
     };
-    let mut pac = krb5_types::pac::Pac::built(
-        0,
-        vec![
-            krb5_types::pac::PacBuffer::new(krb5_types::pac::PAC_LOGON_INFO, logon),
-            krb5_types::pac::PacBuffer::new(
-                krb5_types::pac::PAC_CLIENT_INFO,
-                krb5_types::pac::client_info_buffer(authtime, &cname.components_joined()),
-            ),
-            krb5_types::pac::PacBuffer::new(
-                krb5_types::pac::PAC_UPN_DNS_INFO,
-                krb5_types::pac::upn_dns_buffer(identity),
-            ),
-            krb5_types::pac::PacBuffer::new(
-                krb5_types::pac::PAC_ATTRIBUTES_INFO,
-                krb5_types::pac::attributes_info_buffer(),
-            ),
-            krb5_types::pac::PacBuffer::new(
-                krb5_types::pac::PAC_REQUESTER_SID,
-                krb5_types::pac::requester_sid_buffer(&identity.client_sid()),
-            ),
-        ],
-    );
     if is_service_tkt {
         pac.buffers.push(krb5_types::pac::PacBuffer::new(
             krb5_types::pac::PAC_TICKET_CHECKSUM,
@@ -331,29 +379,115 @@ pub(crate) fn ticket_checksum_input(plain: &[u8], part: &EncTicketPart) -> Resul
     ticket_checksum_der(part)
 }
 
-/// MIT `get_verified_pac` for a TGS principal: only the server signature is
-/// checked with the key that opened the ticket (`kdc_util.c:597-602`).
-/// LOGON_INFO is returned when the PAC carries one; a missing PAC or a
-/// minimal PAC without it (MIT's db2 backend issues those) is `Ok(None)`.
-pub(crate) fn presented_tgt_logon(
+/// MIT `get_verified_pac` (`kdc_util.c:589-630`): TGS header → server
+/// signature only; service header → privsvr + kvno−1/−2 retry.
+pub(crate) fn get_verified_pac(
     part: &EncTicketPart,
     ticket_key: &ProtocolKey,
+    header_server: &Principal,
+    local_tgt: Option<&Principal>,
 ) -> Result<Option<Vec<u8>>, Error> {
     let Some(pac) = pac_from_ticket_part(part) else {
         return Ok(None);
     };
-    verify_pac_signatures(&pac, ticket_key, None, None, false)?;
-    let parsed = krb5_types::pac::Pac::parse(&pac).map_err(|e| {
-        proto_d(
-            err::BAD_INTEGRITY,
-            status::HEADER_PAC,
-            format!("TGT PAC: {e}"),
-        )
-    })?;
-    Ok(parsed
-        .unique_buffer(krb5_types::pac::PAC_LOGON_INFO)
-        .map_err(|e| map_pac_err(&e))?
-        .map(<[u8]>::to_vec))
+    if header_server.name.is_krbtgt() {
+        verify_pac_signatures(&pac, ticket_key, None, None, false)?;
+        return Ok(Some(pac));
+    }
+    let Some(tgt) = local_tgt else {
+        return Err(proto(err::GENERIC, status::HEADER_PAC));
+    };
+    let Some(cur) = tgt.first_current_key() else {
+        return Err(proto(err::GENERIC, status::HEADER_PAC));
+    };
+    let der = ticket_checksum_der(part)?;
+    let first = try_verify_pac(&pac, ticket_key, header_server, &cur.key, &der);
+    if !pac_verify_retryable(&first) {
+        first?;
+        return Ok(Some(pac));
+    }
+    let mut kvno = cur.kvno.saturating_sub(1);
+    let mut tries = 2u32;
+    while tries > 0 && kvno > 0 {
+        let Some(old) = tgt
+            .first_key_at_kvno(kvno)
+            .or_else(|| tgt.key_history.iter().find(|k| k.kvno == kvno))
+        else {
+            return Err(proto(err::MODIFIED, status::HEADER_PAC));
+        };
+        if try_verify_pac(&pac, ticket_key, header_server, &old.key, &der).is_ok() {
+            return Ok(Some(pac));
+        }
+        kvno = kvno.saturating_sub(1);
+        tries -= 1;
+    }
+    Err(proto(err::MODIFIED, status::HEADER_PAC))
+}
+
+fn pac_verify_retryable(r: &Result<(), Error>) -> bool {
+    matches!(r, Err(Error::Protocol { code, .. }) if *code == err::MODIFIED)
+}
+
+fn try_verify_pac(
+    pac: &[u8],
+    server_key: &ProtocolKey,
+    header_server: &Principal,
+    tgt_key: &ProtocolKey,
+    enc_der: &[u8],
+) -> Result<(), Error> {
+    let privsvr = pac_privsvr_key(header_server, tgt_key)?;
+    let is_svc = should_have_ticket_signature(&header_server.name);
+    verify_pac_signatures(pac, server_key, Some(&privsvr), Some(enc_der), is_svc)
+}
+
+pub(crate) fn pac_privsvr_key(
+    server: &Principal,
+    tgt_key: &ProtocolKey,
+) -> Result<ProtocolKey, Error> {
+    let Some((_, val)) = server
+        .string_attrs
+        .iter()
+        .find(|(k, _)| k == "pac_privsvr_enctype")
+    else {
+        return Ok(tgt_key.clone());
+    };
+    let et =
+        EncryptionType::from_mit_name(val).map_err(|_| proto(err::GENERIC, status::HEADER_PAC))?;
+    if tgt_key.etype() == et {
+        return Ok(tgt_key.clone());
+    }
+    derive_prfplus_enctype(tgt_key, b"pac_privsvr", et)
+        .map_err(|_| proto(err::GENERIC, status::HEADER_PAC))
+}
+
+/// MIT `check_normal_tgs_pac` (`tgs_policy.c:601-624`). Missing PAC is ok.
+pub(crate) fn check_normal_tgs_pac(
+    enc_tkt: &EncTicketPart,
+    pac: Option<&[u8]>,
+    server: &Principal,
+    is_crossrealm: bool,
+) -> Result<(), Error> {
+    let Some(raw) = pac else {
+        return Ok(());
+    };
+    let parsed = krb5_types::pac::Pac::parse(raw).map_err(|e| map_pac_err(&e))?;
+    if pac_client_matches(&parsed, enc_tkt) {
+        return Ok(());
+    }
+    if is_crossrealm && server.name.is_cross_tgs_principal(&server.realm) {
+        // `verify_deleg_pac` is A′-2 item 8; fail closed here.
+    }
+    Err(proto(err::BADOPTION, status::HEADER_PAC))
+}
+
+fn pac_client_matches(pac: &krb5_types::pac::Pac, enc_tkt: &EncTicketPart) -> bool {
+    let Ok(Some(buf)) = pac.unique_buffer(PAC_CLIENT_INFO) else {
+        return false;
+    };
+    let Some((authtime, name)) = parse_client_info(buf) else {
+        return false;
+    };
+    authtime == enc_tkt.authtime.unix_seconds() && name == enc_tkt.cname.components_joined()
 }
 
 /// MS-PAC 4.1.2.2 SID filtering for a cross-realm subject: a trusted realm may

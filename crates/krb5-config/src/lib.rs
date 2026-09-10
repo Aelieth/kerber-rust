@@ -152,6 +152,8 @@ pub struct KdcConf {
     /// `reject_bad_transit` (default true). When false, a failed transited
     /// check is accepted without `TRANSITED_POLICY_CHECKED`.
     pub reject_bad_transit: bool,
+    /// MIT `disable_pac` (default false).
+    pub disable_pac: bool,
 }
 
 impl Default for KdcConf {
@@ -177,6 +179,7 @@ impl Default for KdcConf {
             db_library: None,
             domain_sid: None,
             reject_bad_transit: true,
+            disable_pac: false,
         }
     }
 }
@@ -692,6 +695,7 @@ fn parse_kdcdefaults(conf: &mut KdcConf, line: &str) {
                 .collect();
         }
         "reject_bad_transit" => conf.reject_bad_transit = truthy(&v),
+        "disable_pac" => conf.disable_pac = truthy(&v),
         _ => {}
     }
 }
@@ -737,6 +741,7 @@ fn parse_kdc_realm_line(conf: &mut KdcConf, line: &str) {
         "database_module" | "db_library" => conf.db_library = Some(v),
         "domain_sid" => conf.domain_sid = Some(v),
         "reject_bad_transit" => conf.reject_bad_transit = truthy(&v),
+        "disable_pac" => conf.disable_pac = truthy(&v),
         _ => {}
     }
 }
@@ -1557,6 +1562,36 @@ mod tests {
         .unwrap();
         assert_eq!(kdc.kdc_listen, vec!["127.0.0.1:12345".to_string()]);
         assert!(!kdc.reject_bad_transit);
+    }
+
+    #[test]
+    fn disable_pac_from_kdcdefaults_and_realm() {
+        let kdc = KdcConf::parse(
+            r"
+[kdcdefaults]
+    disable_pac = true
+",
+        )
+        .unwrap();
+        assert!(kdc.disable_pac);
+        let realm = KdcConf::parse(
+            r"
+[realms]
+    KERBER.TEST = {
+        disable_pac = true
+    }
+",
+        )
+        .unwrap();
+        assert!(realm.disable_pac);
+        let lib = KdcConf::parse(
+            r"
+[libdefaults]
+    disable_pac = true
+",
+        )
+        .unwrap();
+        assert!(!lib.disable_pac);
     }
 
     #[test]

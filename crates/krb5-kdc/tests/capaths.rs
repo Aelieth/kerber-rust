@@ -1118,10 +1118,13 @@ fn cross_realm_pac_drops_local_domain_sids_keeps_foreign() {
         domain_sid: foreign.clone(),
         rid: 1105,
     };
-    // Server-sign with the B<->C trust key, which the reissuer verifies.
+    let mut t = bc.rep.0.ticket.clone();
+    let mut part = decrypt_ticket_part(&ir, &t).expect("bc");
+    part.cname = cname.clone();
+    part.crealm = krb5_types::try_ascii("B.TEST").expect("realm");
     let pac = sign_pac(
         &cname,
-        0,
+        part.authtime.unix_seconds(),
         &PacTicket {
             server: &ir,
             kdc: &ir,
@@ -1132,11 +1135,6 @@ fn cross_realm_pac_drops_local_domain_sids_keeps_foreign() {
         Some(&logon),
     )
     .expect("sign");
-
-    let mut t = bc.rep.0.ticket.clone();
-    let mut part = decrypt_ticket_part(&ir, &t).expect("bc");
-    part.cname = cname.clone();
-    part.crealm = krb5_types::try_ascii("B.TEST").expect("realm");
     part.authorization_data = Some(wrap_win2k_pac(&pac).expect("wrap"));
     reseal(&ir, &mut t, &part);
 

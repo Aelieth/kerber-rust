@@ -1477,7 +1477,7 @@ fn tgs_renew_strips_when_disallow_renewable() {
 }
 
 #[test]
-fn tgs_renew_after_endtime_still_issues() {
+fn tgs_renew_after_endtime_is_process_tgs() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     store.policy.skew = 0;
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -1496,7 +1496,14 @@ fn tgs_renew_after_endtime_still_issues() {
         }
         other => panic!("expected Protocol, got {other:?}"),
     }
-    krb5_kdc::issue_tgs(&store, &renew_tgs(&issued, 97)).expect("RENEW after endtime");
+    let renew_err = krb5_kdc::issue_tgs(&store, &renew_tgs(&issued, 97)).unwrap_err();
+    match renew_err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::TKT_EXPIRED);
+            assert_eq!(text.as_deref(), Some("PROCESS_TGS"));
+        }
+        other => panic!("expected Protocol, got {other:?}"),
+    }
 }
 
 #[test]
@@ -1599,11 +1606,18 @@ fn as_may_postdate_alone_does_not_postdate() {
 }
 
 #[test]
-fn tgs_validate_allows_starttime_within_skew() {
+fn tgs_validate_future_starttime_is_not_yet_valid() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let from = KerberosTime::now().add_seconds(2).unwrap();
     let issued = krb5_kdc::issue_as(&store, &postdated_as_req(124, from)).expect("postdated AS");
-    krb5_kdc::issue_tgs(&store, &validate_tgs(&issued, 125)).expect("VALIDATE within skew");
+    let err = krb5_kdc::issue_tgs(&store, &validate_tgs(&issued, 125)).unwrap_err();
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::TKT_NYV);
+            assert_eq!(text.as_deref(), Some("NOT_YET_VALID"));
+        }
+        other => panic!("expected Protocol, got {other:?}"),
+    }
 }
 
 #[test]
@@ -1715,7 +1729,7 @@ fn tgs_renew_wrong_sname_is_badoption() {
     let issued = renewable_as(&store, 118);
     let err =
         krb5_kdc::issue_tgs(&store, &renew_tgs_sname(&issued, documented_host(), 119)).unwrap_err();
-    assert_eq!(proto_code(err), err::BADOPTION);
+    assert_eq!(proto_code(err), err::SERVER_NOMATCH);
     krb5_kdc::issue_tgs(&store, &renew_tgs(&issued, 120)).expect("RENEW krbtgt");
 }
 

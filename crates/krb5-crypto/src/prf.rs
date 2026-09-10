@@ -70,19 +70,31 @@ pub fn prf_plus(key: &ProtocolKey, seed: &[u8], len: usize) -> Result<Vec<u8>, E
 ///
 /// PRF or key-length failures.
 pub fn derive_prfplus(key: &ProtocolKey, input: &[u8]) -> Result<ProtocolKey, Error> {
-    let et = key.etype();
-    let mut rnd = prf_plus(key, input, et.keybytes())?;
-    let out = if et == EncryptionType::Des3CbcSha1 {
+    derive_prfplus_enctype(key, input, key.etype())
+}
+
+/// MIT `krb5_c_derive_prfplus` with an explicit output enctype (`cf2.c:93`).
+///
+/// # Errors
+///
+/// PRF or key-length failures.
+pub fn derive_prfplus_enctype(
+    key: &ProtocolKey,
+    input: &[u8],
+    enctype: EncryptionType,
+) -> Result<ProtocolKey, Error> {
+    let mut rnd = prf_plus(key, input, enctype.keybytes())?;
+    let out = if enctype == EncryptionType::Des3CbcSha1 {
         if rnd.len() != 21 {
             rnd.zeroize();
             return Err(Error::InvalidKeyLength);
         }
         let raw = crate::weak::des3_random_to_key(&rnd);
-        let k = ProtocolKey::from_bytes(et, &raw);
+        let k = ProtocolKey::from_bytes(enctype, &raw);
         rnd.zeroize();
         k?
     } else {
-        let k = ProtocolKey::from_bytes(et, &rnd);
+        let k = ProtocolKey::from_bytes(enctype, &rnd);
         rnd.zeroize();
         k?
     };

@@ -411,6 +411,8 @@ pub struct Policy {
     pub capaths: BTreeMap<String, BTreeMap<String, Vec<String>>>,
     /// MIT `reject_bad_transit` (default true).
     pub reject_bad_transit: bool,
+    /// MIT `disable_pac` (default false): issue no PAC.
+    pub disable_pac: bool,
 }
 
 impl Default for Policy {
@@ -428,6 +430,7 @@ impl Default for Policy {
             requires_preauth: true,
             capaths: BTreeMap::new(),
             reject_bad_transit: true,
+            disable_pac: false,
         }
     }
 }
@@ -956,6 +959,7 @@ impl PrincipalStore {
         }
         self.policy.requires_preauth = conf.requires_preauth;
         self.policy.reject_bad_transit = conf.reject_bad_transit;
+        self.policy.disable_pac = conf.disable_pac;
         if let Some(s) = conf.domain_sid.as_deref() {
             let Some(sid) = RpcSid::from_sddl(s) else {
                 return Err(Error::Crypto(format!(

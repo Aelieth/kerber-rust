@@ -15,15 +15,17 @@ use std::process;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, string_to_key};
+use krb5_kdc::{PacTicket, pac_from_ticket_part, sign_pac, ticket_checksum_der, wrap_win2k_pac};
 use krb5_protocol::{
     KdcAddr, Keytab, armor_key, as_req, as_req_sname, attach_fast, build_fast_armor,
     compare_krb_error, compare_stable_rep, decode_enc_kdc_rep, exchange_on_tcp, pa_enc_timestamp,
     pa_enc_timestamp_at, pa_spake_support, tgs_req, tgs_req_ex,
 };
+use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac, PacIdentity, RpcSid};
 use krb5_types::{
     ApOptions, ApReq, AsRep, AuthorizationDataValue, EncTicketPart, EncryptedData, EncryptionKey,
-    KdcOptions, KerberosTime, KrbError, PaData, PrincipalName, TgsRep, Ticket, TicketFlags,
-    TransitedEncoding, err, ku, pa,
+    KdcOptions, KerberosTime, KrbError, PaData, PaPacRequest, PrincipalName, TgsRep, Ticket,
+    TicketFlags, TransitedEncoding, err, flag_bit, ku, pa,
 };
 use sha1::{Digest, Sha1};
 
@@ -83,8 +85,8 @@ fn expect_error(cfg: &Cfg, case: &str, req: &[u8], code: i32) -> Result<(), Stri
 }
 
 // AS errors echo the requested client (prepare_error_as); a TGS error uses the
-// decrypted header ticket's client. tgs-not-a-tgt presents a service ticket the
-// Rust KDC rejects before decrypt (no client), so it passes check_client=false.
+// decrypted header ticket's client. tgs-not-a-tgt decrypts a service header
+// and compares cname (check_client=true).
 fn expect_error_client(
     cfg: &Cfg,
     case: &str,
@@ -503,19 +505,151 @@ fn mint_tgt_ad(
         caddr: None,
         authorization_data,
     };
+    seal_ticket(krbtgt, kvno, realm, sname, part)
+}
+
+fn seal_ticket(
+    key: &ProtocolKey,
+    kvno: u32,
+    realm: &str,
+    sname: &PrincipalName,
+    part: EncTicketPart,
+) -> Result<Ticket, String> {
     let der = encode(&part).map_err(|e| e.to_string())?;
     let usage = KeyUsage::new(ku::TICKET).map_err(|e| e.to_string())?;
-    let cipher = encrypt(krbtgt, usage, &der).map_err(|e| e.to_string())?;
+    let cipher = encrypt(key, usage, &der).map_err(|e| e.to_string())?;
     Ok(Ticket {
         tkt_vno: Ticket::VNO,
         realm: krb5_types::try_ascii(realm).map_err(|e| e.to_string())?,
         sname: sname.clone(),
         enc_part: EncryptedData {
-            etype: krbtgt.etype().to_iana(),
+            etype: key.etype().to_iana(),
             kvno: Some(kvno),
             cipher: cipher.into(),
         },
     })
+}
+
+fn dummy_ident(sam: &str, realm: &str) -> PacIdentity {
+    PacIdentity {
+        sam: sam.to_owned(),
+        realm: realm.to_owned(),
+        domain_sid: RpcSid::dummy_domain(),
+        rid: 1000,
+    }
+}
+
+fn mint_signed_header(
+    key: &ProtocolKey,
+    kvno: u32,
+    cname: &PrincipalName,
+    realm: &str,
+    sname: &PrincipalName,
+    session: &ProtocolKey,
+    window: (KerberosTime, KerberosTime),
+    flags: TicketFlags,
+    pac_cname: &PrincipalName,
+    flip_server: bool,
+    renew_till: Option<KerberosTime>,
+) -> Result<Ticket, String> {
+    let (start, end) = window;
+    let mut part = EncTicketPart {
+        flags,
+        key: EncryptionKey {
+            keytype: session.etype().to_iana(),
+            keyvalue: session.as_bytes().to_vec().into(),
+        },
+        crealm: krb5_types::try_ascii(realm).map_err(|e| e.to_string())?,
+        cname: cname.clone(),
+        transited: TransitedEncoding {
+            tr_type: 1,
+            contents: Vec::<u8>::new().into(),
+        },
+        authtime: start.clone(),
+        starttime: Some(start.clone()),
+        endtime: end,
+        renew_till,
+        caddr: None,
+        authorization_data: Some(wrap_win2k_pac(&[0]).map_err(|e| e.to_string())?),
+    };
+    let der = ticket_checksum_der(&part).map_err(|e| e.to_string())?;
+    let mut pac = sign_pac(
+        pac_cname,
+        start.unix_seconds(),
+        &PacTicket {
+            server: key,
+            kdc: key,
+            enc_tkt_der: &der,
+            is_service_tkt: !sname.is_krbtgt(),
+        },
+        &dummy_ident(&pac_cname.components_joined(), realm),
+        None,
+    )
+    .map_err(|e| e.to_string())?;
+    if flip_server {
+        let mut parsed = Pac::parse(&pac).map_err(|e| e.to_string())?;
+        if let Some(buf) = parsed
+            .buffers
+            .iter_mut()
+            .find(|b| b.kind == PAC_SERVER_CHECKSUM)
+            && buf.data.len() > 4
+        {
+            buf.data[4] ^= 0xff;
+        }
+        pac = parsed.to_bytes();
+    }
+    part.authorization_data = Some(wrap_win2k_pac(&pac).map_err(|e| e.to_string())?);
+    seal_ticket(key, kvno, realm, sname, part)
+}
+
+fn ad_types(part: &EncTicketPart) -> Vec<i32> {
+    let mut out = Vec::new();
+    let Some(ad) = part.authorization_data.as_ref() else {
+        return out;
+    };
+    for el in ad {
+        out.push(el.ad_type);
+        if el.ad_type == pa::AD_IF_RELEVANT
+            && let Ok(inner) = decode::<krb5_types::AuthorizationData>(el.ad_data.as_ref())
+        {
+            for i in inner {
+                out.push(i.ad_type);
+            }
+        }
+    }
+    out
+}
+
+fn expect_tgs_ad(
+    cfg: &Cfg,
+    case: &str,
+    req: &[u8],
+    session: &ProtocolKey,
+    want_pac: bool,
+) -> Result<(), String> {
+    let (tr, tm) = send_both(cfg, case, req)?;
+    let svc = cfg
+        .host
+        .as_ref()
+        .ok_or_else(|| format!("{case}: KERBER_HOST_KEYTAB required"))?;
+    let (_, _, rt, _) = decrypt_tgs(&tr, session, svc)?;
+    let (_, _, mt, _) = decrypt_tgs(&tm, session, svc)?;
+    let rp = pac_from_ticket_part(&rt).is_some();
+    let mp = pac_from_ticket_part(&mt).is_some();
+    if rp != want_pac || mp != want_pac {
+        return Err(format!("{case}: PAC rust={rp} mit={mp} want {want_pac}"));
+    }
+    if ad_types(&rt) != ad_types(&mt) {
+        return Err(format!(
+            "{case}: authdata types rust={:?} mit={:?}",
+            ad_types(&rt),
+            ad_types(&mt)
+        ));
+    }
+    println!(
+        r#"{{"event":"diffsend","case":"{case}","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","issued_pac":{want_pac}}}"#
+    );
+    Ok(())
 }
 
 fn random_session(etype: EncryptionType) -> Result<ProtocolKey, String> {
@@ -819,7 +953,7 @@ fn run() -> Result<(), String> {
         "tgs-not-a-tgt",
         &encode(&not_tgt).map_err(|e| e.to_string())?,
         err::NOT_US,
-        false,
+        true,
     )?;
 
     let expired = mint_tgt(
@@ -1127,8 +1261,8 @@ fn run() -> Result<(), String> {
         TicketFlags::initial_preauth(),
     )?;
     z_tkt.enc_part.kvno = Some(0);
-    let z_tgs =
-        tgs_req(z_tkt, &sess, realm, &user, host, realm, 0x1000_0028).map_err(|e| e.to_string())?;
+    let z_tgs = tgs_req(z_tkt, &sess, realm, &user, host.clone(), realm, 0x1000_0028)
+        .map_err(|e| e.to_string())?;
     expect_tgs_rep(
         &cfg,
         "tgs-header-kvno-zero",
@@ -1235,7 +1369,318 @@ fn run() -> Result<(), String> {
         err::BAD_INTEGRITY,
     )?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":33}}"#);
+    let other = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["other"]);
+    let unknown = PrincipalName::new(PrincipalName::NT_SRV_INST, ["nosuch", "x"]);
+    let window10 = (
+        now.clone(),
+        now.add_hours(10).unwrap_or_else(|_| now.clone()),
+    );
+    let renew_till = now.add_hours(24).unwrap_or_else(|_| now.clone());
+
+    let mismatch = mint_signed_header(
+        tkt_key,
+        tkt_kvno,
+        &user,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        window10.clone(),
+        TicketFlags::initial_preauth(),
+        &other,
+        false,
+        None,
+    )?;
+    expect_error(
+        &cfg,
+        "tgs-pac-client-mismatch",
+        &encode(
+            &tgs_req(
+                mismatch,
+                &sess,
+                realm,
+                &user,
+                host.clone(),
+                realm,
+                0x1000_0030,
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::BADOPTION,
+    )?;
+
+    let corrupt = mint_signed_header(
+        tkt_key,
+        tkt_kvno,
+        &user,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        window10.clone(),
+        TicketFlags::initial_preauth(),
+        &user,
+        true,
+        None,
+    )?;
+    expect_error(
+        &cfg,
+        "tgs-pac-corrupt-before-sname",
+        &encode(
+            &tgs_req(
+                corrupt,
+                &sess,
+                realm,
+                &user,
+                unknown.clone(),
+                realm,
+                0x1000_0031,
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::MODIFIED,
+    )?;
+
+    let pac_tkt = mint_signed_header(
+        tkt_key,
+        tkt_kvno,
+        &user,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        window10.clone(),
+        TicketFlags::initial_preauth(),
+        &user,
+        false,
+        None,
+    )?;
+    let pac_req = encode(&PaPacRequest { include_pac: false }).map_err(|e| e.to_string())?;
+    expect_tgs_ad(
+        &cfg,
+        "tgs-pac-request-false",
+        &encode(
+            &tgs_req_ex(
+                pac_tkt,
+                &sess,
+                realm,
+                &user,
+                host.clone(),
+                realm,
+                0x1000_0032,
+                KdcOptions::forwardable(),
+                None,
+                vec![PaData {
+                    padata_type: pa::PAC_REQUEST,
+                    padata_value: pac_req.into(),
+                }],
+                EncryptionType::preferred()
+                    .iter()
+                    .map(|e| e.to_iana())
+                    .collect(),
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        &sess,
+        true,
+    )?;
+
+    let pacless = mint_tgt(
+        tkt_key,
+        tkt_kvno,
+        &user,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        window10.clone(),
+        TicketFlags::initial_preauth(),
+    )?;
+    expect_tgs_ad(
+        &cfg,
+        "tgs-from-pacless-tgt",
+        &encode(
+            &tgs_req(
+                pacless,
+                &sess,
+                realm,
+                &user,
+                host.clone(),
+                realm,
+                0x1000_0033,
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        &sess,
+        false,
+    )?;
+
+    let (hkey, hkvno) = keytab_for(svc, 20)?;
+    let svc_part = EncTicketPart {
+        flags: TicketFlags::initial_preauth().with_bit(flag_bit::RENEWABLE, true),
+        key: EncryptionKey {
+            keytype: sess.etype().to_iana(),
+            keyvalue: sess.as_bytes().to_vec().into(),
+        },
+        crealm: krb5_types::try_ascii(realm).map_err(|e| e.to_string())?,
+        cname: user.clone(),
+        transited: TransitedEncoding {
+            tr_type: 1,
+            contents: Vec::<u8>::new().into(),
+        },
+        authtime: now.clone(),
+        starttime: Some(now.clone()),
+        endtime: now.add_hours(10).unwrap_or_else(|_| now.clone()),
+        renew_till: Some(renew_till.clone()),
+        caddr: None,
+        authorization_data: None,
+    };
+    let svc_renew = seal_ticket(hkey, hkvno, realm, &host, svc_part)?;
+    expect_tgs_rep(
+        &cfg,
+        "tgs-renew-service-ticket",
+        &encode(
+            &tgs_req_ex(
+                svc_renew,
+                &sess,
+                realm,
+                &user,
+                host.clone(),
+                realm,
+                0x1000_0034,
+                KdcOptions::forwardable()
+                    .with_bit(flag_bit::RENEWABLE, true)
+                    .with_bit(flag_bit::RENEW, true),
+                None,
+                Vec::new(),
+                EncryptionType::preferred()
+                    .iter()
+                    .map(|e| e.to_iana())
+                    .collect(),
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+    )?;
+
+    let proxy_tgt = mint_tgt(
+        tkt_key,
+        tkt_kvno,
+        &user,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        window10.clone(),
+        TicketFlags::initial_preauth().with_bit(flag_bit::PROXIABLE, true),
+    )?;
+    expect_error(
+        &cfg,
+        "tgs-proxy-krbtgt",
+        &encode(
+            &tgs_req_ex(
+                proxy_tgt,
+                &sess,
+                realm,
+                &user,
+                krbtgt_sname.clone(),
+                realm,
+                0x1000_0035,
+                KdcOptions::forwardable().with_bit(flag_bit::PROXY, true),
+                None,
+                Vec::new(),
+                EncryptionType::preferred()
+                    .iter()
+                    .map(|e| e.to_iana())
+                    .collect(),
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::BADOPTION,
+    )?;
+
+    let can_part = EncTicketPart {
+        flags: TicketFlags::initial_preauth().with_bit(flag_bit::RENEWABLE, true),
+        key: EncryptionKey {
+            keytype: sess.etype().to_iana(),
+            keyvalue: sess.as_bytes().to_vec().into(),
+        },
+        crealm: krb5_types::try_ascii(realm).map_err(|e| e.to_string())?,
+        cname: user.clone(),
+        transited: TransitedEncoding {
+            tr_type: 1,
+            contents: Vec::<u8>::new().into(),
+        },
+        authtime: now.clone(),
+        starttime: Some(now.clone()),
+        endtime: now.add_hours(10).unwrap_or_else(|_| now.clone()),
+        renew_till: Some(renew_till),
+        caddr: None,
+        authorization_data: None,
+    };
+    let can_tgt = seal_ticket(tkt_key, tkt_kvno, realm, &krbtgt_sname, can_part)?;
+    expect_tgs_rep(
+        &cfg,
+        "tgs-canonicalize-renew",
+        &encode(
+            &tgs_req_ex(
+                can_tgt,
+                &sess,
+                realm,
+                &user,
+                krbtgt_sname.clone(),
+                realm,
+                0x1000_0036,
+                KdcOptions::forwardable()
+                    .with_bit(flag_bit::RENEWABLE, true)
+                    .with_bit(flag_bit::RENEW, true)
+                    .with_bit(flag_bit::CANONICALIZE, true),
+                None,
+                Vec::new(),
+                EncryptionType::preferred()
+                    .iter()
+                    .map(|e| e.to_iana())
+                    .collect(),
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+    )?;
+
+    let expired_unknown = mint_tgt(
+        tkt_key,
+        tkt_kvno,
+        &user,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        (
+            now.add_seconds(-7200).unwrap_or_else(|_| now.clone()),
+            now.add_seconds(-3600).unwrap_or_else(|_| now.clone()),
+        ),
+        TicketFlags::initial_preauth(),
+    )?;
+    expect_error_client(
+        &cfg,
+        "tgs-expired-vs-unknown-sname",
+        &encode(
+            &tgs_req(
+                expired_unknown,
+                &sess,
+                realm,
+                &user,
+                unknown,
+                realm,
+                0x1000_0037,
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::TKT_EXPIRED,
+        true,
+    )?;
+
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":41}}"#);
     Ok(())
 }
 

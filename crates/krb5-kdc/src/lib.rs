@@ -27,10 +27,13 @@ mod store;
 pub use acl::{Acl, AclEntry, AdminOp, Restrictions};
 pub use ad::{
     PacTicket, decrypt_ticket_part, pac_from_ticket_part, should_have_ticket_signature, sign_pac,
-    ticket_checksum_der, verify_pac, verify_pac_signatures, wrap_win2k_pac,
+    sign_reply_pac, ticket_checksum_der, verify_pac, verify_pac_signatures, wrap_win2k_pac,
 };
 pub use error::Error;
-pub use issue::{IssuedAs, IssuedTgs, handle_request, issue_as, issue_tgs, kdc_error_bytes};
+pub use issue::{
+    IssuedAs, IssuedTgs, handle_request, issue_as, issue_tgs, kdc_error_bytes,
+    tgs_header_is_crossrealm,
+};
 pub use kdb::{
     KdcEnv, MemoryStore, PrincipalRead, PrincipalWrite, Store, StoreLifecycle, lookup_principal_id,
     open_store,

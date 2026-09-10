@@ -910,7 +910,7 @@ fn tgs_fast_inner_nonce_not_outer() {
 }
 
 #[test]
-fn tgs_fast_validate_allows_invalid_tgt_armor() {
+fn tgs_fast_validate_future_starttime_is_not_yet_valid() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = user_key();
@@ -946,7 +946,14 @@ fn tgs_fast_validate_allows_invalid_tgt_armor() {
     .expect("VALIDATE");
     let inner = tgs.0.req_body.clone();
     wrap_tgs_fast(&mut tgs, &issued.session_key, inner).expect("TGS FAST");
-    krb5_kdc::issue_tgs(&store, &tgs).expect("FAST VALIDATE");
+    let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("FAST VALIDATE future start");
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::TKT_NYV);
+            assert_eq!(text.as_deref(), Some("NOT_YET_VALID"));
+        }
+        other => panic!("expected Protocol, got {other:?}"),
+    }
 }
 
 fn wrap_tgs_fast(
@@ -4984,7 +4991,10 @@ fn tgs_without_pac_still_issues() {
         .best_key()
         .unwrap();
     let svc = decrypt_ticket_part(&host.key, &out.rep.0.ticket).expect("svc");
-    assert!(pac_from_ticket_part(&svc).is_some());
+    assert!(
+        pac_from_ticket_part(&svc).is_none(),
+        "TGS from a PAC-less subject issues no PAC (kdc_authdata.c:491)"
+    );
 }
 
 #[test]

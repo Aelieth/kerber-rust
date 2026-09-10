@@ -381,6 +381,28 @@ pub fn client_info_buffer(authtime_unix: u32, name: &str) -> Vec<u8> {
     v
 }
 
+/// Parse PAC client-info: NT time + UTF-16LE name (`k5_pac_validate_client`).
+#[must_use]
+pub fn parse_client_info(buf: &[u8]) -> Option<(u32, String)> {
+    if buf.len() < 10 {
+        return None;
+    }
+    let nt = u64::from_le_bytes(buf[0..8].try_into().ok()?);
+    let nlen = usize::from(u16::from_le_bytes(buf[8..10].try_into().ok()?));
+    if nlen % 2 != 0 || buf.len() < 10 + nlen {
+        return None;
+    }
+    let units: Vec<u16> = buf[10..10 + nlen]
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| u16::from_le_bytes(*c))
+        .collect();
+    let name = String::from_utf16(&units).ok()?;
+    let unix = nt.saturating_sub(NT_UNIX_EPOCH) / 10_000_000;
+    Some((u32::try_from(unix).ok()?, name))
+}
+
 fn unix_to_nt(unix: u32) -> u64 {
     u64::from(unix)
         .saturating_mul(10_000_000)

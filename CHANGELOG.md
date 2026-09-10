@@ -6,6 +6,36 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-A′-2
+
+- **kdc.** TGS gather follows `gather_tgs_req_info`: missing PA-TGS-REQ
+  is 16 `PROCESS_TGS`; header times run inside PROCESS_TGS; local TGT
+  then HEADER_PAC then `search_sprinc`. `is_crossrealm` is the header
+  ticket server realm versus the canonical server realm. Non-TGS headers
+  decrypt via `kdc_get_server_key` (DISALLOW_SVR → 7 `PROCESS_TGS`);
+  `is_local_tgs_principal` compares the instance to the ticket server
+  realm; a foreign ticket looks up `ticket.server` then
+  `krbtgt/<ticket.realm>@local`. `check_tgs_constraints` slots run
+  opts/times then `check_tgs_nontgt` / `check_tgs_tgt` by
+  `NON_TGT_OPTION` (RENEW of a service ticket issues; PROXY of a TGT is
+  13 `CAN'T PROXY TGT`; name mismatch is 26). `get_verified_pac` checks
+  the server signature only on a TGS header and retries privsvr with
+  `pac_privsvr_enctype` / PRF+ `pac_privsvr` on a service header.
+  `handle_pac` preconditions: `disable_pac`, anonymous,
+  `NO_AUTH_DATA_REQUIRED`, AS PA-PAC-REQUEST (undecodable → include),
+  TGS includes a PAC only when the subject had one. A regular TGS
+  copies the subject's non-checksum PAC buffers and re-signs (MIT
+  default `issue_pac` is NOTSUPP — no invented LOGON/UPN/ATTRIBUTES).
+  Privsvr signing uses `get_first_current_key` of the local TGT, then
+  `pac_privsvr_enctype` / PRF+ `pac_privsvr`. Transited appends only
+  when `is_crossrealm` and the header server realm is not the client
+  realm. diffsend 41 cases.
+- **test.** `a2_6_tgs_gather.rs` is the parent-red truth table.
+  `a2_6_tgs_pac_extra.rs` covers PAC-REQUEST / `disable_pac` / privsvr /
+  MIT-shape copy. `cross-kdc-gate.sh` compares MIT-TGT → Rust-TGS PAC
+  buffer types to MIT's own and verifies `setstr pac_privsvr_enctype`
+  with `krb5-pac-extract --verify-privsvr` on both legs.
+
 ### W1-0
 
 - **docs.** W1-0 archive leftovers and the master-plan Active-W1 index

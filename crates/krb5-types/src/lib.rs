@@ -300,6 +300,18 @@ impl PrincipalName {
             && self.name_string[0].as_bytes() == b"krbtgt"
             && self.name_string[1].as_bytes() == realm.as_bytes()
     }
+
+    /// MIT `is_local_tgs_principal`: TGS whose instance equals the principal realm.
+    #[must_use]
+    pub fn is_local_tgs_principal(&self, princ_realm: &str) -> bool {
+        self.is_krbtgt() && self.is_krbtgt_for(princ_realm)
+    }
+
+    /// MIT `is_cross_tgs_principal`: TGS whose instance is not the principal realm.
+    #[must_use]
+    pub fn is_cross_tgs_principal(&self, princ_realm: &str) -> bool {
+        self.is_krbtgt() && !self.is_krbtgt_for(princ_realm)
+    }
 }
 
 /// Network address of a host.
@@ -883,6 +895,13 @@ impl KerberosTime {
     pub fn delta_seconds(&self, other: &Self) -> i64 {
         self.0.timestamp().saturating_sub(other.0.timestamp())
     }
+}
+
+/// PA-PAC-REQUEST ::= SEQUENCE { include-pac [0] BOOLEAN }
+#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+pub struct PaPacRequest {
+    #[rasn(tag(explicit(0)))]
+    pub include_pac: bool,
 }
 
 /// PA-ENC-TS-ENC ::= SEQUENCE { patimestamp, pausec OPTIONAL }

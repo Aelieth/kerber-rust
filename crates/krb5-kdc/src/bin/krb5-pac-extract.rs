@@ -10,8 +10,10 @@ use std::fs;
 use std::process::ExitCode;
 
 use krb5_asn1::decode;
-use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, string_to_key};
-use krb5_kdc::{pac_from_ticket_part, s2k_params};
+use krb5_crypto::{
+    EncryptionType, KeyUsage, ProtocolKey, decrypt, derive_prfplus_enctype, string_to_key,
+};
+use krb5_kdc::{pac_from_ticket_part, s2k_params, ticket_checksum_der, verify_pac_signatures};
 use krb5_protocol::{FileCcache, Keytab};
 use krb5_types::{EncTicketPart, Ticket, ku};
 
@@ -33,6 +35,8 @@ fn main() -> ExitCode {
     let mut keys_out = None;
     let mut print_rid = false;
     let mut print_transited = false;
+    let mut print_types = false;
+    let mut verify_privsvr = None;
     let mut i = 0usize;
     while i < args.len() {
         match args[i].as_str() {
@@ -68,11 +72,20 @@ fn main() -> ExitCode {
                 print_transited = true;
                 i += 1;
             }
+            "--print-types" => {
+                print_types = true;
+                i += 1;
+            }
+            "--verify-privsvr" => {
+                verify_privsvr = args.get(i + 1).cloned();
+                i += 2;
+            }
             _ => {
                 eprintln!(
                     "usage: krb5-pac-extract --keytab <kt> --ccache <cc> [--out <pac>] \
                      [--enc-tkt-out <der>] [--krbtgt-keytab <kt>] [--keys-out <txt>] \
-                     [--print-rid] [--print-transited]"
+                     [--print-rid] [--print-transited] [--print-types] \
+                     [--verify-privsvr <enctype>]"
                 );
                 return ExitCode::from(2);
             }
@@ -84,7 +97,7 @@ fn main() -> ExitCode {
         );
         return ExitCode::from(2);
     };
-    if out.is_none() && !print_transited {
+    if out.is_none() && !print_transited && !print_types && verify_privsvr.is_none() {
         eprintln!("usage: krb5-pac-extract --keytab <kt> --ccache <cc> --out <pac>");
         return ExitCode::from(2);
     }
@@ -105,7 +118,7 @@ fn main() -> ExitCode {
     let kdc_key = krbtgt_kt.as_ref().and_then(|p| {
         Keytab::parse(&fs::read(p).unwrap_or_default())
             .ok()
-            .and_then(|kt| preferred_key(&kt))
+            .and_then(|kt| local_tgt_key(&kt, &cc).or_else(|| preferred_key(&kt)))
     });
     let usage = match KeyUsage::new(ku::TICKET) {
         Ok(u) => u,
@@ -152,18 +165,73 @@ fn main() -> ExitCode {
                 };
                 println!("transited_realms={realms}");
                 println!("transited_policy_checked={checked}");
-                if out.is_none() {
+                if out.is_none() && !print_types && verify_privsvr.is_none() {
                     return ExitCode::SUCCESS;
                 }
             }
-            let Some(out_path) = out.as_ref() else {
-                return ExitCode::SUCCESS;
-            };
             let Some(pac) = pac_from_ticket_part(&part) else {
-                if print_transited {
+                if print_transited && out.is_none() && !print_types && verify_privsvr.is_none() {
                     return ExitCode::SUCCESS;
                 }
                 continue;
+            };
+            if print_types {
+                match krb5_types::pac::Pac::parse(&pac) {
+                    Ok(parsed) => {
+                        let mut kinds: Vec<u32> = parsed.buffers.iter().map(|b| b.kind).collect();
+                        kinds.sort_unstable();
+                        let joined = kinds
+                            .iter()
+                            .map(u32::to_string)
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        println!("pac_types={joined}");
+                    }
+                    Err(e) => {
+                        eprintln!("krb5-pac-extract: PAC parse: {e}");
+                        return ExitCode::from(1);
+                    }
+                }
+            }
+            if let Some(etname) = &verify_privsvr {
+                let et = match EncryptionType::from_mit_name(etname) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        eprintln!("krb5-pac-extract: privsvr enctype {etname}: {e}");
+                        return ExitCode::from(1);
+                    }
+                };
+                let Some(kdc) = kdc_key.as_ref() else {
+                    eprintln!("krb5-pac-extract: --verify-privsvr needs --krbtgt-keytab");
+                    return ExitCode::from(2);
+                };
+                let privsvr = match derive_prfplus_enctype(kdc, b"pac_privsvr", et) {
+                    Ok(k) => k,
+                    Err(e) => {
+                        eprintln!("krb5-pac-extract: derive pac_privsvr: {e}");
+                        return ExitCode::from(1);
+                    }
+                };
+                let der = match ticket_checksum_der(&part) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        eprintln!("krb5-pac-extract: ticket checksum DER: {e}");
+                        return ExitCode::from(1);
+                    }
+                };
+                if let Err(e) =
+                    verify_pac_signatures(&pac, &ent.key, Some(&privsvr), Some(&der), true)
+                {
+                    eprintln!("krb5-pac-extract: privsvr verify: {e}");
+                    return ExitCode::from(1);
+                }
+                println!("privsvr_ok={etname}");
+            }
+            if out.is_none() && !print_rid {
+                return ExitCode::SUCCESS;
+            }
+            let Some(out_path) = out.as_ref() else {
+                return ExitCode::SUCCESS;
             };
             if print_rid {
                 let rid = krb5_types::pac::Pac::parse(&pac).ok().and_then(|parsed| {
@@ -212,6 +280,27 @@ fn main() -> ExitCode {
     }
     eprintln!("krb5-pac-extract: no host/ ticket in ccache");
     ExitCode::from(1)
+}
+
+fn local_tgt_key(kt: &Keytab, cc: &FileCcache) -> Option<ProtocolKey> {
+    for cred in &cc.creds {
+        if cred.is_config() {
+            continue;
+        }
+        if !cred.server.1.components_joined().starts_with("krbtgt/") {
+            continue;
+        }
+        let ticket: Ticket = decode(&cred.ticket).ok()?;
+        let et = EncryptionType::from_iana(ticket.enc_part.etype).ok()?;
+        let kvno = ticket.enc_part.kvno;
+        return kt
+            .entries
+            .iter()
+            .find(|ent| ent.key.etype() == et && kvno.is_none_or(|v| ent.kvno == v))
+            .or_else(|| kt.entries.iter().find(|ent| ent.key.etype() == et))
+            .map(|ent| ent.key.clone());
+    }
+    None
 }
 
 fn preferred_key(kt: &Keytab) -> Option<ProtocolKey> {

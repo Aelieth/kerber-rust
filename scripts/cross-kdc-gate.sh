@@ -42,7 +42,7 @@ if [ ! -f "$GOLDEN" ]; then
     die "missing golden dump $GOLDEN"
 fi
 
-cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-kdb -q
+cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-kdb --bin krb5-pac-extract -q
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT" || true
@@ -209,5 +209,72 @@ spake_kinit_via() {
 spake_kinit_via rust
 spake_kinit_via mit
 
-log "cross.kdc.gate" "ok" ",\"tgt_etype\":\"$MIT_TGT_ETYPE\",\"directions\":4,\"spake_pa_type\":151"
+echo "==== MIT-TGT → Rust-TGS PAC buffer types match MIT-TGT → MIT-TGS ===="
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-pac-extract" "$NAME":/tmp/krb5-pac-extract
+docker exec "$NAME" chmod +x /tmp/krb5-pac-extract
+docker exec "$NAME" kadmin.local -q 'ktadd -norandkey -k /tmp/host.kt host/testhost.kerber.test' \
+    >/tmp/cross-kdc-ktadd.out 2>&1 || die "ktadd -norandkey host failed"
+docker exec "$NAME" kadmin.local -q 'ktadd -norandkey -k /tmp/krbtgt.kt krbtgt/KERBER.TEST' \
+    >/tmp/cross-kdc-ktadd-tgt.out 2>&1 || die "ktadd -norandkey krbtgt failed"
+pac_types_via() {
+    local tgs=$1
+    kinit_via mit
+    got="$(kvno_via "$tgs")"
+    echo "$got"
+    echo "$got" | grep -Fx 'host/testhost.kerber.test@KERBER.TEST: kvno = 1' \
+        || die "PAC-types $tgs kvno failed: $got"
+    docker exec -e KRB5CCNAME="$CC" "$NAME" /tmp/krb5-pac-extract \
+        --keytab /tmp/host.kt --ccache "$CC" --print-types
+}
+MIT_PAC_TYPES="$(pac_types_via mit | sed -n 's/^pac_types=//p')"
+RUST_PAC_TYPES="$(pac_types_via rust | sed -n 's/^pac_types=//p')"
+echo "mit_pac_types=$MIT_PAC_TYPES rust_pac_types=$RUST_PAC_TYPES"
+[ -n "$MIT_PAC_TYPES" ] || die "MIT TGS PAC types empty"
+[ "$MIT_PAC_TYPES" = "$RUST_PAC_TYPES" ] || die "PAC types differ: mit=$MIT_PAC_TYPES rust=$RUST_PAC_TYPES"
+
+echo "==== setstr pac_privsvr_enctype + MIT kvno both legs ===="
+docker exec "$NAME" kadmin.local -q \
+    'setstr host/testhost.kerber.test pac_privsvr_enctype aes128-cts-hmac-sha1-96'
+docker exec "$NAME" kdb5_util dump /tmp/privsvr.dump
+docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
+sleep 0.3
+LOAD_PRIV="$(docker exec \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    "$NAME" /tmp/krb5-kdb load /tmp/privsvr.dump)"
+echo "$LOAD_PRIV"
+echo "$LOAD_PRIV" | grep -q 'ok load version=7' || die "rust kdb reload after setstr failed"
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" sh -c '/tmp/krb5-kdc 127.0.0.1:8888 >/tmp/rust-kdc.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/rust-kdc.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+[ "$ok" = 1 ] || die "rust kdc did not listen after privsvr reload"
+privsvr_kvno() {
+    local tgs=$1
+    kinit_via mit
+    got="$(kvno_via "$tgs")"
+    echo "$got"
+    echo "$got" | grep -Fx 'host/testhost.kerber.test@KERBER.TEST: kvno = 1' \
+        || die "privsvr $tgs kvno failed: $got"
+    docker exec -e KRB5CCNAME="$CC" "$NAME" /tmp/krb5-pac-extract \
+        --keytab /tmp/host.kt --krbtgt-keytab /tmp/krbtgt.kt --ccache "$CC" \
+        --verify-privsvr aes128-cts-hmac-sha1-96
+}
+MIT_PRIVSVR="$(privsvr_kvno mit | sed -n 's/^privsvr_ok=//p')"
+RUST_PRIVSVR="$(privsvr_kvno rust | sed -n 's/^privsvr_ok=//p')"
+echo "mit_privsvr=$MIT_PRIVSVR rust_privsvr=$RUST_PRIVSVR"
+[ "$MIT_PRIVSVR" = "aes128-cts-hmac-sha1-96" ] || die "MIT privsvr verify failed"
+[ "$RUST_PRIVSVR" = "aes128-cts-hmac-sha1-96" ] || die "Rust privsvr verify failed"
+
+log "cross.kdc.gate" "ok" ",\"tgt_etype\":\"$MIT_TGT_ETYPE\",\"directions\":4,\"spake_pa_type\":151,\"pac_types\":\"$MIT_PAC_TYPES\""
 echo "cross-kdc-gate ok"

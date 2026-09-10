@@ -17,11 +17,9 @@ use krb5_types::{
     TgsReq, Ticket, TicketFlags, TransitedEncoding, err, flag_bit, ku, pa,
 };
 
-use crate::ad::{
-    presented_tgt_logon, s4u2proxy_client, s4u2self_client, sign_pac, u2u_session, wrap_win2k_pac,
-};
+use crate::ad::{s4u2proxy_client, s4u2self_client, u2u_session, wrap_win2k_pac};
 use crate::error::Error;
-use crate::kdb::PrincipalRead;
+use crate::kdb::{PrincipalRead, lookup_principal_id};
 use crate::kdb_dump::TL_LAST_ADMIN_UNLOCK;
 use crate::plugins::{PreauthAction, current_policy, run_as_preauth};
 use crate::preauth::{
@@ -522,18 +520,28 @@ fn issue_as_body(
         .add_seconds(i64::try_from(life).unwrap_or(i64::MAX))
         .or_else(|_| starttime.add_hours(10))
         .map_err(|_| proto(err::NEVER_VALID, status::UNKNOWN_REASON))?;
-    let include_pac = !attr(&server, KDB_NO_AUTH_DATA_REQUIRED);
+    let include_pac = include_pac_for_reply(
+        store,
+        &server,
+        req.0.padata.as_deref(),
+        true,
+        true,
+        flags.bit(flag_bit::ANONYMOUS),
+    );
     let krbtgt_p = store
         .fetch_krbtgt()?
         .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
     let krbtgt_key = krbtgt_p
-        .best_key()
+        .first_current_key()
         .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
-    let pac_kdc = if sname.is_krbtgt_for(store.realm()) {
-        skey.key.clone()
-    } else {
-        krbtgt_key.key.clone()
-    };
+    let pac_kdc = crate::ad::pac_privsvr_key(
+        &server,
+        if sname.is_krbtgt_for(store.realm()) {
+            &skey.key
+        } else {
+            &krbtgt_key.key
+        },
+    )?;
     // do_as_req.c:660-666: with CANONICALIZE a krbtgt request is issued under
     // the canonical DB server name (Windows short-realm aliases), and
     // reply_encpart.server follows the ticket server (do_as_req.c:243). Any
@@ -572,6 +580,7 @@ fn issue_as_body(
         include_pac,
         None,
         &starttime,
+        None,
     )?;
     let renew_till = renew_till_for(
         store,
@@ -674,6 +683,8 @@ struct HeaderTgt {
     tgt_key: ProtocolKey,
     session: ProtocolKey,
     authenticator: krb5_types::Authenticator,
+    header_realm: String,
+    header_server: Principal,
 }
 
 fn issue_tgs_from(
@@ -694,7 +705,7 @@ fn issue_tgs_from(
         return Err(proto(err::GENERIC, status::UNKNOWN_REASON));
     }
     let pa_tgs = extract_pa_tgs(req.0.padata.as_deref())
-        .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PROCESS_TGS))?;
+        .ok_or_else(|| proto(err::PADATA_TYPE_NOSUPP, status::PROCESS_TGS))?;
     let header = process_tgs_header(store, pa_tgs.as_ref(), body_der)?;
     let tgs_fast = unwrap_fast_tgs(
         store,
@@ -721,12 +732,11 @@ fn process_tgs_header(
     if ap.ap_options.use_session_key() || ap.ap_options.wants_mutual() {
         return Err(proto(err::POLICY, status::PROCESS_TGS));
     }
-    if !ap.ticket.sname.is_krbtgt_for(store.realm()) {
-        return Err(proto(err::NOT_US, status::BAD_TGS_SERVER_NAME));
-    }
+    let header_realm = utf8_realm(&ap.ticket.realm)?.to_owned();
     let tkt_etype = EncryptionType::from_iana(ap.ticket.enc_part.etype)
         .or_else(|_| EncryptionType::known(ap.ticket.enc_part.etype))?;
-    let (enc_tkt, tgt_key, _) = decrypt_presented_tgt(store, &ap, tkt_etype)?;
+    let (enc_tkt, tgt_key, _, header_server) = decrypt_presented_tgt(store, &ap, tkt_etype)?;
+    check_header_times_rd_req(store, &enc_tkt)?;
     let sess_etype = EncryptionType::from_iana(enc_tkt.key.keytype)
         .or_else(|_| EncryptionType::known(enc_tkt.key.keytype))?;
     let session = ProtocolKey::from_bytes(sess_etype, enc_tkt.key.keyvalue.as_ref())?;
@@ -790,6 +800,8 @@ fn process_tgs_header(
         tgt_key,
         session,
         authenticator,
+        header_realm,
+        header_server,
     })
 }
 
@@ -868,13 +880,14 @@ fn issue_tgs_body(
         tgt_key,
         session: tgt_session,
         authenticator,
+        header_realm,
+        header_server,
     } = header;
     let renew = body.kdc_options.bit(flag_bit::RENEW);
     let validate = body.kdc_options.bit(flag_bit::VALIDATE);
     if renew && validate {
         return Err(proto(err::BADOPTION, status::TICKET_NOT_RENEWABLE));
     }
-    check_ticket_times(store, &enc_tkt, renew, validate)?;
     let rkey = ReplayKey {
         client: format!(
             "{}@{}",
@@ -899,13 +912,25 @@ fn issue_tgs_body(
     if req_realm != store.realm() {
         return Err(proto(err::GENERIC, status::GET_LOCAL_TGT));
     }
-    if (renew || validate) && sname != ap.ticket.sname {
-        return Err(proto(err::BADOPTION, status::RENEW_SERVER_MISMATCH));
-    }
+    let header_pac = crate::ad::get_verified_pac(
+        &enc_tkt,
+        &tgt_key,
+        &header_server,
+        store.fetch_krbtgt()?.as_ref(),
+    )?;
     current_policy().check_tgs(store, &sname)?;
-    let server = store
+    let mut server = store
         .fetch_name(&sname)?
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::LOOKING_UP_SERVER))?;
+    check_tgs_constraints_skeleton(
+        body,
+        &ap.ticket.sname,
+        &enc_tkt,
+        &sname,
+        req_realm.as_str(),
+        renew,
+        validate,
+    )?;
     let tgs_client = store.fetch_name(&enc_tkt.cname)?;
     // MIT TGS checks the server only; a valid TGT still issues after client expiry.
     // MIT runs the service flag rules (deny_opts/deny_all/reqd_flags) before
@@ -942,6 +967,7 @@ fn issue_tgs_body(
         if let Some(ref for_p) = local_user {
             check_s4u2self_locked(for_p, &server)?;
         }
+        server.attributes &= !KDB_NO_AUTH_DATA_REQUIRED;
         // Referral TGTs name the header client (MIT do_tgs_req.c:758-759).
         if !is_referral {
             ticket_cname = user;
@@ -951,7 +977,14 @@ fn issue_tgs_body(
     } else if let Some((cn, logon)) = s4u2proxy_client(store, req, &enc_tkt.cname, tgs_padata)? {
         ticket_cname = cn;
         evidence_logon = Some(logon);
-    } else if let Some(logon) = presented_tgt_logon(&enc_tkt, &tgt_key)? {
+    } else if let Some(logon) = header_pac.as_ref().and_then(|p| {
+        let parsed = krb5_types::pac::Pac::parse(p).ok()?;
+        parsed
+            .unique_buffer(krb5_types::pac::PAC_LOGON_INFO)
+            .ok()
+            .flatten()
+            .map(<[u8]>::to_vec)
+    }) {
         // A cross-realm subject's PAC comes from a trusted realm; MS-PAC SID
         // filtering forbids it from asserting local-domain SIDs (a foreign
         // realm claiming the local domain's Domain Admins or RID 500). A local
@@ -977,16 +1010,18 @@ fn issue_tgs_body(
         (skey.key.clone(), skey.kvno, skey.etype)
     };
     let mut transited = enc_tkt.transited.clone();
-    // MIT is_crossrealm: header TGT realm ≠ local KDC realm and ≠ client.
-    let prev_hop = utf8_realm(&ap.ticket.realm)?;
+    // MIT do_tgs_req.c:684-690: header-server princ realm ≠ canonical server realm.
+    let prev_hop = header_realm.as_str();
     let crealm = utf8_realm(&enc_tkt.crealm)?;
-    let is_crossrealm = prev_hop != store.realm() && prev_hop != crealm;
+    let is_crossrealm = tgs_header_is_crossrealm(prev_hop, &server.realm);
     // MIT check_tgs_lineage: a local user on a foreign TGT is POLICY
     // (skipped for S4U2Self).
     if crealm == store.realm() && is_crossrealm && !s4u2self {
         return Err(proto(err::POLICY, status::INVALID_LINEAGE));
     }
-    if is_crossrealm {
+    // MIT do_tgs_req.c:787-789: keep the header transited when the header
+    // ticket server realm equals the client realm (implicit in the field).
+    if is_crossrealm && prev_hop != crealm {
         if transited.tr_type != 1 {
             return Err(proto(err::TRTYPE_NOSUPP, status::VALIDATE_TRANSIT_TYPE));
         }
@@ -1101,16 +1136,29 @@ fn issue_tgs_body(
         .fetch_krbtgt()?
         .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
     let krbtgt_key = krbtgt_p
-        .best_key()
+        .first_current_key()
         .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
     // Referral TGT PAC 16/19/7 must be keyed with the inter-realm key
     // the foreign KDC holds (Windows TDO inbound), not the local krbtgt.
-    let pac_kdc = if sname.is_krbtgt() && !sname.is_krbtgt_for(store.realm()) {
-        tkt_key.clone()
-    } else {
-        krbtgt_key.key.clone()
-    };
-    let include_pac = !attr(&server, KDB_NO_AUTH_DATA_REQUIRED);
+    let pac_kdc = crate::ad::pac_privsvr_key(
+        &server,
+        if sname.is_krbtgt() && !sname.is_krbtgt_for(store.realm()) {
+            &tkt_key
+        } else {
+            &krbtgt_key.key
+        },
+    )?;
+    if !s4u2self && !body.kdc_options.bit(flag_bit::CNAME_IN_ADDL_TKT) {
+        crate::ad::check_normal_tgs_pac(&enc_tkt, header_pac.as_deref(), &server, is_crossrealm)?;
+    }
+    let include_pac = include_pac_for_reply(
+        store,
+        &server,
+        tgs_padata,
+        false,
+        header_pac.is_some(),
+        flags.bit(flag_bit::ANONYMOUS),
+    );
     let ticket = mint_ticket(
         &tkt_key,
         tkt_kvno,
@@ -1130,6 +1178,11 @@ fn issue_tgs_body(
         include_pac,
         evidence_logon.as_deref(),
         &starttime,
+        if s4u2self || body.kdc_options.bit(flag_bit::CNAME_IN_ADDL_TKT) {
+            None
+        } else {
+            header_pac.as_deref()
+        },
     )?;
     let enc_part = enc_rep_part(
         &session,
@@ -1209,16 +1262,26 @@ fn decrypt_presented_tgt(
     store: &dyn PrincipalRead,
     ap: &krb5_types::ApReq,
     tkt_etype: EncryptionType,
-) -> Result<(EncTicketPart, ProtocolKey, Vec<u8>), Error> {
+) -> Result<(EncTicketPart, ProtocolKey, Vec<u8>, Principal), Error> {
     // MIT kdc_get_server_key (kdc_util.c:360-409): ticket.server, DISALLOW → 7.
     // Incoming interrealm keys are stored as krbtgt/<ticket.realm>@<local>.
     let ticket_realm = utf8_realm(&ap.ticket.realm)?;
     let princ = if ticket_realm == store.realm() {
         store.fetch_name(&ap.ticket.sname)?
     } else {
-        let name = PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", ticket_realm])
-            .map_err(|_| proto(err::S_PRINCIPAL_UNKNOWN, status::PROCESS_TGS))?;
-        store.fetch_name(&name)?
+        store
+            .fetch(&lookup_principal_id(&ap.ticket.sname, ticket_realm))?
+            .map_or_else(
+                || {
+                    let name = PrincipalName::try_new(
+                        PrincipalName::NT_SRV_INST,
+                        ["krbtgt", ticket_realm],
+                    )
+                    .map_err(|_| proto(err::S_PRINCIPAL_UNKNOWN, status::PROCESS_TGS))?;
+                    store.fetch_name(&name)
+                },
+                |p| Ok(Some(p)),
+            )?
     };
     let Some(p) = princ else {
         return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::PROCESS_TGS));
@@ -1226,9 +1289,9 @@ fn decrypt_presented_tgt(
     if attr(&p, KDB_DISALLOW_ALL_TIX) || attr(&p, KDB_DISALLOW_SVR) {
         return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::PROCESS_TGS));
     }
-    // MIT kdc_rd_ap_req (kdc_util.c:295-348): local TGS search_enctype = -1;
-    // kvno 0 retries at most three times, decrementing the found kvno.
-    let local_tgs = ap.ticket.sname.is_krbtgt_for(store.realm());
+    // MIT kdc_rd_ap_req: search_enctype = -1 only for a local TGS
+    // (instance == ticket.server.realm), not every krbtgt/KDC-realm.
+    let local_tgs = ap.ticket.sname.is_local_tgs_principal(ticket_realm);
     let search_enctype = if local_tgs { None } else { Some(tkt_etype) };
     let ticket_kvno = ap.ticket.enc_part.kvno.unwrap_or(0);
     let mut kvno = ticket_kvno;
@@ -1242,7 +1305,7 @@ fn decrypt_presented_tgt(
                 if let Ok(plain) = decrypt(&key, usage, cipher)
                     && let Ok(part) = decode::<EncTicketPart>(&plain)
                 {
-                    return Ok((part, key, plain));
+                    return Ok((part, key, plain, p.clone()));
                 }
                 proto(err::BAD_INTEGRITY, status::PROCESS_TGS)
             }
@@ -1286,55 +1349,123 @@ fn find_server_key(
     Ok((k.key.clone(), k.kvno))
 }
 
-fn check_ticket_times(
-    store: &dyn PrincipalRead,
-    tkt: &EncTicketPart,
-    renew: bool,
-    validate: bool,
-) -> Result<(), Error> {
+/// MIT `krb5int_validate_times` inside `kdc_process_tgs_req` (PROCESS_TGS).
+fn check_header_times_rd_req(store: &dyn PrincipalRead, tkt: &EncTicketPart) -> Result<(), Error> {
     let now = KerberosTime::now();
     let skew = store.policy().skew;
-    if validate {
-        if !tkt.flags.invalid() {
-            return Err(proto(err::BADOPTION, status::VALIDATE_VALID_TICKET));
-        }
-        let start = tkt.starttime.as_ref().unwrap_or(&tkt.authtime);
-        if now.delta_seconds(start) < -skew {
-            return Err(proto(err::TKT_NYV, status::NOT_YET_VALID));
-        }
-        if tkt.endtime.delta_seconds(&now) < -skew {
-            return Err(proto(err::TKT_EXPIRED, status::TKT_EXPIRED));
-        }
-        return Ok(());
-    }
-    if tkt.flags.invalid() {
-        return Err(proto(err::TKT_NYV, status::TICKET_NOT_VALID));
-    }
     if let Some(start) = &tkt.starttime
         && now.delta_seconds(start) < -skew
     {
-        // MIT krb5int_validate_times runs inside kdc_process_tgs_req (rd_req),
-        // so a not-yet-valid header ticket reports PROCESS_TGS (do_tgs_req.c:623).
         return Err(proto(err::TKT_NYV, status::PROCESS_TGS));
     }
+    if tkt.endtime.delta_seconds(&now) < -skew {
+        return Err(proto(err::TKT_EXPIRED, status::PROCESS_TGS));
+    }
+    Ok(())
+}
+
+/// MIT `do_tgs_req.c:686`: header ticket server realm ≠ canonical server realm.
+#[must_use]
+pub fn tgs_header_is_crossrealm(header_server_realm: &str, sprinc_realm: &str) -> bool {
+    header_server_realm != sprinc_realm
+}
+
+fn non_tgt_option(body: &KdcReqBody) -> bool {
+    body.kdc_options.bit(flag_bit::FORWARDED)
+        || body.kdc_options.bit(flag_bit::PROXY)
+        || body.kdc_options.bit(flag_bit::RENEW)
+        || body.kdc_options.bit(flag_bit::VALIDATE)
+}
+
+fn check_tgs_constraints_skeleton(
+    body: &KdcReqBody,
+    header_sname: &PrincipalName,
+    enc_tkt: &EncTicketPart,
+    req_sname: &PrincipalName,
+    req_realm: &str,
+    renew: bool,
+    validate: bool,
+) -> Result<(), Error> {
+    if body.kdc_options.bit(flag_bit::FORWARDED) && !enc_tkt.flags.bit(flag_bit::FORWARDABLE) {
+        return Err(proto(err::BADOPTION, status::TGT_NOT_FORWARDABLE));
+    }
+    if body.kdc_options.bit(flag_bit::PROXY) && !enc_tkt.flags.bit(flag_bit::PROXIABLE) {
+        return Err(proto(err::BADOPTION, status::TGT_NOT_PROXIABLE));
+    }
+    if enc_tkt.flags.invalid() && !validate {
+        return Err(proto(err::TKT_NYV, status::TICKET_NOT_VALID));
+    }
+    if validate {
+        if !enc_tkt.flags.invalid() {
+            return Err(proto(err::BADOPTION, status::VALIDATE_VALID_TICKET));
+        }
+        let now = KerberosTime::now();
+        let start = enc_tkt.starttime.as_ref().unwrap_or(&enc_tkt.authtime);
+        if now.delta_seconds(start) < 0 {
+            return Err(proto(err::TKT_NYV, status::NOT_YET_VALID));
+        }
+    }
     if renew {
-        if !tkt.flags.renewable() {
+        if !enc_tkt.flags.renewable() {
             return Err(proto(err::BADOPTION, status::TICKET_NOT_RENEWABLE));
         }
-        match &tkt.renew_till {
+        let now = KerberosTime::now();
+        match &enc_tkt.renew_till {
             Some(till) if till.unix_seconds() <= now.unix_seconds() => {
                 return Err(proto(err::TKT_EXPIRED, status::TKT_EXPIRED));
             }
             None => return Err(proto(err::TKT_EXPIRED, status::TKT_EXPIRED)),
             Some(_) => {}
         }
-        return Ok(());
     }
-    if tkt.endtime.delta_seconds(&now) < -skew {
-        // Same rd_req stage: an expired header ticket is PROCESS_TGS.
-        return Err(proto(err::TKT_EXPIRED, status::PROCESS_TGS));
+    if non_tgt_option(body) {
+        if header_sname != req_sname {
+            return Err(proto(err::SERVER_NOMATCH, status::RENEW_SERVER_MISMATCH));
+        }
+        if body.kdc_options.bit(flag_bit::PROXY) && req_sname.is_krbtgt() {
+            return Err(proto(err::BADOPTION, status::CANT_PROXY_TGT));
+        }
+    } else {
+        if !header_sname.is_krbtgt() {
+            return Err(proto(err::NOT_US, status::BAD_TGS_SERVER_NAME));
+        }
+        if !header_sname.is_krbtgt_for(req_realm) {
+            return Err(proto(err::NOT_US, status::BAD_TGS_SERVER_INSTANCE));
+        }
     }
     Ok(())
+}
+
+fn include_pac_for_reply(
+    store: &dyn PrincipalRead,
+    server: &Principal,
+    padata: Option<&[PaData]>,
+    is_as_req: bool,
+    subject_had_pac: bool,
+    anonymous: bool,
+) -> bool {
+    if attr(server, KDB_NO_AUTH_DATA_REQUIRED) {
+        return false;
+    }
+    if store.policy().disable_pac || anonymous {
+        return false;
+    }
+    if is_as_req {
+        include_pac_p(padata)
+    } else {
+        subject_had_pac
+    }
+}
+
+fn include_pac_p(padata: Option<&[PaData]>) -> bool {
+    let Some(raw) = padata.and_then(|ps| {
+        ps.iter()
+            .find(|p| p.padata_type == pa::PAC_REQUEST)
+            .map(|p| p.padata_value.as_ref())
+    }) else {
+        return true;
+    };
+    decode::<krb5_types::PaPacRequest>(raw).map_or(true, |p| p.include_pac)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1357,6 +1488,7 @@ fn mint_ticket(
     include_pac: bool,
     logon_override: Option<&[u8]>,
     starttime: &KerberosTime,
+    subject_pac: Option<&[u8]>,
 ) -> Result<Ticket, Error> {
     let mut part = EncTicketPart {
         flags,
@@ -1392,7 +1524,7 @@ fn mint_ticket(
         } else {
             store.pac_identity(cname, crealm)
         };
-        let pac = sign_pac(
+        let pac = crate::ad::sign_reply_pac(
             cname,
             authtime.unix_seconds(),
             &crate::ad::PacTicket {
@@ -1403,6 +1535,7 @@ fn mint_ticket(
             },
             &ident,
             logon_override,
+            subject_pac,
         )?;
         part.authorization_data = Some(wrap_win2k_pac(&pac)?);
     }
@@ -1616,7 +1749,7 @@ fn tgs_header_client(store: &dyn PrincipalRead, req: &TgsReq) -> Option<Principa
     let etype = EncryptionType::from_iana(ap.ticket.enc_part.etype)
         .or_else(|_| EncryptionType::known(ap.ticket.enc_part.etype))
         .ok()?;
-    let (enc_tkt, _, _) = decrypt_presented_tgt(store, &ap, etype).ok()?;
+    let (enc_tkt, _, _, _) = decrypt_presented_tgt(store, &ap, etype).ok()?;
     Some(enc_tkt.cname)
 }
 
@@ -2271,4 +2404,17 @@ fn apply_disallow_flags(
 
 fn utf8_realm(r: &krb5_types::Realm) -> Result<&str, Error> {
     std::str::from_utf8(r.as_bytes()).map_err(|_| proto(err::GENERIC, status::UNKNOWN_REASON))
+}
+
+#[cfg(test)]
+mod a2_6_crossrealm {
+    use super::tgs_header_is_crossrealm;
+
+    #[test]
+    fn is_crossrealm_is_header_realm_vs_server_realm() {
+        assert!(!tgs_header_is_crossrealm("KERBER.TEST", "KERBER.TEST"));
+        assert!(tgs_header_is_crossrealm("OTHER.TEST", "KERBER.TEST"));
+        assert!(!tgs_header_is_crossrealm("OTHER.TEST", "OTHER.TEST"));
+        assert!(tgs_header_is_crossrealm("KERBER.TEST", "OTHER.TEST"));
+    }
 }
