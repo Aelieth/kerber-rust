@@ -530,6 +530,7 @@ KLIST_BM="$(docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf "$MITNAME" klist
 echo "$KLIST_BM"
 echo "$KLIST_BM" | grep -q 'host/testhost.kerber.test'
 echo "$KLIST_BM" | grep -qE 'Addresses: [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'
+echo "MIT_kinit_a_both_legs"
 
 log "s4u.mit.gate" "ok" ',"principal":"host/testhost.kerber.test","for_client":"user@KERBER.TEST"'
 exit 0
