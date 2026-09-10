@@ -505,7 +505,7 @@ fn mint_tgt_ad(
         caddr: None,
         authorization_data,
     };
-    seal_ticket(krbtgt, kvno, realm, sname, part)
+    seal_ticket(krbtgt, kvno, realm, sname, &part)
 }
 
 fn seal_ticket(
@@ -513,9 +513,9 @@ fn seal_ticket(
     kvno: u32,
     realm: &str,
     sname: &PrincipalName,
-    part: EncTicketPart,
+    part: &EncTicketPart,
 ) -> Result<Ticket, String> {
-    let der = encode(&part).map_err(|e| e.to_string())?;
+    let der = encode(part).map_err(|e| e.to_string())?;
     let usage = KeyUsage::new(ku::TICKET).map_err(|e| e.to_string())?;
     let cipher = encrypt(key, usage, &der).map_err(|e| e.to_string())?;
     Ok(Ticket {
@@ -539,6 +539,7 @@ fn dummy_ident(sam: &str, realm: &str) -> PacIdentity {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn mint_signed_header(
     key: &ProtocolKey,
     kvno: u32,
@@ -599,7 +600,7 @@ fn mint_signed_header(
         pac = parsed.to_bytes();
     }
     part.authorization_data = Some(wrap_win2k_pac(&pac).map_err(|e| e.to_string())?);
-    seal_ticket(key, kvno, realm, sname, part)
+    seal_ticket(key, kvno, realm, sname, &part)
 }
 
 /// Service ticket: server checksum under `server`, privsvr under `kdc`.
@@ -651,7 +652,7 @@ fn mint_signed_stkt(
     )
     .map_err(|e| e.to_string())?;
     part.authorization_data = Some(wrap_win2k_pac(&pac).map_err(|e| e.to_string())?);
-    seal_ticket(server, server_kvno, realm, sname, part)
+    seal_ticket(server, server_kvno, realm, sname, &part)
 }
 
 fn ad_types(part: &EncTicketPart) -> Vec<i32> {
@@ -1622,7 +1623,7 @@ fn run() -> Result<(), String> {
         caddr: None,
         authorization_data: None,
     };
-    let svc_renew = seal_ticket(hkey, hkvno, realm, &host, svc_part)?;
+    let svc_renew = seal_ticket(hkey, hkvno, realm, &host, &svc_part)?;
     expect_tgs_rep(
         &cfg,
         "tgs-renew-service-ticket",
@@ -1705,7 +1706,7 @@ fn run() -> Result<(), String> {
         caddr: None,
         authorization_data: None,
     };
-    let can_tgt = seal_ticket(tkt_key, tkt_kvno, realm, &krbtgt_sname, can_part)?;
+    let can_tgt = seal_ticket(tkt_key, tkt_kvno, realm, &krbtgt_sname, &can_part)?;
     expect_tgs_rep(
         &cfg,
         "tgs-canonicalize-renew",
@@ -2252,7 +2253,7 @@ fn run() -> Result<(), String> {
                 tkt_kvno,
                 realm,
                 &krbtgt_sname,
-                bad_sess,
+                &bad_sess,
             )?]),
             0x1000_005d,
         )?,
