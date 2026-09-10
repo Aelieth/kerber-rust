@@ -624,11 +624,7 @@ echo "$MIT_PAC" | grep -q 'proxy_target=host/testhost.kerber.test'
 echo "$MIT_PAC" | grep -q 'transited_services=host/testhost.kerber.test@KERBER.TEST'
 
 echo "==== Rust kvno -U user -P (classic S4U2Proxy happy) ===="
-docker exec "$NAME" sh -c 'for p in /proc/[0-9]*; do
-  comm=$(cat "$p/comm" 2>/dev/null) || continue
-  [ "$comm" = krb5-kdc ] || continue
-  kill -9 "${p#/proc/}" 2>/dev/null || true
-done'
+docker exec "$NAME" sh -c 'for p in /proc/[0-9]*; do comm=$(cat "$p/comm" 2>/dev/null) || continue; [ "$comm" = krb5-kdc ] || continue; kill -9 "${p#/proc/}" 2>/dev/null || true; done'
 ok=0
 for _ in $(seq 1 40); do
     if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',8888),0.15)" 2>/dev/null; then

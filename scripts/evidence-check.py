@@ -30,7 +30,7 @@ def iter_artefacts(root: pathlib.Path) -> list[pathlib.Path]:
     for p in sorted(root.rglob("*")):
         if not p.is_file():
             continue
-        if "scratch" in p.parts:
+        if "scratch" in p.relative_to(root).parts:
             continue
         if p.suffix not in {".log", ".txt"}:
             continue

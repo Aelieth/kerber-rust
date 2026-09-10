@@ -8,6 +8,11 @@ this project uses semantic versioning once a crate is published.
 
 ### W1-A′-2
 
+- **test.** R18's rust-kdc restart kill is one line so
+  `check_no_host_tmp_writes` does not treat the later container
+  `>/tmp/kdc-r18.log` as a host write (CI 451–454 `ledger-mit` /
+  `test`). `evidence-check.py` skips `scratch/` only relative to the
+  tree being checked.
 - **test.** diffsend 74 → 78: U2U success decrypts with the second-ticket
   session key (kvno absent, ticket etype = stkt session, reply session
   etype from `select_session_keytype` when the client omitted it);
