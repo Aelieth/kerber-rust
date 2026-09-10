@@ -1517,6 +1517,8 @@ def check_unit_evidence_helper() -> None:
         _die("unit_red_at must not join test names with | for cargo test")
     if "refusing dirty tree" not in text:
         _die("unit_green must refuse a dirty tree without KERBER_UNIT_ALLOW_DIRTY")
+    if "unit_green: missing Summary" not in text:
+        _die("unit_green must fail unless a Summary … passed line is present")
     env = os.environ.copy()
     env["KERBER_NO_IMAGE"] = "1"
     env["ROOT"] = str(ROOT)
@@ -1660,6 +1662,13 @@ def check_evidence_check_tool() -> None:
         (root / "dirty-red.log").write_text(
             "head_sha=abc1234deadbeef\ntree_sha=t4\ndirty=yes\nred-at-parent=1\n"
         )
+        (root / "r13-unit-green.log").write_text(
+            "head_sha=abc1234deadbeef\ntree_sha=t5\ndirty=no\n==== unit_green r13 ====\n"
+        )
+        (root / "r12-unit-green.log").write_text(
+            "head_sha=abc1234deadbeef\ntree_sha=t6\ndirty=no\n"
+            "     Summary [   0.100s] 11 tests run: 11 passed, 0 skipped\n"
+        )
         (root / "ci-bad.txt").write_text("ci-status: HTTP Error 403: rate limit exceeded\n")
         r = subprocess.run(
             [
@@ -1677,15 +1686,25 @@ def check_evidence_check_tool() -> None:
         if r.returncode == 0:
             _die("evidence-check.py passed a fixture tree with known bad artefacts")
         out = (r.stdout or "") + (r.stderr or "")
-        for name in ("unstamped.log", "wrongsha.log", "dirty.log", "ci-bad.txt"):
+        for name in (
+            "unstamped.log",
+            "wrongsha.log",
+            "dirty.log",
+            "ci-bad.txt",
+            "r13-unit-green.log",
+        ):
             if name not in out:
                 _die(f"evidence-check.py missed {name}: {out}")
         if "dirty.log: dirty=yes without" not in out:
             _die(f"evidence-check.py must name the dirty label rule: {out}")
+        if "unit-green log missing Summary" not in out:
+            _die(f"evidence-check.py must flag a header-only unit-green log: {out}")
         if any(ln.startswith("dirty-red.log:") for ln in out.splitlines()):
             _die("evidence-check.py flagged a dirty log that carries red-at-parent=")
         if any(ln.startswith("ok.log:") for ln in out.splitlines()):
             _die(f"evidence-check.py flagged a good log: {out}")
+        if any(ln.startswith("r12-unit-green.log:") for ln in out.splitlines()):
+            _die(f"evidence-check.py flagged a unit-green log that has Summary: {out}")
     finally:
         subprocess.run(["rm", "-rf", str(root)], check=False)
 

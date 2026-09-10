@@ -53,6 +53,9 @@ def check_file(path: pathlib.Path, commits: list[str]) -> list[str]:
     dirty_m = DIRTY_RE.search(text)
     if dirty_m and dirty_m.group(1) == "yes" and not LABEL_RE.search(text):
         findings.append(f"{rel}: dirty=yes without red-at-parent=/override= label")
+    if "unit-green" in path.name and path.suffix == ".log":
+        if not re.search(r"Summary .*passed", text):
+            findings.append(f"{rel}: unit-green log missing Summary … passed")
     return findings
 
 

@@ -51,7 +51,20 @@ unit_green() {
     fi
     unit_guard_dirty || return 1
     echo "==== unit_green $name filter=$filter ===="
-    cargo nextest run --workspace --profile ci -E "test($filter)"
+    local out rc
+    set +e
+    out="$(cargo nextest run --workspace --profile ci -E "test($filter)" 2>&1)"
+    rc=$?
+    set -e
+    printf '%s\n' "$out"
+    if [ "$rc" -ne 0 ]; then
+        echo "unit_green: nextest failed (rc=$rc)" >&2
+        return 1
+    fi
+    if ! printf '%s\n' "$out" | grep -qE 'Summary .* passed'; then
+        echo "unit_green: missing Summary … passed line" >&2
+        return 1
+    fi
 }
 
 # unit_red_at <parent> <name> [--all|<filter>] <files…>

@@ -1,4 +1,5 @@
-//! R12: ACL before validation; `KEY_DATA`+`n_key_data`; `0x7fff` is EINVAL 22.
+//! R12: ACL before mask on an existing principal; `KEY_DATA`+`n_key_data`;
+//! `0x7fff` is EINVAL 22. Lookup-before-ACL is `r12_kadm5_lookup.rs`.
 
 mod common;
 

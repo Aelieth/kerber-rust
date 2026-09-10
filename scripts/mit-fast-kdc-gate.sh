@@ -367,6 +367,25 @@ echo "$RUST_NOSUCH_PROXY" | grep -E 'rep#[0-9]+ error_code=7 e_data_encoding=met
 RUST_NOSUCH_SHAPE="$(echo "$RUST_NOSUCH_PROXY" | grep -E 'rep#[0-9]+ error_code=' | sed -E 's/^rep#[0-9]+ //' | sort -u)"
 
 echo "==== MIT KDC: FAST wrong-password and unknown-server outer shapes ===="
+# Harness user has empty Attributes; Rust --test-realm user has REQUIRES_PRE_AUTH.
+# Align the flag so both legs emit 25 then 24 method [136], not an AS-REP 0x6b.
+docker exec "$MITNAME" kadmin.local -q 'modprinc +requires_preauth user'
+docker exec "$MITNAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
+sleep 0.3
+docker exec -d "$MITNAME" sh -c 'krb5kdc -n >/tmp/mit-kdc.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$MITNAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$MITNAME" cat /tmp/mit-kdc.log >&2 || true
+    echo "MIT kdc did not listen after +requires_preauth" >&2
+    exit 1
+fi
 docker exec "$MITNAME" sh -c ':> /tmp/fast-err-mit.txt'
 set +e
 MIT_BADPW="$(docker exec -e KRB5_CONFIG=/tmp/krb5-fast-proxy.conf "$MITNAME" \
@@ -383,13 +402,21 @@ echo "$MIT_BADPW_PROXY" | grep -q '136' || {
     echo "MIT FAST wrong-password proxy missing 136: $MIT_BADPW_PROXY" >&2
     exit 1
 }
-echo "$MIT_BADPW_PROXY" | grep -E 'rep#[0-9]+ tag=0x6b' || {
-    echo "MIT FAST wrong-password missing outer AS-REP 0x6b: $MIT_BADPW_PROXY" >&2
+echo "$MIT_BADPW_PROXY" | grep -E 'rep#[0-9]+ error_code=25 e_data_encoding=method e_data_types=\[136\]' || {
+    echo "MIT FAST wrong-password missing 25 method [136]: $MIT_BADPW_PROXY" >&2
+    exit 1
+}
+echo "$MIT_BADPW_PROXY" | grep -E 'rep#[0-9]+ error_code=24 e_data_encoding=method e_data_types=\[136\]' || {
+    echo "MIT FAST wrong-password missing 24 method [136]: $MIT_BADPW_PROXY" >&2
     exit 1
 }
 MIT_BADPW_SHAPE="$(echo "$MIT_BADPW_PROXY" | grep -E 'rep#[0-9]+ (error_code=|tag=)' | sed -E 's/^rep#[0-9]+ //' | sort -u || true)"
 echo "rust_fast_badpw_shape=$RUST_BADPW_SHAPE"
 echo "mit_fast_badpw_shape=$MIT_BADPW_SHAPE"
+if [ "$RUST_BADPW_SHAPE" != "$MIT_BADPW_SHAPE" ]; then
+    echo "FAST wrong-password outer shape differs rust vs MIT" >&2
+    exit 1
+fi
 
 docker exec "$MITNAME" sh -c ':> /tmp/fast-err-mit.txt'
 set +e

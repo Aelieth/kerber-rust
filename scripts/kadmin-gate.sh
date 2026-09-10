@@ -2587,6 +2587,10 @@ kadm5_r12_db_args() {
     fi
     userline="$(docker exec "$ctn" grep -F $'\tuser@KERBER.TEST\t' /tmp/r12.dump || true)"
     echo "$ctn user dump: $userline"
+    [ -n "$userline" ] || {
+        echo "$ctn dump missing user@KERBER.TEST" >&2
+        exit 1
+    }
     echo "$userline" | grep -F $'\t32767\t' && {
         echo "$ctn dump still has TL 32767 on user" >&2
         exit 1
@@ -2627,6 +2631,38 @@ kadm5_r12_db_args "$NAME_MIT" admin/admin /etc/krb5.conf mit
 
 echo "==== glob lists: Rust kadmind vs MIT kadmind ===="
 diff "$SCRATCH/glob-rust.txt" "$SCRATCH/glob-mit.txt" || { echo "glob lists differ between the Rust kadmind and MIT kadmind" >&2; exit 1; }
+
+echo "==== no-GET modify-raw: lookup before ACL and mask (both kadminds) ===="
+kadm5_modify_raw() {
+    local ctn=$1 client=$2 conf=$3
+    local ro_ns adm_ns adm_user
+    ro_ns="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" \
+        /tmp/kadm5-changepw-rpc --service kadmin/admin ro@KERBER.TEST ro-secret KERBER.TEST \
+        modify-raw nosuch@KERBER.TEST maxlife 2>&1 || true)"
+    echo "$ctn ro modify-raw nosuch maxlife: $ro_ns"
+    echo "$ro_ns" | grep -q 'modify_code=43787532' || {
+        echo "$ctn ro no-GET modify nosuch was not KADM5_UNK_PRINC: $ro_ns" >&2
+        exit 1
+    }
+    adm_ns="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" \
+        /tmp/kadm5-changepw-rpc --service kadmin/admin "$client" adminpassword KERBER.TEST \
+        modify-raw nosuch@KERBER.TEST policyclr 2>&1 || true)"
+    echo "$ctn admin modify-raw nosuch policyclr: $adm_ns"
+    echo "$adm_ns" | grep -q 'modify_code=43787532' || {
+        echo "$ctn admin no-GET policyclr nosuch was not KADM5_UNK_PRINC: $adm_ns" >&2
+        exit 1
+    }
+    adm_user="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" \
+        /tmp/kadm5-changepw-rpc --service kadmin/admin "$client" adminpassword KERBER.TEST \
+        modify-raw user@KERBER.TEST policyclr 2>&1 || true)"
+    echo "$ctn admin modify-raw user policyclr: $adm_user"
+    echo "$adm_user" | grep -q 'modify_code=43787534' || {
+        echo "$ctn admin no-GET policyclr user was not KADM5_BAD_MASK: $adm_user" >&2
+        exit 1
+    }
+}
+kadm5_modify_raw "$NAME" admin /tmp/kadmin-krb5.conf
+kadm5_modify_raw "$NAME_MIT" admin/admin /etc/krb5.conf
 
 log "kadmin.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"addprinc+cpw+get+list+mod+chrand+norandkey+lockdown+purgekeys+setstr+renprinc+del+alias"'
 exit 0

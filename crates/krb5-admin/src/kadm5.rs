@@ -2329,6 +2329,15 @@ fn dispatch_kadm5_ticket(
             let (name, prealm, mask, fields) = parse_modify(args)?;
             let req = req_realm(&prealm, &realm);
             let tid = acl_id(&name, &req);
+            let mut g = match write_store(store, API_V2) {
+                Ok(g) => g,
+                Err(rep) => return Ok(rep),
+            };
+            // stub_setup rec_out, then ACL, then check_lockdown, then mask
+            // (server_stubs.c:296-301,621-638).
+            if g.get_in_realm(&name, &req).is_none() {
+                return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
+            }
             if changepw
                 || acl
                     .check(actor, krb5_kdc::AdminOp::Modify, Some(&tid))
@@ -2336,22 +2345,15 @@ fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_MODIFY));
             }
-            if let Some(code) = modify_princ_mask_err(mask, fields.policy.as_deref()) {
-                return Ok(generic_ret(API_V2, code));
-            }
-            let mut g = match write_store(store, API_V2) {
-                Ok(g) => g,
-                Err(rep) => return Ok(rep),
-            };
-            if g.get_in_realm(&name, &req).is_none() {
-                return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
-            }
             if mask & KADM5_ATTRIBUTES != 0
                 && fields.attributes & KDB_LOCKDOWN_KEYS == 0
                 && g.get_in_realm(&name, &req)
                     .is_some_and(|p| p.attributes & KDB_LOCKDOWN_KEYS != 0)
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_MODIFY));
+            }
+            if let Some(code) = modify_princ_mask_err(mask, fields.policy.as_deref()) {
+                return Ok(generic_ret(API_V2, code));
             }
             if mask & KADM5_TL_DATA != 0 && fields.tl_data.iter().any(|t| t.ty < 256) {
                 return Ok(generic_ret(API_V2, KADM5_BAD_TL_TYPE));
@@ -6275,7 +6277,12 @@ mod tests {
     }
 
     #[test]
-    fn stub_setup_unk_before_acl_on_setkey_purge_extract_setstr() {
+    fn stub_setup_unk_before_acl_on_modify_setkey_purge_extract_setstr() {
+        stub_unk_before_acl(
+            MODIFY_PRINCIPAL,
+            &modify_rec("nosuch@KERBER.TEST"),
+            KADM5_AUTH_MODIFY,
+        );
         stub_unk_before_acl(
             EXTRACT_KEYS,
             &extract_args("nosuch@KERBER.TEST", 0),

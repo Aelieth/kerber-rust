@@ -98,15 +98,24 @@ this project uses semantic versioning once a crate is published.
   real all-slot key comparisons; `ci-policy` finds `cases:N` anywhere and
   gains dump/cases fixtures; `status.rs` order + `READ_COOKIE` marked;
   `openssl-seclevel0.cnf` documents inert CipherString.
+- **admin/test (A′-1 close-out).** Modify stub order is lookup → ACL →
+  lockdown → mask like `server_stubs.c:296-301,621-638` (R12's plan had
+  ACL then mask then lookup). `mit-fast-kdc-gate.sh` sets
+  `+requires_preauth` on the MIT harness `user` and dies unless both
+  legs' wrong-password FAST shapes are `25` then `24` method `[136]`;
+  the earlier AS-REP `0x6b` / item-2 deferral was the harness flag, not
+  a FAST wrap. `unit_green` captures nextest (`2>&1`) and requires a
+  `Summary … passed` line.
 - **admin/kdc (A′-1 Round 4 R12).** Every principal put strips
   `KRB5_TL_DB_ARGS` (0x7fff) like `krb5_db_put_principal`; a leftover
   `db_args` is EINVAL 22 `Unsupported argument "…" for db2` and the
   entry/file is unchanged. `krb5-kdb load` of a dump with 32767 fails
   with no partial store; iprop apply skips that record. Modify order is
-  ACL → mask → lookup → lockdown → TL/failcount → `db_args`. Create
-  decodes `n_key_data` so `KEY_DATA`+`n_key_data!=0` is `KADM5_BAD_MASK`.
-  Limitation: a successful modify with both admin fields and TL may still
-  write twice (documented).
+  lookup → ACL → lockdown → mask → TL/failcount → `db_args` (close-out
+  restored MIT's stub order; R12 as landed was ACL → mask → lookup).
+  Create decodes `n_key_data` so `KEY_DATA`+`n_key_data!=0` is
+  `KADM5_BAD_MASK`. Limitation: a successful modify with both admin
+  fields and TL may still write twice (documented).
 - **kdc/protocol (A′-1 Round 4 R13).** `u2u_session` answers MIT
   `decrypt_2ndtkt` statuses: no key / unknown etype of the second ticket
   is 60 `2ND_TKT_SERVER`; decrypt failure is 31 `2ND_TKT_DECRYPT`. Three
@@ -116,17 +125,17 @@ this project uses semantic versioning once a crate is published.
 - **test/ci (A′-1 Round 4 R14).** `mit-fast-kdc-gate.sh` pins a real FAST
   error on both legs: TGS `nosuch/service` is `error_code=7
   e_data_encoding=method e_data_types=[136]` (no cookie) equal on both;
-  wrong-password client text is `Password incorrect while getting
-  initial credentials` on both. MIT's AS FAST password error is outer
-  AS-REP `tag=0x6b`; Rust still emits KRB-ERROR 25 then 24 with method
-  `[136]` (FAST AS-REP wrap stays item 2). The UDP proxy logs non-0x7e
-  replies so that 0x6b is visible. `ci-policy.py` fixtures cover
-  `unit_guard_dirty`, `unit-red-check.py`, `ci-status.py --save`
-  in_progress/403/completed, a diffsend name-set mismatch, and
-  artefact-scoped parent-red in `claim-audit.py`. The R14
+  wrong-password is `25` then `24` method `[136]` on both once the MIT
+  harness `user` has `+requires_preauth` (the harness image creates
+  `user` with empty Attributes; Rust `--test-realm` already sets
+  `REQUIRES_PRE_AUTH`). The UDP proxy logs non-0x7e replies. `ci-policy.py`
+  fixtures cover `unit_guard_dirty`, `unit-red-check.py`,
+  `ci-status.py --save` in_progress/403/completed, a diffsend name-set
+  mismatch, and artefact-scoped parent-red in `claim-audit.py`. The R14
   `unit_guard_dirty` fixtures set `KERBER_NO_IMAGE=1` so
   `provenance.sh` does not require the MIT image (CI test /
   ledger-mit jobs have docker but not `kerber-rust-mit-kdc:1.22.2`).
+  The `8800336` commit body still records the false AS-REP wrap (immutable).
 - **docs/test (A′-1 Round 4 R15).** Round 3 truth pass: recaptured
   `r10-unit-green` / r9 kadm5 parent-red / `ci-<sha>.txt`; summary
   cites anchored by text; `kdb-dump-gate.sh` dies unless both dump

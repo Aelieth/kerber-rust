@@ -3,6 +3,7 @@
  * usage: kadm5-changepw-rpc [--service princ] <client> <password> <realm> <op> [arg]
  * op: listprincs | getprinc <name> | randkey-keepold <n> | setkey-keepold <n>
  *     | addpol-minlife-unmasked-max <policy>
+ *     | modify-raw <target> <maxlife|policyclr>
  */
 #include <kadm5/admin.h>
 #include <com_err.h>
@@ -126,6 +127,42 @@ int main(int argc, char **argv) {
         ent.pw_max_life = 1;
         ret = kadm5_create_policy(handle, &ent, KADM5_POLICY | KADM5_PW_MIN_LIFE);
         printf("addpol_code=%ld\n", (long)ret);
+    } else if (strcmp(op, "modify-raw") == 0 && argc - argi >= 6) {
+        /* No GET: observe stub_setup lookup before ACL/mask
+         * (server_stubs.c:296-301,621-638). */
+        krb5_principal p;
+        kadm5_principal_ent_rec rec;
+        long mask;
+        const char *target = argv[argi + 4];
+        const char *mode = argv[argi + 5];
+        memset(&rec, 0, sizeof(rec));
+        ret = krb5_parse_name(ctx, target, &p);
+        if (ret) {
+            printf("parse_code=%ld\n", (long)ret);
+            kadm5_destroy(handle);
+            krb5_free_context(ctx);
+            return 1;
+        }
+        rec.principal = p;
+        rec.max_life = 36060;
+        if (strcmp(mode, "policyclr") == 0) {
+            rec.policy = (char *)"default";
+            mask = KADM5_MAX_LIFE | KADM5_POLICY | KADM5_POLICY_CLR;
+        } else if (strcmp(mode, "maxlife") == 0) {
+            mask = KADM5_MAX_LIFE;
+        } else {
+            fprintf(stderr, "modify-raw mode must be maxlife|policyclr\n");
+            krb5_free_principal(ctx, p);
+            kadm5_destroy(handle);
+            krb5_free_context(ctx);
+            return 2;
+        }
+        printf("mask_bits=0x%lx\n", (unsigned long)mask);
+        ret = kadm5_modify_principal(handle, &rec, mask);
+        printf("modify_code=%ld\n", (long)ret);
+        printf("modify_msg=%s\n", error_message(ret));
+        rec.policy = NULL;
+        krb5_free_principal(ctx, p);
     } else if ((strcmp(op, "modify-tl-reserved") == 0 ||
                 strcmp(op, "modify-failcount") == 0 ||
                 strcmp(op, "modify-policy-clr") == 0 ||
