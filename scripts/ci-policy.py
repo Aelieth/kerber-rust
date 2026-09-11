@@ -117,6 +117,9 @@ DIFFSEND_CASES = frozenset(
         "tgs-proxy-on-non-p-tgt",
         "tgs-postdate-on-non-postdatable",
         "tgs-postdated-is-invalid",
+        "tgs-no-preauth-flag",
+        "tgs-hw-preauth-flag",
+        "tgs-nyv-inside-skew",
     }
 )
 _LEDGER_GATE = re.compile(r"(?:scripts/)?([A-Za-z0-9._-]+-gate(?:\.sh)?)")

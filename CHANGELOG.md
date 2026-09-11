@@ -18,6 +18,10 @@ this project uses semantic versioning once a crate is published.
 - **test.** `klist -f` flag parsers split on `Flags: ` so a
   `renew until` clause is not taken as `$2` (`until` hid `O` on
   CI 465 `flags-gate`; a whole-line `T` match was `until`).
+- **kdc.** TGS `REQUIRES_PRE_AUTH` without header `PRE_AUTHENT` is
+  `NO PREAUTH` 60 (`tgs_policy.c:180-184`). `kdc_get_ticket_endtime`
+  mins client/server/realm max_life against header end/`till`.
+  `starttime == authtime` is omitted. diffsend 85 → 88.
 
 ### W1-A′-2
 

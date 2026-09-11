@@ -36,8 +36,8 @@ use crate::store::{
     KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_DUP_SKEY, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED,
     KDB_DISALLOW_PROXIABLE, KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED,
     KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE, KDB_OK_TO_AUTH_AS_DELEGATE,
-    KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PWCHANGE, KeyEntry, Principal,
-    random_key,
+    KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH, KDB_REQUIRES_PWCHANGE,
+    KeyEntry, Principal, random_key,
 };
 
 /// Issued AS-REP plus the session key (for tests that decrypt the TGT).
@@ -521,11 +521,7 @@ fn issue_as_body(
     }
     let want_enc_pa = find_pa(req.0.padata.as_deref(), pa::REQ_ENC_PA_REP).is_some()
         || fast.is_some_and(|f| find_pa(Some(&f.inner_padata), pa::REQ_ENC_PA_REP).is_some());
-    let life = requested_life(store, &client, body, &starttime);
-    let end = starttime
-        .add_seconds(i64::try_from(life).unwrap_or(i64::MAX))
-        .or_else(|_| starttime.add_hours(10))
-        .map_err(|_| proto(err::NEVER_VALID, status::UNKNOWN_REASON))?;
+    let end = kdc_get_ticket_endtime(store, &starttime, None, &body.till, Some(&client), &server)?;
     let ticket_renew_till = kdc_get_ticket_renewtime(
         store,
         body,
@@ -1198,13 +1194,14 @@ fn issue_tgs_body(
         {
             starttime = from.clone();
         }
-        end = enc_tkt.endtime.clone();
-        let life = requested_life(store, &server, body, &starttime);
-        if let Ok(capped) = starttime.add_seconds(i64::try_from(life).unwrap_or(i64::MAX))
-            && capped.unix_seconds() < end.unix_seconds()
-        {
-            end = capped;
-        }
+        end = kdc_get_ticket_endtime(
+            store,
+            &starttime,
+            Some(&enc_tkt.endtime),
+            &body.till,
+            tgs_client.as_ref(),
+            &server,
+        )?;
         flags = get_ticket_flags(
             &body.kdc_options,
             tgs_client.as_ref(),
@@ -1352,21 +1349,43 @@ fn issue_tgs_body(
     })
 }
 
-fn requested_life(
+fn omit_start_if_auth(start: &KerberosTime, auth: &KerberosTime) -> Option<KerberosTime> {
+    (start.unix_seconds() != auth.unix_seconds()).then(|| start.clone())
+}
+
+fn kdc_get_ticket_endtime(
     store: &dyn PrincipalRead,
-    princ: &Principal,
-    body: &krb5_types::KdcReqBody,
-    origin: &KerberosTime,
-) -> u64 {
-    let till = u64::from(body.till.unix_seconds());
-    let start = u64::from(origin.unix_seconds());
-    let want = till.saturating_sub(start);
-    let cap = if princ.max_life > 0 {
-        princ.max_life.min(store.policy().max_life)
+    starttime: &KerberosTime,
+    header_end: Option<&KerberosTime>,
+    till: &KerberosTime,
+    client: Option<&Principal>,
+    server: &Principal,
+) -> Result<KerberosTime, Error> {
+    let start = u64::from(starttime.unix_seconds());
+    let till_s = u64::from(till.unix_seconds());
+    let header_s = header_end.map(|t| u64::from(t.unix_seconds()));
+    let until = if till_s == 0 {
+        header_s.unwrap_or(u64::MAX)
     } else {
-        store.policy().max_life
+        header_s.map_or(till_s, |h| till_s.min(h))
     };
-    if want == 0 { cap } else { want.min(cap) }
+    let mut life = until.saturating_sub(start);
+    if let Some(c) = client
+        && c.max_life > 0
+    {
+        life = life.min(c.max_life);
+    }
+    if server.max_life > 0 {
+        life = life.min(server.max_life);
+    }
+    let realm = store.policy().max_life;
+    if realm > 0 {
+        life = life.min(realm);
+    }
+    starttime
+        .add_seconds(i64::try_from(life).unwrap_or(i64::MAX))
+        .or_else(|_| starttime.add_hours(10))
+        .map_err(|_| proto(err::NEVER_VALID, status::UNKNOWN_REASON))
 }
 
 fn decrypt_presented_tgt(
@@ -1744,7 +1763,7 @@ fn mint_ticket(
         cname: cname.clone(),
         transited,
         authtime: authtime.clone(),
-        starttime: Some(starttime.clone()),
+        starttime: omit_start_if_auth(starttime, authtime),
         endtime: endtime.clone(),
         renew_till,
         caddr,
@@ -1832,7 +1851,7 @@ fn enc_rep_part(
         key_expiration: None,
         flags,
         authtime: authtime.clone(),
-        starttime: Some(starttime.clone()),
+        starttime: omit_start_if_auth(starttime, authtime),
         endtime: end.clone(),
         renew_till,
         srealm: ks(realm)?,
@@ -2631,6 +2650,9 @@ fn check_tgs_policy_flags(
     // reqd_flags:
     if attr(server, KDB_REQUIRES_HW_AUTH) && !tkt.flags.bit(flag_bit::HW_AUTHENT) {
         return Err(proto(err::GENERIC, status::NO_HW_PREAUTH));
+    }
+    if attr(server, KDB_REQUIRES_PRE_AUTH) && !tkt.flags.bit(flag_bit::PRE_AUTHENT) {
+        return Err(proto(err::GENERIC, status::NO_PREAUTH));
     }
     Ok(())
 }

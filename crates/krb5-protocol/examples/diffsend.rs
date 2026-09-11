@@ -3088,7 +3088,7 @@ fn run() -> Result<(), String> {
         realm,
         &krbtgt_sname,
         &sess,
-        window10,
+        window10.clone(),
         TicketFlags::initial_preauth().with_bit(flag_bit::MAY_POSTDATE, true),
     )?;
     let postdated = encode(
@@ -3105,7 +3105,7 @@ fn run() -> Result<(), String> {
                 .with_bit(flag_bit::POSTDATED, true),
             None,
             Vec::new(),
-            etypes,
+            etypes.clone(),
             None,
             Some(from),
         )
@@ -3136,7 +3136,113 @@ fn run() -> Result<(), String> {
         r#"{{"event":"diffsend","case":"tgs-postdated-is-invalid","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","invalid":true,"postdated":true}}"#
     );
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":85}}"#);
+    let pauser = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["pauser"]);
+    expect_error(
+        &cfg,
+        "tgs-no-preauth-flag",
+        &encode(
+            &tgs_req_ex(
+                mint_tgt(
+                    tkt_key,
+                    tkt_kvno,
+                    &user,
+                    realm,
+                    &krbtgt_sname,
+                    &sess,
+                    window10.clone(),
+                    TicketFlags::none().with_bit(flag_bit::INITIAL, true),
+                )?,
+                &sess,
+                realm,
+                &user,
+                pauser,
+                realm,
+                0x1000_0074,
+                KdcOptions::none(),
+                None,
+                Vec::new(),
+                etypes.clone(),
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::GENERIC,
+    )?;
+
+    let hwuser = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["hwuser"]);
+    expect_error(
+        &cfg,
+        "tgs-hw-preauth-flag",
+        &encode(
+            &tgs_req_ex(
+                mint_tgt(
+                    tkt_key,
+                    tkt_kvno,
+                    &user,
+                    realm,
+                    &krbtgt_sname,
+                    &sess,
+                    window10.clone(),
+                    TicketFlags::initial_preauth(),
+                )?,
+                &sess,
+                realm,
+                &user,
+                hwuser,
+                realm,
+                0x1000_0075,
+                KdcOptions::none(),
+                None,
+                Vec::new(),
+                etypes.clone(),
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::GENERIC,
+    )?;
+
+    let nyv_from = now.add_seconds(60).unwrap_or_else(|_| now.clone());
+    expect_error(
+        &cfg,
+        "tgs-nyv-inside-skew",
+        &encode(
+            &tgs_req_ex(
+                mint_tgt(
+                    tkt_key,
+                    tkt_kvno,
+                    &user,
+                    realm,
+                    &krbtgt_sname,
+                    &sess,
+                    (
+                        nyv_from.clone(),
+                        nyv_from
+                            .add_seconds(3600)
+                            .unwrap_or_else(|_| nyv_from.clone()),
+                    ),
+                    TicketFlags::initial_preauth()
+                        .with_bit(flag_bit::POSTDATED, true)
+                        .with_bit(flag_bit::INVALID, true),
+                )?,
+                &sess,
+                realm,
+                &user,
+                host,
+                realm,
+                0x1000_0076,
+                KdcOptions::none().with_bit(flag_bit::VALIDATE, true),
+                None,
+                Vec::new(),
+                etypes,
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::TKT_NYV,
+    )?;
+
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":88}}"#);
     Ok(())
 }
 
