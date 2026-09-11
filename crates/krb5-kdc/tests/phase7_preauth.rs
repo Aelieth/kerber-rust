@@ -900,8 +900,13 @@ fn tgs_fast_inner_nonce_not_outer() {
     inner_body.nonce = 200;
     let subkey = wrap_tgs_fast(&mut tgs, &issued.session_key, inner_body).expect("TGS FAST");
     let out = krb5_kdc::issue_tgs(&store, &tgs).expect("TGS");
+    let akey = krb_fx_cf2(&subkey, &issued.session_key, b"subkeyarmor", b"ticketarmor")
+        .expect("TGS armor");
+    let fast = unwrap_fast_rep(&akey, &out.rep.0.padata).expect("FAST TGS rep");
+    let sk = fast.strengthen_key.expect("TGS strengthen-key");
+    let reply = apply_strengthen(&sk, &subkey).expect("CF2");
     let usage = KeyUsage::new(ku::TGS_REP_ENC_PART_SUBKEY).unwrap();
-    let plain = decrypt(&subkey, usage, out.rep.0.enc_part.cipher.as_ref()).expect("TGS enc");
+    let plain = decrypt(&reply, usage, out.rep.0.enc_part.cipher.as_ref()).expect("TGS enc");
     let enc = decode_enc_part(&plain);
     assert_eq!(
         enc.nonce, 200,
@@ -2928,14 +2933,14 @@ fn ca_enabled_preauth_required_method_data_types() {
         types,
         vec![
             pa::FX_FAST,
+            pa::ETYPE_INFO2,
             pa::PK_AS_REQ,
             pa::TD_DH_PARAMETERS,
             pa::SPAKE,
             pa::ENC_TIMESTAMP,
-            pa::ETYPE_INFO2,
             pa::FX_COOKIE,
         ],
-        "CA-enabled METHOD-DATA types must pin [136, 16, 109, 151, 2, 19, 133]"
+        "CA-enabled METHOD-DATA types must pin [136, 19, 16, 109, 151, 2, 133]"
     );
     let again = encode(&method).expect("re-encode");
     let round: MethodData = decode(&again).expect("decode encode");

@@ -116,6 +116,7 @@ fn main() {
             cname: tgt.client.1.clone(),
             crealm: tgt.client.0.clone(),
             fast_avail: false,
+            used_fast: false,
             pa_type: None,
         };
         let kdc = std::env::var("KRB5_KDC")

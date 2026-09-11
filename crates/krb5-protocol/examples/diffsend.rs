@@ -21,8 +21,8 @@ use krb5_kdc::{PacTicket, pac_from_ticket_part, sign_pac, ticket_checksum_der, w
 use krb5_protocol::{
     KdcAddr, Keytab, armor_key, as_req, as_req_sname, attach_fast, build_fast_armor,
     compare_krb_error, compare_stable_rep, decode_enc_kdc_rep, exchange_on_tcp, pa_enc_timestamp,
-    pa_enc_timestamp_at, pa_for_user, pa_s4u_x509_user, pa_spake_support, tgs_req, tgs_req_ex,
-    tgs_req_ex_addr, tgs_req_ex_from,
+    pa_enc_timestamp_at, pa_for_user, pa_pac_options, pa_s4u_x509_user, pa_spake_support, tgs_req,
+    tgs_req_ex, tgs_req_ex_addr, tgs_req_ex_from,
 };
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac, PacIdentity, RpcSid};
 use krb5_types::{
@@ -3491,20 +3491,20 @@ fn run() -> Result<(), String> {
                     realm,
                     &krbtgt_sname,
                     &sess,
-                    window10,
+                    window10.clone(),
                     TicketFlags::initial_preauth(),
                     Some(cammac_ad),
                 )?,
                 &sess,
                 realm,
                 &user,
-                host,
+                host.clone(),
                 realm,
                 0x1000_007a,
                 KdcOptions::none(),
                 None,
                 Vec::new(),
-                etypes,
+                etypes.clone(),
                 None,
                 None,
                 None,
@@ -3515,7 +3515,79 @@ fn run() -> Result<(), String> {
         err::GENERIC,
     )?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":92}}"#);
+    expect_error(
+        &cfg,
+        "ec-outside-fast",
+        &encode(
+            &as_req(
+                user.clone(),
+                realm,
+                0x1000_007b,
+                Some(vec![PaData {
+                    padata_type: pa::ENCRYPTED_CHALLENGE,
+                    padata_value: b"outside-fast".to_vec().into(),
+                }]),
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::PREAUTH_FAILED,
+    )?;
+
+    let pac_opts = pa_pac_options(true).map_err(|e| e.to_string())?;
+    let rbcd_req = encode(
+        &tgs_req_ex(
+            mint_tgt(
+                tkt_key,
+                tkt_kvno,
+                &user,
+                realm,
+                &krbtgt_sname,
+                &sess,
+                window10,
+                TicketFlags::initial_preauth(),
+            )?,
+            &sess,
+            realm,
+            &user,
+            host,
+            realm,
+            0x1000_007c,
+            KdcOptions::none(),
+            None,
+            vec![pac_opts],
+            etypes,
+        )
+        .map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    let (tr, tm) = send_both(&cfg, "tgs-rbcd-pac-options", &rbcd_req)?;
+    let svc = cfg
+        .host
+        .as_ref()
+        .ok_or_else(|| "KERBER_HOST_KEYTAB required".to_string())?;
+    let (_, re, _, _) = decrypt_tgs(&tr, &sess, svc)?;
+    let (_, me, _, _) = decrypt_tgs(&tm, &sess, svc)?;
+    let pa_types = |enc: &krb5_types::EncKdcRepPart| -> Vec<i32> {
+        enc.encrypted_pa_data
+            .as_ref()
+            .into_iter()
+            .flatten()
+            .map(|p| p.padata_type)
+            .collect()
+    };
+    let rt = pa_types(&re);
+    let mt = pa_types(&me);
+    if !rt.contains(&pa::PAC_OPTIONS) || rt != mt {
+        return Err(format!(
+            "tgs-rbcd-pac-options enc_padata rust={rt:?} mit={mt:?}"
+        ));
+    }
+    println!(
+        r#"{{"event":"diffsend","case":"tgs-rbcd-pac-options","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","pac_options":true}}"#
+    );
+
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":94}}"#);
     Ok(())
 }
 

@@ -4,14 +4,18 @@ use std::collections::BTreeMap;
 use std::time::Instant;
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt, krb_fx_cf2};
 use krb5_types::{
-    ApOptions, ApReq, Authenticator, Checksum, EncKdcRepPart, EncryptedData, KdcOptions, KdcReq,
-    KdcReqBody, KerberosTime, PaData, PrincipalName, TgsRep, TgsReq, Ticket, flag_bit, ku, pa,
+    ApOptions, ApReq, Authenticator, Checksum, EncKdcRepPart, EncryptedData, EncryptionKey,
+    KdcOptions, KdcReq, KdcReqBody, KerberosTime, PaData, PrincipalName, TgsRep, TgsReq, Ticket,
+    flag_bit, ku, pa,
 };
 
 use crate::as_ex::AsOutcome;
 use crate::error::Error;
+use crate::preauth::{
+    apply_strengthen, fx_fast_padata_over, unwrap_fast_rep, verify_fast_finished,
+};
 
 use crate::transport::{KdcAddr, exchange};
 
@@ -331,6 +335,7 @@ fn tgs_as_tgt(prev: &AsOutcome, out: TgsOutcome) -> AsOutcome {
         cname: prev.cname.clone(),
         crealm: prev.crealm.clone(),
         fast_avail: prev.fast_avail,
+        used_fast: prev.used_fast,
         pa_type: prev.pa_type,
     }
 }
@@ -483,6 +488,20 @@ fn tgs_once(
     let mic = checksum(&tgt.session_key, cksum_usage, &body_der)?;
     let now = KerberosTime::now();
     let usec = now.0.timestamp_subsec_micros() % 1_000_000;
+    let mut subkey = None;
+    let mut armor_key = None;
+    if tgt.used_fast {
+        let mut raw = vec![0u8; tgt.session_key.etype().key_len()];
+        getrandom::getrandom(&mut raw).map_err(|e| Error::transport_msg(e.to_string()))?;
+        let sub = ProtocolKey::from_bytes(tgt.session_key.etype(), &raw)?;
+        armor_key = Some(krb_fx_cf2(
+            &sub,
+            &tgt.session_key,
+            b"subkeyarmor",
+            b"ticketarmor",
+        )?);
+        subkey = Some(sub);
+    }
     let authenticator = Authenticator {
         authenticator_vno: Authenticator::VNO,
         crealm: tgt.crealm.clone(),
@@ -493,7 +512,10 @@ fn tgs_once(
         }),
         cusec: krb5_types::Microseconds::from_subsec_micros(usec),
         ctime: now,
-        subkey: None,
+        subkey: subkey.as_ref().map(|k| EncryptionKey {
+            keytype: k.etype().to_iana(),
+            keyvalue: k.as_bytes().to_vec().into(),
+        }),
         seq_number: None,
         authorization_data: None,
     };
@@ -513,11 +535,23 @@ fn tgs_once(
     };
     // FAST armor AP-REQ uses key-usage 11; PA-TGS-REQ uses usage 7. MIT
     // FIND_FAST fails if the armor AP-REQ is the TGS authenticator.
+    let ap_raw = encode(&ap_req)?;
     let mut padata = vec![PaData {
         padata_type: pa::TGS_REQ,
-        padata_value: encode(&ap_req)?.into(),
+        padata_value: ap_raw.clone().into(),
     }];
-    padata.extend_from_slice(extra_padata);
+    if let Some(akey) = &armor_key {
+        padata.push(fx_fast_padata_over(
+            None,
+            akey,
+            &ap_raw,
+            &body,
+            extra_padata.to_vec(),
+            &krb5_types::fast::fast_options_none(),
+        )?);
+    } else {
+        padata.extend_from_slice(extra_padata);
+    }
     let tgs = TgsReq(KdcReq {
         pvno: KdcReq::PVNO,
         msg_type: KdcReq::MSG_TGS_REQ,
@@ -545,8 +579,22 @@ fn tgs_once(
         return Err(Error::UnexpectedPdu);
     }
     let TgsRep(inner) = decode::<TgsRep>(&reply)?;
-    let usage = KeyUsage::new(ku::TGS_REP_ENC_PART)?;
-    let plain = decrypt(&tgt.session_key, usage, inner.enc_part.cipher.as_ref())?;
+    let (reply_key, enc_usage) = if let (Some(akey), Some(sub)) = (armor_key, subkey) {
+        let fast = unwrap_fast_rep(&akey, &inner.padata)?;
+        let finished = fast.finished.as_ref().ok_or_else(|| {
+            Error::ReplyMismatch("FAST response missing finish message in KDC reply".into())
+        })?;
+        verify_fast_finished(&akey, &inner.ticket, finished)?;
+        let sk = fast
+            .strengthen_key
+            .as_ref()
+            .ok_or_else(|| Error::ReplyMismatch("FAST TGS reply missing strengthen-key".into()))?;
+        (apply_strengthen(sk, &sub)?, ku::TGS_REP_ENC_PART_SUBKEY)
+    } else {
+        (tgt.session_key.clone(), ku::TGS_REP_ENC_PART)
+    };
+    let usage = KeyUsage::new(enc_usage)?;
+    let plain = decrypt(&reply_key, usage, inner.enc_part.cipher.as_ref())?;
     // MIT `kdc_rep_dc.c:69` decodes the TGS-REP enc-part with
     // `decode_krb5_enc_kdc_rep_part` (APPLICATION 26 then 25 then untagged).
     let enc_part =
@@ -704,6 +752,7 @@ mod tests {
             cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
             crealm: ascii(instance),
             fast_avail: false,
+            used_fast: false,
             pa_type: None,
         }
     }
@@ -745,6 +794,7 @@ mod tests {
             cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
             crealm: ascii("KERBER.TEST"),
             fast_avail: false,
+            used_fast: false,
             pa_type: None,
         }
     }

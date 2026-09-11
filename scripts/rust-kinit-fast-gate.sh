@@ -173,5 +173,32 @@ fi
 KLIST2E="$(docker exec "$NAME" klist -e -c /tmp/krb5cc_fast_np 2>/dev/null || true)"
 echo "$KLIST2E"
 echo "$KLIST2E" | grep -F 'aes256-cts-hmac-sha384-192'
-log "fast.client.gate" "ok" ',"mode":"rust-kinit","pa_type":136,"principal":"user@KERBER.TEST","nopreauth":true,"etype":20'
+
+echo "==== Rust kinit --fast -S host (TGS strengthen-key) ===="
+docker exec "$NAME" sh -c 'cat /dev/null > /tmp/mit-kdc.trace' || true
+set +e
+OUT3="$(docker exec -e KRB5_PASSWORD=userpassword "$NAME" \
+    /tmp/krb5-kinit --fast --armor-ccache /tmp/krb5cc_armor \
+    -c /tmp/krb5cc_fast_tgs -S host/testhost.kerber.test user@KERBER.TEST 2>&1)"
+rc3=$?
+set -e
+echo "$OUT3"
+if [ "$rc3" -ne 0 ]; then
+    echo "==== MIT kdc TRACE (FAST TGS) ===="
+    docker exec "$NAME" cat /tmp/mit-kdc.trace 2>/dev/null || true
+    log "fast.client.gate" "error" ',"error":"rust kinit --fast -S failed","rc":'"$rc3"
+    exit 1
+fi
+assert_no_error_log "$OUT3"
+KLIST3="$(docker exec "$NAME" klist -c /tmp/krb5cc_fast_tgs 2>/dev/null || true)"
+echo "$KLIST3"
+echo "$KLIST3" | grep -q 'host/testhost.kerber.test'
+TRACE3="$(docker exec "$NAME" cat /tmp/mit-kdc.trace 2>/dev/null || true)"
+if ! echo "$TRACE3" | grep -Fq 'Decrypted AP-REQ'; then
+    echo "$TRACE3" >&2
+    log "fast.client.gate" "error" ',"error":"FAST TGS without Decrypted AP-REQ TRACE"'
+    exit 1
+fi
+echo "$TRACE3" | grep -F 'Decrypted AP-REQ'
+log "fast.client.gate" "ok" ',"mode":"rust-kinit","pa_type":136,"principal":"user@KERBER.TEST","nopreauth":true,"etype":20,"tgs_strengthen":true'
 exit 0

@@ -9,6 +9,7 @@ use krb5_crypto::{
 };
 use krb5_protocol::{ReplayCache, ReplayKey};
 use krb5_types::pac::{PacIdentity, parse_kerb_validation_info};
+use krb5_types::s4u::PaPacOptions;
 use krb5_types::{
     AsRep, AsReq, AuthorizationData, AuthorizationDataValue, Checksum, EncKdcRepPart,
     EncTgsRepPart, EncTicketPart, EncryptedData, EncryptionKey, EtypeInfo, EtypeInfo2,
@@ -394,6 +395,23 @@ fn issue_as_body(
         Some(f) => f.inner_body.as_slice(),
         None => body_der,
     };
+    // ec_verify (kdc_preauth_ec.c:71-76): 138 outside FAST is ENOENT → 24.
+    if fast.is_none()
+        && work_padata
+            .as_deref()
+            .into_iter()
+            .flatten()
+            .any(|p| p.padata_type == pa::ENCRYPTED_CHALLENGE)
+    {
+        return Err(attach_preauth_hint(
+            store,
+            &client,
+            ckey,
+            &body.etype,
+            false,
+            proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED),
+        ));
+    }
 
     let mut extra_padata: Vec<PaData> = Vec::new();
     let mut as_rep_key = ckey.key.clone();
@@ -415,7 +433,7 @@ fn issue_as_body(
         pa_body,
         &cname,
     )
-    .map_err(|e| attach_preauth_hint(store, &client, ckey, e))?
+    .map_err(|e| attach_preauth_hint(store, &client, ckey, &body.etype, fast.is_some(), e))?
     {
         Some(PreauthAction::Pkinit { key, pa }) => {
             as_rep_key = key;
@@ -490,13 +508,25 @@ fn issue_as_body(
         }
     }
     if client.requires_preauth && !skip_timestamp {
-        return Err(preauth_required(store, &client, ckey));
+        return Err(preauth_required(
+            store,
+            &client,
+            ckey,
+            &body.etype,
+            fast.is_some(),
+        ));
     }
     if attr(&client, KDB_REQUIRES_HW_AUTH) && !hw_preauth {
         return Err(Error::Protocol {
             code: err::PREAUTH_REQUIRED,
             text: Some(status::NEEDED_HW_PREAUTH.to_owned()),
-            e_data: Some(preauth_hint_edata(store, &client, ckey)),
+            e_data: Some(preauth_hint_edata(
+                store,
+                &client,
+                ckey,
+                &body.etype,
+                fast.is_some(),
+            )),
             detail: None,
         });
     }
@@ -637,7 +667,7 @@ fn issue_as_body(
             Some(finished),
         )?];
     }
-    let mut enc_part = enc_rep_part(
+    let enc_part = enc_rep_part(
         &session,
         fast.map_or(body.nonce, |f| f.nonce),
         &now,
@@ -648,14 +678,9 @@ fn issue_as_body(
         &ticket_sname,
         flags,
         renew_till,
-        None,
+        return_enc_padata(raw, work_padata.as_deref(), &reply_key, want_enc_pa, None)?,
         body.addresses.clone(),
     )?;
-    // The flag is always set; the enc-pa-rep padata is added only when the
-    // client asked for it (kdc_handle_protected_negotiation).
-    if want_enc_pa && let Some(pkt) = raw {
-        enc_part.encrypted_pa_data = Some(enc_pa_rep_padata(&reply_key, pkt)?);
-    }
     let enc_der = encode_enc_kdc_rep_part(enc_part)?;
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART)?;
     let cipher = encrypt(&reply_key, usage, &enc_der)?;
@@ -748,7 +773,7 @@ fn issue_tgs_from(
         None => None,
     };
     let body = inner_owned.as_ref().unwrap_or(outer);
-    issue_tgs_body(store, req, body, tgs_fast.as_ref(), header)
+    issue_tgs_body(store, req, raw, body, tgs_fast.as_ref(), header)
         .map_err(|e| wrap_as_fast(store, tgs_fast.as_ref(), e, body))
 }
 
@@ -896,6 +921,7 @@ fn find_authdata(
 fn issue_tgs_body(
     store: &dyn PrincipalRead,
     req: &TgsReq,
+    raw: Option<&[u8]>,
     body: &KdcReqBody,
     tgs_fast: Option<&FastOk>,
     header: HeaderTgt,
@@ -1349,6 +1375,24 @@ fn issue_tgs_body(
         s4u_rep_pa = Some(pa);
         s4u_enc_pa = enc;
     }
+    let (mut enc_key, enc_usage) = if let Some(sub) = authenticator.subkey {
+        let st = EncryptionType::from_iana(sub.keytype)
+            .or_else(|_| EncryptionType::known(sub.keytype))?;
+        (
+            ProtocolKey::from_bytes(st, sub.keyvalue.as_ref())?,
+            ku::TGS_REP_ENC_PART_SUBKEY,
+        )
+    } else {
+        (tgt_session.clone(), ku::TGS_REP_ENC_PART)
+    };
+    let mut strengthen = None;
+    if tgs_fast.is_some() {
+        let sk = random_key(enc_key.etype())?;
+        enc_key = krb_fx_cf2(&sk, &enc_key, b"strengthenkey", b"replykey")?;
+        strengthen = Some(sk);
+    }
+    let want_enc_pa = find_pa(req.0.padata.as_deref(), pa::REQ_ENC_PA_REP).is_some()
+        || tgs_fast.is_some_and(|f| find_pa(Some(&f.inner_padata), pa::REQ_ENC_PA_REP).is_some());
     let enc_part = enc_rep_part(
         &session,
         tgs_fast.map_or(body.nonce, |f| f.nonce),
@@ -1360,20 +1404,10 @@ fn issue_tgs_body(
         &sname,
         flags,
         ticket_renew_till,
-        s4u_enc_pa,
+        return_enc_padata(raw, tgs_padata, &enc_key, want_enc_pa, s4u_enc_pa)?,
         tgs_reply_caddr(body, renew, validate),
     )?;
     let enc_der = encode_enc_kdc_rep_part(enc_part)?;
-    let (enc_key, enc_usage) = if let Some(sub) = authenticator.subkey {
-        let st = EncryptionType::from_iana(sub.keytype)
-            .or_else(|_| EncryptionType::known(sub.keytype))?;
-        (
-            ProtocolKey::from_bytes(st, sub.keyvalue.as_ref())?,
-            ku::TGS_REP_ENC_PART_SUBKEY,
-        )
-    } else {
-        (tgt_session.clone(), ku::TGS_REP_ENC_PART)
-    };
     let usage = KeyUsage::new(enc_usage)?;
     let cipher = encrypt(&enc_key, usage, &enc_der)?;
     let padata = if let Some(f) = tgs_fast {
@@ -1382,7 +1416,7 @@ fn issue_tgs_body(
         Some(vec![wrap_fast_rep(
             &f.armor_key,
             inner,
-            None,
+            strengthen.as_ref(),
             f.nonce,
             Some(finished),
         )?])
@@ -1918,7 +1952,7 @@ fn enc_rep_part(
     sname: &PrincipalName,
     flags: TicketFlags,
     renew_till: Option<KerberosTime>,
-    encrypted_pa_data: Option<PaData>,
+    encrypted_pa_data: Option<Vec<PaData>>,
     caddr: Option<HostAddresses>,
 ) -> Result<EncKdcRepPart, Error> {
     Ok(EncKdcRepPart {
@@ -1937,8 +1971,41 @@ fn enc_rep_part(
         srealm: ks(realm)?,
         sname: sname.clone(),
         caddr,
-        encrypted_pa_data: encrypted_pa_data.map(|p| vec![p]),
+        encrypted_pa_data,
     })
+}
+
+/// MIT `return_enc_padata` (`kdc_preauth.c:1636-1663`): FAST nego then
+/// PA-PAC-OPTIONS masked to RBCD. Referral PA-20 is omitted — nothing in
+/// 1.22.2 writes `KRB5_TL_SVR_REFERRAL_DATA`.
+fn return_enc_padata(
+    raw: Option<&[u8]>,
+    padata: Option<&[PaData]>,
+    reply_key: &ProtocolKey,
+    want_enc_pa: bool,
+    extra: Option<PaData>,
+) -> Result<Option<Vec<PaData>>, Error> {
+    let mut out = Vec::new();
+    if let Some(p) = extra {
+        out.push(p);
+    }
+    if want_enc_pa && let Some(pkt) = raw {
+        out.extend(enc_pa_rep_padata(reply_key, pkt)?);
+    }
+    if let Some(raw_po) = find_pa(padata, pa::PAC_OPTIONS)
+        && let Ok(opts) = decode::<PaPacOptions>(raw_po)
+        && opts.resource_based_constrained_delegation()
+    {
+        out.push(PaData {
+            padata_type: pa::PAC_OPTIONS,
+            padata_value: encode(&PaPacOptions::rbcd())?.into(),
+        });
+    }
+    if out.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(out))
+    }
 }
 
 /// MIT `kdc_handle_protected_negotiation` (`kdc_util.c:1768-1806`).
@@ -1977,12 +2044,9 @@ fn enctype_requires_etype_info_2(etype: i32) -> bool {
     )
 }
 
-/// AS-REP key-info like `add_etype_info`/`add_pw_salt` (`kdc_preauth.c:769-829`):
-/// PA-ETYPE-INFO2 for every client, PA-ETYPE-INFO + PW-SALT added when the
-/// request carries only legacy (des3/rc4) enctypes. The single entry's salt is
-/// the canonical client's (`_make_etype_info_entry` uses `client->princ`), so a
-/// `kinit` under an alias derives the target's key.
-fn as_rep_key_info(client: &Principal, ckey: &KeyEntry, requested: &[i32]) -> Vec<PaData> {
+/// `add_etype_info` (`kdc_preauth.c:769-799`): PA-ETYPE-INFO only for
+/// pre-info2 clients, then PA-ETYPE-INFO2 for every client.
+fn etype_info_padata(client: &Principal, ckey: &KeyEntry, requested: &[i32]) -> Vec<PaData> {
     let mut out = Vec::new();
     let salt = KerberosString::try_from(String::from_utf8_lossy(&client.salt).as_ref()).ok();
     let etype = ckey.etype.to_iana();
@@ -1997,10 +2061,6 @@ fn as_rep_key_info(client: &Principal, ckey: &KeyEntry, requested: &[i32]) -> Ve
                 padata_value: der.into(),
             });
         }
-        out.push(PaData {
-            padata_type: pa::PW_SALT,
-            padata_value: client.salt.clone().into(),
-        });
     }
     let info2: EtypeInfo2 = vec![EtypeInfo2Entry {
         etype,
@@ -2011,6 +2071,21 @@ fn as_rep_key_info(client: &Principal, ckey: &KeyEntry, requested: &[i32]) -> Ve
         out.push(PaData {
             padata_type: pa::ETYPE_INFO2,
             padata_value: der.into(),
+        });
+    }
+    out
+}
+
+/// AS-REP key-info like `add_etype_info`/`add_pw_salt` (`kdc_preauth.c:769-829`):
+/// etype-info then pw-salt for pre-info2 clients. The single entry's salt is
+/// the canonical client's (`_make_etype_info_entry` uses `client->princ`), so a
+/// `kinit` under an alias derives the target's key.
+fn as_rep_key_info(client: &Principal, ckey: &KeyEntry, requested: &[i32]) -> Vec<PaData> {
+    let mut out = etype_info_padata(client, ckey, requested);
+    if !requested.iter().copied().any(enctype_requires_etype_info_2) {
+        out.push(PaData {
+            padata_type: pa::PW_SALT,
+            padata_value: client.salt.clone().into(),
         });
     }
     out
@@ -2253,20 +2328,7 @@ fn wrap_as_fast(
     };
     let (code, text, inner_ed, as_preauth, detail) = match err {
         Error::PreauthRequired { e_data } => {
-            let mut method = decode::<MethodData>(&e_data).unwrap_or_default();
-            method.retain(|p| p.padata_type != pa::FX_FAST && p.padata_type != pa::SPAKE);
-            if !method
-                .iter()
-                .any(|p| p.padata_type == pa::ENCRYPTED_CHALLENGE)
-            {
-                method.insert(
-                    0,
-                    PaData {
-                        padata_type: pa::ENCRYPTED_CHALLENGE,
-                        padata_value: Vec::<u8>::new().into(),
-                    },
-                );
-            }
+            let method = decode::<MethodData>(&e_data).unwrap_or_default();
             let inner = encode(&method).unwrap_or_default();
             (err::PREAUTH_REQUIRED, None, inner, Some(method), None)
         }
@@ -2328,23 +2390,22 @@ fn wrap_as_fast(
     }
 }
 
-/// `get_preauth_hint_list` METHOD-DATA: the advertise list plus one ETYPE-INFO2
-/// entry for the selected client key (salt from the canonical client, empty
-/// s2kparams, `_make_etype_info_entry`).
-fn preauth_hint_edata(store: &dyn PrincipalRead, client: &Principal, ckey: &KeyEntry) -> Vec<u8> {
-    let salt =
-        krb5_types::KerberosString::try_from(String::from_utf8_lossy(&client.salt).as_ref()).ok();
-    let info: EtypeInfo2 = vec![EtypeInfo2Entry {
-        etype: ckey.etype.to_iana(),
-        salt,
-        s2kparams: None,
-    }];
-    let etype_info = PaData {
-        padata_type: pa::ETYPE_INFO2,
-        padata_value: encode(&info).map_or_else(|_| Vec::new().into(), Into::into),
-    };
-    let mut method: MethodData = crate::plugins::advertise_preauth(store, client);
-    method.push(etype_info);
+/// `get_preauth_hint_list` (`kdc_preauth.c:974-1014`): empty 136, then
+/// `add_etype_info` (11 if pre-info2, always 19), then modules, cookie last
+/// (`prepare_error_as` when e_data is present).
+fn preauth_hint_edata(
+    store: &dyn PrincipalRead,
+    client: &Principal,
+    ckey: &KeyEntry,
+    requested: &[i32],
+    armor: bool,
+) -> Vec<u8> {
+    let mut method: MethodData = crate::plugins::advertise_preauth(store, client, armor);
+    let info = etype_info_padata(client, ckey, requested);
+    let at = usize::from(method.first().is_some_and(|p| p.padata_type == pa::FX_FAST));
+    for (i, p) in info.into_iter().enumerate() {
+        method.insert(at + i, p);
+    }
     if let Ok(c) = make_cookie(store, &client.name, &[]) {
         method.push(PaData {
             padata_type: pa::FX_COOKIE,
@@ -2354,9 +2415,15 @@ fn preauth_hint_edata(store: &dyn PrincipalRead, client: &Principal, ckey: &KeyE
     encode(&method).unwrap_or_default()
 }
 
-fn preauth_required(store: &dyn PrincipalRead, client: &Principal, ckey: &KeyEntry) -> Error {
+fn preauth_required(
+    store: &dyn PrincipalRead,
+    client: &Principal,
+    ckey: &KeyEntry,
+    requested: &[i32],
+    armor: bool,
+) -> Error {
     Error::PreauthRequired {
-        e_data: preauth_hint_edata(store, client, ckey),
+        e_data: preauth_hint_edata(store, client, ckey, requested, armor),
     }
 }
 
@@ -2368,6 +2435,8 @@ fn attach_preauth_hint(
     store: &dyn PrincipalRead,
     client: &Principal,
     ckey: &KeyEntry,
+    requested: &[i32],
+    armor: bool,
     e: Error,
 ) -> Error {
     match e {
@@ -2379,7 +2448,7 @@ fn attach_preauth_hint(
         } if code == err::PREAUTH_FAILED => Error::Protocol {
             code,
             text,
-            e_data: Some(preauth_hint_edata(store, client, ckey)),
+            e_data: Some(preauth_hint_edata(store, client, ckey, requested, armor)),
             detail,
         },
         other => other,

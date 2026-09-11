@@ -37,7 +37,8 @@ pub trait KdcPreauth: Send + Sync {
     /// PA-DATA types this module owns.
     fn pa_types(&self) -> &'static [i32];
     /// METHOD-DATA offers for PREAUTH_REQUIRED.
-    fn advertise(&self, store: &dyn PrincipalRead, _client: &Principal) -> Vec<PaData>;
+    /// `armor` is set when the request is FAST-tunneled (`get_edata` rock).
+    fn advertise(&self, store: &dyn PrincipalRead, client: &Principal, armor: bool) -> Vec<PaData>;
     /// MIT `PA_HARDWARE` (`kdcpreauth_plugin.h`). FAST is still advertised
     /// under `hw_only` (`kdc_preauth.c:999-1001`).
     fn hardware(&self) -> bool {
@@ -74,7 +75,12 @@ impl KdcPreauth for FastMod {
     fn pa_types(&self) -> &'static [i32] {
         &[pa::FX_FAST]
     }
-    fn advertise(&self, _store: &dyn PrincipalRead, _client: &Principal) -> Vec<PaData> {
+    fn advertise(
+        &self,
+        _store: &dyn PrincipalRead,
+        _client: &Principal,
+        _armor: bool,
+    ) -> Vec<PaData> {
         vec![PaData {
             padata_type: pa::FX_FAST,
             padata_value: Vec::<u8>::new().into(),
@@ -105,7 +111,12 @@ impl KdcPreauth for PkinitMod {
     fn pa_types(&self) -> &'static [i32] {
         &[pa::PK_AS_REQ]
     }
-    fn advertise(&self, store: &dyn PrincipalRead, _client: &Principal) -> Vec<PaData> {
+    fn advertise(
+        &self,
+        store: &dyn PrincipalRead,
+        _client: &Principal,
+        _armor: bool,
+    ) -> Vec<PaData> {
         if store.pkinit_ca().is_none() {
             return Vec::new();
         }
@@ -160,7 +171,12 @@ impl KdcPreauth for SpakeMod {
     fn pa_types(&self) -> &'static [i32] {
         &[pa::SPAKE]
     }
-    fn advertise(&self, _store: &dyn PrincipalRead, _client: &Principal) -> Vec<PaData> {
+    fn advertise(
+        &self,
+        _store: &dyn PrincipalRead,
+        _client: &Principal,
+        _armor: bool,
+    ) -> Vec<PaData> {
         vec![PaData {
             padata_type: pa::SPAKE,
             padata_value: Vec::<u8>::new().into(),
@@ -199,7 +215,16 @@ impl KdcPreauth for EncTsMod {
     fn pa_types(&self) -> &'static [i32] {
         &[pa::ENC_TIMESTAMP]
     }
-    fn advertise(&self, _store: &dyn PrincipalRead, _client: &Principal) -> Vec<PaData> {
+    fn advertise(
+        &self,
+        _store: &dyn PrincipalRead,
+        _client: &Principal,
+        armor: bool,
+    ) -> Vec<PaData> {
+        // enc_ts_get (kdc_preauth_encts.c:39-43): ENOENT when FAST armor is present.
+        if armor {
+            return Vec::new();
+        }
         vec![PaData {
             padata_type: pa::ENC_TIMESTAMP,
             padata_value: Vec::<u8>::new().into(),
@@ -253,6 +278,45 @@ impl KdcPreauth for EncTsMod {
     }
 }
 
+struct EncChallengeMod;
+
+impl KdcPreauth for EncChallengeMod {
+    fn name(&self) -> &'static str {
+        "encrypted-challenge"
+    }
+    fn pa_types(&self) -> &'static [i32] {
+        &[pa::ENCRYPTED_CHALLENGE]
+    }
+    fn advertise(
+        &self,
+        _store: &dyn PrincipalRead,
+        client: &Principal,
+        armor: bool,
+    ) -> Vec<PaData> {
+        // ec_edata (kdc_preauth_ec.c:37-48): empty 138 only with armor and keys.
+        if !armor || client.keys.is_empty() {
+            return Vec::new();
+        }
+        vec![PaData {
+            padata_type: pa::ENCRYPTED_CHALLENGE,
+            padata_value: Vec::<u8>::new().into(),
+        }]
+    }
+    fn process_as(
+        &self,
+        _store: &dyn PrincipalRead,
+        _client: &Principal,
+        _padata: Option<&[PaData]>,
+        _ikey: &ProtocolKey,
+        _etype: krb5_crypto::EncryptionType,
+        _as_req_der: &[u8],
+        _body_der: &[u8],
+        _cname: &PrincipalName,
+    ) -> Result<Option<PreauthAction>, Error> {
+        Ok(None)
+    }
+}
+
 /// Demo extra module: counts advertise/process so tests prove the registry.
 #[derive(Debug)]
 pub struct DemoPreauth {
@@ -280,7 +344,12 @@ impl KdcPreauth for DemoPreauth {
     fn pa_types(&self) -> &'static [i32] {
         &[]
     }
-    fn advertise(&self, _store: &dyn PrincipalRead, _client: &Principal) -> Vec<PaData> {
+    fn advertise(
+        &self,
+        _store: &dyn PrincipalRead,
+        _client: &Principal,
+        _armor: bool,
+    ) -> Vec<PaData> {
         self.ads.fetch_add(1, Ordering::SeqCst);
         Vec::new()
     }
@@ -309,6 +378,7 @@ fn builtins() -> &'static [Arc<dyn KdcPreauth>] {
             Arc::new(FastMod) as Arc<dyn KdcPreauth>,
             Arc::new(PkinitMod),
             Arc::new(SpakeMod),
+            Arc::new(EncChallengeMod),
             Arc::new(EncTsMod),
         ]
     })
@@ -396,15 +466,26 @@ pub fn authdata_modules() -> Vec<Arc<dyn KdcAuthdata>> {
         .clone()
 }
 
-/// METHOD-DATA from every registered module plus ETYPE-INFO2 from the caller.
-pub fn advertise_preauth(store: &dyn PrincipalRead, client: &Principal) -> Vec<PaData> {
+/// METHOD-DATA modules after the leading empty PA-FX-FAST
+/// (`get_preauth_hint_list` `kdc_preauth.c:999-1006`).
+pub fn advertise_preauth(
+    store: &dyn PrincipalRead,
+    client: &Principal,
+    armor: bool,
+) -> Vec<PaData> {
     let hw_only = client.attributes & KDB_REQUIRES_HW_AUTH != 0;
-    let mut out = Vec::new();
+    let mut out = vec![PaData {
+        padata_type: pa::FX_FAST,
+        padata_value: Vec::<u8>::new().into(),
+    }];
     for m in preauth_modules() {
-        if hw_only && m.name() != "fast" && !m.hardware() {
+        if m.name() == "fast" {
             continue;
         }
-        out.extend(m.advertise(store, client));
+        if hw_only && !m.hardware() {
+            continue;
+        }
+        out.extend(m.advertise(store, client, armor));
     }
     out
 }

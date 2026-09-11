@@ -65,10 +65,10 @@ pub use kcm::{
 pub use keytab::{Keytab, KeytabEntry, KeytabSlot};
 pub use preauth::{
     apply_strengthen, armor_key, attach_fast, attach_fast_with_options, build_fast_armor,
-    fx_fast_padata, pa_for_user, pa_pac_options, pa_pk_as_req, pa_pk_as_req_agile, pa_pk_as_req_cn,
-    pa_pk_as_req_signed, pa_pk_as_req_spki, pa_s4u_x509_user, pa_spake_response, pa_spake_support,
-    pkinit_reply_key, pkinit_reply_key_agile, unwrap_fast_rep, verify_fast_finished,
-    verify_req_enc_pa_rep,
+    fx_fast_padata, fx_fast_padata_over, pa_for_user, pa_pac_options, pa_pk_as_req,
+    pa_pk_as_req_agile, pa_pk_as_req_cn, pa_pk_as_req_signed, pa_pk_as_req_spki, pa_s4u_x509_user,
+    pa_spake_response, pa_spake_support, pkinit_reply_key, pkinit_reply_key_agile, unwrap_fast_rep,
+    verify_fast_finished, verify_req_enc_pa_rep,
 };
 pub use replay::{ReplayCache, ReplayKey};
 pub use safe_priv::{

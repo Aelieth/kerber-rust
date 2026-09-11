@@ -140,8 +140,33 @@ pub fn fx_fast_padata(
     fast_options: &krb5_types::fast::FastOptions,
 ) -> Result<PaData, Error> {
     let body_der = encode(req_body)?;
+    fx_fast_padata_over(
+        armor,
+        armor_key,
+        &body_der,
+        req_body,
+        inner_padata,
+        fast_options,
+    )
+}
+
+/// [`fx_fast_padata`] with an explicit FAST req_checksum input.
+///
+/// TGS FAST checksums the PA-TGS-REQ AP-REQ (`fast.c:279`, `send_tgs.c:279`).
+///
+/// # Errors
+///
+/// Crypto or DER failures.
+pub fn fx_fast_padata_over(
+    armor: Option<&ApReq>,
+    armor_key: &ProtocolKey,
+    checksum_over: &[u8],
+    req_body: &krb5_types::KdcReqBody,
+    inner_padata: Vec<PaData>,
+    fast_options: &krb5_types::fast::FastOptions,
+) -> Result<PaData, Error> {
     let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM)?;
-    let mic = checksum(armor_key, ck_usage, &body_der)?;
+    let mic = checksum(armor_key, ck_usage, checksum_over)?;
     let inner = krb5_types::fast::KrbFastReq {
         fast_options: fast_options.clone(),
         padata: inner_padata,

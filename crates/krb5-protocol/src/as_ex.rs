@@ -40,6 +40,9 @@ pub struct AsOutcome {
     /// RFC 6806 FAST negotiation: the enc-padata carried PA-FX-FAST, so the KDC
     /// supports FAST (MIT records `fast_avail` in the ccache).
     pub fast_avail: bool,
+    /// The AS-REQ itself was FAST-armored. TGS continues FAST
+    /// (`send_tgs.c:178` + `fast.c:134-136`) when this is set.
+    pub used_fast: bool,
     /// The preauth type that produced the reply (MIT `selected_preauth_type`,
     /// recorded as the ccache `pa_type` config); `None` without preauth.
     pub pa_type: Option<i32>,
@@ -308,6 +311,7 @@ fn finish_as_rep_keys(
             canonicalize,
             expected_sname,
             req_der,
+            false,
         );
     }
     let want = EncryptionType::known(rep.0.enc_part.etype).ok();
@@ -323,6 +327,7 @@ fn finish_as_rep_keys(
             canonicalize,
             expected_sname,
             req_der,
+            false,
         )
     {
         return Ok(out);
@@ -340,6 +345,7 @@ fn finish_as_rep_keys(
             canonicalize,
             expected_sname,
             req_der,
+            false,
         ) {
             Ok(out) => return Ok(out),
             Err(e) => last = e,
@@ -394,6 +400,7 @@ fn continue_preauth(
             req.canonicalize,
             &req_sname(req),
             Some(&wire),
+            false,
         ),
         KdcMsg::Error(e) if e.error_code == err::SKEW => {
             let skew_time = e.stime.clone();
@@ -413,6 +420,7 @@ fn continue_preauth(
                     req.canonicalize,
                     &req_sname(req),
                     Some(&wire),
+                    false,
                 ),
                 KdcMsg::Error(e) => classify_kdc_error(&e),
                 KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
@@ -436,6 +444,7 @@ fn continue_preauth(
                     req.canonicalize,
                     &req_sname(req),
                     Some(&wire),
+                    false,
                 ),
                 KdcMsg::Error(e) => classify_kdc_error(&e),
                 KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
@@ -556,6 +565,7 @@ fn finish_fast_as(
         // MIT verifies the enc-pa-rep checksum under FAST too, over the
         // outer request with the (strengthened) reply key.
         Some(wire),
+        true,
     )
 }
 
@@ -736,6 +746,7 @@ fn send_spake_response(
             req.canonicalize,
             &req_sname(req),
             Some(&wire),
+            false,
         ),
         KdcMsg::Error(e) => classify_kdc_error(&e),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
@@ -792,6 +803,7 @@ fn continue_pkinit(
                 req.canonicalize,
                 &req_sname(req),
                 Some(&wire),
+                false,
             )
         }
         KdcMsg::Error(e) => classify_kdc_error(&e),
@@ -922,6 +934,7 @@ fn finish_as_rep(
     canonicalize: bool,
     expected_sname: &PrincipalName,
     req_der: Option<&[u8]>,
+    used_fast: bool,
 ) -> Result<AsOutcome, Error> {
     let inner = rep.0;
     let had_preauth = pa_type.is_some();
@@ -987,6 +1000,7 @@ fn finish_as_rep(
         cname: inner.cname,
         crealm: inner.crealm,
         fast_avail,
+        used_fast,
         pa_type,
     })
 }

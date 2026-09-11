@@ -36,6 +36,12 @@ this project uses semantic versioning once a crate is published.
   in CAMMAC ku 64 inside IF-RELEVANT before the PAC checksum.
   `[realms]` `encrypted_challenge_indicator` / `pkinit_indicator` /
   `spake_preauth_indicator`. diffsend 91 → 92.
+- **kdc.** `get_preauth_hint_list` order is empty 136, etype-info,
+  modules, cookie (`kdc_preauth.c:974-1014`). EncTs is omitted under
+  FAST; EncChallenge 138 is listed only with armor. EC outside FAST is
+  24. `return_enc_padata` echoes PAC-OPTIONS RBCD and FAST nego.
+  TGS FAST always emits `strengthen_key` and CF2s the reply key.
+  diffsend 92 → 94.
 
 ### W1-A′-2
 

@@ -503,6 +503,7 @@ fn outcome_from_cred(
         cname: cred.client.1.clone(),
         crealm: cred.client.0.clone(),
         fast_avail: false,
+        used_fast: false,
         pa_type: None,
     })
 }
