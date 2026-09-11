@@ -60,7 +60,10 @@ mod tests {
         assert_eq!(issued.ad_checksum.cksumtype, 1);
         assert_eq!(issued.ad_checksum.checksum.as_ref(), b"1234");
         assert_eq!(
-            issued.i_realm.as_ref().map(|r| r.as_bytes()),
+            issued
+                .i_realm
+                .as_ref()
+                .map(rasn::types::GeneralString::as_bytes),
             Some(b"ATHENA.MIT.EDU".as_slice())
         );
         assert_eq!(issued.elements.len(), 2);

@@ -237,11 +237,9 @@ fn r28_greet_is_kdc_issued() {
     let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
     let part = host_part(&store, &out);
     let ticket_ad = part.authorization_data.expect("ticket AD");
-    let has_issued = ticket_ad.iter().any(|e| {
-        if_relevant_inner_types(e)
-            .iter()
-            .any(|t| *t == pa::AD_KDC_ISSUED)
-    });
+    let has_issued = ticket_ad
+        .iter()
+        .any(|e| if_relevant_inner_types(e).contains(&pa::AD_KDC_ISSUED));
     assert!(has_issued, "greet not KDC-ISSUED: {ticket_ad:?}");
     assert!(
         ad_has_payload(&ticket_ad, GREET_AD_TYPE, GREET_TEXT),
@@ -271,16 +269,12 @@ fn r28_greet_precedes_copied_ad() {
     let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
     let part = host_part(&store, &out);
     let ticket_ad = part.authorization_data.expect("ticket AD");
-    let greet_i = ticket_ad.iter().position(|e| {
-        if_relevant_inner_types(e)
-            .iter()
-            .any(|t| *t == pa::AD_KDC_ISSUED)
-    });
-    let copy_i = ticket_ad.iter().position(|e| {
-        if_relevant_inner_types(e)
-            .iter()
-            .any(|t| *t == pa::AD_AND_OR)
-    });
+    let greet_i = ticket_ad
+        .iter()
+        .position(|e| if_relevant_inner_types(e).contains(&pa::AD_KDC_ISSUED));
+    let copy_i = ticket_ad
+        .iter()
+        .position(|e| if_relevant_inner_types(e).contains(&pa::AD_AND_OR));
     assert!(
         greet_i.is_some() && copy_i.is_some() && greet_i < copy_i,
         "greet={greet_i:?} copy={copy_i:?} ad={ticket_ad:?}"
