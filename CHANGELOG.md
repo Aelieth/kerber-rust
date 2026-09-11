@@ -8,6 +8,12 @@ this project uses semantic versioning once a crate is published.
 
 ### W1-A′-2
 
+- **test.** `host_tmp_write_lines` ends a quoted heredoc on `EOF'` /
+  `EOF"`, walks `$(…)` and `$'…'`, and strips only `docker exec`/`run`
+  argv so a host redirect on that line is still scanned. Fail-red
+  fixtures cover a multi-line quote, a quoted heredoc, a docker host
+  redirect, and the four gate probes. Ledger `:218` / `:269` rust-sites
+  name the functions that hold the backticked codes.
 - **kdc.** PAC `UnsupportedChecksum` on a krbtgt header or krbtgt
   second ticket wires 60 `GENERIC` (`KRB5_BAD_ENCTYPE` →
   `errcode_to_protocol`). The privsvr-retry sentinel stays internal

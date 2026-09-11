@@ -831,55 +831,142 @@ def check_docker_cp_cargo_target() -> None:
         )
 
 
+def _skip_dollar_arith(line: str, k: int) -> int:
+    """Advance past `$((…))` starting at `$`. Returns `len(line)` if unclosed."""
+    k += 3
+    n = len(line)
+    while k + 1 < n:
+        if line[k] == ")" and line[k + 1] == ")":
+            return k + 2
+        k += 1
+    return n
+
+
+def _push_cmdsubst(in_sq: list[bool], in_dq: list[bool], in_ansi: list[bool]) -> None:
+    in_sq.append(False)
+    in_dq.append(False)
+    in_ansi.append(False)
+
+
+_DOCKER_CMD = re.compile(r"\bdocker\s+(?:exec|run)\b")
+_DOCKER_HOST_OP = re.compile(r"(?:&&|\|\||;&|\|&|[;&|]|[0-9]*>>?)")
+
+
+def _host_side_code(code: str) -> str:
+    """Drop `docker exec`/`run` argv; keep host redirects, pipes, and later commands."""
+    out: list[str] = []
+    i = 0
+    while i < len(code):
+        m = _DOCKER_CMD.search(code, i)
+        if not m:
+            out.append(code[i:])
+            break
+        out.append(code[i : m.start()])
+        op = _DOCKER_HOST_OP.search(code, m.end())
+        if not op:
+            break
+        i = op.start()
+    return "".join(out)
+
+
 def host_tmp_write_lines(text: str) -> list[int]:
-    """Host-level `>/tmp/` redirects, skipping quotes and heredocs."""
+    """Host-level `>/tmp/` writes, skipping quotes, `$(…)`, and heredocs.
+
+    A quoted closer (`EOF'`, `EOF"`) ends the heredoc. Quoted `sh -c '…'`
+    payloads are stripped; a host redirect on the same docker line is not.
+    """
     hits: list[int] = []
-    in_sq = in_dq = False
+    in_sq = [False]
+    in_dq = [False]
+    in_ansi = [False]
     heredoc_end: str | None = None
     for i, line in enumerate(text.splitlines(), 1):
         if heredoc_end is not None:
-            if line.strip() == heredoc_end:
+            s = line.strip()
+            if s == heredoc_end:
                 heredoc_end = None
+            elif s == heredoc_end + "'":
+                heredoc_end = None
+                in_sq[-1] = False
+            elif s == heredoc_end + '"':
+                heredoc_end = None
+                in_dq[-1] = False
             continue
-        started_sq, started_dq = in_sq, in_dq
+        started_quoted = in_sq[-1] or in_dq[-1] or in_ansi[-1]
         buf: list[str] = []
         k = 0
         n = len(line)
         while k < n:
             ch = line[k]
-            if in_sq:
+            if in_ansi[-1]:
+                if ch == "\\" and k + 1 < n:
+                    k += 2
+                    continue
                 if ch == "'":
-                    in_sq = False
+                    in_ansi[-1] = False
                 k += 1
                 continue
-            if in_dq:
+            if in_sq[-1]:
+                if ch == "'":
+                    in_sq[-1] = False
+                k += 1
+                continue
+            if in_dq[-1]:
                 if ch == "\\" and k + 1 < n:
                     k += 2
                     continue
                 if ch == '"':
-                    in_dq = False
+                    in_dq[-1] = False
+                    k += 1
+                    continue
+                if ch == "$" and k + 1 < n and line[k + 1] == "(":
+                    if k + 2 < n and line[k + 2] == "(":
+                        k = _skip_dollar_arith(line, k)
+                    else:
+                        _push_cmdsubst(in_sq, in_dq, in_ansi)
+                        k += 2
+                    continue
                 k += 1
                 continue
+            if ch == "\\" and k + 1 < n:
+                buf.append(line[k + 1])
+                k += 2
+                continue
+            if ch == "$" and k + 1 < n and line[k + 1] == "'":
+                in_ansi[-1] = True
+                k += 2
+                continue
             if ch == "'":
-                in_sq = True
+                in_sq[-1] = True
                 k += 1
                 continue
             if ch == '"':
-                in_dq = True
+                in_dq[-1] = True
+                k += 1
+                continue
+            if ch == "$" and k + 1 < n and line[k + 1] == "(":
+                if k + 2 < n and line[k + 2] == "(":
+                    k = _skip_dollar_arith(line, k)
+                else:
+                    _push_cmdsubst(in_sq, in_dq, in_ansi)
+                    k += 2
+                continue
+            if ch == ")" and len(in_sq) > 1:
+                in_sq.pop()
+                in_dq.pop()
+                in_ansi.pop()
                 k += 1
                 continue
             if ch == "#":
                 break
             buf.append(ch)
             k += 1
-        code = "".join(buf)
-        if not started_sq and not started_dq and _HEREDOC_DELIM.search(line):
+        code = _host_side_code("".join(buf))
+        if not started_quoted and _HEREDOC_DELIM.search(line):
             m = _HEREDOC_DELIM.search(line)
             if m:
                 heredoc_end = m.group(1)
         if "KERBER_SCRATCH:-" in code:
-            continue
-        if "docker exec" in code or "docker run" in code:
             continue
         if _HOST_TMP_REDIR.search(code):
             hits.append(i)
@@ -2538,6 +2625,43 @@ jobs:
         "echo $(cat >/tmp/x)\n",
         "subshell-tmp-gate.sh",
     )
+    _must_die(
+        check_no_host_tmp_writes,
+        "python3 -c '\nprint(1)\n'\necho x > /tmp/after-multiline\n",
+        "multiline-quote-tmp-gate.sh",
+    )
+    _must_die(
+        check_no_host_tmp_writes,
+        "docker exec n sh -c 'cat >/tmp/in <<EOF\nbody\nEOF'\necho x > /tmp/after-heredoc\n",
+        "quoted-heredoc-tmp-gate.sh",
+    )
+    _must_die(
+        check_no_host_tmp_writes,
+        "docker exec n sh -c 'true' >/tmp/host-out\n",
+        "docker-host-redir-tmp-gate.sh",
+    )
+    check_no_host_tmp_writes(
+        "docker exec n sh -c 'kill /tmp/krb5-kdc; : >/tmp/in-container'\n"
+        "docker exec -d n \\\n"
+        "    sh -c '/tmp/krb5-kdc >/tmp/kdc-r18.log 2>&1'\n",
+        "ok-r18-kill-tmp-gate.sh",
+    )
+    _probe_dir = ROOT / "working" / "logs" / "w1-sweep" / "a2-r2-audit" / "scan-probe"
+    for _probe_name in (
+        "differential-gate.sh",
+        "kadmin-gate.sh",
+        "renew-gate.sh",
+        "s4u-mit-gate.sh",
+    ):
+        _probe = _probe_dir / _probe_name
+        if _probe.is_file():
+            _must_die(check_no_host_tmp_writes, _probe.read_text(), _probe_name)
+        _must_die(
+            check_no_host_tmp_writes,
+            (SCRIPTS / _probe_name).read_text()
+            + f"\necho probe > /tmp/host-probe-{_probe_name}\n",
+            f"probe-{_probe_name}",
+        )
     check_unit_evidence_helper()
     check_settle_helper()
     check_evidence_check_tool()
