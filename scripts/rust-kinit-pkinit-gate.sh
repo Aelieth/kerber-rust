@@ -106,7 +106,30 @@ docker exec "$NAME" grep -q 'BEGIN CERTIFICATE' /tmp/pkinit/kdc.pem
 docker exec "$NAME" grep -q 'BEGIN EC PRIVATE KEY' /tmp/pkinit/kdc.pem
 
 docker exec "$NAME" sh -c 'grep -q pkinit_identity /etc/krb5kdc/kdc.conf || sed -i "/\[kdcdefaults\]/a\\    pkinit_identity = FILE:/tmp/pkinit/kdc.pem\\n    pkinit_anchors = FILE:/tmp/pkinit/ca.pem\\n    pkinit_dh_min_bits = P-256" /etc/krb5kdc/kdc.conf'
+docker exec "$NAME" python3 -c '
+from pathlib import Path
+p = Path("/etc/krb5kdc/kdc.conf")
+t = p.read_text()
+if "pkinit_indicator" not in t:
+    t = t.replace("supported_enctypes", "        pkinit_indicator = pkinit\n        supported_enctypes", 1)
+    p.write_text(t)
+'
 docker exec "$NAME" kadmin.local -q 'modprinc +requires_preauth user'
+docker exec "$NAME" sh -c 'grep -q pkinit_anchors /etc/krb5.conf || cat >> /etc/krb5.conf <<EOF
+
+[libdefaults]
+    pkinit_eku_checking = none
+    pkinit_kdc_hostname = kerber.test
+    pkinit_dh_min_bits = 3072
+
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1
+        pkinit_anchors = FILE:/tmp/pkinit/ca.pem
+        pkinit_eku_checking = none
+        pkinit_kdc_hostname = kerber.test
+    }
+EOF'
 
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
 sleep 0.3
@@ -114,7 +137,7 @@ docker exec -d \
     -e KRB5_TRACE=/tmp/mit-kdc.trace \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
     -e KRB5_CONFIG=/etc/krb5.conf \
-    "$NAME" sh -c 'krb5kdc >/tmp/mit-kdc.log 2>&1'
+    "$NAME" sh -c 'krb5kdc -n >/tmp/mit-kdc.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
     if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.3)" 2>/dev/null; then
@@ -212,6 +235,54 @@ EOF"
 }
 mit_kdc_pkinit_dh1024
 
+echo "==== require_auth pkinit: MIT kinit PKINIT kvno issued, password kvno 12 ===="
+docker exec "$NAME" kadmin.local -q 'setstr host/testhost.kerber.test require_auth pkinit'
+docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
+set +e
+docker exec -e KRB5_TRACE=/dev/stderr "$NAME" \
+    kinit -X X509_user_identity=FILE:/tmp/pkinit/user.pem user@KERBER.TEST
+mpk=$?
+set -e
+if [ "$mpk" -ne 0 ]; then
+    docker exec "$NAME" cat /tmp/mit-kdc.log 2>/dev/null || true
+    log "pkinit.client.gate" "error" ',"error":"MIT kinit PKINIT after require_auth failed","rc":'"$mpk"
+    exit 1
+fi
+set +e
+MPKKV="$(docker exec "$NAME" kvno host/testhost.kerber.test 2>&1)"
+set -e
+echo "$MPKKV"
+echo "$MPKKV" | grep -q 'host/testhost.kerber.test@KERBER.TEST: kvno =' || {
+    docker exec "$NAME" cat /tmp/mit-kdc.log 2>/dev/null || true
+    log "pkinit.client.gate" "error" ',"error":"MIT kvno after PKINIT TGT + require_auth pkinit failed"'
+    exit 1
+}
+docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
+docker exec "$NAME" sh -c ': >/tmp/mit-kdc.log'
+set +e
+docker exec "$NAME" sh -c 'printf "userpassword\n" | kinit user@KERBER.TEST'
+mpw=$?
+set -e
+if [ "$mpw" -ne 0 ]; then
+    docker exec "$NAME" cat /tmp/mit-kdc.log 2>/dev/null || true
+    log "pkinit.client.gate" "error" ',"error":"MIT password kinit after require_auth pkinit failed","rc":'"$mpw"
+    exit 1
+fi
+set +e
+MPWKV="$(docker exec "$NAME" kvno host/testhost.kerber.test 2>&1)"
+set -e
+echo "$MPWKV"
+echo "$MPWKV" | grep -q 'KDC policy rejects request' || {
+    docker exec "$NAME" cat /tmp/mit-kdc.log 2>/dev/null || true
+    log "pkinit.client.gate" "error" ',"error":"MIT password kvno after require_auth pkinit missing KDC policy rejects request"'
+    exit 1
+}
+docker exec "$NAME" grep -q 'HIGHER_AUTHENTICATION_REQUIRED' /tmp/mit-kdc.log || {
+    docker exec "$NAME" cat /tmp/mit-kdc.log 2>/dev/null || true
+    log "pkinit.client.gate" "error" ',"error":"MIT KDC log missing HIGHER_AUTHENTICATION_REQUIRED"'
+    exit 1
+}
+
 echo "==== negative: MIT KDC identity is a client cert (rogue KDC) ===="
 docker exec "$NAME" sh -c 'grep -q pkinit_identity /etc/krb5kdc/kdc.conf && sed -i "s|pkinit_identity = FILE:/tmp/pkinit/kdc.pem|pkinit_identity = FILE:/tmp/pkinit/user.pem|" /etc/krb5kdc/kdc.conf'
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
@@ -220,7 +291,7 @@ docker exec -d \
     -e KRB5_TRACE=/tmp/mit-kdc-rogue.trace \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
     -e KRB5_CONFIG=/etc/krb5.conf \
-    "$NAME" sh -c 'krb5kdc >/tmp/mit-kdc-rogue.log 2>&1'
+    "$NAME" sh -c 'krb5kdc -n >/tmp/mit-kdc-rogue.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
     if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.3)" 2>/dev/null; then

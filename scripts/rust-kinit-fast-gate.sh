@@ -30,6 +30,7 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 cargo build -p krb5-client --bin krb5-kinit
+cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-kdb
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
@@ -66,7 +67,7 @@ docker exec -d \
     -e KRB5_TRACE=/tmp/mit-kdc.trace \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
     -e KRB5_CONFIG=/etc/krb5.conf \
-    "$NAME" sh -c 'krb5kdc >/tmp/mit-kdc.log 2>&1'
+    "$NAME" sh -c 'krb5kdc -n >/tmp/mit-kdc.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
     if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.3)" 2>/dev/null; then
@@ -200,5 +201,149 @@ if ! echo "$TRACE3" | grep -Fq 'Decrypted AP-REQ'; then
     exit 1
 fi
 echo "$TRACE3" | grep -F 'Decrypted AP-REQ'
-log "fast.client.gate" "ok" ',"mode":"rust-kinit","pa_type":136,"principal":"user@KERBER.TEST","nopreauth":true,"etype":20,"tgs_strengthen":true,"mit_tgs_strengthen":true'
+
+echo "==== require_auth encrypted_challenge: FAST issued, password 12 both legs ===="
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb
+docker cp "$ROOT/harness/client-krb5.conf" "$NAME":/tmp/mit-krb5.conf
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb
+docker exec "$NAME" sh -c "sed 's/kdc = 127.0.0.1\$/kdc = 127.0.0.1:8888/' /tmp/mit-krb5.conf > /tmp/rust-krb5.conf && sed -i 's/kdc = 127.0.0.1\$/kdc = 127.0.0.1:88/' /tmp/mit-krb5.conf"
+docker exec "$NAME" python3 -c '
+from pathlib import Path
+p = Path("/etc/krb5kdc/kdc.conf")
+t = p.read_text()
+if "encrypted_challenge_indicator" not in t:
+    t = t.replace("supported_enctypes", "        encrypted_challenge_indicator = encrypted_challenge\n        supported_enctypes", 1)
+    p.write_text(t)
+Path("/tmp/rust-kdc.conf").write_text("""[realms]
+    KERBER.TEST = {
+        encrypted_challenge_indicator = encrypted_challenge
+    }
+""")
+'
+docker exec "$NAME" kadmin.local -q 'modprinc +requires_preauth user'
+docker exec "$NAME" kadmin.local -q 'setstr host/testhost.kerber.test require_auth encrypted_challenge'
+docker exec "$NAME" kdb5_util dump /tmp/ec-ind.dump
+docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
+sleep 0.3
+docker exec -d \
+    -e KRB5_TRACE=/tmp/mit-kdc.trace \
+    -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
+    -e KRB5_CONFIG=/etc/krb5.conf \
+    "$NAME" sh -c 'krb5kdc -n >/tmp/mit-kdc.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/mit-kdc.log >&2 || true
+    log "fast.client.gate" "error" ',"error":"MIT krb5kdc did not listen after EC indicator"'
+    exit 1
+fi
+LOAD_EC="$(docker exec \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    "$NAME" /tmp/krb5-kdb load /tmp/ec-ind.dump)"
+echo "$LOAD_EC"
+echo "$LOAD_EC" | grep -q 'ok load version=7' || {
+    log "fast.client.gate" "error" ',"error":"rust kdb load after EC indicator failed"'
+    exit 1
+}
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_PROFILE=/tmp/rust-kdc.conf \
+    "$NAME" sh -c '/tmp/krb5-kdc 127.0.0.1:8888 >/tmp/rust-kdc.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/rust-kdc.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/rust-kdc.log >&2 || true
+    log "fast.client.gate" "error" ',"error":"rust kdc did not listen after EC indicator"'
+    exit 1
+fi
+docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
+if ! docker exec -e KRB5_CONFIG=/tmp/mit-krb5.conf "$NAME" \
+    sh -c 'printf "userpassword\n" | kinit -c /tmp/ec-armor.cc user@KERBER.TEST'; then
+    log "fast.client.gate" "error" ',"error":"MIT armor kinit for EC cell failed"'
+    exit 1
+fi
+ec_fast_kvno() {
+    local side=$1
+    local conf="/tmp/${side}-krb5.conf"
+    docker exec "$NAME" rm -f /tmp/ec-fast.cc
+    if ! docker exec -e KRB5_CONFIG="$conf" "$NAME" \
+        sh -c 'printf "userpassword\n" | kinit -T /tmp/ec-armor.cc -c /tmp/ec-fast.cc user@KERBER.TEST'; then
+        echo "==== $side FAST kinit failed ===="
+        docker exec "$NAME" cat /tmp/mit-kdc.log >&2 || true
+        docker exec "$NAME" cat /tmp/rust-kdc.log >&2 || true
+        log "fast.client.gate" "error" ",\"error\":\"MIT kinit -T via $side KDC failed\""
+        exit 1
+    fi
+    KLISTC="$(docker exec "$NAME" klist -C -c /tmp/ec-fast.cc 2>/dev/null || true)"
+    echo "$KLISTC"
+    echo "$KLISTC" | grep -q 'pa_type.*= 138' || {
+        log "fast.client.gate" "error" ",\"error\":\"$side FAST kinit missing pa_type 138\""
+        exit 1
+    }
+    set +e
+    got="$(docker exec -e KRB5_CONFIG="$conf" -e KRB5CCNAME=/tmp/ec-fast.cc "$NAME" \
+        kvno host/testhost.kerber.test 2>&1)"
+    set -e
+    echo "$side ec_kvno=$got"
+    echo "$got" | grep -q 'host/testhost.kerber.test@KERBER.TEST: kvno =' || {
+        docker exec "$NAME" cat /tmp/mit-kdc.log >&2 || true
+        docker exec "$NAME" cat /tmp/rust-kdc.log >&2 || true
+        log "fast.client.gate" "error" ",\"error\":\"$side kvno after EC TGT + require_auth failed\""
+        exit 1
+    }
+}
+ec_fast_kvno mit
+ec_fast_kvno rust
+docker exec "$NAME" sh -c ': >/tmp/mit-kdc.log; : >/tmp/rust-kdc.log'
+ec_pw_kvno() {
+    local side=$1
+    local conf="/tmp/${side}-krb5.conf"
+    local logf
+    if [ "$side" = mit ]; then
+        logf=/tmp/mit-kdc.log
+    else
+        logf=/tmp/rust-kdc.log
+    fi
+    docker exec -e KRB5_CONFIG="$conf" "$NAME" kdestroy -A >/dev/null 2>&1 || true
+    if ! docker exec -e KRB5_CONFIG="$conf" "$NAME" \
+        sh -c 'printf "userpassword\n" | kinit -c /tmp/ec-pw.cc user@KERBER.TEST'; then
+        log "fast.client.gate" "error" ",\"error\":\"$side password kinit for EC negative failed\""
+        exit 1
+    fi
+    set +e
+    got="$(docker exec -e KRB5_CONFIG="$conf" -e KRB5CCNAME=/tmp/ec-pw.cc "$NAME" \
+        kvno host/testhost.kerber.test 2>&1)"
+    set -e
+    echo "$side pw_kvno=$got"
+    echo "$got" | grep -q 'KDC policy rejects request' || {
+        log "fast.client.gate" "error" ",\"error\":\"$side password kvno missing KDC policy rejects request\""
+        exit 1
+    }
+    docker exec "$NAME" grep -q 'HIGHER_AUTHENTICATION_REQUIRED' "$logf" || {
+        docker exec "$NAME" cat "$logf" >&2 || true
+        log "fast.client.gate" "error" ",\"error\":\"$side KDC log missing HIGHER_AUTHENTICATION_REQUIRED\""
+        exit 1
+    }
+}
+ec_pw_kvno mit
+ec_pw_kvno rust
+
+log "fast.client.gate" "ok" ',"mode":"rust-kinit","pa_type":136,"principal":"user@KERBER.TEST","nopreauth":true,"etype":20,"tgs_strengthen":true,"mit_tgs_strengthen":true,"ec_require_auth":"issued+12"'
 exit 0

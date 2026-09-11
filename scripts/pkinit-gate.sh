@@ -22,7 +22,7 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
-cargo build -p krb5-kdc --bin krb5-kdc
+cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-kdb
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
@@ -34,10 +34,20 @@ cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
-docker exec "$NAME" chmod +x /tmp/krb5-kdc
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb
+docker exec "$NAME" sh -c 'cat > /tmp/rust-kdc.conf <<EOF
+[realms]
+    KERBER.TEST = {
+        pkinit_indicator = pkinit
+    }
+EOF'
 docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
     -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_KDC_PROFILE=/tmp/rust-kdc.conf \
     "$NAME" sh -c '/tmp/krb5-kdc --test-realm --export-pkinit /tmp/pkinit 127.0.0.1:88 >/tmp/kdc.log 2>&1 || /tmp/krb5-kdc --test-realm --export-pkinit /tmp/pkinit 127.0.0.1:8888 >/tmp/kdc.log 2>&1'
 
 ok=0
@@ -172,7 +182,63 @@ EOF"
     }
     rust_kdc_pkinit_dh1024
 
-    log "pkinit.gate" "ok" ',"mode":"mit-kinit","kdf":"rfc8636-sha256","mit_plugin":"present","san_mismatch":"refused","dh_typed":"typed+cookie"'
+    echo "==== require_auth pkinit: PKINIT kvno issued, password kvno 12 ===="
+    SETSTR="$(docker exec \
+        -e KRB5_KDC_DB=/tmp/rust.db \
+        -e KRB5_KDC_STASH=/tmp/rust.stash \
+        "$NAME" /tmp/krb5-kdb setstr host/testhost.kerber.test require_auth pkinit)"
+    echo "$SETSTR"
+    echo "$SETSTR" | grep -q 'ok setstr' || {
+        log "pkinit.gate" "error" ',"error":"krb5-kdb setstr require_auth failed"'
+        exit 1
+    }
+    docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
+    set +e
+    docker exec -e KRB5_TRACE=/dev/stderr "$NAME" \
+        kinit -X X509_user_identity=FILE:/tmp/pkinit/user.pem user@KERBER.TEST
+    pkrc=$?
+    set -e
+    if [ "$pkrc" -ne 0 ]; then
+        docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
+        log "pkinit.gate" "error" ',"error":"MIT kinit PKINIT after require_auth failed","rc":'"$pkrc"
+        exit 1
+    fi
+    set +e
+    PKKV="$(docker exec "$NAME" kvno host/testhost.kerber.test 2>&1)"
+    set -e
+    echo "$PKKV"
+    echo "$PKKV" | grep -Fx 'host/testhost.kerber.test@KERBER.TEST: kvno = 1' || {
+        docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
+        log "pkinit.gate" "error" ',"error":"kvno after PKINIT TGT + require_auth pkinit failed"'
+        exit 1
+    }
+    docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
+    docker exec "$NAME" sh -c ': >/tmp/kdc.log'
+    set +e
+    docker exec "$NAME" sh -c 'printf "userpassword\n" | kinit user@KERBER.TEST'
+    pwrc=$?
+    set -e
+    if [ "$pwrc" -ne 0 ]; then
+        docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
+        log "pkinit.gate" "error" ',"error":"password kinit after require_auth pkinit failed","rc":'"$pwrc"
+        exit 1
+    fi
+    set +e
+    PWKC="$(docker exec "$NAME" kvno host/testhost.kerber.test 2>&1)"
+    set -e
+    echo "$PWKC"
+    echo "$PWKC" | grep -q 'KDC policy rejects request' || {
+        docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
+        log "pkinit.gate" "error" ',"error":"password kvno after require_auth pkinit missing KDC policy rejects request"'
+        exit 1
+    }
+    docker exec "$NAME" grep -q 'HIGHER_AUTHENTICATION_REQUIRED' /tmp/kdc.log || {
+        docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
+        log "pkinit.gate" "error" ',"error":"rust KDC log missing HIGHER_AUTHENTICATION_REQUIRED"'
+        exit 1
+    }
+
+    log "pkinit.gate" "ok" ',"mode":"mit-kinit","kdf":"rfc8636-sha256","mit_plugin":"present","san_mismatch":"refused","dh_typed":"typed+cookie","pkinit_require_auth":"issued+12"'
     exit 0
 fi
 echo "MIT kinit with FILE identity failed (rc=$rc)"

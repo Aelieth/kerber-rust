@@ -62,6 +62,11 @@ this project uses semantic versioning once a crate is published.
   wraps KDC-ISSUED usage 19 (`greet_auth.c:62-72`) when
   `KERBER_KDC_GREET=1`. Body AD still tries session ku 4 then
   client_key ku 5. diffsend 98 → 101.
+- **kdc.** `cammac_check_kdcver` refuses an unkeyed KDC-verifier
+  checksum (`verify_checksum_keyed`; MIT `cammac.c:168` has no gate).
+  `require_auth` live cells are exact `KDC policy rejects request` plus
+  the KDC log word. PKINIT / Encrypted Challenge / SPAKE indicator
+  pairs issue when the TGT carries the matching indicator.
 
 ### W1-A′-2
 

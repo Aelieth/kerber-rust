@@ -322,10 +322,14 @@ MIT_REQ="$(kvno_via mit)"
 RUST_REQ="$(kvno_via rust)"
 echo "mit_require_auth=$MIT_REQ"
 echo "rust_require_auth=$RUST_REQ"
-echo "$MIT_REQ" | grep -qi 'KDC policy' || echo "$MIT_REQ" | grep -q 'while getting credentials' \
-    || die "MIT kvno after require_auth did not fail: $MIT_REQ"
-echo "$RUST_REQ" | grep -qi 'KDC policy' || echo "$RUST_REQ" | grep -q 'while getting credentials' \
-    || die "Rust kvno after require_auth did not fail: $RUST_REQ"
+echo "$MIT_REQ" | grep -q 'KDC policy rejects request' \
+    || die "MIT kvno after require_auth missing KDC policy rejects request: $MIT_REQ"
+echo "$RUST_REQ" | grep -q 'KDC policy rejects request' \
+    || die "Rust kvno after require_auth missing KDC policy rejects request: $RUST_REQ"
+docker exec "$NAME" grep -q 'HIGHER_AUTHENTICATION_REQUIRED' /tmp/mit-kdc.log \
+    || die "MIT KDC log missing HIGHER_AUTHENTICATION_REQUIRED after require_auth kvno"
+docker exec "$NAME" grep -q 'HIGHER_AUTHENTICATION_REQUIRED' /tmp/rust-kdc.log \
+    || die "Rust KDC log missing HIGHER_AUTHENTICATION_REQUIRED after require_auth kvno"
 docker exec "$NAME" kadmin.local -q 'delstr host/testhost.kerber.test require_auth'
 docker exec "$NAME" kdb5_util dump /tmp/reqauth-clear.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
@@ -387,10 +391,14 @@ MIT_AS="$(try_kinit mit)"
 RUST_AS="$(try_kinit rust)"
 echo "mit_as_require_auth=$MIT_AS"
 echo "rust_as_require_auth=$RUST_AS"
-echo "$MIT_AS" | grep -qi 'KDC policy' || echo "$MIT_AS" | grep -q 'while getting initial credentials' \
-    || die "MIT password kinit after krbtgt require_auth did not fail: $MIT_AS"
-echo "$RUST_AS" | grep -qi 'KDC policy' || echo "$RUST_AS" | grep -q 'while getting initial credentials' \
-    || die "Rust password kinit after krbtgt require_auth did not fail: $RUST_AS"
+echo "$MIT_AS" | grep -q 'KDC policy rejects request' \
+    || die "MIT password kinit after krbtgt require_auth missing KDC policy rejects request: $MIT_AS"
+echo "$RUST_AS" | grep -q 'KDC policy rejects request' \
+    || die "Rust password kinit after krbtgt require_auth missing KDC policy rejects request: $RUST_AS"
+docker exec "$NAME" grep -q 'HIGHER_AUTHENTICATION_REQUIRED' /tmp/mit-kdc.log \
+    || die "MIT KDC log missing HIGHER_AUTHENTICATION_REQUIRED after krbtgt require_auth"
+docker exec "$NAME" grep -q 'HIGHER_AUTHENTICATION_REQUIRED' /tmp/rust-kdc.log \
+    || die "Rust KDC log missing HIGHER_AUTHENTICATION_REQUIRED after krbtgt require_auth"
 docker exec "$NAME" kadmin.local -q 'delstr krbtgt/KERBER.TEST require_auth'
 docker exec "$NAME" kdb5_util dump /tmp/reqauth-as-clear.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
@@ -476,5 +484,58 @@ MIT_CAMMAC_SVC="$(docker exec -e KRB5CCNAME="$CC" "$NAME" /tmp/krb5-pac-extract 
 echo "mit_spake_svc_ad=$MIT_CAMMAC_SVC"
 [ "$MIT_CAMMAC_SVC" = "1/128,1/96" ] || die "MIT TGS service ticket want 1/128,1/96 got $MIT_CAMMAC_SVC"
 
-log "cross.kdc.gate" "ok" ",\"tgt_etype\":\"$MIT_TGT_ETYPE\",\"directions\":4,\"spake_pa_type\":151,\"pac_types\":\"$MIT_PAC_TYPES\",\"tgt_ad\":\"$TGT_AD\",\"svc_ad\":\"$SVC_AD\",\"require_auth\":\"12\",\"cammac_tgt\":\"$CAMMAC_TGT\",\"cammac_svc\":\"$CAMMAC_SVC\",\"rust_cammac_tgt\":\"$RUST_CAMMAC_TGT\",\"mit_cammac_svc\":\"$MIT_CAMMAC_SVC\""
+echo "==== require_auth spake: SPAKE issued, password 12 both legs ===="
+docker exec "$NAME" kadmin.local -q 'setstr host/testhost.kerber.test require_auth spake'
+docker exec "$NAME" kdb5_util dump /tmp/reqauth-spake.dump
+docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
+sleep 0.3
+LOAD_SP="$(docker exec \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    "$NAME" /tmp/krb5-kdb load /tmp/reqauth-spake.dump)"
+echo "$LOAD_SP"
+echo "$LOAD_SP" | grep -q 'ok load version=7' || die "rust kdb reload after require_auth spake failed"
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_PROFILE=/tmp/rust-kdc.conf \
+    "$NAME" sh -c '/tmp/krb5-kdc 127.0.0.1:8888 >/tmp/rust-kdc.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/rust-kdc.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+[ "$ok" = 1 ] || die "rust kdc did not listen after require_auth spake"
+spake_kinit_via mit
+MIT_SPAKE_KV="$(kvno_via mit)"
+echo "mit_spake_require_auth=$MIT_SPAKE_KV"
+echo "$MIT_SPAKE_KV" | grep -Fx 'host/testhost.kerber.test@KERBER.TEST: kvno = 1' \
+    || die "MIT kvno after SPAKE TGT + require_auth spake failed: $MIT_SPAKE_KV"
+spake_kinit_via rust
+RUST_SPAKE_KV="$(kvno_via rust)"
+echo "rust_spake_require_auth=$RUST_SPAKE_KV"
+echo "$RUST_SPAKE_KV" | grep -Fx 'host/testhost.kerber.test@KERBER.TEST: kvno = 1' \
+    || die "Rust kvno after SPAKE TGT + require_auth spake failed: $RUST_SPAKE_KV"
+docker exec "$NAME" sh -c ': >/tmp/mit-kdc.log; : >/tmp/rust-kdc.log'
+kinit_via mit
+MIT_PW_KV="$(kvno_via mit)"
+echo "mit_password_require_auth_spake=$MIT_PW_KV"
+echo "$MIT_PW_KV" | grep -q 'KDC policy rejects request' \
+    || die "MIT password kvno after require_auth spake missing KDC policy rejects request: $MIT_PW_KV"
+docker exec "$NAME" grep -q 'HIGHER_AUTHENTICATION_REQUIRED' /tmp/mit-kdc.log \
+    || die "MIT KDC log missing HIGHER_AUTHENTICATION_REQUIRED after password kvno require_auth spake"
+kinit_via rust
+RUST_PW_KV="$(kvno_via rust)"
+echo "rust_password_require_auth_spake=$RUST_PW_KV"
+echo "$RUST_PW_KV" | grep -q 'KDC policy rejects request' \
+    || die "Rust password kvno after require_auth spake missing KDC policy rejects request: $RUST_PW_KV"
+docker exec "$NAME" grep -q 'HIGHER_AUTHENTICATION_REQUIRED' /tmp/rust-kdc.log \
+    || die "Rust KDC log missing HIGHER_AUTHENTICATION_REQUIRED after password kvno require_auth spake"
+
+log "cross.kdc.gate" "ok" ",\"tgt_etype\":\"$MIT_TGT_ETYPE\",\"directions\":4,\"spake_pa_type\":151,\"pac_types\":\"$MIT_PAC_TYPES\",\"tgt_ad\":\"$TGT_AD\",\"svc_ad\":\"$SVC_AD\",\"require_auth\":\"12\",\"cammac_tgt\":\"$CAMMAC_TGT\",\"cammac_svc\":\"$CAMMAC_SVC\",\"rust_cammac_tgt\":\"$RUST_CAMMAC_TGT\",\"mit_cammac_svc\":\"$MIT_CAMMAC_SVC\",\"spake_require_auth\":\"issued+12\""
 echo "cross-kdc-gate ok"
