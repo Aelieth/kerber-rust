@@ -18,6 +18,7 @@ use zeroize::Zeroize;
 
 pub use rasn::types::{BitString, GeneralizedTime, OctetString};
 
+pub mod cammac;
 mod constants;
 pub mod deltat;
 pub mod extra;

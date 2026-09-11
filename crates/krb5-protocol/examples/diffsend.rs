@@ -3430,13 +3430,13 @@ fn run() -> Result<(), String> {
             &sess,
             realm,
             &user,
-            host,
+            host.clone(),
             realm,
             0x1000_0079,
             KdcOptions::none(),
             None,
             Vec::new(),
-            etypes,
+            etypes.clone(),
             None,
             None,
             Some(strip_enc),
@@ -3470,7 +3470,52 @@ fn run() -> Result<(), String> {
         r#"{{"event":"diffsend","case":"tgs-body-authdata-kdc-issued-stripped","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","kept":true,"dummy_stripped":true}}"#
     );
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":91}}"#);
+    let cammac_ad = vec![AuthorizationDataValue {
+        ad_type: pa::AD_IF_RELEVANT,
+        ad_data: encode(&vec![AuthorizationDataValue {
+            ad_type: pa::AD_CAMMAC,
+            ad_data: b"truncated".to_vec().into(),
+        }])
+        .map_err(|e| e.to_string())?
+        .into(),
+    }];
+    expect_error(
+        &cfg,
+        "tgs-truncated-cammac",
+        &encode(
+            &tgs_req_ex_from(
+                mint_tgt_ad(
+                    tkt_key,
+                    tkt_kvno,
+                    &user,
+                    realm,
+                    &krbtgt_sname,
+                    &sess,
+                    window10,
+                    TicketFlags::initial_preauth(),
+                    Some(cammac_ad),
+                )?,
+                &sess,
+                realm,
+                &user,
+                host,
+                realm,
+                0x1000_007a,
+                KdcOptions::none(),
+                None,
+                Vec::new(),
+                etypes,
+                None,
+                None,
+                None,
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::GENERIC,
+    )?;
+
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":92}}"#);
     Ok(())
 }
 

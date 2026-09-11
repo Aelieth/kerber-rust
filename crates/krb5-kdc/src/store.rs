@@ -421,6 +421,12 @@ pub struct Policy {
     pub reject_bad_transit: bool,
     /// MIT `disable_pac` (default false): issue no PAC.
     pub disable_pac: bool,
+    /// `[realms] encrypted_challenge_indicator` (single).
+    pub encrypted_challenge_indicator: Option<String>,
+    /// `[realms] pkinit_indicator` (repeatable).
+    pub pkinit_indicators: Vec<String>,
+    /// `[realms] spake_preauth_indicator` (repeatable).
+    pub spake_preauth_indicators: Vec<String>,
 }
 
 impl Default for Policy {
@@ -439,6 +445,9 @@ impl Default for Policy {
             capaths: BTreeMap::new(),
             reject_bad_transit: true,
             disable_pac: false,
+            encrypted_challenge_indicator: None,
+            pkinit_indicators: Vec::new(),
+            spake_preauth_indicators: Vec::new(),
         }
     }
 }
@@ -968,6 +977,15 @@ impl PrincipalStore {
         self.policy.requires_preauth = conf.requires_preauth;
         self.policy.reject_bad_transit = conf.reject_bad_transit;
         self.policy.disable_pac = conf.disable_pac;
+        self.policy
+            .encrypted_challenge_indicator
+            .clone_from(&conf.encrypted_challenge_indicator);
+        self.policy
+            .pkinit_indicators
+            .clone_from(&conf.pkinit_indicators);
+        self.policy
+            .spake_preauth_indicators
+            .clone_from(&conf.spake_preauth_indicators);
         if let Some(s) = conf.domain_sid.as_deref() {
             let Some(sid) = RpcSid::from_sddl(s) else {
                 return Err(Error::Crypto(format!(
@@ -3312,6 +3330,9 @@ mod tests {
         max_life = 1h 30m
         max_renewable_life = 2d 0h 0m 0s
         requires_preauth = no
+        encrypted_challenge_indicator = encrypted_challenge
+        pkinit_indicator = pkinit
+        spake_preauth_indicator = spake
     }
 ",
         )
@@ -3320,6 +3341,15 @@ mod tests {
         assert_eq!(store.policy.max_life, 5400);
         assert_eq!(store.policy.max_renewable_life, 2 * 86400);
         assert!(!store.policy.requires_preauth);
+        assert_eq!(
+            store.policy.encrypted_challenge_indicator.as_deref(),
+            Some("encrypted_challenge")
+        );
+        assert_eq!(store.policy.pkinit_indicators, vec!["pkinit".to_string()]);
+        assert_eq!(
+            store.policy.spake_preauth_indicators,
+            vec!["spake".to_string()]
+        );
         assert!(store.policy.allow_weak_crypto);
         assert!(!store.policy.allow_rc4);
         assert!(store.policy.reject_bad_transit);

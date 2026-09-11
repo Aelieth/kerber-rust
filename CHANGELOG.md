@@ -28,6 +28,14 @@ this project uses semantic versioning once a crate is published.
   production). `copy_tgt` / `is_kdc_issued_authdatum` strip
   SIGNTICKET/KDC-ISSUED/WIN2K-PAC/CAMMAC/AUTH-INDICATOR. diffsend
   88 → 91.
+- **kdc.** Auth indicators: `require_auth` any-match is POLICY 12
+  `HIGHER_AUTHENTICATION_REQUIRED` (`kdc_util.c:862-894`). Extract
+  verified CAMMAC (96) from the TGS subject ticket (`get_auth_indicators`);
+  skip extract and the check for S4U2Self. Undecodable CAMMAC is
+  `GENERIC` `GET_AUTH_INDICATORS`. `add_auth_indicators` wraps AD-97
+  in CAMMAC ku 64 inside IF-RELEVANT before the PAC checksum.
+  `[realms]` `encrypted_challenge_indicator` / `pkinit_indicator` /
+  `spake_preauth_indicator`. diffsend 91 → 92.
 
 ### W1-A′-2
 

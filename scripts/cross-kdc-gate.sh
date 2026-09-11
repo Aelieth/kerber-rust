@@ -291,5 +291,190 @@ SVC_AD="$(docker exec -e KRB5CCNAME="$CC" "$NAME" /tmp/krb5-pac-extract \
 echo "rust_svc_ad_types=$SVC_AD"
 [ "$SVC_AD" = "1/128" ] || die "Rust TGS AD shape want 1/128 (no copied TGT PAC) got $SVC_AD"
 
-log "cross.kdc.gate" "ok" ",\"tgt_etype\":\"$MIT_TGT_ETYPE\",\"directions\":4,\"spake_pa_type\":151,\"pac_types\":\"$MIT_PAC_TYPES\",\"tgt_ad\":\"$TGT_AD\",\"svc_ad\":\"$SVC_AD\""
+echo "==== require_auth password kvno is 12 both legs ===="
+docker exec "$NAME" kadmin.local -q 'setstr host/testhost.kerber.test require_auth pkinit'
+docker exec "$NAME" kdb5_util dump /tmp/reqauth.dump
+docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
+sleep 0.3
+LOAD_REQ="$(docker exec \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    "$NAME" /tmp/krb5-kdb load /tmp/reqauth.dump)"
+echo "$LOAD_REQ"
+echo "$LOAD_REQ" | grep -q 'ok load version=7' || die "rust kdb reload after require_auth failed"
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" sh -c '/tmp/krb5-kdc 127.0.0.1:8888 >/tmp/rust-kdc.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/rust-kdc.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+[ "$ok" = 1 ] || die "rust kdc did not listen after require_auth reload"
+kinit_via mit
+MIT_REQ="$(kvno_via mit)"
+RUST_REQ="$(kvno_via rust)"
+echo "mit_require_auth=$MIT_REQ"
+echo "rust_require_auth=$RUST_REQ"
+echo "$MIT_REQ" | grep -qi 'KDC policy' || echo "$MIT_REQ" | grep -q 'while getting credentials' \
+    || die "MIT kvno after require_auth did not fail: $MIT_REQ"
+echo "$RUST_REQ" | grep -qi 'KDC policy' || echo "$RUST_REQ" | grep -q 'while getting credentials' \
+    || die "Rust kvno after require_auth did not fail: $RUST_REQ"
+docker exec "$NAME" kadmin.local -q 'delstr host/testhost.kerber.test require_auth'
+docker exec "$NAME" kdb5_util dump /tmp/reqauth-clear.dump
+docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
+sleep 0.3
+LOAD_CLR="$(docker exec \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    "$NAME" /tmp/krb5-kdb load /tmp/reqauth-clear.dump)"
+echo "$LOAD_CLR"
+echo "$LOAD_CLR" | grep -q 'ok load version=7' || die "rust kdb reload after delstr failed"
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" sh -c '/tmp/krb5-kdc 127.0.0.1:8888 >/tmp/rust-kdc.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/rust-kdc.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+[ "$ok" = 1 ] || die "rust kdc did not listen after require_auth clear"
+
+echo "==== require_auth on krbtgt password kinit is 12 both legs ===="
+docker exec "$NAME" kadmin.local -q 'setstr krbtgt/KERBER.TEST require_auth pkinit'
+docker exec "$NAME" kdb5_util dump /tmp/reqauth-as.dump
+docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
+sleep 0.3
+LOAD_AS="$(docker exec \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    "$NAME" /tmp/krb5-kdb load /tmp/reqauth-as.dump)"
+echo "$LOAD_AS"
+echo "$LOAD_AS" | grep -q 'ok load version=7' || die "rust kdb reload after krbtgt require_auth failed"
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" sh -c '/tmp/krb5-kdc 127.0.0.1:8888 >/tmp/rust-kdc.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/rust-kdc.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+[ "$ok" = 1 ] || die "rust kdc did not listen after krbtgt require_auth"
+try_kinit() {
+    docker exec -e KRB5CCNAME="$CC" "$NAME" kdestroy -A >/dev/null 2>&1 || true
+    docker exec -e KRB5_CONFIG="/tmp/$1-krb5.conf" -e KRB5CCNAME="$CC" "$NAME" \
+        sh -c 'printf "userpassword\n" | kinit user@KERBER.TEST' 2>&1 || true
+}
+MIT_AS="$(try_kinit mit)"
+RUST_AS="$(try_kinit rust)"
+echo "mit_as_require_auth=$MIT_AS"
+echo "rust_as_require_auth=$RUST_AS"
+echo "$MIT_AS" | grep -qi 'KDC policy' || echo "$MIT_AS" | grep -q 'while getting initial credentials' \
+    || die "MIT password kinit after krbtgt require_auth did not fail: $MIT_AS"
+echo "$RUST_AS" | grep -qi 'KDC policy' || echo "$RUST_AS" | grep -q 'while getting initial credentials' \
+    || die "Rust password kinit after krbtgt require_auth did not fail: $RUST_AS"
+docker exec "$NAME" kadmin.local -q 'delstr krbtgt/KERBER.TEST require_auth'
+docker exec "$NAME" kdb5_util dump /tmp/reqauth-as-clear.dump
+docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
+sleep 0.3
+LOAD_ASC="$(docker exec \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    "$NAME" /tmp/krb5-kdb load /tmp/reqauth-as-clear.dump)"
+echo "$LOAD_ASC"
+echo "$LOAD_ASC" | grep -q 'ok load version=7' || die "rust kdb reload after krbtgt delstr failed"
+
+echo "==== SPAKE CAMMAC honor MIT TGT through Rust TGS ===="
+docker exec "$NAME" python3 -c '
+from pathlib import Path
+p = Path("/etc/krb5kdc/kdc.conf")
+t = p.read_text()
+if "spake_preauth_indicator" not in t:
+    t = t.replace("supported_enctypes", "        spake_preauth_indicator = spake\n        supported_enctypes", 1)
+    p.write_text(t)
+Path("/tmp/rust-kdc.conf").write_text("""[realms]
+    KERBER.TEST = {
+        spake_preauth_indicator = spake
+    }
+""")
+'
+docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
+sleep 0.3
+STARTLOG="$(docker exec "$NAME" sh -c 'KRB5_CONFIG=/tmp/spake-kdc-krb5.conf krb5kdc -n >/tmp/mit-kdc.log 2>&1 & sleep 0.5; cat /tmp/mit-kdc.log' 2>&1 || true)"
+echo "$STARTLOG"
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+[ "$ok" = 1 ] || die "MIT krb5kdc did not listen after indicator knob"
+docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
+sleep 0.3
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_PROFILE=/tmp/rust-kdc.conf \
+    "$NAME" sh -c '/tmp/krb5-kdc 127.0.0.1:8888 >/tmp/rust-kdc.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/rust-kdc.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+[ "$ok" = 1 ] || die "rust kdc did not listen after indicator knob"
+spake_kinit_via mit
+CAMMAC_TGT="$(docker exec -e KRB5CCNAME="$CC" "$NAME" /tmp/krb5-pac-extract \
+    --keytab /tmp/krbtgt.kt --ccache "$CC" --tgt --print-ad-types | sed -n 's/^ad_types=//p')"
+echo "mit_spake_tgt_ad=$CAMMAC_TGT"
+echo "$CAMMAC_TGT" | grep -q '96' || die "MIT SPAKE TGT missing CAMMAC 96: $CAMMAC_TGT"
+got="$(kvno_via rust)"
+echo "$got"
+echo "$got" | grep -Fx 'host/testhost.kerber.test@KERBER.TEST: kvno = 1' \
+    || die "Rust TGS rejected MIT SPAKE TGT CAMMAC: $got"
+CAMMAC_SVC="$(docker exec -e KRB5CCNAME="$CC" "$NAME" /tmp/krb5-pac-extract \
+    --keytab /tmp/host.kt --ccache "$CC" --print-ad-types | sed -n 's/^ad_types=//p')"
+echo "rust_spake_svc_ad=$CAMMAC_SVC"
+echo "$CAMMAC_SVC" | grep -q '96' || die "Rust TGS service ticket missing CAMMAC 96: $CAMMAC_SVC"
+
+echo "==== SPAKE CAMMAC honor Rust TGT through MIT TGS ===="
+spake_kinit_via rust
+RUST_CAMMAC_TGT="$(docker exec -e KRB5CCNAME="$CC" "$NAME" /tmp/krb5-pac-extract \
+    --keytab /tmp/krbtgt.kt --ccache "$CC" --tgt --print-ad-types | sed -n 's/^ad_types=//p')"
+echo "rust_spake_tgt_ad=$RUST_CAMMAC_TGT"
+echo "$RUST_CAMMAC_TGT" | grep -q '96' || die "Rust SPAKE TGT missing CAMMAC 96: $RUST_CAMMAC_TGT"
+got="$(kvno_via mit)"
+echo "$got"
+echo "$got" | grep -Fx 'host/testhost.kerber.test@KERBER.TEST: kvno = 1' \
+    || die "MIT TGS rejected Rust SPAKE TGT CAMMAC: $got"
+MIT_CAMMAC_SVC="$(docker exec -e KRB5CCNAME="$CC" "$NAME" /tmp/krb5-pac-extract \
+    --keytab /tmp/host.kt --ccache "$CC" --print-ad-types | sed -n 's/^ad_types=//p')"
+echo "mit_spake_svc_ad=$MIT_CAMMAC_SVC"
+echo "$MIT_CAMMAC_SVC" | grep -q '96' || die "MIT TGS service ticket missing CAMMAC 96: $MIT_CAMMAC_SVC"
+
+log "cross.kdc.gate" "ok" ",\"tgt_etype\":\"$MIT_TGT_ETYPE\",\"directions\":4,\"spake_pa_type\":151,\"pac_types\":\"$MIT_PAC_TYPES\",\"tgt_ad\":\"$TGT_AD\",\"svc_ad\":\"$SVC_AD\",\"require_auth\":\"12\",\"cammac_tgt\":\"$CAMMAC_TGT\",\"cammac_svc\":\"$CAMMAC_SVC\",\"rust_cammac_tgt\":\"$RUST_CAMMAC_TGT\",\"mit_cammac_svc\":\"$MIT_CAMMAC_SVC\""
 echo "cross-kdc-gate ok"

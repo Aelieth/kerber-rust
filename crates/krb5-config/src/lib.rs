@@ -154,6 +154,12 @@ pub struct KdcConf {
     pub reject_bad_transit: bool,
     /// MIT `disable_pac` (default false).
     pub disable_pac: bool,
+    /// `[realms] encrypted_challenge_indicator`.
+    pub encrypted_challenge_indicator: Option<String>,
+    /// `[realms] pkinit_indicator` (repeatable).
+    pub pkinit_indicators: Vec<String>,
+    /// `[realms] spake_preauth_indicator` (repeatable).
+    pub spake_preauth_indicators: Vec<String>,
 }
 
 impl Default for KdcConf {
@@ -180,6 +186,9 @@ impl Default for KdcConf {
             domain_sid: None,
             reject_bad_transit: true,
             disable_pac: false,
+            encrypted_challenge_indicator: None,
+            pkinit_indicators: Vec::new(),
+            spake_preauth_indicators: Vec::new(),
         }
     }
 }
@@ -742,6 +751,11 @@ fn parse_kdc_realm_line(conf: &mut KdcConf, line: &str) {
         "domain_sid" => conf.domain_sid = Some(v),
         "reject_bad_transit" => conf.reject_bad_transit = truthy(&v),
         "disable_pac" => conf.disable_pac = truthy(&v),
+        "encrypted_challenge_indicator" => {
+            conf.encrypted_challenge_indicator = Some(v);
+        }
+        "pkinit_indicator" => conf.pkinit_indicators.push(v),
+        "spake_preauth_indicator" => conf.spake_preauth_indicators.push(v),
         _ => {}
     }
 }
@@ -1592,6 +1606,28 @@ mod tests {
         )
         .unwrap();
         assert!(!lib.disable_pac);
+    }
+
+    #[test]
+    fn realm_auth_indicator_knobs() {
+        let kdc = KdcConf::parse(
+            r"
+[realms]
+    KERBER.TEST = {
+        encrypted_challenge_indicator = encrypted_challenge
+        pkinit_indicator = pkinit
+        pkinit_indicator = certauth
+        spake_preauth_indicator = spake
+    }
+",
+        )
+        .unwrap();
+        assert_eq!(
+            kdc.encrypted_challenge_indicator.as_deref(),
+            Some("encrypted_challenge")
+        );
+        assert_eq!(kdc.pkinit_indicators, vec!["pkinit", "certauth"]);
+        assert_eq!(kdc.spake_preauth_indicators, vec!["spake"]);
     }
 
     #[test]

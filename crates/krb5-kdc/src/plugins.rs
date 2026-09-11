@@ -444,23 +444,43 @@ pub trait KdcPolicy: Send + Sync {
     /// # Errors
     ///
     /// Policy denial.
-    fn check_as(&self, store: &dyn PrincipalRead, client: &Principal) -> Result<(), Error>;
+    fn check_as(
+        &self,
+        store: &dyn PrincipalRead,
+        client: &Principal,
+        indicators: &[String],
+    ) -> Result<(), Error>;
     /// Called on each TGS issue; `Err` denies the request.
     ///
     /// # Errors
     ///
     /// Policy denial.
-    fn check_tgs(&self, store: &dyn PrincipalRead, sname: &PrincipalName) -> Result<(), Error>;
+    fn check_tgs(
+        &self,
+        store: &dyn PrincipalRead,
+        sname: &PrincipalName,
+        indicators: &[String],
+    ) -> Result<(), Error>;
 }
 
 /// Default policy: records nothing; built-in ticket rules stay in issue.rs.
 pub struct DefaultPolicy;
 
 impl KdcPolicy for DefaultPolicy {
-    fn check_as(&self, _store: &dyn PrincipalRead, _client: &Principal) -> Result<(), Error> {
+    fn check_as(
+        &self,
+        _store: &dyn PrincipalRead,
+        _client: &Principal,
+        _indicators: &[String],
+    ) -> Result<(), Error> {
         Ok(())
     }
-    fn check_tgs(&self, _store: &dyn PrincipalRead, _sname: &PrincipalName) -> Result<(), Error> {
+    fn check_tgs(
+        &self,
+        _store: &dyn PrincipalRead,
+        _sname: &PrincipalName,
+        _indicators: &[String],
+    ) -> Result<(), Error> {
         Ok(())
     }
 }
@@ -469,7 +489,12 @@ impl KdcPolicy for DefaultPolicy {
 pub struct DenyPolicy;
 
 impl KdcPolicy for DenyPolicy {
-    fn check_as(&self, _store: &dyn PrincipalRead, _client: &Principal) -> Result<(), Error> {
+    fn check_as(
+        &self,
+        _store: &dyn PrincipalRead,
+        _client: &Principal,
+        _indicators: &[String],
+    ) -> Result<(), Error> {
         Err(Error::Protocol {
             code: krb5_types::err::POLICY,
             text: Some("kdcpolicy".into()),
@@ -477,7 +502,12 @@ impl KdcPolicy for DenyPolicy {
             detail: None,
         })
     }
-    fn check_tgs(&self, _store: &dyn PrincipalRead, _sname: &PrincipalName) -> Result<(), Error> {
+    fn check_tgs(
+        &self,
+        _store: &dyn PrincipalRead,
+        _sname: &PrincipalName,
+        _indicators: &[String],
+    ) -> Result<(), Error> {
         Err(Error::Protocol {
             code: krb5_types::err::POLICY,
             text: Some("kdcpolicy".into()),
@@ -497,11 +527,21 @@ pub struct DemoPolicy {
 }
 
 impl KdcPolicy for DemoPolicy {
-    fn check_as(&self, _store: &dyn PrincipalRead, _client: &Principal) -> Result<(), Error> {
+    fn check_as(
+        &self,
+        _store: &dyn PrincipalRead,
+        _client: &Principal,
+        _indicators: &[String],
+    ) -> Result<(), Error> {
         self.as_checks.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
-    fn check_tgs(&self, _store: &dyn PrincipalRead, _sname: &PrincipalName) -> Result<(), Error> {
+    fn check_tgs(
+        &self,
+        _store: &dyn PrincipalRead,
+        _sname: &PrincipalName,
+        _indicators: &[String],
+    ) -> Result<(), Error> {
         self.tgs_checks.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -629,6 +669,13 @@ mod tests {
             other => panic!("AS deny: {other:?}"),
         }
         clear_thread_policy();
+        let req = as_req(
+            cname.clone(),
+            TEST_REALM,
+            6,
+            Some(vec![pa_enc_timestamp(&key).unwrap()]),
+        )
+        .unwrap();
         let issued = crate::issue_as(&store, &req).expect("AS with default policy");
         set_thread_policy(Arc::new(DenyPolicy));
         let tgs = tgs_req(
@@ -726,7 +773,7 @@ mod tests {
                     ))
                     .expect("user");
                 current_policy()
-                    .check_as(&store, user)
+                    .check_as(&store, user, &[])
                     .expect("demo policy allows");
                 pol.as_checks.load(Ordering::SeqCst)
             }

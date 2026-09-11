@@ -5,13 +5,14 @@ use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, checksum, checksum_output_size, cksumtype_is_keyed,
     decrypt, derive_prfplus_enctype, verify_checksum_keyed, verify_checksum_type,
 };
+use krb5_types::cammac::{Cammac, VerifierMac};
 use krb5_types::pac::{
     PAC_CLIENT_INFO, PAC_FULL_CHECKSUM, PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM, PAC_SERVER_CHECKSUM,
     PAC_TICKET_CHECKSUM, parse_client_info,
 };
 use krb5_types::{
-    AuthorizationData, AuthorizationDataValue, EncTicketPart, EncryptedData, EncryptionKey, PaData,
-    PrincipalName, Ticket, err, ku, pa,
+    AuthorizationData, AuthorizationDataValue, Checksum, EncTicketPart, EncryptedData,
+    EncryptionKey, PaData, PrincipalName, Ticket, err, ku, pa,
 };
 
 use crate::error::Error;
@@ -1260,6 +1261,226 @@ pub(crate) fn with_status(e: Error, st: &'static str) -> Error {
     }
 }
 
+pub(crate) const REQUIRE_AUTH: &str = "require_auth";
+
+pub(crate) fn authind_add(indicators: &mut Vec<String>, ind: &str) {
+    if !indicators.iter().any(|s| s == ind) {
+        indicators.push(ind.to_owned());
+    }
+}
+
+pub(crate) fn authind_contains(indicators: &[String], ind: &str) -> bool {
+    indicators.iter().any(|s| s == ind)
+}
+
+pub(crate) fn check_indicators(server: &Principal, indicators: &[String]) -> Result<(), Error> {
+    let Some((_, req)) = server.string_attrs.iter().find(|(k, _)| k == REQUIRE_AUTH) else {
+        return Ok(());
+    };
+    if req
+        .split(' ')
+        .any(|tok| !tok.is_empty() && authind_contains(indicators, tok))
+    {
+        return Ok(());
+    }
+    Err(Error::Protocol {
+        code: err::POLICY,
+        text: Some(status::HIGHER_AUTHENTICATION_REQUIRED.to_owned()),
+        e_data: None,
+        detail: Some(format!(
+            "Required auth indicators not present in ticket: {req}"
+        )),
+    })
+}
+
+fn collect_authdata(
+    in_ad: &[AuthorizationDataValue],
+    ad_type: i32,
+) -> Result<Vec<AuthorizationDataValue>, Error> {
+    let mut out = Vec::new();
+    collect_authdata_into(in_ad, ad_type, &mut out)?;
+    Ok(out)
+}
+
+fn collect_authdata_into(
+    in_ad: &[AuthorizationDataValue],
+    ad_type: i32,
+    out: &mut Vec<AuthorizationDataValue>,
+) -> Result<(), Error> {
+    for ad in in_ad {
+        if ad.ad_type == pa::AD_IF_RELEVANT {
+            let inner: AuthorizationData = decode(ad.ad_data.as_ref())?;
+            collect_authdata_into(&inner, ad_type, out)?;
+            continue;
+        }
+        if ad.ad_type == ad_type {
+            out.push(ad.clone());
+        }
+    }
+    Ok(())
+}
+
+fn wrap_if_relevant(inner: &[AuthorizationDataValue]) -> Result<AuthorizationData, Error> {
+    let wrapped = encode(&inner.to_vec())?;
+    Ok(vec![AuthorizationDataValue {
+        ad_type: pa::AD_IF_RELEVANT,
+        ad_data: wrapped.into(),
+    }])
+}
+
+fn cammac_checksum(key: &ProtocolKey, message: &[u8]) -> Result<Checksum, Error> {
+    let usage = KeyUsage::new(ku::CAMMAC)?;
+    let mac = checksum(key, usage, message)?;
+    Ok(Checksum {
+        cksumtype: key.etype().checksum_type(),
+        checksum: mac.into(),
+    })
+}
+
+fn encode_kdcver_encpart(
+    enc_tkt: &EncTicketPart,
+    contents: &[AuthorizationDataValue],
+) -> Result<Vec<u8>, Error> {
+    let mut ck = enc_tkt.clone();
+    ck.authorization_data = Some(contents.to_vec());
+    Ok(encode(&ck)?)
+}
+
+fn cammac_create(
+    enc_tkt: &EncTicketPart,
+    server_key: &ProtocolKey,
+    tgt: &Principal,
+    tgt_key: &ProtocolKey,
+    contents: &[AuthorizationDataValue],
+) -> Result<AuthorizationData, Error> {
+    let der_enctkt = encode_kdcver_encpart(enc_tkt, contents)?;
+    let kdc_cksum = cammac_checksum(tgt_key, &der_enctkt)?;
+    let kvno = tgt.first_current_key().map_or(0, |k| k.kvno);
+    let kdc_verifier = VerifierMac {
+        identifier: None,
+        kvno: (kvno != 0).then_some(kvno),
+        enctype: None,
+        mac: kdc_cksum,
+    };
+    let der_authdata = encode(&contents.to_vec())?;
+    let svc_cksum = cammac_checksum(server_key, &der_authdata)?;
+    let svc_verifier = VerifierMac {
+        identifier: None,
+        kvno: None,
+        enctype: None,
+        mac: svc_cksum,
+    };
+    let cammac = Cammac {
+        elements: contents.to_vec(),
+        kdc_verifier: Some(kdc_verifier),
+        svc_verifier: Some(svc_verifier),
+        other_verifiers: None,
+    };
+    let der = encode(&cammac)?;
+    wrap_if_relevant(&[AuthorizationDataValue {
+        ad_type: pa::AD_CAMMAC,
+        ad_data: der.into(),
+    }])
+}
+
+fn cammac_check_kdcver(
+    cammac: &Cammac,
+    enc_tkt: &EncTicketPart,
+    tgt: &Principal,
+    tgt_key: &ProtocolKey,
+) -> bool {
+    let Some(ver) = cammac.kdc_verifier.as_ref() else {
+        return false;
+    };
+    let current = tgt.first_current_key().map_or(0, |k| k.kvno);
+    let want_kvno = ver.kvno.unwrap_or(0);
+    let (key, hist_etype) = if want_kvno == 0 || want_kvno == current {
+        (tgt_key, None)
+    } else {
+        let Some(k) = tgt.first_key_at_kvno(want_kvno) else {
+            return false;
+        };
+        (&k.key, Some(k.etype.to_iana()))
+    };
+    let ver_enctype = ver.enctype.unwrap_or(0);
+    if ver_enctype != 0 && hist_etype.unwrap_or(0) != ver_enctype {
+        return false;
+    }
+    let Ok(der) = encode_kdcver_encpart(enc_tkt, &cammac.elements) else {
+        return false;
+    };
+    let Ok(usage) = KeyUsage::new(ku::CAMMAC) else {
+        return false;
+    };
+    verify_checksum_type(
+        key,
+        usage,
+        &der,
+        ver.mac.cksumtype,
+        ver.mac.checksum.as_ref(),
+    )
+    .is_ok()
+}
+
+fn authind_extract(
+    authdata: &[AuthorizationDataValue],
+    indicators: &mut Vec<String>,
+) -> Result<(), Error> {
+    let found = collect_authdata(authdata, pa::AD_AUTH_INDICATOR)?;
+    for el in found {
+        let Ok(strings) = decode::<Vec<String>>(el.ad_data.as_ref()) else {
+            continue;
+        };
+        indicators.extend(strings);
+    }
+    Ok(())
+}
+
+pub(crate) fn get_auth_indicators(
+    enc_tkt: &EncTicketPart,
+    local_tgt: &Principal,
+    local_tgt_key: &ProtocolKey,
+) -> Result<Vec<String>, Error> {
+    let Some(ad) = enc_tkt.authorization_data.as_deref() else {
+        return Ok(Vec::new());
+    };
+    let cammacs = collect_authdata(ad, pa::AD_CAMMAC).map_err(|e| match e {
+        Error::Asn1(_) => proto(err::GENERIC, status::GET_AUTH_INDICATORS),
+        other => with_status(other, status::GET_AUTH_INDICATORS),
+    })?;
+    let mut indicators = Vec::new();
+    for el in cammacs {
+        let cammac: Cammac = decode(el.ad_data.as_ref())
+            .map_err(|_| proto(err::GENERIC, status::GET_AUTH_INDICATORS))?;
+        if cammac_check_kdcver(&cammac, enc_tkt, local_tgt, local_tgt_key) {
+            authind_extract(&cammac.elements, &mut indicators)
+                .map_err(|e| with_status(e, status::GET_AUTH_INDICATORS))?;
+        }
+    }
+    Ok(indicators)
+}
+
+pub(crate) fn add_auth_indicators(
+    extra: &mut AuthorizationData,
+    indicators: &[String],
+    server_key: &ProtocolKey,
+    krbtgt: &Principal,
+    krbtgt_key: &ProtocolKey,
+    enc_tkt: &EncTicketPart,
+) -> Result<(), Error> {
+    if indicators.is_empty() {
+        return Ok(());
+    }
+    let der = encode(&indicators.to_vec())?;
+    let elements = vec![AuthorizationDataValue {
+        ad_type: pa::AD_AUTH_INDICATOR,
+        ad_data: der.into(),
+    }];
+    let wrapped = cammac_create(enc_tkt, server_key, krbtgt, krbtgt_key, &elements)?;
+    extra.extend(wrapped);
+    Ok(())
+}
+
 fn utf8(s: &krb5_types::KerberosString) -> &str {
     std::str::from_utf8(s.as_bytes()).unwrap_or("")
 }
@@ -1352,6 +1573,90 @@ mod handle_authdata_tests {
             Error::Protocol { code, text, .. } => {
                 assert_eq!(code, err::POLICY);
                 assert_eq!(text.as_deref(), Some(status::HANDLE_AUTHDATA));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn check_indicators_any_match_and_policy() {
+        let mut server = crate::store::Principal::from_keys(
+            PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["svc"]),
+            "KERBER.TEST".into(),
+            Vec::new(),
+            Vec::new(),
+            false,
+            0,
+            false,
+            0,
+        );
+        assert!(check_indicators(&server, &[]).is_ok());
+        server
+            .string_attrs
+            .push((REQUIRE_AUTH.into(), "pkinit spake".into()));
+        assert!(check_indicators(&server, &["spake".into()]).is_ok());
+        let err = check_indicators(&server, &["password".into()]).unwrap_err();
+        match err {
+            Error::Protocol { code, text, .. } => {
+                assert_eq!(code, err::POLICY);
+                assert_eq!(
+                    text.as_deref(),
+                    Some(status::HIGHER_AUTHENTICATION_REQUIRED)
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn cammac_round_trip_and_bad_mac_ignored() {
+        let key = crate::store::random_key(EncryptionType::Aes256CtsHmacSha196).unwrap();
+        let mut tgt = crate::store::Principal::from_keys(
+            PrincipalName::krbtgt("KERBER.TEST"),
+            "KERBER.TEST".into(),
+            Vec::new(),
+            Vec::new(),
+            false,
+            0,
+            false,
+            0,
+        );
+        tgt.keys.push(crate::store::KeyEntry::new(
+            EncryptionType::Aes256CtsHmacSha196,
+            key.clone(),
+            1,
+        ));
+        let part = EncTicketPart {
+            flags: krb5_types::TicketFlags::initial_preauth(),
+            key: EncryptionKey {
+                keytype: key.etype().to_iana(),
+                keyvalue: key.as_bytes().to_vec().into(),
+            },
+            crealm: krb5_types::try_ascii("KERBER.TEST").unwrap(),
+            cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+            transited: krb5_types::TransitedEncoding {
+                tr_type: 1,
+                contents: Vec::<u8>::new().into(),
+            },
+            authtime: krb5_types::KerberosTime::now(),
+            starttime: None,
+            endtime: krb5_types::KerberosTime::now(),
+            renew_till: None,
+            caddr: None,
+            authorization_data: None,
+        };
+        let mut extra = AuthorizationData::new();
+        add_auth_indicators(&mut extra, &["pkinit".into()], &key, &tgt, &key, &part).unwrap();
+        let mut issued = part.clone();
+        issued.authorization_data = Some(extra.clone());
+        let got = get_auth_indicators(&issued, &tgt, &key).unwrap();
+        assert_eq!(got, vec!["pkinit".to_string()]);
+        extra[0].ad_data = b"nope".to_vec().into();
+        issued.authorization_data = Some(extra);
+        let err = get_auth_indicators(&issued, &tgt, &key).unwrap_err();
+        match err {
+            Error::Protocol { text, .. } => {
+                assert_eq!(text.as_deref(), Some(status::GET_AUTH_INDICATORS));
             }
             other => panic!("{other:?}"),
         }

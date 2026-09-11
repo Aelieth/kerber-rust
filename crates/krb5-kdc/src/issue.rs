@@ -19,7 +19,8 @@ use krb5_types::{
 };
 
 use crate::ad::{
-    S4u2Self, SecondTicket, check_s4u2proxy_policy, check_tgs_s4u2proxy, handle_authdata,
+    S4u2Self, SecondTicket, add_auth_indicators, authind_add, check_indicators,
+    check_s4u2proxy_policy, check_tgs_s4u2proxy, get_auth_indicators, handle_authdata,
     make_s4u2self_rep, pac_client_info_eq, process_s4u2self_req, rbcd_pac_client,
     update_delegation_info, with_status, wrap_win2k_pac,
 };
@@ -399,6 +400,7 @@ fn issue_as_body(
     let mut skip_timestamp = false;
     let mut hw_preauth = false;
     let mut reply_key_replaced = false;
+    let mut auth_indicators: Vec<String> = Vec::new();
     let as_req_der = match raw {
         Some(r) => r.to_vec(),
         None => encode(req)?,
@@ -421,6 +423,9 @@ fn issue_as_body(
             skip_timestamp = true;
             hw_preauth = true;
             reply_key_replaced = true;
+            for ind in &store.policy().pkinit_indicators {
+                authind_add(&mut auth_indicators, ind);
+            }
         }
         Some(PreauthAction::Challenge(e_data)) => {
             // do_as_req.c:439-442,809: status PREAUTH_FAILED even for 91.
@@ -455,6 +460,9 @@ fn issue_as_body(
             as_rep_key = k;
             skip_timestamp = true;
             reply_key_replaced = true;
+            for ind in &store.policy().spake_preauth_indicators {
+                authind_add(&mut auth_indicators, ind);
+            }
         }
         Some(PreauthAction::EncTsOk) => {
             skip_timestamp = true;
@@ -471,6 +479,9 @@ fn issue_as_body(
                 store.record_as_outcome(&cname, true);
                 skip_timestamp = true;
                 extra_padata.push(kdc_encrypted_challenge(&f.armor_key, &ckey.key)?);
+                if let Some(ai) = store.policy().encrypted_challenge_indicator.as_deref() {
+                    authind_add(&mut auth_indicators, ai);
+                }
             }
             Err(e) => {
                 store.record_as_outcome(&cname, false);
@@ -499,6 +510,7 @@ fn issue_as_body(
     if body.kdc_options.bit(flag_bit::ANONYMOUS) && !is_anonymous_principal(&req_cname) {
         return Err(proto(err::BADOPTION, status::VALIDATE_ANONYMOUS_PRINCIPAL));
     }
+    current_policy().check_as(store, &client, &auth_indicators)?;
 
     let skey = server
         .first_current_key()
@@ -574,6 +586,7 @@ fn issue_as_body(
         None,
         None,
     )?;
+    check_indicators(&server, &auth_indicators)?;
     let ticket = mint_ticket(
         &skey.key,
         skey.kvno,
@@ -597,6 +610,10 @@ fn issue_as_body(
         body.addresses.clone(),
         false,
         extra_ad,
+        &auth_indicators,
+        &krbtgt_p,
+        &krbtgt_key.key,
+        attr(&server, KDB_NO_AUTH_DATA_REQUIRED),
     )?;
     let renew_till = ticket_renew_till;
     let mut reply_key = as_rep_key.clone();
@@ -938,7 +955,6 @@ fn issue_tgs_body(
         &header_server,
         store.fetch_krbtgt()?.as_ref(),
     )?;
-    current_policy().check_tgs(store, &sname)?;
     let mut server = store
         .fetch_name(&sname)?
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::LOOKING_UP_SERVER))?;
@@ -1062,6 +1078,20 @@ fn issue_tgs_body(
     }
     // MIT check_tgs_policy after constraints (`do_tgs_req.c:872-882`).
     check_tgs_policy_flags(&server, body, ap.ticket.sname.is_krbtgt(), &enc_tkt)?;
+    let local_tgt_key = local_tgt
+        .as_ref()
+        .and_then(Principal::first_current_key)
+        .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
+    let mut auth_indicators = Vec::new();
+    if !s4u2self {
+        let subject = stkt.as_ref().map_or(&enc_tkt, |s| &s.part);
+        let tgt = local_tgt
+            .as_ref()
+            .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
+        auth_indicators = get_auth_indicators(subject, tgt, &local_tgt_key.key)?;
+        check_indicators(&server, &auth_indicators)?;
+    }
+    current_policy().check_tgs(store, &sname, &auth_indicators)?;
     check_db_times(None, &server)?;
     if s4u2proxy {
         let st = stkt
@@ -1307,6 +1337,10 @@ fn issue_tgs_body(
         tgs_ticket_caddr(body, renew, validate, &enc_tkt),
         s4u2self || s4u2proxy,
         extra_ad,
+        &auth_indicators,
+        &krbtgt_p,
+        &krbtgt_key.key,
+        attr(&server, KDB_NO_AUTH_DATA_REQUIRED),
     )?;
     let mut s4u_rep_pa = None;
     let mut s4u_enc_pa = None;
@@ -1781,6 +1815,10 @@ fn mint_ticket(
     caddr: Option<HostAddresses>,
     s4u_final: bool,
     extra_ad: Option<AuthorizationData>,
+    indicators: &[String],
+    krbtgt: &Principal,
+    krbtgt_key: &ProtocolKey,
+    no_auth_data: bool,
 ) -> Result<Ticket, Error> {
     let mut extra = extra_ad.unwrap_or_default();
     let mut part = EncTicketPart {
@@ -1796,6 +1834,16 @@ fn mint_ticket(
         caddr,
         authorization_data: None,
     };
+    if !no_auth_data {
+        add_auth_indicators(
+            &mut extra,
+            indicators,
+            service_key,
+            krbtgt,
+            krbtgt_key,
+            &part,
+        )?;
+    }
     if include_pac {
         let placeholder = wrap_win2k_pac(&[0])?;
         let mut checksum_ad = extra.clone();
@@ -2642,12 +2690,12 @@ fn validate_as_request(
     let in_lockout_window =
         duration == 0 || (last_failed > 0 && now < last_failed.saturating_add(duration));
     if last_failed <= last_admin_unlock(client) {
-        return current_policy().check_as(store, client);
+        return Ok(());
     }
     if count_locked && in_lockout_window {
         return Err(proto(err::CLIENT_REVOKED, status::CLIENT_LOCKED_OUT));
     }
-    current_policy().check_as(store, client)
+    Ok(())
 }
 
 fn check_tgs_policy_flags(

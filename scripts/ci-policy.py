@@ -123,6 +123,7 @@ DIFFSEND_CASES = frozenset(
         "tgs-body-authdata",
         "tgs-ad-mandatory-for-kdc",
         "tgs-body-authdata-kdc-issued-stripped",
+        "tgs-truncated-cammac",
     }
 )
 _LEDGER_GATE = re.compile(r"(?:scripts/)?([A-Za-z0-9._-]+-gate(?:\.sh)?)")
