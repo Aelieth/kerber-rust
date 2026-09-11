@@ -217,6 +217,7 @@ fn r27_tgs_expired_server_beats_require_auth() {
 fn r27_tgs_postdated_omitted_from_is_epoch() {
     let (store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 27041);
+    std::thread::sleep(std::time::Duration::from_secs(2));
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let usage = KeyUsage::new(ku::TICKET).unwrap();
     let mut part = tgt_part(&store, &issued);
