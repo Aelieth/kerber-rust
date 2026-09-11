@@ -15,6 +15,9 @@ this project uses semantic versioning once a crate is published.
   `RENEWABLE`+`DISALLOW_RENEWABLE` is `NON-RENEWABLE TICKET` 12;
   `NON-POSTDATABLE` keys only on `ALLOW_POSTDATE`. GSS initiator
   `tgs_forward` (`krb5_fwd_tgt_creds`); diffsend 81 → 85.
+- **test.** `klist -f` flag parsers split on `Flags: ` so a
+  `renew until` clause is not taken as `$2` (`until` hid `O` on
+  CI 465 `flags-gate`; a whole-line `T` match was `until`).
 
 ### W1-A′-2
 

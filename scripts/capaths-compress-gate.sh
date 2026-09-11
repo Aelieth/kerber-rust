@@ -177,7 +177,7 @@ echo "$DUMP" | grep -q '^transited_realms=EX.COM,B.EX.COM$'
 echo "$DUMP" | grep -q '^transited_policy_checked=1$'
 FLAGS="$(docker exec -e KRB5_CONFIG=/tmp/client.conf "$NAME" klist -f -c /tmp/krb5cc_s2)"
 echo "$FLAGS"
-echo "$FLAGS" | awk '/host\/svc.c.ex.com/{p=1;next} p&&/Flags:/{print;exit}' | grep -q T
+echo "$FLAGS" | awk -F'Flags: ' '/host\/svc.c.ex.com/{p=1;next} p&&/Flags:/{print $2;exit}' | grep -q T
 
 echo "==== MIT C without [capaths] rejects the extra B.EX.COM hop ===="
 docker exec "$NAME" sh -c 'kill -9 $(cat /tmp/mit-c.pid) 2>/dev/null || true'

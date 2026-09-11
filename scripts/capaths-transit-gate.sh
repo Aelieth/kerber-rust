@@ -492,7 +492,7 @@ fi
 echo "$MIT_CHASE" | grep -q 'host/svc.c.test@C.TEST: kvno ='
 MIT_FLAGS="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" klist -f -c /tmp/krb5cc_mit)"
 echo "$MIT_FLAGS"
-echo "$MIT_FLAGS" | awk '/host\/svc.c.test/{p=1;next} p&&/Flags:/{print;exit}' | grep -q T
+echo "$MIT_FLAGS" | awk -F'Flags: ' '/host\/svc.c.test/{p=1;next} p&&/Flags:/{print $2;exit}' | grep -q T
 MIT_DUMP="$(docker exec "$NAME" /tmp/krb5-pac-extract --keytab /tmp/mit-c.host.kt --ccache /tmp/krb5cc_mit --print-transited)"
 echo "$MIT_DUMP"
 echo "$MIT_DUMP" | grep -q '^transited_policy_checked=1$'
@@ -695,7 +695,7 @@ test "$mit_lax_rc" -eq 0
 echo "$MIT_LAX" | grep -q 'host/svc.c.test@C.TEST: kvno ='
 MIT_LAX_FLAGS="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" klist -f -c /tmp/krb5cc_mit_lax)"
 echo "$MIT_LAX_FLAGS"
-MIT_LAX_FL="$(echo "$MIT_LAX_FLAGS" | awk '/host\/svc.c.test/{p=1;next} p&&/Flags:/{print;exit}')"
+MIT_LAX_FL="$(echo "$MIT_LAX_FLAGS" | awk -F'Flags: ' '/host\/svc.c.test/{p=1;next} p&&/Flags:/{print $2;exit}')"
 echo "lax_host_flags=$MIT_LAX_FL"
 echo "$MIT_LAX_FL" | grep -q T && {
     echo "reject_bad_transit=false must not set T" >&2
@@ -831,7 +831,7 @@ echo "$KLIST" | grep -q 'user@A.TEST'
 echo "$KLIST" | grep -q 'krbtgt/B.TEST'
 echo "$KLIST" | grep -q 'krbtgt/C.TEST'
 echo "$KLIST" | grep -q 'host/svc.c.test'
-echo "$KLIST" | awk '/host\/svc.c.test/{p=1;next} p&&/Flags:/{print;exit}' | grep -q T
+echo "$KLIST" | awk -F'Flags: ' '/host\/svc.c.test/{p=1;next} p&&/Flags:/{print $2;exit}' | grep -q T
 RUST_DUMP="$(docker exec "$NAME" /tmp/krb5-pac-extract --keytab /tmp/rust-c.host.kt --ccache /tmp/krb5cc_rust --print-transited)"
 echo "$RUST_DUMP"
 echo "$RUST_DUMP" | grep -q '^transited_policy_checked=1$'

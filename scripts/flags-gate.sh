@@ -135,7 +135,7 @@ docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf \
 FLAGS="$(docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf "$NAME" klist -f)"
 echo "$FLAGS"
 echo "$FLAGS" | grep -q 'flaguser@KERBER.TEST'
-FLAGBITS="$(echo "$FLAGS" | awk '/Flags:/{print $2}' | tail -1)"
+FLAGBITS="$(echo "$FLAGS" | awk -F'Flags: ' '/Flags:/{print $2}' | tail -1 | tr -d '[:space:]')"
 echo "flagbits=$FLAGBITS"
 echo "$FLAGBITS" | grep -qv F
 kadmin_q 'modprinc +allow_forwardable flaguser'
@@ -149,7 +149,7 @@ docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf \
     "$NAME" kvno host/testhost.kerber.test
 OFLAGS="$(docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf "$NAME" klist -f)"
 echo "$OFLAGS"
-OHOST="$(echo "$OFLAGS" | awk '/host\/testhost.kerber.test/{p=1} p && /Flags:/{print $2; exit}')"
+OHOST="$(echo "$OFLAGS" | awk -F'Flags: ' '/host\/testhost.kerber.test/{p=1} p && /Flags:/{print $2; exit}' | tr -d '[:space:]')"
 echo "host_flagbits=$OHOST"
 echo "$OHOST" | grep -q O
 
