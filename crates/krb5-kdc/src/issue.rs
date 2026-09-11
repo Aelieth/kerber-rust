@@ -545,23 +545,18 @@ fn issue_as_body(
     let skey = server
         .first_current_key()
         .ok_or_else(|| proto(err::GENERIC, status::FINDING_SERVER_KEY))?;
-    if let Some(from) = &body.from
-        && from.unix_seconds() > body.till.unix_seconds()
-    {
-        return Err(proto(err::NEVER_VALID, status::UNKNOWN_REASON));
-    }
     let session = random_key(session_etype)?;
     let now = KerberosTime::now();
-    let mut starttime = now.clone();
+    let starttime = if body.kdc_options.bit(flag_bit::POSTDATED) {
+        body.from
+            .clone()
+            .unwrap_or_else(|| KerberosTime::from_unix_seconds(0))
+    } else {
+        now.clone()
+    };
     let mut flags = get_ticket_flags(&body.kdc_options, Some(&client), &server, None)
         .with_bit(flag_bit::PRE_AUTHENT, skip_timestamp)
         .with_bit(flag_bit::HW_AUTHENT, hw_preauth);
-    if let Some(from) = &body.from
-        && from.unix_seconds() > now.unix_seconds()
-        && body.kdc_options.bit(flag_bit::POSTDATED)
-    {
-        starttime = from.clone();
-    }
     let want_enc_pa = find_pa(req.0.padata.as_deref(), pa::REQ_ENC_PA_REP).is_some()
         || fast.is_some_and(|f| find_pa(Some(&f.inner_padata), pa::REQ_ENC_PA_REP).is_some());
     let end = kdc_get_ticket_endtime(store, &starttime, None, &body.till, Some(&client), &server)?;
@@ -995,7 +990,8 @@ fn issue_tgs_body(
         renew,
         validate,
     )?;
-    let tgs_client = store.fetch_name(&enc_tkt.cname)?;
+    let header_client = store.fetch_name(&enc_tkt.cname)?;
+    let mut s4u_local = None;
     let mut ticket_cname = enc_tkt.cname.clone();
     let mut ticket_crealm = utf8_realm(&enc_tkt.crealm)?.to_owned();
     let mut evidence_logon = None;
@@ -1015,7 +1011,7 @@ fn issue_tgs_body(
         let header_cross = utf8_realm(&ap.ticket.realm)? != store.realm();
         let is_referral = tgs_issuing_referral(&sname, req_realm.as_str(), &server);
         let is_self = utf8_realm(&enc_tkt.crealm)? == store.realm()
-            && tgs_client
+            && header_client
                 .as_ref()
                 .is_some_and(|c| c.realm == server.realm && c.name == server.name);
         if !is_referral && !is_self {
@@ -1040,6 +1036,7 @@ fn issue_tgs_body(
         }
         s4u_x509 = s4u.x509;
         s4u_referral = is_referral;
+        s4u_local = s4u.local;
         s4u2self = true;
     }
     let is_referral = tgs_issuing_referral(&sname, req_realm.as_str(), &server);
@@ -1119,7 +1116,6 @@ fn issue_tgs_body(
         check_indicators(&server, &auth_indicators)?;
     }
     current_policy().check_tgs(store, &sname, &auth_indicators)?;
-    check_db_times(None, &server)?;
     if s4u2proxy {
         let st = stkt
             .as_ref()
@@ -1194,8 +1190,23 @@ fn issue_tgs_body(
     }
     let session = random_key(session_etype)?;
     let now = KerberosTime::now();
+    let subject_cname = stkt.as_ref().map_or(&enc_tkt.cname, |s| &s.part.cname);
+    let subject_crealm = if let Some(st) = stkt.as_ref() {
+        utf8_realm(&st.part.crealm)?
+    } else {
+        utf8_realm(&enc_tkt.crealm)?
+    };
+    let tgs_client = if s4u2self {
+        s4u_local
+    } else if attr(&server, KDB_NO_AUTH_DATA_REQUIRED) {
+        None
+    } else if subject_crealm == store.realm() {
+        store.fetch_name(subject_cname)?
+    } else {
+        None
+    };
     let authtime;
-    let mut starttime;
+    let starttime;
     let mut end;
     let mut flags;
     let ticket_renew_till;
@@ -1254,12 +1265,13 @@ fn issue_tgs_body(
         }
     } else {
         authtime = subject_authtime.clone();
-        starttime = now.clone();
-        if body.kdc_options.bit(flag_bit::POSTDATED)
-            && let Some(from) = &body.from
-        {
-            starttime = from.clone();
-        }
+        starttime = if body.kdc_options.bit(flag_bit::POSTDATED) {
+            body.from
+                .clone()
+                .unwrap_or_else(|| KerberosTime::from_unix_seconds(0))
+        } else {
+            now.clone()
+        };
         end = kdc_get_ticket_endtime(
             store,
             &starttime,
@@ -1444,7 +1456,8 @@ fn issue_tgs_body(
 }
 
 fn omit_start_if_auth(start: &KerberosTime, auth: &KerberosTime) -> Option<KerberosTime> {
-    (start.unix_seconds() != auth.unix_seconds()).then(|| start.clone())
+    let s = start.unix_seconds();
+    (s != 0 && s != auth.unix_seconds()).then(|| start.clone())
 }
 
 fn kdc_get_ticket_endtime(
@@ -1455,29 +1468,32 @@ fn kdc_get_ticket_endtime(
     client: Option<&Principal>,
     server: &Principal,
 ) -> Result<KerberosTime, Error> {
-    let start = u64::from(starttime.unix_seconds());
-    let till_s = u64::from(till.unix_seconds());
-    let header_s = header_end.map(|t| u64::from(t.unix_seconds()));
+    let start = starttime.unix_seconds();
+    let till_s = till.unix_seconds();
+    let header_s = header_end.map(KerberosTime::unix_seconds);
     let until = if till_s == 0 {
-        header_s.unwrap_or(u64::MAX)
+        header_s.unwrap_or(u32::MAX)
     } else {
         header_s.map_or(till_s, |h| till_s.min(h))
     };
-    let mut life = until.saturating_sub(start);
+    let mut life = i64::from(until.wrapping_sub(start).cast_signed());
+    if until > start && life < 0 {
+        life = i64::from(i32::MAX);
+    }
     if let Some(c) = client
         && c.max_life > 0
     {
-        life = life.min(c.max_life);
+        life = life.min(i64::try_from(c.max_life).unwrap_or(i64::MAX));
     }
     if server.max_life > 0 {
-        life = life.min(server.max_life);
+        life = life.min(i64::try_from(server.max_life).unwrap_or(i64::MAX));
     }
     let realm = store.policy().max_life;
     if realm > 0 {
-        life = life.min(realm);
+        life = life.min(i64::try_from(realm).unwrap_or(i64::MAX));
     }
     starttime
-        .add_seconds(i64::try_from(life).unwrap_or(i64::MAX))
+        .add_seconds(life)
         .or_else(|_| starttime.add_hours(10))
         .map_err(|_| proto(err::NEVER_VALID, status::UNKNOWN_REASON))
 }
@@ -2774,9 +2790,7 @@ fn check_tgs_policy_flags(
     header_is_tgt: bool,
     tkt: &EncTicketPart,
 ) -> Result<(), Error> {
-    // MIT `svc_pol_fns` order (`tgs_policy.c:60-63`): deny_opts, then deny_all,
-    // then reqd_flags (time is `check_db_times`, run last by the caller). The
-    // order is observable when a service sets several attributes at once.
+    // MIT `svc_pol_fns` (`tgs_policy.c:60-63`): deny_opts, deny_all, reqd_flags, svc_time.
     // deny_opts:
     if attr(server, KDB_DISALLOW_RENEWABLE) && body.kdc_options.bit(flag_bit::RENEWABLE) {
         return Err(proto(err::POLICY, status::NON_RENEWABLE_TICKET));
@@ -2804,6 +2818,9 @@ fn check_tgs_policy_flags(
     if attr(server, KDB_REQUIRES_PRE_AUTH) && !tkt.flags.bit(flag_bit::PRE_AUTHENT) {
         return Err(proto(err::GENERIC, status::NO_PREAUTH));
     }
+    // svc_time (`tgs_policy.c:190-198`) last in `svc_pol_fns`, before
+    // `check_indicators` (`do_tgs_req.c:897-902`).
+    check_db_times(None, server)?;
     Ok(())
 }
 

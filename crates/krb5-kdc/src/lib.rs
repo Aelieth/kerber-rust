@@ -24,7 +24,7 @@ mod preauth;
 mod status;
 mod store;
 
-pub use acl::{Acl, AclEntry, AdminOp, Restrictions};
+pub use acl::{Acl, AclEntry, AdminOp, Restrictions, kadmin_flagspec};
 pub use ad::{
     PacTicket, decrypt_ticket_part, pac_from_ticket_part, should_have_ticket_signature, sign_pac,
     sign_reply_pac, ticket_checksum_der, verify_pac, verify_pac_signatures, wrap_win2k_pac,

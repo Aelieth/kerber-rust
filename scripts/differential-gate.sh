@@ -99,6 +99,23 @@ ADDNOSVR="$(docker exec \
     "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey +0x1000 host/nosvr.kerber.test')"
 echo "$ADDNOSVR"
 echo "$ADDNOSVR" | grep -q 'created' || die "rust addprinc host/nosvr.kerber.test failed"
+ADDEXP="$(docker exec \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey expiredsvc')"
+echo "$ADDEXP"
+echo "$ADDEXP" | grep -q 'created' || die "rust addprinc expiredsvc failed"
+docker exec \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" /tmp/krb5-kadmin-local -q 'modprinc -expire 1 expiredsvc'
+docker exec \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" /tmp/krb5-kadmin-local -q 'setstr expiredsvc require_auth pkinit'
 
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/rust.db \
@@ -134,6 +151,9 @@ docker exec "$NAME" kadmin.local -q 'addprinc -randkey host/dupskey.kerber.test'
 docker exec "$NAME" kadmin.local -q 'modprinc +disallow_dup_skey +disallow_tgt_based host/dupskey.kerber.test'
 docker exec "$NAME" kadmin.local -q 'addprinc -randkey host/nosvr.kerber.test'
 docker exec "$NAME" kadmin.local -q 'modprinc +disallow_svr host/nosvr.kerber.test'
+docker exec "$NAME" kadmin.local -q 'addprinc -randkey expiredsvc'
+docker exec "$NAME" kadmin.local -q 'modprinc -expire 1/1/1990 expiredsvc'
+docker exec "$NAME" kadmin.local -q 'setstr expiredsvc require_auth pkinit'
 # Advertise SPAKE like the Rust KDC (always-on SpakeMod) so PREAUTH hint
 # multisets match. MIT krb5kdc reads spake_preauth_groups from [libdefaults].
 docker exec "$NAME" python3 -c '
@@ -203,7 +223,7 @@ echo "$DIFF" | grep -q '"case":"as-invalid-opts","outcome":"ok","error_code":13'
 echo "$DIFF" | grep -q '"case":"as-request-anonymous","outcome":"ok","error_code":13,"e_text":"VALIDATE_ANONYMOUS_PRINCIPAL","rust_tag":"0x7e","mit_tag":"0x7e"' || die "as-request-anonymous not code 13 e_text VALIDATE_ANONYMOUS_PRINCIPAL on both legs"
 echo "$DIFF" | grep -q '"case":"as-validate-before-preauth","outcome":"ok","error_code":23' || die "as-validate-before-preauth (preauth+needchange) not code 23 on both legs"
 echo "$DIFF" | grep -q '"case":"as-retransmit","outcome":"ok","rust_retransmit_identical":true,"mit_retransmit_identical":true' || die "as-retransmit reply not identical from the lookaside on both legs"
-echo "$DIFF" | grep -q '"outcome":"ok","cases":95' || die "diffsend did not finish 95 cases"
+echo "$DIFF" | grep -q '"outcome":"ok","cases":98' || die "diffsend did not finish 98 cases"
 echo "$DIFF" | grep -q '"case":"fast-armor-no-subkey","outcome":"ok","error_code":12,"e_text":"FIND_FAST","rust_tag":"0x7e","mit_tag":"0x7e"' || die "fast-armor-no-subkey not code 12 e_text FIND_FAST on both legs"
 echo "$DIFF" | grep -q '"case":"armor-ap-req-as-pa-tgs-req","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' || die "armor-ap-req-as-pa-tgs-req not code 12 e_text PROCESS_TGS on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-ad-fx-armor-authenticator","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' || die "tgs-ad-fx-armor-authenticator not code 12 e_text PROCESS_TGS on both legs"
@@ -280,6 +300,9 @@ echo "$DIFF" | grep -q '"case":"tgs-body-authdata-kdc-issued-stripped","outcome"
 echo "$DIFF" | grep -q '"case":"tgs-truncated-cammac","outcome":"ok","error_code":60,"e_text":"GET_AUTH_INDICATORS","rust_tag":"0x7e","mit_tag":"0x7e"' || die "tgs-truncated-cammac not code 60 e_text GET_AUTH_INDICATORS on both legs"
 echo "$DIFF" | grep -qF '"case":"ec-outside-fast","outcome":"ok","error_code":24,"e_text":"PREAUTH_FAILED","e_data_types":[2,19,133,136,151],"rust_tag":"0x7e","mit_tag":"0x7e"' || die "ec-outside-fast not code 24 e_text PREAUTH_FAILED on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-rbcd-pac-options","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","pac_options":true' || die "tgs-rbcd-pac-options not PAC-OPTIONS enc_padata on both legs"
+echo "$DIFF" | grep -q '"case":"tgs-till-in-past","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"' || die "tgs-till-in-past not TGS-REP on both legs"
+echo "$DIFF" | grep -q '"case":"tgs-service-expired-require-auth","outcome":"ok","error_code":2,"e_text":"SERVICE EXPIRED","rust_tag":"0x7e","mit_tag":"0x7e"' || die "tgs-service-expired-require-auth not code 2 e_text SERVICE EXPIRED on both legs"
+echo "$DIFF" | grep -q '"case":"tgs-postdated-from","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"' || die "tgs-postdated-from not TGS-REP on both legs"
 echo "==== MIT_HINT kdc-padata-proxy 25/91 e_data wire order ===="
 docker cp "$ROOT/scripts/lib/kdc-padata-proxy.py" "$NAME":/tmp/kdc-padata-proxy.py
 HINT_ORDER="$(docker exec "$NAME" python3 -c '

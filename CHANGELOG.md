@@ -51,6 +51,13 @@ this project uses semantic versioning once a crate is published.
   verifies. `check_tgs_opts` emits `TICKET NOT RENEWABLE` 13 before
   `TICKET NOT VALID` 33. Client `tgs_renew` ORs `KDC_TKT_COMMON_MASK`.
   diffsend 94 → 95.
+- **kdc.** TGS times/flags use MIT's `t->client` (`do_tgs_req.c:694-778`):
+  S4U2Self is the impersonated user; a normal TGS looks up the subject
+  only when the server lacks `NO_AUTH_DATA_REQUIRED` and the realm
+  matches. `kdc_get_ticket_endtime` uses signed `ts_delta` so a till
+  in the past is an expired endtime. `check_tgs_svc_time` runs in
+  `svc_pol_fns` before `check_indicators`. POSTDATED `starttime = from`
+  unconditionally. diffsend 95 → 98.
 
 ### W1-A′-2
 

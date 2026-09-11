@@ -652,6 +652,10 @@ fn apply_optional_fields(
         sess.modify_ticket_lives(name, a.max_life, a.max_renewable_life)
             .map_err(|e| e.to_string())?;
     }
+    if let Some(exp) = a.expire {
+        sess.modify_expiration(name, exp)
+            .map_err(|e| e.to_string())?;
+    }
     if let Some(pol) = &a.policy {
         sess.set_policy(name, pol).map_err(|e| e.to_string())?;
     }

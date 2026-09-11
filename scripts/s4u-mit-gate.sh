@@ -26,7 +26,8 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
-cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-pac-extract -p krb5-client --bin krb5-kvno
+cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-pac-extract --bin krb5-kdb \
+    -p krb5-client --bin krb5-kvno -p krb5-admin --bin krb5-kadmin-local
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
@@ -943,6 +944,156 @@ RUST_NORBCD_LOG="$(docker exec "$NAME" sh -c "tail -n +$((n + 1)) /tmp/kdc-r22-n
 echo "$RUST_NORBCD_LOG"
 echo "$RUST_NORBCD_LOG" | grep -q '"e_text":"NOT_ALLOWED_TO_DELEGATE"'
 echo "MIT_testkdb_s4u2proxy_rbcd_deny"
+
+s4u_user_life() {
+    local line start end
+    line="$(printf '%s\n' "$1" | grep -B2 'for client user@KERBER.TEST' | grep 'host/testhost' | head -1)"
+    start="$(printf '%s\n' "$line" | awk '{print $1, $2}')"
+    end="$(printf '%s\n' "$line" | awk '{print $3, $4}')"
+    if date -d "$start" +%s >/dev/null 2>&1 && date -d "$end" +%s >/dev/null 2>&1; then
+        echo $(($(date -d "$end" +%s) - $(date -d "$start" +%s)))
+    else
+        echo 999999
+    fi
+}
+
+s4u_user_flags() {
+    printf '%s\n' "$1" | grep 'for client user@KERBER.TEST' | sed -n 's/.*Flags: //p' | awk '{print $1}' | tr -d ','
+}
+
+echo "==== R27: user maxlife 1m caps S4U; -allow_renewable drops R (mit) ===="
+docker exec "$MITNAME" kadmin.local -q 'modprinc -maxlife "1 min" user'
+docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf "$MITNAME" kdestroy -A >/dev/null 2>&1 || true
+docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
+    "$MITNAME" kinit -f -k -t /etc/krb5kdc/testhost.keytab host/testhost.kerber.test@KERBER.TEST
+docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
+    "$MITNAME" kvno -U user host/testhost.kerber.test
+MIT_S4U="$(docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf "$MITNAME" klist -f)"
+echo "$MIT_S4U"
+MIT_LIFE="$(s4u_user_life "$MIT_S4U")"
+echo "mit_s4u_user_life=$MIT_LIFE"
+test "$MIT_LIFE" -ge 0
+test "$MIT_LIFE" -le 90
+docker exec "$MITNAME" kadmin.local -q 'modprinc -allow_renewable user'
+docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf "$MITNAME" kdestroy -A >/dev/null 2>&1 || true
+docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
+    "$MITNAME" kinit -f -r 7d -k -t /etc/krb5kdc/testhost.keytab host/testhost.kerber.test@KERBER.TEST
+docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
+    "$MITNAME" kvno -U user host/testhost.kerber.test
+MIT_S4UR="$(docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf "$MITNAME" klist -f)"
+echo "$MIT_S4UR"
+MIT_RF="$(s4u_user_flags "$MIT_S4UR")"
+echo "mit_s4u_user_flags=$MIT_RF"
+[ -n "$MIT_RF" ] || {
+    log "s4u.mit.gate" "error" ',"error":"MIT S4U klist Flags empty after -allow_renewable user"'
+    exit 1
+}
+echo "$MIT_RF" | grep -qv R || {
+    log "s4u.mit.gate" "error" ',"error":"MIT S4U ticket still renewable after -allow_renewable user"'
+    exit 1
+}
+
+echo "==== R27: user maxlife 1m caps S4U; -allow_renewable drops R (rust) ===="
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmin-local" "$NAME":/tmp/krb5-kadmin-local
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb /tmp/krb5-kadmin-local
+docker exec "$MITNAME" kdb5_util dump /tmp/r27.dump
+docker cp "$MITNAME":/tmp/r27.dump "$SCRATCH/r27.dump"
+docker cp "$SCRATCH/r27.dump" "$NAME":/tmp/r27.dump
+LOAD_R27="$(docker exec -e KRB5_KDC_DB=/tmp/r27.db -e KRB5_KDC_STASH=/tmp/r27.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" /tmp/krb5-kdb load /tmp/r27.dump)"
+echo "$LOAD_R27"
+echo "$LOAD_R27" | grep -q 'ok load version=7' || {
+    log "s4u.mit.gate" "error" ',"error":"Rust krb5-kdb load r27.dump failed"'
+    exit 1
+}
+docker exec -e KRB5_KDC_DB=/tmp/r27.db -e KRB5_KDC_STASH=/tmp/r27.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" /tmp/krb5-kadmin-local -q 'modprinc -maxlife 1m user'
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/r27.db \
+    -e KRB5_KDC_STASH=/tmp/r27.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" sh -c '/tmp/krb5-kdc --export-keytab /tmp/r27-host.kt 127.0.0.1:8889 >/tmp/kdc-r27.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/kdc-r27.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kdc-r27.log >&2 || true
+    log "s4u.mit.gate" "error" ',"error":"Rust KDC for R27 did not listen"'
+    exit 1
+fi
+docker exec "$NAME" sh -c 'cat >/tmp/s4u-r27.conf <<EOF
+[libdefaults]
+    default_realm = KERBER.TEST
+    dns_lookup_kdc = false
+    dns_lookup_realm = false
+    rdns = false
+    forwardable = true
+    default_ccache_name = FILE:/tmp/krb5cc_r27
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1:8889
+    }
+EOF'
+docker exec -e KRB5_CONFIG=/tmp/s4u-r27.conf \
+    "$NAME" kinit -f -k -t /tmp/r27-host.kt host/testhost.kerber.test@KERBER.TEST
+docker exec -e KRB5_CONFIG=/tmp/s4u-r27.conf \
+    "$NAME" kvno -U user host/testhost.kerber.test
+RUST_S4U="$(docker exec -e KRB5_CONFIG=/tmp/s4u-r27.conf "$NAME" klist -f)"
+echo "$RUST_S4U"
+RUST_LIFE="$(s4u_user_life "$RUST_S4U")"
+echo "rust_s4u_user_life=$RUST_LIFE"
+test "$RUST_LIFE" -ge 0
+test "$RUST_LIFE" -le 90
+docker exec "$NAME" sh -c 'for p in /proc/[0-9]*; do comm=$(cat "$p/comm" 2>/dev/null) || continue; [ "$comm" = krb5-kdc ] || continue; kill -9 "${p#/proc/}" 2>/dev/null || true; done'
+docker exec -e KRB5_KDC_DB=/tmp/r27.db -e KRB5_KDC_STASH=/tmp/r27.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" /tmp/krb5-kadmin-local -q 'modprinc -allow_renewable user'
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/r27.db \
+    -e KRB5_KDC_STASH=/tmp/r27.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" sh -c '/tmp/krb5-kdc --export-keytab /tmp/r27-host.kt 127.0.0.1:8889 >/tmp/kdc-r27b.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/kdc-r27b.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kdc-r27b.log >&2 || true
+    log "s4u.mit.gate" "error" ',"error":"Rust KDC for R27 renewable did not listen"'
+    exit 1
+fi
+docker exec -e KRB5_CONFIG=/tmp/s4u-r27.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+docker exec -e KRB5_CONFIG=/tmp/s4u-r27.conf \
+    "$NAME" kinit -f -r 7d -k -t /tmp/r27-host.kt host/testhost.kerber.test@KERBER.TEST
+docker exec -e KRB5_CONFIG=/tmp/s4u-r27.conf \
+    "$NAME" kvno -U user host/testhost.kerber.test
+RUST_S4UR="$(docker exec -e KRB5_CONFIG=/tmp/s4u-r27.conf "$NAME" klist -f)"
+echo "$RUST_S4UR"
+RUST_RF="$(s4u_user_flags "$RUST_S4UR")"
+echo "rust_s4u_user_flags=$RUST_RF"
+[ -n "$RUST_RF" ] || {
+    docker exec "$NAME" cat /tmp/kdc-r27b.log >&2 || true
+    log "s4u.mit.gate" "error" ',"error":"Rust S4U klist Flags empty after -allow_renewable user"'
+    exit 1
+}
+echo "$RUST_RF" | grep -qv R || {
+    docker exec "$NAME" cat /tmp/kdc-r27b.log >&2 || true
+    log "s4u.mit.gate" "error" ',"error":"Rust S4U ticket still renewable after -allow_renewable user"'
+    exit 1
+}
 
 log "s4u.mit.gate" "ok" ',"principal":"host/testhost.kerber.test","for_client":"user@KERBER.TEST"'
 exit 0

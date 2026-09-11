@@ -22,7 +22,7 @@ use krb5_protocol::{
     KdcAddr, Keytab, armor_key, as_req, as_req_sname, attach_fast, build_fast_armor,
     compare_krb_error, compare_stable_rep, decode_enc_kdc_rep, exchange_on_tcp, pa_enc_timestamp,
     pa_enc_timestamp_at, pa_for_user, pa_pac_options, pa_s4u_x509_user, pa_spake_support, tgs_req,
-    tgs_req_ex, tgs_req_ex_addr, tgs_req_ex_from,
+    tgs_req_ex, tgs_req_ex_addr, tgs_req_ex_from, tgs_req_ex_till,
 };
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac, PacIdentity, RpcSid};
 use krb5_types::{
@@ -3568,6 +3568,135 @@ fn run() -> Result<(), String> {
         err::PREAUTH_FAILED,
     )?;
 
+    let past = now.add_seconds(-60).unwrap_or_else(|_| now.clone());
+    let till_past = encode(
+        &tgs_req_ex_till(
+            mint_tgt(
+                tkt_key,
+                tkt_kvno,
+                &user,
+                realm,
+                &krbtgt_sname,
+                &sess,
+                window10.clone(),
+                TicketFlags::initial_preauth(),
+            )?,
+            &sess,
+            realm,
+            &user,
+            host.clone(),
+            realm,
+            0x1000_007d,
+            KdcOptions::none(),
+            None,
+            Vec::new(),
+            etypes.clone(),
+            None,
+            None,
+            None,
+            Some(past.clone()),
+        )
+        .map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    let (tr, tm) = send_both(&cfg, "tgs-till-in-past", &till_past)?;
+    let svc = cfg
+        .host
+        .as_ref()
+        .ok_or_else(|| "KERBER_HOST_KEYTAB required".to_string())?;
+    let (_, _, rt, _) = decrypt_tgs(&tr, &sess, svc)?;
+    let (_, _, mt, _) = decrypt_tgs(&tm, &sess, svc)?;
+    if rt.endtime.unix_seconds() != past.unix_seconds()
+        || mt.endtime.unix_seconds() != past.unix_seconds()
+    {
+        return Err(format!(
+            "tgs-till-in-past rust={} mit={} want={}",
+            rt.endtime.unix_seconds(),
+            mt.endtime.unix_seconds(),
+            past.unix_seconds()
+        ));
+    }
+    println!(
+        r#"{{"event":"diffsend","case":"tgs-till-in-past","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","endtime":{}}}"#,
+        past.unix_seconds()
+    );
+
+    let expiredsvc = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["expiredsvc"]);
+    expect_error(
+        &cfg,
+        "tgs-service-expired-require-auth",
+        &encode(
+            &tgs_req_ex(
+                mint_tgt(
+                    tkt_key,
+                    tkt_kvno,
+                    &user,
+                    realm,
+                    &krbtgt_sname,
+                    &sess,
+                    window10.clone(),
+                    TicketFlags::initial_preauth(),
+                )?,
+                &sess,
+                realm,
+                &user,
+                expiredsvc,
+                realm,
+                0x1000_007e,
+                KdcOptions::none(),
+                None,
+                Vec::new(),
+                etypes.clone(),
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::SERVICE_EXP,
+    )?;
+
+    let from_past = tgs_req_ex_from(
+        mint_tgt(
+            tkt_key,
+            tkt_kvno,
+            &user,
+            realm,
+            &krbtgt_sname,
+            &sess,
+            window10.clone(),
+            TicketFlags::initial_preauth().with_bit(flag_bit::MAY_POSTDATE, true),
+        )?,
+        &sess,
+        realm,
+        &user,
+        host.clone(),
+        realm,
+        0x1000_007f,
+        KdcOptions::none()
+            .with_bit(flag_bit::MAY_POSTDATE, true)
+            .with_bit(flag_bit::POSTDATED, true),
+        None,
+        Vec::new(),
+        etypes.clone(),
+        None,
+        None,
+        None,
+    )
+    .map_err(|e| e.to_string())?;
+    let from_past = encode(&from_past).map_err(|e| e.to_string())?;
+    let (tr, tm) = send_both(&cfg, "tgs-postdated-from", &from_past)?;
+    let (_, _, rt, _) = decrypt_tgs(&tr, &sess, svc)?;
+    let (_, _, mt, _) = decrypt_tgs(&tm, &sess, svc)?;
+    if rt.starttime.is_some() || mt.starttime.is_some() {
+        return Err(format!(
+            "tgs-postdated-from rust={:?} mit={:?} want omitted (from=0)",
+            rt.starttime.as_ref().map(KerberosTime::unix_seconds),
+            mt.starttime.as_ref().map(KerberosTime::unix_seconds)
+        ));
+    }
+    println!(
+        r#"{{"event":"diffsend","case":"tgs-postdated-from","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","starttime_omitted":true}}"#
+    );
+
     let pac_opts = pa_pac_options(true).map_err(|e| e.to_string())?;
     let rbcd_req = encode(
         &tgs_req_ex(
@@ -3621,7 +3750,7 @@ fn run() -> Result<(), String> {
         r#"{{"event":"diffsend","case":"tgs-rbcd-pac-options","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","pac_options":true}}"#
     );
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":95}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":98}}"#);
     Ok(())
 }
 

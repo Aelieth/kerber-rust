@@ -1666,14 +1666,19 @@ fn as_postdated_end_is_absolute_till() {
 }
 
 #[test]
-fn as_from_after_till_is_never_valid() {
+fn as_from_after_till_endtime_is_till() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let till = KerberosTime::now().add_seconds(30).unwrap();
     let from = KerberosTime::now().add_seconds(90).unwrap();
-    let mut req = postdated_as_req(122, from);
-    req.0.req_body.till = till;
-    let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
-    assert_eq!(proto_code(err), err::NEVER_VALID);
+    let mut req = postdated_as_req(122, from.clone());
+    req.0.req_body.till = till.clone();
+    let issued = krb5_kdc::issue_as(&store, &req).expect("from after till");
+    let part = tgt_part(&store, &issued);
+    assert_eq!(
+        part.starttime.as_ref().map(KerberosTime::unix_seconds),
+        Some(from.unix_seconds())
+    );
+    assert_eq!(part.endtime.unix_seconds(), till.unix_seconds());
 }
 
 fn renew_and_validate_tgs(issued: &krb5_kdc::IssuedAs, nonce: u32) -> krb5_types::TgsReq {

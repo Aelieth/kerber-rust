@@ -12,7 +12,7 @@ mod listen;
 use krb5_crypto::EncryptionType;
 use krb5_kdc::{
     Acl, AdminOp, KDB_LOCKDOWN_KEYS, KDB_OK_TO_AUTH_AS_DELEGATE, KDB_REQUIRES_PRE_AUTH,
-    PrincipalStore,
+    PrincipalStore, kadmin_flagspec,
 };
 use krb5_protocol::{Keytab, ReplayCache, verify_ap_req};
 use krb5_types::PrincipalName;
@@ -83,6 +83,8 @@ pub struct KadminArgs {
     pub max_life: Option<u64>,
     /// `modprinc -maxrenewlife` seconds.
     pub max_renewable_life: Option<u64>,
+    /// `modprinc -expire` unix timestamp.
+    pub expire: Option<u32>,
 }
 
 /// Parsed `kadmin.local addpol` operands (`kadmin.c:1600-1689`).
@@ -108,13 +110,6 @@ pub struct PolicyArgs {
     pub pw_lockout_duration: Option<u32>,
     /// `-allowedkeysalts` (`kadmin.c:1669`).
     pub allowed_keysalts: Option<String>,
-}
-
-/// MIT `str_conv.c:147-152`: `strtoul(s, NULL, 16) & 0xffffffff`.
-fn hex_flag32(hex: &str) -> u32 {
-    let digits: String = hex.chars().take_while(char::is_ascii_hexdigit).collect();
-    let v = u64::from_str_radix(&digits, 16).unwrap_or(0);
-    u32::try_from(v & 0xffff_ffff).unwrap_or(0)
 }
 
 /// MIT `kadmin.c:118-138` `strdur`.
@@ -210,22 +205,21 @@ pub fn parse_kadmin_args(parts: &[&str]) -> Result<KadminArgs, String> {
                     .ok_or("-maxrenewlife needs a duration")?;
                 out.max_renewable_life = Some(u64::from(parse_pol_interval(spec)?));
             }
-            s if s.starts_with('+') => {
-                if let Some(hex) = s[1..].strip_prefix("0x") {
-                    out.attr_set |= hex_flag32(hex);
-                } else {
-                    let bit =
-                        kadmin_attr_bit(&s[1..]).ok_or_else(|| format!("unknown flag {s}"))?;
-                    out.attr_set |= bit;
-                }
+            "-expire" => {
+                i += 1;
+                let spec = parts.get(i).copied().ok_or("-expire needs a timestamp")?;
+                out.expire = Some(
+                    spec.parse()
+                        .map_err(|_| format!("Invalid date specification \"{spec}\"."))?,
+                );
             }
-            s if let Some(hex) = s.strip_prefix("-0x") => {
-                out.attr_clear |= hex_flag32(hex);
+            s if let Some((set, clear)) = kadmin_flagspec(s) => {
+                out.attr_set |= set;
+                out.attr_clear |= clear;
             }
-            s if let Some(bit) = s.strip_prefix('-').and_then(kadmin_attr_bit) => {
-                out.attr_clear |= bit;
+            s if s.starts_with('-') || s.starts_with('+') => {
+                return Err(format!("unknown flag {s}"));
             }
-            s if s.starts_with('-') => return Err(format!("unknown flag {s}")),
             other => rest.push(other),
         }
         i += 1;
@@ -701,6 +695,26 @@ impl<'a> AdminSession<'a> {
                 .map_err(Error::from)?;
         }
         Ok(())
+    }
+
+    /// `modprinc -expire`.
+    ///
+    /// # Errors
+    ///
+    /// ACL or not found.
+    pub fn modify_expiration(
+        &mut self,
+        name: &PrincipalName,
+        expiration: u32,
+    ) -> Result<(), Error> {
+        self.reload()?;
+        let tid = self.target_id(name);
+        self.acl
+            .check(&self.actor, AdminOp::Modify, Some(&tid))
+            .map_err(Error::from)?;
+        self.store
+            .apply_admin_fields(name, None, None, Some(expiration), None, None, false, None)
+            .map_err(Error::from)
     }
 
     /// `modprinc -unlock`.
@@ -2943,6 +2957,12 @@ mod tests {
         let a = parse_kadmin_args(&["+0x1ffffffff", "wide"]).unwrap();
         assert_eq!(a.attr_set, 0xffff_ffff);
         assert_eq!(a.name, "wide");
+        let a = parse_kadmin_args(&["-allow_renewable", "user"]).unwrap();
+        assert_eq!(a.attr_set, krb5_kdc::KDB_DISALLOW_RENEWABLE);
+        let a = parse_kadmin_args(&["+allow_renewable", "user"]).unwrap();
+        assert_eq!(a.attr_clear, krb5_kdc::KDB_DISALLOW_RENEWABLE);
+        let a = parse_kadmin_args(&["-expire", "1", "expiredsvc"]).unwrap();
+        assert_eq!(a.expire, Some(1));
     }
 
     #[test]

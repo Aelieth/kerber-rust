@@ -625,6 +625,40 @@ const FLAG_TABLE: &[(&str, u32, bool)] = &[
     ("lockdown_keys", KDB_LOCKDOWN_KEYS, false),
 ];
 
+/// MIT `krb5_flagspec_to_mask` kadmin-modify semantics (`kadm5/str_conv.c:171-197`
+/// with `toset == toclear` as `kadmin.c:1164-1165`).
+#[must_use]
+pub fn kadmin_flagspec(spec: &str) -> Option<(u32, u32)> {
+    let (req_neg, body) = spec
+        .strip_prefix('-')
+        .map(|rest| (true, rest))
+        .or_else(|| spec.strip_prefix('+').map(|rest| (false, rest)))?;
+    if body.is_empty() {
+        return None;
+    }
+    let s: String = body
+        .chars()
+        .map(|c| {
+            let c = if c == '-' { '_' } else { c };
+            c.to_ascii_lowercase()
+        })
+        .collect();
+    let (flag, mut invert) = FLAG_TABLE
+        .iter()
+        .copied()
+        .find(|(n, _, _)| *n == s)
+        .map(|(_, flag, invert)| (flag, invert))
+        .or_else(|| Some((hex_flag32(s.strip_prefix("0x")?), false)))?;
+    if req_neg {
+        invert = !invert;
+    }
+    if invert {
+        Some((0, flag))
+    } else {
+        Some((flag, 0))
+    }
+}
+
 /// MIT `krb5_flagspec_to_mask` (`str_conv.c:170-198`).
 fn flagspec_to_mask(spec: &str, toset: &mut u32, toclear: &mut u32) -> bool {
     let (req_neg, body) = if let Some(rest) = spec.strip_prefix('-') {

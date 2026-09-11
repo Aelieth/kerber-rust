@@ -240,9 +240,53 @@ pub fn tgs_req_ex_from(
     from: Option<KerberosTime>,
     enc_authorization_data: Option<EncryptedData>,
 ) -> Result<TgsReq, Error> {
-    let till = KerberosTime::now()
-        .add_hours(10)
-        .unwrap_or_else(|_| KerberosTime::now());
+    tgs_req_ex_till(
+        ticket,
+        session,
+        crealm,
+        cname,
+        sname,
+        realm,
+        nonce,
+        kdc_options,
+        additional_tickets,
+        extra_padata,
+        etypes,
+        addresses,
+        from,
+        enc_authorization_data,
+        None,
+    )
+}
+
+/// [`tgs_req_ex_from`] with an explicit `till`.
+///
+/// # Errors
+///
+/// Returns crypto or DER failures.
+#[allow(clippy::too_many_arguments)]
+pub fn tgs_req_ex_till(
+    ticket: Ticket,
+    session: &ProtocolKey,
+    crealm: &str,
+    cname: &PrincipalName,
+    sname: PrincipalName,
+    realm: &str,
+    nonce: u32,
+    kdc_options: KdcOptions,
+    additional_tickets: Option<Vec<Ticket>>,
+    extra_padata: Vec<PaData>,
+    etypes: Vec<i32>,
+    addresses: Option<HostAddresses>,
+    from: Option<KerberosTime>,
+    enc_authorization_data: Option<EncryptedData>,
+    till: Option<KerberosTime>,
+) -> Result<TgsReq, Error> {
+    let till = till.unwrap_or_else(|| {
+        KerberosTime::now()
+            .add_hours(10)
+            .unwrap_or_else(|_| KerberosTime::now())
+    });
     let body = KdcReqBody {
         kdc_options,
         cname: None,
