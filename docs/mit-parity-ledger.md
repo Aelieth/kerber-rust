@@ -59,10 +59,10 @@ Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after A′-2 R23):
+Counts (after A′-2 R23 leftover):
 **344** = A1 124 + A2 86 + A3 66 + A4 68.
-exact 246 · stricter-documented 10 · deviation 48 ·
-absent 27 · deferred 13.
+exact 245 · stricter-documented 10 · deviation 48 ·
+absent 27 · deferred 14.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
 A2 10 (9 report rows + the `kdc_util.c:144-191` split) + A3 10 = 28
@@ -233,7 +233,7 @@ mismatches, not extra statuses.
 | tgs_policy.c:70 | `ALLOW_POSTDATE`/`POSTDATED` without TKT `MAY_POSTDATE` | TGT NOT POSTDATABLE 13 | no header-flag check | issues | absent | proposed: diffsend |
 | tgs_policy.c:72 | `VALIDATE` without TKT `INVALID` | VALIDATE VALID TICKET 13 | issue.rs check_tgs_constraints_skeleton:1612-1614 | `VALIDATE VALID TICKET` 13 | exact | `tgs_renew_and_validate_together_is_badoption` (Rust-only combo); proposed: diffsend VALIDATE of already-valid TGT |
 | tgs_policy.c:74 | `RENEW` without TKT `RENEWABLE` | TICKET NOT RENEWABLE 13 | issue.rs check_tgs_constraints_skeleton:1622-1624 | `TICKET NOT RENEWABLE` 13 | exact | `tgs_renew_non_renewable_is_badoption` |
-| tgs_policy.c:100 | TKT `INVALID` and not `VALIDATE` | TICKET NOT VALID 33 | issue.rs requested_life | `INVALID` 33 | deviation | `as_postdated_is_invalid_until_validate` (code); proposed: diffsend e_text |
+| tgs_policy.c:100 | TKT `INVALID` and not `VALIDATE` | TICKET NOT VALID 33 | issue.rs check_tgs_constraints_skeleton:1609-1610 | `TICKET NOT VALID` 33 | deviation | `as_postdated_is_invalid_until_validate` (code); proposed: diffsend e_text |
 | tgs_policy.c:231 | `VALIDATE` and starttime > now | NOT_YET_VALID 33 | issue.rs check_tgs_constraints_skeleton | `NOT_YET_VALID` 33 (no skew) | exact | `tgs_validate_future_starttime_is_not_yet_valid` |
 | tgs_policy.c:241 | `RENEW` and now > `renew_till` | TKT_EXPIRED 32 | issue.rs check_tgs_constraints_skeleton:1626-1631 | `TKT_EXPIRED` 32 | deviation | `tgs_renew_rejects_renew_till_not_after_now` (code); proposed: diffsend e_text |
 | tgs_policy.c:636 | `NON_TGT_OPTION` and `krb5_principal_compare(tkt->server, req->server)` (name **and** realm) | SERVER DIDN'T MATCH TICKET FOR RENEW/FORWARD/ETC 26 | issue.rs check_tgs_constraints_skeleton | name **or** realm mismatch is **26** `SERVER DIDN'T MATCH TICKET FOR RENEW/FORWARD/ETC` | exact | `tgs_renew_wrong_sname_is_badoption`; `a2_r16.rs` `a2_r16_cross_tgt_renew_realm_mismatch_is_26`; `scripts/capaths-transit-gate.sh` `MIT_renew_server_mismatch`; diffsend `tgs-renew-service-ticket` |
@@ -248,7 +248,7 @@ mismatches, not extra statuses.
 | tgs_policy.c:325 | S4U2Self foreign + empty user name (cert-only) | INVALID_XREALM_S4U2SELF_REQUEST 12 | issue.rs check_tgs_s4u2self | `INVALID_XREALM_S4U2SELF_REQUEST` 12 | exact | `s4u2self_cross_tgt_cert_only_empty_name_is_invalid_xrealm` |
 | tgs_policy.c:331 | S4U2Self header PAC missing | S4U2SELF_NO_PAC 20 | issue.rs check_tgs_s4u2self | `S4U2SELF_NO_PAC` 20 | exact | diffsend `s4u2self-no-pac`; `s4u2self_no_pac_is_tgt_revoked` |
 | tgs_policy.c:339 | S4U2Self local: PAC not impersonator | S4U2SELF_LOCAL_PAC_CLIENT 13 | issue.rs check_tgs_s4u2self | `S4U2SELF_LOCAL_PAC_CLIENT` 13 | exact | diffsend `s4u2self-pac-client-mismatch`; `s4u2self_local_pac_mismatch_is_badoption` |
-| tgs_policy.c:352 | S4U2Self foreign: PAC not subject+realm | S4U2SELF_FOREIGN_PAC_CLIENT 13 | issue.rs check_tgs_s4u2self | `S4U2SELF_FOREIGN_PAC_CLIENT` 13 | exact (unit) | `a2_r17_foreign_pac_client` (no MIT-kvno cell; dump lab has no matching incoming key) |
+| tgs_policy.c:352 | S4U2Self foreign: PAC not subject+realm | S4U2SELF_FOREIGN_PAC_CLIENT 13 | issue.rs check_tgs_s4u2self:2504 | `S4U2SELF_FOREIGN_PAC_CLIENT` 13 | deferred | `a2_r17_foreign_pac_client` (unit only; MIT-kvno/diffsend needs incoming-trust key — dump lab has none; promotion: A′-3 incoming-trust cell) |
 | tgs_policy.c:345 `validate_as_request` | S4U2Self local client expired | CLIENT EXPIRED 1 | issue.rs check_db_times | `CLIENT EXPIRED` 1 | exact | `s4u2self_expired_for_user_is_name_exp` (code) |
 | kdc_util.c:779 via tgs_policy.c:345 | S4U2Self local client `DISALLOW_ALL_TIX` | CLIENT LOCKED OUT 18 | issue.rs validate_as_request | `CLIENT LOCKED OUT` 18 | exact | `s4u2self_disabled_for_user_is_revoked` |
 | kdc_util.c:743 via tgs_policy.c:345 | S4U2Self pw expired / needchange | MIT clears pw_expire+needchange (kdc_util.c:1612) | krb5-kdc/ad.rs s4u_from_userid | n/a (clears `pw_expire` + `REQUIRES_PWCHANGE`) | exact | `s4u2self_pw_expired_user_still_issues`; `scripts/s4u-mit-gate.sh` expired cell |

@@ -8,6 +8,10 @@ this project uses semantic versioning once a crate is published.
 
 ### W1-A′-2
 
+- **docs.** Ledger `tgs_policy.c:100` rust-site is
+  `check_tgs_constraints_skeleton:1609-1610` (`TICKET NOT VALID` 33).
+  `tgs_policy.c:352` FOREIGN_PAC is `deferred` until a MIT incoming-trust
+  cell (unit `a2_r17_foreign_pac_client` only).
 - **test.** `a2_r18_parent` `cross_store()` grants the impersonator as
   `name@FOREIGN` so the leftover inject stays green after realm-aware
   RBCD (R22).
