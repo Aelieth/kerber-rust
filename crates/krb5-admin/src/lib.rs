@@ -77,6 +77,8 @@ pub struct KadminArgs {
     pub etypes: Vec<EncryptionType>,
     /// `modprinc -unlock`.
     pub unlock: bool,
+    /// `cpw -keepold`.
+    pub keepold: bool,
 }
 
 /// Parsed `kadmin.local addpol` operands (`kadmin.c:1600-1689`).
@@ -156,6 +158,7 @@ pub fn parse_kadmin_args(parts: &[&str]) -> Result<KadminArgs, String> {
         let p = parts[i];
         match p {
             "-randkey" => out.randkey = true,
+            "-keepold" => out.keepold = true,
             "-norandkey" => out.norandkey = true,
             "-unlock" => out.unlock = true,
             "-pw" => {
@@ -445,12 +448,29 @@ impl<'a> AdminSession<'a> {
     ///
     /// ACL or not found.
     pub fn chrand(&mut self, name: &PrincipalName) -> Result<(), Error> {
+        self.chrand_etypes_keepold(name, &[], false)
+    }
+
+    /// `cpw -randkey [-e …] [-keepold]`.
+    ///
+    /// # Errors
+    ///
+    /// ACL or not found.
+    pub fn chrand_etypes_keepold(
+        &mut self,
+        name: &PrincipalName,
+        etypes: &[EncryptionType],
+        keepold: bool,
+    ) -> Result<(), Error> {
         self.reload()?;
         let tid = self.target_id(name);
         self.acl
             .check(&self.actor, AdminOp::ChangePassword, Some(&tid))
             .map_err(Error::from)?;
-        self.store.chrand(name).map(|_| ()).map_err(Error::from)
+        self.store
+            .chrand_etypes_keepold(name, etypes, u32::from(keepold))
+            .map(|_| ())
+            .map_err(Error::from)
     }
 
     /// Stored `attributes` word.
@@ -2844,6 +2864,16 @@ mod tests {
         assert_eq!(a.name, "rc4user");
         let a = parse_kadmin_args(&["-unlock", "locked"]).unwrap();
         assert!(a.unlock);
+        let a = parse_kadmin_args(&[
+            "-randkey",
+            "-keepold",
+            "-e",
+            "aes128-cts-hmac-sha1-96:normal",
+            "krbtgt/KERBER.TEST",
+        ])
+        .unwrap();
+        assert!(a.randkey && a.keepold);
+        assert_eq!(a.etypes, vec![EncryptionType::Aes128CtsHmacSha196]);
         let a = parse_kadmin_args(&["+0x1ffffffff", "wide"]).unwrap();
         assert_eq!(a.attr_set, 0xffff_ffff);
         assert_eq!(a.name, "wide");

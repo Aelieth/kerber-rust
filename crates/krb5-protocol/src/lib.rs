@@ -80,7 +80,7 @@ pub use safe_priv::{
 pub use secret_file::{destroy_secret_file, write_secret_file};
 pub use tgs::{
     TgsOutcome, referral_hop_realm, tgs_exchange, tgs_exchange_ex, tgs_exchange_once,
-    tgs_exchange_path, tgs_renew, tgs_s4u,
+    tgs_exchange_path, tgs_renew, tgs_s4u, tgs_u2u,
 };
 pub use transport::{KDC_PORT, KdcAddr, exchange, exchange_on_tcp, exchange_with_failover};
 

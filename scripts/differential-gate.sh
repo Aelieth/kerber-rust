@@ -41,7 +41,7 @@ if [ ! -f "$GOLDEN" ]; then
 fi
 
 cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-kdb -q
-cargo build -p krb5-admin --bin krb5-kadmin-local -q
+cargo build -p krb5-admin --bin krb5-kadmin-local -p krb5-client --bin krb5-kvno -q
 cargo build -p krb5-protocol --example diffsend --features diff -q
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
@@ -58,10 +58,10 @@ trap cleanup EXIT
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb
-docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmin-local" "$NAME":/tmp/krb5-kadmin-local
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmin-local" "$NAME":/tmp/krb5-kadmin-local && docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kvno" "$NAME":/tmp/krb5-kvno
 docker cp "${CARGO_TARGET_DIR:-target}/debug/examples/diffsend" "$NAME":/tmp/diffsend
 docker cp "$GOLDEN" "$NAME":/tmp/mit.dump
-docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb /tmp/krb5-kadmin-local /tmp/diffsend
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb /tmp/krb5-kadmin-local /tmp/krb5-kvno /tmp/diffsend
 
 echo "==== load identical dump into Rust KDC on :8888 ===="
 LOAD="$(docker exec \
@@ -203,7 +203,7 @@ echo "$DIFF" | grep -q '"case":"as-invalid-opts","outcome":"ok","error_code":13'
 echo "$DIFF" | grep -q '"case":"as-request-anonymous","outcome":"ok","error_code":13,"e_text":"VALIDATE_ANONYMOUS_PRINCIPAL","rust_tag":"0x7e","mit_tag":"0x7e"' || die "as-request-anonymous not code 13 e_text VALIDATE_ANONYMOUS_PRINCIPAL on both legs"
 echo "$DIFF" | grep -q '"case":"as-validate-before-preauth","outcome":"ok","error_code":23' || die "as-validate-before-preauth (preauth+needchange) not code 23 on both legs"
 echo "$DIFF" | grep -q '"case":"as-retransmit","outcome":"ok","rust_retransmit_identical":true,"mit_retransmit_identical":true' || die "as-retransmit reply not identical from the lookaside on both legs"
-echo "$DIFF" | grep -q '"outcome":"ok","cases":78' || die "diffsend did not finish 78 cases"
+echo "$DIFF" | grep -q '"outcome":"ok","cases":81' || die "diffsend did not finish 81 cases"
 echo "$DIFF" | grep -q '"case":"fast-armor-no-subkey","outcome":"ok","error_code":12,"e_text":"FIND_FAST","rust_tag":"0x7e","mit_tag":"0x7e"' || die "fast-armor-no-subkey not code 12 e_text FIND_FAST on both legs"
 echo "$DIFF" | grep -q '"case":"armor-ap-req-as-pa-tgs-req","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' || die "armor-ap-req-as-pa-tgs-req not code 12 e_text PROCESS_TGS on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-ad-fx-armor-authenticator","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' || die "tgs-ad-fx-armor-authenticator not code 12 e_text PROCESS_TGS on both legs"
@@ -425,6 +425,86 @@ echo "$TCP_CAP" | grep -F 'tcp_cap=ok' || die "tcp cap cell did not finish"
 
 docker cp "$NAME":/tmp/diff-corpus "$OUT/diff-corpus" 2>/dev/null || true
 docker cp "$NAME":/tmp/rust-kdc.log "$OUT/rust-kdc.log" 2>/dev/null || true
+
+echo "$DIFF" | grep -q '"case":"tgs-pac-server-cksum-wrong-enctype","outcome":"ok","error_code":60,"e_text":"HEADER_PAC","rust_tag":"0x7e","mit_tag":"0x7e"' || die "tgs-pac-server-cksum-wrong-enctype not code 60 e_text HEADER_PAC on both legs"
+echo "$DIFF" | grep -q '"case":"u2u-2nd-ticket-pac-wrong-enctype","outcome":"ok","error_code":60,"e_text":"2ND_TKT_PAC","rust_tag":"0x7e","mit_tag":"0x7e"' || die "u2u-2nd-ticket-pac-wrong-enctype not code 60 e_text 2ND_TKT_PAC on both legs"
+echo "$DIFF" | grep -q '"case":"u2u-success","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","ticket_etype":18,"reply_session_etype":17' || die "u2u-success not discriminating ticket 18 / reply 17"
+echo "$DIFF" | grep -q '"case":"u2u-success-offered","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","ticket_etype":18,"reply_session_etype":18' || die "u2u-success-offered not ticket 18 / reply 18"
+
+echo "==== krbtgt rekey keepold then RENEW service ticket both legs ===="
+docker exec "$NAME" sh -c 'cat >/tmp/rust-client.conf <<EOF
+[libdefaults]
+    default_realm = KERBER.TEST
+    dns_lookup_kdc = false
+    rdns = false
+    forwardable = true
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1:8888
+    }
+EOF'
+docker exec "$NAME" sh -c "printf 'userpassword\n' | kinit -r 1d -S host/testhost.kerber.test@KERBER.TEST -c /tmp/krb5cc_mit_rekey user"
+MITCPW="$(docker exec "$NAME" kadmin.local -q 'cpw -randkey -keepold -e aes128-cts-hmac-sha1-96 krbtgt/KERBER.TEST')"
+echo "$MITCPW"
+echo "$MITCPW" | grep -qi 'randomized' || die "MIT cpw -keepold krbtgt failed"
+set +e
+MITREN="$(docker exec "$NAME" /tmp/krb5-kvno --renew-ticket --body-realm KERBER.TEST \
+    -c /tmp/krb5cc_mit_rekey 127.0.0.1:88 host/testhost.kerber.test@KERBER.TEST 2>&1)"
+mitren_rc=$?
+set -e
+echo "$MITREN"
+echo "MIT_krbtgt_rekey_renew rc=${mitren_rc}"
+[ "$mitren_rc" = 0 ] || die "MIT RENEW after krbtgt rekey failed"
+echo "$MITREN" | grep -q 'kvno =' || die "MIT RENEW after rekey missing kvno"
+docker exec -e KRB5_CONFIG=/tmp/rust-client.conf "$NAME" \
+    sh -c "printf 'userpassword\n' | kinit -r 1d -S host/testhost.kerber.test@KERBER.TEST -c /tmp/krb5cc_rust_rekey user"
+RUSTCPW="$(docker exec \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" /tmp/krb5-kadmin-local -q 'cpw -randkey -keepold -e aes128-cts-hmac-sha1-96:normal krbtgt/KERBER.TEST')"
+echo "$RUSTCPW"
+echo "$RUSTCPW" | grep -qi 'randomized' || die "rust cpw -keepold krbtgt failed"
+docker exec "$NAME" sh -c 'for p in /proc/[0-9]*; do comm=$(cat "$p/comm" 2>/dev/null) || continue; [ "$comm" = krb5-kdc ] || continue; cmd=$(tr "\0" " " < "$p/cmdline" 2>/dev/null) || continue; echo "$cmd" | grep -q "/tmp/krb5-kdc" || continue; kill -9 "${p#/proc/}" 2>/dev/null || true; done'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',8888),0.15)" 2>/dev/null; then
+        sleep 0.2
+        continue
+    fi
+    ok=1
+    break
+done
+[ "$ok" = 1 ] || die "rust kdc still listening after rekey kill"
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" sh -c '/tmp/krb5-kdc 127.0.0.1:8888 >/tmp/rust-kdc-rekey.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/rust-kdc-rekey.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+[ "$ok" = 1 ] || {
+    docker exec "$NAME" cat /tmp/rust-kdc-rekey.log >&2 || true
+    die "rust kdc did not listen after rekey"
+}
+set +e
+RUSTREN="$(docker exec -e KRB5_CONFIG=/tmp/rust-client.conf "$NAME" /tmp/krb5-kvno --renew-ticket --body-realm KERBER.TEST \
+    -c /tmp/krb5cc_rust_rekey 127.0.0.1:8888 host/testhost.kerber.test@KERBER.TEST 2>&1)"
+rustren_rc=$?
+set -e
+echo "$RUSTREN"
+echo "RUST_krbtgt_rekey_renew rc=${rustren_rc}"
+[ "$rustren_rc" = 0 ] || {
+    docker exec "$NAME" cat /tmp/rust-kdc-rekey.log >&2 || true
+    die "rust RENEW after krbtgt rekey failed"
+}
+echo "$RUSTREN" | grep -q 'kvno =' || die "rust RENEW after rekey missing kvno"
 
 log "differential.gate" "ok" ',"same_db":true,"transport":"tcp"'
 exit 0

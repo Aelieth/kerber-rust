@@ -629,6 +629,36 @@ fn mint_signed_header(
     flip_server: bool,
     renew_till: Option<KerberosTime>,
 ) -> Result<Ticket, String> {
+    mint_signed_header_ex(
+        key,
+        kvno,
+        cname,
+        realm,
+        sname,
+        session,
+        window,
+        flags,
+        pac_cname,
+        flip_server,
+        renew_till,
+        None,
+    )
+}
+
+fn mint_signed_header_ex(
+    key: &ProtocolKey,
+    kvno: u32,
+    cname: &PrincipalName,
+    realm: &str,
+    sname: &PrincipalName,
+    session: &ProtocolKey,
+    window: (KerberosTime, KerberosTime),
+    flags: TicketFlags,
+    pac_cname: &PrincipalName,
+    flip_server: bool,
+    renew_till: Option<KerberosTime>,
+    server_cksumtype: Option<i32>,
+) -> Result<Ticket, String> {
     let (start, end) = window;
     let mut part = EncTicketPart {
         flags,
@@ -672,6 +702,18 @@ fn mint_signed_header(
             && buf.data.len() > 4
         {
             buf.data[4] ^= 0xff;
+        }
+        pac = parsed.to_bytes();
+    }
+    if let Some(ct) = server_cksumtype {
+        let mut parsed = Pac::parse(&pac).map_err(|e| e.to_string())?;
+        if let Some(buf) = parsed
+            .buffers
+            .iter_mut()
+            .find(|b| b.kind == PAC_SERVER_CHECKSUM)
+            && buf.data.len() >= 4
+        {
+            buf.data[..4].copy_from_slice(&ct.to_le_bytes());
         }
         pac = parsed.to_bytes();
     }
@@ -2335,8 +2377,10 @@ fn run() -> Result<(), String> {
         )?,
         err::ETYPE_NOSUPP,
     )?;
-    // Client offers AES128 only; stkt session is AES256. Ticket key = stkt
-    // session (`:997-1000`); reply session = select_session_keytype (`:352-355`).
+    // Client offers AES128 only; stkt session is a distinct AES256 key.
+    // Ticket key = stkt session (`:997-1000`); reply session =
+    // select_session_keytype (`:352-355`) because 18 was not offered.
+    let stkt_sess = random_session(EncryptionType::Aes256CtsHmacSha196)?;
     let u2u_ok_etypes = vec![EncryptionType::Aes128CtsHmacSha196.to_iana()];
     let u2u_ok = encode(
         &tgs_req_ex(
@@ -2363,7 +2407,7 @@ fn run() -> Result<(), String> {
                 &host,
                 realm,
                 &krbtgt_sname,
-                &sess,
+                &stkt_sess,
                 window10.clone(),
                 TicketFlags::initial_preauth(),
             )?]),
@@ -2374,10 +2418,10 @@ fn run() -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
     let (tr, tm) = send_both(&cfg, "u2u-success", &u2u_ok)?;
-    let (re, rtkt, _) = decrypt_u2u(&tr, &sess, &sess)?;
-    let (me, mtkt, _) = decrypt_u2u(&tm, &sess, &sess)?;
+    let (re, rtkt, _) = decrypt_u2u(&tr, &sess, &stkt_sess)?;
+    let (me, mtkt, _) = decrypt_u2u(&tm, &sess, &stkt_sess)?;
     let want_reply = EncryptionType::Aes128CtsHmacSha196.to_iana();
-    let want_tkt = sess.etype().to_iana();
+    let want_tkt = stkt_sess.etype().to_iana();
     if rtkt.enc_part.kvno.is_some() || mtkt.enc_part.kvno.is_some() {
         return Err(format!(
             "u2u-success: ticket kvno rust={:?} mit={:?} want none",
@@ -2757,6 +2801,122 @@ fn run() -> Result<(), String> {
         err::GENERIC,
     )?;
 
+    expect_error(
+        &cfg,
+        "tgs-pac-server-cksum-wrong-enctype",
+        &encode(
+            &tgs_req(
+                mint_signed_header_ex(
+                    tkt_key,
+                    tkt_kvno,
+                    &user,
+                    realm,
+                    &krbtgt_sname,
+                    &sess,
+                    window10.clone(),
+                    TicketFlags::initial_preauth(),
+                    &user,
+                    false,
+                    None,
+                    Some(15),
+                )?,
+                &sess,
+                realm,
+                &user,
+                host.clone(),
+                realm,
+                0x1000_006e,
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::GENERIC,
+    )?;
+    expect_error(
+        &cfg,
+        "u2u-2nd-ticket-pac-wrong-enctype",
+        &u2u_to(
+            user.clone(),
+            Some(vec![mint_signed_header_ex(
+                tkt_key,
+                tkt_kvno,
+                &user,
+                realm,
+                &krbtgt_sname,
+                &sess,
+                window10.clone(),
+                TicketFlags::initial_preauth(),
+                &user,
+                false,
+                None,
+                Some(15),
+            )?]),
+            0x1000_006f,
+        )?,
+        err::GENERIC,
+    )?;
+    let stkt_offered = random_session(EncryptionType::Aes256CtsHmacSha196)?;
+    let u2u_offered = encode(
+        &tgs_req_ex(
+            mint_tgt(
+                tkt_key,
+                tkt_kvno,
+                &user,
+                realm,
+                &krbtgt_sname,
+                &sess,
+                window10.clone(),
+                TicketFlags::initial_preauth(),
+            )?,
+            &sess,
+            realm,
+            &user,
+            host.clone(),
+            realm,
+            0x1000_0070,
+            u2u_opts.clone(),
+            Some(vec![mint_tgt(
+                tkt_key,
+                tkt_kvno,
+                &host,
+                realm,
+                &krbtgt_sname,
+                &stkt_offered,
+                window10.clone(),
+                TicketFlags::initial_preauth(),
+            )?]),
+            Vec::new(),
+            vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
+        )
+        .map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    let (tr, tm) = send_both(&cfg, "u2u-success-offered", &u2u_offered)?;
+    let (re, rtkt, _) = decrypt_u2u(&tr, &sess, &stkt_offered)?;
+    let (me, mtkt, _) = decrypt_u2u(&tm, &sess, &stkt_offered)?;
+    let want_offered = EncryptionType::Aes256CtsHmacSha196.to_iana();
+    if rtkt.enc_part.kvno.is_some() || mtkt.enc_part.kvno.is_some() {
+        return Err(format!(
+            "u2u-success-offered: ticket kvno rust={:?} mit={:?}",
+            rtkt.enc_part.kvno, mtkt.enc_part.kvno
+        ));
+    }
+    if rtkt.enc_part.etype != want_offered || mtkt.enc_part.etype != want_offered {
+        return Err(format!(
+            "u2u-success-offered: ticket etype rust={} mit={} want {want_offered}",
+            rtkt.enc_part.etype, mtkt.enc_part.etype
+        ));
+    }
+    if re.key.keytype != want_offered || me.key.keytype != want_offered {
+        return Err(format!(
+            "u2u-success-offered: reply session rust={} mit={} want {want_offered}",
+            re.key.keytype, me.key.keytype
+        ));
+    }
+    println!(
+        r#"{{"event":"diffsend","case":"u2u-success-offered","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","ticket_etype":{want_offered},"reply_session_etype":{want_offered}}}"#
+    );
+
     let ftgt_addrs = vec![HostAddress {
         addr_type: HostAddress::ADDRTYPE_INET,
         address: vec![192, 0, 2, 2].into(),
@@ -2807,7 +2967,7 @@ fn run() -> Result<(), String> {
         r#"{{"event":"diffsend","case":"tgs-forwarded-tgt-addresses","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"}}"#
     );
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":78}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":81}}"#);
     Ok(())
 }
 

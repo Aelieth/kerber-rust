@@ -19,7 +19,8 @@ use krb5_client::cli::parse_kvno;
 use krb5_client::{load_ccache, store_ccache_keep_default};
 use krb5_config::resolve_ccspec;
 use krb5_protocol::{
-    AsOutcome, KdcAddr, parse_principal, tgs_exchange_once, tgs_exchange_path, tgs_s4u, tgt_cred,
+    AsOutcome, KdcAddr, parse_principal, tgs_exchange_once, tgs_exchange_path, tgs_s4u, tgs_u2u,
+    tgt_cred,
 };
 use krb5_types::{
     EncKdcRepPart, EncryptionKey, KerberosTime, PrincipalName, Ticket, TicketFlags, err,
@@ -45,15 +46,7 @@ fn main() {
         eprintln!("kvno: {e}");
         std::process::exit(2);
     });
-    if let Err(e) = run(
-        &spec,
-        args.kdc_host.as_deref(),
-        &service,
-        args.disable_transited_check,
-        args.body_realm.as_deref(),
-        args.renew,
-        args.for_user.as_deref(),
-    ) {
+    if let Err(e) = run(&spec, &args, &service) {
         eprintln!("kvno: {e}");
         std::process::exit(1);
     }
@@ -99,12 +92,8 @@ fn addr_for_realm(realm: &str, explicit: Option<&str>) -> KdcAddr {
 
 fn run(
     spec: &krb5_config::CcSpec,
-    kdc_host: Option<&str>,
+    args: &krb5_client::cli::KvnoArgs,
     service: &str,
-    disable_transited_check: bool,
-    body_realm: Option<&str>,
-    renew: bool,
-    for_user: Option<&str>,
 ) -> Result<(), String> {
     let mut cc = load_ccache(spec).map_err(|e| e.to_string())?;
     let (cred, sname, srealm, hop_realm) = {
@@ -112,9 +101,15 @@ fn run(
         let any_tgt = creds
             .iter()
             .copied()
-            .find(|c| c.server.1.components_joined().starts_with("krbtgt/"))
-            .ok_or_else(|| "ccache has no TGT".to_string())?;
-        let crealm = String::from_utf8_lossy(any_tgt.client.0.as_bytes()).into_owned();
+            .find(|c| c.server.1.components_joined().starts_with("krbtgt/"));
+        let crealm = any_tgt
+            .map(|c| String::from_utf8_lossy(c.client.0.as_bytes()).into_owned())
+            .or_else(|| {
+                creds
+                    .first()
+                    .map(|c| String::from_utf8_lossy(c.client.0.as_bytes()).into_owned())
+            })
+            .ok_or_else(|| "ccache is empty".to_string())?;
         let (sname, srealm) = if service.contains('@') {
             parse_principal(service)?
         } else {
@@ -128,17 +123,32 @@ fn run(
                 host_realm.unwrap_or(crealm.clone()),
             )
         };
-        let cred = creds
-            .iter()
-            .copied()
-            .find(|c| c.server.1.is_krbtgt_for(&srealm))
-            .unwrap_or(any_tgt)
-            .clone();
-        // First hop goes to the current TGT's KDC; tgs_exchange chases.
-        let hop_realm = krb5_protocol::referral_hop_realm(&cred.server.1).unwrap_or(crealm);
+        let cred = if args.renew_ticket {
+            creds
+                .iter()
+                .copied()
+                .find(|c| {
+                    c.server.1 == sname && String::from_utf8_lossy(c.server.0.as_bytes()) == srealm
+                })
+                .cloned()
+                .ok_or_else(|| "ccache has no matching service ticket".to_string())?
+        } else {
+            let tgt = any_tgt.ok_or_else(|| "ccache has no TGT".to_string())?;
+            creds
+                .iter()
+                .copied()
+                .find(|c| c.server.1.is_krbtgt_for(&srealm))
+                .unwrap_or(tgt)
+                .clone()
+        };
+        let hop_realm = if args.renew_ticket {
+            srealm.clone()
+        } else {
+            krb5_protocol::referral_hop_realm(&cred.server.1).unwrap_or(crealm)
+        };
         (cred, sname, srealm, hop_realm)
     };
-    let addr = addr_for_realm(&hop_realm, kdc_host);
+    let addr = addr_for_realm(&hop_realm, args.kdc_host.as_deref());
     let session = cred.session_key().map_err(|e| e.to_string())?;
     let ticket: Ticket = decode(&cred.ticket).map_err(|e| e.to_string())?;
     let tgt = AsOutcome {
@@ -169,7 +179,7 @@ fn run(
         fast_avail: false,
         pa_type: None,
     };
-    let tgs = if let Some(who) = for_user {
+    let tgs = if let Some(who) = args.for_user.as_deref() {
         let (uname, urealm) = if who.contains('@') {
             parse_principal(who)?
         } else {
@@ -185,12 +195,35 @@ fn run(
             ));
         }
         tgs_s4u(&addr, &tgt, sname, &hop_realm, uname, &urealm).map_err(kvno_err)?
-    } else if let Some(br) = body_realm {
-        tgs_exchange_once(&addr, &tgt, sname, br, disable_transited_check, renew)
-            .map_err(kvno_err)?
+    } else if let Some(u2u) = args.u2u.as_deref() {
+        let br = args.body_realm.as_deref().ok_or_else(|| {
+            "requires --body-realm (gate-only; MIT kvno --u2u needs a same-realm TGT)".to_string()
+        })?;
+        let path = u2u.strip_prefix("FILE:").unwrap_or(u2u);
+        let host_cc =
+            load_ccache(&krb5_config::CcSpec::File(path.into())).map_err(|e| e.to_string())?;
+        let stkt_cred = host_cc
+            .list()
+            .iter()
+            .copied()
+            .find(|c| c.server.1.components_joined().starts_with("krbtgt/"))
+            .ok_or_else(|| "u2u ccache has no TGT".to_string())?;
+        let stkt: Ticket = decode(&stkt_cred.ticket).map_err(|e| e.to_string())?;
+        tgs_u2u(&addr, &tgt, sname, br, stkt).map_err(kvno_err)?
+    } else if let Some(br) = args.body_realm.as_deref() {
+        tgs_exchange_once(
+            &addr,
+            &tgt,
+            sname,
+            br,
+            args.disable_transited_check,
+            args.renew || args.renew_ticket,
+        )
+        .map_err(kvno_err)?
     } else {
-        let (tgs, path) = tgs_exchange_path(&addr, &tgt, sname, &srealm, disable_transited_check)
-            .map_err(kvno_err)?;
+        let (tgs, path) =
+            tgs_exchange_path(&addr, &tgt, sname, &srealm, args.disable_transited_check)
+                .map_err(kvno_err)?;
         for p in path {
             cc.creds.push(
                 tgt_cred(&p.crealm, &p.cname, &p.ticket, &p.session_key, &p.enc_part)

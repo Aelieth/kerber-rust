@@ -430,7 +430,8 @@ pub(crate) fn get_verified_pac(
         return Ok(None);
     };
     if header_server.name.is_krbtgt() {
-        verify_pac_signatures(&pac, ticket_key, None, None, false)?;
+        verify_pac_signatures(&pac, ticket_key, None, None, false)
+            .map_err(wire_unsupported_pac_cksum)?;
         return Ok(Some(pac));
     }
     let Some(tgt) = local_tgt else {
@@ -469,6 +470,24 @@ fn pac_verify_retryable(r: &Result<(), Error>) -> bool {
         Err(Error::Protocol { code, .. })
             if *code == err::MODIFIED || *code == err::ETYPE_NOSUPP
     )
+}
+
+/// MIT `KRB5_BAD_ENCTYPE` (index 188) → protocol 60 on non-retry PAC exits.
+fn wire_unsupported_pac_cksum(e: Error) -> Error {
+    match e {
+        Error::Protocol {
+            code,
+            text,
+            e_data,
+            detail,
+        } if code == err::ETYPE_NOSUPP => Error::Protocol {
+            code: err::GENERIC,
+            text,
+            e_data,
+            detail,
+        },
+        other => other,
+    }
 }
 
 fn try_verify_pac(

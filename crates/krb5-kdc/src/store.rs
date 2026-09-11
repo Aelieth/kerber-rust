@@ -2225,6 +2225,28 @@ impl PrincipalStore {
         Ok(new_keys)
     }
 
+    /// `cpw -randkey -e` with MIT `keepold`. Empty `etypes` uses policy salts.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] or RNG failure.
+    pub fn chrand_etypes_keepold(
+        &mut self,
+        name: &PrincipalName,
+        etypes: &[EncryptionType],
+        keepold: u32,
+    ) -> Result<Vec<KeyEntry>, Error> {
+        if etypes.is_empty() {
+            return self.chrand_keepold_n(name, keepold);
+        }
+        let mut keys = Vec::new();
+        for etype in etypes {
+            keys.push(KeyEntry::new(*etype, random_key(*etype)?, 0));
+        }
+        self.set_keys(name, keys.clone(), keepold)?;
+        Ok(keys)
+    }
+
     /// Drop keys with kvno below `keepkvno`. `keepkvno <= 0` keeps only the
     /// newest kvno (MIT `purgekeys` without `-keepkvno`).
     ///

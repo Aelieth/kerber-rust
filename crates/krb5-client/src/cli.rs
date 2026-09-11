@@ -353,6 +353,10 @@ pub struct KvnoArgs {
     pub body_realm: Option<String>,
     /// `--renew` (gate-only): set KDC option RENEW (dest-RENEW cells).
     pub renew: bool,
+    /// `--renew-ticket` (gate-only): RENEW the matching service cred.
+    pub renew_ticket: bool,
+    /// `--u2u FILE:cc` (gate-only): ENC_TKT_IN_SKEY with that TGT.
+    pub u2u: Option<String>,
     /// `-U` impersonated user (S4U2Self). Unlike MIT `kvno`, the ccache
     /// principal need not equal the service; the KDC enforces that.
     pub for_user: Option<String>,
@@ -373,6 +377,16 @@ fn kvno_longs() -> &'static [LongOpt] {
         LongOpt {
             name: "renew",
             takes_arg: false,
+            short: None,
+        },
+        LongOpt {
+            name: "renew-ticket",
+            takes_arg: false,
+            short: None,
+        },
+        LongOpt {
+            name: "u2u",
+            takes_arg: true,
             short: None,
         },
     ]
@@ -399,6 +413,14 @@ pub fn parse_kvno(args: &[String]) -> Result<KvnoArgs, String> {
             out.renew = true;
             continue;
         }
+        if o.long == Some("renew-ticket") {
+            out.renew_ticket = true;
+            continue;
+        }
+        if o.long == Some("u2u") {
+            out.u2u = o.arg;
+            continue;
+        }
         match o.flag {
             'c' => out.ccache = o.arg,
             'U' => out.for_user = o.arg,
@@ -410,7 +432,7 @@ pub fn parse_kvno(args: &[String]) -> Result<KvnoArgs, String> {
         out.kdc_host = Some(pos.remove(0));
     }
     out.services = pos;
-    if out.renew && out.body_realm.is_none() {
+    if (out.renew || out.renew_ticket || out.u2u.is_some()) && out.body_realm.is_none() {
         return Err(
             "requires --body-realm (gate-only; MIT kvno has no renew — `kinit -R` is `renew-gate.sh`)"
                 .into(),
@@ -558,6 +580,25 @@ mod tests {
         .unwrap();
         assert!(n.renew);
         assert_eq!(n.body_realm.as_deref(), Some("B.TEST"));
+        let t = parse_kvno(&s(&[
+            "--renew-ticket",
+            "--body-realm",
+            "KERBER.TEST",
+            "host/testhost.kerber.test@KERBER.TEST",
+        ]))
+        .unwrap();
+        assert!(t.renew_ticket);
+        assert_eq!(t.body_realm.as_deref(), Some("KERBER.TEST"));
+        let u2 = parse_kvno(&s(&[
+            "--u2u",
+            "FILE:/tmp/host",
+            "--body-realm",
+            "C.TEST",
+            "host/svc.c.test@C.TEST",
+        ]))
+        .unwrap();
+        assert_eq!(u2.u2u.as_deref(), Some("FILE:/tmp/host"));
+        assert_eq!(u2.body_realm.as_deref(), Some("C.TEST"));
     }
 
     #[test]

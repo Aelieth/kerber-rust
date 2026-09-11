@@ -110,6 +110,9 @@ DIFFSEND_CASES = frozenset(
         "as-optimistic-encts-wrong-etype",
         "as-retransmit",
         "as-request-anonymous",
+        "tgs-pac-server-cksum-wrong-enctype",
+        "u2u-2nd-ticket-pac-wrong-enctype",
+        "u2u-success-offered",
     }
 )
 _LEDGER_GATE = re.compile(r"(?:scripts/)?([A-Za-z0-9._-]+-gate(?:\.sh)?)")

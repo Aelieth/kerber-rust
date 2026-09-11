@@ -85,7 +85,7 @@ pub fn tgs_exchange_once(
     if renew {
         opts = opts.with_bit(flag_bit::RENEW, true);
     }
-    tgs_once(kdc, tgt, sname, realm, opts, &[])
+    tgs_once(kdc, tgt, sname, realm, opts, &[], None)
 }
 
 /// Like [`tgs_exchange_ex`], also returning asked-for path TGTs to cache.
@@ -143,6 +143,7 @@ pub fn tgs_renew(kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> {
             .with_bit(flag_bit::RENEW, true)
             .with_bit(flag_bit::CANONICALIZE, true),
         &[],
+        None,
     )
 }
 
@@ -161,7 +162,25 @@ pub fn tgs_s4u(
     for_realm: &str,
 ) -> Result<TgsOutcome, Error> {
     let pa = crate::pa_for_user(&tgt.session_key, for_user, for_realm)?;
-    tgs_once(kdc, tgt, sname, realm, tgs_kdc_options(tgt), &[pa])
+    tgs_once(kdc, tgt, sname, realm, tgs_kdc_options(tgt), &[pa], None)
+}
+
+/// One TGS-REQ with `ENC_TKT_IN_SKEY` and `stkt` as the second ticket.
+///
+/// Gate-only (`krb5-kvno --u2u`).
+///
+/// # Errors
+///
+/// Transport, crypto, or `KRB-ERROR` failures.
+pub fn tgs_u2u(
+    kdc: &KdcAddr,
+    tgt: &AsOutcome,
+    sname: PrincipalName,
+    realm: &str,
+    stkt: Ticket,
+) -> Result<TgsOutcome, Error> {
+    let opts = tgs_kdc_options(tgt).with_bit(flag_bit::ENC_TKT_IN_SKEY, true);
+    tgs_once(kdc, tgt, sname, realm, opts, &[], Some(vec![stkt]))
 }
 
 /// MIT `krb5_get_credentials`: copy F/P from the TGT into TGS-REQ options.
@@ -200,7 +219,7 @@ fn tgs_inner(
         if disable_transited_check && cur_tgt.ticket.sname.is_krbtgt_for(realm) {
             opts = opts.with_bit(flag_bit::DISABLE_TRANSITED_CHECK, true);
         }
-        let out = tgs_once(&cur_kdc, &cur_tgt, sname.clone(), &served, opts, &[])?;
+        let out = tgs_once(&cur_kdc, &cur_tgt, sname.clone(), &served, opts, &[], None)?;
         match chase_step(&start, &mut seen, sname, &served, &out)? {
             TgsHop::Done => return Ok((out, path)),
             TgsHop::Referral(foreign) => {
@@ -250,6 +269,7 @@ fn get_dest_tgt(
             &served,
             tgs_kdc_options(&cur_tgt),
             &[],
+            None,
         ) {
             Ok(out) => {
                 chase_step(&start, &mut seen, &hop, &served, &out)?;
@@ -415,6 +435,7 @@ fn tgs_once(
     realm: &str,
     kdc_options: KdcOptions,
     extra_padata: &[PaData],
+    extra_tickets: Option<Vec<Ticket>>,
 ) -> Result<TgsOutcome, Error> {
     let nonce = random_nonce31()?;
     let till = KerberosTime(tgt.enc_part.endtime.0);
@@ -433,7 +454,7 @@ fn tgs_once(
         etype: etypes,
         addresses: None,
         enc_authorization_data: None,
-        additional_tickets: None,
+        additional_tickets: extra_tickets,
     };
     let body_der = encode(&body)?;
     let cksum_usage = KeyUsage::new(ku::TGS_REQ_AUTH_CKSUM)?;

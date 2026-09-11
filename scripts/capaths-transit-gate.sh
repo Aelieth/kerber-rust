@@ -1043,7 +1043,7 @@ MIT_S4U_KL="$(docker exec -e KRB5_CONFIG=/tmp/s4u-c.conf "$NAME" \
 echo "$MIT_S4U_KL"
 echo "$MIT_S4U_KL" | grep -q 'for client user@C.TEST'
 
-echo "==== forged cross-realm S4U2Self C host impersonates user@A.TEST ===="
+echo "==== same-realm S4U2Self CLIENT_NOT_OURS negative ===="
 n="$(docker exec "$NAME" sh -c 'wc -l < /tmp/mit-c.log' | tr -d '[:space:]')"
 set +e
 MIT_S4U_XR="$(docker exec -e KRB5_CONFIG=/tmp/s4u-c.conf "$NAME" \
@@ -1204,6 +1204,89 @@ echo "$RUST_RENEW" | grep -q "SERVER DIDN'T MATCH TICKET FOR RENEW" || {
     docker exec "$NAME" cat /tmp/kdc-a-r16.log >&2 || true
     exit 1
 }
+
+expect_lineage_u2u() {
+    local label="$1"
+    local user_cc="$2"
+    local host_cc="$3"
+    local klog="$4"
+    local n
+    n="$(docker exec "$NAME" sh -c "wc -l < ${klog}" | tr -d '[:space:]')"
+    set +e
+    local out rc
+    out="$(docker exec -e KRB5_CONFIG=/tmp/s4u-c.conf "$NAME" \
+        /tmp/krb5-kvno --u2u "FILE:${host_cc}" --body-realm C.TEST \
+        -c "$user_cc" 127.0.0.1:90 host/svc.c.test@C.TEST 2>&1)"
+    rc=$?
+    set -e
+    echo "$out"
+    if [ "$rc" -eq 0 ]; then
+        echo "$label: lineage+U2U must not issue" >&2
+        docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" >&2 || true
+        exit 1
+    fi
+    if ! docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog} | grep -q 'INVALID LINEAGE'"; then
+        echo "$label: new lines of ${klog} missing INVALID LINEAGE" >&2
+        docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" >&2 || true
+        exit 1
+    fi
+    echo "$label lineage_u2u ${klog} (from $((n + 1))):"
+    docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" || true
+}
+
+echo "==== lineage+U2U is INVALID LINEAGE on MIT C and Rust C ===="
+docker exec "$NAME" sh -c 'for p in /proc/[0-9]*; do
+  comm=$(cat "$p/comm" 2>/dev/null) || continue
+  [ "$comm" = krb5kdc ] || continue
+  cmd=$(tr "\0" " " < "$p/cmdline" 2>/dev/null) || continue
+  echo "$cmd" | grep -q "C.TEST" || continue
+  kill -9 "${p#/proc/}" 2>/dev/null || true
+done'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',90),0.15)" 2>/dev/null; then
+        sleep 0.2
+        continue
+    fi
+    ok=1
+    break
+done
+[ "$ok" = 1 ]
+start_mit C.TEST /tmp/kdc-C.conf /tmp/mit-c-lineage-u2u.log /tmp/mit-c.pid
+wait_port 90 || {
+    docker exec "$NAME" cat /tmp/mit-c-lineage-u2u.log 2>/dev/null || true
+    log "capaths.gate" "error" ',"error":"MIT C for lineage+U2U did not listen"'
+    exit 1
+}
+docker exec "$NAME" sh -c "sed 's/default_realm = A.TEST/default_realm = C.TEST/' /tmp/client-capaths.conf > /tmp/s4u-c.conf"
+forge_mit_lineage /tmp/krb5cc_mit_lineage /tmp/krb5cc_mit_lineage_u2u
+docker exec -e KRB5_CONFIG=/tmp/s4u-c.conf "$NAME" \
+    kinit -k -t /tmp/mit-c.host.kt -c /tmp/krb5cc_mit_c_u2u_host host/svc.c.test@C.TEST
+expect_lineage_u2u "MIT_lineage_u2u" /tmp/krb5cc_mit_lineage_u2u \
+    /tmp/krb5cc_mit_c_u2u_host /tmp/mit-c.log
+docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/mit-c.pid)" 2>/dev/null || true'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',90),0.15)" 2>/dev/null; then
+        sleep 0.2
+        continue
+    fi
+    ok=1
+    break
+done
+[ "$ok" = 1 ]
+start_c /tmp/kdc-c-allow.conf /tmp/kdc-c-lineage-u2u.log
+wait_listen /tmp/kdc-c-lineage-u2u.log || {
+    docker exec "$NAME" cat /tmp/kdc-c-lineage-u2u.log 2>/dev/null || true
+    log "capaths.gate" "error" ',"error":"Rust C for lineage+U2U did not listen"'
+    exit 1
+}
+forge_rust_lineage /tmp/krb5cc_rust_lineage /tmp/krb5cc_rust_lineage_u2u
+docker exec -e KRB5_CONFIG=/tmp/s4u-c.conf "$NAME" \
+    kinit -k -t /tmp/rust-c.host.kt -c /tmp/krb5cc_rust_c_u2u_host host/svc.c.test@C.TEST
+expect_lineage_u2u "RUST_lineage_u2u" /tmp/krb5cc_rust_lineage_u2u \
+    /tmp/krb5cc_rust_c_u2u_host /tmp/kdc-c-lineage-u2u.log
+docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/kdc-c.pid)" 2>/dev/null || true'
 
 log "capaths.gate" "ok" \
     ",\"path\":\"A.TEST>B.TEST>C.TEST\",\"permitted\":true,\"rejected\":true,\"transited_tr_type\":${MIT_TR_TYPE},\"transited_contents\":\"${MIT_TR_CONTENTS}\",\"transited_policy_checked\":true,\"reject_bad_transit_false\":true,\"disable_transited_check\":true"

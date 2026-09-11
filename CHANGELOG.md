@@ -8,6 +8,12 @@ this project uses semantic versioning once a crate is published.
 
 ### W1-A′-2
 
+- **kdc.** PAC `UnsupportedChecksum` on a krbtgt header or krbtgt
+  second ticket wires 60 `GENERIC` (`KRB5_BAD_ENCTYPE` →
+  `errcode_to_protocol`). The privsvr-retry sentinel stays internal
+  14. diffsend 78 → 81: `tgs-pac-server-cksum-wrong-enctype`,
+  `u2u-2nd-ticket-pac-wrong-enctype`, `u2u-success-offered`;
+  `u2u-success` uses a distinct stkt session.
 - **kdc.** RBCD `s4u_allowed_from` is `name@REALM` (bare name = local
   realm at insert) and `allowed_to_delegate_from` compares the
   impersonator name and realm (`tgs_policy.c:753-756`,

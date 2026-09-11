@@ -287,7 +287,7 @@ fn run(
             let name = parse_name(sess, &a.name)?;
             let canon = name.unparse_with_realm(sess.realm());
             let done = if a.randkey {
-                sess.chrand(&name)
+                sess.chrand_etypes_keepold(&name, &a.etypes, a.keepold)
             } else {
                 let pw = a.pw.clone().map_or_else(password, Ok)?;
                 sess.change_password(&name, pw.as_bytes())
