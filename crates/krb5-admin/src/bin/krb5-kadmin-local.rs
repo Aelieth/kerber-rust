@@ -648,6 +648,10 @@ fn apply_optional_fields(
         sess.modify_attributes(name, Some(attrs))
             .map_err(|e| e.to_string())?;
     }
+    if a.max_life.is_some() || a.max_renewable_life.is_some() {
+        sess.modify_ticket_lives(name, a.max_life, a.max_renewable_life)
+            .map_err(|e| e.to_string())?;
+    }
     if let Some(pol) = &a.policy {
         sess.set_policy(name, pol).map_err(|e| e.to_string())?;
     }
@@ -692,6 +696,17 @@ mod tests {
         }
         let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
         assert!(q(&mut sess, "getprinc krbtgt/KERBER.TEST@AD.KERBER.TEST").is_ok());
+    }
+
+    #[test]
+    fn modprinc_maxrenewlife_writes_store() {
+        let (mut store, acl) = sess_pair();
+        {
+            let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+            q(&mut sess, "modprinc -maxrenewlife 1d user").unwrap();
+        }
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+        assert_eq!(store.get_name(&user).unwrap().max_renewable_life, 86_400);
     }
 
     #[test]

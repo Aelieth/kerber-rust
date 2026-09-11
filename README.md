@@ -64,7 +64,9 @@ The KDC's live at-rest file is MIT dump **version 7** (the stash holds the
 master key); `krb5-kadmind` speaks ONC RPC program 2112 with AUTH_GSSAPI
 flavor 300001. `krb5-config` is consumed end to end: the KDC applies
 `kdc.conf` ticket policy, and `kinit` / TGS referral chasing read
-`KRB5_CONFIG` then `/etc/krb5.conf`.
+`KRB5_CONFIG` then `/etc/krb5.conf`. An omitted realm
+`max_renewable_life` is 0 (a cap of 0), matching MIT `alt_prof.c`;
+the harness `kdc.conf` sets 7d.
 
 **Honest caveats, stated plainly:**
 

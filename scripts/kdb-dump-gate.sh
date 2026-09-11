@@ -414,4 +414,101 @@ KLIST_B2="$(docker exec -e KRB5_CONFIG=/tmp/kdb-krb5.conf "$NAME" klist)"
 echo "$KLIST_B2"
 echo "$KLIST_B2" | grep -F 'Default principal: a2@KERBER.TEST'
 
-log "kdb.dump.gate" "ok" ',"dump_version":7,"halves":"A+B","alias":"both directions"'
+echo "==== MIT dump max_renewable_life 0: kinit -r renew until = start (both KDCs) ===="
+docker exec "$NAME" kadmin.local -q 'addprinc -pw r0secret -maxrenewlife 0 rlife0' 2>&1 | grep -F 'Principal "rlife0@KERBER.TEST" created.'
+RLIFE0_P="$(docker exec "$NAME" kadmin.local -q 'getprinc rlife0')"
+echo "$RLIFE0_P"
+echo "$RLIFE0_P" | grep -E 'Maximum renewable life:' | grep -qE '0 days 00:00:00'
+docker exec -e KRB5_CONFIG=/tmp/kdb-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+if ! docker exec -e KRB5_CONFIG=/tmp/kdb-krb5.conf \
+    "$NAME" sh -c 'printf "r0secret\n" | kinit -r 7d rlife0@KERBER.TEST'; then
+    log "kdb.dump.gate" "error" ',"error":"MIT kinit -r rlife0 failed"'
+    exit 1
+fi
+RLIFE0_MIT="$(docker exec -e KRB5_CONFIG=/tmp/kdb-krb5.conf "$NAME" klist)"
+echo "$RLIFE0_MIT"
+R0_START="$(echo "$RLIFE0_MIT" | awk '/krbtgt\//{print $1, $2; exit}')"
+R0_REN="$(echo "$RLIFE0_MIT" | awk -F'renew until ' '/renew until/{print $2}' | awk -F, '{print $1}')"
+echo "mit_rlife0_start=$R0_START mit_rlife0_renew=$R0_REN"
+if date -d "$R0_START" +%s >/dev/null 2>&1 && date -d "$R0_REN" +%s >/dev/null 2>&1; then
+    R0_DELTA=$(($(date -d "$R0_REN" +%s) - $(date -d "$R0_START" +%s)))
+    echo "mit_rlife0_delta_secs=$R0_DELTA"
+    test "$R0_DELTA" -ge 0
+    test "$R0_DELTA" -le 120
+fi
+docker exec "$NAME" kdb5_util dump /tmp/rlife0.dump
+docker exec "$NAME" grep -F 'rlife0@KERBER.TEST' /tmp/rlife0.dump | grep -qE '	0	[0-9]+	0	'
+docker exec "$NAME" sh -c '
+for comm in /proc/[0-9]*/comm; do
+    [ -f "$comm" ] || continue
+    read -r name < "$comm" || continue
+    if [ "$name" = "krb5kdc" ]; then
+        pid=${comm#/proc/}
+        pid=${pid%/comm}
+        kill -9 "$pid" 2>/dev/null || true
+    fi
+done
+'
+free=0
+for _ in $(seq 1 40); do
+    if ! docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.2)" 2>/dev/null; then
+        free=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$free" != 1 ]; then
+    log "kdb.dump.gate" "error" ',"error":"MIT krb5kdc still bound :88 after rlife0 dump"'
+    exit 1
+fi
+LOAD_R0="$(docker exec \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_DB=/tmp/rlife0-principal \
+    -e KRB5_KDC_STASH=/tmp/rlife0-stash \
+    "$NAME" /tmp/krb5-kdb load /tmp/rlife0.dump)"
+echo "$LOAD_R0"
+echo "$LOAD_R0" | grep -q 'ok load version=7'
+GET_R0="$(docker exec \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_DB=/tmp/rlife0-principal \
+    -e KRB5_KDC_STASH=/tmp/rlife0-stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'getprinc rlife0')"
+echo "$GET_R0"
+echo "$GET_R0" | grep -E 'Maximum renewable life:' | grep -qE '0 days 00:00:00'
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/rlife0-principal \
+    -e KRB5_KDC_STASH=/tmp/rlife0-stash \
+    "$NAME" sh -c '/tmp/krb5-kdc 127.0.0.1:88 >/tmp/kdc-rlife0.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/kdc-rlife0.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kdc-rlife0.log >&2 || true
+    log "kdb.dump.gate" "error" ',"error":"rust kdc did not listen on rlife0 dump"'
+    exit 1
+fi
+docker exec -e KRB5_CONFIG=/tmp/kdb-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+if ! docker exec -e KRB5_CONFIG=/tmp/kdb-krb5.conf \
+    "$NAME" sh -c 'printf "r0secret\n" | kinit -r 7d rlife0@KERBER.TEST'; then
+    docker exec "$NAME" cat /tmp/kdc-rlife0.log >&2 || true
+    log "kdb.dump.gate" "error" ',"error":"rust kinit -r rlife0 after MIT dump load failed"'
+    exit 1
+fi
+RLIFE0_RUST="$(docker exec -e KRB5_CONFIG=/tmp/kdb-krb5.conf "$NAME" klist)"
+echo "$RLIFE0_RUST"
+RR_START="$(echo "$RLIFE0_RUST" | awk '/krbtgt\//{print $1, $2; exit}')"
+RR_REN="$(echo "$RLIFE0_RUST" | awk -F'renew until ' '/renew until/{print $2}' | awk -F, '{print $1}')"
+echo "rust_rlife0_start=$RR_START rust_rlife0_renew=$RR_REN"
+if date -d "$RR_START" +%s >/dev/null 2>&1 && date -d "$RR_REN" +%s >/dev/null 2>&1; then
+    RR_DELTA=$(($(date -d "$RR_REN" +%s) - $(date -d "$RR_START" +%s)))
+    echo "rust_rlife0_delta_secs=$RR_DELTA"
+    test "$RR_DELTA" -ge 0
+    test "$RR_DELTA" -le 120
+fi
+
+log "kdb.dump.gate" "ok" ',"dump_version":7,"halves":"A+B","alias":"both directions","max_rlife_zero":true'

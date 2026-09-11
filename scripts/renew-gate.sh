@@ -303,5 +303,185 @@ echo "$MIT_PBITS" | grep -q P || {
     exit 1
 }
 
-log "renew.gate" "ok" ',"kinit_r":true,"renew_till_preserved":true,"disallow_strips":true,"proxiable":true,"non_renewable":true'
+echo "==== max_renewable_life 0: renew until = start; kinit -R is 32 (rust) ===="
+kadmin_q 'modprinc -maxrenewlife 0 renewuser'
+ZERO_P="$(kadmin_q 'getprinc renewuser')"
+echo "$ZERO_P"
+echo "$ZERO_P" | grep -E 'Maximum renewable life:' | grep -qE '0 days 00:00:00'
+docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+if ! docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf \
+    "$NAME" sh -c 'printf "renew-secret\n" | kinit -r 7d renewuser@KERBER.TEST'; then
+    docker exec "$NAME" cat /tmp/kdc.log >&2 || true
+    log "renew.gate" "error" ',"error":"kinit -r after maxrenewlife 0 failed"'
+    exit 1
+fi
+ZERO="$(docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf "$NAME" klist -f)"
+echo "$ZERO"
+ZSTART="$(echo "$ZERO" | awk '/krbtgt\//{print $1, $2; exit}')"
+ZREN="$(echo "$ZERO" | awk -F'renew until ' '/renew until/{print $2}' | awk -F, '{print $1}')"
+echo "zero_start=$ZSTART zero_renew=$ZREN"
+if date -d "$ZSTART" +%s >/dev/null 2>&1 && date -d "$ZREN" +%s >/dev/null 2>&1; then
+    ZDELTA=$(($(date -d "$ZREN" +%s) - $(date -d "$ZSTART" +%s)))
+    echo "zero_renew_delta_secs=$ZDELTA"
+    test "$ZDELTA" -ge 0
+    test "$ZDELTA" -le 120
+fi
+sleep 2
+set +e
+ZAGAIN="$(docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf "$NAME" kinit -R 2>&1)"
+set -e
+echo "$ZAGAIN"
+echo "$ZAGAIN" | grep -qiE 'expired|TKT_EXPIRED' || {
+    docker exec "$NAME" cat /tmp/kdc.log >&2 || true
+    log "renew.gate" "error" ',"error":"kinit -R after maxrenewlife 0 did not expire"'
+    exit 1
+}
+
+echo "==== max_renewable_life 1 day (rust kadm5 write) ===="
+kadmin_q 'modprinc -maxrenewlife "1 day" renewuser'
+ONE_P="$(kadmin_q 'getprinc renewuser')"
+echo "$ONE_P"
+echo "$ONE_P" | grep -E 'Maximum renewable life:' | grep -qE '1 day 00:00:00'
+docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+if ! docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf \
+    "$NAME" sh -c 'printf "renew-secret\n" | kinit -r 7d renewuser@KERBER.TEST'; then
+    docker exec "$NAME" cat /tmp/kdc.log >&2 || true
+    log "renew.gate" "error" ',"error":"kinit -r after maxrenewlife 1d failed"'
+    exit 1
+fi
+ONED="$(docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf "$NAME" klist -f)"
+echo "$ONED"
+OSTART="$(echo "$ONED" | awk '/krbtgt\//{print $1, $2; exit}')"
+OREN="$(echo "$ONED" | awk -F'renew until ' '/renew until/{print $2}' | awk -F, '{print $1}')"
+echo "one_start=$OSTART one_renew=$OREN"
+if date -d "$OSTART" +%s >/dev/null 2>&1 && date -d "$OREN" +%s >/dev/null 2>&1; then
+    ODELTA=$(($(date -d "$OREN" +%s) - $(date -d "$OSTART" +%s)))
+    echo "one_renew_delta_secs=$ODELTA"
+    test "$ODELTA" -ge 85200
+    test "$ODELTA" -le 87600
+fi
+
+echo "==== -requires_preauth TGT has no A; +requires_preauth host is NO PREAUTH (rust) ===="
+kadmin_q 'modprinc -requires_preauth renewuser'
+kadmin_q 'modprinc +requires_preauth host/testhost.kerber.test'
+docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+if ! docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf \
+    "$NAME" sh -c 'printf "renew-secret\n" | kinit renewuser@KERBER.TEST'; then
+    docker exec "$NAME" cat /tmp/kdc.log >&2 || true
+    log "renew.gate" "error" ',"error":"kinit after -requires_preauth failed"'
+    exit 1
+fi
+NA="$(docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf "$NAME" klist -f)"
+echo "$NA"
+NABITS="$(echo "$NA" | awk -F'Flags: ' '/Flags:/{print $2}' | tail -1 | tr -d '[:space:]')"
+echo "nabits=$NABITS"
+echo "$NABITS" | grep -qv A || {
+    log "renew.gate" "error" ',"error":"rust -requires_preauth TGT still has A"'
+    exit 1
+}
+set +e
+NOPA="$(docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf \
+    "$NAME" kvno host/testhost.kerber.test 2>&1)"
+set -e
+echo "$NOPA"
+echo "$NOPA" | grep -qiE 'Generic error|KDC policy rejects request|NO PREAUTH' || {
+    docker exec "$NAME" cat /tmp/kdc.log >&2 || true
+    log "renew.gate" "error" ',"error":"rust kvno against +requires_preauth host did not fail"'
+    exit 1
+}
+docker exec "$NAME" grep -q 'NO PREAUTH' /tmp/kdc.log || {
+    docker exec "$NAME" cat /tmp/kdc.log >&2 || true
+    log "renew.gate" "error" ',"error":"rust KDC log missing NO PREAUTH"'
+    exit 1
+}
+
+echo "==== max_renewable_life 0 / 1 day / no A (mit oracle) ===="
+docker exec "$MITNAME" kadmin.local -q 'modprinc -maxrenewlife 0 user'
+MZERO_P="$(docker exec "$MITNAME" kadmin.local -q 'getprinc user')"
+echo "$MZERO_P"
+echo "$MZERO_P" | grep -E 'Maximum renewable life:' | grep -qE '0 days 00:00:00'
+docker exec -e KRB5_CONFIG=/tmp/renew-mit-oracle.conf "$MITNAME" kdestroy -A >/dev/null 2>&1 || true
+if ! docker exec -e KRB5_CONFIG=/tmp/renew-mit-oracle.conf \
+    "$MITNAME" sh -c 'printf "userpassword\n" | kinit -r 7d user@KERBER.TEST'; then
+    docker logs "$MITNAME" >&2 || true
+    log "renew.gate" "error" ',"error":"MIT kinit -r after maxrenewlife 0 failed"'
+    exit 1
+fi
+MZERO="$(docker exec -e KRB5_CONFIG=/tmp/renew-mit-oracle.conf "$MITNAME" klist -f)"
+echo "$MZERO"
+MZSTART="$(echo "$MZERO" | awk '/krbtgt\//{print $1, $2; exit}')"
+MZREN="$(echo "$MZERO" | awk -F'renew until ' '/renew until/{print $2}' | awk -F, '{print $1}')"
+echo "mit_zero_start=$MZSTART mit_zero_renew=$MZREN"
+if date -d "$MZSTART" +%s >/dev/null 2>&1 && date -d "$MZREN" +%s >/dev/null 2>&1; then
+    MZDELTA=$(($(date -d "$MZREN" +%s) - $(date -d "$MZSTART" +%s)))
+    echo "mit_zero_renew_delta_secs=$MZDELTA"
+    test "$MZDELTA" -ge 0
+    test "$MZDELTA" -le 120
+fi
+sleep 2
+set +e
+MZAGAIN="$(docker exec -e KRB5_CONFIG=/tmp/renew-mit-oracle.conf "$MITNAME" kinit -R 2>&1)"
+set -e
+echo "$MZAGAIN"
+echo "$MZAGAIN" | grep -qiE 'expired|TKT_EXPIRED' || {
+    log "renew.gate" "error" ',"error":"MIT kinit -R after maxrenewlife 0 did not expire"'
+    exit 1
+}
+docker exec "$MITNAME" kadmin.local -q 'modprinc -maxrenewlife "1 day" user'
+MONE_P="$(docker exec "$MITNAME" kadmin.local -q 'getprinc user')"
+echo "$MONE_P"
+echo "$MONE_P" | grep -E 'Maximum renewable life:' | grep -qE '1 day 00:00:00'
+docker exec -e KRB5_CONFIG=/tmp/renew-mit-oracle.conf "$MITNAME" kdestroy -A >/dev/null 2>&1 || true
+if ! docker exec -e KRB5_CONFIG=/tmp/renew-mit-oracle.conf \
+    "$MITNAME" sh -c 'printf "userpassword\n" | kinit -r 7d user@KERBER.TEST'; then
+    docker logs "$MITNAME" >&2 || true
+    log "renew.gate" "error" ',"error":"MIT kinit -r after maxrenewlife 1d failed"'
+    exit 1
+fi
+MONED="$(docker exec -e KRB5_CONFIG=/tmp/renew-mit-oracle.conf "$MITNAME" klist -f)"
+echo "$MONED"
+MOSTART="$(echo "$MONED" | awk '/krbtgt\//{print $1, $2; exit}')"
+MOREN="$(echo "$MONED" | awk -F'renew until ' '/renew until/{print $2}' | awk -F, '{print $1}')"
+echo "mit_one_start=$MOSTART mit_one_renew=$MOREN"
+if date -d "$MOSTART" +%s >/dev/null 2>&1 && date -d "$MOREN" +%s >/dev/null 2>&1; then
+    MODELT=$(($(date -d "$MOREN" +%s) - $(date -d "$MOSTART" +%s)))
+    echo "mit_one_renew_delta_secs=$MODELT"
+    test "$MODELT" -ge 85200
+    test "$MODELT" -le 87600
+fi
+docker exec "$MITNAME" kadmin.local -q 'modprinc -requires_preauth user'
+docker exec "$MITNAME" kadmin.local -q 'modprinc +requires_preauth host/testhost.kerber.test'
+docker exec -e KRB5_CONFIG=/tmp/renew-mit-oracle.conf "$MITNAME" kdestroy -A >/dev/null 2>&1 || true
+if ! docker exec -e KRB5_CONFIG=/tmp/renew-mit-oracle.conf \
+    "$MITNAME" sh -c 'printf "userpassword\n" | kinit user@KERBER.TEST'; then
+    docker logs "$MITNAME" >&2 || true
+    log "renew.gate" "error" ',"error":"MIT kinit after -requires_preauth failed"'
+    exit 1
+fi
+MNA="$(docker exec -e KRB5_CONFIG=/tmp/renew-mit-oracle.conf "$MITNAME" klist -f)"
+echo "$MNA"
+MNABITS="$(echo "$MNA" | awk -F'Flags: ' '/Flags:/{print $2}' | tail -1 | tr -d '[:space:]')"
+echo "mit_nabits=$MNABITS"
+echo "$MNABITS" | grep -qv A || {
+    log "renew.gate" "error" ',"error":"MIT -requires_preauth TGT still has A"'
+    exit 1
+}
+set +e
+MNOPA="$(docker exec -e KRB5_CONFIG=/tmp/renew-mit-oracle.conf \
+    "$MITNAME" kvno host/testhost.kerber.test 2>&1)"
+set -e
+echo "$MNOPA"
+echo "$MNOPA" | grep -qiE 'Generic error|KDC policy rejects request|NO PREAUTH' || {
+    log "renew.gate" "error" ',"error":"MIT kvno against +requires_preauth host did not fail"'
+    exit 1
+}
+MITLOG="$(docker exec "$MITNAME" sh -c 'cat /var/log/krb5kdc.log /tmp/krb5kdc.log 2>/dev/null; true')"
+MITLOG="$MITLOG$(docker logs "$MITNAME" 2>&1)"
+echo "$MITLOG$MNOPA" | grep -q 'NO PREAUTH' || {
+    echo "$MITLOG" >&2
+    log "renew.gate" "error" ',"error":"MIT KDC log and kvno missing NO PREAUTH"'
+    exit 1
+}
+
+log "renew.gate" "ok" ',"kinit_r":true,"renew_till_preserved":true,"disallow_strips":true,"proxiable":true,"non_renewable":true,"max_rlife_zero":true,"pre_authent":true'
 exit 0

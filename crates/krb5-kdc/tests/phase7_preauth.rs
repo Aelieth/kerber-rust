@@ -261,7 +261,7 @@ fn every_ticket_sets_enc_pa_rep_flag_without_padata() {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let attrs = store.get_name(&cname).unwrap().attributes & !krb5_kdc::KDB_REQUIRES_PRE_AUTH;
     store
-        .apply_admin_fields(&cname, Some(attrs), None, None, None, None, false)
+        .apply_admin_fields(&cname, Some(attrs), None, None, None, None, false, None)
         .unwrap();
     let key = user_key();
     let req = as_req(cname, TEST_REALM, 207, None).unwrap();
@@ -398,7 +398,7 @@ fn as_rep_enc_part_carries_no_kvno_like_mit() {
     // A no-preauth AS keeps skip_timestamp false, so it exercises the reply kvno.
     let attrs = store.get_name(&cname).unwrap().attributes & !krb5_kdc::KDB_REQUIRES_PRE_AUTH;
     store
-        .apply_admin_fields(&cname, Some(attrs), None, None, None, None, false)
+        .apply_admin_fields(&cname, Some(attrs), None, None, None, None, false, None)
         .unwrap();
     let req = as_req(cname, TEST_REALM, 206, None).unwrap();
     let bytes = krb5_kdc::handle_request(&store, &encode(&req).unwrap()).expect("reply");
@@ -2831,7 +2831,7 @@ fn as_disallow_svr_is_service_not_allowed() {
     let host = documented_host();
     let attrs = store.get_name(&host).unwrap().attributes | KDB_DISALLOW_SVR;
     store
-        .apply_admin_fields(&host, Some(attrs), None, None, None, None, false)
+        .apply_admin_fields(&host, Some(attrs), None, None, None, None, false, None)
         .unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let req = as_req_sname(cname, TEST_REALM, 416, None, host, pref_etypes()).unwrap();
@@ -3628,7 +3628,7 @@ fn or_host_attr(store: &mut PrincipalStore, bit: u32) {
     let host = documented_host();
     let a = store.get_name(&host).unwrap().attributes | bit;
     store
-        .apply_admin_fields(&host, Some(a), None, None, None, None, false)
+        .apply_admin_fields(&host, Some(a), None, None, None, None, false, None)
         .unwrap();
 }
 
@@ -3842,7 +3842,7 @@ fn s4u2self_disabled_for_user_is_revoked() {
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let a = store.get_name(&admin).unwrap().attributes | KDB_DISALLOW_ALL_TIX;
     store
-        .apply_admin_fields(&admin, Some(a), None, None, None, None, false)
+        .apply_admin_fields(&admin, Some(a), None, None, None, None, false, None)
         .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &s4u2self_tgs(&store, admin, 620)).unwrap_err();
     assert_eq!(s4u_code(err), err::CLIENT_REVOKED);
@@ -3853,7 +3853,7 @@ fn s4u2self_expired_for_user_is_name_exp() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     store
-        .apply_admin_fields(&admin, None, None, Some(1), None, None, false)
+        .apply_admin_fields(&admin, None, None, Some(1), None, None, false, None)
         .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &s4u2self_tgs(&store, admin, 630)).unwrap_err();
     assert_eq!(s4u_code(err), err::NAME_EXP);

@@ -119,9 +119,11 @@ Rust stores the strings and does not change pacing. `udp_preference_limit`
 
 **Renewable default, admin-overridable:** ticket renew time is the min of
 the request (`-r`, else RENEWABLE-OK till), the **krbtgt** entry, the
-**client** entry, and kdc.conf realm `max_renewable_life` when that key
-is **explicitly set** (unset ≠ 0). New principals copy the realm policy
-value (7d) onto `max_renewable_life` so `getprinc` is not 0.
+**client** entry, and kdc.conf realm `max_renewable_life`. An omitted
+`max_renewable_life` is 0 (`alt_prof.c:576-577`); 0 is a cap of 0, not
+"use realm policy". New principals copy the realm value. The harness
+`kdc.conf` keeps `max_renewable_life = 7d` so existing gates stay on
+a 7d realm. `modprinc -maxrenewlife` writes `KADM5_MAX_RLIFE`.
 
 ## Not external oracles
 

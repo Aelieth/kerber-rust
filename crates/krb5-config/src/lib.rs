@@ -119,10 +119,8 @@ pub struct KdcConf {
     pub realm: String,
     /// Maximum ticket lifetime in seconds (default 10 hours).
     pub max_life: u64,
-    /// Maximum renewable lifetime in seconds (default 7 days).
+    /// Maximum renewable lifetime in seconds (omitted = 0, `alt_prof.c:576-577`).
     pub max_renewable_life: u64,
-    /// Whether `max_renewable_life` was present in kdc.conf (unset ≠ 0).
-    pub max_renewable_life_set: bool,
     /// Database path.
     pub database_name: Option<PathBuf>,
     /// ACL file.
@@ -169,8 +167,7 @@ impl Default for KdcConf {
             kdc_tcp_listen: vec!["127.0.0.1:88".into()],
             realm: "KERBER.TEST".into(),
             max_life: 10 * 3600,
-            max_renewable_life: 7 * 24 * 3600,
-            max_renewable_life_set: false,
+            max_renewable_life: 0,
             database_name: None,
             acl_file: None,
             key_stash_file: None,
@@ -738,7 +735,6 @@ fn parse_kdc_realm_line(conf: &mut KdcConf, line: &str) {
         "max_life" => conf.max_life = parse_duration_secs(&v).unwrap_or(conf.max_life),
         "max_renewable_life" => {
             conf.max_renewable_life = parse_duration_secs(&v).unwrap_or(conf.max_renewable_life);
-            conf.max_renewable_life_set = true;
         }
         "database_name" => conf.database_name = Some(PathBuf::from(v)),
         "acl_file" => conf.acl_file = Some(PathBuf::from(v)),
@@ -1536,6 +1532,7 @@ mod tests {
         )
         .unwrap();
         assert!(!lax.reject_bad_transit);
+        assert_eq!(lax.max_renewable_life, 0);
         assert_eq!(mit.max_life, 36000);
         assert_eq!(mit.max_renewable_life, 7 * 86400);
         assert_eq!(

@@ -353,7 +353,9 @@ fn bootstrap_test_realm() -> PrincipalStore {
             eprintln!("krb5-kdc: host missing after create");
             std::process::exit(1);
         };
-        if let Err(e) = store.apply_admin_fields(&host, Some(a), None, None, None, None, false) {
+        if let Err(e) =
+            store.apply_admin_fields(&host, Some(a), None, None, None, None, false, None)
+        {
             eprintln!("krb5-kdc: ok_to_auth_as_delegate: {e}");
             std::process::exit(1);
         }
@@ -399,7 +401,9 @@ fn bootstrap_test_realm() -> PrincipalStore {
             eprintln!("krb5-kdc: host missing after create");
             std::process::exit(1);
         };
-        if let Err(e) = store.apply_admin_fields(&host, Some(a), None, None, None, None, false) {
+        if let Err(e) =
+            store.apply_admin_fields(&host, Some(a), None, None, None, None, false, None)
+        {
             eprintln!("krb5-kdc: disallow_dup_skey: {e}");
             std::process::exit(1);
         }
@@ -504,7 +508,9 @@ fn bootstrap_test_realm() -> PrincipalStore {
             eprintln!("krb5-kdc: expired user: {e}");
             std::process::exit(1);
         }
-        if let Err(e) = store.apply_admin_fields(&expired, None, None, None, Some(1), None, false) {
+        if let Err(e) =
+            store.apply_admin_fields(&expired, None, None, None, Some(1), None, false, None)
+        {
             eprintln!("krb5-kdc: expire user: {e}");
             std::process::exit(1);
         }
@@ -534,9 +540,17 @@ fn apply_test_disallow(store: &mut PrincipalStore, env: &str, flag: u32) {
         eprintln!("krb5-kdc: {env}: {spec} missing");
         std::process::exit(1);
     };
-    if let Err(e) =
-        store.apply_admin_fields_in(&name, &princ_realm, Some(a), None, None, None, None, false)
-    {
+    if let Err(e) = store.apply_admin_fields_in(
+        &name,
+        &princ_realm,
+        Some(a),
+        None,
+        None,
+        None,
+        None,
+        false,
+        None,
+    ) {
         eprintln!("krb5-kdc: {env}: {e}");
         std::process::exit(1);
     }

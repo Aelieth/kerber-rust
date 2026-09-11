@@ -554,7 +554,8 @@ fn issue_as_body(
     let now = KerberosTime::now();
     let mut starttime = now.clone();
     let mut flags = get_ticket_flags(&body.kdc_options, Some(&client), &server, None)
-        .with_bit(flag_bit::PRE_AUTHENT, true);
+        .with_bit(flag_bit::PRE_AUTHENT, skip_timestamp)
+        .with_bit(flag_bit::HW_AUTHENT, hw_preauth);
     if let Some(from) = &body.from
         && from.unix_seconds() > now.unix_seconds()
         && body.kdc_options.bit(flag_bit::POSTDATED)
@@ -1711,13 +1712,16 @@ fn check_tgs_constraints_skeleton(
     {
         return Err(proto(err::BADOPTION, status::TGT_NOT_POSTDATABLE));
     }
+    if validate && !enc_tkt.flags.invalid() {
+        return Err(proto(err::BADOPTION, status::VALIDATE_VALID_TICKET));
+    }
+    if renew && !enc_tkt.flags.renewable() {
+        return Err(proto(err::BADOPTION, status::TICKET_NOT_RENEWABLE));
+    }
     if enc_tkt.flags.invalid() && !validate {
         return Err(proto(err::TKT_NYV, status::TICKET_NOT_VALID));
     }
     if validate {
-        if !enc_tkt.flags.invalid() {
-            return Err(proto(err::BADOPTION, status::VALIDATE_VALID_TICKET));
-        }
         let now = KerberosTime::now();
         let start = enc_tkt.starttime.as_ref().unwrap_or(&enc_tkt.authtime);
         if now.delta_seconds(start) < 0 {
@@ -1725,9 +1729,6 @@ fn check_tgs_constraints_skeleton(
         }
     }
     if renew {
-        if !enc_tkt.flags.renewable() {
-            return Err(proto(err::BADOPTION, status::TICKET_NOT_RENEWABLE));
-        }
         let now = KerberosTime::now();
         match &enc_tkt.renew_till {
             Some(till) if till.unix_seconds() <= now.unix_seconds() => {
@@ -2907,13 +2908,10 @@ fn kdc_get_ticket_renewtime(
     {
         rsec = rsec.min(till.unix_seconds());
     }
-    let mut max_rlife = store.policy().max_renewable_life;
-    if server.max_renewable_life > 0 {
-        max_rlife = max_rlife.min(server.max_renewable_life);
-    }
-    if let Some(c) = client
-        && c.max_renewable_life > 0
-    {
+    let mut max_rlife = server
+        .max_renewable_life
+        .min(store.policy().max_renewable_life);
+    if let Some(c) = client {
         max_rlife = max_rlife.min(c.max_renewable_life);
     }
     if let Ok(cap) = starttime.add_seconds(i64::try_from(max_rlife).unwrap_or(i64::MAX)) {

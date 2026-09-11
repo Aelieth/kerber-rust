@@ -127,7 +127,7 @@ fn pac_mismatch_tgt(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs) -> Tick
 fn or_attrs(store: &mut PrincipalStore, name: &PrincipalName, bits: u32) {
     let attrs = store.get_name(name).unwrap().attributes | bits;
     store
-        .apply_admin_fields(name, Some(attrs), None, None, None, None, false)
+        .apply_admin_fields(name, Some(attrs), None, None, None, None, false, None)
         .unwrap();
 }
 

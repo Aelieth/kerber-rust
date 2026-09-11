@@ -117,6 +117,7 @@ DIFFSEND_CASES = frozenset(
         "tgs-proxy-on-non-p-tgt",
         "tgs-postdate-on-non-postdatable",
         "tgs-postdated-is-invalid",
+        "tgs-validate-invalid-non-renewable",
         "tgs-no-preauth-flag",
         "tgs-hw-preauth-flag",
         "tgs-nyv-inside-skew",

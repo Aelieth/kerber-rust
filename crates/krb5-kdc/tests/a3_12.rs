@@ -40,7 +40,7 @@ fn user_as(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
 fn or_attr(store: &mut PrincipalStore, name: &PrincipalName, bit: u32) {
     let a = store.get_name(name).unwrap().attributes | bit;
     store
-        .apply_admin_fields(name, Some(a), None, None, None, None, false)
+        .apply_admin_fields(name, Some(a), None, None, None, None, false, None)
         .unwrap();
 }
 
@@ -135,7 +135,7 @@ fn tgs_caps_endtime_at_client_max_life() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 12021);
     store
-        .apply_admin_fields(&cname(), None, Some(60), None, None, None, false)
+        .apply_admin_fields(&cname(), None, Some(60), None, None, None, false, None)
         .unwrap();
     let tgs = tgs_req_ex(
         issued.rep.0.ticket.clone(),

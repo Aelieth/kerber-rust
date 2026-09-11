@@ -779,7 +779,11 @@ fn write_princ_record(
         }
     };
     let max_life = lifetime(p.max_life, store.policy.max_life);
-    let max_rlife = lifetime(p.max_renewable_life, store.policy.max_renewable_life);
+    let max_rlife = if p.alias_target().is_some() {
+        0
+    } else {
+        u32::try_from(p.max_renewable_life).unwrap_or(u32::MAX)
+    };
     let mut tl = if p.tl_data.is_empty() {
         synthesize_tl(
             &p.realm,

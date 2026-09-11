@@ -241,9 +241,6 @@ impl KdcPreauth for EncTsMod {
         _body_der: &[u8],
         cname: &PrincipalName,
     ) -> Result<Option<PreauthAction>, Error> {
-        if !client.requires_preauth {
-            return Ok(None);
-        }
         let Some(blob) = crate::issue::extract_enc_timestamp(padata) else {
             return Ok(None);
         };

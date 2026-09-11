@@ -146,7 +146,7 @@ fn s4u2self_pw_expired_user_still_issues() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     store
-        .apply_admin_fields(&admin, None, None, None, Some(1), None, false)
+        .apply_admin_fields(&admin, None, None, None, Some(1), None, false, None)
         .unwrap();
     let tgt = host_tgt(&store, 7220);
     let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).unwrap();

@@ -228,7 +228,7 @@ pub struct Principal {
     pub pw_expire: u32,
     /// MIT KDB attributes bitfield (passthrough for dump/load).
     pub attributes: u32,
-    /// Max renewable life in seconds (0 = use realm policy).
+    /// Max renewable life in seconds (0 is a cap of 0).
     pub max_renewable_life: u64,
     /// Principal expiration unix seconds (0 = never).
     pub expiration: u32,
@@ -397,10 +397,8 @@ impl NamedPolicy {
 pub struct Policy {
     /// Max ticket lifetime seconds.
     pub max_life: u64,
-    /// Max renewable lifetime seconds.
+    /// Max renewable lifetime seconds (MIT `alt_prof.c`: omitted = 0).
     pub max_renewable_life: u64,
-    /// Whether kdc.conf set `max_renewable_life` (unset ≠ 0).
-    pub max_renewable_life_set: bool,
     /// Clock skew seconds.
     pub skew: i64,
     /// Allow weak etypes.
@@ -433,8 +431,7 @@ impl Default for Policy {
     fn default() -> Self {
         Self {
             max_life: 10 * 3600,
-            max_renewable_life: 7 * 24 * 3600,
-            max_renewable_life_set: false,
+            max_renewable_life: 0,
             skew: 300,
             allow_weak_crypto: false,
             allow_rc4: false,
@@ -954,7 +951,6 @@ impl PrincipalStore {
     pub fn apply_kdc_conf(&mut self, conf: &krb5_config::KdcConf) -> Result<(), Error> {
         self.policy.max_life = conf.max_life;
         self.policy.max_renewable_life = conf.max_renewable_life;
-        self.policy.max_renewable_life_set = conf.max_renewable_life_set;
         if let Some(v) = conf.allow_weak_crypto {
             self.policy.allow_weak_crypto = v;
         }
@@ -1125,9 +1121,19 @@ impl PrincipalStore {
         admin_password: &[u8],
     ) -> Result<Self, Error> {
         let mut store = Self::new(realm);
+        store.policy.max_renewable_life = 7 * 24 * 3600;
         store.insert_randkey(&PrincipalName::krbtgt(realm), &randkey_etypes())?;
         let tgt = PrincipalName::krbtgt(realm);
-        store.apply_admin_fields(&tgt, Some(KDB_LOCKDOWN_KEYS), None, None, None, None, false)?;
+        store.apply_admin_fields(
+            &tgt,
+            Some(KDB_LOCKDOWN_KEYS),
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+        )?;
         store.insert_password(
             &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [user]),
             user_password,
@@ -2393,6 +2399,7 @@ impl PrincipalStore {
         pw_expire: Option<u32>,
         policy: Option<String>,
         clear_policy: bool,
+        max_renewable_life: Option<u64>,
     ) -> Result<(), Error> {
         let realm = self.realm.clone();
         self.apply_admin_fields_in(
@@ -2404,6 +2411,7 @@ impl PrincipalStore {
             pw_expire,
             policy,
             clear_policy,
+            max_renewable_life,
         )
     }
 
@@ -2423,6 +2431,7 @@ impl PrincipalStore {
         pw_expire: Option<u32>,
         policy: Option<String>,
         clear_policy: bool,
+        max_renewable_life: Option<u64>,
     ) -> Result<(), Error> {
         let id = self.canonical_id(name, princ_realm)?;
         let apply_max = policy.is_some() && !clear_policy && pw_expire.is_none();
@@ -2435,6 +2444,9 @@ impl PrincipalStore {
             }
             if let Some(m) = max_life {
                 p.max_life = m;
+            }
+            if let Some(m) = max_renewable_life {
+                p.max_renewable_life = m;
             }
             if let Some(e) = expiration {
                 p.expiration = e;
@@ -3285,7 +3297,16 @@ mod tests {
         store.put_policy(pol);
         store.set_last_pwd_unix(&user, 1_000_000);
         store
-            .apply_admin_fields(&user, None, None, None, None, Some("life".into()), false)
+            .apply_admin_fields(
+                &user,
+                None,
+                None,
+                None,
+                None,
+                Some("life".into()),
+                false,
+                None,
+            )
             .unwrap();
         let after = store.get_name(&user).unwrap();
         assert_eq!(after.pw_expire, 1_000_000 + 3600);

@@ -250,7 +250,7 @@ fn tgs_disallow_svr_service_header_is_process_tgs() {
     let host = documented_host();
     let attrs = store.get_name(&host).unwrap().attributes | KDB_DISALLOW_SVR;
     store
-        .apply_admin_fields(&host, Some(attrs), None, None, None, None, false)
+        .apply_admin_fields(&host, Some(attrs), None, None, None, None, false, None)
         .unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let renew = tgs_req_ex(

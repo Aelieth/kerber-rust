@@ -76,6 +76,7 @@ fn export_keytab_lockdown_is_denied() {
             None,
             None,
             false,
+            None,
         )
         .expect("lockdown");
     let err = store
@@ -89,7 +90,16 @@ fn export_keytab_local_bypasses_lockdown() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     let tgt = PrincipalName::krbtgt(TEST_REALM);
     store
-        .apply_admin_fields(&tgt, Some(KDB_LOCKDOWN_KEYS), None, None, None, None, false)
+        .apply_admin_fields(
+            &tgt,
+            Some(KDB_LOCKDOWN_KEYS),
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+        )
         .expect("lockdown krbtgt");
     let err = store
         .export_keytab(&acl, &documented_admin_id(), &tgt)
@@ -992,7 +1002,7 @@ fn as_rejects_expired_principal_before_expired_password() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     store
-        .apply_admin_fields(&cname, None, None, Some(1), Some(1), None, false)
+        .apply_admin_fields(&cname, None, None, Some(1), Some(1), None, false, None)
         .unwrap();
     let err = krb5_kdc::issue_as(&store, &user_as_req(41)).unwrap_err();
     assert_eq!(proto_code(err), err::NAME_EXP);
@@ -1008,7 +1018,7 @@ fn as_rejects_expired_password_unless_pwchange_service() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     store
-        .apply_admin_fields(&cname, None, None, Some(0), Some(1), None, false)
+        .apply_admin_fields(&cname, None, None, Some(0), Some(1), None, false, None)
         .unwrap();
     let err = krb5_kdc::issue_as(&store, &user_as_req(43)).unwrap_err();
     assert_eq!(proto_code(err), err::KEY_EXPIRED);
@@ -1208,7 +1218,7 @@ fn as_zero_expiration_still_issues() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     store
-        .apply_admin_fields(&cname, None, None, Some(0), Some(0), None, false)
+        .apply_admin_fields(&cname, None, None, Some(0), Some(0), None, false, None)
         .unwrap();
     krb5_kdc::issue_as(&store, &user_as_req(45)).expect("0 = never");
     store
@@ -1220,6 +1230,7 @@ fn as_zero_expiration_still_issues() {
             Some(u32::MAX),
             None,
             false,
+            None,
         )
         .unwrap();
     krb5_kdc::issue_as(&store, &user_as_req(46)).expect("future still issues");
@@ -1231,14 +1242,14 @@ fn tgs_issues_after_client_expires() {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let issued = krb5_kdc::issue_as(&store, &user_as_req(47)).expect("AS while unexpired");
     store
-        .apply_admin_fields(&cname, None, None, Some(1), None, None, false)
+        .apply_admin_fields(&cname, None, None, Some(1), None, None, false, None)
         .unwrap();
     krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 48)).expect("TGS after NAME_EXP");
 
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let issued = krb5_kdc::issue_as(&store, &user_as_req(49)).expect("AS while unexpired");
     store
-        .apply_admin_fields(&cname, None, None, None, Some(1), None, false)
+        .apply_admin_fields(&cname, None, None, None, Some(1), None, false, None)
         .unwrap();
     krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 50)).expect("TGS after KEY_EXPIRED");
 }
@@ -1249,7 +1260,7 @@ fn tgs_rejects_expired_server() {
     let host = documented_host();
     let issued = krb5_kdc::issue_as(&store, &user_as_req(51)).expect("AS");
     store
-        .apply_admin_fields(&host, None, None, Some(1), None, None, false)
+        .apply_admin_fields(&host, None, None, Some(1), None, None, false, None)
         .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 52)).unwrap_err();
     assert_eq!(proto_code(err), err::SERVICE_EXP);
@@ -1258,7 +1269,7 @@ fn tgs_rejects_expired_server() {
 fn or_attr(store: &mut PrincipalStore, name: &PrincipalName, bit: u32) {
     let a = store.get_name(name).unwrap().attributes | bit;
     store
-        .apply_admin_fields(name, Some(a), None, None, None, None, false)
+        .apply_admin_fields(name, Some(a), None, None, None, None, false, None)
         .unwrap();
 }
 
@@ -1479,7 +1490,7 @@ fn tgs_renew_after_endtime_is_process_tgs() {
     store.policy.skew = 0;
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     store
-        .apply_admin_fields(&cname, None, Some(1), None, None, None, false)
+        .apply_admin_fields(&cname, None, Some(1), None, None, None, false, None)
         .unwrap();
     let issued = renewable_as(&store, 95);
     std::thread::sleep(std::time::Duration::from_secs(2));

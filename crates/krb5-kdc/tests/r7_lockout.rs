@@ -86,7 +86,7 @@ fn as_success_clears_failcount_only_with_requires_preauth() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     store
-        .apply_admin_fields(&user, Some(0), None, None, None, None, false)
+        .apply_admin_fields(&user, Some(0), None, None, None, None, false, None)
         .unwrap();
     store.record_as_outcome(&user, false);
     store.record_as_outcome(&user, true);
@@ -103,6 +103,7 @@ fn as_success_clears_failcount_only_with_requires_preauth() {
             None,
             None,
             false,
+            None,
         )
         .unwrap();
     store.record_as_outcome(&user, false);

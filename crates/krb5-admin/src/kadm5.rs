@@ -2366,6 +2366,8 @@ fn dispatch_kadm5_ticket(
             }
             let attributes = (mask & KADM5_ATTRIBUTES != 0).then_some(fields.attributes);
             let max_life = (mask & KADM5_MAX_LIFE != 0).then_some(u64::from(fields.max_life));
+            let max_renewable_life =
+                (mask & KADM5_MAX_RLIFE != 0).then_some(u64::from(fields.max_rlife));
             let expiration = (mask & KADM5_PRINC_EXPIRE_TIME != 0).then_some(fields.expire);
             let pw_expire = (mask & KADM5_PW_EXPIRATION != 0).then_some(fields.pw_expire);
             let clear_policy = mask & KADM5_POLICY_CLR != 0;
@@ -2385,6 +2387,7 @@ fn dispatch_kadm5_ticket(
                 pw_expire,
                 policy,
                 clear_policy,
+                max_renewable_life,
             ) {
                 Ok(()) => {
                     if mask & KADM5_TL_DATA != 0
@@ -3627,6 +3630,7 @@ struct ModFields {
     expire: u32,
     pw_expire: u32,
     max_life: u32,
+    max_rlife: u32,
     attributes: u32,
     policy: Option<String>,
     fail_auth_count: u32,
@@ -3651,7 +3655,7 @@ fn parse_modify(args: &[u8]) -> Result<(PrincipalName, String, u32, ModFields), 
     r.u32()?; // mkvno
     let policy = r.nullstring()?;
     r.u32()?; // aux
-    r.u32()?; // max_rlife
+    let max_rlife = r.u32()?;
     r.u32()?; // last_success
     r.u32()?; // last_failed
     let fail_auth_count = r.u32()?;
@@ -3689,6 +3693,7 @@ fn parse_modify(args: &[u8]) -> Result<(PrincipalName, String, u32, ModFields), 
             expire,
             pw_expire,
             max_life,
+            max_rlife,
             attributes,
             policy,
             fail_auth_count,
@@ -5991,7 +5996,7 @@ mod tests {
         assert_ne!(mod1, 0);
         {
             let mut g = store.write().unwrap();
-            g.apply_admin_fields(&name, None, None, Some(u32::MAX), None, None, false)
+            g.apply_admin_fields(&name, None, None, Some(u32::MAX), None, None, false, None)
                 .unwrap();
         }
         let after_mod = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &{
@@ -6530,6 +6535,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             )
             .unwrap();
         }
@@ -6560,6 +6566,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             )
             .unwrap();
         }
@@ -6750,6 +6757,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             )
             .unwrap();
         }
@@ -6787,6 +6795,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             )
             .unwrap();
         }
@@ -6831,6 +6840,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             )
             .unwrap();
         }
@@ -6944,6 +6954,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             )
             .unwrap();
         }
@@ -7138,6 +7149,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             )
             .unwrap();
         }
@@ -7166,6 +7178,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             )
             .unwrap();
         }
@@ -7195,6 +7208,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             )
             .unwrap();
         }
@@ -7244,6 +7258,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             )
             .unwrap();
         }
@@ -7293,6 +7308,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             )
             .unwrap();
         }
@@ -7319,6 +7335,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             )
             .unwrap();
         }
@@ -7496,6 +7513,7 @@ mod tests {
             None,
             None,
             false,
+            None,
         )
         .unwrap();
     }
@@ -7721,6 +7739,44 @@ mod tests {
         let p = g.get_name(&extra).unwrap();
         assert!(p.requires_preauth);
         assert_eq!(p.max_life, 3600);
+    }
+
+    #[test]
+    fn modprinc_sets_max_rlife() {
+        let (store, acl, actor) = setup();
+        let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["rlife"]);
+        {
+            let mut g = store.write().unwrap();
+            g.create_password(&acl, &actor, &extra, b"rlife-secret")
+                .unwrap();
+        }
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some("rlife@KERBER.TEST"));
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(1);
+        w.u32(0);
+        w.u32(0);
+        w.u32(1);
+        w.u32(1);
+        w.u32(0);
+        w.u32(0);
+        w.u32(86_400);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(0);
+        w.u32(1);
+        w.u32(0);
+        w.u32(KADM5_MAX_RLIFE);
+        let out = dispatch_kadm5(&store, &acl, &actor, MODIFY_PRINCIPAL, &w.b).unwrap();
+        assert_eq!(ret_code(&out), 0);
+        let g = store.read().unwrap();
+        assert_eq!(g.get_name(&extra).unwrap().max_renewable_life, 86_400);
     }
 
     fn encode_cpol(api: u32, p: &krb5_kdc::NamedPolicy, mask: u32) -> Vec<u8> {

@@ -223,6 +223,7 @@ pub fn apply_kadm5_create_service_attrs(store: &mut PrincipalStore) -> Result<()
         None,
         None,
         false,
+        None,
     )?;
     store.apply_admin_fields(
         &documented_changepw(),
@@ -234,6 +235,7 @@ pub fn apply_kadm5_create_service_attrs(store: &mut PrincipalStore) -> Result<()
         None,
         None,
         false,
+        None,
     )?;
     Ok(())
 }

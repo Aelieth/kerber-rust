@@ -45,6 +45,12 @@ this project uses semantic versioning once a crate is published.
   `prepare_error_as` cookie last). FAST-inner 151 makes MIT kinit
   send SPAKE support (91) when the client shares P-256.
   diffsend 92 → 94.
+- **kdc.** `max_renewable_life` 0 is a cap of 0 (`kdc_util.c:1744-1747`).
+  Omitted kdc.conf `max_renewable_life` is 0. kadm5 modify honours
+  `KADM5_MAX_RLIFE`. AS `PRE_AUTHENT` is set only after EncTs/EC/SPAKE/PKINIT
+  verifies. `check_tgs_opts` emits `TICKET NOT RENEWABLE` 13 before
+  `TICKET NOT VALID` 33. Client `tgs_renew` ORs `KDC_TKT_COMMON_MASK`.
+  diffsend 94 → 95.
 
 ### W1-A′-2
 

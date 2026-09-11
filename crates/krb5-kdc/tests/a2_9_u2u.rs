@@ -196,7 +196,7 @@ fn u2u_dup_skey_disallowed_is_policy() {
     let host = documented_host();
     let attrs = store.get_name(&host).unwrap().attributes | KDB_DISALLOW_DUP_SKEY;
     store
-        .apply_admin_fields(&host, Some(attrs), None, None, None, None, false)
+        .apply_admin_fields(&host, Some(attrs), None, None, None, None, false, None)
         .unwrap();
     let extra = issue_host_tgt(&store, 9150).rep.0.ticket;
     let req = u2u_req(&store, host, Some(vec![extra]), 9151);

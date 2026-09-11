@@ -142,6 +142,7 @@ fn modify_cpw_and_lockout_through_alias_act_on_target_and_delete_removes_stub_on
             None,
             None,
             false,
+            None,
         )
         .unwrap();
     let user = store.get_name(&name(TEST_USER)).unwrap();
@@ -311,6 +312,7 @@ fn as_rep_via_alias_carries_the_target_salt_in_etype_info2() {
             None,
             None,
             false,
+            None,
         )
         .unwrap();
     store

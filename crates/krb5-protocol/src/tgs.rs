@@ -138,17 +138,7 @@ pub fn tgs_exchange_path(
 pub fn tgs_forward(kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> {
     let realm = String::from_utf8_lossy(tgt.crealm.as_bytes()).into_owned();
     let sname = PrincipalName::krbtgt(&realm);
-    let mut opts = KdcOptions::none().with_bit(flag_bit::FORWARDED, true);
-    for bit in [
-        flag_bit::FORWARDABLE,
-        flag_bit::PROXIABLE,
-        flag_bit::MAY_POSTDATE,
-        flag_bit::RENEWABLE,
-    ] {
-        if tgt.enc_part.flags.bit(bit) {
-            opts = opts.with_bit(bit, true);
-        }
-    }
+    let opts = tkt_common_opts(tgt).with_bit(flag_bit::FORWARDED, true);
     tgs_once(kdc, tgt, sname, &realm, opts, &[], None)
 }
 
@@ -165,12 +155,27 @@ pub fn tgs_renew(kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> {
         tgt,
         sname,
         &realm,
-        KdcOptions::none()
+        tkt_common_opts(tgt)
             .with_bit(flag_bit::RENEW, true)
             .with_bit(flag_bit::CANONICALIZE, true),
         &[],
         None,
     )
+}
+
+fn tkt_common_opts(tgt: &AsOutcome) -> KdcOptions {
+    let mut opts = KdcOptions::none();
+    for bit in [
+        flag_bit::FORWARDABLE,
+        flag_bit::PROXIABLE,
+        flag_bit::MAY_POSTDATE,
+        flag_bit::RENEWABLE,
+    ] {
+        if tgt.enc_part.flags.bit(bit) {
+            opts = opts.with_bit(bit, true);
+        }
+    }
+    opts
 }
 
 /// TGS-REQ with PA-FOR-USER (S4U2Self). The KDC enforces that `sname` is the

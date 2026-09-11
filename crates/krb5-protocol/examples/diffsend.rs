@@ -3153,6 +3153,40 @@ fn run() -> Result<(), String> {
         r#"{{"event":"diffsend","case":"tgs-postdated-is-invalid","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","invalid":true,"postdated":true}}"#
     );
 
+    expect_error(
+        &cfg,
+        "tgs-validate-invalid-non-renewable",
+        &encode(
+            &tgs_req_ex(
+                mint_tgt(
+                    tkt_key,
+                    tkt_kvno,
+                    &user,
+                    realm,
+                    &krbtgt_sname,
+                    &sess,
+                    window10.clone(),
+                    TicketFlags::none()
+                        .with_bit(flag_bit::INITIAL, true)
+                        .with_bit(flag_bit::INVALID, true),
+                )?,
+                &sess,
+                realm,
+                &user,
+                PrincipalName::krbtgt(realm),
+                realm,
+                0x1000_0076,
+                KdcOptions::none().with_bit(flag_bit::RENEW, true),
+                None,
+                Vec::new(),
+                etypes.clone(),
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::BADOPTION,
+    )?;
+
     let pauser = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["pauser"]);
     expect_error(
         &cfg,
@@ -3587,7 +3621,7 @@ fn run() -> Result<(), String> {
         r#"{{"event":"diffsend","case":"tgs-rbcd-pac-options","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","pac_options":true}}"#
     );
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":94}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":95}}"#);
     Ok(())
 }
 

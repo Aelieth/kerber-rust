@@ -79,6 +79,10 @@ pub struct KadminArgs {
     pub unlock: bool,
     /// `cpw -keepold`.
     pub keepold: bool,
+    /// `modprinc -maxlife` seconds.
+    pub max_life: Option<u64>,
+    /// `modprinc -maxrenewlife` seconds.
+    pub max_renewable_life: Option<u64>,
 }
 
 /// Parsed `kadmin.local addpol` operands (`kadmin.c:1600-1689`).
@@ -192,6 +196,19 @@ pub fn parse_kadmin_args(parts: &[&str]) -> Result<KadminArgs, String> {
                 if out.etypes.is_empty() {
                     return Err(format!("-e unknown keysalt {spec}"));
                 }
+            }
+            "-maxlife" => {
+                i += 1;
+                let spec = parts.get(i).copied().ok_or("-maxlife needs a duration")?;
+                out.max_life = Some(u64::from(parse_pol_interval(spec)?));
+            }
+            "-maxrenewlife" => {
+                i += 1;
+                let spec = parts
+                    .get(i)
+                    .copied()
+                    .ok_or("-maxrenewlife needs a duration")?;
+                out.max_renewable_life = Some(u64::from(parse_pol_interval(spec)?));
             }
             s if s.starts_with('+') => {
                 if let Some(hex) = s[1..].strip_prefix("0x") {
@@ -676,7 +693,7 @@ impl<'a> AdminSession<'a> {
             .check(&self.actor, AdminOp::Modify, Some(&tid))
             .map_err(Error::from)?;
         self.store
-            .apply_admin_fields(name, attributes, None, None, None, None, false)
+            .apply_admin_fields(name, attributes, None, None, None, None, false, None)
             .map_err(Error::from)?;
         if let Some(rs) = self.acl.restrictions(&self.actor, Some(&tid)) {
             self.store
@@ -700,6 +717,42 @@ impl<'a> AdminSession<'a> {
         self.store.admin_unlock(name).map_err(Error::from)
     }
 
+    /// `modprinc -maxlife` / `-maxrenewlife`.
+    ///
+    /// # Errors
+    ///
+    /// ACL or not found.
+    pub fn modify_ticket_lives(
+        &mut self,
+        name: &PrincipalName,
+        max_life: Option<u64>,
+        max_renewable_life: Option<u64>,
+    ) -> Result<(), Error> {
+        self.reload()?;
+        let tid = self.target_id(name);
+        self.acl
+            .check(&self.actor, AdminOp::Modify, Some(&tid))
+            .map_err(Error::from)?;
+        self.store
+            .apply_admin_fields(
+                name,
+                None,
+                max_life,
+                None,
+                None,
+                None,
+                false,
+                max_renewable_life,
+            )
+            .map_err(Error::from)?;
+        if let Some(rs) = self.acl.restrictions(&self.actor, Some(&tid)) {
+            self.store
+                .impose_acl_restrictions(name, rs)
+                .map_err(Error::from)?;
+        }
+        Ok(())
+    }
+
     /// `modprinc -policy`.
     ///
     /// # Errors
@@ -712,7 +765,16 @@ impl<'a> AdminSession<'a> {
             .check(&self.actor, AdminOp::Modify, Some(&tid))
             .map_err(Error::from)?;
         self.store
-            .apply_admin_fields(name, None, None, None, None, Some(policy.to_owned()), false)
+            .apply_admin_fields(
+                name,
+                None,
+                None,
+                None,
+                None,
+                Some(policy.to_owned()),
+                false,
+                None,
+            )
             .map_err(Error::from)?;
         if let Some(rs) = self.acl.restrictions(&self.actor, Some(&tid)) {
             self.store
@@ -933,7 +995,7 @@ mod tests {
         let changepw = documented_changepw();
         let a = store.get_name(&changepw).unwrap().attributes & !KDB_DISALLOW_TGT_BASED;
         store
-            .apply_admin_fields(&changepw, Some(a), None, None, None, None, false)
+            .apply_admin_fields(&changepw, Some(a), None, None, None, None, false, None)
             .unwrap();
     }
 
@@ -2864,6 +2926,10 @@ mod tests {
         assert_eq!(a.name, "rc4user");
         let a = parse_kadmin_args(&["-unlock", "locked"]).unwrap();
         assert!(a.unlock);
+        let a = parse_kadmin_args(&["-maxrenewlife", "1d", "user"]).unwrap();
+        assert_eq!(a.max_renewable_life, Some(86_400));
+        let a = parse_kadmin_args(&["-maxlife", "2h", "user"]).unwrap();
+        assert_eq!(a.max_life, Some(7_200));
         let a = parse_kadmin_args(&[
             "-randkey",
             "-keepold",
@@ -3056,7 +3122,16 @@ mod tests {
         let (mut store, acl) = bootstrap_documented().unwrap();
         let tgt = PrincipalName::krbtgt(krb5_kdc::TEST_REALM);
         store
-            .apply_admin_fields(&tgt, Some(KDB_LOCKDOWN_KEYS), None, None, None, None, false)
+            .apply_admin_fields(
+                &tgt,
+                Some(KDB_LOCKDOWN_KEYS),
+                None,
+                None,
+                None,
+                None,
+                false,
+                None,
+            )
             .unwrap();
         let before = max_kvno(&store, &tgt);
         let mut n = 0;
