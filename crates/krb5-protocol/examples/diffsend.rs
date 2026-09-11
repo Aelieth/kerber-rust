@@ -645,6 +645,7 @@ fn mint_signed_header(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn mint_signed_header_ex(
     key: &ProtocolKey,
     kvno: u32,
