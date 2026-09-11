@@ -1088,6 +1088,7 @@ fn issue_tgs_body(
             tgs_padata,
             &sname,
             &enc_tkt.cname,
+            utf8_realm(&enc_tkt.crealm)?,
             &st.server,
             &server,
             is_crossrealm,

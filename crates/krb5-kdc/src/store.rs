@@ -13,6 +13,14 @@ fn unix_now() -> u32 {
         .unwrap_or(0)
 }
 
+fn qualify_s4u_from(from: &str, local_realm: &str) -> String {
+    if from.contains('@') {
+        from.to_owned()
+    } else {
+        format!("{from}@{local_realm}")
+    }
+}
+
 #[cfg(test)]
 use std::cell::Cell;
 
@@ -240,7 +248,7 @@ pub struct Principal {
     pub e_data: Vec<u8>,
     /// Relative ID in the realm domain SID (0 = unassigned).
     pub rid: u32,
-    /// Evidence-server names allowed to S4U2Proxy here (RBCD).
+    /// Impersonators allowed to S4U2Proxy here (RBCD), `name@REALM`.
     pub s4u_allowed_from: Vec<String>,
     /// Target names this principal may S4U2Proxy to (classic constrained
     /// delegation / `msDS-AllowedToDelegateTo`).
@@ -1024,11 +1032,12 @@ impl PrincipalStore {
         }
     }
 
-    /// Permit `from` to S4U2Proxy to `name` (RBCD allow-list).
+    /// Permit `from` to S4U2Proxy to `name` (RBCD). A bare name is the local realm.
     pub fn allow_s4u_from(&mut self, name: &PrincipalName, from: &str) {
         let id = crate::kdb::lookup_principal_id(name, &self.realm);
+        let qualified = qualify_s4u_from(from, &self.realm);
         if let Some(p) = self.map.get_mut(&id) {
-            p.s4u_allowed_from.push(from.to_owned());
+            p.s4u_allowed_from.push(qualified);
         }
     }
 
@@ -1364,7 +1373,6 @@ impl PrincipalStore {
         {
             p.attributes |= KDB_PWCHANGE_SERVICE;
         }
-        self.allow_s4u_from(name, &self_name);
         if let Some(rs) = acl.restrictions(actor, Some(&id)) {
             self.apply_acl_restrictions(&id, rs)?;
         }

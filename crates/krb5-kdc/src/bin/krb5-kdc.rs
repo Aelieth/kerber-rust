@@ -366,6 +366,14 @@ fn bootstrap_test_realm() -> PrincipalStore {
             }
         }
     }
+    if let Ok(froms) = std::env::var("KRB5_TEST_S4U_FROM") {
+        for from in froms.split(',') {
+            let from = from.trim();
+            if !from.is_empty() {
+                store.allow_s4u_from(&host, from);
+            }
+        }
+    }
     if let Ok(extra_inst) = std::env::var("KRB5_TEST_EXTRA_HOST") {
         let extra = krb5_types::PrincipalName::new(
             krb5_types::PrincipalName::NT_SRV_HST,

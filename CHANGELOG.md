@@ -8,6 +8,10 @@ this project uses semantic versioning once a crate is published.
 
 ### W1-A′-2
 
+- **kdc.** RBCD `s4u_allowed_from` is `name@REALM` (bare name = local
+  realm at insert) and `allowed_to_delegate_from` compares the
+  impersonator name and realm (`tgs_policy.c:753-756`,
+  `kdb_test.c:761-774`). `create_host` seeds no delegation lists.
 - **test.** MIT test-KDB `kvno -U user -P host/rbcd` proves same-realm
   RBCD (`allowed_to_delegate_from`) on both legs; rust `--test-realm`
   grows `KRB5_TEST_EXTRA_HOST` / `KRB5_TEST_S4U_FROM`.

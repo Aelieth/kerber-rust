@@ -1014,6 +1014,7 @@ pub(crate) fn check_s4u2proxy_policy(
     padata: Option<&[PaData]>,
     dest: &PrincipalName,
     impersonator_name: &PrincipalName,
+    impersonator_realm: &str,
     impersonator: &Principal,
     resource: &Principal,
     is_crossrealm: bool,
@@ -1028,7 +1029,7 @@ pub(crate) fn check_s4u2proxy_policy(
     }
     let mut policy_denial = false;
     if support_rbcd {
-        if allowed_to_delegate_from(resource, impersonator_name) {
+        if allowed_to_delegate_from(resource, impersonator_name, impersonator_realm) {
             return Ok(());
         }
         policy_denial = true;
@@ -1058,8 +1059,12 @@ fn pa_pac_rbcd(padata: Option<&[PaData]>) -> Result<bool, Error> {
     Ok(opts.resource_based_constrained_delegation())
 }
 
-fn allowed_to_delegate_from(resource: &Principal, impersonator: &PrincipalName) -> bool {
-    let from = impersonator.components_joined();
+fn allowed_to_delegate_from(
+    resource: &Principal,
+    impersonator: &PrincipalName,
+    impersonator_realm: &str,
+) -> bool {
+    let from = impersonator.unparse_with_realm(impersonator_realm);
     resource.s4u_allowed_from.iter().any(|n| n == &from)
 }
 

@@ -105,6 +105,14 @@ S4U2Self is not password authentication: the impersonated client's
 `s4u2self_forwardable` keeps FORWARDABLE when `allowed_to_delegate` is
 empty (MIT `addprinc -randkey` / Rust `create_host` seed no targets);
 a non-empty target list without `OK_TO_AUTH_AS_DELEGATE` clears F.
+S4U2Proxy implements both KDB delegation hooks (`tgs_policy.c:548-575`):
+classic `s4u_allowed_to` is realm-less (`kdb_test.c:733-741`
+`UNPARSE_NO_REALM`; same-realm only) and RBCD `s4u_allowed_from` is
+`name@REALM` (`kdb_test.c:761-774`). A bare RBCD grant is the local
+realm at insert. `create_host` seeds neither list (MIT db2 has no
+hooks and refuses 13 `UNSUPPORTED_S4U2PROXY_REQUEST`; MIT test-KDB
+issues only with an explicit `delegation`/`rbcd` entry). That is an
+LDAP/test-KDB-like superset over db2, fail-closed on an empty list.
 
 FAST armor decrypt binds keys to the armor `ticket.realm` (MIT
 `fast_util.c` `rd_req`); forged-realm armor is 35 `NOT_US` (`rd_req`).

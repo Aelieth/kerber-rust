@@ -93,7 +93,7 @@ docker exec -d \
     -e KRB5_TEST_PW_EXPIRED_USER=expirepw \
     -e KRB5_EXPORT_KEYTAB=/tmp/host.keytab \
     -e KRB5_TEST_OK_TO_AUTH_AS_DELEGATE=1 \
-    -e KRB5_TEST_S4U_TO=host/testhost.kerber.test \
+    -e KRB5_TEST_S4U_TO=host/testhost.kerber.test -e KRB5_TEST_S4U_FROM=host/testhost.kerber.test@KERBER.TEST \
     "$NAME" sh -c '/tmp/krb5-kdc --test-realm --export-keytab /tmp/host.keytab 127.0.0.1:8888 >/tmp/kdc.log 2>&1'
 
 ok=0
@@ -649,7 +649,7 @@ docker exec -d \
     -e KRB5_TEST_OK_TO_AUTH_AS_DELEGATE=1 \
     -e KRB5_TEST_S4U_TO=host/testhost.kerber.test \
     -e KRB5_TEST_EXTRA_HOST=rbcd.kerber.test \
-    -e KRB5_TEST_S4U_FROM=host/testhost.kerber.test \
+    -e KRB5_TEST_S4U_FROM=host/testhost.kerber.test@KERBER.TEST \
     "$NAME" sh -c '/tmp/krb5-kdc --test-realm --export-keytab /tmp/host-r18.keytab 127.0.0.1:8888 >/tmp/kdc-r18.log 2>&1'
 ok=0
 for _ in $(seq 1 80); do
@@ -722,6 +722,227 @@ echo "$RUST_RBCD" | grep -qE 'pac_types=.*\b11\b'
 echo "$RUST_RBCD" | grep -q 'proxy_target=host/rbcd.kerber.test'
 echo "$RUST_RBCD" | grep -q 'transited_services=host/testhost.kerber.test@KERBER.TEST'
 echo "MIT_testkdb_s4u2proxy_rbcd"
+echo "explicit_rbcd_grant=host/testhost.kerber.test@KERBER.TEST"
+
+echo "==== MIT db2 kvno -U user -P (no delegation hook) ===="
+docker exec "$MITNAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
+sleep 0.3
+docker exec -d "$MITNAME" sh -c 'krb5kdc -n >/tmp/mit-db2-r22.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$MITNAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.2)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$MITNAME" cat /tmp/mit-db2-r22.log >&2 || true
+    log "s4u.mit.gate" "error" ',"error":"MIT db2 kdc did not listen (r22)"'
+    exit 1
+fi
+n="$(docker exec "$MITNAME" sh -c "wc -l < /tmp/mit-db2-r22.log" | tr -d '[:space:]')"
+docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
+    "$MITNAME" kinit -f -k -t /etc/krb5kdc/testhost.keytab -c /tmp/krb5cc_r22_db2 \
+    host/testhost.kerber.test@KERBER.TEST
+set +e
+DB2_P="$(docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
+    -e KRB5CCNAME=FILE:/tmp/krb5cc_r22_db2 \
+    "$MITNAME" kvno -U user -P host/testhost.kerber.test 2>&1)"
+DB2_RC=$?
+set -e
+echo "$DB2_P"
+echo "mit_db2_s4u2proxy_nogrant_rc=$DB2_RC"
+echo "$DB2_RC" | grep -qx 1
+echo "$DB2_P" | grep -qiE "KDC can't fulfill requested option"
+DB2_LOG="$(docker exec "$MITNAME" sh -c "tail -n +$((n + 1)) /tmp/mit-db2-r22.log")"
+echo "$DB2_LOG"
+echo "$DB2_LOG" | grep -q 'UNSUPPORTED_S4U2PROXY_REQUEST'
+
+echo "==== Rust kvno -U user -P (fresh host, no S4U knobs) ===="
+docker exec "$NAME" sh -c 'for p in /proc/[0-9]*; do comm=$(cat "$p/comm" 2>/dev/null) || continue; [ "$comm" = krb5-kdc ] || continue; kill -9 "${p#/proc/}" 2>/dev/null || true; done'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',8888),0.15)" 2>/dev/null; then
+        sleep 0.2
+        continue
+    fi
+    ok=1
+    break
+done
+[ "$ok" = 1 ]
+docker exec -d \
+    -e KRB5_TEST_USER_PASSWORD=userpassword \
+    -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
+    -e KRB5_EXPORT_KEYTAB=/tmp/host-r22.keytab \
+    "$NAME" sh -c '/tmp/krb5-kdc --test-realm --export-keytab /tmp/host-r22.keytab 127.0.0.1:8888 >/tmp/kdc-r22-nogrant.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/kdc-r22-nogrant.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kdc-r22-nogrant.log >&2 || true
+    log "s4u.mit.gate" "error" ',"error":"Rust KDC for R22 no-grant did not listen"'
+    exit 1
+fi
+n="$(docker exec "$NAME" sh -c "wc -l < /tmp/kdc-r22-nogrant.log" | tr -d '[:space:]')"
+docker exec -e KRB5_CONFIG=/tmp/s4u-r18.conf \
+    "$NAME" kinit -f -k -t /tmp/host-r22.keytab -c /tmp/krb5cc_r22_rust \
+    host/testhost.kerber.test@KERBER.TEST
+set +e
+RUST_P="$(docker exec -e KRB5_CONFIG=/tmp/s4u-r18.conf \
+    -e KRB5CCNAME=FILE:/tmp/krb5cc_r22_rust \
+    "$NAME" kvno -U user -P host/testhost.kerber.test 2>&1)"
+RUST_RC=$?
+set -e
+echo "$RUST_P"
+echo "rust_s4u2proxy_nogrant_rc=$RUST_RC"
+echo "$RUST_RC" | grep -qx 1
+echo "$RUST_P" | grep -qiE "KDC can't fulfill requested option"
+RUST_LOG="$(docker exec "$NAME" sh -c "tail -n +$((n + 1)) /tmp/kdc-r22-nogrant.log")"
+echo "$RUST_LOG"
+echo "$RUST_LOG" | grep -q '"e_text":"NOT_ALLOWED_TO_DELEGATE"'
+echo "mit_db2_e_text=UNSUPPORTED_S4U2PROXY_REQUEST rust_e_text=NOT_ALLOWED_TO_DELEGATE"
+echo "MIT_db2_s4u2proxy_nogrant"
+
+echo "==== MIT test-KDB kvno -U user -P host/rbcd (rbcd block removed) ===="
+docker exec "$NAME" sh -c 'cat >/tmp/test-norbcd-kdc.conf <<EOF
+[kdcdefaults]
+    kdc_listen = 127.0.0.1:8891
+    kdc_tcp_listen = 127.0.0.1:8891
+[realms]
+    KERBER.TEST = {
+        database_module = test
+    }
+[dbmodules]
+    test = {
+        db_library = test
+        princs = {
+            krbtgt/KERBER.TEST = {
+                keys = aes256-cts
+            }
+            user = {
+                keys = aes256-cts
+            }
+            host/testhost.kerber.test = {
+                flags = +ok-to-auth-as-delegate
+                keys = aes256-cts
+            }
+            host/rbcd.kerber.test = {
+                keys = aes256-cts
+            }
+        }
+        delegation = {
+            host/testhost.kerber.test = host/testhost.kerber.test
+        }
+    }
+[logging]
+    kdc = FILE:/tmp/mit-norbcd.log
+EOF
+cat >/tmp/test-norbcd-krb5.conf <<EOF
+[libdefaults]
+    default_realm = KERBER.TEST
+    dns_lookup_kdc = false
+    dns_lookup_realm = false
+    rdns = false
+    forwardable = true
+    default_ccache_name = FILE:/tmp/krb5cc_norbcd
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1:8891
+    }
+[dbmodules]
+    db_module_dir = /usr/lib/krb5/plugins/kdb
+EOF'
+docker exec -d -e KRB5_CONFIG=/tmp/test-norbcd-krb5.conf \
+    -e KRB5_KDC_PROFILE=/tmp/test-norbcd-kdc.conf \
+    "$NAME" sh -c 'krb5kdc -n -P /tmp/mit-norbcd.pid >/tmp/mit-norbcd-stdout.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',8891),0.2)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/mit-norbcd.log >&2 || true
+    docker exec "$NAME" cat /tmp/mit-norbcd-stdout.log >&2 || true
+    log "s4u.mit.gate" "error" ',"error":"MIT test-KDB no-rbcd kdc did not listen"'
+    exit 1
+fi
+n="$(docker exec "$NAME" sh -c "wc -l < /tmp/mit-norbcd.log" | tr -d '[:space:]')"
+docker exec -e KRB5_CONFIG=/tmp/test-norbcd-krb5.conf \
+    "$NAME" kinit -f -k -t /tmp/test-host.kt -c /tmp/krb5cc_mit_norbcd \
+    host/testhost.kerber.test@KERBER.TEST
+set +e
+NORBCD="$(docker exec -e KRB5_CONFIG=/tmp/test-norbcd-krb5.conf \
+    -e KRB5CCNAME=FILE:/tmp/krb5cc_mit_norbcd \
+    "$NAME" kvno -U user -P host/rbcd.kerber.test 2>&1)"
+NORBCD_RC=$?
+set -e
+echo "$NORBCD"
+echo "mit_testkdb_rbcd_deny_rc=$NORBCD_RC"
+echo "$NORBCD_RC" | grep -qx 1
+echo "$NORBCD" | grep -qiE "KDC can't fulfill requested option"
+NORBCD_LOG="$(docker exec "$NAME" sh -c "tail -n +$((n + 1)) /tmp/mit-norbcd.log")"
+echo "$NORBCD_LOG"
+echo "$NORBCD_LOG" | grep -q 'NOT_ALLOWED_TO_DELEGATE'
+
+echo "==== Rust kvno -U user -P host/rbcd (extra host, no S4U_FROM) ===="
+docker exec "$NAME" sh -c 'for p in /proc/[0-9]*; do comm=$(cat "$p/comm" 2>/dev/null) || continue; [ "$comm" = krb5-kdc ] || continue; kill -9 "${p#/proc/}" 2>/dev/null || true; done'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',8888),0.15)" 2>/dev/null; then
+        sleep 0.2
+        continue
+    fi
+    ok=1
+    break
+done
+[ "$ok" = 1 ]
+docker exec -d \
+    -e KRB5_TEST_USER_PASSWORD=userpassword \
+    -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
+    -e KRB5_EXPORT_KEYTAB=/tmp/host-r22b.keytab \
+    -e KRB5_EXPORT_KEYTAB_EXTRA=/tmp/host-r22b-rbcd.keytab \
+    -e KRB5_TEST_EXTRA_HOST=rbcd.kerber.test \
+    "$NAME" sh -c '/tmp/krb5-kdc --test-realm --export-keytab /tmp/host-r22b.keytab 127.0.0.1:8888 >/tmp/kdc-r22-norbcd.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/kdc-r22-norbcd.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kdc-r22-norbcd.log >&2 || true
+    log "s4u.mit.gate" "error" ',"error":"Rust KDC for R22 rbcd-deny did not listen"'
+    exit 1
+fi
+n="$(docker exec "$NAME" sh -c "wc -l < /tmp/kdc-r22-norbcd.log" | tr -d '[:space:]')"
+docker exec -e KRB5_CONFIG=/tmp/s4u-r18.conf \
+    "$NAME" kinit -f -k -t /tmp/host-r22b.keytab -c /tmp/krb5cc_r22_norbcd \
+    host/testhost.kerber.test@KERBER.TEST
+set +e
+RUST_NORBCD="$(docker exec -e KRB5_CONFIG=/tmp/s4u-r18.conf \
+    -e KRB5CCNAME=FILE:/tmp/krb5cc_r22_norbcd \
+    "$NAME" kvno -U user -P host/rbcd.kerber.test 2>&1)"
+RUST_NORBCD_RC=$?
+set -e
+echo "$RUST_NORBCD"
+echo "rust_rbcd_deny_rc=$RUST_NORBCD_RC"
+echo "$RUST_NORBCD_RC" | grep -qx 1
+echo "$RUST_NORBCD" | grep -qiE "KDC can't fulfill requested option"
+RUST_NORBCD_LOG="$(docker exec "$NAME" sh -c "tail -n +$((n + 1)) /tmp/kdc-r22-norbcd.log")"
+echo "$RUST_NORBCD_LOG"
+echo "$RUST_NORBCD_LOG" | grep -q '"e_text":"NOT_ALLOWED_TO_DELEGATE"'
+echo "MIT_testkdb_s4u2proxy_rbcd_deny"
 
 log "s4u.mit.gate" "ok" ',"principal":"host/testhost.kerber.test","for_client":"user@KERBER.TEST"'
 exit 0
