@@ -279,6 +279,31 @@ echo "$DIFF" | grep -q '"case":"tgs-body-authdata-kdc-issued-stripped","outcome"
 echo "$DIFF" | grep -q '"case":"tgs-truncated-cammac","outcome":"ok","error_code":60,"e_text":"GET_AUTH_INDICATORS","rust_tag":"0x7e","mit_tag":"0x7e"' || die "tgs-truncated-cammac not code 60 e_text GET_AUTH_INDICATORS on both legs"
 echo "$DIFF" | grep -qF '"case":"ec-outside-fast","outcome":"ok","error_code":24,"e_text":"PREAUTH_FAILED","e_data_types":[2,19,133,136,151],"rust_tag":"0x7e","mit_tag":"0x7e"' || die "ec-outside-fast not code 24 e_text PREAUTH_FAILED on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-rbcd-pac-options","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","pac_options":true' || die "tgs-rbcd-pac-options not PAC-OPTIONS enc_padata on both legs"
+echo "==== MIT_HINT kdc-padata-proxy 25/91 e_data wire order ===="
+docker cp "$ROOT/scripts/lib/kdc-padata-proxy.py" "$NAME":/tmp/kdc-padata-proxy.py
+HINT_ORDER="$(docker exec "$NAME" python3 -c '
+import importlib.machinery
+p = importlib.machinery.SourceFileLoader("proxy", "/tmp/kdc-padata-proxy.py").load_module()
+want = {
+    "pauser-no-preauth": (25, [136, 19, 151, 2, 133]),
+    "as-hw-preauth": (25, [136, 19, 133]),
+    "as-spake-round1": (91, [151, 19, 133]),
+    "ec-outside-fast": (24, [136, 19, 151, 2, 133]),
+}
+for case, (wcode, wtypes) in want.items():
+    for leg in ("rust", "mit"):
+        data = open(f"/tmp/diff-corpus/{case}.{leg}.der", "rb").read()
+        code, enc, types = p.parse_error_edata(data)
+        print(f"{case}.{leg} code={code} enc={enc} types={types}")
+        if code != wcode or types != wtypes:
+            raise SystemExit(f"{case}.{leg} want {wcode} {wtypes} got {code} {types}")
+print("hint-order-ok")
+')"
+echo "$HINT_ORDER"
+echo "$HINT_ORDER" | grep -qF 'hint-order-ok' || die "25/91 hint e_data wire order mismatch"
+echo "$HINT_ORDER" | grep -qF 'pauser-no-preauth.mit code=25 enc=method types=[136, 19, 151, 2, 133]' || die "MIT_HINT 25 hint list not [136, 19, 151, 2, 133]"
+echo "$HINT_ORDER" | grep -qF 'as-spake-round1.mit code=91 enc=method types=[151, 19, 133]' || die "MIT_HINT 91 e_data not [151, 19, 133]"
+echo "$HINT_ORDER" | grep -qF 'as-spake-round1.rust code=91 enc=method types=[151, 19, 133]' || die "rust_hint 91 e_data not [151, 19, 133]"
 # W1-K M2b: the differential oracle has no case-name whitelist; no diffsend line
 # may carry a "whitelist" key.
 if echo "$DIFF" | grep -q '"whitelist"'; then

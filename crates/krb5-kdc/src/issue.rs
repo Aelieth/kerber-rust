@@ -30,8 +30,8 @@ use crate::kdb::{PrincipalRead, lookup_principal_id};
 use crate::kdb_dump::TL_LAST_ADMIN_UNLOCK;
 use crate::plugins::{PreauthAction, current_policy, run_as_preauth};
 use crate::preauth::{
-    FastOk, decode_edata_padata, fast_finished, find_pa, make_cookie, prepare_as_edata, proto,
-    proto_d, unwrap_fast, unwrap_fast_tgs, with_fx_cookie, wrap_fast_rep,
+    FastOk, decode_edata_padata, fast_finished, find_pa, make_cookie, pa_cookie_last,
+    prepare_as_edata, proto, proto_d, unwrap_fast, unwrap_fast_tgs, with_fx_cookie, wrap_fast_rep,
 };
 use crate::status;
 use crate::store::{
@@ -447,8 +447,8 @@ fn issue_as_body(
         }
         Some(PreauthAction::Challenge(e_data)) => {
             // do_as_req.c:439-442,809: status PREAUTH_FAILED even for 91.
-            // kdc_preauth.c:1141-1170 maybe_add_etype_info2: add PA-ETYPE-INFO2
-            // on a multi-round 91 unless the client already saw a cookie.
+            // kdc_preauth.c:1141-1170 maybe_add_etype_info2 then
+            // prepare_error_as cookie last (do_as_req.c:785-795).
             let mut method = decode_edata_padata(&e_data);
             if find_pa(work_padata.as_deref(), pa::FX_COOKIE).is_none()
                 && !method.iter().any(|p| p.padata_type == pa::ETYPE_INFO2)
@@ -470,7 +470,7 @@ fn issue_as_body(
             return Err(Error::Protocol {
                 code: err::MORE_PREAUTH_DATA_REQUIRED,
                 text: Some(status::PREAUTH_FAILED.to_owned()),
-                e_data: Some(encode(&method).unwrap_or(e_data)),
+                e_data: Some(encode(&pa_cookie_last(method)).unwrap_or(e_data)),
                 detail: None,
             });
         }

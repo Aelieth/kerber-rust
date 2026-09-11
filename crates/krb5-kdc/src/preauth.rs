@@ -789,6 +789,14 @@ pub(crate) fn decode_edata_padata(ed: &[u8]) -> MethodData {
         .collect()
 }
 
+pub(crate) fn pa_cookie_last(mut method: MethodData) -> MethodData {
+    if let Some(i) = method.iter().position(|p| p.padata_type == pa::FX_COOKIE) {
+        let c = method.remove(i);
+        method.push(c);
+    }
+    method
+}
+
 pub(crate) fn with_fx_cookie(
     store: &dyn PrincipalRead,
     client: Option<&PrincipalName>,

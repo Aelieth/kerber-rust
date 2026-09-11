@@ -193,12 +193,12 @@ assert_no_error_log "$OUT3"
 KLIST3="$(docker exec "$NAME" klist -c /tmp/krb5cc_fast_tgs 2>/dev/null || true)"
 echo "$KLIST3"
 echo "$KLIST3" | grep -q 'host/testhost.kerber.test'
-TRACE3="$(docker exec "$NAME" cat /tmp/mit-kdc.trace 2>/dev/null || true)"
+MIT_TRACE=/tmp/mit-kdc.trace; TRACE3="$(docker exec "$NAME" cat "$MIT_TRACE" 2>/dev/null || true)"
 if ! echo "$TRACE3" | grep -Fq 'Decrypted AP-REQ'; then
     echo "$TRACE3" >&2
     log "fast.client.gate" "error" ',"error":"FAST TGS without Decrypted AP-REQ TRACE"'
     exit 1
 fi
 echo "$TRACE3" | grep -F 'Decrypted AP-REQ'
-log "fast.client.gate" "ok" ',"mode":"rust-kinit","pa_type":136,"principal":"user@KERBER.TEST","nopreauth":true,"etype":20,"tgs_strengthen":true'
+log "fast.client.gate" "ok" ',"mode":"rust-kinit","pa_type":136,"principal":"user@KERBER.TEST","nopreauth":true,"etype":20,"tgs_strengthen":true,"mit_tgs_strengthen":true'
 exit 0
