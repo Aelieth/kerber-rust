@@ -17,7 +17,12 @@ fn pref_etypes() -> Vec<i32> {
         .collect()
 }
 
-fn issue_tgt(store: &PrincipalStore, name: &str, password: &[u8], nonce: u32) -> krb5_kdc::IssuedAs {
+fn issue_tgt(
+    store: &PrincipalStore,
+    name: &str,
+    password: &[u8],
+    nonce: u32,
+) -> krb5_kdc::IssuedAs {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]);
     let key = store
         .get_name(&cname)
