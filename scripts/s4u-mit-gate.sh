@@ -948,13 +948,10 @@ echo "MIT_testkdb_s4u2proxy_rbcd_deny"
 s4u_user_life() {
     local line start end
     line="$(printf '%s\n' "$1" | grep -B2 'for client user@KERBER.TEST' | grep 'host/testhost' | head -1)"
+    [ -n "$line" ]
     start="$(printf '%s\n' "$line" | awk '{print $1, $2}')"
     end="$(printf '%s\n' "$line" | awk '{print $3, $4}')"
-    if date -d "$start" +%s >/dev/null 2>&1 && date -d "$end" +%s >/dev/null 2>&1; then
-        echo $(($(date -d "$end" +%s) - $(date -d "$start" +%s)))
-    else
-        echo 999999
-    fi
+    echo $(($(date -d "$end" +%s) - $(date -d "$start" +%s)))
 }
 
 s4u_user_flags() {
