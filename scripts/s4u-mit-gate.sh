@@ -373,7 +373,7 @@ TGST_RUST="$(docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf \
     "$NAME" kvno -U user -P krbtgt/KERBER.TEST 2>&1)"
 set -e
 echo "$TGST_RUST"
-echo "$TGST_RUST" | grep -qiE "KDC policy rejects request|NOT_ALLOWED_TO_DELEGATE"
+echo "$TGST_RUST" | grep -qF "KDC policy rejects request"
 
 echo "==== MIT kvno -U user -P krbtgt (TGS-target POLICY 12) mit ===="
 docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
@@ -383,7 +383,7 @@ TGST_MIT="$(docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
     "$MITNAME" kvno -U user -P krbtgt/KERBER.TEST 2>&1)"
 set -e
 echo "$TGST_MIT"
-echo "$TGST_MIT" | grep -qiE "KDC policy rejects request|NOT_ALLOWED_TO_DELEGATE"
+echo "$TGST_MIT" | grep -qF "KDC policy rejects request"
 echo "MIT_s4u2proxy_tgs_target"
 
 echo "==== MIT kvno --u2u happy rust ===="

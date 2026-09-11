@@ -428,7 +428,7 @@ docker cp "$NAME":/tmp/rust-kdc.log "$OUT/rust-kdc.log" 2>/dev/null || true
 
 echo "$DIFF" | grep -q '"case":"tgs-pac-server-cksum-wrong-enctype","outcome":"ok","error_code":60,"e_text":"HEADER_PAC","rust_tag":"0x7e","mit_tag":"0x7e"' || die "tgs-pac-server-cksum-wrong-enctype not code 60 e_text HEADER_PAC on both legs"
 echo "$DIFF" | grep -q '"case":"u2u-2nd-ticket-pac-wrong-enctype","outcome":"ok","error_code":60,"e_text":"2ND_TKT_PAC","rust_tag":"0x7e","mit_tag":"0x7e"' || die "u2u-2nd-ticket-pac-wrong-enctype not code 60 e_text 2ND_TKT_PAC on both legs"
-echo "$DIFF" | grep -q '"case":"u2u-success","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","ticket_etype":18,"reply_session_etype":17' || die "u2u-success not discriminating ticket 18 / reply 17"
+echo "$DIFF" | grep -q '"case":"u2u-success","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","ticket_etype":18,"reply_session_etype":17' || die "u2u-success not distinct-stkt decrypt + reply 17 (both sessions etype 18)"
 echo "$DIFF" | grep -q '"case":"u2u-success-offered","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","ticket_etype":18,"reply_session_etype":18' || die "u2u-success-offered not ticket 18 / reply 18"
 
 echo "==== krbtgt rekey keepold then RENEW service ticket both legs ===="

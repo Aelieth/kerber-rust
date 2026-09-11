@@ -113,6 +113,12 @@ realm at insert. `create_host` seeds neither list (MIT db2 has no
 hooks and refuses 13 `UNSUPPORTED_S4U2PROXY_REQUEST`; MIT test-KDB
 issues only with an explicit `delegation`/`rbcd` entry). That is an
 LDAP/test-KDB-like superset over db2, fail-closed on an empty list.
+`s4u_allowed_from`/`_to` have no dump, kadm5 or iprop carrier
+(`kdb_dump.rs` loads empty lists; `kadm5` decode starts empty;
+`merge_iprop_princ` does not copy them). The only writers are the
+`KRB5_TEST_S4U_*` knobs, so a production Rust KDC refuses every
+S4U2Proxy like MIT db2 until a W1-C kadm5/dump principal-attribute
+item lands.
 
 FAST armor decrypt binds keys to the armor `ticket.realm` (MIT
 `fast_util.c` `rd_req`); forged-realm armor is 35 `NOT_US` (`rd_req`).

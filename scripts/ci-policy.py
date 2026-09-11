@@ -792,7 +792,20 @@ _HOST_TMP_REDIR = re.compile(
     r"|(?:^|[\s;|&])(?:cp|tee|mv|mkdir|touch|install)\b[^\n;|&]*\s/tmp/"
     r"|\$\([^)]*>>?\s*/tmp/"
 )
-_HEREDOC_DELIM = re.compile(r"""<<[-]?\s*['\"]?(\w+)['\"]?""")
+_HEREDOC_DELIM = re.compile(r"""(?<!<)<<(?!<)[-]?\s*['\"]?(\w+)['\"]?""")
+_UNQUOTED_REDIR = re.compile(r"(?:^|[\s;|&])(?:\d*)>>?\s*$")
+_UNQUOTED_CP = re.compile(
+    r"(?:^|[\s;|&])(?:cp|tee|mv|mkdir|touch|install)\b"
+)
+_QUOTED_TMP = re.compile(r"""['\"]/tmp/""")
+_QUOTED_REDIR_TMP = re.compile(r""">>?\s*['\"]/tmp/""")
+
+
+def _quoted_host_tmp(raw: str, unquoted: str) -> bool:
+    """Host `>"/tmp/…"` or `cp x "/tmp/…"`; `>` inside a quote is not a host write."""
+    if _UNQUOTED_REDIR.search(unquoted.rstrip()) and _QUOTED_REDIR_TMP.search(raw):
+        return True
+    return bool(_UNQUOTED_CP.search(unquoted) and _QUOTED_TMP.search(raw))
 
 
 def check_gate_provenance(text: str | None = None, name: str = "gate.sh") -> None:
@@ -872,8 +885,10 @@ def _host_side_code(code: str) -> str:
 def host_tmp_write_lines(text: str) -> list[int]:
     """Host-level `>/tmp/` writes, skipping quotes, `$(…)`, and heredocs.
 
-    A quoted closer (`EOF'`, `EOF"`) ends the heredoc. Quoted `sh -c '…'`
-    payloads are stripped; a host redirect on the same docker line is not.
+    A quoted closer (`EOF'`, `EOF"`) ends the heredoc. The delimiter is
+    taken from the unquoted host-side text (`<<<` is not a heredoc).
+    Quoted redirect targets are scanned. Quoted `sh -c '…'` payloads are
+    stripped; a host redirect on the same docker line is not.
     """
     hits: list[int] = []
     in_sq = [False]
@@ -961,14 +976,16 @@ def host_tmp_write_lines(text: str) -> list[int]:
                 break
             buf.append(ch)
             k += 1
-        code = _host_side_code("".join(buf))
-        if not started_quoted and _HEREDOC_DELIM.search(line):
-            m = _HEREDOC_DELIM.search(line)
+        unquoted = "".join(buf)
+        code = _host_side_code(unquoted)
+        raw = line[:k]
+        if not started_quoted and "<<" in unquoted:
+            m = _HEREDOC_DELIM.search(raw)
             if m:
                 heredoc_end = m.group(1)
-        if "KERBER_SCRATCH:-" in code:
+        if "KERBER_SCRATCH:-" in code or "KERBER_SCRATCH:-" in raw:
             continue
-        if _HOST_TMP_REDIR.search(code):
+        if _HOST_TMP_REDIR.search(code) or _quoted_host_tmp(raw, code):
             hits.append(i)
     return hits
 
@@ -2662,6 +2679,30 @@ jobs:
             + f"\necho probe > /tmp/host-probe-{_probe_name}\n",
             f"probe-{_probe_name}",
         )
+    _must_die(
+        check_no_host_tmp_writes,
+        "# ignore <<EOF in a comment\necho x > /tmp/after-comment-heredoc\n",
+        "comment-heredoc-tmp-gate.sh",
+    )
+    _must_die(
+        check_no_host_tmp_writes,
+        "cat <<<ignored\necho x > /tmp/after-herestring\n",
+        "herestring-tmp-gate.sh",
+    )
+    _must_die(
+        check_no_host_tmp_writes,
+        'echo >"/tmp/quoted-redir"\n',
+        "quoted-redir-tmp-gate.sh",
+    )
+    _must_die(
+        check_no_host_tmp_writes,
+        'cp x "/tmp/quoted-cp"\n',
+        "quoted-cp-tmp-gate.sh",
+    )
+    check_no_host_tmp_writes(
+        'echo "cat <<EOF"\necho ok\ncat <<<hello\n# <<EOF\n',
+        "ok-quoted-and-comment-heredoc.sh",
+    )
     check_unit_evidence_helper()
     check_settle_helper()
     check_evidence_check_tool()
@@ -2780,14 +2821,25 @@ jobs:
                 }
             ]
 
-        cistat.fetch_runs = _inprog
-        rc = cistat.save_run("o/r", "ci", "abc1234", str(out_dir), retries=2)
-        if rc != 2 or (out_dir / "ci-abc1234.txt").exists():
-            _die("ci-status --save must exit 2 and write no file for in_progress")
-
         import io
         import urllib.error as _ue
         from email.message import Message
+
+        def _quiet_save(*args, **kwargs):
+            sink = io.StringIO()
+            oldout, olderr = sys.stdout, sys.stderr
+            try:
+                sys.stdout = sink
+                sys.stderr = sink
+                return cistat.save_run(*args, **kwargs)
+            finally:
+                sys.stdout = oldout
+                sys.stderr = olderr
+
+        cistat.fetch_runs = _inprog
+        rc = _quiet_save("o/r", "ci", "abc1234", str(out_dir), retries=2)
+        if rc != 2 or (out_dir / "ci-abc1234.txt").exists():
+            _die("ci-status --save must exit 2 and write no file for in_progress")
 
         def _403(*_a, **_k):
             raise _ue.HTTPError(
@@ -2799,7 +2851,7 @@ jobs:
             )
 
         cistat.fetch_runs = _403
-        rc = cistat.save_run("o/r", "ci", "abc1234", str(out_dir), retries=3)
+        rc = _quiet_save("o/r", "ci", "abc1234", str(out_dir), retries=3)
         if rc != 2 or (out_dir / "ci-abc1234.txt").exists():
             _die("ci-status --save must exit 2 and write no file after 403 ×N")
 
@@ -2816,7 +2868,7 @@ jobs:
 
         cistat.fetch_runs = _done
         cistat.format_run = lambda *_a, **_k: ["run ok"]
-        rc = cistat.save_run("o/r", "ci", "abc1234", str(out_dir), retries=1)
+        rc = _quiet_save("o/r", "ci", "abc1234", str(out_dir), retries=1)
         saved = out_dir / "ci-abc1234.txt"
         if rc != 0 or not saved.is_file() or "head_sha=" not in saved.read_text():
             _die("ci-status --save must exit 0 with head_sha= for a completed run")

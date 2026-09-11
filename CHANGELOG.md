@@ -8,6 +8,16 @@ this project uses semantic versioning once a crate is published.
 
 ### W1-A′-2
 
+- **docs.** R25 close-out: ledger `:269`/`:272` unit-only with live
+  deferred; `:270` referral S4U2Proxy `deferred` (A′-4 item 18);
+  `:199` rust-site `issue_tgs_body:942-945` `NULL_SERVER`; `:295`
+  TGS half disclosed. `docs/security.md` names the missing
+  dump/kadm5/iprop S4U carrier (W1-C).
+- **test.** `host_tmp_write_lines` matches the heredoc delimiter on
+  the unquoted host-side text (not `<<<` or a quoted/`#` `<<WORD`)
+  and scans quoted redirect targets. `provenance.sh` `mktemp`s under
+  `KERBER_SCRATCH`/`TMPDIR`. Fixture `ci-status --save` stays off
+  stdout.
 - **docs.** Ledger `tgs_policy.c:100` rust-site is
   `check_tgs_constraints_skeleton:1609-1610` (`TICKET NOT VALID` 33).
   `tgs_policy.c:352` FOREIGN_PAC is `deferred` until a MIT incoming-trust

@@ -22,7 +22,9 @@ _gate_err() {
 trap '_gate_err "$?" "$LINENO" "$BASH_COMMAND" "${BASH_SOURCE[0]}"' ERR
 
 head_sha="$(git rev-parse HEAD)"
-_prov_idx="$(mktemp)"
+_prov_dir="${KERBER_SCRATCH:-${TMPDIR:-/tmp}}"
+mkdir -p "$_prov_dir"
+_prov_idx="$(mktemp "$_prov_dir/kerber-prov.XXXXXX")"
 rm -f "$_prov_idx"
 # working/ is gitignored; naming it in the pathspec makes `git add` exit 1.
 GIT_INDEX_FILE="$_prov_idx" git add -A -- . >/dev/null
