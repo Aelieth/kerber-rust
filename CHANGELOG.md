@@ -42,7 +42,9 @@ this project uses semantic versioning once a crate is published.
   24. `return_enc_padata` echoes PAC-OPTIONS RBCD and FAST nego.
   TGS FAST always emits `strengthen_key` and CF2s the reply key.
   SPAKE 91 e_data is `[151, 19, 133]` (`maybe_add_etype_info2` then
-  `prepare_error_as` cookie last). diffsend 92 → 94.
+  `prepare_error_as` cookie last). FAST-inner 151 makes MIT kinit
+  send SPAKE support (91) when the client shares P-256.
+  diffsend 92 → 94.
 
 ### W1-A′-2
 

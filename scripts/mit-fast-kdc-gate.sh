@@ -183,6 +183,7 @@ docker exec "$NAME" sh -c "cat > /tmp/krb5-fast-proxy.conf <<EOF
     default_realm = KERBER.TEST
     dns_lookup_kdc = false
     udp_preference_limit = 4096
+    spake_preauth_groups = P-256
 [realms]
     KERBER.TEST = {
         kdc = 127.0.0.1:1891
@@ -222,6 +223,18 @@ if [ "$ok" != 1 ]; then
 fi
 docker exec "$MITNAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
 sleep 0.3
+docker exec "$MITNAME" python3 -c '
+from pathlib import Path
+p = Path("/etc/krb5.conf")
+t = p.read_text()
+if "spake_preauth_groups" not in t:
+    t = t.replace("[libdefaults]", "[libdefaults]\n    spake_preauth_groups = P-256", 1)
+p.write_text(t)
+'
+docker exec "$MITNAME" grep -q 'spake_preauth_groups' /etc/krb5.conf || {
+    echo "MIT krb5.conf missing spake_preauth_groups" >&2
+    exit 1
+}
 docker exec -d "$MITNAME" sh -c 'krb5kdc -n >/tmp/mit-kdc.log 2>&1'
 ok=0
 for _ in $(seq 1 80); do
@@ -236,6 +249,11 @@ if [ "$ok" != 1 ]; then
     log "fast.kdc.gate" "error" ',"error":"MIT kdc did not listen"'
     exit 1
 fi
+docker exec "$MITNAME" grep -qi 'spake failed to initialize' /tmp/mit-kdc.log && {
+    docker exec "$MITNAME" cat /tmp/mit-kdc.log >&2 || true
+    echo "MIT SPAKE preauth did not initialize" >&2
+    exit 1
+}
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-forge-tgt" "$MITNAME":/tmp/krb5-forge-tgt
 docker exec "$MITNAME" chmod +x /tmp/krb5-forge-tgt
 docker exec "$MITNAME" sh -c 'printf "userpassword\n" | kinit -c /tmp/krb5cc_armor user@KERBER.TEST'
@@ -298,6 +316,7 @@ docker exec "$MITNAME" sh -c "cat > /tmp/krb5-fast-proxy.conf <<EOF
     default_realm = KERBER.TEST
     dns_lookup_kdc = false
     udp_preference_limit = 4096
+    spake_preauth_groups = P-256
 [realms]
     KERBER.TEST = {
         kdc = 127.0.0.1:1891
@@ -346,6 +365,10 @@ echo "$RUST_BADPW_PROXY" | grep -E 'rep#[0-9]+ error_code=24 e_data_encoding=met
     echo "rust FAST wrong-password missing 24 method [136]: $RUST_BADPW_PROXY" >&2
     exit 1
 }
+echo "$RUST_BADPW_PROXY" | grep -E 'rep#[0-9]+ error_code=91 e_data_encoding=method e_data_types=\[136\]' || {
+    echo "rust FAST wrong-password missing 91 method [136]: $RUST_BADPW_PROXY" >&2
+    exit 1
+}
 RUST_BADPW_SHAPE="$(echo "$RUST_BADPW_PROXY" | grep -E 'rep#[0-9]+ (error_code=|tag=)' | sed -E 's/^rep#[0-9]+ //' | sort -u || true)"
 
 docker exec "$NAME" sh -c ':> /tmp/fast-err-rust.txt'
@@ -368,7 +391,7 @@ RUST_NOSUCH_SHAPE="$(echo "$RUST_NOSUCH_PROXY" | grep -E 'rep#[0-9]+ error_code=
 
 echo "==== MIT KDC: FAST wrong-password and unknown-server outer shapes ===="
 # Harness user has empty Attributes; Rust --test-realm user has REQUIRES_PRE_AUTH.
-# Align the flag so both legs emit 25 then 24 method [136], not an AS-REP 0x6b.
+# Align the flag so both legs emit 25, 91 (SPAKE support), then 24 method [136].
 docker exec "$MITNAME" kadmin.local -q 'modprinc +requires_preauth user'
 docker exec "$MITNAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
 sleep 0.3
@@ -388,7 +411,7 @@ if [ "$ok" != 1 ]; then
 fi
 docker exec "$MITNAME" sh -c ':> /tmp/fast-err-mit.txt'
 set +e
-MIT_BADPW="$(docker exec -e KRB5_CONFIG=/tmp/krb5-fast-proxy.conf "$MITNAME" \
+MIT_BADPW="$(docker exec -e KRB5_CONFIG=/tmp/krb5-fast-proxy.conf -e KRB5_TRACE=/tmp/mit-badpw.trace "$MITNAME" \
     sh -c 'printf "wrongpassword\n" | kinit -T /tmp/krb5cc_armor -c /tmp/krb5cc_bad user@KERBER.TEST' 2>&1)"
 set -e
 echo "$MIT_BADPW"
@@ -408,6 +431,11 @@ echo "$MIT_BADPW_PROXY" | grep -E 'rep#[0-9]+ error_code=25 e_data_encoding=meth
 }
 echo "$MIT_BADPW_PROXY" | grep -E 'rep#[0-9]+ error_code=24 e_data_encoding=method e_data_types=\[136\]' || {
     echo "MIT FAST wrong-password missing 24 method [136]: $MIT_BADPW_PROXY" >&2
+    exit 1
+}
+echo "$MIT_BADPW_PROXY" | grep -E 'rep#[0-9]+ error_code=91 e_data_encoding=method e_data_types=\[136\]' || {
+    echo "MIT FAST wrong-password missing 91 method [136]: $MIT_BADPW_PROXY" >&2
+    docker exec "$MITNAME" cat /tmp/mit-badpw.trace 2>/dev/null || true
     exit 1
 }
 MIT_BADPW_SHAPE="$(echo "$MIT_BADPW_PROXY" | grep -E 'rep#[0-9]+ (error_code=|tag=)' | sed -E 's/^rep#[0-9]+ //' | sort -u || true)"
