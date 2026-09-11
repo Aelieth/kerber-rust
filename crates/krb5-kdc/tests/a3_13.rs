@@ -55,7 +55,8 @@ fn host_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedTgs) -> EncTicketP
     decode(&plain).unwrap()
 }
 
-fn wrap_if_relevant(inner: AuthorizationData) -> AuthorizationData {
+fn wrap_if_relevant(inner: &[AuthorizationDataValue]) -> AuthorizationData {
+    let inner = inner.to_vec();
     let wrapped = encode(&inner).unwrap();
     vec![AuthorizationDataValue {
         ad_type: pa::AD_IF_RELEVANT,
@@ -160,7 +161,7 @@ fn tgs_copies_if_relevant_body_authdata() {
     let (store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 13001);
     let blob = b"kerber-ad-copy";
-    let ad = wrap_if_relevant(vec![AuthorizationDataValue {
+    let ad = wrap_if_relevant(&[AuthorizationDataValue {
         ad_type: pa::AD_AND_OR,
         ad_data: blob.to_vec().into(),
     }]);
@@ -204,11 +205,11 @@ fn tgs_strips_kdc_issued_if_relevant_keeps_sibling() {
     let (store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 13021);
     let keep = b"keep-me";
-    let mut ad = wrap_if_relevant(vec![AuthorizationDataValue {
+    let mut ad = wrap_if_relevant(&[AuthorizationDataValue {
         ad_type: pa::AD_WIN2K_PAC,
         ad_data: b"dummy-pac".to_vec().into(),
     }]);
-    ad.extend(wrap_if_relevant(vec![AuthorizationDataValue {
+    ad.extend(wrap_if_relevant(&[AuthorizationDataValue {
         ad_type: pa::AD_AND_OR,
         ad_data: keep.to_vec().into(),
     }]));
