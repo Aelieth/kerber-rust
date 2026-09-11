@@ -176,6 +176,7 @@ pub fn tgs_req_ex(
         etypes,
         None,
         None,
+        None,
     )
 }
 
@@ -213,6 +214,7 @@ pub fn tgs_req_ex_addr(
         etypes,
         addresses,
         None,
+        None,
     )
 }
 
@@ -236,6 +238,7 @@ pub fn tgs_req_ex_from(
     etypes: Vec<i32>,
     addresses: Option<HostAddresses>,
     from: Option<KerberosTime>,
+    enc_authorization_data: Option<EncryptedData>,
 ) -> Result<TgsReq, Error> {
     let till = KerberosTime::now()
         .add_hours(10)
@@ -251,7 +254,7 @@ pub fn tgs_req_ex_from(
         nonce,
         etype: etypes,
         addresses,
-        enc_authorization_data: None,
+        enc_authorization_data,
         additional_tickets,
     };
     let body_der = encode(&body)?;

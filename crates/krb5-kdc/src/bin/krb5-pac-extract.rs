@@ -15,7 +15,7 @@ use krb5_crypto::{
 };
 use krb5_kdc::{pac_from_ticket_part, s2k_params, ticket_checksum_der, verify_pac_signatures};
 use krb5_protocol::{FileCcache, Keytab};
-use krb5_types::{EncTicketPart, Ticket, ku};
+use krb5_types::{AuthorizationData, AuthorizationDataValue, EncTicketPart, Ticket, ku, pa};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -36,6 +36,8 @@ fn main() -> ExitCode {
     let mut print_rid = false;
     let mut print_transited = false;
     let mut print_types = false;
+    let mut print_ad_types = false;
+    let mut print_tgt = false;
     let mut print_delegation = false;
     let mut last_host = false;
     let mut verify_privsvr = None;
@@ -78,6 +80,14 @@ fn main() -> ExitCode {
                 print_types = true;
                 i += 1;
             }
+            "--print-ad-types" => {
+                print_ad_types = true;
+                i += 1;
+            }
+            "--tgt" => {
+                print_tgt = true;
+                i += 1;
+            }
             "--print-delegation" => {
                 print_delegation = true;
                 i += 1;
@@ -95,7 +105,8 @@ fn main() -> ExitCode {
                     "usage: krb5-pac-extract --keytab <kt> --ccache <cc> [--out <pac>] \
                      [--enc-tkt-out <der>] [--krbtgt-keytab <kt>] [--keys-out <txt>] \
                      [--print-rid] [--print-transited] [--print-types] \
-                     [--print-delegation] [--last] [--verify-privsvr <enctype>]"
+                     [--print-ad-types] [--tgt] [--print-delegation] [--last] \
+                     [--verify-privsvr <enctype>]"
                 );
                 return ExitCode::from(2);
             }
@@ -110,6 +121,7 @@ fn main() -> ExitCode {
     if out.is_none()
         && !print_transited
         && !print_types
+        && !print_ad_types
         && !print_delegation
         && verify_privsvr.is_none()
     {
@@ -147,13 +159,25 @@ fn main() -> ExitCode {
         .iter()
         .filter(|cred| !cred.is_config() && cred.server.1.components_joined().starts_with("host/"))
         .collect();
-    let Some(cred) = (if last_host {
+    let tgt_creds: Vec<_> = cc
+        .creds
+        .iter()
+        .filter(|cred| {
+            !cred.is_config() && cred.server.1.components_joined().starts_with("krbtgt/")
+        })
+        .collect();
+    let Some(cred) = (if print_tgt {
+        tgt_creds.first()
+    } else if last_host {
         host_creds.last()
     } else {
         host_creds.first()
     })
     .copied() else {
-        eprintln!("krb5-pac-extract: no host/ ticket in ccache");
+        eprintln!(
+            "krb5-pac-extract: no {} ticket in ccache",
+            if print_tgt { "krbtgt/" } else { "host/" }
+        );
         return ExitCode::from(1);
     };
     let sname = cred.server.1.components_joined();
@@ -171,6 +195,22 @@ fn main() -> ExitCode {
         let Ok(part) = decode::<EncTicketPart>(&plain) else {
             continue;
         };
+        if print_ad_types {
+            let listed = part
+                .authorization_data
+                .as_deref()
+                .map(format_ad_types)
+                .unwrap_or_default();
+            println!("ad_types={listed}");
+            if out.is_none()
+                && !print_transited
+                && !print_types
+                && !print_delegation
+                && verify_privsvr.is_none()
+            {
+                return ExitCode::SUCCESS;
+            }
+        }
         if print_transited {
             let contents = String::from_utf8_lossy(part.transited.contents.as_ref());
             let checked = i32::from(
@@ -325,6 +365,29 @@ fn main() -> ExitCode {
     }
     eprintln!("krb5-pac-extract: no PAC in {sname} (or key mismatch)");
     ExitCode::from(1)
+}
+
+fn format_ad_types(ad: &[AuthorizationDataValue]) -> String {
+    ad.iter()
+        .map(|e| {
+            if e.ad_type == pa::AD_IF_RELEVANT {
+                match decode::<AuthorizationData>(e.ad_data.as_ref()) {
+                    Ok(inner) => {
+                        let inner_s = inner
+                            .iter()
+                            .map(|i| i.ad_type.to_string())
+                            .collect::<Vec<_>>()
+                            .join("+");
+                        format!("{}/{}", e.ad_type, inner_s)
+                    }
+                    Err(_) => format!("{}/?", e.ad_type),
+                }
+            } else {
+                e.ad_type.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn local_tgt_key(kt: &Keytab, cc: &FileCcache) -> Option<ProtocolKey> {

@@ -203,7 +203,7 @@ echo "$DIFF" | grep -q '"case":"as-invalid-opts","outcome":"ok","error_code":13'
 echo "$DIFF" | grep -q '"case":"as-request-anonymous","outcome":"ok","error_code":13,"e_text":"VALIDATE_ANONYMOUS_PRINCIPAL","rust_tag":"0x7e","mit_tag":"0x7e"' || die "as-request-anonymous not code 13 e_text VALIDATE_ANONYMOUS_PRINCIPAL on both legs"
 echo "$DIFF" | grep -q '"case":"as-validate-before-preauth","outcome":"ok","error_code":23' || die "as-validate-before-preauth (preauth+needchange) not code 23 on both legs"
 echo "$DIFF" | grep -q '"case":"as-retransmit","outcome":"ok","rust_retransmit_identical":true,"mit_retransmit_identical":true' || die "as-retransmit reply not identical from the lookaside on both legs"
-echo "$DIFF" | grep -q '"outcome":"ok","cases":88' || die "diffsend did not finish 88 cases"
+echo "$DIFF" | grep -q '"outcome":"ok","cases":91' || die "diffsend did not finish 91 cases"
 echo "$DIFF" | grep -q '"case":"fast-armor-no-subkey","outcome":"ok","error_code":12,"e_text":"FIND_FAST","rust_tag":"0x7e","mit_tag":"0x7e"' || die "fast-armor-no-subkey not code 12 e_text FIND_FAST on both legs"
 echo "$DIFF" | grep -q '"case":"armor-ap-req-as-pa-tgs-req","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' || die "armor-ap-req-as-pa-tgs-req not code 12 e_text PROCESS_TGS on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-ad-fx-armor-authenticator","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' || die "tgs-ad-fx-armor-authenticator not code 12 e_text PROCESS_TGS on both legs"
@@ -273,6 +273,9 @@ echo "$DIFF" | grep -q '"case":"tgs-postdated-is-invalid","outcome":"ok","rust_t
 echo "$DIFF" | grep -q '"case":"tgs-no-preauth-flag","outcome":"ok","error_code":60,"e_text":"NO PREAUTH","rust_tag":"0x7e","mit_tag":"0x7e"' || die "tgs-no-preauth-flag not code 60 e_text NO PREAUTH on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-hw-preauth-flag","outcome":"ok","error_code":60,"e_text":"NO HW PREAUTH","rust_tag":"0x7e","mit_tag":"0x7e"' || die "tgs-hw-preauth-flag not code 60 e_text NO HW PREAUTH on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-nyv-inside-skew","outcome":"ok","error_code":33,"e_text":"NOT_YET_VALID","rust_tag":"0x7e","mit_tag":"0x7e"' || die "tgs-nyv-inside-skew not code 33 e_text NOT_YET_VALID on both legs"
+echo "$DIFF" | grep -q '"case":"tgs-body-authdata","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","copied":true' || die "tgs-body-authdata not copied on both legs"
+echo "$DIFF" | grep -q '"case":"tgs-ad-mandatory-for-kdc","outcome":"ok","error_code":12,"e_text":"HANDLE_AUTHDATA","rust_tag":"0x7e","mit_tag":"0x7e"' || die "tgs-ad-mandatory-for-kdc not code 12 e_text HANDLE_AUTHDATA on both legs"
+echo "$DIFF" | grep -q '"case":"tgs-body-authdata-kdc-issued-stripped","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","kept":true,"dummy_stripped":true' || die "tgs-body-authdata-kdc-issued-stripped not keep/strip on both legs"
 # W1-K M2b: the differential oracle has no case-name whitelist; no diffsend line
 # may carry a "whitelist" key.
 if echo "$DIFF" | grep -q '"whitelist"'; then

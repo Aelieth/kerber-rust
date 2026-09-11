@@ -22,6 +22,12 @@ this project uses semantic versioning once a crate is published.
   `NO PREAUTH` 60 (`tgs_policy.c:180-184`). `kdc_get_ticket_endtime`
   mins client/server/realm max_life against header end/`till`.
   `starttime == authtime` is omitted. diffsend 85 → 88.
+- **kdc.** `handle_authdata` (`kdc_authdata.c:576-628`): TGS body AD
+  decrypts session ku 4 then subkey ku 5; `AD-MANDATORY-FOR-KDC` is
+  POLICY 12 `HANDLE_AUTHDATA`. `KdcAuthdata` registry (empty in
+  production). `copy_tgt` / `is_kdc_issued_authdatum` strip
+  SIGNTICKET/KDC-ISSUED/WIN2K-PAC/CAMMAC/AUTH-INDICATOR. diffsend
+  88 → 91.
 
 ### W1-A′-2
 

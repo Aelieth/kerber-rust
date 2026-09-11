@@ -10,12 +10,13 @@ use krb5_types::pac::{
     PAC_TICKET_CHECKSUM, parse_client_info,
 };
 use krb5_types::{
-    AuthorizationDataValue, EncTicketPart, EncryptionKey, PaData, PrincipalName, Ticket, err, ku,
-    pa,
+    AuthorizationData, AuthorizationDataValue, EncTicketPart, EncryptedData, EncryptionKey, PaData,
+    PrincipalName, Ticket, err, ku, pa,
 };
 
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
+use crate::plugins::authdata_modules;
 use crate::preauth::{find_pa, proto, proto_d};
 use crate::status;
 use crate::store::Principal;
@@ -1136,6 +1137,112 @@ pub(crate) fn rbcd_pac_client(pac: &[u8]) -> Result<(PrincipalName, String), Err
     ))
 }
 
+fn is_kdc_issued_type(ad_type: i32) -> bool {
+    matches!(
+        ad_type,
+        pa::AD_SIGNTICKET
+            | pa::AD_KDC_ISSUED
+            | pa::AD_WIN2K_PAC
+            | pa::AD_CAMMAC
+            | pa::AD_AUTH_INDICATOR
+    )
+}
+
+/// MIT `is_kdc_issued_authdatum` (`kdc_authdata.c:110-150`).
+///
+/// An IF-RELEVANT whose immediate containee types include a KDC-issued
+/// type is dropped whole. Decode failure of IF-RELEVANT is not issued.
+pub(crate) fn is_kdc_issued_authdatum(ad: &AuthorizationDataValue) -> bool {
+    if ad.ad_type == pa::AD_IF_RELEVANT {
+        let Ok(inner) = decode::<AuthorizationData>(ad.ad_data.as_ref()) else {
+            return false;
+        };
+        return inner.iter().any(|e| is_kdc_issued_type(e.ad_type));
+    }
+    is_kdc_issued_type(ad.ad_type)
+}
+
+fn has_mandatory_for_kdc(ad: &[AuthorizationDataValue]) -> bool {
+    ad.iter().any(|e| e.ad_type == pa::AD_MANDATORY_FOR_KDC)
+}
+
+fn add_filtered_authdata(dst: &mut AuthorizationData, src: &[AuthorizationDataValue]) {
+    dst.extend(src.iter().filter(|e| !is_kdc_issued_authdatum(e)).cloned());
+}
+
+fn map_ad_fail(e: Error) -> Error {
+    match e {
+        Error::Crypto(_) => proto(err::BAD_INTEGRITY, status::HANDLE_AUTHDATA),
+        Error::Asn1(_) => proto(err::GENERIC, status::HANDLE_AUTHDATA),
+        p @ Error::Protocol { .. } => with_status(p, status::HANDLE_AUTHDATA),
+        other => proto_d(err::GENERIC, status::HANDLE_AUTHDATA, other.to_string()),
+    }
+}
+
+fn copy_request_authdata(
+    enc: &EncryptedData,
+    session: &ProtocolKey,
+    client_key: &ProtocolKey,
+    dest: &mut AuthorizationData,
+) -> Result<(), Error> {
+    let sess_usage = KeyUsage::new(ku::TGS_REQ_AD_SESSKEY)?;
+    let sub_usage = KeyUsage::new(ku::TGS_REQ_AD_SUBKEY)?;
+    let plain = decrypt(session, sess_usage, enc.cipher.as_ref())
+        .or_else(|_| decrypt(client_key, sub_usage, enc.cipher.as_ref()))?;
+    let ad: AuthorizationData = decode(&plain)?;
+    if has_mandatory_for_kdc(&ad) {
+        return Err(proto(err::POLICY, status::HANDLE_AUTHDATA));
+    }
+    add_filtered_authdata(dest, &ad);
+    Ok(())
+}
+
+fn copy_tgt_authdata(
+    tgt_ad: &[AuthorizationDataValue],
+    dest: &mut AuthorizationData,
+) -> Result<(), Error> {
+    if has_mandatory_for_kdc(tgt_ad) {
+        return Err(proto(err::POLICY, status::HANDLE_AUTHDATA));
+    }
+    add_filtered_authdata(dest, tgt_ad);
+    Ok(())
+}
+
+/// MIT `handle_authdata` (`kdc_authdata.c:576-628`) without `handle_pac`.
+///
+/// Order: copy TGS body AD → modules (skip anonymous) → copy TGT AD.
+/// `handle_pac` stays in `mint_ticket`.
+pub(crate) fn handle_authdata(
+    is_tgs: bool,
+    anonymous: bool,
+    body_enc_ad: Option<&EncryptedData>,
+    session: Option<&ProtocolKey>,
+    client_key: Option<&ProtocolKey>,
+    tgt_ad: Option<&AuthorizationData>,
+) -> Result<Option<AuthorizationData>, Error> {
+    let mut out: AuthorizationData = Vec::new();
+    if is_tgs && let Some(enc) = body_enc_ad {
+        let session = session.ok_or_else(|| proto(err::GENERIC, status::HANDLE_AUTHDATA))?;
+        let client_key = client_key.ok_or_else(|| proto(err::GENERIC, status::HANDLE_AUTHDATA))?;
+        copy_request_authdata(enc, session, client_key, &mut out).map_err(map_ad_fail)?;
+    }
+    if !anonymous {
+        for m in authdata_modules() {
+            if let Err(e) = m.handle(is_tgs, &mut out) {
+                tracing::error!(module = m.name(), error = %e, "from authdata module");
+            }
+        }
+    }
+    if is_tgs && let Some(tgt) = tgt_ad {
+        copy_tgt_authdata(tgt, &mut out)?;
+    }
+    if out.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(out))
+    }
+}
+
 pub(crate) fn with_status(e: Error, st: &'static str) -> Error {
     match e {
         Error::Protocol {
@@ -1195,5 +1302,58 @@ mod a2_r17_reply {
         assert!(rep.user_id.subject_cert.is_none());
         assert_eq!(rep.user_id.nonce, 1);
         assert!(rep.user_id.use_reply_key_usage());
+    }
+}
+
+#[cfg(test)]
+mod handle_authdata_tests {
+    use super::*;
+
+    #[test]
+    fn if_relevant_decode_fail_is_not_issued() {
+        let junk = AuthorizationDataValue {
+            ad_type: pa::AD_IF_RELEVANT,
+            ad_data: b"not-der".to_vec().into(),
+        };
+        assert!(!is_kdc_issued_authdatum(&junk));
+    }
+
+    #[test]
+    fn copy_tgt_strips_issued_keeps_other() {
+        let keep = AuthorizationDataValue {
+            ad_type: pa::AD_AND_OR,
+            ad_data: b"keep".to_vec().into(),
+        };
+        let pac = AuthorizationDataValue {
+            ad_type: pa::AD_IF_RELEVANT,
+            ad_data: encode(&vec![AuthorizationDataValue {
+                ad_type: pa::AD_WIN2K_PAC,
+                ad_data: b"p".to_vec().into(),
+            }])
+            .unwrap()
+            .into(),
+        };
+        let tgt = vec![pac, keep.clone()];
+        let out = handle_authdata(true, false, None, None, None, Some(&tgt))
+            .unwrap()
+            .unwrap();
+        assert!(out.iter().any(|e| e.ad_type == pa::AD_AND_OR));
+        assert!(out.iter().all(|e| !is_kdc_issued_authdatum(e)));
+    }
+
+    #[test]
+    fn tgt_mandatory_is_handle_authdata() {
+        let tgt = vec![AuthorizationDataValue {
+            ad_type: pa::AD_MANDATORY_FOR_KDC,
+            ad_data: Vec::<u8>::new().into(),
+        }];
+        let err = handle_authdata(true, false, None, None, None, Some(&tgt)).unwrap_err();
+        match err {
+            Error::Protocol { code, text, .. } => {
+                assert_eq!(code, err::POLICY);
+                assert_eq!(text.as_deref(), Some(status::HANDLE_AUTHDATA));
+            }
+            other => panic!("{other:?}"),
+        }
     }
 }

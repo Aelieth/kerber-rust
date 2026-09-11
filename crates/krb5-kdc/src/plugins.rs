@@ -1,10 +1,11 @@
-//! kdcpreauth / kdcpolicy extension points (Rust traits, not dlopen).
+//! kdcpreauth / kdcpolicy / kdcauthdata extension points (Rust traits, not dlopen).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use krb5_asn1::encode;
 use krb5_crypto::ProtocolKey;
-use krb5_types::{PaData, PrincipalName, pa};
+use krb5_types::{AuthorizationData, AuthorizationDataValue, PaData, PrincipalName, pa};
 
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
@@ -333,6 +334,66 @@ pub fn preauth_modules() -> Vec<Arc<dyn KdcPreauth>> {
             .cloned(),
     );
     v
+}
+
+/// One kdcauthdata module (`kdcauthdata_plugin.h`). Errors are logged, not fatal.
+pub trait KdcAuthdata: Send + Sync {
+    /// Stable name (`greet` in MIT `plugins/authdata/greet_server`).
+    fn name(&self) -> &'static str;
+    /// Append ticket authdata. TGS-only modules return immediately on AS.
+    ///
+    /// # Errors
+    ///
+    /// Module-specific; the KDC logs and continues (`kdc_authdata.c:610-611`).
+    fn handle(&self, is_tgs: bool, reply: &mut AuthorizationData) -> Result<(), Error>;
+}
+
+/// MIT greet_server AD type (`greet_auth.c:55`).
+pub const GREET_AD_TYPE: i32 = -42;
+/// MIT greet_server greeting (`greet_auth.c:38`).
+pub const GREET_TEXT: &[u8] = b"Hello, KDC issued acceptor world!";
+
+/// Test / deploy greet module. Production loads none (MIT image has no greet).
+pub struct GreetAuth;
+
+impl KdcAuthdata for GreetAuth {
+    fn name(&self) -> &'static str {
+        "greet"
+    }
+    fn handle(&self, is_tgs: bool, reply: &mut AuthorizationData) -> Result<(), Error> {
+        if !is_tgs {
+            return Ok(());
+        }
+        let inner = vec![AuthorizationDataValue {
+            ad_type: GREET_AD_TYPE,
+            ad_data: GREET_TEXT.to_vec().into(),
+        }];
+        let wrapped = encode(&inner)?;
+        reply.push(AuthorizationDataValue {
+            ad_type: pa::AD_IF_RELEVANT,
+            ad_data: wrapped.into(),
+        });
+        Ok(())
+    }
+}
+
+static EXTRA_AD: Mutex<Vec<Arc<dyn KdcAuthdata>>> = Mutex::new(Vec::new());
+
+/// Extra kdcauthdata modules (tests / deploy). None are built in.
+pub fn register_authdata(m: Arc<dyn KdcAuthdata>) {
+    EXTRA_AD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(m);
+}
+
+/// Loaded kdcauthdata modules (empty unless [`register_authdata`] was called).
+#[must_use]
+pub fn authdata_modules() -> Vec<Arc<dyn KdcAuthdata>> {
+    EXTRA_AD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
 }
 
 /// METHOD-DATA from every registered module plus ETYPE-INFO2 from the caller.
@@ -700,5 +761,19 @@ mod tests {
             Error::Protocol { code, .. } if code == krb5_types::err::REPEAT => {}
             other => panic!("second AS must REPEAT, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn greet_is_tgs_only() {
+        let mut as_ad = Vec::new();
+        GreetAuth.handle(false, &mut as_ad).unwrap();
+        assert!(as_ad.is_empty());
+        let mut tgs_ad = Vec::new();
+        GreetAuth.handle(true, &mut tgs_ad).unwrap();
+        assert_eq!(tgs_ad.len(), 1);
+        assert_eq!(tgs_ad[0].ad_type, pa::AD_IF_RELEVANT);
+        let inner: AuthorizationData = krb5_asn1::decode(tgs_ad[0].ad_data.as_ref()).unwrap();
+        assert_eq!(inner[0].ad_type, GREET_AD_TYPE);
+        assert_eq!(inner[0].ad_data.as_ref(), GREET_TEXT);
     }
 }

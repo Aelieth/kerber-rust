@@ -26,9 +26,10 @@ use krb5_protocol::{
 };
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac, PacIdentity, RpcSid};
 use krb5_types::{
-    ApOptions, ApReq, AsRep, AuthorizationDataValue, Checksum, EncTicketPart, EncryptedData,
-    EncryptionKey, HostAddress, KdcOptions, KerberosTime, KrbError, PaData, PaPacRequest,
-    PrincipalName, TgsRep, Ticket, TicketFlags, TransitedEncoding, err, flag_bit, ku, pa,
+    ApOptions, ApReq, AsRep, AuthorizationData, AuthorizationDataValue, Checksum, EncTicketPart,
+    EncryptedData, EncryptionKey, HostAddress, KdcOptions, KerberosTime, KrbError, PaData,
+    PaPacRequest, PrincipalName, TgsRep, Ticket, TicketFlags, TransitedEncoding, err, flag_bit, ku,
+    pa,
 };
 use sha1::{Digest, Sha1};
 
@@ -348,6 +349,21 @@ fn decrypt_as(
     let session =
         ProtocolKey::from_bytes(sess_et, enc.key.keyvalue.as_ref()).map_err(|e| e.to_string())?;
     Ok((rep, enc, tkt, enc_tag, session))
+}
+
+fn ad_has_payload(ad: &[AuthorizationDataValue], ad_type: i32, payload: &[u8]) -> bool {
+    for e in ad {
+        if e.ad_type == pa::AD_IF_RELEVANT {
+            if let Ok(inner) = decode::<AuthorizationData>(e.ad_data.as_ref())
+                && ad_has_payload(&inner, ad_type, payload)
+            {
+                return true;
+            }
+        } else if e.ad_type == ad_type && e.ad_data.as_ref() == payload {
+            return true;
+        }
+    }
+    false
 }
 
 fn decrypt_tgs(
@@ -3108,6 +3124,7 @@ fn run() -> Result<(), String> {
             etypes.clone(),
             None,
             Some(from),
+            None,
         )
         .map_err(|e| e.to_string())?,
     )
@@ -3228,13 +3245,13 @@ fn run() -> Result<(), String> {
                 &sess,
                 realm,
                 &user,
-                host,
+                host.clone(),
                 realm,
                 0x1000_0076,
                 KdcOptions::none().with_bit(flag_bit::VALIDATE, true),
                 None,
                 Vec::new(),
-                etypes,
+                etypes.clone(),
             )
             .map_err(|e| e.to_string())?,
         )
@@ -3242,7 +3259,218 @@ fn run() -> Result<(), String> {
         err::TKT_NYV,
     )?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":88}}"#);
+    let copy_blob = b"kerber-ad-copy";
+    let copy_ad = vec![AuthorizationDataValue {
+        ad_type: pa::AD_IF_RELEVANT,
+        ad_data: encode(&vec![AuthorizationDataValue {
+            ad_type: pa::AD_AND_OR,
+            ad_data: copy_blob.to_vec().into(),
+        }])
+        .map_err(|e| e.to_string())?
+        .into(),
+    }];
+    let copy_enc = {
+        let usage = KeyUsage::new(ku::TGS_REQ_AD_SESSKEY).map_err(|e| e.to_string())?;
+        let cipher = encrypt(&sess, usage, &encode(&copy_ad).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        EncryptedData {
+            etype: sess.etype().to_iana(),
+            kvno: None,
+            cipher: cipher.into(),
+        }
+    };
+    let copy_req = encode(
+        &tgs_req_ex_from(
+            mint_tgt(
+                tkt_key,
+                tkt_kvno,
+                &user,
+                realm,
+                &krbtgt_sname,
+                &sess,
+                window10.clone(),
+                TicketFlags::initial_preauth(),
+            )?,
+            &sess,
+            realm,
+            &user,
+            host.clone(),
+            realm,
+            0x1000_0077,
+            KdcOptions::none(),
+            None,
+            Vec::new(),
+            etypes.clone(),
+            None,
+            None,
+            Some(copy_enc),
+        )
+        .map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    let (tr, tm) = send_both(&cfg, "tgs-body-authdata", &copy_req)?;
+    let svc = cfg
+        .host
+        .as_ref()
+        .ok_or_else(|| "KERBER_HOST_KEYTAB required".to_string())?;
+    let (_, _, rt, _) = decrypt_tgs(&tr, &sess, svc)?;
+    let (_, _, mt, _) = decrypt_tgs(&tm, &sess, svc)?;
+    let has_copy = |tkt: &EncTicketPart| {
+        tkt.authorization_data
+            .as_ref()
+            .is_some_and(|ad| ad_has_payload(ad, pa::AD_AND_OR, copy_blob))
+    };
+    if !has_copy(&rt) || !has_copy(&mt) {
+        return Err(format!(
+            "tgs-body-authdata: rust_has={} mit_has={}",
+            has_copy(&rt),
+            has_copy(&mt)
+        ));
+    }
+    println!(
+        r#"{{"event":"diffsend","case":"tgs-body-authdata","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","copied":true}}"#
+    );
+
+    let mandatory = vec![AuthorizationDataValue {
+        ad_type: pa::AD_MANDATORY_FOR_KDC,
+        ad_data: Vec::<u8>::new().into(),
+    }];
+    let mand_enc = {
+        let usage = KeyUsage::new(ku::TGS_REQ_AD_SESSKEY).map_err(|e| e.to_string())?;
+        let cipher = encrypt(
+            &sess,
+            usage,
+            &encode(&mandatory).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+        EncryptedData {
+            etype: sess.etype().to_iana(),
+            kvno: None,
+            cipher: cipher.into(),
+        }
+    };
+    expect_error(
+        &cfg,
+        "tgs-ad-mandatory-for-kdc",
+        &encode(
+            &tgs_req_ex_from(
+                mint_tgt(
+                    tkt_key,
+                    tkt_kvno,
+                    &user,
+                    realm,
+                    &krbtgt_sname,
+                    &sess,
+                    window10.clone(),
+                    TicketFlags::initial_preauth(),
+                )?,
+                &sess,
+                realm,
+                &user,
+                host.clone(),
+                realm,
+                0x1000_0078,
+                KdcOptions::none(),
+                None,
+                Vec::new(),
+                etypes.clone(),
+                None,
+                None,
+                Some(mand_enc),
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::POLICY,
+    )?;
+
+    let keep_blob = b"keep-me";
+    let strip_ad = vec![
+        AuthorizationDataValue {
+            ad_type: pa::AD_IF_RELEVANT,
+            ad_data: encode(&vec![AuthorizationDataValue {
+                ad_type: pa::AD_WIN2K_PAC,
+                ad_data: b"dummy-pac".to_vec().into(),
+            }])
+            .map_err(|e| e.to_string())?
+            .into(),
+        },
+        AuthorizationDataValue {
+            ad_type: pa::AD_IF_RELEVANT,
+            ad_data: encode(&vec![AuthorizationDataValue {
+                ad_type: pa::AD_AND_OR,
+                ad_data: keep_blob.to_vec().into(),
+            }])
+            .map_err(|e| e.to_string())?
+            .into(),
+        },
+    ];
+    let strip_enc = {
+        let usage = KeyUsage::new(ku::TGS_REQ_AD_SESSKEY).map_err(|e| e.to_string())?;
+        let cipher = encrypt(&sess, usage, &encode(&strip_ad).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        EncryptedData {
+            etype: sess.etype().to_iana(),
+            kvno: None,
+            cipher: cipher.into(),
+        }
+    };
+    let strip_req = encode(
+        &tgs_req_ex_from(
+            mint_tgt(
+                tkt_key,
+                tkt_kvno,
+                &user,
+                realm,
+                &krbtgt_sname,
+                &sess,
+                window10.clone(),
+                TicketFlags::initial_preauth(),
+            )?,
+            &sess,
+            realm,
+            &user,
+            host,
+            realm,
+            0x1000_0079,
+            KdcOptions::none(),
+            None,
+            Vec::new(),
+            etypes,
+            None,
+            None,
+            Some(strip_enc),
+        )
+        .map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    let (tr, tm) = send_both(&cfg, "tgs-body-authdata-kdc-issued-stripped", &strip_req)?;
+    let (_, _, rt, _) = decrypt_tgs(&tr, &sess, svc)?;
+    let (_, _, mt, _) = decrypt_tgs(&tm, &sess, svc)?;
+    let has_keep = |tkt: &EncTicketPart| {
+        tkt.authorization_data
+            .as_ref()
+            .is_some_and(|ad| ad_has_payload(ad, pa::AD_AND_OR, keep_blob))
+    };
+    let has_dummy = |tkt: &EncTicketPart| {
+        tkt.authorization_data
+            .as_ref()
+            .is_some_and(|ad| ad_has_payload(ad, pa::AD_WIN2K_PAC, b"dummy-pac"))
+    };
+    if !has_keep(&rt) || !has_keep(&mt) || has_dummy(&rt) || has_dummy(&mt) {
+        return Err(format!(
+            "tgs-body-authdata-kdc-issued-stripped: rust_keep={} mit_keep={} rust_dummy={} mit_dummy={}",
+            has_keep(&rt),
+            has_keep(&mt),
+            has_dummy(&rt),
+            has_dummy(&mt)
+        ));
+    }
+    println!(
+        r#"{{"event":"diffsend","case":"tgs-body-authdata-kdc-issued-stripped","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","kept":true,"dummy_stripped":true}}"#
+    );
+
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":91}}"#);
     Ok(())
 }
 

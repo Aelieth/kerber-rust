@@ -276,5 +276,20 @@ echo "mit_privsvr=$MIT_PRIVSVR rust_privsvr=$RUST_PRIVSVR"
 [ "$MIT_PRIVSVR" = "aes128-cts-hmac-sha1-96" ] || die "MIT privsvr verify failed"
 [ "$RUST_PRIVSVR" = "aes128-cts-hmac-sha1-96" ] || die "Rust privsvr verify failed"
 
-log "cross.kdc.gate" "ok" ",\"tgt_etype\":\"$MIT_TGT_ETYPE\",\"directions\":4,\"spake_pa_type\":151,\"pac_types\":\"$MIT_PAC_TYPES\""
+echo "==== MIT TGT AD shape through Rust TGS (copy_tgt strips KDC-issued) ===="
+kinit_via mit
+TGT_AD="$(docker exec -e KRB5CCNAME="$CC" "$NAME" /tmp/krb5-pac-extract \
+    --keytab /tmp/krbtgt.kt --ccache "$CC" --tgt --print-ad-types | sed -n 's/^ad_types=//p')"
+echo "mit_tgt_ad_types=$TGT_AD"
+[ "$TGT_AD" = "1/128" ] || die "MIT TGT AD shape want 1/128 got $TGT_AD"
+got="$(kvno_via rust)"
+echo "$got"
+echo "$got" | grep -Fx 'host/testhost.kerber.test@KERBER.TEST: kvno = 1' \
+    || die "AD-shape rust TGS kvno failed: $got"
+SVC_AD="$(docker exec -e KRB5CCNAME="$CC" "$NAME" /tmp/krb5-pac-extract \
+    --keytab /tmp/host.kt --ccache "$CC" --print-ad-types | sed -n 's/^ad_types=//p')"
+echo "rust_svc_ad_types=$SVC_AD"
+[ "$SVC_AD" = "1/128" ] || die "Rust TGS AD shape want 1/128 (no copied TGT PAC) got $SVC_AD"
+
+log "cross.kdc.gate" "ok" ",\"tgt_etype\":\"$MIT_TGT_ETYPE\",\"directions\":4,\"spake_pa_type\":151,\"pac_types\":\"$MIT_PAC_TYPES\",\"tgt_ad\":\"$TGT_AD\",\"svc_ad\":\"$SVC_AD\""
 echo "cross-kdc-gate ok"

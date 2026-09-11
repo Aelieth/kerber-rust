@@ -60,8 +60,9 @@ pub use osa::{
 };
 pub use persist::{PersistError, load_store, save_store, save_store_legacy_kdb3};
 pub use plugins::{
-    DemoPolicy, DemoPreauth, DenyPolicy, KdcPolicy, KdcPreauth, clear_thread_policy,
-    current_policy, register_preauth, set_policy, set_thread_policy,
+    DemoPolicy, DemoPreauth, DenyPolicy, GREET_AD_TYPE, GREET_TEXT, GreetAuth, KdcAuthdata,
+    KdcPolicy, KdcPreauth, clear_thread_policy, current_policy, register_authdata,
+    register_preauth, set_policy, set_thread_policy,
 };
 pub use store::{
     IPROP_ERROR, IPROP_FULL_RESYNC, IPROP_NIL, IPROP_OK, IPROP_PERM_DENIED, KDB_DISALLOW_ALL_TIX,

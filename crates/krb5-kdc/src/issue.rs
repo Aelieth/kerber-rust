@@ -19,9 +19,9 @@ use krb5_types::{
 };
 
 use crate::ad::{
-    S4u2Self, SecondTicket, check_s4u2proxy_policy, check_tgs_s4u2proxy, make_s4u2self_rep,
-    pac_client_info_eq, process_s4u2self_req, rbcd_pac_client, update_delegation_info, with_status,
-    wrap_win2k_pac,
+    S4u2Self, SecondTicket, check_s4u2proxy_policy, check_tgs_s4u2proxy, handle_authdata,
+    make_s4u2self_rep, pac_client_info_eq, process_s4u2self_req, rbcd_pac_client,
+    update_delegation_info, with_status, wrap_win2k_pac,
 };
 use crate::error::Error;
 use crate::kdb::{PrincipalRead, lookup_principal_id};
@@ -566,6 +566,14 @@ fn issue_as_body(
     } else {
         sname.clone()
     };
+    let extra_ad = handle_authdata(
+        false,
+        flags.bit(flag_bit::ANONYMOUS),
+        None,
+        None,
+        None,
+        None,
+    )?;
     let ticket = mint_ticket(
         &skey.key,
         skey.kvno,
@@ -588,6 +596,7 @@ fn issue_as_body(
         None,
         body.addresses.clone(),
         false,
+        extra_ad,
     )?;
     let renew_till = ticket_renew_till;
     let mut reply_key = as_rep_key.clone();
@@ -1256,6 +1265,21 @@ fn issue_tgs_body(
         let hop = st.server.name.unparse_with_realm(&st.server.realm);
         subject_pac = Some(update_delegation_info(raw, &sname, &hop)?);
     }
+    let client_key = if let Some(sub) = authenticator.subkey.as_ref() {
+        let st = EncryptionType::from_iana(sub.keytype)
+            .or_else(|_| EncryptionType::known(sub.keytype))?;
+        ProtocolKey::from_bytes(st, sub.keyvalue.as_ref())?
+    } else {
+        tgt_session.clone()
+    };
+    let extra_ad = handle_authdata(
+        true,
+        flags.bit(flag_bit::ANONYMOUS),
+        body.enc_authorization_data.as_ref(),
+        Some(&tgt_session),
+        Some(&client_key),
+        enc_tkt.authorization_data.as_ref(),
+    )?;
     let ticket = mint_ticket(
         &tkt_key,
         tkt_kvno,
@@ -1282,6 +1306,7 @@ fn issue_tgs_body(
         },
         tgs_ticket_caddr(body, renew, validate, &enc_tkt),
         s4u2self || s4u2proxy,
+        extra_ad,
     )?;
     let mut s4u_rep_pa = None;
     let mut s4u_enc_pa = None;
@@ -1755,7 +1780,9 @@ fn mint_ticket(
     subject_pac: Option<&[u8]>,
     caddr: Option<HostAddresses>,
     s4u_final: bool,
+    extra_ad: Option<AuthorizationData>,
 ) -> Result<Ticket, Error> {
+    let mut extra = extra_ad.unwrap_or_default();
     let mut part = EncTicketPart {
         flags,
         key: encryption_key(session),
@@ -1771,13 +1798,15 @@ fn mint_ticket(
     };
     if include_pac {
         let placeholder = wrap_win2k_pac(&[0])?;
-        part.authorization_data = Some(placeholder);
+        let mut checksum_ad = extra.clone();
+        checksum_ad.extend(placeholder);
+        part.authorization_data = Some(checksum_ad);
         let checksum_der = encode(&part)?;
         let ident = if let Some(b) = logon_override {
             let v = parse_kerb_validation_info(b).map_err(|e| {
                 proto_d(
                     err::BAD_INTEGRITY,
-                    status::HEADER_PAC,
+                    status::HANDLE_AUTHDATA,
                     format!("PAC logon: {e}"),
                 )
             })?;
@@ -1804,7 +1833,10 @@ fn mint_ticket(
             subject_pac,
             s4u_final,
         )?;
-        part.authorization_data = Some(wrap_win2k_pac(&pac)?);
+        extra.extend(wrap_win2k_pac(&pac)?);
+        part.authorization_data = Some(extra);
+    } else if !extra.is_empty() {
+        part.authorization_data = Some(extra);
     }
     let der = encode(&part)?;
     let usage = KeyUsage::new(ku::TICKET)?;
