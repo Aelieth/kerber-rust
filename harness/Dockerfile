@@ -46,9 +46,16 @@ RUN wget -O krb5.tar.gz "${KRB5_URL}" \
            echo "ERROR: MIT test KDB plugin (test.so) was not built" >&2; \
            exit 1; \
        fi \
-    && mkdir -p /usr/lib/krb5/plugins/kdb \
+    && mkdir -p /usr/lib/krb5/plugins/kdb /usr/lib/krb5/plugins/kdcauthdata \
     && cp "$testdb" /usr/lib/krb5/plugins/kdb/test.so \
     && echo "MIT test KDB plugin present: /usr/lib/krb5/plugins/kdb/test.so" \
+    && greet="$(find plugins/authdata/greet_server -name 'greet_server.so' | head -1)" \
+    && if [ -z "$greet" ]; then \
+           echo "ERROR: MIT greet_server.so was not built" >&2; \
+           exit 1; \
+       fi \
+    && cp "$greet" /usr/lib/krb5/plugins/kdcauthdata/greet_server.so \
+    && echo "MIT greet_server plugin present: /usr/lib/krb5/plugins/kdcauthdata/greet_server.so" \
     && cd / \
     && rm -rf /tmp/build
 

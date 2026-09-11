@@ -195,6 +195,8 @@ pub mod ku {
     pub const ENC_CHALLENGE_KDC: u32 = 55;
     /// RFC 6806 checksum of the AS-REQ (`KRB5_KEYUSAGE_AS_REQ`).
     pub const AS_REQ: u32 = 56;
+    /// AD-KDCIssued checksum (`KRB5_KEYUSAGE_AD_KDCISSUED_CKSUM`).
+    pub const AD_KDCISSUED_CKSUM: u32 = 19;
     /// AD-CAMMAC KDC/service verifier (`KRB5_KEYUSAGE_CAMMAC`).
     pub const CAMMAC: u32 = 64;
     /// SPAKE factor encryption (MIT `KRB5_KEYUSAGE_SPAKE`).

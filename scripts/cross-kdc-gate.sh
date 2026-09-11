@@ -451,7 +451,7 @@ spake_kinit_via mit
 CAMMAC_TGT="$(docker exec -e KRB5CCNAME="$CC" "$NAME" /tmp/krb5-pac-extract \
     --keytab /tmp/krbtgt.kt --ccache "$CC" --tgt --print-ad-types | sed -n 's/^ad_types=//p')"
 echo "mit_spake_tgt_ad=$CAMMAC_TGT"
-echo "$CAMMAC_TGT" | grep -q '96' || die "MIT SPAKE TGT missing CAMMAC 96: $CAMMAC_TGT"
+[ "$CAMMAC_TGT" = "1/128,1/96" ] || die "MIT SPAKE TGT want 1/128,1/96 got $CAMMAC_TGT"
 got="$(kvno_via rust)"
 echo "$got"
 echo "$got" | grep -Fx 'host/testhost.kerber.test@KERBER.TEST: kvno = 1' \
@@ -459,14 +459,14 @@ echo "$got" | grep -Fx 'host/testhost.kerber.test@KERBER.TEST: kvno = 1' \
 CAMMAC_SVC="$(docker exec -e KRB5CCNAME="$CC" "$NAME" /tmp/krb5-pac-extract \
     --keytab /tmp/host.kt --ccache "$CC" --print-ad-types | sed -n 's/^ad_types=//p')"
 echo "rust_spake_svc_ad=$CAMMAC_SVC"
-echo "$CAMMAC_SVC" | grep -q '96' || die "Rust TGS service ticket missing CAMMAC 96: $CAMMAC_SVC"
+[ "$CAMMAC_SVC" = "1/128,1/96" ] || die "Rust TGS service ticket want 1/128,1/96 got $CAMMAC_SVC"
 
 echo "==== SPAKE CAMMAC honor Rust TGT through MIT TGS ===="
 spake_kinit_via rust
 RUST_CAMMAC_TGT="$(docker exec -e KRB5CCNAME="$CC" "$NAME" /tmp/krb5-pac-extract \
     --keytab /tmp/krbtgt.kt --ccache "$CC" --tgt --print-ad-types | sed -n 's/^ad_types=//p')"
 echo "rust_spake_tgt_ad=$RUST_CAMMAC_TGT"
-echo "$RUST_CAMMAC_TGT" | grep -q '96' || die "Rust SPAKE TGT missing CAMMAC 96: $RUST_CAMMAC_TGT"
+[ "$RUST_CAMMAC_TGT" = "1/128,1/96" ] || die "Rust SPAKE TGT want 1/128,1/96 got $RUST_CAMMAC_TGT"
 got="$(kvno_via mit)"
 echo "$got"
 echo "$got" | grep -Fx 'host/testhost.kerber.test@KERBER.TEST: kvno = 1' \
@@ -474,7 +474,7 @@ echo "$got" | grep -Fx 'host/testhost.kerber.test@KERBER.TEST: kvno = 1' \
 MIT_CAMMAC_SVC="$(docker exec -e KRB5CCNAME="$CC" "$NAME" /tmp/krb5-pac-extract \
     --keytab /tmp/host.kt --ccache "$CC" --print-ad-types | sed -n 's/^ad_types=//p')"
 echo "mit_spake_svc_ad=$MIT_CAMMAC_SVC"
-echo "$MIT_CAMMAC_SVC" | grep -q '96' || die "MIT TGS service ticket missing CAMMAC 96: $MIT_CAMMAC_SVC"
+[ "$MIT_CAMMAC_SVC" = "1/128,1/96" ] || die "MIT TGS service ticket want 1/128,1/96 got $MIT_CAMMAC_SVC"
 
 log "cross.kdc.gate" "ok" ",\"tgt_etype\":\"$MIT_TGT_ETYPE\",\"directions\":4,\"spake_pa_type\":151,\"pac_types\":\"$MIT_PAC_TYPES\",\"tgt_ad\":\"$TGT_AD\",\"svc_ad\":\"$SVC_AD\",\"require_auth\":\"12\",\"cammac_tgt\":\"$CAMMAC_TGT\",\"cammac_svc\":\"$CAMMAC_SVC\",\"rust_cammac_tgt\":\"$RUST_CAMMAC_TGT\",\"mit_cammac_svc\":\"$MIT_CAMMAC_SVC\""
 echo "cross-kdc-gate ok"

@@ -44,11 +44,20 @@ cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-kdb -q
 cargo build -p krb5-admin --bin krb5-kadmin-local -p krb5-client --bin krb5-kvno -q
 cargo build -p krb5-protocol --example diffsend --features diff -q
 
+need_image=0
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    need_image=1
+elif ! docker run --rm --entrypoint test "$IMAGE" -f /usr/lib/krb5/plugins/kdcauthdata/greet_server.so; then
+    need_image=1
+fi
+if [ "$need_image" = 1 ]; then
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT" || true
 fi
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     unavailable "MIT image unavailable"
+fi
+if ! docker run --rm --entrypoint test "$IMAGE" -f /usr/lib/krb5/plugins/kdcauthdata/greet_server.so; then
+    unavailable "MIT image missing greet_server.so"
 fi
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
@@ -121,6 +130,7 @@ docker exec -d \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KERBER_KDC_GREET=1 \
     "$NAME" sh -c '/tmp/krb5-kdc --export-keytab /tmp/host.keytab --export-krbtgt-keytab /tmp/krbtgt.keytab 127.0.0.1:8888 >/tmp/rust-kdc.log 2>&1'
 
 ok=0
@@ -163,6 +173,16 @@ t = p.read_text()
 if "spake_preauth_groups" not in t:
     t = t.replace("[libdefaults]", "[libdefaults]\n    spake_preauth_groups = P-256", 1)
 p.write_text(t)
+k = Path("/etc/krb5kdc/kdc.conf")
+kt = k.read_text()
+if "kdcauthdata" not in kt:
+    kt += """
+[plugins]
+  kdcauthdata = {
+    module = greet:/usr/lib/krb5/plugins/kdcauthdata/greet_server.so
+  }
+"""
+k.write_text(kt)
 '
 STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc -n >/tmp/mit-kdc.log 2>&1 & sleep 0.5; cat /tmp/mit-kdc.log' 2>&1 || true)"
 echo "$STARTLOG"
@@ -223,7 +243,7 @@ echo "$DIFF" | grep -q '"case":"as-invalid-opts","outcome":"ok","error_code":13'
 echo "$DIFF" | grep -q '"case":"as-request-anonymous","outcome":"ok","error_code":13,"e_text":"VALIDATE_ANONYMOUS_PRINCIPAL","rust_tag":"0x7e","mit_tag":"0x7e"' || die "as-request-anonymous not code 13 e_text VALIDATE_ANONYMOUS_PRINCIPAL on both legs"
 echo "$DIFF" | grep -q '"case":"as-validate-before-preauth","outcome":"ok","error_code":23' || die "as-validate-before-preauth (preauth+needchange) not code 23 on both legs"
 echo "$DIFF" | grep -q '"case":"as-retransmit","outcome":"ok","rust_retransmit_identical":true,"mit_retransmit_identical":true' || die "as-retransmit reply not identical from the lookaside on both legs"
-echo "$DIFF" | grep -q '"outcome":"ok","cases":98' || die "diffsend did not finish 98 cases"
+echo "$DIFF" | grep -q '"outcome":"ok","cases":101' || die "diffsend did not finish 101 cases"
 echo "$DIFF" | grep -q '"case":"fast-armor-no-subkey","outcome":"ok","error_code":12,"e_text":"FIND_FAST","rust_tag":"0x7e","mit_tag":"0x7e"' || die "fast-armor-no-subkey not code 12 e_text FIND_FAST on both legs"
 echo "$DIFF" | grep -q '"case":"armor-ap-req-as-pa-tgs-req","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' || die "armor-ap-req-as-pa-tgs-req not code 12 e_text PROCESS_TGS on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-ad-fx-armor-authenticator","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' || die "tgs-ad-fx-armor-authenticator not code 12 e_text PROCESS_TGS on both legs"
@@ -294,9 +314,12 @@ echo "$DIFF" | grep -q '"case":"tgs-postdated-is-invalid","outcome":"ok","rust_t
 echo "$DIFF" | grep -q '"case":"tgs-no-preauth-flag","outcome":"ok","error_code":60,"e_text":"NO PREAUTH","rust_tag":"0x7e","mit_tag":"0x7e"' || die "tgs-no-preauth-flag not code 60 e_text NO PREAUTH on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-hw-preauth-flag","outcome":"ok","error_code":60,"e_text":"NO HW PREAUTH","rust_tag":"0x7e","mit_tag":"0x7e"' || die "tgs-hw-preauth-flag not code 60 e_text NO HW PREAUTH on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-nyv-inside-skew","outcome":"ok","error_code":33,"e_text":"NOT_YET_VALID","rust_tag":"0x7e","mit_tag":"0x7e"' || die "tgs-nyv-inside-skew not code 33 e_text NOT_YET_VALID on both legs"
-echo "$DIFF" | grep -q '"case":"tgs-body-authdata","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","copied":true' || die "tgs-body-authdata not copied on both legs"
+echo "$DIFF" | grep -q '"case":"tgs-body-authdata","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","copied":true,"greet":true,"pac_first":true' || die "tgs-body-authdata not DER-copied / greet / PAC-first on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-ad-mandatory-for-kdc","outcome":"ok","error_code":12,"e_text":"HANDLE_AUTHDATA","rust_tag":"0x7e","mit_tag":"0x7e"' || die "tgs-ad-mandatory-for-kdc not code 12 e_text HANDLE_AUTHDATA on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-body-authdata-kdc-issued-stripped","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","kept":true,"dummy_stripped":true' || die "tgs-body-authdata-kdc-issued-stripped not keep/strip on both legs"
+echo "$DIFF" | grep -q '"case":"tgs-body-authdata-subkey","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","copied":true' || die "tgs-body-authdata-subkey not copied on both legs"
+echo "$DIFF" | grep -q '"case":"tgs-body-authdata-session-ku5","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","copied":true' || die "tgs-body-authdata-session-ku5 not copied on both legs"
+echo "$DIFF" | grep -q '"case":"tgs-tgt-and-or-kept","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","kept":true,"dummy_stripped":true' || die "tgs-tgt-and-or-kept not keep/strip on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-truncated-cammac","outcome":"ok","error_code":60,"e_text":"GET_AUTH_INDICATORS","rust_tag":"0x7e","mit_tag":"0x7e"' || die "tgs-truncated-cammac not code 60 e_text GET_AUTH_INDICATORS on both legs"
 echo "$DIFF" | grep -qF '"case":"ec-outside-fast","outcome":"ok","error_code":24,"e_text":"PREAUTH_FAILED","e_data_types":[2,19,133,136,151],"rust_tag":"0x7e","mit_tag":"0x7e"' || die "ec-outside-fast not code 24 e_text PREAUTH_FAILED on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-rbcd-pac-options","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","pac_options":true' || die "tgs-rbcd-pac-options not PAC-OPTIONS enc_padata on both legs"
@@ -544,6 +567,7 @@ docker exec -d \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KERBER_KDC_GREET=1 \
     "$NAME" sh -c '/tmp/krb5-kdc 127.0.0.1:8888 >/tmp/rust-kdc-rekey.log 2>&1'
 ok=0
 for _ in $(seq 1 80); do

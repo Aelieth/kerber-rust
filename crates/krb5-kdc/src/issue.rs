@@ -611,6 +611,8 @@ fn issue_as_body(
         None,
         None,
         None,
+        None,
+        None,
     )?;
     check_indicators(&server, &auth_indicators)?;
     let ticket = mint_ticket(
@@ -1348,6 +1350,8 @@ fn issue_tgs_body(
         Some(&tgt_session),
         Some(&client_key),
         enc_tkt.authorization_data.as_ref(),
+        Some(&session),
+        Some((&krbtgt_p.name, store.realm())),
     )?;
     let ticket = mint_ticket(
         &tkt_key,
@@ -1898,7 +1902,7 @@ fn mint_ticket(
     if include_pac {
         let placeholder = wrap_win2k_pac(&[0])?;
         let mut checksum_ad = extra.clone();
-        checksum_ad.extend(placeholder);
+        checksum_ad.splice(0..0, placeholder);
         part.authorization_data = Some(checksum_ad);
         let checksum_der = encode(&part)?;
         let ident = if let Some(b) = logon_override {
@@ -1932,8 +1936,9 @@ fn mint_ticket(
             subject_pac,
             s4u_final,
         )?;
-        extra.extend(wrap_win2k_pac(&pac)?);
-        part.authorization_data = Some(extra);
+        let mut signed = wrap_win2k_pac(&pac)?;
+        signed.extend(extra);
+        part.authorization_data = Some(signed);
     } else if !extra.is_empty() {
         part.authorization_data = Some(extra);
     }

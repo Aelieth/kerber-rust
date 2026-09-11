@@ -4,8 +4,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use krb5_asn1::encode;
-use krb5_crypto::ProtocolKey;
-use krb5_types::{AuthorizationData, AuthorizationDataValue, PaData, PrincipalName, pa};
+use krb5_crypto::{KeyUsage, ProtocolKey, checksum};
+use krb5_types::cammac::AdKdcIssued;
+use krb5_types::{
+    AuthorizationData, AuthorizationDataValue, Checksum, PaData, PrincipalName, ku, pa,
+};
 
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
@@ -403,16 +406,25 @@ pub fn preauth_modules() -> Vec<Arc<dyn KdcPreauth>> {
     v
 }
 
-/// One kdcauthdata module (`kdcauthdata_plugin.h`). Errors are logged, not fatal.
+/// One kdcauthdata module (`kdcauthdata_plugin.h:105-118`). Errors are logged, not fatal.
 pub trait KdcAuthdata: Send + Sync {
     /// Stable name (`greet` in MIT `plugins/authdata/greet_server`).
     fn name(&self) -> &'static str;
-    /// Append ticket authdata. TGS-only modules return immediately on AS.
+    /// Mutate ticket authdata. TGS-only modules return immediately on AS.
+    ///
+    /// `session` / `issuer` are `enc_tkt_reply->session` and the local TGS
+    /// principal (`kdcauthdata_plugin.h:111-117`).
     ///
     /// # Errors
     ///
     /// Module-specific; the KDC logs and continues (`kdc_authdata.c:610-611`).
-    fn handle(&self, is_tgs: bool, reply: &mut AuthorizationData) -> Result<(), Error>;
+    fn handle(
+        &self,
+        is_tgs: bool,
+        reply: &mut AuthorizationData,
+        session: Option<&ProtocolKey>,
+        issuer: Option<(&PrincipalName, &str)>,
+    ) -> Result<(), Error>;
 }
 
 /// MIT greet_server AD type (`greet_auth.c:55`).
@@ -420,26 +432,66 @@ pub const GREET_AD_TYPE: i32 = -42;
 /// MIT greet_server greeting (`greet_auth.c:38`).
 pub const GREET_TEXT: &[u8] = b"Hello, KDC issued acceptor world!";
 
-/// Test / deploy greet module. Production loads none (MIT image has no greet).
+/// Test / deploy greet module. Production loads none unless `KERBER_KDC_GREET=1`.
 pub struct GreetAuth;
+
+fn make_authdata_kdc_issued(
+    session: &ProtocolKey,
+    issuer: &PrincipalName,
+    realm: &str,
+    elements: &[AuthorizationDataValue],
+) -> Result<AuthorizationDataValue, Error> {
+    let der = encode(&elements.to_vec())?;
+    let usage = KeyUsage::new(ku::AD_KDCISSUED_CKSUM)?;
+    let mac = checksum(session, usage, &der)?;
+    let issued = AdKdcIssued {
+        ad_checksum: Checksum {
+            cksumtype: session.etype().checksum_type(),
+            checksum: mac.into(),
+        },
+        i_realm: Some(krb5_types::try_ascii(realm).map_err(|e| Error::Crypto(e.to_string()))?),
+        i_sname: Some(issuer.clone()),
+        elements: elements.to_vec(),
+    };
+    Ok(AuthorizationDataValue {
+        ad_type: pa::AD_KDC_ISSUED,
+        ad_data: encode(&issued)?.into(),
+    })
+}
 
 impl KdcAuthdata for GreetAuth {
     fn name(&self) -> &'static str {
         "greet"
     }
-    fn handle(&self, is_tgs: bool, reply: &mut AuthorizationData) -> Result<(), Error> {
+    fn handle(
+        &self,
+        is_tgs: bool,
+        reply: &mut AuthorizationData,
+        session: Option<&ProtocolKey>,
+        issuer: Option<(&PrincipalName, &str)>,
+    ) -> Result<(), Error> {
         if !is_tgs {
             return Ok(());
         }
-        let inner = vec![AuthorizationDataValue {
+        let Some(session) = session else {
+            return Ok(());
+        };
+        let Some((tgs, realm)) = issuer else {
+            return Ok(());
+        };
+        let elements = vec![AuthorizationDataValue {
             ad_type: GREET_AD_TYPE,
             ad_data: GREET_TEXT.to_vec().into(),
         }];
-        let wrapped = encode(&inner)?;
-        reply.push(AuthorizationDataValue {
+        let kdc_issued = make_authdata_kdc_issued(session, tgs, realm, &elements)?;
+        let wrapped = encode(&vec![kdc_issued])?;
+        let greet = AuthorizationDataValue {
             ad_type: pa::AD_IF_RELEVANT,
             ad_data: wrapped.into(),
-        });
+        };
+        let mut merged = vec![greet];
+        merged.append(reply);
+        *reply = merged;
         Ok(())
     }
 }
@@ -890,15 +942,37 @@ mod tests {
 
     #[test]
     fn greet_is_tgs_only() {
+        let session = ProtocolKey::from_bytes(
+            krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
+            &[0x11; 32],
+        )
+        .unwrap();
+        let tgs = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "KERBER.TEST"]);
         let mut as_ad = Vec::new();
-        GreetAuth.handle(false, &mut as_ad).unwrap();
+        GreetAuth
+            .handle(
+                false,
+                &mut as_ad,
+                Some(&session),
+                Some((&tgs, "KERBER.TEST")),
+            )
+            .unwrap();
         assert!(as_ad.is_empty());
         let mut tgs_ad = Vec::new();
-        GreetAuth.handle(true, &mut tgs_ad).unwrap();
+        GreetAuth
+            .handle(
+                true,
+                &mut tgs_ad,
+                Some(&session),
+                Some((&tgs, "KERBER.TEST")),
+            )
+            .unwrap();
         assert_eq!(tgs_ad.len(), 1);
         assert_eq!(tgs_ad[0].ad_type, pa::AD_IF_RELEVANT);
         let inner: AuthorizationData = krb5_asn1::decode(tgs_ad[0].ad_data.as_ref()).unwrap();
-        assert_eq!(inner[0].ad_type, GREET_AD_TYPE);
-        assert_eq!(inner[0].ad_data.as_ref(), GREET_TEXT);
+        assert_eq!(inner[0].ad_type, pa::AD_KDC_ISSUED);
+        let issued: AdKdcIssued = krb5_asn1::decode(inner[0].ad_data.as_ref()).unwrap();
+        assert_eq!(issued.elements[0].ad_type, GREET_AD_TYPE);
+        assert_eq!(issued.elements[0].ad_data.as_ref(), GREET_TEXT);
     }
 }

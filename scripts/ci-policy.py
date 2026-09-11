@@ -127,6 +127,9 @@ DIFFSEND_CASES = frozenset(
         "tgs-body-authdata",
         "tgs-ad-mandatory-for-kdc",
         "tgs-body-authdata-kdc-issued-stripped",
+        "tgs-body-authdata-subkey",
+        "tgs-body-authdata-session-ku5",
+        "tgs-tgt-and-or-kept",
         "tgs-truncated-cammac",
         "ec-outside-fast",
         "tgs-rbcd-pac-options",
@@ -2548,7 +2551,7 @@ jobs:
     finally:
         subprocess.run(["rm", "-rf", str(fake_mit)], check=False)
     _must_die(check_ledger_anchors, _row("krb5-kdc/plugins.rs advertise", verdict="absent"))
-    check_ledger_anchors(_row("krb5-kdc/plugins.rs advertise:114", verdict="absent"))
+    check_ledger_anchors(_row("krb5-kdc/plugins.rs advertise:117", verdict="absent"))
     _must_die(check_ledger_anchors, _row("krb5-kdc/plugins.rs advertise:1", verdict="absent"))
     _must_die(check_ledger_anchors, _row("krb5-kdc/listen.rs handle_tcp", "no status word"))
     _must_die(check_ledger_anchors, _row("krb5-kdc/listen.rs handle_tcp", proof="`no_such_unit_anywhere`"))

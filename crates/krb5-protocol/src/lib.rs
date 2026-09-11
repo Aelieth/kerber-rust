@@ -41,7 +41,7 @@ pub use as_ex::{
 };
 pub use builders::{
     as_req, as_req_sname, pa_enc_timestamp, pa_enc_timestamp_at, tgs_req, tgs_req_ex,
-    tgs_req_ex_addr, tgs_req_ex_from, tgs_req_ex_till,
+    tgs_req_ex_addr, tgs_req_ex_from, tgs_req_ex_subkey, tgs_req_ex_till,
 };
 pub use capture::capture_pdu;
 pub use ccache::{

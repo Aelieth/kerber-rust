@@ -256,6 +256,9 @@ fn main() {
     } else {
         eprintln!("krb5-kdc: privilege drop skipped (shared persist db)");
     }
+    if std::env::var("KERBER_KDC_GREET").ok().as_deref() == Some("1") {
+        krb5_kdc::register_authdata(std::sync::Arc::new(krb5_kdc::GreetAuth));
+    }
     println!("listening {addr}");
     if let Err(e) = serve(store, udp, tcp) {
         eprintln!("krb5-kdc: serve: {e}");

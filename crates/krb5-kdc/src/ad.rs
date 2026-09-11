@@ -1212,7 +1212,8 @@ fn copy_tgt_authdata(
 /// MIT `handle_authdata` (`kdc_authdata.c:576-628`) without `handle_pac`.
 ///
 /// Order: copy TGS body AD → modules (skip anonymous) → copy TGT AD.
-/// `handle_pac` stays in `mint_ticket`.
+/// `handle_pac` stays in `mint_ticket` (PAC at index 0).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_authdata(
     is_tgs: bool,
     anonymous: bool,
@@ -1220,6 +1221,8 @@ pub(crate) fn handle_authdata(
     session: Option<&ProtocolKey>,
     client_key: Option<&ProtocolKey>,
     tgt_ad: Option<&AuthorizationData>,
+    reply_session: Option<&ProtocolKey>,
+    issuer: Option<(&PrincipalName, &str)>,
 ) -> Result<Option<AuthorizationData>, Error> {
     let mut out: AuthorizationData = Vec::new();
     if is_tgs && let Some(enc) = body_enc_ad {
@@ -1229,7 +1232,7 @@ pub(crate) fn handle_authdata(
     }
     if !anonymous {
         for m in authdata_modules() {
-            if let Err(e) = m.handle(is_tgs, &mut out) {
+            if let Err(e) = m.handle(is_tgs, &mut out, reply_session, issuer) {
                 tracing::error!(module = m.name(), error = %e, "from authdata module");
             }
         }
@@ -1555,7 +1558,7 @@ mod handle_authdata_tests {
             .into(),
         };
         let tgt = vec![pac, keep.clone()];
-        let out = handle_authdata(true, false, None, None, None, Some(&tgt))
+        let out = handle_authdata(true, false, None, None, None, Some(&tgt), None, None)
             .unwrap()
             .unwrap();
         assert!(out.iter().any(|e| e.ad_type == pa::AD_AND_OR));
@@ -1568,7 +1571,8 @@ mod handle_authdata_tests {
             ad_type: pa::AD_MANDATORY_FOR_KDC,
             ad_data: Vec::<u8>::new().into(),
         }];
-        let err = handle_authdata(true, false, None, None, None, Some(&tgt)).unwrap_err();
+        let err =
+            handle_authdata(true, false, None, None, None, Some(&tgt), None, None).unwrap_err();
         match err {
             Error::Protocol { code, text, .. } => {
                 assert_eq!(code, err::POLICY);

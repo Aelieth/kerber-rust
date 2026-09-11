@@ -3,9 +3,9 @@
 use krb5_asn1::encode;
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, checksum, encrypt};
 use krb5_types::{
-    ApOptions, ApReq, AsReq, Authenticator, Checksum, EncryptedData, HostAddresses, KdcOptions,
-    KdcReq, KdcReqBody, KerberosTime, Microseconds, PaData, PaEncTsEnc, PrincipalName, TgsReq,
-    Ticket, ku, pa,
+    ApOptions, ApReq, AsReq, Authenticator, Checksum, EncryptedData, EncryptionKey, HostAddresses,
+    KdcOptions, KdcReq, KdcReqBody, KerberosTime, Microseconds, PaData, PaEncTsEnc, PrincipalName,
+    TgsReq, Ticket, ku, pa,
 };
 
 use crate::error::Error;
@@ -282,6 +282,50 @@ pub fn tgs_req_ex_till(
     enc_authorization_data: Option<EncryptedData>,
     till: Option<KerberosTime>,
 ) -> Result<TgsReq, Error> {
+    tgs_req_ex_subkey(
+        ticket,
+        session,
+        crealm,
+        cname,
+        sname,
+        realm,
+        nonce,
+        kdc_options,
+        additional_tickets,
+        extra_padata,
+        etypes,
+        addresses,
+        from,
+        enc_authorization_data,
+        till,
+        None,
+    )
+}
+
+/// [`tgs_req_ex_till`] with an authenticator subkey (TGS body AD usage 5).
+///
+/// # Errors
+///
+/// Returns crypto or DER failures.
+#[allow(clippy::too_many_arguments)]
+pub fn tgs_req_ex_subkey(
+    ticket: Ticket,
+    session: &ProtocolKey,
+    crealm: &str,
+    cname: &PrincipalName,
+    sname: PrincipalName,
+    realm: &str,
+    nonce: u32,
+    kdc_options: KdcOptions,
+    additional_tickets: Option<Vec<Ticket>>,
+    extra_padata: Vec<PaData>,
+    etypes: Vec<i32>,
+    addresses: Option<HostAddresses>,
+    from: Option<KerberosTime>,
+    enc_authorization_data: Option<EncryptedData>,
+    till: Option<KerberosTime>,
+    subkey: Option<&ProtocolKey>,
+) -> Result<TgsReq, Error> {
     let till = till.unwrap_or_else(|| {
         KerberosTime::now()
             .add_hours(10)
@@ -315,7 +359,10 @@ pub fn tgs_req_ex_till(
         }),
         cusec: Microseconds::from_subsec_micros(now.0.timestamp_subsec_micros()),
         ctime: now,
-        subkey: None,
+        subkey: subkey.map(|k| EncryptionKey {
+            keytype: k.etype().to_iana(),
+            keyvalue: k.as_bytes().to_vec().into(),
+        }),
         seq_number: None,
         authorization_data: None,
     };

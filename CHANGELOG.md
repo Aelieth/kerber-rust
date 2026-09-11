@@ -58,6 +58,10 @@ this project uses semantic versioning once a crate is published.
   in the past is an expired endtime. `check_tgs_svc_time` runs in
   `svc_pol_fns` before `check_indicators`. POSTDATED `starttime = from`
   unconditionally. diffsend 95 → 98.
+- **kdc.** PAC is prepended at index 0 (`pac_sign.c:389-419`). Greet
+  wraps KDC-ISSUED usage 19 (`greet_auth.c:62-72`) when
+  `KERBER_KDC_GREET=1`. Body AD still tries session ku 4 then
+  client_key ku 5. diffsend 98 → 101.
 
 ### W1-A′-2
 
