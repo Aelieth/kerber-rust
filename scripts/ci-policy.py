@@ -113,6 +113,10 @@ DIFFSEND_CASES = frozenset(
         "tgs-pac-server-cksum-wrong-enctype",
         "u2u-2nd-ticket-pac-wrong-enctype",
         "u2u-success-offered",
+        "tgs-forwarded-on-non-f-tgt",
+        "tgs-proxy-on-non-p-tgt",
+        "tgs-postdate-on-non-postdatable",
+        "tgs-postdated-is-invalid",
     }
 )
 _LEDGER_GATE = re.compile(r"(?:scripts/)?([A-Za-z0-9._-]+-gate(?:\.sh)?)")

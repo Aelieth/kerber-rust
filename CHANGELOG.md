@@ -6,6 +6,16 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-A′-3
+
+- **kdc.** `get_ticket_flags` + `kdc_get_ticket_renewtime` (`kdc_util.c:812-858,1712-1757`).
+  TGS `FORWARDED`/`PROXY`/`MAY_POSTDATE`/`POSTDATED`+`INVALID` copy MIT
+  `OPTS2FLAGS`/`COPY_TKT_FLAGS`. `check_tgs_opts` refuses postdate
+  without header `MAY_POSTDATE` (`TGT NOT POSTDATABLE` 13). deny_opts
+  `RENEWABLE`+`DISALLOW_RENEWABLE` is `NON-RENEWABLE TICKET` 12;
+  `NON-POSTDATABLE` keys only on `ALLOW_POSTDATE`. GSS initiator
+  `tgs_forward` (`krb5_fwd_tgt_creds`); diffsend 81 → 85.
+
 ### W1-A′-2
 
 - **docs.** R25 close-out: ledger `:269`/`:272` unit-only with live

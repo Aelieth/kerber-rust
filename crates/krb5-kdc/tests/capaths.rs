@@ -48,6 +48,31 @@ fn as_tgt(store: &PrincipalStore, realm: &str, nonce: u32) -> krb5_kdc::IssuedAs
     krb5_kdc::issue_as(store, &req).expect("AS")
 }
 
+fn as_tgt_may_postdate(store: &PrincipalStore, realm: &str, nonce: u32) -> krb5_kdc::IssuedAs {
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let salt = cname.default_salt(realm);
+    let key = krb5_crypto::string_to_key(
+        EncryptionType::Aes256CtsHmacSha196,
+        TEST_USER_PASSWORD,
+        &salt,
+        Some(&krb5_kdc::S2K_ITERS.to_be_bytes()),
+    )
+    .expect("s2k");
+    let mut req = as_req(
+        cname,
+        realm,
+        nonce,
+        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
+    )
+    .unwrap();
+    req.0.req_body.kdc_options = req
+        .0
+        .req_body
+        .kdc_options
+        .with_bit(flag_bit::MAY_POSTDATE, true);
+    krb5_kdc::issue_as(store, &req).expect("AS may-postdate")
+}
+
 fn as_tgt_renewable(store: &PrincipalStore, realm: &str, nonce: u32) -> krb5_kdc::IssuedAs {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let salt = cname.default_salt(realm);
@@ -1328,7 +1353,7 @@ fn tgs_service_deny_opts_precedes_deny_all() {
     store
         .apply_admin_fields(&host, Some(a), None, None, None, None, false)
         .unwrap();
-    let tgt = as_tgt(&store, "C.TEST", 973);
+    let tgt = as_tgt_may_postdate(&store, "C.TEST", 973);
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let req = tgs_req_ex(
         tgt.rep.0.ticket.clone(),

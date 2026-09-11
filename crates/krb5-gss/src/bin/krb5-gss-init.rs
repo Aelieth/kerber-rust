@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use krb5_asn1::{decode, encode};
 use krb5_gss::{ChannelBindings, DelegCred, GssContext, IovBuf, IovType, KRB5_OID};
-use krb5_protocol::{FileCcache, build_ap_req_with_cksum};
-use krb5_types::{ApOptions, Ticket};
+use krb5_protocol::{AsOutcome, FileCcache, KdcAddr, build_ap_req_with_cksum, tgs_forward};
+use krb5_types::{ApOptions, EncKdcRepPart, EncryptionKey, KerberosTime, Ticket, TicketFlags};
 
 fn main() {
     let mut ccache = None::<String>;
@@ -82,18 +82,74 @@ fn main() {
         std::process::exit(1);
     });
     let deleg_cred = if deleg {
+        let session = tgt.session_key().unwrap_or_else(|e| {
+            eprintln!("tgt session key: {e}");
+            std::process::exit(1);
+        });
         let tkt: Ticket = decode(&tgt.ticket).unwrap_or_else(|e| {
             eprintln!("tgt: {e}");
             std::process::exit(1);
         });
-        Some(DelegCred {
+        let as_out = AsOutcome {
             ticket: tkt,
-            session: tgt.session_key().unwrap_or_else(|e| {
-                eprintln!("tgt session key: {e}");
-                std::process::exit(1);
-            }),
-            crealm: tgt.client.0.clone(),
+            enc_part: EncKdcRepPart {
+                key: EncryptionKey {
+                    keytype: session.etype().to_iana(),
+                    keyvalue: session.as_bytes().to_vec().into(),
+                },
+                last_req: Vec::new(),
+                nonce: 0,
+                key_expiration: None,
+                flags: TicketFlags::from_u32(tgt.ticket_flags),
+                authtime: KerberosTime::from_unix_seconds(tgt.authtime),
+                starttime: Some(KerberosTime::from_unix_seconds(tgt.starttime)),
+                endtime: KerberosTime::from_unix_seconds(tgt.endtime),
+                renew_till: (tgt.renew_till > 0)
+                    .then(|| KerberosTime::from_unix_seconds(tgt.renew_till)),
+                srealm: tgt.server.0.clone(),
+                sname: tgt.server.1.clone(),
+                caddr: None,
+                encrypted_pa_data: None,
+            },
+            client_key: session.clone(),
+            session_key: session,
             cname: tgt.client.1.clone(),
+            crealm: tgt.client.0.clone(),
+            fast_avail: false,
+            pa_type: None,
+        };
+        let kdc = std::env::var("KRB5_KDC")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map_or_else(
+                || KdcAddr::new("127.0.0.1"),
+                |h| {
+                    if let Some((host, port)) = h.rsplit_once(':')
+                        && let Ok(p) = port.parse()
+                    {
+                        KdcAddr {
+                            host: host.to_owned(),
+                            port: p,
+                        }
+                    } else {
+                        KdcAddr::new(h)
+                    }
+                },
+            );
+        let fwd = tgs_forward(&kdc, &as_out).unwrap_or_else(|e| {
+            eprintln!("tgs_forward: {e}");
+            std::process::exit(1);
+        });
+        Some(DelegCred {
+            ticket: fwd.ticket,
+            session: fwd.session_key,
+            crealm: as_out.crealm,
+            cname: as_out.cname,
+            flags: fwd.enc_part.flags,
+            authtime: Some(fwd.enc_part.authtime),
+            starttime: fwd.enc_part.starttime,
+            endtime: Some(fwd.enc_part.endtime),
+            renew_till: fwd.enc_part.renew_till,
         })
     } else {
         None

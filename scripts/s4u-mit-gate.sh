@@ -185,7 +185,7 @@ KLIST1="$(docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf "$NAME" klist -f)"
 echo "$KLIST1"
 echo "$KLIST1" | grep -q 'host/testhost.kerber.test'
 echo "$KLIST1" | grep -q 'for client user@KERBER.TEST'
-HOSTF="$(echo "$KLIST1" | sed -n 's/.*for client user@KERBER.TEST, Flags: //p')"
+HOSTF="$(echo "$KLIST1" | awk -F'Flags: ' '/for client user@KERBER.TEST/{print $2; exit}')"
 echo "s4u_flags_with_ok_to_auth=$HOSTF"
 test -n "$HOSTF"
 echo "$HOSTF" | grep -q F
@@ -262,7 +262,7 @@ docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf \
     "$NAME" kvno -U user host/testhost.kerber.test
 KLISTF="$(docker exec -e KRB5_CONFIG=/tmp/s4u-krb5.conf "$NAME" klist -f)"
 echo "$KLISTF"
-HOSTF2="$(echo "$KLISTF" | sed -n 's/.*for client user@KERBER.TEST, Flags: //p')"
+HOSTF2="$(echo "$KLISTF" | awk -F'Flags: ' '/for client user@KERBER.TEST/{print $2; exit}')"
 echo "s4u_flags_without_ok_to_auth=$HOSTF2"
 test -n "$HOSTF2"
 echo "$HOSTF2" | grep -q F
@@ -617,7 +617,7 @@ MIT_TK="$(docker exec -e KRB5_CONFIG=/tmp/test-krb5.conf \
     "$NAME" klist -f -c /tmp/krb5cc_mit_testkdb)"
 echo "$MIT_TK"
 echo "$MIT_TK" | grep -q 'for client user@KERBER.TEST'
-MIT_TF="$(echo "$MIT_TK" | sed -n 's/.*for client user@KERBER.TEST, Flags: //p' | tail -1)"
+MIT_TF="$(echo "$MIT_TK" | awk -F'Flags: ' '/for client user@KERBER.TEST/{print $2}' | tail -1)"
 echo "s4u2proxy_flags_mit_testkdb=$MIT_TF"
 test -n "$MIT_TF"
 echo "$MIT_TF" | grep -q F
@@ -686,7 +686,7 @@ RUST_TK="$(docker exec -e KRB5_CONFIG=/tmp/s4u-r18.conf \
     "$NAME" klist -f -c /tmp/krb5cc_rust_s4u2p)"
 echo "$RUST_TK"
 echo "$RUST_TK" | grep -q 'for client user@KERBER.TEST'
-RUST_TF="$(echo "$RUST_TK" | sed -n 's/.*for client user@KERBER.TEST, Flags: //p' | tail -1)"
+RUST_TF="$(echo "$RUST_TK" | awk -F'Flags: ' '/for client user@KERBER.TEST/{print $2}' | tail -1)"
 echo "s4u2proxy_flags_rust=$RUST_TF"
 test -n "$RUST_TF"
 echo "$RUST_TF" | grep -q F

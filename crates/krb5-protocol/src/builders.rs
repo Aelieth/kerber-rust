@@ -162,7 +162,7 @@ pub fn tgs_req_ex(
     extra_padata: Vec<PaData>,
     etypes: Vec<i32>,
 ) -> Result<TgsReq, Error> {
-    tgs_req_ex_addr(
+    tgs_req_ex_from(
         ticket,
         session,
         crealm,
@@ -174,6 +174,7 @@ pub fn tgs_req_ex(
         additional_tickets,
         extra_padata,
         etypes,
+        None,
         None,
     )
 }
@@ -198,6 +199,44 @@ pub fn tgs_req_ex_addr(
     etypes: Vec<i32>,
     addresses: Option<HostAddresses>,
 ) -> Result<TgsReq, Error> {
+    tgs_req_ex_from(
+        ticket,
+        session,
+        crealm,
+        cname,
+        sname,
+        realm,
+        nonce,
+        kdc_options,
+        additional_tickets,
+        extra_padata,
+        etypes,
+        addresses,
+        None,
+    )
+}
+
+/// [`tgs_req_ex_addr`] with optional `from` (POSTDATED).
+///
+/// # Errors
+///
+/// Returns crypto or DER failures.
+#[allow(clippy::too_many_arguments)]
+pub fn tgs_req_ex_from(
+    ticket: Ticket,
+    session: &ProtocolKey,
+    crealm: &str,
+    cname: &PrincipalName,
+    sname: PrincipalName,
+    realm: &str,
+    nonce: u32,
+    kdc_options: KdcOptions,
+    additional_tickets: Option<Vec<Ticket>>,
+    extra_padata: Vec<PaData>,
+    etypes: Vec<i32>,
+    addresses: Option<HostAddresses>,
+    from: Option<KerberosTime>,
+) -> Result<TgsReq, Error> {
     let till = KerberosTime::now()
         .add_hours(10)
         .unwrap_or_else(|_| KerberosTime::now());
@@ -206,7 +245,7 @@ pub fn tgs_req_ex_addr(
         cname: None,
         realm: krb5_types::try_ascii(realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?,
         sname: Some(sname),
-        from: None,
+        from,
         till,
         rtime: None,
         nonce,

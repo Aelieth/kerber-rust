@@ -126,6 +126,28 @@ pub fn tgs_exchange_path(
     result
 }
 
+/// TGS-REQ with `FORWARDED` for `krb5_fwd_tgt_creds`.
+///
+/// # Errors
+///
+/// Transport, crypto, or `KRB-ERROR` failures.
+pub fn tgs_forward(kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> {
+    let realm = String::from_utf8_lossy(tgt.crealm.as_bytes()).into_owned();
+    let sname = PrincipalName::krbtgt(&realm);
+    let mut opts = KdcOptions::none().with_bit(flag_bit::FORWARDED, true);
+    for bit in [
+        flag_bit::FORWARDABLE,
+        flag_bit::PROXIABLE,
+        flag_bit::MAY_POSTDATE,
+        flag_bit::RENEWABLE,
+    ] {
+        if tgt.enc_part.flags.bit(bit) {
+            opts = opts.with_bit(bit, true);
+        }
+    }
+    tgs_once(kdc, tgt, sname, &realm, opts, &[], None)
+}
+
 /// TGS-REQ with KDC option `renew` for `kinit -R`.
 ///
 /// # Errors

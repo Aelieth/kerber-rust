@@ -12,11 +12,14 @@ use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, checksum, checksum_output_size, decrypt, decrypt_cts,
     encrypt, encrypt_with_confounder, integrity_mac, verify_checksum_type,
 };
-use krb5_protocol::{ReplayCache, build_ap_rep, build_ap_req_with_cksum, unwrap_krb_cred};
+use krb5_protocol::{
+    CcacheCred, CcacheKeyblock, FileCcache, ReplayCache, build_ap_rep, build_ap_req_with_cksum,
+    unwrap_krb_cred,
+};
 use krb5_types::{
     ApOptions, ApRep, AuthorizationData, AuthorizationDataValue, Checksum, EncApRepPart,
     EncKrbCredPart, EncryptedData, EncryptionKey, KerberosTime, KrbCred, KrbCredInfo, Microseconds,
-    PrincipalName, Realm, Ticket, ku, pa,
+    PrincipalName, Realm, Ticket, TicketFlags, ku, pa,
 };
 use thiserror::Error;
 
@@ -272,6 +275,16 @@ pub struct DelegCred {
     pub crealm: Realm,
     /// Client name.
     pub cname: PrincipalName,
+    /// Ticket flags copied into `KrbCredInfo`.
+    pub flags: TicketFlags,
+    /// `KrbCredInfo` authtime.
+    pub authtime: Option<KerberosTime>,
+    /// `KrbCredInfo` starttime.
+    pub starttime: Option<KerberosTime>,
+    /// `KrbCredInfo` endtime.
+    pub endtime: Option<KerberosTime>,
+    /// `KrbCredInfo` renew-till.
+    pub renew_till: Option<KerberosTime>,
 }
 
 /// Per-message sequence window (RFC 4121 replay detection).
@@ -1405,11 +1418,11 @@ fn krb_cred_for_deleg(ticket_session: &ProtocolKey, deleg: &DelegCred) -> Result
         },
         prealm: Some(deleg.crealm.clone()),
         pname: Some(deleg.cname.clone()),
-        flags: None,
-        authtime: None,
-        starttime: None,
-        endtime: None,
-        renew_till: None,
+        flags: Some(deleg.flags.clone()),
+        authtime: deleg.authtime.clone(),
+        starttime: deleg.starttime.clone(),
+        endtime: deleg.endtime.clone(),
+        renew_till: deleg.renew_till.clone(),
         srealm: Some(deleg.crealm.clone()),
         sname: Some(PrincipalName::krbtgt(realm.as_ref())),
         caddr: None,
@@ -1603,7 +1616,53 @@ fn extract_delegated(
         .pname
         .as_ref()
         .map_or_else(String::new, |n| n.unparse_with_realm(&realm));
+    if let Ok(path) = std::env::var("GSS_DELEG_CCACHE")
+        && !path.is_empty()
+    {
+        write_deleg_ccache(&path, &part.0, &part.1)?;
+    }
     Ok(Some(name))
+}
+
+fn write_deleg_ccache(path: &str, cred: &KrbCred, part: &EncKrbCredPart) -> Result<(), Error> {
+    let info = part.ticket_info.first().ok_or(Error::Truncated)?;
+    let ticket = cred.tickets.first().ok_or(Error::Truncated)?;
+    let prealm = info.prealm.clone().ok_or(Error::Truncated)?;
+    let pname = info.pname.clone().ok_or(Error::Truncated)?;
+    let etype = EncryptionType::from_iana(info.key.keytype).map_err(Error::from)?;
+    let session =
+        ProtocolKey::from_bytes(etype, info.key.keyvalue.as_ref()).map_err(Error::from)?;
+    let srealm = info.srealm.clone().unwrap_or_else(|| prealm.clone());
+    let sname = info
+        .sname
+        .clone()
+        .unwrap_or_else(|| PrincipalName::krbtgt(&String::from_utf8_lossy(prealm.as_bytes())));
+    let cc = FileCcache::new(
+        (prealm.clone(), pname.clone()),
+        vec![CcacheCred {
+            client: (prealm, pname),
+            server: (srealm, sname),
+            key: CcacheKeyblock::from_protocol(&session),
+            authtime: info.authtime.as_ref().map_or(0, KerberosTime::unix_seconds),
+            starttime: info
+                .starttime
+                .as_ref()
+                .or(info.authtime.as_ref())
+                .map_or(0, KerberosTime::unix_seconds),
+            endtime: info.endtime.as_ref().map_or(0, KerberosTime::unix_seconds),
+            renew_till: info
+                .renew_till
+                .as_ref()
+                .map_or(0, KerberosTime::unix_seconds),
+            is_skey: 0,
+            ticket_flags: info.flags.as_ref().map_or(0, TicketFlags::to_u32),
+            addresses: Vec::new(),
+            authdata: Vec::new(),
+            ticket: encode(ticket).map_err(|e| Error::Inner(e.to_string()))?,
+            second_ticket: Vec::new(),
+        }],
+    );
+    cc.write_file(path).map_err(|e| Error::Inner(e.to_string()))
 }
 
 fn seal_usage(initiator: bool) -> KeyUsage {
@@ -2866,6 +2925,11 @@ mod tests {
             session: as_out.session_key.clone(),
             crealm: ascii(TEST_REALM),
             cname: cname.clone(),
+            flags: TicketFlags::none(),
+            authtime: None,
+            starttime: None,
+            endtime: None,
+            renew_till: None,
         };
         let (_init, token) = GssContext::init_sec_context(
             tgs_out.rep.0.ticket.clone(),
@@ -2904,6 +2968,11 @@ mod tests {
             session: as_out.session_key.clone(),
             crealm: ascii(TEST_REALM),
             cname: cname.clone(),
+            flags: TicketFlags::none(),
+            authtime: None,
+            starttime: None,
+            endtime: None,
+            renew_till: None,
         };
         let der = krb_cred_for_deleg(&tgs_out.session_key, &deleg).unwrap();
         let mut ck = authenticator_checksum(None, GSS_C_DELEG | GSS_C_INTEG, Some(&der));
@@ -2952,6 +3021,11 @@ mod tests {
             session: as_out.session_key.clone(),
             crealm: ascii(TEST_REALM),
             cname: cname.clone(),
+            flags: TicketFlags::none(),
+            authtime: None,
+            starttime: None,
+            endtime: None,
+            renew_till: None,
         };
         let (_init, token) = GssContext::init_sec_context(
             tgs_out.rep.0.ticket.clone(),

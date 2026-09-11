@@ -9,7 +9,7 @@ use krb5_kdc::{
     TEST_REALM, TEST_USER, as_req, bootstrap_documented, documented_host, pa_enc_timestamp,
 };
 use krb5_protocol::ReplayCache;
-use krb5_types::{PrincipalName, ascii};
+use krb5_types::{PrincipalName, TicketFlags, ascii};
 
 fn issue_tgt(store: &krb5_kdc::PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -128,6 +128,11 @@ fn delegation_sets_the_deleg_flag() {
         session: tgt.session_key.clone(),
         crealm: ascii(TEST_REALM),
         cname: cname.clone(),
+        flags: TicketFlags::none(),
+        authtime: None,
+        starttime: None,
+        endtime: None,
+        renew_till: None,
     };
     let (_, token) = GssContext::init_sec_context(
         tgs_out.rep.0.ticket.clone(),

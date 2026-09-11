@@ -203,7 +203,7 @@ echo "$DIFF" | grep -q '"case":"as-invalid-opts","outcome":"ok","error_code":13'
 echo "$DIFF" | grep -q '"case":"as-request-anonymous","outcome":"ok","error_code":13,"e_text":"VALIDATE_ANONYMOUS_PRINCIPAL","rust_tag":"0x7e","mit_tag":"0x7e"' || die "as-request-anonymous not code 13 e_text VALIDATE_ANONYMOUS_PRINCIPAL on both legs"
 echo "$DIFF" | grep -q '"case":"as-validate-before-preauth","outcome":"ok","error_code":23' || die "as-validate-before-preauth (preauth+needchange) not code 23 on both legs"
 echo "$DIFF" | grep -q '"case":"as-retransmit","outcome":"ok","rust_retransmit_identical":true,"mit_retransmit_identical":true' || die "as-retransmit reply not identical from the lookaside on both legs"
-echo "$DIFF" | grep -q '"outcome":"ok","cases":81' || die "diffsend did not finish 81 cases"
+echo "$DIFF" | grep -q '"outcome":"ok","cases":85' || die "diffsend did not finish 85 cases"
 echo "$DIFF" | grep -q '"case":"fast-armor-no-subkey","outcome":"ok","error_code":12,"e_text":"FIND_FAST","rust_tag":"0x7e","mit_tag":"0x7e"' || die "fast-armor-no-subkey not code 12 e_text FIND_FAST on both legs"
 echo "$DIFF" | grep -q '"case":"armor-ap-req-as-pa-tgs-req","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' || die "armor-ap-req-as-pa-tgs-req not code 12 e_text PROCESS_TGS on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-ad-fx-armor-authenticator","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' || die "tgs-ad-fx-armor-authenticator not code 12 e_text PROCESS_TGS on both legs"
@@ -264,6 +264,12 @@ echo "$DIFF" | grep -q '"case":"u2u-2nd-ticket-kvno-miss","outcome":"ok","error_
 echo "$DIFF" | grep -q '"case":"u2u-2nd-ticket-disallow-svr","outcome":"ok","error_code":7,"e_text":"2ND_TKT_SERVER","rust_tag":"0x7e","mit_tag":"0x7e"' || die "u2u-2nd-ticket-disallow-svr not code 7 e_text 2ND_TKT_SERVER on both legs"
 echo "$DIFF" | grep -q '"case":"s4u2self-cert-only","outcome":"ok","error_code":60,"e_text":"LOOKING_UP_S4U2SELF_PRINCIPAL","rust_tag":"0x7e","mit_tag":"0x7e"' || die "s4u2self-cert-only not code 60 e_text LOOKING_UP_S4U2SELF_PRINCIPAL on both legs"
 echo "$DIFF" | grep -q '"case":"tgs-forwarded-tgt-addresses","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"' || die "tgs-forwarded-tgt-addresses not TGS-REP on both legs"
+echo "$DIFF" | grep -q '"case":"tgs-forwarded-addresses".*"forwarded":true' || die "tgs-forwarded-addresses missing forwarded true on both legs"
+echo "$DIFF" | grep -q '"case":"tgs-forwarded-tgt-addresses".*"forwarded":true' || die "tgs-forwarded-tgt-addresses missing forwarded true on both legs"
+echo "$DIFF" | grep -q '"case":"tgs-forwarded-on-non-f-tgt","outcome":"ok","error_code":13,"e_text":"TGT NOT FORWARDABLE","rust_tag":"0x7e","mit_tag":"0x7e"' || die "tgs-forwarded-on-non-f-tgt not code 13 e_text TGT NOT FORWARDABLE on both legs"
+echo "$DIFF" | grep -q '"case":"tgs-proxy-on-non-p-tgt","outcome":"ok","error_code":13,"e_text":"TGT NOT PROXIABLE","rust_tag":"0x7e","mit_tag":"0x7e"' || die "tgs-proxy-on-non-p-tgt not code 13 e_text TGT NOT PROXIABLE on both legs"
+echo "$DIFF" | grep -q '"case":"tgs-postdate-on-non-postdatable","outcome":"ok","error_code":13,"e_text":"TGT NOT POSTDATABLE","rust_tag":"0x7e","mit_tag":"0x7e"' || die "tgs-postdate-on-non-postdatable not code 13 e_text TGT NOT POSTDATABLE on both legs"
+echo "$DIFF" | grep -q '"case":"tgs-postdated-is-invalid","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d".*"invalid":true' || die "tgs-postdated-is-invalid not invalid true on both legs"
 # W1-K M2b: the differential oracle has no case-name whitelist; no diffsend line
 # may carry a "whitelist" key.
 if echo "$DIFF" | grep -q '"whitelist"'; then

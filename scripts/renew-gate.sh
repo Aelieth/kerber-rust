@@ -210,5 +210,98 @@ PBITS="$(echo "$PFLAGS" | awk -F'Flags: ' '/Flags:/{print $2}' | tail -1 | tr -d
 echo "pbits=$PBITS"
 echo "$PBITS" | grep -q P
 
-log "renew.gate" "ok" ',"kinit_r":true,"renew_till_preserved":true,"disallow_strips":true,"proxiable":true'
+echo "==== NON-RENEWABLE TICKET: kvno after kinit -r vs -allow_renewable (rust) ===="
+kadmin_q 'addprinc -randkey host/norenew.kerber.test'
+kadmin_q 'modprinc -allow_renewable host/norenew.kerber.test'
+docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+if ! docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf \
+    "$NAME" sh -c 'printf "renew-secret\n" | kinit -r 7d renewuser@KERBER.TEST'; then
+    docker exec "$NAME" cat /tmp/kdc.log >&2 || true
+    log "renew.gate" "error" ',"error":"kinit -r before NON-RENEWABLE rust failed"'
+    exit 1
+fi
+set +e
+NORENEW_RUST="$(docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf \
+    "$NAME" kvno host/norenew.kerber.test 2>&1)"
+set -e
+echo "$NORENEW_RUST"
+echo "$NORENEW_RUST" | grep -qF "KDC policy rejects request" || {
+    docker exec "$NAME" cat /tmp/kdc.log >&2 || true
+    log "renew.gate" "error" ',"error":"rust kvno against -allow_renewable did not POLICY"'
+    exit 1
+}
+
+echo "==== NON-RENEWABLE TICKET: kvno after kinit -r vs -allow_renewable (mit) ===="
+MITNAME="kerber-rust-renew-mit-oracle"
+docker rm -f "$MITNAME" >/dev/null 2>&1 || true
+docker run -d --name "$MITNAME" "$IMAGE" >/dev/null
+cleanup_mit() { docker rm -f "$MITNAME" >/dev/null 2>&1 || true; }
+trap 'cleanup; cleanup_mit' EXIT
+ok=0
+for _ in $(seq 1 90); do
+    logs="$(docker logs "$MITNAME" 2>&1 || true)"
+    if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"ok"'; then
+        ok=1
+        break
+    fi
+    if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"error"'; then
+        echo "$logs" >&2
+        log "renew.gate" "error" ',"error":"MIT oracle harness kinit failed"'
+        exit 1
+    fi
+    sleep 1
+done
+if [ "$ok" != 1 ]; then
+    docker logs "$MITNAME" >&2 || true
+    log "renew.gate" "error" ',"error":"MIT oracle harness did not become ready"'
+    exit 1
+fi
+docker exec "$MITNAME" kadmin.local -q "addprinc -randkey host/norenew.kerber.test"
+docker exec "$MITNAME" kadmin.local -q "modprinc -allow_renewable host/norenew.kerber.test"
+docker exec "$MITNAME" sh -c 'cat >/tmp/renew-mit-oracle.conf <<EOF
+[libdefaults]
+    default_realm = KERBER.TEST
+    dns_lookup_kdc = false
+    dns_lookup_realm = false
+    rdns = false
+    default_ccache_name = FILE:/tmp/krb5cc_renew_mit
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1
+    }
+EOF'
+if ! docker exec -e KRB5_CONFIG=/tmp/renew-mit-oracle.conf \
+    "$MITNAME" sh -c 'printf "userpassword\n" | kinit -r 7d user@KERBER.TEST'; then
+    docker logs "$MITNAME" >&2 || true
+    log "renew.gate" "error" ',"error":"MIT kinit -r before NON-RENEWABLE failed"'
+    exit 1
+fi
+set +e
+NORENEW_MIT="$(docker exec -e KRB5_CONFIG=/tmp/renew-mit-oracle.conf \
+    "$MITNAME" kvno host/norenew.kerber.test 2>&1)"
+set -e
+echo "$NORENEW_MIT"
+echo "$NORENEW_MIT" | grep -qF "KDC policy rejects request" || {
+    log "renew.gate" "error" ',"error":"MIT kvno against -allow_renewable did not POLICY"'
+    exit 1
+}
+
+echo "==== MIT kinit -p shows P (mit oracle) ===="
+docker exec -e KRB5_CONFIG=/tmp/renew-mit-oracle.conf "$MITNAME" kdestroy -A >/dev/null 2>&1 || true
+if ! docker exec -e KRB5_CONFIG=/tmp/renew-mit-oracle.conf \
+    "$MITNAME" sh -c 'printf "userpassword\n" | kinit -p user@KERBER.TEST'; then
+    docker logs "$MITNAME" >&2 || true
+    log "renew.gate" "error" ',"error":"MIT oracle kinit -p failed"'
+    exit 1
+fi
+MIT_PFLAGS="$(docker exec -e KRB5_CONFIG=/tmp/renew-mit-oracle.conf "$MITNAME" klist -f)"
+echo "$MIT_PFLAGS"
+MIT_PBITS="$(echo "$MIT_PFLAGS" | awk -F'Flags: ' '/Flags:/{print $2}' | tail -1 | tr -d '[:space:]')"
+echo "mit_pbits=$MIT_PBITS"
+echo "$MIT_PBITS" | grep -q P || {
+    log "renew.gate" "error" ',"error":"MIT oracle kinit -p missing P"'
+    exit 1
+}
+
+log "renew.gate" "ok" ',"kinit_r":true,"renew_till_preserved":true,"disallow_strips":true,"proxiable":true,"non_renewable":true'
 exit 0

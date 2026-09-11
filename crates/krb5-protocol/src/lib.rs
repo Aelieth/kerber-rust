@@ -41,7 +41,7 @@ pub use as_ex::{
 };
 pub use builders::{
     as_req, as_req_sname, pa_enc_timestamp, pa_enc_timestamp_at, tgs_req, tgs_req_ex,
-    tgs_req_ex_addr,
+    tgs_req_ex_addr, tgs_req_ex_from,
 };
 pub use capture::capture_pdu;
 pub use ccache::{
@@ -80,7 +80,7 @@ pub use safe_priv::{
 pub use secret_file::{destroy_secret_file, write_secret_file};
 pub use tgs::{
     TgsOutcome, referral_hop_realm, tgs_exchange, tgs_exchange_ex, tgs_exchange_once,
-    tgs_exchange_path, tgs_renew, tgs_s4u, tgs_u2u,
+    tgs_exchange_path, tgs_forward, tgs_renew, tgs_s4u, tgs_u2u,
 };
 pub use transport::{KDC_PORT, KdcAddr, exchange, exchange_on_tcp, exchange_with_failover};
 

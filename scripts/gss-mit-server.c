@@ -4,6 +4,7 @@
 #include <gssapi/gssapi.h>
 #include <gssapi/gssapi_ext.h>
 #include <gssapi/gssapi_krb5.h>
+#include <krb5.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <signal.h>
@@ -186,6 +187,39 @@ int main(int argc, char **argv) {
             gss_OID t = GSS_C_NO_OID;
             if (gss_display_name(&min, dn, &nb, &t) == GSS_S_COMPLETE) {
                 fprintf(stderr, "mit-gss delegated=%.*s\n", (int)nb.length, (char *)nb.value);
+                {
+                    const char *ccpath = getenv("GSS_DELEG_CCACHE");
+                    char namebuf[256];
+                    size_t nlen = nb.length < sizeof(namebuf) - 1 ? nb.length : sizeof(namebuf) - 1;
+                    memcpy(namebuf, nb.value, nlen);
+                    namebuf[nlen] = '\0';
+                    if (ccpath && ccpath[0]) {
+                        krb5_context kctx = NULL;
+                        krb5_ccache kcc = NULL;
+                        krb5_principal princ = NULL;
+                        if (krb5_init_context(&kctx) == 0 &&
+                            krb5_parse_name(kctx, namebuf, &princ) == 0 &&
+                            krb5_cc_resolve(kctx, ccpath, &kcc) == 0 &&
+                            krb5_cc_initialize(kctx, kcc, princ) == 0) {
+                            OM_uint32 cmin = 0;
+                            OM_uint32 cmaj = gss_krb5_copy_ccache(&cmin, deleg, kcc);
+                            if (cmaj != GSS_S_COMPLETE) {
+                                fprintf(stderr, "gss_krb5_copy_ccache maj=%u min=%u\n", cmaj, cmin);
+                            }
+                        } else {
+                            fprintf(stderr, "mit-gss ccache init failed path=%s\n", ccpath);
+                        }
+                        if (princ) {
+                            krb5_free_principal(kctx, princ);
+                        }
+                        if (kcc) {
+                            krb5_cc_close(kctx, kcc);
+                        }
+                        if (kctx) {
+                            krb5_free_context(kctx);
+                        }
+                    }
+                }
                 gss_release_buffer(&min, &nb);
             }
             gss_release_name(&min, &dn);

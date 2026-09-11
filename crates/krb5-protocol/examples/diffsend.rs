@@ -22,7 +22,7 @@ use krb5_protocol::{
     KdcAddr, Keytab, armor_key, as_req, as_req_sname, attach_fast, build_fast_armor,
     compare_krb_error, compare_stable_rep, decode_enc_kdc_rep, exchange_on_tcp, pa_enc_timestamp,
     pa_enc_timestamp_at, pa_for_user, pa_s4u_x509_user, pa_spake_support, tgs_req, tgs_req_ex,
-    tgs_req_ex_addr,
+    tgs_req_ex_addr, tgs_req_ex_from,
 };
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac, PacIdentity, RpcSid};
 use krb5_types::{
@@ -2535,8 +2535,15 @@ fn run() -> Result<(), String> {
             re.caddr, me.caddr
         ));
     }
+    if !rt.flags.bit(flag_bit::FORWARDED) || !mt.flags.bit(flag_bit::FORWARDED) {
+        return Err(format!(
+            "tgs-forwarded-addresses: FORWARDED rust={} mit={}",
+            rt.flags.bit(flag_bit::FORWARDED),
+            mt.flags.bit(flag_bit::FORWARDED)
+        ));
+    }
     println!(
-        r#"{{"event":"diffsend","case":"tgs-forwarded-addresses","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"}}"#
+        r#"{{"event":"diffsend","case":"tgs-forwarded-addresses","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","forwarded":true}}"#
     );
 
     let mut foreign_stkt = mint_tgt(
@@ -2931,7 +2938,7 @@ fn run() -> Result<(), String> {
                 realm,
                 &krbtgt_sname,
                 &sess,
-                window10,
+                window10.clone(),
                 TicketFlags::initial_preauth().with_bit(flag_bit::FORWARDABLE, true),
             )?,
             &sess,
@@ -2964,11 +2971,172 @@ fn run() -> Result<(), String> {
             re.caddr, me.caddr
         ));
     }
+    if !rt.flags.bit(flag_bit::FORWARDED) || !mt.flags.bit(flag_bit::FORWARDED) {
+        return Err(format!(
+            "tgs-forwarded-tgt-addresses: FORWARDED rust={} mit={}",
+            rt.flags.bit(flag_bit::FORWARDED),
+            mt.flags.bit(flag_bit::FORWARDED)
+        ));
+    }
     println!(
-        r#"{{"event":"diffsend","case":"tgs-forwarded-tgt-addresses","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"}}"#
+        r#"{{"event":"diffsend","case":"tgs-forwarded-tgt-addresses","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","forwarded":true}}"#
     );
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":81}}"#);
+    let no_f = mint_tgt(
+        tkt_key,
+        tkt_kvno,
+        &user,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        window10.clone(),
+        TicketFlags::initial_preauth(),
+    )?;
+    expect_error(
+        &cfg,
+        "tgs-forwarded-on-non-f-tgt",
+        &encode(
+            &tgs_req_ex(
+                no_f,
+                &sess,
+                realm,
+                &user,
+                host.clone(),
+                realm,
+                0x1000_0070,
+                KdcOptions::none().with_bit(flag_bit::FORWARDED, true),
+                None,
+                Vec::new(),
+                etypes.clone(),
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::BADOPTION,
+    )?;
+
+    let no_p = mint_tgt(
+        tkt_key,
+        tkt_kvno,
+        &user,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        window10.clone(),
+        TicketFlags::initial_preauth(),
+    )?;
+    expect_error(
+        &cfg,
+        "tgs-proxy-on-non-p-tgt",
+        &encode(
+            &tgs_req_ex(
+                no_p,
+                &sess,
+                realm,
+                &user,
+                host.clone(),
+                realm,
+                0x1000_0071,
+                KdcOptions::none().with_bit(flag_bit::PROXY, true),
+                None,
+                Vec::new(),
+                etypes.clone(),
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::BADOPTION,
+    )?;
+
+    expect_error(
+        &cfg,
+        "tgs-postdate-on-non-postdatable",
+        &encode(
+            &tgs_req_ex(
+                mint_tgt(
+                    tkt_key,
+                    tkt_kvno,
+                    &user,
+                    realm,
+                    &krbtgt_sname,
+                    &sess,
+                    window10.clone(),
+                    TicketFlags::initial_preauth(),
+                )?,
+                &sess,
+                realm,
+                &user,
+                host.clone(),
+                realm,
+                0x1000_0072,
+                KdcOptions::none().with_bit(flag_bit::MAY_POSTDATE, true),
+                None,
+                Vec::new(),
+                etypes.clone(),
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::BADOPTION,
+    )?;
+
+    let from = now.add_seconds(60).unwrap_or_else(|_| now.clone());
+    let post_tgt = mint_tgt(
+        tkt_key,
+        tkt_kvno,
+        &user,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        window10,
+        TicketFlags::initial_preauth().with_bit(flag_bit::MAY_POSTDATE, true),
+    )?;
+    let postdated = encode(
+        &tgs_req_ex_from(
+            post_tgt,
+            &sess,
+            realm,
+            &user,
+            host.clone(),
+            realm,
+            0x1000_0073,
+            KdcOptions::none()
+                .with_bit(flag_bit::MAY_POSTDATE, true)
+                .with_bit(flag_bit::POSTDATED, true),
+            None,
+            Vec::new(),
+            etypes,
+            None,
+            Some(from),
+        )
+        .map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    let (tr, tm) = send_both(&cfg, "tgs-postdated-is-invalid", &postdated)?;
+    let svc = cfg
+        .host
+        .as_ref()
+        .ok_or_else(|| "KERBER_HOST_KEYTAB required".to_string())?;
+    let (_, _, rt, _) = decrypt_tgs(&tr, &sess, svc)?;
+    let (_, _, mt, _) = decrypt_tgs(&tm, &sess, svc)?;
+    if !rt.flags.invalid()
+        || !mt.flags.invalid()
+        || !rt.flags.bit(flag_bit::POSTDATED)
+        || !mt.flags.bit(flag_bit::POSTDATED)
+    {
+        return Err(format!(
+            "tgs-postdated-is-invalid: rust invalid={} postdated={} mit invalid={} postdated={}",
+            rt.flags.invalid(),
+            rt.flags.bit(flag_bit::POSTDATED),
+            mt.flags.invalid(),
+            mt.flags.bit(flag_bit::POSTDATED)
+        ));
+    }
+    println!(
+        r#"{{"event":"diffsend","case":"tgs-postdated-is-invalid","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","invalid":true,"postdated":true}}"#
+    );
+
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":85}}"#);
     Ok(())
 }
 

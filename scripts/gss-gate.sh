@@ -689,4 +689,81 @@ echo "$MIT_CBM"
     exit 1
 }
 
-log "gss.gate" "ok" ",\"acceptor\":\"krb5-gss\",\"initiator\":\"mit-libgssapi\",\"deleg\":\"both\",\"spnego\":\"ok\",\"iov\":\"ok\",\"replay\":\"ok\",\"dce\":\"ok\",\"process_checksum\":\"ok\""
+echo "==== delegated ccache klist -f (FORWARDED) both acceptors ===="
+docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
+docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
+sleep 0.2
+docker exec -d \
+    -e GSS_DELEG_CCACHE=/tmp/rust-deleg.cc \
+    "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /etc/krb5kdc/testhost.keytab --listen 127.0.0.1:4444 >/tmp/gss-accept-fwd.log 2>&1'
+ok=0
+for _ in $(seq 1 20); do
+    if docker exec "$NAME" grep -q 'listening' /tmp/gss-accept-fwd.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.15
+done
+[ "$ok" = 1 ] || {
+    docker exec "$NAME" cat /tmp/gss-accept-fwd.log >&2 || true
+    log "gss.gate" "error" ',"error":"gss-accept did not listen for forwarded ccache"'
+    exit 1
+}
+docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
+    /tmp/gss-mit-client testhost.kerber.test host "$MSG" 127.0.0.1 4444 deleg
+RUST_FWD="$(docker exec -e KRB5CCNAME=/tmp/rust-deleg.cc "$NAME" klist -f 2>&1 || true)"
+echo "$RUST_FWD"
+echo "$RUST_FWD" | grep -q 'user@KERBER.TEST' || {
+    log "gss.gate" "error" ',"error":"rust delegated ccache missing user"'
+    exit 1
+}
+RUST_FBITS="$(echo "$RUST_FWD" | awk -F'Flags: ' '/Flags:/{print $2}' | tail -1 | tr -d '[:space:]')"
+echo "rust_deleg_flags=$RUST_FBITS"
+echo "$RUST_FBITS" | grep -q f || {
+    log "gss.gate" "error" ',"error":"rust delegated ccache missing FORWARDED f"'
+    exit 1
+}
+
+docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
+sleep 0.2
+docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
+    kvno host/testhost.kerber.test@KERBER.TEST
+docker exec -d \
+    -e KRB5_KTNAME=/etc/krb5kdc/testhost.keytab \
+    -e GSS_DELEG_CCACHE=FILE:/tmp/mit-deleg.cc \
+    "$NAME" sh -c '/tmp/gss-mit-server /etc/krb5kdc/testhost.keytab 127.0.0.1 4445 >/tmp/gss-mit-fwd.log 2>&1'
+ok=0
+for _ in $(seq 1 20); do
+    if docker exec "$NAME" grep -q 'listening' /tmp/gss-mit-fwd.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.15
+done
+[ "$ok" = 1 ] || {
+    docker exec "$NAME" cat /tmp/gss-mit-fwd.log >&2 || true
+    log "gss.gate" "error" ',"error":"mit-gss-server did not listen for forwarded ccache"'
+    exit 1
+}
+if ! docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
+    /tmp/krb5-gss-init --ccache /tmp/krb5cc_harness --host testhost.kerber.test \
+    --ip 127.0.0.1 --port 4445 --deleg; then
+    docker exec "$NAME" cat /tmp/gss-mit-fwd.log >&2 || true
+    log "gss.gate" "error" ',"error":"rust gss-init forwarded deleg failed"'
+    exit 1
+fi
+MIT_FWD="$(docker exec -e KRB5CCNAME=/tmp/mit-deleg.cc "$NAME" klist -f 2>&1 || true)"
+echo "$MIT_FWD"
+echo "$MIT_FWD" | grep -q 'user@KERBER.TEST' || {
+    docker exec "$NAME" cat /tmp/gss-mit-fwd.log >&2 || true
+    log "gss.gate" "error" ',"error":"mit delegated ccache missing user"'
+    exit 1
+}
+MIT_FBITS="$(echo "$MIT_FWD" | awk -F'Flags: ' '/Flags:/{print $2}' | tail -1 | tr -d '[:space:]')"
+echo "mit_deleg_flags=$MIT_FBITS"
+echo "$MIT_FBITS" | grep -q f || {
+    log "gss.gate" "error" ',"error":"mit delegated ccache missing FORWARDED f"'
+    exit 1
+}
+
+log "gss.gate" "ok" ",\"acceptor\":\"krb5-gss\",\"initiator\":\"mit-libgssapi\",\"deleg\":\"both\",\"spnego\":\"ok\",\"iov\":\"ok\",\"replay\":\"ok\",\"dce\":\"ok\",\"process_checksum\":\"ok\",\"forwarded\":\"both\""

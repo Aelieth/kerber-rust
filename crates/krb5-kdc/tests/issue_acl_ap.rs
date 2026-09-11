@@ -1354,7 +1354,7 @@ fn as_disallow_all_tix_still_client_revoked() {
 }
 
 #[test]
-fn tgs_strips_renewable_when_server_disallow_renewable() {
+fn tgs_renewable_when_server_disallow_is_non_renewable() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let host = documented_host();
     let mut areq = user_as_req(77);
@@ -1381,17 +1381,14 @@ fn tgs_strips_renewable_when_server_disallow_renewable() {
         vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
     .expect("TGS-REQ");
-    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("strip not POLICY");
-    let host_key = store.get_name(&host).unwrap().best_key().unwrap();
-    let usage = KeyUsage::new(ku::TICKET).unwrap();
-    let plain = decrypt(
-        &host_key.key,
-        usage,
-        out.rep.0.ticket.enc_part.cipher.as_ref(),
-    )
-    .unwrap();
-    let part: EncTicketPart = decode(&plain).unwrap();
-    assert!(!part.flags.renewable());
+    let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::POLICY);
+            assert_eq!(text.as_deref(), Some("NON-RENEWABLE TICKET"));
+        }
+        other => panic!("expected Protocol, got {other:?}"),
+    }
 }
 
 fn renewable_as(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
@@ -1621,14 +1618,14 @@ fn tgs_validate_future_starttime_is_not_yet_valid() {
 }
 
 #[test]
-fn tgs_renew_strips_forwardable_when_disallow() {
+fn tgs_renew_keeps_forwardable_when_disallow() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let issued = renewable_as(&store, 126);
     assert!(tgt_part(&store, &issued).flags.forwardable());
     or_attr(&mut store, &cname, KDB_DISALLOW_FORWARDABLE);
     let out = krb5_kdc::issue_tgs(&store, &renew_tgs(&issued, 127)).expect("RENEW");
-    assert!(!tgs_tgt_part(&store, &out).flags.forwardable());
+    assert!(tgs_tgt_part(&store, &out).flags.forwardable());
 }
 
 #[test]
