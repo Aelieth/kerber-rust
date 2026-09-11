@@ -160,7 +160,10 @@ fn cross_store() -> (PrincipalStore, ProtocolKey) {
     store
         .create_interrealm_key(&acl, &documented_admin_id(), FOREIGN, ir.clone())
         .unwrap();
-    store.allow_s4u_from(&documented_host(), &documented_host().components_joined());
+    store.allow_s4u_from(
+        &documented_host(),
+        &documented_host().unparse_with_realm(FOREIGN),
+    );
     (store, ir)
 }
 

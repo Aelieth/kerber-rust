@@ -8,6 +8,9 @@ this project uses semantic versioning once a crate is published.
 
 ### W1-A′-2
 
+- **test.** `a2_r18_parent` `cross_store()` grants the impersonator as
+  `name@FOREIGN` so the leftover inject stays green after realm-aware
+  RBCD (R22).
 - **test.** `host_tmp_write_lines` ends a quoted heredoc on `EOF'` /
   `EOF"`, walks `$(…)` and `$'…'`, and strips only `docker exec`/`run`
   argv so a host redirect on that line is still scanned. Fail-red
