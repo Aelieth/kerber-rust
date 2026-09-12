@@ -6,9 +6,7 @@ use krb5_kdc::{Error, TEST_REALM, TEST_USER, as_req, bootstrap_documented};
 use krb5_protocol::pa_pk_as_req;
 use krb5_types::{
     MethodData, PaData, PrincipalName, err, pa,
-    pkinit::{
-        ECONTENT_AUTHDATA, PaPkAsReq, cms_sign_leaf, cms_verify, parse_pa_pk_as_req_cms,
-    },
+    pkinit::{ECONTENT_AUTHDATA, PaPkAsReq, cms_sign_leaf, cms_verify, parse_pa_pk_as_req_cms},
 };
 
 fn user() -> PrincipalName {

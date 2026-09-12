@@ -26,9 +26,8 @@ use krb5_protocol::{
     KdcAddr, Keytab, armor_key, as_req, as_req_sname, attach_fast, attach_fast_with_options,
     build_fast_armor, compare_krb_error, compare_stable_rep, decode_enc_kdc_rep, exchange_on_tcp,
     pa_enc_timestamp, pa_enc_timestamp_at, pa_for_user, pa_pac_options, pa_pk_as_req_signed,
-    pa_pk_as_req_unsigned,
-    pa_s4u_x509_user, pa_spake_support, tgs_req, tgs_req_ex, tgs_req_ex_addr, tgs_req_ex_from,
-    tgs_req_ex_subkey, tgs_req_ex_till,
+    pa_pk_as_req_unsigned, pa_s4u_x509_user, pa_spake_support, tgs_req, tgs_req_ex,
+    tgs_req_ex_addr, tgs_req_ex_from, tgs_req_ex_subkey, tgs_req_ex_till,
 };
 use krb5_types::cammac::AdKdcIssued;
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac, PacIdentity, RpcSid};
@@ -4280,9 +4279,10 @@ fn run() -> Result<(), String> {
 
     // RFC 8070: stale AuthPack [4] is internal 90 → wire 24 + a fresh token.
     let pem_path = env::var("KERBER_PKINIT_USER").unwrap_or_else(|_| "/tmp/pkinit/user.pem".into());
-    let pem = fs::read_to_string(&pem_path).map_err(|e| format!("pkinit user pem {pem_path}: {e}"))?;
-    let (cert, leaf) = krb5_types::pkinit::parse_identity_pem(&pem)
-        .ok_or_else(|| format!("parse {pem_path}"))?;
+    let pem =
+        fs::read_to_string(&pem_path).map_err(|e| format!("pkinit user pem {pem_path}: {e}"))?;
+    let (cert, leaf) =
+        krb5_types::pkinit::parse_identity_pem(&pem).ok_or_else(|| format!("parse {pem_path}"))?;
     let stale_kp = p256_generate().map_err(|e| e.to_string())?;
     let mut stale_req =
         as_req(user.clone(), realm, 0x1000_0093, None).map_err(|e| e.to_string())?;

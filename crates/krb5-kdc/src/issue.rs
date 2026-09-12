@@ -478,8 +478,7 @@ fn issue_as_body(
             e,
             work_padata.as_deref(),
         )
-    })?
-    {
+    })? {
         Some(PreauthAction::Pkinit { key, pa, signed }) => {
             as_rep_key = key;
             extra_padata.push(pa);

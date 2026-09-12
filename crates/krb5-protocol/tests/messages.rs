@@ -809,7 +809,11 @@ fn pkinit_as_req_carries_pa_pk_as_req() {
         ticket: krb5_protocol::AsTicketOpts::default(),
     });
     let pkts = seen.lock().unwrap().clone();
-    assert_eq!(pkts.len(), 2, "PKINIT client is two-round (empty 150, then PA-16)");
+    assert_eq!(
+        pkts.len(),
+        2,
+        "PKINIT client is two-round (empty 150, then PA-16)"
+    );
     let first: AsReq = decode(&pkts[0]).expect("first AS-REQ");
     let p1 = first.0.padata.unwrap_or_default();
     assert!(
