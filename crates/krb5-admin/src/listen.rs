@@ -11,7 +11,8 @@ use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_kdc::{SharedDump as SharedStore, save_store};
 use krb5_protocol::{
-    ReplayCache, build_ap_rep, build_krb_priv_with_seq, unwrap_krb_priv_ex, verify_ap_req,
+    ApVerifyParams, DEFAULT_SKEW, ReplayCache, build_ap_rep, build_krb_priv_with_seq,
+    unwrap_krb_priv_ex, verify_ap_req_ex,
 };
 use krb5_types::{
     ChangePasswdData, EncryptionKey, KerberosTime, KrbError, Microseconds, PrincipalName, err,
@@ -337,6 +338,23 @@ const UNK_PRINC_PRIV: &str =
     "Password not changed.\nPrincipal does not exist while trying to change password.\n";
 const DECODE_FAIL: &str = "Failed decoding ChangePasswdData";
 
+/// MIT `krb5_rd_req` walks the changepw keytab. Ticket etype is
+/// `first_current_key` (profile order); `best_key` follows
+/// [`EncryptionType::preferred`] (sha1-first) and is not enough alone.
+fn changepw_verify_keys(store: &krb5_kdc::PrincipalStore, extra: &ProtocolKey) -> Vec<ProtocolKey> {
+    let mut keys = Vec::new();
+    if let Some(p) = store.get_name(&krb5_kdc::documented_changepw()) {
+        keys.extend(p.keys.iter().map(|k| k.key.clone()));
+    }
+    if !keys
+        .iter()
+        .any(|k| k.etype() == extra.etype() && k.as_bytes() == extra.as_bytes())
+    {
+        keys.push(extra.clone());
+    }
+    keys
+}
+
 fn too_soon_text(until: u32) -> String {
     let when = krb5_types::KerberosTime::from_unix_seconds(until)
         .0
@@ -383,13 +401,22 @@ fn handle_kpasswd_from(
     }
     let ap_req = &raw[6..6 + ap_len];
     let priv_raw = &raw[6 + ap_len..];
-    let store_realm = {
+    let (store_realm, keys) = {
         let g = store
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        g.realm().to_owned()
+        (g.realm().to_owned(), changepw_verify_keys(&g, service_key))
     };
-    let Ok(ok) = verify_ap_req(ap_req, service_key, replay) else {
+    let params = ApVerifyParams {
+        keys: &keys,
+        kvno: None,
+        expected_server: None,
+        expected_realm: None,
+        skew: DEFAULT_SKEW,
+        addresses: None,
+        now: None,
+    };
+    let Ok(ok) = verify_ap_req_ex(ap_req, &params, replay, None) else {
         return kpasswd_chpwfail_error(&store_realm, 3, "Failed reading application request");
     };
     let session = protocol_key_from_enc(&ok.ticket_part.key)?;

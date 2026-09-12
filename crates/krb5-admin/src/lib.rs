@@ -1928,6 +1928,74 @@ mod tests {
     }
 
     #[test]
+    fn kpasswd_accepts_first_current_ticket_when_best_key_differs() {
+        use krb5_asn1::encode;
+        use krb5_kdc::{
+            TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
+            bootstrap_realm_with_kdc_conf, documented_changepw, shared_dump as shared_store,
+        };
+        use krb5_protocol::{build_ap_req, build_krb_priv};
+        use krb5_types::ChangePasswdData;
+
+        let kdc = krb5_config::KdcConf::parse(
+            r"
+[realms]
+    KERBER.TEST = {
+        supported_enctypes = aes256-cts-hmac-sha384-192:normal aes128-cts-hmac-sha256-128:normal aes256-cts-hmac-sha1-96:normal aes128-cts-hmac-sha1-96:normal
+    }
+",
+        )
+        .unwrap();
+        let (store, acl) = bootstrap_realm_with_kdc_conf(
+            TEST_REALM,
+            TEST_USER,
+            TEST_USER_PASSWORD,
+            TEST_ADMIN,
+            TEST_ADMIN_PASSWORD,
+            Some(&kdc),
+        )
+        .unwrap();
+        let changepw = documented_changepw();
+        let cpw = store.get_name(&changepw).unwrap();
+        let first = cpw.first_current_key().unwrap();
+        let best = cpw.best_key().unwrap();
+        assert_eq!(first.etype.to_iana(), 20);
+        assert_eq!(best.etype.to_iana(), 18);
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+        let user_key = store
+            .get_name(&user)
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let as_out = changepw_as_ticket(&store, &user, &user_key, 1919);
+        assert_eq!(as_out.rep.0.ticket.enc_part.etype, 20);
+        let cpw_key = best.key.clone();
+        let ap = build_ap_req(
+            as_out.rep.0.ticket.clone(),
+            &as_out.session_key,
+            &krb5_types::ascii(TEST_REALM),
+            &user,
+        )
+        .unwrap();
+        let cpw_data = ChangePasswdData {
+            newpasswd: b"sha384-first-pass".to_vec().into(),
+            targname: Some(user.clone()),
+            targrealm: Some(krb5_types::ascii(TEST_REALM)),
+        };
+        let priv_msg = build_krb_priv(&as_out.session_key, &encode(&cpw_data).unwrap()).unwrap();
+        let req = encode_setpw(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
+        let shared = shared_store(store);
+        let rep = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req)
+            .expect("rd_req must try every changepw key");
+        assert!(
+            rep.len() > 6 && u16::from_be_bytes([rep[4], rep[5]]) > 0,
+            "success reply must include AP-REP"
+        );
+    }
+
+    #[test]
     fn kpasswd_policy_rejection_is_softerror() {
         use krb5_asn1::encode;
         use krb5_kdc::{

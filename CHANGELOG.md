@@ -38,6 +38,12 @@ this project uses semantic versioning once a crate is published.
   `expire-gate.sh` MIT kinit password-expiry warning both legs;
   `kdb-dump-gate.sh` `Key:` order; `kdcpolicy-gate.sh` vs
   `kdcpolicy_test.so`. Image copies the test policy module.
+- **admin.** kpasswd `rd_req` tries every current `kadmin/changepw`
+  key. Ticket etype follows `first_current_key` (profile order);
+  `best_key` is sha1-first and is not enough after
+  `supported_enctypes` 20,19,18,17.
+- **kdc.** `krb5-forge-tgt --key-hex` wraps dump-keytab bytes as
+  the ticket enc etype, not always 18.
 
 ### W1-A′-3
 

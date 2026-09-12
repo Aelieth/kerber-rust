@@ -112,16 +112,10 @@ fn main() -> ExitCode {
     if keep_cipher {
         return claim_realm_keep_cipher(&cc_path, &out_path, &tgt_sname, &claim_realm);
     }
-    let key = match (key_hex, password, principal) {
-        (Some(hex), None, None) => match parse_hex_key(&hex) {
-            Ok(k) => k,
-            Err(e) => {
-                eprintln!("krb5-forge-tgt: key-hex: {e}");
-                return ExitCode::from(2);
-            }
-        },
+    let (hex_for_decrypt, password_key) = match (key_hex, password, principal) {
+        (Some(hex), None, None) => (Some(hex), None),
         (None, Some(pw), Some(princ)) => match key_from_password(&pw, &princ) {
-            Ok(k) => k,
+            Ok(k) => (None, Some(k)),
             Err(e) => {
                 eprintln!("krb5-forge-tgt: password: {e}");
                 return ExitCode::from(2);
@@ -132,17 +126,17 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let reseal = match (reseal_hex, reseal_password, reseal_principal) {
-        (None, None, None) => key.clone(),
+    let reseal_override = match (reseal_hex, reseal_password, reseal_principal) {
+        (None, None, None) => None,
         (Some(hex), None, None) => match parse_hex_key(&hex) {
-            Ok(k) => k,
+            Ok(k) => Some(k),
             Err(e) => {
                 eprintln!("krb5-forge-tgt: reseal-key-hex: {e}");
                 return ExitCode::from(2);
             }
         },
         (None, Some(pw), Some(princ)) => match key_from_password(&pw, &princ) {
-            Ok(k) => k,
+            Ok(k) => Some(k),
             Err(e) => {
                 eprintln!("krb5-forge-tgt: reseal-password: {e}");
                 return ExitCode::from(2);
@@ -205,6 +199,23 @@ fn main() -> ExitCode {
             Ok(t) => t,
             Err(_) => continue,
         };
+        // Ticket enc etype is first_current_key (profile order). --key-hex
+        // bytes from dump-keytab must be wrapped as that etype, not always 18.
+        let key = if let Some(ref hex) = hex_for_decrypt {
+            let Ok(et) = EncryptionType::from_iana(ticket.enc_part.etype)
+                .or_else(|_| EncryptionType::known(ticket.enc_part.etype))
+            else {
+                continue;
+            };
+            let Ok(k) = parse_hex_key_as(hex, et) else {
+                continue;
+            };
+            k
+        } else if let Some(ref k) = password_key {
+            k.clone()
+        } else {
+            return ExitCode::from(2);
+        };
         let Ok(plain) = decrypt(&key, usage, ticket.enc_part.cipher.as_ref()) else {
             continue;
         };
@@ -223,7 +234,8 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
         };
-        let cipher = match encrypt(&reseal, usage, &der) {
+        let reseal = reseal_override.as_ref().unwrap_or(&key);
+        let cipher = match encrypt(reseal, usage, &der) {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("krb5-forge-tgt: reseal: {e}");
@@ -381,8 +393,12 @@ fn key_from_password(password: &str, principal: &str) -> Result<ProtocolKey, Str
 }
 
 fn parse_hex_key(hex: &str) -> Result<ProtocolKey, String> {
+    parse_hex_key_as(hex, EncryptionType::Aes256CtsHmacSha196)
+}
+
+fn parse_hex_key_as(hex: &str, etype: EncryptionType) -> Result<ProtocolKey, String> {
     let raw = hex_decode(hex)?;
-    ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &raw).map_err(|e| e.to_string())
+    ProtocolKey::from_bytes(etype, &raw).map_err(|e| e.to_string())
 }
 
 fn hex_decode(h: &str) -> Result<Vec<u8>, String> {
