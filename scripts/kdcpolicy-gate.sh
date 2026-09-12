@@ -234,16 +234,16 @@ if ! docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
     log "kdcpolicy.gate" "error" ',"error":"rust SPAKE kinit failed"'
     exit 1
 fi
-life_delta 3600 'krbtgt/'
-echo "RUST_one_hour_as" # RUST_one_hour_as
+life_delta 3600 'krbtgt/' || exit 1 # RUST_one_hour_as
+echo "RUST_one_hour_as"
 if ! docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
     "$NAME" kvno host/testhost.kerber.test; then
     docker exec "$NAME" cat /tmp/kdc.log >&2 || true
     log "kdcpolicy.gate" "error" ',"error":"rust kvno host failed"'
     exit 1
 fi
-life_delta 1800 'host/'
-echo "RUST_one_hour_tgs" # RUST_one_hour_tgs
+life_delta 1800 'host/' || exit 1 # RUST_one_hour_tgs
+echo "RUST_one_hour_tgs"
 
 echo "==== rust TGS fail is LOCAL_POLICY ===="
 FAIL_TGS="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
@@ -319,15 +319,15 @@ if ! docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
     log "kdcpolicy.gate" "error" ',"error":"MIT SPAKE kinit failed"'
     exit 1
 fi
-life_delta 3600 'krbtgt/'
-echo "MIT_one_hour_as" # MIT_one_hour_as
+life_delta 3600 'krbtgt/' || exit 1 # MIT_one_hour_as
+echo "MIT_one_hour_as"
 if ! docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
     "$NAME" kvno host/testhost.kerber.test; then
     log "kdcpolicy.gate" "error" ',"error":"MIT kvno host failed"'
     exit 1
 fi
-life_delta 1800 'host/'
-echo "MIT_one_hour_tgs" # MIT_one_hour_tgs
+life_delta 1800 'host/' || exit 1 # MIT_one_hour_tgs
+echo "MIT_one_hour_tgs"
 
 echo "==== MIT TGS fail is LOCAL_POLICY ===="
 FAIL_TGS_MIT="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
