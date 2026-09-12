@@ -660,7 +660,7 @@ fn combine_ws(dst: &mut String, more: &str) {
         return;
     }
     if dst.is_empty() {
-        *dst = more.to_owned();
+        more.clone_into(dst);
     } else {
         dst.push(' ');
         dst.push_str(more);

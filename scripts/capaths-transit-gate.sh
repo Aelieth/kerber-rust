@@ -1362,11 +1362,7 @@ expect_host_referral() {
     echo "$kl"
     echo "$kl" | grep -q 'host/x.c.test'
     echo "$kl" | grep -q 'Ticket server: host/x.c.test@C.TEST'
-    if [ "$tag" = MIT ]; then
-        echo "MIT_host_referral"
-    else
-        echo "RUST_host_referral"
-    fi
+    echo "${tag}_host_referral" # MIT_host_referral / RUST_host_referral
 }
 
 expect_alternate_tgs() {
@@ -1380,11 +1376,7 @@ expect_alternate_tgs() {
     kl="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" klist -c "$cc")"
     echo "$kl"
     echo "$kl" | grep -q 'Ticket server: krbtgt/C.TEST@B.TEST'
-    if [ "$tag" = MIT ]; then
-        echo "MIT_alternate_tgs"
-    else
-        echo "RUST_alternate_tgs"
-    fi
+    echo "${tag}_alternate_tgs" # MIT_alternate_tgs / RUST_alternate_tgs
 }
 
 echo "==== MIT kvno host-based referral and alternate TGS ===="
