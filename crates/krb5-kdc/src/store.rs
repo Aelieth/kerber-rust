@@ -423,6 +423,12 @@ pub struct Policy {
     pub restrict_anon: bool,
     /// MIT `pkinit_require_freshness` (default false).
     pub pkinit_require_freshness: bool,
+    /// MIT `host_based_services` (NT-UNKNOWN referral allow-list).
+    pub host_based_services: String,
+    /// MIT `no_host_referral` (service-type deny-list).
+    pub no_host_referral: String,
+    /// `[domain_realm]` for `krb5_get_host_realm`.
+    pub domain_realm: BTreeMap<String, String>,
     /// `[realms] encrypted_challenge_indicator` (single).
     pub encrypted_challenge_indicator: Option<String>,
     /// `[realms] pkinit_indicator` (repeatable).
@@ -451,6 +457,9 @@ impl Default for Policy {
             disable_pac: false,
             restrict_anon: false,
             pkinit_require_freshness: false,
+            host_based_services: String::new(),
+            no_host_referral: String::new(),
+            domain_realm: BTreeMap::new(),
             encrypted_challenge_indicator: None,
             pkinit_indicators: Vec::new(),
             spake_preauth_indicators: Vec::new(),
@@ -495,6 +504,12 @@ impl Policy {
             .is_none_or(|v| v.contains(&e))
     }
 
+    /// MIT `krb5_get_host_realm` profile half (no DNS).
+    #[must_use]
+    pub fn realm_for_host(&self, host: &str) -> Option<&str> {
+        krb5_config::host_to_realm(&self.domain_realm, host)
+    }
+
     /// Long-term keys minted by addprinc/cpw when `-e` is omitted.
     #[must_use]
     pub fn password_etypes(&self) -> Vec<EncryptionType> {
@@ -518,6 +533,30 @@ fn permitted_transited(
         return vals.clone();
     }
     hierarchical_intermediates(crealm, srealm)
+}
+
+/// MIT `krb5_walk_realm_tree` instance list (`walk_rtree.c`): local, hops, dest.
+pub(crate) fn walk_realm_instances(
+    capaths: &BTreeMap<String, BTreeMap<String, Vec<String>>>,
+    client: &str,
+    server: &str,
+) -> Vec<String> {
+    if client == server {
+        return Vec::new();
+    }
+    if let Some(vals) = capaths.get(client).and_then(|m| m.get(server)) {
+        let mut out = vec![client.to_owned()];
+        if !(vals.len() == 1 && vals[0] == ".") {
+            for v in vals {
+                if v != "." {
+                    out.push(v.clone());
+                }
+            }
+        }
+        out.push(server.to_owned());
+        return out;
+    }
+    hierarchical_intermediates(client, server)
 }
 
 fn hierarchical_intermediates(client: &str, server: &str) -> Vec<String> {
@@ -999,6 +1038,12 @@ impl PrincipalStore {
         self.policy.restrict_anon = conf.restrict_anon;
         self.policy.pkinit_require_freshness = conf.pkinit_require_freshness;
         self.policy
+            .host_based_services
+            .clone_from(&conf.host_based_services);
+        self.policy
+            .no_host_referral
+            .clone_from(&conf.no_host_referral);
+        self.policy
             .encrypted_challenge_indicator
             .clone_from(&conf.encrypted_challenge_indicator);
         self.policy
@@ -1046,6 +1091,7 @@ impl PrincipalStore {
         if let Some(names) = &conf.spake_preauth_groups {
             self.policy.spake_preauth_groups = parse_spake_preauth_groups(names);
         }
+        self.policy.domain_realm.clone_from(&conf.domain_realm);
     }
 
     /// Realm NT domain SID.
@@ -3389,11 +3435,15 @@ mod tests {
         encrypted_challenge_indicator = encrypted_challenge
         pkinit_indicator = pkinit
         spake_preauth_indicator = spake
+        host_based_services = host
+        no_host_referral = imap
     }
 ",
         )
         .unwrap();
         store.apply_kdc_conf(&conf).unwrap();
+        assert_eq!(store.policy.host_based_services, "host");
+        assert_eq!(store.policy.no_host_referral, "imap");
         assert_eq!(store.policy.max_life, 5400);
         assert_eq!(store.policy.max_renewable_life, 2 * 86400);
         assert!(!store.policy.requires_preauth);

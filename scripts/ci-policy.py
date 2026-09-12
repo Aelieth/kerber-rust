@@ -138,6 +138,7 @@ DIFFSEND_CASES = frozenset(
         "as-fast-hide-error-client",
         "tgs-fast-hide-client",
         "pkinit-stale-freshness",
+        "tgs-referral-no-dot",
     }
 )
 _LEDGER_GATE = re.compile(r"(?:scripts/)?([A-Za-z0-9._-]+-gate(?:\.sh)?)")

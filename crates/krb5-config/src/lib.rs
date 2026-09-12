@@ -160,6 +160,10 @@ pub struct KdcConf {
     pub restrict_anon: bool,
     /// MIT `pkinit_require_freshness` (default false).
     pub pkinit_require_freshness: bool,
+    /// MIT `host_based_services` (space/comma-separated).
+    pub host_based_services: String,
+    /// MIT `no_host_referral` (space/comma-separated).
+    pub no_host_referral: String,
     /// `[realms] encrypted_challenge_indicator`.
     pub encrypted_challenge_indicator: Option<String>,
     /// `[realms] pkinit_indicator` (repeatable).
@@ -195,6 +199,8 @@ impl Default for KdcConf {
             disable_pac: false,
             restrict_anon: false,
             pkinit_require_freshness: false,
+            host_based_services: String::new(),
+            no_host_referral: String::new(),
             encrypted_challenge_indicator: None,
             pkinit_indicators: Vec::new(),
             spake_preauth_indicators: Vec::new(),
@@ -399,7 +405,9 @@ fn valid_include_name(name: &str) -> bool {
         .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-fn host_to_realm<'a>(map: &'a BTreeMap<String, String>, host: &str) -> Option<&'a str> {
+/// Longest-suffix `[domain_realm]` map (MIT hostrealm profile).
+#[must_use]
+pub fn host_to_realm<'a>(map: &'a BTreeMap<String, String>, host: &str) -> Option<&'a str> {
     let host = host.trim_end_matches('.').to_ascii_lowercase();
     if let Some(r) = map.get(&host) {
         return Some(r.as_str());
@@ -646,6 +654,19 @@ fn parse_libdefaults(conf: &mut Krb5Conf, seen: &mut BTreeSet<String>, line: &st
     }
 }
 
+fn combine_ws(dst: &mut String, more: &str) {
+    let more = more.trim();
+    if more.is_empty() {
+        return;
+    }
+    if dst.is_empty() {
+        *dst = more.to_owned();
+    } else {
+        dst.push(' ');
+        dst.push_str(more);
+    }
+}
+
 fn split_ws(v: &str) -> Vec<String> {
     v.split_whitespace().map(ToOwned::to_owned).collect()
 }
@@ -720,6 +741,8 @@ fn parse_kdcdefaults(conf: &mut KdcConf, line: &str) {
         "disable_pac" => conf.disable_pac = truthy(&v),
         "restrict_anonymous_to_tgt" => conf.restrict_anon = truthy(&v),
         "pkinit_require_freshness" => conf.pkinit_require_freshness = truthy(&v),
+        "host_based_services" => combine_ws(&mut conf.host_based_services, &v),
+        "no_host_referral" => combine_ws(&mut conf.no_host_referral, &v),
         _ => {}
     }
 }
@@ -768,6 +791,8 @@ fn parse_kdc_realm_line(conf: &mut KdcConf, line: &str) {
         "disable_pac" => conf.disable_pac = truthy(&v),
         "restrict_anonymous_to_tgt" => conf.restrict_anon = truthy(&v),
         "pkinit_require_freshness" => conf.pkinit_require_freshness = truthy(&v),
+        "host_based_services" => combine_ws(&mut conf.host_based_services, &v),
+        "no_host_referral" => combine_ws(&mut conf.no_host_referral, &v),
         "encrypted_challenge_indicator" => {
             conf.encrypted_challenge_indicator = Some(v);
         }
@@ -1736,6 +1761,44 @@ mod tests {
         )
         .unwrap();
         assert!(!lib.pkinit_require_freshness);
+    }
+
+    #[test]
+    fn a4_18_host_based_and_no_host_referral_from_kdcdefaults_and_realm() {
+        let kdc = KdcConf::parse(
+            r"
+[kdcdefaults]
+    host_based_services = host
+    no_host_referral = imap
+",
+        )
+        .unwrap();
+        assert_eq!(kdc.host_based_services, "host");
+        assert_eq!(kdc.no_host_referral, "imap");
+        let both = KdcConf::parse(
+            r"
+[kdcdefaults]
+    host_based_services = host
+[realms]
+    KERBER.TEST = {
+        host_based_services = smtp
+        no_host_referral = *
+    }
+",
+        )
+        .unwrap();
+        assert_eq!(both.host_based_services, "host smtp");
+        assert_eq!(both.no_host_referral, "*");
+        let lib = KdcConf::parse(
+            r"
+[libdefaults]
+    host_based_services = host
+    no_host_referral = imap
+",
+        )
+        .unwrap();
+        assert!(lib.host_based_services.is_empty());
+        assert!(lib.no_host_referral.is_empty());
     }
 
     #[test]

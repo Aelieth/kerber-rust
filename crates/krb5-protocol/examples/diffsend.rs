@@ -4316,7 +4316,47 @@ fn run() -> Result<(), String> {
         err::PREAUTH_FAILED,
     )?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":106}}"#);
+    let nodot = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "nodot"]);
+    let nodot_tgt = mint_tgt(
+        tkt_key,
+        tkt_kvno,
+        &user,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        (
+            now.clone(),
+            now.add_hours(10).unwrap_or_else(|_| now.clone()),
+        ),
+        TicketFlags::initial_preauth(),
+    )?;
+    expect_error(
+        &cfg,
+        "tgs-referral-no-dot",
+        &encode(
+            &tgs_req_ex(
+                nodot_tgt,
+                &sess,
+                realm,
+                &user,
+                nodot,
+                realm,
+                0x1000_0094,
+                KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true),
+                None,
+                Vec::new(),
+                EncryptionType::preferred()
+                    .iter()
+                    .map(|e| e.to_iana())
+                    .collect(),
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::S_PRINCIPAL_UNKNOWN,
+    )?;
+
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":107}}"#);
     Ok(())
 }
 

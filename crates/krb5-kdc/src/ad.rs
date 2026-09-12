@@ -86,7 +86,7 @@ pub(crate) fn sign_reply_pac_s4u(
     identity: &krb5_types::pac::PacIdentity,
     logon_override: Option<&[u8]>,
     subject_pac: Option<&[u8]>,
-    s4u_final: bool,
+    s4u_client_info: Option<&str>,
 ) -> Result<Vec<u8>, Error> {
     sign_reply_pac_inner(
         cname,
@@ -95,7 +95,7 @@ pub(crate) fn sign_reply_pac_s4u(
         identity,
         logon_override,
         subject_pac,
-        s4u_final,
+        s4u_client_info,
     )
 }
 
@@ -117,7 +117,7 @@ pub fn sign_reply_pac(
         identity,
         logon_override,
         subject_pac,
-        false,
+        None,
     )
 }
 
@@ -128,7 +128,7 @@ fn sign_reply_pac_inner(
     identity: &krb5_types::pac::PacIdentity,
     logon_override: Option<&[u8]>,
     subject_pac: Option<&[u8]>,
-    s4u_final: bool,
+    s4u_client_info: Option<&str>,
 ) -> Result<Vec<u8>, Error> {
     let PacTicket {
         server,
@@ -159,8 +159,8 @@ fn sign_reply_pac_inner(
                 }
             }
         }
-        if s4u_final {
-            let info = krb5_types::pac::client_info_buffer(authtime, &cname.components_joined());
+        if let Some(name) = s4u_client_info {
+            let info = krb5_types::pac::client_info_buffer(authtime, name);
             match buffers.iter_mut().find(|b| b.kind == PAC_CLIENT_INFO) {
                 Some(b) => b.data = info,
                 None => buffers.push(krb5_types::pac::PacBuffer::new(PAC_CLIENT_INFO, info)),
@@ -177,13 +177,15 @@ fn sign_reply_pac_inner(
                 identity.rid,
             ),
         };
+        let owned = cname.components_joined();
+        let info_name = s4u_client_info.unwrap_or(owned.as_str());
         krb5_types::pac::Pac::built(
             0,
             vec![
                 krb5_types::pac::PacBuffer::new(PAC_LOGON_INFO, logon),
                 krb5_types::pac::PacBuffer::new(
                     PAC_CLIENT_INFO,
-                    krb5_types::pac::client_info_buffer(authtime, &cname.components_joined()),
+                    krb5_types::pac::client_info_buffer(authtime, info_name),
                 ),
                 krb5_types::pac::PacBuffer::new(
                     krb5_types::pac::PAC_UPN_DNS_INFO,

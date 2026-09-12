@@ -1138,5 +1138,379 @@ echo "$RUST_RF" | grep -qv R || {
     exit 1
 }
 
+echo "==== MIT test-KDB two-realm RBCD ===="
+docker exec "$NAME" sh -c 'for p in /proc/[0-9]*; do
+  comm=$(cat "$p/comm" 2>/dev/null) || continue
+  [ "$comm" = krb5kdc ] || [ "$comm" = krb5-kdc ] || continue
+  kill -9 "${p#/proc/}" 2>/dev/null || true
+done'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" python3 -c "
+import socket
+for p in (8888, 8890, 8892, 8893):
+    try:
+        s = socket.create_connection(('127.0.0.1', p), 0.15)
+        s.close()
+        raise SystemExit(0)
+    except OSError:
+        pass
+raise SystemExit(1)
+" 2>/dev/null; then
+        sleep 0.2
+        continue
+    fi
+    ok=1
+    break
+done
+[ "$ok" = 1 ]
+XR_KEY="00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+docker exec "$NAME" sh -c 'cat >/tmp/test-kdc-a.conf <<EOF
+[kdcdefaults]
+    kdc_listen = 127.0.0.1:8892
+    kdc_tcp_listen = 127.0.0.1:8892
+[realms]
+    KERBER.TEST = {
+        database_module = test
+    }
+[dbmodules]
+    test = {
+        db_library = test
+        princs = {
+            krbtgt/KERBER.TEST = {
+                keys = aes256-cts
+            }
+            krbtgt/OTHER.TEST = {
+                keys = aes256-cts
+            }
+            user = {
+                keys = aes256-cts
+            }
+            host/testhost.kerber.test = {
+                flags = +ok-to-auth-as-delegate
+                keys = aes256-cts
+            }
+        }
+        alias = {
+            host/rbcd.other.test = @OTHER.TEST
+        }
+    }
+[logging]
+    kdc = FILE:/tmp/mit-xrealm-a.log
+EOF
+cat >/tmp/test-kdc-b.conf <<EOF
+[kdcdefaults]
+    kdc_listen = 127.0.0.1:8893
+    kdc_tcp_listen = 127.0.0.1:8893
+[realms]
+    OTHER.TEST = {
+        database_module = test
+    }
+[dbmodules]
+    test = {
+        db_library = test
+        princs = {
+            krbtgt/OTHER.TEST = {
+                keys = aes256-cts
+            }
+            krbtgt/KERBER.TEST = {
+                keys = aes256-cts
+            }
+            user = {
+                keys = aes256-cts
+            }
+            host/rbcd.other.test = {
+                keys = aes256-cts
+            }
+        }
+        rbcd = {
+            host/rbcd.other.test@OTHER.TEST = host/testhost.kerber.test@KERBER.TEST
+        }
+    }
+[logging]
+    kdc = FILE:/tmp/mit-xrealm-b.log
+EOF
+cat >/tmp/test-kdc-b-wrong.conf <<EOF
+[kdcdefaults]
+    kdc_listen = 127.0.0.1:8893
+    kdc_tcp_listen = 127.0.0.1:8893
+[realms]
+    OTHER.TEST = {
+        database_module = test
+    }
+[dbmodules]
+    test = {
+        db_library = test
+        princs = {
+            krbtgt/OTHER.TEST = {
+                keys = aes256-cts
+            }
+            krbtgt/KERBER.TEST = {
+                keys = aes256-cts
+            }
+            user = {
+                keys = aes256-cts
+            }
+            host/rbcd.other.test = {
+                keys = aes256-cts
+            }
+        }
+        rbcd = {
+            host/rbcd.other.test@OTHER.TEST = host/testhost.kerber.test@WRONG.TEST
+        }
+    }
+[logging]
+    kdc = FILE:/tmp/mit-xrealm-b-wrong.log
+EOF
+cat >/tmp/test-krb5-xrealm.conf <<EOF
+[libdefaults]
+    default_realm = KERBER.TEST
+    dns_lookup_kdc = false
+    dns_lookup_realm = false
+    rdns = false
+    forwardable = true
+    default_ccache_name = FILE:/tmp/krb5cc_xrealm
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1:8892
+    }
+    OTHER.TEST = {
+        kdc = 127.0.0.1:8893
+    }
+[dbmodules]
+    db_module_dir = /usr/lib/krb5/plugins/kdb
+EOF'
+docker exec -e KRB5_CONFIG=/tmp/test-krb5-xrealm.conf -e KRB5_KDC_PROFILE=/tmp/test-kdc-a.conf \
+    "$NAME" kadmin.local -r KERBER.TEST -q \
+    'ktadd -norandkey -k /tmp/test-xrealm-host.kt host/testhost.kerber.test'
+docker exec -e KRB5_CONFIG=/tmp/test-krb5-xrealm.conf -e KRB5_KDC_PROFILE=/tmp/test-kdc-b.conf \
+    "$NAME" kadmin.local -r OTHER.TEST -q \
+    'ktadd -norandkey -k /tmp/test-xrealm-rbcd.kt host/rbcd.other.test'
+docker exec -d -e KRB5_CONFIG=/tmp/test-krb5-xrealm.conf -e KRB5_KDC_PROFILE=/tmp/test-kdc-a.conf \
+    "$NAME" sh -c 'krb5kdc -n -r KERBER.TEST -P /tmp/mit-xrealm-a.pid >/tmp/mit-xrealm-a-stdout.log 2>&1'
+docker exec -d -e KRB5_CONFIG=/tmp/test-krb5-xrealm.conf -e KRB5_KDC_PROFILE=/tmp/test-kdc-b.conf \
+    "$NAME" sh -c 'krb5kdc -n -r OTHER.TEST -P /tmp/mit-xrealm-b.pid >/tmp/mit-xrealm-b-stdout.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" python3 -c "
+import socket
+socket.create_connection(('127.0.0.1', 8892), 0.2).close()
+socket.create_connection(('127.0.0.1', 8893), 0.2).close()
+" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/mit-xrealm-a.log /tmp/mit-xrealm-a-stdout.log \
+        /tmp/mit-xrealm-b.log /tmp/mit-xrealm-b-stdout.log >&2 || true
+    log "s4u.mit.gate" "error" ',"error":"MIT test-KDB xrealm kdcs did not listen"'
+    exit 1
+fi
+docker exec -e KRB5_CONFIG=/tmp/test-krb5-xrealm.conf \
+    "$NAME" kinit -f -k -t /tmp/test-xrealm-host.kt -c /tmp/krb5cc_mit_xrealm \
+    host/testhost.kerber.test@KERBER.TEST
+docker exec -e KRB5_CONFIG=/tmp/test-krb5-xrealm.conf -e KRB5CCNAME=FILE:/tmp/krb5cc_mit_xrealm \
+    "$NAME" kvno -C -u -U user -P host/rbcd.other.test@KERBER.TEST
+MIT_XR="$(docker exec "$NAME" /tmp/krb5-pac-extract --keytab /tmp/test-xrealm-rbcd.kt \
+    --ccache /tmp/krb5cc_mit_xrealm --last --print-types --print-delegation)"
+echo "$MIT_XR"
+echo "$MIT_XR" | grep -qE 'pac_types=.*\b11\b'
+echo "$MIT_XR" | grep -q 'proxy_target=host/rbcd.other.test'
+echo "$MIT_XR" | grep -q 'transited_services=host/testhost.kerber.test@KERBER.TEST'
+echo "MIT_testkdb_xrealm_rbcd"
+
+echo "==== MIT test-KDB two-realm RBCD wrong realm ===="
+docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/mit-xrealm-b.pid)" 2>/dev/null || true'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',8893),0.15)" 2>/dev/null; then
+        sleep 0.2
+        continue
+    fi
+    ok=1
+    break
+done
+[ "$ok" = 1 ]
+docker exec -d -e KRB5_CONFIG=/tmp/test-krb5-xrealm.conf -e KRB5_KDC_PROFILE=/tmp/test-kdc-b-wrong.conf \
+    "$NAME" sh -c 'krb5kdc -n -r OTHER.TEST -P /tmp/mit-xrealm-b.pid >/tmp/mit-xrealm-b-wrong-stdout.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',8893),0.2)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/mit-xrealm-b-wrong.log /tmp/mit-xrealm-b-wrong-stdout.log >&2 || true
+    log "s4u.mit.gate" "error" ',"error":"MIT test-KDB xrealm wrong-realm kdc did not listen"'
+    exit 1
+fi
+docker exec -e KRB5_CONFIG=/tmp/test-krb5-xrealm.conf \
+    "$NAME" kinit -f -k -t /tmp/test-xrealm-host.kt -c /tmp/krb5cc_mit_xrealm_wrong \
+    host/testhost.kerber.test@KERBER.TEST
+set +e
+MIT_XR_WRONG="$(docker exec -e KRB5_CONFIG=/tmp/test-krb5-xrealm.conf \
+    -e KRB5CCNAME=FILE:/tmp/krb5cc_mit_xrealm_wrong \
+    "$NAME" kvno -C -u -U user -P host/rbcd.other.test@KERBER.TEST 2>&1)"
+mit_xr_rc=$?
+set -e
+echo "$MIT_XR_WRONG"
+test "$mit_xr_rc" -ne 0
+echo "$MIT_XR_WRONG" | grep -qE "KDC can't fulfill requested option|KDC cannot accommodate requested option|not allowed to delegate|KDC policy rejects request|constrained delegation failed"
+echo "MIT_testkdb_xrealm_rbcd_wrong_realm"
+
+echo "==== Rust two-realm RBCD ===="
+docker exec "$NAME" sh -c 'kill -9 $(cat /tmp/mit-xrealm-a.pid /tmp/mit-xrealm-b.pid 2>/dev/null) 2>/dev/null || true'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" python3 -c "
+import socket
+for p in (8892, 8893):
+    try:
+        s = socket.create_connection(('127.0.0.1', p), 0.15)
+        s.close()
+        raise SystemExit(0)
+    except OSError:
+        pass
+raise SystemExit(1)
+" 2>/dev/null; then
+        sleep 0.2
+        continue
+    fi
+    ok=1
+    break
+done
+[ "$ok" = 1 ]
+docker exec "$NAME" sh -c 'cat >/tmp/rust-krb5-xrealm.conf <<EOF
+[libdefaults]
+    default_realm = KERBER.TEST
+    dns_lookup_kdc = false
+    dns_lookup_realm = false
+    rdns = false
+    forwardable = true
+    default_ccache_name = FILE:/tmp/krb5cc_rust_xrealm
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1:8892
+    }
+    OTHER.TEST = {
+        kdc = 127.0.0.1:8893
+    }
+[domain_realm]
+    .other.test = OTHER.TEST
+    .kerber.test = KERBER.TEST
+EOF
+cat >/tmp/kdc-rust-xrealm-a.conf <<EOF
+[kdcdefaults]
+    host_based_services = *
+EOF'
+docker exec -d \
+    -e KRB5_CONFIG=/tmp/rust-krb5-xrealm.conf \
+    -e KRB5_KDC_PROFILE=/tmp/kdc-rust-xrealm-a.conf \
+    -e KRB5_TEST_USER_PASSWORD=userpassword \
+    -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
+    -e KRB5_TEST_REALM=KERBER.TEST \
+    -e KRB5_TEST_FOREIGN_REALM=OTHER.TEST \
+    -e KRB5_TEST_INTERREALM_KEY="$XR_KEY" \
+    -e KRB5_TEST_HOST=testhost.kerber.test \
+    -e KRB5_TEST_OK_TO_AUTH_AS_DELEGATE=1 \
+    -e KRB5_EXPORT_KEYTAB=/tmp/rust-xrealm-host.kt \
+    "$NAME" sh -c '/tmp/krb5-kdc --test-realm 127.0.0.1:8892 >/tmp/kdc-xrealm-a.log 2>&1'
+docker exec -d \
+    -e KRB5_TEST_USER_PASSWORD=userpassword \
+    -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
+    -e KRB5_TEST_REALM=OTHER.TEST \
+    -e KRB5_TEST_FOREIGN_REALM=KERBER.TEST \
+    -e KRB5_TEST_INTERREALM_KEY="$XR_KEY" \
+    -e KRB5_TEST_HOST=svc.other.test \
+    -e KRB5_TEST_EXTRA_HOST=rbcd.other.test \
+    -e KRB5_TEST_S4U_FROM=host/testhost.kerber.test@KERBER.TEST \
+    -e KRB5_EXPORT_KEYTAB_EXTRA=/tmp/rust-xrealm-rbcd.kt \
+    "$NAME" sh -c '/tmp/krb5-kdc --test-realm 127.0.0.1:8893 >/tmp/kdc-xrealm-b.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/kdc-xrealm-a.log 2>/dev/null \
+        && docker exec "$NAME" grep -q '^listening ' /tmp/kdc-xrealm-b.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kdc-xrealm-a.log /tmp/kdc-xrealm-b.log >&2 || true
+    log "s4u.mit.gate" "error" ',"error":"Rust xrealm KDCs did not listen"'
+    exit 1
+fi
+docker exec -e KRB5_CONFIG=/tmp/rust-krb5-xrealm.conf \
+    "$NAME" kinit -f -k -t /tmp/rust-xrealm-host.kt -c /tmp/krb5cc_rust_xrealm \
+    host/testhost.kerber.test@KERBER.TEST
+docker exec -e KRB5_CONFIG=/tmp/rust-krb5-xrealm.conf -e KRB5CCNAME=FILE:/tmp/krb5cc_rust_xrealm \
+    "$NAME" kvno -C -u -U user -P host/rbcd.other.test@KERBER.TEST
+RUST_XR="$(docker exec "$NAME" /tmp/krb5-pac-extract --keytab /tmp/rust-xrealm-rbcd.kt \
+    --ccache /tmp/krb5cc_rust_xrealm --last --print-types --print-delegation)"
+echo "$RUST_XR"
+echo "$RUST_XR" | grep -qE 'pac_types=.*\b11\b'
+echo "$RUST_XR" | grep -q 'proxy_target=host/rbcd.other.test'
+echo "$RUST_XR" | grep -q 'transited_services=host/testhost.kerber.test@KERBER.TEST'
+echo "RUST_testkdb_xrealm_rbcd"
+
+echo "==== Rust two-realm RBCD wrong realm ===="
+docker exec "$NAME" sh -c 'for p in /proc/[0-9]*; do
+  comm=$(cat "$p/comm" 2>/dev/null) || continue
+  [ "$comm" = krb5-kdc ] || continue
+  cmd=$(tr "\0" " " < "$p/cmdline" 2>/dev/null) || continue
+  echo "$cmd" | grep -Fq -- "127.0.0.1:8893" || continue
+  kill -9 "${p#/proc/}" 2>/dev/null || true
+done'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',8893),0.15)" 2>/dev/null; then
+        sleep 0.2
+        continue
+    fi
+    ok=1
+    break
+done
+[ "$ok" = 1 ]
+docker exec -d \
+    -e KRB5_TEST_USER_PASSWORD=userpassword \
+    -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
+    -e KRB5_TEST_REALM=OTHER.TEST \
+    -e KRB5_TEST_FOREIGN_REALM=KERBER.TEST \
+    -e KRB5_TEST_INTERREALM_KEY="$XR_KEY" \
+    -e KRB5_TEST_HOST=svc.other.test \
+    -e KRB5_TEST_EXTRA_HOST=rbcd.other.test \
+    -e KRB5_TEST_S4U_FROM=host/testhost.kerber.test@WRONG.TEST \
+    "$NAME" sh -c '/tmp/krb5-kdc --test-realm 127.0.0.1:8893 >/tmp/kdc-xrealm-b-wrong.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/kdc-xrealm-b-wrong.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kdc-xrealm-b-wrong.log >&2 || true
+    log "s4u.mit.gate" "error" ',"error":"Rust xrealm wrong-realm KDC did not listen"'
+    exit 1
+fi
+docker exec -e KRB5_CONFIG=/tmp/rust-krb5-xrealm.conf \
+    "$NAME" kinit -f -k -t /tmp/rust-xrealm-host.kt -c /tmp/krb5cc_rust_xrealm_wrong \
+    host/testhost.kerber.test@KERBER.TEST
+set +e
+RUST_XR_WRONG="$(docker exec -e KRB5_CONFIG=/tmp/rust-krb5-xrealm.conf \
+    -e KRB5CCNAME=FILE:/tmp/krb5cc_rust_xrealm_wrong \
+    "$NAME" kvno -C -u -U user -P host/rbcd.other.test@KERBER.TEST 2>&1)"
+rust_xr_rc=$?
+set -e
+echo "$RUST_XR_WRONG"
+test "$rust_xr_rc" -ne 0
+echo "$RUST_XR_WRONG" | grep -qE "KDC can't fulfill requested option|KDC cannot accommodate requested option|not allowed to delegate|KDC policy rejects request|constrained delegation failed"
+echo "RUST_testkdb_xrealm_rbcd_wrong_realm"
+
 log "s4u.mit.gate" "ok" ',"principal":"host/testhost.kerber.test","for_client":"user@KERBER.TEST"'
 exit 0

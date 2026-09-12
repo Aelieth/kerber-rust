@@ -81,6 +81,7 @@ write_kdc_conf() {
 [kdcdefaults]
     kdc_ports = ${port}
     kdc_tcp_ports = ${port}
+    host_based_services = *
 [logging]
     kdc = FILE:${klog}
 [realms]
@@ -98,6 +99,28 @@ mkdir -p /tmp/db-a /tmp/db-b /tmp/db-c
 write_kdc_conf A.TEST 88 /tmp/db-a /tmp/mit-a.log
 write_kdc_conf B.TEST 89 /tmp/db-b /tmp/mit-b.log
 write_kdc_conf C.TEST 90 /tmp/db-c /tmp/mit-c.log
+cat >>/tmp/kdc-A.conf <<'REF'
+[domain_realm]
+    .a.test = A.TEST
+    .b.test = B.TEST
+    .c.test = C.TEST
+[capaths]
+    A.TEST = {
+        C.TEST = B.TEST
+        B.TEST = .
+    }
+REF
+cat >>/tmp/kdc-B.conf <<'REF'
+[domain_realm]
+    .a.test = A.TEST
+    .b.test = B.TEST
+    .c.test = C.TEST
+[capaths]
+    A.TEST = {
+        C.TEST = B.TEST
+        B.TEST = .
+    }
+REF
 sed 's/supported_enctypes.*/reject_bad_transit = false\n        supported_enctypes = aes256-cts-hmac-sha1-96:normal/' \
     /tmp/kdc-C.conf > /tmp/kdc-C-lax.conf
 cat >/tmp/kdc-c-allow.conf <<EOF
@@ -123,6 +146,10 @@ cat >/tmp/kdc-c-deny.conf <<EOF
     C.TEST = {
         kdc = 127.0.0.1:90
     }
+EOF
+cat >/tmp/kdc-rust-referral.conf <<EOF
+[kdcdefaults]
+    host_based_services = *
 EOF
 cat >/tmp/client-garbage.conf <<EOF
 [libdefaults]
@@ -175,6 +202,7 @@ kad /tmp/kdc-B.conf B.TEST "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_
 kad /tmp/kdc-C.conf C.TEST "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_PW} krbtgt/C.TEST@B.TEST"
 kad /tmp/kdc-C.conf C.TEST "addprinc -randkey user"
 kad /tmp/kdc-C.conf C.TEST "addprinc -randkey host/svc.c.test"
+kad /tmp/kdc-C.conf C.TEST "addprinc -randkey host/x.c.test"
 kad /tmp/kdc-C.conf C.TEST "ktadd -k /tmp/mit-c.host.kt host/svc.c.test"
 EOF
 
@@ -756,6 +784,8 @@ done
 
 start_ab() {
     docker exec -d \
+        -e KRB5_CONFIG=/tmp/client-capaths.conf \
+        -e KRB5_KDC_PROFILE=/tmp/kdc-rust-referral.conf \
         -e KRB5_TEST_USER_PASSWORD=userpassword \
         -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
         -e KRB5_TEST_REALM=A.TEST \
@@ -764,6 +794,8 @@ start_ab() {
         -e KRB5_TEST_HOST=svc.a.test \
         "$NAME" sh -c '/tmp/krb5-kdc --test-realm 127.0.0.1:88 >/tmp/kdc-a.log 2>&1'
     docker exec -d \
+        -e KRB5_CONFIG=/tmp/client-capaths.conf \
+        -e KRB5_KDC_PROFILE=/tmp/kdc-rust-referral.conf \
         -e KRB5_TEST_USER_PASSWORD=userpassword \
         -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
         -e KRB5_TEST_REALM=B.TEST \
@@ -784,6 +816,7 @@ start_c() {
         -e KRB5_TEST_FOREIGN_REALM=B.TEST \
         -e KRB5_TEST_INTERREALM_KEY="$XR_KEY" \
         -e KRB5_TEST_HOST=svc.c.test \
+        -e KRB5_TEST_EXTRA_HOST=x.c.test \
         -e KRB5_EXPORT_KEYTAB=/tmp/rust-c.host.kt \
         -e KRB5_TEST_DISALLOW_TIX="${KRB5_TEST_DISALLOW_TIX:-}" \
         -e KRB5_TEST_DISALLOW_SVR="${KRB5_TEST_DISALLOW_SVR:-}" \
@@ -828,7 +861,7 @@ echo "$RUST_CHASE" | grep -q 'host/svc.c.test@C.TEST: kvno ='
 KLIST="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" klist -f -c /tmp/krb5cc_rust 2>/dev/null || true)"
 echo "$KLIST"
 echo "$KLIST" | grep -q 'user@A.TEST'
-echo "$KLIST" | grep -q 'krbtgt/B.TEST'
+echo "$KLIST" | grep -q 'krbtgt/C.TEST@B.TEST'
 echo "$KLIST" | grep -q 'krbtgt/C.TEST'
 echo "$KLIST" | grep -q 'host/svc.c.test'
 echo "$KLIST" | awk -F'Flags: ' '/host\/svc.c.test/{p=1;next} p&&/Flags:/{print $2;exit}' | grep -q T
@@ -1287,6 +1320,118 @@ docker exec -e KRB5_CONFIG=/tmp/s4u-c.conf "$NAME" \
 expect_lineage_u2u "RUST_lineage_u2u" /tmp/krb5cc_rust_lineage_u2u \
     /tmp/krb5cc_rust_c_u2u_host /tmp/kdc-c-lineage-u2u.log
 docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/kdc-c.pid)" 2>/dev/null || true'
+
+kill_named() {
+    local comm="$1"
+    local needle="$2"
+    docker exec "$NAME" sh -c '
+comm_want='"$comm"'
+needle='"$needle"'
+for p in /proc/[0-9]*; do
+  comm=$(cat "$p/comm" 2>/dev/null) || continue
+  [ "$comm" = "$comm_want" ] || continue
+  cmd=$(tr "\0" " " < "$p/cmdline" 2>/dev/null) || continue
+  echo "$cmd" | grep -Fq -- "$needle" || continue
+  kill -9 "${p#/proc/}" 2>/dev/null || true
+done'
+}
+
+wait_port_free() {
+    local port="$1"
+    local ok=0
+    for _ in $(seq 1 40); do
+        if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',${port}),0.15)" 2>/dev/null; then
+            sleep 0.2
+            continue
+        fi
+        ok=1
+        break
+    done
+    [ "$ok" = 1 ]
+}
+
+expect_host_referral() {
+    local tag="$1"
+    local cc="$2"
+    docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+        sh -c "printf 'userpassword\n' | kinit -c ${cc} user@A.TEST"
+    docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+        kvno -C -u -c "$cc" host/x.c.test@A.TEST
+    local kl
+    kl="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" klist -c "$cc")"
+    echo "$kl"
+    echo "$kl" | grep -q 'host/x.c.test'
+    echo "$kl" | grep -q 'Ticket server: host/x.c.test@C.TEST'
+    echo "${tag}_host_referral"
+}
+
+expect_alternate_tgs() {
+    local tag="$1"
+    local cc="$2"
+    docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+        sh -c "printf 'userpassword\n' | kinit -c ${cc} user@A.TEST"
+    docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
+        kvno -c "$cc" krbtgt/C.TEST@A.TEST
+    local kl
+    kl="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" klist -c "$cc")"
+    echo "$kl"
+    echo "$kl" | grep -q 'Ticket server: krbtgt/C.TEST@B.TEST'
+    echo "${tag}_alternate_tgs"
+}
+
+echo "==== MIT kvno host-based referral and alternate TGS ===="
+kill_named krb5-kdc --test-realm
+wait_port_free 88
+wait_port_free 89
+wait_port_free 90
+start_mit A.TEST /tmp/kdc-A.conf /tmp/mit-a-ref.log /tmp/mit-a.pid
+start_mit B.TEST /tmp/kdc-B.conf /tmp/mit-b-ref.log /tmp/mit-b.pid
+start_mit C.TEST /tmp/kdc-C.conf /tmp/mit-c-ref.log /tmp/mit-c.pid
+wait_port 88 || {
+    docker exec "$NAME" cat /tmp/mit-a-ref.log 2>/dev/null || true
+    log "capaths.gate" "error" ',"error":"MIT A for referral did not listen"'
+    exit 1
+}
+wait_port 89 || {
+    docker exec "$NAME" cat /tmp/mit-b-ref.log 2>/dev/null || true
+    log "capaths.gate" "error" ',"error":"MIT B for referral did not listen"'
+    exit 1
+}
+wait_port 90 || {
+    docker exec "$NAME" cat /tmp/mit-c-ref.log 2>/dev/null || true
+    log "capaths.gate" "error" ',"error":"MIT C for referral did not listen"'
+    exit 1
+}
+expect_host_referral MIT /tmp/krb5cc_mit_href
+expect_alternate_tgs MIT /tmp/krb5cc_mit_alt
+docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/mit-a.pid)" 2>/dev/null || true'
+docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/mit-b.pid)" 2>/dev/null || true'
+docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/mit-c.pid)" 2>/dev/null || true'
+wait_port_free 88
+wait_port_free 89
+wait_port_free 90
+
+echo "==== MIT kvno vs Rust KDCs host-based referral and alternate TGS ===="
+docker exec "$NAME" sh -c 'rm -f /tmp/kdc-a.log /tmp/kdc-b.log'
+start_ab
+start_c /tmp/kdc-c-allow.conf /tmp/kdc-c-ref.log
+wait_listen /tmp/kdc-a.log || {
+    docker exec "$NAME" cat /tmp/kdc-a.log 2>/dev/null || true
+    log "capaths.gate" "error" ',"error":"Rust A for referral did not listen"'
+    exit 1
+}
+wait_listen /tmp/kdc-b.log || {
+    docker exec "$NAME" cat /tmp/kdc-b.log 2>/dev/null || true
+    log "capaths.gate" "error" ',"error":"Rust B for referral did not listen"'
+    exit 1
+}
+wait_listen /tmp/kdc-c-ref.log || {
+    docker exec "$NAME" cat /tmp/kdc-c-ref.log 2>/dev/null || true
+    log "capaths.gate" "error" ',"error":"Rust C for referral did not listen"'
+    exit 1
+}
+expect_host_referral RUST /tmp/krb5cc_rust_href
+expect_alternate_tgs RUST /tmp/krb5cc_rust_alt
 
 log "capaths.gate" "ok" \
     ",\"path\":\"A.TEST>B.TEST>C.TEST\",\"permitted\":true,\"rejected\":true,\"transited_tr_type\":${MIT_TR_TYPE},\"transited_contents\":\"${MIT_TR_CONTENTS}\",\"transited_policy_checked\":true,\"reject_bad_transit_false\":true,\"disable_transited_check\":true"

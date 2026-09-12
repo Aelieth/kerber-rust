@@ -682,7 +682,7 @@ fn issue_as_body(
         &starttime,
         None,
         body.addresses.clone(),
-        false,
+        None,
         extra_ad,
         &auth_indicators,
         &krbtgt_p,
@@ -1025,9 +1025,7 @@ fn issue_tgs_body(
         &header_server,
         store.fetch_krbtgt()?.as_ref(),
     )?;
-    let mut server = store
-        .fetch_name(&sname)?
-        .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::LOOKING_UP_SERVER))?;
+    let mut server = search_sprinc(store, &sname, req_realm.as_str(), body)?;
     check_tgs_constraints_skeleton(
         body,
         &ap.ticket.sname,
@@ -1047,6 +1045,7 @@ fn issue_tgs_body(
     let mut s4u_x509 = None;
     let mut s4u_referral = false;
     let mut s4u2proxy = false;
+    let mut s4u_subject: Option<(PrincipalName, String)> = None;
     let mut subject_authtime = enc_tkt.authtime.clone();
     let mut subject_pac = header_pac.clone();
     if let Some(s4u) = process_s4u2self_req(
@@ -1085,6 +1084,7 @@ fn issue_tgs_body(
         s4u_x509 = s4u.x509;
         s4u_referral = is_referral;
         s4u_local = s4u.local;
+        s4u_subject = Some((s4u.user.clone(), s4u.realm.clone()));
         s4u2self = true;
     }
     let is_referral = tgs_issuing_referral(&sname, req_realm.as_str(), &server);
@@ -1111,8 +1111,12 @@ fn issue_tgs_body(
                 .as_deref()
                 .ok_or_else(|| proto(err::BADOPTION, status::RBCD_PAC_PRINC))?;
             let (cname, crealm) = rbcd_pac_client(pac)?;
-            ticket_cname = cname;
-            ticket_crealm = crealm;
+            s4u_subject = Some((cname.clone(), crealm.clone()));
+            // MIT `do_tgs_req.c:756-759`: S4U rewrite only on the final hop.
+            if !is_referral {
+                ticket_cname = cname;
+                ticket_crealm = crealm;
+            }
         }
         check_tgs_s4u2proxy(
             store,
@@ -1125,8 +1129,12 @@ fn issue_tgs_body(
             is_referral,
         )?;
         if !is_crossrealm {
-            ticket_cname = st.part.cname.clone();
-            utf8_realm(&st.part.crealm)?.clone_into(&mut ticket_crealm);
+            let crealm = utf8_realm(&st.part.crealm)?.to_owned();
+            s4u_subject = Some((st.part.cname.clone(), crealm.clone()));
+            if !is_referral {
+                ticket_cname = st.part.cname.clone();
+                ticket_crealm = crealm;
+            }
         }
         subject_authtime = st.part.authtime.clone();
         subject_pac.clone_from(&st.pac);
@@ -1163,7 +1171,7 @@ fn issue_tgs_body(
         auth_indicators = get_auth_indicators(subject, tgt, &local_tgt_key.key)?;
         check_indicators(&server, &auth_indicators)?;
     }
-    current_policy().check_tgs(store, &sname, &auth_indicators)?;
+    current_policy().check_tgs(store, &server.name, &auth_indicators)?;
     if s4u2proxy {
         let st = stkt
             .as_ref()
@@ -1179,7 +1187,7 @@ fn issue_tgs_body(
             is_referral,
         )?;
     }
-    check_anon(store, &enc_tkt.cname, &sname)?;
+    check_anon(store, &enc_tkt.cname, &server.name)?;
     let skip_transited = body.kdc_options.bit(flag_bit::DISABLE_TRANSITED_CHECK);
     let u2u = if body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY) {
         let st = stkt
@@ -1367,7 +1375,7 @@ fn issue_tgs_body(
     // the foreign KDC holds (Windows TDO inbound), not the local krbtgt.
     let pac_kdc = crate::ad::pac_privsvr_key(
         &server,
-        if sname.is_krbtgt() && !sname.is_krbtgt_for(store.realm()) {
+        if server.name.is_krbtgt() && !server.name.is_krbtgt_for(store.realm()) {
             &tkt_key
         } else {
             &krbtgt_key.key
@@ -1386,6 +1394,7 @@ fn issue_tgs_body(
         && let (Some(raw), Some(st)) = (subject_pac.as_deref(), stkt.as_ref())
     {
         let hop = st.server.name.unparse_with_realm(&st.server.realm);
+        // MIT `kdc_authdata.c:410-414`: `req->server`, not the referral TGT.
         subject_pac = Some(update_delegation_info(raw, &sname, &hop)?);
     }
     let client_key = if let Some(sub) = authenticator.subkey.as_ref() {
@@ -1394,6 +1403,20 @@ fn issue_tgs_body(
         ProtocolKey::from_bytes(st, sub.keyvalue.as_ref())?
     } else {
         tgt_session.clone()
+    };
+    // MIT `kdc_authdata.c:534-544`: S4U referral PAC client info is the
+    // subject with realm; the final hop omits the realm.
+    let s4u_client_info = if s4u2self || s4u2proxy {
+        Some(if is_referral {
+            match &s4u_subject {
+                Some((n, r)) => format!("{}@{r}", n.components_joined()),
+                None => ticket_cname.components_joined(),
+            }
+        } else {
+            ticket_cname.components_joined()
+        })
+    } else {
+        None
     };
     let extra_ad = handle_authdata(
         true,
@@ -1405,13 +1428,20 @@ fn issue_tgs_body(
         Some(&session),
         Some((&krbtgt_p.name, store.realm())),
     )?;
+    let ticket_sname = if renew || validate {
+        ap.ticket.sname.clone()
+    } else if is_referral {
+        server.name.clone()
+    } else {
+        sname.clone()
+    };
     let ticket = mint_ticket(
         &tkt_key,
         tkt_kvno,
         tkt_etype,
         &session,
         store.realm(),
-        &sname,
+        &ticket_sname,
         &ticket_crealm,
         &ticket_cname,
         &authtime,
@@ -1430,7 +1460,7 @@ fn issue_tgs_body(
             subject_pac.as_deref()
         },
         tgs_ticket_caddr(body, renew, validate, &enc_tkt),
-        s4u2self || s4u2proxy,
+        s4u_client_info.as_deref(),
         extra_ad,
         &auth_indicators,
         &krbtgt_p,
@@ -1470,7 +1500,7 @@ fn issue_tgs_body(
         &starttime,
         &end,
         store.realm(),
-        &sname,
+        &ticket_sname,
         flags,
         ticket_renew_till,
         return_enc_padata(raw, tgs_padata, &enc_key, want_enc_pa, s4u_enc_pa)?,
@@ -1750,6 +1780,125 @@ pub fn tgs_header_is_crossrealm(header_server_realm: &str, sprinc_realm: &str) -
     header_server_realm != sprinc_realm
 }
 
+/// MIT `in_list` (`do_tgs_req.c:417-431`): space/comma-separated tokens.
+fn in_list(list: &str, item: &str) -> bool {
+    if list.is_empty() {
+        return false;
+    }
+    list.split(|c: char| c.is_ascii_whitespace() || c == ',')
+        .any(|t| t == item)
+}
+
+fn no_referral_option(body: &KdcReqBody) -> bool {
+    body.kdc_options.bit(flag_bit::FORWARDED)
+        || body.kdc_options.bit(flag_bit::PROXY)
+        || body.kdc_options.bit(flag_bit::RENEW)
+        || body.kdc_options.bit(flag_bit::VALIDATE)
+        || body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY)
+}
+
+/// MIT `is_referral_req` (`do_tgs_req.c:438-477`).
+fn is_referral_req(store: &dyn PrincipalRead, body: &KdcReqBody, sname: &PrincipalName) -> bool {
+    if !body.kdc_options.bit(flag_bit::CANONICALIZE)
+        || body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY)
+        || sname.name_string.len() != 2
+    {
+        return false;
+    }
+    let stype = sname
+        .name_string
+        .first()
+        .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
+        .unwrap_or_default();
+    let hostbased = store.policy().host_based_services.as_str();
+    let no_ref = store.policy().no_host_referral.as_str();
+    match sname.name_type {
+        PrincipalName::NT_UNKNOWN => {
+            if !in_list(hostbased, &stype) && !in_list(hostbased, "*") {
+                return false;
+            }
+        }
+        PrincipalName::NT_SRV_HST | PrincipalName::NT_SRV_INST => {}
+        _ => return false,
+    }
+    !in_list(no_ref, &stype) && !in_list(no_ref, "*")
+}
+
+/// MIT `find_referral_tgs` (`do_tgs_req.c:483-523`).
+fn find_referral_tgs(
+    store: &dyn PrincipalRead,
+    body: &KdcReqBody,
+    sname: &PrincipalName,
+    req_realm: &str,
+) -> Result<PrincipalName, Error> {
+    if !is_referral_req(store, body, sname) {
+        return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::LOOKING_UP_SERVER));
+    }
+    let host = sname
+        .name_string
+        .get(1)
+        .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
+        .unwrap_or_default();
+    if !host.contains('.') {
+        return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::LOOKING_UP_SERVER));
+    }
+    let Some(other) = store.policy().realm_for_host(&host) else {
+        return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::LOOKING_UP_SERVER));
+    };
+    if other.is_empty() || other == req_realm {
+        return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::LOOKING_UP_SERVER));
+    }
+    Ok(PrincipalName::new(
+        PrincipalName::NT_SRV_INST,
+        ["krbtgt", other],
+    ))
+}
+
+/// MIT `find_alternate_tgs` (`do_tgs_req.c:370-414`).
+fn find_alternate_tgs(
+    store: &dyn PrincipalRead,
+    princ: &PrincipalName,
+) -> Result<crate::store::Principal, Error> {
+    let far = princ
+        .name_string
+        .get(1)
+        .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
+        .unwrap_or_default();
+    let hops = crate::store::walk_realm_instances(&store.policy().capaths, store.realm(), &far);
+    for inst in hops.iter().skip(1).rev() {
+        let hop = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", inst.as_str()]);
+        if let Some(p) = store.fetch_name(&hop)? {
+            return Ok(p);
+        }
+    }
+    Err(proto(err::S_PRINCIPAL_UNKNOWN, status::UNKNOWN_SERVER))
+}
+
+/// MIT `search_sprinc` (`do_tgs_req.c:541-581`).
+fn search_sprinc(
+    store: &dyn PrincipalRead,
+    requested: &PrincipalName,
+    req_realm: &str,
+    body: &KdcReqBody,
+) -> Result<crate::store::Principal, Error> {
+    if let Some(p) = store.fetch_name(requested)? {
+        return Ok(p);
+    }
+    if no_referral_option(body) {
+        return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::LOOKING_UP_SERVER));
+    }
+    let lookup = if requested.is_cross_tgs_principal(req_realm) {
+        requested.clone()
+    } else {
+        let reftgs = find_referral_tgs(store, body, requested, req_realm)?;
+        if let Some(p) = store.fetch_name(&reftgs)? {
+            return Ok(p);
+        }
+        reftgs
+    };
+    find_alternate_tgs(store, &lookup)
+}
+
 /// MIT `do_tgs_req.c:680-682`: cross TGS **and** resolved ≠ requested.
 fn tgs_issuing_referral(
     requested: &PrincipalName,
@@ -1925,7 +2074,7 @@ fn mint_ticket(
     starttime: &KerberosTime,
     subject_pac: Option<&[u8]>,
     caddr: Option<HostAddresses>,
-    s4u_final: bool,
+    s4u_client_info: Option<&str>,
     extra_ad: Option<AuthorizationData>,
     indicators: &[String],
     krbtgt: &Principal,
@@ -1991,7 +2140,7 @@ fn mint_ticket(
             &ident,
             logon_override,
             subject_pac,
-            s4u_final,
+            s4u_client_info,
         )?;
         let mut signed = wrap_win2k_pac(&pac)?;
         signed.extend(extra);
