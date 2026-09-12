@@ -1197,10 +1197,32 @@ impl PrincipalStore {
         admin: &str,
         admin_password: &[u8],
     ) -> Result<Self, Error> {
+        Self::bootstrap_with_kdc_conf(realm, user, user_password, admin, admin_password, None)
+    }
+
+    /// [`Self::bootstrap`] after applying `kdc.conf` so `supported_enctypes`
+    /// orders keys like MIT `kdb5_util create` / `addprinc` without `-e`.
+    ///
+    /// # Errors
+    ///
+    /// Returns crypto failures from string-to-key, or an unparseable
+    /// `domain_sid`.
+    pub fn bootstrap_with_kdc_conf(
+        realm: &str,
+        user: &str,
+        user_password: &[u8],
+        admin: &str,
+        admin_password: &[u8],
+        kdc: Option<&krb5_config::KdcConf>,
+    ) -> Result<Self, Error> {
         let mut store = Self::new(realm);
         store.policy.max_renewable_life = 7 * 24 * 3600;
         store.policy.spake_preauth_groups = vec![krb5_types::spake::GROUP_P256];
-        store.insert_randkey(&PrincipalName::krbtgt(realm), &randkey_etypes())?;
+        if let Some(c) = kdc {
+            store.apply_kdc_conf(c)?;
+        }
+        let etypes = store.policy.password_etypes();
+        store.insert_randkey(&PrincipalName::krbtgt(realm), &etypes)?;
         let tgt = PrincipalName::krbtgt(realm);
         store.apply_admin_fields(
             &tgt,

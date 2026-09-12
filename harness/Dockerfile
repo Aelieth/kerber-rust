@@ -46,7 +46,7 @@ RUN wget -O krb5.tar.gz "${KRB5_URL}" \
            echo "ERROR: MIT test KDB plugin (test.so) was not built" >&2; \
            exit 1; \
        fi \
-    && mkdir -p /usr/lib/krb5/plugins/kdb /usr/lib/krb5/plugins/kdcauthdata \
+    && mkdir -p /usr/lib/krb5/plugins/kdb /usr/lib/krb5/plugins/kdcauthdata /usr/lib/krb5/plugins/kdcpolicy \
     && cp "$testdb" /usr/lib/krb5/plugins/kdb/test.so \
     && echo "MIT test KDB plugin present: /usr/lib/krb5/plugins/kdb/test.so" \
     && greet="$(find plugins/authdata/greet_server -name 'greet_server.so' | head -1)" \
@@ -56,6 +56,13 @@ RUN wget -O krb5.tar.gz "${KRB5_URL}" \
        fi \
     && cp "$greet" /usr/lib/krb5/plugins/kdcauthdata/greet_server.so \
     && echo "MIT greet_server plugin present: /usr/lib/krb5/plugins/kdcauthdata/greet_server.so" \
+    && kdcpol="$(find plugins/kdcpolicy/test -name 'kdcpolicy_test.so' | head -1)" \
+    && if [ -z "$kdcpol" ]; then \
+           echo "ERROR: MIT kdcpolicy_test.so was not built" >&2; \
+           exit 1; \
+       fi \
+    && cp "$kdcpol" /usr/lib/krb5/plugins/kdcpolicy/kdcpolicy_test.so \
+    && echo "MIT kdcpolicy test plugin present: /usr/lib/krb5/plugins/kdcpolicy/kdcpolicy_test.so" \
     && cd / \
     && rm -rf /tmp/build
 

@@ -72,7 +72,7 @@ fn main() {
 
     let kdc_conf = load_kdc_conf();
     let mut store = if test_realm {
-        bootstrap_test_realm()
+        bootstrap_test_realm(kdc_conf.as_ref())
     } else {
         let (db, stash) = db_and_stash(kdc_conf.as_ref());
         if let (Some(db), Some(stash)) = (db, stash) {
@@ -117,6 +117,9 @@ fn main() {
     {
         eprintln!("krb5-kdc: kdc.conf: {e}");
         std::process::exit(2);
+    }
+    if std::env::var("KRB5_KDCPOLICY").ok().as_deref() == Some("test") {
+        krb5_kdc::set_policy(std::sync::Arc::new(krb5_kdc::TestPolicy));
     }
     let enable_pkinit =
         export_pkinit.is_some() || std::env::var("KRB5_ENABLE_PKINIT").ok().as_deref() == Some("1");
@@ -306,7 +309,7 @@ fn bind_list(
     BIND_CANDIDATES.iter().map(|s| (*s).to_owned()).collect()
 }
 
-fn bootstrap_test_realm() -> PrincipalStore {
+fn bootstrap_test_realm(kdc: Option<&krb5_config::KdcConf>) -> PrincipalStore {
     let user_pw = std::env::var("KRB5_TEST_USER_PASSWORD").unwrap_or_else(|_| {
         eprintln!(
             "krb5-kdc: --test-realm requires KRB5_TEST_USER_PASSWORD (do not compile passwords in)"
@@ -318,12 +321,13 @@ fn bootstrap_test_realm() -> PrincipalStore {
         std::process::exit(2);
     });
     let realm = std::env::var("KRB5_TEST_REALM").unwrap_or_else(|_| TEST_REALM.to_owned());
-    let mut store = PrincipalStore::bootstrap(
+    let mut store = PrincipalStore::bootstrap_with_kdc_conf(
         &realm,
         TEST_USER,
         user_pw.as_bytes(),
         TEST_ADMIN,
         admin_pw.as_bytes(),
+        kdc,
     )
     .unwrap_or_else(|e| {
         eprintln!("krb5-kdc: bootstrap: {e}");

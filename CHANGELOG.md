@@ -26,6 +26,18 @@ this project uses semantic versioning once a crate is published.
   `/tmp` (`isolate_scratch_dir` workspace fallback).
 - **docs.** Hide-client scope; ledger 295/361/362/469/499; F3 cite slack
   on the A′-3 summary/plan.
+- **kdc.** AS last-req is always `[{type 0, epoch}]`; `get_key_exp` is
+  MIT's min of principal/password expiry and 0 is omitted. TGS omits
+  `key_expiration`. `TestPolicy` (`KRB5_KDCPOLICY=test`) matches MIT
+  `kdcpolicy_test.so`: `fail` is 12, `ONE_HOUR`/`SEVEN_HOURS` rewrite
+  life (AS divisor 1, TGS 2), any other indicator is 12.
+  `supported_enctypes` orders `kdb create` / `addprinc` without `-e`;
+  empty profile keeps `randkey_etypes()` 18,17,20,19. RENEW+POSTDATED
+  starts at `from` (`do_tgs_req.c:826-827`).
+- **test.** Diffsend 107 → 108 (`tgs-renew-postdated-from`).
+  `expire-gate.sh` MIT kinit password-expiry warning both legs;
+  `kdb-dump-gate.sh` `Key:` order; `kdcpolicy-gate.sh` vs
+  `kdcpolicy_test.so`. Image copies the test policy module.
 
 ### W1-A′-3
 

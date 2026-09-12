@@ -59,10 +59,12 @@ pub use osa::{
     decrypt_entry as decrypt_history_entry, history_entry as encrypt_history_entry,
 };
 pub use persist::{PersistError, load_store, save_store, save_store_legacy_kdb3};
+#[cfg(test)]
+pub use plugins::DenyPolicy;
 pub use plugins::{
-    DemoPolicy, DemoPreauth, DenyPolicy, GREET_AD_TYPE, GREET_TEXT, GreetAuth, KdcAuthdata,
-    KdcPolicy, KdcPreauth, clear_thread_policy, current_policy, register_authdata,
-    register_preauth, set_policy, set_thread_policy,
+    DemoPolicy, DemoPreauth, GREET_AD_TYPE, GREET_TEXT, GreetAuth, KdcAuthdata, KdcPolicy,
+    KdcPreauth, PolicyAdjustment, TestPolicy, apply_policy_times, clear_thread_policy,
+    current_policy, register_authdata, register_preauth, set_policy, set_thread_policy,
 };
 pub use store::{
     IPROP_ERROR, IPROP_FULL_RESYNC, IPROP_NIL, IPROP_OK, IPROP_PERM_DENIED, KDB_DISALLOW_ALL_TIX,
@@ -198,7 +200,30 @@ pub fn bootstrap_realm(
     admin: &str,
     admin_password: &[u8],
 ) -> Result<(PrincipalStore, Acl), Error> {
-    let mut store = PrincipalStore::bootstrap(realm, user, user_password, admin, admin_password)?;
+    bootstrap_realm_with_kdc_conf(realm, user, user_password, admin, admin_password, None)
+}
+
+/// [`bootstrap_realm`] honouring `kdc.conf` `supported_enctypes`.
+///
+/// # Errors
+///
+/// Returns crypto failures from string-to-key or ACL-gated host create.
+pub fn bootstrap_realm_with_kdc_conf(
+    realm: &str,
+    user: &str,
+    user_password: &[u8],
+    admin: &str,
+    admin_password: &[u8],
+    kdc: Option<&krb5_config::KdcConf>,
+) -> Result<(PrincipalStore, Acl), Error> {
+    let mut store = PrincipalStore::bootstrap_with_kdc_conf(
+        realm,
+        user,
+        user_password,
+        admin,
+        admin_password,
+        kdc,
+    )?;
     let actor = admin_id_for_realm(realm);
     let acl = Acl::allow_admin(&actor)?;
     store.create_host(&acl, &actor, &host_for_realm(realm))?;

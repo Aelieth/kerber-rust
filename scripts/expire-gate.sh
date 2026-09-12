@@ -274,5 +274,69 @@ NEEDCPW="$(docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf "$NAME" klist)"
 echo "$NEEDCPW"
 echo "$NEEDCPW" | grep -q 'kadmin/changepw'
 
-log "expire.gate" "ok" ',"name_exp":true,"key_expired":true,"pwchange_service":true,"tgs_after_client_expire":true,"service_exp":true,"needchange":true'
+echo "==== MIT kinit password-expiry warning vs Rust KDC (key_expiration) ===="
+WARN_DATE="$(docker exec "$NAME" date -u -d '+2 days' '+%b %d, %Y %H:%M:%S UTC')"
+kadmin_q "addprinc -pw warn-secret warnuser"
+kadmin_q "modprinc -pwexpire \"$WARN_DATE\" warnuser"
+docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+WARN_RUST="$(kinit_try 'printf "warn-secret\n" | kinit warnuser@KERBER.TEST')"
+echo "$WARN_RUST"
+echo "$WARN_RUST" | grep -q 'Warning: Your password will expire' # RUST_pw_expire_warning
+if ! docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf "$NAME" klist | grep -q 'krbtgt/'; then
+    echo "warnuser did not obtain a TGT against rust" >&2
+    exit 1
+fi
+
+echo "==== MIT kinit password-expiry warning vs MIT KDC ===="
+docker exec "$NAME" sh -c '
+for comm in /proc/[0-9]*/comm; do
+    [ -f "$comm" ] || continue
+    read -r name < "$comm" || continue
+    if [ "$name" = "krb5-kdc" ] || [ "$name" = "krb5-kadmind" ]; then
+        pid=${comm#/proc/}
+        pid=${pid%/comm}
+        kill -9 "$pid" 2>/dev/null || true
+    fi
+done
+'
+free=0
+for _ in $(seq 1 40); do
+    if ! docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.2)" 2>/dev/null; then
+        free=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$free" != 1 ]; then
+    log "expire.gate" "error" ',"error":"rust kdc still bound :88"'
+    exit 1
+fi
+docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
+docker exec "$NAME" kdb5_util create -s -P masterpassword
+docker exec "$NAME" kadmin.local -q 'addprinc -pw warn-secret warnuser'
+docker exec "$NAME" kadmin.local -q "modprinc -pwexpire \"$WARN_DATE\" warnuser"
+STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc; sleep 0.4' 2>&1 || true)"
+echo "$STARTLOG"
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    log "expire.gate" "error" ',"error":"MIT krb5kdc did not listen"'
+    exit 1
+fi
+docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+WARN_MIT="$(kinit_try 'printf "warn-secret\n" | kinit warnuser@KERBER.TEST')"
+echo "$WARN_MIT"
+echo "$WARN_MIT" | grep -q 'Warning: Your password will expire' # MIT_pw_expire_warning
+if ! docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf "$NAME" klist | grep -q 'krbtgt/'; then
+    echo "warnuser did not obtain a TGT against MIT" >&2
+    exit 1
+fi
+
+log "expire.gate" "ok" ',"name_exp":true,"key_expired":true,"pwchange_service":true,"tgs_after_client_expire":true,"service_exp":true,"needchange":true,"pw_expire_warning":true'
 exit 0

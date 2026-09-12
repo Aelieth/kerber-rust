@@ -19,8 +19,8 @@ use std::path::PathBuf;
 
 use krb5_crypto::EncryptionType;
 use krb5_kdc::{
-    KDB_DUMP_VERSION, NamedPolicy, TEST_ADMIN, TEST_USER, bootstrap_realm, load_dump_etype,
-    load_store, parse_dump, save_store, write_dump_path_etype,
+    KDB_DUMP_VERSION, NamedPolicy, TEST_ADMIN, TEST_USER, bootstrap_realm_with_kdc_conf,
+    load_dump_etype, load_store, parse_dump, save_store, write_dump_path_etype,
 };
 use krb5_types::PrincipalName;
 
@@ -177,12 +177,14 @@ fn cmd_create(realm: &str) {
         eprintln!("krb5-kdb: create requires KRB5_TEST_ADMIN_PASSWORD");
         std::process::exit(2);
     });
-    let (store, _) = bootstrap_realm(
+    let kdc = krb5_config::kdc_conf_path().and_then(|p| krb5_config::KdcConf::load_file(p).ok());
+    let (store, _) = bootstrap_realm_with_kdc_conf(
         realm,
         TEST_USER,
         user_pw.as_bytes(),
         TEST_ADMIN,
         admin_pw.as_bytes(),
+        kdc.as_ref(),
     )
     .unwrap_or_else(|e| {
         eprintln!("krb5-kdb: bootstrap: {e}");

@@ -209,6 +209,8 @@ jobs:
         run: ./scripts/iprop-gate.sh
       - name: expire-gate (MIT kinit NAME_EXP / KEY_EXPIRED / PWCHANGE_SERVICE)
         run: ./scripts/expire-gate.sh
+      - name: kdcpolicy-gate (MIT kdcpolicy_test.so vs Rust TestPolicy)
+        run: ./scripts/kdcpolicy-gate.sh
       - name: flags-gate (MIT modprinc DISALLOW_* / OK_AS_DELEGATE / REQUIRES_HW_AUTH)
         run: ./scripts/flags-gate.sh
       - name: renew-gate (MIT kinit -R / kinit -p vs Rust KDC)

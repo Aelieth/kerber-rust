@@ -678,6 +678,25 @@ fn expect_as_ok(
     let (mr, me, mt, mtag, mit_session) =
         decrypt_as(&mit, &cfg.user_pw, cname, &cfg.realm, tkt_kt)?;
     compare_stable_rep(&rr, &re, &rt, &mr, &me, &mt).map_err(|e| format!("{case}: {e}"))?;
+    if re.last_req.len() != 1
+        || me.last_req.len() != 1
+        || re.last_req[0].lr_type != 0
+        || me.last_req[0].lr_type != 0
+        || re.last_req[0].lr_value.unix_seconds() != 0
+        || me.last_req[0].lr_value.unix_seconds() != 0
+    {
+        return Err(format!(
+            "{case}: last_req rust={:?} mit={:?} want [{{0, epoch}}]",
+            re.last_req
+                .iter()
+                .map(|e| (e.lr_type, e.lr_value.unix_seconds()))
+                .collect::<Vec<_>>(),
+            me.last_req
+                .iter()
+                .map(|e| (e.lr_type, e.lr_value.unix_seconds()))
+                .collect::<Vec<_>>()
+        ));
+    }
     if rtag != 0x7a || mtag != 0x7a {
         return Err(format!(
             "{case}: enc-part tag rust=0x{rtag:02x} mit=0x{mtag:02x} want 0x7a"
@@ -2012,7 +2031,7 @@ fn run() -> Result<(), String> {
         authtime: now.clone(),
         starttime: Some(now.clone()),
         endtime: now.add_hours(10).unwrap_or_else(|_| now.clone()),
-        renew_till: Some(renew_till),
+        renew_till: Some(renew_till.clone()),
         caddr: None,
         authorization_data: None,
     };
@@ -4144,7 +4163,7 @@ fn run() -> Result<(), String> {
                 realm,
                 &krbtgt_sname,
                 &sess,
-                window10,
+                window10.clone(),
                 TicketFlags::initial_preauth(),
             )?,
             &sess,
@@ -4156,7 +4175,7 @@ fn run() -> Result<(), String> {
             KdcOptions::none(),
             None,
             vec![pac_opts],
-            etypes,
+            etypes.clone(),
         )
         .map_err(|e| e.to_string())?,
     )
@@ -4356,7 +4375,73 @@ fn run() -> Result<(), String> {
         err::S_PRINCIPAL_UNKNOWN,
     )?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":107}}"#);
+    let from = now.add_seconds(3600).unwrap_or_else(|_| now.clone());
+    let renew_pd_part = EncTicketPart {
+        flags: TicketFlags::initial_preauth()
+            .with_bit(flag_bit::RENEWABLE, true)
+            .with_bit(flag_bit::MAY_POSTDATE, true),
+        key: EncryptionKey {
+            keytype: sess.etype().to_iana(),
+            keyvalue: sess.as_bytes().to_vec().into(),
+        },
+        crealm: krb5_types::try_ascii(realm).map_err(|e| e.to_string())?,
+        cname: user.clone(),
+        transited: TransitedEncoding {
+            tr_type: 1,
+            contents: Vec::<u8>::new().into(),
+        },
+        authtime: now.clone(),
+        starttime: Some(now.clone()),
+        endtime: window10.1.clone(),
+        renew_till: Some(renew_till.clone()),
+        caddr: None,
+        authorization_data: None,
+    };
+    let renew_from = tgs_req_ex_from(
+        seal_ticket(tkt_key, tkt_kvno, realm, &krbtgt_sname, &renew_pd_part)?,
+        &sess,
+        realm,
+        &user,
+        krbtgt_sname.clone(),
+        realm,
+        0x1000_0095,
+        KdcOptions::none()
+            .with_bit(flag_bit::RENEW, true)
+            .with_bit(flag_bit::POSTDATED, true),
+        None,
+        Vec::new(),
+        etypes.clone(),
+        None,
+        Some(from.clone()),
+        None,
+    )
+    .map_err(|e| e.to_string())?;
+    let renew_from = encode(&renew_from).map_err(|e| e.to_string())?;
+    let (tr, tm) = send_both(&cfg, "tgs-renew-postdated-from", &renew_from)?;
+    let (_, _, rt, _) = decrypt_tgs(&tr, &sess, tkt_kt)?;
+    let (_, _, mt, _) = decrypt_tgs(&tm, &sess, tkt_kt)?;
+    let rstart = rt.starttime.as_ref().unwrap_or(&rt.authtime).unix_seconds();
+    let mstart = mt.starttime.as_ref().unwrap_or(&mt.authtime).unix_seconds();
+    if rstart != from.unix_seconds() || mstart != from.unix_seconds() {
+        return Err(format!(
+            "tgs-renew-postdated-from start rust={rstart} mit={mstart} want={}",
+            from.unix_seconds()
+        ));
+    }
+    if rt.endtime.unix_seconds() != mt.endtime.unix_seconds() {
+        return Err(format!(
+            "tgs-renew-postdated-from end rust={} mit={}",
+            rt.endtime.unix_seconds(),
+            mt.endtime.unix_seconds()
+        ));
+    }
+    println!(
+        r#"{{"event":"diffsend","case":"tgs-renew-postdated-from","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","starttime":{},"endtime":{}}}"#,
+        rstart,
+        rt.endtime.unix_seconds()
+    );
+
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":108}}"#);
     Ok(())
 }
 

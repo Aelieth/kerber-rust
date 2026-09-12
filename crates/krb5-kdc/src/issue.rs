@@ -28,7 +28,7 @@ use crate::ad::{
 use crate::error::Error;
 use crate::kdb::{PrincipalRead, lookup_principal_id};
 use crate::kdb_dump::TL_LAST_ADMIN_UNLOCK;
-use crate::plugins::{PreauthAction, current_policy, run_as_preauth};
+use crate::plugins::{PreauthAction, apply_policy_times, current_policy, run_as_preauth};
 use crate::preauth::{
     FastOk, decode_edata_padata, fast_finished, find_pa, make_cookie, mint_freshness_token_now,
     pa_cookie_last, prepare_as_edata, proto, proto_d, unwrap_fast, unwrap_fast_tgs, with_fx_cookie,
@@ -577,8 +577,6 @@ fn issue_as_body(
             detail: None,
         });
     }
-    current_policy().check_as(store, &client, &auth_indicators)?;
-
     let skey = server
         .first_current_key()
         .ok_or_else(|| proto(err::GENERIC, status::FINDING_SERVER_KEY))?;
@@ -600,8 +598,9 @@ fn issue_as_body(
         .with_bit(flag_bit::HW_AUTHENT, hw_preauth);
     let want_enc_pa = find_pa(req.0.padata.as_deref(), pa::REQ_ENC_PA_REP).is_some()
         || fast.is_some_and(|f| find_pa(Some(&f.inner_padata), pa::REQ_ENC_PA_REP).is_some());
-    let end = kdc_get_ticket_endtime(store, &starttime, None, &body.till, Some(&client), &server)?;
-    let ticket_renew_till = kdc_get_ticket_renewtime(
+    let mut end =
+        kdc_get_ticket_endtime(store, &starttime, None, &body.till, Some(&client), &server)?;
+    let mut ticket_renew_till = kdc_get_ticket_renewtime(
         store,
         body,
         None,
@@ -611,6 +610,8 @@ fn issue_as_body(
         &starttime,
         &end,
     );
+    let as_adj = current_policy().check_as(store, &client, &auth_indicators)?;
+    apply_policy_times(&now, &mut end, &mut ticket_renew_till, &as_adj);
     let include_pac = include_pac_for_reply(
         store,
         &server,
@@ -715,7 +716,6 @@ fn issue_as_body(
         &session,
         fast.map_or(body.nonce, |f| f.nonce),
         &now,
-        &now,
         &starttime,
         &end,
         store.realm(),
@@ -724,6 +724,7 @@ fn issue_as_body(
         renew_till,
         return_enc_padata(raw, work_padata.as_deref(), &reply_key, want_enc_pa, None)?,
         body.addresses.clone(),
+        get_key_exp(&client),
     )?;
     let enc_der = encode_enc_kdc_rep_part(enc_part)?;
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART)?;
@@ -1171,7 +1172,6 @@ fn issue_tgs_body(
         auth_indicators = get_auth_indicators(subject, tgt, &local_tgt_key.key)?;
         check_indicators(&server, &auth_indicators)?;
     }
-    current_policy().check_tgs(store, &server.name, &auth_indicators)?;
     if s4u2proxy {
         let st = stkt
             .as_ref()
@@ -1266,13 +1266,19 @@ fn issue_tgs_body(
     let starttime;
     let mut end;
     let mut flags;
-    let ticket_renew_till;
+    let mut ticket_renew_till;
     if renew {
         if !enc_tkt.flags.renewable() {
             return Err(proto(err::BADOPTION, status::TICKET_NOT_RENEWABLE));
         }
         authtime = enc_tkt.authtime.clone();
-        starttime = now.clone();
+        starttime = if body.kdc_options.bit(flag_bit::POSTDATED) {
+            body.from
+                .clone()
+                .unwrap_or_else(|| KerberosTime::from_unix_seconds(0))
+        } else {
+            now.clone()
+        };
         let old_start = enc_tkt
             .starttime
             .clone()
@@ -1283,7 +1289,9 @@ fn issue_tgs_body(
         if end_s > start_s && hlife < 0 {
             hlife = i64::from(i32::MAX);
         }
-        end = now.add_seconds(hlife).unwrap_or_else(|_| now.clone());
+        end = starttime
+            .add_seconds(hlife)
+            .unwrap_or_else(|_| starttime.clone());
         if let Some(till) = &enc_tkt.renew_till
             && till.unix_seconds() < end.unix_seconds()
         {
@@ -1365,6 +1373,8 @@ fn issue_tgs_body(
     if s4u2self && !s4u_referral {
         flags = s4u2self_forwardable(&server, flags);
     }
+    let tgs_adj = current_policy().check_tgs(store, &server.name, &auth_indicators)?;
+    apply_policy_times(&now, &mut end, &mut ticket_renew_till, &tgs_adj);
     let krbtgt_p = store
         .fetch_krbtgt()?
         .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
@@ -1495,7 +1505,6 @@ fn issue_tgs_body(
     let enc_part = enc_rep_part(
         &session,
         tgs_fast.map_or(body.nonce, |f| f.nonce),
-        &now,
         &authtime,
         &starttime,
         &end,
@@ -1505,6 +1514,7 @@ fn issue_tgs_body(
         ticket_renew_till,
         return_enc_padata(raw, tgs_padata, &enc_key, want_enc_pa, s4u_enc_pa)?,
         tgs_reply_caddr(body, renew, validate),
+        None,
     )?;
     let enc_der = encode_enc_kdc_rep_part(enc_part)?;
     let usage = KeyUsage::new(enc_usage)?;
@@ -2168,11 +2178,24 @@ fn encode_enc_kdc_rep_part(part: EncKdcRepPart) -> Result<Vec<u8>, Error> {
     Ok(encode(&EncTgsRepPart(part))?)
 }
 
+/// MIT `get_key_exp` (`do_as_req.c:83-91`). 0 on both sides is omitted.
+fn get_key_exp(client: &crate::store::Principal) -> Option<KerberosTime> {
+    let exp = client.expiration;
+    let pw = client.pw_expire;
+    let ts = if exp == 0 {
+        pw
+    } else if pw == 0 {
+        exp
+    } else {
+        exp.min(pw)
+    };
+    (ts != 0).then(|| KerberosTime::from_unix_seconds(ts))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn enc_rep_part(
     session: &ProtocolKey,
     nonce: u32,
-    now: &KerberosTime,
     authtime: &KerberosTime,
     starttime: &KerberosTime,
     end: &KerberosTime,
@@ -2182,15 +2205,16 @@ fn enc_rep_part(
     renew_till: Option<KerberosTime>,
     encrypted_pa_data: Option<Vec<PaData>>,
     caddr: Option<HostAddresses>,
+    key_expiration: Option<KerberosTime>,
 ) -> Result<EncKdcRepPart, Error> {
     Ok(EncKdcRepPart {
         key: encryption_key(session),
         last_req: vec![LastReqValue {
             lr_type: 0,
-            lr_value: now.clone(),
+            lr_value: KerberosTime::from_unix_seconds(0),
         }],
         nonce,
-        key_expiration: None,
+        key_expiration,
         flags,
         authtime: authtime.clone(),
         starttime: omit_start_if_auth(starttime, authtime),

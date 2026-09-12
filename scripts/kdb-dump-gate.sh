@@ -169,6 +169,14 @@ echo "$RUST_HIST_A"
 diff <(echo "$RUST_HIST_A" | hist_shape) <(echo "$MIT_HIST_A" | hist_shape)
 rust_local 'cpw -pw s3cret3 histee' | grep -F 'changed.'
 
+echo "==== half A: Rust addprinc without -e Key: order ===="
+rust_local 'addprinc -pw keyord-secret keyordrust' | grep -F 'Principal "keyordrust@KERBER.TEST" created.'
+RUST_KEYORD="$(rust_local 'getprinc keyordrust')"
+echo "$RUST_KEYORD"
+RUST_ETYPES="$(echo "$RUST_KEYORD" | grep '^Key:' | sed 's/^Key: vno [0-9]*, //')"
+echo "RUST_keyord_etypes:"
+echo "$RUST_ETYPES"
+
 echo "==== Rust stash is keytab format; MIT klist -k reads the K/M entry ===="
 # krb5_db_def_fetch_mkey: the stash is a FILE keytab with one K/M@REALM entry.
 docker exec "$NAME" sh -c 'head -c2 /tmp/stash | od -An -tx1' | grep -q '05 02'
@@ -507,4 +515,17 @@ echo "rust_rlife0_delta_secs=$RR_DELTA"
 test "$RR_DELTA" -ge 0
 test "$RR_DELTA" -le 120
 
-log "kdb.dump.gate" "ok" ',"dump_version":7,"halves":"A+B","alias":"both directions","max_rlife_zero":true'
+echo "==== addprinc without -e Key: lines equal both legs ===="
+docker exec "$NAME" kadmin.local -q 'addprinc -pw keyord-secret keyordmit' 2>&1 | grep -F 'Principal "keyordmit@KERBER.TEST" created.'
+MIT_KEYORD="$(docker exec "$NAME" kadmin.local -q 'getprinc keyordmit')"
+echo "$MIT_KEYORD"
+MIT_ETYPES="$(echo "$MIT_KEYORD" | grep '^Key:' | sed 's/^Key: vno [0-9]*, //')"
+echo "MIT_keyord_etypes:"
+echo "$MIT_ETYPES"
+echo "$RUST_ETYPES" | grep -q 'aes256-cts-hmac-sha384-192'
+echo "$MIT_ETYPES" | grep -q 'aes256-cts-hmac-sha384-192'
+diff <(echo "$RUST_ETYPES") <(echo "$MIT_ETYPES")
+echo "MIT_keyord" # MIT_keyord
+echo "RUST_keyord" # RUST_keyord
+
+log "kdb.dump.gate" "ok" ',"dump_version":7,"halves":"A+B","alias":"both directions","max_rlife_zero":true,"addprinc_key_order":true'

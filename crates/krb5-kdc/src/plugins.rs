@@ -7,12 +7,14 @@ use krb5_asn1::encode;
 use krb5_crypto::{KeyUsage, ProtocolKey, checksum};
 use krb5_types::cammac::AdKdcIssued;
 use krb5_types::{
-    AuthorizationData, AuthorizationDataValue, Checksum, PaData, PrincipalName, ku, pa,
+    AuthorizationData, AuthorizationDataValue, Checksum, KerberosTime, PaData, PrincipalName, ku,
+    pa,
 };
 
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
-use crate::preauth::{SpakeStep, process_pkinit, process_spake};
+use crate::preauth::{SpakeStep, process_pkinit, process_spake, proto};
+use crate::status;
 use crate::store::{KDB_REQUIRES_HW_AUTH, Principal};
 
 /// Outcome of one preauth module on an AS-REQ.
@@ -574,9 +576,41 @@ pub fn run_as_preauth(
     Ok(None)
 }
 
-/// Ticket-policy hook (etype / transited / lifetimes stay on DefaultPolicy).
+/// MIT `check_kdcpolicy_as/tgs` lifetime rewrite (`policy.c:91-99`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PolicyAdjustment {
+    /// Seconds; 0 = leave `endtime` unchanged.
+    pub lifetime: i64,
+    /// Seconds; 0 = leave `renew_till` unchanged.
+    pub renew_lifetime: i64,
+}
+
+/// Cap ticket times the way MIT `update_ticket_times` does.
+pub fn apply_policy_times(
+    now: &KerberosTime,
+    end: &mut KerberosTime,
+    renew_till: &mut Option<KerberosTime>,
+    adj: &PolicyAdjustment,
+) {
+    if adj.lifetime != 0
+        && let Ok(cap) = now.add_seconds(adj.lifetime)
+        && cap.unix_seconds() < end.unix_seconds()
+    {
+        *end = cap;
+    }
+    if adj.renew_lifetime != 0
+        && let Ok(cap) = now.add_seconds(adj.renew_lifetime)
+    {
+        match renew_till {
+            Some(r) if cap.unix_seconds() < r.unix_seconds() => *r = cap,
+            _ => {}
+        }
+    }
+}
+
+/// Ticket-policy hook (etype / transited stay on DefaultPolicy).
 pub trait KdcPolicy: Send + Sync {
-    /// Called on each AS issue after fetch; `Err` denies the request.
+    /// Called after AS times are computed; `Err` denies the request.
     ///
     /// # Errors
     ///
@@ -586,8 +620,8 @@ pub trait KdcPolicy: Send + Sync {
         store: &dyn PrincipalRead,
         client: &Principal,
         indicators: &[String],
-    ) -> Result<(), Error>;
-    /// Called on each TGS issue; `Err` denies the request.
+    ) -> Result<PolicyAdjustment, Error>;
+    /// Called after TGS times are computed; `Err` denies the request.
     ///
     /// # Errors
     ///
@@ -597,7 +631,7 @@ pub trait KdcPolicy: Send + Sync {
         store: &dyn PrincipalRead,
         sname: &PrincipalName,
         indicators: &[String],
-    ) -> Result<(), Error>;
+    ) -> Result<PolicyAdjustment, Error>;
 }
 
 /// Default policy: records nothing; built-in ticket rules stay in issue.rs.
@@ -609,29 +643,82 @@ impl KdcPolicy for DefaultPolicy {
         _store: &dyn PrincipalRead,
         _client: &Principal,
         _indicators: &[String],
-    ) -> Result<(), Error> {
-        Ok(())
+    ) -> Result<PolicyAdjustment, Error> {
+        Ok(PolicyAdjustment::default())
     }
     fn check_tgs(
         &self,
         _store: &dyn PrincipalRead,
         _sname: &PrincipalName,
         _indicators: &[String],
-    ) -> Result<(), Error> {
-        Ok(())
+    ) -> Result<PolicyAdjustment, Error> {
+        Ok(PolicyAdjustment::default())
+    }
+}
+
+/// MIT `plugins/kdcpolicy/test` (`t_kdcpolicy.py`).
+pub struct TestPolicy;
+
+fn first_comp(name: &PrincipalName) -> Option<String> {
+    name.name_string
+        .first()
+        .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
+}
+
+fn output_from_indicator(indicators: &[String], divisor: i64) -> Result<PolicyAdjustment, Error> {
+    let Some(ind) = indicators.first() else {
+        return Ok(PolicyAdjustment::default());
+    };
+    let life = match ind.as_str() {
+        "ONE_HOUR" => 3600 / divisor,
+        "SEVEN_HOURS" => 7 * 3600 / divisor,
+        _ => {
+            return Err(proto(krb5_types::err::POLICY, status::LOCAL_POLICY));
+        }
+    };
+    Ok(PolicyAdjustment {
+        lifetime: life,
+        renew_lifetime: life * 2,
+    })
+}
+
+impl KdcPolicy for TestPolicy {
+    fn check_as(
+        &self,
+        _store: &dyn PrincipalRead,
+        client: &Principal,
+        indicators: &[String],
+    ) -> Result<PolicyAdjustment, Error> {
+        if first_comp(&client.name).as_deref() == Some("fail") {
+            return Err(proto(krb5_types::err::POLICY, status::LOCAL_POLICY));
+        }
+        output_from_indicator(indicators, 1)
+    }
+    fn check_tgs(
+        &self,
+        _store: &dyn PrincipalRead,
+        sname: &PrincipalName,
+        indicators: &[String],
+    ) -> Result<PolicyAdjustment, Error> {
+        if first_comp(sname).as_deref() == Some("fail") {
+            return Err(proto(krb5_types::err::POLICY, status::LOCAL_POLICY));
+        }
+        output_from_indicator(indicators, 2)
     }
 }
 
 /// Test hook: deny every AS and TGS.
+#[cfg(test)]
 pub struct DenyPolicy;
 
+#[cfg(test)]
 impl KdcPolicy for DenyPolicy {
     fn check_as(
         &self,
         _store: &dyn PrincipalRead,
         _client: &Principal,
         _indicators: &[String],
-    ) -> Result<(), Error> {
+    ) -> Result<PolicyAdjustment, Error> {
         Err(Error::Protocol {
             code: krb5_types::err::POLICY,
             text: Some("kdcpolicy".into()),
@@ -644,7 +731,7 @@ impl KdcPolicy for DenyPolicy {
         _store: &dyn PrincipalRead,
         _sname: &PrincipalName,
         _indicators: &[String],
-    ) -> Result<(), Error> {
+    ) -> Result<PolicyAdjustment, Error> {
         Err(Error::Protocol {
             code: krb5_types::err::POLICY,
             text: Some("kdcpolicy".into()),
@@ -669,18 +756,18 @@ impl KdcPolicy for DemoPolicy {
         _store: &dyn PrincipalRead,
         _client: &Principal,
         _indicators: &[String],
-    ) -> Result<(), Error> {
+    ) -> Result<PolicyAdjustment, Error> {
         self.as_checks.fetch_add(1, Ordering::SeqCst);
-        Ok(())
+        Ok(PolicyAdjustment::default())
     }
     fn check_tgs(
         &self,
         _store: &dyn PrincipalRead,
         _sname: &PrincipalName,
         _indicators: &[String],
-    ) -> Result<(), Error> {
+    ) -> Result<PolicyAdjustment, Error> {
         self.tgs_checks.fetch_add(1, Ordering::SeqCst);
-        Ok(())
+        Ok(PolicyAdjustment::default())
     }
 }
 
