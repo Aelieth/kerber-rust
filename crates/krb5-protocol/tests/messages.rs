@@ -176,7 +176,6 @@ fn ap_req_checksum_uses_declared_type() {
 
 #[test]
 fn exchange_tcp_and_udp_round_trip_local_kdc() {
-    isolate_host_krb5();
     use std::io::{Read, Write};
     use std::net::{TcpListener, UdpSocket};
     use std::thread;
@@ -185,6 +184,7 @@ fn exchange_tcp_and_udp_round_trip_local_kdc() {
     use krb5_protocol::{KdcAddr, exchange};
     use krb5_types::{KerberosTime, KrbError, Microseconds, PrincipalName, ascii, err};
 
+    isolate_host_krb5();
     let reply = encode(&KrbError {
         pvno: KrbError::PVNO,
         msg_type: KrbError::MSG_TYPE,
@@ -289,7 +289,6 @@ fn non_ascii_realm_as_exchange_is_err() {
 
 #[test]
 fn first_bare_as_req_skew_is_retried() {
-    isolate_host_krb5();
     use std::net::UdpSocket;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -298,6 +297,7 @@ fn first_bare_as_req_skew_is_retried() {
 
     use krb5_types::{KerberosTime, KrbError, Microseconds, PrincipalName, ascii, err};
 
+    isolate_host_krb5();
     let hits = Arc::new(AtomicUsize::new(0));
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
     let port = udp.local_addr().unwrap().port();
@@ -356,7 +356,6 @@ fn first_bare_as_req_skew_is_retried() {
 
 #[test]
 fn spake_as_req_carries_pa_spake() {
-    isolate_host_krb5();
     use std::net::UdpSocket;
     use std::sync::{Arc, Mutex};
     use std::thread;
@@ -364,6 +363,7 @@ fn spake_as_req_carries_pa_spake() {
 
     use krb5_types::{AsReq, KerberosTime, KrbError, Microseconds, PrincipalName, ascii, err, pa};
 
+    isolate_host_krb5();
     let first = Arc::new(Mutex::new(Vec::new()));
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
     let port = udp.local_addr().unwrap().port();
@@ -421,13 +421,13 @@ fn spake_as_req_carries_pa_spake() {
 
 #[test]
 fn want_spake_rejects_non_preauth_as_rep() {
-    isolate_host_krb5();
     use std::net::UdpSocket;
     use std::thread;
     use std::time::Duration;
 
     use krb5_types::{AsRep, EncryptedData, KdcRep, PrincipalName, Ticket, ascii};
 
+    isolate_host_krb5();
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
     let port = udp.local_addr().unwrap().port();
     thread::spawn(move || {
@@ -487,11 +487,11 @@ fn want_spake_rejects_non_preauth_as_rep() {
 
 #[test]
 fn want_spake_rejects_fast_and_pkinit() {
-    isolate_host_krb5();
     use krb5_crypto::{EncryptionType, ProtocolKey};
     use krb5_protocol::{FastArmor, PkinitClient};
     use krb5_types::{EncryptedData, PrincipalName, Ticket, ascii};
 
+    isolate_host_krb5();
     let kdc = krb5_protocol::KdcAddr {
         host: "127.0.0.1".into(),
         port: 1,
@@ -554,7 +554,6 @@ fn want_spake_rejects_fast_and_pkinit() {
 
 #[test]
 fn fast_preauth_retry_carries_fx_fast() {
-    isolate_host_krb5();
     use std::net::UdpSocket;
     use std::sync::{Arc, Mutex};
     use std::thread;
@@ -567,6 +566,7 @@ fn fast_preauth_retry_carries_fx_fast() {
         err, pa,
     };
 
+    isolate_host_krb5();
     let first = Arc::new(Mutex::new(Vec::new()));
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
     let port = udp.local_addr().unwrap().port();
@@ -646,7 +646,6 @@ fn fast_preauth_retry_carries_fx_fast() {
 
 #[test]
 fn fast_client_continue_uses_etype20_from_info2() {
-    isolate_host_krb5();
     use std::net::UdpSocket;
     use std::thread;
     use std::time::Duration;
@@ -659,6 +658,7 @@ fn fast_client_continue_uses_etype20_from_info2() {
     use krb5_protocol::{AsTicketOpts, FastArmor, as_exchange, as_req_sname, pa_enc_timestamp};
     use krb5_types::{PrincipalName, ascii};
 
+    isolate_host_krb5();
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let sha2 = EncryptionType::Aes256CtsHmacSha384192;
@@ -732,7 +732,6 @@ fn fast_client_continue_uses_etype20_from_info2() {
 
 #[test]
 fn pkinit_as_req_carries_pa_pk_as_req() {
-    isolate_host_krb5();
     use std::net::UdpSocket;
     use std::sync::{Arc, Mutex};
     use std::thread;
@@ -743,6 +742,7 @@ fn pkinit_as_req_carries_pa_pk_as_req() {
         AsReq, KerberosTime, KrbError, Microseconds, PrincipalName, ascii, err, pa, pkinit,
     };
 
+    isolate_host_krb5();
     let ca = pkinit::PkinitCa::generate().expect("CA");
     let pem = ca
         .user_identity_pem("user@KERBER.TEST")
@@ -811,7 +811,6 @@ fn pkinit_as_req_carries_pa_pk_as_req() {
 
 #[test]
 fn enterprise_as_req_sets_name_type_and_canonicalize() {
-    isolate_host_krb5();
     use std::net::UdpSocket;
     use std::sync::{Arc, Mutex};
     use std::thread;
@@ -821,6 +820,7 @@ fn enterprise_as_req_sets_name_type_and_canonicalize() {
         AsReq, KerberosTime, KrbError, Microseconds, PrincipalName, ascii, err, flag_bit,
     };
 
+    isolate_host_krb5();
     let first = Arc::new(Mutex::new(Vec::new()));
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
     let port = udp.local_addr().unwrap().port();

@@ -584,7 +584,22 @@ EOF'
 # Enc-ts only for unlocku kinit: rust --test-realm advertises P-256 SPAKE;
 # MIT client default edwards25519 is verify_support 24, and lockout.c
 # increments on that 24, so maxfailure=1 would revoke before enc-ts.
-docker exec "$NAME" sh -c 'sed "/\[libdefaults\]/a\\    preferred_preauth_types = 2" /tmp/kadmin-krb5.conf > /tmp/kadmin-unlock-krb5.conf'
+# preferred_preauth_types = 2 only reorders hints; unknown groups → NOTSUPP.
+docker exec "$NAME" sh -c 'cat >/tmp/kadmin-unlock-krb5.conf <<EOF
+[libdefaults]
+    default_realm = KERBER.TEST
+    dns_lookup_kdc = false
+    dns_lookup_realm = false
+    rdns = false
+    default_ccache_name = FILE:/tmp/krb5cc_kadmin
+    preferred_preauth_types = 2
+    spake_preauth_groups = none
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1
+        admin_server = 127.0.0.1
+    }
+EOF'
 
 echo "==== kinit admin ===="
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf -e KRB5_TRACE=/dev/stderr \
@@ -2410,21 +2425,41 @@ docker exec "$NAME" grep unlocku /tmp/unlock.dump | grep -F $'\t1792\t' || {
 }
 
 echo "==== MIT kadmin modprinc -unlock against MIT kadmind ===="
+# Same unknown-group pin as the rust unlock cell: a P-256-only MIT KDC
+# plus an honest client is verify_support 24, which lockout.c counts.
+docker exec "$NAME_MIT" sh -c 'cat >/tmp/kadmin-unlock-krb5.conf <<EOF
+[libdefaults]
+    default_realm = KERBER.TEST
+    dns_lookup_kdc = false
+    dns_lookup_realm = false
+    rdns = false
+    preferred_preauth_types = 2
+    spake_preauth_groups = none
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1
+        admin_server = 127.0.0.1
+    }
+EOF'
 docker exec "$NAME_MIT" kadmin.local -q 'addpol -maxfailure 1 -lockoutduration 0s -failurecountinterval 0s unlockpol'
 docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw unlock-secret -policy unlockpol +requires_preauth unlocku'
 docker exec "$NAME_MIT" kadmin.local -q 'getprinc unlocku'
-MIT_WRONG="$(docker exec "$NAME_MIT" sh -c 'printf "wrong-secret\n" | kinit unlocku@KERBER.TEST' 2>&1 || true)"
+MIT_WRONG="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-unlock-krb5.conf \
+    "$NAME_MIT" sh -c 'printf "wrong-secret\n" | kinit unlocku@KERBER.TEST' 2>&1 || true)"
 echo "$MIT_WRONG"
 docker exec "$NAME_MIT" kadmin.local -q 'getprinc unlocku'
-MIT_LOCKED="$(docker exec "$NAME_MIT" sh -c 'printf "unlock-secret\n" | kinit unlocku@KERBER.TEST' 2>&1 || true)"
+MIT_LOCKED="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-unlock-krb5.conf \
+    "$NAME_MIT" sh -c 'printf "unlock-secret\n" | kinit unlocku@KERBER.TEST' 2>&1 || true)"
 echo "$MIT_LOCKED"
 echo "$MIT_LOCKED" | grep -qiE 'revoked|locked out|CLIENT_REVOKED' || {
     echo "MIT unlocku was not locked after one failure: $MIT_LOCKED" >&2
     exit 1
 }
 docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'modprinc -unlock unlocku'
-docker exec "$NAME_MIT" kdestroy -A >/dev/null 2>&1 || true
-docker exec "$NAME_MIT" sh -c 'printf "unlock-secret\n" | kinit unlocku@KERBER.TEST'
+docker exec -e KRB5_CONFIG=/tmp/kadmin-unlock-krb5.conf \
+    "$NAME_MIT" kdestroy -A >/dev/null 2>&1 || true
+docker exec -e KRB5_CONFIG=/tmp/kadmin-unlock-krb5.conf \
+    "$NAME_MIT" sh -c 'printf "unlock-secret\n" | kinit unlocku@KERBER.TEST'
 MIT_UNL="$(docker exec "$NAME_MIT" klist)"
 echo "$MIT_UNL"
 echo "$MIT_UNL" | grep -q 'unlocku@KERBER.TEST'
