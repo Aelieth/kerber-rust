@@ -236,12 +236,11 @@ fn a4_19_tgt_hex_must_use_ticket_etype_not_preferred() {
     let in_cc = dir.join("in.cc");
     let out_cc = dir.join("out.cc");
     cc.write_file(&in_cc).unwrap();
-    let hex: String = first
-        .key
-        .as_bytes()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
+    let mut hex = String::with_capacity(first.key.as_bytes().len() * 2);
+    for &b in first.key.as_bytes() {
+        hex.push(char::from(b"0123456789abcdef"[(b >> 4) as usize]));
+        hex.push(char::from(b"0123456789abcdef"[(b & 0x0f) as usize]));
+    }
     let status = std::process::Command::new(env!("CARGO_BIN_EXE_krb5-forge-tgt"))
         .args([
             "--ccache",
