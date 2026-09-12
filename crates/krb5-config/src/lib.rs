@@ -1030,20 +1030,20 @@ impl Drop for IsolatedKrb5 {
 }
 
 fn isolate_scratch_dir() -> PathBuf {
-    if let Ok(p) = std::env::var("CARGO_TARGET_TMPDIR") {
-        if !p.is_empty() {
-            return PathBuf::from(p);
-        }
+    if let Ok(p) = std::env::var("CARGO_TARGET_TMPDIR")
+        && !p.is_empty()
+    {
+        return PathBuf::from(p);
     }
-    if let Ok(p) = std::env::var("CARGO_TARGET_DIR") {
-        if !p.is_empty() {
-            return PathBuf::from(p).join("test-krb5");
-        }
+    if let Ok(p) = std::env::var("CARGO_TARGET_DIR")
+        && !p.is_empty()
+    {
+        return PathBuf::from(p).join("test-krb5");
     }
-    if let Ok(p) = std::env::var("KERBER_SCRATCH") {
-        if !p.is_empty() {
-            return PathBuf::from(p);
-        }
+    if let Ok(p) = std::env::var("KERBER_SCRATCH")
+        && !p.is_empty()
+    {
+        return PathBuf::from(p);
     }
     PathBuf::from("target").join("test-krb5")
 }
