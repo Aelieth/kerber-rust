@@ -69,9 +69,9 @@ Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after A′-3 R30):
-**359** = A1 128 + A2 87 + A3 76 + A4 68.
-exact 282 · stricter-documented 12 · deviation 36 ·
+Counts (after A′-3 R33):
+**360** = A1 128 + A2 87 + A3 77 + A4 68.
+exact 283 · stricter-documented 12 · deviation 36 ·
 absent 14 · deferred 15.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
@@ -462,6 +462,7 @@ are RFC 4120/6113 integers. After W0d G3, FAST unwrap failures wire
 | fast_util.c:70-76 | AS AP-REQ armor missing authenticator subkey | FIND_FAST 12 POLICY (log `ap-request armor without subkey`) | krb5-kdc/preauth.rs armor_key_from_ap; krb5-kdc/preauth.rs proto_fast | FIND_FAST 12 (detail `ap-request armor without subkey`) | exact | `fast_as_armor_without_subkey_is_policy`; diffsend `fast-armor-no-subkey` |
 | fast_util.c:277-355 + :427-440 | FAST reply always strengthen_key; CF2 replykey (`kdc_fast_response_handle_padata` / `kdc_fast_handle_reply_key`; no `kdc_fast_strengthen_reply_key` symbol). MIT client copies existing_key when strengthen_key is NULL | silent | issue.rs issue_as_body; issue.rs issue_tgs_body | AS and TGS FAST replies strengthen then CF2 `replykey`; rust client hard-fails a missing strengthen-key (docs/security.md) | exact | `fast_as_exchange_strengthen_and_finished`; `tgs_fast_inner_nonce_not_outer`; `scripts/rust-kinit-fast-gate.sh` `--fast -S` rust+MIT KDC (`fast_strengthen` / `FAST reply key`) |
 | send_tgs.c:172-178; fast.c:134-137 | every TGS-REQ is FAST-armored (`krb5int_fast_tgs_armor` with NULL armor ccache → subkey/ticket CF2) | n/a (request) | tgs.rs tgs_once | always CF2 `subkeyarmor`/`ticketarmor` and PA-FX-FAST, including after a password AS | exact | `r30_tgs_after_password_as_is_fast_armored` |
+| decode_kdc.c:64-67 | TGS `KRB5_ERR_FAST_REQUIRED` (no PA-FX-FAST) is ignored; present FAST still requires finished | n/a (client) | tgs.rs tgs_fast_reply_key:363 | missing PA-FX-FAST decrypts under the authenticator subkey; present FAST still requires finished + strengthen | exact | `r33_tgs_unwrapped_fast_is_accepted`; `heimdal-gate.sh` |
 | fast_util.c:443-447; do_as_req.c:324-325 | `kdc_fast_hide_client`: hide-client-names (bit 1) makes the outer AS-REP client the anonymous principal `WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS` | anonymous outer client on the AS-REP | issue.rs issue_as_body sets the outer AS-REP cname/crealm to the anonymous principal when the FAST request set bit 1 (R2-P4); the real client stays inside the FAST reply | anonymous outer client on the AS-REP | exact (AS-REP success path; FAST error/TGS-REP hiding is the deferred row below) | `fast_hide_client_names_returns_the_anonymous_outer_client`; docs/security.md |
 | kdc_preauth.c:1092-1133 | filter_preauth_error: unknown → 24 | 24 default | krb5-kdc/issue.rs verify_enc_timestamp; krb5-kdc/issue.rs verify_encrypted_challenge | **34** `REPEAT` on a replayed enc-challenge blob vs MIT's **24** — a different wire code, not just a stricter one | deviation (R2-D1: the replay cache answers before `filter_preauth_error` runs) | `encrypted_challenge_replayed_blob_is_repeat`; security.md |
 | do_as_req.c:270-281; do_tgs_req.c:1038-1046 | handle_authdata fail | `HANDLE_AUTHDATA` + LOG_INFO `AS_REQ/TGS_REQ : handle_authdata (%d)` | ad.rs handle_authdata:1217; status.rs HANDLE_AUTHDATA | `HANDLE_AUTHDATA` 12/31 | exact | diffsend `tgs-ad-mandatory-for-kdc`; `a3_13.rs` |

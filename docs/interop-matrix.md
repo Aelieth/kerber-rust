@@ -83,7 +83,7 @@ not claim a Windows DC.
 
 | Gate | Drives | Asserts | CI |
 | --- | --- | --- | --- |
-| `heimdal-gate.sh` | Heimdal `kinit`/`kgetcred` vs Rust; Rust `krb5-kinit` vs Heimdal | AES-SHA1 both ways; `klist` names `user@KERBER.TEST` and `host/testhost.kerber.test`; missing image `exit 2` | peers (nightly) |
+| `heimdal-gate.sh` | Heimdal `kinit`/`kgetcred` vs Rust; Rust `krb5-kinit` vs Heimdal | AES-SHA1 both ways; `klist` names `user@KERBER.TEST` and `host/testhost.kerber.test`; TGS FAST reply may omit PA-FX-FAST (MIT `decode_kdc.c:66-67`); missing image `exit 2` | peers (nightly) |
 
 ## Supply-chain (not an interop oracle)
 

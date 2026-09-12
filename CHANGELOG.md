@@ -71,6 +71,10 @@ this project uses semantic versioning once a crate is published.
   no certauth hook). A `+requires_hwauth` service is `NO HW PREAUTH` 60.
   TGS RENEW uses signed header life (`do_tgs_req.c:836-838`), so
   `endtime < starttime` renews expired. diffsend 101 → 102.
+- **client.** TGS FAST reply without PA-FX-FAST is accepted like MIT
+  `decode_kdc.c:66-67` (`KRB5_ERR_FAST_REQUIRED` ignored). A present
+  FAST envelope still requires finished + strengthen. Empty-groups
+  stray PA-SPAKE is skipped (`kdc_preauth.c:1306-1307`), not 24.
 
 ### W1-A′-2
 

@@ -400,6 +400,11 @@ pub(crate) fn process_spake(
     let Some(raw) = find_pa(padata, pa::SPAKE) else {
         return Ok(None);
     };
+    // MIT `kdc_preauth.c:1306-1307`: empty groups → SPAKE not a pa_system
+    // (`groups.c:60`); a stray PA-SPAKE is skipped, not 24.
+    if store.policy().spake_preauth_groups.is_empty() {
+        return Ok(None);
+    }
     if raw.is_empty() {
         return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
     }

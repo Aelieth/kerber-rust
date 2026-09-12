@@ -358,6 +358,38 @@ fn tgs_sname_matches(
         || (ticket.is_krbtgt() && requested.components_joined() != ticket.components_joined())
 }
 
+/// MIT `decode_kdc.c:64-67`: missing PA-FX-FAST is `KRB5_ERR_FAST_REQUIRED`
+/// then ignored. A present FAST envelope still requires finished + strengthen.
+fn tgs_fast_reply_key(
+    armor_key: &ProtocolKey,
+    sub: &ProtocolKey,
+    inner: &krb5_types::KdcRep,
+) -> Result<ProtocolKey, Error> {
+    let has_fast = inner
+        .padata
+        .as_ref()
+        .is_some_and(|v| v.iter().any(|p| p.padata_type == pa::FX_FAST));
+    if !has_fast {
+        return Ok(sub.clone());
+    }
+    let fast = unwrap_fast_rep(armor_key, &inner.padata)?;
+    let finished = fast.finished.as_ref().ok_or_else(|| {
+        Error::ReplyMismatch("FAST response missing finish message in KDC reply".into())
+    })?;
+    verify_fast_finished(armor_key, &inner.ticket, finished)?;
+    let sk = fast
+        .strengthen_key
+        .as_ref()
+        .ok_or_else(|| Error::ReplyMismatch("FAST TGS reply missing strengthen-key".into()))?;
+    tracing::info!(
+        event = "client.tgs",
+        component = "krb5-protocol",
+        outcome = "ok",
+        fast_strengthen = true,
+    );
+    apply_strengthen(sk, sub)
+}
+
 fn tgs_sname_ok(
     requested: &PrincipalName,
     ticket: &PrincipalName,
@@ -570,22 +602,7 @@ fn tgs_once(
         return Err(Error::UnexpectedPdu);
     }
     let TgsRep(inner) = decode::<TgsRep>(&reply)?;
-    let fast = unwrap_fast_rep(&armor_key, &inner.padata)?;
-    let finished = fast.finished.as_ref().ok_or_else(|| {
-        Error::ReplyMismatch("FAST response missing finish message in KDC reply".into())
-    })?;
-    verify_fast_finished(&armor_key, &inner.ticket, finished)?;
-    let sk = fast
-        .strengthen_key
-        .as_ref()
-        .ok_or_else(|| Error::ReplyMismatch("FAST TGS reply missing strengthen-key".into()))?;
-    tracing::info!(
-        event = "client.tgs",
-        component = "krb5-protocol",
-        outcome = "ok",
-        fast_strengthen = true,
-    );
-    let reply_key = apply_strengthen(sk, &sub)?;
+    let reply_key = tgs_fast_reply_key(&armor_key, &sub, &inner)?;
     let enc_usage = ku::TGS_REP_ENC_PART_SUBKEY;
     let usage = KeyUsage::new(enc_usage)?;
     let plain = decrypt(&reply_key, usage, inner.enc_part.cipher.as_ref())?;
