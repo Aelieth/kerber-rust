@@ -99,6 +99,11 @@ docker exec "$NAME" sh -c 'cat >/tmp/policy-krb5.conf <<EOF
         admin_server = 127.0.0.1
     }
 EOF'
+# Enc-ts only for rust-KDC lockout kinit: --test-realm advertises P-256 SPAKE;
+# MIT client default edwards25519 is verify_support 24, and lockout.c
+# increments on that 24, so maxfailure=1/2 counts the doomed SPAKE offer.
+# Keep FAST kinit -T on policy-krb5.conf (inner method is 138).
+docker exec "$NAME" sh -c 'sed "/\[libdefaults\]/a\\    preferred_preauth_types = 2" /tmp/policy-krb5.conf > /tmp/policy-lockout-krb5.conf'
 
 kadmin_q() {
     docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
@@ -157,27 +162,27 @@ if ! echo "$REUSE" | grep -qiE 'reuse|REUSE|history'; then
 fi
 
 echo "==== MIT kinit lockuser maxfailure 2 reset then lock ===="
-WRONG1="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
+WRONG1="$(docker exec -e KRB5_CONFIG=/tmp/policy-lockout-krb5.conf \
     "$NAME" sh -c 'printf "wrong-password\n" | kinit lockuser@KERBER.TEST' 2>&1 || true)"
 echo "$WRONG1"
-docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
-if ! docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
+docker exec -e KRB5_CONFIG=/tmp/policy-lockout-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+if ! docker exec -e KRB5_CONFIG=/tmp/policy-lockout-krb5.conf \
     "$NAME" sh -c 'printf "lock-secret\n" | kinit lockuser@KERBER.TEST'; then
     log "policy.gate" "error" ',"error":"correct kinit after one fail must reset lockout"'
     exit 1
 fi
-docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
-WRONG2="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
+docker exec -e KRB5_CONFIG=/tmp/policy-lockout-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+WRONG2="$(docker exec -e KRB5_CONFIG=/tmp/policy-lockout-krb5.conf \
     "$NAME" sh -c 'printf "wrong-password\n" | kinit lockuser@KERBER.TEST' 2>&1 || true)"
 echo "$WRONG2"
 echo "$WRONG2" | grep -qiE 'revoked|CLIENT_REVOKED' && {
     log "policy.gate" "error" ',"error":"first fail after reset must not lock"'
     exit 1
 }
-WRONG3="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
+WRONG3="$(docker exec -e KRB5_CONFIG=/tmp/policy-lockout-krb5.conf \
     "$NAME" sh -c 'printf "wrong-password\n" | kinit lockuser@KERBER.TEST' 2>&1 || true)"
 echo "$WRONG3"
-LOCKED="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
+LOCKED="$(docker exec -e KRB5_CONFIG=/tmp/policy-lockout-krb5.conf \
     "$NAME" sh -c 'printf "wrong-password\n" | kinit lockuser@KERBER.TEST' 2>&1 || true)"
 echo "$LOCKED"
 echo "$LOCKED" | grep -qiE 'revoked|CLIENT_REVOKED'
@@ -246,20 +251,20 @@ DGET="$(kadmin_q 'getpol durpol')"
 echo "$DGET"
 echo "$DGET" | grep -qiE 'lockout duration: 0 days 00:00:03'
 kadmin_q 'addprinc -policy durpol -pw Time-sec1 duruser' >/dev/null
-D1="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
+D1="$(docker exec -e KRB5_CONFIG=/tmp/policy-lockout-krb5.conf \
     "$NAME" sh -c 'printf "wrong-password\n" | kinit duruser@KERBER.TEST' 2>&1 || true)"
 echo "$D1"
-D2="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
+D2="$(docker exec -e KRB5_CONFIG=/tmp/policy-lockout-krb5.conf \
     "$NAME" sh -c 'printf "wrong-password\n" | kinit duruser@KERBER.TEST' 2>&1 || true)"
 echo "$D2"
 echo "$D2" | grep -qiE 'revoked|CLIENT_REVOKED'
 sleep 4
-if ! docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
+if ! docker exec -e KRB5_CONFIG=/tmp/policy-lockout-krb5.conf \
     "$NAME" sh -c 'printf "Time-sec1\n" | kinit duruser@KERBER.TEST'; then
     log "policy.gate" "error" ',"error":"duration-only elapsed lockout must allow kinit"'
     exit 1
 fi
-docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+docker exec -e KRB5_CONFIG=/tmp/policy-lockout-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
 kadmin_q 'delprinc -force duruser' >/dev/null
 kadmin_q 'delpol -force durpol' >/dev/null
 
@@ -269,11 +274,11 @@ IGET="$(kadmin_q 'getpol intpol')"
 echo "$IGET"
 echo "$IGET" | grep -qiE 'failure count reset interval: 0 days 00:00:02'
 kadmin_q 'addprinc -policy intpol -pw Time-sec1 intuser' >/dev/null
-I1="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
+I1="$(docker exec -e KRB5_CONFIG=/tmp/policy-lockout-krb5.conf \
     "$NAME" sh -c 'printf "wrong-password\n" | kinit intuser@KERBER.TEST' 2>&1 || true)"
 echo "$I1"
 sleep 3
-I2="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
+I2="$(docker exec -e KRB5_CONFIG=/tmp/policy-lockout-krb5.conf \
     "$NAME" sh -c 'printf "wrong-password\n" | kinit intuser@KERBER.TEST' 2>&1 || true)"
 echo "$I2"
 echo "$I2" | grep -qiE 'revoked|CLIENT_REVOKED' && {
