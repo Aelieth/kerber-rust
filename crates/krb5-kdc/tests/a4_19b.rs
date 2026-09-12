@@ -1,11 +1,14 @@
-//! A′-4 item 19 HEAD-only: TestPolicy + profile `supported_enctypes`.
+//! A′-4 item 19 HEAD-only: TestPolicy, profile `supported_enctypes`, TGS key_exp.
 
+use krb5_asn1::decode_enc_kdc_rep_part;
+use krb5_crypto::{KeyUsage, decrypt};
 use krb5_kdc::{
     Error, KdcPolicy, TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
-    TestPolicy, bootstrap_documented, clear_thread_policy, documented_admin_id, set_thread_policy,
+    TestPolicy, bootstrap_documented, clear_thread_policy, documented_admin_id, documented_host,
+    set_thread_policy,
 };
 use krb5_protocol::{as_req, pa_enc_timestamp};
-use krb5_types::{PrincipalName, err};
+use krb5_types::{PrincipalName, err, ku};
 
 fn proto(err: &Error) -> (i32, Option<&str>) {
     match err {
@@ -147,4 +150,42 @@ fn a4_19_bootstrap_honours_supported_enctypes_order() {
         .map(|k| k.etype.to_iana())
         .collect();
     assert_eq!(keys, vec![20, 19, 18, 17]);
+}
+
+#[test]
+fn a4_19_tgs_key_exp_is_omitted() {
+    let (store, _) = bootstrap_documented().unwrap();
+    let key = store
+        .get_name(&PrincipalName::new(
+            PrincipalName::NT_PRINCIPAL,
+            [TEST_USER],
+        ))
+        .unwrap()
+        .best_key()
+        .unwrap()
+        .key
+        .clone();
+    let req = as_req(
+        PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]),
+        TEST_REALM,
+        1903,
+        Some(vec![pa_enc_timestamp(&key).unwrap()]),
+    )
+    .unwrap();
+    let tgt = krb5_kdc::issue_as(&store, &req).unwrap();
+    let tgs = krb5_protocol::tgs_req(
+        tgt.rep.0.ticket.clone(),
+        &tgt.session_key,
+        TEST_REALM,
+        &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]),
+        documented_host(),
+        TEST_REALM,
+        1904,
+    )
+    .unwrap();
+    let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
+    let usage = KeyUsage::new(ku::TGS_REP_ENC_PART).unwrap();
+    let plain = decrypt(&tgt.session_key, usage, out.rep.0.enc_part.cipher.as_ref()).unwrap();
+    let enc = decode_enc_kdc_rep_part(&plain).unwrap();
+    assert!(enc.key_expiration.is_none());
 }

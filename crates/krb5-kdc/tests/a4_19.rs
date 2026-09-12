@@ -2,7 +2,7 @@
 
 use krb5_asn1::decode_enc_kdc_rep_part;
 use krb5_crypto::{EncryptionType, KeyUsage, decrypt};
-use krb5_kdc::{PrincipalStore, TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
+use krb5_kdc::{PrincipalStore, TEST_REALM, TEST_USER, bootstrap_documented};
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req_ex_from};
 use krb5_types::{KdcOptions, KerberosTime, PrincipalName, flag_bit, ku};
 
@@ -85,27 +85,6 @@ fn a4_19_as_key_exp_is_min_of_expiration_and_pw_expire() {
         enc.key_expiration.as_ref().map(KerberosTime::unix_seconds),
         Some(now + 2 * 86400)
     );
-}
-
-#[test]
-fn a4_19_tgs_key_exp_is_omitted() {
-    let (store, _) = bootstrap_documented().unwrap();
-    let tgt = user_as(&store, 1903);
-    let tgs = krb5_protocol::tgs_req(
-        tgt.rep.0.ticket.clone(),
-        &tgt.session_key,
-        TEST_REALM,
-        &user(),
-        documented_host(),
-        TEST_REALM,
-        1904,
-    )
-    .unwrap();
-    let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
-    let usage = KeyUsage::new(ku::TGS_REP_ENC_PART).unwrap();
-    let plain = decrypt(&tgt.session_key, usage, out.rep.0.enc_part.cipher.as_ref()).unwrap();
-    let enc = decode_enc_kdc_rep_part(&plain).unwrap();
-    assert!(enc.key_expiration.is_none());
 }
 
 #[test]
