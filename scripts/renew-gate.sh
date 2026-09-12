@@ -141,15 +141,12 @@ echo "exp1=$EXP1 renew1=$REN1"
 [ -n "$EXP1" ] && [ -n "$REN1" ]
 START1="$(echo "$BEFORE" | awk '/krbtgt\//{print $1, $2; exit}')"
 echo "start1=$START1"
-if date -d "$START1" +%s >/dev/null 2>&1 && date -d "$REN1" +%s >/dev/null 2>&1; then
-    S_UNIX="$(date -d "$START1" +%s)"
-    R_UNIX="$(date -d "$REN1" +%s)"
-    DELTA=$((R_UNIX - S_UNIX))
-    echo "renew_delta_secs=$DELTA"
-    # 7d ± 2h
-    test "$DELTA" -ge 590400
-    test "$DELTA" -le 619200
-fi
+S_UNIX="$(date -d "$START1" +%s)"
+R_UNIX="$(date -d "$REN1" +%s)"
+DELTA=$((R_UNIX - S_UNIX))
+echo "renew_delta_secs=$DELTA"
+test "$DELTA" -ge 590400
+test "$DELTA" -le 619200
 
 sleep 2
 echo "==== MIT kinit -R ===="
@@ -320,12 +317,10 @@ echo "$ZERO"
 ZSTART="$(echo "$ZERO" | awk '/krbtgt\//{print $1, $2; exit}')"
 ZREN="$(echo "$ZERO" | awk -F'renew until ' '/renew until/{print $2}' | awk -F, '{print $1}')"
 echo "zero_start=$ZSTART zero_renew=$ZREN"
-if date -d "$ZSTART" +%s >/dev/null 2>&1 && date -d "$ZREN" +%s >/dev/null 2>&1; then
-    ZDELTA=$(($(date -d "$ZREN" +%s) - $(date -d "$ZSTART" +%s)))
-    echo "zero_renew_delta_secs=$ZDELTA"
-    test "$ZDELTA" -ge 0
-    test "$ZDELTA" -le 120
-fi
+ZDELTA=$(($(date -d "$ZREN" +%s) - $(date -d "$ZSTART" +%s)))
+echo "zero_renew_delta_secs=$ZDELTA"
+test "$ZDELTA" -ge 0
+test "$ZDELTA" -le 120
 sleep 2
 set +e
 ZAGAIN="$(docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf "$NAME" kinit -R 2>&1)"
@@ -354,12 +349,10 @@ echo "$ONED"
 OSTART="$(echo "$ONED" | awk '/krbtgt\//{print $1, $2; exit}')"
 OREN="$(echo "$ONED" | awk -F'renew until ' '/renew until/{print $2}' | awk -F, '{print $1}')"
 echo "one_start=$OSTART one_renew=$OREN"
-if date -d "$OSTART" +%s >/dev/null 2>&1 && date -d "$OREN" +%s >/dev/null 2>&1; then
-    ODELTA=$(($(date -d "$OREN" +%s) - $(date -d "$OSTART" +%s)))
-    echo "one_renew_delta_secs=$ODELTA"
-    test "$ODELTA" -ge 85200
-    test "$ODELTA" -le 87600
-fi
+ODELTA=$(($(date -d "$OREN" +%s) - $(date -d "$OSTART" +%s)))
+echo "one_renew_delta_secs=$ODELTA"
+test "$ODELTA" -ge 85200
+test "$ODELTA" -le 87600
 
 echo "==== -requires_preauth TGT has no A; +requires_preauth host is NO PREAUTH (rust) ===="
 kadmin_q 'modprinc -requires_preauth renewuser'
@@ -412,12 +405,10 @@ echo "$MZERO"
 MZSTART="$(echo "$MZERO" | awk '/krbtgt\//{print $1, $2; exit}')"
 MZREN="$(echo "$MZERO" | awk -F'renew until ' '/renew until/{print $2}' | awk -F, '{print $1}')"
 echo "mit_zero_start=$MZSTART mit_zero_renew=$MZREN"
-if date -d "$MZSTART" +%s >/dev/null 2>&1 && date -d "$MZREN" +%s >/dev/null 2>&1; then
-    MZDELTA=$(($(date -d "$MZREN" +%s) - $(date -d "$MZSTART" +%s)))
-    echo "mit_zero_renew_delta_secs=$MZDELTA"
-    test "$MZDELTA" -ge 0
-    test "$MZDELTA" -le 120
-fi
+MZDELTA=$(($(date -d "$MZREN" +%s) - $(date -d "$MZSTART" +%s)))
+echo "mit_zero_renew_delta_secs=$MZDELTA"
+test "$MZDELTA" -ge 0
+test "$MZDELTA" -le 120
 sleep 2
 set +e
 MZAGAIN="$(docker exec -e KRB5_CONFIG=/tmp/renew-mit-oracle.conf "$MITNAME" kinit -R 2>&1)"
@@ -443,12 +434,10 @@ echo "$MONED"
 MOSTART="$(echo "$MONED" | awk '/krbtgt\//{print $1, $2; exit}')"
 MOREN="$(echo "$MONED" | awk -F'renew until ' '/renew until/{print $2}' | awk -F, '{print $1}')"
 echo "mit_one_start=$MOSTART mit_one_renew=$MOREN"
-if date -d "$MOSTART" +%s >/dev/null 2>&1 && date -d "$MOREN" +%s >/dev/null 2>&1; then
-    MODELT=$(($(date -d "$MOREN" +%s) - $(date -d "$MOSTART" +%s)))
-    echo "mit_one_renew_delta_secs=$MODELT"
-    test "$MODELT" -ge 85200
-    test "$MODELT" -le 87600
-fi
+MODELT=$(($(date -d "$MOREN" +%s) - $(date -d "$MOSTART" +%s)))
+echo "mit_one_renew_delta_secs=$MODELT"
+test "$MODELT" -ge 85200
+test "$MODELT" -le 87600
 docker exec "$MITNAME" kadmin.local -q 'modprinc -requires_preauth user'
 docker exec "$MITNAME" kadmin.local -q 'modprinc +requires_preauth host/testhost.kerber.test'
 docker exec -e KRB5_CONFIG=/tmp/renew-mit-oracle.conf "$MITNAME" kdestroy -A >/dev/null 2>&1 || true

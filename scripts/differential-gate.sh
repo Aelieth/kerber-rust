@@ -353,9 +353,7 @@ grep -qF 'as-spake-round1.mit code=91 enc=method types=[151, 19, 133]' <<<"$HINT
 grep -qF 'as-spake-round1.rust code=91 enc=method types=[151, 19, 133]' <<<"$HINT_ORDER" || die "rust_hint 91 e_data not [151, 19, 133]"
 # W1-K M2b: the differential oracle has no case-name whitelist; no diffsend line
 # may carry a "whitelist" key.
-if echo "$DIFF" | grep -q '"whitelist"'; then
-    die "diffsend emitted a whitelist key; M2b bans case-name whitelists"
-fi
+grep -q '"whitelist"' <<<"$DIFF" && die "diffsend emitted a whitelist key; M2b bans case-name whitelists"
 
 echo "==== 128 KiB padded AS-REQ and 1 MiB+1 TCP cap both legs ===="
 TCP_CAP="$(docker exec "$NAME" python3 -c '

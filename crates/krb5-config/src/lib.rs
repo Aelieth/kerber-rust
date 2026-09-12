@@ -10,6 +10,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{SocketAddr, UdpSocket};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use thiserror::Error;
@@ -1013,6 +1014,38 @@ pub fn env_kdc_config() -> Option<PathBuf> {
 
 thread_local! {
     static TEST_KRB5_PATHS: RefCell<Option<Vec<PathBuf>>> = const { RefCell::new(None) };
+    static TEST_KRB5_ISOLATION: RefCell<Option<IsolatedKrb5>> = const { RefCell::new(None) };
+}
+
+static ISOLATE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+struct IsolatedKrb5 {
+    path: PathBuf,
+}
+
+impl Drop for IsolatedKrb5 {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn isolate_scratch_dir() -> PathBuf {
+    if let Ok(p) = std::env::var("CARGO_TARGET_TMPDIR") {
+        if !p.is_empty() {
+            return PathBuf::from(p);
+        }
+    }
+    if let Ok(p) = std::env::var("CARGO_TARGET_DIR") {
+        if !p.is_empty() {
+            return PathBuf::from(p).join("test-krb5");
+        }
+    }
+    if let Ok(p) = std::env::var("KERBER_SCRATCH") {
+        if !p.is_empty() {
+            return PathBuf::from(p);
+        }
+    }
+    PathBuf::from("target").join("test-krb5")
 }
 
 /// Test overlay for [`krb5_conf_paths`] (avoids the host `/etc/krb5.conf`).
@@ -1022,12 +1055,19 @@ pub fn set_test_krb5_paths(paths: Option<Vec<PathBuf>>) {
 
 /// Pin a realm-only profile so host `udp_preference_limit` cannot force TCP.
 pub fn isolate_test_krb5() {
-    let path = std::env::temp_dir().join(format!("kerber-test-krb5-{}.conf", std::process::id()));
+    let dir = isolate_scratch_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join(format!(
+        "kerber-test-krb5-{}-{}.conf",
+        std::process::id(),
+        ISOLATE_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
     let _ = std::fs::write(
         &path,
         "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    dns_lookup_realm = false\n",
     );
-    set_test_krb5_paths(Some(vec![path]));
+    set_test_krb5_paths(Some(vec![path.clone()]));
+    TEST_KRB5_ISOLATION.with(|c| *c.borrow_mut() = Some(IsolatedKrb5 { path }));
 }
 
 /// `KRB5_CONFIG` (colon-split) or `/etc/krb5.conf` when unset.
@@ -1267,6 +1307,18 @@ fn decode_name(msg: &[u8], mut i: usize) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn isolate_test_krb5_stays_off_host_tmp() {
+        isolate_test_krb5();
+        let paths = TEST_KRB5_PATHS
+            .with(|c| c.borrow().clone())
+            .expect("isolated");
+        let path = paths.first().expect("path");
+        assert_ne!(path.parent(), Some(std::env::temp_dir().as_path()));
+        assert!(!path.starts_with("/tmp/kerber-test-krb5"));
+        assert!(path.exists());
+    }
 
     #[test]
     fn parse_krb5_conf_realms_and_libdefaults() {

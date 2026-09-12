@@ -1011,6 +1011,27 @@ def host_tmp_write_lines(text: str) -> list[int]:
     return hits
 
 
+def check_isolate_test_krb5(text: str | None = None) -> None:
+    """Unit-test isolate helper must not write host `/tmp`."""
+    if text is None:
+        path = ROOT / "crates/krb5-config/src/lib.rs"
+        if not path.is_file():
+            _die("missing crates/krb5-config/src/lib.rs")
+        text = path.read_text()
+    if "fn isolate_test_krb5" not in text:
+        _die("isolate_test_krb5 missing")
+    start = text.find("fn isolate_scratch_dir")
+    fn = text.find("pub fn isolate_test_krb5")
+    if start < 0 or start > fn:
+        start = fn
+    if fn < 0:
+        _die("isolate_test_krb5 missing")
+    end = text.find("\npub fn ", fn + 1)
+    chunk = text[start : end if end > 0 else None]
+    if re.search(r"temp_dir\(\)|/tmp/kerber-test-krb5", chunk):
+        _die("isolate_test_krb5 writes host /tmp")
+
+
 def check_no_host_tmp_writes(text: str | None = None, name: str = "gate.sh") -> None:
     """No host `/tmp/` writes in gate scripts outside KERBER_SCRATCH defaults."""
     if text is not None:
@@ -2724,6 +2745,16 @@ jobs:
         'echo "cat <<EOF"\necho ok\ncat <<<hello\n# <<EOF\n',
         "ok-quoted-and-comment-heredoc.sh",
     )
+    check_isolate_test_krb5(
+        "fn isolate_scratch_dir() -> PathBuf {\n    PathBuf::from(\"target\").join(\"test-krb5\")\n}\n"
+        "pub fn isolate_test_krb5() {\n    let dir = isolate_scratch_dir();\n}\n"
+    )
+    _must_die(
+        check_isolate_test_krb5,
+        "pub fn isolate_test_krb5() {\n"
+        "    let path = std::env::temp_dir().join(\"kerber-test-krb5-1.conf\");\n"
+        "}\n",
+    )
     check_unit_evidence_helper()
     check_settle_helper()
     check_evidence_check_tool()
@@ -2992,6 +3023,7 @@ def main() -> None:
     check_gate_provenance()
     check_docker_cp_cargo_target()
     check_no_host_tmp_writes()
+    check_isolate_test_krb5()
     check_unit_evidence_helper()
     check_settle_helper()
     check_evidence_check_tool()

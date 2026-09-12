@@ -366,6 +366,7 @@ done
 [ "$ok" = 1 ] || die "rust kdc did not listen after require_auth clear"
 
 echo "==== require_auth on krbtgt password kinit is 12 both legs ===="
+docker exec "$NAME" sh -c ': >/tmp/mit-kdc.log'
 docker exec "$NAME" kadmin.local -q 'setstr krbtgt/KERBER.TEST require_auth pkinit'
 docker exec "$NAME" kdb5_util dump /tmp/reqauth-as.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'

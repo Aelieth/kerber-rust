@@ -75,6 +75,10 @@ this project uses semantic versioning once a crate is published.
   `decode_kdc.c:66-67` (`KRB5_ERR_FAST_REQUIRED` ignored). A present
   FAST envelope still requires finished + strengthen. Empty-groups
   stray PA-SPAKE is skipped (`kdc_preauth.c:1306-1307`), not 24.
+- **test.** Unit-test `isolate_test_krb5` writes under
+  `CARGO_TARGET_TMPDIR` / `CARGO_TARGET_DIR` / `KERBER_SCRATCH` and
+  removes the file on drop. `s4u_user_life` fails closed on an empty
+  klist line; `date -d` renew deltas are unguarded.
 
 ### W1-A′-2
 

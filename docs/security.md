@@ -76,6 +76,9 @@ A TGS-REQ whose `body.realm` is not a realm this KDC serves is 60
 multi-realm MIT KDC may answer 68 `WRONG_REALM` from `dispatch.c`).
 Destination RENEW/VALIDATE is not exempt.
 
+An omitted `[realms]` `max_renewable_life` in `kdc.conf` is a cap of 0
+(`alt_prof.c:576-577`), not an unset “use 7d” default.
+
 The master-key stash `.k5.REALM` is a FILE keytab with one `K/M@REALM`
 entry (etype and kvno embedded, MIT `krb5_def_store_mkey_list`); loading reads
 the keytab first, then a legacy raw-key stash, rewriting it in keytab format on

@@ -948,10 +948,25 @@ echo "MIT_testkdb_s4u2proxy_rbcd_deny"
 s4u_user_life() {
     local line start end
     line="$(printf '%s\n' "$1" | grep -B2 'for client user@KERBER.TEST' | grep 'host/testhost' | head -1)"
-    [ -n "$line" ]
+    [ -n "$line" ] || return 1
     start="$(printf '%s\n' "$line" | awk '{print $1, $2}')"
     end="$(printf '%s\n' "$line" | awk '{print $3, $4}')"
+    [ -n "$start" ] && [ -n "$end" ] || return 1
     echo $(($(date -d "$end" +%s) - $(date -d "$start" +%s)))
+}
+
+s4u_tgt_life() {
+    local line start end
+    line="$(printf '%s\n' "$1" | grep 'krbtgt/' | head -1)"
+    [ -n "$line" ] || return 1
+    start="$(printf '%s\n' "$line" | awk '{print $1, $2}')"
+    end="$(printf '%s\n' "$line" | awk '{print $3, $4}')"
+    [ -n "$start" ] && [ -n "$end" ] || return 1
+    echo $(($(date -d "$end" +%s) - $(date -d "$start" +%s)))
+}
+
+s4u_tgt_flags() {
+    printf '%s\n' "$1" | grep -A1 'krbtgt/' | sed -n 's/.*Flags: //p' | awk '{print $1}' | tr -d ','
 }
 
 s4u_user_flags() {
@@ -967,10 +982,19 @@ docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
     "$MITNAME" kvno -U user host/testhost.kerber.test
 MIT_S4U="$(docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf "$MITNAME" klist -f)"
 echo "$MIT_S4U"
-MIT_LIFE="$(s4u_user_life "$MIT_S4U")"
+MIT_LIFE="$(s4u_user_life "$MIT_S4U")" || {
+    log "s4u.mit.gate" "error" ',"error":"MIT S4U klist line empty"'
+    exit 1
+}
 echo "mit_s4u_user_life=$MIT_LIFE"
 test "$MIT_LIFE" -ge 0
 test "$MIT_LIFE" -le 90
+MIT_TGT_LIFE="$(s4u_tgt_life "$MIT_S4U")" || {
+    log "s4u.mit.gate" "error" ',"error":"MIT TGT klist line empty"'
+    exit 1
+}
+echo "mit_tgt_life=$MIT_TGT_LIFE"
+test "$MIT_TGT_LIFE" -gt 90
 docker exec "$MITNAME" kadmin.local -q 'modprinc -allow_renewable user'
 docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf "$MITNAME" kdestroy -A >/dev/null 2>&1 || true
 docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
@@ -981,6 +1005,12 @@ MIT_S4UR="$(docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf "$MITNAME" klist
 echo "$MIT_S4UR"
 MIT_RF="$(s4u_user_flags "$MIT_S4UR")"
 echo "mit_s4u_user_flags=$MIT_RF"
+MIT_TGT_RF="$(s4u_tgt_flags "$MIT_S4UR")"
+echo "mit_tgt_flags=$MIT_TGT_RF"
+echo "$MIT_TGT_RF" | grep -q R || {
+    log "s4u.mit.gate" "error" ',"error":"MIT TGT missing R after kinit -r"'
+    exit 1
+}
 [ -n "$MIT_RF" ] || {
     log "s4u.mit.gate" "error" ',"error":"MIT S4U klist Flags empty after -allow_renewable user"'
     exit 1
@@ -1046,10 +1076,19 @@ docker exec -e KRB5_CONFIG=/tmp/s4u-r27.conf \
     "$NAME" kvno -U user host/testhost.kerber.test
 RUST_S4U="$(docker exec -e KRB5_CONFIG=/tmp/s4u-r27.conf "$NAME" klist -f)"
 echo "$RUST_S4U"
-RUST_LIFE="$(s4u_user_life "$RUST_S4U")"
+RUST_LIFE="$(s4u_user_life "$RUST_S4U")" || {
+    log "s4u.mit.gate" "error" ',"error":"Rust S4U klist line empty"'
+    exit 1
+}
 echo "rust_s4u_user_life=$RUST_LIFE"
 test "$RUST_LIFE" -ge 0
 test "$RUST_LIFE" -le 90
+RUST_TGT_LIFE="$(s4u_tgt_life "$RUST_S4U")" || {
+    log "s4u.mit.gate" "error" ',"error":"Rust TGT klist line empty"'
+    exit 1
+}
+echo "rust_tgt_life=$RUST_TGT_LIFE"
+test "$RUST_TGT_LIFE" -gt 90
 docker exec "$NAME" sh -c 'for p in /proc/[0-9]*; do comm=$(cat "$p/comm" 2>/dev/null) || continue; [ "$comm" = krb5-kdc ] || continue; kill -9 "${p#/proc/}" 2>/dev/null || true; done'
 docker exec -e KRB5_KDC_DB=/tmp/r27.db -e KRB5_KDC_STASH=/tmp/r27.stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
@@ -1081,6 +1120,13 @@ RUST_S4UR="$(docker exec -e KRB5_CONFIG=/tmp/s4u-r27.conf "$NAME" klist -f)"
 echo "$RUST_S4UR"
 RUST_RF="$(s4u_user_flags "$RUST_S4UR")"
 echo "rust_s4u_user_flags=$RUST_RF"
+RUST_TGT_RF="$(s4u_tgt_flags "$RUST_S4UR")"
+echo "rust_tgt_flags=$RUST_TGT_RF"
+echo "$RUST_TGT_RF" | grep -q R || {
+    docker exec "$NAME" cat /tmp/kdc-r27b.log >&2 || true
+    log "s4u.mit.gate" "error" ',"error":"Rust TGT missing R after kinit -r"'
+    exit 1
+}
 [ -n "$RUST_RF" ] || {
     docker exec "$NAME" cat /tmp/kdc-r27b.log >&2 || true
     log "s4u.mit.gate" "error" ',"error":"Rust S4U klist Flags empty after -allow_renewable user"'
