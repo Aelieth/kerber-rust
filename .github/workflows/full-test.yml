@@ -20,6 +20,8 @@ jobs:
         with:
           tool: nextest
       - name: test --release
+        env:
+          KRB5_CONFIG: ${{ github.workspace }}/harness/nextest-krb5.conf
         run: cargo nextest run --workspace --release --profile ci
 
   msrv-test:

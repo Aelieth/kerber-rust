@@ -1777,9 +1777,23 @@ echo "$MIT_INT_TAMPER" | grep -E 'clnt_stat=11|garbage_args=1|accept_stat=4' || 
 echo "==== RPCSEC_GSS reject machine vs MIT kadmind ===="
 rpcsec_reject_cells "$NAME_MIT" admin/admin /etc/krb5.conf
 echo "==== MIT kadmin/history service on kadm5 ===="
-MIT_HIST_BEFORE="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc kadmin/history' 2>&1 || true)"
+# kadmin through kadmind (same as the rust HIST_BEFORE cell). kadmin.local
+# against a live DB2 kadmind can print a lock error instead of UNK_PRINC.
+MIT_HIST_BEFORE=""
+for _ in $(seq 1 10); do
+    MIT_HIST_BEFORE="$(docker exec -e KRB5_CONFIG=/etc/krb5.conf \
+        "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'getprinc kadmin/history' 2>&1 || true)"
+    if echo "$MIT_HIST_BEFORE" | grep -qF 'Principal does not exist while retrieving "kadmin/history@KERBER.TEST".'; then
+        break
+    fi
+    if echo "$MIT_HIST_BEFORE" | grep -qF 'Principal: kadmin/history@KERBER.TEST'; then
+        break
+    fi
+    sleep 0.2
+done
 echo "$MIT_HIST_BEFORE"
-echo "$MIT_HIST_BEFORE" | grep -F 'Principal does not exist while retrieving "kadmin/history@KERBER.TEST".'
+echo "$MIT_HIST_BEFORE" | grep -F 'Principal does not exist while retrieving "kadmin/history@KERBER.TEST".' \
+    || { echo "MIT kadmin/history before first policy chpass: $MIT_HIST_BEFORE" >&2; exit 1; }
 
 docker exec "$NAME_MIT" kadmin.local -q 'addpol -minlength 8 -history 2 a8pol' || true
 docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw a8-initial-secret -policy a8pol a8u' || true

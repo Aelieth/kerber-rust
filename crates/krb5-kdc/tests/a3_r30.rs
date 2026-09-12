@@ -119,15 +119,44 @@ fn password_as_tgt() -> AsOutcome {
 
 #[test]
 fn r30_tgs_after_password_as_is_fast_armored() {
-    let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
-    sock.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-    let addr = sock.local_addr().unwrap();
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    // Capture UDP or TCP: host `udp_preference_limit` (or a FAST body
+    // over MIT's 1465 default) must not hide the 136 assert.
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    udp.set_read_timeout(Some(Duration::from_millis(50)))
+        .unwrap();
+    let addr = udp.local_addr().unwrap();
+    let tcp = TcpListener::bind(addr).unwrap();
+    tcp.set_nonblocking(true).unwrap();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let mut buf = vec![0u8; 65535];
-        if let Ok((n, src)) = sock.recv_from(&mut buf) {
-            let _ = tx.send(buf[..n].to_vec());
-            let _ = sock.send_to(&[0x7e], src);
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            let mut buf = vec![0u8; 65535];
+            if let Ok((n, src)) = udp.recv_from(&mut buf) {
+                let _ = udp.send_to(&[0x7e], src);
+                let _ = tx.send(buf[..n].to_vec());
+                return;
+            }
+            if let Ok((mut stream, _)) = tcp.accept() {
+                let _ = stream.set_nonblocking(false);
+                let mut hdr = [0u8; 4];
+                if stream.read_exact(&mut hdr).is_ok() {
+                    let n = u32::from_be_bytes(hdr) as usize;
+                    if (1..=1024 * 1024).contains(&n) {
+                        let mut body = vec![0u8; n];
+                        if stream.read_exact(&mut body).is_ok() {
+                            let _ = stream.write_all(&1u32.to_be_bytes());
+                            let _ = stream.write_all(&[0x7e]);
+                            let _ = tx.send(body);
+                            return;
+                        }
+                    }
+                }
+            }
+            thread::sleep(Duration::from_millis(5));
         }
     });
     let tgt = password_as_tgt();

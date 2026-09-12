@@ -34,6 +34,8 @@ jobs:
       - name: build tests
         run: cargo nextest run --workspace --profile ci --no-run
       - name: test
+        env:
+          KRB5_CONFIG: ${{ github.workspace }}/harness/nextest-krb5.conf
         run: cargo nextest run --workspace --profile ci
       - name: Upload nextest junit
         if: always()
