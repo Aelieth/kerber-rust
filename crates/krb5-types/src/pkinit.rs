@@ -683,13 +683,66 @@ pub fn encode_td_dh_p256() -> Vec<u8> {
     tlv(0x30, &alg)
 }
 
-/// Anonymous PKINIT well-known client name (`WELLKNOWN/ANONYMOUS`).
+/// MIT `KRB5_ANONYMOUS_REALMSTR`.
+pub const ANONYMOUS_REALM: &str = "WELLKNOWN:ANONYMOUS";
+
+/// MIT `krb5_anonymous_principal`: `WELLKNOWN/ANONYMOUS` (NT-WELLKNOWN).
 #[must_use]
 pub fn anonymous_client() -> crate::PrincipalName {
     crate::PrincipalName::new(
-        crate::PrincipalName::NT_PRINCIPAL,
+        crate::PrincipalName::NT_WELLKNOWN,
         ["WELLKNOWN", "ANONYMOUS"],
     )
+}
+
+/// Component-only compare, like `krb5_principal_compare_any_realm`.
+#[must_use]
+pub fn is_anonymous_principal(name: &crate::PrincipalName) -> bool {
+    name.components_eq(&anonymous_client())
+}
+
+/// RFC 8636 `partyUInfo`: anonymous clients use `WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS`.
+#[must_use]
+pub fn encode_party_u(cname: &crate::PrincipalName, realm: &str) -> Vec<u8> {
+    if is_anonymous_principal(cname) {
+        return encode_krb5_principal_name(
+            ANONYMOUS_REALM,
+            crate::PrincipalName::NT_WELLKNOWN,
+            &["WELLKNOWN", "ANONYMOUS"],
+        );
+    }
+    let parts: Vec<String> = cname
+        .name_string
+        .iter()
+        .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
+        .collect();
+    let prefs: Vec<&str> = parts.iter().map(String::as_str).collect();
+    encode_krb5_principal_name(realm, cname.name_type, &prefs)
+}
+
+/// AuthPack nonce plus optional `clientPublicValue` (absent for unsigned-no-DH).
+#[must_use]
+pub fn parse_authpack_maybe_dh(der: &[u8]) -> Option<(u32, Option<Vec<u8>>)> {
+    let (t, body, _) = take_tlv(der)?;
+    if t != 0x30 {
+        return None;
+    }
+    let mut nonce = 0u32;
+    let mut spki: Option<Vec<u8>> = None;
+    let mut cur = body;
+    while !cur.is_empty() {
+        let (tag, inner, rest) = take_tlv(cur)?;
+        if tag == 0xa0 {
+            let seq = unwrap_explicit_seq(inner);
+            if let Some(n) = pkauth_nonce(seq) {
+                nonce = n;
+            }
+        } else if tag == 0xa1 {
+            spki = Some(unwrap_spki_field(inner));
+        }
+        cur = rest;
+    }
+    Some((nonce, spki))
 }
 
 /// CMS AlgorithmIdentifier (digest or signature).
@@ -1255,6 +1308,82 @@ fn signed_attrs_set(econtent_oid: &[u8], e_content: &[u8]) -> Vec<u8> {
     let ct = tlv(0x30, &[ct_oid, tlv(0x31, &oid_der(econtent_oid))].concat());
     let md = tlv(0x30, &[md_oid, tlv(0x31, &tlv(0x04, &digest))].concat());
     tlv(0x31, &[ct, md].concat())
+}
+
+/// CMS ContentInfo wrapping AuthPack with no signers (anonymous PKINIT).
+#[must_use]
+pub fn cms_wrap_unsigned(e_content: &[u8]) -> Vec<u8> {
+    let oid = oid_der(ECONTENT_AUTHDATA);
+    tlv(0x30, &[oid, tlv(0xa0, &tlv(0x04, e_content))].concat())
+}
+
+/// AuthPack from an unsigned CMS ContentInfo or SignedData with no signers.
+#[must_use]
+pub fn cms_extract_unsigned(der: &[u8]) -> Option<Vec<u8>> {
+    if let Some((tag, body, _)) = take_tlv(der)
+        && tag == 0x30
+        && let Some((t, oid, rest)) = take_tlv(body)
+        && t == 0x06
+        && oid == ECONTENT_AUTHDATA
+        && let Some((t, expl, _)) = take_tlv(rest)
+        && t == 0xa0
+        && let Some((t, oct, _)) = take_tlv(expl)
+        && t == 0x04
+    {
+        return Some(oct.to_vec());
+    }
+    if let Ok(ci) = rasn::der::decode::<CmsContentInfo>(der)
+        && ci.content.signer_infos.is_empty()
+        && let Some(ec) = ci.content.encap_content_info.e_content
+    {
+        return Some(ec.to_vec());
+    }
+    unsigned_signeddata_econtent(der)
+}
+
+fn unsigned_signeddata_econtent(der: &[u8]) -> Option<Vec<u8>> {
+    let (tag, ci, _) = take_tlv(der)?;
+    if tag != 0x30 {
+        return None;
+    }
+    let (_, _, rest) = take_tlv(ci)?;
+    let (t, sd_wrap, _) = take_tlv(rest)?;
+    if t != 0xa0 {
+        return None;
+    }
+    let (t, sd, _) = take_tlv(sd_wrap)?;
+    if t != 0x30 {
+        return None;
+    }
+    let mut cur = sd;
+    cur = take_tlv(cur)?.2;
+    cur = take_tlv(cur)?.2;
+    let (t, encap, rest) = take_tlv(cur)?;
+    if t != 0x30 {
+        return None;
+    }
+    let (t, _, after_oid) = take_tlv(encap)?;
+    if t != 0x06 {
+        return None;
+    }
+    let (t, expl, _) = take_tlv(after_oid)?;
+    if t != 0xa0 {
+        return None;
+    }
+    let (t, oct, _) = take_tlv(expl)?;
+    if t != 0x04 {
+        return None;
+    }
+    let signers = if rest.first() == Some(&0xa0) {
+        take_tlv(rest)?.2
+    } else {
+        rest
+    };
+    let (t, sbody, _) = take_tlv(signers)?;
+    if t != 0x31 || !sbody.is_empty() {
+        return None;
+    }
+    Some(oct.to_vec())
 }
 
 /// Extract eContent from CMS SignedData, or return `der` unchanged.
@@ -2277,5 +2406,16 @@ mod signed_attrs_tests {
             cms_verify_full(&cms, &ca.ca_cert).expect_err("bare"),
             "cms signedAttrs"
         );
+    }
+
+    #[test]
+    fn cms_unsigned_contentinfo_round_trips() {
+        let inner = b"anon-authpack";
+        let wrap = cms_wrap_unsigned(inner);
+        assert_eq!(
+            cms_extract_unsigned(&wrap).as_deref(),
+            Some(inner.as_slice())
+        );
+        assert!(cms_verify_full(&wrap, &[]).is_err());
     }
 }

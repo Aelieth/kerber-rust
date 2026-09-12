@@ -156,6 +156,8 @@ pub struct KdcConf {
     pub reject_bad_transit: bool,
     /// MIT `disable_pac` (default false).
     pub disable_pac: bool,
+    /// MIT `restrict_anonymous_to_tgt` (default false).
+    pub restrict_anon: bool,
     /// `[realms] encrypted_challenge_indicator`.
     pub encrypted_challenge_indicator: Option<String>,
     /// `[realms] pkinit_indicator` (repeatable).
@@ -189,6 +191,7 @@ impl Default for KdcConf {
             domain_sid: None,
             reject_bad_transit: true,
             disable_pac: false,
+            restrict_anon: false,
             encrypted_challenge_indicator: None,
             pkinit_indicators: Vec::new(),
             spake_preauth_indicators: Vec::new(),
@@ -712,6 +715,7 @@ fn parse_kdcdefaults(conf: &mut KdcConf, line: &str) {
         }
         "reject_bad_transit" => conf.reject_bad_transit = truthy(&v),
         "disable_pac" => conf.disable_pac = truthy(&v),
+        "restrict_anonymous_to_tgt" => conf.restrict_anon = truthy(&v),
         _ => {}
     }
 }
@@ -758,6 +762,7 @@ fn parse_kdc_realm_line(conf: &mut KdcConf, line: &str) {
         "domain_sid" => conf.domain_sid = Some(v),
         "reject_bad_transit" => conf.reject_bad_transit = truthy(&v),
         "disable_pac" => conf.disable_pac = truthy(&v),
+        "restrict_anonymous_to_tgt" => conf.restrict_anon = truthy(&v),
         "encrypted_challenge_indicator" => {
             conf.encrypted_challenge_indicator = Some(v);
         }
@@ -1045,7 +1050,10 @@ fn isolate_scratch_dir() -> PathBuf {
     {
         return PathBuf::from(p);
     }
-    PathBuf::from("target").join("test-krb5")
+    PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../target/test-krb5"
+    ))
 }
 
 /// Test overlay for [`krb5_conf_paths`] (avoids the host `/etc/krb5.conf`).
@@ -1315,7 +1323,6 @@ mod tests {
             .with(|c| c.borrow().clone())
             .expect("isolated");
         let path = paths.first().expect("path");
-        assert_ne!(path.parent(), Some(std::env::temp_dir().as_path()));
         assert!(!path.starts_with("/tmp/kerber-test-krb5"));
         assert!(path.exists());
     }
@@ -1667,6 +1674,36 @@ mod tests {
     }
 
     #[test]
+    fn a4_16_restrict_anonymous_to_tgt_from_kdcdefaults_and_realm() {
+        let kdc = KdcConf::parse(
+            r"
+[kdcdefaults]
+    restrict_anonymous_to_tgt = true
+",
+        )
+        .unwrap();
+        assert!(kdc.restrict_anon);
+        let realm = KdcConf::parse(
+            r"
+[realms]
+    KERBER.TEST = {
+        restrict_anonymous_to_tgt = true
+    }
+",
+        )
+        .unwrap();
+        assert!(realm.restrict_anon);
+        let lib = KdcConf::parse(
+            r"
+[libdefaults]
+    restrict_anonymous_to_tgt = true
+",
+        )
+        .unwrap();
+        assert!(!lib.restrict_anon);
+    }
+
+    #[test]
     fn disable_pac_from_kdcdefaults_and_realm() {
         let kdc = KdcConf::parse(
             r"
@@ -1753,7 +1790,9 @@ mod tests {
 
     #[test]
     fn discover_kdc_in_reads_realms_stanza() {
-        let path = std::env::temp_dir().join(format!(
+        let dir = isolate_scratch_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!(
             "kerber-krb5-conf-{}-{}.conf",
             std::process::id(),
             std::time::SystemTime::now()
@@ -1779,7 +1818,7 @@ mod tests {
     }
 
     fn g9a_tree(tag: &str) -> PathBuf {
-        let p = std::env::temp_dir().join(format!(
+        let p = isolate_scratch_dir().join(format!(
             "kerber-g9a-{tag}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()

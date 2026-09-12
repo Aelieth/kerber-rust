@@ -248,6 +248,13 @@ fn etype_info2_requires_exact_etype_set() {
 fn preauth_edata_requires_fx_cookie_and_fx_fast() {
     let with = method_edata_hw(&[18]);
     compare_preauth_e_data(Some(&with), Some(&with)).expect("[136, 19, 133] both legs");
+    let wrapped: MethodData = vec![PaData {
+        padata_type: pa::FX_FAST,
+        padata_value: vec![].into(),
+    }];
+    let wrapped = encode(&wrapped).expect("FAST-wrapped METHOD-DATA");
+    compare_preauth_e_data(Some(&wrapped), Some(&wrapped))
+        .expect("FAST-wrapped outer 25 is [136] only");
     let no_cookie = method_edata_no_cookie(&[18]);
     let err = compare_preauth_e_data(Some(&with), Some(&no_cookie))
         .expect_err("as-hw-preauth without 133 must fail");

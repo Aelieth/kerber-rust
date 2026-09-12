@@ -201,6 +201,8 @@ pub mod ku {
     pub const CAMMAC: u32 = 64;
     /// SPAKE factor encryption (MIT `KRB5_KEYUSAGE_SPAKE`).
     pub const SPAKE: u32 = 65;
+    /// PA-PKINIT-KX (`krb5.hin:991` `KRB5_KEYUSAGE_PA_PKINIT_KX`).
+    pub const PA_PKINIT_KX: u32 = 44;
 }
 
 /// RFC 4120 / 6113 / 4556 PA-DATA type numbers.

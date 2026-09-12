@@ -258,13 +258,10 @@ principal `WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS`
 2..15 are refused as 93 `FIND_FAST` (`UNSUPPORTED_CRITICAL_FAST_OPTIONS`
 `0xbfff0000`, `k5-int.h:802-803`).
 
-**FAST hide-client-names scope:** the AS-REP *success* reply is
-anonymized; the FAST *error* reply and the TGS-REP / TGS error are not
-yet (`do_as_req.c:831`, `do_tgs_req.c:235,1111`), because the outer
-KRB-ERROR is built from the request body without the FAST hide flag. A
-hide-client-names request that then errors, or a hidden TGS, still
-exposes the client name in the outer reply — a documented residual
-(ledger `do_as_req.c:831` row).
+**FAST hide-client-names scope:** FAST option bit 1 anonymizes the
+outer client on the AS-REP, the outer KRB-ERROR (`do_as_req.c:831-832`,
+`do_tgs_req.c:235-236`), and the TGS-REP (`do_tgs_req.c:1111-1112`).
+Inner FAST / `fast_finished` keep the real client.
 
 ### W1-J L1a — GSS unwrap_v3 / verify_enc_header
 

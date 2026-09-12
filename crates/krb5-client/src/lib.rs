@@ -58,6 +58,8 @@ pub struct KinitParams<'a> {
     pub ticket: AsTicketOpts,
     /// `kinit -R`.
     pub renew: bool,
+    /// `kinit -n` (anonymous PKINIT).
+    pub anonymous: bool,
 }
 
 /// Result of [`kinit`].
@@ -297,6 +299,18 @@ fn load_pkinit(
     Ok(PkinitClient { cert, key, ca_cert })
 }
 
+fn load_pkinit_anchors(
+    anchors: &Path,
+) -> Result<PkinitClient, Box<dyn std::error::Error + Send + Sync>> {
+    let anc = std::fs::read_to_string(anchors)?;
+    let ca_cert = krb5_types::pkinit::parse_pem("CERTIFICATE", &anc).ok_or("pkinit anchors PEM")?;
+    Ok(PkinitClient {
+        cert: Vec::new(),
+        key: [0u8; 32],
+        ca_cert,
+    })
+}
+
 fn pkinit_from_conf(realm: &str) -> (Option<std::path::PathBuf>, Option<std::path::PathBuf>) {
     let Some(conf) = krb5_config::load_krb5_conf() else {
         return (None, None);
@@ -341,14 +355,18 @@ fn kinit_inner(
     };
     let id_path = params.pkinit_identity.map(Path::to_path_buf).or(conf_id);
     let an_path = params.pkinit_anchors.map(Path::to_path_buf).or(conf_an);
-    let pkinit = match (id_path.as_deref(), an_path.as_deref()) {
-        (Some(i), Some(a)) => Some(load_pkinit(i, a)?),
-        (Some(_), None) | (None, Some(_)) => {
+    let pkinit = match (id_path.as_deref(), an_path.as_deref(), params.anonymous) {
+        (Some(i), Some(a), _) => Some(load_pkinit(i, a)?),
+        (None, Some(a), true) => Some(load_pkinit_anchors(a)?),
+        (Some(_), None, _) | (None, Some(_), false) => {
             return Err("pkinit requires identity and anchors".into());
         }
-        (None, None) => None,
+        (None, None, true) => return Err("anonymous PKINIT requires pkinit_anchors".into()),
+        (None, None, false) => None,
     };
     let conf_e = krb5_protocol::conf_etypes(false);
+    let mut ticket = params.ticket;
+    ticket.anonymous |= params.anonymous;
     let req = AsRequest {
         cname: cname.clone(),
         realm: &realm_s,
@@ -360,7 +378,7 @@ fn kinit_inner(
         canonicalize: params.enterprise,
         sname: None,
         etypes: Some(&conf_e),
-        ticket: params.ticket,
+        ticket,
     };
     let as_out = if let Some(ktpath) = params.keytab {
         let kt = Keytab::parse(&std::fs::read(ktpath)?)?;

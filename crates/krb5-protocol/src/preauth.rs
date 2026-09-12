@@ -521,6 +521,39 @@ pub fn pa_pk_as_req_signed(
     })
 }
 
+/// Unsigned AuthPack (RFC 6112 anonymous PKINIT ContentInfo).
+///
+/// # Errors
+///
+/// DER failures.
+pub fn pa_pk_as_req_unsigned(
+    client_public: &[u8],
+    nonce: u32,
+    body_sha1: &[u8],
+) -> Result<PaData, Error> {
+    let now = KerberosTime::now();
+    let usec = now.0.timestamp_subsec_micros() % 1_000_000;
+    let pk_auth = krb5_types::pkinit::PkAuthenticator {
+        cusec: Microseconds::from_subsec_micros(usec),
+        ctime: now,
+        nonce,
+        pa_checksum: Some(body_sha1.to_vec().into()),
+    };
+    let spki = krb5_types::pkinit::encode_ec_spki(client_public);
+    let inner = krb5_types::pkinit::encode_client_authpack(&pk_auth, &spki)
+        .ok_or_else(|| Error::ReplyMismatch("AuthPack kdf".into()))?;
+    let wrapped = krb5_types::pkinit::cms_wrap_unsigned(&inner);
+    let req = krb5_types::pkinit::PaPkAsReq {
+        signed_auth_pack: wrapped.into(),
+        trusted_certifiers: None,
+        kdc_pk_id: None,
+    };
+    Ok(PaData {
+        padata_type: pa::PK_AS_REQ,
+        padata_value: encode(&req)?.into(),
+    })
+}
+
 /// Verify the KDC CMS, then require KPKdc + SAN `krbtgt/REALM@REALM` and
 /// `id-pkinit-DHKeyData` before any ECDH.
 fn verify_kdc_pkinit_cms(
@@ -607,13 +640,7 @@ pub fn pkinit_reply_key_agile(
     if oid.as_slice() != krb5_types::pkinit::KDF_AH_SHA256_OID {
         return Err(Error::ReplyMismatch("PKINIT unknown kdf".into()));
     }
-    let parts: Vec<String> = client
-        .name_string
-        .iter()
-        .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
-        .collect();
-    let prefs: Vec<&str> = parts.iter().map(String::as_str).collect();
-    let party_u = krb5_types::pkinit::encode_krb5_principal_name(realm, client.name_type, &prefs);
+    let party_u = krb5_types::pkinit::encode_party_u(client, realm);
     let party_v = krb5_types::pkinit::encode_krb5_principal_name(
         realm,
         PrincipalName::NT_SRV_INST,

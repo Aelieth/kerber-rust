@@ -9,8 +9,8 @@ use krb5_crypto::{
 };
 use krb5_protocol::{ReplayCache, ReplayKey};
 use krb5_types::{
-    AsReq, EncryptedData, EncryptionKey, KerberosTime, MethodData, Microseconds, PaData,
-    PrincipalName, TypedData, TypedDataList, err, ku, pa,
+    AsReq, EncryptedData, EncryptionKey, KdcReqBody, KerberosTime, MethodData, Microseconds,
+    PaData, PrincipalName, TypedData, TypedDataList, err, flag_bit, ku, pa,
 };
 
 use crate::error::Error;
@@ -522,7 +522,7 @@ pub(crate) fn process_pkinit(
     body_der: &[u8],
     cname: &PrincipalName,
     realm: &str,
-) -> Result<Option<(ProtocolKey, PaData)>, Error> {
+) -> Result<Option<(ProtocolKey, PaData, bool)>, Error> {
     let Some(raw) = find_pa(padata, pa::PK_AS_REQ) else {
         return Ok(None);
     };
@@ -534,39 +534,61 @@ pub(crate) fn process_pkinit(
     let ca = store
         .pkinit_ca()
         .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
-    let verified = krb5_types::pkinit::cms_verify_full(&cms, &ca.ca_cert).map_err(|e| {
-        tracing::error!(
-            event = "kdc.pkinit",
-            component = "krb5-kdc",
-            outcome = "error",
-            error = e,
-            cms_len = cms.len()
-        );
-        proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED)
-    })?;
     let req_cname = decode::<AsReq>(as_req_der)
         .ok()
         .and_then(|r| r.0.req_body.cname)
         .unwrap_or_else(|| cname.clone());
-    if verified.e_content_type.as_slice() != krb5_types::pkinit::ECONTENT_AUTHDATA {
-        tracing::error!(
-            event = "kdc.pkinit",
-            component = "krb5-kdc",
-            outcome = "error",
-            error = "pkinit eContentType"
-        );
-        return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
-    }
-    if let Err(e) = krb5_types::pkinit::require_client_pkinit_cert(&verified.cert, cname, realm) {
-        tracing::error!(
-            event = "kdc.pkinit",
-            component = "krb5-kdc",
-            outcome = "error",
-            error = e
-        );
-        return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
-    }
-    let inner = verified.e_content;
+    let (inner, is_signed) = match krb5_types::pkinit::cms_verify_full(&cms, &ca.ca_cert) {
+        Ok(verified) => {
+            if verified.e_content_type.as_slice() != krb5_types::pkinit::ECONTENT_AUTHDATA {
+                tracing::error!(
+                    event = "kdc.pkinit",
+                    component = "krb5-kdc",
+                    outcome = "error",
+                    error = "pkinit eContentType"
+                );
+                return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
+            }
+            if let Err(e) =
+                krb5_types::pkinit::require_client_pkinit_cert(&verified.cert, cname, realm)
+            {
+                tracing::error!(
+                    event = "kdc.pkinit",
+                    component = "krb5-kdc",
+                    outcome = "error",
+                    error = e
+                );
+                return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
+            }
+            (verified.e_content, true)
+        }
+        Err(e) => {
+            let Some(inner) = krb5_types::pkinit::cms_extract_unsigned(&cms) else {
+                tracing::error!(
+                    event = "kdc.pkinit",
+                    component = "krb5-kdc",
+                    outcome = "error",
+                    error = e,
+                    cms_len = cms.len()
+                );
+                return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
+            };
+            // pkinit_srv.c:508-516: WITH-realm after do_as_req.c:718-734 rewrite
+            // (`request->client` is WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS).
+            // Rewrite runs only for REQUEST_ANONYMOUS + an anonymous name.
+            let rewritten = decode::<KdcReqBody>(body_der)
+                .is_ok_and(|b| b.kdc_options.bit(flag_bit::ANONYMOUS))
+                && krb5_types::pkinit::is_anonymous_principal(cname);
+            if !rewritten {
+                return Err(proto_d(
+                    err::PREAUTH_FAILED,
+                    status::PREAUTH_FAILED,
+                    "Pkinit request not signed, but client not anonymous.",
+                ));
+            }
+            (inner, false)
+        }
+    };
     if let Err(e) = krb5_types::pkinit::authpack_pa_checksum_ok(&inner, body_der) {
         tracing::error!(
             event = "kdc.pkinit",
@@ -599,7 +621,7 @@ pub(crate) fn process_pkinit(
     if store.pa_replay().check_and_store(rkey) {
         return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
     }
-    let (nonce, spki) = krb5_types::pkinit::parse_authpack(&inner).ok_or_else(|| {
+    let (nonce, spki) = krb5_types::pkinit::parse_authpack_maybe_dh(&inner).ok_or_else(|| {
         tracing::error!(
             event = "kdc.pkinit",
             component = "krb5-kdc",
@@ -610,6 +632,17 @@ pub(crate) fn process_pkinit(
         );
         proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED)
     })?;
+    let Some(spki) = spki else {
+        return Err(if is_signed {
+            dh_params_not_accepted(store, cname)
+        } else {
+            proto_d(
+                err::PREAUTH_FAILED,
+                status::PREAUTH_FAILED,
+                "Anonymous pkinit without DH public value not supported.",
+            )
+        });
+    };
     let agile = krb5_types::pkinit::authpack_wants_sha256_kdf(&inner);
     let (z, info) = if let Some(peer) = krb5_types::pkinit::decode_ec_spki(&spki) {
         let kp = p256_generate()?;
@@ -673,14 +706,7 @@ pub(crate) fn process_pkinit(
             outcome = "ok",
             detail = "rfc8636 sha256 kdf",
         );
-        let parts: Vec<String> = req_cname
-            .name_string
-            .iter()
-            .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
-            .collect();
-        let prefs: Vec<&str> = parts.iter().map(String::as_str).collect();
-        let party_u =
-            krb5_types::pkinit::encode_krb5_principal_name(realm, req_cname.name_type, &prefs);
+        let party_u = krb5_types::pkinit::encode_party_u(&req_cname, realm);
         let party_v = krb5_types::pkinit::encode_krb5_principal_name(
             realm,
             PrincipalName::NT_SRV_INST,
@@ -702,7 +728,7 @@ pub(crate) fn process_pkinit(
         padata_type: pa::PK_AS_REP,
         padata_value: pa_bytes.into(),
     };
-    Ok(Some((reply_key, pa)))
+    Ok(Some((reply_key, pa, is_signed)))
 }
 
 fn pad_z(shared: &[u8], modulus_len: usize) -> Vec<u8> {

@@ -180,6 +180,11 @@ pub fn compare_preauth_e_data(a: Option<&[u8]>, b: Option<&[u8]>) -> Result<(), 
         )));
     }
     if sa.contains(&pa::FX_FAST) {
+        // FAST-wrapped outer 25/24 is empty 136 only; cookie and ETYPE-INFO2
+        // live inside FX-ERROR (kdc_fast.c / prepare_error_as).
+        if sa == [pa::FX_FAST] {
+            return Ok(());
+        }
         if !sa.contains(&pa::FX_COOKIE) {
             return Err(DiffError(format!(
                 "PREAUTH METHOD-DATA missing {} rust={sa:?} mit={sb:?}",

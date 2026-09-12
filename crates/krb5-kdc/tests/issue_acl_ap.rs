@@ -1102,11 +1102,9 @@ fn as_request_reserved_option_bit_is_ignored_like_mit() {
 
 #[test]
 fn as_request_anonymous_from_named_client_is_validate_anonymous_principal() {
-    // do_as_req.c:717-724: REQUEST_ANONYMOUS demands the anonymous principal; a
-    // named client is KRB5KDC_ERR_BADOPTION "VALIDATE_ANONYMOUS_PRINCIPAL",
-    // fired after preauth (validate_as_request lets the bit through, unlike a
-    // TGS-only option). A valid PA-ENC-TIMESTAMP takes us past preauth so the
-    // reply-phase check runs.
+    // do_as_req.c:718-724: REQUEST_ANONYMOUS demands the anonymous principal; a
+    // named client is KRB5KDC_ERR_BADOPTION "VALIDATE_ANONYMOUS_PRINCIPAL"
+    // before check_padata. validate_as_request lets the bit through.
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = client_key();

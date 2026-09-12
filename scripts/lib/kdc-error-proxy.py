@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""UDP proxy that prints KRB-ERROR error-code, e-text, and e_data types.
+"""UDP proxy that prints KRB-ERROR error-code, e-text, client, and e_data types.
 
 usage: kdc-error-proxy.py <listen-port> <kdc-host> <kdc-port> [out-file]
+
+Context tags [7]/[8] are crealm/cname so a hide-client-names error can be
+checked without decoding the PDU in the gate script.
 """
 from __future__ import annotations
 
@@ -92,20 +95,52 @@ def parse_edata_types(edata: bytes) -> tuple[str, list[int]]:
     return enc, types
 
 
-def parse_krb_error(pdu: bytes) -> tuple[int | None, str | None, str, list[int]]:
+def _general_string(val: bytes) -> str:
+    try:
+        return val.decode("ascii")
+    except UnicodeDecodeError:
+        return val.decode("latin-1", "replace")
+
+
+def parse_principal_name(val: bytes) -> str | None:
+    """Decode a PrincipalName SEQUENCE (or its unwrapped body) into `comp/comp`."""
+    if val and val[0] == 0x30:
+        _, seq, _ = _tlv(val, 0)
+        val = seq
+    i = 0
+    parts: list[str] = []
+    while i < len(val):
+        tag, inner, i = _tlv(val, i)
+        if tag & 0xC0 != 0x80 or (tag & 0x1F) != 1:
+            continue
+        inner = _unwrap(inner, bool(tag & 0x20))
+        if inner and inner[0] == 0x30:
+            _, inner, _ = _tlv(inner, 0)
+        j = 0
+        while j < len(inner):
+            _, s, j = _tlv(inner, j)
+            parts.append(_general_string(s))
+    return "/".join(parts) if parts else None
+
+
+def parse_krb_error(
+    pdu: bytes,
+) -> tuple[int | None, str | None, str | None, str | None, str, list[int]]:
     if not pdu or pdu[0] != 0x7E:
-        return None, None, "none", []
+        return None, None, None, None, "none", []
     ln, i = _read_len(pdu, 1)
     end = i + ln
     if end > len(pdu):
         end = len(pdu)
     if i >= end or pdu[i] != 0x30:
-        return None, None, "none", []
+        return None, None, None, None, "none", []
     sln, i = _read_len(pdu, i + 1)
     seq_end = min(i + sln, end)
     code = None
     etext = None
     edata = None
+    crealm = None
+    cname = None
     while i < seq_end:
         if i >= len(pdu):
             break
@@ -125,15 +160,52 @@ def parse_krb_error(pdu: bytes) -> tuple[int | None, str | None, str, list[int]]
             val = val[inner : inner + iln]
         if num == 6:
             code = _int(val)
+        elif num == 7:
+            crealm = _general_string(val)
+        elif num == 8:
+            cname = parse_principal_name(val)
         elif num == 11:
-            try:
-                etext = val.decode("ascii")
-            except UnicodeDecodeError:
-                etext = val.decode("latin-1", "replace")
+            etext = _general_string(val)
         elif num == 12:
             edata = val
     enc, types = parse_edata_types(edata) if edata else ("none", [])
-    return code, etext, enc, types
+    return code, etext, crealm, cname, enc, types
+
+
+def parse_kdc_rep_client(pdu: bytes) -> tuple[str | None, str | None]:
+    """Outer crealm/cname of AS-REP (0x6b) or TGS-REP (0x6d)."""
+    if not pdu or pdu[0] not in (0x6B, 0x6D):
+        return None, None
+    ln, i = _read_len(pdu, 1)
+    end = min(i + ln, len(pdu))
+    if i >= end or pdu[i] != 0x30:
+        return None, None
+    sln, i = _read_len(pdu, i + 1)
+    seq_end = min(i + sln, end)
+    crealm = None
+    cname = None
+    while i < seq_end:
+        if i >= len(pdu):
+            break
+        tag = pdu[i]
+        if tag & 0xC0 != 0x80:
+            i = _skip_value(pdu, i)
+            continue
+        num = tag & 0x1F
+        constructed = tag & 0x20
+        i += 1
+        vln, i = _read_len(pdu, i)
+        val = pdu[i : i + vln]
+        i += vln
+        if constructed and val:
+            inner = 1
+            iln, inner = _read_len(val, 1)
+            val = val[inner : inner + iln]
+        if num == 3:
+            crealm = _general_string(val)
+        elif num == 4:
+            cname = parse_principal_name(val)
+    return crealm, cname
 
 
 def main() -> int:
@@ -164,9 +236,10 @@ def main() -> int:
         except socket.timeout:
             continue
         if reply[:1] == b"\x7e":
-            code, etext, enc, types = parse_krb_error(reply)
+            code, etext, crealm, cname, enc, types = parse_krb_error(reply)
             line = (
                 f"error_code={code}\ne_text={etext}\n"
+                f"crealm={crealm}\ncname={cname}\n"
                 f"e_data_encoding={enc}\ne_data_types={types}\n"
             )
             sys.stdout.write(line)

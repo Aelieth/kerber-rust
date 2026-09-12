@@ -134,6 +134,9 @@ DIFFSEND_CASES = frozenset(
         "ec-outside-fast",
         "tgs-rbcd-pac-options",
         "tgs-renew-header-end-before-start",
+        "as-anonymous-unsigned-authpack-named-client",
+        "as-fast-hide-error-client",
+        "tgs-fast-hide-client",
     }
 )
 _LEDGER_GATE = re.compile(r"(?:scripts/)?([A-Za-z0-9._-]+-gate(?:\.sh)?)")
@@ -1030,6 +1033,9 @@ def check_isolate_test_krb5(text: str | None = None) -> None:
     chunk = text[start : end if end > 0 else None]
     if re.search(r"temp_dir\(\)|/tmp/kerber-test-krb5", chunk):
         _die("isolate_test_krb5 writes host /tmp")
+    test_start = text.find("#[cfg(test)]")
+    if test_start >= 0 and "temp_dir()" in text[test_start:]:
+        _die("cfg(test) writes host /tmp via temp_dir()")
 
 
 def check_no_host_tmp_writes(text: str | None = None, name: str = "gate.sh") -> None:
@@ -2573,7 +2579,7 @@ jobs:
     finally:
         subprocess.run(["rm", "-rf", str(fake_mit)], check=False)
     _must_die(check_ledger_anchors, _row("krb5-kdc/plugins.rs advertise", verdict="absent"))
-    check_ledger_anchors(_row("krb5-kdc/plugins.rs advertise:117", verdict="absent"))
+    check_ledger_anchors(_row("krb5-kdc/plugins.rs advertise:119", verdict="absent"))
     _must_die(check_ledger_anchors, _row("krb5-kdc/plugins.rs advertise:1", verdict="absent"))
     _must_die(check_ledger_anchors, _row("krb5-kdc/listen.rs handle_tcp", "no status word"))
     _must_die(check_ledger_anchors, _row("krb5-kdc/listen.rs handle_tcp", proof="`no_such_unit_anywhere`"))
@@ -2745,6 +2751,7 @@ jobs:
         'echo "cat <<EOF"\necho ok\ncat <<<hello\n# <<EOF\n',
         "ok-quoted-and-comment-heredoc.sh",
     )
+    # A'-3 R34: _must_die(check_isolate_test_krb5) unless a temp_dir() isolate helper is refused.
     check_isolate_test_krb5(
         "fn isolate_scratch_dir() -> PathBuf {\n    PathBuf::from(\"target\").join(\"test-krb5\")\n}\n"
         "pub fn isolate_test_krb5() {\n    let dir = isolate_scratch_dir();\n}\n"
@@ -2754,6 +2761,12 @@ jobs:
         "pub fn isolate_test_krb5() {\n"
         "    let path = std::env::temp_dir().join(\"kerber-test-krb5-1.conf\");\n"
         "}\n",
+    )
+    _must_die(
+        check_isolate_test_krb5,
+        "fn isolate_scratch_dir() -> PathBuf { PathBuf::from(\"target/test-krb5\") }\n"
+        "pub fn isolate_test_krb5() {\n    let dir = isolate_scratch_dir();\n}\n"
+        "#[cfg(test)]\nmod tests {\n    fn f() { let _ = std::env::temp_dir(); }\n}\n",
     )
     check_unit_evidence_helper()
     check_settle_helper()

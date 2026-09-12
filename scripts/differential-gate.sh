@@ -136,7 +136,7 @@ if "spake_preauth_groups" not in t:
     t = t.replace("[libdefaults]", "[libdefaults]\n    spake_preauth_groups = P-256", 1)
 p.write_text(t)
 k = Path("/etc/krb5kdc/kdc.conf")
-kt = k.read_text()
+kt = k.read_text(); kt = kt.replace("[kdcdefaults]", "[kdcdefaults]\n    pkinit_identity = FILE:/tmp/pkinit/kdc.pem\n    pkinit_anchors = FILE:/tmp/pkinit/ca.pem\n    pkinit_dh_min_bits = P-256", 1) if "pkinit_identity" not in kt else kt
 if "kdcauthdata" not in kt:
     kt += """
 [plugins]
@@ -152,7 +152,7 @@ docker exec -d \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KERBER_KDC_GREET=1 \
-    "$NAME" sh -c '/tmp/krb5-kdc --export-keytab /tmp/host.keytab --export-krbtgt-keytab /tmp/krbtgt.keytab 127.0.0.1:8888 >/tmp/rust-kdc.log 2>&1'
+    "$NAME" sh -c '/tmp/krb5-kdc --export-keytab /tmp/host.keytab --export-krbtgt-keytab /tmp/krbtgt.keytab --export-pkinit /tmp/pkinit 127.0.0.1:8888 >/tmp/rust-kdc.log 2>&1'
 
 ok=0
 for _ in $(seq 1 80); do
@@ -167,7 +167,7 @@ done
     die "rust kdc did not listen on 8888"
 }
 docker exec "$NAME" test -f /tmp/krbtgt.keytab || die "krbtgt keytab missing"
-docker exec "$NAME" test -f /tmp/host.keytab || die "host keytab missing"
+docker exec "$NAME" test -f /tmp/host.keytab -a -s /tmp/pkinit/ca.pem -a -s /tmp/pkinit/kdc.pem || die "host keytab or pkinit pem missing"
 
 echo "==== load identical dump into MIT krb5kdc on :88 ===="
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
@@ -198,7 +198,7 @@ done
 [ "$ok" = 1 ] || die "MIT krb5kdc did not listen on 88"
 grep -q 'Address already in use' <<<"$STARTLOG" && die "MIT krb5kdc could not bind :88"
 grep -q 'setting up network' <<<"$STARTLOG" || die "MIT krb5kdc did not start"
-grep -qi 'spake failed to initialize' <<<"$STARTLOG" && die "MIT SPAKE preauth did not initialize"
+grep -qiE 'spake failed to initialize|pkinit failed to initialize' <<<"$STARTLOG" && die "MIT SPAKE/PKINIT preauth did not initialize"
 echo "==== diffsend build-once/send-twice ===="
 set +e
 DIFF="$(docker exec \
@@ -242,7 +242,7 @@ grep -q '"case":"as-invalid-opts","outcome":"ok","error_code":13' <<<"$DIFF" || 
 grep -q '"case":"as-request-anonymous","outcome":"ok","error_code":13,"e_text":"VALIDATE_ANONYMOUS_PRINCIPAL","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "as-request-anonymous not code 13 e_text VALIDATE_ANONYMOUS_PRINCIPAL on both legs"
 grep -q '"case":"as-validate-before-preauth","outcome":"ok","error_code":23' <<<"$DIFF" || die "as-validate-before-preauth (preauth+needchange) not code 23 on both legs"
 grep -q '"case":"as-retransmit","outcome":"ok","rust_retransmit_identical":true,"mit_retransmit_identical":true' <<<"$DIFF" || die "as-retransmit reply not identical from the lookaside on both legs"
-grep -q '"outcome":"ok","cases":102' <<<"$DIFF" || die "diffsend did not finish 102 cases"
+grep -q '"outcome":"ok","cases":105' <<<"$DIFF" || die "diffsend did not finish 105 cases" # A'-3 R32: "outcome":"ok","cases":102"
 grep -q '"case":"fast-armor-no-subkey","outcome":"ok","error_code":12,"e_text":"FIND_FAST","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "fast-armor-no-subkey not code 12 e_text FIND_FAST on both legs"
 grep -q '"case":"armor-ap-req-as-pa-tgs-req","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "armor-ap-req-as-pa-tgs-req not code 12 e_text PROCESS_TGS on both legs"
 grep -q '"case":"tgs-ad-fx-armor-authenticator","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-ad-fx-armor-authenticator not code 12 e_text PROCESS_TGS on both legs"
@@ -252,7 +252,7 @@ grep -q '"case":"tgs-bad-msg-type","outcome":"ok","error_code":60,"e_text":"UNKN
 grep -q '"case":"as-service-not-allowed","outcome":"ok","error_code":27,"e_text":"SERVICE NOT ALLOWED","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "as-service-not-allowed not code 27 e_text SERVICE NOT ALLOWED on both legs"
 grep -q '"case":"tgs-ap-options","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-ap-options not code 12 e_text PROCESS_TGS on both legs"
 grep -q '"case":"tgs-header-kvno-zero","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"' <<<"$DIFF" || die "tgs-header-kvno-zero not TGS-REP on both legs"
-grep -q '"case":"as-hw-preauth","outcome":"ok","error_code":25,"e_text":"NEEDED_HW_PREAUTH","e_data_types":\[19,133,136\],"rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "as-hw-preauth not code 25 with e_data_types [19,133,136] on both legs"
+grep -q '"case":"as-hw-preauth","outcome":"ok","error_code":25,"e_text":"NEEDED_HW_PREAUTH","e_data_types":\[16,19,133,136\],"rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "as-hw-preauth not code 25 with e_data_types [16,19,133,136] on both legs"
 grep -q '"case":"as-spake-round1","outcome":"ok","error_code":91,"e_text":"PREAUTH_FAILED"' <<<"$DIFF" || die "as-spake-round1 not code 91 e_text PREAUTH_FAILED on both legs"
 grep -E '"case":"as-spake-round1".*"e_data_types":\[.*19.*133.*151.*\]' <<<"$DIFF" || die "as-spake-round1 e_data_types missing 19/133/151"
 grep -q '"case":"u2u-2nd-ticket-unknown-server","outcome":"ok","error_code":7,"e_text":"2ND_TKT_SERVER","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "u2u-2nd-ticket-unknown-server not code 7 e_text 2ND_TKT_SERVER on both legs"
@@ -320,7 +320,7 @@ grep -q '"case":"tgs-body-authdata-subkey","outcome":"ok","rust_tag":"0x6d","mit
 grep -q '"case":"tgs-body-authdata-session-ku5","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","copied":true' <<<"$DIFF" || die "tgs-body-authdata-session-ku5 not copied on both legs"
 grep -q '"case":"tgs-tgt-and-or-kept","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","kept":true,"dummy_stripped":true' <<<"$DIFF" || die "tgs-tgt-and-or-kept not keep/strip on both legs"
 grep -q '"case":"tgs-truncated-cammac","outcome":"ok","error_code":60,"e_text":"GET_AUTH_INDICATORS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-truncated-cammac not code 60 e_text GET_AUTH_INDICATORS on both legs"
-grep -qF '"case":"ec-outside-fast","outcome":"ok","error_code":24,"e_text":"PREAUTH_FAILED","e_data_types":[2,19,133,136,151],"rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "ec-outside-fast not code 24 e_text PREAUTH_FAILED on both legs"
+grep -qF '"case":"ec-outside-fast","outcome":"ok","error_code":24,"e_text":"PREAUTH_FAILED","e_data_types":[2,16,19,133,136,147,151],"rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "ec-outside-fast not code 24 e_text PREAUTH_FAILED on both legs" # A'-3: "case":"ec-outside-fast","outcome":"ok","error_code":24,"e_text":"PREAUTH_FAILED","e_data_types":[2,19,133,136,151],"rust_tag":"0x7e","mit_tag":"0x7e"
 grep -q '"case":"tgs-rbcd-pac-options","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","pac_options":true' <<<"$DIFF" || die "tgs-rbcd-pac-options not PAC-OPTIONS enc_padata on both legs"
 grep -q '"case":"tgs-till-in-past","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"' <<<"$DIFF" || die "tgs-till-in-past not TGS-REP on both legs"
 grep -q '"case":"tgs-service-expired-require-auth","outcome":"ok","error_code":2,"e_text":"SERVICE EXPIRED","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-service-expired-require-auth not code 2 e_text SERVICE EXPIRED on both legs"
@@ -332,10 +332,10 @@ HINT_ORDER="$(docker exec "$NAME" python3 -c '
 import importlib.machinery
 p = importlib.machinery.SourceFileLoader("proxy", "/tmp/kdc-padata-proxy.py").load_module()
 want = {
-    "pauser-no-preauth": (25, [136, 19, 151, 2, 133]),
-    "as-hw-preauth": (25, [136, 19, 133]),
+    "pauser-no-preauth": (25, [136, 19, 16, 147, 151, 2, 133]),
+    "as-hw-preauth": (25, [136, 19, 16, 133]),
     "as-spake-round1": (91, [151, 19, 133]),
-    "ec-outside-fast": (24, [136, 19, 151, 2, 133]),
+    "ec-outside-fast": (24, [136, 19, 16, 147, 151, 2, 133]),
 }
 for case, (wcode, wtypes) in want.items():
     for leg in ("rust", "mit"):
@@ -348,12 +348,15 @@ print("hint-order-ok")
 ')"
 echo "$HINT_ORDER"
 grep -qF 'hint-order-ok' <<<"$HINT_ORDER" || die "25/91 hint e_data wire order mismatch"
-grep -qF 'pauser-no-preauth.mit code=25 enc=method types=[136, 19, 151, 2, 133]' <<<"$HINT_ORDER" || die "MIT_HINT 25 hint list not [136, 19, 151, 2, 133]"
+grep -qF 'pauser-no-preauth.mit code=25 enc=method types=[136, 19, 16, 147, 151, 2, 133]' <<<"$HINT_ORDER" || die "MIT_HINT 25 hint list not [136, 19, 16, 147, 151, 2, 133]" # A'-3: [136, 19, 151, 2, 133]
 grep -qF 'as-spake-round1.mit code=91 enc=method types=[151, 19, 133]' <<<"$HINT_ORDER" || die "MIT_HINT 91 e_data not [151, 19, 133]"
 grep -qF 'as-spake-round1.rust code=91 enc=method types=[151, 19, 133]' <<<"$HINT_ORDER" || die "rust_hint 91 e_data not [151, 19, 133]"
 # W1-K M2b: the differential oracle has no case-name whitelist; no diffsend line
 # may carry a "whitelist" key.
 grep -q '"whitelist"' <<<"$DIFF" && die "diffsend emitted a whitelist key; M2b bans case-name whitelists"
+grep -q '"case":"as-anonymous-unsigned-authpack-named-client","outcome":"ok","error_code":24' <<<"$DIFF" || die "as-anonymous-unsigned-authpack-named-client not code 24 on both legs"
+grep -q '"case":"as-fast-hide-error-client","outcome":"ok","error_code":25' <<<"$DIFF" || die "as-fast-hide-error-client not code 25 on both legs"
+grep -q '"case":"tgs-fast-hide-client","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","hidden":true' <<<"$DIFF" || die "tgs-fast-hide-client not hidden TGS-REP on both legs"
 
 echo "==== 128 KiB padded AS-REQ and 1 MiB+1 TCP cap both legs ===="
 TCP_CAP="$(docker exec "$NAME" python3 -c '
@@ -589,5 +592,26 @@ echo "RUST_krbtgt_rekey_renew rc=${rustren_rc}"
     die "rust RENEW after krbtgt rekey failed"
 }
 grep -q 'kvno =' <<<"$RUSTREN" || die "rust RENEW after rekey missing kvno"
+echo "==== hide-client-names outer AS error both legs (kdc-error-proxy) ===="
+docker cp "$ROOT/scripts/lib/kdc-error-proxy.py" "$NAME":/tmp/kdc-error-proxy.py
+HIDE_CLIENT="$(docker exec "$NAME" python3 -c '
+import importlib.machinery
+p = importlib.machinery.SourceFileLoader("proxy", "/tmp/kdc-error-proxy.py").load_module()
+for leg in ("rust", "mit"):
+    data = open(f"/tmp/diff-corpus/as-fast-hide-error-client.{leg}.der", "rb").read()
+    code, etext, crealm, cname, enc, types = p.parse_krb_error(data)
+    print(f"{leg} code={code} crealm={crealm} cname={cname}")
+    if crealm != "WELLKNOWN:ANONYMOUS" or cname != "WELLKNOWN/ANONYMOUS":
+        raise SystemExit(f"{leg} hide-client want anonymous got {crealm} {cname}")
+for leg in ("rust", "mit"):
+    data = open(f"/tmp/diff-corpus/tgs-fast-hide-client.{leg}.der", "rb").read()
+    crealm, cname = p.parse_kdc_rep_client(data)
+    print(f"{leg} tgs crealm={crealm} cname={cname}")
+    if crealm != "WELLKNOWN:ANONYMOUS" or cname != "WELLKNOWN/ANONYMOUS":
+        raise SystemExit(f"{leg} tgs hide-client want anonymous got {crealm} {cname}")
+print("hide-client-ok")
+')"
+echo "$HIDE_CLIENT"
+grep -qF 'hide-client-ok' <<<"$HIDE_CLIENT" || die "hide-client-names outer AS error not anonymous on both legs"
 log "differential.gate" "ok" ',"same_db":true,"transport":"tcp"'
 exit 0

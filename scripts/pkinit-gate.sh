@@ -38,6 +38,8 @@ docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmin-local" "$NAME":/tmp/krb5-kadmin-local
 docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb /tmp/krb5-kadmin-local
 docker exec "$NAME" sh -c 'cat > /tmp/rust-kdc.conf <<EOF
+[kdcdefaults]
+    restrict_anonymous_to_tgt = true
 [realms]
     KERBER.TEST = {
         pkinit_indicator = pkinit
@@ -280,7 +282,62 @@ EOF"
         exit 1
     }
 
-    log "pkinit.gate" "ok" ',"mode":"mit-kinit","kdf":"rfc8636-sha256","mit_plugin":"present","san_mismatch":"refused","dh_typed":"typed+cookie","pkinit_require_auth":"issued+12","pkinit_h":false,"no_hw_preauth":60'
+    echo "==== anonymous PKINIT + restrict_anon kvno → 12 ===="
+    ADDANON="$(docker exec \
+        -e KRB5_KDC_DB=/tmp/rust.db \
+        -e KRB5_KDC_STASH=/tmp/rust.stash \
+        "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey WELLKNOWN/ANONYMOUS')"
+    echo "$ADDANON"
+    echo "$ADDANON" | grep -qi created || {
+        log "pkinit.gate" "error" ',"error":"addprinc WELLKNOWN/ANONYMOUS failed"'
+        exit 1
+    }
+    ADDHOST="$(docker exec \
+        -e KRB5_KDC_DB=/tmp/rust.db \
+        -e KRB5_KDC_STASH=/tmp/rust.stash \
+        "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey host/anonrestrict.kerber.test')"
+    echo "$ADDHOST"
+    echo "$ADDHOST" | grep -qi created || {
+        log "pkinit.gate" "error" ',"error":"addprinc host/anonrestrict.kerber.test failed"'
+        exit 1
+    }
+    docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
+    docker exec "$NAME" sh -c ': >/tmp/kdc.log'
+    set +e
+    docker exec -e KRB5_TRACE=/dev/stderr "$NAME" kinit -n
+    anonrc=$?
+    set -e
+    if [ "$anonrc" -ne 0 ]; then
+        docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
+        log "pkinit.gate" "error" ',"error":"MIT kinit -n vs rust KDC failed","rc":'"$anonrc"
+        exit 1
+    fi
+    ANONL="$(docker exec "$NAME" klist)"
+    echo "$ANONL"
+    echo "$ANONL" | grep -q 'WELLKNOWN/ANONYMOUS' || {
+        log "pkinit.gate" "error" ',"error":"klist after kinit -n missing WELLKNOWN/ANONYMOUS"'
+        exit 1
+    }
+    echo "$ANONL" | grep -q 'WELLKNOWN:ANONYMOUS' || {
+        log "pkinit.gate" "error" ',"error":"klist after kinit -n missing WELLKNOWN:ANONYMOUS"'
+        exit 1
+    }
+    set +e
+    ANONKV="$(docker exec "$NAME" kvno host/anonrestrict.kerber.test 2>&1)"
+    set -e
+    echo "$ANONKV"
+    echo "$ANONKV" | grep -q 'KDC policy rejects request' || {
+        docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
+        log "pkinit.gate" "error" ',"error":"kvno after kinit -n missing KDC policy rejects request"'
+        exit 1
+    }
+    docker exec "$NAME" grep -q 'ANONYMOUS NOT ALLOWED' /tmp/kdc.log || {
+        docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
+        log "pkinit.gate" "error" ',"error":"rust KDC log missing ANONYMOUS NOT ALLOWED"'
+        exit 1
+    }
+
+    log "pkinit.gate" "ok" ',"mode":"mit-kinit","kdf":"rfc8636-sha256","mit_plugin":"present","san_mismatch":"refused","dh_typed":"typed+cookie","pkinit_require_auth":"issued+12","pkinit_h":false,"no_hw_preauth":60,"anon_kinit":true,"restrict_anon":12'
     exit 0
 fi
 echo "MIT kinit with FILE identity failed (rc=$rc)"

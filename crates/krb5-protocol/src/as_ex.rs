@@ -4,11 +4,12 @@ use std::time::Instant;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, p256_generate, string_to_key,
+    EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, krb_fx_cf2, p256_generate,
+    string_to_key,
 };
 use krb5_types::{
-    AsRep, AsReq, EncKdcRepPart, EncryptedData, EtypeInfo, EtypeInfo2, KdcOptions, KdcReq,
-    KdcReqBody, KerberosTime, KrbError, MethodData, PaData, PaEncTsEnc, PrincipalName, err,
+    AsRep, AsReq, EncKdcRepPart, EncryptedData, EncryptionKey, EtypeInfo, EtypeInfo2, KdcOptions,
+    KdcReq, KdcReqBody, KerberosTime, KrbError, MethodData, PaData, PaEncTsEnc, PrincipalName, err,
     flag_bit, ku, pa,
 };
 use sha1::{Digest, Sha1};
@@ -86,6 +87,8 @@ pub struct AsTicketOpts {
     pub proxiable: bool,
     /// Host addresses (`-a`). `None` omits the field.
     pub addresses: Option<krb5_types::HostAddresses>,
+    /// `kinit -n`: REQUEST_ANONYMOUS + unsigned PKINIT.
+    pub anonymous: bool,
 }
 
 impl Default for AsTicketOpts {
@@ -96,6 +99,7 @@ impl Default for AsTicketOpts {
             forwardable: true,
             proxiable: false,
             addresses: None,
+            anonymous: false,
         }
     }
 }
@@ -215,7 +219,7 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
     if req.fast_armor.is_some() {
         return continue_fast(req, keys, nonce, till.clone(), &etypes);
     }
-    if req.pkinit.is_some() {
+    if req.pkinit.is_some() || req.ticket.anonymous {
         return continue_pkinit(req, nonce, till, &etypes);
     }
     let support = req.want_spake.then(pa_spake_support);
@@ -774,7 +778,12 @@ fn continue_pkinit(
     let mut h = Sha1::new();
     h.update(&body_der);
     let sha1 = h.finalize();
-    let pa = pa_pk_as_req_signed(&kp.public, &pk.cert, &pk.key, nonce, &sha1)?;
+    let anonymous = req.ticket.anonymous || krb5_types::pkinit::is_anonymous_principal(&req.cname);
+    let pa = if anonymous {
+        crate::preauth::pa_pk_as_req_unsigned(&kp.public, nonce, &sha1)?
+    } else {
+        pa_pk_as_req_signed(&kp.public, &pk.cert, &pk.key, nonce, &sha1)?
+    };
     // MIT appends PA-AS-FRESHNESS/PA-REQ-ENC-PA-REP (150/149) after the preauth
     // module's PA data, so PA-PK-AS-REQ (16) leads the list.
     req2.0.padata.get_or_insert_with(Vec::new).insert(0, pa);
@@ -963,14 +972,20 @@ fn finish_as_rep(
     if let Some(rd) = req_der {
         crate::preauth::verify_req_enc_pa_rep(&enc_part, &key, rd)?;
     }
+    let expect_anon = krb5_types::pkinit::is_anonymous_principal(cname);
     if inner.cname != *cname {
         let enterprise = cname.name_type == PrincipalName::NT_ENTERPRISE;
-        if !(canonicalize || enterprise) || inner.cname.name_string.is_empty() {
+        let anon_ok = expect_anon && krb5_types::pkinit::is_anonymous_principal(&inner.cname);
+        if !anon_ok && (!(canonicalize || enterprise) || inner.cname.name_string.is_empty()) {
             return Err(Error::ReplyMismatch("AS-REP cname mismatch".into()));
         }
     }
     if inner.crealm.as_bytes() != realm.as_bytes() {
-        return Err(Error::ReplyMismatch("AS-REP crealm mismatch".into()));
+        let anon_realm = expect_anon
+            && inner.crealm.as_bytes() == krb5_types::pkinit::ANONYMOUS_REALM.as_bytes();
+        if !anon_realm {
+            return Err(Error::ReplyMismatch("AS-REP crealm mismatch".into()));
+        }
     }
     as_sname_eq(
         &enc_part.sname,
@@ -991,6 +1006,9 @@ fn finish_as_rep(
     let now = i64::from(KerberosTime::now().unix_seconds());
     check_as_rep_times(&enc_part, now, 300)?;
     as_sname_eq(&enc_part.sname, expected_sname, "AS-REP sname mismatch")?;
+    if expect_anon {
+        verify_anonymous(inner.padata.as_deref(), &key, &enc_part)?;
+    }
     let session_etype = EncryptionType::known(enc_part.key.keytype)?;
     let session_key = ProtocolKey::from_bytes(session_etype, enc_part.key.keyvalue.as_ref())?;
     let fast_avail = enc_part.flags.enc_pa_rep()
@@ -1009,6 +1027,35 @@ fn finish_as_rep(
         used_fast,
         pa_type,
     })
+}
+
+fn verify_anonymous(
+    padata: Option<&[PaData]>,
+    as_key: &ProtocolKey,
+    enc_part: &EncKdcRepPart,
+) -> Result<(), Error> {
+    let raw = padata
+        .and_then(|v| v.iter().find(|p| p.padata_type == pa::PKINIT_KX))
+        .ok_or_else(|| {
+            Error::ReplyMismatch("Reply has wrong form of session key for anonymous request".into())
+        })?;
+    let enc: EncryptedData = decode(raw.padata_value.as_ref())?;
+    let usage = KeyUsage::new(ku::PA_PKINIT_KX)?;
+    let plain = decrypt(as_key, usage, enc.cipher.as_ref())?;
+    let kdc_key: EncryptionKey = decode(&plain)?;
+    let contrib = ProtocolKey::from_bytes(
+        EncryptionType::known(kdc_key.keytype)?,
+        kdc_key.keyvalue.as_ref(),
+    )?;
+    let expected = krb_fx_cf2(&contrib, as_key, b"PKINIT", b"KEYEXCHANGE")?;
+    if expected.etype().to_iana() != enc_part.key.keytype
+        || expected.as_bytes() != enc_part.key.keyvalue.as_ref()
+    {
+        return Err(Error::ReplyMismatch(
+            "Reply has wrong form of session key for anonymous request".into(),
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn as_sname_eq(
@@ -1188,6 +1235,9 @@ fn ticket_body(
     };
     if req.canonicalize {
         opts = opts.with_bit(flag_bit::CANONICALIZE, true);
+    }
+    if req.ticket.anonymous || krb5_types::pkinit::is_anonymous_principal(&req.cname) {
+        opts = opts.with_bit(flag_bit::ANONYMOUS, true);
     }
     (till, rtime, opts, req.ticket.addresses.clone())
 }

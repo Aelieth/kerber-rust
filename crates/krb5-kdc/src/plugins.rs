@@ -24,6 +24,8 @@ pub enum PreauthAction {
         key: ProtocolKey,
         /// PA-PK-AS-REP.
         pa: PaData,
+        /// CMS SignedData verified (MIT `is_signed`).
+        signed: bool,
     },
     /// SPAKE challenge METHOD-DATA.
     Challenge(Vec<u8>),
@@ -117,22 +119,24 @@ impl KdcPreauth for PkinitMod {
     fn advertise(
         &self,
         store: &dyn PrincipalRead,
-        _client: &Principal,
+        client: &Principal,
         _armor: bool,
     ) -> Vec<PaData> {
         if store.pkinit_ca().is_none() {
             return Vec::new();
         }
-        vec![
-            PaData {
-                padata_type: pa::PK_AS_REQ,
-                padata_value: Vec::<u8>::new().into(),
-            },
-            PaData {
+        let mut out = vec![PaData {
+            padata_type: pa::PK_AS_REQ,
+            padata_value: Vec::<u8>::new().into(),
+        }];
+        // pkinit_srv.c:928-929: PKINIT_KX is PA_INFO, not PA_HARDWARE.
+        if client.attributes & KDB_REQUIRES_HW_AUTH == 0 {
+            out.push(PaData {
                 padata_type: pa::PKINIT_KX,
                 padata_value: Vec::<u8>::new().into(),
-            },
-        ]
+            });
+        }
+        out
     }
     fn process_as(
         &self,
@@ -154,9 +158,9 @@ impl KdcPreauth for PkinitMod {
             cname,
             store.realm(),
         ) {
-            Ok(Some((key, pa))) => {
+            Ok(Some((key, pa, signed))) => {
                 store.record_as_outcome(cname, true);
-                Ok(Some(PreauthAction::Pkinit { key, pa }))
+                Ok(Some(PreauthAction::Pkinit { key, pa, signed }))
             }
             Ok(None) => Ok(None),
             Err(e) => {

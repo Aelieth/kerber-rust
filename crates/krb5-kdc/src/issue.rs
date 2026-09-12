@@ -181,7 +181,7 @@ fn handle_inner(
 /// KRB-ERROR with empty text (`make_too_big_error` / `make_toolong_error`).
 #[must_use]
 pub fn kdc_error_bytes(store: &dyn PrincipalRead, code: i32) -> Vec<u8> {
-    encode_krb_error(store, code, None, None, None)
+    encode_krb_error(store, code, None, None, None, false)
 }
 
 fn as_reply(
@@ -190,6 +190,7 @@ fn as_reply(
     raw: &[u8],
 ) -> Result<(Vec<u8>, Option<String>), Error> {
     let body = Some(&req.0.req_body);
+    let hide = peek_as_hides_client(store, req, raw);
     match issue_as_from(store, req, Some(raw)) {
         Ok(issued) => Ok((encode(&issued.rep)?, None)),
         Err(Error::PreauthRequired { e_data }) => Ok((
@@ -203,6 +204,7 @@ fn as_reply(
                     &e_data,
                 )),
                 body,
+                hide,
             ),
             None,
         )),
@@ -218,6 +220,7 @@ fn as_reply(
                 text.as_deref(),
                 e_data.map(|ed| prepare_as_edata(store, req.0.req_body.cname.as_ref(), &ed)),
                 body,
+                hide,
             ),
             detail.filter(|s| !s.is_empty()),
         )),
@@ -228,6 +231,7 @@ fn as_reply(
                 Some(status::PREAUTH_FAILED),
                 None,
                 body,
+                hide,
             ),
             Some(d).filter(|s| !s.is_empty()),
         )),
@@ -238,6 +242,7 @@ fn as_reply(
                 Some(status::UNKNOWN_REASON),
                 None,
                 body,
+                hide,
             ),
             Some(d).filter(|s| !s.is_empty()),
         )),
@@ -248,6 +253,7 @@ fn as_reply(
                 Some(status::LOOKING_UP_CLIENT),
                 None,
                 body,
+                hide,
             ),
             Some(e.to_string()).filter(|s| !s.is_empty()),
         )),
@@ -271,6 +277,7 @@ fn tgs_reply(
         None
     };
     let body = Some(&ebody);
+    let hide = peek_tgs_hides_client(store, req, raw, sender);
     match issue_tgs_from(store, req, Some(raw), sender) {
         Ok(issued) => Ok((encode(&issued.rep)?, None)),
         Err(Error::Protocol {
@@ -279,7 +286,7 @@ fn tgs_reply(
             e_data,
             detail,
         }) => Ok((
-            encode_krb_error(store, code, text.as_deref(), e_data, body),
+            encode_krb_error(store, code, text.as_deref(), e_data, body, hide),
             detail.filter(|s| !s.is_empty()),
         )),
         Err(Error::Crypto(d)) => Ok((
@@ -289,15 +296,30 @@ fn tgs_reply(
                 Some(status::PROCESS_TGS),
                 None,
                 body,
+                hide,
             ),
             Some(d).filter(|s| !s.is_empty()),
         )),
         Err(Error::Asn1(d)) => Ok((
-            encode_krb_error(store, err::GENERIC, Some(status::PROCESS_TGS), None, body),
+            encode_krb_error(
+                store,
+                err::GENERIC,
+                Some(status::PROCESS_TGS),
+                None,
+                body,
+                hide,
+            ),
             Some(d).filter(|s| !s.is_empty()),
         )),
         Err(e) => Ok((
-            encode_krb_error(store, err::GENERIC, Some(status::PROCESS_TGS), None, body),
+            encode_krb_error(
+                store,
+                err::GENERIC,
+                Some(status::PROCESS_TGS),
+                None,
+                body,
+                hide,
+            ),
             Some(e.to_string()).filter(|s| !s.is_empty()),
         )),
     }
@@ -358,7 +380,7 @@ fn issue_as_body(
     let client = store
         .fetch_name(&req_cname)?
         .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, status::CLIENT_NOT_FOUND))?;
-    let cname = if req_cname.name_type == PrincipalName::NT_ENTERPRISE
+    let mut cname = if req_cname.name_type == PrincipalName::NT_ENTERPRISE
         || body.kdc_options.bit(flag_bit::CANONICALIZE)
     {
         client.name.clone()
@@ -412,6 +434,17 @@ fn issue_as_body(
             proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED),
         ));
     }
+    // do_as_req.c:718-734: REQUEST_ANONYMOUS before check_padata. Named client
+    // is 13; WELLKNOWN/ANONYMOUS (any-realm) is rewritten to
+    // WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS and REQUIRES_PRE_AUTH is forced.
+    let mut anonymous_as = false;
+    if body.kdc_options.bit(flag_bit::ANONYMOUS) {
+        if !is_anonymous_principal(&req_cname) {
+            return Err(proto(err::BADOPTION, status::VALIDATE_ANONYMOUS_PRINCIPAL));
+        }
+        cname = anonymous_principal_name();
+        anonymous_as = true;
+    }
 
     let mut extra_padata: Vec<PaData> = Vec::new();
     let mut as_rep_key = ckey.key.clone();
@@ -435,13 +468,15 @@ fn issue_as_body(
     )
     .map_err(|e| attach_preauth_hint(store, &client, ckey, &body.etype, fast.is_some(), e))?
     {
-        Some(PreauthAction::Pkinit { key, pa }) => {
+        Some(PreauthAction::Pkinit { key, pa, signed }) => {
             as_rep_key = key;
             extra_padata.push(pa);
             skip_timestamp = true;
             reply_key_replaced = true;
-            for ind in &store.policy().pkinit_indicators {
-                authind_add(&mut auth_indicators, ind);
+            if signed {
+                for ind in &store.policy().pkinit_indicators {
+                    authind_add(&mut auth_indicators, ind);
+                }
             }
         }
         Some(PreauthAction::Challenge(e_data)) => {
@@ -506,7 +541,7 @@ fn issue_as_body(
             }
         }
     }
-    if client.requires_preauth && !skip_timestamp {
+    if (client.requires_preauth || anonymous_as) && !skip_timestamp {
         return Err(preauth_required(
             store,
             &client,
@@ -529,22 +564,16 @@ fn issue_as_body(
             detail: None,
         });
     }
-    // do_as_req.c:717-724: REQUEST_ANONYMOUS demands the anonymous principal;
-    // a named client asking for anonymity is KRB5KDC_ERR_BADOPTION
-    // "VALIDATE_ANONYMOUS_PRINCIPAL". MIT runs this in the reply-building phase
-    // after preauth, so a preauth-required client still gets PREAUTH_REQUIRED
-    // first. This KDC issues no anonymous tickets, so the client is never the
-    // anonymous principal and the option is refused here (validate_as_request
-    // deliberately lets the bit through, matching kdc_util.c:727).
-    if body.kdc_options.bit(flag_bit::ANONYMOUS) && !is_anonymous_principal(&req_cname) {
-        return Err(proto(err::BADOPTION, status::VALIDATE_ANONYMOUS_PRINCIPAL));
-    }
     current_policy().check_as(store, &client, &auth_indicators)?;
 
     let skey = server
         .first_current_key()
         .ok_or_else(|| proto(err::GENERIC, status::FINDING_SERVER_KEY))?;
-    let session = random_key(session_etype)?;
+    let mut session = random_key(session_etype)?;
+    if anonymous_as {
+        extra_padata.push(pa_pkinit_kx(&as_rep_key, &session)?);
+        session = krb_fx_cf2(&session, &as_rep_key, b"PKINIT", b"KEYEXCHANGE")?;
+    }
     let now = KerberosTime::now();
     let starttime = if body.kdc_options.bit(flag_bit::POSTDATED) {
         body.from
@@ -614,6 +643,11 @@ fn issue_as_body(
         None,
     )?;
     check_indicators(&server, &auth_indicators)?;
+    let issue_crealm = if anonymous_as {
+        ANONYMOUS_REALM
+    } else {
+        store.realm()
+    };
     let ticket = mint_ticket(
         &skey.key,
         skey.kvno,
@@ -621,7 +655,7 @@ fn issue_as_body(
         &session,
         store.realm(),
         &ticket_sname,
-        store.realm(),
+        issue_crealm,
         &cname,
         &now,
         &end,
@@ -654,7 +688,7 @@ fn issue_as_body(
     if let Some(f) = fast {
         let sk = random_key(etype)?;
         reply_key = krb_fx_cf2(&sk, &as_rep_key, b"strengthenkey", b"replykey")?;
-        let finished = fast_finished(&f.armor_key, &ticket, &cname, store.realm())?;
+        let finished = fast_finished(&f.armor_key, &ticket, &cname, issue_crealm)?;
         let inner = std::mem::take(&mut outer_padata);
         outer_padata = vec![wrap_fast_rep(
             &f.armor_key,
@@ -696,7 +730,7 @@ fn issue_as_body(
     let (rep_crealm, rep_cname) = if fast.is_some_and(|f| fast_hides_client(&f.fast_options)) {
         (ks(ANONYMOUS_REALM)?, anonymous_principal_name())
     } else {
-        (ks(store.realm())?, cname)
+        (ks(issue_crealm)?, cname)
     };
     let rep = AsRep(krb5_types::KdcRep {
         pvno: krb5_types::KdcRep::PVNO,
@@ -1132,6 +1166,7 @@ fn issue_tgs_body(
             is_referral,
         )?;
     }
+    check_anon(store, &enc_tkt.cname, &sname)?;
     let skip_transited = body.kdc_options.bit(flag_bit::DISABLE_TRANSITED_CHECK);
     let u2u = if body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY) {
         let st = stkt
@@ -1444,12 +1479,17 @@ fn issue_tgs_body(
     } else {
         s4u_rep_pa.map(|p| vec![p])
     };
+    let (rep_crealm, rep_cname) = if tgs_fast.is_some_and(|f| fast_hides_client(&f.fast_options)) {
+        (ks(ANONYMOUS_REALM)?, anonymous_principal_name())
+    } else {
+        (ks(&ticket_crealm)?, ticket_cname)
+    };
     let rep = TgsRep(krb5_types::KdcRep {
         pvno: krb5_types::KdcRep::PVNO,
         msg_type: krb5_types::KdcRep::MSG_TGS_REP,
         padata,
-        crealm: ks(&ticket_crealm)?,
-        cname: ticket_cname,
+        crealm: rep_crealm,
+        cname: rep_cname,
         ticket,
         enc_part: EncryptedData {
             etype: enc_key.etype().to_iana(),
@@ -2334,6 +2374,57 @@ fn fast_hides_client(opts: &krb5_types::fast::FastOptions) -> bool {
     opts.len() > FAST_HIDE_CLIENT_NAMES_BIT && opts[FAST_HIDE_CLIENT_NAMES_BIT]
 }
 
+fn peek_as_hides_client(store: &dyn PrincipalRead, req: &AsReq, raw: &[u8]) -> bool {
+    let encoded;
+    let body = if let Some(slice) = kdc_req_body_der(raw) {
+        slice
+    } else {
+        encoded = match encode(&req.0.req_body) {
+            Ok(b) => b,
+            Err(_) => return false,
+        };
+        &encoded
+    };
+    unwrap_fast(store, req, body)
+        .ok()
+        .flatten()
+        .is_some_and(|f| fast_hides_client(&f.fast_options))
+}
+
+fn peek_tgs_hides_client(
+    store: &dyn PrincipalRead,
+    req: &TgsReq,
+    raw: &[u8],
+    sender: Option<&HostAddress>,
+) -> bool {
+    let encoded;
+    let body = if let Some(slice) = kdc_req_body_der(raw) {
+        slice
+    } else {
+        encoded = match encode(&req.0.req_body) {
+            Ok(b) => b,
+            Err(_) => return false,
+        };
+        &encoded
+    };
+    let Some(pa_tgs) = extract_pa_tgs(req.0.padata.as_deref()) else {
+        return false;
+    };
+    let Ok(header) = process_tgs_header(store, pa_tgs.as_ref(), body, sender) else {
+        return false;
+    };
+    unwrap_fast_tgs(
+        store,
+        req.0.padata.as_deref(),
+        pa_tgs.as_ref(),
+        header.authenticator.subkey.as_ref(),
+        &header.session,
+    )
+    .ok()
+    .flatten()
+    .is_some_and(|f| fast_hides_client(&f.fast_options))
+}
+
 /// MIT `KRB5_ANONYMOUS_REALMSTR` (krb5.hin:305): the anonymous principal's realm.
 const ANONYMOUS_REALM: &str = "WELLKNOWN:ANONYMOUS";
 
@@ -2391,7 +2482,7 @@ fn wrap_as_fast(
     // MIT kdc_fast_handle_error (fast_util.c:384-386): the inner PA-FX-ERROR
     // KRB-ERROR has empty e_data; the caller's e_data (plus cookie) travels
     // as FAST inner padata next to FX-ERROR.
-    let inner_err = encode_krb_error(store, code, text.as_deref(), None, Some(body));
+    let inner_err = encode_krb_error(store, code, text.as_deref(), None, Some(body), false);
     padata.push(PaData {
         padata_type: pa::FX_ERROR,
         padata_value: inner_err.into(),
@@ -2502,6 +2593,7 @@ fn encode_krb_error(
     text: Option<&str>,
     e_data: Option<Vec<u8>>,
     body: Option<&krb5_types::KdcReqBody>,
+    hide_client: bool,
 ) -> Vec<u8> {
     // MIT 1.22.2 echoes the request realm/sname (C_PRINCIPAL_UNKNOWN for a
     // foreign-realm AS-REQ, not WRONG_REALM).
@@ -2533,7 +2625,14 @@ fn encode_krb_error(
             }
         }
     };
-    let cname = body.and_then(|b| b.cname.clone());
+    let mut cname = body.and_then(|b| b.cname.clone());
+    let mut crealm = cname.as_ref().map(|_| realm.clone());
+    // do_as_req.c:831-832 / do_tgs_req.c:235-236: FAST hide-client on the
+    // outer KRB-ERROR. Inner FX-ERROR keeps the real client.
+    if hide_client && cname.is_some() {
+        cname = Some(anonymous_principal_name());
+        crealm = ks(ANONYMOUS_REALM).ok();
+    }
     let pdu = KrbError {
         pvno: KrbError::PVNO,
         msg_type: KrbError::MSG_TYPE,
@@ -2546,7 +2645,7 @@ fn encode_krb_error(
         // sets errpkt.client from the decrypted header ticket, else NULL;
         // opt_realm_of_principal omits crealm when client is NULL
         // (do_tgs_req.c:201-204, asn1_k_encode.c:919).
-        crealm: cname.as_ref().map(|_| realm.clone()),
+        crealm,
         cname,
         realm,
         sname,
@@ -2673,6 +2772,41 @@ fn is_anonymous_principal(name: &PrincipalName) -> bool {
     name.components_eq(&anonymous_principal_name())
 }
 
+/// MIT `check_anon` (`kdc_util.c:702-713`): restrict_anon + anonymous client
+/// + non-local TGS → 12 `ANONYMOUS NOT ALLOWED`.
+fn check_anon(
+    store: &dyn PrincipalRead,
+    client: &PrincipalName,
+    server: &PrincipalName,
+) -> Result<(), Error> {
+    if store.policy().restrict_anon
+        && is_anonymous_principal(client)
+        && !server.is_local_tgs_principal(store.realm())
+    {
+        return Err(proto(err::POLICY, status::ANONYMOUS_NOT_ALLOWED));
+    }
+    Ok(())
+}
+
+fn pa_pkinit_kx(reply_key: &ProtocolKey, contrib: &ProtocolKey) -> Result<PaData, Error> {
+    let key = EncryptionKey {
+        keytype: contrib.etype().to_iana(),
+        keyvalue: contrib.as_bytes().to_vec().into(),
+    };
+    let plain = encode(&key)?;
+    let usage = KeyUsage::new(ku::PA_PKINIT_KX)?;
+    let cipher = encrypt(reply_key, usage, &plain)?;
+    let enc = EncryptedData {
+        etype: reply_key.etype().to_iana(),
+        kvno: None,
+        cipher: cipher.into(),
+    };
+    Ok(PaData {
+        padata_type: pa::PKINIT_KX,
+        padata_value: encode(&enc)?.into(),
+    })
+}
+
 fn s4u2self_as_invalid_options(body: &krb5_types::KdcReqBody) -> bool {
     body.kdc_options.bit(flag_bit::FORWARDED)
         || body.kdc_options.bit(flag_bit::PROXY)
@@ -2771,6 +2905,12 @@ fn validate_as_request(
     if attr(server, KDB_DISALLOW_SVR) {
         return Err(proto(err::MUST_USE_USER2USER, status::SERVICE_NOT_ALLOWED));
     }
+    // kdc_util.c:795-798: check_anon uses request->server, not the S4U empty_server.
+    let req_server = body
+        .sname
+        .clone()
+        .unwrap_or_else(|| PrincipalName::krbtgt(store.realm()));
+    check_anon(store, &client.name, &req_server)?;
     let mut fails = store.fail_auth_of(client);
     let max_fail = store.max_fail_for(client);
     let last_failed = store.last_failed_of(client);

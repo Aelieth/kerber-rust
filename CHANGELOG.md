@@ -6,6 +6,27 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-A′-4
+
+- **kdc.** Anonymous PKINIT + `check_anon` / `restrict_anonymous_to_tgt`.
+  `REQUEST_ANONYMOUS` from a named client is 13 before preauth; a
+  `WELLKNOWN/ANONYMOUS` client is rewritten to `@WELLKNOWN:ANONYMOUS`
+  and forced through preauth. Unsigned AuthPack from a named client is
+  24. Issued anonymous tickets carry `PA-PKINIT-KX` (ku 44), no PAC,
+  and `crealm` `WELLKNOWN:ANONYMOUS`. `restrict_anon` + a non-local-TGS
+  server is 12 `ANONYMOUS NOT ALLOWED` on AS and TGS.
+- **kdc.** FAST `hide-client-names` now anonymizes the outer KRB-ERROR
+  and TGS-REP as well as the AS-REP; inner FX-ERROR / `fast_finished`
+  keep the real client.
+- **client.** `kinit -n` sends unsigned PKINIT and verifies
+  `PA-PKINIT-KX`.
+- **test.** Diffsend 102 → 105 (`as-anonymous-unsigned-authpack-named-client`,
+  `as-fast-hide-error-client`, `tgs-fast-hide-client`). `pkinit-gate.sh` / `rust-kinit-pkinit-gate.sh`
+  `kinit -n` + `restrict_anon` `kvno`. Unit-test scratch stays off host
+  `/tmp` (`isolate_scratch_dir` workspace fallback).
+- **docs.** Hide-client scope; ledger 295/361/362/469/499; F3 cite slack
+  on the A′-3 summary/plan.
+
 ### W1-A′-3
 
 - **kdc.** `get_ticket_flags` + `kdc_get_ticket_renewtime` (`kdc_util.c:812-858,1712-1757`).

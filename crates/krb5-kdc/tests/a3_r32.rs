@@ -8,7 +8,8 @@ use krb5_kdc::{
 };
 use krb5_protocol::{as_req, pa_enc_timestamp, pa_pk_as_req, tgs_req_ex};
 use krb5_types::{
-    EncTicketPart, EncryptedData, KdcOptions, PrincipalName, Ticket, err, flag_bit, ku,
+    EncTicketPart, EncryptedData, KdcOptions, MethodData, PrincipalName, Ticket, err, flag_bit, ku,
+    pa,
 };
 
 fn proto(err: &Error) -> (i32, Option<&str>) {
@@ -91,11 +92,29 @@ fn r32_pkinit_client_requires_hwauth_is_needed_hw_preauth() {
     let (mut store, _) = bootstrap_documented().unwrap();
     store.enable_pkinit_ca().unwrap();
     or_attr(&mut store, &user(), KDB_REQUIRES_HW_AUTH);
-    let err = pkinit_as(&store, 32002).unwrap_err();
-    assert_eq!(
-        proto(&err),
-        (err::PREAUTH_REQUIRED, Some("NEEDED_HW_PREAUTH"))
-    );
+    match pkinit_as(&store, 32002).unwrap_err() {
+        Error::Protocol {
+            code,
+            text,
+            e_data: Some(ed),
+            ..
+        } if code == err::PREAUTH_REQUIRED && text.as_deref() == Some("NEEDED_HW_PREAUTH") => {
+            let types: Vec<i32> = decode::<MethodData>(&ed)
+                .unwrap()
+                .iter()
+                .map(|p| p.padata_type)
+                .collect();
+            assert!(
+                types.contains(&pa::PK_AS_REQ),
+                "hw_only still advertises PA-PK-AS-REQ, got {types:?}"
+            );
+            assert!(
+                !types.contains(&pa::PKINIT_KX),
+                "pkinit_srv.c:928-929 PKINIT_KX is PA_INFO, skipped under hw_only, got {types:?}"
+            );
+        }
+        other => panic!("expected Protocol NEEDED_HW_PREAUTH with e_data, got {other:?}"),
+    }
 }
 
 #[test]

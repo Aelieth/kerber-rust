@@ -419,6 +419,8 @@ pub struct Policy {
     pub reject_bad_transit: bool,
     /// MIT `disable_pac` (default false): issue no PAC.
     pub disable_pac: bool,
+    /// MIT `restrict_anonymous_to_tgt` (default false).
+    pub restrict_anon: bool,
     /// `[realms] encrypted_challenge_indicator` (single).
     pub encrypted_challenge_indicator: Option<String>,
     /// `[realms] pkinit_indicator` (repeatable).
@@ -445,6 +447,7 @@ impl Default for Policy {
             capaths: BTreeMap::new(),
             reject_bad_transit: true,
             disable_pac: false,
+            restrict_anon: false,
             encrypted_challenge_indicator: None,
             pkinit_indicators: Vec::new(),
             spake_preauth_indicators: Vec::new(),
@@ -990,6 +993,7 @@ impl PrincipalStore {
         self.policy.requires_preauth = conf.requires_preauth;
         self.policy.reject_bad_transit = conf.reject_bad_transit;
         self.policy.disable_pac = conf.disable_pac;
+        self.policy.restrict_anon = conf.restrict_anon;
         self.policy
             .encrypted_challenge_indicator
             .clone_from(&conf.encrypted_challenge_indicator);
@@ -3376,6 +3380,7 @@ mod tests {
         max_life = 1h 30m
         max_renewable_life = 2d 0h 0m 0s
         requires_preauth = no
+        restrict_anonymous_to_tgt = true
         encrypted_challenge_indicator = encrypted_challenge
         pkinit_indicator = pkinit
         spake_preauth_indicator = spake
@@ -3387,6 +3392,7 @@ mod tests {
         assert_eq!(store.policy.max_life, 5400);
         assert_eq!(store.policy.max_renewable_life, 2 * 86400);
         assert!(!store.policy.requires_preauth);
+        assert!(store.policy.restrict_anon);
         assert_eq!(
             store.policy.encrypted_challenge_indicator.as_deref(),
             Some("encrypted_challenge")

@@ -25,14 +25,24 @@ fn main() {
         eprintln!("kinit: {e}");
         std::process::exit(2);
     });
-    if args.anonymous {
-        eprintln!("kinit: anonymous PKINIT is not implemented");
-        std::process::exit(2);
-    }
-    let principal = args.principal.clone().unwrap_or_else(|| {
-        eprintln!("kinit: missing principal");
-        std::process::exit(2);
-    });
+    let principal = if args.anonymous {
+        if let Some(p) = args.principal.clone() {
+            p
+        } else {
+            let realm = krb5_config::load_krb5_conf()
+                .and_then(|c| c.default_realm)
+                .unwrap_or_else(|| {
+                    eprintln!("kinit: cannot determine default realm");
+                    std::process::exit(1);
+                });
+            format!("WELLKNOWN/ANONYMOUS@{realm}")
+        }
+    } else {
+        args.principal.clone().unwrap_or_else(|| {
+            eprintln!("kinit: missing principal");
+            std::process::exit(2);
+        })
+    };
     let principal = if !args.enterprise && !principal.contains('@') {
         match krb5_config::load_krb5_conf_paths(krb5_config::krb5_conf_paths()) {
             Ok(c) => match c.default_realm {
@@ -89,20 +99,22 @@ fn main() {
             .proxiable
             .unwrap_or_else(|| conf.as_ref().is_none_or(|c| c.proxiable)),
         addresses: None,
+        anonymous: args.anonymous,
     };
     if args.addresses == Some(true) {
         ticket.addresses = local_host_addresses();
     }
-    let mut password = if args.keytab || args.renew || args.pkinit_identity.is_some() {
-        Vec::new()
-    } else {
-        env_password().unwrap_or_else(|| {
-            read_password_line(&principal).unwrap_or_else(|e| {
-                eprintln!("kinit: {e}");
-                std::process::exit(2);
+    let mut password =
+        if args.keytab || args.renew || args.pkinit_identity.is_some() || args.anonymous {
+            Vec::new()
+        } else {
+            env_password().unwrap_or_else(|| {
+                read_password_line(&principal).unwrap_or_else(|e| {
+                    eprintln!("kinit: {e}");
+                    std::process::exit(2);
+                })
             })
-        })
-    };
+        };
     let kt_path = args.keytab_path.clone().or_else(|| {
         args.keytab.then(|| {
             env_ktname().map_or_else(
@@ -128,6 +140,7 @@ fn main() {
         },
         ticket,
         renew: args.renew,
+        anonymous: args.anonymous,
     };
     match kinit_with(&addr, &principal, &mut password, &spec, params) {
         Ok(r) => {

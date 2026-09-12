@@ -15,17 +15,19 @@ use std::process;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt, string_to_key,
+    EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt, krb_fx_cf2, p256_generate,
+    string_to_key,
 };
 use krb5_kdc::{
     GREET_AD_TYPE, GREET_TEXT, PacTicket, pac_from_ticket_part, sign_pac, ticket_checksum_der,
     wrap_win2k_pac,
 };
 use krb5_protocol::{
-    KdcAddr, Keytab, armor_key, as_req, as_req_sname, attach_fast, build_fast_armor,
-    compare_krb_error, compare_stable_rep, decode_enc_kdc_rep, exchange_on_tcp, pa_enc_timestamp,
-    pa_enc_timestamp_at, pa_for_user, pa_pac_options, pa_s4u_x509_user, pa_spake_support, tgs_req,
-    tgs_req_ex, tgs_req_ex_addr, tgs_req_ex_from, tgs_req_ex_subkey, tgs_req_ex_till,
+    KdcAddr, Keytab, armor_key, as_req, as_req_sname, attach_fast, attach_fast_with_options,
+    build_fast_armor, compare_krb_error, compare_stable_rep, decode_enc_kdc_rep, exchange_on_tcp,
+    pa_enc_timestamp, pa_enc_timestamp_at, pa_for_user, pa_pac_options, pa_pk_as_req_unsigned,
+    pa_s4u_x509_user, pa_spake_support, tgs_req, tgs_req_ex, tgs_req_ex_addr, tgs_req_ex_from,
+    tgs_req_ex_subkey, tgs_req_ex_till,
 };
 use krb5_types::cammac::AdKdcIssued;
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac, PacIdentity, RpcSid};
@@ -90,6 +92,115 @@ fn send_both(cfg: &Cfg, case: &str, req: &[u8]) -> Result<(Vec<u8>, Vec<u8>), St
 
 fn expect_error(cfg: &Cfg, case: &str, req: &[u8], code: i32) -> Result<(), String> {
     expect_error_client(cfg, case, req, code, true)
+}
+
+fn expect_hidden_client_error(cfg: &Cfg, case: &str, req: &[u8], code: i32) -> Result<(), String> {
+    expect_error_client(cfg, case, req, code, true)?;
+    for leg in ["rust", "mit"] {
+        let der = std::fs::read(cfg.out.join(format!("{case}.{leg}.der")))
+            .map_err(|e| format!("{case} {leg} der: {e}"))?;
+        let err: KrbError = decode(&der).map_err(|e| format!("{case} {leg} decode: {e}"))?;
+        let cn = err.cname.as_ref().map(PrincipalName::components_joined);
+        let cr = err
+            .crealm
+            .as_ref()
+            .map(|r| String::from_utf8_lossy(r.as_bytes()).into_owned());
+        if cn.as_deref() != Some("WELLKNOWN/ANONYMOUS")
+            || cr.as_deref() != Some("WELLKNOWN:ANONYMOUS")
+        {
+            return Err(format!(
+                "{case}: outer client {leg}=({cr:?},{cn:?}) want WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn wrap_tgs_fast_hide(
+    req: &mut krb5_types::TgsReq,
+    session: &ProtocolKey,
+    inner_body: krb5_types::KdcReqBody,
+) -> Result<(), String> {
+    let padata = req.0.padata.as_mut().ok_or("no padata")?;
+    let pa_tgs = padata
+        .iter_mut()
+        .find(|x| x.padata_type == pa::TGS_REQ)
+        .ok_or("no PA-TGS-REQ")?;
+    let mut ap: ApReq = decode(pa_tgs.padata_value.as_ref()).map_err(|e| e.to_string())?;
+    let auth_usage = KeyUsage::new(ku::TGS_REQ_AUTHENTICATOR).map_err(|e| e.to_string())?;
+    let auth_plain = decrypt(session, auth_usage, ap.authenticator.cipher.as_ref())
+        .map_err(|e| e.to_string())?;
+    let mut authenticator: krb5_types::Authenticator =
+        decode(&auth_plain).map_err(|e| e.to_string())?;
+    let subkey =
+        ProtocolKey::from_bytes(session.etype(), &[0x51u8; 32]).map_err(|e| e.to_string())?;
+    authenticator.subkey = Some(EncryptionKey {
+        keytype: subkey.etype().to_iana(),
+        keyvalue: subkey.as_bytes().to_vec().into(),
+    });
+    let auth_der = encode(&authenticator).map_err(|e| e.to_string())?;
+    ap.authenticator.cipher = encrypt(session, auth_usage, &auth_der)
+        .map_err(|e| e.to_string())?
+        .into();
+    pa_tgs.padata_value = encode(&ap).map_err(|e| e.to_string())?.into();
+    let ap_raw = pa_tgs.padata_value.as_ref().to_vec();
+    let akey =
+        krb_fx_cf2(&subkey, session, b"subkeyarmor", b"ticketarmor").map_err(|e| e.to_string())?;
+    let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM).map_err(|e| e.to_string())?;
+    let mic = checksum(&akey, ck_usage, &ap_raw).map_err(|e| e.to_string())?;
+    let mut opts = krb5_types::fast::fast_options_none();
+    opts.set(1, true);
+    let inner = krb5_types::fast::KrbFastReq {
+        fast_options: opts,
+        padata: Vec::new(),
+        req_body: inner_body,
+    };
+    let inner_der = encode(&inner).map_err(|e| e.to_string())?;
+    let enc_usage = KeyUsage::new(ku::FAST_ENC).map_err(|e| e.to_string())?;
+    let cipher = encrypt(&akey, enc_usage, &inner_der).map_err(|e| e.to_string())?;
+    let armored = krb5_types::fast::KrbFastArmoredReq {
+        armor: None,
+        req_checksum: Checksum {
+            cksumtype: akey.etype().checksum_type(),
+            checksum: mic.into(),
+        },
+        enc_fast_req: EncryptedData {
+            etype: akey.etype().to_iana(),
+            kvno: None,
+            cipher: cipher.into(),
+        },
+    };
+    req.0.padata.get_or_insert_with(Vec::new).push(PaData {
+        padata_type: pa::FX_FAST,
+        padata_value: encode(&krb5_types::fast::PaFxFast::ArmoredData(armored))
+            .map_err(|e| e.to_string())?
+            .into(),
+    });
+    Ok(())
+}
+
+fn expect_hidden_tgs_rep(cfg: &Cfg, case: &str, req: &[u8]) -> Result<(), String> {
+    let (rust, mit) = send_both(cfg, case, req)?;
+    for (leg, raw) in [("rust", rust.as_slice()), ("mit", mit.as_slice())] {
+        if raw.first() != Some(&0x6d) {
+            return Err(format!(
+                "{case}: {leg} tag {:02x} want 0x6d",
+                raw.first().unwrap_or(&0)
+            ));
+        }
+        let rep: TgsRep = decode(raw).map_err(|e| format!("{case} {leg}: {e}"))?;
+        let cn = rep.0.cname.components_joined();
+        let cr = String::from_utf8_lossy(rep.0.crealm.as_bytes());
+        if cn != "WELLKNOWN/ANONYMOUS" || cr != "WELLKNOWN:ANONYMOUS" {
+            return Err(format!(
+                "{case}: outer client {leg}=({cr},{cn}) want WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS"
+            ));
+        }
+    }
+    println!(
+        r#"{{"event":"diffsend","case":"{case}","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","hidden":true}}"#
+    );
+    Ok(())
 }
 
 // AS errors echo the requested client (prepare_error_as); a TGS error uses the
@@ -4076,7 +4187,97 @@ fn run() -> Result<(), String> {
         r#"{{"event":"diffsend","case":"tgs-rbcd-pac-options","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","pac_options":true}}"#
     );
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":102}}"#);
+    // pkinit_srv.c:508-516: unsigned AuthPack + named client → 24.
+    let kp = p256_generate().map_err(|e| e.to_string())?;
+    let mut unsigned_named =
+        as_req(user.clone(), realm, 0x1000_0090, None).map_err(|e| e.to_string())?;
+    let body_der = encode(&unsigned_named.0.req_body).map_err(|e| e.to_string())?;
+    let mut h = Sha1::new();
+    h.update(&body_der);
+    let sha1 = h.finalize();
+    unsigned_named.0.padata = Some(vec![
+        pa_pk_as_req_unsigned(&kp.public, 0x1000_0090, &sha1).map_err(|e| e.to_string())?,
+    ]);
+    expect_error(
+        &cfg,
+        "as-anonymous-unsigned-authpack-named-client",
+        &encode(&unsigned_named).map_err(|e| e.to_string())?,
+        err::PREAUTH_FAILED,
+    )?;
+
+    // do_as_req.c:831-832: FAST hide-client on the outer KRB-ERROR.
+    let hide_sess = random_session(EncryptionType::Aes256CtsHmacSha196)?;
+    let hide_tkt = mint_tgt(
+        tkt_key,
+        tkt_kvno,
+        &user,
+        realm,
+        &krbtgt_sname,
+        &hide_sess,
+        (
+            now.clone(),
+            now.add_hours(10).unwrap_or_else(|_| now.clone()),
+        ),
+        TicketFlags::initial_preauth(),
+    )?;
+    let hide_sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x41u8; 32])
+        .map_err(|e| e.to_string())?;
+    let hide_ap = build_fast_armor(
+        hide_tkt,
+        &hide_sess,
+        &krb5_types::try_ascii(realm).map_err(|e| e.to_string())?,
+        &user,
+        Some(&hide_sub),
+    )
+    .map_err(|e| e.to_string())?;
+    let hide_key = armor_key(&hide_sess, Some(&hide_sub)).map_err(|e| e.to_string())?;
+    let mut hide_opts = krb5_types::fast::fast_options_none();
+    hide_opts.set(1, true);
+    let hide_client = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["pauser"]);
+    let mut hide_req = as_req(hide_client, realm, 0x1000_0091, None).map_err(|e| e.to_string())?;
+    attach_fast_with_options(&mut hide_req, &hide_ap, &hide_key, Vec::new(), &hide_opts)
+        .map_err(|e| e.to_string())?;
+    expect_hidden_client_error(
+        &cfg,
+        "as-fast-hide-error-client",
+        &encode(&hide_req).map_err(|e| e.to_string())?,
+        err::PREAUTH_REQUIRED,
+    )?;
+
+    // do_tgs_req.c:1111-1112: FAST hide-client on the outer TGS-REP.
+    let hide_tgs_tgt = mint_tgt(
+        tkt_key,
+        tkt_kvno,
+        &user,
+        realm,
+        &krbtgt_sname,
+        &hide_sess,
+        (
+            now.clone(),
+            now.add_hours(10).unwrap_or_else(|_| now.clone()),
+        ),
+        TicketFlags::initial_preauth(),
+    )?;
+    let hide_host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
+    let mut hide_tgs = tgs_req(
+        hide_tgs_tgt,
+        &hide_sess,
+        realm,
+        &user,
+        hide_host,
+        realm,
+        0x1000_0092,
+    )
+    .map_err(|e| e.to_string())?;
+    let hide_inner = hide_tgs.0.req_body.clone();
+    wrap_tgs_fast_hide(&mut hide_tgs, &hide_sess, hide_inner)?;
+    expect_hidden_tgs_rep(
+        &cfg,
+        "tgs-fast-hide-client",
+        &encode(&hide_tgs).map_err(|e| e.to_string())?,
+    )?;
+
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":105}}"#);
     Ok(())
 }
 

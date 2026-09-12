@@ -966,6 +966,20 @@ fn wrap_tgs_fast(
     session: &ProtocolKey,
     inner_body: krb5_types::KdcReqBody,
 ) -> Result<ProtocolKey, krb5_protocol::Error> {
+    wrap_tgs_fast_opts(
+        req,
+        session,
+        inner_body,
+        krb5_types::fast::fast_options_none(),
+    )
+}
+
+fn wrap_tgs_fast_opts(
+    req: &mut krb5_types::TgsReq,
+    session: &ProtocolKey,
+    inner_body: krb5_types::KdcReqBody,
+    fast_options: krb5_types::fast::FastOptions,
+) -> Result<ProtocolKey, krb5_protocol::Error> {
     let padata = req
         .0
         .padata
@@ -997,7 +1011,7 @@ fn wrap_tgs_fast(
     let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM)?;
     let mic = checksum(&armor_key, ck_usage, &ap_raw)?;
     let inner = krb5_types::fast::KrbFastReq {
-        fast_options: krb5_types::fast::fast_options_none(),
+        fast_options,
         padata: Vec::new(),
         req_body: inner_body,
     };
