@@ -71,6 +71,15 @@ LOAD="$(docker exec \
     "$NAME" /tmp/krb5-kdb load /tmp/mit.dump)"
 echo "$LOAD"
 echo "$LOAD" | grep -q 'ok load version=7' || die "rust kdb load failed"
+# Dump load does not carry groups; rust apply_libdefaults reads this at start.
+docker exec "$NAME" python3 -c '
+from pathlib import Path
+p = Path("/etc/krb5.conf")
+t = p.read_text()
+if "spake_preauth_groups" not in t:
+    t = t.replace("[libdefaults]", "[libdefaults]\n    spake_preauth_groups = P-256", 1)
+    p.write_text(t)
+'
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
