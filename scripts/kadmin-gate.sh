@@ -581,6 +581,10 @@ docker exec "$NAME" sh -c 'cat >/tmp/kadmin-krb5.conf <<EOF
         admin_server = 127.0.0.1
     }
 EOF'
+# Enc-ts only for unlocku kinit: rust --test-realm advertises P-256 SPAKE;
+# MIT client default edwards25519 is verify_support 24, and lockout.c
+# increments on that 24, so maxfailure=1 would revoke before enc-ts.
+docker exec "$NAME" sh -c 'sed "/\[libdefaults\]/a\\    preferred_preauth_types = 2" /tmp/kadmin-krb5.conf > /tmp/kadmin-unlock-krb5.conf'
 
 echo "==== kinit admin ===="
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf -e KRB5_TRACE=/dev/stderr \
@@ -2365,9 +2369,9 @@ docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addpol -maxfailure 1 -lockoutduration 0s -failurecountinterval 0s unlockpol'
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw unlock-secret -policy unlockpol +requires_preauth unlocku'
-docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+docker exec -e KRB5_CONFIG=/tmp/kadmin-unlock-krb5.conf \
     "$NAME" sh -c 'printf "wrong-secret\n" | kinit unlocku@KERBER.TEST' >/dev/null 2>&1 || true
-LOCKED="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+LOCKED="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-unlock-krb5.conf \
     "$NAME" sh -c 'printf "unlock-secret\n" | kinit unlocku@KERBER.TEST' 2>&1 || true)"
 echo "$LOCKED"
 echo "$LOCKED" | grep -qiE 'revoked|locked out|CLIENT_REVOKED' || {
@@ -2376,8 +2380,8 @@ echo "$LOCKED" | grep -qiE 'revoked|locked out|CLIENT_REVOKED' || {
 }
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'modprinc -unlock unlocku'
-docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
-docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+docker exec -e KRB5_CONFIG=/tmp/kadmin-unlock-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+docker exec -e KRB5_CONFIG=/tmp/kadmin-unlock-krb5.conf \
     "$NAME" sh -c 'printf "unlock-secret\n" | kinit unlocku@KERBER.TEST'
 UNL="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" klist)"
 echo "$UNL"

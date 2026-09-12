@@ -1,12 +1,16 @@
 //! Lockout stamp-0 and REQUIRES_PRE_AUTH fail-count clear
 //! (`kdb5.c:1539-1545,1574-1576`, `lockout.c:181-190`).
 
+use krb5_asn1::encode;
 use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
 use krb5_kdc::{
     Error, KDB_REQUIRES_PRE_AUTH, NamedPolicy, S2K_ITERS, TEST_REALM, TEST_USER,
     TEST_USER_PASSWORD, as_req, bootstrap_documented, dump_store, load_dump, pa_enc_timestamp,
 };
-use krb5_types::{PrincipalName, err};
+use krb5_types::{
+    PaData, PrincipalName, err, pa,
+    spake::{GROUP_EDWARDS25519, PaSpake, SpakeSupport},
+};
 
 fn user_key() -> ProtocolKey {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -137,6 +141,52 @@ fn last_failed_nonzero_without_unlock_tl_still_locks() {
     )
     .unwrap();
     let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::CLIENT_REVOKED);
+            assert_eq!(text.as_deref(), Some("CLIENT LOCKED OUT"));
+        }
+        other => panic!("expected 18 CLIENT LOCKED OUT, got {other:?}"),
+    }
+}
+
+#[test]
+fn unpermitted_spake_support_counts_toward_lockout() {
+    let (mut store, _) = bootstrap_documented().unwrap();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    store.put_policy(lock_policy("lock", 1));
+    store
+        .set_principal_policy(&user, Some("lock".into()))
+        .unwrap();
+    let support = PaData {
+        padata_type: pa::SPAKE,
+        padata_value: encode(&PaSpake::Support(SpakeSupport {
+            groups: vec![GROUP_EDWARDS25519],
+        }))
+        .unwrap()
+        .into(),
+    };
+    let err = krb5_kdc::issue_as(
+        &store,
+        &as_req(user.clone(), TEST_REALM, 705, Some(vec![support])).unwrap(),
+    )
+    .unwrap_err();
+    match &err {
+        Error::Protocol { code, .. } => assert_eq!(*code, err::PREAUTH_FAILED),
+        other => panic!("expected 24, got {other:?}"),
+    }
+    assert_eq!(store.fail_auth_of(store.get_name(&user).unwrap()), 1);
+    let err = krb5_kdc::issue_as(
+        &store,
+        &as_req(
+            user,
+            TEST_REALM,
+            706,
+            Some(vec![pa_enc_timestamp(&user_key()).unwrap()]),
+        )
+        .unwrap(),
+    )
+    .unwrap_err();
     match err {
         Error::Protocol { code, text, .. } => {
             assert_eq!(code, err::CLIENT_REVOKED);
