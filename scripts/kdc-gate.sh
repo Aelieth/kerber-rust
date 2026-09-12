@@ -307,7 +307,7 @@ def rows(path):
         text = open(path).read()
     except OSError as e:
         print(f"missing {path}: {e}", file=sys.stderr)
-        sys.exit(1)
+        raise SystemExit(1)
     for line in text.splitlines():
         line = line.strip()
         if not line or line == "state is NULL":
@@ -330,7 +330,7 @@ def first(rows, name):
         ):
             return r
     print(f"no success {name} with tkt_out_id", file=sys.stderr)
-    sys.exit(1)
+    raise SystemExit(1)
 keys = ["event_name", "event_success", "stage", "tkt_out_id", "req_id", "fromport"]
 for name in ("AS_REQ", "TGS_REQ"):
     m = first(mit, name)
@@ -338,19 +338,19 @@ for name in ("AS_REQ", "TGS_REQ"):
     for k in keys:
         if k not in m or k not in r:
             print(f"{name} missing {k} mit={k in m} rust={k in r}", file=sys.stderr)
-            sys.exit(1)
+            raise SystemExit(1)
     for side, rec in (("MIT", m), ("RUST", r)):
         tkt = rec["tkt_out_id"]
         if not re.fullmatch(r"[0-9A-F]{64}", str(tkt)):
             print(f"{side} {name} tkt_out_id {tkt}", file=sys.stderr)
-            sys.exit(1)
+            raise SystemExit(1)
         rid = str(rec["req_id"])
         if not re.fullmatch(r"[0-9A-Za-z]{31}", rid):
             print(f"{side} {name} req_id {rid}", file=sys.stderr)
-            sys.exit(1)
+            raise SystemExit(1)
     if m["stage"] != r["stage"]:
         print(f"{name} stage mit={m['stage']} rust={r['stage']}", file=sys.stderr)
-        sys.exit(1)
+        raise SystemExit(1)
 print("audit-fields-ok")
 PY
 echo "RUST_audit_fields" # TestAudit /tmp/au-rust.log
