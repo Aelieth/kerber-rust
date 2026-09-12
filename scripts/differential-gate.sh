@@ -126,6 +126,27 @@ docker exec \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     "$NAME" /tmp/krb5-kadmin-local -q 'setstr expiredsvc require_auth pkinit'
 
+# Pin P-256 on the container profile before either KDC starts. Dump load
+# does not carry groups; rust apply_libdefaults reads this like MIT kdc.conf.
+docker exec "$NAME" python3 -c '
+from pathlib import Path
+p = Path("/etc/krb5.conf")
+t = p.read_text()
+if "spake_preauth_groups" not in t:
+    t = t.replace("[libdefaults]", "[libdefaults]\n    spake_preauth_groups = P-256", 1)
+p.write_text(t)
+k = Path("/etc/krb5kdc/kdc.conf")
+kt = k.read_text()
+if "kdcauthdata" not in kt:
+    kt += """
+[plugins]
+  kdcauthdata = {
+    module = greet:/usr/lib/krb5/plugins/kdcauthdata/greet_server.so
+  }
+"""
+k.write_text(kt)
+'
+
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
@@ -164,26 +185,6 @@ docker exec "$NAME" kadmin.local -q 'modprinc +disallow_svr host/nosvr.kerber.te
 docker exec "$NAME" kadmin.local -q 'addprinc -randkey expiredsvc'
 docker exec "$NAME" kadmin.local -q 'modprinc -expire 1/1/1990 expiredsvc'
 docker exec "$NAME" kadmin.local -q 'setstr expiredsvc require_auth pkinit'
-# Advertise SPAKE like the Rust KDC (always-on SpakeMod) so PREAUTH hint
-# multisets match. MIT krb5kdc reads spake_preauth_groups from [libdefaults].
-docker exec "$NAME" python3 -c '
-from pathlib import Path
-p = Path("/etc/krb5.conf")
-t = p.read_text()
-if "spake_preauth_groups" not in t:
-    t = t.replace("[libdefaults]", "[libdefaults]\n    spake_preauth_groups = P-256", 1)
-p.write_text(t)
-k = Path("/etc/krb5kdc/kdc.conf")
-kt = k.read_text()
-if "kdcauthdata" not in kt:
-    kt += """
-[plugins]
-  kdcauthdata = {
-    module = greet:/usr/lib/krb5/plugins/kdcauthdata/greet_server.so
-  }
-"""
-k.write_text(kt)
-'
 STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc -n >/tmp/mit-kdc.log 2>&1 & sleep 0.5; cat /tmp/mit-kdc.log' 2>&1 || true)"
 echo "$STARTLOG"
 ok=0
