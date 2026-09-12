@@ -158,6 +158,8 @@ pub struct KdcConf {
     pub disable_pac: bool,
     /// MIT `restrict_anonymous_to_tgt` (default false).
     pub restrict_anon: bool,
+    /// MIT `pkinit_require_freshness` (default false).
+    pub pkinit_require_freshness: bool,
     /// `[realms] encrypted_challenge_indicator`.
     pub encrypted_challenge_indicator: Option<String>,
     /// `[realms] pkinit_indicator` (repeatable).
@@ -192,6 +194,7 @@ impl Default for KdcConf {
             reject_bad_transit: true,
             disable_pac: false,
             restrict_anon: false,
+            pkinit_require_freshness: false,
             encrypted_challenge_indicator: None,
             pkinit_indicators: Vec::new(),
             spake_preauth_indicators: Vec::new(),
@@ -716,6 +719,7 @@ fn parse_kdcdefaults(conf: &mut KdcConf, line: &str) {
         "reject_bad_transit" => conf.reject_bad_transit = truthy(&v),
         "disable_pac" => conf.disable_pac = truthy(&v),
         "restrict_anonymous_to_tgt" => conf.restrict_anon = truthy(&v),
+        "pkinit_require_freshness" => conf.pkinit_require_freshness = truthy(&v),
         _ => {}
     }
 }
@@ -763,6 +767,7 @@ fn parse_kdc_realm_line(conf: &mut KdcConf, line: &str) {
         "reject_bad_transit" => conf.reject_bad_transit = truthy(&v),
         "disable_pac" => conf.disable_pac = truthy(&v),
         "restrict_anonymous_to_tgt" => conf.restrict_anon = truthy(&v),
+        "pkinit_require_freshness" => conf.pkinit_require_freshness = truthy(&v),
         "encrypted_challenge_indicator" => {
             conf.encrypted_challenge_indicator = Some(v);
         }
@@ -1701,6 +1706,36 @@ mod tests {
         )
         .unwrap();
         assert!(!lib.restrict_anon);
+    }
+
+    #[test]
+    fn a4_17_pkinit_require_freshness_from_kdcdefaults_and_realm() {
+        let kdc = KdcConf::parse(
+            r"
+[kdcdefaults]
+    pkinit_require_freshness = true
+",
+        )
+        .unwrap();
+        assert!(kdc.pkinit_require_freshness);
+        let realm = KdcConf::parse(
+            r"
+[realms]
+    KERBER.TEST = {
+        pkinit_require_freshness = true
+    }
+",
+        )
+        .unwrap();
+        assert!(realm.pkinit_require_freshness);
+        let lib = KdcConf::parse(
+            r"
+[libdefaults]
+    pkinit_require_freshness = true
+",
+        )
+        .unwrap();
+        assert!(!lib.pkinit_require_freshness);
     }
 
     #[test]

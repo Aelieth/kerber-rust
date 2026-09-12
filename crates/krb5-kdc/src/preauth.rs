@@ -253,6 +253,61 @@ fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<Protoco
 
 const COOKIE_LIFETIME: i32 = 600;
 const COOKIE_MAGIC: &[u8] = b"MIT1";
+/// MIT `FRESHNESS_LIFETIME` (`kdc_preauth.c:91`).
+pub(crate) const FRESHNESS_LIFETIME: i64 = 600;
+
+/// RFC 8070 token: `ts(BE32) ‖ krbtgt kvno(BE32) ‖ checksum(ku 514, ts)`.
+pub(crate) fn mint_freshness_token(
+    key: &ProtocolKey,
+    kvno: u32,
+    now: u32,
+) -> Result<Vec<u8>, Error> {
+    let ts = now.to_be_bytes();
+    let mac = checksum(key, KeyUsage::new(ku::PA_AS_FRESHNESS)?, &ts)?;
+    let mut out = Vec::with_capacity(8 + mac.len());
+    out.extend_from_slice(&ts);
+    out.extend_from_slice(&kvno.to_be_bytes());
+    out.extend_from_slice(&mac);
+    Ok(out)
+}
+
+pub(crate) fn mint_freshness_token_now(store: &dyn PrincipalRead) -> Result<Vec<u8>, Error> {
+    let tgt = store
+        .fetch_krbtgt()?
+        .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
+    let key = tgt
+        .first_current_key()
+        .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
+    mint_freshness_token(&key.key, key.kvno, KerberosTime::now().unix_seconds())
+}
+
+pub(crate) fn check_freshness_token(
+    store: &dyn PrincipalRead,
+    token: &[u8],
+    now: u32,
+) -> Result<(), Error> {
+    if token.len() <= 8 {
+        return Err(proto(err::PREAUTH_EXPIRED, status::PREAUTH_FAILED));
+    }
+    let ts = u32::from_be_bytes(token[0..4].try_into().unwrap_or([0; 4]));
+    let kvno = u32::from_be_bytes(token[4..8].try_into().unwrap_or([0; 4]));
+    let mac = &token[8..];
+    if i64::from(now) > i64::from(ts).saturating_add(FRESHNESS_LIFETIME) {
+        return Err(proto(err::PREAUTH_EXPIRED, status::PREAUTH_FAILED));
+    }
+    let Some(tgt) = store.fetch_krbtgt().ok().flatten() else {
+        return Err(proto(err::PREAUTH_EXPIRED, status::PREAUTH_FAILED));
+    };
+    let Some(key) = tgt.first_key_at_kvno(kvno) else {
+        return Err(proto(err::PREAUTH_EXPIRED, status::PREAUTH_FAILED));
+    };
+    let usage = KeyUsage::new(ku::PA_AS_FRESHNESS)
+        .map_err(|_| proto(err::PREAUTH_EXPIRED, status::PREAUTH_FAILED))?;
+    match verify_checksum_type(&key.key, usage, &ts.to_be_bytes(), 0, mac) {
+        Ok(()) => Ok(()),
+        Err(_) => Err(proto(err::PREAUTH_EXPIRED, status::PREAUTH_FAILED)),
+    }
+}
 
 fn derive_cookie_key(
     tgt_key: &ProtocolKey,
@@ -597,6 +652,37 @@ pub(crate) fn process_pkinit(
             error = e
         );
         return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
+    }
+    let mut valid_freshness = false;
+    if let Some(tok) = krb5_types::pkinit::parse_authpack_freshness_token(&inner) {
+        check_freshness_token(store, &tok, KerberosTime::now().unix_seconds())?;
+        valid_freshness = true;
+    }
+    if is_signed && store.policy().pkinit_require_freshness && !valid_freshness {
+        tracing::info!(
+            event = "kdc.pkinit",
+            component = "krb5-kdc",
+            outcome = "error",
+            detail = "no freshness token, rejecting auth"
+        );
+        return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
+    }
+    if is_signed {
+        if valid_freshness {
+            tracing::info!(
+                event = "kdc.pkinit",
+                component = "krb5-kdc",
+                outcome = "ok",
+                detail = "freshness token received"
+            );
+        } else {
+            tracing::info!(
+                event = "kdc.pkinit",
+                component = "krb5-kdc",
+                outcome = "ok",
+                detail = "no freshness token received"
+            );
+        }
     }
     let (ctime, cusec) = krb5_types::pkinit::parse_authpack_freshness(&inner).ok_or_else(|| {
         tracing::error!(

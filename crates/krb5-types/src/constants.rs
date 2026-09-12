@@ -84,6 +84,8 @@ pub mod err {
     pub const MSG_TYPE: i32 = 40;
     /// KRB_AP_ERR_MODIFIED
     pub const MODIFIED: i32 = 41;
+    /// KDC_ERR_PREAUTH_EXPIRED (RFC 6113; IANA 90). Filter maps this to 24.
+    pub const PREAUTH_EXPIRED: i32 = 90;
     /// KDC_ERR_MORE_PREAUTH_DATA_REQUIRED (RFC 6113; IANA 91)
     pub const MORE_PREAUTH_DATA_REQUIRED: i32 = 91;
     /// KDC_ERR_UNKNOWN_CRITICAL_FAST_OPTION (RFC 6113; IANA 93)
@@ -189,6 +191,8 @@ pub mod ku {
     pub const FAST_COOKIE: u32 = 54;
     /// MIT `KRB5_KEYUSAGE_PA_FX_COOKIE` (`krb5.hin:1006`).
     pub const PA_FX_COOKIE: u32 = 513;
+    /// MIT `KRB5_KEYUSAGE_PA_AS_FRESHNESS` (`krb5.hin:1007`).
+    pub const PA_AS_FRESHNESS: u32 = 514;
     /// RFC 6113 KEY_USAGE_ENC_CHALLENGE_CLIENT.
     pub const ENC_CHALLENGE_CLIENT: u32 = 54;
     /// RFC 6113 KEY_USAGE_ENC_CHALLENGE_KDC.

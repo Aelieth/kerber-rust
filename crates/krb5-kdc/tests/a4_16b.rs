@@ -38,7 +38,7 @@ fn unsigned_anon_as(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
     let body = encode(&req.0.req_body).expect("body");
     let ck = krb5_types::pkinit::kdc_req_body_checksum(&body);
     req.0.padata = Some(vec![
-        pa_pk_as_req_unsigned(&kp.public, nonce, &ck).expect("unsigned AuthPack"),
+        pa_pk_as_req_unsigned(&kp.public, nonce, &ck, None).expect("unsigned AuthPack"),
     ]);
     krb5_kdc::issue_as(store, &req).expect("anonymous PKINIT")
 }
@@ -112,7 +112,7 @@ fn a4_16_anonymous_pkinit_issues_kx() {
     let body = encode(&req.0.req_body).expect("body");
     let ck = krb5_types::pkinit::kdc_req_body_checksum(&body);
     req.0.padata = Some(vec![
-        pa_pk_as_req_unsigned(&kp.public, 460, &ck).expect("unsigned AuthPack"),
+        pa_pk_as_req_unsigned(&kp.public, 460, &ck, None).expect("unsigned AuthPack"),
     ]);
     let issued = krb5_kdc::issue_as(&store, &req).expect("anonymous PKINIT");
     assert_eq!(
@@ -223,7 +223,7 @@ fn a4_16_unsigned_anon_name_without_anon_bit_is_24() {
     let body = encode(&req.0.req_body).expect("body");
     let ck = krb5_types::pkinit::kdc_req_body_checksum(&body);
     req.0.padata = Some(vec![
-        pa_pk_as_req_unsigned(&kp.public, 466, &ck).expect("unsigned"),
+        pa_pk_as_req_unsigned(&kp.public, 466, &ck, None).expect("unsigned"),
     ]);
     let (code, detail) = match krb5_kdc::issue_as(&store, &req).unwrap_err() {
         Error::Protocol { code, detail, .. } => (code, detail),
@@ -248,7 +248,7 @@ fn a4_16_unsigned_pkinit_named_is_24() {
     let body = encode(&req.0.req_body).expect("body");
     let ck = krb5_types::pkinit::kdc_req_body_checksum(&body);
     req.0.padata = Some(vec![
-        pa_pk_as_req_unsigned(&kp.public, 461, &ck).expect("unsigned"),
+        pa_pk_as_req_unsigned(&kp.public, 461, &ck, None).expect("unsigned"),
     ]);
     let (code, detail) = match krb5_kdc::issue_as(&store, &req).unwrap_err() {
         Error::Protocol { code, detail, .. } => (code, detail),

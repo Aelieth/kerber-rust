@@ -421,6 +421,7 @@ fn pa_pk_as_req_spki_cn(
             ctime: KerberosTime::now(),
             nonce: 1,
             pa_checksum: body_sha1.map(|s| s.to_vec().into()),
+            freshness_token: None,
         },
         client_public_value: Some(spki.to_vec().into()),
         supported_cms_types: None,
@@ -457,6 +458,7 @@ pub fn pa_pk_as_req_agile(
             ctime: KerberosTime::now(),
             nonce: 1,
             pa_checksum: body_sha1.map(|s| s.to_vec().into()),
+            freshness_token: None,
         },
         client_public_value: Some(spki.into()),
         supported_cms_types: None,
@@ -491,6 +493,7 @@ pub fn pa_pk_as_req_signed(
     leaf_secret: &[u8; 32],
     nonce: u32,
     body_sha1: &[u8],
+    freshness: Option<&[u8]>,
 ) -> Result<PaData, Error> {
     let now = KerberosTime::now();
     let usec = now.0.timestamp_subsec_micros() % 1_000_000;
@@ -499,6 +502,7 @@ pub fn pa_pk_as_req_signed(
         ctime: now,
         nonce,
         pa_checksum: Some(body_sha1.to_vec().into()),
+        freshness_token: freshness.map(|t| t.to_vec().into()),
     };
     let spki = krb5_types::pkinit::encode_ec_spki(client_public);
     let inner = krb5_types::pkinit::encode_client_authpack(&pk_auth, &spki)
@@ -530,6 +534,7 @@ pub fn pa_pk_as_req_unsigned(
     client_public: &[u8],
     nonce: u32,
     body_sha1: &[u8],
+    freshness: Option<&[u8]>,
 ) -> Result<PaData, Error> {
     let now = KerberosTime::now();
     let usec = now.0.timestamp_subsec_micros() % 1_000_000;
@@ -538,6 +543,7 @@ pub fn pa_pk_as_req_unsigned(
         ctime: now,
         nonce,
         pa_checksum: Some(body_sha1.to_vec().into()),
+        freshness_token: freshness.map(|t| t.to_vec().into()),
     };
     let spki = krb5_types::pkinit::encode_ec_spki(client_public);
     let inner = krb5_types::pkinit::encode_client_authpack(&pk_auth, &spki)

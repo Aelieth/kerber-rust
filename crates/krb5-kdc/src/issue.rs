@@ -30,8 +30,9 @@ use crate::kdb::{PrincipalRead, lookup_principal_id};
 use crate::kdb_dump::TL_LAST_ADMIN_UNLOCK;
 use crate::plugins::{PreauthAction, current_policy, run_as_preauth};
 use crate::preauth::{
-    FastOk, decode_edata_padata, fast_finished, find_pa, make_cookie, pa_cookie_last,
-    prepare_as_edata, proto, proto_d, unwrap_fast, unwrap_fast_tgs, with_fx_cookie, wrap_fast_rep,
+    FastOk, decode_edata_padata, fast_finished, find_pa, make_cookie, mint_freshness_token_now,
+    pa_cookie_last, prepare_as_edata, proto, proto_d, unwrap_fast, unwrap_fast_tgs, with_fx_cookie,
+    wrap_fast_rep,
 };
 use crate::status;
 use crate::store::{
@@ -432,6 +433,7 @@ fn issue_as_body(
             &body.etype,
             false,
             proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED),
+            work_padata.as_deref(),
         ));
     }
     // do_as_req.c:718-734: REQUEST_ANONYMOUS before check_padata. Named client
@@ -466,7 +468,17 @@ fn issue_as_body(
         pa_body,
         &cname,
     )
-    .map_err(|e| attach_preauth_hint(store, &client, ckey, &body.etype, fast.is_some(), e))?
+    .map_err(|e| {
+        attach_preauth_hint(
+            store,
+            &client,
+            ckey,
+            &body.etype,
+            fast.is_some(),
+            e,
+            work_padata.as_deref(),
+        )
+    })?
     {
         Some(PreauthAction::Pkinit { key, pa, signed }) => {
             as_rep_key = key;
@@ -548,6 +560,7 @@ fn issue_as_body(
             ckey,
             &body.etype,
             fast.is_some(),
+            work_padata.as_deref(),
         ));
     }
     if attr(&client, KDB_REQUIRES_HW_AUTH) && !hw_preauth {
@@ -560,6 +573,7 @@ fn issue_as_body(
                 ckey,
                 &body.etype,
                 fast.is_some(),
+                work_padata.as_deref(),
             )),
             detail: None,
         });
@@ -2516,12 +2530,27 @@ fn preauth_hint_edata(
     ckey: &KeyEntry,
     requested: &[i32],
     armor: bool,
+    request_padata: Option<&[PaData]>,
 ) -> Vec<u8> {
     let mut method: MethodData = crate::plugins::advertise_preauth(store, client, armor);
     let info = etype_info_padata(client, ckey, requested);
     let at = usize::from(method.first().is_some_and(|p| p.padata_type == pa::FX_FAST));
     for (i, p) in info.into_iter().enumerate() {
         method.insert(at + i, p);
+    }
+    // kdc_preauth.c:826-871,895-898: populated 150 last in the hint list when
+    // PKINIT asked and the request advertised the type; cookie is still last.
+    if store.pkinit_ca().is_some()
+        && request_padata
+            .into_iter()
+            .flatten()
+            .any(|p| p.padata_type == pa::AS_FRESHNESS)
+        && let Ok(tok) = mint_freshness_token_now(store)
+    {
+        method.push(PaData {
+            padata_type: pa::AS_FRESHNESS,
+            padata_value: tok.into(),
+        });
     }
     if let Ok(c) = make_cookie(store, &client.name, &[]) {
         method.push(PaData {
@@ -2538,9 +2567,10 @@ fn preauth_required(
     ckey: &KeyEntry,
     requested: &[i32],
     armor: bool,
+    request_padata: Option<&[PaData]>,
 ) -> Error {
     Error::PreauthRequired {
-        e_data: preauth_hint_edata(store, client, ckey, requested, armor),
+        e_data: preauth_hint_edata(store, client, ckey, requested, armor, request_padata),
     }
 }
 
@@ -2555,6 +2585,7 @@ fn attach_preauth_hint(
     requested: &[i32],
     armor: bool,
     e: Error,
+    request_padata: Option<&[PaData]>,
 ) -> Error {
     match e {
         Error::Protocol {
@@ -2562,10 +2593,17 @@ fn attach_preauth_hint(
             text,
             e_data: None,
             detail,
-        } if code == err::PREAUTH_FAILED => Error::Protocol {
-            code,
+        } if code == err::PREAUTH_FAILED || code == err::PREAUTH_EXPIRED => Error::Protocol {
+            code: err::PREAUTH_FAILED,
             text,
-            e_data: Some(preauth_hint_edata(store, client, ckey, requested, armor)),
+            e_data: Some(preauth_hint_edata(
+                store,
+                client,
+                ckey,
+                requested,
+                armor,
+                request_padata,
+            )),
             detail,
         },
         other => other,

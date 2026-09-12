@@ -62,7 +62,7 @@ pub struct AsRequest<'a> {
     pub want_spake: bool,
     /// FAST armor (PA-FX-FAST). Inner preauth is still enc-timestamp.
     pub fast_armor: Option<&'a FastArmor>,
-    /// PKINIT client identity (PA-PK-AS-REQ). Sent on the first AS-REQ.
+    /// PKINIT identity. Empty 150 first; PA-16 on the retry with the hint token.
     pub pkinit: Option<&'a PkinitClient>,
     /// RFC 6806 canonicalize (NT-ENTERPRISE client names).
     pub canonicalize: bool,
@@ -773,19 +773,48 @@ fn continue_pkinit(
         .pkinit
         .ok_or_else(|| Error::ReplyMismatch("PKINIT identity missing".into()))?;
     let kp = p256_generate()?;
-    let mut req2 = build_as_req_from(req, nonce, till, None, etypes)?;
+    // MIT get_in_tkt: empty 150 first, then copy the hint token into AuthPack.
+    let first = build_as_req_from(req, nonce, till.clone(), None, etypes)?;
+    let first_wire = encode(&first)?;
+    let first_reply = exchange(req.kdc, &first_wire)?;
+    let (token, cookie) = match classify(&first_reply)? {
+        KdcMsg::Error(e)
+            if e.error_code == err::PREAUTH_REQUIRED || e.error_code == err::PREAUTH_FAILED =>
+        {
+            let method = method_from_error(&e)?;
+            let token = find_pa(&method, pa::AS_FRESHNESS)
+                .map(|p| p.padata_value.as_ref())
+                .filter(|v| !v.is_empty())
+                .map(<[u8]>::to_vec);
+            (token, find_pa(&method, pa::FX_COOKIE).cloned())
+        }
+        KdcMsg::Error(e) => return classify_kdc_error(&e),
+        KdcMsg::AsRep(_) | KdcMsg::TgsRep => {
+            return Err(Error::ReplyMismatch("PKINIT expected METHOD-DATA".into()));
+        }
+    };
+    let mut extra = Vec::new();
+    if let Some(c) = cookie {
+        extra.push(c);
+    }
+    let mut req2 = build_as_req_from(req, nonce, till, Some(extra), etypes)?;
     let body_der = encode(&req2.0.req_body)?;
     let mut h = Sha1::new();
     h.update(&body_der);
     let sha1 = h.finalize();
     let anonymous = req.ticket.anonymous || krb5_types::pkinit::is_anonymous_principal(&req.cname);
     let pa = if anonymous {
-        crate::preauth::pa_pk_as_req_unsigned(&kp.public, nonce, &sha1)?
+        crate::preauth::pa_pk_as_req_unsigned(&kp.public, nonce, &sha1, token.as_deref())?
     } else {
-        pa_pk_as_req_signed(&kp.public, &pk.cert, &pk.key, nonce, &sha1)?
+        pa_pk_as_req_signed(
+            &kp.public,
+            &pk.cert,
+            &pk.key,
+            nonce,
+            &sha1,
+            token.as_deref(),
+        )?
     };
-    // MIT appends PA-AS-FRESHNESS/PA-REQ-ENC-PA-REP (150/149) after the preauth
-    // module's PA data, so PA-PK-AS-REQ (16) leads the list.
     req2.0.padata.get_or_insert_with(Vec::new).insert(0, pa);
     let wire = encode(&req2)?;
     tracing::info!(
@@ -793,6 +822,7 @@ fn continue_pkinit(
         component = "krb5-protocol",
         outcome = "ok",
         pa_type = pa::PK_AS_REQ,
+        freshness = token.is_some(),
     );
     let reply = exchange(req.kdc, &wire)?;
     match classify(&reply)? {

@@ -105,7 +105,7 @@ docker exec "$NAME" grep -q 'BEGIN EC PRIVATE KEY' /tmp/pkinit/user.pem
 docker exec "$NAME" grep -q 'BEGIN CERTIFICATE' /tmp/pkinit/kdc.pem
 docker exec "$NAME" grep -q 'BEGIN EC PRIVATE KEY' /tmp/pkinit/kdc.pem
 
-docker exec "$NAME" sh -c 'grep -q pkinit_identity /etc/krb5kdc/kdc.conf || sed -i "/\[kdcdefaults\]/a\\    pkinit_identity = FILE:/tmp/pkinit/kdc.pem\\n    pkinit_anchors = FILE:/tmp/pkinit/ca.pem\\n    pkinit_dh_min_bits = P-256" /etc/krb5kdc/kdc.conf'
+docker exec "$NAME" sh -c 'grep -q pkinit_identity /etc/krb5kdc/kdc.conf || sed -i "/\[kdcdefaults\]/a\\    pkinit_identity = FILE:/tmp/pkinit/kdc.pem\\n    pkinit_anchors = FILE:/tmp/pkinit/ca.pem\\n    pkinit_dh_min_bits = P-256\\n    pkinit_require_freshness = true" /etc/krb5kdc/kdc.conf'
 docker exec "$NAME" python3 -c '
 from pathlib import Path
 p = Path("/etc/krb5kdc/kdc.conf")
@@ -435,5 +435,32 @@ docker exec "$NAME" grep -q 'ANONYMOUS NOT ALLOWED' /tmp/mit-kdc-anon.log || {
     log "pkinit.client.gate" "error" ',"error":"MIT KDC log missing ANONYMOUS NOT ALLOWED"'
     exit 1
 }
-log "pkinit.client.gate" "ok" ',"mode":"rust-kinit-anon","principal":"WELLKNOWN/ANONYMOUS","restrict_anon":12'
+echo "==== require_freshness: rust kinit vs MIT KDC ===="
+docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
+docker exec "$NAME" sh -c ': >/tmp/mit-kdc-anon.log'
+set +e
+FROUT="$(docker exec -e KRB5_PASSWORD= "$NAME" \
+    /tmp/krb5-kinit --pkinit FILE:/tmp/pkinit/user.pem --pkinit-anchors FILE:/tmp/pkinit/ca.pem \
+    -c /tmp/krb5cc_fresh user@KERBER.TEST 2>&1)"
+frrc=$?
+set -e
+echo "$FROUT"
+if [ "$frrc" -ne 0 ]; then
+    docker exec "$NAME" cat /tmp/mit-kdc-anon.log 2>/dev/null || true
+    log "pkinit.client.gate" "error" ',"error":"rust kinit vs MIT require_freshness failed","rc":'"$frrc"
+    exit 1
+fi
+assert_no_error_log "$FROUT"
+FRKL="$(docker exec "$NAME" klist -c /tmp/krb5cc_fresh 2>/dev/null || true)"
+echo "$FRKL"
+echo "$FRKL" | grep -q 'user@KERBER.TEST' || {
+    log "pkinit.client.gate" "error" ',"error":"klist after rust kinit require_freshness missing user@KERBER.TEST"'
+    exit 1
+}
+docker exec "$NAME" grep -q 'freshness token received' /tmp/mit-kdc-anon.log || {
+    docker exec "$NAME" cat /tmp/mit-kdc-anon.log 2>/dev/null || true
+    log "pkinit.client.gate" "error" ',"error":"MIT KDC log missing freshness token received"'
+    exit 1
+}
+log "pkinit.client.gate" "ok" ',"mode":"rust-kinit-anon","principal":"WELLKNOWN/ANONYMOUS","restrict_anon":12,"require_freshness":true'
 exit 0

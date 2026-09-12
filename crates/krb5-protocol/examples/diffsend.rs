@@ -25,7 +25,8 @@ use krb5_kdc::{
 use krb5_protocol::{
     KdcAddr, Keytab, armor_key, as_req, as_req_sname, attach_fast, attach_fast_with_options,
     build_fast_armor, compare_krb_error, compare_stable_rep, decode_enc_kdc_rep, exchange_on_tcp,
-    pa_enc_timestamp, pa_enc_timestamp_at, pa_for_user, pa_pac_options, pa_pk_as_req_unsigned,
+    pa_enc_timestamp, pa_enc_timestamp_at, pa_for_user, pa_pac_options, pa_pk_as_req_signed,
+    pa_pk_as_req_unsigned,
     pa_s4u_x509_user, pa_spake_support, tgs_req, tgs_req_ex, tgs_req_ex_addr, tgs_req_ex_from,
     tgs_req_ex_subkey, tgs_req_ex_till,
 };
@@ -4196,7 +4197,7 @@ fn run() -> Result<(), String> {
     h.update(&body_der);
     let sha1 = h.finalize();
     unsigned_named.0.padata = Some(vec![
-        pa_pk_as_req_unsigned(&kp.public, 0x1000_0090, &sha1).map_err(|e| e.to_string())?,
+        pa_pk_as_req_unsigned(&kp.public, 0x1000_0090, &sha1, None).map_err(|e| e.to_string())?,
     ]);
     expect_error(
         &cfg,
@@ -4277,7 +4278,45 @@ fn run() -> Result<(), String> {
         &encode(&hide_tgs).map_err(|e| e.to_string())?,
     )?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":105}}"#);
+    // RFC 8070: stale AuthPack [4] is internal 90 → wire 24 + a fresh token.
+    let pem_path = env::var("KERBER_PKINIT_USER").unwrap_or_else(|_| "/tmp/pkinit/user.pem".into());
+    let pem = fs::read_to_string(&pem_path).map_err(|e| format!("pkinit user pem {pem_path}: {e}"))?;
+    let (cert, leaf) = krb5_types::pkinit::parse_identity_pem(&pem)
+        .ok_or_else(|| format!("parse {pem_path}"))?;
+    let stale_kp = p256_generate().map_err(|e| e.to_string())?;
+    let mut stale_req =
+        as_req(user.clone(), realm, 0x1000_0093, None).map_err(|e| e.to_string())?;
+    let stale_body = encode(&stale_req.0.req_body).map_err(|e| e.to_string())?;
+    let mut h = Sha1::new();
+    h.update(&stale_body);
+    let stale_sha1 = h.finalize();
+    let stale_ts = KerberosTime::now().unix_seconds().saturating_sub(601);
+    let mut stale_tok = stale_ts.to_be_bytes().to_vec();
+    stale_tok.extend_from_slice(&1u32.to_be_bytes());
+    stale_tok.extend_from_slice(&[0u8; 12]);
+    stale_req.0.padata = Some(vec![
+        pa_pk_as_req_signed(
+            &stale_kp.public,
+            &cert,
+            &leaf,
+            0x1000_0093,
+            &stale_sha1,
+            Some(&stale_tok),
+        )
+        .map_err(|e| e.to_string())?,
+        PaData {
+            padata_type: pa::AS_FRESHNESS,
+            padata_value: Vec::<u8>::new().into(),
+        },
+    ]);
+    expect_error(
+        &cfg,
+        "pkinit-stale-freshness",
+        &encode(&stale_req).map_err(|e| e.to_string())?,
+        err::PREAUTH_FAILED,
+    )?;
+
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":106}}"#);
     Ok(())
 }
 

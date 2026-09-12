@@ -754,16 +754,21 @@ fn pkinit_as_req_carries_pa_pk_as_req() {
         ca_cert: ca.ca_cert.clone(),
     };
 
-    let first = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::new(Mutex::new(Vec::new()));
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
     let port = udp.local_addr().unwrap().port();
-    let first2 = first.clone();
+    let seen2 = seen.clone();
     thread::spawn(move || {
         let mut buf = [0u8; 8192];
         let Ok((n, src)) = udp.recv_from(&mut buf) else {
             return;
         };
-        *first2.lock().unwrap() = buf[..n].to_vec();
+        seen2.lock().unwrap().push(buf[..n].to_vec());
+        let hint = encode(&vec![krb5_types::PaData {
+            padata_type: pa::AS_FRESHNESS,
+            padata_value: vec![0u8; 20].into(),
+        }])
+        .unwrap();
         let reply = encode(&KrbError {
             pvno: KrbError::PVNO,
             msg_type: KrbError::MSG_TYPE,
@@ -777,10 +782,14 @@ fn pkinit_as_req_carries_pa_pk_as_req() {
             realm: ascii("KERBER.TEST"),
             sname: PrincipalName::krbtgt("KERBER.TEST"),
             e_text: None,
-            e_data: None,
+            e_data: Some(hint.into()),
         })
         .unwrap();
         let _ = udp.send_to(&reply, src);
+        let Ok((n, _)) = udp.recv_from(&mut buf) else {
+            return;
+        };
+        seen2.lock().unwrap().push(buf[..n].to_vec());
     });
     thread::sleep(Duration::from_millis(20));
     let _ = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
@@ -799,13 +808,24 @@ fn pkinit_as_req_carries_pa_pk_as_req() {
         etypes: None,
         ticket: krb5_protocol::AsTicketOpts::default(),
     });
-    let raw = first.lock().unwrap().clone();
-    assert!(!raw.is_empty(), "PKINIT client must send an AS-REQ");
-    let req: AsReq = decode(&raw).expect("AS-REQ");
-    let padata = req.0.padata.unwrap_or_default();
+    let pkts = seen.lock().unwrap().clone();
+    assert_eq!(pkts.len(), 2, "PKINIT client is two-round (empty 150, then PA-16)");
+    let first: AsReq = decode(&pkts[0]).expect("first AS-REQ");
+    let p1 = first.0.padata.unwrap_or_default();
     assert!(
-        padata.iter().any(|p| p.padata_type == pa::PK_AS_REQ),
-        "PKINIT AS-REQ must carry PA-PK-AS-REQ (16), got {padata:?}"
+        p1.iter()
+            .any(|p| p.padata_type == pa::AS_FRESHNESS && p.padata_value.as_ref().is_empty()),
+        "first PKINIT AS-REQ must advertise empty 150, got {p1:?}"
+    );
+    assert!(
+        !p1.iter().any(|p| p.padata_type == pa::PK_AS_REQ),
+        "first PKINIT AS-REQ must not carry PA-16, got {p1:?}"
+    );
+    let second: AsReq = decode(&pkts[1]).expect("second AS-REQ");
+    let p2 = second.0.padata.unwrap_or_default();
+    assert!(
+        p2.iter().any(|p| p.padata_type == pa::PK_AS_REQ),
+        "second PKINIT AS-REQ must carry PA-PK-AS-REQ (16), got {p2:?}"
     );
 }
 

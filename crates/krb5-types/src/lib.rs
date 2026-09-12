@@ -1975,6 +1975,7 @@ mod tests {
             ctime: KerberosTime::now(),
             nonce: 1,
             pa_checksum: Some(ck.clone().into()),
+            freshness_token: None,
         };
         let pack = pkinit::encode_client_authpack(&pk_auth, &pkinit::encode_ec_spki(&[0x04u8; 65]))
             .expect("authpack");
@@ -1987,6 +1988,7 @@ mod tests {
             ctime: KerberosTime::now(),
             nonce: 1,
             pa_checksum: Some(ck_bad.into()),
+            freshness_token: None,
         };
         let pack_bad =
             pkinit::encode_client_authpack(&pk_bad, &pkinit::encode_ec_spki(&[0x04u8; 65]))

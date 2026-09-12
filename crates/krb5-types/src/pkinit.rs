@@ -36,6 +36,9 @@ pub struct PkAuthenticator {
     /// SHA-1 of the KDC-REQ-BODY (RFC 4556 `OCTET STRING`, not a Checksum).
     #[rasn(tag(explicit(3)))]
     pub pa_checksum: Option<OctetString>,
+    /// RFC 8070 freshness token (`PKAuthenticator` `[4]`).
+    #[rasn(tag(explicit(4)))]
+    pub freshness_token: Option<OctetString>,
 }
 
 /// AuthPack ::= SEQUENCE { pkAuthenticator, clientPublicValue, … }
@@ -306,6 +309,41 @@ pub fn parse_authpack(der: &[u8]) -> Option<(u32, Vec<u8>)> {
 #[must_use]
 pub fn kdc_req_body_checksum(body: &[u8]) -> Vec<u8> {
     sha1_bytes(body)
+}
+
+/// RFC 8070 `PKAuthenticator.freshnessToken` `[4]` (opaque token bytes).
+#[must_use]
+pub fn parse_authpack_freshness_token(der: &[u8]) -> Option<Vec<u8>> {
+    let (t, body, _) = take_tlv(der)?;
+    if t != 0x30 {
+        return None;
+    }
+    let mut cur = body;
+    while !cur.is_empty() {
+        let (tag, inner, rest) = take_tlv(cur)?;
+        if tag == 0xa0 {
+            return pkauth_freshness_token(unwrap_explicit_seq(inner));
+        }
+        cur = rest;
+    }
+    None
+}
+
+fn pkauth_freshness_token(seq_body: &[u8]) -> Option<Vec<u8>> {
+    let mut cur = seq_body;
+    while !cur.is_empty() {
+        let (tag, inner, rest) = take_tlv(cur)?;
+        if tag == 0xa4 {
+            if inner.first() == Some(&0x04)
+                && let Some((_, body, _)) = take_tlv(inner)
+            {
+                return Some(body.to_vec());
+            }
+            return Some(inner.to_vec());
+        }
+        cur = rest;
+    }
+    None
 }
 
 /// RFC 4556 §3.2.2: AuthPack `pkAuthenticator` `ctime` / `cusec`.

@@ -337,7 +337,95 @@ EOF"
         exit 1
     }
 
-    log "pkinit.gate" "ok" ',"mode":"mit-kinit","kdf":"rfc8636-sha256","mit_plugin":"present","san_mismatch":"refused","dh_typed":"typed+cookie","pkinit_require_auth":"issued+12","pkinit_h":false,"no_hw_preauth":60,"anon_kinit":true,"restrict_anon":12'
+    echo "==== require_freshness: MIT kinit -X vs rust KDC ===="
+    docker exec "$NAME" python3 -c '
+from pathlib import Path
+p = Path("/tmp/rust-kdc.conf")
+t = p.read_text()
+if "pkinit_require_freshness" not in t:
+    t = t.replace("[kdcdefaults]", "[kdcdefaults]\n    pkinit_require_freshness = true", 1)
+    p.write_text(t)
+'
+    docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true'
+    sleep 0.3
+    docker exec -d \
+        -e KRB5_TEST_USER_PASSWORD=userpassword \
+        -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
+        -e KRB5_KDC_DB=/tmp/rust.db \
+        -e KRB5_KDC_STASH=/tmp/rust.stash \
+        -e KRB5_KDC_PROFILE=/tmp/rust-kdc.conf \
+        "$NAME" sh -c '/tmp/krb5-kdc --test-realm --export-pkinit /tmp/pkinit 127.0.0.1:'"$PORT"' >/tmp/kdc.log 2>&1'
+    okf=0
+    for _ in $(seq 1 80); do
+        if docker exec "$NAME" grep -q '^listening ' /tmp/kdc.log 2>/dev/null; then
+            okf=1
+            break
+        fi
+        sleep 0.25
+    done
+    if [ "$okf" -ne 1 ]; then
+        docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
+        log "pkinit.gate" "error" ',"error":"rust KDC did not listen after require_freshness"'
+        exit 1
+    fi
+    docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
+    set +e
+    docker exec -e KRB5_TRACE=/dev/stderr "$NAME" \
+        kinit -X X509_user_identity=FILE:/tmp/pkinit/user.pem user@KERBER.TEST
+    frc=$?
+    set -e
+    if [ "$frc" -ne 0 ]; then
+        docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
+        log "pkinit.gate" "error" ',"error":"MIT kinit -X vs rust KDC require_freshness failed","rc":'"$frc"
+        exit 1
+    fi
+    FRKL="$(docker exec "$NAME" klist)"
+    echo "$FRKL"
+    echo "$FRKL" | grep -q 'user@KERBER.TEST' || {
+        log "pkinit.gate" "error" ',"error":"klist after require_freshness kinit missing user@KERBER.TEST"'
+        exit 1
+    }
+    docker exec "$NAME" grep -q 'freshness token received' /tmp/kdc.log || {
+        docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
+        log "pkinit.gate" "error" ',"error":"rust KDC log missing freshness token received"'
+        exit 1
+    }
+    docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
+    set +e
+    FNOUT="$(docker exec -e KRB5_TRACE=/dev/stderr "$NAME" \
+        kinit -X X509_user_identity=FILE:/tmp/pkinit/user.pem -X disable_freshness=yes user@KERBER.TEST 2>&1)"
+    fnrc=$?
+    set -e
+    echo "$FNOUT"
+    if [ "$fnrc" -eq 0 ]; then
+        log "pkinit.gate" "error" ',"error":"disable_freshness kinit issued under require_freshness"'
+        exit 1
+    fi
+    echo "$FNOUT" | grep -qi 'Preauthentication failed' || {
+        log "pkinit.gate" "error" ',"error":"disable_freshness missing Preauthentication failed"'
+        exit 1
+    }
+    docker exec "$NAME" grep -q 'no freshness token, rejecting' /tmp/kdc.log || {
+        docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
+        log "pkinit.gate" "error" ',"error":"rust KDC log missing no freshness token, rejecting"'
+        exit 1
+    }
+    docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
+    docker exec \
+        -e KRB5_KDC_DB=/tmp/rust.db \
+        -e KRB5_KDC_STASH=/tmp/rust.stash \
+        "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey WELLKNOWN/ANONYMOUS' >/dev/null
+    set +e
+    docker exec "$NAME" kinit -n -X disable_freshness=yes
+    fanon=$?
+    set -e
+    if [ "$fanon" -ne 0 ]; then
+        docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
+        log "pkinit.gate" "error" ',"error":"anonymous kinit -n disable_freshness failed under require_freshness","rc":'"$fanon"
+        exit 1
+    fi
+
+    log "pkinit.gate" "ok" ',"mode":"mit-kinit","kdf":"rfc8636-sha256","mit_plugin":"present","san_mismatch":"refused","dh_typed":"typed+cookie","pkinit_require_auth":"issued+12","pkinit_h":false,"no_hw_preauth":60,"anon_kinit":true,"restrict_anon":12,"require_freshness":true'
     exit 0
 fi
 echo "MIT kinit with FILE identity failed (rc=$rc)"
