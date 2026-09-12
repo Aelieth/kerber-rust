@@ -283,6 +283,44 @@ docker exec "$NAME" grep -q 'HIGHER_AUTHENTICATION_REQUIRED' /tmp/mit-kdc.log ||
     exit 1
 }
 
+echo "==== PKINIT TGT has no H; +requires_hwauth host is NO HW PREAUTH ===="
+docker exec "$NAME" kadmin.local -q 'delstr host/testhost.kerber.test require_auth' || true
+docker exec "$NAME" kadmin.local -q 'modprinc +requires_hwauth host/testhost.kerber.test'
+docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
+set +e
+docker exec -e KRB5_TRACE=/dev/stderr "$NAME" \
+    kinit -X X509_user_identity=FILE:/tmp/pkinit/user.pem user@KERBER.TEST
+mhw=$?
+set -e
+if [ "$mhw" -ne 0 ]; then
+    docker exec "$NAME" cat /tmp/mit-kdc.log 2>/dev/null || true
+    log "pkinit.client.gate" "error" ',"error":"MIT kinit PKINIT after +requires_hwauth failed","rc":'"$mhw"
+    exit 1
+fi
+MHWL="$(docker exec "$NAME" klist -f)"
+echo "$MHWL"
+MHBITS="$(echo "$MHWL" | awk -F'Flags: ' '/Flags:/{print $2}' | tail -1 | tr -d '[:space:]')"
+echo "hbits=$MHBITS"
+echo "$MHBITS" | grep -qv H || {
+    log "pkinit.client.gate" "error" ',"error":"MIT PKINIT TGT has H"'
+    exit 1
+}
+docker exec "$NAME" sh -c ': >/tmp/mit-kdc.log'
+set +e
+MHWKV="$(docker exec "$NAME" kvno host/testhost.kerber.test 2>&1)"
+set -e
+echo "$MHWKV"
+echo "$MHWKV" | grep -qiE 'Generic error|KDC policy rejects request|NO HW PREAUTH' || {
+    docker exec "$NAME" cat /tmp/mit-kdc.log 2>/dev/null || true
+    log "pkinit.client.gate" "error" ',"error":"MIT kvno after PKINIT TGT +requires_hwauth host did not fail"'
+    exit 1
+}
+docker exec "$NAME" grep -q 'NO HW PREAUTH' /tmp/mit-kdc.log || {
+    docker exec "$NAME" cat /tmp/mit-kdc.log 2>/dev/null || true
+    log "pkinit.client.gate" "error" ',"error":"MIT KDC log missing NO HW PREAUTH"'
+    exit 1
+}
+
 echo "==== negative: MIT KDC identity is a client cert (rogue KDC) ===="
 docker exec "$NAME" sh -c 'grep -q pkinit_identity /etc/krb5kdc/kdc.conf && sed -i "s|pkinit_identity = FILE:/tmp/pkinit/kdc.pem|pkinit_identity = FILE:/tmp/pkinit/user.pem|" /etc/krb5kdc/kdc.conf'
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'

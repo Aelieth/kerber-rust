@@ -22,7 +22,7 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
-cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-kdb
+cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-kdb -p krb5-admin --bin krb5-kadmin-local
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
@@ -35,7 +35,8 @@ trap cleanup EXIT
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb
-docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmin-local" "$NAME":/tmp/krb5-kadmin-local
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb /tmp/krb5-kadmin-local
 docker exec "$NAME" sh -c 'cat > /tmp/rust-kdc.conf <<EOF
 [realms]
     KERBER.TEST = {
@@ -238,7 +239,48 @@ EOF"
         exit 1
     }
 
-    log "pkinit.gate" "ok" ',"mode":"mit-kinit","kdf":"rfc8636-sha256","mit_plugin":"present","san_mismatch":"refused","dh_typed":"typed+cookie","pkinit_require_auth":"issued+12"'
+    echo "==== PKINIT TGT has no H; +requires_hwauth host is NO HW PREAUTH ===="
+    HWMOD="$(docker exec \
+        -e KRB5_KDC_DB=/tmp/rust.db \
+        -e KRB5_KDC_STASH=/tmp/rust.stash \
+        "$NAME" /tmp/krb5-kadmin-local -q 'modprinc +requires_hwauth host/testhost.kerber.test')"
+    echo "$HWMOD"
+    docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
+    set +e
+    docker exec -e KRB5_TRACE=/dev/stderr "$NAME" \
+        kinit -X X509_user_identity=FILE:/tmp/pkinit/user.pem user@KERBER.TEST
+    hwrc=$?
+    set -e
+    if [ "$hwrc" -ne 0 ]; then
+        docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
+        log "pkinit.gate" "error" ',"error":"MIT kinit PKINIT after +requires_hwauth failed","rc":'"$hwrc"
+        exit 1
+    fi
+    HWL="$(docker exec "$NAME" klist -f)"
+    echo "$HWL"
+    HBITS="$(echo "$HWL" | awk -F'Flags: ' '/Flags:/{print $2}' | tail -1 | tr -d '[:space:]')"
+    echo "hbits=$HBITS"
+    echo "$HBITS" | grep -qv H || {
+        log "pkinit.gate" "error" ',"error":"rust PKINIT TGT has H"'
+        exit 1
+    }
+    docker exec "$NAME" sh -c ': >/tmp/kdc.log'
+    set +e
+    HWKC="$(docker exec "$NAME" kvno host/testhost.kerber.test 2>&1)"
+    set -e
+    echo "$HWKC"
+    echo "$HWKC" | grep -qiE 'Generic error|KDC policy rejects request|NO HW PREAUTH' || {
+        docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
+        log "pkinit.gate" "error" ',"error":"kvno after PKINIT TGT +requires_hwauth host did not fail"'
+        exit 1
+    }
+    docker exec "$NAME" grep -q 'NO HW PREAUTH' /tmp/kdc.log || {
+        docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
+        log "pkinit.gate" "error" ',"error":"rust KDC log missing NO HW PREAUTH"'
+        exit 1
+    }
+
+    log "pkinit.gate" "ok" ',"mode":"mit-kinit","kdf":"rfc8636-sha256","mit_plugin":"present","san_mismatch":"refused","dh_typed":"typed+cookie","pkinit_require_auth":"issued+12","pkinit_h":false,"no_hw_preauth":60'
     exit 0
 fi
 echo "MIT kinit with FILE identity failed (rc=$rc)"

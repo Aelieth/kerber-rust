@@ -416,7 +416,7 @@ fn issue_as_body(
     let mut extra_padata: Vec<PaData> = Vec::new();
     let mut as_rep_key = ckey.key.clone();
     let mut skip_timestamp = false;
-    let mut hw_preauth = false;
+    let hw_preauth = false;
     let mut reply_key_replaced = false;
     let mut auth_indicators: Vec<String> = Vec::new();
     let as_req_der = match raw {
@@ -439,7 +439,6 @@ fn issue_as_body(
             as_rep_key = key;
             extra_padata.push(pa);
             skip_timestamp = true;
-            hw_preauth = true;
             reply_key_replaced = true;
             for ind in &store.policy().pkinit_indicators {
                 authind_add(&mut auth_indicators, ind);
@@ -1222,8 +1221,13 @@ fn issue_tgs_body(
             .starttime
             .clone()
             .unwrap_or_else(|| enc_tkt.authtime.clone());
-        let old_life = enc_tkt.endtime.delta_seconds(&old_start).max(0);
-        end = now.add_seconds(old_life).unwrap_or_else(|_| now.clone());
+        let start_s = old_start.unix_seconds();
+        let end_s = enc_tkt.endtime.unix_seconds();
+        let mut hlife = i64::from(end_s.wrapping_sub(start_s).cast_signed());
+        if end_s > start_s && hlife < 0 {
+            hlife = i64::from(i32::MAX);
+        }
+        end = now.add_seconds(hlife).unwrap_or_else(|_| now.clone());
         if let Some(till) = &enc_tkt.renew_till
             && till.unix_seconds() < end.unix_seconds()
         {

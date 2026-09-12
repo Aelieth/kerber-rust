@@ -242,7 +242,7 @@ grep -q '"case":"as-invalid-opts","outcome":"ok","error_code":13' <<<"$DIFF" || 
 grep -q '"case":"as-request-anonymous","outcome":"ok","error_code":13,"e_text":"VALIDATE_ANONYMOUS_PRINCIPAL","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "as-request-anonymous not code 13 e_text VALIDATE_ANONYMOUS_PRINCIPAL on both legs"
 grep -q '"case":"as-validate-before-preauth","outcome":"ok","error_code":23' <<<"$DIFF" || die "as-validate-before-preauth (preauth+needchange) not code 23 on both legs"
 grep -q '"case":"as-retransmit","outcome":"ok","rust_retransmit_identical":true,"mit_retransmit_identical":true' <<<"$DIFF" || die "as-retransmit reply not identical from the lookaside on both legs"
-grep -q '"outcome":"ok","cases":101' <<<"$DIFF" || die "diffsend did not finish 101 cases"
+grep -q '"outcome":"ok","cases":102' <<<"$DIFF" || die "diffsend did not finish 102 cases"
 grep -q '"case":"fast-armor-no-subkey","outcome":"ok","error_code":12,"e_text":"FIND_FAST","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "fast-armor-no-subkey not code 12 e_text FIND_FAST on both legs"
 grep -q '"case":"armor-ap-req-as-pa-tgs-req","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "armor-ap-req-as-pa-tgs-req not code 12 e_text PROCESS_TGS on both legs"
 grep -q '"case":"tgs-ad-fx-armor-authenticator","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-ad-fx-armor-authenticator not code 12 e_text PROCESS_TGS on both legs"
@@ -325,6 +325,7 @@ grep -q '"case":"tgs-rbcd-pac-options","outcome":"ok","rust_tag":"0x6d","mit_tag
 grep -q '"case":"tgs-till-in-past","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"' <<<"$DIFF" || die "tgs-till-in-past not TGS-REP on both legs"
 grep -q '"case":"tgs-service-expired-require-auth","outcome":"ok","error_code":2,"e_text":"SERVICE EXPIRED","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-service-expired-require-auth not code 2 e_text SERVICE EXPIRED on both legs"
 grep -q '"case":"tgs-postdated-from","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"' <<<"$DIFF" || die "tgs-postdated-from not TGS-REP on both legs"
+grep -q '"case":"tgs-renew-header-end-before-start","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","life":-60' <<<"$DIFF" || die "tgs-renew-header-end-before-start not expired RENEW life -60 on both legs"
 echo "==== MIT_HINT kdc-padata-proxy 25/91 e_data wire order ===="
 docker cp "$ROOT/scripts/lib/kdc-padata-proxy.py" "$NAME":/tmp/kdc-padata-proxy.py
 HINT_ORDER="$(docker exec "$NAME" python3 -c '

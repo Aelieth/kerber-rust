@@ -133,6 +133,7 @@ DIFFSEND_CASES = frozenset(
         "tgs-truncated-cammac",
         "ec-outside-fast",
         "tgs-rbcd-pac-options",
+        "tgs-renew-header-end-before-start",
     }
 )
 _LEDGER_GATE = re.compile(r"(?:scripts/)?([A-Za-z0-9._-]+-gate(?:\.sh)?)")

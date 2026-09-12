@@ -3964,6 +3964,65 @@ fn run() -> Result<(), String> {
         r#"{{"event":"diffsend","case":"tgs-postdated-from","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","starttime_omitted":true}}"#
     );
 
+    let past_end = now.add_seconds(-60).unwrap_or_else(|_| now.clone());
+    let (hkey, hkvno) = keytab_for(svc, 20)?;
+    let inverted = EncTicketPart {
+        flags: TicketFlags::initial_preauth().with_bit(flag_bit::RENEWABLE, true),
+        key: EncryptionKey {
+            keytype: sess.etype().to_iana(),
+            keyvalue: sess.as_bytes().to_vec().into(),
+        },
+        crealm: krb5_types::try_ascii(realm).map_err(|e| e.to_string())?,
+        cname: user.clone(),
+        transited: TransitedEncoding {
+            tr_type: 1,
+            contents: Vec::<u8>::new().into(),
+        },
+        authtime: now.clone(),
+        starttime: Some(now.clone()),
+        endtime: past_end,
+        renew_till: Some(now.add_hours(24).unwrap_or_else(|_| now.clone())),
+        caddr: None,
+        authorization_data: None,
+    };
+    let inverted_svc = seal_ticket(hkey, hkvno, realm, &host, &inverted)?;
+    let renew_inv = encode(
+        &tgs_req_ex(
+            inverted_svc,
+            &sess,
+            realm,
+            &user,
+            host.clone(),
+            realm,
+            0x1000_0080,
+            KdcOptions::forwardable()
+                .with_bit(flag_bit::RENEWABLE, true)
+                .with_bit(flag_bit::RENEW, true),
+            None,
+            Vec::new(),
+            etypes.clone(),
+        )
+        .map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    let (tr, tm) = send_both(&cfg, "tgs-renew-header-end-before-start", &renew_inv)?;
+    let (_, _, rt, _) = decrypt_tgs(&tr, &sess, svc)?;
+    let (_, _, mt, _) = decrypt_tgs(&tm, &sess, svc)?;
+    let life = |p: &EncTicketPart| {
+        let start = p.starttime.as_ref().unwrap_or(&p.authtime).unix_seconds();
+        i64::from(p.endtime.unix_seconds()) - i64::from(start)
+    };
+    let rl = life(&rt);
+    let ml = life(&mt);
+    if rl != -60 || ml != -60 {
+        return Err(format!(
+            "tgs-renew-header-end-before-start rust_life={rl} mit_life={ml} want=-60"
+        ));
+    }
+    println!(
+        r#"{{"event":"diffsend","case":"tgs-renew-header-end-before-start","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","life":-60}}"#
+    );
+
     let pac_opts = pa_pac_options(true).map_err(|e| e.to_string())?;
     let rbcd_req = encode(
         &tgs_req_ex(
@@ -4017,7 +4076,7 @@ fn run() -> Result<(), String> {
         r#"{{"event":"diffsend","case":"tgs-rbcd-pac-options","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","pac_options":true}}"#
     );
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":101}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":102}}"#);
     Ok(())
 }
 

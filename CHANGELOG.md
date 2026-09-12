@@ -67,6 +67,10 @@ this project uses semantic versioning once a crate is published.
   `require_auth` live cells are exact `KDC policy rejects request` plus
   the KDC log word. PKINIT / Encrypted Challenge / SPAKE indicator
   pairs issue when the TGT carries the matching indicator.
+- **kdc.** Stock PKINIT does not set `HW_AUTHENT` (`pkinit_srv.c:360-366,602`;
+  no certauth hook). A `+requires_hwauth` service is `NO HW PREAUTH` 60.
+  TGS RENEW uses signed header life (`do_tgs_req.c:836-838`), so
+  `endtime < starttime` renews expired. diffsend 101 → 102.
 
 ### W1-A′-2
 
