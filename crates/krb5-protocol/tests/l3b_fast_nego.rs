@@ -11,8 +11,13 @@ use krb5_kdc::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
 use krb5_protocol::{AsRequest, AsTicketOpts, KdcAddr, as_exchange};
 use krb5_types::{AsReq, PrincipalName, pa};
 
+fn isolate_host_krb5() {
+    krb5_config::isolate_test_krb5();
+}
+
 #[test]
 fn as_exchange_rejects_reply_missing_enc_pa_rep_checksum() {
+    isolate_host_krb5();
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     // No-preauth so the KDC issues on the first AS-REQ (single round-trip).

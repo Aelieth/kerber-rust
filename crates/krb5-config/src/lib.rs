@@ -6,6 +6,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{SocketAddr, UdpSocket};
 use std::path::{Path, PathBuf};
@@ -1010,9 +1011,31 @@ pub fn env_kdc_config() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+thread_local! {
+    static TEST_KRB5_PATHS: RefCell<Option<Vec<PathBuf>>> = const { RefCell::new(None) };
+}
+
+/// Test overlay for [`krb5_conf_paths`] (avoids the host `/etc/krb5.conf`).
+pub fn set_test_krb5_paths(paths: Option<Vec<PathBuf>>) {
+    TEST_KRB5_PATHS.with(|c| *c.borrow_mut() = paths);
+}
+
+/// Pin a realm-only profile so host `udp_preference_limit` cannot force TCP.
+pub fn isolate_test_krb5() {
+    let path = std::env::temp_dir().join(format!("kerber-test-krb5-{}.conf", std::process::id()));
+    let _ = std::fs::write(
+        &path,
+        "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    dns_lookup_realm = false\n",
+    );
+    set_test_krb5_paths(Some(vec![path]));
+}
+
 /// `KRB5_CONFIG` (colon-split) or `/etc/krb5.conf` when unset.
 #[must_use]
 pub fn krb5_conf_paths() -> Vec<PathBuf> {
+    if let Some(paths) = TEST_KRB5_PATHS.with(|c| c.borrow().clone()) {
+        return paths;
+    }
     match std::env::var_os("KRB5_CONFIG") {
         Some(v) => split_krb5_config_paths(&v.to_string_lossy()),
         None => vec![PathBuf::from("/etc/krb5.conf")],

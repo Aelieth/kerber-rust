@@ -13,6 +13,10 @@ use krb5_protocol::{
 };
 use krb5_types::{EncTgsRepPart, PrincipalName, ascii, ku};
 
+fn isolate_host_krb5() {
+    krb5_config::isolate_test_krb5();
+}
+
 fn client_key() -> krb5_crypto::ProtocolKey {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     string_to_key(
@@ -172,6 +176,7 @@ fn ap_req_checksum_uses_declared_type() {
 
 #[test]
 fn exchange_tcp_and_udp_round_trip_local_kdc() {
+    isolate_host_krb5();
     use std::io::{Read, Write};
     use std::net::{TcpListener, UdpSocket};
     use std::thread;
@@ -262,6 +267,7 @@ fn referral_hop_realm_uses_foreign_sname() {
 
 #[test]
 fn non_ascii_realm_as_exchange_is_err() {
+    isolate_host_krb5();
     let err = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
         cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
         realm: "KÉRBER.TEST",
@@ -283,6 +289,7 @@ fn non_ascii_realm_as_exchange_is_err() {
 
 #[test]
 fn first_bare_as_req_skew_is_retried() {
+    isolate_host_krb5();
     use std::net::UdpSocket;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -349,6 +356,7 @@ fn first_bare_as_req_skew_is_retried() {
 
 #[test]
 fn spake_as_req_carries_pa_spake() {
+    isolate_host_krb5();
     use std::net::UdpSocket;
     use std::sync::{Arc, Mutex};
     use std::thread;
@@ -413,6 +421,7 @@ fn spake_as_req_carries_pa_spake() {
 
 #[test]
 fn want_spake_rejects_non_preauth_as_rep() {
+    isolate_host_krb5();
     use std::net::UdpSocket;
     use std::thread;
     use std::time::Duration;
@@ -478,6 +487,7 @@ fn want_spake_rejects_non_preauth_as_rep() {
 
 #[test]
 fn want_spake_rejects_fast_and_pkinit() {
+    isolate_host_krb5();
     use krb5_crypto::{EncryptionType, ProtocolKey};
     use krb5_protocol::{FastArmor, PkinitClient};
     use krb5_types::{EncryptedData, PrincipalName, Ticket, ascii};
@@ -544,6 +554,7 @@ fn want_spake_rejects_fast_and_pkinit() {
 
 #[test]
 fn fast_preauth_retry_carries_fx_fast() {
+    isolate_host_krb5();
     use std::net::UdpSocket;
     use std::sync::{Arc, Mutex};
     use std::thread;
@@ -635,6 +646,7 @@ fn fast_preauth_retry_carries_fx_fast() {
 
 #[test]
 fn fast_client_continue_uses_etype20_from_info2() {
+    isolate_host_krb5();
     use std::net::UdpSocket;
     use std::thread;
     use std::time::Duration;
@@ -720,6 +732,7 @@ fn fast_client_continue_uses_etype20_from_info2() {
 
 #[test]
 fn pkinit_as_req_carries_pa_pk_as_req() {
+    isolate_host_krb5();
     use std::net::UdpSocket;
     use std::sync::{Arc, Mutex};
     use std::thread;
@@ -798,6 +811,7 @@ fn pkinit_as_req_carries_pa_pk_as_req() {
 
 #[test]
 fn enterprise_as_req_sets_name_type_and_canonicalize() {
+    isolate_host_krb5();
     use std::net::UdpSocket;
     use std::sync::{Arc, Mutex};
     use std::thread;

@@ -32,9 +32,10 @@ PY
 }
 
 unit_guard_dirty() {
+    local who=${1:-unit_green}
     if [ "${dirty:-yes}" != no ]; then
         if [ "${KERBER_UNIT_ALLOW_DIRTY:-}" != 1 ]; then
-            echo "unit_green: refusing dirty tree (dirty=${dirty:-yes}); set KERBER_UNIT_ALLOW_DIRTY=1 to override" >&2
+            echo "$who: refusing dirty tree (dirty=${dirty:-yes}); set KERBER_UNIT_ALLOW_DIRTY=1 to override" >&2
             return 1
         fi
         echo "override=KERBER_UNIT_ALLOW_DIRTY"
@@ -49,7 +50,7 @@ unit_green() {
         echo "unit_green <name> <nextest filter>" >&2
         return 2
     fi
-    unit_guard_dirty || return 1
+    unit_guard_dirty unit_green || return 1
     echo "==== unit_green $name filter=$filter ===="
     local out rc
     set +e
@@ -95,6 +96,7 @@ unit_red_at() {
         echo "unit_red_at: inject files required: unit_red_at <parent> <name> [--all|<filter>] <files…>" >&2
         return 2
     fi
+    unit_guard_dirty unit_red_at || return 1
     local f
     for f in "$@"; do
         if [ ! -f "$ROOT/$f" ] && [ ! -f "$f" ]; then

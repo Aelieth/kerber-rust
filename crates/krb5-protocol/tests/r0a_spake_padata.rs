@@ -15,8 +15,13 @@ use krb5_kdc::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
 use krb5_protocol::{AsRequest, AsTicketOpts, KdcAddr, as_exchange};
 use krb5_types::{AsReq, PrincipalName, pa};
 
+fn isolate_host_krb5() {
+    krb5_config::isolate_test_krb5();
+}
+
 #[test]
 fn spake_response_request_keeps_the_advertised_padata_in_mit_order() {
+    isolate_host_krb5();
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let seen: Arc<Mutex<Vec<Vec<i32>>>> = Arc::new(Mutex::new(Vec::new()));

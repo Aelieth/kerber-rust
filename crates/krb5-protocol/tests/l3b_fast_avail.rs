@@ -11,8 +11,13 @@ use krb5_kdc::{
 use krb5_protocol::{AsRequest, AsTicketOpts, FastArmor, KdcAddr, as_exchange};
 use krb5_types::{PrincipalName, pa};
 
+fn isolate_host_krb5() {
+    krb5_config::isolate_test_krb5();
+}
+
 #[test]
 fn as_exchange_records_fast_availability() {
+    isolate_host_krb5();
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -69,6 +74,7 @@ fn request<'a>(
 
 #[test]
 fn fast_exchange_negotiates_through_the_armor_like_mit() {
+    isolate_host_krb5();
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();

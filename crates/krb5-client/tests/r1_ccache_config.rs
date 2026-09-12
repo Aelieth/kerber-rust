@@ -13,6 +13,10 @@ use krb5_kdc::{
 };
 use krb5_protocol::{FileCcache, KdcAddr};
 
+fn isolate_host_krb5() {
+    krb5_config::isolate_test_krb5();
+}
+
 fn config_value(cache: &FileCcache, key: &str, server: &str) -> Option<Vec<u8>> {
     cache
         .creds
@@ -28,6 +32,7 @@ fn config_value(cache: &FileCcache, key: &str, server: &str) -> Option<Vec<u8>> 
 
 #[test]
 fn kinit_records_fast_avail_and_pa_type_like_write_out_ccache() {
+    isolate_host_krb5();
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
     let addr = udp.local_addr().unwrap();

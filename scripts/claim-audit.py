@@ -5,7 +5,7 @@ Bullet grammar: `- **Title:**` at column 0, continuation lines indented.
 Backtick spans are cell references (`scripts/x-gate.sh:12`, `x-gate.sh:12-20`,
 `:34` for the script of the previous reference), unit names (snake_case with an
 underscore, a `fn` under crates/), MIT cites (`file.c:1-2`), artefacts (`*.log`,
-`*.json` in the evidence dir the summary names) or quoted values.
+`*.json` in any `working/logs/…` dir on the `Evidence:` line) or quoted values.
 
 A reference passes when its line sits within one line of an assertion
 on one of the quoted values (or the reference is a range that covers
@@ -257,14 +257,32 @@ def settle_kind(text: str) -> str | None:
     return "run"
 
 
-def resolve_artefact(root: pathlib.Path, evidence: pathlib.Path | None, name: str) -> pathlib.Path | None:
+def evidence_as_dirs(
+    evidence: pathlib.Path | list[pathlib.Path] | None,
+) -> list[pathlib.Path]:
+    if evidence is None:
+        return []
+    if isinstance(evidence, pathlib.Path):
+        return [evidence]
+    return list(evidence)
+
+
+def resolve_artefact(
+    root: pathlib.Path,
+    evidence: pathlib.Path | list[pathlib.Path] | None,
+    name: str,
+) -> pathlib.Path | None:
     cands = [root / name]
-    if evidence is not None:
-        cands += [evidence / name, evidence.parent / name]
+    for d in evidence_as_dirs(evidence):
+        cands += [d / name, d.parent / name]
     return next((c for c in cands if c.is_file()), None)
 
 
-def check_bullet(b: Bullet, root: pathlib.Path, evidence: pathlib.Path | None) -> None:
+def check_bullet(
+    b: Bullet,
+    root: pathlib.Path,
+    evidence: pathlib.Path | list[pathlib.Path] | None,
+) -> None:
     legs: set[str] = set()
     gate_refs = 0
     tool_refs = 0
@@ -352,7 +370,9 @@ def check_bullet(b: Bullet, root: pathlib.Path, evidence: pathlib.Path | None) -
 
 
 def audit_text(
-    text: str, root: pathlib.Path, evidence: pathlib.Path | None
+    text: str,
+    root: pathlib.Path,
+    evidence: pathlib.Path | list[pathlib.Path] | None,
 ) -> list[tuple[str, str, list[str], list[str]]]:
     header, bullets = parse_section(text)
     if header is None:
@@ -368,9 +388,18 @@ def audit_text(
     return rows
 
 
+def evidence_dirs_of(text: str, root: pathlib.Path) -> list[pathlib.Path]:
+    seen: list[pathlib.Path] = []
+    for m in re.findall(r"working/logs/(?:[\w.-]+/)+", text):
+        p = root / m.rstrip("/")
+        if p not in seen:
+            seen.append(p)
+    return seen
+
+
 def evidence_dir_of(text: str, root: pathlib.Path) -> pathlib.Path | None:
-    m = re.search(r"working/logs/(?:[\w.-]+/)+", text)
-    return root / m.group(0).rstrip("/") if m else None
+    dirs = evidence_dirs_of(text, root)
+    return dirs[0] if dirs else None
 
 
 def provenance() -> str:
@@ -398,7 +427,10 @@ def main() -> int:
     total = 0
     for summary in args.summaries:
         text = summary.read_text()
-        evidence = args.evidence_dir or evidence_dir_of(text, ROOT)
+        evidence = evidence_dirs_of(text, ROOT)
+        if args.evidence_dir is not None:
+            extra = args.evidence_dir
+            evidence = [extra] + [d for d in evidence if d != extra]
         print(f"==== claim-audit {summary} ====")
         for title, status, reasons, notes in audit_text(text, ROOT, evidence):
             total += 1
