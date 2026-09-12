@@ -358,7 +358,7 @@ grep -q '"case":"as-anonymous-unsigned-authpack-named-client","outcome":"ok","er
 grep -q '"case":"as-fast-hide-error-client","outcome":"ok","error_code":25' <<<"$DIFF" || die "as-fast-hide-error-client not code 25 on both legs"
 grep -q '"case":"tgs-fast-hide-client","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","hidden":true' <<<"$DIFF" || die "tgs-fast-hide-client not hidden TGS-REP on both legs"
 grep -q '"case":"pkinit-stale-freshness","outcome":"ok","error_code":24' <<<"$DIFF" || die "pkinit-stale-freshness not code 24 on both legs"
-grep -q '"case":"tgs-referral-no-dot","outcome":"ok","error_code":7' <<<"$DIFF" || die "tgs-referral-no-dot not code 7 on both legs"
+grep -q '"case":"tgs-referral-no-dot","outcome":"ok","error_code":7,"e_text":"LOOKING_UP_SERVER","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-referral-no-dot not code 7 LOOKING_UP_SERVER on both legs"
 
 echo "==== 128 KiB padded AS-REQ and 1 MiB+1 TCP cap both legs ===="
 TCP_CAP="$(docker exec "$NAME" python3 -c '
