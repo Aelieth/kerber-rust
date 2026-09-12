@@ -44,6 +44,8 @@ this project uses semantic versioning once a crate is published.
   `supported_enctypes` 20,19,18,17.
 - **kdc.** `krb5-forge-tgt --key-hex` wraps dump-keytab bytes as
   the ticket enc etype, not always 18.
+- **test.** `sha2-gate.sh` expects ticket etype 20 (`first_current_key`
+  after `supported_enctypes`), not sha1-first 18.
 
 ### W1-A′-3
 

@@ -100,11 +100,9 @@ echo "$KLIST" | grep -q 'host/testhost.kerber.test'
 
 # MIT `klist -e` prints one `Etype (skey, tkt):` line after each principal.
 # The session key must be RFC 8009 etype 20 (SHA-2 negotiated end to end).
-# The ticket key is the KDC's first current key (MIT `get_first_current_key`);
-# the `--test-realm` store mints the compiled default aes256-sha1-96 first
-# (osconf.hin:109), so the ticket key is etype 18. Honouring the harness
-# kdc.conf `supported_enctypes` order is a separate absent behaviour, and
-# cross-kdc-gate proves the MIT/Rust ticket-key parity on a shared dump.
+# The ticket key is the KDC's first current key (MIT `get_first_current_key`).
+# `--test-realm` honours harness `kdc.conf` `supported_enctypes`
+# (20,19,18,17), so first current is etype 20.
 assert_klist_sha2() {
     local princ="$1"
     local pair skey tkt
@@ -119,13 +117,13 @@ assert_klist_sha2() {
         log "sha2.gate" "error" ",\"error\":\"$princ session key must be aes256-cts-hmac-sha384-192\",\"got\":\"$skey\""
         exit 1
     fi
-    if [ "$tkt" != "aes256-cts-hmac-sha1-96" ]; then
-        log "sha2.gate" "error" ",\"error\":\"$princ ticket key must be the first current key aes256-cts-hmac-sha1-96\",\"got\":\"$tkt\""
+    if [ "$tkt" != "aes256-cts-hmac-sha384-192" ]; then
+        log "sha2.gate" "error" ",\"error\":\"$princ ticket key must be the first current key aes256-cts-hmac-sha384-192\",\"got\":\"$tkt\""
         exit 1
     fi
 }
 assert_klist_sha2 'krbtgt/KERBER.TEST'
 assert_klist_sha2 'host/testhost.kerber.test'
 
-log "sha2.gate" "ok" ',"skey":"aes256-cts-hmac-sha384-192","principal":"user@KERBER.TEST","tkt":"aes256-cts-hmac-sha1-96"'
+log "sha2.gate" "ok" ',"skey":"aes256-cts-hmac-sha384-192","principal":"user@KERBER.TEST","tkt":"aes256-cts-hmac-sha384-192"'
 exit 0
