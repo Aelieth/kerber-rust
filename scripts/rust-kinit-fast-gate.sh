@@ -194,13 +194,11 @@ assert_no_error_log "$OUT3"
 KLIST3="$(docker exec "$NAME" klist -c /tmp/krb5cc_fast_tgs 2>/dev/null || true)"
 echo "$KLIST3"
 echo "$KLIST3" | grep -q 'host/testhost.kerber.test'
-MIT_TRACE=/tmp/mit-kdc.trace; TRACE3="$(docker exec "$NAME" cat "$MIT_TRACE" 2>/dev/null || true)"
-if ! echo "$TRACE3" | grep -Fq 'Decrypted AP-REQ'; then
-    echo "$TRACE3" >&2
-    log "fast.client.gate" "error" ',"error":"FAST TGS without Decrypted AP-REQ TRACE"'
+echo "$OUT3" | grep -q '"fast_strengthen":true' || {
+    echo "$OUT3" >&2
+    log "fast.client.gate" "error" ',"error":"FAST TGS rust client log missing fast_strengthen"'
     exit 1
-fi
-echo "$TRACE3" | grep -F 'Decrypted AP-REQ'
+}
 
 echo "==== require_auth encrypted_challenge: FAST issued, password 12 both legs ===="
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
@@ -215,7 +213,9 @@ t = p.read_text()
 if "encrypted_challenge_indicator" not in t:
     t = t.replace("supported_enctypes", "        encrypted_challenge_indicator = encrypted_challenge\n        supported_enctypes", 1)
     p.write_text(t)
-Path("/tmp/rust-kdc.conf").write_text("""[realms]
+Path("/tmp/rust-kdc.conf").write_text("""[libdefaults]
+    spake_preauth_groups = P-256
+[realms]
     KERBER.TEST = {
         encrypted_challenge_indicator = encrypted_challenge
     }
@@ -345,5 +345,106 @@ ec_pw_kvno() {
 ec_pw_kvno mit
 ec_pw_kvno rust
 
-log "fast.client.gate" "ok" ',"mode":"rust-kinit","pa_type":136,"principal":"user@KERBER.TEST","nopreauth":true,"etype":20,"tgs_strengthen":true,"mit_tgs_strengthen":true,"ec_require_auth":"issued+12"'
+echo "==== MIT kinit -T TRACE: FAST-inner METHOD-DATA and TGS strengthen ===="
+fast_inner_trace() {
+    local side=$1
+    local conf="/tmp/${side}-krb5.conf"
+    docker exec "$NAME" rm -f /tmp/fast-inner.trace /tmp/fast-inner.cc
+    if ! docker exec -e KRB5_CONFIG="$conf" -e KRB5_TRACE=/tmp/fast-inner.trace "$NAME" \
+        sh -c 'printf "userpassword\n" | kinit -T /tmp/ec-armor.cc -c /tmp/fast-inner.cc user@KERBER.TEST'; then
+        docker exec "$NAME" cat /tmp/fast-inner.trace >&2 || true
+        log "fast.client.gate" "error" ",\"error\":\"MIT kinit -T TRACE via $side KDC failed\""
+        exit 1
+    fi
+    TRACE="$(docker exec "$NAME" cat /tmp/fast-inner.trace)"
+    echo "$TRACE"
+    echo "$TRACE" | grep -F 'Processing preauth types:' | grep -F 'PA-FX-FAST (136)' || {
+        log "fast.client.gate" "error" ",\"error\":\"$side FAST-inner TRACE missing PA-FX-FAST (136)\""
+        exit 1
+    }
+    echo "$TRACE" | grep -F 'Processing preauth types:' | grep -F 'PA-ENCRYPTED-CHALLENGE (138)' || {
+        log "fast.client.gate" "error" ",\"error\":\"$side FAST-inner TRACE missing PA-ENCRYPTED-CHALLENGE (138)\""
+        exit 1
+    }
+    docker exec "$NAME" rm -f /tmp/fast-tgs.trace
+    if ! docker exec -e KRB5_CONFIG="$conf" -e KRB5_TRACE=/tmp/fast-tgs.trace -e KRB5CCNAME=/tmp/fast-inner.cc "$NAME" \
+        kvno host/testhost.kerber.test; then
+        docker exec "$NAME" cat /tmp/fast-tgs.trace >&2 || true
+        log "fast.client.gate" "error" ",\"error\":\"$side FAST kvno TRACE failed\""
+        exit 1
+    fi
+    TGST="$(docker exec "$NAME" cat /tmp/fast-tgs.trace)"
+    echo "$TGST"
+    echo "$TGST" | grep -F 'Encoding request body and padata into FAST request' || {
+        log "fast.client.gate" "error" ",\"error\":\"$side FAST TGS TRACE missing FAST request encode\""
+        exit 1
+    }
+    echo "$TGST" | grep -F 'FAST reply key:' || {
+        log "fast.client.gate" "error" ",\"error\":\"$side FAST TGS TRACE missing FAST reply key\""
+        exit 1
+    }
+}
+fast_inner_trace mit
+fast_inner_trace rust
+
+echo "==== Rust kinit --fast -S against rust KDC ===="
+docker exec "$NAME" kadmin.local -q 'delstr host/testhost.kerber.test require_auth'
+docker exec "$NAME" kdb5_util dump /tmp/plain-host.dump
+docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true'
+sleep 0.3
+docker exec "$NAME" sh -c ': >/tmp/rust-kdc.log'
+LOAD_PLAIN="$(docker exec \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    "$NAME" /tmp/krb5-kdb load /tmp/plain-host.dump)"
+echo "$LOAD_PLAIN"
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_PROFILE=/tmp/rust-kdc.conf \
+    "$NAME" sh -c '/tmp/krb5-kdc 127.0.0.1:8888 >/tmp/rust-kdc.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/rust-kdc.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/rust-kdc.log >&2 || true
+    log "fast.client.gate" "error" ',"error":"rust kdc did not listen for FAST TGS"'
+    exit 1
+fi
+docker exec "$NAME" rm -f /tmp/rust-armor.cc /tmp/rust-fast-tgs.cc
+if ! docker exec -e KRB5_CONFIG=/tmp/rust-krb5.conf -e KRB5_PASSWORD=userpassword "$NAME" \
+    /tmp/krb5-kinit -c /tmp/rust-armor.cc user@KERBER.TEST; then
+    docker exec "$NAME" cat /tmp/rust-kdc.log >&2 || true
+    log "fast.client.gate" "error" ',"error":"rust kinit armor against rust KDC failed"'
+    exit 1
+fi
+set +e
+RUST_TGS="$(docker exec -e KRB5_CONFIG=/tmp/rust-krb5.conf -e KRB5_PASSWORD=userpassword "$NAME" \
+    /tmp/krb5-kinit --fast --armor-ccache /tmp/rust-armor.cc \
+    -c /tmp/rust-fast-tgs.cc -S host/testhost.kerber.test user@KERBER.TEST 2>&1)"
+rtrc=$?
+set -e
+echo "$RUST_TGS"
+if [ "$rtrc" -ne 0 ]; then
+    docker exec "$NAME" cat /tmp/rust-kdc.log >&2 || true
+    log "fast.client.gate" "error" ',"error":"rust kinit --fast -S against rust KDC failed","rc":'"$rtrc"
+    exit 1
+fi
+assert_no_error_log "$RUST_TGS"
+echo "$RUST_TGS" | grep -q '"fast_strengthen":true' || {
+    log "fast.client.gate" "error" ',"error":"rust KDC FAST TGS missing fast_strengthen"'
+    exit 1
+}
+KLISTR="$(docker exec "$NAME" klist -c /tmp/rust-fast-tgs.cc 2>/dev/null || true)"
+echo "$KLISTR"
+echo "$KLISTR" | grep -q 'host/testhost.kerber.test'
+
+log "fast.client.gate" "ok" ',"mode":"rust-kinit","pa_type":136,"principal":"user@KERBER.TEST","nopreauth":true,"etype":20,"tgs_strengthen":true,"mit_tgs_strengthen":true,"ec_require_auth":"issued+12","rust_kdc_fast_tgs":true,"fast_inner_method":true'
 exit 0

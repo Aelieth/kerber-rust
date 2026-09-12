@@ -129,8 +129,8 @@ impl KdcPreauth for PkinitMod {
                 padata_value: Vec::<u8>::new().into(),
             },
             PaData {
-                padata_type: pa::TD_DH_PARAMETERS,
-                padata_value: krb5_types::pkinit::encode_td_dh_p256().into(),
+                padata_type: pa::PKINIT_KX,
+                padata_value: Vec::<u8>::new().into(),
             },
         ]
     }
@@ -176,10 +176,13 @@ impl KdcPreauth for SpakeMod {
     }
     fn advertise(
         &self,
-        _store: &dyn PrincipalRead,
+        store: &dyn PrincipalRead,
         _client: &Principal,
         _armor: bool,
     ) -> Vec<PaData> {
+        if store.policy().spake_preauth_groups.is_empty() {
+            return Vec::new();
+        }
         vec![PaData {
             padata_type: pa::SPAKE,
             padata_value: Vec::<u8>::new().into(),

@@ -183,7 +183,6 @@ docker exec "$NAME" sh -c "cat > /tmp/krb5-fast-proxy.conf <<EOF
     default_realm = KERBER.TEST
     dns_lookup_kdc = false
     udp_preference_limit = 4096
-    spake_preauth_groups = P-256
 [realms]
     KERBER.TEST = {
         kdc = 127.0.0.1:1891
@@ -316,7 +315,6 @@ docker exec "$MITNAME" sh -c "cat > /tmp/krb5-fast-proxy.conf <<EOF
     default_realm = KERBER.TEST
     dns_lookup_kdc = false
     udp_preference_limit = 4096
-    spake_preauth_groups = P-256
 [realms]
     KERBER.TEST = {
         kdc = 127.0.0.1:1891
@@ -365,10 +363,10 @@ echo "$RUST_BADPW_PROXY" | grep -E 'rep#[0-9]+ error_code=24 e_data_encoding=met
     echo "rust FAST wrong-password missing 24 method [136]: $RUST_BADPW_PROXY" >&2
     exit 1
 }
-echo "$RUST_BADPW_PROXY" | grep -E 'rep#[0-9]+ error_code=91 e_data_encoding=method e_data_types=\[136\]' || {
-    echo "rust FAST wrong-password missing 91 method [136]: $RUST_BADPW_PROXY" >&2
+if echo "$RUST_BADPW_PROXY" | grep -E 'rep#[0-9]+ error_code=91'; then
+    echo "rust FAST wrong-password must not emit 91 for a default-groups client: $RUST_BADPW_PROXY" >&2
     exit 1
-}
+fi
 RUST_BADPW_SHAPE="$(echo "$RUST_BADPW_PROXY" | grep -E 'rep#[0-9]+ (error_code=|tag=)' | sed -E 's/^rep#[0-9]+ //' | sort -u || true)"
 
 docker exec "$NAME" sh -c ':> /tmp/fast-err-rust.txt'
@@ -391,7 +389,8 @@ RUST_NOSUCH_SHAPE="$(echo "$RUST_NOSUCH_PROXY" | grep -E 'rep#[0-9]+ error_code=
 
 echo "==== MIT KDC: FAST wrong-password and unknown-server outer shapes ===="
 # Harness user has empty Attributes; Rust --test-realm user has REQUIRES_PRE_AUTH.
-# Align the flag so both legs emit 25, 91 (SPAKE support), then 24 method [136].
+# Align REQUIRES_PRE_AUTH so both legs emit 25 then 24 method [136].
+# Default MIT client groups are edwards25519; both KDCs permit P-256 only.
 docker exec "$MITNAME" kadmin.local -q 'modprinc +requires_preauth user'
 docker exec "$MITNAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
 sleep 0.3
@@ -433,11 +432,11 @@ echo "$MIT_BADPW_PROXY" | grep -E 'rep#[0-9]+ error_code=24 e_data_encoding=meth
     echo "MIT FAST wrong-password missing 24 method [136]: $MIT_BADPW_PROXY" >&2
     exit 1
 }
-echo "$MIT_BADPW_PROXY" | grep -E 'rep#[0-9]+ error_code=91 e_data_encoding=method e_data_types=\[136\]' || {
-    echo "MIT FAST wrong-password missing 91 method [136]: $MIT_BADPW_PROXY" >&2
+if echo "$MIT_BADPW_PROXY" | grep -E 'rep#[0-9]+ error_code=91'; then
+    echo "MIT FAST wrong-password must not emit 91 for a default-groups client: $MIT_BADPW_PROXY" >&2
     docker exec "$MITNAME" cat /tmp/mit-badpw.trace 2>/dev/null || true
     exit 1
-}
+fi
 MIT_BADPW_SHAPE="$(echo "$MIT_BADPW_PROXY" | grep -E 'rep#[0-9]+ (error_code=|tag=)' | sed -E 's/^rep#[0-9]+ //' | sort -u || true)"
 echo "rust_fast_badpw_shape=$RUST_BADPW_SHAPE"
 echo "mit_fast_badpw_shape=$MIT_BADPW_SHAPE"
@@ -470,5 +469,65 @@ if [ "$RUST_NOSUCH_SHAPE" != "$MIT_NOSUCH_SHAPE" ]; then
     exit 1
 fi
 
-log "fast.kdc.gate" "ok" ',"principal":"user@KERBER.TEST","mode":"mit-kinit-T"'
+echo "==== default-client edwards25519 vs P-256 KDC is 24 both ===="
+docker exec "$NAME" sh -c "cat > /tmp/krb5-ed25519.conf <<EOF
+[libdefaults]
+    default_realm = KERBER.TEST
+    dns_lookup_kdc = false
+    udp_preference_limit = 4096
+    spake_preauth_groups = edwards25519
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1:88
+    }
+EOF"
+docker exec "$MITNAME" sh -c "cat > /tmp/krb5-ed25519.conf <<EOF
+[libdefaults]
+    default_realm = KERBER.TEST
+    dns_lookup_kdc = false
+    udp_preference_limit = 4096
+    spake_preauth_groups = edwards25519
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1:88
+    }
+EOF"
+docker exec "$NAME" rm -f /tmp/fast-err-rust.txt
+docker exec -d "$NAME" python3 /tmp/kdc-padata-proxy.py 1892 127.0.0.1 88 /tmp/fast-err-rust.txt
+sleep 0.4
+docker exec "$NAME" sh -c "sed 's/127.0.0.1:88/127.0.0.1:1892/' /tmp/krb5-ed25519.conf > /tmp/krb5-ed25519-proxy.conf"
+set +e
+docker exec -e KRB5_CONFIG=/tmp/krb5-ed25519-proxy.conf "$NAME" \
+    sh -c 'printf "userpassword\n" | kinit -c /tmp/krb5cc_ed user@KERBER.TEST' >/dev/null 2>&1
+set -e
+RUST_ED="$(docker exec "$NAME" cat /tmp/fast-err-rust.txt 2>/dev/null || true)"
+echo "$RUST_ED"
+echo "$RUST_ED" | grep -E 'rep#[0-9]+ error_code=24' || {
+    echo "rust default-client missing 24: $RUST_ED" >&2
+    exit 1
+}
+if echo "$RUST_ED" | grep -E 'rep#[0-9]+ error_code=91'; then
+    echo "rust default-client must not emit 91: $RUST_ED" >&2
+    exit 1
+fi
+docker exec "$MITNAME" rm -f /tmp/fast-err-mit.txt
+docker exec -d "$MITNAME" python3 /tmp/kdc-padata-proxy.py 1892 127.0.0.1 88 /tmp/fast-err-mit.txt
+sleep 0.4
+docker exec "$MITNAME" sh -c "sed 's/127.0.0.1:88/127.0.0.1:1892/' /tmp/krb5-ed25519.conf > /tmp/krb5-ed25519-proxy.conf"
+set +e
+docker exec -e KRB5_CONFIG=/tmp/krb5-ed25519-proxy.conf "$MITNAME" \
+    sh -c 'printf "userpassword\n" | kinit -c /tmp/krb5cc_ed user@KERBER.TEST' >/dev/null 2>&1
+set -e
+MIT_ED="$(docker exec "$MITNAME" cat /tmp/fast-err-mit.txt 2>/dev/null || true)"
+echo "$MIT_ED"
+echo "$MIT_ED" | grep -E 'rep#[0-9]+ error_code=24' || {
+    echo "MIT default-client missing 24: $MIT_ED" >&2
+    exit 1
+}
+if echo "$MIT_ED" | grep -E 'rep#[0-9]+ error_code=91'; then
+    echo "MIT default-client must not emit 91: $MIT_ED" >&2
+    exit 1
+fi
+
+log "fast.kdc.gate" "ok" ',"principal":"user@KERBER.TEST","mode":"mit-kinit-T","verify_support_24":true'
 exit 0

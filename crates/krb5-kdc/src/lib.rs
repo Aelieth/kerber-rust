@@ -72,7 +72,7 @@ pub use store::{
     KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH, KDB_REQUIRES_PWCHANGE,
     KDB_V1_BASE_LENGTH, KadmData, KeyEntry, MAX_ALIAS_DEPTH, NamedPolicy, Policy, Principal,
     PrincipalStore, RID_ADMINISTRATOR, RID_FIRST_USER, RID_KRBTGT, S2K_ITERS, TlData, UlogEntry,
-    db_args_put_error, random_key, s2k_params, strip_db_args,
+    db_args_put_error, parse_spake_preauth_groups, random_key, s2k_params, strip_db_args,
 };
 
 use krb5_types::PrincipalName;

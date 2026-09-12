@@ -2367,7 +2367,9 @@ fn spake_challenge_then_as_rep() {
 fn golden_dump_store() -> PrincipalStore {
     let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/traces/kdb/mit-dump-v7.txt");
-    load_dump_path(&p, b"masterpassword").expect("golden dump")
+    let mut store = load_dump_path(&p, b"masterpassword").expect("golden dump");
+    store.policy.spake_preauth_groups = vec![krb5_types::spake::GROUP_P256];
+    store
 }
 
 fn spake_round1(
@@ -2935,12 +2937,12 @@ fn ca_enabled_preauth_required_method_data_types() {
             pa::FX_FAST,
             pa::ETYPE_INFO2,
             pa::PK_AS_REQ,
-            pa::TD_DH_PARAMETERS,
+            pa::PKINIT_KX,
             pa::SPAKE,
             pa::ENC_TIMESTAMP,
             pa::FX_COOKIE,
         ],
-        "CA-enabled METHOD-DATA types must pin [136, 19, 16, 109, 151, 2, 133]"
+        "CA-enabled METHOD-DATA types must pin [136, 19, 16, 147, 151, 2, 133]"
     );
     let again = encode(&method).expect("re-encode");
     let round: MethodData = decode(&again).expect("decode encode");

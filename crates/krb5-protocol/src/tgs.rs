@@ -493,20 +493,10 @@ fn tgs_once(
     let mic = checksum(&tgt.session_key, cksum_usage, &body_der)?;
     let now = KerberosTime::now();
     let usec = now.0.timestamp_subsec_micros() % 1_000_000;
-    let mut subkey = None;
-    let mut armor_key = None;
-    if tgt.used_fast {
-        let mut raw = vec![0u8; tgt.session_key.etype().key_len()];
-        getrandom::getrandom(&mut raw).map_err(|e| Error::transport_msg(e.to_string()))?;
-        let sub = ProtocolKey::from_bytes(tgt.session_key.etype(), &raw)?;
-        armor_key = Some(krb_fx_cf2(
-            &sub,
-            &tgt.session_key,
-            b"subkeyarmor",
-            b"ticketarmor",
-        )?);
-        subkey = Some(sub);
-    }
+    let mut raw = vec![0u8; tgt.session_key.etype().key_len()];
+    getrandom::getrandom(&mut raw).map_err(|e| Error::transport_msg(e.to_string()))?;
+    let sub = ProtocolKey::from_bytes(tgt.session_key.etype(), &raw)?;
+    let armor_key = krb_fx_cf2(&sub, &tgt.session_key, b"subkeyarmor", b"ticketarmor")?;
     let authenticator = Authenticator {
         authenticator_vno: Authenticator::VNO,
         crealm: tgt.crealm.clone(),
@@ -517,9 +507,9 @@ fn tgs_once(
         }),
         cusec: krb5_types::Microseconds::from_subsec_micros(usec),
         ctime: now,
-        subkey: subkey.as_ref().map(|k| EncryptionKey {
-            keytype: k.etype().to_iana(),
-            keyvalue: k.as_bytes().to_vec().into(),
+        subkey: Some(EncryptionKey {
+            keytype: sub.etype().to_iana(),
+            keyvalue: sub.as_bytes().to_vec().into(),
         }),
         seq_number: None,
         authorization_data: None,
@@ -545,18 +535,14 @@ fn tgs_once(
         padata_type: pa::TGS_REQ,
         padata_value: ap_raw.clone().into(),
     }];
-    if let Some(akey) = &armor_key {
-        padata.push(fx_fast_padata_over(
-            None,
-            akey,
-            &ap_raw,
-            &body,
-            extra_padata.to_vec(),
-            &krb5_types::fast::fast_options_none(),
-        )?);
-    } else {
-        padata.extend_from_slice(extra_padata);
-    }
+    padata.push(fx_fast_padata_over(
+        None,
+        &armor_key,
+        &ap_raw,
+        &body,
+        extra_padata.to_vec(),
+        &krb5_types::fast::fast_options_none(),
+    )?);
     let tgs = TgsReq(KdcReq {
         pvno: KdcReq::PVNO,
         msg_type: KdcReq::MSG_TGS_REQ,
@@ -584,20 +570,23 @@ fn tgs_once(
         return Err(Error::UnexpectedPdu);
     }
     let TgsRep(inner) = decode::<TgsRep>(&reply)?;
-    let (reply_key, enc_usage) = if let (Some(akey), Some(sub)) = (armor_key, subkey) {
-        let fast = unwrap_fast_rep(&akey, &inner.padata)?;
-        let finished = fast.finished.as_ref().ok_or_else(|| {
-            Error::ReplyMismatch("FAST response missing finish message in KDC reply".into())
-        })?;
-        verify_fast_finished(&akey, &inner.ticket, finished)?;
-        let sk = fast
-            .strengthen_key
-            .as_ref()
-            .ok_or_else(|| Error::ReplyMismatch("FAST TGS reply missing strengthen-key".into()))?;
-        (apply_strengthen(sk, &sub)?, ku::TGS_REP_ENC_PART_SUBKEY)
-    } else {
-        (tgt.session_key.clone(), ku::TGS_REP_ENC_PART)
-    };
+    let fast = unwrap_fast_rep(&armor_key, &inner.padata)?;
+    let finished = fast.finished.as_ref().ok_or_else(|| {
+        Error::ReplyMismatch("FAST response missing finish message in KDC reply".into())
+    })?;
+    verify_fast_finished(&armor_key, &inner.ticket, finished)?;
+    let sk = fast
+        .strengthen_key
+        .as_ref()
+        .ok_or_else(|| Error::ReplyMismatch("FAST TGS reply missing strengthen-key".into()))?;
+    tracing::info!(
+        event = "client.tgs",
+        component = "krb5-protocol",
+        outcome = "ok",
+        fast_strengthen = true,
+    );
+    let reply_key = apply_strengthen(sk, &sub)?;
+    let enc_usage = ku::TGS_REP_ENC_PART_SUBKEY;
     let usage = KeyUsage::new(enc_usage)?;
     let plain = decrypt(&reply_key, usage, inner.enc_part.cipher.as_ref())?;
     // MIT `kdc_rep_dc.c:69` decodes the TGS-REP enc-part with

@@ -425,6 +425,9 @@ pub struct Policy {
     pub pkinit_indicators: Vec<String>,
     /// `[realms] spake_preauth_indicator` (repeatable).
     pub spake_preauth_indicators: Vec<String>,
+    /// `[libdefaults] spake_preauth_groups` as implemented group numbers.
+    /// Empty = MIT KDC default (`groups.c:60`) — SPAKE is not advertised.
+    pub spake_preauth_groups: Vec<i32>,
 }
 
 impl Default for Policy {
@@ -445,8 +448,22 @@ impl Default for Policy {
             encrypted_challenge_indicator: None,
             pkinit_indicators: Vec::new(),
             spake_preauth_indicators: Vec::new(),
+            spake_preauth_groups: Vec::new(),
         }
     }
+}
+
+/// MIT `parse_groups` (`groups.c:175-210`): unknown names skipped.
+/// Rust implements P-256 only; other IANA names are skipped.
+#[must_use]
+pub fn parse_spake_preauth_groups(names: &[String]) -> Vec<i32> {
+    let mut out = Vec::new();
+    for n in names {
+        if n.eq_ignore_ascii_case("P-256") && !out.contains(&krb5_types::spake::GROUP_P256) {
+            out.push(krb5_types::spake::GROUP_P256);
+        }
+    }
+    out
 }
 
 impl Policy {
@@ -982,6 +999,9 @@ impl PrincipalStore {
         self.policy
             .spake_preauth_indicators
             .clone_from(&conf.spake_preauth_indicators);
+        if let Some(names) = &conf.spake_preauth_groups {
+            self.policy.spake_preauth_groups = parse_spake_preauth_groups(names);
+        }
         if let Some(s) = conf.domain_sid.as_deref() {
             let Some(sid) = RpcSid::from_sddl(s) else {
                 return Err(Error::Crypto(format!(
@@ -1014,6 +1034,9 @@ impl PrincipalStore {
                 &conf.permitted_enctypes.join(" "),
                 self.policy.allow_weak_crypto || conf.allow_weak_crypto,
             );
+        }
+        if let Some(names) = &conf.spake_preauth_groups {
+            self.policy.spake_preauth_groups = parse_spake_preauth_groups(names);
         }
     }
 
@@ -1122,6 +1145,7 @@ impl PrincipalStore {
     ) -> Result<Self, Error> {
         let mut store = Self::new(realm);
         store.policy.max_renewable_life = 7 * 24 * 3600;
+        store.policy.spake_preauth_groups = vec![krb5_types::spake::GROUP_P256];
         store.insert_randkey(&PrincipalName::krbtgt(realm), &randkey_etypes())?;
         let tgt = PrincipalName::krbtgt(realm);
         store.apply_admin_fields(
@@ -3345,6 +3369,7 @@ mod tests {
             r"
 [libdefaults]
     allow_weak_crypto = yes
+    spake_preauth_groups = P-256
 
 [realms]
     KERBER.TEST = {
@@ -3374,6 +3399,10 @@ mod tests {
         assert!(store.policy.allow_weak_crypto);
         assert!(!store.policy.allow_rc4);
         assert!(store.policy.reject_bad_transit);
+        assert_eq!(
+            store.policy.spake_preauth_groups,
+            vec![krb5_types::spake::GROUP_P256]
+        );
         let rc4 = krb5_config::KdcConf::parse(
             r"
 [libdefaults]

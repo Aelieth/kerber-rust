@@ -401,7 +401,7 @@ pub(crate) fn process_spake(
         return Ok(None);
     };
     if raw.is_empty() {
-        return send_spake_challenge(store, &client.name, ikey, &[]);
+        return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
     }
     let msg: krb5_types::spake::PaSpake = decode(raw)?;
     if let krb5_types::spake::PaSpake::Response(resp) = &msg {
@@ -451,7 +451,15 @@ pub(crate) fn process_spake(
         )?;
         return Ok(Some(SpakeStep::Done(k0)));
     }
-    if matches!(msg, krb5_types::spake::PaSpake::Support(_)) {
+    if let krb5_types::spake::PaSpake::Support(sup) = &msg {
+        let group = sup
+            .groups
+            .iter()
+            .copied()
+            .find(|g| store.policy().spake_preauth_groups.contains(g));
+        if group != Some(krb5_types::spake::GROUP_P256) {
+            return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
+        }
         return send_spake_challenge(store, &client.name, ikey, raw);
     }
     Ok(None)

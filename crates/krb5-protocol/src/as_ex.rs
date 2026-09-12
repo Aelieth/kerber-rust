@@ -40,8 +40,7 @@ pub struct AsOutcome {
     /// RFC 6806 FAST negotiation: the enc-padata carried PA-FX-FAST, so the KDC
     /// supports FAST (MIT records `fast_avail` in the ccache).
     pub fast_avail: bool,
-    /// The AS-REQ itself was FAST-armored. TGS continues FAST
-    /// (`send_tgs.c:178` + `fast.c:134-136`) when this is set.
+    /// The AS-REQ itself was FAST-armored.
     pub used_fast: bool,
     /// The preauth type that produced the reply (MIT `selected_preauth_type`,
     /// recorded as the ccache `pa_type` config); `None` without preauth.
@@ -627,6 +626,13 @@ fn fast_error_material(akey: &ProtocolKey, err: &KrbError) -> (KrbError, Option<
     let Ok(fast) = unwrap_fast_rep(akey, &Some(vec![fx.clone()])) else {
         return (err.clone(), outer_cookie);
     };
+    let types: Vec<i32> = fast.padata.iter().map(|p| p.padata_type).collect();
+    tracing::info!(
+        event = "client.fast",
+        component = "krb5-protocol",
+        outcome = "ok",
+        inner_padata = ?types,
+    );
     let cookie = find_pa(&fast.padata, pa::FX_COOKIE)
         .cloned()
         .or(outer_cookie);

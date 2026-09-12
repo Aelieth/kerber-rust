@@ -92,6 +92,8 @@ pub struct Krb5Conf {
     pub kcm_socket: Option<String>,
     /// `[libdefaults] default_ccache_name` (MIT parameter expansion).
     pub default_ccache_name: Option<String>,
+    /// `[libdefaults] spake_preauth_groups`. `None` = omitted (KDC default none).
+    pub spake_preauth_groups: Option<Vec<String>>,
     /// Realm → KDC list.
     pub kdcs: BTreeMap<String, Vec<Endpoint>>,
     /// Realm → admin_server.
@@ -158,6 +160,8 @@ pub struct KdcConf {
     pub pkinit_indicators: Vec<String>,
     /// `[realms] spake_preauth_indicator` (repeatable).
     pub spake_preauth_indicators: Vec<String>,
+    /// `[libdefaults] spake_preauth_groups`. `None` = omitted.
+    pub spake_preauth_groups: Option<Vec<String>>,
 }
 
 impl Default for KdcConf {
@@ -186,6 +190,7 @@ impl Default for KdcConf {
             encrypted_challenge_indicator: None,
             pkinit_indicators: Vec::new(),
             spake_preauth_indicators: Vec::new(),
+            spake_preauth_groups: None,
         }
     }
 }
@@ -626,6 +631,9 @@ fn parse_libdefaults(conf: &mut Krb5Conf, seen: &mut BTreeSet<String>, line: &st
         "default_ccache_name" if take_first(seen, "default_ccache_name") => {
             conf.default_ccache_name = Some(v);
         }
+        "spake_preauth_groups" if take_first(seen, "spake_preauth_groups") => {
+            conf.spake_preauth_groups = Some(split_ws(&v));
+        }
         _ => {}
     }
 }
@@ -719,6 +727,7 @@ fn parse_kdc_libdefaults(conf: &mut KdcConf, line: &str) {
         "allow_rc4" => conf.allow_rc4 = Some(truthy(&v)),
         "allow_des3" => conf.allow_des3 = Some(truthy(&v)),
         "permitted_enctypes" => conf.permitted_enctypes = split_ws(&v),
+        "spake_preauth_groups" => conf.spake_preauth_groups = Some(split_ws(&v)),
         // MIT reads kdc_ports/kdc_tcp_ports/reject_bad_transit only from
         // [kdcdefaults] or a realm stanza (main.c:257-261,622-626), never
         // [libdefaults]; no fallthrough, so a kdcdefaults knob placed under
@@ -1327,6 +1336,13 @@ mod tests {
         assert_eq!(c.max_retries.as_deref(), Some("1"));
         assert!(c.kcm_socket.is_none());
         assert!(c.default_ccache_name.is_none());
+        let groups =
+            Krb5Conf::parse("[libdefaults]\n    spake_preauth_groups = edwards25519 P-256\n")
+                .unwrap();
+        assert_eq!(
+            groups.spake_preauth_groups.as_deref(),
+            Some(["edwards25519".to_string(), "P-256".to_string()].as_slice())
+        );
         let sock = Krb5Conf::parse("[libdefaults]\n    kcm_socket = /tmp/kcm.sock\n").unwrap();
         assert_eq!(sock.kcm_socket.as_deref(), Some("/tmp/kcm.sock"));
         let cc =

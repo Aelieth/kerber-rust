@@ -17,7 +17,7 @@ files are gitignored.
 | --- | --- | --- |
 | `mit-as-req.der` | `0x6a` | MIT 1.22.2 client AS-REQ (`kdc-gate.sh` capture of MIT bytes) |
 | `mit-as-req-preauth.der` | `0x6a` | MIT AS-REQ with PA-ENC-TIMESTAMP |
-| `mit-krb-error-preauth.der` | `0x7e` | PREAUTH_REQUIRED (Rust KDC reply to MIT; KRB-ERROR we emit). CA-enabled METHOD-DATA order `[136, 16, 109, 151, 2, 19, 133]` is an **in-code pin** in `phase7_preauth.rs`, not a companion `.der`. |
+| `mit-krb-error-preauth.der` | `0x7e` | PREAUTH_REQUIRED (Rust KDC reply to MIT; KRB-ERROR we emit). CA-enabled METHOD-DATA order `[136, 19, 16, 147, 151, 2, 133]` is an **in-code pin** in `phase7_preauth.rs`, not a companion `.der`. |
 | `mit-as-rep.der` | `0x6b` | MIT 1.22.2 KDC AS-REP (`client-gate.sh` `client-rep-*.der`) |
 | `mit-tgs-req.der` | `0x6c` | MIT TGS-REQ (FAST) |
 | `mit-tgs-rep.der` | `0x6d` | MIT 1.22.2 KDC TGS-REP (`client-gate.sh` `client-rep-*.der`) |
