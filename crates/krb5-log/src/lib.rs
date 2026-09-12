@@ -52,6 +52,8 @@ pub mod events {
     pub const PROTOCOL_KRB_ERROR: &str = "protocol.krb_error";
     /// KDC handled an AS or TGS request.
     pub const KDC_ISSUE: &str = "kdc.issue";
+    /// KDC audit plugin record (`kdc_audit.c` / `j_dict.h` field names).
+    pub const KDC_AUDIT: &str = "kdc.audit";
     /// Admin ACL decision.
     pub const KDC_ACL: &str = "kdc.acl";
     /// AP-REQ verified or rejected.

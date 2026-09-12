@@ -121,6 +121,17 @@ fn main() {
     if std::env::var("KRB5_KDCPOLICY").ok().as_deref() == Some("test") {
         krb5_kdc::set_policy(std::sync::Arc::new(krb5_kdc::TestPolicy));
     }
+    if std::env::var("KRB5_KDC_AUDIT").ok().as_deref() == Some("test") {
+        let path = std::env::var("KRB5_KDC_AUDIT_LOG").unwrap_or_else(|_| "au.log".into());
+        match krb5_kdc::TestAudit::open(&path) {
+            Ok(a) => krb5_kdc::set_audit(std::sync::Arc::new(a)),
+            Err(e) => {
+                eprintln!("krb5-kdc: KRB5_KDC_AUDIT_LOG {path}: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    krb5_kdc::current_audit().kdc_start(true);
     let enable_pkinit =
         export_pkinit.is_some() || std::env::var("KRB5_ENABLE_PKINIT").ok().as_deref() == Some("1");
     if enable_pkinit && let Err(e) = store.enable_pkinit_ca() {
@@ -264,9 +275,11 @@ fn main() {
     }
     println!("listening {addr}");
     if let Err(e) = serve(store, udp, tcp) {
+        krb5_kdc::current_audit().kdc_stop(false);
         eprintln!("krb5-kdc: serve: {e}");
         std::process::exit(1);
     }
+    krb5_kdc::current_audit().kdc_stop(true);
 }
 
 fn load_kdc_conf() -> Option<krb5_config::KdcConf> {

@@ -20,6 +20,16 @@ never install a subscriber. Tests and the harness do.
 | `code` | krb-error | RFC 4120 error-code on `kdc.issue` |
 | `e_text` | krb-error | MIT `log_tgs_req` status string (`PROCESS_TGS`, `GET_LOCAL_TGT`, `FIND_FAST`, …) |
 | `detail` | krb-error | MIT `k5_setmsg` text when MIT has one; otherwise Rust's own. Omitted when empty. Not on the wire. |
+| `kind` | kdc.issue | `AS_REQ` or `TGS_REQ` (`kdc_log.c`) |
+| `req_etypes` | kdc.issue | MIT `ktypes2str`: `N etypes {name(num), …}` |
+| `from` | kdc.issue | Client address (`k5_print_addr`) |
+| `status` | kdc.issue | `ISSUE` on success; MIT status word on fail |
+| `authtime` | kdc.issue | Ticket `authtime` as a Unix timestamp |
+| `etypes` | kdc.issue | MIT `rep_etypes2str`: `etypes {rep=name(num), tkt=…, ses=…}` |
+| `client` | kdc.issue | Unparsed client (`user@REALM`) |
+| `server` | kdc.issue | Unparsed server (`krbtgt/REALM@REALM`) |
+| `s4u` / `s4u_client` | kdc.issue | `PROTOCOL-TRANSITION` or `CONSTRAINED-DELEGATION` |
+| `record` | kdc.audit | One JSON object using MIT `j_dict.h` keys |
 
 Canonical `event` strings live in `krb5_log::events`.
 
@@ -33,6 +43,20 @@ critical-FAST-option `detail` (`FAST option`) is Rust's text — MIT
 has no `k5_setmsg` for `UNKNOWN_CRITICAL_FAST_OPTION`.
 Code 25 logs `e_text=NEEDED_PREAUTH`. Store-programming failures
 that cannot be encoded stay `outcome=error`.
+
+A successful AS or TGS also emits the MIT ISSUE tuple on a second
+`kdc.issue` line: `kind`, `req_etypes`, `from`, `status=ISSUE`,
+`authtime`, `etypes` (`rep_etypes2str`), `client`, and `server`.
+TGS S4U adds `s4u` + `s4u_client`. Unexpected transit-path errors
+are `tracing` **error** (`kdc_log.c:201-206` `LOG_ERR`).
+
+The `KdcAudit` registry (`kdc_audit.c`) writes `event=kdc.audit`
+with MIT `j_dict.h` field names (`event_name`, `event_success`,
+`stage`, `tkt_out_id`, `req_id`, `fromport`, `fromaddr`, …).
+`tkt_out_id` is SHA-256 of `ticket.enc_part.ciphertext` as 64
+uppercase hex digits. `req_id` is 31 alphanumeric characters
+(MIT `REQID_LEN` including NUL). `KRB5_KDC_AUDIT=test` appends
+the same JSON to `KRB5_KDC_AUDIT_LOG` (default `au.log`).
 
 ## Logs as metrics
 

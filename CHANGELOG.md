@@ -46,6 +46,15 @@ this project uses semantic versioning once a crate is published.
   the ticket enc etype, not always 18.
 - **test.** `sha2-gate.sh` expects ticket etype 20 (`first_current_key`
   after `supported_enctypes`), not sha1-first 18.
+- **kdc.** `kdc.issue` carries the MIT ISSUE tuple (`kind`,
+  `req_etypes`, `from`, `status`, `authtime`, `etypes`, `client`,
+  `server`; S4U `s4u` / `s4u_client`). Unexpected transit checks
+  log at error (`kdc_log.c:201-206`). `KdcAudit` (`kdc_audit.c`)
+  hashes `tkt_out_id` as SHA-256 of the ticket ciphertext (64 hex
+  uppercase) and mints a 31-character `req_id`. `KRB5_KDC_AUDIT=test`
+  writes MIT `j_dict.h` field names. Image copies `k5audit_test.so`.
+- **test.** `kdc-gate.sh` greps the ISSUE tuple on both legs and
+  compares audit field names / `tkt_out_id` format.
 
 ### W1-A′-3
 

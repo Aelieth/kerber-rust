@@ -353,6 +353,7 @@ fn udp_loop(
             Ok((n, peer)) => {
                 let payload = buf[..n].to_vec();
                 let sender = HostAddress::from_socket(peer);
+                crate::audit::set_client_port(u32::from(peer.port()));
                 match dispatch_via_cache(store, cache, &payload, Some(&sender)) {
                     Dispatch::Send(mut reply) => {
                         if reply.is_empty() {
@@ -520,7 +521,11 @@ fn handle_tcp(
         }
         Err(e) => return Err(e),
     }
-    let sender = stream.peer_addr().ok().map_or(
+    let peer = stream.peer_addr().ok();
+    if let Some(p) = peer {
+        crate::audit::set_client_port(u32::from(p.port()));
+    }
+    let sender = peer.map_or(
         HostAddress {
             addr_type: 0,
             address: Vec::new().into(),

@@ -32,6 +32,16 @@ fi
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
+if ! docker exec "$NAME" test -f /usr/lib/krb5/plugins/audit/k5audit_test.so; then
+    echo "MIT image lacks k5audit_test.so; rebuilding" >&2
+    docker rm -f "$NAME" >/dev/null 2>&1 || true
+    docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
+    docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
+    if ! docker exec "$NAME" test -f /usr/lib/krb5/plugins/audit/k5audit_test.so; then
+        log "kdc.gate" "error" ',"error":"k5audit_test.so missing after rebuild"'
+        exit 1
+    fi
+fi
 
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
@@ -49,6 +59,8 @@ docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
     -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
     -e KERBER_CAPTURE_DIR=/tmp/traces \
+    -e KRB5_KDC_AUDIT=test \
+    -e KRB5_KDC_AUDIT_LOG=/tmp/au-rust.log \
     "$NAME" sh -c '/tmp/krb5-kdc --test-realm 127.0.0.1:88 >/tmp/kdc.log 2>&1 || /tmp/krb5-kdc --test-realm 127.0.0.1:8888 >/tmp/kdc.log 2>&1'
 
 ok=0
@@ -108,6 +120,17 @@ echo "$KLIST2"
 echo "$KLIST2" | grep -q 'user@KERBER.TEST'
 echo "$KLIST2" | grep -q 'host/testhost.kerber.test'
 
+echo "==== rust KDC ISSUE tuple after kinit + kvno ===="
+RUSTLOG="$(docker exec "$NAME" cat /tmp/kdc.log)"
+echo "$RUSTLOG"
+echo "$RUSTLOG" | grep -q 'ISSUE' # RUST_issue_as
+echo "$RUSTLOG" | grep -q 'user@KERBER.TEST'
+echo "$RUSTLOG" | grep -q 'krbtgt/KERBER.TEST'
+echo "$RUSTLOG" | grep -F 'etypes {rep='
+echo "$RUSTLOG" | grep -q 'host/testhost.kerber.test' # RUST_issue_tgs
+echo "$RUSTLOG" | grep -F 'tkt='
+echo "$RUSTLOG" | grep -F 'ses='
+
 echo "==== MIT kinit -a then kvno via 127.0.0.1 is BADADDR ===="
 docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
 if ! docker exec -e KRB5_TRACE=/dev/stderr "$NAME" sh -c 'printf "userpassword\n" | kinit -a user@KERBER.TEST'; then
@@ -141,6 +164,8 @@ docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
     -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
     -e KERBER_CAPTURE_DIR=/tmp/traces \
+    -e KRB5_KDC_AUDIT=test \
+    -e KRB5_KDC_AUDIT_LOG=/tmp/au-rust.log \
     "$NAME" sh -c "/tmp/krb5-kdc --test-realm 0.0.0.0:${PORT} >/tmp/kdc-bridge.log 2>&1"
 ok=0
 for _ in $(seq 1 80); do
@@ -177,4 +202,158 @@ TRACE_DST="${KERBER_TRACE_DST:-$ROOT/tests/traces}"
 mkdir -p "$TRACE_DST"
 docker cp "$NAME":/tmp/traces/. "$TRACE_DST/" 2>/dev/null || true
 
-log "kdc.gate" "ok" ",\"principal\":\"user@KERBER.TEST\",\"service\":\"host/testhost.kerber.test\""
+echo "==== MIT krb5kdc ISSUE + audit test plugin ===="
+docker exec "$NAME" sh -c '
+for comm in /proc/[0-9]*/comm; do
+    [ -f "$comm" ] || continue
+    read -r name < "$comm" || continue
+    if [ "$name" = "krb5-kdc" ]; then
+        pid=${comm#/proc/}
+        pid=${pid%/comm}
+        kill -9 "$pid" 2>/dev/null || true
+    fi
+done
+'
+free=0
+for _ in $(seq 1 40); do
+    if ! docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.2)" 2>/dev/null; then
+        free=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$free" != 1 ]; then
+    log "kdc.gate" "error" ',"error":"rust kdc still bound :88"'
+    exit 1
+fi
+docker exec -i "$NAME" python3 - <<'PY'
+from pathlib import Path
+p = Path("/etc/krb5.conf")
+t = p.read_text()
+out = []
+sec = ""
+for line in t.splitlines():
+    s = line.strip()
+    if s.startswith("[") and s.endswith("]"):
+        sec = s
+    if sec == "[realms]" and s.startswith("kdc ="):
+        out.append("        kdc = 127.0.0.1")
+        continue
+    if sec == "[logging]" and s.startswith("kdc ="):
+        out.append("    kdc = FILE:/tmp/mit-issue.log")
+        continue
+    out.append(line)
+text = "\n".join(out) + "\n"
+if "k5audit_test.so" not in text:
+    text += """
+[plugins]
+    audit = {
+        module = test:/usr/lib/krb5/plugins/audit/k5audit_test.so
+    }
+"""
+p.write_text(text)
+print("krb5.conf-ok")
+PY
+docker exec "$NAME" sh -c '
+kdb5_util destroy -f >/dev/null 2>&1 || true
+kdb5_util create -s -P masterpassword
+kadmin.local -q "addprinc -pw userpassword user"
+kadmin.local -q "addprinc -randkey host/testhost.kerber.test"
+rm -f /tmp/au.log /tmp/mit-issue.log
+'
+docker exec -d \
+    -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
+    "$NAME" sh -c 'cd /tmp && krb5kdc -n >/tmp/mit-kdc-stdout.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/mit-kdc-stdout.log >&2 || true
+    log "kdc.gate" "error" ',"error":"MIT krb5kdc did not listen"'
+    exit 1
+fi
+docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
+if ! docker exec "$NAME" sh -c 'printf "userpassword\n" | kinit user@KERBER.TEST'; then
+    docker exec "$NAME" cat /tmp/mit-issue.log >&2 || true
+    log "kdc.gate" "error" ',"error":"MIT kinit vs MIT KDC failed"'
+    exit 1
+fi
+if ! docker exec "$NAME" kvno host/testhost.kerber.test; then
+    docker exec "$NAME" cat /tmp/mit-issue.log >&2 || true
+    log "kdc.gate" "error" ',"error":"MIT kvno vs MIT KDC failed"'
+    exit 1
+fi
+MITLOG="$(docker exec "$NAME" cat /tmp/mit-issue.log 2>/dev/null || true)"
+echo "$MITLOG"
+echo "$MITLOG" | grep -q 'ISSUE' # MIT_issue_as
+echo "$MITLOG" | grep -q 'user@KERBER.TEST'
+echo "$MITLOG" | grep -q 'krbtgt/KERBER.TEST'
+echo "$MITLOG" | grep -F 'etypes {rep='
+echo "$MITLOG" | grep -q 'host/testhost.kerber.test' # MIT_issue_tgs
+echo "$MITLOG" | grep -F 'tkt='
+echo "$MITLOG" | grep -F 'ses='
+
+echo "==== audit field names both legs ===="
+docker exec -i "$NAME" python3 - <<'PY'
+import json, re, sys
+def rows(path):
+    out = []
+    try:
+        text = open(path).read()
+    except OSError as e:
+        print(f"missing {path}: {e}", file=sys.stderr)
+        sys.exit(1)
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line == "state is NULL":
+            continue
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return out
+mit = rows("/tmp/au.log")
+rust = rows("/tmp/au-rust.log")
+def first(rows, name):
+    # MIT AS seeds kau_as_req(TRUE) at AUTHN_REQ_CL with no tkt_out_id
+    # (do_as_req.c:520). Compare the ENCR_REP issue record.
+    for r in rows:
+        if (
+            r.get("event_name") == name
+            and r.get("event_success") in (True, 1)
+            and r.get("tkt_out_id")
+        ):
+            return r
+    print(f"no success {name} with tkt_out_id", file=sys.stderr)
+    sys.exit(1)
+keys = ["event_name", "event_success", "stage", "tkt_out_id", "req_id", "fromport"]
+for name in ("AS_REQ", "TGS_REQ"):
+    m = first(mit, name)
+    r = first(rust, name)
+    for k in keys:
+        if k not in m or k not in r:
+            print(f"{name} missing {k} mit={k in m} rust={k in r}", file=sys.stderr)
+            sys.exit(1)
+    for side, rec in (("MIT", m), ("RUST", r)):
+        tkt = rec["tkt_out_id"]
+        if not re.fullmatch(r"[0-9A-F]{64}", str(tkt)):
+            print(f"{side} {name} tkt_out_id {tkt}", file=sys.stderr)
+            sys.exit(1)
+        rid = str(rec["req_id"])
+        if not re.fullmatch(r"[0-9A-Za-z]{31}", rid):
+            print(f"{side} {name} req_id {rid}", file=sys.stderr)
+            sys.exit(1)
+    if m["stage"] != r["stage"]:
+        print(f"{name} stage mit={m['stage']} rust={r['stage']}", file=sys.stderr)
+        sys.exit(1)
+print("audit-fields-ok")
+PY
+echo "RUST_audit_fields" # TestAudit /tmp/au-rust.log
+echo "MIT_audit_fields" # k5audit_test.so /tmp/au.log
+
+log "kdc.gate" "ok" ",\"principal\":\"user@KERBER.TEST\",\"service\":\"host/testhost.kerber.test\",\"issue\":true,\"audit\":true\""

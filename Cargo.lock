@@ -582,6 +582,7 @@ dependencies = [
  "krb5-protocol",
  "krb5-types",
  "nix",
+ "sha2",
  "signal-hook",
  "subtle",
  "thiserror",

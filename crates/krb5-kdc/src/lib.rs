@@ -10,6 +10,7 @@
 
 mod acl;
 mod ad;
+mod audit;
 mod error;
 mod issue;
 mod kdb;
@@ -28,6 +29,11 @@ pub use acl::{Acl, AclEntry, AdminOp, Restrictions, kadmin_flagspec};
 pub use ad::{
     PacTicket, decrypt_ticket_part, pac_from_ticket_part, should_have_ticket_signature, sign_pac,
     sign_reply_pac, ticket_checksum_der, verify_pac, verify_pac_signatures, wrap_win2k_pac,
+};
+pub use audit::{
+    AUTHN_REQ_CL, AuditState, ENCR_REP, ISSUE_TKT, JsonAudit, KdcAudit, REQID_LEN, SRVC_PRINC,
+    TestAudit, VALIDATE_POL, clear_thread_audit, current_audit, enctype_name, ktypes2str,
+    make_tkt_id, new_req_id, rep_etypes2str, set_audit, set_client_port, set_thread_audit,
 };
 pub use error::Error;
 pub use issue::{

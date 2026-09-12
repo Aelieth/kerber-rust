@@ -105,6 +105,7 @@ pub fn handle_request_from(
                     e_text = "NEEDED_PREAUTH".into();
                 }
                 log_krb_error(duration_us, code, &e_text, detail.as_deref());
+                crate::audit::log_failure(store, raw, sender, &bytes, code, &e_text);
             } else {
                 tracing::info!(
                     event = krb5_log::events::KDC_ISSUE,
@@ -113,6 +114,7 @@ pub fn handle_request_from(
                     duration_us,
                     outcome = "ok",
                 );
+                crate::audit::log_success(store, raw, sender, &bytes);
             }
             Ok(bytes)
         }
@@ -1235,7 +1237,12 @@ fn issue_tgs_body(
             Ok(h) => store
                 .policy()
                 .transit_allowed(tkt_client_realm, &req_realm, &h),
-            Err(_) => false,
+            Err(e) => crate::audit::unexpected_transit_false(
+                e,
+                tkt_client_realm,
+                req_realm.as_str(),
+                &transited,
+            ),
         }
     };
     // MIT do_tgs_req: skip leaves T unset; default reject_bad_transit
