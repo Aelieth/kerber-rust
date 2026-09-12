@@ -1,4 +1,4 @@
-//! A′-3 R30: SPAKE verify_support, PKINIT hint [16, 147], TGS FAST armor.
+//! A′-3 R30 inject: verify_support 24, PKINIT [16, 147], TGS FAST armor.
 
 use std::net::UdpSocket;
 use std::sync::mpsc;
@@ -48,22 +48,6 @@ fn r30_verify_support_unpermitted_offer_is_24() {
     .unwrap();
     let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
     assert_eq!(proto(&err), (err::PREAUTH_FAILED, Some("PREAUTH_FAILED")));
-}
-
-#[test]
-fn r30_spake_not_advertised_without_groups() {
-    let (mut store, _) = bootstrap_documented().unwrap();
-    store.policy.spake_preauth_groups.clear();
-    let req = as_req(user(), TEST_REALM, 30003, None).unwrap();
-    let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
-    let Error::PreauthRequired { e_data } = err else {
-        panic!("expected PreauthRequired, got {err:?}");
-    };
-    let method: MethodData = decode(&e_data).unwrap();
-    assert!(
-        method.iter().all(|p| p.padata_type != pa::SPAKE),
-        "empty spake_preauth_groups must omit 151: {method:?}"
-    );
 }
 
 #[test]

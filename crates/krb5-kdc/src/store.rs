@@ -3427,6 +3427,30 @@ mod tests {
     }
 
     #[test]
+    fn r30_spake_not_advertised_without_groups() {
+        let (mut store, _) = crate::bootstrap_documented().unwrap();
+        store.policy.spake_preauth_groups.clear();
+        let req = krb5_protocol::as_req(
+            PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]),
+            crate::TEST_REALM,
+            30003,
+            None,
+        )
+        .unwrap();
+        let err = crate::issue_as(&store, &req).unwrap_err();
+        let crate::Error::PreauthRequired { e_data } = err else {
+            panic!("expected PreauthRequired, got {err:?}");
+        };
+        let method: krb5_types::MethodData = krb5_asn1::decode(&e_data).unwrap();
+        assert!(
+            method
+                .iter()
+                .all(|p| p.padata_type != krb5_types::pa::SPAKE),
+            "empty spake_preauth_groups must omit 151: {method:?}"
+        );
+    }
+
+    #[test]
     fn transit_allowed_capaths_dot_and_hierarchical() {
         let mut p = Policy::default();
         assert!(p.transit_allowed("A.TEST", "A.TEST", &[]));
