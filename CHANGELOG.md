@@ -15,7 +15,13 @@ this project uses semantic versioning once a crate is published.
   sizes), IOV `SIGN_ONLY` and DCE wrap/unwrap (exact for AES, both legs
   live), SPNEGO `negotiate_mech` / `mechListMIC` (deviation: single-leg
   acceptor, MIC always sent, no `request-mic`; a krb5-less list is
-  refused). No code change; `security.md` GSS paragraph extended.
+  refused). No code change; `security.md` GSS paragraph extended. The
+  remaining W1-C parity buckets are deferred-with-oracle rows (ledger 428,
+  deferred 29): `kproplog`, `kadm5_hook` and `kadm5_auth` plugin
+  registries, `server_init.c` local handles, `kdb5_util` verbs, `kprop_util`
+  / `kpropd_rpc`, `gss_display_status` texts, cred-store / lucid / IAKERB /
+  exported contexts, and the remote `kadmin` client — each names the live
+  gate that already exercises MIT's side. W1-C closes.
 - **kpropd.** `kpropd.acl` now has MIT `authorized_principal` semantics
   (`kpropd.c:1298-1348`): a line authorizes when it starts with the
   unparsed client principal and ends there or at whitespace; an optional
