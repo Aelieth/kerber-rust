@@ -145,6 +145,18 @@ this project uses semantic versioning once a crate is published.
   `enctype_name` 6/24 are `DEPRECATED:`. TGS-fail logs
   `UNKNOWN_REASON` and the header `authtime`. JSON keys remain a
   documented subset of `j_dict.h`.
+- **docs.** W1-B B3 grade pass: 23 ledger rows for `lib/krb5/ccache`
+  (FILE v4 layout, `ccache_type`, resolve, create/destroy, tombstone,
+  DIR, `cache_match`, ccselect, KCM), `keytab/kt_file.c`,
+  `os/{sendto_kdc,locate_kdc,hostrealm*,sn2princ,ccdefname,init_os_ctx,
+  changepw}.c` and `clients/{kinit,klist,kvno,kdestroy,kswitch,kpasswd}`
+  graded against `ccache-gate` / `kcm-gate` / `ktutil-gate` /
+  `knobs-gate` / `client-gate` / `client-differential-gate`. Two
+  stricter-documented rows (`kdestroy` `O_NOFOLLOW`; DIR not created
+  on a read) join `docs/security.md`. Host-realm DNS, `dfl` rcache,
+  `sendto_kdc` pacing, `sname_to_principal` canonicalization, kpasswd
+  server locate, ccselect and `com_err` CLI texts stay deferred with
+  their live oracles named.
 - **client.** TGS-REP `krb5int_process_tgs_reply` checks the reply
   client against the TGT client (`gc_via_tkt.c:257-270`), refuses a
   self-inconsistent ticket/enc server (`:108-110`), and rejects an
