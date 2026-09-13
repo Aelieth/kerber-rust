@@ -155,15 +155,19 @@ pub fn tgs_renew(kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> {
         tgt,
         sname,
         &realm,
-        tkt_common_opts(tgt)
-            .with_bit(flag_bit::RENEW, true)
-            .with_bit(flag_bit::CANONICALIZE, true),
+        tgs_renew_options(&tgt.enc_part.flags),
         &[],
         None,
     )
 }
 
 fn tkt_common_opts(tgt: &AsOutcome) -> KdcOptions {
+    tkt_common_from_flags(&tgt.enc_part.flags)
+}
+
+/// MIT `KDC_TKT_COMMON_MASK` (`krb5.hin:1659` = `0x54800000`):
+/// FORWARDABLE | PROXIABLE | MAY_POSTDATE | RENEWABLE.
+fn tkt_common_from_flags(flags: &krb5_types::TicketFlags) -> KdcOptions {
     let mut opts = KdcOptions::none();
     for bit in [
         flag_bit::FORWARDABLE,
@@ -171,11 +175,19 @@ fn tkt_common_opts(tgt: &AsOutcome) -> KdcOptions {
         flag_bit::MAY_POSTDATE,
         flag_bit::RENEWABLE,
     ] {
-        if tgt.enc_part.flags.bit(bit) {
+        if flags.bit(bit) {
             opts = opts.with_bit(bit, true);
         }
     }
     opts
+}
+
+/// MIT `val_renew.c:62-67` `get_new_creds`: `KDC_OPT_RENEW` plus
+/// `old_creds.ticket_flags & KDC_TKT_COMMON_MASK`. No `CANONICALIZE`
+/// (`get_creds.c` sets that only on the referral walk).
+#[must_use]
+pub fn tgs_renew_options(flags: &krb5_types::TicketFlags) -> KdcOptions {
+    tkt_common_from_flags(flags).with_bit(flag_bit::RENEW, true)
 }
 
 /// TGS-REQ with PA-FOR-USER (S4U2Self). The KDC enforces that `sname` is the

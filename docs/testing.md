@@ -636,8 +636,9 @@ when that oracle is absent.
   (UDP+TCP). Eleven seeded flows compare AS-REQ/TGS-REQ CORE fields
   (`msg_type`, `sname`, nonce present, etype list non-empty); SHAPE
   diffs (padata, KDCOptions, etype list, addresses, rtime/till) are
-  printed as the W1-B ranked list. Every seeded flow except `kinit -R`
-  must `SHAPE_MATCH kdc_options` (AS `RENEWABLE_OK`). MIT `klist -C -f -e -a` reads both
+  printed as the W1-B ranked list. Every seeded flow must
+  `SHAPE_MATCH kdc_options` (AS `RENEWABLE_OK`; `kinit -R` is
+  `forwardable`+`renewable`+`renew` per `val_renew.c:62-67`). MIT `klist -C -f -e -a` reads both
   FILE caches; seven CLI error paths (wrong password, unknown principal,
   expired, revoked, no KDC, bad keytab, bad ccache) are non-zero on both
   CLIs. +3d `skew-preload.c`: MIT and Rust `kdc_timesync = 0` are

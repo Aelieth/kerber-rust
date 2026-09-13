@@ -20,12 +20,16 @@ this project uses semantic versioning once a crate is published.
 - **client.** Default AS `kdc_options` include `RENEWABLE_OK`
   (`init_ctx.c:265-267`); `kinit -r` clears it when `RENEWABLE` is set
   (`get_in_tkt.c:723`).
+- **client.** `kinit -R` KDCOptions are `KDC_OPT_RENEW` plus
+  `old_creds.ticket_flags & KDC_TKT_COMMON_MASK` (`val_renew.c:62-67`).
+  No `CANONICALIZE` (that bit is the `get_creds` referral walk).
 - **test.** `scripts/client-differential-gate.sh` drives MIT and Rust
   `kinit`/`kvno` against the live MIT 1.22.2 KDC through
   `scripts/lib/kdc-req-proxy.py` (request-shape JSONL: padata,
   KDCOptions, etypes, addresses, rtime/till class, nonce, sname,
-  KRB-ERROR e_data). Eleven seeded flows (CORE match; SHAPE diffs are
-  the W1-B ranked list); MIT `klist -C -f -e -a` over both FILE caches;
+  KRB-ERROR e_data). Eleven seeded flows (CORE match; every flow
+  `SHAPE_MATCH kdc_options`; remaining SHAPE diffs are the W1-B ranked
+  list); MIT `klist -C -f -e -a` over both FILE caches;
   seven CLI error paths non-zero on both CLIs; +3d `skew-preload.c`
   records default `kdc_timesync` recovery on both CLIs and Clock skew
   when `kdc_timesync = 0`; `gss-mit-client` → Rust acceptor majors.

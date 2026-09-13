@@ -222,6 +222,9 @@ is `KRB5_KDCREP_SKEW` (`Clock skew too great in KDC reply`). There is
 no per-context `time_offset` (no `krb5_context`); ticket times stay
 the KDC's. `kdc_timesync = 0` also rejects an already-expired
 `endtime` (stricter than MIT's starttime-only check).
+`kinit -R` copies `old_creds.ticket_flags & KDC_TKT_COMMON_MASK` and
+sets `KDC_OPT_RENEW` (`val_renew.c:62-67`); it does not set
+`CANONICALIZE` (that bit is the `get_creds` referral walk).
 
 FAST `req_checksum` is verified over the wire KDC-REQ-BODY (field 4)
 when a raw packet is present (`do_as_req.c:526-531`); socketless tests
