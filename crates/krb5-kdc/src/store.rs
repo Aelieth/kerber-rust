@@ -438,6 +438,10 @@ pub struct Policy {
     /// `[libdefaults] spake_preauth_groups` as implemented group numbers.
     /// Empty = MIT KDC default (`groups.c:60`) — SPAKE is not advertised.
     pub spake_preauth_groups: Vec<i32>,
+    /// `[realms] dict_file` words, ASCII-lowercased and sorted, for the MIT
+    /// `dict` password-quality module (`pwqual_dict.c:66-69` `strcasecmp`
+    /// order). Empty = no dictionary.
+    pub dict_words: Vec<String>,
 }
 
 impl Default for Policy {
@@ -464,8 +468,33 @@ impl Default for Policy {
             pkinit_indicators: Vec::new(),
             spake_preauth_indicators: Vec::new(),
             spake_preauth_groups: Vec::new(),
+            dict_words: Vec::new(),
         }
     }
+}
+
+/// MIT `pwqual_empty.c:40-44` extended message (`KADM5_PASS_Q_TOOSHORT`).
+pub const PWQUAL_EMPTY: &str = "Empty passwords are not allowed";
+/// MIT `pwqual_princ.c:50-51` extended message (`KADM5_PASS_Q_DICT`).
+pub const PWQUAL_PRINC: &str = "Password may not match principal name";
+/// MIT `kadm_err.et` `KADM5_PASS_Q_DICT` text: the `dict` module and the
+/// realm branch of `princ_check` (`pwqual_princ.c:45-47`) set no message.
+pub const PWQUAL_DICT: &str = "Password is in the password dictionary";
+
+/// MIT `init_dict` (`pwqual_dict.c:136-150`): every `\n`-terminated line is
+/// a word (an unterminated last line is not; a blank line is the empty
+/// word), sorted with `strcasecmp`. Lowercased here so a `binary_search` is
+/// that comparison.
+#[must_use]
+pub fn parse_dict_words(text: &str) -> Vec<String> {
+    let mut words: Vec<String> = text
+        .split_inclusive('\n')
+        .filter_map(|l| l.strip_suffix('\n'))
+        .map(str::to_ascii_lowercase)
+        .collect();
+    words.sort_unstable();
+    words.dedup();
+    words
 }
 
 /// MIT `parse_groups` (`groups.c:175-210`): unknown names skipped.
@@ -1102,6 +1131,25 @@ impl PrincipalStore {
                 )));
             };
             self.domain_sid = sid;
+        }
+        if let Some(path) = &conf.dict_file {
+            // MIT init_dict (pwqual_dict.c:96-111): a missing file is logged
+            // and the server continues without a dictionary; any other open
+            // or read failure is returned and kadm5_init fails.
+            match std::fs::read(path) {
+                Ok(bytes) => {
+                    self.policy.dict_words = parse_dict_words(&String::from_utf8_lossy(&bytes));
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    self.policy.dict_words = Vec::new();
+                }
+                Err(e) => {
+                    return Err(Error::InvalidArgument(format!(
+                        "kdc.conf dict_file {}: {e}",
+                        path.display()
+                    )));
+                }
+            }
         }
         Ok(())
     }
@@ -2802,19 +2850,71 @@ impl PrincipalStore {
         self.save_if_configured()
     }
 
-    /// Reject `password` against a named policy (create / kadm5 `-policy`).
+    /// MIT `passwd_check` for a new principal (`svr_principal.c:364-373`):
+    /// the named policy's length and class floors when the policy exists
+    /// (`get_policy` treats an unknown name as no policy), then the built-in
+    /// quality modules. `-randkey` creates do not come here.
     ///
     /// # Errors
     ///
     /// [`Error::PasswordPolicy`].
-    pub fn check_named_policy(&self, policy: &str, password: &[u8]) -> Result<(), Error> {
-        match self.policies.get(policy) {
-            Some(pol) => check_pwqual(password, pol),
-            None => Ok(()),
+    pub fn check_new_password(
+        &self,
+        name: &PrincipalName,
+        policy: Option<&str>,
+        password: &[u8],
+    ) -> Result<(), Error> {
+        let pol = policy.and_then(|n| self.policies.get(n));
+        if let Some(pol) = pol {
+            check_pwqual(password, pol)?;
         }
+        self.pwqual_modules(name, pol.is_some(), password)
     }
 
-    /// Reject `password` against the principal's named policy.
+    /// MIT built-in password-quality modules in `k5_pwqual_load` order
+    /// (`server_misc.c:44-58`: `dict`, `empty`, `princ`). `dict` and `princ`
+    /// skip a principal without a policy (`pwqual_dict.c:222-223`,
+    /// `pwqual_princ.c:40-41`); `empty` always applies (`pwqual_empty.c:38-44`).
+    /// `princ_check` compares the realm first (plain `KADM5_PASS_Q_DICT`) and
+    /// then every component (`Password may not match principal name`), all
+    /// with `strcasecmp`.
+    fn pwqual_modules(
+        &self,
+        name: &PrincipalName,
+        has_policy: bool,
+        password: &[u8],
+    ) -> Result<(), Error> {
+        if has_policy
+            && !self.policy.dict_words.is_empty()
+            && self
+                .policy
+                .dict_words
+                .binary_search(&String::from_utf8_lossy(password).to_ascii_lowercase())
+                .is_ok()
+        {
+            return Err(Error::PasswordPolicy(PWQUAL_DICT.into()));
+        }
+        if password.is_empty() {
+            return Err(Error::PasswordPolicy(PWQUAL_EMPTY.into()));
+        }
+        if has_policy {
+            if self.realm.as_bytes().eq_ignore_ascii_case(password) {
+                return Err(Error::PasswordPolicy(PWQUAL_DICT.into()));
+            }
+            if name
+                .name_string
+                .iter()
+                .any(|c| c.as_bytes().eq_ignore_ascii_case(password))
+            {
+                return Err(Error::PasswordPolicy(PWQUAL_PRINC.into()));
+            }
+        }
+        Ok(())
+    }
+
+    /// MIT `passwd_check` on a password change (`svr_principal.c:1282`):
+    /// the bound policy's floors, the built-in quality modules, then the
+    /// policy's history.
     ///
     /// # Errors
     ///
@@ -2827,13 +2927,14 @@ impl PrincipalStore {
         let Some(p) = self.get_name(name) else {
             return Ok(());
         };
-        let Some(ref n) = p.pw_policy else {
+        let pol = p.pw_policy.as_ref().and_then(|n| self.policies.get(n));
+        if let Some(pol) = pol {
+            check_pwqual(password, pol)?;
+        }
+        self.pwqual_modules(name, pol.is_some(), password)?;
+        let Some(pol) = pol else {
             return Ok(());
         };
-        let Some(pol) = self.policies.get(n) else {
-            return Ok(());
-        };
-        check_pwqual(password, pol)?;
         if pol.history == 0 {
             return Ok(());
         }

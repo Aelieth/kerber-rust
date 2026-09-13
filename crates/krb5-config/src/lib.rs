@@ -182,6 +182,10 @@ pub struct KdcConf {
     pub spake_preauth_indicators: Vec<String>,
     /// `[libdefaults] spake_preauth_groups`. `None` = omitted.
     pub spake_preauth_groups: Option<Vec<String>>,
+    /// `[realms] dict_file` for the `dict` password-quality module. MIT
+    /// `alt_prof.c:486-513` reads it from the realm stanza only, never from
+    /// `[kdcdefaults]`.
+    pub dict_file: Option<PathBuf>,
 }
 
 impl Default for KdcConf {
@@ -215,6 +219,7 @@ impl Default for KdcConf {
             pkinit_indicators: Vec::new(),
             spake_preauth_indicators: Vec::new(),
             spake_preauth_groups: None,
+            dict_file: None,
         }
     }
 }
@@ -861,6 +866,7 @@ fn parse_kdc_realm_line(conf: &mut KdcConf, line: &str) {
         }
         "pkinit_indicator" => conf.pkinit_indicators.push(v),
         "spake_preauth_indicator" => conf.spake_preauth_indicators.push(v),
+        "dict_file" => conf.dict_file = Some(PathBuf::from(v)),
         _ => {}
     }
 }
@@ -1764,6 +1770,35 @@ mod tests {
             mit.database_name.as_deref(),
             Some(std::path::Path::new("/var/lib/krb5kdc/principal"))
         );
+    }
+
+    #[test]
+    fn c1_dict_file_is_a_realm_relation_only() {
+        // MIT alt_prof.c:486-513: kadm5_get_config_params reads dict_file
+        // under [realms] REALM; a [kdcdefaults] dict_file is not consulted
+        // (live: MIT logs "No dictionary file specified").
+        let realm = KdcConf::parse(
+            r"
+[realms]
+    KERBER.TEST = {
+        dict_file = /tmp/dict.txt
+    }
+",
+        )
+        .unwrap();
+        assert_eq!(realm.dict_file, Some(PathBuf::from("/tmp/dict.txt")));
+        let defaults = KdcConf::parse(
+            r"
+[kdcdefaults]
+    dict_file = /tmp/dict.txt
+[realms]
+    KERBER.TEST = {
+        max_life = 10h
+    }
+",
+        )
+        .unwrap();
+        assert_eq!(defaults.dict_file, None);
     }
 
     #[test]

@@ -304,6 +304,43 @@ if echo "$LISTD" | grep -Fx tws; then
     echo "delpol tws answered yes left tws: $LISTD" >&2
     exit 1
 fi
+
+echo "==== C1 passwd_check: empty / princ / realm / dict modules, rust vs MIT kadmin.local ===="
+# MIT passwd_check (server_misc.c:110-135) runs the built-in pwqual modules
+# dict, empty, princ after the policy floors; dict/princ skip principals with
+# no policy, empty never does. MIT also klogs
+# "password quality module X rejected password for P: text" to stderr, so
+# only the com_err / created lines are compared.
+pwq_lines() { grep -e '^add_principal:' -e '^change_password:' -e '^get_principal:' -e '^Principal ' -e '^Password ' || true; }
+rust_local 'addpol pq' >/dev/null
+mit_local 'addpol pq' >/dev/null
+dl pwq-empty-nopolicy "$(rust_local 'addprinc -pw "" pqempty' | pwq_lines)" "$(mit_local 'addprinc -pw "" pqempty' | pwq_lines)"
+dl pwq-princ-component "$(rust_local 'addprinc -pw PQNAME -policy pq pqname' | pwq_lines)" "$(mit_local 'addprinc -pw PQNAME -policy pq pqname' | pwq_lines)"
+dl pwq-realm "$(rust_local 'addprinc -pw kerber.test -policy pq pqrealm' | pwq_lines)" "$(mit_local 'addprinc -pw kerber.test -policy pq pqrealm' | pwq_lines)"
+dl pwq-nopolicy-name-ok "$(rust_local 'addprinc -pw pqfree pqfree' | pwq_lines)" "$(mit_local 'addprinc -pw pqfree pqfree' | pwq_lines)"
+# A rejected create left nothing behind on either side.
+dl pwq-rejected-not-created "$(rust_local 'getprinc pqname' | pwq_lines)" "$(mit_local 'getprinc pqname' | pwq_lines)"
+rust_local 'getprinc pqname' | grep -F 'get_principal: Principal does not exist while retrieving "pqname@KERBER.TEST".'
+rust_local 'addprinc -pw "" pqempty' | grep -F 'add_principal: Empty passwords are not allowed while creating "pqempty@KERBER.TEST".'
+rust_local 'addprinc -pw PQNAME -policy pq pqname' | grep -F 'add_principal: Password may not match principal name while creating "pqname@KERBER.TEST".'
+rust_local 'addprinc -pw kerber.test -policy pq pqrealm' | grep -F 'add_principal: Password is in the password dictionary while creating "pqrealm@KERBER.TEST".'
+# cpw goes through the same passwd_check (svr_principal.c:1282).
+dl pwq-cpw-empty "$(rust_local 'cpw -pw "" pqfree' | pwq_lines)" "$(mit_local 'cpw -pw "" pqfree' | pwq_lines)"
+rust_local 'modprinc -policy pq pqfree' >/dev/null
+mit_local 'modprinc -policy pq pqfree' >/dev/null
+dl pwq-cpw-princ "$(rust_local 'cpw -pw PqFree pqfree' | pwq_lines)" "$(mit_local 'cpw -pw PqFree pqfree' | pwq_lines)"
+rust_local 'cpw -pw PqFree pqfree' | grep -F 'change_password: Password may not match principal name while changing password for "pqfree@KERBER.TEST".'
+# [realms] dict_file (alt_prof.c:513; pwqual_dict.c): exact word, strcasecmp,
+# only with a policy. Both kadmin.locals read the container's kdc.conf.
+docker exec "$NAME" sh -c 'printf "zebra\ncorrecthorse\napple\n" >/tmp/dict.txt && sed -i "s#^\(\s*\)max_life = #\1dict_file = /tmp/dict.txt\n\1max_life = #" /etc/krb5kdc/kdc.conf && grep -q "dict_file = /tmp/dict.txt" /etc/krb5kdc/kdc.conf'
+dl pwq-dict-word "$(rust_local 'addprinc -pw CorrectHorse -policy pq pqdict' | pwq_lines)" "$(mit_local 'addprinc -pw CorrectHorse -policy pq pqdict' | pwq_lines)"
+rust_local 'addprinc -pw CorrectHorse -policy pq pqdict' | grep -F 'add_principal: Password is in the password dictionary while creating "pqdict@KERBER.TEST".'
+dl pwq-dict-nopolicy-ok "$(rust_local 'addprinc -pw correcthorse pqdictnp' | pwq_lines)" "$(mit_local 'addprinc -pw correcthorse pqdictnp' | pwq_lines)"
+dl pwq-dict-substring-ok "$(rust_local 'addprinc -pw correcthorse1 -policy pq pqdictsub' | pwq_lines)" "$(mit_local 'addprinc -pw correcthorse1 -policy pq pqdictsub' | pwq_lines)"
+rust_local 'getprinc pqdictsub' | grep -F 'Principal: pqdictsub@KERBER.TEST'
+docker exec "$NAME" sh -c 'sed -i "/dict_file = \/tmp\/dict.txt/d" /etc/krb5kdc/kdc.conf'
+echo "c1_pwqual_modules=identical"
+
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1'
 
 echo "==== kadmin.local ignores KRB5_ACL_FILE ===="

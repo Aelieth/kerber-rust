@@ -411,6 +411,26 @@ impl<'a> AdminSession<'a> {
         self.create_password_etypes(name, password, &[])
     }
 
+    /// MIT `kadm5_create_principal_3` `passwd_check` (`svr_principal.c:364-373`)
+    /// for `addprinc [-policy P] -pw PW`: the named policy's floors (if the
+    /// policy exists) and the built-in `dict` / `empty` / `princ` modules run
+    /// before the principal is created.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::PasswordPolicy`] with the MIT text.
+    pub fn check_new_password(
+        &mut self,
+        name: &PrincipalName,
+        policy: Option<&str>,
+        password: &[u8],
+    ) -> Result<(), Error> {
+        self.reload()?;
+        self.store
+            .check_new_password(name, policy, password)
+            .map_err(Error::from)
+    }
+
     /// `addprinc -e`.
     ///
     /// # Errors

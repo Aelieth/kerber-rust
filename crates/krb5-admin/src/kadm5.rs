@@ -117,6 +117,8 @@ const KADM5_FAILURE: u32 = 43_787_520;
 const KADM5_PASS_Q_TOOSHORT: u32 = 43_787_542;
 /// MIT `ovk` 23.
 const KADM5_PASS_Q_CLASS: u32 = 43_787_543;
+/// MIT `ovk` 24 (`KADM5_PASS_Q_DICT`): `dict` and `princ` modules.
+const KADM5_PASS_Q_DICT: u32 = 43_787_544;
 /// MIT `ovk` 25.
 const KADM5_PASS_REUSE: u32 = 43_787_545;
 /// MIT `ovk` 26 (`KADM5_PASS_TOOSOON`).
@@ -2436,10 +2438,15 @@ fn dispatch_kadm5_ticket(
             };
             let rs = acl.restrictions(actor, Some(&tid));
             let skip_policy = rs.is_some_and(|r| r.clear_policy || r.policy.is_some());
-            if let Some(ref pol) = c.policy
-                && !skip_policy
-                && let Err(e) = g.check_named_policy(pol, c.pass.as_bytes())
-            {
+            // MIT kadm5_create_principal_3 (svr_principal.c:364-373): the
+            // policy floors then the quality modules (`empty` even without a
+            // policy) run before the entry exists.
+            let pol = if skip_policy {
+                None
+            } else {
+                c.policy.as_deref()
+            };
+            if let Err(e) = g.check_new_password(&c.name, pol, c.pass.as_bytes()) {
                 return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
             }
             match g.insert_new_password(&c.name, &req, c.pass.as_bytes(), &[]) {
@@ -2864,10 +2871,12 @@ fn kadm5_code(e: &Error) -> u32 {
     if s.starts_with("Unsupported argument") || s == "Invalid argument" {
         return EINVAL;
     }
-    if s.contains("min_length") {
+    if s.contains("min_length") || s == krb5_kdc::PWQUAL_EMPTY {
         KADM5_PASS_Q_TOOSHORT
     } else if s.contains("min_classes") {
         KADM5_PASS_Q_CLASS
+    } else if s == krb5_kdc::PWQUAL_DICT || s == krb5_kdc::PWQUAL_PRINC {
+        KADM5_PASS_Q_DICT
     } else if s.contains("history") {
         KADM5_PASS_REUSE
     } else if s.contains("setkey kvno") {
@@ -6169,6 +6178,80 @@ mod tests {
         w.u32(KADM5_PRINCIPAL);
         w.nullstring(Some(pass));
         w.b
+    }
+
+    /// `create_rec` with `KADM5_POLICY` set and the policy string filled.
+    fn create_rec_policy(name: &str, pass: &str, policy: &str) -> Vec<u8> {
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some(name));
+        for v in [0, 0, 0, 3600, 1, 0, 0, 1, 1] {
+            w.u32(v);
+        }
+        w.nullstring(Some(policy));
+        // aux, max_rlife, last_success, last_failed, fail_auth_count, n_key,
+        // n_tl, tl_data NULL, empty key_data array.
+        for v in [0, 0, 0, 0, 0, 0, 0, 1, 0] {
+            w.u32(v);
+        }
+        w.u32(KADM5_PRINCIPAL | KADM5_POLICY);
+        w.nullstring(Some(pass));
+        w.b
+    }
+
+    /// MIT `kadm5_create_principal_3` `passwd_check` (`svr_principal.c:370`):
+    /// `empty` rejects without a policy as `KADM5_PASS_Q_TOOSHORT`; `princ`
+    /// rejects a component match under a policy as `KADM5_PASS_Q_DICT`; a
+    /// rejected create leaves no entry.
+    #[test]
+    fn c1_create_runs_pwqual_modules_before_the_entry_exists() {
+        let (store, acl, actor) = setup();
+        store
+            .write()
+            .unwrap()
+            .put_policy(krb5_kdc::NamedPolicy::new("pq"));
+        let empty = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            CREATE_PRINCIPAL,
+            &create_rec("nopol@KERBER.TEST", ""),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&empty), KADM5_PASS_Q_TOOSHORT);
+        let princ = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            CREATE_PRINCIPAL,
+            &create_rec_policy("pqu@KERBER.TEST", "PQU", "pq"),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&princ), KADM5_PASS_Q_DICT);
+        let realm = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            CREATE_PRINCIPAL,
+            &create_rec_policy("pqu@KERBER.TEST", "kerber.test", "pq"),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&realm), KADM5_PASS_Q_DICT);
+        // Without a policy the princ module does not run.
+        let nopol = dispatch_kadm5(
+            &store,
+            &acl,
+            &actor,
+            CREATE_PRINCIPAL,
+            &create_rec("pqfree@KERBER.TEST", "PQFREE"),
+        )
+        .unwrap();
+        assert_eq!(ret_code(&nopol), 0);
+        let g = store.read().unwrap();
+        let n = |s: &str| PrincipalName::new(PrincipalName::NT_PRINCIPAL, [s]);
+        assert!(g.get_name(&n("nopol")).is_none());
+        assert!(g.get_name(&n("pqu")).is_none());
+        assert!(g.get_name(&n("pqfree")).is_some());
     }
 
     #[test]

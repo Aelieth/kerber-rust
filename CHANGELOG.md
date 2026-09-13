@@ -6,6 +6,21 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-C
+
+- **kadmin.** MIT `passwd_check` built-in modules on kadm5 create and
+  chpass, `kadmin.local addprinc`/`cpw` and kpasswd
+  (`server_misc.c:110-135`): `empty` refuses `""` even without a policy
+  (`KADM5_PASS_Q_TOOSHORT`, `Empty passwords are not allowed`); under a
+  policy `princ` refuses a principal component or the realm and `dict`
+  refuses a `[realms] dict_file` word (`KADM5_PASS_Q_DICT`, `Password
+  may not match principal name` / `Password is in the password
+  dictionary`), all `strcasecmp`. The check runs before the entry is
+  written, so `addprinc -pw short -policy p8` creates nothing like
+  MIT. `dict_file` is a realm-stanza relation (`alt_prof.c:513`);
+  ENOENT continues without a dictionary. Live: `kadmin-local-gate.sh`
+  `pwq-*` cells, Rust vs MIT `kadmin.local` identical.
+
 ### W1-B
 
 - **client.** FAST `KrbFastResponse.nonce` must match the request

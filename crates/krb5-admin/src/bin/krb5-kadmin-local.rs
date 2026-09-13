@@ -249,11 +249,17 @@ fn run(
                 }
             } else {
                 let pw = a.pw.clone().map_or_else(password, Ok)?;
-                if a.etypes.is_empty() {
-                    sess.create_password(&name, pw.as_bytes())
-                } else {
-                    sess.create_password_etypes(&name, pw.as_bytes(), &a.etypes)
-                }
+                // MIT kadm5_create_principal_3 runs passwd_check with the
+                // -policy before the entry exists (svr_principal.c:364-373),
+                // so a rejected password creates nothing.
+                sess.check_new_password(&name, a.policy.as_deref(), pw.as_bytes())
+                    .and_then(|()| {
+                        if a.etypes.is_empty() {
+                            sess.create_password(&name, pw.as_bytes())
+                        } else {
+                            sess.create_password_etypes(&name, pw.as_bytes(), &a.etypes)
+                        }
+                    })
             };
             if let Err(e) = created {
                 eprintln!(
@@ -606,6 +612,16 @@ fn kadm_err_text(e: &krb5_admin::Error) -> String {
         krb5_admin::Error::PasswordPolicy(s) if s.contains("history") => {
             "Cannot reuse password".into()
         }
+        // MIT prints krb5_get_error_message: the module's k5_setmsg text for
+        // `empty` and the component branch of `princ`, the plain
+        // KADM5_PASS_Q_DICT text for `dict` and the realm branch.
+        krb5_admin::Error::PasswordPolicy(s)
+            if s == krb5_kdc::PWQUAL_EMPTY
+                || s == krb5_kdc::PWQUAL_PRINC
+                || s == krb5_kdc::PWQUAL_DICT =>
+        {
+            s.clone()
+        }
         krb5_admin::Error::NotFound => "Principal does not exist".into(),
         other => other.to_string(),
     }
@@ -700,6 +716,52 @@ mod tests {
         }
         let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
         assert!(q(&mut sess, "getprinc krbtgt/KERBER.TEST@AD.KERBER.TEST").is_ok());
+    }
+
+    /// MIT `kadm5_create_principal_3` (`svr_principal.c:364-373`) runs
+    /// `passwd_check` before the entry exists: `addprinc -pw short -policy p8`
+    /// creates nothing, and `-pw ""` is refused even without a policy
+    /// (`pwqual_empty.c`). Live MIT 1.22.2 `kadmin.local` agrees.
+    #[test]
+    fn c1_addprinc_rejected_password_creates_no_principal() {
+        let (mut store, acl) = sess_pair();
+        {
+            let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+            q(&mut sess, "addpol -minlength 8 p8").unwrap();
+            q(&mut sess, "addprinc -pw short -policy p8 pqshort").unwrap();
+            q(&mut sess, "addprinc -pw pqname -policy p8 pqname").unwrap();
+            q(&mut sess, "addprinc -pw \"\" nopolempty").unwrap();
+            q(&mut sess, "addprinc -pw longenough -policy p8 pqok").unwrap();
+            q(&mut sess, "addprinc -randkey -policy p8 pqrand").unwrap();
+        }
+        let n = |s: &str| PrincipalName::new(PrincipalName::NT_PRINCIPAL, [s]);
+        assert!(store.get_name(&n("pqshort")).is_none(), "min_length");
+        assert!(store.get_name(&n("pqname")).is_none(), "princ module");
+        assert!(store.get_name(&n("nopolempty")).is_none(), "empty module");
+        let ok = store.get_name(&n("pqok")).expect("accepted create");
+        assert_eq!(ok.pw_policy.as_deref(), Some("p8"));
+        assert!(
+            store.get_name(&n("pqrand")).is_some(),
+            "randkey skips passwd_check"
+        );
+        assert_eq!(
+            kadm_err_text(&krb5_admin::Error::PasswordPolicy(
+                krb5_kdc::PWQUAL_EMPTY.into()
+            )),
+            "Empty passwords are not allowed"
+        );
+        assert_eq!(
+            kadm_err_text(&krb5_admin::Error::PasswordPolicy(
+                krb5_kdc::PWQUAL_PRINC.into()
+            )),
+            "Password may not match principal name"
+        );
+        assert_eq!(
+            kadm_err_text(&krb5_admin::Error::PasswordPolicy(
+                krb5_kdc::PWQUAL_DICT.into()
+            )),
+            "Password is in the password dictionary"
+        );
     }
 
     #[test]
