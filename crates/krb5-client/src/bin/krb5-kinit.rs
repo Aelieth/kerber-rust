@@ -1,7 +1,7 @@
 //! Obtain a TGT from a KDC and write an MIT FILE ccache.
 //!
 //! Usage matches MIT `kinit`: `kinit [-kt keytab] [-c cache] [-r life] [-l life]
-//! [-s start] [-R] [-f|-F] [-p|-P] [-a|-A] [-S service] [-C] [-E] [-n]
+//! [-s start] [-R] [-v] [-f|-F] [-p|-P] [-a|-A] [-S service] [-C] [-E] [-n]
 //! [-X attr=val] [principal]`
 
 #![forbid(unsafe_code)]
@@ -112,17 +112,21 @@ fn main() {
     if args.addresses == Some(true) {
         ticket.addresses = local_host_addresses();
     }
-    let mut password =
-        if args.keytab || args.renew || args.pkinit_identity.is_some() || args.anonymous {
-            Vec::new()
-        } else {
-            env_password().unwrap_or_else(|| {
-                read_password_line(&principal).unwrap_or_else(|e| {
-                    eprintln!("kinit: {e}");
-                    std::process::exit(2);
-                })
+    let mut password = if args.keytab
+        || args.renew
+        || args.validate
+        || args.pkinit_identity.is_some()
+        || args.anonymous
+    {
+        Vec::new()
+    } else {
+        env_password().unwrap_or_else(|| {
+            read_password_line(&principal).unwrap_or_else(|e| {
+                eprintln!("kinit: {e}");
+                std::process::exit(2);
             })
-        };
+        })
+    };
     let kt_path = args.keytab_path.clone().or_else(|| {
         args.keytab.then(|| {
             env_ktname().map_or_else(
@@ -150,6 +154,7 @@ fn main() {
             },
             ticket: ticket.clone(),
             renew: args.renew,
+            validate: args.validate,
             anonymous: args.anonymous,
             canonicalize: args.canonicalize
                 || args.enterprise

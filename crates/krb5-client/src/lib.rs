@@ -15,7 +15,7 @@ use krb5_protocol::{
     AsOutcome, AsRequest, AsTicketOpts, FastArmor, KdcAddr, PkinitClient, TgsOutcome, as_exchange,
     as_exchange_with_keys, dir_cache_path, dir_cache_path_for_store, kcm_destroy, kcm_load,
     kcm_store, kcm_store_keep_default, memory_destroy, memory_retrieve, memory_store,
-    parse_principal_ex, tgs_exchange_path, tgs_renew,
+    parse_principal_ex, tgs_exchange_path, tgs_renew, tgs_validate,
 };
 use krb5_types::Ticket;
 use zeroize::Zeroize;
@@ -58,6 +58,8 @@ pub struct KinitParams<'a> {
     pub ticket: AsTicketOpts,
     /// `kinit -R`.
     pub renew: bool,
+    /// `kinit -v`: TGS-REQ with KDC option `validate`.
+    pub validate: bool,
     /// `kinit -n` (anonymous PKINIT).
     pub anonymous: bool,
     /// `kinit -C` / `[libdefaults] canonicalize`.
@@ -355,6 +357,9 @@ fn kinit_inner(
     if params.renew {
         return renew_inner(&resolved, spec);
     }
+    if params.validate {
+        return validate_inner(&resolved, spec);
+    }
     let armor = match params.armor_ccache {
         Some(p) => Some(load_fast_armor(p)?),
         None => None,
@@ -518,6 +523,21 @@ fn renew_inner(
     kdc: &KdcAddr,
     spec: &CcSpec,
 ) -> Result<(KinitResult, FileCcache), Box<dyn std::error::Error + Send + Sync>> {
+    valrenew_inner(kdc, spec, false)
+}
+
+fn validate_inner(
+    kdc: &KdcAddr,
+    spec: &CcSpec,
+) -> Result<(KinitResult, FileCcache), Box<dyn std::error::Error + Send + Sync>> {
+    valrenew_inner(kdc, spec, true)
+}
+
+fn valrenew_inner(
+    kdc: &KdcAddr,
+    spec: &CcSpec,
+    validate: bool,
+) -> Result<(KinitResult, FileCcache), Box<dyn std::error::Error + Send + Sync>> {
     let mut cc = load_ccache(spec)?;
     let cred = cc
         .list()
@@ -526,7 +546,11 @@ fn renew_inner(
         .ok_or("ccache has no TGT")?
         .clone();
     let tgt = outcome_from_cred(&cred)?;
-    let tgs = tgs_renew(kdc, &tgt)?;
+    let tgs = if validate {
+        tgs_validate(kdc, &tgt)?
+    } else {
+        tgs_renew(kdc, &tgt)?
+    };
     let new_cred = tgt_cred(
         &tgt.crealm,
         &tgt.cname,

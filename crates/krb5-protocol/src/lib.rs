@@ -94,6 +94,7 @@ pub use secret_file::{destroy_secret_file, write_secret_file};
 pub use tgs::{
     TgsOutcome, referral_hop_realm, tgs_exchange, tgs_exchange_ex, tgs_exchange_once,
     tgs_exchange_path, tgs_forward, tgs_renew, tgs_renew_options, tgs_s4u, tgs_s4u2proxy, tgs_u2u,
+    tgs_validate, tgs_validate_options,
 };
 pub use transport::{KDC_PORT, KdcAddr, exchange, exchange_on_tcp, exchange_with_failover};
 pub use vfy_increds::{

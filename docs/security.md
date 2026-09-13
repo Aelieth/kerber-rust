@@ -226,6 +226,8 @@ the KDC's. `kdc_timesync = 0` also rejects an already-expired
 `kinit -R` copies `old_creds.ticket_flags & KDC_TKT_COMMON_MASK` and
 sets `KDC_OPT_RENEW` (`val_renew.c:62-67`); it does not set
 `CANONICALIZE` (that bit is the `get_creds` referral walk).
+`kinit -v` is the same mask plus `KDC_OPT_VALIDATE`
+(`val_renew.c:116-121` `krb5_get_credentials_validate`).
 AS-REP `verify_as_reply` requires `enc.server == ticket.server`
 (name and realm) and, unless `canon_ok`, `enc.server == request.server`
 (`get_in_tkt.c:227-239`). `canon_ok` is CANONICALIZE, NT-ENTERPRISE,

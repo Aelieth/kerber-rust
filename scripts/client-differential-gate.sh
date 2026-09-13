@@ -1223,6 +1223,45 @@ fi
 echo "MIT_kvno_P_tgs_padata"
 echo "RUST_kvno_P_tgs_padata"
 
+echo "==== kinit -v TGS options (val_renew.c VALIDATE) ===="
+tgs_kdc_options() {
+    docker exec "$NAME" python3 -c "
+import json, sys
+for line in open(sys.argv[1]):
+    o = json.loads(line)
+    if o.get('kind') == 'req' and o.get('msg_type') == 12:
+        print(o.get('kdc_options'))
+        break
+" "$1"
+}
+docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf "$NAME" \
+    sh -c "printf 'userpassword\n' | kinit -s 1h -c /tmp/cc_mit_val user@KERBER.TEST" \
+    || die "MIT kinit -s for validate failed"
+docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf -e KRB5_PASSWORD=userpassword "$NAME" \
+    /tmp/krb5-kinit -s 1h -c /tmp/cc_rust_val user@KERBER.TEST \
+    || die "Rust kinit -s for validate failed"
+reset_cap
+docker exec -e KRB5_CONFIG=/tmp/proxy-krb5.conf "$NAME" \
+    kinit -v -c /tmp/cc_mit_val || true
+save_cap mit-validate
+reset_cap
+docker exec -e KRB5_CONFIG=/tmp/proxy-krb5.conf "$NAME" \
+    /tmp/krb5-kinit -v -c /tmp/cc_rust_val user@KERBER.TEST || true
+save_cap rust-validate
+MIT_VAL_OPTS="$(tgs_kdc_options /tmp/cdiff/mit-validate.jsonl)"
+RUST_VAL_OPTS="$(tgs_kdc_options /tmp/cdiff/rust-validate.jsonl)"
+echo "MIT_VAL_OPTS=$MIT_VAL_OPTS"
+echo "RUST_VAL_OPTS=$RUST_VAL_OPTS"
+echo "$MIT_VAL_OPTS" | grep -q validate \
+    || die "MIT kinit -v missing validate ($MIT_VAL_OPTS)"
+echo "$RUST_VAL_OPTS" | grep -q validate \
+    || die "Rust kinit -v missing validate ($RUST_VAL_OPTS)"
+if [ "$MIT_VAL_OPTS" != "$RUST_VAL_OPTS" ]; then
+    die "kinit -v kdc_options MIT=$MIT_VAL_OPTS Rust=$RUST_VAL_OPTS"
+fi
+echo "MIT_kinit_validate"
+echo "RUST_kinit_validate"
+
 mkdir -p "$SCRATCH/cdiff"
 docker cp "$NAME:/tmp/cdiff/." "$SCRATCH/cdiff/"
 log "client.diff.gate" "ok" ",\"flows\":$EXPECTED_FLOWS,\"cli_errors\":8"

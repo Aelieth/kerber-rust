@@ -146,6 +146,8 @@ pub struct KinitArgs {
     pub lifetime: Option<String>,
     /// `-R`.
     pub renew: bool,
+    /// `-v` (`krb5_get_validated_creds`).
+    pub validate: bool,
     /// `-f` / `-F`.
     pub forwardable: Option<bool>,
     /// `-p` / `-P`.
@@ -182,7 +184,7 @@ pub struct KinitArgs {
     pub pos_service: Option<String>,
 }
 
-const KINIT_OPTSTRING: &str = "r:l:c:t:T:S:X:s:kfpFPnaAERC";
+const KINIT_OPTSTRING: &str = "r:l:c:t:T:S:X:s:kfpFPnaAERCv";
 
 fn kinit_longs() -> &'static [LongOpt] {
     &[
@@ -247,6 +249,7 @@ pub fn parse_kinit(args: &[String]) -> Result<KinitArgs, String> {
             'r' => out.rlife = o.arg,
             'l' => out.lifetime = o.arg,
             'R' => out.renew = true,
+            'v' => out.validate = true,
             'f' => out.forwardable = Some(true),
             'F' => out.forwardable = Some(false),
             'p' => out.proxiable = Some(true),
@@ -672,6 +675,9 @@ mod tests {
         let b = parse_kinit(&s(&["-C", "-s", "1h", "user@R"])).unwrap();
         assert!(b.canonicalize);
         assert_eq!(b.starttime.as_deref(), Some("1h"));
+        let v = parse_kinit(&s(&["-v", "user@R"])).unwrap();
+        assert!(v.validate);
+        assert!(!v.renew);
     }
 
     fn sample(end: u32, server: PrincipalName) -> CcacheCred {

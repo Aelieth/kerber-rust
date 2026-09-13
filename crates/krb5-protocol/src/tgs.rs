@@ -724,6 +724,33 @@ pub fn tgs_s4u2proxy(
     )
 }
 
+/// TGS-REQ with KDC option `validate` for `kinit -v`.
+///
+/// # Errors
+///
+/// Transport, crypto, or `KRB-ERROR` failures.
+pub fn tgs_validate(kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> {
+    let realm = String::from_utf8_lossy(tgt.crealm.as_bytes()).into_owned();
+    let sname = PrincipalName::krbtgt(&realm);
+    tgs_once(
+        kdc,
+        tgt,
+        sname,
+        &realm,
+        tgs_validate_options(&tgt.enc_part.flags),
+        &[],
+        None,
+        None,
+    )
+}
+
+/// MIT `val_renew.c:62-67` `get_new_creds`: `KDC_OPT_VALIDATE` plus
+/// `old_creds.ticket_flags & KDC_TKT_COMMON_MASK`.
+#[must_use]
+pub fn tgs_validate_options(flags: &krb5_types::TicketFlags) -> KdcOptions {
+    tkt_common_from_flags(flags).with_bit(flag_bit::VALIDATE, true)
+}
+
 #[cfg(test)]
 mod tests {
     use krb5_crypto::{EncryptionType, ProtocolKey};

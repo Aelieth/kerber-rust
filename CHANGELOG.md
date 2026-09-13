@@ -90,6 +90,11 @@ this project uses semantic versioning once a crate is published.
   S4U2Self for the ccache principal, then a TGS with
   `CNAME_IN_ADDL_TKT`, the evidence ticket, and PA-PAC-OPTIONS 167.
   FAST outer padata is `[1, 136, 167]`. `-P` without `-U` is refused.
+- **client.** `kinit -v` KDCOptions are `KDC_OPT_VALIDATE` plus
+  `old_creds.ticket_flags & KDC_TKT_COMMON_MASK` (`val_renew.c:62-67`,
+  `krb5_get_credentials_validate`). No `CANONICALIZE`. Live both
+  CLIs vs a postdated TGT send `forwardable`+`allow_postdate`+
+  `validate` (KDC `NOT_YET_VALID` 33 before starttime).
 - **kdc.** Hierarchical `find_alternate_tgs` walks MIT
   `rtree_hier_realms` (`walk_rtree.c`) instead of transit
   intermediates, so `krbtgt/X.SUB.KERBER.TEST` issues
@@ -120,7 +125,9 @@ this project uses semantic versioning once a crate is published.
   outer `till=zero`; PKINIT / anon second AS `[133, 16, 150, 149]`;
   SPAKE first-shot `[150, 149]` / error 25; password preauth cascade
   `[[150, 149], [133, 151, 150, 149], [133, 151, 150, 149]]`;
-  `kvno -U` TGS padata `[1, 136, 130, 129]`; diffsend
+  `kvno -U` TGS padata `[1, 136, 130, 129]`; `kvno -U -P` S4U2Proxy
+  `[1, 136, 167]`; `kinit -v` VALIDATE options
+  `forwardable`+`allow_postdate`+`validate`; diffsend
   `tgs-alternate-tgs-hierarchical`. Fail-red
   on `mit-extra`.
 
