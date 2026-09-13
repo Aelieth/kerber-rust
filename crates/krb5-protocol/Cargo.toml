@@ -118,6 +118,10 @@ path = "tests/b2_rd_req_transited.rs"
 name = "b2_tgs_reply"
 path = "tests/b2_tgs_reply.rs"
 
+[[test]]
+name = "b2_sname_match"
+path = "tests/b2_sname_match.rs"
+
 [dependencies]
 chrono.workspace = true
 getrandom.workspace = true

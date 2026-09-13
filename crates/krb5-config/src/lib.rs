@@ -103,6 +103,9 @@ pub struct Krb5Conf {
     pub spake_preauth_groups: Option<Vec<String>>,
     /// `[libdefaults] preferred_preauth_types`. Empty = MIT default `17, 16, 15, 14`.
     pub preferred_preauth_types: Vec<i32>,
+    /// `[libdefaults] ignore_acceptor_hostname`. Default false
+    /// (`sname_match.c:51-53`).
+    pub ignore_acceptor_hostname: bool,
     /// Realm → KDC list.
     pub kdcs: BTreeMap<String, Vec<Endpoint>>,
     /// Realm → admin_server.
@@ -678,6 +681,9 @@ fn parse_libdefaults(conf: &mut Krb5Conf, seen: &mut BTreeSet<String>, line: &st
         }
         "preferred_preauth_types" if take_first(seen, "preferred_preauth_types") => {
             conf.preferred_preauth_types = parse_i32_list(&v);
+        }
+        "ignore_acceptor_hostname" if take_first(seen, "ignore_acceptor_hostname") => {
+            conf.ignore_acceptor_hostname = truthy(&v);
         }
         _ => {}
     }
@@ -2272,5 +2278,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(c.default_realm.as_deref(), Some("LOCAL.TEST"));
+    }
+
+    #[test]
+    fn ignore_acceptor_hostname_defaults_false() {
+        let c = Krb5Conf::parse("[libdefaults]\n    default_realm = KERBER.TEST\n").unwrap();
+        assert!(!c.ignore_acceptor_hostname);
+        let on = Krb5Conf::parse("[libdefaults]\n    ignore_acceptor_hostname = true\n").unwrap();
+        assert!(on.ignore_acceptor_hostname);
     }
 }

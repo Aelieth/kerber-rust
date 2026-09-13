@@ -115,6 +115,12 @@ this project uses semantic versioning once a crate is published.
   `ILL_CR_TKT` 43. The T flag, an empty field, or anonymous crealm
   skips the check like MIT. Live MIT KDC tickets carry T, so GSS
   accept is unchanged.
+- **acceptor.** AP-REQ server matching uses `krb5_sname_match`
+  (`sname_match.c:30-57`). A two-component `NT-SRV-HST` expected name
+  checks the service and hostname; an empty hostname or
+  `[libdefaults] ignore_acceptor_hostname` skips the host component.
+  Other name-types compare name-string + realm. Live GSS / `vfy_increds`
+  still pass a concrete host (ignore off).
 - **client.** TGS-REP `krb5int_process_tgs_reply` checks the reply
   client against the TGT client (`gc_via_tkt.c:257-270`), refuses a
   self-inconsistent ticket/enc server (`:108-110`), and rejects an
@@ -144,7 +150,7 @@ this project uses semantic versioning once a crate is published.
   `kvno -U` TGS padata `[1, 136, 130, 129]`; `kvno -U -P` S4U2Proxy
   `[1, 136, 167]`; `kinit -v` VALIDATE options
   `forwardable`+`allow_postdate`+`validate`; TGS-REP client vs TGT
-  client (`gc_via_tkt.c`); diffsend
+  client (`gc_via_tkt.c`); acceptor `sname_match`; diffsend
   `tgs-alternate-tgs-hierarchical`. Fail-red
   on `mit-extra`.
 

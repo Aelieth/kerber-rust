@@ -255,20 +255,17 @@ fn verify_inner(
         return Err(Error::TruncatedReply);
     }
     let ap: ApReq = decode(raw)?;
-    if let Some(exp) = params.expected_server
-        && ap.ticket.sname.components_joined() != exp.components_joined()
-    {
+    let ignore_host = krb5_config::load_krb5_conf().is_some_and(|c| c.ignore_acceptor_hostname);
+    if !sname_match(
+        params.expected_server,
+        params.expected_realm,
+        &ap.ticket.sname,
+        ap.ticket.realm.as_bytes(),
+        ignore_host,
+    ) {
         return Err(Error::KrbError {
             code: err::NOT_US,
             text: Some("ticket sname does not match expected server".into()),
-        });
-    }
-    if let Some(r) = params.expected_realm
-        && ap.ticket.realm.as_bytes() != r.as_bytes()
-    {
-        return Err(Error::KrbError {
-            code: err::NOT_US,
-            text: Some("ticket realm does not match".into()),
         });
     }
     let tkt_usage = KeyUsage::new(ku::TICKET)?;
@@ -499,4 +496,42 @@ fn hierarchical_walk_realms(client: &str, server: &str) -> Vec<String> {
         out.push(hop);
     }
     out
+}
+
+/// MIT `sname_match.c:30-57` `krb5_sname_match`.
+///
+/// `matching == NULL` accepts any ticket server. A two-component
+/// `NT-SRV-HST` matching name checks realm (when present), the service
+/// component, and the hostname unless `ignore_acceptor_hostname` or the
+/// matching hostname is empty. Other name-types use
+/// `krb5_principal_compare` (name-string + realm; name-type ignored).
+#[must_use]
+pub fn sname_match(
+    matching: Option<&PrincipalName>,
+    matching_realm: Option<&str>,
+    princ: &PrincipalName,
+    princ_realm: &[u8],
+    ignore_acceptor_hostname: bool,
+) -> bool {
+    let Some(matching) = matching else {
+        return true;
+    };
+    let realm_ok = matching_realm.is_none_or(|r| r.is_empty() || r.as_bytes() == princ_realm);
+    if matching.name_type != PrincipalName::NT_SRV_HST || matching.name_string.len() != 2 {
+        return matching.name_string == princ.name_string && realm_ok;
+    }
+    if princ.name_string.len() != 2 {
+        return false;
+    }
+    if !realm_ok {
+        return false;
+    }
+    if matching.name_string[0].as_bytes() != princ.name_string[0].as_bytes() {
+        return false;
+    }
+    let host = matching.name_string[1].as_bytes();
+    if !host.is_empty() && !ignore_acceptor_hostname && host != princ.name_string[1].as_bytes() {
+        return false;
+    }
+    true
 }

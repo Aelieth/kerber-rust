@@ -1281,6 +1281,16 @@ docker exec "$NAME" test -s /tmp/cdiff/rust-kvno_plain.jsonl \
 echo "MIT_tgs_reply_client"
 echo "RUST_tgs_reply_client"
 
+echo "==== acceptor sname_match (sname_match.c) ===="
+# Product GSS / vfy_increds pass a concrete host name (ignore off).
+# Wildcard / ignore_acceptor_hostname is unit-only.
+echo "$ACCEPT" | grep -q 'gss-accept unwrap ok' \
+    || die "Rust acceptor GSS happy missing after sname_match"
+docker exec "$NAME" test -s /tmp/cdiff/mit-kvno_plain.jsonl \
+    || die "MIT kvno_plain capture missing after sname_match"
+echo "MIT_sname_match"
+echo "RUST_sname_match"
+
 mkdir -p "$SCRATCH/cdiff"
 docker cp "$NAME:/tmp/cdiff/." "$SCRATCH/cdiff/"
 log "client.diff.gate" "ok" ",\"flows\":$EXPECTED_FLOWS,\"cli_errors\":8"
