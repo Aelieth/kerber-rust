@@ -1038,7 +1038,9 @@ fn finish_as_rep(
         }
     }
     let now = i64::from(KerberosTime::now().unix_seconds());
-    check_as_rep_times(&enc_part, now, 300)?;
+    let (skew, timesync) = krb5_config::load_krb5_conf()
+        .map_or((300, true), |c| (i64::from(c.clockskew), c.kdc_timesync));
+    check_as_rep_times_sync(&enc_part, now, skew, timesync)?;
     as_sname_eq(&enc_part.sname, expected_sname, "AS-REP sname mismatch")?;
     if expect_anon {
         verify_anonymous(inner.padata.as_deref(), &key, &enc_part)?;
@@ -1103,23 +1105,42 @@ pub(crate) fn as_sname_eq(
     Ok(())
 }
 
-pub(crate) fn check_as_rep_times(
+/// MIT `get_in_tkt.c:260-270` `verify_as_reply` time half.
+///
+/// Default `kdc_timesync` (1) skips starttime vs the local clock (MIT
+/// then sets a per-context `time_offset`; we have no `krb5_context`).
+/// `kdc_timesync = 0` is `KRB5_KDCREP_SKEW` when starttime (or authtime
+/// if starttime is omitted) is outside skew.
+///
+/// # Errors
+///
+/// `kdc_timesync = 0` and starttime (or authtime) outside `skew` is
+/// [`Error::ReplyMismatch`] (`KRB5_KDCREP_SKEW`). An expired `endtime`
+/// in that mode is the same error class (stricter than MIT).
+pub fn check_as_rep_times(enc_part: &EncKdcRepPart, now: i64, skew: i64) -> Result<(), Error> {
+    let timesync = krb5_config::load_krb5_conf().is_none_or(|c| c.kdc_timesync);
+    check_as_rep_times_sync(enc_part, now, skew, timesync)
+}
+
+/// [`check_as_rep_times`] with an explicit `kdc_timesync` flag.
+pub(crate) fn check_as_rep_times_sync(
     enc_part: &EncKdcRepPart,
     now: i64,
     skew: i64,
+    timesync: bool,
 ) -> Result<(), Error> {
-    let end = i64::from(enc_part.endtime.unix_seconds());
-    let auth = i64::from(enc_part.authtime.unix_seconds());
-    if (auth - now).abs() > skew {
-        return Err(Error::ReplyMismatch("AS-REP authtime outside skew".into()));
+    if timesync {
+        return Ok(());
     }
+    let start = enc_part.starttime.as_ref().unwrap_or(&enc_part.authtime);
+    if (i64::from(start.unix_seconds()) - now).abs() > skew {
+        return Err(Error::ReplyMismatch(
+            "Clock skew too great in KDC reply".into(),
+        ));
+    }
+    let end = i64::from(enc_part.endtime.unix_seconds());
     if end + skew < now {
         return Err(Error::ReplyMismatch("AS-REP ticket expired".into()));
-    }
-    if let Some(st) = &enc_part.starttime
-        && i64::from(st.unix_seconds()) > now + skew
-    {
-        return Err(Error::ReplyMismatch("AS-REP ticket not yet valid".into()));
     }
     Ok(())
 }
@@ -1464,10 +1485,24 @@ mod decode_enc_as_tests {
         let now_t = KerberosTime::now();
         let now = i64::from(now_t.unix_seconds());
         part.authtime = now_t.clone();
-        part.endtime = now_t.add_hours(10).unwrap_or(now_t);
-        super::check_as_rep_times(&part, now, 300).unwrap();
+        part.endtime = now_t
+            .clone()
+            .add_hours(10)
+            .unwrap_or_else(|_| now_t.clone());
+        super::check_as_rep_times_sync(&part, now, 300, false).unwrap();
         part.authtime = kerberos_time_from_utc_z("20000101000000Z").expect("old");
-        assert!(super::check_as_rep_times(&part, now, 300).is_err());
+        part.starttime = Some(part.authtime.clone());
+        part.endtime = now_t.clone().add_hours(10).unwrap_or(now_t);
+        let err = super::check_as_rep_times_sync(&part, now, 300, false).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Clock skew too great in KDC reply"),
+            "MIT get_in_tkt.c:266-269, got {err}"
+        );
+        super::check_as_rep_times_sync(&part, now, 300, true).unwrap();
+        part.endtime = kerberos_time_from_utc_z("20000101010000Z").expect("old end");
+        super::check_as_rep_times_sync(&part, now, 300, true).unwrap();
+        assert!(super::check_as_rep_times_sync(&part, now, 300, false).is_err());
     }
 }
 

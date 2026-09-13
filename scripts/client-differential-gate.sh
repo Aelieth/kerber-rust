@@ -515,11 +515,26 @@ set -e
 save_cap rust-skew
 echo "RUST_skew_rc=$RUST_SKEW_RC"
 echo "$RUST_SKEW"
-if [ "$RUST_SKEW_RC" -eq 0 ]; then
-    die "Rust kinit +3d unexpectedly succeeded"
+if [ "$RUST_SKEW_RC" -ne 0 ]; then
+    die "Rust kinit +3d with default kdc_timesync failed"
 fi
-echo "$RUST_SKEW" | grep -q 'authtime outside skew'
-echo "RUST_skew_authtime_reject"
+RUST_SKEW_KL="$(docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf "$NAME" klist -c /tmp/cc_skew_r)"
+echo "$RUST_SKEW_KL"
+echo "$RUST_SKEW_KL" | grep -q 'user@KERBER.TEST'
+echo "RUST_skew_timesync_recovered"
+reset_cap
+set +e
+RUST_SKEW0="$(docker exec -e KRB5_CONFIG=/tmp/notimesync-krb5.conf -e KRB5_PASSWORD=userpassword "$NAME" \
+    sh -c "LD_PRELOAD=/tmp/skew.so /tmp/krb5-kinit -c /tmp/cc_skew0_r user@KERBER.TEST" 2>&1)"
+RUST_SKEW0_RC=$?
+set -e
+echo "RUST_skew_notimesync_rc=$RUST_SKEW0_RC"
+echo "$RUST_SKEW0"
+if [ "$RUST_SKEW0_RC" -eq 0 ]; then
+    die "Rust kinit +3d with kdc_timesync=0 unexpectedly succeeded"
+fi
+echo "$RUST_SKEW0" | grep -qiE 'Clock skew|skew too great'
+echo "RUST_skew_notimesync"
 docker exec "$NAME" python3 -c '
 from pathlib import Path
 t = Path("/tmp/direct-krb5.conf").read_text().replace("kdc = 127.0.0.1:88", "kdc = 127.0.0.1:1")

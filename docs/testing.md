@@ -639,10 +639,10 @@ when that oracle is absent.
   printed as the W1-B ranked list. MIT `klist -C -f -e -a` reads both
   FILE caches; seven CLI error paths (wrong password, unknown principal,
   expired, revoked, no KDC, bad keytab, bad ccache) are non-zero on both
-  CLIs. +3d `skew-preload.c`: MIT `kdc_timesync = 0` is Clock skew too
-  great (proves the preload); default `kdc_timesync` recovers (rc=0,
-  `klist` `user@KERBER.TEST`); Rust rejects `AS-REP authtime outside
-  skew` (`get_in_tkt.c:260-270`). `gss-mit-client` → Rust acceptor
+  CLIs. +3d `skew-preload.c`: MIT and Rust `kdc_timesync = 0` are
+  Clock skew too great (proves the preload); default `kdc_timesync`
+  recovers on both (rc=0, `klist` `user@KERBER.TEST`)
+  (`get_in_tkt.c:260-270`). `gss-mit-client` → Rust acceptor
   replay is 34.
 - `scripts/heimdal-gate.sh` — Heimdal 7.8 secondary oracle
   (`harness/heimdal/`, Debian bookworm apt, no `krb5-user`). The only

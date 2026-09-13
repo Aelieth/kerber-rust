@@ -216,6 +216,12 @@ returning 149 is rejected `KDCREP_MODIFIED`. Present-FAST
 `KRB5_KDCREP_MODIFIED` (`nonce modified in FAST response`) on AS and
 TGS success paths. A FAST error whose inner nonce does not match is
 treated as a non-FAST outer error (`fast.c:450-459`), not retried.
+Default `kdc_timesync` (`init_ctx.c:268-270`) skips the AS-REP
+starttime vs local clock (`get_in_tkt.c:260-270`); `kdc_timesync = 0`
+is `KRB5_KDCREP_SKEW` (`Clock skew too great in KDC reply`). There is
+no per-context `time_offset` (no `krb5_context`); ticket times stay
+the KDC's. `kdc_timesync = 0` also rejects an already-expired
+`endtime` (stricter than MIT's starttime-only check).
 
 FAST `req_checksum` is verified over the wire KDC-REQ-BODY (field 4)
 when a raw packet is present (`do_as_req.c:526-531`); socketless tests

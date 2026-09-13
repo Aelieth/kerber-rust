@@ -13,6 +13,10 @@ this project uses semantic versioning once a crate is published.
   success; a FAST error with a bad nonce is ignored like MIT
   `krb5int_fast_process_error`. Unit-only (`b1_fast_nonce`); no MIT
   tool emits a flipped FAST nonce.
+- **client.** Default `kdc_timesync` skips AS-REP starttime vs the
+  local clock (`get_in_tkt.c:260-270`). `kdc_timesync = 0` is
+  `KRB5_KDCREP_SKEW`. The +3d `client-differential-gate.sh` cell
+  recovers on both CLIs; `kdc_timesync = 0` is Clock skew on both.
 - **test.** `scripts/client-differential-gate.sh` drives MIT and Rust
   `kinit`/`kvno` against the live MIT 1.22.2 KDC through
   `scripts/lib/kdc-req-proxy.py` (request-shape JSONL: padata,
@@ -20,9 +24,9 @@ this project uses semantic versioning once a crate is published.
   KRB-ERROR e_data). Eleven seeded flows (CORE match; SHAPE diffs are
   the W1-B ranked list); MIT `klist -C -f -e -a` over both FILE caches;
   seven CLI error paths non-zero on both CLIs; +3d `skew-preload.c`
-  records MIT default `kdc_timesync` recovery vs Rust AS-REP authtime
-  reject; `gss-mit-client` → Rust acceptor majors. Fail-red on
-  `mit-extra`.
+  records default `kdc_timesync` recovery on both CLIs and Clock skew
+  when `kdc_timesync = 0`; `gss-mit-client` → Rust acceptor majors.
+  Fail-red on `mit-extra`.
 
 ### W1-A′-4
 

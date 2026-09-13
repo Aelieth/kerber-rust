@@ -50,6 +50,10 @@ required-features = ["diff"]
 name = "b1_fast_nonce"
 path = "tests/b1_fast_nonce.rs"
 
+[[test]]
+name = "b1_timesync"
+path = "tests/b1_timesync.rs"
+
 [dependencies]
 chrono.workspace = true
 getrandom.workspace = true

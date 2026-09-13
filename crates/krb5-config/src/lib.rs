@@ -70,7 +70,8 @@ pub struct Krb5Conf {
     pub udp_preference_limit: Option<u32>,
     /// `rdns`. Parsed; we do not reverse-resolve addresses.
     pub rdns: bool,
-    /// `kdc_timesync`. Parsed; AS already resyncs on KRB-ERROR SKEW.
+    /// `kdc_timesync`. Default true (`init_ctx.c:268-270`). AS-REP
+    /// `verify_as_reply` skips starttime vs the local clock when set.
     pub kdc_timesync: bool,
     /// `permitted_enctypes`.
     pub permitted_enctypes: Vec<String>,
