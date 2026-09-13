@@ -91,6 +91,15 @@ pub struct AsTicketOpts {
     pub anonymous: bool,
 }
 
+/// Request times/options MIT `verify_as_reply` compares to EncKDCRepPart.
+#[derive(Clone, Debug)]
+struct AsReqTimes {
+    till: KerberosTime,
+    rtime: Option<KerberosTime>,
+    from: Option<KerberosTime>,
+    opts: KdcOptions,
+}
+
 impl Default for AsTicketOpts {
     fn default() -> Self {
         Self {
@@ -214,17 +223,23 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
             .collect(),
     };
     let nonce = random_nonce()?;
-    let (till, _, _, _) = ticket_body(req);
+    let (till, rtime, opts, _) = ticket_body(req);
+    let bound = AsReqTimes {
+        till,
+        rtime,
+        from: None,
+        opts,
+    };
 
     if req.fast_armor.is_some() {
-        return continue_fast(req, keys, nonce, till.clone(), &etypes);
+        return continue_fast(req, keys, nonce, &bound, &etypes);
     }
     if req.pkinit.is_some() || req.ticket.anonymous {
-        return continue_pkinit(req, nonce, till, &etypes);
+        return continue_pkinit(req, nonce, &bound, &etypes);
     }
     let support = req.want_spake.then(pa_spake_support);
     let first_pa = support.clone().map(|s| vec![s]);
-    let first = build_as_req_from(req, nonce, till.clone(), first_pa.clone(), &etypes)?;
+    let first = build_as_req_from(req, nonce, &bound, first_pa.clone(), &etypes)?;
     let wire = encode(&first)?;
     let reply = exchange(req.kdc, &wire)?;
 
@@ -240,13 +255,14 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
                 req.realm,
                 req.canonicalize,
                 &req_sname(req),
+                &bound,
                 Some(&wire),
             )
         }
         KdcMsg::Error(e) if e.error_code == err::SKEW => {
             // First-reply SKEW: resync from KDC stime and retry the bare AS-REQ.
             let skew_time = e.stime.clone();
-            let first = build_as_req_from(req, nonce, till.clone(), first_pa.clone(), &etypes)?;
+            let first = build_as_req_from(req, nonce, &bound, first_pa.clone(), &etypes)?;
             let wire = encode(&first)?;
             let reply = exchange(req.kdc, &wire)?;
             match classify(&reply)? {
@@ -261,14 +277,15 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
                         req.realm,
                         req.canonicalize,
                         &req_sname(req),
+                        &bound,
                         Some(&wire),
                     )
                 }
                 KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
                     if req.want_spake {
-                        continue_spake(req, keys, nonce, till, &etypes, &e)
+                        continue_spake(req, keys, nonce, &bound, &etypes, &e)
                     } else {
-                        continue_preauth(req, keys, nonce, till, &etypes, &e, Some(&skew_time))
+                        continue_preauth(req, keys, nonce, &bound, &etypes, &e, Some(&skew_time))
                     }
                 }
                 KdcMsg::Error(e) => classify_kdc_error(&e),
@@ -280,10 +297,10 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
                 && (e.error_code == err::PREAUTH_REQUIRED
                     || e.error_code == err::MORE_PREAUTH_DATA_REQUIRED) =>
         {
-            continue_spake(req, keys, nonce, till, &etypes, &e)
+            continue_spake(req, keys, nonce, &bound, &etypes, &e)
         }
         KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
-            continue_preauth(req, keys, nonce, till, &etypes, &e, None)
+            continue_preauth(req, keys, nonce, &bound, &etypes, &e, None)
         }
         KdcMsg::Error(e) => classify_kdc_error(&e),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
@@ -300,6 +317,7 @@ fn finish_as_rep_keys(
     realm: &str,
     canonicalize: bool,
     expected_sname: &PrincipalName,
+    bound: &AsReqTimes,
     req_der: Option<&[u8]>,
 ) -> Result<AsOutcome, Error> {
     if keys.is_empty() {
@@ -313,6 +331,7 @@ fn finish_as_rep_keys(
             None,
             canonicalize,
             expected_sname,
+            bound,
             req_der,
             false,
         );
@@ -329,6 +348,7 @@ fn finish_as_rep_keys(
             None,
             canonicalize,
             expected_sname,
+            bound,
             req_der,
             false,
         )
@@ -347,6 +367,7 @@ fn finish_as_rep_keys(
             None,
             canonicalize,
             expected_sname,
+            bound,
             req_der,
             false,
         ) {
@@ -373,7 +394,7 @@ fn continue_preauth(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
     nonce: u32,
-    till: KerberosTime,
+    bound: &AsReqTimes,
     etypes: &[i32],
     preauth_err: &KrbError,
     skew_hint: Option<&KerberosTime>,
@@ -388,7 +409,7 @@ fn continue_preauth(
         Some(t) => pa_enc_timestamp_at(&client_key, t)?,
         None => pa_enc_timestamp(&client_key)?,
     }];
-    let second = build_as_req_from(req, nonce, till.clone(), Some(padata), etypes)?;
+    let second = build_as_req_from(req, nonce, bound, Some(padata), etypes)?;
     let wire = encode(&second)?;
     let reply = exchange(req.kdc, &wire)?;
     match classify(&reply)? {
@@ -402,13 +423,14 @@ fn continue_preauth(
             Some(pa::ENC_TIMESTAMP),
             req.canonicalize,
             &req_sname(req),
+            bound,
             Some(&wire),
             false,
         ),
         KdcMsg::Error(e) if e.error_code == err::SKEW => {
             let skew_time = e.stime.clone();
             let padata = vec![pa_enc_timestamp_at(&client_key, &skew_time)?];
-            let third = build_as_req_from(req, nonce, till, Some(padata), etypes)?;
+            let third = build_as_req_from(req, nonce, bound, Some(padata), etypes)?;
             let wire = encode(&third)?;
             let reply = exchange(req.kdc, &wire)?;
             match classify(&reply)? {
@@ -422,6 +444,7 @@ fn continue_preauth(
                     Some(pa::ENC_TIMESTAMP),
                     req.canonicalize,
                     &req_sname(req),
+                    bound,
                     Some(&wire),
                     false,
                 ),
@@ -432,7 +455,7 @@ fn continue_preauth(
         KdcMsg::Error(e) if e.error_code == err::ETYPE_NOSUPP => {
             let etypes = vec![EncryptionType::Aes256CtsHmacSha196.to_iana()];
             let padata = vec![pa_enc_timestamp(&client_key)?];
-            let retry = build_as_req_from(req, nonce, till, Some(padata), &etypes)?;
+            let retry = build_as_req_from(req, nonce, bound, Some(padata), &etypes)?;
             let wire = encode(&retry)?;
             let reply = exchange(req.kdc, &wire)?;
             match classify(&reply)? {
@@ -446,6 +469,7 @@ fn continue_preauth(
                     Some(pa::ENC_TIMESTAMP),
                     req.canonicalize,
                     &req_sname(req),
+                    bound,
                     Some(&wire),
                     false,
                 ),
@@ -462,7 +486,7 @@ fn continue_fast(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
     nonce: u32,
-    till: KerberosTime,
+    bound: &AsReqTimes,
     etypes: &[i32],
 ) -> Result<AsOutcome, Error> {
     let armor = req
@@ -474,12 +498,14 @@ fn continue_fast(
     let akey = armor_key(&armor.session, Some(&sub))?;
     // RFC 6113 reply-key base is the PA-ETYPE-INFO2 long-term key, not preferred()[0].
     let ap = fast_armor_ap(armor, &sub)?;
-    let mut probe = build_as_req_from(req, nonce, till.clone(), None, etypes)?;
+    let mut probe = build_as_req_from(req, nonce, bound, None, etypes)?;
     attach_fast(&mut probe, &ap, &akey, Vec::new())?;
     let wire = encode(&probe)?;
     let reply = exchange(req.kdc, &wire)?;
     match classify(&reply)? {
-        KdcMsg::AsRep(rep) => finish_fast_as(req, keys, nonce, etypes, &akey, None, rep, &wire),
+        KdcMsg::AsRep(rep) => {
+            finish_fast_as(req, keys, nonce, etypes, &akey, None, rep, &wire, bound)
+        }
         KdcMsg::Error(e) => {
             let (inner, cookie) = fast_error_material(&akey, &e, nonce);
             if inner.error_code != err::PREAUTH_REQUIRED && e.error_code != err::PREAUTH_REQUIRED {
@@ -499,7 +525,7 @@ fn continue_fast(
             }
             inner_pa.push(pa_enc_timestamp(&client_key)?);
             let ap = fast_armor_ap(armor, &sub)?;
-            let mut req2 = build_as_req_from(req, nonce, till, None, etypes)?;
+            let mut req2 = build_as_req_from(req, nonce, bound, None, etypes)?;
             attach_fast(&mut req2, &ap, &akey, inner_pa)?;
             let wire = encode(&req2)?;
             let reply = exchange(req.kdc, &wire)?;
@@ -513,6 +539,7 @@ fn continue_fast(
                     Some(client_key),
                     rep,
                     &wire,
+                    bound,
                 ),
                 KdcMsg::Error(e) => classify_kdc_error(&fast_error_material(&akey, &e, nonce).0),
                 KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
@@ -532,6 +559,7 @@ fn finish_fast_as(
     client_key: Option<ProtocolKey>,
     rep: AsRep,
     wire: &[u8],
+    bound: &AsReqTimes,
 ) -> Result<AsOutcome, Error> {
     let fast = unwrap_fast_rep_checked(akey, &rep.0.padata, nonce)?;
     let sent_preauth = client_key.is_some();
@@ -565,6 +593,7 @@ fn finish_fast_as(
         sent_preauth.then_some(pa::ENC_TIMESTAMP),
         req.canonicalize,
         &req_sname(req),
+        bound,
         // MIT verifies the enc-pa-rep checksum under FAST too, over the
         // outer request with the (strengthened) reply key.
         Some(wire),
@@ -665,21 +694,21 @@ fn continue_spake(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
     nonce: u32,
-    till: KerberosTime,
+    bound: &AsReqTimes,
     etypes: &[i32],
     err: &KrbError,
 ) -> Result<AsOutcome, Error> {
     let support = pa_spake_support();
     let method = method_from_error(err)?;
     if spake_challenge(&method)?.is_some() {
-        return send_spake_response(req, keys, nonce, till, etypes, err, &support);
+        return send_spake_response(req, keys, nonce, bound, etypes, err, &support);
     }
     let mut padata = Vec::new();
     if let Some(c) = find_pa(&method, pa::FX_COOKIE) {
         padata.push(c.clone());
     }
     padata.push(support.clone());
-    let second = build_as_req_from(req, nonce, till.clone(), Some(padata), etypes)?;
+    let second = build_as_req_from(req, nonce, bound, Some(padata), etypes)?;
     let wire = encode(&second)?;
     let reply = exchange(req.kdc, &wire)?;
     match classify(&reply)? {
@@ -688,7 +717,7 @@ fn continue_spake(
             if e.error_code == err::PREAUTH_REQUIRED
                 || e.error_code == err::MORE_PREAUTH_DATA_REQUIRED =>
         {
-            send_spake_response(req, keys, nonce, till, etypes, &e, &support)
+            send_spake_response(req, keys, nonce, bound, etypes, &e, &support)
         }
         KdcMsg::Error(e) => classify_kdc_error(&e),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
@@ -699,7 +728,7 @@ fn send_spake_response(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
     nonce: u32,
-    till: KerberosTime,
+    bound: &AsReqTimes,
     etypes: &[i32],
     err: &KrbError,
     support: &PaData,
@@ -730,7 +759,7 @@ fn send_spake_response(
         || string_to_key(etype, req.password, &salt, params.as_deref()),
         Ok,
     )?;
-    let mut req2 = build_as_req_from(req, nonce, till, None, etypes)?;
+    let mut req2 = build_as_req_from(req, nonce, bound, None, etypes)?;
     let body_der = encode(&req2.0.req_body)?;
     let (resp, k0) = pa_spake_response(
         &ikey,
@@ -759,6 +788,7 @@ fn send_spake_response(
             Some(pa::SPAKE),
             req.canonicalize,
             &req_sname(req),
+            bound,
             Some(&wire),
             false,
         ),
@@ -770,7 +800,7 @@ fn send_spake_response(
 fn continue_pkinit(
     req: &AsRequest<'_>,
     nonce: u32,
-    till: KerberosTime,
+    bound: &AsReqTimes,
     etypes: &[i32],
 ) -> Result<AsOutcome, Error> {
     let pk = req
@@ -778,7 +808,7 @@ fn continue_pkinit(
         .ok_or_else(|| Error::ReplyMismatch("PKINIT identity missing".into()))?;
     let kp = p256_generate()?;
     // MIT get_in_tkt: empty 150 first, then copy the hint token into AuthPack.
-    let first = build_as_req_from(req, nonce, till.clone(), None, etypes)?;
+    let first = build_as_req_from(req, nonce, bound, None, etypes)?;
     let first_wire = encode(&first)?;
     let first_reply = exchange(req.kdc, &first_wire)?;
     let (token, cookie) = match classify(&first_reply)? {
@@ -801,7 +831,7 @@ fn continue_pkinit(
     if let Some(c) = cookie {
         extra.push(c);
     }
-    let mut req2 = build_as_req_from(req, nonce, till, Some(extra), etypes)?;
+    let mut req2 = build_as_req_from(req, nonce, bound, Some(extra), etypes)?;
     let body_der = encode(&req2.0.req_body)?;
     let mut h = Sha1::new();
     h.update(&body_der);
@@ -851,6 +881,7 @@ fn continue_pkinit(
                 Some(pa::PK_AS_REQ),
                 req.canonicalize,
                 &req_sname(req),
+                bound,
                 Some(&wire),
                 false,
             )
@@ -982,6 +1013,7 @@ fn finish_as_rep(
     pa_type: Option<i32>,
     canonicalize: bool,
     expected_sname: &PrincipalName,
+    bound: &AsReqTimes,
     req_der: Option<&[u8]>,
     used_fast: bool,
 ) -> Result<AsOutcome, Error> {
@@ -1046,6 +1078,13 @@ fn finish_as_rep(
     let (skew, timesync) = krb5_config::load_krb5_conf()
         .map_or((300, true), |c| (i64::from(c.clockskew), c.kdc_timesync));
     check_as_rep_times_sync(&enc_part, now, skew, timesync)?;
+    verify_as_reply_req_times(
+        &enc_part,
+        &bound.till,
+        bound.rtime.as_ref(),
+        bound.from.as_ref(),
+        &bound.opts,
+    )?;
     if expect_anon {
         verify_anonymous(inner.padata.as_deref(), &key, &enc_part)?;
     }
@@ -1143,6 +1182,66 @@ pub fn verify_as_reply_server(
     Ok(())
 }
 
+/// MIT `get_in_tkt.c:243-255` `verify_as_reply` request-time half.
+///
+/// `till`/`rtime`/`from` of 0 are unspecified (MIT). `endtime` after `till`,
+/// `renew_till` after `rtime` (RENEWABLE) or after `till` (RENEWABLE_OK
+/// without RENEWABLE), or POSTDATED `from` ≠ starttime, is
+/// `KRB5_KDCREP_MODIFIED`.
+///
+/// # Errors
+///
+/// [`Error::ReplyMismatch`] (`KRB5_KDCREP_MODIFIED`).
+pub fn verify_as_reply_req_times(
+    enc: &EncKdcRepPart,
+    till: &KerberosTime,
+    rtime: Option<&KerberosTime>,
+    from: Option<&KerberosTime>,
+    opts: &KdcOptions,
+) -> Result<(), Error> {
+    let start = enc.starttime.as_ref().unwrap_or(&enc.authtime);
+    if opts.bit(flag_bit::POSTDATED)
+        && let Some(from) = from
+        && from.unix_seconds() != 0
+        && from.unix_seconds() != start.unix_seconds()
+    {
+        return Err(Error::ReplyMismatch(
+            "AS-REP starttime != request from".into(),
+        ));
+    }
+    if till.unix_seconds() != 0 && enc.endtime.unix_seconds() > till.unix_seconds() {
+        return Err(Error::ReplyMismatch(
+            "AS-REP endtime after request till".into(),
+        ));
+    }
+    if opts.bit(flag_bit::RENEWABLE)
+        && let Some(rtime) = rtime
+        && rtime.unix_seconds() != 0
+        && enc
+            .renew_till
+            .as_ref()
+            .is_some_and(|rt| rt.unix_seconds() > rtime.unix_seconds())
+    {
+        return Err(Error::ReplyMismatch(
+            "AS-REP renew-till after request rtime".into(),
+        ));
+    }
+    if opts.bit(flag_bit::RENEWABLE_OK)
+        && !opts.bit(flag_bit::RENEWABLE)
+        && enc.flags.renewable()
+        && till.unix_seconds() != 0
+        && enc
+            .renew_till
+            .as_ref()
+            .is_some_and(|rt| rt.unix_seconds() > till.unix_seconds())
+    {
+        return Err(Error::ReplyMismatch(
+            "AS-REP renew-till after request till".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// MIT `get_in_tkt.c:260-270` `verify_as_reply` time half.
 ///
 /// Default `kdc_timesync` (1) skips starttime vs the local clock (MIT
@@ -1202,18 +1301,18 @@ fn salt_cname(cname: &PrincipalName) -> PrincipalName {
 fn build_as_req_from(
     req: &AsRequest<'_>,
     nonce: u32,
-    till: KerberosTime,
+    bound: &AsReqTimes,
     padata: Option<Vec<PaData>>,
     etypes: &[i32],
 ) -> Result<AsReq, Error> {
-    let (_, rtime, kdc_options, addresses) = ticket_body(req);
+    let (_, _, _, addresses) = ticket_body(req);
     build_as_req(
         &req.cname,
         req.realm,
         nonce,
-        till,
-        rtime,
-        kdc_options,
+        bound.till.clone(),
+        bound.rtime.clone(),
+        bound.opts.clone(),
         addresses,
         padata,
         etypes,

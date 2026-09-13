@@ -229,7 +229,11 @@ AS-REP `verify_as_reply` requires `enc.server == ticket.server`
 (name and realm) and, unless `canon_ok`, `enc.server == request.server`
 (`get_in_tkt.c:227-239`). `canon_ok` is CANONICALIZE, NT-ENTERPRISE,
 or anonymous, and only when both the requested and issued servers are
-TGS.
+TGS. Request `till`/`rtime`/`from` are compared to the issued times
+(`get_in_tkt.c:243-255`): `endtime` after `till`, `renew_till` after
+`rtime` (RENEWABLE) or after `till` (RENEWABLE_OK without RENEWABLE),
+or POSTDATED `from` ≠ starttime (omitted starttime = authtime), is
+`KRB5_KDCREP_MODIFIED`. Extraneous flags stay unchecked (MIT XXX).
 
 FAST `req_checksum` is verified over the wire KDC-REQ-BODY (field 4)
 when a raw packet is present (`do_as_req.c:526-531`); socketless tests

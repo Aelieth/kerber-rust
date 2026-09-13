@@ -27,6 +27,12 @@ this project uses semantic versioning once a crate is published.
   full principal (name and realm) to both the ticket and the request
   (`get_in_tkt.c:227-239`). `CANONICALIZE` / NT-ENTERPRISE / anonymous
   may rename only when both names are TGS.
+- **client.** AS-REP `verify_as_reply` compares request `till`/`rtime`/
+  `from` to the issued times (`get_in_tkt.c:243-255`). `endtime` after
+  `till`, `renew_till` after `rtime` (RENEWABLE) or after `till`
+  (RENEWABLE_OK without RENEWABLE), or POSTDATED `from` ≠ starttime,
+  is `KRB5_KDCREP_MODIFIED`. Unit-only for the EncKdcRepPart fixture;
+  the live MIT KDC AS cells are the production oracle.
 - **test.** `scripts/client-differential-gate.sh` drives MIT and Rust
   `kinit`/`kvno` against the live MIT 1.22.2 KDC through
   `scripts/lib/kdc-req-proxy.py` (request-shape JSONL: padata,
