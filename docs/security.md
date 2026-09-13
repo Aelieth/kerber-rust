@@ -282,6 +282,15 @@ before enc-timestamp 2. Password `kinit` against a SPAKE-advertising
 KDC therefore uses the three-AS SPAKE cascade, not a one-shot
 enc-timestamp. An extra MIT plain AS on UDP then TCP is
 `sendto_kdc.c` pacing, not a second `get_in_tkt` request.
+`kvno -U` / S4U2Self TGS-REQ padata is `[1, 136, 130, 129]`
+(`s4u_creds.c:517-567`, `fast.c:227-250`): PA-S4U-X509-USER (130)
+is filled with the TGS subkey (ku 26) after nonce and subkey
+exist, then PA-FOR-USER (129) on the TGT session (ku 17); FAST
+outer padata duplicates both. `verify_s4u2self_reply`
+(`s4u_creds.c:273-397`) refuses enc-only 130, a nonce/user/
+checksum mismatch (`KRB5_KDCREP_MODIFIED`), or an unkeyed reply
+checksum on a modern etype (`INAPP_CKSUM`). Missing 130 on both
+the FAST-swapped reply padata and enc-padata is accepted.
 
 FAST `req_checksum` is verified over the wire KDC-REQ-BODY (field 4)
 when a raw packet is present (`do_as_req.c:526-531`); socketless tests

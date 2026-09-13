@@ -98,6 +98,10 @@ path = "tests/b1_spake_first.rs"
 name = "b1_optimistic"
 path = "tests/b1_optimistic.rs"
 
+[[test]]
+name = "b2_s4u_padata"
+path = "tests/b2_s4u_padata.rs"
+
 [dependencies]
 chrono.workspace = true
 getrandom.workspace = true

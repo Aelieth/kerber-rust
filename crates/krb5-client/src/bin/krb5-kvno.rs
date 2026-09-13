@@ -195,7 +195,7 @@ fn run(
                 "no TGT for realm {srealm} in ccache; seed with `kvno krbtgt/{srealm}@{srealm}`"
             ));
         }
-        tgs_s4u(&addr, &tgt, sname, &hop_realm, uname, &urealm).map_err(kvno_err)?
+        tgs_s4u(&addr, &tgt, sname, &hop_realm, &uname, &urealm).map_err(kvno_err)?
     } else if let Some(u2u) = args.u2u.as_deref() {
         let br = args.body_realm.as_deref().ok_or_else(|| {
             "requires --body-realm (gate-only; MIT kvno --u2u needs a same-realm TGT)".to_string()

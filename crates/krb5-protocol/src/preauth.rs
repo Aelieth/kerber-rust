@@ -2,14 +2,15 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256, checksum, decrypt, encrypt,
-    krb_fx_cf2, octetstring2key, p256_generate, p256_shared, pkinit_kdf_agile, spake_derive_key,
-    spake_public_wbytes, spake_result_wbytes, spake_thash_update, spake_wbytes,
+    EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256, checksum, cksumtype_is_keyed, decrypt,
+    encrypt, krb_fx_cf2, octetstring2key, p256_generate, p256_shared, pkinit_kdf_agile,
+    spake_derive_key, spake_public_wbytes, spake_result_wbytes, spake_thash_update, spake_wbytes,
     verify_checksum_type,
 };
 use krb5_types::{
     ApOptions, ApReq, AsReq, Authenticator, Checksum, EncKdcRepPart, EncryptedData, EncryptionKey,
-    KerberosFlags, KerberosTime, Microseconds, PaData, PrincipalName, Realm, Ticket, ku, pa,
+    KerberosFlags, KerberosTime, Microseconds, PaData, PrincipalName, Realm, Ticket, err, ku, pa,
+    principal_compare,
 };
 
 use crate::error::Error;
@@ -762,6 +763,96 @@ pub fn pa_s4u_x509_user(
         padata_type: pa::FOR_X509_USER,
         padata_value: encode(&body)?.into(),
     })
+}
+
+fn find_pa_raw(padata: Option<&[PaData]>, ty: i32) -> Option<&[u8]> {
+    padata?
+        .iter()
+        .find(|p| p.padata_type == ty)
+        .map(|p| p.padata_value.as_ref())
+}
+
+fn s4u_not_newer(etype: EncryptionType) -> bool {
+    matches!(etype, EncryptionType::Des3CbcSha1 | EncryptionType::Rc4Hmac)
+}
+
+/// MIT `verify_s4u2self_reply` (`s4u_creds.c:273-397`). Missing 130 on
+/// both the (FAST-swapped) reply padata and enc-padata is accepted.
+/// Enc-only 130, a nonce/user/checksum mismatch, or an unkeyed reply
+/// checksum on a modern etype is refused.
+///
+/// # Errors
+///
+/// [`Error::ReplyMismatch`] (`KRB5_KDCREP_MODIFIED`) or
+/// [`Error::KrbError`] `INAPP_CKSUM`.
+pub fn verify_s4u2self_reply(
+    subkey: &ProtocolKey,
+    req: &krb5_types::s4u::PaS4uX509User,
+    rep_padata: Option<&[PaData]>,
+    enc_padata: Option<&[PaData]>,
+) -> Result<(), Error> {
+    let enc_s4u = find_pa_raw(enc_padata, pa::FOR_X509_USER);
+    let Some(rep_raw) = find_pa_raw(rep_padata, pa::FOR_X509_USER) else {
+        return if enc_s4u.is_some() {
+            Err(Error::ReplyMismatch("KDC response modified".into()))
+        } else {
+            Ok(())
+        };
+    };
+    let rep: krb5_types::s4u::PaS4uX509User =
+        decode(rep_raw).map_err(|e| Error::Asn1(e.to_string()))?;
+    if rep.user_id.nonce != req.user_id.nonce {
+        return Err(Error::ReplyMismatch("KDC response modified".into()));
+    }
+    let der = encode(&rep.user_id)?;
+    let usage = KeyUsage::new(if rep.user_id.use_reply_key_usage() {
+        ku::PA_S4U_X509_USER_REPLY
+    } else {
+        ku::PA_S4U_X509_USER_REQUEST
+    })?;
+    if verify_checksum_type(
+        subkey,
+        usage,
+        &der,
+        rep.cksum.cksumtype,
+        rep.cksum.checksum.as_ref(),
+    )
+    .is_err()
+    {
+        return Err(Error::ReplyMismatch("KDC response modified".into()));
+    }
+    let Some(rep_user) = rep.user_id.user.as_ref() else {
+        return Err(Error::ReplyMismatch("KDC response modified".into()));
+    };
+    if rep_user.name_string.is_empty() {
+        return Err(Error::ReplyMismatch("KDC response modified".into()));
+    }
+    let req_user = req
+        .user_id
+        .user
+        .as_ref()
+        .ok_or_else(|| Error::ReplyMismatch("KDC response modified".into()))?;
+    let req_realm = std::str::from_utf8(req.user_id.realm.as_bytes()).unwrap_or("");
+    let rep_realm = std::str::from_utf8(rep.user_id.realm.as_bytes()).unwrap_or("");
+    if !principal_compare(req_user, req_realm, rep_user, rep_realm) {
+        return Err(Error::ReplyMismatch("KDC response modified".into()));
+    }
+    if s4u_not_newer(subkey.etype()) {
+        if let Some(enc) = enc_s4u {
+            let want = [req.cksum.checksum.as_ref(), rep.cksum.checksum.as_ref()].concat();
+            if enc != want.as_slice() {
+                return Err(Error::ReplyMismatch("KDC response modified".into()));
+            }
+        } else if rep.user_id.use_reply_key_usage() {
+            return Err(Error::ReplyMismatch("KDC response modified".into()));
+        }
+    } else if !cksumtype_is_keyed(rep.cksum.cksumtype) {
+        return Err(Error::KrbError {
+            code: err::INAPP_CKSUM,
+            text: Some("Inappropriate type of checksum in message".into()),
+        });
+    }
+    Ok(())
 }
 
 /// PA-PAC-OPTIONS (padata 167). `rbcd` sets MS-KILE bit 3.

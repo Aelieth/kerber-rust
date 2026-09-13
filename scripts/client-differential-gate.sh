@@ -1146,6 +1146,31 @@ fi
 echo "MIT_preauth_cascade"
 echo "RUST_preauth_cascade"
 
+echo "==== kvno -U TGS padata (s4u_creds.c) ===="
+tgs_padata() {
+    docker exec "$NAME" python3 -c "
+import json, sys
+for line in open(sys.argv[1]):
+    o = json.loads(line)
+    if o.get('kind') == 'req' and o.get('msg_type') == 12:
+        print(o['padata'])
+        break
+" "$1"
+}
+MIT_KVNO_U_TGS_PADATA="$(tgs_padata /tmp/cdiff/mit-kvno_s4u.jsonl)"
+RUST_KVNO_U_TGS_PADATA="$(tgs_padata /tmp/cdiff/rust-kvno_s4u.jsonl)"
+echo "MIT_KVNO_U_TGS_PADATA=$MIT_KVNO_U_TGS_PADATA"
+echo "RUST_KVNO_U_TGS_PADATA=$RUST_KVNO_U_TGS_PADATA"
+WANT_S4U_TGS_PADATA='[1, 136, 130, 129]'
+if [ "$MIT_KVNO_U_TGS_PADATA" != "$WANT_S4U_TGS_PADATA" ]; then
+    die "MIT kvno -U TGS padata want $WANT_S4U_TGS_PADATA got $MIT_KVNO_U_TGS_PADATA"
+fi
+if [ "$RUST_KVNO_U_TGS_PADATA" != "$WANT_S4U_TGS_PADATA" ]; then
+    die "Rust kvno -U TGS padata want $WANT_S4U_TGS_PADATA got $RUST_KVNO_U_TGS_PADATA"
+fi
+echo "MIT_kvno_U_tgs_padata"
+echo "RUST_kvno_U_tgs_padata"
+
 mkdir -p "$SCRATCH/cdiff"
 docker cp "$NAME:/tmp/cdiff/." "$SCRATCH/cdiff/"
 log "client.diff.gate" "ok" ",\"flows\":$EXPECTED_FLOWS,\"cli_errors\":8"

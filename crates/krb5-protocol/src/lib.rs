@@ -81,7 +81,7 @@ pub use preauth::{
     pa_pk_as_req_agile, pa_pk_as_req_cn, pa_pk_as_req_signed, pa_pk_as_req_spki,
     pa_pk_as_req_unsigned, pa_s4u_x509_user, pa_spake_response, pa_spake_support, pkinit_reply_key,
     pkinit_reply_key_agile, unwrap_fast_rep, unwrap_fast_rep_checked, verify_fast_finished,
-    verify_req_enc_pa_rep,
+    verify_req_enc_pa_rep, verify_s4u2self_reply,
 };
 pub use replay::{ReplayCache, ReplayKey};
 pub use safe_priv::{

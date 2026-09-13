@@ -78,6 +78,14 @@ this project uses semantic versioning once a crate is published.
   the KDC advertises 151 before 2, password kinit sends SPAKE support
   then the response (three AS-REQs). Plain extra MIT UDP/TCP copies
   stay with B3 `sendto_kdc.c`.
+- **client.** `kvno -U` TGS-REQ padata is `[1, 136, 130, 129]`
+  (`s4u_creds.c:517-567` PA-S4U-X509-USER then PA-FOR-USER;
+  `fast.c:227-250` outer FAST duplicates the inner S4U padata).
+  130 is checksummed with the TGS subkey (ku 26) after nonce and
+  subkey exist. A TGS-REP that carries 130 is checked
+  (`verify_s4u2self_reply`, `s4u_creds.c:273-397`): enc-only 130,
+  nonce/user/checksum mismatch is `KRB5_KDCREP_MODIFIED`; an unkeyed
+  reply checksum on a modern etype is `INAPP_CKSUM`.
 - **test.** `scripts/client-differential-gate.sh` drives MIT and Rust
   `kinit`/`kvno` against the live MIT 1.22.2 KDC through
   `scripts/lib/kdc-req-proxy.py` (request-shape JSONL: padata,
@@ -93,7 +101,8 @@ this project uses semantic versioning once a crate is published.
   etype list (MIT 18/17/20/19/16/23/25/26, Rust AES-only); FAST AS
   outer `till=zero`; PKINIT / anon second AS `[133, 16, 150, 149]`;
   SPAKE first-shot `[150, 149]` / error 25; password preauth cascade
-  `[[150, 149], [133, 151, 150, 149], [133, 151, 150, 149]]`. Fail-red
+  `[[150, 149], [133, 151, 150, 149], [133, 151, 150, 149]]`;
+  `kvno -U` TGS padata `[1, 136, 130, 129]`. Fail-red
   on `mit-extra`.
 
 ### W1-A′-4

@@ -89,7 +89,7 @@ pub fn tgs_exchange_once(
     if renew {
         opts = opts.with_bit(flag_bit::RENEW, true);
     }
-    tgs_once(kdc, tgt, sname, realm, opts, &[], None)
+    tgs_once(kdc, tgt, sname, realm, opts, &[], None, None)
 }
 
 /// Like [`tgs_exchange_ex`], also returning asked-for path TGTs to cache.
@@ -139,7 +139,7 @@ pub fn tgs_forward(kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> 
     let realm = String::from_utf8_lossy(tgt.crealm.as_bytes()).into_owned();
     let sname = PrincipalName::krbtgt(&realm);
     let opts = tkt_common_opts(tgt).with_bit(flag_bit::FORWARDED, true);
-    tgs_once(kdc, tgt, sname, &realm, opts, &[], None)
+    tgs_once(kdc, tgt, sname, &realm, opts, &[], None, None)
 }
 
 /// TGS-REQ with KDC option `renew` for `kinit -R`.
@@ -157,6 +157,7 @@ pub fn tgs_renew(kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> {
         &realm,
         tgs_renew_options(&tgt.enc_part.flags),
         &[],
+        None,
         None,
     )
 }
@@ -190,8 +191,11 @@ pub fn tgs_renew_options(flags: &krb5_types::TicketFlags) -> KdcOptions {
     tkt_common_from_flags(flags).with_bit(flag_bit::RENEW, true)
 }
 
-/// TGS-REQ with PA-FOR-USER (S4U2Self). The KDC enforces that `sname` is the
-/// TGT client; this helper does not.
+/// TGS-REQ with PA-S4U-X509-USER (130) and PA-FOR-USER (129) like MIT
+/// `krb5_get_self_cred_from_kdc` (`s4u_creds.c:517-567`). 130 is filled
+/// after the TGS subkey exists (ku 26). FAST outer padata duplicates
+/// both (`fast.c:227-250`). The KDC enforces that `sname` is the TGT
+/// client; this helper does not.
 ///
 /// # Errors
 ///
@@ -201,11 +205,19 @@ pub fn tgs_s4u(
     tgt: &AsOutcome,
     sname: PrincipalName,
     realm: &str,
-    for_user: PrincipalName,
+    for_user: &PrincipalName,
     for_realm: &str,
 ) -> Result<TgsOutcome, Error> {
-    let pa = crate::pa_for_user(&tgt.session_key, for_user, for_realm)?;
-    tgs_once(kdc, tgt, sname, realm, tgs_kdc_options(tgt), &[pa], None)
+    tgs_once(
+        kdc,
+        tgt,
+        sname,
+        realm,
+        tgs_kdc_options(tgt),
+        &[],
+        None,
+        Some((for_user, for_realm)),
+    )
 }
 
 /// One TGS-REQ with `ENC_TKT_IN_SKEY` and `stkt` as the second ticket.
@@ -223,7 +235,7 @@ pub fn tgs_u2u(
     stkt: Ticket,
 ) -> Result<TgsOutcome, Error> {
     let opts = tgs_kdc_options(tgt).with_bit(flag_bit::ENC_TKT_IN_SKEY, true);
-    tgs_once(kdc, tgt, sname, realm, opts, &[], Some(vec![stkt]))
+    tgs_once(kdc, tgt, sname, realm, opts, &[], Some(vec![stkt]), None)
 }
 
 /// MIT `krb5_get_credentials`: copy F/P from the TGT into TGS-REQ options.
@@ -262,7 +274,16 @@ fn tgs_inner(
         if disable_transited_check && cur_tgt.ticket.sname.is_krbtgt_for(realm) {
             opts = opts.with_bit(flag_bit::DISABLE_TRANSITED_CHECK, true);
         }
-        let out = tgs_once(&cur_kdc, &cur_tgt, sname.clone(), &served, opts, &[], None)?;
+        let out = tgs_once(
+            &cur_kdc,
+            &cur_tgt,
+            sname.clone(),
+            &served,
+            opts,
+            &[],
+            None,
+            None,
+        )?;
         match chase_step(&start, &mut seen, sname, &served, &out)? {
             TgsHop::Done => return Ok((out, path)),
             TgsHop::Referral(foreign) => {
@@ -312,6 +333,7 @@ fn get_dest_tgt(
             &served,
             tgs_kdc_options(&cur_tgt),
             &[],
+            None,
             None,
         ) {
             Ok(out) => {
@@ -372,18 +394,20 @@ fn tgs_sname_matches(
 
 /// MIT `decode_kdc.c:64-67`: missing PA-FX-FAST is `KRB5_ERR_FAST_REQUIRED`
 /// then ignored. A present FAST envelope still requires finished + strengthen.
+/// The returned padata is FAST-inner when armed (`fast.c` swap), else the
+/// TGS-REP list — `verify_s4u2self_reply` reads 130 from here.
 fn tgs_fast_reply_key(
     armor_key: &ProtocolKey,
     sub: &ProtocolKey,
     inner: &krb5_types::KdcRep,
     nonce: u32,
-) -> Result<ProtocolKey, Error> {
+) -> Result<(ProtocolKey, Vec<PaData>), Error> {
     let has_fast = inner
         .padata
         .as_ref()
         .is_some_and(|v| v.iter().any(|p| p.padata_type == pa::FX_FAST));
     if !has_fast {
-        return Ok(sub.clone());
+        return Ok((sub.clone(), inner.padata.clone().unwrap_or_default()));
     }
     let fast = unwrap_fast_rep_checked(armor_key, &inner.padata, nonce)?;
     let finished = fast.finished.as_ref().ok_or_else(|| {
@@ -400,7 +424,7 @@ fn tgs_fast_reply_key(
         outcome = "ok",
         fast_strengthen = true,
     );
-    apply_strengthen(sk, sub)
+    Ok((apply_strengthen(sk, sub)?, fast.padata))
 }
 
 fn tgs_sname_ok(
@@ -505,6 +529,7 @@ fn kdc_for_realm(realm: &str, fallback: &KdcAddr) -> KdcAddr {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn tgs_once(
     kdc: &KdcAddr,
     tgt: &AsOutcome,
@@ -513,6 +538,7 @@ fn tgs_once(
     kdc_options: KdcOptions,
     extra_padata: &[PaData],
     extra_tickets: Option<Vec<Ticket>>,
+    s4u: Option<(&PrincipalName, &str)>,
 ) -> Result<TgsOutcome, Error> {
     let nonce = random_nonce31()?;
     let till = KerberosTime(tgt.enc_part.endtime.0);
@@ -541,6 +567,22 @@ fn tgs_once(
     let mut raw = vec![0u8; tgt.session_key.etype().key_len()];
     getrandom::getrandom(&mut raw).map_err(|e| Error::transport_msg(e.to_string()))?;
     let sub = ProtocolKey::from_bytes(tgt.session_key.etype(), &raw)?;
+    let mut extra = extra_padata.to_vec();
+    let mut req_s4u = None;
+    if let Some((user, urealm)) = s4u {
+        let pa130 = crate::pa_s4u_x509_user(&sub, user.clone(), urealm, nonce)?;
+        req_s4u = Some(
+            decode::<krb5_types::s4u::PaS4uX509User>(pa130.padata_value.as_ref())
+                .map_err(|e| Error::Asn1(e.to_string()))?,
+        );
+        extra.splice(
+            0..0,
+            [
+                pa130,
+                crate::pa_for_user(&tgt.session_key, user.clone(), urealm)?,
+            ],
+        );
+    }
     let armor_key = krb_fx_cf2(&sub, &tgt.session_key, b"subkeyarmor", b"ticketarmor")?;
     let authenticator = Authenticator {
         authenticator_vno: Authenticator::VNO,
@@ -585,9 +627,12 @@ fn tgs_once(
         &armor_key,
         &ap_raw,
         &body,
-        extra_padata.to_vec(),
+        extra.clone(),
         &krb5_types::fast::fast_options_none(),
     )?);
+    // MIT `make_tgs_outer_padata` (`fast.c:227-250`): outer FAST TGS
+    // duplicates inner padata (S4U 130/129) after PA-FX-FAST.
+    padata.extend(extra);
     let tgs = TgsReq(KdcReq {
         pvno: KdcReq::PVNO,
         msg_type: KdcReq::MSG_TGS_REQ,
@@ -615,7 +660,7 @@ fn tgs_once(
         return Err(Error::UnexpectedPdu);
     }
     let TgsRep(inner) = decode::<TgsRep>(&reply)?;
-    let reply_key = tgs_fast_reply_key(&armor_key, &sub, &inner, nonce)?;
+    let (reply_key, fast_padata) = tgs_fast_reply_key(&armor_key, &sub, &inner, nonce)?;
     let enc_usage = ku::TGS_REP_ENC_PART_SUBKEY;
     let usage = KeyUsage::new(enc_usage)?;
     let plain = decrypt(&reply_key, usage, inner.enc_part.cipher.as_ref())?;
@@ -625,6 +670,14 @@ fn tgs_once(
         krb5_asn1::decode_enc_kdc_rep_part(&plain).map_err(|e| Error::Asn1(e.to_string()))?;
     if enc_part.nonce != nonce {
         return Err(Error::NonceMismatch);
+    }
+    if let Some(req) = req_s4u.as_ref() {
+        crate::verify_s4u2self_reply(
+            &sub,
+            req,
+            Some(&fast_padata),
+            enc_part.encrypted_pa_data.as_deref(),
+        )?;
     }
     tgs_sname_ok(&requested, &inner.ticket.sname, &enc_part.sname)?;
     let session_etype = EncryptionType::known(enc_part.key.keytype)?;
