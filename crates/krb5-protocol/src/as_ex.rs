@@ -234,9 +234,13 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
     if req.pkinit.is_some() || req.ticket.anonymous {
         return continue_pkinit(req, nonce, &bound, &etypes);
     }
-    let support = req.want_spake.then(pa_spake_support);
-    let first_pa = support.clone().map(|s| vec![s]);
-    let first = build_as_req_from(req, nonce, &bound, first_pa.clone(), &etypes)?;
+    // MIT `get_in_tkt.c:807-813` only sets `optimistic_padata` when the
+    // app called `krb5_get_init_creds_opt_set_preauth_list`. Default
+    // kinit (even with `preferred_preauth_types = 151`) first-shots
+    // empty module padata — `info_pa_permitted` 150/149 only — and
+    // gets PREAUTH_REQUIRED 25. `--spake` still selects SPAKE after
+    // that hint (`continue_spake`); it is not MIT optimistic SPAKE.
+    let first = build_as_req_from(req, nonce, &bound, None, &etypes)?;
     let wire = encode(&first)?;
     let reply = exchange(req.kdc, &wire)?;
 
@@ -259,7 +263,7 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
         KdcMsg::Error(e) if e.error_code == err::SKEW => {
             // First-reply SKEW: resync from KDC stime and retry the bare AS-REQ.
             let skew_time = e.stime.clone();
-            let first = build_as_req_from(req, nonce, &bound, first_pa.clone(), &etypes)?;
+            let first = build_as_req_from(req, nonce, &bound, None, &etypes)?;
             let wire = encode(&first)?;
             let reply = exchange(req.kdc, &wire)?;
             match classify(&reply)? {
@@ -927,6 +931,11 @@ fn spake_challenge(
     let Some(p) = find_pa(method, pa::SPAKE) else {
         return Ok(None);
     };
+    // PREAUTH_REQUIRED advertises an empty PA-SPAKE (MIT `spake_kdc.c:321`).
+    // That is not a challenge; `spake_client.c:151` sends support instead.
+    if p.padata_value.as_ref().is_empty() {
+        return Ok(None);
+    }
     match decode::<krb5_types::spake::PaSpake>(p.padata_value.as_ref())? {
         krb5_types::spake::PaSpake::Challenge(c) => Ok(Some((p.clone(), c))),
         _ => Ok(None),

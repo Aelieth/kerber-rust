@@ -270,6 +270,10 @@ body (`fast.c:310-313`).
 PKINIT and anonymous `kinit -n` second-AS padata is cookie then
 PA-PK-AS-REQ then empty 150/149 (`preauth2.c:992-1019`,
 `get_in_tkt.c:1365-1372`): `[133, 16, 150, 149]`.
+SPAKE `--spake` first-shots `[150, 149]` like MIT
+(`get_in_tkt.c:807-813`); optimistic PA-SPAKE 151 is only for an
+explicit `krb5_get_init_creds_opt_set_preauth_list`. The first
+KRB-ERROR is PREAUTH_REQUIRED 25 with the full METHOD-DATA hint.
 
 FAST `req_checksum` is verified over the wire KDC-REQ-BODY (field 4)
 when a raw packet is present (`do_as_req.c:526-531`); socketless tests

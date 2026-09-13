@@ -68,6 +68,10 @@ this project uses semantic versioning once a crate is published.
 - **client.** PKINIT / anonymous second AS-REQ padata is
   `[133, 16, 150, 149]` (`preauth2.c:992-1019` cookie then module;
   `get_in_tkt.c:1365-1372` empty 150/149).
+- **client.** SPAKE `--spake` first-shots `[150, 149]` like MIT
+  default kinit (`get_in_tkt.c:807-813`); the first KRB-ERROR is
+  PREAUTH_REQUIRED 25 with the full hint list. PA-SPAKE support
+  follows that hint, not an optimistic first-shot 151.
 - **test.** `scripts/client-differential-gate.sh` drives MIT and Rust
   `kinit`/`kvno` against the live MIT 1.22.2 KDC through
   `scripts/lib/kdc-req-proxy.py` (request-shape JSONL: padata,
@@ -81,8 +85,8 @@ this project uses semantic versioning once a crate is published.
   `t_vfy_increds` vs `krb5-vfy-increds`; kpasswd result texts and
   setpw; `kinit -C` / `-s` / `[libdefaults] canonicalize`; default
   etype list (MIT 18/17/20/19/16/23/25/26, Rust AES-only); FAST AS
-  outer `till=zero`; PKINIT / anon second AS `[133, 16, 150, 149]`.
-  Fail-red on `mit-extra`.
+  outer `till=zero`; PKINIT / anon second AS `[133, 16, 150, 149]`;
+  SPAKE first-shot `[150, 149]` / error 25. Fail-red on `mit-extra`.
 
 ### W1-A′-4
 

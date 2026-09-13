@@ -413,9 +413,11 @@ fn spake_as_req_carries_pa_spake() {
     assert!(!raw.is_empty(), "SPAKE client must send an AS-REQ");
     let req: AsReq = decode(&raw).expect("AS-REQ");
     let padata = req.0.padata.unwrap_or_default();
-    assert!(
-        padata.iter().any(|p| p.padata_type == pa::SPAKE),
-        "want_spake AS-REQ must advertise PA-SPAKE (151), got {padata:?}"
+    let types: Vec<i32> = padata.iter().map(|p| p.padata_type).collect();
+    assert_eq!(
+        types,
+        vec![pa::AS_FRESHNESS, pa::REQ_ENC_PA_REP],
+        "MIT first-shot is 150/149 only (get_in_tkt.c:807-813), got {types:?}"
     );
 }
 

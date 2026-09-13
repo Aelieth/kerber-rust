@@ -90,6 +90,10 @@ path = "tests/b1_fast_outer_till.rs"
 name = "b1_pkinit_padata"
 path = "tests/b1_pkinit_padata.rs"
 
+[[test]]
+name = "b1_spake_first"
+path = "tests/b1_spake_first.rs"
+
 [dependencies]
 chrono.workspace = true
 getrandom.workspace = true

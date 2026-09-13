@@ -1042,6 +1042,74 @@ echo "RUST_pkinit_second_as_padata"
 echo "MIT_anon_second_as_padata"
 echo "RUST_anon_second_as_padata"
 
+echo "==== SPAKE first-shot (get_in_tkt.c / preauth2.c) ===="
+reset_cap
+docker exec -e KRB5_CONFIG=/tmp/spake-krb5.conf "$NAME" \
+    sh -c "printf 'userpassword\n' | kinit -c /tmp/cc_mit_spake_first user@KERBER.TEST" \
+    || die "MIT kinit SPAKE first-shot failed"
+save_cap mit-spake-first
+reset_cap
+docker exec -e KRB5_CONFIG=/tmp/spake-krb5.conf -e KRB5_PASSWORD=userpassword "$NAME" \
+    /tmp/krb5-kinit --spake -c /tmp/cc_rust_spake_first user@KERBER.TEST \
+    || die "Rust kinit --spake first-shot failed"
+save_cap rust-spake-first
+spake_first_shape() {
+    docker exec "$NAME" python3 -c "
+import json, sys
+path = sys.argv[1]
+padata = err = edata = None
+for line in open(path):
+    o = json.loads(line)
+    if padata is None and o.get('kind') == 'req' and o.get('msg_type') == 10:
+        padata = o['padata']
+    if err is None and o.get('kind') == 'error':
+        err = o.get('error_code')
+        edata = o.get('e_data_types')
+print(padata)
+print(err)
+print(edata)
+" "$1"
+}
+MIT_SPAKE_FIRST="$(spake_first_shape /tmp/cdiff/mit-spake-first.jsonl)"
+RUST_SPAKE_FIRST="$(spake_first_shape /tmp/cdiff/rust-spake-first.jsonl)"
+MIT_SPAKE_FIRST_PADATA="$(printf '%s\n' "$MIT_SPAKE_FIRST" | sed -n '1p')"
+MIT_SPAKE_FIRST_ERR="$(printf '%s\n' "$MIT_SPAKE_FIRST" | sed -n '2p')"
+MIT_SPAKE_FIRST_EDATA="$(printf '%s\n' "$MIT_SPAKE_FIRST" | sed -n '3p')"
+RUST_SPAKE_FIRST_PADATA="$(printf '%s\n' "$RUST_SPAKE_FIRST" | sed -n '1p')"
+RUST_SPAKE_FIRST_ERR="$(printf '%s\n' "$RUST_SPAKE_FIRST" | sed -n '2p')"
+RUST_SPAKE_FIRST_EDATA="$(printf '%s\n' "$RUST_SPAKE_FIRST" | sed -n '3p')"
+echo "MIT_SPAKE_FIRST_PADATA=$MIT_SPAKE_FIRST_PADATA"
+echo "RUST_SPAKE_FIRST_PADATA=$RUST_SPAKE_FIRST_PADATA"
+echo "MIT_SPAKE_FIRST_ERR=$MIT_SPAKE_FIRST_ERR"
+echo "RUST_SPAKE_FIRST_ERR=$RUST_SPAKE_FIRST_ERR"
+echo "MIT_SPAKE_FIRST_EDATA=$MIT_SPAKE_FIRST_EDATA"
+echo "RUST_SPAKE_FIRST_EDATA=$RUST_SPAKE_FIRST_EDATA"
+WANT_FIRST_PADATA='[150, 149]'
+WANT_FIRST_ERR='25'
+WANT_FIRST_EDATA='[136, 19, 16, 147, 151, 2, 150, 133]'
+if [ "$MIT_SPAKE_FIRST_PADATA" != "$WANT_FIRST_PADATA" ]; then
+    die "MIT SPAKE first padata want $WANT_FIRST_PADATA got $MIT_SPAKE_FIRST_PADATA"
+fi
+if [ "$RUST_SPAKE_FIRST_PADATA" != "$WANT_FIRST_PADATA" ]; then
+    die "Rust SPAKE first padata want $WANT_FIRST_PADATA got $RUST_SPAKE_FIRST_PADATA"
+fi
+if [ "$MIT_SPAKE_FIRST_ERR" != "$WANT_FIRST_ERR" ]; then
+    die "MIT SPAKE first error want $WANT_FIRST_ERR got $MIT_SPAKE_FIRST_ERR"
+fi
+if [ "$RUST_SPAKE_FIRST_ERR" != "$WANT_FIRST_ERR" ]; then
+    die "Rust SPAKE first error want $WANT_FIRST_ERR got $RUST_SPAKE_FIRST_ERR"
+fi
+if [ "$MIT_SPAKE_FIRST_EDATA" != "$WANT_FIRST_EDATA" ]; then
+    die "MIT SPAKE first e_data want $WANT_FIRST_EDATA got $MIT_SPAKE_FIRST_EDATA"
+fi
+if [ "$RUST_SPAKE_FIRST_EDATA" != "$WANT_FIRST_EDATA" ]; then
+    die "Rust SPAKE first e_data want $WANT_FIRST_EDATA got $RUST_SPAKE_FIRST_EDATA"
+fi
+echo "MIT_spake_first_padata"
+echo "RUST_spake_first_padata"
+echo "MIT_spake_first_error_25"
+echo "RUST_spake_first_error_25"
+
 mkdir -p "$SCRATCH/cdiff"
 docker cp "$NAME:/tmp/cdiff/." "$SCRATCH/cdiff/"
 log "client.diff.gate" "ok" ",\"flows\":$EXPECTED_FLOWS,\"cli_errors\":8"
