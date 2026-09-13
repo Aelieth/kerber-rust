@@ -323,6 +323,7 @@ impl KdcConf {
         let mut conf = Self::default();
         let mut section = String::new();
         let mut in_realm = false;
+        let mut realm_lines = Vec::new();
         for raw in text.lines() {
             let line = raw.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -352,6 +353,7 @@ impl KdcConf {
                     continue;
                 }
                 if in_realm {
+                    realm_lines.push(line.to_owned());
                     parse_kdc_realm_line(&mut conf, line);
                 }
             }
@@ -361,6 +363,11 @@ impl KdcConf {
             if section == "libdefaults" {
                 parse_kdc_libdefaults(&mut conf, line);
             }
+        }
+        // MIT `main.c:286-345`: realm stanza, then `[kdcdefaults]` fallback.
+        // Re-apply realm booleans so a later defaults section cannot win.
+        for line in &realm_lines {
+            overlay_realm_booleans(&mut conf, line);
         }
         Ok(conf)
     }
@@ -807,6 +814,20 @@ fn parse_kdc_libdefaults(conf: &mut KdcConf, line: &str) {
         // [kdcdefaults] or a realm stanza (main.c:257-261,622-626), never
         // [libdefaults]; no fallthrough, so a kdcdefaults knob placed under
         // [libdefaults] is ignored like MIT.
+        _ => {}
+    }
+}
+
+/// MIT realm-first booleans: a realm value beats a later `[kdcdefaults]`.
+fn overlay_realm_booleans(conf: &mut KdcConf, line: &str) {
+    let Some((k, v)) = split_kv(line) else {
+        return;
+    };
+    match k.to_ascii_lowercase().as_str() {
+        "reject_bad_transit" => conf.reject_bad_transit = truthy(&v),
+        "disable_pac" => conf.disable_pac = truthy(&v),
+        "restrict_anonymous_to_tgt" => conf.restrict_anon = truthy(&v),
+        "pkinit_require_freshness" => conf.pkinit_require_freshness = truthy(&v),
         _ => {}
     }
 }
@@ -1807,6 +1828,31 @@ mod tests {
         )
         .unwrap();
         assert!(!lib.restrict_anon);
+    }
+
+    #[test]
+    fn f6_realm_booleans_win_over_later_kdcdefaults() {
+        let conf = KdcConf::parse(
+            r"
+[realms]
+    KERBER.TEST = {
+        restrict_anonymous_to_tgt = false
+        pkinit_require_freshness = false
+        disable_pac = false
+        reject_bad_transit = false
+    }
+[kdcdefaults]
+    restrict_anonymous_to_tgt = true
+    pkinit_require_freshness = true
+    disable_pac = true
+    reject_bad_transit = true
+",
+        )
+        .unwrap();
+        assert!(!conf.restrict_anon);
+        assert!(!conf.pkinit_require_freshness);
+        assert!(!conf.disable_pac);
+        assert!(!conf.reject_bad_transit);
     }
 
     #[test]

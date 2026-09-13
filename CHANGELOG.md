@@ -135,6 +135,10 @@ this project uses semantic versioning once a crate is published.
   `krb5_principal_compare`, AP-REQ/AP-REP/KRB-CRED builders. On-disk
   rcache, ccache retrieve, cross-realm S4U2Proxy walk, and a standalone
   `krb5_auth_context` stay deferred (B3).
+- **kdc.** Realm-stanza `restrict_anonymous_to_tgt`,
+  `pkinit_require_freshness`, `disable_pac`, and `reject_bad_transit`
+  win over a later `[kdcdefaults]` (`main.c:286-345`). Host-based
+  referral lists still combine both sections.
 - **client.** TGS-REP `krb5int_process_tgs_reply` checks the reply
   client against the TGT client (`gc_via_tkt.c:257-270`), refuses a
   self-inconsistent ticket/enc server (`:108-110`), and rejects an
