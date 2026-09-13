@@ -1159,7 +1159,7 @@ docker exec \
     -e KRB5_KDC_PROFILE=/tmp/kdc-A.conf \
     "$NAME" kadmin.local -r A.TEST -q "ktadd -norandkey -k /tmp/mit-a-krbtgt.kt krbtgt/A.TEST"
 MIT_A_TGT_KEY="$(docker exec "$NAME" /tmp/krb5-pac-extract --dump-keytab /tmp/mit-a-krbtgt.kt \
-    | awk '$1=="KEY"{print $3; exit}')"
+    | awk '$1=="KEY" && !k {k=$3} END {if (k != "") print k}')"
 [ "${#MIT_A_TGT_KEY}" -eq 64 ]
 docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
     sh -c "printf 'userpassword\n' | kinit -r 7d -c /tmp/krb5cc_mit_r16 user@A.TEST"
@@ -1210,7 +1210,7 @@ if ! wait_listen /tmp/kdc-a-r16.log; then
     exit 1
 fi
 RUST_A_TGT_KEY="$(docker exec "$NAME" /tmp/krb5-pac-extract --dump-keytab /tmp/rust-a-krbtgt.kt \
-    | awk '$1=="KEY"{print $3; exit}')"
+    | awk '$1=="KEY" && !k {k=$3} END {if (k != "") print k}')"
 [ "${#RUST_A_TGT_KEY}" -eq 64 ]
 docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
     sh -c "printf 'userpassword\n' | kinit -r 7d -c /tmp/krb5cc_rust_r16 user@A.TEST"
