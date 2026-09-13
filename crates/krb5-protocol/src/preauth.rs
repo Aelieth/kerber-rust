@@ -268,6 +268,26 @@ pub fn unwrap_fast_rep(
     decode(&plain).map_err(Error::from)
 }
 
+/// MIT `fast.c:397-402` `decrypt_fast_reply`: `local_resp->nonce != state->nonce`
+/// is `KRB5_KDCREP_MODIFIED` ("nonce modified in FAST response").
+///
+/// # Errors
+///
+/// Decrypt/DER failures, or [`Error::ReplyMismatch`] on a flipped nonce.
+pub fn unwrap_fast_rep_checked(
+    armor_key: &ProtocolKey,
+    padata: &Option<Vec<PaData>>,
+    expected_nonce: u32,
+) -> Result<krb5_types::fast::KrbFastResponse, Error> {
+    let fast = unwrap_fast_rep(armor_key, padata)?;
+    if fast.nonce != expected_nonce {
+        return Err(Error::ReplyMismatch(
+            "nonce modified in FAST response: KDC response modified".into(),
+        ));
+    }
+    Ok(fast)
+}
+
 /// Mix the FAST strengthen-key with the base reply key.
 ///
 /// # Errors

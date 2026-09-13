@@ -8,6 +8,11 @@ this project uses semantic versioning once a crate is published.
 
 ### W1-B
 
+- **client.** FAST `KrbFastResponse.nonce` must match the request
+  (`fast.c:397-402`). A flip is `KRB5_KDCREP_MODIFIED` on AS/TGS
+  success; a FAST error with a bad nonce is ignored like MIT
+  `krb5int_fast_process_error`. Unit-only (`b1_fast_nonce`); no MIT
+  tool emits a flipped FAST nonce.
 - **test.** `scripts/client-differential-gate.sh` drives MIT and Rust
   `kinit`/`kvno` against the live MIT 1.22.2 KDC through
   `scripts/lib/kdc-req-proxy.py` (request-shape JSONL: padata,

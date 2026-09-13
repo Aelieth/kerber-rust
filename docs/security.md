@@ -210,7 +210,12 @@ advertises it; since the R0a SPAKE-padata fix the kinit client always
 appends the empty PA-AS-FRESHNESS (150) and PA-REQ-ENC-PA-REP (149) on
 every AS-REQ (`as_ex.rs build_as_req`) and verifies the returned 149
 checksum (`fast.c:646-666`), so a KDC that sets `enc-pa-rep` without
-returning 149 is rejected `KDCREP_MODIFIED`.
+returning 149 is rejected `KDCREP_MODIFIED`. Present-FAST
+`KrbFastResponse.nonce` must echo the request nonce
+(`fast.c:397-402` `decrypt_fast_reply`); a flip is
+`KRB5_KDCREP_MODIFIED` (`nonce modified in FAST response`) on AS and
+TGS success paths. A FAST error whose inner nonce does not match is
+treated as a non-FAST outer error (`fast.c:450-459`), not retried.
 
 FAST `req_checksum` is verified over the wire KDC-REQ-BODY (field 4)
 when a raw packet is present (`do_as_req.c:526-531`); socketless tests

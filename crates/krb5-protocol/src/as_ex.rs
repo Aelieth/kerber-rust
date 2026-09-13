@@ -18,7 +18,7 @@ use zeroize::Zeroize;
 use crate::error::Error;
 use crate::preauth::{
     apply_strengthen, armor_key, attach_fast, build_fast_armor, pa_pk_as_req_signed,
-    pa_spake_response, pa_spake_support, pkinit_reply_key_agile, unwrap_fast_rep,
+    pa_spake_response, pa_spake_support, pkinit_reply_key_agile, unwrap_fast_rep_checked,
     verify_fast_finished,
 };
 use crate::transport::{KdcAddr, exchange};
@@ -481,7 +481,7 @@ fn continue_fast(
     match classify(&reply)? {
         KdcMsg::AsRep(rep) => finish_fast_as(req, keys, nonce, etypes, &akey, None, rep, &wire),
         KdcMsg::Error(e) => {
-            let (inner, cookie) = fast_error_material(&akey, &e);
+            let (inner, cookie) = fast_error_material(&akey, &e, nonce);
             if inner.error_code != err::PREAUTH_REQUIRED && e.error_code != err::PREAUTH_REQUIRED {
                 return classify_kdc_error(&inner);
             }
@@ -514,7 +514,7 @@ fn continue_fast(
                     rep,
                     &wire,
                 ),
-                KdcMsg::Error(e) => classify_kdc_error(&fast_error_material(&akey, &e).0),
+                KdcMsg::Error(e) => classify_kdc_error(&fast_error_material(&akey, &e, nonce).0),
                 KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
             }
         }
@@ -533,7 +533,7 @@ fn finish_fast_as(
     rep: AsRep,
     wire: &[u8],
 ) -> Result<AsOutcome, Error> {
-    let fast = unwrap_fast_rep(akey, &rep.0.padata)?;
+    let fast = unwrap_fast_rep_checked(akey, &rep.0.padata, nonce)?;
     let sent_preauth = client_key.is_some();
     let client_key = match client_key {
         Some(k) => k,
@@ -615,7 +615,11 @@ fn fast_armor_ap(armor: &FastArmor, sub: &ProtocolKey) -> Result<krb5_types::ApR
     )
 }
 
-fn fast_error_material(akey: &ProtocolKey, err: &KrbError) -> (KrbError, Option<PaData>) {
+fn fast_error_material(
+    akey: &ProtocolKey,
+    err: &KrbError,
+    nonce: u32,
+) -> (KrbError, Option<PaData>) {
     let Some(ed) = &err.e_data else {
         return (err.clone(), None);
     };
@@ -627,7 +631,7 @@ fn fast_error_material(akey: &ProtocolKey, err: &KrbError) -> (KrbError, Option<
     let Some(fx) = find_pa(&method, pa::FX_FAST) else {
         return (err.clone(), outer_cookie);
     };
-    let Ok(fast) = unwrap_fast_rep(akey, &Some(vec![fx.clone()])) else {
+    let Ok(fast) = unwrap_fast_rep_checked(akey, &Some(vec![fx.clone()]), nonce) else {
         return (err.clone(), outer_cookie);
     };
     let types: Vec<i32> = fast.padata.iter().map(|p| p.padata_type).collect();

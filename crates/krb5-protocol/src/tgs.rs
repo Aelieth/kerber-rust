@@ -14,7 +14,7 @@ use krb5_types::{
 use crate::as_ex::AsOutcome;
 use crate::error::Error;
 use crate::preauth::{
-    apply_strengthen, fx_fast_padata_over, unwrap_fast_rep, verify_fast_finished,
+    apply_strengthen, fx_fast_padata_over, unwrap_fast_rep_checked, verify_fast_finished,
 };
 
 use crate::transport::{KdcAddr, exchange};
@@ -364,6 +364,7 @@ fn tgs_fast_reply_key(
     armor_key: &ProtocolKey,
     sub: &ProtocolKey,
     inner: &krb5_types::KdcRep,
+    nonce: u32,
 ) -> Result<ProtocolKey, Error> {
     let has_fast = inner
         .padata
@@ -372,7 +373,7 @@ fn tgs_fast_reply_key(
     if !has_fast {
         return Ok(sub.clone());
     }
-    let fast = unwrap_fast_rep(armor_key, &inner.padata)?;
+    let fast = unwrap_fast_rep_checked(armor_key, &inner.padata, nonce)?;
     let finished = fast.finished.as_ref().ok_or_else(|| {
         Error::ReplyMismatch("FAST response missing finish message in KDC reply".into())
     })?;
@@ -602,7 +603,7 @@ fn tgs_once(
         return Err(Error::UnexpectedPdu);
     }
     let TgsRep(inner) = decode::<TgsRep>(&reply)?;
-    let reply_key = tgs_fast_reply_key(&armor_key, &sub, &inner)?;
+    let reply_key = tgs_fast_reply_key(&armor_key, &sub, &inner, nonce)?;
     let enc_usage = ku::TGS_REP_ENC_PART_SUBKEY;
     let usage = KeyUsage::new(enc_usage)?;
     let plain = decrypt(&reply_key, usage, inner.enc_part.cipher.as_ref())?;
