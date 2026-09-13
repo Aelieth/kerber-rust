@@ -1856,7 +1856,7 @@ fn find_referral_tgs(
         .get(1)
         .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
         .unwrap_or_default();
-    if !host.contains('.') {
+    if !host.contains('.') || krb5_config::is_numeric_address(&host) {
         return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::LOOKING_UP_SERVER));
     }
     let Some(other) = store.policy().realm_for_host(&host) else {
@@ -1884,7 +1884,7 @@ fn find_alternate_tgs(
     let hops = crate::store::walk_realm_instances(&store.policy().capaths, store.realm(), &far);
     for inst in hops.iter().skip(1).rev() {
         let hop = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", inst.as_str()]);
-        if let Some(p) = store.fetch_name(&hop)? {
+        if let Some(p) = lookup_svc_princ(store, &hop)? {
             return Ok(p);
         }
     }
@@ -1898,7 +1898,7 @@ fn search_sprinc(
     req_realm: &str,
     body: &KdcReqBody,
 ) -> Result<crate::store::Principal, Error> {
-    if let Some(p) = store.fetch_name(requested)? {
+    if let Some(p) = lookup_svc_princ(store, requested)? {
         return Ok(p);
     }
     if no_referral_option(body) {
@@ -1908,7 +1908,7 @@ fn search_sprinc(
         requested.clone()
     } else {
         let reftgs = find_referral_tgs(store, body, requested, req_realm)?;
-        if let Some(p) = store.fetch_name(&reftgs)? {
+        if let Some(p) = lookup_svc_princ(store, &reftgs)? {
             return Ok(p);
         }
         reftgs
@@ -1923,7 +1923,7 @@ fn tgs_issuing_referral(
     resolved: &crate::store::Principal,
 ) -> bool {
     resolved.name.is_cross_tgs_principal(&resolved.realm)
-        && (resolved.name != *requested || resolved.realm != req_realm)
+        && !krb5_types::principal_compare(&resolved.name, &resolved.realm, requested, req_realm)
 }
 
 fn non_tgt_option(body: &KdcReqBody) -> bool {
@@ -3305,6 +3305,29 @@ fn kdc_get_ticket_renewtime(
     }
     *flags = flags.clone().with_bit(flag_bit::RENEWABLE, true);
     Some(KerberosTime::from_unix_seconds(rsec))
+}
+
+/// MIT `db_get_svc_princ` (`do_tgs_req.c:525-538`): `CANTLOCK_DB` is 29;
+/// any other backend error is 7 `LOOKING_UP_SERVER`.
+fn lookup_svc_princ(
+    store: &dyn PrincipalRead,
+    name: &PrincipalName,
+) -> Result<Option<crate::store::Principal>, Error> {
+    match store.fetch_name(name) {
+        Ok(v) => Ok(v),
+        Err(Error::Protocol {
+            code,
+            text,
+            e_data,
+            detail,
+        }) if code == err::SVC_UNAVAILABLE => Err(Error::Protocol {
+            code,
+            text,
+            e_data,
+            detail,
+        }),
+        Err(_) => Err(proto(err::S_PRINCIPAL_UNKNOWN, status::LOOKING_UP_SERVER)),
+    }
 }
 
 fn utf8_realm(r: &krb5_types::Realm) -> Result<&str, Error> {

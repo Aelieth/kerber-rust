@@ -4375,6 +4375,64 @@ fn run() -> Result<(), String> {
         err::S_PRINCIPAL_UNKNOWN,
     )?;
 
+    let hier_tgt = mint_tgt(
+        tkt_key,
+        tkt_kvno,
+        &user,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        (
+            now.clone(),
+            now.add_hours(10).unwrap_or_else(|_| now.clone()),
+        ),
+        TicketFlags::initial_preauth(),
+    )?;
+    let hier_req = encode(
+        &tgs_req(
+            hier_tgt,
+            &sess,
+            realm,
+            &user,
+            PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "X.SUB.KERBER.TEST"]),
+            realm,
+            0x1000_0096,
+        )
+        .map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    let (hr, hm) = send_both(&cfg, "tgs-alternate-tgs-hierarchical", &hier_req)?;
+    if hr.first() != Some(&0x6d) || hm.first() != Some(&0x6d) {
+        return Err(format!(
+            "tgs-alternate-tgs-hierarchical rust={:02x} mit={:02x} want 0x6d",
+            hr.first().unwrap_or(&0),
+            hm.first().unwrap_or(&0)
+        ));
+    }
+    let want_hier = "krbtgt/SUB.KERBER.TEST";
+    for (leg, raw) in [("rust", hr.as_slice()), ("mit", hm.as_slice())] {
+        let TgsRep(rep) = decode::<TgsRep>(raw).map_err(|e| e.to_string())?;
+        let ticket_sname = rep.ticket.sname.components_joined();
+        if ticket_sname != want_hier {
+            return Err(format!(
+                "tgs-alternate-tgs-hierarchical {leg} ticket.sname={ticket_sname} want {want_hier}"
+            ));
+        }
+        let usage = KeyUsage::new(ku::TGS_REP_ENC_PART).map_err(|e| e.to_string())?;
+        let plain = decrypt(&sess, usage, rep.enc_part.cipher.as_ref())
+            .map_err(|e| format!("tgs-alternate-tgs-hierarchical {leg} enc-part: {e}"))?;
+        let enc = decode_enc_kdc_rep(&plain).map_err(|e| e.to_string())?;
+        let enc_sname = enc.sname.components_joined();
+        if enc_sname != want_hier {
+            return Err(format!(
+                "tgs-alternate-tgs-hierarchical {leg} enc.sname={enc_sname} want {want_hier}"
+            ));
+        }
+    }
+    println!(
+        r#"{{"event":"diffsend","case":"tgs-alternate-tgs-hierarchical","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","sname":"{want_hier}"}}"#
+    );
+
     let from = now.add_seconds(3600).unwrap_or_else(|_| now.clone());
     let renew_pd_part = EncTicketPart {
         flags: TicketFlags::initial_preauth()
@@ -4441,7 +4499,7 @@ fn run() -> Result<(), String> {
         rt.endtime.unix_seconds()
     );
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":108}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":109}}"#);
     Ok(())
 }
 

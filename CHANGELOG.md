@@ -86,6 +86,14 @@ this project uses semantic versioning once a crate is published.
   (`verify_s4u2self_reply`, `s4u_creds.c:273-397`): enc-only 130,
   nonce/user/checksum mismatch is `KRB5_KDCREP_MODIFIED`; an unkeyed
   reply checksum on a modern etype is `INAPP_CKSUM`.
+- **kdc.** Hierarchical `find_alternate_tgs` walks MIT
+  `rtree_hier_realms` (`walk_rtree.c`) instead of transit
+  intermediates, so `krbtgt/X.SUB.KERBER.TEST` issues
+  `krbtgt/SUB.KERBER.TEST` without `[capaths]`. `common == 0` walks
+  every suffix. Backend server-lookup errors are 7
+  `LOOKING_UP_SERVER` (29 passthrough). Host referrals skip numeric
+  addresses (`k5_is_numeric_address`). `is_referral` uses
+  `krb5_principal_compare` (ignores name-type). diffsend 109.
 - **test.** `scripts/client-differential-gate.sh` drives MIT and Rust
   `kinit`/`kvno` against the live MIT 1.22.2 KDC through
   `scripts/lib/kdc-req-proxy.py` (request-shape JSONL: padata,
@@ -102,7 +110,8 @@ this project uses semantic versioning once a crate is published.
   outer `till=zero`; PKINIT / anon second AS `[133, 16, 150, 149]`;
   SPAKE first-shot `[150, 149]` / error 25; password preauth cascade
   `[[150, 149], [133, 151, 150, 149], [133, 151, 150, 149]]`;
-  `kvno -U` TGS padata `[1, 136, 130, 129]`. Fail-red
+  `kvno -U` TGS padata `[1, 136, 130, 129]`; diffsend
+  `tgs-alternate-tgs-hierarchical`. Fail-red
   on `mit-extra`.
 
 ### W1-A′-4

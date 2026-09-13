@@ -412,9 +412,24 @@ fn valid_include_name(name: &str) -> bool {
         .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
+/// MIT `k5_is_numeric_address` (`hostrealm.c:318-338`).
+#[must_use]
+pub fn is_numeric_address(name: &str) -> bool {
+    if name.contains(':') {
+        return true;
+    }
+    if name.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
+        return name.bytes().filter(|&b| b == b'.').count() == 3;
+    }
+    false
+}
+
 /// Longest-suffix `[domain_realm]` map (MIT hostrealm profile).
 #[must_use]
 pub fn host_to_realm<'a>(map: &'a BTreeMap<String, String>, host: &str) -> Option<&'a str> {
+    if is_numeric_address(host) {
+        return None;
+    }
     let host = host.trim_end_matches('.').to_ascii_lowercase();
     if let Some(r) = map.get(&host) {
         return Some(r.as_str());
@@ -1440,6 +1455,23 @@ mod tests {
         assert_eq!(mapped.realm_for_host("app.kerber.test"), Some("DOT.TEST"));
         assert_eq!(mapped.realm_for_host("kerber.test"), Some("BARE.TEST"));
         assert_eq!(mapped.realm_for_host("other.test"), Some("SHORT.TEST"));
+        assert!(is_numeric_address("1.2.3.4"));
+        assert!(is_numeric_address("2001:db8::1"));
+        assert!(!is_numeric_address("1.2.3"));
+        assert!(!is_numeric_address("host.1.2.3.4"));
+        let numeric = Krb5Conf::parse(
+            r"
+[domain_realm]
+    1.2.3.4 = OTHER.TEST
+    .kerber.test = KERBER.TEST
+",
+        )
+        .unwrap();
+        assert_eq!(numeric.realm_for_host("1.2.3.4"), None);
+        assert_eq!(
+            numeric.realm_for_host("app.kerber.test"),
+            Some("KERBER.TEST")
+        );
     }
 
     #[test]

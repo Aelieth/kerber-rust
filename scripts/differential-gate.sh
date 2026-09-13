@@ -87,6 +87,13 @@ ADD="$(docker exec \
     "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey krbtgt/OTHER.TEST')"
 echo "$ADD"
 grep -q 'created' <<<"$ADD" || die "rust addprinc krbtgt/OTHER.TEST failed"
+ADDHIER="$(docker exec \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey krbtgt/SUB.KERBER.TEST')"
+echo "$ADDHIER"
+grep -q 'created' <<<"$ADDHIER" || die "rust addprinc krbtgt/SUB.KERBER.TEST failed"
 ADDLOCK="$(docker exec \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
@@ -176,6 +183,9 @@ docker exec "$NAME" kdb5_util load /tmp/mit.dump
 MITADD="$(docker exec "$NAME" kadmin.local -q 'addprinc -randkey krbtgt/OTHER.TEST@KERBER.TEST')"
 echo "$MITADD"
 grep -qi 'created' <<<"$MITADD" || die "MIT addprinc krbtgt/OTHER.TEST failed"
+MITHIER="$(docker exec "$NAME" kadmin.local -q 'addprinc -randkey krbtgt/SUB.KERBER.TEST@KERBER.TEST')"
+echo "$MITHIER"
+grep -qi 'created' <<<"$MITHIER" || die "MIT addprinc krbtgt/SUB.KERBER.TEST failed"
 docker exec "$NAME" kadmin.local -q 'addprinc -randkey host/locked.kerber.test'
 docker exec "$NAME" kadmin.local -q 'modprinc -allow_tix host/locked.kerber.test'
 docker exec "$NAME" kadmin.local -q 'addprinc -randkey host/dupskey.kerber.test'
@@ -242,7 +252,7 @@ grep -q '"case":"as-invalid-opts","outcome":"ok","error_code":13' <<<"$DIFF" || 
 grep -q '"case":"as-request-anonymous","outcome":"ok","error_code":13,"e_text":"VALIDATE_ANONYMOUS_PRINCIPAL","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "as-request-anonymous not code 13 e_text VALIDATE_ANONYMOUS_PRINCIPAL on both legs"
 grep -q '"case":"as-validate-before-preauth","outcome":"ok","error_code":23' <<<"$DIFF" || die "as-validate-before-preauth (preauth+needchange) not code 23 on both legs"
 grep -q '"case":"as-retransmit","outcome":"ok","rust_retransmit_identical":true,"mit_retransmit_identical":true' <<<"$DIFF" || die "as-retransmit reply not identical from the lookaside on both legs"
-grep -q '"outcome":"ok","cases":108' <<<"$DIFF" || die "diffsend did not finish 108 cases" # A'-3 R32: "outcome":"ok","cases":102" # A'-4 item 16: "outcome":"ok","cases":105" # A'-4 item 17: "outcome":"ok","cases":106" # A'-4 item 18: "outcome":"ok","cases":107"
+grep -q '"outcome":"ok","cases":109' <<<"$DIFF" || die "diffsend did not finish 109 cases" # A'-3 R32: "outcome":"ok","cases":102" # A'-4 item 16: "outcome":"ok","cases":105" # A'-4 item 17: "outcome":"ok","cases":106" # A'-4 item 18: "outcome":"ok","cases":107" # W1-B F4: 109
 grep -q '"case":"fast-armor-no-subkey","outcome":"ok","error_code":12,"e_text":"FIND_FAST","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "fast-armor-no-subkey not code 12 e_text FIND_FAST on both legs"
 grep -q '"case":"armor-ap-req-as-pa-tgs-req","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "armor-ap-req-as-pa-tgs-req not code 12 e_text PROCESS_TGS on both legs"
 grep -q '"case":"tgs-ad-fx-armor-authenticator","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-ad-fx-armor-authenticator not code 12 e_text PROCESS_TGS on both legs"
@@ -359,6 +369,7 @@ grep -q '"case":"as-fast-hide-error-client","outcome":"ok","error_code":25' <<<"
 grep -q '"case":"tgs-fast-hide-client","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","hidden":true' <<<"$DIFF" || die "tgs-fast-hide-client not hidden TGS-REP on both legs"
 grep -q '"case":"pkinit-stale-freshness","outcome":"ok","error_code":24' <<<"$DIFF" || die "pkinit-stale-freshness not code 24 on both legs"
 grep -q '"case":"tgs-referral-no-dot","outcome":"ok","error_code":7,"e_text":"LOOKING_UP_SERVER","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-referral-no-dot not code 7 LOOKING_UP_SERVER on both legs"
+grep -q '"case":"tgs-alternate-tgs-hierarchical","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","sname":"krbtgt/SUB.KERBER.TEST"' <<<"$DIFF" || die "tgs-alternate-tgs-hierarchical not TGS-REP krbtgt/SUB.KERBER.TEST on both legs"
 grep -q '"case":"tgs-renew-postdated-from","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"' <<<"$DIFF" || die "tgs-renew-postdated-from not TGS-REP on both legs"
 grep -qE '"case":"tgs-renew-postdated-from".*"starttime":[0-9]+.*"endtime":[0-9]+' <<<"$DIFF" || die "tgs-renew-postdated-from missing starttime/endtime on both legs"
 

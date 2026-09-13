@@ -139,6 +139,7 @@ DIFFSEND_CASES = frozenset(
         "tgs-fast-hide-client",
         "pkinit-stale-freshness",
         "tgs-referral-no-dot",
+        "tgs-alternate-tgs-hierarchical",
         "tgs-renew-postdated-from",
     }
 )
