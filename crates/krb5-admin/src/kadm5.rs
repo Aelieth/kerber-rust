@@ -2446,10 +2446,16 @@ fn dispatch_kadm5_ticket(
             } else {
                 c.policy.as_deref()
             };
-            if let Err(e) = g.check_new_password(&c.name, pol, c.pass.as_bytes()) {
-                return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
-            }
-            match g.insert_new_password(&c.name, &req, c.pass.as_bytes(), &[]) {
+            let created = match c.pass.as_deref() {
+                Some(pw) => g
+                    .check_new_password(&c.name, pol, pw.as_bytes())
+                    .and_then(|()| g.insert_new_password(&c.name, &req, pw.as_bytes(), &[])),
+                // NULL password: random key (`krb5_dbe_crk`), no quality
+                // check. `-nokey` (KADM5_KEY_DATA) also lands here — MIT
+                // would create a keyless entry (ledger deviation).
+                None => g.insert_new_randkey(&c.name, &req, &[]),
+            };
+            match created {
                 Ok(()) => {
                     if c.mask & KADM5_TL_DATA != 0
                         && let Err(e) = g.merge_tl_data_in(&c.name, &req, &c.tl_data)
@@ -3264,7 +3270,10 @@ fn encode_pols(api: u32, names: &[String]) -> Vec<u8> {
 struct CreateFields {
     name: PrincipalName,
     prealm: String,
-    pass: String,
+    /// `None` is the XDR NULL `passwd` of `kadmin addprinc -randkey`
+    /// (1.8+): `svr_principal.c:463-470` creates with a random key and
+    /// `:369` skips `passwd_check`.
+    pass: Option<String>,
     policy: Option<String>,
     tl_data: Vec<TlData>,
     mask: u32,
@@ -3280,7 +3289,7 @@ fn parse_create(args: &[u8], v3: bool) -> Result<CreateFields, Error> {
     if v3 {
         r.skip_array_i32_pairs()?;
     }
-    let pass = r.nullstring()?.unwrap_or_default();
+    let pass = r.nullstring()?;
     Ok(CreateFields {
         name,
         prealm,

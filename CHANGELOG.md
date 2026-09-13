@@ -20,6 +20,12 @@ this project uses semantic versioning once a crate is published.
   MIT. `dict_file` is a realm-stanza relation (`alt_prof.c:513`);
   ENOENT continues without a dictionary. Live: `kadmin-local-gate.sh`
   `pwq-*` cells, Rust vs MIT `kadmin.local` identical.
+- **kadmin.** kadm5 `create_principal` with a NULL `passwd` — MIT
+  `kadmin addprinc -randkey` since 1.8 (`kadmin.c:1297`) — now creates
+  with random keys like `krb5_dbe_crk` (`svr_principal.c:463-470`) and
+  skips `passwd_check`. Previously the NULL was decoded as `""` and the
+  principal was keyed from the empty password. `-nokey` also gets a
+  random key (MIT: keyless; ledger deviation).
 
 ### W1-B
 

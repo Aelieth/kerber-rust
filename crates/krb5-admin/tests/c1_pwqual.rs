@@ -150,6 +150,56 @@ fn c1_kadm5_create_principal_name_password_is_pass_q_dict_only_with_policy() {
     assert!(g.get_name(&n("pqfree")).is_some());
 }
 
+/// `svr_principal.c:369,463-470`: a NULL `passwd` (`kadmin addprinc
+/// -randkey` since 1.8, `kadmin.c:1297-1298`) skips `passwd_check` and
+/// creates with `krb5_dbe_crk` random keys — never a key derived from the
+/// empty string. Live: MIT `kadmin -q 'addprinc -randkey x'` against the
+/// Rust kadmind (`kadmin-gate.sh`, `chaos-gate.sh`).
+#[test]
+fn c1_kadm5_create_null_password_is_a_random_key_not_the_empty_password() {
+    let (store, _) = bootstrap_documented().unwrap();
+    let acl = Acl::parse("admin@KERBER.TEST *\n").unwrap();
+    let store = shared_dump(store);
+    let mut c = init_client(
+        &store,
+        &acl,
+        &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]),
+        &documented_kadmin(),
+        GSS_INTEGRITY,
+    );
+    let mut args = Vec::new();
+    push_u32(&mut args, API_V2);
+    push_nullstring(&mut args, &format!("host/rk.kerber.test@{TEST_REALM}"));
+    for v in [0, 0, 0, 3600, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0] {
+        push_u32(&mut args, v);
+    }
+    push_u32(&mut args, KADM5_PRINCIPAL);
+    push_u32(&mut args, 0); // NULL passwd
+    let (stat, body) = data_call(&mut c, &store, &acl, CREATE_PRINCIPAL, &args);
+    assert_eq!(stat, SUCCESS);
+    assert_eq!(ret_code(&body), 0, "randkey create is not passwd_checked");
+    let g = store
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let p = g
+        .get_name(&PrincipalName::new(
+            PrincipalName::NT_SRV_HST,
+            ["host", "rk.kerber.test"],
+        ))
+        .expect("created");
+    assert!(!p.keys.is_empty());
+    for k in &p.keys {
+        let params = krb5_kdc::s2k_params(k.etype);
+        let empty = krb5_crypto::string_to_key(k.etype, b"", &p.salt, Some(&params)).unwrap();
+        assert_ne!(
+            empty.as_bytes(),
+            k.key.as_bytes(),
+            "etype {:?} key is the empty-password key",
+            k.etype
+        );
+    }
+}
+
 /// `svr_principal.c:1282`: chpass runs the same `passwd_check`. `empty`
 /// without a policy; `princ` (realm first, then components) with one.
 /// Live MIT `cpw -pw "" u` / `cpw -pw U u` under a policy agree.

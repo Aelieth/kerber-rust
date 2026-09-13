@@ -1493,6 +1493,33 @@ impl PrincipalStore {
         self.insert_password_etypes(name, princ_realm, password, etypes)
     }
 
+    /// kadm5 `create_principal` with a NULL password
+    /// (`svr_principal.c:463-470` `krb5_dbe_crk`): random keys of `etypes`
+    /// (empty = `supported_enctypes`) at kvno 1, no `passwd_check`. This is
+    /// `kadmin addprinc -randkey` since 1.8; the pre-1.8 client sends a
+    /// dummy password and `DISALLOW_ALL_TIX` instead.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AlreadyExists`] or [`Error::Rng`].
+    pub fn insert_new_randkey(
+        &mut self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        etypes: &[EncryptionType],
+    ) -> Result<(), Error> {
+        let id = crate::kdb::lookup_principal_id(name, princ_realm);
+        if self.get(&id).is_some() {
+            return Err(Error::AlreadyExists);
+        }
+        let keys = if etypes.is_empty() {
+            self.policy.password_etypes()
+        } else {
+            etypes.to_vec()
+        };
+        self.insert_randkey_in(name, princ_realm, &keys)
+    }
+
     /// `kadm5_create_alias` (`svr_principal.c:2051-2087`): an alias stub is
     /// a keyless `DISALLOW_ALL_TIX` entry whose only content is
     /// `KRB5_TL_ALIAS_TARGET`. The target need not exist; the alias name must
@@ -2319,14 +2346,24 @@ impl PrincipalStore {
         name: &PrincipalName,
         etypes: &[EncryptionType],
     ) -> Result<(), Error> {
+        let realm = self.realm.clone();
+        self.insert_randkey_in(name, &realm, etypes)
+    }
+
+    fn insert_randkey_in(
+        &mut self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        etypes: &[EncryptionType],
+    ) -> Result<(), Error> {
         let mut keys = Vec::new();
         for etype in etypes {
             keys.push(KeyEntry::new(*etype, random_key(*etype)?, 1));
         }
-        let salt = name.default_salt(&self.realm);
+        let salt = name.default_salt(princ_realm);
         let mut p = Principal::from_keys(
             name.clone(),
-            self.realm.clone(),
+            princ_realm.to_owned(),
             keys,
             salt,
             false,
