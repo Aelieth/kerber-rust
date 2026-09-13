@@ -37,6 +37,10 @@ this project uses semantic versioning once a crate is published.
   client principal (name and realm) and sorts those etypes to the
   front of the AS-REQ (`gic_keytab.c:84-174`). A stale lower kvno
   listed first is ignored.
+- **client.** Password `KEY_EXP` (23) runs the `kadmin/changepw`
+  ticket + kpasswd + retry path (`gic_pwd.c:211-336`). kpasswd
+  result codes outside 0–7, or SUCCESS from a KRB-ERROR, are
+  `KRB5KRB_AP_ERR_MODIFIED` (`chpw.c:217-231`).
 - **test.** `scripts/client-differential-gate.sh` drives MIT and Rust
   `kinit`/`kvno` against the live MIT 1.22.2 KDC through
   `scripts/lib/kdc-req-proxy.py` (request-shape JSONL: padata,

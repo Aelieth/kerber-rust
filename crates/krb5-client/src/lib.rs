@@ -60,6 +60,8 @@ pub struct KinitParams<'a> {
     pub renew: bool,
     /// `kinit -n` (anonymous PKINIT).
     pub anonymous: bool,
+    /// New password for `gic_pwd.c` KEY_EXP → changepw (`KRB5_NEW_PASSWORD`).
+    pub new_password: Option<&'a [u8]>,
 }
 
 /// Result of [`kinit`].
@@ -176,12 +178,20 @@ pub fn kinit_with(
     spec: &CcSpec,
     params: KinitParams<'_>,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
+    let keep_on_key_exp = params.new_password.is_none() && params.keytab.is_none();
     let built = kinit_inner(kdc, principal, password, spec, params);
+    let keep_password = keep_on_key_exp
+        && built
+            .as_ref()
+            .err()
+            .is_some_and(|e| e.to_string().contains("KRB-ERROR 23"));
     let result = match built {
         Ok((r, cc)) => store_ccache(spec, cc).map(|()| r),
         Err(e) => Err(e),
     };
-    password.zeroize();
+    if !keep_password {
+        password.zeroize();
+    }
     result
 }
 
@@ -389,10 +399,57 @@ fn kinit_inner(
         etypes: Some(&etypes),
         ticket,
     };
-    let as_out = if let Some(keys) = keytab_keys.as_deref() {
-        as_exchange_with_keys(&req, keys)?
+    let as_out = match if let Some(keys) = keytab_keys.as_deref() {
+        as_exchange_with_keys(&req, keys)
     } else {
-        as_exchange(&req)?
+        as_exchange(&req)
+    } {
+        Ok(o) => o,
+        Err(e)
+            if krb5_protocol::key_exp_should_changepw(
+                &e,
+                params.new_password.is_some(),
+                params.keytab.is_some(),
+            ) =>
+        {
+            let new_pw = params
+                .new_password
+                .ok_or("Password expired.  You must change it now.")?;
+            eprintln!("Password expired.  You must change it now.");
+            let changepw = krb5_types::PrincipalName::new(
+                krb5_types::PrincipalName::NT_SRV_INST,
+                ["kadmin", "changepw"],
+            );
+            let chpw_ticket = AsTicketOpts {
+                lifetime: Some(5 * 60),
+                rlife: None,
+                forwardable: false,
+                proxiable: false,
+                addresses: None,
+                anonymous: false,
+            };
+            let chpw_req = AsRequest {
+                cname: cname.clone(),
+                realm: &realm_s,
+                password,
+                kdc: &resolved,
+                want_spake: false,
+                fast_armor: armor.as_ref(),
+                pkinit: None,
+                canonicalize: params.enterprise,
+                sname: Some(&changepw),
+                etypes: Some(&etypes),
+                ticket: chpw_ticket,
+            };
+            let chpw_as = as_exchange(&chpw_req)?;
+            krb5_protocol::change_password(&resolved, &chpw_as, new_pw)?;
+            let retry = AsRequest {
+                password: new_pw,
+                ..req
+            };
+            as_exchange(&retry)?
+        }
+        Err(e) => return Err(e.into()),
     };
     let mut creds = vec![tgt_cred(
         &as_out.crealm,

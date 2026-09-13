@@ -1194,6 +1194,14 @@ pub fn env_password() -> Option<Vec<u8>> {
     std::env::var("KRB5_PASSWORD").ok().map(String::into_bytes)
 }
 
+/// `KRB5_NEW_PASSWORD` for `gic_pwd.c` KEY_EXP → changepw (never from argv).
+#[must_use]
+pub fn env_new_password() -> Option<Vec<u8>> {
+    std::env::var("KRB5_NEW_PASSWORD")
+        .ok()
+        .map(String::into_bytes)
+}
+
 /// RFC 2782 lookup of `_kerberos._udp.{realm}`.
 ///
 /// # Errors

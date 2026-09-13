@@ -238,6 +238,11 @@ or POSTDATED `from` ≠ starttime (omitted starttime = authtime), is
 (name and realm; name-type ignored) and puts those etypes first on
 the AS-REQ (`gic_keytab.c:84-174`). A stale lower kvno is not used
 to wrap PA-ENC-TIMESTAMP.
+Password `KEY_EXP` (23) obtains a short non-forwardable
+`kadmin/changepw` ticket, changes the password, and retries the
+AS-REQ (`gic_pwd.c:211-336`). A kpasswd result code outside 0–7 or
+SUCCESS taken from a KRB-ERROR is `KRB5KRB_AP_ERR_MODIFIED`
+(`chpw.c:217-231`).
 
 FAST `req_checksum` is verified over the wire KDC-REQ-BODY (field 4)
 when a raw packet is present (`do_as_req.c:526-531`); socketless tests

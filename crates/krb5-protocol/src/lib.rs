@@ -17,6 +17,7 @@ mod ccache;
 mod ccache_dir;
 mod ccache_mem;
 mod ccmarshal;
+mod chpw;
 #[cfg(any(test, feature = "diff"))]
 #[cfg_attr(not(feature = "diff"), allow(dead_code))]
 mod diff;
@@ -53,6 +54,10 @@ pub use ccache_dir::{
 };
 pub use ccache_mem::{memory_destroy, memory_retrieve, memory_store};
 pub use ccmarshal::FCC_TAG_DELTATIME;
+pub use chpw::{
+    KPASSWD_INITIAL_FLAG_NEEDED, KPASSWD_PORT, KPASSWD_SUCCESS, change_password,
+    key_exp_should_changepw, parse_chpw_result,
+};
 #[cfg(feature = "diff")]
 pub use diff::{
     DiffError, StableKrbError, StableRep, compare_krb_error, compare_preauth_e_data,

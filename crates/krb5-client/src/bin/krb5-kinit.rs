@@ -9,10 +9,11 @@
 
 use std::path::Path;
 
-use krb5_client::cli::{parse_kinit, read_password_line};
+use krb5_client::cli::{parse_kinit, read_password_line, read_prompt_line};
 use krb5_client::{KinitParams, kinit_with, local_host_addresses};
-use krb5_config::{env_ktname, env_password, parse_deltat, resolve_ccspec};
+use krb5_config::{env_ktname, env_new_password, env_password, parse_deltat, resolve_ccspec};
 use krb5_protocol::{AsTicketOpts, KdcAddr, parse_principal_ex};
+use zeroize::Zeroize;
 
 fn main() {
     let _ = tracing_subscriber::fmt()
@@ -126,34 +127,62 @@ fn main() {
     let armor = args.armor_ccache.clone();
     let pk_id = args.pkinit_identity.clone();
     let pk_an = args.pkinit_anchors.clone();
-    let params = KinitParams {
-        service: service.as_deref(),
-        want_spake: args.want_spake,
-        armor_ccache: armor.as_deref().map(Path::new),
-        pkinit_identity: pk_id.as_deref().map(Path::new),
-        pkinit_anchors: pk_an.as_deref().map(Path::new),
-        enterprise: args.enterprise,
-        keytab: if args.keytab {
-            kt_path.as_deref().map(Path::new)
-        } else {
-            None
-        },
-        ticket,
-        renew: args.renew,
-        anonymous: args.anonymous,
-    };
-    match kinit_with(&addr, &principal, &mut password, &spec, params) {
-        Ok(r) => {
-            println!(
-                "ok tgt={} tgs={}",
-                r.as_out.enc_part.sname.name_string.len(),
-                r.tgs_out.is_some()
-            );
+    let mut new_password = env_new_password();
+    loop {
+        let params = KinitParams {
+            service: service.as_deref(),
+            want_spake: args.want_spake,
+            armor_ccache: armor.as_deref().map(Path::new),
+            pkinit_identity: pk_id.as_deref().map(Path::new),
+            pkinit_anchors: pk_an.as_deref().map(Path::new),
+            enterprise: args.enterprise,
+            keytab: if args.keytab {
+                kt_path.as_deref().map(Path::new)
+            } else {
+                None
+            },
+            ticket: ticket.clone(),
+            renew: args.renew,
+            anonymous: args.anonymous,
+            new_password: new_password.as_deref(),
+        };
+        match kinit_with(&addr, &principal, &mut password, &spec, params) {
+            Ok(r) => {
+                println!(
+                    "ok tgt={} tgs={}",
+                    r.as_out.enc_part.sname.name_string.len(),
+                    r.tgs_out.is_some()
+                );
+                break;
+            }
+            Err(e)
+                if !args.keytab
+                    && new_password.is_none()
+                    && e.to_string().contains("KRB-ERROR 23") =>
+            {
+                eprintln!("Password expired.  You must change it now.");
+                let a = read_prompt_line("Enter new password: ").unwrap_or_else(|e| {
+                    eprintln!("kinit: {e}");
+                    std::process::exit(2);
+                });
+                let b = read_prompt_line("Enter it again: ").unwrap_or_else(|e| {
+                    eprintln!("kinit: {e}");
+                    std::process::exit(2);
+                });
+                if a != b {
+                    eprintln!("kinit: passwords do not match");
+                    std::process::exit(1);
+                }
+                new_password = Some(a);
+            }
+            Err(e) => {
+                eprintln!("kinit failed: {e}");
+                std::process::exit(1);
+            }
         }
-        Err(e) => {
-            eprintln!("kinit failed: {e}");
-            std::process::exit(1);
-        }
+    }
+    if let Some(mut n) = new_password {
+        n.zeroize();
     }
 }
 

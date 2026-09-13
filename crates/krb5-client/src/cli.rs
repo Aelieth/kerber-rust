@@ -504,7 +504,16 @@ fn is_local_tgt(cred: &CcacheCred, realm: &[u8]) -> bool {
 ///
 /// Stdin read failure.
 pub fn read_password_line(principal: &str) -> Result<Vec<u8>, String> {
-    eprint!("Password for {principal}: ");
+    read_prompt_line(&format!("Password for {principal}: "))
+}
+
+/// Read one secret line (KEY_EXP new-password prompts).
+///
+/// # Errors
+///
+/// stdin read failure.
+pub fn read_prompt_line(prompt: &str) -> Result<Vec<u8>, String> {
+    eprint!("{prompt}");
     let mut s = String::new();
     std::io::stdin()
         .read_line(&mut s)

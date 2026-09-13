@@ -665,6 +665,44 @@ echo "$RUST_KT_KVNO" | grep -q 'ktuser@KERBER.TEST'
 echo "MIT_kinit_kt_highest_kvno"
 echo "RUST_kinit_kt_highest_kvno"
 
+echo "==== KEY_EXP changepw (gic_pwd.c) ===="
+docker exec "$NAME" sh -c 'python3 -c "import socket;s=socket.create_connection((\"127.0.0.1\",464),0.3)" 2>/dev/null || kadmind'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',464),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    die "MIT kadmind 464 did not listen"
+fi
+docker exec "$NAME" kadmin.local -q 'modprinc +password_changing_service kadmin/changepw' >/dev/null
+docker exec "$NAME" kadmin.local -q 'addprinc -pw exp-old mitexpuser' >/dev/null
+docker exec "$NAME" kadmin.local -q 'modprinc +needchange mitexpuser' >/dev/null
+docker exec "$NAME" kadmin.local -q 'addprinc -pw exp-old rustexpuser' >/dev/null
+docker exec "$NAME" kadmin.local -q 'modprinc +needchange rustexpuser' >/dev/null
+MIT_CHPW="$(docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf "$NAME" \
+    sh -c 'printf "exp-old\nexp-new\nexp-new\n" | kinit -c /tmp/cc_mit_chpw mitexpuser@KERBER.TEST' 2>&1)" \
+    || die "MIT kinit KEY_EXP changepw failed"
+echo "$MIT_CHPW"
+echo "$MIT_CHPW" | grep -q 'Password expired'
+RUST_CHPW="$(docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf \
+    -e KRB5_PASSWORD=exp-old -e KRB5_NEW_PASSWORD=exp-new "$NAME" \
+    /tmp/krb5-kinit -c /tmp/cc_rust_chpw rustexpuser@KERBER.TEST 2>&1)" \
+    || die "Rust kinit KEY_EXP changepw failed"
+echo "$RUST_CHPW"
+echo "$RUST_CHPW" | grep -q 'Password expired'
+MIT_CHPW_KL="$(docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf "$NAME" klist -c /tmp/cc_mit_chpw)"
+RUST_CHPW_KL="$(docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf "$NAME" klist -c /tmp/cc_rust_chpw)"
+echo "$MIT_CHPW_KL"
+echo "$RUST_CHPW_KL"
+echo "$MIT_CHPW_KL" | grep -q 'mitexpuser@KERBER.TEST'
+echo "$RUST_CHPW_KL" | grep -q 'rustexpuser@KERBER.TEST'
+echo "MIT_kinit_keyexp_changepw"
+echo "RUST_kinit_keyexp_changepw"
+
 mkdir -p "$SCRATCH/cdiff"
 docker cp "$NAME:/tmp/cdiff/." "$SCRATCH/cdiff/"
 log "client.diff.gate" "ok" ",\"flows\":$EXPECTED_FLOWS,\"cli_errors\":8"
