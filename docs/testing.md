@@ -485,7 +485,10 @@ when that oracle is absent.
   (`change-password` privilege), not AUTH_GET. In CI.
 - `scripts/prop-acl-gate.sh` — MIT `kprop` vs unset or empty
   `KRB5_KPROP_ACL` is refused (no replica dump); host allowlist still
-  loads. In CI.
+  loads. C2 `acl-*` cells run 17 `kpropd.acl` variants against MIT
+  `kpropd -a` and the Rust kpropd (same file, re-read per connection)
+  and die unless kprop's verdict and the `Rejected connection from
+  unauthorized principal` count agree (`kpropd.c:1298-1348`). In CI.
 - `scripts/kadmin-gate.sh` — MIT `kadmin` against `krb5-kadmind` on 749
   (AUTH_GSSAPI 300001): `addprinc`, `cpw`, `getprinc` (`Principal:
   extra@KERBER.TEST`; last password change is not `[never]`; last

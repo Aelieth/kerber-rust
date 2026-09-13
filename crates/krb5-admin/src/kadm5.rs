@@ -2868,7 +2868,7 @@ fn dispatch_kadm5_ticket(
 
 fn kadm5_code(e: &Error) -> u32 {
     let s = match e {
-        Error::AclDenied => return KADM5_AUTH_GET,
+        Error::AclDenied | Error::KpropUnauthorized(_) => return KADM5_AUTH_GET,
         Error::NotFound => return KADM5_UNK_PRINC,
         Error::PassTooSoon { .. } => return KADM5_PASS_TOOSOON,
         Error::GarbageArgs | Error::ProcUnavail => return KADM5_FAILURE,

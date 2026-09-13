@@ -194,6 +194,10 @@ pub struct ApVerifyOk {
     pub authenticator: Authenticator,
     /// Whether the initiator requested mutual authentication.
     pub mutual_required: bool,
+    /// `Ticket.enc-part.etype` — the service key that decrypted the ticket
+    /// (MIT `ticket->enc_part.enctype`, what kpropd's `authorized_principal`
+    /// compares an ACL enctype against).
+    pub ticket_etype: i32,
 }
 
 /// Verify an AP-REQ using a single service key (tests / simple hosts).
@@ -396,6 +400,7 @@ fn verify_inner(
         srealm: ap.ticket.realm.clone(),
         authenticator,
         mutual_required: ap.ap_options.wants_mutual(),
+        ticket_etype: tkt_etype,
     })
 }
 

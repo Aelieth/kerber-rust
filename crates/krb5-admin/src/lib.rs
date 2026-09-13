@@ -306,6 +306,10 @@ pub enum Error {
     /// ACL denied.
     #[error("acl denied")]
     AclDenied,
+    /// kpropd `authorized_principal` refused the authenticated peer
+    /// (`kpropd.c:540-543` syslog text).
+    #[error("Rejected connection from unauthorized principal {0}")]
+    KpropUnauthorized(String),
     /// Principal missing.
     #[error("not found")]
     NotFound,
@@ -2866,7 +2870,11 @@ mod tests {
             &admin,
         );
         let err = join.join().expect("thread");
-        assert_eq!(err, Error::AclDenied);
+        assert_eq!(
+            err,
+            Error::KpropUnauthorized(format!("admin@{TEST_REALM}")),
+            "kpropd.c:540-543 text with the unparsed client"
+        );
     }
 
     #[test]
@@ -2957,7 +2965,11 @@ mod tests {
             &host,
         );
         let err = join.join().expect("thread");
-        assert_eq!(err, Error::AclDenied);
+        assert_eq!(
+            err,
+            Error::KpropUnauthorized(format!("host/testhost.kerber.test@{TEST_REALM}")),
+            "no ACL file: nobody is authorized"
+        );
     }
 
     #[test]

@@ -12,7 +12,7 @@ use std::path::Path;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{CipherState, EncryptionType, KeyUsage, ProtocolKey, encrypt};
-use krb5_kdc::{Acl, PrincipalStore, dump_store, dump_store_iprop, load_dump, save_store};
+use krb5_kdc::{PrincipalStore, dump_store, dump_store_iprop, load_dump, save_store};
 use krb5_protocol::{
     ApVerifyParams, ReplayCache, build_ap_rep, build_ap_req_mutual_seq, build_krb_priv_chained,
     build_krb_safe_ex, unwrap_krb_priv_chained, verify_ap_rep, verify_ap_req_ex,
@@ -212,15 +212,21 @@ impl KpropAuth {
 
 /// Replica: `recvauth` then dump bytes (caller loads).
 ///
+/// `acl_lines` are the raw `kpropd.acl` lines (`None` = no readable file);
+/// after `recvauth` completes they are checked with
+/// [`kpropd_authorized_principal`] exactly as MIT `kpropd.c:528-546` does
+/// (the AP-REP has already been sent; a rejected peer sees the connection
+/// close).
+///
 /// # Errors
 ///
-/// I/O, sendauth, or dump framing.
+/// I/O, sendauth, dump framing, or [`Error::KpropUnauthorized`].
 pub fn kpropd_recvauth(
     stream: &mut TcpStream,
     host_keys: &[ProtocolKey],
     expected_server: Option<&PrincipalName>,
     expected_realm: Option<&str>,
-    allowed_clients: Option<&[String]>,
+    acl_lines: Option<&[String]>,
     replay: ReplayCache,
 ) -> Result<KpropAuth, Error> {
     let ver = read_message(stream).map_err(|e| Error::Inner(e.to_string()))?;
@@ -255,12 +261,6 @@ pub fn kpropd_recvauth(
             return Err(Error::Inner(e.to_string()));
         }
     };
-    let crealm = String::from_utf8_lossy(ok.authenticator.crealm.as_bytes());
-    let client = ok.authenticator.cname.unparse_with_realm(&crealm);
-    if !kpropd_client_allowed(&client, allowed_clients) {
-        let _ = write_message(stream, &[]);
-        return Err(Error::AclDenied);
-    }
     write_message(stream, &[]).map_err(|e| Error::Inner(e.to_string()))?;
     let session = session_from_ticket(&ok)?;
     let mut local_seq = 1u32;
@@ -278,6 +278,15 @@ pub fn kpropd_recvauth(
         // MIT `rd_rep` stores this seq as remote_seq; the size-ack SAFE
         // must use the same value (then increment).
     }
+    // MIT kpropd.c:526-546: `authorized_principal` runs after
+    // `kerberos_authenticate` (recvauth complete, AP-REP sent) and a rejected
+    // peer gets `exit(1)` — no KRB-ERROR, the socket just closes, so MIT
+    // kprop reports `Broken pipe while sending database block starting at 0`.
+    let crealm = String::from_utf8_lossy(ok.authenticator.crealm.as_bytes());
+    let client = ok.authenticator.cname.unparse_with_realm(&crealm);
+    if !kpropd_authorized_principal(acl_lines, &client, ok.ticket_etype) {
+        return Err(Error::KpropUnauthorized(client));
+    }
     Ok(KpropAuth {
         session,
         local_seq,
@@ -286,8 +295,58 @@ pub fn kpropd_recvauth(
     })
 }
 
-fn kpropd_client_allowed(client: &str, allowed: Option<&[String]>) -> bool {
-    allowed.is_some_and(|patterns| patterns.iter().any(|p| Acl::name_matches(p, client)))
+/// MIT `kpropd.c:1298-1348` `authorized_principal`.
+///
+/// `acl_lines` are the file's lines with only the trailing `\n` removed
+/// (`fgets` + `buf[end] = '\0'`); `None` is an unopenable file. `name` is
+/// the unparsed client (`krb5_unparse_name`); `auth_etype` is the ticket's
+/// `enc_part.enctype`. A line matches when it starts with `name`
+/// (`strncmp(name, buf, strlen(name))`) and the next byte is NUL or
+/// `isspace`; after skipping whitespace an empty remainder authorizes, and a
+/// non-empty remainder authorizes only if `krb5_string_to_enctype` accepts
+/// it (a name or alias, `strcasecmp`, never a number) and it equals
+/// `auth_etype` — otherwise the line is skipped. No wildcards, no leading
+/// whitespace, no comments: `#` lines simply never match a name.
+#[must_use]
+pub fn kpropd_authorized_principal(
+    acl_lines: Option<&[String]>,
+    name: &str,
+    auth_etype: i32,
+) -> bool {
+    // C-locale `isspace`: `' '`, `\t`, `\n`, `\v`, `\f`, `\r`.
+    let c_isspace = |c: char| matches!(c, ' ' | '\t' | '\n' | '\x0b' | '\x0c' | '\r');
+    let Some(lines) = acl_lines else {
+        return false;
+    };
+    for line in lines {
+        let Some(rest) = line.strip_prefix(name) else {
+            continue;
+        };
+        if rest.chars().next().is_some_and(|c| !c_isspace(c)) {
+            continue;
+        }
+        let etype_str = rest.trim_start_matches(c_isspace);
+        if !etype_str.is_empty() && kpropd_acl_string_to_enctype(etype_str) != Some(auth_etype) {
+            continue;
+        }
+        return true;
+    }
+    false
+}
+
+/// `krb5_string_to_enctype` (`enctype_util.c:89-114`) as used by the kpropd
+/// ACL: the whole remainder must be an enctype name or alias, compared with
+/// `strcasecmp`; a number, trailing whitespace or `\r` is `EINVAL`.
+fn kpropd_acl_string_to_enctype(s: &str) -> Option<i32> {
+    if s.is_empty()
+        || s.chars().all(|c| c.is_ascii_digit())
+        || s.contains(|c: char| c.is_whitespace())
+    {
+        return None;
+    }
+    EncryptionType::from_mit_name(s)
+        .ok()
+        .map(EncryptionType::to_iana)
 }
 
 /// MIT `krb5int_is_app_tag(dat, 14)` (`k5-int.h:1334-1336`).

@@ -59,7 +59,6 @@ fn main() {
     println!("listening {bind}");
     let stop = Arc::new(AtomicBool::new(false));
     let realm = kpropd_realm();
-    let allowed = kpropd_acl();
     let replay = ReplayCache::new();
     loop {
         if stop.load(Ordering::Relaxed) {
@@ -73,7 +72,7 @@ fn main() {
                 let master = master.clone();
                 let db = db.clone();
                 let stash = stash.clone();
-                let allowed = allowed.clone();
+                let allowed = kpropd_acl();
                 let replay = replay.clone();
                 thread::spawn(move || {
                     match kpropd_handle_conn(
@@ -109,16 +108,16 @@ fn kpropd_realm() -> String {
         .unwrap_or_else(|_| krb5_kdc::TEST_REALM.to_owned())
 }
 
+/// Raw `kpropd.acl` lines for `kpropd_authorized_principal`, read per
+/// connection like MIT `authorized_principal` (`fopen` on every peer, so
+/// edits apply without a restart). Unset `KRB5_KPROP_ACL` or an unopenable
+/// file is `None`: every peer is refused. Only the trailing `\n` is
+/// stripped (`fgets`, `buf[end] == '\n'`); a `\r`, leading whitespace or a
+/// `#` stay in the line and simply never match a principal.
 fn kpropd_acl() -> Option<Vec<String>> {
     let path = std::env::var("KRB5_KPROP_ACL").ok()?;
-    let text = std::fs::read_to_string(&path).unwrap_or_default();
-    Some(
-        text.lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            .filter_map(|l| l.split_whitespace().next().map(str::to_owned))
-            .collect(),
-    )
+    let text = String::from_utf8_lossy(&std::fs::read(&path).ok()?).into_owned();
+    Some(text.split('\n').map(str::to_owned).collect())
 }
 
 fn load_host_keys() -> Vec<ProtocolKey> {

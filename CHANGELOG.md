@@ -8,6 +8,22 @@ this project uses semantic versioning once a crate is published.
 
 ### W1-C
 
+- **kpropd.** `kpropd.acl` now has MIT `authorized_principal` semantics
+  (`kpropd.c:1298-1348`): a line authorizes when it starts with the
+  unparsed client principal and ends there or at whitespace; an optional
+  remainder must be an enctype name or alias (`krb5_string_to_enctype`,
+  case-insensitive, never a number) equal to the ticket's enctype, an
+  unknown token skips the line; no wildcards, no leading whitespace, `#`
+  is not a comment; the file is re-read per connection and an unopenable
+  or unset `KRB5_KPROP_ACL` authorizes nobody. Previously the lines went
+  through the kadm5 glob matcher with the enctype token ignored, so
+  `*@REALM` authorized every peer and an enctype restriction was not
+  enforced. The check now runs after the AP-REP like `kpropd.c:528`; a
+  refused peer sees the socket close and MIT kprop reports `Broken pipe
+  while sending database block starting at 0` on both kpropds; the Rust
+  kpropd logs `Rejected connection from unauthorized principal NAME`.
+  Live: `prop-acl-gate.sh` `acl-*` cells, 17 ACL variants identical on
+  MIT kpropd and Rust kpropd.
 - **kadmin.** MIT `passwd_check` built-in modules on kadm5 create and
   chpass, `kadmin.local addprinc`/`cpw` and kpasswd
   (`server_misc.c:110-135`): `empty` refuses `""` even without a policy
