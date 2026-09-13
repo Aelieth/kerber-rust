@@ -56,6 +56,10 @@ this project uses semantic versioning once a crate is published.
   `KDC_OPT_CANONICALIZE` (`gic_opt.c:76-83`, `get_in_tkt.c:921-930`).
   `kinit -s` sets `from` plus `ALLOW_POSTDATE`/`POSTDATED`
   (`get_in_tkt.c:711-714,932-934`).
+- **client.** Default AS/TGS etype list is AES 18/17/20/19
+  (`preferred()`). MIT `init_ctx.c:59-66` also offers 16/23/25/26;
+  those stay behind `is_weak` unless named in the profile
+  (stricter-documented).
 - **test.** `scripts/client-differential-gate.sh` drives MIT and Rust
   `kinit`/`kvno` against the live MIT 1.22.2 KDC through
   `scripts/lib/kdc-req-proxy.py` (request-shape JSONL: padata,
@@ -67,7 +71,8 @@ this project uses semantic versioning once a crate is published.
   records default `kdc_timesync` recovery on both CLIs and Clock skew
   when `kdc_timesync = 0`; `gss-mit-client` → Rust acceptor majors;
   `t_vfy_increds` vs `krb5-vfy-increds`; kpasswd result texts and
-  setpw; `kinit -C` / `-s` / `[libdefaults] canonicalize`. Fail-red
+  setpw; `kinit -C` / `-s` / `[libdefaults] canonicalize`; default
+  etype list (MIT 18/17/20/19/16/23/25/26, Rust AES-only). Fail-red
   on `mit-extra`.
 
 ### W1-A′-4

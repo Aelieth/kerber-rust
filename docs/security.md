@@ -43,7 +43,7 @@ the UTF-8 transited row below is mixed on absurd inputs.
 
 | Deviation | MIT | Rust | Why |
 | --- | --- | --- | --- |
-| Master-key type default | `DEFAULT_KDC_ENCTYPE` = aes256-cts-hmac-sha1-96 (`osconf.hin:90`) when `master_key_type` is unset | Honours `master_key_type` when set; defaults to the stronger aes256-cts-hmac-sha384-192 when unset (`persist.rs persist_master_etype`, `krb5-kdb.rs master_etype`) | **STRICTER** than MIT |
+| Default AS/TGS etype list | `init_ctx.c:59-66` `default_enctype_list` = 18, 17, 20, 19, 16, 23, 25, 26 (AES + DES3 + RC4 + Camellia) | `EncryptionType::preferred()` = 18, 17, 20, 19; DES3/RC4/Camellia are `is_weak` and only advertised when named in `default_tkt_enctypes` / `permitted_enctypes` | **STRICTER** than MIT (does not offer deprecated/weak etypes unless the profile asks) |
 | Transited field-count cap | Checker has no comma cap; add path clamps rebuilt encoding at 499 bytes so a 300-hop path cannot be *built* | More than 256 commas (raw comma bytes, including escaped `\,`) is `TooManyFields` (POLICY on the non-add path) | **STRICTER** than MIT |
 | Transited hop-emission cap | No hop cap; `process_intermediates` streams callbacks at O(1) memory | More than 4096 emitted hops is `TooManyFields` (`MAX_TRANSIT_HOPS`) | **STRICTER** than MIT |
 | Transited component bounds | Raw field ≤ 511 unescaped bytes; joined ≤ 512 (`chk_trans.c` `MAXLEN`) | Same (511 raw / 512 joined); over is `FieldTooLong` out of band | MIT-exact |
@@ -257,6 +257,10 @@ not 1 / `0xff80`, is `MODIFIED` / `BAD_PVNO` (`chpw.c:129-143`).
 `kinit -C` and `[libdefaults] canonicalize` set `KDC_OPT_CANONICALIZE`
 (`gic_opt.c:76-83`, `get_in_tkt.c:921-930`). `kinit -s` puts `from` on
 the AS-REQ and sets `ALLOW_POSTDATE`/`POSTDATED` (`get_in_tkt.c:711-714,932-934`).
+The default AS/TGS etype list is the AES quartet 18/17/20/19
+(`preferred()`). MIT `init_ctx.c:59-66` also offers DES3 (16), RC4 (23),
+and Camellia (25, 26); those stay behind `is_weak` unless named in
+`default_tkt_enctypes` / `permitted_enctypes`.
 
 FAST `req_checksum` is verified over the wire KDC-REQ-BODY (field 4)
 when a raw packet is present (`do_as_req.c:526-531`); socketless tests

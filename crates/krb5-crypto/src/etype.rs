@@ -197,7 +197,10 @@ impl EncryptionType {
         }
     }
 
-    /// Preference order for AS/TGS etype lists (strongest first).
+    /// AES-only AS/TGS etype list. MIT `init_ctx.c:59-66`
+    /// `default_enctype_list` also offers DES3 (16), RC4 (23), and
+    /// Camellia (25, 26); those stay behind `is_weak` / an explicit
+    /// `default_tkt_enctypes` / `permitted_enctypes` list.
     #[must_use]
     pub const fn preferred() -> [Self; 4] {
         [
@@ -427,6 +430,28 @@ pub fn parse_keysalt_list(s: &str) -> Vec<EncryptionType> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn b1_etype_preferred_omits_weak() {
+        let p: Vec<i32> = EncryptionType::preferred()
+            .iter()
+            .map(|e| e.to_iana())
+            .collect();
+        assert_eq!(
+            p,
+            vec![18, 17, 20, 19],
+            "AES-only subset of init_ctx.c:59-66"
+        );
+        let mit: Vec<i32> = default_enctype_list().iter().map(|e| e.to_iana()).collect();
+        assert_eq!(
+            mit,
+            vec![18, 17, 20, 19, 16, 23, 25, 26],
+            "MIT default_enctype_list"
+        );
+        for e in EncryptionType::preferred() {
+            assert!(!e.is_weak(), "{e:?} is advertised");
+        }
+    }
+
     #[test]
     fn deprecated_set_matches_mit() {
         assert!(EncryptionType::Des3CbcSha1.is_deprecated());

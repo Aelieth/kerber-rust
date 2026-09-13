@@ -892,6 +892,44 @@ docker exec "$NAME" grep -q canonicalize /tmp/cdiff/rust-canonconf.jsonl \
 echo "MIT_kinit_canonicalize_conf"
 echo "RUST_kinit_canonicalize_conf"
 
+echo "==== default AS etype list (init_ctx.c) ===="
+reset_cap
+mit_kinit /tmp/cc_mit_etype || die "MIT kinit etype failed"
+save_cap mit-etype
+reset_cap
+rust_kinit /tmp/cc_rust_etype || die "Rust kinit etype failed"
+save_cap rust-etype
+MIT_ETYPES="$(docker exec "$NAME" python3 -c '
+import json
+for line in open("/tmp/cdiff/mit-etype.jsonl"):
+    o = json.loads(line)
+    if o.get("kind") == "req" and o.get("msg_type") == 10:
+        print(o["etypes"])
+        break
+else:
+    raise SystemExit("no MIT AS-REQ")
+')"
+RUST_ETYPES="$(docker exec "$NAME" python3 -c '
+import json
+for line in open("/tmp/cdiff/rust-etype.jsonl"):
+    o = json.loads(line)
+    if o.get("kind") == "req" and o.get("msg_type") == 10:
+        print(o["etypes"])
+        break
+else:
+    raise SystemExit("no Rust AS-REQ")
+')"
+echo "MIT_ETYPES=$MIT_ETYPES"
+echo "RUST_ETYPES=$RUST_ETYPES"
+if [ "$MIT_ETYPES" != "[18, 17, 20, 19, 16, 23, 25, 26]" ]; then
+    die "MIT default etypes want [18, 17, 20, 19, 16, 23, 25, 26] got $MIT_ETYPES"
+fi
+if [ "$RUST_ETYPES" != "[18, 17, 20, 19]" ]; then
+    die "Rust preferred etypes want [18, 17, 20, 19] got $RUST_ETYPES"
+fi
+echo "MIT_etype_default_list"
+echo "RUST_etype_aes_only"
+
 mkdir -p "$SCRATCH/cdiff"
 docker cp "$NAME:/tmp/cdiff/." "$SCRATCH/cdiff/"
 log "client.diff.gate" "ok" ",\"flows\":$EXPECTED_FLOWS,\"cli_errors\":8"
