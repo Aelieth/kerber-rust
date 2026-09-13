@@ -267,6 +267,9 @@ FAST AS outer `till` is the epoch (`19700101`) because
 Optional outer `from`/`rtime` stay omitted. The inner FAST-REQ body
 keeps the live times; `req_checksum` is over the snapshotted outer
 body (`fast.c:310-313`).
+PKINIT and anonymous `kinit -n` second-AS padata is cookie then
+PA-PK-AS-REQ then empty 150/149 (`preauth2.c:992-1019`,
+`get_in_tkt.c:1365-1372`): `[133, 16, 150, 149]`.
 
 FAST `req_checksum` is verified over the wire KDC-REQ-BODY (field 4)
 when a raw packet is present (`do_as_req.c:526-531`); socketless tests

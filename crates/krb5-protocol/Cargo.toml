@@ -86,6 +86,10 @@ path = "tests/b1_gic_opt.rs"
 name = "b1_fast_outer_till"
 path = "tests/b1_fast_outer_till.rs"
 
+[[test]]
+name = "b1_pkinit_padata"
+path = "tests/b1_pkinit_padata.rs"
+
 [dependencies]
 chrono.workspace = true
 getrandom.workspace = true

@@ -982,6 +982,66 @@ echo "$FAST_TILL_CMP" | grep -q "SHAPE_MATCH till="
 echo "MIT_fast_outer_till_zero"
 echo "RUST_fast_outer_till_zero"
 
+echo "==== PKINIT / anon second-AS padata (preauth2.c) ===="
+reset_cap
+docker exec -e KRB5_CONFIG=/tmp/pkinit-krb5.conf "$NAME" \
+    kinit -c /tmp/cc_mit_pkinit_pa -X X509_user_identity=FILE:/tmp/pkinit/user.pem \
+    user@KERBER.TEST || die "MIT kinit PKINIT padata failed"
+save_cap mit-pkinit-pa
+reset_cap
+docker exec -e KRB5_CONFIG=/tmp/pkinit-krb5.conf "$NAME" \
+    /tmp/krb5-kinit --pkinit FILE:/tmp/pkinit/user.pem --pkinit-anchors FILE:/tmp/pkinit/ca.pem \
+    -c /tmp/cc_rust_pkinit_pa user@KERBER.TEST \
+    || die "Rust kinit --pkinit padata failed"
+save_cap rust-pkinit-pa
+reset_cap
+docker exec -e KRB5_CONFIG=/tmp/pkinit-krb5.conf "$NAME" \
+    kinit -n -c /tmp/cc_mit_anon_pa || die "MIT kinit -n padata failed"
+save_cap mit-anon-pa
+reset_cap
+docker exec -e KRB5_CONFIG=/tmp/pkinit-krb5.conf "$NAME" \
+    /tmp/krb5-kinit -n --pkinit-anchors FILE:/tmp/pkinit/ca.pem \
+    -c /tmp/cc_rust_anon_pa || die "Rust kinit -n padata failed"
+save_cap rust-anon-pa
+second_as_padata() {
+    docker exec "$NAME" python3 -c "
+import json, sys
+path = sys.argv[1]
+for line in open(path):
+    o = json.loads(line)
+    if o.get('kind') == 'req' and o.get('msg_type') == 10 and 16 in (o.get('padata') or []):
+        print(o['padata'])
+        break
+else:
+    raise SystemExit('no second AS-REQ with PA-16 in ' + path)
+" "$1"
+}
+MIT_PKINIT_PADATA="$(second_as_padata /tmp/cdiff/mit-pkinit-pa.jsonl)"
+RUST_PKINIT_PADATA="$(second_as_padata /tmp/cdiff/rust-pkinit-pa.jsonl)"
+MIT_ANON_PADATA="$(second_as_padata /tmp/cdiff/mit-anon-pa.jsonl)"
+RUST_ANON_PADATA="$(second_as_padata /tmp/cdiff/rust-anon-pa.jsonl)"
+echo "MIT_PKINIT_PADATA=$MIT_PKINIT_PADATA"
+echo "RUST_PKINIT_PADATA=$RUST_PKINIT_PADATA"
+echo "MIT_ANON_PADATA=$MIT_ANON_PADATA"
+echo "RUST_ANON_PADATA=$RUST_ANON_PADATA"
+WANT_PADATA='[133, 16, 150, 149]'
+if [ "$MIT_PKINIT_PADATA" != "$WANT_PADATA" ]; then
+    die "MIT PKINIT second AS padata want $WANT_PADATA got $MIT_PKINIT_PADATA"
+fi
+if [ "$RUST_PKINIT_PADATA" != "$WANT_PADATA" ]; then
+    die "Rust PKINIT second AS padata want $WANT_PADATA got $RUST_PKINIT_PADATA"
+fi
+if [ "$MIT_ANON_PADATA" != "$WANT_PADATA" ]; then
+    die "MIT anon second AS padata want $WANT_PADATA got $MIT_ANON_PADATA"
+fi
+if [ "$RUST_ANON_PADATA" != "$WANT_PADATA" ]; then
+    die "Rust anon second AS padata want $WANT_PADATA got $RUST_ANON_PADATA"
+fi
+echo "MIT_pkinit_second_as_padata"
+echo "RUST_pkinit_second_as_padata"
+echo "MIT_anon_second_as_padata"
+echo "RUST_anon_second_as_padata"
+
 mkdir -p "$SCRATCH/cdiff"
 docker cp "$NAME:/tmp/cdiff/." "$SCRATCH/cdiff/"
 log "client.diff.gate" "ok" ",\"flows\":$EXPECTED_FLOWS,\"cli_errors\":8"

@@ -794,6 +794,20 @@ fn send_spake_response(
     }
 }
 
+/// Place a selected preauth module's PA-DATA after any FX-COOKIE and
+/// before the `info_pa_permitted` pair (150/149).
+///
+/// MIT `k5_preauth` (`preauth2.c:992-1019`) copies the cookie first,
+/// then the module output; `get_in_tkt.c:1365-1372` appends empty
+/// PA-AS-FRESHNESS and PA-REQ-ENC-PA-REP after that.
+pub fn insert_module_padata_before_info_pa(list: &mut Vec<PaData>, module_pa: PaData) {
+    let at = list
+        .iter()
+        .position(|p| p.padata_type == pa::AS_FRESHNESS || p.padata_type == pa::REQ_ENC_PA_REP)
+        .unwrap_or(list.len());
+    list.insert(at, module_pa);
+}
+
 fn continue_pkinit(
     req: &AsRequest<'_>,
     nonce: u32,
@@ -846,7 +860,7 @@ fn continue_pkinit(
             token.as_deref(),
         )?
     };
-    req2.0.padata.get_or_insert_with(Vec::new).insert(0, pa);
+    insert_module_padata_before_info_pa(req2.0.padata.get_or_insert_with(Vec::new), pa);
     let wire = encode(&req2)?;
     tracing::info!(
         event = "client.pkinit",
