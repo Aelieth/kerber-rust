@@ -1281,12 +1281,17 @@ fn ticket_body(
     if req.ticket.proxiable {
         opts = opts.with_bit(flag_bit::PROXIABLE, true);
     }
+    // MIT `init_ctx.c:265-267` `kdc_default_options` = `KDC_OPT_RENEWABLE_OK`.
+    // `get_in_tkt.c:723` clears it when `renew_life > 0` (RENEWABLE is set).
     let rtime = match req.ticket.rlife {
         Some(r) if r > 0 => {
             opts = opts.with_bit(flag_bit::RENEWABLE, true);
             now.add_seconds(i64::try_from(r).unwrap_or(i64::MAX)).ok()
         }
-        _ => None,
+        _ => {
+            opts = opts.with_bit(flag_bit::RENEWABLE_OK, true);
+            None
+        }
     };
     if req.canonicalize {
         opts = opts.with_bit(flag_bit::CANONICALIZE, true);
@@ -1570,5 +1575,49 @@ mod spake_factor_tests {
         // list without SF-NONE (or an empty one) offers nothing we can answer.
         assert!(!spake_contains_sf_none(&challenge(&[])));
         assert!(!spake_contains_sf_none(&challenge(&[2, 7])));
+    }
+}
+
+#[cfg(test)]
+mod as_kdc_options_tests {
+    use super::*;
+
+    fn options_of(ticket: AsTicketOpts) -> KdcOptions {
+        let kdc = KdcAddr::new("127.0.0.1");
+        let req = AsRequest {
+            cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+            realm: "KERBER.TEST",
+            password: b"x",
+            kdc: &kdc,
+            want_spake: false,
+            fast_armor: None,
+            pkinit: None,
+            canonicalize: false,
+            sname: None,
+            etypes: None,
+            ticket,
+        };
+        ticket_body(&req).2
+    }
+
+    #[test]
+    fn default_as_options_include_renewable_ok() {
+        let opts = options_of(AsTicketOpts::default());
+        assert!(opts.bit(flag_bit::FORWARDABLE));
+        assert!(opts.bit(flag_bit::RENEWABLE_OK), "MIT init_ctx.c:265-267");
+        assert!(!opts.bit(flag_bit::RENEWABLE));
+    }
+
+    #[test]
+    fn renew_life_clears_renewable_ok() {
+        let opts = options_of(AsTicketOpts {
+            rlife: Some(7 * 24 * 3600),
+            ..AsTicketOpts::default()
+        });
+        assert!(opts.bit(flag_bit::RENEWABLE), "get_in_tkt.c:718-723");
+        assert!(
+            !opts.bit(flag_bit::RENEWABLE_OK),
+            "get_in_tkt.c:723 clears RENEWABLE_OK when renew_life > 0"
+        );
     }
 }

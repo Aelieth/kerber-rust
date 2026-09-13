@@ -17,6 +17,9 @@ this project uses semantic versioning once a crate is published.
   local clock (`get_in_tkt.c:260-270`). `kdc_timesync = 0` is
   `KRB5_KDCREP_SKEW`. The +3d `client-differential-gate.sh` cell
   recovers on both CLIs; `kdc_timesync = 0` is Clock skew on both.
+- **client.** Default AS `kdc_options` include `RENEWABLE_OK`
+  (`init_ctx.c:265-267`); `kinit -r` clears it when `RENEWABLE` is set
+  (`get_in_tkt.c:723`).
 - **test.** `scripts/client-differential-gate.sh` drives MIT and Rust
   `kinit`/`kvno` against the live MIT 1.22.2 KDC through
   `scripts/lib/kdc-req-proxy.py` (request-shape JSONL: padata,

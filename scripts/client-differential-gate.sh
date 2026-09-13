@@ -220,6 +220,11 @@ compare_flow() {
     fi
     echo "$CMP" | grep -q "FLOW_${flow} mit_reqs="
     echo "$CMP" | grep -q "CORE_MATCH"
+    # AS + kvno TGS already match MIT KDCOptions. `kinit -R` still adds
+    # canonicalize (B1 `val_renew.c`).
+    if [ "$flow" != renew ]; then
+        echo "$CMP" | grep -q "SHAPE_MATCH kdc_options="
+    fi
     FLOW_N=$((FLOW_N + 1))
 }
 
