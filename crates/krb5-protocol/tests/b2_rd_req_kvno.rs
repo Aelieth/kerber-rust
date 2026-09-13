@@ -10,7 +10,7 @@ use krb5_kdc::{
     documented_admin_id, documented_host, pa_enc_timestamp, tgs_req,
 };
 use krb5_protocol::{ApVerifyParams, DEFAULT_SKEW, ReplayCache, build_ap_req, verify_ap_req_ex};
-use krb5_types::{ApReq, PrincipalName, err};
+use krb5_types::{ApReq, KerberosTime, PrincipalName, err};
 
 fn client_key() -> ProtocolKey {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -152,4 +152,26 @@ fn b2_rd_req_matching_kvno_verifies() {
         now: None,
     };
     verify_ap_req_ex(&raw, &params, &ReplayCache::new(), None).expect("matching kvno");
+}
+
+#[test]
+fn b2_rd_req_authenticator_skew_is_37() {
+    let (raw, key, _) = host_ap_req();
+    let now = KerberosTime::now();
+    let far = KerberosTime::from_unix_seconds(now.unix_seconds().saturating_add(10_000));
+    let keys = [key];
+    let params = ApVerifyParams {
+        keys: &keys,
+        key_kvnos: None,
+        kvno: None,
+        expected_server: None,
+        expected_realm: None,
+        skew: DEFAULT_SKEW,
+        addresses: None,
+        now: Some(far),
+    };
+    match verify_ap_req_ex(&raw, &params, &ReplayCache::new(), None) {
+        Err(krb5_protocol::Error::KrbError { code, .. }) => assert_eq!(code, err::SKEW),
+        other => panic!("expected SKEW, got {other:?}"),
+    }
 }

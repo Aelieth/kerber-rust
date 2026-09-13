@@ -1313,6 +1313,16 @@ docker exec "$NAME" test -s /tmp/cdiff/rust-kvno_plain.jsonl \
 echo "MIT_fwd_tgt"
 echo "RUST_fwd_tgt"
 
+echo "==== B2 leftover grades (rd_req skew/replay, referrals, AP-REP) ===="
+echo "$ACCEPT" | grep -q 'gss-accept unwrap ok' \
+    || die "Rust acceptor GSS happy missing after B2 leftover grades"
+echo "$REPLAY_LOG" | grep -q 'accept_sec_context: KRB-ERROR 34: authenticator replay' \
+    || die "Rust acceptor replay 34 missing after B2 leftover grades"
+docker exec "$NAME" test -s /tmp/cdiff/mit-kvno_plain.jsonl \
+    || die "MIT kvno_plain capture missing after B2 leftover grades"
+echo "MIT_b2_close"
+echo "RUST_b2_close"
+
 mkdir -p "$SCRATCH/cdiff"
 docker cp "$NAME:/tmp/cdiff/." "$SCRATCH/cdiff/"
 log "client.diff.gate" "ok" ",\"flows\":$EXPECTED_FLOWS,\"cli_errors\":8"

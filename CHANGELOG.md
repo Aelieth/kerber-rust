@@ -130,6 +130,11 @@ this project uses semantic versioning once a crate is published.
   (`fwd_tgt.c:147-153`). `forwardable == false` clears `FORWARDABLE`.
   Remote `k5_os_hostaddr` when the TGT has addresses stays deferred
   (B3).
+- **client / acceptor.** Remaining B2 files are graded: AP-REQ
+  clockskew and replay, referral hop cap and dest-TGT walk,
+  `krb5_principal_compare`, AP-REQ/AP-REP/KRB-CRED builders. On-disk
+  rcache, ccache retrieve, cross-realm S4U2Proxy walk, and a standalone
+  `krb5_auth_context` stay deferred (B3).
 - **client.** TGS-REP `krb5int_process_tgs_reply` checks the reply
   client against the TGT client (`gc_via_tkt.c:257-270`), refuses a
   self-inconsistent ticket/enc server (`:108-110`), and rejects an
