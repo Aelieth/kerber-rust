@@ -248,6 +248,12 @@ against the keytab: a missing, empty, or non-`host/` keytab succeeds
 unless `ap_req_nofail` / `[libdefaults] verify_ap_req_nofail`; an
 outdated host key fails. No MIT CLI caller; `t_vfy_increds` is the
 oracle.
+kpasswd result codes 0–7 have MIT `krb5_chpw_result_code_string`
+texts (`chpw.c:244-279`). `krb5_chpw_message` decodes the 30-byte
+AD policy blob or a UTF-8 server string (`chpw.c:389-510`).
+`krb5_set_password` sends version `0xff80` with `ChangePasswdData`.
+A framed kpasswd reply whose length disagrees, or whose version is
+not 1 / `0xff80`, is `MODIFIED` / `BAD_PVNO` (`chpw.c:129-143`).
 
 FAST `req_checksum` is verified over the wire KDC-REQ-BODY (field 4)
 when a raw packet is present (`do_as_req.c:526-531`); socketless tests

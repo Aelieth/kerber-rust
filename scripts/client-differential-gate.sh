@@ -773,6 +773,48 @@ set -e
 echo "MIT_vfy_increds_nofail"
 echo "RUST_vfy_increds_nofail"
 
+echo "==== chpw texts + setpw (chpw.c) ===="
+cargo build -p krb5-admin --bin krb5-kpasswd -q
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kpasswd" "$NAME":/tmp/krb5-kpasswd
+docker cp "$ROOT/scripts/kpasswd-tgs-client.c" "$NAME":/tmp/kpasswd-tgs-client.c
+if ! docker exec "$NAME" cc -o /tmp/kpasswd-tgs-client /tmp/kpasswd-tgs-client.c -lkrb5; then
+    die "MIT kpasswd-tgs-client compile failed"
+fi
+docker exec "$NAME" chmod +x /tmp/krb5-kpasswd
+docker exec "$NAME" kadmin.local -q 'addpol -minlength 8 chpwmin' >/dev/null
+docker exec "$NAME" kadmin.local -q 'addprinc -policy chpwmin -pw LongPass1 chpwpol' >/dev/null
+docker exec "$NAME" kadmin.local -q 'addprinc -pw setold chpwset' >/dev/null
+docker exec "$NAME" kadmin.local -q 'addprinc -pw otherpw chpwother' >/dev/null
+MIT_CHPW_POL="$(docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf "$NAME" \
+    sh -c 'printf "LongPass1\nshort\nshort\n" | kpasswd chpwpol@KERBER.TEST' 2>&1)" || true
+echo "$MIT_CHPW_POL"
+echo "$MIT_CHPW_POL" | grep -q 'Password change rejected'
+RUST_CHPW_POL="$(docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf \
+    -e KRB5_PASSWORD=LongPass1 -e KRB5_NEW_PASSWORD=short "$NAME" \
+    /tmp/krb5-kpasswd 127.0.0.1 chpwpol@KERBER.TEST 2>&1)" || true
+echo "$RUST_CHPW_POL"
+echo "$RUST_CHPW_POL" | grep -q 'Password change rejected'
+echo "MIT_kpasswd_soft_rejected"
+echo "RUST_kpasswd_soft_rejected"
+docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf "$NAME" \
+    sh -c 'printf "setold\n" | kinit -c /tmp/cc_chpw_set chpwset@KERBER.TEST' \
+    || die "kinit chpwset for setpw failed"
+MIT_SETPW="$(docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf \
+    -e KRB5CCNAME=/tmp/cc_chpw_set -e KPASSWD_AS_PASSWORD=setold \
+    -e KPASSWD_TARGET=chpwother@KERBER.TEST "$NAME" \
+    /tmp/kpasswd-tgs-client FILE:/tmp/cc_chpw_set KERBER.TEST shouldfail)"
+echo "$MIT_SETPW"
+echo "$MIT_SETPW" | grep -q 'result_code=5'
+echo "$MIT_SETPW" | grep -q 'Access denied'
+RUST_SETPW="$(docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf \
+    -e KRB5_PASSWORD=setold -e KRB5_NEW_PASSWORD=shouldfail \
+    -e KRB5_KPASSWD_TARGET=chpwother@KERBER.TEST "$NAME" \
+    /tmp/krb5-kpasswd 127.0.0.1 chpwset@KERBER.TEST 2>&1)" || true
+echo "$RUST_SETPW"
+echo "$RUST_SETPW" | grep -q 'Access denied'
+echo "MIT_kpasswd_setpw_denied"
+echo "RUST_kpasswd_setpw_denied"
+
 mkdir -p "$SCRATCH/cdiff"
 docker cp "$NAME:/tmp/cdiff/." "$SCRATCH/cdiff/"
 log "client.diff.gate" "ok" ",\"flows\":$EXPECTED_FLOWS,\"cli_errors\":8"

@@ -47,6 +47,11 @@ this project uses semantic versioning once a crate is published.
   `verify_ap_req_nofail`; an outdated host key fails. Live
   `t_vfy_increds` vs `krb5-vfy-increds` in
   `client-differential-gate.sh`.
+- **client.** `chpw.c` result-code texts, AD 30-byte policy messages,
+  and `krb5_set_password` (version `0xff80` + `ChangePasswdData`).
+  A framed reply with a bad length is `MODIFIED`; a bad version is
+  `BAD_PVNO`. Live MIT `kpasswd` `Password change rejected` and
+  `krb5_set_password` `Access denied` vs `krb5-kpasswd`.
 - **test.** `scripts/client-differential-gate.sh` drives MIT and Rust
   `kinit`/`kvno` against the live MIT 1.22.2 KDC through
   `scripts/lib/kdc-req-proxy.py` (request-shape JSONL: padata,
@@ -57,7 +62,8 @@ this project uses semantic versioning once a crate is published.
   seven CLI error paths non-zero on both CLIs; +3d `skew-preload.c`
   records default `kdc_timesync` recovery on both CLIs and Clock skew
   when `kdc_timesync = 0`; `gss-mit-client` → Rust acceptor majors;
-  `t_vfy_increds` vs `krb5-vfy-increds`. Fail-red on `mit-extra`.
+  `t_vfy_increds` vs `krb5-vfy-increds`; kpasswd result texts and
+  setpw. Fail-red on `mit-extra`.
 
 ### W1-A′-4
 

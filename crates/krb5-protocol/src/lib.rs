@@ -56,8 +56,10 @@ pub use ccache_dir::{
 pub use ccache_mem::{memory_destroy, memory_retrieve, memory_store};
 pub use ccmarshal::FCC_TAG_DELTATIME;
 pub use chpw::{
-    KPASSWD_INITIAL_FLAG_NEEDED, KPASSWD_PORT, KPASSWD_SUCCESS, change_password,
-    key_exp_should_changepw, parse_chpw_result,
+    KPASSWD_ACCESSDENIED, KPASSWD_AUTHERROR, KPASSWD_BAD_VERSION, KPASSWD_HARDERROR,
+    KPASSWD_INITIAL_FLAG_NEEDED, KPASSWD_MALFORMED, KPASSWD_PORT, KPASSWD_SETPW_VERSION,
+    KPASSWD_SOFTERROR, KPASSWD_SUCCESS, change_password, chpw_message, chpw_result_code_string,
+    format_chpw_failure, key_exp_should_changepw, parse_chpw_rep, parse_chpw_result, set_password,
 };
 #[cfg(feature = "diff")]
 pub use diff::{
