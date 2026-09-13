@@ -274,16 +274,7 @@ fn tgs_inner(
         if disable_transited_check && cur_tgt.ticket.sname.is_krbtgt_for(realm) {
             opts = opts.with_bit(flag_bit::DISABLE_TRANSITED_CHECK, true);
         }
-        let out = tgs_once(
-            &cur_kdc,
-            &cur_tgt,
-            sname.clone(),
-            &served,
-            opts,
-            &[],
-            None,
-            None,
-        )?;
+        let out = tgs_service_once(&cur_kdc, &cur_tgt, sname, &served, opts, realm, seen.len())?;
         match chase_step(&start, &mut seen, sname, &served, &out)? {
             TgsHop::Done => return Ok((out, path)),
             TgsHop::Referral(foreign) => {
@@ -932,6 +923,90 @@ pub fn tgs_strip_ok_as_delegate(
         flags.with_bit(flag_bit::OK_AS_DELEGATE, false)
     } else {
         flags
+    }
+}
+
+/// After the first referral-style TGS error, MIT `try_fallback`
+/// (`get_creds.c:503-543`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TgsFallback {
+    /// Later referral hop: keep the KDC error (`referral_count > 1`).
+    KeepError,
+    /// Specified server realm: retry without `CANONICALIZE`.
+    NonReferral,
+    /// Referral realm and fewer than two name components.
+    HostRealmUnknown,
+    /// Referral realm + hostname: MIT `krb5_get_fallback_host_realm` (B3).
+    HostRealm,
+}
+
+/// Decide the MIT `try_fallback` arm. Host-realm DNS rewrite is not
+/// applied here (`HostRealm` keeps the original error).
+#[must_use]
+pub fn tgs_try_fallback(
+    referral_count: usize,
+    specified_realm: bool,
+    ncomps: usize,
+) -> TgsFallback {
+    if referral_count > 1 {
+        return TgsFallback::KeepError;
+    }
+    if specified_realm {
+        return TgsFallback::NonReferral;
+    }
+    if ncomps < 2 {
+        return TgsFallback::HostRealmUnknown;
+    }
+    TgsFallback::HostRealm
+}
+
+/// MIT `make_request_for_service(..., FALSE)`: drop `CANONICALIZE`.
+#[must_use]
+pub fn tgs_non_referral_options(opts: KdcOptions) -> KdcOptions {
+    opts.with_bit(flag_bit::CANONICALIZE, false)
+}
+
+/// First referral TGS, then `try_fallback` on a KDC error.
+#[allow(clippy::too_many_arguments)]
+fn tgs_service_once(
+    kdc: &KdcAddr,
+    tgt: &AsOutcome,
+    sname: &PrincipalName,
+    served: &str,
+    opts: KdcOptions,
+    request_realm: &str,
+    referral_count: usize,
+) -> Result<TgsOutcome, Error> {
+    match tgs_once(
+        kdc,
+        tgt,
+        sname.clone(),
+        served,
+        opts.clone(),
+        &[],
+        None,
+        None,
+    ) {
+        Ok(out) => Ok(out),
+        Err(e @ Error::KrbError { .. }) => match tgs_try_fallback(
+            referral_count,
+            !request_realm.is_empty(),
+            sname.name_string.len(),
+        ) {
+            TgsFallback::NonReferral => tgs_once(
+                kdc,
+                tgt,
+                sname.clone(),
+                served,
+                tgs_non_referral_options(opts),
+                &[],
+                None,
+                None,
+            ),
+            TgsFallback::HostRealmUnknown => Err(Error::ReplyMismatch("host realm unknown".into())),
+            TgsFallback::KeepError | TgsFallback::HostRealm => Err(e),
+        },
+        Err(e) => Err(e),
     }
 }
 

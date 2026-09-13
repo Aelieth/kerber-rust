@@ -1291,6 +1291,16 @@ docker exec "$NAME" test -s /tmp/cdiff/mit-kvno_plain.jsonl \
 echo "MIT_sname_match"
 echo "RUST_sname_match"
 
+echo "==== TGS try_fallback after first referral error (get_creds.c) ===="
+# Happy kvno uses CANONICALIZE and succeeds; the no-CANONICALIZE retry
+# is unused. Host-realm DNS rewrite is B3.
+docker exec "$NAME" test -s /tmp/cdiff/mit-kvno_plain.jsonl \
+    || die "MIT kvno_plain capture missing after try_fallback"
+docker exec "$NAME" test -s /tmp/cdiff/rust-kvno_plain.jsonl \
+    || die "Rust kvno_plain capture missing after try_fallback"
+echo "MIT_try_fallback"
+echo "RUST_try_fallback"
+
 mkdir -p "$SCRATCH/cdiff"
 docker cp "$NAME:/tmp/cdiff/." "$SCRATCH/cdiff/"
 log "client.diff.gate" "ok" ",\"flows\":$EXPECTED_FLOWS,\"cli_errors\":8"

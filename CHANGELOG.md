@@ -121,6 +121,10 @@ this project uses semantic versioning once a crate is published.
   `[libdefaults] ignore_acceptor_hostname` skips the host component.
   Other name-types compare name-string + realm. Live GSS / `vfy_increds`
   still pass a concrete host (ignore off).
+- **client.** After the first referral-style TGS error, a specified
+  server realm retries without `CANONICALIZE` (`get_creds.c:503-516`
+  `try_fallback`). A later hop keeps the error. Host-realm DNS rewrite
+  (`:517-542`) stays deferred (B3).
 - **client.** TGS-REP `krb5int_process_tgs_reply` checks the reply
   client against the TGT client (`gc_via_tkt.c:257-270`), refuses a
   self-inconsistent ticket/enc server (`:108-110`), and rejects an
@@ -150,7 +154,8 @@ this project uses semantic versioning once a crate is published.
   `kvno -U` TGS padata `[1, 136, 130, 129]`; `kvno -U -P` S4U2Proxy
   `[1, 136, 167]`; `kinit -v` VALIDATE options
   `forwardable`+`allow_postdate`+`validate`; TGS-REP client vs TGT
-  client (`gc_via_tkt.c`); acceptor `sname_match`; diffsend
+  client (`gc_via_tkt.c`); acceptor `sname_match`; TGS
+  `try_fallback` specified-realm retry; diffsend
   `tgs-alternate-tgs-hierarchical`. Fail-red
   on `mit-extra`.
 
