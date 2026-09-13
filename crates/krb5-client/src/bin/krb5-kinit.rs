@@ -1,7 +1,8 @@
 //! Obtain a TGT from a KDC and write an MIT FILE ccache.
 //!
 //! Usage matches MIT `kinit`: `kinit [-kt keytab] [-c cache] [-r life] [-l life]
-//! [-R] [-f|-F] [-p|-P] [-a|-A] [-S service] [-E] [-n] [-X attr=val] [principal]`
+//! [-s start] [-R] [-f|-F] [-p|-P] [-a|-A] [-S service] [-C] [-E] [-n]
+//! [-X attr=val] [principal]`
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -101,6 +102,12 @@ fn main() {
             .unwrap_or_else(|| conf.as_ref().is_none_or(|c| c.proxiable)),
         addresses: None,
         anonymous: args.anonymous,
+        starttime: args.starttime.as_deref().map(|s| {
+            parse_deltat(s).unwrap_or_else(|| {
+                eprintln!("kinit: Bad start time value {s}");
+                std::process::exit(2);
+            })
+        }),
     };
     if args.addresses == Some(true) {
         ticket.addresses = local_host_addresses();
@@ -144,6 +151,9 @@ fn main() {
             ticket: ticket.clone(),
             renew: args.renew,
             anonymous: args.anonymous,
+            canonicalize: args.canonicalize
+                || args.enterprise
+                || conf.as_ref().is_some_and(|c| c.canonicalize),
             new_password: new_password.as_deref(),
         };
         match kinit_with(&addr, &principal, &mut password, &spec, params) {

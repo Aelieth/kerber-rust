@@ -815,6 +815,83 @@ echo "$RUST_SETPW" | grep -q 'Access denied'
 echo "MIT_kpasswd_setpw_denied"
 echo "RUST_kpasswd_setpw_denied"
 
+echo "==== kinit -C / -s (gic_opt.c) ===="
+docker exec "$NAME" kadmin.local -q 'modprinc +allow_postdate user' >/dev/null
+reset_cap
+mit_kinit /tmp/cc_mit_canon -C || die "MIT kinit -C failed"
+save_cap mit-canon
+reset_cap
+rust_kinit /tmp/cc_rust_canon -C || die "Rust kinit -C failed"
+save_cap rust-canon
+set +e
+CMP="$(docker exec "$NAME" python3 /tmp/kdc-req-proxy.py --compare \
+    /tmp/cdiff/mit-canon.jsonl /tmp/cdiff/rust-canon.jsonl canon 2>&1)"
+rc=$?
+set -e
+echo "$CMP"
+if [ "$rc" -ne 0 ]; then
+    die "compare canon failed (rc=$rc)"
+fi
+echo "$CMP" | grep -q "CORE_MATCH"
+echo "$CMP" | grep -q "SHAPE_MATCH kdc_options="
+docker exec "$NAME" grep -q canonicalize /tmp/cdiff/mit-canon.jsonl \
+    || die "MIT kinit -C missing canonicalize"
+docker exec "$NAME" grep -q canonicalize /tmp/cdiff/rust-canon.jsonl \
+    || die "Rust kinit -C missing canonicalize"
+echo "MIT_kinit_canonicalize"
+echo "RUST_kinit_canonicalize"
+reset_cap
+mit_kinit /tmp/cc_mit_post -s 1h || die "MIT kinit -s failed"
+save_cap mit-post
+reset_cap
+rust_kinit /tmp/cc_rust_post -s 1h || die "Rust kinit -s failed"
+save_cap rust-post
+set +e
+CMP="$(docker exec "$NAME" python3 /tmp/kdc-req-proxy.py --compare \
+    /tmp/cdiff/mit-post.jsonl /tmp/cdiff/rust-post.jsonl post 2>&1)"
+rc=$?
+set -e
+echo "$CMP"
+if [ "$rc" -ne 0 ]; then
+    die "compare post failed (rc=$rc)"
+fi
+echo "$CMP" | grep -q "CORE_MATCH"
+echo "$CMP" | grep -q "SHAPE_MATCH kdc_options="
+echo "$CMP" | grep -q "SHAPE_MATCH from="
+docker exec "$NAME" grep -q postdated /tmp/cdiff/mit-post.jsonl \
+    || die "MIT kinit -s missing postdated"
+docker exec "$NAME" grep -q postdated /tmp/cdiff/rust-post.jsonl \
+    || die "Rust kinit -s missing postdated"
+docker exec "$NAME" grep -q allow_postdate /tmp/cdiff/mit-post.jsonl \
+    || die "MIT kinit -s missing allow_postdate"
+docker exec "$NAME" grep -q allow_postdate /tmp/cdiff/rust-post.jsonl \
+    || die "Rust kinit -s missing allow_postdate"
+echo "MIT_kinit_postdated"
+echo "RUST_kinit_postdated"
+docker exec "$NAME" python3 -c '
+from pathlib import Path
+p = Path("/tmp/proxy-krb5.conf").read_text()
+Path("/tmp/canon-krb5.conf").write_text(
+    p.replace("[libdefaults]", "[libdefaults]\n    canonicalize = true", 1)
+)
+'
+reset_cap
+docker exec -e KRB5_CONFIG=/tmp/canon-krb5.conf \
+    "$NAME" sh -c "printf 'userpassword\n' | kinit -c /tmp/cc_mit_canonconf user@KERBER.TEST" \
+    || die "MIT kinit canonicalize conf failed"
+save_cap mit-canonconf
+reset_cap
+docker exec -e KRB5_CONFIG=/tmp/canon-krb5.conf -e KRB5_PASSWORD=userpassword \
+    "$NAME" /tmp/krb5-kinit -c /tmp/cc_rust_canonconf user@KERBER.TEST \
+    || die "Rust kinit canonicalize conf failed"
+save_cap rust-canonconf
+docker exec "$NAME" grep -q canonicalize /tmp/cdiff/mit-canonconf.jsonl \
+    || die "MIT canonicalize conf missing bit"
+docker exec "$NAME" grep -q canonicalize /tmp/cdiff/rust-canonconf.jsonl \
+    || die "Rust canonicalize conf missing bit"
+echo "MIT_kinit_canonicalize_conf"
+echo "RUST_kinit_canonicalize_conf"
+
 mkdir -p "$SCRATCH/cdiff"
 docker cp "$NAME:/tmp/cdiff/." "$SCRATCH/cdiff/"
 log "client.diff.gate" "ok" ",\"flows\":$EXPECTED_FLOWS,\"cli_errors\":8"

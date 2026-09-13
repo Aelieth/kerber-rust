@@ -52,6 +52,10 @@ this project uses semantic versioning once a crate is published.
   A framed reply with a bad length is `MODIFIED`; a bad version is
   `BAD_PVNO`. Live MIT `kpasswd` `Password change rejected` and
   `krb5_set_password` `Access denied` vs `krb5-kpasswd`.
+- **client.** `kinit -C` and `[libdefaults] canonicalize` set
+  `KDC_OPT_CANONICALIZE` (`gic_opt.c:76-83`, `get_in_tkt.c:921-930`).
+  `kinit -s` sets `from` plus `ALLOW_POSTDATE`/`POSTDATED`
+  (`get_in_tkt.c:711-714,932-934`).
 - **test.** `scripts/client-differential-gate.sh` drives MIT and Rust
   `kinit`/`kvno` against the live MIT 1.22.2 KDC through
   `scripts/lib/kdc-req-proxy.py` (request-shape JSONL: padata,
@@ -63,7 +67,8 @@ this project uses semantic versioning once a crate is published.
   records default `kdc_timesync` recovery on both CLIs and Clock skew
   when `kdc_timesync = 0`; `gss-mit-client` → Rust acceptor majors;
   `t_vfy_increds` vs `krb5-vfy-increds`; kpasswd result texts and
-  setpw. Fail-red on `mit-extra`.
+  setpw; `kinit -C` / `-s` / `[libdefaults] canonicalize`. Fail-red
+  on `mit-extra`.
 
 ### W1-A′-4
 

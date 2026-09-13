@@ -89,6 +89,8 @@ pub struct AsTicketOpts {
     pub addresses: Option<krb5_types::HostAddresses>,
     /// `kinit -n`: REQUEST_ANONYMOUS + unsigned PKINIT.
     pub anonymous: bool,
+    /// Seconds from now (`kinit -s`). `None` or 0 omits `from`.
+    pub starttime: Option<u64>,
 }
 
 /// Request times/options MIT `verify_as_reply` compares to EncKDCRepPart.
@@ -109,6 +111,7 @@ impl Default for AsTicketOpts {
             proxiable: false,
             addresses: None,
             anonymous: false,
+            starttime: None,
         }
     }
 }
@@ -223,13 +226,7 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
             .collect(),
     };
     let nonce = random_nonce()?;
-    let (till, rtime, opts, _) = ticket_body(req);
-    let bound = AsReqTimes {
-        till,
-        rtime,
-        from: None,
-        opts,
-    };
+    let (bound, _) = ticket_body(req);
 
     if req.fast_armor.is_some() {
         return continue_fast(req, keys, nonce, &bound, &etypes);
@@ -1305,13 +1302,14 @@ fn build_as_req_from(
     padata: Option<Vec<PaData>>,
     etypes: &[i32],
 ) -> Result<AsReq, Error> {
-    let (_, _, _, addresses) = ticket_body(req);
+    let (_, addresses) = ticket_body(req);
     build_as_req(
         &req.cname,
         req.realm,
         nonce,
         bound.till.clone(),
         bound.rtime.clone(),
+        bound.from.clone(),
         bound.opts.clone(),
         addresses,
         padata,
@@ -1327,6 +1325,7 @@ fn build_as_req(
     nonce: u32,
     till: KerberosTime,
     rtime: Option<KerberosTime>,
+    from: Option<KerberosTime>,
     kdc_options: KdcOptions,
     addresses: Option<krb5_types::HostAddresses>,
     padata: Option<Vec<PaData>>,
@@ -1355,7 +1354,7 @@ fn build_as_req(
             cname: Some(cname.clone()),
             realm: realm_s,
             sname: Some(sname.clone()),
-            from: None,
+            from,
             till,
             rtime,
             nonce,
@@ -1397,19 +1396,19 @@ pub fn conf_etypes(tgs: bool) -> Vec<i32> {
     if v.is_empty() { preferred } else { v }
 }
 
-fn ticket_body(
-    req: &AsRequest<'_>,
-) -> (
-    KerberosTime,
-    Option<KerberosTime>,
-    KdcOptions,
-    Option<krb5_types::HostAddresses>,
-) {
+fn ticket_body(req: &AsRequest<'_>) -> (AsReqTimes, Option<krb5_types::HostAddresses>) {
     let now = KerberosTime::now();
+    // MIT `get_in_tkt.c:711-714` omits `from` unless start_time != 0.
+    // `get_in_tkt.c:932-934` then sets ALLOW_POSTDATE | POSTDATED.
+    let from = match req.ticket.starttime {
+        Some(s) if s > 0 => now.add_seconds(i64::try_from(s).unwrap_or(i64::MAX)).ok(),
+        _ => None,
+    };
+    let base = from.as_ref().unwrap_or(&now);
     let life = req.ticket.lifetime.unwrap_or(10 * 3600);
-    let till = now
+    let till = base
         .add_seconds(i64::try_from(life).unwrap_or(i64::MAX))
-        .unwrap_or_else(|_| now.clone());
+        .unwrap_or_else(|_| base.clone());
     let mut opts = if req.ticket.forwardable {
         KdcOptions::forwardable()
     } else {
@@ -1418,12 +1417,17 @@ fn ticket_body(
     if req.ticket.proxiable {
         opts = opts.with_bit(flag_bit::PROXIABLE, true);
     }
+    if from.is_some() {
+        opts = opts
+            .with_bit(flag_bit::MAY_POSTDATE, true)
+            .with_bit(flag_bit::POSTDATED, true);
+    }
     // MIT `init_ctx.c:265-267` `kdc_default_options` = `KDC_OPT_RENEWABLE_OK`.
     // `get_in_tkt.c:723` clears it when `renew_life > 0` (RENEWABLE is set).
     let rtime = match req.ticket.rlife {
         Some(r) if r > 0 => {
             opts = opts.with_bit(flag_bit::RENEWABLE, true);
-            now.add_seconds(i64::try_from(r).unwrap_or(i64::MAX)).ok()
+            base.add_seconds(i64::try_from(r).unwrap_or(i64::MAX)).ok()
         }
         _ => {
             opts = opts.with_bit(flag_bit::RENEWABLE_OK, true);
@@ -1436,7 +1440,22 @@ fn ticket_body(
     if req.ticket.anonymous || krb5_types::pkinit::is_anonymous_principal(&req.cname) {
         opts = opts.with_bit(flag_bit::ANONYMOUS, true);
     }
-    (till, rtime, opts, req.ticket.addresses.clone())
+    (
+        AsReqTimes {
+            till,
+            rtime,
+            from,
+            opts,
+        },
+        req.ticket.addresses.clone(),
+    )
+}
+
+/// KDCOptions and optional `from` MIT `get_in_tkt.c:700-934` would set.
+#[must_use]
+pub fn as_init_creds_options(req: &AsRequest<'_>) -> (KdcOptions, Option<KerberosTime>) {
+    let (t, _) = ticket_body(req);
+    (t.opts, t.from)
 }
 
 fn pa_enc_timestamp(key: &ProtocolKey) -> Result<PaData, Error> {
@@ -1734,7 +1753,25 @@ mod as_kdc_options_tests {
             etypes: None,
             ticket,
         };
-        ticket_body(&req).2
+        ticket_body(&req).0.opts
+    }
+
+    fn times_of(ticket: AsTicketOpts, canonicalize: bool) -> AsReqTimes {
+        let kdc = KdcAddr::new("127.0.0.1");
+        let req = AsRequest {
+            cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+            realm: "KERBER.TEST",
+            password: b"x",
+            kdc: &kdc,
+            want_spake: false,
+            fast_armor: None,
+            pkinit: None,
+            canonicalize,
+            sname: None,
+            etypes: None,
+            ticket,
+        };
+        ticket_body(&req).0
     }
 
     #[test]
@@ -1756,5 +1793,40 @@ mod as_kdc_options_tests {
             !opts.bit(flag_bit::RENEWABLE_OK),
             "get_in_tkt.c:723 clears RENEWABLE_OK when renew_life > 0"
         );
+    }
+
+    #[test]
+    fn b1_gic_opt_canonicalize_sets_kdc_option() {
+        let opts = times_of(AsTicketOpts::default(), true).opts;
+        assert!(
+            opts.bit(flag_bit::CANONICALIZE),
+            "get_in_tkt.c:921-930 / gic_opt.c:76-83"
+        );
+        let plain = times_of(AsTicketOpts::default(), false).opts;
+        assert!(!plain.bit(flag_bit::CANONICALIZE));
+    }
+
+    #[test]
+    fn b1_gic_opt_starttime_sets_postdated_and_from() {
+        let t = times_of(
+            AsTicketOpts {
+                starttime: Some(3600),
+                ..AsTicketOpts::default()
+            },
+            false,
+        );
+        assert!(
+            t.opts.bit(flag_bit::MAY_POSTDATE),
+            "get_in_tkt.c:932-934 ALLOW_POSTDATE"
+        );
+        assert!(t.opts.bit(flag_bit::POSTDATED), "get_in_tkt.c:932-934");
+        assert!(
+            t.from.is_some(),
+            "get_in_tkt.c:711-714 omits from only at 0"
+        );
+        let plain = times_of(AsTicketOpts::default(), false);
+        assert!(plain.from.is_none());
+        assert!(!plain.opts.bit(flag_bit::POSTDATED));
+        assert!(!plain.opts.bit(flag_bit::MAY_POSTDATE));
     }
 }

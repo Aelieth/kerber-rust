@@ -85,6 +85,8 @@ pub struct Krb5Conf {
     pub forwardable: bool,
     /// `proxiable`.
     pub proxiable: bool,
+    /// `canonicalize`. Default false (`get_in_tkt.c:921-930`).
+    pub canonicalize: bool,
     /// `ticket_lifetime` seconds.
     pub ticket_lifetime: Option<u64>,
     /// `renew_lifetime` seconds.
@@ -641,6 +643,7 @@ fn parse_libdefaults(conf: &mut Krb5Conf, seen: &mut BTreeSet<String>, line: &st
         }
         "forwardable" if take_first(seen, "forwardable") => conf.forwardable = truthy(&v),
         "proxiable" if take_first(seen, "proxiable") => conf.proxiable = truthy(&v),
+        "canonicalize" if take_first(seen, "canonicalize") => conf.canonicalize = truthy(&v),
         "ticket_lifetime" if take_first(seen, "ticket_lifetime") => {
             conf.ticket_lifetime = parse_duration_secs(&v);
         }
@@ -1457,6 +1460,9 @@ mod tests {
         assert!(!c.proxiable);
         let px = Krb5Conf::parse("[libdefaults]\n    proxiable = true\n").unwrap();
         assert!(px.proxiable);
+        assert!(!c.canonicalize);
+        let cn = Krb5Conf::parse("[libdefaults]\n    canonicalize = true\n").unwrap();
+        assert!(cn.canonicalize);
         assert_eq!(c.ticket_lifetime, Some(10 * 3600));
         assert_eq!(c.renew_lifetime, Some(7 * 86400));
         assert_eq!(c.permitted_enctypes.len(), 2);

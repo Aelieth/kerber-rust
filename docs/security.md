@@ -254,6 +254,9 @@ AD policy blob or a UTF-8 server string (`chpw.c:389-510`).
 `krb5_set_password` sends version `0xff80` with `ChangePasswdData`.
 A framed kpasswd reply whose length disagrees, or whose version is
 not 1 / `0xff80`, is `MODIFIED` / `BAD_PVNO` (`chpw.c:129-143`).
+`kinit -C` and `[libdefaults] canonicalize` set `KDC_OPT_CANONICALIZE`
+(`gic_opt.c:76-83`, `get_in_tkt.c:921-930`). `kinit -s` puts `from` on
+the AS-REQ and sets `ALLOW_POSTDATE`/`POSTDATED` (`get_in_tkt.c:711-714,932-934`).
 
 FAST `req_checksum` is verified over the wire KDC-REQ-BODY (field 4)
 when a raw packet is present (`do_as_req.c:526-531`); socketless tests

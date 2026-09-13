@@ -60,6 +60,8 @@ pub struct KinitParams<'a> {
     pub renew: bool,
     /// `kinit -n` (anonymous PKINIT).
     pub anonymous: bool,
+    /// `kinit -C` / `[libdefaults] canonicalize`.
+    pub canonicalize: bool,
     /// New password for `gic_pwd.c` KEY_EXP → changepw (`KRB5_NEW_PASSWORD`).
     pub new_password: Option<&'a [u8]>,
 }
@@ -394,7 +396,7 @@ fn kinit_inner(
         want_spake: params.want_spake,
         fast_armor: armor.as_ref(),
         pkinit: pkinit.as_ref(),
-        canonicalize: params.enterprise,
+        canonicalize: params.canonicalize || params.enterprise,
         sname: None,
         etypes: Some(&etypes),
         ticket,
@@ -427,6 +429,7 @@ fn kinit_inner(
                 proxiable: false,
                 addresses: None,
                 anonymous: false,
+                starttime: None,
             };
             let chpw_req = AsRequest {
                 cname: cname.clone(),
@@ -436,7 +439,7 @@ fn kinit_inner(
                 want_spake: false,
                 fast_armor: armor.as_ref(),
                 pkinit: None,
-                canonicalize: params.enterprise,
+                canonicalize: params.canonicalize || params.enterprise,
                 sname: Some(&changepw),
                 etypes: Some(&etypes),
                 ticket: chpw_ticket,

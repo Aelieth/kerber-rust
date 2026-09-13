@@ -158,6 +158,10 @@ pub struct KinitArgs {
     pub enterprise: bool,
     /// `-n`.
     pub anonymous: bool,
+    /// `-C`.
+    pub canonicalize: bool,
+    /// `-s`.
+    pub starttime: Option<String>,
     /// `-X` values.
     pub pa_attrs: Vec<String>,
     /// `--spake`.
@@ -178,7 +182,7 @@ pub struct KinitArgs {
     pub pos_service: Option<String>,
 }
 
-const KINIT_OPTSTRING: &str = "r:l:c:t:T:S:X:kfpFPnaAER";
+const KINIT_OPTSTRING: &str = "r:l:c:t:T:S:X:s:kfpFPnaAERC";
 
 fn kinit_longs() -> &'static [LongOpt] {
     &[
@@ -252,6 +256,8 @@ pub fn parse_kinit(args: &[String]) -> Result<KinitArgs, String> {
             'S' => out.service = o.arg,
             'E' => out.enterprise = true,
             'n' => out.anonymous = true,
+            'C' => out.canonicalize = true,
+            's' => out.starttime = o.arg,
             'X' => {
                 if let Some(v) = o.arg {
                     apply_x_attr(&mut out, &v);
@@ -652,6 +658,9 @@ mod tests {
         assert_eq!(a.service.as_deref(), Some("host/x"));
         assert!(a.enterprise);
         assert_eq!(a.principal.as_deref(), Some("user@R"));
+        let b = parse_kinit(&s(&["-C", "-s", "1h", "user@R"])).unwrap();
+        assert!(b.canonicalize);
+        assert_eq!(b.starttime.as_deref(), Some("1h"));
     }
 
     fn sample(end: u32, server: PrincipalName) -> CcacheCred {
