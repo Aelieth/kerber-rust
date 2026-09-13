@@ -58,6 +58,10 @@ path = "tests/b1_timesync.rs"
 name = "b1_renew"
 path = "tests/b1_renew.rs"
 
+[[test]]
+name = "b1_verify_as"
+path = "tests/b1_verify_as.rs"
+
 [dependencies]
 chrono.workspace = true
 getrandom.workspace = true

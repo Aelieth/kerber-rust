@@ -23,6 +23,10 @@ this project uses semantic versioning once a crate is published.
 - **client.** `kinit -R` KDCOptions are `KDC_OPT_RENEW` plus
   `old_creds.ticket_flags & KDC_TKT_COMMON_MASK` (`val_renew.c:62-67`).
   No `CANONICALIZE` (that bit is the `get_creds` referral walk).
+- **client.** AS-REP `verify_as_reply` compares the issued server as a
+  full principal (name and realm) to both the ticket and the request
+  (`get_in_tkt.c:227-239`). `CANONICALIZE` / NT-ENTERPRISE / anonymous
+  may rename only when both names are TGS.
 - **test.** `scripts/client-differential-gate.sh` drives MIT and Rust
   `kinit`/`kvno` against the live MIT 1.22.2 KDC through
   `scripts/lib/kdc-req-proxy.py` (request-shape JSONL: padata,

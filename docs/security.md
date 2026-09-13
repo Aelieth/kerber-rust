@@ -225,6 +225,11 @@ the KDC's. `kdc_timesync = 0` also rejects an already-expired
 `kinit -R` copies `old_creds.ticket_flags & KDC_TKT_COMMON_MASK` and
 sets `KDC_OPT_RENEW` (`val_renew.c:62-67`); it does not set
 `CANONICALIZE` (that bit is the `get_creds` referral walk).
+AS-REP `verify_as_reply` requires `enc.server == ticket.server`
+(name and realm) and, unless `canon_ok`, `enc.server == request.server`
+(`get_in_tkt.c:227-239`). `canon_ok` is CANONICALIZE, NT-ENTERPRISE,
+or anonymous, and only when both the requested and issued servers are
+TGS.
 
 FAST `req_checksum` is verified over the wire KDC-REQ-BODY (field 4)
 when a raw packet is present (`do_as_req.c:526-531`); socketless tests

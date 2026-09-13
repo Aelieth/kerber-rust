@@ -37,7 +37,7 @@ pub use ap_req::{
 };
 pub use as_ex::{
     AsOutcome, AsRequest, AsTicketOpts, FastArmor, PkinitClient, as_exchange, as_exchange_key,
-    as_exchange_with_keys, check_as_rep_times, conf_etypes,
+    as_exchange_with_keys, check_as_rep_times, conf_etypes, verify_as_reply_server,
 };
 pub use builders::{
     as_req, as_req_sname, pa_enc_timestamp, pa_enc_timestamp_at, tgs_req, tgs_req_ex,

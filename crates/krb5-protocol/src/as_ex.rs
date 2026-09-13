@@ -1021,10 +1021,15 @@ fn finish_as_rep(
             return Err(Error::ReplyMismatch("AS-REP crealm mismatch".into()));
         }
     }
-    as_sname_eq(
+    let canon_req = canonicalize || cname.name_type == PrincipalName::NT_ENTERPRISE || expect_anon;
+    verify_as_reply_server(
         &enc_part.sname,
+        &enc_part.srealm,
         &inner.ticket.sname,
-        "AS-REP sname/ticket mismatch",
+        &inner.ticket.realm,
+        expected_sname,
+        realm,
+        canon_req,
     )?;
     if inner.enc_part.etype != key.etype().to_iana() && inner.enc_part.etype != enc_part.key.keytype
     {
@@ -1041,7 +1046,6 @@ fn finish_as_rep(
     let (skew, timesync) = krb5_config::load_krb5_conf()
         .map_or((300, true), |c| (i64::from(c.clockskew), c.kdc_timesync));
     check_as_rep_times_sync(&enc_part, now, skew, timesync)?;
-    as_sname_eq(&enc_part.sname, expected_sname, "AS-REP sname mismatch")?;
     if expect_anon {
         verify_anonymous(inner.padata.as_deref(), &key, &enc_part)?;
     }
@@ -1101,6 +1105,40 @@ pub(crate) fn as_sname_eq(
 ) -> Result<(), Error> {
     if got.name_string != expected.name_string {
         return Err(Error::ReplyMismatch(why.into()));
+    }
+    Ok(())
+}
+
+/// MIT `get_in_tkt.c:227-239` `verify_as_reply` server half.
+///
+/// Always requires `enc.server == ticket.server` (name and realm).
+/// `canon_req` (CANONICALIZE, NT-ENTERPRISE, or anonymous) plus both
+/// names being TGS allows the issued TGS name to differ from the
+/// request; otherwise `enc.server` must match the requested server.
+///
+/// # Errors
+///
+/// [`Error::ReplyMismatch`] (`KRB5_KDCREP_MODIFIED`).
+pub fn verify_as_reply_server(
+    enc_sname: &PrincipalName,
+    enc_srealm: &krb5_types::Realm,
+    ticket_sname: &PrincipalName,
+    ticket_realm: &krb5_types::Realm,
+    request_sname: &PrincipalName,
+    request_realm: &str,
+    canon_req: bool,
+) -> Result<(), Error> {
+    as_sname_eq(enc_sname, ticket_sname, "AS-REP sname/ticket mismatch")?;
+    if enc_srealm.as_bytes() != ticket_realm.as_bytes() {
+        return Err(Error::ReplyMismatch("AS-REP sname/ticket mismatch".into()));
+    }
+    let canon_ok = canon_req && request_sname.is_krbtgt() && enc_sname.is_krbtgt();
+    if canon_ok {
+        return Ok(());
+    }
+    as_sname_eq(enc_sname, request_sname, "AS-REP sname mismatch")?;
+    if enc_srealm.as_bytes() != request_realm.as_bytes() {
+        return Err(Error::ReplyMismatch("AS-REP sname mismatch".into()));
     }
     Ok(())
 }
