@@ -139,6 +139,12 @@ this project uses semantic versioning once a crate is published.
   `pkinit_require_freshness`, `disable_pac`, and `reject_bad_transit`
   win over a later `[kdcdefaults]` (`main.c:286-345`). Host-based
   referral lists still combine both sections.
+- **kdc.** TGS audit seeds `AUTHN_REQ_CL` like MIT
+  `do_tgs_req.c:1181-1184`. Unknown-server failures report stage
+  `SRVC_PRINC`. S4U/U2U records use `S4U2SELF` / `S4U2PROXY` / `U2U`.
+  `enctype_name` 6/24 are `DEPRECATED:`. TGS-fail logs
+  `UNKNOWN_REASON` and the header `authtime`. JSON keys remain a
+  documented subset of `j_dict.h`.
 - **client.** TGS-REP `krb5int_process_tgs_reply` checks the reply
   client against the TGT client (`gc_via_tkt.c:257-270`), refuses a
   self-inconsistent ticket/enc server (`:108-110`), and rejects an

@@ -8,6 +8,7 @@ use krb5_kdc::{
     ktypes2str, make_tkt_id, pa_enc_timestamp, set_thread_audit,
 };
 use krb5_types::PrincipalName;
+use sha2::{Digest, Sha256};
 
 fn user() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
@@ -57,6 +58,13 @@ fn a4_20_tkt_id_is_sha256_of_ticket_ciphertext() {
         "{id}"
     );
     assert_eq!(id, make_tkt_id(cipher));
+    let hash = Sha256::digest(cipher);
+    let independent: String = hash
+        .iter()
+        .flat_map(|b| [b >> 4, b & 0x0f])
+        .map(|n| char::from(b"0123456789ABCDEF"[usize::from(n)]))
+        .collect();
+    assert_eq!(id, independent);
 }
 
 #[test]

@@ -356,4 +356,56 @@ PY
 echo "RUST_audit_fields" # TestAudit /tmp/au-rust.log
 echo "MIT_audit_fields" # k5audit_test.so /tmp/au.log
 
+echo "==== TGS audit seed both legs ===="
+docker exec -i "$NAME" python3 - <<'PY'
+import json, sys
+def rows(path):
+    out = []
+    try:
+        text = open(path).read()
+    except OSError as e:
+        print(f"missing {path}: {e}", file=sys.stderr)
+        raise SystemExit(1)
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line == "state is NULL":
+            continue
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return out
+def finish(rows):
+    for r in rows:
+        if (
+            r.get("event_name") == "TGS_REQ"
+            and r.get("event_success") in (True, 1)
+            and r.get("tkt_out_id")
+        ):
+            return r
+    print("no TGS ENCR_REP", file=sys.stderr)
+    raise SystemExit(1)
+def seed(rows):
+    for r in rows:
+        if (
+            r.get("event_name") == "TGS_REQ"
+            and r.get("event_success") in (True, 1)
+            and not r.get("tkt_out_id")
+            and r.get("stage") == 1
+        ):
+            return r
+    print("no TGS AUTHN_REQ_CL seed", file=sys.stderr)
+    raise SystemExit(1)
+for side, path in (("MIT", "/tmp/au.log"), ("RUST", "/tmp/au-rust.log")):
+    recs = rows(path)
+    s = seed(recs)
+    f = finish(recs)
+    if s.get("req_id") != f.get("req_id"):
+        print(f"{side} TGS seed req_id {s.get('req_id')} != {f.get('req_id')}", file=sys.stderr)
+        raise SystemExit(1)
+print("tgs-audit-seed-ok")
+PY
+echo "MIT_tgs_audit_seed"
+echo "RUST_tgs_audit_seed"
+
 log "kdc.gate" "ok" ",\"principal\":\"user@KERBER.TEST\",\"service\":\"host/testhost.kerber.test\",\"issue\":true,\"audit\":true\""

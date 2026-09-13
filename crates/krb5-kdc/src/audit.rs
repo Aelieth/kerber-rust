@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 
 use crate::decrypt_ticket_part;
 use crate::kdb::{PrincipalRead, lookup_principal_id};
+use crate::status;
 use crate::store::Principal;
 
 /// Authenticate request and client (`audit_plugin.h`).
@@ -65,6 +66,13 @@ pub fn new_req_id() -> String {
 /// MIT `kdc_util.c` `enctype_name` (short name + DEPRECATED/UNSUPPORTED).
 #[must_use]
 pub fn enctype_name(etype: i32) -> String {
+    // MIT `etypes.c` lists these as `ETYPE_DEPRECATED` but Rust `known()`
+    // does not implement them (`enctype_util.c` `krb5int_c_deprecated_enctype`).
+    match etype {
+        6 => return "DEPRECATED:des3-cbc-raw".into(),
+        24 => return "DEPRECATED:arcfour-hmac-exp".into(),
+        _ => {}
+    }
     if let Some(n) = cms_enctype_name(etype) {
         if EncryptionType::known(etype).is_ok() {
             return n.to_string();
@@ -340,6 +348,34 @@ fn seed_as_req(req: &AsReq, sender: Option<&HostAddress>) {
     current_audit().as_req(true, &state);
 }
 
+/// MIT `do_tgs_req.c:1181-1184` seeds `kau_tgs_req(TRUE)` at `AUTHN_REQ_CL`.
+fn seed_tgs_req(req: &TgsReq, sender: Option<&HostAddress>) {
+    clear_req_id();
+    let mut state = base_state("TGS_REQ", &req.0.req_body, sender);
+    state.stage = AUTHN_REQ_CL;
+    state.tkt_in_id = tgs_header_tkt_id(req);
+    current_audit().tgs_req(true, &state);
+}
+
+/// Unknown-server words after MIT `do_tgs_req.c:667` `SRVC_PRINC`.
+fn tgs_fail_stage(e_text: &str) -> i32 {
+    match e_text {
+        status::LOOKING_UP_SERVER
+        | status::UNKNOWN_SERVER
+        | status::SERVER_NOT_FOUND
+        | status::NULL_SERVER => SRVC_PRINC,
+        _ => AUTHN_REQ_CL,
+    }
+}
+
+fn tgs_fail_emsg(code: i32) -> &'static str {
+    if code == err::S_PRINCIPAL_UNKNOWN {
+        "Server not found in Kerberos database"
+    } else {
+        ""
+    }
+}
+
 /// MIT `log_tgs_badtrans` unexpected path: `LOG_ERR`, then treat as unchecked.
 #[must_use]
 pub fn unexpected_transit_false(
@@ -446,6 +482,7 @@ fn as_success(store: &dyn PrincipalRead, req: &AsReq, sender: Option<&HostAddres
         &server,
         None,
         false,
+        "",
     );
     let mut state = base_state("AS_REQ", body, sender);
     state.stage = ENCR_REP;
@@ -478,6 +515,7 @@ fn as_failure(req: &AsReq, sender: Option<&HostAddress>, code: i32, e_text: &str
         &server,
         None,
         false,
+        "",
     );
     let mut state = base_state("AS_REQ", body, sender);
     state.stage = AUTHN_REQ_CL;
@@ -495,6 +533,7 @@ fn tgs_success(
     let Ok(rep) = decode::<TgsRep>(bytes) else {
         return;
     };
+    seed_tgs_req(req, sender);
     let body = &req.0.req_body;
     let realm = realm_str(&body.realm);
     let client = tgs_client_name(store, req, &rep, &realm);
@@ -518,6 +557,7 @@ fn tgs_success(
         &server,
         s4u.as_ref().map(|(k, c)| (*k, c.as_str())),
         false,
+        "",
     );
     let mut state = base_state("TGS_REQ", body, sender);
     state.stage = ENCR_REP;
@@ -536,9 +576,21 @@ fn tgs_success(
     };
     let audit = current_audit();
     match s4u.as_ref().map(|(k, _)| *k) {
-        Some("PROTOCOL-TRANSITION") => audit.s4u2self(true, &state),
-        Some("CONSTRAINED-DELEGATION") => audit.s4u2proxy(true, &state),
-        _ if body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY) => audit.u2u(true, &state),
+        Some("PROTOCOL-TRANSITION") => {
+            let mut s4u_state = state.clone();
+            s4u_state.event_name = "S4U2SELF";
+            audit.s4u2self(true, &s4u_state);
+        }
+        Some("CONSTRAINED-DELEGATION") => {
+            let mut s4u_state = state.clone();
+            s4u_state.event_name = "S4U2PROXY";
+            audit.s4u2proxy(true, &s4u_state);
+        }
+        _ if body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY) => {
+            let mut s4u_state = state.clone();
+            s4u_state.event_name = "U2U";
+            audit.u2u(true, &s4u_state);
+        }
         _ => {}
     }
     audit.tgs_req(true, &state);
@@ -552,6 +604,7 @@ fn tgs_failure(
     code: i32,
     e_text: &str,
 ) {
+    seed_tgs_req(req, sender);
     let body = &req.0.req_body;
     let realm = realm_str(&body.realm);
     let client = tgs_error_client(store, req, &realm);
@@ -559,28 +612,49 @@ fn tgs_failure(
     let req_etypes = ktypes2str(&body.etype);
     let from = format_from(sender);
     let status = if e_text.is_empty() {
-        "PROCESS_TGS"
+        status::UNKNOWN_REASON
     } else {
         e_text
     };
     let nomatch = code == err::SERVER_NOMATCH;
+    let authtime = tgs_header_authtime(store, req);
     emit_issue(
         "TGS_REQ",
         &req_etypes,
         &from,
         status,
-        0,
+        authtime,
         "",
         &client,
         &server,
         None,
         nomatch,
+        tgs_fail_emsg(code),
     );
     let mut state = base_state("TGS_REQ", body, sender);
-    state.stage = AUTHN_REQ_CL;
+    state.stage = tgs_fail_stage(status);
     state.status = Some(status.to_string());
     state.tkt_in_id = tgs_header_tkt_id(req);
-    current_audit().tgs_req(false, &state);
+    let audit = current_audit();
+    match tgs_s4u_kind(req).as_ref().map(|(k, _)| *k) {
+        Some("PROTOCOL-TRANSITION") => {
+            let mut s4u_state = state.clone();
+            s4u_state.event_name = "S4U2SELF";
+            audit.s4u2self(false, &s4u_state);
+        }
+        Some("CONSTRAINED-DELEGATION") => {
+            let mut s4u_state = state.clone();
+            s4u_state.event_name = "S4U2PROXY";
+            audit.s4u2proxy(false, &s4u_state);
+        }
+        _ if body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY) => {
+            let mut s4u_state = state.clone();
+            s4u_state.event_name = "U2U";
+            audit.u2u(false, &s4u_state);
+        }
+        _ => {}
+    }
+    audit.tgs_req(false, &state);
     clear_req_id();
 }
 
@@ -596,6 +670,7 @@ fn emit_issue(
     server: &str,
     s4u: Option<(&str, &str)>,
     server_nomatch: bool,
+    emsg: &str,
 ) {
     if server_nomatch {
         tracing::info!(
@@ -610,6 +685,7 @@ fn emit_issue(
             client,
             server,
             nomatch = true,
+            emsg,
         );
         return;
     }
@@ -626,6 +702,7 @@ fn emit_issue(
         etypes,
         client,
         server,
+        emsg,
     );
     if let Some((kind, s4u_client)) = s4u {
         tracing::info!(
@@ -693,6 +770,29 @@ fn tgs_header_tkt_id(req: &TgsReq) -> Option<String> {
         .find(|p| p.padata_type == pa::TGS_REQ)?;
     let ap: krb5_types::ApReq = decode(pa.padata_value.as_ref()).ok()?;
     Some(make_tkt_id(ap.ticket.enc_part.cipher.as_ref()))
+}
+
+fn tgs_header_authtime(store: &dyn PrincipalRead, req: &TgsReq) -> u32 {
+    let Some(pa) = req
+        .0
+        .padata
+        .as_ref()
+        .and_then(|p| p.iter().find(|x| x.padata_type == pa::TGS_REQ))
+    else {
+        return 0;
+    };
+    let Ok(ap) = decode::<krb5_types::ApReq>(pa.padata_value.as_ref()) else {
+        return 0;
+    };
+    let Some(tgt) = store.fetch_krbtgt().ok().flatten() else {
+        return 0;
+    };
+    let Some(key) = ticket_key(&tgt, ap.ticket.enc_part.etype) else {
+        return 0;
+    };
+    decrypt_ticket_part(&key.key, &ap.ticket)
+        .ok()
+        .map_or(0, |p| p.authtime.unix_seconds())
 }
 
 fn tgs_client_name(store: &dyn PrincipalRead, req: &TgsReq, rep: &TgsRep, realm: &str) -> String {
@@ -978,6 +1078,7 @@ fn json_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
 
     #[test]
     fn tkt_id_is_uppercase_sha256_of_ciphertext() {
@@ -1012,5 +1113,19 @@ mod tests {
         );
         assert!(enctype_name(16).starts_with("DEPRECATED:"));
         assert!(enctype_name(1).starts_with("UNSUPPORTED:"));
+        assert_eq!(enctype_name(6), "DEPRECATED:des3-cbc-raw");
+        assert_eq!(enctype_name(24), "DEPRECATED:arcfour-hmac-exp");
+    }
+
+    #[test]
+    fn tkt_id_matches_independent_sha256() {
+        let cipher = b"cipher";
+        let hash = Sha256::digest(cipher);
+        let mut expect = String::with_capacity(64);
+        for b in hash {
+            expect.push(HEX_UP[usize::from(b >> 4)] as char);
+            expect.push(HEX_UP[usize::from(b & 0x0f)] as char);
+        }
+        assert_eq!(make_tkt_id(cipher), expect);
     }
 }
