@@ -109,6 +109,12 @@ this project uses semantic versioning once a crate is published.
   `NOKEY`; a key at the claimed kvno that fails decrypt is integrity.
   kpasswd and `verify_init_creds` pass keytab kvnos. GSS accept still
   iterates similar-enctype keys (`decrypt_try_server`).
+- **acceptor.** AP-REQ re-checks the ticket transited list when
+  `TRANSITED_POLICY_CHECKED` is unset (`rd_req_dec.c:590-610`,
+  `chk_trans.c:309-355`). A hop not on `krb5_walk_realm_tree` is
+  `ILL_CR_TKT` 43. The T flag, an empty field, or anonymous crealm
+  skips the check like MIT. Live MIT KDC tickets carry T, so GSS
+  accept is unchanged.
 - **test.** `scripts/client-differential-gate.sh` drives MIT and Rust
   `kinit`/`kvno` against the live MIT 1.22.2 KDC through
   `scripts/lib/kdc-req-proxy.py` (request-shape JSONL: padata,

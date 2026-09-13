@@ -110,6 +110,10 @@ path = "tests/b2_rd_req_kvno.rs"
 name = "b2_validate"
 path = "tests/b2_validate.rs"
 
+[[test]]
+name = "b2_rd_req_transited"
+path = "tests/b2_rd_req_transited.rs"
+
 [dependencies]
 chrono.workspace = true
 getrandom.workspace = true

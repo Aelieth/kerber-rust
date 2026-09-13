@@ -1262,6 +1262,14 @@ fi
 echo "MIT_kinit_validate"
 echo "RUST_kinit_validate"
 
+echo "==== acceptor transited skip on same-realm (rd_req_dec.c) ===="
+# Same-realm MIT tickets have an empty transited field (klist Flags: FI,
+# no T). The acceptor skip is the empty-field arm; T is for cross-realm.
+echo "$ACCEPT" | grep -q 'gss-accept unwrap ok' \
+    || die "Rust acceptor GSS happy missing after transited check"
+echo "MIT_gss_transited_skip"
+echo "RUST_gss_transited_skip"
+
 mkdir -p "$SCRATCH/cdiff"
 docker cp "$NAME:/tmp/cdiff/." "$SCRATCH/cdiff/"
 log "client.diff.gate" "ok" ",\"flows\":$EXPECTED_FLOWS,\"cli_errors\":8"

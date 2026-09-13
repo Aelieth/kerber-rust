@@ -1,5 +1,6 @@
 //! AP-REQ construction (RFC 4120 §5.5.1) and service-side verification.
 
+use std::collections::BTreeMap;
 use std::time::Instant;
 
 use krb5_asn1::{decode, encode};
@@ -8,7 +9,7 @@ use krb5_crypto::{
 };
 use krb5_types::{
     ApOptions, ApReq, Authenticator, EncTicketPart, EncryptedData, HostAddresses, KerberosTime,
-    PrincipalName, Realm, Ticket, err, ku,
+    PrincipalName, Realm, Ticket, err, flag_bit, ku,
 };
 
 use crate::error::Error;
@@ -337,6 +338,8 @@ fn verify_inner(
             text: Some("address mismatch".into()),
         });
     }
+    let srealm = String::from_utf8_lossy(ap.ticket.realm.as_bytes());
+    check_ap_req_transited(&ticket_part, &srealm)?;
     let session_etype = EncryptionType::known(ticket_part.key.keytype)?;
     let session = ProtocolKey::from_bytes(session_etype, ticket_part.key.keyvalue.as_ref())?;
     let auth_usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)?;
@@ -397,4 +400,103 @@ fn verify_inner(
         authenticator,
         mutual_required: ap.ap_options.wants_mutual(),
     })
+}
+
+/// MIT `rd_req_dec.c:590-610`: when `TRANSITED_POLICY_CHECKED` is unset
+/// and the transited field is non-empty, `krb5_check_transited_list`
+/// (`chk_trans.c:309-355`) requires every hop in the
+/// `krb5_walk_realm_tree` list. Anonymous crealm skips the check.
+fn check_ap_req_transited(part: &EncTicketPart, srealm: &str) -> Result<(), Error> {
+    if part.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED) {
+        return Ok(());
+    }
+    let raw = part.transited.contents.as_ref();
+    if raw.is_empty() || raw[0] == 0 {
+        return Ok(());
+    }
+    let crealm = String::from_utf8_lossy(part.crealm.as_bytes());
+    if crealm == "WELLKNOWN:ANONYMOUS" {
+        return Ok(());
+    }
+    let hops = part
+        .transited
+        .realms_for(&crealm, srealm)
+        .map_err(|_| Error::KrbError {
+            code: err::ILL_CR_TKT,
+            text: Some("ill-formed transited list".into()),
+        })?;
+    let capaths = krb5_config::load_krb5_conf()
+        .map(|c| c.capaths)
+        .unwrap_or_default();
+    let allowed = walk_realm_tree(&capaths, &crealm, srealm);
+    for h in hops {
+        if !allowed.iter().any(|a| a == &h) {
+            return Err(Error::KrbError {
+                code: err::ILL_CR_TKT,
+                text: Some("transited realm not in hierarchy".into()),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// MIT `krb5_walk_realm_tree` (`walk_rtree.c:96-120`): `[capaths]` if
+/// present, else `rtree_hier_realms`. Same-realm is empty.
+fn walk_realm_tree(
+    capaths: &BTreeMap<String, BTreeMap<String, Vec<String>>>,
+    client: &str,
+    server: &str,
+) -> Vec<String> {
+    if client == server {
+        return Vec::new();
+    }
+    if let Some(vals) = capaths.get(client).and_then(|m| m.get(server)) {
+        let mut out = vec![client.to_owned()];
+        if !(vals.len() == 1 && vals[0] == ".") {
+            for v in vals {
+                if v != "." {
+                    out.push(v.clone());
+                }
+            }
+        }
+        out.push(server.to_owned());
+        return out;
+    }
+    hierarchical_walk_realms(client, server)
+}
+
+fn hierarchical_walk_realms(client: &str, server: &str) -> Vec<String> {
+    if client.len() >= krb5_types::MAX_TRANSIT_RAW || server.len() >= krb5_types::MAX_TRANSIT_RAW {
+        return Vec::new();
+    }
+    if client == server {
+        return Vec::new();
+    }
+    let c: Vec<&str> = client.split('.').collect();
+    let s: Vec<&str> = server.split('.').collect();
+    if c.is_empty() || s.is_empty() {
+        return Vec::new();
+    }
+    let mut common = 0usize;
+    while common < c.len() && common < s.len() && c[c.len() - 1 - common] == s[s.len() - 1 - common]
+    {
+        common += 1;
+    }
+    let ct: Vec<String> = (0..c.len()).map(|k| c[k..].join(".")).collect();
+    let st: Vec<String> = (0..s.len()).map(|k| s[k..].join(".")).collect();
+    let c_keep = if common == 0 {
+        ct.len()
+    } else {
+        ct.len() - common + 1
+    };
+    let s_keep = if common == 0 {
+        st.len()
+    } else {
+        st.len() - common
+    };
+    let mut out: Vec<String> = ct.into_iter().take(c_keep).collect();
+    for hop in st.into_iter().take(s_keep).rev() {
+        out.push(hop);
+    }
+    out
 }
