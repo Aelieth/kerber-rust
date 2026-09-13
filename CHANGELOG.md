@@ -118,7 +118,8 @@ this project uses semantic versioning once a crate is published.
 - **client.** TGS-REP `krb5int_process_tgs_reply` checks the reply
   client against the TGT client (`gc_via_tkt.c:257-270`), refuses a
   self-inconsistent ticket/enc server (`:108-110`), and rejects an
-  `endtime` after request `till` (`:278-297`). S4U2Self whose client
+  `endtime` after request `till` (`:278-297`; skipped on RENEW and
+  VALIDATE like MIT `get_valrenewed_creds` zeroed times). S4U2Self whose client
   equals the requested server is `PADATA_TYPE_NOSUPP`; a final
   S4U2Proxy hop skips the TGT-client compare. A foreign TGT without
   `ok-as-delegate` strips that flag on the reply (`:247-252`).

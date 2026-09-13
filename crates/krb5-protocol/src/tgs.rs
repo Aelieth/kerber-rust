@@ -704,7 +704,13 @@ fn tgs_once(
         &enc_part.sname,
         &enc_part.srealm,
     )?;
-    tgs_reply_req_times(&enc_part, &till, None, None, &kdc_options)?;
+    // MIT `val_renew.c` `get_valrenewed_creds` zeros `in_creds.times`, so
+    // `process_tgs_reply` skips the till/rtime/from bounds on RENEW and
+    // VALIDATE. The wire `till` is still the old TGT endtime; a renewed
+    // ticket may outlive it.
+    if !kdc_options.bit(flag_bit::RENEW) && !kdc_options.bit(flag_bit::VALIDATE) {
+        tgs_reply_req_times(&enc_part, &till, None, None, &kdc_options)?;
+    }
     tgs_sname_ok(&requested, &inner.ticket.sname, &enc_part.sname)?;
     let session_etype = EncryptionType::known(enc_part.key.keytype)?;
     let session_key = ProtocolKey::from_bytes(session_etype, enc_part.key.keyvalue.as_ref())?;
@@ -850,9 +856,10 @@ pub fn tgs_reply_server_consistent(
 /// `till`/`rtime`/`from` of 0 are unspecified. Reply `endtime` after
 /// `till`, `renew_till` after `rtime` (RENEWABLE) or after `till`
 /// (RENEWABLE_OK + issued RENEWABLE), or POSTDATED `from` ≠ starttime,
-/// is `KRB5_KDCREP_MODIFIED`. Starttime skew is not applied here: MIT
-/// uses the per-context timestamp that `kdc_timesync` adjusts, and this
-/// crate has no `krb5_context`.
+/// is `KRB5_KDCREP_MODIFIED`. `tgs_once` skips this on RENEW/VALIDATE
+/// (`val_renew.c` zeros `in_creds.times`). Starttime skew is not
+/// applied here: MIT uses the per-context timestamp that `kdc_timesync`
+/// adjusts, and this crate has no `krb5_context`.
 ///
 /// # Errors
 ///
