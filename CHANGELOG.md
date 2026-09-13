@@ -125,6 +125,11 @@ this project uses semantic versioning once a crate is published.
   server realm retries without `CANONICALIZE` (`get_creds.c:503-516`
   `try_fallback`). A later hop keeps the error. Host-realm DNS rewrite
   (`:517-542`) stays deferred (B3).
+- **client.** `krb5_fwd_tgt_creds` KDCOptions are
+  `ticket_flags & KDC_TKT_COMMON_MASK` plus `FORWARDED`
+  (`fwd_tgt.c:147-153`). `forwardable == false` clears `FORWARDABLE`.
+  Remote `k5_os_hostaddr` when the TGT has addresses stays deferred
+  (B3).
 - **client.** TGS-REP `krb5int_process_tgs_reply` checks the reply
   client against the TGT client (`gc_via_tkt.c:257-270`), refuses a
   self-inconsistent ticket/enc server (`:108-110`), and rejects an
@@ -155,7 +160,8 @@ this project uses semantic versioning once a crate is published.
   `[1, 136, 167]`; `kinit -v` VALIDATE options
   `forwardable`+`allow_postdate`+`validate`; TGS-REP client vs TGT
   client (`gc_via_tkt.c`); acceptor `sname_match`; TGS
-  `try_fallback` specified-realm retry; diffsend
+  `try_fallback` specified-realm retry; `fwd_tgt` FORWARDED options;
+  diffsend
   `tgs-alternate-tgs-hierarchical`. Fail-red
   on `mit-extra`.
 

@@ -126,6 +126,10 @@ path = "tests/b2_sname_match.rs"
 name = "b2_try_fallback"
 path = "tests/b2_try_fallback.rs"
 
+[[test]]
+name = "b2_fwd_tgt"
+path = "tests/b2_fwd_tgt.rs"
+
 [dependencies]
 chrono.workspace = true
 getrandom.workspace = true

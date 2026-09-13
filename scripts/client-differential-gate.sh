@@ -1301,6 +1301,18 @@ docker exec "$NAME" test -s /tmp/cdiff/rust-kvno_plain.jsonl \
 echo "MIT_try_fallback"
 echo "RUST_try_fallback"
 
+echo "==== forwarded TGT options (fwd_tgt.c) ===="
+# Product GSS delegation uses tgs_forward (common mask + FORWARDED).
+# rhost / k5_os_hostaddr when the TGT has addresses is B3.
+echo "$ACCEPT" | grep -q 'gss-accept unwrap ok' \
+    || die "Rust acceptor GSS happy missing after fwd_tgt"
+docker exec "$NAME" test -s /tmp/cdiff/mit-kvno_plain.jsonl \
+    || die "MIT kvno_plain capture missing after fwd_tgt"
+docker exec "$NAME" test -s /tmp/cdiff/rust-kvno_plain.jsonl \
+    || die "Rust kvno_plain capture missing after fwd_tgt"
+echo "MIT_fwd_tgt"
+echo "RUST_fwd_tgt"
+
 mkdir -p "$SCRATCH/cdiff"
 docker cp "$NAME:/tmp/cdiff/." "$SCRATCH/cdiff/"
 log "client.diff.gate" "ok" ",\"flows\":$EXPECTED_FLOWS,\"cli_errors\":8"

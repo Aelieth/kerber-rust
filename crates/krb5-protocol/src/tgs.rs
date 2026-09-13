@@ -138,7 +138,7 @@ pub fn tgs_exchange_path(
 pub fn tgs_forward(kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> {
     let realm = String::from_utf8_lossy(tgt.crealm.as_bytes()).into_owned();
     let sname = PrincipalName::krbtgt(&realm);
-    let opts = tkt_common_opts(tgt).with_bit(flag_bit::FORWARDED, true);
+    let opts = tgs_forward_options(&tgt.enc_part.flags, true);
     tgs_once(kdc, tgt, sname, &realm, opts, &[], None, None)
 }
 
@@ -160,10 +160,6 @@ pub fn tgs_renew(kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> {
         None,
         None,
     )
-}
-
-fn tkt_common_opts(tgt: &AsOutcome) -> KdcOptions {
-    tkt_common_from_flags(&tgt.enc_part.flags)
 }
 
 /// MIT `KDC_TKT_COMMON_MASK` (`krb5.hin:1659` = `0x54800000`):
@@ -1008,6 +1004,17 @@ fn tgs_service_once(
         },
         Err(e) => Err(e),
     }
+}
+
+/// MIT `fwd_tgt.c:147-153` `flags2options | KDC_OPT_FORWARDED`.
+/// `forwardable == false` clears `FORWARDABLE` like `fwd_tgt.c:152-153`.
+#[must_use]
+pub fn tgs_forward_options(flags: &krb5_types::TicketFlags, forwardable: bool) -> KdcOptions {
+    let mut opts = tkt_common_from_flags(flags).with_bit(flag_bit::FORWARDED, true);
+    if !forwardable {
+        opts = opts.with_bit(flag_bit::FORWARDABLE, false);
+    }
+    opts
 }
 
 #[cfg(test)]
