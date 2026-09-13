@@ -65,15 +65,16 @@ fn kinit_records_fast_avail_and_pa_type_like_write_out_ccache() {
     .expect("kinit");
     let cache = FileCcache::parse(&std::fs::read(&path).unwrap()).unwrap();
     let server = format!("krbtgt/{TEST_REALM}@{TEST_REALM}");
-    // The Rust KDC echoed PA-FX-FAST; the user requires preauth, so the
-    // encrypted-timestamp module (2) produced the reply.
+    // The Rust KDC echoed PA-FX-FAST and advertises SPAKE; after
+    // PREAUTH_REQUIRED, `sort_krb5_padata_sequence` + `k5_preauth`
+    // records pa_type 151 like MIT.
     assert_eq!(
         config_value(&cache, "fast_avail", &server).as_deref(),
         Some(b"yes".as_slice())
     );
     assert_eq!(
         config_value(&cache, "pa_type", &server).as_deref(),
-        Some(b"2".as_slice())
+        Some(b"151".as_slice())
     );
     // Config entries precede the credentials, as MIT's memory-cache staging
     // writes them; the realm is the X-CACHECONF: marker.
