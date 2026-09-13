@@ -364,9 +364,18 @@ fn kinit_inner(
         (None, None, true) => return Err("anonymous PKINIT requires pkinit_anchors".into()),
         (None, None, false) => None,
     };
-    let conf_e = krb5_protocol::conf_etypes(false);
+    let mut etypes = krb5_protocol::conf_etypes(false);
     let mut ticket = params.ticket;
     ticket.anonymous |= params.anonymous;
+    let keytab_keys = if let Some(ktpath) = params.keytab {
+        let kt = Keytab::parse(&std::fs::read(ktpath)?)?;
+        let (keys, kt_etypes) = krb5_protocol::keytab_init_creds_keys(&kt, &cname, &realm_s)
+            .ok_or("keytab has no matching principal")?;
+        krb5_protocol::sort_etypes_keytab_first(&mut etypes, &kt_etypes);
+        Some(keys)
+    } else {
+        None
+    };
     let req = AsRequest {
         cname: cname.clone(),
         realm: &realm_s,
@@ -377,21 +386,11 @@ fn kinit_inner(
         pkinit: pkinit.as_ref(),
         canonicalize: params.enterprise,
         sname: None,
-        etypes: Some(&conf_e),
+        etypes: Some(&etypes),
         ticket,
     };
-    let as_out = if let Some(ktpath) = params.keytab {
-        let kt = Keytab::parse(&std::fs::read(ktpath)?)?;
-        let keys: Vec<_> = kt
-            .entries
-            .iter()
-            .filter(|e| e.name == cname)
-            .map(|e| e.key.clone())
-            .collect();
-        if keys.is_empty() {
-            return Err("keytab has no matching principal".into());
-        }
-        as_exchange_with_keys(&req, &keys)?
+    let as_out = if let Some(keys) = keytab_keys.as_deref() {
+        as_exchange_with_keys(&req, keys)?
     } else {
         as_exchange(&req)?
     };

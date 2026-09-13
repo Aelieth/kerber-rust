@@ -33,6 +33,10 @@ this project uses semantic versioning once a crate is published.
   (RENEWABLE_OK without RENEWABLE), or POSTDATED `from` ≠ starttime,
   is `KRB5_KDCREP_MODIFIED`. Unit-only for the EncKdcRepPart fixture;
   the live MIT KDC AS cells are the production oracle.
+- **client.** `kinit -k` uses only the highest keytab kvno for the
+  client principal (name and realm) and sorts those etypes to the
+  front of the AS-REQ (`gic_keytab.c:84-174`). A stale lower kvno
+  listed first is ignored.
 - **test.** `scripts/client-differential-gate.sh` drives MIT and Rust
   `kinit`/`kvno` against the live MIT 1.22.2 KDC through
   `scripts/lib/kdc-req-proxy.py` (request-shape JSONL: padata,

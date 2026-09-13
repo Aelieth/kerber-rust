@@ -644,6 +644,27 @@ echo "$REPLAY_LOG" | grep -q '34'
 echo "MIT_gss_replay_token"
 echo "GSS_replay_major_34"
 
+echo "==== kinit -k highest keytab kvno (gic_keytab.c) ===="
+docker exec "$NAME" kadmin.local -q 'addprinc -randkey ktuser' >/dev/null
+docker exec "$NAME" kadmin.local -q 'ktadd -k /tmp/ktuser-v1.keytab -norandkey ktuser' >/dev/null
+docker exec "$NAME" kadmin.local -q 'cpw -randkey ktuser' >/dev/null
+docker exec "$NAME" kadmin.local -q 'ktadd -k /tmp/ktuser-v2.keytab -norandkey ktuser' >/dev/null
+docker exec "$NAME" sh -c 'printf "rkt /tmp/ktuser-v1.keytab\nrkt /tmp/ktuser-v2.keytab\nwkt /tmp/ktuser-both.keytab\n" | ktutil'
+docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf "$NAME" \
+    kinit -k -t /tmp/ktuser-both.keytab -c /tmp/cc_mit_kt_kvno ktuser@KERBER.TEST \
+    || die "MIT kinit -k two-kvno failed"
+docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf "$NAME" \
+    /tmp/krb5-kinit -k -t /tmp/ktuser-both.keytab -c /tmp/cc_rust_kt_kvno \
+    ktuser@KERBER.TEST || die "Rust kinit -k two-kvno failed"
+MIT_KT_KVNO="$(docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf "$NAME" klist -c /tmp/cc_mit_kt_kvno)"
+RUST_KT_KVNO="$(docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf "$NAME" klist -c /tmp/cc_rust_kt_kvno)"
+echo "$MIT_KT_KVNO"
+echo "$RUST_KT_KVNO"
+echo "$MIT_KT_KVNO" | grep -q 'ktuser@KERBER.TEST'
+echo "$RUST_KT_KVNO" | grep -q 'ktuser@KERBER.TEST'
+echo "MIT_kinit_kt_highest_kvno"
+echo "RUST_kinit_kt_highest_kvno"
+
 mkdir -p "$SCRATCH/cdiff"
 docker cp "$NAME:/tmp/cdiff/." "$SCRATCH/cdiff/"
 log "client.diff.gate" "ok" ",\"flows\":$EXPECTED_FLOWS,\"cli_errors\":8"

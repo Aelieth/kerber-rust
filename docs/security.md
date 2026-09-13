@@ -234,6 +234,10 @@ TGS. Request `till`/`rtime`/`from` are compared to the issued times
 `rtime` (RENEWABLE) or after `till` (RENEWABLE_OK without RENEWABLE),
 or POSTDATED `from` ≠ starttime (omitted starttime = authtime), is
 `KRB5_KDCREP_MODIFIED`. Extraneous flags stay unchecked (MIT XXX).
+`kinit -k` takes only the highest kvno for the requested principal
+(name and realm; name-type ignored) and puts those etypes first on
+the AS-REQ (`gic_keytab.c:84-174`). A stale lower kvno is not used
+to wrap PA-ENC-TIMESTAMP.
 
 FAST `req_checksum` is verified over the wire KDC-REQ-BODY (field 4)
 when a raw packet is present (`do_as_req.c:526-531`); socketless tests

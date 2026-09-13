@@ -63,7 +63,9 @@ pub use kcm::{
     KCM_SOCKET_DEFAULT, kcm_cache_names, kcm_destroy, kcm_load, kcm_socket_path, kcm_store,
     kcm_store_keep_default, kcm_switch, kcm_switch_principal,
 };
-pub use keytab::{Keytab, KeytabEntry, KeytabSlot};
+pub use keytab::{
+    Keytab, KeytabEntry, KeytabSlot, keytab_init_creds_keys, sort_etypes_keytab_first,
+};
 pub use preauth::{
     apply_strengthen, armor_key, attach_fast, attach_fast_with_options, build_fast_armor,
     fx_fast_padata, fx_fast_padata_over, pa_for_user, pa_pac_options, pa_pk_as_req,

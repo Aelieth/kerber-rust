@@ -66,6 +66,10 @@ path = "tests/b1_verify_as.rs"
 name = "b1_verify_times"
 path = "tests/b1_verify_times.rs"
 
+[[test]]
+name = "b1_gic_keytab"
+path = "tests/b1_gic_keytab.rs"
+
 [dependencies]
 chrono.workspace = true
 getrandom.workspace = true

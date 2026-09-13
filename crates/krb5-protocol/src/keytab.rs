@@ -402,6 +402,64 @@ fn eof() -> io::Error {
     io::Error::new(io::ErrorKind::UnexpectedEof, "keytab truncated")
 }
 
+/// MIT `gic_keytab.c:84-143` `lookup_etypes_for_keytab`.
+///
+/// Only the highest kvno for `name` in `realm` (name-type ignored).
+/// Returns those keys and their etype list, or `None` if none match.
+#[must_use]
+pub fn keytab_init_creds_keys(
+    kt: &Keytab,
+    name: &PrincipalName,
+    realm: &str,
+) -> Option<(Vec<ProtocolKey>, Vec<i32>)> {
+    let realm_b = realm.as_bytes();
+    let mut max_kvno = 0u32;
+    let mut keys = Vec::new();
+    let mut etypes = Vec::new();
+    for e in &kt.entries {
+        if e.name.name_string != name.name_string || e.realm.as_bytes() != realm_b {
+            continue;
+        }
+        if e.kvno < max_kvno {
+            continue;
+        }
+        if e.kvno > max_kvno {
+            max_kvno = e.kvno;
+            keys.clear();
+            etypes.clear();
+        }
+        keys.push(e.key.clone());
+        let t = e.key.etype().to_iana();
+        if !etypes.contains(&t) {
+            etypes.push(t);
+        }
+    }
+    if keys.is_empty() {
+        None
+    } else {
+        Some((keys, etypes))
+    }
+}
+
+/// MIT `gic_keytab.c:149-174` `sort_enctypes`.
+///
+/// Moves etypes that appear in `keytab` to the front of `req`, preserving
+/// relative order in each group.
+pub fn sort_etypes_keytab_first(req: &mut [i32], keytab: &[i32]) {
+    let mut front = Vec::with_capacity(req.len());
+    let mut back = Vec::with_capacity(req.len());
+    for &e in req.iter() {
+        if keytab.contains(&e) {
+            front.push(e);
+        } else {
+            back.push(e);
+        }
+    }
+    for (slot, v) in req.iter_mut().zip(front.into_iter().chain(back)) {
+        *slot = v;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
