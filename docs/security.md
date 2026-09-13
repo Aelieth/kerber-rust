@@ -274,6 +274,14 @@ SPAKE `--spake` first-shots `[150, 149]` like MIT
 (`get_in_tkt.c:807-813`); optimistic PA-SPAKE 151 is only for an
 explicit `krb5_get_init_creds_opt_set_preauth_list`. The first
 KRB-ERROR is PREAUTH_REQUIRED 25 with the full METHOD-DATA hint.
+After that hint, `sort_krb5_padata_sequence` (`get_in_tkt.c:400-471`)
+plus `k5_preauth` (`preauth2.c:649-713`) runs the first real
+mechanism we can: default preferred `17, 16, 15, 14` puts PKINIT
+first (skipped without an identity), then advertised SPAKE 151
+before enc-timestamp 2. Password `kinit` against a SPAKE-advertising
+KDC therefore uses the three-AS SPAKE cascade, not a one-shot
+enc-timestamp. An extra MIT plain AS on UDP then TCP is
+`sendto_kdc.c` pacing, not a second `get_in_tkt` request.
 
 FAST `req_checksum` is verified over the wire KDC-REQ-BODY (field 4)
 when a raw packet is present (`do_as_req.c:526-531`); socketless tests

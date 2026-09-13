@@ -72,6 +72,12 @@ this project uses semantic versioning once a crate is published.
   default kinit (`get_in_tkt.c:807-813`); the first KRB-ERROR is
   PREAUTH_REQUIRED 25 with the full hint list. PA-SPAKE support
   follows that hint, not an optimistic first-shot 151.
+- **client.** After PREAUTH_REQUIRED, `sort_krb5_padata_sequence`
+  plus the first runnable `k5_preauth` module (`get_in_tkt.c:400-471`,
+  `preauth2.c:649-713`). Default preferred is `17, 16, 15, 14`; when
+  the KDC advertises 151 before 2, password kinit sends SPAKE support
+  then the response (three AS-REQs). Plain extra MIT UDP/TCP copies
+  stay with B3 `sendto_kdc.c`.
 - **test.** `scripts/client-differential-gate.sh` drives MIT and Rust
   `kinit`/`kvno` against the live MIT 1.22.2 KDC through
   `scripts/lib/kdc-req-proxy.py` (request-shape JSONL: padata,
@@ -86,7 +92,9 @@ this project uses semantic versioning once a crate is published.
   setpw; `kinit -C` / `-s` / `[libdefaults] canonicalize`; default
   etype list (MIT 18/17/20/19/16/23/25/26, Rust AES-only); FAST AS
   outer `till=zero`; PKINIT / anon second AS `[133, 16, 150, 149]`;
-  SPAKE first-shot `[150, 149]` / error 25. Fail-red on `mit-extra`.
+  SPAKE first-shot `[150, 149]` / error 25; password preauth cascade
+  `[[150, 149], [133, 151, 150, 149], [133, 151, 150, 149]]`. Fail-red
+  on `mit-extra`.
 
 ### W1-A′-4
 

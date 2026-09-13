@@ -101,6 +101,8 @@ pub struct Krb5Conf {
     pub default_ccache_name: Option<String>,
     /// `[libdefaults] spake_preauth_groups`. `None` = omitted (KDC default none).
     pub spake_preauth_groups: Option<Vec<String>>,
+    /// `[libdefaults] preferred_preauth_types`. Empty = MIT default `17, 16, 15, 14`.
+    pub preferred_preauth_types: Vec<i32>,
     /// Realm → KDC list.
     pub kdcs: BTreeMap<String, Vec<Endpoint>>,
     /// Realm → admin_server.
@@ -659,6 +661,9 @@ fn parse_libdefaults(conf: &mut Krb5Conf, seen: &mut BTreeSet<String>, line: &st
         "spake_preauth_groups" if take_first(seen, "spake_preauth_groups") => {
             conf.spake_preauth_groups = Some(split_ws(&v));
         }
+        "preferred_preauth_types" if take_first(seen, "preferred_preauth_types") => {
+            conf.preferred_preauth_types = parse_i32_list(&v);
+        }
         _ => {}
     }
 }
@@ -674,6 +679,13 @@ fn combine_ws(dst: &mut String, more: &str) {
         dst.push(' ');
         dst.push_str(more);
     }
+}
+
+fn parse_i32_list(v: &str) -> Vec<i32> {
+    v.split(|c: char| c == ',' || c.is_ascii_whitespace())
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| s.parse().ok())
+        .collect()
 }
 
 fn split_ws(v: &str) -> Vec<String> {
@@ -1478,6 +1490,9 @@ mod tests {
             groups.spake_preauth_groups.as_deref(),
             Some(["edwards25519".to_string(), "P-256".to_string()].as_slice())
         );
+        let pref =
+            Krb5Conf::parse("[libdefaults]\n    preferred_preauth_types = 17, 16, 151\n").unwrap();
+        assert_eq!(pref.preferred_preauth_types, [17, 16, 151]);
         let sock = Krb5Conf::parse("[libdefaults]\n    kcm_socket = /tmp/kcm.sock\n").unwrap();
         assert_eq!(sock.kcm_socket.as_deref(), Some("/tmp/kcm.sock"));
         let cc =

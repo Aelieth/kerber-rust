@@ -145,7 +145,9 @@ pub struct FastArmor {
 }
 
 /// Obtain a TGT. Sends a bare AS-REQ first; if the KDC requires preauth,
-/// derives the client key from ETYPE-INFO2 and retries with PA-ENC-TIMESTAMP.
+/// walks the hint list in MIT `sort_krb5_padata_sequence` order and runs
+/// the first mechanism we can (SPAKE before enc-timestamp when both are
+/// advertised).
 ///
 /// # Errors
 ///
@@ -238,8 +240,9 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
     // app called `krb5_get_init_creds_opt_set_preauth_list`. Default
     // kinit (even with `preferred_preauth_types = 151`) first-shots
     // empty module padata — `info_pa_permitted` 150/149 only — and
-    // gets PREAUTH_REQUIRED 25. `--spake` still selects SPAKE after
-    // that hint (`continue_spake`); it is not MIT optimistic SPAKE.
+    // gets PREAUTH_REQUIRED 25. After that hint, `k5_preauth` plus
+    // `sort_krb5_padata_sequence` picks the first runnable real type
+    // (`continue_from_hint`). `--spake` still forces SPAKE.
     let first = build_as_req_from(req, nonce, &bound, None, &etypes)?;
     let wire = encode(&first)?;
     let reply = exchange(req.kdc, &wire)?;
@@ -283,25 +286,17 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
                     )
                 }
                 KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
-                    if req.want_spake {
-                        continue_spake(req, keys, nonce, &bound, &etypes, &e)
-                    } else {
-                        continue_preauth(req, keys, nonce, &bound, &etypes, &e, Some(&skew_time))
-                    }
+                    continue_from_hint(req, keys, nonce, &bound, &etypes, &e, Some(&skew_time))
                 }
                 KdcMsg::Error(e) => classify_kdc_error(&e),
                 KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
             }
         }
-        KdcMsg::Error(e)
-            if req.want_spake
-                && (e.error_code == err::PREAUTH_REQUIRED
-                    || e.error_code == err::MORE_PREAUTH_DATA_REQUIRED) =>
-        {
+        KdcMsg::Error(e) if req.want_spake && e.error_code == err::MORE_PREAUTH_DATA_REQUIRED => {
             continue_spake(req, keys, nonce, &bound, &etypes, &e)
         }
         KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
-            continue_preauth(req, keys, nonce, &bound, &etypes, &e, None)
+            continue_from_hint(req, keys, nonce, &bound, &etypes, &e, None)
         }
         KdcMsg::Error(e) => classify_kdc_error(&e),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
@@ -389,6 +384,63 @@ fn pick_key(keys: &[ProtocolKey], etype: Option<EncryptionType>) -> Option<Proto
         return Some(k.clone());
     }
     keys.first().cloned()
+}
+
+/// MIT `get_in_tkt.c:400-471` default when `preferred_preauth_types` is unset.
+pub const DEFAULT_PREFERRED_PREAUTH_TYPES: &[i32] = &[17, 16, 15, 14];
+
+/// `[libdefaults] preferred_preauth_types`, or MIT's PKINIT-first default.
+#[must_use]
+pub fn conf_preferred_preauth_types() -> Vec<i32> {
+    match krb5_config::load_krb5_conf() {
+        Some(c) if !c.preferred_preauth_types.is_empty() => c.preferred_preauth_types,
+        _ => DEFAULT_PREFERRED_PREAUTH_TYPES.to_vec(),
+    }
+}
+
+/// Bubble `preferred` types to the front, keeping the rest in hint order.
+///
+/// MIT `sort_krb5_padata_sequence` (`get_in_tkt.c:400-471`).
+#[must_use]
+pub fn sort_krb5_padata_sequence(padata: &[PaData], preferred: &[i32]) -> Vec<PaData> {
+    let mut out = padata.to_vec();
+    let mut base = 0;
+    for &want in preferred {
+        if let Some(i) = out[base..].iter().position(|p| p.padata_type == want) {
+            let i = base + i;
+            let tmp = out.remove(i);
+            out.insert(base, tmp);
+            base += 1;
+        }
+    }
+    out
+}
+
+fn continue_from_hint(
+    req: &AsRequest<'_>,
+    keys: &[ProtocolKey],
+    nonce: u32,
+    bound: &AsReqTimes,
+    etypes: &[i32],
+    err: &KrbError,
+    skew_hint: Option<&KerberosTime>,
+) -> Result<AsOutcome, Error> {
+    if req.want_spake {
+        return continue_spake(req, keys, nonce, bound, etypes, err);
+    }
+    let method = method_from_error(err)?;
+    let preferred = conf_preferred_preauth_types();
+    let sorted = sort_krb5_padata_sequence(&method, &preferred);
+    for p in &sorted {
+        match p.padata_type {
+            pa::SPAKE => return continue_spake(req, keys, nonce, bound, etypes, err),
+            pa::ENC_TIMESTAMP => {
+                return continue_preauth(req, keys, nonce, bound, etypes, err, skew_hint);
+            }
+            _ => {}
+        }
+    }
+    continue_preauth(req, keys, nonce, bound, etypes, err, skew_hint)
 }
 
 fn continue_preauth(

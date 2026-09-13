@@ -38,9 +38,10 @@ pub use ap_req::{
     build_ap_req_opts, build_ap_req_with_cksum, verify_ap_req, verify_ap_req_ex,
 };
 pub use as_ex::{
-    AsOutcome, AsRequest, AsTicketOpts, FastArmor, PkinitClient, as_exchange, as_exchange_key,
-    as_exchange_with_keys, as_init_creds_options, check_as_rep_times, conf_etypes,
-    insert_module_padata_before_info_pa, verify_as_reply_req_times, verify_as_reply_server,
+    AsOutcome, AsRequest, AsTicketOpts, DEFAULT_PREFERRED_PREAUTH_TYPES, FastArmor, PkinitClient,
+    as_exchange, as_exchange_key, as_exchange_with_keys, as_init_creds_options, check_as_rep_times,
+    conf_etypes, conf_preferred_preauth_types, insert_module_padata_before_info_pa,
+    sort_krb5_padata_sequence, verify_as_reply_req_times, verify_as_reply_server,
 };
 pub use builders::{
     as_req, as_req_sname, pa_enc_timestamp, pa_enc_timestamp_at, tgs_req, tgs_req_ex,

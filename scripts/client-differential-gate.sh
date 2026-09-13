@@ -1110,6 +1110,42 @@ echo "RUST_spake_first_padata"
 echo "MIT_spake_first_error_25"
 echo "RUST_spake_first_error_25"
 
+echo "==== optimistic preauth / request-count (get_in_tkt.c / preauth2.c) ===="
+as_req_padata_lists() {
+    docker exec "$NAME" python3 -c "
+import json, sys
+reqs = []
+for line in open(sys.argv[1]):
+    o = json.loads(line)
+    if o.get('kind') == 'req' and o.get('msg_type') == 10:
+        reqs.append(o['padata'])
+print(len(reqs))
+print(reqs)
+" "$1"
+}
+preauth_shape() {
+    as_req_padata_lists "$1"
+}
+MIT_PREAUTH_SHAPE="$(preauth_shape /tmp/cdiff/mit-preauth.jsonl)"
+RUST_PREAUTH_SHAPE="$(preauth_shape /tmp/cdiff/rust-preauth.jsonl)"
+MIT_PREAUTH_N="$(printf '%s\n' "$MIT_PREAUTH_SHAPE" | sed -n '1p')"
+RUST_PREAUTH_N="$(printf '%s\n' "$RUST_PREAUTH_SHAPE" | sed -n '1p')"
+MIT_PREAUTH_PADATA="$(printf '%s\n' "$MIT_PREAUTH_SHAPE" | sed -n '2p')"
+RUST_PREAUTH_PADATA="$(printf '%s\n' "$RUST_PREAUTH_SHAPE" | sed -n '2p')"
+echo "MIT_PREAUTH_N=$MIT_PREAUTH_N"
+echo "RUST_PREAUTH_N=$RUST_PREAUTH_N"
+echo "MIT_PREAUTH_PADATA=$MIT_PREAUTH_PADATA"
+echo "RUST_PREAUTH_PADATA=$RUST_PREAUTH_PADATA"
+WANT_PREAUTH_PADATA='[[150, 149], [133, 151, 150, 149], [133, 151, 150, 149]]'
+if [ "$MIT_PREAUTH_PADATA" != "$WANT_PREAUTH_PADATA" ]; then
+    die "MIT preauth cascade want $WANT_PREAUTH_PADATA got $MIT_PREAUTH_PADATA"
+fi
+if [ "$RUST_PREAUTH_PADATA" != "$WANT_PREAUTH_PADATA" ]; then
+    die "Rust preauth cascade want $WANT_PREAUTH_PADATA got $RUST_PREAUTH_PADATA"
+fi
+echo "MIT_preauth_cascade"
+echo "RUST_preauth_cascade"
+
 mkdir -p "$SCRATCH/cdiff"
 docker cp "$NAME:/tmp/cdiff/." "$SCRATCH/cdiff/"
 log "client.diff.gate" "ok" ",\"flows\":$EXPECTED_FLOWS,\"cli_errors\":8"

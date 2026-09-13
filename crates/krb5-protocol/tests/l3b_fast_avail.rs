@@ -90,11 +90,11 @@ fn fast_exchange_negotiates_through_the_armor_like_mit() {
         host: "127.0.0.1".into(),
         port,
     };
-    // The documented user requires preauth: encrypted timestamp (2) is the
-    // selected preauth type MIT would record as pa_type.
+    // The documented user requires preauth and the KDC advertises SPAKE.
+    // MIT `sort_krb5_padata_sequence` + `k5_preauth` records pa_type 151.
     let plain = as_exchange(&request(&cname, &kdc, None)).expect("plain AS exchange");
     assert!(plain.fast_avail);
-    assert_eq!(plain.pa_type, Some(pa::ENC_TIMESTAMP));
+    assert_eq!(plain.pa_type, Some(pa::SPAKE));
     let armor = FastArmor {
         ticket: plain.ticket.clone(),
         session: plain.session_key.clone(),
