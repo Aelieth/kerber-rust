@@ -696,6 +696,34 @@ fn random_nonce31() -> Result<u32, Error> {
     Ok(if n == 0 { 1 } else { n })
 }
 
+/// S4U2Proxy TGS-REQ: `CNAME_IN_ADDL_TKT`, the evidence ticket, and
+/// PA-PAC-OPTIONS RBCD (`s4u_creds.c:1013-1031` `k5_get_proxy_cred_from_kdc`).
+/// FAST outer padata duplicates 167 (`fast.c:227-250`).
+///
+/// # Errors
+///
+/// Transport, crypto, or `KRB-ERROR` failures.
+pub fn tgs_s4u2proxy(
+    kdc: &KdcAddr,
+    tgt: &AsOutcome,
+    target: PrincipalName,
+    realm: &str,
+    evidence: Ticket,
+) -> Result<TgsOutcome, Error> {
+    let opts = tgs_kdc_options(tgt).with_bit(flag_bit::CNAME_IN_ADDL_TKT, true);
+    let pac = crate::pa_pac_options(true)?;
+    tgs_once(
+        kdc,
+        tgt,
+        target,
+        realm,
+        opts,
+        &[pac],
+        Some(vec![evidence]),
+        None,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use krb5_crypto::{EncryptionType, ProtocolKey};

@@ -9,7 +9,8 @@
 //! `renew-gate.sh`). `-U <user>` sends PA-FOR-USER with `body.realm` of the
 //! presented TGT (single request; no S4U referral walk). MIT `kvno -U` also
 //! requires the ccache principal to equal the service; this binary does not,
-//! so a user TGT can present the Y0 mismatch cell. `-P` is not implemented.
+//! so a user TGT can present the Y0 mismatch cell. `-P` after `-U` is
+//! S4U2Proxy (`s4u_creds.c` `krb5_get_credentials_for_proxy`).
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -19,8 +20,8 @@ use krb5_client::cli::parse_kvno;
 use krb5_client::{load_ccache, store_ccache_keep_default};
 use krb5_config::resolve_ccspec;
 use krb5_protocol::{
-    AsOutcome, KdcAddr, parse_principal, tgs_exchange_once, tgs_exchange_path, tgs_s4u, tgs_u2u,
-    tgt_cred,
+    AsOutcome, KdcAddr, parse_principal, tgs_exchange_once, tgs_exchange_path, tgs_s4u,
+    tgs_s4u2proxy, tgs_u2u, tgt_cred,
 };
 use krb5_types::{
     EncKdcRepPart, EncryptionKey, KerberosTime, PrincipalName, Ticket, TicketFlags, err,
@@ -28,10 +29,6 @@ use krb5_types::{
 
 fn main() {
     let raw: Vec<String> = std::env::args().skip(1).collect();
-    if raw.iter().any(|a| a == "-P") {
-        eprintln!("krb5-kvno: -P (S4U2Proxy) is not implemented");
-        std::process::exit(2);
-    }
     let args = parse_kvno(&raw).unwrap_or_else(|e| {
         eprintln!("kvno: {e}");
         std::process::exit(2);
@@ -195,7 +192,18 @@ fn run(
                 "no TGT for realm {srealm} in ccache; seed with `kvno krbtgt/{srealm}@{srealm}`"
             ));
         }
-        tgs_s4u(&addr, &tgt, sname, &hop_realm, &uname, &urealm).map_err(kvno_err)?
+        let self_sname = if args.proxy {
+            tgt.cname.clone()
+        } else {
+            sname.clone()
+        };
+        let evidence =
+            tgs_s4u(&addr, &tgt, self_sname, &hop_realm, &uname, &urealm).map_err(kvno_err)?;
+        if args.proxy {
+            tgs_s4u2proxy(&addr, &tgt, sname, &hop_realm, evidence.ticket).map_err(kvno_err)?
+        } else {
+            evidence
+        }
     } else if let Some(u2u) = args.u2u.as_deref() {
         let br = args.body_realm.as_deref().ok_or_else(|| {
             "requires --body-realm (gate-only; MIT kvno --u2u needs a same-realm TGT)".to_string()

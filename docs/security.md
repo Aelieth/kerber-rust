@@ -292,6 +292,11 @@ outer padata duplicates both. `verify_s4u2self_reply`
 checksum mismatch (`KRB5_KDCREP_MODIFIED`), or an unkeyed reply
 checksum on a modern etype (`INAPP_CKSUM`). Missing 130 on both
 the FAST-swapped reply padata and enc-padata is accepted.
+`kvno -U -P` is S4U2Proxy (`s4u_creds.c:1195-1262`
+`krb5_get_credentials_for_proxy`): S4U2Self for the ccache
+principal, then `CNAME_IN_ADDL_TKT` plus the evidence ticket and
+PA-PAC-OPTIONS RBCD (167). FAST outer padata is `[1, 136, 167]`.
+`-P` without `-U` is refused (`kvno.c:163-168`).
 AP-REQ acceptor key selection uses the ticket kvno and etype
 (`rd_req_dec.c:325-347` `try_one_princ`). Ticket kvno 0, or a key
 labeled 0, means any (`kdc_util.c:371-372` twin). kpasswd and

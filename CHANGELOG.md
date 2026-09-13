@@ -86,6 +86,10 @@ this project uses semantic versioning once a crate is published.
   (`verify_s4u2self_reply`, `s4u_creds.c:273-397`): enc-only 130,
   nonce/user/checksum mismatch is `KRB5_KDCREP_MODIFIED`; an unkeyed
   reply checksum on a modern etype is `INAPP_CKSUM`.
+- **client.** `kvno -U -P` is S4U2Proxy (`s4u_creds.c:1013-1031`):
+  S4U2Self for the ccache principal, then a TGS with
+  `CNAME_IN_ADDL_TKT`, the evidence ticket, and PA-PAC-OPTIONS 167.
+  FAST outer padata is `[1, 136, 167]`. `-P` without `-U` is refused.
 - **kdc.** Hierarchical `find_alternate_tgs` walks MIT
   `rtree_hier_realms` (`walk_rtree.c`) instead of transit
   intermediates, so `krbtgt/X.SUB.KERBER.TEST` issues

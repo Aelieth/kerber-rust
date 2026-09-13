@@ -366,6 +366,8 @@ pub struct KvnoArgs {
     /// `-U` impersonated user (S4U2Self). Unlike MIT `kvno`, the ccache
     /// principal need not equal the service; the KDC enforces that.
     pub for_user: Option<String>,
+    /// `-P` S4U2Proxy after `-U` (`kvno.c:163-168`).
+    pub proxy: bool,
 }
 
 fn kvno_longs() -> &'static [LongOpt] {
@@ -404,7 +406,7 @@ fn kvno_longs() -> &'static [LongOpt] {
 ///
 /// Unknown option or missing argument.
 pub fn parse_kvno(args: &[String]) -> Result<KvnoArgs, String> {
-    let (opts, rest) = getopt(args, "c:U:", kvno_longs())?;
+    let (opts, rest) = getopt(args, "c:U:P", kvno_longs())?;
     let mut out = KvnoArgs::default();
     for o in opts {
         if o.long == Some("disable-transited-check") {
@@ -430,6 +432,7 @@ pub fn parse_kvno(args: &[String]) -> Result<KvnoArgs, String> {
         match o.flag {
             'c' => out.ccache = o.arg,
             'U' => out.for_user = o.arg,
+            'P' => out.proxy = true,
             _ => return Err(format!("invalid option -- '{}'", o.flag)),
         }
     }
@@ -443,6 +446,9 @@ pub fn parse_kvno(args: &[String]) -> Result<KvnoArgs, String> {
             "requires --body-realm (gate-only; MIT kvno has no renew — `kinit -R` is `renew-gate.sh`)"
                 .into(),
         );
+    }
+    if out.proxy && out.for_user.is_none() {
+        return Err("Option -P (constrained delegation) requires option -U".into());
     }
     Ok(out)
 }
@@ -627,6 +633,11 @@ mod tests {
         let u = parse_kvno(&s(&["-U", "victim@A.TEST", "user@C.TEST"])).unwrap();
         assert_eq!(u.for_user.as_deref(), Some("victim@A.TEST"));
         assert_eq!(u.services, vec!["user@C.TEST".to_string()]);
+        let p = parse_kvno(&s(&["-U", "user", "-P", "host/x@R"])).unwrap();
+        assert!(p.proxy);
+        assert_eq!(p.for_user.as_deref(), Some("user"));
+        let e = parse_kvno(&s(&["-P", "host/x@R"])).unwrap_err();
+        assert!(e.contains("requires option -U"), "{e}");
     }
 
     #[test]

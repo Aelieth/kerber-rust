@@ -570,7 +570,7 @@ cli_pair bad_ccache \
     "KRB5_PASSWORD=userpassword /tmp/krb5-kinit -c /no/such/dir/cc user@KERBER.TEST"
 echo "CLI_error_paths=8"
 
-echo "==== Rust kvno -P is not implemented ===="
+echo "==== kvno -P without -U is refused ===="
 set +e
 RUST_P="$(docker exec "$NAME" /tmp/krb5-kvno -P host/testhost.kerber.test 2>&1)"
 RUST_P_RC=$?
@@ -580,7 +580,7 @@ echo "RUST_kvno_P_rc=$RUST_P_RC"
 if [ "$RUST_P_RC" -eq 0 ]; then
     die "Rust kvno -P unexpectedly succeeded"
 fi
-echo "$RUST_P" | grep -q 'not implemented'
+echo "$RUST_P" | grep -q 'requires'
 
 echo "==== gss-mit-client → Rust acceptor majors ===="
 if ! docker exec "$NAME" cc -o /tmp/gss-mit-client /tmp/gss-mit-client.c -lgssapi_krb5 -lkrb5; then
@@ -1170,6 +1170,58 @@ if [ "$RUST_KVNO_U_TGS_PADATA" != "$WANT_S4U_TGS_PADATA" ]; then
 fi
 echo "MIT_kvno_U_tgs_padata"
 echo "RUST_kvno_U_tgs_padata"
+
+echo "==== kvno -U -P TGS padata (s4u_creds.c S4U2Proxy) ===="
+tgs_padata_nth() {
+    docker exec "$NAME" python3 -c "
+import json, sys
+n = int(sys.argv[2])
+seen = 0
+for line in open(sys.argv[1]):
+    o = json.loads(line)
+    if o.get('kind') == 'req' and o.get('msg_type') == 12:
+        if seen == n:
+            print(o['padata'])
+            break
+        seen += 1
+" "$1" "$2"
+}
+docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf "$NAME" \
+    kinit -f -k -t /tmp/host.keytab -c /tmp/cc_mit_s4u_p host/testhost.kerber.test@KERBER.TEST
+docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf "$NAME" \
+    /tmp/krb5-kinit -k -t /tmp/host.keytab -c /tmp/cc_rust_s4u_p \
+    host/testhost.kerber.test@KERBER.TEST
+reset_cap
+docker exec -e KRB5_CONFIG=/tmp/proxy-krb5.conf -e KRB5CCNAME=FILE:/tmp/cc_mit_s4u_p "$NAME" \
+    kvno -U user -P host/testhost.kerber.test || true
+save_cap mit-kvno_s4u_proxy
+reset_cap
+docker exec -e KRB5_CONFIG=/tmp/proxy-krb5.conf "$NAME" \
+    /tmp/krb5-kvno -c /tmp/cc_rust_s4u_p -U user -P host/testhost.kerber.test || true
+save_cap rust-kvno_s4u_proxy
+MIT_KVNO_P_SELF="$(tgs_padata_nth /tmp/cdiff/mit-kvno_s4u_proxy.jsonl 0)"
+RUST_KVNO_P_SELF="$(tgs_padata_nth /tmp/cdiff/rust-kvno_s4u_proxy.jsonl 0)"
+MIT_KVNO_P_PROXY="$(tgs_padata_nth /tmp/cdiff/mit-kvno_s4u_proxy.jsonl 1)"
+RUST_KVNO_P_PROXY="$(tgs_padata_nth /tmp/cdiff/rust-kvno_s4u_proxy.jsonl 1)"
+echo "MIT_KVNO_P_SELF=$MIT_KVNO_P_SELF"
+echo "RUST_KVNO_P_SELF=$RUST_KVNO_P_SELF"
+echo "MIT_KVNO_P_PROXY=$MIT_KVNO_P_PROXY"
+echo "RUST_KVNO_P_PROXY=$RUST_KVNO_P_PROXY"
+WANT_S4U2PROXY_TGS_PADATA='[1, 136, 167]'
+if [ "$MIT_KVNO_P_SELF" != "$WANT_S4U_TGS_PADATA" ]; then
+    die "MIT kvno -U -P first TGS want $WANT_S4U_TGS_PADATA got $MIT_KVNO_P_SELF"
+fi
+if [ "$RUST_KVNO_P_SELF" != "$WANT_S4U_TGS_PADATA" ]; then
+    die "Rust kvno -U -P first TGS want $WANT_S4U_TGS_PADATA got $RUST_KVNO_P_SELF"
+fi
+if [ "$MIT_KVNO_P_PROXY" != "$WANT_S4U2PROXY_TGS_PADATA" ]; then
+    die "MIT kvno -U -P proxy TGS want $WANT_S4U2PROXY_TGS_PADATA got $MIT_KVNO_P_PROXY"
+fi
+if [ "$RUST_KVNO_P_PROXY" != "$WANT_S4U2PROXY_TGS_PADATA" ]; then
+    die "Rust kvno -U -P proxy TGS want $WANT_S4U2PROXY_TGS_PADATA got $RUST_KVNO_P_PROXY"
+fi
+echo "MIT_kvno_P_tgs_padata"
+echo "RUST_kvno_P_tgs_padata"
 
 mkdir -p "$SCRATCH/cdiff"
 docker cp "$NAME:/tmp/cdiff/." "$SCRATCH/cdiff/"
