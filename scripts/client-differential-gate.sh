@@ -930,6 +930,58 @@ fi
 echo "MIT_etype_default_list"
 echo "RUST_etype_aes_only"
 
+echo "==== FAST outer till (get_in_tkt.c / fast.c) ===="
+docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf "$NAME" \
+    sh -c "printf 'userpassword\n' | kinit -c /tmp/cc_armor_mit_till user@KERBER.TEST" \
+    || die "MIT armor kinit for FAST till failed"
+docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf -e KRB5_PASSWORD=userpassword "$NAME" \
+    /tmp/krb5-kinit -c /tmp/cc_armor_rust_till user@KERBER.TEST \
+    || die "Rust armor kinit for FAST till failed"
+reset_cap
+docker exec -e KRB5_CONFIG=/tmp/proxy-krb5.conf "$NAME" \
+    sh -c "printf 'userpassword\n' | kinit -T /tmp/cc_armor_mit_till -c /tmp/cc_mit_fast_till user@KERBER.TEST" \
+    || die "MIT kinit -T till failed"
+save_cap mit-fast-till
+reset_cap
+docker exec -e KRB5_CONFIG=/tmp/proxy-krb5.conf -e KRB5_PASSWORD=userpassword "$NAME" \
+    /tmp/krb5-kinit --armor-ccache /tmp/cc_armor_rust_till -c /tmp/cc_rust_fast_till \
+    user@KERBER.TEST || die "Rust kinit --armor-ccache till failed"
+save_cap rust-fast-till
+MIT_FAST_TILL="$(docker exec "$NAME" python3 -c '
+import json
+for line in open("/tmp/cdiff/mit-fast-till.jsonl"):
+    o = json.loads(line)
+    if o.get("kind") == "req" and o.get("msg_type") == 10:
+        print(o["till"])
+        break
+else:
+    raise SystemExit("no MIT FAST AS-REQ")
+')"
+RUST_FAST_TILL="$(docker exec "$NAME" python3 -c '
+import json
+for line in open("/tmp/cdiff/rust-fast-till.jsonl"):
+    o = json.loads(line)
+    if o.get("kind") == "req" and o.get("msg_type") == 10:
+        print(o["till"])
+        break
+else:
+    raise SystemExit("no Rust FAST AS-REQ")
+')"
+echo "MIT_FAST_TILL=$MIT_FAST_TILL"
+echo "RUST_FAST_TILL=$RUST_FAST_TILL"
+if [ "$MIT_FAST_TILL" != "zero" ]; then
+    die "MIT FAST outer till want zero got $MIT_FAST_TILL"
+fi
+if [ "$RUST_FAST_TILL" != "zero" ]; then
+    die "Rust FAST outer till want zero got $RUST_FAST_TILL"
+fi
+FAST_TILL_CMP="$(docker exec "$NAME" python3 /tmp/kdc-req-proxy.py --compare \
+    /tmp/cdiff/mit-fast-till.jsonl /tmp/cdiff/rust-fast-till.jsonl fast-till)"
+echo "$FAST_TILL_CMP"
+echo "$FAST_TILL_CMP" | grep -q "SHAPE_MATCH till="
+echo "MIT_fast_outer_till_zero"
+echo "RUST_fast_outer_till_zero"
+
 mkdir -p "$SCRATCH/cdiff"
 docker cp "$NAME:/tmp/cdiff/." "$SCRATCH/cdiff/"
 log "client.diff.gate" "ok" ",\"flows\":$EXPECTED_FLOWS,\"cli_errors\":8"

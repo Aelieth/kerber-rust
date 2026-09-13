@@ -261,6 +261,12 @@ The default AS/TGS etype list is the AES quartet 18/17/20/19
 (`preferred()`). MIT `init_ctx.c:59-66` also offers DES3 (16), RC4 (23),
 and Camellia (25, 26); those stay behind `is_weak` unless named in
 `default_tkt_enctypes` / `permitted_enctypes`.
+FAST AS outer `till` is the epoch (`19700101`) because
+`krb5int_fast_prep_req_body` snapshots the request before
+`set_request_times` (`get_in_tkt.c:836-838`, `fast.c:157-161`).
+Optional outer `from`/`rtime` stay omitted. The inner FAST-REQ body
+keeps the live times; `req_checksum` is over the snapshotted outer
+body (`fast.c:310-313`).
 
 FAST `req_checksum` is verified over the wire KDC-REQ-BODY (field 4)
 when a raw packet is present (`do_as_req.c:526-531`); socketless tests

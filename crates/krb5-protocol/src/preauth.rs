@@ -113,12 +113,25 @@ pub fn attach_fast_with_options(
     // builder already appended), becomes the FAST-REQ; the outer carries
     // only PA-FX-FAST. The KDC swaps the inner request in (kdc_find_fast),
     // so the enc-pa-rep negotiation works through the armor too.
+    //
+    // Outer times stay at the `krb5int_fast_prep_req_body` snapshot
+    // (`get_in_tkt.c:836-838`, `fast.c:157-161`) taken before
+    // `set_request_times` (`get_in_tkt.c:1278-1280`): required `till` is
+    // epoch (`19700101`); optional `from`/`rtime` stay omitted. The inner
+    // FAST-REQ body keeps the live times. `req_checksum` is over the
+    // snapshotted outer body (`fast.c:310-313`).
     let mut inner = inner_padata;
     inner.extend(req.0.padata.take().unwrap_or_default());
-    req.0.padata = Some(vec![fx_fast_padata(
+    let inner_body = req.0.req_body.clone();
+    req.0.req_body.till = KerberosTime::from_unix_seconds(0);
+    req.0.req_body.from = None;
+    req.0.req_body.rtime = None;
+    let outer_der = encode(&req.0.req_body)?;
+    req.0.padata = Some(vec![fx_fast_padata_over(
         Some(armor),
         armor_key,
-        &req.0.req_body,
+        &outer_der,
+        &inner_body,
         inner,
         fast_options,
     )?]);

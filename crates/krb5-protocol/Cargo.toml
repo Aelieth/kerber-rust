@@ -82,6 +82,10 @@ path = "tests/b1_vfy_increds.rs"
 name = "b1_gic_opt"
 path = "tests/b1_gic_opt.rs"
 
+[[test]]
+name = "b1_fast_outer_till"
+path = "tests/b1_fast_outer_till.rs"
+
 [dependencies]
 chrono.workspace = true
 getrandom.workspace = true

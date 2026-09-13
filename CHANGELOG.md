@@ -60,6 +60,11 @@ this project uses semantic versioning once a crate is published.
   (`preferred()`). MIT `init_ctx.c:59-66` also offers 16/23/25/26;
   those stay behind `is_weak` unless named in the profile
   (stricter-documented).
+- **client.** FAST AS outer `till` is the epoch (`19700101`) like MIT
+  `krb5int_fast_prep_req_body` (`fast.c:157-161`,
+  `get_in_tkt.c:836-838`) taken before `set_request_times`. The inner
+  FAST-REQ body keeps the live times; `req_checksum` is over the
+  snapshotted outer body.
 - **test.** `scripts/client-differential-gate.sh` drives MIT and Rust
   `kinit`/`kvno` against the live MIT 1.22.2 KDC through
   `scripts/lib/kdc-req-proxy.py` (request-shape JSONL: padata,
@@ -72,8 +77,8 @@ this project uses semantic versioning once a crate is published.
   when `kdc_timesync = 0`; `gss-mit-client` → Rust acceptor majors;
   `t_vfy_increds` vs `krb5-vfy-increds`; kpasswd result texts and
   setpw; `kinit -C` / `-s` / `[libdefaults] canonicalize`; default
-  etype list (MIT 18/17/20/19/16/23/25/26, Rust AES-only). Fail-red
-  on `mit-extra`.
+  etype list (MIT 18/17/20/19/16/23/25/26, Rust AES-only); FAST AS
+  outer `till=zero`. Fail-red on `mit-extra`.
 
 ### W1-A′-4
 

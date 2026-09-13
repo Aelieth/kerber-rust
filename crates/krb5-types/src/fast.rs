@@ -44,7 +44,8 @@ pub struct KrbFastReq {
     /// Inner padata (encrypted timestamp, cookie, …).
     #[rasn(tag(explicit(1)))]
     pub padata: SequenceOf<PaData>,
-    /// Copy of the outer request body.
+    /// Inner KDC-REQ-BODY (live times). The outer AS-REQ body is the
+    /// `krb5int_fast_prep_req_body` snapshot (`till` epoch).
     #[rasn(tag(explicit(2)))]
     pub req_body: KdcReqBody,
 }
