@@ -8,6 +8,14 @@ this project uses semantic versioning once a crate is published.
 
 ### W1-C
 
+- **docs.** GSS context remainder graded against `gss-gate.sh` (ledger
+  419): mutual AP-REP / acceptor subkey / initial sequence (deviation on
+  the acceptor side: `seq-number` 0, no acceptor subkey; initiator side
+  exact), `gss_wrap_size_limit` (absent; `wrap_iov_length` carries the
+  sizes), IOV `SIGN_ONLY` and DCE wrap/unwrap (exact for AES, both legs
+  live), SPNEGO `negotiate_mech` / `mechListMIC` (deviation: single-leg
+  acceptor, MIC always sent, no `request-mic`; a krb5-less list is
+  refused). No code change; `security.md` GSS paragraph extended.
 - **kpropd.** `kpropd.acl` now has MIT `authorized_principal` semantics
   (`kpropd.c:1298-1348`): a line authorizes when it starts with the
   unparsed client principal and ends there or at whitespace; an optional

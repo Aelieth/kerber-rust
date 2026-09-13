@@ -189,6 +189,19 @@ RRC is reduced modulo the payload length (`unwrap.c:255-263`). `unwrap`
 reports `conf_state`; the RPCSEC_GSS privacy service rejects an
 integrity-only body (`authgss_prot.c:238-240`), so a client that
 negotiated `rpc_gss_svc_privacy` cannot downgrade to an unsealed request.
+The Rust GSS acceptor's mutual AP-REP carries `seq-number` 0 and no acceptor
+subkey, so its tokens are keyed with the initiator subkey from sequence 0
+where MIT (`accept_sec_context.c:1021-1060`, `mk_rep.c:78-111`) generates a
+random initial sequence and a fresh acceptor subkey for CFX; the initiator
+side consumes an MIT acceptor subkey and `FLAG_ACCEPTOR_SUBKEY` exactly.
+Replay protection does not rest on the initial sequence (the authenticator
+rcache and the per-context window do that) and RFC 4121 makes the acceptor
+subkey optional, so this is a parity gap, not a downgrade. The SPNEGO acceptor
+is single-leg: krb5 must be in `mechTypes` or the token is refused, an
+initiator `mechListMIC` is verified over the DER list, and a MIC is always
+returned with `accept-completed`; MIT's `request-mic` leg for a
+non-first mech (`spnego_mech.c:3557-3578`) is not implemented, which for a
+krb5-only acceptor cannot be turned into a downgrade.
 PA-FOR-USER unkeyed is 50 and a bad MAC is 41
 (`INVALID_S4U2SELF_CHECKSUM`). PAC SHA-1 on the server checksum is 15
 (`pac.c:496-497`). PAC signatures are verified over the received bytes
