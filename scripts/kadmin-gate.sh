@@ -946,6 +946,25 @@ RENOLD="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc renamefrom' 2>&1 || true)"
 echo "$RENOLD"
 echo "$RENOLD" | grep -qiE 'does not exist|not found|UNK_PRINC'
+
+echo "==== C1 kadm5 create over the Rust kadmind: -randkey (NULL passwd) is a random key, -pw \"\" is PASS_Q_TOOSHORT ===="
+# Rust leg of the C1 cell; the MIT leg runs once the MIT kadmind is up.
+RUST_RK="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -randkey rkempty' 2>&1 || true)"
+echo "$RUST_RK"
+echo "$RUST_RK" | grep -F 'Principal "rkempty@KERBER.TEST" created.'
+RUST_RK_KINIT="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" sh -c 'printf "\n" | kinit rkempty@KERBER.TEST' 2>&1 || true)"
+echo "$RUST_RK_KINIT"
+echo "$RUST_RK_KINIT" | grep -F 'kinit: Password incorrect while getting initial credentials'
+RUST_RK_EMPTY="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw "" rpcempty' 2>&1 || true)"
+echo "$RUST_RK_EMPTY"
+echo "$RUST_RK_EMPTY" | grep -F 'add_principal: Password is too short while creating "rpcempty@KERBER.TEST".'
+RUST_RK_GET="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc rpcempty' 2>&1 || true)"
+echo "$RUST_RK_GET" | grep -F 'get_principal: Principal does not exist while retrieving "rpcempty@KERBER.TEST".'
+echo "c1_kadm5_randkey_and_empty=rust-leg"
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'ktadd -k /tmp/renameto.keytab renameto'
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
@@ -1861,6 +1880,22 @@ echo "$MITMOD" | grep -F "modify'' privilege"
 MITREN="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'renprinc -force kadmin/changepw kadmin/changepw2' 2>&1 || true)"
 echo "$MITREN"
 echo "$MITREN" | grep -F "delete'' privilege"
+
+echo "==== C1 kadm5 create over the MIT kadmind: -randkey (NULL passwd) is a random key, -pw \"\" is PASS_Q_TOOSHORT ===="
+# svr_principal.c:369,463-470: kadmin addprinc -randkey sends a NULL passwd,
+# the server skips passwd_check and keys with krb5_dbe_crk, so an
+# empty-password kinit fails; pwqual_empty.c refuses -pw "" with
+# KADM5_PASS_Q_TOOSHORT, which the remote kadmin prints as the et text.
+MIT_RK="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'addprinc -randkey rkempty' 2>&1 || true)"
+echo "$MIT_RK"
+echo "$MIT_RK" | grep -F 'Principal "rkempty@KERBER.TEST" created.'
+MIT_RK_KINIT="$(docker exec "$NAME_MIT" sh -c 'printf "\n" | kinit rkempty@KERBER.TEST' 2>&1 || true)"
+echo "$MIT_RK_KINIT"
+echo "$MIT_RK_KINIT" | grep -F 'kinit: Password incorrect while getting initial credentials'
+MIT_RK_EMPTY="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'addprinc -pw "" rpcempty' 2>&1 || true)"
+echo "$MIT_RK_EMPTY"
+echo "$MIT_RK_EMPTY" | grep -F 'add_principal: Password is too short while creating "rpcempty@KERBER.TEST".'
+echo "c1_kadm5_randkey_and_empty=mit-leg"
 
 echo "==== MIT ACL without d renprinc krbtgt is AUTH_INSUFFICIENT ===="
 for run in 1 2; do
