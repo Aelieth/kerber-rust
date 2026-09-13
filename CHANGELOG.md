@@ -41,6 +41,12 @@ this project uses semantic versioning once a crate is published.
   ticket + kpasswd + retry path (`gic_pwd.c:211-336`). kpasswd
   result codes outside 0–7, or SUCCESS from a KRB-ERROR, are
   `KRB5KRB_AP_ERR_MODIFIED` (`chpw.c:217-231`).
+- **client.** `krb5_verify_init_creds` (`vfy_increds.c:259-321`)
+  verifies the TGT with mk_req + rd_req against a keytab. Missing /
+  empty / non-`host/` keytabs succeed unless `-n` or
+  `verify_ap_req_nofail`; an outdated host key fails. Live
+  `t_vfy_increds` vs `krb5-vfy-increds` in
+  `client-differential-gate.sh`.
 - **test.** `scripts/client-differential-gate.sh` drives MIT and Rust
   `kinit`/`kvno` against the live MIT 1.22.2 KDC through
   `scripts/lib/kdc-req-proxy.py` (request-shape JSONL: padata,
@@ -50,8 +56,8 @@ this project uses semantic versioning once a crate is published.
   list); MIT `klist -C -f -e -a` over both FILE caches;
   seven CLI error paths non-zero on both CLIs; +3d `skew-preload.c`
   records default `kdc_timesync` recovery on both CLIs and Clock skew
-  when `kdc_timesync = 0`; `gss-mit-client` → Rust acceptor majors.
-  Fail-red on `mit-extra`.
+  when `kdc_timesync = 0`; `gss-mit-client` → Rust acceptor majors;
+  `t_vfy_increds` vs `krb5-vfy-increds`. Fail-red on `mit-extra`.
 
 ### W1-A′-4
 

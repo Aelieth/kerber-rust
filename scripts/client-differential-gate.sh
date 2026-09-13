@@ -39,7 +39,7 @@ if ! command -v docker >/dev/null 2>&1; then
     unavailable "docker not available"
 fi
 
-cargo build -p krb5-client --bin krb5-kinit --bin krb5-klist --bin krb5-kvno --bin krb5-kdestroy -q
+cargo build -p krb5-client --bin krb5-kinit --bin krb5-klist --bin krb5-kvno --bin krb5-kdestroy --bin krb5-vfy-increds -q
 cargo build -p krb5-kdc --bin krb5-kdc -q
 cargo build -p krb5-gss --bin krb5-gss-accept -q
 
@@ -702,6 +702,76 @@ echo "$MIT_CHPW_KL" | grep -q 'mitexpuser@KERBER.TEST'
 echo "$RUST_CHPW_KL" | grep -q 'rustexpuser@KERBER.TEST'
 echo "MIT_kinit_keyexp_changepw"
 echo "RUST_kinit_keyexp_changepw"
+
+echo "==== vfy_increds (vfy_increds.c) ===="
+docker cp "$ROOT/scripts/t_vfy_increds.c" "$NAME":/tmp/t_vfy_increds.c
+if ! docker exec "$NAME" cc -o /tmp/t_vfy_increds /tmp/t_vfy_increds.c -lkrb5 -lcom_err; then
+    die "MIT t_vfy_increds compile failed"
+fi
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-vfy-increds" "$NAME":/tmp/krb5-vfy-increds
+docker exec "$NAME" chmod +x /tmp/krb5-vfy-increds
+docker exec "$NAME" kadmin.local -q 'addprinc -randkey host/vfy.kerber.test' >/dev/null
+docker exec "$NAME" kadmin.local -q 'ktadd -k /tmp/vfy.kt host/vfy.kerber.test' >/dev/null
+docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf "$NAME" \
+    sh -c 'printf "userpassword\n" | kinit -c /tmp/cc_vfy user@KERBER.TEST' \
+    || die "kinit for vfy_increds failed"
+VFY_ENV="-e KRB5_CONFIG=/tmp/direct-krb5.conf -e KRB5CCNAME=/tmp/cc_vfy -e KRB5_KTNAME=/tmp/vfy.kt"
+docker exec $VFY_ENV "$NAME" /tmp/t_vfy_increds || die "MIT t_vfy_increds host failed"
+docker exec $VFY_ENV "$NAME" /tmp/krb5-vfy-increds || die "Rust t_vfy_increds host failed"
+echo "MIT_vfy_increds_host"
+echo "RUST_vfy_increds_host"
+docker exec "$NAME" kadmin.local -q 'cpw -randkey host/vfy.kerber.test' >/dev/null
+set +e
+docker exec $VFY_ENV "$NAME" /tmp/t_vfy_increds
+mit_vfy_old=$?
+docker exec $VFY_ENV "$NAME" /tmp/krb5-vfy-increds
+rust_vfy_old=$?
+set -e
+[ "$mit_vfy_old" != 0 ] || die "MIT t_vfy_increds outdated unexpectedly succeeded"
+[ "$rust_vfy_old" != 0 ] || die "Rust t_vfy_increds outdated unexpectedly succeeded"
+echo "MIT_vfy_increds_outdated"
+echo "RUST_vfy_increds_outdated"
+docker exec "$NAME" rm -f /tmp/vfy.kt
+docker exec $VFY_ENV "$NAME" /tmp/t_vfy_increds || die "MIT t_vfy_increds no keytab failed"
+docker exec $VFY_ENV "$NAME" /tmp/krb5-vfy-increds || die "Rust t_vfy_increds no keytab failed"
+set +e
+docker exec $VFY_ENV "$NAME" /tmp/t_vfy_increds -n
+mit_vfy_n=$?
+docker exec $VFY_ENV "$NAME" /tmp/krb5-vfy-increds -n
+rust_vfy_n=$?
+set -e
+[ "$mit_vfy_n" != 0 ] || die "MIT t_vfy_increds -n no keytab unexpectedly succeeded"
+[ "$rust_vfy_n" != 0 ] || die "Rust t_vfy_increds -n no keytab unexpectedly succeeded"
+echo "MIT_vfy_increds_nokeytab"
+echo "RUST_vfy_increds_nokeytab"
+docker exec "$NAME" kadmin.local -q 'addprinc -randkey nfs/vfy.kerber.test' >/dev/null
+docker exec "$NAME" kadmin.local -q 'ktadd -k /tmp/vfy.kt nfs/vfy.kerber.test' >/dev/null
+docker exec $VFY_ENV "$NAME" /tmp/t_vfy_increds || die "MIT t_vfy_increds nfs-default failed"
+docker exec $VFY_ENV "$NAME" /tmp/krb5-vfy-increds || die "Rust t_vfy_increds nfs-default failed"
+docker exec $VFY_ENV "$NAME" /tmp/t_vfy_increds nfs/vfy.kerber.test@KERBER.TEST \
+    || die "MIT t_vfy_increds nfs-explicit failed"
+docker exec $VFY_ENV "$NAME" /tmp/krb5-vfy-increds nfs/vfy.kerber.test@KERBER.TEST \
+    || die "Rust t_vfy_increds nfs-explicit failed"
+echo "MIT_vfy_increds_nfs"
+echo "RUST_vfy_increds_nfs"
+docker exec "$NAME" rm -f /tmp/vfy.kt
+docker exec "$NAME" python3 -c '
+from pathlib import Path
+t = Path("/tmp/direct-krb5.conf").read_text()
+Path("/tmp/vfy-nofail.conf").write_text(t.replace("[libdefaults]", "[libdefaults]\n    verify_ap_req_nofail = true"))
+'
+set +e
+docker exec -e KRB5_CONFIG=/tmp/vfy-nofail.conf -e KRB5CCNAME=/tmp/cc_vfy -e KRB5_KTNAME=/tmp/vfy.kt \
+    "$NAME" /tmp/t_vfy_increds
+mit_vfy_nf=$?
+docker exec -e KRB5_CONFIG=/tmp/vfy-nofail.conf -e KRB5CCNAME=/tmp/cc_vfy -e KRB5_KTNAME=/tmp/vfy.kt \
+    "$NAME" /tmp/krb5-vfy-increds
+rust_vfy_nf=$?
+set -e
+[ "$mit_vfy_nf" != 0 ] || die "MIT t_vfy_increds verify_ap_req_nofail unexpectedly succeeded"
+[ "$rust_vfy_nf" != 0 ] || die "Rust t_vfy_increds verify_ap_req_nofail unexpectedly succeeded"
+echo "MIT_vfy_increds_nofail"
+echo "RUST_vfy_increds_nofail"
 
 mkdir -p "$SCRATCH/cdiff"
 docker cp "$NAME:/tmp/cdiff/." "$SCRATCH/cdiff/"

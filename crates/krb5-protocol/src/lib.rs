@@ -30,6 +30,7 @@ mod safe_priv;
 mod secret_file;
 mod tgs;
 mod transport;
+mod vfy_increds;
 
 pub use ap_rep::{build_ap_rep, verify_ap_rep};
 pub use ap_req::{
@@ -92,6 +93,9 @@ pub use tgs::{
     tgs_exchange_path, tgs_forward, tgs_renew, tgs_renew_options, tgs_s4u, tgs_u2u,
 };
 pub use transport::{KDC_PORT, KdcAddr, exchange, exchange_on_tcp, exchange_with_failover};
+pub use vfy_increds::{
+    host_princs_from_keytab, keytab_has_server, verify_init_creds, verify_init_creds_nofail,
+};
 
 #[cfg(test)]
 #[path = "../tests/diff_compare.rs"]

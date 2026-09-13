@@ -243,6 +243,11 @@ Password `KEY_EXP` (23) obtains a short non-forwardable
 AS-REQ (`gic_pwd.c:211-336`). A kpasswd result code outside 0–7 or
 SUCCESS taken from a KRB-ERROR is `KRB5KRB_AP_ERR_MODIFIED`
 (`chpw.c:217-231`).
+`krb5_verify_init_creds` (`vfy_increds.c:259-321`) mk_req + rd_req
+against the keytab: a missing, empty, or non-`host/` keytab succeeds
+unless `ap_req_nofail` / `[libdefaults] verify_ap_req_nofail`; an
+outdated host key fails. No MIT CLI caller; `t_vfy_increds` is the
+oracle.
 
 FAST `req_checksum` is verified over the wire KDC-REQ-BODY (field 4)
 when a raw packet is present (`do_as_req.c:526-531`); socketless tests

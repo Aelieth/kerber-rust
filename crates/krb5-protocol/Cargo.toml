@@ -74,6 +74,10 @@ path = "tests/b1_gic_keytab.rs"
 name = "b1_gic_pwd"
 path = "tests/b1_gic_pwd.rs"
 
+[[test]]
+name = "b1_vfy_increds"
+path = "tests/b1_vfy_increds.rs"
+
 [dependencies]
 chrono.workspace = true
 getrandom.workspace = true

@@ -73,6 +73,8 @@ pub struct Krb5Conf {
     /// `kdc_timesync`. Default true (`init_ctx.c:268-270`). AS-REP
     /// `verify_as_reply` skips starttime vs the local clock when set.
     pub kdc_timesync: bool,
+    /// `verify_ap_req_nofail`. Default false (`vfy_increds.c:38-51`).
+    pub verify_ap_req_nofail: bool,
     /// `permitted_enctypes`.
     pub permitted_enctypes: Vec<String>,
     /// `default_tkt_enctypes`.
@@ -625,6 +627,9 @@ fn parse_libdefaults(conf: &mut Krb5Conf, seen: &mut BTreeSet<String>, line: &st
         }
         "rdns" if take_first(seen, "rdns") => conf.rdns = truthy(&v),
         "kdc_timesync" if take_first(seen, "kdc_timesync") => conf.kdc_timesync = truthy(&v),
+        "verify_ap_req_nofail" if take_first(seen, "verify_ap_req_nofail") => {
+            conf.verify_ap_req_nofail = truthy(&v);
+        }
         "permitted_enctypes" if take_first(seen, "permitted_enctypes") => {
             conf.permitted_enctypes = split_ws(&v);
         }
@@ -1445,6 +1450,9 @@ mod tests {
         assert_eq!(c.udp_preference_limit, Some(0));
         assert!(!c.rdns);
         assert!(!c.kdc_timesync);
+        assert!(!c.verify_ap_req_nofail);
+        let nf = Krb5Conf::parse("[libdefaults]\n    verify_ap_req_nofail = true\n").unwrap();
+        assert!(nf.verify_ap_req_nofail);
         assert!(c.forwardable);
         assert!(!c.proxiable);
         let px = Krb5Conf::parse("[libdefaults]\n    proxiable = true\n").unwrap();
