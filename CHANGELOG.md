@@ -6,6 +6,19 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-B
+
+- **test.** `scripts/client-differential-gate.sh` drives MIT and Rust
+  `kinit`/`kvno` against the live MIT 1.22.2 KDC through
+  `scripts/lib/kdc-req-proxy.py` (request-shape JSONL: padata,
+  KDCOptions, etypes, addresses, rtime/till class, nonce, sname,
+  KRB-ERROR e_data). Eleven seeded flows (CORE match; SHAPE diffs are
+  the W1-B ranked list); MIT `klist -C -f -e -a` over both FILE caches;
+  seven CLI error paths non-zero on both CLIs; +3d `skew-preload.c`
+  records MIT default `kdc_timesync` recovery vs Rust AS-REP authtime
+  reject; `gss-mit-client` → Rust acceptor majors. Fail-red on
+  `mit-extra`.
+
 ### W1-A′-4
 
 - **kdc.** Anonymous PKINIT + `check_anon` / `restrict_anonymous_to_tgt`.

@@ -156,6 +156,7 @@ FAIL_RED_PER_PUSH = (
     "rust-kinit-fast-gate.sh",
     "rust-kinit-pkinit-gate.sh",
     "rust-kinit-enterprise-gate.sh",
+    "client-differential-gate.sh",
     "sha2-gate.sh",
     "s4u-mit-gate.sh",
     "cross-realm-gate.sh",

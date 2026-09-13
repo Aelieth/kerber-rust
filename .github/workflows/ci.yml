@@ -298,6 +298,8 @@ jobs:
         run: ./scripts/rust-kinit-pkinit-gate.sh
       - name: rust-kinit-enterprise-gate (NT-ENTERPRISE both directions)
         run: ./scripts/rust-kinit-enterprise-gate.sh
+      - name: client-differential-gate (both clients vs MIT KDC)
+        run: ./scripts/client-differential-gate.sh
       - name: ktutil-gate (MIT ktadd list + Rust keytab kinit -k)
         run: ./scripts/ktutil-gate.sh
       - name: kadmin-local-gate (local verbs; MIT kadmin getprinc)
