@@ -529,7 +529,7 @@ fn kdc_for_realm(realm: &str, fallback: &KdcAddr) -> KdcAddr {
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 fn tgs_once(
     kdc: &KdcAddr,
     tgt: &AsOutcome,
@@ -545,13 +545,14 @@ fn tgs_once(
     let etypes = crate::as_ex::conf_etypes(true);
 
     let requested = sname.clone();
+    let s4u2proxy = kdc_options.bit(flag_bit::CNAME_IN_ADDL_TKT);
     let body = KdcReqBody {
-        kdc_options,
+        kdc_options: kdc_options.clone(),
         cname: None,
         realm: krb5_types::try_ascii(realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?,
         sname: Some(sname),
         from: None,
-        till,
+        till: till.clone(),
         rtime: None,
         nonce,
         etype: etypes,
@@ -666,11 +667,29 @@ fn tgs_once(
     let plain = decrypt(&reply_key, usage, inner.enc_part.cipher.as_ref())?;
     // MIT `kdc_rep_dc.c:69` decodes the TGS-REP enc-part with
     // `decode_krb5_enc_kdc_rep_part` (APPLICATION 26 then 25 then untagged).
-    let enc_part =
+    let mut enc_part =
         krb5_asn1::decode_enc_kdc_rep_part(&plain).map_err(|e| Error::Asn1(e.to_string()))?;
     if enc_part.nonce != nonce {
         return Err(Error::NonceMismatch);
     }
+    enc_part.flags = tgs_strip_ok_as_delegate(
+        tgt_is_local_realm(tgt),
+        tgt.enc_part.flags.bit(flag_bit::OK_AS_DELEGATE),
+        enc_part.flags,
+    );
+    let request_realm =
+        krb5_types::try_ascii(realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?;
+    tgs_reply_client_ok(
+        &tgt.cname,
+        &tgt.crealm,
+        &inner.cname,
+        &inner.crealm,
+        &inner.ticket.sname,
+        &requested,
+        &request_realm,
+        req_s4u.is_some(),
+        s4u2proxy,
+    )?;
     if let Some(req) = req_s4u.as_ref() {
         crate::verify_s4u2self_reply(
             &sub,
@@ -679,6 +698,13 @@ fn tgs_once(
             enc_part.encrypted_pa_data.as_deref(),
         )?;
     }
+    tgs_reply_server_consistent(
+        &inner.ticket.sname,
+        &inner.ticket.realm,
+        &enc_part.sname,
+        &enc_part.srealm,
+    )?;
+    tgs_reply_req_times(&enc_part, &till, None, None, &kdc_options)?;
     tgs_sname_ok(&requested, &inner.ticket.sname, &enc_part.sname)?;
     let session_etype = EncryptionType::known(enc_part.key.keytype)?;
     let session_key = ProtocolKey::from_bytes(session_etype, enc_part.key.keyvalue.as_ref())?;
@@ -749,6 +775,157 @@ pub fn tgs_validate(kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error>
 #[must_use]
 pub fn tgs_validate_options(flags: &krb5_types::TicketFlags) -> KdcOptions {
     tkt_common_from_flags(flags).with_bit(flag_bit::VALIDATE, true)
+}
+
+fn princ_eq(
+    name_a: &PrincipalName,
+    realm_a: &krb5_types::Realm,
+    name_b: &PrincipalName,
+    realm_b: &krb5_types::Realm,
+) -> bool {
+    name_a.name_string == name_b.name_string && realm_a.as_bytes() == realm_b.as_bytes()
+}
+
+/// MIT `gc_via_tkt.c:257-270` `krb5int_process_tgs_reply` client half.
+///
+/// S4U2Self final hop: reply client == requested server means the KDC
+/// ignored PA-FOR-USER (`KRB5KDC_ERR_PADATA_TYPE_NOSUPP`). Otherwise,
+/// unless this is a final S4U2Proxy hop, reply client must match the
+/// TGT client (`KRB5_KDCREP_MODIFIED`). Name-type is ignored
+/// (`krb5_principal_compare`).
+///
+/// # Errors
+///
+/// [`Error::ReplyMismatch`] for either MIT status.
+#[allow(clippy::too_many_arguments)]
+pub fn tgs_reply_client_ok(
+    tgt_cname: &PrincipalName,
+    tgt_crealm: &krb5_types::Realm,
+    reply_cname: &PrincipalName,
+    reply_crealm: &krb5_types::Realm,
+    reply_sname: &PrincipalName,
+    requested: &PrincipalName,
+    request_realm: &krb5_types::Realm,
+    s4u2self: bool,
+    s4u2proxy: bool,
+) -> Result<(), Error> {
+    if s4u2self && !reply_sname.is_krbtgt() {
+        if princ_eq(reply_cname, reply_crealm, requested, request_realm) {
+            return Err(Error::ReplyMismatch("TGS-REP S4U2Self unsupported".into()));
+        }
+        return Ok(());
+    }
+    if (!s4u2proxy || reply_sname.is_krbtgt())
+        && !princ_eq(reply_cname, reply_crealm, tgt_cname, tgt_crealm)
+    {
+        return Err(Error::ReplyMismatch(
+            "TGS-REP client does not match TGT client".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// MIT `gc_via_tkt.c:108-110` `check_reply_server`: ticket server equals
+/// enc-part server (name and realm; name-type ignored).
+///
+/// # Errors
+///
+/// [`Error::ReplyMismatch`] (`KRB5_KDCREP_MODIFIED`).
+pub fn tgs_reply_server_consistent(
+    ticket_sname: &PrincipalName,
+    ticket_realm: &krb5_types::Realm,
+    enc_sname: &PrincipalName,
+    enc_srealm: &krb5_types::Realm,
+) -> Result<(), Error> {
+    if !princ_eq(ticket_sname, ticket_realm, enc_sname, enc_srealm) {
+        return Err(Error::ReplyMismatch(
+            "TGS-REP ticket server does not match enc-part server".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// MIT `gc_via_tkt.c:278-297` request-time half of `process_tgs_reply`.
+///
+/// `till`/`rtime`/`from` of 0 are unspecified. Reply `endtime` after
+/// `till`, `renew_till` after `rtime` (RENEWABLE) or after `till`
+/// (RENEWABLE_OK + issued RENEWABLE), or POSTDATED `from` ≠ starttime,
+/// is `KRB5_KDCREP_MODIFIED`. Starttime skew is not applied here: MIT
+/// uses the per-context timestamp that `kdc_timesync` adjusts, and this
+/// crate has no `krb5_context`.
+///
+/// # Errors
+///
+/// [`Error::ReplyMismatch`] (`KRB5_KDCREP_MODIFIED`).
+pub fn tgs_reply_req_times(
+    enc: &EncKdcRepPart,
+    till: &KerberosTime,
+    rtime: Option<&KerberosTime>,
+    from: Option<&KerberosTime>,
+    opts: &KdcOptions,
+) -> Result<(), Error> {
+    let start = enc.starttime.as_ref().unwrap_or(&enc.authtime);
+    if opts.bit(flag_bit::POSTDATED)
+        && let Some(from) = from
+        && from.unix_seconds() != 0
+        && from.unix_seconds() != start.unix_seconds()
+    {
+        return Err(Error::ReplyMismatch(
+            "TGS-REP starttime != request from".into(),
+        ));
+    }
+    if till.unix_seconds() != 0 && enc.endtime.unix_seconds() > till.unix_seconds() {
+        return Err(Error::ReplyMismatch(
+            "TGS-REP endtime after request till".into(),
+        ));
+    }
+    if opts.bit(flag_bit::RENEWABLE)
+        && let Some(rtime) = rtime
+        && rtime.unix_seconds() != 0
+        && enc
+            .renew_till
+            .as_ref()
+            .is_some_and(|rt| rt.unix_seconds() > rtime.unix_seconds())
+    {
+        return Err(Error::ReplyMismatch(
+            "TGS-REP renew-till after request rtime".into(),
+        ));
+    }
+    if opts.bit(flag_bit::RENEWABLE_OK)
+        && enc.flags.renewable()
+        && till.unix_seconds() != 0
+        && enc
+            .renew_till
+            .as_ref()
+            .is_some_and(|rt| rt.unix_seconds() > till.unix_seconds())
+    {
+        return Err(Error::ReplyMismatch(
+            "TGS-REP renew-till after request till".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// MIT `gc_via_tkt.c:139-147` `tgt_is_local_realm`.
+fn tgt_is_local_realm(tgt: &AsOutcome) -> bool {
+    let crealm = String::from_utf8_lossy(tgt.crealm.as_bytes());
+    tgt.ticket.sname.is_krbtgt_for(crealm.as_ref())
+        && tgt.ticket.realm.as_bytes() == tgt.crealm.as_bytes()
+}
+
+/// MIT `gc_via_tkt.c:247-252`: drop `ok-as-delegate` from a foreign TGT
+/// that itself lacks the flag.
+#[must_use]
+pub fn tgs_strip_ok_as_delegate(
+    tgt_local_realm: bool,
+    tgt_ok_as_delegate: bool,
+    flags: krb5_types::TicketFlags,
+) -> krb5_types::TicketFlags {
+    if !tgt_local_realm && !tgt_ok_as_delegate {
+        flags.with_bit(flag_bit::OK_AS_DELEGATE, false)
+    } else {
+        flags
+    }
 }
 
 #[cfg(test)]

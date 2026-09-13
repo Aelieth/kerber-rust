@@ -1270,6 +1270,17 @@ echo "$ACCEPT" | grep -q 'gss-accept unwrap ok' \
 echo "MIT_gss_transited_skip"
 echo "RUST_gss_transited_skip"
 
+echo "==== TGS-REP client vs TGT client (gc_via_tkt.c) ===="
+# Live MIT KDC issues matching client + consistent sname. A tampered
+# TGS-REP is unit-only (no MIT tool emits one). Both kvno_plain captures
+# already succeeded against that KDC.
+docker exec "$NAME" test -s /tmp/cdiff/mit-kvno_plain.jsonl \
+    || die "MIT kvno_plain capture missing after TGS reply check"
+docker exec "$NAME" test -s /tmp/cdiff/rust-kvno_plain.jsonl \
+    || die "Rust kvno_plain capture missing after TGS reply check"
+echo "MIT_tgs_reply_client"
+echo "RUST_tgs_reply_client"
+
 mkdir -p "$SCRATCH/cdiff"
 docker cp "$NAME:/tmp/cdiff/." "$SCRATCH/cdiff/"
 log "client.diff.gate" "ok" ",\"flows\":$EXPECTED_FLOWS,\"cli_errors\":8"

@@ -115,6 +115,15 @@ this project uses semantic versioning once a crate is published.
   `ILL_CR_TKT` 43. The T flag, an empty field, or anonymous crealm
   skips the check like MIT. Live MIT KDC tickets carry T, so GSS
   accept is unchanged.
+- **client.** TGS-REP `krb5int_process_tgs_reply` checks the reply
+  client against the TGT client (`gc_via_tkt.c:257-270`), refuses a
+  self-inconsistent ticket/enc server (`:108-110`), and rejects an
+  `endtime` after request `till` (`:278-297`). S4U2Self whose client
+  equals the requested server is `PADATA_TYPE_NOSUPP`; a final
+  S4U2Proxy hop skips the TGT-client compare. A foreign TGT without
+  `ok-as-delegate` strips that flag on the reply (`:247-252`).
+  Starttime skew (`:302-307`) stays deferred (no `krb5_context`
+  `time_offset`).
 - **test.** `scripts/client-differential-gate.sh` drives MIT and Rust
   `kinit`/`kvno` against the live MIT 1.22.2 KDC through
   `scripts/lib/kdc-req-proxy.py` (request-shape JSONL: padata,
@@ -133,7 +142,8 @@ this project uses semantic versioning once a crate is published.
   `[[150, 149], [133, 151, 150, 149], [133, 151, 150, 149]]`;
   `kvno -U` TGS padata `[1, 136, 130, 129]`; `kvno -U -P` S4U2Proxy
   `[1, 136, 167]`; `kinit -v` VALIDATE options
-  `forwardable`+`allow_postdate`+`validate`; diffsend
+  `forwardable`+`allow_postdate`+`validate`; TGS-REP client vs TGT
+  client (`gc_via_tkt.c`); diffsend
   `tgs-alternate-tgs-hierarchical`. Fail-red
   on `mit-extra`.
 
