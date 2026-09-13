@@ -41,7 +41,7 @@ fn kinit_records_fast_avail_and_pa_type_like_write_out_ccache() {
     thread::spawn(move || {
         let _ = serve(store, udp, tcp);
     });
-    thread::sleep(Duration::from_millis(50));
+    thread::sleep(Duration::from_millis(100));
 
     let dir = std::env::temp_dir().join(format!("kerber-r1-cc-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -72,9 +72,12 @@ fn kinit_records_fast_avail_and_pa_type_like_write_out_ccache() {
         config_value(&cache, "fast_avail", &server).as_deref(),
         Some(b"yes".as_slice())
     );
+    let pa_type = config_value(&cache, "pa_type", &server);
     assert_eq!(
-        config_value(&cache, "pa_type", &server).as_deref(),
-        Some(b"151".as_slice())
+        pa_type.as_deref(),
+        Some(b"151".as_slice()),
+        "write_out_ccache pa_type after the MIT hint walk, got {:?}",
+        pa_type.as_deref().map(String::from_utf8_lossy)
     );
     // Config entries precede the credentials, as MIT's memory-cache staging
     // writes them; the realm is the X-CACHECONF: marker.
