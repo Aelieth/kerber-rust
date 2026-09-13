@@ -21,6 +21,8 @@ pub const DEFAULT_SKEW: i64 = 300;
 pub struct ApVerifyParams<'a> {
     /// Long-term keys available (keytab entries); kvno selects.
     pub keys: &'a [ProtocolKey],
+    /// Optional kvno per `keys` slot (`krb5_kt_get_entry` / KDB keytab).
+    pub key_kvnos: Option<&'a [u32]>,
     /// Optional kvno hint from the ticket.
     pub kvno: Option<u32>,
     /// Expected server name; ticket sname must match.
@@ -41,6 +43,7 @@ impl<'a> ApVerifyParams<'a> {
     pub fn single_key(key: &'a ProtocolKey) -> Self {
         Self {
             keys: std::slice::from_ref(key),
+            key_kvnos: None,
             kvno: None,
             expected_server: None,
             expected_realm: None,
@@ -273,11 +276,23 @@ fn verify_inner(
         text: Some("no matching service key".into()),
     };
     let mut ticket_part: Option<EncTicketPart> = None;
-    let want_kvno = ap.ticket.enc_part.kvno.or(params.kvno);
+    let want_kvno = ap
+        .ticket
+        .enc_part
+        .kvno
+        .filter(|&v| v != 0)
+        .or(params.kvno.filter(|&v| v != 0));
+    let tkt_etype = ap.ticket.enc_part.etype;
     for (i, key) in params.keys.iter().enumerate() {
-        if let Some(v) = want_kvno {
-            // Prefer matching kvno when the caller packed kvno into key order.
-            let _ = (v, i);
+        if key.etype().to_iana() != tkt_etype {
+            continue;
+        }
+        if let Some(want) = want_kvno
+            && let Some(have) = params.key_kvnos.and_then(|v| v.get(i)).copied()
+            && have != 0
+            && have != want
+        {
+            continue;
         }
         match decrypt(key, tkt_usage, ap.ticket.enc_part.cipher.as_ref()) {
             Ok(tkt_plain) => match decode::<EncTicketPart>(&tkt_plain) {

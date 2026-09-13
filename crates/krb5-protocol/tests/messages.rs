@@ -164,6 +164,7 @@ fn ap_req_checksum_uses_declared_type() {
         .unwrap();
     let params = krb5_protocol::ApVerifyParams {
         keys: std::slice::from_ref(&kt.entries[0].key),
+        key_kvnos: None,
         kvno: None,
         expected_server: None,
         expected_realm: None,

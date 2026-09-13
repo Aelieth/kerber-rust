@@ -414,6 +414,7 @@ impl GssContext {
             expected_server,
             expected_realm,
             keys: service_keys,
+            key_kvnos: None,
             kvno: None,
             skew: krb5_protocol::DEFAULT_SKEW,
             addresses: None,

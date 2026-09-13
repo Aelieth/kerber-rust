@@ -341,18 +341,26 @@ const DECODE_FAIL: &str = "Failed decoding ChangePasswdData";
 /// MIT `krb5_rd_req` walks the changepw keytab. Ticket etype is
 /// `first_current_key` (profile order); `best_key` follows
 /// [`EncryptionType::preferred`] (sha1-first) and is not enough alone.
-fn changepw_verify_keys(store: &krb5_kdc::PrincipalStore, extra: &ProtocolKey) -> Vec<ProtocolKey> {
+fn changepw_verify_keys(
+    store: &krb5_kdc::PrincipalStore,
+    extra: &ProtocolKey,
+) -> (Vec<ProtocolKey>, Vec<u32>) {
     let mut keys = Vec::new();
+    let mut kvnos = Vec::new();
     if let Some(p) = store.get_name(&krb5_kdc::documented_changepw()) {
-        keys.extend(p.keys.iter().map(|k| k.key.clone()));
+        for k in &p.keys {
+            keys.push(k.key.clone());
+            kvnos.push(k.kvno);
+        }
     }
     if !keys
         .iter()
         .any(|k| k.etype() == extra.etype() && k.as_bytes() == extra.as_bytes())
     {
         keys.push(extra.clone());
+        kvnos.push(0);
     }
-    keys
+    (keys, kvnos)
 }
 
 fn too_soon_text(until: u32) -> String {
@@ -401,14 +409,16 @@ fn handle_kpasswd_from(
     }
     let ap_req = &raw[6..6 + ap_len];
     let priv_raw = &raw[6 + ap_len..];
-    let (store_realm, keys) = {
+    let (store_realm, keys, kvnos) = {
         let g = store
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        (g.realm().to_owned(), changepw_verify_keys(&g, service_key))
+        let (keys, kvnos) = changepw_verify_keys(&g, service_key);
+        (g.realm().to_owned(), keys, kvnos)
     };
     let params = ApVerifyParams {
         keys: &keys,
+        key_kvnos: Some(kvnos.as_slice()),
         kvno: None,
         expected_server: None,
         expected_realm: None,

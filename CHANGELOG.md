@@ -94,6 +94,12 @@ this project uses semantic versioning once a crate is published.
   `LOOKING_UP_SERVER` (29 passthrough). Host referrals skip numeric
   addresses (`k5_is_numeric_address`). `is_referral` uses
   `krb5_principal_compare` (ignores name-type). diffsend 109.
+- **acceptor.** AP-REQ key selection uses the ticket kvno and etype
+  (`rd_req_dec.c:325-347` `try_one_princ` → `krb5_kt_get_entry`).
+  Ticket kvno 0 (or a key labeled 0) means any. A labeled mismatch is
+  `NOKEY`; a key at the claimed kvno that fails decrypt is integrity.
+  kpasswd and `verify_init_creds` pass keytab kvnos. GSS accept still
+  iterates similar-enctype keys (`decrypt_try_server`).
 - **test.** `scripts/client-differential-gate.sh` drives MIT and Rust
   `kinit`/`kvno` against the live MIT 1.22.2 KDC through
   `scripts/lib/kdc-req-proxy.py` (request-shape JSONL: padata,

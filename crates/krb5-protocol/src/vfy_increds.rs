@@ -129,17 +129,19 @@ fn get_vfy_cred(
     };
     let ap = build_ap_req(ticket, &session, &crealm, &cname)?;
     let raw = encode(&ap)?;
-    let keys: Vec<ProtocolKey> = keytab
+    let matched: Vec<_> = keytab
         .entries
         .iter()
         .filter(|e| {
             e.realm.as_bytes() == realm.as_bytes() && e.name.name_string == name.name_string
         })
-        .map(|e| e.key.clone())
         .collect();
+    let keys: Vec<ProtocolKey> = matched.iter().map(|e| e.key.clone()).collect();
+    let kvnos: Vec<u32> = matched.iter().map(|e| e.kvno).collect();
     let realm_s = String::from_utf8_lossy(realm.as_bytes()).into_owned();
     let params = ApVerifyParams {
         keys: &keys,
+        key_kvnos: Some(kvnos.as_slice()),
         kvno: None,
         expected_server: Some(name),
         expected_realm: Some(realm_s.as_str()),

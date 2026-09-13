@@ -239,6 +239,7 @@ pub fn kpropd_recvauth(
     let ap_raw = read_message(stream).map_err(|e| Error::Inner(e.to_string()))?;
     let params = ApVerifyParams {
         keys: host_keys,
+        key_kvnos: None,
         kvno: None,
         expected_server,
         expected_realm,
