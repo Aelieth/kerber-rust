@@ -242,6 +242,21 @@ returning 149 is rejected `KDCREP_MODIFIED`. Present-FAST
 `KRB5_KDCREP_MODIFIED` (`nonce modified in FAST response`) on AS and
 TGS success paths. A FAST error whose inner nonce does not match is
 treated as a non-FAST outer error (`fast.c:450-459`), not retried.
+Under an armor key the reply's client (`crealm`/`cname`) and padata
+are the `KrbFastFinished` message's once its ticket checksum verifies
+(`fast.c:548-558`) — the outer, unauthenticated fields are never
+compared or returned, so `verify_as_reply` (`get_in_tkt.c:236-241`)
+and the CANONICALIZE outcome see the finished client (W1-Z Z1.2; before
+it the outer cname was compared and returned). An armored KRB-ERROR
+whose `e_data` has no PA-FX-FAST or does not decrypt is the fatal outer
+error with no cookie and no method data — no second AS-REQ
+(`fast.c:445-458`); an envelope without FX-ERROR is
+`KRB5KDC_ERR_PREAUTH_FAILED` (`Expecting FX_ERROR pa-data inside FAST
+container`); the FX-COOKIE is taken only from the decrypted inner
+padata. The TGS path reports the inner FX-ERROR the same way
+(`gc_via_tkt.c:190-194`). Live: `scripts/mit-fast-kdc-gate.sh` Z1.2
+cells, MIT `kinit -T` and Rust `krb5-kinit --fast` behind
+`scripts/lib/kdc-rewrite-proxy.py` in front of the MIT KDC.
 Default `kdc_timesync` (`init_ctx.c:268-270`) skips the AS-REP
 starttime vs local clock (`get_in_tkt.c:260-270`); `kdc_timesync = 0`
 is `KRB5_KDCREP_SKEW` (`Clock skew too great in KDC reply`). There is

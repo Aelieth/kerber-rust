@@ -32,6 +32,24 @@ this project uses semantic versioning once a crate is published.
   `insert_new_password` / `insert_new_randkey` → `create_principal_3_in`.
   Ledger: the A4 `:610` row split into the create row and the
   restriction row (430 rows, exact 344).
+- **client.** FAST replies are processed whole, like MIT
+  `krb5int_fast_process_response` / `krb5int_fast_process_error`. Once
+  the `KrbFastFinished` ticket checksum verifies, the AS-REP's and
+  TGS-REP's client (`crealm`/`cname`) and padata are the finished
+  message's (`fast.c:548-558`) before `verify_as_reply` compares them
+  (`get_in_tkt.c:236-241`) — before, the outer, unauthenticated cname
+  was compared and, under CANONICALIZE, returned as the canonical name.
+  An armored KRB-ERROR whose `e_data` has no PA-FX-FAST or does not
+  decrypt is the fatal outer error with no cookie and no method data —
+  the client sends no second AS-REQ (`fast.c:445-458`; before, the outer
+  cookie was taken and the exchange retried); an envelope without
+  FX-ERROR is `KRB5KDC_ERR_PREAUTH_FAILED`. The TGS path reports the
+  inner FX-ERROR (`gc_via_tkt.c:190-194`) instead of the outer code and
+  e_text. New MITM `scripts/lib/kdc-rewrite-proxy.py` (`as-rep-cname`,
+  `strip-fx-fast`) drives four Z1.2 cells at the end of
+  `mit-fast-kdc-gate.sh`, MIT `kinit -T` and Rust `krb5-kinit --fast`
+  against the MIT KDC. Ledger: new `## B1` section (3 rows, all exact;
+  433 rows, exact 347); `ci-policy.py` counts it.
 
 ### W1-C
 

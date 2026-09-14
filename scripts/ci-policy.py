@@ -1237,7 +1237,7 @@ _HEADER_EXACT = re.compile(
 _HEADER_ABSENT = re.compile(r"absent\s+(\d+)\s*·\s*deferred\s+(\d+)")
 _HEADER_TOTAL = re.compile(
     r"\*\*(\d+)\*\*\s*=\s*A1\s+(\d+)\s*\+\s*A2\s+(\d+)\s*\+\s*A3\s+(\d+)"
-    r"(?:\s*\+\s*A4\s+(\d+))?"
+    r"(?:\s*\+\s*A4\s+(\d+))?(?:\s*\+\s*B1\s+(\d+))?"
 )
 _RUST_ANCHOR = re.compile(
     r"(?:`)?(?:(?P<crate>[A-Za-z0-9_-]+)/(?:src/)?)?(?P<file>[A-Za-z0-9_-]+\.rs)"
@@ -1309,21 +1309,13 @@ _CRATE_ALIASES = {
 
 
 def recount_ledger_sections(text: str) -> dict[str, int]:
-    """Row counts under `## A1` / `## A2` / `## A3` / `## A4` headings."""
-    counts = {"A1": 0, "A2": 0, "A3": 0, "A4": 0}
+    """Row counts under `## A1` / `## A2` / `## A3` / `## A4` / `## B1` headings."""
+    counts = {"A1": 0, "A2": 0, "A3": 0, "A4": 0, "B1": 0}
     section: str | None = None
     for line in text.splitlines():
-        if re.match(r"^## A1\b", line):
-            section = "A1"
-            continue
-        if re.match(r"^## A2\b", line):
-            section = "A2"
-            continue
-        if re.match(r"^## A3\b", line):
-            section = "A3"
-            continue
-        if re.match(r"^## A4\b", line):
-            section = "A4"
+        m = re.match(r"^## (A1|A2|A3|A4|B1)\b", line)
+        if m:
+            section = m.group(1)
             continue
         if re.match(r"^## ", line):
             section = None
@@ -1400,15 +1392,16 @@ def check_ledger_tally(text: str | None = None) -> None:
     header_n = int(total.group(1))
     a1, a2, a3 = (int(total.group(i)) for i in (2, 3, 4))
     a4 = int(total.group(5) or 0)
+    b1 = int(total.group(6) or 0)
     n = sum(got.values())
-    parts = a1 + a2 + a3 + a4
+    parts = a1 + a2 + a3 + a4 + b1
     if header_n != n or header_n != parts:
         _die(
             f"docs/mit-parity-ledger.md total {header_n} "
-            f"= A1 {a1} + A2 {a2} + A3 {a3} + A4 {a4} != recount {n}"
+            f"= A1 {a1} + A2 {a2} + A3 {a3} + A4 {a4} + B1 {b1} != recount {n}"
         )
     sec = recount_ledger_sections(text)
-    want_sec = {"A1": a1, "A2": a2, "A3": a3, "A4": a4}
+    want_sec = {"A1": a1, "A2": a2, "A3": a3, "A4": a4, "B1": b1}
     if sec != want_sec:
         _die(
             f"docs/mit-parity-ledger.md section split "

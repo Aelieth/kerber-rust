@@ -560,8 +560,15 @@ fn continue_fast(
             finish_fast_as(req, keys, nonce, etypes, &akey, None, rep, &wire, bound)
         }
         KdcMsg::Error(e) => {
-            let (inner, cookie) = fast_error_material(&akey, &e, nonce);
-            if inner.error_code != err::PREAUTH_REQUIRED && e.error_code != err::PREAUTH_REQUIRED {
+            let FastErrorMaterial {
+                err: inner,
+                cookie,
+                retry,
+            } = fast_error_material(&akey, &e, nonce)?;
+            // `get_in_tkt.c:1721-1724`: only `PREAUTH_REQUIRED && retry`
+            // continues; an outer error that did not unwrap (retry = 0) is
+            // returned as-is — no second AS-REQ, whatever its code.
+            if !retry || inner.error_code != err::PREAUTH_REQUIRED {
                 return classify_kdc_error(&inner);
             }
             let (etype, salt, params) =
@@ -594,7 +601,7 @@ fn continue_fast(
                     &wire,
                     bound,
                 ),
-                KdcMsg::Error(e) => classify_kdc_error(&fast_error_material(&akey, &e, nonce).0),
+                KdcMsg::Error(e) => classify_kdc_error(&fast_error_material(&akey, &e, nonce)?.err),
                 KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
             }
         }
@@ -610,7 +617,7 @@ fn finish_fast_as(
     etypes: &[i32],
     akey: &ProtocolKey,
     client_key: Option<ProtocolKey>,
-    rep: AsRep,
+    mut rep: AsRep,
     wire: &[u8],
     bound: &AsReqTimes,
 ) -> Result<AsOutcome, Error> {
@@ -636,6 +643,14 @@ fn finish_fast_as(
         Error::ReplyMismatch("FAST response missing finish message in KDC reply".into())
     })?;
     verify_fast_finished(akey, &rep.0.ticket, finished)?;
+    // MIT `krb5int_fast_process_response` (`fast.c:548-558`): once the
+    // finished checksum holds, the reply's client *is* the finished message's
+    // client and the reply padata is the FAST-inner list — the outer cname /
+    // crealm / padata are unauthenticated and never looked at again
+    // (`get_in_tkt.c:236-241` compares the replaced client).
+    rep.0.crealm = finished.crealm.clone();
+    rep.0.cname = finished.cname.clone();
+    rep.0.padata = Some(fast.padata.clone());
     finish_as_rep(
         rep,
         nonce,
@@ -697,24 +712,55 @@ fn fast_armor_ap(armor: &FastArmor, sub: &ProtocolKey) -> Result<krb5_types::ApR
     )
 }
 
-fn fast_error_material(
+/// What MIT `krb5int_fast_process_error` (`fast.c:428-511`) hands back for a
+/// KRB-ERROR received under an armor key.
+pub(crate) struct FastErrorMaterial {
+    /// The error to act on: the FX-ERROR inner error when the FAST envelope
+    /// unwrapped, else the outer error as received.
+    pub(crate) err: KrbError,
+    /// FX-COOKIE from the *decrypted* FAST response padata only.
+    pub(crate) cookie: Option<PaData>,
+    /// MIT `*retry`: the inner padata carries more than the FX-ERROR and a
+    /// cookie. False for every outer-error outcome — the client stops.
+    pub(crate) retry: bool,
+}
+
+/// MIT `krb5int_fast_process_error` with an armor key (`fast.c:445-495`):
+/// the e_data must decode as a padata sequence whose PA-FX-FAST decrypts
+/// under the armor key with the request nonce; when it does not ("the KDC
+/// does not understand FAST" — or a man in the middle stripped it) the outer
+/// error is the fatal answer with `retry = 0` and nothing from it is trusted
+/// (no cookie, no method data). A decrypted response without FX-ERROR is
+/// `KRB5KDC_ERR_PREAUTH_FAILED` "Expecting FX_ERROR pa-data inside FAST
+/// container". Otherwise the inner error replaces the outer one, the inner
+/// padata is the method data, and `retry` is set only when that list has
+/// more than the FX-ERROR entry and includes an FX-COOKIE.
+///
+/// The inner error's `e_data` is filled with the inner padata when it is
+/// empty so `method_from_error` / `select_s2k` read the protected hints.
+pub(crate) fn fast_error_material(
     akey: &ProtocolKey,
     err: &KrbError,
     nonce: u32,
-) -> (KrbError, Option<PaData>) {
+) -> Result<FastErrorMaterial, Error> {
+    let outer_fatal = || {
+        Ok(FastErrorMaterial {
+            err: err.clone(),
+            cookie: None,
+            retry: false,
+        })
+    };
     let Some(ed) = &err.e_data else {
-        return (err.clone(), None);
+        return outer_fatal();
     };
-    let method: MethodData = match decode(ed.as_ref()) {
-        Ok(m) => m,
-        Err(_) => return (err.clone(), None),
+    let Ok(method) = decode::<MethodData>(ed.as_ref()) else {
+        return outer_fatal();
     };
-    let outer_cookie = find_pa(&method, pa::FX_COOKIE).cloned();
     let Some(fx) = find_pa(&method, pa::FX_FAST) else {
-        return (err.clone(), outer_cookie);
+        return outer_fatal();
     };
     let Ok(fast) = unwrap_fast_rep_checked(akey, &Some(vec![fx.clone()]), nonce) else {
-        return (err.clone(), outer_cookie);
+        return outer_fatal();
     };
     let types: Vec<i32> = fast.padata.iter().map(|p| p.padata_type).collect();
     tracing::info!(
@@ -723,24 +769,23 @@ fn fast_error_material(
         outcome = "ok",
         inner_padata = ?types,
     );
-    let cookie = find_pa(&fast.padata, pa::FX_COOKIE)
-        .cloned()
-        .or(outer_cookie);
-    if let Some(fx_err) = find_pa(&fast.padata, pa::FX_ERROR)
-        && let Ok(mut inner) = decode::<KrbError>(fx_err.padata_value.as_ref())
-    {
-        if inner.e_data.is_none()
-            && let Ok(ed2) = encode(&fast.padata)
-        {
-            inner.e_data = Some(ed2.into());
-        }
-        return (inner, cookie);
+    let Some(fx_err) = find_pa(&fast.padata, pa::FX_ERROR) else {
+        return Err(Error::KrbError {
+            code: err::PREAUTH_FAILED,
+            text: Some("Expecting FX_ERROR pa-data inside FAST container".into()),
+        });
+    };
+    let mut inner: KrbError = decode(fx_err.padata_value.as_ref())?;
+    if inner.e_data.is_none() {
+        inner.e_data = Some(encode(&fast.padata)?.into());
     }
-    let mut synth = err.clone();
-    if let Ok(ed2) = encode(&fast.padata) {
-        synth.e_data = Some(ed2.into());
-    }
-    (synth, cookie)
+    let cookie = find_pa(&fast.padata, pa::FX_COOKIE).cloned();
+    let retry = fast.padata.len() > 1 && cookie.is_some();
+    Ok(FastErrorMaterial {
+        err: inner,
+        cookie,
+        retry,
+    })
 }
 
 fn continue_spake(

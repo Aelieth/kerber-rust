@@ -22,6 +22,7 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-forge-tgt
+cargo build -p krb5-client --bin krb5-kinit
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
@@ -529,5 +530,136 @@ if echo "$MIT_ED" | grep -E 'rep#[0-9]+ error_code=91'; then
     exit 1
 fi
 
-log "fast.kdc.gate" "ok" ',"principal":"user@KERBER.TEST","mode":"mit-kinit-T","verify_support_24":true'
+# W1-Z Z1.2: client FAST reply processing, MIT kinit -T and Rust krb5-kinit
+# --fast side by side against the MIT KDC behind a rewriting MITM
+# (scripts/lib/kdc-rewrite-proxy.py). `user` is +requires_preauth on this leg
+# (above), /tmp/krb5cc_armor is its MIT armor TGT.
+docker cp "$ROOT/scripts/lib/kdc-rewrite-proxy.py" "$MITNAME":/tmp/kdc-rewrite-proxy.py
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kinit" "$MITNAME":/tmp/krb5-kinit
+docker exec "$MITNAME" chmod +x /tmp/krb5-kinit
+docker exec "$MITNAME" python3 /tmp/kdc-rewrite-proxy.py --self-test
+
+# (i) fast.c:548-558: the AS-REP's outer cname is replaced by the
+# KrbFastFinished client before get_in_tkt.c:236-241 compares it, so a
+# rewritten outer cname is invisible: both clients succeed and klist shows the
+# real principal.
+echo "==== Z1.2 MIT KDC behind MITM: rewritten outer AS-REP cname — MIT kinit -T keeps the finished client ===="
+docker exec -d "$MITNAME" python3 /tmp/kdc-rewrite-proxy.py 1893 127.0.0.1 88 /tmp/z12-cname.txt as-rep-cname mitm
+sleep 0.4
+docker exec "$MITNAME" sh -c "sed 's/127.0.0.1:1891/127.0.0.1:1893/' /tmp/krb5-fast-proxy.conf > /tmp/krb5-z12-cname.conf"
+docker exec "$MITNAME" grep -q '127.0.0.1:1893' /tmp/krb5-z12-cname.conf
+docker exec "$MITNAME" rm -f /tmp/krb5cc_z12_mit /tmp/krb5cc_z12_rust
+set +e
+MIT_Z12_CNAME="$(docker exec -e KRB5_CONFIG=/tmp/krb5-z12-cname.conf "$MITNAME" \
+    sh -c 'printf "userpassword\n" | kinit -T /tmp/krb5cc_armor -c /tmp/krb5cc_z12_mit user@KERBER.TEST' 2>&1)"
+rc=$?
+set -e
+echo "$MIT_Z12_CNAME"
+if [ "$rc" -ne 0 ]; then
+    echo "MIT kinit -T must succeed when only the outer AS-REP cname is rewritten (rc=$rc)" >&2
+    exit 1
+fi
+MIT_Z12_KLIST="$(docker exec "$MITNAME" klist -c /tmp/krb5cc_z12_mit)"
+echo "$MIT_Z12_KLIST"
+echo "$MIT_Z12_KLIST" | grep -q '^Default principal: user@KERBER.TEST$' || {
+    echo "MIT klist must show the finished client user@KERBER.TEST, not the rewritten outer cname" >&2
+    exit 1
+}
+Z12_CNAME_PROXY="$(docker exec "$MITNAME" cat /tmp/z12-cname.txt)"
+echo "$Z12_CNAME_PROXY"
+echo "$Z12_CNAME_PROXY" | grep -q 'kind=as-rep rewritten=yes' || {
+    echo "MITM did not rewrite an AS-REP cname on the MIT leg: $Z12_CNAME_PROXY" >&2
+    exit 1
+}
+
+echo "==== Z1.2 MIT KDC behind MITM: rewritten outer AS-REP cname — Rust kinit --fast keeps the finished client ===="
+docker exec "$MITNAME" sh -c ':> /tmp/z12-cname.txt'
+set +e
+RUST_Z12_CNAME="$(docker exec -e KRB5_CONFIG=/tmp/krb5-z12-cname.conf -e KRB5_PASSWORD=userpassword "$MITNAME" \
+    /tmp/krb5-kinit --fast --armor-ccache /tmp/krb5cc_armor -c /tmp/krb5cc_z12_rust user@KERBER.TEST 2>&1)"
+rc=$?
+set -e
+echo "$RUST_Z12_CNAME"
+if [ "$rc" -ne 0 ]; then
+    echo "Rust kinit --fast must succeed when only the outer AS-REP cname is rewritten (rc=$rc)" >&2
+    exit 1
+fi
+RUST_Z12_KLIST="$(docker exec "$MITNAME" klist -c /tmp/krb5cc_z12_rust)"
+echo "$RUST_Z12_KLIST"
+echo "$RUST_Z12_KLIST" | grep -q '^Default principal: user@KERBER.TEST$' || {
+    echo "Rust klist must show the finished client user@KERBER.TEST, not the rewritten outer cname" >&2
+    exit 1
+}
+Z12_CNAME_PROXY="$(docker exec "$MITNAME" cat /tmp/z12-cname.txt)"
+echo "$Z12_CNAME_PROXY"
+echo "$Z12_CNAME_PROXY" | grep -q 'kind=as-rep rewritten=yes' || {
+    echo "MITM did not rewrite an AS-REP cname on the Rust-client leg: $Z12_CNAME_PROXY" >&2
+    exit 1
+}
+
+# (ii) fast.c:445-458: an armored KRB-ERROR whose e_data has no PA-FX-FAST
+# cannot be unwrapped, so it is the fatal outer error (retry = 0, no cookie):
+# both clients stop at the first 25 and send no second AS-REQ.
+echo "==== Z1.2 MIT KDC behind MITM: PA-FX-FAST stripped from the 25 — MIT kinit -T stops with the outer error ===="
+docker exec -d "$MITNAME" python3 /tmp/kdc-rewrite-proxy.py 1894 127.0.0.1 88 /tmp/z12-strip.txt strip-fx-fast
+sleep 0.4
+docker exec "$MITNAME" sh -c "sed 's/127.0.0.1:1891/127.0.0.1:1894/' /tmp/krb5-fast-proxy.conf > /tmp/krb5-z12-strip.conf"
+docker exec "$MITNAME" grep -q '127.0.0.1:1894' /tmp/krb5-z12-strip.conf
+set +e
+MIT_Z12_STRIP="$(docker exec -e KRB5_CONFIG=/tmp/krb5-z12-strip.conf "$MITNAME" \
+    sh -c 'printf "userpassword\n" | kinit -T /tmp/krb5cc_armor -c /tmp/krb5cc_z12_strip_mit user@KERBER.TEST' 2>&1)"
+rc=$?
+set -e
+echo "$MIT_Z12_STRIP"
+if [ "$rc" -eq 0 ]; then
+    echo "MIT kinit -T must fail when PA-FX-FAST is stripped from the FAST error" >&2
+    exit 1
+fi
+echo "$MIT_Z12_STRIP" | grep -q 'Additional pre-authentication required while getting initial credentials' || {
+    echo "MIT kinit -T must stop with the outer 25: $MIT_Z12_STRIP" >&2
+    exit 1
+}
+Z12_STRIP_PROXY="$(docker exec "$MITNAME" cat /tmp/z12-strip.txt)"
+echo "$Z12_STRIP_PROXY"
+echo "$Z12_STRIP_PROXY" | grep -q 'kind=error error_code=25 rewritten=yes' || {
+    echo "MITM did not strip PA-FX-FAST from a 25 on the MIT leg: $Z12_STRIP_PROXY" >&2
+    exit 1
+}
+MIT_Z12_REQS="$(echo "$Z12_STRIP_PROXY" | grep -c '^req#')"
+if [ "$MIT_Z12_REQS" -ne 1 ]; then
+    echo "MIT kinit -T sent $MIT_Z12_REQS AS-REQs after the unwrappable error; expected exactly 1" >&2
+    exit 1
+fi
+
+echo "==== Z1.2 MIT KDC behind MITM: PA-FX-FAST stripped from the 25 — Rust kinit --fast stops with the outer error ===="
+docker exec "$MITNAME" sh -c ':> /tmp/z12-strip.txt'
+set +e
+RUST_Z12_STRIP="$(docker exec -e KRB5_CONFIG=/tmp/krb5-z12-strip.conf -e KRB5_PASSWORD=userpassword "$MITNAME" \
+    /tmp/krb5-kinit --fast --armor-ccache /tmp/krb5cc_armor -c /tmp/krb5cc_z12_strip_rust user@KERBER.TEST 2>&1)"
+rc=$?
+set -e
+echo "$RUST_Z12_STRIP"
+if [ "$rc" -eq 0 ]; then
+    echo "Rust kinit --fast must fail when PA-FX-FAST is stripped from the FAST error" >&2
+    exit 1
+fi
+# The Rust kinit renders the fatal outer error as `KRB-ERROR 25` (MIT's
+# "Additional pre-authentication required" is code 25).
+echo "$RUST_Z12_STRIP" | grep -q 'KRB-ERROR 25' || {
+    echo "Rust kinit --fast must stop with the outer 25: $RUST_Z12_STRIP" >&2
+    exit 1
+}
+Z12_STRIP_PROXY="$(docker exec "$MITNAME" cat /tmp/z12-strip.txt)"
+echo "$Z12_STRIP_PROXY"
+echo "$Z12_STRIP_PROXY" | grep -q 'kind=error error_code=25 rewritten=yes' || {
+    echo "MITM did not strip PA-FX-FAST from a 25 on the Rust-client leg: $Z12_STRIP_PROXY" >&2
+    exit 1
+}
+RUST_Z12_REQS="$(echo "$Z12_STRIP_PROXY" | grep -c '^req#')"
+if [ "$RUST_Z12_REQS" -ne 1 ]; then
+    echo "Rust kinit --fast sent $RUST_Z12_REQS AS-REQs after the unwrappable error; expected exactly 1" >&2
+    exit 1
+fi
+
+log "fast.kdc.gate" "ok" ',"principal":"user@KERBER.TEST","mode":"mit-kinit-T","verify_support_24":true,"z12_mitm_cells":4'
 exit 0

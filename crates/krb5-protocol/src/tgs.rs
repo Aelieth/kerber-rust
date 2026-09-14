@@ -382,11 +382,13 @@ fn tgs_sname_matches(
 /// MIT `decode_kdc.c:64-67`: missing PA-FX-FAST is `KRB5_ERR_FAST_REQUIRED`
 /// then ignored. A present FAST envelope still requires finished + strengthen.
 /// The returned padata is FAST-inner when armed (`fast.c` swap), else the
-/// TGS-REP list — `verify_s4u2self_reply` reads 130 from here.
+/// TGS-REP list — `verify_s4u2self_reply` reads 130 from here. When armed the
+/// reply's `crealm` / `cname` are replaced by the finished message's client
+/// (`fast.c:548-551`) before `process_tgs_reply` compares them.
 fn tgs_fast_reply_key(
     armor_key: &ProtocolKey,
     sub: &ProtocolKey,
-    inner: &krb5_types::KdcRep,
+    inner: &mut krb5_types::KdcRep,
     nonce: u32,
 ) -> Result<(ProtocolKey, Vec<PaData>), Error> {
     let has_fast = inner
@@ -401,6 +403,8 @@ fn tgs_fast_reply_key(
         Error::ReplyMismatch("FAST response missing finish message in KDC reply".into())
     })?;
     verify_fast_finished(armor_key, &inner.ticket, finished)?;
+    inner.crealm = finished.crealm.clone();
+    inner.cname = finished.cname.clone();
     let sk = fast
         .strengthen_key
         .as_ref()
@@ -633,7 +637,13 @@ fn tgs_once(
         return Err(Error::TruncatedReply);
     }
     if reply[0] == 0x7e {
-        let e: krb5_types::KrbError = decode(&reply)?;
+        let outer: krb5_types::KrbError = decode(&reply)?;
+        // MIT `gc_via_tkt.c:190-194`: `krb5int_fast_process_error` under the
+        // armor key — the authenticated FX-ERROR inside PA-FX-FAST replaces
+        // the outer error; an envelope that is missing or does not unwrap
+        // leaves the outer error as the (fatal) answer. Same rule as the AS
+        // path (`as_ex.rs` `fast_error_material`).
+        let e = crate::as_ex::fast_error_material(&armor_key, &outer, nonce)?.err;
         let text = e
             .e_text
             .as_ref()
@@ -647,8 +657,8 @@ fn tgs_once(
     if reply[0] != 0x6d {
         return Err(Error::UnexpectedPdu);
     }
-    let TgsRep(inner) = decode::<TgsRep>(&reply)?;
-    let (reply_key, fast_padata) = tgs_fast_reply_key(&armor_key, &sub, &inner, nonce)?;
+    let TgsRep(mut inner) = decode::<TgsRep>(&reply)?;
+    let (reply_key, fast_padata) = tgs_fast_reply_key(&armor_key, &sub, &mut inner, nonce)?;
     let enc_usage = ku::TGS_REP_ENC_PART_SUBKEY;
     let usage = KeyUsage::new(enc_usage)?;
     let plain = decrypt(&reply_key, usage, inner.enc_part.cipher.as_ref())?;
