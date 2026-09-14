@@ -254,7 +254,17 @@ grep -q '"case":"as-invalid-opts","outcome":"ok","error_code":13' <<<"$DIFF" || 
 grep -q '"case":"as-request-anonymous","outcome":"ok","error_code":13,"e_text":"VALIDATE_ANONYMOUS_PRINCIPAL","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "as-request-anonymous not code 13 e_text VALIDATE_ANONYMOUS_PRINCIPAL on both legs"
 grep -q '"case":"as-validate-before-preauth","outcome":"ok","error_code":23' <<<"$DIFF" || die "as-validate-before-preauth (preauth+needchange) not code 23 on both legs"
 grep -q '"case":"as-retransmit","outcome":"ok","rust_retransmit_identical":true,"mit_retransmit_identical":true' <<<"$DIFF" || die "as-retransmit reply not identical from the lookaside on both legs"
-grep -q '"outcome":"ok","cases":110' <<<"$DIFF" || die "diffsend did not finish 110 cases" # A'-3 R32: "outcome":"ok","cases":102" # A'-4 item 16: "outcome":"ok","cases":105" # A'-4 item 17: "outcome":"ok","cases":106" # A'-4 item 18: "outcome":"ok","cases":107" # W1-B F4: 109 # W1-Z Z1.3: 110
+# W1-Z Z3.3: the ratchet is checked against the distinct cases diffsend
+# actually emitted, not the literal its summary line claims (a stale
+# "cases":N in diffsend.rs would otherwise pass). History: A'-3 R32 102 ·
+# A'-4 item 16 105 · item 17 106 · item 18 107 · W1-B F4 109 · W1-Z Z1.3 110.
+DIFFSEND_RATCHET=110
+CASES_SEEN="$(grep -o '"case":"[^"]*","outcome":"ok"' <<<"$DIFF" | sort -u | wc -l | tr -d ' ')"
+[ "$CASES_SEEN" = "$DIFFSEND_RATCHET" ] || die "diffsend emitted $CASES_SEEN distinct ok cases; the ratchet is $DIFFSEND_RATCHET"
+grep -q "\"outcome\":\"ok\",\"cases\":$DIFFSEND_RATCHET}" <<<"$DIFF" || die "diffsend summary line does not claim $DIFFSEND_RATCHET cases"
+# Z3.3: validate_as_request REQUIRED PWCHANGE / KEY_EXP (23) on both legs for
+# a needchange principal with no preauth in the way (kdc_util.c:762-766).
+grep -q '"case":"as-needchange","outcome":"ok","error_code":23,"e_text":"REQUIRED PWCHANGE","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "as-needchange not code 23 e_text REQUIRED PWCHANGE on both legs"
 grep -q '"case":"fast-armor-no-subkey","outcome":"ok","error_code":12,"e_text":"FIND_FAST","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "fast-armor-no-subkey not code 12 e_text FIND_FAST on both legs"
 grep -q '"case":"armor-ap-req-as-pa-tgs-req","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "armor-ap-req-as-pa-tgs-req not code 12 e_text PROCESS_TGS on both legs"
 grep -q '"case":"tgs-ad-fx-armor-authenticator","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-ad-fx-armor-authenticator not code 12 e_text PROCESS_TGS on both legs"

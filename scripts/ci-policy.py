@@ -10,7 +10,9 @@ Samba PAC / realtrust / Heimdal must fail-red on a scheduled workflow.
 Gate discipline (docs/testing.md): red-at-HEAD artefacts live under
 working/ which is gitignored, so CI cannot check them. This script
 checks workflow YAML, gate-script structure, and the MIT parity
-ledger `proof` column.
+ledger `proof` column. `--checkpoint` adds the local-evidence rules the
+checkpoint runner owns (W1-Z Z3.4: no cargo build tree under
+`working/logs/`).
 """
 from __future__ import annotations
 
@@ -1057,6 +1059,73 @@ def check_no_host_tmp_writes(text: str | None = None, name: str = "gate.sh") -> 
             _die(f"{path.name} host /tmp write at line {hits[0]}")
 
 
+def check_red_at_sha_target_trap(text: str | None = None) -> None:
+    """W1-Z Z3.4: the cargo tree goes in the EXIT trap (kept only by
+    KERBER_KEEP_RED_TARGET=1) and every run stamps `red-at-parent=1`."""
+    if text is None:
+        path = SCRIPTS / "red-at-sha.sh"
+        if not path.is_file():
+            _die("missing scripts/red-at-sha.sh")
+        text = path.read_text()
+    code = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+    m = re.search(r"cleanup\(\)\s*\{(.*?)\n\}", code, re.S)
+    if not m:
+        _die("red-at-sha.sh has no cleanup() trap body")
+    body = m.group(1)
+    if 'rm -rf "$TARGET"' not in body:
+        _die("red-at-sha.sh cleanup() must remove the red-target cargo tree (Z3.4)")
+    if "KERBER_KEEP_RED_TARGET" not in body:
+        _die("red-at-sha.sh cleanup() must keep the tree only under KERBER_KEEP_RED_TARGET=1")
+    if "trap cleanup EXIT" not in code:
+        _die("red-at-sha.sh must arm cleanup on EXIT")
+    if 'echo "red-at-parent=1"' not in code:
+        _die("red-at-sha.sh must stamp red-at-parent=1 in its provenance block")
+
+
+_RED_TARGET_DIR = re.compile(r"^red-target-[0-9a-f]{6,}$")
+
+
+def find_red_target_trees(root: pathlib.Path) -> list[pathlib.Path]:
+    """`red-target-*` dirs and any cargo build tree (CACHEDIR.TAG + debug/) under root."""
+    found: list[pathlib.Path] = []
+    if not root.is_dir():
+        return found
+    stack = [root]
+    while stack:
+        d = stack.pop()
+        try:
+            entries = list(os.scandir(d))
+        except OSError:
+            continue
+        names = {e.name for e in entries}
+        if _RED_TARGET_DIR.match(d.name) or ("CACHEDIR.TAG" in names and "debug" in names):
+            found.append(d)
+            continue  # do not descend into a build tree
+        for e in entries:
+            if e.is_dir(follow_symlinks=False):
+                stack.append(pathlib.Path(e.path))
+    return sorted(found)
+
+
+def check_no_red_target_trees(root: pathlib.Path | None = None) -> None:
+    """W1-Z Z3.4 (checkpoint runner only — `working/` is gitignored, so CI never
+    sees it): no rebuildable cargo tree may sit inside the evidence dirs."""
+    root = ROOT / "working" / "logs" if root is None else root
+    trees = find_red_target_trees(root)
+    if trees:
+        listing = "\n  ".join(str(t.relative_to(ROOT)) if t.is_relative_to(ROOT) else str(t) for t in trees)
+        total = subprocess.run(
+            ["du", "-sch", *map(str, trees)], capture_output=True, text=True, check=False
+        ).stdout.strip().splitlines()
+        size = total[-1].split("\t")[0] if total else "?"
+        _die(
+            f"{len(trees)} cargo build tree(s) under {root} ({size}); they are rebuildable "
+            "scratch, the stamped unit-red-*.log keeps the rc and FAILED list — "
+            "plan-w1z.md Z5: find working/logs/w1-sweep -type d -name 'red-target-*' "
+            f"-prune -exec rm -rf {{}} +\n  {listing}"
+        )
+
+
 def check_red_at_sha_overlay_order(text: str | None = None) -> None:
     """`scripts/*.sh` must be copied before `write-tree` so tree_sha includes the gate."""
     if text is None:
@@ -1133,8 +1202,24 @@ _LEDGER_CASES_HDR = re.compile(
 )
 
 
-def check_diffsend_cases(ledger: str | None = None, gate: str | None = None) -> None:
-    """DIFFSEND_CASES, the ledger header list, and differential-gate.sh cases:N agree."""
+DIFFSEND_SRC = ROOT / "crates/krb5-protocol/examples/diffsend.rs"
+
+
+def diffsend_source_cases(src: str) -> set[str]:
+    """Copy 1 of the case list: every `expect_*(&cfg, "name"` call and every
+    `"case":"name"` literal the driver prints itself."""
+    names = set(re.findall(r'expect_\w+\(\s*&cfg,\s*"([^"]+)"', src, re.S))
+    names |= set(re.findall(r'"case":"([^"{]+)"', src))
+    return names
+
+
+def check_diffsend_cases(
+    ledger: str | None = None, gate: str | None = None, src: str | None = None
+) -> None:
+    """The four copies of the diffsend case list agree: the driver's names
+    (copy 1), DIFFSEND_CASES here, the ledger header, and the gate — which
+    must grep every case and pin the same ratchet the driver's summary
+    claims (W1-Z Z3.3)."""
     if ledger is None:
         if not LEDGER.is_file():
             _die("missing docs/mit-parity-ledger.md")
@@ -1144,6 +1229,10 @@ def check_diffsend_cases(ledger: str | None = None, gate: str | None = None) -> 
         if not gate_path.is_file():
             _die("missing scripts/differential-gate.sh")
         gate = gate_path.read_text()
+    if src is None:
+        if not DIFFSEND_SRC.is_file():
+            _die("missing crates/krb5-protocol/examples/diffsend.rs")
+        src = DIFFSEND_SRC.read_text()
     hdr = _LEDGER_CASES_HDR.search(ledger)
     if not hdr:
         _die("docs/mit-parity-ledger.md missing live diffsend cases list")
@@ -1154,15 +1243,34 @@ def check_diffsend_cases(ledger: str | None = None, gate: str | None = None) -> 
         _die(
             f"DIFFSEND_CASES vs ledger header: missing {missing} extra {extra}"
         )
-    m = re.search(r'"cases":(\d+)', gate)
+    src_names = diffsend_source_cases(src)
+    if src_names != set(DIFFSEND_CASES):
+        _die(
+            "diffsend.rs case names vs DIFFSEND_CASES: "
+            f"only in diffsend.rs {sorted(src_names - DIFFSEND_CASES)}; "
+            f"only in DIFFSEND_CASES {sorted(DIFFSEND_CASES - src_names)}"
+        )
+    m = re.search(r"^DIFFSEND_RATCHET=(\d+)\s*$", gate, re.M)
     if not m:
-        _die("scripts/differential-gate.sh missing cases:N")
+        _die("scripts/differential-gate.sh missing DIFFSEND_RATCHET=N")
     n = int(m.group(1))
     if n != len(DIFFSEND_CASES):
         _die(
-            f"scripts/differential-gate.sh cases:{n} != "
+            f"scripts/differential-gate.sh DIFFSEND_RATCHET={n} != "
             f"DIFFSEND_CASES {len(DIFFSEND_CASES)}"
         )
+    if '"case":"[^"]*","outcome":"ok"' not in gate or "$CASES_SEEN" not in gate:
+        _die("scripts/differential-gate.sh must count the distinct emitted ok cases against the ratchet")
+    claimed = re.search(r'"outcome":"ok","cases":(\d+)\}', src)
+    if not claimed or int(claimed.group(1)) != n:
+        _die(
+            "diffsend.rs summary line claims "
+            f"{claimed.group(1) if claimed else 'no'} cases; the gate ratchet is {n}"
+        )
+    grepped = set(re.findall(r'"case":"([^"]+)"', gate))
+    ungrepped = sorted(DIFFSEND_CASES - grepped)
+    if ungrepped:
+        _die(f"scripts/differential-gate.sh asserts no line for diffsend case(s) {ungrepped}")
 
 
 def _dump_key_hexes(line: str) -> tuple[str, tuple[str, ...]] | None:
@@ -1869,6 +1977,12 @@ def check_evidence_check_tool() -> None:
             "     Summary [   0.100s] 11 tests run: 11 passed, 0 skipped\n"
         )
         (root / "ci-bad.txt").write_text("ci-status: HTTP Error 403: rate limit exceeded\n")
+        # Z3.2/Z3.6: any scratch* directory is outside the contract (dev runs,
+        # KERBER_SCRATCH output); a file merely named scratch* is not.
+        for scratch in ("scratch", "scratch-dev", "scratch-pre2"):
+            (root / scratch).mkdir()
+            (root / scratch / "dirty-dev-run.log").write_text("head_sha=abc1234\ntree_sha=t\ndirty=yes\n")
+        (root / "scratch-notes.log").write_text("no stamp\n")
         r = subprocess.run(
             [
                 sys.executable,
@@ -1902,6 +2016,10 @@ def check_evidence_check_tool() -> None:
             _die("evidence-check.py flagged a dirty log that carries red-at-parent=")
         if any(ln.startswith("ok.log:") for ln in out.splitlines()):
             _die(f"evidence-check.py flagged a good log: {out}")
+        if "dirty-dev-run.log" in out:
+            _die(f"evidence-check.py must skip every scratch* directory: {out}")
+        if "scratch-notes.log" not in out:
+            _die("evidence-check.py must still check a file merely named scratch*")
         if any(ln.startswith("r12-unit-green.log:") for ln in out.splitlines()):
             _die(f"evidence-check.py flagged a unit-green log that has Summary: {out}")
     finally:
@@ -2024,6 +2142,40 @@ def _scratch_root() -> pathlib.Path:
     base = pathlib.Path(os.environ.get("KERBER_SCRATCH") or ROOT / "target" / "ci-policy")
     base.mkdir(parents=True, exist_ok=True)
     return base
+
+
+def check_index_check_scratch() -> None:
+    """W1-Z Z3.2: index-check.py skips any `scratch*` component (`scratch/`,
+    `scratch-pre/`, `scratch-diffsend2/`), flags an unnamed real file, and
+    accepts a directory name as cover for the files under it."""
+    spec = importlib.util.spec_from_file_location("index_check", SCRIPTS / "index-check.py")
+    if spec is None or spec.loader is None:
+        _die("missing scripts/index-check.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    root = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    try:
+        (root / "INDEX.md").write_text("| `a.log` | named |\n| `sub/` | covered |\n")
+        (root / "a.log").write_text("x")
+        (root / "b.log").write_text("x")
+        (root / "sub").mkdir()
+        (root / "sub" / "c.log").write_text("x")
+        for scratch in ("scratch", "scratch-pre", "scratch-diffsend2", "sub/scratch-red"):
+            (root / scratch).mkdir()
+            (root / scratch / "dump.jsonl").write_text("x")
+        files, unnamed = mod.check(root)
+        if files != 3 or unnamed != ["b.log"]:
+            _die(f"index-check must count 3 files and flag only b.log: files={files} unnamed={unnamed}")
+        if not mod.is_scratch(("z1", "scratch-pre", "cdiff", "x.jsonl")):
+            _die("index-check is_scratch must match a scratch-* component")
+        if mod.is_scratch(("z1", "logs", "settle-kdc-1.log")):
+            _die("index-check is_scratch must not match an ordinary path")
+        (root / "scratch-notes.log").write_text("x")
+        files, unnamed = mod.check(root)
+        if files != 4 or unnamed != ["b.log", "scratch-notes.log"]:
+            _die(f"index-check must judge directories, not file names, as scratch: {unnamed}")
+    finally:
+        subprocess.run(["rm", "-rf", str(root)], check=False)
 
 
 def check_claim_audit() -> None:
@@ -2437,13 +2589,33 @@ jobs:
         + ".\n"
     )
     gate_n = (
-        f'echo "$DIFF" | grep -q \'"outcome":"ok","cases":{len(DIFFSEND_CASES)}\' || die "x"\n'
+        f"DIFFSEND_RATCHET={len(DIFFSEND_CASES)}\n"
+        "CASES_SEEN=\"$(grep -o '\"case\":\"[^\"]*\",\"outcome\":\"ok\"' <<<\"$DIFF\" | sort -u | wc -l)\"\n"
+        '[ "$CASES_SEEN" = "$DIFFSEND_RATCHET" ] || die "x"\n'
+        + "".join(f"grep -q '\"case\":\"{c}\"' <<<\"$DIFF\" || die x\n" for c in sorted(DIFFSEND_CASES))
     )
-    check_diffsend_cases(cases_hdr, gate_n)
-    _must_die(check_diffsend_cases, "no header here", gate_n)
-    _must_die(check_diffsend_cases, cases_hdr, 'echo "no cases pin"\n')
-    gate_short = 'echo "$DIFF" | grep -q \'"outcome":"ok","cases":29\' || die "x"\n'
-    _must_die(check_diffsend_cases, cases_hdr, gate_short)
+    src_n = (
+        "".join(f'expect_error(&cfg, "{c}", &req, 1)?;\n' for c in sorted(DIFFSEND_CASES))
+        + f'println!(r#"{{{{"event":"diffsend","outcome":"ok","cases":{len(DIFFSEND_CASES)}}}}}"#);\n'
+    )
+    check_diffsend_cases(cases_hdr, gate_n, src_n)
+    _must_die(check_diffsend_cases, "no header here", gate_n, src_n)
+    _must_die(check_diffsend_cases, cases_hdr, 'echo "no cases pin"\n', src_n)
+    gate_short = gate_n.replace(f"DIFFSEND_RATCHET={len(DIFFSEND_CASES)}", "DIFFSEND_RATCHET=29")
+    _must_die(check_diffsend_cases, cases_hdr, gate_short, src_n)
+    # Z3.3: the gate must count, not trust the literal; must grep every case;
+    # the driver's names and its summary literal must match the ratchet.
+    _must_die(check_diffsend_cases, cases_hdr, gate_n.replace("$CASES_SEEN", "$X"), src_n)
+    _must_die(
+        check_diffsend_cases, cases_hdr, gate_n.replace('"case":"garbage-pdu"', '"case":"gone"'), src_n
+    )
+    _must_die(check_diffsend_cases, cases_hdr, gate_n, src_n + 'expect_drop(&cfg, "stray-case", &req)?;\n')
+    _must_die(
+        check_diffsend_cases,
+        cases_hdr,
+        gate_n,
+        src_n.replace(f'"cases":{len(DIFFSEND_CASES)}', '"cases":7'),
+    )
 
     def _princ_line(name: str, *keyhexes: str) -> str:
         namelen = str(len(name))
@@ -2783,6 +2955,27 @@ jobs:
         check_red_at_sha_inject,
         '--inject\nTREE="$(git write-tree)"\ncp "$ROOT/$rel" "$WT/$rel"\n',
     )
+    check_red_at_sha_target_trap()
+    _trap_ok = (
+        'cleanup() {\n    rm -rf "$WT"\n    if [ "${KERBER_KEEP_RED_TARGET:-}" != "1" ]; then\n'
+        '        rm -rf "$TARGET"\n    fi\n}\ntrap cleanup EXIT\necho "red-at-parent=1"\n'
+    )
+    check_red_at_sha_target_trap(_trap_ok)
+    _must_die(check_red_at_sha_target_trap, _trap_ok.replace('rm -rf "$TARGET"', "true"))
+    _must_die(check_red_at_sha_target_trap, _trap_ok.replace("KERBER_KEEP_RED_TARGET", "X"))
+    _must_die(check_red_at_sha_target_trap, _trap_ok.replace('echo "red-at-parent=1"', ""))
+    _rt = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    try:
+        check_no_red_target_trees(_rt)
+        (_rt / "z9" / "scratch" / "red-target-0123456789ab" / "debug").mkdir(parents=True)
+        _must_die(check_no_red_target_trees, _rt)
+        subprocess.run(["rm", "-rf", str(_rt / "z9")], check=True)
+        (_rt / "z9" / "scratch" / "tgt" / "debug").mkdir(parents=True)
+        (_rt / "z9" / "scratch" / "tgt" / "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172789f06886806bc55")
+        _must_die(check_no_red_target_trees, _rt)
+    finally:
+        subprocess.run(["rm", "-rf", str(_rt)], check=False)
+    check_index_check_scratch()
 
     env = os.environ.copy()
     env.update({"ROOT": str(ROOT), "KERBER_NO_IMAGE": "1"})
@@ -2863,7 +3056,7 @@ jobs:
         _die("unit-red-check.py must reject empty cargo output")
 
     hdr_mismatch = "The thirty-three live `diffsend` cases are `garbage-pdu`.\n"
-    _must_die(check_diffsend_cases, hdr_mismatch, gate_n)
+    _must_die(check_diffsend_cases, hdr_mismatch, gate_n, src_n)
 
     spec = importlib.util.spec_from_file_location("ci_status_r14", SCRIPTS / "ci-status.py")
     if spec is None or spec.loader is None:
@@ -2974,6 +3167,56 @@ jobs:
     finally:
         subprocess.run(["rm", "-rf", str(croot)], check=False)
 
+    # W1-Z Z3.1 freeze rule: a `Frozen-at: <sha>` summary resolves its cites at
+    # that commit, so a later gate edit that drops the assertion does not
+    # re-open the closed summary; the same bullet without the header is red.
+    froot = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    try:
+        (froot / "scripts").mkdir()
+        gate = froot / "scripts" / "fx-gate.sh"
+        asserting = (
+            'NAME="rust"\nNAME_MIT="mit"\n'
+            'OUT="$(docker exec "$NAME" true)"\n'
+            "echo \"$OUT\" | grep -F 'value=1'\n"
+            'MIT_OUT="$(docker exec "$NAME_MIT" true)"\n'
+            "echo \"$MIT_OUT\" | grep -F 'value=1'\n"
+        )
+        gate.write_text(asserting)
+        genv = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "fx",
+            "GIT_AUTHOR_EMAIL": "fx@x",
+            "GIT_COMMITTER_NAME": "fx",
+            "GIT_COMMITTER_EMAIL": "fx@x",
+        }
+        for cmd in (
+            ["git", "init", "-q"],
+            ["git", "add", "-A"],
+            ["git", "commit", "-q", "-m", "fx"],
+        ):
+            subprocess.run(cmd, cwd=froot, check=True, env=genv, capture_output=True)
+        sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=froot, check=True, capture_output=True, text=True
+        ).stdout.strip()
+        gate.write_text(asserting.replace("grep -F 'value=1'", "cat"))
+        fev = froot / "logs"
+        fev.mkdir()
+        head = "## Settled live (every bullet names the asserting cell on both legs)\n\n"
+        bullet = "- **Frozen cite:** `value=1` at `scripts/fx-gate.sh:4` / `:6`.\n"
+        if camod.frozen_at(f"# T\n\nFrozen-at: `{sha[:12]}`\n\n" + head + bullet) != sha[:12]:
+            _die("claim-audit frozen_at must read the `Frozen-at:` header")
+        rows = camod.audit_text(head + bullet, froot, fev)
+        if not any(r[1] != "ok" for r in rows):
+            _die("claim-audit must read the working tree when no Frozen-at is given")
+        rows = camod.audit_text(head + bullet, froot, fev, sha)
+        if any(r[1] != "ok" for r in rows):
+            _die(f"claim-audit must resolve a frozen cite at its sha: {rows}")
+        rows = camod.audit_text(head + bullet, froot, fev, "0" * 40)
+        if not any(r[1] != "ok" for r in rows):
+            _die("claim-audit must fail a cite frozen at an unknown sha")
+    finally:
+        subprocess.run(["rm", "-rf", str(froot)], check=False)
+
 
 # W1-K M2b: after the differential oracle's whitelist mechanism is deleted, no
 # case may be excused by name. Ban the mechanism identifiers from the diffsend
@@ -3042,6 +3285,11 @@ def main() -> None:
     check_ci_status_save()
     check_red_at_sha_inject()
     check_red_at_sha_overlay_order()
+    check_red_at_sha_target_trap()
+    if "--checkpoint" in sys.argv[1:]:
+        # W1-Z Z3.4: the local evidence tree is gitignored, so only the
+        # checkpoint runner (`ci-policy.py --checkpoint`) can see it.
+        check_no_red_target_trees()
     check_working_gitignored()
     check_ledger_proof_column()
     check_diffsend_cases()

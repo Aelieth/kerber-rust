@@ -280,11 +280,9 @@ jobs:
           echo "KERBER_SKIP_MIT_BUILD=1" >> "$GITHUB_ENV"
       - name: Scratch dir
         run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
-      - name: Build and kinit against MIT 1.22.2
-        run: ./scripts/run-harness.sh
-      - name: Stop MIT harness
-        if: always()
-        run: ./scripts/stop-harness.sh || true
+      # W1-Z Z3.4: the run-harness/stop-harness pair that sat here booted the
+      # stock container and stopped it before the first gate; every gate below
+      # boots its own. The harness job still runs the pair around KERBER_LIVE.
       - name: cross-realm-gate
         run: ./scripts/cross-realm-gate.sh
       - name: capaths-transit-gate

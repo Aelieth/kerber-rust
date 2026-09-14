@@ -5,9 +5,10 @@ usage: index-check.py <evidence-dir>…   (or --all <root> for every subdirector
 
 A name counts when it appears in INDEX.md inside backticks or as the first
 cell of a table row; `{a,b}` braces expand; a directory name in the index
-covers every file under it. `scratch/` trees (gate `KERBER_SCRATCH` output)
-are never evidence and are skipped. Prints `files=N unnamed=M` per
-directory and exits 1 when anything is unnamed.
+covers every file under it. Scratch trees (gate `KERBER_SCRATCH` output:
+any path component starting `scratch` — `scratch/`, `scratch-pre/`,
+`scratch-diffsend2/`; W1-Z Z3.2) are never evidence and are skipped. Prints
+`files=N unnamed=M` per directory and exits 1 when anything is unnamed.
 """
 from __future__ import annotations
 
@@ -18,6 +19,14 @@ import sys
 BACKTICK = re.compile(r"`([^`\n]+)`")
 TABLE_FIRST_CELL = re.compile(r"^\|\s*([^|`\n]+?)\s*\|", re.M)
 BRACES = re.compile(r"\{([^{}]*)\}")
+
+
+def is_scratch(parts: tuple[str, ...]) -> bool:
+    """True when any *directory* component is a scratch tree (`scratch*`).
+
+    Callers pass the path relative to the checked dir; the last component is
+    the file itself and is not judged (a `scratch-notes.log` is evidence)."""
+    return any(part.startswith("scratch") for part in parts[:-1])
 
 
 def expand(name: str) -> set[str]:
@@ -57,7 +66,7 @@ def check(d: pathlib.Path) -> tuple[int, list[str]]:
     files = 0
     unnamed: list[str] = []
     for p in sorted(d.rglob("*")):
-        if not p.is_file() or p == index or "scratch" in p.relative_to(d).parts:
+        if not p.is_file() or p == index or is_scratch(p.relative_to(d).parts):
             continue
         files += 1
         rel = str(p.relative_to(d))
@@ -73,7 +82,7 @@ def main(argv: list[str]) -> int:
     if argv[0] == "--all":
         root = pathlib.Path(argv[1])
         indexed = {
-            p.parent for p in root.rglob("INDEX.md") if "scratch" not in p.parts
+            p.parent for p in root.rglob("INDEX.md") if not is_scratch(p.relative_to(root).parts)
         }
         # R2-T4: also flag a directory that holds files (outside scratch/) but is
         # covered by no INDEX.md at its level or any ancestor -- otherwise such
@@ -82,7 +91,7 @@ def main(argv: list[str]) -> int:
         for p in root.rglob("*"):
             if not p.is_file() or p.name == "INDEX.md":
                 continue
-            if "scratch" in p.relative_to(root).parts:
+            if is_scratch(p.relative_to(root).parts):
                 continue
             if not any(anc in indexed for anc in (p.parent, *p.parent.parents)):
                 orphans.add(p.parent)

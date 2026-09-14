@@ -247,6 +247,24 @@ this project uses semantic versioning once a crate is published.
   under W1-A′-4. `krb5-kdc` / `krb5-admin` / `krb5-protocol` `//!` headers
   and `Cargo.toml` descriptions name their current modules (kpropd +
   iprop included).
+- **tooling (Z3 evidence contract).** `claim-audit.py` freeze rule: a
+  closed summary's `Frozen-at: <sha>` header resolves its `script:line`
+  cites and unit names at that commit (`git show`, `git grep`; `--at`
+  overrides), so a later gate edit cannot re-open it; the six closed W1
+  summaries carry it. `index-check.py` and `evidence-check.py` skip any
+  directory component starting `scratch` (`scratch-pre/`,
+  `scratch-dev/`, …), never a file so named. `differential-gate.sh`
+  asserts `as-needchange` (23 `REQUIRED PWCHANGE` both legs) and checks
+  `DIFFSEND_RATCHET=110` against the count of distinct emitted ok cases,
+  not diffsend's summary literal; `ci-policy.py` reconciles the four
+  copies of the case list (`diffsend.rs` names, `DIFFSEND_CASES`, ledger
+  header, gate greps — every case grepped) and the ratchet against the
+  driver's literal. `red-at-sha.sh` removes its `red-target-<sha>` cargo
+  tree on EXIT (`KERBER_KEEP_RED_TARGET=1` keeps it) and stamps
+  `red-at-parent=1`; `ci-policy.py --checkpoint` fails on any cargo build
+  tree left under `working/logs/`. `ci.yml` `mit-extra` drops the
+  `run-harness`/`stop-harness` pair that booted and stopped the stock
+  container before its first gate. Every rule has a `_self_test` fixture.
 
 ### W1-C
 

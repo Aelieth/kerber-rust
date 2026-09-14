@@ -3,8 +3,9 @@
 
 usage: evidence-check.py <dir> --commits SHA [SHA ...]
 
-Every `.log` / `.txt` under <dir> (non-recursive for INDEX.md siblings; recursive
-otherwise excluding scratch/) is checked:
+Every `.log` / `.txt` under <dir> is checked, except under a scratch tree
+(any directory component starting `scratch` — `scratch/`, `scratch-pre/`,
+`scratch-dev/` — the same rule as index-check.py, W1-Z Z3.2):
 
 - must carry `head_sha=` and `tree_sha=` (unstamped → flag)
 - a `.log` whose `head_sha` is not a prefix of one of `--commits` → flag
@@ -30,7 +31,7 @@ def iter_artefacts(root: pathlib.Path) -> list[pathlib.Path]:
     for p in sorted(root.rglob("*")):
         if not p.is_file():
             continue
-        if "scratch" in p.relative_to(root).parts:
+        if any(part.startswith("scratch") for part in p.relative_to(root).parts[:-1]):
             continue
         if p.suffix not in {".log", ".txt"}:
             continue

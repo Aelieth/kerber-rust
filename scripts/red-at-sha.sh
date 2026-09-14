@@ -81,10 +81,16 @@ mkdir -p "$KERBER_SCRATCH"
 git worktree remove --force "$WT" 2>/dev/null || true
 rm -rf "$WT"
 git worktree add --detach "$WT" "$BASE"
+# The cargo tree is rebuildable scratch (30 of them held 36 GiB of W1
+# evidence dirs); the stamped log keeps the rc and the FAILED list. Keep it
+# for a follow-up run at the same base with KERBER_KEEP_RED_TARGET=1 (W1-Z Z3.4).
 cleanup() {
     cd "$ROOT" || true
     git worktree remove --force "$WT" 2>/dev/null || true
     git worktree prune || true
+    if [ "${KERBER_KEEP_RED_TARGET:-}" != "1" ]; then
+        rm -rf "$TARGET"
+    fi
 }
 trap cleanup EXIT
 
@@ -159,7 +165,12 @@ fi
 echo "==== red-at-sha provenance ===="
 echo "base_sha=$BASE"
 echo "tree_sha=$TREE"
+# Everything this run prints is a deliberate parent (or historical) run, so
+# the dirty=yes the overlaid worktree stamps is the labelled kind
+# (evidence-check.py / claim-audit.py `red-at-parent=`), like unit_red_at.
+echo "red-at-parent=1"
 echo "command=${cmd_show[*]} ${CMD[*]}"
+echo "keep_target=${KERBER_KEEP_RED_TARGET:-0}"
 echo "inject=${INJECT[*]}"
 echo "worktree=$WT"
 echo "CARGO_TARGET_DIR=$TARGET"

@@ -27,7 +27,9 @@ the step before an archive freezes a summary.
 Evidence directories under `working/logs/<archive>/` each carry an `INDEX.md` naming every file with a one-line
 "what"; `python3 scripts/index-check.py <dir>…` (or `--all <root>`) prints `files=N unnamed=M` per directory and
 exits 1 when a file is unnamed (backticked names and table first cells count, `{a,b}` braces expand, a named
-directory covers its files, `scratch/` trees are never evidence). Run it before a summary cites the directory.
+directory covers its files; any directory component starting `scratch` — `scratch/`, `scratch-pre/`,
+`scratch-diffsend2/` — is gate `KERBER_SCRATCH` output and never evidence). Run it before a summary cites
+the directory; `--all working/logs/w1-sweep` unnamed = 0 is a close-out condition.
 
 `scripts/ci-policy.py` enforces workflow YAML (fail-red jobs, nextest
 `--profile ci` on every invocation, no per-push `cargo test
@@ -126,7 +128,15 @@ after the overlay and any `--inject` copies, `command=` including
 worktree **before** `write-tree` so `tree_sha=` describes the tree
 that ran. `--inject` with no files is refused. Binary rebuild is
 only for `scripts/*-gate.sh`. The worktree is removed and
-`git worktree prune`d on EXIT (the target dir stays).
+`git worktree prune`d on EXIT, and so is the `red-target-<sha>` cargo
+tree — it is rebuildable scratch (thirty of them held 36 GiB of W1
+evidence dirs) and the stamped log keeps the rc and the FAILED list;
+`KERBER_KEEP_RED_TARGET=1` keeps it for a follow-up run at the same
+base. Every run stamps `red-at-parent=1` in its provenance block, so the
+`dirty=yes` the overlaid worktree records is the labelled kind.
+`python3 scripts/ci-policy.py --checkpoint` (the local checkpoint runner;
+`working/` is gitignored so CI never sees it) fails on any cargo build
+tree left under `working/logs/`.
 Archive the captured output under `working/logs/…` and the scratch.
 Both legs of a text-equality cell assert pinned literals (never
 capture-from-MIT). Every branch asserts: no `if` whose body is only
@@ -149,6 +159,14 @@ or Heimdal tool (a Rust-side gate run is not a leg); a tooling bullet
 that exercises the rule; and every named artefact must exist, be stamped
 and carry a quoted value. `ci-policy` runs its fixtures; the audit runs it on the
 landed summary with `--stamp` into the evidence directory.
+
+Freeze rule: a closed summary carries `Frozen-at: <close-out sha>` under
+its title, and `claim-audit.py` then resolves its `script:line` cites and
+unit names with `git show <sha>:<script>` / `git grep <sha>` instead of the
+working tree — the values were true at that SHA, and a later gate edit must
+not re-open a closed summary. An open summary (no header) resolves against
+the working tree; `--at SHA` overrides the header for every summary given.
+The bare invocation over every summary is the check.
 
 Wire `e_text` is MIT's status word (`do_as_req.c:806`,
 `do_tgs_req.c:205-206`). MIT `k5_setmsg` texts are KDC-log messages
@@ -591,8 +609,14 @@ Not in any workflow: `gss-sspi-gate.sh` (needs a Windows SSPI peer; exits
   stable set. Ticket flags compare the full flag word with no masking;
   any divergence is fail-red. There is no case-name whitelist: the gate
   fails if a diffsend line carries a `"whitelist"` key, and `ci-policy`
-  bans the whitelist mechanism identifiers (W1-K M2b). Honest `exit 2`
-  only when docker/MIT image is absent. In CI (bare `run:`).
+  bans the whitelist mechanism identifiers (W1-K M2b). The case ratchet
+  is `DIFFSEND_RATCHET=N` in the gate, checked against the distinct
+  `"case":…,"outcome":"ok"` lines diffsend emitted (not the literal its
+  summary claims), and the gate greps a line for every case; `ci-policy`
+  reconciles the four copies of the case list — the `expect_*` names in
+  `diffsend.rs`, `DIFFSEND_CASES`, the ledger header, the gate greps —
+  and the ratchet against the driver's summary literal (W1-Z Z3.3).
+  Honest `exit 2` only when docker/MIT image is absent. In CI (bare `run:`).
   Compare lives behind `krb5-protocol` feature `diff` (`examples/diffsend`
   and the unit fixture); it is not on the default public API.
   **TGS vehicle:** success TGS cases mint a PAC-less TGT with the

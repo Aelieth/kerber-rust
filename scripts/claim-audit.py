@@ -22,7 +22,14 @@ bullet (references into `scripts/*.py`) names a fixture line or a line
 inside a check that runs the tool, and every artefact exists, is stamped (`head_sha=`
 and `tree_sha=`) and carries a quoted value.
 
-usage: claim-audit.py [--evidence-dir DIR] [--stamp] SUMMARY...
+Freeze rule (W1-Z Z3): a closed summary carries `Frozen-at: <sha>` under its
+title. Its `script:line` cites and unit names are then resolved against
+`git show <sha>:<script>` / `git grep <sha>`, not the working tree — the
+values were true at the close-out SHA and a later gate edit must not turn
+a closed summary red. `--at SHA` overrides the header for every summary
+given; an open summary (no header) resolves against the working tree.
+
+usage: claim-audit.py [--evidence-dir DIR] [--stamp] [--at SHA] SUMMARY...
 """
 
 from __future__ import annotations
@@ -67,12 +74,14 @@ FIXTURE_RE = re.compile(r"_must_die\(|must_fail\(|_must_pass\(|\bassert\b|raise 
 PROBE_RE = re.compile(r"subprocess\.(?:run|check_output|Popen)\(|_must_die\(|must_fail\(|\bassert\b")
 DEF_RE = re.compile(r"^(?:def |[A-Za-z_])")
 HEADER = "asserting cell"
+FROZEN_RE = re.compile(r"^Frozen-at:\s*`?([0-9a-f]{7,40})`?", re.M)
 
 
 class Bullet:
-    def __init__(self, title: str, text: str) -> None:
+    def __init__(self, title: str, text: str, at: str | None = None) -> None:
         self.title = title
         self.text = text
+        self.at = at
         self.refs: list[tuple[str, int, int]] = []
         self.values: list[str] = []
         self.units: list[str] = []
@@ -97,7 +106,7 @@ class Bullet:
                 continue
             if ARTEFACT_RE.match(span):
                 self.artefacts.extend(expand_braces(span))
-            elif UNIT_RE.match(span) and unit_exists(ROOT, span):
+            elif UNIT_RE.match(span) and unit_exists(ROOT, span, self.at):
                 self.units.append(span)
             elif len(span.strip()) >= 3:
                 self.values.append(span)
@@ -113,7 +122,7 @@ def expand_braces(name: str) -> list[str]:
     return out
 
 
-def parse_section(text: str) -> tuple[str | None, list[Bullet]]:
+def parse_section(text: str, at: str | None = None) -> tuple[str | None, list[Bullet]]:
     lines = text.split("\n")
     start = next((i for i, l in enumerate(lines) if l.startswith("## Settled live")), None)
     if start is None:
@@ -128,24 +137,43 @@ def parse_section(text: str) -> tuple[str | None, list[Bullet]]:
     for l in body:
         if l.startswith("- "):
             if cur:
-                bullets.append(make_bullet(cur))
+                bullets.append(make_bullet(cur, at))
             cur = [l[2:]]
         elif cur and l.strip():
             cur.append(l.strip())
     if cur:
-        bullets.append(make_bullet(cur))
+        bullets.append(make_bullet(cur, at))
     return lines[start], bullets
 
 
-def make_bullet(lines: list[str]) -> Bullet:
+def make_bullet(lines: list[str], at: str | None = None) -> Bullet:
     text = " ".join(lines)
     m = re.match(r"\*\*(.+?)\*\*", text)
     title = (m.group(1) if m else text[:60]).rstrip(":. ")
-    return Bullet(title, text)
+    return Bullet(title, text, at)
+
+
+def frozen_at(text: str) -> str | None:
+    """The `Frozen-at: <sha>` header of a closed summary, or None."""
+    m = FROZEN_RE.search(text)
+    return m.group(1) if m else None
 
 
 @functools.lru_cache(maxsize=None)
-def script_lines(root: pathlib.Path, path: str) -> tuple[str, ...] | None:
+def git_show(root: pathlib.Path, at: str, path: str) -> str | None:
+    r = subprocess.run(
+        ["git", "show", f"{at}:{path}"], cwd=root, capture_output=True, text=True, errors="replace"
+    )
+    return r.stdout if r.returncode == 0 else None
+
+
+@functools.lru_cache(maxsize=None)
+def script_lines(root: pathlib.Path, path: str, at: str | None = None) -> tuple[str, ...] | None:
+    if at is not None:
+        text = git_show(root, at, path)
+        if text is None and not path.startswith("scripts/"):
+            text = git_show(root, at, f"scripts/{path}")
+        return None if text is None else tuple(text.split("\n"))
     p = root / path
     if not p.is_file():
         p = root / "scripts" / path
@@ -155,8 +183,8 @@ def script_lines(root: pathlib.Path, path: str) -> tuple[str, ...] | None:
 
 
 @functools.lru_cache(maxsize=None)
-def function_bodies(root: pathlib.Path, path: str) -> dict[str, str]:
-    text = "\n".join(script_lines(root, path) or ())
+def function_bodies(root: pathlib.Path, path: str, at: str | None = None) -> dict[str, str]:
+    text = "\n".join(script_lines(root, path, at) or ())
     bodies: dict[str, str] = {}
     for m in FUNC_RE.finditer(text):
         end = text.find("\n}", m.end())
@@ -165,8 +193,8 @@ def function_bodies(root: pathlib.Path, path: str) -> dict[str, str]:
 
 
 @functools.lru_cache(maxsize=None)
-def asserting_functions(root: pathlib.Path, path: str) -> frozenset[str]:
-    bodies = function_bodies(root, path)
+def asserting_functions(root: pathlib.Path, path: str, at: str | None = None) -> frozenset[str]:
+    bodies = function_bodies(root, path, at)
     direct = {n for n, b in bodies.items() if ASSERT_RE.search(b)}
     calls = re.compile(r"^\s*(?:\w+=\"?\$\()?(\w+)\b", re.M)
     return frozenset(
@@ -174,10 +202,12 @@ def asserting_functions(root: pathlib.Path, path: str) -> frozenset[str]:
     )
 
 
-def asserting_text(root: pathlib.Path, path: str, window: str) -> str | None:
+def asserting_text(
+    root: pathlib.Path, path: str, window: str, at: str | None = None
+) -> str | None:
     """The window plus the bodies of asserting functions it calls; None if nothing asserts."""
-    funcs = asserting_functions(root, path)
-    bodies = function_bodies(root, path)
+    funcs = asserting_functions(root, path, at)
+    bodies = function_bodies(root, path, at)
     called = []
     for line in window.split("\n"):
         m = re.match(r"^\s*(?:\w+=\"?\$\()?(\w+)\b", line)
@@ -207,7 +237,14 @@ def value_in(values: list[str], text: str) -> bool:
 
 
 @functools.lru_cache(maxsize=None)
-def unit_exists(root: pathlib.Path, name: str) -> bool:
+def unit_exists(root: pathlib.Path, name: str, at: str | None = None) -> bool:
+    if at is not None:
+        r = subprocess.run(
+            ["git", "grep", "-q", "-E", rf"fn {re.escape(name)}(\(|<|$)", at, "--", "crates/*.rs"],
+            cwd=root,
+            capture_output=True,
+        )
+        return r.returncode == 0
     pat = re.compile(rf"\bfn {re.escape(name)}\b")
     for p in (root / "crates").rglob("*.rs"):
         if pat.search(p.read_text(errors="replace")):
@@ -283,13 +320,14 @@ def check_bullet(
     root: pathlib.Path,
     evidence: pathlib.Path | list[pathlib.Path] | None,
 ) -> None:
+    at = b.at
     legs: set[str] = set()
     gate_refs = 0
     tool_refs = 0
     fixture_ref = False
     passing = 0
     for path, a, z in b.refs:
-        lines = script_lines(root, path)
+        lines = script_lines(root, path, at)
         if lines is None:
             b.reasons.append(f"{path} not found")
             continue
@@ -301,7 +339,7 @@ def check_bullet(
         else:
             lo, hi = max(0, a - 1), min(len(lines), z)
         window = "\n".join(lines[lo:hi])
-        text = asserting_text(root, path, window)
+        text = asserting_text(root, path, window, at)
         if text is None:
             b.reasons.append(f"{path}:{a} asserts nothing")
             continue
@@ -324,7 +362,7 @@ def check_bullet(
             legs |= here
             b.notes.append(f"{path}:{a}-{z} legs={','.join(sorted(here)) or '-'}")
     for u in b.units:
-        if not unit_exists(root, u):
+        if not unit_exists(root, u, at):
             b.reasons.append(f"unit {u} not found under crates/")
     live_settle = False
     for name in b.artefacts:
@@ -373,8 +411,9 @@ def audit_text(
     text: str,
     root: pathlib.Path,
     evidence: pathlib.Path | list[pathlib.Path] | None,
+    at: str | None = None,
 ) -> list[tuple[str, str, list[str], list[str]]]:
-    header, bullets = parse_section(text)
+    header, bullets = parse_section(text, at)
     if header is None:
         return [("Settled live", "fail", ["no '## Settled live' section"], [])]
     rows = []
@@ -420,6 +459,11 @@ def main() -> int:
     ap.add_argument("--evidence-dir", type=pathlib.Path)
     ap.add_argument("--stamp", action="store_true", help="print the provenance header first")
     ap.add_argument("-v", "--verbose", action="store_true", help="print the legs each cell supplied")
+    ap.add_argument(
+        "--at",
+        metavar="SHA",
+        help="resolve script cites and unit names at this commit (overrides `Frozen-at:` headers)",
+    )
     args = ap.parse_args()
     if args.stamp:
         sys.stdout.write(provenance())
@@ -431,8 +475,10 @@ def main() -> int:
         if args.evidence_dir is not None:
             extra = args.evidence_dir
             evidence = [extra] + [d for d in evidence if d != extra]
-        print(f"==== claim-audit {summary} ====")
-        for title, status, reasons, notes in audit_text(text, ROOT, evidence):
+        at = args.at or frozen_at(text)
+        where = f" at {at}" if at else ""
+        print(f"==== claim-audit {summary}{where} ====")
+        for title, status, reasons, notes in audit_text(text, ROOT, evidence, at):
             total += 1
             if status == "ok":
                 print(f"ok    {title}")
