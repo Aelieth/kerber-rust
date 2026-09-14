@@ -6,6 +6,32 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W1-Z
+
+- **kadmind.** `kadm5_create_principal_3` now applies every field the
+  request masks, like `svr_principal.c:376-420`: `KADM5_ATTRIBUTES`
+  (else `[realms] default_principal_flags`, new in `kdc.conf`, else the
+  `requires_preauth` knob — `security.md`), `KADM5_MAX_LIFE` /
+  `KADM5_MAX_RLIFE` (else the realm `max_life` / `max_renewable_life`),
+  `KADM5_PRINC_EXPIRE_TIME` (else `[realms] default_principal_expiration`,
+  new in `kdc.conf`, a `krb5_string_to_timestamp` form —
+  `krb5_types::timestamp`), `KADM5_PW_EXPIRATION` (else `now +
+  pw_max_life` of the policy), `KADM5_KVNO`, `KADM5_POLICY`. Before, the
+  RPC create skipped the whole principal record: `-kvno`, `-expire`,
+  `-pwexpire`, `-maxlife`, `-maxrenewlife` and `+flags` on `addprinc` were
+  dropped and the entry took the realm defaults. kadm5.acl restrictions
+  are imposed on the *request* before the create/modify runs (MIT
+  `impose_restrictions`, `auth.c:205-272`): `-policy P` binds P and its
+  quality checks now refuse the password, a masked value below a cap
+  (an explicit 0 included) is kept, an absent one takes the cap, flags
+  compose `|= require` then `&= forbid`. Before, restrictions were
+  applied to the stored entry after the write, so an in-mask 0 was
+  raised to the cap and a `-policy` restriction skipped `passwd_check`.
+  `Restrictions::apply_to` → `Restrictions::impose(&mut AdminEnt)`;
+  `insert_new_password` / `insert_new_randkey` → `create_principal_3_in`.
+  Ledger: the A4 `:610` row split into the create row and the
+  restriction row (430 rows, exact 344).
+
 ### W1-C
 
 - **docs.** GSS context remainder graded against `gss-gate.sh` (ledger

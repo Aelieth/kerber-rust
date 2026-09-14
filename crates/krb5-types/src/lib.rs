@@ -29,6 +29,7 @@ pub mod pac;
 pub mod pkinit;
 pub mod s4u;
 pub mod spake;
+pub mod timestamp;
 
 pub use constants::{ap_bit, err, flag_bit, ku, pa};
 pub use extra::{

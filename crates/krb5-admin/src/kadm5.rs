@@ -10,9 +10,10 @@ use std::net::TcpStream;
 use krb5_crypto::{EncryptionType, ProtocolKey, kdb_decrypt_key};
 use krb5_gss::GssContext;
 use krb5_kdc::{
-    Acl, KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH,
-    KadmData, KeyEntry, OsaKeyData, OsaPrincEnt, Principal, SharedDump as SharedStore, TL_DB_ARGS,
-    TL_LAST_PWD_CHANGE, TL_MOD_PRINC, TL_STRING_ATTRS, TlData,
+    Acl, AdminEnt, KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PRE_AUTH,
+    KDB_V1_BASE_LENGTH, KadmData, KeyEntry, OsaKeyData, OsaPrincEnt, Principal,
+    SharedDump as SharedStore, TL_DB_ARGS, TL_LAST_PWD_CHANGE, TL_MOD_PRINC, TL_STRING_ATTRS,
+    TlData,
 };
 use krb5_protocol::ReplayCache;
 use krb5_types::{PrincipalName, Ticket};
@@ -713,6 +714,34 @@ fn kadm5_auth_denied(code: u32) -> bool {
             | KADM5_AUTH_EXTRACT
             | KADM5_AUTH_INITIAL
     )
+}
+
+/// `krb5_timeofday` for `impose_restrictions`' `-expire`/`-pwexpire` caps.
+fn unix_now() -> u32 {
+    u32::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs()),
+    )
+    .unwrap_or(u32::MAX)
+}
+
+/// `auth_restrict` for a modify request: the actor's ACL restrictions, if
+/// any, imposed on the parsed `(mask, fields)` (`auth.c:205-272`).
+fn impose_request_restrictions(
+    acl: &krb5_kdc::Acl,
+    actor: &str,
+    tid: &str,
+    mask: u32,
+    mut fields: ModFields,
+) -> (u32, ModFields) {
+    let Some(rs) = acl.restrictions(actor, Some(tid)) else {
+        return (mask, fields);
+    };
+    let mut ent = fields.admin_ent(mask);
+    rs.impose(&mut ent, unix_now());
+    let mask = fields.take_admin_ent(ent);
+    (mask, fields)
 }
 
 /// The kadmind acceptor principal for the `service=` field (`kadmin/admin@REALM`).
@@ -2347,6 +2376,10 @@ fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_MODIFY));
             }
+            // stub_auth_restrict → auth_restrict → impose_restrictions on
+            // the request (`auth.c:205-272`) before check_lockdown and the
+            // library's mask validation (`server_stubs.c:630-638`).
+            let (mask, fields) = impose_request_restrictions(acl, actor, &tid, mask, fields);
             if mask & KADM5_ATTRIBUTES != 0
                 && fields.attributes & KDB_LOCKDOWN_KEYS == 0
                 && g.get_in_realm(&name, &req)
@@ -2402,18 +2435,13 @@ fn dispatch_kadm5_ticket(
                     {
                         return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
                     }
-                    if let Some(rs) = acl.restrictions(actor, Some(&tid))
-                        && let Err(e) = g.impose_acl_restrictions_in(&name, &req, rs)
-                    {
-                        return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
-                    }
                     Ok(generic_ret(API_V2, 0))
                 }
                 Err(e) => Ok(generic_ret(API_V2, kadm5_code(&Error::from(e)))),
             }
         }
         CREATE_PRINCIPAL | CREATE_PRINCIPAL3 => {
-            let c = parse_create(args, proc == CREATE_PRINCIPAL3)?;
+            let mut c = parse_create(args, proc == CREATE_PRINCIPAL3)?;
             let req = req_realm(&c.prealm, &realm);
             let tid = acl_id(&c.name, &req);
             if changepw
@@ -2423,53 +2451,43 @@ fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_ADD));
             }
-            if let Some(code) = create_princ_mask_err(c.mask, c.policy.as_deref(), c.n_key_data) {
+            // stub_auth_restrict (`server_stubs.c:478,519`): the ACL line's
+            // restrictions rewrite the request (`auth.c:205-272`) before
+            // kadm5_create_principal_3 validates the mask, loads the policy
+            // and runs passwd_check — so a `-policy P` restriction is
+            // enforced by P's floors and the quality modules.
+            if let Some(rs) = acl.restrictions(actor, Some(&tid)) {
+                rs.impose(&mut c.ent, unix_now());
+            }
+            if let Some(code) =
+                create_princ_mask_err(c.ent.mask, c.ent.policy.as_deref(), c.n_key_data)
+            {
                 return Ok(generic_ret(API_V2, code));
             }
-            if c.mask & KADM5_TL_DATA != 0 && c.tl_data.iter().any(|t| t.ty < 256) {
+            if c.ent.mask & KADM5_TL_DATA != 0 && c.tl_data.iter().any(|t| t.ty < 256) {
                 return Ok(generic_ret(API_V2, KADM5_BAD_TL_TYPE));
             }
-            if c.mask & KADM5_TL_DATA != 0 && db_args_code(&c.tl_data).is_some() {
+            if c.ent.mask & KADM5_TL_DATA != 0 && db_args_code(&c.tl_data).is_some() {
                 return Ok(generic_ret(API_V2, EINVAL));
             }
             let mut g = match write_store(store, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            let rs = acl.restrictions(actor, Some(&tid));
-            let skip_policy = rs.is_some_and(|r| r.clear_policy || r.policy.is_some());
-            // MIT kadm5_create_principal_3 (svr_principal.c:364-373): the
-            // policy floors then the quality modules (`empty` even without a
-            // policy) run before the entry exists.
-            let pol = if skip_policy {
-                None
-            } else {
-                c.policy.as_deref()
-            };
-            let created = match c.pass.as_deref() {
-                Some(pw) => g
-                    .check_new_password(&c.name, pol, pw.as_bytes())
-                    .and_then(|()| g.insert_new_password(&c.name, &req, pw.as_bytes(), &[])),
-                // NULL password: random key (`krb5_dbe_crk`), no quality
-                // check. `-nokey` (KADM5_KEY_DATA) also lands here — MIT
-                // would create a keyless entry (ledger deviation).
-                None => g.insert_new_randkey(&c.name, &req, &[]),
-            };
+            // NULL password: random key (`krb5_dbe_crk`), no quality check.
+            // `-nokey` (KADM5_KEY_DATA) also lands here — MIT would create a
+            // keyless entry (ledger deviation).
+            let created = g.create_principal_3_in(
+                &c.name,
+                &req,
+                c.pass.as_deref().map(str::as_bytes),
+                &[],
+                &c.ent,
+            );
             match created {
                 Ok(()) => {
-                    if c.mask & KADM5_TL_DATA != 0
+                    if c.ent.mask & KADM5_TL_DATA != 0
                         && let Err(e) = g.merge_tl_data_in(&c.name, &req, &c.tl_data)
-                    {
-                        return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
-                    }
-                    if let Some(rs) = rs
-                        && let Err(e) = g.impose_acl_restrictions_in(&c.name, &req, rs)
-                    {
-                        return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
-                    }
-                    if !skip_policy
-                        && let Some(pol) = c.policy
-                        && let Err(e) = g.set_principal_policy_in(&c.name, &req, Some(pol))
                     {
                         return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
                     }
@@ -3274,29 +3292,41 @@ struct CreateFields {
     /// (1.8+): `svr_principal.c:463-470` creates with a random key and
     /// `:369` skips `passwd_check`.
     pass: Option<String>,
-    policy: Option<String>,
+    /// The `kadm5_principal_ent_rec` fields `kadm5_create_principal_3`
+    /// applies under `mask` (`svr_principal.c:376-420`), as sent.
+    ent: AdminEnt,
     tl_data: Vec<TlData>,
-    mask: u32,
     n_key_data: u32,
 }
 
+/// `xdr_cprinc_arg` / `xdr_cprinc3_arg`: api_version, the whole
+/// `kadm5_principal_ent_rec`, mask, (v3: ks_tuple array), passwd.
 fn parse_create(args: &[u8], v3: bool) -> Result<CreateFields, Error> {
     let mut r = XdrR::new(args);
     let _api = r.u32()?;
     let (name, prealm) = r.principal_realm()?;
-    let (policy, tl_data, n_key_data) = skip_principal_ent_rest(&mut r)?;
+    let (fields, n_key_data) = parse_principal_ent_rest(&mut r)?;
     let mask = r.u32()?;
     if v3 {
         r.skip_array_i32_pairs()?;
     }
     let pass = r.nullstring()?;
+    let ent = AdminEnt {
+        mask,
+        attributes: fields.attributes,
+        max_life: fields.max_life,
+        max_renewable_life: fields.max_rlife,
+        princ_expire_time: fields.expire,
+        pw_expiration: fields.pw_expire,
+        kvno: fields.kvno,
+        policy: fields.policy,
+    };
     Ok(CreateFields {
         name,
         prealm,
         pass,
-        policy,
-        tl_data,
-        mask,
+        ent,
+        tl_data: fields.tl_data,
         n_key_data,
     })
 }
@@ -3650,9 +3680,38 @@ struct ModFields {
     max_life: u32,
     max_rlife: u32,
     attributes: u32,
+    kvno: u32,
     policy: Option<String>,
     fail_auth_count: u32,
     tl_data: Vec<TlData>,
+}
+
+impl ModFields {
+    /// The restriction-bearing subset as an [`AdminEnt`] under `mask`.
+    fn admin_ent(&self, mask: u32) -> AdminEnt {
+        AdminEnt {
+            mask,
+            attributes: self.attributes,
+            max_life: self.max_life,
+            max_renewable_life: self.max_rlife,
+            princ_expire_time: self.expire,
+            pw_expiration: self.pw_expire,
+            kvno: self.kvno,
+            policy: self.policy.clone(),
+        }
+    }
+
+    /// Write an imposed [`AdminEnt`] back (`impose_restrictions` modifies
+    /// `*ent` and `*mask` in place).
+    fn take_admin_ent(&mut self, ent: AdminEnt) -> u32 {
+        self.attributes = ent.attributes;
+        self.max_life = ent.max_life;
+        self.max_rlife = ent.max_renewable_life;
+        self.expire = ent.princ_expire_time;
+        self.pw_expire = ent.pw_expiration;
+        self.policy = ent.policy;
+        ent.mask
+    }
 }
 
 fn parse_modify(args: &[u8]) -> Result<(PrincipalName, String, u32, ModFields), Error> {
@@ -3669,7 +3728,7 @@ fn parse_modify(args: &[u8]) -> Result<(PrincipalName, String, u32, ModFields), 
     }
     let _mod_date = r.u32()?;
     let attributes = r.u32()?;
-    r.u32()?; // kvno
+    let kvno = r.u32()?;
     r.u32()?; // mkvno
     let policy = r.nullstring()?;
     r.u32()?; // aux
@@ -3713,6 +3772,7 @@ fn parse_modify(args: &[u8]) -> Result<(PrincipalName, String, u32, ModFields), 
             max_life,
             max_rlife,
             attributes,
+            kvno,
             policy,
             fail_auth_count,
             tl_data,
@@ -3834,25 +3894,29 @@ fn encode_extract_keys(api: u32, p: &krb5_kdc::Principal, kvno: u32) -> Vec<u8> 
 }
 
 /// After the leading principal, skip the rest of `kadm5_principal_ent_rec`.
-fn skip_principal_ent_rest(r: &mut XdrR<'_>) -> Result<(Option<String>, Vec<TlData>, u32), Error> {
-    // 4 timestamps/deltats: expire, last_pwd, pw_expire, max_life
-    for _ in 0..4 {
-        r.u32()?;
-    }
+/// `xdr_kadm5_principal_ent_rec` after the principal: every scalar the
+/// server reads (`kadm_rpc_xdr.c:xdr_kadm5_principal_ent_rec_v1`), the TL
+/// list and the key_data-nocontents array (walked, not kept). Returns the
+/// fields and `n_key_data`.
+fn parse_principal_ent_rest(r: &mut XdrR<'_>) -> Result<(ModFields, u32), Error> {
+    let expire = r.u32()?;
+    let _last_pwd = r.u32()?;
+    let pw_expire = r.u32()?;
+    let max_life = r.u32()?;
     let mod_null = r.u32()?; // xdr_bool: TRUE means NULL
     if mod_null == 0 {
         let _ = r.principal()?;
     }
     r.u32()?; // mod_date
-    r.u32()?; // attributes
-    r.u32()?; // kvno
+    let attributes = r.u32()?;
+    let kvno = r.u32()?;
     r.u32()?; // mkvno
     let policy = r.nullstring()?;
     r.u32()?; // aux_attributes (xdr_long)
-    r.u32()?; // max_renewable_life
+    let max_rlife = r.u32()?;
     r.u32()?; // last_success
     r.u32()?; // last_failed
-    r.u32()?; // fail_auth_count
+    let fail_auth_count = r.u32()?;
     let n_key = r.u32()?; // int16 via xdr_int
     let _n_tl = r.u32()?;
     let tl_null = r.u32()?;
@@ -3870,9 +3934,6 @@ fn skip_principal_ent_rest(r: &mut XdrR<'_>) -> Result<(Option<String>, Vec<TlDa
     }
     // xdr_array of key_data_nocontents
     let n = r.u32()?;
-    if n != n_key && n_key != 0 {
-        // tolerate mismatch; walk `n`
-    }
     for _ in 0..n {
         let ver = r.u32()?;
         r.u32()?; // kvno ui_2
@@ -3881,7 +3942,20 @@ fn skip_principal_ent_rest(r: &mut XdrR<'_>) -> Result<(Option<String>, Vec<TlDa
             r.u32()?; // type[1]
         }
     }
-    Ok((policy, tl_data, n_key))
+    Ok((
+        ModFields {
+            expire,
+            pw_expire,
+            max_life,
+            max_rlife,
+            attributes,
+            kvno,
+            policy,
+            fail_auth_count,
+            tl_data,
+        },
+        n_key,
+    ))
 }
 
 struct XdrR<'a> {

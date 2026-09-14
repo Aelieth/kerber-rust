@@ -155,6 +155,14 @@ pub struct KdcConf {
     pub supported_enctypes: Vec<String>,
     /// Per-principal `requires_preauth` default.
     pub requires_preauth: bool,
+    /// `[realms] default_principal_flags` as written (MIT `alt_prof.c:596-632`
+    /// `KADM5_CONFIG_FLAGS`; the flagspec list is parsed by the store). `None`
+    /// = `KRB5_KDB_DEF_FLAGS` (0).
+    pub default_principal_flags: Option<String>,
+    /// `[realms] default_principal_expiration` as written (MIT
+    /// `alt_prof.c:580-594` `KADM5_CONFIG_EXPIRATION`, a
+    /// `krb5_string_to_timestamp` form; the store converts it). `None` = 0.
+    pub default_principal_expiration: Option<String>,
     /// `master_key_type` (MIT name, e.g. `aes256-cts-hmac-sha384-192`).
     pub master_key_type: Option<String>,
     /// `database_module` / `db_library`. Default dump-v7; unknown names error.
@@ -206,6 +214,8 @@ impl Default for KdcConf {
             permitted_enctypes: Vec::new(),
             supported_enctypes: Vec::new(),
             requires_preauth: true,
+            default_principal_flags: None,
+            default_principal_expiration: None,
             master_key_type: None,
             db_library: None,
             domain_sid: None,
@@ -852,6 +862,8 @@ fn parse_kdc_realm_line(conf: &mut KdcConf, line: &str) {
         "kdc_user" => conf.kdc_user = Some(v),
         "supported_enctypes" => conf.supported_enctypes = split_ws(&v),
         "requires_preauth" => conf.requires_preauth = truthy(&v),
+        "default_principal_flags" => conf.default_principal_flags = Some(v),
+        "default_principal_expiration" => conf.default_principal_expiration = Some(v),
         "master_key_type" => conf.master_key_type = Some(v),
         "database_module" | "db_library" => conf.db_library = Some(v),
         "domain_sid" => conf.domain_sid = Some(v),

@@ -73,15 +73,15 @@ pub use plugins::{
     current_policy, register_authdata, register_preauth, set_policy, set_thread_policy,
 };
 pub use store::{
-    IPROP_ERROR, IPROP_FULL_RESYNC, IPROP_NIL, IPROP_OK, IPROP_PERM_DENIED, KDB_DISALLOW_ALL_TIX,
-    KDB_DISALLOW_DUP_SKEY, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED,
+    AdminEnt, IPROP_ERROR, IPROP_FULL_RESYNC, IPROP_NIL, IPROP_OK, IPROP_PERM_DENIED,
+    KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_DUP_SKEY, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED,
     KDB_DISALLOW_PROXIABLE, KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED,
     KDB_LOCKDOWN_KEYS, KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE, KDB_OK_TO_AUTH_AS_DELEGATE,
     KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH, KDB_REQUIRES_PWCHANGE,
     KDB_V1_BASE_LENGTH, KadmData, KeyEntry, MAX_ALIAS_DEPTH, NamedPolicy, PWQUAL_DICT,
     PWQUAL_EMPTY, PWQUAL_PRINC, Policy, Principal, PrincipalStore, RID_ADMINISTRATOR,
-    RID_FIRST_USER, RID_KRBTGT, S2K_ITERS, TlData, UlogEntry, db_args_put_error, parse_dict_words,
-    parse_spake_preauth_groups, random_key, s2k_params, strip_db_args,
+    RID_FIRST_USER, RID_KRBTGT, S2K_ITERS, TlData, UlogEntry, db_args_put_error, kadm5_mask,
+    parse_dict_words, parse_spake_preauth_groups, random_key, s2k_params, strip_db_args,
 };
 
 use krb5_types::PrincipalName;

@@ -2752,6 +2752,190 @@ kadm5_modify_raw() {
 kadm5_modify_raw "$NAME" admin /tmp/kadmin-krb5.conf
 kadm5_modify_raw "$NAME_MIT" admin/admin /etc/krb5.conf
 
+echo "==== Z1.1 kadm5_create_principal_3 field application + impose_restrictions (both kadminds, MIT kadmin RPC) ===="
+# svr_principal.c:376-420 applies every masked field of the request record;
+# kadmin/server/auth.c:205-272 imposes the ACL line's restrictions on the
+# request *before* the create/modify runs (server_stubs.c:478,519,630), so a
+# `-policy P` restriction is enforced by P's floors, an in-mask 0 is kept, a
+# value above the cap is lowered and a field absent from the mask takes the
+# cap outright. Each leg restarts its kadmind with the same ACL lines (the
+# `modprinc` actor needs `i`: MIT kadmin_modprinc gets the entry first,
+# kadmin.c:1395-1401, and sends only the parsed args in the mask).
+# The container's kdc.conf plus the two `params.*` stanzas a bare `addprinc`
+# takes (`alt_prof.c:580-632`): `default_principal_flags` (over
+# `KRB5_KDB_DEF_FLAGS` 0) and `default_principal_expiration`
+# (`krb5_string_to_timestamp`, local time — the containers run UTC).
+z11_profile() {
+    docker exec "$1" sh -c '
+python3 - <<PY
+from pathlib import Path
+src = Path("/etc/krb5kdc/kdc.conf").read_text().splitlines(True)
+out = []
+for ln in src:
+    out.append(ln)
+    if ln.strip().startswith("KERBER.TEST") and ln.rstrip().endswith("{"):
+        out.append("        default_principal_flags = +disallow_svr\n")
+        out.append("        default_principal_expiration = 20300102030405\n")
+Path("/tmp/z11-kdc.conf").write_text("".join(out))
+PY
+grep -q default_principal_expiration /tmp/z11-kdc.conf'
+}
+z11_restart() {
+    local ctn=$1 is_mit=$2
+    if [ "$is_mit" = mit ]; then
+        docker exec "$ctn" sh -c '
+for comm in /proc/[0-9]*/comm; do
+    [ -f "$comm" ] || continue
+    read -r name < "$comm" || continue
+    if [ "$name" = "kadmind" ]; then
+        pid=${comm#/proc/}
+        pid=${pid%/comm}
+        kill "$pid" 2>/dev/null || true
+    fi
+done
+'
+        local i
+        for i in $(seq 1 40); do
+            if ! docker exec "$ctn" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+                break
+            fi
+            sleep 0.25
+        done
+        docker exec "$ctn" sh -c 'printf "%s\n" "*/admin@KERBER.TEST *" "admin@KERBER.TEST *" \
+            "z1pol@KERBER.TEST a *@KERBER.TEST -policy shortpol" \
+            "z1rl@KERBER.TEST a *@KERBER.TEST -maxrenewlife 1d" \
+            "z1ml@KERBER.TEST aim *@KERBER.TEST -maxlife 1h" > /var/krb5kdc/kadm5.acl'
+        z11_profile "$ctn"
+        docker exec -d -e KRB5_KDC_PROFILE=/tmp/z11-kdc.conf "$ctn" sh -c 'kadmind -nofork >/tmp/kadmind-z11.log 2>&1'
+        local ok=0
+        for i in $(seq 1 40); do
+            if docker exec "$ctn" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+                ok=1
+                break
+            fi
+            sleep 0.25
+        done
+        [ "$ok" = 1 ] || { docker exec "$ctn" cat /tmp/kadmind-z11.log >&2 || true; echo "MIT kadmind did not listen for z11" >&2; exit 1; }
+    else
+        docker exec "$ctn" sh -c '
+for comm in /proc/[0-9]*/comm; do
+    [ -f "$comm" ] || continue
+    read -r name < "$comm" || continue
+    if [ "$name" = "krb5-kadmind" ]; then
+        pid=${comm#/proc/}
+        pid=${pid%/comm}
+        kill "$pid" 2>/dev/null || true
+    fi
+done
+'
+        sleep 0.4
+        docker exec "$ctn" sh -c 'printf "%s\n" "admin@KERBER.TEST *" \
+            "z1pol@KERBER.TEST a *@KERBER.TEST -policy shortpol" \
+            "z1rl@KERBER.TEST a *@KERBER.TEST -maxrenewlife 1d" \
+            "z1ml@KERBER.TEST aim *@KERBER.TEST -maxlife 1h" > /tmp/kadm5.acl'
+        z11_profile "$ctn"
+        docker exec -d \
+            -e KRB5_KDC_DB=/tmp/principal \
+            -e KRB5_KDC_STASH=/tmp/stash \
+            -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+            -e KRB5_KDC_PROFILE=/tmp/z11-kdc.conf \
+            "$ctn" sh -c '/tmp/krb5-kadmind 127.0.0.1:749 >/tmp/kadmind-z11.log 2>&1'
+        local ok=0 i
+        for i in $(seq 1 40); do
+            if docker exec "$ctn" grep -q '^listening ' /tmp/kadmind-z11.log 2>/dev/null; then
+                ok=1
+                break
+            fi
+            sleep 0.25
+        done
+        [ "$ok" = 1 ] || { docker exec "$ctn" cat /tmp/kadmind-z11.log >&2 || true; echo "Rust kadmind did not listen for z11" >&2; exit 1; }
+    fi
+}
+z11_leg() {
+    local ctn=$1 client=$2 conf=$3 leg=$4
+    local kadm out shape pwx
+    kadm() {
+        docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$1" -w "$2" -q "$3" 2>&1 \
+            | grep -v -e '^Authenticating' -e 'No dictionary' -e 'No policy specified' || true
+    }
+    # Fixtures before the restart: the restricted actors, the two policies.
+    kadm "$client" adminpassword 'addprinc -pw z1pol-secret z1pol' | grep -F 'Principal "z1pol@KERBER.TEST" created.'
+    kadm "$client" adminpassword 'addprinc -pw z1rl-secret z1rl' | grep -F 'Principal "z1rl@KERBER.TEST" created.'
+    kadm "$client" adminpassword 'addprinc -pw z1ml-secret z1ml' | grep -F 'Principal "z1ml@KERBER.TEST" created.'
+    kadm "$client" adminpassword 'addpol -minlength 8 shortpol'
+    kadm "$client" adminpassword 'addpol -maxlife 30d z1pw'
+    z11_restart "$ctn" "$leg"
+
+    echo "---- $leg: every masked field lands (getprinc shape to $SCRATCH/z11-$leg.txt) ----"
+    out="$(kadm "$client" adminpassword 'addprinc -pw x -maxlife 1h -maxrenewlife 0 -expire "2030-01-01 00:00:00 UTC" -pwexpire "2031-01-01 00:00:00 UTC" -kvno 7 +disallow_all_tix +requires_preauth z1u')"
+    echo "$out"
+    echo "$out" | grep -F 'Principal "z1u@KERBER.TEST" created.'
+    shape="$(kadm "$client" adminpassword 'getprinc z1u')"
+    echo "$shape"
+    echo "$shape" | hist_shape > "$SCRATCH/z11-$leg.txt"
+    echo "$shape" | grep -F 'Expiration date: Tue Jan 01 00:00:00 UTC 2030'
+    echo "$shape" | grep -F 'Password expiration date: Wed Jan 01 00:00:00 UTC 2031'
+    echo "$shape" | grep -F 'Maximum ticket life: 0 days 01:00:00'
+    echo "$shape" | grep -F 'Maximum renewable life: 0 days 00:00:00'
+    echo "$shape" | grep -E '^Attributes: DISALLOW_ALL_TIX REQUIRES_PRE_AUTH$'
+    echo "$shape" | grep -E '^Key: vno 7, ' >/dev/null
+    if echo "$shape" | grep -E '^Key: vno ' | grep -vq '^Key: vno 7, '; then
+        echo "$leg: a key is not at kvno 7: $shape" >&2
+        exit 1
+    fi
+
+    echo "---- $leg: default_principal_flags / default_principal_expiration are params.flags / params.expiration for a bare addprinc ----"
+    kadm "$client" adminpassword 'addprinc -pw x z1def' | grep -F 'Principal "z1def@KERBER.TEST" created.'
+    out="$(kadm "$client" adminpassword 'getprinc z1def')"
+    echo "$out"
+    echo "$out" | grep -F 'Expiration date: Wed Jan 02 03:04:05 UTC 2030'
+    echo "$out" | grep -E '^Attributes: DISALLOW_SVR$'
+
+    echo "---- $leg: -policy with pw_max_life sets Password expiration date ----"
+    kadm "$client" adminpassword 'addprinc -pw z1pwu-secret -policy z1pw z1pwu' | grep -F 'Principal "z1pwu@KERBER.TEST" created.'
+    pwx="$(kadm "$client" adminpassword 'getprinc z1pwu' | grep -E '^Password expiration date: ')"
+    echo "$pwx"
+    if echo "$pwx" | grep -qF '[never]'; then
+        echo "$leg: policy pw_max_life did not set the password expiration" >&2
+        exit 1
+    fi
+    # now + 30d, to the day (the two legs run seconds apart).
+    docker exec "$ctn" sh -c "date -u -d '+30 days' '+%a %b %d'" | grep -qF "$(echo "$pwx" | sed -E 's/^Password expiration date: ([A-Za-z]+ [A-Za-z]+ [0-9]+) .*/\1/')" || {
+        echo "$leg: password expiration is not now + 30d: $pwx" >&2
+        exit 1
+    }
+
+    echo "---- $leg: ACL -policy shortpol is enforced on addprinc (Password is too short; nothing created) ----"
+    out="$(kadm z1pol z1pol-secret 'addprinc -pw abc z1short')"
+    echo "$out"
+    echo "$out" | grep -F 'add_principal: Password is too short while creating "z1short@KERBER.TEST".'
+    out="$(kadm "$client" adminpassword 'getprinc z1short')"
+    echo "$out"
+    echo "$out" | grep -F 'get_principal: Principal does not exist while retrieving "z1short@KERBER.TEST".'
+    out="$(kadm z1pol z1pol-secret 'addprinc -pw longenough z1long')"
+    echo "$out"
+    echo "$out" | grep -F 'Principal "z1long@KERBER.TEST" created.'
+    kadm "$client" adminpassword 'getprinc z1long' | grep -E '^Policy: shortpol$'
+
+    echo "---- $leg: ACL -maxrenewlife 1d keeps an in-mask 0 and lowers 30d ----"
+    kadm z1rl z1rl-secret 'addprinc -pw x -maxrenewlife 0 z1r0' | grep -F 'Principal "z1r0@KERBER.TEST" created.'
+    kadm "$client" adminpassword 'getprinc z1r0' | grep -F 'Maximum renewable life: 0 days 00:00:00'
+    kadm z1rl z1rl-secret 'addprinc -pw x -maxrenewlife 30d z1r30' | grep -F 'Principal "z1r30@KERBER.TEST" created.'
+    kadm "$client" adminpassword 'getprinc z1r30' | grep -F 'Maximum renewable life: 1 day 00:00:00'
+
+    echo "---- $leg: ACL -maxlife 1h: a modify without -maxlife takes the cap (auth.c:259-263) ----"
+    kadm z1ml z1ml-secret 'addprinc -pw x -maxlife 30m z1mu' | grep -F 'Principal "z1mu@KERBER.TEST" created.'
+    kadm "$client" adminpassword 'getprinc z1mu' | grep -F 'Maximum ticket life: 0 days 00:30:00'
+    kadm z1ml z1ml-secret 'modprinc +requires_preauth z1mu' | grep -F 'Principal "z1mu@KERBER.TEST" modified.'
+    kadm "$client" adminpassword 'getprinc z1mu' | grep -F 'Maximum ticket life: 0 days 01:00:00'
+}
+z11_leg "$NAME" admin /tmp/kadmin-krb5.conf rust
+z11_leg "$NAME_MIT" admin/admin /etc/krb5.conf mit
+echo "---- Z1.1 getprinc z1u shape: Rust vs MIT ----"
+sed 's/^/rust: /' "$SCRATCH/z11-rust.txt"
+sed 's/^/mit:  /' "$SCRATCH/z11-mit.txt"
+diff "$SCRATCH/z11-rust.txt" "$SCRATCH/z11-mit.txt" || { echo "Z1.1: getprinc z1u differs between the Rust kadmind and MIT kadmind" >&2; exit 1; }
+
 log "kadmin.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"addprinc+cpw+get+list+mod+chrand+norandkey+lockdown+purgekeys+setstr+renprinc+del+alias"'
 exit 0
 

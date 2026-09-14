@@ -392,6 +392,58 @@ impl NamedPolicy {
     }
 }
 
+/// kadm5 `KADM5_*` mask bits (`lib/kadm5/admin.h`) that a create or modify
+/// request carries alongside its `kadm5_principal_ent_rec`.
+pub mod kadm5_mask {
+    /// `KADM5_PRINCIPAL`.
+    pub const PRINCIPAL: u32 = 0x0000_0001;
+    /// `KADM5_PRINC_EXPIRE_TIME`.
+    pub const PRINC_EXPIRE_TIME: u32 = 0x0000_0002;
+    /// `KADM5_PW_EXPIRATION`.
+    pub const PW_EXPIRATION: u32 = 0x0000_0004;
+    /// `KADM5_ATTRIBUTES`.
+    pub const ATTRIBUTES: u32 = 0x0000_0010;
+    /// `KADM5_MAX_LIFE`.
+    pub const MAX_LIFE: u32 = 0x0000_0020;
+    /// `KADM5_KVNO`.
+    pub const KVNO: u32 = 0x0000_0100;
+    /// `KADM5_POLICY`.
+    pub const POLICY: u32 = 0x0000_0800;
+    /// `KADM5_POLICY_CLR`.
+    pub const POLICY_CLR: u32 = 0x0000_1000;
+    /// `KADM5_MAX_RLIFE`.
+    pub const MAX_RLIFE: u32 = 0x0000_2000;
+    /// `KADM5_KEY_DATA`.
+    pub const KEY_DATA: u32 = 0x0002_0000;
+}
+
+/// The `kadm5_principal_ent_rec` fields `kadm5_create_principal_3`
+/// (`svr_principal.c:376-420`) and `impose_restrictions` (`auth.c:205-272`)
+/// read, with the request `mask`. A field is applied only when its
+/// [`kadm5_mask`] bit is set; otherwise the realm default
+/// (`handle->params.*`) is used. Values are as the client sent them (MIT
+/// `kadmin` zero-fills the record), which matters for restrictions that
+/// set a bit on a value the client never meant.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AdminEnt {
+    /// `KADM5_*` bits.
+    pub mask: u32,
+    /// `attributes` (`KADM5_ATTRIBUTES`).
+    pub attributes: u32,
+    /// `max_life` seconds (`KADM5_MAX_LIFE`).
+    pub max_life: u32,
+    /// `max_renewable_life` seconds (`KADM5_MAX_RLIFE`).
+    pub max_renewable_life: u32,
+    /// `princ_expire_time` (`KADM5_PRINC_EXPIRE_TIME`).
+    pub princ_expire_time: u32,
+    /// `pw_expiration` (`KADM5_PW_EXPIRATION`).
+    pub pw_expiration: u32,
+    /// `kvno` (`KADM5_KVNO`).
+    pub kvno: u32,
+    /// `policy` (`KADM5_POLICY`; `KADM5_POLICY_CLR` clears).
+    pub policy: Option<String>,
+}
+
 /// Realm-wide ticket policy.
 #[derive(Clone, Debug)]
 pub struct Policy {
@@ -413,6 +465,16 @@ pub struct Policy {
     pub supported_enctypes: Vec<EncryptionType>,
     /// Default requires_preauth for new principals.
     pub requires_preauth: bool,
+    /// MIT `[realms] default_principal_flags` (`alt_prof.c:596-632`): the
+    /// `handle->params.flags` a kadm5 create takes when `KADM5_ATTRIBUTES` is
+    /// not in the mask. `None` = the stanza is absent (MIT
+    /// `KRB5_KDB_DEF_FLAGS` 0; here the `requires_preauth` knob's bit).
+    pub default_principal_flags: Option<u32>,
+    /// MIT `[realms] default_principal_expiration` (`alt_prof.c:580-594`,
+    /// `krb5_string_to_timestamp`): `handle->params.expiration`, the
+    /// `expiration` of a create without `KADM5_PRINC_EXPIRE_TIME`. 0 when
+    /// absent or unparsable (MIT leaves the zeroed field).
+    pub default_principal_expiration: u32,
     /// `[capaths]` client → server → intermediates (`.` = direct).
     pub capaths: BTreeMap<String, BTreeMap<String, Vec<String>>>,
     /// MIT `reject_bad_transit` (default true).
@@ -456,6 +518,8 @@ impl Default for Policy {
             permitted_enctypes: None,
             supported_enctypes: Vec::new(),
             requires_preauth: true,
+            default_principal_flags: None,
+            default_principal_expiration: 0,
             capaths: BTreeMap::new(),
             reject_bad_transit: true,
             disable_pac: false,
@@ -1102,6 +1166,15 @@ impl PrincipalStore {
                 krb5_crypto::parse_keysalt_list(&conf.supported_enctypes.join(" "));
         }
         self.policy.requires_preauth = conf.requires_preauth;
+        self.policy.default_principal_flags = conf
+            .default_principal_flags
+            .as_deref()
+            .map(crate::acl::default_principal_flags);
+        self.policy.default_principal_expiration = conf
+            .default_principal_expiration
+            .as_deref()
+            .and_then(krb5_types::timestamp::string_to_timestamp)
+            .unwrap_or(0);
         self.policy.reject_bad_transit = conf.reject_bad_transit;
         self.policy.disable_pac = conf.disable_pac;
         self.policy.restrict_anon = conf.restrict_anon;
@@ -1309,9 +1382,19 @@ impl PrincipalStore {
         if let Some(c) = kdc {
             store.apply_kdc_conf(c)?;
         }
-        let etypes = store.policy.password_etypes();
-        store.insert_randkey(&PrincipalName::krbtgt(realm), &etypes)?;
+        // MIT `kdb5_util create` (`kdb5_create.c` `add_principal`): the TGS
+        // key is random and the entry carries no default flags.
         let tgt = PrincipalName::krbtgt(realm);
+        store.create_principal_3_in(
+            &tgt,
+            realm,
+            None,
+            &[],
+            &AdminEnt {
+                mask: kadm5_mask::ATTRIBUTES,
+                ..AdminEnt::default()
+            },
+        )?;
         store.apply_admin_fields(
             &tgt,
             Some(KDB_LOCKDOWN_KEYS),
@@ -1474,7 +1557,8 @@ impl PrincipalStore {
         Ok(())
     }
 
-    /// Insert without ACL (`kadm5_create_principal_3` after stub_auth).
+    /// Insert without ACL (`kadm5_create_principal_3` after stub_auth) with
+    /// no entry fields in the mask: every field is the realm default.
     ///
     /// # Errors
     ///
@@ -1486,11 +1570,13 @@ impl PrincipalStore {
         password: &[u8],
         etypes: &[EncryptionType],
     ) -> Result<(), Error> {
-        let id = crate::kdb::lookup_principal_id(name, princ_realm);
-        if self.get(&id).is_some() {
-            return Err(Error::AlreadyExists);
-        }
-        self.insert_password_etypes(name, princ_realm, password, etypes)
+        self.create_principal_3_in(
+            name,
+            princ_realm,
+            Some(password),
+            etypes,
+            &AdminEnt::default(),
+        )
     }
 
     /// kadm5 `create_principal` with a NULL password
@@ -1508,16 +1594,134 @@ impl PrincipalStore {
         princ_realm: &str,
         etypes: &[EncryptionType],
     ) -> Result<(), Error> {
+        self.create_principal_3_in(name, princ_realm, None, etypes, &AdminEnt::default())
+    }
+
+    /// MIT `handle->params.flags` for a create without `KADM5_ATTRIBUTES`:
+    /// `[realms] default_principal_flags` (`alt_prof.c:596-632`) when set,
+    /// else the Rust `requires_preauth` knob's bit — the knob predates the
+    /// MIT stanza and defaults on, where MIT's `KRB5_KDB_DEF_FLAGS` is 0
+    /// (`docs/security.md`). A written stanza is `params.flags` exactly
+    /// (parsed over 0 like MIT), so it overrides the knob.
+    #[must_use]
+    pub fn default_create_attributes(&self) -> u32 {
+        self.policy
+            .default_principal_flags
+            .unwrap_or(if self.policy.requires_preauth {
+                KDB_REQUIRES_PRE_AUTH
+            } else {
+                0
+            })
+    }
+
+    /// MIT `kadm5_create_principal_3` (`svr_principal.c:290-511`) after the
+    /// stub's ACL / `impose_restrictions` step and mask validation: the
+    /// entry must not exist (`KADM5_DUP`); the named policy is loaded when it
+    /// exists (`get_policy`: an unknown name is *no* policy, not an error);
+    /// `passwd_check` runs on a non-NULL password with that policy before
+    /// anything is written; then every field is the request value when its
+    /// mask bit is set, else the realm default — `attributes` ←
+    /// `params.flags`, `max_life` ← `params.max_life`, `max_renewable_life`
+    /// ← `params.max_rlife`, `expiration` ← `params.expiration`
+    /// (`default_principal_expiration`, 0),
+    /// `pw_expiration` ← `now + pw_max_life` under a policy with one, else 0;
+    /// a password is keyed at `kvno` (default 1) and a NULL password is
+    /// `krb5_dbe_crk` with the kvno rewritten; `KADM5_POLICY` binds the name
+    /// (`adb.policy`) even when the policy does not exist. TL-data and
+    /// key/salt policy stay with the callers.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AlreadyExists`], [`Error::PasswordPolicy`], [`Error::Rng`].
+    pub fn create_principal_3_in(
+        &mut self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        password: Option<&[u8]>,
+        etypes: &[EncryptionType],
+        ent: &AdminEnt,
+    ) -> Result<(), Error> {
         let id = crate::kdb::lookup_principal_id(name, princ_realm);
         if self.get(&id).is_some() {
             return Err(Error::AlreadyExists);
         }
-        let keys = if etypes.is_empty() {
+        let policy_name = (ent.mask & kadm5_mask::POLICY != 0)
+            .then(|| ent.policy.clone())
+            .flatten();
+        let polent = policy_name
+            .as_deref()
+            .and_then(|n| self.policies.get(n))
+            .cloned();
+        if let Some(pw) = password {
+            self.check_new_password(name, policy_name.as_deref(), pw)?;
+        }
+        let now = unix_now();
+        let use_etypes = if etypes.is_empty() {
             self.policy.password_etypes()
         } else {
             etypes.to_vec()
         };
-        self.insert_randkey_in(name, princ_realm, &keys)
+        let salt = name.default_salt(princ_realm);
+        let kvno = if ent.mask & kadm5_mask::KVNO != 0 {
+            ent.kvno
+        } else {
+            1
+        };
+        let keys = if let Some(pw) = password {
+            keys_from_password(&use_etypes, pw, &salt, kvno)?
+        } else {
+            let mut keys = Vec::new();
+            for etype in &use_etypes {
+                keys.push(KeyEntry::new(*etype, random_key(*etype)?, kvno));
+            }
+            keys
+        };
+        let attributes = if ent.mask & kadm5_mask::ATTRIBUTES != 0 {
+            ent.attributes
+        } else {
+            self.default_create_attributes()
+        };
+        let mut p = Principal::from_keys(
+            name.clone(),
+            princ_realm.to_owned(),
+            keys,
+            salt,
+            attributes & KDB_REQUIRES_PRE_AUTH != 0,
+            0,
+            attributes & KDB_DISALLOW_ALL_TIX != 0,
+            0,
+        );
+        p.attributes = attributes;
+        p.max_life = if ent.mask & kadm5_mask::MAX_LIFE != 0 {
+            u64::from(ent.max_life)
+        } else {
+            self.policy.max_life
+        };
+        p.max_renewable_life = if ent.mask & kadm5_mask::MAX_RLIFE != 0 {
+            u64::from(ent.max_renewable_life)
+        } else {
+            self.policy.max_renewable_life
+        };
+        p.expiration = if ent.mask & kadm5_mask::PRINC_EXPIRE_TIME != 0 {
+            ent.princ_expire_time
+        } else {
+            self.policy.default_principal_expiration
+        };
+        p.pw_expire = if ent.mask & kadm5_mask::PW_EXPIRATION != 0 {
+            ent.pw_expiration
+        } else {
+            match &polent {
+                Some(pol) if pol.pw_max_life != 0 => now.saturating_add(pol.pw_max_life),
+                _ => 0,
+            }
+        };
+        if let Some(pol) = policy_name {
+            p.pw_policy = Some(pol);
+            refresh_kadm_tl(&mut p);
+        }
+        stamp_admin_tl(&mut p, true);
+        self.put_principal(p);
+        self.save_if_configured()
     }
 
     /// `kadm5_create_alias` (`svr_principal.c:2051-2087`): an alias stub is
@@ -1600,12 +1804,8 @@ impl PrincipalStore {
         if self.get(&id).is_some() {
             return Err(Error::AlreadyExists);
         }
-        let keys = if etypes.is_empty() {
-            self.policy.password_etypes()
-        } else {
-            etypes.to_vec()
-        };
-        self.insert_randkey(name, &keys)?;
+        let realm = self.realm.clone();
+        self.create_principal_3_in(name, &realm, None, etypes, &AdminEnt::default())?;
         let self_name = name.components_joined();
         if self_name == "kadmin/changepw"
             && let Some(p) = self.map.get_mut(&id)
@@ -2308,73 +2508,7 @@ impl PrincipalStore {
 
     fn insert_password(&mut self, name: &PrincipalName, password: &[u8]) -> Result<(), Error> {
         let realm = self.realm.clone();
-        self.insert_password_etypes(name, &realm, password, &[])
-    }
-
-    fn insert_password_etypes(
-        &mut self,
-        name: &PrincipalName,
-        princ_realm: &str,
-        password: &[u8],
-        etypes: &[EncryptionType],
-    ) -> Result<(), Error> {
-        let salt = name.default_salt(princ_realm);
-        let use_etypes = if etypes.is_empty() {
-            self.policy.password_etypes()
-        } else {
-            etypes.to_vec()
-        };
-        let keys = keys_from_password(&use_etypes, password, &salt, 1)?;
-        let mut p = Principal::from_keys(
-            name.clone(),
-            princ_realm.to_owned(),
-            keys,
-            salt,
-            self.policy.requires_preauth,
-            0,
-            false,
-            0,
-        );
-        p.max_renewable_life = self.policy.max_renewable_life;
-        stamp_admin_tl(&mut p, true);
-        self.put_principal(p);
-        self.save_if_configured()
-    }
-
-    fn insert_randkey(
-        &mut self,
-        name: &PrincipalName,
-        etypes: &[EncryptionType],
-    ) -> Result<(), Error> {
-        let realm = self.realm.clone();
-        self.insert_randkey_in(name, &realm, etypes)
-    }
-
-    fn insert_randkey_in(
-        &mut self,
-        name: &PrincipalName,
-        princ_realm: &str,
-        etypes: &[EncryptionType],
-    ) -> Result<(), Error> {
-        let mut keys = Vec::new();
-        for etype in etypes {
-            keys.push(KeyEntry::new(*etype, random_key(*etype)?, 1));
-        }
-        let salt = name.default_salt(princ_realm);
-        let mut p = Principal::from_keys(
-            name.clone(),
-            princ_realm.to_owned(),
-            keys,
-            salt,
-            false,
-            0,
-            false,
-            0,
-        );
-        p.max_renewable_life = self.policy.max_renewable_life;
-        stamp_admin_tl(&mut p, true);
-        self.put_principal(p);
-        self.save_if_configured()
+        self.insert_new_password(name, &realm, password, &[])
     }
 
     /// Key of `etype` at `kvno` for principal `name`.
@@ -2727,9 +2861,39 @@ impl PrincipalStore {
         self.save_if_configured()
     }
 
+    /// `impose_restrictions` on a request that carries none of the
+    /// restricted fields (the local CLI verbs; MIT `kadmin.local` has no
+    /// ACL, so this is the RPC shape with an empty mask): every restriction
+    /// lands as its cap. The RPC paths call [`Restrictions::impose`] on the
+    /// parsed request instead.
     fn apply_acl_restrictions(&mut self, id: &str, rs: &Restrictions) -> Result<(), Error> {
+        let mut ent = AdminEnt::default();
+        rs.impose(&mut ent, unix_now());
         let p = self.map.get_mut(id).ok_or(Error::NotFound)?;
-        rs.apply_to(p, unix_now());
+        if ent.mask & kadm5_mask::ATTRIBUTES != 0 {
+            p.attributes = ent.attributes;
+            p.requires_preauth = p.attributes & KDB_REQUIRES_PRE_AUTH != 0;
+            p.locked = p.attributes & KDB_DISALLOW_ALL_TIX != 0;
+        }
+        if ent.mask & kadm5_mask::MAX_LIFE != 0 {
+            p.max_life = u64::from(ent.max_life);
+        }
+        if ent.mask & kadm5_mask::MAX_RLIFE != 0 {
+            p.max_renewable_life = u64::from(ent.max_renewable_life);
+        }
+        if ent.mask & kadm5_mask::PRINC_EXPIRE_TIME != 0 {
+            p.expiration = ent.princ_expire_time;
+        }
+        if ent.mask & kadm5_mask::PW_EXPIRATION != 0 {
+            p.pw_expire = ent.pw_expiration;
+        }
+        if ent.mask & kadm5_mask::POLICY_CLR != 0 {
+            p.pw_policy = None;
+            refresh_kadm_tl(p);
+        } else if ent.mask & kadm5_mask::POLICY != 0 {
+            p.pw_policy.clone_from(&ent.policy);
+            refresh_kadm_tl(p);
+        }
         Ok(())
     }
 

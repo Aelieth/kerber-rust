@@ -1,6 +1,7 @@
 //! kadm5.acl-style allow/deny for admin operations.
 
 use crate::error::Error;
+use crate::store::{AdminEnt, kadm5_mask};
 use crate::store::{
     KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_DUP_SKEY, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED,
     KDB_DISALLOW_PROXIABLE, KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED,
@@ -60,6 +61,10 @@ pub struct Restrictions {
     pub require_attrs: u32,
     /// Bits allowed to stay (`~0` with `-flag` bits cleared).
     pub forbid_attrs: u32,
+    /// `rs->mask & KADM5_ATTRIBUTES`: at least one flag token was parsed
+    /// (`auth_acl.c:189-192`), so the request's attributes are rewritten
+    /// even when the flag names cancel out.
+    pub attrs: bool,
 }
 
 impl Default for Restrictions {
@@ -73,45 +78,89 @@ impl Default for Restrictions {
             pwexpire: None,
             require_attrs: 0,
             forbid_attrs: !0,
+            attrs: false,
         }
     }
 }
 
 impl Restrictions {
-    /// MIT `impose_restrictions` (`auth.c:211-272`).
-    pub fn apply_to(&self, p: &mut crate::store::Principal, now: u32) {
-        p.attributes |= self.require_attrs;
-        p.attributes &= self.forbid_attrs;
+    /// MIT `impose_restrictions` (`kadmin/server/auth.c:205-272`), run on
+    /// the kadm5 create/modify *request* before the library call
+    /// (`auth_restrict` ← `stub_auth_restrict`, `server_stubs.c:478,519,630`).
+    /// Every restriction sets its mask bit, so the entry field wins over the
+    /// realm default afterwards; a caller value is only *lowered* to the cap
+    /// (an in-mask 0 stays 0), a value absent from the mask becomes the cap;
+    /// `-expire`/`-pwexpire` cap at `now + delta`; `-policy` replaces a
+    /// different requested policy and `-clearpolicy` turns `KADM5_POLICY`
+    /// into `KADM5_POLICY_CLR`; attributes are `|= require` then `&= forbid`
+    /// on whatever the request carried (0 when the client set none).
+    pub fn impose(&self, ent: &mut AdminEnt, now: u32) {
+        if self.attrs || self.require_attrs != 0 || self.forbid_attrs != !0 {
+            ent.attributes |= self.require_attrs;
+            ent.attributes &= self.forbid_attrs;
+            ent.mask |= kadm5_mask::ATTRIBUTES;
+        }
         if self.clear_policy {
-            p.pw_policy = None;
-        } else if let Some(ref pol) = self.policy {
-            p.pw_policy = Some(pol.clone());
-        }
-        if let Some(d) = self.max_life
-            && (p.max_life == 0 || p.max_life > d)
-        {
-            p.max_life = d;
-        }
-        if let Some(d) = self.max_renewable_life
-            && (p.max_renewable_life == 0 || p.max_renewable_life > d)
-        {
-            p.max_renewable_life = d;
-        }
-        if let Some(d) = self.expire {
-            let cap = now.saturating_add(u32::try_from(d).unwrap_or(u32::MAX));
-            if p.expiration == 0 || p.expiration > cap {
-                p.expiration = cap;
+            ent.mask &= !kadm5_mask::POLICY;
+            ent.mask |= kadm5_mask::POLICY_CLR;
+        } else if let Some(pol) = &self.policy {
+            if ent.policy.as_deref() != Some(pol.as_str()) {
+                ent.policy = Some(pol.clone());
             }
+            ent.mask |= kadm5_mask::POLICY;
+        }
+        let cap_at = |d: u64| now.saturating_add(u32::try_from(d).unwrap_or(u32::MAX));
+        if let Some(d) = self.expire {
+            let cap = cap_at(d);
+            if ent.mask & kadm5_mask::PRINC_EXPIRE_TIME == 0 || ent.princ_expire_time > cap {
+                ent.princ_expire_time = cap;
+            }
+            ent.mask |= kadm5_mask::PRINC_EXPIRE_TIME;
         }
         if let Some(d) = self.pwexpire {
-            let cap = now.saturating_add(u32::try_from(d).unwrap_or(u32::MAX));
-            if p.pw_expire == 0 || p.pw_expire > cap {
-                p.pw_expire = cap;
+            let cap = cap_at(d);
+            if ent.mask & kadm5_mask::PW_EXPIRATION == 0 || ent.pw_expiration > cap {
+                ent.pw_expiration = cap;
             }
+            ent.mask |= kadm5_mask::PW_EXPIRATION;
         }
-        p.requires_preauth = p.attributes & crate::store::KDB_REQUIRES_PRE_AUTH != 0;
-        p.locked = p.attributes & crate::store::KDB_DISALLOW_ALL_TIX != 0;
+        if let Some(d) = self.max_life {
+            let cap = u32::try_from(d).unwrap_or(u32::MAX);
+            if ent.mask & kadm5_mask::MAX_LIFE == 0 || ent.max_life > cap {
+                ent.max_life = cap;
+            }
+            ent.mask |= kadm5_mask::MAX_LIFE;
+        }
+        if let Some(d) = self.max_renewable_life {
+            let cap = u32::try_from(d).unwrap_or(u32::MAX);
+            if ent.mask & kadm5_mask::MAX_RLIFE == 0 || ent.max_renewable_life > cap {
+                ent.max_renewable_life = cap;
+            }
+            ent.mask |= kadm5_mask::MAX_RLIFE;
+        }
     }
+}
+
+/// MIT `kadm5_get_config_params` `default_principal_flags`
+/// (`alt_prof.c:596-632`): tokens split on `,`, space or tab, each fed to
+/// `krb5_flagspec_to_mask(sp, &flags, &flags)` — a `+flag` sets, a `-flag`
+/// clears — stopping at the first token the table does not know (the flags
+/// parsed so far are kept, as MIT keeps `params.flags`). Starts from
+/// `KRB5_KDB_DEF_FLAGS` (0) like MIT: when the stanza is written it *is*
+/// `params.flags`; the Rust `requires_preauth` knob only stands in when the
+/// stanza is absent (`PrincipalStore::default_create_attributes`).
+#[must_use]
+pub fn default_principal_flags(spec: &str) -> u32 {
+    let mut flags = 0u32;
+    for token in spec.split([',', ' ', '\t']).filter(|t| !t.is_empty()) {
+        let mut toset = 0u32;
+        let mut toclear = !0u32;
+        if !flagspec_to_mask(token, &mut toset, &mut toclear) {
+            break;
+        }
+        flags = (flags | toset) & toclear;
+    }
+    flags
 }
 
 /// One ACL line: a principal pattern and permission flags.
@@ -543,6 +592,7 @@ fn parse_restrictions(str: &str) -> Result<Restrictions, Error> {
     while i < tokens.len() {
         let token = tokens[i];
         if flagspec_to_mask(token, &mut rs.require_attrs, &mut rs.forbid_attrs) {
+            rs.attrs = true;
             i += 1;
             continue;
         }
