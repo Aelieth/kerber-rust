@@ -2151,6 +2151,7 @@ fn decode_keydata(r: &mut XdrR<'_>, mkey: Option<&ProtocolKey>) -> Result<Vec<Ke
 
 fn write_store(
     store: &SharedStore,
+    proc: u32,
     api: u32,
 ) -> Result<std::sync::RwLockWriteGuard<'_, krb5_kdc::PrincipalStore>, Vec<u8>> {
     let mut g = store
@@ -2159,7 +2160,7 @@ fn write_store(
     // Reload then mutate then save. Two processes can still interleave
     // that window; a dump file lock is deferred with db2/LMDB.
     if let Err(e) = g.reload_if_stale() {
-        return Err(generic_ret(api, kadm5_code(&Error::from(e))));
+        return Err(generic_ret(api, kadm5_code(proc, &Error::from(e))));
     }
     Ok(g)
 }
@@ -2324,7 +2325,7 @@ fn dispatch_kadm5_ticket(
         GET_PRINCIPAL => {
             let (name, prealm, _mask) = parse_get(args)?;
             let req = req_realm(&prealm, &realm);
-            let g = match write_store(store, API_V2) {
+            let g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
@@ -2380,7 +2381,7 @@ fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_DELETE));
             }
-            let mut g = match write_store(store, API_V2) {
+            let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
@@ -2391,14 +2392,14 @@ fn dispatch_kadm5_ticket(
             }
             match g.remove_in(&name, &req) {
                 Ok(()) => Ok(generic_ret(API_V2, 0)),
-                Err(e) => Ok(generic_ret(API_V2, kadm5_code(&Error::from(e)))),
+                Err(e) => Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e)))),
             }
         }
         MODIFY_PRINCIPAL => {
             let (name, prealm, mask, fields) = parse_modify(args)?;
             let req = req_realm(&prealm, &realm);
             let tid = acl_id(&name, &req);
-            let mut g = match write_store(store, API_V2) {
+            let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
@@ -2466,16 +2467,16 @@ fn dispatch_kadm5_ticket(
                     if mask & KADM5_TL_DATA != 0
                         && let Err(e) = g.merge_tl_data_in(&name, &req, &fields.tl_data)
                     {
-                        return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
+                        return Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))));
                     }
                     if mask & KADM5_FAIL_AUTH_COUNT != 0
                         && let Err(e) = g.clear_fail_auth_count_in(&name, &req)
                     {
-                        return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
+                        return Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))));
                     }
                     Ok(generic_ret(API_V2, 0))
                 }
-                Err(e) => Ok(generic_ret(API_V2, kadm5_code(&Error::from(e)))),
+                Err(e) => Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e)))),
             }
         }
         CREATE_PRINCIPAL | CREATE_PRINCIPAL3 => {
@@ -2508,7 +2509,7 @@ fn dispatch_kadm5_ticket(
             if c.ent.mask & KADM5_TL_DATA != 0 && db_args_code(&c.tl_data).is_some() {
                 return Ok(generic_ret(API_V2, EINVAL));
             }
-            let mut g = match write_store(store, API_V2) {
+            let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
@@ -2527,11 +2528,11 @@ fn dispatch_kadm5_ticket(
                     if c.ent.mask & KADM5_TL_DATA != 0
                         && let Err(e) = g.merge_tl_data_in(&c.name, &req, &c.tl_data)
                     {
-                        return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
+                        return Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))));
                     }
                     Ok(generic_ret(API_V2, 0))
                 }
-                Err(e) => Ok(generic_ret(API_V2, kadm5_code(&Error::from(e)))),
+                Err(e) => Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e)))),
             }
         }
         RENAME_PRINCIPAL => {
@@ -2547,7 +2548,7 @@ fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_INSUFFICIENT));
             }
-            let mut g = match write_store(store, API_V2) {
+            let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
@@ -2558,13 +2559,13 @@ fn dispatch_kadm5_ticket(
             }
             match g.rename_unchecked(&old, &old_req, &new, &new_req) {
                 Ok(()) => Ok(generic_ret(API_V2, 0)),
-                Err(e) => Ok(generic_ret(API_V2, kadm5_code(&Error::from(e)))),
+                Err(e) => Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e)))),
             }
         }
         CHPASS_PRINCIPAL | CHPASS_PRINCIPAL3 => {
             let (name, prealm, pass, keepold) = parse_chpass(args, proc == CHPASS_PRINCIPAL3)?;
             let req = req_realm(&prealm, &realm);
-            let mut g = match write_store(store, API_V2) {
+            let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
@@ -2592,12 +2593,12 @@ fn dispatch_kadm5_ticket(
                 return Ok(generic_ret(API_V2, KADM5_AUTH_INITIAL));
             }
             if self_change && let Err(e) = g.check_min_life_in(&name, &req) {
-                return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
+                return Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))));
             }
             let n = clamp_self_keepold(self_change, keepold);
             match g.set_password_keepold_n_in(&name, &req, pass.as_bytes(), n) {
                 Ok(()) => Ok(generic_ret(API_V2, 0)),
-                Err(e) => Ok(generic_ret(API_V2, kadm5_code(&Error::from(e)))),
+                Err(e) => Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e)))),
             }
         }
         CREATE_POLICY => {
@@ -2608,7 +2609,7 @@ fn dispatch_kadm5_ticket(
             if let Some(code) = policy_mask_err(mask, true) {
                 return Ok(generic_ret(api, code));
             }
-            let mut g = match write_store(store, api) {
+            let mut g = match write_store(store, proc, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
@@ -2636,14 +2637,14 @@ fn dispatch_kadm5_ticket(
             if changepw || acl.check(actor, krb5_kdc::AdminOp::Delete, None).is_err() {
                 return Ok(generic_ret(api, KADM5_AUTH_DELETE));
             }
-            let mut g = match write_store(store, api) {
+            let mut g = match write_store(store, proc, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
             match g.delete_policy(&name) {
                 Ok(()) => Ok(generic_ret(api, 0)),
                 Err(krb5_kdc::Error::NotFound) => Ok(generic_ret(api, KADM5_UNK_POLICY)),
-                Err(e) => Ok(generic_ret(api, kadm5_code(&Error::from(e)))),
+                Err(e) => Ok(generic_ret(api, kadm5_code(proc, &Error::from(e)))),
             }
         }
         MODIFY_POLICY => {
@@ -2657,7 +2658,7 @@ fn dispatch_kadm5_ticket(
             if let Some(code) = policy_mask_err(mask, false) {
                 return Ok(generic_ret(api, code));
             }
-            let mut g = match write_store(store, api) {
+            let mut g = match write_store(store, proc, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
@@ -2711,7 +2712,7 @@ fn dispatch_kadm5_ticket(
         CHRAND_PRINCIPAL | CHRAND_PRINCIPAL3 => {
             let (name, prealm, keepold) = parse_chrand(args, proc == CHRAND_PRINCIPAL3)?;
             let req = req_realm(&prealm, &realm);
-            let mut g = match write_store(store, API_V2) {
+            let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
@@ -2735,7 +2736,7 @@ fn dispatch_kadm5_ticket(
                 return Ok(generic_ret(API_V2, KADM5_AUTH_INITIAL));
             }
             if self_change && let Err(e) = g.check_min_life_in(&name, &req) {
-                return Ok(generic_ret(API_V2, kadm5_code(&Error::from(e))));
+                return Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))));
             }
             let n = clamp_self_keepold(self_change, keepold);
             match g.chrand_keepold_n_in(&name, &req, n) {
@@ -2745,13 +2746,13 @@ fn dispatch_kadm5_ticket(
                         .is_some_and(|p| p.attributes & KDB_LOCKDOWN_KEYS != 0);
                     Ok(encode_chrand(if hide { &[] } else { &keys }))
                 }
-                Err(e) => Ok(generic_ret(API_V2, kadm5_code(&Error::from(e)))),
+                Err(e) => Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e)))),
             }
         }
         EXTRACT_KEYS => {
             let (api, name, prealm, kvno) = parse_extract(args)?;
             let req = req_realm(&prealm, &realm);
-            let g = match write_store(store, api) {
+            let g = match write_store(store, proc, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
@@ -2784,7 +2785,7 @@ fn dispatch_kadm5_ticket(
         PURGEKEYS => {
             let (api, name, prealm, keepkvno) = parse_purgekeys(args)?;
             let req = req_realm(&prealm, &realm);
-            let mut g = match write_store(store, API_V2) {
+            let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
@@ -2809,13 +2810,13 @@ fn dispatch_kadm5_ticket(
                     );
                     Ok(generic_ret(api, 0))
                 }
-                Err(e) => Ok(generic_ret(api, kadm5_code(&Error::from(e)))),
+                Err(e) => Ok(generic_ret(api, kadm5_code(proc, &Error::from(e)))),
             }
         }
         SETKEY_PRINCIPAL | SETKEY_PRINCIPAL3 | SETKEY_PRINCIPAL4 => {
             let (api, name, prealm, keys, keepold) = parse_setkey(args, proc)?;
             let req = req_realm(&prealm, &realm);
-            let mut g = match write_store(store, API_V2) {
+            let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
@@ -2838,13 +2839,13 @@ fn dispatch_kadm5_ticket(
             let n = clamp_self_keepold(is_self(actor, &name, &req), keepold);
             match g.set_keys_in(&name, &req, keys, n) {
                 Ok(()) => Ok(generic_ret(api, 0)),
-                Err(e) => Ok(generic_ret(api, kadm5_code(&Error::from(e)))),
+                Err(e) => Ok(generic_ret(api, kadm5_code(proc, &Error::from(e)))),
             }
         }
         GET_STRINGS => {
             let (api, name, prealm) = parse_gstrings(args)?;
             let req = req_realm(&prealm, &realm);
-            let g = match write_store(store, api) {
+            let g = match write_store(store, proc, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
@@ -2865,13 +2866,13 @@ fn dispatch_kadm5_ticket(
             }
             match g.get_strings_in(&name, &req) {
                 Ok(attrs) => Ok(encode_gstrings(api, &attrs)),
-                Err(e) => Ok(generic_ret(api, kadm5_code(&Error::from(e)))),
+                Err(e) => Ok(generic_ret(api, kadm5_code(proc, &Error::from(e)))),
             }
         }
         SET_STRING => {
             let (api, name, prealm, key, value) = parse_sstring(args)?;
             let req = req_realm(&prealm, &realm);
-            let mut g = match write_store(store, API_V2) {
+            let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
@@ -2890,7 +2891,7 @@ fn dispatch_kadm5_ticket(
             }
             match g.set_string_in(&name, &req, &key, value.as_deref()) {
                 Ok(()) => Ok(generic_ret(api, 0)),
-                Err(e) => Ok(generic_ret(api, kadm5_code(&Error::from(e)))),
+                Err(e) => Ok(generic_ret(api, kadm5_code(proc, &Error::from(e)))),
             }
         }
         CREATE_ALIAS => {
@@ -2909,22 +2910,50 @@ fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_INSUFFICIENT));
             }
-            let mut g = match write_store(store, API_V2) {
+            let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
             match g.create_alias_in(&alias, &alias_req, &target, &target_req) {
                 Ok(()) => Ok(generic_ret(API_V2, 0)),
-                Err(e) => Ok(generic_ret(API_V2, kadm5_code(&Error::from(e)))),
+                Err(e) => Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e)))),
             }
         }
         _ => Err(Error::ProcUnavail),
     }
 }
 
-fn kadm5_code(e: &Error) -> u32 {
+/// The `KADM5_AUTH_*` code a stub denies with (`server_stubs.c`, the
+/// `ret->code = KADM5_AUTH_…` of each `*_2_svc`): ADD for the creates
+/// (`:480,521,1268`), DELETE for the deletes (`:582,1311`), MODIFY for
+/// modify/purgekeys/set_string/modify_policy (`:633,1515,1594,1352`),
+/// INSUFFICIENT for rename and create_alias (`:702,1743`), GET for the gets
+/// (`:772,1400,1553`), LIST for the lists (`:816,1445`), CHANGEPW for
+/// chpass/chrand (`:860,915,1150,1210`), SETKEY for setkey (`:971,1023,1077`),
+/// EXTRACT for get_principal_keys (`:1691`).
+fn auth_code_for(proc: u32) -> u32 {
+    match proc {
+        CREATE_PRINCIPAL | CREATE_PRINCIPAL3 | CREATE_POLICY => KADM5_AUTH_ADD,
+        DELETE_PRINCIPAL | DELETE_POLICY => KADM5_AUTH_DELETE,
+        MODIFY_PRINCIPAL | MODIFY_POLICY | PURGEKEYS | SET_STRING => KADM5_AUTH_MODIFY,
+        RENAME_PRINCIPAL | CREATE_ALIAS => KADM5_AUTH_INSUFFICIENT,
+        GET_PRINCS | GET_POLS => KADM5_AUTH_LIST,
+        CHPASS_PRINCIPAL | CHPASS_PRINCIPAL3 | CHRAND_PRINCIPAL | CHRAND_PRINCIPAL3 => {
+            KADM5_AUTH_CHANGEPW
+        }
+        SETKEY_PRINCIPAL | SETKEY_PRINCIPAL3 | SETKEY_PRINCIPAL4 => KADM5_AUTH_SETKEY,
+        EXTRACT_KEYS => KADM5_AUTH_EXTRACT,
+        _ => KADM5_AUTH_GET,
+    }
+}
+
+/// kadm5 return code for a store error surfacing from the `proc` stub. A
+/// store-level `AclDenied` takes the stub's own `KADM5_AUTH_*` (no in-tree
+/// store path returns it today — the ACL is checked inline in each arm —
+/// so this is latent hygiene, `working/plan-w1z.md` Z1b.3).
+fn kadm5_code(proc: u32, e: &Error) -> u32 {
     let s = match e {
-        Error::AclDenied | Error::KpropUnauthorized(_) => return KADM5_AUTH_GET,
+        Error::AclDenied | Error::KpropUnauthorized(_) => return auth_code_for(proc),
         Error::NotFound => return KADM5_UNK_PRINC,
         Error::PassTooSoon { .. } => return KADM5_PASS_TOOSOON,
         Error::GarbageArgs | Error::ProcUnavail => return KADM5_FAILURE,
@@ -4108,6 +4137,39 @@ impl XdrW {
 
 #[cfg(test)]
 mod tests {
+    /// W1-Z Z1b.3: a store-level `AclDenied` takes the stub's own
+    /// `KADM5_AUTH_*` (`server_stubs.c`), not `KADM5_AUTH_GET` for every op.
+    #[test]
+    fn z1b_store_acl_denied_is_the_stubs_auth_code() {
+        use super::*;
+        let d = Error::AclDenied;
+        assert_eq!(kadm5_code(CREATE_PRINCIPAL, &d), KADM5_AUTH_ADD);
+        assert_eq!(kadm5_code(CREATE_PRINCIPAL3, &d), KADM5_AUTH_ADD);
+        assert_eq!(kadm5_code(CREATE_POLICY, &d), KADM5_AUTH_ADD);
+        assert_eq!(kadm5_code(DELETE_PRINCIPAL, &d), KADM5_AUTH_DELETE);
+        assert_eq!(kadm5_code(DELETE_POLICY, &d), KADM5_AUTH_DELETE);
+        assert_eq!(kadm5_code(MODIFY_PRINCIPAL, &d), KADM5_AUTH_MODIFY);
+        assert_eq!(kadm5_code(MODIFY_POLICY, &d), KADM5_AUTH_MODIFY);
+        assert_eq!(kadm5_code(PURGEKEYS, &d), KADM5_AUTH_MODIFY);
+        assert_eq!(kadm5_code(SET_STRING, &d), KADM5_AUTH_MODIFY);
+        assert_eq!(kadm5_code(RENAME_PRINCIPAL, &d), KADM5_AUTH_INSUFFICIENT);
+        assert_eq!(kadm5_code(CREATE_ALIAS, &d), KADM5_AUTH_INSUFFICIENT);
+        assert_eq!(kadm5_code(GET_PRINCIPAL, &d), KADM5_AUTH_GET);
+        assert_eq!(kadm5_code(GET_POLICY, &d), KADM5_AUTH_GET);
+        assert_eq!(kadm5_code(GET_STRINGS, &d), KADM5_AUTH_GET);
+        assert_eq!(kadm5_code(GET_PRINCS, &d), KADM5_AUTH_LIST);
+        assert_eq!(kadm5_code(GET_POLS, &d), KADM5_AUTH_LIST);
+        assert_eq!(kadm5_code(CHPASS_PRINCIPAL, &d), KADM5_AUTH_CHANGEPW);
+        assert_eq!(kadm5_code(CHRAND_PRINCIPAL3, &d), KADM5_AUTH_CHANGEPW);
+        assert_eq!(kadm5_code(SETKEY_PRINCIPAL4, &d), KADM5_AUTH_SETKEY);
+        assert_eq!(kadm5_code(EXTRACT_KEYS, &d), KADM5_AUTH_EXTRACT);
+        // Other store errors are op-independent.
+        assert_eq!(
+            kadm5_code(DELETE_PRINCIPAL, &Error::NotFound),
+            KADM5_UNK_PRINC
+        );
+    }
+
     #[test]
     fn read_record_bounds_the_total_accumulated_size() {
         // R2-S3: a pre-auth client that chains fragments without ever setting

@@ -2884,7 +2884,10 @@ fn encode_krb_error(
         cusec: None,
         stime: KerberosTime::now(),
         susec: Microseconds::ZERO,
-        error_code: code,
+        // do_as_req.c:804 / do_tgs_req.c:199 `errcode_to_protocol`: only
+        // 0..=128 is a protocol code; anything else (a `KdcPolicy` handing
+        // back a raw library code) goes out as KRB_ERR_GENERIC 60.
+        error_code: crate::error::errcode_to_protocol(code),
         // MIT prepare_error_as echoes request->client. prepare_error_tgs
         // sets errpkt.client from the decrypted header ticket, else NULL;
         // opt_realm_of_principal omits crealm when client is NULL

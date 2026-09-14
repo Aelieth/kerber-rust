@@ -133,6 +133,52 @@ this project uses semantic versioning once a crate is published.
   `kadmin-gate.sh` runs it against both kadminds (1,2 → `accepted
   version=1`; 3,4 echoed; 5,0 → `denied auth_stat=1 AUTH_BADCRED`).
   Ledger `svc_auth_gssapi.c:308-341` → exact (351).
+- **client.** `krb5-kinit`'s expired-password flow is `gic_pwd.c:205-240`
+  in MIT's order: a typed `KDC_ERR_KEY_EXP` (no more matching the error
+  text) → the `kadmin/changepw` AS *first*, with the password just typed
+  → only then `Password expired.  You must change it now.` and the
+  `Enter new password` / `Enter it again` prompts (three tries; mismatch,
+  empty and soft kpasswd results re-prompt with MIT's banners, a hard
+  result is `Password change failed`), the change, the final AS. A wrong
+  password on an expired principal is now `kinit: Password incorrect
+  while getting initial credentials` (`kinit.c:785-790`) and never
+  prompts; before, the prompts came first and the failure surfaced only
+  after the user had typed a new password twice. The gate's first run
+  found the other half of that line: against a principal without
+  `+requires_preauth` (MIT's harness default) a wrong password is an
+  AS-REP the client cannot verify, and `krb5-kinit` printed `crypto:
+  integrity check failed` — a KDC-REP enc-part that fails its HMAC is now
+  the typed `krb5_protocol::Error::ReplyIntegrity` (MIT
+  `krb5_kdc_rep_decrypt_proc` → `KRB5KRB_AP_ERR_BAD_INTEGRITY`, "Decrypt
+  integrity check failed"), which `krb5_client::mit_error_code` reports
+  as 31 and `krb5-kinit` as `Password incorrect` like MIT. The prompts
+  themselves are `krb5_prompter_posix` (`prompter.c:47-93`): on stdout,
+  echo off while stdin is a terminal, a newline after each hidden read
+  — before, `Password for` went to stderr and a password typed at a
+  terminal echoed. `KinitParams.prompter` (`NewPasswordPrompter`) carries the
+  prompter; `KRB5_NEW_PASSWORD` remains the non-interactive source.
+  `krb5_protocol::change_password_result` returns the kpasswd result
+  code. `kpasswd-gate.sh` Z1b.2 runs MIT `kinit` and `krb5-kinit` side
+  by side against the MIT KDC. Ledger B1 `gic_pwd.c:205-240` and
+  `prompter.c:47-93` exact (438 rows, exact 353).
+- **kdc / kadmind (latent).** Three wire-code hygiene fixes with no
+  in-tree trigger. `errcode_to_protocol` (`kdc_util.c:691-697`) now runs
+  at the KRB-ERROR encoder itself (`issue.rs encode_krb_error`, MIT
+  `do_as_req.c:804` / `do_tgs_req.c:199`), so a `KdcPolicy` plugin that
+  returns a library-local code such as 145 is `KRB_ERR_GENERIC` 60 on
+  the wire instead of an out-of-range `error-code`; before, only the
+  `Error::Protocol` path in `error.rs` clamped. A store-level
+  `Error::AclDenied` in kadmind is the stub's own `KADM5_AUTH_*` for the
+  procedure (`auth_code_for(proc)`, e.g. `AUTH_ADD` for
+  `CREATE_PRINCIPAL`) instead of `AUTH_GET` for every op. The eight
+  client-caused PKINIT verify failures (CMS, cert chain, eContentType,
+  checksum, ctime, AuthPack, DH group, SPKI) log at `info` /
+  `outcome = "denied"` like MIT's `LOG_INFO "preauth (%s) verify
+  failure"` (`kdc_preauth.c:1224-1228`), not `error`; the KDC's own
+  faults stay `error`. `scripts/kdc-gate.sh:411` had a malformed JSON
+  literal. Ledger: a new A2 `kdc_util.c:691-697` row (exact, latent),
+  `kdc_preauth.c:1224-1228` and the add/delete ACL denial row → exact
+  (439 rows, exact 356, deviation 32).
 
 ### W1-C
 

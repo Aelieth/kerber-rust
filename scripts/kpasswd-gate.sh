@@ -202,7 +202,7 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
-cargo build -p krb5-kdc --bin krb5-kdc -p krb5-admin --bin krb5-kadmind --bin krb5-kpasswd
+cargo build -p krb5-kdc --bin krb5-kdc -p krb5-admin --bin krb5-kadmind --bin krb5-kpasswd -p krb5-client --bin krb5-kinit
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
@@ -754,6 +754,59 @@ echo "==== MIT kpasswd bad AP-REQ retransmit (schpw.c:126-136,110-111) ===="
 pin_kpasswd_apreq_retransmit "$NAME_MIT" "MIT"
 echo "==== MIT kpasswd fill-datagram AP-REQ (schpw.c:89-95) ===="
 pin_kpasswd_fill_datagram "$NAME_MIT" "MIT"
+
+# W1-Z Z1b.2: kinit's expired-password flow order (gic_pwd.c:205-240) against
+# the MIT KDC + MIT kadmind 464: the kadmin/changepw AS runs *first* with the
+# typed password, so a wrong password is "Password incorrect" and never
+# prompts; the right password changes it and gets a TGT. MIT kinit is the
+# oracle, Rust krb5-kinit the subject, same stdin script for both.
+echo "==== Z1b.2 kinit KEY_EXP flow order (gic_pwd.c:205-240): MIT kinit vs Rust krb5-kinit against the MIT KDC ===="
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kinit" "$NAME_MIT":/tmp/krb5-kinit
+docker exec "$NAME_MIT" chmod +x /tmp/krb5-kinit
+docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw exp-old -pwexpire 2020-01-01 z1bmit' >/dev/null
+docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw exp-old -pwexpire 2020-01-01 z1brust' >/dev/null
+docker exec "$NAME_MIT" kadmin.local -q 'getprinc z1brust' | grep -E '^Password expiration date: ' | grep -qv never
+z1b2_check() {
+    local leg=$1 out=$2 rc=$3 want_rc=$4
+    echo "$leg (rc=$rc):"
+    echo "$out" | sed "s/^/  $leg| /"
+    if [ "$rc" -ne "$want_rc" ]; then
+        echo "$leg: rc $rc want $want_rc" >&2
+        exit 1
+    fi
+}
+echo "---- wrong password on an expired principal: the password failure, no new-password prompt ----"
+set +e
+MIT_Z1B_WRONG="$(docker exec "$NAME_MIT" sh -c 'printf "not-it\nexp-new\nexp-new\n" | kinit -c /tmp/cc_z1b_mit_wrong z1bmit@KERBER.TEST' 2>&1)"
+mit_rc=$?
+RUST_Z1B_WRONG="$(docker exec -e KRB5_PASSWORD=not-it "$NAME_MIT" sh -c 'printf "exp-new\nexp-new\n" | /tmp/krb5-kinit -c /tmp/cc_z1b_rust_wrong z1brust@KERBER.TEST' 2>&1)"
+rust_rc=$?
+set -e
+z1b2_check mit "$MIT_Z1B_WRONG" "$mit_rc" 1
+z1b2_check rust "$RUST_Z1B_WRONG" "$rust_rc" 1
+echo "$MIT_Z1B_WRONG" | grep -qF 'kinit: Password incorrect while getting initial credentials' || { echo "MIT kinit did not report the password failure" >&2; exit 1; }
+echo "$RUST_Z1B_WRONG" | grep -qF 'kinit: Password incorrect while getting initial credentials' || { echo "Rust krb5-kinit did not report the password failure" >&2; exit 1; }
+if echo "$MIT_Z1B_WRONG$RUST_Z1B_WRONG" | grep -q 'Enter new password'; then
+    echo "a kinit prompted for a new password before the changepw AS" >&2
+    exit 1
+fi
+docker exec "$NAME_MIT" kadmin.local -q 'getprinc z1brust' | grep -qE '^Key: vno 1, ' || { echo "Rust wrong-password run changed the key" >&2; exit 1; }
+echo "---- right password: changepw AS, then the prompts, the change and a TGT ----"
+MIT_Z1B_OK="$(docker exec "$NAME_MIT" sh -c 'printf "exp-old\nexp-new\nexp-new\n" | kinit -c /tmp/cc_z1b_mit_ok z1bmit@KERBER.TEST' 2>&1)" \
+    || { echo "$MIT_Z1B_OK"; echo "MIT kinit KEY_EXP change failed" >&2; exit 1; }
+RUST_Z1B_OK="$(docker exec -e KRB5_PASSWORD=exp-old "$NAME_MIT" sh -c 'printf "exp-new\nexp-new\n" | /tmp/krb5-kinit -c /tmp/cc_z1b_rust_ok z1brust@KERBER.TEST' 2>&1)" \
+    || { echo "$RUST_Z1B_OK"; echo "Rust krb5-kinit KEY_EXP change failed" >&2; exit 1; }
+z1b2_check mit "$MIT_Z1B_OK" 0 0
+z1b2_check rust "$RUST_Z1B_OK" 0 0
+echo "$MIT_Z1B_OK" | grep -qF 'Password expired.  You must change it now.'
+echo "$RUST_Z1B_OK" | grep -qF 'Password expired.  You must change it now.'
+echo "$RUST_Z1B_OK" | grep -qF 'Enter new password'
+docker exec "$NAME_MIT" klist -c /tmp/cc_z1b_mit_ok | grep -qF 'krbtgt/KERBER.TEST@KERBER.TEST'
+docker exec "$NAME_MIT" klist -c /tmp/cc_z1b_rust_ok | grep -qF 'krbtgt/KERBER.TEST@KERBER.TEST'
+docker exec "$NAME_MIT" kadmin.local -q 'getprinc z1brust' | grep -qE '^Key: vno 2, ' || { echo "Rust change did not bump the kvno" >&2; exit 1; }
+docker exec "$NAME_MIT" kadmin.local -q 'getprinc z1bmit' | grep -qE '^Key: vno 2, ' || { echo "MIT change did not bump the kvno" >&2; exit 1; }
+echo "MIT_z1b2_keyexp_order"
+echo "RUST_z1b2_keyexp_order"
 
 log "kpasswd.gate" "ok" ',"principal":"user@KERBER.TEST","op":"kpasswd+kinit","softerror":true'
 exit 0

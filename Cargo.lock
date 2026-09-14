@@ -500,6 +500,7 @@ dependencies = [
  "krb5-log",
  "krb5-protocol",
  "krb5-types",
+ "nix",
  "tracing",
  "tracing-subscriber",
  "zeroize",

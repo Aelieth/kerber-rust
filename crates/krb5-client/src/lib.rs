@@ -64,8 +64,27 @@ pub struct KinitParams<'a> {
     pub anonymous: bool,
     /// `kinit -C` / `[libdefaults] canonicalize`.
     pub canonicalize: bool,
-    /// New password for `gic_pwd.c` KEY_EXP → changepw (`KRB5_NEW_PASSWORD`).
+    /// New password for `gic_pwd.c` KEY_EXP → changepw (`KRB5_NEW_PASSWORD`),
+    /// the non-interactive stand-in for [`KinitParams::prompter`].
     pub new_password: Option<&'a [u8]>,
+    /// MIT `krb5_prompter_fct` for the KEY_EXP new-password prompts
+    /// (`gic_pwd.c:238-263`). `None` with no `new_password` leaves
+    /// `KDC_ERR_KEY_EXP` as the error (`gic_pwd.c:213-214`).
+    pub prompter: Option<NewPasswordPrompter<'a>>,
+}
+
+/// `krb5_prompter_fct` narrowed to `gic_pwd.c:238-263`: shown `banner`, it
+/// returns the `Enter new password` / `Enter it again` replies.
+#[derive(Clone, Copy)]
+pub struct NewPasswordPrompter<'a>(pub &'a (dyn Fn(&str) -> PromptReply + 'a));
+
+/// The two `KRB5_PROMPT_TYPE_NEW_PASSWORD*` replies, or the prompter's error.
+pub type PromptReply = Result<(Vec<u8>, Vec<u8>), String>;
+
+impl std::fmt::Debug for NewPasswordPrompter<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("NewPasswordPrompter")
+    }
 }
 
 /// Result of [`kinit`].
@@ -182,21 +201,27 @@ pub fn kinit_with(
     spec: &CcSpec,
     params: KinitParams<'_>,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
-    let keep_on_key_exp = params.new_password.is_none() && params.keytab.is_none();
     let built = kinit_inner(kdc, principal, password, spec, params);
-    let keep_password = keep_on_key_exp
-        && built
-            .as_ref()
-            .err()
-            .is_some_and(|e| e.to_string().contains("KRB-ERROR 23"));
     let result = match built {
         Ok((r, cc)) => store_ccache(spec, cc).map(|()| r),
         Err(e) => Err(e),
     };
-    if !keep_password {
-        password.zeroize();
-    }
+    password.zeroize();
     result
+}
+
+/// The MIT `krb5_error_code` of a `kinit_with` failure, typed (never by
+/// text): the KRB-ERROR code the KDC sent, or `KRB5KRB_AP_ERR_BAD_INTEGRITY`
+/// (31) for a KDC-REP that did not verify under the derived key, which is
+/// what `krb5_get_init_creds_password` returns for a wrong password when the
+/// KDC did not require preauth (`kinit.c:787`).
+#[must_use]
+pub fn mit_error_code(e: &(dyn std::error::Error + Send + Sync + 'static)) -> Option<i32> {
+    match e.downcast_ref::<krb5_protocol::Error>() {
+        Some(krb5_protocol::Error::KrbError { code, .. }) => Some(*code),
+        Some(krb5_protocol::Error::ReplyIntegrity) => Some(krb5_types::err::BAD_INTEGRITY),
+        _ => None,
+    }
 }
 
 /// Load a FILE, MEMORY, or DIR cache.
@@ -412,17 +437,19 @@ fn kinit_inner(
         as_exchange(&req)
     } {
         Ok(o) => o,
+        // gic_pwd.c:205-240: a typed KDC_ERR_KEY_EXP from a password AS (not
+        // keytab — `krb5_get_init_creds_keytab` has no change flow) with a
+        // prompter or a new-password source. The kadmin/changepw AS comes
+        // *first*, with the password just used, so a wrong password is the
+        // password failure (`:229-236`); only then the new-password prompts
+        // (`:238-258`), the change (`:283-286`) and the final AS (`:333`).
         Err(e)
             if krb5_protocol::key_exp_should_changepw(
                 &e,
-                params.new_password.is_some(),
+                params.new_password.is_some() || params.prompter.is_some(),
                 params.keytab.is_some(),
             ) =>
         {
-            let new_pw = params
-                .new_password
-                .ok_or("Password expired.  You must change it now.")?;
-            eprintln!("Password expired.  You must change it now.");
             let changepw = krb5_types::PrincipalName::new(
                 krb5_types::PrincipalName::NT_SRV_INST,
                 ["kadmin", "changepw"],
@@ -450,12 +477,22 @@ fn kinit_inner(
                 ticket: chpw_ticket,
             };
             let chpw_as = as_exchange(&chpw_req)?;
-            krb5_protocol::change_password(&resolved, &chpw_as, new_pw)?;
+            let mut new_pw = match (params.new_password, params.prompter) {
+                (Some(p), _) => {
+                    eprintln!("{KEY_EXP_BANNER}");
+                    krb5_protocol::change_password(&resolved, &chpw_as, p)?;
+                    p.to_vec()
+                }
+                (None, Some(prompter)) => prompt_and_change(&resolved, &chpw_as, prompter)?,
+                (None, None) => return Err(e.into()),
+            };
             let retry = AsRequest {
-                password: new_pw,
+                password: &new_pw,
                 ..req
             };
-            as_exchange(&retry)?
+            let out = as_exchange(&retry);
+            new_pw.zeroize();
+            out?
         }
         Err(e) => return Err(e.into()),
     };
@@ -517,6 +554,55 @@ fn kinit_inner(
         return Err(e.into());
     }
     Ok((KinitResult { as_out, tgs_out }, cache))
+}
+
+/// `gic_pwd.c:238` banner shown ahead of the new-password prompts.
+const KEY_EXP_BANNER: &str = "Password expired.  You must change it now.";
+
+/// `gic_pwd.c:249-326`: three tries of prompt, compare, `krb5_change_password`
+/// over `chpw_as`; a soft kpasswd result re-prompts with the result text in
+/// the banner, anything else is the error. Returns the accepted password.
+fn prompt_and_change(
+    kdc: &KdcAddr,
+    chpw_as: &krb5_protocol::AsOutcome,
+    prompter: NewPasswordPrompter<'_>,
+) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+    let mut banner = KEY_EXP_BANNER.to_owned();
+    // `KRB5_CHPW_FAIL` "set in case the retry loop falls through" (`:299`).
+    let mut ret = "Password change failed";
+    for _tries in 0..3 {
+        let (mut pw0, mut pw1) = (prompter.0)(&banner)?;
+        if pw0 != pw1 {
+            // KRB5_LIBOS_BADPWDMATCH (`:268-271`)
+            ret = "Password mismatch";
+            banner = format!("{ret}.  Please try again.");
+        } else if pw0.is_empty() {
+            // KRB5_CHPW_PWDNULL (`:272-275`)
+            ret = "New password cannot be zero length";
+            banner = format!("{ret}.  Please try again.");
+        } else {
+            let (code, data) = krb5_protocol::change_password_result(kdc, chpw_as, &pw0)?;
+            if code == krb5_protocol::KPASSWD_SUCCESS {
+                pw1.zeroize();
+                return Ok(pw0);
+            }
+            ret = "Password change failed";
+            if code != krb5_protocol::KPASSWD_SOFTERROR {
+                // `:301-305`: a hard result is KRB5_CHPW_FAIL, no retry.
+                pw0.zeroize();
+                pw1.zeroize();
+                return Err(ret.into());
+            }
+            // `:309-323`: "<code string>: <message>.  Please try again."
+            banner = format!(
+                "{}.  Please try again.\n",
+                krb5_protocol::format_chpw_failure(code, &data)
+            );
+        }
+        pw0.zeroize();
+        pw1.zeroize();
+    }
+    Err(ret.into())
 }
 
 fn renew_inner(

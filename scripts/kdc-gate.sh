@@ -408,4 +408,4 @@ PY
 echo "MIT_tgs_audit_seed"
 echo "RUST_tgs_audit_seed"
 
-log "kdc.gate" "ok" ",\"principal\":\"user@KERBER.TEST\",\"service\":\"host/testhost.kerber.test\",\"issue\":true,\"audit\":true\""
+log "kdc.gate" "ok" ",\"principal\":\"user@KERBER.TEST\",\"service\":\"host/testhost.kerber.test\",\"issue\":true,\"audit\":true"

@@ -1144,7 +1144,10 @@ fn finish_as_rep(
         string_to_key(etype, password, &salt, None)?
     };
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART)?;
-    let plain = decrypt(&key, usage, inner.enc_part.cipher.as_ref())?;
+    let plain = decrypt(&key, usage, inner.enc_part.cipher.as_ref()).map_err(|e| match e {
+        krb5_crypto::Error::Integrity => Error::ReplyIntegrity,
+        other => other.into(),
+    })?;
     let enc_part = decode_enc_as(&plain)?;
     if enc_part.nonce != nonce {
         return Err(Error::NonceMismatch);

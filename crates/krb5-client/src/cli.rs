@@ -513,7 +513,8 @@ fn is_local_tgt(cred: &CcacheCred, realm: &[u8]) -> bool {
         && s.name_string[1].as_bytes() == realm
 }
 
-/// Prompt on stderr and strip a trailing newline (MIT `krb5_prompter_posix`).
+/// `Password for <principal>: ` — the `krb5_get_init_creds_password`
+/// prompt (`gic_pwd.c:96`) through [`read_prompt_line`].
 ///
 /// # Errors
 ///
@@ -522,17 +523,35 @@ pub fn read_password_line(principal: &str) -> Result<Vec<u8>, String> {
     read_prompt_line(&format!("Password for {principal}: "))
 }
 
-/// Read one secret line (KEY_EXP new-password prompts).
+/// One hidden prompt like MIT `krb5_prompter_posix` (`prompter.c:78-92`):
+/// the prompt on **stdout**, echo off while stdin is a terminal
+/// (`setup_tty`), the line read, echo restored, and a newline printed
+/// after every hidden prompt whether or not stdin is a tty (`:91-92`);
+/// the trailing newline is stripped from the reply.
 ///
 /// # Errors
 ///
 /// stdin read failure.
 pub fn read_prompt_line(prompt: &str) -> Result<Vec<u8>, String> {
-    eprint!("{prompt}");
+    use nix::sys::termios::{LocalFlags, SetArg, tcgetattr, tcsetattr};
+    use std::io::Write as _;
+    let stdin = std::io::stdin();
+    print!("{prompt}");
+    let _ = std::io::stdout().flush();
+    // `tcgetattr` fails with ENOTTY on a pipe: no echo to turn off.
+    let saved = tcgetattr(&stdin).ok();
+    if let Some(t) = &saved {
+        let mut hidden = t.clone();
+        hidden.local_flags.remove(LocalFlags::ECHO);
+        let _ = tcsetattr(&stdin, SetArg::TCSANOW, &hidden);
+    }
     let mut s = String::new();
-    std::io::stdin()
-        .read_line(&mut s)
-        .map_err(|_| "failed to read password from stdin".to_owned())?;
+    let read = stdin.read_line(&mut s);
+    if let Some(t) = &saved {
+        let _ = tcsetattr(&stdin, SetArg::TCSANOW, t);
+    }
+    println!();
+    read.map_err(|_| "failed to read password from stdin".to_owned())?;
     Ok(s.trim_end_matches(['\n', '\r']).as_bytes().to_vec())
 }
 

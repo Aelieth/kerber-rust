@@ -179,6 +179,26 @@ pub fn format_chpw_failure(code: u16, result_data: &[u8]) -> String {
 ///
 /// Transport, crypto, or a non-success / modified result code.
 pub fn change_password(kdc: &KdcAddr, as_out: &AsOutcome, new_pw: &[u8]) -> Result<(), Error> {
+    let (code, data) = change_password_result(kdc, as_out, new_pw)?;
+    if code != KPASSWD_SUCCESS {
+        return Err(Error::ReplyMismatch(format_chpw_failure(code, &data)));
+    }
+    Ok(())
+}
+
+/// [`change_password`] returning the kpasswd result code and result data
+/// like MIT `krb5_change_password` (`result_code`, `result_string`), so a
+/// caller can tell a soft rejection (`KRB5_KPASSWD_SOFTERROR`) apart.
+///
+/// # Errors
+///
+/// Transport, crypto, or a modified reply; a non-success result code is
+/// returned, not an error.
+pub fn change_password_result(
+    kdc: &KdcAddr,
+    as_out: &AsOutcome,
+    new_pw: &[u8],
+) -> Result<(u16, Vec<u8>), Error> {
     change_or_set(kdc, as_out, new_pw, None)
 }
 
@@ -193,7 +213,11 @@ pub fn set_password(
     new_pw: &[u8],
     target: (&Realm, &PrincipalName),
 ) -> Result<(), Error> {
-    change_or_set(kdc, as_out, new_pw, Some(target))
+    let (code, data) = change_or_set(kdc, as_out, new_pw, Some(target))?;
+    if code != KPASSWD_SUCCESS {
+        return Err(Error::ReplyMismatch(format_chpw_failure(code, &data)));
+    }
+    Ok(())
 }
 
 fn change_or_set(
@@ -201,7 +225,7 @@ fn change_or_set(
     as_out: &AsOutcome,
     new_pw: &[u8],
     target: Option<(&Realm, &PrincipalName)>,
-) -> Result<(), Error> {
+) -> Result<(u16, Vec<u8>), Error> {
     let mut sk = vec![0u8; as_out.session_key.etype().key_len()];
     getrandom::getrandom(&mut sk).map_err(|e| Error::Crypto(e.to_string()))?;
     let sub = ProtocolKey::from_bytes(as_out.session_key.etype(), &sk)?;
@@ -262,10 +286,7 @@ fn change_or_set(
         let (code, rest) = parse_chpw_rep(&user, false)?;
         (code, rest.to_vec())
     };
-    if code != KPASSWD_SUCCESS {
-        return Err(Error::ReplyMismatch(format_chpw_failure(code, &data)));
-    }
-    Ok(())
+    Ok((code, data))
 }
 
 /// MIT `gic_pwd.c:211-222`: KEY_EXP plus a new-password source, not keytab.

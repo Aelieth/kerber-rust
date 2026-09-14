@@ -568,6 +568,11 @@ fn send_spake_challenge(
 }
 
 /// PKINIT: ECDH reply key from PA-PK-AS-REQ.
+///
+/// A client-caused verify failure (CMS, cert, eContentType, checksum, ctime,
+/// AuthPack, DH group, SPKI) is logged at `info` like MIT's
+/// `kdc_preauth.c:1224-1228` `LOG_INFO "preauth (%s) verify failure: %s"`,
+/// `outcome = "denied"`; the KDC's own faults stay `error`.
 pub(crate) fn process_pkinit(
     store: &dyn PrincipalRead,
     padata: Option<&[PaData]>,
@@ -595,10 +600,10 @@ pub(crate) fn process_pkinit(
     let (inner, is_signed) = match krb5_types::pkinit::cms_verify_full(&cms, &ca.ca_cert) {
         Ok(verified) => {
             if verified.e_content_type.as_slice() != krb5_types::pkinit::ECONTENT_AUTHDATA {
-                tracing::error!(
+                tracing::info!(
                     event = "kdc.pkinit",
                     component = "krb5-kdc",
-                    outcome = "error",
+                    outcome = "denied",
                     error = "pkinit eContentType"
                 );
                 return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
@@ -606,10 +611,10 @@ pub(crate) fn process_pkinit(
             if let Err(e) =
                 krb5_types::pkinit::require_client_pkinit_cert(&verified.cert, cname, realm)
             {
-                tracing::error!(
+                tracing::info!(
                     event = "kdc.pkinit",
                     component = "krb5-kdc",
-                    outcome = "error",
+                    outcome = "denied",
                     error = e
                 );
                 return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
@@ -618,10 +623,10 @@ pub(crate) fn process_pkinit(
         }
         Err(e) => {
             let Some(inner) = krb5_types::pkinit::cms_extract_unsigned(&cms) else {
-                tracing::error!(
+                tracing::info!(
                     event = "kdc.pkinit",
                     component = "krb5-kdc",
-                    outcome = "error",
+                    outcome = "denied",
                     error = e,
                     cms_len = cms.len()
                 );
@@ -644,10 +649,10 @@ pub(crate) fn process_pkinit(
         }
     };
     if let Err(e) = krb5_types::pkinit::authpack_pa_checksum_ok(&inner, body_der) {
-        tracing::error!(
+        tracing::info!(
             event = "kdc.pkinit",
             component = "krb5-kdc",
-            outcome = "error",
+            outcome = "denied",
             error = e
         );
         return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
@@ -684,10 +689,10 @@ pub(crate) fn process_pkinit(
         }
     }
     let (ctime, cusec) = krb5_types::pkinit::parse_authpack_freshness(&inner).ok_or_else(|| {
-        tracing::error!(
+        tracing::info!(
             event = "kdc.pkinit",
             component = "krb5-kdc",
-            outcome = "error",
+            outcome = "denied",
             error = "pkinit ctime"
         );
         proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED)
@@ -707,10 +712,10 @@ pub(crate) fn process_pkinit(
         return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
     }
     let (nonce, spki) = krb5_types::pkinit::parse_authpack_maybe_dh(&inner).ok_or_else(|| {
-        tracing::error!(
+        tracing::info!(
             event = "kdc.pkinit",
             component = "krb5-kdc",
-            outcome = "error",
+            outcome = "denied",
             error = "AuthPack",
             inner_len = inner.len(),
             inner_tag = inner.first().copied().unwrap_or(0)
@@ -736,10 +741,10 @@ pub(crate) fn process_pkinit(
         (shared.to_vec(), info)
     } else if let Some((p, y)) = krb5_types::pkinit::parse_dh_spki(&spki) {
         let group = dh_group_for_prime(&p).ok_or_else(|| {
-            tracing::error!(
+            tracing::info!(
                 event = "kdc.pkinit",
                 component = "krb5-kdc",
-                outcome = "error",
+                outcome = "denied",
                 error = "unknown DH prime",
                 p_len = p.len()
             );
@@ -759,10 +764,10 @@ pub(crate) fn process_pkinit(
         let info = krb5_types::pkinit::encode_kdc_dh_key_info(&kp.public_der, nonce);
         (z, info)
     } else {
-        tracing::error!(
+        tracing::info!(
             event = "kdc.pkinit",
             component = "krb5-kdc",
-            outcome = "error",
+            outcome = "denied",
             error = "SPKI",
             spki_len = spki.len(),
             spki_tag = spki.first().copied().unwrap_or(0)

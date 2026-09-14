@@ -92,6 +92,15 @@ Destination RENEW/VALIDATE is not exempt.
 An omitted `[realms]` `max_renewable_life` in `kdc.conf` is a cap of 0
 (`alt_prof.c:576-577`), not an unset “use 7d” default.
 
+Every KRB-ERROR `error-code` passes `errcode_to_protocol`
+(`kdc_util.c:691-697`) at the encoder itself (`do_as_req.c:804`,
+`do_tgs_req.c:199`): an `ERROR_TABLE_BASE_krb5` offset in `[0,128]` is
+sent as is, anything else — including a library-local code returned by
+a `KdcPolicy` plugin — is `KRB_ERR_GENERIC` 60. A client-caused PKINIT
+verify failure is logged at `info` (`outcome = "denied"`), MIT's
+`LOG_INFO "preauth (%s) verify failure"` (`kdc_preauth.c:1224-1228`);
+the KDC's own faults stay `error`.
+
 The master-key stash `.k5.REALM` is a FILE keytab with one `K/M@REALM`
 entry (etype and kvno embedded, MIT `krb5_def_store_mkey_list`); loading reads
 the keytab first, then a legacy raw-key stash, rewriting it in keytab format on
@@ -281,9 +290,13 @@ or POSTDATED `from` ≠ starttime (omitted starttime = authtime), is
 (name and realm; name-type ignored) and puts those etypes first on
 the AS-REQ (`gic_keytab.c:84-174`). A stale lower kvno is not used
 to wrap PA-ENC-TIMESTAMP.
-Password `KEY_EXP` (23) obtains a short non-forwardable
-`kadmin/changepw` ticket, changes the password, and retries the
-AS-REQ (`gic_pwd.c:211-336`). A kpasswd result code outside 0–7 or
+Password `KEY_EXP` (23, typed) obtains a short non-forwardable
+`kadmin/changepw` ticket with the password just typed *before* any
+new-password prompt (`gic_pwd.c:229-236`), so a wrong password on an
+expired principal is the password failure (`Password incorrect while
+getting initial credentials`, `kinit.c:785-790`) and never a prompt;
+then the three prompt tries (`:249-326`), the change, and the final
+AS-REQ (`:333`). A kpasswd result code outside 0–7 or
 SUCCESS taken from a KRB-ERROR is `KRB5KRB_AP_ERR_MODIFIED`
 (`chpw.c:217-231`).
 `krb5_verify_init_creds` (`vfy_increds.c:259-321`) mk_req + rd_req
@@ -575,7 +588,9 @@ arg-version switch is `svc_auth_gssapi.c:308-341`: an undecodable
 init arg is `AUTH_BADCRED`; versions 1 and 2 are answered with
 `init_res.version` 1 (a logged "Accepted old RPC protocol request"),
 3 and 4 are echoed, any other version is `AUTH_BADCRED` before the
-token is looked at.
+token is looked at. A store-level ACL refusal inside a stub is that
+procedure's own `KADM5_AUTH_*` code (`auth_code_for`), never a
+generic `AUTH_GET`.
 `kadmin.local` ktadd ignores lockdown like MIT. Create-time name
 special-casing keeps `PWCHANGE_SERVICE` only (`create_principal` has
 none of the `kdb5_util create` bits).

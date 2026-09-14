@@ -11,7 +11,9 @@
 use std::path::Path;
 
 use krb5_client::cli::{parse_kinit, read_password_line, read_prompt_line};
-use krb5_client::{KinitParams, kinit_with, local_host_addresses};
+use krb5_client::{
+    KinitParams, NewPasswordPrompter, kinit_with, local_host_addresses, mit_error_code,
+};
 use krb5_config::{env_ktname, env_new_password, env_password, parse_deltat, resolve_ccspec};
 use krb5_protocol::{AsTicketOpts, KdcAddr, parse_principal_ex};
 use zeroize::Zeroize;
@@ -138,8 +140,24 @@ fn main() {
     let armor = args.armor_ccache.clone();
     let pk_id = args.pkinit_identity.clone();
     let pk_an = args.pkinit_anchors.clone();
-    let mut new_password = env_new_password();
-    loop {
+    let new_password = env_new_password();
+    // kinit.c:625-633 `pwprompt`: the password came from the user, so a
+    // PREAUTH_FAILED is reported as "Password incorrect" (`:785-790`).
+    let pw_auth = !(args.keytab
+        || args.renew
+        || args.validate
+        || args.pkinit_identity.is_some()
+        || args.anonymous);
+    // gic_pwd.c:238-263 through `kinit_prompter` (kinit.c:620-640): the
+    // banner, then `Enter new password` / `Enter it again`.
+    let prompter = |banner: &str| -> Result<(Vec<u8>, Vec<u8>), String> {
+        // `krb5_prompter_posix` prints the banner on stdout (`prompter.c:54`).
+        println!("{banner}");
+        let a = read_prompt_line("Enter new password: ")?;
+        let b = read_prompt_line("Enter it again: ")?;
+        Ok((a, b))
+    };
+    {
         let params = KinitParams {
             service: service.as_deref(),
             want_spake: args.want_spake,
@@ -160,6 +178,7 @@ fn main() {
                 || args.enterprise
                 || conf.as_ref().is_some_and(|c| c.canonicalize),
             new_password: new_password.as_deref(),
+            prompter: (!args.keytab).then_some(NewPasswordPrompter(&prompter)),
         };
         match kinit_with(&addr, &principal, &mut password, &spec, params) {
             Ok(r) => {
@@ -168,30 +187,20 @@ fn main() {
                     r.as_out.enc_part.sname.name_string.len(),
                     r.tgs_out.is_some()
                 );
-                break;
-            }
-            Err(e)
-                if !args.keytab
-                    && new_password.is_none()
-                    && e.to_string().contains("KRB-ERROR 23") =>
-            {
-                eprintln!("Password expired.  You must change it now.");
-                let a = read_prompt_line("Enter new password: ").unwrap_or_else(|e| {
-                    eprintln!("kinit: {e}");
-                    std::process::exit(2);
-                });
-                let b = read_prompt_line("Enter it again: ").unwrap_or_else(|e| {
-                    eprintln!("kinit: {e}");
-                    std::process::exit(2);
-                });
-                if a != b {
-                    eprintln!("kinit: passwords do not match");
-                    std::process::exit(1);
-                }
-                new_password = Some(a);
             }
             Err(e) => {
-                eprintln!("kinit failed: {e}");
+                // kinit.c:785-793: BAD_INTEGRITY, or PREAUTH_FAILED after a
+                // password prompt, is "Password incorrect while getting
+                // initial credentials".
+                match mit_error_code(e.as_ref()) {
+                    Some(krb5_types::err::BAD_INTEGRITY) => {
+                        eprintln!("kinit: Password incorrect while getting initial credentials");
+                    }
+                    Some(krb5_types::err::PREAUTH_FAILED) if pw_auth => {
+                        eprintln!("kinit: Password incorrect while getting initial credentials");
+                    }
+                    _ => eprintln!("kinit failed: {e}"),
+                }
                 std::process::exit(1);
             }
         }
