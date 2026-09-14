@@ -460,7 +460,7 @@ pub struct AdminEnt {
 /// Realm-wide ticket policy.
 #[derive(Clone, Debug)]
 pub struct Policy {
-    /// Max ticket lifetime seconds.
+    /// Max ticket lifetime seconds (MIT `alt_prof.c`: omitted = 24 h).
     pub max_life: u64,
     /// Max renewable lifetime seconds (MIT `alt_prof.c`: omitted = 0).
     pub max_renewable_life: u64,
@@ -522,7 +522,7 @@ pub struct Policy {
 impl Default for Policy {
     fn default() -> Self {
         Self {
-            max_life: 10 * 3600,
+            max_life: 24 * 3600,
             max_renewable_life: 0,
             skew: 300,
             allow_weak_crypto: false,

@@ -2999,6 +2999,123 @@ diff "$SCRATCH/z65-rust.txt" "$SCRATCH/z65-mit.txt" || {
     exit 1
 }
 
+echo "==== Z6.6 params.max_life default is 24 h (alt_prof.c:574-575) ===="
+# Stock kdc.conf writes max_life = 10h. Strip only that relation (not
+# max_renewable_life) and restart both kadminds so an unmasked create
+# takes MIT's 24 h default.
+z66_profile() {
+    # python must run *inside* the container (z11_profile): `docker exec`
+    # without `-i` does not forward the host heredoc, so the file was never
+    # written and rust kadmind exited on a missing KRB5_KDC_PROFILE.
+    docker exec "$1" sh -c '
+python3 - <<PY
+from pathlib import Path
+src = Path("/etc/krb5kdc/kdc.conf").read_text().splitlines(True)
+out = []
+for ln in src:
+    key = ln.split("=", 1)[0].strip()
+    if key == "max_life":
+        continue
+    out.append(ln)
+Path("/tmp/z66-kdc.conf").write_text("".join(out))
+PY
+test -f /tmp/z66-kdc.conf
+grep -q max_renewable_life /tmp/z66-kdc.conf
+if grep -E "^[[:space:]]*max_life[[:space:]]*=" /tmp/z66-kdc.conf; then
+    echo "z66-kdc.conf still has max_life" >&2
+    exit 1
+fi
+'
+}
+z66_restart() {
+    local ctn=$1 is_mit=$2
+    if [ "$is_mit" = mit ]; then
+        docker exec "$ctn" sh -c '
+for comm in /proc/[0-9]*/comm; do
+    [ -f "$comm" ] || continue
+    read -r name < "$comm" || continue
+    if [ "$name" = "kadmind" ]; then
+        pid=${comm#/proc/}
+        pid=${pid%/comm}
+        kill "$pid" 2>/dev/null || true
+    fi
+done
+'
+        local i
+        for i in $(seq 1 40); do
+            if ! docker exec "$ctn" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+                break
+            fi
+            sleep 0.25
+        done
+        docker exec -d -e KRB5_KDC_PROFILE=/tmp/z66-kdc.conf "$ctn" sh -c 'kadmind -nofork >/tmp/kadmind-z66.log 2>&1'
+        local ok=0
+        for i in $(seq 1 40); do
+            if docker exec "$ctn" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+                ok=1
+                break
+            fi
+            sleep 0.25
+        done
+        [ "$ok" = 1 ] || { docker exec "$ctn" cat /tmp/kadmind-z66.log >&2 || true; echo "MIT kadmind did not listen for z66" >&2; exit 1; }
+    else
+        docker exec "$ctn" sh -c '
+for comm in /proc/[0-9]*/comm; do
+    [ -f "$comm" ] || continue
+    read -r name < "$comm" || continue
+    if [ "$name" = "krb5-kadmind" ]; then
+        pid=${comm#/proc/}
+        pid=${pid%/comm}
+        kill "$pid" 2>/dev/null || true
+    fi
+done
+'
+        local i
+        for i in $(seq 1 40); do
+            if ! docker exec "$ctn" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+                break
+            fi
+            sleep 0.25
+        done
+        docker exec -d \
+            -e KRB5_KDC_DB=/tmp/principal \
+            -e KRB5_KDC_STASH=/tmp/stash \
+            -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+            -e KRB5_KDC_PROFILE=/tmp/z66-kdc.conf \
+            "$ctn" sh -c '/tmp/krb5-kadmind 127.0.0.1:749 >/tmp/kadmind-z66.log 2>&1'
+        local ok=0
+        for i in $(seq 1 40); do
+            if docker exec "$ctn" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',749),0.3)" 2>/dev/null; then
+                ok=1
+                break
+            fi
+            sleep 0.25
+        done
+        [ "$ok" = 1 ] || { docker exec "$ctn" sh -c 'echo ---- z66-kdc.conf ----; cat /tmp/z66-kdc.conf; echo ---- kadmind-z66.log ----; cat /tmp/kadmind-z66.log' >&2 || true; echo "Rust kadmind did not listen for z66" >&2; exit 1; }
+    fi
+}
+z66_profile "$NAME"
+z66_profile "$NAME_MIT"
+z66_restart "$NAME" rust
+z66_restart "$NAME_MIT" mit
+z66_leg() {
+    local ctn=$1 client=$2 conf=$3 leg=$4
+    docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+        -q 'addprinc -pw x z66' 2>&1 | grep -F 'Principal "z66@KERBER.TEST" created.'
+    local life
+    life="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+        -q 'getprinc z66' | grep '^Maximum ticket life:')"
+    echo "$leg: $life"
+    echo "$life" | grep -Fx 'Maximum ticket life: 1 day 00:00:00'
+    echo "$life" > "$SCRATCH/z66-$leg.txt"
+}
+z66_leg "$NAME" admin/admin /tmp/kadmin-krb5.conf rust
+z66_leg "$NAME_MIT" admin/admin /etc/krb5.conf mit
+diff "$SCRATCH/z66-rust.txt" "$SCRATCH/z66-mit.txt" || {
+    echo "Z6.6: getprinc z66 Maximum ticket life differs between the Rust kadmind and MIT kadmind" >&2
+    exit 1
+}
+
 log "kadmin.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"addprinc+cpw+get+list+mod+chrand+norandkey+lockdown+purgekeys+setstr+renprinc+del+alias"'
 exit 0
 

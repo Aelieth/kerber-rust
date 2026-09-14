@@ -153,6 +153,11 @@ this project uses semantic versioning once a crate is published.
   `ENCTYPE_NULL` and still emit NEEDED_PREAUTH; `add_etype_info` skips
   PA 19 when there is no key). diffsend `as-needpreauth-hints-unpermitted`
   (111 cases; hint types `[136, 16, 147, 133]`, no 2 / 19 / 151).
+- **kadmind.** Unset `kdc.conf` `max_life` is 24 h, like
+  `alt_prof.c:574-575` `GET_DELTAT_PARAM(…, 24 * 60 * 60)`. Before,
+  `Policy` and `KdcConf` defaulted to 10 h, so a bare `addprinc` showed
+  `Maximum ticket life: 0 days 10:00:00` whenever the relation was
+  omitted. Ledger: new A4 row `alt_prof.c:574-575` (452 rows, exact 357).
 - **kadmind.** RPC `kadm5_create_principal_3` honours the v3 `ks_tuple`
   array like `apply_keysalt_policy` (`svr_principal.c:444-447`): `addprinc
   -e` is the key list, else the bound policy's `allowed_keysalts`, else

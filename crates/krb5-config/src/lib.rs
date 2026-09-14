@@ -131,7 +131,7 @@ pub struct KdcConf {
     pub kdc_tcp_listen: Vec<String>,
     /// Realm name.
     pub realm: String,
-    /// Maximum ticket lifetime in seconds (default 10 hours).
+    /// Maximum ticket lifetime in seconds (default 1 day, `alt_prof.c`).
     pub max_life: u64,
     /// Maximum renewable lifetime in seconds (omitted = 0, `alt_prof.c:576-577`).
     pub max_renewable_life: u64,
@@ -202,7 +202,7 @@ impl Default for KdcConf {
             kdc_listen: vec!["127.0.0.1:88".into()],
             kdc_tcp_listen: vec!["127.0.0.1:88".into()],
             realm: "KERBER.TEST".into(),
-            max_life: 10 * 3600,
+            max_life: 24 * 3600,
             max_renewable_life: 0,
             database_name: None,
             acl_file: None,
