@@ -1,4 +1,6 @@
-//! Administration: kadmind, kadmin.local, kdb5_util, kpasswd, kprop.
+//! Administration: kadmind (kadm5 over ONC RPC `AUTH_GSSAPI`), kadmin.local,
+//! kdb5_util, kpasswd (RFC 3244 on 464), kprop / kpropd (dump v7 on 754) and
+//! iprop (`IPROP_GET_UPDATES` / `FULL_RESYNC`, `krb5-iprop-pull`), ktutil.
 //!
 //! The kadmind path enforces the KDC ACL. There is no C FFI.
 

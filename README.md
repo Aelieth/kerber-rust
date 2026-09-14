@@ -20,7 +20,7 @@ client (`kinit`), GSS-API, and the admin/propagation daemons (`kadmind`,
 
 | | |
 |---|---|
-| **v1.0.0** | Tagged interop milestone: the MIT 1.22.2 / Heimdal / Active Directory core, proven by 30+ content-asserting external gates in CI. `publish = false` (not on crates.io). |
+| **v1.0.0** | Tagged interop milestone: the MIT 1.22.2 / Heimdal / Active Directory core, proven by content-asserting external gates in CI (47 MIT-oracle gates per push, eight Samba/AD/Heimdal gates nightly — [docs/testing.md](docs/testing.md) § CI lanes). `publish = false` (not on crates.io). |
 | **v1.1** *(in progress)* | **General-purpose MIT completeness** — make the KDC *behave* like MIT across the board and stand alone as a client toolset. See the [roadmap](#roadmap-to-11). |
 
 **The one rule:** a feature is *done* only when a content-asserting gate
@@ -81,8 +81,9 @@ the harness `kdc.conf` sets 7d.
 ## Roadmap to 1.1
 
 A three-agent parity survey against MIT 1.22.2 found the core strong and
-interop-proven, but not yet 100%. **1.1 closes the gap** — nine phases, each
-gated against real MIT before it counts as done:
+interop-proven, but not yet 100%. **1.1 closes the gap** — nine feature
+phases and then a source-level parity sweep, each gated against real MIT
+before it counts as done:
 
 | Phase | Delivers |
 | --- | --- |
@@ -92,9 +93,10 @@ gated against real MIT before it counts as done:
 | **G4** | **iprop fidelity — landed.** Incremental kdbe carries string-attrs / history / policy / lockout; ulog persists across master restart. Gates: `iprop-gate`, `differential-gate` |
 | **G5** | **GSS breadth — landed.** Credential delegation, real SPNEGO negotiation, `wrap_iov`/`unwrap_iov` for NFSv4 `RPCSEC_GSS` / SSH / HTTP · *hard requirement*. Gate: `gss-gate` |
 | **G6** | **Client-side preauth & names — landed.** Wire PKINIT / SPAKE / FAST into `kinit`; NT-ENTERPRISE canonicalization. Gates: `rust-kinit-{fast,pkinit,spake,enterprise}-gate` |
-| **G7** | **Standalone user CLIs — landed.** `klist`, `kvno`, `kdestroy`, `kpasswd`, `kadmin`, `ktutil`. Gates: `client-gate`, `kpasswd-gate`, `kadmin-gate`, `ktutil-gate`. Harness still uses MIT `kinit`/`kvno` as the oracle (retiring that is not this cut) |
+| **G7** | **Standalone user CLIs — landed.** `klist`, `kvno`, `kdestroy`, `kpasswd`, `kadmin.local` (`krb5-kadmin-local`), `ktutil`. The remote `kadmin` client is deferred (W1-D, see CHANGELOG); `kadmin-gate` drives MIT `kadmin` against the Rust kadmind. Gates: `client-gate`, `kpasswd-gate`, `kadmin-gate`, `ktutil-gate`. Harness still uses MIT `kinit`/`kvno` as the oracle (retiring that is not this cut) |
 | **G8** | **ccache breadth — landed.** FILE/DIR/MEMORY/KCM; `KEYRING:` is rejected (`Unknown credential cache type`). Gates: `ccache-gate`, `kcm-gate` |
 | **G9** | **Config breadth — landed.** `[capaths]`, key `[libdefaults]` knobs, `include`/`includedir`. Gates: `capaths-transit-gate`, `knobs-gate`, `config-include-gate` |
+| **W1** | **MIT 1.22.2 parity sweep — closed.** KDC (`do_as_req`/`do_tgs_req`/`kdc_util`/`tgs_policy`/FAST/PAC), client library, acceptor and kadm5 graded function by function against MIT source in [docs/mit-parity-ledger.md](docs/mit-parity-ledger.md); every row is `exact`, `stricter-documented` ([docs/security.md](docs/security.md)), `deviation`, `deferred` with a named promotion oracle, or one of the two `absent` non-goals. Also landed on the way: anonymous PKINIT + `restrict_anonymous_to_tgt`, RFC 8070 PKINIT freshness, FAST hide-client-names, client-side S4U2Self/S4U2Proxy, `krb5-vfy-increds`, `krb5-kswitch`. Gates: `differential-gate` (110 same-bytes cases), `client-differential-gate`, `kadmin-gate`, `mit-fast-kdc-gate`, `kdcpolicy-gate`, `cross-kdc-gate` |
 
 G5 (GSS) is a hard requirement: kerber-rust is meant to host real client
 networks that already use SSH GSSAPI delegation, HTTP `Negotiate`, and NFSv4
@@ -103,6 +105,16 @@ a shim under `forbid(unsafe_code)`; the fleet default is FILE, see
 [docs/kcm-nfs-verdict.md](docs/kcm-nfs-verdict.md)), so `KEYRING:` is refused
 as an unknown cache type until then. Beyond 1.1 lies the pure-Rust KDC embed
 into [KLLDAP](docs/integration-klldap.md).
+
+### Non-goals for 1.1
+
+Stated up front so their absence is not read as a gap: OTP / SAM-2 preauth
+(PA-OTP over RADIUS), IAKERB, `KEYRING:` ccaches (post-embed), kdcproxy /
+MS-KKDCP, FIPS mode, MSLSA ccaches, `ksu` / `.k5login`, `kpropd` under
+inetd, `gss_wrap_size_limit`, dlopen plugins (plugins are Rust traits),
+db2 / LMDB / LDAP KDB backends, and master-key rollover. The two `absent`
+rows in the parity ledger are the first and the `gss_wrap_size_limit`
+entries of this list.
 
 ## Build and test
 
@@ -172,7 +184,7 @@ option. See [NOTICE](NOTICE) and [docs/export-control.md](docs/export-control.md
 Supply chain, all in the CI `audit` job: `cargo audit`, `cargo deny`,
 per-crate `cargo geiger` (`scripts/geiger.sh`, 0-unsafe product), and
 `cargo vet --locked`. MSRV is **1.95** (`package.rust-version`), edition
-**2024**, matching KLLDAP 0.7.5; `rasn` is unpinned (`0.28`, lock 0.28.14)
+**2024**, matching KLLDAP (checkout 0.7.4, upstream 0.7.6); `rasn` is unpinned (`0.28`, lock 0.28.14)
 with MIT golden DER as the byte-level net. See
 [docs/security.md](docs/security.md).
 

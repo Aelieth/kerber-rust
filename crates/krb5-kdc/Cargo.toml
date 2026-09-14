@@ -1,6 +1,6 @@
 [package]
 name = "krb5-kdc"
-description = "Pure-Rust Kerberos V5 KDC: AS/TGS issue, ACL admin, keytab export"
+description = "Pure-Rust Kerberos V5 KDC: AS/TGS issue, PKINIT/SPAKE/FAST preauth, PAC/S4U, dump-v7 KDB, ACL admin"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

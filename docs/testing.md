@@ -342,20 +342,46 @@ captured `host/svc` PAC server checksum is verified (usage 17). Skip
 cleanly without the keytab.
 
 MSRV is 1.95 (`package.rust-version`), edition 2024, matching KLLDAP
-0.7.5. The `msrv` CI job is `cargo test --workspace --locked` on that
-toolchain. `rasn` is unpinned (`0.28`); golden MIT DER is the protocol
-net if encodings drift. There is no unlocked `--locked` fallback.
-KLLDAP alignment: [`integration-klldap.md`](integration-klldap.md).
+(local checkout 0.7.4; upstream `Aelieth/klldap` 0.7.6). The `msrv` CI
+job is `cargo build --workspace --all-targets --locked` on that
+toolchain; the full `cargo test --workspace --locked` on MSRV is the
+`msrv-test` job of `full-test.yml` (nightly + `v*` tags). `rasn` is
+unpinned (`0.28`); golden MIT DER is the protocol net if encodings
+drift. There is no unlocked `--locked` fallback. KLLDAP alignment:
+[`integration-klldap.md`](integration-klldap.md).
 
-Era II gates. The harness CI job runs `kadmin-gate`, `kadmin-local-gate`, `policy-gate`, `history-mit-gate`, `kpasswd-gate`, `rust-kpasswd-mit-gate`, `ktutil-gate`, `mit-fast-kdc-gate`,
-`kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `iprop-gate`,
-`expire-gate`, `flags-gate`, `renew-gate`, `postdate-gate`, `getprivs-gate`, `prop-acl-gate`, `restart-gate`,
-`prod-gate`, `prod-realm-gate`, `stress-gate`, `chaos-gate`, `soak-gate`, `s4u-mit-gate`, `samba-ad-gate`, `ad-windows-gate`,
-`ad-s4u-gate`, `samba-pac-verify-gate`, `samba-pac-l2-gate`,
-`samba-crossrealm-gate`, `samba-realtrust-gate`, and `heimdal-gate` after `pkinit-gate`.
+### CI lanes (which job runs which gates)
+
+Per-push (`.github/workflows/ci.yml`, every job red-blocks except the
+three marked `continue-on-error`):
+
+| Job | Runs |
+| --- | --- |
+| `test` | `cargo fmt --check`, `cargo clippy --all-targets --all-features -D warnings`, `cargo nextest run --workspace --profile ci`, `cargo doc --no-deps` |
+| `msrv` | `cargo build --workspace --all-targets --locked` on Rust 1.95 |
+| `audit` | `cargo audit`, `cargo deny`, `scripts/geiger.sh` (per-crate `cargo geiger`, 0-unsafe product), `cargo vet --locked` |
+| `ledger-mit` | fetches the SHA-pinned MIT 1.22.2 source and runs `scripts/ci-policy.py` (ledger anchors, tally, proof column, evidence rules) |
+| `mit-image` | builds or restores `kerber-rust-mit-kdc:1.22.2` for the two gate jobs |
+| `harness` | `client-gate`, `ccache-gate`, `knobs-gate`, `config-include-gate`, `kdc-gate`, `store-gate`, `bidirectional-gate`, `gss-gate`, `pkinit-gate`, `kadmin-gate`, `policy-gate`, `history-mit-gate`, `kpasswd-gate`, `kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `rd-safe-oracle-gate`, `cross-kdc-gate`, `iprop-gate`, `expire-gate`, `kdcpolicy-gate`, `flags-gate`, `renew-gate`, `postdate-gate`, `getprivs-gate`, `prop-acl-gate`, `restart-gate`, `prod-gate`, `prod-realm-gate`; `sssd-renew-gate`, `kit-conformance-gate`, `gssproxy-gate`, `nfs-krb5p-gate` run under `skip2` (an honest `exit 2` = oracle absent is not red) |
+| `mit-extra` | `cross-realm-gate`, `capaths-transit-gate`, `capaths-compress-gate`, `spake-gate`, `rust-kinit-spake-gate`, `mit-fast-kdc-gate`, `rust-kinit-fast-gate`, `rust-kinit-pkinit-gate`, `rust-kinit-enterprise-gate`, `client-differential-gate`, `ktutil-gate`, `kadmin-local-gate`, `rust-kpasswd-mit-gate`, `sha2-gate`, `s4u-mit-gate`, `kcm-gate`, `rc4-session-gate` |
+| `slo` (`continue-on-error`) | `stress-gate` over `harness/prod` |
+| `chaos` (`continue-on-error`) | `chaos-gate` |
+| `soak` (`continue-on-error`) | `soak-gate` (short run) |
+
+Scheduled (a red is a red, but a push does not wait for it):
+
+| Workflow | Cadence | Runs |
+| --- | --- | --- |
+| `peers.yml` | nightly 06:12 UTC + manual | `samba-ad-gate`, `ad-windows-gate`, `ad-s4u-gate`, `samba-pac-verify-gate`, `samba-pac-l2-gate`, `samba-crossrealm-gate`, `samba-realtrust-gate`, `heimdal-gate` — every step `if: always()`, no `continue-on-error` |
+| `soak.yml` | nightly 05:47 UTC + manual | long `soak-gate` |
+| `fuzz.yml` | nightly 04:17 UTC + manual | `cargo +nightly fuzz run <target> -max_total_time=60` per target (9 targets) |
+| `kcm-opcode.yml` | nightly 07:18 UTC + manual | `kcm-opcode-gate` |
+| `full-test.yml` | nightly 05:27 UTC, `v*` tags, manual | `test-release` (release-profile tests) and `msrv-test` (`cargo test --workspace --locked` on 1.95) |
+
+Not in any workflow: `gss-sspi-gate.sh` (needs a Windows SSPI peer; exits
+2 without it) and `ad-mit-trust-gate.sh` (the retired MIT↔AD trust lab).
 `ad-*` are live Samba (`samba-ad-dc`), not the torn-down Windows DC.
-`heimdal-gate` is live Heimdal 7.8 both directions. `gss-sspi` exits 2
-when that oracle is absent.
+`heimdal-gate` is live Heimdal 7.8 both directions.
 
 - `scripts/samba-ad-gate.sh` — Samba 4 AD DC. The only `exit 0` is after a
   live `kinit`/`kvno`/`klist`. Missing docker, image, or KDC is `exit 2`

@@ -1,6 +1,6 @@
 [package]
 name = "krb5-protocol"
-description = "Kerberos V5 AS/TGS exchanges over UDP/TCP"
+description = "Kerberos V5 AS/TGS/AP/SAFE/PRIV exchanges, preauth padata, keytab and ccaches over UDP/TCP"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

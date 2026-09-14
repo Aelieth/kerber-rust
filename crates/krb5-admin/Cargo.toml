@@ -1,6 +1,6 @@
 [package]
 name = "krb5-admin"
-description = "kadmind, kadmin.local, kdb5_util, kpasswd, and kprop equivalents"
+description = "kadmind, kadmin.local, kdb5_util, kpasswd, kprop/kpropd, iprop, and ktutil equivalents"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

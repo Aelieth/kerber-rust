@@ -7,14 +7,14 @@ document is **Phase 1 only**: matching dependencies and toolchain so a
 future path-embed does not pull two generations of the same crate.
 The FFI replace is a later phase.
 
-Ground truth for shared versions is KLLDAP **0.7.5**
-(`/home/local/Projects/klldap/`, workspace version 0.7.4, edition 2024,
-`rust-version` 1.95.0). kerber-rust stays Apache-2.0 OR MIT;
+Ground truth for shared versions is the KLLDAP checkout at
+`/home/local/Projects/klldap/` (workspace version **0.7.4**; upstream
+`Aelieth/klldap` is at 0.7.6 — same edition 2024, `rust-version` 1.95.0). kerber-rust stays Apache-2.0 OR MIT;
 `publish = false`.
 
 ## Toolchain parity
 
-| Knob | kerber-rust | KLLDAP 0.7.5 |
+| Knob | kerber-rust | KLLDAP 0.7.4 (checkout) |
 | --- | --- | --- |
 | edition | 2024 | 2024 |
 | MSRV (`rust-version`) | 1.95 | 1.95.0 |

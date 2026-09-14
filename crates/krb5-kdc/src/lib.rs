@@ -1,5 +1,12 @@
-//! Pure-Rust Kerberos V5 KDC: AS/TGS issue, ACL-gated admin, keytab export.
+//! Pure-Rust Kerberos V5 KDC graded against MIT 1.22.2.
 //!
+//! AS/TGS issue (`issue`), preauth — PA-ENC-TIMESTAMP, encrypted challenge,
+//! PKINIT with RFC 8070 freshness and RFC 8062 anonymity, SPAKE, FAST
+//! (`preauth`), the kdcpreauth / kdcpolicy registries (`plugins`), PAC and
+//! S4U2Self / S4U2Proxy (`ad`), the MIT ISSUE tuple + audit plugin (`audit`),
+//! KDB traits and the in-memory store (`kdb`, `store`), `kdb5_util` dump v7
+//! at rest (`kdb_dump`, `persist`), master-key stash (`mkey`), the lookaside
+//! reply cache (`lookaside`), ACL-gated admin (`acl`) and keytab export.
 //! Ticket issuance, ACL checks, and keytab export are pure functions so tests
 //! do not need a bound socket. UDP/TCP 88 is a thin listener over
 //! [`handle_request`]. There is no C FFI.

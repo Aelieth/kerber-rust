@@ -210,6 +210,43 @@ this project uses semantic versioning once a crate is published.
   bodies corrected (exact 360, deviation 31). Units
   `z1b_preauth_filter.rs` (red at `7a44ef8`: 60 both),
   `z1b_wire_codes.rs` module cell; `differential-gate.sh` 110 cases green.
+- **docs (Z2 truth commit).** Ledger: the W1-Z audit's row list re-graded
+  — twelve unit-only or nonexistent-cell rows go `deferred` with the
+  oracle that promotes them (`tgs_policy.c` VALIDATE/RENEW/cross-realm
+  S4U/referral S4U2Proxy, `do_tgs_req.c:642/694`, `pac.c:640-673`
+  cross-KDC `TICKET_CHECKSUM`, `pkinit_srv.c:371-373` certauth, the
+  remaining AS order differences of `do_as_req.c:577-762`), the FAST
+  armor realm (`fast_util.c:62-67`) is `stricter-documented`,
+  `supported_enctypes` unset (four keys vs MIT's two) is a `deviation`,
+  `do_tgs_req.c:1103/1121` and `do_as_req.c:251-256` (`return_padata`,
+  forge-only) are `exact`, seven drifting
+  `check_tgs_constraints_skeleton:N` anchors lose their line numbers,
+  eight `deferred` rows re-home the W1-C kadm5 folds
+  (`kadm5_get_principal` TL > 255, `krb5_dbe_update_tl_data` order,
+  multi-put, `xdr_krb5_int16` TL width, `ulog_replay` skip-vs-fail,
+  `kdb5_util load` text, create-existing `KADM5_DUP`, `check_1_6_dummy`);
+  header gains the dual-verdict counting rule and the `forge-only`
+  annotation rule; `absent` = the two non-goals. Counts 447 = A1 128 +
+  A2 91 + A3 78 + A4 145 + B1 5; exact 354 · stricter-documented 15 ·
+  deviation 28 · absent 2 · deferred 48. `security.md`: TGS AP-REQ,
+  PA-ENC-TIMESTAMP and encrypted-challenge replay rows; FAST TGS envelope
+  row rewritten for `29a5ec8`; FAST armor realm STRICTER; `s4u_allowed_*`
+  paragraph points at the KLLDAP embed; stale `min_life is W1` /
+  `Extraneous flags stay unchecked` gone. `stages.md`: the eight
+  Samba/AD/Heimdal gates are `peers.yml` nightly, `stress`/`chaos`/`soak`
+  laned, the panic-deny claim names the three crates without it, a W1
+  section. `README.md`: no remote `kadmin`, a W1 roadmap row, the
+  non-goals list, gate count, KLLDAP 0.7.4/0.7.6. `interop-matrix.md`:
+  four missing gate rows (`rd-safe-oracle`, `cross-kdc`, `kdcpolicy`,
+  `rc4-session`), Heimdal cell asserts only what the gate asserts, `soak`
+  lane, `ad-mit-trust` never invoked, PKINIT/FAST rows carry the
+  freshness / anonymous / `edwards25519` cells. `testing.md`: the CI lane
+  table (every `ci.yml` job and scheduled workflow → gates), `msrv` job is
+  `cargo build --all-targets`. `rfc-mapping.md`: RFC 8070 and RFC 8062
+  rows. The two CHANGELOG bullets `500acf4` / `0c153f3` had missed are
+  under W1-A′-4. `krb5-kdc` / `krb5-admin` / `krb5-protocol` `//!` headers
+  and `Cargo.toml` descriptions name their current modules (kpropd +
+  iprop included).
 
 ### W1-C
 
@@ -462,6 +499,27 @@ this project uses semantic versioning once a crate is published.
   keep the real client.
 - **client.** `kinit -n` sends unsigned PKINIT and verifies
   `PA-PKINIT-KX`.
+- **kdc / client.** RFC 8070 PKINIT freshness (`500acf4`): the KDC mints
+  `PA-AS-FRESHNESS` (padata 150, ku 514 over the krbtgt key,
+  `FRESHNESS_LIFETIME` 600 s like `kdc_preauth.c:91`) into the
+  preauth-required METHOD-DATA when the request advertised 150
+  (`kdc_preauth.c:826-871`) and checks the echoed token inside the
+  AuthPack; with
+  `pkinit_require_freshness = true` a stale or missing token is 24 with
+  the log `no freshness token, rejecting`, a good one logs `freshness
+  token received`. The Rust `kinit` echoes the token. Gates:
+  `pkinit-gate.sh` `require_freshness: MIT kinit -X vs rust KDC`,
+  `rust-kinit-pkinit-gate.sh` `require_freshness: rust kinit vs MIT KDC`;
+  diffsend `pkinit-stale-freshness`.
+- **kdc / client.** SPAKE `verify_support` (`0c153f3`): a PA-SPAKE support
+  message that offers no group in `spake_preauth_groups` is 24 like MIT
+  (the MIT client's default `edwards25519` against a P-256-only KDC is 24
+  on both legs — pinning the MIT client to P-256 had hidden that); the
+  Rust client armors **every** TGS-REQ with the TGT like MIT `send_tgs`
+  (random subkey, `krb_fx_cf2` `subkeyarmor`/`ticketarmor`) and requires
+  the finished message inside a present envelope. Gates:
+  `mit-fast-kdc-gate.sh` `default-client edwards25519 vs P-256 KDC is 24
+  both`, `rust-kinit-fast-gate.sh` strengthen-key cells.
 - **test.** Diffsend 102 → 105 (`as-anonymous-unsigned-authpack-named-client`,
   `as-fast-hide-error-client`, `tgs-fast-hide-client`). `pkinit-gate.sh` / `rust-kinit-pkinit-gate.sh`
   `kinit -n` + `restrict_anon` `kvno`. Unit-test scratch stays off host
