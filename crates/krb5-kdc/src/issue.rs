@@ -249,17 +249,41 @@ fn as_reply(
             ),
             Some(d).filter(|s| !s.is_empty()),
         )),
+        // do_as_req.c:346-347: an error that set no status of its own is
+        // `UNKNOWN_REASON` (the lookups label theirs in `lookup_as_princ`).
         Err(e) => Ok((
             encode_krb_error(
                 store,
                 err::GENERIC,
-                Some(status::LOOKING_UP_CLIENT),
+                Some(status::UNKNOWN_REASON),
                 None,
                 body,
                 hide,
             ),
             Some(e.to_string()).filter(|s| !s.is_empty()),
         )),
+    }
+}
+
+/// MIT `do_as_req.c:577-607`: `KRB5_KDB_CANTLOCK_DB` on the client or the
+/// server lookup is 29 `SVC_UNAVAILABLE` with no status; any other backend
+/// fault is 60 under the lookup's own status word (`LOOKING_UP_CLIENT`,
+/// `LOOKING_UP_SERVER`) with the fault text in the log detail. A backend that
+/// signals `CANTLOCK` does so as a 29 `Error::Protocol`, passed through.
+fn lookup_as_princ(
+    store: &dyn PrincipalRead,
+    name: &PrincipalName,
+    looking_up: &'static str,
+) -> Result<Option<crate::store::Principal>, Error> {
+    match store.fetch_name(name) {
+        Ok(v) => Ok(v),
+        Err(e @ Error::Protocol { code, .. }) if code == err::SVC_UNAVAILABLE => Err(e),
+        Err(e) => Err(Error::Protocol {
+            code: err::GENERIC,
+            text: Some(looking_up.to_owned()),
+            e_data: None,
+            detail: Some(e.to_string()),
+        }),
     }
 }
 
@@ -380,8 +404,7 @@ fn issue_as_body(
         .cname
         .clone()
         .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, status::NULL_CLIENT))?;
-    let client = store
-        .fetch_name(&req_cname)?
+    let client = lookup_as_princ(store, &req_cname, status::LOOKING_UP_CLIENT)?
         .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, status::CLIENT_NOT_FOUND))?;
     let mut cname = if req_cname.name_type == PrincipalName::NT_ENTERPRISE
         || body.kdc_options.bit(flag_bit::CANONICALIZE)
@@ -394,8 +417,7 @@ fn issue_as_body(
         .sname
         .clone()
         .unwrap_or_else(|| PrincipalName::krbtgt(store.realm()));
-    let server = store
-        .fetch_name(&sname)?
+    let server = lookup_as_princ(store, &sname, status::LOOKING_UP_SERVER)?
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::SERVER_NOT_FOUND))?;
     // MIT validate_as_request runs after the client/server lookups and before
     // preauth (do_as_req.c:630 precedes check_padata at :758).

@@ -266,17 +266,15 @@ impl KdcPreauth for EncTsMod {
         // non-permitted enctypes (:60-61, :82-86) — a timestamp under a
         // retired kvno's key (a stale keytab) never decrypts. A miss is
         // KRB5_KDB_NO_MATCHING_KEY, remapped to KRB5KDC_ERR_PREAUTH_FAILED
-        // (24) at :113-114; KRB5_KDB_NO_PERMITTED_KEY is not remapped and
-        // leaves the KDC as 60 GENERIC with the PREAUTH_FAILED status. An
+        // (24) at :113-114; KRB5_KDB_NO_PERMITTED_KEY (a declared etype
+        // outside permitted_enctypes, :60-61) is not remapped here but is
+        // not a pass-through code either, so `filter_preauth_error`
+        // (kdc_preauth.c:1092-1133) makes it the same 24 on the wire. An
         // unknown etype matches no key.
         let policy = store.policy();
         let top = client.keys.iter().map(|k| k.kvno).max();
-        let mut no_permitted = false;
         let keys: Vec<_> = match krb5_crypto::EncryptionType::known(enc.etype) {
-            Ok(pa_et) if !policy.etype_permitted(pa_et) => {
-                no_permitted = true;
-                Vec::new()
-            }
+            Ok(pa_et) if !policy.etype_permitted(pa_et) => Vec::new(),
             Ok(pa_et) => client
                 .keys
                 .iter()
@@ -297,11 +295,7 @@ impl KdcPreauth for EncTsMod {
         store.record_as_outcome(cname, false);
         Err(last_err.unwrap_or_else(|| {
             crate::preauth::proto(
-                if no_permitted {
-                    krb5_types::err::GENERIC
-                } else {
-                    krb5_types::err::PREAUTH_FAILED
-                },
+                krb5_types::err::PREAUTH_FAILED,
                 crate::status::PREAUTH_FAILED,
             )
         }))
@@ -588,13 +582,99 @@ pub fn run_as_preauth(
     cname: &PrincipalName,
 ) -> Result<Option<PreauthAction>, Error> {
     for m in preauth_modules() {
-        if let Some(a) = m.process_as(
+        match m.process_as(
             store, client, padata, ikey, etype, as_req_der, body_der, cname,
-        )? {
-            return Ok(Some(a));
+        ) {
+            Ok(Some(a)) => return Ok(Some(a)),
+            Ok(None) => {}
+            Err(e) => return Err(filter_preauth_error(e)),
         }
     }
     Ok(None)
+}
+
+/// MIT `filter_preauth_error` (`kdc_preauth.c:1092-1133`), applied where
+/// `finish_check_padata` applies it (`:1206`): a module failure keeps its
+/// code only when it is on the pass-through list; anything else — a KDB
+/// code such as `KRB5_KDB_NO_PERMITTED_KEY`, an ASN.1 or crypto failure, 90
+/// `PREAUTH_EXPIRED` — reaches the client as 24 `PREAUTH_FAILED`. Whatever
+/// the code, the status word is the `PREAUTH_FAILED` `finish_preauth` sets
+/// for every module failure (`do_as_req.c:442`), so the e_text is too. The
+/// module's e-data rides along (`:1194-1196`), and the original failure
+/// stays in the log detail. 34 `REPEAT` is the
+/// documented R2-D1 exception (the replay cache answers before the filter
+/// would run); FAST errors never pass here (`FastMod::process_as` is a
+/// no-op, `kdc_find_fast` is not a module in MIT either).
+pub(crate) fn filter_preauth_error(e: Error) -> Error {
+    use krb5_types::err;
+    const PASS_THROUGH: &[i32] = &[
+        err::BAD_INTEGRITY,
+        err::SKEW,
+        err::PREAUTH_REQUIRED,
+        err::ETYPE_NOSUPP,
+        // rfc 4556
+        err::CLIENT_NOT_TRUSTED,
+        err::INVALID_SIG,
+        err::DH_KEY_PARAMETERS_NOT_ACCEPTED,
+        70, // CANT_VERIFY_CERTIFICATE
+        71, // INVALID_CERTIFICATE
+        72, // REVOKED_CERTIFICATE
+        73, // REVOCATION_STATUS_UNKNOWN
+        75, // CLIENT_NAME_MISMATCH
+        77, // INCONSISTENT_KEY_PURPOSE
+        78, // DIGEST_IN_CERT_NOT_ACCEPTED
+        79, // PA_CHECKSUM_MUST_BE_INCLUDED
+        80, // DIGEST_IN_SIGNED_DATA_NOT_ACCEPTED
+        81, // PUBLIC_KEY_ENCRYPTION_NOT_SUPPORTED
+        // earlier drafts of what became rfc 4556
+        66, // CERTIFICATE_MISMATCH
+        63, // KDC_NOT_TRUSTED
+        74, // REVOCATION_STATUS_UNAVAILABLE
+        // pkinit alg-agility
+        100, // NO_ACCEPTABLE_KDF
+        // rfc 6113
+        err::MORE_PREAUTH_DATA_REQUIRED,
+        // R2-D1 (docs/security.md replay row): not in MIT's list
+        err::REPEAT,
+    ];
+    match e {
+        Error::PreauthRequired { .. } => e,
+        Error::Protocol {
+            code,
+            text,
+            e_data,
+            detail,
+        } => {
+            let wire = if code == err::PREAUTH_FAILED || PASS_THROUGH.contains(&code) {
+                code
+            } else {
+                err::PREAUTH_FAILED
+            };
+            // The module's own status word and any code the filter rewrote
+            // survive in the log detail (MIT syslogs "preauth (%s) verify
+            // failure: %s", kdc_preauth.c:1224-1226).
+            let why = text.filter(|t| t != status::PREAUTH_FAILED);
+            let detail = match (why, detail, wire == code) {
+                (None, d, true) => d,
+                (Some(w), Some(d), _) => Some(format!("preauth verify failure: {w} ({code}): {d}")),
+                (Some(w), None, _) => Some(format!("preauth verify failure: {w} ({code})")),
+                (None, Some(d), false) => Some(format!("preauth verify failure ({code}): {d}")),
+                (None, None, false) => Some(format!("preauth verify failure ({code})")),
+            };
+            Error::Protocol {
+                code: wire,
+                text: Some(status::PREAUTH_FAILED.to_owned()),
+                e_data,
+                detail,
+            }
+        }
+        other => Error::Protocol {
+            code: err::PREAUTH_FAILED,
+            text: Some(status::PREAUTH_FAILED.to_owned()),
+            e_data: None,
+            detail: Some(format!("preauth verify failure: {other}")),
+        },
+    }
 }
 
 /// MIT `check_kdcpolicy_as/tgs` lifetime rewrite (`policy.c:91-99`).

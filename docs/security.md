@@ -101,6 +101,20 @@ verify failure is logged at `info` (`outcome = "denied"`), MIT's
 `LOG_INFO "preauth (%s) verify failure"` (`kdc_preauth.c:1224-1228`);
 the KDC's own faults stay `error`.
 
+A kdcpreauth module failure leaves the KDC through MIT's
+`filter_preauth_error` (`kdc_preauth.c:1092-1133`, applied where
+`finish_check_padata` applies it): the code reaches the client only when
+it is on the pass-through list (31, 37, 25, 14, the RFC 4556 codes, 100,
+91); anything else — a KDB code such as `KRB5_KDB_NO_PERMITTED_KEY` for
+a timestamp under an enctype outside `permitted_enctypes`, an ASN.1 or
+crypto failure, 90 — is 24 `PREAUTH_FAILED`, indistinguishable from a
+wrong password, and the e_text is the `PREAUTH_FAILED` status
+`finish_preauth` sets for every module failure (`do_as_req.c:442`). The
+module's own status word and the rewritten code stay in the log detail.
+The one addition to MIT's list is 34 `REPEAT` (the PA-ENC-TIMESTAMP replay
+row above, R2-D1): a replayed enc-ts / enc-challenge blob is still refused as a
+replay, not reported as a wrong password.
+
 The master-key stash `.k5.REALM` is a FILE keytab with one `K/M@REALM`
 entry (etype and kvno embedded, MIT `krb5_def_store_mkey_list`); loading reads
 the keytab first, then a legacy raw-key stash, rewriting it in keytab format on

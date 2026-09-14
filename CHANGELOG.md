@@ -178,7 +178,38 @@ this project uses semantic versioning once a crate is published.
   faults stay `error`. `scripts/kdc-gate.sh:411` had a malformed JSON
   literal. Ledger: a new A2 `kdc_util.c:691-697` row (exact, latent),
   `kdc_preauth.c:1224-1228` and the add/delete ACL denial row → exact
-  (439 rows, exact 356, deviation 32).
+  (439 rows, exact 356, deviation 32). Follow-up: the AS client and
+  server lookups are labelled like `do_as_req.c:577-607` — a backend's
+  `CANTLOCK_DB` (a 29 `Error::Protocol`) passes through on either
+  lookup, any other backend fault is 60 `LOOKING_UP_CLIENT` /
+  `LOOKING_UP_SERVER` with the fault text in the log detail, and an
+  error that set no status of its own is `UNKNOWN_REASON`
+  (`:346-347`); before, every post-decode fault in the AS was labelled
+  `LOOKING_UP_CLIENT`. No in-tree store faults a lookup; the unit
+  wraps one. Ledger `do_as_req.c:588-590`, `:604-606`,
+  `:579-580,598-599` absent → exact (exact 359, absent 5).
+- **kdc (fix, CI 550-552 red).** `differential-gate.sh`
+  `as-optimistic-encts-wrong-etype` — a PA-ENC-TIMESTAMP declaring des3
+  against the harness profile's aes-only `permitted_enctypes` — has
+  been 60 on the Rust leg since Z1.4 (`59c363b`), 24 on MIT. The Z1.4
+  comment had `KRB5_KDB_NO_PERMITTED_KEY` "not remapped, a KDB code →
+  60": `enc_ts_verify` indeed remaps only `NO_MATCHING_KEY`
+  (`kdc_preauth_encts.c:113-114`), but every kdcpreauth failure then
+  passes `filter_preauth_error` (`kdc_preauth.c:1092-1133`, at `:1206`),
+  which turns any code off its pass-through list into 24. That filter
+  now exists at the module boundary (`plugins.rs run_as_preauth` →
+  `filter_preauth_error`): the list verbatim (31, 37, 25, 14, the RFC
+  4556 codes 62-66/70-75/77-81, 100, 91) plus 34 `REPEAT` as the
+  documented R2-D1 exception; anything else, and any non-protocol module
+  error, is 24; the e_text is always the `PREAUTH_FAILED` status
+  `finish_preauth` sets (`do_as_req.c:442`), with the module's own status
+  word and the rewritten code in the log detail. `PreauthAction` is
+  exported (a `KdcPreauth` implementation outside the crate could not
+  name its own return type). Ledger `do_as_req.c:439-442` deviation →
+  exact, `kdc_preauth_encts.c:47-118` and `kdc_preauth.c:1092-1133`
+  bodies corrected (exact 360, deviation 31). Units
+  `z1b_preauth_filter.rs` (red at `7a44ef8`: 60 both),
+  `z1b_wire_codes.rs` module cell; `differential-gate.sh` 110 cases green.
 
 ### W1-C
 
