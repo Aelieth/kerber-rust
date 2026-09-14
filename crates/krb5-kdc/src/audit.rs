@@ -748,17 +748,20 @@ fn decrypt_issued(store: &dyn PrincipalRead, ticket: &Ticket) -> Option<EncTicke
         .fetch(&lookup_principal_id(&ticket.sname, &realm))
         .ok()
         .flatten()?;
-    ticket_key(&princ, ticket.enc_part.etype).and_then(|k| decrypt_ticket_part(&k.key, ticket).ok())
+    ticket_key(&princ, ticket.enc_part.etype, store.policy())
+        .and_then(|k| decrypt_ticket_part(&k.key, ticket).ok())
 }
 
-fn ticket_key(princ: &Principal, etype: i32) -> Option<&crate::store::KeyEntry> {
+fn ticket_key<'a>(
+    princ: &'a Principal,
+    etype: i32,
+    policy: &crate::store::Policy,
+) -> Option<&'a crate::store::KeyEntry> {
     let want = EncryptionType::known(etype).ok();
-    princ
-        .keys
-        .iter()
-        .filter(|k| princ.keys.iter().map(|x| x.kvno).max() == Some(k.kvno))
-        .find(|k| want.is_some_and(|e| k.etype == e))
-        .or_else(|| princ.first_current_key())
+    policy
+        .find_enctype(princ, want, 0)
+        .ok()
+        .or_else(|| policy.first_current_key(princ).ok())
 }
 
 fn tgs_header_tkt_id(req: &TgsReq) -> Option<String> {
@@ -787,7 +790,7 @@ fn tgs_header_authtime(store: &dyn PrincipalRead, req: &TgsReq) -> u32 {
     let Some(tgt) = store.fetch_krbtgt().ok().flatten() else {
         return 0;
     };
-    let Some(key) = ticket_key(&tgt, ap.ticket.enc_part.etype) else {
+    let Some(key) = ticket_key(&tgt, ap.ticket.enc_part.etype, store.policy()) else {
         return 0;
     };
     decrypt_ticket_part(&key.key, &ap.ticket)
@@ -819,7 +822,7 @@ fn header_cname(store: &dyn PrincipalRead, req: &TgsReq) -> Option<PrincipalName
         .find(|p| p.padata_type == pa::TGS_REQ)?;
     let ap: krb5_types::ApReq = decode(pa.padata_value.as_ref()).ok()?;
     let tgt = store.fetch_krbtgt().ok().flatten()?;
-    let key = ticket_key(&tgt, ap.ticket.enc_part.etype)?;
+    let key = ticket_key(&tgt, ap.ticket.enc_part.etype, store.policy())?;
     Some(decrypt_ticket_part(&key.key, &ap.ticket).ok()?.cname)
 }
 

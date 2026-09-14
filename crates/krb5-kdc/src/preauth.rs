@@ -16,7 +16,7 @@ use krb5_types::{
 use crate::error::Error;
 use crate::kdb::{PrincipalRead, lookup_principal_id};
 use crate::status;
-use crate::store::Principal;
+use crate::store::{KeyLookup, Principal};
 
 pub(crate) struct FastOk {
     pub armor_key: ProtocolKey,
@@ -192,6 +192,30 @@ fn verify_fast_req_checksum(
     Ok(())
 }
 
+/// MIT `krb5_ktkdb_get_entry` key pick (`lib/kdb/keytab.c:152-178`).
+fn armor_ticket_key(
+    store: &dyn PrincipalRead,
+    p: &Principal,
+    ticket: &krb5_types::Ticket,
+) -> Result<ProtocolKey, Error> {
+    let kvno = ticket.enc_part.kvno.unwrap_or(0);
+    let tkt_etype = EncryptionType::from_iana(ticket.enc_part.etype)
+        .or_else(|_| EncryptionType::known(ticket.enc_part.etype))
+        .ok();
+    let xrealm = p.name.is_krbtgt() && !p.name.is_krbtgt_for(store.realm());
+    let search = if xrealm { tkt_etype } else { None };
+    match store.policy().find_enctype(p, search, kvno) {
+        Ok(k) => {
+            if !xrealm && tkt_etype.is_some_and(|e| e != k.etype) {
+                return Err(proto_fast(err::GENERIC, "FAST armor TGT"));
+            }
+            Ok(k.key.clone())
+        }
+        Err(KeyLookup::NoPermittedKey) => Err(proto_fast(err::GENERIC, "FAST armor TGT")),
+        Err(KeyLookup::NoMatchingKey) => Err(proto_fast(err::BADKEYVER, "FAST armor TGT")),
+    }
+}
+
 fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<ProtocolKey, Error> {
     let ap: krb5_types::ApReq = decode(ap_raw)?;
     let tkt_usage = KeyUsage::new(ku::TICKET)?;
@@ -206,16 +230,18 @@ fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<Protoco
     let Some(p) = store.fetch_name(&ap.ticket.sname)? else {
         return Err(proto_fast(err::NOT_US, "FAST armor TGT"));
     };
-    let mut enc_tkt: Option<krb5_types::EncTicketPart> = None;
-    for k in &p.keys {
-        if let Ok(plain) = decrypt(&k.key, tkt_usage, cipher)
-            && let Ok(part) = decode::<krb5_types::EncTicketPart>(&plain)
-        {
-            enc_tkt = Some(part);
-            break;
-        }
-    }
-    let enc_tkt = enc_tkt.ok_or_else(|| proto_fast(err::BAD_INTEGRITY, "FAST armor TGT"))?;
+    // MIT `krb5_rd_req` → KDB keytab `krb5_ktkdb_get_entry` (`keytab.c:157-163`):
+    // `krb5_dbe_find_enctype(entry, xrealm ? etype : -1, -1, kvno)` pins the
+    // ticket kvno and skips non-permitted enctypes. A local TGS then fails
+    // `krb5_c_enctype_compare` (`:171-178`) as `KRB5_KDB_NO_PERMITTED_KEY`
+    // (wire 60 via `errcode_to_protocol`). `NO_MATCHING_KEY` becomes
+    // `KRB5_KT_KVNONOTFOUND` → `BADKEYVER` 44 (`rd_req_dec.c:137-147`).
+    let key = armor_ticket_key(store, &p, &ap.ticket)?;
+    let enc_tkt = match decrypt(&key, tkt_usage, cipher) {
+        Ok(plain) => decode::<krb5_types::EncTicketPart>(&plain)
+            .map_err(|_| proto_fast(err::BAD_INTEGRITY, "FAST armor TGT"))?,
+        Err(_) => return Err(proto_fast(err::BAD_INTEGRITY, "FAST armor TGT")),
+    };
     if enc_tkt.flags.invalid() {
         return Err(proto_fast(err::TKT_NYV, "FAST armor INVALID"));
     }

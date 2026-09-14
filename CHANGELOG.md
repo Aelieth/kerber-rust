@@ -123,6 +123,23 @@ this project uses semantic versioning once a crate is published.
   Ledger: two A2 rows (`kdb_default.c:47-94`, `do_as_req.c:104-130`),
   436 rows, exact 350; the `kdc_preauth_encts.c:47-118` row names the
   top-kvno search.
+- **kdc.** FAST armor-TGT decrypt is MIT `krb5_ktkdb_get_entry`
+  (`keytab.c:152-178`, reached from `armor_ap_request` at
+  `fast_util.c:52-54`): `krb5_dbe_find_enctype(entry, xrealm ? etype : -1,
+  -1, kvno)` pins the ticket kvno and skips non-permitted enctypes; a
+  local TGS whose first permitted key is not similar to the ticket etype
+  is `KRB5_KDB_NO_PERMITTED_KEY` → wire 60 `FIND_FAST`. Before,
+  `armor_key_from_ap` walked every krbtgt key unfiltered, so an
+  aes128-sealed armor TGT still decrypted when `permitted_enctypes`
+  was aes256-only and a ticket labelled kvno N sealed under N+1 was
+  accepted. The PAC `key_history` fallback (`ad.rs`) and the audit
+  `ticket_key` helper now go through `Policy::find_enctype` /
+  `etype_permitted` as well. `rc4-session-gate.sh` G: both KDCs under
+  `permitted_enctypes = aes256-cts-hmac-sha1-96`, MIT `kinit -T` with an
+  aes128-resealed armor TGT is `kinit: Generic error (see e-text) while
+  getting initial credentials` on both legs (wire 60; units pin
+  `FIND_FAST`); the unforged aes256 TGT still armors. Ledger: new A3 row
+  `keytab.c:152-178` (449 rows, exact 353).
 - **kadmind.** The AUTH_GSSAPI `GSSAPI_INIT` arg-version switch is MIT's
   (`svc_auth_gssapi.c:326-341`): versions 1 and 2 are answered with
   `init_res.version` 1 and a "Accepted old RPC protocol request" warning,

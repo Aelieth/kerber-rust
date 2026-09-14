@@ -84,7 +84,7 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
-cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-kdb \
+cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-kdb --bin krb5-forge-tgt --bin krb5-pac-extract \
     -p krb5-admin --bin krb5-kadmin-local \
     -p krb5-client --bin krb5-kinit --bin krb5-kvno --bin krb5-klist -q
 
@@ -183,7 +183,9 @@ docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmin-local" "$NAME":/tmp/krb
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kinit" "$NAME":/tmp/krb5-kinit
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kvno" "$NAME":/tmp/krb5-kvno
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-klist" "$NAME":/tmp/krb5-klist
-docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kadmin-local /tmp/krb5-kinit /tmp/krb5-kvno /tmp/krb5-klist
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-forge-tgt" "$NAME":/tmp/krb5-forge-tgt
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-pac-extract" "$NAME":/tmp/krb5-pac-extract
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kadmin-local /tmp/krb5-kinit /tmp/krb5-kvno /tmp/krb5-klist /tmp/krb5-forge-tgt /tmp/krb5-pac-extract
 
 docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
@@ -556,5 +558,100 @@ echo "stale keytab (kvno 2 kept, kvno 3 current): rust=$F_RUST"
 docker cp "$NAME":/tmp/mit-kdc-e.log "$OUT/mit-kdc-e.log" 2>/dev/null || true
 docker cp "$NAME":/tmp/rust-kdc-e.log "$OUT/rust-kdc-e.log" 2>/dev/null || true
 
-log "rc4.session" "ok" ',"mit_vs_rust":"kinit+kvno","rust_vs_mit":"kinit+kvno","skey":"arcfour-hmac","kvno_rc":0,"kdcdefaults_allow_rc4":"ignored","permitted_enctypes_key_lookup":"aes256 both, FINDING_SERVER_KEY both","stale_keytab":"Password incorrect (24) both"'
+echo "==== G) FAST armor TGT under a non-permitted etype (krb5_dbe_find_enctype) ===="
+# Z6.1. MIT `armor_ap_request` (`fast_util.c:52-54`) calls `krb5_rd_req` with
+# the KDB keytab; `krb5_ktkdb_get_entry` (`keytab.c:157`) is
+# `krb5_dbe_find_enctype(entry, xrealm ? etype : -1, -1, kvno)` and then a
+# similar-enctype check (`:171-178`). Both KDCs still have
+# `permitted_enctypes = aes256-cts-hmac-sha1-96` from cell E. Give krbtgt a
+# current kvno that also holds aes128, mint a real TGT (aes256), reseal it
+# under the leftover aes128 key with `krb5-forge-tgt`, and drive MIT
+# `kinit -T` against both KDCs. The walk that accepted any key would issue;
+# MIT's pick is `KRB5_KDB_NO_PERMITTED_KEY` → wire 60 `FIND_FAST`.
+docker exec "$NAME" kadmin.local -q \
+    'cpw -randkey -keepold -e aes256-cts-hmac-sha1-96:normal,aes128-cts-hmac-sha1-96:normal krbtgt/KERBER.TEST'
+docker exec \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
+    -e KRB5_CONFIG=/etc/krb5.conf \
+    "$NAME" /tmp/krb5-kadmin-local -q \
+    'cpw -randkey -keepold -e aes256-cts-hmac-sha1-96:normal,aes128-cts-hmac-sha1-96:normal krbtgt/KERBER.TEST'
+docker exec "$NAME" kadmin.local -q 'getprinc krbtgt/KERBER.TEST' \
+    | grep -E '^Key: vno' | tee "$OUT/mit-getprinc-z61-krbtgt.txt"
+docker exec \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
+    -e KRB5_CONFIG=/etc/krb5.conf \
+    "$NAME" /tmp/krb5-kadmin-local -q 'getprinc krbtgt/KERBER.TEST' \
+    | grep -E '^Key: vno' | tee "$OUT/rust-getprinc-z61-krbtgt.txt"
+grep -q 'aes128-cts-hmac-sha1-96' "$OUT/mit-getprinc-z61-krbtgt.txt" \
+    || die "G) MIT krbtgt has no aes128 key after cpw"
+grep -q 'aes128-cts-hmac-sha1-96' "$OUT/rust-getprinc-z61-krbtgt.txt" \
+    || die "G) Rust krbtgt has no aes128 key after cpw"
+docker exec "$NAME" kadmin.local -q 'ktadd -norandkey -k /tmp/g-mit-krbtgt.kt krbtgt/KERBER.TEST' \
+    || die "G) MIT ktadd -norandkey krbtgt failed"
+docker exec \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
+    -e KRB5_CONFIG=/etc/krb5.conf \
+    "$NAME" /tmp/krb5-kadmin-local -q 'ktadd -norandkey -k /tmp/g-rust-krbtgt.kt krbtgt/KERBER.TEST' \
+    || die "G) Rust ktadd -norandkey krbtgt failed"
+G_MIT_AES128="$(docker exec "$NAME" /tmp/krb5-pac-extract --dump-keytab /tmp/g-mit-krbtgt.kt \
+    | awk '$1=="KEY" && $2=="17" {hex=$3; kv=$NF} END {print hex}')"
+G_RUST_AES128="$(docker exec "$NAME" /tmp/krb5-pac-extract --dump-keytab /tmp/g-rust-krbtgt.kt \
+    | awk '$1=="KEY" && $2=="17" {hex=$3; kv=$NF} END {print hex}')"
+[ "${#G_MIT_AES128}" -eq 32 ] || die "G) MIT krbtgt has no 16-byte aes128 key: '$G_MIT_AES128'"
+[ "${#G_RUST_AES128}" -eq 32 ] || die "G) Rust krbtgt has no 16-byte aes128 key: '$G_RUST_AES128'"
+g_kinit_src() {
+    local conf=$1 cc=$2
+    docker exec -e KRB5_CONFIG="$conf" "$NAME" \
+        sh -c "printf '%s\n' userpassword | kinit -c $cc user@KERBER.TEST" 2>&1
+}
+g_kinit_src /etc/krb5.conf /tmp/g-mit-src.cc >/dev/null \
+    || die "G) MIT kinit source TGT failed"
+g_kinit_src /tmp/krb5-8888.conf /tmp/g-rust-src.cc >/dev/null \
+    || die "G) Rust kinit source TGT failed"
+docker exec "$NAME" /tmp/krb5-forge-tgt \
+    --ccache /tmp/g-mit-src.cc --out /tmp/g-mit-armor.cc \
+    --tgt krbtgt/KERBER.TEST --claim-realm KERBER.TEST \
+    --decrypt-keytab /tmp/g-mit-krbtgt.kt --reseal-key-hex "$G_MIT_AES128" \
+    || die "G) forge MIT aes128 armor TGT failed"
+docker exec "$NAME" /tmp/krb5-forge-tgt \
+    --ccache /tmp/g-rust-src.cc --out /tmp/g-rust-armor.cc \
+    --tgt krbtgt/KERBER.TEST --claim-realm KERBER.TEST \
+    --decrypt-keytab /tmp/g-rust-krbtgt.kt --reseal-key-hex "$G_RUST_AES128" \
+    || die "G) forge Rust aes128 armor TGT failed"
+g_kinit_t() {
+    local conf=$1 armor=$2 cc=$3 out rc
+    set +e
+    out="$(docker exec -e KRB5_CONFIG="$conf" "$NAME" \
+        sh -c "printf '%s\n' userpassword | kinit -T $armor -c $cc user@KERBER.TEST" 2>&1)"
+    rc=$?
+    set -e
+    printf '%s\n' "$out"
+    return "$rc"
+}
+G_MIT="$(g_kinit_t /etc/krb5.conf /tmp/g-mit-armor.cc /tmp/g-mit-out.cc)" && die "G) MIT kinit -T accepted the aes128 armor TGT"
+G_RUST="$(g_kinit_t /tmp/krb5-8888.conf /tmp/g-rust-armor.cc /tmp/g-rust-out.cc)" && die "G) Rust kinit -T accepted the aes128 armor TGT"
+echo "G MIT kinit -T aes128-armor: $G_MIT"
+echo "G Rust kinit -T aes128-armor: $G_RUST"
+[ "$G_MIT" = "kinit: Generic error (see e-text) while getting initial credentials" ] \
+    || die "G) MIT kinit -T is not Generic error (60): $G_MIT"
+[ "$G_RUST" = "$G_MIT" ] || die "G) Rust FAST-armor refusal differs from MIT: rust=$G_RUST mit=$G_MIT"
+printf '%s\n' "$G_MIT" | tee "$OUT/g-mit-kinit-t.txt" >/dev/null
+printf '%s\n' "$G_RUST" | tee "$OUT/g-rust-kinit-t.txt" >/dev/null
+# MIT kinit prints Generic error (60) and does not echo e_text. Units pin
+# FIND_FAST; the live bar is the identical client string on both legs.
+# Control: the unforged aes256 TGT still armors.
+G_CTL_MIT="$(g_kinit_t /etc/krb5.conf /tmp/g-mit-src.cc /tmp/g-mit-ctl.cc)" \
+    || die "G control: MIT kinit -T with the genuine TGT failed: $G_CTL_MIT"
+G_CTL_RUST="$(g_kinit_t /tmp/krb5-8888.conf /tmp/g-rust-src.cc /tmp/g-rust-ctl.cc)" \
+    || die "G control: Rust kinit -T with the genuine TGT failed: $G_CTL_RUST"
+echo "G control MIT kinit -T aes256-armor: $G_CTL_MIT"
+echo "G control Rust kinit -T aes256-armor: $G_CTL_RUST"
+
+log "rc4.session" "ok" ',"mit_vs_rust":"kinit+kvno","rust_vs_mit":"kinit+kvno","skey":"arcfour-hmac","kvno_rc":0,"kdcdefaults_allow_rc4":"ignored","permitted_enctypes_key_lookup":"aes256 both, FINDING_SERVER_KEY both","stale_keytab":"Password incorrect (24) both","fast_armor_nonpermitted_etype":"FIND_FAST both"'
 echo "rc4-session-gate both directions ok"

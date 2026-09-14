@@ -460,11 +460,11 @@ pub(crate) fn get_verified_pac(
         .saturating_sub(1);
     let mut tries = 2u32;
     while tries > 0 && kvno > 0 {
-        let Some(old) = policy
-            .find_enctype(tgt, None, kvno)
-            .ok()
-            .or_else(|| tgt.key_history.iter().find(|k| k.kvno == kvno))
-        else {
+        let Some(old) = policy.find_enctype(tgt, None, kvno).ok().or_else(|| {
+            tgt.key_history
+                .iter()
+                .find(|k| k.kvno == kvno && policy.etype_permitted(k.etype))
+        }) else {
             return Err(proto(err::MODIFIED, status::HEADER_PAC));
         };
         if try_verify_pac(&pac, ticket_key, header_server, &old.key, &der).is_ok() {

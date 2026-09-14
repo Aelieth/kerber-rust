@@ -488,7 +488,13 @@ fn key_from_password(password: &str, principal: &str) -> Result<ProtocolKey, Str
 }
 
 fn parse_hex_key(hex: &str) -> Result<ProtocolKey, String> {
-    parse_hex_key_as(hex, EncryptionType::Aes256CtsHmacSha196)
+    let raw = hex_decode(hex)?;
+    let et = match raw.len() {
+        16 => EncryptionType::Aes128CtsHmacSha196,
+        32 => EncryptionType::Aes256CtsHmacSha196,
+        n => return Err(format!("key length {n} is not aes128 (16) or aes256 (32)")),
+    };
+    ProtocolKey::from_bytes(et, &raw).map_err(|e| e.to_string())
 }
 
 fn parse_hex_key_as(hex: &str, etype: EncryptionType) -> Result<ProtocolKey, String> {
