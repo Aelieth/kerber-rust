@@ -160,9 +160,11 @@ fn type_multiset(m: &MethodData) -> Vec<i32> {
 /// Structural METHOD-DATA / TYPED-DATA compare for 25/24/91/65 e_data.
 ///
 /// Both legs' padata type **multisets** must match (order is item 15). When
-/// FX-FAST (136) is present (hint list), FX-COOKIE and ETYPE-INFO2 are
-/// required and the ETYPE-INFO2 etype sets must be equal. ENC_TIMESTAMP
-/// agreement is implied by the multiset.
+/// FX-FAST (136) is present (hint list), FX-COOKIE is required. ETYPE-INFO2
+/// is required only when either leg listed it — `add_etype_info`
+/// (`kdc_preauth.c:776-778`) skips it when there is no client key. When
+/// both list it, the etype sets must be equal. ENC_TIMESTAMP agreement is
+/// implied by the multiset.
 ///
 /// # Errors
 ///
@@ -191,12 +193,9 @@ pub fn compare_preauth_e_data(a: Option<&[u8]>, b: Option<&[u8]>) -> Result<(), 
                 pa::FX_COOKIE
             )));
         }
-        if !sa.contains(&pa::ETYPE_INFO2) {
-            return Err(DiffError(format!(
-                "PREAUTH METHOD-DATA missing {} rust={sa:?} mit={sb:?}",
-                pa::ETYPE_INFO2
-            )));
-        }
+        // `add_etype_info` (`kdc_preauth.c:776-778`) skips PA-ETYPE-INFO2 when
+        // `select_client_key` found no key (`have_client_keys` is then also
+        // false). The type multiset still has to match; do not require 19.
     }
     if sa.contains(&pa::ETYPE_INFO2) {
         let ea = etype_info2_etypes(&ma)?;

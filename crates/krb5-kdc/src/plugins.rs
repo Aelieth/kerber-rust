@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use krb5_asn1::encode;
-use krb5_crypto::{KeyUsage, ProtocolKey, checksum};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, checksum};
 use krb5_types::cammac::AdKdcIssued;
 use krb5_types::{
     AuthorizationData, AuthorizationDataValue, Checksum, KerberosTime, PaData, PrincipalName, ku,
@@ -45,7 +45,14 @@ pub trait KdcPreauth: Send + Sync {
     fn pa_types(&self) -> &'static [i32];
     /// METHOD-DATA offers for PREAUTH_REQUIRED.
     /// `armor` is set when the request is FAST-tunneled (`get_edata` rock).
-    fn advertise(&self, store: &dyn PrincipalRead, client: &Principal, armor: bool) -> Vec<PaData>;
+    /// `requested` is the AS-REQ etype list (`have_client_keys`).
+    fn advertise(
+        &self,
+        store: &dyn PrincipalRead,
+        client: &Principal,
+        armor: bool,
+        requested: &[i32],
+    ) -> Vec<PaData>;
     /// MIT `PA_HARDWARE` (`kdcpreauth_plugin.h`). FAST is still advertised
     /// under `hw_only` (`kdc_preauth.c:999-1001`).
     fn hardware(&self) -> bool {
@@ -87,6 +94,7 @@ impl KdcPreauth for FastMod {
         _store: &dyn PrincipalRead,
         _client: &Principal,
         _armor: bool,
+        _requested: &[i32],
     ) -> Vec<PaData> {
         vec![PaData {
             padata_type: pa::FX_FAST,
@@ -123,6 +131,7 @@ impl KdcPreauth for PkinitMod {
         store: &dyn PrincipalRead,
         client: &Principal,
         _armor: bool,
+        _requested: &[i32],
     ) -> Vec<PaData> {
         if store.pkinit_ca().is_none() {
             return Vec::new();
@@ -183,10 +192,17 @@ impl KdcPreauth for SpakeMod {
     fn advertise(
         &self,
         store: &dyn PrincipalRead,
-        _client: &Principal,
+        client: &Principal,
         _armor: bool,
+        requested: &[i32],
     ) -> Vec<PaData> {
-        if store.policy().spake_preauth_groups.is_empty() {
+        // spake_edata (spake_kdc.c:309-314): omit when client_keyblock is
+        // NULL — `select_client_key` left ENCTYPE_NULL, the same condition
+        // as `have_client_keys` being false. Groups still required
+        // (groups.c:60,235-238).
+        if store.policy().spake_preauth_groups.is_empty()
+            || !have_client_keys(store, client, requested)
+        {
             return Vec::new();
         }
         vec![PaData {
@@ -229,12 +245,14 @@ impl KdcPreauth for EncTsMod {
     }
     fn advertise(
         &self,
-        _store: &dyn PrincipalRead,
-        _client: &Principal,
+        store: &dyn PrincipalRead,
+        client: &Principal,
         armor: bool,
+        requested: &[i32],
     ) -> Vec<PaData> {
-        // enc_ts_get (kdc_preauth_encts.c:39-43): ENOENT when FAST armor is present.
-        if armor {
+        // enc_ts_get (kdc_preauth_encts.c:39-43): ENOENT when FAST armor is
+        // present or `have_client_keys` is false (`kdc_preauth.c:442`).
+        if armor || !have_client_keys(store, client, requested) {
             return Vec::new();
         }
         vec![PaData {
@@ -313,12 +331,14 @@ impl KdcPreauth for EncChallengeMod {
     }
     fn advertise(
         &self,
-        _store: &dyn PrincipalRead,
+        store: &dyn PrincipalRead,
         client: &Principal,
         armor: bool,
+        requested: &[i32],
     ) -> Vec<PaData> {
-        // ec_edata (kdc_preauth_ec.c:37-48): empty 138 only with armor and keys.
-        if !armor || client.keys.is_empty() {
+        // ec_edata (kdc_preauth_ec.c:37-48): empty 138 only with armor and
+        // `have_client_keys` (`kdc_preauth.c:442`).
+        if !armor || !have_client_keys(store, client, requested) {
             return Vec::new();
         }
         vec![PaData {
@@ -373,6 +393,7 @@ impl KdcPreauth for DemoPreauth {
         _store: &dyn PrincipalRead,
         _client: &Principal,
         _armor: bool,
+        _requested: &[i32],
     ) -> Vec<PaData> {
         self.ads.fetch_add(1, Ordering::SeqCst);
         Vec::new()
@@ -545,6 +566,7 @@ pub fn advertise_preauth(
     store: &dyn PrincipalRead,
     client: &Principal,
     armor: bool,
+    requested: &[i32],
 ) -> Vec<PaData> {
     let hw_only = client.attributes & KDB_REQUIRES_HW_AUTH != 0;
     let mut out = vec![PaData {
@@ -558,9 +580,21 @@ pub fn advertise_preauth(
         if hw_only && !m.hardware() {
             continue;
         }
-        out.extend(m.advertise(store, client, armor));
+        out.extend(m.advertise(store, client, armor, requested));
     }
     out
+}
+
+/// MIT `have_client_keys` (`kdc_preauth.c:434-447`): true when
+/// `krb5_dbe_find_enctype(client, requested[i], -1, 0)` succeeds for any
+/// requested etype — top kvno only, permitted enctypes only.
+fn have_client_keys(store: &dyn PrincipalRead, client: &Principal, requested: &[i32]) -> bool {
+    requested.iter().any(|&iana| {
+        let Ok(et) = EncryptionType::known(iana) else {
+            return false;
+        };
+        store.policy().find_enctype(client, Some(et), 0).is_ok()
+    })
 }
 
 /// Run registered AS preauth modules in order. First `Some` action wins;

@@ -423,8 +423,30 @@ fn issue_as_body(
     // preauth (do_as_req.c:630 precedes check_padata at :758).
     validate_as_request(store, &client, &server, body)?;
     let session_etype = select_session_keytype(&server, &body.etype, store.policy())?;
-    let ckey = select_client_key(store.policy(), &client, &body.etype)
-        .ok_or_else(|| proto(err::ETYPE_NOSUPP, status::CANT_FIND_CLIENT_KEY))?;
+    let work_padata = if let Some(f) = fast {
+        Some(f.inner_padata.clone())
+    } else {
+        req.0.padata.clone()
+    };
+    // MIT `select_client_key` (`do_as_req.c:736-745`) returns success with
+    // `ENCTYPE_NULL` when no requested etype has a permitted top-kvno key;
+    // `CANT_FIND_CLIENT_KEY` is only after preauth (`:259-265`). A
+    // preauth-required client with no padata still gets 25 so
+    // `have_client_keys` can omit ENC-TS / ENC-CHALLENGE (`kdc_preauth.c:442`).
+    let Some(ckey) = select_client_key(store.policy(), &client, &body.etype) else {
+        let empty = work_padata.as_deref().is_none_or(<[PaData]>::is_empty);
+        if client.requires_preauth && empty {
+            return Err(preauth_required(
+                store,
+                &client,
+                None,
+                &body.etype,
+                fast.is_some(),
+                work_padata.as_deref(),
+            ));
+        }
+        return Err(proto(err::ETYPE_NOSUPP, status::CANT_FIND_CLIENT_KEY));
+    };
     let etype = ckey.etype;
     let encoded_body;
     let body_der: &[u8] = if let Some(slice) = raw.and_then(kdc_req_body_der) {
@@ -432,11 +454,6 @@ fn issue_as_body(
     } else {
         encoded_body = encode(body)?;
         &encoded_body
-    };
-    let work_padata = if let Some(f) = fast {
-        Some(f.inner_padata.clone())
-    } else {
-        req.0.padata.clone()
     };
     let pa_body: &[u8] = match fast {
         Some(f) => f.inner_body.as_slice(),
@@ -580,7 +597,7 @@ fn issue_as_body(
         return Err(preauth_required(
             store,
             &client,
-            ckey,
+            Some(ckey),
             &body.etype,
             fast.is_some(),
             work_padata.as_deref(),
@@ -593,7 +610,7 @@ fn issue_as_body(
             e_data: Some(preauth_hint_edata(
                 store,
                 &client,
-                ckey,
+                Some(ckey),
                 &body.etype,
                 fast.is_some(),
                 work_padata.as_deref(),
@@ -2755,16 +2772,19 @@ fn wrap_as_fast(
 fn preauth_hint_edata(
     store: &dyn PrincipalRead,
     client: &Principal,
-    ckey: &KeyEntry,
+    ckey: Option<&KeyEntry>,
     requested: &[i32],
     armor: bool,
     request_padata: Option<&[PaData]>,
 ) -> Vec<u8> {
-    let mut method: MethodData = crate::plugins::advertise_preauth(store, client, armor);
-    let info = etype_info_padata(client, ckey, requested);
-    let at = usize::from(method.first().is_some_and(|p| p.padata_type == pa::FX_FAST));
-    for (i, p) in info.into_iter().enumerate() {
-        method.insert(at + i, p);
+    let mut method: MethodData = crate::plugins::advertise_preauth(store, client, armor, requested);
+    // MIT `add_etype_info` (`kdc_preauth.c:776-778`): skip when no client key.
+    if let Some(ckey) = ckey {
+        let info = etype_info_padata(client, ckey, requested);
+        let at = usize::from(method.first().is_some_and(|p| p.padata_type == pa::FX_FAST));
+        for (i, p) in info.into_iter().enumerate() {
+            method.insert(at + i, p);
+        }
     }
     // kdc_preauth.c:826-871,895-898: populated 150 last in the hint list when
     // PKINIT asked and the request advertised the type; cookie is still last.
@@ -2792,7 +2812,7 @@ fn preauth_hint_edata(
 fn preauth_required(
     store: &dyn PrincipalRead,
     client: &Principal,
-    ckey: &KeyEntry,
+    ckey: Option<&KeyEntry>,
     requested: &[i32],
     armor: bool,
     request_padata: Option<&[PaData]>,
@@ -2827,7 +2847,7 @@ fn attach_preauth_hint(
             e_data: Some(preauth_hint_edata(
                 store,
                 client,
-                ckey,
+                Some(ckey),
                 requested,
                 armor,
                 request_padata,

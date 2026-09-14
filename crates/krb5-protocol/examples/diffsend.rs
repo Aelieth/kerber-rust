@@ -1209,6 +1209,30 @@ fn run() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     expect_error(&cfg, "pauser-no-preauth", &req, err::PREAUTH_REQUIRED)?;
 
+    // hintu is keyed only aes128; the request lists only aes256. MIT
+    // `have_client_keys` (`kdc_preauth.c:442`) is false → 25 with no PA 2,
+    // no ETYPE-INFO2 (`add_etype_info` skips a NULL client key), and no
+    // PA 151 (`spake_edata` omits when client_keyblock is NULL).
+    let hintu = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["hintu"]);
+    let req = encode(
+        &as_req_sname(
+            hintu,
+            realm,
+            0x1000_0012,
+            None,
+            PrincipalName::krbtgt(realm),
+            vec![18],
+        )
+        .map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    expect_error(
+        &cfg,
+        "as-needpreauth-hints-unpermitted",
+        &req,
+        err::PREAUTH_REQUIRED,
+    )?;
+
     let pkey = client_key(18, &cfg.pauser_pw, &pauser, realm)?;
     let old = KerberosTime::now()
         .add_seconds(-3600)
@@ -4570,7 +4594,7 @@ fn run() -> Result<(), String> {
         rt.endtime.unix_seconds()
     );
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":110}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":111}}"#);
     Ok(())
 }
 

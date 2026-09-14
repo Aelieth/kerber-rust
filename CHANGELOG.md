@@ -140,6 +140,19 @@ this project uses semantic versioning once a crate is published.
   getting initial credentials` on both legs (wire 60; units pin
   `FIND_FAST`); the unforged aes256 TGT still armors. Ledger: new A3 row
   `keytab.c:152-178` (449 rows, exact 353).
+- **kdc.** ENC-TS (2) and ENC-CHALLENGE (138) hints follow MIT
+  `have_client_keys` (`kdc_preauth.c:434-447`, `kdc_preauth_encts.c:39-43`,
+  `kdc_preauth_ec.c:42-46`): advertised only when the client has a
+  permitted key of a requested etype at the top kvno. SPAKE (151) uses
+  the same condition via `client_keyblock` (`spake_kdc.c:309-314`: omit
+  when `select_client_key` left `ENCTYPE_NULL`). Before, ENC-TS was
+  offered whenever the request was not FAST-armored, ENC-CHALLENGE
+  whenever the client had any stored key, and SPAKE whenever groups were
+  configured. A preauth-required AS-REQ with no matching client key is
+  now 25 with that hint list (MIT `select_client_key` may return
+  `ENCTYPE_NULL` and still emit NEEDED_PREAUTH; `add_etype_info` skips
+  PA 19 when there is no key). diffsend `as-needpreauth-hints-unpermitted`
+  (111 cases; hint types `[136, 16, 147, 133]`, no 2 / 19 / 151).
 - **kadmind.** The AUTH_GSSAPI `GSSAPI_INIT` arg-version switch is MIT's
   (`svc_auth_gssapi.c:326-341`): versions 1 and 2 are answered with
   `init_res.version` 1 and a "Accepted old RPC protocol request" warning,

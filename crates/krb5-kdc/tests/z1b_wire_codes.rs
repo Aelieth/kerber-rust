@@ -93,6 +93,7 @@ impl krb5_kdc::KdcPreauth for FailingModule {
         _store: &dyn PrincipalRead,
         _client: &Principal,
         _armor: bool,
+        _requested: &[i32],
     ) -> Vec<krb5_types::PaData> {
         Vec::new()
     }

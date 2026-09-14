@@ -132,6 +132,13 @@ docker exec \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     "$NAME" /tmp/krb5-kadmin-local -q 'setstr expiredsvc require_auth pkinit'
+ADDHINT="$(docker exec \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey -e aes128-cts-hmac-sha1-96:normal +requires_preauth hintu')"
+echo "$ADDHINT"
+grep -q 'created' <<<"$ADDHINT" || die "rust addprinc hintu failed"
 
 # Pin P-256 on the container profile before either KDC starts. Dump load
 # does not carry groups; rust apply_libdefaults reads this like MIT kdc.conf.
@@ -195,6 +202,9 @@ docker exec "$NAME" kadmin.local -q 'modprinc +disallow_svr host/nosvr.kerber.te
 docker exec "$NAME" kadmin.local -q 'addprinc -randkey expiredsvc'
 docker exec "$NAME" kadmin.local -q 'modprinc -expire 1/1/1990 expiredsvc'
 docker exec "$NAME" kadmin.local -q 'setstr expiredsvc require_auth pkinit'
+MITHINT="$(docker exec "$NAME" kadmin.local -q 'addprinc -randkey -e aes128-cts-hmac-sha1-96:normal +requires_preauth hintu')"
+echo "$MITHINT"
+grep -qi 'created' <<<"$MITHINT" || die "MIT addprinc hintu failed"
 STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc -n >/tmp/mit-kdc.log 2>&1 & sleep 0.5; cat /tmp/mit-kdc.log' 2>&1 || true)"
 echo "$STARTLOG"
 ok=0
@@ -234,6 +244,7 @@ grep -q '"case":"etype-nosupp","outcome":"ok","error_code":14,"e_text":"BAD_ENCR
 grep -q '"case":"as-session-enctype","outcome":"ok","error_code":14,"e_text":"BAD_ENCRYPTION_TYPE","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "missing as-session-enctype"
 grep -q '"case":"wrong-realm","outcome":"ok","error_code":6,"e_text":"CLIENT_NOT_FOUND","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "wrong-realm was not CLIENT_NOT_FOUND"
 grep -q '"case":"pauser-no-preauth","outcome":"ok","error_code":25' <<<"$DIFF" || die "missing PREAUTH_REQUIRED(25)"
+grep -q '"case":"as-needpreauth-hints-unpermitted","outcome":"ok","error_code":25,"e_text":"NEEDED_PREAUTH","e_data_types":\[16,133,136,147\]' <<<"$DIFF" || die "as-needpreauth-hints-unpermitted not 25 NEEDED_PREAUTH types [16,133,136,147] on both legs"
 grep -q '"e_text":"NEEDED_PREAUTH"' <<<"$DIFF" || die "missing NEEDED_PREAUTH"
 grep -q '"case":"skewed-timestamp","outcome":"ok","error_code":37,"e_text":"PREAUTH_FAILED","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "missing PREAUTH_FAILED"
 grep -q '"case":"unknown-sname","outcome":"ok","error_code":7,"e_text":"SERVER_NOT_FOUND","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "missing SERVER_NOT_FOUND"
@@ -257,8 +268,8 @@ grep -q '"case":"as-retransmit","outcome":"ok","rust_retransmit_identical":true,
 # W1-Z Z3.3: the ratchet is checked against the distinct cases diffsend
 # actually emitted, not the literal its summary line claims (a stale
 # "cases":N in diffsend.rs would otherwise pass). History: A'-3 R32 102 ·
-# A'-4 item 16 105 · item 17 106 · item 18 107 · W1-B F4 109 · W1-Z Z1.3 110.
-DIFFSEND_RATCHET=110
+# A'-4 item 16 105 · item 17 106 · item 18 107 · W1-B F4 109 · W1-Z Z1.3 110 · Z6.2 111.
+DIFFSEND_RATCHET=111
 CASES_SEEN="$(grep -o '"case":"[^"]*","outcome":"ok"' <<<"$DIFF" | sort -u | wc -l | tr -d ' ')"
 [ "$CASES_SEEN" = "$DIFFSEND_RATCHET" ] || die "diffsend emitted $CASES_SEEN distinct ok cases; the ratchet is $DIFFSEND_RATCHET"
 grep -q "\"outcome\":\"ok\",\"cases\":$DIFFSEND_RATCHET}" <<<"$DIFF" || die "diffsend summary line does not claim $DIFFSEND_RATCHET cases"
@@ -355,6 +366,7 @@ import importlib.machinery
 p = importlib.machinery.SourceFileLoader("proxy", "/tmp/kdc-padata-proxy.py").load_module()
 want = {
     "pauser-no-preauth": (25, [136, 19, 16, 147, 151, 2, 133]),
+    "as-needpreauth-hints-unpermitted": (25, [136, 16, 147, 133]),
     "as-hw-preauth": (25, [136, 19, 16, 133]),
     "as-spake-round1": (91, [151, 19, 133]),
     "ec-outside-fast": (24, [136, 19, 16, 147, 151, 2, 133]),
@@ -371,6 +383,8 @@ print("hint-order-ok")
 echo "$HINT_ORDER"
 grep -qF 'hint-order-ok' <<<"$HINT_ORDER" || die "25/91 hint e_data wire order mismatch"
 grep -qF 'pauser-no-preauth.mit code=25 enc=method types=[136, 19, 16, 147, 151, 2, 133]' <<<"$HINT_ORDER" || die "MIT_HINT 25 hint list not [136, 19, 16, 147, 151, 2, 133]" # A'-3: [136, 19, 151, 2, 133]
+grep -qF 'as-needpreauth-hints-unpermitted.mit code=25 enc=method types=[136, 16, 147, 133]' <<<"$HINT_ORDER" || die "MIT_HINT unpermitted 25 hint list not [136, 16, 147, 133]"
+grep -qF 'as-needpreauth-hints-unpermitted.rust code=25 enc=method types=[136, 16, 147, 133]' <<<"$HINT_ORDER" || die "rust_hint unpermitted 25 hint list not [136, 16, 147, 133]"
 grep -qF 'as-spake-round1.mit code=91 enc=method types=[151, 19, 133]' <<<"$HINT_ORDER" || die "MIT_HINT 91 e_data not [151, 19, 133]"
 grep -qF 'as-spake-round1.rust code=91 enc=method types=[151, 19, 133]' <<<"$HINT_ORDER" || die "rust_hint 91 e_data not [151, 19, 133]"
 # W1-K M2b: the differential oracle has no case-name whitelist; no diffsend line
