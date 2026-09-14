@@ -285,6 +285,11 @@ fn verify_inner(
         .filter(|&v| v != 0)
         .or(params.kvno.filter(|&v| v != 0));
     let tkt_etype = ap.ticket.enc_part.etype;
+    // MIT kt_file.c:355-384 `krb5_ktfile_get_entry`: an entry for the
+    // principal and enctype at another kvno is `found_wrong_kvno` →
+    // KRB5_KT_KVNONOTFOUND when nothing matched.
+    let mut found_wrong_kvno = false;
+    let mut tried_any = false;
     for (i, key) in params.keys.iter().enumerate() {
         if key.etype().to_iana() != tkt_etype {
             continue;
@@ -294,8 +299,10 @@ fn verify_inner(
             && have != 0
             && have != want
         {
+            found_wrong_kvno = true;
             continue;
         }
+        tried_any = true;
         match decrypt(key, tkt_usage, ap.ticket.enc_part.cipher.as_ref()) {
             Ok(tkt_plain) => match decode::<EncTicketPart>(&tkt_plain) {
                 Ok(p) => {
@@ -307,18 +314,54 @@ fn verify_inner(
             Err(e) => last_err = e.into(),
         }
     }
-    let ticket_part = ticket_part.ok_or(last_err)?;
-    if ticket_part.flags.invalid() {
-        return Err(Error::KrbError {
-            code: err::TKT_NYV,
-            text: Some("INVALID flag".into()),
-        });
-    }
+    let Some(ticket_part) = ticket_part else {
+        // MIT rd_req_dec.c:118-148 `keytab_fetch_error`: KVNONOTFOUND is
+        // KRB5KRB_AP_ERR_BADKEYVER "Cannot find key for %s kvno %d in
+        // keytab" when the pinned name is the ticket's server
+        // (`krb5_principal_compare`, name type ignored), else NOT_US;
+        // no entry at all stays NOKEY.
+        if found_wrong_kvno && !tried_any && params.expected_server.is_some() {
+            let same_princ = params
+                .expected_server
+                .is_some_and(|s| s.name_string == ap.ticket.sname.name_string)
+                && params
+                    .expected_realm
+                    .is_none_or(|r| r.as_bytes() == ap.ticket.realm.as_bytes());
+            let sname = ap
+                .ticket
+                .sname
+                .name_string
+                .iter()
+                .map(|c| String::from_utf8_lossy(c.as_bytes()).into_owned())
+                .collect::<Vec<_>>()
+                .join("/");
+            let want = want_kvno.unwrap_or(0);
+            return Err(if same_princ {
+                Error::KrbError {
+                    code: err::BADKEYVER,
+                    text: Some(format!("Cannot find key for {sname} kvno {want} in keytab")),
+                }
+            } else {
+                Error::KrbError {
+                    code: err::NOT_US,
+                    text: Some(format!(
+                        "Server principal does not match request ticket server {sname}"
+                    )),
+                }
+            });
+        }
+        return Err(last_err);
+    };
     let now = params.now.clone().unwrap_or_else(KerberosTime::now);
     let skew = params.skew.max(0);
-    if let Some(start) = &ticket_part.starttime
-        && now.delta_seconds(start) < -skew
-    {
+    // MIT krb5int_validate_times (valid_times.c:36-58): use starttime, else
+    // authtime, for the not-yet-valid test — a ticket with no starttime is
+    // gated by its authtime, not left unchecked.
+    let start = ticket_part
+        .starttime
+        .as_ref()
+        .unwrap_or(&ticket_part.authtime);
+    if now.delta_seconds(start) < -skew {
         return Err(Error::KrbError {
             code: err::TKT_NYV,
             text: Some("ticket not yet valid".into()),
@@ -328,6 +371,14 @@ fn verify_inner(
         return Err(Error::KrbError {
             code: err::TKT_EXPIRED,
             text: Some("ticket expired".into()),
+        });
+    }
+    // MIT rd_req_dec.c:634-638 checks the INVALID flag after krb5int_validate_times
+    // and returns KRB5KRB_AP_ERR_TKT_INVALID, not TKT_NYV.
+    if ticket_part.flags.invalid() {
+        return Err(Error::KrbError {
+            code: err::TKT_INVALID,
+            text: Some("Ticket has invalid flag set".into()),
         });
     }
     if let Some(addrs) = params.addresses

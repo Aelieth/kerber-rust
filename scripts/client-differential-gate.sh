@@ -40,8 +40,8 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 cargo build -p krb5-client --bin krb5-kinit --bin krb5-klist --bin krb5-kvno --bin krb5-kdestroy --bin krb5-vfy-increds -q
-cargo build -p krb5-kdc --bin krb5-kdc -q
-cargo build -p krb5-gss --bin krb5-gss-accept -q
+cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-forge-tgt --bin krb5-pac-extract -q
+cargo build -p krb5-gss --bin krb5-gss-accept --bin krb5-gss-init -q
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT" || true
@@ -81,11 +81,16 @@ docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kvno" "$NAME":/tmp/krb5-kvno
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdestroy" "$NAME":/tmp/krb5-kdestroy
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc-export
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-gss-accept" "$NAME":/tmp/krb5-gss-accept
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-gss-init" "$NAME":/tmp/krb5-gss-init
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-forge-tgt" "$NAME":/tmp/krb5-forge-tgt
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-pac-extract" "$NAME":/tmp/krb5-pac-extract
 docker cp "$ROOT/scripts/lib/kdc-req-proxy.py" "$NAME":/tmp/kdc-req-proxy.py
 docker cp "$ROOT/scripts/lib/skew-preload.c" "$NAME":/tmp/skew-preload.c
 docker cp "$ROOT/scripts/gss-mit-client.c" "$NAME":/tmp/gss-mit-client.c
+docker cp "$ROOT/scripts/gss-mit-server.c" "$NAME":/tmp/gss-mit-server.c
 docker exec "$NAME" chmod +x /tmp/krb5-kinit /tmp/krb5-klist /tmp/krb5-kvno /tmp/krb5-kdestroy \
-    /tmp/krb5-kdc-export /tmp/krb5-gss-accept /tmp/kdc-req-proxy.py
+    /tmp/krb5-kdc-export /tmp/krb5-gss-accept /tmp/krb5-gss-init /tmp/krb5-forge-tgt \
+    /tmp/krb5-pac-extract /tmp/kdc-req-proxy.py
 
 docker exec "$NAME" mkdir -p /tmp/pkinit /tmp/cdiff
 docker exec \
@@ -722,13 +727,22 @@ echo "MIT_vfy_increds_host"
 echo "RUST_vfy_increds_host"
 docker exec "$NAME" kadmin.local -q 'cpw -randkey host/vfy.kerber.test' >/dev/null
 set +e
-docker exec $VFY_ENV "$NAME" /tmp/t_vfy_increds
+mit_vfy_old_out="$(docker exec $VFY_ENV "$NAME" /tmp/t_vfy_increds 2>&1)"
 mit_vfy_old=$?
-docker exec $VFY_ENV "$NAME" /tmp/krb5-vfy-increds
+rust_vfy_old_out="$(docker exec $VFY_ENV "$NAME" /tmp/krb5-vfy-increds 2>&1)"
 rust_vfy_old=$?
 set -e
+echo "$mit_vfy_old_out"
+echo "$rust_vfy_old_out"
 [ "$mit_vfy_old" != 0 ] || die "MIT t_vfy_increds outdated unexpectedly succeeded"
 [ "$rust_vfy_old" != 0 ] || die "Rust t_vfy_increds outdated unexpectedly succeeded"
+# Z1.3: the keytab holds host/vfy at the old kvno only → try_one_princ
+# (fully-specified name from the keytab) → KRB5_KT_KVNONOTFOUND →
+# keytab_fetch_error BADKEYVER (44) with the same text on both legs.
+echo "$mit_vfy_old_out" | grep -Eq 'Cannot find key for host/vfy\.kerber\.test@KERBER\.TEST kvno [0-9]+ in keytab' \
+    || die "MIT t_vfy_increds outdated is not BADKEYVER (keytab_fetch_error text)"
+echo "$rust_vfy_old_out" | grep -Eq 'KRB-ERROR 44: Cannot find key for host/vfy\.kerber\.test kvno [0-9]+ in keytab' \
+    || die "Rust t_vfy_increds outdated is not KRB-ERROR 44 with keytab_fetch_error text"
 echo "MIT_vfy_increds_outdated"
 echo "RUST_vfy_increds_outdated"
 docker exec "$NAME" rm -f /tmp/vfy.kt
@@ -1322,6 +1336,126 @@ docker exec "$NAME" test -s /tmp/cdiff/mit-kvno_plain.jsonl \
     || die "MIT kvno_plain capture missing after B2 leftover grades"
 echo "MIT_b2_close"
 echo "RUST_b2_close"
+
+echo "==== Z1.3 acceptor validate_times + key pinning (forged) ===="
+# MIT rd_req_dec.c: krb5int_validate_times (valid_times.c:36-58) rejects a
+# ticket whose starttime (else authtime) is in the future with TKT_NYV, and
+# try_one_princ (rd_req_dec.c:374-376) pins the exact kvno for a fully
+# specified acceptor name. We forge a real host/testhost service ticket with
+# krb5-forge-tgt (reseal under the true host key so it still decrypts) and
+# replay it via the Rust initiator (which uses the cached ticket bytes as-is)
+# to both the Rust acceptor and MIT's gss-server. Both must refuse; the
+# untouched ticket must be accepted by both (the control).
+docker exec "$NAME" cc -o /tmp/gss-mit-server /tmp/gss-mit-server.c -lgssapi_krb5 -lkrb5 \
+    || die "cc gss-mit-server failed"
+
+# Source ccache: a real TGT + host/testhost service ticket to forge from
+# (Rust tools so the initiator parses the ccache format).
+docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf -e KRB5_PASSWORD=userpassword "$NAME" \
+    /tmp/krb5-kinit -c /tmp/cc_z13_src user@KERBER.TEST \
+    || die "Z1.3 kinit source failed"
+docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf "$NAME" \
+    /tmp/krb5-kvno -c /tmp/cc_z13_src host/testhost.kerber.test \
+    || die "Z1.3 kvno host/testhost failed"
+
+# Forge (i) NYV: future authtime, no starttime; (ii) mislabelled kvno 99.
+# --decrypt-keytab picks the host key matching the ticket's own etype+kvno and
+# reseals under it, so the acceptor still decrypts (only the times/label change).
+docker exec "$NAME" /tmp/krb5-forge-tgt \
+    --ccache /tmp/cc_z13_src --out /tmp/cc_z13_nyv --tgt host/testhost.kerber.test \
+    --claim-realm KERBER.TEST --decrypt-keytab /tmp/host.keytab --authtime +7200 --drop-starttime \
+    || die "Z1.3 forge NYV failed"
+docker exec "$NAME" /tmp/krb5-forge-tgt \
+    --ccache /tmp/cc_z13_src --out /tmp/cc_z13_kvno --tgt host/testhost.kerber.test \
+    --claim-realm KERBER.TEST --decrypt-keytab /tmp/host.keytab --set-kvno 99 \
+    || die "Z1.3 forge kvno failed"
+
+# Rust acceptor (survives failed accepts), fresh log.
+docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
+sleep 0.3
+docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /tmp/host.keytab --listen 127.0.0.1:4444 >/tmp/gss-z13-rust.log 2>&1'
+ok=0
+for _ in $(seq 1 20); do
+    if docker exec "$NAME" grep -q listening /tmp/gss-z13-rust.log 2>/dev/null; then ok=1; break; fi
+    sleep 0.1
+done
+[ "$ok" = 1 ] || { docker exec "$NAME" cat /tmp/gss-z13-rust.log >&2 || true; die "Z1.3 Rust acceptor did not listen"; }
+
+# Probe a ccache against an acceptor port with the Rust initiator; rc 0 means
+# accepted (an AP-REP came back), non-zero means refused.
+z13_probe() {  # $1=ccache $2=port -> stdout: ok|refused ; init log -> stderr
+    local out rc
+    set +e
+    out="$(docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf "$NAME" \
+        /tmp/krb5-gss-init --ccache "$1" --host testhost.kerber.test \
+        --ip 127.0.0.1 --port "$2" --accept-only 2>&1)"
+    rc=$?
+    set -e
+    echo "$out" >&2
+    [ "$rc" -eq 0 ] && echo ok || echo refused
+}
+
+# --- Rust acceptor leg ---
+RUST_CTL="$(z13_probe /tmp/cc_z13_src 4444 | tail -1)"
+RUST_NYV="$(z13_probe /tmp/cc_z13_nyv 4444 | tail -1)"
+RUST_KVNO="$(z13_probe /tmp/cc_z13_kvno 4444 | tail -1)"
+echo "RUST z13 control=$RUST_CTL nyv=$RUST_NYV kvno=$RUST_KVNO"
+[ "$RUST_CTL" = ok ] || die "Z1.3 Rust acceptor refused the untouched control ticket"
+[ "$RUST_NYV" = refused ] || die "Z1.3 Rust acceptor accepted a NYV ticket"
+[ "$RUST_KVNO" = refused ] || die "Z1.3 Rust acceptor accepted a mislabelled-kvno ticket"
+RUST_Z13_LOG="$(docker exec "$NAME" cat /tmp/gss-z13-rust.log)"
+echo "$RUST_Z13_LOG"
+echo "$RUST_Z13_LOG" | grep -q 'accept_sec_context:' \
+    || die "Z1.3 Rust acceptor logged no refusal"
+# The codes MIT's rd_req_dec.c assigns: TKT_NYV 33 (valid_times.c:44-51) and
+# BADKEYVER 44 with keytab_fetch_error's text (rd_req_dec.c:139-148).
+echo "$RUST_Z13_LOG" | grep -q 'KRB-ERROR 33: ticket not yet valid' \
+    || die "Z1.3 Rust acceptor NYV refusal is not KRB-ERROR 33"
+echo "$RUST_Z13_LOG" | grep -q 'KRB-ERROR 44: Cannot find key for host/testhost.kerber.test kvno 99 in keytab' \
+    || die "Z1.3 Rust acceptor kvno refusal is not BADKEYVER 44 with keytab_fetch_error text"
+
+# --- MIT acceptor leg (gss-server dies on a failed accept; restart per case) ---
+z13_mit_case() {  # $1=forged-ccache $2=label -> echoes refused|ok
+    docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
+    sleep 0.3
+    # Pass a fully-qualified acceptor principal so MIT pins the ticket kvno
+    # (try_one_princ), the same way the Rust acceptor pins its keytab kvnos.
+    docker exec -d -e KRB5_CONFIG=/tmp/direct-krb5.conf -e GSS_ACCEPT_ONLY=1 "$NAME" \
+        sh -c "/tmp/gss-mit-server /tmp/host.keytab 127.0.0.1 4460 host/testhost.kerber.test@KERBER.TEST >/tmp/gss-z13-mit-$2.log 2>&1"
+    ok=0
+    for _ in $(seq 1 20); do
+        if docker exec "$NAME" grep -q listening "/tmp/gss-z13-mit-$2.log" 2>/dev/null; then ok=1; break; fi
+        sleep 0.1
+    done
+    [ "$ok" = 1 ] || { docker exec "$NAME" cat "/tmp/gss-z13-mit-$2.log" >&2 || true; die "Z1.3 MIT acceptor ($2) did not listen"; }
+    ctl="$(z13_probe /tmp/cc_z13_src 4460 | tail -1)"
+    [ "$ctl" = ok ] || die "Z1.3 MIT acceptor refused the untouched control ($2)"
+    z13_probe "$1" 4460 | tail -1
+}
+MIT_NYV="$(z13_mit_case /tmp/cc_z13_nyv nyv | tail -1)"
+MIT_KVNO="$(z13_mit_case /tmp/cc_z13_kvno kvno | tail -1)"
+echo "MIT z13 nyv=$MIT_NYV kvno=$MIT_KVNO"
+[ "$MIT_NYV" = refused ] || die "Z1.3 MIT acceptor accepted a NYV ticket"
+[ "$MIT_KVNO" = refused ] || die "Z1.3 MIT acceptor accepted a mislabelled-kvno ticket"
+MIT_NYV_LOG="$(docker exec "$NAME" cat /tmp/gss-z13-mit-nyv.log)"
+MIT_KVNO_LOG="$(docker exec "$NAME" cat /tmp/gss-z13-mit-kvno.log)"
+echo "$MIT_NYV_LOG"
+echo "$MIT_KVNO_LOG"
+echo "$MIT_NYV_LOG" | grep -q 'ap-rep=yes' \
+    || die "Z1.3 MIT acceptor never accepted the NYV control (setup broken)"
+echo "$MIT_NYV_LOG" | grep -q 'accept_sec_context:' \
+    || die "Z1.3 MIT acceptor logged no NYV refusal"
+echo "$MIT_KVNO_LOG" | grep -q 'accept_sec_context:' \
+    || die "Z1.3 MIT acceptor logged no kvno refusal"
+# MIT's minor-status texts for the same two codes (KRB5KRB_AP_ERR_TKT_NYV and
+# KRB5KRB_AP_ERR_BADKEYVER via keytab_fetch_error).
+echo "$MIT_NYV_LOG" | grep -q 'mech: Ticket not yet valid' \
+    || die "Z1.3 MIT acceptor NYV refusal is not TKT_NYV"
+echo "$MIT_KVNO_LOG" | grep -q 'mech: Cannot find key for host/testhost.kerber.test@KERBER.TEST kvno 99 in keytab' \
+    || die "Z1.3 MIT acceptor kvno refusal is not BADKEYVER (keytab_fetch_error)"
+docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
+echo "MIT_z13_nyv_refused_kvno_refused"
+echo "RUST_z13_nyv_refused_kvno_refused"
 
 mkdir -p "$SCRATCH/cdiff"
 docker cp "$NAME:/tmp/cdiff/." "$SCRATCH/cdiff/"

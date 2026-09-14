@@ -383,6 +383,36 @@ impl GssContext {
         expected_realm: Option<&str>,
         rcache: &ReplayCache,
     ) -> Result<(Self, Option<Vec<u8>>), Error> {
+        Self::accept_sec_context_kt(
+            token,
+            service_keys,
+            None,
+            channel_bindings,
+            expected_server,
+            expected_realm,
+            rcache,
+        )
+    }
+
+    /// [`accept_sec_context`](Self::accept_sec_context) with a per-key kvno
+    /// slice (parallel to `service_keys`, as read from a keytab). MIT
+    /// `try_one_princ` (`rd_req_dec.c:325-347`) fetches the keytab entry by the
+    /// exact ticket kvno when the server principal is fully specified; a
+    /// wildcard name (`is_matching`) iterates instead. We mirror that: the
+    /// kvnos pin the ticket kvno only when `expected_server` is `Some`.
+    ///
+    /// # Errors
+    ///
+    /// Truncated token, AP-REQ verification, or checksum failure.
+    pub fn accept_sec_context_kt(
+        token: &[u8],
+        service_keys: &[ProtocolKey],
+        service_kvnos: Option<&[u32]>,
+        channel_bindings: Option<&ChannelBindings>,
+        expected_server: Option<&PrincipalName>,
+        expected_realm: Option<&str>,
+        rcache: &ReplayCache,
+    ) -> Result<(Self, Option<Vec<u8>>), Error> {
         let first = service_keys.first().ok_or(Error::Truncated)?;
         let dce_style = token.first() != Some(&0x60);
         let inner = ap_req_token(token)?;
@@ -414,7 +444,9 @@ impl GssContext {
             expected_server,
             expected_realm,
             keys: service_keys,
-            key_kvnos: None,
+            // MIT pins the ticket kvno only on the fully specified (explicit
+            // server) path; a wildcard acceptor name iterates every key.
+            key_kvnos: expected_server.and(service_kvnos),
             kvno: None,
             skew: krb5_protocol::DEFAULT_SKEW,
             addresses: None,
@@ -2117,14 +2149,41 @@ pub fn spnego_accept(
     expected_realm: Option<&str>,
     rcache: &ReplayCache,
 ) -> Result<(GssContext, Vec<u8>), Error> {
+    spnego_accept_kt(
+        token,
+        service_keys,
+        None,
+        channel_bindings,
+        expected_server,
+        expected_realm,
+        rcache,
+    )
+}
+
+/// [`spnego_accept`] with a per-key kvno slice; see
+/// [`GssContext::accept_sec_context_kt`] for the kvno-pinning semantics.
+///
+/// # Errors
+///
+/// Truncated SPNEGO, AP-REQ verify, or MIC verify.
+pub fn spnego_accept_kt(
+    token: &[u8],
+    service_keys: &[ProtocolKey],
+    service_kvnos: Option<&[u32]>,
+    channel_bindings: Option<&ChannelBindings>,
+    expected_server: Option<&PrincipalName>,
+    expected_realm: Option<&str>,
+    rcache: &ReplayCache,
+) -> Result<(GssContext, Vec<u8>), Error> {
     let init = parse_neg_init(token)?;
     if !mech_list_has_krb5(&init.mech_list_der)? {
         return Err(Error::Truncated);
     }
     let mech = mech_token_as_gss(&init.mech_token);
-    let (mut ctx, ap_rep) = GssContext::accept_sec_context(
+    let (mut ctx, ap_rep) = GssContext::accept_sec_context_kt(
         &mech,
         service_keys,
+        service_kvnos,
         channel_bindings,
         expected_server,
         expected_realm,

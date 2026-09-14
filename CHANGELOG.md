@@ -50,6 +50,32 @@ this project uses semantic versioning once a crate is published.
   `mit-fast-kdc-gate.sh`, MIT `kinit -T` and Rust `krb5-kinit --fast`
   against the MIT KDC. Ledger: new `## B1` section (3 rows, all exact;
   433 rows, exact 347); `ci-policy.py` counts it.
+- **acceptor.** AP-REQ time validation is `krb5int_validate_times`
+  (`valid_times.c:36-58`): not-yet-valid is judged against `starttime`
+  and, when the ticket carries none, against `authtime` — before, a
+  ticket with a future `authtime` and no `starttime` was accepted; the
+  `INVALID` flag is `KRB5KRB_AP_ERR_TKT_INVALID` (145, `rd_req_dec.c:636`),
+  checked after the times — before it was reported as `TKT_NYV` (33).
+  Key pinning follows `try_one_princ` (`rd_req_dec.c:374-385`): the
+  product GSS acceptor `krb5-gss-accept` passes the keytab kvnos
+  (`accept_sec_context_kt` / `spnego_accept_kt`), so a ticket labelled
+  kvno N under a fully-specified acceptor name decrypts only with key N
+  — before, every key in the keytab was tried and a relabelled ticket
+  was accepted; when the keytab holds the principal at other kvnos only,
+  the refusal is `KRB5KRB_AP_ERR_BADKEYVER` (44) with `keytab_fetch_error`'s
+  "Cannot find key for %s kvno %d in keytab" (`rd_req_dec.c:139-148`),
+  not `NOKEY` (45); the kpasswd listener pins `expected_server` to
+  `kadmin/changepw@REALM`, so a `host/x` ticket that happens to decrypt
+  under the changepw key is refused with `NOT_US` (35), MIT's
+  `nomatch_error` at `rd_req_dec.c:382`. `krb5-forge-tgt`
+  grows `--authtime`, `--drop-starttime`, `--set-kvno`,
+  `--decrypt-keytab`; `krb5-pac-extract` prints the keytab kvno;
+  `scripts/gss-mit-server.c` takes an optional acceptor principal.
+  Z1.3 cells at the end of `client-differential-gate.sh`: a forged
+  future-`authtime`/no-`starttime` service ticket and a kvno-relabelled
+  one, both refused by the Rust acceptor and by MIT `gss-server` given
+  the fully-specified name. Ledger: `rd_req_dec.c` pinning row rewritten,
+  new `valid_times.c` row (434 rows, exact 348).
 
 ### W1-C
 

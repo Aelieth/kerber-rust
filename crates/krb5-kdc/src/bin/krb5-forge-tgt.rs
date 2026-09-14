@@ -4,6 +4,9 @@
 //!   krb5-forge-tgt --ccache IN --out OUT --claim-realm REALM --tgt krbtgt/C.TEST --key-hex HEX
 //!   krb5-forge-tgt --ccache IN --out OUT --claim-realm REALM --tgt krbtgt/C.TEST --password PW --principal NAME
 //!   optional --reseal-key-hex / --reseal-password + --reseal-principal to encrypt with a different key
+//!   optional --decrypt-keytab <kt> auto-selects the key matching the ticket's own etype+kvno
+//!   optional --authtime <+secs|epoch> / --drop-starttime rewrite the ticket times (acceptor NYV tests)
+//!   optional --set-kvno <n> relabels the ticket's cleartext kvno (acceptor key-pinning tests)
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -14,8 +17,8 @@ use std::process::ExitCode;
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, string_to_key};
 use krb5_kdc::s2k_params;
-use krb5_protocol::{FileCcache, parse_principal};
-use krb5_types::{EncTicketPart, OctetString, Ticket, TransitedEncoding, ku};
+use krb5_protocol::{FileCcache, Keytab, parse_principal};
+use krb5_types::{EncTicketPart, KerberosTime, OctetString, Ticket, TransitedEncoding, ku};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -32,6 +35,10 @@ fn main() -> ExitCode {
     let mut reseal_hex = None;
     let mut reseal_password = None;
     let mut reseal_principal = None;
+    let mut authtime: Option<String> = None;
+    let mut drop_starttime = false;
+    let mut set_kvno: Option<u32> = None;
+    let mut decrypt_keytab: Option<String> = None;
     let mut i = 0usize;
     while i < args.len() {
         match args[i].as_str() {
@@ -87,11 +94,28 @@ fn main() -> ExitCode {
                 reseal_principal = args.get(i + 1).cloned();
                 i += 2;
             }
+            "--authtime" => {
+                authtime = args.get(i + 1).cloned();
+                i += 2;
+            }
+            "--drop-starttime" => {
+                drop_starttime = true;
+                i += 1;
+            }
+            "--set-kvno" => {
+                set_kvno = args.get(i + 1).and_then(|v| v.parse::<u32>().ok());
+                i += 2;
+            }
+            "--decrypt-keytab" => {
+                decrypt_keytab = args.get(i + 1).cloned();
+                i += 2;
+            }
             _ => {
                 eprintln!(
                     "usage: krb5-forge-tgt --ccache <in> --out <out> --tgt <krbtgt/REALM> \
-                     (--claim-realm <realm> [--keep-cipher | --key-hex <hex> | --password <pw> --principal <name@REALM>] \
+                     (--claim-realm <realm> [--keep-cipher | --key-hex <hex> | --password <pw> --principal <name@REALM> | --decrypt-keytab <kt>] \
                      [--reseal-key-hex <hex> | --reseal-password <pw> --reseal-principal <name@REALM>] \
+                     [--authtime <+secs|epoch>] [--drop-starttime] [--set-kvno <n>] \
                      | --alias-as <krbtgt/REALM@REALM>)"
                 );
                 return ExitCode::from(2);
@@ -112,6 +136,24 @@ fn main() -> ExitCode {
     if keep_cipher {
         return claim_realm_keep_cipher(&cc_path, &out_path, &tgt_sname, &claim_realm);
     }
+    // `--decrypt-keytab` picks the key matching the ticket's own etype+kvno, so
+    // callers do not have to know which enctype/kvno the KDC sealed a service
+    // ticket under (a keytab can hold several).
+    let keytab_keys: Option<Vec<(i32, u32, ProtocolKey)>> = match decrypt_keytab {
+        None => None,
+        Some(ref path) => match Keytab::parse(&fs::read(path).unwrap_or_default()) {
+            Ok(kt) => Some(
+                kt.entries
+                    .iter()
+                    .map(|e| (e.key.etype().to_iana(), e.kvno, e.key.clone()))
+                    .collect(),
+            ),
+            Err(e) => {
+                eprintln!("krb5-forge-tgt: decrypt-keytab: {e}");
+                return ExitCode::from(2);
+            }
+        },
+    };
     let (hex_for_decrypt, password_key) = match (key_hex, password, principal) {
         (Some(hex), None, None) => (Some(hex), None),
         (None, Some(pw), Some(princ)) => match key_from_password(&pw, &princ) {
@@ -121,8 +163,11 @@ fn main() -> ExitCode {
                 return ExitCode::from(2);
             }
         },
+        (None, None, None) if keytab_keys.is_some() => (None, None),
         _ => {
-            eprintln!("krb5-forge-tgt: need --key-hex or --password plus --principal");
+            eprintln!(
+                "krb5-forge-tgt: need --key-hex, --password plus --principal, or --decrypt-keytab"
+            );
             return ExitCode::from(2);
         }
     };
@@ -187,6 +232,33 @@ fn main() -> ExitCode {
             }
         },
     };
+    // `+N` is N seconds from now (a not-yet-valid ticket); a bare integer is an
+    // absolute Unix time.
+    let authtime_ts: Option<KerberosTime> = match authtime.as_deref() {
+        None => None,
+        Some(s) => {
+            let ts = if let Some(rel) = s.strip_prefix('+') {
+                match rel.parse::<i64>() {
+                    Ok(n) => KerberosTime::now()
+                        .add_seconds(n)
+                        .unwrap_or_else(|_| KerberosTime::now()),
+                    Err(e) => {
+                        eprintln!("krb5-forge-tgt: --authtime: {e}");
+                        return ExitCode::from(2);
+                    }
+                }
+            } else {
+                match s.parse::<u32>() {
+                    Ok(n) => KerberosTime::from_unix_seconds(n),
+                    Err(e) => {
+                        eprintln!("krb5-forge-tgt: --authtime: {e}");
+                        return ExitCode::from(2);
+                    }
+                }
+            };
+            Some(ts)
+        }
+    };
     let mut found = false;
     for cred in &mut cc.creds {
         if cred.is_config() || cred.is_removed() {
@@ -201,7 +273,21 @@ fn main() -> ExitCode {
         };
         // Ticket enc etype is first_current_key (profile order). --key-hex
         // bytes from dump-keytab must be wrapped as that etype, not always 18.
-        let key = if let Some(ref hex) = hex_for_decrypt {
+        let key = if let Some(ref keys) = keytab_keys {
+            // Match the ticket's own etype, and its kvno when it carries one
+            // (else the highest kvno for that etype).
+            let et = ticket.enc_part.etype;
+            let want_kvno = ticket.enc_part.kvno;
+            let picked = keys
+                .iter()
+                .filter(|(kt_et, kvno, _)| *kt_et == et && want_kvno.is_none_or(|w| *kvno == w))
+                .max_by_key(|(_, kvno, _)| *kvno)
+                .map(|(_, _, k)| k.clone());
+            let Some(k) = picked else {
+                continue;
+            };
+            k
+        } else if let Some(ref hex) = hex_for_decrypt {
             let Ok(et) = EncryptionType::from_iana(ticket.enc_part.etype)
                 .or_else(|_| EncryptionType::known(ticket.enc_part.etype))
             else {
@@ -227,6 +313,12 @@ fn main() -> ExitCode {
         if let Some(ref r) = claim_crealm_ks {
             part.crealm = r.clone();
         }
+        if let Some(ref at) = authtime_ts {
+            part.authtime = at.clone();
+        }
+        if drop_starttime {
+            part.starttime = None;
+        }
         let der = match encode(&part) {
             Ok(d) => d,
             Err(e) => {
@@ -244,6 +336,9 @@ fn main() -> ExitCode {
         };
         ticket.enc_part.cipher = OctetString::from(cipher);
         ticket.enc_part.etype = reseal.etype().to_iana();
+        if let Some(k) = set_kvno {
+            ticket.enc_part.kvno = Some(k);
+        }
         ticket.realm = claim_ks.clone();
         match encode(&ticket) {
             Ok(tkt) => cred.ticket = tkt,

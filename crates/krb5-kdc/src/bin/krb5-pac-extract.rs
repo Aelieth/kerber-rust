@@ -436,11 +436,14 @@ fn dump_keytab(args: &[String]) -> ExitCode {
         }
     };
     for e in &kt.entries {
+        // `KEY <etype> <hex> <name> <kvno>` — the kvno trails so existing
+        // callers that read `$3` for the hex are unaffected.
         println!(
-            "KEY {} {} {}",
+            "KEY {} {} {} {}",
             e.key.etype().to_iana(),
             hex_bytes(e.key.as_bytes()),
-            e.name.components_joined()
+            e.name.components_joined(),
+            e.kvno
         );
     }
     ExitCode::SUCCESS

@@ -58,6 +58,14 @@ main(int argc, char **argv)
     check(krb5_cc_close(context, ccache));
 
     ret = krb5_verify_init_creds(context, &creds, princ, NULL, NULL, &opt);
+    if (ret) {
+        /* The extended message (k5_setmsg), e.g. keytab_fetch_error's
+         * "Cannot find key for %s kvno %d in keytab", so the gate can compare
+         * the refusal code's text with the Rust twin's. */
+        const char *msg = krb5_get_error_message(context, ret);
+        fprintf(stderr, "t_vfy_increds: %s\n", msg);
+        krb5_free_error_message(context, msg);
+    }
     krb5_free_cred_contents(context, &creds);
     krb5_free_principal(context, princ);
     krb5_free_context(context);

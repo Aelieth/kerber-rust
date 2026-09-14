@@ -72,6 +72,10 @@ fn main() {
         std::process::exit(1);
     };
     let service_keys: Vec<_> = kt.entries.iter().map(|e| e.key.clone()).collect();
+    // Parallel kvnos so a fully specified acceptor name pins the ticket kvno
+    // (MIT try_one_princ); a ticket labelled kvno N is not opened by a key
+    // labelled M != N.
+    let service_kvnos: Vec<u32> = kt.entries.iter().map(|e| e.kvno).collect();
     eprintln!(
         "gss-accept keytab entries={} principal={}",
         service_keys.len(),
@@ -103,9 +107,10 @@ fn main() {
             }
         };
         let accepted = if krb5_gss::is_spnego(&tok) {
-            match krb5_gss::spnego_accept(
+            match krb5_gss::spnego_accept_kt(
                 &tok,
                 &service_keys,
+                Some(&service_kvnos),
                 bindings.as_ref(),
                 Some(&ent.name),
                 Some(realm),
@@ -119,9 +124,10 @@ fn main() {
             }
         } else {
             let inner = krb5_gss::spnego_inner(&tok).map_or_else(|_| tok.clone(), Vec::from);
-            GssContext::accept_sec_context(
+            GssContext::accept_sec_context_kt(
                 &inner,
                 &service_keys,
+                Some(&service_kvnos),
                 bindings.as_ref(),
                 Some(&ent.name),
                 Some(realm),

@@ -86,12 +86,17 @@ static void recv_token(int fd, gss_buffer_desc *tok) {
 
 int main(int argc, char **argv) {
     if (argc < 4) {
-        fprintf(stderr, "usage: %s keytab ip port\n", argv[0]);
+        fprintf(stderr, "usage: %s keytab ip port [acceptor-principal]\n", argv[0]);
         return 2;
     }
     const char *keytab = argv[1];
     const char *ip = argv[2];
     int port = atoi(argv[3]);
+    /* Optional argv[4]: a fully-qualified acceptor principal (name/inst@REALM).
+     * A host-based name (the default) is a matching principal, so rd_req scans
+     * every keytab key and ignores the ticket kvno (kt_file.c iteration). A
+     * fully-specified name makes rd_req pin the exact kvno (try_one_princ). */
+    const char *acceptor_princ = (argc >= 5) ? argv[4] : NULL;
     signal(SIGPIPE, SIG_IGN);
     setenv("KRB5_KTNAME", keytab, 1);
 
@@ -100,7 +105,13 @@ int main(int argc, char **argv) {
     gss_name_t aname = GSS_C_NO_NAME;
     gss_cred_id_t acred = GSS_C_NO_CREDENTIAL;
     OM_uint32 amaj, amin;
-    amaj = gss_import_name(&amin, &nbuf, GSS_C_NT_HOSTBASED_SERVICE, &aname);
+    if (acceptor_princ != NULL) {
+        gss_buffer_desc pbuf = { strlen(acceptor_princ), (void *)acceptor_princ };
+        amaj = gss_import_name(&amin, &pbuf,
+                               (gss_OID)GSS_KRB5_NT_PRINCIPAL_NAME, &aname);
+    } else {
+        amaj = gss_import_name(&amin, &nbuf, GSS_C_NT_HOSTBASED_SERVICE, &aname);
+    }
     if (amaj != GSS_S_COMPLETE) {
         die_gss("import_name", amaj, amin);
     }

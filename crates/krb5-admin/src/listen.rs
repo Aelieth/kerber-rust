@@ -416,12 +416,16 @@ fn handle_kpasswd_from(
         let (keys, kvnos) = changepw_verify_keys(&g, service_key);
         (g.realm().to_owned(), keys, kvnos)
     };
+    // MIT schpw.c / the changepw acceptor acquires the kadmin/changepw cred, so
+    // krb5_rd_req is pinned to that service: a ticket for any other principal
+    // (e.g. host/x) is refused even if it decrypts under a shared key.
+    let changepw = krb5_kdc::documented_changepw();
     let params = ApVerifyParams {
         keys: &keys,
         key_kvnos: Some(kvnos.as_slice()),
         kvno: None,
-        expected_server: None,
-        expected_realm: None,
+        expected_server: Some(&changepw),
+        expected_realm: Some(store_realm.as_str()),
         skew: DEFAULT_SKEW,
         addresses: None,
         now: None,
