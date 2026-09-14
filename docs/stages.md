@@ -96,7 +96,7 @@ gates — `samba-ad-gate`, `ad-windows-gate`, `ad-s4u-gate`,
 
 ## Era III — W1 MIT parity sweep (closed)
 
-W1 (`working/plan-w1-index.md`) swept the KDC against MIT 1.22.2 source
+W1 (`working/w1-sweep/plan-w1-index-0907-1954.md`, archive `working/w1-sweep/README.md`) swept the KDC against MIT 1.22.2 source
 function by function: A′-1…4 (FAST/cookie/entry validation, AS/`kdc_util`,
 TGS policy/S4U/PAC, kadm5) produced the graded
 [`mit-parity-ledger.md`](mit-parity-ledger.md) (one row per MIT check:

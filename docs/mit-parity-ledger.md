@@ -8,7 +8,7 @@ regeneration under `working/logs/audit-polish-0902/w0e/`).
 Heimdal/Samba are regression, not the equality bar. Isolation: host
 `/etc/krb5.conf` stays `TESTLABBY.LOCAL`.
 
-This file is the W1-A sweep (`working/ledger-w1a-0903-1702.md`) with
+This file is the W1-A sweep (`working/polish-pass/ledger-w1a-0903-1702.md`) with
 Part 0 of `working/plan-audit-polish-w1a-f-0903-1330.md` applied from
 the three verification reports
 `working/logs/audit-polish-0902/w0c-audit/ledger-verify-a{1,2,3}-*.md`.
@@ -72,9 +72,9 @@ Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
-Counts (after W1-Z Z2):
-**447** = A1 128 + A2 91 + A3 78 + A4 145 + B1 5.
-exact 354 · stricter-documented 15 · deviation 28 ·
+Counts (after W1-Z Z4):
+**448** = A1 128 + A2 91 + A3 78 + A4 146 + B1 5.
+exact 354 · stricter-documented 15 · deviation 29 ·
 absent 2 · deferred 48.
 
 Counting rule: a row with two verdicts (`exact (unit)`,
@@ -85,7 +85,7 @@ Annotation rule: an `exact` row whose proof is unit-only carries
 state is reachable only by forged PDUs / faulted stores, so no live
 differential cell can exist); rows without it name a live gate cell or
 `diffsend` case. The per-row sweep that adds the annotation to every
-unit-only `exact` row is W3 (`working/plan-w1z.md` §W3 handoff). The two
+unit-only `exact` row is W3 (`working/w1-sweep/plan-w1z-0913-1915.md` §W3 handoff). The two
 `absent` rows are the user's stated non-goals (OTP preauth,
 `gss_wrap_size_limit`).
 
@@ -93,7 +93,7 @@ Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
 A2 10 (9 report rows + the `kdc_util.c:144-191` split) + A3 10 = 28
 row inserts (the plan's "27" counted the split inside the A2 9).
 W1-Z Z2 added the eight `deferred` A4 rows for the W1-C kadm5 folds
-that had no owner (`working/plan-w1z.md` W3 handoff table).
+that had no owner (`working/w1-sweep/plan-w1z-0913-1915.md` W3 handoff table).
 
 ## Ranked F-batches (security > parity > e_text)
 
@@ -538,7 +538,8 @@ checksum/rc4/declared-cksumtype rows that sat under A3.
 | checksum_hmac_md5.c:53-66 | `-137` MD5_HMAC_ARCFOUR uses the raw key; `-138` HMAC-MD5-ARCFOUR uses HMAC(key, `"signaturekey\0"`) | n/a | ops.rs hmac_md5_arcfour_checksum | `-137` raw key; `-138` KS | exact | `verify_checksum_type_md5_hmac_rc4_uses_raw_key` (unit; MIT clients emit `-138`) |
 | enc_rc4.c:17-35 | RC4 usage `3→8, 9→9, 23→13` | n/a | weak.rs arcfour_translate_usage | 9 is 9 | exact | `arcfour_usage_9_is_9`; live rc4 both directions `w1h/rc4-1.log` / `rc4-2.log` (TGS-REP usage 9) |
 | schpw.c:47-82,89-95,110-111,126-166,273-350,384-397; net-server.c:1103 | kpasswd pre-AP-REQ bailout (no datagram); AP-REQ `>=` remaining is bailout; AP-REQ fail `chpwfail` AUTHERROR 3 with `error_code` **60**; PRIV fail after AP-REQ KRB-PRIV HARDERROR 2; no per-listener rcache | no datagram / framed `chpwfail` 60 / two replies on UDP retransmit | krb5-admin/listen.rs handle_kpasswd_from | **60**; empty `e_text`; `e_data` result‖text | exact | `kpasswd_bad_ap_req_is_chpwfail_autherror`; `kpasswd_ap_req_fills_datagram_is_bailout`; `scripts/kpasswd-gate.sh` raw + fill + retransmit both legs |
-| recvauth.c:132-138,150-186; rd_req.c:56-57 | kpropd junk AP-REQ: not APPLICATION 14 → `KRB_AP_ERR_MSG_TYPE`; else `problem - ERROR_TABLE_BASE_krb5` > 127 → **60**; `e_text = error_message` + NUL | **40** `Invalid message type\0` for `\xff\x00\x01` | kprop.rs kprop_rd_req_error | **40** + NUL | exact | `kpropd_ap_req_fail_is_krb_error`; `scripts/kprop-gate.sh` junk AP-REQ both legs |
+| net-server.c:1278,1391-1414 (kadmind shares the KDC net-server) | kpasswd TCP length prefix > `bufsiz-4` (1 MiB): `make_toolong_error` writes a KRB-ERROR **61** then the connection is dropped | **61** | krb5-admin/listen.rs serve_kpasswd_tcp; krb5-admin/listen.rs read_len_pref | 64 KiB cap; over-cap frames are logged and the connection closed with no reply | deviation | a 64 KiB cap is stricter than MIT's 1 MiB and a silent close discloses less than a KRB-ERROR; no legitimate producer emits a >2 KiB kpasswd frame (`changepw.c`). Forge-only; proposed `scripts/kpasswd-gate.sh` over-cap cell. W1-Z audit F-D 1 |
+| recvauth.c:132-138,150-186; rd_req.c:56-57 | kpropd junk AP-REQ: not APPLICATION 14 → `KRB_AP_ERR_MSG_TYPE`; else `problem - ERROR_TABLE_BASE_krb5` > 127 → **60**; `e_text = error_message` + NUL. Rust-only error kinds (I/O, keytab) also fall to **60** but carry the Rust `Display` text where MIT names the com_err string (`recvauth_error_fields` catch-all) — text-shape only, forge-only, W1-Z audit F-B 2 | **40** `Invalid message type\0` for `\xff\x00\x01` | kprop.rs kprop_rd_req_error | **40** + NUL | exact | `kpropd_ap_req_fail_is_krb_error`; `scripts/kprop-gate.sh` junk AP-REQ both legs |
 | svc.c:328-367,486-520; rpc_callmsg.c:107-108; kadm_rpc_svc.c:80-88 | kadmind RPC: unknown program `PROG_UNAVAIL`; 2112 wrong vers `PROG_MISMATCH` low/high 2; AUTH_NONE `AUTH_TOOWEAK`; REPLY-typed no reply | accepted 1 / accepted 2+2+2 / denied AUTH_TOOWEAK 5 / idle | kadm5.rs handle_rpc | same | exact | `bad_program_is_prog_unavail`; `kadm_vers_99_is_prog_mismatch_2_2`; `reply_typed_rpc_is_no_reply`; `scripts/kadmin-gate.sh` framing both legs |
 | crypto_int.h:596-608; krb5_c_verify_checksum | declared cksumtype `ctp` selects the verifier | n/a | krb5-crypto/ops.rs verify_checksum_type | declared type used | exact | `verify_checksum_type_honours_declared_unkeyed`; `verify_checksum_type_md5_hmac_rc4_uses_raw_key` |
 | rd_req_dec.c:748-749 | AP-REQ authenticator checksum keyed with the ticket session key; GSS acceptor supplies empty `app_cksum` so a non-0x8003 type is verified over empty data | n/a | krb5-protocol/ap_req.rs verify_inner | session key; 0x8003 skipped | exact | `accept_non_8003_over_data_is_bad_sig`; `accept_non_8003_empty_with_subkey_uses_session_key` |
@@ -684,7 +685,7 @@ checksum/rc4/declared-cksumtype rows that sat under A3.
 
 The client half of W1-B. Until W1-Z Z1.2 this section had no rows and the
 client was graded only in `docs/security.md`; the rows here are the ones
-the section re-audit found laxer than MIT (`working/audit-w1z-0913.md`
+the section re-audit found laxer than MIT (`working/w1-sweep/audit-w1z-0913.md`
 §3.2) and the fix that made them exact. Oracle for the live cells: the
 MIT 1.22.2 KDC behind `scripts/lib/kdc-rewrite-proxy.py`, MIT `kinit -T`
 and Rust `krb5-kinit --fast` side by side (`scripts/mit-fast-kdc-gate.sh`

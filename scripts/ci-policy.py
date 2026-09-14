@@ -1121,7 +1121,7 @@ def check_no_red_target_trees(root: pathlib.Path | None = None) -> None:
         _die(
             f"{len(trees)} cargo build tree(s) under {root} ({size}); they are rebuildable "
             "scratch, the stamped unit-red-*.log keeps the rc and FAILED list — "
-            "plan-w1z.md Z5: find working/logs/w1-sweep -type d -name 'red-target-*' "
+            "working/w1-sweep/plan-w1z-0913-1915.md Z5: find working/logs/w1-sweep -type d -name 'red-target-*' "
             f"-prune -exec rm -rf {{}} +\n  {listing}"
         )
 

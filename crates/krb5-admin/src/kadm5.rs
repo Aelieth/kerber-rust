@@ -2950,7 +2950,7 @@ fn auth_code_for(proc: u32) -> u32 {
 /// kadm5 return code for a store error surfacing from the `proc` stub. A
 /// store-level `AclDenied` takes the stub's own `KADM5_AUTH_*` (no in-tree
 /// store path returns it today — the ACL is checked inline in each arm —
-/// so this is latent hygiene, `working/plan-w1z.md` Z1b.3).
+/// so this is latent hygiene, `working/w1-sweep/plan-w1z-0913-1915.md` Z1b.3).
 fn kadm5_code(proc: u32, e: &Error) -> u32 {
     let s = match e {
         Error::AclDenied | Error::KpropUnauthorized(_) => return auth_code_for(proc),

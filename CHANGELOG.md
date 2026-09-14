@@ -265,6 +265,19 @@ this project uses semantic versioning once a crate is published.
   tree left under `working/logs/`. `ci.yml` `mit-extra` drops the
   `run-harness`/`stop-harness` pair that booted and stopped the stock
   container before its first gate. Every rule has a `_self_test` fixture.
+- **docs (Z4 archive + close).** The two remaining class-sweep text-shape
+  items are ledgered: kpasswd TCP frames over the 64 KiB cap are logged
+  and the connection closed where MIT's shared `net-server.c:1391-1414`
+  answers `KRB_ERR_FIELD_TOOLONG` at 1 MiB (`deviation`, forge-only), and
+  kpropd's Rust-only error kinds reach the wire as **60** with the Rust
+  `Display` text where MIT names the com_err string (`recvauth.c:168`,
+  clause on the existing `exact` row). Counts 448 = A1 128 + A2 91 +
+  A3 78 + A4 146 + B1 5; exact 354 · stricter-documented 15 · deviation
+  29 · absent 2 · deferred 48. W1 is closed: its plans, summaries,
+  audits and ledger draft are archived under `working/w1-sweep/`
+  (goal.txt `-<mmdd>-<time>` names, README + closeout); the in-tree
+  cross-references (`stages.md`, ledger header, `kadm5.rs`,
+  `ci-policy.py`) point at the archive.
 
 ### W1-C
 
