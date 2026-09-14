@@ -36,6 +36,8 @@ pub enum Error {
     Rng,
     /// Password rejected by named policy.
     PasswordPolicy(String),
+    /// `KADM5_BAD_KEYSALTS`: requested `-e` is outside `allowed_keysalts`.
+    BadKeysalts,
     /// `KADM5_PASS_TOOSOON`: min_life not elapsed. `until` is unix seconds.
     PassTooSoon {
         /// `last_pwd_change + pw_min_life`.
@@ -71,6 +73,7 @@ impl fmt::Display for Error {
             }
             Self::Rng => write!(f, "rng failed"),
             Self::PasswordPolicy(s) => write!(f, "password policy: {s}"),
+            Self::BadKeysalts => write!(f, "Invalid key/salt tuples"),
             Self::PassTooSoon { .. } => {
                 write!(f, "Current password's minimum life has not expired")
             }

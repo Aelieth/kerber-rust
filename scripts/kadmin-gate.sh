@@ -2973,6 +2973,32 @@ z1b1_leg() {
 z1b1_leg "$NAME" rust
 z1b1_leg "$NAME_MIT" mit
 
+echo "==== Z6.5 RPC create honours ks_tuple (svr_principal.c:444-447) ===="
+# MIT kadmin addprinc -randkey -e against both kadminds (still up after z11).
+# Date-bearing lines are dropped; only Key: lines are compared.
+z65_leg() {
+    local ctn=$1 client=$2 conf=$3 leg=$4
+    docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+        -q 'addprinc -randkey -e aes128-cts-hmac-sha1-96:normal z65' 2>&1 \
+        | grep -F 'Principal "z65@KERBER.TEST" created.'
+    local keys
+    keys="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+        -q 'getprinc z65' | grep '^Key:')"
+    echo "$leg: $keys"
+    echo "$keys" | grep -Fx 'Key: vno 1, aes128-cts-hmac-sha1-96' >/dev/null
+    [ "$(echo "$keys" | grep -c '^Key:')" = 1 ] || {
+        echo "$leg: z65 has more than the requested keysalt: $keys" >&2
+        exit 1
+    }
+    echo "$keys" > "$SCRATCH/z65-$leg.txt"
+}
+z65_leg "$NAME" admin/admin /tmp/kadmin-krb5.conf rust
+z65_leg "$NAME_MIT" admin/admin /etc/krb5.conf mit
+diff "$SCRATCH/z65-rust.txt" "$SCRATCH/z65-mit.txt" || {
+    echo "Z6.5: getprinc z65 Key: lines differ between the Rust kadmind and MIT kadmind" >&2
+    exit 1
+}
+
 log "kadmin.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"addprinc+cpw+get+list+mod+chrand+norandkey+lockdown+purgekeys+setstr+renprinc+del+alias"'
 exit 0
 

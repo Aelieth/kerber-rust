@@ -153,6 +153,12 @@ this project uses semantic versioning once a crate is published.
   `ENCTYPE_NULL` and still emit NEEDED_PREAUTH; `add_etype_info` skips
   PA 19 when there is no key). diffsend `as-needpreauth-hints-unpermitted`
   (111 cases; hint types `[136, 16, 147, 133]`, no 2 / 19 / 151).
+- **kadmind.** RPC `kadm5_create_principal_3` honours the v3 `ks_tuple`
+  array like `apply_keysalt_policy` (`svr_principal.c:444-447`): `addprinc
+  -e` is the key list, else the bound policy's `allowed_keysalts`, else
+  `supported_enctypes`; a tuple outside the policy is `KADM5_BAD_KEYSALTS`.
+  Before, `parse_create` skipped the array and the CREATE arm passed
+  `&[]`. Ledger: new A4 row `svr_principal.c:444-447` (451 rows, exact 356).
 - **kadmind.** `kdb_put_entry` stamps `KRB5_TL_MOD_PRINC` with the
   authenticated kadm5 caller (`server_kdb.c:376-377`
   `krb5_dbe_update_mod_princ_data(…, now, handle->current_caller)`), and

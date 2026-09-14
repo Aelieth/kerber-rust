@@ -147,6 +147,8 @@ const KADM5_AUTH_INITIAL: u32 = 43_787_582;
 const KADM5_AUTH_CHANGEPW: u32 = 43_787_565;
 /// MIT `ovk` 50 (`KADM5_AUTH_SETKEY`).
 const KADM5_AUTH_SETKEY: u32 = 43_787_570;
+/// MIT `ovk` 58 (`KADM5_BAD_KEYSALTS`).
+const KADM5_BAD_KEYSALTS: u32 = 43_787_578;
 /// MIT `ovk` 59 (`KADM5_SETKEY_BAD_KVNO`).
 const KADM5_SETKEY_BAD_KVNO: u32 = 43_787_579;
 /// MIT `ovk` 60 (`KADM5_AUTH_EXTRACT`).
@@ -2521,7 +2523,7 @@ fn dispatch_kadm5_ticket(
                 &c.name,
                 &req,
                 c.pass.as_deref().map(str::as_bytes),
-                &[],
+                &c.ks,
                 &c.ent,
                 actor,
             );
@@ -2974,6 +2976,8 @@ fn kadm5_code(proc: u32, e: &Error) -> u32 {
         KADM5_PASS_REUSE
     } else if s.contains("setkey kvno") {
         KADM5_SETKEY_BAD_KVNO
+    } else if s == "Invalid key/salt tuples" {
+        KADM5_BAD_KEYSALTS
     } else if s.contains("principal exists") {
         KADM5_DUP
     } else if s == "Alias target must be within the same realm" {
@@ -3366,6 +3370,9 @@ struct CreateFields {
     ent: AdminEnt,
     tl_data: Vec<TlData>,
     n_key_data: u32,
+    /// v3 `ks_tuple` (`xdr_cprinc3_arg`); empty on v2 and when the
+    /// client omitted `-e`.
+    ks: Vec<EncryptionType>,
 }
 
 /// `xdr_cprinc_arg` / `xdr_cprinc3_arg`: api_version, the whole
@@ -3376,9 +3383,7 @@ fn parse_create(args: &[u8], v3: bool) -> Result<CreateFields, Error> {
     let (name, prealm) = r.principal_realm()?;
     let (fields, n_key_data) = parse_principal_ent_rest(&mut r)?;
     let mask = r.u32()?;
-    if v3 {
-        r.skip_array_i32_pairs()?;
-    }
+    let ks = if v3 { r.key_salt_tuples()? } else { Vec::new() };
     let pass = r.nullstring()?;
     let ent = AdminEnt {
         mask,
@@ -3397,6 +3402,7 @@ fn parse_create(args: &[u8], v3: bool) -> Result<CreateFields, Error> {
         ent,
         tl_data: fields.tl_data,
         n_key_data,
+        ks,
     })
 }
 
@@ -4104,6 +4110,18 @@ impl<'a> XdrR<'a> {
             self.u32()?;
         }
         Ok(())
+    }
+
+    /// `xdr_array` of `krb5_key_salt_tuple` (`kadm_rpc_xdr.c` `xdr_krb5_key_salt_tuple`).
+    fn key_salt_tuples(&mut self) -> Result<Vec<EncryptionType>, Error> {
+        let n = self.u32()?;
+        let mut out = Vec::new();
+        for _ in 0..n {
+            let et = i32::try_from(self.u32()?).unwrap_or(i32::MAX);
+            let _salttype = self.u32()?;
+            out.push(EncryptionType::from_iana(et).map_err(|e| Error::Inner(e.to_string()))?);
+        }
+        Ok(out)
     }
 }
 

@@ -30,7 +30,7 @@ thread_local! {
     static FAIL_NEXT_CHRAND_SAVE: Cell<bool> = const { Cell::new(false) };
 }
 
-use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
+use krb5_crypto::{EncryptionType, ProtocolKey, parse_keysalt_list, string_to_key};
 use krb5_protocol::{Keytab, KeytabEntry, ReplayCache};
 use krb5_types::pac::{PacIdentity, RpcSid};
 use krb5_types::pkinit::PkinitCa;
@@ -1724,8 +1724,10 @@ impl PrincipalStore {
     /// `pw_expiration` ← `now + pw_max_life` under a policy with one, else 0;
     /// a password is keyed at `kvno` (default 1) and a NULL password is
     /// `krb5_dbe_crk` with the kvno rewritten; `KADM5_POLICY` binds the name
-    /// (`adb.policy`) even when the policy does not exist. TL-data and
-    /// key/salt policy stay with the callers.
+    /// (`adb.policy`) even when the policy does not exist. Key/salt tuples
+    /// are `apply_keysalt_policy` (`svr_principal.c:444-447`): the request's
+    /// `-e` list, else the bound policy's `allowed_keysalts`, else
+    /// `supported_enctypes`. TL-data stays with the callers.
     ///
     /// # Errors
     ///
@@ -1754,11 +1756,11 @@ impl PrincipalStore {
             self.check_new_password(name, policy_name.as_deref(), pw)?;
         }
         let now = unix_now();
-        let use_etypes = if etypes.is_empty() {
-            self.policy.password_etypes()
-        } else {
-            etypes.to_vec()
-        };
+        let use_etypes = apply_keysalt_policy(
+            polent.as_ref().and_then(|p| p.allowed_keysalts.as_deref()),
+            etypes,
+            &self.policy.password_etypes(),
+        )?;
         let salt = name.default_salt(princ_realm);
         let kvno = if ent.mask & kadm5_mask::KVNO != 0 {
             ent.kvno
@@ -3728,6 +3730,46 @@ fn sid_from_random_bytes(b: &[u8; 12]) -> Result<RpcSid, Error> {
         return Err(Error::Rng);
     }
     Ok(sid)
+}
+
+/// MIT `apply_keysalt_policy` (`svr_principal.c:128-231`): the request's
+/// `-e` tuples when present, else the bound policy's `allowed_keysalts`,
+/// else `supported_enctypes`. A requested tuple outside the policy is
+/// `KADM5_BAD_KEYSALTS`. Salt types are stripped like `parse_keysalt_list`
+/// (the live cell is `:normal`).
+///
+/// # Errors
+///
+/// [`Error::BadKeysalts`].
+pub fn apply_keysalt_policy(
+    allowed_keysalts: Option<&str>,
+    requested: &[EncryptionType],
+    supported: &[EncryptionType],
+) -> Result<Vec<EncryptionType>, Error> {
+    let allowed = allowed_keysalts
+        .filter(|s| !s.is_empty())
+        .map(parse_keysalt_list);
+    match allowed {
+        None => {
+            if requested.is_empty() {
+                Ok(supported.to_vec())
+            } else {
+                Ok(requested.to_vec())
+            }
+        }
+        Some(ak) => {
+            for e in requested {
+                if !ak.contains(e) {
+                    return Err(Error::BadKeysalts);
+                }
+            }
+            if requested.is_empty() {
+                Ok(ak)
+            } else {
+                Ok(ak.into_iter().filter(|e| requested.contains(e)).collect())
+            }
+        }
+    }
 }
 
 /// Fill a random protocol key of `etype`.
