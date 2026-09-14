@@ -111,6 +111,19 @@ pub struct KeyEntry {
     pub kdb_salt: Option<Vec<u8>>,
 }
 
+/// Why [`Principal::find_enctype`] found nothing: MIT `KRB5_KDB_NO_MATCHING_KEY`
+/// (no key of that etype/kvno at all) versus `KRB5_KDB_NO_PERMITTED_KEY` (the
+/// requested etype, or every matching key, is outside `permitted_enctypes`).
+/// Both are KDB-library codes the KDC clamps to 60 `GENERIC` on the wire; the
+/// split is for logs and tests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyLookup {
+    /// `KRB5_KDB_NO_MATCHING_KEY`.
+    NoMatchingKey,
+    /// `KRB5_KDB_NO_PERMITTED_KEY`.
+    NoPermittedKey,
+}
+
 impl KeyEntry {
     /// Key without dump salt metadata (`ver` 1 on write).
     #[must_use]
@@ -597,6 +610,33 @@ impl Policy {
             .is_none_or(|v| v.contains(&e))
     }
 
+    /// MIT `krb5_dbe_find_enctype` under this policy's `permitted_enctypes`
+    /// ([`Principal::find_enctype`] with [`Policy::etype_permitted`]).
+    ///
+    /// # Errors
+    ///
+    /// [`KeyLookup::NoMatchingKey`] / [`KeyLookup::NoPermittedKey`] as
+    /// [`Principal::find_enctype`].
+    pub fn find_enctype<'p>(
+        &self,
+        p: &'p Principal,
+        etype: Option<EncryptionType>,
+        kvno: u32,
+    ) -> Result<&'p KeyEntry, KeyLookup> {
+        p.find_enctype(etype, kvno, |e| self.etype_permitted(e))
+    }
+
+    /// MIT `get_first_current_key` (`kdc_util.c:462-473`): the first
+    /// *permitted* key of the highest kvno, `krb5_dbe_find_enctype(-1, -1, 0)`.
+    ///
+    /// # Errors
+    ///
+    /// [`KeyLookup::NoMatchingKey`] when there are no keys,
+    /// [`KeyLookup::NoPermittedKey`] when none at the top kvno is permitted.
+    pub fn first_current_key<'p>(&self, p: &'p Principal) -> Result<&'p KeyEntry, KeyLookup> {
+        self.find_enctype(p, None, 0)
+    }
+
     /// MIT `krb5_get_host_realm` profile half (no DNS).
     #[must_use]
     pub fn realm_for_host(&self, host: &str) -> Option<&str> {
@@ -745,17 +785,68 @@ impl Principal {
             .max_by_key(|k| k.kvno)
     }
 
-    /// MIT `get_first_current_key`: the first stored key of the highest kvno.
+    /// The first stored key of the highest kvno, *unfiltered*: MIT
+    /// `current_kvno(tgt)` / `tgt->key_data[0]`. KDC key selection goes
+    /// through [`Policy::first_current_key`], which skips non-permitted
+    /// enctypes the way `krb5_dbe_find_enctype` does.
     #[must_use]
     pub fn first_current_key(&self) -> Option<&KeyEntry> {
         let kvno = self.keys.iter().map(|k| k.kvno).max()?;
         self.first_key_at_kvno(kvno)
     }
 
-    /// The first stored key of `kvno` (MIT `krb5_dbe_find_enctype(-1, -1, kvno)`).
+    /// The first stored key of `kvno`, unfiltered (see [`Principal::find_enctype`]
+    /// for the permitted-enctype form the KDC uses).
     #[must_use]
     pub fn first_key_at_kvno(&self, kvno: u32) -> Option<&KeyEntry> {
         self.keys.iter().find(|k| k.kvno == kvno)
+    }
+
+    /// MIT `krb5_dbe_def_search_enctype` from index 0 (`kdb_default.c:47-94`)
+    /// with salttype -1, i.e. `krb5_dbe_find_enctype(ent, etype, -1, kvno)`:
+    /// `etype` `None` is -1 (any); `kvno` 0 is the highest kvno and no other;
+    /// an `etype` that is not permitted is `NoPermittedKey` before the list is
+    /// read (`:60-61`); keys of a non-permitted enctype are skipped (`:82-86`)
+    /// and, when they were the only matches, the answer is `NoPermittedKey`
+    /// rather than `NoMatchingKey` (`:92-94`). Stored order decides between
+    /// several permitted keys of the same kvno, as MIT's `key_data` order does.
+    ///
+    /// # Errors
+    ///
+    /// [`KeyLookup::NoMatchingKey`] when no key matches `etype`/`kvno` at all;
+    /// [`KeyLookup::NoPermittedKey`] when `etype` itself, or every matching
+    /// key, is outside `permitted`.
+    pub fn find_enctype(
+        &self,
+        etype: Option<EncryptionType>,
+        kvno: u32,
+        permitted: impl Fn(EncryptionType) -> bool,
+    ) -> Result<&KeyEntry, KeyLookup> {
+        if let Some(e) = etype
+            && !permitted(e)
+        {
+            return Err(KeyLookup::NoPermittedKey);
+        }
+        let Some(top) = self.keys.iter().map(|k| k.kvno).max() else {
+            return Err(KeyLookup::NoMatchingKey);
+        };
+        let kvno = if kvno == 0 { top } else { kvno };
+        let mut saw_non_permitted = false;
+        for k in &self.keys {
+            if k.kvno != kvno || etype.is_some_and(|e| k.etype != e) {
+                continue;
+            }
+            if !permitted(k.etype) {
+                saw_non_permitted = true;
+                continue;
+            }
+            return Ok(k);
+        }
+        Err(if saw_non_permitted {
+            KeyLookup::NoPermittedKey
+        } else {
+            KeyLookup::NoMatchingKey
+        })
     }
 
     /// Key matching `etype` and `kvno`.
@@ -3644,6 +3735,82 @@ pub fn s2k_params(etype: EncryptionType) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A principal with keys `(etype, kvno)` stored in the given order.
+    fn keyed(keys: &[(EncryptionType, u32)]) -> Principal {
+        let (mut store, _) = crate::bootstrap_documented().unwrap();
+        let name = crate::documented_host();
+        let entries = keys
+            .iter()
+            .map(|&(e, v)| KeyEntry::new(e, random_key(e).unwrap(), v))
+            .collect();
+        {
+            let id = store.canonical_id(&name, TEST_REALM_STR).unwrap();
+            store.map.get_mut(&id).unwrap().keys = entries;
+        }
+        store.get_name(&name).unwrap().clone()
+    }
+
+    const TEST_REALM_STR: &str = "KERBER.TEST";
+    const A128: EncryptionType = EncryptionType::Aes128CtsHmacSha196;
+    const A256: EncryptionType = EncryptionType::Aes256CtsHmacSha196;
+
+    /// `kdb_default.c:60-61`: a requested etype outside the permitted set is
+    /// `NO_PERMITTED_KEY` before the key list is read, even when the
+    /// principal holds such a key.
+    #[test]
+    fn find_enctype_non_permitted_request_is_no_permitted_key_up_front() {
+        let p = keyed(&[(A128, 1)]);
+        let only256 = |e: EncryptionType| e == A256;
+        assert_eq!(
+            p.find_enctype(Some(A128), 0, only256).err(),
+            Some(KeyLookup::NoPermittedKey)
+        );
+        // And an absent-but-permitted etype is NO_MATCHING_KEY.
+        assert_eq!(
+            p.find_enctype(Some(A256), 0, only256).err(),
+            Some(KeyLookup::NoMatchingKey)
+        );
+    }
+
+    /// `:65-67` kvno 0 is the highest kvno only; `:82-86` non-permitted keys
+    /// of that kvno are skipped; `:92-94` only-non-permitted matches →
+    /// `NO_PERMITTED_KEY`, no key at that kvno → `NO_MATCHING_KEY`.
+    #[test]
+    fn find_enctype_top_kvno_skips_non_permitted_and_names_the_miss() {
+        let p = keyed(&[(A128, 2), (A256, 2), (A256, 1)]);
+        let all = |_: EncryptionType| true;
+        let only256 = |e: EncryptionType| e == A256;
+        let only128 = |e: EncryptionType| e == A128;
+        // Stored order wins between permitted keys of the top kvno.
+        assert_eq!(p.find_enctype(None, 0, all).unwrap().etype, A128);
+        // The aes128 stored first is skipped when not permitted.
+        let k = p.find_enctype(None, 0, only256).unwrap();
+        assert_eq!((k.etype, k.kvno), (A256, 2));
+        // kvno 0 never reaches down to kvno 1: with aes128 the only permitted
+        // etype and aes256 at kvno 1 irrelevant, the top kvno still answers.
+        assert_eq!((p.find_enctype(None, 0, only128).unwrap().kvno), 2);
+        // Explicit kvno 1 holds aes256 only.
+        assert_eq!(
+            p.find_enctype(None, 1, only128).err(),
+            Some(KeyLookup::NoPermittedKey)
+        );
+        assert_eq!(
+            p.find_enctype(None, 3, all).err(),
+            Some(KeyLookup::NoMatchingKey)
+        );
+        assert_eq!(
+            p.find_enctype(Some(A128), 1, all).err(),
+            Some(KeyLookup::NoMatchingKey)
+        );
+        // An empty key set is NO_MATCHING_KEY (`:62-63`).
+        let mut empty = p.clone();
+        empty.keys.clear();
+        assert_eq!(
+            empty.find_enctype(None, 0, all).err(),
+            Some(KeyLookup::NoMatchingKey)
+        );
+    }
 
     fn admin_tl_u32(p: &Principal, ty: i32) -> u32 {
         p.tl_data

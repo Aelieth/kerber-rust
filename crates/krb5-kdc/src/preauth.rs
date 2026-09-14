@@ -275,9 +275,11 @@ pub(crate) fn mint_freshness_token_now(store: &dyn PrincipalRead) -> Result<Vec<
     let tgt = store
         .fetch_krbtgt()?
         .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
-    let key = tgt
-        .first_current_key()
-        .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
+    // `rock->local_tgt_key`: `get_local_tgt` → `get_first_current_key`.
+    let key = store
+        .policy()
+        .first_current_key(&tgt)
+        .map_err(|_| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
     mint_freshness_token(&key.key, key.kvno, KerberosTime::now().unix_seconds())
 }
 
@@ -298,7 +300,8 @@ pub(crate) fn check_freshness_token(
     let Some(tgt) = store.fetch_krbtgt().ok().flatten() else {
         return Err(proto(err::PREAUTH_EXPIRED, status::PREAUTH_FAILED));
     };
-    let Some(key) = tgt.first_key_at_kvno(kvno) else {
+    // `kdc_preauth.c:545` `krb5_dbe_find_enctype(local_tgt, -1, -1, token_kvno)`.
+    let Ok(key) = store.policy().find_enctype(&tgt, None, kvno) else {
         return Err(proto(err::PREAUTH_EXPIRED, status::PREAUTH_FAILED));
     };
     let usage = KeyUsage::new(ku::PA_AS_FRESHNESS)
@@ -344,7 +347,7 @@ pub(crate) fn make_cookie_at(
     let Ok(Some(krbtgt_p)) = store.fetch_krbtgt() else {
         return Ok(b"MIT".to_vec());
     };
-    let Some(krbtgt) = krbtgt_p.first_current_key() else {
+    let Ok(krbtgt) = store.policy().first_current_key(&krbtgt_p) else {
         return Ok(b"MIT".to_vec());
     };
     let key = derive_cookie_key(&krbtgt.key, client, store.realm())?;
@@ -375,13 +378,9 @@ pub(crate) fn open_cookie(
     let Ok(Some(krbtgt_p)) = store.fetch_krbtgt() else {
         return Vec::new();
     };
-    let current = krbtgt_p.first_current_key();
-    let ke = if current.is_some_and(|k| k.kvno == kvno) {
-        current
-    } else {
-        krbtgt_p.first_key_at_kvno(kvno)
-    };
-    let Some(ke) = ke else {
+    // `fast_util.c:506-516`: the current kvno uses the already-chosen first
+    // permitted key; an older kvno is `krb5_dbe_find_enctype(tgt, -1, -1, kvno)`.
+    let Ok(ke) = store.policy().find_enctype(&krbtgt_p, None, kvno) else {
         return Vec::new();
     };
     let Ok(key) = derive_cookie_key(&ke.key, client, store.realm()) else {

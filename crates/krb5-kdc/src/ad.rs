@@ -425,6 +425,7 @@ pub fn ticket_checksum_der(part: &EncTicketPart) -> Result<Vec<u8>, Error> {
 /// MIT `get_verified_pac` (`kdc_util.c:589-630`): TGS header → server
 /// signature only; service header → privsvr + kvno−1/−2 retry.
 pub(crate) fn get_verified_pac(
+    policy: &crate::store::Policy,
     part: &EncTicketPart,
     ticket_key: &ProtocolKey,
     header_server: &Principal,
@@ -441,7 +442,8 @@ pub(crate) fn get_verified_pac(
     let Some(tgt) = local_tgt else {
         return Err(proto(err::GENERIC, status::HEADER_PAC));
     };
-    let Some(cur) = tgt.first_current_key() else {
+    // `tgt_key` as MIT's caller got it: `get_local_tgt` → `get_first_current_key`.
+    let Ok(cur) = policy.first_current_key(tgt) else {
         return Err(proto(err::GENERIC, status::HEADER_PAC));
     };
     let der = ticket_checksum_der(part)?;
@@ -450,11 +452,17 @@ pub(crate) fn get_verified_pac(
         first?;
         return Ok(Some(pac));
     }
-    let mut kvno = cur.kvno.saturating_sub(1);
+    // `kdc_util.c:614-616`: `key_data[0].key_data_kvno - 1`, then
+    // `krb5_dbe_find_enctype(tgt, -1, -1, kvno)` for each of two tries.
+    let mut kvno = tgt
+        .first_current_key()
+        .map_or(0, |k| k.kvno)
+        .saturating_sub(1);
     let mut tries = 2u32;
     while tries > 0 && kvno > 0 {
-        let Some(old) = tgt
-            .first_key_at_kvno(kvno)
+        let Some(old) = policy
+            .find_enctype(tgt, None, kvno)
+            .ok()
             .or_else(|| tgt.key_history.iter().find(|k| k.kvno == kvno))
         else {
             return Err(proto(err::MODIFIED, status::HEADER_PAC));
@@ -1389,6 +1397,7 @@ fn cammac_create(
 }
 
 fn cammac_check_kdcver(
+    policy: &crate::store::Policy,
     cammac: &Cammac,
     enc_tkt: &EncTicketPart,
     tgt: &Principal,
@@ -1397,12 +1406,14 @@ fn cammac_check_kdcver(
     let Some(ver) = cammac.kdc_verifier.as_ref() else {
         return false;
     };
+    // `cammac.c:152-158`: `current_kvno(tgt)` is `key_data[0]` unfiltered;
+    // another kvno is `krb5_dbe_find_enctype(tgt, -1, -1, ver->kvno)`.
     let current = tgt.first_current_key().map_or(0, |k| k.kvno);
     let want_kvno = ver.kvno.unwrap_or(0);
     let (key, hist_etype) = if want_kvno == 0 || want_kvno == current {
         (tgt_key, None)
     } else {
-        let Some(k) = tgt.first_key_at_kvno(want_kvno) else {
+        let Ok(k) = policy.find_enctype(tgt, None, want_kvno) else {
             return false;
         };
         (&k.key, Some(k.etype.to_iana()))
@@ -1444,6 +1455,7 @@ fn authind_extract(
 }
 
 pub(crate) fn get_auth_indicators(
+    policy: &crate::store::Policy,
     enc_tkt: &EncTicketPart,
     local_tgt: &Principal,
     local_tgt_key: &ProtocolKey,
@@ -1459,7 +1471,7 @@ pub(crate) fn get_auth_indicators(
     for el in cammacs {
         let cammac: Cammac = decode(el.ad_data.as_ref())
             .map_err(|_| proto(err::GENERIC, status::GET_AUTH_INDICATORS))?;
-        if cammac_check_kdcver(&cammac, enc_tkt, local_tgt, local_tgt_key) {
+        if cammac_check_kdcver(policy, &cammac, enc_tkt, local_tgt, local_tgt_key) {
             authind_extract(&cammac.elements, &mut indicators)
                 .map_err(|e| with_status(e, status::GET_AUTH_INDICATORS))?;
         }
@@ -1657,11 +1669,13 @@ mod handle_authdata_tests {
         add_auth_indicators(&mut extra, &["pkinit".into()], &key, &tgt, &key, &part).unwrap();
         let mut issued = part.clone();
         issued.authorization_data = Some(extra.clone());
-        let got = get_auth_indicators(&issued, &tgt, &key).unwrap();
+        let got =
+            get_auth_indicators(&crate::store::Policy::default(), &issued, &tgt, &key).unwrap();
         assert_eq!(got, vec!["pkinit".to_string()]);
         extra[0].ad_data = b"nope".to_vec().into();
         issued.authorization_data = Some(extra);
-        let err = get_auth_indicators(&issued, &tgt, &key).unwrap_err();
+        let err =
+            get_auth_indicators(&crate::store::Policy::default(), &issued, &tgt, &key).unwrap_err();
         match err {
             Error::Protocol { text, .. } => {
                 assert_eq!(text.as_deref(), Some(status::GET_AUTH_INDICATORS));
@@ -1722,7 +1736,8 @@ mod handle_authdata_tests {
         extra[0].ad_data = encode(&inner).unwrap().into();
         let mut issued = part.clone();
         issued.authorization_data = Some(extra);
-        let got = get_auth_indicators(&issued, &tgt, &key).unwrap();
+        let got =
+            get_auth_indicators(&crate::store::Policy::default(), &issued, &tgt, &key).unwrap();
         assert!(got.is_empty());
     }
 }

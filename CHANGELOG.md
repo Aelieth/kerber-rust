@@ -88,6 +88,41 @@ this project uses semantic versioning once a crate is published.
   `::error` annotation per failed testcase (`scripts/lib/junit-annotate.py`)
   — the job log is private, the annotations are what `ci-status.py`
   reads.
+- **kdc.** Every long-term key the KDC picks out of a principal record
+  goes through MIT `krb5_dbe_find_enctype` (`kdb_default.c:47-94`), now
+  `Principal::find_enctype` behind `Policy::find_enctype` /
+  `Policy::first_current_key`: a requested etype outside
+  `[libdefaults] permitted_enctypes` is `NO_PERMITTED_KEY` before the
+  keys are read; kvno 0 means the highest kvno and no other; keys of a
+  non-permitted enctype are skipped, and when they were the only
+  matches the miss is `NO_PERMITTED_KEY` rather than `NO_MATCHING_KEY`
+  (`KeyLookup`). Callers rewired: the AS and TGS server key
+  (`get_first_current_key`, `do_as_req.c:225`, `do_tgs_req.c:1004`), the
+  local TGT key, `find_server_key` (`kdc_util.c:426`), the AS client key
+  (`select_client_key`, `do_as_req.c:119` — the top kvno only),
+  `dbentry_supports_enctype` (`kdc_util.c:1076`), the PAC old-kvno retry
+  (`:616`), the FAST cookie and freshness-token kvno lookups
+  (`fast_util.c:511`, `kdc_preauth.c:545`), the CAMMAC verifier kvno
+  (`cammac.c:155`) and the enc-timestamp key search
+  (`kdc_preauth_encts.c:76-78` `krb5_dbe_search_enctype`: the client's
+  keys of the timestamp's etype at the *highest kvno* only, so a stale
+  keytab after `cpw -randkey -keepold` is 24 like MIT — before, every
+  kept kvno still authenticated). Before, `first_current_key` took the
+  first stored key of the top kvno whatever `permitted_enctypes` said,
+  so a server keyed
+  `-e aes128:normal,aes256:normal` under `permitted_enctypes = aes256`
+  got aes128 tickets and a server with only non-permitted keys still got
+  tickets; `key_for(etype)` also reached down to older kvnos for the AS
+  client key. `rc4-session-gate.sh` E restarts both KDCs with
+  `permitted_enctypes = aes256-cts-hmac-sha1-96`: the mixed-keyed
+  service's ticket is aes256 on both, the aes128-only service is `kvno:
+  KDC returned error string: FINDING_SERVER_KEY` on both (and, as the
+  control under the earlier config, aes128 on both); F: `kinit -kt` with
+  the kvno-2 keytab after `cpw -randkey -keepold` is `kinit: Password
+  incorrect while getting initial credentials` on both (24).
+  Ledger: two A2 rows (`kdb_default.c:47-94`, `do_as_req.c:104-130`),
+  436 rows, exact 350; the `kdc_preauth_encts.c:47-118` row names the
+  top-kvno search.
 
 ### W1-C
 

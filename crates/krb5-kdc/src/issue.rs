@@ -401,7 +401,7 @@ fn issue_as_body(
     // preauth (do_as_req.c:630 precedes check_padata at :758).
     validate_as_request(store, &client, &server, body)?;
     let session_etype = select_session_keytype(&server, &body.etype, store.policy())?;
-    let ckey = select_client_key(&client, &body.etype)
+    let ckey = select_client_key(store.policy(), &client, &body.etype)
         .ok_or_else(|| proto(err::ETYPE_NOSUPP, status::CANT_FIND_CLIENT_KEY))?;
     let etype = ckey.etype;
     let encoded_body;
@@ -579,9 +579,10 @@ fn issue_as_body(
             detail: None,
         });
     }
-    let skey = server
-        .first_current_key()
-        .ok_or_else(|| proto(err::GENERIC, status::FINDING_SERVER_KEY))?;
+    let skey = store
+        .policy()
+        .first_current_key(&server)
+        .map_err(|_| proto(err::GENERIC, status::FINDING_SERVER_KEY))?;
     let mut session = random_key(session_etype)?;
     if anonymous_as {
         extra_padata.push(pa_pkinit_kx(&as_rep_key, &session)?);
@@ -625,9 +626,10 @@ fn issue_as_body(
     let krbtgt_p = store
         .fetch_krbtgt()?
         .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
-    let krbtgt_key = krbtgt_p
-        .first_current_key()
-        .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
+    let krbtgt_key = store
+        .policy()
+        .first_current_key(&krbtgt_p)
+        .map_err(|_| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
     let pac_kdc = crate::ad::pac_privsvr_key(
         &server,
         if sname.is_krbtgt_for(store.realm()) {
@@ -1023,6 +1025,7 @@ fn issue_tgs_body(
         return Err(proto(err::GENERIC, status::GET_LOCAL_TGT));
     }
     let header_pac = crate::ad::get_verified_pac(
+        store.policy(),
         &enc_tkt,
         &tgt_key,
         &header_server,
@@ -1163,7 +1166,7 @@ fn issue_tgs_body(
     check_tgs_policy_flags(&server, body, ap.ticket.sname.is_krbtgt(), &enc_tkt)?;
     let local_tgt_key = local_tgt
         .as_ref()
-        .and_then(Principal::first_current_key)
+        .and_then(|t| store.policy().first_current_key(t).ok())
         .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
     let mut auth_indicators = Vec::new();
     if !s4u2self {
@@ -1171,7 +1174,7 @@ fn issue_tgs_body(
         let tgt = local_tgt
             .as_ref()
             .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
-        auth_indicators = get_auth_indicators(subject, tgt, &local_tgt_key.key)?;
+        auth_indicators = get_auth_indicators(store.policy(), subject, tgt, &local_tgt_key.key)?;
         check_indicators(&server, &auth_indicators)?;
     }
     if s4u2proxy {
@@ -1207,9 +1210,10 @@ fn issue_tgs_body(
     let (tkt_key, tkt_kvno, tkt_etype) = if let Some(((k, kv, et), _)) = u2u {
         (k, kv, et)
     } else {
-        let skey = server
-            .first_current_key()
-            .ok_or_else(|| proto(err::GENERIC, status::FINDING_SERVER_KEY))?;
+        let skey = store
+            .policy()
+            .first_current_key(&server)
+            .map_err(|_| proto(err::GENERIC, status::FINDING_SERVER_KEY))?;
         (skey.key.clone(), skey.kvno, skey.etype)
     };
     let mut transited = enc_tkt.transited.clone();
@@ -1385,9 +1389,10 @@ fn issue_tgs_body(
     let krbtgt_p = store
         .fetch_krbtgt()?
         .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
-    let krbtgt_key = krbtgt_p
-        .first_current_key()
-        .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
+    let krbtgt_key = store
+        .policy()
+        .first_current_key(&krbtgt_p)
+        .map_err(|_| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
     // Referral TGT PAC 16/19/7 must be keyed with the inter-realm key
     // the foreign KDC holds (Windows TDO inbound), not the local krbtgt.
     let pac_kdc = crate::ad::pac_privsvr_key(
@@ -1630,7 +1635,7 @@ fn decrypt_presented_tgt(
     let usage = KeyUsage::new(ku::TICKET)?;
     let cipher = ap.ticket.enc_part.cipher.as_ref();
     loop {
-        let last = match find_server_key(&p, search_enctype, kvno) {
+        let last = match find_server_key(store.policy(), &p, search_enctype, kvno) {
             Ok((key, found)) => {
                 kvno = found;
                 if let Ok(plain) = decrypt(&key, usage, cipher)
@@ -1719,7 +1724,7 @@ fn decrypt_2ndtkt(
         return Err(proto(err::GENERIC, status::SECOND_TKT_SERVER));
     };
     let kvno = extra.enc_part.kvno.unwrap_or(0);
-    let (key, _) = find_server_key(&server, Some(tkt_etype), kvno)
+    let (key, _) = find_server_key(store.policy(), &server, Some(tkt_etype), kvno)
         .map_err(|e| with_status(e, status::SECOND_TKT_SERVER))?;
     let usage = KeyUsage::new(ku::TICKET)?;
     let plain = decrypt(&key, usage, extra.enc_part.cipher.as_ref())
@@ -1727,14 +1732,14 @@ fn decrypt_2ndtkt(
     let part: EncTicketPart =
         decode(&plain).map_err(|_| proto(err::BAD_INTEGRITY, status::SECOND_TKT_DECRYPT))?;
     if extra.sname.is_krbtgt() {
-        let pac = crate::ad::get_verified_pac(&part, &key, &server, None)
+        let pac = crate::ad::get_verified_pac(store.policy(), &part, &key, &server, None)
             .map_err(|e| with_status(e, status::SECOND_TKT_PAC))?;
         return Ok(Some(SecondTicket { part, server, pac }));
     }
     let Some(tgt) = local_tgt else {
         return Err(proto(err::GENERIC, status::GET_LOCAL_TGT));
     };
-    let pac = crate::ad::get_verified_pac(&part, &key, &server, Some(tgt))
+    let pac = crate::ad::get_verified_pac(store.policy(), &part, &key, &server, Some(tgt))
         .map_err(|e| with_status(e, status::SECOND_TKT_PAC))?;
     Ok(Some(SecondTicket { part, server, pac }))
 }
@@ -1746,24 +1751,28 @@ fn u2u_from_stkt(st: &SecondTicket) -> Result<(ProtocolKey, u32, EncryptionType)
     Ok((key, 0, etype))
 }
 
-/// MIT `find_server_key` (`kdc_util.c:417-457`). kvno 0 means any kvno.
-/// No matching key, or a requested etype that is not similar, is
-/// `KRB5_KDB_NO_MATCHING_KEY` / `KRB5_KDB_NO_PERMITTED_KEY` → 60 `PROCESS_TGS`.
+/// MIT `find_server_key` (`kdc_util.c:417-457`): `krb5_dbe_find_enctype(server,
+/// enctype, -1, kvno ? kvno : -1)` (`:426-427`), so kvno 0 means any kvno and
+/// keys outside `permitted_enctypes` are never chosen; a requested etype that
+/// is not similar to the key's is `KRB5_KDB_NO_PERMITTED_KEY` (`:441-449`).
+/// Either KDB code → 60 `PROCESS_TGS`.
 fn find_server_key(
+    policy: &crate::store::Policy,
     p: &Principal,
     search_enctype: Option<EncryptionType>,
     kvno: u32,
 ) -> Result<(ProtocolKey, u32), Error> {
+    // kvno -1 (any): MIT walks `key_data` in descending-kvno order and takes
+    // the first permitted match, so the highest kvno holding one wins.
     let key = if kvno == 0 {
-        match search_enctype {
-            Some(e) => p.key_for(e),
-            None => p.first_current_key(),
-        }
+        let mut kvnos: Vec<u32> = p.keys.iter().map(|k| k.kvno).collect();
+        kvnos.sort_unstable_by(|a, b| b.cmp(a));
+        kvnos.dedup();
+        kvnos
+            .into_iter()
+            .find_map(|v| policy.find_enctype(p, search_enctype, v).ok())
     } else {
-        match search_enctype {
-            Some(e) => p.keys.iter().find(|k| k.etype == e && k.kvno == kvno),
-            None => p.first_key_at_kvno(kvno),
-        }
+        policy.find_enctype(p, search_enctype, kvno).ok()
     };
     let Some(k) = key else {
         return Err(proto(err::GENERIC, status::PROCESS_TGS));
@@ -2352,10 +2361,17 @@ fn as_rep_key_info(client: &Principal, ckey: &KeyEntry, requested: &[i32]) -> Ve
     out
 }
 
-fn select_client_key<'a>(princ: &'a Principal, requested: &[i32]) -> Option<&'a KeyEntry> {
+/// MIT `select_client_key` (`do_as_req.c:104-130`): the first requested etype
+/// for which `krb5_dbe_find_enctype(client, etype, -1, 0)` (`:119`) finds a
+/// permitted key at the client's *highest* kvno.
+fn select_client_key<'a>(
+    policy: &crate::store::Policy,
+    princ: &'a Principal,
+    requested: &[i32],
+) -> Option<&'a KeyEntry> {
     for n in requested {
         if let Ok(e) = EncryptionType::known(*n)
-            && let Some(k) = princ.key_for(e)
+            && let Ok(k) = policy.find_enctype(princ, Some(e), 0)
         {
             return Some(k);
         }
@@ -2363,17 +2379,26 @@ fn select_client_key<'a>(princ: &'a Principal, requested: &[i32]) -> Option<&'a 
     None
 }
 
-fn dbentry_supports_enctype(server: &Principal, enctype: EncryptionType, allow_weak: bool) -> bool {
+/// MIT `dbentry_supports_enctype` (`kdc_util.c:1040-1077`): the
+/// `session_enctypes` attribute when set, else aes256 or a *permitted*
+/// long-term key of that etype at the highest kvno
+/// (`krb5_dbe_find_enctype(server, enctype, -1, 0)`, `:1076`).
+fn dbentry_supports_enctype(
+    policy: &crate::store::Policy,
+    server: &Principal,
+    enctype: EncryptionType,
+) -> bool {
     if let Some((_, raw)) = server
         .string_attrs
         .iter()
         .find(|(k, _)| k == "session_enctypes")
         && !raw.is_empty()
-        && let Some(list) = parse_enctype_list(raw, allow_weak)
+        && let Some(list) = parse_enctype_list(raw, policy.allow_weak_crypto)
     {
         return list.contains(&enctype);
     }
-    enctype == EncryptionType::Aes256CtsHmacSha196 || server.key_for(enctype).is_some()
+    enctype == EncryptionType::Aes256CtsHmacSha196
+        || policy.find_enctype(server, Some(enctype), 0).is_ok()
 }
 
 fn select_session_keytype(
@@ -2394,7 +2419,7 @@ fn select_session_keytype(
         if e == EncryptionType::Rc4Hmac && !policy.allow_rc4 {
             continue;
         }
-        if dbentry_supports_enctype(server, e, policy.allow_weak_crypto) {
+        if dbentry_supports_enctype(policy, server, e) {
             return Ok(e);
         }
     }

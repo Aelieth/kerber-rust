@@ -260,11 +260,28 @@ impl KdcPreauth for EncTsMod {
             Ok(e) => e,
             Err(_) => return Ok(None),
         };
-        // enc_ts_verify (kdc_preauth_encts.c:74-116): krb5_dbe_search_enctype
-        // over the declared etype; a miss is KRB5_KDB_NO_MATCHING_KEY, remapped
-        // to KRB5KDC_ERR_PREAUTH_FAILED (24). An unknown etype matches no key.
+        // enc_ts_verify (kdc_preauth_encts.c:74-92): krb5_dbe_search_enctype
+        // (client, &start, etype, -1, kvno 0) walks the keys of the declared
+        // etype at the *highest kvno* only (kdb_default.c:65-67) and skips
+        // non-permitted enctypes (:60-61, :82-86) — a timestamp under a
+        // retired kvno's key (a stale keytab) never decrypts. A miss is
+        // KRB5_KDB_NO_MATCHING_KEY, remapped to KRB5KDC_ERR_PREAUTH_FAILED
+        // (24) at :113-114; KRB5_KDB_NO_PERMITTED_KEY is not remapped and
+        // leaves the KDC as 60 GENERIC with the PREAUTH_FAILED status. An
+        // unknown etype matches no key.
+        let policy = store.policy();
+        let top = client.keys.iter().map(|k| k.kvno).max();
+        let mut no_permitted = false;
         let keys: Vec<_> = match krb5_crypto::EncryptionType::known(enc.etype) {
-            Ok(pa_et) => client.keys.iter().filter(|k| k.etype == pa_et).collect(),
+            Ok(pa_et) if !policy.etype_permitted(pa_et) => {
+                no_permitted = true;
+                Vec::new()
+            }
+            Ok(pa_et) => client
+                .keys
+                .iter()
+                .filter(|k| Some(k.kvno) == top && k.etype == pa_et)
+                .collect(),
             Err(_) => Vec::new(),
         };
         let mut last_err = None;
@@ -280,7 +297,11 @@ impl KdcPreauth for EncTsMod {
         store.record_as_outcome(cname, false);
         Err(last_err.unwrap_or_else(|| {
             crate::preauth::proto(
-                krb5_types::err::PREAUTH_FAILED,
+                if no_permitted {
+                    krb5_types::err::GENERIC
+                } else {
+                    krb5_types::err::PREAUTH_FAILED
+                },
                 crate::status::PREAUTH_FAILED,
             )
         }))

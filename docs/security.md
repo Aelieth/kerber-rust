@@ -370,7 +370,16 @@ etype walks the request list like `select_session_keytype`
 (`kdc_util.c:1084-1112`): valid, permitted, `allow_des3`/`allow_rc4`,
 then `dbentry_supports_enctype` (`session_enctypes` attr, else
 AES256-sha1 assumed, else a long-term key). AS uses krbtgt; TGS uses
-the service. Ticket encryption stays the server long-term key. RC4
+the service. Ticket encryption stays the server long-term key — the
+first key of the top kvno whose enctype is in `permitted_enctypes`, as
+`krb5_dbe_find_enctype` (`kdb_default.c:47-94`) hands it to
+`get_first_current_key`; a server whose only keys are non-permitted is
+60 `FINDING_SERVER_KEY`, and the same lookup (top kvno only, permitted
+only) picks the AS client key, the `find_server_key` header key, the
+PAC / FAST-cookie / freshness / CAMMAC old-kvno keys, and the
+enc-timestamp verifier searches the client's keys of the timestamp's
+etype at the top kvno only (`kdc_preauth_encts.c:76-78`), so a key kept
+by `cpw -keepold` no longer authenticates an AS-REQ. RC4
 `checksum()` is RFC 4757 type `-138`. `cksumtype` 0
 substitutes the key's mandatory type, then `is_keyed(0)` is 12.
 Unknown armor type is
