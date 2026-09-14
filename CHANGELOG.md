@@ -123,6 +123,16 @@ this project uses semantic versioning once a crate is published.
   Ledger: two A2 rows (`kdb_default.c:47-94`, `do_as_req.c:104-130`),
   436 rows, exact 350; the `kdc_preauth_encts.c:47-118` row names the
   top-kvno search.
+- **kadmind.** The AUTH_GSSAPI `GSSAPI_INIT` arg-version switch is MIT's
+  (`svc_auth_gssapi.c:326-341`): versions 1 and 2 are answered with
+  `init_res.version` 1 and a "Accepted old RPC protocol request" warning,
+  3 and 4 are echoed, any other version is `AUTH_BADCRED` before the
+  token is looked at, and an undecodable init arg is `AUTH_BADCRED`
+  (`:308-315`). Before, every version was echoed and 5 was accepted.
+  `scripts/lib/auth-gssapi-init-probe.py` forges the init;
+  `kadmin-gate.sh` runs it against both kadminds (1,2 → `accepted
+  version=1`; 3,4 echoed; 5,0 → `denied auth_stat=1 AUTH_BADCRED`).
+  Ledger `svc_auth_gssapi.c:308-341` → exact (351).
 
 ### W1-C
 

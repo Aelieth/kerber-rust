@@ -2936,6 +2936,26 @@ sed 's/^/rust: /' "$SCRATCH/z11-rust.txt"
 sed 's/^/mit:  /' "$SCRATCH/z11-mit.txt"
 diff "$SCRATCH/z11-rust.txt" "$SCRATCH/z11-mit.txt" || { echo "Z1.1: getprinc z1u differs between the Rust kadmind and MIT kadmind" >&2; exit 1; }
 
+# W1-Z Z1b.1: the AUTH_GSSAPI GSSAPI_INIT arg-version switch
+# (svc_auth_gssapi.c:326-341) against both kadminds on 749 with a forged
+# init (empty token): 1/2 → init_res.version 1, 3/4 echoed, 5 → AUTH_BADCRED.
+echo "==== Z1b.1 AUTH_GSSAPI init-arg version switch (svc_auth_gssapi.c:326-341): Rust kadmind vs MIT kadmind ===="
+z1b1_leg() {
+    local ctn=$1 leg=$2 v out
+    docker cp "$ROOT/scripts/lib/auth-gssapi-init-probe.py" "$ctn":/tmp/auth-gssapi-init-probe.py
+    for v in 1 2 3 4 5 0; do
+        out="$(docker exec "$ctn" python3 /tmp/auth-gssapi-init-probe.py 127.0.0.1:749 "$v")"
+        echo "$leg: init-arg version $v -> $out"
+        case $v in
+            1|2) echo "$out" | grep -q '^accepted version=1 ' || { echo "$leg: version $v was not answered with init_res.version 1" >&2; exit 1; } ;;
+            3|4) echo "$out" | grep -q "^accepted version=$v " || { echo "$leg: version $v was not echoed" >&2; exit 1; } ;;
+            *)   echo "$out" | grep -q '^denied auth_stat=1 AUTH_BADCRED$' || { echo "$leg: version $v was not AUTH_BADCRED" >&2; exit 1; } ;;
+        esac
+    done
+}
+z1b1_leg "$NAME" rust
+z1b1_leg "$NAME_MIT" mit
+
 log "kadmin.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"addprinc+cpw+get+list+mod+chrand+norandkey+lockdown+purgekeys+setstr+renprinc+del+alias"'
 exit 0
 

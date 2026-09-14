@@ -925,9 +925,47 @@ fn handle_auth_gssapi(
     );
 
     if auth_msg && (proc == AUTH_GSSAPI_INIT || proc == AUTH_GSSAPI_CONTINUE_INIT) {
+        // svc_auth_gssapi.c:308-315: an undecodable `authgssapi_init_arg`
+        // is AUTH_BADCRED ("protocol error in procedure arguments").
         let mut ar = XdrR::new(args);
-        let arg_ver = ar.u32()?;
-        let token = ar.opaque()?;
+        let (Ok(arg_ver), Ok(token)) = (ar.u32(), ar.opaque()) else {
+            tracing::warn!(
+                event = krb5_log::events::ADMIN,
+                component = "krb5-admin",
+                outcome = "denied",
+                detail = "protocol error in procedure arguments",
+            );
+            return Ok(rpc_reply_auth_error(xid, AUTH_BADCRED));
+        };
+        // svc_auth_gssapi.c:326-341: the init-arg version switch. 1 and 2
+        // are the OpenVision protocol — answered with `call_res.version`
+        // 1 and a compat warning; 3 and 4 are echoed; anything else is
+        // AUTH_BADCRED ("unsupported GSSAPI_INIT version"). The version
+        // is settled before the token is looked at, so a bad version is
+        // refused even when the token would not have verified.
+        let res_ver = match arg_ver {
+            1 | 2 => {
+                tracing::warn!(
+                    event = krb5_log::events::ADMIN,
+                    component = "krb5-admin",
+                    outcome = "ok",
+                    detail = "Warning: Accepted old RPC protocol request",
+                    arg_ver,
+                );
+                1
+            }
+            3 | 4 => arg_ver,
+            _ => {
+                tracing::warn!(
+                    event = krb5_log::events::ADMIN,
+                    component = "krb5-admin",
+                    outcome = "denied",
+                    detail = "unsupported GSSAPI_INIT version",
+                    arg_ver,
+                );
+                return Ok(rpc_reply_auth_error(xid, AUTH_BADCRED));
+            }
+        };
         let (ctx, out_tok) = match GssContext::accept_sec_context(
             &token,
             service_keys,
@@ -946,7 +984,7 @@ fn handle_auth_gssapi(
                     detail = "accept_sec_context",
                 );
                 let mut body = XdrW::default();
-                encode_init_res(&mut body, arg_ver, &[], 1, 0, &[], &[]);
+                encode_init_res(&mut body, res_ver, &[], 1, 0, &[], &[]);
                 return Ok(rpc_reply_clear(xid, &body.b));
             }
         };
@@ -969,7 +1007,7 @@ fn handle_auth_gssapi(
             seq,
         });
         let mut body = XdrW::default();
-        encode_init_res(&mut body, arg_ver, &handle, 0, 0, &tok, &signed);
+        encode_init_res(&mut body, res_ver, &handle, 0, 0, &tok, &signed);
         return Ok(rpc_reply_clear(xid, &body.b));
     }
 

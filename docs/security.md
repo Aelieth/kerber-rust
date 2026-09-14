@@ -570,7 +570,12 @@ unknown program, `PROG_MISMATCH` with low=high=`KADMVERS` 2 for
 program 2112 and a wrong version, and `AUTH_TOOWEAK` for AUTH_NONE
 on a matching program (`kadm_rpc_svc.c:80-88`). A REPLY-typed
 message fails `xdr_callmsg` (`rpc_callmsg.c:107-108`) so no reply
-is sent and the connection is kept.
+is sent and the connection is kept. The AUTH_GSSAPI `GSSAPI_INIT`
+arg-version switch is `svc_auth_gssapi.c:308-341`: an undecodable
+init arg is `AUTH_BADCRED`; versions 1 and 2 are answered with
+`init_res.version` 1 (a logged "Accepted old RPC protocol request"),
+3 and 4 are echoed, any other version is `AUTH_BADCRED` before the
+token is looked at.
 `kadmin.local` ktadd ignores lockdown like MIT. Create-time name
 special-casing keeps `PWCHANGE_SERVICE` only (`create_principal` has
 none of the `kdb5_util create` bits).
