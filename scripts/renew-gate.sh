@@ -545,7 +545,7 @@ for f in /proc/[0-9]*/comm; do
     if [ "$name" = "$comm_want" ]; then
         pid=${f#/proc/}
         pid=${pid%/comm}
-        kill "$pid" 2>/dev/null || true
+        kill -9 "$pid" 2>/dev/null || true
     fi
 done
 '
@@ -554,7 +554,11 @@ done
 z71_profile "$NAME"
 z71_profile "$MITNAME"
 z71_kill_comm "$NAME" krb5-kdc
-z71_wait_port "$NAME" down || true
+if ! z71_wait_port "$NAME" down; then
+    docker exec "$NAME" cat /tmp/kdc.log /tmp/kdc-z71.log >&2 || true
+    log "renew.gate" "error" ',"error":"Rust KDC still listening after z71 kill"'
+    exit 1
+fi
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
@@ -567,7 +571,12 @@ if ! z71_wait_port "$NAME" up; then
     exit 1
 fi
 z71_kill_comm "$MITNAME" krb5kdc
-z71_wait_port "$MITNAME" down || true
+if ! z71_wait_port "$MITNAME" down; then
+    docker exec "$MITNAME" cat /tmp/krb5kdc-z71.log >&2 || true
+    docker logs "$MITNAME" >&2 || true
+    log "renew.gate" "error" ',"error":"MIT KDC still listening after z71 kill"'
+    exit 1
+fi
 docker exec -d -e KRB5_KDC_PROFILE=/tmp/z71-kdc.conf \
     "$MITNAME" sh -c 'krb5kdc -n >/tmp/krb5kdc-z71.log 2>&1'
 if ! z71_wait_port "$MITNAME" up; then
