@@ -63,7 +63,39 @@ fn z1_default_principal_flags_is_params_flags_for_a_create() {
     assert_eq!(
         store.get_name(&name("z1knob")).unwrap().attributes,
         KDB_REQUIRES_PRE_AUTH,
-        "no stanza: the knob's bit alone (docs/security.md)"
+        "no stanza: the knob's bit alone on a password-keyed create (docs/security.md)"
+    );
+    // A random-key (service) create without the stanza is MIT's
+    // KRB5_KDB_DEF_FLAGS 0: the knob's scope is password-keyed creates, so
+    // U2U to a fresh `-randkey` service is not `NO PREAUTH` (flags-gate).
+    store
+        .insert_new_randkey(&name("host/z1knob.kerber.test"), TEST_REALM, &[])
+        .unwrap();
+    assert_eq!(
+        store
+            .get_name(&name("host/z1knob.kerber.test"))
+            .unwrap()
+            .attributes,
+        0,
+        "no stanza, random key: params.flags is 0 like MIT"
+    );
+    // With the stanza written, both kinds of create take it.
+    let (mut store, _) = bootstrap_documented().unwrap();
+    store
+        .apply_kdc_conf(&kdc_conf(
+            "        requires_preauth = yes\n        default_principal_flags = +requires_preauth\n",
+        ))
+        .unwrap();
+    store
+        .insert_new_randkey(&name("host/z1stanza.kerber.test"), TEST_REALM, &[])
+        .unwrap();
+    assert_eq!(
+        store
+            .get_name(&name("host/z1stanza.kerber.test"))
+            .unwrap()
+            .attributes,
+        KDB_REQUIRES_PRE_AUTH,
+        "a written stanza is params.flags for a random-key create too"
     );
 }
 

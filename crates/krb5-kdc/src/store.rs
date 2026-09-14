@@ -1599,19 +1599,21 @@ impl PrincipalStore {
 
     /// MIT `handle->params.flags` for a create without `KADM5_ATTRIBUTES`:
     /// `[realms] default_principal_flags` (`alt_prof.c:596-632`) when set,
-    /// else the Rust `requires_preauth` knob's bit — the knob predates the
-    /// MIT stanza and defaults on, where MIT's `KRB5_KDB_DEF_FLAGS` is 0
-    /// (`docs/security.md`). A written stanza is `params.flags` exactly
-    /// (parsed over 0 like MIT), so it overrides the knob.
+    /// parsed over 0 like MIT. Without the stanza MIT's `KRB5_KDB_DEF_FLAGS`
+    /// is 0; the Rust `requires_preauth` knob (predates the stanza, default
+    /// on) adds `REQUIRES_PRE_AUTH` to *password-keyed* creates only — its
+    /// scope since before W1-Z — so random-key (service) creates are MIT's 0
+    /// and U2U to a fresh `-randkey` service keeps working
+    /// (`docs/security.md`). A written stanza overrides the knob for both.
     #[must_use]
-    pub fn default_create_attributes(&self) -> u32 {
-        self.policy
-            .default_principal_flags
-            .unwrap_or(if self.policy.requires_preauth {
+    pub fn default_create_attributes(&self, password_keyed: bool) -> u32 {
+        self.policy.default_principal_flags.unwrap_or(
+            if password_keyed && self.policy.requires_preauth {
                 KDB_REQUIRES_PRE_AUTH
             } else {
                 0
-            })
+            },
+        )
     }
 
     /// MIT `kadm5_create_principal_3` (`svr_principal.c:290-511`) after the
@@ -1679,7 +1681,7 @@ impl PrincipalStore {
         let attributes = if ent.mask & kadm5_mask::ATTRIBUTES != 0 {
             ent.attributes
         } else {
-            self.default_create_attributes()
+            self.default_create_attributes(password.is_some())
         };
         let mut p = Principal::from_keys(
             name.clone(),

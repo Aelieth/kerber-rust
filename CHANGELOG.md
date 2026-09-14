@@ -11,7 +11,8 @@ this project uses semantic versioning once a crate is published.
 - **kadmind.** `kadm5_create_principal_3` now applies every field the
   request masks, like `svr_principal.c:376-420`: `KADM5_ATTRIBUTES`
   (else `[realms] default_principal_flags`, new in `kdc.conf`, else the
-  `requires_preauth` knob — `security.md`), `KADM5_MAX_LIFE` /
+  `requires_preauth` knob for password-keyed creates and MIT's 0 for
+  `-randkey` creates — `security.md`), `KADM5_MAX_LIFE` /
   `KADM5_MAX_RLIFE` (else the realm `max_life` / `max_renewable_life`),
   `KADM5_PRINC_EXPIRE_TIME` (else `[realms] default_principal_expiration`,
   new in `kdc.conf`, a `krb5_string_to_timestamp` form —

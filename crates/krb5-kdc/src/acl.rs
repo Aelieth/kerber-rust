@@ -147,8 +147,9 @@ impl Restrictions {
 /// clears — stopping at the first token the table does not know (the flags
 /// parsed so far are kept, as MIT keeps `params.flags`). Starts from
 /// `KRB5_KDB_DEF_FLAGS` (0) like MIT: when the stanza is written it *is*
-/// `params.flags`; the Rust `requires_preauth` knob only stands in when the
-/// stanza is absent (`PrincipalStore::default_create_attributes`).
+/// `params.flags`; the Rust `requires_preauth` knob only stands in for a
+/// password-keyed create when the stanza is absent
+/// (`PrincipalStore::default_create_attributes`).
 #[must_use]
 pub fn default_principal_flags(spec: &str) -> u32 {
     let mut flags = 0u32;
