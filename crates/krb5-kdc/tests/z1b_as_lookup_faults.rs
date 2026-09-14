@@ -1,10 +1,11 @@
 //! W1-Z Z1b.3 follow-up: AS client/server lookup faults are labelled like
 //! MIT `do_as_req.c:577-607` — `CANTLOCK_DB` is 29 `SVC_UNAVAILABLE` on
-//! either lookup, any other backend fault is 60 with the lookup's own status
-//! word (`LOOKING_UP_CLIENT` / `LOOKING_UP_SERVER`). No in-tree store fails a
-//! lookup; a `PrincipalRead` wrapper stands in for a backend that does.
-//! Compiles at `7a44ef8` (parent-red): the parent labelled a server-lookup
-//! fault `LOOKING_UP_CLIENT` (the catch-all arm).
+//! either lookup **with** the lookup's status word (`LOOKING_UP_CLIENT` /
+//! `LOOKING_UP_SERVER`; Z6.3), any other backend fault is 60 with the same
+//! words. No in-tree store fails a lookup; a `PrincipalRead` wrapper stands
+//! in for a backend that does. Compiles at `7a44ef8` (parent-red): the
+//! parent labelled a server-lookup fault `LOOKING_UP_CLIENT` (the catch-all
+//! arm). The CANTLOCK e_text half was wrong until Z6.3 (`z6_lookup.rs`).
 
 use krb5_asn1::decode;
 use krb5_kdc::{
@@ -114,7 +115,14 @@ fn z1b_as_lookup_faults_are_labelled_like_do_as_req() {
         as_error(&tgs_id, backend_fault),
         (err::GENERIC, Some("LOOKING_UP_SERVER".into()))
     );
-    // :579-580, :598-599 — CANTLOCK_DB on either lookup is 29, no status.
-    assert_eq!(as_error(&client_id, cantlock), (err::SVC_UNAVAILABLE, None));
-    assert_eq!(as_error(&tgs_id, cantlock), (err::SVC_UNAVAILABLE, None));
+    // :579-590, :598-606 — CANTLOCK_DB is remapped to 29, then the
+    // `else if (errcode)` chain sets the lookup status (Z6.3).
+    assert_eq!(
+        as_error(&client_id, cantlock),
+        (err::SVC_UNAVAILABLE, Some("LOOKING_UP_CLIENT".into()))
+    );
+    assert_eq!(
+        as_error(&tgs_id, cantlock),
+        (err::SVC_UNAVAILABLE, Some("LOOKING_UP_SERVER".into()))
+    );
 }

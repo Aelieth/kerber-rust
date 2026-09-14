@@ -668,6 +668,9 @@ pub(crate) fn filter_preauth_error(e: Error) -> Error {
         100, // NO_ACCEPTABLE_KDF
         // rfc 6113
         err::MORE_PREAUTH_DATA_REQUIRED,
+        // k5e1 KRB5KDC_ERR_DISCARD (kdc_preauth.c:1125); do_as_req.c:372
+        // suppresses the reply
+        err::DISCARD,
         // R2-D1 (docs/security.md replay row): not in MIT's list
         err::REPEAT,
     ];

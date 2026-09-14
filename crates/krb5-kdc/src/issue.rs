@@ -216,17 +216,25 @@ fn as_reply(
             text,
             e_data,
             detail,
-        }) => Ok((
-            encode_krb_error(
-                store,
-                code,
-                text.as_deref(),
-                e_data.map(|ed| prepare_as_edata(store, req.0.req_body.cname.as_ref(), &ed)),
-                body,
-                hide,
-            ),
-            detail.filter(|s| !s.is_empty()),
-        )),
+        }) => {
+            // do_as_req.c:371-372: `KRB5KDC_ERR_DISCARD` skips
+            // `prepare_error_as` (no KRB-ERROR). The filter kept the code
+            // (`kdc_preauth.c:1125`); `dispatch.c:78` also drops it.
+            if code == err::DISCARD {
+                return Ok((Vec::new(), detail.filter(|s| !s.is_empty())));
+            }
+            Ok((
+                encode_krb_error(
+                    store,
+                    code,
+                    text.as_deref(),
+                    e_data.map(|ed| prepare_as_edata(store, req.0.req_body.cname.as_ref(), &ed)),
+                    body,
+                    hide,
+                ),
+                detail.filter(|s| !s.is_empty()),
+            ))
+        }
         Err(Error::Crypto(d)) => Ok((
             encode_krb_error(
                 store,
@@ -265,11 +273,12 @@ fn as_reply(
     }
 }
 
-/// MIT `do_as_req.c:577-607`: `KRB5_KDB_CANTLOCK_DB` on the client or the
-/// server lookup is 29 `SVC_UNAVAILABLE` with no status; any other backend
-/// fault is 60 under the lookup's own status word (`LOOKING_UP_CLIENT`,
-/// `LOOKING_UP_SERVER`) with the fault text in the log detail. A backend that
-/// signals `CANTLOCK` does so as a 29 `Error::Protocol`, passed through.
+/// MIT `do_as_req.c:577-607`: `KRB5_KDB_CANTLOCK_DB` is remapped to 29
+/// `SVC_UNAVAILABLE` (`:579-580` / `:598-599`), **then** the `else if
+/// (errcode)` chain sets `LOOKING_UP_CLIENT` / `LOOKING_UP_SERVER`
+/// (`:588-590` / `:604-606`). Any other backend fault is 60 under the same
+/// status word, with the fault text in the log detail. A backend signals
+/// `CANTLOCK` as a 29 `Error::Protocol`.
 fn lookup_as_princ(
     store: &dyn PrincipalRead,
     name: &PrincipalName,
@@ -277,13 +286,20 @@ fn lookup_as_princ(
 ) -> Result<Option<crate::store::Principal>, Error> {
     match store.fetch_name(name) {
         Ok(v) => Ok(v),
-        Err(e @ Error::Protocol { code, .. }) if code == err::SVC_UNAVAILABLE => Err(e),
-        Err(e) => Err(Error::Protocol {
-            code: err::GENERIC,
-            text: Some(looking_up.to_owned()),
-            e_data: None,
-            detail: Some(e.to_string()),
-        }),
+        Err(e) => {
+            let (code, detail) = match e {
+                Error::Protocol { code, detail, .. } if code == err::SVC_UNAVAILABLE => {
+                    (err::SVC_UNAVAILABLE, detail)
+                }
+                other => (err::GENERIC, Some(other.to_string())),
+            };
+            Err(Error::Protocol {
+                code,
+                text: Some(looking_up.to_owned()),
+                e_data: None,
+                detail,
+            })
+        }
     }
 }
 
@@ -3379,8 +3395,10 @@ fn kdc_get_ticket_renewtime(
     Some(KerberosTime::from_unix_seconds(rsec))
 }
 
-/// MIT `db_get_svc_princ` (`do_tgs_req.c:525-538`): `CANTLOCK_DB` is 29;
-/// any other backend error is 7 `LOOKING_UP_SERVER`.
+/// MIT `db_get_svc_princ` (`do_tgs_req.c:525-538`): `CANTLOCK_DB` is 29
+/// `SVC_UNAVAILABLE`, and **any** backend error (including CANTLOCK) sets
+/// `LOOKING_UP_SERVER`. Other faults stay 7 `S_PRINCIPAL_UNKNOWN` with that
+/// status (the pre-Z6.3 wire code; MIT would send the remapped KDB code).
 fn lookup_svc_princ(
     store: &dyn PrincipalRead,
     name: &PrincipalName,
@@ -3389,12 +3407,12 @@ fn lookup_svc_princ(
         Ok(v) => Ok(v),
         Err(Error::Protocol {
             code,
-            text,
             e_data,
             detail,
+            ..
         }) if code == err::SVC_UNAVAILABLE => Err(Error::Protocol {
             code,
-            text,
+            text: Some(status::LOOKING_UP_SERVER.to_owned()),
             e_data,
             detail,
         }),

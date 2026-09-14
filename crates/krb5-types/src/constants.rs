@@ -133,6 +133,11 @@ pub mod err {
     /// MIT's `errcode_to_protocol` (`kdc_util.c:691-697`) clamps offsets over
     /// 128 to `GENERIC` (60). The acceptor returns it to GSS as a minor.
     pub const TKT_INVALID: i32 = 145;
+    /// MIT `k5e1_err.et` `KRB5KDC_ERR_DISCARD` (table `k5e1` offset 3,
+    /// com_err base ×256 with the 2³² wrap). Library-local: not an RFC 4120
+    /// wire number. `filter_preauth_error` (`kdc_preauth.c:1125`) passes it
+    /// through; `do_as_req.c:372` / `dispatch.c:78` suppress the reply.
+    pub const DISCARD: i32 = -1_750_600_189;
 }
 
 /// RFC 4120 / 4121 / 6113 key-usage numbers.

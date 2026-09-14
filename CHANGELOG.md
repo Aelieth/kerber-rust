@@ -153,6 +153,15 @@ this project uses semantic versioning once a crate is published.
   `ENCTYPE_NULL` and still emit NEEDED_PREAUTH; `add_etype_info` skips
   PA 19 when there is no key). diffsend `as-needpreauth-hints-unpermitted`
   (111 cases; hint types `[136, 16, 147, 133]`, no 2 / 19 / 151).
+- **kdc.** AS lookup `CANTLOCK_DB` is 29 `SVC_UNAVAILABLE` **and**
+  `LOOKING_UP_CLIENT` / `LOOKING_UP_SERVER` (`do_as_req.c:579-590`,
+  `:598-606`: the remap precedes the `else if (errcode)` status chain).
+  The TGS `db_get_svc_princ` twin (`do_tgs_req.c:533-537`) labels CANTLOCK
+  `LOOKING_UP_SERVER` too. Before, a backend 29 passed through with no
+  e_text (`z1b_as_lookup_faults` asserted that form). `KRB5KDC_ERR_DISCARD`
+  is on `filter_preauth_error`'s pass-through list (`kdc_preauth.c:1125`)
+  and `as_reply` suppresses the KRB-ERROR (`do_as_req.c:371-372`). Forge-only
+  — no lockable KDB in tree.
 - **kadmind.** The AUTH_GSSAPI `GSSAPI_INIT` arg-version switch is MIT's
   (`svc_auth_gssapi.c:326-341`): versions 1 and 2 are answered with
   `init_res.version` 1 and a "Accepted old RPC protocol request" warning,
