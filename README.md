@@ -20,7 +20,7 @@ client (`kinit`), GSS-API, and the admin/propagation daemons (`kadmind`,
 
 | | |
 |---|---|
-| **v1.0.0** | Tagged interop milestone: the MIT 1.22.2 / Heimdal / Active Directory core, proven by content-asserting external gates in CI (47 MIT-oracle gates per push, eight Samba/AD/Heimdal gates nightly — [docs/testing.md](docs/testing.md) § CI lanes). `publish = false` (not on crates.io). |
+| **v1.0.0** | Tagged interop milestone: the MIT 1.22.2 / Heimdal / Active Directory core, proven by content-asserting external gates in CI (54 gates on every push in `ci.yml`, eight Samba/AD/Heimdal gates nightly in `peers.yml` — [docs/testing.md](docs/testing.md) § CI lanes). `publish = false` (not on crates.io). |
 | **v1.1** *(in progress)* | **General-purpose MIT completeness** — make the KDC *behave* like MIT across the board and stand alone as a client toolset. See the [roadmap](#roadmap-to-11). |
 
 **The one rule:** a feature is *done* only when a content-asserting gate
