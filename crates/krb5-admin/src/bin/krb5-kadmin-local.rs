@@ -1,6 +1,6 @@
 //! Local kadm5 verbs against a dump/stash (MIT `kadmin.local`).
 //!
-//! Usage: krb5-kadmin.local [-q command]
+//! Usage: krb5-kadmin.local [-p principal] [-q command]
 //! DB: `KRB5_KDC_DB` + `KRB5_KDC_STASH`. Passwords from `KRB5_PASSWORD`.
 
 #![forbid(unsafe_code)]
@@ -17,14 +17,17 @@ use krb5_types::PrincipalName;
 
 fn main() {
     let mut queued = Vec::new();
+    let mut princ = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         if a == "-q" {
             if let Some(c) = args.next() {
                 queued.push(c);
             }
+        } else if a == "-p" {
+            princ = args.next();
         } else {
-            eprintln!("usage: krb5-kadmin.local [-q command]");
+            eprintln!("usage: krb5-kadmin.local [-p principal] [-q command]");
             std::process::exit(2);
         }
     }
@@ -43,8 +46,8 @@ fn main() {
     if let Some(c) = krb5_config::load_krb5_conf() {
         store.apply_libdefaults(&c);
     }
-    let actor = std::env::var("KRB5_KADMIN_PRINCIPAL")
-        .unwrap_or_else(|_| format!("admin@{}", store.realm()));
+    let explicit = princ.or_else(|| std::env::var("KRB5_KADMIN_PRINCIPAL").ok());
+    let actor = krb5_admin::kadmin_local_princstr(store.realm(), explicit.as_deref());
     // MIT kadmin.local does not read kadm5.acl (`KRB5_ACL_FILE` is kadmind-only).
     let acl = Acl::parse("* *e\n").unwrap_or_else(|e| {
         eprintln!("kadmin.local: acl: {e}");
@@ -471,11 +474,9 @@ fn print_getprinc(p: &krb5_kdc::Principal, policy_missing: bool) {
     println!("Password expiration date: {}", never(p.pw_expire));
     println!("Maximum ticket life: {}", strdur(p.max_life));
     println!("Maximum renewable life: {}", strdur(p.max_renewable_life));
-    println!(
-        "Last modified: {} (kadmin/admin@{})",
-        strdate(tl_u32(2)),
-        p.realm
-    );
+    let mod_name = krb5_kdc::tl_mod_princ_name(&p.tl_data)
+        .unwrap_or_else(|| format!("kadmin/admin@{}", p.realm));
+    println!("Last modified: {} ({})", strdate(tl_u32(2)), mod_name);
     println!("Last successful authentication: {}", never(p.last_success));
     println!("Last failed authentication: {}", never(p.last_failed));
     println!("Failed password attempts: {}", p.fail_auth_count);

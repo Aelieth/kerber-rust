@@ -119,6 +119,7 @@ fn a4_17_require_freshness_unsigned_without_token_issues() {
             TEST_REALM,
             b"anon",
             &[krb5_crypto::EncryptionType::Aes256CtsHmacSha196],
+            "kadmin/admin@KERBER.TEST",
         )
         .expect("WELLKNOWN/ANONYMOUS");
     let kp = p256_generate().expect("ecdh");

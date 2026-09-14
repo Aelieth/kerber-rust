@@ -153,6 +153,16 @@ this project uses semantic versioning once a crate is published.
   `ENCTYPE_NULL` and still emit NEEDED_PREAUTH; `add_etype_info` skips
   PA 19 when there is no key). diffsend `as-needpreauth-hints-unpermitted`
   (111 cases; hint types `[136, 16, 147, 133]`, no 2 / 19 / 151).
+- **kadmind.** `kdb_put_entry` stamps `KRB5_TL_MOD_PRINC` with the
+  authenticated kadm5 caller (`server_kdb.c:376-377`
+  `krb5_dbe_update_mod_princ_data(…, now, handle->current_caller)`), and
+  `getprinc` unparses that name. Before, every create/modify/cpw wrote
+  `kadmin/admin@REALM` regardless of the GSS client or `kadmin.local`
+  princstr. RPC `addprinc` as `admin/admin` now shows
+  `Last modified: … (admin/admin@KERBER.TEST)`; `kadmin.local` without
+  `-p` is MIT `kadmin.c:455-536` (`$USER/admin@REALM`, else the euid's
+  passwd name) — `root/admin@KERBER.TEST` in the gate containers.
+  Ledger: new A4 row `server_kdb.c:376-377` (450 rows, exact 355).
 - **kdc.** AS lookup `CANTLOCK_DB` is 29 `SVC_UNAVAILABLE` **and**
   `LOOKING_UP_CLIENT` / `LOOKING_UP_SERVER` (`do_as_req.c:579-590`,
   `:598-606`: the remap precedes the `else if (errcode)` status chain).

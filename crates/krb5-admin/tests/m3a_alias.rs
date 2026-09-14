@@ -47,7 +47,7 @@ fn t_kadmin_acl() -> (krb5_kdc::SharedDump, Acl) {
     let (mut store, _) = bootstrap_documented().unwrap();
     for p in ["some_alias", "restricted_alias", "none"] {
         store
-            .insert_new_password(&name(p), TEST_REALM, b"pw", &[])
+            .insert_new_password(&name(p), TEST_REALM, b"pw", &[], "kadmin/admin@KERBER.TEST")
             .unwrap();
     }
     let acl = Acl::parse(

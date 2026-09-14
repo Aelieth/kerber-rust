@@ -1846,10 +1846,18 @@ MIT_HIST_PROBE="$(kadm5_probe "$NAME_MIT" admin/admin valid /etc/krb5.conf kadmi
 echo "$MIT_HIST_PROBE"
 echo "$MIT_HIST_PROBE" | grep -F 'valid label=AUTH_TOOWEAK'
 echo "==== kadmin/history getprinc shape: Rust vs MIT (create_hist: max_life 64 s, no attributes, one key at kvno 2, no policy) ===="
-hist_shape() { grep -E '^(Expiration date|Password expiration date|Maximum ticket life|Maximum renewable life|Attributes|Number of keys|Key: vno|MKey: vno|Policy):?' ; }
+# Last modified date is dropped so the Z1.1 rust/MIT getprinc byte-diff
+# sees the modifier. History itself is created by kadmind RPC (`admin@`)
+# on the Rust dump and by `kadmin.local` (`root/admin@`) on MIT — the
+# modifier of `kadmin/history` is Z6.4's cell, not this shape check.
+hist_shape() {
+    grep -E '^(Expiration date|Password expiration date|Maximum ticket life|Maximum renewable life|Attributes|Number of keys|Key: vno|MKey: vno|Policy|Last modified):?' \
+        | sed -E 's/^(Last modified): .* \((.*)\)$/\1: (\2)/'
+}
 echo "$HIST_GET" | hist_shape | sed 's/^/rust: /'
 echo "$MIT_HIST_GET" | hist_shape | sed 's/^/mit:  /'
-diff <(echo "$HIST_GET" | hist_shape) <(echo "$MIT_HIST_GET" | hist_shape)
+diff <(echo "$HIST_GET" | hist_shape | grep -v '^Last modified:') \
+     <(echo "$MIT_HIST_GET" | hist_shape | grep -v '^Last modified:')
 echo "$HIST_GET" | grep -F 'Maximum ticket life: 0 days 00:01:04'
 echo "$HIST_GET" | grep -F 'Key: vno 2, aes256-cts-hmac-sha384-192'
 echo "==== MIT kadmin/admin is DISALLOW_TGT_BASED ===="
@@ -2830,6 +2838,8 @@ done
 '
         sleep 0.4
         docker exec "$ctn" sh -c 'printf "%s\n" "admin@KERBER.TEST *" \
+            "admin/admin@KERBER.TEST *" \
+            "*/admin@KERBER.TEST *" \
             "z1pol@KERBER.TEST a *@KERBER.TEST -policy shortpol" \
             "z1rl@KERBER.TEST a *@KERBER.TEST -maxrenewlife 1d" \
             "z1ml@KERBER.TEST aim *@KERBER.TEST -maxlife 1h" > /tmp/kadm5.acl'
@@ -2852,18 +2862,24 @@ done
     fi
 }
 z11_leg() {
-    local ctn=$1 client=$2 conf=$3 leg=$4
+    local ctn=$1 fixture=$2 client=$3 conf=$4 leg=$5
     local kadm out shape pwx
     kadm() {
         docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$1" -w "$2" -q "$3" 2>&1 \
             | grep -v -e '^Authenticating' -e 'No dictionary' -e 'No policy specified' || true
     }
     # Fixtures before the restart: the restricted actors, the two policies.
-    kadm "$client" adminpassword 'addprinc -pw z1pol-secret z1pol' | grep -F 'Principal "z1pol@KERBER.TEST" created.'
-    kadm "$client" adminpassword 'addprinc -pw z1rl-secret z1rl' | grep -F 'Principal "z1rl@KERBER.TEST" created.'
-    kadm "$client" adminpassword 'addprinc -pw z1ml-secret z1ml' | grep -F 'Principal "z1ml@KERBER.TEST" created.'
-    kadm "$client" adminpassword 'addpol -minlength 8 shortpol'
-    kadm "$client" adminpassword 'addpol -maxlife 30d z1pw'
+    # The rust dump has `admin@`, not `admin/admin@`; create the RPC actor
+    # used after restart so Z6.4's modifier is `admin/admin@KERBER.TEST`
+    # on both legs.
+    kadm "$fixture" adminpassword 'addprinc -pw z1pol-secret z1pol' | grep -F 'Principal "z1pol@KERBER.TEST" created.'
+    kadm "$fixture" adminpassword 'addprinc -pw z1rl-secret z1rl' | grep -F 'Principal "z1rl@KERBER.TEST" created.'
+    kadm "$fixture" adminpassword 'addprinc -pw z1ml-secret z1ml' | grep -F 'Principal "z1ml@KERBER.TEST" created.'
+    kadm "$fixture" adminpassword 'addpol -minlength 8 shortpol'
+    kadm "$fixture" adminpassword 'addpol -maxlife 30d z1pw'
+    if [ "$leg" = rust ]; then
+        kadm "$fixture" adminpassword 'addprinc -pw adminpassword admin/admin' || true
+    fi
     z11_restart "$ctn" "$leg"
 
     echo "---- $leg: every masked field lands (getprinc shape to $SCRATCH/z11-$leg.txt) ----"
@@ -2883,6 +2899,7 @@ z11_leg() {
         echo "$leg: a key is not at kvno 7: $shape" >&2
         exit 1
     fi
+    echo "$shape" | grep -E '^Last modified: .* \(admin/admin@KERBER.TEST\)$'
 
     echo "---- $leg: default_principal_flags / default_principal_expiration are params.flags / params.expiration for a bare addprinc ----"
     kadm "$client" adminpassword 'addprinc -pw x z1def' | grep -F 'Principal "z1def@KERBER.TEST" created.'
@@ -2929,8 +2946,8 @@ z11_leg() {
     kadm z1ml z1ml-secret 'modprinc +requires_preauth z1mu' | grep -F 'Principal "z1mu@KERBER.TEST" modified.'
     kadm "$client" adminpassword 'getprinc z1mu' | grep -F 'Maximum ticket life: 0 days 01:00:00'
 }
-z11_leg "$NAME" admin /tmp/kadmin-krb5.conf rust
-z11_leg "$NAME_MIT" admin/admin /etc/krb5.conf mit
+z11_leg "$NAME" admin admin/admin /tmp/kadmin-krb5.conf rust
+z11_leg "$NAME_MIT" admin/admin admin/admin /etc/krb5.conf mit
 echo "---- Z1.1 getprinc z1u shape: Rust vs MIT ----"
 sed 's/^/rust: /' "$SCRATCH/z11-rust.txt"
 sed 's/^/mit:  /' "$SCRATCH/z11-mit.txt"

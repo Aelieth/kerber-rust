@@ -570,6 +570,7 @@ fn apply_test_disallow(store: &mut PrincipalStore, env: &str, flag: u32) {
         None,
         false,
         None,
+        &format!("kadmin/admin@{princ_realm}"),
     ) {
         eprintln!("krb5-kdc: {env}: {e}");
         std::process::exit(1);

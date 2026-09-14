@@ -7,6 +7,8 @@
 use krb5_kdc::{Acl, KDB_DISALLOW_SVR, KDB_REQUIRES_PRE_AUTH, TEST_REALM, bootstrap_documented};
 use krb5_types::PrincipalName;
 
+const ACTOR: &str = "kadmin/admin@KERBER.TEST";
+
 fn name(s: &str) -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_PRINCIPAL, [s])
 }
@@ -33,7 +35,7 @@ fn z1_default_principal_flags_is_params_flags_for_a_create() {
         ))
         .unwrap();
     store
-        .insert_new_password(&name("z1flags"), TEST_REALM, b"z1flags-secret", &[])
+        .insert_new_password(&name("z1flags"), TEST_REALM, b"z1flags-secret", &[], ACTOR)
         .unwrap();
     assert_eq!(
         store.get_name(&name("z1flags")).unwrap().attributes,
@@ -46,7 +48,7 @@ fn z1_default_principal_flags_is_params_flags_for_a_create() {
         ))
         .unwrap();
     store
-        .insert_new_password(&name("z1stop"), TEST_REALM, b"z1stop-secret", &[])
+        .insert_new_password(&name("z1stop"), TEST_REALM, b"z1stop-secret", &[], ACTOR)
         .unwrap();
     assert_eq!(
         store.get_name(&name("z1stop")).unwrap().attributes,
@@ -58,7 +60,7 @@ fn z1_default_principal_flags_is_params_flags_for_a_create() {
         .apply_kdc_conf(&kdc_conf("        requires_preauth = yes\n"))
         .unwrap();
     store
-        .insert_new_password(&name("z1knob"), TEST_REALM, b"z1knob-secret", &[])
+        .insert_new_password(&name("z1knob"), TEST_REALM, b"z1knob-secret", &[], ACTOR)
         .unwrap();
     assert_eq!(
         store.get_name(&name("z1knob")).unwrap().attributes,
@@ -69,7 +71,7 @@ fn z1_default_principal_flags_is_params_flags_for_a_create() {
     // KRB5_KDB_DEF_FLAGS 0: the knob's scope is password-keyed creates, so
     // U2U to a fresh `-randkey` service is not `NO PREAUTH` (flags-gate).
     store
-        .insert_new_randkey(&name("host/z1knob.kerber.test"), TEST_REALM, &[])
+        .insert_new_randkey(&name("host/z1knob.kerber.test"), TEST_REALM, &[], ACTOR)
         .unwrap();
     assert_eq!(
         store
@@ -87,7 +89,7 @@ fn z1_default_principal_flags_is_params_flags_for_a_create() {
         ))
         .unwrap();
     store
-        .insert_new_randkey(&name("host/z1stanza.kerber.test"), TEST_REALM, &[])
+        .insert_new_randkey(&name("host/z1stanza.kerber.test"), TEST_REALM, &[], ACTOR)
         .unwrap();
     assert_eq!(
         store
@@ -112,7 +114,7 @@ fn z1_create_without_expire_takes_default_principal_expiration() {
         ))
         .unwrap();
     store
-        .insert_new_password(&name("z1exp"), TEST_REALM, b"z1exp-secret", &[])
+        .insert_new_password(&name("z1exp"), TEST_REALM, b"z1exp-secret", &[], ACTOR)
         .unwrap();
     // 2030-01-02T03:04:05Z is 1893553445; the stanza is local time (MIT
     // `mktime`), so the stored value is that ± the zone offset. The exact
@@ -130,7 +132,7 @@ fn z1_create_without_expire_takes_default_principal_expiration() {
         ))
         .unwrap();
     store
-        .insert_new_password(&name("z1noexp"), TEST_REALM, b"z1noexp-secret", &[])
+        .insert_new_password(&name("z1noexp"), TEST_REALM, b"z1noexp-secret", &[], ACTOR)
         .unwrap();
     assert_eq!(
         store.get_name(&name("z1noexp")).unwrap().expiration,
@@ -149,11 +151,11 @@ fn z1_create_without_max_life_takes_params_max_life() {
         .apply_kdc_conf(&kdc_conf("        max_life = 1h 30m\n"))
         .unwrap();
     store
-        .insert_new_password(&name("z1life"), TEST_REALM, b"z1life-secret", &[])
+        .insert_new_password(&name("z1life"), TEST_REALM, b"z1life-secret", &[], ACTOR)
         .unwrap();
     assert_eq!(store.get_name(&name("z1life")).unwrap().max_life, 5400);
     store
-        .insert_new_randkey(&name("host/z1life"), TEST_REALM, &[])
+        .insert_new_randkey(&name("host/z1life"), TEST_REALM, &[], ACTOR)
         .unwrap();
     assert_eq!(
         store.get_name(&name("host/z1life")).unwrap().max_life,
@@ -170,7 +172,7 @@ fn z1_impose_acl_restrictions_on_an_empty_request_takes_every_cap() {
     let acl =
         Acl::parse("admin@KERBER.TEST * *@KERBER.TEST -maxlife 1h -maxrenewlife 2h\n").unwrap();
     store
-        .insert_new_password(&name("z1cap"), TEST_REALM, b"z1cap-secret", &[])
+        .insert_new_password(&name("z1cap"), TEST_REALM, b"z1cap-secret", &[], ACTOR)
         .unwrap();
     store
         .apply_admin_fields(

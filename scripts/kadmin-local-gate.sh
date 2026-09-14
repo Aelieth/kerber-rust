@@ -802,5 +802,42 @@ for g in 'gpol*' '*x' 'gp?' 'gpol1' '*@*'; do
     dl "listpols-$g" "$(rust_local "listpols $g" | grep -v '^Authenticating' | sort)" "$(mit_local "listpols $g" | sort)"
 done
 
+echo "==== Z6.4 kadmin.local stamps princstr (kadmin.c:455-536) ===="
+# uid 0 with USER unset is getpwuid → root → root/admin@REALM. The date is
+# dropped; only the modifier is compared (both legs, MIT kadmin.local vs
+# Rust krb5-kadmin.local).
+z64l_mod() { sed -n -E 's/^Last modified: .* \((.*)\)$/\1/p'; }
+# Do not pass `-e USER=`: MIT `getenv("USER")` treats a set-but-empty
+# value as a name and stamps `/admin@REALM`. An unset USER falls through
+# to getpwuid (uid 0 → root) like `kadmin.c:519-527`.
+RUST64="$(docker exec -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey z64l' 2>&1 || true)"
+echo "$RUST64"
+echo "$RUST64" | grep -F 'Principal "z64l@KERBER.TEST" created.'
+R64GET="$(docker exec -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -q 'getprinc z64l')"
+echo "$R64GET"
+R64MOD="$(echo "$R64GET" | z64l_mod)"
+echo "rust modifier=$R64MOD"
+[ "$R64MOD" = "root/admin@KERBER.TEST" ] || {
+    echo "Rust kadmin.local modifier is not root/admin@KERBER.TEST: $R64GET" >&2
+    exit 1
+}
+MIT64="$(docker exec "$NAME" kadmin.local -q 'addprinc -randkey z64l' 2>&1 || true)"
+echo "$MIT64"
+echo "$MIT64" | grep -F 'Principal "z64l@KERBER.TEST" created.'
+M64GET="$(docker exec "$NAME" kadmin.local -q 'getprinc z64l')"
+echo "$M64GET"
+M64MOD="$(echo "$M64GET" | z64l_mod)"
+echo "mit modifier=$M64MOD"
+[ "$M64MOD" = "root/admin@KERBER.TEST" ] || {
+    echo "MIT kadmin.local modifier is not root/admin@KERBER.TEST: $M64GET" >&2
+    exit 1
+}
+[ "$R64MOD" = "$M64MOD" ] || {
+    echo "Z6.4 kadmin.local modifier differs: rust=$R64MOD mit=$M64MOD" >&2
+    exit 1
+}
+
 log "kadmin.local.gate" "ok" ',"principal":"extra2@KERBER.TEST,host/slashhost@KERBER.TEST,randsvc,ktone,kttwo,raceprinc,lockee,gldlock,krbtgt","verb":"alias+policy-order+glob"'
 exit 0

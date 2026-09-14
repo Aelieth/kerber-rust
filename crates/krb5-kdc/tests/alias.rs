@@ -16,6 +16,8 @@ use krb5_types::{EtypeInfo2, PrincipalName, flag_bit, pa};
 
 const MASTER_PASSWORD: &[u8] = b"masterpassword";
 
+const ACTOR: &str = "kadmin/admin@KERBER.TEST";
+
 fn name(s: &str) -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_PRINCIPAL, [s])
 }
@@ -27,7 +29,7 @@ fn id(s: &str) -> String {
 fn store_with_alias(alias: &str, target: &str) -> PrincipalStore {
     let (mut store, _) = bootstrap_documented().unwrap();
     store
-        .create_alias_in(&name(alias), TEST_REALM, &name(target), TEST_REALM)
+        .create_alias_in(&name(alias), TEST_REALM, &name(target), TEST_REALM, ACTOR)
         .unwrap();
     store
 }
@@ -61,6 +63,7 @@ fn alias_chain_of_ten_resolves_eleven_and_self_do_not() {
                 TEST_REALM,
                 &name(&format!("a{}", i - 1)),
                 TEST_REALM,
+                ACTOR,
             )
             .unwrap();
     }
@@ -75,6 +78,7 @@ fn alias_chain_of_ten_resolves_eleven_and_self_do_not() {
             TEST_REALM,
             &name("selfalias"),
             TEST_REALM,
+            ACTOR,
         )
         .unwrap();
     assert!(store.get(&id("selfalias")).is_none());
@@ -85,20 +89,20 @@ fn alias_chain_of_ten_resolves_eleven_and_self_do_not() {
 fn dup_realm_and_rename_refusals_carry_mit_texts() {
     let mut store = store_with_alias("a1", TEST_USER);
     assert!(matches!(
-        store.create_alias_in(&name("a1"), TEST_REALM, &name(TEST_USER), TEST_REALM),
+        store.create_alias_in(&name("a1"), TEST_REALM, &name(TEST_USER), TEST_REALM, ACTOR),
         Err(Error::AlreadyExists)
     ));
     assert!(matches!(
-        store.insert_new_password(&name("a1"), TEST_REALM, b"pw", &[]),
+        store.insert_new_password(&name("a1"), TEST_REALM, b"pw", &[], ACTOR),
         Err(Error::AlreadyExists)
     ));
-    let realm = store.create_alias_in(&name("x"), TEST_REALM, &name("y"), "OTHER.REALM");
+    let realm = store.create_alias_in(&name("x"), TEST_REALM, &name("y"), "OTHER.REALM", ACTOR);
     assert!(matches!(realm, Err(Error::AliasRealm)));
     assert_eq!(
         realm.unwrap_err().to_string(),
         "Alias target must be within the same realm"
     );
-    let ren = store.rename_unchecked(&name("a1"), TEST_REALM, &name("b1"), TEST_REALM);
+    let ren = store.rename_unchecked(&name("a1"), TEST_REALM, &name("b1"), TEST_REALM, ACTOR);
     assert!(matches!(ren, Err(Error::AliasUnsupported)));
     assert_eq!(
         ren.unwrap_err().to_string(),
@@ -110,20 +114,20 @@ fn dup_realm_and_rename_refusals_carry_mit_texts() {
 fn dangling_alias_is_overwritable_by_create_and_rename() {
     let (mut store, _) = bootstrap_documented().unwrap();
     store
-        .create_alias_in(&name("xa1"), TEST_REALM, &name("nosuch"), TEST_REALM)
+        .create_alias_in(&name("xa1"), TEST_REALM, &name("nosuch"), TEST_REALM, ACTOR)
         .unwrap();
     store
-        .create_alias_in(&name("xa3"), TEST_REALM, &name("nosuch"), TEST_REALM)
+        .create_alias_in(&name("xa3"), TEST_REALM, &name("nosuch"), TEST_REALM, ACTOR)
         .unwrap();
     assert!(store.get(&id("xa1")).is_none());
     store
-        .insert_new_password(&name("xa1"), TEST_REALM, b"pw", &[])
+        .insert_new_password(&name("xa1"), TEST_REALM, b"pw", &[], ACTOR)
         .unwrap();
     let xa1 = store.get(&id("xa1")).unwrap();
     assert_eq!(xa1.id(), id("xa1"));
     assert!(xa1.alias_target().is_none());
     store
-        .rename_unchecked(&name("xa1"), TEST_REALM, &name("xa3"), TEST_REALM)
+        .rename_unchecked(&name("xa1"), TEST_REALM, &name("xa3"), TEST_REALM, ACTOR)
         .unwrap();
     assert_eq!(store.get(&id("xa3")).unwrap().id(), id("xa3"));
 }
@@ -143,13 +147,14 @@ fn modify_cpw_and_lockout_through_alias_act_on_target_and_delete_removes_stub_on
             None,
             false,
             None,
+            ACTOR,
         )
         .unwrap();
     let user = store.get_name(&name(TEST_USER)).unwrap();
     assert_ne!(user.attributes & KDB_REQUIRES_PRE_AUTH, 0);
     let kvno = user.keys.iter().map(|k| k.kvno).max().unwrap();
     store
-        .set_password_keepold_n_in(&name("a1"), TEST_REALM, b"newpw", 0)
+        .set_password_keepold_n_in(&name("a1"), TEST_REALM, b"newpw", 0, ACTOR)
         .unwrap();
     let user = store.get_name(&name(TEST_USER)).unwrap();
     assert_eq!(user.keys.iter().map(|k| k.kvno).max().unwrap(), kvno + 1);
@@ -214,7 +219,7 @@ fn tgs_via_alias_keeps_requested_sname_and_uses_target_key() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let host = documented_host();
     store
-        .create_alias_in(&name("svcalias"), TEST_REALM, &host, TEST_REALM)
+        .create_alias_in(&name("svcalias"), TEST_REALM, &host, TEST_REALM, ACTOR)
         .unwrap();
     store
         .create_alias_in(
@@ -222,6 +227,7 @@ fn tgs_via_alias_keeps_requested_sname_and_uses_target_key() {
             TEST_REALM,
             &PrincipalName::krbtgt(TEST_REALM),
             TEST_REALM,
+            ACTOR,
         )
         .unwrap();
     let user_key = store
@@ -291,6 +297,7 @@ fn tgs_via_alias_keeps_requested_sname_and_uses_target_key() {
             TEST_REALM,
             &name("selfalias"),
             TEST_REALM,
+            ACTOR,
         )
         .unwrap();
     let err = issue_tgs(&store, &req).unwrap_err();
@@ -313,10 +320,11 @@ fn as_rep_via_alias_carries_the_target_salt_in_etype_info2() {
             None,
             false,
             None,
+            ACTOR,
         )
         .unwrap();
     store
-        .create_alias_in(&name("a1"), TEST_REALM, &name(TEST_USER), TEST_REALM)
+        .create_alias_in(&name("a1"), TEST_REALM, &name(TEST_USER), TEST_REALM, ACTOR)
         .unwrap();
     let req = as_req(name("a1"), TEST_REALM, 31, None).unwrap();
     let out = issue_as(&store, &req).unwrap();

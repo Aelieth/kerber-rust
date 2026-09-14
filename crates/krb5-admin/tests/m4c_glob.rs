@@ -40,7 +40,7 @@ fn get_princs_glob_matches_svr_iters() {
     let (mut store, _) = bootstrap_documented().unwrap();
     for p in ["a1", "a10", "a11", "xa1", "b2"] {
         store
-            .insert_new_password(&name(p), TEST_REALM, b"pw", &[])
+            .insert_new_password(&name(p), TEST_REALM, b"pw", &[], "kadmin/admin@KERBER.TEST")
             .unwrap();
     }
     let acl = Acl::parse("admin@KERBER.TEST *\n").unwrap();

@@ -37,10 +37,48 @@ pub use listen::{
     parse_kpasswd_rep, serve_kpasswd_tcp, serve_kpasswd_udp,
 };
 
+/// MIT `kadmin.c:455-536` `princstr` for `kadm5_init`: `-p` / explicit name,
+/// else `$USER/admin@REALM`, else the euid's passwd name `/admin@REALM`.
+#[must_use]
+pub fn kadmin_local_princstr(realm: &str, explicit: Option<&str>) -> String {
+    if let Some(p) = explicit.filter(|s| !s.is_empty()) {
+        return if p.contains('@') {
+            p.to_owned()
+        } else {
+            format!("{p}@{realm}")
+        };
+    }
+    let user = std::env::var("USER")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(euid_passwd_name)
+        .unwrap_or_else(|| "root".into());
+    format!("{user}/admin@{realm}")
+}
+
+fn euid_passwd_name() -> Option<String> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let uid = status
+        .lines()
+        .find(|l| l.starts_with("Uid:"))?
+        .split_whitespace()
+        .nth(1)?;
+    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
+    for line in passwd.lines() {
+        let mut parts = line.split(':');
+        let name = parts.next()?;
+        let _pw = parts.next()?;
+        if parts.next()? == uid {
+            return Some(name.to_owned());
+        }
+    }
+    None
+}
+
 /// Load a kadm5 ACL file. `None` is MIT `kadmin.local` full privs for `actor`.
 ///
 /// The ACL is not a security boundary here: the actor is self-chosen via
-/// `KRB5_KADMIN_PRINCIPAL`. A set-but-unreadable path is a hard error.
+/// `-p` / `KRB5_KADMIN_PRINCIPAL`. A set-but-unreadable path is a hard error.
 ///
 /// # Errors
 ///
@@ -505,7 +543,7 @@ impl<'a> AdminSession<'a> {
             .check(&self.actor, AdminOp::ChangePassword, Some(&tid))
             .map_err(Error::from)?;
         self.store
-            .chrand_etypes_keepold(name, etypes, u32::from(keepold))
+            .chrand_etypes_keepold(name, etypes, u32::from(keepold), &self.actor)
             .map(|_| ())
             .map_err(Error::from)
     }
@@ -557,7 +595,7 @@ impl<'a> AdminSession<'a> {
     ) -> Result<(), Error> {
         self.reload()?;
         self.store
-            .create_alias_in(alias, alias_realm, target, target_realm)
+            .create_alias_in(alias, alias_realm, target, target_realm, &self.actor)
             .map_err(|e| match e {
                 // MIT KADM5_DUP text (kadm5_create_alias / kdb_get_entry).
                 krb5_kdc::Error::AlreadyExists => {
@@ -632,7 +670,10 @@ impl<'a> AdminSession<'a> {
                 .check(&self.actor, AdminOp::ChangePassword, Some(&tid))
                 .map_err(Error::from)?;
         }
-        self.store.set_password(name, password).map_err(Error::from)
+        let realm = self.store.realm().to_owned();
+        self.store
+            .set_password_keepold_n_in(name, &realm, password, 0, &self.actor)
+            .map_err(Error::from)
     }
 
     /// Realm of the bound store.
@@ -712,8 +753,20 @@ impl<'a> AdminSession<'a> {
         self.acl
             .check(&self.actor, AdminOp::Modify, Some(&tid))
             .map_err(Error::from)?;
+        let realm = self.store.realm().to_owned();
         self.store
-            .apply_admin_fields(name, attributes, None, None, None, None, false, None)
+            .apply_admin_fields_in(
+                name,
+                &realm,
+                attributes,
+                None,
+                None,
+                None,
+                None,
+                false,
+                None,
+                &self.actor,
+            )
             .map_err(Error::from)?;
         if let Some(rs) = self.acl.restrictions(&self.actor, Some(&tid)) {
             self.store
@@ -738,8 +791,20 @@ impl<'a> AdminSession<'a> {
         self.acl
             .check(&self.actor, AdminOp::Modify, Some(&tid))
             .map_err(Error::from)?;
+        let realm = self.store.realm().to_owned();
         self.store
-            .apply_admin_fields(name, None, None, Some(expiration), None, None, false, None)
+            .apply_admin_fields_in(
+                name,
+                &realm,
+                None,
+                None,
+                Some(expiration),
+                None,
+                None,
+                false,
+                None,
+                &self.actor,
+            )
             .map_err(Error::from)
     }
 
@@ -773,9 +838,11 @@ impl<'a> AdminSession<'a> {
         self.acl
             .check(&self.actor, AdminOp::Modify, Some(&tid))
             .map_err(Error::from)?;
+        let realm = self.store.realm().to_owned();
         self.store
-            .apply_admin_fields(
+            .apply_admin_fields_in(
                 name,
+                &realm,
                 None,
                 max_life,
                 None,
@@ -783,6 +850,7 @@ impl<'a> AdminSession<'a> {
                 None,
                 false,
                 max_renewable_life,
+                &self.actor,
             )
             .map_err(Error::from)?;
         if let Some(rs) = self.acl.restrictions(&self.actor, Some(&tid)) {
@@ -804,9 +872,11 @@ impl<'a> AdminSession<'a> {
         self.acl
             .check(&self.actor, AdminOp::Modify, Some(&tid))
             .map_err(Error::from)?;
+        let realm = self.store.realm().to_owned();
         self.store
-            .apply_admin_fields(
+            .apply_admin_fields_in(
                 name,
+                &realm,
                 None,
                 None,
                 None,
@@ -814,6 +884,7 @@ impl<'a> AdminSession<'a> {
                 Some(policy.to_owned()),
                 false,
                 None,
+                &self.actor,
             )
             .map_err(Error::from)?;
         if let Some(rs) = self.acl.restrictions(&self.actor, Some(&tid)) {
@@ -3268,5 +3339,17 @@ mod tests {
         }
         assert!(n >= 1);
         assert!(max_kvno(&store, &tgt) > before);
+    }
+
+    #[test]
+    fn kadmin_local_princstr_canonicalizes_explicit_like_parse_name() {
+        assert_eq!(
+            kadmin_local_princstr("KERBER.TEST", Some("admin/admin")),
+            "admin/admin@KERBER.TEST"
+        );
+        assert_eq!(
+            kadmin_local_princstr("KERBER.TEST", Some("joe/admin@OTHER.TEST")),
+            "joe/admin@OTHER.TEST"
+        );
     }
 }

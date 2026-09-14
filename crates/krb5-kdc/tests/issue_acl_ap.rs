@@ -1141,7 +1141,13 @@ fn as_canonicalize_issues_the_krbtgt_under_the_canonical_db_name() {
     let issue = |canon: bool, nonce: u32| -> krb5_kdc::IssuedAs {
         let (mut store, _) = bootstrap_documented().expect("bootstrap");
         store
-            .create_alias_in(&short, TEST_REALM, &canonical, TEST_REALM)
+            .create_alias_in(
+                &short,
+                TEST_REALM,
+                &canonical,
+                TEST_REALM,
+                "kadmin/admin@KERBER.TEST",
+            )
             .expect("krbtgt alias");
         let mut req = as_req_sname(
             cname.clone(),

@@ -797,8 +797,19 @@ fn tgs_krbtgt_disallow_all_tix_is_process_tgs() {
     let (_a, _b, mut c, _ab, _bc, host_c, bctgt) = three_realm_distinct();
     let irn = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "C.TEST"]);
     let a = c.get_in_realm(&irn, "B.TEST").unwrap().attributes | KDB_DISALLOW_ALL_TIX;
-    c.apply_admin_fields_in(&irn, "B.TEST", Some(a), None, None, None, None, false, None)
-        .unwrap();
+    c.apply_admin_fields_in(
+        &irn,
+        "B.TEST",
+        Some(a),
+        None,
+        None,
+        None,
+        None,
+        false,
+        None,
+        "kadmin/admin@B.TEST",
+    )
+    .unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let req = tgs_req(
         bctgt.rep.0.ticket.clone(),
@@ -870,8 +881,19 @@ fn tgs_cross_krbtgt_disallow_svr_is_process_tgs() {
     let (_a, _b, mut c, _ab, _bc, host_c, bctgt) = three_realm_distinct();
     let irn = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "C.TEST"]);
     let a = c.get_in_realm(&irn, "B.TEST").unwrap().attributes | KDB_DISALLOW_SVR;
-    c.apply_admin_fields_in(&irn, "B.TEST", Some(a), None, None, None, None, false, None)
-        .unwrap();
+    c.apply_admin_fields_in(
+        &irn,
+        "B.TEST",
+        Some(a),
+        None,
+        None,
+        None,
+        None,
+        false,
+        None,
+        "kadmin/admin@B.TEST",
+    )
+    .unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let req = tgs_req(
         bctgt.rep.0.ticket.clone(),

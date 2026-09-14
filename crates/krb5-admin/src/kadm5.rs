@@ -2462,6 +2462,7 @@ fn dispatch_kadm5_ticket(
                 policy,
                 clear_policy,
                 max_renewable_life,
+                actor,
             ) {
                 Ok(()) => {
                     if mask & KADM5_TL_DATA != 0
@@ -2522,6 +2523,7 @@ fn dispatch_kadm5_ticket(
                 c.pass.as_deref().map(str::as_bytes),
                 &[],
                 &c.ent,
+                actor,
             );
             match created {
                 Ok(()) => {
@@ -2557,7 +2559,7 @@ fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_DELETE));
             }
-            match g.rename_unchecked(&old, &old_req, &new, &new_req) {
+            match g.rename_unchecked(&old, &old_req, &new, &new_req, actor) {
                 Ok(()) => Ok(generic_ret(API_V2, 0)),
                 Err(e) => Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e)))),
             }
@@ -2596,7 +2598,7 @@ fn dispatch_kadm5_ticket(
                 return Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))));
             }
             let n = clamp_self_keepold(self_change, keepold);
-            match g.set_password_keepold_n_in(&name, &req, pass.as_bytes(), n) {
+            match g.set_password_keepold_n_in(&name, &req, pass.as_bytes(), n, actor) {
                 Ok(()) => Ok(generic_ret(API_V2, 0)),
                 Err(e) => Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e)))),
             }
@@ -2739,7 +2741,7 @@ fn dispatch_kadm5_ticket(
                 return Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))));
             }
             let n = clamp_self_keepold(self_change, keepold);
-            match g.chrand_keepold_n_in(&name, &req, n) {
+            match g.chrand_keepold_n_in(&name, &req, n, actor) {
                 Ok(keys) => {
                     let hide = g
                         .get_in_realm(&name, &req)
@@ -2837,7 +2839,7 @@ fn dispatch_kadm5_ticket(
                 return Ok(generic_ret(api, KADM5_AUTH_SETKEY));
             }
             let n = clamp_self_keepold(is_self(actor, &name, &req), keepold);
-            match g.set_keys_in(&name, &req, keys, n) {
+            match g.set_keys_in(&name, &req, keys, n, actor) {
                 Ok(()) => Ok(generic_ret(api, 0)),
                 Err(e) => Ok(generic_ret(api, kadm5_code(proc, &Error::from(e)))),
             }
@@ -2914,7 +2916,7 @@ fn dispatch_kadm5_ticket(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            match g.create_alias_in(&alias, &alias_req, &target, &target_req) {
+            match g.create_alias_in(&alias, &alias_req, &target, &target_req, actor) {
                 Ok(()) => Ok(generic_ret(API_V2, 0)),
                 Err(e) => Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e)))),
             }
@@ -3864,7 +3866,8 @@ fn encode_principal_ent(w: &mut XdrW, p: &krb5_kdc::Principal) {
     w.u32(u32::try_from(p.max_life).unwrap_or(0));
     // MIT kadmin always unparses `mod_name`; a NULL pointer is
     // KRB5_PARSE_MALFORMED ("while unparsing principal").
-    let mod_name = format!("kadmin/admin@{}", p.realm);
+    let mod_name = krb5_kdc::tl_mod_princ_name(&p.tl_data)
+        .unwrap_or_else(|| format!("kadmin/admin@{}", p.realm));
     w.u32(0); // xdr_nulltype FALSE → encode principal
     w.nullstring(Some(&mod_name));
     w.u32(tl_u32(&p.tl_data, TL_MOD_PRINC).unwrap_or(0));

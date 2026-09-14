@@ -311,7 +311,7 @@ fn cmd_alias(alias: &str, target: &str) {
     let (a, a_realm) = parse(alias);
     let (t, t_realm) = parse(target);
     store
-        .create_alias_in(&a, &a_realm, &t, &t_realm)
+        .create_alias_in(&a, &a_realm, &t, &t_realm, &format!("kadmin/admin@{realm}"))
         .unwrap_or_else(|e| {
             eprintln!("krb5-kdb: alias: {e}");
             std::process::exit(1);

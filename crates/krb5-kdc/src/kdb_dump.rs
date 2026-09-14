@@ -41,6 +41,28 @@ pub const TL_LAST_PWD_CHANGE: i32 = 1;
 pub const TL_LAST_ADMIN_UNLOCK: i32 = 0x0700;
 /// `KRB5_TL_MOD_PRINC`.
 pub const TL_MOD_PRINC: i32 = 2;
+
+/// MIT `krb5_dbe_lookup_mod_princ_data` (`kdb5.c:1637-1663`): 4-byte LE
+/// timestamp + NUL-terminated unparsed principal.
+#[must_use]
+pub fn tl_mod_princ(contents: &[u8]) -> Option<(u32, String)> {
+    if contents.len() < 5 || contents.last() != Some(&0) {
+        return None;
+    }
+    let ts = u32::from_le_bytes(contents[0..4].try_into().ok()?);
+    let name = std::str::from_utf8(&contents[4..contents.len() - 1])
+        .ok()?
+        .to_owned();
+    Some((ts, name))
+}
+
+/// The unparsed modifier in `KRB5_TL_MOD_PRINC`, when the TL is well-formed.
+#[must_use]
+pub fn tl_mod_princ_name(tl: &[TlData]) -> Option<String> {
+    tl.iter()
+        .find(|t| t.ty == TL_MOD_PRINC)
+        .and_then(|t| tl_mod_princ(&t.contents).map(|(_, n)| n))
+}
 /// `KRB5_TL_KADM_DATA`.
 pub const TL_KADM_DATA: i32 = 3;
 /// `KRB5_TL_MKVNO`.
