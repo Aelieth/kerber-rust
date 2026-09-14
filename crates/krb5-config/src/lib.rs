@@ -133,8 +133,13 @@ pub struct KdcConf {
     pub realm: String,
     /// Maximum ticket lifetime in seconds (default 1 day, `alt_prof.c`).
     pub max_life: u64,
-    /// Maximum renewable lifetime in seconds (omitted = 0, `alt_prof.c:576-577`).
+    /// kadm5 create default for `max_renewable_life` (`alt_prof.c:577-578`
+    /// `GET_DELTAT_PARAM(max_rlife, …, 0)`). Omitted = 0.
     pub max_renewable_life: u64,
+    /// KDC realm renewable cap (`kdc/main.c:316-319` `realm_maxrlife`,
+    /// omitted = `KRB5_KDB_MAX_RLIFE` = 7 days). A written
+    /// `max_renewable_life` sets this and [`Self::max_renewable_life`].
+    pub realm_max_renewable_life: u64,
     /// Database path.
     pub database_name: Option<PathBuf>,
     /// ACL file.
@@ -204,6 +209,7 @@ impl Default for KdcConf {
             realm: "KERBER.TEST".into(),
             max_life: 24 * 3600,
             max_renewable_life: 0,
+            realm_max_renewable_life: 7 * 24 * 3600,
             database_name: None,
             acl_file: None,
             key_stash_file: None,
@@ -854,7 +860,10 @@ fn parse_kdc_realm_line(conf: &mut KdcConf, line: &str) {
     match k.to_ascii_lowercase().as_str() {
         "max_life" => conf.max_life = parse_duration_secs(&v).unwrap_or(conf.max_life),
         "max_renewable_life" => {
-            conf.max_renewable_life = parse_duration_secs(&v).unwrap_or(conf.max_renewable_life);
+            if let Some(secs) = parse_duration_secs(&v) {
+                conf.max_renewable_life = secs;
+                conf.realm_max_renewable_life = secs;
+            }
         }
         "database_name" => conf.database_name = Some(PathBuf::from(v)),
         "acl_file" => conf.acl_file = Some(PathBuf::from(v)),
@@ -1692,6 +1701,7 @@ mod tests {
         assert_eq!(c.realm, "KERBER.TEST");
         assert_eq!(c.max_life, 36000);
         assert_eq!(c.max_renewable_life, 7 * 86400);
+        assert_eq!(c.realm_max_renewable_life, 7 * 86400);
         assert!(c.requires_preauth);
         assert_eq!(
             c.master_key_type.as_deref(),
@@ -1776,8 +1786,10 @@ mod tests {
         .unwrap();
         assert!(!lax.reject_bad_transit);
         assert_eq!(lax.max_renewable_life, 0);
+        assert_eq!(lax.realm_max_renewable_life, 7 * 86400);
         assert_eq!(mit.max_life, 36000);
         assert_eq!(mit.max_renewable_life, 7 * 86400);
+        assert_eq!(mit.realm_max_renewable_life, 7 * 86400);
         assert_eq!(
             mit.database_name.as_deref(),
             Some(std::path::Path::new("/var/lib/krb5kdc/principal"))

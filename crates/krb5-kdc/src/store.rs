@@ -462,8 +462,10 @@ pub struct AdminEnt {
 pub struct Policy {
     /// Max ticket lifetime seconds (MIT `alt_prof.c`: omitted = 24 h).
     pub max_life: u64,
-    /// Max renewable lifetime seconds (MIT `alt_prof.c`: omitted = 0).
+    /// kadm5 create default (`alt_prof.c:577-578`: omitted = 0).
     pub max_renewable_life: u64,
+    /// KDC issue cap (`kdc/main.c:316-319` `realm_maxrlife`: omitted = 7 d).
+    pub realm_max_renewable_life: u64,
     /// Clock skew seconds.
     pub skew: i64,
     /// Allow weak etypes.
@@ -524,6 +526,7 @@ impl Default for Policy {
         Self {
             max_life: 24 * 3600,
             max_renewable_life: 0,
+            realm_max_renewable_life: 7 * 24 * 3600,
             skew: 300,
             allow_weak_crypto: false,
             allow_rc4: false,
@@ -1237,6 +1240,7 @@ impl PrincipalStore {
     pub fn apply_kdc_conf(&mut self, conf: &krb5_config::KdcConf) -> Result<(), Error> {
         self.policy.max_life = conf.max_life;
         self.policy.max_renewable_life = conf.max_renewable_life;
+        self.policy.realm_max_renewable_life = conf.realm_max_renewable_life;
         if let Some(v) = conf.allow_weak_crypto {
             self.policy.allow_weak_crypto = v;
         }
@@ -1468,6 +1472,10 @@ impl PrincipalStore {
         kdc: Option<&krb5_config::KdcConf>,
     ) -> Result<Self, Error> {
         let mut store = Self::new(realm);
+        // No profile: keep the harness create default (7 d) so `--test-realm`
+        // principals match stock `max_renewable_life = 7d`. A supplied
+        // kdc.conf with the key omitted then sets create = 0 and the realm
+        // cap = 7 d (`kdc/main.c` vs `alt_prof.c`).
         store.policy.max_renewable_life = 7 * 24 * 3600;
         store.policy.spake_preauth_groups = vec![krb5_types::spake::GROUP_P256];
         if let Some(c) = kdc {
@@ -4063,6 +4071,7 @@ mod tests {
         assert_eq!(store.policy.no_host_referral, "imap");
         assert_eq!(store.policy.max_life, 5400);
         assert_eq!(store.policy.max_renewable_life, 2 * 86400);
+        assert_eq!(store.policy.realm_max_renewable_life, 2 * 86400);
         assert!(!store.policy.requires_preauth);
         assert!(store.policy.restrict_anon);
         assert!(store.policy.pkinit_require_freshness);

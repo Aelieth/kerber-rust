@@ -461,7 +461,13 @@ pub fn write_dump(store: &PrincipalStore, mkey: &ProtocolKey) -> Result<String, 
     let mut out = format!("kdb5_util load_dump version {KDB_DUMP_VERSION}\n");
     let has_km = princs.iter().any(|p| p.name.components_joined() == "K/M");
     if !has_km {
-        let km = synthesize_km(store.realm(), mkey, now);
+        let km = synthesize_km(
+            store.realm(),
+            mkey,
+            now,
+            store.policy.max_life,
+            store.policy.max_renewable_life,
+        );
         write_princ_record(&mut out, &km, mkey, store)?;
     }
     for p in princs {
@@ -1138,7 +1144,13 @@ fn synthesize_tl(realm: &str, now: u32, mkvno: u16, is_km: bool) -> Vec<TlData> 
     tl
 }
 
-fn synthesize_km(realm: &str, mkey: &ProtocolKey, now: u32) -> Principal {
+fn synthesize_km(
+    realm: &str,
+    mkey: &ProtocolKey,
+    now: u32,
+    max_life: u64,
+    max_renewable_life: u64,
+) -> Principal {
     let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, MASTER_NAME);
     let salt = name.default_salt(realm);
     let mut p = Principal::from_keys(
@@ -1147,12 +1159,12 @@ fn synthesize_km(realm: &str, mkey: &ProtocolKey, now: u32) -> Principal {
         vec![KeyEntry::new(mkey.etype(), mkey.clone(), 1)],
         salt,
         false,
-        36_000,
+        max_life,
         true,
         0,
     );
     p.attributes = KDB_DISALLOW_ALL_TIX | KDB_LOCKDOWN_KEYS;
-    p.max_renewable_life = 604_800;
+    p.max_renewable_life = max_renewable_life;
     p.tl_data = synthesize_tl(realm, now, 1, true);
     p
 }

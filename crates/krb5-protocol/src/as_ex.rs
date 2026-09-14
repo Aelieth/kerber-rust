@@ -77,7 +77,8 @@ pub struct AsRequest<'a> {
 /// AS-REQ ticket policy from `kinit` flags.
 #[derive(Clone, Debug)]
 pub struct AsTicketOpts {
-    /// Ticket lifetime in seconds (`-l`). `None` is 10 hours.
+    /// Ticket lifetime in seconds (`-l`). `None` is 24 hours
+    /// (`get_in_tkt.c:936-947`).
     pub lifetime: Option<u64>,
     /// Renewable lifetime in seconds (`-r`).
     pub rlife: Option<u64>,
@@ -1528,7 +1529,7 @@ fn ticket_body(req: &AsRequest<'_>) -> (AsReqTimes, Option<krb5_types::HostAddre
         _ => None,
     };
     let base = from.as_ref().unwrap_or(&now);
-    let life = req.ticket.lifetime.unwrap_or(10 * 3600);
+    let life = req.ticket.lifetime.unwrap_or(24 * 3600);
     let till = base
         .add_seconds(i64::try_from(life).unwrap_or(i64::MAX))
         .unwrap_or_else(|_| base.clone());
@@ -1951,5 +1952,17 @@ mod as_kdc_options_tests {
         assert!(plain.from.is_none());
         assert!(!plain.opts.bit(flag_bit::POSTDATED));
         assert!(!plain.opts.bit(flag_bit::MAY_POSTDATE));
+    }
+
+    #[test]
+    fn z7_omitted_lifetime_is_one_day() {
+        let t = times_of(AsTicketOpts::default(), false);
+        let now = i64::from(KerberosTime::now().unix_seconds());
+        let till = i64::from(t.till.unix_seconds());
+        let delta = till - now;
+        assert!(
+            (86_400 - 5..=86_400 + 5).contains(&delta),
+            "get_in_tkt.c:947 omitted till is 24 h, got {delta}"
+        );
     }
 }

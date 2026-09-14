@@ -1457,7 +1457,66 @@ docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
 echo "MIT_z13_nyv_refused_kvno_refused"
 echo "RUST_z13_nyv_refused_kvno_refused"
 
+echo "==== Z7.1 omitted ticket_lifetime till is 24 h (get_in_tkt.c:936-947) ===="
+# Stock client conf writes ticket_lifetime = 10h. A conf that omits it
+# (and has no -l) must send till = now + 24 h on both kinit and krb5-kinit.
+docker exec "$NAME" sh -c 'python3 - <<PY
+from pathlib import Path
+Path("/tmp/z71-notill-krb5.conf").write_text("""[libdefaults]
+    default_realm = KERBER.TEST
+    dns_lookup_realm = false
+    dns_lookup_kdc = false
+    rdns = false
+    forwardable = true
+    spake_preauth_groups = P-256
+[realms]
+    KERBER.TEST = {
+        kdc = 127.0.0.1:1891
+        admin_server = 127.0.0.1
+    }
+[domain_realm]
+    .kerber.test = KERBER.TEST
+    kerber.test = KERBER.TEST
+""")
+PY'
+if grep -E '^[[:space:]]*ticket_lifetime[[:space:]]*=' <<<"$(docker exec "$NAME" cat /tmp/z71-notill-krb5.conf)"; then
+    die "z71-notill-krb5.conf still has ticket_lifetime"
+fi
+reset_cap
+docker exec -e KRB5_CONFIG=/tmp/z71-notill-krb5.conf "$NAME" \
+    sh -c "printf 'userpassword\n' | kinit -c /tmp/cc_mit_z71_till user@KERBER.TEST" \
+    || die "MIT kinit omitted ticket_lifetime failed"
+save_cap mit-z71-till
+reset_cap
+docker exec -e KRB5_CONFIG=/tmp/z71-notill-krb5.conf -e KRB5_PASSWORD=userpassword "$NAME" \
+    /tmp/krb5-kinit -c /tmp/cc_rust_z71_till user@KERBER.TEST \
+    || die "Rust krb5-kinit omitted ticket_lifetime failed"
+save_cap rust-z71-till
+Z71_TILL="$(docker exec "$NAME" python3 -c '
+import json, time
+now = int(time.time())
+want = 24 * 3600
+for label, path in (("MIT", "/tmp/cdiff/mit-z71-till.jsonl"), ("RUST", "/tmp/cdiff/rust-z71-till.jsonl")):
+    till = None
+    for line in open(path):
+        o = json.loads(line)
+        if o.get("kind") == "req" and o.get("msg_type") == 10:
+            till = o.get("till_unix")
+            break
+    if till is None:
+        raise SystemExit(f"no {label} AS-REQ till_unix")
+    delta = till - now
+    print(f"{label}_z71_till_unix={till} delta={delta}")
+    if abs(delta - want) > 120:
+        raise SystemExit(f"{label} till delta want ~86400 got {delta}")
+print("MIT_z71_omitted_till_24h")
+print("RUST_z71_omitted_till_24h")
+')"
+echo "$Z71_TILL"
+echo "$Z71_TILL" | grep -q "MIT_z71_omitted_till_24h"
+echo "$Z71_TILL" | grep -q "RUST_z71_omitted_till_24h"
+
 mkdir -p "$SCRATCH/cdiff"
 docker cp "$NAME:/tmp/cdiff/." "$SCRATCH/cdiff/"
-log "client.diff.gate" "ok" ",\"flows\":$EXPECTED_FLOWS,\"cli_errors\":8"
+log "client.diff.gate" "ok" ",\"flows\":$EXPECTED_FLOWS,\"cli_errors\":8,\"z71_till\":true"
 echo "client-differential-gate ok flows:$EXPECTED_FLOWS"

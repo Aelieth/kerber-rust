@@ -472,5 +472,150 @@ echo "$MITLOG$MNOPA" | grep -q 'NO PREAUTH' || {
     exit 1
 }
 
-log "renew.gate" "ok" ',"kinit_r":true,"renew_till_preserved":true,"disallow_strips":true,"proxiable":true,"non_renewable":true,"max_rlife_zero":true,"pre_authent":true'
+echo "==== Z7.1 omitted max_renewable_life is a 7d realm cap (kdc/main.c:316-319) ===="
+# Stock kdc.conf writes max_renewable_life = 7d. Strip only that relation,
+# set max_life = 1h, restart both KDCs, then kinit -r 5d -l 1h. MIT's
+# realm_maxrlife default is 7 d, so 5 d is allowed. Do not substring-match
+# max_life when stripping (z66 pitfall).
+z71_profile() {
+    docker exec "$1" sh -c '
+python3 - <<PY
+from pathlib import Path
+src_path = Path("/etc/krb5kdc/kdc.conf")
+if src_path.exists():
+    src = src_path.read_text().splitlines(True)
+    out = []
+    seen_life = False
+    for ln in src:
+        key = ln.split("=", 1)[0].strip()
+        if key == "max_renewable_life":
+            continue
+        if key == "max_life":
+            indent = ln[: len(ln) - len(ln.lstrip())]
+            out.append(f"{indent}max_life = 1h\n")
+            seen_life = True
+            continue
+        out.append(ln)
+    if not seen_life:
+        text = "".join(out)
+        needle = "    }\n"
+        insert = "        max_life = 1h\n"
+        if needle in text:
+            text = text.replace(needle, insert + needle, 1)
+        else:
+            text += "[realms]\n    KERBER.TEST = {\n        max_life = 1h\n    }\n"
+        Path("/tmp/z71-kdc.conf").write_text(text)
+    else:
+        Path("/tmp/z71-kdc.conf").write_text("".join(out))
+else:
+    Path("/tmp/z71-kdc.conf").write_text(
+        "[realms]\n    KERBER.TEST = {\n        max_life = 1h\n    }\n"
+    )
+PY
+test -f /tmp/z71-kdc.conf
+if grep -E "^[[:space:]]*max_renewable_life[[:space:]]*=" /tmp/z71-kdc.conf; then
+    echo "z71-kdc.conf still has max_renewable_life" >&2
+    exit 1
+fi
+grep -q "max_life = 1h" /tmp/z71-kdc.conf
+'
+}
+
+z71_wait_port() {
+    local ctn=$1 want=$2
+    local i
+    for i in $(seq 1 40); do
+        if docker exec "$ctn" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.3)" 2>/dev/null; then
+            [ "$want" = up ] && return 0
+        else
+            [ "$want" = down ] && return 0
+        fi
+        sleep 0.25
+    done
+    return 1
+}
+
+z71_kill_comm() {
+    local ctn=$1 comm=$2
+    docker exec "$ctn" sh -c '
+comm_want='"$comm"'
+for f in /proc/[0-9]*/comm; do
+    [ -f "$f" ] || continue
+    read -r name < "$f" || continue
+    if [ "$name" = "$comm_want" ]; then
+        pid=${f#/proc/}
+        pid=${pid%/comm}
+        kill "$pid" 2>/dev/null || true
+    fi
+done
+'
+}
+
+z71_profile "$NAME"
+z71_profile "$MITNAME"
+z71_kill_comm "$NAME" krb5-kdc
+z71_wait_port "$NAME" down || true
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_PROFILE=/tmp/z71-kdc.conf \
+    "$NAME" sh -c '/tmp/krb5-kdc 127.0.0.1:88 >/tmp/kdc-z71.log 2>&1'
+if ! z71_wait_port "$NAME" up; then
+    docker exec "$NAME" cat /tmp/kdc-z71.log >&2 || true
+    log "renew.gate" "error" ',"error":"Rust KDC did not listen for z71"'
+    exit 1
+fi
+z71_kill_comm "$MITNAME" krb5kdc
+z71_wait_port "$MITNAME" down || true
+docker exec -d -e KRB5_KDC_PROFILE=/tmp/z71-kdc.conf \
+    "$MITNAME" sh -c 'krb5kdc -n >/tmp/krb5kdc-z71.log 2>&1'
+if ! z71_wait_port "$MITNAME" up; then
+    docker exec "$MITNAME" cat /tmp/krb5kdc-z71.log >&2 || true
+    docker logs "$MITNAME" >&2 || true
+    log "renew.gate" "error" ',"error":"MIT KDC did not listen for z71"'
+    exit 1
+fi
+
+kadmin_q 'modprinc -maxrenewlife 7d renewuser'
+kadmin_q 'modprinc -maxrenewlife 7d krbtgt/KERBER.TEST'
+docker exec "$MITNAME" kadmin.local -q 'modprinc -maxrenewlife 7d user'
+docker exec "$MITNAME" kadmin.local -q 'modprinc -maxrenewlife 7d krbtgt/KERBER.TEST'
+
+docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
+if ! docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf \
+    "$NAME" sh -c 'printf "renew-secret\n" | kinit -l 1h -r 5d renewuser@KERBER.TEST'; then
+    docker exec "$NAME" cat /tmp/kdc-z71.log >&2 || true
+    log "renew.gate" "error" ',"error":"Rust kinit -r 5d after omitted rlife failed"'
+    exit 1
+fi
+RLIST="$(docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf "$NAME" klist -f)"
+echo "$RLIST"
+RSTART="$(echo "$RLIST" | awk '/krbtgt\//{print $1, $2; exit}')"
+RREN="$(echo "$RLIST" | awk -F'renew until ' '/renew until/{print $2}' | awk -F, '{print $1}')"
+RDELT=$(($(date -d "$RREN" +%s) - $(date -d "$RSTART" +%s)))
+echo "rust_z71_start=$RSTART rust_z71_renew=$RREN rust_z71_delta=$RDELT"
+test "$RDELT" -ge 431700
+test "$RDELT" -le 432300
+
+docker exec -e KRB5_CONFIG=/tmp/renew-mit-oracle.conf "$MITNAME" kdestroy -A >/dev/null 2>&1 || true
+if ! docker exec -e KRB5_CONFIG=/tmp/renew-mit-oracle.conf \
+    "$MITNAME" sh -c 'printf "userpassword\n" | kinit -l 1h -r 5d user@KERBER.TEST'; then
+    docker exec "$MITNAME" cat /tmp/krb5kdc-z71.log >&2 || true
+    docker logs "$MITNAME" >&2 || true
+    log "renew.gate" "error" ',"error":"MIT kinit -r 5d after omitted rlife failed"'
+    exit 1
+fi
+MLIST="$(docker exec -e KRB5_CONFIG=/tmp/renew-mit-oracle.conf "$MITNAME" klist -f)"
+echo "$MLIST"
+MSTART="$(echo "$MLIST" | awk '/krbtgt\//{print $1, $2; exit}')"
+MREN="$(echo "$MLIST" | awk -F'renew until ' '/renew until/{print $2}' | awk -F, '{print $1}')"
+MDELT=$(($(date -d "$MREN" +%s) - $(date -d "$MSTART" +%s)))
+echo "mit_z71_start=$MSTART mit_z71_renew=$MREN mit_z71_delta=$MDELT"
+test "$MDELT" -ge 431700
+test "$MDELT" -le 432300
+echo "MIT_z71_omitted_rlife_five_day_renew"
+echo "RUST_z71_omitted_rlife_five_day_renew"
+
+log "renew.gate" "ok" ',"kinit_r":true,"renew_till_preserved":true,"disallow_strips":true,"proxiable":true,"non_renewable":true,"max_rlife_zero":true,"pre_authent":true,"z71_realm_cap":true'
 exit 0

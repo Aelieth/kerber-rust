@@ -8,6 +8,18 @@ this project uses semantic versioning once a crate is published.
 
 ### W1-Z
 
+- **kdc / client.** Lifetime defaults match MIT's two consumers of
+  `max_renewable_life` and the client `till` fallback. Omitted
+  `kdc.conf` `max_renewable_life` is still 0 for kadm5 create
+  (`alt_prof.c:577-578`) but the KDC issue cap is 7 days
+  (`kdc/main.c:316-319` `KRB5_KDB_MAX_RLIFE`) — `Policy` /
+  `KdcConf` now keep both (`realm_max_renewable_life`); a written
+  key still sets both. `as_ex` omitted `-l` / `ticket_lifetime` is
+  24 h (`get_in_tkt.c:947`; before: 10 h). Synthesised `K/M` takes
+  `params.max_life` / `params.max_rlife` (`kdb5_create.c:394-395`;
+  before: 10 h / 7 d). Ledger: new `kdc/main.c:312-319` and
+  `get_in_tkt.c:936-947` rows, `alt_prof.c` cite `:573-574` (454
+  rows, exact 359).
 - **kadmind.** `kadm5_create_principal_3` now applies every field the
   request masks, like `svr_principal.c:376-420`: `KADM5_ATTRIBUTES`
   (else `[realms] default_principal_flags`, new in `kdc.conf`, else the

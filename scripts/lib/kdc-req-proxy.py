@@ -135,13 +135,40 @@ def _principal(val: bytes) -> tuple[str | None, int | None]:
     return "/".join(parts), ntype
 
 
+def _time_text(val: bytes) -> str:
+    """Contents of a GeneralizedTime (implicit context or explicit 0x18)."""
+    if val and val[0] == 0x18:
+        try:
+            _, inner, _ = _tlv(val, 0)
+            return _general_string(inner)
+        except (ValueError, IndexError):
+            pass
+    return _general_string(val)
+
+
 def _time_class(val: bytes) -> str:
     if not val:
         return "absent"
-    text = _general_string(val)
+    text = _time_text(val)
     if text.startswith("19700101"):
         return "zero"
     return "present"
+
+
+def _time_unix(val: bytes) -> int | None:
+    """GeneralizedTime YYYYMMDDHHMMSSZ → unix seconds, or None."""
+    if not val:
+        return None
+    text = _time_text(val).rstrip("Zz")
+    if len(text) < 14:
+        return None
+    from datetime import datetime, timezone
+
+    try:
+        dt = datetime.strptime(text[:14], "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return int(dt.timestamp())
 
 
 def _bit_string_u32(val: bytes) -> int:
@@ -222,6 +249,7 @@ def parse_kdc_req_shape(pdu: bytes) -> dict | None:
         "sname_nt": None,
         "from": "absent",
         "till": "absent",
+        "till_unix": None,
         "rtime": "absent",
         "nonce": False,
         "etypes": [],
@@ -257,6 +285,7 @@ def parse_kdc_req_shape(pdu: bytes) -> dict | None:
             shape["from"] = _time_class(inner)
         elif num == 5:
             shape["till"] = _time_class(inner)
+            shape["till_unix"] = _time_unix(inner)
         elif num == 6:
             shape["rtime"] = _time_class(inner)
         elif num == 7:
@@ -651,6 +680,7 @@ def _self_test() -> int:
     assert shape["etypes"] == [18], shape
     assert shape["etype_nonempty"] is True, shape
     assert shape["till"] == "present", shape
+    assert shape["till_unix"] == 1767268800, shape
     assert "forwardable" in shape["kdc_options"], shape
     assert "renewable_ok" in shape["kdc_options"], shape
     mit = [shape]

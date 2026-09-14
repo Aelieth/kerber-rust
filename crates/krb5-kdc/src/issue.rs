@@ -3381,7 +3381,7 @@ fn kdc_get_ticket_renewtime(
     }
     let mut max_rlife = server
         .max_renewable_life
-        .min(store.policy().max_renewable_life);
+        .min(store.policy().realm_max_renewable_life);
     if let Some(c) = client {
         max_rlife = max_rlife.min(c.max_renewable_life);
     }
