@@ -759,6 +759,43 @@ fn mint_tgt_caddr(
     seal_ticket(krbtgt, kvno, realm, sname, &part)
 }
 
+/// `mint_tgt` with explicit `authtime` / optional `starttime` / `endtime`
+/// (the KDC-side `krb5int_validate_times` starttime-absent oracle).
+#[allow(clippy::too_many_arguments)]
+fn mint_tgt_times(
+    krbtgt: &ProtocolKey,
+    kvno: u32,
+    cname: &PrincipalName,
+    realm: &str,
+    sname: &PrincipalName,
+    session: &ProtocolKey,
+    authtime: KerberosTime,
+    starttime: Option<KerberosTime>,
+    endtime: KerberosTime,
+    flags: TicketFlags,
+) -> Result<Ticket, String> {
+    let part = EncTicketPart {
+        flags,
+        key: EncryptionKey {
+            keytype: session.etype().to_iana(),
+            keyvalue: session.as_bytes().to_vec().into(),
+        },
+        crealm: krb5_types::try_ascii(realm).map_err(|e| e.to_string())?,
+        cname: cname.clone(),
+        transited: TransitedEncoding {
+            tr_type: 1,
+            contents: Vec::<u8>::new().into(),
+        },
+        authtime,
+        starttime,
+        endtime,
+        renew_till: None,
+        caddr: None,
+        authorization_data: None,
+    };
+    seal_ticket(krbtgt, kvno, realm, sname, &part)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn mint_tgt_ad(
     krbtgt: &ProtocolKey,
@@ -1423,6 +1460,40 @@ fn run() -> Result<(), String> {
         &cfg,
         "tgt-nyv",
         &encode(&tgs_nyv).map_err(|e| e.to_string())?,
+        err::TKT_NYV,
+        true,
+    )?;
+
+    // W1-Z Z1.3: krb5int_validate_times (valid_times.c:44-51) judges a header
+    // ticket with no starttime by its authtime — kdc_rd_ap_req →
+    // krb5_rd_req_decoded_anyflag → rd_req_dec.c:627. A forged TGT with a
+    // future authtime and starttime absent is 33 PROCESS_TGS on both KDCs.
+    let nyv_no_start = mint_tgt_times(
+        tkt_key,
+        tkt_kvno,
+        &user,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        now.add_seconds(3600).unwrap_or_else(|_| now.clone()),
+        None,
+        now.add_seconds(7200).unwrap_or_else(|_| now.clone()),
+        TicketFlags::initial_preauth(),
+    )?;
+    let tgs_nyv_no_start = tgs_req(
+        nyv_no_start,
+        &sess,
+        realm,
+        &user,
+        host.clone(),
+        realm,
+        0x1000_000b,
+    )
+    .map_err(|e| e.to_string())?;
+    expect_error_client(
+        &cfg,
+        "tgt-nyv-no-starttime",
+        &encode(&tgs_nyv_no_start).map_err(|e| e.to_string())?,
         err::TKT_NYV,
         true,
     )?;
@@ -4499,7 +4570,7 @@ fn run() -> Result<(), String> {
         rt.endtime.unix_seconds()
     );
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":109}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":110}}"#);
     Ok(())
 }
 

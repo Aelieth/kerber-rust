@@ -241,6 +241,8 @@ grep -q '"case":"garbage-pdu","outcome":"ok","rust_tag":"drop","mit_tag":"drop"'
 grep -q '"case":"tgs-not-a-tgt","outcome":"ok","error_code":35,"e_text":"BAD TGS SERVER NAME","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "missing BAD TGS SERVER NAME"
 grep -q '"case":"tgt-expired","outcome":"ok","error_code":32,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgt-expired not code 32 e_text PROCESS_TGS on both legs"
 grep -q '"case":"tgt-nyv","outcome":"ok","error_code":33,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgt-nyv not code 33 e_text PROCESS_TGS on both legs"
+# W1-Z Z1.3: valid_times.c:44-51 — starttime absent → authtime is the NYV bound on both KDCs
+grep -q '"case":"tgt-nyv-no-starttime","outcome":"ok","error_code":33,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgt-nyv-no-starttime not code 33 e_text PROCESS_TGS on both legs"
 grep -q '"case":"as-success"' <<<"$DIFF" || die "missing as-success"
 grep -q '"case":"tgs-success"' <<<"$DIFF" || die "missing tgs-success"
 grep -q '"rust_tag":"0x6b"' <<<"$DIFF" || die "as-success missing AS-REP tag"
@@ -252,7 +254,7 @@ grep -q '"case":"as-invalid-opts","outcome":"ok","error_code":13' <<<"$DIFF" || 
 grep -q '"case":"as-request-anonymous","outcome":"ok","error_code":13,"e_text":"VALIDATE_ANONYMOUS_PRINCIPAL","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "as-request-anonymous not code 13 e_text VALIDATE_ANONYMOUS_PRINCIPAL on both legs"
 grep -q '"case":"as-validate-before-preauth","outcome":"ok","error_code":23' <<<"$DIFF" || die "as-validate-before-preauth (preauth+needchange) not code 23 on both legs"
 grep -q '"case":"as-retransmit","outcome":"ok","rust_retransmit_identical":true,"mit_retransmit_identical":true' <<<"$DIFF" || die "as-retransmit reply not identical from the lookaside on both legs"
-grep -q '"outcome":"ok","cases":109' <<<"$DIFF" || die "diffsend did not finish 109 cases" # A'-3 R32: "outcome":"ok","cases":102" # A'-4 item 16: "outcome":"ok","cases":105" # A'-4 item 17: "outcome":"ok","cases":106" # A'-4 item 18: "outcome":"ok","cases":107" # W1-B F4: 109
+grep -q '"outcome":"ok","cases":110' <<<"$DIFF" || die "diffsend did not finish 110 cases" # A'-3 R32: "outcome":"ok","cases":102" # A'-4 item 16: "outcome":"ok","cases":105" # A'-4 item 17: "outcome":"ok","cases":106" # A'-4 item 18: "outcome":"ok","cases":107" # W1-B F4: 109 # W1-Z Z1.3: 110
 grep -q '"case":"fast-armor-no-subkey","outcome":"ok","error_code":12,"e_text":"FIND_FAST","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "fast-armor-no-subkey not code 12 e_text FIND_FAST on both legs"
 grep -q '"case":"armor-ap-req-as-pa-tgs-req","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "armor-ap-req-as-pa-tgs-req not code 12 e_text PROCESS_TGS on both legs"
 grep -q '"case":"tgs-ad-fx-armor-authenticator","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-ad-fx-armor-authenticator not code 12 e_text PROCESS_TGS on both legs"

@@ -1776,13 +1776,15 @@ fn find_server_key(
     Ok((k.key.clone(), k.kvno))
 }
 
-/// MIT `krb5int_validate_times` inside `kdc_process_tgs_req` (PROCESS_TGS).
+/// MIT `krb5int_validate_times` inside `kdc_process_tgs_req` (PROCESS_TGS):
+/// `kdc_rd_ap_req` → `krb5_rd_req_decoded_anyflag` → `rd_req_dec.c:627` →
+/// `valid_times.c:44-51`, a header ticket with no `starttime` is judged by its
+/// `authtime`.
 fn check_header_times_rd_req(store: &dyn PrincipalRead, tkt: &EncTicketPart) -> Result<(), Error> {
     let now = KerberosTime::now();
     let skew = store.policy().skew;
-    if let Some(start) = &tkt.starttime
-        && now.delta_seconds(start) < -skew
-    {
+    let start = tkt.starttime.as_ref().unwrap_or(&tkt.authtime);
+    if now.delta_seconds(start) < -skew {
         return Err(proto(err::TKT_NYV, status::PROCESS_TGS));
     }
     if tkt.endtime.delta_seconds(&now) < -skew {

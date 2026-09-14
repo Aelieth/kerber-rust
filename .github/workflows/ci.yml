@@ -37,6 +37,11 @@ jobs:
         env:
           KRB5_CONFIG: ${{ github.workspace }}/harness/nextest-krb5.conf
         run: cargo nextest run --workspace --profile ci
+      - name: Annotate nextest failures
+        # Job logs are private; the annotations are public and are what
+        # scripts/ci-status.py reads. One ::error per failed testcase.
+        if: failure()
+        run: python3 scripts/lib/junit-annotate.py target/nextest/ci/junit.xml
       - name: Upload nextest junit
         if: always()
         uses: actions/upload-artifact@v4

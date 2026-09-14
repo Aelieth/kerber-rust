@@ -76,6 +76,18 @@ this project uses semantic versioning once a crate is published.
   one, both refused by the Rust acceptor and by MIT `gss-server` given
   the fully-specified name. Ledger: `rd_req_dec.c` pinning row rewritten,
   new `valid_times.c` row (434 rows, exact 348).
+- **kdc.** The TGS header-ticket time check is `krb5int_validate_times`
+  whole as well (`kdc_rd_ap_req` → `krb5_rd_req_decoded_anyflag` →
+  `rd_req_dec.c:627` → `valid_times.c:44-51`): a TGT that carries no
+  `starttime` is judged by its `authtime` — before, a PAC-less TGT with
+  a future `authtime` and no `starttime` was accepted (a PAC-bearing one
+  already failed `HEADER_PAC` on the rewritten `authtime`). New
+  `diffsend` case `tgt-nyv-no-starttime` (110 cases): 33 `PROCESS_TGS`
+  on both KDCs for the same forged bytes.
+- **ci.** When the `test` job fails, nextest's junit is turned into one
+  `::error` annotation per failed testcase (`scripts/lib/junit-annotate.py`)
+  — the job log is private, the annotations are what `ci-status.py`
+  reads.
 
 ### W1-C
 

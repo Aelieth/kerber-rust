@@ -45,6 +45,7 @@ DIFFSEND_CASES = frozenset(
         "tgs-not-a-tgt",
         "tgt-expired",
         "tgt-nyv",
+        "tgt-nyv-no-starttime",
         "fast-armor-no-subkey",
         "armor-ap-req-as-pa-tgs-req",
         "tgs-ad-fx-armor-authenticator",
