@@ -311,10 +311,11 @@ pub fn parse_policy_args(parts: &[&str]) -> Result<PolicyArgs, String> {
                 out.pw_lockout_duration = Some(parse_pol_interval(val)?);
             }
             "-allowedkeysalts" => {
-                if val.contains('\t') || krb5_crypto::parse_keysalt_list(val).is_empty() {
-                    return Err(format!("-allowedkeysalts {val}"));
+                if val == "-" {
+                    out.allowed_keysalts = None;
+                } else {
+                    out.allowed_keysalts = Some(val.to_owned());
                 }
-                out.allowed_keysalts = Some(val.to_owned());
             }
             _ => return Err(format!("unknown flag {p}")),
         }

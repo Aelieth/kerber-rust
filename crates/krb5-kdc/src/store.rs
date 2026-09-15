@@ -2845,10 +2845,14 @@ impl PrincipalStore {
     /// [`Error::NotFound`].
     pub fn purgekeys(&mut self, name: &PrincipalName, keepkvno: i32) -> Result<(), Error> {
         let realm = self.realm.clone();
-        self.purgekeys_in(name, &realm, keepkvno)
+        let actor = default_mod_actor(&realm);
+        self.purgekeys_in(name, &realm, keepkvno, &actor)
     }
 
     /// [`Self::purgekeys`] for `name@princ_realm`.
+    ///
+    /// MIT `kadm5_purgekeys` → `kdb_put_entry` stamps `current_caller`
+    /// even when no old keys are dropped.
     ///
     /// # Errors
     ///
@@ -2858,6 +2862,7 @@ impl PrincipalStore {
         name: &PrincipalName,
         princ_realm: &str,
         keepkvno: i32,
+        actor: &str,
     ) -> Result<(), Error> {
         let id = self.canonical_id(name, princ_realm)?;
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
@@ -2867,6 +2872,7 @@ impl PrincipalStore {
             u32::try_from(keepkvno).unwrap_or(u32::MAX)
         };
         p.keys.retain(|k| k.kvno >= keep);
+        stamp_admin_tl(p, false, actor);
         let snap = p.clone();
         self.note_ulog(id, false, Some(snap));
         self.save_if_configured()

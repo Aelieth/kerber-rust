@@ -409,7 +409,8 @@ pub fn parse_enctype_list(profstr: &str, allow_weak: bool) -> Option<Vec<Encrypt
     if list.is_empty() { None } else { Some(list) }
 }
 
-/// MIT keysalt list (`aes256-cts:normal rc4-hmac:normal`). Unknown tokens are skipped.
+/// MIT `krb5_string_to_keysalts` (`str_conv.c:337-343`): unrecognized
+/// tokens are discarded. Used for `supported_enctypes`.
 #[must_use]
 pub fn parse_keysalt_list(s: &str) -> Vec<EncryptionType> {
     let mut out = Vec::new();

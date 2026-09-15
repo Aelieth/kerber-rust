@@ -251,6 +251,7 @@ def parse_kdc_req_shape(pdu: bytes) -> dict | None:
         "till": "absent",
         "till_unix": None,
         "rtime": "absent",
+        "rtime_unix": None,
         "nonce": False,
         "etypes": [],
         "etype_nonempty": False,
@@ -288,6 +289,7 @@ def parse_kdc_req_shape(pdu: bytes) -> dict | None:
             shape["till_unix"] = _time_unix(inner)
         elif num == 6:
             shape["rtime"] = _time_class(inner)
+            shape["rtime_unix"] = _time_unix(inner)
         elif num == 7:
             shape["nonce"] = True
         elif num == 8:

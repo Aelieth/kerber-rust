@@ -340,7 +340,10 @@ the AS-REQ and sets `ALLOW_POSTDATE`/`POSTDATED` (`get_in_tkt.c:711-714,932-934`
 The default AS/TGS etype list is the AES quartet 18/17/20/19
 (`preferred()`). MIT `init_ctx.c:59-66` also offers DES3 (16), RC4 (23),
 and Camellia (25, 26); those stay behind `is_weak` unless named in
-`default_tkt_enctypes` / `permitted_enctypes`.
+`default_tkt_enctypes` / `permitted_enctypes`. kadm5 v3 `ks_tuple`
+(`-e`) uses MIT `ETYPE_WEAK` (`is_mit_weak`, none of the implemented
+types) so `des3-cbc-sha1` / `arcfour-hmac` / camellia mint like MIT
+kadmind under `allow_weak_crypto = false`; `from_iana` stays stricter.
 FAST AS outer `till` is the epoch (`19700101`) because
 `krb5int_fast_prep_req_body` snapshots the request before
 `set_request_times` (`get_in_tkt.c:836-838`, `fast.c:157-161`).

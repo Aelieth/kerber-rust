@@ -2620,6 +2620,11 @@ fn dispatch_kadm5_ticket(
             if let Some(code) = policy_mask_err(mask, true) {
                 return Ok(generic_ret(api, code));
             }
+            if mask & KADM5_POLICY_ALLOWED_KEYSALTS != 0
+                && let Some(code) = validate_allowed_keysalts(pol.allowed_keysalts.as_deref())
+            {
+                return Ok(generic_ret(api, code));
+            }
             let mut g = match write_store(store, proc, api) {
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
@@ -2670,6 +2675,11 @@ fn dispatch_kadm5_ticket(
                 return Ok(generic_ret(api, code));
             }
             if let Some(code) = policy_mask_err(mask, false) {
+                return Ok(generic_ret(api, code));
+            }
+            if mask & KADM5_POLICY_ALLOWED_KEYSALTS != 0
+                && let Some(code) = validate_allowed_keysalts(rec.allowed_keysalts.as_deref())
+            {
                 return Ok(generic_ret(api, code));
             }
             let mut g = match write_store(store, proc, api) {
@@ -2818,7 +2828,7 @@ fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
             }
-            match g.purgekeys_in(&name, &req, keepkvno) {
+            match g.purgekeys_in(&name, &req, keepkvno, actor) {
                 Ok(()) => {
                     tracing::info!(
                         event = krb5_log::events::ADMIN,
@@ -3128,8 +3138,21 @@ pub(crate) fn policy_text(code: u32) -> &'static str {
         KADM5_BAD_LENGTH => "Invalid password length",
         KADM5_BAD_CLASS => "Invalid number of character classes",
         KADM5_BAD_HISTORY => "Invalid password history count",
+        KADM5_BAD_KEYSALTS => "Invalid key/salt tuples",
         _ => "Operation failed",
     }
+}
+
+/// MIT `validate_allowed_keysalts` (`svr_policy.c:20-36`): a tab is
+/// `KADM5_BAD_KEYSALTS`. `krb5_string_to_keysalts` skips unknown tokens
+/// and only fails ENOMEM, so `addpol -allowedkeysalts bogus:normal`
+/// succeeds on MIT 1.22.2 (live settle).
+fn validate_allowed_keysalts(allowed: Option<&str>) -> Option<u32> {
+    let s = allowed.filter(|s| !s.is_empty())?;
+    if s.contains('\t') {
+        return Some(KADM5_BAD_KEYSALTS);
+    }
+    None
 }
 
 /// Build an `osa_policy_ent` and its mask from CLI `PolicyArgs`.
@@ -3182,6 +3205,11 @@ pub(crate) fn create_policy_local(
     a: &crate::PolicyArgs,
 ) -> Result<krb5_kdc::NamedPolicy, &'static str> {
     let (mut pol, mask) = build_policy(a);
+    if mask & KADM5_POLICY_ALLOWED_KEYSALTS != 0
+        && let Some(code) = validate_allowed_keysalts(pol.allowed_keysalts.as_deref())
+    {
+        return Err(policy_text(code));
+    }
     if exists {
         return Err(policy_text(KADM5_DUP));
     }
@@ -3202,6 +3230,11 @@ pub(crate) fn modify_policy_local(
     a: &crate::PolicyArgs,
 ) -> Result<krb5_kdc::NamedPolicy, &'static str> {
     let (rec, mask) = build_policy(a);
+    if mask & KADM5_POLICY_ALLOWED_KEYSALTS != 0
+        && let Some(code) = validate_allowed_keysalts(rec.allowed_keysalts.as_deref())
+    {
+        return Err(policy_text(code));
+    }
     let merged = merge_policy(existing.clone(), &rec, mask);
     if let Some(code) = policy_floor_err(&merged, mask) {
         return Err(policy_text(code));
@@ -4150,10 +4183,16 @@ impl<'a> XdrR<'a> {
         for _ in 0..n {
             let et = i32::try_from(self.u32()?).unwrap_or(i32::MAX);
             let _salttype = self.u32()?;
-            out.push(
-                EncryptionType::known(et)
-                    .map_err(|_| Error::Inner("Invalid key/salt tuples".into()))?,
-            );
+            let e = EncryptionType::known(et)
+                .map_err(|_| Error::Inner("Invalid key/salt tuples".into()))?;
+            // MIT `etypes.c`: `allow_weak_crypto` filters `ETYPE_WEAK` only.
+            // None of the implemented types set that flag (`is_mit_weak`).
+            // Deprecated des3/rc4 and camellia are accepted on the v3
+            // `ks_tuple` like MIT kadmind (`from_iana` stays stricter).
+            if e.is_mit_weak() {
+                return Err(Error::Inner("Invalid key/salt tuples".into()));
+            }
+            out.push(e);
         }
         Ok(out)
     }

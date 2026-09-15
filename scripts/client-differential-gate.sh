@@ -1516,7 +1516,42 @@ echo "$Z71_TILL"
 echo "$Z71_TILL" | grep -q "MIT_z71_omitted_till_24h"
 echo "$Z71_TILL" | grep -q "RUST_z71_omitted_till_24h"
 
+echo "==== Z8.2 kinit -r 12h clamps rtime to till (get_in_tkt.c:718-722) ===="
+# Same omitted-ticket_lifetime conf as Z7.1; -r 12h is shorter than the
+# 24 h default till, so both clients must send rtime == till.
+reset_cap
+docker exec -e KRB5_CONFIG=/tmp/z71-notill-krb5.conf "$NAME" \
+    sh -c "printf 'userpassword\n' | kinit -r 12h -c /tmp/cc_mit_z82_rtime user@KERBER.TEST" \
+    || die "MIT kinit -r 12h failed"
+save_cap mit-z82-rtime
+reset_cap
+docker exec -e KRB5_CONFIG=/tmp/z71-notill-krb5.conf -e KRB5_PASSWORD=userpassword "$NAME" \
+    /tmp/krb5-kinit -r 12h -c /tmp/cc_rust_z82_rtime user@KERBER.TEST \
+    || die "Rust krb5-kinit -r 12h failed"
+save_cap rust-z82-rtime
+Z82_RTIME="$(docker exec "$NAME" python3 -c '
+import json
+for label, path in (("MIT", "/tmp/cdiff/mit-z82-rtime.jsonl"), ("RUST", "/tmp/cdiff/rust-z82-rtime.jsonl")):
+    till = rtime = None
+    for line in open(path):
+        o = json.loads(line)
+        if o.get("kind") == "req" and o.get("msg_type") == 10:
+            till = o.get("till_unix")
+            rtime = o.get("rtime_unix")
+            break
+    if till is None or rtime is None:
+        raise SystemExit(f"no {label} AS-REQ till_unix/rtime_unix")
+    print(f"{label}_z82_till={till} rtime={rtime}")
+    if till != rtime:
+        raise SystemExit(f"{label} rtime {rtime} != till {till}")
+print("MIT_z82_rtime_clamped_to_till")
+print("RUST_z82_rtime_clamped_to_till")
+')"
+echo "$Z82_RTIME"
+echo "$Z82_RTIME" | grep -q "MIT_z82_rtime_clamped_to_till"
+echo "$Z82_RTIME" | grep -q "RUST_z82_rtime_clamped_to_till"
+
 mkdir -p "$SCRATCH/cdiff"
 docker cp "$NAME:/tmp/cdiff/." "$SCRATCH/cdiff/"
-log "client.diff.gate" "ok" ",\"flows\":$EXPECTED_FLOWS,\"cli_errors\":8,\"z71_till\":true"
+log "client.diff.gate" "ok" ",\"flows\":$EXPECTED_FLOWS,\"cli_errors\":8,\"z71_till\":true,\"z82_rtime\":true"
 echo "client-differential-gate ok flows:$EXPECTED_FLOWS"

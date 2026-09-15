@@ -8,9 +8,26 @@ this project uses semantic versioning once a crate is published.
 
 ### W1-Z
 
+- **kpasswd / client / kadm5 / bootstrap (Z8).** kpasswd reloads the
+  store before mutate (`reload_if_stale`, the `write_store` house
+  rule; Z7.2 had inlined the change and skipped it). Client
+  `set_request_times` clamps `rtime` up to `till`
+  (`get_in_tkt.c:718-722`; `-r` shorter than the 24 h default till).
+  Bootstrap stamps `kadmin/admin` and `kadmin/changepw` `kdb5_util@`
+  (`kadm5_create.c:100`) and keeps `krbtgt` / K/M `db_creation@`.
+  `purgekeys` stamps `current_caller` like `kdb_put_entry` (even when
+  no old keys are dropped).
+  `addpol`/`modpol` run `validate_allowed_keysalts` (a tab is
+  `KADM5_BAD_KEYSALTS`; unknown tokens are stored like MIT
+  `krb5_string_to_keysalts`). v3 `ks_tuple` filters MIT
+  `ETYPE_WEAK` only (`is_mit_weak`; des3/rc4/camellia mint like MIT
+  kadmind). `chrand_etypes_keepold` keeps the current kvno (was 0);
+  `kadmin.local addprinc -policy P` binds P before create. Ledger:
+  unknown-tuple half of `svr_principal.c:444-447` is
+  `stricter-documented` (MIT `KRB5_PROG_ETYPE_NOSUPP`); `schpw.c:407`.
 - **kadmind / kpasswd / kadmin.local.** `mod_name` and keysalt families
   match MIT's remaining callers. kpasswd stamps `kadmind@REALM`
-  (`ovsec_kadmd.c:446`, `schpw.c:406`; before: the ticket client).
+  (`ovsec_kadmd.c:446`, `schpw.c:407`; before: the ticket client).
   Local `ktadd` rotate and `modprinc -unlock` stamp the session
   princstr (`server_kdb.c:376-377`; before: `default_mod_actor` /
   no stamp). Bootstrap without a kadm5 handle is

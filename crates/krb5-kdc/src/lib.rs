@@ -150,6 +150,14 @@ pub fn admin_id_for_realm(realm: &str) -> String {
     format!("{TEST_ADMIN}@{realm}")
 }
 
+/// `kdb5_util@<realm>` — `kadm5_init(context, progname, …)` when
+/// `kdb5_util create` seeds `kadmin/admin` and `kadmin/changepw`
+/// (`kadm5_create.c:100`).
+#[must_use]
+pub fn kdb5_util_id_for_realm(realm: &str) -> String {
+    format!("kdb5_util@{realm}")
+}
+
 /// `host/testhost.<realm-as-dns>` as NT-SRV-HST.
 #[must_use]
 pub fn host_for_realm(realm: &str) -> PrincipalName {
@@ -256,8 +264,11 @@ pub fn bootstrap_realm_with_kdc_conf(
 ///
 /// [`Error::NotFound`] when the kadmin principals are missing.
 pub fn apply_kadm5_create_service_attrs(store: &mut PrincipalStore) -> Result<(), Error> {
-    store.apply_admin_fields(
+    let realm = store.realm().to_owned();
+    let actor = kdb5_util_id_for_realm(&realm);
+    store.apply_admin_fields_in(
         &documented_kadmin(),
+        &realm,
         Some(store::KDB_DISALLOW_TGT_BASED | store::KDB_LOCKDOWN_KEYS),
         None,
         None,
@@ -265,9 +276,11 @@ pub fn apply_kadm5_create_service_attrs(store: &mut PrincipalStore) -> Result<()
         None,
         false,
         None,
+        &actor,
     )?;
-    store.apply_admin_fields(
+    store.apply_admin_fields_in(
         &documented_changepw(),
+        &realm,
         Some(
             store::KDB_DISALLOW_TGT_BASED | store::KDB_PWCHANGE_SERVICE | store::KDB_LOCKDOWN_KEYS,
         ),
@@ -277,6 +290,7 @@ pub fn apply_kadm5_create_service_attrs(store: &mut PrincipalStore) -> Result<()
         None,
         false,
         None,
+        &actor,
     )?;
     Ok(())
 }

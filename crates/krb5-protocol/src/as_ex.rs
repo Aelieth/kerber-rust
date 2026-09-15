@@ -1548,7 +1548,7 @@ fn ticket_body(req: &AsRequest<'_>) -> (AsReqTimes, Option<krb5_types::HostAddre
     }
     // MIT `init_ctx.c:265-267` `kdc_default_options` = `KDC_OPT_RENEWABLE_OK`.
     // `get_in_tkt.c:723` clears it when `renew_life > 0` (RENEWABLE is set).
-    let rtime = match req.ticket.rlife {
+    let mut rtime = match req.ticket.rlife {
         Some(r) if r > 0 => {
             opts = opts.with_bit(flag_bit::RENEWABLE, true);
             base.add_seconds(i64::try_from(r).unwrap_or(i64::MAX)).ok()
@@ -1558,6 +1558,14 @@ fn ticket_body(req: &AsRequest<'_>) -> (AsReqTimes, Option<krb5_types::HostAddre
             None
         }
     };
+    // MIT `get_in_tkt.c:718-722`: don't ask for a smaller renewable time
+    // than the lifetime (`rtime = from+renew_life; if till > rtime then
+    // rtime = till`).
+    if let Some(rt) = rtime.as_mut()
+        && till.unix_seconds() > rt.unix_seconds()
+    {
+        *rt = till.clone();
+    }
     if req.canonicalize {
         opts = opts.with_bit(flag_bit::CANONICALIZE, true);
     }
@@ -1963,6 +1971,25 @@ mod as_kdc_options_tests {
         assert!(
             (86_400 - 5..=86_400 + 5).contains(&delta),
             "get_in_tkt.c:947 omitted till is 24 h, got {delta}"
+        );
+    }
+
+    #[test]
+    fn z8_renew_life_shorter_than_till_is_clamped() {
+        let t = times_of(
+            AsTicketOpts {
+                rlife: Some(12 * 3600),
+                ..AsTicketOpts::default()
+            },
+            false,
+        );
+        let rtime = t
+            .rtime
+            .expect("get_in_tkt.c:718 sets rtime when renew_life > 0");
+        assert_eq!(
+            rtime.unix_seconds(),
+            t.till.unix_seconds(),
+            "get_in_tkt.c:718-722 rtime is max(from+renew_life, till)"
         );
     }
 }

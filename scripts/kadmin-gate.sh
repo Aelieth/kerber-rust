@@ -3174,6 +3174,109 @@ diff "$SCRATCH/z72ks-rust.txt" "$SCRATCH/z72ks-mit.txt" || {
     exit 1
 }
 
+echo "==== Z8.3 bootstrap actors: kadmin/changepw kdb5_util@ (kadm5_create.c:100) ===="
+# kadmin/changepw is never successfully modified in this gate (the
+# lockdown_keys cell is a privilege denial), so both legs still show
+# kadm5_create's kdb5_util@REALM. krbtgt is purgekeys'd earlier
+# (admin@ on rust, admin/admin@ on MIT — fixture princstr); bootstrap
+# db_creation@ is z8_bootstrap_mod.rs.
+z83_mod() { sed -n -E 's/^Last modified: .* \((.*)\)$/\1/p'; }
+R83="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" \
+    kadmin -p admin/admin -w adminpassword -q 'getprinc kadmin/changepw')"
+M83="$(docker exec -e KRB5_CONFIG=/etc/krb5.conf "$NAME_MIT" \
+    kadmin -p admin/admin -w adminpassword -q 'getprinc kadmin/changepw')"
+echo "$R83" | hist_shape | sed 's/^/rust kadmin\/changepw: /'
+echo "$M83" | hist_shape | sed 's/^/mit kadmin\/changepw: /'
+R83MOD="$(echo "$R83" | z83_mod)"
+M83MOD="$(echo "$M83" | z83_mod)"
+echo "rust kadmin/changepw modifier=$R83MOD"
+echo "mit  kadmin/changepw modifier=$M83MOD"
+[ "$R83MOD" = "kdb5_util@KERBER.TEST" ]
+[ "$M83MOD" = "kdb5_util@KERBER.TEST" ]
+[ "$R83MOD" = "$M83MOD" ]
+R83T="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" \
+    kadmin -p admin/admin -w adminpassword -q 'getprinc krbtgt/KERBER.TEST')"
+M83T="$(docker exec -e KRB5_CONFIG=/etc/krb5.conf "$NAME_MIT" \
+    kadmin -p admin/admin -w adminpassword -q 'getprinc krbtgt/KERBER.TEST')"
+R83TMOD="$(echo "$R83T" | z83_mod)"
+M83TMOD="$(echo "$M83T" | z83_mod)"
+echo "rust krbtgt modifier=$R83TMOD (purgekeys caller)"
+echo "mit  krbtgt modifier=$M83TMOD (purgekeys caller)"
+[ "$R83TMOD" = "admin@KERBER.TEST" ]
+[ "$M83TMOD" = "admin/admin@KERBER.TEST" ]
+echo "MIT_z83_bootstrap_actors"
+echo "RUST_z83_bootstrap_actors"
+
+echo "==== Z8.4 addpol/modpol unknown keysalt matches MIT (string_to_keysalts skips) ===="
+# Live MIT kadmin.local addpol -allowedkeysalts bogus:normal succeeds
+# (str_conv.c:341-343 discards unrecognized; validate only rejects a tab).
+z84_leg() {
+    local ctn=$1 client=$2 conf=$3 leg=$4
+    local add mod get
+    add="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+        -q 'addpol -allowedkeysalts bogus:normal z8pol' 2>&1 || true)"
+    echo "$leg addpol: $add"
+    if echo "$add" | grep -qF 'Invalid key/salt tuples'; then
+        echo "$leg: addpol bogus:normal was refused" >&2
+        exit 1
+    fi
+    get="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+        -q 'getpol z8pol' | grep -E '^(Policy|Allowed key/salt)')"
+    echo "$leg getpol: $get"
+    echo "$get" | grep -F 'Policy: z8pol'
+    echo "$get" | grep -F 'Allowed key/salt types: bogus:normal'
+    echo "$get" > "$SCRATCH/z84get-$leg.txt"
+    docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+        -q 'addpol z8mod' >/dev/null
+    mod="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+        -q 'modpol -allowedkeysalts bogus:normal z8mod' 2>&1 || true)"
+    echo "$leg modpol: $mod"
+    if echo "$mod" | grep -qF 'Invalid key/salt tuples'; then
+        echo "$leg: modpol bogus:normal was refused" >&2
+        exit 1
+    fi
+}
+z84_leg "$NAME" admin/admin /tmp/kadmin-krb5.conf rust
+z84_leg "$NAME_MIT" admin/admin /etc/krb5.conf mit
+diff "$SCRATCH/z84get-rust.txt" "$SCRATCH/z84get-mit.txt" || {
+    echo "Z8.4: getpol z8pol differs between the Rust kadmind and MIT kadmind" >&2
+    exit 1
+}
+
+echo "==== Z8.5 weak/deprecated -e on both kadminds (allow_weak_crypto = false) ===="
+z85_leg() {
+    local ctn=$1 client=$2 conf=$3 leg=$4
+    local des3 rc4 keys
+    des3="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+        -q 'addprinc -randkey -e des3-cbc-sha1:normal z8des3' 2>&1 || true)"
+    rc4="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+        -q 'addprinc -randkey -e arcfour-hmac:normal z8rc4' 2>&1 || true)"
+    echo "$leg des3: $des3"
+    echo "$leg rc4: $rc4"
+    echo "$des3" | grep -F 'Principal "z8des3@KERBER.TEST" created.'
+    echo "$rc4" | grep -F 'Principal "z8rc4@KERBER.TEST" created.'
+    keys="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+        -q 'getprinc z8des3' | grep '^Key:')"
+    echo "$leg des3 keys: $keys"
+    echo "$keys" > "$SCRATCH/z85des3-$leg.txt"
+    keys="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+        -q 'getprinc z8rc4' | grep '^Key:')"
+    echo "$leg rc4 keys: $keys"
+    echo "$keys" > "$SCRATCH/z85rc4-$leg.txt"
+}
+z85_leg "$NAME" admin/admin /tmp/kadmin-krb5.conf rust
+z85_leg "$NAME_MIT" admin/admin /etc/krb5.conf mit
+diff "$SCRATCH/z85des3-rust.txt" "$SCRATCH/z85des3-mit.txt" || {
+    echo "Z8.5: getprinc z8des3 Key: lines differ between the Rust kadmind and MIT kadmind" >&2
+    exit 1
+}
+diff "$SCRATCH/z85rc4-rust.txt" "$SCRATCH/z85rc4-mit.txt" || {
+    echo "Z8.5: getprinc z8rc4 Key: lines differ between the Rust kadmind and MIT kadmind" >&2
+    exit 1
+}
+echo "MIT_z85_des3_rc4_ks_tuple"
+echo "RUST_z85_des3_rc4_ks_tuple"
+
 log "kadmin.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"addprinc+cpw+get+list+mod+chrand+norandkey+lockdown+purgekeys+setstr+renprinc+del+alias"'
 exit 0
 

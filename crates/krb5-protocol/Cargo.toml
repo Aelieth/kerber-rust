@@ -111,6 +111,10 @@ name = "z1_acceptor_times"
 path = "tests/z1_acceptor_times.rs"
 
 [[test]]
+name = "z8_rtime"
+path = "tests/z8_rtime.rs"
+
+[[test]]
 name = "b2_validate"
 path = "tests/b2_validate.rs"
 

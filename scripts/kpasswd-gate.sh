@@ -202,7 +202,7 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
-cargo build -p krb5-kdc --bin krb5-kdc -p krb5-admin --bin krb5-kadmind --bin krb5-kpasswd -p krb5-client --bin krb5-kinit
+cargo build -p krb5-kdc --bin krb5-kdc -p krb5-admin --bin krb5-kadmind --bin krb5-kpasswd --bin krb5-kadmin-local -p krb5-client --bin krb5-kinit
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
@@ -216,8 +216,9 @@ trap cleanup EXIT
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmind" "$NAME":/tmp/krb5-kadmind
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kpasswd" "$NAME":/tmp/krb5-kpasswd
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmin-local" "$NAME":/tmp/krb5-kadmin-local
 docker cp "$ROOT/scripts/kpasswd-tgs-client.c" "$NAME":/tmp/kpasswd-tgs-client.c
-docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kadmind /tmp/krb5-kpasswd
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kadmind /tmp/krb5-kpasswd /tmp/krb5-kadmin-local
 if ! docker exec "$NAME" cc -o /tmp/kpasswd-tgs-client /tmp/kpasswd-tgs-client.c -lkrb5; then
     log "kpasswd.gate" "error" ',"error":"cc kpasswd-tgs-client failed"'
     exit 1
@@ -836,6 +837,31 @@ echo "mit modifier=$M72MOD"
     echo "Z7.2 kpasswd modifier differs: rust=$R72MOD mit=$M72MOD" >&2
     exit 1
 }
+
+echo "==== Z8.1 kpasswd reloads after kadmin.local (write_store house rule) ===="
+# kadmind is already up. A local addprinc must survive the next kpasswd save.
+kadmin_q 'addprinc -pw z8old z8kpw' | grep -F 'Principal "z8kpw@KERBER.TEST" created.'
+docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword \
+    -q 'addprinc -pw z8old z8kpw' | grep -F 'Principal "z8kpw@KERBER.TEST" created.'
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_PASSWORD=z8x-secret \
+    "$NAME" /tmp/krb5-kadmin-local -q 'addprinc z8x' \
+    | grep -F 'Principal "z8x@KERBER.TEST" created.'
+docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw z8x-secret z8x' \
+    | grep -F 'Principal "z8x@KERBER.TEST" created.'
+docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
+    "$NAME" sh -c 'printf "z8old\nz8new\nz8new\n" | kpasswd z8kpw@KERBER.TEST'
+docker exec "$NAME_MIT" sh -c 'printf "z8old\nz8new\nz8new\n" | kpasswd z8kpw@KERBER.TEST'
+R8X="$(kadmin_q 'getprinc z8x')"
+M8X="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc z8x')"
+echo "$R8X"
+echo "$M8X"
+echo "$R8X" | grep -F 'Principal: z8x@KERBER.TEST'
+echo "$M8X" | grep -F 'Principal: z8x@KERBER.TEST'
+echo "MIT_z81_local_princ_survives_kpasswd"
+echo "RUST_z81_local_princ_survives_kpasswd"
 
 log "kpasswd.gate" "ok" ',"principal":"user@KERBER.TEST","op":"kpasswd+kinit","softerror":true'
 exit 0
