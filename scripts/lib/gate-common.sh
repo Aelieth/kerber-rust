@@ -229,6 +229,9 @@ shell_container() {
         docker inspect "$NAME" >/dev/null 2>&1 || die "KERBER_SHELL=$NAME is not running"
         docker exec "$NAME" sh -c '
             kill $(pidof krb5-kdc krb5-kadmind krb5kdc kadmind kpropd) 2>/dev/null || true
+            pkill -f kdc-error-proxy.py >/dev/null 2>&1 || true
+            pkill -f kdc-req-proxy.py >/dev/null 2>&1 || true
+            pkill -f integ-tamper-proxy.py >/dev/null 2>&1 || true
             # Keep copied binaries (/tmp/krb5-*). Wipe leftover realm files so
             # the next gate kdb5_util create / --test-realm is not DUP.
             kdb5_util destroy -f >/dev/null 2>&1 || true
@@ -238,12 +241,18 @@ shell_container() {
                 /etc/krb5kdc/principal*
             rm -f /tmp/*.conf /tmp/*.log /tmp/*.pid /tmp/*.cc /tmp/krb5cc* \
                 /tmp/*.keytab /tmp/*.kt /tmp/*.txt /tmp/kadm5.acl
+            if [ -f /etc/krb5.conf.kerber-stock ]; then
+                cp -a /etc/krb5.conf.kerber-stock /etc/krb5.conf
+            fi
+            if [ -f /etc/krb5kdc/kdc.conf.kerber-stock ]; then
+                cp -a /etc/krb5kdc/kdc.conf.kerber-stock /etc/krb5kdc/kdc.conf
+            fi
         ' || true
         wait_pid_gone "$NAME" krb5-kdc || true
         wait_pid_gone "$NAME" krb5kdc || true
         wait_pid_gone "$NAME" krb5-kadmind || true
         local p
-        for p in 88 89 90 91 464 749 2121; do
+        for p in 88 89 90 91 464 749 1888 1891 1892 2121; do
             wait_gone_in "$NAME" "$p" || true
         done
         return 0

@@ -11,6 +11,10 @@ need_image
 NAME="${KERBER_SHELL:-kerber-rust-shell}"
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --hostname testhost.kerber.test --entrypoint sleep "$IMAGE" 7200 >/dev/null
+docker exec "$NAME" sh -c '
+    cp -a /etc/krb5.conf /etc/krb5.conf.kerber-stock
+    cp -a /etc/krb5kdc/kdc.conf /etc/krb5kdc/kdc.conf.kerber-stock
+'
 DEST="${CARGO_TARGET_DIR:-$ROOT/target}/debug"
 for b in krb5-kdc krb5-kadmind krb5-kdb krb5-kadmin-local krb5-kinit krb5-kvno \
     krb5-klist krb5-kdestroy krb5-ktutil krb5-kpasswd krb5-kprop krb5-kpropd \

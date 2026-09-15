@@ -2273,6 +2273,7 @@ def check_gate_common_sourced() -> None:
         "mit_conf_restore",
         "rm -rf /tmp/db-*",
         "kdb5_util destroy",
+        "krb5.conf.kerber-stock",
     ):
         if needle not in ctext:
             _die(f"gate-common.sh missing {needle}")
