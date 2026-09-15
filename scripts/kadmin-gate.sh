@@ -9,6 +9,7 @@ cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-glob-cells.sh"
 need_bins krb5-kdc krb5-kdb krb5-kadmind krb5-kadmin-local
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"

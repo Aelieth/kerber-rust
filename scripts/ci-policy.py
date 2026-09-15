@@ -2280,6 +2280,8 @@ def check_gate_common_sourced() -> None:
             _die(f"{path.name} must not run cargo build (use need_bins)")
         check_gate_cargo_leftover(text, path.name)
         check_gate_no_exit_trap(text, path.name)
+        if path.name == "kadmin-gate.sh" and "kadmin-glob-cells.sh" not in text:
+            _die("kadmin-gate.sh must source scripts/lib/kadmin-glob-cells.sh")
     check_build_bins_examples()
 
 

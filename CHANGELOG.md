@@ -17,7 +17,8 @@ this project uses semantic versioning once a crate is published.
   `wait_port_in`/`wait_udp_in`/`wait_gone_in`/`wait_pid_gone`/`wait_log`;
   remaining sleeps are tagged `# proto:` and sum to 24.7 s.
   `build-bins.sh` builds `ccache-probe`. Gates use `register_cleanup`
-  instead of a private EXIT trap.
+  instead of a private EXIT trap. `kadmin-gate.sh` still sources
+  `kadmin-glob-cells.sh` (the S2 converter had dropped it).
 
 ### W2-S1
 
