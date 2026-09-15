@@ -2271,6 +2271,8 @@ def check_gate_common_sourced() -> None:
         "shell_container",
         "mit_live_guard",
         "mit_conf_restore",
+        "rm -rf /tmp/db-*",
+        "kdb5_util destroy",
     ):
         if needle not in ctext:
             _die(f"gate-common.sh missing {needle}")

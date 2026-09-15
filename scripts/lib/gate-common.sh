@@ -227,11 +227,25 @@ shell_container() {
     if [ -n "${KERBER_SHELL:-}" ]; then
         NAME="${KERBER_SHELL}"
         docker inspect "$NAME" >/dev/null 2>&1 || die "KERBER_SHELL=$NAME is not running"
-        docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc krb5-kadmind krb5kdc kadmind) 2>/dev/null || true' || true
+        docker exec "$NAME" sh -c '
+            kill $(pidof krb5-kdc krb5-kadmind krb5kdc kadmind kpropd) 2>/dev/null || true
+            # Keep copied binaries (/tmp/krb5-*). Wipe leftover realm files so
+            # the next gate kdb5_util create / --test-realm is not DUP.
+            kdb5_util destroy -f >/dev/null 2>&1 || true
+            rm -rf /tmp/db-* /tmp/principal* /tmp/stash /tmp/*.dump
+            rm -f /var/krb5kdc/principal* /var/kerberos/krb5kdc/principal* \
+                /var/krb5kdc/.k5.* /var/kerberos/krb5kdc/.k5.* \
+                /etc/krb5kdc/principal*
+            rm -f /tmp/*.conf /tmp/*.log /tmp/*.pid /tmp/*.cc /tmp/krb5cc* \
+                /tmp/*.keytab /tmp/*.kt /tmp/*.txt /tmp/kadm5.acl
+        ' || true
         wait_pid_gone "$NAME" krb5-kdc || true
+        wait_pid_gone "$NAME" krb5kdc || true
         wait_pid_gone "$NAME" krb5-kadmind || true
-        wait_gone_in "$NAME" 88 || true
-        wait_gone_in "$NAME" 749 || true
+        local p
+        for p in 88 89 90 91 464 749 2121; do
+            wait_gone_in "$NAME" "$p" || true
+        done
         return 0
     fi
     NAME="${NAME:-kerber-rust-${GATE_NAME}}"
