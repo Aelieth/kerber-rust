@@ -4,9 +4,22 @@ Testing is continuous. Categories grow with the stages.
 
 ## Gate discipline
 
-CI status is read from the terminal with `python3 scripts/ci-status.py [-n RUNS] [--sha SHA] [--jobs]`:
+The local entry point is `make safety` (fmt, clippy, nextest under
+`harness/nextest-krb5.conf`, `cargo doc --workspace --no-deps`,
+`python3 scripts/ci-policy.py`). `make snapshot OUT=<dir>` records the
+test/gate/oracle inventory; `make checkpoint OUT=<dir>` runs nextest and
+the gates into a stamped `timings.tsv`. `python3 scripts/hygiene-diff.py
+<old> <new>` fails if a test, cell tag, diffsend case, flow or ledger
+row disappeared. Tier budgets land in W2-S6 (`ci-budget.toml`); S0 only
+measures.
+
+CI status is read from the terminal with `python3 scripts/ci-status.py [-n RUNS] [--sha SHA] [--jobs] [--durations] [--workflow ci|peers]`:
 the public GitHub REST API answers unauthenticated with run, job and step conclusions and with the
-check-run annotations (job logs need `GITHUB_TOKEN`). Every gate sources `scripts/lib/provenance.sh`,
+check-run annotations (job logs need `GITHUB_TOKEN`). `--durations` prints
+per-job `duration_s=` from `started_at`/`completed_at`; `--save` records
+those lines plus `run_wall_s=`. `--workflow` selects a workflow file
+(not the global run list filtered to `main`), so peers and PR-head SHAs
+are visible. `--budget-report -n 15` prints per-job medians. Every gate sources `scripts/lib/provenance.sh`,
 whose `ERR` trap turns a silent `set -e` death into a `::error file=scripts/<gate>.sh,line=N::…` line
 naming the failing command; GitHub stores it as an annotation and `ci-status.py` prints it under the
 failed job, so a red step names its cell without the log. Deliberate failures under `set +e`, `||`, `!`

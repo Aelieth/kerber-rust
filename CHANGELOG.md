@@ -6,6 +6,19 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W2-S0
+
+- **Measure.** `ci-status.py --durations` prints per-job
+  `duration_s=` / `run_wall_s=` from the jobs payload;
+  `--workflow` fetches `/actions/workflows/<file>/runs` so peers and
+  PR SHAs are visible; `--budget-report` prints medians; `--save`
+  records the duration lines. `scripts/checkpoint.sh` writes
+  `timings.tsv`. `hygiene-snapshot.sh` / `hygiene-diff.py` inventory
+  tests, gate cell tags, diffsend cases, client-differential flows
+  and ledger rows (fail on a removal or regrade). `make safety` is
+  fmt → clippy → nextest → doc → `ci-policy.py`; CONTRIBUTING drops
+  `cargo test --workspace`.
+
 ### W1-Z
 
 - **kpasswd / client / kadm5 / bootstrap (Z8).** kpasswd reloads the

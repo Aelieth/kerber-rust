@@ -54,18 +54,24 @@ rustdoc.
 
 ## Local checks
 
+The `test` job in CI is `make safety` (fmt, clippy, nextest, doc,
+`ci-policy.py`) plus CI-only extras (nextest `--no-run`, junit, the
+gate ERR-trap self-test). Do not run `cargo test --workspace` — CI
+forbids it on per-push; nextest is the runner.
+
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-cargo test --workspace --release
-cargo doc --workspace --no-deps
+make safety
 ```
 
-Live MIT oracles (when Docker is available): `scripts/client-gate.sh`,
-`scripts/kdc-gate.sh` (assert `klist` principal/service), 
-`scripts/bidirectional-gate.sh`. Set `KERBER_LIVE=1` so live tests fail
-instead of skip.
+Live MIT oracles (when Docker is available): `make harness` then
+`make gate GATE=client-gate`, `make gate GATE=kdc-gate`,
+`make gate GATE=bidirectional-gate`. `make stop-harness` tears the
+container down. Comparison snapshot / full gate checkpoint:
+
+```bash
+make snapshot OUT=working/logs/w2-efficiency/s0/new
+make checkpoint OUT=working/logs/w2-efficiency/s0/checkpoint
+```
 
 Never add C FFI. `unsafe` is forbidden unless a future exception is
 audited, minimized, and documented in the PR.
