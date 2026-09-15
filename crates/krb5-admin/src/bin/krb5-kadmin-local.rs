@@ -245,7 +245,9 @@ fn run(
                 eprintln!("No policy specified for {canon}; defaulting to no policy");
             }
             let created = if a.randkey {
-                if a.etypes.is_empty() {
+                if a.policy.is_some() {
+                    sess.create_etypes_pol(&name, None, &a.etypes, a.policy.as_deref())
+                } else if a.etypes.is_empty() {
                     sess.create_randkey(&name)
                 } else {
                     sess.create_randkey_etypes(&name, &a.etypes)
@@ -254,10 +256,19 @@ fn run(
                 let pw = a.pw.clone().map_or_else(password, Ok)?;
                 // MIT kadm5_create_principal_3 runs passwd_check with the
                 // -policy before the entry exists (svr_principal.c:364-373),
-                // so a rejected password creates nothing.
+                // so a rejected password creates nothing. Bind `-policy`
+                // before create so `apply_keysalt_policy` sees
+                // `allowed_keysalts` (`svr_principal.c:444-447`).
                 sess.check_new_password(&name, a.policy.as_deref(), pw.as_bytes())
                     .and_then(|()| {
-                        if a.etypes.is_empty() {
+                        if a.policy.is_some() {
+                            sess.create_etypes_pol(
+                                &name,
+                                Some(pw.as_bytes()),
+                                &a.etypes,
+                                a.policy.as_deref(),
+                            )
+                        } else if a.etypes.is_empty() {
                             sess.create_password(&name, pw.as_bytes())
                         } else {
                             sess.create_password_etypes(&name, pw.as_bytes(), &a.etypes)
@@ -299,7 +310,7 @@ fn run(
                 sess.chrand_etypes_keepold(&name, &a.etypes, a.keepold)
             } else {
                 let pw = a.pw.clone().map_or_else(password, Ok)?;
-                sess.change_password(&name, pw.as_bytes())
+                sess.change_password_etypes(&name, pw.as_bytes(), &a.etypes)
             };
             match done {
                 Ok(()) if a.randkey => println!("Key for \"{canon}\" randomized."),

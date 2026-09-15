@@ -8,6 +8,22 @@ this project uses semantic versioning once a crate is published.
 
 ### W1-Z
 
+- **kadmind / kpasswd / kadmin.local.** `mod_name` and keysalt families
+  match MIT's remaining callers. kpasswd stamps `kadmind@REALM`
+  (`ovsec_kadmd.c:446`, `schpw.c:406`; before: the ticket client).
+  Local `ktadd` rotate and `modprinc -unlock` stamp the session
+  princstr (`server_kdb.c:376-377`; before: `default_mod_actor` /
+  no stamp). Bootstrap without a kadm5 handle is
+  `db_creation@REALM` (`kdb5_create.c:114-133`; before:
+  `kadmin/admin@REALM`). `kadm5_chpass_principal_3` /
+  `kadm5_randkey_principal_3` apply `apply_keysalt_policy` on the
+  v3 `ks_tuple` (`svr_principal.c:1259,1425`); an unknown etype is
+  `KADM5_BAD_KEYSALTS`, not RPC `SYSTEM_ERR`. RPC `CREATE_POLICY`
+  keeps `allowed_keysalts` (`kadm_rpc_xdr.c:525`; before: the V4
+  string was discarded). `kadmin.local addprinc -policy P -e` binds
+  P before create. Ledger: extended
+  `svr_principal.c:444-447`, new `kdb5_create.c:114-133` (455
+  rows, exact 360).
 - **kdc / client.** Lifetime defaults match MIT's two consumers of
   `max_renewable_life` and the client `till` fallback. Omitted
   `kdc.conf` `max_renewable_life` is still 0 for kadm5 create

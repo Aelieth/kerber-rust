@@ -3116,6 +3116,64 @@ diff "$SCRATCH/z66-rust.txt" "$SCRATCH/z66-mit.txt" || {
     exit 1
 }
 
+echo "==== Z7.2 RPC chpass/randkey honour ks_tuple (svr_principal.c:1259,1425) ===="
+z72_leg() {
+    local ctn=$1 client=$2 conf=$3 leg=$4
+    docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+        -q 'addprinc -pw z72old z72c' 2>&1 \
+        | grep -F 'Principal "z72c@KERBER.TEST" created.'
+    docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+        -q 'cpw -pw z72new -e aes128-cts-hmac-sha1-96:normal z72c' 2>&1 \
+        | grep -F 'Password for "z72c@KERBER.TEST" changed.'
+    local keys
+    keys="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+        -q 'getprinc z72c' | grep '^Key:')"
+    echo "$leg cpw -e: $keys"
+    echo "$keys" | grep -Fx 'Key: vno 2, aes128-cts-hmac-sha1-96' >/dev/null
+    [ "$(echo "$keys" | grep -c '^Key:')" = 1 ] || {
+        echo "$leg: z72c has more than the requested keysalt: $keys" >&2
+        exit 1
+    }
+    echo "$keys" > "$SCRATCH/z72c-$leg.txt"
+    docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+        -q 'addprinc -randkey z72r' 2>&1 \
+        | grep -F 'Principal "z72r@KERBER.TEST" created.'
+    docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+        -q 'cpw -randkey -e aes128-cts-hmac-sha1-96:normal z72r' 2>&1 \
+        | grep -F 'Key for "z72r@KERBER.TEST" randomized.'
+    keys="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+        -q 'getprinc z72r' | grep '^Key:')"
+    echo "$leg cpw -randkey -e: $keys"
+    echo "$keys" | grep -Fx 'Key: vno 2, aes128-cts-hmac-sha1-96' >/dev/null
+    [ "$(echo "$keys" | grep -c '^Key:')" = 1 ] || {
+        echo "$leg: z72r has more than the requested keysalt: $keys" >&2
+        exit 1
+    }
+    echo "$keys" > "$SCRATCH/z72r-$leg.txt"
+    docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+        -q 'addpol -allowedkeysalts aes256-cts:normal z72ks' >/dev/null
+    local refuse
+    refuse="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+        -q 'addprinc -policy z72ks -e aes128-cts:normal -pw ValidPass1 z72ksbad' 2>&1 || true)"
+    echo "$leg refuse: $refuse"
+    echo "$refuse" | grep -F 'Invalid key/salt tuples'
+    echo "$refuse" > "$SCRATCH/z72ks-$leg.txt"
+}
+z72_leg "$NAME" admin/admin /tmp/kadmin-krb5.conf rust
+z72_leg "$NAME_MIT" admin/admin /etc/krb5.conf mit
+diff "$SCRATCH/z72c-rust.txt" "$SCRATCH/z72c-mit.txt" || {
+    echo "Z7.2: getprinc z72c Key: lines differ between the Rust kadmind and MIT kadmind" >&2
+    exit 1
+}
+diff "$SCRATCH/z72r-rust.txt" "$SCRATCH/z72r-mit.txt" || {
+    echo "Z7.2: getprinc z72r Key: lines differ between the Rust kadmind and MIT kadmind" >&2
+    exit 1
+}
+diff "$SCRATCH/z72ks-rust.txt" "$SCRATCH/z72ks-mit.txt" || {
+    echo "Z7.2: addprinc -policy -e refusal differs between the Rust kadmind and MIT kadmind" >&2
+    exit 1
+}
+
 log "kadmin.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"addprinc+cpw+get+list+mod+chrand+norandkey+lockdown+purgekeys+setstr+renprinc+del+alias"'
 exit 0
 

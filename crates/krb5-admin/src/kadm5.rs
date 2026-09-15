@@ -2483,7 +2483,10 @@ fn dispatch_kadm5_ticket(
             }
         }
         CREATE_PRINCIPAL | CREATE_PRINCIPAL3 => {
-            let mut c = parse_create(args, proc == CREATE_PRINCIPAL3)?;
+            let mut c = match parse_ks(parse_create(args, proc == CREATE_PRINCIPAL3)) {
+                Ok(c) => c,
+                Err(rep) => return rep,
+            };
             let req = req_realm(&c.prealm, &realm);
             let tid = acl_id(&c.name, &req);
             if changepw
@@ -2567,7 +2570,11 @@ fn dispatch_kadm5_ticket(
             }
         }
         CHPASS_PRINCIPAL | CHPASS_PRINCIPAL3 => {
-            let (name, prealm, pass, keepold) = parse_chpass(args, proc == CHPASS_PRINCIPAL3)?;
+            let (name, prealm, pass, keepold, ks) =
+                match parse_ks(parse_chpass(args, proc == CHPASS_PRINCIPAL3)) {
+                    Ok(v) => v,
+                    Err(rep) => return rep,
+                };
             let req = req_realm(&prealm, &realm);
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
@@ -2600,7 +2607,7 @@ fn dispatch_kadm5_ticket(
                 return Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))));
             }
             let n = clamp_self_keepold(self_change, keepold);
-            match g.set_password_keepold_n_in(&name, &req, pass.as_bytes(), n, actor) {
+            match g.set_password_etypes_keepold_n_in(&name, &req, pass.as_bytes(), n, actor, &ks) {
                 Ok(()) => Ok(generic_ret(API_V2, 0)),
                 Err(e) => Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e)))),
             }
@@ -2628,6 +2635,9 @@ fn dispatch_kadm5_ticket(
             }
             if mask & KADM5_PW_MIN_LIFE == 0 {
                 pol.pw_min_life = 0;
+            }
+            if mask & KADM5_POLICY_ALLOWED_KEYSALTS == 0 {
+                pol.allowed_keysalts = None;
             }
             if let Some(code) = policy_floor_err(&pol, mask) {
                 return Ok(generic_ret(api, code));
@@ -2714,7 +2724,11 @@ fn dispatch_kadm5_ticket(
             Ok(encode_pols(api, &names))
         }
         CHRAND_PRINCIPAL | CHRAND_PRINCIPAL3 => {
-            let (name, prealm, keepold) = parse_chrand(args, proc == CHRAND_PRINCIPAL3)?;
+            let (name, prealm, keepold, ks) =
+                match parse_ks(parse_chrand(args, proc == CHRAND_PRINCIPAL3)) {
+                    Ok(v) => v,
+                    Err(rep) => return rep,
+                };
             let req = req_realm(&prealm, &realm);
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
@@ -2743,7 +2757,7 @@ fn dispatch_kadm5_ticket(
                 return Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))));
             }
             let n = clamp_self_keepold(self_change, keepold);
-            match g.chrand_keepold_n_in(&name, &req, n, actor) {
+            match g.chrand_etypes_keepold_in(&name, &req, &ks, n, actor) {
                 Ok(keys) => {
                     let hide = g
                         .get_in_realm(&name, &req)
@@ -3021,6 +3035,7 @@ fn parse_policy_arg(args: &[u8]) -> Result<(u32, krb5_kdc::NamedPolicy, u32), Er
     let mut max_fail = 0;
     let mut pw_failcnt_interval = 0;
     let mut pw_lockout_duration = 0;
+    let mut allowed_keysalts = None;
     if api >= API_V3 {
         max_fail = r.u32().unwrap_or(0);
         pw_failcnt_interval = r.u32().unwrap_or(0);
@@ -3030,7 +3045,7 @@ fn parse_policy_arg(args: &[u8]) -> Result<(u32, krb5_kdc::NamedPolicy, u32), Er
         let _ = r.u32();
         let _ = r.u32();
         let _ = r.u32();
-        let _ = r.nullstring();
+        allowed_keysalts = r.nullstring().ok().flatten().filter(|s| !s.is_empty());
         let _n_tl = r.u32().unwrap_or(0);
         let tl_null = r.u32().unwrap_or(1);
         if tl_null == 0 {
@@ -3057,7 +3072,7 @@ fn parse_policy_arg(args: &[u8]) -> Result<(u32, krb5_kdc::NamedPolicy, u32), Er
             pw_lockout_duration,
             pw_min_life: min_life,
             pw_max_life: max_life,
-            allowed_keysalts: None,
+            allowed_keysalts,
         },
         mask,
     ))
@@ -3331,7 +3346,7 @@ fn encode_policy_rec(w: &mut XdrW, api: u32, p: &krb5_kdc::NamedPolicy) {
         w.u32(0);
         w.u32(0);
         w.u32(0);
-        w.u32(0);
+        w.nullstring(p.allowed_keysalts.as_deref());
         w.u32(0);
         w.u32(1);
     }
@@ -3406,19 +3421,33 @@ fn parse_create(args: &[u8], v3: bool) -> Result<CreateFields, Error> {
     })
 }
 
-fn parse_chpass(args: &[u8], v3: bool) -> Result<(PrincipalName, String, String, bool), Error> {
+/// Unknown v3 `ks_tuple` etypes are `KADM5_BAD_KEYSALTS` in the stub
+/// reply, not ONC RPC `SYSTEM_ERR` (`svr_principal.c` `apply_keysalt_policy`).
+fn parse_ks<T>(r: Result<T, Error>) -> Result<T, Result<Vec<u8>, Error>> {
+    match r {
+        Ok(v) => Ok(v),
+        Err(Error::Inner(s)) if s == "Invalid key/salt tuples" => {
+            Err(Ok(generic_ret(API_V2, KADM5_BAD_KEYSALTS)))
+        }
+        Err(e) => Err(Err(e)),
+    }
+}
+
+fn parse_chpass(
+    args: &[u8],
+    v3: bool,
+) -> Result<(PrincipalName, String, String, bool, Vec<EncryptionType>), Error> {
     let mut r = XdrR::new(args);
     let _api = r.u32()?;
     let (princ, prealm) = r.principal_realm()?;
-    let keepold = if v3 {
+    let (keepold, ks) = if v3 {
         let k = r.u32()? != 0;
-        r.skip_array_i32_pairs()?;
-        k
+        (k, r.key_salt_tuples()?)
     } else {
-        false
+        (false, Vec::new())
     };
     let pass = r.nullstring()?.unwrap_or_default();
-    Ok((princ, prealm, pass, keepold))
+    Ok((princ, prealm, pass, keepold, ks))
 }
 
 fn parse_get(args: &[u8]) -> Result<(PrincipalName, String, u32), Error> {
@@ -3735,18 +3764,20 @@ fn parse_extract(args: &[u8]) -> Result<(u32, PrincipalName, String, u32), Error
     Ok((api, princ, prealm, kvno))
 }
 
-fn parse_chrand(args: &[u8], v3: bool) -> Result<(PrincipalName, String, bool), Error> {
+fn parse_chrand(
+    args: &[u8],
+    v3: bool,
+) -> Result<(PrincipalName, String, bool, Vec<EncryptionType>), Error> {
     let mut r = XdrR::new(args);
     let _api = r.u32()?;
     let (princ, prealm) = r.principal_realm()?;
-    let keepold = if v3 {
-        let k = r.u32().unwrap_or(0) != 0;
-        let _ = r.skip_array_i32_pairs();
-        k
+    let (keepold, ks) = if v3 {
+        let k = r.u32()? != 0;
+        (k, r.key_salt_tuples()?)
     } else {
-        false
+        (false, Vec::new())
     };
-    Ok((princ, prealm, keepold))
+    Ok((princ, prealm, keepold, ks))
 }
 
 struct ModFields {
@@ -4119,7 +4150,10 @@ impl<'a> XdrR<'a> {
         for _ in 0..n {
             let et = i32::try_from(self.u32()?).unwrap_or(i32::MAX);
             let _salttype = self.u32()?;
-            out.push(EncryptionType::from_iana(et).map_err(|e| Error::Inner(e.to_string()))?);
+            out.push(
+                EncryptionType::known(et)
+                    .map_err(|_| Error::Inner("Invalid key/salt tuples".into()))?,
+            );
         }
         Ok(out)
     }
@@ -6084,7 +6118,7 @@ mod tests {
         assert_eq!(r.u32().unwrap(), 0, "mod_name present");
         assert_eq!(
             r.nullstring().unwrap().as_deref(),
-            Some("kadmin/admin@KERBER.TEST")
+            Some("db_creation@KERBER.TEST")
         );
         r.u32().unwrap(); // mod_date
         r.u32().unwrap(); // attributes

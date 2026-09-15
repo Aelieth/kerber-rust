@@ -808,5 +808,34 @@ docker exec "$NAME_MIT" kadmin.local -q 'getprinc z1bmit' | grep -qE '^Key: vno 
 echo "MIT_z1b2_keyexp_order"
 echo "RUST_z1b2_keyexp_order"
 
+echo "==== Z7.2 kpasswd stamps kadmind@REALM (ovsec_kadmd.c:446) ===="
+# Fresh principals: user@ already has min_life leftover from earlier cells.
+z72_mod() { sed -n -E 's/^Last modified: .* \((.*)\)$/\1/p'; }
+kadmin_q 'addprinc -pw z72old z72kpw' | grep -F 'Principal "z72kpw@KERBER.TEST" created.'
+docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw z72old z72kpw' >/dev/null
+docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
+    "$NAME" sh -c 'printf "z72old\nz72new\nz72new\n" | kpasswd z72kpw@KERBER.TEST'
+docker exec "$NAME_MIT" sh -c 'printf "z72old\nz72new\nz72new\n" | kpasswd z72kpw@KERBER.TEST'
+R72="$(kadmin_q 'getprinc z72kpw')"
+M72="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc z72kpw')"
+echo "$R72"
+echo "$M72"
+R72MOD="$(echo "$R72" | z72_mod)"
+M72MOD="$(echo "$M72" | z72_mod)"
+echo "rust modifier=$R72MOD"
+echo "mit modifier=$M72MOD"
+[ "$R72MOD" = "kadmind@KERBER.TEST" ] || {
+    echo "Rust kpasswd modifier is not kadmind@KERBER.TEST: $R72" >&2
+    exit 1
+}
+[ "$M72MOD" = "kadmind@KERBER.TEST" ] || {
+    echo "MIT kpasswd modifier is not kadmind@KERBER.TEST: $M72" >&2
+    exit 1
+}
+[ "$R72MOD" = "$M72MOD" ] || {
+    echo "Z7.2 kpasswd modifier differs: rust=$R72MOD mit=$M72MOD" >&2
+    exit 1
+}
+
 log "kpasswd.gate" "ok" ',"principal":"user@KERBER.TEST","op":"kpasswd+kinit","softerror":true'
 exit 0

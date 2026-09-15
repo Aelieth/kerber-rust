@@ -499,8 +499,17 @@ fn handle_kpasswd_from(
         let mut g = store
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut sess = AdminSession::local(&mut g, acl, client.clone());
-        match sess.change_password(&targ, &newpass) {
+        // MIT `ovsec_kadmd.c:446` `kadm5_init(…, "kadmind", …)` + `schpw.c:406`:
+        // the changepw dispatcher uses the global handle, so `current_caller`
+        // is `kadmind@REALM`, not the ticket client.
+        let stamp = format!("kadmind@{store_realm}");
+        let changed = (|| {
+            if self_change {
+                g.check_min_life_in(&targ, &targ_realm)?;
+            }
+            g.set_password_keepold_n_in(&targ, &targ_realm, &newpass, 0, &stamp)
+        })();
+        match changed.map_err(Error::from) {
             Ok(()) => (0u16, String::new(), "success".to_owned()),
             Err(Error::PasswordPolicy(msg)) => (4, msg, "password policy".to_owned()),
             Err(Error::PassTooSoon { until }) => (

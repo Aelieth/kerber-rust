@@ -1931,6 +1931,44 @@ impl PrincipalStore {
         Ok(())
     }
 
+    /// ACL-gated create with an optional bound policy so
+    /// `apply_keysalt_policy` sees `allowed_keysalts` (`svr_principal.c:444-447`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AclDenied`], [`Error::AlreadyExists`], or [`Error::BadKeysalts`].
+    pub fn create_etypes_pol(
+        &mut self,
+        acl: &Acl,
+        actor: &str,
+        name: &PrincipalName,
+        password: Option<&[u8]>,
+        etypes: &[EncryptionType],
+        policy: Option<&str>,
+    ) -> Result<(), Error> {
+        let realm = self.realm.clone();
+        let id = crate::kdb::lookup_principal_id(name, &realm);
+        acl.check(actor, AdminOp::Create, Some(&id))?;
+        let mut ent = AdminEnt::default();
+        if let Some(p) = policy {
+            ent.mask |= kadm5_mask::POLICY;
+            ent.policy = Some(p.to_owned());
+        }
+        self.create_principal_3_in(name, &realm, password, etypes, &ent, actor)?;
+        if password.is_none() {
+            let self_name = name.components_joined();
+            if self_name == "kadmin/changepw"
+                && let Some(p) = self.map.get_mut(&id)
+            {
+                p.attributes |= KDB_PWCHANGE_SERVICE;
+            }
+        }
+        if let Some(rs) = acl.restrictions(actor, Some(&id)) {
+            self.apply_acl_restrictions(&id, rs)?;
+        }
+        Ok(())
+    }
+
     /// Replace password-derived keys (`keepold=false`): one active kvno;
     /// prior keys go to [`Principal::key_history`] pruned to policy depth N.
     ///
@@ -2015,7 +2053,8 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing.
+    /// [`Error::NotFound`] when the principal is missing, or
+    /// [`Error::BadKeysalts`].
     pub fn set_password_keepold_n_in(
         &mut self,
         name: &PrincipalName,
@@ -2023,6 +2062,25 @@ impl PrincipalStore {
         password: &[u8],
         keepold: u32,
         actor: &str,
+    ) -> Result<(), Error> {
+        self.set_password_etypes_keepold_n_in(name, princ_realm, password, keepold, actor, &[])
+    }
+
+    /// [`Self::set_password_keepold_n_in`] with a v3 `ks_tuple` list
+    /// (`kadm5_chpass_principal_3`, `svr_principal.c:1259`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] when the principal is missing, or
+    /// [`Error::BadKeysalts`].
+    pub fn set_password_etypes_keepold_n_in(
+        &mut self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        password: &[u8],
+        keepold: u32,
+        actor: &str,
+        etypes: &[EncryptionType],
     ) -> Result<(), Error> {
         let id = self.canonical_id(name, princ_realm)?;
         // MIT `kadm5_chpass_principal_3`: a bound policy (`have_pol`) fetches
@@ -2055,8 +2113,14 @@ impl PrincipalStore {
             .max()
             .unwrap_or(0)
             .saturating_add(1);
-        let new_keys =
-            keys_from_password(&self.policy.password_etypes(), password, &salt, next_kvno)?;
+        let allowed = existing
+            .pw_policy
+            .as_ref()
+            .and_then(|n| self.policies.get(n))
+            .and_then(|p| p.allowed_keysalts.clone());
+        let use_etypes =
+            apply_keysalt_policy(allowed.as_deref(), etypes, &self.policy.password_etypes())?;
+        let new_keys = keys_from_password(&use_etypes, password, &salt, next_kvno)?;
         self.replace_password_keys(&id, new_keys, nhist.zip(hist), keepold, actor)?;
         self.apply_pw_max_life_in(name, princ_realm)?;
         let snap = self.map.get(&id).cloned();
@@ -2143,10 +2207,15 @@ impl PrincipalStore {
     ///
     /// [`Error::NotFound`].
     pub fn admin_unlock(&mut self, name: &PrincipalName) -> Result<(), Error> {
-        self.admin_unlock_in(name, &self.realm.clone())
+        let realm = self.realm.clone();
+        let actor = default_mod_actor(&realm);
+        self.admin_unlock_in(name, &realm, &actor)
     }
 
     /// [`Self::admin_unlock`] for `name@princ_realm`.
+    ///
+    /// `kdb_put_entry` stamps `KRB5_TL_MOD_PRINC` with `actor`
+    /// (`svr_principal.c:685` through `server_kdb.c:376-377`).
     ///
     /// # Errors
     ///
@@ -2155,6 +2224,7 @@ impl PrincipalStore {
         &mut self,
         name: &PrincipalName,
         princ_realm: &str,
+        actor: &str,
     ) -> Result<(), Error> {
         let id = self.canonical_id(name, princ_realm)?;
         let now = unix_now();
@@ -2166,6 +2236,7 @@ impl PrincipalStore {
                 ty: TL_LAST_ADMIN_UNLOCK,
                 contents: now.to_le_bytes().to_vec(),
             });
+            stamp_admin_tl(p, false, actor);
         }
         self.clear_as_fail_count(name);
         let snap = self.map.get(&id).cloned();
@@ -2565,13 +2636,11 @@ impl PrincipalStore {
         &mut self,
         name: &PrincipalName,
         rotate: bool,
+        actor: &str,
         write: impl FnOnce(&Keytab) -> Result<(), Error>,
     ) -> Result<Keytab, Error> {
         let snap = self.get_name(name).cloned().ok_or(Error::NotFound)?;
-        if rotate
-            && let Err(e) =
-                self.chrand_etypes_keepold(name, &[], 0, &default_mod_actor(&self.realm))
-        {
+        if rotate && let Err(e) = self.chrand_etypes_keepold(name, &[], 0, actor) {
             return Err(self.rollback_rotate(true, snap, e));
         }
         let kt = match self.export_keytab_local(name) {
@@ -2675,7 +2744,7 @@ impl PrincipalStore {
     ) -> Result<Vec<KeyEntry>, Error> {
         let realm = self.realm.clone();
         let actor = default_mod_actor(&realm);
-        self.chrand_keepold_n_in(name, &realm, keepold, &actor)
+        self.chrand_etypes_keepold_in(name, &realm, &[], keepold, &actor)
     }
 
     /// [`Self::chrand_keepold_n`] for `name@princ_realm`.
@@ -2690,6 +2759,25 @@ impl PrincipalStore {
         keepold: u32,
         actor: &str,
     ) -> Result<Vec<KeyEntry>, Error> {
+        self.chrand_etypes_keepold_in(name, princ_realm, &[], keepold, actor)
+    }
+
+    /// [`Self::chrand_etypes_keepold`] for `name@princ_realm`.
+    ///
+    /// Empty `etypes` is MIT's omitted `-e` (`svr_principal.c:1425`
+    /// `apply_keysalt_policy`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`], [`Error::BadKeysalts`], or RNG failure.
+    pub fn chrand_etypes_keepold_in(
+        &mut self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        etypes: &[EncryptionType],
+        keepold: u32,
+        actor: &str,
+    ) -> Result<Vec<KeyEntry>, Error> {
         let id = self.canonical_id(name, princ_realm)?;
         let existing = self.map.get(&id).ok_or(Error::NotFound)?;
         let next_kvno = existing
@@ -2699,9 +2787,15 @@ impl PrincipalStore {
             .max()
             .unwrap_or(0)
             .saturating_add(1);
+        let allowed = existing
+            .pw_policy
+            .as_ref()
+            .and_then(|n| self.policies.get(n))
+            .and_then(|p| p.allowed_keysalts.clone());
+        let use_etypes =
+            apply_keysalt_policy(allowed.as_deref(), etypes, &self.policy.password_etypes())?;
         let mut new_keys = Vec::new();
-        let etypes = self.policy.password_etypes();
-        for etype in etypes {
+        for etype in use_etypes {
             new_keys.push(KeyEntry::new(etype, random_key(etype)?, next_kvno));
         }
         {
@@ -2739,17 +2833,8 @@ impl PrincipalStore {
         keepold: u32,
         actor: &str,
     ) -> Result<Vec<KeyEntry>, Error> {
-        if etypes.is_empty() {
-            let realm = self.realm.clone();
-            return self.chrand_keepold_n_in(name, &realm, keepold, actor);
-        }
-        let mut keys = Vec::new();
-        for etype in etypes {
-            keys.push(KeyEntry::new(*etype, random_key(*etype)?, 0));
-        }
         let realm = self.realm.clone();
-        self.set_keys_in(name, &realm, keys.clone(), keepold, actor)?;
-        Ok(keys)
+        self.chrand_etypes_keepold_in(name, &realm, etypes, keepold, actor)
     }
 
     /// Drop keys with kvno below `keepkvno`. `keepkvno <= 0` keeps only the
@@ -3640,10 +3725,11 @@ fn empty_kadm_data() -> Vec<u8> {
     v
 }
 
-/// MIT `kdb5_util create` / tests without a kadm5 handle: the historical
-/// hard-coded acceptor name. Live kadm5 paths pass `current_caller`.
+/// MIT `kdb5_util create` (`kdb5_create.c:114-133`): principals written
+/// without a kadm5 handle are stamped `db_creation@REALM`. Live kadm5
+/// paths pass `current_caller`.
 fn default_mod_actor(realm: &str) -> String {
-    format!("kadmin/admin@{realm}")
+    format!("db_creation@{realm}")
 }
 
 /// `krb5_parse_name` of `client_name` then `krb5_unparse_name` (`server_init.c:239-241`).
@@ -5094,7 +5180,7 @@ mod tests {
         let before = max_kvno(&store, &extra);
         super::FAIL_NEXT_CHRAND_SAVE.with(|c| c.set(true));
         let err = store
-            .ktadd_local_atomic(&extra, true, |_| Ok(()))
+            .ktadd_local_atomic(&extra, true, &crate::documented_admin_id(), |_| Ok(()))
             .unwrap_err();
         assert!(
             err.to_string().contains("injected chrand save fail"),
@@ -5136,7 +5222,7 @@ mod tests {
         let before = max_kvno(&store, &extra);
         super::FAIL_NEXT_KTADD_EXPORT.with(|c| c.set(true));
         let err = store
-            .ktadd_local_atomic(&extra, true, |_| Ok(()))
+            .ktadd_local_atomic(&extra, true, &crate::documented_admin_id(), |_| Ok(()))
             .unwrap_err();
         assert!(err.to_string().contains("injected export fail"), "{err}");
         assert_eq!(max_kvno(&store, &extra), before);
@@ -5163,7 +5249,7 @@ mod tests {
         crate::persist::save_store(&store, &db, &stash).unwrap();
         store.persist_paths = Some((db.clone(), stash.clone()));
         let err = store
-            .ktadd_local_atomic(&extra, true, |_| {
+            .ktadd_local_atomic(&extra, true, &crate::documented_admin_id(), |_| {
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;

@@ -839,5 +839,48 @@ echo "mit modifier=$M64MOD"
     exit 1
 }
 
+echo "==== Z7.2 local ktadd/unlock stamp princstr; addprinc -policy -e keysalt ===="
+z72l_mod() { sed -n -E 's/^Last modified: .* \((.*)\)$/\1/p'; }
+# USER unset → getpwuid uid 0 → root/admin@ like Z6.4.
+rust_local 'addprinc -randkey z72kt' >/dev/null
+mit_local 'addprinc -randkey z72kt' >/dev/null
+rust_local 'ktadd -k /tmp/z72.kt z72kt' >/dev/null
+mit_local 'ktadd -k /tmp/z72-mit.kt z72kt' >/dev/null
+R72KT="$(echo "$(rust_local 'getprinc z72kt')" | z72l_mod)"
+M72KT="$(echo "$(mit_local 'getprinc z72kt')" | z72l_mod)"
+echo "ktadd rust modifier=$R72KT mit=$M72KT"
+[ "$R72KT" = "root/admin@KERBER.TEST" ] || {
+    echo "Rust ktadd modifier is not root/admin@KERBER.TEST" >&2
+    exit 1
+}
+[ "$R72KT" = "$M72KT" ] || {
+    echo "Z7.2 ktadd modifier differs: rust=$R72KT mit=$M72KT" >&2
+    exit 1
+}
+rust_local 'addprinc -pw z72ul-secret z72ul' >/dev/null
+mit_local 'addprinc -pw z72ul-secret z72ul' >/dev/null
+rust_local 'modprinc -unlock z72ul' >/dev/null
+mit_local 'modprinc -unlock z72ul' >/dev/null
+R72UL="$(echo "$(rust_local 'getprinc z72ul')" | z72l_mod)"
+M72UL="$(echo "$(mit_local 'getprinc z72ul')" | z72l_mod)"
+echo "unlock rust modifier=$R72UL mit=$M72UL"
+[ "$R72UL" = "root/admin@KERBER.TEST" ] || {
+    echo "Rust unlock modifier is not root/admin@KERBER.TEST" >&2
+    exit 1
+}
+[ "$R72UL" = "$M72UL" ] || {
+    echo "Z7.2 unlock modifier differs: rust=$R72UL mit=$M72UL" >&2
+    exit 1
+}
+rust_local 'addpol -allowedkeysalts aes256-cts:normal z72ks' >/dev/null
+mit_local 'addpol -allowedkeysalts aes256-cts:normal z72ks' >/dev/null
+dl z72-local-ks \
+    "$(rust_local 'addprinc -policy z72ks -e aes128-cts:normal -pw ValidPass1 z72ksbad' 2>&1 | grep -F 'Invalid key/salt tuples')" \
+    "$(mit_local 'addprinc -policy z72ks -e aes128-cts:normal -pw ValidPass1 z72ksbad' 2>&1 | grep -F 'Invalid key/salt tuples')"
+if rust_local 'getprinc z72ksbad' 2>&1 | grep -q '^Principal: z72ksbad@'; then
+    echo "rejected local keysalt create left an entry" >&2
+    exit 1
+fi
+
 log "kadmin.local.gate" "ok" ',"principal":"extra2@KERBER.TEST,host/slashhost@KERBER.TEST,randsvc,ktone,kttwo,raceprinc,lockee,gldlock,krbtgt","verb":"alias+policy-order+glob"'
 exit 0

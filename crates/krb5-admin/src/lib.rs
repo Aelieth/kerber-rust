@@ -517,6 +517,25 @@ impl<'a> AdminSession<'a> {
             .map_err(Error::from)
     }
 
+    /// `addprinc [-randkey] [-e] [-policy]`: bind the policy before
+    /// `apply_keysalt_policy` (`svr_principal.c:444-447`).
+    ///
+    /// # Errors
+    ///
+    /// ACL, already exists, or [`krb5_kdc::Error::BadKeysalts`].
+    pub fn create_etypes_pol(
+        &mut self,
+        name: &PrincipalName,
+        password: Option<&[u8]>,
+        etypes: &[EncryptionType],
+        policy: Option<&str>,
+    ) -> Result<(), Error> {
+        self.reload()?;
+        self.store
+            .create_etypes_pol(self.acl, &self.actor, name, password, etypes, policy)
+            .map_err(Error::from)
+    }
+
     /// Rotate keys (`cpw -randkey` / default `ktadd`).
     ///
     /// # Errors
@@ -640,7 +659,7 @@ impl<'a> AdminSession<'a> {
                 .map_err(Error::from)?;
         }
         self.store
-            .ktadd_local_atomic(name, rotate, |kt| {
+            .ktadd_local_atomic(name, rotate, &self.actor, |kt| {
                 write(kt).map_err(krb5_kdc::Error::Crypto)
             })
             .map_err(Error::from)
@@ -655,6 +674,20 @@ impl<'a> AdminSession<'a> {
     ///
     /// ACL denied or principal missing.
     pub fn change_password(&mut self, name: &PrincipalName, password: &[u8]) -> Result<(), Error> {
+        self.change_password_etypes(name, password, &[])
+    }
+
+    /// `cpw -e` / `kadm5_chpass_principal_3` with a v3 `ks_tuple`.
+    ///
+    /// # Errors
+    ///
+    /// ACL denied, principal missing, or [`krb5_kdc::Error::BadKeysalts`].
+    pub fn change_password_etypes(
+        &mut self,
+        name: &PrincipalName,
+        password: &[u8],
+        etypes: &[EncryptionType],
+    ) -> Result<(), Error> {
         self.reload()?;
         let store_realm = self.store.realm();
         let self_change =
@@ -672,7 +705,7 @@ impl<'a> AdminSession<'a> {
         }
         let realm = self.store.realm().to_owned();
         self.store
-            .set_password_keepold_n_in(name, &realm, password, 0, &self.actor)
+            .set_password_etypes_keepold_n_in(name, &realm, password, 0, &self.actor, etypes)
             .map_err(Error::from)
     }
 
@@ -819,7 +852,10 @@ impl<'a> AdminSession<'a> {
         self.acl
             .check(&self.actor, AdminOp::Modify, Some(&tid))
             .map_err(Error::from)?;
-        self.store.admin_unlock(name).map_err(Error::from)
+        let realm = self.store.realm().to_owned();
+        self.store
+            .admin_unlock_in(name, &realm, &self.actor)
+            .map_err(Error::from)
     }
 
     /// `modprinc -maxlife` / `-maxrenewlife`.
