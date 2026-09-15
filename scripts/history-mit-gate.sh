@@ -22,9 +22,7 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     exit 2
 fi
 
-docker rm -f "$NAME" >/dev/null 2>&1 || true
-docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
-register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
+shell_container
 
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec "$NAME" kdb5_util create -s -P masterpassword >/dev/null

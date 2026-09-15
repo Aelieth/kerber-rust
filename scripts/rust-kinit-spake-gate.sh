@@ -28,29 +28,8 @@ fi
 
 need_image
 
-docker rm -f "$NAME" >/dev/null 2>&1 || true
-docker run -d --name "$NAME" "$IMAGE" >/dev/null
-register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
-
-ok=0
-for _ in $(seq 1 90); do
-    logs="$(docker logs "$NAME" 2>&1 || true)"
-    if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"ok"'; then
-        ok=1
-        break
-    fi
-    if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"error"'; then
-        echo "$logs" >&2
-        log "spake.client.gate" "error" ',"error":"harness kinit failed"'
-        exit 1
-    fi
-    sleep 1
-done
-if [ "$ok" -ne 1 ]; then
-    log "spake.client.gate" "error" ',"error":"harness did not become ready"'
-    docker logs "$NAME" >&2 || true
-    exit 1
-fi
+stock_mit_kdc
+mit_live_guard
 
 docker exec "$NAME" sh -c 'grep -q spake_preauth_groups /etc/krb5kdc/kdc.conf || sed -i "/\[kdcdefaults\]/a\\    spake_preauth_groups = P-256" /etc/krb5kdc/kdc.conf'
 docker exec "$NAME" sh -c 'grep -q spake_preauth_groups /etc/krb5.conf || sed -i "/\[libdefaults\]/a\\    spake_preauth_groups = P-256\n    preferred_preauth_types = 151" /etc/krb5.conf'

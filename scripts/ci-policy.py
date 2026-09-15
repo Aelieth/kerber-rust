@@ -2267,6 +2267,10 @@ def check_gate_common_sourced() -> None:
         "wait_tcp_bound_in",
         "wait_gone_in",
         "wait_pid_gone",
+        "stock_mit_kdc",
+        "shell_container",
+        "mit_live_guard",
+        "mit_conf_restore",
     ):
         if needle not in ctext:
             _die(f"gate-common.sh missing {needle}")
@@ -2295,7 +2299,22 @@ def check_gate_common_sourced() -> None:
         if re.search(r"krb5kdc -n >/tmp/mit-kdc.log 2>&1 & cat", text):
             _die(f"{path.name} must wait_log for krb5kdc -n, not cat the log immediately")
     check_kadmin_glob_lib()
+    check_s4_shared_boots()
     check_build_bins_examples()
+
+
+def check_s4_shared_boots(ci_text: str | None = None) -> None:
+    """harness and mit-extra boot one stock MIT KDC and one shell per job."""
+    if ci_text is None:
+        ci_text = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    if "boot-stock-mit.sh" not in ci_text:
+        _die("ci.yml must run scripts/lib/boot-stock-mit.sh")
+    if "boot-shell.sh" not in ci_text:
+        _die("ci.yml must run scripts/lib/boot-shell.sh")
+    if ci_text.count("boot-stock-mit.sh") < 2:
+        _die("ci.yml must boot stock MIT in both harness and mit-extra")
+    if ci_text.count("boot-shell.sh") < 2:
+        _die("ci.yml must boot a shared shell in both harness and mit-extra")
 
 
 def check_kadmin_glob_lib(text: str | None = None) -> None:
@@ -3215,6 +3234,10 @@ jobs:
         "trap 'cleanup; mit_cleanup' EXIT\n",
         "exit-trap-gate.sh",
     )
+    check_s4_shared_boots(
+        "boot-stock-mit.sh\nboot-shell.sh\nboot-stock-mit.sh\nboot-shell.sh\n"
+    )
+    _must_die(check_s4_shared_boots, "boot-shell.sh\nboot-shell.sh\n")
     check_kadmin_glob_lib("hist_shape() { cat; }\nalias_cells() { :; }\n")
     _must_die(check_kadmin_glob_lib, "glob_cells() { :; }\n")
     _must_die(check_kadmin_glob_lib, "hist_shape() { cat; }\n")

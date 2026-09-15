@@ -23,9 +23,7 @@ fi
 
 need_image
 
-docker rm -f "$NAME" >/dev/null 2>&1 || true
-docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
-register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
+shell_container
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-pac-extract" "$NAME":/tmp/krb5-pac-extract
 docker exec "$NAME" chmod +x /tmp/krb5-pac-extract

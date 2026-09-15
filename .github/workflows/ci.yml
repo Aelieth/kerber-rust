@@ -208,6 +208,10 @@ jobs:
       - name: Stop MIT harness
         if: always()
         run: ./scripts/stop-harness.sh || true
+      - name: shared shell + stock MIT
+        run: |
+          ./scripts/lib/boot-shell.sh
+          ./scripts/lib/boot-stock-mit.sh
       - name: kdc-gate (MIT client vs Rust KDC)
         run: ./scripts/kdc-gate.sh
       - name: store-gate (MemoryStore serve + MIT kinit/kvno)
@@ -297,6 +301,9 @@ jobs:
         env:
           KERBER_REQUIRE_REAL_PCAP: "1"
         run: ./scripts/prod-realm-gate.sh
+      - name: shared topology cleanup
+        if: always()
+        run: docker rm -f kerber-rust-shell kerber-rust-mit-kdc >/dev/null 2>&1 || true
 
   mit-extra:
     runs-on: ubuntu-latest
@@ -326,10 +333,10 @@ jobs:
         run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
       - name: Build bins
         run: ./scripts/lib/build-bins.sh
-      # W1-Z Z3.4: the run-harness/stop-harness pair that sat here booted the
-      # stock container and stopped it before the first gate; every gate below
-      # boots its own. The harness job still runs the pair around the standing
-      # kerber-rust-mit-kdc container.
+      - name: shared shell + stock MIT
+        run: |
+          ./scripts/lib/boot-shell.sh
+          ./scripts/lib/boot-stock-mit.sh
       - name: cross-realm-gate
         run: ./scripts/cross-realm-gate.sh
       - name: capaths-transit-gate
@@ -364,6 +371,9 @@ jobs:
         run: ./scripts/kcm-gate.sh
       - name: rc4-session-gate (allow_rc4 session_enctypes both directions)
         run: ./scripts/rc4-session-gate.sh
+      - name: shared topology cleanup
+        if: always()
+        run: docker rm -f kerber-rust-shell kerber-rust-mit-kdc >/dev/null 2>&1 || true
 
   slo:
     runs-on: ubuntu-latest

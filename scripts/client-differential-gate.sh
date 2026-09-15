@@ -31,27 +31,8 @@ fi
 
 python3 "$ROOT/scripts/lib/kdc-req-proxy.py" --self-test || die "kdc-req-proxy self-test failed"
 
-docker rm -f "$NAME" >/dev/null 2>&1 || true
-docker run -d --name "$NAME" "$IMAGE" >/dev/null
-register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
-
-ok=0
-for _ in $(seq 1 90); do
-    logs="$(docker logs "$NAME" 2>&1 || true)"
-    if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"ok"'; then
-        ok=1
-        break
-    fi
-    if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"error"'; then
-        echo "$logs" >&2
-        die "harness kinit failed"
-    fi
-    sleep 1
-done
-if [ "$ok" -ne 1 ]; then
-    docker logs "$NAME" >&2 || true
-    die "harness did not become ready"
-fi
+stock_mit_kdc
+mit_live_guard
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kinit" "$NAME":/tmp/krb5-kinit
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-klist" "$NAME":/tmp/krb5-klist

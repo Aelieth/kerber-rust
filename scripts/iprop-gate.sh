@@ -34,9 +34,7 @@ done
 
 need_image
 
-docker rm -f "$NAME" >/dev/null 2>&1 || true
-docker run -d --name "$NAME" --hostname testhost.kerber.test --entrypoint sleep "$IMAGE" 3600 >/dev/null
-register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
+shell_container 3600 testhost.kerber.test
 docker exec "$NAME" sh -c 'grep -v testhost.kerber.test /etc/hosts >/tmp/hosts.new; echo "127.0.0.1 testhost.kerber.test testhost" >>/tmp/hosts.new; cat /tmp/hosts.new >/etc/hosts'
 
 if ! docker exec "$NAME" sh -c 'command -v kpropd >/dev/null && command -v kadmind >/dev/null'; then

@@ -223,13 +223,24 @@ need_bins() {
 
 shell_container() {
     local keep="${1:-3600}"
+    local host="${2:-}"
     if [ -n "${KERBER_SHELL:-}" ]; then
         NAME="${KERBER_SHELL}"
+        docker inspect "$NAME" >/dev/null 2>&1 || die "KERBER_SHELL=$NAME is not running"
+        docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc krb5-kadmind krb5kdc kadmind) 2>/dev/null || true' || true
+        wait_pid_gone "$NAME" krb5-kdc || true
+        wait_pid_gone "$NAME" krb5-kadmind || true
+        wait_gone_in "$NAME" 88 || true
+        wait_gone_in "$NAME" 749 || true
         return 0
     fi
     NAME="${NAME:-kerber-rust-${GATE_NAME}}"
     docker rm -f "$NAME" >/dev/null 2>&1 || true
-    docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" "$keep" >/dev/null
+    if [ -n "$host" ]; then
+        docker run -d --name "$NAME" --hostname "$host" --entrypoint sleep "$IMAGE" "$keep" >/dev/null
+    else
+        docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" "$keep" >/dev/null
+    fi
     register_cleanup "docker rm -f '$NAME' >/dev/null 2>&1 || true"
 }
 
@@ -267,24 +278,76 @@ mit_kdc_restart() {
 }
 
 stock_mit_kdc() {
-    local n="${1:-kerber-rust-mit-kdc}"
-    if [ "${KERBER_LIVE:-}" = 1 ] && docker inspect "$n" >/dev/null 2>&1; then
+    local n="${1:-${KERBER_MIT_NAME:-kerber-rust-mit-kdc}}"
+    local logs i
+    if [ "${KERBER_LIVE:-}" = 1 ]; then
+        n="${KERBER_MIT_NAME:-kerber-rust-mit-kdc}"
+        docker inspect "$n" >/dev/null 2>&1 || die "KERBER_LIVE=1 but $n is not running"
         NAME="$n"
         return 0
     fi
     docker rm -f "$n" >/dev/null 2>&1 || true
     docker run -d --name "$n" \
-        -p 88:88/tcp -p 88:88/udp \
         -e "CORRELATION_ID=${CORRELATION_ID}" \
-        "$IMAGE"
+        "$IMAGE" >/dev/null
     NAME="$n"
-    register_cleanup "docker rm -f '$n' >/dev/null 2>&1 || true"
-    local i
+    if [ "${KERBER_STOCK_KEEP:-}" != 1 ]; then
+        register_cleanup "docker rm -f '$n' >/dev/null 2>&1 || true"
+    fi
     for i in $(seq 1 90); do
-        if docker logs "$n" 2>&1 | grep -q '"event":"harness.kinit".*"outcome":"ok"'; then
+        logs="$(docker logs "$n" 2>&1 || true)"
+        if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"ok"'; then
+            return 0
+        fi
+        if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"error"'; then
+            echo "$logs" >&2
+            die "stock MIT KDC harness kinit failed"
+        fi
+        sleep 0.1
+    done
+    docker logs "$n" >&2 || true
+    die "stock MIT KDC did not become ready"
+}
+
+# Snapshot stock conf+KDB once; restore after a mutating gate when KERBER_LIVE=1.
+mit_conf_snapshot() {
+    local ctn="${1:-$NAME}"
+    docker exec "$ctn" sh -c '
+        [ -f /tmp/kerber-stock-kdc.conf ] || cp -a /etc/krb5kdc/kdc.conf /tmp/kerber-stock-kdc.conf
+        [ -f /tmp/kerber-stock-krb5.conf ] || cp -a /etc/krb5.conf /tmp/kerber-stock-krb5.conf
+        [ -f /tmp/kerber-stock.dump ] || kdb5_util dump /tmp/kerber-stock.dump >/dev/null 2>&1 || true
+    '
+}
+
+mit_conf_restore() {
+    local ctn="${1:-$NAME}"
+    docker exec "$ctn" sh -c '
+        [ -f /tmp/kerber-stock-kdc.conf ] && cp /tmp/kerber-stock-kdc.conf /etc/krb5kdc/kdc.conf
+        [ -f /tmp/kerber-stock-krb5.conf ] && cp /tmp/kerber-stock-krb5.conf /etc/krb5.conf
+        if [ -f /tmp/kerber-stock.dump ]; then
+            kdb5_util load /tmp/kerber-stock.dump >/dev/null 2>&1 || true
+        fi
+        kill $(pidof krb5kdc) 2>/dev/null || true
+        kill $(pidof kadmind) 2>/dev/null || true
+        kill $(pidof krb5-kdc) 2>/dev/null || true
+    ' || true
+    wait_pid_gone "$ctn" krb5kdc || true
+    wait_pid_gone "$ctn" kadmind || true
+    docker exec -d "$ctn" krb5kdc || true
+    local i
+    for i in $(seq 1 40); do
+        if docker exec "$ctn" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.3)" 2>/dev/null; then
             return 0
         fi
         sleep 0.1
     done
-    die "stock MIT KDC did not become ready"
+    return 0
+}
+
+# Mutating Group-A gates restore stock conf+KDB when attaching to a shared MIT KDC.
+mit_live_guard() {
+    if [ "${KERBER_LIVE:-}" = 1 ]; then
+        mit_conf_snapshot "$NAME"
+        register_cleanup "mit_conf_restore '$NAME'"
+    fi
 }

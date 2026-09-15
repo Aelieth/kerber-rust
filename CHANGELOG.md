@@ -6,6 +6,15 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W2-S4
+
+- **Shared topologies.** `harness` and `mit-extra` boot one stock MIT
+  KDC (`scripts/lib/boot-stock-mit.sh`, `KERBER_LIVE=1`) and one
+  `--entrypoint sleep` shell (`boot-shell.sh`, `KERBER_SHELL`) per job.
+  Group-A gates attach via `stock_mit_kdc` and restore conf+KDB after
+  mutating cells (`mit_live_guard`). Group-B gates attach via
+  `shell_container` (leftover KDC/kadmind killed). Cell tags unchanged.
+
 ### W2-S3
 
 - **kadmin split.** `kadmin-gate.sh` is a local wrapper. CI runs

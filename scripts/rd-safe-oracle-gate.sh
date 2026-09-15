@@ -20,9 +20,7 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     exit 2
 fi
 
-docker rm -f "$NAME" >/dev/null 2>&1 || true
-docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 180 >/dev/null
-register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
+shell_container 180
 
 docker cp "$ROOT/scripts/rd-safe-oracle.c" "$NAME":/tmp/rd-safe-oracle.c
 docker exec "$NAME" sh -c "gcc -O1 -o /tmp/rd-safe-oracle /tmp/rd-safe-oracle.c $MIT_LIBS"
