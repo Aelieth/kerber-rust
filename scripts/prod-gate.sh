@@ -41,7 +41,7 @@ if command -v tcpdump >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
     rm -f "$LO_PCAP"
     sudo -n tcpdump -i lo -n -U -w "$LO_PCAP" "port 18888" >/dev/null 2>"$OUT/tcpdump.err" &
     TCPDUMP_PID=$!
-    sleep 0.2
+    sleep 0.2 # proto: pcap start
 else
     unavailable "tcpdump/sudo unavailable for loopback pcap"
 fi
@@ -81,13 +81,13 @@ set +e
 kinit_rc=$?
 set -e
 echo "kinit_rc=$kinit_rc" | tee -a "$OUT/kinit.log"
-sleep 0.3
+sleep 0.3 # proto: pcap flush
 
 # Stop capture so the pcap is flushed.
 if [ -n "$TCPDUMP_PID" ]; then
     sudo -n kill "$TCPDUMP_PID" >/dev/null 2>&1 || true
     TCPDUMP_PID=""
-    sleep 0.2
+    sleep 0.2 # proto: pcap flush
     sudo -n chmod a+r "$LO_PCAP" 2>/dev/null || true
 fi
 

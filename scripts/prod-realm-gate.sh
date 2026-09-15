@@ -94,7 +94,7 @@ CAP=0
 if docker exec "$PRIMARY" sh -c 'command -v tcpdump >/dev/null'; then
     docker exec -d "$PRIMARY" sh -c \
         'tcpdump -i eth0 -n -U -s 0 -w /tmp/prod-realm.pcap "port 88 or port 754 or (ip[6:2] & 0x1fff != 0)" >/tmp/tcpdump.log 2>&1 & echo $! >/tmp/tcpdump.pid'
-    sleep 0.8
+    sleep 0.8 # proto: pcap start
     CAP=1
 fi
 if [ "${KERBER_REQUIRE_REAL_PCAP:-0}" = "1" ] && [ "$CAP" != 1 ]; then
@@ -132,8 +132,8 @@ docker cp "$PRIMARY":/tmp/kdc.log "$OUT/kdc1.log"
 analyze_logs "$OUT/kdc1.log" "$OUT/kdc1-log-analysis.json"
 
 if [ "$CAP" = 1 ]; then
-    sleep 0.8
-    docker exec "$PRIMARY" sh -c 'kill -INT "$(cat /tmp/tcpdump.pid 2>/dev/null)" 2>/dev/null; sleep 0.4' || true
+    sleep 0.8 # proto: pcap flush
+    docker exec "$PRIMARY" sh -c 'kill -INT "$(cat /tmp/tcpdump.pid 2>/dev/null)" 2>/dev/null; sleep 0.4 # proto: pcap flush' || true
     docker cp "$PRIMARY":/tmp/prod-realm.pcap "$OUT/prod-realm.pcap" 2>/dev/null || \
         docker cp "$PRIMARY":/tmp/prod.pcap "$OUT/prod-realm.pcap" 2>/dev/null || true
 fi

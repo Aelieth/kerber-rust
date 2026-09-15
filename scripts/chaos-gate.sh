@@ -93,7 +93,7 @@ export KERBER_LOAD_SECONDS=8
 export KERBER_LOAD_ITERS=999
 prod_loadgen "$PIP" >"$OUT/loadgen-failover.log" 2>&1 &
 LG_PID=$!
-sleep 1.5
+sleep 1.5 # proto: loadgen window
 docker kill "$PRIMARY" >/dev/null
 RUNNING="$(docker inspect -f '{{.State.Running}}' "$PRIMARY" 2>/dev/null || echo missing)"
 echo "primary_running=$RUNNING" | tee "$OUT/primary-after-kill.txt"

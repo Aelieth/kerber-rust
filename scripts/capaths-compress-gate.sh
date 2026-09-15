@@ -126,23 +126,13 @@ start_mit() {
     docker exec -e KRB5_CONFIG="$conf" -e KRB5_KDC_PROFILE="$profile" \
         "$NAME" sh -c "krb5kdc -n -r ${realm} >${log} 2>&1 & echo \$! >${pidf}"
 }
-wait_port() {
-    local port="$1" i
-    for i in $(seq 1 80); do
-        if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',${port}),0.3)" 2>/dev/null; then
-            return 0
-        fi
-        sleep 0.25
-    done
-    return 1
-}
 
 echo "==== start MIT KDCs ===="
 start_mit A.EX.COM /tmp/kdc-a.conf /tmp/mit-a.log /tmp/mit-a.pid
 start_mit EX.COM /tmp/kdc-x.conf /tmp/mit-x.log /tmp/mit-x.pid
 start_mit B.EX.COM /tmp/kdc-b.conf /tmp/mit-b.log /tmp/mit-b.pid
 start_mit C.EX.COM /tmp/kdc-c.conf /tmp/mit-c.log /tmp/mit-c.pid
-wait_port 88 && wait_port 89 && wait_port 90 && wait_port 91 || {
+wait_port_in "$NAME" 88 && wait_port_in "$NAME" 89 && wait_port_in "$NAME" 90 && wait_port_in "$NAME" 91 || {
     docker exec "$NAME" sh -c 'cat /tmp/mit-a.log /tmp/mit-x.log /tmp/mit-b.log /tmp/mit-c.log' || true
     log "capaths.compress" "error" ',"error":"MIT KDCs did not listen"'
     exit 1
@@ -189,7 +179,7 @@ except OSError:
     break
 done
 start_mit C.EX.COM /tmp/kdc-c.conf /tmp/mit-c-deny.log /tmp/mit-c.pid /tmp/client-nocapaths.conf
-wait_port 91 || {
+wait_port_in "$NAME" 91 || {
     docker exec "$NAME" cat /tmp/mit-c-deny.log || true
     log "capaths.compress" "error" ',"error":"deny C did not listen"'
     exit 1

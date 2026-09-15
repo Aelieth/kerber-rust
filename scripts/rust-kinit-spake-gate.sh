@@ -56,7 +56,7 @@ docker exec "$NAME" sh -c 'grep -q spake_preauth_groups /etc/krb5kdc/kdc.conf ||
 docker exec "$NAME" sh -c 'grep -q spake_preauth_groups /etc/krb5.conf || sed -i "/\[libdefaults\]/a\\    spake_preauth_groups = P-256\n    preferred_preauth_types = 151" /etc/krb5.conf'
 docker exec "$NAME" kadmin.local -q 'modprinc +requires_preauth user'
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
-sleep 0.3
+wait_pid_gone "$NAME" krb5kdc || true
 docker exec -d \
     -e KRB5_TRACE=/tmp/mit-kdc.trace \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
@@ -82,7 +82,7 @@ docker exec "$NAME" chmod +x /tmp/krb5-kinit
 PROXY=1888
 docker cp "$ROOT/scripts/lib/kdc-error-proxy.py" "$NAME":/tmp/kdc-error-proxy.py
 docker exec -d "$NAME" python3 /tmp/kdc-error-proxy.py "$PROXY" 127.0.0.1 88 /tmp/spake-91.txt
-sleep 0.2
+wait_udp_in "$NAME" "$PROXY" || die "proxy $PROXY did not listen"
 docker exec "$NAME" sh -c "cat >/tmp/spake-proxy-krb5.conf <<EOF
 [libdefaults]
     default_realm = KERBER.TEST

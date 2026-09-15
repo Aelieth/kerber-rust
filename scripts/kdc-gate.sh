@@ -150,7 +150,7 @@ if [ -z "$BRIDGE" ]; then
     exit 1
 fi
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true'
-sleep 0.3
+wait_pid_gone "$NAME" krb5-kdc || true
 docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
     -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \

@@ -79,7 +79,7 @@ echo "==== load identical dump into MIT krb5kdc on :88 ===="
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec "$NAME" kdb5_util create -s -P masterpassword
 docker exec "$NAME" kdb5_util load /tmp/mit.dump
-STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc -n >/tmp/mit-kdc.log 2>&1 & sleep 0.5; cat /tmp/mit-kdc.log' 2>&1 || true)"
+STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc -n >/tmp/mit-kdc.log 2>&1 & cat /tmp/mit-kdc.log' 2>&1 || true)"
 echo "$STARTLOG"
 ok=0
 for _ in $(seq 1 40); do
@@ -171,8 +171,8 @@ if "spake_preauth_groups" not in t:
 Path("/tmp/spake-kdc-krb5.conf").write_text(t)
 '
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
-sleep 0.3
-STARTLOG="$(docker exec "$NAME" sh -c 'KRB5_CONFIG=/tmp/spake-kdc-krb5.conf krb5kdc -n >/tmp/mit-kdc.log 2>&1 & sleep 0.5; cat /tmp/mit-kdc.log' 2>&1 || true)"
+wait_pid_gone "$NAME" krb5kdc || true
+STARTLOG="$(docker exec "$NAME" sh -c 'KRB5_CONFIG=/tmp/spake-kdc-krb5.conf krb5kdc -n >/tmp/mit-kdc.log 2>&1 & cat /tmp/mit-kdc.log' 2>&1 || true)"
 echo "$STARTLOG"
 ok=0
 for _ in $(seq 1 40); do
@@ -226,7 +226,7 @@ docker exec "$NAME" kadmin.local -q \
     'setstr host/testhost.kerber.test pac_privsvr_enctype aes128-cts-hmac-sha1-96'
 docker exec "$NAME" kdb5_util dump /tmp/privsvr.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
-sleep 0.3
+wait_pid_gone "$NAME" krb5-kdc || true
 LOAD_PRIV="$(docker exec \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_KDC_DB=/tmp/rust.db \
@@ -284,7 +284,7 @@ echo "==== require_auth password kvno is 12 both legs ===="
 docker exec "$NAME" kadmin.local -q 'setstr host/testhost.kerber.test require_auth pkinit'
 docker exec "$NAME" kdb5_util dump /tmp/reqauth.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
-sleep 0.3
+wait_pid_gone "$NAME" krb5-kdc || true
 LOAD_REQ="$(docker exec \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_KDC_DB=/tmp/rust.db \
@@ -322,7 +322,7 @@ docker exec "$NAME" grep -q 'HIGHER_AUTHENTICATION_REQUIRED' /tmp/rust-kdc.log \
 docker exec "$NAME" kadmin.local -q 'delstr host/testhost.kerber.test require_auth'
 docker exec "$NAME" kdb5_util dump /tmp/reqauth-clear.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
-sleep 0.3
+wait_pid_gone "$NAME" krb5-kdc || true
 LOAD_CLR="$(docker exec \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_KDC_DB=/tmp/rust.db \
@@ -350,7 +350,7 @@ docker exec "$NAME" sh -c ': >/tmp/mit-kdc.log'
 docker exec "$NAME" kadmin.local -q 'setstr krbtgt/KERBER.TEST require_auth pkinit'
 docker exec "$NAME" kdb5_util dump /tmp/reqauth-as.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
-sleep 0.3
+wait_pid_gone "$NAME" krb5-kdc || true
 LOAD_AS="$(docker exec \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_KDC_DB=/tmp/rust.db \
@@ -392,7 +392,7 @@ docker exec "$NAME" grep -q 'HIGHER_AUTHENTICATION_REQUIRED' /tmp/rust-kdc.log \
 docker exec "$NAME" kadmin.local -q 'delstr krbtgt/KERBER.TEST require_auth'
 docker exec "$NAME" kdb5_util dump /tmp/reqauth-as-clear.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
-sleep 0.3
+wait_pid_gone "$NAME" krb5-kdc || true
 LOAD_ASC="$(docker exec \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_KDC_DB=/tmp/rust.db \
@@ -416,8 +416,8 @@ Path("/tmp/rust-kdc.conf").write_text("""[realms]
 """)
 '
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
-sleep 0.3
-STARTLOG="$(docker exec "$NAME" sh -c 'KRB5_CONFIG=/tmp/spake-kdc-krb5.conf krb5kdc -n >/tmp/mit-kdc.log 2>&1 & sleep 0.5; cat /tmp/mit-kdc.log' 2>&1 || true)"
+wait_pid_gone "$NAME" krb5kdc || true
+STARTLOG="$(docker exec "$NAME" sh -c 'KRB5_CONFIG=/tmp/spake-kdc-krb5.conf krb5kdc -n >/tmp/mit-kdc.log 2>&1 & cat /tmp/mit-kdc.log' 2>&1 || true)"
 echo "$STARTLOG"
 ok=0
 for _ in $(seq 1 40); do
@@ -429,7 +429,7 @@ for _ in $(seq 1 40); do
 done
 [ "$ok" = 1 ] || die "MIT krb5kdc did not listen after indicator knob"
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
-sleep 0.3
+wait_pid_gone "$NAME" krb5-kdc || true
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
@@ -478,7 +478,7 @@ echo "==== require_auth spake: SPAKE issued, password 12 both legs ===="
 docker exec "$NAME" kadmin.local -q 'setstr host/testhost.kerber.test require_auth spake'
 docker exec "$NAME" kdb5_util dump /tmp/reqauth-spake.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
-sleep 0.3
+wait_pid_gone "$NAME" krb5-kdc || true
 LOAD_SP="$(docker exec \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_KDC_DB=/tmp/rust.db \

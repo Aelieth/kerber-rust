@@ -10,7 +10,8 @@ cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
-need_bins krb5-kdc krb5-kdb krb5-forge-tgt krb5-pac-extract
+need_bins krb5-kdc krb5-kdb krb5-forge-tgt krb5-pac-extract \
+    krb5-kadmin-local krb5-kinit krb5-kvno krb5-klist
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-rc4-session-gate"
@@ -36,29 +37,7 @@ done
 ' sh "$comm_name"
 }
 
-wait_port() {
-    local port=$1 n=${2:-40}
-    local i
-    for i in $(seq 1 "$n"); do
-        if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',$port),0.3)" 2>/dev/null; then
-            return 0
-        fi
-        sleep 0.25
-    done
-    return 1
-}
 
-wait_port_free() {
-    local port=$1 n=${2:-40}
-    local i
-    for i in $(seq 1 "$n"); do
-        if ! docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',$port),0.2)" 2>/dev/null; then
-            return 0
-        fi
-        sleep 0.25
-    done
-    return 1
-}
 
 tkt_etype_of() {
     printf '%s\n' "$1" | awk '/krbtgt\//{getline; sub(/.*tkt\):[ \t]*/, ""); print; exit}'
@@ -72,9 +51,6 @@ if ! command -v docker >/dev/null 2>&1; then
     log "rc4.session" "error" ',"error":"docker not available"'
     exit 1
 fi
-
-    -p krb5-admin --bin krb5-kadmin-local \
-    -p krb5-client --bin krb5-kinit --bin krb5-kvno --bin krb5-klist -q
 
 need_image
 
@@ -141,12 +117,12 @@ docker exec "$NAME" kadmin.local -q 'getprinc rc4user' | tee "$OUT/mit-getprinc-
 
 echo "==== restart MIT krb5kdc via /proc/*/comm ===="
 kill_comm krb5kdc
-wait_port_free 88 || die "MIT krb5kdc still bound :88 after kill"
+wait_gone_in "$NAME" 88 || die "MIT krb5kdc still bound :88 after kill"
 docker exec -d \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
     -e KRB5_CONFIG=/etc/krb5.conf \
     "$NAME" sh -c 'krb5kdc >/tmp/mit-kdc.log 2>&1'
-wait_port 88 || die "MIT krb5kdc did not listen after restart"
+wait_port_in "$NAME" 88 || die "MIT krb5kdc did not listen after restart"
 
 echo "==== control: MIT kinit against MIT KDC ===="
 set +e
@@ -309,12 +285,12 @@ if docker exec "$NAME" grep -q allow_rc4 /etc/krb5.conf; then
     die "krb5.conf still carries allow_rc4"
 fi
 kill_comm krb5kdc
-wait_port_free 88 || die "MIT krb5kdc still bound :88 after kill (D)"
+wait_gone_in "$NAME" 88 || die "MIT krb5kdc still bound :88 after kill (D)"
 docker exec -d \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
     -e KRB5_CONFIG=/etc/krb5.conf \
     "$NAME" sh -c 'krb5kdc >/tmp/mit-kdc-d.log 2>&1'
-wait_port 88 || die "MIT krb5kdc did not listen (D)"
+wait_port_in "$NAME" 88 || die "MIT krb5kdc did not listen (D)"
 # The Rust KDC's UDP loop leaves the shutdown flag unread until its read
 # timeout, so a plain kill can keep :8888 bound; kill -9 like policy-gate, and
 # relaunch on the persisted DB without --test-realm like restart-gate.
@@ -328,8 +304,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-sleep 0.5
-wait_port_free 8888 || die "rust kdc still bound :8888 after kill (D)"
+wait_gone_in "$NAME" 8888 || die "rust kdc still bound :8888 after kill (D)"
 docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
     -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
@@ -438,12 +413,12 @@ PY
 docker exec "$NAME" grep -E '^\s*permitted_enctypes = aes256-cts-hmac-sha1-96$' /tmp/krb5-e-kdc.conf >/dev/null ||
     die "E) /tmp/krb5-e-kdc.conf lacks the aes256-only permitted_enctypes"
 kill_comm krb5kdc
-wait_port_free 88 || die "MIT krb5kdc still bound :88 after kill (E)"
+wait_gone_in "$NAME" 88 || die "MIT krb5kdc still bound :88 after kill (E)"
 docker exec -d \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
     -e KRB5_CONFIG=/tmp/krb5-e-kdc.conf \
     "$NAME" sh -c 'krb5kdc >/tmp/mit-kdc-e.log 2>&1'
-wait_port 88 || die "MIT krb5kdc did not listen (E)"
+wait_port_in "$NAME" 88 || die "MIT krb5kdc did not listen (E)"
 docker exec "$NAME" sh -c '
 for comm in /proc/[0-9]*/comm; do
     [ -f "$comm" ] || continue
@@ -454,8 +429,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-sleep 0.5
-wait_port_free 8888 || die "rust kdc still bound :8888 after kill (E)"
+wait_gone_in "$NAME" 8888 || die "rust kdc still bound :8888 after kill (E)"
 docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
     -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \

@@ -43,7 +43,7 @@ CAP=0
 if docker exec "$CLIENT" sh -c 'command -v tcpdump >/dev/null'; then
     docker exec -d "$CLIENT" sh -c \
         'tcpdump -i eth0 -n -U -s 0 -w /tmp/soak.pcap "port 88 or (ip[6:2] & 0x1fff != 0)" >/tmp/tcpdump.log 2>&1 & echo $! >/tmp/tcpdump.pid'
-    sleep 0.5
+    sleep 0.5 # proto: pcap start
     CAP=1
 fi
 if [ "${KERBER_REQUIRE_REAL_PCAP:-0}" = "1" ] && [ "$CAP" != 1 ]; then
@@ -79,7 +79,7 @@ grep -q '"event":"loadgen"' "$OUT/loadgen.log" || die "loadgen missing JSON summ
 grep -q '"err":0' "$OUT/loadgen.log" || die "loadgen reported errors during soak"
 
 if [ "$CAP" = 1 ]; then
-    docker exec "$CLIENT" sh -c 'kill -INT "$(cat /tmp/tcpdump.pid 2>/dev/null)" 2>/dev/null; sleep 0.3' || true
+    docker exec "$CLIENT" sh -c 'kill -INT "$(cat /tmp/tcpdump.pid 2>/dev/null)" 2>/dev/null; sleep 0.3 # proto: pcap flush' || true
     if ! docker cp "$CLIENT":/tmp/soak.pcap "$OUT/soak.pcap" 2>/dev/null; then
         if [ "${KERBER_REQUIRE_REAL_PCAP:-0}" = "1" ]; then
             die "KERBER_REQUIRE_REAL_PCAP=1 but soak pcap was not archived"

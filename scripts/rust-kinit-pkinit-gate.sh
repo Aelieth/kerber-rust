@@ -123,7 +123,7 @@ docker exec "$NAME" sh -c 'grep -q pkinit_anchors /etc/krb5.conf || cat >> /etc/
 EOF'
 
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
-sleep 0.3
+wait_pid_gone "$NAME" krb5kdc || true
 docker exec -d \
     -e KRB5_TRACE=/tmp/mit-kdc.trace \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
@@ -183,7 +183,7 @@ mit_kdc_pkinit_dh1024() {
     docker cp "$ROOT/scripts/lib/openssl-seclevel0.cnf" "$NAME":/tmp/openssl-seclevel0.cnf
     docker exec "$NAME" rm -f /tmp/pkinit-65.txt
     docker exec -d "$NAME" python3 /tmp/kdc-error-proxy.py "$proxy" 127.0.0.1 88 /tmp/pkinit-65.txt
-    sleep 0.4
+    wait_udp_in "$NAME" "$proxy" || die "proxy $proxy did not listen"
     docker exec "$NAME" sh -c "cat > /tmp/krb5-dh1024.conf <<EOF
 [libdefaults]
     default_realm = KERBER.TEST
@@ -315,7 +315,7 @@ docker exec "$NAME" grep -q 'NO HW PREAUTH' /tmp/mit-kdc.log || {
 echo "==== negative: MIT KDC identity is a client cert (rogue KDC) ===="
 docker exec "$NAME" sh -c 'grep -q pkinit_identity /etc/krb5kdc/kdc.conf && sed -i "s|pkinit_identity = FILE:/tmp/pkinit/kdc.pem|pkinit_identity = FILE:/tmp/pkinit/user.pem|" /etc/krb5kdc/kdc.conf'
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
-sleep 0.3
+wait_pid_gone "$NAME" krb5kdc || true
 docker exec -d \
     -e KRB5_TRACE=/tmp/mit-kdc-rogue.trace \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
@@ -369,7 +369,7 @@ if "restrict_anonymous_to_tgt" not in t:
 docker exec "$NAME" kadmin.local -q 'addprinc -randkey WELLKNOWN/ANONYMOUS@KERBER.TEST'
 docker exec "$NAME" kadmin.local -q 'addprinc -randkey host/anonrestrict.kerber.test'
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
-sleep 0.3
+wait_pid_gone "$NAME" krb5kdc || true
 docker exec -d \
     -e KRB5_TRACE=/tmp/mit-kdc-anon.trace \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \

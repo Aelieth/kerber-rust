@@ -53,7 +53,7 @@ if [ "$ok" -ne 1 ]; then
 fi
 
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
-sleep 0.3
+wait_pid_gone "$NAME" krb5kdc || true
 docker exec -d \
     -e KRB5_TRACE=/tmp/mit-kdc.trace \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
@@ -216,7 +216,7 @@ docker exec "$NAME" kadmin.local -q 'modprinc +requires_preauth user'
 docker exec "$NAME" kadmin.local -q 'setstr host/testhost.kerber.test require_auth encrypted_challenge'
 docker exec "$NAME" kdb5_util dump /tmp/ec-ind.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
-sleep 0.3
+wait_pid_gone "$NAME" krb5kdc || true
 docker exec -d \
     -e KRB5_TRACE=/tmp/mit-kdc.trace \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
@@ -382,7 +382,7 @@ echo "==== Rust kinit --fast -S against rust KDC ===="
 docker exec "$NAME" kadmin.local -q 'delstr host/testhost.kerber.test require_auth'
 docker exec "$NAME" kdb5_util dump /tmp/plain-host.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true'
-sleep 0.3
+wait_pid_gone "$NAME" krb5-kdc || true
 docker exec "$NAME" sh -c ': >/tmp/rust-kdc.log'
 LOAD_PLAIN="$(docker exec \
     -e KRB5_MASTER_PASSWORD=masterpassword \

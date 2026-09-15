@@ -2254,7 +2254,18 @@ def check_gate_common_sourced() -> None:
     if not common.is_file():
         _die("missing scripts/lib/gate-common.sh")
     ctext = common.read_text(encoding="utf-8")
-    for needle in ("log()", "die()", "unavailable()", "need_bins", "need_image", "gate_wall_s="):
+    for needle in (
+        "log()",
+        "die()",
+        "unavailable()",
+        "need_bins",
+        "need_image",
+        "gate_wall_s=",
+        "wait_port_in",
+        "wait_udp_in",
+        "wait_gone_in",
+        "wait_pid_gone",
+    ):
         if needle not in ctext:
             _die(f"gate-common.sh missing {needle}")
     for path in sorted(SCRIPTS.glob("*-gate.sh")):
@@ -2267,6 +2278,13 @@ def check_gate_common_sourced() -> None:
             _die(f"{path.name} still defines a private cleanup()")
         if re.search(r"\bcargo\s+build\b", text):
             _die(f"{path.name} must not run cargo build (use need_bins)")
+        check_gate_cargo_leftover(text, path.name)
+
+
+def check_gate_cargo_leftover(text: str, name: str = "gate.sh") -> None:
+    """S2 converter residue: a cargo-build argument line with no cargo build."""
+    if re.search(r"^\s+-p\s+krb5-", text, re.M):
+        _die(f"{name} still has leftover cargo-build argument lines")
 
 
 def check_no_gate_cargo_build() -> None:
@@ -3112,6 +3130,12 @@ jobs:
         check_no_host_tmp_writes,
         "docker exec n sh -c 'true' >/tmp/host-out\n",
         "docker-host-redir-tmp-gate.sh",
+    )
+    check_gate_cargo_leftover("need_bins krb5-kdc krb5-kvno\n", "ok-bins-gate.sh")
+    _must_die(
+        check_gate_cargo_leftover,
+        "    -p krb5-client --bin krb5-kvno\n",
+        "leftover-cargo-gate.sh",
     )
     check_no_host_tmp_writes(
         "docker exec n sh -c 'kill /tmp/krb5-kdc; : >/tmp/in-container'\n"

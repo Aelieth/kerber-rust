@@ -296,7 +296,7 @@ docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec "$NAME" kdb5_util create -s -P masterpassword
 docker exec "$NAME" kadmin.local -q 'addprinc -pw warn-secret warnuser'
 docker exec "$NAME" kadmin.local -q "modprinc -pwexpire \"$WARN_DATE\" warnuser"
-STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc; sleep 0.4' 2>&1 || true)"
+STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc' 2>&1 || true)"
 echo "$STARTLOG"
 ok=0
 for _ in $(seq 1 40); do

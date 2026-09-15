@@ -121,29 +121,7 @@ done
 '
 }
 
-wait_listen() {
-    ok=0
-    for _ in $(seq 1 80); do
-        if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.3)" 2>/dev/null; then
-            ok=1
-            break
-        fi
-        sleep 0.25
-    done
-    [ "$ok" = 1 ]
-}
 
-wait_free() {
-    free=0
-    for _ in $(seq 1 40); do
-        if ! docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.2)" 2>/dev/null; then
-            free=1
-            break
-        fi
-        sleep 0.25
-    done
-    [ "$free" = 1 ]
-}
 
 kadmin_q() {
     docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
@@ -235,7 +213,7 @@ echo "RUST_tgs_fail" # RUST_tgs_fail
 
 echo "==== rust foreign indicator is LOCAL_POLICY ===="
 kill_named krb5-kdc krb5-kadmind
-if ! wait_free; then
+if ! wait_gone_in "$NAME" 88; then
     log "kdcpolicy.gate" "error" ',"error":"rust kdc still bound :88"'
     exit 1
 fi
@@ -267,7 +245,7 @@ echo "RUST_foreign_indicator" # RUST_foreign_indicator
 
 echo "==== MIT kdcpolicy_test.so ===="
 kill_named krb5-kdc
-if ! wait_free; then
+if ! wait_gone_in "$NAME" 88; then
     log "kdcpolicy.gate" "error" ',"error":"rust kdc still bound :88 before MIT"'
     exit 1
 fi
@@ -278,9 +256,9 @@ docker exec "$NAME" kadmin.local -q 'addprinc -pw userpassword user'
 docker exec "$NAME" kadmin.local -q 'modprinc +requires_preauth user'
 docker exec "$NAME" kadmin.local -q 'addprinc -randkey host/testhost.kerber.test'
 docker exec "$NAME" kadmin.local -q 'addprinc -pw fail-secret fail'
-STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc; sleep 0.4' 2>&1 || true)"
+STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc' 2>&1 || true)"
 echo "$STARTLOG"
-if ! wait_listen; then
+if ! wait_port_in "$NAME" 88; then
     docker exec "$NAME" cat /tmp/mit-kdc.log 2>/dev/null >&2 || true
     log "kdcpolicy.gate" "error" ',"error":"MIT krb5kdc did not listen"'
     exit 1
@@ -319,14 +297,14 @@ echo "MIT_tgs_fail" # MIT_tgs_fail
 
 echo "==== MIT foreign indicator is LOCAL_POLICY ===="
 kill_named krb5kdc
-if ! wait_free; then
+if ! wait_gone_in "$NAME" 88; then
     log "kdcpolicy.gate" "error" ',"error":"MIT krb5kdc still bound :88"'
     exit 1
 fi
 docker exec "$NAME" sed -i 's/spake_preauth_indicator = ONE_HOUR/spake_preauth_indicator = OTHER/' /etc/krb5kdc/kdc.conf
-STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc; sleep 0.4' 2>&1 || true)"
+STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc' 2>&1 || true)"
 echo "$STARTLOG"
-if ! wait_listen; then
+if ! wait_port_in "$NAME" 88; then
     log "kdcpolicy.gate" "error" ',"error":"MIT krb5kdc OTHER did not listen"'
     exit 1
 fi

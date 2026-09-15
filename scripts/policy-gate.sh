@@ -359,7 +359,7 @@ echo "$MR2" | grep -F 'Cannot reuse password while changing password for "histus
 DUMPH="$(docker exec "$NAME" kdb5_util dump /tmp/mit-hist.dump 2>&1 || true)"
 echo "$DUMPH"
 docker exec "$NAME" grep -E $'^princ\t[0-9]+\t[0-9]+\t[0-9]+\t[0-9]+\t[0-9]+\thistuser@KERBER.TEST\t' /tmp/mit-hist.dump | grep -q $'\t3\t'
-STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc; sleep 0.4' 2>&1 || true)"
+STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc' 2>&1 || true)"
 echo "$STARTLOG"
 ok=0
 for _ in $(seq 1 40); do

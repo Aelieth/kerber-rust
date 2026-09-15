@@ -69,14 +69,11 @@ if ! docker exec "$NAME" test -s /etc/krb5kdc/testhost.keytab; then
 fi
 
 docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /etc/krb5kdc/testhost.keytab --listen 127.0.0.1:4444 >/tmp/gss-accept.log 2>&1'
-sleep 0.5
-
-if ! docker exec "$NAME" grep -q 'listening' /tmp/gss-accept.log 2>/dev/null; then
+wait_log "$NAME" /tmp/gss-accept.log listening || {
     echo "==== gss-accept log ===="
     docker exec "$NAME" cat /tmp/gss-accept.log 2>/dev/null || true
-    log "gss.gate" "error" ',"error":"gss-accept did not listen"'
-    exit 1
-fi
+    die "gss-accept did not listen"
+}
 
 echo "==== MIT libgssapi_krb5 initiator ===="
 MSG="hello-from-mit-gss"
@@ -121,7 +118,7 @@ fi
 
 echo "==== MIT libgssapi_krb5 initiator with GSS_C_DELEG_FLAG ===="
 docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
-sleep 0.2
+wait_pid_gone "$NAME" krb5-gss-accept || true
 docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /etc/krb5kdc/testhost.keytab --listen 127.0.0.1:4444 >/tmp/gss-accept-deleg.log 2>&1'
 ok=0
 for _ in $(seq 1 20); do
@@ -229,7 +226,7 @@ echo "mit_acceptor_deleg_flags=$MIT_DELEG_FLAGS"
 
 echo "==== MIT SPNEGO initiator vs Rust acceptor ===="
 docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
-sleep 0.2
+wait_pid_gone "$NAME" krb5-gss-accept || true
 docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /etc/krb5kdc/testhost.keytab --listen 127.0.0.1:4444 >/tmp/gss-accept-spnego.log 2>&1'
 ok=0
 for _ in $(seq 1 20); do
@@ -255,7 +252,7 @@ echo "$SPNEGO_LOG" | grep -q 'gss-accept spnego peer mic ok'
 
 echo "==== MIT wrap_iov vs Rust unwrap_iov ===="
 docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
-sleep 0.2
+wait_pid_gone "$NAME" krb5-gss-accept || true
 docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /etc/krb5kdc/testhost.keytab --listen 127.0.0.1:4444 >/tmp/gss-accept-iov.log 2>&1'
 ok=0
 for _ in $(seq 1 20); do
@@ -286,7 +283,7 @@ IOV_FLAGS="$(echo "$IOV_LOG" | sed -n 's/.*gss-accept inquire flags=\([0-9]*\) l
 
 echo "==== MIT wrap_iov SIGN_ONLY vs Rust unwrap_iov ===="
 docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
-sleep 0.2
+wait_pid_gone "$NAME" krb5-gss-accept || true
 docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /etc/krb5kdc/testhost.keytab --listen 127.0.0.1:4444 --assoc rpc-hdr >/tmp/gss-accept-sign.log 2>&1'
 ok=0
 for _ in $(seq 1 20); do
@@ -311,7 +308,8 @@ echo "$SIGN_LOG" | grep -q "$MSG"
 echo "==== replayed AP-REQ vs MIT acceptor ===="
 docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
 docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
-sleep 0.2
+wait_pid_gone "$NAME" gss-mit-server || true
+wait_pid_gone "$NAME" krb5-gss-accept || true
 docker exec -d \
     -e KRB5_KTNAME=/etc/krb5kdc/testhost.keytab \
     "$NAME" sh -c 'stdbuf -oL -eL /tmp/gss-mit-server /etc/krb5kdc/testhost.keytab 127.0.0.1 4448 >/tmp/gss-mit-replay.log 2>&1'
@@ -394,7 +392,8 @@ fi
 echo "==== MIT DCE wrap_iov vs Rust unwrap ===="
 docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
 docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
-sleep 0.2
+wait_pid_gone "$NAME" krb5-gss-accept || true
+wait_pid_gone "$NAME" gss-mit-server || true
 docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /etc/krb5kdc/testhost.keytab --listen 127.0.0.1:4444 >/tmp/gss-accept-dce.log 2>&1'
 ok=0
 for _ in $(seq 1 20); do
@@ -422,7 +421,8 @@ echo "$DCE_LOG" | grep -q "gss-accept unwrap ok bytes=${#MSG}"
 echo "==== MIT DCE wrap_iov vs MIT unwrap ===="
 docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
 docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
-sleep 0.2
+wait_pid_gone "$NAME" krb5-gss-accept || true
+wait_pid_gone "$NAME" gss-mit-server || true
 docker exec -d \
     -e KRB5_KTNAME=/etc/krb5kdc/testhost.keytab \
     "$NAME" sh -c '/tmp/gss-mit-server /etc/krb5kdc/testhost.keytab 127.0.0.1 4450 >/tmp/gss-mit-server-dce.log 2>&1'
@@ -455,7 +455,8 @@ gss_mutate_cell() {
     echo "==== Rust initiator mutate $kind vs Rust acceptor ===="
     docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
     docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
-    sleep 0.2
+    wait_pid_gone "$NAME" krb5-gss-accept || true
+    wait_pid_gone "$NAME" gss-mit-server || true
     docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /etc/krb5kdc/testhost.keytab --listen 127.0.0.1:4444 >/tmp/gss-accept-mut.log 2>&1'
     ok=0
     for _ in $(seq 1 20); do
@@ -484,7 +485,8 @@ gss_mutate_cell() {
     echo "==== Rust initiator mutate $kind vs MIT acceptor ===="
     docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
     docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
-    sleep 0.2
+    wait_pid_gone "$NAME" krb5-gss-accept || true
+    wait_pid_gone "$NAME" gss-mit-server || true
     docker exec -d \
         -e KRB5_KTNAME=/etc/krb5kdc/testhost.keytab \
         "$NAME" sh -c "/tmp/gss-mit-server /etc/krb5kdc/testhost.keytab 127.0.0.1 4451 >/tmp/gss-mit-mut.log 2>&1"
@@ -549,7 +551,8 @@ gss_listen() {
 echo "==== Rust initiator no-checksum vs Rust acceptor ===="
 docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
 docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
-sleep 0.2
+wait_pid_gone "$NAME" krb5-gss-accept || true
+wait_pid_gone "$NAME" gss-mit-server || true
 docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /etc/krb5kdc/testhost.keytab --listen 127.0.0.1:4444 --accept-only >/tmp/gss-accept-nc.log 2>&1'
 gss_listen /tmp/gss-accept-nc.log "gss-accept no-checksum"
 RUST_GSS_INIT=/tmp/krb5-gss-init
@@ -570,7 +573,8 @@ RUST_NC_FLAGS="$(echo "$RUST_NC" | sed -n 's/.*gss-accept inquire flags=\([0-9]*
 echo "==== Rust initiator no-checksum vs MIT acceptor ===="
 docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
 docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
-sleep 0.2
+wait_pid_gone "$NAME" krb5-gss-accept || true
+wait_pid_gone "$NAME" gss-mit-server || true
 docker exec -d \
     -e KRB5_KTNAME=/etc/krb5kdc/testhost.keytab \
     -e GSS_ACCEPT_ONLY=1 \
@@ -594,7 +598,8 @@ MIT_NC_FLAGS="$(echo "$MIT_NC" | sed -n 's/.*mit-gss inquire flags=\([0-9]*\) li
 echo "==== MIT initiator no CB vs Rust acceptor with CB ===="
 docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
 docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
-sleep 0.2
+wait_pid_gone "$NAME" krb5-gss-accept || true
+wait_pid_gone "$NAME" gss-mit-server || true
 docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /etc/krb5kdc/testhost.keytab --listen 127.0.0.1:4444 --channel-bindings acceptor-bind >/tmp/gss-accept-cb.log 2>&1'
 gss_listen /tmp/gss-accept-cb.log "gss-accept cb"
 MIT_GSS_CLIENT=/tmp/gss-mit-client
@@ -613,7 +618,8 @@ RUST_CB_FLAGS="$(echo "$RUST_CB" | sed -n 's/.*gss-accept inquire flags=\([0-9]*
 echo "==== Rust initiator no CB vs MIT acceptor with CB ===="
 docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
 docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
-sleep 0.2
+wait_pid_gone "$NAME" krb5-gss-accept || true
+wait_pid_gone "$NAME" gss-mit-server || true
 docker exec -d \
     -e KRB5_KTNAME=/etc/krb5kdc/testhost.keytab \
     -e GSS_CHANNEL_BINDINGS=acceptor-bind \
@@ -636,7 +642,8 @@ MIT_CB_FLAGS="$(echo "$MIT_CB" | sed -n 's/.*mit-gss inquire flags=\([0-9]*\) li
 echo "==== MIT initiator CB mismatch vs Rust acceptor ===="
 docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
 docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
-sleep 0.2
+wait_pid_gone "$NAME" krb5-gss-accept || true
+wait_pid_gone "$NAME" gss-mit-server || true
 docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /etc/krb5kdc/testhost.keytab --listen 127.0.0.1:4444 --channel-bindings tls-b >/tmp/gss-accept-cbm.log 2>&1'
 gss_listen /tmp/gss-accept-cbm.log "gss-accept cb mismatch"
 MIT_GSS_CLIENT=/tmp/gss-mit-client
@@ -653,7 +660,8 @@ echo "$RUST_CBM" | grep -q 'gss channel bindings' || {
 echo "==== Rust initiator CB mismatch vs MIT acceptor ===="
 docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
 docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
-sleep 0.2
+wait_pid_gone "$NAME" krb5-gss-accept || true
+wait_pid_gone "$NAME" gss-mit-server || true
 docker exec -d \
     -e KRB5_KTNAME=/etc/krb5kdc/testhost.keytab \
     -e GSS_CHANNEL_BINDINGS=tls-b \
@@ -683,7 +691,8 @@ echo "$MIT_CBM"
 echo "==== delegated ccache klist -f (FORWARDED) both acceptors ===="
 docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
 docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
-sleep 0.2
+wait_pid_gone "$NAME" krb5-gss-accept || true
+wait_pid_gone "$NAME" gss-mit-server || true
 docker exec -d \
     -e GSS_DELEG_CCACHE=/tmp/rust-deleg.cc \
     "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /etc/krb5kdc/testhost.keytab --listen 127.0.0.1:4444 >/tmp/gss-accept-fwd.log 2>&1'
@@ -716,7 +725,7 @@ echo "$RUST_FBITS" | grep -q f || {
 }
 
 docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
-sleep 0.2
+wait_pid_gone "$NAME" krb5-gss-accept || true
 docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
     kvno host/testhost.kerber.test@KERBER.TEST
 docker exec -d \

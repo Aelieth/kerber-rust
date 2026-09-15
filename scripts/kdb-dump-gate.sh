@@ -27,8 +27,6 @@ if [ ! -f "$GOLDEN" ]; then
     exit 1
 fi
 
-need_image
-
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
 register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
@@ -346,7 +344,7 @@ MIT_HIST_B="$(docker exec "$NAME" kadmin.local -q 'getprinc kadmin/history' 2>&1
 echo "$MIT_HIST_B"
 diff <(echo "$MIT_HIST_B" | hist_shape) <(echo "$RUST_HIST_B" | hist_shape)
 docker exec "$NAME" kadmin.local -q 'cpw -pw b3cret3 histb' 2>&1 | grep -F 'changed.'
-STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc; sleep 0.4' 2>&1 || true)"
+STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc' 2>&1 || true)"
 echo "$STARTLOG"
 ok=0
 for _ in $(seq 1 40); do

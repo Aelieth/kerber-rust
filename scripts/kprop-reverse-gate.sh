@@ -165,7 +165,7 @@ fi
 
 # kpropd -p kdb5_util should have loaded; load again if the replica is empty.
 docker exec "$NAME" sh -c 'kdb5_util load /tmp/from_kprop.dump >/tmp/kdb-load.log 2>&1 || true'
-STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc; sleep 0.4' 2>&1 || true)"
+STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc' 2>&1 || true)"
 echo "$STARTLOG"
 ok=0
 for _ in $(seq 1 40); do

@@ -134,7 +134,8 @@ docker exec "$NAME_A" sh -c 'for p in /proc/[0-9]*; do
   cmd=$(tr "\0" " " < "$p/cmdline" 2>/dev/null) || continue
   echo "$cmd" | grep -q "task\[kdc\]" || continue
   kill "${p#/proc/}" 2>/dev/null || true
-done; sleep 1'
+done'
+wait_gone_in "$NAME_A" 88 || true
 
 ISSUE_SALT='KERBER.TESTkrbtgtAD.KERBER.TEST'
 ACCEPT_SALT='AD.KERBER.TESTkrbtgtKERBER.TEST'

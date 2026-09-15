@@ -134,7 +134,7 @@ if [ "$rc" -eq 0 ]; then
         docker cp "$ROOT/scripts/lib/openssl-seclevel0.cnf" "$NAME":/tmp/openssl-seclevel0.cnf
         docker exec "$NAME" rm -f /tmp/pkinit-65.txt
         docker exec -d "$NAME" python3 /tmp/kdc-error-proxy.py "$proxy" 127.0.0.1 "$PORT" /tmp/pkinit-65.txt
-        sleep 0.4
+        wait_udp_in "$NAME" "$proxy" || die "proxy $proxy did not listen"
         docker exec "$NAME" sh -c "cat > /tmp/krb5-dh1024.conf <<EOF
 [libdefaults]
     default_realm = KERBER.TEST
@@ -339,7 +339,7 @@ if "pkinit_require_freshness" not in t:
     p.write_text(t)
 '
     docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true'
-    sleep 0.3
+    wait_pid_gone "$NAME" krb5-kdc || true
     docker exec -d \
         -e KRB5_TEST_USER_PASSWORD=userpassword \
         -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \

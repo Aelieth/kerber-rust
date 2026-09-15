@@ -213,7 +213,6 @@ for _ in $(seq 1 40); do
     fi
     sleep 0.25
 done
-sleep 1
 IPROP_LOG="$(docker exec "$NAME" cat /tmp/kpropd-iprop.log 2>/dev/null || true)"
 echo "$IPROP_LOG"
 if echo "$IPROP_LOG" | grep -qiE 'Program not registered|PROG_UNAVAIL'; then
@@ -421,7 +420,7 @@ for _ in $(seq 1 40); do
     fi
     sleep 0.25
 done
-docker exec "$NAME" sh -c 'krb5kdc; sleep 0.4' >/dev/null 2>&1 || true
+docker exec "$NAME" sh -c 'krb5kdc' >/dev/null 2>&1 || true
 ok=0
 for _ in $(seq 1 40); do
     if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.3)" 2>/dev/null; then

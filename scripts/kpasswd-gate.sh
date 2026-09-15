@@ -557,7 +557,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-sleep 0.4
+wait_gone_in "$NAME_MIT" 88 || true
 docker exec "$NAME_MIT" krb5kdc
 ok=0
 for _ in $(seq 1 40); do

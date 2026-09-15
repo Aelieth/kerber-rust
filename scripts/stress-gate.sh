@@ -51,7 +51,7 @@ echo "==== wire loadgen workers=${KERBER_LOAD_WORKERS} iters=${KERBER_LOAD_ITERS
 MID_RC_FILE="$OUT/mid.rc"
 echo 1 >"$MID_RC_FILE"
 (
-    sleep 0.4
+    sleep 0.4 # proto: mid-sample delay
     if ! prod_mit_sample mid; then
         echo 1 >"$MID_RC_FILE"
         exit 1

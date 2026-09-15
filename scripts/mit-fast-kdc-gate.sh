@@ -169,7 +169,7 @@ echo "==== Rust KDC: FAST-error outer e_data shape via kdc-padata-proxy ===="
 docker cp "$ROOT/scripts/lib/kdc-padata-proxy.py" "$NAME":/tmp/kdc-padata-proxy.py
 docker exec "$NAME" rm -f /tmp/fast-err-rust.txt
 docker exec -d "$NAME" python3 /tmp/kdc-padata-proxy.py 1891 127.0.0.1 88 /tmp/fast-err-rust.txt
-sleep 0.4
+wait_udp_in "$NAME" 1891 || die "proxy :1891 did not listen"
 docker exec "$NAME" sh -c "cat > /tmp/krb5-fast-proxy.conf <<EOF
 [libdefaults]
     default_realm = KERBER.TEST
@@ -213,7 +213,7 @@ if [ "$ok" != 1 ]; then
     exit 1
 fi
 docker exec "$MITNAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
-sleep 0.3
+wait_pid_gone "$MITNAME" krb5kdc || true
 docker exec "$MITNAME" python3 -c '
 from pathlib import Path
 p = Path("/etc/krb5.conf")
@@ -301,7 +301,7 @@ echo "==== MIT KDC: FAST-error outer e_data shape via kdc-padata-proxy ===="
 docker cp "$ROOT/scripts/lib/kdc-padata-proxy.py" "$MITNAME":/tmp/kdc-padata-proxy.py
 docker exec "$MITNAME" rm -f /tmp/fast-err-mit.txt
 docker exec -d "$MITNAME" python3 /tmp/kdc-padata-proxy.py 1891 127.0.0.1 88 /tmp/fast-err-mit.txt
-sleep 0.4
+wait_udp_in "$MITNAME" 1891 || die "proxy 1891 did not listen"
 docker exec "$MITNAME" sh -c "cat > /tmp/krb5-fast-proxy.conf <<EOF
 [libdefaults]
     default_realm = KERBER.TEST
@@ -385,7 +385,7 @@ echo "==== MIT KDC: FAST wrong-password and unknown-server outer shapes ===="
 # Default MIT client groups are edwards25519; both KDCs permit P-256 only.
 docker exec "$MITNAME" kadmin.local -q 'modprinc +requires_preauth user'
 docker exec "$MITNAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
-sleep 0.3
+wait_pid_gone "$MITNAME" krb5kdc || true
 docker exec -d "$MITNAME" sh -c 'krb5kdc -n >/tmp/mit-kdc.log 2>&1'
 ok=0
 for _ in $(seq 1 80); do
@@ -486,7 +486,7 @@ docker exec "$MITNAME" sh -c "cat > /tmp/krb5-ed25519.conf <<EOF
 EOF"
 docker exec "$NAME" rm -f /tmp/fast-err-rust.txt
 docker exec -d "$NAME" python3 /tmp/kdc-padata-proxy.py 1892 127.0.0.1 88 /tmp/fast-err-rust.txt
-sleep 0.4
+wait_udp_in "$NAME" 1892 || die "proxy :1892 did not listen"
 docker exec "$NAME" sh -c "sed 's/127.0.0.1:88/127.0.0.1:1892/' /tmp/krb5-ed25519.conf > /tmp/krb5-ed25519-proxy.conf"
 set +e
 docker exec -e KRB5_CONFIG=/tmp/krb5-ed25519-proxy.conf "$NAME" \
@@ -504,7 +504,7 @@ if echo "$RUST_ED" | grep -E 'rep#[0-9]+ error_code=91'; then
 fi
 docker exec "$MITNAME" rm -f /tmp/fast-err-mit.txt
 docker exec -d "$MITNAME" python3 /tmp/kdc-padata-proxy.py 1892 127.0.0.1 88 /tmp/fast-err-mit.txt
-sleep 0.4
+wait_udp_in "$MITNAME" 1892 || die "proxy 1892 did not listen"
 docker exec "$MITNAME" sh -c "sed 's/127.0.0.1:88/127.0.0.1:1892/' /tmp/krb5-ed25519.conf > /tmp/krb5-ed25519-proxy.conf"
 set +e
 docker exec -e KRB5_CONFIG=/tmp/krb5-ed25519-proxy.conf "$MITNAME" \
@@ -536,7 +536,7 @@ docker exec "$MITNAME" python3 /tmp/kdc-rewrite-proxy.py --self-test
 # real principal.
 echo "==== Z1.2 MIT KDC behind MITM: rewritten outer AS-REP cname — MIT kinit -T keeps the finished client ===="
 docker exec -d "$MITNAME" python3 /tmp/kdc-rewrite-proxy.py 1893 127.0.0.1 88 /tmp/z12-cname.txt as-rep-cname mitm
-sleep 0.4
+wait_port_in "$MITNAME" 1893 || die "proxy 1893 did not listen"
 docker exec "$MITNAME" sh -c "sed 's/127.0.0.1:1891/127.0.0.1:1893/' /tmp/krb5-fast-proxy.conf > /tmp/krb5-z12-cname.conf"
 docker exec "$MITNAME" grep -q '127.0.0.1:1893' /tmp/krb5-z12-cname.conf
 docker exec "$MITNAME" rm -f /tmp/krb5cc_z12_mit /tmp/krb5cc_z12_rust
@@ -593,7 +593,7 @@ echo "$Z12_CNAME_PROXY" | grep -q 'kind=as-rep rewritten=yes' || {
 # both clients stop at the first 25 and send no second AS-REQ.
 echo "==== Z1.2 MIT KDC behind MITM: PA-FX-FAST stripped from the 25 — MIT kinit -T stops with the outer error ===="
 docker exec -d "$MITNAME" python3 /tmp/kdc-rewrite-proxy.py 1894 127.0.0.1 88 /tmp/z12-strip.txt strip-fx-fast
-sleep 0.4
+wait_port_in "$MITNAME" 1894 || die "proxy 1894 did not listen"
 docker exec "$MITNAME" sh -c "sed 's/127.0.0.1:1891/127.0.0.1:1894/' /tmp/krb5-fast-proxy.conf > /tmp/krb5-z12-strip.conf"
 docker exec "$MITNAME" grep -q '127.0.0.1:1894' /tmp/krb5-z12-strip.conf
 set +e

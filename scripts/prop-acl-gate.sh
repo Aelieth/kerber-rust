@@ -77,7 +77,7 @@ docker exec "$NAME" sh -c "printf 'host/localhost@KERBER.TEST\\nhost/${HN}@KERBE
 echo "==== MIT krb5kdc ===="
 kill_comm krb5kdc
 kill_comm krb5-kdc
-docker exec "$NAME" sh -c 'krb5kdc; sleep 0.4' >/dev/null 2>&1 || true
+docker exec "$NAME" sh -c 'krb5kdc' >/dev/null 2>&1 || true
 ok=0
 for _ in $(seq 1 40); do
     if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.3)" 2>/dev/null; then
@@ -260,7 +260,6 @@ acl_case() {
     docker exec "$NAME" sh -c "printf '$fmt' >/tmp/kpropd.acl.case; rm -f /tmp/mit-rep.dump /tmp/replica"
     mit="$( (docker exec -e KRB5_CONFIG=/tmp/prop-krb5.conf "$NAME" kprop -f /tmp/dump -s /tmp/host.keytab -P 1754 -d "$HN" 2>&1 || true) | kprop_verdict)"
     rust="$( (docker exec -e KRB5_CONFIG=/tmp/prop-krb5.conf "$NAME" kprop -f /tmp/dump -s /tmp/host.keytab -P 754 -d "$HN" 2>&1 || true) | kprop_verdict)"
-    sleep 0.3
     mit_log="$(docker exec "$NAME" grep -ac "Rejected connection from unauthorized principal host/${HN}@KERBER.TEST" /tmp/kpropd-mit.log || true)"
     rust_log="$(docker exec "$NAME" grep -ac "Rejected connection from unauthorized principal host/${HN}@KERBER.TEST" /tmp/kpropd.log || true)"
     echo "acl-$name mit=[$mit] rust=[$rust] rejected_lines mit=$mit_log rust=$rust_log"

@@ -140,7 +140,7 @@ Path("/tmp/pkinit-krb5.conf").write_text(pkinit)
 '
 
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
-sleep 0.3
+wait_pid_gone "$NAME" krb5kdc || true
 docker exec -d \
     -e KRB5_TRACE=/tmp/mit-kdc.trace \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
@@ -1349,7 +1349,7 @@ docker exec "$NAME" /tmp/krb5-forge-tgt \
 
 # Rust acceptor (survives failed accepts), fresh log.
 docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
-sleep 0.3
+wait_pid_gone "$NAME" krb5-gss-accept || true
 docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /tmp/host.keytab --listen 127.0.0.1:4444 >/tmp/gss-z13-rust.log 2>&1'
 ok=0
 for _ in $(seq 1 20); do
@@ -1394,7 +1394,7 @@ echo "$RUST_Z13_LOG" | grep -q 'KRB-ERROR 44: Cannot find key for host/testhost.
 # --- MIT acceptor leg (gss-server dies on a failed accept; restart per case) ---
 z13_mit_case() {  # $1=forged-ccache $2=label -> echoes refused|ok
     docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
-    sleep 0.3
+    wait_pid_gone "$NAME" gss-mit-server || true
     # Pass a fully-qualified acceptor principal so MIT pins the ticket kvno
     # (try_one_princ), the same way the Rust acceptor pins its keytab kvnos.
     docker exec -d -e KRB5_CONFIG=/tmp/direct-krb5.conf -e GSS_ACCEPT_ONLY=1 "$NAME" \

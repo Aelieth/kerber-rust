@@ -78,7 +78,8 @@ docker exec "$NAME" sh -c 'for p in /proc/[0-9]*; do
   tr="\0"; cmd=$(tr "\0" " " < "$p/cmdline" 2>/dev/null) || continue
   echo "$cmd" | grep -q "task\[kdc\]" || continue
   kill "${p#/proc/}" 2>/dev/null || true
-done; sleep 1'
+done'
+wait_gone_in "$NAME" 88 || true
 
 docker exec "$NAME" sh -c "cat >/tmp/kdc.conf <<EOF
 [realms]

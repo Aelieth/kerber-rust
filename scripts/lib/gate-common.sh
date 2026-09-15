@@ -1,9 +1,11 @@
 # Shared gate preamble. Source after `cd "$ROOT"` and after provenance.sh.
 # shellcheck shell=bash
 # Provides: log, die, unavailable, register_cleanup, wait_port, wait_listen,
-# wait_gone, wait_log, need_image, need_bins, shell_container, kdc_start,
-# kdc_restart, mit_kdc_restart, stock_mit_kdc. One EXIT trap writes
-# gate_wall_s= and runs registered cleanups. Does not replace provenance's ERR.
+# wait_gone, wait_log, wait_port_in, wait_udp_in, wait_gone_in, wait_pid_gone, need_image,
+# need_bins, shell_container, kdc_start, kdc_restart, mit_kdc_restart,
+# stock_mit_kdc. One EXIT trap writes gate_wall_s= and runs registered
+# cleanups. Does not replace provenance's ERR. Host wait_port/wait_gone need a
+# published port; wait_port_in/wait_gone_in probe inside $NAME.
 
 GATE_COMMON_SOURCED=1
 GATE_NAME="${GATE_NAME:-$(basename "${BASH_SOURCE[1]:-${0}}" .sh)}"
@@ -105,6 +107,67 @@ wait_log() {
     local i
     for i in $(seq 1 "$n"); do
         if docker exec "$ctn" grep -qE "$pattern" "$logfile" 2>/dev/null; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    return 1
+}
+
+# In-container TCP connect. Group-B shell containers do not publish KDC ports
+# to the host, so wait_port (host-side) cannot see them.
+wait_port_in() {
+    local ctn="${1:-$NAME}" port="${2:-88}" n="${3:-80}"
+    local i
+    for i in $(seq 1 "$n"); do
+        if docker exec "$ctn" python3 -c "import socket; socket.create_connection(('127.0.0.1', int('$port')), 0.2)" 2>/dev/null; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    return 1
+}
+
+# UDP proxies (kdc-error-proxy / kdc-padata-proxy) do not accept TCP.
+# Ready = the listen port is already bound inside the container.
+wait_udp_in() {
+    local ctn="${1:-$NAME}" port="${2:-88}" n="${3:-80}"
+    local i
+    for i in $(seq 1 "$n"); do
+        if docker exec "$ctn" python3 -c "import socket,sys
+s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+try:
+    s.bind(('127.0.0.1', int('$port')))
+    sys.exit(1)
+except OSError:
+    sys.exit(0)
+finally:
+    s.close()" 2>/dev/null; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    return 1
+}
+
+wait_gone_in() {
+    local ctn="${1:-$NAME}" port="${2:-88}" n="${3:-80}"
+    local i
+    for i in $(seq 1 "$n"); do
+        if ! wait_port_in "$ctn" "$port" 1; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    return 1
+}
+
+wait_pid_gone() {
+    local ctn="${1:-$NAME}" proc="$2" n="${3:-40}"
+    local i
+    [ -n "$proc" ] || return 1
+    for i in $(seq 1 "$n"); do
+        if ! docker exec "$ctn" sh -c "pidof '$proc' >/dev/null" 2>/dev/null; then
             return 0
         fi
         sleep 0.1

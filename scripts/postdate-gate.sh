@@ -93,7 +93,7 @@ docker exec -e KRB5_CONFIG=/tmp/postdate-krb5.conf \
 echo "==== addprinc pduser ===="
 kadmin_q 'addprinc -pw pd-secret pduser'
 
-echo "==== MIT kinit -s +2s ===="
+echo "==== MIT kinit -s +20s ===="
 START="$(docker exec "$NAME" date -u -d '+2 seconds' '+%Y%m%d%H%M%S')"
 echo "start=$START"
 docker exec -e KRB5_CONFIG=/tmp/postdate-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true

@@ -8,7 +8,7 @@ cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
-need_bins krb5-kdc krb5-pac-extract krb5-kdb
+need_bins krb5-kdc krb5-pac-extract krb5-kdb krb5-kvno krb5-kadmin-local
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-s4u-mit-gate"
@@ -22,8 +22,6 @@ if ! command -v docker >/dev/null 2>&1; then
     log "s4u.mit.gate" "error" ',"error":"docker not available"'
     exit 1
 fi
-
-    -p krb5-client --bin krb5-kvno -p krb5-admin --bin krb5-kadmin-local
 
 need_image
 
@@ -55,7 +53,7 @@ docker exec "$NAME" kadmin.local -q "addprinc -randkey admin" >/dev/null
 docker exec "$NAME" kadmin.local -q "addprinc -pw expirepw -pwexpire 19900101000000 expired" >/dev/null
 
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
-sleep 0.3
+wait_pid_gone "$NAME" krb5kdc || true
 docker exec -d "$NAME" sh -c 'krb5kdc -n >/tmp/mit-kdc.log 2>&1'
 ok=0
 for _ in $(seq 1 80); do
@@ -272,7 +270,7 @@ case "$LISTEN" in
     *:8888*) PROXY_TO=8888 ;;
 esac
 docker exec -d "$NAME" python3 /tmp/kdc-padata-proxy.py 1892 127.0.0.1 "$PROXY_TO" /tmp/s4u-padata.txt
-sleep 0.3
+wait_udp_in "$NAME" 1892 || die "proxy :1892 did not listen"
 docker exec "$NAME" sh -c "sed 's/${KDC_LINE}/kdc = 127.0.0.1:1892/' /tmp/s4u-krb5.conf | sed '/forwardable = true/a\\    udp_preference_limit = 10000' > /tmp/s4u-proxy.conf"
 docker exec -e KRB5_CONFIG=/tmp/s4u-proxy.conf \
     "$NAME" kinit -f -k -t /tmp/host.keytab host/testhost.kerber.test@KERBER.TEST
@@ -344,7 +342,7 @@ echo "$KLISTME"
 echo "$KLISTME" | grep -q 'for client expired@KERBER.TEST'
 docker cp "$ROOT/scripts/lib/kdc-padata-proxy.py" "$MITNAME":/tmp/kdc-padata-proxy.py
 docker exec -d "$MITNAME" python3 /tmp/kdc-padata-proxy.py 1892 127.0.0.1 88 /tmp/s4u-mit-padata.txt
-sleep 0.3
+wait_udp_in "$MITNAME" 1892 || die "proxy 1892 did not listen"
 docker exec "$MITNAME" sh -c "sed 's/kdc = 127.0.0.1/kdc = 127.0.0.1:1892/' /tmp/s4u-mit-oracle.conf > /tmp/s4u-mit-proxy.conf"
 docker exec -e KRB5_CONFIG=/tmp/s4u-mit-proxy.conf \
     "$MITNAME" kinit -f -k -t /etc/krb5kdc/testhost.keytab host/testhost.kerber.test@KERBER.TEST
@@ -405,7 +403,7 @@ echo "MIT_u2u_happy"
 
 echo "==== MIT kvno --u2u -allow_dup_skey rust ===="
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true'
-sleep 0.3
+wait_pid_gone "$NAME" krb5-kdc || true
 docker exec "$NAME" sh -c 'sed -i "s/kdc = 127.0.0.1.*/kdc = 127.0.0.1:8888/" /tmp/s4u-krb5.conf'
 docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
@@ -483,7 +481,7 @@ echo "$KVNO_AM" | grep -qiE "Incorrect net address|BADADDR|KRB5KRB_AP_ERR_BADADD
 echo "==== MIT kinit -a + kvno via bridge rust ===="
 BRIDGE="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$NAME")"
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true'
-sleep 0.3
+wait_pid_gone "$NAME" krb5-kdc || true
 docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
     -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
@@ -717,7 +715,7 @@ echo "explicit_rbcd_grant=host/testhost.kerber.test@KERBER.TEST"
 
 echo "==== MIT db2 kvno -U user -P (no delegation hook) ===="
 docker exec "$MITNAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
-sleep 0.3
+wait_pid_gone "$MITNAME" krb5kdc || true
 docker exec -d "$MITNAME" sh -c 'krb5kdc -n >/tmp/mit-db2-r22.log 2>&1'
 ok=0
 for _ in $(seq 1 80); do

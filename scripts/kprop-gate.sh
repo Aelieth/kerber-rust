@@ -271,7 +271,7 @@ docker exec "$NAME" kadmin.local -q "addprinc -randkey host/${HN}"
 docker exec "$NAME" kadmin.local -q "ktadd -k /tmp/host.keytab host/localhost host/${HN}"
 docker exec "$NAME" kdb5_util dump /tmp/dump
 docker exec "$NAME" sh -c "printf 'host/localhost@KERBER.TEST\\nhost/${HN}@KERBER.TEST\\n' >/tmp/kpropd.acl"
-docker exec "$NAME" sh -c 'sleep 0.2; touch /tmp/dump.dump_ok'
+docker exec "$NAME" sh -c 'touch /tmp/dump.dump_ok'
 DUMP_HEAD="$(docker exec "$NAME" head -1 /tmp/dump)"
 echo "$DUMP_HEAD"
 echo "$DUMP_HEAD" | grep -q 'kdb5_util load_dump version 7'
@@ -279,7 +279,7 @@ echo "$DUMP_HEAD" | grep -q 'kdb5_util load_dump version 7'
 echo "==== MIT krb5kdc for kprop tickets ===="
 kill_comm krb5kdc
 kill_comm krb5-kdc
-STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc; sleep 0.4' 2>&1 || true)"
+STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc' 2>&1 || true)"
 echo "$STARTLOG"
 ok=0
 for _ in $(seq 1 40); do

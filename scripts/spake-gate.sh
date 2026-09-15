@@ -55,7 +55,7 @@ esac
 PROXY=1888
 docker cp "$ROOT/scripts/lib/kdc-error-proxy.py" "$NAME":/tmp/kdc-error-proxy.py
 docker exec -d "$NAME" python3 /tmp/kdc-error-proxy.py "$PROXY" 127.0.0.1 "$PORT" /tmp/spake-91.txt
-sleep 0.2
+wait_udp_in "$NAME" "$PROXY" || die "proxy $PROXY did not listen"
 
 docker exec "$NAME" sh -c "sed -i 's/kdc = 127.0.0.1\$/kdc = 127.0.0.1:${PROXY}/' /etc/krb5.conf"
 docker exec "$NAME" sh -c "cat >> /etc/krb5.conf <<EOF
