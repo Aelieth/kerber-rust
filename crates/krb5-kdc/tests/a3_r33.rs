@@ -96,9 +96,10 @@ fn unwrapped_tgs_rep(tgt: &AsOutcome, wire: &[u8]) -> Vec<u8> {
         nonce: tgs.0.req_body.nonce,
         key_expiration: None,
         flags: TicketFlags::none(),
-        authtime: t.clone(),
+        authtime: t,
         starttime: None,
-        endtime: t.clone(),
+        // till is the TGT endtime; a fresh now() can tick past it.
+        endtime: tgs.0.req_body.till.clone(),
         renew_till: None,
         srealm: ascii("KERBER.TEST"),
         sname: sname.clone(),
