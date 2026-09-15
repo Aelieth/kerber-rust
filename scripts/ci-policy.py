@@ -2271,7 +2271,8 @@ def check_gate_common_sourced() -> None:
         "shell_container",
         "mit_live_guard",
         "mit_conf_restore",
-        "rm -rf /tmp/db-*",
+        "find /tmp -mindepth 1 -maxdepth 1",
+        "! -name 'build'",
         "kdb5_util destroy",
         "krb5.conf.kerber-stock",
     ):

@@ -232,15 +232,17 @@ shell_container() {
             pkill -f kdc-error-proxy.py >/dev/null 2>&1 || true
             pkill -f kdc-req-proxy.py >/dev/null 2>&1 || true
             pkill -f integ-tamper-proxy.py >/dev/null 2>&1 || true
-            # Keep copied binaries (/tmp/krb5-*). Wipe leftover realm files so
-            # the next gate kdb5_util create / --test-realm is not DUP.
+            # Keep copied binaries (/tmp/krb5-*, ccache-probe). Wipe leftover
+            # realm files so the next gate kdb5_util create / --test-realm /
+            # rust.db+stash is not DUP or a stale master key.
             kdb5_util destroy -f >/dev/null 2>&1 || true
-            rm -rf /tmp/db-* /tmp/principal* /tmp/stash /tmp/*.dump
+            find /tmp -mindepth 1 -maxdepth 1 \
+                ! -name 'krb5-*' ! -name 'ccache-probe' ! -name 'build' \
+                -exec rm -rf {} +
+            mkdir -p /tmp/build
             rm -f /var/krb5kdc/principal* /var/kerberos/krb5kdc/principal* \
                 /var/krb5kdc/.k5.* /var/kerberos/krb5kdc/.k5.* \
                 /etc/krb5kdc/principal*
-            rm -f /tmp/*.conf /tmp/*.log /tmp/*.pid /tmp/*.cc /tmp/krb5cc* \
-                /tmp/*.keytab /tmp/*.kt /tmp/*.txt /tmp/kadm5.acl
             if [ -f /etc/krb5.conf.kerber-stock ]; then
                 cp -a /etc/krb5.conf.kerber-stock /etc/krb5.conf
             fi
