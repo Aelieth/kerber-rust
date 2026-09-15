@@ -47,3 +47,4 @@ checkpoint:
 
 budget:
 	python3 scripts/ci-status.py --budget-report -n 15 --jobs
+	python3 scripts/ci-status.py --check-budget -n 5 --workflow ci

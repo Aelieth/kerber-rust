@@ -65,6 +65,9 @@ the runner. Linking needs `lld` (`ld.lld` on `$PATH`; see
 make safety
 ```
 
+Per-push CI is three tiers (`docs/testing.md`); job walls live in
+`ci-budget.toml`. `make budget` prints medians and `--check-budget`.
+
 Live MIT oracles (when Docker is available): `make harness` then
 `make gate GATE=client-gate`, `make gate GATE=kdc-gate`,
 `make gate GATE=bidirectional-gate`. `make stop-harness` tears the

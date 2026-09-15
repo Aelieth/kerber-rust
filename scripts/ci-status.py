@@ -3,6 +3,7 @@
 
 usage: ci-status.py [-n RUNS] [--workflow NAME] [--sha SHA] [--jobs] [--durations]
                     [--repo OWNER/NAME] [--save SHA] [--out DIR] [--budget-report]
+                    [--check-budget]
 
 Reads the public REST API without a token (run, job and step conclusions and
 the check-run annotations — the gates' `::error file=,line=` lines — are
@@ -17,17 +18,20 @@ run (retries with backoff; exits 2 otherwise). Fixture annotations from
 
 `--durations` prints per-job `duration_s=` from `started_at`/`completed_at`
 already in the `/jobs` payload. `--budget-report` prints per-job medians over
-the last N completed runs (informational; `--check-budget` is S6).
+the last N completed runs. `--check-budget` compares completed runs against
+`ci-budget.toml` (W2-S6; a run cannot measure itself).
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import pathlib
 import statistics
 import subprocess
 import sys
 import time
+import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -361,6 +365,90 @@ def budget_report(repo: str, workflow: str, n: int) -> int:
     return 0
 
 
+def parse_budget(text: str) -> dict:
+    """Parse ci-budget.toml text into {jobs: {name: int}, run_wall: int|None}."""
+    data = tomllib.loads(text)
+    jobs = {str(k): int(v) for k, v in (data.get("jobs") or {}).items()}
+    run_wall = (data.get("push") or {}).get("run_wall")
+    return {"jobs": jobs, "run_wall": int(run_wall) if run_wall is not None else None}
+
+
+def load_budget(path: pathlib.Path | None = None) -> dict:
+    if path is None:
+        path = pathlib.Path(__file__).resolve().parents[1] / "ci-budget.toml"
+    if not path.is_file():
+        raise FileNotFoundError(str(path))
+    return parse_budget(path.read_text(encoding="utf-8"))
+
+
+def budget_overruns(
+    job_durations: dict[str, int],
+    run_wall: int | None,
+    budget: dict,
+) -> list[str]:
+    """Human lines for each overrun. Empty means within budget."""
+    lines: list[str] = []
+    for name, cap in (budget.get("jobs") or {}).items():
+        got = job_durations.get(name)
+        if got is None:
+            continue
+        if got > cap:
+            lines.append(f"job={name} duration_s={got} budget={cap}")
+    cap_wall = budget.get("run_wall")
+    if cap_wall is not None and run_wall is not None and run_wall > cap_wall:
+        lines.append(f"run_wall_s={run_wall} budget={cap_wall}")
+    return lines
+
+
+def check_budget(repo: str, workflow: str, sha: str | None, n: int) -> int:
+    """Compare completed runs against ci-budget.toml.
+
+    Exit 0 within budget, 1 on overrun, 2 if no completed run / fetch failed.
+    """
+    try:
+        budget = load_budget()
+    except FileNotFoundError:
+        print("ci-status: missing ci-budget.toml", file=sys.stderr)
+        return 2
+    try:
+        selected = fetch_runs(repo, workflow, sha, n)
+    except urllib.error.URLError as e:
+        print(f"ci-status: {e}", file=sys.stderr)
+        return 2
+    completed = [r for r in selected if (r.get("status") or "") == "completed"]
+    if not completed:
+        print("ci-status: no completed run to check", file=sys.stderr)
+        return 2
+    rc = 0
+    for run in completed:
+        try:
+            job_list = get(
+                f"/repos/{repo}/actions/runs/{run['id']}/jobs?per_page=50"
+            ).get("jobs", [])
+        except urllib.error.URLError as e:
+            print(
+                f"ci-status: jobs unavailable for run {run.get('run_number')}: {e}",
+                file=sys.stderr,
+            )
+            return 2
+        durs: dict[str, int] = {}
+        for job in job_list:
+            dur = job_duration_s(job)
+            if dur is not None:
+                durs[job["name"]] = dur
+        wall = run_wall_s(job_list, run)
+        over = budget_overruns(durs, wall, budget)
+        sha8 = (run.get("head_sha") or "")[:8]
+        if over:
+            rc = 1
+            print(f"check-budget FAIL run={run.get('run_number')} sha={sha8}")
+            for line in over:
+                print(f"  {line}")
+        else:
+            print(f"check-budget ok run={run.get('run_number')} sha={sha8}")
+    return rc
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("-n", "--runs", type=int, default=10)
@@ -388,6 +476,11 @@ def main() -> int:
         action="store_true",
         help="print per-job median duration_s over the last -n completed runs",
     )
+    ap.add_argument(
+        "--check-budget",
+        action="store_true",
+        help="fail if completed runs exceed ci-budget.toml (last -n, or --sha)",
+    )
     args = ap.parse_args()
     if not args.repo:
         print("ci-status: cannot determine the repository; pass --repo", file=sys.stderr)
@@ -396,6 +489,8 @@ def main() -> int:
         return save_run(args.repo, args.workflow, args.save, args.out)
     if args.budget_report:
         return budget_report(args.repo, args.workflow, args.runs)
+    if args.check_budget:
+        return check_budget(args.repo, args.workflow, args.sha, args.runs)
     try:
         selected = fetch_runs(args.repo, args.workflow, args.sha, args.runs)
     except urllib.error.URLError as e:

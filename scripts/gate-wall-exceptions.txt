@@ -1,0 +1,2 @@
+# Empty: every gate_wall_s in a checkpoint timings.tsv must be ≤ 45 s.
+# A non-comment line here is a forbidden exception (W2-S6).

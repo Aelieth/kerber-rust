@@ -6,6 +6,16 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W2-S6
+
+- **Enforce.** `ci-budget.toml` is the one source for per-push job
+  walls (ratched from measured CI: harness 500, mit-extra 300,
+  run_wall 540). `ci-status.py --check-budget` compares a completed
+  SHA; nightly `budget.yml` checks the last five `ci.yml` runs.
+  `ci-policy` fail-reds empty `gate-wall-exceptions.txt`, proto-sleep
+  ≤ 35 s, unit `sleep(` ≤ 8, and the `docs/testing.md` tier contract.
+  Every new rule has a `_self_test` fixture.
+
 ### W2-S5
 
 - **Unit sleeps and traces.** Timestamp tests wait until the integer

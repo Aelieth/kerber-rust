@@ -10,14 +10,16 @@ The local entry point is `make safety` (fmt, clippy, nextest under
 test/gate/oracle inventory; `make checkpoint OUT=<dir>` runs nextest and
 the gates into a stamped `timings.tsv`. `python3 scripts/hygiene-diff.py
 <old> <new>` fails if a test, cell tag, diffsend case, flow or ledger
-row disappeared. Tier budgets land in W2-S6 (`ci-budget.toml`); S0 only
-measures.
+row disappeared. Job walls live in `ci-budget.toml` (see Tier contract
+below). `python3 scripts/ci-status.py --check-budget` compares a
+completed SHA against that file.
 
 CI status is read from the terminal with `python3 scripts/ci-status.py [-n RUNS] [--sha SHA] [--jobs] [--durations] [--workflow ci|peers]`:
 the public GitHub REST API answers unauthenticated with run, job and step conclusions and with the
 check-run annotations (job logs need `GITHUB_TOKEN`). `--durations` prints
 per-job `duration_s=` from `started_at`/`completed_at`; `--save` records
-those lines plus `run_wall_s=`. `--workflow` selects a workflow file
+those lines plus `run_wall_s=`. `--check-budget` fails if a completed
+run exceeds `ci-budget.toml`. `--workflow` selects a workflow file
 (not the global run list filtered to `main`), so peers and PR-head SHAs
 are visible. `--budget-report -n 15` prints per-job medians. Every gate sources `scripts/lib/provenance.sh`,
 whose `ERR` trap turns a silent `set -e` death into a `::error file=scripts/<gate>.sh,line=N::…` line
@@ -381,6 +383,26 @@ toolchain; the full `cargo test --workspace --locked` on MSRV is the
 unpinned (`0.28`); golden MIT DER is the protocol net if encodings
 drift. There is no unlocked `--locked` fallback. KLLDAP alignment:
 [`integration-klldap.md`](integration-klldap.md).
+
+### Tier contract (W2-S6)
+
+Job walls live in `ci-budget.toml` (one source). `ci-status.py --check-budget`
+compares a completed SHA, or the last N runs, against that file. A run cannot
+measure itself; the nightly `budget.yml` job checks the last five `ci.yml` runs.
+
+- **Tier 1** — per-push blocking: `test`, `harness`, `mit-extra`, `msrv`,
+  `audit`, `ledger-mit`, `mit-image`, `doc`. Combined wall ≤ `[push].run_wall`
+  (540 s). Per-job: `test` 300, `harness` 500, `mit-extra` 300, `doc` 90,
+  `msrv` 120, `audit` 240, `ledger-mit` 60, `mit-image` 90.
+- **Tier 2** — per-push soft (`continue-on-error`): `slo` 180, `chaos` 180,
+  `soak` 240.
+- **Tier 3** — nightly: `peers.yml`, `full-test.yml`, `fuzz.yml`,
+  `kcm-opcode.yml`, `soak.yml`, `budget.yml`.
+
+Every gate's `gate_wall_s` in a checkpoint `timings.tsv` is ≤ 45 s
+(`scripts/gate-wall-exceptions.txt` is empty). Gate proto sleeps sum to
+≤ 35 s and are tagged `# proto:`. Unit `sleep(` in `crates/*/tests` is
+≤ 8.
 
 ### CI lanes (which job runs which gates)
 

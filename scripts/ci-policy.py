@@ -196,6 +196,27 @@ TIMEOUT_JOBS = (
     "doc",
 )
 
+GATE_WALL_MAX = 45
+GATE_PROTO_SLEEP_MAX = 35.0
+UNIT_SLEEP_MAX = 8
+BUDGET_REQUIRED_JOBS = (
+    "test",
+    "harness",
+    "mit-extra",
+    "doc",
+    "msrv",
+    "audit",
+    "ledger-mit",
+    "mit-image",
+)
+EXCEPTIONS_REL = "scripts/gate-wall-exceptions.txt"
+_SLEEP_RE = re.compile(r"\bsleep\s+([0-9]+(?:\.[0-9]+)?)")
+_ENTRYPOINT_SLEEP = re.compile(r"--entrypoint\s+sleep")
+_PROTO_HINT = re.compile(
+    r"proto:|lockout|postdate|starttime|ticket age|renew|soak|failurecount|nyv",
+    re.I,
+)
+
 FULL_RUN_SCHEDULED = (
     "cargo nextest run --workspace --release",
     "cargo test --workspace --locked",
@@ -2054,6 +2075,10 @@ def check_ci_status_save() -> None:
         _die("ci-status.py must emit run_wall_s=")
     if "--budget-report" not in text:
         _die("ci-status.py must support --budget-report")
+    if "--check-budget" not in text:
+        _die("ci-status.py must support --check-budget")
+    if "budget_overruns" not in text:
+        _die("ci-status.py must implement budget_overruns")
     if "actions/workflows/" not in text:
         _die("ci-status.py must fetch /actions/workflows/<file>/runs")
     if "branch=main" in text:
@@ -2077,6 +2102,19 @@ def check_ci_status_save() -> None:
         {"started_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:01:05Z"}
     ) != 65:
         _die("job_duration_s must use started_at/completed_at")
+    over = mod.budget_overruns(
+        {"harness": 600, "test": 100},
+        700,
+        {"jobs": {"harness": 500, "test": 300}, "run_wall": 540},
+    )
+    if not any("harness" in ln for ln in over) or not any("run_wall" in ln for ln in over):
+        _die(f"budget_overruns must flag harness and run_wall: {over}")
+    if mod.budget_overruns(
+        {"harness": 400, "test": 100},
+        500,
+        {"jobs": {"harness": 500, "test": 300}, "run_wall": 540},
+    ):
+        _die("budget_overruns must accept durations under budget")
 
 
 def check_makefile_matches_ci() -> None:
@@ -2131,56 +2169,67 @@ def check_makefile_matches_ci() -> None:
     _order(test_job.body, "ci.yml test job")
 
 
-def check_rust_cache_shared_key() -> None:
+def check_rust_cache_shared_key(wf_texts: dict[str, str] | None = None) -> None:
     """Every Swatinem/rust-cache step uses shared-key: kerber; cargo jobs have a cache."""
     needle = "shared-key: kerber"
-    for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
-        text = path.read_text(encoding="utf-8")
+    if wf_texts is None:
+        wf_texts = {
+            p.name: p.read_text(encoding="utf-8")
+            for p in sorted((ROOT / ".github" / "workflows").glob("*.yml"))
+        }
+    for name, text in wf_texts.items():
         n_cache = text.count("Swatinem/rust-cache")
         n_key = text.count(needle)
         if n_cache and n_key != n_cache:
-            _die(f"{path.name}: rust-cache steps must set shared-key: kerber ({n_key}/{n_cache})")
-        wf = Workflow(path, text)
-        for name, job in wf.jobs.items():
+            _die(f"{name}: rust-cache steps must set shared-key: kerber ({n_key}/{n_cache})")
+        wf = Workflow(pathlib.Path(name), text)
+        for job_name, job in wf.jobs.items():
             if "cargo " not in job.body and "cargo\n" not in job.body:
                 continue
             if "Swatinem/rust-cache" not in job.body:
-                _die(f"{path.name} job {name} runs cargo but has no rust-cache")
+                _die(f"{name} job {job_name} runs cargo but has no rust-cache")
             if needle not in job.body:
-                _die(f"{path.name} job {name} rust-cache missing shared-key: kerber")
+                _die(f"{name} job {job_name} rust-cache missing shared-key: kerber")
 
 
-def check_prod_image_once() -> None:
+def check_prod_image_once(ci_text: str | None = None) -> None:
     """ci.yml builds harness/prod/Dockerfile exactly once (mit-image)."""
-    ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
-    n = ci.count("harness/prod/Dockerfile")
-    builds = ci.count("docker build -f harness/prod/Dockerfile")
+    if ci_text is None:
+        ci_text = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    builds = ci_text.count("docker build -f harness/prod/Dockerfile")
     if builds != 1:
         _die(f"ci.yml must docker build harness/prod/Dockerfile exactly once, found {builds}")
-    if "upload-artifact" in ci and "mit-kdc-image" in ci:
+    if "upload-artifact" in ci_text and "mit-kdc-image" in ci_text:
         _die("ci.yml must not upload-artifact the MIT tar (cache restore only)")
-    wf = Workflow(WORKFLOWS / "ci.yml", ci)
+    wf = Workflow(pathlib.Path("ci.yml"), ci_text)
     mit = wf.jobs.get("mit-image")
     if mit is None or "harness/prod/Dockerfile" not in mit.body:
         _die("mit-image must build/save harness/prod/Dockerfile")
-    if not re.search(r"hashFiles\([^)]*harness/prod/Dockerfile", ci):
+    if not re.search(r"hashFiles\([^)]*harness/prod/Dockerfile", ci_text):
         _die("cache key must hashFiles harness/prod/Dockerfile")
 
 
-def check_build_profile() -> None:
+def check_build_profile(
+    cargo: str | None = None,
+    cfg: str | None = None,
+    ci: str | None = None,
+) -> None:
     """[profile.dev] line-tables-only + split-debuginfo; lld rustflags."""
-    cargo = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
+    if cargo is None:
+        cargo = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
     if 'debug = "line-tables-only"' not in cargo:
         _die('Cargo.toml [profile.dev] must set debug = "line-tables-only"')
     if 'split-debuginfo = "unpacked"' not in cargo:
         _die('Cargo.toml [profile.dev] must set split-debuginfo = "unpacked"')
-    cfg = ROOT / ".cargo" / "config.toml"
-    if not cfg.is_file():
-        _die("missing .cargo/config.toml")
-    text = cfg.read_text(encoding="utf-8")
-    if "fuse-ld=lld" not in text:
+    if cfg is None:
+        cfg_path = ROOT / ".cargo" / "config.toml"
+        if not cfg_path.is_file():
+            _die("missing .cargo/config.toml")
+        cfg = cfg_path.read_text(encoding="utf-8")
+    if "fuse-ld=lld" not in cfg:
         _die(".cargo/config.toml must pass -fuse-ld=lld")
-    ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    if ci is None:
+        ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
     if "apt-get install" not in ci or " lld" not in ci:
         _die("ci.yml must apt-get install lld")
 
@@ -2238,11 +2287,18 @@ def check_env_read() -> None:
                     _die(f"{wf_path.name} sets {name} but no script/test reads it")
 
 
-def check_trace_dst() -> None:
+def check_trace_dst(texts: dict[str, str] | None = None) -> None:
     """Gate captures must not default into tests/traces (S5)."""
-    for name in ("kdc-gate.sh", "client-gate.sh"):
-        path = SCRIPTS / name
-        text = path.read_text(encoding="utf-8")
+    names = ("kdc-gate.sh", "client-gate.sh")
+    if texts is None:
+        texts = {}
+        for name in names:
+            path = SCRIPTS / name
+            if not path.is_file():
+                _die(f"missing scripts/{name}")
+            texts[name] = path.read_text(encoding="utf-8")
+    for name in names:
+        text = texts.get(name, "")
         if 'KERBER_TRACE_DST:-$ROOT/tests/traces' in text:
             _die(f"{name} must not default TRACE_DST to tests/traces")
         if "KERBER_SCRATCH" not in text or "TRACE_DST" not in text:
@@ -2319,6 +2375,192 @@ def check_s4_shared_boots(ci_text: str | None = None) -> None:
         _die("ci.yml must boot stock MIT in both harness and mit-extra")
     if ci_text.count("boot-shell.sh") < 2:
         _die("ci.yml must boot a shared shell in both harness and mit-extra")
+
+
+def check_stock_boots_per_job(ci_text: str | None = None) -> None:
+    """Plan name for the S4 shared-boot contract."""
+    check_s4_shared_boots(ci_text)
+
+
+def _in_poll_loop(lines: list[str], idx: int) -> bool:
+    for j in range(idx, max(-1, idx - 30), -1):
+        if re.search(r"for\s+\S+\s+in\s+\$\(seq", lines[j]):
+            return True
+        if re.search(r"^\s*while\b", lines[j]):
+            return True
+        if re.match(r"^\s*done\b", lines[j]):
+            return False
+    return False
+
+
+def classify_gate_sleeps(text: str) -> list[tuple[str, float]]:
+    rows: list[tuple[str, float]] = []
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if _ENTRYPOINT_SLEEP.search(line) or re.search(r"docker\s+run.*sleep\s+3600", line):
+            continue
+        code = line.split("#", 1)[0]
+        m = _SLEEP_RE.search(code)
+        if not m:
+            continue
+        sec = float(m.group(1))
+        kind = "poll" if _in_poll_loop(lines, i) else "padding"
+        comment = line[line.index("#") :] if "#" in line else ""
+        if kind != "poll" and (
+            comment.strip().startswith("# proto:") or _PROTO_HINT.search(line)
+        ):
+            kind = "proto"
+        rows.append((kind, sec))
+    return rows
+
+
+def check_gate_wall(
+    exceptions_text: str | None = None,
+    timings_text: str | None = None,
+) -> None:
+    """Checkpoint gate walls ≤ 45 s; exceptions file must be empty."""
+    if exceptions_text is None:
+        path = ROOT / EXCEPTIONS_REL
+        if not path.is_file():
+            _die(f"missing {EXCEPTIONS_REL}")
+        exceptions_text = path.read_text(encoding="utf-8")
+    for i, line in enumerate(exceptions_text.splitlines(), 1):
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            _die(f"{EXCEPTIONS_REL}:{i} must be empty (no gate-wall exceptions)")
+    texts: list[str] = []
+    if timings_text is not None:
+        texts = [timings_text]
+    else:
+        args = sys.argv[1:]
+        if "--timings" in args:
+            idx = args.index("--timings")
+            if idx + 1 >= len(args):
+                _die("--timings needs a path")
+            tpath = pathlib.Path(args[idx + 1])
+            if not tpath.is_file():
+                _die(f"missing timings file {tpath}")
+            texts = [tpath.read_text(encoding="utf-8")]
+        elif "--checkpoint" in args:
+            log_root = ROOT / "working" / "logs"
+            texts = [
+                p.read_text(encoding="utf-8")
+                for p in log_root.rglob("timings.tsv")
+                if p.is_file()
+            ]
+        else:
+            return
+    for text in texts:
+        for i, line in enumerate(text.splitlines()):
+            if i == 0 and line.startswith("gate"):
+                continue
+            parts = line.split("\t")
+            if len(parts) < 4:
+                continue
+            try:
+                wall = int(parts[3])
+            except ValueError:
+                continue
+            if wall > GATE_WALL_MAX:
+                _die(f"gate {parts[0]} wall_s={wall} exceeds {GATE_WALL_MAX}")
+
+
+def check_sleep_ratchet(
+    gate_texts: dict[str, str] | None = None,
+    unit_sleep_count: int | None = None,
+) -> None:
+    """Gate proto sleeps ≤ 35 s all tagged; unit sleep( ≤ UNIT_SLEEP_MAX."""
+    if gate_texts is None:
+        gate_texts = {
+            p.name: p.read_text(encoding="utf-8")
+            for p in sorted(SCRIPTS.glob("*-gate.sh"))
+        }
+        common = SCRIPTS / "lib" / "gate-common.sh"
+        if common.is_file():
+            gate_texts[common.name] = common.read_text(encoding="utf-8")
+    proto = 0.0
+    for name, text in gate_texts.items():
+        for kind, sec in classify_gate_sleeps(text):
+            if kind == "padding":
+                _die(f"{name} has an untagged padding sleep {sec}s")
+            if kind == "proto":
+                proto += sec
+    if proto > GATE_PROTO_SLEEP_MAX:
+        _die(f"proto sleeps sum {proto:.1f}s exceeds {GATE_PROTO_SLEEP_MAX}")
+    if unit_sleep_count is None:
+        n = 0
+        for path in (ROOT / "crates").glob("*/tests/**/*.rs"):
+            n += path.read_text(encoding="utf-8", errors="replace").count("sleep(")
+        unit_sleep_count = n
+    if unit_sleep_count > UNIT_SLEEP_MAX:
+        _die(f"unit sleep( count {unit_sleep_count} exceeds {UNIT_SLEEP_MAX}")
+
+
+def parse_budget_toml(text: str) -> dict:
+    import tomllib
+
+    data = tomllib.loads(text)
+    jobs = {str(k): int(v) for k, v in (data.get("jobs") or {}).items()}
+    run_wall = (data.get("push") or {}).get("run_wall")
+    return {"jobs": jobs, "run_wall": int(run_wall) if run_wall is not None else None}
+
+
+def check_ci_budgets(
+    toml_text: str | None = None,
+    status_text: str | None = None,
+    wf_names: list[str] | None = None,
+) -> None:
+    """ci-budget.toml exists with required jobs; ci-status --check-budget; nightly budget.yml."""
+    if toml_text is None:
+        path = ROOT / "ci-budget.toml"
+        if not path.is_file():
+            _die("missing ci-budget.toml")
+        toml_text = path.read_text(encoding="utf-8")
+    budget = parse_budget_toml(toml_text)
+    for name in BUDGET_REQUIRED_JOBS:
+        if name not in budget["jobs"]:
+            _die(f"ci-budget.toml missing [jobs].{name}")
+    if budget.get("run_wall") is None:
+        _die("ci-budget.toml missing [push].run_wall")
+    if status_text is None:
+        status_text = (SCRIPTS / "ci-status.py").read_text(encoding="utf-8")
+    if "--check-budget" not in status_text:
+        _die("ci-status.py must support --check-budget")
+    if "budget_overruns" not in status_text:
+        _die("ci-status.py must implement budget_overruns")
+    if wf_names is None:
+        wf_names = [p.name for p in sorted(WORKFLOWS.glob("*.yml"))]
+    if "budget.yml" not in wf_names:
+        _die("missing .github/workflows/budget.yml nightly job")
+
+
+def check_testing_doc_budgets(
+    testing_text: str | None = None,
+    contributing_text: str | None = None,
+    toml_text: str | None = None,
+) -> None:
+    """docs/testing.md names the three tiers; numbers come from ci-budget.toml."""
+    if testing_text is None:
+        testing_text = (ROOT / "docs" / "testing.md").read_text(encoding="utf-8")
+    if contributing_text is None:
+        contributing_text = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    if toml_text is None:
+        path = ROOT / "ci-budget.toml"
+        if not path.is_file():
+            _die("missing ci-budget.toml")
+        toml_text = path.read_text(encoding="utf-8")
+    for needle in ("Tier 1", "Tier 2", "Tier 3", "ci-budget.toml"):
+        if needle not in testing_text:
+            _die(f"docs/testing.md must name {needle}")
+    budget = parse_budget_toml(toml_text)
+    for name in BUDGET_REQUIRED_JOBS:
+        if name not in testing_text:
+            _die(f"docs/testing.md must mention job {name}")
+    if "ci-budget.toml" not in contributing_text and "tier" not in contributing_text.lower():
+        _die("CONTRIBUTING.md must mention the tier rule / ci-budget.toml")
+    harness = str(budget["jobs"].get("harness", ""))
+    if harness and harness not in testing_text:
+        _die("docs/testing.md must quote the harness budget from ci-budget.toml")
 
 
 def check_kadmin_glob_lib(text: str | None = None) -> None:
@@ -3242,6 +3484,130 @@ jobs:
         "boot-stock-mit.sh\nboot-shell.sh\nboot-stock-mit.sh\nboot-shell.sh\n"
     )
     _must_die(check_s4_shared_boots, "boot-shell.sh\nboot-shell.sh\n")
+    check_stock_boots_per_job(
+        "boot-stock-mit.sh\nboot-shell.sh\nboot-stock-mit.sh\nboot-shell.sh\n"
+    )
+    _must_die(check_stock_boots_per_job, "boot-stock-mit.sh\n")
+    check_gate_wall("# empty\n", "gate\trun\tgate_rc\twall_s\nkdc-gate\trun1\t0\t12\n")
+    _must_die(check_gate_wall, "kadmin-gate\n", "gate\trun\tgate_rc\twall_s\n")
+    _must_die(
+        check_gate_wall,
+        "# empty\n",
+        "gate\trun\tgate_rc\twall_s\nkpasswd-gate\trun1\t0\t46\n",
+    )
+    ok_sleep = "sleep 2 # proto: ticket age\n"
+    check_sleep_ratchet({"renew-gate.sh": ok_sleep}, unit_sleep_count=5)
+    _must_die(
+        check_sleep_ratchet,
+        {"pad-gate.sh": "sleep 3\n"},
+        5,
+    )
+    _must_die(
+        check_sleep_ratchet,
+        {"renew-gate.sh": "sleep 40 # proto: ticket age\n"},
+        5,
+    )
+    _must_die(check_sleep_ratchet, {"renew-gate.sh": ok_sleep}, 9)
+    good_toml = (
+        "[jobs]\n"
+        "test = 300\nharness = 500\nmit-extra = 300\ndoc = 90\n"
+        "msrv = 120\naudit = 240\nledger-mit = 60\nmit-image = 90\n"
+        "[push]\nrun_wall = 540\n"
+    )
+    check_ci_budgets(
+        good_toml,
+        "--check-budget\nbudget_overruns\n",
+        ["ci.yml", "budget.yml"],
+    )
+    _must_die(
+        check_ci_budgets,
+        "[jobs]\ntest = 300\n[push]\nrun_wall = 540\n",
+        "--check-budget\nbudget_overruns\n",
+        ["ci.yml", "budget.yml"],
+    )
+    _must_die(
+        check_ci_budgets,
+        good_toml,
+        "no check flag\n",
+        ["ci.yml", "budget.yml"],
+    )
+    _must_die(
+        check_ci_budgets,
+        good_toml,
+        "--check-budget\nbudget_overruns\n",
+        ["ci.yml"],
+    )
+    good_docs = (
+        "Tier 1 test harness mit-extra msrv audit ledger-mit mit-image doc "
+        "ci-budget.toml 500\nTier 2 slo chaos soak\nTier 3 budget.yml\n"
+    )
+    check_testing_doc_budgets(good_docs, "see ci-budget.toml tier rule\n", good_toml)
+    _must_die(
+        check_testing_doc_budgets,
+        "no tiers here\n",
+        "see ci-budget.toml\n",
+        good_toml,
+    )
+    dst_ok = 'TRACE_DST="${KERBER_TRACE_DST:-${KERBER_SCRATCH}/traces}"\n'
+    check_trace_dst({"kdc-gate.sh": dst_ok, "client-gate.sh": dst_ok})
+    _must_die(
+        check_trace_dst,
+        {
+            "kdc-gate.sh": 'TRACE_DST="${KERBER_TRACE_DST:-$ROOT/tests/traces}"\n',
+            "client-gate.sh": dst_ok,
+        },
+    )
+    prod_ok = (
+        "jobs:\n"
+        "  mit-image:\n"
+        "    steps:\n"
+        "      - run: docker build -f harness/prod/Dockerfile -t prod .\n"
+        "        hashFiles('harness/prod/Dockerfile')\n"
+    )
+    check_prod_image_once(prod_ok)
+    _must_die(
+        check_prod_image_once,
+        "jobs:\n  mit-image:\n    steps:\n      - run: echo no prod\n",
+    )
+    _must_die(
+        check_prod_image_once,
+        "docker build -f harness/prod/Dockerfile\n"
+        "docker build -f harness/prod/Dockerfile\n"
+        "jobs:\n  mit-image:\n    steps:\n      - run: harness/prod/Dockerfile\n"
+        "hashFiles('harness/prod/Dockerfile')\n",
+    )
+    check_build_profile(
+        'debug = "line-tables-only"\nsplit-debuginfo = "unpacked"\n',
+        "fuse-ld=lld\n",
+        "apt-get install -y lld\n",
+    )
+    _must_die(
+        check_build_profile,
+        "debug = 2\nsplit-debuginfo = \"unpacked\"\n",
+        "fuse-ld=lld\n",
+        "apt-get install -y lld\n",
+    )
+    cache_ok = (
+        "jobs:\n"
+        "  test:\n"
+        "    steps:\n"
+        "      - uses: Swatinem/rust-cache@v2\n"
+        "        with:\n"
+        "          shared-key: kerber\n"
+        "      - run: cargo nextest run\n"
+    )
+    check_rust_cache_shared_key({"ci.yml": cache_ok})
+    _must_die(
+        check_rust_cache_shared_key,
+        {
+            "ci.yml": (
+                "jobs:\n"
+                "  test:\n"
+                "    steps:\n"
+                "      - run: cargo nextest run\n"
+            )
+        },
+    )
     check_kadmin_glob_lib("hist_shape() { cat; }\nalias_cells() { :; }\n")
     _must_die(check_kadmin_glob_lib, "glob_cells() { :; }\n")
     _must_die(check_kadmin_glob_lib, "hist_shape() { cat; }\n")
@@ -3690,6 +4056,11 @@ def main() -> None:
     check_peers_unavailable_convention()
     check_gate_common_sourced()
     check_trace_dst()
+    check_stock_boots_per_job()
+    check_gate_wall()
+    check_sleep_ratchet()
+    check_ci_budgets()
+    check_testing_doc_budgets()
     check_red_at_sha_inject()
     check_red_at_sha_overlay_order()
     check_red_at_sha_target_trap()
