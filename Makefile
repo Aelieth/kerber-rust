@@ -1,6 +1,6 @@
-# Local entry points. `make safety` is what the ci.yml `test` job's cargo
-# steps must match (fmt, clippy, nextest, doc) plus ci-policy.py.
-# W3 may add doctest / RUSTDOCFLAGS; W2 does not.
+# Local entry points. `make safety` is fmt → clippy → nextest → ci-policy
+# (the ci.yml `test` job). `make doc` is the sibling `doc` job. lld is
+# required (see .cargo/config.toml). W3 may add doctest / RUSTDOCFLAGS.
 
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 KRB5_CONFIG ?= $(ROOT)/harness/nextest-krb5.conf
@@ -9,7 +9,7 @@ GATE ?=
 
 .PHONY: safety fmt clippy test doc policy harness stop-harness gate snapshot checkpoint budget
 
-safety: fmt clippy test doc policy
+safety: fmt clippy test policy
 
 fmt:
 	cargo fmt --all -- --check

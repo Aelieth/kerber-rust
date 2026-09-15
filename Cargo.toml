@@ -84,6 +84,13 @@ struct_excessive_bools = "allow"
 similar_names = "allow"
 many_single_char_names = "allow"
 
+# W2-S1: the `test` job is link-bound (full debuginfo × ~190 binaries).
+# line-tables-only keeps nextest backtraces; split-debuginfo keeps the
+# linker from packing DWARF into every executable. [profile.test] inherits.
+[profile.dev]
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
+
 # M0: kdc nextest user 1319 s debug vs 115 s release. pbkdf2_hmac
 # monomorphises into krb5-crypto (ops.rs). [profile.test] inherits.
 [profile.dev.package.krb5-crypto]
