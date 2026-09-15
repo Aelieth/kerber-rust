@@ -1,7 +1,7 @@
 # Shared gate preamble. Source after `cd "$ROOT"` and after provenance.sh.
 # shellcheck shell=bash
 # Provides: log, die, unavailable, register_cleanup, wait_port, wait_listen,
-# wait_gone, wait_log, wait_port_in, wait_udp_in, wait_gone_in, wait_pid_gone, need_image,
+# wait_gone, wait_log, wait_port_in, wait_udp_in, wait_tcp_bound_in, wait_gone_in, wait_pid_gone, need_image,
 # need_bins, shell_container, kdc_start, kdc_restart, mit_kdc_restart,
 # stock_mit_kdc. One EXIT trap writes gate_wall_s= and runs registered
 # cleanups. Does not replace provenance's ERR. Host wait_port/wait_gone need a
@@ -128,14 +128,20 @@ wait_port_in() {
     return 1
 }
 
-# UDP proxies (kdc-error-proxy / kdc-padata-proxy) do not accept TCP.
 # Ready = the listen port is already bound inside the container.
-wait_udp_in() {
-    local ctn="${1:-$NAME}" port="${2:-88}" n="${3:-80}"
-    local i
+# Use wait_tcp_bound_in (not wait_port_in) for single-accept TCP proxies:
+# a connect probe would steal the only accept().
+wait_bound_in() {
+    local ctn="${1:-$NAME}" port="${2:-88}" n="${3:-80}" kind="${4:-udp}"
+    local sock i
+    case "$kind" in
+        tcp) sock="socket.SOCK_STREAM" ;;
+        udp) sock="socket.SOCK_DGRAM" ;;
+        *) return 1 ;;
+    esac
     for i in $(seq 1 "$n"); do
         if docker exec "$ctn" python3 -c "import socket,sys
-s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s=socket.socket(socket.AF_INET, $sock)
 try:
     s.bind(('127.0.0.1', int('$port')))
     sys.exit(1)
@@ -149,6 +155,9 @@ finally:
     done
     return 1
 }
+
+wait_udp_in() { wait_bound_in "${1:-$NAME}" "${2:-88}" "${3:-80}" udp; }
+wait_tcp_bound_in() { wait_bound_in "${1:-$NAME}" "${2:-88}" "${3:-80}" tcp; }
 
 wait_gone_in() {
     local ctn="${1:-$NAME}" port="${2:-88}" n="${3:-80}"

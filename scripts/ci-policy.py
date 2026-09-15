@@ -2263,6 +2263,7 @@ def check_gate_common_sourced() -> None:
         "gate_wall_s=",
         "wait_port_in",
         "wait_udp_in",
+        "wait_tcp_bound_in",
         "wait_gone_in",
         "wait_pid_gone",
     ):
@@ -2282,6 +2283,11 @@ def check_gate_common_sourced() -> None:
         check_gate_no_exit_trap(text, path.name)
         if path.name == "kadmin-gate.sh" and "kadmin-glob-cells.sh" not in text:
             _die("kadmin-gate.sh must source scripts/lib/kadmin-glob-cells.sh")
+        if path.name == "kadmin-gate.sh":
+            if re.search(r'wait_port_in\s+"\$NAME(_MIT)?"\s+1749', text):
+                _die("kadmin-gate.sh tamper proxy is single-accept; use wait_tcp_bound_in, not wait_port_in")
+            if "wait_tcp_bound_in" not in text:
+                _die("kadmin-gate.sh must wait_tcp_bound_in for the integrity tamper proxy")
     check_build_bins_examples()
 
 

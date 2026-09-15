@@ -664,7 +664,7 @@ if echo "$INT_LIST" | grep -qE 'count=0$'; then
 fi
 echo "==== RPCSEC_GSS integrity tampered checksum vs Rust kadmind ===="
 start_integ_tamper_proxy "$NAME"
-wait_port_in "$NAME" 1749 || die "tamper proxy did not listen"
+wait_tcp_bound_in "$NAME" 1749 || die "tamper proxy did not listen"
 INT_TAMPER="$(kadm5_integrity_list "$NAME" admin@KERBER.TEST adminpassword integrity /tmp/kadmin-krb5.conf 1749 2>&1 || true)"
 echo "$INT_TAMPER"
 if echo "$INT_TAMPER" | grep -qF 'list_code=0'; then
@@ -1792,7 +1792,7 @@ if echo "$MIT_INT_LIST" | grep -qE 'count=0$'; then
 fi
 echo "==== MIT RPCSEC_GSS integrity tampered checksum ===="
 start_integ_tamper_proxy "$NAME_MIT"
-wait_port_in "$NAME_MIT" 1749 || die "MIT tamper proxy did not listen"
+wait_tcp_bound_in "$NAME_MIT" 1749 || die "MIT tamper proxy did not listen"
 MIT_INT_TAMPER="$(kadm5_integrity_list "$NAME_MIT" admin/admin adminpassword integrity /etc/krb5.conf 1749 2>&1 || true)"
 echo "$MIT_INT_TAMPER"
 if echo "$MIT_INT_TAMPER" | grep -qF 'list_code=0'; then
