@@ -6,6 +6,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins krb5-kdc krb5-pac-extract krb5-forge-tgt krb5-kvno
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-capaths-gate"
@@ -14,27 +16,16 @@ export CORRELATION_ID
 XR_KEY="00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
 XR_PW="xrpassword"
 
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"capaths-transit-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
-
 if ! command -v docker >/dev/null 2>&1; then
     log "capaths.gate" "error" ',"error":"docker not available"'
     exit 1
 fi
 
-cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-pac-extract --bin krb5-forge-tgt
-cargo build -p krb5-client --bin krb5-kvno
-
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
-fi
+need_image
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
+register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-pac-extract" "$NAME":/tmp/krb5-pac-extract
@@ -214,25 +205,14 @@ start_mit() {
         "$NAME" sh -c "krb5kdc -n -r ${realm} >${log} 2>&1 & echo \$! >${pidf}"
 }
 
-wait_port() {
-    local port="$1"
-    local i
-    for i in $(seq 1 80); do
-        if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',${port}),0.3)" 2>/dev/null; then
-            return 0
-        fi
-        sleep 0.25
-    done
-    return 1
-}
 
 echo "==== MIT krb5kdc A/B/C ===="
 start_mit A.TEST /tmp/kdc-A.conf /tmp/mit-a.log /tmp/mit-a.pid
 start_mit B.TEST /tmp/kdc-B.conf /tmp/mit-b.log /tmp/mit-b.pid
 start_mit C.TEST /tmp/kdc-C.conf /tmp/mit-c.log /tmp/mit-c.pid
-wait_port 88
-wait_port 89
-wait_port 90 || {
+wait_port_in "$NAME" 88
+wait_port_in "$NAME" 89
+wait_port_in "$NAME" 90 || {
     echo "==== MIT KDC logs ===="
     docker exec "$NAME" sh -c 'cat /tmp/mit-a.log /tmp/mit-b.log /tmp/mit-c.log' || true
     log "capaths.gate" "error" ',"error":"MIT KDCs did not listen"'
@@ -668,7 +648,7 @@ docker exec \
     -e KRB5_CONFIG=/tmp/kdc-c-deny.conf \
     -e KRB5_KDC_PROFILE=/tmp/kdc-C.conf \
     "$NAME" sh -c "krb5kdc -n -r C.TEST >/tmp/mit-c-deny.log 2>&1 & echo \$! >/tmp/mit-c.pid"
-wait_port 90 || {
+wait_port_in "$NAME" 90 || {
     docker exec "$NAME" cat /tmp/mit-c-deny.log 2>/dev/null || true
     log "capaths.gate" "error" ',"error":"MIT deny C did not listen"'
     exit 1
@@ -706,7 +686,7 @@ docker exec \
     -e KRB5_CONFIG=/tmp/kdc-c-deny.conf \
     -e KRB5_KDC_PROFILE=/tmp/kdc-C-lax.conf \
     "$NAME" sh -c "krb5kdc -n -r C.TEST >/tmp/mit-c-lax.log 2>&1 & echo \$! >/tmp/mit-c.pid"
-wait_port 90 || {
+wait_port_in "$NAME" 90 || {
     docker exec "$NAME" cat /tmp/mit-c-lax.log 2>/dev/null || true
     log "capaths.gate" "error" ',"error":"MIT lax C did not listen"'
     exit 1
@@ -754,7 +734,7 @@ docker exec \
     -e KRB5_CONFIG=/tmp/client-capaths.conf \
     -e KRB5_KDC_PROFILE=/tmp/kdc-C-lax.conf \
     "$NAME" sh -c "krb5kdc -n -r C.TEST >/tmp/mit-c-skip-lax.log 2>&1 & echo \$! >/tmp/mit-c.pid"
-wait_port 90 || {
+wait_port_in "$NAME" 90 || {
     docker exec "$NAME" cat /tmp/mit-c-skip-lax.log 2>/dev/null || true
     log "capaths.gate" "error" ',"error":"MIT skip-lax C did not listen"'
     exit 1
@@ -823,23 +803,12 @@ start_c() {
         "$NAME" sh -c "/tmp/krb5-kdc --test-realm 127.0.0.1:90 >$log 2>&1 & echo \$! >/tmp/kdc-c.pid"
 }
 
-wait_listen() {
-    local log="$1"
-    local i
-    for i in $(seq 1 80); do
-        if docker exec "$NAME" grep -q '^listening ' "$log" 2>/dev/null; then
-            return 0
-        fi
-        sleep 0.25
-    done
-    return 1
-}
 
 start_ab
 start_c /tmp/kdc-c-allow.conf /tmp/kdc-c-allow.log
-wait_listen /tmp/kdc-a.log
-wait_listen /tmp/kdc-b.log
-wait_listen /tmp/kdc-c-allow.log
+wait_listen "$NAME" /tmp/kdc-a.log
+wait_listen "$NAME" /tmp/kdc-b.log
+wait_listen "$NAME" /tmp/kdc-c-allow.log
 echo "==== KDC A ===="
 docker exec "$NAME" cat /tmp/kdc-a.log 2>/dev/null || true
 echo "==== KDC B ===="
@@ -915,7 +884,7 @@ for _ in $(seq 1 40); do
 done
 [ "$ok" = 1 ]
 KRB5_TEST_DISALLOW_TIX=krbtgt/C.TEST@B.TEST start_c /tmp/kdc-c-allow.conf /tmp/kdc-c-disallow.log
-if ! wait_listen /tmp/kdc-c-disallow.log; then
+if ! wait_listen "$NAME" /tmp/kdc-c-disallow.log; then
     docker exec "$NAME" cat /tmp/kdc-c-disallow.log >&2 || true
     log "capaths.gate" "error" ',"error":"disallow KDC C did not listen"'
     exit 1
@@ -952,7 +921,7 @@ done
 [ "$ok" = 1 ]
 unset KRB5_TEST_DISALLOW_TIX
 start_c /tmp/kdc-c-allow.conf /tmp/kdc-c-allow.log
-if ! wait_listen /tmp/kdc-c-allow.log; then
+if ! wait_listen "$NAME" /tmp/kdc-c-allow.log; then
     docker exec "$NAME" cat /tmp/kdc-c-allow.log >&2 || true
     log "capaths.gate" "error" ',"error":"restored KDC C did not listen"'
     exit 1
@@ -970,9 +939,9 @@ docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
 
 echo "==== restart C without capaths (rejected path) ===="
 docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/kdc-c.pid)" 2>/dev/null || true'
-sleep 1
+wait_gone_in "$NAME" 90 || true
 start_c /tmp/kdc-c-deny.conf /tmp/kdc-c-deny.log
-if ! wait_listen /tmp/kdc-c-deny.log; then
+if ! wait_listen "$NAME" /tmp/kdc-c-deny.log; then
     echo "==== KDC C deny (did not listen) ===="
     docker exec "$NAME" cat /tmp/kdc-c-deny.log 2>/dev/null || true
     docker exec "$NAME" cat /tmp/kdc-c.pid 2>/dev/null || true
@@ -995,7 +964,7 @@ echo "$DENY" | grep -q 'KDC policy rejects request'
 
 echo "==== Rust C reject_bad_transit=false accepts without T ===="
 docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/kdc-c.pid)" 2>/dev/null || true'
-sleep 1
+wait_gone_in "$NAME" 90 || true
 docker exec \
     -e KRB5_CONFIG=/tmp/kdc-c-deny.conf \
     -e KRB5_KDC_PROFILE=/tmp/kdc-C-lax.conf \
@@ -1007,7 +976,7 @@ docker exec \
     -e KRB5_TEST_HOST=svc.c.test \
     -e KRB5_EXPORT_KEYTAB=/tmp/rust-c-lax.kt \
     "$NAME" sh -c '/tmp/krb5-kdc --test-realm 127.0.0.1:90 >/tmp/kdc-c-lax.log 2>&1 & echo $! >/tmp/kdc-c.pid'
-wait_listen /tmp/kdc-c-lax.log || {
+wait_listen "$NAME" /tmp/kdc-c-lax.log || {
     docker exec "$NAME" cat /tmp/kdc-c-lax.log 2>/dev/null || true
     log "capaths.gate" "error" ',"error":"Rust lax C did not listen"'
     exit 1
@@ -1028,7 +997,7 @@ echo "$RUST_LAX_DUMP" | grep -q '^transited_policy_checked=0$'
 
 echo "==== Rust C capaths + reject_bad_transit=false skip accepts without T ===="
 docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/kdc-c.pid)" 2>/dev/null || true'
-sleep 1
+wait_gone_in "$NAME" 90 || true
 docker exec \
     -e KRB5_CONFIG=/tmp/kdc-c-allow.conf \
     -e KRB5_KDC_PROFILE=/tmp/kdc-C-lax.conf \
@@ -1040,7 +1009,7 @@ docker exec \
     -e KRB5_TEST_HOST=svc.c.test \
     -e KRB5_EXPORT_KEYTAB=/tmp/rust-c-skip-lax.kt \
     "$NAME" sh -c '/tmp/krb5-kdc --test-realm 127.0.0.1:90 >/tmp/kdc-c-skip-lax.log 2>&1 & echo $! >/tmp/kdc-c.pid'
-wait_listen /tmp/kdc-c-skip-lax.log || {
+wait_listen "$NAME" /tmp/kdc-c-skip-lax.log || {
     docker exec "$NAME" cat /tmp/kdc-c-skip-lax.log 2>/dev/null || true
     log "capaths.gate" "error" ',"error":"Rust skip-lax C did not listen"'
     exit 1
@@ -1061,7 +1030,7 @@ for _ in $(seq 1 40); do
 done
 [ "$ok" = 1 ]
 start_mit C.TEST /tmp/kdc-C.conf /tmp/mit-c-s4u.log /tmp/mit-c.pid
-wait_port 90 || {
+wait_port_in "$NAME" 90 || {
     docker exec "$NAME" cat /tmp/mit-c-s4u.log 2>/dev/null || true
     log "capaths.gate" "error" ',"error":"MIT C for S4U did not listen"'
     exit 1
@@ -1103,7 +1072,7 @@ for _ in $(seq 1 40); do
 done
 [ "$ok" = 1 ]
 start_c /tmp/kdc-c-allow.conf /tmp/kdc-c-s4u.log
-wait_listen /tmp/kdc-c-s4u.log || {
+wait_listen "$NAME" /tmp/kdc-c-s4u.log || {
     docker exec "$NAME" cat /tmp/kdc-c-s4u.log 2>/dev/null || true
     log "capaths.gate" "error" ',"error":"Rust C for S4U cross did not listen"'
     exit 1
@@ -1145,7 +1114,7 @@ for _ in $(seq 1 40); do
 done
 [ "$ok" = 1 ]
 start_mit A.TEST /tmp/kdc-A.conf /tmp/mit-a-r16.log /tmp/mit-a.pid
-wait_port 88 || {
+wait_port_in "$NAME" 88 || {
     docker exec "$NAME" cat /tmp/mit-a-r16.log 2>/dev/null || true
     log "capaths.gate" "error" ',"error":"MIT A for R16 RENEW did not listen"'
     exit 1
@@ -1204,7 +1173,7 @@ docker exec -d \
     -e KRB5_TEST_HOST=svc.a.test \
     -e KRB5_EXPORT_KRBTGT_KEYTAB=/tmp/rust-a-krbtgt.kt \
     "$NAME" sh -c '/tmp/krb5-kdc --test-realm 127.0.0.1:88 >/tmp/kdc-a-r16.log 2>&1'
-if ! wait_listen /tmp/kdc-a-r16.log; then
+if ! wait_listen "$NAME" /tmp/kdc-a-r16.log; then
     docker exec "$NAME" cat /tmp/kdc-a-r16.log >&2 || true
     log "capaths.gate" "error" ',"error":"Rust A for R16 RENEW did not listen"'
     exit 1
@@ -1286,7 +1255,7 @@ for _ in $(seq 1 40); do
 done
 [ "$ok" = 1 ]
 start_mit C.TEST /tmp/kdc-C.conf /tmp/mit-c-lineage-u2u.log /tmp/mit-c.pid
-wait_port 90 || {
+wait_port_in "$NAME" 90 || {
     docker exec "$NAME" cat /tmp/mit-c-lineage-u2u.log 2>/dev/null || true
     log "capaths.gate" "error" ',"error":"MIT C for lineage+U2U did not listen"'
     exit 1
@@ -1309,7 +1278,7 @@ for _ in $(seq 1 40); do
 done
 [ "$ok" = 1 ]
 start_c /tmp/kdc-c-allow.conf /tmp/kdc-c-lineage-u2u.log
-wait_listen /tmp/kdc-c-lineage-u2u.log || {
+wait_listen "$NAME" /tmp/kdc-c-lineage-u2u.log || {
     docker exec "$NAME" cat /tmp/kdc-c-lineage-u2u.log 2>/dev/null || true
     log "capaths.gate" "error" ',"error":"Rust C for lineage+U2U did not listen"'
     exit 1
@@ -1336,19 +1305,6 @@ for p in /proc/[0-9]*; do
 done'
 }
 
-wait_port_free() {
-    local port="$1"
-    local ok=0
-    for _ in $(seq 1 40); do
-        if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',${port}),0.15)" 2>/dev/null; then
-            sleep 0.2
-            continue
-        fi
-        ok=1
-        break
-    done
-    [ "$ok" = 1 ]
-}
 
 expect_host_referral() {
     local tag="$1"
@@ -1381,23 +1337,23 @@ expect_alternate_tgs() {
 
 echo "==== MIT kvno host-based referral and alternate TGS ===="
 kill_named krb5-kdc --test-realm
-wait_port_free 88
-wait_port_free 89
-wait_port_free 90
+wait_gone_in "$NAME" 88
+wait_gone_in "$NAME" 89
+wait_gone_in "$NAME" 90
 start_mit A.TEST /tmp/kdc-A.conf /tmp/mit-a-ref.log /tmp/mit-a.pid
 start_mit B.TEST /tmp/kdc-B.conf /tmp/mit-b-ref.log /tmp/mit-b.pid
 start_mit C.TEST /tmp/kdc-C.conf /tmp/mit-c-ref.log /tmp/mit-c.pid
-wait_port 88 || {
+wait_port_in "$NAME" 88 || {
     docker exec "$NAME" cat /tmp/mit-a-ref.log 2>/dev/null || true
     log "capaths.gate" "error" ',"error":"MIT A for referral did not listen"'
     exit 1
 }
-wait_port 89 || {
+wait_port_in "$NAME" 89 || {
     docker exec "$NAME" cat /tmp/mit-b-ref.log 2>/dev/null || true
     log "capaths.gate" "error" ',"error":"MIT B for referral did not listen"'
     exit 1
 }
-wait_port 90 || {
+wait_port_in "$NAME" 90 || {
     docker exec "$NAME" cat /tmp/mit-c-ref.log 2>/dev/null || true
     log "capaths.gate" "error" ',"error":"MIT C for referral did not listen"'
     exit 1
@@ -1407,25 +1363,25 @@ expect_alternate_tgs MIT /tmp/krb5cc_mit_alt
 docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/mit-a.pid)" 2>/dev/null || true'
 docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/mit-b.pid)" 2>/dev/null || true'
 docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/mit-c.pid)" 2>/dev/null || true'
-wait_port_free 88
-wait_port_free 89
-wait_port_free 90
+wait_gone_in "$NAME" 88
+wait_gone_in "$NAME" 89
+wait_gone_in "$NAME" 90
 
 echo "==== MIT kvno vs Rust KDCs host-based referral and alternate TGS ===="
 docker exec "$NAME" sh -c 'rm -f /tmp/kdc-a.log /tmp/kdc-b.log'
 start_ab
 start_c /tmp/kdc-c-allow.conf /tmp/kdc-c-ref.log
-wait_listen /tmp/kdc-a.log || {
+wait_listen "$NAME" /tmp/kdc-a.log || {
     docker exec "$NAME" cat /tmp/kdc-a.log 2>/dev/null || true
     log "capaths.gate" "error" ',"error":"Rust A for referral did not listen"'
     exit 1
 }
-wait_listen /tmp/kdc-b.log || {
+wait_listen "$NAME" /tmp/kdc-b.log || {
     docker exec "$NAME" cat /tmp/kdc-b.log 2>/dev/null || true
     log "capaths.gate" "error" ',"error":"Rust B for referral did not listen"'
     exit 1
 }
-wait_listen /tmp/kdc-c-ref.log || {
+wait_listen "$NAME" /tmp/kdc-c-ref.log || {
     docker exec "$NAME" cat /tmp/kdc-c-ref.log 2>/dev/null || true
     log "capaths.gate" "error" ',"error":"Rust C for referral did not listen"'
     exit 1

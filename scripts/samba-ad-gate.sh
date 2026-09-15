@@ -8,28 +8,13 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
 
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-samba-ad-gate}"
 mkdir -p "$SCRATCH"
 UNAVAIL="$SCRATCH/samba-ad-gate-unavailable.log"
-
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"samba-ad-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
-
-unavailable() {
-    {
-        echo "date=$(date -Iseconds)"
-        echo "host /etc/krb5.conf must stay TESTLABBY.LOCAL"
-        echo "$1"
-        docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null || true
-    } | tee "$UNAVAIL" >&2
-    log "samba.ad.gate" "error" ",\"error\":\"unavailable\""
-    exit 2
-}
 
 if ! command -v docker >/dev/null 2>&1; then
     unavailable "docker not available"
@@ -48,11 +33,10 @@ fi
 
 NAME="kerber-rust-samba-ad-gate"
 docker rm -f "$NAME" >/dev/null 2>&1 || true
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
 
 set +e
 docker run -d --name "$NAME" --hostname dc1 "$IMAGE" >"$SCRATCH/samba-ad-run.err" 2>&1
+register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
 run_rc=$?
 set -e
 if [ "$run_rc" -ne 0 ]; then

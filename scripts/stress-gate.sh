@@ -8,6 +8,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins loadgen krb5-kdc krb5-kdb krb5-kadmind krb5-kadmin-local krb5-kpasswd krb5-kprop krb5-kpropd
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/prod-realm-common.sh"
 
@@ -23,32 +25,10 @@ DEGRADE_FACTOR="${KERBER_SLO_DEGRADE_FACTOR:-2.5}"
 export KERBER_LOAD_WORKERS="${KERBER_LOAD_WORKERS:-8}"
 export KERBER_LOAD_ITERS="${KERBER_LOAD_ITERS:-8}"
 
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"stress-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
-die() {
-    log "stress.gate" "error" ",\"error\":\"$1\""
-    echo "FATAL: $1" >&2
-    exit 1
-}
-unavailable() {
-    log "stress.gate" "error" ",\"error\":\"$1\""
-    echo "$1" | tee "$SCRATCH/stress-gate-unavailable.log"
-    exit 2
-}
-cleanup() {
-    "$ROOT/harness/prod/env-down.sh" >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
-
 command -v docker >/dev/null 2>&1 || unavailable "docker not available"
 
 python3 "$ROOT/scripts/lib/analyze-kdc-slo.py" --self-test \
     || die "SLO analyzer self-test failed"
-
-cargo build -p krb5-kdc -p krb5-admin --bins -q
-cargo build -p krb5-client --example loadgen -q
 
 echo "==== env-up $REALM ===="
 "$ROOT/harness/prod/env-up.sh" | tee "$OUT/env-up.log"
@@ -71,7 +51,7 @@ echo "==== wire loadgen workers=${KERBER_LOAD_WORKERS} iters=${KERBER_LOAD_ITERS
 MID_RC_FILE="$OUT/mid.rc"
 echo 1 >"$MID_RC_FILE"
 (
-    sleep 0.4
+    sleep 0.4 # proto: mid-sample delay
     if ! prod_mit_sample mid; then
         echo 1 >"$MID_RC_FILE"
         exit 1

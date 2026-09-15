@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-rd-safe-oracle"
@@ -13,15 +14,7 @@ MIT_LIBS="-lkrb5 -lk5crypto -lcom_err"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
 
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"rd-safe-oracle-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
-
-if ! command -v docker >/dev/null 2>&1; then
-    log "rd.safe.oracle" "error" ',"error":"docker not available"'
-    exit 2
-fi
+need_image
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     log "rd.safe.oracle" "error" ',"error":"MIT image unavailable"'
     exit 2
@@ -29,8 +22,7 @@ fi
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 180 >/dev/null
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
+register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
 
 docker cp "$ROOT/scripts/rd-safe-oracle.c" "$NAME":/tmp/rd-safe-oracle.c
 docker exec "$NAME" sh -c "gcc -O1 -o /tmp/rd-safe-oracle /tmp/rd-safe-oracle.c $MIT_LIBS"

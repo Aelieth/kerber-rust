@@ -4854,7 +4854,7 @@ mod tests {
         assert!(crate::issue_as(&store, &bad_as()).is_err());
         let locked = crate::issue_as(&store, &bad_as()).unwrap_err();
         assert!(revoked(&locked), "max_fail 1 must lock on the next AS");
-        std::thread::sleep(std::time::Duration::from_secs(2));
+        std::thread::sleep(std::time::Duration::from_millis(1100));
         crate::issue_as(&store, &good)
             .expect("elapsed lockout duration with interval=0 must unlock");
     }
@@ -4900,7 +4900,7 @@ mod tests {
         };
         let revoked = |e: &Error| matches!(e, Error::Protocol { code, .. } if *code == krb5_types::err::CLIENT_REVOKED);
         assert!(crate::issue_as(&store, &bad_as()).is_err());
-        std::thread::sleep(std::time::Duration::from_secs(2));
+        std::thread::sleep(std::time::Duration::from_millis(1100));
         let second = crate::issue_as(&store, &bad_as()).unwrap_err();
         assert!(
             !revoked(&second),

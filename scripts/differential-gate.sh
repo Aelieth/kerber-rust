@@ -6,6 +6,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins krb5-kdc krb5-kdb krb5-kadmin-local krb5-kvno diffsend
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-differential-gate"
@@ -16,33 +18,12 @@ SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-differential-gate}"
 OUT="$SCRATCH/differential-gate"
 mkdir -p "$OUT"
 
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"differential-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
-
-die() {
-    log "differential.gate" "error" ",\"error\":\"$1\""
-    echo "FATAL: $1" >&2
-    exit 1
-}
-
-unavailable() {
-    log "differential.gate" "error" ",\"error\":\"$1\""
-    echo "$1" | tee "$SCRATCH/differential-unavailable.log"
-    exit 2
-}
-
 if ! command -v docker >/dev/null 2>&1; then
     unavailable "docker not available"
 fi
 if [ ! -f "$GOLDEN" ]; then
     die "missing golden dump $GOLDEN"
 fi
-
-cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-kdb -q
-cargo build -p krb5-admin --bin krb5-kadmin-local -p krb5-client --bin krb5-kvno -q
-cargo build -p krb5-protocol --example diffsend --features diff -q
 
 need_image=0
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
@@ -62,8 +43,7 @@ fi
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
+register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb
@@ -205,7 +185,10 @@ docker exec "$NAME" kadmin.local -q 'setstr expiredsvc require_auth pkinit'
 MITHINT="$(docker exec "$NAME" kadmin.local -q 'addprinc -randkey -e aes128-cts-hmac-sha1-96:normal +requires_preauth hintu')"
 echo "$MITHINT"
 grep -qi 'created' <<<"$MITHINT" || die "MIT addprinc hintu failed"
-STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc -n >/tmp/mit-kdc.log 2>&1 & sleep 0.5; cat /tmp/mit-kdc.log' 2>&1 || true)"
+docker exec "$NAME" sh -c ': >/tmp/mit-kdc.log'
+docker exec -d "$NAME" sh -c 'krb5kdc -n >/tmp/mit-kdc.log 2>&1'
+wait_log "$NAME" /tmp/mit-kdc.log "setting up network" || die "MIT krb5kdc did not start"
+STARTLOG="$(docker exec "$NAME" cat /tmp/mit-kdc.log 2>/dev/null || true)"
 echo "$STARTLOG"
 ok=0
 for _ in $(seq 1 40); do

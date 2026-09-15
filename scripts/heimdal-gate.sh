@@ -8,6 +8,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins krb5-kdc krb5-kinit
 
 IMAGE="${HEIMDAL_IMAGE:-kerber-rust-heimdal-kdc:latest}"
 NAME_H2R="kerber-rust-heimdal-h2r"
@@ -20,28 +22,6 @@ export CORRELATION_ID
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-heimdal-gate}"
 mkdir -p "$SCRATCH"
 UNAVAIL="$SCRATCH/heimdal-gate-unavailable.log"
-
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"heimdal-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
-
-die() {
-    log "heimdal.gate" "error" ",\"error\":\"$1\""
-    echo "FATAL: $1" >&2
-    exit 1
-}
-
-unavailable() {
-    {
-        echo "date=$(date -Iseconds)"
-        echo "host /etc/krb5.conf must stay TESTLABBY.LOCAL"
-        echo "$1"
-        docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null || true
-    } | tee "$UNAVAIL" >&2
-    log "heimdal.gate" "error" ",\"error\":\"unavailable\""
-    exit 2
-}
 
 assert_klist() {
     local label="$1"
@@ -81,11 +61,7 @@ fi
 
 echo "host /etc/krb5.conf must stay TESTLABBY.LOCAL"
 
-cargo build -p krb5-kdc --bin krb5-kdc -p krb5-client --bin krb5-kinit
-
 docker rm -f "$NAME_H2R" "$NAME_R2H" >/dev/null 2>&1 || true
-cleanup() { docker rm -f "$NAME_H2R" "$NAME_R2H" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
 
 echo "==== Heimdal client vs Rust KDC ===="
 docker run -d --name "$NAME_H2R" --entrypoint sleep "$IMAGE" 3600 >/dev/null \

@@ -5,16 +5,13 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins krb5-kinit
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-kinit-spake-gate"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
-
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"rust-kinit-spake-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
 
 assert_no_error_log() {
     if echo "$1" | grep -qF '"level":"ERROR"'; then
@@ -29,17 +26,11 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
-cargo build -p krb5-client --bin krb5-kinit
-
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
-fi
+need_image
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" "$IMAGE" >/dev/null
-
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
+register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
 
 ok=0
 for _ in $(seq 1 90); do
@@ -65,7 +56,7 @@ docker exec "$NAME" sh -c 'grep -q spake_preauth_groups /etc/krb5kdc/kdc.conf ||
 docker exec "$NAME" sh -c 'grep -q spake_preauth_groups /etc/krb5.conf || sed -i "/\[libdefaults\]/a\\    spake_preauth_groups = P-256\n    preferred_preauth_types = 151" /etc/krb5.conf'
 docker exec "$NAME" kadmin.local -q 'modprinc +requires_preauth user'
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
-sleep 0.3
+wait_pid_gone "$NAME" krb5kdc || true
 docker exec -d \
     -e KRB5_TRACE=/tmp/mit-kdc.trace \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
@@ -91,7 +82,7 @@ docker exec "$NAME" chmod +x /tmp/krb5-kinit
 PROXY=1888
 docker cp "$ROOT/scripts/lib/kdc-error-proxy.py" "$NAME":/tmp/kdc-error-proxy.py
 docker exec -d "$NAME" python3 /tmp/kdc-error-proxy.py "$PROXY" 127.0.0.1 88 /tmp/spake-91.txt
-sleep 0.2
+wait_udp_in "$NAME" "$PROXY" || die "proxy $PROXY did not listen"
 docker exec "$NAME" sh -c "cat >/tmp/spake-proxy-krb5.conf <<EOF
 [libdefaults]
     default_realm = KERBER.TEST

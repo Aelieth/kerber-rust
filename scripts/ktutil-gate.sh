@@ -5,32 +5,24 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins krb5-ktutil
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-ktutil-gate"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
 
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"ktutil-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
-
 if ! command -v docker >/dev/null 2>&1; then
     log "ktutil.gate" "error" ',"error":"docker not available"'
     exit 1
 fi
 
-cargo build -p krb5-admin --bin krb5-ktutil
-
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
-fi
+need_image
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" "$IMAGE" >/dev/null
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
+register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
 
 ok=0
 for _ in $(seq 1 90); do

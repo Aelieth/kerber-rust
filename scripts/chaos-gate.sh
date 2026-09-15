@@ -7,6 +7,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins loadgen krb5-kdc krb5-kdb krb5-kadmind krb5-kadmin-local krb5-kpasswd krb5-kprop krb5-kpropd
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/prod-realm-common.sh"
 
@@ -20,28 +22,7 @@ export KERBER_LOAD_WORKERS="${KERBER_LOAD_WORKERS:-4}"
 export KERBER_LOAD_ITERS="${KERBER_LOAD_ITERS:-4}"
 MEM_CAP="${KERBER_CHAOS_MEM:-128m}"
 
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"chaos-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
-die() {
-    log "chaos.gate" "error" ",\"error\":\"$1\""
-    echo "FATAL: $1" >&2
-    exit 1
-}
-unavailable() {
-    log "chaos.gate" "error" ",\"error\":\"$1\""
-    echo "$1" | tee "$SCRATCH/chaos-gate-unavailable.log"
-    exit 2
-}
-cleanup() {
-    "$ROOT/harness/prod/env-down.sh" >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
-
 command -v docker >/dev/null 2>&1 || unavailable "docker not available"
-cargo build -p krb5-kdc -p krb5-admin --bins -q
-cargo build -p krb5-client --example loadgen -q
 
 echo "==== env-up $REALM ===="
 "$ROOT/harness/prod/env-up.sh" | tee "$OUT/env-up.log"
@@ -112,7 +93,7 @@ export KERBER_LOAD_SECONDS=8
 export KERBER_LOAD_ITERS=999
 prod_loadgen "$PIP" >"$OUT/loadgen-failover.log" 2>&1 &
 LG_PID=$!
-sleep 1.5
+sleep 1.5 # proto: loadgen window
 docker kill "$PRIMARY" >/dev/null
 RUNNING="$(docker inspect -f '{{.State.Running}}' "$PRIMARY" 2>/dev/null || echo missing)"
 echo "primary_running=$RUNNING" | tee "$OUT/primary-after-kill.txt"

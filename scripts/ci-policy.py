@@ -2237,6 +2237,99 @@ def check_env_read() -> None:
                     _die(f"{wf_path.name} sets {name} but no script/test reads it")
 
 
+def check_trace_dst() -> None:
+    """Gate captures must not default into tests/traces (S5)."""
+    for name in ("kdc-gate.sh", "client-gate.sh"):
+        path = SCRIPTS / name
+        text = path.read_text(encoding="utf-8")
+        if 'KERBER_TRACE_DST:-$ROOT/tests/traces' in text:
+            _die(f"{name} must not default TRACE_DST to tests/traces")
+        if "KERBER_SCRATCH" not in text or "TRACE_DST" not in text:
+            _die(f"{name} must default TRACE_DST under KERBER_SCRATCH")
+
+
+def check_gate_common_sourced() -> None:
+    """Every gate sources gate-common.sh; no private log()/cleanup(); no cargo build."""
+    common = SCRIPTS / "lib" / "gate-common.sh"
+    if not common.is_file():
+        _die("missing scripts/lib/gate-common.sh")
+    ctext = common.read_text(encoding="utf-8")
+    for needle in (
+        "log()",
+        "die()",
+        "unavailable()",
+        "need_bins",
+        "need_image",
+        "gate_wall_s=",
+        "wait_port_in",
+        "wait_udp_in",
+        "wait_tcp_bound_in",
+        "wait_gone_in",
+        "wait_pid_gone",
+    ):
+        if needle not in ctext:
+            _die(f"gate-common.sh missing {needle}")
+    for path in sorted(SCRIPTS.glob("*-gate.sh")):
+        text = path.read_text(encoding="utf-8")
+        if "scripts/lib/gate-common.sh" not in text:
+            _die(f"{path.name} must source scripts/lib/gate-common.sh")
+        if re.search(r"^log\(\)", text, re.M):
+            _die(f"{path.name} still defines a private log()")
+        if re.search(r"^cleanup\(\)", text, re.M):
+            _die(f"{path.name} still defines a private cleanup()")
+        if re.search(r"\bcargo\s+build\b", text):
+            _die(f"{path.name} must not run cargo build (use need_bins)")
+        check_gate_cargo_leftover(text, path.name)
+        check_gate_no_exit_trap(text, path.name)
+        if path.name == "kadmin-gate.sh" and "kadmin-glob-cells.sh" not in text:
+            _die("kadmin-gate.sh must source scripts/lib/kadmin-glob-cells.sh")
+        if path.name == "kadmin-gate.sh":
+            if re.search(r'wait_port_in\s+"\$NAME(_MIT)?"\s+1749', text):
+                _die("kadmin-gate.sh tamper proxy is single-accept; use wait_tcp_bound_in, not wait_port_in")
+            if "wait_tcp_bound_in" not in text:
+                _die("kadmin-gate.sh must wait_tcp_bound_in for the integrity tamper proxy")
+        if path.name == "kcm-gate.sh":
+            check_kcm_need_image(text)
+        if re.search(r"krb5kdc -n >/tmp/mit-kdc.log 2>&1 & cat", text):
+            _die(f"{path.name} must wait_log for krb5kdc -n, not cat the log immediately")
+    check_build_bins_examples()
+
+
+def check_kcm_need_image(text: str, name: str = "kcm-gate.sh") -> None:
+    """need_image inspects $IMAGE; the Fedora KCM tag is not the MIT image."""
+    if re.search(r'^\s*IMAGE=.*sssd-kcm', text, re.M) and "need_image" in text:
+        _die(f"{name} must not set IMAGE to sssd-kcm before need_image (KERBER_SKIP_MIT_BUILD)")
+    if "KCM_IMAGE" not in text:
+        _die(f"{name} must use KCM_IMAGE for the Fedora sssd-kcm tag")
+
+
+def check_gate_no_exit_trap(text: str, name: str = "gate.sh") -> None:
+    """Gates must not replace gate-common's EXIT trap (register_cleanup)."""
+    if re.search(r"^\s*trap\b.*\bEXIT\b", text, re.M):
+        _die(f"{name} must not set an EXIT trap (use register_cleanup)")
+
+
+def check_build_bins_examples() -> None:
+    """Job-level build-bins.sh must produce every example the gates docker-cp."""
+    path = SCRIPTS / "lib" / "build-bins.sh"
+    if not path.is_file():
+        _die("missing scripts/lib/build-bins.sh")
+    text = path.read_text(encoding="utf-8")
+    for ex in ("ccache-probe", "diffsend", "kprop-expired-apreq", "loadgen"):
+        if ex not in text:
+            _die(f"build-bins.sh must build example {ex}")
+
+
+def check_gate_cargo_leftover(text: str, name: str = "gate.sh") -> None:
+    """S2 converter residue: a cargo-build argument line with no cargo build."""
+    if re.search(r"^\s+-p\s+krb5-", text, re.M):
+        _die(f"{name} still has leftover cargo-build argument lines")
+
+
+def check_no_gate_cargo_build() -> None:
+    check_gate_common_sourced()
+
+
 def check_peers_unavailable_convention() -> None:
     """peers.yml maps gate exit 2 to step success; live kinit/kvno failures are exit 1."""
     wrapper = SCRIPTS / "lib" / "run-peer-step.sh"
@@ -3077,6 +3170,27 @@ jobs:
         "docker exec n sh -c 'true' >/tmp/host-out\n",
         "docker-host-redir-tmp-gate.sh",
     )
+    check_gate_cargo_leftover("need_bins krb5-kdc krb5-kvno\n", "ok-bins-gate.sh")
+    _must_die(
+        check_gate_cargo_leftover,
+        "    -p krb5-client --bin krb5-kvno\n",
+        "leftover-cargo-gate.sh",
+    )
+    check_gate_no_exit_trap("register_cleanup 'docker rm -f \"$NAME\"'\n", "ok-trap-gate.sh")
+    _must_die(
+        check_gate_no_exit_trap,
+        "trap 'cleanup; mit_cleanup' EXIT\n",
+        "exit-trap-gate.sh",
+    )
+    check_kcm_need_image(
+        'KCM_IMAGE="${KCM_IMAGE:-kerber-rust-sssd-kcm:f43}"\nneed_image\n',
+        "ok-kcm-gate.sh",
+    )
+    _must_die(
+        check_kcm_need_image,
+        'IMAGE="${KCM_IMAGE:-kerber-rust-sssd-kcm:f43}"\nneed_image\n',
+        "bad-kcm-gate.sh",
+    )
     check_no_host_tmp_writes(
         "docker exec n sh -c 'kill /tmp/krb5-kdc; : >/tmp/in-container'\n"
         "docker exec -d n \\\n"
@@ -3490,6 +3604,8 @@ def main() -> None:
     check_build_profile()
     check_env_read()
     check_peers_unavailable_convention()
+    check_gate_common_sourced()
+    check_trace_dst()
     check_red_at_sha_inject()
     check_red_at_sha_overlay_order()
     check_red_at_sha_target_trap()

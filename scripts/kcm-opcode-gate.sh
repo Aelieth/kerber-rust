@@ -6,23 +6,16 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-kcm-opcode}"
 mkdir -p "$SCRATCH"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"kcm-opcode-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
 
 F43_DIGEST="sha256:96b2a05f8ce3111e10c236abe8055b01500880d95ee7c2f92fa30847fdbb667b"
 F42_DIGEST="sha256:e78cd1a688cd079c23864f289a89a49a3f4ad66d817864e325e1d058310ee95c"
 
-if ! command -v docker >/dev/null 2>&1; then
-    echo "docker not available" | tee "$SCRATCH/kcm-opcode-unavailable.log"
-    log "kcm.opcode.gate" "unavailable" ',"error":"docker not available"'
-    exit 2
-fi
+need_image
 
 probe_one() {
     local tag="$1" fedora="$2" digest="$3" out="$4"

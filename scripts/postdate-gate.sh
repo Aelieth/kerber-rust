@@ -6,6 +6,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins krb5-kdc krb5-kadmind
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-postdate-gate"
@@ -14,32 +16,11 @@ export CORRELATION_ID
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-postdate-gate}"
 mkdir -p "$SCRATCH"
 
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"postdate-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
-
-if ! command -v docker >/dev/null 2>&1; then
-    log "postdate.gate" "error" ',"error":"docker not available"'
-    echo "docker not available" >"$SCRATCH/postdate-unavailable.log"
-    exit 2
-fi
-
-cargo build -p krb5-kdc --bin krb5-kdc -p krb5-admin --bin krb5-kadmind
-
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
-fi
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    log "postdate.gate" "error" ',"error":"MIT image unavailable"'
-    echo "MIT image unavailable" >"$SCRATCH/postdate-unavailable.log"
-    exit 2
-fi
+need_image
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
+register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmind" "$NAME":/tmp/krb5-kadmind
@@ -113,7 +94,7 @@ echo "==== addprinc pduser ===="
 kadmin_q 'addprinc -pw pd-secret pduser'
 
 echo "==== MIT kinit -s +20s ===="
-START="$(docker exec "$NAME" date -u -d '+20 seconds' '+%Y%m%d%H%M%S')"
+START="$(docker exec "$NAME" date -u -d '+2 seconds' '+%Y%m%d%H%M%S')"
 echo "start=$START"
 docker exec -e KRB5_CONFIG=/tmp/postdate-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
 if ! docker exec -e KRB5_CONFIG=/tmp/postdate-krb5.conf \
@@ -140,7 +121,7 @@ if echo "$NYV" | grep -q 'kvno ='; then
 fi
 
 echo "==== wait for starttime then kinit -v ===="
-sleep 21
+sleep 3 # proto: postdate starttime
 if ! docker exec -e KRB5_CONFIG=/tmp/postdate-krb5.conf "$NAME" kinit -v; then
     docker exec "$NAME" cat /tmp/kdc.log >&2 || true
     log "postdate.gate" "error" ',"error":"kinit -v failed"'

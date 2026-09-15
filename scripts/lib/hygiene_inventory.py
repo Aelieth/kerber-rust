@@ -114,6 +114,8 @@ def _in_poll_loop(lines: list[str], idx: int) -> bool:
     for j in range(idx, max(-1, idx - 30), -1):
         if re.search(r"for\s+\S+\s+in\s+\$\(seq", lines[j]):
             return True
+        if re.search(r"^\s*while\b", lines[j]):
+            return True
         if re.match(r"^\s*done\b", lines[j]):
             return False
     return False

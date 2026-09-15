@@ -6,6 +6,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins krb5-kdc krb5-kadmind
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-policy-gate"
@@ -14,32 +16,11 @@ export CORRELATION_ID
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-policy-gate}"
 mkdir -p "$SCRATCH"
 
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"policy-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
-
-if ! command -v docker >/dev/null 2>&1; then
-    log "policy.gate" "error" ',"error":"docker not available"'
-    echo "docker not available" >"$SCRATCH/policy-unavailable.log"
-    exit 2
-fi
-
-cargo build -p krb5-kdc --bin krb5-kdc -p krb5-admin --bin krb5-kadmind
-
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
-fi
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    log "policy.gate" "error" ',"error":"MIT image unavailable"'
-    echo "MIT image unavailable" >"$SCRATCH/policy-unavailable.log"
-    exit 2
-fi
+need_image
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
+register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmind" "$NAME":/tmp/krb5-kadmind
@@ -256,7 +237,7 @@ D2="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
     "$NAME" sh -c 'printf "wrong-password\n" | kinit duruser@KERBER.TEST' 2>&1 || true)"
 echo "$D2"
 echo "$D2" | grep -qiE 'revoked|CLIENT_REVOKED'
-sleep 4
+sleep 4 # proto: lockoutduration
 if ! docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
     "$NAME" sh -c 'printf "Time-sec1\n" | kinit duruser@KERBER.TEST'; then
     log "policy.gate" "error" ',"error":"duration-only elapsed lockout must allow kinit"'
@@ -275,7 +256,7 @@ kadmin_q 'addprinc -policy intpol -pw Time-sec1 intuser' >/dev/null
 I1="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
     "$NAME" sh -c 'printf "wrong-password\n" | kinit intuser@KERBER.TEST' 2>&1 || true)"
 echo "$I1"
-sleep 3
+sleep 3 # proto: failurecountinterval
 I2="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
     "$NAME" sh -c 'printf "wrong-password\n" | kinit intuser@KERBER.TEST' 2>&1 || true)"
 echo "$I2"
@@ -378,7 +359,7 @@ echo "$MR2" | grep -F 'Cannot reuse password while changing password for "histus
 DUMPH="$(docker exec "$NAME" kdb5_util dump /tmp/mit-hist.dump 2>&1 || true)"
 echo "$DUMPH"
 docker exec "$NAME" grep -E $'^princ\t[0-9]+\t[0-9]+\t[0-9]+\t[0-9]+\t[0-9]+\thistuser@KERBER.TEST\t' /tmp/mit-hist.dump | grep -q $'\t3\t'
-STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc; sleep 0.4' 2>&1 || true)"
+STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc' 2>&1 || true)"
 echo "$STARTLOG"
 ok=0
 for _ in $(seq 1 40); do

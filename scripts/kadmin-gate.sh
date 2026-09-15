@@ -7,7 +7,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
-. "$ROOT/scripts/lib/provenance.sh"; . "$ROOT/scripts/lib/kadmin-glob-cells.sh"
+. "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-glob-cells.sh"
+need_bins krb5-kdc krb5-kdb krb5-kadmind krb5-kadmin-local
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-kadmin-gate"
@@ -18,11 +21,6 @@ CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
 export CORRELATION_ID
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-kadmin-gate}"
 mkdir -p "$SCRATCH"
-
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"kadmin-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
 
 compile_kadm5_changepw() {
     local ctn=$1
@@ -488,16 +486,11 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
-cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-kdb -p krb5-admin --bin krb5-kadmind --bin krb5-kadmin-local
-
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
-fi
+need_image
 
 docker rm -f "$NAME" "$NAME_MIT" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
-cleanup() { docker rm -f "$NAME" "$NAME_MIT" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
+register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb
@@ -671,7 +664,7 @@ if echo "$INT_LIST" | grep -qE 'count=0$'; then
 fi
 echo "==== RPCSEC_GSS integrity tampered checksum vs Rust kadmind ===="
 start_integ_tamper_proxy "$NAME"
-sleep 0.3
+wait_tcp_bound_in "$NAME" 1749 || die "tamper proxy did not listen"
 INT_TAMPER="$(kadm5_integrity_list "$NAME" admin@KERBER.TEST adminpassword integrity /tmp/kadmin-krb5.conf 1749 2>&1 || true)"
 echo "$INT_TAMPER"
 if echo "$INT_TAMPER" | grep -qF 'list_code=0'; then
@@ -689,7 +682,7 @@ ADD="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf -e KRB5_TRACE=/dev/stder
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw extra-secret extra' 2>&1 || true)"
 echo "$ADD"
 echo "==== kadmind log ===="
-sleep 0.3
+wait_log "$NAME" /tmp/kadmind.log "Request: kadm5_create_principal" || true
 KADMIND_LOG="$(docker exec "$NAME" cat /tmp/kadmind.log 2>/dev/null || true)"
 echo "$KADMIND_LOG"
 # M4c: MIT log_done / log_unauth (server_stubs.c:403-459). The successful admin
@@ -886,7 +879,7 @@ echo "$KLIST3" | grep -q 'extra@KERBER.TEST'
 echo "==== MIT kadmin cpw -randkey extra + ktadd + kinit -k ===="
 PWD_BEFORE="$(echo "$GET2" | grep '^Last password change:')"
 MOD_BEFORE="$(echo "$GET2" | grep '^Last modified:')"
-sleep 1
+sleep 1 # proto: last-password-change timestamp
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'cpw -randkey extra'
 GETR="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
@@ -1161,7 +1154,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-sleep 0.4
+wait_gone_in "$NAME" 749 || true
 docker exec "$NAME" sh -c 'printf "%s\n" "scoped@KERBER.TEST ad *@KERBER.TEST" > /tmp/kadm5.acl'
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/principal \
@@ -1202,14 +1195,14 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-sleep 0.4
+wait_gone_in "$NAME" 749 || true
 docker exec "$NAME" sh -c 'printf "%s\n" "bad@KERBER.TEST aZ" > /tmp/kadm5.acl'
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
     -e KRB5_ACL_FILE=/tmp/kadm5.acl \
     "$NAME" sh -c '/tmp/krb5-kadmind 127.0.0.1:749 >/tmp/kadmind-badacl.log 2>&1'
-sleep 1
+wait_log "$NAME" /tmp/kadmind-badacl.log "Unrecognized ACL" || true
 BADLOG="$(docker exec "$NAME" cat /tmp/kadmind-badacl.log 2>/dev/null || true)"
 echo "$BADLOG"
 echo "$BADLOG" | grep -F "Unrecognized ACL operation 'Z' in bad@KERBER.TEST aZ"
@@ -1227,7 +1220,7 @@ docker exec -d \
     -e KRB5_KDC_STASH=/tmp/stash \
     -e KRB5_ACL_FILE=/tmp/kadm5.acl \
     "$NAME" sh -c '/tmp/krb5-kadmind 127.0.0.1:749 >/tmp/kadmind-crlf.log 2>&1'
-sleep 1
+wait_log "$NAME" /tmp/kadmind-crlf.log "Unrecognized ACL" || true
 CRLFLOG="$(docker exec "$NAME" cat /tmp/kadmind-crlf.log 2>/dev/null || true)"
 echo "$CRLFLOG"
 echo "$CRLFLOG" | grep -F "Unrecognized ACL operation"
@@ -1248,7 +1241,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-sleep 0.4
+wait_gone_in "$NAME" 749 || true
 docker exec "$NAME" sh -c '
 python3 - <<PY
 from pathlib import Path
@@ -1525,7 +1518,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-sleep 0.4
+wait_gone_in "$NAME" 749 || true
 docker exec "$NAME" sh -c 'printf "%s\n" "admin@KERBER.TEST * *@KERBER.TEST -maxlife 12:34" "kiprop/*@KERBER.TEST p" > /tmp/kadm5.acl'
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/principal \
@@ -1558,7 +1551,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-sleep 0.4
+wait_gone_in "$NAME" 749 || true
 docker exec "$NAME" sh -c 'printf "%s\n" "admin@KERBER.TEST * *@KERBER.TEST -maxlife 42x" "kiprop/*@KERBER.TEST p" > /tmp/kadm5.acl'
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/principal \
@@ -1600,7 +1593,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-sleep 0.4
+wait_gone_in "$NAME" 749 || true
 docker exec "$NAME" sh -c 'printf "%s\n" "admin@KERBER.TEST * *@KERBER.TEST -maxlife 3dd" > /tmp/kadm5.acl'
 set +e
 docker exec \
@@ -1650,6 +1643,7 @@ fi
 
 echo "==== MIT kadmind lockdown cells ===="
 docker run -d --name "$NAME_MIT" "$IMAGE" >/dev/null
+register_cleanup 'docker rm -f "$NAME_MIT" >/dev/null 2>&1 || true'
 ok=0
 for _ in $(seq 1 90); do
     logs="$(docker logs "$NAME_MIT" 2>&1 || true)"
@@ -1705,7 +1699,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-sleep 0.4
+wait_gone_in "$NAME_MIT" 749 || true
 docker exec "$NAME_MIT" sh -c 'cat >/tmp/mit-iprop-kdc.conf <<EOF
 [kdcdefaults]
     kdc_ports = 88
@@ -1798,7 +1792,7 @@ if echo "$MIT_INT_LIST" | grep -qE 'count=0$'; then
 fi
 echo "==== MIT RPCSEC_GSS integrity tampered checksum ===="
 start_integ_tamper_proxy "$NAME_MIT"
-sleep 0.3
+wait_tcp_bound_in "$NAME_MIT" 1749 || die "MIT tamper proxy did not listen"
 MIT_INT_TAMPER="$(kadm5_integrity_list "$NAME_MIT" admin/admin adminpassword integrity /etc/krb5.conf 1749 2>&1 || true)"
 echo "$MIT_INT_TAMPER"
 if echo "$MIT_INT_TAMPER" | grep -qF 'list_code=0'; then
@@ -1983,7 +1977,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-sleep 0.4
+wait_gone_in "$NAME_MIT" 749 || true
 docker exec "$NAME_MIT" sh -c 'printf "%s\n" "scoped@KERBER.TEST ad *@KERBER.TEST" > /var/kerberos/krb5kdc/kadm5.acl'
 docker exec -d "$NAME_MIT" sh -c 'kadmind -nofork >/tmp/kadmind-noadmin.log 2>&1'
 ok=0
@@ -2019,7 +2013,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-sleep 0.4
+wait_gone_in "$NAME_MIT" 749 || true
 docker exec "$NAME_MIT" sh -c 'printf "%s\n" "bad@KERBER.TEST aZ" > /var/kerberos/krb5kdc/kadm5.acl'
 set +e
 docker exec "$NAME_MIT" sh -c 'timeout 3 kadmind -nofork >/tmp/kadmind-badacl.log 2>&1'
@@ -2302,7 +2296,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-sleep 0.4
+wait_gone_in "$NAME_MIT" 749 || true
 docker exec "$NAME_MIT" sh -c 'printf "%s\n" "admin@KERBER.TEST * *@KERBER.TEST -maxlife 12:34" "*/admin@KERBER.TEST *" > /var/krb5kdc/kadm5.acl'
 docker exec -d "$NAME_MIT" sh -c 'kadmind -nofork >/tmp/kadmind-maxlife.log 2>&1'
 ok=0
@@ -2331,7 +2325,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-sleep 0.4
+wait_gone_in "$NAME_MIT" 749 || true
 docker exec "$NAME_MIT" sh -c 'printf "%s\n" "admin@KERBER.TEST * *@KERBER.TEST -maxlife 42x" "*/admin@KERBER.TEST * *@KERBER.TEST -maxlife 42x" > /var/krb5kdc/kadm5.acl'
 docker exec -d "$NAME_MIT" sh -c 'kadmind -nofork >/tmp/kadmind-42x.log 2>&1'
 ok=0
@@ -2367,7 +2361,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-sleep 0.4
+wait_gone_in "$NAME_MIT" 749 || true
 docker exec "$NAME_MIT" sh -c 'printf "%s\n" "admin@KERBER.TEST * *@KERBER.TEST -maxlife 3dd" > /var/krb5kdc/kadm5.acl'
 set +e
 docker exec "$NAME_MIT" sh -c 'timeout 3 kadmind -nofork >/tmp/kadmind-3dd.log 2>&1'
@@ -2418,7 +2412,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-sleep 0.4
+wait_gone_in "$NAME" 749 || true
 docker exec "$NAME" sh -c 'printf "%s\n" "admin@KERBER.TEST *" > /tmp/kadm5.acl'
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/principal \
@@ -2640,7 +2634,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-        sleep 0.4
+        wait_gone_in "$ctn" 749 || true
         docker exec "$ctn" sh -c 'printf "%s\n" "admin@KERBER.TEST *" "ro@KERBER.TEST i" > /tmp/kadm5.acl'
         docker exec -d \
             -e KRB5_KDC_DB=/tmp/principal \
@@ -2837,7 +2831,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-        sleep 0.4
+        wait_gone_in "$ctn" 749 || true
         docker exec "$ctn" sh -c 'printf "%s\n" "admin@KERBER.TEST *" \
             "admin/admin@KERBER.TEST *" \
             "*/admin@KERBER.TEST *" \

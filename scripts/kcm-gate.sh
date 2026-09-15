@@ -6,46 +6,31 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins krb5-kinit krb5-klist krb5-kdestroy krb5-kswitch
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-kcm-gate}"
 mkdir -p "$SCRATCH"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"kcm-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
 
 MIT="kerber-rust-mit-kdc"
 KCM="kerber-rust-sssd-kcm"
-IMAGE="${KCM_IMAGE:-kerber-rust-sssd-kcm:f43}"
+KCM_IMAGE="${KCM_IMAGE:-kerber-rust-sssd-kcm:f43}"
 F43_DIGEST="sha256:96b2a05f8ce3111e10c236abe8055b01500880d95ee7c2f92fa30847fdbb667b"
 
-if ! command -v docker >/dev/null 2>&1; then
-    echo "docker not available" | tee "$SCRATCH/kcm-gate-unavailable.log"
-    log "kcm.gate" "unavailable" ',"error":"docker not available"'
-    exit 2
-fi
+need_image
 STOP_MIT=0
 if ! docker ps -q --filter "name=^${MIT}$" | grep -q .; then
     ./scripts/run-harness.sh
     STOP_MIT=1
 fi
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+if ! docker image inspect "$KCM_IMAGE" >/dev/null 2>&1; then
     docker build -f harness/kcm/Dockerfile --build-arg "FEDORA_DIGEST=${F43_DIGEST}" \
-        -t "$IMAGE" "$ROOT"
+        -t "$KCM_IMAGE" "$ROOT"
 fi
 
-cargo build -p krb5-client --bin krb5-kinit --bin krb5-klist --bin krb5-kdestroy --bin krb5-kswitch
-
 docker rm -f "$KCM" >/dev/null 2>&1 || true
-docker run -d --name "$KCM" --network "container:${MIT}" "$IMAGE" >/dev/null
-cleanup() {
-    docker rm -f "$KCM" >/dev/null 2>&1 || true
-    if [ "$STOP_MIT" = 1 ]; then
-        ./scripts/stop-harness.sh >/dev/null 2>&1 || true
-    fi
-}
-trap cleanup EXIT
+docker run -d --name "$KCM" --network "container:${MIT}" "$KCM_IMAGE" >/dev/null
 for _ in $(seq 1 50); do
     if docker exec "$KCM" test -S /run/.heim_org.h5l.kcm-socket; then
         break

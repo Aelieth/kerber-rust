@@ -5,16 +5,13 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins krb5-kinit krb5-kdc krb5-kdb
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-kinit-fast-gate"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
-
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"rust-kinit-fast-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
 
 assert_no_error_log() {
     if echo "$1" | grep -qF '"level":"ERROR"'; then
@@ -29,17 +26,11 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
-cargo build -p krb5-client --bin krb5-kinit
-cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-kdb
-
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
-fi
+need_image
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" "$IMAGE" >/dev/null
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
+register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
 
 ok=0
 for _ in $(seq 1 90); do
@@ -62,7 +53,7 @@ if [ "$ok" -ne 1 ]; then
 fi
 
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
-sleep 0.3
+wait_pid_gone "$NAME" krb5kdc || true
 docker exec -d \
     -e KRB5_TRACE=/tmp/mit-kdc.trace \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
@@ -225,7 +216,7 @@ docker exec "$NAME" kadmin.local -q 'modprinc +requires_preauth user'
 docker exec "$NAME" kadmin.local -q 'setstr host/testhost.kerber.test require_auth encrypted_challenge'
 docker exec "$NAME" kdb5_util dump /tmp/ec-ind.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
-sleep 0.3
+wait_pid_gone "$NAME" krb5kdc || true
 docker exec -d \
     -e KRB5_TRACE=/tmp/mit-kdc.trace \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
@@ -391,7 +382,7 @@ echo "==== Rust kinit --fast -S against rust KDC ===="
 docker exec "$NAME" kadmin.local -q 'delstr host/testhost.kerber.test require_auth'
 docker exec "$NAME" kdb5_util dump /tmp/plain-host.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true'
-sleep 0.3
+wait_pid_gone "$NAME" krb5-kdc || true
 docker exec "$NAME" sh -c ': >/tmp/rust-kdc.log'
 LOAD_PLAIN="$(docker exec \
     -e KRB5_MASTER_PASSWORD=masterpassword \

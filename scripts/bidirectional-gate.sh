@@ -5,12 +5,12 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
-
-cargo build -p krb5-kdc --bin krb5-kdc -p krb5-client --bin krb5-kinit
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins krb5-kdc krb5-kinit
 
 TMP="${TMPDIR:-/tmp}/kerber-bidir-$$"
 mkdir -p "$TMP"
-trap 'rm -rf "$TMP"; kill $KDC_PID 2>/dev/null || true' EXIT
+register_cleanup 'rm -rf "$TMP"; kill ${KDC_PID:-} 2>/dev/null || true'
 
 export KRB5_TEST_USER_PASSWORD="${KRB5_TEST_USER_PASSWORD:-userpassword}"
 export KRB5_TEST_ADMIN_PASSWORD="${KRB5_TEST_ADMIN_PASSWORD:-adminpassword}"

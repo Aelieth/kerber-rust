@@ -24,12 +24,17 @@ trap '_gate_err "$?" "$LINENO" "$BASH_COMMAND" "${BASH_SOURCE[0]}"' ERR
 head_sha="$(git rev-parse HEAD)"
 _prov_dir="${KERBER_SCRATCH:-${TMPDIR:-/tmp}}"
 mkdir -p "$_prov_dir"
-_prov_idx="$(mktemp "$_prov_dir/kerber-prov.XXXXXX")"
-rm -f "$_prov_idx"
-# working/ is gitignored; naming it in the pathspec makes `git add` exit 1.
-GIT_INDEX_FILE="$_prov_idx" git add -A -- . >/dev/null
-tree_sha="$(GIT_INDEX_FILE="$_prov_idx" git write-tree)"
-rm -f "$_prov_idx"
+if [ -n "${KERBER_TREE_SHA:-}" ]; then
+    tree_sha="$KERBER_TREE_SHA"
+else
+    _prov_idx="$(mktemp "$_prov_dir/kerber-prov.XXXXXX")"
+    rm -f "$_prov_idx"
+    # working/ is gitignored; naming it in the pathspec makes `git add` exit 1.
+    GIT_INDEX_FILE="$_prov_idx" git add -A -- . >/dev/null
+    tree_sha="$(GIT_INDEX_FILE="$_prov_idx" git write-tree)"
+    rm -f "$_prov_idx"
+    export KERBER_TREE_SHA="$tree_sha"
+fi
 if git status --porcelain --untracked-files=normal -- ':!working' | grep -q .; then
     dirty=yes
 else
@@ -45,10 +50,19 @@ fi
 if command -v docker >/dev/null 2>&1; then
     if docker image inspect kerber-rust-mit-kdc:1.22.2 >/dev/null 2>&1; then
         image="$(docker image inspect kerber-rust-mit-kdc:1.22.2 --format '{{.Id}} {{.Created}}')"
-        acl_sha256_image="$(
-            docker run --rm --entrypoint cat kerber-rust-mit-kdc:1.22.2 \
-                /var/kerberos/krb5kdc/kadm5.acl | sha256sum | awk '{print $1}'
-        )"
+        _img_id="$(echo "$image" | awk '{print $1}')"
+        _img_key="${_img_id##*:}"
+        _img_key="${_img_key//\//_}"
+        _memo="${_prov_dir}/prov-${_img_key}"
+        if [ -f "$_memo" ]; then
+            acl_sha256_image="$(cat "$_memo")"
+        else
+            acl_sha256_image="$(
+                docker run --rm --entrypoint cat kerber-rust-mit-kdc:1.22.2 \
+                    /var/kerberos/krb5kdc/kadm5.acl | sha256sum | awk '{print $1}'
+            )"
+            printf '%s\n' "$acl_sha256_image" >"$_memo"
+        fi
         if [ "$acl_sha256_image" != "$acl_sha256_tree" ]; then
             echo "stale MIT image; rebuild from harness/" >&2
             echo "acl_sha256_tree=$acl_sha256_tree" >&2

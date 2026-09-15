@@ -8,6 +8,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins krb5-kinit krb5-klist krb5-kvno krb5-kdestroy krb5-vfy-increds krb5-kdc krb5-forge-tgt krb5-pac-extract krb5-gss-accept krb5-gss-init krb5-kpasswd
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-client-diff-gate"
@@ -18,34 +20,11 @@ mkdir -p "$SCRATCH"
 PROXY_PORT=1891
 EXPECTED_FLOWS=11
 
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"client-differential-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
-
-die() {
-    log "client.diff.gate" "error" ",\"error\":\"$1\""
-    echo "FATAL: $1" >&2
-    exit 1
-}
-
-unavailable() {
-    log "client.diff.gate" "error" ",\"error\":\"$1\""
-    echo "$1" | tee "$SCRATCH/client-differential-unavailable.log"
-    exit 2
-}
-
 if ! command -v docker >/dev/null 2>&1; then
     unavailable "docker not available"
 fi
 
-cargo build -p krb5-client --bin krb5-kinit --bin krb5-klist --bin krb5-kvno --bin krb5-kdestroy --bin krb5-vfy-increds -q
-cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-forge-tgt --bin krb5-pac-extract -q
-cargo build -p krb5-gss --bin krb5-gss-accept --bin krb5-gss-init -q
-
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT" || true
-fi
+need_image
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     unavailable "MIT image unavailable"
 fi
@@ -54,8 +33,7 @@ python3 "$ROOT/scripts/lib/kdc-req-proxy.py" --self-test || die "kdc-req-proxy s
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" "$IMAGE" >/dev/null
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
+register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
 
 ok=0
 for _ in $(seq 1 90); do
@@ -162,7 +140,7 @@ Path("/tmp/pkinit-krb5.conf").write_text(pkinit)
 '
 
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
-sleep 0.3
+wait_pid_gone "$NAME" krb5kdc || true
 docker exec -d \
     -e KRB5_TRACE=/tmp/mit-kdc.trace \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
@@ -788,7 +766,6 @@ echo "MIT_vfy_increds_nofail"
 echo "RUST_vfy_increds_nofail"
 
 echo "==== chpw texts + setpw (chpw.c) ===="
-cargo build -p krb5-admin --bin krb5-kpasswd -q
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kpasswd" "$NAME":/tmp/krb5-kpasswd
 docker cp "$ROOT/scripts/kpasswd-tgs-client.c" "$NAME":/tmp/kpasswd-tgs-client.c
 if ! docker exec "$NAME" cc -o /tmp/kpasswd-tgs-client /tmp/kpasswd-tgs-client.c -lkrb5; then
@@ -1372,7 +1349,7 @@ docker exec "$NAME" /tmp/krb5-forge-tgt \
 
 # Rust acceptor (survives failed accepts), fresh log.
 docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
-sleep 0.3
+wait_pid_gone "$NAME" krb5-gss-accept || true
 docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /tmp/host.keytab --listen 127.0.0.1:4444 >/tmp/gss-z13-rust.log 2>&1'
 ok=0
 for _ in $(seq 1 20); do
@@ -1417,7 +1394,7 @@ echo "$RUST_Z13_LOG" | grep -q 'KRB-ERROR 44: Cannot find key for host/testhost.
 # --- MIT acceptor leg (gss-server dies on a failed accept; restart per case) ---
 z13_mit_case() {  # $1=forged-ccache $2=label -> echoes refused|ok
     docker exec "$NAME" sh -c 'kill $(pidof gss-mit-server) 2>/dev/null || true'
-    sleep 0.3
+    wait_pid_gone "$NAME" gss-mit-server || true
     # Pass a fully-qualified acceptor principal so MIT pins the ticket kvno
     # (try_one_princ), the same way the Rust acceptor pins its keytab kvnos.
     docker exec -d -e KRB5_CONFIG=/tmp/direct-krb5.conf -e GSS_ACCEPT_ONLY=1 "$NAME" \

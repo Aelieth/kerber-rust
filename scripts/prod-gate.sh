@@ -10,17 +10,14 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins krb5-kdc krb5-kinit
 
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-prod-gate}"
 OUT="$SCRATCH/prod-gate"
 mkdir -p "$OUT"
-
-unavailable() {
-    echo "$1" | tee "$OUT/pcap-unavailable.log"
-    exit 2
-}
 
 export KRB5_TEST_USER_PASSWORD="${KRB5_TEST_USER_PASSWORD:-userpassword}"
 export KRB5_TEST_ADMIN_PASSWORD="${KRB5_TEST_ADMIN_PASSWORD:-adminpassword}"
@@ -30,24 +27,12 @@ export KERBER_CAPTURE_DIR="$OUT/pdus"
 rm -rf "$KERBER_CAPTURE_DIR"
 mkdir -p "$KERBER_CAPTURE_DIR"
 
-cargo build -p krb5-kdc --bin krb5-kdc -q
-cargo build -p krb5-client --bin krb5-kinit -q
 BIND="127.0.0.1:18888"
 LOG="$OUT/kdc.json"
 PCAP="$OUT/kdc.pcap"
 LO_PCAP="$OUT/kdc-lo.pcap"
 TCPDUMP_PID=""
 KDC_PID=""
-
-cleanup() {
-    if [ -n "$TCPDUMP_PID" ]; then
-        sudo -n kill "$TCPDUMP_PID" >/dev/null 2>&1 || true
-    fi
-    if [ -n "$KDC_PID" ]; then
-        kill "$KDC_PID" >/dev/null 2>&1 || true
-    fi
-}
-trap cleanup EXIT
 
 # Loopback capture of the isolated bind only. Write aside from $PCAP:
 # sudo tcpdump creates a root-owned file; chmod a+r does not make it
@@ -56,7 +41,7 @@ if command -v tcpdump >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
     rm -f "$LO_PCAP"
     sudo -n tcpdump -i lo -n -U -w "$LO_PCAP" "port 18888" >/dev/null 2>"$OUT/tcpdump.err" &
     TCPDUMP_PID=$!
-    sleep 0.2
+    sleep 0.2 # proto: pcap start
 else
     unavailable "tcpdump/sudo unavailable for loopback pcap"
 fi
@@ -96,13 +81,13 @@ set +e
 kinit_rc=$?
 set -e
 echo "kinit_rc=$kinit_rc" | tee -a "$OUT/kinit.log"
-sleep 0.3
+sleep 0.3 # proto: pcap flush
 
 # Stop capture so the pcap is flushed.
 if [ -n "$TCPDUMP_PID" ]; then
     sudo -n kill "$TCPDUMP_PID" >/dev/null 2>&1 || true
     TCPDUMP_PID=""
-    sleep 0.2
+    sleep 0.2 # proto: pcap flush
     sudo -n chmod a+r "$LO_PCAP" 2>/dev/null || true
 fi
 

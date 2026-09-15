@@ -7,6 +7,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins krb5-pac-extract
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-capaths-compress"
@@ -14,26 +16,16 @@ CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
 export CORRELATION_ID
 XR_PW="xrpassword"
 
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"capaths-compress-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
-
 if ! command -v docker >/dev/null 2>&1; then
     log "capaths.compress" "error" ',"error":"docker not available"'
     exit 1
 fi
 
-cargo build -p krb5-kdc --bin krb5-pac-extract -q
-
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
-fi
+need_image
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
+register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-pac-extract" "$NAME":/tmp/krb5-pac-extract
 docker exec "$NAME" chmod +x /tmp/krb5-pac-extract
@@ -134,23 +126,13 @@ start_mit() {
     docker exec -e KRB5_CONFIG="$conf" -e KRB5_KDC_PROFILE="$profile" \
         "$NAME" sh -c "krb5kdc -n -r ${realm} >${log} 2>&1 & echo \$! >${pidf}"
 }
-wait_port() {
-    local port="$1" i
-    for i in $(seq 1 80); do
-        if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',${port}),0.3)" 2>/dev/null; then
-            return 0
-        fi
-        sleep 0.25
-    done
-    return 1
-}
 
 echo "==== start MIT KDCs ===="
 start_mit A.EX.COM /tmp/kdc-a.conf /tmp/mit-a.log /tmp/mit-a.pid
 start_mit EX.COM /tmp/kdc-x.conf /tmp/mit-x.log /tmp/mit-x.pid
 start_mit B.EX.COM /tmp/kdc-b.conf /tmp/mit-b.log /tmp/mit-b.pid
 start_mit C.EX.COM /tmp/kdc-c.conf /tmp/mit-c.log /tmp/mit-c.pid
-wait_port 88 && wait_port 89 && wait_port 90 && wait_port 91 || {
+wait_port_in "$NAME" 88 && wait_port_in "$NAME" 89 && wait_port_in "$NAME" 90 && wait_port_in "$NAME" 91 || {
     docker exec "$NAME" sh -c 'cat /tmp/mit-a.log /tmp/mit-x.log /tmp/mit-b.log /tmp/mit-c.log' || true
     log "capaths.compress" "error" ',"error":"MIT KDCs did not listen"'
     exit 1
@@ -197,7 +179,7 @@ except OSError:
     break
 done
 start_mit C.EX.COM /tmp/kdc-c.conf /tmp/mit-c-deny.log /tmp/mit-c.pid /tmp/client-nocapaths.conf
-wait_port 91 || {
+wait_port_in "$NAME" 91 || {
     docker exec "$NAME" cat /tmp/mit-c-deny.log || true
     log "capaths.compress" "error" ',"error":"deny C did not listen"'
     exit 1

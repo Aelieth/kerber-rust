@@ -8,6 +8,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins krb5-kdc krb5-pac-extract
 
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
@@ -15,21 +17,6 @@ SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-samba-crossrealm}"
 mkdir -p "$SCRATCH"
 UNAVAIL="$SCRATCH/samba-crossrealm-unavailable.log"
 TRUST_PW="${SAMBA_TRUST_PASSWORD:-Trust-P@ss-Kerber-2026!}"
-
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"samba-crossrealm-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
-
-unavailable() {
-    {
-        echo "date=$(date -Iseconds)"
-        echo "host /etc/krb5.conf must stay TESTLABBY.LOCAL"
-        echo "$1"
-    } | tee "$UNAVAIL" >&2
-    log "samba.crossrealm" "error" ",\"error\":\"unavailable\""
-    exit 2
-}
 
 if ! command -v docker >/dev/null 2>&1; then
     unavailable "docker not available"
@@ -42,8 +29,6 @@ if [ -z "$IMAGE" ]; then
     unavailable "no Samba AD DC image (set SAMBA_AD_IMAGE)"
 fi
 
-cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-pac-extract
-
 ISSUE_SALT='KERBER.TESTkrbtgtAD.KERBER.TEST'
 ACCEPT_SALT='AD.KERBER.TESTkrbtgtKERBER.TEST'
 PAC_EXTRACT="${CARGO_TARGET_DIR:-target}/debug/krb5-pac-extract"
@@ -55,11 +40,10 @@ fi
 
 NAME="kerber-rust-samba-crossrealm"
 docker rm -f "$NAME" >/dev/null 2>&1 || true
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
 
 set +e
 docker run -d --name "$NAME" --hostname dc1 "$IMAGE" >"$SCRATCH/samba-xr-run.err" 2>&1
+register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
 run_rc=$?
 set -e
 if [ "$run_rc" -ne 0 ]; then
@@ -94,7 +78,8 @@ docker exec "$NAME" sh -c 'for p in /proc/[0-9]*; do
   tr="\0"; cmd=$(tr "\0" " " < "$p/cmdline" 2>/dev/null) || continue
   echo "$cmd" | grep -q "task\[kdc\]" || continue
   kill "${p#/proc/}" 2>/dev/null || true
-done; sleep 1'
+done'
+wait_gone_in "$NAME" 88 || true
 
 docker exec "$NAME" sh -c "cat >/tmp/kdc.conf <<EOF
 [realms]

@@ -6,6 +6,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins krb5-kdc krb5-kadmind krb5-kpasswd krb5-kadmin-local krb5-kinit
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-kpasswd-gate"
@@ -14,11 +16,6 @@ CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
 export CORRELATION_ID
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-kpasswd-gate}"
 mkdir -p "$SCRATCH"
-
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"kpasswd-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
 
 # Raw UDP kpasswd: vno 0x0002 / plen != len. MIT schpw.c:60-82 sets
 # numresult then goto bailout; dispatch logs com_err and sends no datagram.
@@ -202,16 +199,11 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
-cargo build -p krb5-kdc --bin krb5-kdc -p krb5-admin --bin krb5-kadmind --bin krb5-kpasswd --bin krb5-kadmin-local -p krb5-client --bin krb5-kinit
-
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
-fi
+need_image
 
 docker rm -f "$NAME" "$NAME_MIT" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
-cleanup() { docker rm -f "$NAME" "$NAME_MIT" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
+register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmind" "$NAME":/tmp/krb5-kadmind
@@ -536,6 +528,7 @@ pin_kpasswd_fill_datagram "$NAME" "Rust"
 
 echo "==== MIT kadmind policy rejection is SOFTERROR ===="
 docker run -d --name "$NAME_MIT" "$IMAGE" >/dev/null
+register_cleanup 'docker rm -f "$NAME_MIT" >/dev/null 2>&1 || true'
 ok=0
 for _ in $(seq 1 90); do
     logs="$(docker logs "$NAME_MIT" 2>&1 || true)"
@@ -564,7 +557,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-sleep 0.4
+wait_gone_in "$NAME_MIT" 88 || true
 docker exec "$NAME_MIT" krb5kdc
 ok=0
 for _ in $(seq 1 40); do
