@@ -51,8 +51,9 @@ if command -v docker >/dev/null 2>&1; then
     if docker image inspect kerber-rust-mit-kdc:1.22.2 >/dev/null 2>&1; then
         image="$(docker image inspect kerber-rust-mit-kdc:1.22.2 --format '{{.Id}} {{.Created}}')"
         _img_id="$(echo "$image" | awk '{print $1}')"
-        _memo="${_prov_dir}/prov-${_img_id##*:}"
-        _memo="${_memo//\//_}"
+        _img_key="${_img_id##*:}"
+        _img_key="${_img_key//\//_}"
+        _memo="${_prov_dir}/prov-${_img_key}"
         if [ -f "$_memo" ]; then
             acl_sha256_image="$(cat "$_memo")"
         else
