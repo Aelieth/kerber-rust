@@ -2290,6 +2290,8 @@ def check_gate_common_sourced() -> None:
                 _die("kadmin-gate.sh must wait_tcp_bound_in for the integrity tamper proxy")
         if path.name == "kcm-gate.sh":
             check_kcm_need_image(text)
+        if re.search(r"krb5kdc -n >/tmp/mit-kdc.log 2>&1 & cat", text):
+            _die(f"{path.name} must wait_log for krb5kdc -n, not cat the log immediately")
     check_build_bins_examples()
 
 

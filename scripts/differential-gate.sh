@@ -185,7 +185,10 @@ docker exec "$NAME" kadmin.local -q 'setstr expiredsvc require_auth pkinit'
 MITHINT="$(docker exec "$NAME" kadmin.local -q 'addprinc -randkey -e aes128-cts-hmac-sha1-96:normal +requires_preauth hintu')"
 echo "$MITHINT"
 grep -qi 'created' <<<"$MITHINT" || die "MIT addprinc hintu failed"
-STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc -n >/tmp/mit-kdc.log 2>&1 & cat /tmp/mit-kdc.log' 2>&1 || true)"
+docker exec "$NAME" sh -c ': >/tmp/mit-kdc.log'
+docker exec -d "$NAME" sh -c 'krb5kdc -n >/tmp/mit-kdc.log 2>&1'
+wait_log "$NAME" /tmp/mit-kdc.log "setting up network" || die "MIT krb5kdc did not start"
+STARTLOG="$(docker exec "$NAME" cat /tmp/mit-kdc.log 2>/dev/null || true)"
 echo "$STARTLOG"
 ok=0
 for _ in $(seq 1 40); do

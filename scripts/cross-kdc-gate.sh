@@ -79,7 +79,10 @@ echo "==== load identical dump into MIT krb5kdc on :88 ===="
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec "$NAME" kdb5_util create -s -P masterpassword
 docker exec "$NAME" kdb5_util load /tmp/mit.dump
-STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc -n >/tmp/mit-kdc.log 2>&1 & cat /tmp/mit-kdc.log' 2>&1 || true)"
+docker exec "$NAME" sh -c ': >/tmp/mit-kdc.log'
+docker exec -d "$NAME" sh -c 'krb5kdc -n >/tmp/mit-kdc.log 2>&1'
+wait_log "$NAME" /tmp/mit-kdc.log "setting up network" || die "MIT krb5kdc did not start"
+STARTLOG="$(docker exec "$NAME" cat /tmp/mit-kdc.log 2>/dev/null || true)"
 echo "$STARTLOG"
 ok=0
 for _ in $(seq 1 40); do
@@ -172,7 +175,10 @@ Path("/tmp/spake-kdc-krb5.conf").write_text(t)
 '
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
 wait_pid_gone "$NAME" krb5kdc || true
-STARTLOG="$(docker exec "$NAME" sh -c 'KRB5_CONFIG=/tmp/spake-kdc-krb5.conf krb5kdc -n >/tmp/mit-kdc.log 2>&1 & cat /tmp/mit-kdc.log' 2>&1 || true)"
+docker exec "$NAME" sh -c ': >/tmp/mit-kdc.log'
+docker exec -d -e KRB5_CONFIG=/tmp/spake-kdc-krb5.conf "$NAME" sh -c 'krb5kdc -n >/tmp/mit-kdc.log 2>&1'
+wait_log "$NAME" /tmp/mit-kdc.log "setting up network" || die "MIT krb5kdc did not start"
+STARTLOG="$(docker exec "$NAME" cat /tmp/mit-kdc.log 2>/dev/null || true)"
 echo "$STARTLOG"
 ok=0
 for _ in $(seq 1 40); do
@@ -417,7 +423,10 @@ Path("/tmp/rust-kdc.conf").write_text("""[realms]
 '
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
 wait_pid_gone "$NAME" krb5kdc || true
-STARTLOG="$(docker exec "$NAME" sh -c 'KRB5_CONFIG=/tmp/spake-kdc-krb5.conf krb5kdc -n >/tmp/mit-kdc.log 2>&1 & cat /tmp/mit-kdc.log' 2>&1 || true)"
+docker exec "$NAME" sh -c ': >/tmp/mit-kdc.log'
+docker exec -d -e KRB5_CONFIG=/tmp/spake-kdc-krb5.conf "$NAME" sh -c 'krb5kdc -n >/tmp/mit-kdc.log 2>&1'
+wait_log "$NAME" /tmp/mit-kdc.log "setting up network" || die "MIT krb5kdc did not start"
+STARTLOG="$(docker exec "$NAME" cat /tmp/mit-kdc.log 2>/dev/null || true)"
 echo "$STARTLOG"
 ok=0
 for _ in $(seq 1 40); do
