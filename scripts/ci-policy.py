@@ -2237,6 +2237,31 @@ def check_env_read() -> None:
                     _die(f"{wf_path.name} sets {name} but no script/test reads it")
 
 
+def check_gate_common_sourced() -> None:
+    """Every gate sources gate-common.sh; no private log()/cleanup(); no cargo build."""
+    common = SCRIPTS / "lib" / "gate-common.sh"
+    if not common.is_file():
+        _die("missing scripts/lib/gate-common.sh")
+    ctext = common.read_text(encoding="utf-8")
+    for needle in ("log()", "die()", "unavailable()", "need_bins", "need_image", "gate_wall_s="):
+        if needle not in ctext:
+            _die(f"gate-common.sh missing {needle}")
+    for path in sorted(SCRIPTS.glob("*-gate.sh")):
+        text = path.read_text(encoding="utf-8")
+        if "scripts/lib/gate-common.sh" not in text:
+            _die(f"{path.name} must source scripts/lib/gate-common.sh")
+        if re.search(r"^log\(\)", text, re.M):
+            _die(f"{path.name} still defines a private log()")
+        if re.search(r"^cleanup\(\)", text, re.M):
+            _die(f"{path.name} still defines a private cleanup()")
+        if re.search(r"\bcargo\s+build\b", text):
+            _die(f"{path.name} must not run cargo build (use need_bins)")
+
+
+def check_no_gate_cargo_build() -> None:
+    check_gate_common_sourced()
+
+
 def check_peers_unavailable_convention() -> None:
     """peers.yml maps gate exit 2 to step success; live kinit/kvno failures are exit 1."""
     wrapper = SCRIPTS / "lib" / "run-peer-step.sh"
@@ -3490,6 +3515,7 @@ def main() -> None:
     check_build_profile()
     check_env_read()
     check_peers_unavailable_convention()
+    check_gate_common_sourced()
     check_red_at_sha_inject()
     check_red_at_sha_overlay_order()
     check_red_at_sha_target_trap()

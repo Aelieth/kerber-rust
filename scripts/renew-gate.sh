@@ -6,6 +6,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins krb5-kdc krb5-kadmind
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-renew-gate"
@@ -14,32 +16,11 @@ export CORRELATION_ID
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-renew-gate}"
 mkdir -p "$SCRATCH"
 
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"renew-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
-
-if ! command -v docker >/dev/null 2>&1; then
-    log "renew.gate" "error" ',"error":"docker not available"'
-    echo "docker not available" >"$SCRATCH/renew-unavailable.log"
-    exit 2
-fi
-
-cargo build -p krb5-kdc --bin krb5-kdc -p krb5-admin --bin krb5-kadmind
-
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
-fi
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    log "renew.gate" "error" ',"error":"MIT image unavailable"'
-    echo "MIT image unavailable" >"$SCRATCH/renew-unavailable.log"
-    exit 2
-fi
+need_image
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
+register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmind" "$NAME":/tmp/krb5-kadmind
@@ -148,7 +129,7 @@ echo "renew_delta_secs=$DELTA"
 test "$DELTA" -ge 590400
 test "$DELTA" -le 619200
 
-sleep 2
+sleep 2 # proto: ticket age
 echo "==== MIT kinit -R ===="
 if ! docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf "$NAME" kinit -R; then
     docker exec "$NAME" cat /tmp/kdc.log >&2 || true
@@ -321,7 +302,7 @@ ZDELTA=$(($(date -d "$ZREN" +%s) - $(date -d "$ZSTART" +%s)))
 echo "zero_renew_delta_secs=$ZDELTA"
 test "$ZDELTA" -ge 0
 test "$ZDELTA" -le 120
-sleep 2
+sleep 2 # proto: ticket age
 set +e
 ZAGAIN="$(docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf "$NAME" kinit -R 2>&1)"
 set -e
@@ -409,7 +390,7 @@ MZDELTA=$(($(date -d "$MZREN" +%s) - $(date -d "$MZSTART" +%s)))
 echo "mit_zero_renew_delta_secs=$MZDELTA"
 test "$MZDELTA" -ge 0
 test "$MZDELTA" -le 120
-sleep 2
+sleep 2 # proto: ticket age
 set +e
 MZAGAIN="$(docker exec -e KRB5_CONFIG=/tmp/renew-mit-oracle.conf "$MITNAME" kinit -R 2>&1)"
 set -e

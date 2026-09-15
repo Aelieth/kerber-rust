@@ -8,6 +8,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/prod-realm-common.sh"
 
@@ -17,33 +18,9 @@ SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-prod-realm-gate}"
 OUT="$SCRATCH/prod-realm-gate"
 mkdir -p "$OUT"
 
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"prod-realm-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
-
-unavailable() {
-    log "prod.realm.gate" "error" ",\"error\":\"$1\""
-    echo "$1" | tee "$SCRATCH/prod-realm-gate-unavailable.log"
-    exit 2
-}
-
-die() {
-    log "prod.realm.gate" "error" ",\"error\":\"$1\""
-    echo "FATAL: $1" >&2
-    exit 1
-}
-
-cleanup() {
-    "$ROOT/harness/prod/env-down.sh" >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
-
 if ! command -v docker >/dev/null 2>&1; then
     unavailable "docker not available"
 fi
-
-cargo build -p krb5-kdc -p krb5-admin -q
 
 if ! docker image inspect "$KERBER_PROD_IMAGE" >/dev/null 2>&1; then
     if docker image inspect "$KERBER_PROD_IMAGE_FALLBACK" >/dev/null 2>&1; then

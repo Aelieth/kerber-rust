@@ -9,27 +9,14 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins krb5-kdc krb5-pac-extract
 
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-samba-pac-verify}"
 mkdir -p "$SCRATCH"
 UNAVAIL="$SCRATCH/samba-pac-verify-unavailable.log"
-
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"samba-pac-verify-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
-
-unavailable() {
-    {
-        echo "date=$(date -Iseconds)"
-        echo "host /etc/krb5.conf must stay TESTLABBY.LOCAL"
-        echo "$1"
-    } | tee "$UNAVAIL" >&2
-    log "samba.pac.verify" "error" ",\"error\":\"unavailable\""
-    exit 2
-}
 
 if ! command -v docker >/dev/null 2>&1; then
     unavailable "docker not available"
@@ -43,15 +30,12 @@ if [ -z "$IMAGE" ]; then
     unavailable "no Samba AD DC image (set SAMBA_AD_IMAGE)"
 fi
 
-cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-pac-extract
-
 NAME="kerber-rust-samba-pac-verify"
 docker rm -f "$NAME" >/dev/null 2>&1 || true
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
 
 set +e
 docker run -d --name "$NAME" --hostname dc1 "$IMAGE" >"$SCRATCH/samba-pac-run.err" 2>&1
+register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
 run_rc=$?
 set -e
 if [ "$run_rc" -ne 0 ]; then

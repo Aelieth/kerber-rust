@@ -6,6 +6,15 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W2-S2
+
+- **Gate library.** Every `scripts/*-gate.sh` sources
+  `scripts/lib/gate-common.sh` (`log`/`die`/`unavailable`/`need_bins`/
+  `need_image`/wait helpers). Gates no longer run `cargo build`.
+  `provenance.sh` memos the ACL hash per image id and reuses
+  `KERBER_TREE_SHA` so `git write-tree` and the throwaway ACL container
+  run once per job.
+
 ### W2-S1
 
 - **CI shape.** `[profile.dev] debug = "line-tables-only"` +

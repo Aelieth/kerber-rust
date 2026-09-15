@@ -6,15 +6,12 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins krb5-kinit krb5-kdc
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
-
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"rust-kinit-enterprise-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
 
 assert_canonical() {
     local klist="$1"
@@ -32,12 +29,7 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
-cargo build -p krb5-client --bin krb5-kinit
-cargo build -p krb5-kdc --bin krb5-kdc
-
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
-fi
+need_image
 
 # --- Rust kinit -E vs MIT KDC ---
 NAME="kerber-rust-kinit-enterprise-mit"
@@ -103,6 +95,7 @@ trap - EXIT
 NAME="kerber-rust-kinit-enterprise-kdc"
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
+register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
 cleanup_kdc() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup_kdc EXIT
 

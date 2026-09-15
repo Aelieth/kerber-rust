@@ -9,6 +9,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins krb5-kdc krb5-kdb krb5-forge-tgt krb5-pac-extract
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-rc4-session-gate"
@@ -17,19 +19,6 @@ export CORRELATION_ID
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-rc4-session-gate}"
 OUT="$SCRATCH/rc4-session-gate"
 mkdir -p "$OUT"
-
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"rc4-session-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
-
-die() {
-    log "rc4.session" "error" ",\"error\":\"$1\""
-    echo "FATAL: $1" >&2
-    docker exec "$NAME" cat /tmp/rust-kdc.log 2>/dev/null | tail -80 >&2 || true
-    docker exec "$NAME" cat /tmp/mit-kinit-rustkdc.trace 2>/dev/null | tail -80 >&2 || true
-    exit 1
-}
 
 kill_comm() {
     local comm_name=$1
@@ -84,18 +73,14 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
-cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-kdb --bin krb5-forge-tgt --bin krb5-pac-extract \
     -p krb5-admin --bin krb5-kadmin-local \
     -p krb5-client --bin krb5-kinit --bin krb5-kvno --bin krb5-klist -q
 
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
-fi
+need_image
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" "$IMAGE" >/dev/null
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
+register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
 
 ok=0
 for _ in $(seq 1 90); do

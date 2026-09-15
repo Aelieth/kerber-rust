@@ -9,6 +9,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins krb5-kdc krb5-pac-extract
 
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
@@ -17,21 +19,6 @@ mkdir -p "$SCRATCH"
 UNAVAIL="$SCRATCH/samba-realtrust-unavailable.log"
 ADMIN_PW="${SAMBA_ADMIN_PASSWORD:-Samba-Admin-Kerber-2026!}"
 KBRUSER_PW="${SAMBA_KBRUSER_PASSWORD:-Kbruser-P@ss-2026!}"
-
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"samba-realtrust-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
-
-unavailable() {
-    {
-        echo "date=$(date -Iseconds)"
-        echo "host /etc/krb5.conf must stay TESTLABBY.LOCAL"
-        echo "$1"
-    } | tee "$UNAVAIL" >&2
-    log "samba.realtrust" "error" ",\"error\":\"unavailable\""
-    exit 2
-}
 
 if ! command -v docker >/dev/null 2>&1; then
     unavailable "docker not available"
@@ -48,19 +35,12 @@ if [ -z "$IMAGE_A" ] || [ -z "$IMAGE_B" ]; then
     unavailable "need samba-ad-dc:latest and samba-kerber-dc:latest (or SAMBA_AD_IMAGE / SAMBA_KERBER_IMAGE)"
 fi
 
-cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-pac-extract
-
 NET="kerber-rust-realtrust"
 NAME_A="kerber-rust-samba-rt-a"
 NAME_B="kerber-rust-samba-rt-b"
 docker rm -f "$NAME_A" "$NAME_B" >/dev/null 2>&1 || true
 docker network rm "$NET" >/dev/null 2>&1 || true
 docker network create "$NET" >/dev/null
-cleanup() {
-    docker rm -f "$NAME_A" "$NAME_B" >/dev/null 2>&1 || true
-    docker network rm "$NET" >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
 
 set +e
 docker run -d --name "$NAME_A" --hostname dc1 --network "$NET" \

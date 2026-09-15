@@ -5,8 +5,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
-
-cargo build -p krb5-kdc --bin krb5-kdc -p krb5-client --bin krb5-kinit
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins krb5-kdc krb5-kinit
 
 TMP="${TMPDIR:-/tmp}/kerber-bidir-$$"
 mkdir -p "$TMP"

@@ -8,6 +8,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins loadgen krb5-kdc krb5-kdb krb5-kadmind krb5-kadmin-local krb5-kpasswd krb5-kprop krb5-kpropd
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/prod-realm-common.sh"
 
@@ -23,30 +25,9 @@ export KERBER_LOAD_SECONDS="$SOAK_S"
 unset KERBER_LOAD_ITERS || true
 P99_MAX_US="${KERBER_SLO_P99_MAX_US:-500000}"
 
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"soak-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
-die() {
-    log "soak.gate" "error" ",\"error\":\"$1\""
-    echo "FATAL: $1" >&2
-    exit 1
-}
-unavailable() {
-    log "soak.gate" "error" ",\"error\":\"$1\""
-    echo "$1" | tee "$SCRATCH/soak-gate-unavailable.log"
-    exit 2
-}
-cleanup() {
-    "$ROOT/harness/prod/env-down.sh" >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
-
 command -v docker >/dev/null 2>&1 || unavailable "docker not available"
 python3 "$ROOT/scripts/lib/analyze-kdc-slo.py" --self-test \
     || die "SLO analyzer self-test failed"
-cargo build -p krb5-kdc -p krb5-admin --bins -q
-cargo build -p krb5-client --example loadgen -q
 
 echo "==== env-up $REALM ===="
 # PDU files in the KDC cgroup inflate docker stats via page cache; RSS

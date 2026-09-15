@@ -6,6 +6,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins krb5-kdc krb5-kprop
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-kprop-reverse-gate"
@@ -13,11 +15,6 @@ CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
 export CORRELATION_ID
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-kprop-reverse-gate}"
 mkdir -p "$SCRATCH"
-
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"kprop-reverse-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
 
 kill_comm() {
     local comm="$1"
@@ -35,27 +32,11 @@ done
 '
 }
 
-if ! command -v docker >/dev/null 2>&1; then
-    log "kprop.reverse.gate" "error" ',"error":"docker not available"'
-    echo "docker not available" >"$SCRATCH/kprop-reverse-unavailable.log"
-    exit 2
-fi
-
-cargo build -p krb5-kdc --bin krb5-kdc -p krb5-admin --bin krb5-kprop
-
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
-fi
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    log "kprop.reverse.gate" "error" ',"error":"MIT image unavailable"'
-    echo "MIT image unavailable" >"$SCRATCH/kprop-reverse-unavailable.log"
-    exit 2
-fi
+need_image
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --hostname testhost.kerber.test --entrypoint sleep "$IMAGE" 3600 >/dev/null
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
+register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
 
 if ! docker exec "$NAME" sh -c 'command -v kpropd >/dev/null && command -v kdb5_util >/dev/null'; then
     log "kprop.reverse.gate" "error" ',"error":"kpropd/kdb5_util missing"'

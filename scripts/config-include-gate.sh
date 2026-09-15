@@ -6,19 +6,16 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins krb5-kinit krb5-kvno krb5-klist
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"config-include-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
 NAME="kerber-rust-mit-kdc"
 if ! docker ps -q --filter "name=^${NAME}$" | grep -q .; then
     echo "start the harness first: ./scripts/run-harness.sh" >&2
     exit 1
 fi
 
-cargo build -p krb5-client --bin krb5-kinit --bin krb5-kvno --bin krb5-klist -q
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kinit" "$NAME":/tmp/krb5-kinit
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kvno" "$NAME":/tmp/krb5-kvno
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-klist" "$NAME":/tmp/krb5-klist

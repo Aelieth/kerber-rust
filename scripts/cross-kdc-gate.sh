@@ -7,6 +7,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins krb5-kdc krb5-kdb krb5-pac-extract
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-cross-kdc-gate"
@@ -18,23 +20,6 @@ OUT="$SCRATCH/cross-kdc-gate"
 mkdir -p "$OUT"
 CC=/tmp/cross-kdc.cc
 
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"cross-kdc-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
-
-die() {
-    log "cross.kdc.gate" "error" ",\"error\":\"$1\""
-    echo "FATAL: $1" >&2
-    exit 1
-}
-
-unavailable() {
-    log "cross.kdc.gate" "error" ",\"error\":\"$1\""
-    echo "$1" | tee "$SCRATCH/cross-kdc-unavailable.log"
-    exit 2
-}
-
 if ! command -v docker >/dev/null 2>&1; then
     unavailable "docker not available"
 fi
@@ -42,19 +27,14 @@ if [ ! -f "$GOLDEN" ]; then
     die "missing golden dump $GOLDEN"
 fi
 
-cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-kdb --bin krb5-pac-extract -q
-
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT" || true
-fi
+need_image
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     unavailable "MIT image unavailable"
 fi
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
+register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb

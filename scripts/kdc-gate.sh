@@ -8,30 +8,24 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/gate-common.sh"
+need_bins krb5-kdc
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-mit-client"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
 
-log() {
-    printf '{"event":"%s","correlation_id":"%s","component":"kdc-gate","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$2" "${3:-}"
-}
-
 if ! command -v docker >/dev/null 2>&1; then
     log "kdc.gate" "error" ',"error":"docker not available"'
     exit 1
 fi
 
-cargo build -p krb5-kdc --bin krb5-kdc
-
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
-fi
+need_image
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
+register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
 if ! docker exec "$NAME" test -f /usr/lib/krb5/plugins/audit/k5audit_test.so; then
     echo "MIT image lacks k5audit_test.so; rebuilding" >&2
     docker rm -f "$NAME" >/dev/null 2>&1 || true
@@ -42,9 +36,6 @@ if ! docker exec "$NAME" test -f /usr/lib/krb5/plugins/audit/k5audit_test.so; th
         exit 1
     fi
 fi
-
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
 
 if ! docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc; then
     log "kdc.gate" "error" ',"error":"docker cp krb5-kdc failed"'
