@@ -2237,6 +2237,17 @@ def check_env_read() -> None:
                     _die(f"{wf_path.name} sets {name} but no script/test reads it")
 
 
+def check_trace_dst() -> None:
+    """Gate captures must not default into tests/traces (S5)."""
+    for name in ("kdc-gate.sh", "client-gate.sh"):
+        path = SCRIPTS / name
+        text = path.read_text(encoding="utf-8")
+        if 'KERBER_TRACE_DST:-$ROOT/tests/traces' in text:
+            _die(f"{name} must not default TRACE_DST to tests/traces")
+        if "KERBER_SCRATCH" not in text or "TRACE_DST" not in text:
+            _die(f"{name} must default TRACE_DST under KERBER_SCRATCH")
+
+
 def check_gate_common_sourced() -> None:
     """Every gate sources gate-common.sh; no private log()/cleanup(); no cargo build."""
     common = SCRIPTS / "lib" / "gate-common.sh"
@@ -3516,6 +3527,7 @@ def main() -> None:
     check_env_read()
     check_peers_unavailable_convention()
     check_gate_common_sourced()
+    check_trace_dst()
     check_red_at_sha_inject()
     check_red_at_sha_overlay_order()
     check_red_at_sha_target_trap()
