@@ -2288,7 +2288,17 @@ def check_gate_common_sourced() -> None:
                 _die("kadmin-gate.sh tamper proxy is single-accept; use wait_tcp_bound_in, not wait_port_in")
             if "wait_tcp_bound_in" not in text:
                 _die("kadmin-gate.sh must wait_tcp_bound_in for the integrity tamper proxy")
+        if path.name == "kcm-gate.sh":
+            check_kcm_need_image(text)
     check_build_bins_examples()
+
+
+def check_kcm_need_image(text: str, name: str = "kcm-gate.sh") -> None:
+    """need_image inspects $IMAGE; the Fedora KCM tag is not the MIT image."""
+    if re.search(r'^\s*IMAGE=.*sssd-kcm', text, re.M) and "need_image" in text:
+        _die(f"{name} must not set IMAGE to sssd-kcm before need_image (KERBER_SKIP_MIT_BUILD)")
+    if "KCM_IMAGE" not in text:
+        _die(f"{name} must use KCM_IMAGE for the Fedora sssd-kcm tag")
 
 
 def check_gate_no_exit_trap(text: str, name: str = "gate.sh") -> None:
@@ -3169,6 +3179,15 @@ jobs:
         check_gate_no_exit_trap,
         "trap 'cleanup; mit_cleanup' EXIT\n",
         "exit-trap-gate.sh",
+    )
+    check_kcm_need_image(
+        'KCM_IMAGE="${KCM_IMAGE:-kerber-rust-sssd-kcm:f43}"\nneed_image\n',
+        "ok-kcm-gate.sh",
+    )
+    _must_die(
+        check_kcm_need_image,
+        'IMAGE="${KCM_IMAGE:-kerber-rust-sssd-kcm:f43}"\nneed_image\n',
+        "bad-kcm-gate.sh",
     )
     check_no_host_tmp_writes(
         "docker exec n sh -c 'kill /tmp/krb5-kdc; : >/tmp/in-container'\n"

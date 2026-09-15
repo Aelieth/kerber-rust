@@ -15,7 +15,7 @@ export CORRELATION_ID
 
 MIT="kerber-rust-mit-kdc"
 KCM="kerber-rust-sssd-kcm"
-IMAGE="${KCM_IMAGE:-kerber-rust-sssd-kcm:f43}"
+KCM_IMAGE="${KCM_IMAGE:-kerber-rust-sssd-kcm:f43}"
 F43_DIGEST="sha256:96b2a05f8ce3111e10c236abe8055b01500880d95ee7c2f92fa30847fdbb667b"
 
 need_image
@@ -24,13 +24,13 @@ if ! docker ps -q --filter "name=^${MIT}$" | grep -q .; then
     ./scripts/run-harness.sh
     STOP_MIT=1
 fi
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+if ! docker image inspect "$KCM_IMAGE" >/dev/null 2>&1; then
     docker build -f harness/kcm/Dockerfile --build-arg "FEDORA_DIGEST=${F43_DIGEST}" \
-        -t "$IMAGE" "$ROOT"
+        -t "$KCM_IMAGE" "$ROOT"
 fi
 
 docker rm -f "$KCM" >/dev/null 2>&1 || true
-docker run -d --name "$KCM" --network "container:${MIT}" "$IMAGE" >/dev/null
+docker run -d --name "$KCM" --network "container:${MIT}" "$KCM_IMAGE" >/dev/null
 for _ in $(seq 1 50); do
     if docker exec "$KCM" test -S /run/.heim_org.h5l.kcm-socket; then
         break
