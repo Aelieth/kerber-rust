@@ -23,11 +23,13 @@ fi
 
 need_image
 
-docker rm -f "$NAME" >/dev/null 2>&1 || true
-docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
-register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
+shell_container
 if ! docker exec "$NAME" test -f /usr/lib/krb5/plugins/audit/k5audit_test.so; then
     echo "MIT image lacks k5audit_test.so; rebuilding" >&2
+    if [ -n "${KERBER_SHELL:-}" ]; then
+        log "kdc.gate" "error" ',"error":"k5audit_test.so missing in shared shell image"'
+        exit 1
+    fi
     docker rm -f "$NAME" >/dev/null 2>&1 || true
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
     docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null

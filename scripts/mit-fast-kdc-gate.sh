@@ -20,9 +20,7 @@ fi
 
 need_image
 
-docker rm -f "$NAME" >/dev/null 2>&1 || true
-docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
-register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
+shell_container
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-forge-tgt" "$NAME":/tmp/krb5-forge-tgt
@@ -194,22 +192,13 @@ RUST_SHAPE="$(echo "$RUST_FAST_ERR" | grep -E 'rep#[0-9]+ error_code=' | head -1
 
 echo "==== MIT KDC: forged-realm FAST armor is NOT_US ===="
 MITNAME="${NAME}-mit"
-docker rm -f "$MITNAME" >/dev/null 2>&1 || true
-docker run -d --name "$MITNAME" "$IMAGE" >/dev/null
-register_cleanup 'docker rm -f "$MITNAME" >/dev/null 2>&1 || true'
-ok=0
-for _ in $(seq 1 90); do
-    logs="$(docker logs "$MITNAME" 2>&1 || true)"
-    if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"ok"'; then
-        ok=1
-        break
-    fi
-    sleep 1
-done
-if [ "$ok" != 1 ]; then
-    docker logs "$MITNAME" >&2 || true
-    log "fast.kdc.gate" "error" ',"error":"MIT harness did not become ready"'
-    exit 1
+_saved=$NAME
+stock_mit_kdc "$MITNAME"
+MITNAME=$NAME
+NAME=$_saved
+if [ "${KERBER_LIVE:-}" = 1 ]; then
+    mit_conf_snapshot "$MITNAME"
+    register_cleanup "mit_conf_restore '$MITNAME'"
 fi
 docker exec "$MITNAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
 wait_pid_gone "$MITNAME" krb5kdc || true

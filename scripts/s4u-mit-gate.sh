@@ -25,28 +25,11 @@ fi
 
 need_image
 
-docker rm -f "$NAME" "$MITNAME" >/dev/null 2>&1 || true
-docker run -d --name "$NAME" "$IMAGE" >/dev/null
-
-ok=0
-for _ in $(seq 1 90); do
-    logs="$(docker logs "$NAME" 2>&1 || true)"
-    if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"ok"'; then
-        ok=1
-        break
-    fi
-    if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"error"'; then
-        echo "$logs" >&2
-        log "s4u.mit.gate" "error" ',"error":"harness kinit failed"'
-        exit 1
-    fi
-    sleep 1
-done
-if [ "$ok" != 1 ]; then
-    log "s4u.mit.gate" "error" ',"error":"harness did not become ready"'
-    docker logs "$NAME" >&2 || true
-    exit 1
+if [ -z "${KERBER_LIVE:-}" ]; then
+    docker rm -f "$NAME" "$MITNAME" >/dev/null 2>&1 || true
 fi
+stock_mit_kdc "$NAME"
+mit_live_guard
 
 # The mismatch cell uses -U admin; the entrypoint only adds `user`.
 docker exec "$NAME" kadmin.local -q "addprinc -randkey admin" >/dev/null
@@ -203,9 +186,10 @@ echo "$LOCKED"
 echo "$LOCKED" | grep -qiE "credentials have been revoked|CLIENT_REVOKED"
 
 echo "==== without ok_to_auth_as_delegate keeps F (no allowed_to_delegate targets) ===="
-docker rm -f "$NAME" >/dev/null 2>&1 || true
-docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
-register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
+if [ "${KERBER_LIVE:-}" = 1 ]; then
+    mit_conf_restore "$NAME"
+fi
+shell_container
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker exec "$NAME" chmod +x /tmp/krb5-kdc
 docker exec -d \
@@ -283,26 +267,13 @@ echo "$PADATA" | grep -E 'req#[0-9]+ msg_type=12 padata=\[' | grep -q '129'
 echo "$PADATA" | grep -E 'rep#[0-9]+ tag=0x6d' | grep -q '0x6d'
 
 echo "==== MIT KDC db2: keep F, expired user, reply 130 ===="
-docker rm -f "$MITNAME" >/dev/null 2>&1 || true
-docker run -d --name "$MITNAME" "$IMAGE" >/dev/null
-ok=0
-for _ in $(seq 1 90); do
-    logs="$(docker logs "$MITNAME" 2>&1 || true)"
-    if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"ok"'; then
-        ok=1
-        break
-    fi
-    if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"error"'; then
-        echo "$logs" >&2
-        log "s4u.mit.gate" "error" ',"error":"MIT oracle harness kinit failed"'
-        exit 1
-    fi
-    sleep 1
-done
-if [ "$ok" != 1 ]; then
-    log "s4u.mit.gate" "error" ',"error":"MIT oracle harness did not become ready"'
-    docker logs "$MITNAME" >&2 || true
-    exit 1
+_saved=$NAME
+stock_mit_kdc "$MITNAME"
+MITNAME=$NAME
+NAME=$_saved
+if [ "${KERBER_LIVE:-}" = 1 ]; then
+    mit_conf_snapshot "$MITNAME"
+    register_cleanup "mit_conf_restore '$MITNAME'"
 fi
 docker exec "$MITNAME" kadmin.local -q "addprinc -pw expirepw expired"
 EXPOUT="$(docker exec "$MITNAME" kadmin.local -q "modprinc -pwexpire 1/1/1990 expired")"

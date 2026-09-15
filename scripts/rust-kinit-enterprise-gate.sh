@@ -33,29 +33,8 @@ need_image
 
 # --- Rust kinit -E vs MIT KDC ---
 NAME="kerber-rust-kinit-enterprise-mit"
-docker rm -f "$NAME" >/dev/null 2>&1 || true
-docker run -d --name "$NAME" "$IMAGE" >/dev/null
-register_cleanup "docker rm -f '$NAME' >/dev/null 2>&1 || true"
-
-ok=0
-for _ in $(seq 1 90); do
-    logs="$(docker logs "$NAME" 2>&1 || true)"
-    if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"ok"'; then
-        ok=1
-        break
-    fi
-    if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"error"'; then
-        echo "$logs" >&2
-        log "enterprise.gate" "error" ',"error":"harness kinit failed"'
-        exit 1
-    fi
-    sleep 1
-done
-if [ "$ok" -ne 1 ]; then
-    log "enterprise.gate" "error" ',"error":"harness did not become ready"'
-    docker logs "$NAME" >&2 || true
-    exit 1
-fi
+stock_mit_kdc "$NAME"
+mit_live_guard
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kinit" "$NAME":/tmp/krb5-kinit
 docker exec "$NAME" chmod +x /tmp/krb5-kinit
@@ -87,13 +66,13 @@ set -e
 echo "$OUT"
 test "$rc" -ne 0
 echo "$OUT" | grep -Eqi 'CLIENT_NOT_FOUND|C_PRINCIPAL_UNKNOWN|not found'
-docker rm -f "$NAME" >/dev/null 2>&1 || true
+if [ "${KERBER_LIVE:-}" != 1 ]; then
+    docker rm -f "$NAME" >/dev/null 2>&1 || true
+fi
 
 # --- MIT kinit -E vs Rust KDC ---
 NAME="kerber-rust-kinit-enterprise-kdc"
-docker rm -f "$NAME" >/dev/null 2>&1 || true
-docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
-register_cleanup "docker rm -f '$NAME' >/dev/null 2>&1 || true"
+shell_container
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker exec "$NAME" chmod +x /tmp/krb5-kdc

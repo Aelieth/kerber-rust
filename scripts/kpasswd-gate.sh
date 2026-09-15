@@ -201,9 +201,10 @@ fi
 
 need_image
 
-docker rm -f "$NAME" "$NAME_MIT" >/dev/null 2>&1 || true
-docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
-register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
+if [ -z "${KERBER_SHELL:-}" ]; then
+    docker rm -f "$NAME" "$NAME_MIT" >/dev/null 2>&1 || true
+fi
+shell_container
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmind" "$NAME":/tmp/krb5-kadmind
@@ -527,21 +528,13 @@ echo "==== Rust kpasswd fill-datagram AP-REQ (schpw.c:89-95) ===="
 pin_kpasswd_fill_datagram "$NAME" "Rust"
 
 echo "==== MIT kadmind policy rejection is SOFTERROR ===="
-docker run -d --name "$NAME_MIT" "$IMAGE" >/dev/null
-register_cleanup 'docker rm -f "$NAME_MIT" >/dev/null 2>&1 || true'
-ok=0
-for _ in $(seq 1 90); do
-    logs="$(docker logs "$NAME_MIT" 2>&1 || true)"
-    if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"ok"'; then
-        ok=1
-        break
-    fi
-    sleep 1
-done
-if [ "$ok" != 1 ]; then
-    docker logs "$NAME_MIT" >&2 || true
-    log "kpasswd.gate" "error" ',"error":"MIT harness did not become ready"'
-    exit 1
+_saved=$NAME
+stock_mit_kdc
+NAME_MIT=$NAME
+NAME=$_saved
+if [ "${KERBER_LIVE:-}" = 1 ]; then
+    mit_conf_snapshot "$NAME_MIT"
+    register_cleanup "mit_conf_restore '$NAME_MIT'"
 fi
 echo "==== MIT krb5kdc FILE log ===="
 docker exec "$NAME_MIT" sh -c 'sed -i "s|kdc = STDERR|kdc = FILE:/tmp/krb5kdc.log|" /etc/krb5.conf'

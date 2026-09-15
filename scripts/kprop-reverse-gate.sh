@@ -34,9 +34,7 @@ done
 
 need_image
 
-docker rm -f "$NAME" >/dev/null 2>&1 || true
-docker run -d --name "$NAME" --hostname testhost.kerber.test --entrypoint sleep "$IMAGE" 3600 >/dev/null
-register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
+shell_container 3600 testhost.kerber.test
 
 if ! docker exec "$NAME" sh -c 'command -v kpropd >/dev/null && command -v kdb5_util >/dev/null'; then
     log "kprop.reverse.gate" "error" ',"error":"kpropd/kdb5_util missing"'

@@ -34,9 +34,7 @@ done
 
 need_image
 
-docker rm -f "$NAME" >/dev/null 2>&1 || true
-docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
-register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
+shell_container
 
 if ! docker exec "$NAME" sh -c 'command -v kprop >/dev/null'; then
     log "propacl.gate" "error" ',"error":"kprop binary missing"'
