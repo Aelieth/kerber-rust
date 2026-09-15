@@ -24,7 +24,7 @@ this project uses semantic versioning once a crate is published.
   kadmind). `chrand_etypes_keepold` keeps the current kvno (was 0);
   `kadmin.local addprinc -policy P` binds P before create. Ledger:
   unknown-tuple half of `svr_principal.c:444-447` is
-  `stricter-documented` (MIT `KRB5_PROG_ETYPE_NOSUPP`); `schpw.c:407`.
+  `stricter-documented` (MIT `KRB5_BAD_ENCTYPE`); `schpw.c:407`.
   Follow-up: `setstr` stamps `current_caller` like `kadm5_set_string`
   → `kdb_put_entry` (`svr_principal.c:2022-2043`); `kadm5_create`
   applies `ADMIN_LIFETIME` 3 h / `CHANGEPW_LIFETIME` 5 min
