@@ -6,6 +6,17 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W2-S3
+
+- **kadmin split.** `kadmin-gate.sh` is a local wrapper. CI runs
+  `kadmin-rust-gate.sh`, `kadmin-rust-acl-gate.sh`, `kadmin-mit-gate.sh`,
+  then `kadmin-both-gate.sh` (`KERBER_KADMIN_KEEP=1` leaves containers
+  for the later legs). Rust-vs-MIT diffs that used to share shell vars
+  (`HIST_GET`, `GETPRIVS`, `GETPOL`, `GETF`, `GETU`, `GETNM`) persist
+  under `$KERBER_SCRATCH` because KEEP does not preserve the parent
+  shell. Cell tags are unchanged; `hygiene-diff` identifies a cell by
+  `(kind, tag)` so a tag may move files.
+
 ### W2-S2
 
 - **Gate library.** Every `scripts/*-gate.sh` sources

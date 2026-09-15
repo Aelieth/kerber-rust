@@ -205,6 +205,7 @@ DOCUMENTED_STUBS = frozenset(
     {
         "gss-sspi-gate.sh",
         "ad-mit-trust-gate.sh",
+        "kadmin-gate.sh",  # local wrapper; CI runs rust+mit+both steps
     }
 )
 
@@ -2281,18 +2282,50 @@ def check_gate_common_sourced() -> None:
             _die(f"{path.name} must not run cargo build (use need_bins)")
         check_gate_cargo_leftover(text, path.name)
         check_gate_no_exit_trap(text, path.name)
-        if path.name == "kadmin-gate.sh" and "kadmin-glob-cells.sh" not in text:
-            _die("kadmin-gate.sh must source scripts/lib/kadmin-glob-cells.sh")
-        if path.name == "kadmin-gate.sh":
+        if path.name in ("kadmin-rust-gate.sh", "kadmin-rust-acl-gate.sh", "kadmin-mit-gate.sh", "kadmin-both-gate.sh") and "kadmin-glob-cells.sh" not in text:
+            _die(f"{path.name} must source scripts/lib/kadmin-glob-cells.sh")
+        if path.name in ("kadmin-rust-gate.sh", "kadmin-mit-gate.sh"):
             if re.search(r'wait_port_in\s+"\$NAME(_MIT)?"\s+1749', text):
-                _die("kadmin-gate.sh tamper proxy is single-accept; use wait_tcp_bound_in, not wait_port_in")
+                _die(f"{path.name} tamper proxy is single-accept; use wait_tcp_bound_in, not wait_port_in")
             if "wait_tcp_bound_in" not in text:
-                _die("kadmin-gate.sh must wait_tcp_bound_in for the integrity tamper proxy")
+                _die(f"{path.name} must wait_tcp_bound_in for the integrity tamper proxy")
+        check_kadmin_split_snaps(text, path.name)
         if path.name == "kcm-gate.sh":
             check_kcm_need_image(text)
         if re.search(r"krb5kdc -n >/tmp/mit-kdc.log 2>&1 & cat", text):
             _die(f"{path.name} must wait_log for krb5kdc -n, not cat the log immediately")
+    check_kadmin_glob_lib()
     check_build_bins_examples()
+
+
+def check_kadmin_glob_lib(text: str | None = None) -> None:
+    """hist_shape lives in the sourced lib so both-gate can diff getprinc output."""
+    if text is None:
+        path = SCRIPTS / "lib" / "kadmin-glob-cells.sh"
+        if not path.is_file():
+            _die("missing scripts/lib/kadmin-glob-cells.sh")
+        text = path.read_text(encoding="utf-8")
+    if "hist_shape" not in text:
+        _die("kadmin-glob-cells.sh must define hist_shape for rust/MIT getprinc diffs")
+    if "alias_cells" not in text:
+        _die("kadmin-glob-cells.sh must define alias_cells")
+
+
+def check_kadmin_split_snaps(text: str, name: str) -> None:
+    """KEEP preserves containers, not shell vars; rust snapshots must cross the process boundary."""
+    if name == "kadmin-rust-gate.sh" and "save_rust_snap" not in text:
+        _die("kadmin-rust-gate.sh must persist rust snapshots for mit-gate diffs")
+    if name == "kadmin-rust-acl-gate.sh" and "save_rust_snap" not in text:
+        _die("kadmin-rust-acl-gate.sh must persist rust snapshots for mit-gate diffs")
+    if name == "kadmin-mit-gate.sh" and "load_rust_snap" not in text:
+        _die("kadmin-mit-gate.sh must load rust snapshots (KEEP does not preserve shell vars)")
+    if name == "kadmin-gate.sh":
+        if "kadmin-rust-gate.sh" not in text or "kadmin-both-gate.sh" not in text:
+            _die("kadmin-gate.sh must wrap rust+mit+both legs")
+        if "kadmin-rust-acl-gate.sh" not in text:
+            _die("kadmin-gate.sh must wrap rust-acl after rust")
+        if "KERBER_SCRATCH" not in text:
+            _die("kadmin-gate.sh must export KERBER_SCRATCH so rust/mit/both share snapshots")
 
 
 def check_kcm_need_image(text: str, name: str = "kcm-gate.sh") -> None:
@@ -3181,6 +3214,30 @@ jobs:
         check_gate_no_exit_trap,
         "trap 'cleanup; mit_cleanup' EXIT\n",
         "exit-trap-gate.sh",
+    )
+    check_kadmin_glob_lib("hist_shape() { cat; }\nalias_cells() { :; }\n")
+    _must_die(check_kadmin_glob_lib, "glob_cells() { :; }\n")
+    _must_die(check_kadmin_glob_lib, "hist_shape() { cat; }\n")
+    check_kadmin_split_snaps("save_rust_snap HIST_GET\n", "kadmin-rust-gate.sh")
+    _must_die(check_kadmin_split_snaps, "echo no snap\n", "kadmin-rust-gate.sh")
+    check_kadmin_split_snaps("load_rust_snap HIST_GET\n", "kadmin-mit-gate.sh")
+    _must_die(check_kadmin_split_snaps, "echo no load\n", "kadmin-mit-gate.sh")
+    check_kadmin_split_snaps(
+        "./scripts/kadmin-rust-gate.sh\n./scripts/kadmin-rust-acl-gate.sh\n"
+        "./scripts/kadmin-both-gate.sh\nKERBER_SCRATCH=\n",
+        "kadmin-gate.sh",
+    )
+    check_kadmin_split_snaps("save_rust_snap GETPRIVS\n", "kadmin-rust-acl-gate.sh")
+    _must_die(check_kadmin_split_snaps, "echo no snap\n", "kadmin-rust-acl-gate.sh")
+    _must_die(
+        check_kadmin_split_snaps,
+        "./scripts/kadmin-rust-gate.sh\n./scripts/kadmin-both-gate.sh\n",
+        "kadmin-gate.sh",
+    )
+    _must_die(
+        check_kadmin_split_snaps,
+        "./scripts/kadmin-rust-gate.sh\nKERBER_SCRATCH=\n",
+        "kadmin-gate.sh",
     )
     check_kcm_need_image(
         'KCM_IMAGE="${KCM_IMAGE:-kerber-rust-sssd-kcm:f43}"\nneed_image\n',
