@@ -102,7 +102,9 @@ kinit_rc=$?
 set -e
 if [ "$kinit_rc" -ne 0 ]; then
     docker logs "$NAME" >>"$LOG" 2>&1 || true
-    unavailable "kinit ${USER}@${REALM} against Samba AD failed"
+    log "ad.windows.gate" "error" ',"error":"kinit failed against a listening Samba AD"'
+    echo "kinit ${USER}@${REALM} against Samba AD failed" >&2
+    exit 1
 fi
 
 set +e
@@ -113,7 +115,9 @@ set -e
 echo "$KVNO_OUT" | tee -a "$LOG"
 echo "$KLIST" | tee -a "$LOG"
 if [ "$kvno_rc" -ne 0 ]; then
-    unavailable "kvno ${SVC} against Samba AD failed"
+    log "ad.windows.gate" "error" ',"error":"kvno failed against a listening Samba AD"'
+    echo "kvno ${SVC} against Samba AD failed" >&2
+    exit 1
 fi
 echo "$KLIST" | grep -q "${USER}@${REALM}"
 echo "$KLIST" | grep -q "${SVC}@${REALM}"

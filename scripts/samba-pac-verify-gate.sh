@@ -114,7 +114,9 @@ kinit_rc=$?
 set -e
 if [ "$kinit_rc" -ne 0 ]; then
     docker exec "$NAME" cat /tmp/rust-kdc.log 2>/dev/null || true
-    unavailable "kinit user@KERBER.TEST against co-located Rust KDC failed"
+    log "samba.pac.verify" "error" ',"error":"kinit failed against co-located Rust KDC"'
+    echo "kinit user@KERBER.TEST against co-located Rust KDC failed" >&2
+    exit 1
 fi
 
 set +e
@@ -125,7 +127,9 @@ KLIST="$(docker exec -e KRB5_CONFIG=/tmp/rust-krb5.conf "$NAME" klist 2>&1)"
 set -e
 echo "$KLIST"
 if [ "$kvno_rc" -ne 0 ]; then
-    unavailable "kvno host/testhost.kerber.test against Rust KDC failed"
+    log "samba.pac.verify" "error" ',"error":"kvno failed against co-located Rust KDC"'
+    echo "kvno host/testhost.kerber.test against Rust KDC failed" >&2
+    exit 1
 fi
 echo "$KLIST" | grep -q 'user@KERBER.TEST'
 echo "$KLIST" | grep -q 'host/testhost.kerber.test'

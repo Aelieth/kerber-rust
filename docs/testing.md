@@ -388,11 +388,12 @@ three marked `continue-on-error`):
 
 | Job | Runs |
 | --- | --- |
-| `test` | `cargo fmt --check`, `cargo clippy --all-targets --all-features -D warnings`, `cargo nextest run --workspace --profile ci`, `cargo doc --no-deps` |
+| `test` | `cargo fmt --check`, `cargo clippy --all-targets --all-features -D warnings`, `cargo nextest run --workspace --profile ci` |
+| `doc` | `cargo doc --workspace --no-deps` (sibling of `test`) |
 | `msrv` | `cargo build --workspace --all-targets --locked` on Rust 1.95 |
 | `audit` | `cargo audit`, `cargo deny`, `scripts/geiger.sh` (per-crate `cargo geiger`, 0-unsafe product), `cargo vet --locked` |
 | `ledger-mit` | fetches the SHA-pinned MIT 1.22.2 source and runs `scripts/ci-policy.py` (ledger anchors, tally, proof column, evidence rules) |
-| `mit-image` | builds or restores `kerber-rust-mit-kdc:1.22.2` for the two gate jobs |
+| `mit-image` | builds or restores `kerber-rust-mit-kdc:1.22.2` and `kerber-rust-prod-node:latest` into `actions/cache` (no artifact round-trip) |
 | `harness` | `client-gate`, `ccache-gate`, `knobs-gate`, `config-include-gate`, `kdc-gate`, `store-gate`, `bidirectional-gate`, `gss-gate`, `pkinit-gate`, `kadmin-gate`, `policy-gate`, `history-mit-gate`, `kpasswd-gate`, `kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `rd-safe-oracle-gate`, `cross-kdc-gate`, `iprop-gate`, `expire-gate`, `kdcpolicy-gate`, `flags-gate`, `renew-gate`, `postdate-gate`, `getprivs-gate`, `prop-acl-gate`, `restart-gate`, `prod-gate`, `prod-realm-gate`; `sssd-renew-gate`, `kit-conformance-gate`, `gssproxy-gate`, `nfs-krb5p-gate` run under `skip2` (an honest `exit 2` = oracle absent is not red) |
 | `mit-extra` | `cross-realm-gate`, `capaths-transit-gate`, `capaths-compress-gate`, `spake-gate`, `rust-kinit-spake-gate`, `mit-fast-kdc-gate`, `rust-kinit-fast-gate`, `rust-kinit-pkinit-gate`, `rust-kinit-enterprise-gate`, `client-differential-gate`, `ktutil-gate`, `kadmin-local-gate`, `rust-kpasswd-mit-gate`, `sha2-gate`, `s4u-mit-gate`, `kcm-gate`, `rc4-session-gate` |
 | `slo` (`continue-on-error`) | `stress-gate` over `harness/prod` |

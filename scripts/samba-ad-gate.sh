@@ -103,8 +103,10 @@ docker exec -e KRB5_CONFIG=/tmp/samba-krb5.conf "$NAME" \
 kinit_rc=$?
 set -e
 if [ "$kinit_rc" -ne 0 ]; then
-    docker logs "$NAME" >>"$UNAVAIL" 2>&1 || true
-    unavailable "kinit ${USER}@${REALM} against Samba AD failed"
+    docker logs "$NAME" >&2 || true
+    log "samba.ad.gate" "error" ',"error":"kinit failed against a listening Samba AD"'
+    echo "kinit ${USER}@${REALM} against Samba AD failed" >&2
+    exit 1
 fi
 
 set +e
@@ -115,7 +117,9 @@ set -e
 echo "$KVNO_OUT"
 echo "$KLIST"
 if [ "$kvno_rc" -ne 0 ]; then
-    unavailable "kvno against Samba AD failed"
+    log "samba.ad.gate" "error" ',"error":"kvno failed against a listening Samba AD"'
+    echo "kvno against Samba AD failed" >&2
+    exit 1
 fi
 echo "$KLIST" | grep -q "${USER}@${REALM}"
 echo "$KLIST" | grep -q "krbtgt/${REALM}@${REALM}"
