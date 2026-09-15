@@ -147,4 +147,12 @@ if [ "$PEERS" = 1 ]; then
 fi
 
 echo "finished=$(date -Is)" >>"$OUT/00-head.txt"
+if [ "$SKIP_POLICY" != 1 ]; then
+    python3 scripts/ci-policy.py --checkpoint --timings "$OUT/timings.tsv" \
+        >"$OUT/04-gate-wall.log" 2>&1 || {
+        echo "checkpoint: gate-wall check failed" >&2
+        cat "$OUT/04-gate-wall.log" >&2
+        exit 1
+    }
+fi
 echo CHECKPOINT_DONE

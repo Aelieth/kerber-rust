@@ -1,0 +1,20 @@
+# W2-S6 per-push job budgets (seconds). Ratched from measured CI
+# (S4 run 588: test=147 harness=436 mit-extra=259 run_wall=470), not
+# the paper Exit hopes. A run cannot measure itself; --check-budget
+# compares a completed SHA / the last N runs.
+
+[jobs]
+test = 300
+harness = 500
+mit-extra = 300
+doc = 90
+msrv = 120
+audit = 240
+ledger-mit = 60
+mit-image = 90
+slo = 180
+chaos = 180
+soak = 240
+
+[push]
+run_wall = 540
