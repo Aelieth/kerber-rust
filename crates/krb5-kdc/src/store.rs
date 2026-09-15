@@ -3942,6 +3942,17 @@ mod tests {
     }
 
     const TEST_REALM_STR: &str = "KERBER.TEST";
+
+    fn wait_unix_past(target: u32) {
+        let cap = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while unix_now() <= target {
+            assert!(
+                std::time::Instant::now() < cap,
+                "unix seconds did not pass {target} within 2s"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
     const A128: EncryptionType = EncryptionType::Aes128CtsHmacSha196;
     const A256: EncryptionType = EncryptionType::Aes256CtsHmacSha196;
 
@@ -4854,7 +4865,7 @@ mod tests {
         assert!(crate::issue_as(&store, &bad_as()).is_err());
         let locked = crate::issue_as(&store, &bad_as()).unwrap_err();
         assert!(revoked(&locked), "max_fail 1 must lock on the next AS");
-        std::thread::sleep(std::time::Duration::from_millis(1100));
+        wait_unix_past(unix_now());
         crate::issue_as(&store, &good)
             .expect("elapsed lockout duration with interval=0 must unlock");
     }
@@ -4900,7 +4911,7 @@ mod tests {
         };
         let revoked = |e: &Error| matches!(e, Error::Protocol { code, .. } if *code == krb5_types::err::CLIENT_REVOKED);
         assert!(crate::issue_as(&store, &bad_as()).is_err());
-        std::thread::sleep(std::time::Duration::from_millis(1100));
+        wait_unix_past(unix_now());
         let second = crate::issue_as(&store, &bad_as()).unwrap_err();
         assert!(
             !revoked(&second),

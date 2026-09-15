@@ -17,6 +17,67 @@ fn isolate_host_krb5() {
     krb5_config::isolate_test_krb5();
 }
 
+/// Capture `n` UDP requests and return them without waiting out the client
+/// UDP retry backoff (0.5+1+2 s) after the stub has what the test asserts.
+fn capture_udp_reqs(
+    n: usize,
+    reply: Vec<u8>,
+    send: impl FnOnce(u16) + Send + 'static,
+) -> Vec<Vec<u8>> {
+    use std::net::UdpSocket;
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::thread;
+    use std::time::Duration;
+
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (tx, rx) = mpsc::channel();
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = udp.local_addr().unwrap().port();
+    let seen2 = seen.clone();
+    thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        loop {
+            let Ok((nread, src)) = udp.recv_from(&mut buf) else {
+                return;
+            };
+            {
+                let mut g = seen2.lock().unwrap();
+                if g.len() < n {
+                    g.push(buf[..nread].to_vec());
+                    if g.len() == n {
+                        let _ = tx.send(());
+                    }
+                }
+            }
+            let _ = udp.send_to(&reply, src);
+        }
+    });
+    thread::spawn(move || send(port));
+    rx.recv_timeout(Duration::from_secs(2))
+        .expect("UDP stub captured the expected requests");
+    seen.lock().unwrap().clone()
+}
+
+fn preauth_required_der() -> Vec<u8> {
+    use krb5_types::{KerberosTime, KrbError, Microseconds, PrincipalName, ascii, err};
+    encode(&KrbError {
+        pvno: KrbError::PVNO,
+        msg_type: KrbError::MSG_TYPE,
+        ctime: None,
+        cusec: None,
+        stime: KerberosTime::now(),
+        susec: Microseconds::ZERO,
+        error_code: err::PREAUTH_REQUIRED,
+        crealm: None,
+        cname: None,
+        realm: ascii("KERBER.TEST"),
+        sname: PrincipalName::krbtgt("KERBER.TEST"),
+        e_text: None,
+        e_data: None,
+    })
+    .unwrap()
+}
+
 fn client_key() -> krb5_crypto::ProtocolKey {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     string_to_key(
@@ -180,7 +241,6 @@ fn exchange_tcp_and_udp_round_trip_local_kdc() {
     use std::io::{Read, Write};
     use std::net::{TcpListener, UdpSocket};
     use std::thread;
-    use std::time::Duration;
 
     use krb5_protocol::{KdcAddr, exchange};
     use krb5_types::{KerberosTime, KrbError, Microseconds, PrincipalName, ascii, err};
@@ -225,7 +285,6 @@ fn exchange_tcp_and_udp_round_trip_local_kdc() {
             .unwrap();
         s.write_all(&reply_t).unwrap();
     });
-    thread::sleep(Duration::from_millis(20));
     let got = exchange(
         &KdcAddr {
             host: "127.0.0.1".into(),
@@ -294,7 +353,6 @@ fn first_bare_as_req_skew_is_retried() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::thread;
-    use std::time::Duration;
 
     use krb5_types::{KerberosTime, KrbError, Microseconds, PrincipalName, ascii, err};
 
@@ -332,7 +390,6 @@ fn first_bare_as_req_skew_is_retried() {
             let _ = udp.send_to(&reply, src);
         }
     });
-    thread::sleep(Duration::from_millis(20));
     let _ = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
         cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
         realm: "KERBER.TEST",
@@ -357,60 +414,28 @@ fn first_bare_as_req_skew_is_retried() {
 
 #[test]
 fn spake_as_req_carries_pa_spake() {
-    use std::net::UdpSocket;
-    use std::sync::{Arc, Mutex};
-    use std::thread;
-    use std::time::Duration;
-
-    use krb5_types::{AsReq, KerberosTime, KrbError, Microseconds, PrincipalName, ascii, err, pa};
+    use krb5_types::{AsReq, PrincipalName, pa};
 
     isolate_host_krb5();
-    let first = Arc::new(Mutex::new(Vec::new()));
-    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
-    let port = udp.local_addr().unwrap().port();
-    let first2 = first.clone();
-    thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        let Ok((n, src)) = udp.recv_from(&mut buf) else {
-            return;
-        };
-        *first2.lock().unwrap() = buf[..n].to_vec();
-        let reply = encode(&KrbError {
-            pvno: KrbError::PVNO,
-            msg_type: KrbError::MSG_TYPE,
-            ctime: None,
-            cusec: None,
-            stime: KerberosTime::now(),
-            susec: Microseconds::ZERO,
-            error_code: err::PREAUTH_REQUIRED,
-            crealm: None,
-            cname: None,
-            realm: ascii("KERBER.TEST"),
-            sname: PrincipalName::krbtgt("KERBER.TEST"),
-            e_text: None,
-            e_data: None,
-        })
-        .unwrap();
-        let _ = udp.send_to(&reply, src);
+    let pkts = capture_udp_reqs(1, preauth_required_der(), |port| {
+        let _ = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
+            cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+            realm: "KERBER.TEST",
+            password: b"userpassword",
+            kdc: &krb5_protocol::KdcAddr {
+                host: "127.0.0.1".into(),
+                port,
+            },
+            want_spake: true,
+            fast_armor: None,
+            pkinit: None,
+            canonicalize: false,
+            sname: None,
+            etypes: None,
+            ticket: krb5_protocol::AsTicketOpts::default(),
+        });
     });
-    thread::sleep(Duration::from_millis(20));
-    let _ = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
-        cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
-        realm: "KERBER.TEST",
-        password: b"userpassword",
-        kdc: &krb5_protocol::KdcAddr {
-            host: "127.0.0.1".into(),
-            port,
-        },
-        want_spake: true,
-        fast_armor: None,
-        pkinit: None,
-        canonicalize: false,
-        sname: None,
-        etypes: None,
-        ticket: krb5_protocol::AsTicketOpts::default(),
-    });
-    let raw = first.lock().unwrap().clone();
+    let raw = pkts.into_iter().next().expect("first AS-REQ");
     assert!(!raw.is_empty(), "SPAKE client must send an AS-REQ");
     let req: AsReq = decode(&raw).expect("AS-REQ");
     let padata = req.0.padata.unwrap_or_default();
@@ -426,7 +451,6 @@ fn spake_as_req_carries_pa_spake() {
 fn want_spake_rejects_non_preauth_as_rep() {
     use std::net::UdpSocket;
     use std::thread;
-    use std::time::Duration;
 
     use krb5_types::{AsRep, EncryptedData, KdcRep, PrincipalName, Ticket, ascii};
 
@@ -464,7 +488,6 @@ fn want_spake_rejects_non_preauth_as_rep() {
         .unwrap();
         let _ = udp.send_to(&reply, src);
     });
-    thread::sleep(Duration::from_millis(20));
     let err = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
         cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
         realm: "KERBER.TEST",
@@ -557,52 +580,11 @@ fn want_spake_rejects_fast_and_pkinit() {
 
 #[test]
 fn fast_preauth_retry_carries_fx_fast() {
-    use std::net::UdpSocket;
-    use std::sync::{Arc, Mutex};
-    use std::thread;
-    use std::time::Duration;
-
     use krb5_crypto::{EncryptionType, ProtocolKey};
     use krb5_protocol::FastArmor;
-    use krb5_types::{
-        AsReq, EncryptedData, KerberosTime, KrbError, Microseconds, PrincipalName, Ticket, ascii,
-        err, pa,
-    };
+    use krb5_types::{AsReq, EncryptedData, PrincipalName, Ticket, ascii, pa};
 
     isolate_host_krb5();
-    let first = Arc::new(Mutex::new(Vec::new()));
-    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
-    let port = udp.local_addr().unwrap().port();
-    let first2 = first.clone();
-    thread::spawn(move || {
-        let mut buf = [0u8; 8192];
-        for nsent in 0..2 {
-            let Ok((n, src)) = udp.recv_from(&mut buf) else {
-                return;
-            };
-            if nsent == 0 {
-                *first2.lock().unwrap() = buf[..n].to_vec();
-            }
-            let reply = encode(&KrbError {
-                pvno: KrbError::PVNO,
-                msg_type: KrbError::MSG_TYPE,
-                ctime: None,
-                cusec: None,
-                stime: KerberosTime::now(),
-                susec: Microseconds::ZERO,
-                error_code: err::PREAUTH_REQUIRED,
-                crealm: None,
-                cname: None,
-                realm: ascii("KERBER.TEST"),
-                sname: PrincipalName::krbtgt("KERBER.TEST"),
-                e_text: None,
-                e_data: None,
-            })
-            .unwrap();
-            let _ = udp.send_to(&reply, src);
-        }
-    });
-    thread::sleep(Duration::from_millis(20));
     let session =
         ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x42u8; 32]).unwrap();
     let ticket = Ticket {
@@ -621,23 +603,25 @@ fn fast_preauth_retry_carries_fx_fast() {
         crealm: ascii("KERBER.TEST"),
         cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
     };
-    let _ = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
-        cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
-        realm: "KERBER.TEST",
-        password: b"userpassword",
-        kdc: &krb5_protocol::KdcAddr {
-            host: "127.0.0.1".into(),
-            port,
-        },
-        want_spake: false,
-        fast_armor: Some(&armor),
-        pkinit: None,
-        canonicalize: false,
-        sname: None,
-        etypes: None,
-        ticket: krb5_protocol::AsTicketOpts::default(),
+    let pkts = capture_udp_reqs(1, preauth_required_der(), move |port| {
+        let _ = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
+            cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+            realm: "KERBER.TEST",
+            password: b"userpassword",
+            kdc: &krb5_protocol::KdcAddr {
+                host: "127.0.0.1".into(),
+                port,
+            },
+            want_spake: false,
+            fast_armor: Some(&armor),
+            pkinit: None,
+            canonicalize: false,
+            sname: None,
+            etypes: None,
+            ticket: krb5_protocol::AsTicketOpts::default(),
+        });
     });
-    let raw = first.lock().unwrap().clone();
+    let raw = pkts.into_iter().next().expect("first AS-REQ");
     assert!(!raw.is_empty(), "FAST client must send an AS-REQ");
     let req: AsReq = decode(&raw).expect("AS-REQ");
     let padata = req.0.padata.unwrap_or_default();
@@ -651,7 +635,6 @@ fn fast_preauth_retry_carries_fx_fast() {
 fn fast_client_continue_uses_etype20_from_info2() {
     use std::net::UdpSocket;
     use std::thread;
-    use std::time::Duration;
 
     use krb5_crypto::{EncryptionType, string_to_key};
     use krb5_kdc::{
@@ -698,7 +681,6 @@ fn fast_client_continue_uses_etype20_from_info2() {
     thread::spawn(move || {
         let _ = serve(store, udp, tcp);
     });
-    thread::sleep(Duration::from_millis(50));
 
     let etypes = [
         sha2.to_iana(),
@@ -735,11 +717,6 @@ fn fast_client_continue_uses_etype20_from_info2() {
 
 #[test]
 fn pkinit_as_req_carries_pa_pk_as_req() {
-    use std::net::UdpSocket;
-    use std::sync::{Arc, Mutex};
-    use std::thread;
-    use std::time::Duration;
-
     use krb5_protocol::PkinitClient;
     use krb5_types::{
         AsReq, KerberosTime, KrbError, Microseconds, PrincipalName, ascii, err, pa, pkinit,
@@ -757,61 +734,45 @@ fn pkinit_as_req_carries_pa_pk_as_req() {
         ca_cert: ca.ca_cert.clone(),
     };
 
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
-    let port = udp.local_addr().unwrap().port();
-    let seen2 = seen.clone();
-    thread::spawn(move || {
-        let mut buf = [0u8; 8192];
-        let Ok((n, src)) = udp.recv_from(&mut buf) else {
-            return;
-        };
-        seen2.lock().unwrap().push(buf[..n].to_vec());
-        let hint = encode(&vec![krb5_types::PaData {
-            padata_type: pa::AS_FRESHNESS,
-            padata_value: vec![0u8; 20].into(),
-        }])
-        .unwrap();
-        let reply = encode(&KrbError {
-            pvno: KrbError::PVNO,
-            msg_type: KrbError::MSG_TYPE,
-            ctime: None,
-            cusec: None,
-            stime: KerberosTime::now(),
-            susec: Microseconds::ZERO,
-            error_code: err::PREAUTH_REQUIRED,
-            crealm: None,
-            cname: None,
-            realm: ascii("KERBER.TEST"),
-            sname: PrincipalName::krbtgt("KERBER.TEST"),
-            e_text: None,
-            e_data: Some(hint.into()),
-        })
-        .unwrap();
-        let _ = udp.send_to(&reply, src);
-        let Ok((n, _)) = udp.recv_from(&mut buf) else {
-            return;
-        };
-        seen2.lock().unwrap().push(buf[..n].to_vec());
+    let hint = encode(&vec![krb5_types::PaData {
+        padata_type: pa::AS_FRESHNESS,
+        padata_value: vec![0u8; 20].into(),
+    }])
+    .unwrap();
+    let reply = encode(&KrbError {
+        pvno: KrbError::PVNO,
+        msg_type: KrbError::MSG_TYPE,
+        ctime: None,
+        cusec: None,
+        stime: KerberosTime::now(),
+        susec: Microseconds::ZERO,
+        error_code: err::PREAUTH_REQUIRED,
+        crealm: None,
+        cname: None,
+        realm: ascii("KERBER.TEST"),
+        sname: PrincipalName::krbtgt("KERBER.TEST"),
+        e_text: None,
+        e_data: Some(hint.into()),
+    })
+    .unwrap();
+    let pkts = capture_udp_reqs(2, reply, move |port| {
+        let _ = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
+            cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+            realm: "KERBER.TEST",
+            password: b"",
+            kdc: &krb5_protocol::KdcAddr {
+                host: "127.0.0.1".into(),
+                port,
+            },
+            want_spake: false,
+            fast_armor: None,
+            pkinit: Some(&pk),
+            canonicalize: false,
+            sname: None,
+            etypes: None,
+            ticket: krb5_protocol::AsTicketOpts::default(),
+        });
     });
-    thread::sleep(Duration::from_millis(20));
-    let _ = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
-        cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
-        realm: "KERBER.TEST",
-        password: b"",
-        kdc: &krb5_protocol::KdcAddr {
-            host: "127.0.0.1".into(),
-            port,
-        },
-        want_spake: false,
-        fast_armor: None,
-        pkinit: Some(&pk),
-        canonicalize: false,
-        sname: None,
-        etypes: None,
-        ticket: krb5_protocol::AsTicketOpts::default(),
-    });
-    let pkts = seen.lock().unwrap().clone();
     assert_eq!(
         pkts.len(),
         2,
@@ -838,63 +799,29 @@ fn pkinit_as_req_carries_pa_pk_as_req() {
 
 #[test]
 fn enterprise_as_req_sets_name_type_and_canonicalize() {
-    use std::net::UdpSocket;
-    use std::sync::{Arc, Mutex};
-    use std::thread;
-    use std::time::Duration;
-
-    use krb5_types::{
-        AsReq, KerberosTime, KrbError, Microseconds, PrincipalName, ascii, err, flag_bit,
-    };
+    use krb5_types::{AsReq, PrincipalName, flag_bit};
 
     isolate_host_krb5();
-    let first = Arc::new(Mutex::new(Vec::new()));
-    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
-    let port = udp.local_addr().unwrap().port();
-    let first2 = first.clone();
-    thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        let Ok((n, src)) = udp.recv_from(&mut buf) else {
-            return;
-        };
-        *first2.lock().unwrap() = buf[..n].to_vec();
-        let reply = encode(&KrbError {
-            pvno: KrbError::PVNO,
-            msg_type: KrbError::MSG_TYPE,
-            ctime: None,
-            cusec: None,
-            stime: KerberosTime::now(),
-            susec: Microseconds::ZERO,
-            error_code: err::PREAUTH_REQUIRED,
-            crealm: None,
-            cname: None,
-            realm: ascii("KERBER.TEST"),
-            sname: PrincipalName::krbtgt("KERBER.TEST"),
-            e_text: None,
-            e_data: None,
-        })
-        .unwrap();
-        let _ = udp.send_to(&reply, src);
+    let pkts = capture_udp_reqs(1, preauth_required_der(), |port| {
+        let cname = PrincipalName::new(PrincipalName::NT_ENTERPRISE, ["user@KERBER.TEST"]);
+        let _ = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
+            cname,
+            realm: "KERBER.TEST",
+            password: b"userpassword",
+            kdc: &krb5_protocol::KdcAddr {
+                host: "127.0.0.1".into(),
+                port,
+            },
+            want_spake: false,
+            fast_armor: None,
+            pkinit: None,
+            canonicalize: true,
+            sname: None,
+            etypes: None,
+            ticket: krb5_protocol::AsTicketOpts::default(),
+        });
     });
-    thread::sleep(Duration::from_millis(20));
-    let cname = PrincipalName::new(PrincipalName::NT_ENTERPRISE, ["user@KERBER.TEST"]);
-    let _ = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
-        cname,
-        realm: "KERBER.TEST",
-        password: b"userpassword",
-        kdc: &krb5_protocol::KdcAddr {
-            host: "127.0.0.1".into(),
-            port,
-        },
-        want_spake: false,
-        fast_armor: None,
-        pkinit: None,
-        canonicalize: true,
-        sname: None,
-        etypes: None,
-        ticket: krb5_protocol::AsTicketOpts::default(),
-    });
-    let raw = first.lock().unwrap().clone();
+    let raw = pkts.into_iter().next().expect("first AS-REQ");
     assert!(!raw.is_empty(), "enterprise client must send an AS-REQ");
     let req: AsReq = decode(&raw).expect("AS-REQ");
     let got = req.0.req_body.cname.expect("cname");

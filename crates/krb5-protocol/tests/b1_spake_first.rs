@@ -4,8 +4,7 @@
 //! empty module padata and gets PREAUTH_REQUIRED 25.
 //! Live oracle: `client-differential-gate.sh` `MIT_spake_first_padata`.
 
-use std::net::UdpSocket;
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -20,37 +19,40 @@ fn isolate_host_krb5() {
 #[test]
 fn b1_spake_first_shot_omits_optimistic_151() {
     isolate_host_krb5();
-    let first = Arc::new(Mutex::new(Vec::new()));
-    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let (got, wait) = mpsc::channel();
+    let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let port = udp.local_addr().unwrap().port();
-    let first2 = first.clone();
     thread::spawn(move || {
         let mut buf = [0u8; 4096];
         let Ok((n, src)) = udp.recv_from(&mut buf) else {
             return;
         };
-        *first2.lock().unwrap() = buf[..n].to_vec();
         let reply = encode_preauth_required();
         let _ = udp.send_to(&reply, src);
+        let _ = got.send(buf[..n].to_vec());
+        while udp.recv_from(&mut buf).is_ok() {}
     });
-    thread::sleep(Duration::from_millis(20));
-    let _ = as_exchange(&AsRequest {
-        cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
-        realm: "KERBER.TEST",
-        password: b"userpassword",
-        kdc: &KdcAddr {
-            host: "127.0.0.1".into(),
-            port,
-        },
-        want_spake: true,
-        fast_armor: None,
-        pkinit: None,
-        canonicalize: false,
-        sname: None,
-        etypes: None,
-        ticket: AsTicketOpts::default(),
+    thread::spawn(move || {
+        let _ = as_exchange(&AsRequest {
+            cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+            realm: "KERBER.TEST",
+            password: b"userpassword",
+            kdc: &KdcAddr {
+                host: "127.0.0.1".into(),
+                port,
+            },
+            want_spake: true,
+            fast_armor: None,
+            pkinit: None,
+            canonicalize: false,
+            sname: None,
+            etypes: None,
+            ticket: AsTicketOpts::default(),
+        });
     });
-    let raw = first.lock().unwrap().clone();
+    let raw = wait
+        .recv_timeout(Duration::from_secs(2))
+        .expect("SPAKE client must send an AS-REQ");
     assert!(!raw.is_empty(), "SPAKE client must send an AS-REQ");
     let req: AsReq = decode(&raw).expect("AS-REQ");
     let types: Vec<i32> = req

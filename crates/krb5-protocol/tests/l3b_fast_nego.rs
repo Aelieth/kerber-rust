@@ -4,7 +4,6 @@
 
 use std::net::UdpSocket;
 use std::thread;
-use std::time::Duration;
 
 use krb5_asn1::{decode, encode};
 use krb5_kdc::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
@@ -45,7 +44,6 @@ fn as_exchange_rejects_reply_missing_enc_pa_rep_checksum() {
             }
         }
     });
-    thread::sleep(Duration::from_millis(20));
 
     let err = as_exchange(&AsRequest {
         cname,

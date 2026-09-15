@@ -6,6 +6,18 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W2-S5
+
+- **Unit sleeps and traces.** Timestamp tests wait until the integer
+  unix second has passed instead of a fixed 2 s sleep (`KerberosTime`
+  has no fractional seconds). Capture stubs return after the asserted
+  PDUs so the client UDP retry backoff (0.5+1+2 s) is not on the test
+  thread. Spawn-padding sleeps after an already-bound socket are gone.
+  `sleep(` in `crates/*/tests` is 5 (was 32); tests > 2 s is 0 (was 11);
+  nextest wall 5.0 s for 1404 tests. Gate captures default under
+  `$KERBER_SCRATCH`; `tests/traces` keeps the 13 tracked goldens.
+  Assertions, test names, and cells are unchanged.
+
 ### W2-S4
 
 - **Shared topologies.** `harness` and `mit-extra` boot one stock MIT
