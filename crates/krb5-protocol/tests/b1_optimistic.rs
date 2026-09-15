@@ -7,7 +7,6 @@
 use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
 
 use krb5_asn1::{decode, encode};
 use krb5_protocol::{
@@ -94,7 +93,6 @@ fn b1_optimistic_hint_picks_spake_before_enc_ts() {
             }
         }
     });
-    thread::sleep(Duration::from_millis(20));
     let _ = as_exchange(&AsRequest {
         cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
         realm: "KERBER.TEST",

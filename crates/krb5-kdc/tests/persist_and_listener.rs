@@ -390,7 +390,6 @@ fn udp_listener_answers_wrong_password() {
     thread::spawn(move || {
         let _ = serve(store, udp, tcp);
     });
-    thread::sleep(Duration::from_millis(50));
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let req = as_req(cname, TEST_REALM, 1, None).unwrap();
     let bytes = encode(&req).unwrap();
@@ -419,7 +418,6 @@ fn listener_retransmit_resends_the_cached_reply_like_replay_c() {
     thread::spawn(move || {
         let _ = serve(store, udp, tcp);
     });
-    thread::sleep(Duration::from_millis(50));
 
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let salt = cname.default_salt(TEST_REALM);
@@ -497,7 +495,6 @@ fn tcp_worker_cap_drops_excess_connections() {
             },
         );
     });
-    thread::sleep(Duration::from_millis(40));
     let hold = TcpStream::connect(addr).unwrap();
     hold.set_read_timeout(Some(Duration::from_millis(300)))
         .unwrap();
@@ -545,14 +542,12 @@ fn listener_chaos_udp_garbage_then_valid() {
             },
         );
     });
-    thread::sleep(Duration::from_millis(40));
     let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
     sock.set_read_timeout(Some(Duration::from_millis(200)))
         .unwrap();
+    // MIT dispatch drops garbage with no reply; do not wait out io_timeout.
     for junk in [&[][..], &[0xff; 8], &[0x00; 256], &[0x6a, 0x01]] {
         let _ = sock.send_to(junk, addr);
-        let mut buf = [0u8; 4096];
-        let _ = sock.recv(&mut buf);
     }
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let req = as_req(cname, TEST_REALM, 1, None).unwrap();
@@ -740,7 +735,6 @@ fn serve_until_honours_shutdown_within_the_poll_interval() {
             },
         );
     });
-    thread::sleep(Duration::from_millis(60));
     let t0 = Instant::now();
     flag.store(true, Ordering::SeqCst);
     handle.join().unwrap();

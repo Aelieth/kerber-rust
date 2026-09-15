@@ -1406,6 +1406,20 @@ fn tgs_renewable_when_server_disallow_is_non_renewable() {
     }
 }
 
+/// KerberosTime is integer unix seconds; a 1 s lifetime issued at t.9 is
+/// still valid at t+1.1. Wait until the clock second is strictly after
+/// `target` (capped at 2 s, the previous fixed sleep).
+fn wait_unix_past(target: u32) {
+    let cap = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while KerberosTime::now().unix_seconds() <= target {
+        assert!(
+            std::time::Instant::now() < cap,
+            "unix seconds did not pass {target} within 2s"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
 fn renewable_as(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
     let mut req = user_as_req(nonce);
     req.0.req_body.kdc_options = req
@@ -1468,7 +1482,8 @@ fn tgs_renew_preserves_renew_till() {
     let before = tgt_part(&store, &issued);
     assert!(before.flags.renewable());
     let old_till = before.renew_till.clone().expect("renew_till");
-    std::thread::sleep(std::time::Duration::from_secs(1));
+    // Needs wall-clock so renew_till is compared after time has moved.
+    wait_unix_past(KerberosTime::now().unix_seconds());
     let out = krb5_kdc::issue_tgs(&store, &renew_tgs(&issued, 92)).expect("RENEW");
     let after = tgs_tgt_part(&store, &out);
     assert!(after.flags.renewable());
@@ -1497,7 +1512,8 @@ fn tgs_renew_after_endtime_is_process_tgs() {
         .apply_admin_fields(&cname, None, Some(1), None, None, None, false, None)
         .unwrap();
     let issued = renewable_as(&store, 95);
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    // max_life is 1 s; wait until the integer endtime second has passed.
+    wait_unix_past(tgt_part(&store, &issued).endtime.unix_seconds());
     let err = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 96)).unwrap_err();
     // MIT reports an expired header ticket at the rd_req stage: code 32 with
     // e_text PROCESS_TGS (do_tgs_req.c:623), not TKT_EXPIRED.
@@ -1582,8 +1598,9 @@ fn validate_tgs(issued: &krb5_kdc::IssuedAs, nonce: u32) -> krb5_types::TgsReq {
 fn as_postdated_is_invalid_until_validate() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     store.policy.skew = 0;
-    let from = KerberosTime::now().add_seconds(2).unwrap();
-    let issued = krb5_kdc::issue_as(&store, &postdated_as_req(110, from)).expect("postdated AS");
+    let from = KerberosTime::now().add_seconds(1).unwrap();
+    let issued =
+        krb5_kdc::issue_as(&store, &postdated_as_req(110, from.clone())).expect("postdated AS");
     let part = tgt_part(&store, &issued);
     assert!(part.flags.invalid());
     assert!(part.flags.bit(flag_bit::POSTDATED));
@@ -1591,7 +1608,8 @@ fn as_postdated_is_invalid_until_validate() {
     assert_eq!(proto_code(err), err::TKT_NYV);
     let too_soon = krb5_kdc::issue_tgs(&store, &validate_tgs(&issued, 112)).unwrap_err();
     assert_eq!(proto_code(too_soon), err::TKT_NYV);
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    // starttime is now+1 s; wait until that integer second has passed.
+    wait_unix_past(from.unix_seconds());
     let out = krb5_kdc::issue_tgs(&store, &validate_tgs(&issued, 113)).expect("VALIDATE");
     let after = tgs_tgt_part(&store, &out);
     assert!(!after.flags.invalid());
@@ -1709,9 +1727,11 @@ fn renew_and_validate_tgs(issued: &krb5_kdc::IssuedAs, nonce: u32) -> krb5_types
 fn tgs_renew_and_validate_together_is_badoption() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let from = KerberosTime::now().add_seconds(1).unwrap();
-    let issued = krb5_kdc::issue_as(&store, &postdated_as_req(116, from)).expect("postdated AS");
+    let issued =
+        krb5_kdc::issue_as(&store, &postdated_as_req(116, from.clone())).expect("postdated AS");
     assert!(!tgt_part(&store, &issued).flags.renewable());
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    // starttime is now+1 s; wait until that integer second has passed.
+    wait_unix_past(from.unix_seconds());
     let err = krb5_kdc::issue_tgs(&store, &renew_and_validate_tgs(&issued, 117)).unwrap_err();
     assert_eq!(proto_code(err), err::BADOPTION);
 }

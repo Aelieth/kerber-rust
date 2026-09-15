@@ -4,7 +4,6 @@
 
 use std::net::UdpSocket;
 use std::thread;
-use std::time::Duration;
 
 use krb5_client::kinit_to_spec;
 use krb5_config::CcSpec;
@@ -41,7 +40,6 @@ fn kinit_records_fast_avail_and_pa_type_like_write_out_ccache() {
     thread::spawn(move || {
         let _ = serve(store, udp, tcp);
     });
-    thread::sleep(Duration::from_millis(100));
 
     let dir = std::env::temp_dir().join(format!("kerber-r1-cc-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

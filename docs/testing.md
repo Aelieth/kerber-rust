@@ -314,7 +314,8 @@ PKINIT: `scripts/pkinit-gate.sh` **fails** unless MIT `pkinit.so` is
 present and MIT `kinit -X X509_user_identity=FILE:` succeeds against
 the Rust KDC. The KDC log must contain `rfc8636 sha256 kdf` (MIT TRACE
 `PKINIT used KDF 2B06010502030602`). Set `KERBER_CAPTURE_DIR` to write
-raw PDUs under `tests/traces/`.
+raw PDUs under `$KERBER_SCRATCH` (not `tests/traces/`, which keeps
+only the tracked goldens).
 
 SPAKE: `scripts/spake-gate.sh` runs MIT `kinit` against the Rust KDC
 with `preferred_preauth_types = 151` and `spake_preauth_groups = P-256`.

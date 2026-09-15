@@ -60,7 +60,6 @@ fn serve(store: PrincipalStore) -> String {
             });
         }
     });
-    thread::sleep(Duration::from_millis(20));
     format!("127.0.0.1:{}", addr.port())
 }
 

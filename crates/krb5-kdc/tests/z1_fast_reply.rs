@@ -173,7 +173,6 @@ fn mitm(store: PrincipalStore, rewrite: Box<Rewrite>) -> (KdcAddr, Arc<AtomicUsi
             });
         }
     });
-    thread::sleep(Duration::from_millis(20));
     (
         KdcAddr {
             host: "127.0.0.1".into(),

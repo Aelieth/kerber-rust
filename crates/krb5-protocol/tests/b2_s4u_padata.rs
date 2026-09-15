@@ -8,7 +8,6 @@
 use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, ProtocolKey, unkeyed_checksum};
@@ -107,7 +106,6 @@ fn b2_s4u_tgs_outer_padata_is_1_136_130_129() {
             let _ = udp.send_to(&encode_generic(), src);
         }
     });
-    thread::sleep(Duration::from_millis(20));
     let _ = tgs_s4u(
         &KdcAddr {
             host: "127.0.0.1".into(),
@@ -265,7 +263,6 @@ fn b2_s4u2proxy_outer_padata_is_1_136_167() {
             let _ = udp.send_to(&encode_generic(), src);
         }
     });
-    thread::sleep(Duration::from_millis(20));
     let tgt = fake_tgt();
     let evidence = tgt.ticket.clone();
     let _ = tgs_s4u2proxy(

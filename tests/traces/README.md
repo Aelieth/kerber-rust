@@ -6,10 +6,11 @@ to equal the captured bytes (plus named fields). A divergence fails the
 unit `test` CI job. `mit-krb-error-preauth.der` is the KRB-ERROR we emit
 (PREAUTH_REQUIRED), not a MIT-KDC reply.
 
-Set `KERBER_CAPTURE_DIR` to this directory (or a temp dir) when running
-the KDC or client: each raw PDU is written as `{kdc,client}-{req,rep}-<nonce>.der`
-at the Rust socket boundary (no packet sniffer required). Those hash-named
-files are gitignored.
+Set `KERBER_CAPTURE_DIR` to a temp dir when running the KDC or client: each
+raw PDU is written as `{kdc,client}-{req,rep}-<nonce>.der` at the Rust
+socket boundary (no packet sniffer required). Gate scripts default
+`KERBER_TRACE_DST` under `$KERBER_SCRATCH` so this directory keeps only the
+tracked goldens. Hash-named files that land here are gitignored.
 
 ## Provenance
 
@@ -29,5 +30,6 @@ files are gitignored.
 
 Reply goldens must be MIT-KDC bytes from the Rust client socket
 (`client-rep-*.der`), not Rust-KDC socket dumps (`kdc-rep-*.der`).
-`scripts/client-gate.sh` copies captures here (`KERBER_TRACE_DST` override).
-`scripts/kdc-gate.sh` copies MIT *request* PDUs as `mit-*-req.der`.
+`scripts/client-gate.sh` / `scripts/kdc-gate.sh` write captures to
+`$KERBER_SCRATCH/traces` unless `KERBER_TRACE_DST` overrides. `kdc-gate.sh`
+still copies MIT *request* PDUs as `mit-*-req.der` when refreshing goldens.

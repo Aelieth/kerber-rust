@@ -3,7 +3,6 @@
 
 use std::net::UdpSocket;
 use std::thread;
-use std::time::Duration;
 
 use krb5_kdc::{
     TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, serve, shared_store,
@@ -28,7 +27,6 @@ fn as_exchange_records_fast_availability() {
     thread::spawn(move || {
         let _ = serve(store, udp, tcp);
     });
-    thread::sleep(Duration::from_millis(50));
 
     let out = as_exchange(&AsRequest {
         cname,
@@ -85,7 +83,6 @@ fn fast_exchange_negotiates_through_the_armor_like_mit() {
     thread::spawn(move || {
         let _ = serve(store, udp, tcp);
     });
-    thread::sleep(Duration::from_millis(50));
     let kdc = KdcAddr {
         host: "127.0.0.1".into(),
         port,

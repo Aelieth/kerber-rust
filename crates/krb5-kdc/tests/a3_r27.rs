@@ -93,6 +93,17 @@ fn host_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedTgs) -> EncTicketP
     .unwrap()
 }
 
+fn wait_unix_past(target: u32) {
+    let cap = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while KerberosTime::now().unix_seconds() <= target {
+        assert!(
+            std::time::Instant::now() < cap,
+            "unix seconds did not pass {target} within 2s"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
 fn tgt_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs) -> EncTicketPart {
     let key = store.krbtgt().unwrap().best_key().unwrap();
     let usage = KeyUsage::new(ku::TICKET).unwrap();
@@ -217,7 +228,8 @@ fn r27_tgs_expired_server_beats_require_auth() {
 fn r27_tgs_postdated_omitted_from_is_epoch() {
     let (store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 27041);
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    // Authtime must be in the past so omitted from (epoch) is not NYV.
+    wait_unix_past(tgt_part(&store, &issued).authtime.unix_seconds());
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let usage = KeyUsage::new(ku::TICKET).unwrap();
     let mut part = tgt_part(&store, &issued);

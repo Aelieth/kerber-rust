@@ -8,7 +8,6 @@
 use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
 
 use krb5_asn1::decode;
 use krb5_kdc::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
@@ -46,7 +45,6 @@ fn spake_response_request_keeps_the_advertised_padata_in_mit_order() {
             }
         }
     });
-    thread::sleep(Duration::from_millis(20));
 
     as_exchange(&AsRequest {
         cname,
