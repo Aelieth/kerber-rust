@@ -14,7 +14,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install lld
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq lld
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: kerber
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
         with:
@@ -30,6 +34,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.95
+      - name: Install lld
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq lld
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: kerber
       - name: MSRV 1.95 test (locked)
         run: cargo test --workspace --locked

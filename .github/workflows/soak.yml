@@ -13,31 +13,40 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: kerber
+      - name: Install lld
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq lld
       - uses: actions/cache@v4
         with:
-          path: /tmp/kerber-rust-mit-kdc.tar
-          key: mit-kdc-1.22.2-${{ hashFiles('harness/Dockerfile', 'harness/krb5.conf', 'harness/kdc.conf', 'harness/kadm5.acl', 'harness/krb5-sha2.conf', 'harness/entrypoint.sh') }}
-      - name: Load cached MIT image or docker build
+          path: |
+            /tmp/kerber-rust-mit-kdc.tar
+            /tmp/kerber-rust-prod-node.tar
+          key: mit-kdc-1.22.2-${{ hashFiles('harness/Dockerfile', 'harness/krb5.conf', 'harness/kdc.conf', 'harness/kadm5.acl', 'harness/krb5-sha2.conf', 'harness/entrypoint.sh', 'harness/prod/Dockerfile') }}
+      - name: Load cached MIT+prod images or docker build
         run: |
           set -euo pipefail
-          tar=/tmp/kerber-rust-mit-kdc.tar
-          image=kerber-rust-mit-kdc:1.22.2
-          if [ -f "$tar" ]; then
-            docker load -i "$tar"
+          mit_tar=/tmp/kerber-rust-mit-kdc.tar
+          prod_tar=/tmp/kerber-rust-prod-node.tar
+          mit=kerber-rust-mit-kdc:1.22.2
+          prod=kerber-rust-prod-node:latest
+          if [ -f "$mit_tar" ]; then
+            docker load -i "$mit_tar"
             echo "KERBER_SKIP_MIT_BUILD=1" >> "$GITHUB_ENV"
           else
-            docker build -f harness/Dockerfile -t "$image" .
-            docker save "$image" -o "$tar"
+            docker build -f harness/Dockerfile -t "$mit" .
+            docker save "$mit" -o "$mit_tar"
+          fi
+          if [ -f "$prod_tar" ]; then
+            docker load -i "$prod_tar"
+          else
+            docker build -f harness/prod/Dockerfile -t "$prod" .
+            docker save "$prod" -o "$prod_tar"
           fi
       - name: Scratch dir
         run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
-      - name: Build MIT harness image
-        run: ./scripts/run-harness.sh
-      - name: Stop MIT harness
-        if: always()
-        run: ./scripts/stop-harness.sh || true
-      - name: Build prod-node capture image
-        run: docker build -f harness/prod/Dockerfile -t kerber-rust-prod-node:latest .
+      - name: Build bins
+        run: ./scripts/lib/build-bins.sh
       - name: soak-gate (scheduled window)
         env:
           KERBER_SOAK_SECONDS: "480"
