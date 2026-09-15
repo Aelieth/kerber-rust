@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Print recent GitHub Actions runs with per-job conclusions and failing steps.
 
-usage: ci-status.py [-n RUNS] [--workflow NAME] [--sha SHA] [--jobs] [--repo OWNER/NAME]
-                    [--save SHA] [--out DIR]
+usage: ci-status.py [-n RUNS] [--workflow NAME] [--sha SHA] [--jobs] [--durations]
+                    [--repo OWNER/NAME] [--save SHA] [--out DIR] [--budget-report]
 
 Reads the public REST API without a token (run, job and step conclusions and
 the check-run annotations — the gates' `::error file=,line=` lines — are
@@ -12,20 +12,38 @@ workflow succeeded, 1 when it failed, 2 when it is still running or unknown.
 
 `--save SHA` writes `ci-<sha>.txt` only from a **completed**, non-rate-limited
 run (retries with backoff; exits 2 otherwise). Fixture annotations from
-`scripts/probe-gate.sh` (`title=fixture`) are omitted.
+`scripts/probe-gate.sh` (`title=fixture`) are omitted. Saved records include
+`job=<name> duration_s=<n>` lines and `run_wall_s=` (W2-S0).
+
+`--durations` prints per-job `duration_s=` from `started_at`/`completed_at`
+already in the `/jobs` payload. `--budget-report` prints per-job medians over
+the last N completed runs (informational; `--check-budget` is S6).
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import statistics
 import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+from datetime import datetime
 
 API = "https://api.github.com"
+
+# Workflow `name:` → filename. `--workflow` accepts either.
+WORKFLOW_FILES = {
+    "ci": "ci.yml",
+    "peers": "peers.yml",
+    "soak": "soak.yml",
+    "fuzz": "fuzz.yml",
+    "kcm-opcode": "kcm-opcode.yml",
+    "full-test": "full-test.yml",
+}
 
 
 def repo_from_git() -> str | None:
@@ -39,6 +57,13 @@ def repo_from_git() -> str | None:
         if url.startswith(prefix):
             return url[len(prefix) :].removesuffix(".git")
     return None
+
+
+def workflow_file(name: str) -> str:
+    """Map a workflow name (`ci`, `peers`) or filename (`peers.yml`) to the YAML file."""
+    if name.endswith(".yml") or name.endswith(".yaml"):
+        return name
+    return WORKFLOW_FILES.get(name, f"{name}.yml")
 
 
 def get(path: str) -> dict | list:
@@ -90,40 +115,154 @@ def failing_steps(job: dict) -> list[str]:
     ]
 
 
-def format_run(repo: str, r: dict, jobs: bool) -> list[str]:
+def parse_gh_ts(s: str | None) -> float | None:
+    """Parse a GitHub ISO-8601 timestamp to epoch seconds. None if missing/unparseable."""
+    if not s:
+        return None
+    text = s.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        return None
+
+
+def job_duration_s(job: dict) -> int | None:
+    """Whole seconds between job started_at and completed_at."""
+    start = parse_gh_ts(job.get("started_at"))
+    end = parse_gh_ts(job.get("completed_at"))
+    if start is None or end is None:
+        return None
+    return max(0, int(round(end - start)))
+
+
+def step_duration_s(step: dict) -> int | None:
+    start = parse_gh_ts(step.get("started_at"))
+    end = parse_gh_ts(step.get("completed_at"))
+    if start is None or end is None:
+        return None
+    return max(0, int(round(end - start)))
+
+
+def run_wall_s(jobs: list[dict], run: dict | None = None) -> int | None:
+    """Critical-path wall: max job completed_at − min job started_at.
+
+    Falls back to the run's run_started_at/updated_at when jobs have no stamps.
+    """
+    starts: list[float] = []
+    ends: list[float] = []
+    for job in jobs:
+        start = parse_gh_ts(job.get("started_at"))
+        end = parse_gh_ts(job.get("completed_at"))
+        if start is not None:
+            starts.append(start)
+        if end is not None:
+            ends.append(end)
+    if starts and ends:
+        return max(0, int(round(max(ends) - min(starts))))
+    if run:
+        start = parse_gh_ts(run.get("run_started_at") or run.get("created_at"))
+        end = parse_gh_ts(run.get("updated_at"))
+        if start is not None and end is not None:
+            return max(0, int(round(end - start)))
+    return None
+
+
+def duration_lines(jobs: list[dict], run: dict | None = None) -> list[str]:
+    """Machine-readable duration records for --save and --durations."""
+    lines: list[str] = []
+    for job in jobs:
+        dur = job_duration_s(job)
+        if dur is None:
+            continue
+        lines.append(f"job={job['name']} duration_s={dur}")
+        for step in job.get("steps") or []:
+            sdur = step_duration_s(step)
+            if sdur is None:
+                continue
+            name = (step.get("name") or "").split(" (")[0]
+            if not name:
+                continue
+            lines.append(f"step={job['name']}/{name} duration_s={sdur}")
+    wall = run_wall_s(jobs, run)
+    if wall is not None:
+        lines.append(f"run_wall_s={wall}")
+    return lines
+
+
+def format_run(repo: str, r: dict, jobs: bool, durations: bool = False) -> list[str]:
     lines: list[str] = []
     state = r["conclusion"] or r["status"]
-    lines.append(
-        f"run {r['run_number']} {r['head_sha'][:7]} {r['name']} {state} {r['created_at']} id={r['id']}"
+    head = (
+        f"run {r['run_number']} {r['head_sha'][:7]} {r['name']} {state} "
+        f"{r['created_at']} id={r['id']}"
     )
-    if jobs or state != "success":
+    want_jobs = jobs or durations or state != "success"
+    job_list: list[dict] = []
+    if want_jobs:
         try:
-            job_list = get(f"/repos/{repo}/actions/runs/{r['id']}/jobs?per_page=50").get("jobs", [])
+            job_list = get(f"/repos/{repo}/actions/runs/{r['id']}/jobs?per_page=50").get(
+                "jobs", []
+            )
         except urllib.error.URLError as e:
+            lines.append(head)
             lines.append(f"    jobs: unavailable ({e})")
             return lines
+    wall = run_wall_s(job_list, r) if job_list else None
+    if wall is not None:
+        head = f"{head} run_wall_s={wall}"
+    lines.append(head)
+    if job_list:
         for j in job_list:
             bad = failing_steps(j)
             note = f"  FAILED: {', '.join(bad)}" if bad else ""
             jstate = j["conclusion"] or j["status"]
-            if jobs or bad or jstate not in ("success", "skipped"):
-                lines.append(f"    {j['name']}: {jstate}{note}")
+            dur = job_duration_s(j)
+            dur_note = f" duration_s={dur}" if dur is not None and durations else ""
+            if jobs or durations or bad or jstate not in ("success", "skipped"):
+                lines.append(f"    {j['name']}: {jstate}{dur_note}{note}")
             if bad:
                 for line in annotations(repo, j):
                     lines.append(f"        {line}")
+        if durations:
+            lines.extend(duration_lines(job_list, r))
     return lines
 
 
 def fetch_runs(repo: str, workflow: str, sha: str | None, n: int) -> list[dict]:
-    runs = get(f"/repos/{repo}/actions/runs?per_page={max(n * 3, 10)}&branch=main")
+    """Runs of one workflow, newest first.
+
+    Uses `/actions/workflows/<file>/runs` (not the global run list filtered
+    by the default branch) so `--workflow peers` and PR-head SHAs are visible.
+    """
+    wf = workflow_file(workflow)
+    per_page = max(n * 3, 10)
+    path = f"/repos/{repo}/actions/workflows/{urllib.parse.quote(wf)}/runs?per_page={per_page}"
+    runs = get(path)
     if not isinstance(runs, dict):
         return []
-    selected = [
-        r
-        for r in runs.get("workflow_runs", [])
-        if r["name"] == workflow and (not sha or r["head_sha"].startswith(sha))
-    ][:n]
-    return selected
+    selected = list(runs.get("workflow_runs") or [])
+    if sha:
+        selected = [r for r in selected if r.get("head_sha", "").startswith(sha)]
+        if not selected and len(sha) >= 7:
+            # Workflow-file listing is not filtered by SHA server-side; a
+            # long-ago run can fall off per_page. Try the run list by head_sha
+            # (full SHA) and keep those whose path/name matches.
+            try:
+                extra = get(
+                    f"/repos/{repo}/actions/runs?per_page={per_page}"
+                    f"&head_sha={urllib.parse.quote(sha)}"
+                )
+            except urllib.error.HTTPError:
+                extra = {}
+            if isinstance(extra, dict):
+                want = workflow_file(workflow)
+                for r in extra.get("workflow_runs") or []:
+                    path_name = (r.get("path") or "").rsplit("/", 1)[-1]
+                    if path_name == want or r.get("name") == workflow:
+                        selected.append(r)
+    return selected[:n]
 
 
 def save_run(repo: str, workflow: str, sha: str, out_dir: str, retries: int = 10) -> int:
@@ -164,7 +303,7 @@ def save_run(repo: str, workflow: str, sha: str, out_dir: str, retries: int = 10
             time.sleep(backoff)
             backoff = min(backoff * 2, 60)
             continue
-        lines = format_run(repo, newest, jobs=True)
+        lines = format_run(repo, newest, jobs=True, durations=True)
         # Stamp so evidence-check accepts the record.
         stamp = [
             "==== provenance ====",
@@ -185,12 +324,54 @@ def save_run(repo: str, workflow: str, sha: str, out_dir: str, retries: int = 10
     return 2
 
 
+def budget_report(repo: str, workflow: str, n: int) -> int:
+    """Print per-job median duration_s over the last N completed runs."""
+    selected = fetch_runs(repo, workflow, None, n)
+    if not selected:
+        print("ci-status: no matching runs", file=sys.stderr)
+        return 2
+    by_job: dict[str, list[int]] = {}
+    walls: list[int] = []
+    used = 0
+    for run in selected:
+        if (run.get("status") or "") != "completed":
+            continue
+        try:
+            job_list = get(f"/repos/{repo}/actions/runs/{run['id']}/jobs?per_page=50").get(
+                "jobs", []
+            )
+        except urllib.error.URLError as e:
+            print(f"ci-status: jobs unavailable for run {run.get('run_number')}: {e}", file=sys.stderr)
+            continue
+        used += 1
+        wall = run_wall_s(job_list, run)
+        if wall is not None:
+            walls.append(wall)
+        for job in job_list:
+            dur = job_duration_s(job)
+            if dur is None:
+                continue
+            by_job.setdefault(job["name"], []).append(dur)
+    print(f"budget-report workflow={workflow} runs_completed={used} of {len(selected)}")
+    if walls:
+        print(f"run_wall_s median={int(statistics.median(walls))} n={len(walls)}")
+    for name in sorted(by_job):
+        vals = by_job[name]
+        print(f"job={name} median_s={int(statistics.median(vals))} n={len(vals)}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("-n", "--runs", type=int, default=10)
-    ap.add_argument("--workflow", default="ci", help="workflow name to select (default: ci)")
+    ap.add_argument("--workflow", default="ci", help="workflow name or YAML file (default: ci)")
     ap.add_argument("--sha", help="only runs for this commit (prefix match)")
     ap.add_argument("--jobs", action="store_true", help="list every job of every listed run")
+    ap.add_argument(
+        "--durations",
+        action="store_true",
+        help="print per-job duration_s= from started_at/completed_at",
+    )
     ap.add_argument("--repo", default=repo_from_git(), help="OWNER/NAME (default: origin)")
     ap.add_argument(
         "--save",
@@ -202,12 +383,19 @@ def main() -> int:
         default=".",
         help="directory for --save output (default: cwd)",
     )
+    ap.add_argument(
+        "--budget-report",
+        action="store_true",
+        help="print per-job median duration_s over the last -n completed runs",
+    )
     args = ap.parse_args()
     if not args.repo:
         print("ci-status: cannot determine the repository; pass --repo", file=sys.stderr)
         return 2
     if args.save:
         return save_run(args.repo, args.workflow, args.save, args.out)
+    if args.budget_report:
+        return budget_report(args.repo, args.workflow, args.runs)
     try:
         selected = fetch_runs(args.repo, args.workflow, args.sha, args.runs)
     except urllib.error.URLError as e:
@@ -217,7 +405,7 @@ def main() -> int:
         print("ci-status: no matching runs", file=sys.stderr)
         return 2
     for r in selected:
-        for line in format_run(args.repo, r, args.jobs):
+        for line in format_run(args.repo, r, args.jobs, durations=args.durations):
             print(line)
     newest = selected[0]
     if newest["conclusion"] == "success":
