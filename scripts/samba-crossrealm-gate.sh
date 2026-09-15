@@ -153,7 +153,9 @@ docker exec -e KRB5_CONFIG=/tmp/xr-krb5.conf "$NAME" \
 kinit_rc=$?
 set -e
 if [ "$kinit_rc" -ne 0 ]; then
-    unavailable "kinit user@KERBER.TEST failed"
+    log "samba.crossrealm" "error" ',"error":"kinit user@KERBER.TEST failed"'
+    echo "kinit user@KERBER.TEST failed" >&2
+    exit 1
 fi
 
 set +e
@@ -203,7 +205,9 @@ docker exec -e KRB5_CONFIG=/tmp/ad-krb5.conf "$NAME" \
 rk_rc=$?
 set -e
 if [ "$rk_rc" -ne 0 ]; then
-    unavailable "kinit kbruser@AD.KERBER.TEST failed"
+    log "samba.crossrealm" "error" ',"error":"kinit kbruser@AD.KERBER.TEST failed"'
+    echo "kinit kbruser@AD.KERBER.TEST failed" >&2
+    exit 1
 fi
 
 set +e

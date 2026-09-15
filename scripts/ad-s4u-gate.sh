@@ -113,7 +113,9 @@ set -e
 echo "kinit_rc=$kinit_rc" | tee -a "$LOG"
 if [ "$kinit_rc" -ne 0 ]; then
     docker exec -e KRB5_CONFIG=/tmp/samba-krb5.conf "$NAME" klist -k /tmp/svc.keytab >>"$LOG" 2>&1 || true
-    unavailable "kinit -k ${SELF}@${REALM} failed"
+    log "ad.s4u.gate" "error" ',"error":"kinit -k failed against a listening Samba AD"'
+    echo "kinit -k ${SELF}@${REALM} failed" >&2
+    exit 1
 fi
 
 # Samba: S4U2Self target is the account (kbrsvc). host/svc is an SPN, not
