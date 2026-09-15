@@ -218,8 +218,23 @@ jobs:
         run: ./scripts/gss-gate.sh
       - name: pkinit-gate (MIT pkinit.so vs Rust KDC)
         run: ./scripts/pkinit-gate.sh
-      - name: kadmin-gate (MIT kadmin vs krb5-kadmind)
-        run: ./scripts/kadmin-gate.sh
+      - name: kadmin-rust-gate
+        env:
+          KERBER_KADMIN_KEEP: "1"
+        run: ./scripts/kadmin-rust-gate.sh
+      - name: kadmin-rust-acl-gate
+        env:
+          KERBER_KADMIN_KEEP: "1"
+        run: ./scripts/kadmin-rust-acl-gate.sh
+      - name: kadmin-mit-gate
+        env:
+          KERBER_KADMIN_KEEP: "1"
+        run: ./scripts/kadmin-mit-gate.sh
+      - name: kadmin-both-gate
+        run: ./scripts/kadmin-both-gate.sh
+      - name: kadmin containers cleanup
+        if: always()
+        run: docker rm -f kerber-rust-kadmin-gate kerber-rust-kadmin-mit >/dev/null 2>&1 || true
       - name: policy-gate (MIT kadmin addpol/modpol/getpol/delpol/listpols + kinit lockout)
         run: ./scripts/policy-gate.sh
       - name: history-mit-gate (MIT kadmin.local history-window oracle)

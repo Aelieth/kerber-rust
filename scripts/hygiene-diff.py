@@ -122,19 +122,42 @@ def main() -> int:
     old_cells = load_set(old / "gates.txt")
     new_cells = load_set(new / "gates.txt")
     # workflow tags may move with a job rename; still fail on section/echo/flow loss.
+    # A cell may move files (W2: the tag survives). Identity is (kind, tag).
     def cell_key(line: str) -> tuple[str, str, str]:
         parts = line.split("\t")
         if len(parts) < 3:
             return ("", "", line)
         return parts[0], parts[1], parts[2]
 
-    old_stable = {c for c in old_cells if cell_key(c)[1] != "workflow"}
-    new_stable = {c for c in new_cells if cell_key(c)[1] != "workflow"}
-    for c in sorted(old_stable - new_stable):
-        fail(f"gate cell tag removed: {c}")
-    moved = len(new_stable - old_stable)
-    if moved:
-        info(f"gate cell tags added: {moved}")
+    def cell_tag(line: str) -> tuple[str, str]:
+        _fn, kind, tag = cell_key(line)
+        return kind, tag
+
+    old_stable = {cell_tag(c) for c in old_cells if cell_tag(c)[0] != "workflow"}
+    new_stable = {cell_tag(c) for c in new_cells if cell_tag(c)[0] != "workflow"}
+    for kind, tag in sorted(old_stable - new_stable):
+        fail(f"gate cell tag removed: {kind}\t{tag}")
+    added = new_stable - old_stable
+    if added:
+        info(f"gate cell tags added: {len(added)}")
+    old_files: dict[tuple[str, str], set[str]] = {}
+    new_files: dict[tuple[str, str], set[str]] = {}
+    for c in old_cells:
+        fn, kind, tag = cell_key(c)
+        if kind == "workflow":
+            continue
+        old_files.setdefault((kind, tag), set()).add(fn)
+    for c in new_cells:
+        fn, kind, tag = cell_key(c)
+        if kind == "workflow":
+            continue
+        new_files.setdefault((kind, tag), set()).add(fn)
+    for key in sorted(set(old_files) & set(new_files)):
+        if old_files[key] != new_files[key]:
+            info(
+                f"gate cell moved {key[0]}\t{key[1]}: "
+                f"{sorted(old_files[key])} -> {sorted(new_files[key])}"
+            )
 
     for fname, label in (
         ("diffsend.txt", "diffsend case"),

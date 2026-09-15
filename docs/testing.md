@@ -394,7 +394,7 @@ three marked `continue-on-error`):
 | `audit` | `cargo audit`, `cargo deny`, `scripts/geiger.sh` (per-crate `cargo geiger`, 0-unsafe product), `cargo vet --locked` |
 | `ledger-mit` | fetches the SHA-pinned MIT 1.22.2 source and runs `scripts/ci-policy.py` (ledger anchors, tally, proof column, evidence rules) |
 | `mit-image` | builds or restores `kerber-rust-mit-kdc:1.22.2` and `kerber-rust-prod-node:latest` into `actions/cache` (no artifact round-trip) |
-| `harness` | `client-gate`, `ccache-gate`, `knobs-gate`, `config-include-gate`, `kdc-gate`, `store-gate`, `bidirectional-gate`, `gss-gate`, `pkinit-gate`, `kadmin-gate`, `policy-gate`, `history-mit-gate`, `kpasswd-gate`, `kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `rd-safe-oracle-gate`, `cross-kdc-gate`, `iprop-gate`, `expire-gate`, `kdcpolicy-gate`, `flags-gate`, `renew-gate`, `postdate-gate`, `getprivs-gate`, `prop-acl-gate`, `restart-gate`, `prod-gate`, `prod-realm-gate`; `sssd-renew-gate`, `kit-conformance-gate`, `gssproxy-gate`, `nfs-krb5p-gate` run under `skip2` (an honest `exit 2` = oracle absent is not red) |
+| `harness` | `client-gate`, `ccache-gate`, `knobs-gate`, `config-include-gate`, `kdc-gate`, `store-gate`, `bidirectional-gate`, `gss-gate`, `pkinit-gate`, `kadmin-rust-gate`, `kadmin-rust-acl-gate`, `kadmin-mit-gate`, `kadmin-both-gate` (local wrapper `kadmin-gate.sh`), `policy-gate`, `history-mit-gate`, `kpasswd-gate`, `kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `rd-safe-oracle-gate`, `cross-kdc-gate`, `iprop-gate`, `expire-gate`, `kdcpolicy-gate`, `flags-gate`, `renew-gate`, `postdate-gate`, `getprivs-gate`, `prop-acl-gate`, `restart-gate`, `prod-gate`, `prod-realm-gate`; `sssd-renew-gate`, `kit-conformance-gate`, `gssproxy-gate`, `nfs-krb5p-gate` run under `skip2` (an honest `exit 2` = oracle absent is not red) |
 | `mit-extra` | `cross-realm-gate`, `capaths-transit-gate`, `capaths-compress-gate`, `spake-gate`, `rust-kinit-spake-gate`, `mit-fast-kdc-gate`, `rust-kinit-fast-gate`, `rust-kinit-pkinit-gate`, `rust-kinit-enterprise-gate`, `client-differential-gate`, `ktutil-gate`, `kadmin-local-gate`, `rust-kpasswd-mit-gate`, `sha2-gate`, `s4u-mit-gate`, `kcm-gate`, `rc4-session-gate` |
 | `slo` (`continue-on-error`) | `stress-gate` over `harness/prod` |
 | `chaos` (`continue-on-error`) | `chaos-gate` |
@@ -547,7 +547,7 @@ Not in any workflow: `gss-sspi-gate.sh` (needs a Windows SSPI peer; exits
   `kpropd -a` and the Rust kpropd (same file, re-read per connection)
   and die unless kprop's verdict and the `Rejected connection from
   unauthorized principal` count agree (`kpropd.c:1298-1348`). In CI.
-- `scripts/kadmin-gate.sh` — MIT `kadmin` against `krb5-kadmind` on 749
+- `scripts/kadmin-rust-gate.sh` / `kadmin-rust-acl-gate.sh` / `kadmin-mit-gate.sh` / `kadmin-both-gate.sh` — MIT `kadmin` against `krb5-kadmind` on 749 (local wrapper `scripts/kadmin-gate.sh`)
   (AUTH_GSSAPI 300001): `addprinc`, `cpw`, `getprinc` (`Principal:
   extra@KERBER.TEST`; last password change is not `[never]`; last
   modified is not Unix epoch), `listprincs` (names `extra` and `user`),
