@@ -14,8 +14,10 @@ this project uses semantic versioning once a crate is published.
   `provenance.sh` memos the ACL hash per image id and reuses
   `KERBER_TREE_SHA` so `git write-tree` and the throwaway ACL container
   run once per job. Straight-line daemon sleeps are
-  `wait_port_in`/`wait_gone_in`/`wait_pid_gone`/`wait_log`; remaining
-  sleeps are tagged `# proto:` and sum to 24.7 s.
+  `wait_port_in`/`wait_udp_in`/`wait_gone_in`/`wait_pid_gone`/`wait_log`;
+  remaining sleeps are tagged `# proto:` and sum to 24.7 s.
+  `build-bins.sh` builds `ccache-probe`. Gates use `register_cleanup`
+  instead of a private EXIT trap.
 
 ### W2-S1
 

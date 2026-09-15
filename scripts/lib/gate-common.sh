@@ -205,6 +205,11 @@ need_bins() {
         die "bins missing ($*); run scripts/lib/build-bins.sh"
     fi
     "$ROOT/scripts/lib/build-bins.sh"
+    for bin in "$@"; do
+        if [ ! -x "$dest/$bin" ] && [ ! -x "$dest/examples/$bin" ]; then
+            die "bins missing after build-bins.sh: $bin"
+        fi
+    done
 }
 
 shell_container() {

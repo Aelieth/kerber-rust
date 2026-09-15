@@ -213,8 +213,7 @@ echo "==== NON-RENEWABLE TICKET: kvno after kinit -r vs -allow_renewable (mit) =
 MITNAME="kerber-rust-renew-mit-oracle"
 docker rm -f "$MITNAME" >/dev/null 2>&1 || true
 docker run -d --name "$MITNAME" "$IMAGE" >/dev/null
-cleanup_mit() { docker rm -f "$MITNAME" >/dev/null 2>&1 || true; }
-trap 'cleanup; cleanup_mit' EXIT
+register_cleanup 'docker rm -f "$MITNAME" >/dev/null 2>&1 || true'
 ok=0
 for _ in $(seq 1 90); do
     logs="$(docker logs "$MITNAME" 2>&1 || true)"

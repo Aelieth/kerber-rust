@@ -35,8 +35,7 @@ need_image
 NAME="kerber-rust-kinit-enterprise-mit"
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" "$IMAGE" >/dev/null
-cleanup_mit() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
-trap cleanup_mit EXIT
+register_cleanup "docker rm -f '$NAME' >/dev/null 2>&1 || true"
 
 ok=0
 for _ in $(seq 1 90); do
@@ -88,16 +87,13 @@ set -e
 echo "$OUT"
 test "$rc" -ne 0
 echo "$OUT" | grep -Eqi 'CLIENT_NOT_FOUND|C_PRINCIPAL_UNKNOWN|not found'
-cleanup_mit
-trap - EXIT
+docker rm -f "$NAME" >/dev/null 2>&1 || true
 
 # --- MIT kinit -E vs Rust KDC ---
 NAME="kerber-rust-kinit-enterprise-kdc"
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
-register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
-cleanup_kdc() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
-trap cleanup_kdc EXIT
+register_cleanup "docker rm -f '$NAME' >/dev/null 2>&1 || true"
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker exec "$NAME" chmod +x /tmp/krb5-kdc

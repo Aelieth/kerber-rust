@@ -196,8 +196,7 @@ echo "==== MIT KDC: forged-realm FAST armor is NOT_US ===="
 MITNAME="${NAME}-mit"
 docker rm -f "$MITNAME" >/dev/null 2>&1 || true
 docker run -d --name "$MITNAME" "$IMAGE" >/dev/null
-mit_cleanup() { docker rm -f "$MITNAME" >/dev/null 2>&1 || true; }
-trap 'cleanup; mit_cleanup' EXIT
+register_cleanup 'docker rm -f "$MITNAME" >/dev/null 2>&1 || true'
 ok=0
 for _ in $(seq 1 90); do
     logs="$(docker logs "$MITNAME" 2>&1 || true)"

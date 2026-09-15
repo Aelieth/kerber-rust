@@ -2279,6 +2279,25 @@ def check_gate_common_sourced() -> None:
         if re.search(r"\bcargo\s+build\b", text):
             _die(f"{path.name} must not run cargo build (use need_bins)")
         check_gate_cargo_leftover(text, path.name)
+        check_gate_no_exit_trap(text, path.name)
+    check_build_bins_examples()
+
+
+def check_gate_no_exit_trap(text: str, name: str = "gate.sh") -> None:
+    """Gates must not replace gate-common's EXIT trap (register_cleanup)."""
+    if re.search(r"^\s*trap\b.*\bEXIT\b", text, re.M):
+        _die(f"{name} must not set an EXIT trap (use register_cleanup)")
+
+
+def check_build_bins_examples() -> None:
+    """Job-level build-bins.sh must produce every example the gates docker-cp."""
+    path = SCRIPTS / "lib" / "build-bins.sh"
+    if not path.is_file():
+        _die("missing scripts/lib/build-bins.sh")
+    text = path.read_text(encoding="utf-8")
+    for ex in ("ccache-probe", "diffsend", "kprop-expired-apreq", "loadgen"):
+        if ex not in text:
+            _die(f"build-bins.sh must build example {ex}")
 
 
 def check_gate_cargo_leftover(text: str, name: str = "gate.sh") -> None:
@@ -3136,6 +3155,12 @@ jobs:
         check_gate_cargo_leftover,
         "    -p krb5-client --bin krb5-kvno\n",
         "leftover-cargo-gate.sh",
+    )
+    check_gate_no_exit_trap("register_cleanup 'docker rm -f \"$NAME\"'\n", "ok-trap-gate.sh")
+    _must_die(
+        check_gate_no_exit_trap,
+        "trap 'cleanup; mit_cleanup' EXIT\n",
+        "exit-trap-gate.sh",
     )
     check_no_host_tmp_writes(
         "docker exec n sh -c 'kill /tmp/krb5-kdc; : >/tmp/in-container'\n"
