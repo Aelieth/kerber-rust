@@ -2028,7 +2028,10 @@ def check_evidence_check_tool() -> None:
 
 
 def check_ci_status_save() -> None:
-    """R8: ci-status.py --save exists and filters fixture annotations."""
+    """R8: ci-status.py --save exists and filters fixture annotations.
+
+    W2-S0: also durations, workflow-file fetch (not branch=main), budget-report.
+    """
     path = SCRIPTS / "ci-status.py"
     if not path.is_file():
         _die("missing scripts/ci-status.py")
@@ -2041,6 +2044,18 @@ def check_ci_status_save() -> None:
         _die("ci-status.py must filter probe-gate.sh fixture annotations")
     if "403" not in text:
         _die("ci-status.py --save must handle HTTP 403 rate limits")
+    if "--durations" not in text:
+        _die("ci-status.py must support --durations")
+    if "duration_s=" not in text:
+        _die("ci-status.py must emit duration_s= records")
+    if "run_wall_s=" not in text:
+        _die("ci-status.py must emit run_wall_s=")
+    if "--budget-report" not in text:
+        _die("ci-status.py must support --budget-report")
+    if "actions/workflows/" not in text:
+        _die("ci-status.py must fetch /actions/workflows/<file>/runs")
+    if "branch=main" in text:
+        _die("ci-status.py must not pin fetch_runs to branch=main")
     import importlib.util
 
     spec = importlib.util.spec_from_file_location("ci_status_r8", path)
@@ -2054,6 +2069,54 @@ def check_ci_status_save() -> None:
         _die("is_fixture_annotation must accept probe-gate.sh path")
     if mod.is_fixture_annotation({"title": "", "path": "scripts/kadmin-gate.sh"}):
         _die("is_fixture_annotation must not filter product gates")
+    if mod.workflow_file("peers") != "peers.yml":
+        _die("workflow_file must map peers -> peers.yml")
+    if mod.job_duration_s(
+        {"started_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:01:05Z"}
+    ) != 65:
+        _die("job_duration_s must use started_at/completed_at")
+
+
+def check_makefile_matches_ci() -> None:
+    """W2-S0: Makefile `safety` cargo order matches the ci.yml `test` job."""
+    makefile = ROOT / "Makefile"
+    if not makefile.is_file():
+        _die("missing Makefile")
+    mf = makefile.read_text()
+    ci_path = WORKFLOWS / "ci.yml"
+    if not ci_path.is_file():
+        _die("missing .github/workflows/ci.yml")
+    ci = ci_path.read_text()
+    if "safety:" not in mf:
+        _die("Makefile missing safety target")
+    needles = (
+        "cargo fmt --all",
+        "cargo clippy --workspace --all-targets --all-features",
+        "cargo nextest run --workspace --profile ci",
+        "cargo doc --workspace --no-deps",
+        "python3 scripts/ci-policy.py",
+    )
+    for n in needles:
+        if n not in mf:
+            _die(f"Makefile safety missing {n!r}")
+        if n not in ci:
+            _die(f"ci.yml missing {n!r}")
+    cargo = (
+        "cargo fmt --all",
+        "cargo clippy --workspace",
+        "cargo nextest run --workspace --profile ci",
+        "cargo doc --workspace --no-deps",
+    )
+
+    def _order(text: str, label: str) -> None:
+        pos = [text.find(s) for s in cargo]
+        if any(p < 0 for p in pos):
+            _die(f"{label} missing a safety cargo step")
+        if pos != sorted(pos):
+            _die(f"{label} cargo order must be fmt, clippy, nextest, doc")
+
+    _order(mf, "Makefile")
+    _order(ci, "ci.yml test job")
 
 
 def check_red_at_sha_inject(text: str | None = None) -> None:
@@ -3284,6 +3347,7 @@ def main() -> None:
     check_settle_helper()
     check_evidence_check_tool()
     check_ci_status_save()
+    check_makefile_matches_ci()
     check_red_at_sha_inject()
     check_red_at_sha_overlay_order()
     check_red_at_sha_target_trap()
