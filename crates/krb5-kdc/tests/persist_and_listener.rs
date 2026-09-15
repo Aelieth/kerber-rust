@@ -547,7 +547,8 @@ fn listener_chaos_udp_garbage_then_valid() {
     });
     thread::sleep(Duration::from_millis(40));
     let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
-    sock.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
+    sock.set_read_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
     for junk in [&[][..], &[0xff; 8], &[0x00; 256], &[0x6a, 0x01]] {
         let _ = sock.send_to(junk, addr);
         let mut buf = [0u8; 4096];
