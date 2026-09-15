@@ -193,6 +193,7 @@ TIMEOUT_JOBS = (
     "mit-image",
     "msrv",
     "audit",
+    "doc",
 )
 
 FULL_RUN_SCHEDULED = (
@@ -2078,7 +2079,7 @@ def check_ci_status_save() -> None:
 
 
 def check_makefile_matches_ci() -> None:
-    """W2-S0: Makefile `safety` cargo order matches the ci.yml `test` job."""
+    """Makefile `safety` cargo order matches the ci.yml `test` job; doc is a sibling."""
     makefile = ROOT / "Makefile"
     if not makefile.is_file():
         _die("missing Makefile")
@@ -2086,26 +2087,36 @@ def check_makefile_matches_ci() -> None:
     ci_path = WORKFLOWS / "ci.yml"
     if not ci_path.is_file():
         _die("missing .github/workflows/ci.yml")
-    ci = ci_path.read_text()
+    ci_wf = Workflow(ci_path, ci_path.read_text())
+    test_job = ci_wf.jobs.get("test")
+    doc_job = ci_wf.jobs.get("doc")
+    if test_job is None:
+        _die("ci.yml missing job test")
+    if doc_job is None:
+        _die("ci.yml missing job doc")
     if "safety:" not in mf:
         _die("Makefile missing safety target")
     needles = (
         "cargo fmt --all",
         "cargo clippy --workspace --all-targets --all-features",
         "cargo nextest run --workspace --profile ci",
-        "cargo doc --workspace --no-deps",
         "python3 scripts/ci-policy.py",
     )
     for n in needles:
         if n not in mf:
             _die(f"Makefile safety missing {n!r}")
-        if n not in ci:
-            _die(f"ci.yml missing {n!r}")
+        if n not in test_job.body:
+            _die(f"ci.yml test job missing {n!r}")
+    if "cargo doc --workspace --no-deps" not in mf:
+        _die("Makefile missing cargo doc --workspace --no-deps (make doc)")
+    if "cargo doc --workspace --no-deps" in test_job.body:
+        _die("ci.yml test job must not run cargo doc (that is the doc job)")
+    if "cargo doc --workspace --no-deps" not in doc_job.body:
+        _die("ci.yml doc job must cargo doc --workspace --no-deps")
     cargo = (
         "cargo fmt --all",
         "cargo clippy --workspace",
         "cargo nextest run --workspace --profile ci",
-        "cargo doc --workspace --no-deps",
     )
 
     def _order(text: str, label: str) -> None:
@@ -2113,10 +2124,136 @@ def check_makefile_matches_ci() -> None:
         if any(p < 0 for p in pos):
             _die(f"{label} missing a safety cargo step")
         if pos != sorted(pos):
-            _die(f"{label} cargo order must be fmt, clippy, nextest, doc")
+            _die(f"{label} cargo order must be fmt, clippy, nextest")
 
     _order(mf, "Makefile")
-    _order(ci, "ci.yml test job")
+    _order(test_job.body, "ci.yml test job")
+
+
+def check_rust_cache_shared_key() -> None:
+    """Every Swatinem/rust-cache step uses shared-key: kerber; cargo jobs have a cache."""
+    needle = "shared-key: kerber"
+    for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+        text = path.read_text(encoding="utf-8")
+        n_cache = text.count("Swatinem/rust-cache")
+        n_key = text.count(needle)
+        if n_cache and n_key != n_cache:
+            _die(f"{path.name}: rust-cache steps must set shared-key: kerber ({n_key}/{n_cache})")
+        wf = Workflow(path, text)
+        for name, job in wf.jobs.items():
+            if "cargo " not in job.body and "cargo\n" not in job.body:
+                continue
+            if "Swatinem/rust-cache" not in job.body:
+                _die(f"{path.name} job {name} runs cargo but has no rust-cache")
+            if needle not in job.body:
+                _die(f"{path.name} job {name} rust-cache missing shared-key: kerber")
+
+
+def check_prod_image_once() -> None:
+    """ci.yml builds harness/prod/Dockerfile exactly once (mit-image)."""
+    ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    n = ci.count("harness/prod/Dockerfile")
+    builds = ci.count("docker build -f harness/prod/Dockerfile")
+    if builds != 1:
+        _die(f"ci.yml must docker build harness/prod/Dockerfile exactly once, found {builds}")
+    if "upload-artifact" in ci and "mit-kdc-image" in ci:
+        _die("ci.yml must not upload-artifact the MIT tar (cache restore only)")
+    wf = Workflow(WORKFLOWS / "ci.yml", ci)
+    mit = wf.jobs.get("mit-image")
+    if mit is None or "harness/prod/Dockerfile" not in mit.body:
+        _die("mit-image must build/save harness/prod/Dockerfile")
+    if not re.search(r"hashFiles\([^)]*harness/prod/Dockerfile", ci):
+        _die("cache key must hashFiles harness/prod/Dockerfile")
+
+
+def check_build_profile() -> None:
+    """[profile.dev] line-tables-only + split-debuginfo; lld rustflags."""
+    cargo = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
+    if 'debug = "line-tables-only"' not in cargo:
+        _die('Cargo.toml [profile.dev] must set debug = "line-tables-only"')
+    if 'split-debuginfo = "unpacked"' not in cargo:
+        _die('Cargo.toml [profile.dev] must set split-debuginfo = "unpacked"')
+    cfg = ROOT / ".cargo" / "config.toml"
+    if not cfg.is_file():
+        _die("missing .cargo/config.toml")
+    text = cfg.read_text(encoding="utf-8")
+    if "fuse-ld=lld" not in text:
+        _die(".cargo/config.toml must pass -fuse-ld=lld")
+    ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    if "apt-get install" not in ci or " lld" not in ci:
+        _die("ci.yml must apt-get install lld")
+
+
+def check_env_read() -> None:
+    """Every env a workflow sets (except GitHub-provided) is read by a script or test."""
+    allow = {
+        "GITHUB_ENV",
+        "GITHUB_OUTPUT",
+        "GITHUB_PATH",
+        "GITHUB_STEP_SUMMARY",
+        "GITHUB_TOKEN",
+        "GEIGER_DEPS_OUT",
+        "KRB5_CONFIG",
+        "KERBER_SCRATCH",
+        "KERBER_SKIP_MIT_BUILD",
+        "KERBER_REQUIRE_REAL_PCAP",
+        "KERBER_REQUIRE_NETEM",
+        "KERBER_SOAK_SECONDS",
+        "SAMBA_AD_IMAGE",
+        "SAMBA_AD_REALM",
+        "SAMBA_AD_USER",
+        "SAMBA_AD_PASSWORD",
+        "SAMBA_KERBER_IMAGE",
+        "CORRELATION_ID",
+    }
+    env_re = re.compile(r"(?m)^\s{2,8}([A-Z][A-Z0-9_]+):\s")
+    corpus: list[str] = []
+    for path in sorted((ROOT / "scripts").rglob("*")):
+        if path.suffix in {".sh", ".py", ".rs", ".c"} and path.is_file():
+            corpus.append(path.read_text(encoding="utf-8", errors="replace"))
+    for path in sorted((ROOT / "crates").rglob("*.rs")):
+        corpus.append(path.read_text(encoding="utf-8", errors="replace"))
+    blob = "\n".join(corpus)
+    for wf_path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+        text = wf_path.read_text(encoding="utf-8")
+        in_env = False
+        for line in text.splitlines():
+            if re.match(r"^\s+env:\s*$", line):
+                in_env = True
+                continue
+            if in_env:
+                if re.match(r"^\s+\w", line) and not re.match(r"^\s+[A-Z0-9_]+:", line):
+                    in_env = False
+                    continue
+                m = re.match(r"^\s+([A-Z][A-Z0-9_]+):\s", line)
+                if not m:
+                    if line.strip() and not line.strip().startswith("#"):
+                        in_env = False
+                    continue
+                name = m.group(1)
+                if name in allow:
+                    continue
+                if name not in blob:
+                    _die(f"{wf_path.name} sets {name} but no script/test reads it")
+
+
+def check_peers_unavailable_convention() -> None:
+    """peers.yml maps gate exit 2 to step success; live kinit/kvno failures are exit 1."""
+    wrapper = SCRIPTS / "lib" / "run-peer-step.sh"
+    if not wrapper.is_file():
+        _die("missing scripts/lib/run-peer-step.sh")
+    wtext = wrapper.read_text(encoding="utf-8")
+    if "[ \"$rc\" -eq 2 ]" not in wtext and "[ \"$rc\" -eq 2 ]" not in wtext.replace(" ", ""):
+        if 'rc" -eq 2' not in wtext:
+            _die("run-peer-step.sh must treat exit 2 as unavailable (not a job failure)")
+    peers = (WORKFLOWS / "peers.yml").read_text(encoding="utf-8")
+    if "run-peer-step.sh" not in peers:
+        _die("peers.yml must wrap peer gates with run-peer-step.sh")
+    ad = (SCRIPTS / "samba-ad-gate.sh").read_text(encoding="utf-8")
+    if 'unavailable "kinit' in ad:
+        _die("samba-ad-gate.sh kinit failure against a listening KDC must exit 1, not unavailable")
+    if "exit 1" not in ad:
+        _die("samba-ad-gate.sh must exit 1 on live kinit/kvno failure")
 
 
 def check_red_at_sha_inject(text: str | None = None) -> None:
@@ -3348,6 +3485,11 @@ def main() -> None:
     check_evidence_check_tool()
     check_ci_status_save()
     check_makefile_matches_ci()
+    check_rust_cache_shared_key()
+    check_prod_image_once()
+    check_build_profile()
+    check_env_read()
+    check_peers_unavailable_convention()
     check_red_at_sha_inject()
     check_red_at_sha_overlay_order()
     check_red_at_sha_target_trap()

@@ -6,6 +6,19 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W2-S1
+
+- **CI shape.** `[profile.dev] debug = "line-tables-only"` +
+  `split-debuginfo = "unpacked"`; `.cargo/config.toml` uses `lld`.
+  `cargo doc` moves to a sibling `doc` job. `Swatinem/rust-cache`
+  `shared-key: kerber` on every cargo job (audit included). `mit-image`
+  also builds `harness/prod` and both tars restore from `actions/cache`
+  (no MIT artifact round-trip). `scripts/lib/build-bins.sh` is the
+  job-level cargo build; `soak.yml` drops the unused
+  `run-harness`/`stop-harness` pair; unread `KERBER_LIVE` env is gone.
+  `peers.yml` maps gate exit 2 through `run-peer-step.sh` so missing
+  images are not job-red; live kinit/kvno failures stay exit 1.
+
 ### W2-S0
 
 - **Measure.** `ci-status.py --durations` prints per-job
