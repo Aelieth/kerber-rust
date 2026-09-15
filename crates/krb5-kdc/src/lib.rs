@@ -258,6 +258,11 @@ pub fn bootstrap_realm_with_kdc_conf(
     Ok((store, acl))
 }
 
+/// MIT `kadm5_create.c:54` `ADMIN_LIFETIME`.
+const KADM5_ADMIN_LIFETIME: u64 = 60 * 60 * 3;
+/// MIT `kadm5_create.c:55` `CHANGEPW_LIFETIME`.
+const KADM5_CHANGEPW_LIFETIME: u64 = 60 * 5;
+
 /// MIT `kadm5_create` (`kadm5_create.c`) flags. `create_principal` does not set these.
 ///
 /// # Errors
@@ -270,7 +275,7 @@ pub fn apply_kadm5_create_service_attrs(store: &mut PrincipalStore) -> Result<()
         &documented_kadmin(),
         &realm,
         Some(store::KDB_DISALLOW_TGT_BASED | store::KDB_LOCKDOWN_KEYS),
-        None,
+        Some(KADM5_ADMIN_LIFETIME),
         None,
         None,
         None,
@@ -284,7 +289,7 @@ pub fn apply_kadm5_create_service_attrs(store: &mut PrincipalStore) -> Result<()
         Some(
             store::KDB_DISALLOW_TGT_BASED | store::KDB_PWCHANGE_SERVICE | store::KDB_LOCKDOWN_KEYS,
         ),
-        None,
+        Some(KADM5_CHANGEPW_LIFETIME),
         None,
         None,
         None,

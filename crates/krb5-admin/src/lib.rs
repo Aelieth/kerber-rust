@@ -1048,8 +1048,9 @@ impl<'a> AdminSession<'a> {
         val: &str,
     ) -> Result<(), Error> {
         self.reload()?;
+        let realm = self.store.realm().to_owned();
         self.store
-            .set_string(name, key, Some(val))
+            .set_string_in(name, &realm, key, Some(val), &self.actor)
             .map_err(Error::from)
     }
 

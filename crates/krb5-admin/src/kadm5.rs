@@ -2917,7 +2917,7 @@ fn dispatch_kadm5_ticket(
             if key.is_empty() {
                 return Ok(generic_ret(api, KADM5_FAILURE));
             }
-            match g.set_string_in(&name, &req, &key, value.as_deref()) {
+            match g.set_string_in(&name, &req, &key, value.as_deref(), actor) {
                 Ok(()) => Ok(generic_ret(api, 0)),
                 Err(e) => Ok(generic_ret(api, kadm5_code(proc, &Error::from(e)))),
             }

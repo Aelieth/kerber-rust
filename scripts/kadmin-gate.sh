@@ -488,7 +488,7 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
-cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-kdb -p krb5-admin --bin krb5-kadmind
+cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-kdb -p krb5-admin --bin krb5-kadmind --bin krb5-kadmin-local
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
@@ -502,7 +502,8 @@ trap cleanup EXIT
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmind" "$NAME":/tmp/krb5-kadmind
-docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb /tmp/krb5-kadmind
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmin-local" "$NAME":/tmp/krb5-kadmin-local
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb /tmp/krb5-kadmind /tmp/krb5-kadmin-local
 
 docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
@@ -3276,6 +3277,58 @@ diff "$SCRATCH/z85rc4-rust.txt" "$SCRATCH/z85rc4-mit.txt" || {
 }
 echo "MIT_z85_des3_rc4_ks_tuple"
 echo "RUST_z85_des3_rc4_ks_tuple"
+
+echo "==== Z8 leftover: kadm5_create max_life (kadm5_create.c:54-55,207-213) ===="
+z8life() {
+    local ctn=$1 client=$2 conf=$3 princ=$4 want=$5
+    local life
+    life="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" \
+        kadmin -p "$client" -w adminpassword -q "getprinc $princ" \
+        | grep '^Maximum ticket life:')"
+    echo "$ctn $princ: $life"
+    echo "$life" | grep -Fx "$want"
+}
+z8life "$NAME" admin/admin /tmp/kadmin-krb5.conf kadmin/admin \
+    'Maximum ticket life: 0 days 03:00:00'
+z8life "$NAME_MIT" admin/admin /etc/krb5.conf kadmin/admin \
+    'Maximum ticket life: 0 days 03:00:00'
+z8life "$NAME" admin/admin /tmp/kadmin-krb5.conf kadmin/changepw \
+    'Maximum ticket life: 0 days 00:05:00'
+z8life "$NAME_MIT" admin/admin /etc/krb5.conf kadmin/changepw \
+    'Maximum ticket life: 0 days 00:05:00'
+echo "MIT_z8_kadm5_create_max_life"
+echo "RUST_z8_kadm5_create_max_life"
+
+echo "==== Z8 leftover: setstr stamps current_caller (svr_principal.c:2022-2043) ===="
+# RPC create stamps the kadmind caller; local setstr must restamp
+# like kdb_put_entry (Z7.2 local princstr is root/admin@ both legs).
+docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" \
+    kadmin -p admin/admin -w adminpassword -q 'addprinc -pw z8str-secret z8str' \
+    | grep -F 'Principal "z8str@KERBER.TEST" created.'
+docker exec -e KRB5_CONFIG=/etc/krb5.conf "$NAME_MIT" \
+    kadmin -p admin/admin -w adminpassword -q 'addprinc -pw z8str-secret z8str' \
+    | grep -F 'Principal "z8str@KERBER.TEST" created.'
+docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -p root/admin -q 'setstr z8str note leftover'
+docker exec "$NAME_MIT" kadmin.local -p root/admin -q 'setstr z8str note leftover'
+z8str_mod() { sed -n -E 's/^Last modified: .* \((.*)\)$/\1/p'; }
+RSTR="$(docker exec \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    "$NAME" /tmp/krb5-kadmin-local -p root/admin -q 'getprinc z8str')"
+MSTR="$(docker exec "$NAME_MIT" kadmin.local -p root/admin -q 'getprinc z8str')"
+echo "$RSTR" | hist_shape | sed 's/^/rust z8str: /'
+echo "$MSTR" | hist_shape | sed 's/^/mit  z8str: /'
+RSTRMOD="$(echo "$RSTR" | z8str_mod)"
+MSTRMOD="$(echo "$MSTR" | z8str_mod)"
+echo "rust z8str modifier=$RSTRMOD"
+echo "mit  z8str modifier=$MSTRMOD"
+[ "$RSTRMOD" = "root/admin@KERBER.TEST" ]
+[ "$MSTRMOD" = "root/admin@KERBER.TEST" ]
+echo "MIT_z8_setstr_stamps_caller"
+echo "RUST_z8_setstr_stamps_caller"
 
 log "kadmin.gate" "ok" ',"principal":"extra@KERBER.TEST","op":"addprinc+cpw+get+list+mod+chrand+norandkey+lockdown+purgekeys+setstr+renprinc+del+alias"'
 exit 0

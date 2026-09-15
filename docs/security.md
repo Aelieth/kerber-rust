@@ -480,8 +480,10 @@ exit 1 after a failed verb). The paragraphs below pin that surface
 against MIT 1.22.2.
 
 `kadmin/admin` and `kadmin/changepw` are bootstrapped with MIT
-`kadm5_create` attributes: both `DISALLOW_TGT_BASED|LOCKDOWN_KEYS`;
-changepw also `PWCHANGE_SERVICE`. A TGS from a TGT is 12
+`kadm5_create` attributes and lifetimes (`kadm5_create.c:54-55,207-213`):
+both `DISALLOW_TGT_BASED|LOCKDOWN_KEYS`; changepw also
+`PWCHANGE_SERVICE`; `max_life` is 3 h / 5 min (`ADMIN_LIFETIME` /
+`CHANGEPW_LIFETIME`). A TGS from a TGT is 12
 `TGT BASED NOT ALLOWED`. `kdb5_util create` also sets `LOCKDOWN_KEYS`
 on `krbtgt/REALM` and `K/M` (`kdb5_create.c:465`). Remote kadm5
 maps lockdown to the privilege codes MIT kadmind remaps in

@@ -1755,12 +1755,22 @@ fn bootstrap_changepw_and_admin_carry_kadm5_create_attributes() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let admin = store.get_name(&documented_kadmin()).expect("kadmin/admin");
     assert_eq!(admin.attributes, KDB_DISALLOW_TGT_BASED | KDB_LOCKDOWN_KEYS);
+    assert_eq!(
+        admin.max_life,
+        60 * 60 * 3,
+        "kadm5_create.c:54 ADMIN_LIFETIME"
+    );
     let changepw = store
         .get_name(&documented_changepw())
         .expect("kadmin/changepw");
     assert_eq!(
         changepw.attributes,
         KDB_DISALLOW_TGT_BASED | KDB_PWCHANGE_SERVICE | KDB_LOCKDOWN_KEYS
+    );
+    assert_eq!(
+        changepw.max_life,
+        60 * 5,
+        "kadm5_create.c:55 CHANGEPW_LIFETIME"
     );
 }
 

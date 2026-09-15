@@ -3243,10 +3243,14 @@ impl PrincipalStore {
         value: Option<&str>,
     ) -> Result<(), Error> {
         let realm = self.realm.clone();
-        self.set_string_in(name, &realm, key, value)
+        let actor = default_mod_actor(&realm);
+        self.set_string_in(name, &realm, key, value, &actor)
     }
 
     /// [`Self::set_string`] for `name@princ_realm`.
+    ///
+    /// MIT `kadm5_set_string` → `kdb_put_entry` stamps `current_caller`
+    /// (`svr_principal.c:2022-2043`).
     ///
     /// # Errors
     ///
@@ -3257,6 +3261,7 @@ impl PrincipalStore {
         princ_realm: &str,
         key: &str,
         value: Option<&str>,
+        actor: &str,
     ) -> Result<(), Error> {
         let id = self.canonical_id(name, princ_realm)?;
         let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
@@ -3264,6 +3269,7 @@ impl PrincipalStore {
         if let Some(v) = value {
             p.string_attrs.push((key.to_owned(), v.to_owned()));
         }
+        stamp_admin_tl(p, false, actor);
         let snap = p.clone();
         self.note_ulog(id, false, Some(snap));
         self.save_if_configured()

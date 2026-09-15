@@ -25,6 +25,10 @@ this project uses semantic versioning once a crate is published.
   `kadmin.local addprinc -policy P` binds P before create. Ledger:
   unknown-tuple half of `svr_principal.c:444-447` is
   `stricter-documented` (MIT `KRB5_PROG_ETYPE_NOSUPP`); `schpw.c:407`.
+  Follow-up: `setstr` stamps `current_caller` like `kadm5_set_string`
+  → `kdb_put_entry` (`svr_principal.c:2022-2043`); `kadm5_create`
+  applies `ADMIN_LIFETIME` 3 h / `CHANGEPW_LIFETIME` 5 min
+  (`kadm5_create.c:54-55,207-213`).
 - **kadmind / kpasswd / kadmin.local.** `mod_name` and keysalt families
   match MIT's remaining callers. kpasswd stamps `kadmind@REALM`
   (`ovsec_kadmd.c:446`, `schpw.c:407`; before: the ticket client).
