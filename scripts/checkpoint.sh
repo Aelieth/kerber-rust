@@ -71,6 +71,9 @@ rungate() {
 SKIP_ALWAYS="chaos-gate soak-gate stress-gate prod-gate prod-realm-gate nfs-krb5p-gate sssd-renew-gate ad-mit-trust-gate"
 PEERS_GATES="samba-ad-gate ad-windows-gate ad-s4u-gate samba-pac-verify-gate samba-pac-l2-gate samba-crossrealm-gate samba-realtrust-gate heimdal-gate"
 HARNESS_ATTACH="knobs-gate ccache-gate client-gate config-include-gate"
+# CI runs these KEEP-attached; local checkpoint runs them in that order
+# with KERBER_KADMIN_KEEP=1 so each wall_s is a CI leg, not the wrapper.
+KADMIN_KEEP="kadmin-rust-gate kadmin-rust-acl-gate kadmin-mit-gate kadmin-both-gate"
 
 if [ "$SKIP_POLICY" != 1 ]; then
     { . scripts/lib/provenance.sh; echo "label=python3 scripts/ci-policy.py"; python3 scripts/ci-policy.py; echo "rc=$?"; } \
@@ -110,6 +113,8 @@ wanted() {
     local g="$1"
     case " $SKIP_ALWAYS " in *" $g "*) return 1 ;; esac
     case " $HARNESS_ATTACH " in *" $g "*) return 1 ;; esac
+    case " $KADMIN_KEEP " in *" $g "*) return 1 ;; esac
+    case "$g" in kadmin-gate) return 1 ;; esac
     if [ "$PEERS" != 1 ]; then
         case " $PEERS_GATES " in *" $g "*) return 1 ;; esac
     fi
@@ -126,6 +131,15 @@ for f in scripts/*-gate.sh; do
     i=$((i + 1))
     rungate "$i" "$g" ""
 done
+
+i=50
+export KERBER_KADMIN_KEEP=1
+for g in $KADMIN_KEEP; do
+    i=$((i + 1))
+    rungate "$i" "$g" ""
+done
+unset KERBER_KADMIN_KEEP
+docker rm -f kerber-rust-kadmin-gate kerber-rust-kadmin-mit >/dev/null 2>&1 || true
 
 if [ -n "$TWICE" ]; then
     i=70

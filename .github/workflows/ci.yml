@@ -243,6 +243,42 @@ jobs:
         run: ./scripts/policy-gate.sh
       - name: history-mit-gate (MIT kadmin.local history-window oracle)
         run: ./scripts/history-mit-gate.sh
+      - name: shared topology cleanup
+        if: always()
+        run: docker rm -f kerber-rust-shell kerber-rust-mit-kdc >/dev/null 2>&1 || true
+
+  harness-2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: mit-image
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: kerber
+      - name: Install lld
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq lld
+      - uses: actions/cache@v4
+        with:
+          path: |
+            /tmp/kerber-rust-mit-kdc.tar
+            /tmp/kerber-rust-prod-node.tar
+          key: mit-kdc-1.22.2-${{ hashFiles('harness/Dockerfile', 'harness/krb5.conf', 'harness/kdc.conf', 'harness/kadm5.acl', 'harness/krb5-sha2.conf', 'harness/entrypoint.sh', 'harness/prod/Dockerfile') }}
+      - name: docker load MIT and prod images
+        run: |
+          set -euo pipefail
+          docker load -i /tmp/kerber-rust-mit-kdc.tar
+          docker load -i /tmp/kerber-rust-prod-node.tar
+          echo "KERBER_SKIP_MIT_BUILD=1" >> "$GITHUB_ENV"
+      - name: Scratch dir
+        run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
+      - name: Build bins
+        run: ./scripts/lib/build-bins.sh
+      - name: shared shell + stock MIT
+        run: |
+          ./scripts/lib/boot-shell.sh
+          ./scripts/lib/boot-stock-mit.sh
       - name: kpasswd-gate (MIT kpasswd vs kadmind 464)
         run: ./scripts/kpasswd-gate.sh
       - name: kdb-dump-gate (MIT dump/load + kinit both directions)
@@ -355,8 +391,6 @@ jobs:
         run: ./scripts/rust-kinit-pkinit-gate.sh
       - name: rust-kinit-enterprise-gate (NT-ENTERPRISE both directions)
         run: ./scripts/rust-kinit-enterprise-gate.sh
-      - name: client-differential-gate (both clients vs MIT KDC)
-        run: ./scripts/client-differential-gate.sh
       - name: ktutil-gate (MIT ktadd list + Rust keytab kinit -k)
         run: ./scripts/ktutil-gate.sh
       - name: kadmin-local-gate (local verbs; MIT kadmin getprinc)
@@ -365,12 +399,50 @@ jobs:
         run: ./scripts/rust-kpasswd-mit-gate.sh
       - name: sha2-gate
         run: ./scripts/sha2-gate.sh
+      - name: rc4-session-gate (allow_rc4 session_enctypes both directions)
+        run: ./scripts/rc4-session-gate.sh
+      - name: shared topology cleanup
+        if: always()
+        run: docker rm -f kerber-rust-shell kerber-rust-mit-kdc >/dev/null 2>&1 || true
+
+  mit-extra-2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: mit-image
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: kerber
+      - name: Install lld
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq lld
+      - uses: actions/cache@v4
+        with:
+          path: |
+            /tmp/kerber-rust-mit-kdc.tar
+            /tmp/kerber-rust-prod-node.tar
+          key: mit-kdc-1.22.2-${{ hashFiles('harness/Dockerfile', 'harness/krb5.conf', 'harness/kdc.conf', 'harness/kadm5.acl', 'harness/krb5-sha2.conf', 'harness/entrypoint.sh', 'harness/prod/Dockerfile') }}
+      - name: docker load MIT and prod images
+        run: |
+          set -euo pipefail
+          docker load -i /tmp/kerber-rust-mit-kdc.tar
+          docker load -i /tmp/kerber-rust-prod-node.tar
+          echo "KERBER_SKIP_MIT_BUILD=1" >> "$GITHUB_ENV"
+      - name: Scratch dir
+        run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
+      - name: Build bins
+        run: ./scripts/lib/build-bins.sh
+      - name: shared shell + stock MIT
+        run: |
+          ./scripts/lib/boot-shell.sh
+          ./scripts/lib/boot-stock-mit.sh
+      - name: client-differential-gate (both clients vs MIT KDC)
+        run: ./scripts/client-differential-gate.sh
       - name: s4u-mit-gate (MIT kvno -U / -U -P vs Rust KDC)
         run: ./scripts/s4u-mit-gate.sh
       - name: kcm-gate (Rust KCM vs sssd-kcm + MIT klist)
         run: ./scripts/kcm-gate.sh
-      - name: rc4-session-gate (allow_rc4 session_enctypes both directions)
-        run: ./scripts/rc4-session-gate.sh
       - name: shared topology cleanup
         if: always()
         run: docker rm -f kerber-rust-shell kerber-rust-mit-kdc >/dev/null 2>&1 || true

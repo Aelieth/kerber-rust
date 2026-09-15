@@ -6,6 +6,16 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W2-S7 walls
+
+- **Job split + leftover-reset.** `harness-2` and `mit-extra-2` run in
+  parallel with `harness` / `mit-extra` so the named jobs fit the Exit
+  walls (270 / 180). Shared-shell attach reset is one `docker exec`
+  (kill, wipe KDB, restore conf, wait pids+ports in-container) instead
+  of 13 host-side waits. Local checkpoint runs kadmin KEEP legs in
+  order, not the 139 s wrapper. `kpasswd-gate` listen loops are
+  `wait_log`.
+
 ### W2-S6
 
 - **Enforce.** `ci-budget.toml` is the one source for per-push job
