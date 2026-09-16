@@ -62,10 +62,15 @@ rungate() {
     timeout 1200 bash "scripts/$2.sh" >>"$log" 2>&1
     rc=$?
     e=$(date +%s)
+    wall=$((e - s))
+    gw=$(awk -F= '/^gate_wall_s=/{v=$2} END{print v}' "$log")
+    if [ -n "$gw" ] && [ "$gw" -eq "$gw" ] 2>/dev/null; then
+        wall=$gw
+    fi
     echo "gate_rc=$rc" >>"$log"
-    echo "wall_s=$((e - s))" >>"$log"
-    printf '%s\t%s\t%s\t%s\n' "$2" "${3:-run1}" "$rc" "$((e - s))" >>"$OUT/timings.tsv"
-    prog "$1" "$2${3:+-$3}" "gate_rc=$rc wall_s=$((e - s))"
+    echo "wall_s=$wall" >>"$log"
+    printf '%s\t%s\t%s\t%s\n' "$2" "${3:-run1}" "$rc" "$wall" >>"$OUT/timings.tsv"
+    prog "$1" "$2${3:+-$3}" "gate_rc=$rc wall_s=$wall"
 }
 
 SKIP_ALWAYS="chaos-gate soak-gate stress-gate prod-gate prod-realm-gate nfs-krb5p-gate sssd-renew-gate ad-mit-trust-gate"
