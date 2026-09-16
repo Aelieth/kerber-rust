@@ -53,7 +53,7 @@ def krb_error(der):
 
 kind = sys.argv[1]
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-s.settimeout(2.0)
+s.settimeout(0.4)
 if kind == "vno":
     pkt = struct.pack(">HHH", 6, 2, 0)
 elif kind == "len":
@@ -536,28 +536,12 @@ done
 '
 wait_gone_in "$NAME_MIT" 88 || true
 docker exec "$NAME_MIT" krb5kdc
-ok=0
-for _ in $(seq 1 40); do
-    if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.3)" 2>/dev/null; then
-        ok=1
-        break
-    fi
-    sleep 0.25
-done
-if [ "$ok" != 1 ]; then
+if ! wait_port_in "$NAME_MIT" 88; then
     log "kpasswd.gate" "error" ',"error":"MIT krb5kdc did not listen after log restart"'
     exit 1
 fi
 docker exec -d "$NAME_MIT" sh -c 'kadmind -nofork >/tmp/kadmind.log 2>&1'
-ok=0
-for _ in $(seq 1 40); do
-    if docker exec "$NAME_MIT" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',464),0.3)" 2>/dev/null; then
-        ok=1
-        break
-    fi
-    sleep 0.25
-done
-if [ "$ok" != 1 ]; then
+if ! wait_port_in "$NAME_MIT" 464; then
     log "kpasswd.gate" "error" ',"error":"MIT kadmind 464 did not listen"'
     exit 1
 fi

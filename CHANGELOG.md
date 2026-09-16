@@ -6,6 +6,12 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W2-S7 kpasswd wall
+
+- **kpasswd-gate.** Expected-no-reply UDP probes use a 0.4 s socket
+  timeout (was 2 s × 12). MIT kadmind listen waits are `wait_port_in`.
+  Checkpoint `timings.tsv` records `gate_wall_s` when the gate prints it.
+
 ### W2-S7 walls
 
 - **Job split + leftover-reset.** `harness-2` and `mit-extra-2` run in
