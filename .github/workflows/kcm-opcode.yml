@@ -5,6 +5,9 @@ on:
     - cron: "18 7 * * *"
   workflow_dispatch:
 
+env:
+  KERBER_NEED_BINS_STRICT: "1"
+
 jobs:
   kcm-opcode:
     runs-on: ubuntu-latest
@@ -14,6 +17,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install lld
         run: sudo apt-get update -qq && sudo apt-get install -y -qq lld
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: kerber
       - name: Scratch dir
         run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
       - uses: actions/cache@v4
@@ -31,5 +37,7 @@ jobs:
           else
             echo "MIT tar missing from cache; kcm-opcode will unavailable (exit 2)"
           fi
+      - name: Build bins
+        run: ./scripts/lib/build-bins.sh
       - name: kcm-opcode-gate (F43/F42 sssd-kcm value-assert)
         run: ./scripts/lib/run-peer-step.sh ./scripts/kcm-opcode-gate.sh

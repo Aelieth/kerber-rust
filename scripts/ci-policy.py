@@ -176,6 +176,8 @@ FAIL_RED_PER_PUSH = (
     "kadmin-rust-acl-gate.sh",
     "kadmin-mit-gate.sh",
     "kadmin-both-gate.sh",
+    "kpasswd-rust-gate.sh",
+    "kpasswd-mit-gate.sh",
 )
 
 NIGHTLY_BLOCKING = (
@@ -2527,6 +2529,8 @@ def check_gate_wall(
         else:
             return
     for text in texts:
+        n_rows = 0
+        n_rc0 = 0
         for i, line in enumerate(text.splitlines()):
             if i == 0 and line.startswith("gate"):
                 continue
@@ -2535,10 +2539,16 @@ def check_gate_wall(
                 continue
             try:
                 wall = int(parts[3])
+                rc = int(parts[2])
             except ValueError:
                 continue
+            n_rows += 1
+            if rc == 0:
+                n_rc0 += 1
             if wall > GATE_WALL_MAX:
                 _die(f"gate {parts[0]} wall_s={wall} exceeds {GATE_WALL_MAX}")
+        if n_rows and n_rc0 == 0:
+            _die("checkpoint timings have zero gate_rc=0 rows")
 
 
 def check_sleep_ratchet(
@@ -2723,8 +2733,9 @@ def check_need_bins_strict(
     ci_text: str | None = None,
     checkpoint_text: str | None = None,
     common_text: str | None = None,
+    workflow_texts: dict[str, str] | None = None,
 ) -> None:
-    """CI and checkpoint set KERBER_NEED_BINS_STRICT=1; need_bins logs when it builds."""
+    """CI, checkpoint, and every gate-running workflow set STRICT=1 and build-bins."""
     if ci_text is None:
         ci_text = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
     if "KERBER_NEED_BINS_STRICT" not in ci_text:
@@ -2739,6 +2750,18 @@ def check_need_bins_strict(
         _die("need_bins must honour KERBER_NEED_BINS_STRICT")
     if "need_bins: building" not in common_text:
         _die("need_bins must log when it builds (lenient local path)")
+    if workflow_texts is None:
+        workflow_texts = {
+            p.name: p.read_text(encoding="utf-8")
+            for p in sorted(WORKFLOWS.glob("*.yml"))
+        }
+    for name, text in workflow_texts.items():
+        if not re.search(r"scripts/[A-Za-z0-9._-]+-gate\.sh", text):
+            continue
+        if "build-bins.sh" not in text:
+            _die(f"{name} runs a gate but has no build-bins.sh step")
+        if 'KERBER_NEED_BINS_STRICT: "1"' not in text:
+            _die(f'{name} runs a gate but lacks KERBER_NEED_BINS_STRICT: "1"')
 
 
 def check_no_gate_cargo_build(gate_texts: dict[str, str] | None = None) -> None:
@@ -3772,6 +3795,11 @@ jobs:
     _must_die(
         check_gate_wall,
         "# empty\n",
+        "gate\trun\tgate_rc\twall_s\nkdc-gate\trun1\t2\t1\n",
+    )
+    _must_die(
+        check_gate_wall,
+        "# empty\n",
         "gate\trun\tgate_rc\twall_s\nkpasswd-gate\trun1\t0\t46\n",
     )
     ok_sleep = "sleep 2 # proto: ticket age\n"
@@ -3843,6 +3871,26 @@ jobs:
         "KERBER_NEED_BINS_STRICT: \"1\"\n",
         "export KERBER_NEED_BINS_STRICT=1\n",
         "KERBER_NEED_BINS_STRICT\nneed_bins: building\n",
+        {
+            "peers.yml": (
+                'scripts/samba-ad-gate.sh\nbuild-bins.sh\n'
+                'KERBER_NEED_BINS_STRICT: "1"\n'
+            )
+        },
+    )
+    _must_die(
+        check_need_bins_strict,
+        'KERBER_NEED_BINS_STRICT: "1"\n',
+        "export KERBER_NEED_BINS_STRICT=1\n",
+        "KERBER_NEED_BINS_STRICT\nneed_bins: building\n",
+        {"peers.yml": "scripts/samba-ad-gate.sh\n"},
+    )
+    _must_die(
+        check_need_bins_strict,
+        'KERBER_NEED_BINS_STRICT: "1"\n',
+        "export KERBER_NEED_BINS_STRICT=1\n",
+        "KERBER_NEED_BINS_STRICT\nneed_bins: building\n",
+        {"peers.yml": "scripts/samba-ad-gate.sh\nbuild-bins.sh\n"},
     )
     _must_die(
         check_need_bins_strict,
@@ -4023,6 +4071,43 @@ jobs:
         "run-peer-step.sh\n",
         "kinit failed; exit 1\n",
         {"peers.yml": "scripts/samba-ad-gate.sh\n"},
+        {},
+    )
+    _must_die(
+        check_peers_unavailable_convention,
+        '[ "$rc" -eq 2 ] && exit 0\n',
+        "run-peer-step.sh\n",
+        "kinit failed; exit 1\n",
+        {
+            "peers.yml": (
+                "scripts/samba-ad-gate.sh\nkerber-rust-mit-kdc.tar\n"
+            )
+        },
+        {},
+    )
+    _must_die(
+        check_peers_unavailable_convention,
+        '[ "$rc" -eq 2 ] && exit 0\n',
+        "run-peer-step.sh\n",
+        "kinit failed; exit 1\n",
+        {
+            "kcm-opcode.yml": (
+                "scripts/kcm-opcode-gate.sh\nkerber-rust-mit-kdc.tar\nlld\n"
+            )
+        },
+        {},
+    )
+    _must_die(
+        check_peers_unavailable_convention,
+        '[ "$rc" -eq 2 ] && exit 0\n',
+        "run-peer-step.sh\n",
+        "kinit failed; exit 1\n",
+        {
+            "kcm-opcode.yml": (
+                "scripts/kcm-opcode-gate.sh\nKERBER_NO_IMAGE\n"
+                "lld\nrun-peer-step.sh\n"
+            )
+        },
         {},
     )
     _must_die(

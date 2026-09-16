@@ -419,7 +419,7 @@ three marked `continue-on-error`):
 | `ledger-mit` | fetches the SHA-pinned MIT 1.22.2 source and runs `scripts/ci-policy.py` (ledger anchors, tally, proof column, evidence rules) |
 | `mit-image` | builds or restores `kerber-rust-mit-kdc:1.22.2` and `kerber-rust-prod-node:latest` into `actions/cache` (no artifact round-trip) |
 | `harness` | After `run-harness`/`stop-harness` (client/ccache/knobs/config-include), one shared shell (`KERBER_SHELL`) and one stock MIT KDC (`KERBER_LIVE=1`). Then `kdc-gate`, `store-gate`, `bidirectional-gate`, `gss-gate`, `pkinit-gate`, `kadmin-rust-gate`, `kadmin-rust-acl-gate`, `kadmin-mit-gate`, `kadmin-both-gate` (local wrapper `kadmin-gate.sh`), `policy-gate`, `history-mit-gate` |
-| `harness-2` | One shared shell + one stock MIT KDC, then `kpasswd-gate`, `kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `rd-safe-oracle-gate`, `cross-kdc-gate`, `iprop-gate`, `expire-gate`, `kdcpolicy-gate`, `flags-gate`, `renew-gate`, `postdate-gate`, `getprivs-gate`, `prop-acl-gate`, `restart-gate`, `prod-gate`, `prod-realm-gate`; `sssd-renew-gate`, `kit-conformance-gate`, `gssproxy-gate`, `nfs-krb5p-gate` run under `skip2` |
+| `harness-2` | One shared shell + one stock MIT KDC, then `kpasswd-rust-gate`, `kpasswd-mit-gate` (local wrapper `kpasswd-gate.sh`), `kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `rd-safe-oracle-gate`, `cross-kdc-gate`, `iprop-gate`, `expire-gate`, `kdcpolicy-gate`, `flags-gate`, `renew-gate`, `postdate-gate`, `getprivs-gate`, `prop-acl-gate`, `restart-gate`, `prod-gate`, `prod-realm-gate`; `sssd-renew-gate`, `kit-conformance-gate`, `gssproxy-gate`, `nfs-krb5p-gate` run under `skip2` |
 | `mit-extra` | One shared shell + one stock MIT KDC, then `cross-realm-gate`, `capaths-transit-gate`, `capaths-compress-gate`, `spake-gate`, `rust-kinit-spake-gate`, `mit-fast-kdc-gate`, `rust-kinit-fast-gate`, `rust-kinit-pkinit-gate`, `rust-kinit-enterprise-gate`, `ktutil-gate`, `kadmin-local-gate`, `rust-kpasswd-mit-gate`, `sha2-gate`, `rc4-session-gate` |
 | `mit-extra-2` | One shared shell + one stock MIT KDC, then `client-differential-gate`, `s4u-mit-gate`, `kcm-gate` |
 | `slo` (`continue-on-error`) | `stress-gate` over `harness/prod` |
@@ -605,7 +605,7 @@ Not in any workflow: `gss-sspi-gate.sh` (needs a Windows SSPI peer; exits
   mutating local `setstr` must keep a concurrent `kadmind` `addprinc`
   (`m5k: m5v` via `getstrs`); local `addprinc n7local` then remote
   `cpw extra2` must keep both on a fresh dump. Run twice.
-- `scripts/kpasswd-gate.sh` — MIT `kpasswd` against kadmind UDP/TCP
+- `scripts/kpasswd-rust-gate.sh` / `scripts/kpasswd-mit-gate.sh` — MIT `kpasswd` against kadmind UDP/TCP (local wrapper `kpasswd-gate.sh`)
   464 (`kadmin/changepw`), then `kinit` with the new password; old
   password must fail; second `kpasswd` + `kinit`; then Rust
   `krb5-kpasswd` against the same Rust kadmind. A `-minlength 8`

@@ -5,6 +5,9 @@ on:
     - cron: "47 5 * * *"
   workflow_dispatch:
 
+env:
+  KERBER_NEED_BINS_STRICT: "1"
+
 jobs:
   soak:
     runs-on: ubuntu-latest

@@ -5,6 +5,9 @@ on:
     - cron: "12 6 * * *"
   workflow_dispatch:
 
+env:
+  KERBER_NEED_BINS_STRICT: "1"
+
 jobs:
   peers:
     runs-on: ubuntu-latest
@@ -35,6 +38,8 @@ jobs:
           else
             echo "MIT tar missing from cache; peer steps will unavailable (exit 2)"
           fi
+      - name: Build bins
+        run: ./scripts/lib/build-bins.sh
       - name: Build Samba AD DC image (harness/samba)
         if: always()
         run: docker build -f harness/samba/Dockerfile -t samba-ad-dc:latest .
