@@ -41,6 +41,7 @@ NAME_B="kerber-rust-samba-rt-b"
 docker rm -f "$NAME_A" "$NAME_B" >/dev/null 2>&1 || true
 docker network rm "$NET" >/dev/null 2>&1 || true
 docker network create "$NET" >/dev/null
+register_cleanup 'docker rm -f "$NAME_A" "$NAME_B" >/dev/null 2>&1 || true; docker network rm "$NET" >/dev/null 2>&1 || true'
 
 set +e
 docker run -d --name "$NAME_A" --hostname dc1 --network "$NET" \
@@ -135,7 +136,7 @@ docker exec "$NAME_A" sh -c 'for p in /proc/[0-9]*; do
   echo "$cmd" | grep -q "task\[kdc\]" || continue
   kill "${p#/proc/}" 2>/dev/null || true
 done'
-wait_gone_in "$NAME_A" 88 || true
+wait_gone_in "$NAME_A" 88 || die "KDC still bound :88 after kill"
 
 ISSUE_SALT='KERBER.TESTkrbtgtAD.KERBER.TEST'
 ACCEPT_SALT='AD.KERBER.TESTkrbtgtKERBER.TEST'

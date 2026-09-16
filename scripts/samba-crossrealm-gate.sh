@@ -79,7 +79,7 @@ docker exec "$NAME" sh -c 'for p in /proc/[0-9]*; do
   echo "$cmd" | grep -q "task\[kdc\]" || continue
   kill "${p#/proc/}" 2>/dev/null || true
 done'
-wait_gone_in "$NAME" 88 || true
+wait_gone_in "$NAME" 88 || die "KDC still bound :88 after kill"
 
 docker exec "$NAME" sh -c "cat >/tmp/kdc.conf <<EOF
 [realms]

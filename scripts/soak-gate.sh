@@ -35,6 +35,7 @@ echo "==== env-up $REALM ===="
 export KERBER_CAPTURE=0
 "$ROOT/harness/prod/env-up.sh" | tee "$OUT/env-up.log"
 grep -q 'SMOKE OK' "$OUT/env-up.log" || die "env-up smoke did not pass"
+register_cleanup "$ROOT/harness/prod/env-down.sh >/dev/null 2>&1 || true"
 PIP="$(prod_ip_of "$PRIMARY")"
 [ -n "$PIP" ] || die "primary IP missing"
 prod_stage_loadgen || die "stage loadgen"

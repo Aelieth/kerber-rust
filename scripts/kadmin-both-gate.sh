@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Both-kadmind diff cells of kadmin-gate (GSS-RPC 749). Isolated throwaway container.
+# Both-kadmind diff cells of kadmin-gate (GSS-RPC 749). KEEP-attach in CI.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -622,7 +622,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-        wait_gone_in "$ctn" 749 || true
+        wait_gone_in "$ctn" 749 || die "kadmind still bound :749 after kill"
         docker exec "$ctn" sh -c 'printf "%s\n" "admin@KERBER.TEST *" "ro@KERBER.TEST i" > /tmp/kadm5.acl'
         docker exec -d \
             -e KRB5_KDC_DB=/tmp/principal \
@@ -819,7 +819,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-        wait_gone_in "$ctn" 749 || true
+        wait_gone_in "$ctn" 749 || die "kadmind still bound :749 after kill"
         docker exec "$ctn" sh -c 'printf "%s\n" "admin@KERBER.TEST *" \
             "admin/admin@KERBER.TEST *" \
             "*/admin@KERBER.TEST *" \

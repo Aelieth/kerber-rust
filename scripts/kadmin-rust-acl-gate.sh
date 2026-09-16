@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Rust kadmind ACL-restart / policy cells of kadmin-gate. Attaches to the
-# rust-gate container (KERBER_KADMIN_KEEP=1). Isolated throwaway container.
+# rust-gate container (KERBER_KADMIN_KEEP=1). KEEP-attach in CI.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -15,8 +15,13 @@ CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
 export CORRELATION_ID
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-kadmin-gate}"
 mkdir -p "$SCRATCH"
+_snap_key() {
+    printf '%s-%s\n' "$(git rev-parse HEAD)" \
+        "$(git status --porcelain -- ':!working' | sha256sum | awk '{print $1}')"
+}
 save_rust_snap() {
     printf '%s\n' "$2" >"$SCRATCH/kadmin-rust-$1"
+    _snap_key >"$SCRATCH/kadmin-rust-$1.key"
 }
 
 if ! command -v docker >/dev/null 2>&1; then

@@ -62,6 +62,7 @@ fi
 echo "host /etc/krb5.conf must stay TESTLABBY.LOCAL"
 
 docker rm -f "$NAME_H2R" "$NAME_R2H" >/dev/null 2>&1 || true
+register_cleanup 'docker rm -f "$NAME_H2R" "$NAME_R2H" >/dev/null 2>&1 || true'
 
 echo "==== Heimdal client vs Rust KDC ===="
 docker run -d --name "$NAME_H2R" --entrypoint sleep "$IMAGE" 3600 >/dev/null \

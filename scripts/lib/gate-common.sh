@@ -20,7 +20,7 @@ _CLEANUP_FNS=()
 
 log() {
     printf '{"event":"%s","correlation_id":"%s","component":"%s","outcome":"%s"%s}\n' \
-        "$1" "$CORRELATION_ID" "$COMPONENT" "$2" "${3:-}"
+        "$1" "$CORRELATION_ID" "$COMPONENT" "${2:-}" "${3:-}"
 }
 
 die() {
@@ -133,14 +133,14 @@ wait_port_in() {
 # a connect probe would steal the only accept().
 wait_bound_in() {
     local ctn="${1:-$NAME}" port="${2:-88}" n="${3:-80}" kind="${4:-udp}"
-    local sock i
+    local sock i bound=0
     case "$kind" in
         tcp) sock="socket.SOCK_STREAM" ;;
         udp) sock="socket.SOCK_DGRAM" ;;
         *) return 1 ;;
     esac
-    for i in $(seq 1 "$n"); do
-        if docker exec "$ctn" python3 -c "import socket,sys
+    _bound() {
+        docker exec "$ctn" python3 -c "import socket,sys
 s=socket.socket(socket.AF_INET, $sock)
 try:
     s.bind(('127.0.0.1', int('$port')))
@@ -148,7 +148,14 @@ try:
 except OSError:
     sys.exit(0)
 finally:
-    s.close()" 2>/dev/null; then
+    s.close()" 2>/dev/null
+    }
+    # Refuse a port that was already bound before this wait (stale proxy).
+    if _bound; then
+        return 1
+    fi
+    for i in $(seq 1 "$n"); do
+        if _bound; then
             return 0
         fi
         sleep 0.1
@@ -213,7 +220,7 @@ need_bins() {
     if [ "${KERBER_NEED_BINS_STRICT:-}" = 1 ]; then
         die "bins missing ($*); run scripts/lib/build-bins.sh"
     fi
-    log "need_bins: building missing bins ($*) (KERBER_NEED_BINS_STRICT unset)"
+    log "need_bins" "ok" ",\"msg\":\"need_bins: building missing bins ($*) (KERBER_NEED_BINS_STRICT unset)\""
     "$ROOT/scripts/lib/build-bins.sh"
     for bin in "$@"; do
         if [ ! -x "$dest/$bin" ] && [ ! -x "$dest/examples/$bin" ]; then
@@ -227,15 +234,14 @@ shell_container() {
     local host="${2:-}"
     if [ -n "${KERBER_SHELL:-}" ]; then
         NAME="${KERBER_SHELL}"
-        docker inspect "$NAME" >/dev/null 2>&1 || die "KERBER_SHELL=$NAME is not running"
+        [ "$(docker inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null)" = true ] \
+            || die "KERBER_SHELL=$NAME is not running"
         # One exec: kill leftovers, wipe KDB, restore stock conf, wait
         # pids+ports inside the container (host-side wait_gone_in is 10
         # docker execs per attach and dominated the harness wall).
         docker exec "$NAME" sh -c "$(cat <<'EOS'
             kill $(pidof krb5-kdc krb5-kadmind krb5kdc kadmind kpropd) 2>/dev/null || true
-            pkill -f kdc-error-proxy.py >/dev/null 2>&1 || true
-            pkill -f kdc-req-proxy.py >/dev/null 2>&1 || true
-            pkill -f integ-tamper-proxy.py >/dev/null 2>&1 || true
+            pkill -f -- '-proxy.py' >/dev/null 2>&1 || true
             kdb5_util destroy -f >/dev/null 2>&1 || true
             find /tmp -mindepth 1 -maxdepth 1 \
                 ! -name 'krb5-*' ! -name 'ccache-probe' ! -name 'build' \
@@ -279,6 +285,9 @@ while time.time() < deadline:
 "
 EOS
         )" || true
+        wait_gone_in "$NAME" 1888 40 || die "proxy still bound :1888 after attach-reset"
+        wait_gone_in "$NAME" 1891 20 || die "proxy still bound :1891 after attach-reset"
+        wait_gone_in "$NAME" 1892 20 || die "proxy still bound :1892 after attach-reset"
         return 0
     fi
     NAME="${NAME:-kerber-rust-${GATE_NAME}}"
@@ -329,7 +338,8 @@ stock_mit_kdc() {
     local logs i
     if [ "${KERBER_LIVE:-}" = 1 ]; then
         n="${KERBER_MIT_NAME:-kerber-rust-mit-kdc}"
-        docker inspect "$n" >/dev/null 2>&1 || die "KERBER_LIVE=1 but $n is not running"
+        [ "$(docker inspect -f '{{.State.Running}}' "$n" 2>/dev/null)" = true ] \
+            || die "KERBER_LIVE=1 but $n is not running"
         NAME="$n"
         return 0
     fi
@@ -377,6 +387,7 @@ mit_conf_restore() {
         kill $(pidof krb5kdc) 2>/dev/null || true
         kill $(pidof kadmind) 2>/dev/null || true
         kill $(pidof krb5-kdc) 2>/dev/null || true
+        pkill -f -- '-proxy.py' >/dev/null 2>&1 || true
     ' || true
     wait_pid_gone "$ctn" krb5kdc || true
     wait_pid_gone "$ctn" kadmind || true

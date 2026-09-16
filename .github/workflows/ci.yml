@@ -215,6 +215,8 @@ jobs:
         run: |
           ./scripts/lib/boot-shell.sh
           ./scripts/lib/boot-stock-mit.sh
+      - name: attach-reset proxy self-test
+        run: ./scripts/gate-attach-reset-selftest.sh
       - name: kdc-gate (MIT client vs Rust KDC)
         run: ./scripts/kdc-gate.sh
       - name: store-gate (MemoryStore serve + MIT kinit/kvno)

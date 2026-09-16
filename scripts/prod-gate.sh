@@ -56,6 +56,7 @@ done
 
 ./target/debug/krb5-kdc --test-realm "$BIND" >"$LOG" 2>&1 &
 KDC_PID=$!
+register_cleanup 'kill $KDC_PID $TCPDUMP_PID 2>/dev/null || true'
 
 ok=0
 for _ in $(seq 1 50); do

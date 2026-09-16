@@ -534,7 +534,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-wait_gone_in "$NAME_MIT" 88 || true
+wait_gone_in "$NAME_MIT" 88 || die "MIT krb5kdc still bound :88 after kill"
 docker exec "$NAME_MIT" krb5kdc
 if ! wait_port_in "$NAME_MIT" 88; then
     log "kpasswd.gate" "error" ',"error":"MIT krb5kdc did not listen after log restart"'

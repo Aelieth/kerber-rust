@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rust kadmind leg of kadmin-gate (GSS-RPC 749). Isolated throwaway container.
+# Rust kadmind leg of kadmin-gate (GSS-RPC 749). KEEP-attach in CI.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -19,9 +19,15 @@ export CORRELATION_ID
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-kadmin-gate}"
 mkdir -p "$SCRATCH"
 # mit-gate diffs these; KERBER_KADMIN_KEEP preserves containers, not shell vars.
+_snap_key() {
+    printf '%s-%s\n' "$(git rev-parse HEAD)" \
+        "$(git status --porcelain -- ':!working' | sha256sum | awk '{print $1}')"
+}
 save_rust_snap() {
     printf '%s\n' "$2" >"$SCRATCH/kadmin-rust-$1"
+    _snap_key >"$SCRATCH/kadmin-rust-$1.key"
 }
+rm -f "$SCRATCH"/kadmin-rust-*
 
 _kadmin_cleanup() {
     if [ "${KERBER_KADMIN_KEEP:-}" = 1 ]; then

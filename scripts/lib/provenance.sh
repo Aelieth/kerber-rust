@@ -33,7 +33,6 @@ else
     GIT_INDEX_FILE="$_prov_idx" git add -A -- . >/dev/null
     tree_sha="$(GIT_INDEX_FILE="$_prov_idx" git write-tree)"
     rm -f "$_prov_idx"
-    export KERBER_TREE_SHA="$tree_sha"
 fi
 if git status --porcelain --untracked-files=normal -- ':!working' | grep -q .; then
     dirty=yes

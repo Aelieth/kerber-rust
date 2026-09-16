@@ -12,13 +12,13 @@ mkdir -p "$SCRATCH"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
 
+need_image
 IMAGE="${SSSD_FEDORA_IMAGE:-}"
 if [ -z "$IMAGE" ]; then
     echo "SSSD Fedora image not configured (SSSD_FEDORA_IMAGE)" | tee "$SCRATCH/sssd-renew-unavailable.log"
     log "sssd.renew.gate" "unavailable" ',"error":"no Fedora sssd image"'
     exit 2
 fi
-need_image
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     if ! docker pull "$IMAGE" >/dev/null 2>&1; then
         echo "cannot pull $IMAGE" | tee "$SCRATCH/sssd-renew-unavailable.log"

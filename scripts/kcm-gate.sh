@@ -31,6 +31,7 @@ fi
 
 docker rm -f "$KCM" >/dev/null 2>&1 || true
 docker run -d --name "$KCM" --network "container:${MIT}" "$KCM_IMAGE" >/dev/null
+register_cleanup 'docker rm -f "$KCM" >/dev/null 2>&1 || true'
 for _ in $(seq 1 50); do
     if docker exec "$KCM" test -S /run/.heim_org.h5l.kcm-socket; then
         break

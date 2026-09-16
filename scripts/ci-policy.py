@@ -2386,6 +2386,7 @@ GATE_COMMON_NEEDLES = (
     "! -name 'build'",
     "kdb5_util destroy",
     "krb5.conf.kerber-stock",
+    "pkill -f -- '-proxy.py'",
 )
 
 

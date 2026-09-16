@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MIT kadmind leg of kadmin-gate (GSS-RPC 749). Isolated throwaway container.
+# MIT kadmind leg of kadmin-gate (GSS-RPC 749). KEEP-attach in CI.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -18,9 +18,16 @@ CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
 export CORRELATION_ID
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-kadmin-gate}"
 mkdir -p "$SCRATCH"
+_snap_key() {
+    printf '%s-%s\n' "$(git rev-parse HEAD)" \
+        "$(git status --porcelain -- ':!working' | sha256sum | awk '{print $1}')"
+}
 load_rust_snap() {
     local f="$SCRATCH/kadmin-rust-$1"
+    local k="$f.key"
     [ -f "$f" ] || die "missing rust snapshot $1 (run kadmin-rust-gate.sh first)"
+    [ -f "$k" ] || die "missing rust snapshot key $1"
+    [ "$(cat "$k")" = "$(_snap_key)" ] || die "stale rust snapshot $1 (tree/run mismatch)"
     cat "$f"
 }
 
@@ -563,7 +570,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-wait_gone_in "$NAME_MIT" 749 || true
+wait_gone_in "$NAME_MIT" 749 || die "MIT kadmind still bound :749 after kill"
 docker exec "$NAME_MIT" sh -c 'cat >/tmp/mit-iprop-kdc.conf <<EOF
 [kdcdefaults]
     kdc_ports = 88
@@ -837,7 +844,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-wait_gone_in "$NAME_MIT" 749 || true
+wait_gone_in "$NAME_MIT" 749 || die "MIT kadmind still bound :749 after kill"
 docker exec "$NAME_MIT" sh -c 'printf "%s\n" "scoped@KERBER.TEST ad *@KERBER.TEST" > /var/kerberos/krb5kdc/kadm5.acl'
 docker exec -d "$NAME_MIT" sh -c 'kadmind -nofork >/tmp/kadmind-noadmin.log 2>&1'
 ok=0
@@ -873,7 +880,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-wait_gone_in "$NAME_MIT" 749 || true
+wait_gone_in "$NAME_MIT" 749 || die "MIT kadmind still bound :749 after kill"
 docker exec "$NAME_MIT" sh -c 'printf "%s\n" "bad@KERBER.TEST aZ" > /var/kerberos/krb5kdc/kadm5.acl'
 set +e
 docker exec "$NAME_MIT" sh -c 'timeout 3 kadmind -nofork >/tmp/kadmind-badacl.log 2>&1'
@@ -1156,7 +1163,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-wait_gone_in "$NAME_MIT" 749 || true
+wait_gone_in "$NAME_MIT" 749 || die "MIT kadmind still bound :749 after kill"
 docker exec "$NAME_MIT" sh -c 'printf "%s\n" "admin@KERBER.TEST * *@KERBER.TEST -maxlife 12:34" "*/admin@KERBER.TEST *" > /var/krb5kdc/kadm5.acl'
 docker exec -d "$NAME_MIT" sh -c 'kadmind -nofork >/tmp/kadmind-maxlife.log 2>&1'
 ok=0
@@ -1185,7 +1192,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-wait_gone_in "$NAME_MIT" 749 || true
+wait_gone_in "$NAME_MIT" 749 || die "MIT kadmind still bound :749 after kill"
 docker exec "$NAME_MIT" sh -c 'printf "%s\n" "admin@KERBER.TEST * *@KERBER.TEST -maxlife 42x" "*/admin@KERBER.TEST * *@KERBER.TEST -maxlife 42x" > /var/krb5kdc/kadm5.acl'
 docker exec -d "$NAME_MIT" sh -c 'kadmind -nofork >/tmp/kadmind-42x.log 2>&1'
 ok=0
@@ -1221,7 +1228,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-wait_gone_in "$NAME_MIT" 749 || true
+wait_gone_in "$NAME_MIT" 749 || die "MIT kadmind still bound :749 after kill"
 docker exec "$NAME_MIT" sh -c 'printf "%s\n" "admin@KERBER.TEST * *@KERBER.TEST -maxlife 3dd" > /var/krb5kdc/kadm5.acl'
 set +e
 docker exec "$NAME_MIT" sh -c 'timeout 3 kadmind -nofork >/tmp/kadmind-3dd.log 2>&1'
@@ -1272,7 +1279,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-wait_gone_in "$NAME" 749 || true
+wait_gone_in "$NAME" 749 || die "kadmind still bound :749 after kill"
 docker exec "$NAME" sh -c 'printf "%s\n" "admin@KERBER.TEST *" > /tmp/kadm5.acl'
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/principal \
