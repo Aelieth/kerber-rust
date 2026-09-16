@@ -52,6 +52,7 @@ esac
 
 PROXY=1888
 docker cp "$ROOT/scripts/lib/kdc-error-proxy.py" "$NAME":/tmp/kdc-error-proxy.py
+wait_bound_free_in "$NAME" "$PROXY" udp || die "stale proxy still bound :$PROXY"
 docker exec -d "$NAME" python3 /tmp/kdc-error-proxy.py "$PROXY" 127.0.0.1 "$PORT" /tmp/spake-91.txt
 wait_udp_in "$NAME" "$PROXY" || die "proxy $PROXY did not listen"
 

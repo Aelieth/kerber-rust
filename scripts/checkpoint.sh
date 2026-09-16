@@ -3,6 +3,8 @@
 # Usage:
 #   scripts/checkpoint.sh --out DIR [--twice g1,g2] [--peers] [--gates g1,g2]
 #                         [--skip-nextest] [--skip-harness] [--skip-policy]
+#   scripts/checkpoint.sh --plan ...     (print index/gate/label, do not run)
+#   scripts/checkpoint.sh --self-test
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -14,6 +16,14 @@ GATES=""
 SKIP_NEXTEST=0
 SKIP_HARNESS=0
 SKIP_POLICY=0
+PLAN=0
+
+# KEEP / twice / peers legs use dedicated index ranges so they cannot
+# collide with the alphabetical pass (W2 close-audit: kadmin KEEP reused 51–54).
+KEEP_INDEX_START=200
+KPASSWD_KEEP_INDEX_START=210
+TWICE_INDEX_START=300
+PEERS_INDEX_START=400
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -24,39 +34,95 @@ while [ $# -gt 0 ]; do
         --skip-nextest) SKIP_NEXTEST=1; shift ;;
         --skip-harness) SKIP_HARNESS=1; shift ;;
         --skip-policy) SKIP_POLICY=1; shift ;;
+        --plan) PLAN=1; shift ;;
+        --self-test) CHECKPOINT_SELF_TEST=1; shift ;;
         *) echo "usage: $0 --out DIR [--twice g1,g2] [--peers] [--gates g1,g2]" >&2; exit 2 ;;
     esac
 done
+
+if [ "${CHECKPOINT_SELF_TEST:-0}" = 1 ]; then
+    t=$(mktemp -d)
+    mkdir -p "$t/full"
+    echo x >"$t/full/a"
+    if "$0" --out "$t/full" --skip-nextest --skip-harness --skip-policy; then
+        echo "checkpoint.sh --self-test: nonempty --out must be refused" >&2
+        rm -rf "$t"
+        exit 1
+    fi
+    plan=$("$0" --plan --out "$t/empty" --peers)
+    peers_n=$(printf '%s\n' "$plan" | grep -c 'samba-ad-gate' || true)
+    if [ "$peers_n" -ne 1 ]; then
+        echo "checkpoint.sh --self-test: peers gate ran $peers_n times (want 1)" >&2
+        printf '%s\n' "$plan" >&2
+        rm -rf "$t"
+        exit 1
+    fi
+    if ! printf '%s\n' "$plan" | grep -q '^201 kadmin-rust-gate'; then
+        echo "checkpoint.sh --self-test: kadmin KEEP must start at 201" >&2
+        printf '%s\n' "$plan" >&2
+        rm -rf "$t"
+        exit 1
+    fi
+    if ! printf '%s\n' "$plan" | grep -q '^211 kpasswd-rust-gate'; then
+        echo "checkpoint.sh --self-test: kpasswd KEEP must start at 211" >&2
+        rm -rf "$t"
+        exit 1
+    fi
+    if ! printf '%s\n' "$plan" | grep -q '^401 samba-ad-gate peers'; then
+        echo "checkpoint.sh --self-test: peers KEEP range must start at 401" >&2
+        rm -rf "$t"
+        exit 1
+    fi
+    rm -rf "$t"
+    echo "checkpoint.sh: self-test ok"
+    exit 0
+fi
+
 if [ -z "$OUT" ]; then
     echo "checkpoint.sh: --out DIR is required" >&2
     exit 2
 fi
-mkdir -p "$OUT"
-OUT="$(cd "$OUT" && pwd)"
-export KERBER_SCRATCH="${KERBER_SCRATCH:-$OUT/scratch}"
-mkdir -p "$KERBER_SCRATCH"
-export KERBER_NEED_BINS_STRICT=1
+if [ "$PLAN" != 1 ]; then
+    if [ -d "$OUT" ] && [ -n "$(ls -A "$OUT" 2>/dev/null)" ]; then
+        echo "checkpoint.sh: refusing non-empty --out $OUT" >&2
+        exit 2
+    fi
+    mkdir -p "$OUT"
+    OUT="$(cd "$OUT" && pwd)"
+    export KERBER_SCRATCH="${KERBER_SCRATCH:-$OUT/scratch}"
+    mkdir -p "$KERBER_SCRATCH"
+    export KERBER_NEED_BINS_STRICT=1
 
-if pgrep -f 'scripts/[a-z0-9-]*-gate\.sh' >/dev/null || pgrep -x cargo >/dev/null; then
-    echo "ABORT: a gate or cargo is already running" >&2
-    exit 3
+    if pgrep -f 'scripts/[a-z0-9-]*-gate\.sh' >/dev/null || pgrep -x cargo >/dev/null; then
+        echo "ABORT: a gate or cargo is already running" >&2
+        exit 3
+    fi
+
+    {
+        echo "head_sha=$(git rev-parse HEAD)"
+        echo "dirty_files=$(git status --porcelain | wc -l)"
+        echo "started=$(date -Is)"
+        echo "host_krb5_default_realm=$(/usr/bin/grep -m1 default_realm /etc/krb5.conf 2>/dev/null || true)"
+        echo "nproc=$(nproc)"
+    } >"$OUT/00-head.txt"
+
+    : >"$OUT/02-progress.txt"
+    printf 'gate\trun\tgate_rc\twall_s\n' >"$OUT/timings.tsv"
+    prog() { echo "$1 $2 $3 $(date +%H:%M:%S)" >>"$OUT/02-progress.txt"; }
+else
+    SKIP_NEXTEST=1
+    SKIP_HARNESS=1
+    SKIP_POLICY=1
+    prog() { :; }
 fi
-
-{
-    echo "head_sha=$(git rev-parse HEAD)"
-    echo "dirty_files=$(git status --porcelain | wc -l)"
-    echo "started=$(date -Is)"
-    echo "host_krb5_default_realm=$(/usr/bin/grep -m1 default_realm /etc/krb5.conf 2>/dev/null || true)"
-    echo "nproc=$(nproc)"
-} >"$OUT/00-head.txt"
-
-: >"$OUT/02-progress.txt"
-printf 'gate\trun\tgate_rc\twall_s\n' >"$OUT/timings.tsv"
-prog() { echo "$1 $2 $3 $(date +%H:%M:%S)" >>"$OUT/02-progress.txt"; }
 
 rungate() {
     # $1=index $2=gate-stem $3=run-label
     local log s e rc
+    if [ "$PLAN" = 1 ]; then
+        echo "$1 $2 ${3:-run1}"
+        return 0
+    fi
     log="$OUT/$1-$2${3:+-$3}.log"
     echo "==== $2 ($3): scripts/$2.sh ====" >"$log"
     s=$(date +%s)
@@ -80,6 +146,7 @@ HARNESS_ATTACH="knobs-gate ccache-gate client-gate config-include-gate"
 # CI runs these KEEP-attached; local checkpoint runs them in that order
 # with KERBER_KADMIN_KEEP=1 so each wall_s is a CI leg, not the wrapper.
 KADMIN_KEEP="kadmin-rust-gate kadmin-rust-acl-gate kadmin-mit-gate kadmin-both-gate"
+KPASSWD_KEEP="kpasswd-rust-gate kpasswd-mit-gate"
 
 if [ "$SKIP_POLICY" != 1 ]; then
     { . scripts/lib/provenance.sh; echo "label=python3 scripts/ci-policy.py"; python3 scripts/ci-policy.py; echo "rc=$?"; } \
@@ -120,10 +187,10 @@ wanted() {
     case " $SKIP_ALWAYS " in *" $g "*) return 1 ;; esac
     case " $HARNESS_ATTACH " in *" $g "*) return 1 ;; esac
     case " $KADMIN_KEEP " in *" $g "*) return 1 ;; esac
-    case "$g" in kadmin-gate) return 1 ;; esac
-    if [ "$PEERS" != 1 ]; then
-        case " $PEERS_GATES " in *" $g "*) return 1 ;; esac
-    fi
+    case " $KPASSWD_KEEP " in *" $g "*) return 1 ;; esac
+    case "$g" in kadmin-gate|kpasswd-gate) return 1 ;; esac
+    # Peers gates never run in the alphabetical pass; --peers uses PEERS_INDEX_START.
+    case " $PEERS_GATES " in *" $g "*) return 1 ;; esac
     if [ -n "$GATES" ]; then
         case ",$GATES," in *",$g,"*) return 0 ;; *) return 1 ;; esac
     fi
@@ -138,17 +205,30 @@ for f in scripts/*-gate.sh; do
     rungate "$i" "$g" ""
 done
 
-i=50
+i=$KEEP_INDEX_START
 export KERBER_KADMIN_KEEP=1
 for g in $KADMIN_KEEP; do
     i=$((i + 1))
     rungate "$i" "$g" ""
 done
 unset KERBER_KADMIN_KEEP
-docker rm -f kerber-rust-kadmin-gate kerber-rust-kadmin-mit >/dev/null 2>&1 || true
+if [ "$PLAN" != 1 ]; then
+    docker rm -f kerber-rust-kadmin-gate kerber-rust-kadmin-mit >/dev/null 2>&1 || true
+fi
+
+i=$KPASSWD_KEEP_INDEX_START
+export KERBER_KPASSWD_KEEP=1
+for g in $KPASSWD_KEEP; do
+    i=$((i + 1))
+    rungate "$i" "$g" ""
+done
+unset KERBER_KPASSWD_KEEP
+if [ "$PLAN" != 1 ]; then
+    docker rm -f kerber-rust-kpasswd-gate >/dev/null 2>&1 || true
+fi
 
 if [ -n "$TWICE" ]; then
-    i=70
+    i=$TWICE_INDEX_START
     IFS=',' read -r -a twice_arr <<<"$TWICE"
     for g in "${twice_arr[@]}"; do
         g=${g%.sh}
@@ -159,13 +239,16 @@ if [ -n "$TWICE" ]; then
 fi
 
 if [ "$PEERS" = 1 ]; then
-    i=80
+    i=$PEERS_INDEX_START
     for g in $PEERS_GATES; do
         i=$((i + 1))
         rungate "$i" "$g" peers
     done
 fi
 
+if [ "$PLAN" = 1 ]; then
+    exit 0
+fi
 echo "finished=$(date -Is)" >>"$OUT/00-head.txt"
 if [ "$SKIP_POLICY" != 1 ]; then
     python3 scripts/ci-policy.py --checkpoint --timings "$OUT/timings.tsv" \

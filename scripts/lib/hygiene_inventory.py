@@ -321,7 +321,7 @@ def snapshot(root: pathlib.Path, out: pathlib.Path, skip_nextest: bool, quality:
         "| `quality.txt` | grep (and optional compiler) counts |",
         "| `provenance.txt` | stamp from snapshot.sh |",
         "",
-        f"tests={0 if skip_nextest else int((out / 'tests.count').read_text())}",
+        f"tests={(out / 'tests.count').read_text(encoding='utf-8').strip()}",
         f"gate_tags={len(cells)}",
         f"diffsend={len(cases)}",
         f"flows={len(flows)}",

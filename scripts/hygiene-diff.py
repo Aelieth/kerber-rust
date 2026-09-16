@@ -4,17 +4,22 @@
 Fails on:
   - a test name removed that is not in --renames / --duplicates
   - a gate cell tag removed
+  - a (file,kind,tag) multiplicity drop (a (kind,tag) count that fell)
   - a diffsend case, client-differential flow, or ledger row removed or regraded
   - a gate_rc that went from 0 to non-zero
   - quality counts that went up (allow=, unwrap_expect_panic_src=, traces_untracked=)
+
+Prints `gate_rc: not compared` when neither side has timings.tsv.
 
 Reports as information: sleep/boot/cargo-build/LOC deltas.
 """
 from __future__ import annotations
 
 import argparse
+import collections
 import pathlib
 import sys
+import tempfile
 
 
 def load_data_lines(path: pathlib.Path) -> list[str]:
@@ -75,13 +80,84 @@ def load_gate_rc(path: pathlib.Path) -> dict[str, int]:
     return rc
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("old", type=pathlib.Path)
-    ap.add_argument("new", type=pathlib.Path)
-    ap.add_argument("--renames", type=pathlib.Path, help="old_name -> new_name")
-    ap.add_argument("--duplicates", type=pathlib.Path, help="removed_name = kept_name")
-    args = ap.parse_args()
+def _write_snap(d: pathlib.Path, gates: list[str], timings: str | None = None) -> None:
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "gates.txt").write_text("# gate\tkind\ttag\n" + "".join(g + "\n" for g in gates), encoding="utf-8")
+    (d / "tests.txt").write_text("# binary\tname\nbin\tt1\n", encoding="utf-8")
+    (d / "tests.count").write_text("1\n", encoding="utf-8")
+    for name in (
+        "diffsend.txt",
+        "client-differential-flows.txt",
+        "ledger-rows.txt",
+        "quality.txt",
+        "sleeps.txt",
+        "cargo-build-gates.txt",
+        "unit-sleeps.txt",
+    ):
+        (d / name).write_text("#\n", encoding="utf-8")
+    if timings is not None:
+        (d / "timings.tsv").write_text(timings, encoding="utf-8")
+
+
+def _self_test() -> None:
+    """Red on (file,kind,tag) multiplicity drop; gate_rc: not compared when no timings."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        old, new = root / "old", root / "new"
+        _write_snap(
+            old,
+            [
+                "a.sh\techo\tcell-x",
+                "b.sh\techo\tcell-x",
+                "a.sh\techo\tkeep",
+            ],
+        )
+        _write_snap(
+            new,
+            [
+                "a.sh\techo\tcell-x",
+                "a.sh\techo\tkeep",
+            ],
+        )
+        rc = main_compare(old, new)
+        if rc == 0:
+            raise SystemExit("hygiene-diff --self-test: multiplicity drop must fail")
+
+        moved_old, moved_new = root / "moved-old", root / "moved-new"
+        _write_snap(moved_old, ["a.sh\techo\tcell-y"])
+        _write_snap(moved_new, ["b.sh\techo\tcell-y"])
+        if main_compare(moved_old, moved_new) != 0:
+            raise SystemExit("hygiene-diff --self-test: file move must not fail")
+
+        none_old, none_new = root / "none-old", root / "none-new"
+        _write_snap(none_old, ["a.sh\techo\tkeep"])
+        _write_snap(none_new, ["a.sh\techo\tkeep"])
+        # Capture stdout for the not-compared line.
+        import io
+        from contextlib import redirect_stdout
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = main_compare(none_old, none_new)
+        if rc != 0:
+            raise SystemExit("hygiene-diff --self-test: identical snaps must be ok")
+        if "gate_rc: not compared" not in buf.getvalue():
+            raise SystemExit("hygiene-diff --self-test: missing gate_rc: not compared")
+
+
+def main_compare(old: pathlib.Path, new: pathlib.Path, renames_path=None, duplicates_path=None) -> int:
+    class NS:
+        pass
+
+    args = NS()
+    args.old = old
+    args.new = new
+    args.renames = renames_path
+    args.duplicates = duplicates_path
+    return _compare(args)
+
+
+def _compare(args) -> int:
     old, new = args.old, args.new
     if not old.is_dir() or not new.is_dir():
         print(f"hygiene-diff: need directories, got {old} {new}", file=sys.stderr)
@@ -140,6 +216,24 @@ def main() -> int:
     added = new_stable - old_stable
     if added:
         info(f"gate cell tags added: {len(added)}")
+    # (file,kind,tag) multiplicity: a tag that exists in two files and then
+    # only one is a lost cell even though the (kind,tag) set is unchanged.
+    # File moves (same (kind,tag) count, different files) stay informational.
+    old_ft = collections.Counter(
+        cell_key(c) for c in old_cells if cell_tag(c)[0] != "workflow"
+    )
+    new_ft = collections.Counter(
+        cell_key(c) for c in new_cells if cell_tag(c)[0] != "workflow"
+    )
+    old_tag_n = collections.Counter((k, t) for _, k, t in old_ft.elements())
+    new_tag_n = collections.Counter((k, t) for _, k, t in new_ft.elements())
+    for (kind, tag), n in sorted(old_tag_n.items()):
+        mapped = duplicates.get(tag) or renames.get(tag)
+        new_n = new_tag_n.get((kind, tag), 0)
+        if mapped:
+            new_n = max(new_n, new_tag_n.get((kind, mapped), 0))
+        if new_n < n:
+            fail(f"gate cell multiplicity drop: {kind}\t{tag} {n} -> {new_n}")
     old_files: dict[tuple[str, str], set[str]] = {}
     new_files: dict[tuple[str, str], set[str]] = {}
     for c in old_cells:
@@ -189,6 +283,8 @@ def main() -> int:
                 fail(f"gate_rc 0 -> {new_rc[gate]}: {gate}")
     elif old_rc or new_rc:
         info("gate_rc: only one side has timings.tsv (informational)")
+    else:
+        info("gate_rc: not compared")
 
     def int_or_none(d: dict[str, str], k: str) -> int | None:
         v = d.get(k)
@@ -250,6 +346,20 @@ def main() -> int:
         return 1
     print("hygiene-diff: ok")
     return 0
+
+
+def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
+        _self_test()
+        print("hygiene-diff: self-test ok")
+        return 0
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("old", type=pathlib.Path)
+    ap.add_argument("new", type=pathlib.Path)
+    ap.add_argument("--renames", type=pathlib.Path, help="old_name -> new_name")
+    ap.add_argument("--duplicates", type=pathlib.Path, help="removed_name = kept_name")
+    args = ap.parse_args()
+    return _compare(args)
 
 
 if __name__ == "__main__":

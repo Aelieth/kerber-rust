@@ -131,6 +131,7 @@ if [ "$rc" -eq 0 ]; then
         docker cp "$ROOT/scripts/lib/kdc-error-proxy.py" "$NAME":/tmp/kdc-error-proxy.py
         docker cp "$ROOT/scripts/lib/openssl-seclevel0.cnf" "$NAME":/tmp/openssl-seclevel0.cnf
         docker exec "$NAME" rm -f /tmp/pkinit-65.txt
+        wait_bound_free_in "$NAME" "$proxy" udp || die "stale proxy still bound :$proxy"
         docker exec -d "$NAME" python3 /tmp/kdc-error-proxy.py "$proxy" 127.0.0.1 "$PORT" /tmp/pkinit-65.txt
         wait_udp_in "$NAME" "$proxy" || die "proxy $proxy did not listen"
         docker exec "$NAME" sh -c "cat > /tmp/krb5-dh1024.conf <<EOF

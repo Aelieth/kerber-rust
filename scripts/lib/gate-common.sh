@@ -166,10 +166,12 @@ wait_udp_in() { wait_bound_in "${1:-$NAME}" "${2:-88}" "${3:-80}" udp; }
 wait_tcp_bound_in() { wait_bound_in "${1:-$NAME}" "${2:-88}" "${3:-80}" tcp; }
 
 wait_gone_in() {
+    # Port is gone when UDP bind succeeds (no leftover UDP proxy) AND TCP
+    # connect fails. A TCP-only probe cannot see kdc-error-proxy.py.
     local ctn="${1:-$NAME}" port="${2:-88}" n="${3:-80}"
     local i
     for i in $(seq 1 "$n"); do
-        if ! wait_port_in "$ctn" "$port" 1; then
+        if wait_bound_free_in "$ctn" "$port" udp && ! wait_port_in "$ctn" "$port" 1; then
             return 0
         fi
         sleep 0.1
@@ -276,6 +278,14 @@ while time.time() < deadline:
         except Exception:
             pass
         s.close()
+        if busy:
+            break
+        u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            u.bind(('127.0.0.1', p))
+        except OSError:
+            busy = True
+        u.close()
         if busy:
             break
     if not busy:

@@ -28,23 +28,29 @@ if [ -z "${KERBER_SHELL:-}" ]; then
 fi
 NAME="$KERBER_SHELL"
 
-# Stray UDP proxy on 1888 inside the shared container.
-docker exec -d "$NAME" python3 -c "
+# Stray UDP proxy named *-proxy.py so attach-reset's pkill matches.
+docker exec "$NAME" sh -c 'cat > /tmp/stray-proxy.py <<'"'"'PY'"'"'
 import socket, time
-s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-s.bind(('127.0.0.1', 1888))
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", 1888))
 time.sleep(30)
-" >/dev/null
+PY'
+docker exec -d "$NAME" python3 /tmp/stray-proxy.py
 sleep 0.3
 if wait_bound_free_in "$NAME" 1888 udp; then
     echo "wait_bound_free_in must fail on a pre-bound port" >&2
     exit 1
 fi
 
-# Attach-reset must kill the stray and leave 1888 free.
+# Attach-reset must kill the stray and leave 1888 free (UDP, not just TCP).
 KERBER_SHELL="$NAME" shell_container
 wait_gone_in "$NAME" 1888 40 || {
     echo "attach-reset left :1888 bound" >&2
     exit 1
 }
+if ! wait_bound_free_in "$NAME" 1888 udp; then
+    echo "attach-reset left a UDP listener on :1888" >&2
+    exit 1
+fi
 echo "attach-reset proxy self-test ok"
