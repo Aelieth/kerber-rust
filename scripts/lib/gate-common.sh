@@ -165,6 +165,25 @@ wait_bound_free_in() {
 wait_udp_in() { wait_bound_in "${1:-$NAME}" "${2:-88}" "${3:-80}" udp; }
 wait_tcp_bound_in() { wait_bound_in "${1:-$NAME}" "${2:-88}" "${3:-80}" tcp; }
 
+# The MIT image has `kill` but not `pkill`/`pgrep`. Scan /proc for *-proxy.py.
+kill_proxy_py_in() {
+    docker exec "${1:-$NAME}" python3 -c '
+import os, signal
+for pid in os.listdir("/proc"):
+    if not pid.isdigit():
+        continue
+    try:
+        cmd = open("/proc/%s/cmdline" % pid, "rb").read().replace(b"\x00", b" ").decode("ascii", "replace")
+    except Exception:
+        continue
+    if "-proxy.py" in cmd:
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+        except OSError:
+            pass
+' >/dev/null 2>&1 || true
+}
+
 wait_gone_in() {
     # Port is gone when UDP bind succeeds (no leftover UDP proxy) AND TCP
     # connect fails. A TCP-only probe cannot see kdc-error-proxy.py.
@@ -294,6 +313,7 @@ while time.time() < deadline:
 "
 EOS
         )" || true
+        kill_proxy_py_in "$NAME"
         wait_gone_in "$NAME" 1888 40 || die "proxy still bound :1888 after attach-reset"
         wait_gone_in "$NAME" 1891 20 || die "proxy still bound :1891 after attach-reset"
         wait_gone_in "$NAME" 1892 20 || die "proxy still bound :1892 after attach-reset"
@@ -398,6 +418,7 @@ mit_conf_restore() {
         kill $(pidof krb5-kdc) 2>/dev/null || true
         pkill -f -- '-proxy.py' >/dev/null 2>&1 || true
     ' || true
+    kill_proxy_py_in "$ctn"
     wait_pid_gone "$ctn" krb5kdc || true
     wait_pid_gone "$ctn" kadmind || true
     docker exec -d "$ctn" krb5kdc || true
