@@ -6,6 +6,19 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W2-Y4 walls and nightly budget
+
+- **client-differential split.** `client-differential-gate.sh` is a local
+  wrapper. CI runs `client-differential-flows-gate.sh` (11 `FLOW_*`
+  sections, both legs) then `client-differential-cli-gate.sh` (CLI/gss/Z)
+  with `KERBER_CLIENT_DIFF_KEEP=1` so the second leg reuses the MIT
+  container. Cell tags are unchanged; `hygiene-diff` identifies a cell
+  by `(kind, tag)` so a tag may move files. Named Exit caps unchanged.
+- **Nightly `--check-budget`.** Compares each job's median of the last
+  five completed runs (and the median wall) to `ci-budget.toml`. Single-run
+  breaches are info; fail only when the median breaches or ≥ 3 of 5 runs
+  breach.
+
 ### W2-S7 budget + fixtures
 
 - **`ci-budget.toml`.** `audit` 240→260 and `mit-extra-2` 180→220 from

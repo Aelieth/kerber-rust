@@ -161,7 +161,8 @@ FAIL_RED_PER_PUSH = (
     "rust-kinit-fast-gate.sh",
     "rust-kinit-pkinit-gate.sh",
     "rust-kinit-enterprise-gate.sh",
-    "client-differential-gate.sh",
+    "client-differential-flows-gate.sh",
+    "client-differential-cli-gate.sh",
     "sha2-gate.sh",
     "s4u-mit-gate.sh",
     "cross-realm-gate.sh",
@@ -238,6 +239,7 @@ DOCUMENTED_STUBS = frozenset(
         "ad-mit-trust-gate.sh",
         "kadmin-gate.sh",  # local wrapper; CI runs rust+mit+both steps
         "kpasswd-gate.sh",  # local wrapper; CI runs rust+mit steps
+        "client-differential-gate.sh",  # local wrapper; CI runs flows+cli steps
     }
 )
 
@@ -2129,6 +2131,12 @@ def check_ci_status_save() -> None:
         _die("ci-status.py must support --check-budget")
     if "budget_overruns" not in text:
         _die("ci-status.py must implement budget_overruns")
+    if "budget_median_verdict" not in text:
+        _die("ci-status.py must implement budget_median_verdict")
+    if "over_runs_fail_at" not in text:
+        _die("ci-status.py median verdict must take over_runs_fail_at")
+    if ">= 3 of 5" not in text and ">=3-of-5" not in text:
+        _die("ci-status.py --check-budget must document median / >=3-of-5")
     if "actions/workflows/" not in text:
         _die("ci-status.py must fetch /actions/workflows/<file>/runs")
     if "branch=main" in text:
@@ -2165,6 +2173,33 @@ def check_ci_status_save() -> None:
         {"jobs": {"harness": 500, "test": 300}, "run_wall": 540},
     ):
         _die("budget_overruns must accept durations under budget")
+    _y4_budget = {"jobs": {"mit-extra": 180, "test": 300}, "run_wall": 360}
+    # 2 of 5 over, median under — info, not fail.
+    _y4_green = [
+        (625, {"mit-extra": 183, "test": 136}, 388),
+        (624, {"mit-extra": 181, "test": 127}, 272),
+        (623, {"mit-extra": 155, "test": 103}, 374),
+        (622, {"mit-extra": 174, "test": 108}, 277),
+        (613, {"mit-extra": 168, "test": 123}, 288),
+    ]
+    _fail, _info = mod.budget_median_verdict(_y4_green, _y4_budget)
+    if _fail:
+        _die(f"budget_median_verdict must pass 2-of-5 with median under cap: {_fail}")
+    if not any("mit-extra" in ln for ln in _info):
+        _die("budget_median_verdict must info single-run mit-extra breaches")
+    # 3 of 5 over / median over — fail.
+    _y4_red = [
+        (621, {"mit-extra": 198, "test": 128}, 316),
+        (619, {"mit-extra": 192, "test": 124}, 314),
+        (616, {"mit-extra": 185, "test": 134}, 284),
+        (615, {"mit-extra": 164, "test": 131}, 321),
+        (613, {"mit-extra": 168, "test": 123}, 288),
+    ]
+    _fail, _info = mod.budget_median_verdict(_y4_red, _y4_budget)
+    if not _fail:
+        _die("budget_median_verdict must fail 3-of-5 / median over cap")
+    if not any("mit-extra" in ln for ln in _fail):
+        _die(f"budget_median_verdict 3-of-5 must name mit-extra: {_fail}")
 
 
 def check_makefile_matches_ci(mf: str | None = None, ci_text: str | None = None) -> None:

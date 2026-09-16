@@ -22,6 +22,7 @@ PLAN=0
 # collide with the alphabetical pass (W2 close-audit: kadmin KEEP reused 51–54).
 KEEP_INDEX_START=200
 KPASSWD_KEEP_INDEX_START=210
+CLIENT_DIFF_KEEP_INDEX_START=220
 TWICE_INDEX_START=300
 PEERS_INDEX_START=400
 
@@ -68,12 +69,18 @@ if [ "${CHECKPOINT_SELF_TEST:-0}" = 1 ]; then
         rm -rf "$t"
         exit 1
     fi
+    if ! printf '%s\n' "$plan" | grep -q '^221 client-differential-flows-gate'; then
+        echo "checkpoint.sh --self-test: client-diff KEEP must start at 221" >&2
+        printf '%s\n' "$plan" >&2
+        rm -rf "$t"
+        exit 1
+    fi
     if ! printf '%s\n' "$plan" | grep -q '^401 samba-ad-gate peers'; then
         echo "checkpoint.sh --self-test: peers KEEP range must start at 401" >&2
         rm -rf "$t"
         exit 1
     fi
-    twice_plan=$("$0" --plan --out "$t/empty" --twice kpasswd-mit-gate,kadmin-mit-gate,pkinit-gate)
+    twice_plan=$("$0" --plan --out "$t/empty" --twice kpasswd-mit-gate,kadmin-mit-gate,client-differential-cli-gate,pkinit-gate)
     rust_n=$(printf '%s\n' "$twice_plan" | grep -c 'kpasswd-rust-gate' || true)
     if [ "$rust_n" -ne 2 ]; then
         echo "checkpoint.sh --self-test: --twice kpasswd-mit must KEEP-pair rust (got $rust_n)" >&2
@@ -89,6 +96,19 @@ if [ "${CHECKPOINT_SELF_TEST:-0}" = 1 ]; then
     fi
     if ! printf '%s\n' "$twice_plan" | grep -q 'kadmin-rust-gate run2'; then
         echo "checkpoint.sh --self-test: --twice kadmin-mit must re-run the kadmin KEEP pair" >&2
+        printf '%s\n' "$twice_plan" >&2
+        rm -rf "$t"
+        exit 1
+    fi
+    flows_n=$(printf '%s\n' "$twice_plan" | grep -c 'client-differential-flows-gate' || true)
+    if [ "$flows_n" -ne 2 ]; then
+        echo "checkpoint.sh --self-test: --twice client-differential-cli must KEEP-pair flows (got $flows_n)" >&2
+        printf '%s\n' "$twice_plan" >&2
+        rm -rf "$t"
+        exit 1
+    fi
+    if ! printf '%s\n' "$twice_plan" | grep -q 'client-differential-flows-gate run2'; then
+        echo "checkpoint.sh --self-test: --twice client-differential-cli must emit flows run2" >&2
         printf '%s\n' "$twice_plan" >&2
         rm -rf "$t"
         exit 1
@@ -173,6 +193,7 @@ HARNESS_ATTACH="knobs-gate ccache-gate client-gate config-include-gate"
 # with KERBER_KADMIN_KEEP=1 so each wall_s is a CI leg, not the wrapper.
 KADMIN_KEEP="kadmin-rust-gate kadmin-rust-acl-gate kadmin-mit-gate kadmin-both-gate"
 KPASSWD_KEEP="kpasswd-rust-gate kpasswd-mit-gate"
+CLIENT_DIFF_KEEP="client-differential-flows-gate client-differential-cli-gate"
 
 if [ "$SKIP_POLICY" != 1 ]; then
     { . scripts/lib/provenance.sh; echo "label=python3 scripts/ci-policy.py"; python3 scripts/ci-policy.py; echo "rc=$?"; } \
@@ -214,7 +235,8 @@ wanted() {
     case " $HARNESS_ATTACH " in *" $g "*) return 1 ;; esac
     case " $KADMIN_KEEP " in *" $g "*) return 1 ;; esac
     case " $KPASSWD_KEEP " in *" $g "*) return 1 ;; esac
-    case "$g" in kadmin-gate|kpasswd-gate) return 1 ;; esac
+    case " $CLIENT_DIFF_KEEP " in *" $g "*) return 1 ;; esac
+    case "$g" in kadmin-gate|kpasswd-gate|client-differential-gate) return 1 ;; esac
     # Peers gates never run in the alphabetical pass; --peers uses PEERS_INDEX_START.
     case " $PEERS_GATES " in *" $g "*) return 1 ;; esac
     if [ -n "$GATES" ]; then
@@ -253,11 +275,23 @@ if [ "$PLAN" != 1 ]; then
     docker rm -f kerber-rust-kpasswd-gate >/dev/null 2>&1 || true
 fi
 
+i=$CLIENT_DIFF_KEEP_INDEX_START
+export KERBER_CLIENT_DIFF_KEEP=1
+for g in $CLIENT_DIFF_KEEP; do
+    i=$((i + 1))
+    rungate "$i" "$g" ""
+done
+unset KERBER_CLIENT_DIFF_KEEP
+if [ "$PLAN" != 1 ]; then
+    docker rm -f kerber-rust-mit-kdc >/dev/null 2>&1 || true
+fi
+
 if [ -n "$TWICE" ]; then
     i=$TWICE_INDEX_START
     IFS=',' read -r -a twice_arr <<<"$TWICE"
     did_kpasswd=0
     did_kadmin=0
+    did_client_diff=0
     for g in "${twice_arr[@]}"; do
         g=${g%.sh}
         [ -n "$g" ] || continue
@@ -290,6 +324,23 @@ if [ -n "$TWICE" ]; then
                     unset KERBER_KADMIN_KEEP
                     if [ "$PLAN" != 1 ]; then
                         docker rm -f kerber-rust-kadmin-gate kerber-rust-kadmin-mit >/dev/null 2>&1 || true
+                    fi
+                fi
+                continue
+                ;;
+        esac
+        case " $CLIENT_DIFF_KEEP client-differential-gate " in
+            *" $g "*)
+                if [ "$did_client_diff" = 0 ]; then
+                    did_client_diff=1
+                    export KERBER_CLIENT_DIFF_KEEP=1
+                    for kg in $CLIENT_DIFF_KEEP; do
+                        i=$((i + 1))
+                        rungate "$i" "$kg" run2
+                    done
+                    unset KERBER_CLIENT_DIFF_KEEP
+                    if [ "$PLAN" != 1 ]; then
+                        docker rm -f kerber-rust-mit-kdc >/dev/null 2>&1 || true
                     fi
                 fi
                 continue

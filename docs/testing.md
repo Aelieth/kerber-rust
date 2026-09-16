@@ -421,7 +421,7 @@ three marked `continue-on-error`):
 | `harness` | After `run-harness`/`stop-harness` (client/ccache/knobs/config-include), one shared shell (`KERBER_SHELL`) and one stock MIT KDC (`KERBER_LIVE=1`). Then `kdc-gate`, `store-gate`, `bidirectional-gate`, `gss-gate`, `pkinit-gate`, `kadmin-rust-gate`, `kadmin-rust-acl-gate`, `kadmin-mit-gate`, `kadmin-both-gate` (local wrapper `kadmin-gate.sh`), `policy-gate`, `history-mit-gate` |
 | `harness-2` | One shared shell + one stock MIT KDC, then `kpasswd-rust-gate`, `kpasswd-mit-gate` (local wrapper `kpasswd-gate.sh`), `kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `rd-safe-oracle-gate`, `cross-kdc-gate`, `iprop-gate`, `expire-gate`, `kdcpolicy-gate`, `flags-gate`, `renew-gate`, `postdate-gate`, `getprivs-gate`, `prop-acl-gate`, `restart-gate`, `prod-gate`, `prod-realm-gate`; `sssd-renew-gate`, `kit-conformance-gate`, `gssproxy-gate`, `nfs-krb5p-gate` run under `skip2` |
 | `mit-extra` | One shared shell + one stock MIT KDC, then `cross-realm-gate`, `capaths-transit-gate`, `capaths-compress-gate`, `spake-gate`, `rust-kinit-spake-gate`, `mit-fast-kdc-gate`, `rust-kinit-fast-gate`, `rust-kinit-pkinit-gate`, `rust-kinit-enterprise-gate`, `ktutil-gate`, `kadmin-local-gate`, `rust-kpasswd-mit-gate`, `sha2-gate`, `rc4-session-gate` |
-| `mit-extra-2` | One shared shell + one stock MIT KDC, then `client-differential-gate`, `s4u-mit-gate`, `kcm-gate` |
+| `mit-extra-2` | One shared shell + one stock MIT KDC, then `client-differential-flows-gate`, `client-differential-cli-gate` (local wrapper `client-differential-gate.sh`), `s4u-mit-gate`, `kcm-gate` |
 | `slo` (`continue-on-error`) | `stress-gate` over `harness/prod` |
 | `chaos` (`continue-on-error`) | `chaos-gate` |
 | `soak` (`continue-on-error`) | `soak-gate` (short run) |
@@ -725,7 +725,9 @@ Not in any workflow: `gss-sspi-gate.sh` (needs a Windows SSPI peer; exits
   scheduled workflow is fail-red. Per-push `continue-on-error` is only
   `slo` / `chaos` / `soak`. `scripts/rust-kinit-fast-gate.sh` is fail-red
   on `mit-extra` (SHA-2-first FAST vs MIT).
-  `scripts/client-differential-gate.sh` is fail-red on `mit-extra`: both
+  `scripts/client-differential-flows-gate.sh` /
+  `scripts/client-differential-cli-gate.sh` (local wrapper
+  `client-differential-gate.sh`) are fail-red on `mit-extra-2`: both
   clients against the live MIT KDC through `scripts/lib/kdc-req-proxy.py`
   (UDP+TCP). Eleven seeded flows compare AS-REQ/TGS-REQ CORE fields
   (`msg_type`, `sname`, nonce present, etype list non-empty); SHAPE

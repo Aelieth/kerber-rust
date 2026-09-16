@@ -200,8 +200,11 @@ def ledger_rows(root: pathlib.Path) -> tuple[list[str], dict[str, int]]:
 
 
 def client_diff_flows(root: pathlib.Path) -> list[str]:
-    text = (root / "scripts" / "client-differential-gate.sh").read_text(encoding="utf-8")
-    return sorted({m.group(1) for m in FLOW_SECTION_RE.finditer(text)})
+    flows: set[str] = set()
+    for path in sorted((root / "scripts").glob("*-gate.sh")):
+        text = path.read_text(encoding="utf-8")
+        flows.update(m.group(1) for m in FLOW_SECTION_RE.finditer(text))
+    return sorted(flows)
 
 
 def rust_sleeps(root: pathlib.Path) -> list[str]:

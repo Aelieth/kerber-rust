@@ -446,8 +446,12 @@ jobs:
         run: |
           ./scripts/lib/boot-shell.sh
           ./scripts/lib/boot-stock-mit.sh
-      - name: client-differential-gate (both clients vs MIT KDC)
-        run: ./scripts/client-differential-gate.sh
+      - name: client-differential-flows-gate (11 FLOW_* vs MIT KDC)
+        env:
+          KERBER_CLIENT_DIFF_KEEP: "1"
+        run: ./scripts/client-differential-flows-gate.sh
+      - name: client-differential-cli-gate (CLI/gss/Z vs MIT KDC)
+        run: ./scripts/client-differential-cli-gate.sh
       - name: s4u-mit-gate (MIT kvno -U / -U -P vs Rust KDC)
         run: ./scripts/s4u-mit-gate.sh
       - name: kcm-gate (Rust KCM vs sssd-kcm + MIT klist)

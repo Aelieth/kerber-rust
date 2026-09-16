@@ -18,8 +18,10 @@ run (retries with backoff; exits 2 otherwise). Fixture annotations from
 
 `--durations` prints per-job `duration_s=` from `started_at`/`completed_at`
 already in the `/jobs` payload. `--budget-report` prints per-job medians over
-the last N completed runs. `--check-budget` compares completed runs against
-`ci-budget.toml` (W2-S6; a run cannot measure itself).
+the last N completed runs. `--check-budget` compares each job's median of the
+last N completed runs (and the median wall) to `ci-budget.toml`; single-run
+breaches are info; fail when the median breaches or ≥ 3 of 5 runs breach
+(W2-Y4; a run cannot measure itself).
 """
 from __future__ import annotations
 
@@ -400,10 +402,60 @@ def budget_overruns(
     return lines
 
 
+def budget_median_verdict(
+    runs: list[tuple[int | None, dict[str, int], int | None]],
+    budget: dict,
+    over_runs_fail_at: int = 3,
+) -> tuple[list[str], list[str]]:
+    """Fail when a job/wall median exceeds the cap, or >= over_runs_fail_at runs do.
+
+    `runs` is (run_number, job_durs, wall) newest-first. Single-run
+    breaches are info. Empty fail list means within budget.
+    """
+    fail: list[str] = []
+    info: list[str] = []
+    by_job: dict[str, list[int]] = {}
+    walls: list[int] = []
+    for run_n, durs, wall in runs:
+        if wall is not None:
+            walls.append(wall)
+        for name, dur in durs.items():
+            by_job.setdefault(name, []).append(dur)
+        over = budget_overruns(durs, wall, budget)
+        if over:
+            for line in over:
+                info.append(f"run={run_n} {line}")
+
+    for name, cap in (budget.get("jobs") or {}).items():
+        vals = by_job.get(name) or []
+        if not vals:
+            continue
+        med = int(statistics.median(vals))
+        over_n = sum(1 for v in vals if v > cap)
+        line = f"job={name} median_s={med} budget={cap} n={len(vals)} over={over_n}"
+        if med > cap or over_n >= over_runs_fail_at:
+            fail.append(line)
+        elif over_n:
+            info.append(line + " (info)")
+
+    cap_wall = budget.get("run_wall")
+    if cap_wall is not None and walls:
+        med = int(statistics.median(walls))
+        over_n = sum(1 for v in walls if v > cap_wall)
+        line = f"run_wall_s median={med} budget={cap_wall} n={len(walls)} over={over_n}"
+        if med > cap_wall or over_n >= over_runs_fail_at:
+            fail.append(line)
+        elif over_n:
+            info.append(line + " (info)")
+    return fail, info
+
+
 def check_budget(repo: str, workflow: str, sha: str | None, n: int) -> int:
     """Compare completed runs against ci-budget.toml.
 
-    Exit 0 within budget, 1 on overrun, 2 if no completed run / fetch failed.
+    Per-run overruns are info. Fail when a job/wall median exceeds the cap
+    or when >= 3 of the runs breach (W2-Y4). Exit 2 if no completed run /
+    fetch failed.
     """
     try:
         budget = load_budget()
@@ -419,7 +471,7 @@ def check_budget(repo: str, workflow: str, sha: str | None, n: int) -> int:
     if not completed:
         print("ci-status: no completed run to check", file=sys.stderr)
         return 2
-    rc = 0
+    payload: list[tuple[int | None, dict[str, int], int | None]] = []
     for run in completed:
         try:
             job_list = get(
@@ -437,16 +489,22 @@ def check_budget(repo: str, workflow: str, sha: str | None, n: int) -> int:
             if dur is not None:
                 durs[job["name"]] = dur
         wall = run_wall_s(job_list, run)
-        over = budget_overruns(durs, wall, budget)
         sha8 = (run.get("head_sha") or "")[:8]
+        over = budget_overruns(durs, wall, budget)
         if over:
-            rc = 1
-            print(f"check-budget FAIL run={run.get('run_number')} sha={sha8}")
+            print(f"check-budget info run={run.get('run_number')} sha={sha8}")
             for line in over:
                 print(f"  {line}")
         else:
             print(f"check-budget ok run={run.get('run_number')} sha={sha8}")
-    return rc
+        payload.append((run.get("run_number"), durs, wall))
+    fail, _info = budget_median_verdict(payload, budget)
+    for line in fail:
+        print(f"check-budget FAIL {line}")
+    if fail:
+        return 1
+    print("check-budget ok (median / >=3-of-5)")
+    return 0
 
 
 def main() -> int:
@@ -479,7 +537,7 @@ def main() -> int:
     ap.add_argument(
         "--check-budget",
         action="store_true",
-        help="fail if completed runs exceed ci-budget.toml (last -n, or --sha)",
+        help="fail if job/wall median of last -n (or --sha) exceeds ci-budget.toml, or >=3 of 5 runs breach",
     )
     args = ap.parse_args()
     if not args.repo:

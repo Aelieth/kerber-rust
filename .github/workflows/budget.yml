@@ -11,7 +11,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
-      - name: Check last five ci.yml runs against ci-budget.toml
+      - name: Check last five ci.yml runs (median / >=3-of-5) against ci-budget.toml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 scripts/ci-status.py --check-budget -n 5 --workflow ci
