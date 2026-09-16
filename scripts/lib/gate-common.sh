@@ -198,6 +198,57 @@ wait_gone_in() {
     return 1
 }
 
+# Kill Samba task[kdc] workers and wait until UDP :88 is bound again.
+# The parent respawns them so the TDO cache is fresh. wait_gone_in is
+# the wrong probe here: Samba keeps :88; these gates' Rust KDC is :8888.
+samba_kdc_respawn_in() {
+    local ctn="${1:?}"
+    docker exec "$ctn" python3 -c '
+import os, signal, time
+pids = []
+for name in os.listdir("/proc"):
+    if not name.isdigit():
+        continue
+    try:
+        comm = open("/proc/%s/comm" % name).read().strip()
+    except Exception:
+        continue
+    if comm != "samba":
+        continue
+    try:
+        cmd = open("/proc/%s/cmdline" % name, "rb").read().replace(b"\x00", b" ").decode("ascii", "replace")
+    except Exception:
+        continue
+    if "task[kdc]" not in cmd:
+        continue
+    pid = int(name)
+    pids.append(pid)
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        pass
+deadline = time.time() + 8
+while time.time() < deadline:
+    live = []
+    for pid in pids:
+        try:
+            os.kill(pid, 0)
+            live.append(pid)
+        except OSError:
+            pass
+    if not live:
+        break
+    if time.time() > deadline - 4:
+        for pid in live:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+    time.sleep(0.1)
+' >/dev/null 2>&1 || true
+    wait_udp_in "$ctn" 88 40
+}
+
 wait_pid_gone() {
     local ctn="${1:-$NAME}" proc="$2" n="${3:-40}"
     local i

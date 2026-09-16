@@ -73,6 +73,32 @@ if [ "${CHECKPOINT_SELF_TEST:-0}" = 1 ]; then
         rm -rf "$t"
         exit 1
     fi
+    twice_plan=$("$0" --plan --out "$t/empty" --twice kpasswd-mit-gate,kadmin-mit-gate,pkinit-gate)
+    rust_n=$(printf '%s\n' "$twice_plan" | grep -c 'kpasswd-rust-gate' || true)
+    if [ "$rust_n" -ne 2 ]; then
+        echo "checkpoint.sh --self-test: --twice kpasswd-mit must KEEP-pair rust (got $rust_n)" >&2
+        printf '%s\n' "$twice_plan" >&2
+        rm -rf "$t"
+        exit 1
+    fi
+    if ! printf '%s\n' "$twice_plan" | grep -q 'kpasswd-rust-gate run2'; then
+        echo "checkpoint.sh --self-test: --twice kpasswd-mit must emit kpasswd-rust-gate run2" >&2
+        printf '%s\n' "$twice_plan" >&2
+        rm -rf "$t"
+        exit 1
+    fi
+    if ! printf '%s\n' "$twice_plan" | grep -q 'kadmin-rust-gate run2'; then
+        echo "checkpoint.sh --self-test: --twice kadmin-mit must re-run the kadmin KEEP pair" >&2
+        printf '%s\n' "$twice_plan" >&2
+        rm -rf "$t"
+        exit 1
+    fi
+    if ! printf '%s\n' "$twice_plan" | grep -q 'pkinit-gate run2'; then
+        echo "checkpoint.sh --self-test: --twice pkinit-gate must stay a generic run2" >&2
+        printf '%s\n' "$twice_plan" >&2
+        rm -rf "$t"
+        exit 1
+    fi
     rm -rf "$t"
     echo "checkpoint.sh: self-test ok"
     exit 0
@@ -230,9 +256,45 @@ fi
 if [ -n "$TWICE" ]; then
     i=$TWICE_INDEX_START
     IFS=',' read -r -a twice_arr <<<"$TWICE"
+    did_kpasswd=0
+    did_kadmin=0
     for g in "${twice_arr[@]}"; do
         g=${g%.sh}
         [ -n "$g" ] || continue
+        case " $KPASSWD_KEEP " in
+            *" $g "*)
+                if [ "$did_kpasswd" = 0 ]; then
+                    did_kpasswd=1
+                    export KERBER_KPASSWD_KEEP=1
+                    for kg in $KPASSWD_KEEP; do
+                        i=$((i + 1))
+                        rungate "$i" "$kg" run2
+                    done
+                    unset KERBER_KPASSWD_KEEP
+                    if [ "$PLAN" != 1 ]; then
+                        docker rm -f kerber-rust-kpasswd-gate >/dev/null 2>&1 || true
+                    fi
+                fi
+                continue
+                ;;
+        esac
+        case " $KADMIN_KEEP " in
+            *" $g "*)
+                if [ "$did_kadmin" = 0 ]; then
+                    did_kadmin=1
+                    export KERBER_KADMIN_KEEP=1
+                    for kg in $KADMIN_KEEP; do
+                        i=$((i + 1))
+                        rungate "$i" "$kg" run2
+                    done
+                    unset KERBER_KADMIN_KEEP
+                    if [ "$PLAN" != 1 ]; then
+                        docker rm -f kerber-rust-kadmin-gate kerber-rust-kadmin-mit >/dev/null 2>&1 || true
+                    fi
+                fi
+                continue
+                ;;
+        esac
         i=$((i + 1))
         rungate "$i" "$g" run2
     done

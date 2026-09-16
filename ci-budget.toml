@@ -1,14 +1,14 @@
-# W2-S6 per-push job budgets (seconds). Ratched from measured close-SHA
-# CI (1069816 run 602: audit=249 mit-extra-2=211). Named Exit jobs stay
-# test 300 / harness 270 / mit-extra 180 / run_wall 360. A run cannot
-# measure itself; --check-budget compares a completed SHA / last N runs.
+# W2-S6 per-push job budgets (seconds). X6 ratchet from 994c144 run 612
+# (harness-2=286 mit-extra-2=178) plus X1 run 607 (225 / 154). Named Exit
+# jobs stay test 300 / harness 270 / mit-extra 180 / run_wall 360. A run
+# cannot measure itself; --check-budget compares a completed SHA / last N.
 
 [jobs]
 test = 300
 harness = 270
 harness-2 = 300
 mit-extra = 180
-mit-extra-2 = 220
+mit-extra-2 = 210
 doc = 90
 msrv = 120
 audit = 260

@@ -129,14 +129,8 @@ fi
 echo "kbruser $KBR_SID rid $KBR_RID"
 
 # Respawn Samba-A KDC workers so the TDO is live.
-docker exec "$NAME_A" sh -c 'for p in /proc/[0-9]*; do
-  comm=$(cat "$p/comm" 2>/dev/null) || continue
-  [ "$comm" = samba ] || continue
-  cmd=$(tr "\0" " " < "$p/cmdline" 2>/dev/null) || continue
-  echo "$cmd" | grep -q "task\[kdc\]" || continue
-  kill "${p#/proc/}" 2>/dev/null || true
-done'
-wait_gone_in "$NAME_A" 88 || die "KDC still bound :88 after kill"
+# Samba keeps UDP :88; wait_gone_in would die on the respawned workers.
+samba_kdc_respawn_in "$NAME_A" || die "Samba KDC did not rebind :88 after worker kill"
 
 ISSUE_SALT='KERBER.TESTkrbtgtAD.KERBER.TEST'
 ACCEPT_SALT='AD.KERBER.TESTkrbtgtKERBER.TEST'

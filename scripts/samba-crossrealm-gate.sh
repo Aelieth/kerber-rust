@@ -72,14 +72,8 @@ docker exec "$NAME" python3 /tmp/trust_local.py \
     --realm KERBER.TEST --flat KERBER --password "$TRUST_PW" \
     --sid "$RUST_SID" --type uplevel
 # KDC workers cache TDO at start; respawn them so the trust is visible.
-docker exec "$NAME" sh -c 'for p in /proc/[0-9]*; do
-  comm=$(cat "$p/comm" 2>/dev/null) || continue
-  [ "$comm" = samba ] || continue
-  tr="\0"; cmd=$(tr "\0" " " < "$p/cmdline" 2>/dev/null) || continue
-  echo "$cmd" | grep -q "task\[kdc\]" || continue
-  kill "${p#/proc/}" 2>/dev/null || true
-done'
-wait_gone_in "$NAME" 88 || die "KDC still bound :88 after kill"
+# Samba keeps UDP :88; wait_gone_in would die on the respawned workers.
+samba_kdc_respawn_in "$NAME" || die "Samba KDC did not rebind :88 after worker kill"
 
 docker exec "$NAME" sh -c "cat >/tmp/kdc.conf <<EOF
 [realms]

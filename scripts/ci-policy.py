@@ -2388,6 +2388,7 @@ GATE_COMMON_NEEDLES = (
     "kdb5_util destroy",
     "krb5.conf.kerber-stock",
     "pkill -f -- '-proxy.py'",
+    "samba_kdc_respawn_in",
 )
 
 
@@ -2846,6 +2847,34 @@ def check_peers_unavailable_convention(
         for name, text in capture_texts.items():
             if not _run_rc_adjacent_to_docker_run(text):
                 _die(f"{name} run_rc=$? must sit adjacent to docker run")
+
+
+_SAMBA_GONE_88 = re.compile(r'wait_gone_in\s+"\$NAME(_A)?"\s+88')
+
+
+def check_samba_kdc_respawn(
+    cross_text: str | None = None,
+    trust_text: str | None = None,
+) -> None:
+    """Samba PAC L3/realtrust respawn task[kdc] workers; UDP :88 stays bound."""
+    if cross_text is None:
+        path = SCRIPTS / "samba-crossrealm-gate.sh"
+        if not path.is_file():
+            _die("missing scripts/samba-crossrealm-gate.sh")
+        cross_text = path.read_text(encoding="utf-8")
+    if trust_text is None:
+        path = SCRIPTS / "samba-realtrust-gate.sh"
+        if not path.is_file():
+            _die("missing scripts/samba-realtrust-gate.sh")
+        trust_text = path.read_text(encoding="utf-8")
+    for name, text in (
+        ("samba-crossrealm-gate.sh", cross_text),
+        ("samba-realtrust-gate.sh", trust_text),
+    ):
+        if "samba_kdc_respawn_in" not in text:
+            _die(f"{name} must call samba_kdc_respawn_in after task[kdc] kill")
+        if _SAMBA_GONE_88.search(text):
+            _die(f"{name} must not wait_gone_in :88 (Samba keeps the port)")
 
 
 def check_red_at_sha_inject(text: str | None = None) -> None:
@@ -4021,6 +4050,25 @@ jobs:
             )
         },
     )
+    check_samba_kdc_respawn(
+        'samba_kdc_respawn_in "$NAME" || die x\n',
+        'samba_kdc_respawn_in "$NAME_A" || die x\n',
+    )
+    _must_die(
+        check_samba_kdc_respawn,
+        'wait_gone_in "$NAME" 88 || die x\n',
+        'samba_kdc_respawn_in "$NAME_A" || die x\n',
+    )
+    _must_die(
+        check_samba_kdc_respawn,
+        'samba_kdc_respawn_in "$NAME" || die x\n',
+        'wait_gone_in "$NAME_A" 88 || die x\n',
+    )
+    _must_die(
+        check_samba_kdc_respawn,
+        "echo no helper\n",
+        'samba_kdc_respawn_in "$NAME_A" || die x\n',
+    )
     common_ok = "\n".join(GATE_COMMON_NEEDLES) + "\n"
     gate_ok = "scripts/lib/gate-common.sh\nneed_bins krb5-kdc\n"
     check_gate_common_sourced(common_ok, {"ok-gate.sh": gate_ok})
@@ -4489,6 +4537,7 @@ def main() -> None:
     check_build_profile()
     check_env_read()
     check_peers_unavailable_convention()
+    check_samba_kdc_respawn()
     check_gate_common_sourced()
     check_no_gate_cargo_build()
     check_trace_dst()
