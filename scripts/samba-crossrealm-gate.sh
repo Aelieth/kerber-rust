@@ -73,7 +73,7 @@ docker exec "$NAME" python3 /tmp/trust_local.py \
     --sid "$RUST_SID" --type uplevel
 # KDC workers cache TDO at start; respawn them so the trust is visible.
 # Samba keeps UDP :88; wait_gone_in would die on the respawned workers.
-samba_kdc_respawn_in "$NAME" || die "Samba KDC did not rebind :88 after worker kill"
+samba_kdc_respawn_in "$NAME" || die "Samba KDC workers did not respawn after kill"
 
 docker exec "$NAME" sh -c "cat >/tmp/kdc.conf <<EOF
 [realms]

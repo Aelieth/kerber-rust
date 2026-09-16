@@ -2448,7 +2448,10 @@ def check_log_arity(common_text: str | None = None) -> None:
 
 
 def check_hygiene_diff_self_test(text: str | None = None) -> None:
-    """hygiene-diff.py runs _self_test on normal compare runs, not only --self-test."""
+    """hygiene-diff.py runs _self_test on normal compare runs, not only --self-test.
+
+    Compare-run self-test FAIL lines go to stderr so a green artefact has none.
+    """
     if text is None:
         path = SCRIPTS / "hygiene-diff.py"
         if not path.is_file():
@@ -2460,6 +2463,8 @@ def check_hygiene_diff_self_test(text: str | None = None) -> None:
         _die("hygiene-diff.py must define _self_test")
     if text.count("_self_test()") < 2:
         _die("hygiene-diff.py must run _self_test on normal compare runs")
+    if "redirect_stdout(sys.stderr)" not in text:
+        _die("hygiene-diff.py must send compare-run _self_test to stderr")
 
 
 def check_gate_common_sourced(
@@ -2504,6 +2509,9 @@ def check_gate_common_sourced(
         check_kadmin_split_snaps(text, name)
         if name == "kcm-gate.sh":
             check_kcm_need_image(text)
+            check_kcm_stop_before_run(text, name)
+        if name == "prod-gate.sh":
+            check_prod_gate_tcpdump_cleanup(text)
         if re.search(r"krb5kdc -n >/tmp/mit-kdc.log 2>&1 & cat", text):
             _die(f"{name} must wait_log for krb5kdc -n, not cat the log immediately")
     check_no_gate_cargo_build(items)
@@ -2783,6 +2791,42 @@ def check_kcm_need_image(text: str, name: str = "kcm-gate.sh") -> None:
         _die(f"{name} must use KCM_IMAGE for the Fedora sssd-kcm tag")
 
 
+def check_kcm_stop_before_run(text: str | None = None, name: str = "kcm-gate.sh") -> None:
+    """kcm-gate registers stop-harness before run-harness so a failed boot still stops."""
+    if text is None:
+        path = SCRIPTS / "kcm-gate.sh"
+        if not path.is_file():
+            _die("missing scripts/kcm-gate.sh")
+        text = path.read_text(encoding="utf-8")
+    stop = text.find("stop-harness.sh")
+    run = text.find("run-harness.sh")
+    if run < 0:
+        _die(f"{name} must call run-harness.sh")
+    if stop < 0:
+        _die(f"{name} must register stop-harness.sh")
+    if stop > run:
+        _die(f"{name} must register stop-harness before run-harness")
+
+
+def check_prod_gate_tcpdump_cleanup(text: str | None = None) -> None:
+    """Registered cleanup kills root tcpdump with sudo -n kill; KDC with plain kill."""
+    if text is None:
+        path = SCRIPTS / "prod-gate.sh"
+        if not path.is_file():
+            _die("missing scripts/prod-gate.sh")
+        text = path.read_text(encoding="utf-8")
+    bodies = re.findall(r"register_cleanup\s+'([^']*)'", text)
+    if not bodies:
+        _die("prod-gate.sh must register_cleanup")
+    joined = "\n".join(bodies)
+    if "sudo -n kill" not in joined or "TCPDUMP_PID" not in joined:
+        _die("prod-gate.sh cleanup must sudo -n kill TCPDUMP_PID")
+    if re.search(r"kill \$KDC_PID \$TCPDUMP_PID", joined):
+        _die("prod-gate.sh must not plain-kill the root tcpdump with the KDC")
+    if "kill $KDC_PID" not in joined and 'kill "$KDC_PID"' not in joined:
+        _die("prod-gate.sh cleanup must plain-kill KDC_PID")
+
+
 def check_gate_no_exit_trap(text: str, name: str = "gate.sh") -> None:
     """Gates must not replace gate-common's EXIT trap (register_cleanup)."""
     if re.search(r"^\s*trap\b.*\bEXIT\b", text, re.M):
@@ -2975,6 +3019,8 @@ def check_samba_kdc_respawn(
             _die(f"{name} must call samba_kdc_respawn_in after task[kdc] kill")
         if _SAMBA_GONE_88.search(text):
             _die(f"{name} must not wait_gone_in :88 (Samba keeps the port)")
+        if "rebind :88" in text:
+            _die(f"{name} Samba die must not say rebind :88 (UDP 88 stays bound)")
 
 
 def check_red_at_sha_inject(text: str | None = None) -> None:
@@ -4231,6 +4277,11 @@ jobs:
         "echo no helper\n",
         'samba_kdc_respawn_in "$NAME_A" || die x\n',
     )
+    _must_die(
+        check_samba_kdc_respawn,
+        'samba_kdc_respawn_in "$NAME" || die "Samba KDC did not rebind :88 after worker kill"\n',
+        'samba_kdc_respawn_in "$NAME_A" || die x\n',
+    )
     common_ok = "\n".join(GATE_COMMON_NEEDLES) + "\n"
     gate_ok = "scripts/lib/gate-common.sh\nneed_bins krb5-kdc\n"
     check_log_arity(
@@ -4241,11 +4292,18 @@ jobs:
     check_hygiene_diff_self_test(
         "def _self_test():\n    pass\n"
         "def main() -> int:\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        return 0\n    _self_test()\n    return _compare()\n"
+        "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
+        "    return _compare()\n"
     )
     _must_die(
         check_hygiene_diff_self_test,
         "def main() -> int:\n    if argv[1] == '--self-test':\n        _self_test()\n        return 0\n",
+    )
+    _must_die(
+        check_hygiene_diff_self_test,
+        "def _self_test():\n    pass\n"
+        "def main() -> int:\n    if argv[1] == '--self-test':\n        _self_test()\n"
+        "        return 0\n    _self_test()\n    return _compare()\n",
     )
     check_gate_common_sourced(common_ok, {"ok-gate.sh": gate_ok})
     _must_die(
@@ -4299,6 +4357,23 @@ jobs:
         check_kcm_need_image,
         'IMAGE="${KCM_IMAGE:-kerber-rust-sssd-kcm:f43}"\nneed_image\n',
         "bad-kcm-gate.sh",
+    )
+    check_kcm_stop_before_run(
+        "register_cleanup './scripts/stop-harness.sh'\n./scripts/run-harness.sh\n",
+        "ok-kcm-gate.sh",
+    )
+    _must_die(
+        check_kcm_stop_before_run,
+        "./scripts/run-harness.sh\nregister_cleanup './scripts/stop-harness.sh'\n",
+        "bad-kcm-gate.sh",
+    )
+    check_prod_gate_tcpdump_cleanup(
+        'register_cleanup \'kill $KDC_PID 2>/dev/null || true; '
+        'if [ -n "$TCPDUMP_PID" ]; then sudo -n kill "$TCPDUMP_PID" >/dev/null 2>&1 || true; fi\'\n'
+    )
+    _must_die(
+        check_prod_gate_tcpdump_cleanup,
+        "register_cleanup 'kill $KDC_PID $TCPDUMP_PID 2>/dev/null || true'\n",
     )
     check_no_host_tmp_writes(
         "docker exec n sh -c 'kill /tmp/krb5-kdc; : >/tmp/in-container'\n"
@@ -4716,6 +4791,8 @@ def main() -> None:
     check_samba_kdc_respawn()
     check_log_arity()
     check_hygiene_diff_self_test()
+    check_kcm_stop_before_run()
+    check_prod_gate_tcpdump_cleanup()
     check_gate_common_sourced()
     check_no_gate_cargo_build()
     check_trace_dst()

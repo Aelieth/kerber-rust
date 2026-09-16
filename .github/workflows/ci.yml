@@ -384,8 +384,6 @@ jobs:
           ./scripts/lib/boot-stock-mit.sh
       - name: cross-realm-gate
         run: ./scripts/cross-realm-gate.sh
-      - name: capaths-transit-gate
-        run: ./scripts/capaths-transit-gate.sh
       - name: capaths-compress-gate
         run: ./scripts/capaths-compress-gate.sh
       - name: spake-gate
@@ -456,6 +454,8 @@ jobs:
         run: ./scripts/s4u-mit-gate.sh
       - name: kcm-gate (Rust KCM vs sssd-kcm + MIT klist)
         run: ./scripts/kcm-gate.sh
+      - name: capaths-transit-gate
+        run: ./scripts/capaths-transit-gate.sh
       - name: shared topology cleanup
         if: always()
         run: docker rm -f kerber-rust-shell kerber-rust-mit-kdc >/dev/null 2>&1 || true

@@ -37,7 +37,10 @@ s.bind(("127.0.0.1", 1888))
 time.sleep(30)
 PY'
 docker exec -d "$NAME" python3 /tmp/stray-proxy.py
-sleep 0.3
+wait_bound_in "$NAME" 1888 40 udp || {
+    echo "stray proxy did not bind :1888" >&2
+    exit 1
+}
 if wait_bound_free_in "$NAME" 1888 udp; then
     echo "wait_bound_free_in must fail on a pre-bound port" >&2
     exit 1
@@ -62,7 +65,10 @@ s.bind(("127.0.0.1", 1891))
 time.sleep(30)
 PY'
 docker exec -d "$NAME" python3 /tmp/stray-1891-proxy.py
-sleep 0.3
+wait_bound_in "$NAME" 1891 40 udp || {
+    echo "stray proxy did not bind :1891" >&2
+    exit 1
+}
 if wait_bound_free_in "$NAME" 1891 udp; then
     echo "wait_bound_free_in must fail on a pre-bound :1891" >&2
     exit 1

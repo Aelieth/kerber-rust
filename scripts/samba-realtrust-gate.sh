@@ -130,7 +130,7 @@ echo "kbruser $KBR_SID rid $KBR_RID"
 
 # Respawn Samba-A KDC workers so the TDO is live.
 # Samba keeps UDP :88; wait_gone_in would die on the respawned workers.
-samba_kdc_respawn_in "$NAME_A" || die "Samba KDC did not rebind :88 after worker kill"
+samba_kdc_respawn_in "$NAME_A" || die "Samba KDC workers did not respawn after kill"
 
 ISSUE_SALT='KERBER.TESTkrbtgtAD.KERBER.TEST'
 ACCEPT_SALT='AD.KERBER.TESTkrbtgtKERBER.TEST'
