@@ -53,4 +53,23 @@ if ! wait_bound_free_in "$NAME" 1888 udp; then
     echo "attach-reset left a UDP listener on :1888" >&2
     exit 1
 fi
+# Pre-bound 1891 (FAST/S4U/client-differential leftover port).
+docker exec "$NAME" sh -c 'cat > /tmp/stray-1891-proxy.py <<'"'"'PY'"'"'
+import socket, time
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", 1891))
+time.sleep(30)
+PY'
+docker exec -d "$NAME" python3 /tmp/stray-1891-proxy.py
+sleep 0.3
+if wait_bound_free_in "$NAME" 1891 udp; then
+    echo "wait_bound_free_in must fail on a pre-bound :1891" >&2
+    exit 1
+fi
+kill_proxy_py_in "$NAME" || true
+wait_gone_in "$NAME" 1891 40 || {
+    echo "kill_proxy_py_in left :1891 bound" >&2
+    exit 1
+}
 echo "attach-reset proxy self-test ok"

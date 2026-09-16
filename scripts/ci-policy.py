@@ -2389,7 +2389,8 @@ GATE_COMMON_NEEDLES = (
     "! -name 'build'",
     "kdb5_util destroy",
     "krb5.conf.kerber-stock",
-    "pkill -f -- '-proxy.py'",
+    "kill_proxy_py_in",
+    "wait_bound_free_in",
     "samba_kdc_respawn_in",
 )
 
@@ -2407,6 +2408,8 @@ def check_gate_common_sourced(
     for needle in GATE_COMMON_NEEDLES:
         if needle not in common_text:
             _die(f"gate-common.sh missing {needle}")
+    if "pkill -f -- '-proxy.py'" in (common_text or "") and "kill_proxy_py_in" not in common_text:
+        _die("gate-common.sh must pin kill_proxy_py_in, not only pkill")
     if gate_texts is None:
         items = {
             p.name: p.read_text(encoding="utf-8")
@@ -2437,7 +2440,14 @@ def check_gate_common_sourced(
         if re.search(r"krb5kdc -n >/tmp/mit-kdc.log 2>&1 & cat", text):
             _die(f"{name} must wait_log for krb5kdc -n, not cat the log immediately")
     check_no_gate_cargo_build(items)
+    idx = common_text.find("samba_kdc_respawn_in()")
+    end = common_text.find("wait_pid_gone()", idx) if idx >= 0 else -1
+    if idx >= 0 and end > idx and "wait_udp_in" in common_text[idx:end]:
+        _die("samba_kdc_respawn_in must wait for a new task[kdc] pid, not wait_udp_in :88")
     if live:
+        ci_yml = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+        if "gate-attach-reset-selftest.sh" not in ci_yml:
+            _die("ci.yml must run gate-attach-reset-selftest.sh")
         check_kadmin_glob_lib()
         check_s4_shared_boots()
         check_build_bins_examples()

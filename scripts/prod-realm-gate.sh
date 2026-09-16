@@ -33,9 +33,9 @@ if ! docker image inspect "$KERBER_PROD_IMAGE" >/dev/null 2>&1; then
 fi
 
 echo "==== env-up $REALM ===="
+register_cleanup "$ROOT/harness/prod/env-down.sh >/dev/null 2>&1 || true"
 "$ROOT/harness/prod/env-up.sh" | tee "$OUT/env-up.log"
 grep -q 'SMOKE OK' "$OUT/env-up.log" || die "env-up smoke did not pass"
-register_cleanup "$ROOT/harness/prod/env-down.sh >/dev/null 2>&1 || true"
 
 PIP="$(prod_ip_of "$PRIMARY")"; RIP="$(prod_ip_of "$REPLICA")"; CIP="$(prod_ip_of "$CLIENT")"
 [ -n "$PIP" ] && [ -n "$RIP" ] && [ -n "$CIP" ] || die "IP discovery failed"

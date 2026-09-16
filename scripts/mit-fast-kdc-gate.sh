@@ -166,6 +166,7 @@ echo "$MM_NEW" | grep -q '"detail":"FAST armor TGT"'
 echo "==== Rust KDC: FAST-error outer e_data shape via kdc-padata-proxy ===="
 docker cp "$ROOT/scripts/lib/kdc-padata-proxy.py" "$NAME":/tmp/kdc-padata-proxy.py
 docker exec "$NAME" rm -f /tmp/fast-err-rust.txt
+wait_bound_free_in "$NAME" 1891 udp || die "proxy :1891 already bound"
 docker exec -d "$NAME" python3 /tmp/kdc-padata-proxy.py 1891 127.0.0.1 88 /tmp/fast-err-rust.txt
 wait_udp_in "$NAME" 1891 || die "proxy :1891 did not listen"
 docker exec "$NAME" sh -c "cat > /tmp/krb5-fast-proxy.conf <<EOF
@@ -288,6 +289,7 @@ echo "$MITASLOG" | grep -qE 'FIND_FAST: .*while handling ap-request armor'
 echo "==== MIT KDC: FAST-error outer e_data shape via kdc-padata-proxy ===="
 docker cp "$ROOT/scripts/lib/kdc-padata-proxy.py" "$MITNAME":/tmp/kdc-padata-proxy.py
 docker exec "$MITNAME" rm -f /tmp/fast-err-mit.txt
+wait_bound_free_in "$MITNAME" 1891 udp || die "proxy 1891 already bound"
 docker exec -d "$MITNAME" python3 /tmp/kdc-padata-proxy.py 1891 127.0.0.1 88 /tmp/fast-err-mit.txt
 wait_udp_in "$MITNAME" 1891 || die "proxy 1891 did not listen"
 docker exec "$MITNAME" sh -c "cat > /tmp/krb5-fast-proxy.conf <<EOF
@@ -473,6 +475,7 @@ docker exec "$MITNAME" sh -c "cat > /tmp/krb5-ed25519.conf <<EOF
     }
 EOF"
 docker exec "$NAME" rm -f /tmp/fast-err-rust.txt
+wait_bound_free_in "$NAME" 1892 udp || die "proxy :1892 already bound"
 docker exec -d "$NAME" python3 /tmp/kdc-padata-proxy.py 1892 127.0.0.1 88 /tmp/fast-err-rust.txt
 wait_udp_in "$NAME" 1892 || die "proxy :1892 did not listen"
 docker exec "$NAME" sh -c "sed 's/127.0.0.1:88/127.0.0.1:1892/' /tmp/krb5-ed25519.conf > /tmp/krb5-ed25519-proxy.conf"
@@ -491,6 +494,7 @@ if echo "$RUST_ED" | grep -E 'rep#[0-9]+ error_code=91'; then
     exit 1
 fi
 docker exec "$MITNAME" rm -f /tmp/fast-err-mit.txt
+wait_bound_free_in "$MITNAME" 1892 udp || die "proxy 1892 already bound"
 docker exec -d "$MITNAME" python3 /tmp/kdc-padata-proxy.py 1892 127.0.0.1 88 /tmp/fast-err-mit.txt
 wait_udp_in "$MITNAME" 1892 || die "proxy 1892 did not listen"
 docker exec "$MITNAME" sh -c "sed 's/127.0.0.1:88/127.0.0.1:1892/' /tmp/krb5-ed25519.conf > /tmp/krb5-ed25519-proxy.conf"
@@ -523,6 +527,7 @@ docker exec "$MITNAME" python3 /tmp/kdc-rewrite-proxy.py --self-test
 # rewritten outer cname is invisible: both clients succeed and klist shows the
 # real principal.
 echo "==== Z1.2 MIT KDC behind MITM: rewritten outer AS-REP cname — MIT kinit -T keeps the finished client ===="
+wait_bound_free_in "$MITNAME" 1893 tcp || die "proxy 1893 already bound"
 docker exec -d "$MITNAME" python3 /tmp/kdc-rewrite-proxy.py 1893 127.0.0.1 88 /tmp/z12-cname.txt as-rep-cname mitm
 wait_port_in "$MITNAME" 1893 || die "proxy 1893 did not listen"
 docker exec "$MITNAME" sh -c "sed 's/127.0.0.1:1891/127.0.0.1:1893/' /tmp/krb5-fast-proxy.conf > /tmp/krb5-z12-cname.conf"
@@ -580,6 +585,7 @@ echo "$Z12_CNAME_PROXY" | grep -q 'kind=as-rep rewritten=yes' || {
 # cannot be unwrapped, so it is the fatal outer error (retry = 0, no cookie):
 # both clients stop at the first 25 and send no second AS-REQ.
 echo "==== Z1.2 MIT KDC behind MITM: PA-FX-FAST stripped from the 25 — MIT kinit -T stops with the outer error ===="
+wait_bound_free_in "$MITNAME" 1894 tcp || die "proxy 1894 already bound"
 docker exec -d "$MITNAME" python3 /tmp/kdc-rewrite-proxy.py 1894 127.0.0.1 88 /tmp/z12-strip.txt strip-fx-fast
 wait_port_in "$MITNAME" 1894 || die "proxy 1894 did not listen"
 docker exec "$MITNAME" sh -c "sed 's/127.0.0.1:1891/127.0.0.1:1894/' /tmp/krb5-fast-proxy.conf > /tmp/krb5-z12-strip.conf"

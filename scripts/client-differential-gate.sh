@@ -140,18 +140,9 @@ if [ "$ok" != 1 ]; then
     die "MIT krb5kdc did not listen after SPAKE/PKINIT config"
 fi
 
+wait_bound_free_in "$NAME" "$PROXY_PORT" udp || die "proxy :$PROXY_PORT already bound"
 docker exec -d "$NAME" python3 /tmp/kdc-req-proxy.py "$PROXY_PORT" 127.0.0.1 88 /tmp/cdiff/live.jsonl
-ok=0
-for _ in $(seq 1 40); do
-    if docker exec "$NAME" python3 -c "import socket;s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.bind(('127.0.0.1',0));s.sendto(b'x',('127.0.0.1',$PROXY_PORT))" 2>/dev/null; then
-        ok=1
-        break
-    fi
-    sleep 0.1
-done
-if [ "$ok" != 1 ]; then
-    die "kdc-req-proxy did not listen"
-fi
+wait_udp_in "$NAME" "$PROXY_PORT" || die "kdc-req-proxy did not listen"
 
 docker exec "$NAME" kadmin.local -q 'addprinc -randkey WELLKNOWN/ANONYMOUS@KERBER.TEST' >/dev/null || true
 docker exec "$NAME" kadmin.local -q 'ktadd -k /tmp/user.keytab -norandkey user' >/dev/null

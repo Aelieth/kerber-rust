@@ -253,6 +253,7 @@ PROXY_TO=88
 case "$LISTEN" in
     *:8888*) PROXY_TO=8888 ;;
 esac
+wait_bound_free_in "$NAME" 1892 udp || die "proxy :1892 already bound"
 docker exec -d "$NAME" python3 /tmp/kdc-padata-proxy.py 1892 127.0.0.1 "$PROXY_TO" /tmp/s4u-padata.txt
 wait_udp_in "$NAME" 1892 || die "proxy :1892 did not listen"
 docker exec "$NAME" sh -c "sed 's/${KDC_LINE}/kdc = 127.0.0.1:1892/' /tmp/s4u-krb5.conf | sed '/forwardable = true/a\\    udp_preference_limit = 10000' > /tmp/s4u-proxy.conf"
@@ -312,6 +313,7 @@ KLISTME="$(docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf "$MITNAME" klist 
 echo "$KLISTME"
 echo "$KLISTME" | grep -q 'for client expired@KERBER.TEST'
 docker cp "$ROOT/scripts/lib/kdc-padata-proxy.py" "$MITNAME":/tmp/kdc-padata-proxy.py
+wait_bound_free_in "$MITNAME" 1892 udp || die "proxy 1892 already bound"
 docker exec -d "$MITNAME" python3 /tmp/kdc-padata-proxy.py 1892 127.0.0.1 88 /tmp/s4u-mit-padata.txt
 wait_udp_in "$MITNAME" 1892 || die "proxy 1892 did not listen"
 docker exec "$MITNAME" sh -c "sed 's/kdc = 127.0.0.1/kdc = 127.0.0.1:1892/' /tmp/s4u-mit-oracle.conf > /tmp/s4u-mit-proxy.conf"

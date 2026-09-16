@@ -23,6 +23,7 @@ STOP_MIT=0
 if ! docker ps -q --filter "name=^${MIT}$" | grep -q .; then
     ./scripts/run-harness.sh
     STOP_MIT=1
+    register_cleanup './scripts/stop-harness.sh >/dev/null 2>&1 || true'
 fi
 if ! docker image inspect "$KCM_IMAGE" >/dev/null 2>&1; then
     docker build -f harness/kcm/Dockerfile --build-arg "FEDORA_DIGEST=${F43_DIGEST}" \

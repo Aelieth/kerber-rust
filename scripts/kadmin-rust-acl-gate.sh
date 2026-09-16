@@ -16,8 +16,7 @@ export CORRELATION_ID
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-kadmin-gate}"
 mkdir -p "$SCRATCH"
 _snap_key() {
-    printf '%s-%s\n' "$(git rev-parse HEAD)" \
-        "$(git status --porcelain -- ':!working' | sha256sum | awk '{print $1}')"
+    printf '%s\n' "${tree_sha:?}"
 }
 save_rust_snap() {
     printf '%s\n' "$2" >"$SCRATCH/kadmin-rust-$1"

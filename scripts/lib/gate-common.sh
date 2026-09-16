@@ -166,22 +166,54 @@ wait_udp_in() { wait_bound_in "${1:-$NAME}" "${2:-88}" "${3:-80}" udp; }
 wait_tcp_bound_in() { wait_bound_in "${1:-$NAME}" "${2:-88}" "${3:-80}" tcp; }
 
 # The MIT image has `kill` but not `pkill`/`pgrep`. Scan /proc for *-proxy.py.
+# Skip this scanner's pid (its cmdline contains the needle) and SIGKILL leftovers.
 kill_proxy_py_in() {
     docker exec "${1:-$NAME}" python3 -c '
-import os, signal
-for pid in os.listdir("/proc"):
-    if not pid.isdigit():
+import os, signal, time, sys
+self = os.getpid()
+killed = []
+for name in os.listdir("/proc"):
+    if not name.isdigit():
+        continue
+    pid = int(name)
+    if pid == self:
         continue
     try:
-        cmd = open("/proc/%s/cmdline" % pid, "rb").read().replace(b"\x00", b" ").decode("ascii", "replace")
+        cmd = open("/proc/%s/cmdline" % name, "rb").read().replace(b"\x00", b" ").decode("ascii", "replace")
+    except Exception:
+        continue
+    if "-proxy.py" not in cmd:
+        continue
+    try:
+        os.kill(pid, signal.SIGTERM)
+        killed.append(pid)
+    except OSError:
+        pass
+time.sleep(0.05)
+live = []
+for pid in killed:
+    try:
+        os.kill(pid, 0)
+        live.append(pid)
+    except OSError:
+        pass
+for pid in live:
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+time.sleep(0.05)
+for name in os.listdir("/proc"):
+    if not name.isdigit() or int(name) == self:
+        continue
+    try:
+        cmd = open("/proc/%s/cmdline" % name, "rb").read().replace(b"\x00", b" ").decode("ascii", "replace")
     except Exception:
         continue
     if "-proxy.py" in cmd:
-        try:
-            os.kill(int(pid), signal.SIGTERM)
-        except OSError:
-            pass
-' >/dev/null 2>&1 || true
+        sys.exit(1)
+' >/dev/null 2>&1 || return 1
+    return 0
 }
 
 wait_gone_in() {
@@ -198,22 +230,19 @@ wait_gone_in() {
     return 1
 }
 
-# Kill Samba task[kdc] workers and wait until UDP :88 is bound again.
-# The parent respawns them so the TDO cache is fresh. wait_gone_in is
-# the wrong probe here: Samba keeps :88; these gates' Rust KDC is :8888.
+# Kill Samba task[kdc] workers and wait for a *new* task[kdc] pid.
+# UDP :88 never unbinds (the parent holds it); wait_udp_in 88 is vacuous.
 samba_kdc_respawn_in() {
     local ctn="${1:?}"
     docker exec "$ctn" python3 -c '
 import os, signal, time
+self = os.getpid()
 pids = []
 for name in os.listdir("/proc"):
     if not name.isdigit():
         continue
-    try:
-        comm = open("/proc/%s/comm" % name).read().strip()
-    except Exception:
-        continue
-    if comm != "samba":
+    pid = int(name)
+    if pid == self:
         continue
     try:
         cmd = open("/proc/%s/cmdline" % name, "rb").read().replace(b"\x00", b" ").decode("ascii", "replace")
@@ -221,7 +250,6 @@ for name in os.listdir("/proc"):
         continue
     if "task[kdc]" not in cmd:
         continue
-    pid = int(name)
     pids.append(pid)
     try:
         os.kill(pid, signal.SIGTERM)
@@ -245,8 +273,36 @@ while time.time() < deadline:
             except OSError:
                 pass
     time.sleep(0.1)
-' >/dev/null 2>&1 || true
-    wait_udp_in "$ctn" 88 40
+else:
+    raise SystemExit(1)
+old = set(pids)
+deadline = time.time() + 8
+found = False
+while time.time() < deadline:
+    now = []
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        pid = int(name)
+        if pid == self:
+            continue
+        try:
+            cmd = open("/proc/%s/cmdline" % name, "rb").read().replace(b"\x00", b" ").decode("ascii", "replace")
+        except Exception:
+            continue
+        if "task[kdc]" not in cmd:
+            continue
+        now.append(pid)
+    # Old pids are dead (loop above). A live task[kdc] is a respawn even
+    # if the kernel reused a pid from `old`.
+    if now:
+        found = True
+        break
+    time.sleep(0.1)
+if not found:
+    raise SystemExit(1)
+' >/dev/null 2>&1 || return 1
+    return 0
 }
 
 wait_pid_gone() {
@@ -469,7 +525,12 @@ mit_conf_restore() {
         kill $(pidof krb5-kdc) 2>/dev/null || true
         pkill -f -- '-proxy.py' >/dev/null 2>&1 || true
     ' || true
-    kill_proxy_py_in "$ctn"
+    kill_proxy_py_in "$ctn" || true
+    wait_gone_in "$ctn" 1888 40 || die "proxy still bound :1888 after mit_conf_restore"
+    wait_gone_in "$ctn" 1891 20 || die "proxy still bound :1891 after mit_conf_restore"
+    wait_gone_in "$ctn" 1892 20 || die "proxy still bound :1892 after mit_conf_restore"
+    wait_gone_in "$ctn" 1893 20 || die "proxy still bound :1893 after mit_conf_restore"
+    wait_gone_in "$ctn" 1894 20 || die "proxy still bound :1894 after mit_conf_restore"
     wait_pid_gone "$ctn" krb5kdc || true
     wait_pid_gone "$ctn" kadmind || true
     docker exec -d "$ctn" krb5kdc || true
@@ -480,7 +541,7 @@ mit_conf_restore() {
         fi
         sleep 0.1
     done
-    return 0
+    die "krb5kdc did not come back after mit_conf_restore"
 }
 
 # Mutating Group-A gates restore stock conf+KDB when attaching to a shared MIT KDC.

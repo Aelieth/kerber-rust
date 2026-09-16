@@ -210,6 +210,9 @@ fi
 if [ -z "${KERBER_SHELL:-}" ]; then
     docker rm -f "$NAME" "$NAME_MIT" >/dev/null 2>&1 || true
 fi
+if [ "${KERBER_KPASSWD_KEEP:-}" != 1 ]; then
+    register_cleanup "docker rm -f '$NAME' '$NAME_MIT' >/dev/null 2>&1 || true"
+fi
 shell_container
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
