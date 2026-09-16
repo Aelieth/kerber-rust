@@ -735,11 +735,23 @@ fn serve_until_honours_shutdown_within_the_poll_interval() {
             },
         );
     });
-    // Prove the UDP loop is in recv (the flag is checked only around the
-    // blocking read). Setting the flag before the first recv returns in
-    // microseconds and does not exercise shutdown_poll.
+    // Prove the UDP loop is in recv: a half-round-trip with no read can
+    // return before the first recv (the flag is checked only around the
+    // blocking read). Send a real AS-REQ and read the KRB-ERROR before
+    // storing the flag; a short pause then lets the loop re-enter recv so
+    // shutdown_poll (not io_timeout) is the honour path.
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let req = as_req(cname, TEST_REALM, 1, None).unwrap();
+    let bytes = encode(&req).unwrap();
     let probe = UdpSocket::bind("127.0.0.1:0").unwrap();
-    probe.send_to(&[0u8], addr).unwrap();
+    probe
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    probe.send_to(&bytes, addr).unwrap();
+    let mut buf = [0u8; 4096];
+    let n = probe.recv(&mut buf).unwrap();
+    let e: krb5_types::KrbError = decode(&buf[..n]).unwrap();
+    assert_eq!(e.error_code, err::PREAUTH_REQUIRED);
     thread::sleep(Duration::from_millis(20));
     let t0 = Instant::now();
     flag.store(true, Ordering::SeqCst);

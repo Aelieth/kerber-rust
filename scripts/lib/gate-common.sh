@@ -19,6 +19,10 @@ _GATE_START="${_GATE_START:-$(date +%s)}"
 _CLEANUP_FNS=()
 
 log() {
+    if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
+        echo "log: expected 2-3 args, got $# ($*)" >&2
+        return 1
+    fi
     printf '{"event":"%s","correlation_id":"%s","component":"%s","outcome":"%s"%s}\n' \
         "$1" "$CORRELATION_ID" "$COMPONENT" "${2:-}" "${3:-}"
 }

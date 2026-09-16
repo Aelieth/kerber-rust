@@ -2430,6 +2430,38 @@ GATE_COMMON_NEEDLES = (
 )
 
 
+def check_log_arity(common_text: str | None = None) -> None:
+    """log() refuses a call that is not 2 or 3 args (W2-Y5)."""
+    if common_text is None:
+        path = SCRIPTS / "lib" / "gate-common.sh"
+        if not path.is_file():
+            _die("missing scripts/lib/gate-common.sh")
+        common_text = path.read_text(encoding="utf-8")
+    m = re.search(r"^log\(\) \{.*?\n\}", common_text, re.M | re.S)
+    if not m:
+        _die("gate-common.sh must define log()")
+    body = m.group(0)
+    if '"$#"' not in body:
+        _die("log() must check $# arity")
+    if "expected 2-3" not in body:
+        _die("log() must refuse arity other than 2-3")
+
+
+def check_hygiene_diff_self_test(text: str | None = None) -> None:
+    """hygiene-diff.py runs _self_test on normal compare runs, not only --self-test."""
+    if text is None:
+        path = SCRIPTS / "hygiene-diff.py"
+        if not path.is_file():
+            _die("missing scripts/hygiene-diff.py")
+        text = path.read_text(encoding="utf-8")
+    if "def main" not in text:
+        _die("hygiene-diff.py must define main()")
+    if "def _self_test" not in text:
+        _die("hygiene-diff.py must define _self_test")
+    if text.count("_self_test()") < 2:
+        _die("hygiene-diff.py must run _self_test on normal compare runs")
+
+
 def check_gate_common_sourced(
     common_text: str | None = None,
     gate_texts: dict[str, str] | None = None,
@@ -2600,7 +2632,7 @@ def check_sleep_ratchet(
     gate_texts: dict[str, str] | None = None,
     unit_sleep_count: int | None = None,
 ) -> None:
-    """Gate proto sleeps ≤ 35 s all tagged; unit sleep( ≤ UNIT_SLEEP_MAX."""
+    """Gate proto sleeps ≤ GATE_PROTO_SLEEP_MAX all tagged; unit sleep( ≤ UNIT_SLEEP_MAX."""
     if gate_texts is None:
         gate_texts = {
             p.name: p.read_text(encoding="utf-8")
@@ -4201,6 +4233,20 @@ jobs:
     )
     common_ok = "\n".join(GATE_COMMON_NEEDLES) + "\n"
     gate_ok = "scripts/lib/gate-common.sh\nneed_bins krb5-kdc\n"
+    check_log_arity(
+        'log() {\n    if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then\n'
+        '        echo "log: expected 2-3 args, got $#" >&2\n        return 1\n    fi\n}\n'
+    )
+    _must_die(check_log_arity, "log() {\n    printf '%s' \"$1\"\n}\n")
+    check_hygiene_diff_self_test(
+        "def _self_test():\n    pass\n"
+        "def main() -> int:\n    if argv[1] == '--self-test':\n        _self_test()\n"
+        "        return 0\n    _self_test()\n    return _compare()\n"
+    )
+    _must_die(
+        check_hygiene_diff_self_test,
+        "def main() -> int:\n    if argv[1] == '--self-test':\n        _self_test()\n        return 0\n",
+    )
     check_gate_common_sourced(common_ok, {"ok-gate.sh": gate_ok})
     _must_die(
         check_gate_common_sourced,
@@ -4668,6 +4714,8 @@ def main() -> None:
     check_env_read()
     check_peers_unavailable_convention()
     check_samba_kdc_respawn()
+    check_log_arity()
+    check_hygiene_diff_self_test()
     check_gate_common_sourced()
     check_no_gate_cargo_build()
     check_trace_dst()

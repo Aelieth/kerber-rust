@@ -353,6 +353,7 @@ def main() -> int:
         _self_test()
         print("hygiene-diff: self-test ok")
         return 0
+    _self_test()
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("old", type=pathlib.Path)
     ap.add_argument("new", type=pathlib.Path)

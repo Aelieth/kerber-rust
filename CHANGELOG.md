@@ -6,6 +6,16 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W2-Y5 X4 proof and docs truth
+
+- **serve_until probe.** `serve_until_honours_shutdown_within_the_poll_interval`
+  sends a real AS-REQ and reads the KRB-ERROR before storing the shutdown
+  flag. `unit_red_at` inject with `shutdown_poll = io_timeout` (5 s) fails
+  the kept `< 2 s` assertion in 5.13 s (`red-at-parent=` / `--inject`).
+- **log() arity.** `gate-common.sh` `log()` refuses a call that is not 2
+  or 3 args. `hygiene-diff.py` runs `_self_test` on normal compare runs.
+  `check_sleep_ratchet` docstring quotes `GATE_PROTO_SLEEP_MAX`.
+
 ### W2-Y4 walls and nightly budget
 
 - **client-differential split.** `client-differential-gate.sh` is a local
