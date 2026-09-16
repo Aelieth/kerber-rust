@@ -11,7 +11,25 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install lld
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq lld
       - name: Scratch dir
         run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            /tmp/kerber-rust-mit-kdc.tar
+            /tmp/kerber-rust-prod-node.tar
+          key: mit-kdc-1.22.2-${{ hashFiles('harness/Dockerfile', 'harness/krb5.conf', 'harness/kdc.conf', 'harness/kadm5.acl', 'harness/krb5-sha2.conf', 'harness/entrypoint.sh', 'harness/prod/Dockerfile') }}
+      - name: docker load MIT image
+        run: |
+          set -euo pipefail
+          if [ -f /tmp/kerber-rust-mit-kdc.tar ]; then
+            docker load -i /tmp/kerber-rust-mit-kdc.tar
+            echo "KERBER_SKIP_MIT_BUILD=1" >> "$GITHUB_ENV"
+          else
+            echo "MIT tar missing from cache; kcm-opcode will unavailable (exit 2)"
+          fi
       - name: kcm-opcode-gate (F43/F42 sssd-kcm value-assert)
-        run: ./scripts/kcm-opcode-gate.sh
+        run: ./scripts/lib/run-peer-step.sh ./scripts/kcm-opcode-gate.sh

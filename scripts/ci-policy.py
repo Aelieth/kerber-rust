@@ -2751,12 +2751,43 @@ def check_no_gate_cargo_build(gate_texts: dict[str, str] | None = None) -> None:
         check_gate_cargo_leftover(text, name)
 
 
+PEER_CAPTURE_GATES = (
+    "ad-s4u-gate.sh",
+    "ad-windows-gate.sh",
+    "samba-ad-gate.sh",
+    "samba-crossrealm-gate.sh",
+    "samba-pac-l2-gate.sh",
+    "samba-pac-verify-gate.sh",
+)
+
+
+def _run_rc_adjacent_to_docker_run(text: str) -> bool:
+    """`run_rc=$?` must follow `docker run` with no `register_cleanup` in between."""
+    lines = text.splitlines()
+    saw = False
+    for i, line in enumerate(lines):
+        if not re.search(r"\bdocker\s+run\b", line.split("#", 1)[0]):
+            continue
+        for j in range(i + 1, min(len(lines), i + 12)):
+            code = lines[j].split("#", 1)[0]
+            if re.search(r"\brun_rc=\$\?", code):
+                saw = True
+                between = "\n".join(lines[i + 1 : j])
+                if "register_cleanup" in between:
+                    return False
+                break
+    return saw
+
+
 def check_peers_unavailable_convention(
     wrapper_text: str | None = None,
     peers_text: str | None = None,
     ad_text: str | None = None,
+    nightly_texts: dict[str, str] | None = None,
+    capture_texts: dict[str, str] | None = None,
 ) -> None:
     """peers.yml maps gate exit 2 to step success; live kinit/kvno failures are exit 1."""
+    live = wrapper_text is None and peers_text is None and ad_text is None
     if wrapper_text is None:
         wrapper = SCRIPTS / "lib" / "run-peer-step.sh"
         if not wrapper.is_file():
@@ -2775,6 +2806,44 @@ def check_peers_unavailable_convention(
         _die("samba-ad-gate.sh kinit failure against a listening KDC must exit 1, not unavailable")
     if "exit 1" not in ad_text:
         _die("samba-ad-gate.sh must exit 1 on live kinit/kvno failure")
+    if live:
+        nightly_texts = {}
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            text = path.read_text(encoding="utf-8")
+            if Workflow(path, text).scheduled:
+                nightly_texts[path.name] = text
+        capture_texts = {
+            name: (SCRIPTS / name).read_text(encoding="utf-8")
+            for name in PEER_CAPTURE_GATES
+            if (SCRIPTS / name).is_file()
+        }
+    if nightly_texts:
+        for name, text in nightly_texts.items():
+            if not re.search(r"scripts/[A-Za-z0-9._-]+-gate\.sh", text):
+                continue
+            if "kerber-rust-mit-kdc.tar" not in text and "KERBER_NO_IMAGE" not in text:
+                _die(
+                    f"{name} runs a gate but neither restores the MIT tar "
+                    "nor sets KERBER_NO_IMAGE"
+                )
+        for name in ("peers.yml", "kcm-opcode.yml"):
+            text = nightly_texts.get(name, "")
+            if not text:
+                continue
+            if "kerber-rust-mit-kdc.tar" not in text:
+                _die(f"{name} must restore kerber-rust-mit-kdc.tar (KERBER_NO_IMAGE is not a substitute)")
+            if name == "kcm-opcode.yml" and "lld" not in text:
+                _die("kcm-opcode.yml must install lld")
+            if name == "kcm-opcode.yml" and "run-peer-step.sh" not in text:
+                _die("kcm-opcode.yml must wrap the gate with run-peer-step.sh")
+        if "peers.yml" in nightly_texts:
+            pt = nightly_texts["peers.yml"]
+            if "unavailable=" not in pt or "failed=" not in pt:
+                _die("peers.yml must print unavailable=N failed=M")
+    if capture_texts:
+        for name, text in capture_texts.items():
+            if not _run_rc_adjacent_to_docker_run(text):
+                _die(f"{name} run_rc=$? must sit adjacent to docker run")
 
 
 def check_red_at_sha_inject(text: str | None = None) -> None:
@@ -3900,6 +3969,55 @@ jobs:
         '[ "$rc" -eq 2 ]\n',
         "run-peer-step.sh\n",
         'unavailable "kinit failed"\nexit 1\n',
+    )
+    check_peers_unavailable_convention(
+        '[ "$rc" -eq 2 ] && exit 0\n',
+        "run-peer-step.sh\n",
+        "kinit failed; exit 1\n",
+        {
+            "peers.yml": (
+                "scripts/samba-ad-gate.sh\nkerber-rust-mit-kdc.tar\n"
+                "unavailable=\nfailed=\n"
+            ),
+            "kcm-opcode.yml": (
+                "scripts/kcm-opcode-gate.sh\nkerber-rust-mit-kdc.tar\n"
+                "lld\nrun-peer-step.sh\n"
+            ),
+        },
+        {"ad-s4u-gate.sh": "docker run -d --name n img\nrun_rc=$?\nregister_cleanup x\n"},
+    )
+    _must_die(
+        check_peers_unavailable_convention,
+        '[ "$rc" -eq 2 ] && exit 0\n',
+        "run-peer-step.sh\n",
+        "kinit failed; exit 1\n",
+        {"peers.yml": "scripts/samba-ad-gate.sh\n"},
+        {},
+    )
+    _must_die(
+        check_peers_unavailable_convention,
+        '[ "$rc" -eq 2 ] && exit 0\n',
+        "run-peer-step.sh\n",
+        "kinit failed; exit 1\n",
+        {
+            "peers.yml": "scripts/samba-ad-gate.sh\nkerber-rust-mit-kdc.tar\nunavailable=\nfailed=\n",
+            "kcm-opcode.yml": "scripts/kcm-opcode-gate.sh\nkerber-rust-mit-kdc.tar\nrun-peer-step.sh\n",
+        },
+        {},
+    )
+    _must_die(
+        check_peers_unavailable_convention,
+        '[ "$rc" -eq 2 ] && exit 0\n',
+        "run-peer-step.sh\n",
+        "kinit failed; exit 1\n",
+        {},
+        {
+            "ad-s4u-gate.sh": (
+                "docker run -d --name n img\n"
+                "register_cleanup x\n"
+                "run_rc=$?\n"
+            )
+        },
     )
     common_ok = "\n".join(GATE_COMMON_NEEDLES) + "\n"
     gate_ok = "scripts/lib/gate-common.sh\nneed_bins krb5-kdc\n"

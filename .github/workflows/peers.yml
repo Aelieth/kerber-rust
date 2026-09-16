@@ -19,6 +19,22 @@ jobs:
           shared-key: kerber
       - name: Scratch dir
         run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            /tmp/kerber-rust-mit-kdc.tar
+            /tmp/kerber-rust-prod-node.tar
+          key: mit-kdc-1.22.2-${{ hashFiles('harness/Dockerfile', 'harness/krb5.conf', 'harness/kdc.conf', 'harness/kadm5.acl', 'harness/krb5-sha2.conf', 'harness/entrypoint.sh', 'harness/prod/Dockerfile') }}
+      - name: docker load MIT image
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f /tmp/kerber-rust-mit-kdc.tar ]; then
+            docker load -i /tmp/kerber-rust-mit-kdc.tar
+            echo "KERBER_SKIP_MIT_BUILD=1" >> "$GITHUB_ENV"
+          else
+            echo "MIT tar missing from cache; peer steps will unavailable (exit 2)"
+          fi
       - name: Build Samba AD DC image (harness/samba)
         if: always()
         run: docker build -f harness/samba/Dockerfile -t samba-ad-dc:latest .
@@ -70,3 +86,16 @@ jobs:
       - name: heimdal-gate (Heimdal 7.8 bidirectional)
         if: always()
         run: ./scripts/lib/run-peer-step.sh ./scripts/heimdal-gate.sh
+      - name: peer tally
+        if: always()
+        run: |
+          set -euo pipefail
+          f="${KERBER_SCRATCH}/peer-tally.txt"
+          unavail=0
+          fail=0
+          if [ -f "$f" ]; then
+            unavail=$(grep -c '^unavailable$' "$f" || true)
+            fail=$(grep -c '^failed$' "$f" || true)
+          fi
+          echo "unavailable=$unavail failed=$fail"
+          test "$fail" -eq 0

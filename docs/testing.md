@@ -430,10 +430,10 @@ Scheduled (a red is a red, but a push does not wait for it):
 
 | Workflow | Cadence | Runs |
 | --- | --- | --- |
-| `peers.yml` | nightly 06:12 UTC + manual | `samba-ad-gate`, `ad-windows-gate`, `ad-s4u-gate`, `samba-pac-verify-gate`, `samba-pac-l2-gate`, `samba-crossrealm-gate`, `samba-realtrust-gate`, `heimdal-gate` — every step `if: always()`, no `continue-on-error` |
+| `peers.yml` | nightly 06:12 UTC + manual | Restores `kerber-rust-mit-kdc:1.22.2` from the same `actions/cache` key as `harness` (miss → gates `exit 2`, not `KERBER_NO_IMAGE`). Builds `samba-ad-dc:latest`, `samba-kerber-dc:latest`, `kerber-rust-heimdal-kdc:latest` in the job. Then `samba-ad-gate`, `ad-windows-gate`, `ad-s4u-gate`, `samba-pac-verify-gate`, `samba-pac-l2-gate`, `samba-crossrealm-gate`, `samba-realtrust-gate`, `heimdal-gate` — every step `if: always()` via `run-peer-step.sh`; tally `unavailable=N failed=M`; job red only when `failed > 0` |
 | `soak.yml` | nightly 05:47 UTC + manual | long `soak-gate` |
 | `fuzz.yml` | nightly 04:17 UTC + manual | `cargo +nightly fuzz run <target> -max_total_time=60` per target (9 targets) |
-| `kcm-opcode.yml` | nightly 07:18 UTC + manual | `kcm-opcode-gate` |
+| `kcm-opcode.yml` | nightly 07:18 UTC + manual | Restores the MIT tar (same cache key); installs `lld`; `kcm-opcode-gate` via `run-peer-step.sh` (exit 2 → green `peer-step unavailable`) |
 | `full-test.yml` | nightly 05:27 UTC, `v*` tags, manual | `test-release` (release-profile tests) and `msrv-test` (`cargo test --workspace --locked` on 1.95) |
 
 Not in any workflow: `gss-sspi-gate.sh` (needs a Windows SSPI peer; exits
@@ -656,7 +656,8 @@ Not in any workflow: `gss-sspi-gate.sh` (needs a Windows SSPI peer; exits
   reconciles the four copies of the case list — the `expect_*` names in
   `diffsend.rs`, `DIFFSEND_CASES`, the ledger header, the gate greps —
   and the ratchet against the driver's summary literal (W1-Z Z3.3).
-  Honest `exit 2` only when docker/MIT image is absent. In CI (bare `run:`).
+  Honest `exit 2` when docker or the MIT image is absent (provenance no
+  longer `exit 1` / `KERBER_NO_IMAGE` as a substitute). In CI (bare `run:`).
   Compare lives behind `krb5-protocol` feature `diff` (`examples/diffsend`
   and the unit fixture); it is not on the default public API.
   **TGS vehicle:** success TGS cases mint a PAC-less TGT with the

@@ -72,14 +72,14 @@ if command -v docker >/dev/null 2>&1; then
     elif [ "${KERBER_NO_IMAGE:-}" = 1 ]; then
         image="unavailable"
     else
-        echo "MIT image kerber-rust-mit-kdc:1.22.2 missing; rebuild from harness/ or set KERBER_NO_IMAGE=1" >&2
-        exit 1
+        echo "MIT image kerber-rust-mit-kdc:1.22.2 missing; restore the CI cache or rebuild from harness/" >&2
+        exit 2
     fi
 elif [ "${KERBER_NO_IMAGE:-}" = 1 ]; then
     image="unavailable"
 else
-    echo "docker not available; set KERBER_NO_IMAGE=1 to stamp without the MIT image" >&2
-    exit 1
+    echo "docker not available" >&2
+    exit 2
 fi
 echo "==== provenance ===="
 echo "head_sha=$head_sha"

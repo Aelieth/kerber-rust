@@ -36,9 +36,9 @@ docker rm -f "$NAME" >/dev/null 2>&1 || true
 
 set +e
 docker run -d --name "$NAME" --hostname dc1 "$IMAGE" >"$SCRATCH/samba-ad-run.err" 2>&1
-register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
 run_rc=$?
 set -e
+register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
 if [ "$run_rc" -ne 0 ]; then
     unavailable "docker run $IMAGE failed: $(tr '\n' ' ' <"$SCRATCH/samba-ad-run.err" 2>/dev/null || true)"
 fi
