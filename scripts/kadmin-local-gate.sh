@@ -473,15 +473,27 @@ echo "$MITKV" | grep -Eq '^Key: vno[[:space:]]*2'
 echo "==== local setstr does not clobber concurrent kadmind create ===="
 docker exec "$NAME" sh -c '
   set -e
-  rm -f /tmp/klfifo
+  rm -f /tmp/klfifo /tmp/kl.out /tmp/kl.err
   mkfifo /tmp/klfifo
   env KRB5_KDC_DB=/tmp/principal KRB5_KDC_STASH=/tmp/stash \
     /tmp/krb5-kadmin-local </tmp/klfifo >/tmp/kl.out 2>/tmp/kl.err &
   echo $! >/tmp/kl.pid
   exec 3>/tmp/klfifo
-  # The background local session must load the store before the concurrent
-  # kadmind create. Probe: the kadmin-local pid is alive.
-  while ! kill -0 "$(cat /tmp/kl.pid)" 2>/dev/null; do sleep 0.05; done
+  # ready: session has loaded the store when a harmless getprinc answers.
+  echo "getprinc extra2" >&3
+  ok=0
+  for _ in $(seq 1 80); do
+    if grep -q "Principal: extra2@KERBER.TEST" /tmp/kl.out 2>/dev/null; then
+      ok=1
+      break
+    fi
+    sleep 0.05
+  done
+  if [ "$ok" != 1 ]; then
+    echo "kadmin-local did not load the store (kl.out)" >&2
+    cat /tmp/kl.out /tmp/kl.err >&2 || true
+    exit 1
+  fi
   env KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     kadmin -p admin@KERBER.TEST -w adminpassword -q "addprinc -pw race-pw raceprinc"
   echo "setstr extra2 racek racev" >&3
@@ -615,13 +627,27 @@ echo "$GTGT" | grep -q 'krbtgt/KERBER.TEST@KERBER.TEST'
 echo "==== setstr does not clobber concurrent kadmind create ===="
 docker exec "$NAME" sh -c '
   set -e
-  rm -f /tmp/m5fifo
+  rm -f /tmp/m5fifo /tmp/m5.out /tmp/m5.err
   mkfifo /tmp/m5fifo
   env KRB5_KDC_DB=/tmp/principal KRB5_KDC_STASH=/tmp/stash \
     /tmp/krb5-kadmin-local </tmp/m5fifo >/tmp/m5.out 2>/tmp/m5.err &
   echo $! >/tmp/m5.pid
   exec 3>/tmp/m5fifo
-  while ! kill -0 "$(cat /tmp/m5.pid)" 2>/dev/null; do sleep 0.05; done
+  # ready: session has loaded the store when a harmless getprinc answers.
+  echo "getprinc extra2" >&3
+  ok=0
+  for _ in $(seq 1 80); do
+    if grep -q "Principal: extra2@KERBER.TEST" /tmp/m5.out 2>/dev/null; then
+      ok=1
+      break
+    fi
+    sleep 0.05
+  done
+  if [ "$ok" != 1 ]; then
+    echo "kadmin-local did not load the store (m5.out)" >&2
+    cat /tmp/m5.out /tmp/m5.err >&2 || true
+    exit 1
+  fi
   env KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     kadmin -p admin@KERBER.TEST -w adminpassword -q "addprinc -pw m5-pw m5race"
   echo "setstr extra2 m5k m5v" >&3
