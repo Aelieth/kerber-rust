@@ -5,8 +5,10 @@
 
 [jobs]
 test = 300
-harness = 500
-mit-extra = 300
+harness = 270
+harness-2 = 300
+mit-extra = 180
+mit-extra-2 = 180
 doc = 90
 msrv = 120
 audit = 240
@@ -17,4 +19,4 @@ chaos = 180
 soak = 240
 
 [push]
-run_wall = 540
+run_wall = 360

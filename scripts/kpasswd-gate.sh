@@ -224,15 +224,7 @@ docker exec -d \
     -e KRB5_KDC_STASH=/tmp/stash \
     "$NAME" sh -c '/tmp/krb5-kdc --test-realm 127.0.0.1:88 >/tmp/kdc.log 2>&1'
 
-ok=0
-for _ in $(seq 1 80); do
-    if docker exec "$NAME" grep -q '^listening ' /tmp/kdc.log 2>/dev/null; then
-        ok=1
-        break
-    fi
-    sleep 0.25
-done
-if [ "$ok" != 1 ]; then
+if ! wait_log "$NAME" /tmp/kdc.log '^listening '; then
     docker exec "$NAME" cat /tmp/kdc.log >&2 || true
     log "kpasswd.gate" "error" ',"error":"kdc did not listen"'
     exit 1
@@ -247,15 +239,7 @@ docker exec -d \
     -e KRB5_KDC_STASH=/tmp/stash \
     -e KRB5_ACL_FILE=/tmp/kadm5.acl \
     "$NAME" sh -c '/tmp/krb5-kadmind 127.0.0.1:749 >/tmp/kadmind.log 2>&1'
-ok=0
-for _ in $(seq 1 40); do
-    if docker exec "$NAME" grep -q '^kpasswd ' /tmp/kadmind.log 2>/dev/null; then
-        ok=1
-        break
-    fi
-    sleep 0.25
-done
-if [ "$ok" != 1 ]; then
+if ! wait_log "$NAME" /tmp/kadmind.log '^kpasswd '; then
     docker exec "$NAME" cat /tmp/kadmind.log >&2 || true
     log "kpasswd.gate" "error" ',"error":"kpasswd 464 did not listen"'
     exit 1
