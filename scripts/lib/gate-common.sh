@@ -227,14 +227,14 @@ shell_container() {
     if [ -n "${KERBER_SHELL:-}" ]; then
         NAME="${KERBER_SHELL}"
         docker inspect "$NAME" >/dev/null 2>&1 || die "KERBER_SHELL=$NAME is not running"
-        docker exec "$NAME" sh -c '
+        # One exec: kill leftovers, wipe KDB, restore stock conf, wait
+        # pids+ports inside the container (host-side wait_gone_in is 10
+        # docker execs per attach and dominated the harness wall).
+        docker exec "$NAME" sh -c "$(cat <<'EOS'
             kill $(pidof krb5-kdc krb5-kadmind krb5kdc kadmind kpropd) 2>/dev/null || true
             pkill -f kdc-error-proxy.py >/dev/null 2>&1 || true
             pkill -f kdc-req-proxy.py >/dev/null 2>&1 || true
             pkill -f integ-tamper-proxy.py >/dev/null 2>&1 || true
-            # Keep copied binaries (/tmp/krb5-*, ccache-probe). Wipe leftover
-            # realm files so the next gate kdb5_util create / --test-realm /
-            # rust.db+stash is not DUP or a stale master key.
             kdb5_util destroy -f >/dev/null 2>&1 || true
             find /tmp -mindepth 1 -maxdepth 1 \
                 ! -name 'krb5-*' ! -name 'ccache-probe' ! -name 'build' \
@@ -249,14 +249,35 @@ shell_container() {
             if [ -f /etc/krb5kdc/kdc.conf.kerber-stock ]; then
                 cp -a /etc/krb5kdc/kdc.conf.kerber-stock /etc/krb5kdc/kdc.conf
             fi
-        ' || true
-        wait_pid_gone "$NAME" krb5-kdc || true
-        wait_pid_gone "$NAME" krb5kdc || true
-        wait_pid_gone "$NAME" krb5-kadmind || true
-        local p
-        for p in 88 89 90 91 464 749 1888 1891 1892 2121; do
-            wait_gone_in "$NAME" "$p" || true
-        done
+            i=0
+            while [ "$i" -lt 20 ]; do
+                pidof krb5-kdc krb5kdc krb5-kadmind kadmind kpropd >/dev/null 2>&1 || break
+                i=$((i + 1))
+                sleep 0.05
+            done
+            python3 -c "
+import socket, time
+ports = (88, 89, 90, 91, 464, 749, 1888, 1891, 1892, 2121)
+deadline = time.time() + 2
+while time.time() < deadline:
+    busy = False
+    for p in ports:
+        s = socket.socket()
+        s.settimeout(0.05)
+        try:
+            s.connect(('127.0.0.1', p))
+            busy = True
+        except Exception:
+            pass
+        s.close()
+        if busy:
+            break
+    if not busy:
+        break
+    time.sleep(0.05)
+"
+EOS
+        )" || true
         return 0
     fi
     NAME="${NAME:-kerber-rust-${GATE_NAME}}"

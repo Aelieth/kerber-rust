@@ -186,7 +186,9 @@ NIGHTLY_BLOCKING = (
 TIMEOUT_JOBS = (
     "test",
     "harness",
+    "harness-2",
     "mit-extra",
+    "mit-extra-2",
     "slo",
     "chaos",
     "soak",
@@ -2371,10 +2373,10 @@ def check_s4_shared_boots(ci_text: str | None = None) -> None:
         _die("ci.yml must run scripts/lib/boot-stock-mit.sh")
     if "boot-shell.sh" not in ci_text:
         _die("ci.yml must run scripts/lib/boot-shell.sh")
-    if ci_text.count("boot-stock-mit.sh") < 2:
-        _die("ci.yml must boot stock MIT in both harness and mit-extra")
-    if ci_text.count("boot-shell.sh") < 2:
-        _die("ci.yml must boot a shared shell in both harness and mit-extra")
+    if ci_text.count("boot-stock-mit.sh") < 4:
+        _die("ci.yml must boot stock MIT in harness, harness-2, mit-extra, and mit-extra-2")
+    if ci_text.count("boot-shell.sh") < 4:
+        _die("ci.yml must boot a shared shell in harness, harness-2, mit-extra, and mit-extra-2")
 
 
 def check_stock_boots_per_job(ci_text: str | None = None) -> None:
@@ -3480,13 +3482,15 @@ jobs:
         "trap 'cleanup; mit_cleanup' EXIT\n",
         "exit-trap-gate.sh",
     )
-    check_s4_shared_boots(
-        "boot-stock-mit.sh\nboot-shell.sh\nboot-stock-mit.sh\nboot-shell.sh\n"
+    _four_boots = (
+        "boot-stock-mit.sh\nboot-shell.sh\n"
+        "boot-stock-mit.sh\nboot-shell.sh\n"
+        "boot-stock-mit.sh\nboot-shell.sh\n"
+        "boot-stock-mit.sh\nboot-shell.sh\n"
     )
+    check_s4_shared_boots(_four_boots)
     _must_die(check_s4_shared_boots, "boot-shell.sh\nboot-shell.sh\n")
-    check_stock_boots_per_job(
-        "boot-stock-mit.sh\nboot-shell.sh\nboot-stock-mit.sh\nboot-shell.sh\n"
-    )
+    check_stock_boots_per_job(_four_boots)
     _must_die(check_stock_boots_per_job, "boot-stock-mit.sh\n")
     check_gate_wall("# empty\n", "gate\trun\tgate_rc\twall_s\nkdc-gate\trun1\t0\t12\n")
     _must_die(check_gate_wall, "kadmin-gate\n", "gate\trun\tgate_rc\twall_s\n")
@@ -3510,9 +3514,9 @@ jobs:
     _must_die(check_sleep_ratchet, {"renew-gate.sh": ok_sleep}, 9)
     good_toml = (
         "[jobs]\n"
-        "test = 300\nharness = 500\nmit-extra = 300\ndoc = 90\n"
+        "test = 300\nharness = 270\nmit-extra = 180\ndoc = 90\n"
         "msrv = 120\naudit = 240\nledger-mit = 60\nmit-image = 90\n"
-        "[push]\nrun_wall = 540\n"
+        "[push]\nrun_wall = 360\n"
     )
     check_ci_budgets(
         good_toml,
@@ -3539,7 +3543,7 @@ jobs:
     )
     good_docs = (
         "Tier 1 test harness mit-extra msrv audit ledger-mit mit-image doc "
-        "ci-budget.toml 500\nTier 2 slo chaos soak\nTier 3 budget.yml\n"
+        "ci-budget.toml 270\nTier 2 slo chaos soak\nTier 3 budget.yml\n"
     )
     check_testing_doc_budgets(good_docs, "see ci-budget.toml tier rule\n", good_toml)
     _must_die(
