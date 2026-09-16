@@ -172,6 +172,10 @@ FAIL_RED_PER_PUSH = (
     "rust-kpasswd-mit-gate.sh",
     "kcm-gate.sh",
     "config-include-gate.sh",
+    "kadmin-rust-gate.sh",
+    "kadmin-rust-acl-gate.sh",
+    "kadmin-mit-gate.sh",
+    "kadmin-both-gate.sh",
 )
 
 NIGHTLY_BLOCKING = (
@@ -199,8 +203,14 @@ TIMEOUT_JOBS = (
 )
 
 GATE_WALL_MAX = 45
-GATE_PROTO_SLEEP_MAX = 35.0
+GATE_PROTO_SLEEP_MAX = 26.0
 UNIT_SLEEP_MAX = 8
+PLAN_JOB_CAPS = {
+    "test": 300,
+    "harness": 270,
+    "mit-extra": 180,
+}
+PLAN_RUN_WALL_CAP = 360
 BUDGET_REQUIRED_JOBS = (
     "test",
     "harness",
@@ -214,10 +224,6 @@ BUDGET_REQUIRED_JOBS = (
 EXCEPTIONS_REL = "scripts/gate-wall-exceptions.txt"
 _SLEEP_RE = re.compile(r"\bsleep\s+([0-9]+(?:\.[0-9]+)?)")
 _ENTRYPOINT_SLEEP = re.compile(r"--entrypoint\s+sleep")
-_PROTO_HINT = re.compile(
-    r"proto:|lockout|postdate|starttime|ticket age|renew|soak|failurecount|nyv",
-    re.I,
-)
 
 FULL_RUN_SCHEDULED = (
     "cargo nextest run --workspace --release",
@@ -822,15 +828,41 @@ def check_full_run_scheduled(workflows: list[Workflow]) -> None:
             _die(f"{needle!r} is continue-on-error on a scheduled workflow")
 
 
-def check_gate_membership(workflows: list[Workflow]) -> None:
+def check_gate_membership(
+    workflows: list[Workflow] | None = None,
+    fail_red: tuple[str, ...] | None = None,
+    stubs: frozenset[str] | None = None,
+    gate_names: list[str] | None = None,
+) -> None:
+    """Every gate is in some workflow; every FAIL_RED_PER_PUSH gate is a per-push ci.yml step."""
+    if workflows is None:
+        workflows = [
+            Workflow(p, p.read_text())
+            for p in sorted(WORKFLOWS.glob("*.yml"))
+        ]
+    if fail_red is None:
+        fail_red = FAIL_RED_PER_PUSH
+    if stubs is None:
+        stubs = DOCUMENTED_STUBS
     mentioned: set[str] = set()
     for w in workflows:
         mentioned.update(SCRIPT_RE.findall(w.text))
-    for path in sorted(SCRIPTS.glob("*-gate.sh")):
-        name = path.name
-        if name in mentioned or name in DOCUMENTED_STUBS:
+    if gate_names is None:
+        gate_names = [p.name for p in sorted(SCRIPTS.glob("*-gate.sh"))]
+    for name in gate_names:
+        if name in mentioned or name in stubs:
             continue
         _die(f"{name} is not in any workflow and not in DOCUMENTED_STUBS")
+    ci_wfs = [w for w in workflows if w.path.name == "ci.yml"]
+    if not ci_wfs:
+        _die("check_gate_membership needs ci.yml")
+    ci = ci_wfs[0]
+    for script in fail_red:
+        hits = _scripts_in_jobs(ci.jobs, script)
+        if not hits:
+            _die(f"{script} is not a per-push ci.yml step")
+        if all(j.continue_on_error for j in hits):
+            _die(f"{script} only runs on continue-on-error ci.yml jobs")
 
 
 def check_no_informational_gates() -> None:
@@ -1072,17 +1104,30 @@ def check_isolate_test_krb5(text: str | None = None) -> None:
         _die("cfg(test) writes host /tmp via temp_dir()")
 
 
-def check_no_host_tmp_writes(text: str | None = None, name: str = "gate.sh") -> None:
-    """No host `/tmp/` writes in gate scripts outside KERBER_SCRATCH defaults."""
+def check_no_host_tmp_writes(
+    text: str | None = None,
+    name: str = "gate.sh",
+    files: dict[str, str] | None = None,
+) -> None:
+    """No host `/tmp/` writes in gate scripts or scripts/lib outside KERBER_SCRATCH defaults."""
     if text is not None:
         hits = host_tmp_write_lines(text)
         if hits:
             _die(f"{name} host /tmp write at line {hits[0]}")
         return
-    for path in sorted(SCRIPTS.glob("*-gate.sh")):
-        hits = host_tmp_write_lines(path.read_text())
+    if files is None:
+        files = {
+            p.name: p.read_text()
+            for p in sorted(SCRIPTS.glob("*-gate.sh"))
+        }
+        lib = SCRIPTS / "lib"
+        if lib.is_dir():
+            for path in sorted(lib.glob("*.sh")):
+                files[f"lib/{path.name}"] = path.read_text()
+    for fname, body in files.items():
+        hits = host_tmp_write_lines(body)
         if hits:
-            _die(f"{path.name} host /tmp write at line {hits[0]}")
+            _die(f"{fname} host /tmp write at line {hits[0]}")
 
 
 def check_red_at_sha_target_trap(text: str | None = None) -> None:
@@ -2373,9 +2418,6 @@ def check_gate_common_sourced(
             _die(f"{name} still defines a private log()")
         if re.search(r"^cleanup\(\)", text, re.M):
             _die(f"{name} still defines a private cleanup()")
-        if re.search(r"\bcargo\s+build\b", text):
-            _die(f"{name} must not run cargo build (use need_bins)")
-        check_gate_cargo_leftover(text, name)
         check_gate_no_exit_trap(text, name)
         if name in ("kadmin-rust-gate.sh", "kadmin-rust-acl-gate.sh", "kadmin-mit-gate.sh", "kadmin-both-gate.sh") and "kadmin-glob-cells.sh" not in text:
             _die(f"{name} must source scripts/lib/kadmin-glob-cells.sh")
@@ -2389,6 +2431,7 @@ def check_gate_common_sourced(
             check_kcm_need_image(text)
         if re.search(r"krb5kdc -n >/tmp/mit-kdc.log 2>&1 & cat", text):
             _die(f"{name} must wait_log for krb5kdc -n, not cat the log immediately")
+    check_no_gate_cargo_build(items)
     if live:
         check_kadmin_glob_lib()
         check_s4_shared_boots()
@@ -2438,9 +2481,7 @@ def classify_gate_sleeps(text: str) -> list[tuple[str, float]]:
         sec = float(m.group(1))
         kind = "poll" if _in_poll_loop(lines, i) else "padding"
         comment = line[line.index("#") :] if "#" in line else ""
-        if kind != "poll" and (
-            comment.strip().startswith("# proto:") or _PROTO_HINT.search(line)
-        ):
+        if kind != "poll" and comment.strip().startswith("# proto:"):
             kind = "proto"
         rows.append((kind, sec))
     return rows
@@ -2541,8 +2582,10 @@ def check_ci_budgets(
     toml_text: str | None = None,
     status_text: str | None = None,
     wf_names: list[str] | None = None,
+    ci_job_names: list[str] | None = None,
 ) -> None:
-    """ci-budget.toml exists with required jobs; ci-status --check-budget; nightly budget.yml."""
+    """ci-budget.toml exists with required jobs; plan caps are maxima; every ci.yml job is budgeted."""
+    live = toml_text is None
     if toml_text is None:
         path = ROOT / "ci-budget.toml"
         if not path.is_file():
@@ -2554,6 +2597,15 @@ def check_ci_budgets(
             _die(f"ci-budget.toml missing [jobs].{name}")
     if budget.get("run_wall") is None:
         _die("ci-budget.toml missing [push].run_wall")
+    for name, cap in PLAN_JOB_CAPS.items():
+        val = budget["jobs"].get(name)
+        if val is not None and val > cap:
+            _die(f"ci-budget.toml [jobs].{name}={val} exceeds plan cap {cap}")
+    if budget["run_wall"] > PLAN_RUN_WALL_CAP:
+        _die(
+            f"ci-budget.toml [push].run_wall={budget['run_wall']} "
+            f"exceeds plan cap {PLAN_RUN_WALL_CAP}"
+        )
     if status_text is None:
         status_text = (SCRIPTS / "ci-status.py").read_text(encoding="utf-8")
     if "--check-budget" not in status_text:
@@ -2564,6 +2616,14 @@ def check_ci_budgets(
         wf_names = [p.name for p in sorted(WORKFLOWS.glob("*.yml"))]
     if "budget.yml" not in wf_names:
         _die("missing .github/workflows/budget.yml nightly job")
+    if live and ci_job_names is None:
+        ci_path = WORKFLOWS / "ci.yml"
+        if ci_path.is_file():
+            ci_job_names = list(Workflow(ci_path, ci_path.read_text()).jobs)
+    if ci_job_names:
+        for name in ci_job_names:
+            if name not in budget["jobs"]:
+                _die(f"ci-budget.toml missing [jobs].{name} (ci.yml job)")
 
 
 def check_testing_doc_budgets(
@@ -2656,8 +2716,39 @@ def check_gate_cargo_leftover(text: str, name: str = "gate.sh") -> None:
         _die(f"{name} still has leftover cargo-build argument lines")
 
 
-def check_no_gate_cargo_build() -> None:
-    check_gate_common_sourced()
+def check_need_bins_strict(
+    ci_text: str | None = None,
+    checkpoint_text: str | None = None,
+    common_text: str | None = None,
+) -> None:
+    """CI and checkpoint set KERBER_NEED_BINS_STRICT=1; need_bins logs when it builds."""
+    if ci_text is None:
+        ci_text = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    if "KERBER_NEED_BINS_STRICT" not in ci_text:
+        _die("ci.yml must set KERBER_NEED_BINS_STRICT")
+    if checkpoint_text is None:
+        checkpoint_text = (SCRIPTS / "checkpoint.sh").read_text(encoding="utf-8")
+    if "KERBER_NEED_BINS_STRICT=1" not in checkpoint_text:
+        _die("checkpoint.sh must export KERBER_NEED_BINS_STRICT=1")
+    if common_text is None:
+        common_text = (SCRIPTS / "lib" / "gate-common.sh").read_text(encoding="utf-8")
+    if "KERBER_NEED_BINS_STRICT" not in common_text:
+        _die("need_bins must honour KERBER_NEED_BINS_STRICT")
+    if "need_bins: building" not in common_text:
+        _die("need_bins must log when it builds (lenient local path)")
+
+
+def check_no_gate_cargo_build(gate_texts: dict[str, str] | None = None) -> None:
+    """Named S6 rule: no scripts/*-gate.sh may run cargo build (use need_bins)."""
+    if gate_texts is None:
+        gate_texts = {
+            p.name: p.read_text(encoding="utf-8")
+            for p in sorted(SCRIPTS.glob("*-gate.sh"))
+        }
+    for name, text in gate_texts.items():
+        if re.search(r"\bcargo\s+build\b", text):
+            _die(f"{name} must not run cargo build (use need_bins)")
+        check_gate_cargo_leftover(text, name)
 
 
 def check_peers_unavailable_convention(
@@ -3445,6 +3536,47 @@ jobs:
     _must_die(check_ci, _ci("on:\n  push:\n" + _soft))  # missing timeout job 'test'
     _must_die(check_nightly, [])  # no scheduled workflow runs a nightly-blocking gate
 
+    _ci_push = Workflow(
+        pathlib.Path("ci.yml"),
+        "on:\n  push:\njobs:\n  harness:\n    timeout-minutes: 20\n"
+        "    steps:\n      - run: ./scripts/kadmin-rust-gate.sh\n",
+    )
+    check_gate_membership(
+        [_ci_push],
+        ("kadmin-rust-gate.sh",),
+        frozenset(),
+        ["kadmin-rust-gate.sh"],
+    )
+    _ci_soft = Workflow(
+        pathlib.Path("ci.yml"),
+        "on:\n  push:\njobs:\n  soak:\n    continue-on-error: true\n"
+        "    steps:\n      - run: ./scripts/kadmin-rust-gate.sh\n",
+    )
+    _must_die(
+        check_gate_membership,
+        [_ci_soft],
+        ("kadmin-rust-gate.sh",),
+        frozenset(),
+        ["kadmin-rust-gate.sh"],
+    )
+    _ci_no_kadmin = Workflow(
+        pathlib.Path("ci.yml"),
+        "on:\n  push:\njobs:\n  harness:\n    timeout-minutes: 20\n"
+        "    steps:\n      - run: ./scripts/spake-gate.sh\n",
+    )
+    _nightly_kadmin = Workflow(
+        pathlib.Path("peers.yml"),
+        "on:\n  schedule:\n    - cron: '0 0 * * *'\njobs:\n  peers:\n"
+        "    steps:\n      - run: ./scripts/kadmin-rust-gate.sh\n",
+    )
+    _must_die(
+        check_gate_membership,
+        [_ci_no_kadmin, _nightly_kadmin],
+        ("kadmin-rust-gate.sh",),
+        frozenset(),
+        ["kadmin-rust-gate.sh"],
+    )
+
     check_gate_provenance('. "$ROOT/scripts/lib/provenance.sh"\n', "ok-gate.sh")
     _must_die(check_gate_provenance, "#!/bin/bash\necho hi\n", "no-prov-gate.sh")
     check_no_case_whitelists(
@@ -3504,6 +3636,12 @@ jobs:
     )
     _must_die(
         check_no_host_tmp_writes,
+        None,
+        "lib",
+        {"lib/gate-common.sh": "echo x > /tmp/host-out\n"},
+    )
+    _must_die(
+        check_no_host_tmp_writes,
         "docker exec n sh -c 'true' >/tmp/host-out\n",
         "docker-host-redir-tmp-gate.sh",
     )
@@ -3545,6 +3683,11 @@ jobs:
     )
     _must_die(
         check_sleep_ratchet,
+        {"pad-gate.sh": "sleep 3 # lockout\n"},
+        5,
+    )
+    _must_die(
+        check_sleep_ratchet,
         {"renew-gate.sh": "sleep 40 # proto: ticket age\n"},
         5,
     )
@@ -3577,6 +3720,47 @@ jobs:
         good_toml,
         "--check-budget\nbudget_overruns\n",
         ["ci.yml"],
+    )
+    _must_die(
+        check_ci_budgets,
+        (
+            "[jobs]\n"
+            "test = 300\nharness = 500\nmit-extra = 180\ndoc = 90\n"
+            "msrv = 120\naudit = 240\nledger-mit = 60\nmit-image = 90\n"
+            "[push]\nrun_wall = 360\n"
+        ),
+        "--check-budget\nbudget_overruns\n",
+        ["ci.yml", "budget.yml"],
+    )
+    _must_die(
+        check_ci_budgets,
+        good_toml,
+        "--check-budget\nbudget_overruns\n",
+        ["ci.yml", "budget.yml"],
+        ["harness-2"],
+    )
+    check_need_bins_strict(
+        "KERBER_NEED_BINS_STRICT: \"1\"\n",
+        "export KERBER_NEED_BINS_STRICT=1\n",
+        "KERBER_NEED_BINS_STRICT\nneed_bins: building\n",
+    )
+    _must_die(
+        check_need_bins_strict,
+        "no strict env\n",
+        "export KERBER_NEED_BINS_STRICT=1\n",
+        "KERBER_NEED_BINS_STRICT\nneed_bins: building\n",
+    )
+    _must_die(
+        check_need_bins_strict,
+        "KERBER_NEED_BINS_STRICT: \"1\"\n",
+        "no export\n",
+        "KERBER_NEED_BINS_STRICT\nneed_bins: building\n",
+    )
+    _must_die(
+        check_need_bins_strict,
+        "KERBER_NEED_BINS_STRICT: \"1\"\n",
+        "export KERBER_NEED_BINS_STRICT=1\n",
+        "KERBER_NEED_BINS_STRICT\n",
     )
     good_docs = (
         "Tier 1 test harness mit-extra msrv audit ledger-mit mit-image doc "
@@ -3729,6 +3913,15 @@ jobs:
         check_gate_common_sourced,
         common_ok,
         {"bad-gate.sh": "scripts/lib/gate-common.sh\ncargo build -p krb5-kdc\n"},
+    )
+    check_no_gate_cargo_build({"ok-gate.sh": "need_bins krb5-kdc\n"})
+    _must_die(
+        check_no_gate_cargo_build,
+        {"bad-gate.sh": "cargo build -p krb5-kdc\n"},
+    )
+    _must_die(
+        check_no_gate_cargo_build,
+        {"leftover-gate.sh": "    -p krb5-client --bin krb5-kvno\n"},
     )
     check_kadmin_glob_lib("hist_shape() { cat; }\nalias_cells() { :; }\n")
     _must_die(check_kadmin_glob_lib, "glob_cells() { :; }\n")
@@ -4177,11 +4370,13 @@ def main() -> None:
     check_env_read()
     check_peers_unavailable_convention()
     check_gate_common_sourced()
+    check_no_gate_cargo_build()
     check_trace_dst()
     check_stock_boots_per_job()
     check_gate_wall()
     check_sleep_ratchet()
     check_ci_budgets()
+    check_need_bins_strict()
     check_testing_doc_budgets()
     check_red_at_sha_inject()
     check_red_at_sha_overlay_order()

@@ -35,6 +35,7 @@ mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
 export KERBER_SCRATCH="${KERBER_SCRATCH:-$OUT/scratch}"
 mkdir -p "$KERBER_SCRATCH"
+export KERBER_NEED_BINS_STRICT=1
 
 if pgrep -f 'scripts/[a-z0-9-]*-gate\.sh' >/dev/null || pgrep -x cargo >/dev/null; then
     echo "ABORT: a gate or cargo is already running" >&2

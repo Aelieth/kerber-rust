@@ -213,6 +213,7 @@ need_bins() {
     if [ "${KERBER_NEED_BINS_STRICT:-}" = 1 ]; then
         die "bins missing ($*); run scripts/lib/build-bins.sh"
     fi
+    log "need_bins: building missing bins ($*) (KERBER_NEED_BINS_STRICT unset)"
     "$ROOT/scripts/lib/build-bins.sh"
     for bin in "$@"; do
         if [ ! -x "$dest/$bin" ] && [ ! -x "$dest/examples/$bin" ]; then
