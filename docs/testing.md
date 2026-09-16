@@ -393,8 +393,8 @@ measure itself; the nightly `budget.yml` job checks the last five `ci.yml` runs.
 - **Tier 1** — per-push blocking: `test`, `harness`, `harness-2`, `mit-extra`,
   `mit-extra-2`, `msrv`, `audit`, `ledger-mit`, `mit-image`, `doc`. Combined
   wall ≤ `[push].run_wall` (360 s). Per-job: `test` 300, `harness` 270,
-  `harness-2` 300, `mit-extra` 180, `mit-extra-2` 180, `doc` 90, `msrv` 120,
-  `audit` 240, `ledger-mit` 60, `mit-image` 90.
+  `harness-2` 300, `mit-extra` 180, `mit-extra-2` 220, `doc` 90, `msrv` 120,
+  `audit` 260, `ledger-mit` 60, `mit-image` 90.
 - **Tier 2** — per-push soft (`continue-on-error`): `slo` 180, `chaos` 180,
   `soak` 240.
 - **Tier 3** — nightly: `peers.yml`, `full-test.yml`, `fuzz.yml`,

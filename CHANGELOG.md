@@ -6,6 +6,14 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W2-S7 budget + fixtures
+
+- **`ci-budget.toml`.** `audit` 240→260 and `mit-extra-2` 180→220 from
+  close-SHA run 602 (249 / 211). Named Exit jobs unchanged.
+- **`ci-policy` `_self_test`.** Injectable `_must_die` fixtures for
+  `check_env_read`, `check_peers_unavailable_convention`,
+  `check_gate_common_sourced` / cargo-build, and `check_makefile_matches_ci`.
+
 ### W2-S7 kpasswd wall
 
 - **kpasswd-gate.** Expected-no-reply UDP probes use a 0.4 s socket

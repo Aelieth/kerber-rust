@@ -2119,16 +2119,19 @@ def check_ci_status_save() -> None:
         _die("budget_overruns must accept durations under budget")
 
 
-def check_makefile_matches_ci() -> None:
+def check_makefile_matches_ci(mf: str | None = None, ci_text: str | None = None) -> None:
     """Makefile `safety` cargo order matches the ci.yml `test` job; doc is a sibling."""
-    makefile = ROOT / "Makefile"
-    if not makefile.is_file():
-        _die("missing Makefile")
-    mf = makefile.read_text()
-    ci_path = WORKFLOWS / "ci.yml"
-    if not ci_path.is_file():
-        _die("missing .github/workflows/ci.yml")
-    ci_wf = Workflow(ci_path, ci_path.read_text())
+    if mf is None:
+        makefile = ROOT / "Makefile"
+        if not makefile.is_file():
+            _die("missing Makefile")
+        mf = makefile.read_text()
+    if ci_text is None:
+        ci_path = WORKFLOWS / "ci.yml"
+        if not ci_path.is_file():
+            _die("missing .github/workflows/ci.yml")
+        ci_text = ci_path.read_text()
+    ci_wf = Workflow(pathlib.Path("ci.yml"), ci_text)
     test_job = ci_wf.jobs.get("test")
     doc_job = ci_wf.jobs.get("doc")
     if test_job is None:
@@ -2236,7 +2239,10 @@ def check_build_profile(
         _die("ci.yml must apt-get install lld")
 
 
-def check_env_read() -> None:
+def check_env_read(
+    wf_texts: dict[str, str] | None = None,
+    corpus_blob: str | None = None,
+) -> None:
     """Every env a workflow sets (except GitHub-provided) is read by a script or test."""
     allow = {
         "GITHUB_ENV",
@@ -2258,16 +2264,24 @@ def check_env_read() -> None:
         "SAMBA_KERBER_IMAGE",
         "CORRELATION_ID",
     }
-    env_re = re.compile(r"(?m)^\s{2,8}([A-Z][A-Z0-9_]+):\s")
-    corpus: list[str] = []
-    for path in sorted((ROOT / "scripts").rglob("*")):
-        if path.suffix in {".sh", ".py", ".rs", ".c"} and path.is_file():
+    if corpus_blob is None:
+        corpus: list[str] = []
+        for path in sorted((ROOT / "scripts").rglob("*")):
+            if path.suffix in {".sh", ".py", ".rs", ".c"} and path.is_file():
+                corpus.append(path.read_text(encoding="utf-8", errors="replace"))
+        for path in sorted((ROOT / "crates").rglob("*.rs")):
             corpus.append(path.read_text(encoding="utf-8", errors="replace"))
-    for path in sorted((ROOT / "crates").rglob("*.rs")):
-        corpus.append(path.read_text(encoding="utf-8", errors="replace"))
-    blob = "\n".join(corpus)
-    for wf_path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
-        text = wf_path.read_text(encoding="utf-8")
+        blob = "\n".join(corpus)
+    else:
+        blob = corpus_blob
+    if wf_texts is None:
+        wf_items = {
+            p.name: p.read_text(encoding="utf-8")
+            for p in sorted((ROOT / ".github" / "workflows").glob("*.yml"))
+        }
+    else:
+        wf_items = wf_texts
+    for wf_name, text in wf_items.items():
         in_env = False
         for line in text.splitlines():
             if re.match(r"^\s+env:\s*$", line):
@@ -2286,7 +2300,7 @@ def check_env_read() -> None:
                 if name in allow:
                     continue
                 if name not in blob:
-                    _die(f"{wf_path.name} sets {name} but no script/test reads it")
+                    _die(f"{wf_name} sets {name} but no script/test reads it")
 
 
 def check_trace_dst(texts: dict[str, str] | None = None) -> None:
@@ -2307,62 +2321,78 @@ def check_trace_dst(texts: dict[str, str] | None = None) -> None:
             _die(f"{name} must default TRACE_DST under KERBER_SCRATCH")
 
 
-def check_gate_common_sourced() -> None:
+GATE_COMMON_NEEDLES = (
+    "log()",
+    "die()",
+    "unavailable()",
+    "need_bins",
+    "need_image",
+    "gate_wall_s=",
+    "wait_port_in",
+    "wait_udp_in",
+    "wait_tcp_bound_in",
+    "wait_gone_in",
+    "wait_pid_gone",
+    "stock_mit_kdc",
+    "shell_container",
+    "mit_live_guard",
+    "mit_conf_restore",
+    "find /tmp -mindepth 1 -maxdepth 1",
+    "! -name 'build'",
+    "kdb5_util destroy",
+    "krb5.conf.kerber-stock",
+)
+
+
+def check_gate_common_sourced(
+    common_text: str | None = None,
+    gate_texts: dict[str, str] | None = None,
+) -> None:
     """Every gate sources gate-common.sh; no private log()/cleanup(); no cargo build."""
-    common = SCRIPTS / "lib" / "gate-common.sh"
-    if not common.is_file():
-        _die("missing scripts/lib/gate-common.sh")
-    ctext = common.read_text(encoding="utf-8")
-    for needle in (
-        "log()",
-        "die()",
-        "unavailable()",
-        "need_bins",
-        "need_image",
-        "gate_wall_s=",
-        "wait_port_in",
-        "wait_udp_in",
-        "wait_tcp_bound_in",
-        "wait_gone_in",
-        "wait_pid_gone",
-        "stock_mit_kdc",
-        "shell_container",
-        "mit_live_guard",
-        "mit_conf_restore",
-        "find /tmp -mindepth 1 -maxdepth 1",
-        "! -name 'build'",
-        "kdb5_util destroy",
-        "krb5.conf.kerber-stock",
-    ):
-        if needle not in ctext:
+    if common_text is None:
+        common = SCRIPTS / "lib" / "gate-common.sh"
+        if not common.is_file():
+            _die("missing scripts/lib/gate-common.sh")
+        common_text = common.read_text(encoding="utf-8")
+    for needle in GATE_COMMON_NEEDLES:
+        if needle not in common_text:
             _die(f"gate-common.sh missing {needle}")
-    for path in sorted(SCRIPTS.glob("*-gate.sh")):
-        text = path.read_text(encoding="utf-8")
+    if gate_texts is None:
+        items = {
+            p.name: p.read_text(encoding="utf-8")
+            for p in sorted(SCRIPTS.glob("*-gate.sh"))
+        }
+        live = True
+    else:
+        items = gate_texts
+        live = False
+    for name, text in items.items():
         if "scripts/lib/gate-common.sh" not in text:
-            _die(f"{path.name} must source scripts/lib/gate-common.sh")
+            _die(f"{name} must source scripts/lib/gate-common.sh")
         if re.search(r"^log\(\)", text, re.M):
-            _die(f"{path.name} still defines a private log()")
+            _die(f"{name} still defines a private log()")
         if re.search(r"^cleanup\(\)", text, re.M):
-            _die(f"{path.name} still defines a private cleanup()")
+            _die(f"{name} still defines a private cleanup()")
         if re.search(r"\bcargo\s+build\b", text):
-            _die(f"{path.name} must not run cargo build (use need_bins)")
-        check_gate_cargo_leftover(text, path.name)
-        check_gate_no_exit_trap(text, path.name)
-        if path.name in ("kadmin-rust-gate.sh", "kadmin-rust-acl-gate.sh", "kadmin-mit-gate.sh", "kadmin-both-gate.sh") and "kadmin-glob-cells.sh" not in text:
-            _die(f"{path.name} must source scripts/lib/kadmin-glob-cells.sh")
-        if path.name in ("kadmin-rust-gate.sh", "kadmin-mit-gate.sh"):
+            _die(f"{name} must not run cargo build (use need_bins)")
+        check_gate_cargo_leftover(text, name)
+        check_gate_no_exit_trap(text, name)
+        if name in ("kadmin-rust-gate.sh", "kadmin-rust-acl-gate.sh", "kadmin-mit-gate.sh", "kadmin-both-gate.sh") and "kadmin-glob-cells.sh" not in text:
+            _die(f"{name} must source scripts/lib/kadmin-glob-cells.sh")
+        if name in ("kadmin-rust-gate.sh", "kadmin-mit-gate.sh"):
             if re.search(r'wait_port_in\s+"\$NAME(_MIT)?"\s+1749', text):
-                _die(f"{path.name} tamper proxy is single-accept; use wait_tcp_bound_in, not wait_port_in")
+                _die(f"{name} tamper proxy is single-accept; use wait_tcp_bound_in, not wait_port_in")
             if "wait_tcp_bound_in" not in text:
-                _die(f"{path.name} must wait_tcp_bound_in for the integrity tamper proxy")
-        check_kadmin_split_snaps(text, path.name)
-        if path.name == "kcm-gate.sh":
+                _die(f"{name} must wait_tcp_bound_in for the integrity tamper proxy")
+        check_kadmin_split_snaps(text, name)
+        if name == "kcm-gate.sh":
             check_kcm_need_image(text)
         if re.search(r"krb5kdc -n >/tmp/mit-kdc.log 2>&1 & cat", text):
-            _die(f"{path.name} must wait_log for krb5kdc -n, not cat the log immediately")
-    check_kadmin_glob_lib()
-    check_s4_shared_boots()
-    check_build_bins_examples()
+            _die(f"{name} must wait_log for krb5kdc -n, not cat the log immediately")
+    if live:
+        check_kadmin_glob_lib()
+        check_s4_shared_boots()
+        check_build_bins_examples()
 
 
 def check_s4_shared_boots(ci_text: str | None = None) -> None:
@@ -2630,22 +2660,29 @@ def check_no_gate_cargo_build() -> None:
     check_gate_common_sourced()
 
 
-def check_peers_unavailable_convention() -> None:
+def check_peers_unavailable_convention(
+    wrapper_text: str | None = None,
+    peers_text: str | None = None,
+    ad_text: str | None = None,
+) -> None:
     """peers.yml maps gate exit 2 to step success; live kinit/kvno failures are exit 1."""
-    wrapper = SCRIPTS / "lib" / "run-peer-step.sh"
-    if not wrapper.is_file():
-        _die("missing scripts/lib/run-peer-step.sh")
-    wtext = wrapper.read_text(encoding="utf-8")
-    if "[ \"$rc\" -eq 2 ]" not in wtext and "[ \"$rc\" -eq 2 ]" not in wtext.replace(" ", ""):
-        if 'rc" -eq 2' not in wtext:
+    if wrapper_text is None:
+        wrapper = SCRIPTS / "lib" / "run-peer-step.sh"
+        if not wrapper.is_file():
+            _die("missing scripts/lib/run-peer-step.sh")
+        wrapper_text = wrapper.read_text(encoding="utf-8")
+    if "[ \"$rc\" -eq 2 ]" not in wrapper_text and "[ \"$rc\" -eq 2 ]" not in wrapper_text.replace(" ", ""):
+        if 'rc" -eq 2' not in wrapper_text:
             _die("run-peer-step.sh must treat exit 2 as unavailable (not a job failure)")
-    peers = (WORKFLOWS / "peers.yml").read_text(encoding="utf-8")
-    if "run-peer-step.sh" not in peers:
+    if peers_text is None:
+        peers_text = (WORKFLOWS / "peers.yml").read_text(encoding="utf-8")
+    if "run-peer-step.sh" not in peers_text:
         _die("peers.yml must wrap peer gates with run-peer-step.sh")
-    ad = (SCRIPTS / "samba-ad-gate.sh").read_text(encoding="utf-8")
-    if 'unavailable "kinit' in ad:
+    if ad_text is None:
+        ad_text = (SCRIPTS / "samba-ad-gate.sh").read_text(encoding="utf-8")
+    if 'unavailable "kinit' in ad_text:
         _die("samba-ad-gate.sh kinit failure against a listening KDC must exit 1, not unavailable")
-    if "exit 1" not in ad:
+    if "exit 1" not in ad_text:
         _die("samba-ad-gate.sh must exit 1 on live kinit/kvno failure")
 
 
@@ -3611,6 +3648,87 @@ jobs:
                 "      - run: cargo nextest run\n"
             )
         },
+    )
+    mf_ok = (
+        "safety: fmt clippy test policy\n"
+        "cargo fmt --all\n"
+        "cargo clippy --workspace --all-targets --all-features\n"
+        "cargo nextest run --workspace --profile ci\n"
+        "python3 scripts/ci-policy.py\n"
+        "cargo doc --workspace --no-deps\n"
+    )
+    ci_ok = (
+        "jobs:\n"
+        "  test:\n"
+        "    steps:\n"
+        "      - run: cargo fmt --all\n"
+        "      - run: cargo clippy --workspace --all-targets --all-features\n"
+        "      - run: cargo nextest run --workspace --profile ci\n"
+        "      - run: python3 scripts/ci-policy.py\n"
+        "  doc:\n"
+        "    steps:\n"
+        "      - run: cargo doc --workspace --no-deps\n"
+    )
+    check_makefile_matches_ci(mf_ok, ci_ok)
+    _must_die(
+        check_makefile_matches_ci,
+        "safety:\ncargo fmt --all\n",
+        ci_ok,
+    )
+    _must_die(
+        check_makefile_matches_ci,
+        mf_ok,
+        "jobs:\n  test:\n    steps:\n      - run: cargo fmt --all\n"
+        "      - run: cargo clippy --workspace --all-targets --all-features\n"
+        "      - run: cargo nextest run --workspace --profile ci\n"
+        "      - run: python3 scripts/ci-policy.py\n"
+        "      - run: cargo doc --workspace --no-deps\n"
+        "  doc:\n    steps:\n      - run: cargo doc --workspace --no-deps\n",
+    )
+    check_env_read(
+        {"ci.yml": "  env:\n    KERBER_READ: 1\n"},
+        "KERBER_READ is used here\n",
+    )
+    _must_die(
+        check_env_read,
+        {"ci.yml": "  env:\n    KERBER_UNREAD_XYZ: 1\n"},
+        "no reader for that name\n",
+    )
+    check_peers_unavailable_convention(
+        '[ "$rc" -eq 2 ] && exit 0\n',
+        "run-peer-step.sh\n",
+        "kinit failed; exit 1\n",
+    )
+    _must_die(
+        check_peers_unavailable_convention,
+        "echo no rc check\n",
+        "run-peer-step.sh\n",
+        "exit 1\n",
+    )
+    _must_die(
+        check_peers_unavailable_convention,
+        '[ "$rc" -eq 2 ]\n',
+        "no wrapper\n",
+        "exit 1\n",
+    )
+    _must_die(
+        check_peers_unavailable_convention,
+        '[ "$rc" -eq 2 ]\n',
+        "run-peer-step.sh\n",
+        'unavailable "kinit failed"\nexit 1\n',
+    )
+    common_ok = "\n".join(GATE_COMMON_NEEDLES) + "\n"
+    gate_ok = "scripts/lib/gate-common.sh\nneed_bins krb5-kdc\n"
+    check_gate_common_sourced(common_ok, {"ok-gate.sh": gate_ok})
+    _must_die(
+        check_gate_common_sourced,
+        common_ok.replace("wait_port_in", "no-wait"),
+        {"ok-gate.sh": gate_ok},
+    )
+    _must_die(
+        check_gate_common_sourced,
+        common_ok,
+        {"bad-gate.sh": "scripts/lib/gate-common.sh\ncargo build -p krb5-kdc\n"},
     )
     check_kadmin_glob_lib("hist_shape() { cat; }\nalias_cells() { :; }\n")
     _must_die(check_kadmin_glob_lib, "glob_cells() { :; }\n")
