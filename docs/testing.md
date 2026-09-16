@@ -390,10 +390,11 @@ Job walls live in `ci-budget.toml` (one source). `ci-status.py --check-budget`
 compares a completed SHA, or the last N runs, against that file. A run cannot
 measure itself; the nightly `budget.yml` job checks the last five `ci.yml` runs.
 
-- **Tier 1** — per-push blocking: `test`, `harness`, `mit-extra`, `msrv`,
-  `audit`, `ledger-mit`, `mit-image`, `doc`. Combined wall ≤ `[push].run_wall`
-  (540 s). Per-job: `test` 300, `harness` 500, `mit-extra` 300, `doc` 90,
-  `msrv` 120, `audit` 240, `ledger-mit` 60, `mit-image` 90.
+- **Tier 1** — per-push blocking: `test`, `harness`, `harness-2`, `mit-extra`,
+  `mit-extra-2`, `msrv`, `audit`, `ledger-mit`, `mit-image`, `doc`. Combined
+  wall ≤ `[push].run_wall` (360 s). Per-job: `test` 300, `harness` 270,
+  `harness-2` 300, `mit-extra` 180, `mit-extra-2` 180, `doc` 90, `msrv` 120,
+  `audit` 240, `ledger-mit` 60, `mit-image` 90.
 - **Tier 2** — per-push soft (`continue-on-error`): `slo` 180, `chaos` 180,
   `soak` 240.
 - **Tier 3** — nightly: `peers.yml`, `full-test.yml`, `fuzz.yml`,
@@ -417,8 +418,10 @@ three marked `continue-on-error`):
 | `audit` | `cargo audit`, `cargo deny`, `scripts/geiger.sh` (per-crate `cargo geiger`, 0-unsafe product), `cargo vet --locked` |
 | `ledger-mit` | fetches the SHA-pinned MIT 1.22.2 source and runs `scripts/ci-policy.py` (ledger anchors, tally, proof column, evidence rules) |
 | `mit-image` | builds or restores `kerber-rust-mit-kdc:1.22.2` and `kerber-rust-prod-node:latest` into `actions/cache` (no artifact round-trip) |
-| `harness` | After `run-harness`/`stop-harness` (client/ccache/knobs/config-include), one shared shell (`KERBER_SHELL`) and one stock MIT KDC (`KERBER_LIVE=1`). Then `kdc-gate`, `store-gate`, `bidirectional-gate`, `gss-gate`, `pkinit-gate`, `kadmin-rust-gate`, `kadmin-rust-acl-gate`, `kadmin-mit-gate`, `kadmin-both-gate` (local wrapper `kadmin-gate.sh`), `policy-gate`, `history-mit-gate`, `kpasswd-gate`, `kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `rd-safe-oracle-gate`, `cross-kdc-gate`, `iprop-gate`, `expire-gate`, `kdcpolicy-gate`, `flags-gate`, `renew-gate`, `postdate-gate`, `getprivs-gate`, `prop-acl-gate`, `restart-gate`, `prod-gate`, `prod-realm-gate`; `sssd-renew-gate`, `kit-conformance-gate`, `gssproxy-gate`, `nfs-krb5p-gate` run under `skip2` (an honest `exit 2` = oracle absent is not red) |
-| `mit-extra` | One shared shell + one stock MIT KDC, then `cross-realm-gate`, `capaths-transit-gate`, `capaths-compress-gate`, `spake-gate`, `rust-kinit-spake-gate`, `mit-fast-kdc-gate`, `rust-kinit-fast-gate`, `rust-kinit-pkinit-gate`, `rust-kinit-enterprise-gate`, `client-differential-gate`, `ktutil-gate`, `kadmin-local-gate`, `rust-kpasswd-mit-gate`, `sha2-gate`, `s4u-mit-gate`, `kcm-gate`, `rc4-session-gate` |
+| `harness` | After `run-harness`/`stop-harness` (client/ccache/knobs/config-include), one shared shell (`KERBER_SHELL`) and one stock MIT KDC (`KERBER_LIVE=1`). Then `kdc-gate`, `store-gate`, `bidirectional-gate`, `gss-gate`, `pkinit-gate`, `kadmin-rust-gate`, `kadmin-rust-acl-gate`, `kadmin-mit-gate`, `kadmin-both-gate` (local wrapper `kadmin-gate.sh`), `policy-gate`, `history-mit-gate` |
+| `harness-2` | One shared shell + one stock MIT KDC, then `kpasswd-gate`, `kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `rd-safe-oracle-gate`, `cross-kdc-gate`, `iprop-gate`, `expire-gate`, `kdcpolicy-gate`, `flags-gate`, `renew-gate`, `postdate-gate`, `getprivs-gate`, `prop-acl-gate`, `restart-gate`, `prod-gate`, `prod-realm-gate`; `sssd-renew-gate`, `kit-conformance-gate`, `gssproxy-gate`, `nfs-krb5p-gate` run under `skip2` |
+| `mit-extra` | One shared shell + one stock MIT KDC, then `cross-realm-gate`, `capaths-transit-gate`, `capaths-compress-gate`, `spake-gate`, `rust-kinit-spake-gate`, `mit-fast-kdc-gate`, `rust-kinit-fast-gate`, `rust-kinit-pkinit-gate`, `rust-kinit-enterprise-gate`, `ktutil-gate`, `kadmin-local-gate`, `rust-kpasswd-mit-gate`, `sha2-gate`, `rc4-session-gate` |
+| `mit-extra-2` | One shared shell + one stock MIT KDC, then `client-differential-gate`, `s4u-mit-gate`, `kcm-gate` |
 | `slo` (`continue-on-error`) | `stress-gate` over `harness/prod` |
 | `chaos` (`continue-on-error`) | `chaos-gate` |
 | `soak` (`continue-on-error`) | `soak-gate` (short run) |
