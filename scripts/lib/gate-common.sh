@@ -133,14 +133,14 @@ wait_port_in() {
 # a connect probe would steal the only accept().
 wait_bound_in() {
     local ctn="${1:-$NAME}" port="${2:-88}" n="${3:-80}" kind="${4:-udp}"
-    local sock i bound=0
+    local sock i
     case "$kind" in
         tcp) sock="socket.SOCK_STREAM" ;;
         udp) sock="socket.SOCK_DGRAM" ;;
         *) return 1 ;;
     esac
-    _bound() {
-        docker exec "$ctn" python3 -c "import socket,sys
+    for i in $(seq 1 "$n"); do
+        if docker exec "$ctn" python3 -c "import socket,sys
 s=socket.socket(socket.AF_INET, $sock)
 try:
     s.bind(('127.0.0.1', int('$port')))
@@ -148,19 +148,18 @@ try:
 except OSError:
     sys.exit(0)
 finally:
-    s.close()" 2>/dev/null
-    }
-    # Refuse a port that was already bound before this wait (stale proxy).
-    if _bound; then
-        return 1
-    fi
-    for i in $(seq 1 "$n"); do
-        if _bound; then
+    s.close()" 2>/dev/null; then
             return 0
         fi
         sleep 0.1
     done
     return 1
+}
+
+# Fail if the port is already bound (stale listener). Callers snapshot
+# this before starting a daemon, then wait_bound_in after.
+wait_bound_free_in() {
+    ! wait_bound_in "${1:-$NAME}" "${2:-88}" 1 "${3:-udp}"
 }
 
 wait_udp_in() { wait_bound_in "${1:-$NAME}" "${2:-88}" "${3:-80}" udp; }

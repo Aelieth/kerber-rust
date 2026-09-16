@@ -284,8 +284,12 @@ jobs:
         run: |
           ./scripts/lib/boot-shell.sh
           ./scripts/lib/boot-stock-mit.sh
-      - name: kpasswd-gate (MIT kpasswd vs kadmind 464)
-        run: ./scripts/kpasswd-gate.sh
+      - name: kpasswd-rust-gate
+        env:
+          KERBER_KPASSWD_KEEP: "1"
+        run: ./scripts/kpasswd-rust-gate.sh
+      - name: kpasswd-mit-gate
+        run: ./scripts/kpasswd-mit-gate.sh
       - name: kdb-dump-gate (MIT dump/load + kinit both directions)
         run: ./scripts/kdb-dump-gate.sh
       - name: differential-gate (same AS/TGS bytes to Rust and MIT)

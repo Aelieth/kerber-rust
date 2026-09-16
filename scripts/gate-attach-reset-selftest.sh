@@ -36,10 +36,10 @@ s.bind(('127.0.0.1', 1888))
 time.sleep(30)
 " >/dev/null
 sleep 0.3
-wait_bound_in "$NAME" 1888 5 udp && {
-    echo "wait_bound_in must fail on a pre-bound port" >&2
+if wait_bound_free_in "$NAME" 1888 udp; then
+    echo "wait_bound_free_in must fail on a pre-bound port" >&2
     exit 1
-}
+fi
 
 # Attach-reset must kill the stray and leave 1888 free.
 KERBER_SHELL="$NAME" shell_container

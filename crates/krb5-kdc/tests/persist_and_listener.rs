@@ -735,6 +735,12 @@ fn serve_until_honours_shutdown_within_the_poll_interval() {
             },
         );
     });
+    // Prove the UDP loop is in recv (the flag is checked only around the
+    // blocking read). Setting the flag before the first recv returns in
+    // microseconds and does not exercise shutdown_poll.
+    let probe = UdpSocket::bind("127.0.0.1:0").unwrap();
+    probe.send_to(&[0u8], addr).unwrap();
+    thread::sleep(Duration::from_millis(20));
     let t0 = Instant::now();
     flag.store(true, Ordering::SeqCst);
     handle.join().unwrap();

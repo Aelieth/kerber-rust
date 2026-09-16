@@ -235,6 +235,7 @@ DOCUMENTED_STUBS = frozenset(
         "gss-sspi-gate.sh",
         "ad-mit-trust-gate.sh",
         "kadmin-gate.sh",  # local wrapper; CI runs rust+mit+both steps
+        "kpasswd-gate.sh",  # local wrapper; CI runs rust+mit steps
     }
 )
 
