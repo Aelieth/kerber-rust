@@ -29,7 +29,7 @@ case "$OUT" in /*) ;; *) OUT="$CALLER_PWD/$OUT" ;; esac
 # Lab realm only (W3-S1): never a host whose /etc/krb5.conf names a real realm.
 # shellcheck source=lib/lab-realm.sh
 . "$ROOT/scripts/lib/lab-realm.sh"
-require_lab_realm
+require_lab_realm "$HOST_KRB5_CONF"
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
 # provenance.sh scratches under KERBER_SCRATCH, never host /tmp.
@@ -45,8 +45,8 @@ if [ -f "$SRC_ROOT/scripts/lib/provenance.sh" ]; then
     ) >"$OUT/provenance.txt" 2>&1 || true
 fi
 {
-    echo "host_krb5_default_realm=$(host_default_realm)"
-    echo "lab_realm_override=$(lab_realm_override)"
+    echo "host_krb5_default_realm=$(host_default_realm "$HOST_KRB5_CONF")"
+    echo "lab_realm_override=$(lab_realm_override "$HOST_KRB5_CONF")"
 } >>"$OUT/provenance.txt"
 
 args=(--root "$SRC_ROOT" --out "$OUT")

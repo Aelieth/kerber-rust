@@ -137,7 +137,7 @@ if [ "$PLAN" != 1 ]; then
     # Lab realm only (W3-S1): never a host whose /etc/krb5.conf names a real realm.
     # shellcheck source=lib/lab-realm.sh
     . scripts/lib/lab-realm.sh
-    require_lab_realm
+    require_lab_realm "$HOST_KRB5_CONF"
     mkdir -p "$OUT"
     OUT="$(cd "$OUT" && pwd)"
     export KERBER_SCRATCH="${KERBER_SCRATCH:-$OUT/scratch}"
@@ -163,8 +163,8 @@ if [ "$PLAN" != 1 ]; then
         printf '%s\n' "$STAMP"
         echo "dirty_files=$(git status --porcelain | wc -l)"
         echo "started=$(date -Is)"
-        echo "host_krb5_default_realm=$(host_default_realm)"
-        echo "lab_realm_override=$(lab_realm_override)"
+        echo "host_krb5_default_realm=$(host_default_realm "$HOST_KRB5_CONF")"
+        echo "lab_realm_override=$(lab_realm_override "$HOST_KRB5_CONF")"
         echo "nproc=$(nproc)"
     } >"$OUT/00-head.txt"
 

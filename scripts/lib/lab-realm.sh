@@ -6,17 +6,24 @@
 # shellcheck shell=bash
 
 LAB_REALM="TESTLABBY.LOCAL"
+# The file the runners guard on. Every function below takes the conf path as its
+# argument (defaulting to this file) — the runners pass the constant by name;
+# fixtures and self-tests pass their own.
+HOST_KRB5_CONF="/etc/krb5.conf"
 
-# The value of the first `default_realm` line in /etc/krb5.conf, or empty.
+# host_default_realm CONF: the value of the first live `default_realm = X` line
+# (the key at the start of the line, optionally indented) in CONF, or empty.
+# Anchored so a commented-out `# default_realm = TESTLABBY.LOCAL` above the real
+# setting cannot satisfy the guard (W3-S1 audit R3).
 host_default_realm() {
-    /usr/bin/grep -m1 'default_realm' /etc/krb5.conf 2>/dev/null \
+    /usr/bin/grep -m1 -E '^[[:space:]]*default_realm[[:space:]]*=' "${1:-$HOST_KRB5_CONF}" 2>/dev/null \
         | sed 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*$//'
 }
 
-# Exit 2 unless the host realm is the lab stub or the override is set.
+# require_lab_realm CONF: exit 2 unless CONF's realm is the lab stub or the override is set.
 require_lab_realm() {
     local realm
-    realm="$(host_default_realm)"
+    realm="$(host_default_realm "${1:-$HOST_KRB5_CONF}")"
     if [ "$realm" = "$LAB_REALM" ] || [ "${KERBER_ALLOW_HOST_REALM:-0}" = 1 ]; then
         return 0
     fi
@@ -25,9 +32,10 @@ require_lab_realm() {
     exit 2
 }
 
-# "no" on the lab realm, "yes" when running under the override (call after require_lab_realm).
+# lab_realm_override CONF: "no" on the lab realm, "yes" when running under the
+# override (call after require_lab_realm).
 lab_realm_override() {
     local override=yes
-    [ "$(host_default_realm)" != "$LAB_REALM" ] || override=no
+    [ "$(host_default_realm "${1:-$HOST_KRB5_CONF}")" != "$LAB_REALM" ] || override=no
     echo "$override"
 }
