@@ -6,6 +6,16 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S2.1 drop the eight a2_*_parent red-inject files
+
+- **test.** The eight `crates/krb5-kdc/tests/a2_*_parent.rs` binaries
+  (1,824 LOC, 36 tests) are deleted. Red-at-parent stays a capture-time
+  overlay (`red-at-sha.sh --inject` + `unit-red-check.py`); nothing at
+  HEAD read these files. 35 tests share a name with the green twin (15
+  byte-identical, 20 cosmetic); `u2u_host_tgt_issues_kvno_none` is
+  subsumed by `u2u_host_tgt_issues_kvno_zero`. `unit-red-check.py` and
+  `unit-evidence.sh` are byte-unchanged.
+
 ### W3-S1 lints, toolchain, dependencies, CI shape
 
 - **Evidence runners.** `checkpoint.sh` and `hygiene-snapshot.sh` refuse
