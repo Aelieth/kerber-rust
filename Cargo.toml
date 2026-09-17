@@ -39,7 +39,7 @@ krb5-admin = { path = "crates/krb5-admin" }
 aes = "0.8"
 camellia = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["alloc", "clock", "std"] }
-cmac = "0.7"
+cmac = "0.8"
 des = "0.8"
 getrandom = "0.2"
 hmac = "0.12"
