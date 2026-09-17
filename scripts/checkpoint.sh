@@ -454,6 +454,13 @@ write_index() {
         done
         echo "| \`scratch/\` | gate \`KERBER_SCRATCH\` (skipped by index-check) |"
     } >"$OUT/INDEX.md"
+    # Taken into a hygiene snapshot directory (the W3 shape: <snap>/checkpoint/)?
+    # Then the snapshot's INDEX.md predates this run; have its writer name us.
+    local parent="${OUT%/*}"
+    if [ -f "$parent/INDEX.md" ] && [ "$(head -n1 "$parent/INDEX.md")" = "# hygiene snapshot" ]; then
+        python3 scripts/lib/hygiene_inventory.py --reindex "$parent" \
+            || echo "checkpoint: snapshot reindex of $parent failed (INDEX.md rows must be added by hand)" >&2
+    fi
 }
 
 if [ "$SKIP_POLICY" != 1 ]; then

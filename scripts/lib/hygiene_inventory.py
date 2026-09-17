@@ -849,6 +849,91 @@ def claim_audits(root: pathlib.Path) -> list[str]:
     return rows
 
 
+# The two `checkpoint*` shapes a later `scripts/checkpoint.sh --out <snapshot>/checkpoint`
+# run leaves beside the snapshot: the directory (it writes its own INDEX.md) and
+# a runner's captured stdout/stderr. Named here so index-check needs no hand rows.
+def checkpoint_rows(out: pathlib.Path) -> list[str]:
+    rows = []
+    for entry in sorted(out.glob("checkpoint*")):
+        if entry.is_dir():
+            rows.append(
+                f"| `{entry.name}/` | `scripts/checkpoint.sh --out` taken into this directory "
+                "after the snapshot; own `INDEX.md` written by checkpoint.sh |"
+            )
+        else:
+            rows.append(f"| `{entry.name}` | stdout/stderr of the checkpoint run beside the snapshot |")
+    return rows
+
+
+def write_index(out: pathlib.Path, quality: bool, counts: dict[str, object], q: list[str]) -> None:
+    """INDEX.md: one row per file (index-check.py names files, it does not expand globs)."""
+    index = [
+        "# hygiene snapshot",
+        "",
+        "| File | What |",
+        "|---|---|",
+        "| `tests.txt` | nextest binary + test name |",
+        "| `tests.count` | number of tests |",
+        "| `gates.txt` | cell tags (section/echo/flow/workflow) |",
+        "| `gate-asserts.txt` | `die` / `grep -q` / `diff <(` counts per gate |",
+        "| `sleeps.txt` | gate sleep sites |",
+        "| `cargo-build-gates.txt` | gates that run cargo build |",
+        "| `boots.txt` | static docker-run / rust-kdc sites |",
+        "| `diffsend.txt` | diffsend case names |",
+        "| `client-differential-flows.txt` | client-differential flow names |",
+        "| `ledger-rows.txt` | MIT cite + verdict |",
+        "| `ledger-recount.txt` | ci-policy recount |",
+        "| `ci-policy.txt` | `ci-policy.py` rc + tail |",
+        "| `claim-audit.txt` | `claim-audit.py` rc per `working/summary-*.md` |",
+        "| `unit-sleeps.txt` | thread::sleep in crates/*/tests |",
+        "| `crates.txt` / `binaries.txt` | workspace packages and their bin targets |",
+        "| `deps-declared.txt` / `deps.txt` | per-package declarations / resolved `cargo tree` |",
+        "| `loc-crates.txt` / `loc-files.txt` | LOC, SLOC, comment, doc, blank per package / file |",
+        "| `pub-items.txt` | `pub` vs restricted items per package |",
+        "| `fn-sizes.txt` | functions > 40 lines with scope, visibility, doc header |",
+        "| `allow-sites.txt` / `process-history.txt` | `#[allow]` sites / process-tag comments |",
+        "| `quality.txt` | grep counts; with `--quality` fmt/clippy/doc/doctest/missing_docs/shellcheck |",
+    ]
+    if quality:
+        index += [
+            "| `clippy.log` | `cargo clippy --workspace --all-targets --all-features -- -D warnings` |",
+            "| `doc.log` / `doc-strict.log` | `cargo doc --workspace --no-deps` plain (the warning count) / under `RUSTDOCFLAGS=-D warnings` (the rc) |",
+            "| `doctest.log` | `cargo test --workspace --doc` |",
+            "| `undocumented-pub.txt` / `undocumented-pub-items.txt` | `missing_docs` per package / per site |",
+            "| `shellcheck.txt` | `shellcheck -S style -f gcc` findings |",
+        ]
+    index += [
+        "| `provenance.txt` | stamp from snapshot.sh (+ host realm and lab_realm_override) |",
+        "| `scratch/` | `KERBER_SCRATCH` of the snapshot run (skipped by index-check) |",
+    ]
+    index += checkpoint_rows(out)
+    index += [""] + [f"{k}={v}" for k, v in counts.items()]
+    index.extend(q)
+    (out / "INDEX.md").write_text("\n".join(index) + "\n", encoding="utf-8")
+
+
+def data_lines(path: pathlib.Path) -> int:
+    """Rows in a write_lines() file: every line after the `#` header."""
+    return sum(1 for ln in path.read_text(encoding="utf-8").splitlines() if not ln.startswith("#"))
+
+
+def reindex(out: pathlib.Path) -> None:
+    """Rewrite INDEX.md from what is on disk (same rows as the snapshot wrote, plus
+    any `checkpoint*` entry taken into the directory since). Counts come from the
+    inventory files themselves, so nothing is recomputed from the tree."""
+    q = [ln for ln in (out / "quality.txt").read_text(encoding="utf-8").splitlines() if not ln.startswith("#")]
+    quality = "quality=1" in q
+    counts = {
+        "tests": (out / "tests.count").read_text(encoding="utf-8").strip(),
+        "gate_tags": data_lines(out / "gates.txt"),
+        "diffsend": data_lines(out / "diffsend.txt"),
+        "flows": data_lines(out / "client-differential-flows.txt"),
+        "ledger_rows": data_lines(out / "ledger-rows.txt"),
+        "cargo_build_gates": data_lines(out / "cargo-build-gates.txt"),
+    }
+    write_index(out, quality, counts, q)
+
+
 def snapshot(root: pathlib.Path, out: pathlib.Path, skip_nextest: bool, quality: bool) -> None:
     out.mkdir(parents=True, exist_ok=True)
     if skip_nextest:
@@ -933,64 +1018,41 @@ def snapshot(root: pathlib.Path, out: pathlib.Path, skip_nextest: bool, quality:
         q.extend(quality_compiler(root, out, members))
     write_lines(out / "quality.txt", "# key=value", q)
 
-    index = [
-        "# hygiene snapshot",
-        "",
-        "| File | What |",
-        "|---|---|",
-        "| `tests.txt` | nextest binary + test name |",
-        "| `tests.count` | number of tests |",
-        "| `gates.txt` | cell tags (section/echo/flow/workflow) |",
-        "| `gate-asserts.txt` | `die` / `grep -q` / `diff <(` counts per gate |",
-        "| `sleeps.txt` | gate sleep sites |",
-        "| `cargo-build-gates.txt` | gates that run cargo build |",
-        "| `boots.txt` | static docker-run / rust-kdc sites |",
-        "| `diffsend.txt` | diffsend case names |",
-        "| `client-differential-flows.txt` | client-differential flow names |",
-        "| `ledger-rows.txt` | MIT cite + verdict |",
-        "| `ledger-recount.txt` | ci-policy recount |",
-        "| `ci-policy.txt` | `ci-policy.py` rc + tail |",
-        "| `claim-audit.txt` | `claim-audit.py` rc per `working/summary-*.md` |",
-        "| `unit-sleeps.txt` | thread::sleep in crates/*/tests |",
-        "| `crates.txt` / `binaries.txt` | workspace packages and their bin targets |",
-        "| `deps-declared.txt` / `deps.txt` | per-package declarations / resolved `cargo tree` |",
-        "| `loc-crates.txt` / `loc-files.txt` | LOC, SLOC, comment, doc, blank per package / file |",
-        "| `pub-items.txt` | `pub` vs restricted items per package |",
-        "| `fn-sizes.txt` | functions > 40 lines with scope, visibility, doc header |",
-        "| `allow-sites.txt` / `process-history.txt` | `#[allow]` sites / process-tag comments |",
-        "| `quality.txt` | grep counts; with `--quality` fmt/clippy/doc/doctest/missing_docs/shellcheck |",
-    ]
-    if quality:
-        # One row per file: index-check.py names files, it does not expand globs.
-        index += [
-            "| `clippy.log` | `cargo clippy --workspace --all-targets --all-features -- -D warnings` |",
-            "| `doc.log` / `doc-strict.log` | `cargo doc --workspace --no-deps` plain (the warning count) / under `RUSTDOCFLAGS=-D warnings` (the rc) |",
-            "| `doctest.log` | `cargo test --workspace --doc` |",
-            "| `undocumented-pub.txt` / `undocumented-pub-items.txt` | `missing_docs` per package / per site |",
-            "| `shellcheck.txt` | `shellcheck -S style -f gcc` findings |",
-        ]
-    index += [
-        "| `provenance.txt` | stamp from snapshot.sh (+ host realm and lab_realm_override) |",
-        "| `scratch/` | `KERBER_SCRATCH` of the snapshot run (skipped by index-check) |",
-        "",
-        f"tests={(out / 'tests.count').read_text(encoding='utf-8').strip()}",
-        f"gate_tags={len(cells)}",
-        f"diffsend={len(cases)}",
-        f"flows={len(flows)}",
-        f"ledger_rows={len(rows)}",
-        f"cargo_build_gates={len(builds)}",
-    ]
-    index.extend(q)
-    (out / "INDEX.md").write_text("\n".join(index) + "\n", encoding="utf-8")
+    write_index(
+        out,
+        quality,
+        {
+            "tests": (out / "tests.count").read_text(encoding="utf-8").strip(),
+            "gate_tags": len(cells),
+            "diffsend": len(cases),
+            "flows": len(flows),
+            "ledger_rows": len(rows),
+            "cargo_build_gates": len(builds),
+        },
+        q,
+    )
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--root", type=pathlib.Path, required=True)
-    ap.add_argument("--out", type=pathlib.Path, required=True)
+    ap.add_argument("--root", type=pathlib.Path)
+    ap.add_argument("--out", type=pathlib.Path)
     ap.add_argument("--skip-nextest", action="store_true")
     ap.add_argument("--quality", action="store_true")
+    ap.add_argument(
+        "--reindex",
+        type=pathlib.Path,
+        metavar="SNAPSHOT",
+        help="rewrite SNAPSHOT/INDEX.md from the files on disk (names a checkpoint taken since)",
+    )
     args = ap.parse_args()
+    if args.reindex is not None:
+        if args.root or args.out or args.skip_nextest or args.quality:
+            ap.error("--reindex takes no other option")
+        reindex(args.reindex.resolve())
+        return 0
+    if args.root is None or args.out is None:
+        ap.error("--root and --out are required")
     snapshot(args.root.resolve(), args.out.resolve(), args.skip_nextest, args.quality)
     return 0
 
