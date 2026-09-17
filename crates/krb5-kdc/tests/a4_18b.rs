@@ -9,7 +9,7 @@ use krb5_kdc::{
     wrap_win2k_pac,
 };
 use krb5_protocol::{pa_for_user, pa_pac_options, tgs_req, tgs_req_ex};
-use krb5_testkit::pref_etypes;
+use krb5_testkit::{aes_key, pref_etypes};
 use krb5_types::pac::{
     PAC_CLIENT_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer, parse_client_info,
 };
@@ -187,10 +187,6 @@ fn a4_18_renew_skips_alternate_tgs() {
         }
         other => panic!("RENEW must not alternate, got {other:?}"),
     }
-}
-
-fn aes_key(b: u8) -> ProtocolKey {
-    ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[b; 32]).expect("key")
 }
 
 fn attach_pac(key: &ProtocolKey, part: &mut EncTicketPart, info_name: &str) {

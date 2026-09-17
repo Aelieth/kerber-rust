@@ -1,21 +1,17 @@
 //! A′-2 R16: incoming-trust principals and realm-aware TGS lookup.
 
 use krb5_asn1::encode;
-use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, encrypt};
+use krb5_crypto::{KeyUsage, encrypt};
 use krb5_kdc::{
     PrincipalStore, RID_KRBTGT, TEST_REALM, TEST_USER, as_req, bootstrap_documented,
     decrypt_ticket_part, documented_admin_id, documented_host, dump_store, dump_store_iprop,
     load_dump, pa_enc_timestamp,
 };
 use krb5_protocol::{tgs_req, tgs_req_ex};
-use krb5_testkit::pref_etypes;
+use krb5_testkit::{aes_key, pref_etypes};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit, ku};
 
 const FOREIGN: &str = "AD.KERBER.TEST";
-
-fn aes_key(b: u8) -> ProtocolKey {
-    ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[b; 32]).expect("key")
-}
 
 fn issue_tgt(
     store: &PrincipalStore,

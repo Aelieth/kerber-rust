@@ -10,9 +10,10 @@ this project uses semantic versioning once a crate is published.
 
 - **test.** `crates/krb5-testkit` (`publish = false`, a `krb5-kdc`
   dev-dependency) holds helpers that were copied across KDC test
-  binaries. First family: `pref_etypes()` — the 15 remaining copies
-  (two spellings of `EncryptionType::preferred()` → IANA numbers) now
-  call the one function. Assertion text in those files is unchanged.
+  binaries. `pref_etypes()` — the 15 remaining copies (two spellings of
+  `EncryptionType::preferred()` → IANA numbers). `aes_key(seed)` — the
+  five identical AES-256 repeated-byte keys. Assertion text in those
+  files is unchanged.
 
 ### W3-S2.1 drop the eight a2_*_parent red-inject files
 
