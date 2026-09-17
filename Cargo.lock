@@ -628,6 +628,7 @@ name = "krb5-testkit"
 version = "1.0.0"
 dependencies = [
  "krb5-crypto",
+ "krb5-kdc",
 ]
 
 [[package]]

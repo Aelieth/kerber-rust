@@ -3,37 +3,17 @@
 use krb5_asn1::encode;
 use krb5_crypto::{KeyUsage, ProtocolKey, encrypt};
 use krb5_kdc::{
-    PacTicket, PrincipalStore, TEST_ADMIN, TEST_REALM, as_req, bootstrap_documented,
-    decrypt_ticket_part, documented_admin_id, documented_host, pa_enc_timestamp, sign_reply_pac,
-    ticket_checksum_der, wrap_win2k_pac,
+    PacTicket, TEST_ADMIN, TEST_REALM, bootstrap_documented, decrypt_ticket_part,
+    documented_admin_id, documented_host, sign_reply_pac, ticket_checksum_der, wrap_win2k_pac,
 };
 use krb5_protocol::{pa_for_user, pa_s4u_x509_user, tgs_req_ex};
-use krb5_testkit::{aes_key, pref_etypes};
+use krb5_testkit::{aes_key, host_tgt, pref_etypes};
 use krb5_types::pac::{PAC_CLIENT_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer};
 use krb5_types::{
     EncTicketPart, EncryptedData, KdcOptions, PaData, PrincipalName, Ticket, err, flag_bit, ku, pa,
 };
 
 const FOREIGN: &str = "OTHER.TEST";
-
-fn host_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
-    let host = documented_host();
-    let key = store
-        .get_name(&host)
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
-    let req = as_req(
-        host,
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    krb5_kdc::issue_as(store, &req).unwrap()
-}
 
 fn s4u_tgs(
     tgt: &krb5_kdc::IssuedAs,

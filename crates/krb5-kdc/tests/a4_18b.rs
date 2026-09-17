@@ -9,7 +9,7 @@ use krb5_kdc::{
     wrap_win2k_pac,
 };
 use krb5_protocol::{pa_for_user, pa_pac_options, tgs_req, tgs_req_ex};
-use krb5_testkit::{aes_key, pref_etypes};
+use krb5_testkit::{aes_key, host_tgt, pref_etypes};
 use krb5_types::pac::{
     PAC_CLIENT_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer, parse_client_info,
 };
@@ -236,25 +236,6 @@ fn reseal_incoming(key: &ProtocolKey, tgt: &krb5_kdc::IssuedAs, part: &EncTicket
             cipher: encrypt(key, usage, &der).unwrap().into(),
         },
     }
-}
-
-fn host_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
-    let host = documented_host();
-    let key = store
-        .get_name(&host)
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
-    let req = as_req(
-        host,
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    krb5_kdc::issue_as(store, &req).unwrap()
 }
 
 fn evidence_for_user(store: &PrincipalStore, nonce: u32) -> Ticket {

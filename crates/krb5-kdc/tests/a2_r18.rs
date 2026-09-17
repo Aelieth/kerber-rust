@@ -8,7 +8,7 @@ use krb5_kdc::{
     pac_from_ticket_part, sign_reply_pac, ticket_checksum_der, wrap_win2k_pac,
 };
 use krb5_protocol::{pa_pac_options, tgs_req_ex};
-use krb5_testkit::{aes_key, pref_etypes};
+use krb5_testkit::{aes_key, host_tgt, pref_etypes};
 use krb5_types::pac::{
     PAC_CLIENT_INFO, PAC_DELEGATION_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer,
     parse_client_info, parse_delegation_info,
@@ -20,25 +20,6 @@ use krb5_types::{
 const FOREIGN: &str = "OTHER.TEST";
 const SUBJECT: &str = "alice";
 const SUBJECT_REALM: &str = "ALICE.TEST";
-
-fn host_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
-    let host = documented_host();
-    let key = store
-        .get_name(&host)
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
-    let req = as_req(
-        host,
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    krb5_kdc::issue_as(store, &req).unwrap()
-}
 
 fn code(e: krb5_kdc::Error) -> (i32, Option<String>) {
     match e {

@@ -12,8 +12,9 @@ this project uses semantic versioning once a crate is published.
   dev-dependency) holds helpers that were copied across KDC test
   binaries. `pref_etypes()` — the 15 remaining copies (two spellings of
   `EncryptionType::preferred()` → IANA numbers). `aes_key(seed)` — the
-  five identical AES-256 repeated-byte keys. Assertion text in those
-  files is unchanged.
+  five identical AES-256 repeated-byte keys. `host_tgt` — the five
+  identical documented-host AS TGTs. Assertion text in those files is
+  unchanged.
 
 ### W3-S2.1 drop the eight a2_*_parent red-inject files
 

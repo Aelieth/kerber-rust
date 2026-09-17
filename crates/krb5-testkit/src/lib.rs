@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 use krb5_crypto::{EncryptionType, ProtocolKey};
+use krb5_kdc::{IssuedAs, PrincipalStore, TEST_REALM, as_req, documented_host, pa_enc_timestamp};
 
 /// IANA etype numbers in MIT `preferred()` order.
 ///
@@ -30,4 +31,33 @@ pub fn pref_etypes() -> Vec<i32> {
 #[must_use]
 pub fn aes_key(seed: u8) -> ProtocolKey {
     ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[seed; 32]).expect("key")
+}
+
+/// AS-issued TGT for the documented POSIX host principal.
+///
+/// Replaces the five identical `host_tgt` copies in `krb5-kdc` tests.
+///
+/// # Panics
+///
+/// Panics if the documented host is missing from `store`, has no key,
+/// timestamp preauth fails, or `issue_as` fails — the same unwraps the
+/// local copies used.
+#[must_use]
+pub fn host_tgt(store: &PrincipalStore, nonce: u32) -> IssuedAs {
+    let host = documented_host();
+    let key = store
+        .get_name(&host)
+        .unwrap()
+        .best_key()
+        .unwrap()
+        .key
+        .clone();
+    let req = as_req(
+        host,
+        TEST_REALM,
+        nonce,
+        Some(vec![pa_enc_timestamp(&key).unwrap()]),
+    )
+    .unwrap();
+    krb5_kdc::issue_as(store, &req).unwrap()
 }
