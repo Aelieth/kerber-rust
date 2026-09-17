@@ -497,7 +497,6 @@ dependencies = [
  "krb5-config",
  "krb5-crypto",
  "krb5-kdc",
- "krb5-log",
  "krb5-protocol",
  "krb5-types",
  "nix",
@@ -510,11 +509,9 @@ dependencies = [
 name = "krb5-config"
 version = "1.0.0"
 dependencies = [
- "krb5-log",
  "krb5-types",
  "nix",
  "thiserror",
- "tracing",
 ]
 
 [[package]]
@@ -523,9 +520,7 @@ version = "1.0.0"
 dependencies = [
  "krb5-asn1",
  "krb5-crypto",
- "krb5-log",
  "krb5-types",
- "tracing",
  "tracing-subscriber",
 ]
 
@@ -562,12 +557,10 @@ dependencies = [
  "krb5-asn1",
  "krb5-crypto",
  "krb5-kdc",
- "krb5-log",
  "krb5-protocol",
  "krb5-types",
  "md-5",
  "thiserror",
- "tracing",
  "tracing-subscriber",
 ]
 
@@ -589,7 +582,6 @@ dependencies = [
  "thiserror",
  "tracing",
  "tracing-subscriber",
- "zeroize",
 ]
 
 [[package]]
@@ -602,7 +594,6 @@ dependencies = [
  "krb5-kdc",
  "krb5-protocol",
  "krb5-types",
- "tracing",
  "tracing-subscriber",
 ]
 
@@ -617,7 +608,6 @@ dependencies = [
 name = "krb5-protocol"
 version = "1.0.0"
 dependencies = [
- "chrono",
  "getrandom 0.2.17",
  "krb5-asn1",
  "krb5-config",
@@ -629,7 +619,6 @@ dependencies = [
  "sha1",
  "thiserror",
  "tracing",
- "tracing-subscriber",
  "zeroize",
 ]
 

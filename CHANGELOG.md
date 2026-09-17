@@ -33,6 +33,18 @@ this project uses semantic versioning once a crate is published.
   `msrv-test` jobs pin `RUSTUP_TOOLCHAIN: 1.95`; `fuzz/Cargo.toml` gains
   `rust-version`; `ci-policy.py check_msrv_pinned` asserts both manifests,
   the channel and both jobs agree on 1.95.
+- **Dependencies.** The 11 unused declarations removed (`krb5-log` from
+  client/config/gss/consumer, `tracing` from config/gss/consumer/kdc-consumer,
+  `zeroize` from kdc, `chrono` and dev `tracing-subscriber` from protocol)
+  and the duplicate `sha2` dev line; `Cargo.lock` loses 11 edges and no
+  package. `krb5_log`: the never-emitted `events::{HARNESS_START,
+  HARNESS_KDC_READY, HARNESS_KINIT, PROTOCOL_AP_REP, GSS, CONFIG}` and the
+  ten unused `FIELD_*` constants deleted (`events::ADMIN` is emitted and
+  stays); `docs/logging.md` names the components that log. `deny.toml`:
+  `yanked = "deny"`, explicit empty `ignore`, `multiple-versions = "deny"`
+  with `getrandom 0.4` and `syn 3` as the only skips, `wildcards = "deny"`
+  (`allow-wildcard-paths` for the version-less path deps), licence list
+  trimmed to the four the lock uses.
 
 ### W3-S0 comparison baseline
 

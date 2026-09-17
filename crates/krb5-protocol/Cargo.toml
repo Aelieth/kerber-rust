@@ -139,7 +139,6 @@ name = "b2_fwd_tgt"
 path = "tests/b2_fwd_tgt.rs"
 
 [dependencies]
-chrono.workspace = true
 getrandom.workspace = true
 krb5-asn1.workspace = true
 krb5-config.workspace = true
@@ -154,7 +153,6 @@ zeroize.workspace = true
 
 [dev-dependencies]
 krb5-kdc.workspace = true
-tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

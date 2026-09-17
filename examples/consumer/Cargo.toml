@@ -11,9 +11,7 @@ publish.workspace = true
 [dependencies]
 krb5-asn1.workspace = true
 krb5-crypto.workspace = true
-krb5-log.workspace = true
 krb5-types.workspace = true
-tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [lints]

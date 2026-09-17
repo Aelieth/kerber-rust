@@ -11,7 +11,7 @@
 //! | --- | --- |
 //! | `event` | Stable name from [`events`] |
 //! | `correlation_id` | Hex ID tying one operation together |
-//! | `component` | Emitting crate (`krb5-crypto`, `krb5-asn1`, `harness`) |
+//! | `component` | Emitting crate (`krb5-crypto`, `krb5-asn1`, `krb5-protocol`, `krb5-kdc`, `krb5-admin`, `krb5-client`) |
 //! | `outcome` | `"ok"` or `"error"` |
 //!
 //! Crypto operations also emit `etype` (IANA number), `key_usage`, and
@@ -39,12 +39,6 @@ pub mod events {
     pub const ASN1_ENCODE: &str = "asn1.encode";
     /// DER decode finished.
     pub const ASN1_DECODE: &str = "asn1.decode";
-    /// MIT KDC harness process started.
-    pub const HARNESS_START: &str = "harness.start";
-    /// MIT KDC is accepting clients.
-    pub const HARNESS_KDC_READY: &str = "harness.kdc.ready";
-    /// In-harness `kinit` finished.
-    pub const HARNESS_KINIT: &str = "harness.kinit";
     /// AS-REQ sent or AS-REP processed.
     pub const PROTOCOL_AS: &str = "protocol.as";
     /// TGS-REQ sent or TGS-REP processed.
@@ -59,42 +53,15 @@ pub mod events {
     pub const KDC_ACL: &str = "kdc.acl";
     /// AP-REQ verified or rejected.
     pub const PROTOCOL_AP: &str = "protocol.ap";
-    /// AP-REP processed.
-    pub const PROTOCOL_AP_REP: &str = "protocol.ap_rep";
     /// KDC UDP/TCP listener.
     pub const KDC_LISTEN: &str = "kdc.listen";
     /// KDC transport event (datagram/connection).
     pub const KDC_TRANSPORT: &str = "kdc.transport";
     /// Client transport (UDP/TCP exchange).
     pub const PROTOCOL_TRANSPORT: &str = "protocol.transport";
-    /// GSS wrap/unwrap/MIC.
-    pub const GSS: &str = "gss";
     /// Admin protocol (kadmind / kpasswd / kprop).
     pub const ADMIN: &str = "admin";
-    /// Config / discovery.
-    pub const CONFIG: &str = "config";
 }
-
-/// Tracing field name for the correlation ID.
-pub const FIELD_CORRELATION_ID: &str = "correlation_id";
-/// Tracing field name for the stable event name.
-pub const FIELD_EVENT: &str = "event";
-/// Tracing field name for the emitting component.
-pub const FIELD_COMPONENT: &str = "component";
-/// Tracing field name for IANA etype.
-pub const FIELD_ETYPE: &str = "etype";
-/// Tracing field name for RFC 3961 key usage.
-pub const FIELD_KEY_USAGE: &str = "key_usage";
-/// Tracing field name for duration in microseconds.
-pub const FIELD_DURATION_US: &str = "duration_us";
-/// Tracing field name for `"ok"` / `"error"`.
-pub const FIELD_OUTCOME: &str = "outcome";
-/// Tracing field name for an error Display string.
-pub const FIELD_ERROR: &str = "error";
-/// Tracing field name for the PDU type name.
-pub const FIELD_PDU: &str = "pdu";
-/// Tracing field name for encoded/decoded byte length.
-pub const FIELD_BYTE_LEN: &str = "byte_len";
 
 thread_local! {
     static CURRENT: RefCell<Option<String>> = const { RefCell::new(None) };

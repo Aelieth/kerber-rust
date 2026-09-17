@@ -1,22 +1,34 @@
 [advisories]
 version = 2
-yanked = "warn"
+yanked = "deny"
+# No advisory is ignored. Adding one needs the RUSTSEC id, the reason, and a
+# row in docs/security.md.
+ignore = []
 
 [licenses]
 version = 2
+# Exactly the licences the lock file uses; cargo deny warns on an allowance
+# nothing matches, so a new licence is added here when its crate arrives.
 allow = [
     "MIT",
     "Apache-2.0",
     "BSD-3-Clause",
-    "BSD-2-Clause",
-    "ISC",
     "Unicode-3.0",
-    "Zlib",
 ]
 
 [bans]
-multiple-versions = "warn"
-wildcards = "allow"
+multiple-versions = "deny"
+wildcards = "deny"
+# Path dependencies carry no version; every crate here is publish = false.
+allow-wildcard-paths = true
+# The two known duplicates, named so that a new one is red. The same pair is
+# why Cargo.toml allows clippy::multiple_crate_versions.
+skip = [
+    # product pins 0.2; 0.4 arrives through rasn-derive-impl → uuid (proc-macro, build time)
+    { name = "getrandom", version = "0.4" },
+    # proc-macro graph only
+    { name = "syn", version = "3" },
+]
 
 [sources]
 unknown-registry = "deny"

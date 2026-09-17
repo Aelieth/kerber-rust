@@ -7,9 +7,9 @@ never install a subscriber. Tests and the harness do.
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `event` | yes | Stable name (`crypto.encrypt`, `asn1.decode`, `harness.kinit`, …) |
+| `event` | yes | Stable name from `krb5_log::events` (`crypto.encrypt`, `asn1.decode`, `kdc.issue`, `admin`, …); every constant there is emitted somewhere |
 | `correlation_id` | yes | 32 hex chars; one ID per *exchange* (crypto/ASN.1 inherit the parent via `enter_correlation`; they do not mint a new ID per op) |
-| `component` | yes | `krb5-crypto`, `krb5-asn1`, `krb5-kdc`, or `harness` |
+| `component` | yes | `krb5-crypto`, `krb5-asn1`, `krb5-protocol`, `krb5-kdc`, `krb5-admin`, or `krb5-client` |
 | `outcome` | yes | `ok`, `error`, or `krb-error` |
 | `duration_us` | crypto/asn1 | Wall time of the operation |
 | `etype` | crypto | IANA encryption-type number |
@@ -31,7 +31,9 @@ never install a subscriber. Tests and the harness do.
 | `s4u` / `s4u_client` | kdc.issue | `PROTOCOL-TRANSITION` or `CONSTRAINED-DELEGATION` |
 | `record` | kdc.audit | One JSON object using MIT `j_dict.h` keys |
 
-Canonical `event` strings live in `krb5_log::events`.
+Canonical `event` strings live in `krb5_log::events`; the field names
+above are written literally at each `tracing` call site (there are no
+`FIELD_*` constants).
 
 Every request logs one `event=kdc.issue` line from `handle_request`
 at `info`, including `duration_us`. A **KRB-ERROR** PDU is
