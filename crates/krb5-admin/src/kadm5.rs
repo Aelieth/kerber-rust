@@ -347,7 +347,7 @@ pub struct Kadm5RpcSession {
     agss: Option<Agss>,
 }
 
-/// One ONC RPC record through [`handle_rpc`].
+/// One ONC RPC record through `handle_rpc`.
 ///
 /// # Errors
 ///
@@ -3427,7 +3427,7 @@ struct CreateFields {
 /// `kadm5_principal_ent_rec`, mask, (v3: ks_tuple array), passwd.
 fn parse_create(args: &[u8], v3: bool) -> Result<CreateFields, Error> {
     let mut r = XdrR::new(args);
-    let _api = r.u32()?;
+    let _ = r.u32()?;
     let (name, prealm) = r.principal_realm()?;
     let (fields, n_key_data) = parse_principal_ent_rest(&mut r)?;
     let mask = r.u32()?;
@@ -3471,7 +3471,7 @@ fn parse_chpass(
     v3: bool,
 ) -> Result<(PrincipalName, String, String, bool, Vec<EncryptionType>), Error> {
     let mut r = XdrR::new(args);
-    let _api = r.u32()?;
+    let _ = r.u32()?;
     let (princ, prealm) = r.principal_realm()?;
     let (keepold, ks) = if v3 {
         let k = r.u32()? != 0;
@@ -3485,7 +3485,7 @@ fn parse_chpass(
 
 fn parse_get(args: &[u8]) -> Result<(PrincipalName, String, u32), Error> {
     let mut r = XdrR::new(args);
-    let _api = r.u32()?;
+    let _ = r.u32()?;
     let (princ, prealm) = r.principal_realm()?;
     let mask = r.u32().unwrap_or(u32::MAX);
     Ok((princ, prealm, mask))
@@ -3680,19 +3680,19 @@ fn glob_class(pat: &[u8], c: u8) -> Option<(bool, usize)> {
 
 fn parse_gprincs(args: &[u8]) -> Result<Option<String>, Error> {
     let mut r = XdrR::new(args);
-    let _api = r.u32()?;
+    let _ = r.u32()?;
     r.nullstring()
 }
 
 fn parse_one_princ(args: &[u8]) -> Result<(PrincipalName, String), Error> {
     let mut r = XdrR::new(args);
-    let _api = r.u32()?;
+    let _ = r.u32()?;
     r.principal_realm()
 }
 
 fn parse_rename(args: &[u8]) -> Result<(PrincipalName, String, PrincipalName, String), Error> {
     let mut r = XdrR::new(args);
-    let _api = r.u32()?;
+    let _ = r.u32()?;
     let (old, old_realm) = r.principal_realm()?;
     let (new, new_realm) = r.principal_realm()?;
     Ok((old, old_realm, new, new_realm))
@@ -3802,7 +3802,7 @@ fn parse_chrand(
     v3: bool,
 ) -> Result<(PrincipalName, String, bool, Vec<EncryptionType>), Error> {
     let mut r = XdrR::new(args);
-    let _api = r.u32()?;
+    let _ = r.u32()?;
     let (princ, prealm) = r.principal_realm()?;
     let (keepold, ks) = if v3 {
         let k = r.u32()? != 0;
@@ -3855,7 +3855,7 @@ impl ModFields {
 
 fn parse_modify(args: &[u8]) -> Result<(PrincipalName, String, u32, ModFields), Error> {
     let mut r = XdrR::new(args);
-    let _api = r.u32()?;
+    let _ = r.u32()?;
     let (princ, prealm) = r.principal_realm()?;
     let expire = r.u32()?;
     let _last_pwd = r.u32()?;
@@ -6128,7 +6128,7 @@ mod tests {
 
     fn ret_code(b: &[u8]) -> u32 {
         let mut r = XdrR::new(b);
-        let _api = r.u32().unwrap();
+        let _ = r.u32().unwrap();
         r.u32().unwrap()
     }
 

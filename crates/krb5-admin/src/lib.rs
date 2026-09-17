@@ -5,6 +5,7 @@
 //! The kadmind path enforces the KDC ACL. There is no C FFI.
 
 #![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod kadm5;
@@ -605,7 +606,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error`] wrapping `KADM5_ALIAS_REALM` or `KADM5_DUP`.
+    /// [`Error`](enum@Error) wrapping `KADM5_ALIAS_REALM` or `KADM5_DUP`.
     pub fn create_alias(
         &mut self,
         alias: &PrincipalName,

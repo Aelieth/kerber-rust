@@ -525,7 +525,7 @@ fn wrong_password_yields_preauth_failed_bytes() {
     let wrong = krb5_crypto::string_to_key(
         krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
         b"not-the-password",
-        &cname.default_salt(TEST_REALM),
+        cname.default_salt(TEST_REALM),
         Some(&S2K_ITERS.to_be_bytes()),
     )
     .expect("s2k");

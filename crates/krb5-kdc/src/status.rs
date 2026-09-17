@@ -59,7 +59,6 @@ pub const PREAUTH_FAILED: &str = "PREAUTH_FAILED";
 pub const PROCESS_TGS: &str = "PROCESS_TGS";
 /// MIT `do_as_req.c:747-751` status; Rust's `open_cookie` ignores bad cookies
 /// like MIT's `return 0` path, so this word is never emitted.
-#[allow(dead_code)]
 pub const READ_COOKIE: &str = "READ_COOKIE";
 pub const RENEW_SERVER_MISMATCH: &str = "SERVER DIDN'T MATCH TICKET FOR RENEW/FORWARD/ETC";
 pub const REQUIRED_PWCHANGE: &str = "REQUIRED PWCHANGE";

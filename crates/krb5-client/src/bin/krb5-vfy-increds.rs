@@ -1,6 +1,6 @@
 //! MIT `t_vfy_increds`: verify the first non-config ccache cred against a keytab.
 //!
-//! Usage: krb5-vfy-increds [-n] [server]
+//! Usage: `krb5-vfy-increds [-n] [server]`
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

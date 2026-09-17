@@ -63,7 +63,7 @@ zeroize = { version = "1.8", features = ["derive", "alloc"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
-missing_docs = "allow"
+missing_docs = "deny"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
@@ -73,16 +73,26 @@ expect_used = "allow"
 panic = "allow"
 todo = "deny"
 unimplemented = "deny"
-needless_borrows_for_generic_args = "allow"
-# Pedantic noise that is not useful in this tree: rasn field bindings,
-# RFC vocabulary in rustdoc, long AS/TGS/issue functions, ACL flag
-# structs, and Kerberos names (cname/crealm, KAT single-letter vars).
+# The rasn Decode/Encode derives bind every field `_`-prefixed (314 sites in
+# krb5-types alone), so this lint cannot be denied without an allow on each
+# derived type.
 no_effect_underscore_binding = "allow"
+# Pedantic noise that is not useful in this tree: RFC vocabulary in
+# rustdoc, MIT functions ported whole, MIT flag structs mirrored 1:1, and
+# Kerberos names (cname/crealm, KAT single-letter vars).
 doc_markdown = "allow"
 too_many_lines = "allow"
 struct_excessive_bools = "allow"
 similar_names = "allow"
 many_single_char_names = "allow"
+# The cargo group: wildcard / negative / redundant feature and dependency
+# names stay live. getrandom 0.2 (product) / 0.4 (rasn-derive-impl → uuid)
+# and syn 2 / 3 in the proc-macro graph are the two known duplicates
+# (deny.toml names the same two as its only skips); publish = false, so no
+# keywords, categories, readme or documentation fields.
+cargo = { level = "deny", priority = -1 }
+multiple_crate_versions = "allow"
+cargo_common_metadata = "allow"
 
 # W2-S1: the `test` job is link-bound (full debuginfo × ~190 binaries).
 # line-tables-only keeps nextest backtraces; split-debuginfo keeps the

@@ -19,7 +19,7 @@ fn host_token() -> (Vec<u8>, krb5_crypto::ProtocolKey, u32) {
     let key = krb5_crypto::string_to_key(
         krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
         TEST_USER_PASSWORD,
-        &cname.default_salt(TEST_REALM),
+        cname.default_salt(TEST_REALM),
         Some(&S2K_ITERS.to_be_bytes()),
     )
     .expect("s2k");

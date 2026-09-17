@@ -25,12 +25,15 @@ pub use krb5_protocol::{
 };
 pub use krb5_protocol::{Error as ProtocolError, KDC_PORT};
 
+/// Credential-cache re-exports of [`krb5_protocol`]: [`FileCcache`], [`CcacheCred`],
+/// [`CcacheKeyblock`] and the principal/realm helpers, grouped for callers that only cache.
 pub mod ccache {
     pub use krb5_protocol::{
         CcacheCred, CcacheKeyblock, FileCcache, parse_principal, realm, tgt_cred,
     };
 }
 
+/// Keytab re-exports of [`krb5_protocol`]: [`Keytab`] and [`KeytabEntry`].
 pub mod keytab {
     pub use krb5_protocol::{Keytab, KeytabEntry};
 }

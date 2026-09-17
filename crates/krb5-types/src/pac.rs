@@ -820,7 +820,7 @@ pub struct KerbValidationInfo {
     pub logon_domain_name: RpcUnicode,
     /// Domain SID.
     pub logon_domain_id: RpcSid,
-    /// Reserved1[2].
+    /// `Reserved1[2]`.
     pub reserved1: [u32; 2],
     /// UserAccountControl.
     pub user_account_control: u32,

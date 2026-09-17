@@ -104,7 +104,7 @@ pub struct SecureCookie {
     pub data: SequenceOf<crate::PaData>,
 }
 
-/// PA-FX-FAST ::= CHOICE { armored-data [0] KrbFastArmoredReq }
+/// `PA-FX-FAST ::= CHOICE { armored-data [0] KrbFastArmoredReq }`
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 #[rasn(choice)]
 pub enum PaFxFast {
@@ -113,7 +113,7 @@ pub enum PaFxFast {
     ArmoredData(KrbFastArmoredReq),
 }
 
-/// PA-FX-FAST reply ::= CHOICE { armored-data [0] KrbFastArmoredRep }
+/// `PA-FX-FAST reply ::= CHOICE { armored-data [0] KrbFastArmoredRep }`
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 #[rasn(choice)]
 pub enum PaFxFastRep {

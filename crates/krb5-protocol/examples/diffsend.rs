@@ -408,7 +408,7 @@ fn client_key(
     let et = EncryptionType::from_iana(etype)
         .or_else(|_| EncryptionType::known(etype))
         .map_err(|e| e.to_string())?;
-    string_to_key(et, pw, &cname.default_salt(realm), None).map_err(|e| e.to_string())
+    string_to_key(et, pw, cname.default_salt(realm), None).map_err(|e| e.to_string())
 }
 
 fn load_keytab(path: &str) -> Result<Keytab, String> {

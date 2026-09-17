@@ -19,7 +19,7 @@ fn password_key(name: &str, password: &[u8]) -> ProtocolKey {
     string_to_key(
         EncryptionType::Aes256CtsHmacSha196,
         password,
-        &cname.default_salt(TEST_REALM),
+        cname.default_salt(TEST_REALM),
         Some(&S2K_ITERS.to_be_bytes()),
     )
     .expect("s2k")

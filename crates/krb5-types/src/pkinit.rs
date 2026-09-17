@@ -61,12 +61,12 @@ pub struct DhRepInfo {
     /// CMS SignedData wrapping ReplyKeyPack / server DH public.
     #[rasn(tag(0))]
     pub dh_signed_data: OctetString,
-    /// Optional server DH nonce (`DHNonce` = OCTET STRING, EXPLICIT [1]).
+    /// Optional server DH nonce (`DHNonce` = OCTET STRING, EXPLICIT `[1]`).
     #[rasn(tag(explicit(1)))]
     pub server_dh_nonce: Option<OctetString>,
 }
 
-/// PA-PK-AS-REP ::= CHOICE { dhInfo [0] DHRepInfo, encKeyPack [1] IMPLICIT OCTET STRING }
+/// `PA-PK-AS-REP ::= CHOICE { dhInfo [0] DHRepInfo, encKeyPack [1] IMPLICIT OCTET STRING }`
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 #[rasn(choice)]
 pub enum PaPkAsRep {
@@ -278,7 +278,7 @@ pub fn encode_kdc_dh_key_info(uncompressed: &[u8], nonce: u32) -> Vec<u8> {
 
 /// Parse RFC 4556 `AuthPack` for `(nonce, clientPublicValue)`.
 ///
-/// Accepts MIT's EXPLICIT [1] `SubjectPublicKeyInfo` SEQUENCE and this
+/// Accepts MIT's EXPLICIT `[1]` `SubjectPublicKeyInfo` SEQUENCE and this
 /// crate's rasn `OCTET STRING` wrapping of the same SPKI. Extra fields
 /// (`supportedKDFs`, …) are ignored so MIT 1.22.2 AuthPack decodes.
 #[must_use]
@@ -451,7 +451,7 @@ pub fn encode_rfc8636_other_info(
     tlv(0x30, &[alg, u, v, s].concat())
 }
 
-/// Append `supportedKDFs` (SHA-256) as AuthPack [4].
+/// Append `supportedKDFs` (SHA-256) as AuthPack `[4]`.
 #[must_use]
 pub fn authpack_with_sha256_kdf(authpack: &[u8]) -> Option<Vec<u8>> {
     let (t, body, _) = take_tlv(authpack)?;
@@ -473,7 +473,7 @@ pub fn encode_client_authpack(pk_auth: &PkAuthenticator, spki: &[u8]) -> Option<
     authpack_with_sha256_kdf(&tlv(0x30, &body))
 }
 
-/// Insert RFC 8636 `kdf` [2] into a rasn-encoded `PA-PK-AS-REP` dhInfo.
+/// Insert RFC 8636 `kdf [2]` into a rasn-encoded `PA-PK-AS-REP` dhInfo.
 #[must_use]
 pub fn pa_pk_as_rep_with_kdf(pa_pk_as_rep: &[u8], kdf_oid: &[u8]) -> Option<Vec<u8>> {
     let (t, inner, _) = take_tlv(pa_pk_as_rep)?;
@@ -807,7 +807,7 @@ pub struct CmsEncapContentInfo {
 pub struct CmsSignerInfo {
     /// version (3 when sid is subjectKeyIdentifier).
     pub version: i32,
-    /// subjectKeyIdentifier [0] EXPLICIT (local CMS profile).
+    /// `subjectKeyIdentifier [0] EXPLICIT` (local CMS profile).
     #[rasn(tag(explicit(0)))]
     pub sid: OctetString,
     /// Digest algorithm.
@@ -836,7 +836,7 @@ pub struct CmsSignedData {
 pub struct CmsContentInfo {
     /// id-signedData.
     pub content_type: ObjectIdentifier,
-    /// SignedData [0] EXPLICIT.
+    /// `SignedData [0] EXPLICIT`.
     #[rasn(tag(explicit(0)))]
     pub content: CmsSignedData,
 }

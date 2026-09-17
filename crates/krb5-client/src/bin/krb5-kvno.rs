@@ -1,7 +1,7 @@
 //! Obtain a service ticket via TGS and print its kvno (MIT `kvno`).
 //!
-//! Usage: krb5-kvno [-c ccache] [--disable-transited-check] [--body-realm REALM]
-//!                  [kdc-host] <service>
+//! Usage: `krb5-kvno [-c ccache] [--disable-transited-check] [--body-realm REALM]
+//! [kdc-host] <service>`
 //!
 //! `--disable-transited-check` is gate-only (MIT `kvno` cannot set bit 26).
 //! `--body-realm` is gate-only: send that TGS-REQ realm with no chase.

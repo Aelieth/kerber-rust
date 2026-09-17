@@ -4603,7 +4603,7 @@ mod tests {
         store.set_password(&user, b"Ipol-pw1").unwrap();
         // A principal literally named `policy:svc` must still ship (its id
         // carries @REALM; only the marker `policy:ipol` is filtered).
-        let acl = Acl::allow_admin(&crate::documented_admin_id()).unwrap();
+        let acl = Acl::allow_admin(crate::documented_admin_id()).unwrap();
         let colliding = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["policy:svc"]);
         store
             .create_password(

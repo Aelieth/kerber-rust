@@ -334,7 +334,7 @@ fn main() -> ExitCode {
             };
             println!("pac_rid={rid}");
         }
-        if fs::write(&out_path, &pac).is_err() {
+        if fs::write(out_path, &pac).is_err() {
             eprintln!("krb5-pac-extract: write {out_path}");
             return ExitCode::from(1);
         }

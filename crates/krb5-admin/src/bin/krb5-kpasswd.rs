@@ -1,6 +1,6 @@
 //! RFC 3244 kpasswd client. TCP 464 first, then UDP.
 //!
-//! Usage: krb5-kpasswd <kdc-host> <user@REALM>
+//! Usage: `krb5-kpasswd <kdc-host> <user@REALM>`
 //! Old password: `KRB5_PASSWORD`. New: `KRB5_NEW_PASSWORD`.
 //! `KRB5_KPASSWD_TARGET=name@REALM` uses `krb5_set_password` (0xff80).
 

@@ -214,7 +214,7 @@ impl KpropAuth {
 ///
 /// `acl_lines` are the raw `kpropd.acl` lines (`None` = no readable file);
 /// after `recvauth` completes they are checked with
-/// [`kpropd_authorized_principal`] exactly as MIT `kpropd.c:528-546` does
+/// `kpropd_authorized_principal` exactly as MIT `kpropd.c:528-546` does
 /// (the AP-REP has already been sent; a rejected peer sees the connection
 /// close).
 ///

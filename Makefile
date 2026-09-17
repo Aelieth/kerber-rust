@@ -1,6 +1,6 @@
 # Local entry points. `make safety` is fmt → clippy → nextest → ci-policy
-# (the ci.yml `test` job). `make doc` is the sibling `doc` job. lld is
-# required (see .cargo/config.toml). W3 may add doctest / RUSTDOCFLAGS.
+# (the ci.yml `test` job). `make doc` is the sibling `doc` job, strict under
+# RUSTDOCFLAGS=-D warnings. lld is required (see .cargo/config.toml).
 
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 KRB5_CONFIG ?= $(ROOT)/harness/nextest-krb5.conf
@@ -22,7 +22,7 @@ test:
 	KRB5_CONFIG=$(KRB5_CONFIG) cargo nextest run --workspace --profile ci
 
 doc:
-	cargo doc --workspace --no-deps
+	RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps
 
 policy:
 	python3 scripts/ci-policy.py

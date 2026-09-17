@@ -71,6 +71,8 @@ jobs:
           shared-key: kerber
       - name: doc
         run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
 
   msrv:
     runs-on: ubuntu-latest

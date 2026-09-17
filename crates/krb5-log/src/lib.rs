@@ -1,6 +1,6 @@
 //! Structured logging schema for kerber-rust.
 //!
-//! Library crates emit [`tracing`] events using the field names in this
+//! Library crates emit `tracing` events using the field names in this
 //! module. Applications and tests install a subscriber; this crate does not.
 //!
 //! # Event fields
@@ -19,6 +19,7 @@
 //! ASN.1 operations emit `pdu` (type name) and `byte_len`.
 
 #![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use std::cell::RefCell;

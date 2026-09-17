@@ -194,7 +194,7 @@ pub fn spake_thash_update(thash: &[u8], data1: &[u8], data2: &[u8]) -> [u8; 32] 
     Sha2Digest::finalize(h).into()
 }
 
-/// MIT `derive_key`: K'[n] = CF2(ikey, "SPAKE", random-to-key(H), "keyderiv").
+/// MIT `derive_key`: `K'[n] = CF2(ikey, "SPAKE", random-to-key(H), "keyderiv")`.
 ///
 /// # Errors
 ///

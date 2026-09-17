@@ -16,6 +16,18 @@ this project uses semantic versioning once a crate is published.
   and writes an `INDEX.md`; the snapshot index names every `--quality`
   file; `hygiene-diff.py` prints a provenance header. No product code
   changes.
+- **Lints.** `missing_docs = "deny"` workspace-wide, paid for with one
+  `///` per RFC 4120 field in `krb5-types` (103), the 12 CAMMAC fields and
+  the two `krb5-client` modules; the panic-deny trio on `krb5-admin`,
+  `krb5-asn1` and `krb5-log` (10/10 libraries, no code fixes); the 33
+  rustdoc warnings fixed (ASN.1 `[n]` tags and usage lines in code spans,
+  private-item links unlinked, `Error` disambiguated) and `make doc` /
+  the `doc` job strict under `RUSTDOCFLAGS=-D warnings`;
+  `needless_borrows_for_generic_args` retired (17 borrows dropped, all in
+  tests/tools); the clippy `cargo` group at deny with
+  `multiple_crate_versions` and `cargo_common_metadata` allowed for the
+  reasons stated. `no_effect_underscore_binding` stays allowed: the rasn
+  derives bind every field `_`-prefixed (the comment now says so).
 
 ### W3-S0 comparison baseline
 

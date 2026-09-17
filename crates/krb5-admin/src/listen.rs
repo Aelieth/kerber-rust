@@ -710,7 +710,7 @@ pub fn serve_kpasswd_tcp(
 /// kprop dump over TCP: send MIT dump version-7 text (4-byte length prefix).
 ///
 /// The body is `kdb5_util load_dump version 7`, not a KDB3 blob. MIT-wire
-/// sendauth lives in [`crate::kprop`].
+/// sendauth lives in `crate::kprop`.
 ///
 /// # Errors
 ///

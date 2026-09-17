@@ -5,8 +5,13 @@ Testing is continuous. Categories grow with the stages.
 ## Gate discipline
 
 The local entry point is `make safety` (fmt, clippy, nextest under
-`harness/nextest-krb5.conf`, `cargo doc --workspace --no-deps`,
-`python3 scripts/ci-policy.py`). `make snapshot OUT=<dir>` records the
+`harness/nextest-krb5.conf`, `python3 scripts/ci-policy.py`); `make doc`
+is the sibling `doc` job, `cargo doc --workspace --no-deps` under
+`RUSTDOCFLAGS=-D warnings`. Clippy runs `all` + `pedantic` + `cargo` at
+deny with eight named allows (`Cargo.toml` says why for each),
+`missing_docs` is denied workspace-wide, and every library and binary
+root carries `#![deny(clippy::unwrap_used, clippy::expect_used,
+clippy::panic)]`. `make snapshot OUT=<dir>` records the
 test/gate/oracle inventory and the shape of the tree (LOC and comment
 lines per package and file, function and file maxima, `pub` surface,
 `#[allow]` sites, binaries, dependencies); `QUALITY=1` adds the

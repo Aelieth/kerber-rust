@@ -56,7 +56,7 @@ pub struct SpakeResponse {
     pub factor: EncryptedData,
 }
 
-/// PA-SPAKE ::= CHOICE { support[0], challenge[1], response[2], encData[3] }
+/// `PA-SPAKE ::= CHOICE { support[0], challenge[1], response[2], encData[3] }`
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 #[rasn(choice)]
 pub enum PaSpake {

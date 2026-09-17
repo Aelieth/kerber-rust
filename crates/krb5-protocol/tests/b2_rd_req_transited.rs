@@ -17,7 +17,7 @@ fn client_key() -> ProtocolKey {
     krb5_crypto::string_to_key(
         EncryptionType::Aes256CtsHmacSha196,
         TEST_USER_PASSWORD,
-        &cname.default_salt(TEST_REALM),
+        cname.default_salt(TEST_REALM),
         Some(&S2K_ITERS.to_be_bytes()),
     )
     .expect("s2k")
