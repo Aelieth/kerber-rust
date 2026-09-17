@@ -442,7 +442,7 @@ all of the above).
 | --- | --- |
 | `test` | `cargo fmt --check`, `cargo clippy --all-targets --all-features -D warnings`, `cargo nextest run --workspace --profile ci` |
 | `doc` | `cargo doc --workspace --no-deps` under `RUSTDOCFLAGS=-D warnings` (sibling of `test`) |
-| `shellcheck` | `shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh` with `.shellcheckrc` (`external-sources=true`, `SC2329` off); zero inline disables (`make shellcheck`) |
+| `shellcheck` | `shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh` with `.shellcheckrc` (`external-sources=true`, `SC2329` off); zero inline disables (`make shellcheck`). ShellCheck is installed by version and sha256 (`SHELLCHECK_VERSION`, v0.11.0 — the runner's package is 0.9.0 and reports hundreds of SC2317/SC2119 notes 0.11.0 does not); the Makefile fallback image and the hygiene inventory name the same version, and `ci-policy.py` keeps the three in step |
 | `msrv` | `cargo build --workspace --all-targets --locked` on Rust 1.95 |
 | `audit` | `cargo audit`, `cargo deny`, `scripts/geiger.sh` (per-crate `cargo geiger`, 0-unsafe product), `cargo vet --locked` |
 | `ledger-mit` | fetches the SHA-pinned MIT 1.22.2 source and runs `scripts/ci-policy.py` (ledger anchors, tally, proof column, evidence rules) |

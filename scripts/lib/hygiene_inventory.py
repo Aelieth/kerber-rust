@@ -278,7 +278,8 @@ DIE_RE = re.compile(r"\bdie\b")
 EXIT_1_RE = re.compile(r"\bexit\s+1\b")
 GREP_Q_RE = re.compile(r"\bgrep\s+(?:-[A-Za-z]+\s+)*-[A-Za-z]*q[A-Za-z]*\b")
 DIFF_SUB_RE = re.compile(r"\bdiff\s+<\(")
-SHELLCHECK_IMAGE = "koalaman/shellcheck:stable"
+# The version the ci.yml shellcheck job installs and make shellcheck falls back to.
+SHELLCHECK_IMAGE = "koalaman/shellcheck:v0.11.0"
 SHELL_GLOBS = ("scripts/*.sh", "scripts/lib/*.sh", "harness/*.sh")
 WARN_LINE_RE = re.compile(r"^(?:warning|error)(?:\[[^\]]+\])?: ")
 WARN_SUMMARY_RE = re.compile(

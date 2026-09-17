@@ -1,8 +1,9 @@
 # Local entry points. `make safety` is fmt → clippy → nextest → ci-policy
 # (the ci.yml `test` job). `make doc` is the sibling `doc` job, strict under
 # RUSTDOCFLAGS=-D warnings. `make shellcheck` is the ci.yml `shellcheck` job
-# (the binary if installed, else the koalaman/shellcheck:stable image). lld is
-# required (see .cargo/config.toml).
+# (the binary if installed, else the koalaman/shellcheck:v0.11.0 image — the
+# version ci.yml installs; the runner's package is 0.9.0). lld is required
+# (see .cargo/config.toml).
 
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 KRB5_CONFIG ?= $(ROOT)/harness/nextest-krb5.conf
@@ -30,7 +31,7 @@ shellcheck:
 	@if command -v shellcheck >/dev/null 2>&1; then \
 	  shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh; \
 	else \
-	  docker run --rm -v "$(ROOT):/mnt:ro" koalaman/shellcheck:stable -S style scripts/*.sh scripts/lib/*.sh harness/*.sh; \
+	  docker run --rm -v "$(ROOT):/mnt:ro" koalaman/shellcheck:v0.11.0 -S style scripts/*.sh scripts/lib/*.sh harness/*.sh; \
 	fi
 
 policy:

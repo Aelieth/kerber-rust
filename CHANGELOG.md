@@ -55,7 +55,10 @@ this project uses semantic versioning once a crate is published.
   sites; checkout must precede a local action, so it stays inline). A
   fail-red `shellcheck -S style` job (`make shellcheck`) over
   `scripts/*.sh scripts/lib/*.sh harness/*.sh` with `.shellcheckrc`
-  (`external-sources=true`, `SC2329` off): the 85 inline `SC1091`
+  (`external-sources=true`, `SC2329` off), on ShellCheck v0.11.0
+  installed by version and sha256 (the runner's 0.9.0 package reports
+  ~490 SC2317/SC2119 notes; the Makefile fallback image and the hygiene
+  inventory pin the same version, asserted by `ci-policy.py`): the 85 inline `SC1091`
   disables are gone and the 69 style findings fixed without changing
   what any gate does — `register_cleanup` strings expand their constant
   container names at registration (the two PID cleanups are named

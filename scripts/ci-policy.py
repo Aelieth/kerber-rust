@@ -2368,13 +2368,17 @@ def check_workflow_hardening(
     action_texts: dict[str, str] | None = None,
     dependabot: str | None = None,
     shellcheckrc: str | None = None,
+    shellcheck_pins: dict[str, str] | None = None,
 ) -> None:
     """W3-S1 CI shape: every workflow grants `contents: read` at the top;
     `concurrency` + `cancel-in-progress` on ci.yml and fuzz.yml only; every
     third-party `uses:` (workflows and composite actions) is a 40-hex SHA with
     the tag in a trailing comment; dependabot covers github-actions and cargo;
     ci.yml runs the fail-red shellcheck job over the three script globs with a
-    `.shellcheckrc` that follows sources."""
+    `.shellcheckrc` that follows sources, on a ShellCheck it installs itself by
+    version and sha256 (the runner's package differs by two minor versions and
+    hundreds of notes), and the Makefile fallback image and the hygiene
+    inventory's image name that same version."""
     if wf_texts is None:
         wf_texts = {
             p.name: p.read_text(encoding="utf-8")
@@ -2419,6 +2423,20 @@ def check_workflow_hardening(
         _die(f"ci.yml needs a shellcheck job running `{SHELLCHECK_CMD}`")
     if "external-sources=true" not in shellcheckrc:
         _die(".shellcheckrc must set external-sources=true")
+    ver = re.search(r"(?m)^\s+SHELLCHECK_VERSION:\s*(v\d+\.\d+\.\d+)\s*$", job.body)
+    if ver is None:
+        _die("ci.yml shellcheck job must pin SHELLCHECK_VERSION: vX.Y.Z (the runner's package is not that version)")
+    if not re.search(r"(?m)^\s+SHELLCHECK_SHA256:\s*[0-9a-f]{64}\s*$", job.body) or "sha256sum --check" not in job.body:
+        _die("ci.yml shellcheck job must verify the release tarball with SHELLCHECK_SHA256 and sha256sum --check")
+    if shellcheck_pins is None:
+        shellcheck_pins = {
+            "Makefile": (ROOT / "Makefile").read_text(encoding="utf-8"),
+            "scripts/lib/hygiene_inventory.py": (ROOT / "scripts" / "lib" / "hygiene_inventory.py").read_text(encoding="utf-8"),
+        }
+    image = f"koalaman/shellcheck:{ver.group(1)}"
+    for name, text in shellcheck_pins.items():
+        if image not in text:
+            _die(f"{name} must run the shellcheck image {image} (the version ci.yml installs)")
 
 
 def check_prod_image_once(ci_text: str | None = None) -> None:
@@ -4243,25 +4261,32 @@ jobs:
     )
     check_rust_cache_shared_key({"ci.yml": cache_ok})
     sha = "c" * 40
+    sc_pin = f"    env:\n      SHELLCHECK_VERSION: v0.11.0\n      SHELLCHECK_SHA256: {'8' * 64}\n"
     hard_ci = (
         "name: ci\n\npermissions:\n  contents: read\n\nconcurrency:\n  group: g\n  cancel-in-progress: true\n\n"
-        "on:\n  push:\njobs:\n  shellcheck:\n    steps:\n"
+        f"on:\n  push:\njobs:\n  shellcheck:\n{sc_pin}    steps:\n"
         f"      - uses: actions/checkout@{sha} # v5.1.0\n"
+        '      - run: echo "$SHELLCHECK_SHA256  $f" | sha256sum --check\n'
         f"      - run: {SHELLCHECK_CMD}\n"
     )
     hard_soak = "name: soak\n\npermissions:\n  contents: read\n\non:\n  schedule:\njobs:\n  soak:\n    steps:\n      - uses: ./.github/actions/rust-preamble\n"
     hard_action = {"rust-preamble/action.yml": f"runs:\n  steps:\n    - uses: Swatinem/rust-cache@{sha} # v2.9.2\n"}
     hard_bot = 'updates:\n  - package-ecosystem: "github-actions"\n  - package-ecosystem: "cargo"\n'
-    check_workflow_hardening({"ci.yml": hard_ci, "soak.yml": hard_soak}, hard_action, hard_bot, "external-sources=true\n")
-    _must_die(check_workflow_hardening, {"ci.yml": hard_ci, "soak.yml": hard_soak.replace("permissions:\n  contents: read\n\n", "")}, hard_action, hard_bot, "external-sources=true\n")
-    _must_die(check_workflow_hardening, {"ci.yml": hard_ci, "soak.yml": hard_soak.replace("on:", "concurrency:\n  cancel-in-progress: true\non:")}, hard_action, hard_bot, "external-sources=true\n")
-    _must_die(check_workflow_hardening, {"ci.yml": hard_ci.replace("concurrency:\n  group: g\n  cancel-in-progress: true\n\n", ""), "soak.yml": hard_soak}, hard_action, hard_bot, "external-sources=true\n")
-    _must_die(check_workflow_hardening, {"ci.yml": hard_ci.replace(f"@{sha} # v5.1.0", "@v5"), "soak.yml": hard_soak}, hard_action, hard_bot, "external-sources=true\n")
-    _must_die(check_workflow_hardening, {"ci.yml": hard_ci.replace(" # v5.1.0", ""), "soak.yml": hard_soak}, hard_action, hard_bot, "external-sources=true\n")
-    _must_die(check_workflow_hardening, {"ci.yml": hard_ci, "soak.yml": hard_soak}, {"rust-preamble/action.yml": "runs:\n  steps:\n    - uses: Swatinem/rust-cache@v2\n"}, hard_bot, "external-sources=true\n")
-    _must_die(check_workflow_hardening, {"ci.yml": hard_ci, "soak.yml": hard_soak}, hard_action, 'updates:\n  - package-ecosystem: "cargo"\n', "external-sources=true\n")
-    _must_die(check_workflow_hardening, {"ci.yml": hard_ci.replace(SHELLCHECK_CMD, "shellcheck scripts/*.sh"), "soak.yml": hard_soak}, hard_action, hard_bot, "external-sources=true\n")
-    _must_die(check_workflow_hardening, {"ci.yml": hard_ci, "soak.yml": hard_soak}, hard_action, hard_bot, "disable=SC2329\n")
+    hard_pins = {"Makefile": "koalaman/shellcheck:v0.11.0 -S style\n", "hygiene_inventory.py": 'SHELLCHECK_IMAGE = "koalaman/shellcheck:v0.11.0"\n'}
+    check_workflow_hardening({"ci.yml": hard_ci, "soak.yml": hard_soak}, hard_action, hard_bot, "external-sources=true\n", hard_pins)
+    _must_die(check_workflow_hardening, {"ci.yml": hard_ci, "soak.yml": hard_soak.replace("permissions:\n  contents: read\n\n", "")}, hard_action, hard_bot, "external-sources=true\n", hard_pins)
+    _must_die(check_workflow_hardening, {"ci.yml": hard_ci, "soak.yml": hard_soak.replace("on:", "concurrency:\n  cancel-in-progress: true\non:")}, hard_action, hard_bot, "external-sources=true\n", hard_pins)
+    _must_die(check_workflow_hardening, {"ci.yml": hard_ci.replace("concurrency:\n  group: g\n  cancel-in-progress: true\n\n", ""), "soak.yml": hard_soak}, hard_action, hard_bot, "external-sources=true\n", hard_pins)
+    _must_die(check_workflow_hardening, {"ci.yml": hard_ci.replace(f"@{sha} # v5.1.0", "@v5"), "soak.yml": hard_soak}, hard_action, hard_bot, "external-sources=true\n", hard_pins)
+    _must_die(check_workflow_hardening, {"ci.yml": hard_ci.replace(" # v5.1.0", ""), "soak.yml": hard_soak}, hard_action, hard_bot, "external-sources=true\n", hard_pins)
+    _must_die(check_workflow_hardening, {"ci.yml": hard_ci, "soak.yml": hard_soak}, {"rust-preamble/action.yml": "runs:\n  steps:\n    - uses: Swatinem/rust-cache@v2\n"}, hard_bot, "external-sources=true\n", hard_pins)
+    _must_die(check_workflow_hardening, {"ci.yml": hard_ci, "soak.yml": hard_soak}, hard_action, 'updates:\n  - package-ecosystem: "cargo"\n', "external-sources=true\n", hard_pins)
+    _must_die(check_workflow_hardening, {"ci.yml": hard_ci.replace(SHELLCHECK_CMD, "shellcheck scripts/*.sh"), "soak.yml": hard_soak}, hard_action, hard_bot, "external-sources=true\n", hard_pins)
+    _must_die(check_workflow_hardening, {"ci.yml": hard_ci, "soak.yml": hard_soak}, hard_action, hard_bot, "disable=SC2329\n", hard_pins)
+    # The shellcheck job on the runner's package (no version pin), an unverified tarball, a stale fallback image.
+    _must_die(check_workflow_hardening, {"ci.yml": hard_ci.replace(sc_pin, ""), "soak.yml": hard_soak}, hard_action, hard_bot, "external-sources=true\n", hard_pins)
+    _must_die(check_workflow_hardening, {"ci.yml": hard_ci.replace("sha256sum --check", "tar -xJf"), "soak.yml": hard_soak}, hard_action, hard_bot, "external-sources=true\n", hard_pins)
+    _must_die(check_workflow_hardening, {"ci.yml": hard_ci, "soak.yml": hard_soak}, hard_action, hard_bot, "external-sources=true\n", {**hard_pins, "Makefile": "koalaman/shellcheck:stable -S style\n"})
     cache_via_preamble = cache_ok.replace(
         "      - uses: Swatinem/rust-cache@v2\n        with:\n          shared-key: kerber\n",
         "      - uses: ./.github/actions/rust-preamble\n",

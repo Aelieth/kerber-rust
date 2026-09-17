@@ -74,8 +74,22 @@ jobs:
   shellcheck:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      # The version make shellcheck and the hygiene inventory run (koalaman/shellcheck:v0.11.0).
+      # ubuntu-latest's package is 0.9.0, whose SC2317/SC2119 heuristics report ~490 notes
+      # 0.11.0 does not; the checks must not move with the runner image.
+      SHELLCHECK_VERSION: v0.11.0
+      SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Install ShellCheck ${{ env.SHELLCHECK_VERSION }}
+        run: |
+          set -euo pipefail
+          f="shellcheck-$SHELLCHECK_VERSION.linux.x86_64.tar.xz"
+          curl -sSL -o "$f" "https://github.com/koalaman/shellcheck/releases/download/$SHELLCHECK_VERSION/$f"
+          echo "$SHELLCHECK_SHA256  $f" | sha256sum --check
+          tar -xJf "$f"
+          sudo install -m 0755 "shellcheck-$SHELLCHECK_VERSION/shellcheck" /usr/local/bin/shellcheck
       - name: shellcheck -S style (zero inline disables; .shellcheckrc follows sources)
         run: |
           shellcheck --version
