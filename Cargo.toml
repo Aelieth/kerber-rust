@@ -41,7 +41,7 @@ camellia = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["alloc", "clock", "std"] }
 cmac = "0.7"
 des = "0.8"
-getrandom = "0.2"
+getrandom = "0.4"
 hmac = "0.12"
 md-5 = "0.10"
 md4 = "0.10"
