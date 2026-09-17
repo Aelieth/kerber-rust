@@ -2,8 +2,9 @@
 # rust-cache. checkout itself stays in the job (a local action needs the tree
 # checked out before it can be referenced). The docker-tar `actions/cache`
 # step and the gate `run:` lines stay inline: ci-policy.py text-matches them.
-# Pins: dtolnay/rust-toolchain has no versioned tags; its master SHA is pinned
-# and the channel passed explicitly (the tag-derived default needs a tag ref).
+# Pins: dtolnay/rust-toolchain is pinned to a master SHA by choice — it has a
+# `v1` tag, and `stable`/`nightly`/`1.95` are branches the action reads its
+# default channel from; a SHA names neither, so the channel is passed explicitly.
 name: rust-preamble
 description: Install the Rust toolchain and lld, then restore the shared cargo cache.
 

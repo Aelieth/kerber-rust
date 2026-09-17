@@ -415,7 +415,7 @@ measure itself; the nightly `budget.yml` job checks the last five `ci.yml` runs.
   `mit-extra-2`, `msrv`, `audit`, `ledger-mit`, `mit-image`, `doc`,
   `shellcheck`. Combined wall ≤ `[push].run_wall` (360 s). Per-job: `test`
   300, `harness` 270, `harness-2` 300, `mit-extra` 180, `mit-extra-2` 210,
-  `doc` 90, `shellcheck` 60, `msrv` 120, `audit` 260, `ledger-mit` 60,
+  `doc` 90, `shellcheck` 90, `msrv` 120, `audit` 260, `ledger-mit` 60,
   `mit-image` 90.
 - **Tier 2** — per-push soft (`continue-on-error`): `slo` 180, `chaos` 180,
   `soak` 240.

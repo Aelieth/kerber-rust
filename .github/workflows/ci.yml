@@ -86,7 +86,7 @@ jobs:
         run: |
           set -euo pipefail
           f="shellcheck-$SHELLCHECK_VERSION.linux.x86_64.tar.xz"
-          curl -sSL -o "$f" "https://github.com/koalaman/shellcheck/releases/download/$SHELLCHECK_VERSION/$f"
+          curl -fsSL -o "$f" "https://github.com/koalaman/shellcheck/releases/download/$SHELLCHECK_VERSION/$f"
           echo "$SHELLCHECK_SHA256  $f" | sha256sum --check
           tar -xJf "$f"
           sudo install -m 0755 "shellcheck-$SHELLCHECK_VERSION/shellcheck" /usr/local/bin/shellcheck
