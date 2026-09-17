@@ -42,8 +42,56 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# A gate that is running, not a process that merely names one: the command line
+# must be a shell interpreter with `scripts/<name>-gate.sh` as its script
+# argument (`bash scripts/kdc-gate.sh`, as checkpoint.sh's own `timeout 1200
+# bash scripts/…` runs them, or `/usr/bin/bash ./scripts/…`). `shellcheck
+# scripts/*-gate.sh`, `cat`, `tail -f`, an editor or ci-policy.py reading the
+# file do not match (W3-S1 audit R4: they aborted five checkpoints).
+GATE_PROCESS_RE='^([^ ]*/)?(ba|da)?sh( -[a-zA-Z]+)* ([^ ]*/)?scripts/[a-z0-9-]+-gate\.sh( |$)'
+
+# 0 when a gate or cargo is running (the checkpoint must not share the ports,
+# the containers or the target dir with either).
+gate_or_cargo_running() {
+    pgrep -f "$GATE_PROCESS_RE" >/dev/null || pgrep -x cargo >/dev/null
+}
+
 if [ "${CHECKPOINT_SELF_TEST:-0}" = 1 ]; then
-    t=$(mktemp -d "${KERBER_SCRATCH:-${TMPDIR:-/tmp}}/checkpoint-selftest.XXXXXX")
+    scratch_parent="${KERBER_SCRATCH:-${TMPDIR:-/tmp}}"
+    mkdir -p "$scratch_parent"
+    t=$(mktemp -d "$scratch_parent/checkpoint-selftest.XXXXXX") || exit 1
+    # Busy guard: a quiet machine is a precondition of the checkpoint itself.
+    if gate_or_cargo_running; then
+        echo "checkpoint.sh --self-test: a gate or cargo is already running; the busy-guard cases need a quiet machine" >&2
+        rm -rf "$t"
+        exit 1
+    fi
+    tail -f scripts/kdc-gate.sh >/dev/null 2>&1 &
+    reader_pid=$!
+    if gate_or_cargo_running; then
+        echo "checkpoint.sh --self-test: a process that only reads a gate script (tail -f scripts/kdc-gate.sh) must not trip the busy guard" >&2
+        kill "$reader_pid" 2>/dev/null
+        rm -rf "$t"
+        exit 1
+    fi
+    mkdir -p "$t/scripts"
+    printf '#!/usr/bin/env bash\ntrap "exit 0" TERM\nwhile :; do sleep 1; done\n' >"$t/scripts/probe-gate.sh"
+    bash "$t/scripts/probe-gate.sh" &
+    probe_pid=$!
+    sleep 0.2
+    if ! gate_or_cargo_running; then
+        echo "checkpoint.sh --self-test: a running gate (bash …/scripts/probe-gate.sh) must trip the busy guard" >&2
+        kill "$probe_pid" "$reader_pid" 2>/dev/null
+        rm -rf "$t"
+        exit 1
+    fi
+    kill "$probe_pid" "$reader_pid" 2>/dev/null
+    wait "$probe_pid" "$reader_pid" 2>/dev/null
+    if gate_or_cargo_running; then
+        echo "checkpoint.sh --self-test: busy guard still tripped after the probe gate exited" >&2
+        rm -rf "$t"
+        exit 1
+    fi
     mkdir -p "$t/full"
     echo x >"$t/full/a"
     if "$0" --out "$t/full" --skip-nextest --skip-harness --skip-policy; then
@@ -144,7 +192,7 @@ if [ "$PLAN" != 1 ]; then
     mkdir -p "$KERBER_SCRATCH"
     export KERBER_NEED_BINS_STRICT=1
 
-    if pgrep -f 'scripts/[a-z0-9-]*-gate\.sh' >/dev/null || pgrep -x cargo >/dev/null; then
+    if gate_or_cargo_running; then
         echo "ABORT: a gate or cargo is already running" >&2
         exit 3
     fi

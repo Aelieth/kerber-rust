@@ -22,7 +22,9 @@ unless the host `default_realm` is the `TESTLABBY.LOCAL` lab stub
 (`scripts/lib/lab-realm.sh` reads the first live `default_realm =` line
 of `/etc/krb5.conf`, not a commented one; `KERBER_ALLOW_HOST_REALM=1`
 overrides and is recorded in the stamp), stamp every file they write,
-and name every file in their own `INDEX.md`. `python3
+and name every file in their own `INDEX.md`. The checkpoint aborts while
+a gate (`bash scripts/<x>-gate.sh`) or `cargo` is running — a process
+that only reads a gate script does not count. `python3
 scripts/hygiene-diff.py <old> <new>` prints a provenance header, then
 fails if a test, cell tag, diffsend case, flow or ledger row
 disappeared, a gate went red, or a quality count rose; shape deltas are
