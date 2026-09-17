@@ -6,7 +6,12 @@
 #![forbid(unsafe_code)]
 
 use krb5_crypto::{EncryptionType, ProtocolKey};
-use krb5_kdc::{IssuedAs, PrincipalStore, TEST_REALM, as_req, documented_host, pa_enc_timestamp};
+use krb5_kdc::{
+    IssuedAs, PacTicket, PrincipalStore, TEST_REALM, as_req, documented_host, pa_enc_timestamp,
+    sign_reply_pac, ticket_checksum_der, wrap_win2k_pac,
+};
+use krb5_types::EncTicketPart;
+use krb5_types::pac::{PAC_CLIENT_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer};
 
 /// IANA etype numbers in MIT `preferred()` order.
 ///
@@ -60,4 +65,47 @@ pub fn host_tgt(store: &PrincipalStore, nonce: u32) -> IssuedAs {
     )
     .unwrap();
     krb5_kdc::issue_as(store, &req).unwrap()
+}
+
+/// Sign a Win2k PAC onto an existing ticket part using `key` as both
+/// server and KDC key.
+///
+/// Replaces the four identical `attach_pac` copies in `krb5-kdc` tests.
+///
+/// # Panics
+///
+/// Panics if PAC wrap, ticket-checksum DER, or `sign_reply_pac` fails —
+/// the same unwraps the local copies used.
+pub fn attach_pac(key: &ProtocolKey, part: &mut EncTicketPart, info_name: &str) {
+    let stub = Pac::built(
+        0,
+        vec![PacBuffer::new(
+            PAC_CLIENT_INFO,
+            client_info_buffer(part.authtime.unix_seconds(), info_name),
+        )],
+    )
+    .to_bytes();
+    part.authorization_data = Some(wrap_win2k_pac(&[0]).unwrap());
+    let der = ticket_checksum_der(part).unwrap();
+    let ident = PacIdentity {
+        sam: part.cname.components_joined(),
+        realm: String::new(),
+        domain_sid: RpcSid::nt_domain(1, 2, 3),
+        rid: 1,
+    };
+    let pac = sign_reply_pac(
+        &part.cname,
+        part.authtime.unix_seconds(),
+        &PacTicket {
+            server: key,
+            kdc: key,
+            enc_tkt_der: &der,
+            is_service_tkt: false,
+        },
+        &ident,
+        None,
+        Some(&stub),
+    )
+    .unwrap();
+    part.authorization_data = Some(wrap_win2k_pac(&pac).unwrap());
 }

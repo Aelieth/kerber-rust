@@ -629,6 +629,7 @@ version = "1.0.0"
 dependencies = [
  "krb5-crypto",
  "krb5-kdc",
+ "krb5-types",
 ]
 
 [[package]]

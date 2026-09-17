@@ -3,12 +3,11 @@
 use krb5_asn1::encode;
 use krb5_crypto::{KeyUsage, ProtocolKey, encrypt};
 use krb5_kdc::{
-    PacTicket, TEST_ADMIN, TEST_REALM, bootstrap_documented, decrypt_ticket_part,
-    documented_admin_id, documented_host, sign_reply_pac, ticket_checksum_der, wrap_win2k_pac,
+    TEST_ADMIN, TEST_REALM, bootstrap_documented, decrypt_ticket_part, documented_admin_id,
+    documented_host,
 };
 use krb5_protocol::{pa_for_user, pa_s4u_x509_user, tgs_req_ex};
-use krb5_testkit::{aes_key, host_tgt, pref_etypes};
-use krb5_types::pac::{PAC_CLIENT_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer};
+use krb5_testkit::{aes_key, attach_pac, host_tgt, pref_etypes};
 use krb5_types::{
     EncTicketPart, EncryptedData, KdcOptions, PaData, PrincipalName, Ticket, err, flag_bit, ku, pa,
 };
@@ -44,40 +43,6 @@ fn code(e: krb5_kdc::Error) -> (i32, Option<String>) {
         krb5_kdc::Error::Protocol { code, text, .. } => (code, text),
         other => panic!("{other:?}"),
     }
-}
-
-fn attach_pac(key: &ProtocolKey, part: &mut EncTicketPart, info_name: &str) {
-    let stub = Pac::built(
-        0,
-        vec![PacBuffer::new(
-            PAC_CLIENT_INFO,
-            client_info_buffer(part.authtime.unix_seconds(), info_name),
-        )],
-    )
-    .to_bytes();
-    part.authorization_data = Some(wrap_win2k_pac(&[0]).unwrap());
-    let der = ticket_checksum_der(part).unwrap();
-    let ident = PacIdentity {
-        sam: part.cname.components_joined(),
-        realm: String::new(),
-        domain_sid: RpcSid::nt_domain(1, 2, 3),
-        rid: 1,
-    };
-    let pac = sign_reply_pac(
-        &part.cname,
-        part.authtime.unix_seconds(),
-        &PacTicket {
-            server: key,
-            kdc: key,
-            enc_tkt_der: &der,
-            is_service_tkt: false,
-        },
-        &ident,
-        None,
-        Some(&stub),
-    )
-    .unwrap();
-    part.authorization_data = Some(wrap_win2k_pac(&pac).unwrap());
 }
 
 fn reseal_incoming(key: &ProtocolKey, tgt: &krb5_kdc::IssuedAs, part: &EncTicketPart) -> Ticket {

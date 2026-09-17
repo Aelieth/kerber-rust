@@ -3,16 +3,13 @@
 use krb5_asn1::encode;
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, string_to_key};
 use krb5_kdc::{
-    Acl, Error, PacTicket, PrincipalStore, S2K_ITERS, TEST_ADMIN, TEST_REALM, TEST_USER,
-    TEST_USER_PASSWORD, as_req, bootstrap_documented, decrypt_ticket_part, documented_admin_id,
-    documented_host, pa_enc_timestamp, pac_from_ticket_part, sign_reply_pac, ticket_checksum_der,
-    wrap_win2k_pac,
+    Acl, Error, PrincipalStore, S2K_ITERS, TEST_ADMIN, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
+    as_req, bootstrap_documented, decrypt_ticket_part, documented_admin_id, documented_host,
+    pa_enc_timestamp, pac_from_ticket_part,
 };
 use krb5_protocol::{pa_for_user, pa_pac_options, tgs_req, tgs_req_ex};
-use krb5_testkit::{aes_key, host_tgt, pref_etypes};
-use krb5_types::pac::{
-    PAC_CLIENT_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer, parse_client_info,
-};
+use krb5_testkit::{aes_key, attach_pac, host_tgt, pref_etypes};
+use krb5_types::pac::{PAC_CLIENT_INFO, Pac, parse_client_info};
 use krb5_types::{
     EncTicketPart, EncryptedData, KdcOptions, PrincipalName, Ticket, err, flag_bit, ku,
 };
@@ -187,40 +184,6 @@ fn a4_18_renew_skips_alternate_tgs() {
         }
         other => panic!("RENEW must not alternate, got {other:?}"),
     }
-}
-
-fn attach_pac(key: &ProtocolKey, part: &mut EncTicketPart, info_name: &str) {
-    let stub = Pac::built(
-        0,
-        vec![PacBuffer::new(
-            PAC_CLIENT_INFO,
-            client_info_buffer(part.authtime.unix_seconds(), info_name),
-        )],
-    )
-    .to_bytes();
-    part.authorization_data = Some(wrap_win2k_pac(&[0]).unwrap());
-    let der = ticket_checksum_der(part).unwrap();
-    let ident = PacIdentity {
-        sam: part.cname.components_joined(),
-        realm: String::new(),
-        domain_sid: RpcSid::nt_domain(1, 2, 3),
-        rid: 1,
-    };
-    let pac = sign_reply_pac(
-        &part.cname,
-        part.authtime.unix_seconds(),
-        &PacTicket {
-            server: key,
-            kdc: key,
-            enc_tkt_der: &der,
-            is_service_tkt: false,
-        },
-        &ident,
-        None,
-        Some(&stub),
-    )
-    .unwrap();
-    part.authorization_data = Some(wrap_win2k_pac(&pac).unwrap());
 }
 
 fn reseal_incoming(key: &ProtocolKey, tgt: &krb5_kdc::IssuedAs, part: &EncTicketPart) -> Ticket {

@@ -13,8 +13,8 @@ this project uses semantic versioning once a crate is published.
   binaries. `pref_etypes()` — the 15 remaining copies (two spellings of
   `EncryptionType::preferred()` → IANA numbers). `aes_key(seed)` — the
   five identical AES-256 repeated-byte keys. `host_tgt` — the five
-  identical documented-host AS TGTs. Assertion text in those files is
-  unchanged.
+  identical documented-host AS TGTs. `attach_pac` — the four identical
+  Win2k PAC attach bodies. Assertion text in those files is unchanged.
 
 ### W3-S2.1 drop the eight a2_*_parent red-inject files
 
