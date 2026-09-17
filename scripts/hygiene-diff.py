@@ -137,21 +137,25 @@ def _write_snap(
         (d / "timings.tsv").write_text(timings, encoding="utf-8")
 
 
-def _quiet_compare(old: pathlib.Path, new: pathlib.Path) -> int:
+def _quiet_compare(old: pathlib.Path, new: pathlib.Path, dead_path: pathlib.Path | None = None) -> int:
     import io
     from contextlib import redirect_stdout
 
     with redirect_stdout(io.StringIO()):
-        return main_compare(old, new)
+        return main_compare(old, new, dead_path=dead_path)
 
 
-def _must_fail(old: pathlib.Path, new: pathlib.Path, label: str) -> None:
-    if _quiet_compare(old, new) == 0:
+def _must_fail(
+    old: pathlib.Path, new: pathlib.Path, label: str, dead_path: pathlib.Path | None = None
+) -> None:
+    if _quiet_compare(old, new, dead_path) == 0:
         raise SystemExit(f"hygiene-diff --self-test: {label} must fail")
 
 
-def _must_pass(old: pathlib.Path, new: pathlib.Path, label: str) -> None:
-    if _quiet_compare(old, new) != 0:
+def _must_pass(
+    old: pathlib.Path, new: pathlib.Path, label: str, dead_path: pathlib.Path | None = None
+) -> None:
+    if _quiet_compare(old, new, dead_path) != 0:
         raise SystemExit(f"hygiene-diff --self-test: {label} must pass")
 
 
@@ -221,15 +225,12 @@ def _self_test() -> None:
         dead_old, dead_new = root / "dead-old", root / "dead-new"
         _write_snap(dead_old, ["a.sh\techo\tMIT_DEAD_PORT", "b.sh\techo\tMIT_DEAD_PORT", "a.sh\techo\tkeep"])
         _write_snap(dead_new, ["a.sh\techo\tkeep"])
-        if main_compare(dead_old, dead_new) == 0:
-            raise SystemExit("hygiene-diff --self-test: unlisted echo tag removal must fail")
-        if main_compare(dead_old, dead_new, dead_path=dead_map) != 0:
-            raise SystemExit("hygiene-diff --self-test: --dead echo tag removal must pass")
+        _must_fail(dead_old, dead_new, "unlisted echo tag removal")
+        _must_pass(dead_old, dead_new, "--dead echo tag removal", dead_path=dead_map)
         sect_old, sect_new = root / "sect-old", root / "sect-new"
         _write_snap(sect_old, ["a.sh\tsection\tMIT_DEAD_PORT", "a.sh\techo\tkeep"])
         _write_snap(sect_new, ["a.sh\techo\tkeep"])
-        if main_compare(sect_old, sect_new, dead_path=dead_map) == 0:
-            raise SystemExit("hygiene-diff --self-test: --dead must not waive a section tag")
+        _must_fail(sect_old, sect_new, "--dead listed section tag removal", dead_path=dead_map)
 
         moved_old, moved_new = root / "moved-old", root / "moved-new"
         _write_snap(moved_old, ["a.sh\techo\tcell-y"])
