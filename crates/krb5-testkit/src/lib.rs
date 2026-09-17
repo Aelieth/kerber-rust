@@ -5,12 +5,13 @@
 
 #![forbid(unsafe_code)]
 
-use krb5_crypto::{EncryptionType, ProtocolKey};
+use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
 use krb5_kdc::{
-    IssuedAs, PacTicket, PrincipalStore, TEST_REALM, as_req, documented_host, pa_enc_timestamp,
-    sign_reply_pac, ticket_checksum_der, wrap_win2k_pac,
+    IssuedAs, PacTicket, PrincipalStore, S2K_ITERS, TEST_REALM, as_req, documented_host,
+    pa_enc_timestamp, sign_reply_pac, ticket_checksum_der, wrap_win2k_pac,
 };
 use krb5_types::EncTicketPart;
+use krb5_types::PrincipalName;
 use krb5_types::pac::{PAC_CLIENT_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer};
 
 /// IANA etype numbers in MIT `preferred()` order.
@@ -36,6 +37,27 @@ pub fn pref_etypes() -> Vec<i32> {
 #[must_use]
 pub fn aes_key(seed: u8) -> ProtocolKey {
     ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[seed; 32]).expect("key")
+}
+
+/// AES-256 string-to-key of `password` with `name`'s default realm salt.
+///
+/// Replaces the eleven local `password_key` copies in `krb5-kdc` tests.
+/// Those copies differed only in `unwrap` vs `expect("s2k")` and whether
+/// the salt was bound to a local.
+///
+/// # Panics
+///
+/// Panics if string-to-key fails — the same expect/unwrap the copies used.
+#[must_use]
+pub fn password_key(name: &str, password: &[u8]) -> ProtocolKey {
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]);
+    string_to_key(
+        EncryptionType::Aes256CtsHmacSha196,
+        password,
+        cname.default_salt(TEST_REALM),
+        Some(&S2K_ITERS.to_be_bytes()),
+    )
+    .expect("s2k")
 }
 
 /// AS-issued TGT for the documented POSIX host principal.

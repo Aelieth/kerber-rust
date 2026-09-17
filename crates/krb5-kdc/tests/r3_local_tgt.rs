@@ -1,28 +1,16 @@
 //! Remaining `GET_LOCAL_TGT` sites (`ad.rs` S4U2Proxy PAC) wire 60,
 //! and `kdc_rd_ap_req` kvno 0 decrypts the previous kvno (`kdc_util.c:325-346`).
 
-use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
+use krb5_crypto::ProtocolKey;
 use krb5_kdc::{
-    Error, KdcEnv, Policy, Principal, PrincipalRead, PrincipalStore, S2K_ITERS, TEST_ADMIN,
+    Error, KdcEnv, Policy, Principal, PrincipalRead, PrincipalStore, TEST_ADMIN,
     TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
     documented_host, pa_enc_timestamp,
 };
 use krb5_protocol::tgs_req_ex;
-use krb5_testkit::pref_etypes;
+use krb5_testkit::{password_key, pref_etypes};
 use krb5_types::pac::RpcSid;
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
-
-fn password_key(name: &str, password: &[u8]) -> ProtocolKey {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]);
-    let salt = cname.default_salt(TEST_REALM);
-    string_to_key(
-        EncryptionType::Aes256CtsHmacSha196,
-        password,
-        &salt,
-        Some(&S2K_ITERS.to_be_bytes()),
-    )
-    .unwrap()
-}
 
 fn issue_tgt(
     store: &PrincipalStore,

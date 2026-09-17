@@ -16,31 +16,18 @@ use std::thread;
 use std::time::Duration;
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, string_to_key};
-use krb5_kdc::{
-    PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented,
-};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt};
+use krb5_kdc::{PrincipalStore, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
 use krb5_protocol::{
     AsRequest, AsTicketOpts, Error, FastArmor, KdcAddr, armor_key, as_exchange, as_req,
     pa_enc_timestamp, unwrap_fast_rep,
 };
+use krb5_testkit::password_key;
 use krb5_types::fast::{KrbFastArmoredRep, KrbFastResponse, PaFxFast, PaFxFastRep};
 use krb5_types::{
     ApReq, AsRep, AsReq, Authenticator, EncryptedData, KrbError, MethodData, PaData, PrincipalName,
     ascii, err, ku, pa,
 };
-
-fn password_key(name: &str, password: &[u8]) -> ProtocolKey {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]);
-    let salt = cname.default_salt(TEST_REALM);
-    string_to_key(
-        EncryptionType::Aes256CtsHmacSha196,
-        password,
-        &salt,
-        Some(&S2K_ITERS.to_be_bytes()),
-    )
-    .expect("s2k")
-}
 
 fn user() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])

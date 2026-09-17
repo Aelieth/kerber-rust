@@ -1,29 +1,18 @@
 //! A′-4 item 18 units that need `domain_realm` / host-based knobs.
 
 use krb5_asn1::encode;
-use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, string_to_key};
+use krb5_crypto::{KeyUsage, ProtocolKey, decrypt, encrypt};
 use krb5_kdc::{
-    Acl, Error, PrincipalStore, S2K_ITERS, TEST_ADMIN, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
-    as_req, bootstrap_documented, decrypt_ticket_part, documented_admin_id, documented_host,
+    Acl, Error, PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req,
+    bootstrap_documented, decrypt_ticket_part, documented_admin_id, documented_host,
     pa_enc_timestamp, pac_from_ticket_part,
 };
 use krb5_protocol::{pa_for_user, pa_pac_options, tgs_req, tgs_req_ex};
-use krb5_testkit::{aes_key, attach_pac, host_tgt, pref_etypes};
+use krb5_testkit::{aes_key, attach_pac, host_tgt, password_key, pref_etypes};
 use krb5_types::pac::{PAC_CLIENT_INFO, Pac, parse_client_info};
 use krb5_types::{
     EncTicketPart, EncryptedData, KdcOptions, PrincipalName, Ticket, err, flag_bit, ku,
 };
-
-fn password_key(name: &str, password: &[u8]) -> ProtocolKey {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]);
-    string_to_key(
-        EncryptionType::Aes256CtsHmacSha196,
-        password,
-        cname.default_salt(TEST_REALM),
-        Some(&S2K_ITERS.to_be_bytes()),
-    )
-    .expect("s2k")
-}
 
 fn issue_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);

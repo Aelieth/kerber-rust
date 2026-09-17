@@ -1,16 +1,15 @@
 //! A′-2 item 6 PAC-shape units that need APIs parent `2e5995a` does not export.
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{
-    EncryptionType, KeyUsage, ProtocolKey, derive_prfplus_enctype, encrypt, string_to_key,
-};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, derive_prfplus_enctype, encrypt};
 use krb5_kdc::{
-    PacTicket, PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req,
+    PacTicket, PrincipalStore, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req,
     bootstrap_documented, decrypt_ticket_part, documented_host, pa_enc_timestamp,
     pac_from_ticket_part, sign_reply_pac, tgs_req, ticket_checksum_der, verify_pac_signatures,
     wrap_win2k_pac,
 };
 use krb5_protocol::tgs_req_ex;
+use krb5_testkit::password_key;
 use krb5_types::pac::{
     PAC_CLIENT_INFO, PAC_FULL_CHECKSUM, PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM, PAC_SERVER_CHECKSUM,
     PAC_TICKET_CHECKSUM, Pac, PacBuffer, client_info_buffer,
@@ -19,17 +18,6 @@ use krb5_types::{
     EncTicketPart, KdcOptions, KerberosTime, KrbError, PaData, PaPacRequest, PrincipalName, err,
     flag_bit, ku, pa,
 };
-
-fn password_key(name: &str, password: &[u8]) -> ProtocolKey {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]);
-    string_to_key(
-        EncryptionType::Aes256CtsHmacSha196,
-        password,
-        cname.default_salt(TEST_REALM),
-        Some(&S2K_ITERS.to_be_bytes()),
-    )
-    .unwrap()
-}
 
 fn renewable_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);

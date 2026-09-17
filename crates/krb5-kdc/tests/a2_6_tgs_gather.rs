@@ -1,26 +1,16 @@
 //! A′-2 item 6: TGS gather order, `is_crossrealm`, constraints skeleton, header PAC.
 
 use krb5_asn1::encode;
-use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, encrypt, string_to_key};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, encrypt};
 use krb5_kdc::{
-    Error, KDB_DISALLOW_SVR, PacTicket, PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER,
-    TEST_USER_PASSWORD, as_req, bootstrap_documented, decrypt_ticket_part, documented_host,
-    pa_enc_timestamp, pac_from_ticket_part, sign_pac, tgs_req, ticket_checksum_der, wrap_win2k_pac,
+    Error, KDB_DISALLOW_SVR, PacTicket, PrincipalStore, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
+    as_req, bootstrap_documented, decrypt_ticket_part, documented_host, pa_enc_timestamp,
+    pac_from_ticket_part, sign_pac, tgs_req, ticket_checksum_der, wrap_win2k_pac,
 };
 use krb5_protocol::tgs_req_ex;
+use krb5_testkit::password_key;
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac};
 use krb5_types::{EncTicketPart, KdcOptions, PrincipalName, err, flag_bit, ku};
-
-fn password_key(name: &str, password: &[u8]) -> ProtocolKey {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]);
-    string_to_key(
-        EncryptionType::Aes256CtsHmacSha196,
-        password,
-        cname.default_salt(TEST_REALM),
-        Some(&S2K_ITERS.to_be_bytes()),
-    )
-    .unwrap()
-}
 
 fn issue_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);

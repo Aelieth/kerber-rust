@@ -22,7 +22,7 @@ use krb5_protocol::{
     pa_pk_as_req_cn, pa_pk_as_req_spki, pa_spake_response, pa_spake_support, pkinit_reply_key,
     pkinit_reply_key_agile, tgs_req_ex, unwrap_fast_rep,
 };
-use krb5_testkit::pref_etypes;
+use krb5_testkit::{password_key, pref_etypes};
 use krb5_types::pac::{
     PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM, PAC_SERVER_CHECKSUM, Pac, RpcSid,
     parse_kerb_validation_info, zero_pac_ad_data,
@@ -32,18 +32,6 @@ use krb5_types::{
     EncryptionKey, KdcOptions, KerberosTime, KrbError, MethodData, Microseconds, PaData,
     PaEncTsEnc, PrincipalName, ascii, err, flag_bit, ku, pa,
 };
-
-fn password_key(name: &str, password: &[u8]) -> ProtocolKey {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]);
-    let salt = cname.default_salt(TEST_REALM);
-    string_to_key(
-        EncryptionType::Aes256CtsHmacSha196,
-        password,
-        &salt,
-        Some(&S2K_ITERS.to_be_bytes()),
-    )
-    .expect("s2k")
-}
 
 fn user_key() -> ProtocolKey {
     password_key(TEST_USER, TEST_USER_PASSWORD)

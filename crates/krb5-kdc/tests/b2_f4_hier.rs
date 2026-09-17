@@ -5,24 +5,13 @@
 //! walked nothing, a numeric host still took `[domain_realm]`, and
 //! `is_referral` compared name-type.
 
-use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
 use krb5_kdc::{
-    Error, PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req,
-    bootstrap_documented, documented_admin_id, pa_enc_timestamp, tgs_req,
+    Error, PrincipalStore, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
+    documented_admin_id, pa_enc_timestamp, tgs_req,
 };
 use krb5_protocol::tgs_req_ex;
+use krb5_testkit::{password_key, pref_etypes};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
-
-fn password_key(name: &str, password: &[u8]) -> ProtocolKey {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]);
-    string_to_key(
-        EncryptionType::Aes256CtsHmacSha196,
-        password,
-        cname.default_salt(TEST_REALM),
-        Some(&S2K_ITERS.to_be_bytes()),
-    )
-    .expect("s2k")
-}
 
 fn issue_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -120,10 +109,7 @@ fn f4_referral_numeric_ipv4_is_looking_up_server() {
         KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true),
         None,
         Vec::new(),
-        EncryptionType::preferred()
-            .iter()
-            .map(|e| e.to_iana())
-            .collect(),
+        pref_etypes(),
     )
     .expect("TGS-REQ");
     match krb5_kdc::issue_tgs(&store, &tgs) {

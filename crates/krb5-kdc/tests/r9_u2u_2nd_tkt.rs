@@ -1,26 +1,13 @@
 //! R9: U2U missing second-ticket server is 7 `2ND_TKT_SERVER`
 //! (`do_tgs_req.c:280-289` via `kdc_get_server_key(stkt)`).
 
-use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
 use krb5_kdc::{
-    PrincipalStore, S2K_ITERS, TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER,
-    TEST_USER_PASSWORD, as_req, bootstrap_documented, documented_host, pa_enc_timestamp,
+    PrincipalStore, TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
+    as_req, bootstrap_documented, documented_host, pa_enc_timestamp,
 };
 use krb5_protocol::tgs_req_ex;
-use krb5_testkit::pref_etypes;
+use krb5_testkit::{password_key, pref_etypes};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
-
-fn password_key(name: &str, password: &[u8]) -> ProtocolKey {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]);
-    let salt = cname.default_salt(TEST_REALM);
-    string_to_key(
-        EncryptionType::Aes256CtsHmacSha196,
-        password,
-        &salt,
-        Some(&S2K_ITERS.to_be_bytes()),
-    )
-    .unwrap()
-}
 
 fn issue_tgt(
     store: &PrincipalStore,

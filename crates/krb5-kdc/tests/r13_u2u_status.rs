@@ -1,24 +1,13 @@
 //! R13: `u2u_session` statuses (`do_tgs_req.c:250-307`, `kdc_util.c:420-450`).
 
-use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
+use krb5_crypto::EncryptionType;
 use krb5_kdc::{
-    PrincipalStore, S2K_ITERS, TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER,
-    TEST_USER_PASSWORD, as_req, bootstrap_documented, pa_enc_timestamp,
+    PrincipalStore, TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
+    as_req, bootstrap_documented, pa_enc_timestamp,
 };
 use krb5_protocol::tgs_req_ex;
-use krb5_testkit::pref_etypes;
+use krb5_testkit::{password_key, pref_etypes};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
-
-fn password_key(name: &str, password: &[u8]) -> ProtocolKey {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]);
-    string_to_key(
-        EncryptionType::Aes256CtsHmacSha196,
-        password,
-        cname.default_salt(TEST_REALM),
-        Some(&S2K_ITERS.to_be_bytes()),
-    )
-    .unwrap()
-}
 
 fn issue_tgt(
     store: &PrincipalStore,

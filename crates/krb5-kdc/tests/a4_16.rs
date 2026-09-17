@@ -1,29 +1,17 @@
 //! A′-4 item 16 units that compile at `e483047` and fail there.
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{
-    EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt, krb_fx_cf2, string_to_key,
-};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt, krb_fx_cf2};
 use krb5_kdc::{
-    Error, PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req,
-    bootstrap_documented, documented_host, pa_enc_timestamp, tgs_req,
+    Error, PrincipalStore, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
+    documented_host, pa_enc_timestamp, tgs_req,
 };
 use krb5_protocol::{armor_key, attach_fast_with_options, build_fast_armor, unwrap_fast_rep};
+use krb5_testkit::password_key;
 use krb5_types::{
     ApReq, Checksum, EncryptedData, EncryptionKey, KrbError, PrincipalName, ascii, err, flag_bit,
     ku, pa,
 };
-
-fn password_key(name: &str, password: &[u8]) -> ProtocolKey {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]);
-    string_to_key(
-        EncryptionType::Aes256CtsHmacSha196,
-        password,
-        cname.default_salt(TEST_REALM),
-        Some(&S2K_ITERS.to_be_bytes()),
-    )
-    .expect("s2k")
-}
 
 fn issue_tgt(
     store: &PrincipalStore,
