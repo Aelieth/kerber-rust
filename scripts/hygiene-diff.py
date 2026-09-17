@@ -17,7 +17,9 @@ Fails on:
 A key present on only one side is skipped (a W2 snapshot has no W3 keys;
 `na`/`skipped` values are not numbers).
 
-Prints `gate_rc: not compared` when neither side has timings.tsv.
+gate_rc comes from `<snapshot>/timings.tsv` or `<snapshot>/checkpoint/timings.tsv`;
+prints `gate_rc: N gates compared, K non-zero in new (…)` when both sides have one,
+`gate_rc: not compared` when neither does.
 
 Reports as information: sleep/boot/cargo-build deltas; LOC, comment and doc
 lines per package; file and fn maxima; `pub` surface; binaries and
@@ -51,7 +53,9 @@ def load_set(path: pathlib.Path) -> set[str]:
     return set(load_data_lines(path))
 
 
-_STAMP_LINE_RE = re.compile(r"^(?:====.*====|[a-z_]+=\S*)$")
+# A provenance.sh stamp line: `==== provenance ====` or `key=value`, where the
+# key may carry digits (`acl_sha256_tree`) and the value spaces (`image=sha256:… <date>`).
+_STAMP_LINE_RE = re.compile(r"^(?:====.*====|[a-z_][a-z0-9_]*=.*)$")
 
 
 def load_map(path: pathlib.Path | None, sep: str) -> dict[str, str]:
@@ -210,7 +214,8 @@ def _self_test() -> None:
         dead_map = root / "dead.txt"
         dead_map.write_text(
             "==== provenance ====\nhead_sha=abc\ntree_sha=def\ndirty=no\n"
-            "# a stamped map still parses\nMIT_DEAD_PORT: unused constant, S1 commit 4\n",
+            "image=sha256:0123 2026-09-12T16:52:22-05:00\nacl_sha256_tree=5668\n"
+            "# a provenance.sh-stamped map still parses\nMIT_DEAD_PORT: unused constant, S1 commit 4\n",
             encoding="utf-8",
         )
         dead_old, dead_new = root / "dead-old", root / "dead-new"
@@ -394,6 +399,12 @@ def _compare(args) -> int:
             if rc == 0 and new_rc.get(gate, 0) not in (0, None) and new_rc.get(gate, 0) != 0:
                 # unavailable (2) is not a product failure if it was 0 before — that is a regression.
                 fail(f"gate_rc 0 -> {new_rc[gate]}: {gate}")
+        both = sorted(set(old_rc) & set(new_rc))
+        nonzero = [f"{g}={new_rc[g]}" for g in both if new_rc[g] != 0]
+        info(
+            f"gate_rc: {len(both)} gates compared, {len(nonzero)} non-zero in new"
+            + (f" ({', '.join(nonzero)})" if nonzero else "")
+        )
     elif old_rc or new_rc:
         info("gate_rc: only one side has timings.tsv (informational)")
     else:
