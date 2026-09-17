@@ -6,6 +6,17 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S1 lints, toolchain, dependencies, CI shape
+
+- **Evidence runners.** `checkpoint.sh` and `hygiene-snapshot.sh` refuse
+  to run unless the host `default_realm` is the `TESTLABBY.LOCAL` lab
+  stub (`scripts/lib/lab-realm.sh`; `KERBER_ALLOW_HOST_REALM=1` overrides,
+  recorded in the stamp). The checkpoint stamps its own bookkeeping files
+  (`00-head.txt`, `02-progress.txt`, `04-gate-wall.log`, `timings.tsv`)
+  and writes an `INDEX.md`; the snapshot index names every `--quality`
+  file; `hygiene-diff.py` prints a provenance header. No product code
+  changes.
+
 ### W3-S0 comparison baseline
 
 - **Shape inventory.** `hygiene-snapshot.sh` records, next to the W2

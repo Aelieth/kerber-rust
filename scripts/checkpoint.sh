@@ -17,6 +17,7 @@ SKIP_NEXTEST=0
 SKIP_HARNESS=0
 SKIP_POLICY=0
 PLAN=0
+STAMP=""
 
 # KEEP / twice / peers legs use dedicated index ranges so they cannot
 # collide with the alphabetical pass (W2 close-audit: kadmin KEEP reused 51–54).
@@ -133,6 +134,10 @@ if [ "$PLAN" != 1 ]; then
         echo "checkpoint.sh: refusing non-empty --out $OUT" >&2
         exit 2
     fi
+    # Lab realm only (W3-S1): never a host whose /etc/krb5.conf names a real realm.
+    # shellcheck source=lib/lab-realm.sh
+    . scripts/lib/lab-realm.sh
+    require_lab_realm
     mkdir -p "$OUT"
     OUT="$(cd "$OUT" && pwd)"
     export KERBER_SCRATCH="${KERBER_SCRATCH:-$OUT/scratch}"
@@ -144,16 +149,27 @@ if [ "$PLAN" != 1 ]; then
         exit 3
     fi
 
+    # The bookkeeping files this script writes itself carry the same stamp as
+    # the gate logs (evidence-check.py wants head_sha= and tree_sha= in each).
+    STAMP="$(KERBER_NO_IMAGE=1 bash -c '. scripts/lib/provenance.sh' 2>/dev/null)" || STAMP=""
+    if [ -z "$STAMP" ]; then
+        STAMP="$(printf '==== provenance ====\nhead_sha=%s\ntree_sha=%s\ndirty=%s\ncaptured_at=%s' \
+            "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')" \
+            "$(if git status --porcelain -- ':!working' | grep -q .; then echo yes; else echo no; fi)" \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+    fi
+
     {
-        echo "head_sha=$(git rev-parse HEAD)"
+        printf '%s\n' "$STAMP"
         echo "dirty_files=$(git status --porcelain | wc -l)"
         echo "started=$(date -Is)"
-        echo "host_krb5_default_realm=$(/usr/bin/grep -m1 default_realm /etc/krb5.conf 2>/dev/null || true)"
+        echo "host_krb5_default_realm=$(host_default_realm)"
+        echo "lab_realm_override=$(lab_realm_override)"
         echo "nproc=$(nproc)"
     } >"$OUT/00-head.txt"
 
-    : >"$OUT/02-progress.txt"
-    printf 'gate\trun\tgate_rc\twall_s\n' >"$OUT/timings.tsv"
+    { printf '%s\n' "$STAMP"; echo "==== progress ===="; } >"$OUT/02-progress.txt"
+    { printf '%s\n' "$STAMP"; printf 'gate\trun\tgate_rc\twall_s\n'; } >"$OUT/timings.tsv"
     prog() { echo "$1 $2 $3 $(date +%H:%M:%S)" >>"$OUT/02-progress.txt"; }
 else
     SKIP_NEXTEST=1
@@ -363,12 +379,44 @@ if [ "$PLAN" = 1 ]; then
     exit 0
 fi
 echo "finished=$(date -Is)" >>"$OUT/00-head.txt"
+
+# Every file in the output directory named by its own INDEX.md (index-check.py).
+write_index() {
+    local f n what
+    {
+        echo "# checkpoint at $(git rev-parse --short HEAD) — scripts/checkpoint.sh"
+        echo
+        echo "| File | What |"
+        echo "|---|---|"
+        for f in "$OUT"/*; do
+            [ -f "$f" ] || continue
+            n="${f##*/}"
+            case "$n" in
+                INDEX.md) continue ;;
+                00-head.txt) what="provenance stamp; dirty_files / started / host_krb5_default_realm / lab_realm_override / nproc / finished" ;;
+                01-nextest-isolated.log) what="\`cargo nextest run --workspace --profile ci\` under \`harness/nextest-krb5.conf\`" ;;
+                02-progress.txt) what="per-step progress lines (stamped)" ;;
+                03-ci-policy.log) what="\`ci-policy.py\` on the checkout" ;;
+                04-gate-wall.log) what="\`ci-policy.py --checkpoint --timings timings.tsv\` (stamped)" ;;
+                07-run-harness.log) what="harness image build/run" ;;
+                timings.tsv) what="gate / run / gate_rc / wall_s (stamped)" ;;
+                *) what="gate log (stamped by provenance.sh)" ;;
+            esac
+            echo "| \`$n\` | $what |"
+        done
+        echo "| \`scratch/\` | gate \`KERBER_SCRATCH\` (skipped by index-check) |"
+    } >"$OUT/INDEX.md"
+}
+
 if [ "$SKIP_POLICY" != 1 ]; then
-    python3 scripts/ci-policy.py --checkpoint --timings "$OUT/timings.tsv" \
-        >"$OUT/04-gate-wall.log" 2>&1 || {
+    { printf '%s\n' "$STAMP"; echo "==== ci-policy --checkpoint ===="; } >"$OUT/04-gate-wall.log"
+    if ! python3 scripts/ci-policy.py --checkpoint --timings "$OUT/timings.tsv" \
+        >>"$OUT/04-gate-wall.log" 2>&1; then
+        write_index
         echo "checkpoint: gate-wall check failed" >&2
         cat "$OUT/04-gate-wall.log" >&2
         exit 1
-    }
+    fi
 fi
+write_index
 echo CHECKPOINT_DONE

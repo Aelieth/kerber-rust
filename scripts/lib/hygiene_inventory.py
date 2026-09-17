@@ -958,8 +958,19 @@ def snapshot(root: pathlib.Path, out: pathlib.Path, skip_nextest: bool, quality:
         "| `fn-sizes.txt` | functions > 40 lines with scope, visibility, doc header |",
         "| `allow-sites.txt` / `process-history.txt` | `#[allow]` sites / process-tag comments |",
         "| `quality.txt` | grep counts; with `--quality` fmt/clippy/doc/doctest/missing_docs/shellcheck |",
-        "| `undocumented-pub*.txt` / `shellcheck.txt` / `*.log` | `--quality` detail (`doc.log` plain, `doc-strict.log` under `-D warnings`) |",
-        "| `provenance.txt` | stamp from snapshot.sh |",
+    ]
+    if quality:
+        # One row per file: index-check.py names files, it does not expand globs.
+        index += [
+            "| `clippy.log` | `cargo clippy --workspace --all-targets --all-features -- -D warnings` |",
+            "| `doc.log` / `doc-strict.log` | `cargo doc --workspace --no-deps` plain (the warning count) / under `RUSTDOCFLAGS=-D warnings` (the rc) |",
+            "| `doctest.log` | `cargo test --workspace --doc` |",
+            "| `undocumented-pub.txt` / `undocumented-pub-items.txt` | `missing_docs` per package / per site |",
+            "| `shellcheck.txt` | `shellcheck -S style -f gcc` findings |",
+        ]
+    index += [
+        "| `provenance.txt` | stamp from snapshot.sh (+ host realm and lab_realm_override) |",
+        "| `scratch/` | `KERBER_SCRATCH` of the snapshot run (skipped by index-check) |",
         "",
         f"tests={(out / 'tests.count').read_text(encoding='utf-8').strip()}",
         f"gate_tags={len(cells)}",

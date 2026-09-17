@@ -78,5 +78,9 @@ make snapshot OUT=working/logs/w3-hygiene/s1/new QUALITY=1
 make checkpoint OUT=working/logs/w3-hygiene/s1/checkpoint
 ```
 
+Both run only where the host `default_realm` is the `TESTLABBY.LOCAL` lab
+stub, never on a machine whose `/etc/krb5.conf` names a real realm
+(`KERBER_ALLOW_HOST_REALM=1` overrides and is recorded in the stamp).
+
 Never add C FFI. `unsafe` is forbidden unless a future exception is
 audited, minimized, and documented in the PR.

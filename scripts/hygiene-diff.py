@@ -26,7 +26,9 @@ from __future__ import annotations
 
 import argparse
 import collections
+import os
 import pathlib
+import subprocess
 import sys
 import tempfile
 
@@ -539,7 +541,41 @@ def main() -> int:
     ap.add_argument("--renames", type=pathlib.Path, help="old_name -> new_name")
     ap.add_argument("--duplicates", type=pathlib.Path, help="removed_name = kept_name")
     args = ap.parse_args()
+    if args.old.is_dir() and args.new.is_dir():
+        for line in provenance_header(args.old, args.new):
+            print(line)
     return _compare(args)
+
+
+def provenance_header(old: pathlib.Path, new: pathlib.Path) -> list[str]:
+    """Stamp the compare output like any other artefact (evidence-check.py wants
+    `head_sha=` and `tree_sha=`): the tree the compare ran on, from
+    `scripts/lib/provenance.sh`, then the two snapshots' own stamps."""
+    root = pathlib.Path(__file__).resolve().parent.parent
+    env = dict(os.environ, KERBER_NO_IMAGE="1")
+    scratch = pathlib.Path(env.get("KERBER_SCRATCH") or new / "scratch")
+    scratch.mkdir(parents=True, exist_ok=True)
+    env["KERBER_SCRATCH"] = str(scratch)
+    try:
+        stamp = subprocess.run(
+            ["bash", "-c", ". scripts/lib/provenance.sh"],
+            cwd=root, env=env, capture_output=True, text=True, check=False,
+        ).stdout
+    except OSError:
+        stamp = ""
+    keep = ("==== provenance ====", "head_sha=", "tree_sha=", "dirty=", "captured_at=")
+    lines = [ln for ln in stamp.splitlines() if ln.startswith(keep)]
+    if len(lines) < 3:
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
+        tree = subprocess.run(["git", "rev-parse", "HEAD^{tree}"], cwd=root, capture_output=True, text=True).stdout.strip()
+        lines = ["==== provenance ====", f"head_sha={head}", f"tree_sha={tree}", "dirty=unknown"]
+    for label, d in (("old", old), ("new", new)):
+        side = kv(d / "provenance.txt")
+        lines.append(
+            f"{label}={d} {label}_head={side.get('head_sha', '?')[:12]} {label}_dirty={side.get('dirty', '?')}"
+        )
+    lines.append("==== compare ====")
+    return lines
 
 
 if __name__ == "__main__":
