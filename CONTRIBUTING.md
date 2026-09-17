@@ -74,8 +74,8 @@ Live MIT oracles (when Docker is available): `make harness` then
 container down. Comparison snapshot / full gate checkpoint:
 
 ```bash
-make snapshot OUT=working/logs/w2-efficiency/s0/new
-make checkpoint OUT=working/logs/w2-efficiency/s0/checkpoint
+make snapshot OUT=working/logs/w3-hygiene/s1/new QUALITY=1
+make checkpoint OUT=working/logs/w3-hygiene/s1/checkpoint
 ```
 
 Never add C FFI. `unsafe` is forbidden unless a future exception is

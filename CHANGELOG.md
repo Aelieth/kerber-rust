@@ -6,6 +6,20 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S0 comparison baseline
+
+- **Shape inventory.** `hygiene-snapshot.sh` records, next to the W2
+  time inventory, LOC/SLOC/comment/doc lines per package and file,
+  functions over 40 lines with scope and doc header, `pub` vs restricted
+  items, `#[allow]` sites, process-tag comments, gate assert counts,
+  binaries and declared/resolved dependencies. `--quality` adds
+  fmt/clippy/rustdoc-`-D warnings`/doctest counts, `missing_docs` per
+  library (`--force-warn`, 117 at the W3 base) and `shellcheck -S style`
+  (binary or the local `koalaman/shellcheck` image; `na` without either).
+  `hygiene-diff.py` fails when any of those counts rises or a quality rc
+  goes red, reports shape deltas, and self-tests the new rules. `make
+  snapshot QUALITY=1`, `make rust-kdc`. No product code changes.
+
 ### W2-Y5 X4 proof and docs truth
 
 - **serve_until probe.** `serve_until_honours_shutdown_within_the_poll_interval`

@@ -7,11 +7,20 @@ Fails on:
   - a (file,kind,tag) multiplicity drop (a (kind,tag) count that fell)
   - a diffsend case, client-differential flow, or ledger row removed or regraded
   - a gate_rc that went from 0 to non-zero
-  - quality counts that went up (allow=, unwrap_expect_panic_src=, traces_untracked=)
+  - quality counts that went up (allow=, unwrap_expect_panic_src=, traces_untracked=,
+    clippy_warnings=, doc_warnings=, fmt_files=, shellcheck_findings=, undocumented_pub=)
+  - a quality rc that went from 0 to non-zero (fmt_rc, clippy_rc, doc_rc, doctest_rc,
+    shellcheck_rc)
+
+A key present on only one side is skipped (a W2 snapshot has no W3 keys;
+`na`/`skipped` values are not numbers).
 
 Prints `gate_rc: not compared` when neither side has timings.tsv.
 
-Reports as information: sleep/boot/cargo-build/LOC deltas.
+Reports as information: sleep/boot/cargo-build deltas; LOC, comment and doc
+lines per package; file and fn maxima; `pub` surface; binaries and
+dependencies added or removed; gate assert-count drops; new shellcheck
+findings and new undocumented items when their count rose.
 """
 from __future__ import annotations
 
@@ -80,7 +89,13 @@ def load_gate_rc(path: pathlib.Path) -> dict[str, int]:
     return rc
 
 
-def _write_snap(d: pathlib.Path, gates: list[str], timings: str | None = None) -> None:
+def _write_snap(
+    d: pathlib.Path,
+    gates: list[str],
+    timings: str | None = None,
+    quality: dict[str, str] | None = None,
+    binaries: list[str] | None = None,
+) -> None:
     d.mkdir(parents=True, exist_ok=True)
     (d / "gates.txt").write_text("# gate\tkind\ttag\n" + "".join(g + "\n" for g in gates), encoding="utf-8")
     (d / "tests.txt").write_text("# binary\tname\nbin\tt1\n", encoding="utf-8")
@@ -89,20 +104,73 @@ def _write_snap(d: pathlib.Path, gates: list[str], timings: str | None = None) -
         "diffsend.txt",
         "client-differential-flows.txt",
         "ledger-rows.txt",
-        "quality.txt",
         "sleeps.txt",
         "cargo-build-gates.txt",
         "unit-sleeps.txt",
     ):
         (d / name).write_text("#\n", encoding="utf-8")
+    (d / "quality.txt").write_text(
+        "#\n" + "".join(f"{k}={v}\n" for k, v in (quality or {}).items()), encoding="utf-8"
+    )
+    if binaries is not None:
+        (d / "binaries.txt").write_text("#\n" + "".join(b + "\n" for b in binaries), encoding="utf-8")
     if timings is not None:
         (d / "timings.tsv").write_text(timings, encoding="utf-8")
+
+
+def _quiet_compare(old: pathlib.Path, new: pathlib.Path) -> int:
+    import io
+    from contextlib import redirect_stdout
+
+    with redirect_stdout(io.StringIO()):
+        return main_compare(old, new)
+
+
+def _must_fail(old: pathlib.Path, new: pathlib.Path, label: str) -> None:
+    if _quiet_compare(old, new) == 0:
+        raise SystemExit(f"hygiene-diff --self-test: {label} must fail")
+
+
+def _must_pass(old: pathlib.Path, new: pathlib.Path, label: str) -> None:
+    if _quiet_compare(old, new) != 0:
+        raise SystemExit(f"hygiene-diff --self-test: {label} must pass")
+
+
+def _self_test_quality(root: pathlib.Path) -> None:
+    """W3 keys: a rise or a 0 -> non-zero rc is red; a one-sided key or a moved binary is not."""
+    red = [
+        ("undocumented_pub rose", {"undocumented_pub": "5"}, {"undocumented_pub": "7"}),
+        ("shellcheck_findings rose", {"shellcheck_findings": "90"}, {"shellcheck_findings": "91"}),
+        ("doc_warnings rose", {"doc_warnings": "0"}, {"doc_warnings": "1"}),
+        ("doc_rc went red", {"doc_rc": "0"}, {"doc_rc": "1"}),
+    ]
+    green = [
+        ("doc_rc stayed red", {"doc_rc": "1", "doc_warnings": "3"}, {"doc_rc": "1", "doc_warnings": "3"}),
+        ("one-sided key", {}, {"doc_warnings": "3", "undocumented_pub": "117"}),
+        ("na", {"shellcheck_findings": "na"}, {"shellcheck_findings": "90"}),
+        ("counts fell", {"undocumented_pub": "117", "allow": "75"}, {"undocumented_pub": "0", "allow": "70"}),
+    ]
+    for i, (label, old_q, new_q) in enumerate(red):
+        old, new = root / f"red{i}-old", root / f"red{i}-new"
+        _write_snap(old, ["a.sh\techo\tkeep"], quality=old_q)
+        _write_snap(new, ["a.sh\techo\tkeep"], quality=new_q)
+        _must_fail(old, new, f"quality {label}")
+    for i, (label, old_q, new_q) in enumerate(green):
+        old, new = root / f"green{i}-old", root / f"green{i}-new"
+        _write_snap(old, ["a.sh\techo\tkeep"], quality=old_q)
+        _write_snap(new, ["a.sh\techo\tkeep"], quality=new_q)
+        _must_pass(old, new, f"quality {label}")
+    old, new = root / "bin-old", root / "bin-new"
+    _write_snap(old, ["a.sh\techo\tkeep"], binaries=["krb5-kdc\tkrb5-forge-tgt"])
+    _write_snap(new, ["a.sh\techo\tkeep"], binaries=["krb5-tools\tkrb5-forge-tgt"])
+    _must_pass(old, new, "a binary moving packages")
 
 
 def _self_test() -> None:
     """Red on (file,kind,tag) multiplicity drop; gate_rc: not compared when no timings."""
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
+        _self_test_quality(root)
         old, new = root / "old", root / "new"
         _write_snap(
             old,
@@ -296,10 +364,118 @@ def _compare(args) -> int:
             return None
 
     old_q, new_q = kv(old / "quality.txt"), kv(new / "quality.txt")
-    for key in ("allow", "unwrap_expect_panic_src", "traces_untracked"):
+    for key in (
+        "allow",
+        "unwrap_expect_panic_src",
+        "traces_untracked",
+        "clippy_warnings",
+        "doc_warnings",
+        "fmt_files",
+        "shellcheck_findings",
+        "undocumented_pub",
+    ):
         a, b = int_or_none(old_q, key), int_or_none(new_q, key)
         if a is not None and b is not None and b > a:
             fail(f"quality {key} rose {a} -> {b}")
+        elif a is not None and b is not None and b != a:
+            info(f"quality {key} {a} -> {b}")
+    for key in ("fmt_rc", "clippy_rc", "doc_rc", "doctest_rc", "shellcheck_rc"):
+        a, b = int_or_none(old_q, key), int_or_none(new_q, key)
+        if a == 0 and b not in (None, 0):
+            fail(f"quality {key} 0 -> {b}")
+
+    def _norm_finding(line: str) -> str:
+        # shellcheck `file:line:col: level: message [SCnnnn]` -> `file: level: message [SCnnnn]`;
+        # undocumented `file:line<TAB>message` -> `file<TAB>message` (line numbers shift).
+        if "\t" in line:
+            where, msg = line.split("\t", 1)
+            return f"{where.rsplit(':', 1)[0]}\t{msg}"
+        parts = line.split(":", 3)
+        return f"{parts[0]}:{parts[3].strip()}" if len(parts) == 4 else line
+
+    for fname, key, label in (
+        ("shellcheck.txt", "shellcheck_findings", "shellcheck finding"),
+        ("undocumented-pub-items.txt", "undocumented_pub", "undocumented item"),
+    ):
+        a, b = int_or_none(old_q, key), int_or_none(new_q, key)
+        if a is None or b is None or b <= a:
+            continue
+        old_s = {_norm_finding(ln) for ln in load_data_lines(old / fname)}
+        new_l = [ln for ln in load_data_lines(new / fname) if _norm_finding(ln) not in old_s]
+        for ln in new_l[:20]:
+            info(f"new {label}: {ln}")
+
+    for fname, label in (
+        ("crates.txt", "package"),
+        ("binaries.txt", "binary"),
+        ("deps-declared.txt", "declared dependency"),
+        ("deps.txt", "resolved dependency"),
+    ):
+        old_s, new_s = load_set(old / fname), load_set(new / fname)
+        if not old_s and not new_s:
+            continue
+        for item in sorted(old_s - new_s):
+            info(f"{label} removed: {item}")
+        for item in sorted(new_s - old_s):
+            info(f"{label} added: {item}")
+
+    def table(path: pathlib.Path) -> dict[str, list[str]]:
+        rows: dict[str, list[str]] = {}
+        for ln in load_data_lines(path):
+            parts = ln.split("\t")
+            rows[parts[0]] = parts[1:]
+        return rows
+
+    old_loc, new_loc = table(old / "loc-crates.txt"), table(new / "loc-crates.txt")
+    for pkg in sorted(set(old_loc) | set(new_loc)):
+        a, b = old_loc.get(pkg), new_loc.get(pkg)
+        if a is None or b is None or a == b:
+            continue
+        # columns: files loc sloc comment doc blank src_loc src_test_loc tests_loc tests_in_src tests_in_tests
+        names = ("files", "loc", "sloc", "comment", "doc", "blank", "src_loc", "src_test_loc", "tests_loc", "tests_in_src", "tests_in_tests")
+        deltas = [f"{n} {x}->{y}" for n, x, y in zip(names, a, b) if x != y]
+        info(f"loc {pkg}: " + ", ".join(deltas))
+    old_pub, new_pub = table(old / "pub-items.txt"), table(new / "pub-items.txt")
+    for pkg in sorted(set(old_pub) | set(new_pub)):
+        a, b = old_pub.get(pkg), new_pub.get(pkg)
+        if a is None or b is None or a == b:
+            continue
+        info(f"pub {pkg}: pub {a[0]}->{b[0]}, restricted {a[1]}->{b[1]}")
+    old_as, new_as = table(old / "gate-asserts.txt"), table(new / "gate-asserts.txt")
+    for gate in sorted(set(old_as) & set(new_as)):
+        a, b = old_as[gate], new_as[gate]
+        if a == b:
+            continue
+        names = ("die", "exit_1", "grep_q", "diff_sub")
+        dropped = [f"{n} {x}->{y}" for n, x, y in zip(names, a, b) if int(y) < int(x)]
+        if dropped:
+            info(f"gate asserts dropped {gate}: " + ", ".join(dropped))
+    for key in (
+        "loc",
+        "sloc",
+        "comment_lines",
+        "doc_lines",
+        "src_test_loc",
+        "tests_in_src",
+        "tests_in_tests",
+        "doctests",
+        "pub_items",
+        "pub_restricted",
+        "allow_sites",
+        "process_history_comments",
+        "max_file_lines_src",
+        "files_over_1500_src",
+        "max_fn_lines_src",
+        "fns_over_120_src",
+        "undoc_fns_over_40_src",
+        "binaries",
+        "deps_declared",
+        "deps_tree",
+        "shellcheck_disables",
+    ):
+        a, b = old_q.get(key), new_q.get(key)
+        if (a or b) and a != b:
+            info(f"{key} {a} -> {b}")
 
     old_sleeps = load_data_lines(old / "sleeps.txt")
     new_sleeps = load_data_lines(new / "sleeps.txt")

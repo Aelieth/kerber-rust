@@ -6,8 +6,9 @@ ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 KRB5_CONFIG ?= $(ROOT)/harness/nextest-krb5.conf
 OUT ?=
 GATE ?=
+QUALITY ?=
 
-.PHONY: safety fmt clippy test doc policy harness stop-harness gate snapshot checkpoint budget
+.PHONY: safety fmt clippy test doc policy harness stop-harness rust-kdc gate snapshot checkpoint budget
 
 safety: fmt clippy test policy
 
@@ -32,14 +33,17 @@ harness:
 stop-harness:
 	./scripts/stop-harness.sh
 
+rust-kdc:
+	./scripts/run-rust-kdc.sh
+
 gate:
 	@if [ -z "$(GATE)" ]; then echo "usage: make gate GATE=client-gate"; exit 2; fi
 	@g="$(GATE)"; g=$${g%.sh}; case "$$g" in *-gate) ;; *) g="$$g-gate" ;; esac; \
 	  ./scripts/$$g.sh
 
 snapshot:
-	@if [ -z "$(OUT)" ]; then echo "usage: make snapshot OUT=dir"; exit 2; fi
-	./scripts/hygiene-snapshot.sh $(OUT)
+	@if [ -z "$(OUT)" ]; then echo "usage: make snapshot OUT=dir [QUALITY=1]"; exit 2; fi
+	./scripts/hygiene-snapshot.sh $(if $(QUALITY),--quality,) $(OUT)
 
 checkpoint:
 	@if [ -z "$(OUT)" ]; then echo "usage: make checkpoint OUT=dir"; exit 2; fi

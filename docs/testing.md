@@ -7,10 +7,15 @@ Testing is continuous. Categories grow with the stages.
 The local entry point is `make safety` (fmt, clippy, nextest under
 `harness/nextest-krb5.conf`, `cargo doc --workspace --no-deps`,
 `python3 scripts/ci-policy.py`). `make snapshot OUT=<dir>` records the
-test/gate/oracle inventory; `make checkpoint OUT=<dir>` runs nextest and
-the gates into a stamped `timings.tsv`. `python3 scripts/hygiene-diff.py
-<old> <new>` fails if a test, cell tag, diffsend case, flow or ledger
-row disappeared. Job walls live in `ci-budget.toml` (see Tier contract
+test/gate/oracle inventory and the shape of the tree (LOC and comment
+lines per package and file, function and file maxima, `pub` surface,
+`#[allow]` sites, binaries, dependencies); `QUALITY=1` adds the
+compiler-backed counts (fmt, clippy, rustdoc under `-D warnings`,
+doctests, `missing_docs`, shellcheck). `make checkpoint OUT=<dir>` runs
+nextest and the gates into a stamped `timings.tsv`. `python3
+scripts/hygiene-diff.py <old> <new>` fails if a test, cell tag, diffsend
+case, flow or ledger row disappeared, a gate went red, or a quality
+count rose; shape deltas are informational. Job walls live in `ci-budget.toml` (see Tier contract
 below). `python3 scripts/ci-status.py --check-budget` compares a
 completed SHA against that file.
 
