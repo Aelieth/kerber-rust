@@ -7,9 +7,9 @@ never install a subscriber. Tests and the harness do.
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `event` | yes | Stable name from `krb5_log::events` (`crypto.encrypt`, `asn1.decode`, `kdc.issue`, `admin`, …); every constant there is emitted somewhere |
-| `correlation_id` | yes | 32 hex chars; one ID per *exchange* (crypto/ASN.1 inherit the parent via `enter_correlation`; they do not mint a new ID per op) |
-| `component` | yes | `krb5-crypto`, `krb5-asn1`, `krb5-protocol`, `krb5-kdc`, `krb5-admin`, or `krb5-client` |
+| `event` | yes | Stable name. From Rust: a `krb5_log::events` constant (`crypto.encrypt`, `asn1.decode`, `kdc.issue`, `admin`, …; every constant there is emitted somewhere). From the harness containers: `harness.start`, `harness.kdc.ready`, `harness.kinit`, `heimdal.start`, `samba.start` (see below) |
+| `correlation_id` | yes | 32 hex chars; one ID per *exchange* (crypto/ASN.1 inherit the parent via `enter_correlation`; they do not mint a new ID per op). The harness containers echo the `CORRELATION_ID` they were started with (`none` when unset) |
+| `component` | yes | Rust: `krb5-crypto`, `krb5-asn1`, `krb5-protocol`, `krb5-kdc`, `krb5-admin`, or `krb5-client`. Harness: `harness` (the MIT KDC container), `heimdal-harness`, `samba-harness` |
 | `outcome` | yes | `ok`, `error`, or `krb-error` |
 | `duration_us` | crypto/asn1 | Wall time of the operation |
 | `etype` | crypto | IANA encryption-type number |
@@ -31,9 +31,32 @@ never install a subscriber. Tests and the harness do.
 | `s4u` / `s4u_client` | kdc.issue | `PROTOCOL-TRANSITION` or `CONSTRAINED-DELEGATION` |
 | `record` | kdc.audit | One JSON object using MIT `j_dict.h` keys |
 
-Canonical `event` strings live in `krb5_log::events`; the field names
-above are written literally at each `tracing` call site (there are no
-`FIELD_*` constants).
+Canonical Rust `event` strings live in `krb5_log::events`; the field
+names above are written literally at each `tracing` call site (there
+are no `FIELD_*` constants).
+
+## Harness log lines
+
+The three container entrypoints under `harness/` are shell, not
+`tracing`; each writes its lines with `printf` to stdout (`docker
+logs`), one JSON object per line with the same `event` /
+`correlation_id` / `component` / `outcome` core plus `realm`. Their
+names are declared here and nowhere in Rust:
+
+| `component` | `event` | Extra fields | Emitted |
+| --- | --- | --- | --- |
+| `harness` | `harness.start` | `kdc_port` | `harness/entrypoint.sh`, before the KDB is created |
+| `harness` | `harness.kdc.ready` | `kdc_port`; `error` on `outcome=error` | once `krb5kdc` listens on 88, or after the wait times out |
+| `harness` | `harness.kinit` | `principal` | after the in-container `kinit`; `outcome` `ok` or `error` |
+| `heimdal-harness` | `heimdal.start` | `kdc` (the KDC binary path) | `harness/heimdal/entrypoint.sh`, before `exec` of the KDC |
+| `samba-harness` | `samba.start` | — | `harness/samba/entrypoint.sh`, before `exec samba` (the domain is provisioned in the image) |
+
+Gate scripts depend on two of these by exact string:
+`scripts/lib/gate-common.sh`, `scripts/run-harness.sh` and
+`scripts/kadmin-mit-gate.sh` wait for
+`"event":"harness.kinit"` with `"outcome":"ok"` (and fail on
+`"outcome":"error"`), and `scripts/heimdal-gate.sh` waits for
+`"event":"heimdal.start"`. Renaming an event renames those greps.
 
 Every request logs one `event=kdc.issue` line from `handle_request`
 at `info`, including `duration_us`. A **KRB-ERROR** PDU is
