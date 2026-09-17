@@ -74,6 +74,11 @@ this project uses semantic versioning once a crate is published.
   `check_msrv_pinned`, `check_rust_cache_shared_key`, `check_build_profile`
   and the `kcm-opcode` lld rule read through the composite; the prod-gate
   cleanup check accepts a named function.
+- **Comparison harness.** `hygiene-diff.py --dead <map>`: an `echo`-kind
+  cell tag (the `MIT_*`/`RUST_*` identifier scan) listed with a reason is
+  reported as information when it disappears, so deleting a dead path or
+  port constant does not read as a lost cell; `section`/`flow` tags and
+  unlisted `echo` tags still fail. A map may carry the evidence stamp.
 
 ### W3-S0 comparison baseline
 

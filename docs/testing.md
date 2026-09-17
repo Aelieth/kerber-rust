@@ -25,8 +25,11 @@ file in their own `INDEX.md`. `python3
 scripts/hygiene-diff.py <old> <new>` prints a provenance header, then
 fails if a test, cell tag, diffsend case, flow or ledger row
 disappeared, a gate went red, or a quality count rose; shape deltas are
-informational. Job walls live in `ci-budget.toml` (see Tier contract
-below). `python3 scripts/ci-status.py --check-budget` compares a
+informational. A swath that renames or de-duplicates tests passes its
+map (`--renames`, `--duplicates`); one that deletes a `MIT_*`/`RUST_*`
+variable that was never a cell lists it in `--dead` with the reason
+(`section` and `flow` tags cannot be waived). Job walls live in
+`ci-budget.toml` (see Tier contract below). `python3 scripts/ci-status.py --check-budget` compares a
 completed SHA against that file.
 
 CI status is read from the terminal with `python3 scripts/ci-status.py [-n RUNS] [--sha SHA] [--jobs] [--durations] [--workflow ci|peers]`:

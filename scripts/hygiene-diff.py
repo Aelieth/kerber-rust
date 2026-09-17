@@ -3,7 +3,9 @@
 
 Fails on:
   - a test name removed that is not in --renames / --duplicates
-  - a gate cell tag removed
+  - a gate cell tag removed (an `echo` tag listed in --dead with a reason is
+    information: the MIT_/RUST_ identifier scan also catches path and port
+    constants that were never a cell; `section`/`flow` tags cannot be waived)
   - a (file,kind,tag) multiplicity drop (a (kind,tag) count that fell)
   - a diffsend case, client-differential flow, or ledger row removed or regraded
   - a gate_rc that went from 0 to non-zero
@@ -28,6 +30,7 @@ import argparse
 import collections
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -48,14 +51,24 @@ def load_set(path: pathlib.Path) -> set[str]:
     return set(load_data_lines(path))
 
 
+_STAMP_LINE_RE = re.compile(r"^(?:====.*====|[a-z_]+=\S*)$")
+
+
 def load_map(path: pathlib.Path | None, sep: str) -> dict[str, str]:
+    """`left <sep> right` per line; `#` comments; a leading provenance stamp
+    (`==== provenance ====`, `key=value` lines) is skipped so a map kept as
+    evidence can carry the stamp evidence-check.py wants."""
     if path is None or not path.is_file():
         return {}
     mapping: dict[str, str] = {}
+    in_stamp = True
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
+        if in_stamp and _STAMP_LINE_RE.match(line):
+            continue
+        in_stamp = False
         if sep not in line:
             raise SystemExit(f"bad map line in {path}: {line!r}")
         left, right = line.split(sep, 1)
@@ -193,6 +206,26 @@ def _self_test() -> None:
         if rc == 0:
             raise SystemExit("hygiene-diff --self-test: multiplicity drop must fail")
 
+        # --dead waives an `echo` tag with a reason; never a section, never unlisted.
+        dead_map = root / "dead.txt"
+        dead_map.write_text(
+            "==== provenance ====\nhead_sha=abc\ntree_sha=def\ndirty=no\n"
+            "# a stamped map still parses\nMIT_DEAD_PORT: unused constant, S1 commit 4\n",
+            encoding="utf-8",
+        )
+        dead_old, dead_new = root / "dead-old", root / "dead-new"
+        _write_snap(dead_old, ["a.sh\techo\tMIT_DEAD_PORT", "b.sh\techo\tMIT_DEAD_PORT", "a.sh\techo\tkeep"])
+        _write_snap(dead_new, ["a.sh\techo\tkeep"])
+        if main_compare(dead_old, dead_new) == 0:
+            raise SystemExit("hygiene-diff --self-test: unlisted echo tag removal must fail")
+        if main_compare(dead_old, dead_new, dead_path=dead_map) != 0:
+            raise SystemExit("hygiene-diff --self-test: --dead echo tag removal must pass")
+        sect_old, sect_new = root / "sect-old", root / "sect-new"
+        _write_snap(sect_old, ["a.sh\tsection\tMIT_DEAD_PORT", "a.sh\techo\tkeep"])
+        _write_snap(sect_new, ["a.sh\techo\tkeep"])
+        if main_compare(sect_old, sect_new, dead_path=dead_map) == 0:
+            raise SystemExit("hygiene-diff --self-test: --dead must not waive a section tag")
+
         moved_old, moved_new = root / "moved-old", root / "moved-new"
         _write_snap(moved_old, ["a.sh\techo\tcell-y"])
         _write_snap(moved_new, ["b.sh\techo\tcell-y"])
@@ -215,7 +248,9 @@ def _self_test() -> None:
             raise SystemExit("hygiene-diff --self-test: missing gate_rc: not compared")
 
 
-def main_compare(old: pathlib.Path, new: pathlib.Path, renames_path=None, duplicates_path=None) -> int:
+def main_compare(
+    old: pathlib.Path, new: pathlib.Path, renames_path=None, duplicates_path=None, dead_path=None
+) -> int:
     class NS:
         pass
 
@@ -224,6 +259,7 @@ def main_compare(old: pathlib.Path, new: pathlib.Path, renames_path=None, duplic
     args.new = new
     args.renames = renames_path
     args.duplicates = duplicates_path
+    args.dead = dead_path
     return _compare(args)
 
 
@@ -236,6 +272,7 @@ def _compare(args) -> int:
     failed = 0
     renames = load_map(args.renames, "->")
     duplicates = load_map(args.duplicates, "=")
+    dead = load_map(getattr(args, "dead", None), ":")
 
     def fail(msg: str) -> None:
         nonlocal failed
@@ -282,6 +319,9 @@ def _compare(args) -> int:
     old_stable = {cell_tag(c) for c in old_cells if cell_tag(c)[0] != "workflow"}
     new_stable = {cell_tag(c) for c in new_cells if cell_tag(c)[0] != "workflow"}
     for kind, tag in sorted(old_stable - new_stable):
+        if kind == "echo" and dead.get(tag):
+            info(f"gate cell tag removed as dead: {kind}\t{tag} ({dead[tag]})")
+            continue
         fail(f"gate cell tag removed: {kind}\t{tag}")
     added = new_stable - old_stable
     if added:
@@ -303,6 +343,9 @@ def _compare(args) -> int:
         if mapped:
             new_n = max(new_n, new_tag_n.get((kind, mapped), 0))
         if new_n < n:
+            if kind == "echo" and dead.get(tag):
+                info(f"gate cell multiplicity drop as dead: {kind}\t{tag} {n} -> {new_n} ({dead[tag]})")
+                continue
             fail(f"gate cell multiplicity drop: {kind}\t{tag} {n} -> {new_n}")
     old_files: dict[tuple[str, str], set[str]] = {}
     new_files: dict[tuple[str, str], set[str]] = {}
@@ -540,6 +583,7 @@ def main() -> int:
     ap.add_argument("new", type=pathlib.Path)
     ap.add_argument("--renames", type=pathlib.Path, help="old_name -> new_name")
     ap.add_argument("--duplicates", type=pathlib.Path, help="removed_name = kept_name")
+    ap.add_argument("--dead", type=pathlib.Path, help="echo tag: reason (a MIT_/RUST_ name that was never a cell)")
     args = ap.parse_args()
     if args.old.is_dir() and args.new.is_dir():
         for line in provenance_header(args.old, args.new):
