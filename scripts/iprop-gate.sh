@@ -4,7 +4,6 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-# shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 need_bins krb5-kdc krb5-pac-extract krb5-kadmind krb5-kprop krb5-kpropd krb5-iprop-pull

@@ -4,7 +4,6 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-# shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 . "$ROOT/scripts/lib/client-diff-common.sh"
@@ -346,16 +345,16 @@ docker exec "$NAME" kadmin.local -q 'ktadd -k /tmp/vfy.kt host/vfy.kerber.test' 
 docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf "$NAME" \
     sh -c 'printf "userpassword\n" | kinit -c /tmp/cc_vfy user@KERBER.TEST' \
     || die "kinit for vfy_increds failed"
-VFY_ENV="-e KRB5_CONFIG=/tmp/direct-krb5.conf -e KRB5CCNAME=/tmp/cc_vfy -e KRB5_KTNAME=/tmp/vfy.kt"
-docker exec $VFY_ENV "$NAME" /tmp/t_vfy_increds || die "MIT t_vfy_increds host failed"
-docker exec $VFY_ENV "$NAME" /tmp/krb5-vfy-increds || die "Rust t_vfy_increds host failed"
+VFY_ENV=(-e KRB5_CONFIG=/tmp/direct-krb5.conf -e KRB5CCNAME=/tmp/cc_vfy -e KRB5_KTNAME=/tmp/vfy.kt)
+docker exec "${VFY_ENV[@]}" "$NAME" /tmp/t_vfy_increds || die "MIT t_vfy_increds host failed"
+docker exec "${VFY_ENV[@]}" "$NAME" /tmp/krb5-vfy-increds || die "Rust t_vfy_increds host failed"
 echo "MIT_vfy_increds_host"
 echo "RUST_vfy_increds_host"
 docker exec "$NAME" kadmin.local -q 'cpw -randkey host/vfy.kerber.test' >/dev/null
 set +e
-mit_vfy_old_out="$(docker exec $VFY_ENV "$NAME" /tmp/t_vfy_increds 2>&1)"
+mit_vfy_old_out="$(docker exec "${VFY_ENV[@]}" "$NAME" /tmp/t_vfy_increds 2>&1)"
 mit_vfy_old=$?
-rust_vfy_old_out="$(docker exec $VFY_ENV "$NAME" /tmp/krb5-vfy-increds 2>&1)"
+rust_vfy_old_out="$(docker exec "${VFY_ENV[@]}" "$NAME" /tmp/krb5-vfy-increds 2>&1)"
 rust_vfy_old=$?
 set -e
 echo "$mit_vfy_old_out"
@@ -372,12 +371,12 @@ echo "$rust_vfy_old_out" | grep -Eq 'KRB-ERROR 44: Cannot find key for host/vfy\
 echo "MIT_vfy_increds_outdated"
 echo "RUST_vfy_increds_outdated"
 docker exec "$NAME" rm -f /tmp/vfy.kt
-docker exec $VFY_ENV "$NAME" /tmp/t_vfy_increds || die "MIT t_vfy_increds no keytab failed"
-docker exec $VFY_ENV "$NAME" /tmp/krb5-vfy-increds || die "Rust t_vfy_increds no keytab failed"
+docker exec "${VFY_ENV[@]}" "$NAME" /tmp/t_vfy_increds || die "MIT t_vfy_increds no keytab failed"
+docker exec "${VFY_ENV[@]}" "$NAME" /tmp/krb5-vfy-increds || die "Rust t_vfy_increds no keytab failed"
 set +e
-docker exec $VFY_ENV "$NAME" /tmp/t_vfy_increds -n
+docker exec "${VFY_ENV[@]}" "$NAME" /tmp/t_vfy_increds -n
 mit_vfy_n=$?
-docker exec $VFY_ENV "$NAME" /tmp/krb5-vfy-increds -n
+docker exec "${VFY_ENV[@]}" "$NAME" /tmp/krb5-vfy-increds -n
 rust_vfy_n=$?
 set -e
 [ "$mit_vfy_n" != 0 ] || die "MIT t_vfy_increds -n no keytab unexpectedly succeeded"
@@ -386,11 +385,11 @@ echo "MIT_vfy_increds_nokeytab"
 echo "RUST_vfy_increds_nokeytab"
 docker exec "$NAME" kadmin.local -q 'addprinc -randkey nfs/vfy.kerber.test' >/dev/null
 docker exec "$NAME" kadmin.local -q 'ktadd -k /tmp/vfy.kt nfs/vfy.kerber.test' >/dev/null
-docker exec $VFY_ENV "$NAME" /tmp/t_vfy_increds || die "MIT t_vfy_increds nfs-default failed"
-docker exec $VFY_ENV "$NAME" /tmp/krb5-vfy-increds || die "Rust t_vfy_increds nfs-default failed"
-docker exec $VFY_ENV "$NAME" /tmp/t_vfy_increds nfs/vfy.kerber.test@KERBER.TEST \
+docker exec "${VFY_ENV[@]}" "$NAME" /tmp/t_vfy_increds || die "MIT t_vfy_increds nfs-default failed"
+docker exec "${VFY_ENV[@]}" "$NAME" /tmp/krb5-vfy-increds || die "Rust t_vfy_increds nfs-default failed"
+docker exec "${VFY_ENV[@]}" "$NAME" /tmp/t_vfy_increds nfs/vfy.kerber.test@KERBER.TEST \
     || die "MIT t_vfy_increds nfs-explicit failed"
-docker exec $VFY_ENV "$NAME" /tmp/krb5-vfy-increds nfs/vfy.kerber.test@KERBER.TEST \
+docker exec "${VFY_ENV[@]}" "$NAME" /tmp/krb5-vfy-increds nfs/vfy.kerber.test@KERBER.TEST \
     || die "Rust t_vfy_increds nfs-explicit failed"
 echo "MIT_vfy_increds_nfs"
 echo "RUST_vfy_increds_nfs"

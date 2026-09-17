@@ -893,6 +893,9 @@ _UNQUOTED_CP = re.compile(
     r"(?:^|[\s;|&])(?:cp|tee|mv|mkdir|touch|install)\b"
 )
 _QUOTED_TMP = re.compile(r"""['\"]/tmp/""")
+# `mktemp` / `mktemp -d` with no template and no -p/--tmpdir lands in host /tmp
+# (W3-S1). A template or `-p DIR` follows the flags; a bare call hits a closer.
+_BARE_MKTEMP = re.compile(r"(?<![\w-])mktemp\b(?:\s+-[a-zA-Z]+)*\s*(?=$|[)|&;>])")
 _QUOTED_REDIR_TMP = re.compile(r""">>?\s*['\"]/tmp/""")
 
 
@@ -1082,6 +1085,8 @@ def host_tmp_write_lines(text: str) -> list[int]:
             continue
         if _HOST_TMP_REDIR.search(code) or _quoted_host_tmp(raw, code):
             hits.append(i)
+        elif "mktemp" in code and "TMPDIR=" not in code and _BARE_MKTEMP.search(raw):
+            hits.append(i)
     return hits
 
 
@@ -1114,7 +1119,7 @@ def check_no_host_tmp_writes(
     name: str = "gate.sh",
     files: dict[str, str] | None = None,
 ) -> None:
-    """No host `/tmp/` writes in gate scripts or scripts/lib outside KERBER_SCRATCH defaults."""
+    """No host `/tmp/` writes (nor bare `mktemp`) in scripts/*.sh or scripts/lib outside KERBER_SCRATCH defaults."""
     if text is not None:
         hits = host_tmp_write_lines(text)
         if hits:
@@ -1123,7 +1128,7 @@ def check_no_host_tmp_writes(
     if files is None:
         files = {
             p.name: p.read_text()
-            for p in sorted(SCRIPTS.glob("*-gate.sh"))
+            for p in sorted(SCRIPTS.glob("*.sh"))
         }
         lib = SCRIPTS / "lib"
         if lib.is_dir():
@@ -2259,6 +2264,10 @@ def check_makefile_matches_ci(mf: str | None = None, ci_text: str | None = None)
 
 MSRV = "1.95"
 MSRV_JOBS = (("ci.yml", "msrv"), ("full-test.yml", "msrv-test"))
+# The composite that installs the toolchain, lld and rust-cache (W3-S1). A job
+# that `uses:` it has the rust-cache step, so the checks below read through it.
+RUST_PREAMBLE = "./.github/actions/rust-preamble"
+RUST_PREAMBLE_FILE = ROOT / ".github" / "actions" / "rust-preamble" / "action.yml"
 
 
 def check_msrv_pinned(
@@ -2299,12 +2308,16 @@ def check_msrv_pinned(
         job = Workflow(pathlib.Path(name), text).jobs.get(job_name)
         if job is None:
             _die(f"{name} missing job {job_name}")
-        # `@1.95` by tag, or SHA-pinned with `toolchain: 1.95` (W3-S1 pins by SHA).
+        # `@1.95` by tag, or SHA-pinned / the rust-preamble composite with
+        # `toolchain: 1.95` (W3-S1 pins by SHA and shares the preamble).
         by_tag = re.search(r"dtolnay/rust-toolchain@" + re.escape(MSRV) + r"\b", job.body)
-        by_sha = re.search(r"dtolnay/rust-toolchain@[0-9a-f]{40}\b", job.body) and re.search(
+        installer = re.search(r"dtolnay/rust-toolchain@[0-9a-f]{40}\b", job.body) or (
+            RUST_PREAMBLE in job.body
+        )
+        by_input = installer and re.search(
             r'(?m)^\s+toolchain:\s*"?' + re.escape(MSRV) + r'"?\s*$', job.body
         )
-        if not (by_tag or by_sha):
+        if not (by_tag or by_input):
             _die(f"{name} job {job_name} must install dtolnay/rust-toolchain {MSRV}")
         if not re.search(r'(?m)^\s+RUSTUP_TOOLCHAIN:\s*"?' + re.escape(MSRV) + r'"?\s*$', job.body):
             _die(f"{name} job {job_name} must set RUSTUP_TOOLCHAIN: {MSRV}")
@@ -2312,14 +2325,20 @@ def check_msrv_pinned(
             _die(f"{name} job {job_name} runs no cargo step")
 
 
-def check_rust_cache_shared_key(wf_texts: dict[str, str] | None = None) -> None:
-    """Every Swatinem/rust-cache step uses shared-key: kerber; cargo jobs have a cache."""
+def check_rust_cache_shared_key(
+    wf_texts: dict[str, str] | None = None, preamble: str | None = None
+) -> None:
+    """Every Swatinem/rust-cache step uses shared-key: kerber; cargo jobs have a
+    cache, inline or through the rust-preamble composite (which must carry it)."""
     needle = "shared-key: kerber"
     if wf_texts is None:
         wf_texts = {
             p.name: p.read_text(encoding="utf-8")
             for p in sorted((ROOT / ".github" / "workflows").glob("*.yml"))
         }
+    if preamble is None:
+        preamble = RUST_PREAMBLE_FILE.read_text(encoding="utf-8") if RUST_PREAMBLE_FILE.is_file() else ""
+    preamble_ok = "Swatinem/rust-cache" in preamble and needle in preamble
     for name, text in wf_texts.items():
         n_cache = text.count("Swatinem/rust-cache")
         n_key = text.count(needle)
@@ -2329,10 +2348,77 @@ def check_rust_cache_shared_key(wf_texts: dict[str, str] | None = None) -> None:
         for job_name, job in wf.jobs.items():
             if "cargo " not in job.body and "cargo\n" not in job.body:
                 continue
+            if RUST_PREAMBLE in job.body:
+                if not preamble_ok:
+                    _die(f"{RUST_PREAMBLE}/action.yml must run Swatinem/rust-cache with {needle}")
+                continue
             if "Swatinem/rust-cache" not in job.body:
                 _die(f"{name} job {job_name} runs cargo but has no rust-cache")
             if needle not in job.body:
                 _die(f"{name} job {job_name} rust-cache missing shared-key: kerber")
+
+
+CONCURRENCY_WORKFLOWS = ("ci.yml", "fuzz.yml")
+_USES_PINNED = re.compile(r"^\s*(?:-\s+)?uses:\s*(\S+)(.*)$")
+SHELLCHECK_CMD = "shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh"
+
+
+def check_workflow_hardening(
+    wf_texts: dict[str, str] | None = None,
+    action_texts: dict[str, str] | None = None,
+    dependabot: str | None = None,
+    shellcheckrc: str | None = None,
+) -> None:
+    """W3-S1 CI shape: every workflow grants `contents: read` at the top;
+    `concurrency` + `cancel-in-progress` on ci.yml and fuzz.yml only; every
+    third-party `uses:` (workflows and composite actions) is a 40-hex SHA with
+    the tag in a trailing comment; dependabot covers github-actions and cargo;
+    ci.yml runs the fail-red shellcheck job over the three script globs with a
+    `.shellcheckrc` that follows sources."""
+    if wf_texts is None:
+        wf_texts = {
+            p.name: p.read_text(encoding="utf-8")
+            for p in sorted((ROOT / ".github" / "workflows").glob("*.yml"))
+        }
+    if action_texts is None:
+        action_texts = {
+            f"{p.parent.name}/{p.name}": p.read_text(encoding="utf-8")
+            for p in sorted((ROOT / ".github" / "actions").glob("*/action.yml"))
+        }
+    if dependabot is None:
+        p = ROOT / ".github" / "dependabot.yml"
+        dependabot = p.read_text(encoding="utf-8") if p.is_file() else ""
+    if shellcheckrc is None:
+        p = ROOT / ".shellcheckrc"
+        shellcheckrc = p.read_text(encoding="utf-8") if p.is_file() else ""
+    for name, text in wf_texts.items():
+        if not re.search(r"(?m)^permissions:\n  contents: read$", text):
+            _die(f"{name} must grant top-level permissions: contents: read")
+        has_conc = bool(re.search(r"(?m)^concurrency:\n(?:  .*\n)*  cancel-in-progress: true$", text))
+        if has_conc != (name in CONCURRENCY_WORKFLOWS):
+            want = "must" if name in CONCURRENCY_WORKFLOWS else "must not"
+            _die(f"{name} {want} set concurrency with cancel-in-progress: true")
+    for name, text in {**wf_texts, **action_texts}.items():
+        for i, line in enumerate(text.splitlines(), 1):
+            m = _USES_PINNED.match(line)
+            if not m:
+                continue
+            ref, rest = m.group(1), m.group(2)
+            if ref.startswith("./"):
+                continue
+            if not re.fullmatch(r"[^@\s]+@[0-9a-f]{40}", ref) or not re.match(r"\s+#\s*\S", rest):
+                _die(f"{name}:{i} uses: must be SHA-pinned with the tag in a comment: {ref}")
+    for eco in ("github-actions", "cargo"):
+        if f'package-ecosystem: "{eco}"' not in dependabot and f"package-ecosystem: {eco}" not in dependabot:
+            _die(f".github/dependabot.yml must cover package-ecosystem {eco}")
+    ci = wf_texts.get("ci.yml")
+    if ci is None:
+        _die("missing ci.yml")
+    job = Workflow(pathlib.Path("ci.yml"), ci).jobs.get("shellcheck")
+    if job is None or SHELLCHECK_CMD not in job.body:
+        _die(f"ci.yml needs a shellcheck job running `{SHELLCHECK_CMD}`")
+    if "external-sources=true" not in shellcheckrc:
+        _die(".shellcheckrc must set external-sources=true")
 
 
 def check_prod_image_once(ci_text: str | None = None) -> None:
@@ -2372,9 +2458,12 @@ def check_build_profile(
     if "fuse-ld=lld" not in cfg:
         _die(".cargo/config.toml must pass -fuse-ld=lld")
     if ci is None:
+        # The lld step lives in the rust-preamble composite every cargo job uses.
         ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+        if RUST_PREAMBLE_FILE.is_file():
+            ci += RUST_PREAMBLE_FILE.read_text(encoding="utf-8")
     if "apt-get install" not in ci or " lld" not in ci:
-        _die("ci.yml must apt-get install lld")
+        _die("ci.yml (or the rust-preamble composite) must apt-get install lld")
 
 
 def check_env_read(
@@ -2870,7 +2959,12 @@ def check_prod_gate_tcpdump_cleanup(text: str | None = None) -> None:
         if not path.is_file():
             _die("missing scripts/prod-gate.sh")
         text = path.read_text(encoding="utf-8")
+    # The cleanup is a quoted string or a named function; read the body either way.
     bodies = re.findall(r"register_cleanup\s+'([^']*)'", text)
+    for fn in re.findall(r"^register_cleanup\s+([A-Za-z_]\w*)\s*$", text, re.M):
+        m = re.search(rf"^{re.escape(fn)}\(\)\s*\{{\n(.*?)^\}}", text, re.M | re.S)
+        if m:
+            bodies.append(m.group(1))
     if not bodies:
         _die("prod-gate.sh must register_cleanup")
     joined = "\n".join(bodies)
@@ -3034,8 +3128,8 @@ def check_peers_unavailable_convention(
                 continue
             if "kerber-rust-mit-kdc.tar" not in text:
                 _die(f"{name} must restore kerber-rust-mit-kdc.tar (KERBER_NO_IMAGE is not a substitute)")
-            if name == "kcm-opcode.yml" and "lld" not in text:
-                _die("kcm-opcode.yml must install lld")
+            if name == "kcm-opcode.yml" and "lld" not in text and RUST_PREAMBLE not in text:
+                _die("kcm-opcode.yml must install lld (inline or via the rust-preamble composite)")
             if name == "kcm-opcode.yml" and "run-peer-step.sh" not in text:
                 _die("kcm-opcode.yml must wrap the gate with run-peer-step.sh")
         if "peers.yml" in nightly_texts:
@@ -4148,6 +4242,33 @@ jobs:
         "      - run: cargo nextest run\n"
     )
     check_rust_cache_shared_key({"ci.yml": cache_ok})
+    sha = "c" * 40
+    hard_ci = (
+        "name: ci\n\npermissions:\n  contents: read\n\nconcurrency:\n  group: g\n  cancel-in-progress: true\n\n"
+        "on:\n  push:\njobs:\n  shellcheck:\n    steps:\n"
+        f"      - uses: actions/checkout@{sha} # v5.1.0\n"
+        f"      - run: {SHELLCHECK_CMD}\n"
+    )
+    hard_soak = "name: soak\n\npermissions:\n  contents: read\n\non:\n  schedule:\njobs:\n  soak:\n    steps:\n      - uses: ./.github/actions/rust-preamble\n"
+    hard_action = {"rust-preamble/action.yml": f"runs:\n  steps:\n    - uses: Swatinem/rust-cache@{sha} # v2.9.2\n"}
+    hard_bot = 'updates:\n  - package-ecosystem: "github-actions"\n  - package-ecosystem: "cargo"\n'
+    check_workflow_hardening({"ci.yml": hard_ci, "soak.yml": hard_soak}, hard_action, hard_bot, "external-sources=true\n")
+    _must_die(check_workflow_hardening, {"ci.yml": hard_ci, "soak.yml": hard_soak.replace("permissions:\n  contents: read\n\n", "")}, hard_action, hard_bot, "external-sources=true\n")
+    _must_die(check_workflow_hardening, {"ci.yml": hard_ci, "soak.yml": hard_soak.replace("on:", "concurrency:\n  cancel-in-progress: true\non:")}, hard_action, hard_bot, "external-sources=true\n")
+    _must_die(check_workflow_hardening, {"ci.yml": hard_ci.replace("concurrency:\n  group: g\n  cancel-in-progress: true\n\n", ""), "soak.yml": hard_soak}, hard_action, hard_bot, "external-sources=true\n")
+    _must_die(check_workflow_hardening, {"ci.yml": hard_ci.replace(f"@{sha} # v5.1.0", "@v5"), "soak.yml": hard_soak}, hard_action, hard_bot, "external-sources=true\n")
+    _must_die(check_workflow_hardening, {"ci.yml": hard_ci.replace(" # v5.1.0", ""), "soak.yml": hard_soak}, hard_action, hard_bot, "external-sources=true\n")
+    _must_die(check_workflow_hardening, {"ci.yml": hard_ci, "soak.yml": hard_soak}, {"rust-preamble/action.yml": "runs:\n  steps:\n    - uses: Swatinem/rust-cache@v2\n"}, hard_bot, "external-sources=true\n")
+    _must_die(check_workflow_hardening, {"ci.yml": hard_ci, "soak.yml": hard_soak}, hard_action, 'updates:\n  - package-ecosystem: "cargo"\n', "external-sources=true\n")
+    _must_die(check_workflow_hardening, {"ci.yml": hard_ci.replace(SHELLCHECK_CMD, "shellcheck scripts/*.sh"), "soak.yml": hard_soak}, hard_action, hard_bot, "external-sources=true\n")
+    _must_die(check_workflow_hardening, {"ci.yml": hard_ci, "soak.yml": hard_soak}, hard_action, hard_bot, "disable=SC2329\n")
+    cache_via_preamble = cache_ok.replace(
+        "      - uses: Swatinem/rust-cache@v2\n        with:\n          shared-key: kerber\n",
+        "      - uses: ./.github/actions/rust-preamble\n",
+    )
+    preamble_ok = "steps:\n  - uses: Swatinem/rust-cache@" + "b" * 40 + " # v2\n    with:\n      shared-key: kerber\n"
+    check_rust_cache_shared_key({"ci.yml": cache_via_preamble}, preamble_ok)
+    _must_die(check_rust_cache_shared_key, {"ci.yml": cache_via_preamble}, "steps:\n  - run: true\n")
     msrv_wf = (
         "jobs:\n"
         "  {job}:\n"
@@ -4168,6 +4289,18 @@ jobs:
         "      - uses: dtolnay/rust-toolchain@" + "a" * 40 + " # stable\n        with:\n          toolchain: \"1.95\"\n",
     )
     check_msrv_pinned(manifest_ok, manifest_ok, 'channel = "stable"\n', {"ci.yml": sha_pinned, "full-test.yml": msrv_ok["full-test.yml"]})
+    via_preamble = msrv_ok["ci.yml"].replace(
+        "      - uses: dtolnay/rust-toolchain@1.95\n",
+        "      - uses: ./.github/actions/rust-preamble\n        with:\n          toolchain: \"1.95\"\n",
+    )
+    check_msrv_pinned(manifest_ok, manifest_ok, 'channel = "stable"\n', {"ci.yml": via_preamble, "full-test.yml": msrv_ok["full-test.yml"]})
+    _must_die(
+        check_msrv_pinned,
+        manifest_ok,
+        manifest_ok,
+        'channel = "stable"\n',
+        {"ci.yml": via_preamble.replace('          toolchain: "1.95"\n', ""), "full-test.yml": msrv_ok["full-test.yml"]},
+    )
     _must_die(
         check_msrv_pinned,
         manifest_ok,
@@ -4470,9 +4603,28 @@ jobs:
         'register_cleanup \'kill $KDC_PID 2>/dev/null || true; '
         'if [ -n "$TCPDUMP_PID" ]; then sudo -n kill "$TCPDUMP_PID" >/dev/null 2>&1 || true; fi\'\n'
     )
+    check_prod_gate_tcpdump_cleanup(
+        "prod_cleanup() {\n"
+        '    kill "$KDC_PID" 2>/dev/null || true\n'
+        '    if [ -n "$TCPDUMP_PID" ]; then sudo -n kill "$TCPDUMP_PID" >/dev/null 2>&1 || true; fi\n'
+        "}\nregister_cleanup prod_cleanup\n"
+    )
     _must_die(
         check_prod_gate_tcpdump_cleanup,
         "register_cleanup 'kill $KDC_PID $TCPDUMP_PID 2>/dev/null || true'\n",
+    )
+    _must_die(
+        check_prod_gate_tcpdump_cleanup,
+        'prod_cleanup() {\n    kill "$KDC_PID" 2>/dev/null || true\n}\nregister_cleanup prod_cleanup\n',
+    )
+    _must_die(check_no_host_tmp_writes, 'tmp="$(mktemp -d)"\n', "bare-mktemp.sh")
+    _must_die(check_no_host_tmp_writes, "t=$(mktemp)\n", "bare-mktemp-file.sh")
+    check_no_host_tmp_writes(
+        'TMP="$(mktemp -d "${KERBER_SCRATCH:-${TMPDIR:-/tmp}}/x.XXXXXX")"\n'
+        'idx="$(mktemp "$dir/kerber-prov.XXXXXX")"\n'
+        'd="$(mktemp -d -p "$SCRATCH")"\n'
+        "docker exec n sh -c 'mktemp -d'\n",
+        "ok-mktemp.sh",
     )
     check_no_host_tmp_writes(
         "docker exec n sh -c 'kill /tmp/krb5-kdc; : >/tmp/in-container'\n"
@@ -4884,6 +5036,7 @@ def main() -> None:
     check_makefile_matches_ci()
     check_msrv_pinned()
     check_rust_cache_shared_key()
+    check_workflow_hardening()
     check_prod_image_once()
     check_build_profile()
     check_env_read()

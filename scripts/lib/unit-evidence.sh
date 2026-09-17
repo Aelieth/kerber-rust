@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Stamped unit green / parent-red helpers. Source after cd "$ROOT".
 # shellcheck shell=bash
-# shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 
 # Every #[test] / #[tokio::test] fn name in the named files, one per line.

@@ -7,7 +7,6 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-# shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 need_bins krb5-kdc krb5-pac-extract
@@ -16,7 +15,6 @@ CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
 export CORRELATION_ID
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-samba-realtrust}"
 mkdir -p "$SCRATCH"
-UNAVAIL="$SCRATCH/samba-realtrust-unavailable.log"
 ADMIN_PW="${SAMBA_ADMIN_PASSWORD:-Samba-Admin-Kerber-2026!}"
 KBRUSER_PW="${SAMBA_KBRUSER_PASSWORD:-Kbruser-P@ss-2026!}"
 
@@ -41,7 +39,7 @@ NAME_B="kerber-rust-samba-rt-b"
 docker rm -f "$NAME_A" "$NAME_B" >/dev/null 2>&1 || true
 docker network rm "$NET" >/dev/null 2>&1 || true
 docker network create "$NET" >/dev/null
-register_cleanup 'docker rm -f "$NAME_A" "$NAME_B" >/dev/null 2>&1 || true; docker network rm "$NET" >/dev/null 2>&1 || true'
+register_cleanup "docker rm -f '$NAME_A' '$NAME_B' >/dev/null 2>&1 || true; docker network rm '$NET' >/dev/null 2>&1 || true"
 
 set +e
 docker run -d --name "$NAME_A" --hostname dc1 --network "$NET" \
@@ -57,8 +55,7 @@ fi
 
 wait88() {
     local n=$1
-    local i
-    for i in $(seq 1 40); do
+    for _ in $(seq 1 40); do
         if docker exec "$n" sh -c 'ss -lun | grep -q ":88 "' 2>/dev/null; then
             return 0
         fi

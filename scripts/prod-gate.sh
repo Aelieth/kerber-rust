@@ -8,7 +8,6 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-# shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 need_bins krb5-kdc krb5-kinit
@@ -57,7 +56,11 @@ done
 ./target/debug/krb5-kdc --test-realm "$BIND" >"$LOG" 2>&1 &
 KDC_PID=$!
 # tcpdump is root-owned (`sudo -n tcpdump`); a plain kill gets EPERM.
-register_cleanup 'kill $KDC_PID 2>/dev/null || true; if [ -n "$TCPDUMP_PID" ]; then sudo -n kill "$TCPDUMP_PID" >/dev/null 2>&1 || true; fi'
+prod_cleanup() {
+    kill "$KDC_PID" 2>/dev/null || true
+    if [ -n "$TCPDUMP_PID" ]; then sudo -n kill "$TCPDUMP_PID" >/dev/null 2>&1 || true; fi
+}
+register_cleanup prod_cleanup
 
 ok=0
 for _ in $(seq 1 50); do
@@ -196,7 +199,7 @@ echo "pcap_source=KERBER_CAPTURE_DIR" | tee "$OUT/pcap.stat"
 if [ -f "$PCAP" ]; then
     psz=$(wc -c <"$PCAP" | tr -d ' ')
     echo "pcap_bytes=$psz" | tee -a "$OUT/pcap.stat"
-    ls "$KERBER_CAPTURE_DIR" | tee "$OUT/pdus.list"
+    find "$KERBER_CAPTURE_DIR" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort | tee "$OUT/pdus.list"
     if command -v tshark >/dev/null 2>&1; then
         tshark -r "$PCAP" -d udp.port==18888,kerberos -q -z io,phs 2>/dev/null \
             | tee "$OUT/pcap-tshark.txt" || true

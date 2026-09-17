@@ -4,7 +4,6 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-# shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 need_bins krb5-kdc krb5-kpropd krb5-kadmind
@@ -314,10 +313,8 @@ echo "c2_kpropd_acl_semantics=identical"
 echo "==== MIT kinit user against replica ===="
 kill_comm krb5kdc
 kill_comm krb5-kpropd
-free=0
 for _ in $(seq 1 40); do
     if ! docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.2)" 2>/dev/null; then
-        free=1
         break
     fi
     sleep 0.25

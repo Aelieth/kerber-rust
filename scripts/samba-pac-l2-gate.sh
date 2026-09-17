@@ -6,7 +6,6 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-# shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 need_bins krb5-kdc krb5-pac-extract
@@ -15,7 +14,6 @@ CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
 export CORRELATION_ID
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-samba-pac-l2}"
 mkdir -p "$SCRATCH"
-UNAVAIL="$SCRATCH/samba-pac-l2-unavailable.log"
 
 if ! command -v docker >/dev/null 2>&1; then
     unavailable "docker not available"
@@ -35,7 +33,7 @@ set +e
 docker run -d --name "$NAME" --hostname dc1 "$IMAGE" >"$SCRATCH/samba-pac-l2-run.err" 2>&1
 run_rc=$?
 set -e
-register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
+register_cleanup "docker rm -f '$NAME' >/dev/null 2>&1 || true"
 if [ "$run_rc" -ne 0 ]; then
     unavailable "docker run failed: $(tr '\n' ' ' <"$SCRATCH/samba-pac-l2-run.err" 2>/dev/null || true)"
 fi

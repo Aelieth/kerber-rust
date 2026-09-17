@@ -6,7 +6,6 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-# shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 
@@ -48,7 +47,7 @@ set +e
 docker run -d --name "$NAME" --hostname dc1 "$IMAGE" >"$SCRATCH/ad-windows-run.err" 2>&1
 run_rc=$?
 set -e
-register_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
+register_cleanup "docker rm -f '$NAME' >/dev/null 2>&1 || true"
 if [ "$run_rc" -ne 0 ]; then
     unavailable "docker run $IMAGE failed: $(tr '\n' ' ' <"$SCRATCH/ad-windows-run.err" 2>/dev/null || true)"
 fi

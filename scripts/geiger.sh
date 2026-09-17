@@ -37,7 +37,8 @@ if grep -RInE --include='*.rs' \
     die "product source contains language-level unsafe"
 fi
 
-tmp="$(mktemp -d)"
+mkdir -p "${KERBER_SCRATCH:-${TMPDIR:-/tmp}}"
+tmp="$(mktemp -d "${KERBER_SCRATCH:-${TMPDIR:-/tmp}}/geiger.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
 jsons=()
 

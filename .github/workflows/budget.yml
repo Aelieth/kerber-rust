@@ -1,5 +1,8 @@
 name: budget
 
+permissions:
+  contents: read
+
 on:
   schedule:
     - cron: "17 6 * * *"
@@ -10,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Check last five ci.yml runs (median / >=3-of-5) against ci-budget.toml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

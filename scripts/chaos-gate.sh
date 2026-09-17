@@ -5,11 +5,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-# shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 need_bins loadgen krb5-kdc krb5-kdb krb5-kadmind krb5-kadmin-local krb5-kpasswd krb5-kprop krb5-kpropd
-# shellcheck disable=SC1091
 . "$ROOT/scripts/lib/prod-realm-common.sh"
 
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"

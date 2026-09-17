@@ -7,7 +7,6 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-# shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 need_bins krb5-kdc krb5-kdb krb5-kadmin-local
@@ -160,7 +159,7 @@ echo "==== Rust stash is keytab format; MIT klist -k reads the K/M entry ===="
 # krb5_db_def_fetch_mkey: the stash is a FILE keytab with one K/M@REALM entry.
 docker exec "$NAME" sh -c 'head -c2 /tmp/stash | od -An -tx1' | grep -q '05 02'
 KMKT="$(docker exec "$NAME" klist -k -e -t -K /tmp/stash 2>&1)"
-echo "$KMKT" | sed 's/(0x[0-9a-f]*)/(0x<redacted>)/'
+printf '%s\n' "$KMKT" | sed 's/(0x[0-9a-f]*)/(0x<redacted>)/'
 echo "$KMKT" | grep -q 'K/M@KERBER.TEST'
 echo "$KMKT" | grep -q 'aes256-cts-hmac-sha384-192'
 # krb5-kdb stash rewrites the same file idempotently.

@@ -4,7 +4,6 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-# shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 need_bins krb5-kinit krb5-klist krb5-kdestroy krb5-kswitch
@@ -19,11 +18,9 @@ KCM_IMAGE="${KCM_IMAGE:-kerber-rust-sssd-kcm:f43}"
 F43_DIGEST="sha256:96b2a05f8ce3111e10c236abe8055b01500880d95ee7c2f92fa30847fdbb667b"
 
 need_image
-STOP_MIT=0
 if ! docker ps -q --filter "name=^${MIT}$" | grep -q .; then
     register_cleanup './scripts/stop-harness.sh >/dev/null 2>&1 || true'
     ./scripts/run-harness.sh
-    STOP_MIT=1
 fi
 if ! docker image inspect "$KCM_IMAGE" >/dev/null 2>&1; then
     docker build -f harness/kcm/Dockerfile --build-arg "FEDORA_DIGEST=${F43_DIGEST}" \
@@ -32,7 +29,7 @@ fi
 
 docker rm -f "$KCM" >/dev/null 2>&1 || true
 docker run -d --name "$KCM" --network "container:${MIT}" "$KCM_IMAGE" >/dev/null
-register_cleanup 'docker rm -f "$KCM" >/dev/null 2>&1 || true'
+register_cleanup "docker rm -f '$KCM' >/dev/null 2>&1 || true"
 for _ in $(seq 1 50); do
     if docker exec "$KCM" test -S /run/.heim_org.h5l.kcm-socket; then
         break

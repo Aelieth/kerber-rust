@@ -69,7 +69,6 @@ case "$KERBER_SCRATCH" in
         ;;
 esac
 
-# shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 
 BASE="$(git rev-parse --verify "$1^{commit}")"

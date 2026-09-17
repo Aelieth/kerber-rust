@@ -4,7 +4,6 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-# shellcheck disable=SC1091
 . "$ROOT/scripts/lib/gate-common.sh"
 
 if ! command -v docker >/dev/null 2>&1; then
@@ -17,13 +16,11 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     exit 0
 fi
 
-OWN=0
 if [ -z "${KERBER_SHELL:-}" ]; then
     NAME="kerber-rust-attach-selftest-$$"
     docker rm -f "$NAME" >/dev/null 2>&1 || true
     docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 120 >/dev/null
     KERBER_SHELL="$NAME"
-    OWN=1
     trap 'docker rm -f "$NAME" >/dev/null 2>&1 || true' EXIT
 fi
 NAME="$KERBER_SHELL"

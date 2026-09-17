@@ -6,7 +6,6 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-# shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 need_bins krb5-kdc krb5-kinit
@@ -21,7 +20,6 @@ CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
 export CORRELATION_ID
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-heimdal-gate}"
 mkdir -p "$SCRATCH"
-UNAVAIL="$SCRATCH/heimdal-gate-unavailable.log"
 
 assert_klist() {
     local label="$1"
@@ -62,7 +60,7 @@ fi
 echo "host /etc/krb5.conf must stay TESTLABBY.LOCAL"
 
 docker rm -f "$NAME_H2R" "$NAME_R2H" >/dev/null 2>&1 || true
-register_cleanup 'docker rm -f "$NAME_H2R" "$NAME_R2H" >/dev/null 2>&1 || true'
+register_cleanup "docker rm -f '$NAME_H2R' '$NAME_R2H' >/dev/null 2>&1 || true"
 
 echo "==== Heimdal client vs Rust KDC ===="
 docker run -d --name "$NAME_H2R" --entrypoint sleep "$IMAGE" 3600 >/dev/null \

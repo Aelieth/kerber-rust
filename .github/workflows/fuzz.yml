@@ -1,5 +1,12 @@
 name: fuzz
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 on:
   schedule:
     - cron: "17 4 * * *"
@@ -31,20 +38,32 @@ jobs:
           - gss_token
           - transited
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@nightly
-      - name: Install lld
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq lld
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: ./.github/actions/rust-preamble
         with:
-          shared-key: kerber
+          toolchain: nightly
       - name: cargo-fuzz
         run: cargo install cargo-fuzz --locked
-      - name: seed corpus from traces
+      - name: seed corpus (committed seed-* files plus the MIT traces that fit)
         run: |
-          mkdir -p fuzz/corpus/${{ matrix.target }}
+          set -euo pipefail
+          d="fuzz/corpus/${{ matrix.target }}"
+          mkdir -p "$d"
           case "${{ matrix.target }}" in
-            der_decode|as_tgs_ap) cp tests/traces/mit-*.der fuzz/corpus/${{ matrix.target }}/ || true ;;
+            der_decode|as_tgs_ap) cp tests/traces/mit-*.der "$d/" ;;
+            pac_ndr) cp tests/traces/*.ndr "$d/" ;;
+            keytab_ccache) cp tests/traces/ccache-*.bin "$d/" ;;
           esac
+          n=$(find "$d" -type f | wc -l)
+          echo "corpus ${{ matrix.target }}: $n inputs"
+          test "$n" -gt 0
       - name: smoke ${{ matrix.target }}
         run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=60 -rss_limit_mb=2048
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}/
+          retention-days: 30
+          if-no-files-found: ignore

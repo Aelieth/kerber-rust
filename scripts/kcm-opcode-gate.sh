@@ -4,7 +4,6 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-# shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-kcm-opcode}"
@@ -27,8 +26,7 @@ probe_one() {
     fi
     docker rm -f "$name" >/dev/null 2>&1 || true
     docker run -d --name "$name" "$image" >/dev/null
-    local i
-    for i in $(seq 1 50); do
+    for _ in $(seq 1 50); do
         if docker exec "$name" test -S /run/.heim_org.h5l.kcm-socket; then
             break
         fi

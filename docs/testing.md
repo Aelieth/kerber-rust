@@ -7,7 +7,7 @@ Testing is continuous. Categories grow with the stages.
 The local entry point is `make safety` (fmt, clippy, nextest under
 `harness/nextest-krb5.conf`, `python3 scripts/ci-policy.py`); `make doc`
 is the sibling `doc` job, `cargo doc --workspace --no-deps` under
-`RUSTDOCFLAGS=-D warnings`. Clippy runs `all` + `pedantic` + `cargo` at
+`RUSTDOCFLAGS=-D warnings`; `make shellcheck` is the `shellcheck` job. Clippy runs `all` + `pedantic` + `cargo` at
 deny with eight named allows (`Cargo.toml` says why for each),
 `missing_docs` is denied workspace-wide, and every library and binary
 root carries `#![deny(clippy::unwrap_used, clippy::expect_used,
@@ -406,10 +406,11 @@ compares a completed SHA, or the last N runs, against that file. A run cannot
 measure itself; the nightly `budget.yml` job checks the last five `ci.yml` runs.
 
 - **Tier 1** — per-push blocking: `test`, `harness`, `harness-2`, `mit-extra`,
-  `mit-extra-2`, `msrv`, `audit`, `ledger-mit`, `mit-image`, `doc`. Combined
-  wall ≤ `[push].run_wall` (360 s). Per-job: `test` 300, `harness` 270,
-  `harness-2` 300, `mit-extra` 180, `mit-extra-2` 210, `doc` 90, `msrv` 120,
-  `audit` 260, `ledger-mit` 60, `mit-image` 90.
+  `mit-extra-2`, `msrv`, `audit`, `ledger-mit`, `mit-image`, `doc`,
+  `shellcheck`. Combined wall ≤ `[push].run_wall` (360 s). Per-job: `test`
+  300, `harness` 270, `harness-2` 300, `mit-extra` 180, `mit-extra-2` 210,
+  `doc` 90, `shellcheck` 60, `msrv` 120, `audit` 260, `ledger-mit` 60,
+  `mit-image` 90.
 - **Tier 2** — per-push soft (`continue-on-error`): `slo` 180, `chaos` 180,
   `soak` 240.
 - **Tier 3** — nightly: `peers.yml`, `full-test.yml`, `fuzz.yml`,
@@ -423,12 +424,22 @@ Unit `sleep(` in `crates/*/tests` is ≤ 8.
 ### CI lanes (which job runs which gates)
 
 Per-push (`.github/workflows/ci.yml`, every job red-blocks except the
-three marked `continue-on-error`):
+three marked `continue-on-error`). Every workflow grants `permissions:
+contents: read` at the top (the `audit` job adds `checks`/`issues: write`
+for `rustsec/audit-check`); `ci.yml` and `fuzz.yml` cancel a superseded
+run (`concurrency`); every third-party `uses:` is pinned to a commit SHA
+with the tag in a comment and `.github/dependabot.yml` moves the pins
+(github-actions daily, cargo weekly). The toolchain + lld + `rust-cache`
+steps are one composite, `.github/actions/rust-preamble`; checkout, the
+docker-tar `actions/cache` step and the gate `run:` lines stay inline
+because `ci-policy.py` reads them (`check_workflow_hardening` asserts
+all of the above).
 
 | Job | Runs |
 | --- | --- |
 | `test` | `cargo fmt --check`, `cargo clippy --all-targets --all-features -D warnings`, `cargo nextest run --workspace --profile ci` |
-| `doc` | `cargo doc --workspace --no-deps` (sibling of `test`) |
+| `doc` | `cargo doc --workspace --no-deps` under `RUSTDOCFLAGS=-D warnings` (sibling of `test`) |
+| `shellcheck` | `shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh` with `.shellcheckrc` (`external-sources=true`, `SC2329` off); zero inline disables (`make shellcheck`) |
 | `msrv` | `cargo build --workspace --all-targets --locked` on Rust 1.95 |
 | `audit` | `cargo audit`, `cargo deny`, `scripts/geiger.sh` (per-crate `cargo geiger`, 0-unsafe product), `cargo vet --locked` |
 | `ledger-mit` | fetches the SHA-pinned MIT 1.22.2 source and runs `scripts/ci-policy.py` (ledger anchors, tally, proof column, evidence rules) |

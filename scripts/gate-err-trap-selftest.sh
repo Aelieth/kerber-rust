@@ -12,7 +12,6 @@ cat >"$TMP/scripts/probe-gate.sh" <<'PROBE'
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$KERBER_ROOT"
-# shellcheck disable=SC1091
 . "$KERBER_ROOT/scripts/lib/provenance.sh" >/dev/null
 f() { return 3; }
 false || true

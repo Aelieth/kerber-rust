@@ -4,7 +4,6 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-# shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 . "$ROOT/scripts/lib/kadmin-glob-cells.sh"
@@ -331,7 +330,7 @@ echo "$CPW2" | grep -F "Current password's minimum life has not expired"
 echo "==== self keepold clamps to 5 ===="
 docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw keep-0 keepoldself'
-pw=keep-0
+pw='keep-0'
 for i in 1 2 3 4 5 6; do
     nxt="keep-$i"
     KEEP="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \

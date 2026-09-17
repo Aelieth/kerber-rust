@@ -1,0 +1,6 @@
+# Language statistics and review folding: prose is documentation; the parity
+# ledger (a table ci-policy.py recounts) folds in diffs like generated output.
+docs/** linguist-documentation
+*.md linguist-documentation
+examples/configs/** linguist-documentation
+docs/mit-parity-ledger.md linguist-generated

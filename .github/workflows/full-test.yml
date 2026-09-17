@@ -1,5 +1,8 @@
 name: full-test
 
+permissions:
+  contents: read
+
 on:
   schedule:
     - cron: "27 5 * * *"
@@ -12,15 +15,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install lld
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq lld
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: kerber
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: ./.github/actions/rust-preamble
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
         with:
           tool: nextest
       - name: test --release
@@ -35,12 +33,9 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: "1.95"
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@1.95
-      - name: Install lld
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq lld
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: ./.github/actions/rust-preamble
         with:
-          shared-key: kerber
+          toolchain: "1.95"
       - name: MSRV 1.95 test (locked)
         run: cargo test --workspace --locked

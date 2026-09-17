@@ -3,7 +3,6 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-# shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 . "$ROOT/scripts/lib/kadmin-glob-cells.sh"
@@ -13,7 +12,6 @@ IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-kadmin-gate"
 NAME_MIT="kerber-rust-kadmin-mit"
 KADMIND_PORT=749
-MIT_IPROP_PORT=2121
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-kadmin-gate}"
@@ -503,7 +501,7 @@ need_image
 
 docker rm -f "$NAME" "$NAME_MIT" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
-_kadmin_cleanup 'docker rm -f "$NAME" >/dev/null 2>&1 || true'
+_kadmin_cleanup "docker rm -f '$NAME' >/dev/null 2>&1 || true"
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb

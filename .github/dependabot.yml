@@ -1,0 +1,15 @@
+# Keeps the SHA pins in .github/workflows and .github/actions current (the tag
+# comment on each `uses:` is what dependabot rewrites) and the cargo tree
+# reviewed weekly. ci-policy.py check_workflow_hardening asserts both ecosystems.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directories:
+      - "/"
+      - "/.github/actions/*"
+    schedule:
+      interval: "daily"
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"

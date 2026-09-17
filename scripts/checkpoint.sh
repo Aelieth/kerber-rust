@@ -7,7 +7,7 @@
 #   scripts/checkpoint.sh --self-test
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$ROOT"
+cd "$ROOT" || exit 1
 
 OUT=""
 TWICE=""
@@ -43,7 +43,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ "${CHECKPOINT_SELF_TEST:-0}" = 1 ]; then
-    t=$(mktemp -d)
+    t=$(mktemp -d "${KERBER_SCRATCH:-${TMPDIR:-/tmp}}/checkpoint-selftest.XXXXXX")
     mkdir -p "$t/full"
     echo x >"$t/full/a"
     if "$0" --out "$t/full" --skip-nextest --skip-harness --skip-policy; then
@@ -214,7 +214,7 @@ CLIENT_DIFF_KEEP="client-differential-flows-gate client-differential-cli-gate"
 if [ "$SKIP_POLICY" != 1 ]; then
     { . scripts/lib/provenance.sh; echo "label=python3 scripts/ci-policy.py"; python3 scripts/ci-policy.py; echo "rc=$?"; } \
         >"$OUT/03-ci-policy.log" 2>&1
-    prog 03 ci-policy done
+    prog 03 ci-policy "done"
 fi
 
 if [ "$SKIP_NEXTEST" != 1 ]; then
@@ -235,7 +235,7 @@ if [ "$SKIP_HARNESS" != 1 ]; then
     { . scripts/lib/provenance.sh; echo "label=KERBER_SKIP_MIT_BUILD=1 ./scripts/run-harness.sh"; s=$(date +%s)
       KERBER_SKIP_MIT_BUILD=1 ./scripts/run-harness.sh; echo "harness_rc=$?"; echo "wall_s=$(($(date +%s) - s))"; } \
         >"$OUT/07-run-harness.log" 2>&1
-    prog 07 run-harness done
+    prog 07 run-harness "done"
     i=10
     for g in $HARNESS_ATTACH; do
         i=$((i + 1))

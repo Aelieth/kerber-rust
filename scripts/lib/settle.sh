@@ -34,7 +34,6 @@ case "$base" in
         ;;
 esac
 
-# shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 # R2-T8: a settle must describe committed code, so refuse a dirty tree (working/
 # is already excluded from provenance.sh's dirty check). KERBER_SETTLE_ALLOW_DIRTY

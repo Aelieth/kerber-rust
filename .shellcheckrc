@@ -1,0 +1,10 @@
+# shellcheck -S style over scripts/*.sh scripts/lib/*.sh harness/*.sh, run from
+# the repo root (the CI shellcheck job, make shellcheck, the hygiene inventory).
+# Sourced files are followed, so `. "$ROOT/scripts/lib/gate-common.sh"` needs no
+# per-site directive; SCRIPTDIR/.. is the root for `$ROOT/...` paths.
+external-sources=true
+source-path=SCRIPTDIR
+source-path=SCRIPTDIR/..
+# SC2329 (function never invoked) fires on the helpers a gate defines for a
+# cell family it may not run this pass; the dead ones fall in S6, not here.
+disable=SC2329

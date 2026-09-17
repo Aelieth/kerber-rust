@@ -45,6 +45,35 @@ this project uses semantic versioning once a crate is published.
   with `getrandom 0.4` and `syn 3` as the only skips, `wildcards = "deny"`
   (`allow-wildcard-paths` for the version-less path deps), licence list
   trimmed to the four the lock uses.
+- **CI shape.** Every workflow grants `permissions: contents: read`
+  (`audit` adds `checks`/`issues: write` for `rustsec/audit-check`);
+  `ci.yml` and `fuzz.yml` cancel superseded runs; all 41 third-party
+  `uses:` are pinned to a commit SHA with the tag in a comment, and
+  `.github/dependabot.yml` moves the pins (github-actions daily, cargo
+  weekly). The toolchain + lld + `rust-cache` steps every cargo job
+  repeated are one composite (`.github/actions/rust-preamble`, 17 call
+  sites; checkout must precede a local action, so it stays inline). A
+  fail-red `shellcheck -S style` job (`make shellcheck`) over
+  `scripts/*.sh scripts/lib/*.sh harness/*.sh` with `.shellcheckrc`
+  (`external-sources=true`, `SC2329` off): the 85 inline `SC1091`
+  disables are gone and the 69 style findings fixed without changing
+  what any gate does — `register_cleanup` strings expand their constant
+  container names at registration (the two PID cleanups are named
+  functions), 14 unused loop counters and the dead variables removed
+  (five `UNAVAIL` paths, `GATE_COMMON_SOURCED`, `STOP_MIT`, `OWN`,
+  `free`, `KADMIND_PORT`/`MIT_IPROP_PORT`, the ten `RUST_GSS_ACCEPT`/
+  `MIT_GSS_SERVER` assignments, two stale `local` names), `VFY_ENV` is
+  an array, `set -- $spec` splits on its one space explicitly. `fuzz.yml` asserts every corpus
+  is non-empty (the committed `seed-*` files plus the traces that fit)
+  and uploads `fuzz/artifacts/<target>` for 30 days on failure.
+  `geiger.sh` and the checkpoint self-test `mktemp` under
+  `KERBER_SCRATCH`; `ci-policy.py host_tmp_write_lines` flags a bare
+  `mktemp` and `check_no_host_tmp_writes` covers every `scripts/*.sh`.
+  `.gitattributes` marks prose as documentation and the parity ledger
+  as generated. New `ci-policy.py` assertions: `check_workflow_hardening`;
+  `check_msrv_pinned`, `check_rust_cache_shared_key`, `check_build_profile`
+  and the `kcm-opcode` lld rule read through the composite; the prod-gate
+  cleanup check accepts a named function.
 
 ### W3-S0 comparison baseline
 

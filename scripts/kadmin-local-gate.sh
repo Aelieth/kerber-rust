@@ -3,7 +3,6 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-# shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 need_bins krb5-kdc krb5-kdb krb5-kadmind krb5-kadmin-local
@@ -808,7 +807,7 @@ done
 dl listprincs-malformed-bracket \
     "$(rust_local 'listprincs [abc' 2>&1 | grep -F 'Invalid argument')" \
     "$(mit_local 'listprincs [abc' 2>&1 | grep -F 'Invalid argument')"
-dl 'listprincs-ga-backslash' "$(rust_local 'listprincs ga\\' 2>&1 | grep -v '^Authenticating')" "$(mit_local 'listprincs ga\\' 2>&1)"
+dl 'listprincs-ga-backslash' "$(rust_local "listprincs ga\\\\" 2>&1 | grep -v '^Authenticating')" "$(mit_local "listprincs ga\\\\" 2>&1)"
 for pl in gpol1 gpolx gp2; do
     rust_local "addpol $pl" >/dev/null
     mit_local "addpol $pl" >/dev/null
@@ -861,8 +860,8 @@ rust_local 'addprinc -randkey z72kt' >/dev/null
 mit_local 'addprinc -randkey z72kt' >/dev/null
 rust_local 'ktadd -k /tmp/z72.kt z72kt' >/dev/null
 mit_local 'ktadd -k /tmp/z72-mit.kt z72kt' >/dev/null
-R72KT="$(echo "$(rust_local 'getprinc z72kt')" | z72l_mod)"
-M72KT="$(echo "$(mit_local 'getprinc z72kt')" | z72l_mod)"
+R72KT="$(rust_local 'getprinc z72kt' | z72l_mod)"
+M72KT="$(mit_local 'getprinc z72kt' | z72l_mod)"
 echo "ktadd rust modifier=$R72KT mit=$M72KT"
 [ "$R72KT" = "root/admin@KERBER.TEST" ] || {
     echo "Rust ktadd modifier is not root/admin@KERBER.TEST" >&2
@@ -876,8 +875,8 @@ rust_local 'addprinc -pw z72ul-secret z72ul' >/dev/null
 mit_local 'addprinc -pw z72ul-secret z72ul' >/dev/null
 rust_local 'modprinc -unlock z72ul' >/dev/null
 mit_local 'modprinc -unlock z72ul' >/dev/null
-R72UL="$(echo "$(rust_local 'getprinc z72ul')" | z72l_mod)"
-M72UL="$(echo "$(mit_local 'getprinc z72ul')" | z72l_mod)"
+R72UL="$(rust_local 'getprinc z72ul' | z72l_mod)"
+M72UL="$(mit_local 'getprinc z72ul' | z72l_mod)"
 echo "unlock rust modifier=$R72UL mit=$M72UL"
 [ "$R72UL" = "root/admin@KERBER.TEST" ] || {
     echo "Rust unlock modifier is not root/admin@KERBER.TEST" >&2

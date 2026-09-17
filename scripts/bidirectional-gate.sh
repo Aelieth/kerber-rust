@@ -3,14 +3,18 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-# shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 need_bins krb5-kdc krb5-kinit
 
 TMP="${TMPDIR:-/tmp}/kerber-bidir-$$"
 mkdir -p "$TMP"
-register_cleanup 'rm -rf "$TMP"; kill ${KDC_PID:-} 2>/dev/null || true'
+KDC_PID=""
+bidir_cleanup() {
+    rm -rf "$TMP"
+    if [ -n "$KDC_PID" ]; then kill "$KDC_PID" 2>/dev/null || true; fi
+}
+register_cleanup bidir_cleanup
 
 export KRB5_TEST_USER_PASSWORD="${KRB5_TEST_USER_PASSWORD:-userpassword}"
 export KRB5_TEST_ADMIN_PASSWORD="${KRB5_TEST_ADMIN_PASSWORD:-adminpassword}"

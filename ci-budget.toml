@@ -10,6 +10,7 @@ harness-2 = 300
 mit-extra = 180
 mit-extra-2 = 210
 doc = 90
+shellcheck = 60
 msrv = 120
 audit = 260
 ledger-mit = 60

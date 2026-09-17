@@ -3,7 +3,6 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-# shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 . "$ROOT/scripts/lib/kadmin-glob-cells.sh"
@@ -12,8 +11,6 @@ need_bins krb5-kdc krb5-kdb krb5-kadmind krb5-kadmin-local
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-kadmin-gate"
 NAME_MIT="kerber-rust-kadmin-mit"
-KADMIND_PORT=749
-MIT_IPROP_PORT=2121
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
 SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-kadmin-gate}"
@@ -495,7 +492,7 @@ need_image
 if ! docker inspect "$NAME" >/dev/null 2>&1 || ! docker inspect "$NAME_MIT" >/dev/null 2>&1; then
     die "kadmin-both-gate needs rust+mit containers (run rust then mit with KERBER_KADMIN_KEEP=1)"
 fi
-register_cleanup 'docker rm -f "$NAME" "$NAME_MIT" >/dev/null 2>&1 || true'
+register_cleanup "docker rm -f '$NAME' '$NAME_MIT' >/dev/null 2>&1 || true"
 echo "==== kadm5 modify reserved TL type and nonzero failcount both kadminds ===="
 kadm5_modify_validate() {
     local ctn=$1 client=$2 conf=$3 princ=$4
@@ -642,7 +639,7 @@ done
 }
 kadm5_r12_db_args() {
     local ctn=$1 client=$2 conf=$3 is_mit=$4
-    local kadm dumpcmd userline before after mod add getx ro kd
+    local userline before after mod add getx ro kd
     kadm() { docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword -q "$1" 2>&1 || true; }
     before="$(kadm 'getprinc user' | grep -v -e '^Authenticating' -e 'No dictionary')"
     mod="$(kadm 'modprinc -x foo=bar user')"
@@ -846,7 +843,7 @@ done
 }
 z11_leg() {
     local ctn=$1 fixture=$2 client=$3 conf=$4 leg=$5
-    local kadm out shape pwx
+    local out shape pwx
     kadm() {
         docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$1" -w "$2" -q "$3" 2>&1 \
             | grep -v -e '^Authenticating' -e 'No dictionary' -e 'No policy specified' || true

@@ -4,7 +4,6 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-# shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 need_bins krb5-kdc krb5-kadmind krb5-kpasswd krb5-kadmin-local krb5-kinit
@@ -423,7 +422,7 @@ docker exec "$NAME_MIT" kadmin.local -q 'getprinc z1brust' | grep -E '^Password 
 z1b2_check() {
     local leg=$1 out=$2 rc=$3 want_rc=$4
     echo "$leg (rc=$rc):"
-    echo "$out" | sed "s/^/  $leg| /"
+    printf '%s\n' "$out" | sed "s/^/  $leg| /"
     if [ "$rc" -ne "$want_rc" ]; then
         echo "$leg: rc $rc want $want_rc" >&2
         exit 1

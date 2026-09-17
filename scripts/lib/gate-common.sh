@@ -7,7 +7,6 @@
 # cleanups. Does not replace provenance's ERR. Host wait_port/wait_gone need a
 # published port; wait_port_in/wait_gone_in probe inside $NAME.
 
-GATE_COMMON_SOURCED=1
 GATE_NAME="${GATE_NAME:-$(basename "${BASH_SOURCE[1]:-${0}}" .sh)}"
 COMPONENT="${COMPONENT:-$GATE_NAME}"
 IMAGE="${IMAGE:-kerber-rust-mit-kdc:1.22.2}"
@@ -61,8 +60,7 @@ trap '_gate_common_exit' EXIT
 
 wait_port() {
     local host="${1:-127.0.0.1}" port="${2:-88}" n="${3:-80}"
-    local i
-    for i in $(seq 1 "$n"); do
+    for _ in $(seq 1 "$n"); do
         if python3 - "$host" "$port" <<'PY' 2>/dev/null
 import socket, sys
 s = socket.socket(); s.settimeout(0.2)
@@ -83,8 +81,7 @@ PY
 
 wait_listen() {
     local ctn=$1 logfile=$2 n="${3:-80}"
-    local i
-    for i in $(seq 1 "$n"); do
+    for _ in $(seq 1 "$n"); do
         if docker exec "$ctn" grep -q '^listening ' "$logfile" 2>/dev/null; then
             return 0
         fi
@@ -96,8 +93,7 @@ wait_listen() {
 
 wait_gone() {
     local host="${1:-127.0.0.1}" port="${2:-88}" n="${3:-80}"
-    local i
-    for i in $(seq 1 "$n"); do
+    for _ in $(seq 1 "$n"); do
         if ! wait_port "$host" "$port" 1; then
             return 0
         fi
@@ -108,8 +104,7 @@ wait_gone() {
 
 wait_log() {
     local ctn=$1 logfile=$2 pattern=$3 n="${4:-80}"
-    local i
-    for i in $(seq 1 "$n"); do
+    for _ in $(seq 1 "$n"); do
         if docker exec "$ctn" grep -qE "$pattern" "$logfile" 2>/dev/null; then
             return 0
         fi
@@ -122,8 +117,7 @@ wait_log() {
 # to the host, so wait_port (host-side) cannot see them.
 wait_port_in() {
     local ctn="${1:-$NAME}" port="${2:-88}" n="${3:-80}"
-    local i
-    for i in $(seq 1 "$n"); do
+    for _ in $(seq 1 "$n"); do
         if docker exec "$ctn" python3 -c "import socket; socket.create_connection(('127.0.0.1', int('$port')), 0.2)" 2>/dev/null; then
             return 0
         fi
@@ -137,13 +131,13 @@ wait_port_in() {
 # a connect probe would steal the only accept().
 wait_bound_in() {
     local ctn="${1:-$NAME}" port="${2:-88}" n="${3:-80}" kind="${4:-udp}"
-    local sock i
+    local sock
     case "$kind" in
         tcp) sock="socket.SOCK_STREAM" ;;
         udp) sock="socket.SOCK_DGRAM" ;;
         *) return 1 ;;
     esac
-    for i in $(seq 1 "$n"); do
+    for _ in $(seq 1 "$n"); do
         if docker exec "$ctn" python3 -c "import socket,sys
 s=socket.socket(socket.AF_INET, $sock)
 try:
@@ -224,8 +218,7 @@ wait_gone_in() {
     # Port is gone when UDP bind succeeds (no leftover UDP proxy) AND TCP
     # connect fails. A TCP-only probe cannot see kdc-error-proxy.py.
     local ctn="${1:-$NAME}" port="${2:-88}" n="${3:-80}"
-    local i
-    for i in $(seq 1 "$n"); do
+    for _ in $(seq 1 "$n"); do
         if wait_bound_free_in "$ctn" "$port" udp && ! wait_port_in "$ctn" "$port" 1; then
             return 0
         fi
@@ -311,9 +304,8 @@ if not found:
 
 wait_pid_gone() {
     local ctn="${1:-$NAME}" proc="$2" n="${3:-40}"
-    local i
     [ -n "$proc" ] || return 1
-    for i in $(seq 1 "$n"); do
+    for _ in $(seq 1 "$n"); do
         if ! docker exec "$ctn" sh -c "pidof '$proc' >/dev/null" 2>/dev/null; then
             return 0
         fi
@@ -463,8 +455,7 @@ mit_kdc_restart() {
     docker exec "$ctn" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true' || true
     sleep 0.1 # proto: krb5kdc pid reuse
     docker exec -d "$ctn" krb5kdc
-    local i
-    for i in $(seq 1 80); do
+    for _ in $(seq 1 80); do
         if docker exec "$ctn" sh -c 'pidof krb5kdc >/dev/null' 2>/dev/null; then
             return 0
         fi
@@ -475,7 +466,7 @@ mit_kdc_restart() {
 
 stock_mit_kdc() {
     local n="${1:-${KERBER_MIT_NAME:-kerber-rust-mit-kdc}}"
-    local logs i
+    local logs
     if [ "${KERBER_LIVE:-}" = 1 ]; then
         n="${KERBER_MIT_NAME:-kerber-rust-mit-kdc}"
         [ "$(docker inspect -f '{{.State.Running}}' "$n" 2>/dev/null)" = true ] \
@@ -491,7 +482,7 @@ stock_mit_kdc() {
     if [ "${KERBER_STOCK_KEEP:-}" != 1 ]; then
         register_cleanup "docker rm -f '$n' >/dev/null 2>&1 || true"
     fi
-    for i in $(seq 1 90); do
+    for _ in $(seq 1 90); do
         logs="$(docker logs "$n" 2>&1 || true)"
         if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"ok"'; then
             return 0
@@ -538,8 +529,7 @@ mit_conf_restore() {
     wait_pid_gone "$ctn" krb5kdc || true
     wait_pid_gone "$ctn" kadmind || true
     docker exec -d "$ctn" krb5kdc || true
-    local i
-    for i in $(seq 1 40); do
+    for _ in $(seq 1 40); do
         if docker exec "$ctn" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.3)" 2>/dev/null; then
             return 0
         fi

@@ -5,7 +5,6 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-# shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 need_bins krb5-gss-accept krb5-gss-init
@@ -387,7 +386,6 @@ done
     exit 1
 }
 MIT_GSS_CLIENT=/tmp/gss-mit-client
-RUST_GSS_ACCEPT=/tmp/krb5-gss-accept
 docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
     "$MIT_GSS_CLIENT" testhost.kerber.test host "$MSG" 127.0.0.1 4444 dce
 DCE_LOG="$(docker exec "$NAME" cat /tmp/gss-accept-dce.log 2>/dev/null || true)"
@@ -418,7 +416,6 @@ done
     exit 1
 }
 MIT_GSS_CLIENT=/tmp/gss-mit-client
-MIT_GSS_SERVER=/tmp/gss-mit-server
 docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
     "$MIT_GSS_CLIENT" testhost.kerber.test host "$MSG" 127.0.0.1 4450 dce
 MIT_DCE="$(docker exec "$NAME" cat /tmp/gss-mit-server-dce.log 2>/dev/null || true)"
@@ -450,7 +447,6 @@ gss_mutate_cell() {
         exit 1
     }
     RUST_GSS_INIT=/tmp/krb5-gss-init
-    RUST_GSS_ACCEPT=/tmp/krb5-gss-accept
     docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
         "$RUST_GSS_INIT" --ccache /tmp/krb5cc_harness --host testhost.kerber.test \
         --ip 127.0.0.1 --port 4444 --mutate "$kind"
@@ -482,7 +478,6 @@ gss_mutate_cell() {
         exit 1
     }
     RUST_GSS_INIT=/tmp/krb5-gss-init
-    MIT_GSS_SERVER=/tmp/gss-mit-server
     docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
         "$RUST_GSS_INIT" --ccache /tmp/krb5cc_harness --host testhost.kerber.test \
         --ip 127.0.0.1 --port 4451 --mutate "$kind" || true
@@ -534,7 +529,6 @@ wait_pid_gone "$NAME" gss-mit-server || true
 docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /etc/krb5kdc/testhost.keytab --listen 127.0.0.1:4444 --accept-only >/tmp/gss-accept-nc.log 2>&1'
 gss_listen /tmp/gss-accept-nc.log "gss-accept no-checksum"
 RUST_GSS_INIT=/tmp/krb5-gss-init
-RUST_GSS_ACCEPT=/tmp/krb5-gss-accept
 docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
     "$RUST_GSS_INIT" --ccache /tmp/krb5cc_harness --host testhost.kerber.test \
     --ip 127.0.0.1 --port 4444 --no-checksum --accept-only
@@ -559,7 +553,6 @@ docker exec -d \
     "$NAME" sh -c '/tmp/gss-mit-server /etc/krb5kdc/testhost.keytab 127.0.0.1 4452 >/tmp/gss-mit-nc.log 2>&1'
 gss_listen /tmp/gss-mit-nc.log "mit-gss-server no-checksum"
 RUST_GSS_INIT=/tmp/krb5-gss-init
-MIT_GSS_SERVER=/tmp/gss-mit-server
 docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
     "$RUST_GSS_INIT" --ccache /tmp/krb5cc_harness --host testhost.kerber.test \
     --ip 127.0.0.1 --port 4452 --no-checksum --accept-only
@@ -581,7 +574,6 @@ wait_pid_gone "$NAME" gss-mit-server || true
 docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /etc/krb5kdc/testhost.keytab --listen 127.0.0.1:4444 --channel-bindings acceptor-bind >/tmp/gss-accept-cb.log 2>&1'
 gss_listen /tmp/gss-accept-cb.log "gss-accept cb"
 MIT_GSS_CLIENT=/tmp/gss-mit-client
-RUST_GSS_ACCEPT=/tmp/krb5-gss-accept
 docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
     "$MIT_GSS_CLIENT" testhost.kerber.test host "$MSG" 127.0.0.1 4444
 RUST_CB="$(docker exec "$NAME" cat /tmp/gss-accept-cb.log 2>/dev/null || true)"
@@ -604,7 +596,6 @@ docker exec -d \
     "$NAME" sh -c '/tmp/gss-mit-server /etc/krb5kdc/testhost.keytab 127.0.0.1 4453 >/tmp/gss-mit-cb.log 2>&1'
 gss_listen /tmp/gss-mit-cb.log "mit-gss-server cb"
 RUST_GSS_INIT=/tmp/krb5-gss-init
-MIT_GSS_SERVER=/tmp/gss-mit-server
 docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
     "$RUST_GSS_INIT" --ccache /tmp/krb5cc_harness --host testhost.kerber.test \
     --ip 127.0.0.1 --port 4453
@@ -625,7 +616,6 @@ wait_pid_gone "$NAME" gss-mit-server || true
 docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /etc/krb5kdc/testhost.keytab --listen 127.0.0.1:4444 --channel-bindings tls-b >/tmp/gss-accept-cbm.log 2>&1'
 gss_listen /tmp/gss-accept-cbm.log "gss-accept cb mismatch"
 MIT_GSS_CLIENT=/tmp/gss-mit-client
-RUST_GSS_ACCEPT=/tmp/krb5-gss-accept
 docker exec -e KRB5CCNAME=/tmp/krb5cc_harness -e GSS_CHANNEL_BINDINGS=tls-a "$NAME" \
     "$MIT_GSS_CLIENT" testhost.kerber.test host "$MSG" 127.0.0.1 4444 || true
 RUST_CBM="$(docker exec "$NAME" cat /tmp/gss-accept-cbm.log 2>/dev/null || true)"
@@ -646,7 +636,6 @@ docker exec -d \
     "$NAME" sh -c '/tmp/gss-mit-server /etc/krb5kdc/testhost.keytab 127.0.0.1 4454 >/tmp/gss-mit-cbm.log 2>&1'
 gss_listen /tmp/gss-mit-cbm.log "mit-gss-server cb mismatch"
 RUST_GSS_INIT=/tmp/krb5-gss-init
-MIT_GSS_SERVER=/tmp/gss-mit-server
 docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
     "$RUST_GSS_INIT" --ccache /tmp/krb5cc_harness --host testhost.kerber.test \
     --ip 127.0.0.1 --port 4454 --channel-bindings tls-a || true

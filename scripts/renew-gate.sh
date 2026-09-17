@@ -4,7 +4,6 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-# shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 need_bins krb5-kdc krb5-kadmind
@@ -488,8 +487,7 @@ grep -q "max_life = 1h" /tmp/z71-kdc.conf
 
 z71_wait_port() {
     local ctn=$1 want=$2
-    local i
-    for i in $(seq 1 40); do
+    for _ in $(seq 1 40); do
         if docker exec "$ctn" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.3)" 2>/dev/null; then
             [ "$want" = up ] && return 0
         else

@@ -56,9 +56,10 @@ rustdoc.
 
 The `test` job in CI is `make safety` (fmt, clippy, nextest,
 `ci-policy.py`) plus CI-only extras (nextest `--no-run`, junit, the
-gate ERR-trap self-test). `make doc` is the sibling `doc` job. Do not
-run `cargo test --workspace` — CI forbids it on per-push; nextest is
-the runner. Linking needs `lld` (`ld.lld` on `$PATH`; see
+gate ERR-trap self-test). `make doc` and `make shellcheck` are the
+sibling `doc` and `shellcheck` jobs. Do not run `cargo test --workspace`
+— CI forbids it on per-push; nextest is the runner. Linking needs `lld`
+(`ld.lld` on `$PATH`; see
 `.cargo/config.toml`).
 
 ```bash

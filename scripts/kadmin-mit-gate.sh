@@ -3,7 +3,6 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-# shellcheck disable=SC1091
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 . "$ROOT/scripts/lib/kadmin-glob-cells.sh"
@@ -513,7 +512,7 @@ GETNM="$(load_rust_snap GETNM)"
 echo "==== MIT kadmind lockdown cells ===="
 docker rm -f "$NAME_MIT" >/dev/null 2>&1 || true
 docker run -d --name "$NAME_MIT" "$IMAGE" >/dev/null
-_kadmin_cleanup 'docker rm -f "$NAME_MIT" >/dev/null 2>&1 || true'
+_kadmin_cleanup "docker rm -f '$NAME_MIT' >/dev/null 2>&1 || true"
 ok=0
 for _ in $(seq 1 90); do
     logs="$(docker logs "$NAME_MIT" 2>&1 || true)"
@@ -1087,7 +1086,7 @@ echo "$MIT_CPW2"
 echo "$MIT_CPW2" | grep -F "Current password's minimum life has not expired"
 echo "==== MIT self keepold clamps to 5 ===="
 docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw keep-0 keepoldself'
-pw=keep-0
+pw='keep-0'
 for i in 1 2 3 4 5 6; do
     nxt="keep-$i"
     KEEP="$(docker exec "$NAME_MIT" kadmin -p keepoldself -w "$pw" -q "cpw -keepold -pw $nxt keepoldself" 2>&1 || true)"

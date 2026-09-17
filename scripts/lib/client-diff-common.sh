@@ -1,4 +1,5 @@
 # Shared helpers for client-differential-flows-gate / client-differential-cli-gate.
+# shellcheck shell=bash
 # KEEP-attach: KERBER_CLIENT_DIFF_KEEP=1 leaves the MIT container for the next leg.
 # Functions expand $NAME at call time.
 

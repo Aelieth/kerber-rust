@@ -1,5 +1,5 @@
 # Shared helpers for C2 gates over harness/prod. Source after ROOT is set.
-# shellcheck disable=SC1091
+# shellcheck shell=bash
 . "$ROOT/harness/prod/limits.env"
 
 REALM="${KERBER_PROD_REALM:-PROD.KERBER.TEST}"
@@ -24,8 +24,7 @@ prod_client() {
 
 prod_wait_log() {
     local node="$1" file="$2" pat="$3" n="${4:-80}"
-    local i
-    for i in $(seq 1 "$n"); do
+    for _ in $(seq 1 "$n"); do
         docker exec "$node" grep -q "$pat" "$file" 2>/dev/null && return 0
         sleep 0.25
     done

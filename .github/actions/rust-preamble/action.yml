@@ -1,0 +1,32 @@
+# The Rust preamble every cargo job repeats after checkout: toolchain, lld,
+# rust-cache. checkout itself stays in the job (a local action needs the tree
+# checked out before it can be referenced). The docker-tar `actions/cache`
+# step and the gate `run:` lines stay inline: ci-policy.py text-matches them.
+# Pins: dtolnay/rust-toolchain has no versioned tags; its master SHA is pinned
+# and the channel passed explicitly (the tag-derived default needs a tag ref).
+name: rust-preamble
+description: Install the Rust toolchain and lld, then restore the shared cargo cache.
+
+inputs:
+  toolchain:
+    description: rustup toolchain (stable, nightly, or a version such as 1.95)
+    required: false
+    default: stable
+  components:
+    description: comma-separated rustup components (rustfmt, clippy)
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master 2026-09-12
+      with:
+        toolchain: ${{ inputs.toolchain }}
+        components: ${{ inputs.components }}
+    - name: Install lld
+      shell: bash
+      run: sudo apt-get update -qq && sudo apt-get install -y -qq lld
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      with:
+        shared-key: kerber
