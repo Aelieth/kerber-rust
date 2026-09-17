@@ -22,6 +22,7 @@ use krb5_protocol::{
     pa_pk_as_req_cn, pa_pk_as_req_spki, pa_spake_response, pa_spake_support, pkinit_reply_key,
     pkinit_reply_key_agile, tgs_req_ex, unwrap_fast_rep,
 };
+use krb5_testkit::pref_etypes;
 use krb5_types::pac::{
     PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM, PAC_SERVER_CHECKSUM, Pac, RpcSid,
     parse_kerb_validation_info, zero_pac_ad_data,
@@ -62,13 +63,6 @@ fn pkinit_as_req(
 
 fn decode_enc_part(plain: &[u8]) -> EncKdcRepPart {
     krb5_asn1::decode_enc_kdc_rep_part(plain).expect("enc-part")
-}
-
-fn pref_etypes() -> Vec<i32> {
-    EncryptionType::preferred()
-        .iter()
-        .map(|e| e.to_iana())
-        .collect()
 }
 
 fn issue_tgt(

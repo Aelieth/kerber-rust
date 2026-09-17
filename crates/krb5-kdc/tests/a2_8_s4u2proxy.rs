@@ -6,15 +6,9 @@ use krb5_kdc::{
     pac_from_ticket_part,
 };
 use krb5_protocol::{tgs_req, tgs_req_ex};
+use krb5_testkit::pref_etypes;
 use krb5_types::pac::{PAC_DELEGATION_INFO, Pac, parse_delegation_info};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
-
-fn pref_etypes() -> Vec<i32> {
-    krb5_crypto::EncryptionType::preferred()
-        .iter()
-        .map(|e| e.to_iana())
-        .collect()
-}
 
 fn issue_tgt(
     store: &PrincipalStore,

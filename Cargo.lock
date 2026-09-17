@@ -574,6 +574,7 @@ dependencies = [
  "krb5-crypto",
  "krb5-log",
  "krb5-protocol",
+ "krb5-testkit",
  "krb5-types",
  "nix",
  "sha2",
@@ -620,6 +621,13 @@ dependencies = [
  "thiserror",
  "tracing",
  "zeroize",
+]
+
+[[package]]
+name = "krb5-testkit"
+version = "1.0.0"
+dependencies = [
+ "krb5-crypto",
 ]
 
 [[package]]

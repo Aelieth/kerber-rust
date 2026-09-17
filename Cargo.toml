@@ -11,6 +11,7 @@ members = [
     "crates/krb5-kdc",
     "crates/krb5-gss",
     "crates/krb5-admin",
+    "crates/krb5-testkit",
     "examples/consumer",
     "examples/kdc-consumer",
 ]
@@ -36,6 +37,7 @@ krb5-kdc = { path = "crates/krb5-kdc" }
 krb5-config = { path = "crates/krb5-config" }
 krb5-gss = { path = "crates/krb5-gss" }
 krb5-admin = { path = "crates/krb5-admin" }
+krb5-testkit = { path = "crates/krb5-testkit" }
 aes = "0.8"
 camellia = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["alloc", "clock", "std"] }

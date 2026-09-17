@@ -1,21 +1,15 @@
 //! A′-2 R23: PAC UnsupportedChecksum wires 60 on non-retry exits.
 
 use krb5_asn1::encode;
-use krb5_crypto::{EncryptionType, KeyUsage, encrypt};
+use krb5_crypto::{KeyUsage, encrypt};
 use krb5_kdc::{
     PrincipalStore, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
     decrypt_ticket_part, documented_host, pa_enc_timestamp, pac_from_ticket_part, wrap_win2k_pac,
 };
 use krb5_protocol::{tgs_req, tgs_req_ex};
+use krb5_testkit::pref_etypes;
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit, ku};
-
-fn pref_etypes() -> Vec<i32> {
-    EncryptionType::preferred()
-        .iter()
-        .map(|e| e.to_iana())
-        .collect()
-}
 
 fn issue_tgt(
     store: &PrincipalStore,

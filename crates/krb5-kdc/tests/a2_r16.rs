@@ -8,16 +8,10 @@ use krb5_kdc::{
     load_dump, pa_enc_timestamp,
 };
 use krb5_protocol::{tgs_req, tgs_req_ex};
+use krb5_testkit::pref_etypes;
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit, ku};
 
 const FOREIGN: &str = "AD.KERBER.TEST";
-
-fn pref_etypes() -> Vec<i32> {
-    EncryptionType::preferred()
-        .iter()
-        .map(|e| e.to_iana())
-        .collect()
-}
 
 fn aes_key(b: u8) -> ProtocolKey {
     ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[b; 32]).expect("key")

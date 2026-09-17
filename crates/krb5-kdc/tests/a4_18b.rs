@@ -9,6 +9,7 @@ use krb5_kdc::{
     wrap_win2k_pac,
 };
 use krb5_protocol::{pa_for_user, pa_pac_options, tgs_req, tgs_req_ex};
+use krb5_testkit::pref_etypes;
 use krb5_types::pac::{
     PAC_CLIENT_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer, parse_client_info,
 };
@@ -25,13 +26,6 @@ fn password_key(name: &str, password: &[u8]) -> ProtocolKey {
         Some(&S2K_ITERS.to_be_bytes()),
     )
     .expect("s2k")
-}
-
-fn pref_etypes() -> Vec<i32> {
-    EncryptionType::preferred()
-        .iter()
-        .map(|e| e.to_iana())
-        .collect()
 }
 
 fn issue_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {

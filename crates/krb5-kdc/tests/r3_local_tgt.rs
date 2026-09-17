@@ -8,6 +8,7 @@ use krb5_kdc::{
     documented_host, pa_enc_timestamp,
 };
 use krb5_protocol::tgs_req_ex;
+use krb5_testkit::pref_etypes;
 use krb5_types::pac::RpcSid;
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
 
@@ -39,13 +40,6 @@ fn issue_tgt(
     )
     .unwrap();
     krb5_kdc::issue_as(store, &req).unwrap()
-}
-
-fn pref_etypes() -> Vec<i32> {
-    EncryptionType::preferred()
-        .iter()
-        .map(|e| e.to_iana())
-        .collect()
 }
 
 fn proto(err: &Error) -> (i32, Option<&str>) {

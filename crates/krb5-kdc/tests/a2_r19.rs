@@ -9,19 +9,13 @@ use krb5_kdc::{
     pa_enc_timestamp, random_key, sign_pac, ticket_checksum_der, wrap_win2k_pac,
 };
 use krb5_protocol::{tgs_req, tgs_req_ex};
+use krb5_testkit::pref_etypes;
 use krb5_types::{
     EncTicketPart, EncryptedData, HostAddress, KdcOptions, KerberosTime, KrbError, PrincipalName,
     Ticket, err, flag_bit, ku,
 };
 
 const FOREIGN: &str = "OTHER.TEST";
-
-fn pref_etypes() -> Vec<i32> {
-    EncryptionType::preferred()
-        .iter()
-        .map(|e| e.to_iana())
-        .collect()
-}
 
 fn proto(err: &Error) -> (i32, Option<&str>) {
     match err {

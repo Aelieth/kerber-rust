@@ -8,15 +8,9 @@ use krb5_kdc::{
     pa_enc_timestamp, pac_from_ticket_part, wrap_win2k_pac,
 };
 use krb5_protocol::{tgs_req, tgs_req_ex};
+use krb5_testkit::pref_etypes;
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit, ku};
-
-fn pref_etypes() -> Vec<i32> {
-    krb5_crypto::EncryptionType::preferred()
-        .iter()
-        .map(|e| e.to_iana())
-        .collect()
-}
 
 fn issue_tgt(
     store: &PrincipalStore,

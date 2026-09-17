@@ -6,6 +6,7 @@ use krb5_kdc::{
     TEST_USER_PASSWORD, as_req, bootstrap_documented, pa_enc_timestamp,
 };
 use krb5_protocol::tgs_req_ex;
+use krb5_testkit::pref_etypes;
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
 
 fn password_key(name: &str, password: &[u8]) -> ProtocolKey {
@@ -35,13 +36,6 @@ fn issue_tgt(
     )
     .unwrap();
     krb5_kdc::issue_as(store, &req).unwrap()
-}
-
-fn pref_etypes() -> Vec<i32> {
-    EncryptionType::preferred()
-        .iter()
-        .map(|e| e.to_iana())
-        .collect()
 }
 
 fn proto(err: &krb5_kdc::Error) -> (i32, Option<&str>) {

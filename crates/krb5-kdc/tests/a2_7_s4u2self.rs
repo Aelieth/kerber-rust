@@ -1,22 +1,16 @@
 //! A′-2 item 7 S4U2Self units that fail at parent `2e5995a`.
 
 use krb5_asn1::encode;
-use krb5_crypto::{EncryptionType, KeyUsage, checksum, encrypt};
+use krb5_crypto::{KeyUsage, checksum, encrypt};
 use krb5_kdc::{
     PacTicket, PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER, as_req, bootstrap_documented,
     decrypt_ticket_part, documented_host, pa_enc_timestamp, sign_reply_pac, ticket_checksum_der,
     wrap_win2k_pac,
 };
 use krb5_protocol::{pa_for_user, pa_s4u_x509_user, tgs_req_ex};
+use krb5_testkit::pref_etypes;
 use krb5_types::pac::{PAC_CLIENT_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer};
 use krb5_types::{EncTicketPart, KdcOptions, PaData, PrincipalName, err, ku, pa};
-
-fn pref_etypes() -> Vec<i32> {
-    EncryptionType::preferred()
-        .iter()
-        .map(|e| e.to_iana())
-        .collect()
-}
 
 fn host_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
     let host = documented_host();

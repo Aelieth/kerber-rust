@@ -7,6 +7,7 @@ use krb5_kdc::{
     documented_host, handle_request_from, pa_enc_timestamp,
 };
 use krb5_protocol::{tgs_req, tgs_req_ex, tgs_req_ex_addr};
+use krb5_testkit::pref_etypes;
 use krb5_types::{
     HostAddress, KdcOptions, KrbError, PaData, PaPacRequest, PrincipalName, err, flag_bit, ku, pa,
 };
@@ -16,13 +17,6 @@ fn inet(a: u8, b: u8, c: u8, d: u8) -> HostAddress {
         addr_type: HostAddress::ADDRTYPE_INET,
         address: vec![a, b, c, d].into(),
     }
-}
-
-fn pref_etypes() -> Vec<i32> {
-    krb5_crypto::EncryptionType::preferred()
-        .iter()
-        .map(|e| e.to_iana())
-        .collect()
 }
 
 fn user_key(store: &PrincipalStore) -> krb5_crypto::ProtocolKey {
