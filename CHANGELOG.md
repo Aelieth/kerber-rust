@@ -37,10 +37,13 @@ this project uses semantic versioning once a crate is published.
   client/config/gss/consumer, `tracing` from config/gss/consumer/kdc-consumer,
   `zeroize` from kdc, `chrono` and dev `tracing-subscriber` from protocol)
   and the duplicate `sha2` dev line; `Cargo.lock` loses 11 edges and no
-  package. `krb5_log`: the never-emitted `events::{HARNESS_START,
-  HARNESS_KDC_READY, HARNESS_KINIT, PROTOCOL_AP_REP, GSS, CONFIG}` and the
-  ten unused `FIELD_*` constants deleted (`events::ADMIN` is emitted and
-  stays); `docs/logging.md` names the components that log. `deny.toml`:
+  package. `krb5_log`: `events::{HARNESS_START, HARNESS_KDC_READY,
+  HARNESS_KINIT, PROTOCOL_AP_REP, GSS, CONFIG}` and the ten `FIELD_*`
+  constants deleted — none was referenced from Rust; the three harness
+  event strings stay live as literals in the `harness/` entrypoints
+  (`events::ADMIN` is the `event` of 18 `tracing` calls and stays);
+  `docs/logging.md` names the Rust and harness components and the
+  harness events the gate scripts grep for. `deny.toml`:
   `yanked = "deny"`, explicit empty `ignore`, `multiple-versions = "deny"`
   with `getrandom 0.4` and `syn 3` as the only skips, `wildcards = "deny"`
   (`allow-wildcard-paths` for the version-less path deps), licence list
@@ -57,10 +60,12 @@ this project uses semantic versioning once a crate is published.
   `scripts/*.sh scripts/lib/*.sh harness/*.sh` with `.shellcheckrc`
   (`external-sources=true`, `SC2329` off), on ShellCheck v0.11.0
   installed by version and sha256 (the runner's 0.9.0 package reports
-  ~490 SC2317/SC2119 notes; the Makefile fallback image and the hygiene
-  inventory pin the same version, asserted by `ci-policy.py`): the 85 inline `SC1091`
-  disables are gone and the 69 style findings fixed without changing
-  what any gate does — `register_cleanup` strings expand their constant
+  493 SC2317/SC2119 notes 0.11.0 does not; the Makefile fallback image
+  and the hygiene inventory pin the same version, asserted by
+  `ci-policy.py`): the 86 inline `SC1091` disables are gone and the 90
+  style findings are 0 (69 fixed in the scripts, the 21 `SC2329`
+  never-invoked-function notes silenced by `.shellcheckrc` until S6)
+  without changing what any gate does — `register_cleanup` strings expand their constant
   container names at registration (the two PID cleanups are named
   functions), 14 unused loop counters and the dead variables removed
   (five `UNAVAIL` paths, `GATE_COMMON_SOURCED`, `STOP_MIT`, `OWN`,
