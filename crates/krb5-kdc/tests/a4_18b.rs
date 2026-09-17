@@ -8,24 +8,11 @@ use krb5_kdc::{
     pa_enc_timestamp, pac_from_ticket_part,
 };
 use krb5_protocol::{pa_for_user, pa_pac_options, tgs_req, tgs_req_ex};
-use krb5_testkit::{aes_key, attach_pac, host_tgt, password_key, pref_etypes};
+use krb5_testkit::{aes_key, attach_pac, host_tgt, issue_tgt_password, pref_etypes};
 use krb5_types::pac::{PAC_CLIENT_INFO, Pac, parse_client_info};
 use krb5_types::{
     EncTicketPart, EncryptedData, KdcOptions, PrincipalName, Ticket, err, flag_bit, ku,
 };
-
-fn issue_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let key = password_key(TEST_USER, TEST_USER_PASSWORD);
-    let req = as_req(
-        cname,
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
-    )
-    .unwrap();
-    krb5_kdc::issue_as(store, &req).expect("AS")
-}
 
 fn other_store(store: &mut PrincipalStore, acl: &Acl) {
     store
@@ -53,7 +40,7 @@ fn tgs_for(
     nonce: u32,
 ) -> krb5_types::TgsReq {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt(store, nonce);
+    let tgt = issue_tgt_password(store, TEST_USER, TEST_USER_PASSWORD, nonce);
     tgs_req_ex(
         tgt.rep.0.ticket,
         &tgt.session_key,
@@ -76,7 +63,7 @@ fn a4_18_host_fqdn_canonicalize_issues_referral() {
     other_store(&mut store, &acl);
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "x.other.test"]);
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt(&store, 1810);
+    let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 1810);
     let tgs = tgs_req_ex(
         tgt.rep.0.ticket,
         &tgt.session_key,

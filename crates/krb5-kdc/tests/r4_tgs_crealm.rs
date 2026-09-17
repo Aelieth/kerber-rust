@@ -2,32 +2,14 @@
 //! (`do_tgs_req.c:201-204`, `asn1_k_encode.c:919`).
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, string_to_key};
-use krb5_kdc::{
-    S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
-    documented_host, pa_enc_timestamp,
-};
+use krb5_kdc::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_host};
+use krb5_testkit::issue_tgt_password;
 use krb5_types::{ApReq, KrbError, PrincipalName, err, pa};
 
-fn issue_tgt() -> (krb5_kdc::PrincipalStore, krb5_kdc::IssuedAs, PrincipalName) {
+fn local_tgt() -> (krb5_kdc::PrincipalStore, krb5_kdc::IssuedAs, PrincipalName) {
     let (store, _) = bootstrap_documented().unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let salt = cname.default_salt(TEST_REALM);
-    let key = string_to_key(
-        EncryptionType::Aes256CtsHmacSha196,
-        TEST_USER_PASSWORD,
-        &salt,
-        Some(&S2K_ITERS.to_be_bytes()),
-    )
-    .unwrap();
-    let req = as_req(
-        cname.clone(),
-        TEST_REALM,
-        801,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    let issued = krb5_kdc::issue_as(&store, &req).unwrap();
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 801);
     (store, issued, cname)
 }
 
@@ -38,7 +20,7 @@ fn no_client(e: &KrbError) {
 
 #[test]
 fn tgs_bad_msg_type_omits_crealm() {
-    let (store, issued, cname) = issue_tgt();
+    let (store, issued, cname) = local_tgt();
     let mut tgs = krb5_protocol::tgs_req(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
@@ -58,7 +40,7 @@ fn tgs_bad_msg_type_omits_crealm() {
 
 #[test]
 fn tgs_ap_options_omits_crealm() {
-    let (store, issued, cname) = issue_tgt();
+    let (store, issued, cname) = local_tgt();
     let mut tgs = krb5_protocol::tgs_req(
         issued.rep.0.ticket.clone(),
         &issued.session_key,

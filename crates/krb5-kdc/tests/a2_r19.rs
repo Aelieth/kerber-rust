@@ -9,7 +9,7 @@ use krb5_kdc::{
     pa_enc_timestamp, random_key, sign_pac, ticket_checksum_der, wrap_win2k_pac,
 };
 use krb5_protocol::{tgs_req, tgs_req_ex};
-use krb5_testkit::pref_etypes;
+use krb5_testkit::{issue_tgt, pref_etypes};
 use krb5_types::{
     EncTicketPart, EncryptedData, HostAddress, KdcOptions, KerberosTime, KrbError, PrincipalName,
     Ticket, err, flag_bit, ku,
@@ -22,25 +22,6 @@ fn proto(err: &Error) -> (i32, Option<&str>) {
         Error::Protocol { code, text, .. } => (*code, text.as_deref()),
         other => panic!("expected protocol error, got {other:?}"),
     }
-}
-
-fn issue_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let key = store
-        .get_name(&cname)
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
-    let req = as_req(
-        cname,
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    krb5_kdc::issue_as(store, &req).unwrap()
 }
 
 fn issue_host_tgt(store: &PrincipalStore, dest: &PrincipalName, nonce: u32) -> krb5_kdc::IssuedAs {
@@ -133,7 +114,7 @@ fn a2_r19_locked_host_pac_mismatch_is_header_pac() {
         .create_host(&acl, &documented_admin_id(), &dest)
         .unwrap();
     or_attrs(&mut store, &dest, KDB_DISALLOW_ALL_TIX);
-    let as_out = issue_tgt(&store, 19010);
+    let as_out = issue_tgt(&store, TEST_USER, 19010);
     let tkt = pac_mismatch_tgt(&store, &as_out);
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let req = tgs_req(
@@ -164,7 +145,7 @@ fn a2_r19_dup_skey_beats_tgt_based() {
     );
     let extra = issue_host_tgt(&store, &dest, 19020).rep.0.ticket;
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt(&store, 19021);
+    let tgt = issue_tgt(&store, TEST_USER, 19021);
     let req = tgs_req_ex(
         tgt.rep.0.ticket,
         &tgt.session_key,
@@ -190,7 +171,7 @@ fn a2_r19_lineage_before_u2u() {
     store
         .create_interrealm_key(&acl, &documented_admin_id(), FOREIGN, ir.clone())
         .unwrap();
-    let as_out = issue_tgt(&store, 19030);
+    let as_out = issue_tgt(&store, TEST_USER, 19030);
     let local = store.krbtgt().unwrap().best_key().unwrap().key.clone();
     let mut part = decrypt_ticket_part(&local, &as_out.rep.0.ticket).unwrap();
     part.authorization_data = None;
@@ -246,7 +227,7 @@ fn a2_r19_lineage_before_u2u() {
 #[test]
 fn a2_r19_expired_caddr_is_badaddr() {
     let (store, _) = bootstrap_documented().unwrap();
-    let as_out = issue_tgt(&store, 19040);
+    let as_out = issue_tgt(&store, TEST_USER, 19040);
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let mut part = decrypt_ticket_part(&krbtgt.key, &as_out.rep.0.ticket).unwrap();
     part.endtime = KerberosTime::now().add_seconds(-3600).unwrap();
@@ -273,7 +254,7 @@ fn a2_r19_expired_caddr_is_badaddr() {
 #[test]
 fn a2_r19_expired_authenticator_mismatch_is_badmatch() {
     let (store, _) = bootstrap_documented().unwrap();
-    let as_out = issue_tgt(&store, 19050);
+    let as_out = issue_tgt(&store, TEST_USER, 19050);
     let tkt = expire_tgt(&store, &as_out);
     let other = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let req = tgs_req(

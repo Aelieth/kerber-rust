@@ -22,7 +22,7 @@ use krb5_protocol::{
     pa_pk_as_req_cn, pa_pk_as_req_spki, pa_spake_response, pa_spake_support, pkinit_reply_key,
     pkinit_reply_key_agile, tgs_req_ex, unwrap_fast_rep,
 };
-use krb5_testkit::{password_key, pref_etypes};
+use krb5_testkit::{issue_tgt_password, password_key, pref_etypes};
 use krb5_types::pac::{
     PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM, PAC_SERVER_CHECKSUM, Pac, RpcSid,
     parse_kerb_validation_info, zero_pac_ad_data,
@@ -51,24 +51,6 @@ fn pkinit_as_req(
 
 fn decode_enc_part(plain: &[u8]) -> EncKdcRepPart {
     krb5_asn1::decode_enc_kdc_rep_part(plain).expect("enc-part")
-}
-
-fn issue_tgt(
-    store: &PrincipalStore,
-    name: &str,
-    password: &[u8],
-    nonce: u32,
-) -> krb5_kdc::IssuedAs {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]);
-    let key = password_key(name, password);
-    let req = as_req(
-        cname,
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
-    )
-    .unwrap();
-    krb5_kdc::issue_as(store, &req).expect("AS")
 }
 
 #[test]
@@ -146,7 +128,7 @@ fn fast_as_exchange_strengthen_and_finished() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = user_key();
-    let armor_as = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 201);
+    let armor_as = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 201);
     let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x42u8; 32])
         .expect("subkey");
     let armor_ap = build_fast_armor(
@@ -200,7 +182,7 @@ fn fast_hide_client_names_returns_the_anonymous_outer_client() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = user_key();
-    let armor_as = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 221);
+    let armor_as = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 221);
     let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x37u8; 32])
         .expect("subkey");
     let armor_ap = build_fast_armor(
@@ -268,7 +250,7 @@ fn as_rep_outer_padata_is_etype_info2_only_like_mit() {
     // des3/rc4-only request); MIT 1.22.2 never emits PA-SUPPORTED-ENCTYPES (165).
     // TEST_USER has aes keys, so a modern request yields exactly PA-ETYPE-INFO2.
     let (store, _) = bootstrap_documented().expect("bootstrap");
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 208);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 208);
     let mut types: Vec<i32> = issued
         .rep
         .0
@@ -430,7 +412,7 @@ fn fast_as_forged_armor_realm_is_not_us() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = user_key();
-    let armor_as = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 210);
+    let armor_as = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 210);
     let mut ticket = armor_as.rep.0.ticket.clone();
     ticket.realm = ascii("OTHER.TEST");
     let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x42u8; 32])
@@ -507,7 +489,7 @@ struct ArmorTgt {
 }
 
 fn armor_tgt(store: &PrincipalStore, armor_nonce: u32) -> ArmorTgt {
-    let armor_as = issue_tgt(store, TEST_USER, TEST_USER_PASSWORD, armor_nonce);
+    let armor_as = issue_tgt_password(store, TEST_USER, TEST_USER_PASSWORD, armor_nonce);
     let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x51u8; 32])
         .expect("subkey");
     ArmorTgt {
@@ -648,7 +630,7 @@ fn wrap_as_fast_bit(
 ) -> Result<krb5_kdc::IssuedAs, Error> {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = user_key();
-    let armor_as = issue_tgt(store, TEST_USER, TEST_USER_PASSWORD, nonce);
+    let armor_as = issue_tgt_password(store, TEST_USER, TEST_USER_PASSWORD, nonce);
     let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x45u8; 32])
         .expect("subkey");
     let armor_ap = build_fast_armor(
@@ -745,7 +727,7 @@ fn fast_as_armor_for_host_ticket_is_server_nomatch() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = user_key();
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 853);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 853);
     let tgs = tgs_req(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
@@ -788,7 +770,7 @@ fn explicit_as_armor_expired_tgt_is_tkt_expired() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = user_key();
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 851);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 851);
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let mut part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("TGT");
     part.endtime = KerberosTime::now().add_seconds(-120).unwrap();
@@ -828,7 +810,7 @@ fn explicit_as_armor_future_starttime_is_tkt_nyv() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = user_key();
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 856);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 856);
     let krbtgt = store.krbtgt().unwrap().first_current_key().unwrap();
     let mut part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("TGT");
     part.starttime = Some(KerberosTime::now().add_seconds(3600).unwrap());
@@ -867,7 +849,7 @@ fn explicit_as_armor_future_starttime_is_tkt_nyv() {
 fn tgs_fast_inner_nonce_not_outer() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 850);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 850);
     let mut tgs = tgs_req(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
@@ -1129,7 +1111,7 @@ fn wrap_tgs_fast_explicit_armor(
 fn tgs_fast_forged_ticket_realm_is_process_tgs() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 870);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 870);
     let mut tgs = tgs_req(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
@@ -1167,7 +1149,7 @@ fn tgs_fast_forged_ticket_realm_is_process_tgs() {
 fn tgs_fast_explicit_armor_is_preauth_failed() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 872);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 872);
     let mut tgs = tgs_req(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
@@ -1219,7 +1201,7 @@ fn tgs_fast_explicit_armor_is_preauth_failed() {
 fn tgs_fast_without_subkey_is_preauth_failed() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 874);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 874);
     let mut tgs = tgs_req(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
@@ -1244,7 +1226,7 @@ fn tgs_fast_without_subkey_is_preauth_failed() {
 fn fast_as_armor_without_subkey_is_policy() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let armor_as = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 880);
+    let armor_as = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 880);
     let armor_ap = build_fast_armor(
         armor_as.rep.0.ticket.clone(),
         &armor_as.session_key,
@@ -1266,7 +1248,7 @@ fn fast_as_armor_without_subkey_is_policy() {
 fn tgs_fast_explicit_armor_without_pa_tgs_subkey_is_accepted() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 882);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 882);
     let mut tgs = tgs_req(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
@@ -1297,7 +1279,7 @@ fn tgs_fast_explicit_armor_without_pa_tgs_subkey_is_accepted() {
 fn tgs_fast_explicit_armor_without_any_subkey_is_policy() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 884);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 884);
     let mut tgs = tgs_req(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
@@ -1356,7 +1338,7 @@ fn assert_process_tgs_policy(err: Error, detail: &str) {
 fn tgs_header_ticket_ad_fx_armor_is_policy() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 886);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 886);
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let mut part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("TGT");
     part.authorization_data = Some(vec![fx_armor_ad()]);
@@ -1380,7 +1362,7 @@ fn tgs_header_ticket_ad_fx_armor_is_policy() {
 fn tgs_header_ticket_if_relevant_ad_fx_armor_is_policy() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 888);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 888);
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let mut part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("TGT");
     let inner = encode(&vec![fx_armor_ad()]).expect("inner AD");
@@ -1408,7 +1390,7 @@ fn tgs_header_ticket_if_relevant_ad_fx_armor_is_policy() {
 fn tgs_header_authenticator_ad_fx_armor_is_policy() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 890);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 890);
     let mut tgs = tgs_req(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
@@ -1489,7 +1471,7 @@ fn map_fx_fast_tgs(
 fn fast_as_prepared(store: &PrincipalStore, nonce: u32) -> (krb5_types::AsReq, ProtocolKey) {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = user_key();
-    let armor_as = issue_tgt(store, TEST_USER, TEST_USER_PASSWORD, nonce);
+    let armor_as = issue_tgt_password(store, TEST_USER, TEST_USER_PASSWORD, nonce);
     let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x47u8; 32])
         .expect("subkey");
     let armor_ap = build_fast_armor(
@@ -1571,7 +1553,7 @@ fn fast_as_prepared_etype(
 
 fn fast_tgs_prepared(store: &PrincipalStore, nonce: u32) -> krb5_types::TgsReq {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt(store, TEST_USER, TEST_USER_PASSWORD, nonce);
+    let issued = issue_tgt_password(store, TEST_USER, TEST_USER_PASSWORD, nonce);
     let mut tgs = tgs_req(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
@@ -2049,7 +2031,7 @@ fn assert_process_tgs(err: Error, code: i32) {
 fn tgs_authenticator_unknown_cksumtype_is_sumtype_nosupp() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 930);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 930);
     let mut tgs = tgs_req(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
@@ -2069,7 +2051,7 @@ fn tgs_authenticator_unknown_cksumtype_is_sumtype_nosupp() {
 fn tgs_authenticator_bad_bytes_is_bad_integrity() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 932);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 932);
     let mut tgs = tgs_req(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
@@ -2108,7 +2090,7 @@ fn tgs_wire_reply(store: &PrincipalStore, tgs: &krb5_types::TgsReq) -> Vec<u8> {
 fn tgs_authenticator_cksum_provider_mismatch_is_generic() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 940);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 940);
     let mut tgs = tgs_req(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
@@ -2131,7 +2113,7 @@ fn tgs_authenticator_cksum_provider_mismatch_is_generic() {
 fn tgs_authenticator_cksum_wrong_length_is_generic() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 942);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 942);
     let mut tgs = tgs_req(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
@@ -2155,7 +2137,7 @@ fn tgs_authenticator_cksum_wrong_length_is_generic() {
 fn tgs_authenticator_missing_checksum_is_process_tgs() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 944);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 944);
     let mut tgs = tgs_req(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
@@ -2197,7 +2179,7 @@ fn tgs_authenticator_missing_checksum_is_process_tgs() {
 fn tgs_authenticator_cname_mismatch_is_badmatch() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 904);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 904);
     let mut tgs = tgs_req(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
@@ -2245,7 +2227,7 @@ fn tgs_authenticator_cname_mismatch_is_badmatch() {
 fn tgs_authenticator_crealm_mismatch_is_badmatch() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 906);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 906);
     let mut tgs = tgs_req(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
@@ -2754,7 +2736,7 @@ fn as_bad_pvno_is_dropped() {
 fn tgs_bad_msg_type_is_unknown_reason_without_cname() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 412);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 412);
     let mut tgs = tgs_req(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
@@ -2791,7 +2773,7 @@ fn tgs_bad_msg_type_is_unknown_reason_without_cname() {
 fn tgs_ap_options_use_session_key_is_policy() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 414);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 414);
     let mut tgs = tgs_req(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
@@ -2847,7 +2829,7 @@ fn as_disallow_svr_is_service_not_allowed() {
 fn tgs_header_unknown_kvno_is_generic() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 417);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 417);
     let mut tkt = issued.rep.0.ticket.clone();
     tkt.enc_part.kvno = Some(99);
     let tgs = tgs_req(
@@ -2874,7 +2856,7 @@ fn tgs_header_unknown_kvno_is_generic() {
 fn tgs_header_kvno_zero_issues() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 419);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 419);
     let mut tkt = issued.rep.0.ticket.clone();
     tkt.enc_part.kvno = Some(0);
     let tgs = tgs_req(
@@ -3418,7 +3400,7 @@ fn pkinit_under_fast_issues() {
     let ca = store.pkinit_ca().expect("CA").clone();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let kp = p256_generate().expect("client ECDH");
-    let armor_as = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 442);
+    let armor_as = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 442);
     let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x43u8; 32])
         .expect("subkey");
     let armor_ap = build_fast_armor(
@@ -3445,7 +3427,7 @@ fn pkinit_fast_inner_body_hash_mismatch_is_refused() {
     let ca = store.pkinit_ca().expect("CA").clone();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let kp = p256_generate().expect("client ECDH");
-    let armor_as = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 444);
+    let armor_as = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 444);
     let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x44u8; 32])
         .expect("subkey");
     let armor_ap = build_fast_armor(
@@ -3563,7 +3545,7 @@ fn pkinit_enterprise_san_binds_issued_cname() {
 fn as_and_tgs_tickets_carry_verifiable_pac() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 501);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 501);
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let tgt_part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("TGT");
     let pac = pac_from_ticket_part(&tgt_part).expect("PAC on TGT");
@@ -3675,7 +3657,7 @@ fn s4u2self_user_tgt_host_sname_is_badmatch() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 640);
+    let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 640);
     let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).expect("PA-FOR-USER");
     let tgs = tgs_req_ex(
         tgt.rep.0.ticket.clone(),
@@ -3865,7 +3847,7 @@ fn s4u2proxy_takes_cname_from_evidence() {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     store.allow_s4u_to(&user, &documented_host().components_joined());
-    let admin_tgt = issue_tgt(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 701);
+    let admin_tgt = issue_tgt_password(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 701);
     let evidence_tgs = tgs_req(
         admin_tgt.rep.0.ticket.clone(),
         &admin_tgt.session_key,
@@ -3877,7 +3859,7 @@ fn s4u2proxy_takes_cname_from_evidence() {
     )
     .expect("evidence TGS-REQ");
     let evidence = krb5_kdc::issue_tgs(&store, &evidence_tgs).expect("evidence");
-    let user_tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 703);
+    let user_tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 703);
     let opts = KdcOptions::forwardable().with_bit(flag_bit::CNAME_IN_ADDL_TKT, true);
     let tgs = tgs_req_ex(
         user_tgt.rep.0.ticket.clone(),
@@ -3915,7 +3897,7 @@ fn s4u2proxy_rejects_non_forwardable_evidence() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let admin_tgt = issue_tgt(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 711);
+    let admin_tgt = issue_tgt_password(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 711);
     let evidence_tgs = tgs_req_ex(
         admin_tgt.rep.0.ticket.clone(),
         &admin_tgt.session_key,
@@ -3937,7 +3919,7 @@ fn s4u2proxy_rejects_non_forwardable_evidence() {
         !ev_part.flags.forwardable(),
         "fixture must be a non-forwardable evidence ticket"
     );
-    let user_tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 713);
+    let user_tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 713);
     let opts = KdcOptions::forwardable().with_bit(flag_bit::CNAME_IN_ADDL_TKT, true);
     let tgs = tgs_req_ex(
         user_tgt.rep.0.ticket.clone(),
@@ -3964,7 +3946,7 @@ fn s4u2proxy_rejects_malformed_pac_options() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let admin_tgt = issue_tgt(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 721);
+    let admin_tgt = issue_tgt_password(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 721);
     let evidence_tgs = tgs_req(
         admin_tgt.rep.0.ticket.clone(),
         &admin_tgt.session_key,
@@ -3976,7 +3958,7 @@ fn s4u2proxy_rejects_malformed_pac_options() {
     )
     .expect("evidence TGS-REQ");
     let evidence = krb5_kdc::issue_tgs(&store, &evidence_tgs).expect("evidence");
-    let user_tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 723);
+    let user_tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 723);
     let opts = KdcOptions::forwardable().with_bit(flag_bit::CNAME_IN_ADDL_TKT, true);
     let bad = krb5_types::PaData {
         padata_type: pa::PAC_OPTIONS,
@@ -4007,7 +3989,7 @@ fn s4u2proxy_classic_denied_without_allowed_to() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let admin_tgt = issue_tgt(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 751);
+    let admin_tgt = issue_tgt_password(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 751);
     let evidence_tgs = tgs_req(
         admin_tgt.rep.0.ticket.clone(),
         &admin_tgt.session_key,
@@ -4019,7 +4001,7 @@ fn s4u2proxy_classic_denied_without_allowed_to() {
     )
     .expect("evidence TGS-REQ");
     let evidence = krb5_kdc::issue_tgs(&store, &evidence_tgs).expect("evidence");
-    let user_tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 753);
+    let user_tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 753);
     let opts = KdcOptions::forwardable().with_bit(flag_bit::CNAME_IN_ADDL_TKT, true);
     let tgs = tgs_req_ex(
         user_tgt.rep.0.ticket.clone(),
@@ -4046,7 +4028,7 @@ fn s4u2proxy_honors_pac_options_rbcd() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let admin_tgt = issue_tgt(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 731);
+    let admin_tgt = issue_tgt_password(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 731);
     let evidence_tgs = tgs_req(
         admin_tgt.rep.0.ticket.clone(),
         &admin_tgt.session_key,
@@ -4058,7 +4040,7 @@ fn s4u2proxy_honors_pac_options_rbcd() {
     )
     .expect("evidence TGS-REQ");
     let evidence = krb5_kdc::issue_tgs(&store, &evidence_tgs).expect("evidence");
-    let user_tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 733);
+    let user_tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 733);
     let opts = KdcOptions::forwardable().with_bit(flag_bit::CNAME_IN_ADDL_TKT, true);
     let tgs = tgs_req_ex(
         user_tgt.rep.0.ticket.clone(),
@@ -4086,7 +4068,7 @@ fn s4u2proxy_rbcd_allowed_from_succeeds() {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     store.allow_s4u_from(&documented_host(), &user.components_joined());
-    let admin_tgt = issue_tgt(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 741);
+    let admin_tgt = issue_tgt_password(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 741);
     let evidence_tgs = tgs_req(
         admin_tgt.rep.0.ticket.clone(),
         &admin_tgt.session_key,
@@ -4098,7 +4080,7 @@ fn s4u2proxy_rbcd_allowed_from_succeeds() {
     )
     .expect("evidence TGS-REQ");
     let evidence = krb5_kdc::issue_tgs(&store, &evidence_tgs).expect("evidence");
-    let user_tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 743);
+    let user_tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 743);
     let opts = KdcOptions::forwardable().with_bit(flag_bit::CNAME_IN_ADDL_TKT, true);
     let tgs = tgs_req_ex(
         user_tgt.rep.0.ticket.clone(),
@@ -4123,7 +4105,7 @@ fn u2u_encrypts_ticket_in_additional_tgt_session() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let host = documented_host();
-    let user_tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 801);
+    let user_tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 801);
     let host_key = store
         .get_name(&host)
         .unwrap()
@@ -4175,7 +4157,7 @@ fn s4u2self_bad_checksum_rejected() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 901);
+    let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 901);
     let mut pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).expect("PA-FOR-USER");
     let mut for_user: krb5_types::s4u::PaForUser =
         decode(pa.padata_value.as_ref()).expect("PaForUser");
@@ -4212,7 +4194,7 @@ fn s4u2self_unkeyed_cksumtype_is_inapp() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 903);
+    let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 903);
     let mut pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).expect("PA-FOR-USER");
     let mut for_user: krb5_types::s4u::PaForUser =
         decode(pa.padata_value.as_ref()).expect("PaForUser");
@@ -4269,7 +4251,7 @@ fn tgs_referral_uses_interrealm_key_and_transited() {
         )
         .expect("interrealm");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 51);
+    let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 51);
     let other = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "OTHER.TEST"]);
     let tgs = tgs_req(
         tgt.rep.0.ticket.clone(),
@@ -4298,7 +4280,7 @@ fn tgs_referral_uses_interrealm_key_and_transited() {
 #[test]
 fn pac_logon_info_is_ndr() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 54);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 54);
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("TGT");
     let pac = pac_from_ticket_part(&part).expect("PAC");
@@ -4386,7 +4368,7 @@ fn tgs_canonicalize_issues_cross_realm_krbtgt() {
         )
         .expect("interrealm");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 61);
+    let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 61);
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "svc.other.test"]);
     let tgs = tgs_req_ex(
         tgt.rep.0.ticket.clone(),
@@ -4426,7 +4408,7 @@ fn tgs_referral_ad_kerber_test_issues_krbtgt() {
         )
         .expect("interrealm");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 71);
+    let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 71);
     let ir_sname = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "AD.KERBER.TEST"]);
     let tgs = tgs_req_ex(
         tgt.rep.0.ticket.clone(),
@@ -4507,7 +4489,7 @@ fn interrealm_issue_key_is_not_the_peer_accept_key() {
             .any(|k| k.key.as_bytes() == issue_bytes)
     );
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 81);
+    let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 81);
     let tgs = tgs_req_ex(
         tgt.rep.0.ticket.clone(),
         &tgt.session_key,
@@ -4643,7 +4625,7 @@ fn issue_as_and_tgs_with_etype_20_mint_sha2_tickets() {
 #[test]
 fn same_realm_ticket_sets_transited_policy_checked() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 70);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 70);
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let tgt_part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("tgt");
     assert!(
@@ -4789,7 +4771,7 @@ fn same_realm_ticket_sets_transited_policy_checked() {
 
     let (mut lax_store, _) = bootstrap_documented().expect("lax");
     lax_store.policy.reject_bad_transit = false;
-    let issued_lax = issue_tgt(&lax_store, TEST_USER, TEST_USER_PASSWORD, 76);
+    let issued_lax = issue_tgt_password(&lax_store, TEST_USER, TEST_USER_PASSWORD, 76);
     let skip_lax = tgs_req_ex(
         issued_lax.rep.0.ticket.clone(),
         &issued_lax.session_key,
@@ -4866,7 +4848,7 @@ fn two_realm_pac_stores() -> (PrincipalStore, PrincipalStore, ProtocolKey, Princ
 
 fn referral_from_local(local: &PrincipalStore, nonce: u32) -> (krb5_kdc::IssuedTgs, PrincipalName) {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt(local, TEST_USER, TEST_USER_PASSWORD, nonce);
+    let tgt = issue_tgt_password(local, TEST_USER, TEST_USER_PASSWORD, nonce);
     let other = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "OTHER.TEST"]);
     let tgs = tgs_req(
         tgt.rep.0.ticket.clone(),
@@ -5009,7 +4991,7 @@ fn tgs_rejects_corrupt_foreign_referral_pac() {
 #[test]
 fn tgs_without_pac_still_issues() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 9300);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 9300);
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let mut part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("TGT");
     assert!(pac_from_ticket_part(&part).is_some());
@@ -5042,7 +5024,7 @@ fn tgs_without_pac_still_issues() {
 #[test]
 fn type16_checksum_uses_original_enc_tkt_bytes() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 9400);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 9400);
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let usage = KeyUsage::new(ku::TICKET).expect("usage");
     let plain = decrypt(

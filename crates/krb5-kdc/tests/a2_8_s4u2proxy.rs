@@ -1,44 +1,18 @@
 //! A′-2 item 8 S4U2Proxy constraint and policy statuses.
 
 use krb5_kdc::{
-    PrincipalStore, TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
-    as_req, bootstrap_documented, decrypt_ticket_part, documented_host, pa_enc_timestamp,
-    pac_from_ticket_part,
+    PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER, as_req, bootstrap_documented,
+    decrypt_ticket_part, documented_host, pa_enc_timestamp, pac_from_ticket_part,
 };
 use krb5_protocol::{tgs_req, tgs_req_ex};
-use krb5_testkit::pref_etypes;
+use krb5_testkit::{issue_tgt, pref_etypes};
 use krb5_types::pac::{PAC_DELEGATION_INFO, Pac, parse_delegation_info};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
-
-fn issue_tgt(
-    store: &PrincipalStore,
-    name: &str,
-    password: &[u8],
-    nonce: u32,
-) -> krb5_kdc::IssuedAs {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]);
-    let key = store
-        .get_name(&cname)
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
-    let _ = password;
-    let req = as_req(
-        cname,
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    krb5_kdc::issue_as(store, &req).unwrap()
-}
 
 fn evidence_for_user(store: &PrincipalStore, nonce: u32) -> krb5_types::Ticket {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let admin_tgt = issue_tgt(store, TEST_ADMIN, TEST_ADMIN_PASSWORD, nonce);
+    let admin_tgt = issue_tgt(store, TEST_ADMIN, nonce);
     let req = tgs_req(
         admin_tgt.rep.0.ticket.clone(),
         &admin_tgt.session_key,
@@ -60,7 +34,7 @@ fn proxy_req(
     nonce: u32,
 ) -> krb5_types::TgsReq {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let user_tgt = issue_tgt(store, TEST_USER, TEST_USER_PASSWORD, nonce);
+    let user_tgt = issue_tgt(store, TEST_USER, nonce);
     tgs_req_ex(
         user_tgt.rep.0.ticket,
         &user_tgt.session_key,
@@ -92,7 +66,7 @@ fn cname_addl() -> KdcOptions {
 fn s4u2proxy_no_2nd_tkt_is_unknown_reason() {
     let (store, _) = bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 8100);
+    let tgt = issue_tgt(&store, TEST_USER, 8100);
     let req = tgs_req_ex(
         tgt.rep.0.ticket,
         &tgt.session_key,
@@ -128,7 +102,7 @@ fn s4u2proxy_tgs_target_is_policy() {
 #[test]
 fn s4u2proxy_evidence_mismatch_is_server_nomatch() {
     let (store, _) = bootstrap_documented().unwrap();
-    let admin_tgt = issue_tgt(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 8120);
+    let admin_tgt = issue_tgt(&store, TEST_ADMIN, 8120);
     let req = proxy_req(
         &store,
         admin_tgt.rep.0.ticket,
@@ -146,7 +120,7 @@ fn s4u2proxy_no_header_pac_is_tgt_revoked() {
     let (store, _) = bootstrap_documented().unwrap();
     let ev = evidence_for_user(&store, 8130);
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 8132);
+    let tgt = issue_tgt(&store, TEST_USER, 8132);
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let mut part = decrypt_ticket_part(&krbtgt.key, &tgt.rep.0.ticket).unwrap();
     part.authorization_data = None;

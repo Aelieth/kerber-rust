@@ -6,25 +6,12 @@
 //! `is_referral` compared name-type.
 
 use krb5_kdc::{
-    Error, PrincipalStore, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
-    documented_admin_id, pa_enc_timestamp, tgs_req,
+    Error, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_admin_id,
+    tgs_req,
 };
 use krb5_protocol::tgs_req_ex;
-use krb5_testkit::{password_key, pref_etypes};
+use krb5_testkit::{issue_tgt_password, pref_etypes};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
-
-fn issue_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let key = password_key(TEST_USER, TEST_USER_PASSWORD);
-    let req = as_req(
-        cname,
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
-    )
-    .unwrap();
-    krb5_kdc::issue_as(store, &req).expect("AS")
-}
 
 #[test]
 fn f4_hier_alternate_issues_sub_realm() {
@@ -38,7 +25,7 @@ fn f4_hier_alternate_issues_sub_realm() {
         )
         .expect("interrealm");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt(&store, 4001);
+    let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 4001);
     let far = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "X.SUB.KERBER.TEST"]);
     let tgs = tgs_req(
         tgt.rep.0.ticket.clone(),
@@ -64,7 +51,7 @@ fn f4_hier_common_zero_issues_org_hop() {
         .create_interrealm(&acl, &documented_admin_id(), "ORG", b"interrealm-secret")
         .expect("interrealm");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt(&store, 4003);
+    let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 4003);
     let far = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "BAR.ORG"]);
     let tgs = tgs_req(
         tgt.rep.0.ticket.clone(),
@@ -96,7 +83,7 @@ fn f4_referral_numeric_ipv4_is_looking_up_server() {
         .domain_realm
         .insert("1.2.3.4".into(), "OTHER.TEST".into());
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt(&store, 4005);
+    let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 4005);
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "1.2.3.4"]);
     let tgs = tgs_req_ex(
         tgt.rep.0.ticket,
@@ -133,7 +120,7 @@ fn f4_explicit_cross_tgs_keeps_request_name_type() {
         )
         .expect("interrealm");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt(&store, 4007);
+    let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 4007);
     let far = PrincipalName::new(PrincipalName::NT_UNKNOWN, ["krbtgt", "OTHER.TEST"]);
     let tgs = tgs_req(
         tgt.rep.0.ticket.clone(),

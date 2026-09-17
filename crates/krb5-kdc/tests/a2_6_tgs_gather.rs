@@ -8,22 +8,9 @@ use krb5_kdc::{
     pac_from_ticket_part, sign_pac, tgs_req, ticket_checksum_der, wrap_win2k_pac,
 };
 use krb5_protocol::tgs_req_ex;
-use krb5_testkit::password_key;
+use krb5_testkit::{issue_tgt_password, password_key};
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac};
 use krb5_types::{EncTicketPart, KdcOptions, PrincipalName, err, flag_bit, ku};
-
-fn issue_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let key = password_key(TEST_USER, TEST_USER_PASSWORD);
-    let req = as_req(
-        cname,
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    krb5_kdc::issue_as(store, &req).unwrap()
-}
 
 fn renewable_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -154,7 +141,7 @@ fn tgs_proxy_krbtgt_is_cant_proxy_tgt() {
 #[test]
 fn tgs_corrupt_pac_before_unknown_sname_is_header_pac() {
     let (store, _) = bootstrap_documented().unwrap();
-    let as_out = issue_tgt(&store, 6030);
+    let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6030);
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let mut part = decrypt_ticket_part(&krbtgt.key, &as_out.rep.0.ticket).unwrap();
     let pac = pac_from_ticket_part(&part).unwrap();
@@ -185,7 +172,7 @@ fn tgs_corrupt_pac_before_unknown_sname_is_header_pac() {
 #[test]
 fn tgs_pac_client_mismatch_is_header_pac() {
     let (store, _) = bootstrap_documented().unwrap();
-    let as_out = issue_tgt(&store, 6040);
+    let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6040);
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let mut part = decrypt_ticket_part(&krbtgt.key, &as_out.rep.0.ticket).unwrap();
     let ident = store.pac_identity(&part.cname, TEST_REALM);
@@ -225,7 +212,7 @@ fn tgs_pac_client_mismatch_is_header_pac() {
 #[test]
 fn tgs_missing_pa_tgs_req_is_padata_type_nosupp() {
     let (store, _) = bootstrap_documented().unwrap();
-    let as_out = issue_tgt(&store, 6060);
+    let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6060);
     let mut tgs = host_tgs(&as_out, 6061);
     tgs.0.padata = None;
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
@@ -266,7 +253,7 @@ fn tgs_disallow_svr_service_header_is_process_tgs() {
 #[test]
 fn tgs_forwarded_without_forwardable_is_tgt_not_forwardable() {
     let (store, _) = bootstrap_documented().unwrap();
-    let as_out = issue_tgt(&store, 6110);
+    let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6110);
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let mut part = decrypt_ticket_part(&krbtgt.key, &as_out.rep.0.ticket).unwrap();
     part.flags = part.flags.with_bit(flag_bit::FORWARDABLE, false);
@@ -293,7 +280,7 @@ fn tgs_forwarded_without_forwardable_is_tgt_not_forwardable() {
 #[test]
 fn tgs_proxy_without_proxiable_is_tgt_not_proxiable() {
     let (store, _) = bootstrap_documented().unwrap();
-    let as_out = issue_tgt(&store, 6120);
+    let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6120);
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let mut part = decrypt_ticket_part(&krbtgt.key, &as_out.rep.0.ticket).unwrap();
     part.flags = part.flags.with_bit(flag_bit::PROXIABLE, false);

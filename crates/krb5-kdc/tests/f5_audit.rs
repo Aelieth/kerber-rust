@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use krb5_asn1::encode;
 use krb5_kdc::{
-    AUTHN_REQ_CL, ENCR_REP, SRVC_PRINC, TEST_REALM, TEST_USER, TestAudit, as_req,
-    bootstrap_documented, clear_thread_audit, documented_host, pa_enc_timestamp, set_thread_audit,
-    tgs_req,
+    AUTHN_REQ_CL, ENCR_REP, SRVC_PRINC, TEST_REALM, TEST_USER, TestAudit, bootstrap_documented,
+    clear_thread_audit, documented_host, set_thread_audit, tgs_req,
 };
+use krb5_testkit::issue_tgt;
 use krb5_types::PrincipalName;
 
 fn user() -> PrincipalName {
@@ -29,24 +29,6 @@ fn scratch_dir(name: &str) -> std::path::PathBuf {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
-}
-
-fn issue_tgt(store: &krb5_kdc::PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
-    let key = store
-        .get_name(&user())
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
-    let req = as_req(
-        user(),
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    krb5_kdc::issue_as(store, &req).unwrap()
 }
 
 fn audit_lines(path: &std::path::Path) -> Vec<String> {
@@ -73,7 +55,7 @@ fn f5_tgs_seed_is_authn_req_cl_without_tkt_out() {
     let path = dir.join("au.log");
     set_thread_audit(Arc::new(TestAudit::open(&path).unwrap()));
     let (store, _) = bootstrap_documented().unwrap();
-    let tgt = issue_tgt(&store, 5101);
+    let tgt = issue_tgt(&store, TEST_USER, 5101);
     let tgs = tgs_req(
         tgt.rep.0.ticket.clone(),
         &tgt.session_key,
@@ -118,7 +100,7 @@ fn f5_unknown_server_failure_is_srvc_princ() {
     let path = dir.join("au.log");
     set_thread_audit(Arc::new(TestAudit::open(&path).unwrap()));
     let (store, _) = bootstrap_documented().unwrap();
-    let tgt = issue_tgt(&store, 5103);
+    let tgt = issue_tgt(&store, TEST_USER, 5103);
     let nosuch = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "nosuch.kerber.test"]);
     let tgs = tgs_req(
         tgt.rep.0.ticket.clone(),

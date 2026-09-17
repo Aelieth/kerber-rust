@@ -4,31 +4,13 @@
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::{
     Error, KdcEnv, Policy, Principal, PrincipalRead, PrincipalStore, TEST_ADMIN,
-    TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
-    documented_host, pa_enc_timestamp,
+    TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented,
+    documented_host,
 };
 use krb5_protocol::tgs_req_ex;
-use krb5_testkit::{password_key, pref_etypes};
+use krb5_testkit::{issue_tgt_password, pref_etypes};
 use krb5_types::pac::RpcSid;
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
-
-fn issue_tgt(
-    store: &PrincipalStore,
-    name: &str,
-    password: &[u8],
-    nonce: u32,
-) -> krb5_kdc::IssuedAs {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]);
-    let key = password_key(name, password);
-    let req = as_req(
-        cname,
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    krb5_kdc::issue_as(store, &req).unwrap()
-}
 
 fn proto(err: &Error) -> (i32, Option<&str>) {
     match err {
@@ -76,7 +58,7 @@ fn s4u2proxy_missing_local_tgt_is_get_local_tgt() {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     store.allow_s4u_to(&user, &documented_host().components_joined());
-    let admin_tgt = issue_tgt(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 731);
+    let admin_tgt = issue_tgt_password(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 731);
     let evidence_tgs = krb5_protocol::tgs_req(
         admin_tgt.rep.0.ticket.clone(),
         &admin_tgt.session_key,
@@ -88,7 +70,7 @@ fn s4u2proxy_missing_local_tgt_is_get_local_tgt() {
     )
     .unwrap();
     let evidence = krb5_kdc::issue_tgs(&store, &evidence_tgs).unwrap();
-    let user_tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 733);
+    let user_tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 733);
     let opts = KdcOptions::forwardable().with_bit(flag_bit::CNAME_IN_ADDL_TKT, true);
     let tgs = tgs_req_ex(
         user_tgt.rep.0.ticket.clone(),
@@ -114,7 +96,7 @@ fn s4u2proxy_missing_local_tgt_is_get_local_tgt() {
 fn tgs_header_kvno_zero_decrypts_previous_kvno() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 751);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 751);
     let krbtgt = PrincipalName::krbtgt(TEST_REALM);
     store.chrand_keepold_n(&krbtgt, 1).unwrap();
     let mut ticket = issued.rep.0.ticket.clone();

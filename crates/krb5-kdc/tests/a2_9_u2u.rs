@@ -3,39 +3,14 @@
 use krb5_asn1::encode;
 use krb5_crypto::{KeyUsage, encrypt};
 use krb5_kdc::{
-    KDB_DISALLOW_DUP_SKEY, PrincipalStore, TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER,
-    TEST_USER_PASSWORD, as_req, bootstrap_documented, decrypt_ticket_part, documented_host,
-    pa_enc_timestamp, pac_from_ticket_part, wrap_win2k_pac,
+    KDB_DISALLOW_DUP_SKEY, PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER, as_req,
+    bootstrap_documented, decrypt_ticket_part, documented_host, pa_enc_timestamp,
+    pac_from_ticket_part, wrap_win2k_pac,
 };
 use krb5_protocol::{tgs_req, tgs_req_ex};
-use krb5_testkit::pref_etypes;
+use krb5_testkit::{issue_tgt, pref_etypes};
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit, ku};
-
-fn issue_tgt(
-    store: &PrincipalStore,
-    name: &str,
-    password: &[u8],
-    nonce: u32,
-) -> krb5_kdc::IssuedAs {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]);
-    let key = store
-        .get_name(&cname)
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
-    let _ = password;
-    let req = as_req(
-        cname,
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    krb5_kdc::issue_as(store, &req).unwrap()
-}
 
 fn issue_host_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
     let host = documented_host();
@@ -67,7 +42,7 @@ fn u2u_req(
     nonce: u32,
 ) -> krb5_types::TgsReq {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt(store, TEST_USER, TEST_USER_PASSWORD, nonce);
+    let tgt = issue_tgt(store, TEST_USER, nonce);
     tgs_req_ex(
         tgt.rep.0.ticket,
         &tgt.session_key,
@@ -111,7 +86,7 @@ fn u2u_no_2nd_tkt_is_badoption() {
 fn u2u_service_ticket_is_not_tgs() {
     let (store, _) = bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 9110);
+    let tgt = issue_tgt(&store, TEST_USER, 9110);
     let svc = tgs_req(
         tgt.rep.0.ticket.clone(),
         &tgt.session_key,
@@ -132,7 +107,7 @@ fn u2u_service_ticket_is_not_tgs() {
 #[test]
 fn u2u_admin_tgt_for_host_is_mismatch() {
     let (store, _) = bootstrap_documented().unwrap();
-    let admin = issue_tgt(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 9120);
+    let admin = issue_tgt(&store, TEST_ADMIN, 9120);
     let req = u2u_req(
         &store,
         documented_host(),

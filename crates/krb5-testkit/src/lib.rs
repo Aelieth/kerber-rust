@@ -12,6 +12,7 @@ use krb5_kdc::{
 };
 use krb5_types::EncTicketPart;
 use krb5_types::PrincipalName;
+use krb5_types::flag_bit;
 use krb5_types::pac::{PAC_CLIENT_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer};
 
 /// IANA etype numbers in MIT `preferred()` order.
@@ -58,6 +59,101 @@ pub fn password_key(name: &str, password: &[u8]) -> ProtocolKey {
         Some(&S2K_ITERS.to_be_bytes()),
     )
     .expect("s2k")
+}
+
+/// Best long-term key for the NT_PRINCIPAL named `name`.
+///
+/// # Panics
+///
+/// Panics if `name` is missing from `store` or has no key.
+#[must_use]
+pub fn store_key(store: &PrincipalStore, name: &str) -> ProtocolKey {
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]);
+    store
+        .get_name(&cname)
+        .unwrap()
+        .best_key()
+        .unwrap()
+        .key
+        .clone()
+}
+
+fn as_tgt(
+    store: &PrincipalStore,
+    name: &str,
+    nonce: u32,
+    key: &ProtocolKey,
+    renewable: bool,
+) -> IssuedAs {
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]);
+    let mut req = as_req(
+        cname,
+        TEST_REALM,
+        nonce,
+        Some(vec![pa_enc_timestamp(key).unwrap()]),
+    )
+    .unwrap();
+    if renewable {
+        req.0.req_body.kdc_options = req
+            .0
+            .req_body
+            .kdc_options
+            .with_bit(flag_bit::RENEWABLE, true);
+        req.0.req_body.rtime = Some(req.0.req_body.till.add_hours(48).expect("rtime"));
+    }
+    krb5_kdc::issue_as(store, &req).unwrap()
+}
+
+/// AS-issued TGT for `name` using the store's best long-term key.
+///
+/// Replaces the store-key `issue_tgt` copies (unused-password and
+/// `TEST_USER`-only signatures).
+///
+/// # Panics
+///
+/// Panics if the principal is missing, timestamp preauth fails, or
+/// `issue_as` fails — the same unwraps the local copies used.
+#[must_use]
+pub fn issue_tgt(store: &PrincipalStore, name: &str, nonce: u32) -> IssuedAs {
+    let key = store_key(store, name);
+    as_tgt(store, name, nonce, &key, false)
+}
+
+/// AS-issued TGT for `name` using string-to-key of `password`.
+///
+/// Replaces the `password_key` `issue_tgt` copies (`unwrap` and
+/// `expect("pa")`/`expect("AS")`).
+///
+/// # Panics
+///
+/// Panics if string-to-key, timestamp preauth, or `issue_as` fails.
+#[must_use]
+pub fn issue_tgt_password(
+    store: &PrincipalStore,
+    name: &str,
+    password: &[u8],
+    nonce: u32,
+) -> IssuedAs {
+    let key = password_key(name, password);
+    as_tgt(store, name, nonce, &key, false)
+}
+
+/// Like [`issue_tgt`] but optionally sets RENEWABLE and `rtime` +48h.
+///
+/// Replaces `a2_r16.rs`'s four-argument `issue_tgt`.
+///
+/// # Panics
+///
+/// Same unwraps as [`issue_tgt`], plus `add_hours(48)` if `renewable`.
+#[must_use]
+pub fn issue_tgt_renewable(
+    store: &PrincipalStore,
+    name: &str,
+    nonce: u32,
+    renewable: bool,
+) -> IssuedAs {
+    let key = store_key(store, name);
+    as_tgt(store, name, nonce, &key, renewable)
 }
 
 /// AS-issued TGT for the documented POSIX host principal.

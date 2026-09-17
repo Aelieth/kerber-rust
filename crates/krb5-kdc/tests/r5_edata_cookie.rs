@@ -3,28 +3,14 @@
 //! e_data (`fast_util.c:384-386`).
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
-use krb5_kdc::{
-    Error, S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
-    pa_enc_timestamp,
-};
+use krb5_crypto::{EncryptionType, ProtocolKey};
+use krb5_kdc::{Error, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented};
 use krb5_protocol::{armor_key, attach_fast, build_fast_armor, pa_pk_as_req_spki, unwrap_fast_rep};
+use krb5_testkit::issue_tgt_password;
 use krb5_types::{KrbError, MethodData, PrincipalName, ascii, err, pa};
 
 fn first_ctx_tag(der: &[u8]) -> Option<u8> {
     der.iter().copied().find(|b| b & 0xc0 == 0x80)
-}
-
-fn user_key() -> ProtocolKey {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let salt = cname.default_salt(TEST_REALM);
-    string_to_key(
-        EncryptionType::Aes256CtsHmacSha196,
-        TEST_USER_PASSWORD,
-        &salt,
-        Some(&S2K_ITERS.to_be_bytes()),
-    )
-    .unwrap()
 }
 
 fn pkinit_as_req(
@@ -37,18 +23,6 @@ fn pkinit_as_req(
     let cksum = krb5_types::pkinit::kdc_req_body_checksum(&body);
     req.0.padata = Some(vec![make_pa(&cksum)]);
     req
-}
-
-fn issue_tgt(store: &krb5_kdc::PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = as_req(
-        cname,
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&user_key()).unwrap()]),
-    )
-    .unwrap();
-    krb5_kdc::issue_as(store, &req).unwrap()
 }
 
 #[test]
@@ -149,7 +123,7 @@ fn edata_int_types(ed: &[u8]) -> Vec<i32> {
 fn fast_error_inner_fx_error_omits_edata() {
     let (store, _) = bootstrap_documented().unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let armor = issue_tgt(&store, 910);
+    let armor = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 910);
     let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x51u8; 32]).unwrap();
     let armor_ap = build_fast_armor(
         armor.rep.0.ticket.clone(),

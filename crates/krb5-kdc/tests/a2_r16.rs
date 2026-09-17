@@ -3,47 +3,15 @@
 use krb5_asn1::encode;
 use krb5_crypto::{KeyUsage, encrypt};
 use krb5_kdc::{
-    PrincipalStore, RID_KRBTGT, TEST_REALM, TEST_USER, as_req, bootstrap_documented,
-    decrypt_ticket_part, documented_admin_id, documented_host, dump_store, dump_store_iprop,
-    load_dump, pa_enc_timestamp,
+    RID_KRBTGT, TEST_REALM, TEST_USER, as_req, bootstrap_documented, decrypt_ticket_part,
+    documented_admin_id, documented_host, dump_store, dump_store_iprop, load_dump,
+    pa_enc_timestamp,
 };
 use krb5_protocol::{tgs_req, tgs_req_ex};
-use krb5_testkit::{aes_key, pref_etypes};
+use krb5_testkit::{aes_key, issue_tgt_renewable, pref_etypes};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit, ku};
 
 const FOREIGN: &str = "AD.KERBER.TEST";
-
-fn issue_tgt(
-    store: &PrincipalStore,
-    name: &str,
-    nonce: u32,
-    renewable: bool,
-) -> krb5_kdc::IssuedAs {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]);
-    let key = store
-        .get_name(&cname)
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
-    let mut req = as_req(
-        cname,
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    if renewable {
-        req.0.req_body.kdc_options = req
-            .0
-            .req_body
-            .kdc_options
-            .with_bit(flag_bit::RENEWABLE, true);
-        req.0.req_body.rtime = Some(req.0.req_body.till.add_hours(48).expect("rtime"));
-    }
-    krb5_kdc::issue_as(store, &req).unwrap()
-}
 
 fn code(e: krb5_kdc::Error) -> (i32, Option<String>) {
     match e {
@@ -95,7 +63,7 @@ fn a2_r16_cross_tgt_renew_realm_mismatch_is_26() {
     store
         .create_interrealm_key(&acl, &actor, FOREIGN, ir.clone())
         .unwrap();
-    let issued = issue_tgt(&store, TEST_USER, 16100, true);
+    let issued = issue_tgt_renewable(&store, TEST_USER, 16100, true);
     let local = store.krbtgt().unwrap().best_key().unwrap().key.clone();
     let mut part = decrypt_ticket_part(&local, &issued.rep.0.ticket).unwrap();
     part.flags = part.flags.with_bit(flag_bit::RENEWABLE, true);
@@ -158,7 +126,7 @@ fn a2_r16_u2u_second_ticket_foreign_realm_is_7() {
     let mut foreign = extra;
     foreign.realm = krb5_types::try_ascii("OTHER.TEST").unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt(&store, TEST_USER, 16111, false);
+    let tgt = issue_tgt_renewable(&store, TEST_USER, 16111, false);
     let req = tgs_req_ex(
         tgt.rep.0.ticket,
         &tgt.session_key,
@@ -229,7 +197,7 @@ fn a2_r16_foreign_header_decrypts_via_incoming_kvno() {
     assert_eq!(incoming.keys.len(), 1);
     assert_eq!(incoming.keys[0].kvno, 1);
     assert_eq!(incoming.keys[0].key.as_bytes(), &[0x77u8; 32]);
-    let issued = issue_tgt(&store, TEST_USER, 16120, false);
+    let issued = issue_tgt_renewable(&store, TEST_USER, 16120, false);
     let local = store.krbtgt().unwrap().best_key().unwrap().key.clone();
     let mut part = decrypt_ticket_part(&local, &issued.rep.0.ticket).unwrap();
     part.authorization_data = None;

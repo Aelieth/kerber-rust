@@ -9,7 +9,7 @@ use krb5_kdc::{
     wrap_win2k_pac,
 };
 use krb5_protocol::tgs_req_ex;
-use krb5_testkit::password_key;
+use krb5_testkit::{issue_tgt_password, password_key};
 use krb5_types::pac::{
     PAC_CLIENT_INFO, PAC_FULL_CHECKSUM, PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM, PAC_SERVER_CHECKSUM,
     PAC_TICKET_CHECKSUM, Pac, PacBuffer, client_info_buffer,
@@ -34,19 +34,6 @@ fn renewable_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
         .req_body
         .kdc_options
         .with_bit(flag_bit::RENEWABLE, true);
-    krb5_kdc::issue_as(store, &req).unwrap()
-}
-
-fn issue_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let key = password_key(TEST_USER, TEST_USER_PASSWORD);
-    let req = as_req(
-        cname,
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
     krb5_kdc::issue_as(store, &req).unwrap()
 }
 
@@ -121,7 +108,7 @@ fn tgs_privsvr_enctype_signs_with_prfplus() {
             Some("aes128-cts-hmac-sha1-96"),
         )
         .unwrap();
-    let as_out = issue_tgt(&store, 6130);
+    let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6130);
     let svc = krb5_kdc::issue_tgs(&store, &host_tgs(&as_out, 6131)).unwrap();
     let host_key = store.get_name(&host).unwrap().best_key().unwrap();
     let part = decrypt_ticket_part(&host_key.key, &svc.rep.0.ticket).unwrap();
@@ -143,7 +130,7 @@ fn tgs_privsvr_enctype_signs_with_prfplus() {
 #[test]
 fn tgs_from_client_info_only_tgt_does_not_invent_logon() {
     let (store, _) = bootstrap_documented().unwrap();
-    let as_out = issue_tgt(&store, 6140);
+    let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6140);
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let mut part = decrypt_ticket_part(&krbtgt.key, &as_out.rep.0.ticket).unwrap();
     let stub = Pac::built(
@@ -213,7 +200,7 @@ fn tgs_from_client_info_only_tgt_does_not_invent_logon() {
 #[test]
 fn tgs_from_local_tgt_keeps_subject_logon() {
     let (store, _) = bootstrap_documented().unwrap();
-    let as_out = issue_tgt(&store, 6150);
+    let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6150);
     let svc = krb5_kdc::issue_tgs(&store, &host_tgs(&as_out, 6151)).unwrap();
     let host = store
         .get_name(&documented_host())
@@ -228,7 +215,7 @@ fn tgs_from_local_tgt_keeps_subject_logon() {
 #[test]
 fn tgs_preserves_subject_authtime() {
     let (store, _) = bootstrap_documented().unwrap();
-    let as_out = issue_tgt(&store, 6160);
+    let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6160);
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let mut part = decrypt_ticket_part(&krbtgt.key, &as_out.rep.0.ticket).unwrap();
     let old = KerberosTime::from_unix_seconds(1_700_000_000);
@@ -284,7 +271,7 @@ fn tgs_preserves_subject_authtime() {
 #[test]
 fn tgs_not_a_tgt_decrypts_and_names_client() {
     let (store, _) = bootstrap_documented().unwrap();
-    let as_out = issue_tgt(&store, 6001);
+    let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6001);
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let mut part = decrypt_ticket_part(&krbtgt.key, &as_out.rep.0.ticket).unwrap();
     part.authorization_data = None;
@@ -326,7 +313,7 @@ fn tgs_not_a_tgt_decrypts_and_names_client() {
 #[test]
 fn tgs_expired_beats_unknown_sname() {
     let (store, _) = bootstrap_documented().unwrap();
-    let as_out = issue_tgt(&store, 6080);
+    let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6080);
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let mut part = decrypt_ticket_part(&krbtgt.key, &as_out.rep.0.ticket).unwrap();
     part.endtime = KerberosTime::now().add_seconds(-3600).unwrap();

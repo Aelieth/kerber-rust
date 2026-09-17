@@ -3,24 +3,11 @@
 use std::collections::BTreeMap;
 
 use krb5_kdc::{
-    Error, PrincipalStore, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
-    documented_admin_id, pa_enc_timestamp, tgs_req,
+    Error, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_admin_id,
+    tgs_req,
 };
-use krb5_testkit::password_key;
+use krb5_testkit::issue_tgt_password;
 use krb5_types::{PrincipalName, err};
-
-fn issue_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let key = password_key(TEST_USER, TEST_USER_PASSWORD);
-    let req = as_req(
-        cname,
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
-    )
-    .unwrap();
-    krb5_kdc::issue_as(store, &req).expect("AS")
-}
 
 #[test]
 fn a4_18_alternate_tgs_issues_near_hop() {
@@ -39,7 +26,7 @@ fn a4_18_alternate_tgs_issues_near_hop() {
     capaths.insert(TEST_REALM.into(), hops);
     store.set_capaths(capaths);
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt(&store, 1801);
+    let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 1801);
     let far = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "FAR.TEST"]);
     let tgs = tgs_req(
         tgt.rep.0.ticket.clone(),
@@ -62,7 +49,7 @@ fn a4_18_alternate_tgs_issues_near_hop() {
 fn a4_18_alternate_tgs_without_hop_is_unknown_server() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgt = issue_tgt(&store, 1803);
+    let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 1803);
     let far = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "FAR.TEST"]);
     let tgs = tgs_req(
         tgt.rep.0.ticket.clone(),

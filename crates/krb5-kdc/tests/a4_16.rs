@@ -3,33 +3,15 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt, krb_fx_cf2};
 use krb5_kdc::{
-    Error, PrincipalStore, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
-    documented_host, pa_enc_timestamp, tgs_req,
+    Error, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
+    documented_host, tgs_req,
 };
 use krb5_protocol::{armor_key, attach_fast_with_options, build_fast_armor, unwrap_fast_rep};
-use krb5_testkit::password_key;
+use krb5_testkit::issue_tgt_password;
 use krb5_types::{
     ApReq, Checksum, EncryptedData, EncryptionKey, KrbError, PrincipalName, ascii, err, flag_bit,
     ku, pa,
 };
-
-fn issue_tgt(
-    store: &PrincipalStore,
-    name: &str,
-    password: &[u8],
-    nonce: u32,
-) -> krb5_kdc::IssuedAs {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]);
-    let key = password_key(name, password);
-    let req = as_req(
-        cname,
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
-    )
-    .unwrap();
-    krb5_kdc::issue_as(store, &req).expect("AS")
-}
 
 fn wrap_tgs_fast_opts(
     req: &mut krb5_types::TgsReq,
@@ -119,7 +101,7 @@ fn a4_16_named_anon_without_preauth_is_still_13() {
 fn a4_16_fast_hide_as_error_client() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let armor_as = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 223);
+    let armor_as = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 223);
     let sub = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x38u8; 32])
         .expect("subkey");
     let armor_ap = build_fast_armor(
@@ -158,7 +140,7 @@ fn a4_16_fast_hide_as_error_client() {
 fn a4_16_tgs_fast_hide_outer_tgs_rep() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let issued = issue_tgt(&store, TEST_USER, TEST_USER_PASSWORD, 851);
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 851);
     let mut tgs = tgs_req(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
