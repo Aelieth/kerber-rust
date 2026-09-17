@@ -31,6 +31,9 @@ jobs:
   msrv-test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # rust-toolchain.toml pins stable; the env pin outranks it (ci-policy check_msrv_pinned).
+    env:
+      RUSTUP_TOOLCHAIN: "1.95"
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.95

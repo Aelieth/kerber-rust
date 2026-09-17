@@ -183,8 +183,9 @@ option. See [NOTICE](NOTICE) and [docs/export-control.md](docs/export-control.md
 
 Supply chain, all in the CI `audit` job: `cargo audit`, `cargo deny`,
 per-crate `cargo geiger` (`scripts/geiger.sh`, 0-unsafe product), and
-`cargo vet --locked`. MSRV is **1.95** (`package.rust-version`), edition
-**2024**, matching KLLDAP (checkout 0.7.4, upstream 0.7.6); `rasn` is unpinned (`0.28`, lock 0.28.14)
+`cargo vet --locked`. MSRV is **1.95** (`package.rust-version`, asserted by
+`ci-policy.py` against the `msrv` jobs), `rust-toolchain.toml` tracks stable
+with rustfmt and clippy, edition **2024**, matching KLLDAP (checkout 0.7.4, upstream 0.7.6); `rasn` is unpinned (`0.28`, lock 0.28.14)
 with MIT golden DER as the byte-level net. See
 [docs/security.md](docs/security.md).
 

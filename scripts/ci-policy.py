@@ -2257,6 +2257,61 @@ def check_makefile_matches_ci(mf: str | None = None, ci_text: str | None = None)
     _order(test_job.body, "ci.yml test job")
 
 
+MSRV = "1.95"
+MSRV_JOBS = (("ci.yml", "msrv"), ("full-test.yml", "msrv-test"))
+
+
+def check_msrv_pinned(
+    cargo_toml: str | None = None,
+    fuzz_toml: str | None = None,
+    toolchain_toml: str | None = None,
+    wf_texts: dict[str, str] | None = None,
+) -> None:
+    """W3-S1: rust-version is MSRV in both manifests; rust-toolchain.toml tracks
+    stable; each msrv job installs MSRV and pins it with RUSTUP_TOOLCHAIN (the
+    toolchain file outranks `rustup default`, which is all the action sets)."""
+    if cargo_toml is None:
+        cargo_toml = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
+    if fuzz_toml is None:
+        fuzz_toml = (ROOT / "fuzz" / "Cargo.toml").read_text(encoding="utf-8")
+    if toolchain_toml is None:
+        p = ROOT / "rust-toolchain.toml"
+        toolchain_toml = p.read_text(encoding="utf-8") if p.is_file() else ""
+    if wf_texts is None:
+        wf_texts = {
+            name: (WORKFLOWS / name).read_text(encoding="utf-8")
+            for name, _ in MSRV_JOBS
+            if (WORKFLOWS / name).is_file()
+        }
+    rv = re.compile(r'(?m)^rust-version\s*=\s*"([^"]+)"')
+    for label, text in (("Cargo.toml", cargo_toml), ("fuzz/Cargo.toml", fuzz_toml)):
+        m = rv.search(text)
+        if not m:
+            _die(f"{label} has no rust-version")
+        if m.group(1) != MSRV:
+            _die(f"{label} rust-version {m.group(1)} != MSRV {MSRV}")
+    if not re.search(r'(?m)^channel\s*=\s*"stable"', toolchain_toml):
+        _die('rust-toolchain.toml must pin channel = "stable"')
+    for name, job_name in MSRV_JOBS:
+        text = wf_texts.get(name)
+        if text is None:
+            _die(f"missing workflow {name}")
+        job = Workflow(pathlib.Path(name), text).jobs.get(job_name)
+        if job is None:
+            _die(f"{name} missing job {job_name}")
+        # `@1.95` by tag, or SHA-pinned with `toolchain: 1.95` (W3-S1 pins by SHA).
+        by_tag = re.search(r"dtolnay/rust-toolchain@" + re.escape(MSRV) + r"\b", job.body)
+        by_sha = re.search(r"dtolnay/rust-toolchain@[0-9a-f]{40}\b", job.body) and re.search(
+            r'(?m)^\s+toolchain:\s*"?' + re.escape(MSRV) + r'"?\s*$', job.body
+        )
+        if not (by_tag or by_sha):
+            _die(f"{name} job {job_name} must install dtolnay/rust-toolchain {MSRV}")
+        if not re.search(r'(?m)^\s+RUSTUP_TOOLCHAIN:\s*"?' + re.escape(MSRV) + r'"?\s*$', job.body):
+            _die(f"{name} job {job_name} must set RUSTUP_TOOLCHAIN: {MSRV}")
+        if "cargo " not in job.body:
+            _die(f"{name} job {job_name} runs no cargo step")
+
+
 def check_rust_cache_shared_key(wf_texts: dict[str, str] | None = None) -> None:
     """Every Swatinem/rust-cache step uses shared-key: kerber; cargo jobs have a cache."""
     needle = "shared-key: kerber"
@@ -4093,6 +4148,50 @@ jobs:
         "      - run: cargo nextest run\n"
     )
     check_rust_cache_shared_key({"ci.yml": cache_ok})
+    msrv_wf = (
+        "jobs:\n"
+        "  {job}:\n"
+        "    env:\n"
+        '      RUSTUP_TOOLCHAIN: "1.95"\n'
+        "    steps:\n"
+        "      - uses: dtolnay/rust-toolchain@1.95\n"
+        "      - run: cargo build --workspace --locked\n"
+    )
+    msrv_ok = {
+        "ci.yml": msrv_wf.format(job="msrv"),
+        "full-test.yml": msrv_wf.format(job="msrv-test"),
+    }
+    manifest_ok = '[package]\nrust-version = "1.95"\n'
+    check_msrv_pinned(manifest_ok, manifest_ok, 'channel = "stable"\n', msrv_ok)
+    sha_pinned = msrv_ok["ci.yml"].replace(
+        "      - uses: dtolnay/rust-toolchain@1.95\n",
+        "      - uses: dtolnay/rust-toolchain@" + "a" * 40 + " # stable\n        with:\n          toolchain: \"1.95\"\n",
+    )
+    check_msrv_pinned(manifest_ok, manifest_ok, 'channel = "stable"\n', {"ci.yml": sha_pinned, "full-test.yml": msrv_ok["full-test.yml"]})
+    _must_die(
+        check_msrv_pinned,
+        manifest_ok,
+        manifest_ok,
+        'channel = "stable"\n',
+        {"ci.yml": sha_pinned.replace('          toolchain: "1.95"\n', ""), "full-test.yml": msrv_ok["full-test.yml"]},
+    )
+    _must_die(check_msrv_pinned, '[package]\nrust-version = "1.90"\n', manifest_ok, 'channel = "stable"\n', msrv_ok)
+    _must_die(check_msrv_pinned, manifest_ok, "[package]\n", 'channel = "stable"\n', msrv_ok)
+    _must_die(check_msrv_pinned, manifest_ok, manifest_ok, 'channel = "1.95.0"\n', msrv_ok)
+    _must_die(
+        check_msrv_pinned,
+        manifest_ok,
+        manifest_ok,
+        'channel = "stable"\n',
+        {"ci.yml": msrv_wf.format(job="msrv").replace('      RUSTUP_TOOLCHAIN: "1.95"\n', ""), "full-test.yml": msrv_ok["full-test.yml"]},
+    )
+    _must_die(
+        check_msrv_pinned,
+        manifest_ok,
+        manifest_ok,
+        'channel = "stable"\n',
+        {"ci.yml": msrv_ok["ci.yml"], "full-test.yml": msrv_ok["full-test.yml"].replace("@1.95", "@stable")},
+    )
     _must_die(
         check_rust_cache_shared_key,
         {
@@ -4783,6 +4882,7 @@ def main() -> None:
     check_evidence_check_tool()
     check_ci_status_save()
     check_makefile_matches_ci()
+    check_msrv_pinned()
     check_rust_cache_shared_key()
     check_prod_image_once()
     check_build_profile()

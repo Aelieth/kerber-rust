@@ -28,6 +28,11 @@ this project uses semantic versioning once a crate is published.
   `multiple_crate_versions` and `cargo_common_metadata` allowed for the
   reasons stated. `no_effect_underscore_binding` stays allowed: the rasn
   derives bind every field `_`-prefixed (the comment now says so).
+- **Toolchain.** `rust-toolchain.toml` (`stable`, rustfmt + clippy, minimal
+  profile). Because the file outranks `rustup default`, the `msrv` and
+  `msrv-test` jobs pin `RUSTUP_TOOLCHAIN: 1.95`; `fuzz/Cargo.toml` gains
+  `rust-version`; `ci-policy.py check_msrv_pinned` asserts both manifests,
+  the channel and both jobs agree on 1.95.
 
 ### W3-S0 comparison baseline
 
