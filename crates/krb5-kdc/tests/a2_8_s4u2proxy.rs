@@ -4,8 +4,7 @@ use krb5_kdc::{
     PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER, as_req, bootstrap_documented,
     decrypt_ticket_part, documented_host, pa_enc_timestamp, pac_from_ticket_part,
 };
-use krb5_protocol::tgs_req_ex;
-use krb5_testkit::{evidence_for_user, expect_status, issue_tgt, pref_etypes};
+use krb5_testkit::{TgsReqBuilder, evidence_for_user, expect_status, issue_tgt, pref_etypes};
 use krb5_types::pac::{PAC_DELEGATION_INFO, Pac, parse_delegation_info};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
 
@@ -18,7 +17,7 @@ fn proxy_req(
 ) -> krb5_types::TgsReq {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let user_tgt = issue_tgt(store, TEST_USER, nonce);
-    tgs_req_ex(
+    TgsReqBuilder::new(
         user_tgt.rep.0.ticket,
         &user_tgt.session_key,
         TEST_REALM,
@@ -26,11 +25,12 @@ fn proxy_req(
         dest,
         TEST_REALM,
         nonce + 1,
-        opts,
-        Some(vec![evidence]),
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(opts)
+    .additional_tickets(Some(vec![evidence]))
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .unwrap()
 }
 
@@ -43,7 +43,7 @@ fn s4u2proxy_no_2nd_tkt_is_unknown_reason() {
     let (store, _) = bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let tgt = issue_tgt(&store, TEST_USER, 8100);
-    let req = tgs_req_ex(
+    let req = TgsReqBuilder::new(
         tgt.rep.0.ticket,
         &tgt.session_key,
         TEST_REALM,
@@ -51,11 +51,12 @@ fn s4u2proxy_no_2nd_tkt_is_unknown_reason() {
         documented_host(),
         TEST_REALM,
         8101,
-        cname_addl(),
-        None,
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(cname_addl())
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .unwrap();
     let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::GENERIC);
@@ -106,7 +107,7 @@ fn s4u2proxy_no_header_pac_is_tgt_revoked() {
     tkt.enc_part.cipher = krb5_crypto::encrypt(&krbtgt.key, usage, &der)
         .unwrap()
         .into();
-    let req = tgs_req_ex(
+    let req = TgsReqBuilder::new(
         tkt,
         &tgt.session_key,
         TEST_REALM,
@@ -114,11 +115,12 @@ fn s4u2proxy_no_header_pac_is_tgt_revoked() {
         documented_host(),
         TEST_REALM,
         8133,
-        cname_addl(),
-        Some(vec![ev]),
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(cname_addl())
+    .additional_tickets(Some(vec![ev]))
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .unwrap();
     let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::TGT_REVOKED);

@@ -6,10 +6,10 @@ use krb5_kdc::{
     bootstrap_documented, decrypt_ticket_part, documented_admin_id, documented_host,
     pa_enc_timestamp, pac_from_ticket_part,
 };
-use krb5_protocol::{pa_for_user, pa_pac_options, tgs_req_ex};
+use krb5_protocol::{pa_for_user, pa_pac_options};
 use krb5_testkit::{
-    aes_key, attach_pac, evidence_for_user, foreign, host_tgt, issue_tgt_password, pref_etypes,
-    reseal_incoming,
+    TgsReqBuilder, aes_key, attach_pac, evidence_for_user, foreign, host_tgt, issue_tgt_password,
+    pref_etypes, reseal_incoming,
 };
 use krb5_types::pac::{PAC_CLIENT_INFO, Pac, parse_client_info};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit, ku};
@@ -41,7 +41,7 @@ fn tgs_for(
 ) -> krb5_types::TgsReq {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let tgt = issue_tgt_password(store, TEST_USER, TEST_USER_PASSWORD, nonce);
-    tgs_req_ex(
+    TgsReqBuilder::new(
         tgt.rep.0.ticket,
         &tgt.session_key,
         TEST_REALM,
@@ -49,11 +49,12 @@ fn tgs_for(
         sname,
         TEST_REALM,
         nonce + 1,
-        opts,
-        None,
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(opts)
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .expect("TGS-REQ")
 }
 
@@ -64,7 +65,7 @@ fn a4_18_host_fqdn_canonicalize_issues_referral() {
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "x.other.test"]);
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 1810);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         tgt.rep.0.ticket,
         &tgt.session_key,
         TEST_REALM,
@@ -72,11 +73,12 @@ fn a4_18_host_fqdn_canonicalize_issues_referral() {
         host,
         TEST_REALM,
         1811,
-        canon(),
-        None,
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(canon())
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .expect("TGS-REQ");
     let out = krb5_kdc::issue_tgs(&store, &tgs).expect("host referral");
     assert_eq!(
@@ -192,7 +194,7 @@ fn a4_18_s4u2self_case2_cross_local_user_referral_issues() {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let pa = pa_for_user(&tgt.session_key, user, TEST_REALM).unwrap();
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "x.other.test"]);
-    let req = tgs_req_ex(
+    let req = TgsReqBuilder::new(
         header,
         &tgt.session_key,
         "OTHER.TEST",
@@ -200,11 +202,12 @@ fn a4_18_s4u2self_case2_cross_local_user_referral_issues() {
         host,
         TEST_REALM,
         1861,
-        canon(),
-        None,
-        vec![pa],
-        pref_etypes(),
     )
+    .options(canon())
+    .additional_tickets(None)
+    .padata(vec![pa])
+    .etypes(pref_etypes())
+    .build()
     .unwrap();
     let out = krb5_kdc::issue_tgs(&store, &req).expect("S4U2Self case 2");
     assert_eq!(
@@ -242,7 +245,7 @@ fn a4_18_s4u2self_case3_cross_foreign_user_referral_issues() {
     let header = reseal_incoming(&ir, &tgt, &part);
     let pa = pa_for_user(&tgt.session_key, alice.clone(), "OTHER.TEST").unwrap();
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "x.other.test"]);
-    let req = tgs_req_ex(
+    let req = TgsReqBuilder::new(
         header,
         &tgt.session_key,
         "OTHER.TEST",
@@ -250,11 +253,12 @@ fn a4_18_s4u2self_case3_cross_foreign_user_referral_issues() {
         host,
         TEST_REALM,
         1865,
-        canon(),
-        None,
-        vec![pa],
-        pref_etypes(),
     )
+    .options(canon())
+    .additional_tickets(None)
+    .padata(vec![pa])
+    .etypes(pref_etypes())
+    .build()
     .unwrap();
     let out = krb5_kdc::issue_tgs(&store, &req).expect("S4U2Self case 3");
     assert_eq!(
@@ -271,7 +275,7 @@ fn a4_18_s4u2self_local_tgt_referral_is_looking_up_server() {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let pa = pa_for_user(&tgt.session_key, user, TEST_REALM).unwrap();
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "x.other.test"]);
-    let req = tgs_req_ex(
+    let req = TgsReqBuilder::new(
         tgt.rep.0.ticket,
         &tgt.session_key,
         TEST_REALM,
@@ -279,11 +283,12 @@ fn a4_18_s4u2self_local_tgt_referral_is_looking_up_server() {
         host,
         TEST_REALM,
         1871,
-        canon(),
-        None,
-        vec![pa],
-        pref_etypes(),
     )
+    .options(canon())
+    .additional_tickets(None)
+    .padata(vec![pa])
+    .etypes(pref_etypes())
+    .build()
     .unwrap();
     match krb5_kdc::issue_tgs(&store, &req) {
         Err(Error::Protocol { code, text, .. }) => {
@@ -321,7 +326,7 @@ fn a4_18_s4u2proxy_referral_without_rbcd_is_unsupported() {
     let opts = KdcOptions::forwardable()
         .with_bit(flag_bit::CNAME_IN_ADDL_TKT, true)
         .with_bit(flag_bit::CANONICALIZE, true);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         user_tgt.rep.0.ticket,
         &user_tgt.session_key,
         TEST_REALM,
@@ -329,11 +334,12 @@ fn a4_18_s4u2proxy_referral_without_rbcd_is_unsupported() {
         dest,
         TEST_REALM,
         1883,
-        opts,
-        Some(vec![evidence]),
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(opts)
+    .additional_tickets(Some(vec![evidence]))
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .unwrap();
     match krb5_kdc::issue_tgs(&store, &tgs) {
         Err(Error::Protocol { code, text, .. }) => {
@@ -352,7 +358,7 @@ fn a4_18_s4u2proxy_referral_with_rbcd_issues() {
     let tgt = host_tgt(&store, 1890);
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let pa = pa_for_user(&tgt.session_key, user, TEST_REALM).unwrap();
-    let self_req = tgs_req_ex(
+    let self_req = TgsReqBuilder::new(
         tgt.rep.0.ticket.clone(),
         &tgt.session_key,
         TEST_REALM,
@@ -360,11 +366,12 @@ fn a4_18_s4u2proxy_referral_with_rbcd_issues() {
         host.clone(),
         TEST_REALM,
         1891,
-        KdcOptions::forwardable(),
-        None,
-        vec![pa],
-        pref_etypes(),
     )
+    .options(KdcOptions::forwardable())
+    .additional_tickets(None)
+    .padata(vec![pa])
+    .etypes(pref_etypes())
+    .build()
     .unwrap();
     let evidence = krb5_kdc::issue_tgs(&store, &self_req)
         .expect("S4U2Self evidence")
@@ -375,7 +382,7 @@ fn a4_18_s4u2proxy_referral_with_rbcd_issues() {
     let opts = KdcOptions::forwardable()
         .with_bit(flag_bit::CNAME_IN_ADDL_TKT, true)
         .with_bit(flag_bit::CANONICALIZE, true);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         tgt.rep.0.ticket,
         &tgt.session_key,
         TEST_REALM,
@@ -383,11 +390,12 @@ fn a4_18_s4u2proxy_referral_with_rbcd_issues() {
         dest,
         TEST_REALM,
         1893,
-        opts,
-        Some(vec![evidence]),
-        vec![pa_pac_options(true).unwrap()],
-        pref_etypes(),
     )
+    .options(opts)
+    .additional_tickets(Some(vec![evidence]))
+    .padata(vec![pa_pac_options(true).unwrap()])
+    .etypes(pref_etypes())
+    .build()
     .unwrap();
     let out = krb5_kdc::issue_tgs(&store, &tgs).expect("S4U2Proxy referral");
     assert_eq!(

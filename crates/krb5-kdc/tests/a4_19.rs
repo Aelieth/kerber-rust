@@ -3,10 +3,10 @@
 use krb5_asn1::decode_enc_kdc_rep_part;
 use krb5_crypto::{EncryptionType, KeyUsage, decrypt};
 use krb5_kdc::{PrincipalStore, TEST_REALM, bootstrap_documented};
-use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req_ex_from};
+use krb5_protocol::{as_req, pa_enc_timestamp};
 use krb5_types::{KdcOptions, KerberosTime, PrincipalName, flag_bit, ku};
 
-use krb5_testkit::{user, user_as};
+use krb5_testkit::{TgsReqBuilder, user, user_as};
 fn enc_as(issued: &krb5_kdc::IssuedAs) -> krb5_types::EncKdcRepPart {
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
     let plain = decrypt(
@@ -91,7 +91,7 @@ fn a4_19_renew_postdated_starts_at_from() {
         .with_bit(flag_bit::MAY_POSTDATE, true);
     let tgt = krb5_kdc::issue_as(&store, &req).unwrap();
     let from = KerberosTime::now().add_seconds(3600).unwrap();
-    let tgs = tgs_req_ex_from(
+    let tgs = TgsReqBuilder::new(
         tgt.rep.0.ticket.clone(),
         &tgt.session_key,
         TEST_REALM,
@@ -99,16 +99,19 @@ fn a4_19_renew_postdated_starts_at_from() {
         PrincipalName::krbtgt(TEST_REALM),
         TEST_REALM,
         1906,
+    )
+    .options(
         KdcOptions::none()
             .with_bit(flag_bit::RENEW, true)
             .with_bit(flag_bit::POSTDATED, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
-        None,
-        Some(from.clone()),
-        None,
     )
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .addresses(None)
+    .from(Some(from.clone()))
+    .enc_authorization_data(None)
+    .build()
     .unwrap();
     let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
     let part = ticket_part(&store, &out);

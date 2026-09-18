@@ -7,8 +7,8 @@ use krb5_kdc::{
     TEST_ADMIN_PASSWORD, TEST_USER, TEST_USER_PASSWORD, as_req, decrypt_ticket_part,
     pa_enc_timestamp, tgs_req,
 };
-use krb5_protocol::{pa_for_user, tgs_req_ex};
-use krb5_testkit::reseal_mut;
+use krb5_protocol::pa_for_user;
+use krb5_testkit::{TgsReqBuilder, reseal_mut};
 use krb5_types::{
     ApReq, EncTicketPart, KdcOptions, OctetString, PrincipalName, Ticket, err, flag_bit, ku, pa,
 };
@@ -182,7 +182,7 @@ fn three_hop_capaths_accept_and_reject() {
     assert_eq!(part.transited.tr_type, 1);
 
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let skip_req = tgs_req_ex(
+    let skip_req = TgsReqBuilder::new(
         bc.rep.0.ticket.clone(),
         &bc.session_key,
         "A.TEST",
@@ -190,11 +190,12 @@ fn three_hop_capaths_accept_and_reject() {
         host_c.clone(),
         "C.TEST",
         406,
-        KdcOptions::forwardable().with_bit(flag_bit::DISABLE_TRANSITED_CHECK, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::DISABLE_TRANSITED_CHECK, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .expect("skip tgs");
     match krb5_kdc::issue_tgs(&c, &skip_req) {
         Err(Error::Protocol { code, text, .. }) => {
@@ -411,7 +412,7 @@ fn transited_cross_realm_renew_at_dest_is_server_nomatch() {
     part.renew_till = Some(part.endtime.add_hours(24).expect("renew_till"));
     part.authorization_data = None;
     reseal_mut(&mut t, &part, &ir);
-    let req = tgs_req_ex(
+    let req = TgsReqBuilder::new(
         t,
         &bc.session_key,
         "A.TEST",
@@ -419,11 +420,12 @@ fn transited_cross_realm_renew_at_dest_is_server_nomatch() {
         PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "C.TEST"]),
         "C.TEST",
         531,
-        KdcOptions::forwardable().with_bit(flag_bit::RENEW, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::RENEW, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .expect("renew tgs");
     match krb5_kdc::issue_tgs(&c, &req) {
         Err(Error::Protocol { code, text, .. }) => {
@@ -673,7 +675,7 @@ fn tgs_renew_at_dest_issuer_realm_is_get_local_tgt() {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let tgt = as_tgt_renewable(&a, "A.TEST", 970);
     let ren = KdcOptions::forwardable().with_bit(flag_bit::RENEWABLE, true);
-    let ab = tgs_req_ex(
+    let ab = TgsReqBuilder::new(
         tgt.rep.0.ticket.clone(),
         &tgt.session_key,
         "A.TEST",
@@ -681,14 +683,15 @@ fn tgs_renew_at_dest_issuer_realm_is_get_local_tgt() {
         PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "B.TEST"]),
         "A.TEST",
         971,
-        ren.clone(),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(ren.clone())
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .expect("ab");
     let ab = krb5_kdc::issue_tgs(&a, &ab).expect("A->B");
-    let bc = tgs_req_ex(
+    let bc = TgsReqBuilder::new(
         ab.rep.0.ticket.clone(),
         &ab.session_key,
         "A.TEST",
@@ -696,11 +699,12 @@ fn tgs_renew_at_dest_issuer_realm_is_get_local_tgt() {
         PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "C.TEST"]),
         "B.TEST",
         972,
-        ren,
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(ren)
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .expect("bc");
     let bc = krb5_kdc::issue_tgs(&b, &bc).expect("B->C");
     c.set_capaths(std::collections::BTreeMap::new());
@@ -717,7 +721,7 @@ fn tgs_renew_at_dest_issuer_realm_is_get_local_tgt() {
     let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &honest));
     assert_eq!(code, err::POLICY);
     assert_eq!(text.as_deref(), Some("BAD_TRANSIT"));
-    let renew = tgs_req_ex(
+    let renew = TgsReqBuilder::new(
         bc.rep.0.ticket.clone(),
         &bc.session_key,
         "A.TEST",
@@ -725,11 +729,12 @@ fn tgs_renew_at_dest_issuer_realm_is_get_local_tgt() {
         PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "C.TEST"]),
         "B.TEST",
         974,
-        KdcOptions::forwardable().with_bit(flag_bit::RENEW, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::RENEW, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .expect("renew");
     let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &renew));
     assert_eq!(code, err::GENERIC);
@@ -921,7 +926,7 @@ fn transited_renew_at_dest_mismatched_realm_is_26() {
     part.renew_till = Some(part.endtime.add_hours(24).expect("renew_till"));
     part.authorization_data = None;
     reseal_mut(&mut t, &part, &ir);
-    let req = tgs_req_ex(
+    let req = TgsReqBuilder::new(
         t,
         &bc.session_key,
         "A.TEST",
@@ -929,11 +934,12 @@ fn transited_renew_at_dest_mismatched_realm_is_26() {
         PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "C.TEST"]),
         "C.TEST",
         930,
-        KdcOptions::forwardable().with_bit(flag_bit::RENEW, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::RENEW, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .expect("renew tgs");
     let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
     assert_eq!(code, err::SERVER_NOMATCH);
@@ -989,7 +995,7 @@ fn s4u2self_referral_names_header_client() {
     attach_client_info_pac(&ir, &mut part, &format!("{TEST_ADMIN}@A.TEST"));
     reseal_mut(&mut t, &part, &ir);
     let pa = pa_for_user(&ab.session_key, admin, "A.TEST").expect("PA-FOR-USER");
-    let req = tgs_req_ex(
+    let req = TgsReqBuilder::new(
         t,
         &ab.session_key,
         "A.TEST",
@@ -997,11 +1003,12 @@ fn s4u2self_referral_names_header_client() {
         PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "C.TEST"]),
         "B.TEST",
         982,
-        KdcOptions::forwardable(),
-        None,
-        vec![pa],
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::forwardable())
+    .additional_tickets(None)
+    .padata(vec![pa])
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .expect("s4u explicit TGS");
     let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&b, &req));
     assert_eq!(code, err::BADMATCH);
@@ -1022,7 +1029,7 @@ fn s4u2self_cross_tgt_local_user_local_server_is_not_cross_realm() {
     reseal_mut(&mut t, &part, &ir);
     let local = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let pa = pa_for_user(&bc.session_key, local, "C.TEST").expect("PA-FOR-USER");
-    let req = tgs_req_ex(
+    let req = TgsReqBuilder::new(
         t,
         &bc.session_key,
         "C.TEST",
@@ -1030,11 +1037,12 @@ fn s4u2self_cross_tgt_local_user_local_server_is_not_cross_realm() {
         host_c.clone(),
         "C.TEST",
         983,
-        KdcOptions::forwardable(),
-        None,
-        vec![pa],
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::forwardable())
+    .additional_tickets(None)
+    .padata(vec![pa])
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .expect("s4u");
     let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
     assert_eq!(code, err::C_PRINCIPAL_UNKNOWN);
@@ -1047,7 +1055,7 @@ fn s4u2self_cross_tgt_foreign_client_named_like_local_server_is_badmatch() {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let pa = pa_for_user(&bc.session_key, admin, "A.TEST").expect("PA-FOR-USER");
-    let req = tgs_req_ex(
+    let req = TgsReqBuilder::new(
         bc.rep.0.ticket.clone(),
         &bc.session_key,
         "A.TEST",
@@ -1055,11 +1063,12 @@ fn s4u2self_cross_tgt_foreign_client_named_like_local_server_is_badmatch() {
         user.clone(),
         "C.TEST",
         986,
-        KdcOptions::forwardable(),
-        None,
-        vec![pa],
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::forwardable())
+    .additional_tickets(None)
+    .padata(vec![pa])
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .expect("s4u");
     let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
     assert_eq!(code, err::BADMATCH);
@@ -1082,7 +1091,7 @@ fn s4u2self_local_tgt_foreign_crealm_is_badmatch() {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let pa = pa_for_user(&tgt.session_key, admin, "C.TEST").expect("PA-FOR-USER");
-    let mut req = tgs_req_ex(
+    let mut req = TgsReqBuilder::new(
         t,
         &tgt.session_key,
         "C.TEST",
@@ -1090,11 +1099,12 @@ fn s4u2self_local_tgt_foreign_crealm_is_badmatch() {
         user.clone(),
         "C.TEST",
         985,
-        KdcOptions::forwardable(),
-        None,
-        vec![pa],
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::forwardable())
+    .additional_tickets(None)
+    .padata(vec![pa])
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .expect("s4u");
     let tgs_pa = req
         .0
@@ -1139,7 +1149,7 @@ fn s4u2self_cross_tgt_local_server_foreign_user_issues() {
     reseal_mut(&mut t, &part, &ir);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let pa = pa_for_user(&bc.session_key, admin, "A.TEST").expect("PA-FOR-USER");
-    let req = tgs_req_ex(
+    let req = TgsReqBuilder::new(
         t,
         &bc.session_key,
         "C.TEST",
@@ -1147,11 +1157,12 @@ fn s4u2self_cross_tgt_local_server_foreign_user_issues() {
         host_c.clone(),
         "C.TEST",
         987,
-        KdcOptions::forwardable(),
-        None,
-        vec![pa],
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::forwardable())
+    .additional_tickets(None)
+    .padata(vec![pa])
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .expect("s4u");
     let out = krb5_kdc::issue_tgs(&c, &req).expect("MIT case 4");
     let host_key = c.get_name(&host_c).unwrap().best_key().unwrap().key.clone();
@@ -1194,7 +1205,7 @@ fn s4u2self_cross_tgt_cert_only_empty_name_is_invalid_xrealm() {
         padata_type: pa::FOR_X509_USER,
         padata_value: encode(&body).expect("130").into(),
     };
-    let req = tgs_req_ex(
+    let req = TgsReqBuilder::new(
         t,
         &bc.session_key,
         "C.TEST",
@@ -1202,11 +1213,12 @@ fn s4u2self_cross_tgt_cert_only_empty_name_is_invalid_xrealm() {
         host_c.clone(),
         "C.TEST",
         988,
-        KdcOptions::forwardable(),
-        None,
-        vec![pa],
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::forwardable())
+    .additional_tickets(None)
+    .padata(vec![pa])
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .expect("s4u");
     let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
     assert_eq!(code, err::POLICY);
@@ -1371,7 +1383,7 @@ fn tgs_service_deny_opts_precedes_deny_all() {
         .unwrap();
     let tgt = as_tgt_may_postdate(&store, "C.TEST", 973);
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = tgs_req_ex(
+    let req = TgsReqBuilder::new(
         tgt.rep.0.ticket.clone(),
         &tgt.session_key,
         "C.TEST",
@@ -1379,11 +1391,12 @@ fn tgs_service_deny_opts_precedes_deny_all() {
         host.clone(),
         "C.TEST",
         974,
-        KdcOptions::forwardable().with_bit(flag_bit::MAY_POSTDATE, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::MAY_POSTDATE, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .expect("tgs");
     let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&store, &req));
     assert_eq!(code, err::CANNOT_POSTDATE, "deny_opts (postdate) wins");

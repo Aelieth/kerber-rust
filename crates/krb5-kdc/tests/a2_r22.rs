@@ -5,8 +5,10 @@ use krb5_kdc::{
     PacTicket, PrincipalStore, TEST_REALM, bootstrap_documented, decrypt_ticket_part,
     documented_admin_id, documented_host, sign_reply_pac, ticket_checksum_der, wrap_win2k_pac,
 };
-use krb5_protocol::{pa_pac_options, tgs_req_ex};
-use krb5_testkit::{aes_key, attach_pac, expect_status, host_tgt, pref_etypes, reseal_incoming};
+use krb5_protocol::pa_pac_options;
+use krb5_testkit::{
+    TgsReqBuilder, aes_key, attach_pac, expect_status, host_tgt, pref_etypes, reseal_incoming,
+};
 use krb5_types::pac::{
     PAC_CLIENT_INFO, PAC_DELEGATION_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer,
 };
@@ -110,7 +112,7 @@ fn proxy_cross(
     nonce: u32,
 ) -> krb5_types::TgsReq {
     let dest = extra_host();
-    tgs_req_ex(
+    TgsReqBuilder::new(
         header,
         session,
         FOREIGN,
@@ -118,11 +120,12 @@ fn proxy_cross(
         dest,
         TEST_REALM,
         nonce,
-        cname_addl(),
-        Some(vec![evidence]),
-        vec![pa_pac_options(true).unwrap()],
-        pref_etypes(),
     )
+    .options(cname_addl())
+    .additional_tickets(Some(vec![evidence]))
+    .padata(vec![pa_pac_options(true).unwrap()])
+    .etypes(pref_etypes())
+    .build()
     .unwrap()
 }
 

@@ -8,8 +8,8 @@ use krb5_kdc::{
     decrypt_ticket_part, documented_admin_id, documented_host, handle_request_from,
     pa_enc_timestamp, random_key, sign_pac, ticket_checksum_der, wrap_win2k_pac,
 };
-use krb5_protocol::{tgs_req, tgs_req_ex};
-use krb5_testkit::{err_of, issue_tgt, pref_etypes, reseal, status};
+use krb5_protocol::tgs_req;
+use krb5_testkit::{TgsReqBuilder, err_of, issue_tgt, pref_etypes, reseal, status};
 use krb5_types::{
     EncryptedData, HostAddress, KdcOptions, KerberosTime, PrincipalName, Ticket, err, flag_bit, ku,
 };
@@ -119,7 +119,7 @@ fn a2_r19_dup_skey_beats_tgt_based() {
     let extra = issue_host_tgt(&store, &dest, 19020).rep.0.ticket;
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let tgt = issue_tgt(&store, TEST_USER, 19021);
-    let req = tgs_req_ex(
+    let req = TgsReqBuilder::new(
         tgt.rep.0.ticket,
         &tgt.session_key,
         TEST_REALM,
@@ -127,11 +127,12 @@ fn a2_r19_dup_skey_beats_tgt_based() {
         dest,
         TEST_REALM,
         19022,
-        KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true),
-        Some(vec![extra]),
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true))
+    .additional_tickets(Some(vec![extra]))
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &req).unwrap_err();
     assert_eq!(status(&err), (err::POLICY, Some("DUP_SKEY DISALLOWED")));
@@ -179,7 +180,7 @@ fn a2_r19_lineage_before_u2u() {
         .unwrap();
         krb5_kdc::issue_as(&store, &req).unwrap().rep.0.ticket
     };
-    let req = tgs_req_ex(
+    let req = TgsReqBuilder::new(
         header,
         &as_out.session_key,
         TEST_REALM,
@@ -187,11 +188,12 @@ fn a2_r19_lineage_before_u2u() {
         documented_host(),
         TEST_REALM,
         19032,
-        KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true),
-        Some(vec![admin_tgt]),
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true))
+    .additional_tickets(Some(vec![admin_tgt]))
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &req).unwrap_err();
     assert_eq!(status(&err), (err::POLICY, Some("INVALID LINEAGE")));
@@ -271,7 +273,7 @@ fn a2_r19_renew_pac_service_after_krbtgt_enctype_rekey() {
         krb5_kdc::issue_as(&store, &req).unwrap()
     };
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let first = tgs_req_ex(
+    let first = TgsReqBuilder::new(
         as_out.rep.0.ticket,
         &as_out.session_key,
         TEST_REALM,
@@ -279,11 +281,12 @@ fn a2_r19_renew_pac_service_after_krbtgt_enctype_rekey() {
         documented_host(),
         TEST_REALM,
         19061,
-        KdcOptions::forwardable().with_bit(flag_bit::RENEWABLE, true),
-        None,
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::RENEWABLE, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .unwrap();
     let svc = krb5_kdc::issue_tgs(&store, &first).unwrap();
     let aes128 = random_key(EncryptionType::Aes128CtsHmacSha196).unwrap();
@@ -298,7 +301,7 @@ fn a2_r19_renew_pac_service_after_krbtgt_enctype_rekey() {
             1,
         )
         .unwrap();
-    let renew = tgs_req_ex(
+    let renew = TgsReqBuilder::new(
         svc.rep.0.ticket,
         &svc.session_key,
         TEST_REALM,
@@ -306,13 +309,16 @@ fn a2_r19_renew_pac_service_after_krbtgt_enctype_rekey() {
         documented_host(),
         TEST_REALM,
         19062,
+    )
+    .options(
         KdcOptions::forwardable()
             .with_bit(flag_bit::RENEWABLE, true)
             .with_bit(flag_bit::RENEW, true),
-        None,
-        Vec::new(),
-        pref_etypes(),
     )
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .unwrap();
     krb5_kdc::issue_tgs(&store, &renew).expect("RENEW after krbtgt enctype rekey");
 }

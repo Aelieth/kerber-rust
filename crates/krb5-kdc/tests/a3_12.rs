@@ -5,12 +5,11 @@ use krb5_crypto::{EncryptionType, KeyUsage, decrypt, encrypt};
 use krb5_kdc::{
     KDB_REQUIRES_PRE_AUTH, PrincipalStore, TEST_REALM, bootstrap_documented, documented_host,
 };
-use krb5_protocol::tgs_req_ex;
 use krb5_types::{
     EncTicketPart, EncryptedData, KdcOptions, PrincipalName, Ticket, err, flag_bit, ku,
 };
 
-use krb5_testkit::{status, user, user_as};
+use krb5_testkit::{TgsReqBuilder, status, user, user_as};
 fn or_attr(store: &mut PrincipalStore, name: &PrincipalName, bit: u32) {
     let a = store.get_name(name).unwrap().attributes | bit;
     store
@@ -74,7 +73,7 @@ fn tgs_requires_preauth_without_pa_flag_is_no_preauth() {
     let host = documented_host();
     let issued = user_as(&store, 12001);
     or_attr(&mut store, &host, KDB_REQUIRES_PRE_AUTH);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         tgt_without_preauth(&store, &issued),
         &issued.session_key,
         TEST_REALM,
@@ -82,11 +81,12 @@ fn tgs_requires_preauth_without_pa_flag_is_no_preauth() {
         host,
         TEST_REALM,
         12002,
-        KdcOptions::forwardable(),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::forwardable())
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
     assert_eq!(status(&err), (err::GENERIC, Some("NO PREAUTH")));
@@ -107,7 +107,7 @@ fn tgs_caps_endtime_at_client_max_life() {
     store
         .apply_admin_fields(&user(), None, Some(60), None, None, None, false, None)
         .unwrap();
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
@@ -115,11 +115,12 @@ fn tgs_caps_endtime_at_client_max_life() {
         documented_host(),
         TEST_REALM,
         12022,
-        KdcOptions::forwardable(),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::forwardable())
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .unwrap();
     let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
     let part = host_part(&store, &out);

@@ -6,8 +6,8 @@ use krb5_kdc::{
     PrincipalStore, TEST_REALM, TEST_USER, as_req, bootstrap_documented, decrypt_ticket_part,
     documented_host, handle_request_from, pa_enc_timestamp,
 };
-use krb5_protocol::{tgs_req, tgs_req_ex, tgs_req_ex_addr};
-use krb5_testkit::{err_of_cname, pref_etypes};
+use krb5_protocol::tgs_req;
+use krb5_testkit::{TgsReqBuilder, err_of_cname, pref_etypes};
 use krb5_types::{
     HostAddress, KdcOptions, PaData, PaPacRequest, PrincipalName, err, flag_bit, ku, pa,
 };
@@ -146,7 +146,7 @@ fn tgs_forwarded_copies_request_addresses() {
     let tgt = as_with_addrs(&store, None, 10120, false, false);
     let want = vec![inet(192, 0, 2, 12)];
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = tgs_req_ex_addr(
+    let req = TgsReqBuilder::new(
         tgt.rep.0.ticket,
         &tgt.session_key,
         TEST_REALM,
@@ -154,12 +154,13 @@ fn tgs_forwarded_copies_request_addresses() {
         PrincipalName::krbtgt(TEST_REALM),
         TEST_REALM,
         10121,
-        KdcOptions::none().with_bit(flag_bit::FORWARDED, true),
-        None,
-        Vec::new(),
-        pref_etypes(),
-        Some(want.clone()),
     )
+    .options(KdcOptions::none().with_bit(flag_bit::FORWARDED, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .addresses(Some(want.clone()))
+    .build()
     .unwrap();
     let issued = krb5_kdc::issue_tgs(&store, &req).unwrap();
     assert_eq!(
@@ -178,7 +179,7 @@ fn tgs_renew_keeps_header_caddr() {
     let addrs = vec![inet(192, 0, 2, 13)];
     let tgt = as_with_addrs(&store, Some(addrs.clone()), 10130, true, true);
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = tgs_req_ex(
+    let req = TgsReqBuilder::new(
         tgt.rep.0.ticket,
         &tgt.session_key,
         TEST_REALM,
@@ -186,11 +187,12 @@ fn tgs_renew_keeps_header_caddr() {
         PrincipalName::krbtgt(TEST_REALM),
         TEST_REALM,
         10131,
-        KdcOptions::none().with_bit(flag_bit::RENEW, true),
-        None,
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(KdcOptions::none().with_bit(flag_bit::RENEW, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .unwrap();
     let issued = krb5_kdc::issue_tgs(&store, &req).unwrap();
     assert_eq!(

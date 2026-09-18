@@ -4,11 +4,11 @@ use krb5_asn1::{decode, decode_enc_kdc_rep_part};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt};
 use krb5_kdc::{Error, TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
 use krb5_protocol::{
-    armor_key, as_req, attach_fast, build_fast_armor, pa_pac_options, tgs_req_ex, unwrap_fast_rep,
+    armor_key, as_req, attach_fast, build_fast_armor, pa_pac_options, unwrap_fast_rep,
 };
 use krb5_types::{KdcOptions, MethodData, PaData, PrincipalName, ascii, err, ku, pa};
 
-use krb5_testkit::{status, user_as};
+use krb5_testkit::{TgsReqBuilder, status, user_as};
 #[test]
 fn as_hint_list_is_136_info2_modules_cookie() {
     let (store, _) = bootstrap_documented().unwrap();
@@ -55,7 +55,7 @@ fn tgs_pac_options_rbcd_is_echoed_in_enc_padata() {
     let (store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 15003);
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
@@ -63,11 +63,12 @@ fn tgs_pac_options_rbcd_is_echoed_in_enc_padata() {
         documented_host(),
         TEST_REALM,
         15004,
-        KdcOptions::none(),
-        None,
-        vec![pa_pac_options(true).unwrap()],
-        vec![18],
     )
+    .options(KdcOptions::none())
+    .additional_tickets(None)
+    .padata(vec![pa_pac_options(true).unwrap()])
+    .etypes(vec![18])
+    .build()
     .unwrap();
     let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
     let usage = KeyUsage::new(ku::TGS_REP_ENC_PART).unwrap();

@@ -7,8 +7,7 @@ use krb5_kdc::{
     bootstrap_documented, decrypt_ticket_part, documented_host, pa_enc_timestamp,
     pac_from_ticket_part, sign_pac, tgs_req, ticket_checksum_der, wrap_win2k_pac,
 };
-use krb5_protocol::tgs_req_ex;
-use krb5_testkit::{issue_tgt_password, password_key, status};
+use krb5_testkit::{TgsReqBuilder, issue_tgt_password, password_key, status};
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac};
 use krb5_types::{EncTicketPart, KdcOptions, PrincipalName, err, flag_bit, ku};
 
@@ -61,7 +60,7 @@ fn tgs_renew_service_ticket_issues() {
     let (store, _) = bootstrap_documented().unwrap();
     let as_out = renewable_tgt(&store, 6010);
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let first = tgs_req_ex(
+    let first = TgsReqBuilder::new(
         as_out.rep.0.ticket.clone(),
         &as_out.session_key,
         TEST_REALM,
@@ -69,14 +68,15 @@ fn tgs_renew_service_ticket_issues() {
         documented_host(),
         TEST_REALM,
         6011,
-        KdcOptions::forwardable().with_bit(flag_bit::RENEWABLE, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::RENEWABLE, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .unwrap();
     let svc = krb5_kdc::issue_tgs(&store, &first).unwrap();
-    let renew = tgs_req_ex(
+    let renew = TgsReqBuilder::new(
         svc.rep.0.ticket.clone(),
         &svc.session_key,
         TEST_REALM,
@@ -84,13 +84,16 @@ fn tgs_renew_service_ticket_issues() {
         documented_host(),
         TEST_REALM,
         6012,
+    )
+    .options(
         KdcOptions::forwardable()
             .with_bit(flag_bit::RENEWABLE, true)
             .with_bit(flag_bit::RENEW, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .unwrap();
     krb5_kdc::issue_tgs(&store, &renew).expect("RENEW of a service ticket");
 }
@@ -113,7 +116,7 @@ fn tgs_proxy_krbtgt_is_cant_proxy_tgt() {
         .kdc_options
         .with_bit(flag_bit::PROXIABLE, true);
     let as_out = krb5_kdc::issue_as(&store, &req).unwrap();
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         as_out.rep.0.ticket.clone(),
         &as_out.session_key,
         TEST_REALM,
@@ -121,11 +124,12 @@ fn tgs_proxy_krbtgt_is_cant_proxy_tgt() {
         PrincipalName::krbtgt(TEST_REALM),
         TEST_REALM,
         6021,
-        KdcOptions::forwardable().with_bit(flag_bit::PROXY, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::PROXY, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
     assert_eq!(status(&err), (err::BADOPTION, Some("CAN'T PROXY TGT")));
@@ -223,7 +227,7 @@ fn tgs_disallow_svr_service_header_is_process_tgs() {
         .apply_admin_fields(&host, Some(attrs), None, None, None, None, false, None)
         .unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let renew = tgs_req_ex(
+    let renew = TgsReqBuilder::new(
         svc.rep.0.ticket.clone(),
         &svc.session_key,
         TEST_REALM,
@@ -231,13 +235,16 @@ fn tgs_disallow_svr_service_header_is_process_tgs() {
         host,
         TEST_REALM,
         6072,
+    )
+    .options(
         KdcOptions::forwardable()
             .with_bit(flag_bit::RENEWABLE, true)
             .with_bit(flag_bit::RENEW, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &renew).unwrap_err();
     assert_eq!(
@@ -255,7 +262,7 @@ fn tgs_forwarded_without_forwardable_is_tgt_not_forwardable() {
     part.flags = part.flags.with_bit(flag_bit::FORWARDABLE, false);
     let tkt = rewrap(&as_out.rep.0.ticket, &part, &krbtgt.key);
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         tkt,
         &as_out.session_key,
         TEST_REALM,
@@ -263,11 +270,12 @@ fn tgs_forwarded_without_forwardable_is_tgt_not_forwardable() {
         documented_host(),
         TEST_REALM,
         6111,
-        KdcOptions::forwardable().with_bit(flag_bit::FORWARDED, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::FORWARDED, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
     assert_eq!(status(&err), (err::BADOPTION, Some("TGT NOT FORWARDABLE")));
@@ -282,7 +290,7 @@ fn tgs_proxy_without_proxiable_is_tgt_not_proxiable() {
     part.flags = part.flags.with_bit(flag_bit::PROXIABLE, false);
     let tkt = rewrap(&as_out.rep.0.ticket, &part, &krbtgt.key);
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         tkt,
         &as_out.session_key,
         TEST_REALM,
@@ -290,11 +298,12 @@ fn tgs_proxy_without_proxiable_is_tgt_not_proxiable() {
         documented_host(),
         TEST_REALM,
         6121,
-        KdcOptions::forwardable().with_bit(flag_bit::PROXY, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::PROXY, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
     assert_eq!(status(&err), (err::BADOPTION, Some("TGT NOT PROXIABLE")));

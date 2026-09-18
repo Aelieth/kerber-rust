@@ -6,10 +6,9 @@ use krb5_kdc::{
     KDB_DISALLOW_POSTDATED, KDB_DISALLOW_RENEWABLE, KDB_OK_AS_DELEGATE, PrincipalStore, TEST_REALM,
     bootstrap_documented, documented_host,
 };
-use krb5_protocol::tgs_req_ex;
 use krb5_types::{EncTicketPart, KdcOptions, PrincipalName, err, flag_bit, ku};
 
-use krb5_testkit::{status, user, user_as_bits};
+use krb5_testkit::{TgsReqBuilder, status, user, user_as_bits};
 fn or_attr(store: &mut PrincipalStore, name: &PrincipalName, bit: u32) {
     let a = store.get_name(name).unwrap().attributes | bit;
     store
@@ -46,7 +45,7 @@ fn tgt_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedTgs) -> EncTicketPa
 fn tgs_postdate_without_may_postdate_is_tgt_not_postdatable() {
     let (store, _) = bootstrap_documented().unwrap();
     let issued = user_as_bits(&store, 11001, &[]);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
@@ -54,11 +53,12 @@ fn tgs_postdate_without_may_postdate_is_tgt_not_postdatable() {
         documented_host(),
         TEST_REALM,
         11002,
-        KdcOptions::forwardable().with_bit(flag_bit::MAY_POSTDATE, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::MAY_POSTDATE, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
     assert_eq!(status(&err), (err::BADOPTION, Some("TGT NOT POSTDATABLE")));
@@ -70,7 +70,7 @@ fn tgs_renewable_against_disallow_is_non_renewable() {
     let host = documented_host();
     let issued = user_as_bits(&store, 11011, &[(flag_bit::RENEWABLE, true)]);
     or_attr(&mut store, &host, KDB_DISALLOW_RENEWABLE);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
@@ -78,11 +78,12 @@ fn tgs_renewable_against_disallow_is_non_renewable() {
         host,
         TEST_REALM,
         11012,
-        KdcOptions::forwardable().with_bit(flag_bit::RENEWABLE, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::RENEWABLE, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
     assert_eq!(status(&err), (err::POLICY, Some("NON-RENEWABLE TICKET")));
@@ -92,7 +93,7 @@ fn tgs_renewable_against_disallow_is_non_renewable() {
 fn tgs_forwarded_sets_forwarded() {
     let (store, _) = bootstrap_documented().unwrap();
     let issued = user_as_bits(&store, 11021, &[]);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
@@ -100,11 +101,12 @@ fn tgs_forwarded_sets_forwarded() {
         PrincipalName::krbtgt(TEST_REALM),
         TEST_REALM,
         11022,
-        KdcOptions::none().with_bit(flag_bit::FORWARDED, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::none().with_bit(flag_bit::FORWARDED, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .unwrap();
     let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
     assert!(tgt_part(&store, &out).flags.bit(flag_bit::FORWARDED));
@@ -114,7 +116,7 @@ fn tgs_forwarded_sets_forwarded() {
 fn tgs_proxy_sets_proxy() {
     let (store, _) = bootstrap_documented().unwrap();
     let issued = user_as_bits(&store, 11031, &[(flag_bit::PROXIABLE, true)]);
-    let host_req = tgs_req_ex(
+    let host_req = TgsReqBuilder::new(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
@@ -122,15 +124,16 @@ fn tgs_proxy_sets_proxy() {
         documented_host(),
         TEST_REALM,
         11032,
-        KdcOptions::forwardable().with_bit(flag_bit::PROXIABLE, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::PROXIABLE, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .unwrap();
     let host_out = krb5_kdc::issue_tgs(&store, &host_req).unwrap();
     assert!(host_part(&store, &host_out).flags.proxiable());
-    let proxy = tgs_req_ex(
+    let proxy = TgsReqBuilder::new(
         host_out.rep.0.ticket.clone(),
         &host_out.session_key,
         TEST_REALM,
@@ -138,11 +141,12 @@ fn tgs_proxy_sets_proxy() {
         documented_host(),
         TEST_REALM,
         11033,
-        KdcOptions::none().with_bit(flag_bit::PROXY, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::none().with_bit(flag_bit::PROXY, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .unwrap();
     let out = krb5_kdc::issue_tgs(&store, &proxy).unwrap();
     assert!(host_part(&store, &out).flags.bit(flag_bit::PROXY));
@@ -152,7 +156,7 @@ fn tgs_proxy_sets_proxy() {
 fn tgs_postdated_is_invalid() {
     let (store, _) = bootstrap_documented().unwrap();
     let issued = user_as_bits(&store, 11041, &[(flag_bit::MAY_POSTDATE, true)]);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
@@ -160,13 +164,16 @@ fn tgs_postdated_is_invalid() {
         documented_host(),
         TEST_REALM,
         11042,
+    )
+    .options(
         KdcOptions::none()
             .with_bit(flag_bit::MAY_POSTDATE, true)
             .with_bit(flag_bit::POSTDATED, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .unwrap();
     let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
     let part = host_part(&store, &out);
@@ -180,7 +187,7 @@ fn tgs_postdated_bit_alone_does_not_deny_postdate() {
     let host = documented_host();
     or_attr(&mut store, &host, KDB_DISALLOW_POSTDATED);
     let issued = user_as_bits(&store, 11051, &[(flag_bit::MAY_POSTDATE, true)]);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
@@ -188,11 +195,12 @@ fn tgs_postdated_bit_alone_does_not_deny_postdate() {
         host,
         TEST_REALM,
         11052,
-        KdcOptions::none().with_bit(flag_bit::POSTDATED, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::none().with_bit(flag_bit::POSTDATED, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .unwrap();
     let out = krb5_kdc::issue_tgs(&store, &tgs).expect("deny_opts keys only on ALLOW_POSTDATE");
     assert!(host_part(&store, &out).flags.invalid());
@@ -204,7 +212,7 @@ fn tgs_renew_skips_ok_as_delegate() {
     let krbtgt = PrincipalName::krbtgt(TEST_REALM);
     or_attr(&mut store, &krbtgt, KDB_OK_AS_DELEGATE);
     let issued = user_as_bits(&store, 11061, &[(flag_bit::RENEWABLE, true)]);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
@@ -212,13 +220,16 @@ fn tgs_renew_skips_ok_as_delegate() {
         krbtgt,
         TEST_REALM,
         11062,
+    )
+    .options(
         KdcOptions::forwardable()
             .with_bit(flag_bit::RENEWABLE, true)
             .with_bit(flag_bit::RENEW, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .unwrap();
     let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
     assert!(!tgt_part(&store, &out).flags.bit(flag_bit::OK_AS_DELEGATE));

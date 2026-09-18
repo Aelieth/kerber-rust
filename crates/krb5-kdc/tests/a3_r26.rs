@@ -5,12 +5,12 @@ use krb5_crypto::{EncryptionType, KeyUsage, decrypt, encrypt};
 use krb5_kdc::{
     KDB_REQUIRES_PRE_AUTH, PrincipalStore, Restrictions, TEST_REALM, bootstrap_documented,
 };
-use krb5_protocol::{as_req, tgs_req_ex};
+use krb5_protocol::as_req;
 use krb5_types::{
     EncTicketPart, EncryptedData, KdcOptions, PrincipalName, Ticket, err, flag_bit, ku,
 };
 
-use krb5_testkit::{status, user, user_as_bits};
+use krb5_testkit::{TgsReqBuilder, status, user, user_as_bits};
 fn tgt_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs) -> EncTicketPart {
     let key = store.krbtgt().unwrap().best_key().unwrap();
     let usage = KeyUsage::new(ku::TICKET).unwrap();
@@ -84,7 +84,7 @@ fn tgs_renew_invalid_non_renewable_is_ticket_not_renewable() {
         .flags
         .with_bit(flag_bit::INVALID, true)
         .with_bit(flag_bit::RENEWABLE, false);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         forge_tgt(&store, &issued, &part),
         &issued.session_key,
         TEST_REALM,
@@ -92,11 +92,12 @@ fn tgs_renew_invalid_non_renewable_is_ticket_not_renewable() {
         PrincipalName::krbtgt(TEST_REALM),
         TEST_REALM,
         26022,
-        KdcOptions::none().with_bit(flag_bit::RENEW, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::none().with_bit(flag_bit::RENEW, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
     assert_eq!(status(&err), (err::BADOPTION, Some("TICKET NOT RENEWABLE")));

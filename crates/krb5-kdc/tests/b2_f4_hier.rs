@@ -9,8 +9,7 @@ use krb5_kdc::{
     Error, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_admin_id,
     tgs_req,
 };
-use krb5_protocol::tgs_req_ex;
-use krb5_testkit::{issue_tgt_password, pref_etypes};
+use krb5_testkit::{TgsReqBuilder, issue_tgt_password, pref_etypes};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
 
 #[test]
@@ -85,7 +84,7 @@ fn f4_referral_numeric_ipv4_is_looking_up_server() {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 4005);
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "1.2.3.4"]);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         tgt.rep.0.ticket,
         &tgt.session_key,
         TEST_REALM,
@@ -93,11 +92,12 @@ fn f4_referral_numeric_ipv4_is_looking_up_server() {
         host,
         TEST_REALM,
         4006,
-        KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true),
-        None,
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .expect("TGS-REQ");
     match krb5_kdc::issue_tgs(&store, &tgs) {
         Err(Error::Protocol { code, text, .. }) => {

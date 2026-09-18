@@ -8,8 +8,7 @@ use krb5_kdc::{
     pac_from_ticket_part, sign_reply_pac, tgs_req, ticket_checksum_der, verify_pac_signatures,
     wrap_win2k_pac,
 };
-use krb5_protocol::tgs_req_ex;
-use krb5_testkit::{issue_tgt_password, password_key};
+use krb5_testkit::{TgsReqBuilder, issue_tgt_password, password_key};
 use krb5_types::pac::{
     PAC_CLIENT_INFO, PAC_FULL_CHECKSUM, PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM, PAC_SERVER_CHECKSUM,
     PAC_TICKET_CHECKSUM, Pac, PacBuffer, client_info_buffer,
@@ -344,7 +343,7 @@ fn tgs_canonicalize_renew_issues_local_tgt() {
     let (store, _) = bootstrap_documented().unwrap();
     let as_out = renewable_tgt(&store, 6090);
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         as_out.rep.0.ticket.clone(),
         &as_out.session_key,
         TEST_REALM,
@@ -352,14 +351,17 @@ fn tgs_canonicalize_renew_issues_local_tgt() {
         PrincipalName::krbtgt(TEST_REALM),
         TEST_REALM,
         6091,
+    )
+    .options(
         KdcOptions::forwardable()
             .with_bit(flag_bit::RENEWABLE, true)
             .with_bit(flag_bit::RENEW, true)
             .with_bit(flag_bit::CANONICALIZE, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .unwrap();
     let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
     assert!(out.rep.0.ticket.sname.is_krbtgt_for(TEST_REALM));

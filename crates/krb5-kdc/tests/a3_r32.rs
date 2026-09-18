@@ -5,8 +5,8 @@ use krb5_crypto::{EncryptionType, KeyUsage, decrypt, encrypt, p256_generate};
 use krb5_kdc::{
     Error, KDB_REQUIRES_HW_AUTH, PrincipalStore, TEST_REALM, bootstrap_documented, documented_host,
 };
-use krb5_protocol::{as_req, pa_enc_timestamp, pa_pk_as_req, tgs_req_ex};
-use krb5_testkit::{krbtgt, status, user};
+use krb5_protocol::{as_req, pa_enc_timestamp, pa_pk_as_req};
+use krb5_testkit::{TgsReqBuilder, krbtgt, status, user};
 use krb5_types::{
     EncTicketPart, EncryptedData, KdcOptions, MethodData, PrincipalName, Ticket, err, flag_bit, ku,
     pa,
@@ -109,7 +109,7 @@ fn r32_pkinit_tgs_requires_hwauth_is_no_hw_preauth() {
     let host = documented_host();
     or_attr(&mut store, &host, KDB_REQUIRES_HW_AUTH);
     let issued = pkinit_as(&store, 32003).unwrap();
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
@@ -117,11 +117,12 @@ fn r32_pkinit_tgs_requires_hwauth_is_no_hw_preauth() {
         host,
         TEST_REALM,
         32004,
-        KdcOptions::forwardable(),
-        None,
-        Vec::new(),
-        etypes(),
     )
+    .options(KdcOptions::forwardable())
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(etypes())
+    .build()
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
     assert_eq!(status(&err), (err::GENERIC, Some("NO HW PREAUTH")));
@@ -174,7 +175,7 @@ fn r32_renew_header_end_before_start_is_expired() {
                 .into(),
         },
     };
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         tgt,
         &issued.session_key,
         TEST_REALM,
@@ -182,13 +183,16 @@ fn r32_renew_header_end_before_start_is_expired() {
         krbtgt(),
         TEST_REALM,
         32012,
+    )
+    .options(
         KdcOptions::none()
             .with_bit(flag_bit::RENEWABLE, true)
             .with_bit(flag_bit::RENEW, true),
-        None,
-        Vec::new(),
-        etypes(),
     )
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(etypes())
+    .build()
     .unwrap();
     let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
     let got = tgs_part(&store, &out);

@@ -7,8 +7,8 @@ use krb5_kdc::{
     documented_admin_id, documented_host, dump_store, dump_store_iprop, load_dump,
     pa_enc_timestamp,
 };
-use krb5_protocol::{tgs_req, tgs_req_ex};
-use krb5_testkit::{aes_key, expect_status, issue_tgt_renewable, pref_etypes};
+use krb5_protocol::tgs_req;
+use krb5_testkit::{TgsReqBuilder, aes_key, expect_status, issue_tgt_renewable, pref_etypes};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit, ku};
 
 const FOREIGN: &str = "AD.KERBER.TEST";
@@ -75,7 +75,7 @@ fn a2_r16_cross_tgt_renew_realm_mismatch_is_26() {
         },
     };
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = tgs_req_ex(
+    let req = TgsReqBuilder::new(
         header,
         &issued.session_key,
         TEST_REALM,
@@ -83,11 +83,12 @@ fn a2_r16_cross_tgt_renew_realm_mismatch_is_26() {
         PrincipalName::krbtgt(TEST_REALM),
         TEST_REALM,
         16101,
-        KdcOptions::forwardable().with_bit(flag_bit::RENEW, true),
-        None,
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::RENEW, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .unwrap();
     let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::SERVER_NOMATCH);
@@ -120,7 +121,7 @@ fn a2_r16_u2u_second_ticket_foreign_realm_is_7() {
     foreign.realm = krb5_types::try_ascii("OTHER.TEST").unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let tgt = issue_tgt_renewable(&store, TEST_USER, 16111, false);
-    let req = tgs_req_ex(
+    let req = TgsReqBuilder::new(
         tgt.rep.0.ticket,
         &tgt.session_key,
         TEST_REALM,
@@ -128,11 +129,12 @@ fn a2_r16_u2u_second_ticket_foreign_realm_is_7() {
         host,
         TEST_REALM,
         16112,
-        KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true),
-        Some(vec![foreign]),
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true))
+    .additional_tickets(Some(vec![foreign]))
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .unwrap();
     let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::S_PRINCIPAL_UNKNOWN);

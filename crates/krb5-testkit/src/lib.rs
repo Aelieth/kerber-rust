@@ -5,16 +5,19 @@
 
 #![forbid(unsafe_code)]
 
+mod builders;
+pub use builders::{AsReqBuilder, TgsReqBuilder};
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, encrypt, string_to_key};
 use krb5_kdc::{
-    IssuedAs, PacTicket, PrincipalStore, S2K_ITERS, TEST_ADMIN, TEST_REALM, TEST_USER, as_req,
+    IssuedAs, PacTicket, PrincipalStore, S2K_ITERS, TEST_ADMIN, TEST_REALM, TEST_USER,
     documented_host, pa_enc_timestamp, sign_reply_pac, ticket_checksum_der, wrap_win2k_pac,
 };
-use krb5_protocol::{pa_for_user, tgs_req, tgs_req_ex};
+use krb5_protocol::{pa_for_user, tgs_req};
 use krb5_types::AuthorizationData;
 use krb5_types::AuthorizationDataValue;
 use krb5_types::EncTicketPart;
@@ -186,13 +189,10 @@ fn as_tgt(
     renewable: bool,
 ) -> IssuedAs {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]);
-    let mut req = as_req(
-        cname,
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(key).unwrap()]),
-    )
-    .unwrap();
+    let mut req = AsReqBuilder::new(cname, nonce)
+        .padata(vec![pa_enc_timestamp(key).unwrap()])
+        .build()
+        .unwrap();
     if renewable {
         req.0.req_body.kdc_options = req
             .0
@@ -280,13 +280,10 @@ pub fn user_as(store: &PrincipalStore, nonce: u32) -> IssuedAs {
 pub fn user_as_bits(store: &PrincipalStore, nonce: u32, bits: &[(usize, bool)]) -> IssuedAs {
     let key = store_key(store, TEST_USER);
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let mut req = as_req(
-        cname,
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
+    let mut req = AsReqBuilder::new(cname, nonce)
+        .padata(vec![pa_enc_timestamp(&key).unwrap()])
+        .build()
+        .unwrap();
     for (bit, on) in bits {
         req.0.req_body.kdc_options = req.0.req_body.kdc_options.with_bit(*bit, *on);
     }
@@ -312,13 +309,10 @@ pub fn host_tgt(store: &PrincipalStore, nonce: u32) -> IssuedAs {
         .unwrap()
         .key
         .clone();
-    let req = as_req(
-        host,
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
+    let req = AsReqBuilder::new(host, nonce)
+        .padata(vec![pa_enc_timestamp(&key).unwrap()])
+        .build()
+        .unwrap();
     krb5_kdc::issue_as(store, &req).unwrap()
 }
 
@@ -466,7 +460,7 @@ pub fn s4u_tgs(
     opts: KdcOptions,
 ) -> TgsReq {
     let host = documented_host();
-    tgs_req_ex(
+    TgsReqBuilder::new(
         tgt.rep.0.ticket.clone(),
         &tgt.session_key,
         TEST_REALM,
@@ -474,11 +468,11 @@ pub fn s4u_tgs(
         sname,
         TEST_REALM,
         nonce,
-        opts,
-        None,
-        padata,
-        pref_etypes(),
     )
+    .options(opts)
+    .padata(padata)
+    .etypes(pref_etypes())
+    .build()
     .unwrap()
 }
 
@@ -514,7 +508,7 @@ pub fn s4u_admin(tgt: &IssuedAs, nonce: u32, opts: KdcOptions) -> TgsReq {
     let host = documented_host();
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).unwrap();
-    tgs_req_ex(
+    TgsReqBuilder::new(
         tgt.rep.0.ticket.clone(),
         &tgt.session_key,
         TEST_REALM,
@@ -522,11 +516,11 @@ pub fn s4u_admin(tgt: &IssuedAs, nonce: u32, opts: KdcOptions) -> TgsReq {
         host.clone(),
         TEST_REALM,
         nonce,
-        opts,
-        None,
-        vec![pa],
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(opts)
+    .padata(vec![pa])
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .unwrap()
 }
 

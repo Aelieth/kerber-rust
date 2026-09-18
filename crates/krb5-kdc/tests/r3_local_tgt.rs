@@ -7,8 +7,7 @@ use krb5_kdc::{
     TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented,
     documented_host,
 };
-use krb5_protocol::tgs_req_ex;
-use krb5_testkit::{issue_tgt_password, pref_etypes, status};
+use krb5_testkit::{TgsReqBuilder, issue_tgt_password, pref_etypes, status};
 use krb5_types::pac::RpcSid;
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
 
@@ -65,7 +64,7 @@ fn s4u2proxy_missing_local_tgt_is_get_local_tgt() {
     let evidence = krb5_kdc::issue_tgs(&store, &evidence_tgs).unwrap();
     let user_tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 733);
     let opts = KdcOptions::forwardable().with_bit(flag_bit::CNAME_IN_ADDL_TKT, true);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         user_tgt.rep.0.ticket.clone(),
         &user_tgt.session_key,
         TEST_REALM,
@@ -73,11 +72,12 @@ fn s4u2proxy_missing_local_tgt_is_get_local_tgt() {
         documented_host(),
         TEST_REALM,
         734,
-        opts,
-        Some(vec![evidence.rep.0.ticket.clone()]),
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(opts)
+    .additional_tickets(Some(vec![evidence.rep.0.ticket.clone()]))
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .unwrap();
     let err = krb5_kdc::issue_tgs(&HideLocalTgt(&store), &tgs).unwrap_err();
     let (code, text) = status(&err);

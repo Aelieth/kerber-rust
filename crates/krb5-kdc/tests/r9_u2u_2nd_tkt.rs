@@ -5,8 +5,7 @@ use krb5_kdc::{
     TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
     bootstrap_documented, documented_host,
 };
-use krb5_protocol::tgs_req_ex;
-use krb5_testkit::{issue_tgt_password, pref_etypes, status};
+use krb5_testkit::{TgsReqBuilder, issue_tgt_password, pref_etypes, status};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
 
 #[test]
@@ -19,7 +18,7 @@ fn u2u_missing_second_ticket_server_is_2nd_tkt_server() {
     // Outer sname does not exist; MIT `kdc_get_server_key` → 7 `2ND_TKT_SERVER`.
     second.sname = PrincipalName::new(PrincipalName::NT_SRV_INST, ["no-such-2ndtkt", TEST_REALM]);
     let opts = KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         user_tgt.rep.0.ticket.clone(),
         &user_tgt.session_key,
         TEST_REALM,
@@ -27,11 +26,12 @@ fn u2u_missing_second_ticket_server_is_2nd_tkt_server() {
         documented_host(),
         TEST_REALM,
         743,
-        opts,
-        Some(vec![second]),
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(opts)
+    .additional_tickets(Some(vec![second]))
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
     let (code, text) = status(&err);

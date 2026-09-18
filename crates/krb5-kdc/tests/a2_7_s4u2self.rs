@@ -6,8 +6,8 @@ use krb5_kdc::{
     PacTicket, PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER, bootstrap_documented,
     decrypt_ticket_part, documented_host, sign_reply_pac, ticket_checksum_der, wrap_win2k_pac,
 };
-use krb5_protocol::{pa_for_user, pa_s4u_x509_user, tgs_req_ex};
-use krb5_testkit::{expect_status, host_tgt, pref_etypes, reseal_tgt, s4u_self};
+use krb5_protocol::{pa_for_user, pa_s4u_x509_user};
+use krb5_testkit::{TgsReqBuilder, expect_status, host_tgt, pref_etypes, reseal_tgt, s4u_self};
 use krb5_types::pac::{PAC_CLIENT_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer};
 use krb5_types::{EncTicketPart, KdcOptions, PaData, PrincipalName, err, ku, pa};
 
@@ -57,7 +57,7 @@ fn s4u2self_no_pac_is_tgt_revoked() {
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).unwrap();
     let host = documented_host();
-    let req = tgs_req_ex(
+    let req = TgsReqBuilder::new(
         tkt,
         &tgt.session_key,
         TEST_REALM,
@@ -65,11 +65,12 @@ fn s4u2self_no_pac_is_tgt_revoked() {
         host.clone(),
         TEST_REALM,
         7101,
-        KdcOptions::forwardable(),
-        None,
-        vec![pa],
-        pref_etypes(),
     )
+    .options(KdcOptions::forwardable())
+    .additional_tickets(None)
+    .padata(vec![pa])
+    .etypes(pref_etypes())
+    .build()
     .unwrap();
     let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::TGT_REVOKED);
@@ -87,7 +88,7 @@ fn s4u2self_local_pac_mismatch_is_badoption() {
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).unwrap();
     let host = documented_host();
-    let req = tgs_req_ex(
+    let req = TgsReqBuilder::new(
         tkt,
         &tgt.session_key,
         TEST_REALM,
@@ -95,11 +96,12 @@ fn s4u2self_local_pac_mismatch_is_badoption() {
         host.clone(),
         TEST_REALM,
         7103,
-        KdcOptions::forwardable(),
-        None,
-        vec![pa],
-        pref_etypes(),
     )
+    .options(KdcOptions::forwardable())
+    .additional_tickets(None)
+    .padata(vec![pa])
+    .etypes(pref_etypes())
+    .build()
     .unwrap();
     let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::BADOPTION);

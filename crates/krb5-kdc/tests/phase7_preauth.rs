@@ -20,9 +20,9 @@ use krb5_protocol::{
     apply_strengthen, armor_key, as_req_sname, attach_fast, attach_fast_with_options,
     build_fast_armor, pa_for_user, pa_pac_options, pa_pk_as_req, pa_pk_as_req_agile,
     pa_pk_as_req_cn, pa_pk_as_req_spki, pa_spake_response, pa_spake_support, pkinit_reply_key,
-    pkinit_reply_key_agile, tgs_req_ex, unwrap_fast_rep,
+    pkinit_reply_key_agile, unwrap_fast_rep,
 };
-use krb5_testkit::{issue_tgt_password, password_key, pref_etypes};
+use krb5_testkit::{TgsReqBuilder, issue_tgt_password, password_key, pref_etypes};
 use krb5_types::pac::{
     PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM, PAC_SERVER_CHECKSUM, Pac, RpcSid,
     parse_kerb_validation_info, zero_pac_ad_data,
@@ -899,7 +899,7 @@ fn tgs_fast_validate_future_starttime_is_not_yet_valid() {
         .with_bit(flag_bit::MAY_POSTDATE, true)
         .with_bit(flag_bit::POSTDATED, true);
     let issued = krb5_kdc::issue_as(&store, &req).expect("postdated AS");
-    let mut tgs = tgs_req_ex(
+    let mut tgs = TgsReqBuilder::new(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
@@ -907,11 +907,12 @@ fn tgs_fast_validate_future_starttime_is_not_yet_valid() {
         PrincipalName::krbtgt(TEST_REALM),
         TEST_REALM,
         861,
-        KdcOptions::forwardable().with_bit(flag_bit::VALIDATE, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::VALIDATE, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .expect("VALIDATE");
     let inner = tgs.0.req_body.clone();
     wrap_tgs_fast(&mut tgs, &issued.session_key, inner).expect("TGS FAST");
@@ -3622,7 +3623,7 @@ fn s4u2self_impersonates_user() {
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let tgt = issue_host_tgt(&store, 601);
     let pa = pa_for_user(&tgt.session_key, admin.clone(), TEST_REALM).expect("PA-FOR-USER");
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         tgt.rep.0.ticket.clone(),
         &tgt.session_key,
         TEST_REALM,
@@ -3630,11 +3631,12 @@ fn s4u2self_impersonates_user() {
         host.clone(),
         TEST_REALM,
         602,
-        KdcOptions::forwardable(),
-        None,
-        vec![pa],
-        pref_etypes(),
     )
+    .options(KdcOptions::forwardable())
+    .additional_tickets(None)
+    .padata(vec![pa])
+    .etypes(pref_etypes())
+    .build()
     .expect("S4U TGS-REQ");
     let out = krb5_kdc::issue_tgs(&store, &tgs).expect("S4U2Self");
     assert_eq!(out.rep.0.cname.components_joined(), TEST_ADMIN);
@@ -3659,7 +3661,7 @@ fn s4u2self_user_tgt_host_sname_is_badmatch() {
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 640);
     let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).expect("PA-FOR-USER");
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         tgt.rep.0.ticket.clone(),
         &tgt.session_key,
         TEST_REALM,
@@ -3667,11 +3669,12 @@ fn s4u2self_user_tgt_host_sname_is_badmatch() {
         documented_host(),
         TEST_REALM,
         641,
-        KdcOptions::forwardable(),
-        None,
-        vec![pa],
-        pref_etypes(),
     )
+    .options(KdcOptions::forwardable())
+    .additional_tickets(None)
+    .padata(vec![pa])
+    .etypes(pref_etypes())
+    .build()
     .expect("S4U TGS-REQ");
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
     match err {
@@ -3694,7 +3697,7 @@ fn s4u2self_clears_forwardable_without_ok_to_auth() {
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let tgt = issue_host_tgt(&store, 650);
     let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).expect("PA-FOR-USER");
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         tgt.rep.0.ticket.clone(),
         &tgt.session_key,
         TEST_REALM,
@@ -3702,11 +3705,12 @@ fn s4u2self_clears_forwardable_without_ok_to_auth() {
         host.clone(),
         TEST_REALM,
         651,
-        KdcOptions::forwardable(),
-        None,
-        vec![pa],
-        pref_etypes(),
     )
+    .options(KdcOptions::forwardable())
+    .additional_tickets(None)
+    .padata(vec![pa])
+    .etypes(pref_etypes())
+    .build()
     .expect("S4U TGS-REQ");
     let out = krb5_kdc::issue_tgs(&store, &tgs).expect("S4U2Self");
     let hostk = store.get_name(&host).unwrap().best_key().unwrap();
@@ -3725,7 +3729,7 @@ fn s4u2self_explicit_cross_tgs_is_server_mismatch() {
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let tgt = issue_host_tgt(&store, 660);
     let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).expect("PA-FOR-USER");
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         tgt.rep.0.ticket.clone(),
         &tgt.session_key,
         TEST_REALM,
@@ -3733,11 +3737,12 @@ fn s4u2self_explicit_cross_tgs_is_server_mismatch() {
         PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "OTHER.TEST"]),
         TEST_REALM,
         661,
-        KdcOptions::forwardable(),
-        None,
-        vec![pa],
-        pref_etypes(),
     )
+    .options(KdcOptions::forwardable())
+    .additional_tickets(None)
+    .padata(vec![pa])
+    .etypes(pref_etypes())
+    .build()
     .expect("S4U TGS-REQ");
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
     match err {
@@ -3759,7 +3764,7 @@ fn s4u2self_local_tgt_foreign_user_is_not_ours() {
     let foreign = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["alice"]);
     let tgt = issue_host_tgt(&store, 670);
     let pa = pa_for_user(&tgt.session_key, foreign, "OTHER.TEST").expect("PA-FOR-USER");
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         tgt.rep.0.ticket.clone(),
         &tgt.session_key,
         TEST_REALM,
@@ -3767,11 +3772,12 @@ fn s4u2self_local_tgt_foreign_user_is_not_ours() {
         host.clone(),
         TEST_REALM,
         671,
-        KdcOptions::forwardable(),
-        None,
-        vec![pa],
-        pref_etypes(),
     )
+    .options(KdcOptions::forwardable())
+    .additional_tickets(None)
+    .padata(vec![pa])
+    .etypes(pref_etypes())
+    .build()
     .expect("S4U TGS-REQ");
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
     match err {
@@ -3787,7 +3793,7 @@ fn s4u2self_tgs(store: &PrincipalStore, for_user: PrincipalName, nonce: u32) -> 
     let host = documented_host();
     let tgt = issue_host_tgt(store, nonce);
     let pa = pa_for_user(&tgt.session_key, for_user, TEST_REALM).expect("PA-FOR-USER");
-    tgs_req_ex(
+    TgsReqBuilder::new(
         tgt.rep.0.ticket.clone(),
         &tgt.session_key,
         TEST_REALM,
@@ -3795,11 +3801,12 @@ fn s4u2self_tgs(store: &PrincipalStore, for_user: PrincipalName, nonce: u32) -> 
         host.clone(),
         TEST_REALM,
         nonce + 1,
-        KdcOptions::forwardable(),
-        None,
-        vec![pa],
-        pref_etypes(),
     )
+    .options(KdcOptions::forwardable())
+    .additional_tickets(None)
+    .padata(vec![pa])
+    .etypes(pref_etypes())
+    .build()
     .expect("S4U TGS-REQ")
 }
 
@@ -3861,7 +3868,7 @@ fn s4u2proxy_takes_cname_from_evidence() {
     let evidence = krb5_kdc::issue_tgs(&store, &evidence_tgs).expect("evidence");
     let user_tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 703);
     let opts = KdcOptions::forwardable().with_bit(flag_bit::CNAME_IN_ADDL_TKT, true);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         user_tgt.rep.0.ticket.clone(),
         &user_tgt.session_key,
         TEST_REALM,
@@ -3869,11 +3876,12 @@ fn s4u2proxy_takes_cname_from_evidence() {
         documented_host(),
         TEST_REALM,
         704,
-        opts,
-        Some(vec![evidence.rep.0.ticket.clone()]),
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(opts)
+    .additional_tickets(Some(vec![evidence.rep.0.ticket.clone()]))
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .expect("S4U2Proxy TGS-REQ");
     let out = krb5_kdc::issue_tgs(&store, &tgs).expect("S4U2Proxy");
     assert_eq!(out.rep.0.cname.components_joined(), TEST_ADMIN);
@@ -3898,7 +3906,7 @@ fn s4u2proxy_rejects_non_forwardable_evidence() {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let admin_tgt = issue_tgt_password(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 711);
-    let evidence_tgs = tgs_req_ex(
+    let evidence_tgs = TgsReqBuilder::new(
         admin_tgt.rep.0.ticket.clone(),
         &admin_tgt.session_key,
         TEST_REALM,
@@ -3906,11 +3914,12 @@ fn s4u2proxy_rejects_non_forwardable_evidence() {
         user.clone(),
         TEST_REALM,
         712,
-        KdcOptions::none(),
-        None,
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(KdcOptions::none())
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .expect("non-forwardable evidence TGS-REQ");
     let evidence = krb5_kdc::issue_tgs(&store, &evidence_tgs).expect("evidence");
     let user_long = store.get_name(&user).unwrap().best_key().unwrap();
@@ -3921,7 +3930,7 @@ fn s4u2proxy_rejects_non_forwardable_evidence() {
     );
     let user_tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 713);
     let opts = KdcOptions::forwardable().with_bit(flag_bit::CNAME_IN_ADDL_TKT, true);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         user_tgt.rep.0.ticket.clone(),
         &user_tgt.session_key,
         TEST_REALM,
@@ -3929,11 +3938,12 @@ fn s4u2proxy_rejects_non_forwardable_evidence() {
         documented_host(),
         TEST_REALM,
         714,
-        opts,
-        Some(vec![evidence.rep.0.ticket.clone()]),
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(opts)
+    .additional_tickets(Some(vec![evidence.rep.0.ticket.clone()]))
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .expect("S4U2Proxy TGS-REQ");
     match krb5_kdc::issue_tgs(&store, &tgs) {
         Err(Error::Protocol { code, .. }) => assert_eq!(code, err::BADOPTION),
@@ -3964,7 +3974,7 @@ fn s4u2proxy_rejects_malformed_pac_options() {
         padata_type: pa::PAC_OPTIONS,
         padata_value: b"not-der".to_vec().into(),
     };
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         user_tgt.rep.0.ticket.clone(),
         &user_tgt.session_key,
         TEST_REALM,
@@ -3972,11 +3982,12 @@ fn s4u2proxy_rejects_malformed_pac_options() {
         documented_host(),
         TEST_REALM,
         724,
-        opts,
-        Some(vec![evidence.rep.0.ticket.clone()]),
-        vec![bad],
-        pref_etypes(),
     )
+    .options(opts)
+    .additional_tickets(Some(vec![evidence.rep.0.ticket.clone()]))
+    .padata(vec![bad])
+    .etypes(pref_etypes())
+    .build()
     .expect("S4U2Proxy TGS-REQ");
     match krb5_kdc::issue_tgs(&store, &tgs) {
         Err(Error::Protocol { code, .. }) => assert_eq!(code, err::BADOPTION),
@@ -4003,7 +4014,7 @@ fn s4u2proxy_classic_denied_without_allowed_to() {
     let evidence = krb5_kdc::issue_tgs(&store, &evidence_tgs).expect("evidence");
     let user_tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 753);
     let opts = KdcOptions::forwardable().with_bit(flag_bit::CNAME_IN_ADDL_TKT, true);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         user_tgt.rep.0.ticket.clone(),
         &user_tgt.session_key,
         TEST_REALM,
@@ -4011,11 +4022,12 @@ fn s4u2proxy_classic_denied_without_allowed_to() {
         documented_host(),
         TEST_REALM,
         754,
-        opts,
-        Some(vec![evidence.rep.0.ticket.clone()]),
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(opts)
+    .additional_tickets(Some(vec![evidence.rep.0.ticket.clone()]))
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .expect("S4U2Proxy TGS-REQ");
     match krb5_kdc::issue_tgs(&store, &tgs) {
         Err(Error::Protocol { code, .. }) => assert_eq!(code, err::BADOPTION),
@@ -4042,7 +4054,7 @@ fn s4u2proxy_honors_pac_options_rbcd() {
     let evidence = krb5_kdc::issue_tgs(&store, &evidence_tgs).expect("evidence");
     let user_tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 733);
     let opts = KdcOptions::forwardable().with_bit(flag_bit::CNAME_IN_ADDL_TKT, true);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         user_tgt.rep.0.ticket.clone(),
         &user_tgt.session_key,
         TEST_REALM,
@@ -4050,11 +4062,12 @@ fn s4u2proxy_honors_pac_options_rbcd() {
         documented_host(),
         TEST_REALM,
         734,
-        opts,
-        Some(vec![evidence.rep.0.ticket.clone()]),
-        vec![pa_pac_options(true).expect("PA-PAC-OPTIONS")],
-        pref_etypes(),
     )
+    .options(opts)
+    .additional_tickets(Some(vec![evidence.rep.0.ticket.clone()]))
+    .padata(vec![pa_pac_options(true).expect("PA-PAC-OPTIONS")])
+    .etypes(pref_etypes())
+    .build()
     .expect("S4U2Proxy TGS-REQ");
     match krb5_kdc::issue_tgs(&store, &tgs) {
         Err(Error::Protocol { code, .. }) => assert_eq!(code, err::BADOPTION),
@@ -4082,7 +4095,7 @@ fn s4u2proxy_rbcd_allowed_from_succeeds() {
     let evidence = krb5_kdc::issue_tgs(&store, &evidence_tgs).expect("evidence");
     let user_tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 743);
     let opts = KdcOptions::forwardable().with_bit(flag_bit::CNAME_IN_ADDL_TKT, true);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         user_tgt.rep.0.ticket.clone(),
         &user_tgt.session_key,
         TEST_REALM,
@@ -4090,11 +4103,12 @@ fn s4u2proxy_rbcd_allowed_from_succeeds() {
         documented_host(),
         TEST_REALM,
         744,
-        opts,
-        Some(vec![evidence.rep.0.ticket.clone()]),
-        vec![pa_pac_options(true).expect("PA-PAC-OPTIONS")],
-        pref_etypes(),
     )
+    .options(opts)
+    .additional_tickets(Some(vec![evidence.rep.0.ticket.clone()]))
+    .padata(vec![pa_pac_options(true).expect("PA-PAC-OPTIONS")])
+    .etypes(pref_etypes())
+    .build()
     .expect("S4U2Proxy TGS-REQ");
     let out = krb5_kdc::issue_tgs(&store, &tgs).expect("RBCD allowed");
     assert_eq!(out.rep.0.cname.components_joined(), TEST_ADMIN);
@@ -4122,7 +4136,7 @@ fn u2u_encrypts_ticket_in_additional_tgt_session() {
     .unwrap();
     let host_tgt = krb5_kdc::issue_as(&store, &host_as).expect("host TGT");
     let opts = KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         user_tgt.rep.0.ticket.clone(),
         &user_tgt.session_key,
         TEST_REALM,
@@ -4130,11 +4144,12 @@ fn u2u_encrypts_ticket_in_additional_tgt_session() {
         host,
         TEST_REALM,
         803,
-        opts,
-        Some(vec![host_tgt.rep.0.ticket.clone()]),
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(opts)
+    .additional_tickets(Some(vec![host_tgt.rep.0.ticket.clone()]))
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .expect("U2U TGS-REQ");
     let out = krb5_kdc::issue_tgs(&store, &tgs).expect("U2U");
     assert!(out.rep.0.ticket.enc_part.kvno.is_none());
@@ -4165,7 +4180,7 @@ fn s4u2self_bad_checksum_rejected() {
     ck[0] ^= 0xff;
     for_user.cksum.checksum = ck.into();
     pa.padata_value = encode(&for_user).expect("re-encode").into();
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         tgt.rep.0.ticket.clone(),
         &tgt.session_key,
         TEST_REALM,
@@ -4173,11 +4188,12 @@ fn s4u2self_bad_checksum_rejected() {
         documented_host(),
         TEST_REALM,
         902,
-        KdcOptions::forwardable(),
-        None,
-        vec![pa],
-        pref_etypes(),
     )
+    .options(KdcOptions::forwardable())
+    .additional_tickets(None)
+    .padata(vec![pa])
+    .etypes(pref_etypes())
+    .build()
     .expect("TGS-REQ");
     let bytes = krb5_kdc::handle_request(&store, &encode(&tgs).expect("der")).expect("reply");
     let e: krb5_types::KrbError = decode(&bytes).expect("KRB-ERROR");
@@ -4200,7 +4216,7 @@ fn s4u2self_unkeyed_cksumtype_is_inapp() {
         decode(pa.padata_value.as_ref()).expect("PaForUser");
     for_user.cksum.cksumtype = 7;
     pa.padata_value = encode(&for_user).expect("re-encode").into();
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         tgt.rep.0.ticket.clone(),
         &tgt.session_key,
         TEST_REALM,
@@ -4208,11 +4224,12 @@ fn s4u2self_unkeyed_cksumtype_is_inapp() {
         documented_host(),
         TEST_REALM,
         904,
-        KdcOptions::forwardable(),
-        None,
-        vec![pa],
-        pref_etypes(),
     )
+    .options(KdcOptions::forwardable())
+    .additional_tickets(None)
+    .padata(vec![pa])
+    .etypes(pref_etypes())
+    .build()
     .expect("TGS-REQ");
     let bytes = krb5_kdc::handle_request(&store, &encode(&tgs).expect("der")).expect("reply");
     let e: krb5_types::KrbError = decode(&bytes).expect("KRB-ERROR");
@@ -4370,7 +4387,7 @@ fn tgs_canonicalize_issues_cross_realm_krbtgt() {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 61);
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "svc.other.test"]);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         tgt.rep.0.ticket.clone(),
         &tgt.session_key,
         TEST_REALM,
@@ -4378,11 +4395,12 @@ fn tgs_canonicalize_issues_cross_realm_krbtgt() {
         host,
         "OTHER.TEST",
         62,
-        KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true),
-        None,
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .expect("cross-realm TGS-REQ");
     let err = krb5_kdc::issue_tgs(&store, &tgs).expect_err("foreign body.realm");
     match err {
@@ -4410,7 +4428,7 @@ fn tgs_referral_ad_kerber_test_issues_krbtgt() {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 71);
     let ir_sname = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "AD.KERBER.TEST"]);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         tgt.rep.0.ticket.clone(),
         &tgt.session_key,
         TEST_REALM,
@@ -4418,11 +4436,12 @@ fn tgs_referral_ad_kerber_test_issues_krbtgt() {
         ir_sname,
         TEST_REALM,
         72,
-        KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true),
-        None,
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .expect("AD referral TGS-REQ");
     let out = krb5_kdc::issue_tgs(&store, &tgs).expect("AD referral TGS");
     assert_eq!(
@@ -4490,7 +4509,7 @@ fn interrealm_issue_key_is_not_the_peer_accept_key() {
     );
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 81);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         tgt.rep.0.ticket.clone(),
         &tgt.session_key,
         TEST_REALM,
@@ -4498,11 +4517,12 @@ fn interrealm_issue_key_is_not_the_peer_accept_key() {
         ir_name,
         TEST_REALM,
         82,
-        KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true),
-        None,
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .expect("AD referral TGS-REQ");
     let out = krb5_kdc::issue_tgs(&store, &tgs).expect("AD referral TGS");
     let issue_key =
@@ -4593,7 +4613,7 @@ fn issue_as_and_tgs_with_etype_20_mint_sha2_tickets() {
         krbtgt_first.to_iana(),
         "TGT EncryptedData.etype is the first current krbtgt key (get_first_current_key), not the session etype"
     );
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         as_out.rep.0.ticket.clone(),
         &as_out.session_key,
         TEST_REALM,
@@ -4601,11 +4621,12 @@ fn issue_as_and_tgs_with_etype_20_mint_sha2_tickets() {
         documented_host(),
         TEST_REALM,
         81,
-        KdcOptions::forwardable(),
-        None,
-        Vec::new(),
-        vec![sha2.to_iana()],
     )
+    .options(KdcOptions::forwardable())
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![sha2.to_iana()])
+    .build()
     .expect("TGS etype 20");
     let tgs_out = krb5_kdc::issue_tgs(&store, &tgs).expect("TGS etype 20");
     assert_eq!(tgs_out.session_key.etype(), sha2);
@@ -4656,7 +4677,7 @@ fn same_realm_ticket_sets_transited_policy_checked() {
     );
 
     let skip_opts = KdcOptions::forwardable().with_bit(flag_bit::DISABLE_TRANSITED_CHECK, true);
-    let skip = tgs_req_ex(
+    let skip = TgsReqBuilder::new(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
@@ -4664,11 +4685,12 @@ fn same_realm_ticket_sets_transited_policy_checked() {
         documented_host(),
         TEST_REALM,
         72,
-        skip_opts.clone(),
-        None,
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(skip_opts.clone())
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .expect("tgs skip");
     match krb5_kdc::issue_tgs(&store, &skip) {
         Err(Error::Protocol { code, text, .. }) => {
@@ -4701,7 +4723,7 @@ fn same_realm_ticket_sets_transited_policy_checked() {
         "AS TGT is the non-T negative control"
     );
     assert!(as_part.flags.renewable());
-    let renew_non_t = tgs_req_ex(
+    let renew_non_t = TgsReqBuilder::new(
         issued_r.rep.0.ticket.clone(),
         &issued_r.session_key,
         TEST_REALM,
@@ -4709,13 +4731,16 @@ fn same_realm_ticket_sets_transited_policy_checked() {
         PrincipalName::krbtgt(TEST_REALM),
         TEST_REALM,
         78,
+    )
+    .options(
         KdcOptions::forwardable()
             .with_bit(flag_bit::RENEW, true)
             .with_bit(flag_bit::DISABLE_TRANSITED_CHECK, true),
-        None,
-        Vec::new(),
-        pref_etypes(),
     )
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .expect("renew non-T skip");
     match krb5_kdc::issue_tgs(&store, &renew_non_t) {
         Err(Error::Protocol { code, text, .. }) => {
@@ -4724,7 +4749,7 @@ fn same_realm_ticket_sets_transited_policy_checked() {
         }
         other => panic!("RENEW of a non-T ticket + skip must be POLICY, got {other:?}"),
     }
-    let tgs_tgt = tgs_req_ex(
+    let tgs_tgt = TgsReqBuilder::new(
         issued_r.rep.0.ticket.clone(),
         &issued_r.session_key,
         TEST_REALM,
@@ -4732,11 +4757,12 @@ fn same_realm_ticket_sets_transited_policy_checked() {
         PrincipalName::krbtgt(TEST_REALM),
         TEST_REALM,
         74,
-        KdcOptions::forwardable().with_bit(flag_bit::RENEWABLE, true),
-        None,
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::RENEWABLE, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .expect("tgs tgt");
     let tgs_tgt_out = krb5_kdc::issue_tgs(&store, &tgs_tgt).expect("TGS TGT");
     let tgt_key = store.krbtgt().unwrap().best_key().unwrap();
@@ -4746,7 +4772,7 @@ fn same_realm_ticket_sets_transited_policy_checked() {
         "same-realm TGS TGT must carry T before RENEW+skip"
     );
     assert!(tgs_tgt_part.flags.renewable());
-    let renew_skip = tgs_req_ex(
+    let renew_skip = TgsReqBuilder::new(
         tgs_tgt_out.rep.0.ticket.clone(),
         &tgs_tgt_out.session_key,
         TEST_REALM,
@@ -4754,13 +4780,16 @@ fn same_realm_ticket_sets_transited_policy_checked() {
         PrincipalName::krbtgt(TEST_REALM),
         TEST_REALM,
         75,
+    )
+    .options(
         KdcOptions::forwardable()
             .with_bit(flag_bit::RENEW, true)
             .with_bit(flag_bit::DISABLE_TRANSITED_CHECK, true),
-        None,
-        Vec::new(),
-        pref_etypes(),
     )
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .expect("renew skip");
     let renewed = krb5_kdc::issue_tgs(&store, &renew_skip).expect("RENEW skip inherits T");
     let renewed_part = decrypt_ticket_part(&tgt_key.key, &renewed.rep.0.ticket).expect("enc renew");
@@ -4772,7 +4801,7 @@ fn same_realm_ticket_sets_transited_policy_checked() {
     let (mut lax_store, _) = bootstrap_documented().expect("lax");
     lax_store.policy.reject_bad_transit = false;
     let issued_lax = issue_tgt_password(&lax_store, TEST_USER, TEST_USER_PASSWORD, 76);
-    let skip_lax = tgs_req_ex(
+    let skip_lax = TgsReqBuilder::new(
         issued_lax.rep.0.ticket.clone(),
         &issued_lax.session_key,
         TEST_REALM,
@@ -4780,11 +4809,12 @@ fn same_realm_ticket_sets_transited_policy_checked() {
         documented_host(),
         TEST_REALM,
         77,
-        skip_opts,
-        None,
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(skip_opts)
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .expect("tgs skip lax");
     let skipped =
         krb5_kdc::issue_tgs(&lax_store, &skip_lax).expect("skip + reject_bad_transit=false");

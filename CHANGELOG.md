@@ -36,7 +36,10 @@ this project uses semantic versioning once a crate is published.
   the `OTHER.TEST` krbtgt constructor. `reseal` / `reseal_mut` /
   `reseal_store` / `reseal_tgt` / `reseal_incoming` — PAC reseal
   (incompatible bodies kept apart; `z1` decrypt+mutate and `z6`
-  etype rewrite stay local). Assertion
+  etype rewrite stay local). `AsReqBuilder` / `TgsReqBuilder` —
+  the 101 test `tgs_req_ex*` sites plus the testkit AS/S4U
+  wrappers (`diffsend` and product `src/` stay on the protocol
+  helpers; S3 records the pub-surface move). Assertion
   text in those files is unchanged.
 
 ### W3-S2.1 drop the eight a2_*_parent red-inject files

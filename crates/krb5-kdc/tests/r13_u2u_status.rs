@@ -5,15 +5,14 @@ use krb5_kdc::{
     PrincipalStore, TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
     bootstrap_documented,
 };
-use krb5_protocol::tgs_req_ex;
-use krb5_testkit::{issue_tgt_password, pref_etypes, status};
+use krb5_testkit::{TgsReqBuilder, issue_tgt_password, pref_etypes, status};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
 
 fn u2u(store: &PrincipalStore, second: krb5_types::Ticket) -> krb5_kdc::Error {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let user_tgt = issue_tgt_password(store, TEST_USER, TEST_USER_PASSWORD, 813);
     let opts = KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         user_tgt.rep.0.ticket,
         &user_tgt.session_key,
         TEST_REALM,
@@ -21,11 +20,12 @@ fn u2u(store: &PrincipalStore, second: krb5_types::Ticket) -> krb5_kdc::Error {
         user.clone(),
         TEST_REALM,
         814,
-        opts,
-        Some(vec![second]),
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(opts)
+    .additional_tickets(Some(vec![second]))
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .unwrap();
     krb5_kdc::issue_tgs(store, &tgs).unwrap_err()
 }

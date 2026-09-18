@@ -4,8 +4,8 @@ use krb5_kdc::{
     PrincipalStore, TEST_REALM, TEST_USER, as_req, bootstrap_documented, decrypt_ticket_part,
     documented_host, pa_enc_timestamp, pac_from_ticket_part, wrap_win2k_pac,
 };
-use krb5_protocol::{tgs_req, tgs_req_ex};
-use krb5_testkit::{expect_status, issue_tgt, pref_etypes, reseal_store};
+use krb5_protocol::tgs_req;
+use krb5_testkit::{TgsReqBuilder, expect_status, issue_tgt, pref_etypes, reseal_store};
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
 
@@ -79,7 +79,7 @@ fn a2_r23_u2u_stkt_pac_wrong_cksumtype_is_generic() {
     reseal_store(&store, &mut extra, &part);
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let tgt = issue_tgt(&store, TEST_USER, 23020);
-    let req = tgs_req_ex(
+    let req = TgsReqBuilder::new(
         tgt.rep.0.ticket,
         &tgt.session_key,
         TEST_REALM,
@@ -87,11 +87,12 @@ fn a2_r23_u2u_stkt_pac_wrong_cksumtype_is_generic() {
         documented_host(),
         TEST_REALM,
         23021,
-        KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true),
-        Some(vec![extra]),
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true))
+    .additional_tickets(Some(vec![extra]))
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .unwrap();
     let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::GENERIC);

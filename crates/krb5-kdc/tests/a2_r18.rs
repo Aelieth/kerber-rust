@@ -6,8 +6,10 @@ use krb5_kdc::{
     decrypt_ticket_part, documented_admin_id, documented_host, pa_enc_timestamp,
     pac_from_ticket_part, sign_reply_pac, ticket_checksum_der, wrap_win2k_pac,
 };
-use krb5_protocol::{pa_pac_options, tgs_req_ex};
-use krb5_testkit::{aes_key, attach_pac, expect_status, host_tgt, pref_etypes, reseal_incoming};
+use krb5_protocol::pa_pac_options;
+use krb5_testkit::{
+    TgsReqBuilder, aes_key, attach_pac, expect_status, host_tgt, pref_etypes, reseal_incoming,
+};
 use krb5_types::pac::{
     PAC_CLIENT_INFO, PAC_DELEGATION_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer,
     parse_client_info, parse_delegation_info,
@@ -119,7 +121,7 @@ fn proxy_cross(
     nonce: u32,
 ) -> krb5_types::TgsReq {
     let host = documented_host();
-    tgs_req_ex(
+    TgsReqBuilder::new(
         header,
         session,
         FOREIGN,
@@ -127,11 +129,12 @@ fn proxy_cross(
         host.clone(),
         TEST_REALM,
         nonce,
-        cname_addl(),
-        Some(vec![evidence]),
-        vec![pa_pac_options(true).unwrap()],
-        pref_etypes(),
     )
+    .options(cname_addl())
+    .additional_tickets(Some(vec![evidence]))
+    .padata(vec![pa_pac_options(true).unwrap()])
+    .etypes(pref_etypes())
+    .build()
     .unwrap()
 }
 
@@ -160,7 +163,7 @@ fn a2_r18_local_s4u2proxy_client_info_omits_realm() {
     };
     let ev = krb5_kdc::issue_tgs(
         &store,
-        &tgs_req_ex(
+        &TgsReqBuilder::new(
             admin_tgt.rep.0.ticket.clone(),
             &admin_tgt.session_key,
             TEST_REALM,
@@ -168,11 +171,12 @@ fn a2_r18_local_s4u2proxy_client_info_omits_realm() {
             user.clone(),
             TEST_REALM,
             18001,
-            KdcOptions::forwardable(),
-            None,
-            vec![],
-            pref_etypes(),
         )
+        .options(KdcOptions::forwardable())
+        .additional_tickets(None)
+        .padata(vec![])
+        .etypes(pref_etypes())
+        .build()
         .unwrap(),
     )
     .unwrap()
@@ -198,7 +202,7 @@ fn a2_r18_local_s4u2proxy_client_info_omits_realm() {
     };
     let out = krb5_kdc::issue_tgs(
         &store,
-        &tgs_req_ex(
+        &TgsReqBuilder::new(
             user_tgt.rep.0.ticket,
             &user_tgt.session_key,
             TEST_REALM,
@@ -206,11 +210,12 @@ fn a2_r18_local_s4u2proxy_client_info_omits_realm() {
             documented_host(),
             TEST_REALM,
             18003,
-            cname_addl(),
-            Some(vec![ev]),
-            vec![],
-            pref_etypes(),
         )
+        .options(cname_addl())
+        .additional_tickets(Some(vec![ev]))
+        .padata(vec![])
+        .etypes(pref_etypes())
+        .build()
         .unwrap(),
     )
     .unwrap();

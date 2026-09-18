@@ -4,9 +4,10 @@ use krb5_kdc::{
     TEST_ADMIN, TEST_REALM, bootstrap_documented, decrypt_ticket_part, documented_admin_id,
     documented_host,
 };
-use krb5_protocol::{pa_for_user, pa_s4u_x509_user, tgs_req_ex};
+use krb5_protocol::{pa_for_user, pa_s4u_x509_user};
 use krb5_testkit::{
-    aes_key, attach_pac, expect_status, foreign, host_tgt, pref_etypes, reseal_incoming, s4u_tgs,
+    TgsReqBuilder, aes_key, attach_pac, expect_status, foreign, host_tgt, pref_etypes,
+    reseal_incoming, s4u_tgs,
 };
 use krb5_types::{EncTicketPart, KdcOptions, PaData, PrincipalName, err, flag_bit, pa};
 
@@ -132,7 +133,7 @@ fn a2_r17_foreign_pac_client() {
     let alice = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["alice"]);
     let pa = pa_for_user(&tgt.session_key, alice, FOREIGN).unwrap();
     let host = documented_host();
-    let req = tgs_req_ex(
+    let req = TgsReqBuilder::new(
         header,
         &tgt.session_key,
         TEST_REALM,
@@ -140,11 +141,12 @@ fn a2_r17_foreign_pac_client() {
         host.clone(),
         TEST_REALM,
         17041,
-        KdcOptions::forwardable(),
-        None,
-        vec![pa],
-        pref_etypes(),
     )
+    .options(KdcOptions::forwardable())
+    .additional_tickets(None)
+    .padata(vec![pa])
+    .etypes(pref_etypes())
+    .build()
     .unwrap();
     let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::BADOPTION);

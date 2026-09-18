@@ -5,8 +5,8 @@ use krb5_kdc::{
     bootstrap_documented, decrypt_ticket_part, documented_host, pa_enc_timestamp,
     pac_from_ticket_part, wrap_win2k_pac,
 };
-use krb5_protocol::{tgs_req, tgs_req_ex};
-use krb5_testkit::{expect_status, issue_tgt, pref_etypes, reseal_store};
+use krb5_protocol::tgs_req;
+use krb5_testkit::{TgsReqBuilder, expect_status, issue_tgt, pref_etypes, reseal_store};
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
 
@@ -41,7 +41,7 @@ fn u2u_req(
 ) -> krb5_types::TgsReq {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let tgt = issue_tgt(store, TEST_USER, nonce);
-    tgs_req_ex(
+    TgsReqBuilder::new(
         tgt.rep.0.ticket,
         &tgt.session_key,
         TEST_REALM,
@@ -49,11 +49,12 @@ fn u2u_req(
         dest,
         TEST_REALM,
         nonce + 1,
-        u2u_opts(),
-        extra,
-        Vec::new(),
-        pref_etypes(),
     )
+    .options(u2u_opts())
+    .additional_tickets(extra)
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
     .unwrap()
 }
 

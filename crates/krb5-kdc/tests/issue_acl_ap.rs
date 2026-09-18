@@ -12,8 +12,8 @@ use krb5_kdc::{
     tgs_req,
 };
 use krb5_protocol::Keytab;
-use krb5_protocol::{ReplayCache, as_req_sname, build_ap_req, tgs_req_ex, verify_ap_req};
-use krb5_testkit::{scratch_dir, status};
+use krb5_protocol::{ReplayCache, as_req_sname, build_ap_req, verify_ap_req};
+use krb5_testkit::{TgsReqBuilder, scratch_dir, status};
 use krb5_types::{
     EncKdcRepPart, EncTicketPart, KdcOptions, KerberosTime, KrbError, MethodData, OctetString,
     PrincipalName, ascii, err, flag_bit, ku, pa,
@@ -660,7 +660,7 @@ fn tgs_session_enctypes_attr_is_membership() {
     )
     .unwrap();
     let as_out = krb5_kdc::issue_as(&store, &req).expect("AS");
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         as_out.rep.0.ticket.clone(),
         &as_out.session_key,
         TEST_REALM,
@@ -668,11 +668,12 @@ fn tgs_session_enctypes_attr_is_membership() {
         documented_host(),
         TEST_REALM,
         65,
-        KdcOptions::forwardable(),
-        None,
-        Vec::new(),
-        vec![18, 17],
     )
+    .options(KdcOptions::forwardable())
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![18, 17])
+    .build()
     .expect("tgs");
     let tgs_out = krb5_kdc::issue_tgs(&store, &tgs).expect("TGS");
     assert_eq!(
@@ -1345,7 +1346,7 @@ fn tgs_renewable_when_server_disallow_is_non_renewable() {
     assert!(tgt_part(&store, &issued).flags.renewable());
     or_attr(&mut store, &host, KDB_DISALLOW_RENEWABLE);
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
@@ -1353,11 +1354,12 @@ fn tgs_renewable_when_server_disallow_is_non_renewable() {
         documented_host(),
         TEST_REALM,
         78,
-        KdcOptions::forwardable().with_bit(flag_bit::RENEWABLE, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::RENEWABLE, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .expect("TGS-REQ");
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
     match err {
@@ -1395,7 +1397,7 @@ fn renewable_as(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
 
 fn renew_tgs(issued: &krb5_kdc::IssuedAs, nonce: u32) -> krb5_types::TgsReq {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    tgs_req_ex(
+    TgsReqBuilder::new(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
@@ -1403,13 +1405,16 @@ fn renew_tgs(issued: &krb5_kdc::IssuedAs, nonce: u32) -> krb5_types::TgsReq {
         PrincipalName::krbtgt(TEST_REALM),
         TEST_REALM,
         nonce,
+    )
+    .options(
         KdcOptions::forwardable()
             .with_bit(flag_bit::RENEWABLE, true)
             .with_bit(flag_bit::RENEW, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .expect("RENEW TGS-REQ")
 }
 
@@ -1541,7 +1546,7 @@ fn postdated_as_req(nonce: u32, from: KerberosTime) -> krb5_types::AsReq {
 
 fn validate_tgs(issued: &krb5_kdc::IssuedAs, nonce: u32) -> krb5_types::TgsReq {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    tgs_req_ex(
+    TgsReqBuilder::new(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
@@ -1549,11 +1554,12 @@ fn validate_tgs(issued: &krb5_kdc::IssuedAs, nonce: u32) -> krb5_types::TgsReq {
         PrincipalName::krbtgt(TEST_REALM),
         TEST_REALM,
         nonce,
-        KdcOptions::forwardable().with_bit(flag_bit::VALIDATE, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::VALIDATE, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .expect("VALIDATE TGS-REQ")
 }
 
@@ -1668,7 +1674,7 @@ fn as_from_after_till_endtime_is_till() {
 
 fn renew_and_validate_tgs(issued: &krb5_kdc::IssuedAs, nonce: u32) -> krb5_types::TgsReq {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    tgs_req_ex(
+    TgsReqBuilder::new(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
@@ -1676,13 +1682,16 @@ fn renew_and_validate_tgs(issued: &krb5_kdc::IssuedAs, nonce: u32) -> krb5_types
         PrincipalName::krbtgt(TEST_REALM),
         TEST_REALM,
         nonce,
+    )
+    .options(
         KdcOptions::forwardable()
             .with_bit(flag_bit::RENEW, true)
             .with_bit(flag_bit::VALIDATE, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .expect("RENEW+VALIDATE TGS-REQ")
 }
 
@@ -1705,7 +1714,7 @@ fn renew_tgs_sname(
     nonce: u32,
 ) -> krb5_types::TgsReq {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    tgs_req_ex(
+    TgsReqBuilder::new(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
@@ -1713,13 +1722,16 @@ fn renew_tgs_sname(
         sname,
         TEST_REALM,
         nonce,
+    )
+    .options(
         KdcOptions::forwardable()
             .with_bit(flag_bit::RENEWABLE, true)
             .with_bit(flag_bit::RENEW, true),
-        None,
-        Vec::new(),
-        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
     .expect("RENEW TGS-REQ")
 }
 

@@ -5,12 +5,12 @@ use krb5_crypto::{EncryptionType, KeyUsage, decrypt, encrypt};
 use krb5_kdc::{
     KDB_DISALLOW_RENEWABLE, PrincipalStore, TEST_REALM, bootstrap_documented, documented_host,
 };
-use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req_ex, tgs_req_ex_from};
+use krb5_protocol::{as_req, pa_enc_timestamp};
 use krb5_types::{
     EncTicketPart, EncryptedData, KdcOptions, KerberosTime, Ticket, err, flag_bit, ku,
 };
 
-use krb5_testkit::{admin, s4u_admin, status, user, user_as};
+use krb5_testkit::{TgsReqBuilder, admin, s4u_admin, status, user, user_as};
 fn etypes() -> Vec<i32> {
     vec![EncryptionType::Aes256CtsHmacSha196.to_iana()]
 }
@@ -153,7 +153,7 @@ fn r27_tgs_expired_server_beats_require_auth() {
     store
         .apply_admin_fields(&host, None, None, Some(1), None, None, false, None)
         .unwrap();
-    let tgs = tgs_req_ex(
+    let tgs = TgsReqBuilder::new(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
@@ -161,11 +161,12 @@ fn r27_tgs_expired_server_beats_require_auth() {
         host,
         TEST_REALM,
         27032,
-        KdcOptions::forwardable(),
-        None,
-        Vec::new(),
-        etypes(),
     )
+    .options(KdcOptions::forwardable())
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(etypes())
+    .build()
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
     assert_eq!(status(&err), (err::SERVICE_EXP, Some("SERVICE EXPIRED")));
@@ -193,7 +194,7 @@ fn r27_tgs_postdated_omitted_from_is_epoch() {
                 .into(),
         },
     };
-    let tgs = tgs_req_ex_from(
+    let tgs = TgsReqBuilder::new(
         tgt,
         &issued.session_key,
         TEST_REALM,
@@ -201,16 +202,19 @@ fn r27_tgs_postdated_omitted_from_is_epoch() {
         documented_host(),
         TEST_REALM,
         27042,
+    )
+    .options(
         KdcOptions::none()
             .with_bit(flag_bit::MAY_POSTDATE, true)
             .with_bit(flag_bit::POSTDATED, true),
-        None,
-        Vec::new(),
-        etypes(),
-        None,
-        None,
-        None,
     )
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(etypes())
+    .addresses(None)
+    .from(None)
+    .enc_authorization_data(None)
+    .build()
     .unwrap();
     let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
     let got = host_part(&store, &out);
