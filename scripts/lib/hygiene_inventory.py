@@ -234,6 +234,13 @@ def quality_grep(root: pathlib.Path) -> list[str]:
     unwrap_n = 0
     src_loc = 0
     test_files = 0
+    src_test_rels: set[str] = set()
+    crates = root / "crates"
+    if crates.is_dir():
+        for pdir in sorted(p for p in crates.iterdir() if p.is_dir()):
+            prefix = pdir.relative_to(root).as_posix()
+            for rel in cfg_test_files_in_pkg(pdir):
+                src_test_rels.add(f"{prefix}/{rel}")
     for path in (root / "crates").rglob("*.rs"):
         rel = str(path.relative_to(root))
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -244,8 +251,10 @@ def quality_grep(root: pathlib.Path) -> list[str]:
         norm = rel.replace("\\", "/")
         # Product src only. `krb5-testkit` is a test-only crate (workspace
         # `publish = false`); its unwraps are the helpers S2.2 moved out of
-        # `tests/`, which this key never counted.
-        if "/src/" in norm and "/tests/" not in norm and "/krb5-testkit/" not in norm:
+        # `tests/`, which this key never counted. A `src/**` file the parent
+        # declared `#[cfg(test)] mod` is src-test (`diff_compare.rs`,
+        # `kadm5/tests/*.rs`), not product.
+        if "/src/" in norm and "/krb5-testkit/" not in norm and norm not in src_test_rels:
             unwrap_n += len(re.findall(r"\bunwrap\(|\bexpect\(|\bpanic!\(", text))
     rows.append(f"allow={allow_n}")
     rows.append(f"unwrap_expect_panic_src={unwrap_n}")
@@ -271,6 +280,8 @@ FN_RE = re.compile(
 )
 CFG_TEST_RE = re.compile(r"^\s*#\[cfg\(test\)\]\s*$")
 MOD_OPEN_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+[A-Za-z_][A-Za-z0-9_]*\s*\{")
+MOD_SEMI_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;")
+PATH_ATTR_RE = re.compile(r'^#\[path\s*=\s*"([^"]+)"\]')
 PUB_ITEM_RE = re.compile(
     r"^\s*pub(?P<restrict>\s*\([^)]*\))?\s+(?:(?:const|async|unsafe|extern\s+\"[^\"]*\")\s+)*"
     r"(?:fn|struct|enum|trait|type|const|static|mod|use|union|macro_rules!)\b"
@@ -508,17 +519,89 @@ def workspace_members(root: pathlib.Path) -> list[dict]:
     return members
 
 
-def _scope(rel_in_pkg: str, line: int, test_ranges: list[tuple[int, int]]) -> str:
-    """Path is relative to the package dir (a package under `examples/` is not an example)."""
+def cfg_test_files_in_pkg(pdir: pathlib.Path) -> set[str]:
+    """Package-relative paths of `src/**` files whose parent is `#[cfg(test)] mod`."""
+    rels: set[str] = set()
+    for path in sorted(pdir.rglob("*.rs")):
+        if "/target/" in f"/{path.as_posix()}/":
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        pending = False
+        path_attr: str | None = None
+        for line in text.splitlines():
+            s = line.strip()
+            if CFG_TEST_RE.match(line):
+                pending = True
+                path_attr = None
+                continue
+            if not pending:
+                continue
+            pm = PATH_ATTR_RE.match(s)
+            if pm:
+                path_attr = pm.group(1)
+                continue
+            if s.startswith("#["):
+                continue
+            pending = False
+            mm = MOD_SEMI_RE.match(line)
+            if not mm:
+                path_attr = None
+                continue
+            name = mm.group(1)
+            if path.stem in ("mod", "lib", "main"):
+                parent = path.parent
+            else:
+                parent = path.parent / path.stem
+            if path_attr:
+                child = (path.parent / path_attr)
+            else:
+                as_file = parent / f"{name}.rs"
+                as_dir = parent / name
+                if as_file.is_file():
+                    child = as_file
+                elif (as_dir / "mod.rs").is_file():
+                    child = as_dir
+                else:
+                    path_attr = None
+                    continue
+            if child.is_dir():
+                for nested in child.rglob("*.rs"):
+                    try:
+                        rels.add(nested.relative_to(pdir).as_posix())
+                    except ValueError:
+                        pass
+            elif child.is_file():
+                try:
+                    rels.add(child.relative_to(pdir).as_posix())
+                except ValueError:
+                    pass
+            path_attr = None
+    return rels
+
+
+def _scope(
+    rel_in_pkg: str,
+    line: int,
+    test_ranges: list[tuple[int, int]],
+    src_test_files: set[str] | None = None,
+) -> str:
+    """Path is relative to the package dir (a package under `examples/` is not an example).
+
+    `src/**` keeps that prefix even when a nested directory is named `tests/`
+    (`kadm5/tests/*.rs`). A file the parent declared `#[cfg(test)] mod` is
+    `src-test` (`diff_compare.rs`).
+    """
     parts = rel_in_pkg.split("/")
-    if "tests" in parts:
+    if parts[0] == "tests":
         return "tests"
-    if "examples" in parts:
+    if parts[0] == "examples":
         return "examples"
-    if "benches" in parts:
+    if parts[0] == "benches":
         return "benches"
     if "bin" in parts or parts[-1] == "main.rs":
         return "bin"
+    if src_test_files and rel_in_pkg in src_test_files:
+        return "src-test"
     if any(a <= line <= b for a, b in test_ranges):
         return "src-test"
     return "src"
@@ -541,6 +624,7 @@ def shape_inventory(root: pathlib.Path, members: list[dict]) -> dict[str, object
     for m in members:
         pdir = root / m["dir"]
         p = collections.Counter()
+        src_test_files = cfg_test_files_in_pkg(pdir)
         for path in sorted(pdir.rglob("*.rs")):
             rel = path.relative_to(root).as_posix()
             in_pkg = path.relative_to(pdir).as_posix()
@@ -554,8 +638,9 @@ def shape_inventory(root: pathlib.Path, members: list[dict]) -> dict[str, object
             sloc, comment, doc, blank = classify_lines(raw_lines)
             loc_files.append(f"{rel}\t{loc}\t{sloc}\t{comment}\t{doc}\t{blank}")
             fns, test_ranges = scan_items(strip_noncode(text))
-            file_scope = _scope(in_pkg, 0, [])
+            file_scope = _scope(in_pkg, 1, [], src_test_files)
             is_product = file_scope in ("src", "bin")
+            is_src_test_file = file_scope == "src-test"
             p["files"] += 1
             p["loc"] += loc
             p["sloc"] += sloc
@@ -570,12 +655,14 @@ def shape_inventory(root: pathlib.Path, members: list[dict]) -> dict[str, object
                         files_over_1500_src += 1
                     if loc > max_file[1]:
                         max_file = (rel, loc)
+            elif is_src_test_file:
+                p["src_test_loc"] += loc
             elif file_scope == "tests":
                 p["tests_loc"] += loc
             for i, line in enumerate(raw_lines, 1):
                 s = line.strip()
                 if s.startswith("#[test]"):
-                    if is_product:
+                    if is_product or is_src_test_file:
                         p["tests_in_src"] += 1
                     else:
                         p["tests_in_tests"] += 1
@@ -589,7 +676,7 @@ def shape_inventory(root: pathlib.Path, members: list[dict]) -> dict[str, object
                         p["pub_restricted" if pm.group("restrict") else "pub_items"] += 1
             for start, end, name, vis in fns:
                 n_lines = end - start + 1
-                scope = _scope(in_pkg, start, test_ranges)
+                scope = _scope(in_pkg, start, test_ranges, src_test_files)
                 documented = "y" if has_doc_header(raw_lines, start) else "n"
                 if scope == "src":
                     if n_lines > 120:
