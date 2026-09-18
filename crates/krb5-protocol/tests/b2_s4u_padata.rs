@@ -5,6 +5,10 @@
 //! `verify_s4u2self_reply` is new at the parent so a re-export inject
 //! does not compile; the live MIT `kvno -U` cell is the production oracle.
 
+#[path = "common/mod.rs"]
+mod common;
+use common::isolate_host_krb5;
+
 use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -18,10 +22,6 @@ use krb5_types::{
     EncKdcRepPart, EncryptedData, EncryptionKey, KerberosTime, KrbError, Microseconds, OctetString,
     PaData, PrincipalName, TgsReq, Ticket, TicketFlags, ascii, err, pa,
 };
-
-fn isolate_host_krb5() {
-    krb5_config::isolate_test_krb5();
-}
 
 fn session() -> ProtocolKey {
     ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[7u8; 32]).unwrap()

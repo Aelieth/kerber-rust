@@ -5,6 +5,10 @@
 //! no enc-pa-rep checksum and the client fails `KDCREP_MODIFIED` — the CI red
 //! `rust-kinit-spake-gate` showed against MIT 1.22.2 at `e5d9e28`…`a8563e1`.
 
+#[path = "common/mod.rs"]
+mod common;
+use common::isolate_host_krb5;
+
 use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -13,10 +17,6 @@ use krb5_asn1::decode;
 use krb5_kdc::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
 use krb5_protocol::{AsRequest, AsTicketOpts, KdcAddr, as_exchange};
 use krb5_types::{AsReq, PrincipalName, pa};
-
-fn isolate_host_krb5() {
-    krb5_config::isolate_test_krb5();
-}
 
 #[test]
 fn spake_response_request_keeps_the_advertised_padata_in_mit_order() {

@@ -6,25 +6,18 @@
 //! with no key at the ticket's kvno was `NOKEY` (45) where MIT's
 //! `keytab_fetch_error` says `BADKEYVER` (44).
 
+#[path = "common/mod.rs"]
+mod common;
+use common::client_key;
+
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, string_to_key};
+use krb5_crypto::{KeyUsage, ProtocolKey, decrypt, encrypt};
 use krb5_kdc::{
-    S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
-    documented_admin_id, documented_host, pa_enc_timestamp, tgs_req,
+    TEST_REALM, TEST_USER, as_req, bootstrap_documented, documented_admin_id, documented_host,
+    pa_enc_timestamp, tgs_req,
 };
 use krb5_protocol::{ApVerifyParams, DEFAULT_SKEW, ReplayCache, build_ap_req, verify_ap_req_ex};
 use krb5_types::{ApReq, EncTicketPart, KerberosTime, PrincipalName, flag_bit, ku};
-
-fn client_key() -> ProtocolKey {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    string_to_key(
-        EncryptionType::Aes256CtsHmacSha196,
-        TEST_USER_PASSWORD,
-        cname.default_salt(TEST_REALM),
-        Some(&S2K_ITERS.to_be_bytes()),
-    )
-    .expect("s2k")
-}
 
 /// Build a real `host/…` AP-REQ, then reseal its ticket after `mutate` has
 /// rewritten the (decrypted) `EncTicketPart`. The session key is untouched, so

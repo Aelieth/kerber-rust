@@ -1,10 +1,12 @@
 //! W1-B B1: `vfy_increds.c` `krb5_verify_init_creds`.
 //! Live oracle: `client-differential-gate.sh` vs MIT `t_vfy_increds`.
 
-use krb5_crypto::{EncryptionType, string_to_key};
+#[path = "common/mod.rs"]
+mod common;
+use common::client_key;
+
 use krb5_kdc::{
-    S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
-    documented_host, pa_enc_timestamp, tgs_req,
+    TEST_REALM, TEST_USER, as_req, bootstrap_documented, documented_host, pa_enc_timestamp, tgs_req,
 };
 use krb5_protocol::{
     CcacheCred, CcacheKeyblock, KdcAddr, Keytab, host_princs_from_keytab, keytab_has_server, realm,
@@ -38,17 +40,6 @@ fn dummy_cred() -> CcacheCred {
 
 fn dummy_kdc() -> KdcAddr {
     KdcAddr::new("127.0.0.1")
-}
-
-fn client_key() -> krb5_crypto::ProtocolKey {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    string_to_key(
-        EncryptionType::Aes256CtsHmacSha196,
-        TEST_USER_PASSWORD,
-        cname.default_salt(TEST_REALM),
-        Some(&S2K_ITERS.to_be_bytes()),
-    )
-    .unwrap()
 }
 
 #[test]

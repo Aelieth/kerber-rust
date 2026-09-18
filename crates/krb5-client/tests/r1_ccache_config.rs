@@ -2,6 +2,10 @@
 //! ccache config entries keyed by the TGT's server, like MIT
 //! `write_out_ccache` (`get_in_tkt.c:1617-1640`, `save_selected_preauth_type`).
 
+#[path = "common/mod.rs"]
+mod common;
+use common::isolate_host_krb5;
+
 use std::net::UdpSocket;
 use std::thread;
 
@@ -12,10 +16,6 @@ use krb5_kdc::{
 };
 use krb5_protocol::{FileCcache, KdcAddr};
 use krb5_testkit::scratch_dir;
-
-fn isolate_host_krb5() {
-    krb5_config::isolate_test_krb5();
-}
 
 fn config_value(cache: &FileCcache, key: &str, server: &str) -> Option<Vec<u8>> {
     cache

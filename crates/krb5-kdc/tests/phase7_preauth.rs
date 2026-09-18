@@ -22,7 +22,7 @@ use krb5_protocol::{
     pa_pk_as_req_cn, pa_pk_as_req_spki, pa_spake_response, pa_spake_support, pkinit_reply_key,
     pkinit_reply_key_agile, unwrap_fast_rep,
 };
-use krb5_testkit::{TgsReqBuilder, issue_tgt_password, password_key, pref_etypes};
+use krb5_testkit::{TgsReqBuilder, host_tgt, issue_tgt_password, password_key, pref_etypes};
 use krb5_types::pac::{
     PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM, PAC_SERVER_CHECKSUM, Pac, RpcSid,
     parse_kerb_validation_info, zero_pac_ad_data,
@@ -3588,25 +3588,6 @@ fn as_and_tgs_tickets_carry_verifiable_pac() {
     verify_pac(&signed, &host.key, &krbtgt.key, true).expect("re-sign");
 }
 
-fn issue_host_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
-    let host = documented_host();
-    let key = store
-        .get_name(&host)
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
-    let req = as_req(
-        host,
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).expect("pa")]),
-    )
-    .unwrap();
-    krb5_kdc::issue_as(store, &req).expect("host AS")
-}
-
 fn or_host_attr(store: &mut PrincipalStore, bit: u32) {
     let host = documented_host();
     let a = store.get_name(&host).unwrap().attributes | bit;
@@ -3621,7 +3602,7 @@ fn s4u2self_impersonates_user() {
     or_host_attr(&mut store, KDB_OK_TO_AUTH_AS_DELEGATE);
     let host = documented_host();
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let tgt = issue_host_tgt(&store, 601);
+    let tgt = host_tgt(&store, 601);
     let pa = pa_for_user(&tgt.session_key, admin.clone(), TEST_REALM).expect("PA-FOR-USER");
     let tgs = TgsReqBuilder::new(
         tgt.rep.0.ticket.clone(),
@@ -3695,7 +3676,7 @@ fn s4u2self_clears_forwardable_without_ok_to_auth() {
     let host = documented_host();
     store.allow_s4u_to(&host, "host/other.kerber.test");
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let tgt = issue_host_tgt(&store, 650);
+    let tgt = host_tgt(&store, 650);
     let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).expect("PA-FOR-USER");
     let tgs = TgsReqBuilder::new(
         tgt.rep.0.ticket.clone(),
@@ -3727,7 +3708,7 @@ fn s4u2self_explicit_cross_tgs_is_server_mismatch() {
         .expect("interrealm");
     let host = documented_host();
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let tgt = issue_host_tgt(&store, 660);
+    let tgt = host_tgt(&store, 660);
     let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).expect("PA-FOR-USER");
     let tgs = TgsReqBuilder::new(
         tgt.rep.0.ticket.clone(),
@@ -3762,7 +3743,7 @@ fn s4u2self_local_tgt_foreign_user_is_not_ours() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let host = documented_host();
     let foreign = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["alice"]);
-    let tgt = issue_host_tgt(&store, 670);
+    let tgt = host_tgt(&store, 670);
     let pa = pa_for_user(&tgt.session_key, foreign, "OTHER.TEST").expect("PA-FOR-USER");
     let tgs = TgsReqBuilder::new(
         tgt.rep.0.ticket.clone(),
@@ -3791,7 +3772,7 @@ fn s4u2self_local_tgt_foreign_user_is_not_ours() {
 
 fn s4u2self_tgs(store: &PrincipalStore, for_user: PrincipalName, nonce: u32) -> krb5_types::TgsReq {
     let host = documented_host();
-    let tgt = issue_host_tgt(store, nonce);
+    let tgt = host_tgt(store, nonce);
     let pa = pa_for_user(&tgt.session_key, for_user, TEST_REALM).expect("PA-FOR-USER");
     TgsReqBuilder::new(
         tgt.rep.0.ticket.clone(),

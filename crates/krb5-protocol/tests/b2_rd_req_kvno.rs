@@ -3,25 +3,18 @@
 //! These compile at `7e55747` and fail there: `want_kvno` was discarded
 //! and every key was tried.
 
+#[path = "common/mod.rs"]
+mod common;
+use common::client_key;
+
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_kdc::{
-    S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
-    documented_admin_id, documented_host, pa_enc_timestamp, tgs_req,
+    TEST_REALM, TEST_USER, as_req, bootstrap_documented, documented_admin_id, documented_host,
+    pa_enc_timestamp, tgs_req,
 };
 use krb5_protocol::{ApVerifyParams, DEFAULT_SKEW, ReplayCache, build_ap_req, verify_ap_req_ex};
 use krb5_types::{ApReq, KerberosTime, PrincipalName, err};
-
-fn client_key() -> ProtocolKey {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    krb5_crypto::string_to_key(
-        EncryptionType::Aes256CtsHmacSha196,
-        TEST_USER_PASSWORD,
-        cname.default_salt(TEST_REALM),
-        Some(&S2K_ITERS.to_be_bytes()),
-    )
-    .expect("s2k")
-}
 
 fn host_ap_req() -> (Vec<u8>, ProtocolKey, u32) {
     krb5_config::isolate_test_krb5();

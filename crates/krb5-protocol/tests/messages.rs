@@ -1,10 +1,13 @@
 //! Protocol message tests: AP-REP, SAFE/PRIV/CRED, DER tags.
 
+#[path = "common/mod.rs"]
+mod common;
+use common::{client_key, isolate_host_krb5};
+
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, KeyUsage, string_to_key, unkeyed_checksum};
+use krb5_crypto::{KeyUsage, unkeyed_checksum};
 use krb5_kdc::{
-    S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
-    documented_host, pa_enc_timestamp, tgs_req,
+    TEST_REALM, TEST_USER, as_req, bootstrap_documented, documented_host, pa_enc_timestamp, tgs_req,
 };
 use krb5_protocol::{
     ReplayCache, build_ap_rep, build_ap_req, build_ap_req_opts, build_krb_cred, build_krb_priv,
@@ -12,10 +15,6 @@ use krb5_protocol::{
     verify_ap_req_ex,
 };
 use krb5_types::{EncTgsRepPart, PrincipalName, ascii, ku};
-
-fn isolate_host_krb5() {
-    krb5_config::isolate_test_krb5();
-}
 
 /// Capture `n` UDP requests and return them without waiting out the client
 /// UDP retry backoff (0.5+1+2 s) after the stub has what the test asserts.
@@ -75,17 +74,6 @@ fn preauth_required_der() -> Vec<u8> {
         e_text: None,
         e_data: None,
     })
-    .unwrap()
-}
-
-fn client_key() -> krb5_crypto::ProtocolKey {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    string_to_key(
-        EncryptionType::Aes256CtsHmacSha196,
-        TEST_USER_PASSWORD,
-        cname.default_salt(TEST_REALM),
-        Some(&S2K_ITERS.to_be_bytes()),
-    )
     .unwrap()
 }
 

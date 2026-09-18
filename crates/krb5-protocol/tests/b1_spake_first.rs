@@ -4,6 +4,10 @@
 //! empty module padata and gets PREAUTH_REQUIRED 25.
 //! Live oracle: `client-differential-gate.sh` `MIT_spake_first_padata`.
 
+#[path = "common/mod.rs"]
+mod common;
+use common::isolate_host_krb5;
+
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -11,10 +15,6 @@ use std::time::Duration;
 use krb5_asn1::decode;
 use krb5_protocol::{AsRequest, AsTicketOpts, KdcAddr, as_exchange};
 use krb5_types::{AsReq, KerberosTime, KrbError, Microseconds, PrincipalName, ascii, err, pa};
-
-fn isolate_host_krb5() {
-    krb5_config::isolate_test_krb5();
-}
 
 #[test]
 fn b1_spake_first_shot_omits_optimistic_151() {

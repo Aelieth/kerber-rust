@@ -3,11 +3,14 @@
 //! delegation (`accept_sec_context.c:573-577`), `GSS_C_PROT_READY_FLAG`
 //! (`:1089`), RRC reduced modulo the length (`unwrap.c:259-262`).
 
+#[path = "common/mod.rs"]
+mod common;
+use common::issue_tgt;
+
 use krb5_crypto::ProtocolKey;
 use krb5_gss::{DelegCred, GSS_C_DELEG, GSS_C_PROT_READY, GssContext};
 use krb5_kdc::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
 use krb5_protocol::ReplayCache;
-use krb5_testkit::issue_tgt;
 use krb5_types::{PrincipalName, TicketFlags, ascii};
 
 fn linked() -> (GssContext, GssContext) {

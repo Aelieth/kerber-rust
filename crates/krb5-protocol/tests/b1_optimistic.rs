@@ -4,6 +4,10 @@
 //! remainder keeps hint order, so advertised 151 is tried before 2.
 //! Live oracle: `client-differential-gate.sh` `MIT_preauth_cascade`.
 
+#[path = "common/mod.rs"]
+mod common;
+use common::isolate_host_krb5;
+
 use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -16,10 +20,6 @@ use krb5_protocol::{
 use krb5_types::{
     AsReq, KerberosTime, KrbError, MethodData, Microseconds, PaData, PrincipalName, ascii, err, pa,
 };
-
-fn isolate_host_krb5() {
-    krb5_config::isolate_test_krb5();
-}
 
 fn mit_hint() -> MethodData {
     [136, 19, 16, 147, 151, 2, 150, 133]

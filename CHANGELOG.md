@@ -39,7 +39,10 @@ this project uses semantic versioning once a crate is published.
   etype rewrite stay local). `AsReqBuilder` / `TgsReqBuilder` —
   the 101 test `tgs_req_ex*` sites plus the testkit AS/S4U
   wrappers (`diffsend` and product `src/` stay on the protocol
-  helpers; S3 records the pub-surface move). Assertion
+  helpers; S3 records the pub-surface move). Thin
+  `tests/common/mod.rs` in kdc/protocol/client/gss for crate-local
+  glue (`isolate_host_krb5`, `client_key`; admin XDR stays in
+  admin). Assertion
   text in those files is unchanged.
 
 ### W3-S2.1 drop the eight a2_*_parent red-inject files

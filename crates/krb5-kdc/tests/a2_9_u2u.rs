@@ -1,33 +1,13 @@
 //! A′-2 item 9 U2U / second-ticket statuses.
 
 use krb5_kdc::{
-    KDB_DISALLOW_DUP_SKEY, PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER, as_req,
-    bootstrap_documented, decrypt_ticket_part, documented_host, pa_enc_timestamp,
-    pac_from_ticket_part, wrap_win2k_pac,
+    KDB_DISALLOW_DUP_SKEY, PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER, bootstrap_documented,
+    decrypt_ticket_part, documented_host, pac_from_ticket_part, wrap_win2k_pac,
 };
 use krb5_protocol::tgs_req;
-use krb5_testkit::{TgsReqBuilder, expect_status, issue_tgt, pref_etypes, reseal_store};
+use krb5_testkit::{TgsReqBuilder, expect_status, host_tgt, issue_tgt, pref_etypes, reseal_store};
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
-
-fn issue_host_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
-    let host = documented_host();
-    let key = store
-        .get_name(&host)
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
-    let req = as_req(
-        host,
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    krb5_kdc::issue_as(store, &req).unwrap()
-}
 
 fn u2u_opts() -> KdcOptions {
     KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true)
@@ -107,7 +87,7 @@ fn u2u_admin_tgt_for_host_is_mismatch() {
 #[test]
 fn u2u_bad_session_etype_is_etype_nosupp() {
     let (store, _) = bootstrap_documented().unwrap();
-    let host = issue_host_tgt(&store, 9130);
+    let host = host_tgt(&store, 9130);
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let mut part = decrypt_ticket_part(&krbtgt.key, &host.rep.0.ticket).unwrap();
     part.key.keytype = 99;
@@ -122,7 +102,7 @@ fn u2u_bad_session_etype_is_etype_nosupp() {
 #[test]
 fn u2u_bad_pac_is_modified() {
     let (store, _) = bootstrap_documented().unwrap();
-    let host = issue_host_tgt(&store, 9140);
+    let host = host_tgt(&store, 9140);
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let mut part = decrypt_ticket_part(&krbtgt.key, &host.rep.0.ticket).unwrap();
     let raw = pac_from_ticket_part(&part).unwrap();
@@ -152,7 +132,7 @@ fn u2u_dup_skey_disallowed_is_policy() {
     store
         .apply_admin_fields(&host, Some(attrs), None, None, None, None, false, None)
         .unwrap();
-    let extra = issue_host_tgt(&store, 9150).rep.0.ticket;
+    let extra = host_tgt(&store, 9150).rep.0.ticket;
     let req = u2u_req(&store, host, Some(vec![extra]), 9151);
     let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::POLICY);
@@ -162,7 +142,7 @@ fn u2u_dup_skey_disallowed_is_policy() {
 #[test]
 fn u2u_host_tgt_issues_kvno_zero() {
     let (store, _) = bootstrap_documented().unwrap();
-    let extra = issue_host_tgt(&store, 9160);
+    let extra = host_tgt(&store, 9160);
     let req = u2u_req(
         &store,
         documented_host(),

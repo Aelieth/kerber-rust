@@ -153,6 +153,7 @@ zeroize.workspace = true
 
 [dev-dependencies]
 krb5-kdc.workspace = true
+krb5-testkit.workspace = true
 
 [lints]
 workspace = true

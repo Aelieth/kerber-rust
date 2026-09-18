@@ -1,5 +1,9 @@
 //! Gating tests: ACL allow/deny, AS/TGS issue, AP-REQ verify negatives.
 
+#[path = "common/mod.rs"]
+mod common;
+use common::client_key;
+
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, string_to_key};
 use krb5_kdc::{
@@ -7,7 +11,7 @@ use krb5_kdc::{
     KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_LOCKDOWN_KEYS,
     KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH,
     KDB_REQUIRES_PRE_AUTH, KDB_REQUIRES_PWCHANGE, PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER,
-    TEST_USER_PASSWORD, acl_for_store, as_req, bootstrap_documented, default_acl_path,
+    acl_for_store, as_req, bootstrap_documented, default_acl_path,
     documented_admin_id, documented_changepw, documented_host, documented_kadmin, pa_enc_timestamp,
     tgs_req,
 };
@@ -18,18 +22,6 @@ use krb5_types::{
     EncKdcRepPart, EncTicketPart, KdcOptions, KerberosTime, KrbError, MethodData, OctetString,
     PrincipalName, ascii, err, flag_bit, ku, pa,
 };
-
-fn client_key() -> ProtocolKey {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let salt = cname.default_salt(TEST_REALM);
-    string_to_key(
-        EncryptionType::Aes256CtsHmacSha196,
-        TEST_USER_PASSWORD,
-        &salt,
-        Some(&S2K_ITERS.to_be_bytes()),
-    )
-    .expect("s2k")
-}
 
 fn decode_enc_part(plain: &[u8]) -> EncKdcRepPart {
     krb5_asn1::decode_enc_kdc_rep_part(plain).expect("enc-part")

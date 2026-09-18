@@ -1,32 +1,13 @@
 //! A′-2 R23: PAC UnsupportedChecksum wires 60 on non-retry exits.
 
 use krb5_kdc::{
-    PrincipalStore, TEST_REALM, TEST_USER, as_req, bootstrap_documented, decrypt_ticket_part,
-    documented_host, pa_enc_timestamp, pac_from_ticket_part, wrap_win2k_pac,
+    TEST_REALM, TEST_USER, bootstrap_documented, decrypt_ticket_part, documented_host,
+    pac_from_ticket_part, wrap_win2k_pac,
 };
 use krb5_protocol::tgs_req;
-use krb5_testkit::{TgsReqBuilder, expect_status, issue_tgt, pref_etypes, reseal_store};
+use krb5_testkit::{TgsReqBuilder, expect_status, host_tgt, issue_tgt, pref_etypes, reseal_store};
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
-
-fn issue_host_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
-    let host = documented_host();
-    let key = store
-        .get_name(&host)
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
-    let req = as_req(
-        host,
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    krb5_kdc::issue_as(store, &req).unwrap()
-}
 
 fn rewrite_server_cksumtype(part: &mut krb5_types::EncTicketPart, ctype: i32) {
     let raw = pac_from_ticket_part(part).unwrap();
@@ -71,7 +52,7 @@ fn a2_r23_header_pac_wrong_cksumtype_is_generic() {
 #[test]
 fn a2_r23_u2u_stkt_pac_wrong_cksumtype_is_generic() {
     let (store, _) = bootstrap_documented().unwrap();
-    let host = issue_host_tgt(&store, 23010);
+    let host = host_tgt(&store, 23010);
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let mut part = decrypt_ticket_part(&krbtgt.key, &host.rep.0.ticket).unwrap();
     rewrite_server_cksumtype(&mut part, 15);
