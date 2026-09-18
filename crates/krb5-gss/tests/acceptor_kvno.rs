@@ -60,7 +60,7 @@ fn host_token() -> (Vec<u8>, krb5_crypto::ProtocolKey, u32) {
 }
 
 #[test]
-fn z1_gss_accept_kt_pins_ticket_kvno() {
+fn gss_accept_kt_pins_ticket_kvno() {
     let (token, skey, kvno) = host_token();
     assert_eq!(kvno, 1);
     let host = documented_host();
@@ -102,7 +102,7 @@ fn z1_gss_accept_kt_pins_ticket_kvno() {
 }
 
 #[test]
-fn z1_gss_accept_kt_matching_kvno_verifies() {
+fn gss_accept_kt_matching_kvno_verifies() {
     let (token, skey, kvno) = host_token();
     let host = documented_host();
     GssContext::accept_sec_context_kt(
