@@ -3,8 +3,9 @@
 
 Fails on:
   - a test `(binary, name)` removed that is not in --renames / --duplicates
-    (`--duplicates` is keyed `old_binary<TAB>old_name = new_binary<TAB>new_name`;
-    a RHS that is also a LHS is rejected; many-to-one needs `merged:` on the RHS)
+    (`--duplicates` and `--renames` are keyed `old_binary<TAB>old_name`
+    to `new_binary<TAB>new_name`; a RHS that is also a LHS is rejected;
+    many-to-one needs `merged:` on the RHS)
   - a gate cell tag removed (an `echo` tag listed in --dead with a reason is
     information: the MIT_/RUST_ identifier scan also catches path and port
     constants that were never a cell; `section`/`flow` tags cannot be waived)
@@ -115,22 +116,22 @@ def strip_merged(s: str) -> str:
     return s[7:] if s.startswith("merged:") else s
 
 
-def load_duplicates_map(path: pathlib.Path | None) -> dict[str, str]:
-    """Keyed `old_binary<TAB>old_name = [merged:]new_binary<TAB>new_name`."""
-    raw = load_map(path, "=")
+def _load_keyed_id_map(path: pathlib.Path | None, sep: str, kind: str) -> dict[str, str]:
+    """Keyed `old_binary<TAB>old_name <sep> [merged:]new_binary<TAB>new_name`."""
+    raw = load_map(path, sep)
     mapping: dict[str, str] = {}
     for left, right in raw.items():
         if "\t" not in left:
-            raise SystemExit(f"duplicates LHS must be binary<TAB>name: {left!r}")
+            raise SystemExit(f"{kind} LHS must be binary<TAB>name: {left!r}")
         rhs = strip_merged(right)
         if "\t" not in rhs:
-            raise SystemExit(f"duplicates RHS must be binary<TAB>name: {right!r}")
+            raise SystemExit(f"{kind} RHS must be binary<TAB>name: {right!r}")
         mapping[left] = right
     lhs = set(mapping)
     for left, right in mapping.items():
         rhs = strip_merged(right)
         if rhs in lhs:
-            raise SystemExit(f"duplicates RHS is also a LHS: {rhs}")
+            raise SystemExit(f"{kind} RHS is also a LHS: {rhs}")
     targets: dict[str, list[tuple[str, str]]] = {}
     for left, right in mapping.items():
         targets.setdefault(strip_merged(right), []).append((left, right))
@@ -142,17 +143,19 @@ def load_duplicates_map(path: pathlib.Path | None) -> dict[str, str]:
     return {left: strip_merged(right) for left, right in mapping.items()}
 
 
+def load_duplicates_map(path: pathlib.Path | None) -> dict[str, str]:
+    """Keyed `old_binary<TAB>old_name = [merged:]new_binary<TAB>new_name`."""
+    return _load_keyed_id_map(path, "=", "duplicates")
+
+
+def load_renames_map(path: pathlib.Path | None) -> dict[str, str]:
+    """Keyed `old_binary<TAB>old_name -> [merged:]new_binary<TAB>new_name`."""
+    return _load_keyed_id_map(path, "->", "renames")
+
+
 def apply_rename(t: str, renames: dict[str, str]) -> str:
-    """Name-only `old -> new` or keyed `old_binary<TAB>old_name -> new_binary<TAB>new_name`."""
-    if t in renames:
-        return renames[t]
-    binary, sep, name = t.partition("\t")
-    if not sep:
-        return renames.get(t, t)
-    if name in renames:
-        rhs = renames[name]
-        return rhs if "\t" in rhs else f"{binary}\t{rhs}"
-    return t
+    """Keyed `old_binary<TAB>old_name -> new_binary<TAB>new_name` only."""
+    return renames.get(t, t)
 
 
 def _write_snap(
@@ -237,8 +240,8 @@ def _must_fail(
     duplicates_path: pathlib.Path | None = None,
     renames_path: pathlib.Path | None = None,
 ) -> None:
-    if (
-        _quiet_compare(
+    try:
+        rc = _quiet_compare(
             old,
             new,
             dead_path,
@@ -246,8 +249,9 @@ def _must_fail(
             duplicates_path=duplicates_path,
             renames_path=renames_path,
         )
-        == 0
-    ):
+    except SystemExit:
+        return
+    if rc == 0:
         raise SystemExit(f"hygiene-diff --self-test: {label} must fail")
 
 
@@ -285,34 +289,42 @@ def _self_test_duplicates(root: pathlib.Path) -> None:
     _must_pass(old, new, "keyed duplicate", duplicates_path=good)
     name_only = root / "dup-name.txt"
     name_only.write_text("foo = bar\n", encoding="utf-8")
-    try:
-        load_duplicates_map(name_only)
-    except SystemExit:
-        pass
-    else:
-        raise SystemExit("hygiene-diff --self-test: name-only duplicates must fail")
+    _must_fail(old, new, "name-only duplicates", duplicates_path=name_only)
     chained = root / "dup-chain.txt"
     chained.write_text("oldbin\tfoo = midbin\tmid\nmidbin\tmid = newbin\tbar\n", encoding="utf-8")
-    try:
-        load_duplicates_map(chained)
-    except SystemExit:
-        pass
-    else:
-        raise SystemExit("hygiene-diff --self-test: RHS-as-LHS must fail")
+    _must_fail(old, new, "RHS-as-LHS", duplicates_path=chained)
     many_old, many_new = root / "many-old", root / "many-new"
     _write_snap(many_old, ["a.sh\techo\tkeep"], tests=["a\tx", "b\ty"])
     _write_snap(many_new, ["a.sh\techo\tkeep"], tests=["c\tz"])
     no_merged = root / "dup-nomerge.txt"
     no_merged.write_text("a\tx = c\tz\nb\ty = c\tz\n", encoding="utf-8")
-    try:
-        load_duplicates_map(no_merged)
-    except SystemExit:
-        pass
-    else:
-        raise SystemExit("hygiene-diff --self-test: many-to-one without merged: must fail")
+    _must_fail(many_old, many_new, "many-to-one without merged:", duplicates_path=no_merged)
     merged = root / "dup-merged.txt"
     merged.write_text("a\tx = merged:c\tz\nb\ty = merged:c\tz\n", encoding="utf-8")
     _must_pass(many_old, many_new, "many-to-one merged", duplicates_path=merged)
+
+
+def _self_test_renames(root: pathlib.Path) -> None:
+    """Keyed --renames; two olds → one new needs merged:."""
+    old, new = root / "ren-old", root / "ren-new"
+    _write_snap(old, ["a.sh\techo\tkeep"], tests=["oldbin\tfoo"])
+    _write_snap(new, ["a.sh\techo\tkeep"], tests=["newbin\tbar"])
+    _must_fail(old, new, "removed test without keyed rename")
+    good = root / "ren-good.txt"
+    good.write_text("oldbin\tfoo -> newbin\tbar\n", encoding="utf-8")
+    _must_pass(old, new, "keyed rename", renames_path=good)
+    name_only = root / "ren-name.txt"
+    name_only.write_text("foo -> bar\n", encoding="utf-8")
+    _must_fail(old, new, "name-only renames", renames_path=name_only)
+    many_old, many_new = root / "ren-many-old", root / "ren-many-new"
+    _write_snap(many_old, ["a.sh\techo\tkeep"], tests=["a\tx", "b\ty"])
+    _write_snap(many_new, ["a.sh\techo\tkeep"], tests=["c\tz"])
+    no_merged = root / "ren-nomerge.txt"
+    no_merged.write_text("a\tx -> c\tz\nb\ty -> c\tz\n", encoding="utf-8")
+    _must_fail(many_old, many_new, "rename many-to-one without merged:", renames_path=no_merged)
+    merged = root / "ren-merged.txt"
+    merged.write_text("a\tx -> merged:c\tz\nb\ty -> merged:c\tz\n", encoding="utf-8")
+    _must_pass(many_old, many_new, "rename many-to-one merged", renames_path=merged)
 
 
 def _self_test_quality(root: pathlib.Path) -> None:
@@ -337,7 +349,22 @@ def _self_test_quality(root: pathlib.Path) -> None:
         waiver_old,
         waiver_new,
         "quality allow_sites waived",
-        accept_rise=["allow_sites=4: tests/common dead_code"],
+        accept_rise=["allow_sites=4:+4 tests/common dead_code, -1 status.rs, -1 c2_kpropd_acl.rs"],
+    )
+    _must_fail(
+        waiver_old,
+        waiver_new,
+        "accept-rise mismatched N",
+        accept_rise=["allow_sites=2: wrong n"],
+    )
+    same_old, same_new = root / "rise-same-old", root / "rise-same-new"
+    _write_snap(same_old, ["a.sh\techo\tkeep"], quality={"allow_sites": "80"})
+    _write_snap(same_new, ["a.sh\techo\tkeep"], quality={"allow_sites": "80"})
+    _must_fail(
+        same_old,
+        same_new,
+        "accept-rise unused",
+        accept_rise=["allow_sites=1: unused"],
     )
     for i, (label, old_q, new_q) in enumerate(red):
         old, new = root / f"red{i}-old", root / f"red{i}-new"
@@ -361,6 +388,7 @@ def _self_test() -> None:
         root = pathlib.Path(tmp)
         _self_test_quality(root)
         _self_test_duplicates(root)
+        _self_test_renames(root)
         old, new = root / "old", root / "new"
         _write_snap(
             old,
@@ -449,8 +477,12 @@ def _compare(args) -> int:
         return 2
 
     failed = 0
-    renames = load_map(args.renames, "->")
-    duplicates = load_duplicates_map(args.duplicates)
+    try:
+        renames = load_renames_map(args.renames)
+        duplicates = load_duplicates_map(args.duplicates)
+    except SystemExit as e:
+        print(f"FAIL {e}")
+        return 1
     dead = load_map(getattr(args, "dead", None), ":")
 
     def fail(msg: str) -> None:
@@ -776,7 +808,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("old", type=pathlib.Path)
     ap.add_argument("new", type=pathlib.Path)
-    ap.add_argument("--renames", type=pathlib.Path, help="old_name -> new_name (or binary<TAB>name -> …)")
+    ap.add_argument(
+        "--renames",
+        type=pathlib.Path,
+        help="old_binary<TAB>old_name -> [merged:]new_binary<TAB>new_name",
+    )
     ap.add_argument(
         "--duplicates",
         type=pathlib.Path,

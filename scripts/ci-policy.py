@@ -1365,8 +1365,8 @@ def _gate_unit_index():
     return mod
 
 
-_CAPTURE_ENV_RE = re.compile(r"""env::var\(\s*"([^"]+)"\s*\)""")
-_CAPTURE_ASSIGN_RE = re.compile(r"KERBER_CAPTURE_DIR=([^\s\\]+)")
+_CAPTURE_ENV_RE = re.compile(r"""(?:env::var(?:_os)?|option_env!)\(\s*"([^"]+)"\s*\)""")
+_CAPTURE_ASSIGN_RE = re.compile(r"""KERBER_CAPTURE_DIR\s*[=:]\s*([^\s\\#'"]+|['"][^'"]+['"])""")
 
 
 def _capture_product(text: str) -> str:
@@ -1409,11 +1409,23 @@ def check_capture_env_only(
         common_text = common.read_text(encoding="utf-8")
     if "refuse_golden_capture_dir" not in common_text:
         _die("gate-common.sh must define refuse_golden_capture_dir")
+    live_scan = script_texts is None
     if script_texts is None:
-        script_texts = {
-            p.name: p.read_text(encoding="utf-8")
-            for p in sorted(SCRIPTS.glob("*.sh")) + sorted((SCRIPTS / "lib").glob("*.sh"))
-        }
+        script_texts = {}
+        for p in sorted(SCRIPTS.glob("*.sh")) + sorted((SCRIPTS / "lib").glob("*.sh")):
+            script_texts[str(p.relative_to(ROOT))] = p.read_text(encoding="utf-8")
+        harness = ROOT / "harness"
+        if harness.is_dir():
+            for p in sorted(harness.rglob("*.sh")):
+                script_texts[str(p.relative_to(ROOT))] = p.read_text(encoding="utf-8")
+        wf = ROOT / ".github" / "workflows"
+        if wf.is_dir():
+            for p in sorted(list(wf.glob("*.yml")) + list(wf.glob("*.yaml"))):
+                script_texts[str(p.relative_to(ROOT))] = p.read_text(encoding="utf-8")
+        for rel in ("scripts/lib/prod-realm-common.sh", "harness/prod/env-up.sh"):
+            text = script_texts.get(rel, "")
+            if "refuse_golden_capture_dir" not in text:
+                _die(f"{rel} must call refuse_golden_capture_dir")
     for name, text in script_texts.items():
         for m in _CAPTURE_ASSIGN_RE.finditer(text):
             if _is_golden_capture_path(m.group(1)):
@@ -1469,6 +1481,8 @@ def check_doc_file_cites(
                 texts[rel] = path.read_text(encoding="utf-8")
     missing: list[str] = []
     for doc, text in texts.items():
+        if pathlib.Path(doc).name == "CHANGELOG.md":
+            continue
         for m in _DOC_FILE_CITE_RE.finditer(text):
             rel = m.group(1)
             if any(ch in rel for ch in "*?{}<>"):
@@ -2774,16 +2788,27 @@ def check_autotests_registered(root: pathlib.Path | None = None) -> None:
             )
 
 
-def check_hygiene_diff_self_test(text: str | None = None) -> None:
-    """hygiene-diff.py runs _self_test on normal compare runs, not only --self-test.
+def _run_script_self_test(path: pathlib.Path, label: str) -> None:
+    proc = subprocess.run(
+        [sys.executable, str(path), "--self-test"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or "")[-400:]
+        _die(f"{label} --self-test failed (rc={proc.returncode}): {tail}")
 
-    Compare-run self-test FAIL lines go to stderr so a green artefact has none.
-    """
+
+def check_hygiene_diff_self_test(text: str | None = None) -> None:
+    """hygiene-diff.py --self-test is executed; compare runs also call _self_test."""
+    path = SCRIPTS / "hygiene-diff.py"
     if text is None:
-        path = SCRIPTS / "hygiene-diff.py"
         if not path.is_file():
             _die("missing scripts/hygiene-diff.py")
         text = path.read_text(encoding="utf-8")
+        _run_script_self_test(path, "hygiene-diff.py")
     if "def main" not in text:
         _die("hygiene-diff.py must define main()")
     if "def _self_test" not in text:
@@ -2794,23 +2819,36 @@ def check_hygiene_diff_self_test(text: str | None = None) -> None:
         _die("hygiene-diff.py must send compare-run _self_test to stderr")
     if "def load_duplicates_map" not in text or "merged:" not in text:
         _die("hygiene-diff.py must key --duplicates and require merged: for many-to-one")
+    if "def load_renames_map" not in text:
+        _die("hygiene-diff.py must key --renames")
     if "def _self_test_duplicates" not in text:
         _die("hygiene-diff.py must self-test keyed duplicates maps")
 
 
 def check_hygiene_body_diff_self_test(text: str | None = None) -> None:
-    """hygiene-body-diff.py runs _self_test on normal compare runs."""
+    """hygiene-body-diff.py --self-test is executed; a gutted fixture is red."""
+    path = SCRIPTS / "hygiene-body-diff.py"
     if text is None:
-        path = SCRIPTS / "hygiene-body-diff.py"
         if not path.is_file():
             _die("missing scripts/hygiene-body-diff.py")
         text = path.read_text(encoding="utf-8")
+        _run_script_self_test(path, "hygiene-body-diff.py")
     if "def _self_test" not in text:
         _die("hygiene-body-diff.py must define _self_test")
     if text.count("_self_test()") < 2:
         _die("hygiene-body-diff.py must run _self_test on normal compare runs")
-    if "assert_eq!" not in text or "user_as" not in text:
-        _die("hygiene-body-diff.py must self-test an assertion change and a helper rename")
+    if not re.search(r"assert_eq!\(\s*1,\s*2\s*\)", text):
+        _die("hygiene-body-diff.py must self-test an assertion change (assert_eq!(1, 2))")
+    if "user_as" not in text:
+        _die("hygiene-body-diff.py must self-test a helper rename")
+
+
+def check_hygiene_inventory_cfg_test() -> None:
+    """Inventory classifies `#[cfg(test)] mod x;` as src-test."""
+    path = SCRIPTS / "lib" / "hygiene_inventory.py"
+    if not path.is_file():
+        _die("missing scripts/lib/hygiene_inventory.py")
+    _run_script_self_test(path, "hygiene_inventory.py")
 
 
 def check_gate_common_sourced(
@@ -3997,6 +4035,24 @@ jobs:
         "refuse_golden_capture_dir() {\n    :\n}\n",
         {"kdc-gate.sh": "KERBER_CAPTURE_DIR=$ROOT/tests/traces\n"},
     )
+    _must_die(
+        check_capture_env_only,
+        'pub fn capture_pdu() {\n    let _ = std::env::var("KERBER_CAPTURE_DIR");\n}\n',
+        "refuse_golden_capture_dir() {\n    :\n}\n",
+        {"ci.yml": "KERBER_CAPTURE_DIR: $ROOT/tests/traces\n"},
+    )
+    _must_die(
+        check_capture_env_only,
+        'pub fn capture_pdu() {\n    let _ = std::env::var_os("KERBER_SCRATCH");\n}\n',
+        "refuse_golden_capture_dir() {\n    :\n}\n",
+        {},
+    )
+    check_capture_env_only(
+        'pub fn capture_pdu() {\n    let _ = std::env::var_os("KERBER_CAPTURE_DIR");\n}\n',
+        "refuse_golden_capture_dir() {\n    :\n}\n",
+        {"kdc-gate.sh": "KERBER_CAPTURE_DIR=/tmp/traces\n"},
+    )
+    check_doc_file_cites({"CHANGELOG.md": "see `crates/missing/nope.rs`\n"}, ROOT)
 
     def _princ_line(name: str, *keyhexes: str) -> str:
         namelen = str(len(name))
@@ -4794,6 +4850,7 @@ jobs:
     _must_die(check_log_arity, "log() {\n    printf '%s' \"$1\"\n}\n")
     check_hygiene_diff_self_test(
         "def load_duplicates_map():\n    return {'merged:'}\n"
+        "def load_renames_map():\n    return {}\n"
         "def _self_test_duplicates():\n    pass\n"
         "def _self_test():\n    pass\n"
         "def main() -> int:\n    if argv[1] == '--self-test':\n        _self_test()\n"
@@ -4811,11 +4868,17 @@ jobs:
         "        return 0\n    _self_test()\n    return _compare()\n",
     )
     check_hygiene_body_diff_self_test(
-        "def _self_test():\n    assert_eq! vs user_as helper\n"
+        "def _self_test():\n    assert_eq!(1, 2) vs user_as helper\n"
         "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
     )
     _must_die(check_hygiene_body_diff_self_test, "def main():\n    return 0\n")
+    _must_die(
+        check_hygiene_body_diff_self_test,
+        "def _self_test():\n    assert_eq! vs user_as helper\n"
+        "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
+        "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n",
+    )
     with tempfile.TemporaryDirectory() as tmp:
         demo = pathlib.Path(tmp) / "crates" / "demo"
         (demo / "tests" / "common").mkdir(parents=True)
@@ -5337,6 +5400,7 @@ def main() -> None:
     check_log_arity()
     check_hygiene_diff_self_test()
     check_hygiene_body_diff_self_test()
+    check_hygiene_inventory_cfg_test()
     check_autotests_registered()
     check_kcm_stop_before_run()
     check_prod_gate_tcpdump_cleanup()

@@ -6,6 +6,26 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S2-R2 compare tooling
+
+- **tool.** `hygiene-body-diff --accept` is keyed `binary<TAB>name` and
+  pins old→new assertion-blob hashes; an unused entry or a blob
+  mismatch is red. `--subst` rewrites only declared-helper call
+  positions. Callee names stay in the assertion blob;
+  `#[ignore]` / `#[should_panic]` are compared. The request-shape
+  column is dropped (no canonical built-request form).
+- **tool.** `hygiene-diff --renames` is keyed and collision-checked
+  (many-to-one needs `merged:`). Negative duplicates fixtures go
+  through `main_compare`; `--accept-rise` has mismatched-N and unused
+  reds.
+- **tool.** `ci-policy` executes both `--self-test`s (a gutted
+  `_self_test` that keeps tokens is red). `check_capture_env_only`
+  scans `harness/**/*.sh` and `.github/workflows/*.yml`, matches
+  `var_os` / `option_env!`, and requires `refuse_golden_capture_dir`
+  in `prod-realm-common.sh` and `harness/prod/env-up.sh`.
+- **tool.** Inventory `CFG_TEST_RE` accepts `#[cfg(test)] mod x;`.
+  `check_doc_file_cites` excludes `CHANGELOG.md` (history).
+
 ### W3-S2-R residues
 
 - **fix.** Restore `capture.rs` product semantics: unset or empty

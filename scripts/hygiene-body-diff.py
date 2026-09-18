@@ -6,10 +6,18 @@ Links old → new by `--renames` / `--duplicates` (the same maps
 prefixes, and a helper-substitution table, then reports:
 
   pairs, identical, helper-only, differing, assertion-line changes,
-  request-shape changes, dropped, added
+  dropped, added
 
-Fails when an assertion-line change is not in `--accept` (with a reason)
-or a dropped test is not covered by the duplicates map.
+`--subst` rewrites only call positions of names in the declared helper
+list (never constants, numerics, or string literals). `--accept` is keyed
+`binary<TAB>name` and pins the accepted old→new assertion-blob hashes;
+an unused entry or a blob mismatch fails. There is no request-shape
+column (no canonical built-request form).
+
+Fails when an assertion-line change is not in `--accept` (with a matching
+blob pin), a `#[ignore]` / `#[should_panic]` attribute is added or
+removed, or a dropped test is not covered by the duplicates map (keyed,
+target must exist).
 
 Usage:
   python3 scripts/hygiene-body-diff.py --old SHA --new SHA \\
@@ -20,6 +28,7 @@ from __future__ import annotations
 import argparse
 import collections
 import difflib
+import hashlib
 import io
 import os
 import pathlib
@@ -47,7 +56,9 @@ def _hygiene_diff():
 _HD = _hygiene_diff()
 apply_rename = _HD.apply_rename
 load_duplicates_map = _HD.load_duplicates_map
+load_renames_map = _HD.load_renames_map
 load_map = _HD.load_map
+strip_merged = _HD.strip_merged
 
 HELPERS = (
     "issue_tgt",
@@ -60,6 +71,7 @@ HELPERS = (
     "protocol_code",
     "proto_code",
     "proto",
+    "ret_code",
     "err_of",
     "err_of_cname",
     "password_key",
@@ -99,13 +111,14 @@ PATHPFX = re.compile(
     r"super|crate)::"
 )
 ASSERT_RE = re.compile(r"\bassert(?:_eq|_ne|_matches)?!")
-REQ_RE = re.compile(
-    r"\betypes?\b|\bnonce\b|\brealm\b|\bprincipal\b|kdc_options|KdcOptions|"
-    r"\bflags\b|till|rtime|from|starttime|endtime|addresses|caddr|padata|"
-    r"PaData|PA_|sname|cname|second_ticket|additional_tickets|lifetime|"
-    r"renew|forwardable|proxiable|postdated"
-)
 TEST_ATTR = re.compile(r"#\[\s*(?:tokio::test|test|test_case|rstest|proptest)")
+SPECIAL_ATTR_RE = re.compile(r"#\[\s*(?:ignore|should_panic)")
+ACCEPT_RHS_RE = re.compile(
+    r"^(?P<new>[^\s|]+(?:\t[^\s|]+))\s*\|\s*"
+    r"sha256:(?P<oldh>[0-9a-f]{64})\s*\|\s*"
+    r"sha256:(?P<newh>[0-9a-f]{64})\s*\|\s*"
+    r"(?P<reason>.+)$"
+)
 FN_RE = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 MOD_RE = re.compile(r"\bmod\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{")
 STAMP_RE = re.compile(r"^(?:====.*====|[a-z_][a-z0-9_]*=.*)$")
@@ -217,6 +230,8 @@ def extract(root: pathlib.Path) -> list[dict]:
             ev_idx = 0
             pending_attrs: list[tuple[str, int, int]] = []
             stack: list[tuple[int, str]] = []
+            file_results: list[dict] = []
+            file_fns: list[str] = []
             depth = 0
             n = len(scan)
             p = 0
@@ -237,6 +252,7 @@ def extract(root: pathlib.Path) -> list[dict]:
                             q += 1
                         pending_attrs.append((src[m.start() : q + 1], m.start(), q + 1))
                     elif typ == "fn":
+                        file_fns.append(m.group(1))
                         attrs: list[str] = []
                         if pending_attrs:
                             k = len(pending_attrs) - 1
@@ -280,13 +296,15 @@ def extract(root: pathlib.Path) -> list[dict]:
                                     if d3 == 0:
                                         break
                                 q += 1
-                            results.append(
+                            attr_block = "".join(a + "\n" for a in attrs)
+                            file_results.append(
                                 {
                                     "crate": crate,
                                     "file": rel,
                                     "name": m.group(1),
                                     "leaf": m.group(1),
-                                    "body": src[start_body : q + 1],
+                                    "body": attr_block + src[start_body : q + 1],
+                                    "attrs": attrs,
                                     "mods": [s[1] for s in stack],
                                 }
                             )
@@ -300,6 +318,11 @@ def extract(root: pathlib.Path) -> list[dict]:
                     while stack and stack[-1][0] >= depth:
                         stack.pop()
                 p += 1
+            tests = {t["leaf"] for t in file_results}
+            locals_ = [n for n in file_fns if n not in tests]
+            for t in file_results:
+                t["local_helpers"] = locals_
+            results.extend(file_results)
     return results
 
 
@@ -346,13 +369,19 @@ def load_subst(path: pathlib.Path | None, extra: list[str] | None) -> list[tuple
             raise SystemExit(f"bad --subst {raw!r} (want old=new)")
         a, b = raw.split("=", 1)
         pairs.append((a.strip(), b.strip()))
+    for old, new in pairs:
+        if old not in HELPERS:
+            raise SystemExit(f"--subst {old} is not a declared helper")
+        if not new:
+            raise SystemExit(f"--subst {old}= needs a replacement")
     return pairs
 
 
-def load_accept(path: pathlib.Path | None) -> dict[str, str]:
+def load_accept(path: pathlib.Path | None) -> dict[str, dict[str, str]]:
+    """Keyed `binary<TAB>name = binary<TAB>name | sha256:old | sha256:new | reason`."""
     if path is None or not path.is_file():
         return {}
-    out: dict[str, str] = {}
+    out: dict[str, dict[str, str]] = {}
     in_stamp = True
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
@@ -363,10 +392,23 @@ def load_accept(path: pathlib.Path | None) -> dict[str, str]:
         in_stamp = False
         if "=" not in line:
             raise SystemExit(f"bad --accept line {line!r}")
-        k, reason = line.split("=", 1)
-        if not reason.strip():
-            raise SystemExit(f"--accept {k!r} needs a reason")
-        out[k.strip()] = reason.strip()
+        k, rest = line.split("=", 1)
+        key = k.strip()
+        if "\t" not in key:
+            raise SystemExit(f"--accept LHS must be binary<TAB>name: {key!r}")
+        m = ACCEPT_RHS_RE.match(rest.strip())
+        if not m:
+            raise SystemExit(
+                f"--accept {key!r} needs `binary<TAB>name | sha256:<64> | sha256:<64> | reason`"
+            )
+        out[key] = {
+            "new": m.group("new"),
+            "old_hash": m.group("oldh"),
+            "new_hash": m.group("newh"),
+            "reason": m.group("reason").strip(),
+        }
+        if not out[key]["reason"]:
+            raise SystemExit(f"--accept {key!r} needs a reason")
     return out
 
 
@@ -379,20 +421,61 @@ def norm_body(body: str) -> list[str]:
     return [x for x in lines if x]
 
 
+def _rewrite_helper_calls(line: str, old: str, new: str) -> str:
+    """Replace `old(` / `old!(` outside string literals. Never rewrite constants."""
+    pat = re.compile(rf"\b{re.escape(old)}\s*(?=[(!])")
+    out: list[str] = []
+    i, n = 0, len(line)
+    in_str = False
+    while i < n:
+        c = line[i]
+        if in_str:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(line[i + 1])
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            out.append(c)
+            i += 1
+            continue
+        m = pat.match(line, i)
+        if m and not (i > 0 and line[i - 1] == "."):
+            out.append(new)
+            i = m.end()
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def apply_subst(lines: list[str], subst: list[tuple[str, str]]) -> list[str]:
     out = []
     for line in lines:
         for old, new in subst:
-            line = re.sub(rf"\b{re.escape(old)}\b", new, line)
+            if old not in HELPERS:
+                continue
+            line = _rewrite_helper_calls(line, old, new)
         out.append(line)
     return out
 
 
-def smash_helpers(lines: list[str]) -> list[str]:
+def smash_helpers(lines: list[str], extra: list[str] | tuple[str, ...] = ()) -> list[str]:
+    """Smash declared and same-file helpers at bare call positions only.
+
+    `user_as()` / `host_part(` become HELPER; `store.policy()` and the word
+    `realm` inside a string stay. Never rewrite constants or field names.
+    """
+    names = list(dict.fromkeys([*HELPERS, *extra]))
     out = []
     for line in lines:
-        for h in HELPERS:
-            line = re.sub(rf"\b{h}\b", "HELPER", line)
+        for h in names:
+            line = _rewrite_helper_calls(line, h, "HELPER")
         line = re.sub(r"HELPER\s*\(\s*&?[^)]*\)(?:\.\d+)?", "HELPER", line)
         out.append(line)
     return out
@@ -477,16 +560,50 @@ def link(
     return pairs, unmatched_old, unmatched_new
 
 
-def dup_covers(t: dict, dups: dict[str, str]) -> bool:
-    leaf = t["leaf"]
-    for lhs in dups:
-        if lhs.split("\t")[-1].split("::")[-1] == leaf or lhs.endswith(f"\t{leaf}"):
-            return True
+def test_id(t: dict) -> str:
+    return f"{t['crate']}\t{t['leaf']}"
+
+
+def _lhs_matches(lhs: str, t: dict) -> bool:
+    if "\t" not in lhs:
+        return False
+    name = lhs.split("\t", 1)[1]
+    leaf = name.split("::")[-1]
+    return leaf == t["leaf"] or name == t["leaf"] or lhs.endswith(f"\t{t['leaf']}")
+
+
+def _rhs_exists(rhs: str, new_tests: list[dict]) -> bool:
+    key = strip_merged(rhs)
+    if "\t" not in key:
+        return False
+    name = key.split("\t", 1)[1]
+    leaf = name.split("::")[-1]
+    return any(n["leaf"] == leaf or n["leaf"] == name for n in new_tests)
+
+
+def dup_covers(t: dict, dups: dict[str, str], new_tests: list[dict]) -> bool:
+    """True only when a keyed LHS matches and the RHS target exists in new."""
+    for lhs, rhs in dups.items():
+        if _lhs_matches(lhs, t):
+            return _rhs_exists(rhs, new_tests)
     return False
 
 
 def accept_key(t: dict) -> str:
-    return t["leaf"]
+    return test_id(t)
+
+
+def special_attrs(t: dict) -> list[str]:
+    out: list[str] = []
+    for a in t.get("attrs") or []:
+        compact = re.sub(r"\s+", "", a)
+        if SPECIAL_ATTR_RE.search(compact):
+            out.append(compact)
+    return out
+
+
+def blob_hash(blob: str) -> str:
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 def compare_trees(
@@ -495,20 +612,20 @@ def compare_trees(
     renames: dict[str, str],
     dups: dict[str, str],
     subst: list[tuple[str, str]],
-    accept: dict[str, str],
+    accept: dict[str, dict[str, str]],
 ) -> dict[str, object]:
     old, new = extract(old_root), extract(new_root)
     pairs, unmatched_old, unmatched_new = link(old, new, renames, dups)
     identical = helper_only = 0
     differ: list[tuple[dict, dict, list[str], list[str]]] = []
-    assert_changes: list[tuple[dict, dict]] = []
-    req_changes: list[tuple[dict, dict]] = []
+    assert_changes: list[tuple[dict, dict, str, str]] = []
+    attr_changes: list[tuple[dict, dict]] = []
     for o, n in pairs:
         ol, nl = apply_subst(norm_body(o["body"]), subst), apply_subst(norm_body(n["body"]), subst)
         if ol == nl:
             identical += 1
             continue
-        so, sn = smash_helpers(ol), smash_helpers(nl)
+        so, sn = smash_helpers(ol, o.get("local_helpers") or ()), smash_helpers(nl, n.get("local_helpers") or ())
         if so == sn:
             helper_only += 1
             continue
@@ -545,8 +662,7 @@ def compare_trees(
                             k += 1
                             break
                     k += 1
-                blob = re.sub(r"\b[A-Za-z_][A-Za-z0-9_]*\s*\(", "CALL(", text[i:k])
-                blob = re.sub(r"\s+", " ", blob)
+                blob = re.sub(r"\s+", " ", text[i:k])
                 blob = re.sub(r"\(\s+", "(", blob)
                 blob = re.sub(r"\s+\)", ")", blob)
                 blob = re.sub(r",\s*\)", ")", blob)
@@ -555,21 +671,28 @@ def compare_trees(
                 blobs.append(blob.strip())
             return " | ".join(blobs)
 
-        if assert_blob(so) != assert_blob(sn):
-            assert_changes.append((o, n))
-        orq = [l for l in so if REQ_RE.search(l)]
-        nrq = [l for l in sn if REQ_RE.search(l)]
-        if orq != nrq and re.sub(r"\s+", " ", " ".join(orq)) != re.sub(r"\s+", " ", " ".join(nrq)):
-            req_changes.append((o, n))
-    dropped_unmapped = [t for t in unmatched_old if not dup_covers(t, dups)]
+        if special_attrs(o) != special_attrs(n):
+            attr_changes.append((o, n))
+        ob, nb = assert_blob(so), assert_blob(sn)
+        if ob != nb:
+            assert_changes.append((o, n, blob_hash(ob), blob_hash(nb)))
+    dropped_unmapped = [t for t in unmatched_old if not dup_covers(t, dups, new)]
     unaccepted = []
     accepted = []
-    for o, n in assert_changes:
-        reason = accept.get(accept_key(o)) or accept.get(accept_key(n))
-        if reason:
-            accepted.append((o, n, reason))
+    used_accept: set[str] = set()
+    for o, n, oh, nh in assert_changes:
+        entry = accept.get(accept_key(o)) or accept.get(accept_key(n))
+        key = accept_key(o) if accept_key(o) in accept else accept_key(n)
+        if (
+            entry
+            and entry["old_hash"] == oh
+            and entry["new_hash"] == nh
+        ):
+            used_accept.add(key)
+            accepted.append((o, n, entry["reason"]))
         else:
-            unaccepted.append((o, n))
+            unaccepted.append((o, n, oh, nh, entry))
+    unused_accept = [k for k in accept if k not in used_accept]
     report = {
         "old": len(old),
         "new": len(new),
@@ -579,13 +702,14 @@ def compare_trees(
         "differ": len(differ),
         "assertion_changes": len(assert_changes),
         "assertion_accepted": len(accepted),
-        "request_shape_changes": len(req_changes),
         "dropped": len(unmatched_old),
         "dropped_unmapped": len(dropped_unmapped),
         "added": len(unmatched_new),
         "unaccepted": unaccepted,
         "dropped_unmapped_tests": dropped_unmapped,
         "accepted": accepted,
+        "attr_changes": attr_changes,
+        "unused_accept": unused_accept,
     }
     return report
 
@@ -598,7 +722,6 @@ def render(report: dict[str, object]) -> str:
         f"differ {report['differ']}",
         f"assertion-line changes {report['assertion_changes']}",
         f"assertion accepted {report['assertion_accepted']}",
-        f"request-shape changes {report['request_shape_changes']}",
         f"dropped {report['dropped']}",
         f"dropped unmapped {report['dropped_unmapped']}",
         f"added {report['added']}",
@@ -612,10 +735,21 @@ def render(report: dict[str, object]) -> str:
 
 def evaluate(report: dict[str, object]) -> None:
     errs: list[str] = []
-    for o, n in report["unaccepted"]:  # type: ignore[misc]
-        errs.append(f"assertion-line change not in --accept: {o['file']} {o['leaf']} -> {n['leaf']}")
+    for row in report["unaccepted"]:  # type: ignore[misc]
+        o, n = row[0], row[1]
+        entry = row[4] if len(row) > 4 else None
+        if entry:
+            errs.append(
+                f"assertion-line change blob mismatch: {o['file']} {o['leaf']} -> {n['leaf']}"
+            )
+        else:
+            errs.append(f"assertion-line change not in --accept: {o['file']} {o['leaf']} -> {n['leaf']}")
+    for o, n in report["attr_changes"]:  # type: ignore[misc]
+        errs.append(f"#[ignore]/#[should_panic] change: {o['file']} {o['leaf']} -> {n['leaf']}")
     for t in report["dropped_unmapped_tests"]:  # type: ignore[misc]
         errs.append(f"dropped test not in --duplicates: {t['file']} {t['leaf']}")
+    for key in report["unused_accept"]:  # type: ignore[misc]
+        errs.append(f"--accept entry unused: {key}")
     if errs:
         raise BodyDiffError("; ".join(errs[:8]))
 
@@ -637,6 +771,7 @@ def _self_test() -> None:
             encoding="utf-8",
         )
         red = compare_trees(old, new, {}, {}, [], {})
+        assert red["assertion_changes"] == 1
         try:
             evaluate(red)
         except BodyDiffError:
@@ -657,6 +792,146 @@ def _self_test() -> None:
             evaluate(smashed)
             if smashed["helper_only"] != 1:
                 raise SystemExit("hygiene-body-diff --self-test: helper rename must pass")
+        src_o.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert_eq!(26, BADOPTION);\n}\n",
+            encoding="utf-8",
+        )
+        src_n.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert_eq!(26, SERVER_NOMATCH);\n}\n",
+            encoding="utf-8",
+        )
+        const_red = compare_trees(old, new, {}, {}, [], {})
+        try:
+            evaluate(const_red)
+        except BodyDiffError:
+            pass
+        else:
+            raise SystemExit("hygiene-body-diff --self-test: constant assertion change must fail")
+        # --subst must not rewrite a constant, even if asked
+        try:
+            load_subst(None, ["BADOPTION=SERVER_NOMATCH"])
+        except SystemExit:
+            pass
+        else:
+            raise SystemExit("hygiene-body-diff --self-test: --subst of a non-helper must fail")
+        sneak = compare_trees(old, new, {}, {}, [("BADOPTION", "SERVER_NOMATCH")], {})
+        try:
+            evaluate(sneak)
+        except BodyDiffError:
+            pass
+        else:
+            raise SystemExit("hygiene-body-diff --self-test: subst must not hide BADOPTION")
+        src_o.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert_eq!(foo(), 1);\n}\n",
+            encoding="utf-8",
+        )
+        src_n.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert_eq!(bar(), 1);\n}\n",
+            encoding="utf-8",
+        )
+        callee = compare_trees(old, new, {}, {}, [], {})
+        try:
+            evaluate(callee)
+        except BodyDiffError:
+            pass
+        else:
+            raise SystemExit("hygiene-body-diff --self-test: callee name change must fail")
+        src_o.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert_eq!(1, 1);\n}\n",
+            encoding="utf-8",
+        )
+        src_n.joinpath("t.rs").write_text(
+            "#[test]\n#[ignore]\nfn sample() {\n    assert_eq!(1, 1);\n}\n",
+            encoding="utf-8",
+        )
+        ignored = compare_trees(old, new, {}, {}, [], {})
+        try:
+            evaluate(ignored)
+        except BodyDiffError:
+            pass
+        else:
+            raise SystemExit("hygiene-body-diff --self-test: #[ignore] added must fail")
+        src_o.joinpath("t.rs").write_text(
+            "#[test]\nfn gone() {\n    assert_eq!(1, 1);\n}\n",
+            encoding="utf-8",
+        )
+        src_n.joinpath("t.rs").write_text(
+            "#[test]\nfn kept() {\n    assert_eq!(1, 1);\n}\n",
+            encoding="utf-8",
+        )
+        missing_tgt = compare_trees(
+            old, new, {}, {"demo\tgone": "demo\tno_such"}, [], {}
+        )
+        try:
+            evaluate(missing_tgt)
+        except BodyDiffError:
+            pass
+        else:
+            raise SystemExit("hygiene-body-diff --self-test: missing dup target must fail")
+        unkeyed = pathlib.Path(tmp) / "unkeyed.txt"
+        unkeyed.write_text("gone = kept\n", encoding="utf-8")
+        try:
+            load_duplicates_map(unkeyed)
+        except SystemExit:
+            pass
+        else:
+            raise SystemExit("hygiene-body-diff --self-test: unkeyed map must fail")
+        src_o.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert_eq!(1, 1);\n}\n",
+            encoding="utf-8",
+        )
+        src_n.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert_eq!(1, 2);\n}\n",
+            encoding="utf-8",
+        )
+        pin = compare_trees(old, new, {}, {}, [], {})
+        o, n, oh, nh, _ent = pin["unaccepted"][0]  # type: ignore[misc]
+        good_accept = {
+            "demo\tsample": {
+                "new": "demo\tsample",
+                "old_hash": oh,
+                "new_hash": nh,
+                "reason": "fixture",
+            }
+        }
+        ok = compare_trees(old, new, {}, {}, [], good_accept)
+        evaluate(ok)
+        if ok["assertion_accepted"] != 1:
+            raise SystemExit("hygiene-body-diff --self-test: matching accept blob must pass")
+        bad_blob = {
+            "demo\tsample": {
+                "new": "demo\tsample",
+                "old_hash": "0" * 64,
+                "new_hash": "1" * 64,
+                "reason": "wrong pin",
+            }
+        }
+        try:
+            evaluate(compare_trees(old, new, {}, {}, [], bad_blob))
+        except BodyDiffError:
+            pass
+        else:
+            raise SystemExit("hygiene-body-diff --self-test: blob mismatch must fail")
+        unused = {
+            "demo\tsample": {
+                "new": "demo\tsample",
+                "old_hash": oh,
+                "new_hash": nh,
+                "reason": "fixture",
+            },
+            "demo\tother": {
+                "new": "demo\tother",
+                "old_hash": "a" * 64,
+                "new_hash": "b" * 64,
+                "reason": "unused",
+            },
+        }
+        try:
+            evaluate(compare_trees(old, new, {}, {}, [], unused))
+        except BodyDiffError:
+            pass
+        else:
+            raise SystemExit("hygiene-body-diff --self-test: unused accept must fail")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -680,13 +955,8 @@ def main(argv: list[str] | None = None) -> int:
 
     with redirect_stdout(sys.stderr):
         _self_test()
-    renames = load_map(ns.renames, "->")
-    try:
-        dups = load_duplicates_map(ns.duplicates)
-    except SystemExit:
-        # Body-diff may run with a name-only historical map; treat as leaf=leaf.
-        raw = load_map(ns.duplicates, "=")
-        dups = raw
+    renames = load_renames_map(ns.renames)
+    dups = load_duplicates_map(ns.duplicates)
     subst = load_subst(ns.subst_file, ns.subst)
     accept = load_accept(ns.accept)
     with tempfile.TemporaryDirectory() as tmp:

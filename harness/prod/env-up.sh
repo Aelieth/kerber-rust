@@ -31,6 +31,16 @@ say()  { printf '\033[1;36m[env-up]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[env-up] WARN:\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[env-up] FATAL:\033[0m %s\n' "$*" >&2; exit 1; }
 
+# Same golden-home rule as scripts/lib/gate-common.sh (env-up is not a gate).
+refuse_golden_capture_dir() {
+    local d="${1:-}"
+    [ -z "$d" ] && return 0
+    local norm="${d//\\//}"
+    case "/$norm/" in
+        */tests/traces/*) die "KERBER_CAPTURE_DIR refuses tests/traces: $d" ;;
+    esac
+}
+
 command -v docker >/dev/null 2>&1 || die "docker not found"
 
 # Pick the capture-tooling image; fall back to the lean base if it is not built.
@@ -117,6 +127,7 @@ say "created dump-v7 realm $REALM"
 docker exec "$PRIMARY" mkdir -p /tmp/pdus
 CAPTURE_ENV=()
 if [ "${KERBER_CAPTURE:-1}" != "0" ]; then
+    refuse_golden_capture_dir /tmp/pdus
     CAPTURE_ENV=(-e KERBER_CAPTURE_DIR=/tmp/pdus)
 fi
 docker exec -d \

@@ -24,6 +24,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 
 SECTION_RE = re.compile(r"""echo\s+["']====\s*(.+?)\s*====""")
 IDENT_RE = re.compile(r"\b((?:MIT|RUST)_[A-Z0-9_]+)\b")
@@ -279,6 +280,9 @@ FN_RE = re.compile(
     r"(?:(?:const|async|unsafe|extern\s+\"[^\"]*\")\s+)*fn\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
 )
 CFG_TEST_RE = re.compile(r"^\s*#\[cfg\(test\)\]\s*$")
+CFG_TEST_MOD_SEMI_RE = re.compile(
+    r"^\s*#\[cfg\(test\)\]\s+(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$"
+)
 MOD_OPEN_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+[A-Za-z_][A-Za-z0-9_]*\s*\{")
 MOD_SEMI_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;")
 PATH_ATTR_RE = re.compile(r'^#\[path\s*=\s*"([^"]+)"\]')
@@ -519,6 +523,41 @@ def workspace_members(root: pathlib.Path) -> list[dict]:
     return members
 
 
+def _add_cfg_test_child(
+    rels: set[str],
+    pdir: pathlib.Path,
+    path: pathlib.Path,
+    name: str,
+    path_attr: str | None,
+) -> None:
+    if path.stem in ("mod", "lib", "main"):
+        parent = path.parent
+    else:
+        parent = path.parent / path.stem
+    if path_attr:
+        child = path.parent / path_attr
+    else:
+        as_file = parent / f"{name}.rs"
+        as_dir = parent / name
+        if as_file.is_file():
+            child = as_file
+        elif (as_dir / "mod.rs").is_file():
+            child = as_dir
+        else:
+            return
+    if child.is_dir():
+        for nested in child.rglob("*.rs"):
+            try:
+                rels.add(nested.relative_to(pdir).as_posix())
+            except ValueError:
+                pass
+    elif child.is_file():
+        try:
+            rels.add(child.relative_to(pdir).as_posix())
+        except ValueError:
+            pass
+
+
 def cfg_test_files_in_pkg(pdir: pathlib.Path) -> set[str]:
     """Package-relative paths of `src/**` files whose parent is `#[cfg(test)] mod`."""
     rels: set[str] = set()
@@ -530,6 +569,12 @@ def cfg_test_files_in_pkg(pdir: pathlib.Path) -> set[str]:
         path_attr: str | None = None
         for line in text.splitlines():
             s = line.strip()
+            oneline = CFG_TEST_MOD_SEMI_RE.match(line)
+            if oneline:
+                _add_cfg_test_child(rels, pdir, path, oneline.group(1), None)
+                pending = False
+                path_attr = None
+                continue
             if CFG_TEST_RE.match(line):
                 pending = True
                 path_attr = None
@@ -547,36 +592,24 @@ def cfg_test_files_in_pkg(pdir: pathlib.Path) -> set[str]:
             if not mm:
                 path_attr = None
                 continue
-            name = mm.group(1)
-            if path.stem in ("mod", "lib", "main"):
-                parent = path.parent
-            else:
-                parent = path.parent / path.stem
-            if path_attr:
-                child = (path.parent / path_attr)
-            else:
-                as_file = parent / f"{name}.rs"
-                as_dir = parent / name
-                if as_file.is_file():
-                    child = as_file
-                elif (as_dir / "mod.rs").is_file():
-                    child = as_dir
-                else:
-                    path_attr = None
-                    continue
-            if child.is_dir():
-                for nested in child.rglob("*.rs"):
-                    try:
-                        rels.add(nested.relative_to(pdir).as_posix())
-                    except ValueError:
-                        pass
-            elif child.is_file():
-                try:
-                    rels.add(child.relative_to(pdir).as_posix())
-                except ValueError:
-                    pass
+            _add_cfg_test_child(rels, pdir, path, mm.group(1), path_attr)
             path_attr = None
     return rels
+
+
+def self_test_cfg_test() -> None:
+    """Single-line `#[cfg(test)] mod x;` is src-test."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        src = root / "src"
+        src.mkdir()
+        (src / "lib.rs").write_text("#[cfg(test)] mod oneline;\n", encoding="utf-8")
+        (src / "oneline.rs").write_text("fn helper() {}\n", encoding="utf-8")
+        rels = cfg_test_files_in_pkg(root)
+        if "src/oneline.rs" not in rels:
+            raise SystemExit("one-line #[cfg(test)] mod x; must classify as src-test")
+        if _scope("src/oneline.rs", 1, [], rels) != "src-test":
+            raise SystemExit("one-line #[cfg(test)] mod x; scope must be src-test")
 
 
 def _scope(
@@ -1125,6 +1158,10 @@ def snapshot(root: pathlib.Path, out: pathlib.Path, skip_nextest: bool, quality:
 
 
 def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
+        self_test_cfg_test()
+        print("hygiene_inventory: self-test ok")
+        return 0
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--root", type=pathlib.Path)
     ap.add_argument("--out", type=pathlib.Path)

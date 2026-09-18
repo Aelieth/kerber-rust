@@ -99,6 +99,7 @@ prod_kprop_replica() {
         "$PRIMARY" /usr/local/bin/krb5-kprop -P 754 -s /tmp/kdc2.keytab -n "$REPLICA_FQDN" "$REPLICA_FQDN" \
         | tee "$OUT/kprop.log" | grep -q 'kprop ok' || return 1
 
+    refuse_golden_capture_dir /tmp/pdus
     docker exec -d \
         -e KRB5_KDC_DB=/tmp/replica.db \
         -e KRB5_KDC_STASH=/tmp/replica.stash \

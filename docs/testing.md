@@ -33,14 +33,20 @@ scripts/hygiene-diff.py <old> <new>` prints a provenance header, then
 fails if a test, cell tag, diffsend case, flow or ledger row
 disappeared, a gate went red, or a quality count rose; shape deltas are
 informational. A swath that renames or de-duplicates tests passes its
-map (`--renames`, `--duplicates`). `--duplicates` is keyed
-`old_binary<TAB>old_name = new_binary<TAB>new_name`; a RHS that is also
-a LHS is rejected, and many-to-one needs `merged:` on the RHS.
+map (`--renames`, `--duplicates`). `--duplicates` and `--renames` are
+keyed `old_binary<TAB>old_name` to `new_binary<TAB>new_name`; a RHS
+that is also a LHS is rejected, and many-to-one needs `merged:` on the
+RHS.
 `python3 scripts/hygiene-body-diff.py --old SHA --new SHA --renames
 --duplicates [--accept map]` links test fns through those maps,
 normalises whitespace/comments/helper names, and fails an assertion-line
 change that is not in `--accept` or a dropped test that is not in
-`--duplicates`. One that deletes a `MIT_*`/`RUST_*`
+`--duplicates`. `--accept` is keyed `binary<TAB>name` and pins the
+old and new assertion-blob `sha256:` hashes; an unused entry or a blob
+mismatch is red. `--subst` / `--subst-file` rewrite only call positions
+of names in the declared helper list (`user_as()`, `temp_dir()`, …),
+never constants, numerics, or string literals. There is no request-shape
+column (no canonical built-request form). One that deletes a `MIT_*`/`RUST_*`
 variable that was never a cell lists it in `--dead` with the reason
 (`section` and `flow` tags cannot be waived). Job walls live in
 `ci-budget.toml` (see Tier contract below). `python3 scripts/ci-status.py --check-budget` compares a
@@ -77,6 +83,11 @@ exits 1 when a file is unnamed (backticked names and table first cells count, `{
 directory covers its files; any directory component starting `scratch` — `scratch/`, `scratch-pre/`,
 `scratch-diffsend2/` — is gate `KERBER_SCRATCH` output and never evidence). Run it before a summary cites
 the directory; `--all working/logs/w1-sweep` unnamed = 0 is a close-out condition.
+
+`check_doc_file_cites` fails a backticked
+`crates`/`scripts`/`docs`/`tests`/`harness`/`.github`/`examples` file
+path that does not exist. `CHANGELOG.md` is excluded (history: a
+retired path in an old entry is not a live cite).
 
 `scripts/ci-policy.py` enforces workflow YAML (fail-red jobs, nextest
 `--profile ci` on every invocation, no per-push `cargo test
