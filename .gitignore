@@ -11,8 +11,22 @@ __pycache__/
 *.pcap
 *.pcapng
 core
-# Socket-boundary captures (golden MIT PDUs are tests/traces/mit-*.der)
-/tests/traces/kdc-*.der
-/tests/traces/client-*.der
-# Captured AD oracle fixtures — svc.keytab is a REAL service key; keep local, never commit
-/tests/traces/ad/
+# tests/traces is the golden home. Ignore everything except the 13 tracked
+# files (README + 12 goldens). Captures go under $KERBER_SCRATCH/traces;
+# promote one file with scripts/promote-trace.sh. AD keytabs stay in ~/adlab.
+/tests/traces/*
+!/tests/traces/README.md
+!/tests/traces/mit-as-req.der
+!/tests/traces/mit-as-req-preauth.der
+!/tests/traces/mit-krb-error-preauth.der
+!/tests/traces/mit-as-rep.der
+!/tests/traces/mit-tgs-req.der
+!/tests/traces/mit-tgs-rep.der
+!/tests/traces/pac-kbruser.ndr
+!/tests/traces/ccache-mit-addr-u2u.bin
+!/tests/traces/kdb/
+/tests/traces/kdb/*
+!/tests/traces/kdb/mit-dump-v7.txt
+!/tests/traces/kdb/mit-dump-v6.txt
+!/tests/traces/kdb/getprinc-pauser.txt
+!/tests/traces/kdb/mit-dump-v7-history.txt

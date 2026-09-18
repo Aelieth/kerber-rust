@@ -1,7 +1,8 @@
 //! Gated AD PAC tests: captured Windows Server 2022 `host/svc` ticket.
 //!
 //! The NDR golden `tests/traces/pac-kbruser.ndr` is committed (no keys).
-//! `svc.keytab` / ccache stay gitignored; those paths skip cleanly.
+//! `svc.keytab` / ccache stay in operator-held `~/adlab/`; those paths
+//! skip cleanly.
 
 use krb5_asn1::decode;
 use krb5_kdc::{
@@ -18,15 +19,7 @@ use krb5_types::pac::{
 use krb5_types::{PrincipalName, Ticket, err};
 use std::path::{Path, PathBuf};
 
-fn traces_ad() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/traces/ad")
-}
-
 fn fixture_dir() -> Option<PathBuf> {
-    let traces = traces_ad();
-    if traces.join("svc.keytab").is_file() {
-        return Some(traces);
-    }
     if let Ok(home) = std::env::var("HOME") {
         let adlab = PathBuf::from(home).join("adlab");
         if adlab.join("svc.keytab").is_file() {
@@ -43,26 +36,16 @@ fn load_service_key(dir: &Path) -> Option<krb5_crypto::ProtocolKey> {
 }
 
 fn load_service_ticket(dir: &Path) -> Option<Ticket> {
-    let mut candidates = vec![dir.join("ad.ccache")];
-    if let Ok(home) = std::env::var("HOME") {
-        candidates.push(PathBuf::from(home).join("adlab/ad.ccache"));
-    }
-    for path in candidates {
-        let Ok(bytes) = std::fs::read(&path) else {
+    let bytes = std::fs::read(dir.join("ad.ccache")).ok()?;
+    let cc = FileCcache::parse(&bytes).ok()?;
+    for cred in &cc.creds {
+        if cred.is_config() {
             continue;
-        };
-        let Ok(cc) = FileCcache::parse(&bytes) else {
-            continue;
-        };
-        for cred in &cc.creds {
-            if cred.is_config() {
-                continue;
-            }
-            if cred.server.1.components_joined().starts_with("host/")
-                && let Ok(t) = decode::<Ticket>(&cred.ticket)
-            {
-                return Some(t);
-            }
+        }
+        if cred.server.1.components_joined().starts_with("host/")
+            && let Ok(t) = decode::<Ticket>(&cred.ticket)
+        {
+            return Some(t);
         }
     }
     None

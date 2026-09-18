@@ -6,11 +6,19 @@ to equal the captured bytes (plus named fields). A divergence fails the
 unit `test` CI job. `mit-krb-error-preauth.der` is the KRB-ERROR we emit
 (PREAUTH_REQUIRED), not a MIT-KDC reply.
 
-Set `KERBER_CAPTURE_DIR` to a temp dir when running the KDC or client: each
-raw PDU is written as `{kdc,client}-{req,rep}-<nonce>.der` at the Rust
-socket boundary (no packet sniffer required). Gate scripts default
-`KERBER_TRACE_DST` under `$KERBER_SCRATCH` so this directory keeps only the
-tracked goldens. Hash-named files that land here are gitignored.
+Set `KERBER_CAPTURE_DIR` when running the KDC or client: each raw PDU is
+written as `{kdc,client}-{req,rep}-<nonce>.der` at the Rust socket
+boundary (no packet sniffer required). Unset, capture defaults to
+`${KERBER_SCRATCH}/traces` or `${CARGO_TARGET_DIR}/traces`. Empty
+`KERBER_CAPTURE_DIR` disables. Gate scripts default `KERBER_TRACE_DST`
+the same way (`${KERBER_SCRATCH:-target}/traces`). This directory keeps
+only the 13 tracked files (README + 12 goldens); `.gitignore` allow-lists
+them. Promote one capture with `scripts/promote-trace.sh <src> <dest>
+<tag> <origin>`.
+
+AD keytabs, FILE ccaches, and pcaps live in operator-held `~/adlab/`
+(0600). They are never stored under `tests/traces/ad/`. The committed
+`pac-kbruser.ndr` is identity bytes only.
 
 ## Provenance
 

@@ -240,9 +240,14 @@ DER-strictness negatives live in `crates/krb5-asn1/tests/der_strict.rs`.
 `fuzz/` has 9 cargo-fuzz targets (DER, AS/TGS/AP, keytab/ccache,
 PKINIT CMS, PAC NDR, SPAKE points, Oakley DH, GSS tokens, transited)
 seeded from `tests/traces/` (transited also has `fuzz/corpus/transited/`).
-CI smokes each target ~60s (`.github/workflows/fuzz.yml`; schedule,
-dispatch, and PR on `fuzz/**` — no `push:` trigger). Transited seeds
-are `crealm\\0srealm\\0contents` so `process_intermediates` is reached.
+The four thin corpora (`pkinit_cms`, `spake_point`, `oakley_dh`,
+`gss_token`) keep extra `seed-*` fixtures (CMS SEQUENCE, IANA M/N,
+Oakley 2048 prime, SPNEGO wrapper). After a campaign, minimize with
+`cargo +nightly fuzz cmin <target>` and keep only `seed-*` names
+(`fuzz/.gitignore` drops hash-named files). CI smokes each target ~60s
+(`.github/workflows/fuzz.yml`; schedule, dispatch, and PR on `fuzz/**`
+— no `push:` trigger). Transited seeds are
+`crealm\\0srealm\\0contents` so `process_intermediates` is reached.
 
 ## Interop
 
@@ -340,9 +345,10 @@ rejected on both acceptors.
 PKINIT: `scripts/pkinit-gate.sh` **fails** unless MIT `pkinit.so` is
 present and MIT `kinit -X X509_user_identity=FILE:` succeeds against
 the Rust KDC. The KDC log must contain `rfc8636 sha256 kdf` (MIT TRACE
-`PKINIT used KDF 2B06010502030602`). Set `KERBER_CAPTURE_DIR` to write
-raw PDUs under `$KERBER_SCRATCH` (not `tests/traces/`, which keeps
-only the tracked goldens).
+`PKINIT used KDF 2B06010502030602`). Unset `KERBER_CAPTURE_DIR` writes
+raw PDUs under `${KERBER_SCRATCH}/traces` (not `tests/traces/`, which
+keeps only the tracked goldens). Promote one file with
+`scripts/promote-trace.sh`.
 
 SPAKE: `scripts/spake-gate.sh` runs MIT `kinit` against the Rust KDC
 with `preferred_preauth_types = 151` and `spake_preauth_groups = P-256`.

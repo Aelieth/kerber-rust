@@ -3,7 +3,7 @@
 Coordinates for the Windows Server 2022 Evaluation DC used as the
 Active Directory oracle. **This file contains no secrets.** Service
 keys, pcaps, FILE ccaches, and passwords stay in operator-held
-`~/adlab/` and the gitignored `tests/traces/ad/` tree.
+`~/adlab/` only (never `tests/traces/ad/`).
 
 > **Live successor:** this Windows DC was the *capture* source and has been
 > torn down. The **live** AD oracle going forward is a containerized Samba 4 AD
@@ -46,8 +46,10 @@ Passwords and `svc.keytab` are operator-held. Never commit them.
 | `~/adlab/ad.ccache` | FILE cache for `kbruser` |
 | `~/adlab/svc.keytab` | Service key (secret) |
 | `~/adlab/ad-krb.pcap` | Wire capture of AS+TGS including the PAC-bearing service ticket |
-| `tests/traces/ad/` | Gitignored copies for local tests. Refresh **from** `~/adlab`. |
 | `tests/traces/pac-kbruser.ndr` | Committed non-secret `PAC_LOGON_INFO` NDR of `kbruser` (no keys). |
+
+Local tests (`crates/krb5-kdc/tests/pac_ad_capture.rs`) read `~/adlab`.
+Do not copy the keytab or pcap into the worktree.
 
 ## Safe re-test (never touch host krb5/sssd)
 
