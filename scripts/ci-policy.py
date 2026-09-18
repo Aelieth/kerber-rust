@@ -1444,6 +1444,41 @@ def check_gate_unit_index(
         _die(str(e))
 
 
+_DOC_FILE_CITE_RE = re.compile(
+    r"`((?:crates|scripts|docs|tests|harness|\.github|examples)/"
+    r"[A-Za-z0-9_./+-]+\.[A-Za-z0-9]+)"
+    r"(?::\d+(?:-\d+)?)?`"
+)
+
+
+def check_doc_file_cites(
+    texts: dict[str, str] | None = None,
+    root: pathlib.Path | None = None,
+) -> None:
+    """Every backticked crates/scripts/docs/tests/harness/.github/examples file path exists."""
+    root = pathlib.Path(root) if root is not None else ROOT
+    if texts is None:
+        texts = {}
+        docs = root / "docs"
+        if docs.is_dir():
+            for path in sorted(docs.glob("*.md")):
+                texts[str(path.relative_to(root))] = path.read_text(encoding="utf-8")
+        for rel in ("README.md", "tests/traces/README.md"):
+            path = root / rel
+            if path.is_file():
+                texts[rel] = path.read_text(encoding="utf-8")
+    missing: list[str] = []
+    for doc, text in texts.items():
+        for m in _DOC_FILE_CITE_RE.finditer(text):
+            rel = m.group(1)
+            if any(ch in rel for ch in "*?{}<>"):
+                continue
+            if not (root / rel).exists():
+                missing.append(f"{doc}: `{rel}`")
+    if missing:
+        _die("doc file cite(s) do not exist: " + "; ".join(missing[:8]))
+
+
 def _dump_key_hexes(line: str) -> tuple[str, tuple[str, ...]] | None:
     """Name and every key_data slot-0 hex from a princ dump line, or None."""
     if not line.startswith("princ\t"):
@@ -3907,6 +3942,18 @@ jobs:
             encoding="utf-8",
         )
         _must_die(check_gate_unit_index, troot, cell_gate, good_doc)
+        (testdir / "twin.rs").write_text(
+            "#[test]\nfn as_unknown_sname_is_server_not_found() {}\n",
+            encoding="utf-8",
+        )
+        _must_die(check_gate_unit_index, troot, cell_gate, good_doc)
+
+    check_doc_file_cites({"docs/testing.md": "see `crates/krb5-kdc/src/lib.rs`\n"}, ROOT)
+    _must_die(
+        check_doc_file_cites,
+        {"docs/testing.md": "see `crates/krb5-kdc/tests/ad_pac.rs`\n"},
+        ROOT,
+    )
 
     check_capture_env_only(
         'pub fn capture_pdu() {\n    let _ = std::env::var("KERBER_CAPTURE_DIR");\n}\n',
@@ -5285,6 +5332,7 @@ def main() -> None:
     check_ledger_proof_column()
     check_diffsend_cases()
     check_gate_unit_index()
+    check_doc_file_cites()
     check_capture_env_only()
     check_golden_dump_unique_keys()
     check_ledger_tally()

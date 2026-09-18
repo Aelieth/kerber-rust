@@ -13,8 +13,8 @@ uses a per-context sequence window in addition to that cache.
 
 | Protection | Code site | Test |
 | --- | --- | --- |
-| Constant-time MAC / checksum | `krb5-crypto` `mac_verify` (`derive.rs`); callers `ops.rs` decrypt/checksum, `weak.rs` RC4/DES | `decrypt_bad_mac_is_error`; `zeroize_ct.rs` `mac_verify_rejects_one_bit_flip` |
-| Constant-time PAC signature | `verify_checksum_type` over PAC `SignatureType` (`ad.rs` `verify_pac_sig`; `pac.c:478-514`) | `crates/krb5-kdc/tests/ad_pac.rs` `verify_pac_signatures` / `pac_sha1_server_checksum_is_sumtype_nosupp` |
+| Constant-time MAC / checksum | `krb5-crypto` `mac_verify` (`derive.rs`); callers `ops.rs` decrypt/checksum, `weak.rs` RC4/DES | `crates/krb5-crypto/tests/known_answer.rs`; `decrypt_bad_mac_is_error`; `zeroize_ct.rs` `mac_verify_rejects_one_bit_flip` / `checksum_bit_flip_is_integrity` |
+| Constant-time PAC signature | `verify_checksum_type` over PAC `SignatureType` (`ad.rs` `verify_pac_sig`; `pac.c:478-514`) | `crates/krb5-kdc/tests/pac_ad_capture.rs` `verify_pac_signatures` / `pac_sha1_server_checksum_is_sumtype_nosupp` |
 | Replay — AP-REQ authenticator | `verify_ap_req` (`krb5-protocol` `ap_req.rs`) | `ap_req_valid_truncated_wrong_key_replay` |
 | Replay — TGS authenticator | `issue_tgs` (`krb5-kdc` `issue.rs`) `tgs_replay` | `tgs_authenticator_replay_is_repeat` |
 | Replay — PA-ENC-TIMESTAMP | `verify_enc_timestamp` (`issue.rs`) `pa_replay` | `pa_enc_timestamp_replay_is_repeat` |
@@ -25,6 +25,8 @@ uses a per-context sequence window in addition to that cache.
 | Zeroize-on-drop — protocol keys | `ProtocolKey` `Drop` (`krb5-crypto` `key.rs`) | `zeroize_ct.rs` `protocol_key_drop_zeroizes` |
 | Zeroize-on-drop — derived keys | `DerivedKeys` `Drop` (`derive.rs`) | `zeroize_ct.rs` `derived_keys_drop_zeroizes` |
 | Zeroize-on-drop — DH exponent | `DhKeypair` `Drop` (`modp.rs`); SPAKE seed (`spake.rs`) | `zeroize_ct.rs` `dh_keypair_drop_zeroizes` |
+| Zeroize-on-drop — EncryptionKey | `EncryptionKey` `Drop` (`krb5-types` `lib.rs`) | `zeroize_ct.rs` `encryption_key_drop_zeroizes` |
+| Zeroize-on-drop — PkinitClient | `PkinitClient` `Drop` (`krb5-protocol` `as_ex.rs`) | `zeroize_ct.rs` `pkinit_client_drop_zeroizes` |
 | Zeroize — client password | `kinit` (`krb5-client` `lib.rs`) zeros the buffer before return | `kinit` return path; live `client-gate` |
 | 0600 secret files | `write_secret_file` (`secret_file.rs`); keytab, ccache, dump, stash | `persist_survives_restart_without_key_regen` (save_store) |
 | `kdestroy` never follows a symlink | `destroy_secret_file` (`secret_file.rs`) opens `O_NOFOLLOW\|O_NONBLOCK` and refuses a symlink or FIFO; MIT `fcc_destroy` (`cc_file.c:553-660`) opens the name `O_RDWR`, so a swapped symlink has its target zero-filled and the link unlinked | `open_refuses_symlink_with_nofollow`; `client-gate.sh` symlink `kdestroy` leaves the target intact |
@@ -33,7 +35,7 @@ uses a per-context sequence window in addition to that cache.
 | kpropd.acl is MIT `authorized_principal`, not a kadm5 glob | `kpropd_authorized_principal` (`krb5-admin` `kprop.rs`; `kpropd.c:1298-1348`): exact unparsed-principal prefix match ended by NUL/whitespace, optional enctype token that must name the ticket's `enc_part.enctype` (`krb5_string_to_enctype`, an unknown token skips the line), no wildcards, no leading whitespace, unopenable or unset `KRB5_KPROP_ACL` authorizes nobody; the file is re-read per connection; the check runs after the AP-REP like `kpropd.c:528` and the refusal closes the socket with the MIT log text. Before W1-C C2 the lines went through the kadm5 glob matcher, so `*@REALM` authorized every peer and an enctype restriction was ignored | `kpropd_acl_exact_line_authorizes_and_wildcards_never_do`; `kpropd_acl_enctype_suffix_must_name_the_ticket_enctype`; `prop-acl-gate.sh` `acl-*` cells vs MIT kpropd |
 | Product 0-unsafe | Workspace lint `unsafe_code = "forbid"`; `#![forbid(unsafe_code)]` on every library crate | compile (`clippy -D warnings`); `scripts/geiger.sh` |
 | iprop keys never sent in the clear | `dispatch_iprop` GET_UPDATES answers `UPDATE_ERROR` (`kadm5.rs`, `krb5_kdc::IPROP_ERROR`) when `iprop_master_key` is `None`, rather than ship the store's plaintext keys | `iprop_get_updates_refuses_plaintext_keys_without_master_key` |
-| Cross-realm PAC SID filtering | `filter_cross_realm_logon` (`ad.rs`) drops local-domain SIDs from a cross-realm subject's `LOGON_INFO`; `issue.rs` calls it when the header ticket is from a foreign realm | `cross_realm_pac_drops_local_domain_sids_keeps_foreign`, `cross_realm_pac_claiming_local_domain_base_is_policy` (`crates/krb5-kdc/tests/capaths.rs`) |
+| Cross-realm PAC SID filtering | `filter_cross_realm_logon` (`ad.rs`) drops local-domain SIDs from a cross-realm subject's `LOGON_INFO`; `issue.rs` calls it when the header ticket is from a foreign realm | `cross_realm_pac_drops_local_domain_sids_keeps_foreign`, `cross_realm_pac_claiming_local_domain_base_is_policy` (`crates/krb5-kdc/tests/tgs_crossrealm.rs`) |
 
 `DISABLE_TRANSITED_CHECK` and ticket flags are protocol policy, not
 timing. There is no injectable clock; replay windows use

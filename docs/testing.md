@@ -403,7 +403,7 @@ Cross-realm: `scripts/cross-realm-gate.sh` starts two Rust KDCs
 then MIT `kinit` + `kvno host/svc.other.test@OTHER.TEST`. It fails
 unless `klist` contains `krbtgt/OTHER.TEST` and the host ticket.
 
-AD PAC: `crates/krb5-kdc/tests/ad_pac.rs` decodes committed
+AD PAC: `crates/krb5-kdc/tests/pac_ad_capture.rs` decodes committed
 `tests/traces/pac-kbruser.ndr` (byte-identical re-encode; `kbruser` /
 `kbrgroup` / ADKERBER SID). With `~/adlab/svc.keytab` present, the
 captured `host/svc` PAC server checksum is verified (usage 17). Skip
@@ -680,7 +680,7 @@ Not in any workflow: `gss-sspi-gate.sh` (needs a Windows SSPI peer; exits
   (`kdb5_util load_dump version 7`, not KDB3), MIT `krb5kdc`, MIT
   `kinit` with `renew until` in `klist`. Run twice.
 - `scripts/differential-gate.sh` — one dump, two live KDCs (Rust `:8888`,
-  MIT 1.22.2 `krb5kdc` `:88`). `examples/diffsend.rs` encodes each
+  MIT 1.22.2 `krb5kdc` `:88`). `crates/krb5-protocol/examples/diffsend.rs` encodes each
   AS/TGS case **once** and TCP-exchanges the same bytes to both.
   KRB-ERROR compares `error_code`/`realm`/`sname`/`e_text` (mask
   `stime`/`susec`/`ctime`/`cusec`; PREAUTH `e_data` is
@@ -703,7 +703,7 @@ Not in any workflow: `gss-sspi-gate.sh` (needs a Windows SSPI peer; exits
   and the ratchet against the driver's summary literal (W1-Z Z3.3).
   Honest `exit 2` when docker or the MIT image is absent (provenance no
   longer `exit 1` / `KERBER_NO_IMAGE` as a substitute). In CI (bare `run:`).
-  Compare lives behind `krb5-protocol` feature `diff` (`examples/diffsend`
+  Compare lives behind `krb5-protocol` feature `diff` (`crates/krb5-protocol/examples/diffsend.rs`
   and the unit fixture); it is not on the default public API.
   **TGS vehicle:** success TGS cases mint a PAC-less TGT with the
   exported krbtgt key (etype 20, empty `tr-type` 1). A live Rust PAC
@@ -740,7 +740,7 @@ Not in any workflow: `gss-sspi-gate.sh` (needs a Windows SSPI peer; exits
   AS/TGS PDUs 10/11/12/13). CI sets `KERBER_REQUIRE_REAL_PCAP=1` so
   missing eth0 capture fails red. In CI after `prod-gate`.
 - `scripts/stress-gate.sh` — C2a: concurrent wire AS+TGS via
-  `examples/loadgen.rs` plus MIT `kinit`/`kvno` under load. Throughput
+  `crates/krb5-client/examples/loadgen.rs` plus MIT `kinit`/`kvno` under load. Throughput
   uses `kdc.issue` timestamps or `duration_us`, not Docker wall clock.
   p99/throughput undershoot with `kdc_issue_err==0` and no panics is a
   warning; error-rate and panics stay hard-fail. `kdc_issue_krb_error`
