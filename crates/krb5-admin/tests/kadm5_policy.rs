@@ -177,7 +177,7 @@ fn kadmin_local_alias_creates_a_stub_for_the_target() {
 }
 
 #[test]
-fn z8_addpol_unknown_keysalt_is_stored_like_mit() {
+fn addpol_unknown_keysalt_is_stored_like_mit() {
     let (mut store, acl) = bootstrap_documented().unwrap();
     let mut sess = AdminSession::local(&mut store, &acl, documented_admin_id());
     let a = parse_policy_args(&["-allowedkeysalts", "bogus:normal", "z8pol"])
@@ -192,7 +192,7 @@ fn z8_addpol_unknown_keysalt_is_stored_like_mit() {
 }
 
 #[test]
-fn z8_addpol_tab_keysalt_is_invalid_key_salt_tuples() {
+fn addpol_tab_keysalt_is_invalid_key_salt_tuples() {
     let (mut store, acl) = bootstrap_documented().unwrap();
     let mut sess = AdminSession::local(&mut store, &acl, documented_admin_id());
     let a = parse_policy_args(&["-allowedkeysalts", "aes256-cts:normal\tfoo", "z8tab"])
@@ -205,7 +205,7 @@ fn z8_addpol_tab_keysalt_is_invalid_key_salt_tuples() {
 }
 
 #[test]
-fn z8_modpol_unknown_keysalt_is_stored_like_mit() {
+fn modpol_unknown_keysalt_is_stored_like_mit() {
     let (mut store, acl) = bootstrap_documented().unwrap();
     let mut sess = AdminSession::local(&mut store, &acl, documented_admin_id());
     sess.add_policy_ent(&parse_policy_args(&["z8mod"]).unwrap())

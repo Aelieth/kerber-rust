@@ -30,7 +30,7 @@ use krb5_testkit::scratch_dir;
 use krb5_types::{ChangePasswdData, PrincipalName};
 
 #[test]
-fn z1_kpasswd_host_ticket_under_changepw_key_is_refused() {
+fn kpasswd_host_ticket_under_changepw_key_is_refused() {
     krb5_config::isolate_test_krb5();
     let (store, acl) = bootstrap_documented().expect("bootstrap");
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -1423,7 +1423,7 @@ fn kpasswd_udp_exchange_ignores_off_path() {
 }
 
 #[test]
-fn z7_kpasswd_stamps_kadmind_not_the_client() {
+fn kpasswd_stamps_kadmind_not_the_client() {
     krb5_config::isolate_test_krb5();
     let (store, acl) = bootstrap_documented().expect("bootstrap");
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -1493,7 +1493,7 @@ fn z7_kpasswd_stamps_kadmind_not_the_client() {
 }
 
 #[test]
-fn z8_kpasswd_keeps_an_out_of_process_principal() {
+fn kpasswd_keeps_an_out_of_process_principal() {
     krb5_config::isolate_test_krb5();
     let dir = scratch_dir("krb5-z8-kpw");
     let db = dir.join("principal");

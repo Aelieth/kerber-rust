@@ -706,7 +706,7 @@ mod tests {
     }
 
     #[test]
-    fn a2_r16_getprinc_incoming_trust_uses_foreign_realm_id() {
+    fn getprinc_incoming_trust_uses_foreign_realm_id() {
         let (mut store, acl) = sess_pair();
         let ir = krb5_crypto::ProtocolKey::from_bytes(
             krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
@@ -735,7 +735,7 @@ mod tests {
     /// creates nothing, and `-pw ""` is refused even without a policy
     /// (`pwqual_empty.c`). Live MIT 1.22.2 `kadmin.local` agrees.
     #[test]
-    fn c1_addprinc_rejected_password_creates_no_principal() {
+    fn addprinc_rejected_password_creates_no_principal() {
         let (mut store, acl) = sess_pair();
         {
             let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());

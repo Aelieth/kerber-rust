@@ -82,7 +82,7 @@ fn stored(store: &krb5_kdc::SharedDump, name: &str) -> krb5_kdc::Principal {
 }
 
 #[test]
-fn z6_create3_ks_tuple_is_the_only_key() {
+fn create3_ks_tuple_is_the_only_key() {
     let (store, _) = bootstrap_documented().unwrap();
     let acl = Acl::parse("admin@KERBER.TEST *\n").unwrap();
     let store = shared_dump(store);
@@ -112,7 +112,7 @@ fn z6_create3_ks_tuple_is_the_only_key() {
 }
 
 #[test]
-fn z6_create3_ks_tuple_outside_allowed_keysalts_is_bad_keysalts() {
+fn create3_ks_tuple_outside_allowed_keysalts_is_bad_keysalts() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let mut pol = NamedPolicy::new("ksonly");
     pol.allowed_keysalts = Some("aes256-cts-hmac-sha1-96:normal".into());
@@ -183,7 +183,7 @@ fn stored_z7_chpass_ks(store: &krb5_kdc::SharedDump, name: &str) -> krb5_kdc::Pr
 }
 
 #[test]
-fn z7_chpass3_ks_tuple_is_the_only_key() {
+fn chpass3_ks_tuple_is_the_only_key() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let acl = Acl::parse("admin@KERBER.TEST *\n").unwrap();
     store
@@ -218,7 +218,7 @@ fn z7_chpass3_ks_tuple_is_the_only_key() {
 }
 
 #[test]
-fn z7_chrand3_ks_tuple_is_the_only_key() {
+fn chrand3_ks_tuple_is_the_only_key() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let acl = Acl::parse("admin@KERBER.TEST *\n").unwrap();
     store
@@ -249,7 +249,7 @@ fn z7_chrand3_ks_tuple_is_the_only_key() {
 }
 
 #[test]
-fn z7_chpass3_unknown_etype_is_bad_keysalts() {
+fn chpass3_unknown_etype_is_bad_keysalts() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let acl = Acl::parse("admin@KERBER.TEST *\n").unwrap();
     store
@@ -274,7 +274,7 @@ fn z7_chpass3_unknown_etype_is_bad_keysalts() {
 }
 
 #[test]
-fn z7_chrand3_unknown_etype_is_bad_keysalts() {
+fn chrand3_unknown_etype_is_bad_keysalts() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let acl = Acl::parse("admin@KERBER.TEST *\n").unwrap();
     store
@@ -295,7 +295,7 @@ fn z7_chrand3_unknown_etype_is_bad_keysalts() {
 }
 
 #[test]
-fn z7_chpass3_outside_allowed_keysalts_is_bad_keysalts() {
+fn chpass3_outside_allowed_keysalts_is_bad_keysalts() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let mut pol = NamedPolicy::new("ksonly");
     pol.allowed_keysalts = Some("aes256-cts-hmac-sha1-96:normal".into());
@@ -335,7 +335,7 @@ fn z7_chpass3_outside_allowed_keysalts_is_bad_keysalts() {
 }
 
 #[test]
-fn z8_ks_tuple_filters_mit_weak_only() {
+fn ks_tuple_filters_mit_weak_only() {
     let src = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/kadm5.rs"));
     assert!(
         src.contains("is_mit_weak()"),

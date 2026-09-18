@@ -160,7 +160,7 @@ fn n(s: &str) -> PrincipalName {
 }
 
 #[test]
-fn z7_ktadd_local_stamps_the_session_actor() {
+fn ktadd_local_stamps_the_session_actor() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let actor = "root/admin@KERBER.TEST";
     let acl = Acl::allow_admin(actor).unwrap();
@@ -180,7 +180,7 @@ fn z7_ktadd_local_stamps_the_session_actor() {
 }
 
 #[test]
-fn z7_admin_unlock_stamps_the_session_actor() {
+fn admin_unlock_stamps_the_session_actor() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let creator = "joe/admin@KERBER.TEST";
     let actor = "root/admin@KERBER.TEST";

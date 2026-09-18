@@ -104,7 +104,7 @@ fn modify_foreign_realm_existing_user_is_unk_princ() {
 /// rejects a component match under a policy as `KADM5_PASS_Q_DICT`; a
 /// rejected create leaves no entry.
 #[test]
-fn c1_create_runs_pwqual_modules_before_the_entry_exists() {
+fn create_runs_pwqual_modules_before_the_entry_exists() {
     let (store, acl, actor) = setup();
     store
         .write()

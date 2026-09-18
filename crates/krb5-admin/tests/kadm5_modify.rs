@@ -825,7 +825,7 @@ fn gprinc_mod_name(body: &[u8]) -> String {
 }
 
 #[test]
-fn z6_getprinc_mod_name_is_the_rpc_caller() {
+fn getprinc_mod_name_is_the_rpc_caller() {
     let (store, _) = bootstrap_documented().unwrap();
     let acl = Acl::parse("admin@KERBER.TEST *\n").unwrap();
     let store = shared_dump(store);

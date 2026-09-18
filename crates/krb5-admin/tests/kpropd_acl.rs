@@ -108,7 +108,7 @@ fn refused(r: &Result<KpropAuth, Error>) -> bool {
 }
 
 #[test]
-fn c2_kpropd_acl_exact_line_authorizes_and_wildcards_never_do() {
+fn kpropd_acl_exact_line_authorizes_and_wildcards_never_do() {
     let (ok, client) = kprop_against(Some(vec![CLIENT.to_owned()]));
     assert!(ok.is_ok(), "exact line: {:?}", shown(&ok));
     assert!(client.is_ok(), "client sendauth: {:?}", shown(&client));
@@ -127,7 +127,7 @@ fn c2_kpropd_acl_exact_line_authorizes_and_wildcards_never_do() {
 }
 
 #[test]
-fn c2_kpropd_acl_enctype_suffix_must_name_the_ticket_enctype() {
+fn kpropd_acl_enctype_suffix_must_name_the_ticket_enctype() {
     let (store, _) = bootstrap_documented().unwrap();
     let (_, _, tkt_etype) = host_ticket(&store);
     let tkt_name = krb5_crypto::EncryptionType::known(tkt_etype)
@@ -172,7 +172,7 @@ fn c2_kpropd_acl_enctype_suffix_must_name_the_ticket_enctype() {
 }
 
 #[test]
-fn c2_kpropd_acl_is_a_prefix_match_ended_by_whitespace_or_eol() {
+fn kpropd_acl_is_a_prefix_match_ended_by_whitespace_or_eol() {
     // Trailing whitespace (and a bare CR, which fgets keeps) is fine …
     let (tail, _) = kprop_against(Some(vec![format!("{CLIENT}\t "), String::new()]));
     assert!(tail.is_ok(), "trailing whitespace: {:?}", shown(&tail));
@@ -219,7 +219,7 @@ fn c2_kpropd_acl_is_a_prefix_match_ended_by_whitespace_or_eol() {
 }
 
 #[test]
-fn c2_kpropd_refuses_after_the_ap_rep_so_kprop_fails_on_the_dump_not_sendauth() {
+fn kpropd_refuses_after_the_ap_rep_so_kprop_fails_on_the_dump_not_sendauth() {
     // kpropd.c:526-546: authorized_principal runs after kerberos_authenticate;
     // MIT kprop completes sendauth (gets the AP-REP) and then dies with
     // `Broken pipe while sending database block starting at 0`.

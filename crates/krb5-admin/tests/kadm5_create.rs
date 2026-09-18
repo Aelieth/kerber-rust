@@ -146,7 +146,7 @@ fn stored(r: &Rig, name: &str) -> krb5_kdc::Principal {
 }
 
 #[test]
-fn z1_kadm5_create_applies_every_masked_field() {
+fn kadm5_create_applies_every_masked_field() {
     let mut r = rig("admin@KERBER.TEST *\n", |_| {});
     let ent = Ent {
         expire: 1_893_456_000,    // 2030-01-01
@@ -184,7 +184,7 @@ fn z1_kadm5_create_applies_every_masked_field() {
 }
 
 #[test]
-fn z1_kadm5_create_without_mask_bits_takes_realm_defaults() {
+fn kadm5_create_without_mask_bits_takes_realm_defaults() {
     let mut r = rig("admin@KERBER.TEST *\n", |s| {
         let mut pol = NamedPolicy::new("z1pw");
         pol.pw_max_life = 30 * 86400;
@@ -233,7 +233,7 @@ fn z1_kadm5_create_without_mask_bits_takes_realm_defaults() {
 }
 
 #[test]
-fn z1_acl_policy_restriction_is_enforced_on_create() {
+fn acl_policy_restriction_is_enforced_on_create() {
     let mut r = rig(
         "admin@KERBER.TEST * *@KERBER.TEST -policy shortpol\n",
         |s| {
@@ -272,7 +272,7 @@ fn z1_acl_policy_restriction_is_enforced_on_create() {
 }
 
 #[test]
-fn z1_acl_maxrenewlife_keeps_an_in_mask_zero_and_lowers_above_cap() {
+fn acl_maxrenewlife_keeps_an_in_mask_zero_and_lowers_above_cap() {
     let mut r = rig(
         "admin@KERBER.TEST * *@KERBER.TEST -maxrenewlife 1d\n",
         |_| {},
@@ -304,7 +304,7 @@ fn z1_acl_maxrenewlife_keeps_an_in_mask_zero_and_lowers_above_cap() {
 }
 
 #[test]
-fn z1_acl_maxlife_absent_from_modify_mask_takes_the_cap() {
+fn acl_maxlife_absent_from_modify_mask_takes_the_cap() {
     let mut r = rig("admin@KERBER.TEST * *@KERBER.TEST -maxlife 1h\n", |_| {});
     let args = ent_args(
         &format!("z1m@{TEST_REALM}"),
@@ -337,7 +337,7 @@ fn z1_acl_maxlife_absent_from_modify_mask_takes_the_cap() {
 }
 
 #[test]
-fn z1_acl_attribute_restriction_composes_with_the_request_attributes() {
+fn acl_attribute_restriction_composes_with_the_request_attributes() {
     let mut r = rig(
         "admin@KERBER.TEST * *@KERBER.TEST +requires_preauth\n",
         |_| {},
@@ -360,7 +360,7 @@ fn z1_acl_attribute_restriction_composes_with_the_request_attributes() {
 }
 
 #[test]
-fn z1_acl_expire_keeps_a_masked_value_below_the_cap() {
+fn acl_expire_keeps_a_masked_value_below_the_cap() {
     let mut r = rig("admin@KERBER.TEST * *@KERBER.TEST -expire 1d\n", |_| {});
     let soon = now() + 3600;
     let args = ent_args(

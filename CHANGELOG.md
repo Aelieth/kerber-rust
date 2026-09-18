@@ -30,6 +30,7 @@ this project uses semantic versioning once a crate is published.
   and the three `z1b_` fns. Config five in-src names (`c1_`/`a4_*`/`f6_`).
   Protocol 111 (`b1_`/`b2_`/`z1_`/`z7_`/`z8_`);
   `rd_req_authenticator_skew_is_37` → `…_is_skew`.
+  Admin 39 (`z1_`/`z1b_`/`z6_`/`z7_`/`z8_`/`c1_`/`c2_`/`a2_r16_`).
 
 ### W3-S2.3 in-src tests by shape
 

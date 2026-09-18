@@ -71,7 +71,7 @@ fn create_args(name: &str, password: &str, policy: Option<&str>) -> Vec<u8> {
 }
 
 #[test]
-fn c1_kadm5_create_empty_password_is_pass_q_tooshort_and_creates_nothing() {
+fn kadm5_create_empty_password_is_pass_q_tooshort_and_creates_nothing() {
     let (store, _) = bootstrap_documented().unwrap();
     let acl = Acl::parse("admin@KERBER.TEST *\n").unwrap();
     let store = shared_dump(store);
@@ -96,7 +96,7 @@ fn c1_kadm5_create_empty_password_is_pass_q_tooshort_and_creates_nothing() {
 }
 
 #[test]
-fn c1_kadm5_create_principal_name_password_is_pass_q_dict_only_with_policy() {
+fn kadm5_create_principal_name_password_is_pass_q_dict_only_with_policy() {
     let (mut store, _) = bootstrap_documented().unwrap();
     store.put_policy(NamedPolicy::new("pq"));
     let acl = Acl::parse("admin@KERBER.TEST *\n").unwrap();
@@ -128,7 +128,7 @@ fn c1_kadm5_create_principal_name_password_is_pass_q_dict_only_with_policy() {
 }
 
 #[test]
-fn c1_kadm5_create_null_password_is_a_random_key_not_the_empty_password() {
+fn kadm5_create_null_password_is_a_random_key_not_the_empty_password() {
     let (store, _) = bootstrap_documented().unwrap();
     let acl = Acl::parse("admin@KERBER.TEST *\n").unwrap();
     let store = shared_dump(store);
@@ -173,7 +173,7 @@ fn c1_kadm5_create_null_password_is_a_random_key_not_the_empty_password() {
 }
 
 #[test]
-fn c1_chpass_runs_empty_and_princ_modules() {
+fn chpass_runs_empty_and_princ_modules() {
     let (mut store, acl) = bootstrap_documented().unwrap();
     let mut sess = AdminSession::local(&mut store, &acl, documented_admin_id());
     assert_eq!(rejected(sess.change_password(&user(), b"")), EMPTY);
@@ -197,7 +197,7 @@ fn c1_chpass_runs_empty_and_princ_modules() {
 }
 
 #[test]
-fn c1_dict_file_from_the_realm_stanza_rejects_words_case_insensitively() {
+fn dict_file_from_the_realm_stanza_rejects_words_case_insensitively() {
     let dir = scratch_dir("c1-dict-admin");
     let dict = dir.join("dict.txt");
     std::fs::write(&dict, "zebra\ncorrecthorse\napple\n").unwrap();
