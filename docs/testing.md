@@ -429,7 +429,7 @@ measure itself; the nightly `budget.yml` job checks the last five `ci.yml` runs.
 Every gate's `gate_wall_s` in a checkpoint `timings.tsv` is ≤ 45 s
 (`scripts/gate-wall-exceptions.txt` is empty). Gate proto sleeps sum to
 ≤ 26 s and are tagged `# proto:` (a lockout/postdate word is not enough).
-Unit `sleep(` in `crates/*/tests` is ≤ 8.
+Unit `sleep(` in `crates/*/tests` is ≤ 14.
 
 ### CI lanes (which job runs which gates)
 

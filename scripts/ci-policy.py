@@ -207,7 +207,7 @@ TIMEOUT_JOBS = (
 
 GATE_WALL_MAX = 45
 GATE_PROTO_SLEEP_MAX = 26.0
-UNIT_SLEEP_MAX = 8
+UNIT_SLEEP_MAX = 14
 PLAN_JOB_CAPS = {
     "test": 300,
     "harness": 270,
@@ -2609,6 +2609,46 @@ def check_log_arity(common_text: str | None = None) -> None:
         _die("log() must refuse arity other than 2-3")
 
 
+def check_autotests_registered(root: pathlib.Path | None = None) -> None:
+    """Every tests/*.rs in an autotests=false crate has a [[test]] entry.
+
+    `tests/common.rs` and `tests/common/**` are shared modules, not harnesses.
+    """
+    root = pathlib.Path(root) if root is not None else ROOT
+    crates = root / "crates"
+    if not crates.is_dir():
+        _die("missing crates/")
+    for toml in sorted(crates.glob("*/Cargo.toml")):
+        text = toml.read_text(encoding="utf-8")
+        if not re.search(r"(?m)^\s*autotests\s*=\s*false\s*$", text):
+            continue
+        tests_dir = toml.parent / "tests"
+        if not tests_dir.is_dir():
+            continue
+        listed: set[str] = set()
+        for m in re.finditer(r"(?ms)^\[\[test\]\]\s*(.*?)(?=\n\[|\Z)", text):
+            block = m.group(1)
+            path_m = re.search(r'(?m)^\s*path\s*=\s*"([^"]+)"', block)
+            name_m = re.search(r'(?m)^\s*name\s*=\s*"([^"]+)"', block)
+            if path_m:
+                p = path_m.group(1)
+                listed.add(p.removeprefix("tests/"))
+            elif name_m:
+                listed.add(f"{name_m.group(1)}.rs")
+        orphans = []
+        for p in tests_dir.rglob("*.rs"):
+            rel = p.relative_to(tests_dir).as_posix()
+            if rel == "common.rs" or rel.startswith("common/"):
+                continue
+            if rel not in listed:
+                orphans.append(rel)
+        if orphans:
+            _die(
+                f"{toml.parent.name}: autotests=false tests/*.rs missing [[test]]: "
+                + ", ".join(sorted(orphans))
+            )
+
+
 def check_hygiene_diff_self_test(text: str | None = None) -> None:
     """hygiene-diff.py runs _self_test on normal compare runs, not only --self-test.
 
@@ -4109,7 +4149,7 @@ jobs:
         {"renew-gate.sh": "sleep 40 # proto: ticket age\n"},
         5,
     )
-    _must_die(check_sleep_ratchet, {"renew-gate.sh": ok_sleep}, 9)
+    _must_die(check_sleep_ratchet, {"renew-gate.sh": ok_sleep}, 15)
     good_toml = (
         "[jobs]\n"
         "test = 300\nharness = 270\nmit-extra = 180\ndoc = 90\n"
@@ -4562,6 +4602,19 @@ jobs:
         "def main() -> int:\n    if argv[1] == '--self-test':\n        _self_test()\n"
         "        return 0\n    _self_test()\n    return _compare()\n",
     )
+    with tempfile.TemporaryDirectory() as tmp:
+        demo = pathlib.Path(tmp) / "crates" / "demo"
+        (demo / "tests" / "common").mkdir(parents=True)
+        (demo / "tests" / "listed.rs").write_text("fn main() {}\n", encoding="utf-8")
+        (demo / "tests" / "common" / "mod.rs").write_text("", encoding="utf-8")
+        (demo / "Cargo.toml").write_text(
+            "[package]\nname = \"demo\"\nautotests = false\n\n"
+            "[[test]]\nname = \"listed\"\npath = \"tests/listed.rs\"\n",
+            encoding="utf-8",
+        )
+        check_autotests_registered(pathlib.Path(tmp))
+        (demo / "tests" / "orphan.rs").write_text("", encoding="utf-8")
+        _must_die(check_autotests_registered, pathlib.Path(tmp))
     check_gate_common_sourced(common_ok, {"ok-gate.sh": gate_ok})
     _must_die(
         check_gate_common_sourced,
@@ -5069,6 +5122,7 @@ def main() -> None:
     check_samba_kdc_respawn()
     check_log_arity()
     check_hygiene_diff_self_test()
+    check_autotests_registered()
     check_kcm_stop_before_run()
     check_prod_gate_tcpdump_cleanup()
     check_gate_common_sourced()

@@ -6,6 +6,27 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S2.3 in-src tests by shape
+
+- **test.** Whole-flow tests leave `src/`; private-bound and
+  pure-unit stay. `krb5-config` include-tree (9) →
+  `tests/include_tree.rs` (`g9a_tree` uses `scratch_dir`;
+  `isolate_test_krb5_stays_off_host_tmp` stays on
+  `TEST_KRB5_PATHS`). `krb5-gss` init/accept flow (19) →
+  `tests/context_flow.rs`. `krb5-kdc` store whole-flow (17) →
+  `tests/store_flow.rs` (15 private-bound + public-only unit
+  stay). `krb5-admin` lib (37) →
+  `tests/{kpasswd_authz,kpasswd_wire,kpasswd_malformed,kprop,acl_dispatch,ktadd}.rs`
+  (4 parser tests stay). `kadm5.rs` 126 tests stay private-bound
+  and regroup into `kadm5/tests/{framing,glob,auth_gssapi,rpcsec,privilege,changepw,getprinc,principal,lockdown,keysalt,policy,setstr,reload,iprop}.rs`
+  (`privilege` not `acl.rs`, so the ledger `acl.rs` cite stays
+  `krb5-kdc/acl.rs`). `tests/diff_compare.rs` →
+  `src/diff_compare.rs`; `r10_edata_oracle.rs` deleted (−2 named
+  duplicates). `ci-policy` requires a `[[test]]` for every
+  `tests/*.rs` in an `autotests = false` crate. Unit `sleep(`
+  ratchet 8 → 14: the same waits moved from `src/` into
+  `tests/` (the inventory only counts `crates/*/tests`).
+
 ### W3-S2.2 shared test helpers (`krb5-testkit`)
 
 - **test.** `crates/krb5-testkit` (`publish = false`, a `krb5-kdc`

@@ -110,5 +110,4 @@ pub use vfy_increds::{
 };
 
 #[cfg(test)]
-#[path = "../tests/diff_compare.rs"]
 mod diff_compare;
