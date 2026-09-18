@@ -1798,7 +1798,7 @@ mod tests {
     }
 
     #[test]
-    fn c1_dict_file_is_a_realm_relation_only() {
+    fn dict_file_is_a_realm_relation_only() {
         // MIT alt_prof.c:486-513: kadm5_get_config_params reads dict_file
         // under [realms] REALM; a [kdcdefaults] dict_file is not consulted
         // (live: MIT logs "No dictionary file specified").
@@ -1861,7 +1861,7 @@ mod tests {
     }
 
     #[test]
-    fn a4_16_restrict_anonymous_to_tgt_from_kdcdefaults_and_realm() {
+    fn restrict_anonymous_to_tgt_from_kdcdefaults_and_realm() {
         let kdc = KdcConf::parse(
             r"
 [kdcdefaults]
@@ -1891,7 +1891,7 @@ mod tests {
     }
 
     #[test]
-    fn f6_realm_booleans_win_over_later_kdcdefaults() {
+    fn realm_booleans_win_over_later_kdcdefaults() {
         let conf = KdcConf::parse(
             r"
 [realms]
@@ -1916,7 +1916,7 @@ mod tests {
     }
 
     #[test]
-    fn a4_17_pkinit_require_freshness_from_kdcdefaults_and_realm() {
+    fn pkinit_require_freshness_from_kdcdefaults_and_realm() {
         let kdc = KdcConf::parse(
             r"
 [kdcdefaults]
@@ -1946,7 +1946,7 @@ mod tests {
     }
 
     #[test]
-    fn a4_18_host_based_and_no_host_referral_from_kdcdefaults_and_realm() {
+    fn host_based_and_no_host_referral_from_kdcdefaults_and_realm() {
         let kdc = KdcConf::parse(
             r"
 [kdcdefaults]
