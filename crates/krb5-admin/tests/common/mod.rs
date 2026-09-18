@@ -3,10 +3,10 @@
 
 #![allow(dead_code)]
 
-use krb5_admin::{Kadm5RpcSession, kadm5_handle_rpc};
+use krb5_admin::{Kadm5RpcSession, encode_kpasswd_req, kadm5_handle_rpc};
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_gss::GssContext;
-use krb5_kdc::{Acl, SharedDump, TEST_REALM, issue_as};
+use krb5_kdc::{Acl, PrincipalStore, SharedDump, TEST_REALM, issue_as};
 use krb5_protocol::{ReplayCache, as_req_sname, pa_enc_timestamp};
 use krb5_types::{PrincipalName, ascii};
 
@@ -263,4 +263,109 @@ pub fn data_call(
 /// `generic_ret` code of a reply databody.
 pub fn ret_code(databody: &[u8]) -> u32 {
     u32::from_be_bytes(databody[4..8].try_into().unwrap())
+}
+
+// Helpers moved from src/lib.rs in-src tests (S2.3).
+
+pub fn changepw_as_ticket(
+    store: &krb5_kdc::PrincipalStore,
+    user: &PrincipalName,
+    user_key: &krb5_crypto::ProtocolKey,
+    nonce: u32,
+) -> krb5_kdc::IssuedAs {
+    use krb5_kdc::{TEST_REALM, documented_changepw};
+    use krb5_protocol::pa_enc_timestamp;
+    krb5_kdc::issue_as(
+        store,
+        &krb5_protocol::as_req_sname(
+            user.clone(),
+            TEST_REALM,
+            nonce,
+            Some(vec![pa_enc_timestamp(user_key).unwrap()]),
+            documented_changepw(),
+            krb5_crypto::EncryptionType::preferred()
+                .iter()
+                .map(|e| e.to_iana())
+                .collect(),
+        )
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+pub fn allow_tgs_changepw(store: &mut krb5_kdc::PrincipalStore) {
+    use krb5_kdc::{KDB_DISALLOW_TGT_BASED, documented_changepw};
+    let changepw = documented_changepw();
+    let a = store.get_name(&changepw).unwrap().attributes & !KDB_DISALLOW_TGT_BASED;
+    store
+        .apply_admin_fields(&changepw, Some(a), None, None, None, None, false, None)
+        .unwrap();
+}
+
+pub fn reseal_ticket_crealm(
+    key: &krb5_crypto::ProtocolKey,
+    ticket: &mut krb5_types::Ticket,
+    crealm: &str,
+) {
+    use krb5_asn1::encode;
+    use krb5_crypto::{KeyUsage, encrypt};
+    use krb5_kdc::decrypt_ticket_part;
+    use krb5_types::{OctetString, ku};
+    let mut part = decrypt_ticket_part(key, ticket).unwrap();
+    part.crealm = krb5_types::ascii(crealm);
+    let der = encode(&part).unwrap();
+    let usage = KeyUsage::new(ku::TICKET).unwrap();
+    ticket.enc_part.cipher = OctetString::from(encrypt(key, usage, &der).unwrap());
+}
+
+pub fn encode_setpw(ap_req: &[u8], krb_priv_der: &[u8]) -> Vec<u8> {
+    let mut req = encode_kpasswd_req(ap_req, krb_priv_der);
+    req[2..4].copy_from_slice(&0xff80u16.to_be_bytes());
+    req
+}
+
+pub fn changepw_tgs_ticket(
+    store: &krb5_kdc::PrincipalStore,
+    user: &PrincipalName,
+    user_key: &krb5_crypto::ProtocolKey,
+    nonce: u32,
+) -> krb5_kdc::IssuedTgs {
+    use krb5_kdc::{TEST_REALM, documented_changepw};
+    use krb5_protocol::{pa_enc_timestamp, tgs_req};
+    let as_out = krb5_kdc::issue_as(
+        store,
+        &krb5_kdc::as_req(
+            user.clone(),
+            TEST_REALM,
+            nonce,
+            Some(vec![pa_enc_timestamp(user_key).unwrap()]),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    krb5_kdc::issue_tgs(
+        store,
+        &tgs_req(
+            as_out.rep.0.ticket.clone(),
+            &as_out.session_key,
+            TEST_REALM,
+            user,
+            documented_changepw(),
+            TEST_REALM,
+            nonce + 1,
+        )
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+pub fn max_kvno(store: &PrincipalStore, name: &PrincipalName) -> u32 {
+    store
+        .get_name(name)
+        .unwrap()
+        .keys
+        .iter()
+        .map(|k| k.kvno)
+        .max()
+        .unwrap_or(0)
 }
