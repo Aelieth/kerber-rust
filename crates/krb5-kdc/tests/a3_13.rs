@@ -9,7 +9,7 @@ use krb5_types::{
     PrincipalName, TgsReq, Ticket, err, ku, pa,
 };
 
-use krb5_testkit::{status, user_as};
+use krb5_testkit::{status, user_as, wrap_if_relevant};
 fn cname() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
 }
@@ -25,15 +25,6 @@ fn host_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedTgs) -> EncTicketP
     )
     .unwrap();
     decode(&plain).unwrap()
-}
-
-fn wrap_if_relevant(inner: &[AuthorizationDataValue]) -> AuthorizationData {
-    let inner = inner.to_vec();
-    let wrapped = encode(&inner).unwrap();
-    vec![AuthorizationDataValue {
-        ad_type: pa::AD_IF_RELEVANT,
-        ad_data: wrapped.into(),
-    }]
 }
 
 fn enc_ad(session: &ProtocolKey, ad: &AuthorizationData) -> EncryptedData {

@@ -12,7 +12,7 @@ use krb5_types::{
     ku, pa,
 };
 
-use krb5_testkit::{status, user_as};
+use krb5_testkit::{status, user_as, wrap_if_relevant};
 fn user() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
 }
@@ -34,13 +34,6 @@ fn decrypt_tgt(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs) -> EncTicket
     let (key, _) = tgt_key(store);
     let usage = KeyUsage::new(ku::TICKET).unwrap();
     decode(&decrypt(&key, usage, issued.rep.0.ticket.enc_part.cipher.as_ref()).unwrap()).unwrap()
-}
-
-fn wrap_if_relevant(inner: &[AuthorizationDataValue]) -> AuthorizationData {
-    vec![AuthorizationDataValue {
-        ad_type: pa::AD_IF_RELEVANT,
-        ad_data: encode(&inner.to_vec()).unwrap().into(),
-    }]
 }
 
 fn indicator_elements() -> AuthorizationData {

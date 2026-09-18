@@ -5,13 +5,15 @@
 
 #![forbid(unsafe_code)]
 
-use krb5_asn1::decode;
+use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
 use krb5_kdc::{
     IssuedAs, PacTicket, PrincipalStore, S2K_ITERS, TEST_ADMIN, TEST_REALM, TEST_USER, as_req,
     documented_host, pa_enc_timestamp, sign_reply_pac, ticket_checksum_der, wrap_win2k_pac,
 };
 use krb5_protocol::{pa_for_user, tgs_req, tgs_req_ex};
+use krb5_types::AuthorizationData;
+use krb5_types::AuthorizationDataValue;
 use krb5_types::EncTicketPart;
 use krb5_types::KdcOptions;
 use krb5_types::KrbError;
@@ -20,6 +22,7 @@ use krb5_types::PrincipalName;
 use krb5_types::TgsReq;
 use krb5_types::Ticket;
 use krb5_types::flag_bit;
+use krb5_types::pa;
 use krb5_types::pac::{PAC_CLIENT_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer};
 
 /// IANA etype numbers in MIT `preferred()` order.
@@ -462,4 +465,21 @@ pub fn evidence_for_user(store: &PrincipalStore, nonce: u32) -> Ticket {
     )
     .unwrap();
     krb5_kdc::issue_tgs(store, &req).unwrap().rep.0.ticket
+}
+
+/// IF-RELEVANT wrapper around inner authdata elements.
+///
+/// Replaces the three test copies (`a3_13`, `a3_r28`, `a3_r29`).
+/// Product `ad.rs` stays `Result`-returning and is not this helper.
+///
+/// # Panics
+///
+/// Panics if DER encode fails — the same unwrap the copies used.
+#[must_use]
+pub fn wrap_if_relevant(inner: &[AuthorizationDataValue]) -> AuthorizationData {
+    let wrapped = encode(&inner.to_vec()).unwrap();
+    vec![AuthorizationDataValue {
+        ad_type: pa::AD_IF_RELEVANT,
+        ad_data: wrapped.into(),
+    }]
 }

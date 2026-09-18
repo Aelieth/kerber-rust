@@ -26,7 +26,9 @@ this project uses semantic versioning once a crate is published.
   — the three S4U TGS helpers (`pref_etypes` vs AES-256-only kept
   apart). `evidence_for_user` — the two admin→user evidence
   tickets (`a4_18b`'s inline store-key AS is `issue_tgt`).
-  Assertion text in those files is unchanged.
+  `wrap_if_relevant` — the three test IF-RELEVANT wrappers
+  (product `ad.rs` stays `Result`-returning). Assertion text in
+  those files is unchanged.
 
 ### W3-S2.1 drop the eight a2_*_parent red-inject files
 
