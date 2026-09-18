@@ -3,24 +3,15 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{KeyUsage, ProtocolKey, checksum, decrypt, encrypt, unkeyed_checksum};
 use krb5_kdc::{
-    Error, PrincipalStore, TEST_REALM, TEST_USER, bootstrap_documented, documented_host, issue_tgs,
+    Error, PrincipalStore, TEST_REALM, bootstrap_documented, documented_host, issue_tgs,
 };
 use krb5_protocol::tgs_req;
 use krb5_types::cammac::{Cammac, VerifierMac};
 use krb5_types::{
-    AuthorizationData, AuthorizationDataValue, Checksum, EncTicketPart, PrincipalName, Ticket, err,
-    ku, pa,
+    AuthorizationData, AuthorizationDataValue, Checksum, EncTicketPart, Ticket, err, ku, pa,
 };
 
-use krb5_testkit::{status, user_as, wrap_if_relevant};
-fn user() -> PrincipalName {
-    PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
-}
-
-fn krbtgt() -> PrincipalName {
-    PrincipalName::krbtgt(TEST_REALM)
-}
-
+use krb5_testkit::{krbtgt, status, user, user_as, wrap_if_relevant};
 fn tgt_key(store: &PrincipalStore) -> (ProtocolKey, u32) {
     let e = store
         .get_name(&krbtgt())

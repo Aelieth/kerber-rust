@@ -4,12 +4,12 @@ use krb5_asn1::decode;
 use krb5_crypto::{EncryptionType, KeyUsage, decrypt};
 use krb5_kdc::{
     KDB_DISALLOW_POSTDATED, KDB_DISALLOW_RENEWABLE, KDB_OK_AS_DELEGATE, PrincipalStore, TEST_REALM,
-    TEST_USER, bootstrap_documented, documented_host,
+    bootstrap_documented, documented_host,
 };
 use krb5_protocol::tgs_req_ex;
 use krb5_types::{EncTicketPart, KdcOptions, PrincipalName, err, flag_bit, ku};
 
-use krb5_testkit::{status, user_as_bits};
+use krb5_testkit::{status, user, user_as_bits};
 fn or_attr(store: &mut PrincipalStore, name: &PrincipalName, bit: u32) {
     let a = store.get_name(name).unwrap().attributes | bit;
     store
@@ -42,10 +42,6 @@ fn tgt_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedTgs) -> EncTicketPa
     decode(&plain).unwrap()
 }
 
-fn cname() -> PrincipalName {
-    PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
-}
-
 #[test]
 fn tgs_postdate_without_may_postdate_is_tgt_not_postdatable() {
     let (store, _) = bootstrap_documented().unwrap();
@@ -54,7 +50,7 @@ fn tgs_postdate_without_may_postdate_is_tgt_not_postdatable() {
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
-        &cname(),
+        &user(),
         documented_host(),
         TEST_REALM,
         11002,
@@ -78,7 +74,7 @@ fn tgs_renewable_against_disallow_is_non_renewable() {
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
-        &cname(),
+        &user(),
         host,
         TEST_REALM,
         11012,
@@ -100,7 +96,7 @@ fn tgs_forwarded_sets_forwarded() {
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
-        &cname(),
+        &user(),
         PrincipalName::krbtgt(TEST_REALM),
         TEST_REALM,
         11022,
@@ -122,7 +118,7 @@ fn tgs_proxy_sets_proxy() {
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
-        &cname(),
+        &user(),
         documented_host(),
         TEST_REALM,
         11032,
@@ -138,7 +134,7 @@ fn tgs_proxy_sets_proxy() {
         host_out.rep.0.ticket.clone(),
         &host_out.session_key,
         TEST_REALM,
-        &cname(),
+        &user(),
         documented_host(),
         TEST_REALM,
         11033,
@@ -160,7 +156,7 @@ fn tgs_postdated_is_invalid() {
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
-        &cname(),
+        &user(),
         documented_host(),
         TEST_REALM,
         11042,
@@ -188,7 +184,7 @@ fn tgs_postdated_bit_alone_does_not_deny_postdate() {
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
-        &cname(),
+        &user(),
         host,
         TEST_REALM,
         11052,
@@ -212,7 +208,7 @@ fn tgs_renew_skips_ok_as_delegate() {
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
-        &cname(),
+        &user(),
         krbtgt,
         TEST_REALM,
         11062,

@@ -4,8 +4,8 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use krb5_asn1::encode;
-use krb5_kdc::{TEST_REALM, TEST_USER, as_req, bootstrap_documented, pa_enc_timestamp};
-use krb5_types::PrincipalName;
+use krb5_kdc::{TEST_REALM, as_req, bootstrap_documented, pa_enc_timestamp};
+use krb5_testkit::user;
 use tracing_subscriber::fmt::MakeWriter;
 
 #[derive(Clone)]
@@ -26,10 +26,6 @@ impl<'a> MakeWriter<'a> for Capture {
     fn make_writer(&'a self) -> Self::Writer {
         self.clone()
     }
-}
-
-fn user() -> PrincipalName {
-    PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
 }
 
 fn capture_as(nonce: u32) -> String {

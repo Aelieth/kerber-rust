@@ -3,11 +3,10 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, decrypt, encrypt, p256_generate};
 use krb5_kdc::{
-    Error, KDB_REQUIRES_HW_AUTH, PrincipalStore, TEST_REALM, TEST_USER, bootstrap_documented,
-    documented_host,
+    Error, KDB_REQUIRES_HW_AUTH, PrincipalStore, TEST_REALM, bootstrap_documented, documented_host,
 };
 use krb5_protocol::{as_req, pa_enc_timestamp, pa_pk_as_req, tgs_req_ex};
-use krb5_testkit::status;
+use krb5_testkit::{krbtgt, status, user};
 use krb5_types::{
     EncTicketPart, EncryptedData, KdcOptions, MethodData, PrincipalName, Ticket, err, flag_bit, ku,
     pa,
@@ -15,14 +14,6 @@ use krb5_types::{
 
 fn etypes() -> Vec<i32> {
     vec![EncryptionType::Aes256CtsHmacSha196.to_iana()]
-}
-
-fn user() -> PrincipalName {
-    PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
-}
-
-fn krbtgt() -> PrincipalName {
-    PrincipalName::krbtgt(TEST_REALM)
 }
 
 fn or_attr(store: &mut PrincipalStore, name: &PrincipalName, bit: u32) {

@@ -2,18 +2,14 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt};
-use krb5_kdc::{PrincipalStore, TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
+use krb5_kdc::{PrincipalStore, TEST_REALM, bootstrap_documented, documented_host};
 use krb5_types::{
     ApReq, Authenticator, AuthorizationData, AuthorizationDataValue, Checksum, EncTicketPart,
     EncryptedData, KdcOptions, KdcReq, KdcReqBody, KerberosTime, Microseconds, PaData,
     PrincipalName, TgsReq, Ticket, err, ku, pa,
 };
 
-use krb5_testkit::{status, user_as, wrap_if_relevant};
-fn cname() -> PrincipalName {
-    PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
-}
-
+use krb5_testkit::{status, user, user_as, wrap_if_relevant};
 fn host_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedTgs) -> EncTicketPart {
     let host = documented_host();
     let key = store.get_name(&host).unwrap().best_key().unwrap();
@@ -68,7 +64,7 @@ fn tgs_with_enc_ad(
     let authenticator = Authenticator {
         authenticator_vno: Authenticator::VNO,
         crealm: krb5_types::try_ascii(TEST_REALM).unwrap(),
-        cname: cname(),
+        cname: user(),
         cksum: Some(Checksum {
             cksumtype: session.etype().checksum_type(),
             checksum: mic.into(),

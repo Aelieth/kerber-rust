@@ -7,12 +7,8 @@ use krb5_kdc::{
     AUTHN_REQ_CL, ENCR_REP, SRVC_PRINC, TEST_REALM, TEST_USER, TestAudit, bootstrap_documented,
     clear_thread_audit, documented_host, set_thread_audit, tgs_req,
 };
-use krb5_testkit::issue_tgt;
+use krb5_testkit::{issue_tgt, user};
 use krb5_types::PrincipalName;
-
-fn user() -> PrincipalName {
-    PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
-}
 
 fn scratch_dir(name: &str) -> std::path::PathBuf {
     let scratch = std::env::var_os("CARGO_TARGET_TMPDIR")

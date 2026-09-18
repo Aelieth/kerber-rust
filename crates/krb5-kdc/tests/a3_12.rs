@@ -3,24 +3,19 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, decrypt, encrypt};
 use krb5_kdc::{
-    KDB_REQUIRES_PRE_AUTH, PrincipalStore, TEST_REALM, TEST_USER, bootstrap_documented,
-    documented_host,
+    KDB_REQUIRES_PRE_AUTH, PrincipalStore, TEST_REALM, bootstrap_documented, documented_host,
 };
 use krb5_protocol::tgs_req_ex;
 use krb5_types::{
     EncTicketPart, EncryptedData, KdcOptions, PrincipalName, Ticket, err, flag_bit, ku,
 };
 
-use krb5_testkit::{status, user_as};
+use krb5_testkit::{status, user, user_as};
 fn or_attr(store: &mut PrincipalStore, name: &PrincipalName, bit: u32) {
     let a = store.get_name(name).unwrap().attributes | bit;
     store
         .apply_admin_fields(name, Some(a), None, None, None, None, false, None)
         .unwrap();
-}
-
-fn cname() -> PrincipalName {
-    PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
 }
 
 fn tgt_without_preauth(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs) -> Ticket {
@@ -83,7 +78,7 @@ fn tgs_requires_preauth_without_pa_flag_is_no_preauth() {
         tgt_without_preauth(&store, &issued),
         &issued.session_key,
         TEST_REALM,
-        &cname(),
+        &user(),
         host,
         TEST_REALM,
         12002,
@@ -110,13 +105,13 @@ fn tgs_caps_endtime_at_client_max_life() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 12021);
     store
-        .apply_admin_fields(&cname(), None, Some(60), None, None, None, false, None)
+        .apply_admin_fields(&user(), None, Some(60), None, None, None, false, None)
         .unwrap();
     let tgs = tgs_req_ex(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
-        &cname(),
+        &user(),
         documented_host(),
         TEST_REALM,
         12022,

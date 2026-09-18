@@ -22,16 +22,12 @@ use krb5_protocol::{
     AsRequest, AsTicketOpts, Error, FastArmor, KdcAddr, armor_key, as_exchange, as_req,
     pa_enc_timestamp, unwrap_fast_rep,
 };
-use krb5_testkit::password_key;
+use krb5_testkit::{password_key, user};
 use krb5_types::fast::{KrbFastArmoredRep, KrbFastResponse, PaFxFast, PaFxFastRep};
 use krb5_types::{
     ApReq, AsRep, AsReq, Authenticator, EncryptedData, KrbError, MethodData, PaData, PrincipalName,
     ascii, err, ku, pa,
 };
-
-fn user() -> PrincipalName {
-    PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
-}
 
 fn mallory() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["mallory"])

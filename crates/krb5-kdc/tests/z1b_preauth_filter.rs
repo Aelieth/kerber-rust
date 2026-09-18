@@ -9,16 +9,12 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, encrypt};
-use krb5_kdc::{PrincipalStore, TEST_REALM, TEST_USER, bootstrap_documented};
+use krb5_kdc::{PrincipalStore, TEST_REALM, bootstrap_documented};
 use krb5_protocol::{as_req, pa_enc_timestamp};
+use krb5_testkit::user;
 use krb5_types::{
-    EncryptedData, KerberosTime, KrbError, Microseconds, PaData, PaEncTsEnc, PrincipalName, err,
-    ku, pa,
+    EncryptedData, KerberosTime, KrbError, Microseconds, PaData, PaEncTsEnc, err, ku, pa,
 };
-
-fn user() -> PrincipalName {
-    PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
-}
 
 fn user_key(store: &PrincipalStore, etype: EncryptionType) -> ProtocolKey {
     store

@@ -2,16 +2,13 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::p256_generate;
-use krb5_kdc::{Error, TEST_REALM, TEST_USER, as_req, bootstrap_documented};
+use krb5_kdc::{Error, TEST_REALM, as_req, bootstrap_documented};
 use krb5_protocol::{pa_pk_as_req_signed, pa_pk_as_req_unsigned};
+use krb5_testkit::user;
 use krb5_types::{
     MethodData, PaData, PrincipalName, err, flag_bit, pa,
     pkinit::{kdc_req_body_checksum, parse_authpack_freshness_token},
 };
-
-fn user() -> PrincipalName {
-    PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
-}
 
 fn wellknown_anonymous() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_WELLKNOWN, ["WELLKNOWN", "ANONYMOUS"])

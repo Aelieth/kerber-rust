@@ -3,26 +3,16 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, decrypt, encrypt};
 use krb5_kdc::{
-    KDB_DISALLOW_RENEWABLE, PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER,
-    bootstrap_documented, documented_host,
+    KDB_DISALLOW_RENEWABLE, PrincipalStore, TEST_REALM, bootstrap_documented, documented_host,
 };
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req_ex, tgs_req_ex_from};
 use krb5_types::{
-    EncTicketPart, EncryptedData, KdcOptions, KerberosTime, PrincipalName, Ticket, err, flag_bit,
-    ku,
+    EncTicketPart, EncryptedData, KdcOptions, KerberosTime, Ticket, err, flag_bit, ku,
 };
 
-use krb5_testkit::{s4u_admin, status, user_as};
+use krb5_testkit::{admin, s4u_admin, status, user, user_as};
 fn etypes() -> Vec<i32> {
     vec![EncryptionType::Aes256CtsHmacSha196.to_iana()]
-}
-
-fn user() -> PrincipalName {
-    PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
-}
-
-fn admin() -> PrincipalName {
-    PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN])
 }
 
 fn host_as(store: &PrincipalStore, nonce: u32, renewable: bool) -> krb5_kdc::IssuedAs {

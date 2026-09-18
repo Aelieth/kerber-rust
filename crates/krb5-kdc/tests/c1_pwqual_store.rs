@@ -5,11 +5,8 @@ use krb5_kdc::{
     Error, NamedPolicy, PWQUAL_DICT, PWQUAL_EMPTY, PWQUAL_PRINC, PrincipalStore, TEST_REALM,
     TEST_USER, bootstrap_documented,
 };
+use krb5_testkit::user;
 use krb5_types::PrincipalName;
-
-fn user() -> PrincipalName {
-    PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
-}
 
 fn name(s: &str) -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_PRINCIPAL, [s])

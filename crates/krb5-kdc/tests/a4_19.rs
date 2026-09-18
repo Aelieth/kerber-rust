@@ -2,15 +2,11 @@
 
 use krb5_asn1::decode_enc_kdc_rep_part;
 use krb5_crypto::{EncryptionType, KeyUsage, decrypt};
-use krb5_kdc::{PrincipalStore, TEST_REALM, TEST_USER, bootstrap_documented};
+use krb5_kdc::{PrincipalStore, TEST_REALM, bootstrap_documented};
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req_ex_from};
 use krb5_types::{KdcOptions, KerberosTime, PrincipalName, flag_bit, ku};
 
-use krb5_testkit::user_as;
-fn user() -> PrincipalName {
-    PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
-}
-
+use krb5_testkit::{user, user_as};
 fn enc_as(issued: &krb5_kdc::IssuedAs) -> krb5_types::EncKdcRepPart {
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART).unwrap();
     let plain = decrypt(

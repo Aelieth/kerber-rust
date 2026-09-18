@@ -2,16 +2,13 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::p256_generate;
-use krb5_kdc::{Error, TEST_REALM, TEST_USER, as_req, bootstrap_documented};
+use krb5_kdc::{Error, TEST_REALM, as_req, bootstrap_documented};
 use krb5_protocol::pa_pk_as_req;
+use krb5_testkit::user;
 use krb5_types::{
-    MethodData, PaData, PrincipalName, err, pa,
+    MethodData, PaData, err, pa,
     pkinit::{ECONTENT_AUTHDATA, PaPkAsReq, cms_sign_leaf, cms_verify, parse_pa_pk_as_req_cms},
 };
-
-fn user() -> PrincipalName {
-    PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
-}
 
 fn tlv(tag: u8, body: &[u8]) -> Vec<u8> {
     let mut out = vec![tag];

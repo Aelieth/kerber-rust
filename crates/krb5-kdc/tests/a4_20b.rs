@@ -4,15 +4,11 @@ use std::sync::Arc;
 
 use krb5_asn1::encode;
 use krb5_kdc::{
-    ENCR_REP, TEST_REALM, TEST_USER, TestAudit, as_req, bootstrap_documented, clear_thread_audit,
-    ktypes2str, make_tkt_id, pa_enc_timestamp, set_thread_audit,
+    ENCR_REP, TEST_REALM, TestAudit, as_req, bootstrap_documented, clear_thread_audit, ktypes2str,
+    make_tkt_id, pa_enc_timestamp, set_thread_audit,
 };
-use krb5_types::PrincipalName;
+use krb5_testkit::user;
 use sha2::{Digest, Sha256};
-
-fn user() -> PrincipalName {
-    PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
-}
 
 fn scratch_dir(name: &str) -> std::path::PathBuf {
     let scratch = std::env::var_os("CARGO_TARGET_TMPDIR")

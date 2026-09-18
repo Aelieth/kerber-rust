@@ -3,19 +3,14 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, decrypt, encrypt};
 use krb5_kdc::{
-    KDB_REQUIRES_PRE_AUTH, PrincipalStore, Restrictions, TEST_REALM, TEST_USER,
-    bootstrap_documented,
+    KDB_REQUIRES_PRE_AUTH, PrincipalStore, Restrictions, TEST_REALM, bootstrap_documented,
 };
 use krb5_protocol::{as_req, tgs_req_ex};
 use krb5_types::{
     EncTicketPart, EncryptedData, KdcOptions, PrincipalName, Ticket, err, flag_bit, ku,
 };
 
-use krb5_testkit::{status, user_as_bits};
-fn cname() -> PrincipalName {
-    PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
-}
-
+use krb5_testkit::{status, user, user_as_bits};
 fn tgt_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs) -> EncTicketPart {
     let key = store.krbtgt().unwrap().best_key().unwrap();
     let usage = KeyUsage::new(ku::TICKET).unwrap();
@@ -51,7 +46,7 @@ fn as_renewable_with_zero_rlife_caps_renew_till_at_start() {
         max_renewable_life: Some(0),
         ..Restrictions::default()
     };
-    store.impose_acl_restrictions(&cname(), &rs).unwrap();
+    store.impose_acl_restrictions(&user(), &rs).unwrap();
     let issued = user_as_bits(&store, 26001, &[(flag_bit::RENEWABLE, true)]);
     let part = tgt_part(&store, &issued);
     let start = part
@@ -74,8 +69,8 @@ fn as_without_preauth_has_no_pre_authent() {
         forbid_attrs: !KDB_REQUIRES_PRE_AUTH,
         ..Restrictions::default()
     };
-    store.impose_acl_restrictions(&cname(), &rs).unwrap();
-    let req = as_req(cname(), TEST_REALM, 26011, None).unwrap();
+    store.impose_acl_restrictions(&user(), &rs).unwrap();
+    let req = as_req(user(), TEST_REALM, 26011, None).unwrap();
     let issued = krb5_kdc::issue_as(&store, &req).unwrap();
     assert!(!tgt_part(&store, &issued).flags.pre_authent());
 }
@@ -93,7 +88,7 @@ fn tgs_renew_invalid_non_renewable_is_ticket_not_renewable() {
         forge_tgt(&store, &issued, &part),
         &issued.session_key,
         TEST_REALM,
-        &cname(),
+        &user(),
         PrincipalName::krbtgt(TEST_REALM),
         TEST_REALM,
         26022,

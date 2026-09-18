@@ -5,8 +5,8 @@ use std::sync::Arc;
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt};
 use krb5_kdc::{
-    GREET_AD_TYPE, GREET_TEXT, GreetAuth, PrincipalStore, TEST_REALM, TEST_USER,
-    bootstrap_documented, decrypt_ticket_part, documented_host, register_authdata,
+    GREET_AD_TYPE, GREET_TEXT, GreetAuth, PrincipalStore, TEST_REALM, bootstrap_documented,
+    decrypt_ticket_part, documented_host, register_authdata,
 };
 use krb5_types::{
     ApReq, Authenticator, AuthorizationData, AuthorizationDataValue, Checksum, EncTicketPart,
@@ -14,11 +14,7 @@ use krb5_types::{
     PaData, PrincipalName, TgsReq, Ticket, ku, pa,
 };
 
-use krb5_testkit::{user_as, wrap_if_relevant};
-fn cname() -> PrincipalName {
-    PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
-}
-
+use krb5_testkit::{user, user_as, wrap_if_relevant};
 fn host_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedTgs) -> EncTicketPart {
     let host = documented_host();
     let key = store.get_name(&host).unwrap().best_key().unwrap();
@@ -74,7 +70,7 @@ fn tgs_hand(
     let authenticator = Authenticator {
         authenticator_vno: Authenticator::VNO,
         crealm: krb5_types::try_ascii(TEST_REALM).unwrap(),
-        cname: cname(),
+        cname: user(),
         cksum: Some(Checksum {
             cksumtype: session.etype().checksum_type(),
             checksum: mic.into(),

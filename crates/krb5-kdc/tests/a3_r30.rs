@@ -7,18 +7,14 @@ use std::time::Duration;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, ProtocolKey};
-use krb5_kdc::{Error, TEST_REALM, TEST_USER, bootstrap_documented};
+use krb5_kdc::{Error, TEST_REALM, bootstrap_documented};
 use krb5_protocol::{AsOutcome, KdcAddr, as_req, tgs_exchange};
-use krb5_testkit::status;
+use krb5_testkit::{status, user};
 use krb5_types::{
     EncKdcRepPart, EncryptedData, EncryptionKey, KerberosTime, MethodData, OctetString, PaData,
     PrincipalName, TgsReq, Ticket, TicketFlags, ascii, err, pa,
     spake::{GROUP_EDWARDS25519, PaSpake, SpakeSupport},
 };
-
-fn user() -> PrincipalName {
-    PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
-}
 
 fn support_groups(groups: &[i32]) -> PaData {
     let msg = PaSpake::Support(SpakeSupport {

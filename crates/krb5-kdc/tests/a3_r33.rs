@@ -8,16 +8,13 @@ use std::time::Duration;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt};
-use krb5_kdc::{Error, TEST_REALM, TEST_USER, bootstrap_documented};
+use krb5_kdc::{Error, TEST_REALM, bootstrap_documented};
 use krb5_protocol::{AsOutcome, KdcAddr, as_req, tgs_exchange};
+use krb5_testkit::user;
 use krb5_types::{
     ApReq, Authenticator, EncKdcRepPart, EncTgsRepPart, EncryptedData, EncryptionKey, KerberosTime,
     OctetString, PaData, PrincipalName, TgsRep, TgsReq, Ticket, TicketFlags, ascii, ku, pa,
 };
-
-fn user() -> PrincipalName {
-    PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
-}
 
 fn session() -> ProtocolKey {
     ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[7u8; 32]).unwrap()

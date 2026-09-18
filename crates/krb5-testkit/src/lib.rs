@@ -19,11 +19,56 @@ use krb5_types::KdcOptions;
 use krb5_types::KrbError;
 use krb5_types::PaData;
 use krb5_types::PrincipalName;
+use krb5_types::Realm;
 use krb5_types::TgsReq;
 use krb5_types::Ticket;
+use krb5_types::ascii;
 use krb5_types::flag_bit;
 use krb5_types::pa;
 use krb5_types::pac::{PAC_CLIENT_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer};
+
+/// `TEST_USER` as NT_PRINCIPAL.
+///
+/// Replaces the local `user` / `cname` copies that bind `TEST_USER`.
+/// Protocol tests that use the string `"user"` stay local.
+#[must_use]
+pub fn user() -> PrincipalName {
+    PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
+}
+
+/// `TEST_ADMIN` as NT_PRINCIPAL.
+#[must_use]
+pub fn admin() -> PrincipalName {
+    PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN])
+}
+
+/// Documented POSIX host principal.
+#[must_use]
+pub fn host() -> PrincipalName {
+    documented_host()
+}
+
+/// Local-realm krbtgt principal.
+#[must_use]
+pub fn krbtgt() -> PrincipalName {
+    PrincipalName::krbtgt(TEST_REALM)
+}
+
+/// Documented test realm string.
+#[must_use]
+pub fn realm() -> &'static str {
+    TEST_REALM
+}
+
+/// `name` as a KerberosString realm.
+///
+/// # Panics
+///
+/// Panics if `name` is not a GeneralString — the same expect `ascii` uses.
+#[must_use]
+pub fn realm_with(name: &str) -> Realm {
+    ascii(name)
+}
 
 /// IANA etype numbers in MIT `preferred()` order.
 ///

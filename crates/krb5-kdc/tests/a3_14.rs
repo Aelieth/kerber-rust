@@ -2,22 +2,18 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{KeyUsage, decrypt, encrypt};
-use krb5_kdc::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
+use krb5_kdc::{TEST_REALM, bootstrap_documented, documented_host};
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
-use krb5_types::{AuthorizationDataValue, EncTicketPart, PrincipalName, Ticket, err, ku, pa};
+use krb5_types::{AuthorizationDataValue, EncTicketPart, Ticket, err, ku, pa};
 
-use krb5_testkit::{status, user_as};
-fn krbtgt_name() -> PrincipalName {
-    PrincipalName::krbtgt(TEST_REALM)
-}
-
+use krb5_testkit::{krbtgt, status, user, user_as};
 #[test]
 fn as_require_auth_is_higher_authentication() {
     let (mut store, _) = bootstrap_documented().unwrap();
     store
-        .set_string(&krbtgt_name(), "require_auth", Some("pkinit"))
+        .set_string(&krbtgt(), "require_auth", Some("pkinit"))
         .unwrap();
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let cname = user();
     let key = store
         .get_name(&cname)
         .unwrap()
@@ -50,7 +46,7 @@ fn tgs_require_auth_is_higher_authentication() {
         issued.rep.0.ticket.clone(),
         &issued.session_key,
         TEST_REALM,
-        &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]),
+        &user(),
         documented_host(),
         TEST_REALM,
         14003,
@@ -68,7 +64,7 @@ fn tgs_truncated_cammac_is_get_auth_indicators() {
     let (store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 14004);
     let tgt_key = store
-        .get_name(&krbtgt_name())
+        .get_name(&krbtgt())
         .unwrap()
         .first_current_key()
         .unwrap()
@@ -99,7 +95,7 @@ fn tgs_truncated_cammac_is_get_auth_indicators() {
         ticket,
         &issued.session_key,
         TEST_REALM,
-        &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]),
+        &user(),
         documented_host(),
         TEST_REALM,
         14005,

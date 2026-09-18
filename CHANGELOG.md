@@ -27,8 +27,11 @@ this project uses semantic versioning once a crate is published.
   apart). `evidence_for_user` — the two admin→user evidence
   tickets (`a4_18b`'s inline store-key AS is `issue_tgt`).
   `wrap_if_relevant` — the three test IF-RELEVANT wrappers
-  (product `ad.rs` stays `Result`-returning). Assertion text in
-  those files is unchanged.
+  (product `ad.rs` stays `Result`-returning). `user` / `admin` /
+  `host` / `krbtgt` / `realm` / `realm_with` — TEST_* principal
+  constructors (`cname`/`krbtgt_name` map onto `user`/`krbtgt`;
+  protocol `"user"` / `KERBER.TEST` stay local). Assertion text
+  in those files is unchanged.
 
 ### W3-S2.1 drop the eight a2_*_parent red-inject files
 
