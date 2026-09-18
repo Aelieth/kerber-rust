@@ -5,8 +5,6 @@
 //! close (`kpropd.c:528-546`). Live oracle: MIT kpropd in
 //! `scripts/prop-acl-gate.sh` (`acl-*` cells).
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
 use krb5_admin::{Error, KpropAuth, kprop_send_dump, kprop_sendauth, kpropd_recvauth};
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::{

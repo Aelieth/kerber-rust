@@ -9,8 +9,9 @@ Fails on:
   - a (file,kind,tag) multiplicity drop (a (kind,tag) count that fell)
   - a diffsend case, client-differential flow, or ledger row removed or regraded
   - a gate_rc that went from 0 to non-zero
-  - quality counts that went up (allow=, unwrap_expect_panic_src=, traces_untracked=,
+  - quality counts that went up (allow=, allow_sites=, unwrap_expect_panic_src=, traces_untracked=,
     clippy_warnings=, doc_warnings=, fmt_files=, shellcheck_findings=, undocumented_pub=)
+    unless `--accept-rise key=N:reason` names that exact rise
   - a quality rc that went from 0 to non-zero (fmt_rc, clippy_rc, doc_rc, doctest_rc,
     shellcheck_rc)
 
@@ -137,25 +138,58 @@ def _write_snap(
         (d / "timings.tsv").write_text(timings, encoding="utf-8")
 
 
-def _quiet_compare(old: pathlib.Path, new: pathlib.Path, dead_path: pathlib.Path | None = None) -> int:
+def parse_accept_rise(items: list[str] | None) -> dict[str, tuple[int, str]]:
+    """`--accept-rise key=N:reason` → {key: (N, reason)}."""
+    out: dict[str, tuple[int, str]] = {}
+    for raw in items or []:
+        if "=" not in raw:
+            raise SystemExit(f"bad --accept-rise {raw!r} (want key=N:reason)")
+        key, rest = raw.split("=", 1)
+        if ":" not in rest:
+            raise SystemExit(f"bad --accept-rise {raw!r} (want key=N:reason)")
+        n_s, reason = rest.split(":", 1)
+        try:
+            n = int(n_s)
+        except ValueError as e:
+            raise SystemExit(f"bad --accept-rise {raw!r} (N must be int)") from e
+        if n < 1 or not key.strip() or not reason.strip():
+            raise SystemExit(f"bad --accept-rise {raw!r}")
+        out[key.strip()] = (n, reason.strip())
+    return out
+
+
+def _quiet_compare(
+    old: pathlib.Path,
+    new: pathlib.Path,
+    dead_path: pathlib.Path | None = None,
+    accept_rise: list[str] | None = None,
+) -> int:
     import io
     from contextlib import redirect_stdout
 
     with redirect_stdout(io.StringIO()):
-        return main_compare(old, new, dead_path=dead_path)
+        return main_compare(old, new, dead_path=dead_path, accept_rise=accept_rise)
 
 
 def _must_fail(
-    old: pathlib.Path, new: pathlib.Path, label: str, dead_path: pathlib.Path | None = None
+    old: pathlib.Path,
+    new: pathlib.Path,
+    label: str,
+    dead_path: pathlib.Path | None = None,
+    accept_rise: list[str] | None = None,
 ) -> None:
-    if _quiet_compare(old, new, dead_path) == 0:
+    if _quiet_compare(old, new, dead_path, accept_rise=accept_rise) == 0:
         raise SystemExit(f"hygiene-diff --self-test: {label} must fail")
 
 
 def _must_pass(
-    old: pathlib.Path, new: pathlib.Path, label: str, dead_path: pathlib.Path | None = None
+    old: pathlib.Path,
+    new: pathlib.Path,
+    label: str,
+    dead_path: pathlib.Path | None = None,
+    accept_rise: list[str] | None = None,
 ) -> None:
-    if _quiet_compare(old, new, dead_path) != 0:
+    if _quiet_compare(old, new, dead_path, accept_rise=accept_rise) != 0:
         raise SystemExit(f"hygiene-diff --self-test: {label} must pass")
 
 
@@ -173,6 +207,16 @@ def _self_test_quality(root: pathlib.Path) -> None:
         ("na", {"shellcheck_findings": "na"}, {"shellcheck_findings": "90"}),
         ("counts fell", {"undocumented_pub": "117", "allow": "75"}, {"undocumented_pub": "0", "allow": "70"}),
     ]
+    waiver_old, waiver_new = root / "waiver-old", root / "waiver-new"
+    _write_snap(waiver_old, ["a.sh\techo\tkeep"], quality={"allow_sites": "77"})
+    _write_snap(waiver_new, ["a.sh\techo\tkeep"], quality={"allow_sites": "81"})
+    _must_fail(waiver_old, waiver_new, "quality allow_sites rose")
+    _must_pass(
+        waiver_old,
+        waiver_new,
+        "quality allow_sites waived",
+        accept_rise=["allow_sites=4: tests/common dead_code"],
+    )
     for i, (label, old_q, new_q) in enumerate(red):
         old, new = root / f"red{i}-old", root / f"red{i}-new"
         _write_snap(old, ["a.sh\techo\tkeep"], quality=old_q)
@@ -255,7 +299,12 @@ def _self_test() -> None:
 
 
 def main_compare(
-    old: pathlib.Path, new: pathlib.Path, renames_path=None, duplicates_path=None, dead_path=None
+    old: pathlib.Path,
+    new: pathlib.Path,
+    renames_path=None,
+    duplicates_path=None,
+    dead_path=None,
+    accept_rise=None,
 ) -> int:
     class NS:
         pass
@@ -266,6 +315,7 @@ def main_compare(
     args.renames = renames_path
     args.duplicates = duplicates_path
     args.dead = dead_path
+    args.accept_rise = accept_rise
     return _compare(args)
 
 
@@ -421,8 +471,11 @@ def _compare(args) -> int:
             return None
 
     old_q, new_q = kv(old / "quality.txt"), kv(new / "quality.txt")
+    waivers = parse_accept_rise(getattr(args, "accept_rise", None))
+    waived_used: set[str] = set()
     for key in (
         "allow",
+        "allow_sites",
         "unwrap_expect_panic_src",
         "traces_untracked",
         "clippy_warnings",
@@ -433,9 +486,17 @@ def _compare(args) -> int:
     ):
         a, b = int_or_none(old_q, key), int_or_none(new_q, key)
         if a is not None and b is not None and b > a:
-            fail(f"quality {key} rose {a} -> {b}")
+            delta = b - a
+            if key in waivers and waivers[key][0] == delta:
+                waived_used.add(key)
+                info(f"quality {key} rose {a} -> {b} accepted ({waivers[key][1]})")
+            else:
+                fail(f"quality {key} rose {a} -> {b}")
         elif a is not None and b is not None and b != a:
             info(f"quality {key} {a} -> {b}")
+    for key, (n, reason) in waivers.items():
+        if key not in waived_used:
+            fail(f"accept-rise {key}={n}:{reason} unused")
     for key in ("fmt_rc", "clippy_rc", "doc_rc", "doctest_rc", "shellcheck_rc"):
         a, b = int_or_none(old_q, key), int_or_none(new_q, key)
         if a == 0 and b not in (None, 0):
@@ -596,6 +657,13 @@ def main() -> int:
     ap.add_argument("--renames", type=pathlib.Path, help="old_name -> new_name")
     ap.add_argument("--duplicates", type=pathlib.Path, help="removed_name = kept_name")
     ap.add_argument("--dead", type=pathlib.Path, help="echo tag: reason (a MIT_/RUST_ name that was never a cell)")
+    ap.add_argument(
+        "--accept-rise",
+        action="append",
+        default=[],
+        metavar="KEY=N:REASON",
+        help="allow quality KEY to rise by exactly N (recorded reason)",
+    )
     args = ap.parse_args()
     if args.old.is_dir() and args.new.is_dir():
         for line in provenance_header(args.old, args.new):

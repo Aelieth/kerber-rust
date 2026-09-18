@@ -1,7 +1,5 @@
 //! Admin whole-flow tests moved from `src/lib.rs`.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
 #[path = "common/mod.rs"]
 mod common;
 

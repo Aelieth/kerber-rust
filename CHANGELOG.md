@@ -14,6 +14,9 @@ this project uses semantic versioning once a crate is published.
   `check_capture_env_only`.
 - **test.** `cross_tgt_renew_realm_mismatch_is_server_nomatch` (body
   asserts 26 `SERVER_NOMATCH`, not `BADOPTION`).
+- **test.** Drop redundant clippy unwrap/expect/panic allows on admin
+  `tests/*.rs`; keep the four `tests/common` `dead_code` allows.
+  `hygiene-diff` fails an `allow_sites` rise unless `--accept-rise`.
 
 ### W3-S2.6 coverage
 

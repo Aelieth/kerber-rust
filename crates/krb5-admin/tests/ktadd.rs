@@ -5,8 +5,6 @@
 //! already exist; the parent uses `default_mod_actor` on rotate and does
 //! not stamp unlock.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
 #[path = "common/mod.rs"]
 mod common;
 use common::*;

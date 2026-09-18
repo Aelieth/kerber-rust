@@ -13,8 +13,6 @@
 //! `load_store`, and `persist_paths` already exist; the parent writes
 //! without `reload_if_stale()`.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
 #[path = "common/mod.rs"]
 mod common;
 use common::*;
