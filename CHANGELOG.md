@@ -10,6 +10,7 @@ this project uses semantic versioning once a crate is published.
 
 - **test.** `krb5-types/tests/k3_parse_deltat.rs` → `parse_name_deltat.rs`
   (`ci-policy` red-at-sha overlay-probe fixture follows).
+  `krb5-client/tests/r1_ccache_config.rs` → `ccache_config.rs`.
 
 ### W3-S2.3 in-src tests by shape
 
