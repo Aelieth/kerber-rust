@@ -6,6 +6,22 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S2-R3 compare-tool robustness
+
+- **tool.** Each `--self-test` (`hygiene-diff`, `hygiene-body-diff`,
+  `hygiene_inventory`) prints `self-test ok (N cases)`. `ci-policy`
+  requires N at or above the known count; a copy whose `_self_test`
+  body is `return None` (tokens kept in the docstring) is red.
+- **tool.** `hygiene-body-diff` smashes a same-file helper only when
+  the name exists on both sides; a rename compares helper bodies and a
+  weaker body is an assertion change. `--accept` is keyed nextest
+  `binary<TAB>name` (one entry, one pair); the RHS must exist in the
+  new tree. The assertion blob keeps helper-call arguments.
+- **tool.** `check_capture_env_only` requires a
+  `refuse_golden_capture_dir` *call* line
+  (`^\s*refuse_golden_capture_dir\s+\S`) in
+  `prod-realm-common.sh` and `harness/prod/env-up.sh`.
+
 ### W3-S2-R2 compare tooling
 
 - **tool.** `hygiene-body-diff --accept` is keyed `binary<TAB>name` and
@@ -18,11 +34,10 @@ this project uses semantic versioning once a crate is published.
   (many-to-one needs `merged:`). Negative duplicates fixtures go
   through `main_compare`; `--accept-rise` has mismatched-N and unused
   reds.
-- **tool.** `ci-policy` executes both `--self-test`s (a gutted
-  `_self_test` that keeps tokens is red). `check_capture_env_only`
-  scans `harness/**/*.sh` and `.github/workflows/*.yml`, matches
-  `var_os` / `option_env!`, and requires `refuse_golden_capture_dir`
-  in `prod-realm-common.sh` and `harness/prod/env-up.sh`.
+- **tool.** `ci-policy` executes both `--self-test`s. The gutted
+  `_self_test` red is S2-R3 (case count + body replacement).
+  `check_capture_env_only` scans `harness/**/*.sh` and
+  `.github/workflows/*.yml` and matches `var_os` / `option_env!`.
 - **tool.** Inventory `CFG_TEST_RE` accepts `#[cfg(test)] mod x;`.
   `check_doc_file_cites` excludes `CHANGELOG.md` (history).
 

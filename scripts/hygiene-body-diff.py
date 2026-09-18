@@ -9,10 +9,14 @@ prefixes, and a helper-substitution table, then reports:
   dropped, added
 
 `--subst` rewrites only call positions of names in the declared helper
-list (never constants, numerics, or string literals). `--accept` is keyed
-`binary<TAB>name` and pins the accepted old→new assertion-blob hashes;
-an unused entry or a blob mismatch fails. There is no request-shape
-column (no canonical built-request form).
+list (never constants, numerics, or string literals). Same-file helpers
+are smashed only when the name exists on both sides of a pair; a rename
+compares the helper bodies. `--accept` is keyed nextest
+`binary<TAB>name` (one entry, one pair) and pins the accepted old→new
+assertion-blob hashes; the RHS must exist in the new tree, and an unused
+entry or a blob mismatch fails. Helper-call arguments stay in the blob
+(smash the callee name only). There is no request-shape column (no
+canonical built-request form).
 
 Fails when an assertion-line change is not in `--accept` (with a matching
 blob pin), a `#[ignore]` / `#[should_panic]` attribute is added or
@@ -232,6 +236,7 @@ def extract(root: pathlib.Path) -> list[dict]:
             stack: list[tuple[int, str]] = []
             file_results: list[dict] = []
             file_fns: list[str] = []
+            helper_bodies: dict[str, str] = {}
             depth = 0
             n = len(scan)
             p = 0
@@ -276,17 +281,18 @@ def extract(root: pathlib.Path) -> list[dict]:
                             TEST_ATTR.search(a.replace(" ", "")) or re.match(r"#\[\s*(?:tokio::)?test", a)
                             for a in attrs
                         )
-                        if istest:
-                            q = m.end()
-                            d2 = 1
-                            while q < n and d2 > 0:
-                                if scan[q] == "(":
-                                    d2 += 1
-                                elif scan[q] == ")":
-                                    d2 -= 1
-                                q += 1
-                            while q < n and scan[q] != "{":
-                                q += 1
+                        q = m.end()
+                        d2 = 1
+                        while q < n and d2 > 0:
+                            if scan[q] == "(":
+                                d2 += 1
+                            elif scan[q] == ")":
+                                d2 -= 1
+                            q += 1
+                        while q < n and scan[q] not in "{;":
+                            q += 1
+                        body = ""
+                        if q < n and scan[q] == "{":
                             start_body, d3 = q, 0
                             while q < n:
                                 if scan[q] == "{":
@@ -296,6 +302,8 @@ def extract(root: pathlib.Path) -> list[dict]:
                                     if d3 == 0:
                                         break
                                 q += 1
+                            body = src[start_body : q + 1]
+                        if istest:
                             attr_block = "".join(a + "\n" for a in attrs)
                             file_results.append(
                                 {
@@ -303,11 +311,13 @@ def extract(root: pathlib.Path) -> list[dict]:
                                     "file": rel,
                                     "name": m.group(1),
                                     "leaf": m.group(1),
-                                    "body": attr_block + src[start_body : q + 1],
+                                    "body": attr_block + body,
                                     "attrs": attrs,
                                     "mods": [s[1] for s in stack],
                                 }
                             )
+                        elif body:
+                            helper_bodies[m.group(1)] = body
                         pending_attrs = []
                     ev_idx += 1
                 ch = scan[p]
@@ -322,6 +332,7 @@ def extract(root: pathlib.Path) -> list[dict]:
             locals_ = [n for n in file_fns if n not in tests]
             for t in file_results:
                 t["local_helpers"] = locals_
+                t["helper_bodies"] = helper_bodies
             results.extend(file_results)
     return results
 
@@ -466,19 +477,141 @@ def apply_subst(lines: list[str], subst: list[tuple[str, str]]) -> list[str]:
 
 
 def smash_helpers(lines: list[str], extra: list[str] | tuple[str, ...] = ()) -> list[str]:
-    """Smash declared and same-file helpers at bare call positions only.
+    """Smash declared and extra helper callee names at bare call positions.
 
-    `user_as()` / `host_part(` become HELPER; `store.policy()` and the word
-    `realm` inside a string stay. Never rewrite constants or field names.
+    Arguments stay (`status(&a, 13)` → `HELPER(&a, 13)`). `store.policy()` and
+    the word `realm` inside a string stay. Never rewrite constants or fields.
+    Same-file helpers belong in `extra` only when the name exists on both
+    sides of a pair.
     """
     names = list(dict.fromkeys([*HELPERS, *extra]))
     out = []
     for line in lines:
         for h in names:
             line = _rewrite_helper_calls(line, h, "HELPER")
-        line = re.sub(r"HELPER\s*\(\s*&?[^)]*\)(?:\.\d+)?", "HELPER", line)
+        # Adapter shape only: `HELPER(&err)` / `HELPER(err).0` after a
+        # declared-helper subst (`proto_code` → `status`). Numeric and
+        # other arguments stay so `status(&a, 13)` vs `status(&a, 0)` is
+        # still an assertion change.
+        line = re.sub(r"HELPER\s*\(\s*&", "HELPER(", line)
+        line = re.sub(r"(HELPER\s*\([^)]*\))\s*\.\d+", r"\1", line)
         out.append(line)
     return out
+
+
+def flatten_code(lines: list[str]) -> str:
+    text = re.sub(r"\s+", " ", " ".join(lines))
+    text = re.sub(r"\(\s+", "(", text)
+    text = re.sub(r"\s+\)", ")", text)
+    text = re.sub(r",\s*\)", ")", text)
+    text = re.sub(r"\s+,", ",", text)
+    return re.sub(r",\s*", ", ", text)
+
+
+def _name_called(lines: list[str], name: str) -> bool:
+    return any(_rewrite_helper_calls(line, name, "HELPER") != line for line in lines)
+
+
+def helper_norm(body: str, own: str) -> str:
+    return flatten_code(smash_helpers(norm_body(body), [own]))
+
+
+def smash_pair(
+    o: dict,
+    n: dict,
+    ol: list[str],
+    nl: list[str],
+) -> tuple[list[str], list[str], bool]:
+    """Smash shared same-file helpers; pair renamed locals by helper body.
+
+    A name change whose helper bodies differ is not helper-only (the
+    smashed blobs keep the distinct callee names, so it is an assertion
+    change). Byte-identical bodies modulo the name stay helper-only.
+    """
+    helpers = set(HELPERS)
+    old_locals = list(o.get("local_helpers") or [])
+    new_locals = list(n.get("local_helpers") or [])
+    old_used = [h for h in old_locals if h not in helpers and _name_called(ol, h)]
+    new_used = [h for h in new_locals if h not in helpers and _name_called(nl, h)]
+    # Smash a same-file name only when both sides *call* it. A split that
+    # keeps the old name in the new file unused must still pair the used
+    # rename by helper body (tgt_part → tgt_part_issue_acl_ap).
+    shared_used = [h for h in old_used if h in set(new_used)]
+    so = smash_helpers(ol, shared_used)
+    sn = smash_helpers(nl, shared_used)
+    if so == sn or flatten_code(so) == flatten_code(sn):
+        return so, sn, True
+    old_bodies = o.get("helper_bodies") or {}
+    new_bodies = n.get("helper_bodies") or {}
+    old_only = [h for h in old_used if h not in shared_used]
+    new_only = [h for h in new_used if h not in shared_used]
+    unmatched = list(old_only)
+    paired_old: list[str] = []
+    paired_new: list[str] = []
+    for nh in new_only:
+        nb = helper_norm(new_bodies.get(nh, ""), nh)
+        match = next(
+            (oh for oh in unmatched if helper_norm(old_bodies.get(oh, ""), oh) == nb),
+            None,
+        )
+        if match is None:
+            # Leftovers on both sides whose bodies differ: assertion change.
+            if old_only and new_only:
+                return so, sn, False
+            break
+        unmatched.remove(match)
+        paired_old.append(match)
+        paired_new.append(nh)
+    so2 = smash_helpers(so, paired_old)
+    sn2 = smash_helpers(sn, paired_new)
+    if so2 == sn2 or flatten_code(so2) == flatten_code(sn2):
+        return so2, sn2, True
+    leftover_old = [h for h in unmatched]
+    leftover_new = [h for h in new_only if h not in paired_new]
+    if leftover_old and leftover_new:
+        return so2, sn2, False
+    # One-sided leftover (local `code` vs declared `protocol_code`): smash
+    # the leftover name and re-compare. Both-sided leftovers already failed.
+    so3 = smash_helpers(so2, leftover_old)
+    sn3 = smash_helpers(sn2, leftover_new)
+    if so3 == sn3 or flatten_code(so3) == flatten_code(sn3):
+        return so3, sn3, True
+    return so3, sn3, False
+
+
+def nextest_binary(t: dict) -> str:
+    """Nextest rust-suite id: `crate`, `crate::stem`, or `crate::bin/name`."""
+    parts = t["file"].split("/")
+    crate = t["crate"]
+    if len(parts) >= 4 and parts[2] == "tests":
+        stem = parts[3][:-3] if parts[3].endswith(".rs") else parts[3]
+        return f"{crate}::{stem}"
+    if len(parts) >= 5 and parts[2] == "src" and parts[3] == "bin":
+        name = parts[4][:-3] if parts[4].endswith(".rs") else parts[4]
+        return f"{crate}::bin/{name}"
+    return crate
+
+
+def nextest_name(t: dict) -> str:
+    """Nextest testcase name: file-module path + nested mods + leaf."""
+    parts = t["file"].split("/")
+    mods = list(t.get("mods") or [])
+    leaf = t["leaf"]
+    if len(parts) >= 3 and parts[2] == "src":
+        rest = parts[3:]
+        if rest and rest[0] == "bin":
+            file_mods: list[str] = []
+        elif rest:
+            fname = rest[-1]
+            dirs = rest[:-1]
+            if fname in ("lib.rs", "main.rs", "mod.rs"):
+                file_mods = dirs
+            else:
+                file_mods = [*dirs, pathlib.Path(fname).stem]
+        else:
+            file_mods = []
+        return "::".join([*file_mods, *mods, leaf])
+    return "::".join([*mods, leaf]) if mods else leaf
 
 
 def materialize(spec: str, dest: pathlib.Path, git_cwd: pathlib.Path) -> pathlib.Path:
@@ -561,7 +694,7 @@ def link(
 
 
 def test_id(t: dict) -> str:
-    return f"{t['crate']}\t{t['leaf']}"
+    return f"{nextest_binary(t)}\t{nextest_name(t)}"
 
 
 def _lhs_matches(lhs: str, t: dict) -> bool:
@@ -625,19 +758,8 @@ def compare_trees(
         if ol == nl:
             identical += 1
             continue
-        so, sn = smash_helpers(ol, o.get("local_helpers") or ()), smash_helpers(nl, n.get("local_helpers") or ())
-        if so == sn:
-            helper_only += 1
-            continue
-        def flatten_code(lines: list[str]) -> str:
-            text = re.sub(r"\s+", " ", " ".join(lines))
-            text = re.sub(r"\(\s+", "(", text)
-            text = re.sub(r"\s+\)", ")", text)
-            text = re.sub(r",\s*\)", ")", text)
-            text = re.sub(r"\s+,", ",", text)
-            return re.sub(r",\s*", ", ", text)
-
-        if flatten_code(so) == flatten_code(sn):
+        so, sn, helper = smash_pair(o, n, ol, nl)
+        if helper:
             helper_only += 1
             continue
         differ.append((o, n, ol, nl))
@@ -677,16 +799,25 @@ def compare_trees(
         if ob != nb:
             assert_changes.append((o, n, blob_hash(ob), blob_hash(nb)))
     dropped_unmapped = [t for t in unmatched_old if not dup_covers(t, dups, new)]
+    new_ids = {test_id(t) for t in new}
+    missing_rhs = [
+        strip_merged(entry["new"])
+        for entry in accept.values()
+        if strip_merged(entry["new"]) not in new_ids
+    ]
     unaccepted = []
     accepted = []
     used_accept: set[str] = set()
     for o, n, oh, nh in assert_changes:
-        entry = accept.get(accept_key(o)) or accept.get(accept_key(n))
         key = accept_key(o) if accept_key(o) in accept else accept_key(n)
+        entry = accept.get(key)
+        rhs_ok = entry is not None and strip_merged(entry["new"]) == accept_key(n)
         if (
             entry
+            and rhs_ok
             and entry["old_hash"] == oh
             and entry["new_hash"] == nh
+            and key not in used_accept
         ):
             used_accept.add(key)
             accepted.append((o, n, entry["reason"]))
@@ -710,6 +841,7 @@ def compare_trees(
         "accepted": accepted,
         "attr_changes": attr_changes,
         "unused_accept": unused_accept,
+        "missing_accept_rhs": missing_rhs,
     }
     return report
 
@@ -750,11 +882,22 @@ def evaluate(report: dict[str, object]) -> None:
         errs.append(f"dropped test not in --duplicates: {t['file']} {t['leaf']}")
     for key in report["unused_accept"]:  # type: ignore[misc]
         errs.append(f"--accept entry unused: {key}")
+    for rhs in report.get("missing_accept_rhs") or []:  # type: ignore[misc]
+        errs.append(f"--accept RHS missing in new tree: {rhs}")
     if errs:
         raise BodyDiffError("; ".join(errs[:8]))
 
 
-def _self_test() -> None:
+def _must_red(report: dict[str, object], label: str) -> None:
+    try:
+        evaluate(report)
+    except BodyDiffError:
+        return
+    raise SystemExit(f"hygiene-body-diff --self-test: {label} must fail")
+
+
+def _self_test() -> int:
+    n = 0
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
         old, new = root / "old", root / "new"
@@ -771,13 +914,10 @@ def _self_test() -> None:
             encoding="utf-8",
         )
         red = compare_trees(old, new, {}, {}, [], {})
-        assert red["assertion_changes"] == 1
-        try:
-            evaluate(red)
-        except BodyDiffError:
-            pass
-        else:
-            raise SystemExit("hygiene-body-diff --self-test: assert_eq! literal change must fail")
+        if red["assertion_changes"] != 1:
+            raise SystemExit("hygiene-body-diff --self-test: assert_eq!(1, 2) must be an assertion change")
+        _must_red(red, "assert_eq! literal change")
+        n += 1
         src_n.joinpath("t.rs").write_text(
             "#[test]\nfn sample() {\n    assert_eq!(\n        1,\n        1,\n    );\n    let _ = issue_tgt();\n}\n",
             encoding="utf-8",
@@ -786,12 +926,12 @@ def _self_test() -> None:
         evaluate(green)
         if green["assertion_changes"] != 0:
             raise SystemExit("hygiene-body-diff --self-test: rustfmt wrap of assert_eq! must pass")
-        if green["helper_only"] != 1 and green["identical"] != 1:
-            # smash_helpers should also pass without subst
-            smashed = compare_trees(old, new, {}, {}, [], {})
-            evaluate(smashed)
-            if smashed["helper_only"] != 1:
-                raise SystemExit("hygiene-body-diff --self-test: helper rename must pass")
+        n += 1
+        smashed = compare_trees(old, new, {}, {}, [], {})
+        evaluate(smashed)
+        if smashed["helper_only"] != 1:
+            raise SystemExit("hygiene-body-diff --self-test: helper rename must pass")
+        n += 1
         src_o.joinpath("t.rs").write_text(
             "#[test]\nfn sample() {\n    assert_eq!(26, BADOPTION);\n}\n",
             encoding="utf-8",
@@ -800,27 +940,18 @@ def _self_test() -> None:
             "#[test]\nfn sample() {\n    assert_eq!(26, SERVER_NOMATCH);\n}\n",
             encoding="utf-8",
         )
-        const_red = compare_trees(old, new, {}, {}, [], {})
-        try:
-            evaluate(const_red)
-        except BodyDiffError:
-            pass
-        else:
-            raise SystemExit("hygiene-body-diff --self-test: constant assertion change must fail")
-        # --subst must not rewrite a constant, even if asked
+        _must_red(compare_trees(old, new, {}, {}, [], {}), "constant assertion change")
+        n += 1
         try:
             load_subst(None, ["BADOPTION=SERVER_NOMATCH"])
         except SystemExit:
             pass
         else:
             raise SystemExit("hygiene-body-diff --self-test: --subst of a non-helper must fail")
+        n += 1
         sneak = compare_trees(old, new, {}, {}, [("BADOPTION", "SERVER_NOMATCH")], {})
-        try:
-            evaluate(sneak)
-        except BodyDiffError:
-            pass
-        else:
-            raise SystemExit("hygiene-body-diff --self-test: subst must not hide BADOPTION")
+        _must_red(sneak, "subst must not hide BADOPTION")
+        n += 1
         src_o.joinpath("t.rs").write_text(
             "#[test]\nfn sample() {\n    assert_eq!(foo(), 1);\n}\n",
             encoding="utf-8",
@@ -829,13 +960,8 @@ def _self_test() -> None:
             "#[test]\nfn sample() {\n    assert_eq!(bar(), 1);\n}\n",
             encoding="utf-8",
         )
-        callee = compare_trees(old, new, {}, {}, [], {})
-        try:
-            evaluate(callee)
-        except BodyDiffError:
-            pass
-        else:
-            raise SystemExit("hygiene-body-diff --self-test: callee name change must fail")
+        _must_red(compare_trees(old, new, {}, {}, [], {}), "callee name change")
+        n += 1
         src_o.joinpath("t.rs").write_text(
             "#[test]\nfn sample() {\n    assert_eq!(1, 1);\n}\n",
             encoding="utf-8",
@@ -844,13 +970,8 @@ def _self_test() -> None:
             "#[test]\n#[ignore]\nfn sample() {\n    assert_eq!(1, 1);\n}\n",
             encoding="utf-8",
         )
-        ignored = compare_trees(old, new, {}, {}, [], {})
-        try:
-            evaluate(ignored)
-        except BodyDiffError:
-            pass
-        else:
-            raise SystemExit("hygiene-body-diff --self-test: #[ignore] added must fail")
+        _must_red(compare_trees(old, new, {}, {}, [], {}), "#[ignore] added")
+        n += 1
         src_o.joinpath("t.rs").write_text(
             "#[test]\nfn gone() {\n    assert_eq!(1, 1);\n}\n",
             encoding="utf-8",
@@ -859,15 +980,11 @@ def _self_test() -> None:
             "#[test]\nfn kept() {\n    assert_eq!(1, 1);\n}\n",
             encoding="utf-8",
         )
-        missing_tgt = compare_trees(
-            old, new, {}, {"demo\tgone": "demo\tno_such"}, [], {}
+        _must_red(
+            compare_trees(old, new, {}, {"demo\tgone": "demo\tno_such"}, [], {}),
+            "missing dup target",
         )
-        try:
-            evaluate(missing_tgt)
-        except BodyDiffError:
-            pass
-        else:
-            raise SystemExit("hygiene-body-diff --self-test: missing dup target must fail")
+        n += 1
         unkeyed = pathlib.Path(tmp) / "unkeyed.txt"
         unkeyed.write_text("gone = kept\n", encoding="utf-8")
         try:
@@ -876,6 +993,7 @@ def _self_test() -> None:
             pass
         else:
             raise SystemExit("hygiene-body-diff --self-test: unkeyed map must fail")
+        n += 1
         src_o.joinpath("t.rs").write_text(
             "#[test]\nfn sample() {\n    assert_eq!(1, 1);\n}\n",
             encoding="utf-8",
@@ -885,10 +1003,11 @@ def _self_test() -> None:
             encoding="utf-8",
         )
         pin = compare_trees(old, new, {}, {}, [], {})
-        o, n, oh, nh, _ent = pin["unaccepted"][0]  # type: ignore[misc]
+        _o, _n, oh, nh, _ent = pin["unaccepted"][0]  # type: ignore[misc]
+        pin_id = "demo::t\tsample"
         good_accept = {
-            "demo\tsample": {
-                "new": "demo\tsample",
+            pin_id: {
+                "new": pin_id,
                 "old_hash": oh,
                 "new_hash": nh,
                 "reason": "fixture",
@@ -898,48 +1017,124 @@ def _self_test() -> None:
         evaluate(ok)
         if ok["assertion_accepted"] != 1:
             raise SystemExit("hygiene-body-diff --self-test: matching accept blob must pass")
+        n += 1
         bad_blob = {
-            "demo\tsample": {
-                "new": "demo\tsample",
+            pin_id: {
+                "new": pin_id,
                 "old_hash": "0" * 64,
                 "new_hash": "1" * 64,
                 "reason": "wrong pin",
             }
         }
-        try:
-            evaluate(compare_trees(old, new, {}, {}, [], bad_blob))
-        except BodyDiffError:
-            pass
-        else:
-            raise SystemExit("hygiene-body-diff --self-test: blob mismatch must fail")
+        _must_red(compare_trees(old, new, {}, {}, [], bad_blob), "blob mismatch")
+        n += 1
         unused = {
-            "demo\tsample": {
-                "new": "demo\tsample",
+            pin_id: {
+                "new": pin_id,
                 "old_hash": oh,
                 "new_hash": nh,
                 "reason": "fixture",
             },
-            "demo\tother": {
-                "new": "demo\tother",
+            "demo::t\tother": {
+                "new": "demo::t\tother",
                 "old_hash": "a" * 64,
                 "new_hash": "b" * 64,
                 "reason": "unused",
             },
         }
-        try:
-            evaluate(compare_trees(old, new, {}, {}, [], unused))
-        except BodyDiffError:
-            pass
-        else:
-            raise SystemExit("hygiene-body-diff --self-test: unused accept must fail")
+        _must_red(compare_trees(old, new, {}, {}, [], unused), "unused accept")
+        n += 1
+        ghost = {
+            pin_id: {
+                "new": "demo::t\tno_such",
+                "old_hash": oh,
+                "new_hash": nh,
+                "reason": "ghost",
+            }
+        }
+        _must_red(compare_trees(old, new, {}, {}, [], ghost), "accept RHS missing")
+        n += 1
+        src_o.joinpath("t.rs").write_text(
+            "fn strict_verify(x: i32) -> bool { x == 13 }\n"
+            "#[test]\nfn sample() {\n    assert!(strict_verify(13));\n}\n",
+            encoding="utf-8",
+        )
+        src_n.joinpath("t.rs").write_text(
+            "fn loose_verify(x: i32) -> bool { true }\n"
+            "#[test]\nfn sample() {\n    assert!(loose_verify(13));\n}\n",
+            encoding="utf-8",
+        )
+        weaker = compare_trees(old, new, {}, {}, [], {})
+        if weaker["assertion_changes"] != 1:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: weaker same-file helper rename must be an assertion change"
+            )
+        _must_red(weaker, "weaker same-file helper rename")
+        n += 1
+        src_n.joinpath("t.rs").write_text(
+            "fn loose_verify(x: i32) -> bool { x == 13 }\n"
+            "#[test]\nfn sample() {\n    assert!(loose_verify(13));\n}\n",
+            encoding="utf-8",
+        )
+        renamed = compare_trees(old, new, {}, {}, [], {})
+        evaluate(renamed)
+        if renamed["helper_only"] != 1 or renamed["assertion_changes"] != 0:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: identical helper body modulo name must be helper-only"
+            )
+        n += 1
+        src_o.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert!(status(&a, 13));\n}\n",
+            encoding="utf-8",
+        )
+        src_n.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert!(status(&a, 0));\n}\n",
+            encoding="utf-8",
+        )
+        args = compare_trees(old, new, {}, {}, [], {})
+        if args["assertion_changes"] != 1:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: helper-call argument change must be an assertion change"
+            )
+        _must_red(args, "helper-call argument change")
+        n += 1
+        twin = (
+            "#[test]\nfn sample() {\n    assert_eq!(1, 1);\n}\n",
+            "#[test]\nfn sample() {\n    assert_eq!(1, 2);\n}\n",
+        )
+        src_o.joinpath("t.rs").write_text(twin[0], encoding="utf-8")
+        src_n.joinpath("t.rs").write_text(twin[1], encoding="utf-8")
+        src_o.joinpath("u.rs").write_text(twin[0], encoding="utf-8")
+        src_n.joinpath("u.rs").write_text(twin[1], encoding="utf-8")
+        two = compare_trees(old, new, {}, {}, [], {})
+        if two["assertion_changes"] != 2:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: two (crate, leaf) pairs must both be assertion changes"
+            )
+        one_entry = {
+            pin_id: {
+                "new": pin_id,
+                "old_hash": two["unaccepted"][0][2],  # type: ignore[index]
+                "new_hash": two["unaccepted"][0][3],  # type: ignore[index]
+                "reason": "covers only demo::t",
+            }
+        }
+        covered = compare_trees(old, new, {}, {}, [], one_entry)
+        if covered["assertion_accepted"] != 1 or not covered["unaccepted"]:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: one accept entry must cover exactly one pair"
+            )
+        _must_red(covered, "one accept entry covering two (crate, leaf) pairs")
+        n += 1
+    return n
 
 
 def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
     if argv == ["--self-test"]:
-        _self_test()
-        print("hygiene-body-diff: self-test ok")
+        n = _self_test()
+        print(f"hygiene-body-diff: self-test ok ({n} cases)")
         return 0
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--old", required=True, help="SHA or directory")

@@ -278,57 +278,73 @@ def _must_pass(
         raise SystemExit(f"hygiene-diff --self-test: {label} must pass")
 
 
-def _self_test_duplicates(root: pathlib.Path) -> None:
+def _self_test_duplicates(root: pathlib.Path) -> int:
     """Keyed maps; RHS-as-LHS red; many-to-one needs merged:."""
+    n = 0
     old, new = root / "dup-old", root / "dup-new"
     _write_snap(old, ["a.sh\techo\tkeep"], tests=["oldbin\tfoo", "oldbin\tkeep"])
     _write_snap(new, ["a.sh\techo\tkeep"], tests=["newbin\tbar", "oldbin\tkeep"])
     _must_fail(old, new, "removed test without keyed map")
+    n += 1
     good = root / "dup-good.txt"
     good.write_text("oldbin\tfoo = newbin\tbar\n", encoding="utf-8")
     _must_pass(old, new, "keyed duplicate", duplicates_path=good)
+    n += 1
     name_only = root / "dup-name.txt"
     name_only.write_text("foo = bar\n", encoding="utf-8")
     _must_fail(old, new, "name-only duplicates", duplicates_path=name_only)
+    n += 1
     chained = root / "dup-chain.txt"
     chained.write_text("oldbin\tfoo = midbin\tmid\nmidbin\tmid = newbin\tbar\n", encoding="utf-8")
     _must_fail(old, new, "RHS-as-LHS", duplicates_path=chained)
+    n += 1
     many_old, many_new = root / "many-old", root / "many-new"
     _write_snap(many_old, ["a.sh\techo\tkeep"], tests=["a\tx", "b\ty"])
     _write_snap(many_new, ["a.sh\techo\tkeep"], tests=["c\tz"])
     no_merged = root / "dup-nomerge.txt"
     no_merged.write_text("a\tx = c\tz\nb\ty = c\tz\n", encoding="utf-8")
     _must_fail(many_old, many_new, "many-to-one without merged:", duplicates_path=no_merged)
+    n += 1
     merged = root / "dup-merged.txt"
     merged.write_text("a\tx = merged:c\tz\nb\ty = merged:c\tz\n", encoding="utf-8")
     _must_pass(many_old, many_new, "many-to-one merged", duplicates_path=merged)
+    n += 1
+    return n
 
 
-def _self_test_renames(root: pathlib.Path) -> None:
+def _self_test_renames(root: pathlib.Path) -> int:
     """Keyed --renames; two olds → one new needs merged:."""
+    n = 0
     old, new = root / "ren-old", root / "ren-new"
     _write_snap(old, ["a.sh\techo\tkeep"], tests=["oldbin\tfoo"])
     _write_snap(new, ["a.sh\techo\tkeep"], tests=["newbin\tbar"])
     _must_fail(old, new, "removed test without keyed rename")
+    n += 1
     good = root / "ren-good.txt"
     good.write_text("oldbin\tfoo -> newbin\tbar\n", encoding="utf-8")
     _must_pass(old, new, "keyed rename", renames_path=good)
+    n += 1
     name_only = root / "ren-name.txt"
     name_only.write_text("foo -> bar\n", encoding="utf-8")
     _must_fail(old, new, "name-only renames", renames_path=name_only)
+    n += 1
     many_old, many_new = root / "ren-many-old", root / "ren-many-new"
     _write_snap(many_old, ["a.sh\techo\tkeep"], tests=["a\tx", "b\ty"])
     _write_snap(many_new, ["a.sh\techo\tkeep"], tests=["c\tz"])
     no_merged = root / "ren-nomerge.txt"
     no_merged.write_text("a\tx -> c\tz\nb\ty -> c\tz\n", encoding="utf-8")
     _must_fail(many_old, many_new, "rename many-to-one without merged:", renames_path=no_merged)
+    n += 1
     merged = root / "ren-merged.txt"
     merged.write_text("a\tx -> merged:c\tz\nb\ty -> merged:c\tz\n", encoding="utf-8")
     _must_pass(many_old, many_new, "rename many-to-one merged", renames_path=merged)
+    n += 1
+    return n
 
 
-def _self_test_quality(root: pathlib.Path) -> None:
+def _self_test_quality(root: pathlib.Path) -> int:
     """W3 keys: a rise or a 0 -> non-zero rc is red; a one-sided key or a moved binary is not."""
+    n = 0
     red = [
         ("undocumented_pub rose", {"undocumented_pub": "5"}, {"undocumented_pub": "7"}),
         ("shellcheck_findings rose", {"shellcheck_findings": "90"}, {"shellcheck_findings": "91"}),
@@ -345,18 +361,21 @@ def _self_test_quality(root: pathlib.Path) -> None:
     _write_snap(waiver_old, ["a.sh\techo\tkeep"], quality={"allow_sites": "77"})
     _write_snap(waiver_new, ["a.sh\techo\tkeep"], quality={"allow_sites": "81"})
     _must_fail(waiver_old, waiver_new, "quality allow_sites rose")
+    n += 1
     _must_pass(
         waiver_old,
         waiver_new,
         "quality allow_sites waived",
         accept_rise=["allow_sites=4:+4 tests/common dead_code, -1 status.rs, -1 c2_kpropd_acl.rs"],
     )
+    n += 1
     _must_fail(
         waiver_old,
         waiver_new,
         "accept-rise mismatched N",
         accept_rise=["allow_sites=2: wrong n"],
     )
+    n += 1
     same_old, same_new = root / "rise-same-old", root / "rise-same-new"
     _write_snap(same_old, ["a.sh\techo\tkeep"], quality={"allow_sites": "80"})
     _write_snap(same_new, ["a.sh\techo\tkeep"], quality={"allow_sites": "80"})
@@ -366,29 +385,35 @@ def _self_test_quality(root: pathlib.Path) -> None:
         "accept-rise unused",
         accept_rise=["allow_sites=1: unused"],
     )
+    n += 1
     for i, (label, old_q, new_q) in enumerate(red):
         old, new = root / f"red{i}-old", root / f"red{i}-new"
         _write_snap(old, ["a.sh\techo\tkeep"], quality=old_q)
         _write_snap(new, ["a.sh\techo\tkeep"], quality=new_q)
         _must_fail(old, new, f"quality {label}")
+        n += 1
     for i, (label, old_q, new_q) in enumerate(green):
         old, new = root / f"green{i}-old", root / f"green{i}-new"
         _write_snap(old, ["a.sh\techo\tkeep"], quality=old_q)
         _write_snap(new, ["a.sh\techo\tkeep"], quality=new_q)
         _must_pass(old, new, f"quality {label}")
+        n += 1
     old, new = root / "bin-old", root / "bin-new"
     _write_snap(old, ["a.sh\techo\tkeep"], binaries=["krb5-kdc\tkrb5-forge-tgt"])
     _write_snap(new, ["a.sh\techo\tkeep"], binaries=["krb5-tools\tkrb5-forge-tgt"])
     _must_pass(old, new, "a binary moving packages")
+    n += 1
+    return n
 
 
-def _self_test() -> None:
+def _self_test() -> int:
     """Red on (file,kind,tag) multiplicity drop; gate_rc: not compared when no timings."""
+    n = 0
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
-        _self_test_quality(root)
-        _self_test_duplicates(root)
-        _self_test_renames(root)
+        n += _self_test_quality(root)
+        n += _self_test_duplicates(root)
+        n += _self_test_renames(root)
         old, new = root / "old", root / "new"
         _write_snap(
             old,
@@ -408,6 +433,7 @@ def _self_test() -> None:
         rc = main_compare(old, new)
         if rc == 0:
             raise SystemExit("hygiene-diff --self-test: multiplicity drop must fail")
+        n += 1
 
         # --dead waives an `echo` tag with a reason; never a section, never unlisted.
         dead_map = root / "dead.txt"
@@ -421,17 +447,21 @@ def _self_test() -> None:
         _write_snap(dead_old, ["a.sh\techo\tMIT_DEAD_PORT", "b.sh\techo\tMIT_DEAD_PORT", "a.sh\techo\tkeep"])
         _write_snap(dead_new, ["a.sh\techo\tkeep"])
         _must_fail(dead_old, dead_new, "unlisted echo tag removal")
+        n += 1
         _must_pass(dead_old, dead_new, "--dead echo tag removal", dead_path=dead_map)
+        n += 1
         sect_old, sect_new = root / "sect-old", root / "sect-new"
         _write_snap(sect_old, ["a.sh\tsection\tMIT_DEAD_PORT", "a.sh\techo\tkeep"])
         _write_snap(sect_new, ["a.sh\techo\tkeep"])
         _must_fail(sect_old, sect_new, "--dead listed section tag removal", dead_path=dead_map)
+        n += 1
 
         moved_old, moved_new = root / "moved-old", root / "moved-new"
         _write_snap(moved_old, ["a.sh\techo\tcell-y"])
         _write_snap(moved_new, ["b.sh\techo\tcell-y"])
         if main_compare(moved_old, moved_new) != 0:
             raise SystemExit("hygiene-diff --self-test: file move must not fail")
+        n += 1
 
         none_old, none_new = root / "none-old", root / "none-new"
         _write_snap(none_old, ["a.sh\techo\tkeep"])
@@ -447,6 +477,8 @@ def _self_test() -> None:
             raise SystemExit("hygiene-diff --self-test: identical snaps must be ok")
         if "gate_rc: not compared" not in buf.getvalue():
             raise SystemExit("hygiene-diff --self-test: missing gate_rc: not compared")
+        n += 1
+    return n
 
 
 def main_compare(
@@ -798,8 +830,8 @@ def _compare(args) -> int:
 
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
-        _self_test()
-        print("hygiene-diff: self-test ok")
+        n = _self_test()
+        print(f"hygiene-diff: self-test ok ({n} cases)")
         return 0
     from contextlib import redirect_stdout
 

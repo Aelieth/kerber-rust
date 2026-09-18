@@ -16,6 +16,7 @@ checkpoint runner owns (W1-Z Z3.4: no cargo build tree under
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import os
 import pathlib
@@ -1422,9 +1423,12 @@ def check_capture_env_only(
         if wf.is_dir():
             for p in sorted(list(wf.glob("*.yml")) + list(wf.glob("*.yaml"))):
                 script_texts[str(p.relative_to(ROOT))] = p.read_text(encoding="utf-8")
-        for rel in ("scripts/lib/prod-realm-common.sh", "harness/prod/env-up.sh"):
-            text = script_texts.get(rel, "")
-            if "refuse_golden_capture_dir" not in text:
+    if live_scan or any(rel in script_texts for rel in _REQUIRED_REFUSE_CALLERS):
+        for rel in _REQUIRED_REFUSE_CALLERS:
+            if not live_scan and rel not in script_texts:
+                continue
+            caller = script_texts.get(rel, "")
+            if not _REFUSE_CALL_RE.search(caller):
                 _die(f"{rel} must call refuse_golden_capture_dir")
     for name, text in script_texts.items():
         for m in _CAPTURE_ASSIGN_RE.finditer(text):
@@ -2788,7 +2792,78 @@ def check_autotests_registered(root: pathlib.Path | None = None) -> None:
             )
 
 
-def _run_script_self_test(path: pathlib.Path, label: str) -> None:
+_SELF_TEST_OK_RE = re.compile(r"self-test ok \((\d+) cases\)")
+HYGIENE_DIFF_MIN_CASES = 30
+HYGIENE_BODY_DIFF_MIN_CASES = 18
+HYGIENE_INVENTORY_MIN_CASES = 1
+_REFUSE_CALL_RE = re.compile(r"^\s*refuse_golden_capture_dir\s+\S", re.M)
+_REQUIRED_REFUSE_CALLERS = (
+    "scripts/lib/prod-realm-common.sh",
+    "harness/prod/env-up.sh",
+)
+
+
+def _self_test_n_from_text(text: str) -> int | None:
+    found = [int(x) for x in _SELF_TEST_OK_RE.findall(text)]
+    return max(found) if found else None
+
+
+def _self_test_fn_is_gutted(text: str, name: str = "_self_test") -> bool:
+    """True when `name` exists and its body is effectively `return None`."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return bool(
+            re.search(
+                rf'def {re.escape(name)}\([^)]*\):\s*(?:"""[\s\S]*?"""\s*)?return None\b',
+                text,
+            )
+        )
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef) or node.name != name:
+            continue
+        body = list(node.body)
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(getattr(body[0], "value", None), ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            body = body[1:]
+        if not body:
+            return True
+        if len(body) == 1 and isinstance(body[0], ast.Return):
+            val = body[0].value
+            return val is None or (isinstance(val, ast.Constant) and val.value is None)
+        return False
+    return False
+
+
+def _require_self_test_n(blob: str, label: str, min_n: int) -> None:
+    n = _self_test_n_from_text(blob)
+    if n is None or n < min_n:
+        _die(
+            f"{label} --self-test must print self-test ok (N cases) with N>={min_n}, got {n!r}"
+        )
+
+
+def _gut_self_test_source(src: str, name: str = "_self_test") -> str:
+    tree = ast.parse(src)
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef) or node.name != name:
+            continue
+        doc = ast.get_docstring(node)
+        new_body: list[ast.stmt] = []
+        if doc is not None:
+            new_body.append(ast.Expr(value=ast.Constant(value=doc)))
+        new_body.append(ast.Return(value=ast.Constant(value=None)))
+        node.body = new_body
+    return ast.unparse(tree)
+
+
+def _run_script_self_test(
+    path: pathlib.Path, label: str, min_n: int | None = None
+) -> None:
     proc = subprocess.run(
         [sys.executable, str(path), "--self-test"],
         cwd=ROOT,
@@ -2799,16 +2874,53 @@ def _run_script_self_test(path: pathlib.Path, label: str) -> None:
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout or "")[-400:]
         _die(f"{label} --self-test failed (rc={proc.returncode}): {tail}")
+    if min_n is not None:
+        _require_self_test_n((proc.stdout or "") + "\n" + (proc.stderr or ""), label, min_n)
+
+
+def _gutted_self_test_must_not_count(
+    path: pathlib.Path, src: str, label: str, min_n: int
+) -> None:
+    """A copy whose `_self_test` body is `return None` must not report N cases."""
+    try:
+        gutted = _gut_self_test_source(src)
+    except SyntaxError:
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        probe = pathlib.Path(tmp) / path.name
+        probe.write_text(gutted, encoding="utf-8")
+        proc = subprocess.run(
+            [sys.executable, str(probe), "--self-test"],
+            cwd=tmp,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        n = _self_test_n_from_text((proc.stdout or "") + "\n" + (proc.stderr or ""))
+        if n is not None and n >= min_n:
+            _die(f"{label} gutted _self_test still reports self-test ok ({n} cases)")
 
 
 def check_hygiene_diff_self_test(text: str | None = None) -> None:
-    """hygiene-diff.py --self-test is executed; compare runs also call _self_test."""
+    """hygiene-diff.py --self-test is executed; a gutted `_self_test` is red."""
     path = SCRIPTS / "hygiene-diff.py"
     if text is None:
         if not path.is_file():
             _die("missing scripts/hygiene-diff.py")
         text = path.read_text(encoding="utf-8")
-        _run_script_self_test(path, "hygiene-diff.py")
+        _run_script_self_test(path, "hygiene-diff.py", HYGIENE_DIFF_MIN_CASES)
+        _gutted_self_test_must_not_count(
+            path, text, "hygiene-diff.py", HYGIENE_DIFF_MIN_CASES
+        )
+    elif _self_test_n_from_text(text) is None or (
+        _self_test_n_from_text(text) or 0
+    ) < HYGIENE_DIFF_MIN_CASES:
+        _die(
+            "hygiene-diff.py must print self-test ok (N cases) with "
+            f"N>={HYGIENE_DIFF_MIN_CASES}"
+        )
+    if _self_test_fn_is_gutted(text):
+        _die("hygiene-diff.py _self_test must not be gutted to return None")
     if "def main" not in text:
         _die("hygiene-diff.py must define main()")
     if "def _self_test" not in text:
@@ -2826,13 +2938,25 @@ def check_hygiene_diff_self_test(text: str | None = None) -> None:
 
 
 def check_hygiene_body_diff_self_test(text: str | None = None) -> None:
-    """hygiene-body-diff.py --self-test is executed; a gutted fixture is red."""
+    """hygiene-body-diff.py --self-test is executed; a gutted `_self_test` is red."""
     path = SCRIPTS / "hygiene-body-diff.py"
     if text is None:
         if not path.is_file():
             _die("missing scripts/hygiene-body-diff.py")
         text = path.read_text(encoding="utf-8")
-        _run_script_self_test(path, "hygiene-body-diff.py")
+        _run_script_self_test(path, "hygiene-body-diff.py", HYGIENE_BODY_DIFF_MIN_CASES)
+        _gutted_self_test_must_not_count(
+            path, text, "hygiene-body-diff.py", HYGIENE_BODY_DIFF_MIN_CASES
+        )
+    elif _self_test_n_from_text(text) is None or (
+        _self_test_n_from_text(text) or 0
+    ) < HYGIENE_BODY_DIFF_MIN_CASES:
+        _die(
+            "hygiene-body-diff.py must print self-test ok (N cases) with "
+            f"N>={HYGIENE_BODY_DIFF_MIN_CASES}"
+        )
+    if _self_test_fn_is_gutted(text):
+        _die("hygiene-body-diff.py _self_test must not be gutted to return None")
     if "def _self_test" not in text:
         _die("hygiene-body-diff.py must define _self_test")
     if text.count("_self_test()") < 2:
@@ -2848,7 +2972,7 @@ def check_hygiene_inventory_cfg_test() -> None:
     path = SCRIPTS / "lib" / "hygiene_inventory.py"
     if not path.is_file():
         _die("missing scripts/lib/hygiene_inventory.py")
-    _run_script_self_test(path, "hygiene_inventory.py")
+    _run_script_self_test(path, "hygiene_inventory.py", HYGIENE_INVENTORY_MIN_CASES)
 
 
 def check_gate_common_sourced(
@@ -4052,6 +4176,12 @@ jobs:
         "refuse_golden_capture_dir() {\n    :\n}\n",
         {"kdc-gate.sh": "KERBER_CAPTURE_DIR=/tmp/traces\n"},
     )
+    _must_die(
+        check_capture_env_only,
+        'pub fn capture_pdu() {\n    let _ = std::env::var("KERBER_CAPTURE_DIR");\n}\n',
+        "refuse_golden_capture_dir() {\n    :\n}\n",
+        {"harness/prod/env-up.sh": "refuse_golden_capture_dir() {\n    :\n}\n"},
+    )
     check_doc_file_cites({"CHANGELOG.md": "see `crates/missing/nope.rs`\n"}, ROOT)
 
     def _princ_line(name: str, *keyhexes: str) -> str:
@@ -4854,6 +4984,7 @@ jobs:
         "def _self_test_duplicates():\n    pass\n"
         "def _self_test():\n    pass\n"
         "def main() -> int:\n    if argv[1] == '--self-test':\n        _self_test()\n"
+        "        print('hygiene-diff: self-test ok (30 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
         "    return _compare()\n"
     )
@@ -4867,9 +4998,23 @@ jobs:
         "def main() -> int:\n    if argv[1] == '--self-test':\n        _self_test()\n"
         "        return 0\n    _self_test()\n    return _compare()\n",
     )
+    _must_die(
+        check_hygiene_diff_self_test,
+        'def load_duplicates_map():\n    return {"merged:"}\n'
+        "def load_renames_map():\n    return {}\n"
+        "def _self_test_duplicates():\n    pass\n"
+        "def _self_test():\n"
+        '    """merged: load_duplicates_map load_renames_map _self_test_duplicates"""\n'
+        "    return None\n"
+        "def main() -> int:\n    if argv[1] == '--self-test':\n        _self_test()\n"
+        "        print('hygiene-diff: self-test ok (30 cases)')\n"
+        "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
+        "    return _compare()\n",
+    )
     check_hygiene_body_diff_self_test(
         "def _self_test():\n    assert_eq!(1, 2) vs user_as helper\n"
         "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
+        "        print('hygiene-body-diff: self-test ok (18 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
     )
     _must_die(check_hygiene_body_diff_self_test, "def main():\n    return 0\n")
@@ -4877,6 +5022,15 @@ jobs:
         check_hygiene_body_diff_self_test,
         "def _self_test():\n    assert_eq! vs user_as helper\n"
         "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
+        "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n",
+    )
+    _must_die(
+        check_hygiene_body_diff_self_test,
+        "def _self_test():\n"
+        '    """assert_eq!(1, 2) vs user_as helper"""\n'
+        "    return None\n"
+        "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
+        "        print('hygiene-body-diff: self-test ok (18 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n",
     )
     with tempfile.TemporaryDirectory() as tmp:

@@ -41,12 +41,17 @@ RHS.
 --duplicates [--accept map]` links test fns through those maps,
 normalises whitespace/comments/helper names, and fails an assertion-line
 change that is not in `--accept` or a dropped test that is not in
-`--duplicates`. `--accept` is keyed `binary<TAB>name` and pins the
-old and new assertion-blob `sha256:` hashes; an unused entry or a blob
-mismatch is red. `--subst` / `--subst-file` rewrite only call positions
-of names in the declared helper list (`user_as()`, `temp_dir()`, …),
-never constants, numerics, or string literals. There is no request-shape
-column (no canonical built-request form). One that deletes a `MIT_*`/`RUST_*`
+`--duplicates`. `--accept` is keyed nextest `binary<TAB>name` (one entry covers
+exactly one pair) and pins the old and new assertion-blob `sha256:`
+hashes; the RHS must exist in the new tree, and an unused entry or a
+blob mismatch is red. Same-file helpers are smashed only when the name
+exists on both sides; a rename compares the helper bodies. The blob
+keeps helper-call arguments (smash the callee name only). `--subst` /
+`--subst-file` rewrite only call positions of names in the declared
+helper list (`user_as()`, `temp_dir()`, …), never constants, numerics,
+or string literals. `--self-test` on the compare tools prints
+`self-test ok (N cases)`. There is no request-shape column (no
+canonical built-request form). One that deletes a `MIT_*`/`RUST_*`
 variable that was never a cell lists it in `--dead` with the reason
 (`section` and `flow` tags cannot be waived). Job walls live in
 `ci-budget.toml` (see Tier contract below). `python3 scripts/ci-status.py --check-budget` compares a

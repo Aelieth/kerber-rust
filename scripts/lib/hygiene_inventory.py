@@ -597,7 +597,7 @@ def cfg_test_files_in_pkg(pdir: pathlib.Path) -> set[str]:
     return rels
 
 
-def self_test_cfg_test() -> None:
+def self_test_cfg_test() -> int:
     """Single-line `#[cfg(test)] mod x;` is src-test."""
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
@@ -610,6 +610,7 @@ def self_test_cfg_test() -> None:
             raise SystemExit("one-line #[cfg(test)] mod x; must classify as src-test")
         if _scope("src/oneline.rs", 1, [], rels) != "src-test":
             raise SystemExit("one-line #[cfg(test)] mod x; scope must be src-test")
+    return 1
 
 
 def _scope(
@@ -1159,8 +1160,8 @@ def snapshot(root: pathlib.Path, out: pathlib.Path, skip_nextest: bool, quality:
 
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
-        self_test_cfg_test()
-        print("hygiene_inventory: self-test ok")
+        n = self_test_cfg_test()
+        print(f"hygiene_inventory: self-test ok ({n} cases)")
         return 0
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--root", type=pathlib.Path)
