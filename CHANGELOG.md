@@ -6,6 +6,16 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S2.5 fixtures
+
+- **test.** Capture defaults to `${KERBER_SCRATCH}/traces` (else
+  `${CARGO_TARGET_DIR}/traces`); empty `KERBER_CAPTURE_DIR` disables;
+  paths under `tests/traces` are refused. `.gitignore` allow-lists the
+  13 tracked goldens. `scripts/promote-trace.sh` copies one PDU and
+  appends the README row. AD keytabs stay in `~/adlab`. Fuzz: `cmin`
+  note plus seeds on `pkinit_cms` / `spake_point` / `oakley_dh` /
+  `gss_token`.
+
 ### W3-S2.4 subject taxonomy
 
 - **test.** `krb5-types/tests/k3_parse_deltat.rs` → `parse_name_deltat.rs`
