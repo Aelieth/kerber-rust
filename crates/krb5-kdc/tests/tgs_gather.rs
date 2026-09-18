@@ -111,6 +111,7 @@ fn tgs_renew_service_ticket_issues() {
 }
 
 #[test]
+// oracle: differential-gate.sh tgs-proxy-krbtgt
 fn tgs_proxy_krbtgt_is_cant_proxy_tgt() {
     let (store, _) = bootstrap_documented().unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -148,6 +149,7 @@ fn tgs_proxy_krbtgt_is_cant_proxy_tgt() {
 }
 
 #[test]
+// oracle: differential-gate.sh tgs-pac-corrupt-before-sname
 fn tgs_corrupt_pac_before_unknown_sname_is_header_pac() {
     let (store, _) = bootstrap_documented().unwrap();
     let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6030);
@@ -179,6 +181,7 @@ fn tgs_corrupt_pac_before_unknown_sname_is_header_pac() {
 }
 
 #[test]
+// oracle: differential-gate.sh tgs-pac-client-mismatch
 fn tgs_pac_client_mismatch_is_header_pac() {
     let (store, _) = bootstrap_documented().unwrap();
     let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6040);
@@ -266,6 +269,7 @@ fn tgs_disallow_svr_service_header_is_process_tgs() {
 }
 
 #[test]
+// oracle: differential-gate.sh tgs-forwarded-on-non-f-tgt
 fn tgs_forwarded_without_forwardable_is_tgt_not_forwardable() {
     let (store, _) = bootstrap_documented().unwrap();
     let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6110);
@@ -294,6 +298,7 @@ fn tgs_forwarded_without_forwardable_is_tgt_not_forwardable() {
 }
 
 #[test]
+// oracle: differential-gate.sh tgs-proxy-on-non-p-tgt
 fn tgs_proxy_without_proxiable_is_tgt_not_proxiable() {
     let (store, _) = bootstrap_documented().unwrap();
     let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6120);
@@ -322,6 +327,7 @@ fn tgs_proxy_without_proxiable_is_tgt_not_proxiable() {
 }
 
 #[test]
+// oracle: differential-gate.sh tgs-not-a-tgt
 fn tgs_not_a_tgt_decrypts_and_names_client() {
     let (store, _) = bootstrap_documented().unwrap();
     let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6001);
@@ -364,6 +370,7 @@ fn tgs_not_a_tgt_decrypts_and_names_client() {
 }
 
 #[test]
+// oracle: differential-gate.sh tgs-expired-vs-unknown-sname
 fn tgs_expired_beats_unknown_sname() {
     let (store, _) = bootstrap_documented().unwrap();
     let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6080);
@@ -487,6 +494,7 @@ fn or_attrs(store: &mut PrincipalStore, name: &PrincipalName, bits: u32) {
 }
 
 #[test]
+// oracle: differential-gate.sh tgs-locked-pac-mismatch
 fn locked_host_pac_mismatch_is_header_pac() {
     let (mut store, acl) = bootstrap_documented().unwrap();
     let dest = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "locked.kerber.test"]);
@@ -607,6 +615,7 @@ fn lineage_before_u2u() {
 }
 
 #[test]
+// oracle: differential-gate.sh tgs-expired-addr-mismatch
 fn tgs_expired_caddr_is_badaddr() {
     let (store, _) = bootstrap_documented().unwrap();
     let as_out = issue_tgt(&store, TEST_USER, 19040);
@@ -634,6 +643,7 @@ fn tgs_expired_caddr_is_badaddr() {
 }
 
 #[test]
+// oracle: differential-gate.sh tgs-expired-badmatch
 fn expired_authenticator_mismatch_is_badmatch() {
     let (store, _) = bootstrap_documented().unwrap();
     let as_out = issue_tgt(&store, TEST_USER, 19050);

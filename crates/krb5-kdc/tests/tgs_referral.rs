@@ -164,6 +164,7 @@ fn host_fqdn_canonicalize_issues_referral() {
 }
 
 #[test]
+// oracle: differential-gate.sh tgs-referral-no-dot
 fn referral_no_dot_is_looking_up_server() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     other_store(&mut store, &acl);

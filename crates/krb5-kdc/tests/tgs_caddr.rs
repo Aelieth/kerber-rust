@@ -203,6 +203,7 @@ fn tgs_renew_keeps_header_caddr() {
 }
 
 #[test]
+// oracle: differential-gate.sh tgs-addr-mismatch
 fn tgs_sender_mismatch_is_badaddr() {
     let (store, _) = bootstrap_documented().unwrap();
     let tgt = as_with_addrs(&store, None, 10140, false, false);

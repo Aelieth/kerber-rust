@@ -1354,6 +1354,41 @@ def check_diffsend_cases(
         _die(f"scripts/differential-gate.sh asserts no line for diffsend case(s) {ungrepped}")
 
 
+def _gate_unit_index():
+    spec = importlib.util.spec_from_file_location(
+        "gate_unit_index", SCRIPTS / "lib" / "gate_unit_index.py"
+    )
+    if spec is None or spec.loader is None:
+        _die("cannot load scripts/lib/gate_unit_index.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def check_gate_unit_index(
+    root: pathlib.Path | None = None,
+    gate: str | None = None,
+    doc: str | None = None,
+) -> None:
+    """Every differential-gate.sh status-word cell has a tagged unit twin."""
+    mod = _gate_unit_index()
+    root = pathlib.Path(root) if root is not None else ROOT
+    if gate is None:
+        path = SCRIPTS / "differential-gate.sh"
+        if not path.is_file():
+            _die("missing scripts/differential-gate.sh")
+        gate = path.read_text(encoding="utf-8")
+    if doc is None:
+        doc_path = root / "docs" / "gate-unit-index.md"
+        if not doc_path.is_file():
+            _die("missing docs/gate-unit-index.md")
+        doc = doc_path.read_text(encoding="utf-8")
+    try:
+        mod.verify(root, gate, doc)
+    except mod.GateIndexError as e:
+        _die(str(e))
+
+
 def _dump_key_hexes(line: str) -> tuple[str, tuple[str, ...]] | None:
     """Name and every key_data slot-0 hex from a princ dump line, or None."""
     if not line.startswith("princ\t"):
@@ -3792,6 +3827,32 @@ jobs:
         src_n.replace(f'"cases":{len(DIFFSEND_CASES)}', '"cases":7'),
     )
 
+    with tempfile.TemporaryDirectory() as tmp:
+        troot = pathlib.Path(tmp)
+        testdir = troot / "crates" / "demo" / "tests"
+        testdir.mkdir(parents=True)
+        (testdir / "twin.rs").write_text(
+            "#[test]\n// oracle: differential-gate.sh unknown-sname\n"
+            "fn as_unknown_sname_is_server_not_found() {}\n",
+            encoding="utf-8",
+        )
+        gui = _gate_unit_index()
+        cell_gate = (
+            'grep -q \'"case":"unknown-sname","outcome":"ok","error_code":7,'
+            '"e_text":"SERVER_NOT_FOUND"\' <<<"$DIFF"\n'
+        )
+        good_doc = gui.verify(troot, cell_gate, None)
+        check_gate_unit_index(troot, cell_gate, good_doc)
+        _must_die(check_gate_unit_index, troot, cell_gate, good_doc + "stale\n")
+        _must_die(check_gate_unit_index, troot, cell_gate.replace("unknown-sname", "other-case"), good_doc)
+        (testdir / "twin.rs").write_text(
+            "#[test]\nfn other() {}\n"
+            "// oracle: differential-gate.sh unknown-sname\n"
+            "fn as_unknown_sname_is_server_not_found() {}\n",
+            encoding="utf-8",
+        )
+        _must_die(check_gate_unit_index, troot, cell_gate, good_doc)
+
     def _princ_line(name: str, *keyhexes: str) -> str:
         namelen = str(len(name))
         parts = [
@@ -5144,6 +5205,7 @@ def main() -> None:
     check_working_gitignored()
     check_ledger_proof_column()
     check_diffsend_cases()
+    check_gate_unit_index()
     check_golden_dump_unique_keys()
     check_ledger_tally()
     check_ledger_anchors()

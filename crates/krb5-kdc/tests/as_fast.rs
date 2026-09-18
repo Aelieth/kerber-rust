@@ -842,6 +842,7 @@ fn explicit_as_armor_future_starttime_is_tkt_nyv() {
 }
 
 #[test]
+// oracle: differential-gate.sh fast-armor-no-subkey
 fn fast_as_armor_without_subkey_is_policy() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);

@@ -641,6 +641,7 @@ fn spake_expired_cookie_is_preauth_failed() {
 }
 
 #[test]
+// oracle: differential-gate.sh as-spake-round1
 fn handle_request_spake_91_e_text_is_preauth_failed() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);

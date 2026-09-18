@@ -16,7 +16,7 @@ use krb5_kdc::{
 use krb5_protocol::pa_pac_options;
 use krb5_testkit::{
     TgsReqBuilder, aes_key, attach_pac, evidence_for_user, expect_status, host_tgt, issue_tgt,
-    issue_tgt_password, pref_etypes, reseal_incoming,
+    issue_tgt_password, pref_etypes, reseal, reseal_incoming,
 };
 use krb5_types::pac::{
     PAC_CLIENT_INFO, PAC_DELEGATION_INFO, PAC_LOGON_INFO, Pac, PacBuffer, PacIdentity, RpcSid,
@@ -55,6 +55,7 @@ fn cname_addl() -> KdcOptions {
 }
 
 #[test]
+// oracle: differential-gate.sh s4u2proxy-no-2nd-tkt
 fn s4u2proxy_no_2nd_tkt_is_unknown_reason() {
     let (store, _) = bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -80,6 +81,7 @@ fn s4u2proxy_no_2nd_tkt_is_unknown_reason() {
 }
 
 #[test]
+// oracle: differential-gate.sh s4u2proxy-tgs-target
 fn s4u2proxy_tgs_target_is_policy() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -93,6 +95,7 @@ fn s4u2proxy_tgs_target_is_policy() {
 }
 
 #[test]
+// oracle: differential-gate.sh s4u2proxy-evidence-mismatch
 fn s4u2proxy_evidence_mismatch_is_server_nomatch() {
     let (store, _) = bootstrap_documented().unwrap();
     let admin_tgt = issue_tgt(&store, TEST_ADMIN, 8120);
@@ -109,6 +112,7 @@ fn s4u2proxy_evidence_mismatch_is_server_nomatch() {
 }
 
 #[test]
+// oracle: differential-gate.sh s4u2proxy-no-header-pac
 fn s4u2proxy_no_header_pac_is_tgt_revoked() {
     let (store, _) = bootstrap_documented().unwrap();
     let ev = evidence_for_user(&store, 8130);
@@ -144,6 +148,7 @@ fn s4u2proxy_no_header_pac_is_tgt_revoked() {
 }
 
 #[test]
+// oracle: differential-gate.sh s4u2proxy-no-stkt-pac
 fn s4u2proxy_no_stkt_pac_is_modified() {
     let (store, _) = bootstrap_documented().unwrap();
     let ev = evidence_for_user(&store, 8140);
@@ -167,6 +172,7 @@ fn s4u2proxy_no_stkt_pac_is_modified() {
 }
 
 #[test]
+// oracle: differential-gate.sh s4u2proxy-u2u-combo
 fn s4u2proxy_u2u_combo_is_invalid_options() {
     let (store, _) = bootstrap_documented().unwrap();
     let host = documented_host();
@@ -222,6 +228,45 @@ const FOREIGN: &str = "OTHER.TEST";
 const SUBJECT: &str = "alice";
 
 const SUBJECT_REALM: &str = "ALICE.TEST";
+
+fn attach_stkt_pac(
+    server: &ProtocolKey,
+    kdc: &ProtocolKey,
+    part: &mut EncTicketPart,
+    info_name: &str,
+) {
+    let stub = Pac::built(
+        0,
+        vec![PacBuffer::new(
+            PAC_CLIENT_INFO,
+            client_info_buffer(part.authtime.unix_seconds(), info_name),
+        )],
+    )
+    .to_bytes();
+    part.authorization_data = Some(wrap_win2k_pac(&[0]).unwrap());
+    let der = ticket_checksum_der(part).unwrap();
+    let ident = PacIdentity {
+        sam: part.cname.components_joined(),
+        realm: String::new(),
+        domain_sid: RpcSid::nt_domain(1, 2, 3),
+        rid: 1,
+    };
+    let pac = sign_reply_pac(
+        &part.cname,
+        part.authtime.unix_seconds(),
+        &PacTicket {
+            server,
+            kdc,
+            enc_tkt_der: &der,
+            is_service_tkt: true,
+        },
+        &ident,
+        None,
+        Some(&stub),
+    )
+    .unwrap();
+    part.authorization_data = Some(wrap_win2k_pac(&pac).unwrap());
+}
 
 fn attach_deleg_pac(key: &ProtocolKey, part: &mut EncTicketPart, info_name: &str, transited: &str) {
     let di = krb5_types::pac::S4uDelegationInfo {
@@ -722,6 +767,7 @@ fn s4u2proxy_takes_cname_from_evidence() {
 }
 
 #[test]
+// oracle: differential-gate.sh s4u2proxy-not-forwardable
 fn s4u2proxy_rejects_non_forwardable_evidence() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -767,9 +813,65 @@ fn s4u2proxy_rejects_non_forwardable_evidence() {
     .build()
     .expect("S4U2Proxy TGS-REQ");
     match krb5_kdc::issue_tgs(&store, &tgs) {
-        Err(Error::Protocol { code, .. }) => assert_eq!(code, err::BADOPTION),
+        Err(Error::Protocol { code, text, .. }) => {
+            assert_eq!(code, err::BADOPTION);
+            assert_eq!(text.as_deref(), Some("EVIDENCE_TKT_NOT_FORWARDABLE"));
+        }
         other => panic!("expected BADOPTION, got {other:?}"),
     }
+}
+
+#[test]
+// oracle: differential-gate.sh s4u2proxy-header-pac
+fn s4u2proxy_header_pac_mismatch_is_badoption() {
+    let (store, _) = bootstrap_documented().unwrap();
+    let host = documented_host();
+    let tgt = host_tgt(&store, 8200);
+    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
+    let mut part = decrypt_ticket_part(&krbtgt.key, &tgt.rep.0.ticket).unwrap();
+    attach_pac(&krbtgt.key, &mut part, TEST_USER);
+    let header = reseal(&tgt.rep.0.ticket, &part, &krbtgt.key);
+    let ev = evidence_for_user(&store, 8202);
+    let req = TgsReqBuilder::new(
+        header,
+        &tgt.session_key,
+        TEST_REALM,
+        &host,
+        host.clone(),
+        TEST_REALM,
+        8203,
+    )
+    .options(cname_addl())
+    .additional_tickets(Some(vec![ev]))
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
+    .unwrap();
+    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
+    assert_eq!(c, err::BADOPTION);
+    assert_eq!(text.as_deref(), Some("S4U2PROXY_HEADER_PAC"));
+}
+
+#[test]
+// oracle: differential-gate.sh s4u2proxy-local-stkt-pac
+fn s4u2proxy_local_stkt_pac_mismatch_is_badoption() {
+    let (store, _) = bootstrap_documented().unwrap();
+    let ev = evidence_for_user(&store, 8210);
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let ukey = store.get_name(&user).unwrap().best_key().unwrap();
+    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
+    let mut part = decrypt_ticket_part(&ukey.key, &ev).unwrap();
+    attach_stkt_pac(
+        &ukey.key,
+        &krbtgt.key,
+        &mut part,
+        &documented_host().components_joined(),
+    );
+    let tkt = reseal(&ev, &part, &ukey.key);
+    let req = proxy_req(&store, tkt, documented_host(), cname_addl(), 8212);
+    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
+    assert_eq!(c, err::BADOPTION);
+    assert_eq!(text.as_deref(), Some("S4U2PROXY_LOCAL_STKT_PAC"));
 }
 
 #[test]

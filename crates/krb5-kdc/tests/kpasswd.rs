@@ -112,6 +112,7 @@ fn as_rejects_expired_password_unless_pwchange_service() {
 }
 
 #[test]
+// oracle: differential-gate.sh as-needchange
 fn as_needchange_is_key_expired_unless_changepw() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);

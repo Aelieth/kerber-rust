@@ -84,6 +84,7 @@ fn tgt_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs) -> EncTicketPar
 }
 
 #[test]
+// oracle: differential-gate.sh tgs-no-preauth-flag
 fn tgs_requires_preauth_without_pa_flag_is_no_preauth() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let host = documented_host();
@@ -169,6 +170,7 @@ fn forge_tgt(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs, part: &EncTick
 }
 
 #[test]
+// oracle: differential-gate.sh tgs-validate-invalid-non-renewable
 fn tgs_renew_invalid_non_renewable_is_ticket_not_renewable() {
     let (store, _) = bootstrap_documented().unwrap();
     let issued = user_as_bits(&store, 26021, &[]);
@@ -302,6 +304,7 @@ fn s4u2self_disallow_renewable_user_has_no_r() {
 }
 
 #[test]
+// oracle: differential-gate.sh tgs-service-expired-require-auth
 fn tgs_expired_server_beats_require_auth() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let host = documented_host();
@@ -649,6 +652,7 @@ fn tgs_renew_strips_when_disallow_renewable() {
 }
 
 #[test]
+// oracle: differential-gate.sh tgt-expired
 fn tgs_renew_after_endtime_is_process_tgs() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     store.policy.skew = 0;
@@ -714,6 +718,7 @@ fn tgs_renew_non_renewable_is_badoption() {
 }
 
 #[test]
+// oracle: differential-gate.sh tgs-nyv-inside-skew
 fn tgs_validate_future_starttime_is_not_yet_valid() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let from = KerberosTime::now().add_seconds(2).unwrap();
@@ -789,6 +794,8 @@ fn reseal_tgt(
 }
 
 #[test]
+// oracle: differential-gate.sh tgt-nyv
+// oracle: differential-gate.sh tgt-nyv-no-starttime
 fn tgs_header_tgt_without_starttime_and_future_authtime_is_nyv() {
     krb5_config::isolate_test_krb5();
     let (store, _) = bootstrap_documented().unwrap();

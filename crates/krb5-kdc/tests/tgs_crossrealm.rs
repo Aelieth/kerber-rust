@@ -114,6 +114,7 @@ fn cross_tgt_renew_realm_mismatch_is_badoption() {
 }
 
 #[test]
+// oracle: differential-gate.sh u2u-2nd-ticket-foreign-realm
 fn u2u_second_ticket_foreign_realm_is_2nd_tkt_server() {
     let (store, _) = bootstrap_documented().unwrap();
     let host = documented_host();

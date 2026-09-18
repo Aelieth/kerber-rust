@@ -152,6 +152,7 @@ fn tgs_copies_if_relevant_body_authdata() {
 }
 
 #[test]
+// oracle: differential-gate.sh tgs-ad-mandatory-for-kdc
 fn tgs_mandatory_for_kdc_is_handle_authdata() {
     let (store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 13011);
@@ -275,6 +276,7 @@ fn tgs_require_auth_is_higher_authentication() {
 }
 
 #[test]
+// oracle: differential-gate.sh tgs-truncated-cammac
 fn tgs_truncated_cammac_is_get_auth_indicators() {
     let (store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 14004);

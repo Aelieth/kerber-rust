@@ -75,7 +75,9 @@ the directory; `--all working/logs/w1-sweep` unnamed = 0 is a close-out conditio
 `--profile ci` on every invocation, no per-push `cargo test
 --workspace` or `cargo test --all`, `--no-run` + junit upload, no
 echo-only `then`/`elif`/`else` arm in `scripts/*-gate.sh` or
-`scripts/lib/*.sh`, `"ci.yml"` path-equality). A mixed `exit`+`echo`
+`scripts/lib/*.sh`, `"ci.yml"` path-equality) and that every
+`differential-gate.sh` status-word cell has a tagged unit twin in
+[`gate-unit-index.md`](gate-unit-index.md). A mixed `exit`+`echo`
 chain is a hit. Multi-line `||` / `&&` / `\\` conditions are joined
 before matching (including 2+ continuations). Each arm is tokenised
 (assignments, redirections, quotes, `$(…)` stripped): an assertion is a

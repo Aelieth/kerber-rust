@@ -53,6 +53,7 @@ fn tgt_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedTgs) -> EncTicketPa
 }
 
 #[test]
+// oracle: differential-gate.sh tgs-postdate-on-non-postdatable
 fn tgs_postdate_without_may_postdate_is_tgt_not_postdatable() {
     let (store, _) = bootstrap_documented().unwrap();
     let issued = user_as_bits(&store, 11001, &[]);
@@ -382,6 +383,7 @@ fn tgs_requires_hw_auth_without_hw_flag() {
 }
 
 #[test]
+// oracle: differential-gate.sh tgs-ap-options
 fn tgs_ap_options_use_session_key_is_policy() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);

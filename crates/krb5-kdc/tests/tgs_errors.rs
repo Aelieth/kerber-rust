@@ -38,6 +38,7 @@ fn rewrite_server_cksumtype(part: &mut krb5_types::EncTicketPart, ctype: i32) {
 }
 
 #[test]
+// oracle: differential-gate.sh tgs-pac-server-cksum-wrong-enctype
 fn header_pac_wrong_cksumtype_is_generic() {
     let (store, _) = bootstrap_documented().unwrap();
     let as_out = issue_tgt(&store, TEST_USER, 23000);
@@ -66,6 +67,7 @@ fn header_pac_wrong_cksumtype_is_generic() {
 }
 
 #[test]
+// oracle: differential-gate.sh u2u-2nd-ticket-pac-wrong-enctype
 fn u2u_stkt_pac_wrong_cksumtype_is_generic() {
     let (store, _) = bootstrap_documented().unwrap();
     let host = host_tgt(&store, 23010);
@@ -104,6 +106,7 @@ fn handle_request_empty_is_dropped() {
 }
 
 #[test]
+// oracle: differential-gate.sh unknown-cname
 fn unknown_client_e_text_is_client_not_found() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["nosuchuser"]);
@@ -242,6 +245,7 @@ fn as_error_echoes_the_requested_client_like_prepare_error_as() {
 }
 
 #[test]
+// oracle: differential-gate.sh tgs-bad-msg-type
 fn tgs_bad_msg_type_is_unknown_reason_without_cname() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);

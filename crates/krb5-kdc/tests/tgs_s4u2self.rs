@@ -62,6 +62,7 @@ fn attach_client_info_pac(store: &PrincipalStore, part: &mut EncTicketPart, info
 }
 
 #[test]
+// oracle: differential-gate.sh s4u2self-no-pac
 fn s4u2self_no_pac_is_tgt_revoked() {
     let (store, _) = bootstrap_documented().unwrap();
     let tgt = host_tgt(&store, 7100);
@@ -93,6 +94,7 @@ fn s4u2self_no_pac_is_tgt_revoked() {
 }
 
 #[test]
+// oracle: differential-gate.sh s4u2self-pac-client-mismatch
 fn s4u2self_local_pac_mismatch_is_badoption() {
     let (store, _) = bootstrap_documented().unwrap();
     let tgt = host_tgt(&store, 7102);
@@ -124,6 +126,7 @@ fn s4u2self_local_pac_mismatch_is_badoption() {
 }
 
 #[test]
+// oracle: differential-gate.sh pa-s4u-x509-user-nonce
 fn s4u2self_x509_nonce_mismatch_is_modified() {
     let (store, _) = bootstrap_documented().unwrap();
     let tgt = host_tgt(&store, 7110);
@@ -136,6 +139,7 @@ fn s4u2self_x509_nonce_mismatch_is_modified() {
 }
 
 #[test]
+// oracle: differential-gate.sh pa-s4u-x509-user-bad-checksum
 fn s4u2self_x509_bad_checksum_is_modified() {
     let (store, _) = bootstrap_documented().unwrap();
     let tgt = host_tgt(&store, 7112);
@@ -154,6 +158,7 @@ fn s4u2self_x509_bad_checksum_is_modified() {
 }
 
 #[test]
+// oracle: differential-gate.sh pa-s4u-x509-user-empty
 fn s4u2self_x509_empty_is_invalid_request() {
     let (store, _) = bootstrap_documented().unwrap();
     let tgt = host_tgt(&store, 7120);
@@ -166,6 +171,7 @@ fn s4u2self_x509_empty_is_invalid_request() {
 }
 
 #[test]
+// oracle: differential-gate.sh s4u2self-cert-only
 fn s4u2self_x509_cert_only_local_is_looking_up() {
     let (store, _) = bootstrap_documented().unwrap();
     let tgt = host_tgt(&store, 7122);
@@ -269,6 +275,7 @@ fn s4u2self_keeps_forwardable_without_delegate_targets() {
 }
 
 #[test]
+// oracle: differential-gate.sh pa-for-user-undecodable
 fn s4u2self_for_user_undecodable_is_generic() {
     let (store, _) = bootstrap_documented().unwrap();
     let tgt = host_tgt(&store, 7160);
@@ -342,6 +349,7 @@ fn explicit_cross_tgs_is_server_mismatch() {
 }
 
 #[test]
+// oracle: differential-gate.sh s4u2self-renew-options
 fn s4u2self_u2u_is_invalid_options() {
     let (store, _) = bootstrap_documented().unwrap();
     let tgt = host_tgt(&store, 17020);
@@ -365,6 +373,7 @@ fn s4u2self_u2u_is_invalid_options() {
 }
 
 #[test]
+// oracle: differential-gate.sh pa-s4u-x509-user-truncated
 fn truncated_x509_is_decode() {
     let (store, _) = bootstrap_documented().unwrap();
     let tgt = host_tgt(&store, 17030);
@@ -987,6 +996,7 @@ fn s4u2self_clears_forwardable_without_ok_to_auth() {
 }
 
 #[test]
+// oracle: differential-gate.sh s4u2self-krbtgt-other
 fn s4u2self_explicit_cross_tgs_is_server_mismatch() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     let ir = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x11; 32]).unwrap();

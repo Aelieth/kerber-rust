@@ -50,6 +50,7 @@ fn u2u_req(
 }
 
 #[test]
+// oracle: differential-gate.sh u2u-no-2nd-tkt
 fn u2u_no_2nd_tkt_is_badoption() {
     let (store, _) = bootstrap_documented().unwrap();
     let req = u2u_req(&store, documented_host(), None, 9100);
@@ -59,6 +60,7 @@ fn u2u_no_2nd_tkt_is_badoption() {
 }
 
 #[test]
+// oracle: differential-gate.sh u2u-2nd-ticket-not-tgs
 fn u2u_service_ticket_is_not_tgs() {
     let (store, _) = bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -81,6 +83,7 @@ fn u2u_service_ticket_is_not_tgs() {
 }
 
 #[test]
+// oracle: differential-gate.sh u2u-2nd-ticket-mismatch
 fn u2u_admin_tgt_for_host_is_mismatch() {
     let (store, _) = bootstrap_documented().unwrap();
     let admin = issue_tgt(&store, TEST_ADMIN, 9120);
@@ -96,6 +99,7 @@ fn u2u_admin_tgt_for_host_is_mismatch() {
 }
 
 #[test]
+// oracle: differential-gate.sh u2u-bad-etype
 fn u2u_bad_session_etype_is_etype_nosupp() {
     let (store, _) = bootstrap_documented().unwrap();
     let host = host_tgt(&store, 9130);
@@ -111,6 +115,7 @@ fn u2u_bad_session_etype_is_etype_nosupp() {
 }
 
 #[test]
+// oracle: differential-gate.sh u2u-2nd-ticket-bad-pac
 fn u2u_bad_pac_is_modified() {
     let (store, _) = bootstrap_documented().unwrap();
     let host = host_tgt(&store, 9140);
@@ -136,6 +141,7 @@ fn u2u_bad_pac_is_modified() {
 }
 
 #[test]
+// oracle: differential-gate.sh u2u-dup-skey-tgt-based
 fn u2u_dup_skey_disallowed_is_policy() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let host = documented_host();
@@ -242,6 +248,7 @@ fn u2u(store: &PrincipalStore, second: krb5_types::Ticket) -> krb5_kdc::Error {
 }
 
 #[test]
+// oracle: differential-gate.sh u2u-2nd-ticket-kvno-miss
 fn u2u_no_key_of_ticket_etype_is_2nd_tkt_server() {
     let (store, _) = bootstrap_documented().unwrap();
     let admin_tgt = issue_tgt_password(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 811);
@@ -254,6 +261,7 @@ fn u2u_no_key_of_ticket_etype_is_2nd_tkt_server() {
 }
 
 #[test]
+// oracle: differential-gate.sh u2u-2nd-ticket-bad-etype
 fn u2u_unknown_etype_99_is_2nd_tkt_server() {
     let (store, _) = bootstrap_documented().unwrap();
     let admin_tgt = issue_tgt_password(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 812);
@@ -266,6 +274,7 @@ fn u2u_unknown_etype_99_is_2nd_tkt_server() {
 }
 
 #[test]
+// oracle: differential-gate.sh u2u-2nd-ticket-corrupt
 fn u2u_corrupt_cipher_is_2nd_tkt_decrypt() {
     let (store, _) = bootstrap_documented().unwrap();
     let admin_tgt = issue_tgt_password(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 815);
@@ -282,6 +291,8 @@ fn u2u_corrupt_cipher_is_2nd_tkt_decrypt() {
 }
 
 #[test]
+// oracle: differential-gate.sh u2u-2nd-ticket-disallow-svr
+// oracle: differential-gate.sh u2u-2nd-ticket-unknown-server
 fn u2u_missing_second_ticket_server_is_2nd_tkt_server() {
     let (store, _) = bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);

@@ -67,7 +67,10 @@ use krb5_protocol::{
     armor_key, as_req_sname, attach_fast, build_fast_armor, pa_pac_options, pa_pk_as_req_spki,
     unwrap_fast_rep,
 };
-use krb5_testkit::{TgsReqBuilder, issue_tgt_password, password_key, status, user, user_as};
+use krb5_testkit::{
+    TgsReqBuilder, expect_status, issue_tgt_password, password_key, pref_etypes, status, user,
+    user_as,
+};
 use krb5_types::pac::RpcSid;
 use krb5_types::{
     Checksum, EncKdcRepPart, EncTicketPart, EncryptedData, KdcOptions, KerberosTime, KrbError,
@@ -100,6 +103,7 @@ fn as_hint_list_is_136_info2_modules_cookie() {
 }
 
 #[test]
+// oracle: differential-gate.sh ec-outside-fast
 fn as_ec_outside_fast_is_preauth_failed() {
     let (store, _) = bootstrap_documented().unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -206,6 +210,18 @@ fn decode_enc_part(plain: &[u8]) -> EncKdcRepPart {
 }
 
 #[test]
+// oracle: differential-gate.sh unknown-sname
+fn as_unknown_sname_is_server_not_found() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let sname = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "no-such.kerber.test"]);
+    let req = as_req_sname(cname, TEST_REALM, 0x1000_0006, None, sname, pref_etypes()).unwrap();
+    let (c, text) = expect_status(krb5_kdc::issue_as(&store, &req).unwrap_err());
+    assert_eq!(c, err::S_PRINCIPAL_UNKNOWN);
+    assert_eq!(text.as_deref(), Some("SERVER_NOT_FOUND"));
+}
+
+#[test]
 fn as_without_preauth_is_preauth_required() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -304,6 +320,8 @@ fn wrong_password_yields_preauth_failed_bytes() {
 }
 
 #[test]
+// oracle: differential-gate.sh as-session-enctype
+// oracle: differential-gate.sh etype-nosupp
 fn no_common_etype_is_etype_nosupp() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -630,6 +648,7 @@ fn as_req_enc_pa_rep_is_verified() {
 }
 
 #[test]
+// oracle: differential-gate.sh as-bad-msg-type
 fn as_bad_msg_type_is_validate_message_type() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -664,6 +683,7 @@ fn as_bad_pvno_is_dropped() {
 }
 
 #[test]
+// oracle: differential-gate.sh wrong-realm
 fn as_wrong_realm_is_chaseable() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -1549,6 +1569,7 @@ fn policy_raw_library_code_reaches_the_wire_as_generic_60() {
 }
 
 #[test]
+// oracle: differential-gate.sh skewed-timestamp
 fn module_failures_pass_through_the_filter_like_kdc_preauth() {
     assert_eq!(
         module_wire_error(0),
@@ -1632,6 +1653,7 @@ fn hint_omits_enc_ts_when_the_only_key_is_not_permitted() {
 }
 
 #[test]
+// oracle: differential-gate.sh as-needpreauth-hints-unpermitted
 fn hint_omits_enc_ts_when_the_only_key_is_not_requested() {
     krb5_config::isolate_test_krb5();
     let (mut store, _) = bootstrap_documented().unwrap();

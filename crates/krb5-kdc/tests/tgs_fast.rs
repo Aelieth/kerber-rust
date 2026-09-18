@@ -800,6 +800,7 @@ fn tgs_header_ticket_ad_fx_armor_is_policy() {
 }
 
 #[test]
+// oracle: differential-gate.sh armor-ap-req-as-pa-tgs-req
 fn tgs_header_ticket_if_relevant_ad_fx_armor_is_policy() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -828,6 +829,7 @@ fn tgs_header_ticket_if_relevant_ad_fx_armor_is_policy() {
 }
 
 #[test]
+// oracle: differential-gate.sh tgs-ad-fx-armor-authenticator
 fn tgs_header_authenticator_ad_fx_armor_is_policy() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);

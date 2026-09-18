@@ -163,6 +163,7 @@ fn pkinit_client_requires_hwauth_is_needed_hw_preauth() {
 }
 
 #[test]
+// oracle: differential-gate.sh tgs-hw-preauth-flag
 fn pkinit_tgs_requires_hwauth_is_no_hw_preauth() {
     let (mut store, _) = bootstrap_documented().unwrap();
     store.enable_pkinit_ca().unwrap();
@@ -327,6 +328,7 @@ fn as_request_reserved_option_bit_is_ignored_like_mit() {
 }
 
 #[test]
+// oracle: differential-gate.sh as-request-anonymous
 fn as_request_anonymous_from_named_client_is_validate_anonymous_principal() {
     // do_as_req.c:718-724: REQUEST_ANONYMOUS demands the anonymous principal; a
     // named client is KRB5KDC_ERR_BADOPTION "VALIDATE_ANONYMOUS_PRINCIPAL"
@@ -455,6 +457,7 @@ fn as_strips_forwardable_when_disallow_forwardable() {
 }
 
 #[test]
+// oracle: differential-gate.sh as-hw-preauth
 fn as_hw_auth_required_rejects_enc_ts() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -494,6 +497,7 @@ fn as_sets_proxiable_when_requested() {
 }
 
 #[test]
+// oracle: differential-gate.sh as-service-not-allowed
 fn as_disallow_svr_is_service_not_allowed() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let host = documented_host();
