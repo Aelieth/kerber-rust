@@ -8,6 +8,7 @@ use krb5_kdc::{
     pa_enc_timestamp, tgs_req,
 };
 use krb5_protocol::{pa_for_user, tgs_req_ex};
+use krb5_testkit::reseal_mut;
 use krb5_types::{
     ApReq, EncTicketPart, KdcOptions, OctetString, PrincipalName, Ticket, err, flag_bit, ku, pa,
 };
@@ -274,13 +275,6 @@ fn attach_client_info_pac(key: &ProtocolKey, part: &mut EncTicketPart, info_name
     part.authorization_data = Some(wrap_win2k_pac(&pac).expect("wrap"));
 }
 
-fn reseal(key: &ProtocolKey, ticket: &mut Ticket, part: &EncTicketPart) {
-    let der = encode(part).unwrap();
-    let usage = KeyUsage::new(ku::TICKET).unwrap();
-    let cipher = encrypt(key, usage, &der).unwrap();
-    ticket.enc_part.cipher = OctetString::from(cipher);
-}
-
 fn three_realm() -> (
     PrincipalStore,
     PrincipalStore,
@@ -339,7 +333,7 @@ fn transited_add_path_type_and_ill_formed() {
     let mut part = decrypt_ticket_part(&ir, &t2).expect("bc");
     part.transited.tr_type = 2;
     part.authorization_data = None;
-    reseal(&ir, &mut t2, &part);
+    reseal_mut(&mut t2, &part, &ir);
     let req = tgs_req(
         t2,
         &bc.session_key,
@@ -364,7 +358,7 @@ fn transited_add_path_type_and_ill_formed() {
     part.transited.tr_type = 1;
     part.transited.contents = OctetString::from(vec![b'A'; 500]);
     part.authorization_data = None;
-    reseal(&ir, &mut tlong, &part);
+    reseal_mut(&mut tlong, &part, &ir);
     let req = tgs_req(
         tlong,
         &bc.session_key,
@@ -395,7 +389,7 @@ fn transited_add_path_bad_intermediates_is_policy() {
     part.transited.tr_type = 1;
     part.transited.contents = OctetString::from(b",,".to_vec());
     part.authorization_data = None;
-    reseal(&ir, &mut t, &part);
+    reseal_mut(&mut t, &part, &ir);
     let req = tgs_req(t, &bc.session_key, "A.TEST", &cname, host_c, "C.TEST", 530).expect("tgs");
     match krb5_kdc::issue_tgs(&c, &req) {
         Err(Error::Protocol { code, text, .. }) => {
@@ -416,7 +410,7 @@ fn transited_cross_realm_renew_at_dest_is_server_nomatch() {
     part.flags = part.flags.with_bit(flag_bit::RENEWABLE, true);
     part.renew_till = Some(part.endtime.add_hours(24).expect("renew_till"));
     part.authorization_data = None;
-    reseal(&ir, &mut t, &part);
+    reseal_mut(&mut t, &part, &ir);
     let req = tgs_req_ex(
         t,
         &bc.session_key,
@@ -454,7 +448,7 @@ fn transited_non_add_overlong_forwarded() {
     part.transited.tr_type = 1;
     part.transited.contents = OctetString::from(vec![b'A'; 512]);
     part.authorization_data = None;
-    reseal(&tgt_key, &mut ticket, &part);
+    reseal_mut(&mut ticket, &part, &tgt_key);
     let out = chase_tgs(
         &store,
         ticket,
@@ -540,7 +534,7 @@ fn reseal_empty_transited(key: &ProtocolKey, ticket: &Ticket, claimed: &str) -> 
     let mut part = decrypt_ticket_part(key, &t).expect("enc");
     part.transited = krb5_types::TransitedEncoding::empty();
     part.authorization_data = None;
-    reseal(key, &mut t, &part);
+    reseal_mut(&mut t, &part, key);
     t.realm = krb5_types::try_ascii(claimed).expect("realm");
     t
 }
@@ -768,7 +762,7 @@ fn tgs_lineage_local_user_on_foreign_tgt_is_policy() {
     let mut part = decrypt_ticket_part(&bckey, &t).expect("bc");
     part.crealm = krb5_types::try_ascii("C.TEST").expect("realm");
     part.authorization_data = None;
-    reseal(&bckey, &mut t, &part);
+    reseal_mut(&mut t, &part, &bckey);
     for lax in [false, true] {
         c.policy.reject_bad_transit = !lax;
         let req = tgs_req(
@@ -926,7 +920,7 @@ fn transited_renew_at_dest_mismatched_realm_is_26() {
     part.flags = part.flags.with_bit(flag_bit::RENEWABLE, true);
     part.renew_till = Some(part.endtime.add_hours(24).expect("renew_till"));
     part.authorization_data = None;
-    reseal(&ir, &mut t, &part);
+    reseal_mut(&mut t, &part, &ir);
     let req = tgs_req_ex(
         t,
         &bc.session_key,
@@ -959,7 +953,7 @@ fn anonymous_crealm_skips_transited_parse() {
     part.transited.tr_type = 1;
     part.transited.contents = OctetString::from(b",".to_vec());
     part.authorization_data = None;
-    reseal(&ir, &mut t, &part);
+    reseal_mut(&mut t, &part, &ir);
     let req = tgs_req(
         t,
         &bc.session_key,
@@ -993,7 +987,7 @@ fn s4u2self_referral_names_header_client() {
     let mut t = ab.rep.0.ticket.clone();
     let mut part = decrypt_ticket_part(&ir, &t).expect("ab");
     attach_client_info_pac(&ir, &mut part, &format!("{TEST_ADMIN}@A.TEST"));
-    reseal(&ir, &mut t, &part);
+    reseal_mut(&mut t, &part, &ir);
     let pa = pa_for_user(&ab.session_key, admin, "A.TEST").expect("PA-FOR-USER");
     let req = tgs_req_ex(
         t,
@@ -1025,7 +1019,7 @@ fn s4u2self_cross_tgt_local_user_local_server_is_not_cross_realm() {
     part.cname = host_c.clone();
     part.crealm = krb5_types::try_ascii("C.TEST").expect("realm");
     part.authorization_data = None;
-    reseal(&ir, &mut t, &part);
+    reseal_mut(&mut t, &part, &ir);
     let local = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let pa = pa_for_user(&bc.session_key, local, "C.TEST").expect("PA-FOR-USER");
     let req = tgs_req_ex(
@@ -1084,7 +1078,7 @@ fn s4u2self_local_tgt_foreign_crealm_is_badmatch() {
     let mut part = decrypt_ticket_part(&tgt_key, &t).expect("tgt");
     part.crealm = krb5_types::try_ascii("A.TEST").expect("realm");
     part.authorization_data = None;
-    reseal(&tgt_key, &mut t, &part);
+    reseal_mut(&mut t, &part, &tgt_key);
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let pa = pa_for_user(&tgt.session_key, admin, "C.TEST").expect("PA-FOR-USER");
@@ -1142,7 +1136,7 @@ fn s4u2self_cross_tgt_local_server_foreign_user_issues() {
     part.cname = host_c.clone();
     part.crealm = krb5_types::try_ascii("C.TEST").expect("realm");
     attach_client_info_pac(&ir, &mut part, &format!("{TEST_ADMIN}@A.TEST"));
-    reseal(&ir, &mut t, &part);
+    reseal_mut(&mut t, &part, &ir);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let pa = pa_for_user(&bc.session_key, admin, "A.TEST").expect("PA-FOR-USER");
     let req = tgs_req_ex(
@@ -1178,7 +1172,7 @@ fn s4u2self_cross_tgt_cert_only_empty_name_is_invalid_xrealm() {
     part.cname = host_c.clone();
     part.crealm = krb5_types::try_ascii("C.TEST").expect("realm");
     part.authorization_data = None;
-    reseal(&ir, &mut t, &part);
+    reseal_mut(&mut t, &part, &ir);
     let user_id = krb5_types::s4u::S4uUserId {
         nonce: 988,
         user: None,
@@ -1280,7 +1274,7 @@ fn cross_realm_pac_drops_local_domain_sids_keeps_foreign() {
     )
     .expect("sign");
     part.authorization_data = Some(wrap_win2k_pac(&pac).expect("wrap"));
-    reseal(&ir, &mut t, &part);
+    reseal_mut(&mut t, &part, &ir);
 
     let req = tgs_req(
         t,
@@ -1355,7 +1349,7 @@ fn cross_realm_pac_claiming_local_domain_base_is_policy() {
     )
     .expect("sign");
     part.authorization_data = Some(wrap_win2k_pac(&pac).expect("wrap"));
-    reseal(&ir, &mut t, &part);
+    reseal_mut(&mut t, &part, &ir);
     let req = tgs_req(t, &bc.session_key, "B.TEST", &cname, host_c, "C.TEST", 992).expect("tgs");
     let (code, text) = tgs_code_text(krb5_kdc::issue_tgs(&c, &req));
     assert_eq!(code, err::POLICY);

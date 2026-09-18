@@ -9,10 +9,9 @@ use krb5_kdc::{
     pa_enc_timestamp, random_key, sign_pac, ticket_checksum_der, wrap_win2k_pac,
 };
 use krb5_protocol::{tgs_req, tgs_req_ex};
-use krb5_testkit::{err_of, issue_tgt, pref_etypes, status};
+use krb5_testkit::{err_of, issue_tgt, pref_etypes, reseal, status};
 use krb5_types::{
-    EncTicketPart, EncryptedData, HostAddress, KdcOptions, KerberosTime, PrincipalName, Ticket,
-    err, flag_bit, ku,
+    EncryptedData, HostAddress, KdcOptions, KerberosTime, PrincipalName, Ticket, err, flag_bit, ku,
 };
 
 const FOREIGN: &str = "OTHER.TEST";
@@ -33,14 +32,6 @@ fn issue_host_tgt(store: &PrincipalStore, dest: &PrincipalName, nonce: u32) -> k
     )
     .unwrap();
     krb5_kdc::issue_as(store, &req).unwrap()
-}
-
-fn reseal(ticket: &Ticket, part: &EncTicketPart, key: &ProtocolKey) -> Ticket {
-    let der = encode(part).unwrap();
-    let usage = KeyUsage::new(ku::TICKET).unwrap();
-    let mut out = ticket.clone();
-    out.enc_part.cipher = encrypt(key, usage, &der).unwrap().into();
-    out
 }
 
 fn inet(a: u8, b: u8, c: u8, d: u8) -> HostAddress {

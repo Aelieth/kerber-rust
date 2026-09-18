@@ -1,15 +1,13 @@
 //! A′-2 R23: PAC UnsupportedChecksum wires 60 on non-retry exits.
 
-use krb5_asn1::encode;
-use krb5_crypto::{KeyUsage, encrypt};
 use krb5_kdc::{
     PrincipalStore, TEST_REALM, TEST_USER, as_req, bootstrap_documented, decrypt_ticket_part,
     documented_host, pa_enc_timestamp, pac_from_ticket_part, wrap_win2k_pac,
 };
 use krb5_protocol::{tgs_req, tgs_req_ex};
-use krb5_testkit::{expect_status, issue_tgt, pref_etypes};
+use krb5_testkit::{expect_status, issue_tgt, pref_etypes, reseal_store};
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac};
-use krb5_types::{KdcOptions, PrincipalName, err, flag_bit, ku};
+use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
 
 fn issue_host_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
     let host = documented_host();
@@ -42,13 +40,6 @@ fn rewrite_server_cksumtype(part: &mut krb5_types::EncTicketPart, ctype: i32) {
     part.authorization_data = Some(wrap_win2k_pac(&parsed.to_bytes()).unwrap());
 }
 
-fn reseal(store: &PrincipalStore, tkt: &mut krb5_types::Ticket, part: &krb5_types::EncTicketPart) {
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let der = encode(part).unwrap();
-    let usage = KeyUsage::new(ku::TICKET).unwrap();
-    tkt.enc_part.cipher = encrypt(&krbtgt.key, usage, &der).unwrap().into();
-}
-
 #[test]
 fn a2_r23_header_pac_wrong_cksumtype_is_generic() {
     let (store, _) = bootstrap_documented().unwrap();
@@ -58,7 +49,7 @@ fn a2_r23_header_pac_wrong_cksumtype_is_generic() {
     rewrite_server_cksumtype(&mut part, 15);
     let tkt = {
         let mut t = as_out.rep.0.ticket.clone();
-        reseal(&store, &mut t, &part);
+        reseal_store(&store, &mut t, &part);
         t
     };
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -85,7 +76,7 @@ fn a2_r23_u2u_stkt_pac_wrong_cksumtype_is_generic() {
     let mut part = decrypt_ticket_part(&krbtgt.key, &host.rep.0.ticket).unwrap();
     rewrite_server_cksumtype(&mut part, 15);
     let mut extra = host.rep.0.ticket.clone();
-    reseal(&store, &mut extra, &part);
+    reseal_store(&store, &mut extra, &part);
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let tgt = issue_tgt(&store, TEST_USER, 23020);
     let req = tgs_req_ex(

@@ -1,33 +1,16 @@
 //! A′-2 R17: S4U2Self keep-F default, is_referral, reply 130, policy cells.
 
-use krb5_asn1::encode;
-use krb5_crypto::{KeyUsage, ProtocolKey, encrypt};
 use krb5_kdc::{
     TEST_ADMIN, TEST_REALM, bootstrap_documented, decrypt_ticket_part, documented_admin_id,
     documented_host,
 };
 use krb5_protocol::{pa_for_user, pa_s4u_x509_user, tgs_req_ex};
-use krb5_testkit::{aes_key, attach_pac, expect_status, host_tgt, pref_etypes, s4u_tgs};
-use krb5_types::{
-    EncTicketPart, EncryptedData, KdcOptions, PaData, PrincipalName, Ticket, err, flag_bit, ku, pa,
+use krb5_testkit::{
+    aes_key, attach_pac, expect_status, foreign, host_tgt, pref_etypes, reseal_incoming, s4u_tgs,
 };
+use krb5_types::{EncTicketPart, KdcOptions, PaData, PrincipalName, err, flag_bit, pa};
 
 const FOREIGN: &str = "OTHER.TEST";
-
-fn reseal_incoming(key: &ProtocolKey, tgt: &krb5_kdc::IssuedAs, part: &EncTicketPart) -> Ticket {
-    let der = encode(part).unwrap();
-    let usage = KeyUsage::new(ku::TICKET).unwrap();
-    Ticket {
-        tkt_vno: tgt.rep.0.ticket.tkt_vno,
-        realm: krb5_types::try_ascii(FOREIGN).unwrap(),
-        sname: PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", TEST_REALM]),
-        enc_part: EncryptedData {
-            etype: key.etype().to_iana(),
-            kvno: Some(1),
-            cipher: encrypt(key, usage, &der).unwrap().into(),
-        },
-    }
-}
 
 #[test]
 fn a2_r17_create_host_has_no_s4u_to_targets() {
@@ -71,7 +54,7 @@ fn a2_r17_explicit_cross_tgs_is_server_mismatch() {
     let tgt = host_tgt(&store, 17010);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).unwrap();
-    let other = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", FOREIGN]);
+    let other = foreign();
     let (c, text) = expect_status(
         krb5_kdc::issue_tgs(
             &store,

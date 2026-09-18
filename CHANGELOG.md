@@ -32,7 +32,11 @@ this project uses semantic versioning once a crate is published.
   constructors (`cname`/`krbtgt_name` map onto `user`/`krbtgt`;
   protocol `"user"` / `KERBER.TEST` stay local). `scratch_dir` —
   the four local copies plus the test `temp_dir()` sites (client
-  and admin take testkit as a **dev-dependency**). Assertion
+  and admin take testkit as a **dev-dependency**). `foreign()` —
+  the `OTHER.TEST` krbtgt constructor. `reseal` / `reseal_mut` /
+  `reseal_store` / `reseal_tgt` / `reseal_incoming` — PAC reseal
+  (incompatible bodies kept apart; `z1` decrypt+mutate and `z6`
+  etype rewrite stay local). Assertion
   text in those files is unchanged.
 
 ### W3-S2.1 drop the eight a2_*_parent red-inject files

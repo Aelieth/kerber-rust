@@ -1,16 +1,14 @@
 //! A′-2 item 9 U2U / second-ticket statuses.
 
-use krb5_asn1::encode;
-use krb5_crypto::{KeyUsage, encrypt};
 use krb5_kdc::{
     KDB_DISALLOW_DUP_SKEY, PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER, as_req,
     bootstrap_documented, decrypt_ticket_part, documented_host, pa_enc_timestamp,
     pac_from_ticket_part, wrap_win2k_pac,
 };
 use krb5_protocol::{tgs_req, tgs_req_ex};
-use krb5_testkit::{expect_status, issue_tgt, pref_etypes};
+use krb5_testkit::{expect_status, issue_tgt, pref_etypes, reseal_store};
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac};
-use krb5_types::{KdcOptions, PrincipalName, err, flag_bit, ku};
+use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
 
 fn issue_host_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
     let host = documented_host();
@@ -57,13 +55,6 @@ fn u2u_req(
         pref_etypes(),
     )
     .unwrap()
-}
-
-fn reseal(store: &PrincipalStore, tkt: &mut krb5_types::Ticket, part: &krb5_types::EncTicketPart) {
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let der = encode(part).unwrap();
-    let usage = KeyUsage::new(ku::TICKET).unwrap();
-    tkt.enc_part.cipher = encrypt(&krbtgt.key, usage, &der).unwrap().into();
 }
 
 #[test]
@@ -120,7 +111,7 @@ fn u2u_bad_session_etype_is_etype_nosupp() {
     let mut part = decrypt_ticket_part(&krbtgt.key, &host.rep.0.ticket).unwrap();
     part.key.keytype = 99;
     let mut extra = host.rep.0.ticket.clone();
-    reseal(&store, &mut extra, &part);
+    reseal_store(&store, &mut extra, &part);
     let req = u2u_req(&store, documented_host(), Some(vec![extra]), 9131);
     let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::ETYPE_NOSUPP);
@@ -145,7 +136,7 @@ fn u2u_bad_pac_is_modified() {
     }
     part.authorization_data = Some(wrap_win2k_pac(&parsed.to_bytes()).unwrap());
     let mut extra = host.rep.0.ticket.clone();
-    reseal(&store, &mut extra, &part);
+    reseal_store(&store, &mut extra, &part);
     let req = u2u_req(&store, documented_host(), Some(vec![extra]), 9141);
     let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::MODIFIED);

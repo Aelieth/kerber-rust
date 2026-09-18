@@ -1,7 +1,6 @@
 //! A′-4 item 18 units that need `domain_realm` / host-based knobs.
 
-use krb5_asn1::encode;
-use krb5_crypto::{KeyUsage, ProtocolKey, decrypt, encrypt};
+use krb5_crypto::{KeyUsage, decrypt};
 use krb5_kdc::{
     Acl, Error, PrincipalStore, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req,
     bootstrap_documented, decrypt_ticket_part, documented_admin_id, documented_host,
@@ -9,12 +8,11 @@ use krb5_kdc::{
 };
 use krb5_protocol::{pa_for_user, pa_pac_options, tgs_req_ex};
 use krb5_testkit::{
-    aes_key, attach_pac, evidence_for_user, host_tgt, issue_tgt_password, pref_etypes,
+    aes_key, attach_pac, evidence_for_user, foreign, host_tgt, issue_tgt_password, pref_etypes,
+    reseal_incoming,
 };
 use krb5_types::pac::{PAC_CLIENT_INFO, Pac, parse_client_info};
-use krb5_types::{
-    EncTicketPart, EncryptedData, KdcOptions, PrincipalName, Ticket, err, flag_bit, ku,
-};
+use krb5_types::{KdcOptions, PrincipalName, err, flag_bit, ku};
 
 fn other_store(store: &mut PrincipalStore, acl: &Acl) {
     store
@@ -161,21 +159,6 @@ fn a4_18_renew_skips_alternate_tgs() {
             assert_eq!(text.as_deref(), Some("LOOKING_UP_SERVER"));
         }
         other => panic!("RENEW must not alternate, got {other:?}"),
-    }
-}
-
-fn reseal_incoming(key: &ProtocolKey, tgt: &krb5_kdc::IssuedAs, part: &EncTicketPart) -> Ticket {
-    let der = encode(part).unwrap();
-    let usage = KeyUsage::new(ku::TICKET).unwrap();
-    Ticket {
-        tkt_vno: tgt.rep.0.ticket.tkt_vno,
-        realm: krb5_types::try_ascii("OTHER.TEST").unwrap(),
-        sname: PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", TEST_REALM]),
-        enc_part: EncryptedData {
-            etype: key.etype().to_iana(),
-            kvno: Some(1),
-            cipher: encrypt(key, usage, &der).unwrap().into(),
-        },
     }
 }
 
@@ -420,10 +403,7 @@ fn a4_18_s4u2proxy_referral_with_rbcd_issues() {
     // MIT `kdc_authdata.c:534-539`: S4U referral PAC client info is the
     // subject with realm (B's `RBCD_PAC_PRINC` read).
     let ir = store
-        .get_name(&PrincipalName::new(
-            PrincipalName::NT_SRV_INST,
-            ["krbtgt", "OTHER.TEST"],
-        ))
+        .get_name(&foreign())
         .unwrap()
         .best_key()
         .unwrap()

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, encrypt, string_to_key};
 use krb5_kdc::{
     IssuedAs, PacTicket, PrincipalStore, S2K_ITERS, TEST_ADMIN, TEST_REALM, TEST_USER, as_req,
     documented_host, pa_enc_timestamp, sign_reply_pac, ticket_checksum_der, wrap_win2k_pac,
@@ -18,6 +18,7 @@ use krb5_protocol::{pa_for_user, tgs_req, tgs_req_ex};
 use krb5_types::AuthorizationData;
 use krb5_types::AuthorizationDataValue;
 use krb5_types::EncTicketPart;
+use krb5_types::EncryptedData;
 use krb5_types::KdcOptions;
 use krb5_types::KrbError;
 use krb5_types::PaData;
@@ -27,6 +28,7 @@ use krb5_types::TgsReq;
 use krb5_types::Ticket;
 use krb5_types::ascii;
 use krb5_types::flag_bit;
+use krb5_types::ku;
 use krb5_types::pa;
 use krb5_types::pac::{PAC_CLIENT_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer};
 
@@ -49,6 +51,14 @@ pub fn admin() -> PrincipalName {
 #[must_use]
 pub fn host() -> PrincipalName {
     documented_host()
+}
+
+/// Cross-realm krbtgt for `OTHER.TEST`.
+///
+/// Replaces the `FOREIGN` / `["krbtgt", "OTHER.TEST"]` constructors.
+#[must_use]
+pub fn foreign() -> PrincipalName {
+    PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "OTHER.TEST"])
 }
 
 /// Local-realm krbtgt principal.
@@ -562,4 +572,85 @@ pub fn wrap_if_relevant(inner: &[AuthorizationDataValue]) -> AuthorizationData {
         ad_type: pa::AD_IF_RELEVANT,
         ad_data: wrapped.into(),
     }]
+}
+
+/// Re-encrypt `part` onto a clone of `ticket` with `key` (KU ticket).
+///
+/// Replaces `a2_r19.rs`.
+///
+/// # Panics
+///
+/// Panics if encode or encrypt fails — the same unwrap the copy used.
+#[must_use]
+pub fn reseal(ticket: &Ticket, part: &EncTicketPart, key: &ProtocolKey) -> Ticket {
+    let der = encode(part).unwrap();
+    let usage = KeyUsage::new(ku::TICKET).unwrap();
+    let mut out = ticket.clone();
+    out.enc_part.cipher = encrypt(key, usage, &der).unwrap().into();
+    out
+}
+
+/// Re-encrypt `part` onto `ticket` in place with `key`.
+///
+/// Replaces `capaths.rs`'s `reseal`.
+///
+/// # Panics
+///
+/// Same unwraps as [`reseal`].
+pub fn reseal_mut(ticket: &mut Ticket, part: &EncTicketPart, key: &ProtocolKey) {
+    let der = encode(part).unwrap();
+    let usage = KeyUsage::new(ku::TICKET).unwrap();
+    ticket.enc_part.cipher = encrypt(key, usage, &der).unwrap().into();
+}
+
+/// [`reseal_mut`] with the store's krbtgt key.
+///
+/// Replaces `a2_9_u2u.rs` and `a2_r23.rs`.
+///
+/// # Panics
+///
+/// Panics if the krbtgt is missing, plus [`reseal_mut`].
+pub fn reseal_store(store: &PrincipalStore, ticket: &mut Ticket, part: &EncTicketPart) {
+    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
+    reseal_mut(ticket, part, &krbtgt.key);
+}
+
+/// [`reseal`] of an issued TGT under the store's krbtgt key.
+///
+/// Replaces `a2_7_s4u2self.rs`. `z1_tgs_header_times.rs` stays local
+/// (decrypt + mutate).
+///
+/// # Panics
+///
+/// Same as [`reseal_store`].
+#[must_use]
+pub fn reseal_tgt(store: &PrincipalStore, tgt: &IssuedAs, part: &EncTicketPart) -> Ticket {
+    reseal(
+        &tgt.rep.0.ticket,
+        part,
+        &store.krbtgt().unwrap().best_key().unwrap().key,
+    )
+}
+
+/// Incoming cross-realm TGT: `OTHER.TEST` realm, local krbtgt sname.
+///
+/// Replaces `a2_r17`, `a2_r18`, `a2_r22`, `a4_18b`.
+///
+/// # Panics
+///
+/// Same unwraps as [`reseal`].
+#[must_use]
+pub fn reseal_incoming(key: &ProtocolKey, tgt: &IssuedAs, part: &EncTicketPart) -> Ticket {
+    let der = encode(part).unwrap();
+    let usage = KeyUsage::new(ku::TICKET).unwrap();
+    Ticket {
+        tkt_vno: tgt.rep.0.ticket.tkt_vno,
+        realm: ascii("OTHER.TEST"),
+        sname: PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", TEST_REALM]),
+        enc_part: EncryptedData {
+            etype: key.etype().to_iana(),
+            kvno: Some(1),
+            cipher: encrypt(key, usage, &der).unwrap().into(),
+        },
+    }
 }

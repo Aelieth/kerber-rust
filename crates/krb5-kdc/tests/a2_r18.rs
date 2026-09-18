@@ -1,21 +1,18 @@
 //! A′-2 R18: S4U2Proxy identity, PAC client info, cross-realm gather.
 
-use krb5_asn1::encode;
-use krb5_crypto::{KeyUsage, ProtocolKey, encrypt};
+use krb5_crypto::ProtocolKey;
 use krb5_kdc::{
     PacTicket, PrincipalStore, TEST_ADMIN, TEST_REALM, as_req, bootstrap_documented,
     decrypt_ticket_part, documented_admin_id, documented_host, pa_enc_timestamp,
     pac_from_ticket_part, sign_reply_pac, ticket_checksum_der, wrap_win2k_pac,
 };
 use krb5_protocol::{pa_pac_options, tgs_req_ex};
-use krb5_testkit::{aes_key, attach_pac, expect_status, host_tgt, pref_etypes};
+use krb5_testkit::{aes_key, attach_pac, expect_status, host_tgt, pref_etypes, reseal_incoming};
 use krb5_types::pac::{
     PAC_CLIENT_INFO, PAC_DELEGATION_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer,
     parse_client_info, parse_delegation_info,
 };
-use krb5_types::{
-    EncTicketPart, EncryptedData, KdcOptions, PrincipalName, Ticket, err, flag_bit, ku,
-};
+use krb5_types::{EncTicketPart, KdcOptions, PrincipalName, Ticket, err, flag_bit};
 
 const FOREIGN: &str = "OTHER.TEST";
 const SUBJECT: &str = "alice";
@@ -67,21 +64,6 @@ fn attach_deleg_pac(key: &ProtocolKey, part: &mut EncTicketPart, info_name: &str
     )
     .unwrap();
     part.authorization_data = Some(wrap_win2k_pac(&pac).unwrap());
-}
-
-fn reseal_incoming(key: &ProtocolKey, tgt: &krb5_kdc::IssuedAs, part: &EncTicketPart) -> Ticket {
-    let der = encode(part).unwrap();
-    let usage = KeyUsage::new(ku::TICKET).unwrap();
-    Ticket {
-        tkt_vno: tgt.rep.0.ticket.tkt_vno,
-        realm: krb5_types::try_ascii(FOREIGN).unwrap(),
-        sname: PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", TEST_REALM]),
-        enc_part: EncryptedData {
-            etype: key.etype().to_iana(),
-            kvno: Some(1),
-            cipher: encrypt(key, usage, &der).unwrap().into(),
-        },
-    }
 }
 
 fn cross_store() -> (PrincipalStore, ProtocolKey) {

@@ -1,28 +1,15 @@
 //! A′-2 item 7 S4U2Self units that fail at parent `2e5995a`.
 
 use krb5_asn1::encode;
-use krb5_crypto::{KeyUsage, checksum, encrypt};
+use krb5_crypto::{KeyUsage, checksum};
 use krb5_kdc::{
     PacTicket, PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER, bootstrap_documented,
     decrypt_ticket_part, documented_host, sign_reply_pac, ticket_checksum_der, wrap_win2k_pac,
 };
 use krb5_protocol::{pa_for_user, pa_s4u_x509_user, tgs_req_ex};
-use krb5_testkit::{expect_status, host_tgt, pref_etypes, s4u_self};
+use krb5_testkit::{expect_status, host_tgt, pref_etypes, reseal_tgt, s4u_self};
 use krb5_types::pac::{PAC_CLIENT_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer};
 use krb5_types::{EncTicketPart, KdcOptions, PaData, PrincipalName, err, ku, pa};
-
-fn reseal_tgt(
-    store: &PrincipalStore,
-    tgt: &krb5_kdc::IssuedAs,
-    part: &EncTicketPart,
-) -> krb5_types::Ticket {
-    let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
-    let der = encode(part).unwrap();
-    let usage = KeyUsage::new(ku::TICKET).unwrap();
-    let mut t = tgt.rep.0.ticket.clone();
-    t.enc_part.cipher = encrypt(&krbtgt.key, usage, &der).unwrap().into();
-    t
-}
 
 fn attach_client_info_pac(store: &PrincipalStore, part: &mut EncTicketPart, info_name: &str) {
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
