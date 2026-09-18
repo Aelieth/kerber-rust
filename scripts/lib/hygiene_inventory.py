@@ -241,7 +241,11 @@ def quality_grep(root: pathlib.Path) -> list[str]:
         if "/tests/" in rel.replace("\\", "/"):
             test_files += 1
         allow_n += len(re.findall(r"#\[allow\(", text))
-        if "/src/" in rel.replace("\\", "/") and "/tests/" not in rel.replace("\\", "/"):
+        norm = rel.replace("\\", "/")
+        # Product src only. `krb5-testkit` is a test-only crate (workspace
+        # `publish = false`); its unwraps are the helpers S2.2 moved out of
+        # `tests/`, which this key never counted.
+        if "/src/" in norm and "/tests/" not in norm and "/krb5-testkit/" not in norm:
             unwrap_n += len(re.findall(r"\bunwrap\(|\bexpect\(|\bpanic!\(", text))
     rows.append(f"allow={allow_n}")
     rows.append(f"unwrap_expect_panic_src={unwrap_n}")
