@@ -17,6 +17,16 @@ this project uses semantic versioning once a crate is published.
 - **test.** Drop redundant clippy unwrap/expect/panic allows on admin
   `tests/*.rs`; keep the four `tests/common` `dead_code` allows.
   `hygiene-diff` fails an `allow_sites` rise unless `--accept-rise`.
+- **docs.** File cites follow the S2 merges (`pac_ad_capture.rs`,
+  `tgs_crossrealm.rs`, `acceptor_realm.rs`, crate-qualified
+  `diffsend`/`loadgen`). `ci-policy` `check_doc_file_cites` is fail-red
+  on a missing backticked path; `check_gate_unit_index` has a missing-twin
+  fixture.
+- **test.** `checksum_bit_flip_is_integrity` pins `verify_checksum_type`'s
+  `mac_verify` line. `docs/security.md` restores `known_answer.rs` and
+  the EncryptionKey / PkinitClient Drop rows.
+- **tool.** `hygiene_inventory` books a `src/**` file the parent declared
+  `#[cfg(test)] mod` as `src-test` (`diff_compare.rs`, `kadm5/tests`).
 
 ### W3-S2.6 coverage
 
@@ -26,6 +36,8 @@ this project uses semantic versioning once a crate is published.
   `unknown-sname` 7, `s4u2proxy-not-forwardable` 13,
   `s4u2proxy-header-pac` 13, `s4u2proxy-local-stkt-pac` 13.
   `krb5-crypto/tests/zeroize_ct.rs` pins Drop+zeroize and `ct_eq`.
+  `s4u2proxy_rejects_non_forwardable_evidence` also asserts e_text
+  `EVIDENCE_TKT_NOT_FORWARDABLE` (the one S2 assertion addition).
 
 ### W3-S2.5 fixtures
 
