@@ -21,9 +21,10 @@ this project uses semantic versioning once a crate is published.
   `user_as_bits` — the ten TEST_USER AS helpers (two with option
   bits). `status` / `expect_status` — borrowed `proto` vs owned
   `code` (panic strings kept apart); `protocol_code` for the
-  `Result`→`Option` `code`; `err_of` / `err_of_cname` for the two
-  wire `KRB-ERROR` decoders. Assertion text in those files is
-  unchanged.
+  `Result`→`Option` `code`;   `err_of` / `err_of_cname` for the two
+  wire `KRB-ERROR` decoders. `s4u_tgs` / `s4u_self` / `s4u_admin`
+  — the three S4U TGS helpers (`pref_etypes` vs AES-256-only kept
+  apart). Assertion text in those files is unchanged.
 
 ### W3-S2.1 drop the eight a2_*_parent red-inject files
 

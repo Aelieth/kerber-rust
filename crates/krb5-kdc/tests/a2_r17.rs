@@ -7,36 +7,12 @@ use krb5_kdc::{
     documented_host,
 };
 use krb5_protocol::{pa_for_user, pa_s4u_x509_user, tgs_req_ex};
-use krb5_testkit::{aes_key, attach_pac, expect_status, host_tgt, pref_etypes};
+use krb5_testkit::{aes_key, attach_pac, expect_status, host_tgt, pref_etypes, s4u_tgs};
 use krb5_types::{
     EncTicketPart, EncryptedData, KdcOptions, PaData, PrincipalName, Ticket, err, flag_bit, ku, pa,
 };
 
 const FOREIGN: &str = "OTHER.TEST";
-
-fn s4u_tgs(
-    tgt: &krb5_kdc::IssuedAs,
-    sname: PrincipalName,
-    padata: Vec<PaData>,
-    nonce: u32,
-    opts: KdcOptions,
-) -> krb5_types::TgsReq {
-    let host = documented_host();
-    tgs_req_ex(
-        tgt.rep.0.ticket.clone(),
-        &tgt.session_key,
-        TEST_REALM,
-        &host,
-        sname,
-        TEST_REALM,
-        nonce,
-        opts,
-        None,
-        padata,
-        pref_etypes(),
-    )
-    .unwrap()
-}
 
 fn reseal_incoming(key: &ProtocolKey, tgt: &krb5_kdc::IssuedAs, part: &EncTicketPart) -> Ticket {
     let der = encode(part).unwrap();

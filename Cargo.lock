@@ -631,6 +631,7 @@ dependencies = [
  "krb5-asn1",
  "krb5-crypto",
  "krb5-kdc",
+ "krb5-protocol",
  "krb5-types",
 ]
 

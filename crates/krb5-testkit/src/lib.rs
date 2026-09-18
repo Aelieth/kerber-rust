@@ -8,12 +8,16 @@
 use krb5_asn1::decode;
 use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
 use krb5_kdc::{
-    IssuedAs, PacTicket, PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER, as_req, documented_host,
-    pa_enc_timestamp, sign_reply_pac, ticket_checksum_der, wrap_win2k_pac,
+    IssuedAs, PacTicket, PrincipalStore, S2K_ITERS, TEST_ADMIN, TEST_REALM, TEST_USER, as_req,
+    documented_host, pa_enc_timestamp, sign_reply_pac, ticket_checksum_der, wrap_win2k_pac,
 };
+use krb5_protocol::{pa_for_user, tgs_req_ex};
 use krb5_types::EncTicketPart;
+use krb5_types::KdcOptions;
 use krb5_types::KrbError;
+use krb5_types::PaData;
 use krb5_types::PrincipalName;
+use krb5_types::TgsReq;
 use krb5_types::flag_bit;
 use krb5_types::pac::{PAC_CLIENT_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer};
 
@@ -350,4 +354,84 @@ pub fn err_of_cname(bytes: &[u8]) -> (i32, String, Option<String>) {
         .to_owned();
     let cname = e.cname.as_ref().map(PrincipalName::components_joined);
     (e.error_code, text, cname)
+}
+
+/// S4U TGS-REQ: header TGT, client = documented host, caller `sname` / padata / opts.
+///
+/// Replaces `a2_r17.rs`. Etypes are [`pref_etypes`].
+///
+/// # Panics
+///
+/// Panics if `tgs_req_ex` fails — the same unwrap the copy used.
+#[must_use]
+pub fn s4u_tgs(
+    tgt: &IssuedAs,
+    sname: PrincipalName,
+    padata: Vec<PaData>,
+    nonce: u32,
+    opts: KdcOptions,
+) -> TgsReq {
+    let host = documented_host();
+    tgs_req_ex(
+        tgt.rep.0.ticket.clone(),
+        &tgt.session_key,
+        TEST_REALM,
+        &host,
+        sname,
+        TEST_REALM,
+        nonce,
+        opts,
+        None,
+        padata,
+        pref_etypes(),
+    )
+    .unwrap()
+}
+
+/// S4U2Self TGS-REQ for the documented host with FORWARDABLE and caller padata.
+///
+/// Replaces `a2_7_s4u2self.rs`.
+///
+/// # Panics
+///
+/// Same unwrap as [`s4u_tgs`].
+#[must_use]
+pub fn s4u_self(tgt: &IssuedAs, padata: Vec<PaData>, nonce: u32) -> TgsReq {
+    s4u_tgs(
+        tgt,
+        documented_host(),
+        padata,
+        nonce,
+        KdcOptions::forwardable(),
+    )
+}
+
+/// S4U2Self TGS-REQ impersonating `TEST_ADMIN` with a single AES-256 etype.
+///
+/// Replaces `a3_r27.rs`. Must not call [`s4u_tgs`]: that site's etype
+/// list is AES-256 only, not [`pref_etypes`].
+///
+/// # Panics
+///
+/// Panics if `pa_for_user` or `tgs_req_ex` fails — the same unwraps
+/// the copy used.
+#[must_use]
+pub fn s4u_admin(tgt: &IssuedAs, nonce: u32, opts: KdcOptions) -> TgsReq {
+    let host = documented_host();
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
+    let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).unwrap();
+    tgs_req_ex(
+        tgt.rep.0.ticket.clone(),
+        &tgt.session_key,
+        TEST_REALM,
+        &host,
+        host.clone(),
+        TEST_REALM,
+        nonce,
+        opts,
+        None,
+        vec![pa],
+        vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
+    )
+    .unwrap()
 }

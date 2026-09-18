@@ -6,13 +6,13 @@ use krb5_kdc::{
     KDB_DISALLOW_RENEWABLE, PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER,
     bootstrap_documented, documented_host,
 };
-use krb5_protocol::{as_req, pa_enc_timestamp, pa_for_user, tgs_req_ex, tgs_req_ex_from};
+use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req_ex, tgs_req_ex_from};
 use krb5_types::{
     EncTicketPart, EncryptedData, KdcOptions, KerberosTime, PrincipalName, Ticket, err, flag_bit,
     ku,
 };
 
-use krb5_testkit::{status, user_as};
+use krb5_testkit::{s4u_admin, status, user_as};
 fn etypes() -> Vec<i32> {
     vec![EncryptionType::Aes256CtsHmacSha196.to_iana()]
 }
@@ -94,25 +94,6 @@ fn tgt_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs) -> EncTicketPar
     .unwrap()
 }
 
-fn s4u_tgs(tgt: &krb5_kdc::IssuedAs, nonce: u32, opts: KdcOptions) -> krb5_types::TgsReq {
-    let host = documented_host();
-    let pa = pa_for_user(&tgt.session_key, admin(), TEST_REALM).unwrap();
-    tgs_req_ex(
-        tgt.rep.0.ticket.clone(),
-        &tgt.session_key,
-        TEST_REALM,
-        &host,
-        host.clone(),
-        TEST_REALM,
-        nonce,
-        opts,
-        None,
-        vec![pa],
-        etypes(),
-    )
-    .unwrap()
-}
-
 #[test]
 fn r27_s4u2self_caps_endtime_at_impersonated_max_life() {
     let (mut store, _) = bootstrap_documented().unwrap();
@@ -121,7 +102,7 @@ fn r27_s4u2self_caps_endtime_at_impersonated_max_life() {
         .unwrap();
     let tgt = host_as(&store, 27001, false);
     let out =
-        krb5_kdc::issue_tgs(&store, &s4u_tgs(&tgt, 27002, KdcOptions::forwardable())).unwrap();
+        krb5_kdc::issue_tgs(&store, &s4u_admin(&tgt, 27002, KdcOptions::forwardable())).unwrap();
     let part = host_part(&store, &out);
     let start = part
         .starttime
@@ -141,7 +122,7 @@ fn r27_s4u2self_disallow_renewable_user_has_no_r() {
         .unwrap();
     let tgt = host_as(&store, 27011, true);
     let opts = KdcOptions::forwardable().with_bit(flag_bit::RENEWABLE, true);
-    let out = krb5_kdc::issue_tgs(&store, &s4u_tgs(&tgt, 27012, opts)).unwrap();
+    let out = krb5_kdc::issue_tgs(&store, &s4u_admin(&tgt, 27012, opts)).unwrap();
     assert!(!host_part(&store, &out).flags.renewable());
 }
 

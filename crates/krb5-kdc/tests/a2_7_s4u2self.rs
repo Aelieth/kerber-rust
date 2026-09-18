@@ -7,27 +7,9 @@ use krb5_kdc::{
     decrypt_ticket_part, documented_host, sign_reply_pac, ticket_checksum_der, wrap_win2k_pac,
 };
 use krb5_protocol::{pa_for_user, pa_s4u_x509_user, tgs_req_ex};
-use krb5_testkit::{expect_status, host_tgt, pref_etypes};
+use krb5_testkit::{expect_status, host_tgt, pref_etypes, s4u_self};
 use krb5_types::pac::{PAC_CLIENT_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer};
 use krb5_types::{EncTicketPart, KdcOptions, PaData, PrincipalName, err, ku, pa};
-
-fn s4u_tgs(tgt: &krb5_kdc::IssuedAs, padata: Vec<PaData>, nonce: u32) -> krb5_types::TgsReq {
-    let host = documented_host();
-    tgs_req_ex(
-        tgt.rep.0.ticket.clone(),
-        &tgt.session_key,
-        TEST_REALM,
-        &host,
-        host.clone(),
-        TEST_REALM,
-        nonce,
-        KdcOptions::forwardable(),
-        None,
-        padata,
-        pref_etypes(),
-    )
-    .unwrap()
-}
 
 fn reseal_tgt(
     store: &PrincipalStore,
@@ -144,7 +126,7 @@ fn s4u2self_x509_nonce_mismatch_is_modified() {
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let pa = pa_s4u_x509_user(&tgt.session_key, admin, TEST_REALM, 0xdead).unwrap();
     let (c, text) =
-        expect_status(krb5_kdc::issue_tgs(&store, &s4u_tgs(&tgt, vec![pa], 7111)).unwrap_err());
+        expect_status(krb5_kdc::issue_tgs(&store, &s4u_self(&tgt, vec![pa], 7111)).unwrap_err());
     assert_eq!(c, err::MODIFIED);
     assert_eq!(text.as_deref(), Some("INVALID_S4U2SELF_CHECKSUM"));
 }
@@ -162,7 +144,7 @@ fn s4u2self_x509_bad_checksum_is_modified() {
     body.cksum.checksum = ck.into();
     pa.padata_value = encode(&body).unwrap().into();
     let (c, text) =
-        expect_status(krb5_kdc::issue_tgs(&store, &s4u_tgs(&tgt, vec![pa], 7113)).unwrap_err());
+        expect_status(krb5_kdc::issue_tgs(&store, &s4u_self(&tgt, vec![pa], 7113)).unwrap_err());
     assert_eq!(c, err::MODIFIED);
     assert_eq!(text.as_deref(), Some("INVALID_S4U2SELF_CHECKSUM"));
 }
@@ -174,7 +156,7 @@ fn s4u2self_x509_empty_is_invalid_request() {
     let empty = PrincipalName::new(PrincipalName::NT_UNKNOWN, std::iter::empty::<&str>());
     let pa = pa_s4u_x509_user(&tgt.session_key, empty, TEST_REALM, 7121).unwrap();
     let (c, text) =
-        expect_status(krb5_kdc::issue_tgs(&store, &s4u_tgs(&tgt, vec![pa], 7121)).unwrap_err());
+        expect_status(krb5_kdc::issue_tgs(&store, &s4u_self(&tgt, vec![pa], 7121)).unwrap_err());
     assert_eq!(c, err::C_PRINCIPAL_UNKNOWN);
     assert_eq!(text.as_deref(), Some("INVALID_S4U2SELF_REQUEST"));
 }
@@ -205,7 +187,7 @@ fn s4u2self_x509_cert_only_local_is_looking_up() {
         padata_value: encode(&body).unwrap().into(),
     };
     let (c, text) =
-        expect_status(krb5_kdc::issue_tgs(&store, &s4u_tgs(&tgt, vec![pa], 7123)).unwrap_err());
+        expect_status(krb5_kdc::issue_tgs(&store, &s4u_self(&tgt, vec![pa], 7123)).unwrap_err());
     assert_eq!(c, err::GENERIC);
     assert_eq!(text.as_deref(), Some("LOOKING_UP_S4U2SELF_PRINCIPAL"));
 }
@@ -216,7 +198,7 @@ fn s4u2self_x509_issues_and_replies_130() {
     let tgt = host_tgt(&store, 7130);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let pa = pa_s4u_x509_user(&tgt.session_key, admin, TEST_REALM, 7131).unwrap();
-    let out = krb5_kdc::issue_tgs(&store, &s4u_tgs(&tgt, vec![pa], 7131)).unwrap();
+    let out = krb5_kdc::issue_tgs(&store, &s4u_self(&tgt, vec![pa], 7131)).unwrap();
     assert_eq!(out.rep.0.cname.components_joined(), TEST_ADMIN);
     assert!(
         out.rep
@@ -235,7 +217,7 @@ fn s4u2self_x509_wins_over_for_user() {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let pa130 = pa_s4u_x509_user(&tgt.session_key, admin, TEST_REALM, 7133).unwrap();
     let pa129 = pa_for_user(&tgt.session_key, user, TEST_REALM).unwrap();
-    let out = krb5_kdc::issue_tgs(&store, &s4u_tgs(&tgt, vec![pa129, pa130], 7133)).unwrap();
+    let out = krb5_kdc::issue_tgs(&store, &s4u_self(&tgt, vec![pa129, pa130], 7133)).unwrap();
     assert_eq!(out.rep.0.cname.components_joined(), TEST_ADMIN);
 }
 
@@ -245,7 +227,7 @@ fn s4u2self_for_user_only_omits_reply_130() {
     let tgt = host_tgt(&store, 7134);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).unwrap();
-    let out = krb5_kdc::issue_tgs(&store, &s4u_tgs(&tgt, vec![pa], 7135)).unwrap();
+    let out = krb5_kdc::issue_tgs(&store, &s4u_self(&tgt, vec![pa], 7135)).unwrap();
     assert_eq!(out.rep.0.cname.components_joined(), TEST_ADMIN);
     assert!(
         out.rep
@@ -265,7 +247,7 @@ fn s4u2self_pw_expired_user_still_issues() {
         .unwrap();
     let tgt = host_tgt(&store, 7140);
     let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).unwrap();
-    krb5_kdc::issue_tgs(&store, &s4u_tgs(&tgt, vec![pa], 7141)).unwrap();
+    krb5_kdc::issue_tgs(&store, &s4u_self(&tgt, vec![pa], 7141)).unwrap();
 }
 
 #[test]
@@ -275,7 +257,7 @@ fn s4u2self_keeps_forwardable_without_delegate_targets() {
     let tgt = host_tgt(&store, 7150);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).unwrap();
-    let out = krb5_kdc::issue_tgs(&store, &s4u_tgs(&tgt, vec![pa], 7151)).unwrap();
+    let out = krb5_kdc::issue_tgs(&store, &s4u_self(&tgt, vec![pa], 7151)).unwrap();
     let host = documented_host();
     let hostk = store.get_name(&host).unwrap().best_key().unwrap();
     let part: EncTicketPart = decrypt_ticket_part(&hostk.key, &out.rep.0.ticket).unwrap();
@@ -291,7 +273,7 @@ fn s4u2self_for_user_undecodable_is_generic() {
         padata_value: b"\x30\x03\x01\x01".to_vec().into(),
     };
     let (c, text) =
-        expect_status(krb5_kdc::issue_tgs(&store, &s4u_tgs(&tgt, vec![pa], 7161)).unwrap_err());
+        expect_status(krb5_kdc::issue_tgs(&store, &s4u_self(&tgt, vec![pa], 7161)).unwrap_err());
     assert_eq!(c, err::GENERIC);
     assert_eq!(text.as_deref(), Some("DECODE_PA_FOR_USER"));
 }
