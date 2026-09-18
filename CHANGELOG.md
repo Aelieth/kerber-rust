@@ -17,9 +17,13 @@ this project uses semantic versioning once a crate is published.
   Win2k PAC attach bodies. `password_key` — the eleven string-to-key
   copies (unwrap vs `expect("s2k")`, salt binding). `issue_tgt` /
   `issue_tgt_password` / `issue_tgt_renewable` — the 19 AS-TGT helpers
-  (store-key vs password-key kept as separate paths). `user_as` /
+  (store-key vs password-key kept as separate paths).   `user_as` /
   `user_as_bits` — the ten TEST_USER AS helpers (two with option
-  bits). Assertion text in those files is unchanged.
+  bits). `status` / `expect_status` — borrowed `proto` vs owned
+  `code` (panic strings kept apart); `protocol_code` for the
+  `Result`→`Option` `code`; `err_of` / `err_of_cname` for the two
+  wire `KRB-ERROR` decoders. Assertion text in those files is
+  unchanged.
 
 ### W3-S2.1 drop the eight a2_*_parent red-inject files
 

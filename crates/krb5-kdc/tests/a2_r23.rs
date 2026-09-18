@@ -7,7 +7,7 @@ use krb5_kdc::{
     documented_host, pa_enc_timestamp, pac_from_ticket_part, wrap_win2k_pac,
 };
 use krb5_protocol::{tgs_req, tgs_req_ex};
-use krb5_testkit::{issue_tgt, pref_etypes};
+use krb5_testkit::{expect_status, issue_tgt, pref_etypes};
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit, ku};
 
@@ -28,13 +28,6 @@ fn issue_host_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
     )
     .unwrap();
     krb5_kdc::issue_as(store, &req).unwrap()
-}
-
-fn code(e: krb5_kdc::Error) -> (i32, Option<String>) {
-    match e {
-        krb5_kdc::Error::Protocol { code, text, .. } => (code, text),
-        other => panic!("{other:?}"),
-    }
 }
 
 fn rewrite_server_cksumtype(part: &mut krb5_types::EncTicketPart, ctype: i32) {
@@ -79,7 +72,7 @@ fn a2_r23_header_pac_wrong_cksumtype_is_generic() {
         23001,
     )
     .unwrap();
-    let (c, text) = code(krb5_kdc::issue_tgs(&store, &tgs).unwrap_err());
+    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &tgs).unwrap_err());
     assert_eq!(c, err::GENERIC);
     assert_eq!(text.as_deref(), Some("HEADER_PAC"));
 }
@@ -109,7 +102,7 @@ fn a2_r23_u2u_stkt_pac_wrong_cksumtype_is_generic() {
         pref_etypes(),
     )
     .unwrap();
-    let (c, text) = code(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
+    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::GENERIC);
     assert_eq!(text.as_deref(), Some("2ND_TKT_PAC"));
 }

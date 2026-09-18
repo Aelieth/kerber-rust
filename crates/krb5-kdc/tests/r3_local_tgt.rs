@@ -8,16 +8,9 @@ use krb5_kdc::{
     documented_host,
 };
 use krb5_protocol::tgs_req_ex;
-use krb5_testkit::{issue_tgt_password, pref_etypes};
+use krb5_testkit::{issue_tgt_password, pref_etypes, status};
 use krb5_types::pac::RpcSid;
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
-
-fn proto(err: &Error) -> (i32, Option<&str>) {
-    match err {
-        Error::Protocol { code, text, .. } => (*code, text.as_deref()),
-        other => panic!("expected protocol error, got {other:?}"),
-    }
-}
 
 /// Header decrypt uses `ticket.server`; PAC/U2U still call `fetch_krbtgt`.
 struct HideLocalTgt<'a>(&'a PrincipalStore);
@@ -87,7 +80,7 @@ fn s4u2proxy_missing_local_tgt_is_get_local_tgt() {
     )
     .unwrap();
     let err = krb5_kdc::issue_tgs(&HideLocalTgt(&store), &tgs).unwrap_err();
-    let (code, text) = proto(&err);
+    let (code, text) = status(&err);
     assert_eq!(code, err::GENERIC);
     assert_eq!(text, Some("GET_LOCAL_TGT"));
 }

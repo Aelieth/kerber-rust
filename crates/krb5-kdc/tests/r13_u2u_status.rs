@@ -6,15 +6,8 @@ use krb5_kdc::{
     bootstrap_documented,
 };
 use krb5_protocol::tgs_req_ex;
-use krb5_testkit::{issue_tgt_password, pref_etypes};
+use krb5_testkit::{issue_tgt_password, pref_etypes, status};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
-
-fn proto(err: &krb5_kdc::Error) -> (i32, Option<&str>) {
-    match err {
-        krb5_kdc::Error::Protocol { code, text, .. } => (*code, text.as_deref()),
-        other => panic!("expected protocol error, got {other:?}"),
-    }
-}
 
 fn u2u(store: &PrincipalStore, second: krb5_types::Ticket) -> krb5_kdc::Error {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -44,7 +37,7 @@ fn u2u_no_key_of_ticket_etype_is_2nd_tkt_server() {
     let mut second = admin_tgt.rep.0.ticket;
     second.enc_part.etype = EncryptionType::Camellia128CtsCmac.to_iana();
     let err = u2u(&store, second);
-    let (code, text) = proto(&err);
+    let (code, text) = status(&err);
     assert_eq!(code, err::GENERIC);
     assert_eq!(text, Some("2ND_TKT_SERVER"));
 }
@@ -56,7 +49,7 @@ fn u2u_unknown_etype_99_is_2nd_tkt_server() {
     let mut second = admin_tgt.rep.0.ticket;
     second.enc_part.etype = 99;
     let err = u2u(&store, second);
-    let (code, text) = proto(&err);
+    let (code, text) = status(&err);
     assert_eq!(code, err::GENERIC);
     assert_eq!(text, Some("2ND_TKT_SERVER"));
 }
@@ -72,7 +65,7 @@ fn u2u_corrupt_cipher_is_2nd_tkt_decrypt() {
     }
     second.enc_part.cipher = cipher.into();
     let err = u2u(&store, second);
-    let (code, text) = proto(&err);
+    let (code, text) = status(&err);
     assert_eq!(code, err::BAD_INTEGRITY);
     assert_eq!(text, Some("2ND_TKT_DECRYPT"));
 }

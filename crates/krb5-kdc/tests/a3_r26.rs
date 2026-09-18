@@ -3,7 +3,7 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, decrypt, encrypt};
 use krb5_kdc::{
-    Error, KDB_REQUIRES_PRE_AUTH, PrincipalStore, Restrictions, TEST_REALM, TEST_USER,
+    KDB_REQUIRES_PRE_AUTH, PrincipalStore, Restrictions, TEST_REALM, TEST_USER,
     bootstrap_documented,
 };
 use krb5_protocol::{as_req, tgs_req_ex};
@@ -11,14 +11,7 @@ use krb5_types::{
     EncTicketPart, EncryptedData, KdcOptions, PrincipalName, Ticket, err, flag_bit, ku,
 };
 
-use krb5_testkit::user_as_bits;
-fn proto(err: &Error) -> (i32, Option<&str>) {
-    match err {
-        Error::Protocol { code, text, .. } => (*code, text.as_deref()),
-        other => panic!("expected protocol error, got {other:?}"),
-    }
-}
-
+use krb5_testkit::{status, user_as_bits};
 fn cname() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
 }
@@ -111,5 +104,5 @@ fn tgs_renew_invalid_non_renewable_is_ticket_not_renewable() {
     )
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(proto(&err), (err::BADOPTION, Some("TICKET NOT RENEWABLE")));
+    assert_eq!(status(&err), (err::BADOPTION, Some("TICKET NOT RENEWABLE")));
 }

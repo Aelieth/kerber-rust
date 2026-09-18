@@ -1,15 +1,15 @@
 //! A′-2 item 10 ticket addresses and TGS sender bind.
 
-use krb5_asn1::{decode, encode};
+use krb5_asn1::encode;
 use krb5_crypto::{KeyUsage, decrypt, encrypt};
 use krb5_kdc::{
     PrincipalStore, TEST_REALM, TEST_USER, as_req, bootstrap_documented, decrypt_ticket_part,
     documented_host, handle_request_from, pa_enc_timestamp,
 };
 use krb5_protocol::{tgs_req, tgs_req_ex, tgs_req_ex_addr};
-use krb5_testkit::pref_etypes;
+use krb5_testkit::{err_of_cname, pref_etypes};
 use krb5_types::{
-    HostAddress, KdcOptions, KrbError, PaData, PaPacRequest, PrincipalName, err, flag_bit, ku, pa,
+    HostAddress, KdcOptions, PaData, PaPacRequest, PrincipalName, err, flag_bit, ku, pa,
 };
 
 fn inet(a: u8, b: u8, c: u8, d: u8) -> HostAddress {
@@ -104,18 +104,6 @@ fn enc_tgs(
     let usage = KeyUsage::new(ku::TGS_REP_ENC_PART).unwrap();
     let plain = decrypt(reply_key, usage, issued.rep.0.enc_part.cipher.as_ref()).unwrap();
     krb5_asn1::decode_enc_kdc_rep_part(&plain).unwrap()
-}
-
-fn err_of(bytes: &[u8]) -> (i32, String, Option<String>) {
-    let e: KrbError = decode(bytes).unwrap();
-    let text = e
-        .e_text
-        .as_ref()
-        .and_then(|t| std::str::from_utf8(t.as_bytes()).ok())
-        .unwrap_or("")
-        .to_owned();
-    let cname = e.cname.as_ref().map(PrincipalName::components_joined);
-    (e.error_code, text, cname)
 }
 
 #[test]
@@ -230,7 +218,7 @@ fn tgs_sender_mismatch_is_badaddr() {
     .unwrap();
     let bytes =
         handle_request_from(&store, &encode(&req).unwrap(), Some(&inet(192, 0, 2, 1))).unwrap();
-    let (code, text, cname) = err_of(&bytes);
+    let (code, text, cname) = err_of_cname(&bytes);
     assert_eq!(code, err::BADADDR);
     assert_eq!(text, "PROCESS_TGS");
     assert_eq!(cname.as_deref(), Some(TEST_USER));

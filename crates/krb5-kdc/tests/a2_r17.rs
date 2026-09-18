@@ -7,7 +7,7 @@ use krb5_kdc::{
     documented_host,
 };
 use krb5_protocol::{pa_for_user, pa_s4u_x509_user, tgs_req_ex};
-use krb5_testkit::{aes_key, attach_pac, host_tgt, pref_etypes};
+use krb5_testkit::{aes_key, attach_pac, expect_status, host_tgt, pref_etypes};
 use krb5_types::{
     EncTicketPart, EncryptedData, KdcOptions, PaData, PrincipalName, Ticket, err, flag_bit, ku, pa,
 };
@@ -36,13 +36,6 @@ fn s4u_tgs(
         pref_etypes(),
     )
     .unwrap()
-}
-
-fn code(e: krb5_kdc::Error) -> (i32, Option<String>) {
-    match e {
-        krb5_kdc::Error::Protocol { code, text, .. } => (code, text),
-        other => panic!("{other:?}"),
-    }
 }
 
 fn reseal_incoming(key: &ProtocolKey, tgt: &krb5_kdc::IssuedAs, part: &EncTicketPart) -> Ticket {
@@ -103,7 +96,7 @@ fn a2_r17_explicit_cross_tgs_is_server_mismatch() {
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).unwrap();
     let other = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", FOREIGN]);
-    let (c, text) = code(
+    let (c, text) = expect_status(
         krb5_kdc::issue_tgs(
             &store,
             &s4u_tgs(&tgt, other, vec![pa], 17011, KdcOptions::forwardable()),
@@ -123,7 +116,7 @@ fn a2_r17_s4u2self_u2u_is_invalid_options() {
     let tgt = host_tgt(&store, 17020);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).unwrap();
-    let (c, text) = code(
+    let (c, text) = expect_status(
         krb5_kdc::issue_tgs(
             &store,
             &s4u_tgs(
@@ -148,7 +141,7 @@ fn a2_r17_truncated_x509_is_decode() {
         padata_type: pa::FOR_X509_USER,
         padata_value: b"\x30\x03\x01\x01".to_vec().into(),
     };
-    let (c, text) = code(
+    let (c, text) = expect_status(
         krb5_kdc::issue_tgs(
             &store,
             &s4u_tgs(
@@ -194,7 +187,7 @@ fn a2_r17_foreign_pac_client() {
         pref_etypes(),
     )
     .unwrap();
-    let (c, text) = code(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
+    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::BADOPTION);
     assert_eq!(text.as_deref(), Some("S4U2SELF_FOREIGN_PAC_CLIENT"));
 }

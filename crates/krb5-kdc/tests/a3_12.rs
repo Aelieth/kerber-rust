@@ -3,7 +3,7 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, decrypt, encrypt};
 use krb5_kdc::{
-    Error, KDB_REQUIRES_PRE_AUTH, PrincipalStore, TEST_REALM, TEST_USER, bootstrap_documented,
+    KDB_REQUIRES_PRE_AUTH, PrincipalStore, TEST_REALM, TEST_USER, bootstrap_documented,
     documented_host,
 };
 use krb5_protocol::tgs_req_ex;
@@ -11,14 +11,7 @@ use krb5_types::{
     EncTicketPart, EncryptedData, KdcOptions, PrincipalName, Ticket, err, flag_bit, ku,
 };
 
-use krb5_testkit::user_as;
-fn proto(err: &Error) -> (i32, Option<&str>) {
-    match err {
-        Error::Protocol { code, text, .. } => (*code, text.as_deref()),
-        other => panic!("expected protocol error, got {other:?}"),
-    }
-}
-
+use krb5_testkit::{status, user_as};
 fn or_attr(store: &mut PrincipalStore, name: &PrincipalName, bit: u32) {
     let a = store.get_name(name).unwrap().attributes | bit;
     store
@@ -101,7 +94,7 @@ fn tgs_requires_preauth_without_pa_flag_is_no_preauth() {
     )
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(proto(&err), (err::GENERIC, Some("NO PREAUTH")));
+    assert_eq!(status(&err), (err::GENERIC, Some("NO PREAUTH")));
 }
 
 #[test]

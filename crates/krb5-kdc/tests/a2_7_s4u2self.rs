@@ -7,7 +7,7 @@ use krb5_kdc::{
     decrypt_ticket_part, documented_host, sign_reply_pac, ticket_checksum_der, wrap_win2k_pac,
 };
 use krb5_protocol::{pa_for_user, pa_s4u_x509_user, tgs_req_ex};
-use krb5_testkit::{host_tgt, pref_etypes};
+use krb5_testkit::{expect_status, host_tgt, pref_etypes};
 use krb5_types::pac::{PAC_CLIENT_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer};
 use krb5_types::{EncTicketPart, KdcOptions, PaData, PrincipalName, err, ku, pa};
 
@@ -27,13 +27,6 @@ fn s4u_tgs(tgt: &krb5_kdc::IssuedAs, padata: Vec<PaData>, nonce: u32) -> krb5_ty
         pref_etypes(),
     )
     .unwrap()
-}
-
-fn code(e: krb5_kdc::Error) -> (i32, Option<String>) {
-    match e {
-        krb5_kdc::Error::Protocol { code, text, .. } => (code, text),
-        other => panic!("{other:?}"),
-    }
 }
 
 fn reseal_tgt(
@@ -109,7 +102,7 @@ fn s4u2self_no_pac_is_tgt_revoked() {
         pref_etypes(),
     )
     .unwrap();
-    let (c, text) = code(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
+    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::TGT_REVOKED);
     assert_eq!(text.as_deref(), Some("S4U2SELF_NO_PAC"));
 }
@@ -139,7 +132,7 @@ fn s4u2self_local_pac_mismatch_is_badoption() {
         pref_etypes(),
     )
     .unwrap();
-    let (c, text) = code(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
+    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::BADOPTION);
     assert_eq!(text.as_deref(), Some("S4U2SELF_LOCAL_PAC_CLIENT"));
 }
@@ -150,7 +143,8 @@ fn s4u2self_x509_nonce_mismatch_is_modified() {
     let tgt = host_tgt(&store, 7110);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let pa = pa_s4u_x509_user(&tgt.session_key, admin, TEST_REALM, 0xdead).unwrap();
-    let (c, text) = code(krb5_kdc::issue_tgs(&store, &s4u_tgs(&tgt, vec![pa], 7111)).unwrap_err());
+    let (c, text) =
+        expect_status(krb5_kdc::issue_tgs(&store, &s4u_tgs(&tgt, vec![pa], 7111)).unwrap_err());
     assert_eq!(c, err::MODIFIED);
     assert_eq!(text.as_deref(), Some("INVALID_S4U2SELF_CHECKSUM"));
 }
@@ -167,7 +161,8 @@ fn s4u2self_x509_bad_checksum_is_modified() {
     ck[0] ^= 0xff;
     body.cksum.checksum = ck.into();
     pa.padata_value = encode(&body).unwrap().into();
-    let (c, text) = code(krb5_kdc::issue_tgs(&store, &s4u_tgs(&tgt, vec![pa], 7113)).unwrap_err());
+    let (c, text) =
+        expect_status(krb5_kdc::issue_tgs(&store, &s4u_tgs(&tgt, vec![pa], 7113)).unwrap_err());
     assert_eq!(c, err::MODIFIED);
     assert_eq!(text.as_deref(), Some("INVALID_S4U2SELF_CHECKSUM"));
 }
@@ -178,7 +173,8 @@ fn s4u2self_x509_empty_is_invalid_request() {
     let tgt = host_tgt(&store, 7120);
     let empty = PrincipalName::new(PrincipalName::NT_UNKNOWN, std::iter::empty::<&str>());
     let pa = pa_s4u_x509_user(&tgt.session_key, empty, TEST_REALM, 7121).unwrap();
-    let (c, text) = code(krb5_kdc::issue_tgs(&store, &s4u_tgs(&tgt, vec![pa], 7121)).unwrap_err());
+    let (c, text) =
+        expect_status(krb5_kdc::issue_tgs(&store, &s4u_tgs(&tgt, vec![pa], 7121)).unwrap_err());
     assert_eq!(c, err::C_PRINCIPAL_UNKNOWN);
     assert_eq!(text.as_deref(), Some("INVALID_S4U2SELF_REQUEST"));
 }
@@ -208,7 +204,8 @@ fn s4u2self_x509_cert_only_local_is_looking_up() {
         padata_type: pa::FOR_X509_USER,
         padata_value: encode(&body).unwrap().into(),
     };
-    let (c, text) = code(krb5_kdc::issue_tgs(&store, &s4u_tgs(&tgt, vec![pa], 7123)).unwrap_err());
+    let (c, text) =
+        expect_status(krb5_kdc::issue_tgs(&store, &s4u_tgs(&tgt, vec![pa], 7123)).unwrap_err());
     assert_eq!(c, err::GENERIC);
     assert_eq!(text.as_deref(), Some("LOOKING_UP_S4U2SELF_PRINCIPAL"));
 }
@@ -293,7 +290,8 @@ fn s4u2self_for_user_undecodable_is_generic() {
         padata_type: pa::FOR_USER,
         padata_value: b"\x30\x03\x01\x01".to_vec().into(),
     };
-    let (c, text) = code(krb5_kdc::issue_tgs(&store, &s4u_tgs(&tgt, vec![pa], 7161)).unwrap_err());
+    let (c, text) =
+        expect_status(krb5_kdc::issue_tgs(&store, &s4u_tgs(&tgt, vec![pa], 7161)).unwrap_err());
     assert_eq!(c, err::GENERIC);
     assert_eq!(text.as_deref(), Some("DECODE_PA_FOR_USER"));
 }

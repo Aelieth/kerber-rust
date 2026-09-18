@@ -7,17 +7,11 @@ use krb5_kdc::{
     documented_host,
 };
 use krb5_protocol::{as_req, pa_enc_timestamp, pa_pk_as_req, tgs_req_ex};
+use krb5_testkit::status;
 use krb5_types::{
     EncTicketPart, EncryptedData, KdcOptions, MethodData, PrincipalName, Ticket, err, flag_bit, ku,
     pa,
 };
-
-fn proto(err: &Error) -> (i32, Option<&str>) {
-    match err {
-        Error::Protocol { code, text, .. } => (*code, text.as_deref()),
-        other => panic!("expected protocol error, got {other:?}"),
-    }
-}
 
 fn etypes() -> Vec<i32> {
     vec![EncryptionType::Aes256CtsHmacSha196.to_iana()]
@@ -139,7 +133,7 @@ fn r32_pkinit_tgs_requires_hwauth_is_no_hw_preauth() {
     )
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(proto(&err), (err::GENERIC, Some("NO HW PREAUTH")));
+    assert_eq!(status(&err), (err::GENERIC, Some("NO HW PREAUTH")));
 }
 
 #[test]

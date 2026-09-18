@@ -7,7 +7,7 @@ use krb5_kdc::{
     documented_admin_id, documented_host, sign_reply_pac, ticket_checksum_der, wrap_win2k_pac,
 };
 use krb5_protocol::{pa_pac_options, tgs_req_ex};
-use krb5_testkit::{aes_key, attach_pac, host_tgt, pref_etypes};
+use krb5_testkit::{aes_key, attach_pac, expect_status, host_tgt, pref_etypes};
 use krb5_types::pac::{
     PAC_CLIENT_INFO, PAC_DELEGATION_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer,
 };
@@ -18,13 +18,6 @@ use krb5_types::{
 const FOREIGN: &str = "OTHER.TEST";
 const SUBJECT: &str = "alice";
 const SUBJECT_REALM: &str = "ALICE.TEST";
-
-fn code(e: krb5_kdc::Error) -> (i32, Option<String>) {
-    match e {
-        krb5_kdc::Error::Protocol { code, text, .. } => (code, text),
-        other => panic!("{other:?}"),
-    }
-}
 
 fn cname_addl() -> KdcOptions {
     KdcOptions::forwardable().with_bit(flag_bit::CNAME_IN_ADDL_TKT, true)
@@ -177,8 +170,9 @@ fn a2_r22_foreign_impersonator_vs_local_grant_is_not_allowed() {
     store.allow_s4u_from(&extra_host(), &documented_host().components_joined());
     let (header, session) = foreign_header(&store, &ir, 22000);
     let ev = foreign_evidence(&store, &ir, 22010);
-    let (c, text) =
-        code(krb5_kdc::issue_tgs(&store, &proxy_cross(header, &session, ev, 22020)).unwrap_err());
+    let (c, text) = expect_status(
+        krb5_kdc::issue_tgs(&store, &proxy_cross(header, &session, ev, 22020)).unwrap_err(),
+    );
     assert_eq!(c, err::BADOPTION);
     assert_eq!(text.as_deref(), Some("NOT_ALLOWED_TO_DELEGATE"));
 }

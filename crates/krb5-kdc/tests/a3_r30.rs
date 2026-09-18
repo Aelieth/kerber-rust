@@ -9,18 +9,12 @@ use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_kdc::{Error, TEST_REALM, TEST_USER, bootstrap_documented};
 use krb5_protocol::{AsOutcome, KdcAddr, as_req, tgs_exchange};
+use krb5_testkit::status;
 use krb5_types::{
     EncKdcRepPart, EncryptedData, EncryptionKey, KerberosTime, MethodData, OctetString, PaData,
     PrincipalName, TgsReq, Ticket, TicketFlags, ascii, err, pa,
     spake::{GROUP_EDWARDS25519, PaSpake, SpakeSupport},
 };
-
-fn proto(err: &Error) -> (i32, Option<&str>) {
-    match err {
-        Error::Protocol { code, text, .. } => (*code, text.as_deref()),
-        other => panic!("expected protocol error, got {other:?}"),
-    }
-}
 
 fn user() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
@@ -47,7 +41,7 @@ fn r30_verify_support_unpermitted_offer_is_24() {
     )
     .unwrap();
     let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
-    assert_eq!(proto(&err), (err::PREAUTH_FAILED, Some("PREAUTH_FAILED")));
+    assert_eq!(status(&err), (err::PREAUTH_FAILED, Some("PREAUTH_FAILED")));
 }
 
 #[test]

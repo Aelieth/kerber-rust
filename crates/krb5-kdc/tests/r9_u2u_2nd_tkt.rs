@@ -6,15 +6,8 @@ use krb5_kdc::{
     bootstrap_documented, documented_host,
 };
 use krb5_protocol::tgs_req_ex;
-use krb5_testkit::{issue_tgt_password, pref_etypes};
+use krb5_testkit::{issue_tgt_password, pref_etypes, status};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
-
-fn proto(err: &krb5_kdc::Error) -> (i32, Option<&str>) {
-    match err {
-        krb5_kdc::Error::Protocol { code, text, .. } => (*code, text.as_deref()),
-        other => panic!("expected protocol error, got {other:?}"),
-    }
-}
 
 #[test]
 fn u2u_missing_second_ticket_server_is_2nd_tkt_server() {
@@ -41,7 +34,7 @@ fn u2u_missing_second_ticket_server_is_2nd_tkt_server() {
     )
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    let (code, text) = proto(&err);
+    let (code, text) = status(&err);
     assert_eq!(code, err::S_PRINCIPAL_UNKNOWN);
     assert_eq!(text, Some("2ND_TKT_SERVER"));
 }

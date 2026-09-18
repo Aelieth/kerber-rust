@@ -12,14 +12,7 @@ use krb5_types::{
     ku, pa,
 };
 
-use krb5_testkit::user_as;
-fn proto(err: &Error) -> (i32, Option<&str>) {
-    match err {
-        Error::Protocol { code, text, .. } => (*code, text.as_deref()),
-        other => panic!("expected protocol error, got {other:?}"),
-    }
-}
-
+use krb5_testkit::{status, user_as};
 fn user() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
 }
@@ -134,7 +127,7 @@ fn expect_higher(
     let ticket = attach_cammac(store, issued, cksumtype);
     let err = tgs_require_auth(store, ticket, &issued.session_key, nonce, "pkinit").unwrap_err();
     assert_eq!(
-        proto(&err),
+        status(&err),
         (err::POLICY, Some("HIGHER_AUTHENTICATION_REQUIRED"))
     );
 }
@@ -188,7 +181,7 @@ fn r29_cammac_unkeyed_does_not_satisfy_any_match() {
     )
     .unwrap_err();
     assert_eq!(
-        proto(&err),
+        status(&err),
         (err::POLICY, Some("HIGHER_AUTHENTICATION_REQUIRED"))
     );
 }

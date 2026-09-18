@@ -8,7 +8,7 @@ use krb5_kdc::{
     pac_from_ticket_part, wrap_win2k_pac,
 };
 use krb5_protocol::{tgs_req, tgs_req_ex};
-use krb5_testkit::{issue_tgt, pref_etypes};
+use krb5_testkit::{expect_status, issue_tgt, pref_etypes};
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit, ku};
 
@@ -59,13 +59,6 @@ fn u2u_req(
     .unwrap()
 }
 
-fn code(e: krb5_kdc::Error) -> (i32, Option<String>) {
-    match e {
-        krb5_kdc::Error::Protocol { code, text, .. } => (code, text),
-        other => panic!("{other:?}"),
-    }
-}
-
 fn reseal(store: &PrincipalStore, tkt: &mut krb5_types::Ticket, part: &krb5_types::EncTicketPart) {
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let der = encode(part).unwrap();
@@ -77,7 +70,7 @@ fn reseal(store: &PrincipalStore, tkt: &mut krb5_types::Ticket, part: &krb5_type
 fn u2u_no_2nd_tkt_is_badoption() {
     let (store, _) = bootstrap_documented().unwrap();
     let req = u2u_req(&store, documented_host(), None, 9100);
-    let (c, text) = code(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
+    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::BADOPTION);
     assert_eq!(text.as_deref(), Some("NO_2ND_TKT"));
 }
@@ -99,7 +92,7 @@ fn u2u_service_ticket_is_not_tgs() {
     .unwrap();
     let extra = krb5_kdc::issue_tgs(&store, &svc).unwrap().rep.0.ticket;
     let req = u2u_req(&store, documented_host(), Some(vec![extra]), 9112);
-    let (c, text) = code(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
+    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::POLICY);
     assert_eq!(text.as_deref(), Some("2ND_TKT_NOT_TGS"));
 }
@@ -114,7 +107,7 @@ fn u2u_admin_tgt_for_host_is_mismatch() {
         Some(vec![admin.rep.0.ticket]),
         9121,
     );
-    let (c, text) = code(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
+    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::SERVER_NOMATCH);
     assert_eq!(text.as_deref(), Some("2ND_TKT_MISMATCH"));
 }
@@ -129,7 +122,7 @@ fn u2u_bad_session_etype_is_etype_nosupp() {
     let mut extra = host.rep.0.ticket.clone();
     reseal(&store, &mut extra, &part);
     let req = u2u_req(&store, documented_host(), Some(vec![extra]), 9131);
-    let (c, text) = code(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
+    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::ETYPE_NOSUPP);
     assert_eq!(text.as_deref(), Some("BAD_ETYPE_IN_2ND_TKT"));
 }
@@ -154,7 +147,7 @@ fn u2u_bad_pac_is_modified() {
     let mut extra = host.rep.0.ticket.clone();
     reseal(&store, &mut extra, &part);
     let req = u2u_req(&store, documented_host(), Some(vec![extra]), 9141);
-    let (c, text) = code(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
+    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::MODIFIED);
     assert_eq!(text.as_deref(), Some("2ND_TKT_PAC"));
 }
@@ -169,7 +162,7 @@ fn u2u_dup_skey_disallowed_is_policy() {
         .unwrap();
     let extra = issue_host_tgt(&store, 9150).rep.0.ticket;
     let req = u2u_req(&store, host, Some(vec![extra]), 9151);
-    let (c, text) = code(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
+    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::POLICY);
     assert_eq!(text.as_deref(), Some("DUP_SKEY DISALLOWED"));
 }

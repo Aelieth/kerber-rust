@@ -5,7 +5,7 @@ use krb5_kdc::{
     decrypt_ticket_part, documented_host, pa_enc_timestamp, pac_from_ticket_part,
 };
 use krb5_protocol::{tgs_req, tgs_req_ex};
-use krb5_testkit::{issue_tgt, pref_etypes};
+use krb5_testkit::{expect_status, issue_tgt, pref_etypes};
 use krb5_types::pac::{PAC_DELEGATION_INFO, Pac, parse_delegation_info};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
 
@@ -51,13 +51,6 @@ fn proxy_req(
     .unwrap()
 }
 
-fn code(e: krb5_kdc::Error) -> (i32, Option<String>) {
-    match e {
-        krb5_kdc::Error::Protocol { code, text, .. } => (code, text),
-        other => panic!("{other:?}"),
-    }
-}
-
 fn cname_addl() -> KdcOptions {
     KdcOptions::forwardable().with_bit(flag_bit::CNAME_IN_ADDL_TKT, true)
 }
@@ -81,7 +74,7 @@ fn s4u2proxy_no_2nd_tkt_is_unknown_reason() {
         pref_etypes(),
     )
     .unwrap();
-    let (c, text) = code(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
+    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::GENERIC);
     assert_eq!(text.as_deref(), Some("UNKNOWN_REASON"));
 }
@@ -94,7 +87,7 @@ fn s4u2proxy_tgs_target_is_policy() {
     let ev = evidence_for_user(&store, 8110);
     let tgt = PrincipalName::krbtgt(TEST_REALM);
     let req = proxy_req(&store, ev, tgt, cname_addl(), 8112);
-    let (c, text) = code(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
+    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::POLICY);
     assert_eq!(text.as_deref(), Some("NOT_ALLOWED_TO_DELEGATE"));
 }
@@ -110,7 +103,7 @@ fn s4u2proxy_evidence_mismatch_is_server_nomatch() {
         cname_addl(),
         8122,
     );
-    let (c, text) = code(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
+    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::SERVER_NOMATCH);
     assert_eq!(text.as_deref(), Some("EVIDENCE_TICKET_MISMATCH"));
 }
@@ -144,7 +137,7 @@ fn s4u2proxy_no_header_pac_is_tgt_revoked() {
         pref_etypes(),
     )
     .unwrap();
-    let (c, text) = code(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
+    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::TGT_REVOKED);
     assert_eq!(text.as_deref(), Some("S4U2PROXY_NO_HEADER_PAC"));
 }
@@ -167,7 +160,7 @@ fn s4u2proxy_no_stkt_pac_is_modified() {
     let mut tkt = ev;
     tkt.enc_part.cipher = krb5_crypto::encrypt(&ukey.key, usage, &der).unwrap().into();
     let req = proxy_req(&store, tkt, documented_host(), cname_addl(), 8142);
-    let (c, text) = code(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
+    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::MODIFIED);
     assert_eq!(text.as_deref(), Some("S4U2PROXY_NO_STKT_PAC"));
 }
@@ -193,7 +186,7 @@ fn s4u2proxy_u2u_combo_is_invalid_options() {
     let host_tgt = krb5_kdc::issue_as(&store, &host_as).unwrap();
     let opts = cname_addl().with_bit(flag_bit::ENC_TKT_IN_SKEY, true);
     let req = proxy_req(&store, host_tgt.rep.0.ticket, host, opts, 8152);
-    let (c, text) = code(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
+    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::BADOPTION);
     assert_eq!(text.as_deref(), Some("INVALID_S4U2PROXY_OPTIONS"));
 }

@@ -3,12 +3,12 @@
 use krb5_asn1::encode;
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, encrypt};
 use krb5_kdc::{
-    Error, KDB_DISALLOW_SVR, PacTicket, PrincipalStore, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
-    as_req, bootstrap_documented, decrypt_ticket_part, documented_host, pa_enc_timestamp,
+    KDB_DISALLOW_SVR, PacTicket, PrincipalStore, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req,
+    bootstrap_documented, decrypt_ticket_part, documented_host, pa_enc_timestamp,
     pac_from_ticket_part, sign_pac, tgs_req, ticket_checksum_der, wrap_win2k_pac,
 };
 use krb5_protocol::tgs_req_ex;
-use krb5_testkit::{issue_tgt_password, password_key};
+use krb5_testkit::{issue_tgt_password, password_key, status};
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac};
 use krb5_types::{EncTicketPart, KdcOptions, PrincipalName, err, flag_bit, ku};
 
@@ -28,13 +28,6 @@ fn renewable_tgt(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
         .kdc_options
         .with_bit(flag_bit::RENEWABLE, true);
     krb5_kdc::issue_as(store, &req).unwrap()
-}
-
-fn proto(err: &Error) -> (i32, Option<&str>) {
-    match err {
-        Error::Protocol { code, text, .. } => (*code, text.as_deref()),
-        other => panic!("expected protocol error, got {other:?}"),
-    }
 }
 
 fn rewrap(
@@ -135,7 +128,7 @@ fn tgs_proxy_krbtgt_is_cant_proxy_tgt() {
     )
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(proto(&err), (err::BADOPTION, Some("CAN'T PROXY TGT")));
+    assert_eq!(status(&err), (err::BADOPTION, Some("CAN'T PROXY TGT")));
 }
 
 #[test]
@@ -166,7 +159,7 @@ fn tgs_corrupt_pac_before_unknown_sname_is_header_pac() {
     )
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(proto(&err), (err::MODIFIED, Some("HEADER_PAC")));
+    assert_eq!(status(&err), (err::MODIFIED, Some("HEADER_PAC")));
 }
 
 #[test]
@@ -206,7 +199,7 @@ fn tgs_pac_client_mismatch_is_header_pac() {
     )
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(proto(&err), (err::BADOPTION, Some("HEADER_PAC")));
+    assert_eq!(status(&err), (err::BADOPTION, Some("HEADER_PAC")));
 }
 
 #[test]
@@ -216,7 +209,7 @@ fn tgs_missing_pa_tgs_req_is_padata_type_nosupp() {
     let mut tgs = host_tgs(&as_out, 6061);
     tgs.0.padata = None;
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(proto(&err), (err::PADATA_TYPE_NOSUPP, Some("PROCESS_TGS")));
+    assert_eq!(status(&err), (err::PADATA_TYPE_NOSUPP, Some("PROCESS_TGS")));
 }
 
 #[test]
@@ -247,7 +240,10 @@ fn tgs_disallow_svr_service_header_is_process_tgs() {
     )
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &renew).unwrap_err();
-    assert_eq!(proto(&err), (err::S_PRINCIPAL_UNKNOWN, Some("PROCESS_TGS")));
+    assert_eq!(
+        status(&err),
+        (err::S_PRINCIPAL_UNKNOWN, Some("PROCESS_TGS"))
+    );
 }
 
 #[test]
@@ -274,7 +270,7 @@ fn tgs_forwarded_without_forwardable_is_tgt_not_forwardable() {
     )
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(proto(&err), (err::BADOPTION, Some("TGT NOT FORWARDABLE")));
+    assert_eq!(status(&err), (err::BADOPTION, Some("TGT NOT FORWARDABLE")));
 }
 
 #[test]
@@ -301,5 +297,5 @@ fn tgs_proxy_without_proxiable_is_tgt_not_proxiable() {
     )
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(proto(&err), (err::BADOPTION, Some("TGT NOT PROXIABLE")));
+    assert_eq!(status(&err), (err::BADOPTION, Some("TGT NOT PROXIABLE")));
 }

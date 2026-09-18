@@ -3,7 +3,7 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, decrypt, encrypt};
 use krb5_kdc::{
-    Error, KDB_DISALLOW_RENEWABLE, PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER,
+    KDB_DISALLOW_RENEWABLE, PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER,
     bootstrap_documented, documented_host,
 };
 use krb5_protocol::{as_req, pa_enc_timestamp, pa_for_user, tgs_req_ex, tgs_req_ex_from};
@@ -12,14 +12,7 @@ use krb5_types::{
     ku,
 };
 
-use krb5_testkit::user_as;
-fn proto(err: &Error) -> (i32, Option<&str>) {
-    match err {
-        Error::Protocol { code, text, .. } => (*code, text.as_deref()),
-        other => panic!("expected protocol error, got {other:?}"),
-    }
-}
-
+use krb5_testkit::{status, user_as};
 fn etypes() -> Vec<i32> {
     vec![EncryptionType::Aes256CtsHmacSha196.to_iana()]
 }
@@ -204,7 +197,7 @@ fn r27_tgs_expired_server_beats_require_auth() {
     )
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(proto(&err), (err::SERVICE_EXP, Some("SERVICE EXPIRED")));
+    assert_eq!(status(&err), (err::SERVICE_EXP, Some("SERVICE EXPIRED")));
 }
 
 #[test]

@@ -13,6 +13,7 @@ use krb5_kdc::{
 };
 use krb5_protocol::Keytab;
 use krb5_protocol::{ReplayCache, as_req_sname, build_ap_req, tgs_req_ex, verify_ap_req};
+use krb5_testkit::status;
 use krb5_types::{
     EncKdcRepPart, EncTicketPart, KdcOptions, KerberosTime, KrbError, MethodData, OctetString,
     PrincipalName, ascii, err, flag_bit, ku, pa,
@@ -990,13 +991,6 @@ fn user_as_req(nonce: u32) -> krb5_types::AsReq {
     .unwrap()
 }
 
-fn proto_code(e: Error) -> i32 {
-    match e {
-        Error::Protocol { code, .. } => code,
-        other => panic!("expected protocol error, got {other:?}"),
-    }
-}
-
 #[test]
 fn as_rejects_expired_principal_before_expired_password() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
@@ -1005,7 +999,7 @@ fn as_rejects_expired_principal_before_expired_password() {
         .apply_admin_fields(&cname, None, None, Some(1), Some(1), None, false, None)
         .unwrap();
     let err = krb5_kdc::issue_as(&store, &user_as_req(41)).unwrap_err();
-    assert_eq!(proto_code(err), err::NAME_EXP);
+    assert_eq!(status(&err).0, err::NAME_EXP);
 
     let raw = encode(&user_as_req(42)).unwrap();
     let reply = krb5_kdc::handle_request(&store, &raw).unwrap();
@@ -1021,7 +1015,7 @@ fn as_rejects_expired_password_unless_pwchange_service() {
         .apply_admin_fields(&cname, None, None, Some(0), Some(1), None, false, None)
         .unwrap();
     let err = krb5_kdc::issue_as(&store, &user_as_req(43)).unwrap_err();
-    assert_eq!(proto_code(err), err::KEY_EXPIRED);
+    assert_eq!(status(&err).0, err::KEY_EXPIRED);
 
     let key = client_key();
     let changepw = as_req_sname(
@@ -1076,7 +1070,7 @@ fn as_req_with_tgs_only_option_is_invalid_as_options() {
     let mut req = as_req(cname, TEST_REALM, 51, None).unwrap();
     req.0.req_body.kdc_options = req.0.req_body.kdc_options.with_bit(flag_bit::RENEW, true);
     let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
-    assert_eq!(proto_code(err), err::BADOPTION);
+    assert_eq!(status(&err).0, err::BADOPTION);
 }
 
 #[test]
@@ -1267,7 +1261,7 @@ fn tgs_rejects_expired_server() {
         .apply_admin_fields(&host, None, None, Some(1), None, None, false, None)
         .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 52)).unwrap_err();
-    assert_eq!(proto_code(err), err::SERVICE_EXP);
+    assert_eq!(status(&err).0, err::SERVICE_EXP);
 }
 
 fn or_attr(store: &mut PrincipalStore, name: &PrincipalName, bit: u32) {
@@ -1365,7 +1359,7 @@ fn as_disallow_all_tix_still_client_revoked() {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     or_attr(&mut store, &cname, KDB_DISALLOW_ALL_TIX);
     let err = krb5_kdc::issue_as(&store, &user_as_req(64)).unwrap_err();
-    assert_eq!(proto_code(err), err::CLIENT_REVOKED);
+    assert_eq!(status(&err).0, err::CLIENT_REVOKED);
 }
 
 #[test]
@@ -1552,7 +1546,7 @@ fn tgs_renew_rejects_renew_till_not_after_now() {
     let mut issued = issued;
     issued.rep.0.ticket.enc_part.cipher = OctetString::from(cipher);
     let err = krb5_kdc::issue_tgs(&store, &renew_tgs(&issued, 101)).unwrap_err();
-    assert_eq!(proto_code(err), err::TKT_EXPIRED);
+    assert_eq!(status(&err).0, err::TKT_EXPIRED);
 }
 
 #[test]
@@ -1561,7 +1555,7 @@ fn tgs_renew_non_renewable_is_badoption() {
     let issued = krb5_kdc::issue_as(&store, &user_as_req(98)).expect("AS");
     assert!(!tgt_part(&store, &issued).flags.renewable());
     let err = krb5_kdc::issue_tgs(&store, &renew_tgs(&issued, 99)).unwrap_err();
-    assert_eq!(proto_code(err), err::BADOPTION);
+    assert_eq!(status(&err).0, err::BADOPTION);
 }
 
 fn postdated_as_req(nonce: u32, from: KerberosTime) -> krb5_types::AsReq {
@@ -1605,9 +1599,9 @@ fn as_postdated_is_invalid_until_validate() {
     assert!(part.flags.invalid());
     assert!(part.flags.bit(flag_bit::POSTDATED));
     let err = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 111)).unwrap_err();
-    assert_eq!(proto_code(err), err::TKT_NYV);
+    assert_eq!(status(&err).0, err::TKT_NYV);
     let too_soon = krb5_kdc::issue_tgs(&store, &validate_tgs(&issued, 112)).unwrap_err();
-    assert_eq!(proto_code(too_soon), err::TKT_NYV);
+    assert_eq!(status(&too_soon).0, err::TKT_NYV);
     // starttime is now+1 s; wait until that integer second has passed.
     wait_unix_past(from.unix_seconds());
     let out = krb5_kdc::issue_tgs(&store, &validate_tgs(&issued, 113)).expect("VALIDATE");
@@ -1668,7 +1662,7 @@ fn as_cannot_postdate_when_disallow() {
     or_attr(&mut store, &cname, KDB_DISALLOW_POSTDATED);
     let from = KerberosTime::now().add_seconds(30).unwrap();
     let err = krb5_kdc::issue_as(&store, &postdated_as_req(115, from)).unwrap_err();
-    assert_eq!(proto_code(err), err::CANNOT_POSTDATE);
+    assert_eq!(status(&err).0, err::CANNOT_POSTDATE);
 }
 
 #[test]
@@ -1733,7 +1727,7 @@ fn tgs_renew_and_validate_together_is_badoption() {
     // starttime is now+1 s; wait until that integer second has passed.
     wait_unix_past(from.unix_seconds());
     let err = krb5_kdc::issue_tgs(&store, &renew_and_validate_tgs(&issued, 117)).unwrap_err();
-    assert_eq!(proto_code(err), err::BADOPTION);
+    assert_eq!(status(&err).0, err::BADOPTION);
 }
 
 fn renew_tgs_sname(
@@ -1766,7 +1760,7 @@ fn tgs_renew_wrong_sname_is_badoption() {
     let issued = renewable_as(&store, 118);
     let err =
         krb5_kdc::issue_tgs(&store, &renew_tgs_sname(&issued, documented_host(), 119)).unwrap_err();
-    assert_eq!(proto_code(err), err::SERVER_NOMATCH);
+    assert_eq!(status(&err).0, err::SERVER_NOMATCH);
     krb5_kdc::issue_tgs(&store, &renew_tgs(&issued, 120)).expect("RENEW krbtgt");
 }
 
@@ -1848,19 +1842,19 @@ fn tgs_honors_svr_tgt_based_lockout_and_ok_as_delegate() {
 
     or_attr(&mut store, &host, KDB_DISALLOW_SVR);
     let err = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 66)).unwrap_err();
-    assert_eq!(proto_code(err), err::MUST_USE_USER2USER);
+    assert_eq!(status(&err).0, err::MUST_USE_USER2USER);
 
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let issued = krb5_kdc::issue_as(&store, &user_as_req(67)).expect("AS");
     or_attr(&mut store, &host, KDB_DISALLOW_TGT_BASED);
     let err = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 68)).unwrap_err();
-    assert_eq!(proto_code(err), err::POLICY);
+    assert_eq!(status(&err).0, err::POLICY);
 
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let issued = krb5_kdc::issue_as(&store, &user_as_req(69)).expect("AS");
     or_attr(&mut store, &host, KDB_DISALLOW_ALL_TIX);
     let err = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 70)).unwrap_err();
-    assert_eq!(proto_code(err), err::S_PRINCIPAL_UNKNOWN);
+    assert_eq!(status(&err).0, err::S_PRINCIPAL_UNKNOWN);
 
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let issued = krb5_kdc::issue_as(&store, &user_as_req(71)).expect("AS");
@@ -1904,5 +1898,5 @@ fn tgs_requires_hw_auth_without_hw_flag() {
     let issued = krb5_kdc::issue_as(&store, &user_as_req(75)).expect("AS");
     or_attr(&mut store, &host, KDB_REQUIRES_HW_AUTH);
     let err = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 76)).unwrap_err();
-    assert_eq!(proto_code(err), err::GENERIC);
+    assert_eq!(status(&err).0, err::GENERIC);
 }

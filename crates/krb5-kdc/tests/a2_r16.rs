@@ -8,17 +8,10 @@ use krb5_kdc::{
     pa_enc_timestamp,
 };
 use krb5_protocol::{tgs_req, tgs_req_ex};
-use krb5_testkit::{aes_key, issue_tgt_renewable, pref_etypes};
+use krb5_testkit::{aes_key, expect_status, issue_tgt_renewable, pref_etypes};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit, ku};
 
 const FOREIGN: &str = "AD.KERBER.TEST";
-
-fn code(e: krb5_kdc::Error) -> (i32, Option<String>) {
-    match e {
-        krb5_kdc::Error::Protocol { code, text, .. } => (code, text),
-        other => panic!("{other:?}"),
-    }
-}
 
 fn incoming_name() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", TEST_REALM])
@@ -96,7 +89,7 @@ fn a2_r16_cross_tgt_renew_realm_mismatch_is_26() {
         pref_etypes(),
     )
     .unwrap();
-    let (c, text) = code(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
+    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::SERVER_NOMATCH);
     assert_eq!(
         text.as_deref(),
@@ -141,7 +134,7 @@ fn a2_r16_u2u_second_ticket_foreign_realm_is_7() {
         pref_etypes(),
     )
     .unwrap();
-    let (c, text) = code(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
+    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::S_PRINCIPAL_UNKNOWN);
     assert_eq!(text.as_deref(), Some("2ND_TKT_SERVER"));
 }
@@ -224,7 +217,7 @@ fn a2_r16_foreign_header_decrypts_via_incoming_kvno() {
         16121,
     )
     .unwrap();
-    let (c, text) = code(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
+    let (c, text) = expect_status(krb5_kdc::issue_tgs(&store, &req).unwrap_err());
     assert_eq!(c, err::POLICY);
     assert_eq!(text.as_deref(), Some("INVALID LINEAGE"));
 }

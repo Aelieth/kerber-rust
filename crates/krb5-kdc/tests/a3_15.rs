@@ -8,14 +8,7 @@ use krb5_protocol::{
 };
 use krb5_types::{KdcOptions, MethodData, PaData, PrincipalName, ascii, err, ku, pa};
 
-use krb5_testkit::user_as;
-fn proto(err: &Error) -> (i32, Option<&str>) {
-    match err {
-        Error::Protocol { code, text, .. } => (*code, text.as_deref()),
-        other => panic!("expected protocol error, got {other:?}"),
-    }
-}
-
+use krb5_testkit::{status, user_as};
 #[test]
 fn as_hint_list_is_136_info2_modules_cookie() {
     let (store, _) = bootstrap_documented().unwrap();
@@ -54,7 +47,7 @@ fn as_ec_outside_fast_is_preauth_failed() {
     )
     .unwrap();
     let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
-    assert_eq!(proto(&err), (err::PREAUTH_FAILED, Some("PREAUTH_FAILED")));
+    assert_eq!(status(&err), (err::PREAUTH_FAILED, Some("PREAUTH_FAILED")));
 }
 
 #[test]

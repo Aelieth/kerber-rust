@@ -3,19 +3,13 @@
 use krb5_asn1::decode_enc_kdc_rep_part;
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt};
 use krb5_kdc::{
-    Error, KdcPolicy, TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
+    KdcPolicy, TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
     TestPolicy, bootstrap_documented, clear_thread_policy, documented_admin_id, documented_host,
     set_thread_policy,
 };
 use krb5_protocol::{as_req, pa_enc_timestamp};
+use krb5_testkit::status;
 use krb5_types::{PrincipalName, err, ku};
-
-fn proto(err: &Error) -> (i32, Option<&str>) {
-    match err {
-        Error::Protocol { code, text, .. } => (*code, text.as_deref()),
-        other => panic!("expected protocol error, got {other:?}"),
-    }
-}
 
 #[test]
 fn a4_19_test_policy_fail_client_is_local_policy() {
@@ -40,7 +34,7 @@ fn a4_19_test_policy_fail_client_is_local_policy() {
     )
     .unwrap();
     let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
-    let (code, text) = proto(&err);
+    let (code, text) = status(&err);
     assert_eq!(code, err::POLICY);
     assert_eq!(text, Some("LOCAL_POLICY"));
     clear_thread_policy();
@@ -73,7 +67,7 @@ fn a4_19_test_policy_foreign_indicator_is_local_policy() {
     let err = TestPolicy
         .check_as(&store, &user, &["OTHER".into()])
         .unwrap_err();
-    let (code, text) = proto(&err);
+    let (code, text) = status(&err);
     assert_eq!(code, err::POLICY);
     assert_eq!(text, Some("LOCAL_POLICY"));
     clear_thread_policy();

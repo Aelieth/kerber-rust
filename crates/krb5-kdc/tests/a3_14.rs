@@ -2,18 +2,11 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{KeyUsage, decrypt, encrypt};
-use krb5_kdc::{Error, TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
+use krb5_kdc::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 use krb5_types::{AuthorizationDataValue, EncTicketPart, PrincipalName, Ticket, err, ku, pa};
 
-use krb5_testkit::user_as;
-fn proto(err: &Error) -> (i32, Option<&str>) {
-    match err {
-        Error::Protocol { code, text, .. } => (*code, text.as_deref()),
-        other => panic!("expected protocol error, got {other:?}"),
-    }
-}
-
+use krb5_testkit::{status, user_as};
 fn krbtgt_name() -> PrincipalName {
     PrincipalName::krbtgt(TEST_REALM)
 }
@@ -41,7 +34,7 @@ fn as_require_auth_is_higher_authentication() {
     .unwrap();
     let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
     assert_eq!(
-        proto(&err),
+        status(&err),
         (err::POLICY, Some("HIGHER_AUTHENTICATION_REQUIRED"))
     );
 }
@@ -65,7 +58,7 @@ fn tgs_require_auth_is_higher_authentication() {
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
     assert_eq!(
-        proto(&err),
+        status(&err),
         (err::POLICY, Some("HIGHER_AUTHENTICATION_REQUIRED"))
     );
 }
@@ -113,5 +106,5 @@ fn tgs_truncated_cammac_is_get_auth_indicators() {
     )
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(proto(&err), (err::GENERIC, Some("GET_AUTH_INDICATORS")));
+    assert_eq!(status(&err), (err::GENERIC, Some("GET_AUTH_INDICATORS")));
 }

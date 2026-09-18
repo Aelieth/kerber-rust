@@ -3,20 +3,13 @@
 use krb5_asn1::decode;
 use krb5_crypto::{EncryptionType, KeyUsage, decrypt};
 use krb5_kdc::{
-    Error, KDB_DISALLOW_POSTDATED, KDB_DISALLOW_RENEWABLE, KDB_OK_AS_DELEGATE, PrincipalStore,
-    TEST_REALM, TEST_USER, bootstrap_documented, documented_host,
+    KDB_DISALLOW_POSTDATED, KDB_DISALLOW_RENEWABLE, KDB_OK_AS_DELEGATE, PrincipalStore, TEST_REALM,
+    TEST_USER, bootstrap_documented, documented_host,
 };
 use krb5_protocol::tgs_req_ex;
 use krb5_types::{EncTicketPart, KdcOptions, PrincipalName, err, flag_bit, ku};
 
-use krb5_testkit::user_as_bits;
-fn proto(err: &Error) -> (i32, Option<&str>) {
-    match err {
-        Error::Protocol { code, text, .. } => (*code, text.as_deref()),
-        other => panic!("expected protocol error, got {other:?}"),
-    }
-}
-
+use krb5_testkit::{status, user_as_bits};
 fn or_attr(store: &mut PrincipalStore, name: &PrincipalName, bit: u32) {
     let a = store.get_name(name).unwrap().attributes | bit;
     store
@@ -72,7 +65,7 @@ fn tgs_postdate_without_may_postdate_is_tgt_not_postdatable() {
     )
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(proto(&err), (err::BADOPTION, Some("TGT NOT POSTDATABLE")));
+    assert_eq!(status(&err), (err::BADOPTION, Some("TGT NOT POSTDATABLE")));
 }
 
 #[test]
@@ -96,7 +89,7 @@ fn tgs_renewable_against_disallow_is_non_renewable() {
     )
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(proto(&err), (err::POLICY, Some("NON-RENEWABLE TICKET")));
+    assert_eq!(status(&err), (err::POLICY, Some("NON-RENEWABLE TICKET")));
 }
 
 #[test]

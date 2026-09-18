@@ -5,12 +5,14 @@
 
 #![forbid(unsafe_code)]
 
+use krb5_asn1::decode;
 use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
 use krb5_kdc::{
     IssuedAs, PacTicket, PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER, as_req, documented_host,
     pa_enc_timestamp, sign_reply_pac, ticket_checksum_der, wrap_win2k_pac,
 };
 use krb5_types::EncTicketPart;
+use krb5_types::KrbError;
 use krb5_types::PrincipalName;
 use krb5_types::flag_bit;
 use krb5_types::pac::{PAC_CLIENT_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer};
@@ -263,4 +265,89 @@ pub fn attach_pac(key: &ProtocolKey, part: &mut EncTicketPart, info_name: &str) 
     )
     .unwrap();
     part.authorization_data = Some(wrap_win2k_pac(&pac).unwrap());
+}
+
+/// Protocol error code + borrowed status text.
+///
+/// Replaces the local `proto` copies.
+///
+/// # Panics
+///
+/// Panics if `err` is not [`krb5_kdc::Error::Protocol`].
+#[must_use]
+pub fn status(err: &krb5_kdc::Error) -> (i32, Option<&str>) {
+    match err {
+        krb5_kdc::Error::Protocol { code, text, .. } => (*code, text.as_deref()),
+        other => panic!("expected protocol error, got {other:?}"),
+    }
+}
+
+/// Protocol error code + owned status text.
+///
+/// Replaces the local `code(Error)` copies. Those copies panic with
+/// `{other:?}` (no "expected protocol error" prefix). Must not be
+/// merged with [`status`]: borrowed vs owned text, and different
+/// panic strings.
+///
+/// # Panics
+///
+/// Panics if `err` is not [`krb5_kdc::Error::Protocol`].
+#[must_use]
+pub fn expect_status(err: krb5_kdc::Error) -> (i32, Option<String>) {
+    match err {
+        krb5_kdc::Error::Protocol { code, text, .. } => (code, text),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Protocol code from a `Result`, or `None` if it is not a protocol error.
+///
+/// Replaces `pac_shape.rs`'s `code(&Result)`. Must not be merged with
+/// [`expect_status`]: this returns `Option` and never panics.
+#[must_use]
+pub fn protocol_code(result: &Result<(), krb5_kdc::Error>) -> Option<i32> {
+    match result {
+        Err(krb5_kdc::Error::Protocol { code, .. }) => Some(*code),
+        _ => None,
+    }
+}
+
+/// Wire `KRB-ERROR` code + `e-text` (empty string when absent).
+///
+/// Replaces `a2_r19.rs`'s two-tuple `err_of`. Must not be merged with
+/// [`err_of_cname`]: that site also returns the error `cname`.
+///
+/// # Panics
+///
+/// Panics if `bytes` is not a `KRB-ERROR` — the same unwrap the copy used.
+#[must_use]
+pub fn err_of(bytes: &[u8]) -> (i32, String) {
+    let e: KrbError = decode(bytes).unwrap();
+    let text = e
+        .e_text
+        .as_ref()
+        .and_then(|t| std::str::from_utf8(t.as_bytes()).ok())
+        .unwrap_or("")
+        .to_owned();
+    (e.error_code, text)
+}
+
+/// Wire `KRB-ERROR` code, `e-text`, and joined `cname`.
+///
+/// Replaces `a2_10_caddr.rs`'s three-tuple `err_of`.
+///
+/// # Panics
+///
+/// Same unwrap as [`err_of`].
+#[must_use]
+pub fn err_of_cname(bytes: &[u8]) -> (i32, String, Option<String>) {
+    let e: KrbError = decode(bytes).unwrap();
+    let text = e
+        .e_text
+        .as_ref()
+        .and_then(|t| std::str::from_utf8(t.as_bytes()).ok())
+        .unwrap_or("")
+        .to_owned();
+    let cname = e.cname.as_ref().map(PrincipalName::components_joined);
+    (e.error_code, text, cname)
 }

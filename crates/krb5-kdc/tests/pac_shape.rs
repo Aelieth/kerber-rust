@@ -5,10 +5,11 @@
 
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::{
-    Error, PacTicket, TEST_REALM, TEST_USER, bootstrap_documented, documented_host,
+    PacTicket, TEST_REALM, TEST_USER, bootstrap_documented, documented_host,
     should_have_ticket_signature, sign_pac, ticket_checksum_der, verify_pac_signatures,
 };
 use krb5_protocol::{as_req, pa_enc_timestamp};
+use krb5_testkit::protocol_code;
 use krb5_types::pac::{
     PAC_FULL_CHECKSUM, PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM, PAC_SERVER_CHECKSUM,
     PAC_TICKET_CHECKSUM, Pac, PacError,
@@ -77,13 +78,6 @@ fn kinds(pac: &[u8]) -> Vec<u32> {
         .collect()
 }
 
-fn code(r: &Result<(), Error>) -> Option<i32> {
-    match r {
-        Err(Error::Protocol { code, .. }) => Some(*code),
-        _ => None,
-    }
-}
-
 #[test]
 fn ticket_signature_predicate_matches_mit() {
     let tgt = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", TEST_REALM]);
@@ -117,7 +111,7 @@ fn tgt_pac_verifies_without_ticket_or_full_checksum() {
     verify_pac_signatures(&s.tgt_shaped, &s.server, Some(&s.kdc), Some(&s.der), false)
         .expect("TGT shape: server + privsvr only");
     assert_eq!(
-        code(&verify_pac_signatures(
+        protocol_code(&verify_pac_signatures(
             &s.tgt_shaped,
             &s.server,
             Some(&s.kdc),
@@ -156,7 +150,7 @@ fn duplicate_signature_buffer_is_generic_60() {
     ));
     assert!(parsed.unique_buffer(PAC_LOGON_INFO).unwrap().is_some());
     assert_eq!(
-        code(&verify_pac_signatures(
+        protocol_code(&verify_pac_signatures(
             &bytes,
             &s.server,
             Some(&s.kdc),

@@ -3,26 +3,19 @@
 use krb5_asn1::encode;
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, encrypt};
 use krb5_kdc::{
-    Error, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_DUP_SKEY, KDB_DISALLOW_TGT_BASED, KeyEntry,
-    PacTicket, PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER, as_req, bootstrap_documented,
+    KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_DUP_SKEY, KDB_DISALLOW_TGT_BASED, KeyEntry, PacTicket,
+    PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER, as_req, bootstrap_documented,
     decrypt_ticket_part, documented_admin_id, documented_host, handle_request_from,
     pa_enc_timestamp, random_key, sign_pac, ticket_checksum_der, wrap_win2k_pac,
 };
 use krb5_protocol::{tgs_req, tgs_req_ex};
-use krb5_testkit::{issue_tgt, pref_etypes};
+use krb5_testkit::{err_of, issue_tgt, pref_etypes, status};
 use krb5_types::{
-    EncTicketPart, EncryptedData, HostAddress, KdcOptions, KerberosTime, KrbError, PrincipalName,
-    Ticket, err, flag_bit, ku,
+    EncTicketPart, EncryptedData, HostAddress, KdcOptions, KerberosTime, PrincipalName, Ticket,
+    err, flag_bit, ku,
 };
 
 const FOREIGN: &str = "OTHER.TEST";
-
-fn proto(err: &Error) -> (i32, Option<&str>) {
-    match err {
-        Error::Protocol { code, text, .. } => (*code, text.as_deref()),
-        other => panic!("expected protocol error, got {other:?}"),
-    }
-}
 
 fn issue_host_tgt(store: &PrincipalStore, dest: &PrincipalName, nonce: u32) -> krb5_kdc::IssuedAs {
     let key = store
@@ -55,17 +48,6 @@ fn inet(a: u8, b: u8, c: u8, d: u8) -> HostAddress {
         addr_type: HostAddress::ADDRTYPE_INET,
         address: vec![a, b, c, d].into(),
     }
-}
-
-fn err_of(bytes: &[u8]) -> (i32, String) {
-    let e: KrbError = krb5_asn1::decode(bytes).unwrap();
-    let text = e
-        .e_text
-        .as_ref()
-        .and_then(|t| std::str::from_utf8(t.as_bytes()).ok())
-        .unwrap_or("")
-        .to_owned();
-    (e.error_code, text)
 }
 
 fn expire_tgt(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs) -> Ticket {
@@ -128,7 +110,7 @@ fn a2_r19_locked_host_pac_mismatch_is_header_pac() {
     )
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &req).unwrap_err();
-    assert_eq!(proto(&err), (err::BADOPTION, Some("HEADER_PAC")));
+    assert_eq!(status(&err), (err::BADOPTION, Some("HEADER_PAC")));
 }
 
 #[test]
@@ -161,7 +143,7 @@ fn a2_r19_dup_skey_beats_tgt_based() {
     )
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &req).unwrap_err();
-    assert_eq!(proto(&err), (err::POLICY, Some("DUP_SKEY DISALLOWED")));
+    assert_eq!(status(&err), (err::POLICY, Some("DUP_SKEY DISALLOWED")));
 }
 
 #[test]
@@ -221,7 +203,7 @@ fn a2_r19_lineage_before_u2u() {
     )
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &req).unwrap_err();
-    assert_eq!(proto(&err), (err::POLICY, Some("INVALID LINEAGE")));
+    assert_eq!(status(&err), (err::POLICY, Some("INVALID LINEAGE")));
 }
 
 #[test]
@@ -268,7 +250,7 @@ fn a2_r19_expired_authenticator_mismatch_is_badmatch() {
     )
     .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &req).unwrap_err();
-    assert_eq!(proto(&err), (err::BADMATCH, Some("PROCESS_TGS")));
+    assert_eq!(status(&err), (err::BADMATCH, Some("PROCESS_TGS")));
 }
 
 #[test]

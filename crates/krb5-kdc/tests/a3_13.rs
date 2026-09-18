@@ -2,23 +2,14 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt};
-use krb5_kdc::{
-    Error, PrincipalStore, TEST_REALM, TEST_USER, bootstrap_documented, documented_host,
-};
+use krb5_kdc::{PrincipalStore, TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
 use krb5_types::{
     ApReq, Authenticator, AuthorizationData, AuthorizationDataValue, Checksum, EncTicketPart,
     EncryptedData, KdcOptions, KdcReq, KdcReqBody, KerberosTime, Microseconds, PaData,
     PrincipalName, TgsReq, Ticket, err, ku, pa,
 };
 
-use krb5_testkit::user_as;
-fn proto(err: &Error) -> (i32, Option<&str>) {
-    match err {
-        Error::Protocol { code, text, .. } => (*code, text.as_deref()),
-        other => panic!("expected protocol error, got {other:?}"),
-    }
-}
-
+use krb5_testkit::{status, user_as};
 fn cname() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
 }
@@ -178,7 +169,7 @@ fn tgs_mandatory_for_kdc_is_handle_authdata() {
         enc_ad(&issued.session_key, &ad),
     );
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(proto(&err), (err::POLICY, Some("HANDLE_AUTHDATA")));
+    assert_eq!(status(&err), (err::POLICY, Some("HANDLE_AUTHDATA")));
 }
 
 #[test]
@@ -230,5 +221,5 @@ fn tgs_body_ad_decrypt_fail_is_handle_authdata() {
         },
     );
     let err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    assert_eq!(proto(&err), (err::BAD_INTEGRITY, Some("HANDLE_AUTHDATA")));
+    assert_eq!(status(&err), (err::BAD_INTEGRITY, Some("HANDLE_AUTHDATA")));
 }

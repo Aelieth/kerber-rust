@@ -8,7 +8,7 @@ use krb5_kdc::{
     pac_from_ticket_part, sign_reply_pac, ticket_checksum_der, wrap_win2k_pac,
 };
 use krb5_protocol::{pa_pac_options, tgs_req_ex};
-use krb5_testkit::{aes_key, attach_pac, host_tgt, pref_etypes};
+use krb5_testkit::{aes_key, attach_pac, expect_status, host_tgt, pref_etypes};
 use krb5_types::pac::{
     PAC_CLIENT_INFO, PAC_DELEGATION_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer,
     parse_client_info, parse_delegation_info,
@@ -20,13 +20,6 @@ use krb5_types::{
 const FOREIGN: &str = "OTHER.TEST";
 const SUBJECT: &str = "alice";
 const SUBJECT_REALM: &str = "ALICE.TEST";
-
-fn code(e: krb5_kdc::Error) -> (i32, Option<String>) {
-    match e {
-        krb5_kdc::Error::Protocol { code, text, .. } => (code, text),
-        other => panic!("{other:?}"),
-    }
-}
 
 fn cname_addl() -> KdcOptions {
     KdcOptions::forwardable().with_bit(flag_bit::CNAME_IN_ADDL_TKT, true)
@@ -266,8 +259,9 @@ fn a2_r18_cross_stkt_realm_mismatch_is_xrealm() {
         "THIRD.TEST",
         &format!("{SUBJECT}@{SUBJECT_REALM}"),
     );
-    let (c, text) =
-        code(krb5_kdc::issue_tgs(&store, &proxy_cross(header, &session, ev, 18120)).unwrap_err());
+    let (c, text) = expect_status(
+        krb5_kdc::issue_tgs(&store, &proxy_cross(header, &session, ev, 18120)).unwrap_err(),
+    );
     assert_eq!(c, err::BADOPTION);
     assert_eq!(text.as_deref(), Some("XREALM_EVIDENCE_TICKET_MISMATCH"));
 }
@@ -277,8 +271,9 @@ fn a2_r18_cross_pac_without_realm_is_rbcd_pac_princ() {
     let (store, ir) = cross_store();
     let (header, session) = foreign_host_header(&store, &ir, 18200);
     let ev = cross_evidence(&store, &ir, 18210, FOREIGN, SUBJECT);
-    let (c, text) =
-        code(krb5_kdc::issue_tgs(&store, &proxy_cross(header, &session, ev, 18220)).unwrap_err());
+    let (c, text) = expect_status(
+        krb5_kdc::issue_tgs(&store, &proxy_cross(header, &session, ev, 18220)).unwrap_err(),
+    );
     assert_eq!(c, err::BADOPTION);
     assert_eq!(text.as_deref(), Some("RBCD_PAC_PRINC"));
 }
@@ -294,8 +289,9 @@ fn a2_r18_cross_tkt_client_realm_is_transited() {
         FOREIGN,
         &format!("{SUBJECT}@{SUBJECT_REALM}"),
     );
-    let (c, text) =
-        code(krb5_kdc::issue_tgs(&store, &proxy_cross(header, &session, ev, 18270)).unwrap_err());
+    let (c, text) = expect_status(
+        krb5_kdc::issue_tgs(&store, &proxy_cross(header, &session, ev, 18270)).unwrap_err(),
+    );
     assert_eq!(c, err::POLICY);
     assert_eq!(text.as_deref(), Some("BAD_TRANSIT"));
 }
