@@ -363,7 +363,7 @@ armor AP-REQ). Reverse FAST: `scripts/mit-fast-kdc-gate.sh` is MIT
 both MIT and Rust (`The ticket isn't for us`). Forged-realm FAST TGS
 (`kvno` on a forged `kinit -T` ccache) is 7 `PROCESS_TGS` on both;
 the MIT client line is required verbatim. Unit-red FAST negatives
-(`phase7_preauth.rs`): bad `req_checksum` is 41, unkeyed is 12, unknown
+(`as_fast.rs`): bad `req_checksum` is 41, unkeyed is 12, unknown
 armor type is 24, AS checksum ignores a dummy PA-TGS-REQ, TGS
 authenticator cname mismatch is 36. MIT clients cannot emit these. Reverse PKINIT:
 `scripts/rust-kinit-pkinit-gate.sh` is Rust `kinit --pkinit FILE:` against
@@ -502,7 +502,7 @@ Not in any workflow: `gss-sspi-gate.sh` (needs a Windows SSPI peer; exits
   must not contain `PAC … failed`. `kvno` is not proof that the TGS
   copied LOGON_INFO; that copy is `tgs_copies_foreign_referral_pac_identity`
   / `tgs_rejects_corrupt_foreign_referral_pac` in
-  `crates/krb5-kdc/tests/phase7_preauth.rs`. Type-16 is hashed over the
+  `crates/krb5-kdc/tests/tgs_crossrealm.rs`. Type-16 is hashed over the
   original EncTicketPart bytes with PAC ad-data a single zero.
 - `scripts/ad-windows-gate.sh` — live Samba `kinit kbruser@AD.KERBER.TEST`
   then `kvno host/svc.ad.kerber.test` (aes256-cts-hmac-sha1-96). Samba

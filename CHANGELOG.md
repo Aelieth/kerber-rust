@@ -20,6 +20,10 @@ this project uses semantic versioning once a crate is published.
   `pwqual`, `rpcsec`, `acceptor_realm`, `kpasswd`, `kpropd_acl`,
   `cli_stdin`, `keysalt`; `kprop` / `acl_dispatch` / `ktadd` stay
   (ktadd absorbs `z7_local_stamp`).
+  `krb5-kdc` 81 → 36: `as_*`, `tgs_*`, `pac_*`, `kdb_*`, `acl`,
+  `ap_req`, `audit`, `kdcpolicy`, `kpasswd`, `net_listener`;
+  `store_flow` stays. One named duplicate dropped
+  (`unknown_client_e_text_is_client_not_found`; keep `j3`).
 
 ### W3-S2.3 in-src tests by shape
 

@@ -1,11 +1,10 @@
 //! Store whole-flow tests (bootstrap + issue_as + public methods).
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use krb5_crypto::EncryptionType;
 use krb5_kdc::*;
 use krb5_types::PrincipalName;
 use krb5_types::pac::RpcSid;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn unix_now() -> u32 {
     SystemTime::now()
@@ -128,7 +127,7 @@ fn rename_keeps_rid_and_keys() {
 
 #[test]
 fn named_policy_pwqual_and_lockout() {
-    use krb5_protocol::{as_req, pa_enc_timestamp, pa_enc_timestamp_at};
+    use krb5_protocol::{as_req, pa_enc_timestamp_at};
     use krb5_types::KerberosTime;
 
     let (mut store, _) = krb5_kdc::bootstrap_documented().unwrap();
@@ -410,7 +409,7 @@ fn password_history_matches_mit_window() {
 
 #[test]
 fn failed_as_stamps_last_failed() {
-    use krb5_protocol::{as_req, pa_enc_timestamp, pa_enc_timestamp_at};
+    use krb5_protocol::{as_req, pa_enc_timestamp_at};
     use krb5_types::KerberosTime;
 
     let (store, _) = krb5_kdc::bootstrap_documented().unwrap();
@@ -458,7 +457,7 @@ fn failed_as_stamps_last_failed() {
 
 #[test]
 fn lockout_duration_only_unlocks_after_sleep() {
-    use krb5_protocol::{as_req, pa_enc_timestamp, pa_enc_timestamp_at};
+    use krb5_protocol::{as_req, pa_enc_timestamp_at};
     use krb5_types::KerberosTime;
 
     let (mut store, _) = krb5_kdc::bootstrap_documented().unwrap();
@@ -569,7 +568,7 @@ fn lockout_interval_only_resets_fail_count() {
 
 #[test]
 fn serial_ulog_delta_then_issue_as() {
-    use krb5_protocol::{as_req, pa_enc_timestamp};
+    use krb5_protocol::as_req;
 
     let (mut master, acl) = krb5_kdc::bootstrap_documented().unwrap();
     let (mut slave, _) = krb5_kdc::bootstrap_documented().unwrap();
@@ -759,7 +758,7 @@ fn ulog_records_delete_rename_chrand() {
 
 #[test]
 fn admin_unlock_clears_failcount_lockout() {
-    use krb5_protocol::{as_req, pa_enc_timestamp};
+    use krb5_protocol::as_req;
     use krb5_types::err;
     let (mut store, _) = krb5_kdc::bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [krb5_kdc::TEST_USER]);
