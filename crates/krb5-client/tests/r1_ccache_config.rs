@@ -11,6 +11,7 @@ use krb5_kdc::{
     TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, serve, shared_store,
 };
 use krb5_protocol::{FileCcache, KdcAddr};
+use krb5_testkit::scratch_dir;
 
 fn isolate_host_krb5() {
     krb5_config::isolate_test_krb5();
@@ -41,8 +42,7 @@ fn kinit_records_fast_avail_and_pa_type_like_write_out_ccache() {
         let _ = serve(store, udp, tcp);
     });
 
-    let dir = std::env::temp_dir().join(format!("kerber-r1-cc-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = scratch_dir("kerber-r1-cc");
     let path = dir.join("cc");
     let mut pw = TEST_USER_PASSWORD.to_vec();
     kinit_to_spec(

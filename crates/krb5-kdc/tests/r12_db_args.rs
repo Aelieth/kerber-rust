@@ -4,6 +4,7 @@ use krb5_kdc::{
     TEST_REALM, TEST_USER, TlData, UlogEntry, bootstrap_documented, dump_store, load_dump,
     save_store,
 };
+use krb5_testkit::scratch_dir;
 use krb5_types::PrincipalName;
 
 fn db_arg(nul: bool) -> TlData {
@@ -81,15 +82,7 @@ fn iprop_db_args_entry_is_absent_after_apply() {
 
 #[test]
 fn merge_tl_db_args_leaves_entry_and_file_unchanged() {
-    let dir = std::env::temp_dir().join(format!(
-        "krb5-r12-db-args-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&dir);
+    let dir = scratch_dir("krb5-r12-db-args");
     let db = dir.join("principal");
     let stash = dir.join("stash");
     let (mut store, _) = bootstrap_documented().unwrap();

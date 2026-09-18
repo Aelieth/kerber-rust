@@ -13,6 +13,7 @@ use krb5_kdc::{
     TL_LAST_PWD_CHANGE, TL_MOD_PRINC, bootstrap_documented, dump_store, dump_store_iprop,
     load_dump, master_key_from_password, parse_dump,
 };
+use krb5_testkit::scratch_dir;
 use krb5_types::PrincipalName;
 
 fn traces() -> PathBuf {
@@ -328,15 +329,7 @@ fn dump_load_preserves_sid_rid_not_dummy() {
 
 #[test]
 fn krb5_kdb_cli_load_and_dump_content() {
-    let dir = std::env::temp_dir().join(format!(
-        "krb5-kdb-cli-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&dir);
+    let dir = scratch_dir("krb5-kdb-cli");
     let db = dir.join("principal");
     let stash = dir.join("stash");
     let dumped = dir.join("rust.dump");
@@ -394,15 +387,7 @@ fn krb5_kdb_cli_load_and_dump_content() {
 
 #[test]
 fn krb5_kdb_cli_create_named_realm_dump_v7() {
-    let dir = std::env::temp_dir().join(format!(
-        "krb5-kdb-create-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&dir);
+    let dir = scratch_dir("krb5-kdb-create");
     let db = dir.join("principal");
     let stash = dir.join("stash");
     let bin = env!("CARGO_BIN_EXE_krb5-kdb");

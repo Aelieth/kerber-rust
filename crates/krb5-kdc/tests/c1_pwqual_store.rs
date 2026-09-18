@@ -5,7 +5,7 @@ use krb5_kdc::{
     Error, NamedPolicy, PWQUAL_DICT, PWQUAL_EMPTY, PWQUAL_PRINC, PrincipalStore, TEST_REALM,
     TEST_USER, bootstrap_documented,
 };
-use krb5_testkit::user;
+use krb5_testkit::{scratch_dir, user};
 use krb5_types::PrincipalName;
 
 fn name(s: &str) -> PrincipalName {
@@ -17,23 +17,6 @@ fn rejected(r: Result<(), Error>) -> String {
         Err(Error::PasswordPolicy(s)) => s,
         other => panic!("expected PasswordPolicy, got {other:?}"),
     }
-}
-
-fn scratch_dir(name: &str) -> std::path::PathBuf {
-    let scratch = std::env::var_os("CARGO_TARGET_TMPDIR")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("CARGO_TARGET_DIR")
-                .map(|p| std::path::PathBuf::from(p).join("test-krb5"))
-        })
-        .or_else(|| std::env::var_os("KERBER_SCRATCH").map(std::path::PathBuf::from))
-        .unwrap_or_else(|| {
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-krb5")
-        });
-    let dir = scratch.join(format!("{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
 }
 
 /// `pwqual_empty.c:38-44`: the only module that runs without a policy, on

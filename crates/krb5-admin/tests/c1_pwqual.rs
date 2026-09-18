@@ -11,6 +11,7 @@ use krb5_kdc::{
     Acl, NamedPolicy, TEST_ADMIN, TEST_REALM, TEST_USER, bootstrap_documented, documented_admin_id,
     documented_kadmin, shared_dump,
 };
+use krb5_testkit::scratch_dir;
 use krb5_types::PrincipalName;
 
 const CREATE_PRINCIPAL: u32 = 1;
@@ -66,23 +67,6 @@ fn create_args(name: &str, password: &str, policy: Option<&str>) -> Vec<u8> {
     );
     push_nullstring(&mut w, password);
     w
-}
-
-fn scratch_dir(name: &str) -> std::path::PathBuf {
-    let scratch = std::env::var_os("CARGO_TARGET_TMPDIR")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("CARGO_TARGET_DIR")
-                .map(|p| std::path::PathBuf::from(p).join("test-krb5"))
-        })
-        .or_else(|| std::env::var_os("KERBER_SCRATCH").map(std::path::PathBuf::from))
-        .unwrap_or_else(|| {
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-krb5")
-        });
-    let dir = scratch.join(format!("{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
 }
 
 /// `svr_principal.c:364-373`: `passwd_check` runs before the entry exists.

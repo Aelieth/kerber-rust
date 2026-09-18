@@ -30,8 +30,10 @@ this project uses semantic versioning once a crate is published.
   (product `ad.rs` stays `Result`-returning). `user` / `admin` /
   `host` / `krbtgt` / `realm` / `realm_with` — TEST_* principal
   constructors (`cname`/`krbtgt_name` map onto `user`/`krbtgt`;
-  protocol `"user"` / `KERBER.TEST` stay local). Assertion text
-  in those files is unchanged.
+  protocol `"user"` / `KERBER.TEST` stay local). `scratch_dir` —
+  the four local copies plus the test `temp_dir()` sites (client
+  and admin take testkit as a **dev-dependency**). Assertion
+  text in those files is unchanged.
 
 ### W3-S2.1 drop the eight a2_*_parent red-inject files
 

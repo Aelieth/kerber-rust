@@ -2,6 +2,7 @@
 
 use krb5_client::{Keytab, parse_principal};
 use krb5_crypto::{EncryptionType, ProtocolKey};
+use krb5_testkit::scratch_dir;
 use krb5_types::{PrincipalName, ascii};
 
 fn hex(s: &str) -> Vec<u8> {
@@ -146,7 +147,7 @@ fn file_ccache_skips_etype_zero_config_and_keeps_tickets() {
 
 #[test]
 fn destroy_secret_file_unlinks() {
-    let path = std::env::temp_dir().join(format!("krb5cc-destroy-{}", std::process::id()));
+    let path = scratch_dir("krb5cc-destroy").join("cc");
     std::fs::write(&path, b"secret-cache").unwrap();
     krb5_protocol::destroy_secret_file(&path).unwrap();
     assert!(!path.exists());
@@ -155,10 +156,9 @@ fn destroy_secret_file_unlinks() {
 
 #[test]
 fn destroy_secret_file_refuses_symlink() {
-    let dir = std::env::temp_dir();
-    let pid = std::process::id();
-    let target = dir.join(format!("krb5cc-destroy-target-{pid}"));
-    let link = dir.join(format!("krb5cc-destroy-link-{pid}"));
+    let dir = scratch_dir("krb5cc-destroy-symlink");
+    let target = dir.join("target");
+    let link = dir.join("link");
     let _ = std::fs::remove_file(&target);
     let _ = std::fs::remove_file(&link);
     std::fs::write(&target, b"do-not-zero").unwrap();
@@ -177,7 +177,7 @@ fn destroy_secret_file_refuses_symlink() {
 
 #[test]
 fn destroy_secret_file_refuses_fifo_quickly() {
-    let path = std::env::temp_dir().join(format!("krb5cc-destroy-fifo-{}", std::process::id()));
+    let path = scratch_dir("krb5cc-destroy-fifo").join("fifo");
     let _ = std::fs::remove_file(&path);
     let st = std::process::Command::new("mkfifo")
         .arg(&path)
@@ -192,7 +192,7 @@ fn destroy_secret_file_refuses_fifo_quickly() {
 
 #[test]
 fn destroy_secret_file_refuses_directory() {
-    let path = std::env::temp_dir().join(format!("krb5cc-destroy-dir-{}", std::process::id()));
+    let path = scratch_dir("krb5cc-destroy-dir").join("dir");
     let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir(&path).unwrap();
     assert!(krb5_protocol::destroy_secret_file(&path).is_err());

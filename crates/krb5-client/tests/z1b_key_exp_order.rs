@@ -13,7 +13,6 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, UdpSocket};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -21,6 +20,7 @@ use krb5_kdc::{
     KDB_REQUIRES_PRE_AUTH, KDB_REQUIRES_PWCHANGE, PrincipalStore, TEST_REALM, TEST_USER,
     bootstrap_documented, documented_changepw,
 };
+use krb5_testkit::scratch_dir;
 use krb5_types::PrincipalName;
 
 /// Serve `store` on UDP and TCP at one ephemeral port; returns `host:port`.
@@ -81,13 +81,7 @@ fn expired_user_store() -> PrincipalStore {
 /// (exit code, stdout + stderr — prompts and banners go to stdout like
 /// `krb5_prompter_posix`, errors to stderr).
 fn kinit(kdc: &str, password: &str, stdin: &str) -> (Option<i32>, String) {
-    static SEQ: AtomicUsize = AtomicUsize::new(0);
-    let dir = std::env::temp_dir().join(format!(
-        "z1b-kinit-{}-{}",
-        std::process::id(),
-        SEQ.fetch_add(1, Ordering::Relaxed)
-    ));
-    let _ = std::fs::create_dir_all(&dir);
+    let dir = scratch_dir("z1b-kinit");
     let conf = dir.join("krb5.conf");
     std::fs::write(
         &conf,

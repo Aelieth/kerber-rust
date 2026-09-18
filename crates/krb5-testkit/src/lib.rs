@@ -5,6 +5,9 @@
 
 #![forbid(unsafe_code)]
 
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
 use krb5_kdc::{
@@ -68,6 +71,38 @@ pub fn realm() -> &'static str {
 #[must_use]
 pub fn realm_with(name: &str) -> Realm {
     ascii(name)
+}
+
+/// Scratch directory that is never host `/tmp`.
+///
+/// Replaces the four local `scratch_dir` copies and the test
+/// `std::env::temp_dir()` sites. Prefers `CARGO_TARGET_TMPDIR`, then
+/// `CARGO_TARGET_DIR/test-krb5`, then `KERBER_SCRATCH`, then
+/// `target/test-krb5` next to the workspace.
+///
+/// # Panics
+///
+/// Panics if the directory cannot be created.
+#[must_use]
+pub fn scratch_dir(name: &str) -> PathBuf {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let scratch = std::env::var_os("CARGO_TARGET_TMPDIR")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("CARGO_TARGET_DIR").map(|p| PathBuf::from(p).join("test-krb5"))
+        })
+        .or_else(|| std::env::var_os("KERBER_SCRATCH").map(PathBuf::from))
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-krb5")
+        });
+    let dir = scratch.join(format!(
+        "{name}-{}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch_dir");
+    dir
 }
 
 /// IANA etype numbers in MIT `preferred()` order.

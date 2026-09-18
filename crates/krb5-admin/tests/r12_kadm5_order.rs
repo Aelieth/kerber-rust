@@ -11,6 +11,7 @@ use krb5_kdc::{
     Acl, TEST_ADMIN, TEST_REALM, TEST_USER, bootstrap_documented, documented_admin_id,
     documented_kadmin, load_store, save_store, shared_dump,
 };
+use krb5_testkit::scratch_dir;
 use krb5_types::PrincipalName;
 
 const MODIFY_PRINCIPAL: u32 = 3;
@@ -74,15 +75,7 @@ fn admin_client(store: &krb5_kdc::SharedDump, acl: &Acl) -> common::Client {
 
 #[test]
 fn modify_one_db_args_is_einval_and_unchanged() {
-    let dir = std::env::temp_dir().join(format!(
-        "krb5-r12-kadm5-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&dir);
+    let dir = scratch_dir("krb5-r12-kadm5");
     let db = dir.join("principal");
     let stash = dir.join("stash");
     let (store, _) = bootstrap_documented().unwrap();

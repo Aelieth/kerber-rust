@@ -10,19 +10,13 @@ use krb5_kdc::{
     load_store, save_store, shared_dump,
 };
 use krb5_protocol::{ReplayCache, as_req_sname, build_ap_req, build_krb_priv, pa_enc_timestamp};
+use krb5_testkit::scratch_dir;
 use krb5_types::{ChangePasswdData, PrincipalName};
 
 #[test]
 fn z8_kpasswd_keeps_an_out_of_process_principal() {
     krb5_config::isolate_test_krb5();
-    let dir = std::env::temp_dir().join(format!(
-        "krb5-z8-kpw-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos())
-    ));
-    let _ = std::fs::create_dir_all(&dir);
+    let dir = scratch_dir("krb5-z8-kpw");
     let db = dir.join("principal");
     let stash = dir.join("stash");
     let (store, acl) = bootstrap_documented().expect("bootstrap");

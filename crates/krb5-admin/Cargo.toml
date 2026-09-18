@@ -52,5 +52,8 @@ path = "src/bin/krb5-kadmin-local.rs"
 name = "krb5-kpasswd"
 path = "src/bin/krb5-kpasswd.rs"
 
+[dev-dependencies]
+krb5-testkit.workspace = true
+
 [lints]
 workspace = true

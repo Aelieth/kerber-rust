@@ -5,6 +5,7 @@ use std::process::Command;
 use krb5_client::cli::{check_ccache, parse_kinit, parse_klist};
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_protocol::{CcacheCred, CcacheKeyblock, FileCcache, realm};
+use krb5_testkit::scratch_dir;
 use krb5_types::PrincipalName;
 
 #[test]
@@ -25,7 +26,7 @@ fn klist_s_live_tgt_is_exit_0_silent() {
         .map_or(0, |d| u32::try_from(d.as_secs()).unwrap_or(0));
     let cred = sample(now + 3600, PrincipalName::krbtgt("KERBER.TEST"));
     let cc = FileCcache::new(cred.client.clone(), vec![cred]);
-    let path = std::env::temp_dir().join(format!("krb5cc-klist-s-{}-{}", std::process::id(), now));
+    let path = scratch_dir("krb5cc-klist-s").join("cc");
     cc.write_file(&path).unwrap();
     let bin = env!("CARGO_BIN_EXE_krb5-klist");
     let out = Command::new(bin)

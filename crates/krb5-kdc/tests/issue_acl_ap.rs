@@ -13,7 +13,7 @@ use krb5_kdc::{
 };
 use krb5_protocol::Keytab;
 use krb5_protocol::{ReplayCache, as_req_sname, build_ap_req, tgs_req_ex, verify_ap_req};
-use krb5_testkit::status;
+use krb5_testkit::{scratch_dir, status};
 use krb5_types::{
     EncKdcRepPart, EncTicketPart, KdcOptions, KerberosTime, KrbError, MethodData, OctetString,
     PrincipalName, ascii, err, flag_bit, ku, pa,
@@ -801,15 +801,7 @@ fn kadmind_acl_follows_store_realm_or_acl_file() {
         Error::AclDenied
     );
 
-    let dir = std::env::temp_dir().join(format!(
-        "kadmind-acl-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = scratch_dir("kadmind-acl");
     let path = dir.join("kadm5.acl");
     std::fs::write(
         &path,
@@ -846,14 +838,7 @@ fn acl_default_path_is_kdc_dir_kadm5_acl() {
 
 #[test]
 fn acl_unknown_op_letter_includes_line_and_aborting() {
-    let dir = std::env::temp_dir().join(format!(
-        "acl-az-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos())
-    ));
-    let _ = std::fs::create_dir_all(&dir);
+    let dir = scratch_dir("acl-az");
     let path = dir.join("kadm5.acl");
     std::fs::write(&path, "bad@KERBER.TEST aZ\n").unwrap();
     let err = acl_for_store("KERBER.TEST", Some(&path)).expect_err("aZ");
@@ -903,15 +888,7 @@ fn acl_none_is_self_only_for_embed() {
 
 #[test]
 fn acl_file_without_admin_is_not_replaced() {
-    let dir = std::env::temp_dir().join(format!(
-        "kadmind-acl-nofallback-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = scratch_dir("kadmind-acl-nofallback");
     let path = dir.join("kadm5.acl");
     std::fs::write(&path, "operator@PROD.KERBER.TEST *\n").unwrap();
     let acl = acl_for_store("PROD.KERBER.TEST", Some(&path)).expect("file as-is");
@@ -929,15 +906,7 @@ fn acl_file_without_admin_is_not_replaced() {
 
 #[test]
 fn acl_default_realm_applies() {
-    let dir = std::env::temp_dir().join(format!(
-        "kadmind-acl-realm-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = scratch_dir("kadmind-acl-realm");
     let path = dir.join("kadm5.acl");
     std::fs::write(&path, "admin *\noperator@PROD.KERBER.TEST i\n").unwrap();
     let acl = acl_for_store("PROD.KERBER.TEST", Some(&path)).expect("realm default");

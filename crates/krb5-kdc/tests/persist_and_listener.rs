@@ -12,12 +12,12 @@ use krb5_kdc::{
     documented_admin_id, documented_host, handle_request, load_store, pa_enc_timestamp, save_store,
     serve, shared_store, tgs_req,
 };
+use krb5_testkit::scratch_dir;
 use krb5_types::{AsRep, PrincipalName, err, ku};
 
 #[test]
 fn persist_survives_restart_without_key_regen() {
-    let dir = std::env::temp_dir().join(format!("krb5-persist-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
+    let dir = scratch_dir("krb5-persist");
     let db = dir.join("principal");
     let stash = dir.join("stash");
     let (store, _) = bootstrap_documented().unwrap();
@@ -63,15 +63,7 @@ fn persist_survives_restart_without_key_regen() {
 
 #[test]
 fn persist_ulog_survives_reload() {
-    let dir = std::env::temp_dir().join(format!(
-        "krb5-ulog-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&dir);
+    let dir = scratch_dir("krb5-ulog");
     let db = dir.join("principal");
     let stash = dir.join("stash");
     let (mut store, acl) = bootstrap_documented().unwrap();
@@ -109,15 +101,7 @@ fn persist_ulog_survives_reload() {
 #[test]
 fn persist_writes_db_and_stash_mode_0600() {
     use std::os::unix::fs::PermissionsExt;
-    let dir = std::env::temp_dir().join(format!(
-        "krb5-persist-0600-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&dir);
+    let dir = scratch_dir("krb5-persist-0600");
     let db = dir.join("principal");
     let stash = dir.join("stash");
     let (store, _) = bootstrap_documented().unwrap();
@@ -131,15 +115,7 @@ fn persist_writes_db_and_stash_mode_0600() {
 
 #[test]
 fn reload_if_stale_sees_kadmin_create() {
-    let dir = std::env::temp_dir().join(format!(
-        "krb5-reload-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&dir);
+    let dir = scratch_dir("krb5-reload");
     let db = dir.join("principal");
     let stash = dir.join("stash");
     let (mut writer, acl) = bootstrap_documented().unwrap();
@@ -168,15 +144,7 @@ fn reload_if_stale_keeps_lockout_and_pa_replay() {
     use krb5_kdc::{NamedPolicy, TEST_USER};
     use krb5_protocol::ReplayKey;
 
-    let dir = std::env::temp_dir().join(format!(
-        "krb5-reload-overlay-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&dir);
+    let dir = scratch_dir("krb5-reload-overlay");
     let db = dir.join("principal");
     let stash = dir.join("stash");
     let (mut writer, acl) = bootstrap_documented().unwrap();
@@ -237,15 +205,7 @@ fn reload_if_stale_keeps_lockout_and_pa_replay() {
 
 #[test]
 fn persist_paths_saves_password_lock_and_expiry() {
-    let dir = std::env::temp_dir().join(format!(
-        "krb5-persist-status-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&dir);
+    let dir = scratch_dir("krb5-persist-status");
     let db = dir.join("principal");
     let stash = dir.join("stash");
     let (store, acl) = bootstrap_documented().unwrap();
@@ -282,15 +242,7 @@ fn persist_paths_saves_password_lock_and_expiry() {
 
 #[test]
 fn persist_dump_v7_issues_as_with_string_to_key() {
-    let dir = std::env::temp_dir().join(format!(
-        "krb5-persist-as-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&dir);
+    let dir = scratch_dir("krb5-persist-as");
     let db = dir.join("principal");
     let stash = dir.join("stash");
     let (store, _) = bootstrap_documented().unwrap();
@@ -328,15 +280,7 @@ fn persist_dump_v7_issues_as_with_string_to_key() {
 fn persist_legacy_kdb3_still_loads_sid() {
     use krb5_kdc::save_store_legacy_kdb3;
 
-    let dir = std::env::temp_dir().join(format!(
-        "krb5-persist-kdb3-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let _ = std::fs::create_dir_all(&dir);
+    let dir = scratch_dir("krb5-persist-kdb3");
     let db = dir.join("principal");
     let stash = dir.join("stash");
     let (store, _) = bootstrap_documented().unwrap();
@@ -645,8 +589,7 @@ fn stash_is_keytab_format_and_reads_back_the_master() {
     // MIT krb5_def_store_mkey_list writes a FILE keytab with one K/M@REALM
     // entry; klist -k / kdb5_util read it. The Rust stash matches (etype/kvno
     // embedded, so load is a single decrypt, not a blind etype trial).
-    let dir = std::env::temp_dir().join(format!("krb5-stash-kt-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
+    let dir = scratch_dir("krb5-stash-kt");
     let db = dir.join("principal");
     let stash = dir.join(".k5.KERBER.TEST");
     let (store, _) = bootstrap_documented().unwrap();
@@ -680,8 +623,7 @@ fn stash_is_keytab_format_and_reads_back_the_master() {
 
 #[test]
 fn legacy_raw_stash_loads_then_is_rewritten_as_keytab() {
-    let dir = std::env::temp_dir().join(format!("krb5-stash-raw-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
+    let dir = scratch_dir("krb5-stash-raw");
     let db = dir.join("principal");
     let stash = dir.join(".k5.KERBER.TEST");
     let (store, _) = bootstrap_documented().unwrap();

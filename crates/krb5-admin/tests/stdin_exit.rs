@@ -1,5 +1,6 @@
 //! Process-level stdin exit codes for `ktutil` / `kadmin.local`.
 
+use krb5_testkit::scratch_dir;
 use std::fs::File;
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -61,14 +62,7 @@ fn ktutil_nope_then_q_exits_1() {
 
 #[test]
 fn kadmin_local_nope_then_q_exits_1() {
-    let dir = std::env::temp_dir().join(format!(
-        "kadmin-stdin-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos())
-    ));
-    let _ = std::fs::create_dir_all(&dir);
+    let dir = scratch_dir("kadmin-stdin");
     let db = dir.join("principal");
     let stash = dir.join("stash");
     let (store, _) = krb5_kdc::bootstrap_documented().unwrap();
@@ -129,14 +123,7 @@ fn kadmin_local_nope_then_q_exits_1() {
 }
 
 fn dir_stdin(bin: &str, envs: &[(&str, std::path::PathBuf)]) -> std::process::Output {
-    let scratch = std::env::temp_dir().join(format!(
-        "ktutil-dir-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos())
-    ));
-    std::fs::create_dir_all(&scratch).unwrap();
+    let scratch = scratch_dir("ktutil-dir");
     let file = File::open(&scratch).expect("open directory");
     let mut cmd = Command::new("timeout");
     cmd.args(["--kill-after=1s", "2", bin])
@@ -171,14 +158,7 @@ fn ktutil_directory_stdin_terminates() {
 
 #[test]
 fn kadmin_local_directory_stdin_terminates() {
-    let dir = std::env::temp_dir().join(format!(
-        "kadmin-dirin-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos())
-    ));
-    let _ = std::fs::create_dir_all(&dir);
+    let dir = scratch_dir("kadmin-dirin");
     let db = dir.join("principal");
     let stash = dir.join("stash");
     let (store, _) = krb5_kdc::bootstrap_documented().unwrap();
