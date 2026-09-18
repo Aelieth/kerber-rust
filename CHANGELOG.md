@@ -24,6 +24,8 @@ this project uses semantic versioning once a crate is published.
   `ap_req`, `audit`, `kdcpolicy`, `kpasswd`, `net_listener`;
   `store_flow` stays. One named duplicate dropped
   (`unknown_client_e_text_is_client_not_found`; keep `j3`).
+  Prefix strip (crate-sized): crypto `b1_etype_preferred_omits_weak`
+  → `etype_preferred_omits_weak`.
 
 ### W3-S2.3 in-src tests by shape
 

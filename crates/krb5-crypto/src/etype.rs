@@ -432,7 +432,7 @@ pub fn parse_keysalt_list(s: &str) -> Vec<EncryptionType> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn b1_etype_preferred_omits_weak() {
+    fn etype_preferred_omits_weak() {
         let p: Vec<i32> = EncryptionType::preferred()
             .iter()
             .map(|e| e.to_iana())
