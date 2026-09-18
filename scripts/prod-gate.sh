@@ -23,6 +23,7 @@ export KRB5_TEST_ADMIN_PASSWORD="${KRB5_TEST_ADMIN_PASSWORD:-adminpassword}"
 export KRB5_PASSWORD="${KRB5_PASSWORD:-$KRB5_TEST_USER_PASSWORD}"
 export RUST_LOG="${RUST_LOG:-krb5_kdc=info,krb5_protocol=info,krb5_client=info}"
 export KERBER_CAPTURE_DIR="$OUT/pdus"
+refuse_golden_capture_dir "$KERBER_CAPTURE_DIR"
 rm -rf "$KERBER_CAPTURE_DIR"
 mkdir -p "$KERBER_CAPTURE_DIR"
 

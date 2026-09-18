@@ -24,6 +24,8 @@ docker exec -e KRB5_PASSWORD=userpassword -e KERBER_CAPTURE_DIR=/tmp/client-trac
     "$NAME" /tmp/krb5-kinit \
     -c /tmp/krb5cc_rust -S host/testhost.kerber.test user@KERBER.TEST
 TRACE_DST="${KERBER_TRACE_DST:-${KERBER_SCRATCH:-$ROOT/target}/traces}"
+refuse_golden_capture_dir "$TRACE_DST"
+refuse_golden_capture_dir "${KERBER_CAPTURE_DIR:-}"
 mkdir -p "$TRACE_DST"
 docker cp "$NAME":/tmp/client-traces/. "$TRACE_DST/" 2>/dev/null || true
 echo "==== MIT klist of Rust FILE ccache ===="

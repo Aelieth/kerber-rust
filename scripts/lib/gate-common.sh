@@ -32,6 +32,17 @@ die() {
     exit 1
 }
 
+# Product capture has no path policy (S2-R R1). Gates must not point
+# KERBER_CAPTURE_DIR or TRACE_DST at the golden home.
+refuse_golden_capture_dir() {
+    local d="${1:-}"
+    [ -z "$d" ] && return 0
+    local norm="${d//\\//}"
+    case "/$norm/" in
+        */tests/traces/*) die "KERBER_CAPTURE_DIR refuses tests/traces: $d" ;;
+    esac
+}
+
 unavailable() {
     {
         echo "date=$(date -Iseconds)"

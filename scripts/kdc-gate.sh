@@ -191,6 +191,8 @@ echo "$KLISTB" | grep -q 'host/testhost.kerber.test'
 echo "$KLISTB" | grep -qE 'Addresses: [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'
 
 TRACE_DST="${KERBER_TRACE_DST:-${KERBER_SCRATCH:-$ROOT/target}/traces}"
+refuse_golden_capture_dir "$TRACE_DST"
+refuse_golden_capture_dir "${KERBER_CAPTURE_DIR:-}"
 mkdir -p "$TRACE_DST"
 docker cp "$NAME":/tmp/traces/. "$TRACE_DST/" 2>/dev/null || true
 

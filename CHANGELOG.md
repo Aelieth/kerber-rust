@@ -6,6 +6,13 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S2-R residues
+
+- **fix.** Restore `capture.rs` product semantics: unset or empty
+  `KERBER_CAPTURE_DIR` writes nothing. Golden-home protection lives in
+  `gate-common.sh` `refuse_golden_capture_dir` and `ci-policy`
+  `check_capture_env_only`.
+
 ### W3-S2.6 coverage
 
 - **test.** Gate↔unit index: `// oracle: differential-gate.sh <case>`
@@ -17,9 +24,8 @@ this project uses semantic versioning once a crate is published.
 
 ### W3-S2.5 fixtures
 
-- **test.** Capture defaults to `${KERBER_SCRATCH}/traces` (else
-  `${CARGO_TARGET_DIR}/traces`); empty `KERBER_CAPTURE_DIR` disables;
-  paths under `tests/traces` are refused. `.gitignore` allow-lists the
+- **test.** Capture is env-gated (`KERBER_CAPTURE_DIR` set and
+  non-empty); gates choose the directory. `.gitignore` allow-lists the
   13 tracked goldens. `scripts/promote-trace.sh` copies one PDU and
   appends the README row. AD keytabs stay in `~/adlab`. Fuzz: `cmin`
   note plus seeds on `pkinit_cms` / `spake_point` / `oakley_dh` /

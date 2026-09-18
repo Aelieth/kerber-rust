@@ -347,10 +347,11 @@ rejected on both acceptors.
 PKINIT: `scripts/pkinit-gate.sh` **fails** unless MIT `pkinit.so` is
 present and MIT `kinit -X X509_user_identity=FILE:` succeeds against
 the Rust KDC. The KDC log must contain `rfc8636 sha256 kdf` (MIT TRACE
-`PKINIT used KDF 2B06010502030602`). Unset `KERBER_CAPTURE_DIR` writes
-raw PDUs under `${KERBER_SCRATCH}/traces` (not `tests/traces/`, which
-keeps only the tracked goldens). Promote one file with
-`scripts/promote-trace.sh`.
+`PKINIT used KDF 2B06010502030602`). Product capture writes only when
+`KERBER_CAPTURE_DIR` is set and non-empty (unset or empty writes
+nothing). Gates choose the directory; `scripts/lib/gate-common.sh`
+`refuse_golden_capture_dir` refuses a path under `tests/traces/`.
+Promote one file with `scripts/promote-trace.sh`.
 
 SPAKE: `scripts/spake-gate.sh` runs MIT `kinit` against the Rust KDC
 with `preferred_preauth_types = 151` and `spake_preauth_groups = P-256`.

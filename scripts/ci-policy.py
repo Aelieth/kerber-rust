@@ -1365,6 +1365,61 @@ def _gate_unit_index():
     return mod
 
 
+_CAPTURE_ENV_RE = re.compile(r"""env::var\(\s*"([^"]+)"\s*\)""")
+_CAPTURE_ASSIGN_RE = re.compile(r"KERBER_CAPTURE_DIR=([^\s\\]+)")
+
+
+def _capture_product(text: str) -> str:
+    i = text.find("#[cfg(test)]")
+    return text if i < 0 else text[:i]
+
+
+def _is_golden_capture_path(val: str) -> bool:
+    norm = val.strip().strip("\"'").replace("\\", "/")
+    parts = [p for p in norm.split("/") if p and p != "$ROOT"]
+    return any(
+        parts[i] == "tests" and parts[i + 1] == "traces" for i in range(len(parts) - 1)
+    )
+
+
+def check_capture_env_only(
+    capture_text: str | None = None,
+    common_text: str | None = None,
+    script_texts: dict[str, str] | None = None,
+) -> None:
+    """capture.rs reads no env but KERBER_CAPTURE_DIR; no script sets it under tests/traces."""
+    if capture_text is None:
+        path = ROOT / "crates" / "krb5-protocol" / "src" / "capture.rs"
+        if not path.is_file():
+            _die("missing crates/krb5-protocol/src/capture.rs")
+        capture_text = path.read_text(encoding="utf-8")
+    product = _capture_product(capture_text)
+    envs = set(_CAPTURE_ENV_RE.findall(product))
+    if envs != {"KERBER_CAPTURE_DIR"}:
+        _die(
+            "capture.rs product must read only KERBER_CAPTURE_DIR, got "
+            + ", ".join(sorted(envs) or ["<none>"])
+        )
+    if "KERBER_SCRATCH" in product or "CARGO_TARGET_DIR" in product:
+        _die("capture.rs product must not name KERBER_SCRATCH or CARGO_TARGET_DIR")
+    if common_text is None:
+        common = SCRIPTS / "lib" / "gate-common.sh"
+        if not common.is_file():
+            _die("missing scripts/lib/gate-common.sh")
+        common_text = common.read_text(encoding="utf-8")
+    if "refuse_golden_capture_dir" not in common_text:
+        _die("gate-common.sh must define refuse_golden_capture_dir")
+    if script_texts is None:
+        script_texts = {
+            p.name: p.read_text(encoding="utf-8")
+            for p in sorted(SCRIPTS.glob("*.sh")) + sorted((SCRIPTS / "lib").glob("*.sh"))
+        }
+    for name, text in script_texts.items():
+        for m in _CAPTURE_ASSIGN_RE.finditer(text):
+            if _is_golden_capture_path(m.group(1)):
+                _die(f"{name} sets KERBER_CAPTURE_DIR under tests/traces")
+
+
 def check_gate_unit_index(
     root: pathlib.Path | None = None,
     gate: str | None = None,
@@ -3853,6 +3908,30 @@ jobs:
         )
         _must_die(check_gate_unit_index, troot, cell_gate, good_doc)
 
+    check_capture_env_only(
+        'pub fn capture_pdu() {\n    let _ = std::env::var("KERBER_CAPTURE_DIR");\n}\n',
+        "refuse_golden_capture_dir() {\n    :\n}\n",
+        {"kdc-gate.sh": "KERBER_CAPTURE_DIR=/tmp/traces\n"},
+    )
+    _must_die(
+        check_capture_env_only,
+        'pub fn capture_pdu() {\n    let _ = std::env::var("KERBER_SCRATCH");\n}\n',
+        "refuse_golden_capture_dir() {\n    :\n}\n",
+        {},
+    )
+    _must_die(
+        check_capture_env_only,
+        'pub fn capture_pdu() {\n    let _ = std::env::var("KERBER_CAPTURE_DIR");\n}\n',
+        "log() {\n    :\n}\n",
+        {},
+    )
+    _must_die(
+        check_capture_env_only,
+        'pub fn capture_pdu() {\n    let _ = std::env::var("KERBER_CAPTURE_DIR");\n}\n',
+        "refuse_golden_capture_dir() {\n    :\n}\n",
+        {"kdc-gate.sh": "KERBER_CAPTURE_DIR=$ROOT/tests/traces\n"},
+    )
+
     def _princ_line(name: str, *keyhexes: str) -> str:
         namelen = str(len(name))
         parts = [
@@ -5206,6 +5285,7 @@ def main() -> None:
     check_ledger_proof_column()
     check_diffsend_cases()
     check_gate_unit_index()
+    check_capture_env_only()
     check_golden_dump_unique_keys()
     check_ledger_tally()
     check_ledger_anchors()
