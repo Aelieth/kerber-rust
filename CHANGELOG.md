@@ -28,6 +28,8 @@ this project uses semantic versioning once a crate is published.
   → `etype_preferred_omits_weak`. GSS `z1_gss_accept_kt_*` →
   `gss_accept_kt_*`. Client `z1b_key_exp_order.rs` → `key_exp_order.rs`
   and the three `z1b_` fns. Config five in-src names (`c1_`/`a4_*`/`f6_`).
+  Protocol 111 (`b1_`/`b2_`/`z1_`/`z7_`/`z8_`);
+  `rd_req_authenticator_skew_is_37` → `…_is_skew`.
 
 ### W3-S2.3 in-src tests by shape
 

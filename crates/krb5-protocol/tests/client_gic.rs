@@ -58,7 +58,7 @@ fn sample_kt() -> Keytab {
 }
 
 #[test]
-fn b1_gic_keytab_uses_highest_kvno_only() {
+fn gic_keytab_uses_highest_kvno_only() {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
     let (keys, etypes) = keytab_init_creds_keys(&sample_kt(), &user, "KERBER.TEST").expect("keys");
     assert_eq!(keys.len(), 2, "both etypes at kvno 2");
@@ -68,20 +68,20 @@ fn b1_gic_keytab_uses_highest_kvno_only() {
 }
 
 #[test]
-fn b1_gic_keytab_wrong_realm_is_ignored() {
+fn gic_keytab_wrong_realm_is_ignored() {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
     let (keys, _) = keytab_init_creds_keys(&sample_kt(), &user, "KERBER.TEST").expect("keys");
     assert!(keys.iter().all(|k| k.as_bytes() != [9u8; 32]));
 }
 
 #[test]
-fn b1_gic_keytab_unknown_principal_is_none() {
+fn gic_keytab_unknown_principal_is_none() {
     let other = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["nosuch"]);
     assert!(keytab_init_creds_keys(&sample_kt(), &other, "KERBER.TEST").is_none());
 }
 
 #[test]
-fn b1_gic_keytab_sort_moves_keytab_etypes_front() {
+fn gic_keytab_sort_moves_keytab_etypes_front() {
     let mut req = [18, 17, 20, 19];
     sort_etypes_keytab_first(&mut req, &[17]);
     assert_eq!(req, [17, 18, 20, 19]);
@@ -109,7 +109,7 @@ fn options_of(
 }
 
 #[test]
-fn b1_gic_opt_canonicalize_sets_kdc_option() {
+fn gic_opt_canonicalize_sets_kdc_option() {
     let (opts, from) = options_of(AsTicketOpts::default(), true);
     assert!(
         opts.bit(flag_bit::CANONICALIZE),
@@ -121,7 +121,7 @@ fn b1_gic_opt_canonicalize_sets_kdc_option() {
 }
 
 #[test]
-fn b1_gic_opt_starttime_sets_postdated_and_from() {
+fn gic_opt_starttime_sets_postdated_and_from() {
     let (opts, from) = options_of(
         AsTicketOpts {
             starttime: Some(3600),
@@ -142,7 +142,7 @@ fn b1_gic_opt_starttime_sets_postdated_and_from() {
 }
 
 #[test]
-fn b1_gic_pwd_key_exp_with_new_password_should_changepw() {
+fn gic_pwd_key_exp_with_new_password_should_changepw() {
     let err = Error::KrbError {
         code: err::KEY_EXPIRED,
         text: Some("KEY EXPIRED".into()),
@@ -151,7 +151,7 @@ fn b1_gic_pwd_key_exp_with_new_password_should_changepw() {
 }
 
 #[test]
-fn b1_gic_pwd_key_exp_without_new_password_does_not_changepw() {
+fn gic_pwd_key_exp_without_new_password_does_not_changepw() {
     let err = Error::KrbError {
         code: err::KEY_EXPIRED,
         text: None,
@@ -160,7 +160,7 @@ fn b1_gic_pwd_key_exp_without_new_password_does_not_changepw() {
 }
 
 #[test]
-fn b1_gic_pwd_keytab_does_not_changepw() {
+fn gic_pwd_keytab_does_not_changepw() {
     let err = Error::KrbError {
         code: err::KEY_EXPIRED,
         text: None,
@@ -169,30 +169,30 @@ fn b1_gic_pwd_keytab_does_not_changepw() {
 }
 
 #[test]
-fn b1_chpw_success_is_ok() {
+fn chpw_success_is_ok() {
     assert_eq!(parse_chpw_result(&[0, 0], false).unwrap(), 0);
 }
 
 #[test]
-fn b1_chpw_out_of_range_is_modified() {
+fn chpw_out_of_range_is_modified() {
     let err = parse_chpw_result(&[0, 8], false).unwrap_err();
     assert!(err.to_string().contains("modified"), "{err}");
 }
 
 #[test]
-fn b1_chpw_success_from_error_is_modified() {
+fn chpw_success_from_error_is_modified() {
     let err = parse_chpw_result(&[0, 0], true).unwrap_err();
     assert!(err.to_string().contains("SUCCESS from KRB-ERROR"), "{err}");
 }
 
 #[test]
-fn b1_chpw_truncated_is_modified() {
+fn chpw_truncated_is_modified() {
     let err = parse_chpw_result(&[0], false).unwrap_err();
     assert!(err.to_string().contains("truncated"), "{err}");
 }
 
 #[test]
-fn b1_chpw_result_code_strings_match_mit() {
+fn chpw_result_code_strings_match_mit() {
     use krb5_protocol::chpw_result_code_string;
     assert_eq!(chpw_result_code_string(0), "Success");
     assert_eq!(chpw_result_code_string(1), "Malformed request error");
@@ -206,7 +206,7 @@ fn b1_chpw_result_code_strings_match_mit() {
 }
 
 #[test]
-fn b1_chpw_message_utf8_and_fallback() {
+fn chpw_message_utf8_and_fallback() {
     use krb5_protocol::chpw_message;
     assert_eq!(
         chpw_message(b"This is a valid string."),
@@ -216,7 +216,7 @@ fn b1_chpw_message_utf8_and_fallback() {
 }
 
 #[test]
-fn b1_chpw_message_ad_policy_matches_mit_test_chpw_message() {
+fn chpw_message_ad_policy_matches_mit_test_chpw_message() {
     use krb5_protocol::chpw_message;
     let complex = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -257,7 +257,7 @@ fn b1_chpw_message_ad_policy_matches_mit_test_chpw_message() {
 }
 
 #[test]
-fn b1_renew_options_are_common_mask_plus_renew() {
+fn renew_options_are_common_mask_plus_renew() {
     let flags = TicketFlags::from_u32(0x5480_0000);
     let opts = tgs_renew_options(&flags);
     assert!(opts.bit(flag_bit::FORWARDABLE));
@@ -272,7 +272,7 @@ fn b1_renew_options_are_common_mask_plus_renew() {
 }
 
 #[test]
-fn b1_renew_options_omit_unset_ticket_flags() {
+fn renew_options_omit_unset_ticket_flags() {
     let flags = TicketFlags::from_u32(0x4000_0000);
     let opts = tgs_renew_options(&flags);
     assert!(opts.bit(flag_bit::FORWARDABLE));

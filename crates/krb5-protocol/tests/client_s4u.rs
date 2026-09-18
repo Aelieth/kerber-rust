@@ -91,7 +91,7 @@ fn encode_generic() -> Vec<u8> {
 }
 
 #[test]
-fn b2_s4u_tgs_outer_padata_is_1_136_130_129() {
+fn s4u_tgs_outer_padata_is_1_136_130_129() {
     isolate_host_krb5();
     let shots = Arc::new(Mutex::new(Vec::new()));
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -134,14 +134,14 @@ fn b2_s4u_tgs_outer_padata_is_1_136_130_129() {
 }
 
 #[test]
-fn b2_s4u_verify_missing_both_is_ok() {
+fn s4u_verify_missing_both_is_ok() {
     let key = session();
     let req = decode_pa130(&pa_s4u_x509_user(&key, user(), "KERBER.TEST", 42).unwrap());
     verify_s4u2self_reply(&key, &req, None, None).expect("no 130 is ok");
 }
 
 #[test]
-fn b2_s4u_verify_enc_only_is_modified() {
+fn s4u_verify_enc_only_is_modified() {
     let key = session();
     let pa = pa_s4u_x509_user(&key, user(), "KERBER.TEST", 42).unwrap();
     let req = decode_pa130(&pa);
@@ -154,7 +154,7 @@ fn b2_s4u_verify_enc_only_is_modified() {
 }
 
 #[test]
-fn b2_s4u_verify_valid_is_ok() {
+fn s4u_verify_valid_is_ok() {
     let key = session();
     let pa = pa_s4u_x509_user(&key, user(), "KERBER.TEST", 42).unwrap();
     let req = decode_pa130(&pa);
@@ -165,7 +165,7 @@ fn b2_s4u_verify_valid_is_ok() {
 }
 
 #[test]
-fn b2_s4u_verify_bad_nonce_is_modified() {
+fn s4u_verify_bad_nonce_is_modified() {
     let key = session();
     let pa = pa_s4u_x509_user(&key, user(), "KERBER.TEST", 42).unwrap();
     let req = decode_pa130(&pa);
@@ -178,7 +178,7 @@ fn b2_s4u_verify_bad_nonce_is_modified() {
 }
 
 #[test]
-fn b2_s4u_verify_user_mismatch_is_modified() {
+fn s4u_verify_user_mismatch_is_modified() {
     let key = session();
     let pa = pa_s4u_x509_user(&key, user(), "KERBER.TEST", 42).unwrap();
     let req = decode_pa130(&pa);
@@ -192,7 +192,7 @@ fn b2_s4u_verify_user_mismatch_is_modified() {
 }
 
 #[test]
-fn b2_s4u_verify_unkeyed_is_inapp() {
+fn s4u_verify_unkeyed_is_inapp() {
     let key = session();
     let pa = pa_s4u_x509_user(&key, user(), "KERBER.TEST", 42).unwrap();
     let req = decode_pa130(&pa);
@@ -248,7 +248,7 @@ fn reply_from_userid(key: &ProtocolKey, req: &krb5_types::s4u::PaS4uX509User) ->
 }
 
 #[test]
-fn b2_s4u2proxy_outer_padata_is_1_136_167() {
+fn s4u2proxy_outer_padata_is_1_136_167() {
     isolate_host_krb5();
     let shots = Arc::new(Mutex::new(Vec::new()));
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();

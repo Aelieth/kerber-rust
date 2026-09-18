@@ -57,7 +57,7 @@ fn sealed(key: &ProtocolKey, nonce: u32) -> PaData {
 }
 
 #[test]
-fn b1_fast_reply_nonce_mismatch_is_kdcrep_modified() {
+fn fast_reply_nonce_mismatch_is_kdcrep_modified() {
     let key = armor();
     let pa = sealed(&key, 100);
     let err = unwrap_fast_rep_checked(&key, &Some(vec![pa]), 101).expect_err("flipped nonce");
@@ -69,7 +69,7 @@ fn b1_fast_reply_nonce_mismatch_is_kdcrep_modified() {
 }
 
 #[test]
-fn b1_fast_reply_nonce_match_unwraps() {
+fn fast_reply_nonce_match_unwraps() {
     let key = armor();
     let pa = sealed(&key, 100);
     let fast = unwrap_fast_rep_checked(&key, &Some(vec![pa.clone()]), 100).expect("match");
@@ -116,7 +116,7 @@ fn wrap_fast() -> (krb5_types::AsReq, ProtocolKey, krb5_types::KerberosTime) {
 }
 
 #[test]
-fn b1_fast_outer_till_is_epoch() {
+fn fast_outer_till_is_epoch() {
     let (req, akey, live_till) = wrap_fast();
     assert!(
         live_till.unix_seconds() > 0,
@@ -167,7 +167,7 @@ fn b1_fast_outer_till_is_epoch() {
 }
 
 #[test]
-fn b1_fast_outer_till_inner_nonce_unchanged() {
+fn fast_outer_till_inner_nonce_unchanged() {
     let (req, akey, _) = wrap_fast();
     let pa = &req.0.padata.as_ref().expect("padata")[0];
     let fx: krb5_types::fast::PaFxFast = decode(pa.padata_value.as_ref()).expect("pa-fx-fast");
@@ -499,7 +499,7 @@ fn rewrite_outer_cname(reply: Vec<u8>) -> Vec<u8> {
 /// With CANONICALIZE the outer name would otherwise be accepted as the
 /// canonical name.
 #[test]
-fn z1_fast_as_rep_client_is_the_finished_client_under_canonicalize() {
+fn fast_as_rep_client_is_the_finished_client_under_canonicalize() {
     let (store, _) = bootstrap_documented().unwrap();
     let armor = armor_tgt(&store, 1201);
     let (kdc, _) = mitm(store, Box::new(|_, reply| rewrite_outer_cname(reply)));
@@ -515,7 +515,7 @@ fn z1_fast_as_rep_client_is_the_finished_client_under_canonicalize() {
 /// replaced (finished) client, which is the requested one — the rewritten
 /// outer name is not a mismatch.
 #[test]
-fn z1_fast_as_rep_outer_cname_is_ignored_without_canonicalize() {
+fn fast_as_rep_outer_cname_is_ignored_without_canonicalize() {
     let (store, _) = bootstrap_documented().unwrap();
     let armor = armor_tgt(&store, 1202);
     let (kdc, _) = mitm(store, Box::new(|_, reply| rewrite_outer_cname(reply)));
@@ -528,7 +528,7 @@ fn z1_fast_as_rep_outer_cname_is_ignored_without_canonicalize() {
 /// the requested one (re-wrapped under the recovered armor key, the ticket
 /// checksum untouched) is `KRB5_KDCREP_MODIFIED` without CANONICALIZE.
 #[test]
-fn z1_fast_as_rep_finished_cname_mismatch_is_kdcrep_modified() {
+fn fast_as_rep_finished_cname_mismatch_is_kdcrep_modified() {
     let (store, _) = bootstrap_documented().unwrap();
     let armor = armor_tgt(&store, 1203);
     let session = armor.session.clone();
@@ -561,7 +561,7 @@ fn z1_fast_as_rep_finished_cname_mismatch_is_kdcrep_modified() {
 /// FX-COOKIE — and no second AS-REQ is sent (`get_in_tkt.c:1721-1724`
 /// continues only on `PREAUTH_REQUIRED && retry`).
 #[test]
-fn z1_fast_error_without_fx_fast_is_the_fatal_outer_error() {
+fn fast_error_without_fx_fast_is_the_fatal_outer_error() {
     let (store, _) = bootstrap_documented().unwrap();
     let armor = armor_tgt(&store, 1204);
     let session = armor.session.clone();
@@ -606,7 +606,7 @@ fn z1_fast_error_without_fx_fast_is_the_fatal_outer_error() {
 /// The same for a PA-FX-FAST that does not decrypt (a flipped ciphertext
 /// byte): `decrypt_fast_reply` fails → outer error, `retry = 0`.
 #[test]
-fn z1_fast_error_with_a_corrupt_fx_fast_is_the_fatal_outer_error() {
+fn fast_error_with_a_corrupt_fx_fast_is_the_fatal_outer_error() {
     let (store, _) = bootstrap_documented().unwrap();
     let armor = armor_tgt(&store, 1205);
     let (kdc, count) = mitm(
@@ -641,7 +641,7 @@ fn z1_fast_error_with_a_corrupt_fx_fast_is_the_fatal_outer_error() {
 /// `KRB5KDC_ERR_PREAUTH_FAILED` "Expecting FX_ERROR pa-data inside FAST
 /// container" — an error, not a synthesized retry.
 #[test]
-fn z1_fast_error_without_inner_fx_error_is_preauth_failed() {
+fn fast_error_without_inner_fx_error_is_preauth_failed() {
     let (store, _) = bootstrap_documented().unwrap();
     let armor = armor_tgt(&store, 1206);
     let session = armor.session.clone();
@@ -682,7 +682,7 @@ fn z1_fast_error_without_inner_fx_error_is_preauth_failed() {
 /// the client still sees `S_PRINCIPAL_UNKNOWN`. With the envelope stripped
 /// the outer error stands (fast.c:445-458).
 #[test]
-fn z1_fast_tgs_error_is_the_inner_fx_error() {
+fn fast_tgs_error_is_the_inner_fx_error() {
     let (store, _) = bootstrap_documented().unwrap();
     let strip = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let strip_in = strip.clone();

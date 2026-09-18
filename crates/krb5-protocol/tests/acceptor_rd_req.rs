@@ -57,7 +57,7 @@ fn host_ap_req() -> (Vec<u8>, ProtocolKey, u32) {
 }
 
 #[test]
-fn b2_rd_req_kvno_mismatch_is_nokey() {
+fn rd_req_kvno_mismatch_is_nokey() {
     let (raw, key, kvno) = host_ap_req();
     assert_eq!(kvno, 1);
     let other = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[9u8; 32]).unwrap();
@@ -80,7 +80,7 @@ fn b2_rd_req_kvno_mismatch_is_nokey() {
 }
 
 #[test]
-fn b2_rd_req_relabeled_ticket_kvno_is_nokey() {
+fn rd_req_relabeled_ticket_kvno_is_nokey() {
     let (raw, key, kvno) = host_ap_req();
     assert_eq!(kvno, 1);
     let mut ap: ApReq = decode(&raw).expect("AP-REQ");
@@ -105,7 +105,7 @@ fn b2_rd_req_relabeled_ticket_kvno_is_nokey() {
 }
 
 #[test]
-fn b2_rd_req_wrong_key_at_claimed_kvno_is_integrity() {
+fn rd_req_wrong_key_at_claimed_kvno_is_integrity() {
     let (raw, key, kvno) = host_ap_req();
     assert_eq!(kvno, 1);
     let mut ap: ApReq = decode(&raw).expect("AP-REQ");
@@ -131,7 +131,7 @@ fn b2_rd_req_wrong_key_at_claimed_kvno_is_integrity() {
 }
 
 #[test]
-fn b2_rd_req_matching_kvno_verifies() {
+fn rd_req_matching_kvno_verifies() {
     let (raw, key, kvno) = host_ap_req();
     let keys = [key];
     let kvnos = [kvno];
@@ -149,7 +149,7 @@ fn b2_rd_req_matching_kvno_verifies() {
 }
 
 #[test]
-fn b2_rd_req_authenticator_skew_is_37() {
+fn rd_req_authenticator_skew_is_skew() {
     let (raw, key, _) = host_ap_req();
     let now = KerberosTime::now();
     let far = KerberosTime::from_unix_seconds(now.unix_seconds().saturating_add(10_000));
@@ -200,13 +200,13 @@ fn verify(
 }
 
 #[test]
-fn b2_rd_req_transited_issued_ticket_with_t_flag_verifies() {
+fn rd_req_transited_issued_ticket_with_t_flag_verifies() {
     let (raw, key, _) = host_ap_req();
     verify(&raw, &key).expect("KDC-issued ticket has TRANSITED_POLICY_CHECKED");
 }
 
 #[test]
-fn b2_rd_req_transited_unchecked_evil_hop_is_ill_cr_tkt() {
+fn rd_req_transited_unchecked_evil_hop_is_ill_cr_tkt() {
     let (raw, key, _) = host_ap_req();
     let raw2 = rewrite_ticket(&raw, &key, |part| {
         part.flags = part
@@ -222,7 +222,7 @@ fn b2_rd_req_transited_unchecked_evil_hop_is_ill_cr_tkt() {
 }
 
 #[test]
-fn b2_rd_req_transited_t_flag_skips_evil_hop() {
+fn rd_req_transited_t_flag_skips_evil_hop() {
     let (raw, key, _) = host_ap_req();
     let raw2 = rewrite_ticket(&raw, &key, |part| {
         assert!(
@@ -235,7 +235,7 @@ fn b2_rd_req_transited_t_flag_skips_evil_hop() {
 }
 
 #[test]
-fn b2_rd_req_transited_unchecked_empty_verifies() {
+fn rd_req_transited_unchecked_empty_verifies() {
     let (raw, key, _) = host_ap_req();
     let raw2 = rewrite_ticket(&raw, &key, |part| {
         part.flags = part
@@ -311,7 +311,7 @@ fn accept(raw: &[u8], key: &ProtocolKey) -> Result<(), krb5_protocol::Error> {
 }
 
 #[test]
-fn z1_no_starttime_future_authtime_is_nyv() {
+fn no_starttime_future_authtime_is_nyv() {
     // MIT valid_times.c:44-51: starttime==0 falls back to authtime; a ticket
     // whose authtime is well beyond the skew is not yet valid.
     let far = KerberosTime::now()
@@ -330,7 +330,7 @@ fn z1_no_starttime_future_authtime_is_nyv() {
 }
 
 #[test]
-fn z1_invalid_flag_is_tkt_invalid() {
+fn invalid_flag_is_tkt_invalid() {
     // MIT rd_req_dec.c:634-638: the INVALID flag yields KRB5KRB_AP_ERR_TKT_INVALID
     // (offset 145), distinct from TKT_NYV.
     let (raw, key) = host_ap_req_forged(|part| {
@@ -348,7 +348,7 @@ fn z1_invalid_flag_is_tkt_invalid() {
 }
 
 #[test]
-fn z1_pinned_name_wrong_kvno_is_badkeyver() {
+fn pinned_name_wrong_kvno_is_badkeyver() {
     // MIT rd_req_dec.c:374-376 try_one_princ → krb5_kt_get_entry(princ, kvno,
     // etype); kt_file.c:380-384 an entry for the principal+enctype at another
     // kvno is KRB5_KT_KVNONOTFOUND; rd_req_dec.c:139-148 keytab_fetch_error

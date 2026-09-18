@@ -32,7 +32,7 @@ fn mit_hint() -> MethodData {
 }
 
 #[test]
-fn b1_sort_krb5_padata_sequence_default_puts_pkinit_first() {
+fn sort_krb5_padata_sequence_default_puts_pkinit_first() {
     let sorted = sort_krb5_padata_sequence(&mit_hint(), DEFAULT_PREFERRED_PREAUTH_TYPES);
     let types: Vec<i32> = sorted.iter().map(|p| p.padata_type).collect();
     assert_eq!(
@@ -43,7 +43,7 @@ fn b1_sort_krb5_padata_sequence_default_puts_pkinit_first() {
 }
 
 #[test]
-fn b1_sort_krb5_padata_sequence_preferred_151_first() {
+fn sort_krb5_padata_sequence_preferred_151_first() {
     let sorted = sort_krb5_padata_sequence(&mit_hint(), &[151]);
     let types: Vec<i32> = sorted.iter().map(|p| p.padata_type).collect();
     assert_eq!(types[0], pa::SPAKE);
@@ -54,14 +54,14 @@ fn b1_sort_krb5_padata_sequence_preferred_151_first() {
 }
 
 #[test]
-fn b1_sort_krb5_padata_sequence_preferred_2_first() {
+fn sort_krb5_padata_sequence_preferred_2_first() {
     let sorted = sort_krb5_padata_sequence(&mit_hint(), &[2]);
     let types: Vec<i32> = sorted.iter().map(|p| p.padata_type).collect();
     assert_eq!(types[0], pa::ENC_TIMESTAMP);
 }
 
 #[test]
-fn b1_optimistic_hint_picks_spake_before_enc_ts() {
+fn optimistic_hint_picks_spake_before_enc_ts() {
     isolate_host_krb5();
     let shots = Arc::new(Mutex::new(Vec::new()));
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -171,7 +171,7 @@ fn encode_preauth_failed() -> Vec<u8> {
 }
 
 #[test]
-fn b1_spake_first_shot_omits_optimistic_151() {
+fn spake_first_shot_omits_optimistic_151() {
     isolate_host_krb5();
     let (got, wait) = mpsc::channel();
     let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -254,7 +254,7 @@ fn types(list: &[PaData]) -> Vec<i32> {
 }
 
 #[test]
-fn b1_pkinit_padata_cookie_then_module_then_info() {
+fn pkinit_padata_cookie_then_module_then_info() {
     let mut list = vec![
         pa_of(pa::FX_COOKIE),
         pa_of(pa::AS_FRESHNESS),
@@ -274,7 +274,7 @@ fn b1_pkinit_padata_cookie_then_module_then_info() {
 }
 
 #[test]
-fn b1_pkinit_padata_module_before_info_without_cookie() {
+fn pkinit_padata_module_before_info_without_cookie() {
     let mut list = vec![pa_of(pa::AS_FRESHNESS), pa_of(pa::REQ_ENC_PA_REP)];
     insert_module_padata_before_info_pa(&mut list, pa_of(pa::PK_AS_REQ));
     assert_eq!(

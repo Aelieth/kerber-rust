@@ -9,7 +9,7 @@ use krb5_types::{
 };
 
 #[test]
-fn b1_verify_as_srealm_vs_ticket_is_kdcrep_modified() {
+fn verify_as_srealm_vs_ticket_is_kdcrep_modified() {
     let sname = PrincipalName::krbtgt("KERBER.TEST");
     let enc_realm = ascii("KERBER.TEST");
     let tkt_realm = ascii("FORGED.TEST");
@@ -30,7 +30,7 @@ fn b1_verify_as_srealm_vs_ticket_is_kdcrep_modified() {
 }
 
 #[test]
-fn b1_verify_as_srealm_vs_request_is_kdcrep_modified() {
+fn verify_as_srealm_vs_request_is_kdcrep_modified() {
     let sname = PrincipalName::krbtgt("KERBER.TEST");
     let realm = ascii("OTHER.TEST");
     let err = verify_as_reply_server(&sname, &realm, &sname, &realm, &sname, "KERBER.TEST", false)
@@ -42,7 +42,7 @@ fn b1_verify_as_srealm_vs_request_is_kdcrep_modified() {
 }
 
 #[test]
-fn b1_verify_as_canon_ok_allows_tgs_rename() {
+fn verify_as_canon_ok_allows_tgs_rename() {
     let asked = PrincipalName::krbtgt("SHORT");
     let issued = PrincipalName::krbtgt("KERBER.TEST");
     let realm = ascii("KERBER.TEST");
@@ -59,7 +59,7 @@ fn b1_verify_as_canon_ok_allows_tgs_rename() {
 }
 
 #[test]
-fn b1_verify_as_canon_without_tgs_is_still_mismatch() {
+fn verify_as_canon_without_tgs_is_still_mismatch() {
     let asked = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "a.kerber.test"]);
     let issued = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "b.kerber.test"]);
     let realm = ascii("KERBER.TEST");
@@ -80,7 +80,7 @@ fn b1_verify_as_canon_without_tgs_is_still_mismatch() {
 }
 
 #[test]
-fn b1_verify_as_matching_tgt_is_ok() {
+fn verify_as_matching_tgt_is_ok() {
     let sname = PrincipalName::krbtgt("KERBER.TEST");
     let realm = ascii("KERBER.TEST");
     verify_as_reply_server(&sname, &realm, &sname, &realm, &sname, "KERBER.TEST", false)
@@ -110,7 +110,7 @@ fn sample_part() -> EncKdcRepPart {
 }
 
 #[test]
-fn b1_verify_times_endtime_after_till_is_kdcrep_modified() {
+fn verify_times_endtime_after_till_is_kdcrep_modified() {
     let enc = sample_part();
     let till = kerberos_time_from_utc_z("20260819110000Z").expect("earlier till");
     let err = verify_as_reply_req_times(&enc, &till, None, None, &KdcOptions::none()).unwrap_err();
@@ -121,14 +121,14 @@ fn b1_verify_times_endtime_after_till_is_kdcrep_modified() {
 }
 
 #[test]
-fn b1_verify_times_endtime_at_till_is_ok() {
+fn verify_times_endtime_at_till_is_ok() {
     let enc = sample_part();
     verify_as_reply_req_times(&enc, &enc.endtime, None, None, &KdcOptions::none())
         .expect("ts_after is strict >");
 }
 
 #[test]
-fn b1_verify_times_renew_till_after_rtime_is_kdcrep_modified() {
+fn verify_times_renew_till_after_rtime_is_kdcrep_modified() {
     let mut enc = sample_part();
     enc.renew_till = Some(kerberos_time_from_utc_z("20260820120000Z").expect("later rtime"));
     let rtime = kerberos_time_from_utc_z("20260819180000Z").expect("rtime");
@@ -141,7 +141,7 @@ fn b1_verify_times_renew_till_after_rtime_is_kdcrep_modified() {
 }
 
 #[test]
-fn b1_verify_times_renewable_ok_renew_till_after_till_is_kdcrep_modified() {
+fn verify_times_renewable_ok_renew_till_after_till_is_kdcrep_modified() {
     let mut enc = sample_part();
     enc.flags = TicketFlags::from_u32(0x0080_0000);
     enc.renew_till = Some(kerberos_time_from_utc_z("20260826120000Z").expect("7d"));
@@ -154,7 +154,7 @@ fn b1_verify_times_renewable_ok_renew_till_after_till_is_kdcrep_modified() {
 }
 
 #[test]
-fn b1_verify_times_postdated_from_mismatch_is_kdcrep_modified() {
+fn verify_times_postdated_from_mismatch_is_kdcrep_modified() {
     let enc = sample_part();
     let from = kerberos_time_from_utc_z("20260819130000Z").expect("from");
     let opts = KdcOptions::none().with_bit(flag_bit::POSTDATED, true);
@@ -191,7 +191,7 @@ fn pin_timesync(on: bool) {
 }
 
 #[test]
-fn b1_kdc_timesync_accepts_authtime_outside_skew() {
+fn kdc_timesync_accepts_authtime_outside_skew() {
     pin_timesync(true);
     let mut part = sample_part();
     let now_t = KerberosTime::now();
@@ -203,7 +203,7 @@ fn b1_kdc_timesync_accepts_authtime_outside_skew() {
 }
 
 #[test]
-fn b1_kdc_timesync_off_is_kdcrep_skew() {
+fn kdc_timesync_off_is_kdcrep_skew() {
     pin_timesync(false);
     let mut part = sample_part();
     let now_t = KerberosTime::now();
@@ -223,7 +223,7 @@ fn b1_kdc_timesync_off_is_kdcrep_skew() {
 /// (`get_in_tkt.c:718-722`). Source pin so the inject compiles at the
 /// parent (no public rtime getter there) and still fails.
 #[test]
-fn z8_rtime_is_clamped_up_to_till() {
+fn rtime_is_clamped_up_to_till() {
     let src = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/as_ex.rs"));
     assert!(
         src.contains("till.unix_seconds() > rt.unix_seconds()") || src.contains("if till > rtime"),

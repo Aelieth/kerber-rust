@@ -1928,7 +1928,7 @@ mod as_kdc_options_tests {
     }
 
     #[test]
-    fn b1_gic_opt_canonicalize_sets_kdc_option() {
+    fn gic_opt_canonicalize_sets_kdc_option() {
         let opts = times_of(AsTicketOpts::default(), true).opts;
         assert!(
             opts.bit(flag_bit::CANONICALIZE),
@@ -1939,7 +1939,7 @@ mod as_kdc_options_tests {
     }
 
     #[test]
-    fn b1_gic_opt_starttime_sets_postdated_and_from() {
+    fn gic_opt_starttime_sets_postdated_and_from() {
         let t = times_of(
             AsTicketOpts {
                 starttime: Some(3600),
@@ -1963,7 +1963,7 @@ mod as_kdc_options_tests {
     }
 
     #[test]
-    fn z7_omitted_lifetime_is_one_day() {
+    fn omitted_lifetime_is_one_day() {
         let t = times_of(AsTicketOpts::default(), false);
         let now = i64::from(KerberosTime::now().unix_seconds());
         let till = i64::from(t.till.unix_seconds());
@@ -1975,7 +1975,7 @@ mod as_kdc_options_tests {
     }
 
     #[test]
-    fn z8_renew_life_shorter_than_till_is_clamped() {
+    fn renew_life_shorter_than_till_is_clamped() {
         let t = times_of(
             AsTicketOpts {
                 rlife: Some(12 * 3600),

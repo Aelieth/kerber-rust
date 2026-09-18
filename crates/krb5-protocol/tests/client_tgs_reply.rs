@@ -52,7 +52,7 @@ fn enc_part(end: KerberosTime, renew: Option<KerberosTime>, flags: TicketFlags) 
 }
 
 #[test]
-fn b2_tgs_reply_client_matches_tgt() {
+fn tgs_reply_client_matches_tgt() {
     tgs_reply_client_ok(
         &user(),
         &realm(),
@@ -68,7 +68,7 @@ fn b2_tgs_reply_client_matches_tgt() {
 }
 
 #[test]
-fn b2_tgs_reply_client_ignores_name_type() {
+fn tgs_reply_client_ignores_name_type() {
     let nt_user = PrincipalName::new(PrincipalName::NT_UNKNOWN, ["user"]);
     tgs_reply_client_ok(
         &user(),
@@ -85,7 +85,7 @@ fn b2_tgs_reply_client_ignores_name_type() {
 }
 
 #[test]
-fn b2_tgs_reply_wrong_client_is_modified() {
+fn tgs_reply_wrong_client_is_modified() {
     let other = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["other"]);
     let err = tgs_reply_client_ok(
         &user(),
@@ -106,7 +106,7 @@ fn b2_tgs_reply_wrong_client_is_modified() {
 }
 
 #[test]
-fn b2_tgs_reply_s4u2proxy_final_skips_tgt_client() {
+fn tgs_reply_s4u2proxy_final_skips_tgt_client() {
     let impersonated = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["impersonated"]);
     tgs_reply_client_ok(
         &user(),
@@ -123,7 +123,7 @@ fn b2_tgs_reply_s4u2proxy_final_skips_tgt_client() {
 }
 
 #[test]
-fn b2_tgs_reply_s4u2proxy_referral_requires_tgt_client() {
+fn tgs_reply_s4u2proxy_referral_requires_tgt_client() {
     let impersonated = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["impersonated"]);
     let err = tgs_reply_client_ok(
         &user(),
@@ -144,7 +144,7 @@ fn b2_tgs_reply_s4u2proxy_referral_requires_tgt_client() {
 }
 
 #[test]
-fn b2_tgs_reply_s4u2self_client_eq_server_is_nosupp() {
+fn tgs_reply_s4u2self_client_eq_server_is_nosupp() {
     let err = tgs_reply_client_ok(
         &user(),
         &realm(),
@@ -161,7 +161,7 @@ fn b2_tgs_reply_s4u2self_client_eq_server_is_nosupp() {
 }
 
 #[test]
-fn b2_tgs_reply_s4u2self_impersonated_is_ok() {
+fn tgs_reply_s4u2self_impersonated_is_ok() {
     let impersonated = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["impersonated"]);
     tgs_reply_client_ok(
         &user(),
@@ -178,32 +178,32 @@ fn b2_tgs_reply_s4u2self_impersonated_is_ok() {
 }
 
 #[test]
-fn b2_tgs_reply_server_consistent_ok() {
+fn tgs_reply_server_consistent_ok() {
     tgs_reply_server_consistent(&host(), &realm(), &host(), &realm()).unwrap();
 }
 
 #[test]
-fn b2_tgs_reply_server_mismatch_is_modified() {
+fn tgs_reply_server_mismatch_is_modified() {
     let err = tgs_reply_server_consistent(&host(), &realm(), &krbtgt(), &realm()).unwrap_err();
     assert!(err.to_string().contains("ticket server"), "{err}");
 }
 
 #[test]
-fn b2_tgs_reply_strip_ok_as_delegate_foreign_without_flag() {
+fn tgs_reply_strip_ok_as_delegate_foreign_without_flag() {
     let flags = TicketFlags::none().with_bit(flag_bit::OK_AS_DELEGATE, true);
     let out = tgs_strip_ok_as_delegate(false, false, flags);
     assert!(!out.bit(flag_bit::OK_AS_DELEGATE));
 }
 
 #[test]
-fn b2_tgs_reply_strip_ok_as_delegate_keeps_local_and_flagged_foreign() {
+fn tgs_reply_strip_ok_as_delegate_keeps_local_and_flagged_foreign() {
     let flags = TicketFlags::none().with_bit(flag_bit::OK_AS_DELEGATE, true);
     assert!(tgs_strip_ok_as_delegate(true, false, flags.clone()).bit(flag_bit::OK_AS_DELEGATE));
     assert!(tgs_strip_ok_as_delegate(false, true, flags).bit(flag_bit::OK_AS_DELEGATE));
 }
 
 #[test]
-fn b2_tgs_reply_endtime_after_till_is_modified() {
+fn tgs_reply_endtime_after_till_is_modified() {
     let till = KerberosTime::from_unix_seconds(1_700_000_100);
     let enc = enc_part(
         KerberosTime::from_unix_seconds(1_700_000_200),
@@ -218,14 +218,14 @@ fn b2_tgs_reply_endtime_after_till_is_modified() {
 }
 
 #[test]
-fn b2_tgs_reply_endtime_at_till_ok() {
+fn tgs_reply_endtime_at_till_ok() {
     let till = KerberosTime::from_unix_seconds(1_700_000_200);
     let enc = enc_part(till.clone(), None, TicketFlags::none());
     tgs_reply_req_times(&enc, &till, None, None, &KdcOptions::none()).unwrap();
 }
 
 #[test]
-fn b2_tgs_reply_zero_till_skips_endtime() {
+fn tgs_reply_zero_till_skips_endtime() {
     let till = KerberosTime::from_unix_seconds(0);
     let enc = enc_part(
         KerberosTime::from_unix_seconds(1_700_000_200),
@@ -236,28 +236,28 @@ fn b2_tgs_reply_zero_till_skips_endtime() {
 }
 
 #[test]
-fn b2_try_fallback_specified_realm_is_non_referral() {
+fn try_fallback_specified_realm_is_non_referral() {
     assert_eq!(tgs_try_fallback(1, true, 2), TgsFallback::NonReferral);
 }
 
 #[test]
-fn b2_try_fallback_later_hop_keeps_error() {
+fn try_fallback_later_hop_keeps_error() {
     assert_eq!(tgs_try_fallback(2, true, 2), TgsFallback::KeepError);
     assert_eq!(tgs_try_fallback(2, false, 2), TgsFallback::KeepError);
 }
 
 #[test]
-fn b2_try_fallback_referral_one_comp_is_host_realm_unknown() {
+fn try_fallback_referral_one_comp_is_host_realm_unknown() {
     assert_eq!(tgs_try_fallback(1, false, 1), TgsFallback::HostRealmUnknown);
 }
 
 #[test]
-fn b2_try_fallback_referral_host_is_host_realm() {
+fn try_fallback_referral_host_is_host_realm() {
     assert_eq!(tgs_try_fallback(1, false, 2), TgsFallback::HostRealm);
 }
 
 #[test]
-fn b2_try_fallback_non_referral_drops_canonicalize() {
+fn try_fallback_non_referral_drops_canonicalize() {
     let opts = KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true);
     let retry = tgs_non_referral_options(opts);
     assert!(!retry.bit(flag_bit::CANONICALIZE));
@@ -265,7 +265,7 @@ fn b2_try_fallback_non_referral_drops_canonicalize() {
 }
 
 #[test]
-fn b2_validate_options_are_common_mask_plus_validate() {
+fn validate_options_are_common_mask_plus_validate() {
     let flags = TicketFlags::from_u32(0x5480_0000);
     let opts = tgs_validate_options(&flags);
     assert!(opts.bit(flag_bit::FORWARDABLE));
@@ -284,7 +284,7 @@ fn b2_validate_options_are_common_mask_plus_validate() {
 }
 
 #[test]
-fn b2_validate_options_omit_unset_ticket_flags() {
+fn validate_options_omit_unset_ticket_flags() {
     let flags = TicketFlags::from_u32(0x4000_0000);
     let opts = tgs_validate_options(&flags);
     assert!(opts.bit(flag_bit::FORWARDABLE));
@@ -302,7 +302,7 @@ fn common_flags() -> TicketFlags {
 }
 
 #[test]
-fn b2_fwd_tgt_options_are_common_mask_plus_forwarded() {
+fn fwd_tgt_options_are_common_mask_plus_forwarded() {
     let opts = tgs_forward_options(&common_flags(), true);
     assert!(opts.bit(flag_bit::FORWARDED));
     assert!(opts.bit(flag_bit::FORWARDABLE));
@@ -312,7 +312,7 @@ fn b2_fwd_tgt_options_are_common_mask_plus_forwarded() {
 }
 
 #[test]
-fn b2_fwd_tgt_not_forwardable_clears_forwardable() {
+fn fwd_tgt_not_forwardable_clears_forwardable() {
     let opts = tgs_forward_options(&common_flags(), false);
     assert!(opts.bit(flag_bit::FORWARDED));
     assert!(!opts.bit(flag_bit::FORWARDABLE));

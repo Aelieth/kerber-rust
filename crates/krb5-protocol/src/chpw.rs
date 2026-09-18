@@ -383,7 +383,7 @@ mod parse_rep_tests {
     use krb5_types::err;
 
     #[test]
-    fn b1_chpw_framed_length_mismatch_is_modified() {
+    fn chpw_framed_length_mismatch_is_modified() {
         let mut raw = vec![0u8; 8];
         raw[0..2].copy_from_slice(&7u16.to_be_bytes());
         raw[2..4].copy_from_slice(&1u16.to_be_bytes());
@@ -392,7 +392,7 @@ mod parse_rep_tests {
     }
 
     #[test]
-    fn b1_chpw_bad_version_is_bad_pvno() {
+    fn chpw_bad_version_is_bad_pvno() {
         let mut raw = vec![0u8; 8];
         raw[0..2].copy_from_slice(&8u16.to_be_bytes());
         raw[2..4].copy_from_slice(&2u16.to_be_bytes());
@@ -406,7 +406,7 @@ mod parse_rep_tests {
     }
 
     #[test]
-    fn b1_chpw_setpw_version_is_accepted() {
+    fn chpw_setpw_version_is_accepted() {
         let mut raw = vec![0u8; 6];
         raw[0..2].copy_from_slice(&6u16.to_be_bytes());
         raw[2..4].copy_from_slice(&KPASSWD_SETPW_VERSION.to_be_bytes());

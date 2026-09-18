@@ -14,7 +14,7 @@ fn user() -> PrincipalName {
 }
 
 #[test]
-fn b2_sname_match_none_accepts_any() {
+fn sname_match_none_accepts_any() {
     assert!(sname_match(
         None,
         None,
@@ -25,7 +25,7 @@ fn b2_sname_match_none_accepts_any() {
 }
 
 #[test]
-fn b2_sname_match_srv_hst_requires_service_and_host() {
+fn sname_match_srv_hst_requires_service_and_host() {
     let want = host("host", "svc.kerber.test");
     let got = host("host", "svc.kerber.test");
     assert!(sname_match(
@@ -46,7 +46,7 @@ fn b2_sname_match_srv_hst_requires_service_and_host() {
 }
 
 #[test]
-fn b2_sname_match_ignore_acceptor_hostname_skips_host() {
+fn sname_match_ignore_acceptor_hostname_skips_host() {
     let want = host("host", "svc.kerber.test");
     let other = host("host", "other.kerber.test");
     assert!(sname_match(
@@ -67,7 +67,7 @@ fn b2_sname_match_ignore_acceptor_hostname_skips_host() {
 }
 
 #[test]
-fn b2_sname_match_empty_hostname_is_wildcard() {
+fn sname_match_empty_hostname_is_wildcard() {
     let want = host("host", "");
     let got = host("host", "svc.kerber.test");
     assert!(sname_match(
@@ -80,7 +80,7 @@ fn b2_sname_match_empty_hostname_is_wildcard() {
 }
 
 #[test]
-fn b2_sname_match_empty_realm_is_unspecified() {
+fn sname_match_empty_realm_is_unspecified() {
     let want = host("host", "svc.kerber.test");
     let got = host("host", "svc.kerber.test");
     assert!(sname_match(
@@ -94,7 +94,7 @@ fn b2_sname_match_empty_realm_is_unspecified() {
 }
 
 #[test]
-fn b2_sname_match_realm_mismatch_is_false() {
+fn sname_match_realm_mismatch_is_false() {
     let want = host("host", "svc.kerber.test");
     let got = host("host", "svc.kerber.test");
     assert!(!sname_match(
@@ -107,7 +107,7 @@ fn b2_sname_match_realm_mismatch_is_false() {
 }
 
 #[test]
-fn b2_sname_match_non_hst_is_principal_compare() {
+fn sname_match_non_hst_is_principal_compare() {
     let want = user();
     assert!(sname_match(
         Some(&want),
@@ -135,7 +135,7 @@ fn b2_sname_match_non_hst_is_principal_compare() {
 }
 
 #[test]
-fn b2_sname_match_hst_rejects_non_two_component_ticket() {
+fn sname_match_hst_rejects_non_two_component_ticket() {
     let want = host("host", "svc.kerber.test");
     assert!(!sname_match(
         Some(&want),
