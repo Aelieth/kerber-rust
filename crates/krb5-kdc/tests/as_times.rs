@@ -46,7 +46,7 @@ fn tgt_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs) -> EncTicketPar
 }
 
 #[test]
-fn r27_as_till_in_past_endtime_is_till() {
+fn as_till_in_past_endtime_is_till() {
     let (store, _) = bootstrap_documented().unwrap();
     let key = store
         .get_name(&user())
@@ -72,7 +72,7 @@ fn r27_as_till_in_past_endtime_is_till() {
 }
 
 #[test]
-fn r27_as_from_after_till_issues_expired_end() {
+fn as_from_after_till_issues_expired_end() {
     let (store, _) = bootstrap_documented().unwrap();
     let key = store
         .get_name(&user())
@@ -135,7 +135,7 @@ fn ticket_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedTgs) -> krb5_typ
 }
 
 #[test]
-fn a4_19_last_req_is_lrq_none_epoch() {
+fn last_req_is_lrq_none_epoch() {
     let (store, _) = bootstrap_documented().unwrap();
     let enc = enc_as(&user_as(&store, 1901));
     assert_eq!(enc.last_req.len(), 1);
@@ -144,7 +144,7 @@ fn a4_19_last_req_is_lrq_none_epoch() {
 }
 
 #[test]
-fn a4_19_as_key_exp_is_min_of_expiration_and_pw_expire() {
+fn as_key_exp_is_min_of_expiration_and_pw_expire() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let now = KerberosTime::now().unix_seconds();
     store
@@ -167,7 +167,7 @@ fn a4_19_as_key_exp_is_min_of_expiration_and_pw_expire() {
 }
 
 #[test]
-fn a4_19_renew_postdated_starts_at_from() {
+fn renew_postdated_starts_at_from() {
     let (store, _) = bootstrap_documented().unwrap();
     let key = store
         .get_name(&user())
@@ -511,7 +511,7 @@ fn name(s: &str) -> PrincipalName {
 }
 
 #[test]
-fn z6_params_max_life_default_is_one_day() {
+fn params_max_life_default_is_one_day() {
     let (mut store, _) = bootstrap_documented().unwrap();
     assert_eq!(
         store.policy().max_life,
@@ -538,7 +538,7 @@ fn z6_params_max_life_default_is_one_day() {
 }
 
 #[test]
-fn z7_realm_cap_omitted_rlife_allows_five_day_renew() {
+fn realm_cap_omitted_rlife_allows_five_day_renew() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let conf = krb5_config::KdcConf::parse(&format!(
         "[realms]\n    {TEST_REALM} = {{\n        max_life = 1h\n    }}\n"
@@ -629,7 +629,7 @@ fn z7_realm_cap_omitted_rlife_allows_five_day_renew() {
 }
 
 #[test]
-fn z7_synthesize_km_uses_params_lifetimes() {
+fn synthesize_km_uses_params_lifetimes() {
     let store = PrincipalStore::new(TEST_REALM);
     let text = dump_store(&store, b"masterpassword").expect("dump");
     let dump = parse_dump(&text).expect("parse");
@@ -639,7 +639,7 @@ fn z7_synthesize_km_uses_params_lifetimes() {
 }
 
 #[test]
-fn z7_client_till_default_is_one_day() {
+fn client_till_default_is_one_day() {
     let src = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../krb5-protocol/src/as_ex.rs"
@@ -655,7 +655,7 @@ fn z7_client_till_default_is_one_day() {
 }
 
 #[test]
-fn z8_kadmin_admin_max_life_is_three_hours() {
+fn kadmin_admin_max_life_is_three_hours() {
     let (store, _) = bootstrap_documented().unwrap();
     let p = store.get_name(&documented_kadmin()).expect("kadmin/admin");
     assert_eq!(
@@ -667,7 +667,7 @@ fn z8_kadmin_admin_max_life_is_three_hours() {
 }
 
 #[test]
-fn z8_kadmin_changepw_max_life_is_five_minutes() {
+fn kadmin_changepw_max_life_is_five_minutes() {
     let (store, _) = bootstrap_documented().unwrap();
     let p = store
         .get_name(&documented_changepw())

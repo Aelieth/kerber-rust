@@ -33,7 +33,7 @@ fn incoming_name() -> PrincipalName {
 }
 
 #[test]
-fn a2_r16_incoming_trust_is_own_principal() {
+fn incoming_trust_is_own_principal() {
     let (mut store, acl) = bootstrap_documented().unwrap();
     let actor = documented_admin_id();
     let issue = aes_key(0x11);
@@ -64,7 +64,7 @@ fn a2_r16_incoming_trust_is_own_principal() {
 }
 
 #[test]
-fn a2_r16_cross_tgt_renew_realm_mismatch_is_26() {
+fn cross_tgt_renew_realm_mismatch_is_badoption() {
     let (mut store, acl) = bootstrap_documented().unwrap();
     let actor = documented_admin_id();
     let ir = aes_key(0x33);
@@ -114,7 +114,7 @@ fn a2_r16_cross_tgt_renew_realm_mismatch_is_26() {
 }
 
 #[test]
-fn a2_r16_u2u_second_ticket_foreign_realm_is_7() {
+fn u2u_second_ticket_foreign_realm_is_2nd_tkt_server() {
     let (store, _) = bootstrap_documented().unwrap();
     let host = documented_host();
     let hkey = store
@@ -157,7 +157,7 @@ fn a2_r16_u2u_second_ticket_foreign_realm_is_7() {
 }
 
 #[test]
-fn a2_r16_incoming_trust_dump_load_round_trip() {
+fn incoming_trust_dump_load_round_trip() {
     let (mut store, acl) = bootstrap_documented().unwrap();
     let actor = documented_admin_id();
     let ir = aes_key(0x44);
@@ -178,7 +178,7 @@ fn a2_r16_incoming_trust_dump_load_round_trip() {
 }
 
 #[test]
-fn a2_r16_incoming_trust_iprop_names_foreign_id() {
+fn incoming_trust_iprop_names_foreign_id() {
     let (mut store, acl) = bootstrap_documented().unwrap();
     store
         .create_interrealm_key(&acl, &documented_admin_id(), FOREIGN, aes_key(0x55))
@@ -192,7 +192,7 @@ fn a2_r16_incoming_trust_iprop_names_foreign_id() {
 }
 
 #[test]
-fn a2_r16_foreign_header_decrypts_via_incoming_kvno() {
+fn foreign_header_decrypts_via_incoming_kvno() {
     let (mut store, acl) = bootstrap_documented().unwrap();
     let actor = documented_admin_id();
     let issue = aes_key(0x66);

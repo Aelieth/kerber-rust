@@ -1066,7 +1066,7 @@ fn assert_finding_server_key<T: std::fmt::Debug>(got: Result<T, krb5_kdc::Error>
 }
 
 #[test]
-fn z1_tgs_service_key_skips_a_non_permitted_first_key() {
+fn tgs_service_key_skips_a_non_permitted_first_key() {
     let mut store = store_permitting_aes256();
     set_random_keys(&mut store, &documented_host(), &[AES128, AES256]);
     let tgt = kinit(&store);
@@ -1079,7 +1079,7 @@ fn z1_tgs_service_key_skips_a_non_permitted_first_key() {
 }
 
 #[test]
-fn z1_tgs_service_key_only_non_permitted_is_finding_server_key() {
+fn tgs_service_key_only_non_permitted_is_finding_server_key() {
     let mut store = store_permitting_aes256();
     set_random_keys(&mut store, &documented_host(), &[AES128]);
     let tgt = kinit(&store);
@@ -1087,7 +1087,7 @@ fn z1_tgs_service_key_only_non_permitted_is_finding_server_key() {
 }
 
 #[test]
-fn z1_as_server_key_skips_a_non_permitted_first_key() {
+fn as_server_key_skips_a_non_permitted_first_key() {
     let mut store = store_permitting_aes256();
     set_random_keys(
         &mut store,
@@ -1103,7 +1103,7 @@ fn z1_as_server_key_skips_a_non_permitted_first_key() {
 }
 
 #[test]
-fn z1_as_server_key_only_non_permitted_is_finding_server_key() {
+fn as_server_key_only_non_permitted_is_finding_server_key() {
     let mut store = store_permitting_aes256();
     set_random_keys(&mut store, &PrincipalName::krbtgt(TEST_REALM), &[AES128]);
     let padata = vec![pa_enc_timestamp(&user_key_z1_permitted_key(&store, AES256)).unwrap()];
@@ -1112,7 +1112,7 @@ fn z1_as_server_key_only_non_permitted_is_finding_server_key() {
 }
 
 #[test]
-fn z1_as_client_key_is_chosen_at_the_highest_kvno_only() {
+fn as_client_key_is_chosen_at_the_highest_kvno_only() {
     krb5_config::isolate_test_krb5();
     let (mut store, _) = bootstrap_documented().unwrap();
     let old_aes256 = user_key_z1_permitted_key(&store, AES256);
@@ -1162,7 +1162,7 @@ fn z1_as_client_key_is_chosen_at_the_highest_kvno_only() {
 }
 
 #[test]
-fn z1_enc_ts_under_a_retired_kvno_key_is_preauth_failed() {
+fn enc_ts_under_a_retired_kvno_key_is_preauth_failed() {
     krb5_config::isolate_test_krb5();
     let (mut store, _) = bootstrap_documented().unwrap();
     let stale = user_key_z1_permitted_key(&store, AES256);
@@ -1188,7 +1188,7 @@ fn z1_enc_ts_under_a_retired_kvno_key_is_preauth_failed() {
 }
 
 #[test]
-fn z1_as_client_key_skips_a_non_permitted_requested_etype() {
+fn as_client_key_skips_a_non_permitted_requested_etype() {
     let mut store = store_permitting_aes256();
     set_random_keys(&mut store, &user_name(), &[AES128, AES256]);
     let padata = vec![
@@ -1297,7 +1297,7 @@ fn as_error(fail_id: &str, fault: fn() -> Error) -> (i32, Option<String>) {
 }
 
 #[test]
-fn z1b_as_lookup_faults_are_labelled_like_do_as_req() {
+fn as_lookup_faults_are_labelled_like_do_as_req() {
     let client_id = format!("{TEST_USER}@{TEST_REALM}");
     let tgs_id = format!("krbtgt/{TEST_REALM}@{TEST_REALM}");
     // :588-590 — a client-lookup fault is 60 LOOKING_UP_CLIENT.
@@ -1350,7 +1350,7 @@ fn wire(store: &PrincipalStore, nonce: u32, padata: Vec<PaData>) -> (i32, Option
 }
 
 #[test]
-fn z1b_encts_under_a_non_permitted_etype_is_24_like_filter_preauth_error() {
+fn encts_under_a_non_permitted_etype_is_24_like_filter_preauth_error() {
     krb5_config::isolate_test_krb5();
     let (mut store, _) = bootstrap_documented().unwrap();
     let kdc = krb5_config::KdcConf::parse(
@@ -1374,7 +1374,7 @@ fn z1b_encts_under_a_non_permitted_etype_is_24_like_filter_preauth_error() {
 }
 
 #[test]
-fn z1b_encts_with_an_out_of_range_pausec_is_24_not_60() {
+fn encts_with_an_out_of_range_pausec_is_24_not_60() {
     krb5_config::isolate_test_krb5();
     let (store, _) = bootstrap_documented().unwrap();
     let key = user_key_z1b_preauth_filter(&store, EncryptionType::Aes256CtsHmacSha196);
@@ -1540,7 +1540,7 @@ fn module_wire_error(selector: u8) -> (i32, Option<String>) {
 }
 
 #[test]
-fn z1b_policy_raw_library_code_reaches_the_wire_as_generic_60() {
+fn policy_raw_library_code_reaches_the_wire_as_generic_60() {
     // Outside 0..=128 (a com_err library value the module forgot to map).
     assert_eq!(wire_error_code(1_000_000), err::GENERIC);
     assert_eq!(wire_error_code(-1_765_328_361), err::GENERIC);
@@ -1549,7 +1549,7 @@ fn z1b_policy_raw_library_code_reaches_the_wire_as_generic_60() {
 }
 
 #[test]
-fn z1b_module_failures_pass_through_the_filter_like_kdc_preauth() {
+fn module_failures_pass_through_the_filter_like_kdc_preauth() {
     assert_eq!(
         module_wire_error(0),
         (err::PREAUTH_FAILED, Some("PREAUTH_FAILED".into())),
@@ -1607,7 +1607,7 @@ fn hint_types(err: Error) -> Vec<i32> {
 }
 
 #[test]
-fn z6_hint_omits_enc_ts_when_the_only_key_is_not_permitted() {
+fn hint_omits_enc_ts_when_the_only_key_is_not_permitted() {
     let mut store = store_permitting_aes256_z6_hints();
     set_user_aes128_only(&mut store);
     assert!(store.get_name(&user_name()).unwrap().requires_preauth);
@@ -1632,7 +1632,7 @@ fn z6_hint_omits_enc_ts_when_the_only_key_is_not_permitted() {
 }
 
 #[test]
-fn z6_hint_omits_enc_ts_when_the_only_key_is_not_requested() {
+fn hint_omits_enc_ts_when_the_only_key_is_not_requested() {
     krb5_config::isolate_test_krb5();
     let (mut store, _) = bootstrap_documented().unwrap();
     set_user_aes128_only(&mut store);
@@ -1657,7 +1657,7 @@ fn z6_hint_omits_enc_ts_when_the_only_key_is_not_requested() {
 }
 
 #[test]
-fn z6_fast_hint_omits_enc_challenge_when_have_client_keys_is_false() {
+fn fast_hint_omits_enc_challenge_when_have_client_keys_is_false() {
     let mut store = store_permitting_aes256_z6_hints();
     let key = store
         .get_name(&user_name())
@@ -1753,7 +1753,7 @@ impl KdcPreauth for DiscardMod {
 }
 
 #[test]
-fn z6_cantlock_on_client_is_29_looking_up_client() {
+fn cantlock_on_client_is_29_looking_up_client() {
     let client_id = format!("{TEST_USER}@{TEST_REALM}");
     assert_eq!(
         as_error(&client_id, cantlock),
@@ -1762,7 +1762,7 @@ fn z6_cantlock_on_client_is_29_looking_up_client() {
 }
 
 #[test]
-fn z6_cantlock_on_server_is_29_looking_up_server() {
+fn cantlock_on_server_is_29_looking_up_server() {
     let tgs_id = format!("krbtgt/{TEST_REALM}@{TEST_REALM}");
     assert_eq!(
         as_error(&tgs_id, cantlock),
@@ -1771,7 +1771,7 @@ fn z6_cantlock_on_server_is_29_looking_up_server() {
 }
 
 #[test]
-fn z6_discard_module_failure_is_no_reply() {
+fn discard_module_failure_is_no_reply() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| register_preauth(Arc::new(DiscardMod)));
     let (store, _) = bootstrap_documented().unwrap();

@@ -487,7 +487,7 @@ fn or_attrs(store: &mut PrincipalStore, name: &PrincipalName, bits: u32) {
 }
 
 #[test]
-fn a2_r19_locked_host_pac_mismatch_is_header_pac() {
+fn locked_host_pac_mismatch_is_header_pac() {
     let (mut store, acl) = bootstrap_documented().unwrap();
     let dest = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "locked.kerber.test"]);
     store
@@ -512,7 +512,7 @@ fn a2_r19_locked_host_pac_mismatch_is_header_pac() {
 }
 
 #[test]
-fn a2_r19_dup_skey_beats_tgt_based() {
+fn dup_skey_beats_tgt_based() {
     let (mut store, acl) = bootstrap_documented().unwrap();
     let dest = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "dupskey.kerber.test"]);
     store
@@ -546,7 +546,7 @@ fn a2_r19_dup_skey_beats_tgt_based() {
 }
 
 #[test]
-fn a2_r19_lineage_before_u2u() {
+fn lineage_before_u2u() {
     let (mut store, acl) = bootstrap_documented().unwrap();
     let ir = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x44; 32]).unwrap();
     store
@@ -607,7 +607,7 @@ fn a2_r19_lineage_before_u2u() {
 }
 
 #[test]
-fn a2_r19_expired_caddr_is_badaddr() {
+fn tgs_expired_caddr_is_badaddr() {
     let (store, _) = bootstrap_documented().unwrap();
     let as_out = issue_tgt(&store, TEST_USER, 19040);
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
@@ -634,7 +634,7 @@ fn a2_r19_expired_caddr_is_badaddr() {
 }
 
 #[test]
-fn a2_r19_expired_authenticator_mismatch_is_badmatch() {
+fn expired_authenticator_mismatch_is_badmatch() {
     let (store, _) = bootstrap_documented().unwrap();
     let as_out = issue_tgt(&store, TEST_USER, 19050);
     let tkt = expire_tgt(&store, &as_out);
@@ -654,7 +654,7 @@ fn a2_r19_expired_authenticator_mismatch_is_badmatch() {
 }
 
 #[test]
-fn a2_r19_renew_pac_service_after_krbtgt_enctype_rekey() {
+fn renew_pac_service_after_krbtgt_enctype_rekey() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let as_out = {
         let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);

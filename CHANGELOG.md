@@ -31,6 +31,9 @@ this project uses semantic versioning once a crate is published.
   Protocol 111 (`b1_`/`b2_`/`z1_`/`z7_`/`z8_`);
   `rd_req_authenticator_skew_is_37` → `…_is_skew`.
   Admin 39 (`z1_`/`z1b_`/`z6_`/`z7_`/`z8_`/`c1_`/`c2_`/`a2_r16_`).
+  KDC 145; documented `a2_r19_expired_caddr` / `a4_16_unsigned_anon`
+  rewrites; trailing `_is_24`/`_is_26`/`_is_7`/`_is_still_13` become
+  status words.
 
 ### W3-S2.3 in-src tests by shape
 

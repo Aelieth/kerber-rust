@@ -12,7 +12,7 @@ use krb5_testkit::status;
 use krb5_types::{PrincipalName, err, ku};
 
 #[test]
-fn a4_19_test_policy_fail_client_is_local_policy() {
+fn test_policy_fail_client_is_local_policy() {
     set_thread_policy(std::sync::Arc::new(TestPolicy));
     let (mut store, acl) = bootstrap_documented().unwrap();
     let fail = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["fail"]);
@@ -41,7 +41,7 @@ fn a4_19_test_policy_fail_client_is_local_policy() {
 }
 
 #[test]
-fn a4_19_test_policy_foreign_indicator_is_local_policy() {
+fn test_policy_foreign_indicator_is_local_policy() {
     set_thread_policy(std::sync::Arc::new(TestPolicy));
     let store = krb5_kdc::PrincipalStore::bootstrap(
         TEST_REALM,
@@ -74,7 +74,7 @@ fn a4_19_test_policy_foreign_indicator_is_local_policy() {
 }
 
 #[test]
-fn a4_19_test_policy_one_hour_rewrites_endtime() {
+fn test_policy_one_hour_rewrites_endtime() {
     set_thread_policy(std::sync::Arc::new(TestPolicy));
     let store = krb5_kdc::PrincipalStore::bootstrap(
         TEST_REALM,
@@ -114,7 +114,7 @@ fn a4_19_test_policy_one_hour_rewrites_endtime() {
 }
 
 #[test]
-fn a4_19_bootstrap_honours_supported_enctypes_order() {
+fn bootstrap_honours_supported_enctypes_order() {
     let kdc = krb5_config::KdcConf::parse(
         r"
 [realms]
@@ -147,7 +147,7 @@ fn a4_19_bootstrap_honours_supported_enctypes_order() {
 }
 
 #[test]
-fn a4_19_tgt_hex_must_use_ticket_etype_not_preferred() {
+fn tgt_hex_must_use_ticket_etype_not_preferred() {
     let kdc = krb5_config::KdcConf::parse(
         r"
 [realms]
@@ -258,7 +258,7 @@ fn a4_19_tgt_hex_must_use_ticket_etype_not_preferred() {
 }
 
 #[test]
-fn a4_19_tgs_key_exp_is_omitted() {
+fn tgs_key_exp_is_omitted() {
     let (store, _) = bootstrap_documented().unwrap();
     let key = store
         .get_name(&PrincipalName::new(

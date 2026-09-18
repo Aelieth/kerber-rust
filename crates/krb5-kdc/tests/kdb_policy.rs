@@ -29,7 +29,7 @@ fn rejected(r: Result<(), Error>) -> String {
 }
 
 #[test]
-fn c1_empty_password_is_rejected_without_a_policy() {
+fn empty_password_is_rejected_without_a_policy() {
     let (mut store, _acl) = bootstrap_documented().unwrap();
     assert_eq!(
         rejected(store.check_new_password(&name("nopol"), None, b"")),
@@ -44,7 +44,7 @@ fn c1_empty_password_is_rejected_without_a_policy() {
 }
 
 #[test]
-fn c1_principal_component_and_realm_match_are_rejected_only_with_a_policy() {
+fn principal_component_and_realm_match_are_rejected_only_with_a_policy() {
     let (mut store, _acl) = bootstrap_documented().unwrap();
     store.put_policy(NamedPolicy::new("pq"));
     let pqu = name("pqu");
@@ -88,7 +88,7 @@ fn c1_principal_component_and_realm_match_are_rejected_only_with_a_policy() {
 }
 
 #[test]
-fn c1_dict_file_words_are_rejected_case_insensitively_only_with_a_policy() {
+fn dict_file_words_are_rejected_case_insensitively_only_with_a_policy() {
     let dir = scratch_dir("c1-dict");
     let dict = dir.join("dict.txt");
     std::fs::write(&dict, "zebra\ncorrecthorse\napple\nunterminated").unwrap();

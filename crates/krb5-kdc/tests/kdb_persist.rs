@@ -397,7 +397,7 @@ fn tl_mod_name(p: &krb5_kdc::Principal) -> Option<String> {
 }
 
 #[test]
-fn z6_create_stamps_the_authenticated_caller() {
+fn create_stamps_the_authenticated_caller() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let actor = "joe/admin@KERBER.TEST";
     let acl = Acl::allow_admin(actor).unwrap();
@@ -421,7 +421,7 @@ fn z6_create_stamps_the_authenticated_caller() {
 }
 
 #[test]
-fn z7_bootstrap_krbtgt_is_stamped_db_creation() {
+fn bootstrap_krbtgt_is_stamped_db_creation() {
     let (store, _) = bootstrap_documented().unwrap();
     let tgt = PrincipalName::krbtgt(TEST_REALM);
     let p = store.get_name(&tgt).expect("krbtgt");
@@ -434,7 +434,7 @@ fn z7_bootstrap_krbtgt_is_stamped_db_creation() {
 }
 
 #[test]
-fn z8_bootstrap_kadmin_services_are_stamped_kdb5_util() {
+fn bootstrap_kadmin_services_are_stamped_kdb5_util() {
     let (store, _) = bootstrap_documented().unwrap();
     for (label, name) in [
         ("kadmin/admin", documented_kadmin()),
@@ -458,7 +458,7 @@ fn z8_bootstrap_kadmin_services_are_stamped_kdb5_util() {
 }
 
 #[test]
-fn z8_purgekeys_stamps_the_mod_actor() {
+fn purgekeys_stamps_the_mod_actor() {
     let (mut store, acl) = bootstrap_documented().unwrap();
     let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["z8pk"]);
     store
@@ -480,7 +480,7 @@ fn z8_purgekeys_stamps_the_mod_actor() {
 }
 
 #[test]
-fn z8_setstr_stamps_the_mod_actor() {
+fn setstr_stamps_the_mod_actor() {
     let (mut store, acl) = bootstrap_documented().unwrap();
     let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["z8str"]);
     store

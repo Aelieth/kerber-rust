@@ -270,7 +270,7 @@ fn tgt_part_a3_r27(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs) -> EncTi
 }
 
 #[test]
-fn r27_s4u2self_caps_endtime_at_impersonated_max_life() {
+fn s4u2self_caps_endtime_at_impersonated_max_life() {
     let (mut store, _) = bootstrap_documented().unwrap();
     store
         .apply_admin_fields(&admin(), None, Some(60), None, None, None, false, None)
@@ -289,7 +289,7 @@ fn r27_s4u2self_caps_endtime_at_impersonated_max_life() {
 }
 
 #[test]
-fn r27_s4u2self_disallow_renewable_user_has_no_r() {
+fn s4u2self_disallow_renewable_user_has_no_r() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let a = store.get_name(&admin()).unwrap().attributes | KDB_DISALLOW_RENEWABLE;
     store
@@ -302,7 +302,7 @@ fn r27_s4u2self_disallow_renewable_user_has_no_r() {
 }
 
 #[test]
-fn r27_tgs_expired_server_beats_require_auth() {
+fn tgs_expired_server_beats_require_auth() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let host = documented_host();
     let issued = user_as(&store, 27031);
@@ -332,7 +332,7 @@ fn r27_tgs_expired_server_beats_require_auth() {
 }
 
 #[test]
-fn r27_tgs_postdated_omitted_from_is_epoch() {
+fn tgs_postdated_omitted_from_is_epoch() {
     let (store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 27041);
     // Authtime must be in the past so omitted from (epoch) is not NYV.
@@ -789,7 +789,7 @@ fn reseal_tgt(
 }
 
 #[test]
-fn z1_tgs_header_tgt_without_starttime_and_future_authtime_is_nyv() {
+fn tgs_header_tgt_without_starttime_and_future_authtime_is_nyv() {
     krb5_config::isolate_test_krb5();
     let (store, _) = bootstrap_documented().unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);

@@ -26,7 +26,7 @@ use krb5_types::{KdcOptions, PrincipalName, err, flag_bit, ku};
 use std::collections::BTreeMap;
 
 #[test]
-fn a4_18_alternate_tgs_issues_near_hop() {
+fn alternate_tgs_issues_near_hop() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     store
         .create_interrealm(
@@ -62,7 +62,7 @@ fn a4_18_alternate_tgs_issues_near_hop() {
 }
 
 #[test]
-fn a4_18_alternate_tgs_without_hop_is_unknown_server() {
+fn alternate_tgs_without_hop_is_unknown_server() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 1803);
@@ -131,7 +131,7 @@ fn tgs_for(
 }
 
 #[test]
-fn a4_18_host_fqdn_canonicalize_issues_referral() {
+fn host_fqdn_canonicalize_issues_referral() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     other_store(&mut store, &acl);
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "x.other.test"]);
@@ -164,7 +164,7 @@ fn a4_18_host_fqdn_canonicalize_issues_referral() {
 }
 
 #[test]
-fn a4_18_referral_no_dot_is_looking_up_server() {
+fn referral_no_dot_is_looking_up_server() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     other_store(&mut store, &acl);
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "nodot"]);
@@ -179,7 +179,7 @@ fn a4_18_referral_no_dot_is_looking_up_server() {
 }
 
 #[test]
-fn a4_18_nt_unknown_needs_host_based_services() {
+fn nt_unknown_needs_host_based_services() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     other_store(&mut store, &acl);
     let host = PrincipalName::new(PrincipalName::NT_UNKNOWN, ["host", "x.other.test"]);
@@ -198,7 +198,7 @@ fn a4_18_nt_unknown_needs_host_based_services() {
 }
 
 #[test]
-fn a4_18_no_host_referral_star_blocks() {
+fn no_host_referral_star_blocks() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     other_store(&mut store, &acl);
     store.policy.no_host_referral = "*".into();
@@ -214,7 +214,7 @@ fn a4_18_no_host_referral_star_blocks() {
 }
 
 #[test]
-fn a4_18_renew_skips_alternate_tgs() {
+fn renew_skips_alternate_tgs() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     other_store(&mut store, &acl);
     let mut hops = std::collections::BTreeMap::new();
@@ -237,7 +237,7 @@ fn a4_18_renew_skips_alternate_tgs() {
 }
 
 #[test]
-fn a4_18_s4u2self_case2_cross_local_user_referral_issues() {
+fn s4u2self_case2_cross_local_user_referral_issues() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     let ir = aes_key(0x44);
     store
@@ -289,7 +289,7 @@ fn a4_18_s4u2self_case2_cross_local_user_referral_issues() {
 }
 
 #[test]
-fn a4_18_s4u2self_case3_cross_foreign_user_referral_issues() {
+fn s4u2self_case3_cross_foreign_user_referral_issues() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     let ir = aes_key(0x55);
     store
@@ -340,7 +340,7 @@ fn a4_18_s4u2self_case3_cross_foreign_user_referral_issues() {
 }
 
 #[test]
-fn a4_18_s4u2self_local_tgt_referral_is_looking_up_server() {
+fn s4u2self_local_tgt_referral_is_looking_up_server() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     other_store(&mut store, &acl);
     let tgt = host_tgt(&store, 1870);
@@ -372,7 +372,7 @@ fn a4_18_s4u2self_local_tgt_referral_is_looking_up_server() {
 }
 
 #[test]
-fn a4_18_s4u2proxy_referral_without_rbcd_is_unsupported() {
+fn s4u2proxy_referral_without_rbcd_is_unsupported() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     other_store(&mut store, &acl);
     let evidence = evidence_for_user(&store, 1880);
@@ -423,7 +423,7 @@ fn a4_18_s4u2proxy_referral_without_rbcd_is_unsupported() {
 }
 
 #[test]
-fn a4_18_s4u2proxy_referral_with_rbcd_issues() {
+fn s4u2proxy_referral_with_rbcd_issues() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     other_store(&mut store, &acl);
     let host = documented_host();
@@ -497,7 +497,7 @@ fn a4_18_s4u2proxy_referral_with_rbcd_issues() {
 }
 
 #[test]
-fn f4_hier_alternate_issues_sub_realm() {
+fn hier_alternate_issues_sub_realm() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     store
         .create_interrealm(
@@ -528,7 +528,7 @@ fn f4_hier_alternate_issues_sub_realm() {
 }
 
 #[test]
-fn f4_hier_common_zero_issues_org_hop() {
+fn hier_common_zero_issues_org_hop() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     store
         .create_interrealm(&acl, &documented_admin_id(), "ORG", b"interrealm-secret")
@@ -551,7 +551,7 @@ fn f4_hier_common_zero_issues_org_hop() {
 }
 
 #[test]
-fn f4_referral_numeric_ipv4_is_looking_up_server() {
+fn referral_numeric_ipv4_is_looking_up_server() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     store
         .create_interrealm(
@@ -593,7 +593,7 @@ fn f4_referral_numeric_ipv4_is_looking_up_server() {
 }
 
 #[test]
-fn f4_explicit_cross_tgs_keeps_request_name_type() {
+fn explicit_cross_tgs_keeps_request_name_type() {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
     store
         .create_interrealm(

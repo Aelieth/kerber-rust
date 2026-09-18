@@ -13,7 +13,7 @@ use krb5_protocol::{
 use krb5_types::{KrbError, PrincipalName, ascii, err, flag_bit, pa};
 
 #[test]
-fn a4_16_named_anon_without_preauth_is_still_13() {
+fn named_anon_without_preauth_is_validate_anonymous() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let mut req = as_req(cname, TEST_REALM, 57, None).unwrap();
@@ -64,7 +64,7 @@ fn unsigned_anon_as(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
 }
 
 #[test]
-fn a4_16_restrict_anon_as_to_host() {
+fn restrict_anon_as_to_host() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     store.policy.restrict_anon = true;
     insert_anonymous(&mut store);
@@ -91,7 +91,7 @@ fn a4_16_restrict_anon_as_to_host() {
 }
 
 #[test]
-fn a4_16_restrict_anon_as_to_local_tgt() {
+fn restrict_anon_as_to_local_tgt() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     store.policy.restrict_anon = true;
     insert_anonymous(&mut store);
@@ -115,7 +115,7 @@ fn a4_16_restrict_anon_as_to_local_tgt() {
 }
 
 #[test]
-fn a4_16_anonymous_pkinit_issues_kx() {
+fn anonymous_pkinit_issues_kx() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     store.enable_pkinit_ca().expect("PKINIT CA");
     let ca = store.pkinit_ca().expect("CA").clone();
@@ -184,7 +184,7 @@ fn a4_16_anonymous_pkinit_issues_kx() {
 }
 
 #[test]
-fn a4_16_restrict_anon_tgs_to_host() {
+fn restrict_anon_tgs_to_host() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     store.enable_pkinit_ca().expect("PKINIT CA");
     insert_anonymous(&mut store);
@@ -209,7 +209,7 @@ fn a4_16_restrict_anon_tgs_to_host() {
 }
 
 #[test]
-fn a4_16_anonymous_tgt_fast_armor() {
+fn anonymous_tgt_fast_armor() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     store.enable_pkinit_ca().expect("PKINIT CA");
     insert_anonymous(&mut store);
@@ -234,7 +234,7 @@ fn a4_16_anonymous_tgt_fast_armor() {
 }
 
 #[test]
-fn a4_16_unsigned_anon_name_without_anon_bit_is_24() {
+fn anon_unsigned_authpack_named_client_is_preauth_failed() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     store.enable_pkinit_ca().expect("PKINIT CA");
     insert_anonymous(&mut store);
@@ -259,7 +259,7 @@ fn a4_16_unsigned_anon_name_without_anon_bit_is_24() {
 }
 
 #[test]
-fn a4_16_unsigned_pkinit_named_is_24() {
+fn unsigned_pkinit_named_is_preauth_failed() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     store.enable_pkinit_ca().expect("PKINIT CA");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);

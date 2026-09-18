@@ -1521,7 +1521,7 @@ mod a2_r17_reply {
     use krb5_types::s4u::{PaS4uX509User, S4uUserId, s4u_reply_key_usage_flags};
 
     #[test]
-    fn a2_r17_reply_130_omits_subject_cert() {
+    fn reply_130_omits_subject_cert() {
         let key =
             ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x42; 32]).expect("key");
         let req = PaS4uX509User {

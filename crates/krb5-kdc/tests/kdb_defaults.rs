@@ -53,7 +53,7 @@ fn kdc_conf(realm_lines: &str) -> krb5_config::KdcConf {
 }
 
 #[test]
-fn z1_default_principal_flags_is_params_flags_for_a_create() {
+fn default_principal_flags_is_params_flags_for_a_create() {
     let (mut store, _) = bootstrap_documented().unwrap();
     store
         .apply_kdc_conf(&kdc_conf(
@@ -128,7 +128,7 @@ fn z1_default_principal_flags_is_params_flags_for_a_create() {
 }
 
 #[test]
-fn z1_create_without_expire_takes_default_principal_expiration() {
+fn create_without_expire_takes_default_principal_expiration() {
     let (mut store, _) = bootstrap_documented().unwrap();
     store
         .apply_kdc_conf(&kdc_conf(
@@ -164,7 +164,7 @@ fn z1_create_without_expire_takes_default_principal_expiration() {
 }
 
 #[test]
-fn z1_create_without_max_life_takes_params_max_life() {
+fn create_without_max_life_takes_params_max_life() {
     let (mut store, _) = bootstrap_documented().unwrap();
     store
         .apply_kdc_conf(&kdc_conf("        max_life = 1h 30m\n"))
@@ -184,7 +184,7 @@ fn z1_create_without_max_life_takes_params_max_life() {
 }
 
 #[test]
-fn z1_impose_acl_restrictions_on_an_empty_request_takes_every_cap() {
+fn impose_acl_restrictions_on_an_empty_request_takes_every_cap() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let acl =
         Acl::parse("admin@KERBER.TEST * *@KERBER.TEST -maxlife 1h -maxrenewlife 2h\n").unwrap();

@@ -33,7 +33,7 @@ use krb5_types::{
 };
 
 #[test]
-fn a4_16_fast_hide_as_error_client() {
+fn fast_hide_as_error_client() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let armor_as = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 223);
@@ -1351,7 +1351,7 @@ fn assert_find_fast_z6_armor_enctype(err: krb5_kdc::Error, code: i32) {
 }
 
 #[test]
-fn z6_armor_tgt_under_a_non_permitted_etype_is_generic_find_fast() {
+fn armor_tgt_under_a_non_permitted_etype_is_generic_find_fast() {
     let mut store = store_permitting_aes256();
     set_krbtgt_keys(
         &mut store,
@@ -1374,7 +1374,7 @@ fn z6_armor_tgt_under_a_non_permitted_etype_is_generic_find_fast() {
 }
 
 #[test]
-fn z6_armor_tgt_labelled_n_sealed_under_n_plus_1_is_bad_integrity() {
+fn armor_tgt_labelled_n_sealed_under_n_plus_1_is_bad_integrity() {
     let (mut store, _) = bootstrap_documented().unwrap();
     set_krbtgt_keys(
         &mut store,

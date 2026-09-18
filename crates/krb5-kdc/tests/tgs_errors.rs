@@ -38,7 +38,7 @@ fn rewrite_server_cksumtype(part: &mut krb5_types::EncTicketPart, ctype: i32) {
 }
 
 #[test]
-fn a2_r23_header_pac_wrong_cksumtype_is_generic() {
+fn header_pac_wrong_cksumtype_is_generic() {
     let (store, _) = bootstrap_documented().unwrap();
     let as_out = issue_tgt(&store, TEST_USER, 23000);
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
@@ -66,7 +66,7 @@ fn a2_r23_header_pac_wrong_cksumtype_is_generic() {
 }
 
 #[test]
-fn a2_r23_u2u_stkt_pac_wrong_cksumtype_is_generic() {
+fn u2u_stkt_pac_wrong_cksumtype_is_generic() {
     let (store, _) = bootstrap_documented().unwrap();
     let host = host_tgt(&store, 23010);
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();

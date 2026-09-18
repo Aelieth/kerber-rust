@@ -145,7 +145,7 @@ fn unwrapped_tgs_rep(tgt: &AsOutcome, wire: &[u8]) -> Vec<u8> {
 }
 
 #[test]
-fn r33_tgs_unwrapped_fast_is_accepted() {
+fn tgs_unwrapped_fast_is_accepted() {
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
     udp.set_read_timeout(Some(Duration::from_millis(50)))
         .unwrap();
@@ -269,7 +269,7 @@ fn wrap_tgs_fast_opts(
 }
 
 #[test]
-fn a4_16_tgs_fast_hide_outer_tgs_rep() {
+fn tgs_fast_hide_outer_tgs_rep() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 851);

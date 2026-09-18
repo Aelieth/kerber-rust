@@ -338,7 +338,7 @@ fn proxy_cross(
 }
 
 #[test]
-fn a2_r18_local_s4u2proxy_client_info_omits_realm() {
+fn local_s4u2proxy_client_info_omits_realm() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
     store.allow_s4u_to(&user, &documented_host().components_joined());
@@ -435,7 +435,7 @@ fn a2_r18_local_s4u2proxy_client_info_omits_realm() {
 }
 
 #[test]
-fn a2_r18_cross_stkt_realm_mismatch_is_xrealm() {
+fn cross_stkt_realm_mismatch_is_xrealm() {
     let (store, ir) = cross_store();
     let (header, session) = foreign_host_header(&store, &ir, 18100);
     let ev = cross_evidence(
@@ -453,7 +453,7 @@ fn a2_r18_cross_stkt_realm_mismatch_is_xrealm() {
 }
 
 #[test]
-fn a2_r18_cross_pac_without_realm_is_rbcd_pac_princ() {
+fn cross_pac_without_realm_is_rbcd_pac_princ() {
     let (store, ir) = cross_store();
     let (header, session) = foreign_host_header(&store, &ir, 18200);
     let ev = cross_evidence(&store, &ir, 18210, FOREIGN, SUBJECT);
@@ -465,7 +465,7 @@ fn a2_r18_cross_pac_without_realm_is_rbcd_pac_princ() {
 }
 
 #[test]
-fn a2_r18_cross_tkt_client_realm_is_transited() {
+fn cross_tkt_client_realm_is_transited() {
     let (store, ir) = cross_store();
     let (header, session) = foreign_host_header(&store, &ir, 18250);
     let ev = cross_evidence(
@@ -483,7 +483,7 @@ fn a2_r18_cross_tkt_client_realm_is_transited() {
 }
 
 #[test]
-fn a2_r18_cross_issues_pac_client_and_realm() {
+fn cross_issues_pac_client_and_realm() {
     let (mut store, ir) = cross_store();
     store.policy.reject_bad_transit = false;
     let (header, session) = foreign_host_header(&store, &ir, 18300);
@@ -637,14 +637,14 @@ fn store_with_ir() -> (PrincipalStore, ProtocolKey) {
 }
 
 #[test]
-fn a2_r22_create_host_has_no_s4u_from() {
+fn create_host_has_no_s4u_from() {
     let (store, _) = bootstrap_documented().unwrap();
     let host = store.get_name(&documented_host()).expect("host");
     assert!(host.s4u_allowed_from.is_empty());
 }
 
 #[test]
-fn a2_r22_foreign_impersonator_vs_local_grant_is_not_allowed() {
+fn foreign_impersonator_vs_local_grant_is_not_allowed() {
     let (mut store, ir) = store_with_ir();
     store.allow_s4u_from(&extra_host(), &documented_host().components_joined());
     let (header, session) = foreign_header(&store, &ir, 22000);
@@ -657,7 +657,7 @@ fn a2_r22_foreign_impersonator_vs_local_grant_is_not_allowed() {
 }
 
 #[test]
-fn a2_r22_realm_qualified_foreign_grant_matches() {
+fn realm_qualified_foreign_grant_matches() {
     let (mut store, ir) = store_with_ir();
     store.allow_s4u_from(
         &extra_host(),

@@ -96,7 +96,7 @@ fn password_as_tgt() -> AsOutcome {
 }
 
 #[test]
-fn r30_verify_support_unpermitted_offer_is_24() {
+fn verify_support_unpermitted_offer_is_preauth_failed() {
     let (store, _) = bootstrap_documented().unwrap();
     let req = as_req(
         user(),
@@ -110,7 +110,7 @@ fn r30_verify_support_unpermitted_offer_is_24() {
 }
 
 #[test]
-fn r30_pkinit_hint_is_16_147() {
+fn pkinit_hint_is_16_147() {
     let (mut store, _) = bootstrap_documented().unwrap();
     store.enable_pkinit_ca().unwrap();
     let req = as_req(user(), TEST_REALM, 30004, None).unwrap();
@@ -131,7 +131,7 @@ fn r30_pkinit_hint_is_16_147() {
 }
 
 #[test]
-fn r30_tgs_after_password_as_is_fast_armored() {
+fn tgs_after_password_as_is_fast_armored() {
     use std::io::{Read, Write};
     use std::net::TcpListener;
 
@@ -204,7 +204,7 @@ fn r30_tgs_after_password_as_is_fast_armored() {
 }
 
 #[test]
-fn r33_empty_groups_stray_pa_spake_is_skipped() {
+fn empty_groups_stray_pa_spake_is_skipped() {
     let (mut store, _) = bootstrap_documented().unwrap();
     store.policy.spake_preauth_groups.clear();
     let princ = user();

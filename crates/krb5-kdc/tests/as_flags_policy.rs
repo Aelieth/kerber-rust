@@ -124,7 +124,7 @@ fn pkinit_as(store: &PrincipalStore, nonce: u32) -> Result<krb5_kdc::IssuedAs, E
 }
 
 #[test]
-fn r32_pkinit_tgt_has_no_hw_authent() {
+fn pkinit_tgt_has_no_hw_authent() {
     let (mut store, _) = bootstrap_documented().unwrap();
     store.enable_pkinit_ca().unwrap();
     let part = tgt_part_a3_r32(&store, &pkinit_as(&store, 32001).unwrap());
@@ -133,7 +133,7 @@ fn r32_pkinit_tgt_has_no_hw_authent() {
 }
 
 #[test]
-fn r32_pkinit_client_requires_hwauth_is_needed_hw_preauth() {
+fn pkinit_client_requires_hwauth_is_needed_hw_preauth() {
     let (mut store, _) = bootstrap_documented().unwrap();
     store.enable_pkinit_ca().unwrap();
     or_attr(&mut store, &user(), KDB_REQUIRES_HW_AUTH);
@@ -163,7 +163,7 @@ fn r32_pkinit_client_requires_hwauth_is_needed_hw_preauth() {
 }
 
 #[test]
-fn r32_pkinit_tgs_requires_hwauth_is_no_hw_preauth() {
+fn pkinit_tgs_requires_hwauth_is_no_hw_preauth() {
     let (mut store, _) = bootstrap_documented().unwrap();
     store.enable_pkinit_ca().unwrap();
     let host = documented_host();
@@ -189,7 +189,7 @@ fn r32_pkinit_tgs_requires_hwauth_is_no_hw_preauth() {
 }
 
 #[test]
-fn r32_renew_header_end_before_start_is_expired() {
+fn renew_header_end_before_start_is_expired() {
     let (store, _) = bootstrap_documented().unwrap();
     let key = store
         .get_name(&user())

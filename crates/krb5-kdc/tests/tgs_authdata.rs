@@ -455,7 +455,7 @@ fn and_or_ad(blob: &[u8]) -> AuthorizationData {
 }
 
 #[test]
-fn r28_pac_is_first_authdata() {
+fn pac_is_first_authdata() {
     let (store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 28001);
     let blob = b"r28-pac-first";
@@ -483,7 +483,7 @@ fn r28_pac_is_first_authdata() {
 }
 
 #[test]
-fn r28_greet_is_kdc_issued() {
+fn greet_is_kdc_issued() {
     register_authdata(Arc::new(GreetAuth));
     let (store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 28011);
@@ -509,7 +509,7 @@ fn r28_greet_is_kdc_issued() {
 }
 
 #[test]
-fn r28_greet_precedes_copied_ad() {
+fn greet_precedes_copied_ad() {
     register_authdata(Arc::new(GreetAuth));
     let (store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 28021);
@@ -544,7 +544,7 @@ fn r28_greet_precedes_copied_ad() {
 }
 
 #[test]
-fn r28_body_ad_subkey_ku5_is_copied() {
+fn body_ad_subkey_ku5_is_copied() {
     let (store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 28031);
     let blob = b"r28-subkey-ku5";
@@ -569,7 +569,7 @@ fn r28_body_ad_subkey_ku5_is_copied() {
 }
 
 #[test]
-fn r28_body_ad_session_ku5_is_copied() {
+fn body_ad_session_ku5_is_copied() {
     let (store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 28041);
     let blob = b"r28-session-ku5";
@@ -597,7 +597,7 @@ fn r28_body_ad_session_ku5_is_copied() {
 }
 
 #[test]
-fn r28_tgt_and_or_kept_through_tgs() {
+fn tgt_and_or_kept_through_tgs() {
     let (store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 28051);
     let keep = b"r28-tgt-keep";
@@ -733,42 +733,42 @@ fn expect_higher(
 }
 
 #[test]
-fn r29_cammac_rsa_md5_kdcver_is_skipped() {
+fn cammac_rsa_md5_kdcver_is_skipped() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 29001);
     expect_higher(&mut store, &issued, 7, 29002);
 }
 
 #[test]
-fn r29_cammac_sha1_kdcver_is_skipped() {
+fn cammac_sha1_kdcver_is_skipped() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 29003);
     expect_higher(&mut store, &issued, 14, 29004);
 }
 
 #[test]
-fn r29_cammac_md4_kdcver_is_skipped() {
+fn cammac_md4_kdcver_is_skipped() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 29005);
     expect_higher(&mut store, &issued, 2, 29006);
 }
 
 #[test]
-fn r29_cammac_nist_sha_kdcver_is_skipped() {
+fn cammac_nist_sha_kdcver_is_skipped() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 29007);
     expect_higher(&mut store, &issued, 9, 29008);
 }
 
 #[test]
-fn r29_cammac_cksumtype_zero_kdcver_is_skipped() {
+fn cammac_cksumtype_zero_kdcver_is_skipped() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 29009);
     expect_higher(&mut store, &issued, 0, 29010);
 }
 
 #[test]
-fn r29_cammac_unkeyed_does_not_satisfy_any_match() {
+fn cammac_unkeyed_does_not_satisfy_any_match() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 29011);
     let ticket = attach_cammac(&store, &issued, 7);

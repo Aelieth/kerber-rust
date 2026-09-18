@@ -63,7 +63,7 @@ fn capture_as(nonce: u32) -> String {
 }
 
 #[test]
-fn a4_20_as_issue_log_has_client_server_etypes() {
+fn as_issue_log_has_client_server_etypes() {
     let log = capture_as(2001);
     assert!(log.contains("ISSUE"), "missing ISSUE: {log}");
     assert!(log.contains("user@KERBER.TEST"), "missing client: {log}");
@@ -75,7 +75,7 @@ fn a4_20_as_issue_log_has_client_server_etypes() {
 }
 
 #[test]
-fn a4_20_as_issue_log_has_authtime_and_kind() {
+fn as_issue_log_has_authtime_and_kind() {
     let log = capture_as(2002);
     assert!(
         log.contains("AS_REQ") || log.contains("kind"),
@@ -85,7 +85,7 @@ fn a4_20_as_issue_log_has_authtime_and_kind() {
 }
 
 #[test]
-fn a4_20_tkt_id_is_sha256_of_ticket_ciphertext() {
+fn tkt_id_is_sha256_of_ticket_ciphertext() {
     let (store, _) = bootstrap_documented().unwrap();
     let key = store
         .get_name(&user())
@@ -121,7 +121,7 @@ fn a4_20_tkt_id_is_sha256_of_ticket_ciphertext() {
 }
 
 #[test]
-fn a4_20_test_audit_writes_mit_field_names() {
+fn test_audit_writes_mit_field_names() {
     let dir = scratch_dir("a4-20-audit");
     let path = dir.join("au.log");
     let sink = TestAudit::open(&path).unwrap();
@@ -187,7 +187,7 @@ fn a4_20_test_audit_writes_mit_field_names() {
 }
 
 #[test]
-fn a4_20_ktypes2str_matches_mit() {
+fn ktypes2str_matches_mit() {
     assert_eq!(
         ktypes2str(&[18, 17, 20, 19]),
         "4 etypes {aes256-cts-hmac-sha1-96(18), aes128-cts-hmac-sha1-96(17), aes256-cts-hmac-sha384-192(20), aes128-cts-hmac-sha256-128(19)}"
@@ -213,7 +213,7 @@ fn json_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
 }
 
 #[test]
-fn f5_tgs_seed_is_authn_req_cl_without_tkt_out() {
+fn tgs_seed_is_authn_req_cl_without_tkt_out() {
     let dir = scratch_dir("f5-tgs-seed");
     let path = dir.join("au.log");
     set_thread_audit(Arc::new(TestAudit::open(&path).unwrap()));
@@ -258,7 +258,7 @@ fn f5_tgs_seed_is_authn_req_cl_without_tkt_out() {
 }
 
 #[test]
-fn f5_unknown_server_failure_is_srvc_princ() {
+fn unknown_server_failure_is_srvc_princ() {
     let dir = scratch_dir("f5-tgs-srvc");
     let path = dir.join("au.log");
     set_thread_audit(Arc::new(TestAudit::open(&path).unwrap()));

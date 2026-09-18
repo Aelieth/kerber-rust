@@ -50,7 +50,7 @@ fn pw_expiration_on_modify_is_last_pwd_change_plus_max_life() {
 }
 
 #[test]
-fn r30_spake_not_advertised_without_groups() {
+fn spake_not_advertised_without_groups() {
     let (mut store, _) = krb5_kdc::bootstrap_documented().unwrap();
     store.policy.spake_preauth_groups.clear();
     let req = krb5_protocol::as_req(

@@ -86,7 +86,7 @@ fn inject_pkauth_freshness(authpack: &[u8], token: &[u8]) -> Vec<u8> {
 }
 
 #[test]
-fn a4_17_empty_150_hint_carries_populated_token() {
+fn empty_150_hint_carries_populated_token() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     store.enable_pkinit_ca().expect("PKINIT CA");
     let mut req = as_req(user(), TEST_REALM, 1701, None).unwrap();
@@ -113,7 +113,7 @@ fn a4_17_empty_150_hint_carries_populated_token() {
 }
 
 #[test]
-fn a4_17_stale_freshness_token_is_24() {
+fn stale_freshness_token_is_preauth_failed() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     store.enable_pkinit_ca().expect("PKINIT CA");
     let ca = store.pkinit_ca().expect("CA").clone();
@@ -177,7 +177,7 @@ fn hint_token(store: &krb5_kdc::PrincipalStore) -> Vec<u8> {
 }
 
 #[test]
-fn a4_17_no_150_in_request_omits_token_from_hint() {
+fn no_150_in_request_omits_token_from_hint() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     store.enable_pkinit_ca().expect("PKINIT CA");
     let req = as_req(user(), TEST_REALM, 1711, None).unwrap();
@@ -192,7 +192,7 @@ fn a4_17_no_150_in_request_omits_token_from_hint() {
 }
 
 #[test]
-fn a4_17_require_freshness_signed_without_token_is_24() {
+fn require_freshness_signed_without_token_is_preauth_failed() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     store.enable_pkinit_ca().expect("PKINIT CA");
     store.policy.pkinit_require_freshness = true;
@@ -219,7 +219,7 @@ fn a4_17_require_freshness_signed_without_token_is_24() {
 }
 
 #[test]
-fn a4_17_require_freshness_signed_with_token_issues() {
+fn require_freshness_signed_with_token_issues() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     store.enable_pkinit_ca().expect("PKINIT CA");
     store.policy.pkinit_require_freshness = true;
@@ -250,7 +250,7 @@ fn a4_17_require_freshness_signed_with_token_issues() {
 }
 
 #[test]
-fn a4_17_require_freshness_unsigned_without_token_issues() {
+fn require_freshness_unsigned_without_token_issues() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     store.enable_pkinit_ca().expect("PKINIT CA");
     store.policy.pkinit_require_freshness = true;
