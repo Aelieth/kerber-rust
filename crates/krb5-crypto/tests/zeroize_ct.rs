@@ -8,7 +8,7 @@
 
 use krb5_crypto::{
     DerivedKeys, DhKeypair, EncryptionType, Error, KeyUsage, OAKLEY_2048, ProtocolKey, checksum,
-    decrypt, derive_keys, dh_generate, encrypt_with_confounder,
+    decrypt, derive_keys, dh_generate, encrypt_with_confounder, verify_checksum_type,
 };
 
 const KEY_RS: &str = include_str!("../src/key.rs");
@@ -18,6 +18,7 @@ const PKINIT_CLIENT_RS: &str = include_str!("../../krb5-protocol/src/as_ex.rs");
 const ENCRYPTION_KEY_RS: &str = include_str!("../../krb5-types/src/lib.rs");
 const AUTHPACK_RS: &str = include_str!("../../krb5-types/src/pkinit.rs");
 const STORE_RS: &str = include_str!("../../krb5-kdc/src/store.rs");
+const OPS_RS: &str = include_str!("../src/ops.rs");
 
 fn hex(s: &str) -> Vec<u8> {
     let s: String = s.chars().filter(|c| !c.is_whitespace()).collect();
@@ -113,6 +114,11 @@ fn mac_verify_rejects_one_bit_flip() {
 
 #[test]
 fn checksum_bit_flip_is_integrity() {
+    assert!(
+        OPS_RS.contains("let expected = keyed_checksum_for_type")
+            && OPS_RS.contains("mac_verify(mac, &expected)"),
+        "verify_checksum_type must compare with mac_verify"
+    );
     let usage = KeyUsage::new(2).unwrap();
     let key = ProtocolKey::from_bytes(
         EncryptionType::Aes128CtsHmacSha256128,
@@ -122,7 +128,10 @@ fn checksum_bit_flip_is_integrity() {
     let data = b"one-bit-flip";
     let mut mac = checksum(&key, usage, data).unwrap();
     mac[0] ^= 0x01;
-    assert_ne!(mac, checksum(&key, usage, data).unwrap());
+    assert_eq!(
+        verify_checksum_type(&key, usage, data, 0, &mac).unwrap_err(),
+        Error::Integrity
+    );
 }
 
 #[test]
