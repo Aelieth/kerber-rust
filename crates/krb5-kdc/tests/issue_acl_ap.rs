@@ -11,9 +11,8 @@ use krb5_kdc::{
     KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_LOCKDOWN_KEYS,
     KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH,
     KDB_REQUIRES_PRE_AUTH, KDB_REQUIRES_PWCHANGE, PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER,
-    acl_for_store, as_req, bootstrap_documented, default_acl_path,
-    documented_admin_id, documented_changepw, documented_host, documented_kadmin, pa_enc_timestamp,
-    tgs_req,
+    acl_for_store, as_req, bootstrap_documented, default_acl_path, documented_admin_id,
+    documented_changepw, documented_host, documented_kadmin, pa_enc_timestamp, tgs_req,
 };
 use krb5_protocol::Keytab;
 use krb5_protocol::{ReplayCache, as_req_sname, build_ap_req, verify_ap_req};
