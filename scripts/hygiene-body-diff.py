@@ -57,6 +57,11 @@ HELPERS = (
     "user_as_bits",
     "status",
     "expect_status",
+    "protocol_code",
+    "proto_code",
+    "proto",
+    "err_of",
+    "err_of_cname",
     "password_key",
     "pref_etypes",
     "aes_key",
@@ -67,24 +72,33 @@ HELPERS = (
     "reseal",
     "reseal_with",
     "reseal_ticket",
+    "reseal_mut",
+    "reseal_store",
+    "reseal_tgt",
+    "reseal_incoming",
     "s4u_tgs",
+    "s4u_self",
+    "s4u_admin",
     "s4u_req",
     "evidence_for_user",
     "wrap_if_relevant",
     "user",
     "admin",
     "krbtgt",
+    "cname",
+    "krbtgt_name",
     "documented_host",
     "bootstrap_documented",
     "inet",
     "decrypt_ticket_part",
+    "unique_dir",
 )
-PATHPFX = re.compile(r"\b(?:krb5_testkit|testkit|common|crate::common|self::common)::")
-ASSERT_RE = re.compile(
-    r"assert!|assert_eq!|assert_ne!|assert_matches|expect_status|\bstatus\s*\(|"
-    r"unwrap_err|matches!|is_err\(\)|is_ok\(\)|panic!|should_panic|"
-    r"err::[A-Z0-9_]+|KDC_ERR_|KRB_AP_ERR|unwrap_none|expect\("
+PATHPFX = re.compile(
+    r"\b(?:krb5_testkit|testkit|common|crate::common|self::common|"
+    r"krb5_kdc|krb5_admin|krb5_protocol|krb5_client|krb5_gss|krb5_config|"
+    r"super|crate)::"
 )
+ASSERT_RE = re.compile(r"\bassert(?:_eq|_ne|_matches)?!")
 REQ_RE = re.compile(
     r"\betypes?\b|\bnonce\b|\brealm\b|\bprincipal\b|kdc_options|KdcOptions|"
     r"\bflags\b|till|rtime|from|starttime|endtime|addresses|caddr|padata|"
@@ -127,6 +141,22 @@ def strip_for_scan(src: str) -> str:
                 if out[k] != "\n":
                     out[k] = " "
             i = j
+        elif c == "r" and i + 1 < n and src[i + 1] in '#"':
+            prev = src[i - 1] if i else ""
+            prev_ok = not (prev.isalnum() or prev == "_") or (
+                prev == "b" and (i < 2 or not (src[i - 2].isalnum() or src[i - 2] == "_"))
+            )
+            m = re.match(r'r(#*)"', src[i:])
+            if prev_ok and m:
+                term = '"' + m.group(1)
+                j = src.find(term, i + len(m.group(0)))
+                j = n if j < 0 else j + len(term)
+                for k in range(i, j):
+                    if out[k] != "\n":
+                        out[k] = " "
+                i = j
+                continue
+            i += 1
         elif c == '"':
             j = i + 1
             while j < n:
@@ -141,6 +171,14 @@ def strip_for_scan(src: str) -> str:
                 if out[k] != "\n":
                     out[k] = " "
             i = j
+        elif c == "'":
+            m = re.match(r"'(\\.|[^\\'])'", src[i:])
+            if m:
+                for k in range(i, i + len(m.group(0))):
+                    out[k] = " "
+                i += len(m.group(0))
+                continue
+            i += 1
         else:
             i += 1
     return "".join(out)
@@ -156,9 +194,14 @@ def extract(root: pathlib.Path) -> list[dict]:
             path = pathlib.Path(dirpath) / fn
             rel = path.relative_to(root).as_posix()
             parts = rel.split("/")
-            if not parts or parts[0] != "crates" or len(parts) < 3:
+            if not parts or len(parts) < 3:
                 continue
-            crate, kind = parts[1], parts[2]
+            if parts[0] == "crates":
+                crate, kind = parts[1], parts[2]
+            elif parts[0] == "examples":
+                crate, kind = parts[1], parts[2] if len(parts) > 2 else "src"
+            else:
+                continue
             if kind not in ("src", "tests"):
                 continue
             src = path.read_text(encoding="utf-8", errors="replace")
@@ -350,6 +393,7 @@ def smash_helpers(lines: list[str]) -> list[str]:
     for line in lines:
         for h in HELPERS:
             line = re.sub(rf"\b{h}\b", "HELPER", line)
+        line = re.sub(r"HELPER\s*\(\s*&?[^)]*\)(?:\.\d+)?", "HELPER", line)
         out.append(line)
     return out
 
@@ -402,6 +446,14 @@ def link(
     def sim(a: list[str], b: list[str]) -> float:
         return difflib.SequenceMatcher(None, "\n".join(a), "\n".join(b)).ratio()
 
+    old = sorted(
+        old,
+        key=lambda t: (
+            "parent" in t["file"] or "/r10_" in t["file"],
+            t["file"],
+            t["leaf"],
+        ),
+    )
     for t in old:
         cands: list[dict] = []
         for leaf in mapped_leaves(t, renames, dups):
@@ -456,17 +508,58 @@ def compare_trees(
         if ol == nl:
             identical += 1
             continue
-        if smash_helpers(ol) == smash_helpers(nl):
+        so, sn = smash_helpers(ol), smash_helpers(nl)
+        if so == sn:
+            helper_only += 1
+            continue
+        def flatten_code(lines: list[str]) -> str:
+            text = re.sub(r"\s+", " ", " ".join(lines))
+            text = re.sub(r"\(\s+", "(", text)
+            text = re.sub(r"\s+\)", ")", text)
+            text = re.sub(r",\s*\)", ")", text)
+            text = re.sub(r"\s+,", ",", text)
+            return re.sub(r",\s*", ", ", text)
+
+        if flatten_code(so) == flatten_code(sn):
             helper_only += 1
             continue
         differ.append((o, n, ol, nl))
-        oa = [l for l in ol if ASSERT_RE.search(l)]
-        na = [l for l in nl if ASSERT_RE.search(l)]
-        if oa != na:
+        def assert_blob(lines: list[str]) -> str:
+            text = re.sub(r"\s+", " ", " ".join(lines))
+            blobs: list[str] = []
+            for m in ASSERT_RE.finditer(text):
+                i = m.start()
+                # take the macro and its top-level (...)
+                j = text.find("(", m.end() - 1)
+                if j < 0:
+                    blobs.append(text[i : m.end()])
+                    continue
+                depth = 0
+                k = j
+                while k < len(text):
+                    if text[k] == "(":
+                        depth += 1
+                    elif text[k] == ")":
+                        depth -= 1
+                        if depth == 0:
+                            k += 1
+                            break
+                    k += 1
+                blob = re.sub(r"\b[A-Za-z_][A-Za-z0-9_]*\s*\(", "CALL(", text[i:k])
+                blob = re.sub(r"\s+", " ", blob)
+                blob = re.sub(r"\(\s+", "(", blob)
+                blob = re.sub(r"\s+\)", ")", blob)
+                blob = re.sub(r",\s*\)", ")", blob)
+                blob = re.sub(r"\s+,", ",", blob)
+                blob = re.sub(r",\s*", ", ", blob)
+                blobs.append(blob.strip())
+            return " | ".join(blobs)
+
+        if assert_blob(so) != assert_blob(sn):
             assert_changes.append((o, n))
-        orq = [l for l in ol if REQ_RE.search(l)]
-        nrq = [l for l in nl if REQ_RE.search(l)]
-        if orq != nrq:
+        orq = [l for l in so if REQ_RE.search(l)]
+        nrq = [l for l in sn if REQ_RE.search(l)]
+        if orq != nrq and re.sub(r"\s+", " ", " ".join(orq)) != re.sub(r"\s+", " ", " ".join(nrq)):
             req_changes.append((o, n))
     dropped_unmapped = [t for t in unmatched_old if not dup_covers(t, dups)]
     unaccepted = []
@@ -551,11 +644,13 @@ def _self_test() -> None:
         else:
             raise SystemExit("hygiene-body-diff --self-test: assert_eq! literal change must fail")
         src_n.joinpath("t.rs").write_text(
-            "#[test]\nfn sample() {\n    assert_eq!(1, 1);\n    let _ = issue_tgt();\n}\n",
+            "#[test]\nfn sample() {\n    assert_eq!(\n        1,\n        1,\n    );\n    let _ = issue_tgt();\n}\n",
             encoding="utf-8",
         )
         green = compare_trees(old, new, {}, {}, [("user_as", "issue_tgt")], {})
         evaluate(green)
+        if green["assertion_changes"] != 0:
+            raise SystemExit("hygiene-body-diff --self-test: rustfmt wrap of assert_eq! must pass")
         if green["helper_only"] != 1 and green["identical"] != 1:
             # smash_helpers should also pass without subst
             smashed = compare_trees(old, new, {}, {}, [], {})

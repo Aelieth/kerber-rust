@@ -29,7 +29,8 @@ this project uses semantic versioning once a crate is published.
   `#[cfg(test)] mod` as `src-test` (`diff_compare.rs`, `kadm5/tests`).
 - **tool.** `hygiene-diff --duplicates` is keyed
   `binary<TAB>name`; many-to-one needs `merged:`.
-  `scripts/hygiene-body-diff.py` compares test bodies through those maps.
+  `scripts/hygiene-body-diff.py` compares test bodies through those maps
+  (a kept twin is not skipped as a duplicate; rustfmt wrap is helper-only).
 
 ### W3-S2.6 coverage
 
