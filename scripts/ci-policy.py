@@ -2792,6 +2792,25 @@ def check_hygiene_diff_self_test(text: str | None = None) -> None:
         _die("hygiene-diff.py must run _self_test on normal compare runs")
     if "redirect_stdout(sys.stderr)" not in text:
         _die("hygiene-diff.py must send compare-run _self_test to stderr")
+    if "def load_duplicates_map" not in text or "merged:" not in text:
+        _die("hygiene-diff.py must key --duplicates and require merged: for many-to-one")
+    if "def _self_test_duplicates" not in text:
+        _die("hygiene-diff.py must self-test keyed duplicates maps")
+
+
+def check_hygiene_body_diff_self_test(text: str | None = None) -> None:
+    """hygiene-body-diff.py runs _self_test on normal compare runs."""
+    if text is None:
+        path = SCRIPTS / "hygiene-body-diff.py"
+        if not path.is_file():
+            _die("missing scripts/hygiene-body-diff.py")
+        text = path.read_text(encoding="utf-8")
+    if "def _self_test" not in text:
+        _die("hygiene-body-diff.py must define _self_test")
+    if text.count("_self_test()") < 2:
+        _die("hygiene-body-diff.py must run _self_test on normal compare runs")
+    if "assert_eq!" not in text or "user_as" not in text:
+        _die("hygiene-body-diff.py must self-test an assertion change and a helper rename")
 
 
 def check_gate_common_sourced(
@@ -4774,6 +4793,8 @@ jobs:
     )
     _must_die(check_log_arity, "log() {\n    printf '%s' \"$1\"\n}\n")
     check_hygiene_diff_self_test(
+        "def load_duplicates_map():\n    return {'merged:'}\n"
+        "def _self_test_duplicates():\n    pass\n"
         "def _self_test():\n    pass\n"
         "def main() -> int:\n    if argv[1] == '--self-test':\n        _self_test()\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
@@ -4789,6 +4810,12 @@ jobs:
         "def main() -> int:\n    if argv[1] == '--self-test':\n        _self_test()\n"
         "        return 0\n    _self_test()\n    return _compare()\n",
     )
+    check_hygiene_body_diff_self_test(
+        "def _self_test():\n    assert_eq! vs user_as helper\n"
+        "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
+        "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
+    )
+    _must_die(check_hygiene_body_diff_self_test, "def main():\n    return 0\n")
     with tempfile.TemporaryDirectory() as tmp:
         demo = pathlib.Path(tmp) / "crates" / "demo"
         (demo / "tests" / "common").mkdir(parents=True)
@@ -5309,6 +5336,7 @@ def main() -> None:
     check_samba_kdc_respawn()
     check_log_arity()
     check_hygiene_diff_self_test()
+    check_hygiene_body_diff_self_test()
     check_autotests_registered()
     check_kcm_stop_before_run()
     check_prod_gate_tcpdump_cleanup()

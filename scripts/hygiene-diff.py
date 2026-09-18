@@ -2,7 +2,9 @@
 """Compare two hygiene snapshots. Exit 1 on a forbidden removal or regression.
 
 Fails on:
-  - a test name removed that is not in --renames / --duplicates
+  - a test `(binary, name)` removed that is not in --renames / --duplicates
+    (`--duplicates` is keyed `old_binary<TAB>old_name = new_binary<TAB>new_name`;
+    a RHS that is also a LHS is rejected; many-to-one needs `merged:` on the RHS)
   - a gate cell tag removed (an `echo` tag listed in --dead with a reason is
     information: the MIT_/RUST_ identifier scan also catches path and port
     constants that were never a cell; `section`/`flow` tags cannot be waived)
@@ -109,17 +111,63 @@ def load_gate_rc(path: pathlib.Path) -> dict[str, int]:
     return rc
 
 
+def strip_merged(s: str) -> str:
+    return s[7:] if s.startswith("merged:") else s
+
+
+def load_duplicates_map(path: pathlib.Path | None) -> dict[str, str]:
+    """Keyed `old_binary<TAB>old_name = [merged:]new_binary<TAB>new_name`."""
+    raw = load_map(path, "=")
+    mapping: dict[str, str] = {}
+    for left, right in raw.items():
+        if "\t" not in left:
+            raise SystemExit(f"duplicates LHS must be binary<TAB>name: {left!r}")
+        rhs = strip_merged(right)
+        if "\t" not in rhs:
+            raise SystemExit(f"duplicates RHS must be binary<TAB>name: {right!r}")
+        mapping[left] = right
+    lhs = set(mapping)
+    for left, right in mapping.items():
+        rhs = strip_merged(right)
+        if rhs in lhs:
+            raise SystemExit(f"duplicates RHS is also a LHS: {rhs}")
+    targets: dict[str, list[tuple[str, str]]] = {}
+    for left, right in mapping.items():
+        targets.setdefault(strip_merged(right), []).append((left, right))
+    for rhs, ents in targets.items():
+        if len(ents) > 1:
+            for left, right in ents:
+                if not right.startswith("merged:"):
+                    raise SystemExit(f"many-to-one {rhs} needs merged: (from {left})")
+    return {left: strip_merged(right) for left, right in mapping.items()}
+
+
+def apply_rename(t: str, renames: dict[str, str]) -> str:
+    """Name-only `old -> new` or keyed `old_binary<TAB>old_name -> new_binary<TAB>new_name`."""
+    if t in renames:
+        return renames[t]
+    binary, sep, name = t.partition("\t")
+    if not sep:
+        return renames.get(t, t)
+    if name in renames:
+        rhs = renames[name]
+        return rhs if "\t" in rhs else f"{binary}\t{rhs}"
+    return t
+
+
 def _write_snap(
     d: pathlib.Path,
     gates: list[str],
     timings: str | None = None,
     quality: dict[str, str] | None = None,
     binaries: list[str] | None = None,
+    tests: list[str] | None = None,
 ) -> None:
     d.mkdir(parents=True, exist_ok=True)
     (d / "gates.txt").write_text("# gate\tkind\ttag\n" + "".join(g + "\n" for g in gates), encoding="utf-8")
-    (d / "tests.txt").write_text("# binary\tname\nbin\tt1\n", encoding="utf-8")
-    (d / "tests.count").write_text("1\n", encoding="utf-8")
+    rows = tests if tests is not None else ["bin\tt1"]
+    (d / "tests.txt").write_text("# binary\tname\n" + "".join(r + "\n" for r in rows), encoding="utf-8")
+    (d / "tests.count").write_text(f"{len(rows)}\n", encoding="utf-8")
     for name in (
         "diffsend.txt",
         "client-differential-flows.txt",
@@ -163,12 +211,21 @@ def _quiet_compare(
     new: pathlib.Path,
     dead_path: pathlib.Path | None = None,
     accept_rise: list[str] | None = None,
+    duplicates_path: pathlib.Path | None = None,
+    renames_path: pathlib.Path | None = None,
 ) -> int:
     import io
     from contextlib import redirect_stdout
 
     with redirect_stdout(io.StringIO()):
-        return main_compare(old, new, dead_path=dead_path, accept_rise=accept_rise)
+        return main_compare(
+            old,
+            new,
+            dead_path=dead_path,
+            accept_rise=accept_rise,
+            duplicates_path=duplicates_path,
+            renames_path=renames_path,
+        )
 
 
 def _must_fail(
@@ -177,8 +234,20 @@ def _must_fail(
     label: str,
     dead_path: pathlib.Path | None = None,
     accept_rise: list[str] | None = None,
+    duplicates_path: pathlib.Path | None = None,
+    renames_path: pathlib.Path | None = None,
 ) -> None:
-    if _quiet_compare(old, new, dead_path, accept_rise=accept_rise) == 0:
+    if (
+        _quiet_compare(
+            old,
+            new,
+            dead_path,
+            accept_rise=accept_rise,
+            duplicates_path=duplicates_path,
+            renames_path=renames_path,
+        )
+        == 0
+    ):
         raise SystemExit(f"hygiene-diff --self-test: {label} must fail")
 
 
@@ -188,9 +257,62 @@ def _must_pass(
     label: str,
     dead_path: pathlib.Path | None = None,
     accept_rise: list[str] | None = None,
+    duplicates_path: pathlib.Path | None = None,
+    renames_path: pathlib.Path | None = None,
 ) -> None:
-    if _quiet_compare(old, new, dead_path, accept_rise=accept_rise) != 0:
+    if (
+        _quiet_compare(
+            old,
+            new,
+            dead_path,
+            accept_rise=accept_rise,
+            duplicates_path=duplicates_path,
+            renames_path=renames_path,
+        )
+        != 0
+    ):
         raise SystemExit(f"hygiene-diff --self-test: {label} must pass")
+
+
+def _self_test_duplicates(root: pathlib.Path) -> None:
+    """Keyed maps; RHS-as-LHS red; many-to-one needs merged:."""
+    old, new = root / "dup-old", root / "dup-new"
+    _write_snap(old, ["a.sh\techo\tkeep"], tests=["oldbin\tfoo", "oldbin\tkeep"])
+    _write_snap(new, ["a.sh\techo\tkeep"], tests=["newbin\tbar", "oldbin\tkeep"])
+    _must_fail(old, new, "removed test without keyed map")
+    good = root / "dup-good.txt"
+    good.write_text("oldbin\tfoo = newbin\tbar\n", encoding="utf-8")
+    _must_pass(old, new, "keyed duplicate", duplicates_path=good)
+    name_only = root / "dup-name.txt"
+    name_only.write_text("foo = bar\n", encoding="utf-8")
+    try:
+        load_duplicates_map(name_only)
+    except SystemExit:
+        pass
+    else:
+        raise SystemExit("hygiene-diff --self-test: name-only duplicates must fail")
+    chained = root / "dup-chain.txt"
+    chained.write_text("oldbin\tfoo = midbin\tmid\nmidbin\tmid = newbin\tbar\n", encoding="utf-8")
+    try:
+        load_duplicates_map(chained)
+    except SystemExit:
+        pass
+    else:
+        raise SystemExit("hygiene-diff --self-test: RHS-as-LHS must fail")
+    many_old, many_new = root / "many-old", root / "many-new"
+    _write_snap(many_old, ["a.sh\techo\tkeep"], tests=["a\tx", "b\ty"])
+    _write_snap(many_new, ["a.sh\techo\tkeep"], tests=["c\tz"])
+    no_merged = root / "dup-nomerge.txt"
+    no_merged.write_text("a\tx = c\tz\nb\ty = c\tz\n", encoding="utf-8")
+    try:
+        load_duplicates_map(no_merged)
+    except SystemExit:
+        pass
+    else:
+        raise SystemExit("hygiene-diff --self-test: many-to-one without merged: must fail")
+    merged = root / "dup-merged.txt"
+    merged.write_text("a\tx = merged:c\tz\nb\ty = merged:c\tz\n", encoding="utf-8")
+    _must_pass(many_old, many_new, "many-to-one merged", duplicates_path=merged)
 
 
 def _self_test_quality(root: pathlib.Path) -> None:
@@ -238,6 +360,7 @@ def _self_test() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = pathlib.Path(tmp)
         _self_test_quality(root)
+        _self_test_duplicates(root)
         old, new = root / "old", root / "new"
         _write_snap(
             old,
@@ -327,7 +450,7 @@ def _compare(args) -> int:
 
     failed = 0
     renames = load_map(args.renames, "->")
-    duplicates = load_map(args.duplicates, "=")
+    duplicates = load_duplicates_map(args.duplicates)
     dead = load_map(getattr(args, "dead", None), ":")
 
     def fail(msg: str) -> None:
@@ -342,17 +465,16 @@ def _compare(args) -> int:
     new_tests = load_set(new / "tests.txt")
     mapped_old: set[str] = set()
     for t in old_tests:
-        binary, _, name = t.partition("\t")
-        new_name = renames.get(name, name)
-        mapped_old.add(f"{binary}\t{new_name}" if "\t" in t else new_name)
-    removed_tests = mapped_old - new_tests
-    kept_names = {t.split("\t", 1)[-1] for t in new_tests}
-    for t in sorted(removed_tests):
-        name = t.split("\t", 1)[-1]
-        kept = duplicates.get(name)
-        if kept and kept in kept_names:
-            info(f"test removed as duplicate {name} = {kept}")
+        if t in duplicates:
+            kept = duplicates[t]
+            if kept in new_tests:
+                info(f"test removed as duplicate {t} = {kept}")
+                continue
+            fail(f"test removed: {t} (duplicate target missing: {kept})")
             continue
+        mapped_old.add(apply_rename(t, renames))
+    removed_tests = mapped_old - new_tests
+    for t in sorted(removed_tests):
         fail(f"test removed: {t}")
     added_tests = new_tests - mapped_old
     if added_tests:
@@ -654,8 +776,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("old", type=pathlib.Path)
     ap.add_argument("new", type=pathlib.Path)
-    ap.add_argument("--renames", type=pathlib.Path, help="old_name -> new_name")
-    ap.add_argument("--duplicates", type=pathlib.Path, help="removed_name = kept_name")
+    ap.add_argument("--renames", type=pathlib.Path, help="old_name -> new_name (or binary<TAB>name -> …)")
+    ap.add_argument(
+        "--duplicates",
+        type=pathlib.Path,
+        help="old_binary<TAB>old_name = [merged:]new_binary<TAB>new_name",
+    )
     ap.add_argument("--dead", type=pathlib.Path, help="echo tag: reason (a MIT_/RUST_ name that was never a cell)")
     ap.add_argument(
         "--accept-rise",

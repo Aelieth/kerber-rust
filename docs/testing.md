@@ -33,7 +33,14 @@ scripts/hygiene-diff.py <old> <new>` prints a provenance header, then
 fails if a test, cell tag, diffsend case, flow or ledger row
 disappeared, a gate went red, or a quality count rose; shape deltas are
 informational. A swath that renames or de-duplicates tests passes its
-map (`--renames`, `--duplicates`); one that deletes a `MIT_*`/`RUST_*`
+map (`--renames`, `--duplicates`). `--duplicates` is keyed
+`old_binary<TAB>old_name = new_binary<TAB>new_name`; a RHS that is also
+a LHS is rejected, and many-to-one needs `merged:` on the RHS.
+`python3 scripts/hygiene-body-diff.py --old SHA --new SHA --renames
+--duplicates [--accept map]` links test fns through those maps,
+normalises whitespace/comments/helper names, and fails an assertion-line
+change that is not in `--accept` or a dropped test that is not in
+`--duplicates`. One that deletes a `MIT_*`/`RUST_*`
 variable that was never a cell lists it in `--dead` with the reason
 (`section` and `flow` tags cannot be waived). Job walls live in
 `ci-budget.toml` (see Tier contract below). `python3 scripts/ci-status.py --check-budget` compares a
@@ -460,7 +467,7 @@ all of the above).
 | `doc` | `cargo doc --workspace --no-deps` under `RUSTDOCFLAGS=-D warnings` (sibling of `test`) |
 | `shellcheck` | `shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh` with `.shellcheckrc` (`external-sources=true`, `SC2329` off); zero inline disables (`make shellcheck`). ShellCheck is installed by version and sha256 (`SHELLCHECK_VERSION`, v0.11.0 — the runner's package is 0.9.0 and reports hundreds of SC2317/SC2119 notes 0.11.0 does not); the Makefile fallback image and the hygiene inventory name the same version, and `ci-policy.py` keeps the three in step |
 | `msrv` | `cargo build --workspace --all-targets --locked` on Rust 1.95 |
-| `audit` | `cargo audit`, `cargo deny`, `scripts/geiger.sh` (per-crate `cargo geiger`, 0-unsafe product), `cargo vet --locked` |
+| `audit` | `cargo audit`, `cargo deny`, `scripts/geiger.sh` (per-crate `cargo geiger`, 0-unsafe product), `cargo vet --locked` (CI pins cargo-vet **0.10.0**; local 0.10.2 is not an oracle) |
 | `ledger-mit` | fetches the SHA-pinned MIT 1.22.2 source and runs `scripts/ci-policy.py` (ledger anchors, tally, proof column, evidence rules) |
 | `mit-image` | builds or restores `kerber-rust-mit-kdc:1.22.2` and `kerber-rust-prod-node:latest` into `actions/cache` (no artifact round-trip) |
 | `harness` | After `run-harness`/`stop-harness` (client/ccache/knobs/config-include), one shared shell (`KERBER_SHELL`) and one stock MIT KDC (`KERBER_LIVE=1`). Then `kdc-gate`, `store-gate`, `bidirectional-gate`, `gss-gate`, `pkinit-gate`, `kadmin-rust-gate`, `kadmin-rust-acl-gate`, `kadmin-mit-gate`, `kadmin-both-gate` (local wrapper `kadmin-gate.sh`), `policy-gate`, `history-mit-gate` |
