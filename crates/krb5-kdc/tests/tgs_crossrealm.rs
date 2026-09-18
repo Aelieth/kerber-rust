@@ -64,7 +64,7 @@ fn incoming_trust_is_own_principal() {
 }
 
 #[test]
-fn cross_tgt_renew_realm_mismatch_is_badoption() {
+fn cross_tgt_renew_realm_mismatch_is_server_nomatch() {
     let (mut store, acl) = bootstrap_documented().unwrap();
     let actor = documented_admin_id();
     let ir = aes_key(0x33);

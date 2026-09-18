@@ -12,6 +12,8 @@ this project uses semantic versioning once a crate is published.
   `KERBER_CAPTURE_DIR` writes nothing. Golden-home protection lives in
   `gate-common.sh` `refuse_golden_capture_dir` and `ci-policy`
   `check_capture_env_only`.
+- **test.** `cross_tgt_renew_realm_mismatch_is_server_nomatch` (body
+  asserts 26 `SERVER_NOMATCH`, not `BADOPTION`).
 
 ### W3-S2.6 coverage
 
