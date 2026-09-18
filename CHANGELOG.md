@@ -24,7 +24,9 @@ this project uses semantic versioning once a crate is published.
   `Result`→`Option` `code`;   `err_of` / `err_of_cname` for the two
   wire `KRB-ERROR` decoders. `s4u_tgs` / `s4u_self` / `s4u_admin`
   — the three S4U TGS helpers (`pref_etypes` vs AES-256-only kept
-  apart). Assertion text in those files is unchanged.
+  apart). `evidence_for_user` — the two admin→user evidence
+  tickets (`a4_18b`'s inline store-key AS is `issue_tgt`).
+  Assertion text in those files is unchanged.
 
 ### W3-S2.1 drop the eight a2_*_parent red-inject files
 

@@ -3,12 +3,14 @@
 use krb5_asn1::encode;
 use krb5_crypto::{KeyUsage, ProtocolKey, decrypt, encrypt};
 use krb5_kdc::{
-    Acl, Error, PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req,
+    Acl, Error, PrincipalStore, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req,
     bootstrap_documented, decrypt_ticket_part, documented_admin_id, documented_host,
     pa_enc_timestamp, pac_from_ticket_part,
 };
-use krb5_protocol::{pa_for_user, pa_pac_options, tgs_req, tgs_req_ex};
-use krb5_testkit::{aes_key, attach_pac, host_tgt, issue_tgt_password, pref_etypes};
+use krb5_protocol::{pa_for_user, pa_pac_options, tgs_req_ex};
+use krb5_testkit::{
+    aes_key, attach_pac, evidence_for_user, host_tgt, issue_tgt_password, pref_etypes,
+};
 use krb5_types::pac::{PAC_CLIENT_INFO, Pac, parse_client_info};
 use krb5_types::{
     EncTicketPart, EncryptedData, KdcOptions, PrincipalName, Ticket, err, flag_bit, ku,
@@ -175,39 +177,6 @@ fn reseal_incoming(key: &ProtocolKey, tgt: &krb5_kdc::IssuedAs, part: &EncTicket
             cipher: encrypt(key, usage, &der).unwrap().into(),
         },
     }
-}
-
-fn evidence_for_user(store: &PrincipalStore, nonce: u32) -> Ticket {
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let admin_tgt = {
-        let key = store
-            .get_name(&admin)
-            .unwrap()
-            .best_key()
-            .unwrap()
-            .key
-            .clone();
-        let req = as_req(
-            admin.clone(),
-            TEST_REALM,
-            nonce,
-            Some(vec![pa_enc_timestamp(&key).unwrap()]),
-        )
-        .unwrap();
-        krb5_kdc::issue_as(store, &req).unwrap()
-    };
-    let req = tgs_req(
-        admin_tgt.rep.0.ticket,
-        &admin_tgt.session_key,
-        TEST_REALM,
-        &admin,
-        user,
-        TEST_REALM,
-        nonce + 1,
-    )
-    .unwrap();
-    krb5_kdc::issue_tgs(store, &req).unwrap().rep.0.ticket
 }
 
 #[test]

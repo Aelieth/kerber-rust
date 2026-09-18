@@ -11,13 +11,14 @@ use krb5_kdc::{
     IssuedAs, PacTicket, PrincipalStore, S2K_ITERS, TEST_ADMIN, TEST_REALM, TEST_USER, as_req,
     documented_host, pa_enc_timestamp, sign_reply_pac, ticket_checksum_der, wrap_win2k_pac,
 };
-use krb5_protocol::{pa_for_user, tgs_req_ex};
+use krb5_protocol::{pa_for_user, tgs_req, tgs_req_ex};
 use krb5_types::EncTicketPart;
 use krb5_types::KdcOptions;
 use krb5_types::KrbError;
 use krb5_types::PaData;
 use krb5_types::PrincipalName;
 use krb5_types::TgsReq;
+use krb5_types::Ticket;
 use krb5_types::flag_bit;
 use krb5_types::pac::{PAC_CLIENT_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer};
 
@@ -434,4 +435,31 @@ pub fn s4u_admin(tgt: &IssuedAs, nonce: u32, opts: KdcOptions) -> TgsReq {
         vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
     .unwrap()
+}
+
+/// Admin TGS for `TEST_USER` — S4U2Proxy evidence ticket.
+///
+/// Replaces the two `evidence_for_user` copies. `a2_8` already used
+/// [`issue_tgt`]; `a4_18b` inlined the same store-key AS.
+///
+/// # Panics
+///
+/// Panics if the admin TGT, `tgs_req`, or `issue_tgs` fails — the
+/// same unwraps the copies used.
+#[must_use]
+pub fn evidence_for_user(store: &PrincipalStore, nonce: u32) -> Ticket {
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
+    let admin_tgt = issue_tgt(store, TEST_ADMIN, nonce);
+    let req = tgs_req(
+        admin_tgt.rep.0.ticket,
+        &admin_tgt.session_key,
+        TEST_REALM,
+        &admin,
+        user,
+        TEST_REALM,
+        nonce + 1,
+    )
+    .unwrap();
+    krb5_kdc::issue_tgs(store, &req).unwrap().rep.0.ticket
 }

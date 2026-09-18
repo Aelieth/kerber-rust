@@ -4,27 +4,10 @@ use krb5_kdc::{
     PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER, as_req, bootstrap_documented,
     decrypt_ticket_part, documented_host, pa_enc_timestamp, pac_from_ticket_part,
 };
-use krb5_protocol::{tgs_req, tgs_req_ex};
-use krb5_testkit::{expect_status, issue_tgt, pref_etypes};
+use krb5_protocol::tgs_req_ex;
+use krb5_testkit::{evidence_for_user, expect_status, issue_tgt, pref_etypes};
 use krb5_types::pac::{PAC_DELEGATION_INFO, Pac, parse_delegation_info};
 use krb5_types::{KdcOptions, PrincipalName, err, flag_bit};
-
-fn evidence_for_user(store: &PrincipalStore, nonce: u32) -> krb5_types::Ticket {
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
-    let admin_tgt = issue_tgt(store, TEST_ADMIN, nonce);
-    let req = tgs_req(
-        admin_tgt.rep.0.ticket.clone(),
-        &admin_tgt.session_key,
-        TEST_REALM,
-        &admin,
-        user,
-        TEST_REALM,
-        nonce + 1,
-    )
-    .unwrap();
-    krb5_kdc::issue_tgs(store, &req).unwrap().rep.0.ticket
-}
 
 fn proxy_req(
     store: &PrincipalStore,
