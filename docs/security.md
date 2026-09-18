@@ -13,7 +13,7 @@ uses a per-context sequence window in addition to that cache.
 
 | Protection | Code site | Test |
 | --- | --- | --- |
-| Constant-time MAC / checksum | `krb5-crypto` `mac_verify` (`derive.rs`); callers `ops.rs` decrypt/checksum, `weak.rs` RC4/DES | `decrypt_bad_mac_is_error` (`krb5-crypto/tests/known_answer.rs`) |
+| Constant-time MAC / checksum | `krb5-crypto` `mac_verify` (`derive.rs`); callers `ops.rs` decrypt/checksum, `weak.rs` RC4/DES | `decrypt_bad_mac_is_error`; `zeroize_ct.rs` `mac_verify_rejects_one_bit_flip` |
 | Constant-time PAC signature | `verify_checksum_type` over PAC `SignatureType` (`ad.rs` `verify_pac_sig`; `pac.c:478-514`) | `crates/krb5-kdc/tests/ad_pac.rs` `verify_pac_signatures` / `pac_sha1_server_checksum_is_sumtype_nosupp` |
 | Replay — AP-REQ authenticator | `verify_ap_req` (`krb5-protocol` `ap_req.rs`) | `ap_req_valid_truncated_wrong_key_replay` |
 | Replay — TGS authenticator | `issue_tgs` (`krb5-kdc` `issue.rs`) `tgs_replay` | `tgs_authenticator_replay_is_repeat` |
@@ -22,9 +22,9 @@ uses a per-context sequence window in addition to that cache.
 | Replay — GSS wrap/MIC sequence | `krb5-gss` `accept_seq` (`recv_window`) | `wrap_mic_replay_inside_window_is_rejected` |
 | Replay — GSS acceptor AP-REQ | `accept_sec_context` shared `ReplayCache`. kadm5 RPC holds one in-memory cache (300 s). MIT `dfl` file persists across restarts (`rc_file2.c:165-195`; W1-C cell). kpasswd uses a fresh `ReplayCache` per datagram like MIT `schpw.c:110-111` (a UDP retransmit is answered). | `accept_same_token_twice_is_repeat`; `gss-gate.sh` replay cell (MIT KRB-ERROR 34 `Request is a replay`); `kpasswd-gate.sh` retransmit |
 | Replay cache window / cap / poison | `ReplayCache::check_and_store` | `replay::tests::{window_prune_is_not_replay, cap_evicts_oldest_not_grow, poison_fails_closed}` |
-| Zeroize-on-drop — protocol keys | `ProtocolKey` `Drop` (`krb5-crypto` `key.rs`) | Drop impl; `ProtocolKey` is every stash / keytab / ccache key |
-| Zeroize-on-drop — derived keys | `DerivedKeys` `Drop` (`derive.rs`) | Drop impl; used on every encrypt/decrypt |
-| Zeroize-on-drop — DH exponent | `DhKeypair` `Drop` (`modp.rs`); SPAKE seed (`spake.rs`) | Drop impl; PKINIT / SPAKE issue path |
+| Zeroize-on-drop — protocol keys | `ProtocolKey` `Drop` (`krb5-crypto` `key.rs`) | `zeroize_ct.rs` `protocol_key_drop_zeroizes` |
+| Zeroize-on-drop — derived keys | `DerivedKeys` `Drop` (`derive.rs`) | `zeroize_ct.rs` `derived_keys_drop_zeroizes` |
+| Zeroize-on-drop — DH exponent | `DhKeypair` `Drop` (`modp.rs`); SPAKE seed (`spake.rs`) | `zeroize_ct.rs` `dh_keypair_drop_zeroizes` |
 | Zeroize — client password | `kinit` (`krb5-client` `lib.rs`) zeros the buffer before return | `kinit` return path; live `client-gate` |
 | 0600 secret files | `write_secret_file` (`secret_file.rs`); keytab, ccache, dump, stash | `persist_survives_restart_without_key_regen` (save_store) |
 | `kdestroy` never follows a symlink | `destroy_secret_file` (`secret_file.rs`) opens `O_NOFOLLOW\|O_NONBLOCK` and refuses a symlink or FIFO; MIT `fcc_destroy` (`cc_file.c:553-660`) opens the name `O_RDWR`, so a swapped symlink has its target zero-filled and the link unlinked | `open_refuses_symlink_with_nofollow`; `client-gate.sh` symlink `kdestroy` leaves the target intact |

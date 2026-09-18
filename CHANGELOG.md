@@ -6,6 +6,15 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S2.6 coverage
+
+- **test.** Gate↔unit index: `// oracle: differential-gate.sh <case>`
+  on the status-word twins, generated `docs/gate-unit-index.md`,
+  `ci-policy` fail-red when a cell has no tagged twin. Four twins:
+  `unknown-sname` 7, `s4u2proxy-not-forwardable` 13,
+  `s4u2proxy-header-pac` 13, `s4u2proxy-local-stkt-pac` 13.
+  `krb5-crypto/tests/zeroize_ct.rs` pins Drop+zeroize and `ct_eq`.
+
 ### W3-S2.5 fixtures
 
 - **test.** Capture defaults to `${KERBER_SCRATCH}/traces` (else
