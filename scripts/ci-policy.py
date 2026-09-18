@@ -3261,7 +3261,7 @@ def check_red_at_sha_inject(text: str | None = None) -> None:
         capture_output=True,
         check=False,
     )
-    inj = "crates/krb5-types/tests/k3_parse_deltat.rs"
+    inj = "crates/krb5-types/tests/parse_name_deltat.rs"
     if probe.returncode != 0 or not (ROOT / inj).is_file():
         # R2-T3: a shallow CI checkout (fetch-depth 1) cannot see the historical
         # base, so the probe cannot run. Say so loudly rather than pass silently.

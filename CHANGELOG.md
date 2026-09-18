@@ -6,6 +6,11 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S2.4 subject taxonomy
+
+- **test.** `krb5-types/tests/k3_parse_deltat.rs` → `parse_name_deltat.rs`
+  (`ci-policy` red-at-sha overlay-probe fixture follows).
+
 ### W3-S2.3 in-src tests by shape
 
 - **test.** Whole-flow tests leave `src/`; private-bound and
