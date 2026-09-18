@@ -3,12 +3,10 @@
 //! with the ACL matrix of MIT `tests/t_kadmin_acl.py` and the codes settled in
 //! `working/logs/audit-polish-0902/w1k/m3a-settle-mit-alias.log` §D.
 
+#[path = "common/mod.rs"]
 mod common;
+use common::*;
 
-use common::{
-    API_V2, GSS_INTEGRITY, PROC_UNAVAIL, SUCCESS, data_call, init_client, push_nullstring,
-    push_u32, ret_code, take_opaque, take_u32,
-};
 use krb5_kdc::{
     Acl, TEST_REALM, TEST_USER, bootstrap_documented, documented_changepw, documented_host,
     documented_kadmin, shared_dump,
@@ -16,11 +14,17 @@ use krb5_kdc::{
 use krb5_types::PrincipalName;
 
 const CREATE_ALIAS: u32 = 27;
+
 const RENAME_PRINCIPAL: u32 = 4;
+
 const GET_PRINCIPAL: u32 = 5;
+
 const KADM5_AUTH_INSUFFICIENT: u32 = 43_787_525;
+
 const KADM5_DUP: u32 = 43_787_527;
+
 const KADM5_ALIAS_REALM: u32 = 43_787_583;
+
 const KRB5_KDB_ALIAS_UNSUPPORTED: u32 = 2_514_958_894;
 
 fn name(s: &str) -> PrincipalName {

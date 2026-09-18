@@ -2,12 +2,10 @@
 //! `*1` matches a1/a11/xa1 but not a10 (settled live in
 //! `working/logs/audit-polish-0902/w1k/m3a-settle-mit-alias.log` §E).
 
+#[path = "common/mod.rs"]
 mod common;
+use common::*;
 
-use common::{
-    API_V2, GET_PRINCS, GSS_INTEGRITY, SUCCESS, data_call, init_client, push_nullstring, push_u32,
-    take_opaque, take_u32,
-};
 use krb5_kdc::{Acl, TEST_REALM, bootstrap_documented, documented_kadmin, shared_dump};
 use krb5_types::PrincipalName;
 
@@ -22,7 +20,6 @@ fn gprincs_args(glob: &str) -> Vec<u8> {
     w
 }
 
-/// Names from a `gprincs_ret` databody (api, code, n, n, [nullstring…]).
 fn names(body: &[u8]) -> Vec<String> {
     let mut i = 8; // api + code
     let n = take_u32(body, &mut i);

@@ -16,6 +16,10 @@ this project uses semantic versioning once a crate is published.
   `z1_kvno_pin.rs` → `acceptor_kvno.rs`; `context_flow.rs` stays.
   `krb5-protocol` 29 → 12: subject files; `z1_fast_reply` moves
   from kdc into `client_fast.rs`; `z8_rtime` into `client_verify_as.rs`.
+  `krb5-admin` 35 → 15: `kadm5_{create,modify,policy,alias,glob}`,
+  `pwqual`, `rpcsec`, `acceptor_realm`, `kpasswd`, `kpropd_acl`,
+  `cli_stdin`, `keysalt`; `kprop` / `acl_dispatch` / `ktadd` stay
+  (ktadd absorbs `z7_local_stamp`).
 
 ### W3-S2.3 in-src tests by shape
 

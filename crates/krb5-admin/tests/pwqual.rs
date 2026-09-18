@@ -1,11 +1,10 @@
 //! W1-C C1: MIT built-in password-quality modules (`dict`, `empty`, `princ`)
 //! on kadm5 create and on chpass. Compiles at `370461b` (parent-red).
 
+#[path = "common/mod.rs"]
 mod common;
+use common::*;
 
-use common::{
-    API_V2, GSS_INTEGRITY, SUCCESS, data_call, init_client, push_nullstring, push_u32, ret_code,
-};
 use krb5_admin::{AdminSession, Error};
 use krb5_kdc::{
     Acl, NamedPolicy, TEST_ADMIN, TEST_REALM, TEST_USER, bootstrap_documented, documented_admin_id,
@@ -15,15 +14,19 @@ use krb5_testkit::scratch_dir;
 use krb5_types::PrincipalName;
 
 const CREATE_PRINCIPAL: u32 = 1;
+
 const KADM5_PRINCIPAL: u32 = 0x0000_0001;
+
 const KADM5_POLICY: u32 = 0x0000_0800;
-/// `kadm_err.et` 22.
+
 const KADM5_PASS_Q_TOOSHORT: u32 = 43_787_542;
-/// `kadm_err.et` 24.
+
 const KADM5_PASS_Q_DICT: u32 = 43_787_544;
 
 const EMPTY: &str = "Empty passwords are not allowed";
+
 const PRINC: &str = "Password may not match principal name";
+
 const DICT: &str = "Password is in the password dictionary";
 
 fn user() -> PrincipalName {
@@ -41,8 +44,6 @@ fn rejected(r: Result<(), Error>) -> String {
     }
 }
 
-/// kadm5 `create_principal` args: `KADM5_PRINCIPAL` plus, with `policy`,
-/// `KADM5_POLICY` and the policy string.
 fn create_args(name: &str, password: &str, policy: Option<&str>) -> Vec<u8> {
     let mut w = Vec::new();
     push_u32(&mut w, API_V2);
@@ -69,10 +70,6 @@ fn create_args(name: &str, password: &str, policy: Option<&str>) -> Vec<u8> {
     w
 }
 
-/// `svr_principal.c:364-373`: `passwd_check` runs before the entry exists.
-/// `pwqual_empty.c:38-44` rejects `""` without a policy as
-/// `KADM5_PASS_Q_TOOSHORT`. Live MIT `kadmin.local addprinc -pw "" e`:
-/// `Empty passwords are not allowed`, nothing created.
 #[test]
 fn c1_kadm5_create_empty_password_is_pass_q_tooshort_and_creates_nothing() {
     let (store, _) = bootstrap_documented().unwrap();
@@ -98,10 +95,6 @@ fn c1_kadm5_create_empty_password_is_pass_q_tooshort_and_creates_nothing() {
     );
 }
 
-/// `pwqual_princ.c:40-55` under a policy: a component match is
-/// `KADM5_PASS_Q_DICT` (`strcasecmp`); without a policy the module skips.
-/// Live MIT `addprinc -pw pqu -policy pq pqu`: `Password may not match
-/// principal name`.
 #[test]
 fn c1_kadm5_create_principal_name_password_is_pass_q_dict_only_with_policy() {
     let (mut store, _) = bootstrap_documented().unwrap();
@@ -134,11 +127,6 @@ fn c1_kadm5_create_principal_name_password_is_pass_q_dict_only_with_policy() {
     assert!(g.get_name(&n("pqfree")).is_some());
 }
 
-/// `svr_principal.c:369,463-470`: a NULL `passwd` (`kadmin addprinc
-/// -randkey` since 1.8, `kadmin.c:1297-1298`) skips `passwd_check` and
-/// creates with `krb5_dbe_crk` random keys — never a key derived from the
-/// empty string. Live: MIT `kadmin -q 'addprinc -randkey x'` against the
-/// Rust kadmind (`kadmin-gate.sh`, `chaos-gate.sh`).
 #[test]
 fn c1_kadm5_create_null_password_is_a_random_key_not_the_empty_password() {
     let (store, _) = bootstrap_documented().unwrap();
@@ -184,9 +172,6 @@ fn c1_kadm5_create_null_password_is_a_random_key_not_the_empty_password() {
     }
 }
 
-/// `svr_principal.c:1282`: chpass runs the same `passwd_check`. `empty`
-/// without a policy; `princ` (realm first, then components) with one.
-/// Live MIT `cpw -pw "" u` / `cpw -pw U u` under a policy agree.
 #[test]
 fn c1_chpass_runs_empty_and_princ_modules() {
     let (mut store, acl) = bootstrap_documented().unwrap();
@@ -211,11 +196,6 @@ fn c1_chpass_runs_empty_and_princ_modules() {
     sess.change_password(&user(), b"userpassword").unwrap();
 }
 
-/// `alt_prof.c:486-513` + `pwqual_dict.c:136-150,215-230`: `[realms]
-/// dict_file` words, one per `\n`-terminated line, `strcasecmp` exact match,
-/// only with a policy. Live MIT with `dict_file = /tmp/dict.txt`:
-/// `CorrectHorse` rejected under a policy, `correcthorse1` accepted,
-/// `correcthorse` accepted with no policy.
 #[test]
 fn c1_dict_file_from_the_realm_stanza_rejects_words_case_insensitively() {
     let dir = scratch_dir("c1-dict-admin");

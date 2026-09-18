@@ -7,9 +7,6 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use std::net::{TcpListener, TcpStream};
-use std::thread::{self, JoinHandle};
-
 use krb5_admin::{Error, KpropAuth, kprop_send_dump, kprop_sendauth, kpropd_recvauth};
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::{
@@ -18,11 +15,11 @@ use krb5_kdc::{
 };
 use krb5_protocol::{ReplayCache, as_req, pa_enc_timestamp, tgs_req};
 use krb5_types::Ticket;
+use std::net::{TcpListener, TcpStream};
+use std::thread::{self, JoinHandle};
 
 const CLIENT: &str = "host/testhost.kerber.test@KERBER.TEST";
 
-/// A `host/testhost` → `host/testhost` service ticket from the documented
-/// store, the way `krb5-kprop` gets one (AS with PA-ENC-TIMESTAMP, then TGS).
 fn host_ticket(store: &PrincipalStore) -> (Ticket, ProtocolKey, i32) {
     let host = documented_host();
     let key = store
@@ -81,8 +78,6 @@ fn spawn_kpropd(
     (addr, join)
 }
 
-/// Run one kprop against a kpropd with `acl`; returns the kpropd result and
-/// whether the client's `sendauth` (through the AP-REP) succeeded.
 fn kprop_against(acl: Option<Vec<String>>) -> (Result<KpropAuth, Error>, Result<KpropAuth, Error>) {
     let (store, _) = bootstrap_documented().unwrap();
     let (ticket, session, _) = host_ticket(&store);
@@ -101,12 +96,10 @@ fn kprop_against(acl: Option<Vec<String>>) -> (Result<KpropAuth, Error>, Result<
     (server_auth, client_auth)
 }
 
-/// `KpropAuth` is not `Debug`; show only the outcome.
 fn shown(r: &Result<KpropAuth, Error>) -> Result<(), String> {
     r.as_ref().map(|_| ()).map_err(ToString::to_string)
 }
 
-/// kpropd.c:540-543 syslog text, carried by the kpropd error.
 fn refused(r: &Result<KpropAuth, Error>) -> bool {
     r.as_ref().err().map(ToString::to_string)
         == Some(format!(

@@ -5,32 +5,40 @@
 //! `server_stubs.c:478,519,630` `stub_auth_restrict`). Compiles at `b50d6bf`
 //! (parent-red): every assertion here is on the stored entry through the RPC
 //! path, which the parent accepted while silently dropping the fields.
+//! R9 green-only: create reserved TL (already at Round 2 parent) + dump TL width.
 
+#[path = "common/mod.rs"]
 mod common;
+use common::*;
 
-use common::{
-    API_V2, GSS_INTEGRITY, SUCCESS, data_call, init_client, push_nullstring, push_u32, ret_code,
-};
 use krb5_kdc::{
-    Acl, KDB_DISALLOW_ALL_TIX, KDB_REQUIRES_PRE_AUTH, NamedPolicy, TEST_ADMIN, TEST_REALM,
-    bootstrap_documented, documented_kadmin, shared_dump,
+    Acl, KDB_DISALLOW_ALL_TIX, KDB_REQUIRES_PRE_AUTH, NamedPolicy, PrincipalRead, TEST_ADMIN,
+    TEST_REALM, bootstrap_documented, documented_kadmin, shared_dump,
 };
 use krb5_types::PrincipalName;
 
 const CREATE_PRINCIPAL: u32 = 1;
+
 const MODIFY_PRINCIPAL: u32 = 3;
+
 const KADM5_PRINCIPAL: u32 = 0x0000_0001;
+
 const KADM5_PRINC_EXPIRE_TIME: u32 = 0x0000_0002;
+
 const KADM5_PW_EXPIRATION: u32 = 0x0000_0004;
+
 const KADM5_ATTRIBUTES: u32 = 0x0000_0010;
+
 const KADM5_MAX_LIFE: u32 = 0x0000_0020;
+
 const KADM5_KVNO: u32 = 0x0000_0100;
+
 const KADM5_POLICY: u32 = 0x0000_0800;
+
 const KADM5_MAX_RLIFE: u32 = 0x0000_2000;
-/// `kadm_err.et` 22.
+
 const KADM5_PASS_Q_TOOSHORT: u32 = 43_787_542;
 
-/// The `kadm5_principal_ent_rec` scalars a create/modify request carries.
 #[derive(Clone, Copy, Default)]
 struct Ent {
     expire: u32,
@@ -41,9 +49,6 @@ struct Ent {
     kvno: u32,
 }
 
-/// `xdr_cprinc_arg` / `xdr_mprinc_arg` body: api_version, the record, mask
-/// (and for create the password). Field order is
-/// `kadm_rpc_xdr.c:xdr_kadm5_principal_ent_rec_v1`.
 fn ent_args(
     name: &str,
     ent: Ent,
@@ -103,7 +108,6 @@ struct Rig {
     client: common::Client,
 }
 
-/// A kadmind with `acl_text` and an authenticated `admin@KERBER.TEST` client.
 fn rig(acl_text: &str, setup: impl FnOnce(&mut krb5_kdc::PrincipalStore)) -> Rig {
     let (mut store, _) = bootstrap_documented().unwrap();
     setup(&mut store);
@@ -141,11 +145,6 @@ fn stored(r: &Rig, name: &str) -> krb5_kdc::Principal {
         .clone()
 }
 
-/// `svr_principal.c:381-401`: every masked field lands on the entry;
-/// `:461-464`: `KADM5_KVNO` keys the password at that kvno. Live MIT
-/// `addprinc -pw x -maxlife 1h -maxrenewlife 0 -expire 2030-01-01 -pwexpire
-/// 2031-01-01 -kvno 7 +disallow_all_tix +requires_preauth z1u` shows all six
-/// in `getprinc`.
 #[test]
 fn z1_kadm5_create_applies_every_masked_field() {
     let mut r = rig("admin@KERBER.TEST *\n", |_| {});
@@ -184,10 +183,6 @@ fn z1_kadm5_create_applies_every_masked_field() {
     );
 }
 
-/// `svr_principal.c:381-401` `else` arms: without the mask bit the field is
-/// `handle->params.*` — `max_life`/`max_rlife` from kdc.conf, expiration 0,
-/// `pw_expiration` 0 unless the policy has `pw_max_life` (`:397-400`), and
-/// `attributes` = `params.flags` (the realm default flags).
 #[test]
 fn z1_kadm5_create_without_mask_bits_takes_realm_defaults() {
     let mut r = rig("admin@KERBER.TEST *\n", |s| {
@@ -237,10 +232,6 @@ fn z1_kadm5_create_without_mask_bits_takes_realm_defaults() {
     );
 }
 
-/// `auth.c:218-231` + `svr_principal.c:364-373`: a `-policy P` restriction
-/// puts P into the request mask *before* the create, so P's floors reject
-/// the password and nothing is created. Live MIT: `Password is too short
-/// while creating "..."`.
 #[test]
 fn z1_acl_policy_restriction_is_enforced_on_create() {
     let mut r = rig(
@@ -280,9 +271,6 @@ fn z1_acl_policy_restriction_is_enforced_on_create() {
     );
 }
 
-/// `auth.c:265-270`: with `KADM5_MAX_RLIFE` in the mask the value is only
-/// lowered to the cap — an explicit 0 stays 0 (MIT `getprinc` shows
-/// `0 days 00:00:00`); a value above the cap is lowered.
 #[test]
 fn z1_acl_maxrenewlife_keeps_an_in_mask_zero_and_lowers_above_cap() {
     let mut r = rig(
@@ -315,9 +303,6 @@ fn z1_acl_maxrenewlife_keeps_an_in_mask_zero_and_lowers_above_cap() {
     assert_eq!(stored(&r, "z1r30").max_renewable_life, 86400);
 }
 
-/// `auth.c:259-263`: a modify request *without* `KADM5_MAX_LIFE` takes the
-/// cap outright (`!(*mask & KADM5_MAX_LIFE)`), even when the stored value
-/// is already below it — MIT rewrites `ent->max_life` and sets the bit.
 #[test]
 fn z1_acl_maxlife_absent_from_modify_mask_takes_the_cap() {
     let mut r = rig("admin@KERBER.TEST * *@KERBER.TEST -maxlife 1h\n", |_| {});
@@ -351,9 +336,6 @@ fn z1_acl_maxlife_absent_from_modify_mask_takes_the_cap() {
     );
 }
 
-/// `auth.c:214-217`: `ent->attributes |= require_attrs` on the request's
-/// own attributes, so a masked `DISALLOW_ALL_TIX` survives a
-/// `+requires_preauth` restriction.
 #[test]
 fn z1_acl_attribute_restriction_composes_with_the_request_attributes() {
     let mut r = rig(
@@ -377,8 +359,6 @@ fn z1_acl_attribute_restriction_composes_with_the_request_attributes() {
     );
 }
 
-/// `auth.c:236-241`: `-expire` caps a masked `princ_expire_time` at
-/// `now + delta` only when it is later; an earlier request value is kept.
 #[test]
 fn z1_acl_expire_keeps_a_masked_value_below_the_cap() {
     let mut r = rig("admin@KERBER.TEST * *@KERBER.TEST -expire 1d\n", |_| {});
@@ -413,4 +393,89 @@ fn z1_acl_expire_keeps_a_masked_value_below_the_cap() {
         (t0 + 86400..=now() + 86400).contains(&e),
         "capped at now + 1d, got {e}"
     );
+}
+
+const KADM5_TL_DATA: u32 = 0x0004_0000;
+
+const KADM5_BAD_TL_TYPE: u32 = 43_787_567;
+
+fn create_args(name: &str, tl: Option<(u32, &[u8])>, mask: u32) -> Vec<u8> {
+    let mut w = Vec::new();
+    push_u32(&mut w, API_V2);
+    push_nullstring(&mut w, name);
+    push_u32(&mut w, 0);
+    push_u32(&mut w, 0);
+    push_u32(&mut w, 0);
+    push_u32(&mut w, 3600);
+    push_u32(&mut w, 1);
+    push_u32(&mut w, 0);
+    push_u32(&mut w, 0);
+    push_u32(&mut w, 1);
+    push_u32(&mut w, 1);
+    push_u32(&mut w, 0);
+    push_u32(&mut w, 0);
+    push_u32(&mut w, 0);
+    push_u32(&mut w, 0);
+    push_u32(&mut w, 0);
+    push_u32(&mut w, 0);
+    push_u32(&mut w, 0);
+    if let Some((ty, contents)) = tl {
+        push_u32(&mut w, 1);
+        push_u32(&mut w, 0);
+        push_u32(&mut w, 1);
+        push_u32(&mut w, ty);
+        push_opaque(&mut w, contents);
+        push_u32(&mut w, 0);
+    } else {
+        push_u32(&mut w, 0);
+        push_u32(&mut w, 1);
+    }
+    push_u32(&mut w, 0);
+    push_u32(&mut w, mask);
+    push_nullstring(&mut w, "password");
+    w
+}
+
+#[test]
+fn create_reserved_tl_does_not_write() {
+    let (store, _) = bootstrap_documented().unwrap();
+    let acl = Acl::parse("admin@KERBER.TEST *\n").unwrap();
+    let store = shared_dump(store);
+    let mut c = init_client(
+        &store,
+        &acl,
+        &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]),
+        &documented_kadmin(),
+        GSS_INTEGRITY,
+    );
+    let args = create_args(
+        &format!("r9tlbad@{TEST_REALM}"),
+        Some((3, b"x")),
+        KADM5_PRINCIPAL | KADM5_TL_DATA,
+    );
+    let (stat, body) = data_call(&mut c, &store, &acl, CREATE_PRINCIPAL, &args);
+    assert_eq!(stat, SUCCESS);
+    assert_eq!(ret_code(&body), KADM5_BAD_TL_TYPE);
+    let g = store
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    assert!(
+        g.get_name(&PrincipalName::new(
+            PrincipalName::NT_PRINCIPAL,
+            ["r9tlbad"]
+        ))
+        .is_none()
+    );
+}
+
+#[test]
+fn documented_dump_has_no_tl_type_ge_0x10000() {
+    let (store, _) = bootstrap_documented().unwrap();
+    for p in store.list_principals().unwrap() {
+        assert!(
+            !p.tl_data.iter().any(|t| t.ty >= 0x1_0000),
+            "{:?} has TL type >= 0x10000",
+            p.name
+        );
+    }
 }
