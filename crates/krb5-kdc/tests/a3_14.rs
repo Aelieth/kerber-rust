@@ -2,36 +2,16 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{KeyUsage, decrypt, encrypt};
-use krb5_kdc::{
-    Error, PrincipalStore, TEST_REALM, TEST_USER, bootstrap_documented, documented_host,
-};
+use krb5_kdc::{Error, TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 use krb5_types::{AuthorizationDataValue, EncTicketPart, PrincipalName, Ticket, err, ku, pa};
 
+use krb5_testkit::user_as;
 fn proto(err: &Error) -> (i32, Option<&str>) {
     match err {
         Error::Protocol { code, text, .. } => (*code, text.as_deref()),
         other => panic!("expected protocol error, got {other:?}"),
     }
-}
-
-fn user_as(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let key = store
-        .get_name(&cname)
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
-    let req = as_req(
-        cname,
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    krb5_kdc::issue_as(store, &req).unwrap()
 }
 
 fn krbtgt_name() -> PrincipalName {

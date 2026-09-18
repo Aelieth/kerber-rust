@@ -5,13 +5,14 @@ use krb5_crypto::{KeyUsage, ProtocolKey, checksum, decrypt, encrypt, unkeyed_che
 use krb5_kdc::{
     Error, PrincipalStore, TEST_REALM, TEST_USER, bootstrap_documented, documented_host, issue_tgs,
 };
-use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
+use krb5_protocol::tgs_req;
 use krb5_types::cammac::{Cammac, VerifierMac};
 use krb5_types::{
     AuthorizationData, AuthorizationDataValue, Checksum, EncTicketPart, PrincipalName, Ticket, err,
     ku, pa,
 };
 
+use krb5_testkit::user_as;
 fn proto(err: &Error) -> (i32, Option<&str>) {
     match err {
         Error::Protocol { code, text, .. } => (*code, text.as_deref()),
@@ -25,24 +26,6 @@ fn user() -> PrincipalName {
 
 fn krbtgt() -> PrincipalName {
     PrincipalName::krbtgt(TEST_REALM)
-}
-
-fn user_as(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
-    let key = store
-        .get_name(&user())
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
-    let req = as_req(
-        user(),
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    krb5_kdc::issue_as(store, &req).unwrap()
 }
 
 fn tgt_key(store: &PrincipalStore) -> (ProtocolKey, u32) {

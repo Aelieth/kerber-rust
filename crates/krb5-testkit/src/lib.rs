@@ -7,7 +7,7 @@
 
 use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
 use krb5_kdc::{
-    IssuedAs, PacTicket, PrincipalStore, S2K_ITERS, TEST_REALM, as_req, documented_host,
+    IssuedAs, PacTicket, PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER, as_req, documented_host,
     pa_enc_timestamp, sign_reply_pac, ticket_checksum_der, wrap_win2k_pac,
 };
 use krb5_types::EncTicketPart;
@@ -154,6 +154,43 @@ pub fn issue_tgt_renewable(
 ) -> IssuedAs {
     let key = store_key(store, name);
     as_tgt(store, name, nonce, &key, renewable)
+}
+
+/// AS-issued TGT for `TEST_USER` using the store's best key.
+///
+/// Replaces the eight two-argument `user_as` copies (`PrincipalName`
+/// inline vs a local `user()`/`cname()` helper).
+///
+/// # Panics
+///
+/// Same unwraps as [`issue_tgt`].
+#[must_use]
+pub fn user_as(store: &PrincipalStore, nonce: u32) -> IssuedAs {
+    issue_tgt(store, TEST_USER, nonce)
+}
+
+/// Like [`user_as`] but applies `bits` to `kdc_options` before issue.
+///
+/// Replaces `a3_11.rs` and `a3_r26.rs`.
+///
+/// # Panics
+///
+/// Same unwraps as [`user_as`].
+#[must_use]
+pub fn user_as_bits(store: &PrincipalStore, nonce: u32, bits: &[(usize, bool)]) -> IssuedAs {
+    let key = store_key(store, TEST_USER);
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let mut req = as_req(
+        cname,
+        TEST_REALM,
+        nonce,
+        Some(vec![pa_enc_timestamp(&key).unwrap()]),
+    )
+    .unwrap();
+    for (bit, on) in bits {
+        req.0.req_body.kdc_options = req.0.req_body.kdc_options.with_bit(*bit, *on);
+    }
+    krb5_kdc::issue_as(store, &req).unwrap()
 }
 
 /// AS-issued TGT for the documented POSIX host principal.

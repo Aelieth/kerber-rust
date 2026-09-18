@@ -6,26 +6,9 @@ use krb5_kdc::{PrincipalStore, TEST_REALM, TEST_USER, bootstrap_documented};
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req_ex_from};
 use krb5_types::{KdcOptions, KerberosTime, PrincipalName, flag_bit, ku};
 
+use krb5_testkit::user_as;
 fn user() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
-}
-
-fn user_as(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
-    let key = store
-        .get_name(&user())
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
-    let req = as_req(
-        user(),
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    krb5_kdc::issue_as(store, &req).unwrap()
 }
 
 fn enc_as(issued: &krb5_kdc::IssuedAs) -> krb5_types::EncKdcRepPart {

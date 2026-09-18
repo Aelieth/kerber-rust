@@ -12,6 +12,7 @@ use krb5_types::{
     ku,
 };
 
+use krb5_testkit::user_as;
 fn proto(err: &Error) -> (i32, Option<&str>) {
     match err {
         Error::Protocol { code, text, .. } => (*code, text.as_deref()),
@@ -29,24 +30,6 @@ fn user() -> PrincipalName {
 
 fn admin() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN])
-}
-
-fn user_as(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
-    let key = store
-        .get_name(&user())
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
-    let req = as_req(
-        user(),
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    krb5_kdc::issue_as(store, &req).unwrap()
 }
 
 fn host_as(store: &PrincipalStore, nonce: u32, renewable: bool) -> krb5_kdc::IssuedAs {

@@ -6,36 +6,15 @@ use krb5_kdc::{
     Error, KDB_DISALLOW_POSTDATED, KDB_DISALLOW_RENEWABLE, KDB_OK_AS_DELEGATE, PrincipalStore,
     TEST_REALM, TEST_USER, bootstrap_documented, documented_host,
 };
-use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req_ex};
+use krb5_protocol::tgs_req_ex;
 use krb5_types::{EncTicketPart, KdcOptions, PrincipalName, err, flag_bit, ku};
 
+use krb5_testkit::user_as_bits;
 fn proto(err: &Error) -> (i32, Option<&str>) {
     match err {
         Error::Protocol { code, text, .. } => (*code, text.as_deref()),
         other => panic!("expected protocol error, got {other:?}"),
     }
-}
-
-fn user_as(store: &PrincipalStore, nonce: u32, bits: &[(usize, bool)]) -> krb5_kdc::IssuedAs {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let key = store
-        .get_name(&cname)
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
-    let mut req = as_req(
-        cname,
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    for (bit, on) in bits {
-        req.0.req_body.kdc_options = req.0.req_body.kdc_options.with_bit(*bit, *on);
-    }
-    krb5_kdc::issue_as(store, &req).unwrap()
 }
 
 fn or_attr(store: &mut PrincipalStore, name: &PrincipalName, bit: u32) {
@@ -77,7 +56,7 @@ fn cname() -> PrincipalName {
 #[test]
 fn tgs_postdate_without_may_postdate_is_tgt_not_postdatable() {
     let (store, _) = bootstrap_documented().unwrap();
-    let issued = user_as(&store, 11001, &[]);
+    let issued = user_as_bits(&store, 11001, &[]);
     let tgs = tgs_req_ex(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
@@ -100,7 +79,7 @@ fn tgs_postdate_without_may_postdate_is_tgt_not_postdatable() {
 fn tgs_renewable_against_disallow_is_non_renewable() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let host = documented_host();
-    let issued = user_as(&store, 11011, &[(flag_bit::RENEWABLE, true)]);
+    let issued = user_as_bits(&store, 11011, &[(flag_bit::RENEWABLE, true)]);
     or_attr(&mut store, &host, KDB_DISALLOW_RENEWABLE);
     let tgs = tgs_req_ex(
         issued.rep.0.ticket.clone(),
@@ -123,7 +102,7 @@ fn tgs_renewable_against_disallow_is_non_renewable() {
 #[test]
 fn tgs_forwarded_sets_forwarded() {
     let (store, _) = bootstrap_documented().unwrap();
-    let issued = user_as(&store, 11021, &[]);
+    let issued = user_as_bits(&store, 11021, &[]);
     let tgs = tgs_req_ex(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
@@ -145,7 +124,7 @@ fn tgs_forwarded_sets_forwarded() {
 #[test]
 fn tgs_proxy_sets_proxy() {
     let (store, _) = bootstrap_documented().unwrap();
-    let issued = user_as(&store, 11031, &[(flag_bit::PROXIABLE, true)]);
+    let issued = user_as_bits(&store, 11031, &[(flag_bit::PROXIABLE, true)]);
     let host_req = tgs_req_ex(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
@@ -183,7 +162,7 @@ fn tgs_proxy_sets_proxy() {
 #[test]
 fn tgs_postdated_is_invalid() {
     let (store, _) = bootstrap_documented().unwrap();
-    let issued = user_as(&store, 11041, &[(flag_bit::MAY_POSTDATE, true)]);
+    let issued = user_as_bits(&store, 11041, &[(flag_bit::MAY_POSTDATE, true)]);
     let tgs = tgs_req_ex(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
@@ -211,7 +190,7 @@ fn tgs_postdated_bit_alone_does_not_deny_postdate() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let host = documented_host();
     or_attr(&mut store, &host, KDB_DISALLOW_POSTDATED);
-    let issued = user_as(&store, 11051, &[(flag_bit::MAY_POSTDATE, true)]);
+    let issued = user_as_bits(&store, 11051, &[(flag_bit::MAY_POSTDATE, true)]);
     let tgs = tgs_req_ex(
         issued.rep.0.ticket.clone(),
         &issued.session_key,
@@ -235,7 +214,7 @@ fn tgs_renew_skips_ok_as_delegate() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let krbtgt = PrincipalName::krbtgt(TEST_REALM);
     or_attr(&mut store, &krbtgt, KDB_OK_AS_DELEGATE);
-    let issued = user_as(&store, 11061, &[(flag_bit::RENEWABLE, true)]);
+    let issued = user_as_bits(&store, 11061, &[(flag_bit::RENEWABLE, true)]);
     let tgs = tgs_req_ex(
         issued.rep.0.ticket.clone(),
         &issued.session_key,

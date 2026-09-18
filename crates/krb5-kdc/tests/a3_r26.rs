@@ -6,11 +6,12 @@ use krb5_kdc::{
     Error, KDB_REQUIRES_PRE_AUTH, PrincipalStore, Restrictions, TEST_REALM, TEST_USER,
     bootstrap_documented,
 };
-use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req_ex};
+use krb5_protocol::{as_req, tgs_req_ex};
 use krb5_types::{
     EncTicketPart, EncryptedData, KdcOptions, PrincipalName, Ticket, err, flag_bit, ku,
 };
 
+use krb5_testkit::user_as_bits;
 fn proto(err: &Error) -> (i32, Option<&str>) {
     match err {
         Error::Protocol { code, text, .. } => (*code, text.as_deref()),
@@ -20,27 +21,6 @@ fn proto(err: &Error) -> (i32, Option<&str>) {
 
 fn cname() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
-}
-
-fn user_as(store: &PrincipalStore, nonce: u32, bits: &[(usize, bool)]) -> krb5_kdc::IssuedAs {
-    let key = store
-        .get_name(&cname())
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
-    let mut req = as_req(
-        cname(),
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    for (bit, on) in bits {
-        req.0.req_body.kdc_options = req.0.req_body.kdc_options.with_bit(*bit, *on);
-    }
-    krb5_kdc::issue_as(store, &req).unwrap()
 }
 
 fn tgt_part(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs) -> EncTicketPart {
@@ -79,7 +59,7 @@ fn as_renewable_with_zero_rlife_caps_renew_till_at_start() {
         ..Restrictions::default()
     };
     store.impose_acl_restrictions(&cname(), &rs).unwrap();
-    let issued = user_as(&store, 26001, &[(flag_bit::RENEWABLE, true)]);
+    let issued = user_as_bits(&store, 26001, &[(flag_bit::RENEWABLE, true)]);
     let part = tgt_part(&store, &issued);
     let start = part
         .starttime
@@ -110,7 +90,7 @@ fn as_without_preauth_has_no_pre_authent() {
 #[test]
 fn tgs_renew_invalid_non_renewable_is_ticket_not_renewable() {
     let (store, _) = bootstrap_documented().unwrap();
-    let issued = user_as(&store, 26021, &[]);
+    let issued = user_as_bits(&store, 26021, &[]);
     let mut part = tgt_part(&store, &issued);
     part.flags = part
         .flags

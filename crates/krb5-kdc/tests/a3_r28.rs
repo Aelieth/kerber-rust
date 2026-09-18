@@ -8,32 +8,13 @@ use krb5_kdc::{
     GREET_AD_TYPE, GREET_TEXT, GreetAuth, PrincipalStore, TEST_REALM, TEST_USER,
     bootstrap_documented, decrypt_ticket_part, documented_host, register_authdata,
 };
-use krb5_protocol::{as_req, pa_enc_timestamp};
 use krb5_types::{
     ApReq, Authenticator, AuthorizationData, AuthorizationDataValue, Checksum, EncTicketPart,
     EncryptedData, EncryptionKey, KdcOptions, KdcReq, KdcReqBody, KerberosTime, Microseconds,
     PaData, PrincipalName, TgsReq, Ticket, ku, pa,
 };
 
-fn user_as(store: &PrincipalStore, nonce: u32) -> krb5_kdc::IssuedAs {
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let key = store
-        .get_name(&cname)
-        .unwrap()
-        .best_key()
-        .unwrap()
-        .key
-        .clone();
-    let req = as_req(
-        cname,
-        TEST_REALM,
-        nonce,
-        Some(vec![pa_enc_timestamp(&key).unwrap()]),
-    )
-    .unwrap();
-    krb5_kdc::issue_as(store, &req).unwrap()
-}
-
+use krb5_testkit::user_as;
 fn cname() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
 }
