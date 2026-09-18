@@ -26,7 +26,8 @@ this project uses semantic versioning once a crate is published.
   (`unknown_client_e_text_is_client_not_found`; keep `j3`).
   Prefix strip (crate-sized): crypto `b1_etype_preferred_omits_weak`
   → `etype_preferred_omits_weak`. GSS `z1_gss_accept_kt_*` →
-  `gss_accept_kt_*`.
+  `gss_accept_kt_*`. Client `z1b_key_exp_order.rs` → `key_exp_order.rs`
+  and the three `z1b_` fns.
 
 ### W3-S2.3 in-src tests by shape
 

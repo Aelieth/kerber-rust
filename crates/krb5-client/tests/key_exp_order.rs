@@ -116,7 +116,7 @@ fn kinit(kdc: &str, password: &str, stdin: &str) -> (Option<i32>, String) {
 }
 
 #[test]
-fn z1b_wrong_password_on_an_expired_principal_is_password_incorrect_and_never_prompts() {
+fn wrong_password_on_an_expired_principal_is_password_incorrect_and_never_prompts() {
     let kdc = serve(expired_user_store());
     let (code, err) = kinit(&kdc, "not-the-password", "new-pw\nnew-pw\n");
     assert_eq!(code, Some(1), "stderr: {err}");
@@ -131,7 +131,7 @@ fn z1b_wrong_password_on_an_expired_principal_is_password_incorrect_and_never_pr
 }
 
 #[test]
-fn z1b_changepw_as_failure_is_reported_before_any_prompt() {
+fn changepw_as_failure_is_reported_before_any_prompt() {
     // No kadmin/changepw principal: the changepw AS is S_PRINCIPAL_UNKNOWN
     // (7) with the *right* password — reported as such, never prompted.
     let mut store = expired_user_store();
@@ -150,7 +150,7 @@ fn z1b_changepw_as_failure_is_reported_before_any_prompt() {
 }
 
 #[test]
-fn z1b_wrong_password_without_preauth_is_bad_integrity_password_incorrect() {
+fn wrong_password_without_preauth_is_bad_integrity_password_incorrect() {
     // MIT's harness principals carry no REQUIRES_PRE_AUTH: the changepw AS
     // with a wrong password is answered with an AS-REP the client cannot
     // verify — `krb5_kdc_rep_decrypt_proc` → `KRB5KRB_AP_ERR_BAD_INTEGRITY`
