@@ -65,10 +65,6 @@ path = "tests/acceptor_rd_req.rs"
 name = "acceptor_sname"
 path = "tests/acceptor_sname.rs"
 
-[[test]]
-name = "rtime"
-path = "tests/rtime.rs"
-
 [dependencies]
 getrandom.workspace = true
 krb5-asn1.workspace = true
