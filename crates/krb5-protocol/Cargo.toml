@@ -26,112 +26,44 @@ name = "messages"
 path = "tests/messages.rs"
 
 [[test]]
-name = "safe_noncanon"
-path = "tests/safe_noncanon.rs"
+name = "safe_priv"
+path = "tests/safe_priv.rs"
 
 [[test]]
-name = "l3b_fast_nego"
-path = "tests/l3b_fast_nego.rs"
+name = "client_verify_as"
+path = "tests/client_verify_as.rs"
 
 [[test]]
-name = "l3b_fast_avail"
-path = "tests/l3b_fast_avail.rs"
+name = "client_fast"
+path = "tests/client_fast.rs"
 
 [[test]]
-name = "r0a_spake_padata"
-path = "tests/r0a_spake_padata.rs"
+name = "client_preauth_order"
+path = "tests/client_preauth_order.rs"
 
 [[test]]
-name = "b1_fast_nonce"
-path = "tests/b1_fast_nonce.rs"
+name = "client_gic"
+path = "tests/client_gic.rs"
 
 [[test]]
-name = "b1_timesync"
-path = "tests/b1_timesync.rs"
+name = "client_vfy_increds"
+path = "tests/client_vfy_increds.rs"
 
 [[test]]
-name = "b1_renew"
-path = "tests/b1_renew.rs"
+name = "client_tgs_reply"
+path = "tests/client_tgs_reply.rs"
 
 [[test]]
-name = "b1_verify_as"
-path = "tests/b1_verify_as.rs"
+name = "client_s4u"
+path = "tests/client_s4u.rs"
 
 [[test]]
-name = "b1_verify_times"
-path = "tests/b1_verify_times.rs"
+name = "acceptor_rd_req"
+path = "tests/acceptor_rd_req.rs"
 
 [[test]]
-name = "b1_gic_keytab"
-path = "tests/b1_gic_keytab.rs"
-
-[[test]]
-name = "b1_gic_pwd"
-path = "tests/b1_gic_pwd.rs"
-
-[[test]]
-name = "b1_vfy_increds"
-path = "tests/b1_vfy_increds.rs"
-
-[[test]]
-name = "b1_gic_opt"
-path = "tests/b1_gic_opt.rs"
-
-[[test]]
-name = "b1_fast_outer_till"
-path = "tests/b1_fast_outer_till.rs"
-
-[[test]]
-name = "b1_pkinit_padata"
-path = "tests/b1_pkinit_padata.rs"
-
-[[test]]
-name = "b1_spake_first"
-path = "tests/b1_spake_first.rs"
-
-[[test]]
-name = "b1_optimistic"
-path = "tests/b1_optimistic.rs"
-
-[[test]]
-name = "b2_s4u_padata"
-path = "tests/b2_s4u_padata.rs"
-
-[[test]]
-name = "b2_rd_req_kvno"
-path = "tests/b2_rd_req_kvno.rs"
-
-[[test]]
-name = "z1_acceptor_times"
-path = "tests/z1_acceptor_times.rs"
-
-[[test]]
-name = "z8_rtime"
-path = "tests/z8_rtime.rs"
-
-[[test]]
-name = "b2_validate"
-path = "tests/b2_validate.rs"
-
-[[test]]
-name = "b2_rd_req_transited"
-path = "tests/b2_rd_req_transited.rs"
-
-[[test]]
-name = "b2_tgs_reply"
-path = "tests/b2_tgs_reply.rs"
-
-[[test]]
-name = "b2_sname_match"
-path = "tests/b2_sname_match.rs"
-
-[[test]]
-name = "b2_try_fallback"
-path = "tests/b2_try_fallback.rs"
-
-[[test]]
-name = "b2_fwd_tgt"
-path = "tests/b2_fwd_tgt.rs"
+name = "acceptor_sname"
+path = "tests/acceptor_sname.rs"
 
 [dependencies]
 getrandom.workspace = true

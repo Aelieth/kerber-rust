@@ -4,7 +4,9 @@
 //! are new at the parent.
 
 use krb5_protocol::{
-    tgs_reply_client_ok, tgs_reply_req_times, tgs_reply_server_consistent, tgs_strip_ok_as_delegate,
+    TgsFallback, tgs_forward_options, tgs_non_referral_options, tgs_reply_client_ok,
+    tgs_reply_req_times, tgs_reply_server_consistent, tgs_strip_ok_as_delegate, tgs_try_fallback,
+    tgs_validate_options,
 };
 use krb5_types::{
     EncKdcRepPart, EncryptionKey, KdcOptions, KerberosTime, OctetString, PrincipalName,
@@ -231,4 +233,88 @@ fn b2_tgs_reply_zero_till_skips_endtime() {
         TicketFlags::none(),
     );
     tgs_reply_req_times(&enc, &till, None, None, &KdcOptions::none()).unwrap();
+}
+
+#[test]
+fn b2_try_fallback_specified_realm_is_non_referral() {
+    assert_eq!(tgs_try_fallback(1, true, 2), TgsFallback::NonReferral);
+}
+
+#[test]
+fn b2_try_fallback_later_hop_keeps_error() {
+    assert_eq!(tgs_try_fallback(2, true, 2), TgsFallback::KeepError);
+    assert_eq!(tgs_try_fallback(2, false, 2), TgsFallback::KeepError);
+}
+
+#[test]
+fn b2_try_fallback_referral_one_comp_is_host_realm_unknown() {
+    assert_eq!(tgs_try_fallback(1, false, 1), TgsFallback::HostRealmUnknown);
+}
+
+#[test]
+fn b2_try_fallback_referral_host_is_host_realm() {
+    assert_eq!(tgs_try_fallback(1, false, 2), TgsFallback::HostRealm);
+}
+
+#[test]
+fn b2_try_fallback_non_referral_drops_canonicalize() {
+    let opts = KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true);
+    let retry = tgs_non_referral_options(opts);
+    assert!(!retry.bit(flag_bit::CANONICALIZE));
+    assert!(retry.bit(flag_bit::FORWARDABLE));
+}
+
+#[test]
+fn b2_validate_options_are_common_mask_plus_validate() {
+    let flags = TicketFlags::from_u32(0x5480_0000);
+    let opts = tgs_validate_options(&flags);
+    assert!(opts.bit(flag_bit::FORWARDABLE));
+    assert!(opts.bit(flag_bit::PROXIABLE));
+    assert!(opts.bit(flag_bit::MAY_POSTDATE));
+    assert!(opts.bit(flag_bit::RENEWABLE));
+    assert!(
+        opts.bit(flag_bit::VALIDATE),
+        "val_renew.c:116-121 KDC_OPT_VALIDATE"
+    );
+    assert!(!opts.bit(flag_bit::RENEW));
+    assert!(
+        !opts.bit(flag_bit::CANONICALIZE),
+        "validate is not the get_creds referral walk"
+    );
+}
+
+#[test]
+fn b2_validate_options_omit_unset_ticket_flags() {
+    let flags = TicketFlags::from_u32(0x4000_0000);
+    let opts = tgs_validate_options(&flags);
+    assert!(opts.bit(flag_bit::FORWARDABLE));
+    assert!(opts.bit(flag_bit::VALIDATE));
+    assert!(!opts.bit(flag_bit::PROXIABLE));
+    assert!(!opts.bit(flag_bit::RENEWABLE));
+    assert!(!opts.bit(flag_bit::RENEW));
+    assert!(!opts.bit(flag_bit::CANONICALIZE));
+}
+
+fn common_flags() -> TicketFlags {
+    TicketFlags::none()
+        .with_bit(flag_bit::FORWARDABLE, true)
+        .with_bit(flag_bit::RENEWABLE, true)
+}
+
+#[test]
+fn b2_fwd_tgt_options_are_common_mask_plus_forwarded() {
+    let opts = tgs_forward_options(&common_flags(), true);
+    assert!(opts.bit(flag_bit::FORWARDED));
+    assert!(opts.bit(flag_bit::FORWARDABLE));
+    assert!(opts.bit(flag_bit::RENEWABLE));
+    assert!(!opts.bit(flag_bit::CANONICALIZE));
+    assert!(!opts.bit(flag_bit::PROXIABLE));
+}
+
+#[test]
+fn b2_fwd_tgt_not_forwardable_clears_forwardable() {
+    let opts = tgs_forward_options(&common_flags(), false);
+    assert!(opts.bit(flag_bit::FORWARDED));
+    assert!(!opts.bit(flag_bit::FORWARDABLE));
+    assert!(opts.bit(flag_bit::RENEWABLE));
 }

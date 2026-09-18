@@ -4,7 +4,6 @@
 #[path = "common/mod.rs"]
 mod common;
 use common::client_key;
-
 use krb5_kdc::{
     TEST_REALM, TEST_USER, as_req, bootstrap_documented, documented_host, pa_enc_timestamp, tgs_req,
 };

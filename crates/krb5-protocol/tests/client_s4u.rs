@@ -8,11 +8,6 @@
 #[path = "common/mod.rs"]
 mod common;
 use common::isolate_host_krb5;
-
-use std::net::UdpSocket;
-use std::sync::{Arc, Mutex};
-use std::thread;
-
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, ProtocolKey, unkeyed_checksum};
 use krb5_protocol::{
@@ -22,6 +17,9 @@ use krb5_types::{
     EncKdcRepPart, EncryptedData, EncryptionKey, KerberosTime, KrbError, Microseconds, OctetString,
     PaData, PrincipalName, TgsReq, Ticket, TicketFlags, ascii, err, pa,
 };
+use std::net::UdpSocket;
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 fn session() -> ProtocolKey {
     ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[7u8; 32]).unwrap()

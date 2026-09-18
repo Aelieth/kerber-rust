@@ -14,6 +14,8 @@ this project uses semantic versioning once a crate is published.
   `krb5-gss` 6 → 4: `accept_checksum.rs` ← `process_checksum` +
   `zero_token_cb`; `unwrap_v3.rs` absorbs `v2_callers`;
   `z1_kvno_pin.rs` → `acceptor_kvno.rs`; `context_flow.rs` stays.
+  `krb5-protocol` 29 → 12: subject files; `z1_fast_reply` moves
+  from kdc into `client_fast.rs`; `z8_rtime` into `client_verify_as.rs`.
 
 ### W3-S2.3 in-src tests by shape
 

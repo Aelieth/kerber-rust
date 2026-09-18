@@ -1,13 +1,25 @@
-//! W1-Z Z1.2: the client processes a FAST reply whole, like MIT
-//! `krb5int_fast_process_response` (`fast.c:517-560`) and
-//! `krb5int_fast_process_error` (`fast.c:428-511`): the finished message's
-//! client replaces the outer AS-REP client before `get_in_tkt.c:236-241`
-//! compares it, and a KRB-ERROR under armor whose PA-FX-FAST is missing or
-//! does not unwrap is the fatal outer error — no cookie, no method data, no
-//! second AS-REQ. A man in the middle sits between `as_exchange` and the
-//! in-process KDC and rewrites one message. Compiles at `92c67f9`
-//! (parent-red).
+//! W1-B B1: FAST reply nonce. MIT `fast.c:397-402` `decrypt_fast_reply`.
+//! Unit-only: no MIT tool emits a flipped FAST nonce.
 
+#[path = "common/mod.rs"]
+mod common;
+use common::isolate_host_krb5;
+use krb5_asn1::{decode, encode};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt};
+use krb5_kdc::{
+    PrincipalStore, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, serve,
+    shared_store,
+};
+use krb5_protocol::{
+    AsRequest, AsTicketOpts, Error, FastArmor, KdcAddr, armor_key, as_exchange, as_req,
+    attach_fast, build_fast_armor, pa_enc_timestamp, unwrap_fast_rep, unwrap_fast_rep_checked,
+};
+use krb5_testkit::{password_key, user};
+use krb5_types::fast::{KrbFastArmoredRep, KrbFastResponse, PaFxFast, PaFxFastRep};
+use krb5_types::{
+    ApReq, AsRep, AsReq, Authenticator, EncryptedData, KrbError, MethodData, PaData, PrincipalName,
+    Ticket, ascii, err, ku, pa, try_ascii,
+};
 use std::io::{Read, Write};
 use std::net::{TcpListener, UdpSocket};
 use std::sync::Arc;
@@ -15,19 +27,305 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt};
-use krb5_kdc::{PrincipalStore, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
-use krb5_protocol::{
-    AsRequest, AsTicketOpts, Error, FastArmor, KdcAddr, armor_key, as_exchange, as_req,
-    pa_enc_timestamp, unwrap_fast_rep,
-};
-use krb5_testkit::{password_key, user};
-use krb5_types::fast::{KrbFastArmoredRep, KrbFastResponse, PaFxFast, PaFxFastRep};
-use krb5_types::{
-    ApReq, AsRep, AsReq, Authenticator, EncryptedData, KrbError, MethodData, PaData, PrincipalName,
-    ascii, err, ku, pa,
-};
+fn armor() -> ProtocolKey {
+    ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x5a; 32]).expect("armor")
+}
+
+fn sealed(key: &ProtocolKey, nonce: u32) -> PaData {
+    let resp = KrbFastResponse {
+        padata: Vec::new(),
+        strengthen_key: None,
+        finished: None,
+        nonce,
+    };
+    let der = encode(&resp).expect("enc");
+    let usage = KeyUsage::new(ku::FAST_REP).expect("usage");
+    let cipher = encrypt(key, usage, &der).expect("seal");
+    let armored = KrbFastArmoredRep {
+        enc_fast_rep: EncryptedData {
+            etype: key.etype().to_iana(),
+            kvno: None,
+            cipher: cipher.into(),
+        },
+    };
+    PaData {
+        padata_type: pa::FX_FAST,
+        padata_value: encode(&krb5_types::fast::PaFxFastRep::ArmoredData(armored))
+            .expect("pa")
+            .into(),
+    }
+}
+
+#[test]
+fn b1_fast_reply_nonce_mismatch_is_kdcrep_modified() {
+    let key = armor();
+    let pa = sealed(&key, 100);
+    let err = unwrap_fast_rep_checked(&key, &Some(vec![pa]), 101).expect_err("flipped nonce");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("nonce modified in FAST response"),
+        "MIT fast.c:398-402 text, got {msg}"
+    );
+}
+
+#[test]
+fn b1_fast_reply_nonce_match_unwraps() {
+    let key = armor();
+    let pa = sealed(&key, 100);
+    let fast = unwrap_fast_rep_checked(&key, &Some(vec![pa.clone()]), 100).expect("match");
+    assert_eq!(fast.nonce, 100);
+    let raw = unwrap_fast_rep(&key, &Some(vec![pa])).expect("decrypt-only still works");
+    assert_eq!(raw.nonce, 100);
+}
+
+fn dummy_ticket(realm: &str) -> Ticket {
+    Ticket {
+        tkt_vno: Ticket::VNO,
+        realm: try_ascii(realm).expect("realm"),
+        sname: PrincipalName::krbtgt(realm),
+        enc_part: EncryptedData {
+            etype: EncryptionType::Aes256CtsHmacSha196.to_iana(),
+            kvno: Some(1),
+            cipher: vec![0u8; 32].into(),
+        },
+    }
+}
+
+fn wrap_fast() -> (krb5_types::AsReq, ProtocolKey, krb5_types::KerberosTime) {
+    let realm = "KERBER.TEST";
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+    let session =
+        ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x11; 32]).expect("session");
+    let sub =
+        ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x22; 32]).expect("sub");
+    let armor = build_fast_armor(
+        dummy_ticket(realm),
+        &session,
+        &try_ascii(realm).expect("realm"),
+        &cname,
+        Some(&sub),
+    )
+    .expect("armor");
+    let akey = armor_key(&session, Some(&sub)).expect("akey");
+    let mut req = as_req(cname, realm, 42, None).expect("as-req");
+    let live_till = req.0.req_body.till.clone();
+    req.0.req_body.from = Some(live_till.clone());
+    req.0.req_body.rtime = Some(live_till.clone());
+    attach_fast(&mut req, &armor, &akey, Vec::new()).expect("FAST wrap");
+    (req, akey, live_till)
+}
+
+#[test]
+fn b1_fast_outer_till_is_epoch() {
+    let (req, akey, live_till) = wrap_fast();
+    assert!(
+        live_till.unix_seconds() > 0,
+        "as_req till is now+10h before the snapshot"
+    );
+    assert_eq!(
+        req.0.req_body.till.unix_seconds(),
+        0,
+        "get_in_tkt.c:836-838 / fast.c:157-161 outer till is 0"
+    );
+    assert!(
+        req.0.req_body.from.is_none(),
+        "opt_kerberos_time from=0 is omitted"
+    );
+    assert!(
+        req.0.req_body.rtime.is_none(),
+        "opt_kerberos_time rtime=0 is omitted"
+    );
+
+    let till_der = encode(&req.0.req_body.till).expect("till der");
+    assert!(
+        till_der.windows(8).any(|w| w == b"19700101"),
+        "epoch GeneralizedTime is 19700101, got {till_der:?}"
+    );
+
+    let pa = &req.0.padata.as_ref().expect("padata")[0];
+    assert_eq!(pa.padata_type, pa::FX_FAST);
+    let fx: krb5_types::fast::PaFxFast = decode(pa.padata_value.as_ref()).expect("pa-fx-fast");
+    let krb5_types::fast::PaFxFast::ArmoredData(armored) = fx;
+    let enc_usage = KeyUsage::new(ku::FAST_ENC).expect("enc usage");
+    let plain = decrypt(&akey, enc_usage, armored.enc_fast_req.cipher.as_ref()).expect("decrypt");
+    let inner: krb5_types::fast::KrbFastReq = decode(&plain).expect("fast-req");
+    assert_eq!(
+        inner.req_body.till, live_till,
+        "inner FAST-REQ keeps the live till"
+    );
+    assert_eq!(inner.req_body.from.as_ref(), Some(&live_till));
+    assert_eq!(inner.req_body.rtime.as_ref(), Some(&live_till));
+
+    let outer_der = encode(&req.0.req_body).expect("outer body");
+    let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM).expect("ck usage");
+    let mic = checksum(&akey, ck_usage, &outer_der).expect("req_checksum");
+    assert_eq!(
+        armored.req_checksum.checksum.as_ref(),
+        mic.as_slice(),
+        "fast.c:310-313 checksums the snapshotted outer body"
+    );
+}
+
+#[test]
+fn b1_fast_outer_till_inner_nonce_unchanged() {
+    let (req, akey, _) = wrap_fast();
+    let pa = &req.0.padata.as_ref().expect("padata")[0];
+    let fx: krb5_types::fast::PaFxFast = decode(pa.padata_value.as_ref()).expect("pa-fx-fast");
+    let krb5_types::fast::PaFxFast::ArmoredData(armored) = fx;
+    let enc_usage = KeyUsage::new(ku::FAST_ENC).expect("enc usage");
+    let plain = decrypt(&akey, enc_usage, armored.enc_fast_req.cipher.as_ref()).expect("decrypt");
+    let inner: krb5_types::fast::KrbFastReq = decode(&plain).expect("fast-req");
+    assert_eq!(inner.req_body.nonce, 42);
+    assert_eq!(req.0.req_body.nonce, 42);
+}
+
+#[test]
+fn as_exchange_records_fast_availability() {
+    isolate_host_krb5();
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let addr = udp.local_addr().unwrap();
+    let tcp = std::net::TcpListener::bind(addr).unwrap();
+    let port = addr.port();
+    let store = shared_store(store);
+    thread::spawn(move || {
+        let _ = serve(store, udp, tcp);
+    });
+
+    let out = as_exchange(&AsRequest {
+        cname,
+        realm: TEST_REALM,
+        password: TEST_USER_PASSWORD,
+        kdc: &KdcAddr {
+            host: "127.0.0.1".into(),
+            port,
+        },
+        want_spake: false,
+        fast_armor: None,
+        pkinit: None,
+        canonicalize: false,
+        sname: None,
+        etypes: None,
+        ticket: AsTicketOpts::default(),
+    })
+    .expect("AS exchange with enc-pa-rep negotiation");
+    // The client advertised PA-149; the KDC echoed a valid checksum (else
+    // as_exchange would fail KDCREP_MODIFIED) plus PA-FX-FAST.
+    assert!(out.fast_avail, "PA-FX-FAST echoed => fast_avail");
+}
+
+fn request<'a>(
+    cname: &PrincipalName,
+    kdc: &'a KdcAddr,
+    armor: Option<&'a FastArmor>,
+) -> AsRequest<'a> {
+    AsRequest {
+        cname: cname.clone(),
+        realm: TEST_REALM,
+        password: TEST_USER_PASSWORD,
+        kdc,
+        want_spake: false,
+        fast_armor: armor,
+        pkinit: None,
+        canonicalize: false,
+        sname: None,
+        etypes: None,
+        ticket: AsTicketOpts::default(),
+    }
+}
+
+#[test]
+fn fast_exchange_negotiates_through_the_armor_like_mit() {
+    isolate_host_krb5();
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let addr = udp.local_addr().unwrap();
+    let tcp = std::net::TcpListener::bind(addr).unwrap();
+    let port = addr.port();
+    let store = shared_store(store);
+    thread::spawn(move || {
+        let _ = serve(store, udp, tcp);
+    });
+    let kdc = KdcAddr {
+        host: "127.0.0.1".into(),
+        port,
+    };
+    // The documented user requires preauth and the KDC advertises SPAKE.
+    // MIT `sort_krb5_padata_sequence` + `k5_preauth` records pa_type 151.
+    let plain = as_exchange(&request(&cname, &kdc, None)).expect("plain AS exchange");
+    assert!(plain.fast_avail);
+    assert_eq!(plain.pa_type, Some(pa::SPAKE));
+    let armor = FastArmor {
+        ticket: plain.ticket.clone(),
+        session: plain.session_key.clone(),
+        crealm: plain.crealm.clone(),
+        cname: plain.cname.clone(),
+    };
+    // Under FAST the advertised 150/149 travel inside the FAST-REQ, the KDC
+    // swaps the inner request in, and the client verifies the echo over the
+    // outer request with the strengthened reply key (krb5int_fast_verify_nego).
+    let fast = as_exchange(&request(&cname, &kdc, Some(&armor))).expect("FAST AS exchange");
+    assert!(fast.fast_avail, "PA-FX-FAST echoed inside the FAST reply");
+    assert_eq!(fast.pa_type, Some(pa::ENC_TIMESTAMP));
+}
+
+#[test]
+fn as_exchange_rejects_reply_missing_enc_pa_rep_checksum() {
+    isolate_host_krb5();
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    // No-preauth so the KDC issues on the first AS-REQ (single round-trip).
+    let attrs = store.get_name(&cname).unwrap().attributes & !krb5_kdc::KDB_REQUIRES_PRE_AUTH;
+    store
+        .apply_admin_fields(&cname, Some(attrs), None, None, None, None, false, None)
+        .unwrap();
+
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = udp.local_addr().unwrap().port();
+    thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        if let Ok((n, src)) = udp.recv_from(&mut buf) {
+            // Strip the client's PA-REQ-ENC-PA-REP so issue_as sets enc-pa-rep
+            // (L3a) but echoes no checksum.
+            if let Ok(mut req) = decode::<AsReq>(&buf[..n]) {
+                if let Some(p) = req.0.padata.as_mut() {
+                    p.retain(|d| d.padata_type != pa::REQ_ENC_PA_REP);
+                }
+                if let Ok(stripped) = encode(&req)
+                    && let Ok(reply) = krb5_kdc::handle_request(&store, &stripped)
+                {
+                    let _ = udp.send_to(&reply, src);
+                }
+            }
+        }
+    });
+
+    let err = as_exchange(&AsRequest {
+        cname,
+        realm: TEST_REALM,
+        password: TEST_USER_PASSWORD,
+        kdc: &KdcAddr {
+            host: "127.0.0.1".into(),
+            port,
+        },
+        want_spake: false,
+        fast_armor: None,
+        pkinit: None,
+        canonicalize: false,
+        sname: None,
+        etypes: None,
+        ticket: AsTicketOpts::default(),
+    })
+    .expect_err("enc-pa-rep flag without a PA-149 checksum => KDCREP_MODIFIED");
+    match err {
+        krb5_protocol::Error::ReplyMismatch(m) => {
+            assert!(m.contains("modified"), "want KDCREP_MODIFIED text, got {m}");
+        }
+        other => panic!("want KDCREP_MODIFIED, got {other:?}"),
+    }
+}
 
 fn mallory() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["mallory"])
