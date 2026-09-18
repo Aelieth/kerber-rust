@@ -13,5 +13,8 @@ krb5-types.workspace = true
 nix.workspace = true
 thiserror.workspace = true
 
+[dev-dependencies]
+krb5-testkit.workspace = true
+
 [lints]
 workspace = true
