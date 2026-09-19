@@ -30,27 +30,10 @@ docker exec -d \
     -e KRB5_KDC_DB_LIBRARY=memory \
     "$NAME" sh -c '/tmp/krb5-kdc --test-realm 127.0.0.1:88 >/tmp/kdc.log 2>&1 || /tmp/krb5-kdc --test-realm 127.0.0.1:8888 >/tmp/kdc.log 2>&1'
 
-ok=0
-for _ in $(seq 1 80); do
-    if docker exec "$NAME" grep -q '^listening ' /tmp/kdc.log 2>/dev/null; then
-        ok=1
-        break
-    fi
-    if docker exec "$NAME" grep -qiE 'bind failed|privilege drop:|not found|glibc' /tmp/kdc.log 2>/dev/null; then
-        if ! docker exec "$NAME" grep -q '^listening ' /tmp/kdc.log 2>/dev/null; then
-            break
-        fi
-    fi
-    sleep 0.25
-done
+require_listen "$NAME" /tmp/kdc.log "rust KDC listening in /tmp/kdc.log"
 
 echo "==== rust KDC log ===="
 docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
-
-if [ "$ok" -ne 1 ]; then
-    log "store.gate" "error" ',"error":"rust KDC did not listen"'
-    exit 1
-fi
 
 if ! docker exec "$NAME" grep -q '^backend memory' /tmp/kdc.log; then
     log "store.gate" "error" ',"error":"KDC did not serve MemoryStore (missing backend memory)"'

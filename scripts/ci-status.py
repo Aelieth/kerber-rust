@@ -21,7 +21,9 @@ already in the `/jobs` payload. `--budget-report` prints per-job medians over
 the last N completed runs. `--check-budget` compares each job's median of the
 last N completed runs (and the median wall) to `ci-budget.toml`; single-run
 breaches are info; fail when the median breaches or ≥ 3 of 5 runs breach
-(W2-Y4; a run cannot measure itself).
+(W2-Y4; a run cannot measure itself). Listings and `--check-budget` keep
+`main` pushes and the PR under test (`--pr` or `GITHUB_REF`); dependabot
+runs are dropped. `--save` / `--sha` still match that commit.
 """
 from __future__ import annotations
 
@@ -29,6 +31,7 @@ import argparse
 import json
 import os
 import pathlib
+import re
 import statistics
 import subprocess
 import sys
@@ -236,14 +239,54 @@ def format_run(repo: str, r: dict, jobs: bool, durations: bool = False) -> list[
     return lines
 
 
-def fetch_runs(repo: str, workflow: str, sha: str | None, n: int) -> list[dict]:
+def pr_under_test(explicit: int | None = None) -> int | None:
+    """`--pr`, else `GITHUB_REF=refs/pull/N/…`."""
+    if explicit is not None:
+        return explicit
+    ref = os.environ.get("GITHUB_REF") or ""
+    m = re.match(r"refs/pull/(\d+)", ref)
+    return int(m.group(1)) if m else None
+
+
+def keep_listing_run(run: dict, pr: int | None = None) -> bool:
+    """Listings and --check-budget keep main pushes and the PR under test.
+
+    Dependabot rebases (PRs 46–53) fail on every main move and must not
+    sit in the nightly median-of-5 window.
+    """
+    actor = ((run.get("actor") or {}).get("login") or "").lower()
+    head = run.get("head_branch") or ""
+    if actor == "dependabot[bot]" or head.startswith("dependabot/"):
+        return False
+    event = run.get("event") or ""
+    if event == "push" and head == "main":
+        return True
+    if pr is None:
+        return False
+    if event in ("pull_request", "pull_request_target"):
+        for item in run.get("pull_requests") or []:
+            if item.get("number") == pr:
+                return True
+    return False
+
+
+def fetch_runs(
+    repo: str,
+    workflow: str,
+    sha: str | None,
+    n: int,
+    pr: int | None = None,
+    filter_ci: bool = True,
+) -> list[dict]:
     """Runs of one workflow, newest first.
 
     Uses `/actions/workflows/<file>/runs` (not the global run list filtered
     by the default branch) so `--workflow peers` and PR-head SHAs are visible.
+    Listings and budget checks drop dependabot and keep only `main` pushes
+    plus the PR under test. An explicit `--sha` is unfiltered (save-by-SHA).
     """
     wf = workflow_file(workflow)
-    per_page = max(n * 3, 10)
+    per_page = max(n * 10, 30)
     path = f"/repos/{repo}/actions/workflows/{urllib.parse.quote(wf)}/runs?per_page={per_page}"
     runs = get(path)
     if not isinstance(runs, dict):
@@ -251,6 +294,7 @@ def fetch_runs(repo: str, workflow: str, sha: str | None, n: int) -> list[dict]:
     selected = list(runs.get("workflow_runs") or [])
     if sha:
         selected = [r for r in selected if r.get("head_sha", "").startswith(sha)]
+        filter_ci = False
         if not selected and len(sha) >= 7:
             # Workflow-file listing is not filtered by SHA server-side; a
             # long-ago run can fall off per_page. Try the run list by head_sha
@@ -268,6 +312,8 @@ def fetch_runs(repo: str, workflow: str, sha: str | None, n: int) -> list[dict]:
                     path_name = (r.get("path") or "").rsplit("/", 1)[-1]
                     if path_name == want or r.get("name") == workflow:
                         selected.append(r)
+    if filter_ci:
+        selected = [r for r in selected if keep_listing_run(r, pr)]
     return selected[:n]
 
 
@@ -330,9 +376,9 @@ def save_run(repo: str, workflow: str, sha: str, out_dir: str, retries: int = 10
     return 2
 
 
-def budget_report(repo: str, workflow: str, n: int) -> int:
+def budget_report(repo: str, workflow: str, n: int, pr: int | None = None) -> int:
     """Print per-job median duration_s over the last N completed runs."""
-    selected = fetch_runs(repo, workflow, None, n)
+    selected = fetch_runs(repo, workflow, None, n, pr=pr)
     if not selected:
         print("ci-status: no matching runs", file=sys.stderr)
         return 2
@@ -450,7 +496,9 @@ def budget_median_verdict(
     return fail, info
 
 
-def check_budget(repo: str, workflow: str, sha: str | None, n: int) -> int:
+def check_budget(
+    repo: str, workflow: str, sha: str | None, n: int, pr: int | None = None
+) -> int:
     """Compare completed runs against ci-budget.toml.
 
     Per-run overruns are info. Fail when a job/wall median exceeds the cap
@@ -463,7 +511,7 @@ def check_budget(repo: str, workflow: str, sha: str | None, n: int) -> int:
         print("ci-status: missing ci-budget.toml", file=sys.stderr)
         return 2
     try:
-        selected = fetch_runs(repo, workflow, sha, n)
+        selected = fetch_runs(repo, workflow, sha, n, pr=pr)
     except urllib.error.URLError as e:
         print(f"ci-status: {e}", file=sys.stderr)
         return 2
@@ -539,18 +587,25 @@ def main() -> int:
         action="store_true",
         help="fail if job/wall median of last -n (or --sha) exceeds ci-budget.toml, or >=3 of 5 runs breach",
     )
+    ap.add_argument(
+        "--pr",
+        type=int,
+        default=None,
+        help="include this pull request's runs (default: GITHUB_REF refs/pull/N)",
+    )
     args = ap.parse_args()
     if not args.repo:
         print("ci-status: cannot determine the repository; pass --repo", file=sys.stderr)
         return 2
+    pr = pr_under_test(args.pr)
     if args.save:
         return save_run(args.repo, args.workflow, args.save, args.out)
     if args.budget_report:
-        return budget_report(args.repo, args.workflow, args.runs)
+        return budget_report(args.repo, args.workflow, args.runs, pr=pr)
     if args.check_budget:
-        return check_budget(args.repo, args.workflow, args.sha, args.runs)
+        return check_budget(args.repo, args.workflow, args.sha, args.runs, pr=pr)
     try:
-        selected = fetch_runs(args.repo, args.workflow, args.sha, args.runs)
+        selected = fetch_runs(args.repo, args.workflow, args.sha, args.runs, pr=pr)
     except urllib.error.URLError as e:
         print(f"ci-status: {e}", file=sys.stderr)
         return 2

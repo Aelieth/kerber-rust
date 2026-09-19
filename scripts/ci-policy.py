@@ -2289,6 +2289,10 @@ def check_ci_status_save() -> None:
         _die("ci-status.py must fetch /actions/workflows/<file>/runs")
     if "branch=main" in text:
         _die("ci-status.py must not pin fetch_runs to branch=main")
+    if "keep_listing_run" not in text:
+        _die("ci-status.py must filter listings to main pushes and the PR under test")
+    if "dependabot[bot]" not in text:
+        _die("ci-status.py must drop dependabot runs from listings and --check-budget")
     import importlib.util
 
     spec = importlib.util.spec_from_file_location("ci_status_r8", path)
@@ -2348,6 +2352,32 @@ def check_ci_status_save() -> None:
         _die("budget_median_verdict must fail 3-of-5 / median over cap")
     if not any("mit-extra" in ln for ln in _fail):
         _die(f"budget_median_verdict 3-of-5 must name mit-extra: {_fail}")
+    dep = {
+        "event": "pull_request",
+        "head_branch": "dependabot/cargo/foo",
+        "actor": {"login": "dependabot[bot]"},
+        "pull_requests": [{"number": 46}],
+    }
+    main_push = {
+        "event": "push",
+        "head_branch": "main",
+        "actor": {"login": "Aelieth"},
+        "pull_requests": [],
+    }
+    pr_run = {
+        "event": "pull_request",
+        "head_branch": "w3-hygiene-s3-0",
+        "actor": {"login": "Aelieth"},
+        "pull_requests": [{"number": 60}],
+    }
+    if mod.keep_listing_run(dep, pr=60):
+        _die("keep_listing_run must drop a dependabot run")
+    if not mod.keep_listing_run(main_push, pr=None):
+        _die("keep_listing_run must keep a main push")
+    if not mod.keep_listing_run(pr_run, pr=60):
+        _die("keep_listing_run must keep the PR under test")
+    if mod.keep_listing_run(pr_run, pr=54):
+        _die("keep_listing_run must drop another PR")
 
 
 def check_makefile_matches_ci(mf: str | None = None, ci_text: str | None = None) -> None:
@@ -2717,6 +2747,9 @@ GATE_COMMON_NEEDLES = (
     "need_image",
     "gate_wall_s=",
     "wait_port_in",
+    "require_listen",
+    "require_log",
+    "require_port_in",
     "wait_udp_in",
     "wait_tcp_bound_in",
     "wait_gone_in",

@@ -6,6 +6,19 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S3-0 pre-flight
+
+- **scripts.** Gate KDC starts wait for the listener (or a log line)
+  with a hard cap and die naming what never appeared
+  (`require_listen` / `require_log` / `require_port_in` in
+  `gate-common.sh`). `kdc-gate.sh` and
+  `client-differential-flows-gate.sh` no longer assert a log after one
+  read or a fixed `sleep 0.25`. Expected strings and cells are
+  unchanged.
+- **scripts.** `ci-status.py` listings and `--check-budget` keep `main`
+  pushes and the PR under test; dependabot runs are dropped. Cargo
+  dependabot `open-pull-requests-limit` is 0 through W3.
+
 ### W3-S2-R3 compare-tool robustness
 
 - **tool.** Each `--self-test` (`hygiene-diff`, `hygiene-body-diff`,

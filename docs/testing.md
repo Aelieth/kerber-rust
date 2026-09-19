@@ -62,12 +62,18 @@ the public GitHub REST API answers unauthenticated with run, job and step conclu
 check-run annotations (job logs need `GITHUB_TOKEN`). `--durations` prints
 per-job `duration_s=` from `started_at`/`completed_at`; `--save` records
 those lines plus `run_wall_s=`. `--check-budget` fails if a completed
-run exceeds `ci-budget.toml`. `--workflow` selects a workflow file
+run exceeds `ci-budget.toml`. Listings and `--check-budget` keep `main`
+pushes and the PR under test (`--pr` or `GITHUB_REF`); dependabot runs
+are dropped so their rebase failures do not sit in the nightly
+median-of-5. `--workflow` selects a workflow file
 (not the global run list filtered to `main`), so peers and PR-head SHAs
 are visible. `--budget-report -n 15` prints per-job medians. Every gate sources `scripts/lib/provenance.sh`,
 whose `ERR` trap turns a silent `set -e` death into a `::error file=scripts/<gate>.sh,line=N::…` line
 naming the failing command; GitHub stores it as an annotation and `ci-status.py` prints it under the
-failed job, so a red step names its cell without the log. Deliberate failures under `set +e`, `||`, `!`
+failed job, so a red step names its cell without the log. KDC starts wait
+for the listener (or a log line) through `require_listen` /
+`require_log` / `require_port_in` in `scripts/lib/gate-common.sh`: a
+hard cap, then `die` naming what never appeared. Deliberate failures under `set +e`, `||`, `!`
 and `if` conditions are not annotated, and `log … error; exit 1` paths speak for themselves.
 `scripts/gate-err-trap-selftest.sh` (the `test` job) keeps the trap honest. Check CI after every push;
 a job stops at its first red step, so every gate behind that step has no CI evidence until the run is

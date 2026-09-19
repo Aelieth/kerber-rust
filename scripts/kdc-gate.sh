@@ -55,28 +55,10 @@ docker exec -d \
     -e KRB5_KDC_AUDIT_LOG=/tmp/au-rust.log \
     "$NAME" sh -c '/tmp/krb5-kdc --test-realm 127.0.0.1:88 >/tmp/kdc.log 2>&1 || /tmp/krb5-kdc --test-realm 127.0.0.1:8888 >/tmp/kdc.log 2>&1'
 
-ok=0
-for _ in $(seq 1 80); do
-    if docker exec "$NAME" grep -q '^listening ' /tmp/kdc.log 2>/dev/null; then
-        ok=1
-        break
-    fi
-    # Do not match JSON "error" fields on the success path (privilege drop).
-    if docker exec "$NAME" grep -qiE 'bind failed|privilege drop:|not found|glibc' /tmp/kdc.log 2>/dev/null; then
-        if ! docker exec "$NAME" grep -q '^listening ' /tmp/kdc.log 2>/dev/null; then
-            break
-        fi
-    fi
-    sleep 0.25
-done
+require_listen "$NAME" /tmp/kdc.log "rust KDC listening in /tmp/kdc.log"
 
 echo "==== rust KDC log ===="
 docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
-
-if [ "$ok" -ne 1 ]; then
-    log "kdc.gate" "error" ',"error":"rust KDC did not listen inside MIT client container"'
-    exit 1
-fi
 
 LISTEN="$(docker exec "$NAME" grep '^listening ' /tmp/kdc.log | tail -1)"
 PORT=88
@@ -113,6 +95,9 @@ echo "$KLIST2" | grep -q 'user@KERBER.TEST'
 echo "$KLIST2" | grep -q 'host/testhost.kerber.test'
 
 echo "==== rust KDC ISSUE tuple after kinit + kvno ===="
+require_log "$NAME" /tmp/kdc.log 'ISSUE' "ISSUE in /tmp/kdc.log"
+require_log "$NAME" /tmp/kdc.log 'krbtgt/KERBER.TEST' "krbtgt/KERBER.TEST in /tmp/kdc.log"
+require_log "$NAME" /tmp/kdc.log 'host/testhost.kerber.test' "host/testhost.kerber.test in /tmp/kdc.log"
 RUSTLOG="$(docker exec "$NAME" cat /tmp/kdc.log)"
 echo "$RUSTLOG"
 echo "$RUSTLOG" | grep -q 'ISSUE' # RUST_issue_as
@@ -159,19 +144,7 @@ docker exec -d \
     -e KRB5_KDC_AUDIT=test \
     -e KRB5_KDC_AUDIT_LOG=/tmp/au-rust.log \
     "$NAME" sh -c "/tmp/krb5-kdc --test-realm 0.0.0.0:${PORT} >/tmp/kdc-bridge.log 2>&1"
-ok=0
-for _ in $(seq 1 80); do
-    if docker exec "$NAME" grep -q '^listening ' /tmp/kdc-bridge.log 2>/dev/null; then
-        ok=1
-        break
-    fi
-    sleep 0.25
-done
-if [ "$ok" != 1 ]; then
-    docker exec "$NAME" cat /tmp/kdc-bridge.log >&2 || true
-    log "kdc.gate" "error" ',"error":"kdc did not listen on 0.0.0.0"'
-    exit 1
-fi
+require_listen "$NAME" /tmp/kdc-bridge.log "rust KDC listening on 0.0.0.0 in /tmp/kdc-bridge.log"
 docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
 docker exec "$NAME" sh -c "sed -i 's/kdc = 127.0.0.1.*/kdc = ${BRIDGE}:${PORT}/' /etc/krb5.conf"
 if ! docker exec -e KRB5_TRACE=/dev/stderr "$NAME" sh -c 'printf "userpassword\n" | kinit -a user@KERBER.TEST'; then
@@ -208,18 +181,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-free=0
-for _ in $(seq 1 40); do
-    if ! docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.2)" 2>/dev/null; then
-        free=1
-        break
-    fi
-    sleep 0.25
-done
-if [ "$free" != 1 ]; then
-    log "kdc.gate" "error" ',"error":"rust kdc still bound :88"'
-    exit 1
-fi
+wait_gone_in "$NAME" 88 40 || die "rust kdc still bound :88"
 docker exec -i "$NAME" python3 - <<'PY'
 from pathlib import Path
 p = Path("/etc/krb5.conf")
@@ -258,18 +220,9 @@ rm -f /tmp/au.log /tmp/mit-issue.log
 docker exec -d \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
     "$NAME" sh -c 'cd /tmp && krb5kdc -n >/tmp/mit-kdc-stdout.log 2>&1'
-ok=0
-for _ in $(seq 1 80); do
-    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.3)" 2>/dev/null; then
-        ok=1
-        break
-    fi
-    sleep 0.25
-done
-if [ "$ok" != 1 ]; then
+if ! wait_port_in "$NAME" 88 80; then
     docker exec "$NAME" cat /tmp/mit-kdc-stdout.log >&2 || true
-    log "kdc.gate" "error" ',"error":"MIT krb5kdc did not listen"'
-    exit 1
+    die "MIT krb5kdc listening on :88 never appeared"
 fi
 docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
 if ! docker exec "$NAME" sh -c 'printf "userpassword\n" | kinit user@KERBER.TEST'; then
@@ -282,6 +235,8 @@ if ! docker exec "$NAME" kvno host/testhost.kerber.test; then
     log "kdc.gate" "error" ',"error":"MIT kvno vs MIT KDC failed"'
     exit 1
 fi
+require_log "$NAME" /tmp/mit-issue.log 'ISSUE' "ISSUE in /tmp/mit-issue.log"
+require_log "$NAME" /tmp/mit-issue.log 'krbtgt/KERBER.TEST' "krbtgt/KERBER.TEST in /tmp/mit-issue.log"
 MITLOG="$(docker exec "$NAME" cat /tmp/mit-issue.log 2>/dev/null || true)"
 echo "$MITLOG"
 echo "$MITLOG" | grep -q 'ISSUE' # MIT_issue_as

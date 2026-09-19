@@ -13,3 +13,6 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # Dependabot rebases fail on every main move and sit in the
+    # nightly median-of-5 window. Pause new cargo PRs through W3.
+    open-pull-requests-limit: 0

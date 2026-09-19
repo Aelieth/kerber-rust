@@ -1,7 +1,8 @@
 # Shared gate preamble. Source after `cd "$ROOT"` and after provenance.sh.
 # shellcheck shell=bash
 # Provides: log, die, unavailable, register_cleanup, wait_port, wait_listen,
-# wait_gone, wait_log, wait_port_in, wait_udp_in, wait_tcp_bound_in, wait_gone_in, wait_pid_gone, need_image,
+# wait_gone, wait_log, require_listen, require_log, require_port_in,
+# wait_port_in, wait_udp_in, wait_tcp_bound_in, wait_gone_in, wait_pid_gone, need_image,
 # need_bins, shell_container, kdc_start, kdc_restart, mit_kdc_restart,
 # stock_mit_kdc. One EXIT trap writes gate_wall_s= and runs registered
 # cleanups. Does not replace provenance's ERR. Host wait_port/wait_gone need a
@@ -122,6 +123,44 @@ wait_log() {
         sleep 0.1
     done
     return 1
+}
+
+# Bounded readiness. Hard-cap the poll, then die naming what never appeared.
+# Crash markers on a rust KDC log abort early (bind/privilege/not-found).
+require_listen() {
+    local ctn=$1 logfile=$2 what=$3 n="${4:-80}"
+    local i
+    for i in $(seq 1 "$n"); do
+        if docker exec "$ctn" grep -q '^listening ' "$logfile" 2>/dev/null; then
+            return 0
+        fi
+        if docker exec "$ctn" grep -qiE 'bind failed|privilege drop:|not found|glibc' "$logfile" 2>/dev/null; then
+            if ! docker exec "$ctn" grep -q '^listening ' "$logfile" 2>/dev/null; then
+                docker exec "$ctn" cat "$logfile" >&2 || true
+                die "$what never appeared (kdc start failed)"
+            fi
+        fi
+        sleep 0.1
+    done
+    docker exec "$ctn" cat "$logfile" >&2 || true
+    die "$what never appeared"
+}
+
+require_log() {
+    local ctn=$1 logfile=$2 pattern=$3 what=$4 n="${5:-80}"
+    if wait_log "$ctn" "$logfile" "$pattern" "$n"; then
+        return 0
+    fi
+    docker exec "$ctn" cat "$logfile" >&2 || true
+    die "$what never appeared"
+}
+
+require_port_in() {
+    local ctn=$1 port=$2 what=$3 n="${4:-80}"
+    if wait_port_in "$ctn" "$port" "$n"; then
+        return 0
+    fi
+    die "$what never appeared"
 }
 
 # In-container TCP connect. Group-B shell containers do not publish KDC ports
@@ -452,7 +491,7 @@ kdc_start() {
         -e KRB5_KDC_DB="${KRB5_KDC_DB:-/tmp/principal}" \
         -e KRB5_KDC_STASH="${KRB5_KDC_STASH:-/tmp/stash}" \
         "$NAME" sh -c "/tmp/krb5-kdc --test-realm $addr >/tmp/kdc.log 2>&1"
-    wait_listen "$NAME" /tmp/kdc.log || die "kdc did not listen"
+    require_listen "$NAME" /tmp/kdc.log "rust KDC listening in /tmp/kdc.log"
 }
 
 kdc_restart() {

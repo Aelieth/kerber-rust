@@ -134,17 +134,9 @@ docker exec -d \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
     -e KRB5_CONFIG=/etc/krb5.conf \
     "$NAME" sh -c 'krb5kdc -n >/tmp/mit-kdc.log 2>&1'
-ok=0
-for _ in $(seq 1 40); do
-    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',88),0.3)" 2>/dev/null; then
-        ok=1
-        break
-    fi
-    sleep 0.25
-done
-if [ "$ok" != 1 ]; then
+if ! wait_port_in "$NAME" 88 80; then
     docker exec "$NAME" cat /tmp/mit-kdc.log >&2 || true
-    die "MIT krb5kdc did not listen after SPAKE/PKINIT config"
+    die "MIT krb5kdc listening on :88 never appeared"
 fi
 
 wait_bound_free_in "$NAME" "$PROXY_PORT" udp || die "proxy :$PROXY_PORT already bound"
