@@ -499,7 +499,7 @@ fn handle_kpasswd_from(
         let mut g = store
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // House rule (`kadm5.rs` `write_store`): reload then mutate then
+        // House rule (`kadm5/dispatch.rs` `write_store`): reload then mutate then
         // save. `AdminSession::change_password` did this; the Z7.2 inline
         // path skipped it and could save over a `kadmin.local` write.
         // MIT `ovsec_kadmd.c:446` `kadm5_init(…, "kadmind", …)` + `schpw.c:407`:

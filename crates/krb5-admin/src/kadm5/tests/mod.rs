@@ -1,6 +1,16 @@
-//! In-src kadm5 tests, regrouped by family. Zero product visibility change.
+//! In-src kadm5 tests, regrouped by family. Private-bound: they reach
+//! the sibling modules' `pub(super)` items, nothing wider.
 
-use super::*;
+use krb5_crypto::ProtocolKey;
+use krb5_gss::GssContext;
+use krb5_kdc::{Acl, KDB_LOCKDOWN_KEYS, SharedDump as SharedStore, TL_LAST_PWD_CHANGE, TlData};
+use krb5_types::PrincipalName;
+
+use super::{
+    auth::*, codes::*, dispatch::*, glob::*, iprop::*, log::*, policy::*, principal::*, rpc::*,
+    xdr::*,
+};
+use crate::{AdminSession, Error};
 
 fn rpc_call(xid: u32, prog: u32, vers: u32, proc: u32, flavor: u32) -> Vec<u8> {
     let mut w = XdrW::default();

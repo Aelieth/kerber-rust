@@ -6,6 +6,28 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S3.1 kadm5 by MIT source family
+
+- **krb5-admin.** `kadm5.rs` (4,233 lines) is split into
+  `kadm5/{codes,xdr,rpc,auth,iprop,dispatch,principal,policy,glob,log}.rs`,
+  each headed by the MIT file or function family it mirrors; the root
+  keeps the module list and the crate's re-exports. Every item moved
+  whole (`hygiene-fn-diff`: 3,457 pairs, 0 changed); 249 private
+  items the siblings or the in-src tests reach are `pub(super)`,
+  nothing became `pub`. No wire, text or store behaviour changed.
+- **tests.** `keysalt.rs` pins the weak-etype filter in
+  `src/kadm5/xdr.rs`; the in-src `kadm5/tests/` import the sibling
+  modules explicitly.
+- **docs.** The parity ledger's `kadm5.rs` anchors (45 rows) and two
+  `security.md` cites name the module files.
+- **tool.** `hygiene-fn-diff.py` no longer attaches a `//!` module
+  header to the first item under it, and a private → `pub(super)`
+  widening whose signature rustfmt re-wraps (one parameter per line,
+  trailing comma) is `vis-only`; a `(T,)` tuple keeps its comma.
+  Self-test 47 cases. `ci-policy.py` skips `#[cfg(test)]` children
+  of `src/**` when indexing ledger anchor files, so
+  `kadm5/tests/policy.rs` does not collide with `kadm5/policy.rs`.
+
 ### W3-S3-0 pre-flight
 
 - **scripts.** Gate KDC starts wait for the listener (or a log line)
