@@ -531,7 +531,7 @@ docker exec "$MITNAME" python3 /tmp/kdc-rewrite-proxy.py --self-test
 echo "==== Z1.2 MIT KDC behind MITM: rewritten outer AS-REP cname — MIT kinit -T keeps the finished client ===="
 wait_bound_free_in "$MITNAME" 1893 tcp || die "proxy 1893 already bound"
 docker exec -d "$MITNAME" python3 /tmp/kdc-rewrite-proxy.py 1893 127.0.0.1 88 /tmp/z12-cname.txt as-rep-cname mitm
-wait_port_in "$MITNAME" 1893 || die "proxy 1893 did not listen"
+require_port_in "$MITNAME" 1893 "proxy 1893 listen"
 docker exec "$MITNAME" sh -c "sed 's/127.0.0.1:1891/127.0.0.1:1893/' /tmp/krb5-fast-proxy.conf > /tmp/krb5-z12-cname.conf"
 docker exec "$MITNAME" grep -q '127.0.0.1:1893' /tmp/krb5-z12-cname.conf
 docker exec "$MITNAME" rm -f /tmp/krb5cc_z12_mit /tmp/krb5cc_z12_rust
@@ -589,7 +589,7 @@ echo "$Z12_CNAME_PROXY" | grep -q 'kind=as-rep rewritten=yes' || {
 echo "==== Z1.2 MIT KDC behind MITM: PA-FX-FAST stripped from the 25 — MIT kinit -T stops with the outer error ===="
 wait_bound_free_in "$MITNAME" 1894 tcp || die "proxy 1894 already bound"
 docker exec -d "$MITNAME" python3 /tmp/kdc-rewrite-proxy.py 1894 127.0.0.1 88 /tmp/z12-strip.txt strip-fx-fast
-wait_port_in "$MITNAME" 1894 || die "proxy 1894 did not listen"
+require_port_in "$MITNAME" 1894 "proxy 1894 listen"
 docker exec "$MITNAME" sh -c "sed 's/127.0.0.1:1891/127.0.0.1:1894/' /tmp/krb5-fast-proxy.conf > /tmp/krb5-z12-strip.conf"
 docker exec "$MITNAME" grep -q '127.0.0.1:1894' /tmp/krb5-z12-strip.conf
 set +e

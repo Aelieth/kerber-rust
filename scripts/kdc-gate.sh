@@ -220,10 +220,7 @@ rm -f /tmp/au.log /tmp/mit-issue.log
 docker exec -d \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
     "$NAME" sh -c 'cd /tmp && krb5kdc -n >/tmp/mit-kdc-stdout.log 2>&1'
-if ! wait_port_in "$NAME" 88 200; then
-    docker exec "$NAME" cat /tmp/mit-kdc-stdout.log >&2 || true
-    die "MIT krb5kdc listening on :88 never appeared"
-fi
+require_port_in "$NAME" 88 "MIT krb5kdc listening on :88"
 docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
 if ! docker exec "$NAME" sh -c 'printf "userpassword\n" | kinit user@KERBER.TEST'; then
     docker exec "$NAME" cat /tmp/mit-issue.log >&2 || true

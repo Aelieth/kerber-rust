@@ -109,7 +109,7 @@ docker exec -d \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
     -e KRB5_CONFIG=/etc/krb5.conf \
     "$NAME" sh -c 'krb5kdc >/tmp/mit-kdc.log 2>&1'
-wait_port_in "$NAME" 88 || die "MIT krb5kdc did not listen after restart"
+require_port_in "$NAME" 88 "MIT krb5kdc listen after restart"
 
 echo "==== control: MIT kinit against MIT KDC ===="
 set +e
@@ -277,7 +277,7 @@ docker exec -d \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
     -e KRB5_CONFIG=/etc/krb5.conf \
     "$NAME" sh -c 'krb5kdc >/tmp/mit-kdc-d.log 2>&1'
-wait_port_in "$NAME" 88 || die "MIT krb5kdc did not listen (D)"
+require_port_in "$NAME" 88 "MIT krb5kdc listen (D)"
 # The Rust KDC's UDP loop leaves the shutdown flag unread until its read
 # timeout, so a plain kill can keep :8888 bound; kill -9 like policy-gate, and
 # relaunch on the persisted DB without --test-realm like restart-gate.
@@ -405,7 +405,7 @@ docker exec -d \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
     -e KRB5_CONFIG=/tmp/krb5-e-kdc.conf \
     "$NAME" sh -c 'krb5kdc >/tmp/mit-kdc-e.log 2>&1'
-wait_port_in "$NAME" 88 || die "MIT krb5kdc did not listen (E)"
+require_port_in "$NAME" 88 "MIT krb5kdc listen (E)"
 docker exec "$NAME" sh -c '
 for comm in /proc/[0-9]*/comm; do
     [ -f "$comm" ] || continue

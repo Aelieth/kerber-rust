@@ -505,6 +505,7 @@ EOS
     register_cleanup "docker rm -f '$NAME' >/dev/null 2>&1 || true"
 }
 
+# Uncalled (kdc-gate inlines the start). Held for S6.
 kdc_start() {
     local addr="${1:-127.0.0.1:88}"
     docker exec -d \
@@ -517,12 +518,14 @@ kdc_start() {
     require_listen "$NAME" /tmp/kdc.log "rust KDC listening in /tmp/kdc.log"
 }
 
+# Uncalled. Held for S6.
 kdc_restart() {
     docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true' || true
     wait_gone 127.0.0.1 88 40 || true
     kdc_start "$@"
 }
 
+# Uncalled. Held for S6.
 mit_kdc_restart() {
     local ctn="${1:-$NAME}"
     docker exec "$ctn" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true' || true
