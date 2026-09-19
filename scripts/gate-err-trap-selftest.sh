@@ -192,4 +192,80 @@ if echo "$OUT" | grep -q 'gate-common.sh'; then
     echo "require_log annotated gate-common.sh instead of the gate" >&2
     exit 1
 fi
+
+# stock_mit_kdc: dead shared container warns and snapshots; green attach is quiet.
+cat >"$TMP/fakebin/docker" <<'FAKE'
+#!/usr/bin/env bash
+cmd=$1
+shift || true
+case "$cmd" in
+    inspect)
+        if [ -f "${KERBER_STOCK_RUNNING:-}" ]; then echo true; else echo false; fi
+        ;;
+    logs)
+        echo '{"event":"harness.kinit","correlation_id":"x","outcome":"ok"}'
+        ;;
+    rm|run)
+        echo "$cmd" >>"${KERBER_STOCK_MARK:?}"
+        echo cid
+        ;;
+    exec)
+        case "$*" in
+            *kerber-stock*) echo snapshot >>"${KERBER_STOCK_MARK:?}" ;;
+        esac
+        ;;
+    *)
+        exit 1
+        ;;
+esac
+FAKE
+chmod +x "$TMP/fakebin/docker"
+cat >"$TMP/scripts/stock-probe.sh" <<'PROBE'
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$KERBER_ROOT"
+. "$KERBER_ROOT/scripts/lib/provenance.sh" >/dev/null
+. "$KERBER_ROOT/scripts/lib/gate-common.sh"
+stock_mit_kdc
+echo "stock_mit_kdc ok"
+PROBE
+chmod +x "$TMP/scripts/stock-probe.sh"
+run_stock() {
+    local mark=$1 running=${2:-}
+    : >"$mark"
+    (
+        cd "$TMP" || exit 1
+        export KERBER_ROOT="$ROOT" KERBER_NO_IMAGE=1 KERBER_SCRATCH="$TMP/scratch"
+        export KERBER_LIVE=1 KERBER_MIT_NAME=fake-mit KERBER_STOCK_LIVE_N=1
+        export KERBER_STOCK_MARK="$mark" GITHUB_ACTIONS=1
+        export PATH="$TMP/fakebin:$PATH"
+        if [ -n "$running" ]; then
+            export KERBER_STOCK_RUNNING="$running"
+        else
+            unset KERBER_STOCK_RUNNING
+        fi
+        bash ./scripts/stock-probe.sh 2>&1
+    ) || true
+}
+MARK="$TMP/stock.mark"
+OUT="$(run_stock "$MARK")"
+echo "$OUT"
+echo "$OUT" | grep -qF '::warning::dead shared MIT container fake-mit; starting a replacement'
+echo "$OUT" | grep -qF '"event":"stock.mit"'
+echo "$OUT" | grep -qF 'stock_mit_kdc ok'
+grep -q '^run$' "$MARK"
+grep -q '^snapshot$' "$MARK"
+: >"$MARK"
+touch "$TMP/stock.running"
+OUT="$(run_stock "$MARK" "$TMP/stock.running")"
+echo "$OUT"
+echo "$OUT" | grep -qF 'stock_mit_kdc ok'
+if echo "$OUT" | grep -q '::warning'; then
+    echo "healthy LIVE attach must not warn" >&2
+    exit 1
+fi
+if [ -s "$MARK" ]; then
+    echo "healthy LIVE attach must not replace the container: $(cat "$MARK")" >&2
+    exit 1
+fi
 echo "gate-err-trap-selftest: ok"

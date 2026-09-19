@@ -50,6 +50,9 @@ this project uses semantic versioning once a crate is published.
   is in the ratchet sum again (22.50 s).
 - **scripts.** `unavailable` annotates `::notice`; `die` keeps `::error`.
   Both name the first frame outside `scripts/lib/`.
+- **scripts.** A dead shared MIT container is named in a structured
+  warning (and `::warning` on Actions); the replacement gets
+  `mit_conf_snapshot`.
 
 ### W3-S2-R3 compare-tool robustness
 

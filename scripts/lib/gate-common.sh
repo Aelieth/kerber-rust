@@ -592,13 +592,22 @@ _stock_mit_ready() {
     echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"ok"'
 }
 
+_stock_mit_warn_dead() {
+    local n=$1
+    log "stock.mit" "warn" ",\"container\":\"$n\",\"warning\":\"dead shared container; starting a replacement\""
+    echo "stock_mit_kdc: dead shared container $n; starting a replacement" >&2
+    if [ -n "${GITHUB_ACTIONS:-}" ]; then
+        printf '::warning::dead shared MIT container %s; starting a replacement\n' "$n"
+    fi
+}
+
 stock_mit_kdc() {
     local n="${1:-${KERBER_MIT_NAME:-kerber-rust-mit-kdc}}"
-    local logs
+    local logs replaced=0
     if [ "${KERBER_LIVE:-}" = 1 ]; then
         n="${KERBER_MIT_NAME:-kerber-rust-mit-kdc}"
         NAME="$n"
-        for _ in $(seq 1 200); do
+        for _ in $(seq 1 "${KERBER_STOCK_LIVE_N:-200}"); do
             if _stock_mit_running "$n" && _stock_mit_ready "$n"; then
                 return 0
             fi
@@ -616,7 +625,9 @@ stock_mit_kdc() {
             die "KERBER_LIVE=1 but $n never became ready"
         fi
         # Still dead: start a stock instance and keep it for later steps.
+        _stock_mit_warn_dead "$n"
         KERBER_STOCK_KEEP=1
+        replaced=1
     fi
     docker rm -f "$n" >/dev/null 2>&1 || true
     docker run -d --name "$n" \
@@ -629,6 +640,9 @@ stock_mit_kdc() {
     for _ in $(seq 1 90); do
         logs="$(docker logs "$n" 2>&1 || true)"
         if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"ok"'; then
+            if [ "$replaced" = 1 ]; then
+                mit_conf_snapshot "$n"
+            fi
             return 0
         fi
         if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"error"'; then
