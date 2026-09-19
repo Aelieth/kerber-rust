@@ -10,8 +10,9 @@ a comparison normaliser that keeps string, byte-string, raw-string
 and char literal contents (whitespace and comments are still
 normalised outside literals), and classifies each pair
 `identical` / `vis-only` (only `pub` ↔ `pub(crate)` on the signature)
-/ `changed`. Reports `added` and `removed`. A key collision never
-drops a body.
+/ `doc-only` / `changed`. The compared blob includes the attribute
+block above the fn. Reports `added` and `removed`. A key collision
+never drops a body.
 
 Fails on any `changed`, `added` or `removed` not in `--accept` (keyed,
 blob-pinned, unused entry red). `--split old_key = new_a + new_b + …`
@@ -328,9 +329,14 @@ def compare_norm(src: str) -> str:
         c = src[i]
         nxt = src[i + 1] if i + 1 < n else ""
         if c == "/" and nxt == "/":
+            third = src[i + 2] if i + 2 < n else ""
             j = src.find("\n", i)
-            i = n if j < 0 else j
-            emit_space()
+            j = n if j < 0 else j
+            if third in "/!":
+                emit(src[i:j])
+            else:
+                emit_space()
+            i = j
             continue
         if c == "/" and nxt == "*":
             depth, j = 1, i + 2
@@ -386,13 +392,27 @@ def vis_fold(sig: str) -> str:
     return VIS_FOLD_RE.sub("pub", sig)
 
 
+def _strip_doc_lines(src: str) -> str:
+    kept: list[str] = []
+    for ln in src.splitlines():
+        s = ln.strip()
+        if s.startswith("///") or s.startswith("//!"):
+            continue
+        kept.append(ln)
+    return "\n".join(kept)
+
+
 def classify(old_src: str, new_src: str) -> str:
     if compare_norm(old_src) == compare_norm(new_src):
         return "identical"
+    if compare_norm(_strip_doc_lines(old_src)) == compare_norm(_strip_doc_lines(new_src)):
+        return "doc-only"
     if compare_norm(inner_body(old_src)) == compare_norm(inner_body(new_src)) and vis_fold(
-        compare_norm(signature_of(old_src))
-    ) == vis_fold(compare_norm(signature_of(new_src))):
-        if compare_norm(signature_of(old_src)) != compare_norm(signature_of(new_src)):
+        compare_norm(signature_of(_strip_doc_lines(old_src)))
+    ) == vis_fold(compare_norm(signature_of(_strip_doc_lines(new_src)))):
+        if compare_norm(signature_of(_strip_doc_lines(old_src))) != compare_norm(
+            signature_of(_strip_doc_lines(new_src))
+        ):
             return "vis-only"
     return "changed"
 
@@ -411,6 +431,27 @@ def _impl_type_at(lines: list[str], line_1: int) -> str | None:
         if i == line_1:
             return stack[-1][1] if stack else None
     return None
+
+
+def _attr_doc_start(raw_lines: list[str], decl_line: int) -> int:
+    """0-based index of the attribute / doc block above a 1-based fn line."""
+    idx = decl_line - 2
+    start = decl_line - 1
+    while idx >= 0:
+        s = raw_lines[idx].strip()
+        if not s:
+            idx -= 1
+            continue
+        if s.startswith("///") or s.startswith("//!") or s.startswith("#["):
+            start = idx
+            idx -= 1
+            continue
+        if s.startswith("#") or s.endswith(",") or s == "]" or s.endswith(")]"):
+            start = idx
+            idx -= 1
+            continue
+        break
+    return start
 
 
 def _has_test_attr(raw_lines: list[str], decl_line: int) -> bool:
@@ -461,7 +502,8 @@ def extract(root: pathlib.Path) -> dict[str, dict[str, str]]:
                 continue
             ty = _impl_type_at(code_lines, start)
             key = fn_key(crate, module, ty, name)
-            src = "\n".join(raw_lines[start - 1 : end])
+            prelude = _attr_doc_start(raw_lines, start)
+            src = "\n".join(raw_lines[prelude:end])
             if key in found:
                 # Never drop a colliding body. Disambiguate with file:line
                 # when two items still share a key.
@@ -564,6 +606,7 @@ def compare_trees(
     added = sorted(k for k in new if k not in used_new)
     identical = sum(1 for _o, _n, k in pairs if k == "identical")
     vis_only = [(o, n) for o, n, k in pairs if k == "vis-only"]
+    doc_only = [(o, n) for o, n, k in pairs if k == "doc-only"]
     changed = [(o, n) for o, n, k in pairs if k == "changed"]
 
     accepted: list[tuple[str, str, str]] = []
@@ -594,6 +637,7 @@ def compare_trees(
         "pairs": len(pairs),
         "identical": identical,
         "vis_only": len(vis_only),
+        "doc_only": len(doc_only),
         "changed": len(changed),
         "accepted": accepted,
         "unaccepted": unaccepted,
@@ -616,6 +660,7 @@ def render(report: dict[str, object]) -> str:
         f"pairs {report['pairs']}",
         f"identical {report['identical']}",
         f"vis-only {report['vis_only']}",
+        f"doc-only {report['doc_only']}",
         f"changed {report['changed']}",
         f"accepted {len(report['accepted'])}",  # type: ignore[arg-type]
         f"removed {len(report['removed'])}",  # type: ignore[arg-type]
@@ -868,6 +913,38 @@ def _self_test() -> int:
             n += 1
         else:
             raise SystemExit("hygiene-fn-diff --self-test: --split RHS-as-LHS must fail")
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "pub fn ready(x: i32) -> i32 { x + 1 }\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            '#[cfg(feature = "extra")]\npub fn ready(x: i32) -> i32 { x + 1 }\n',
+        )
+        cfg = compare_trees(old, new, {}, {}, {}, [])
+        if cfg["changed"] != 1:
+            raise SystemExit("hygiene-fn-diff --self-test: added #[cfg] must be changed")
+        _must_red(cfg, "added #[cfg(feature)]")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "/// old docs\npub fn ready(x: i32) -> i32 { x + 1 }\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "/// new docs\npub fn ready(x: i32) -> i32 { x + 1 }\n",
+        )
+        docs = compare_trees(old, new, {}, {}, {}, [])
+        evaluate(docs)
+        if docs["doc_only"] != 1 or docs["changed"] != 0:
+            raise SystemExit("hygiene-fn-diff --self-test: /// change must be doc-only")
+        n += 1
     return n
 
 
