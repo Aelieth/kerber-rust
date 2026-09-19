@@ -3,7 +3,7 @@
 
 Product-code sibling of hygiene-body-diff.py. Extracts every non-test
 `fn` (free, impl and trait methods; keyed
-`crate<TAB>module::path::[Type::]name`), links old → new by the key and
+`crate<TAB>module::path::[impl-header::]name`), links old → new by the key and
 a keyed `--moves` map (`old_key = new_key`, RHS-as-LHS rejected,
 many-to-one needs `merged:`), compares bodies after
 a comparison normaliser that keeps string, byte-string, raw-string
@@ -22,7 +22,8 @@ absent from the old; unused glue is red).
 
 Usage:
   python3 scripts/hygiene-fn-diff.py --old SHA --new SHA \\
-      [--moves map.txt] [--accept map.txt] [--split map.txt]
+      [--moves map.txt] [--accept map.txt] [--split map.txt] \\
+      [--glue LINE] [--roots DIR]
 """
 from __future__ import annotations
 
@@ -72,11 +73,6 @@ scan_items = _INV.scan_items
 cfg_test_files_in_pkg = _INV.cfg_test_files_in_pkg
 FN_RE = _INV.FN_RE
 
-IMPL_RE = re.compile(
-    r"^\s*impl(?:<[^;{]*>)?\s+"
-    r"(?:(?:!)?[A-Za-z_][A-Za-z0-9_:]*(?:<[^;{]*>)?\s+for\s+)?"
-    r"(?P<ty>[A-Za-z_][A-Za-z0-9_]*)"
-)
 NON_FN_RE = re.compile(
     r"^\s*(?:pub(?:\([^)]*\))?\s+)?"
     r"(?:(?P<kind>const|static)\s+(?:mut\s+)?(?!fn\b)(?P<csname>[A-Za-z_][A-Za-z0-9_]*)"
@@ -231,8 +227,12 @@ def load_splits(
 
 def module_path(rel: str) -> tuple[str, str]:
     parts = rel.split("/")
-    crate = parts[1]
-    rest = parts[3:]
+    if parts[0] == "crates" and len(parts) >= 2:
+        crate = parts[1]
+        rest = parts[3:] if len(parts) > 3 else []
+    else:
+        crate = parts[0]
+        rest = parts[1:]
     if not rest or rest in (["lib.rs"], ["main.rs"]):
         return crate, ""
     if rest[-1] == "mod.rs":
@@ -450,20 +450,57 @@ def classify(old_src: str, new_src: str) -> str:
     return "changed"
 
 
-def _impl_type_at(lines: list[str], line_1: int) -> str | None:
-    """Innermost `impl Type` / `impl Trait for Type` covering 1-based line."""
+IMPL_START_RE = re.compile(r"^\s*(?:unsafe\s+)?impl\b")
+MOD_NEST_RE = re.compile(
+    r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{"
+)
+
+
+def _norm_header(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _impl_header_at(lines: list[str], line_1: int) -> str | None:
+    """Innermost `impl …` header covering 1-based line (full header, not just Type)."""
     stack: list[tuple[int, str]] = []
     depth = 0
+    pending: list[str] | None = None
+    pending_depth = 0
     for i, raw in enumerate(lines, 1):
-        m = IMPL_RE.match(raw)
-        if m and "{" in raw[m.end() :]:
-            stack.append((depth, m.group("ty")))
+        if pending is not None:
+            pending.append(raw)
+            if "{" in raw:
+                head = " ".join(pending)
+                stack.append((pending_depth, _norm_header(head[: head.find("{")])))
+                pending = None
+        elif IMPL_START_RE.match(raw):
+            if "{" in raw:
+                stack.append((depth, _norm_header(raw[: raw.find("{")])))
+            else:
+                pending = [raw]
+                pending_depth = depth
+        if i == line_1:
+            return stack[-1][1] if stack else None
         depth += raw.count("{") - raw.count("}")
         while stack and stack[-1][0] >= depth:
             stack.pop()
-        if i == line_1:
-            return stack[-1][1] if stack else None
     return None
+
+
+def _inline_mod_at(lines: list[str], line_1: int) -> str:
+    """`mod name { … }` nesting covering 1-based line."""
+    stack: list[tuple[int, str]] = []
+    depth = 0
+    for i, raw in enumerate(lines, 1):
+        m = MOD_NEST_RE.match(raw)
+        if m:
+            stack.append((depth, m.group(1)))
+        if i == line_1:
+            return "::".join(name for _d, name in stack)
+        depth += raw.count("{") - raw.count("}")
+        while stack and stack[-1][0] >= depth:
+            stack.pop()
+    return ""
 
 
 def _attr_doc_start(raw_lines: list[str], decl_line: int) -> int:
@@ -560,22 +597,33 @@ def scan_non_fn(code: str) -> list[tuple[int, int, str, str]]:
     return items
 
 
-def extract(root: pathlib.Path) -> dict[str, dict[str, str]]:
+def extract(
+    root: pathlib.Path, roots: list[str] | None = None
+) -> dict[str, dict[str, str]]:
     """key → {src, file, name, kind}."""
     found: dict[str, dict[str, str]] = {}
-    crates = root / "crates"
-    if not crates.is_dir():
-        return found
+    roots = roots or ["crates"]
     src_test: set[str] = set()
-    for pdir in sorted(p for p in crates.iterdir() if p.is_dir()):
-        prefix = pdir.relative_to(root).as_posix()
-        for rel in cfg_test_files_in_pkg(pdir):
-            src_test.add(f"{prefix}/{rel}")
-    for path in sorted(crates.rglob("*.rs")):
+    crates = root / "crates"
+    if crates.is_dir():
+        for pdir in sorted(p for p in crates.iterdir() if p.is_dir()):
+            prefix = pdir.relative_to(root).as_posix()
+            for rel in cfg_test_files_in_pkg(pdir):
+                src_test.add(f"{prefix}/{rel}")
+    files: list[pathlib.Path] = []
+    for top in roots:
+        base = root / top
+        if base.is_dir():
+            files.extend(base.rglob("*.rs"))
+        elif base.is_file() and base.suffix == ".rs":
+            files.append(base)
+    for path in sorted(files):
         rel = path.relative_to(root).as_posix()
         if "/target/" in f"/{rel}/" or "/tests/" in f"/{rel}/" or "/benches/" in f"/{rel}/":
             continue
-        if "/krb5-testkit/" in f"/{rel}/" or "/src/" not in f"/{rel}/":
+        if "/krb5-testkit/" in f"/{rel}/":
+            continue
+        if rel.startswith("crates/") and "/src/" not in f"/{rel}/":
             continue
         if rel in src_test:
             continue
@@ -590,8 +638,10 @@ def extract(root: pathlib.Path) -> dict[str, dict[str, str]]:
                 continue
             if _has_test_attr(raw_lines, start):
                 continue
-            ty = _impl_type_at(code_lines, start)
-            key = fn_key(crate, module, ty, name)
+            inline = _inline_mod_at(code_lines, start)
+            full_mod = "::".join(p for p in (module, inline) if p)
+            ty = _impl_header_at(code_lines, start)
+            key = fn_key(crate, full_mod, ty, name)
             prelude = _attr_doc_start(raw_lines, start)
             src = "\n".join(raw_lines[prelude:end])
             if key in found:
@@ -605,9 +655,11 @@ def extract(root: pathlib.Path) -> dict[str, dict[str, str]]:
                 continue
             if any(a < start < b for a, b in fn_spans):
                 continue
-            ty = _impl_type_at(code_lines, start)
+            inline = _inline_mod_at(code_lines, start)
+            full_mod = "::".join(p for p in (module, inline) if p)
+            ty = _impl_header_at(code_lines, start)
             prefix = f"{ty}::{kind}" if ty else kind
-            key = fn_key(crate, module, prefix, name)
+            key = fn_key(crate, full_mod, prefix, name)
             prelude = _attr_doc_start(raw_lines, start)
             src = "\n".join(raw_lines[prelude:end])
             if key in found:
@@ -657,9 +709,10 @@ def compare_trees(
     accept: dict[str, dict[str, str]],
     splits: dict[str, list[str]],
     glue: dict[str, list[str]] | list[str],
+    roots: list[str] | None = None,
 ) -> dict[str, object]:
-    old = extract(old_root)
-    new = extract(new_root)
+    old = extract(old_root, roots)
+    new = extract(new_root, roots)
     used_old: set[str] = set()
     used_new: set[str] = set()
     used_moves: set[str] = set()
@@ -1248,6 +1301,81 @@ def _self_test() -> int:
         if loaded != {"demo\ta": "demo\tc", "demo\tb": "demo\tc"}:
             raise SystemExit("hygiene-fn-diff --self-test: merged: parser must keep both LHS")
         n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "impl From<Foo> for Bar {\n"
+            "    fn from(x: Foo) -> Bar { Bar }\n"
+            "}\n"
+            "impl From<Baz> for Bar {\n"
+            "    fn from(x: Baz) -> Bar { Bar }\n"
+            "}\n"
+            "impl Trait for &T {\n"
+            "    fn refer() {}\n"
+            "}\n"
+            "impl Trait for [u8; 16] {\n"
+            "    fn arr() {}\n"
+            "}\n"
+            "impl Trait for (A, B) {\n"
+            "    fn tup() {}\n"
+            "}\n"
+            "impl Trait for Box<T> {\n"
+            "    fn boxed() {}\n"
+            "}\n"
+            "impl foo::Bar for baz::Qux {\n"
+            "    fn path_m() {}\n"
+            "}\n"
+            "impl<T> Wrap<T>\n"
+            "where\n"
+            "    T: Clone,\n"
+            "{\n"
+            "    fn bound() {}\n"
+            "}\n"
+            "mod inner {\n"
+            "    fn nest() {}\n"
+            "}\n",
+        )
+        keyed = extract(old)
+        from_keys = [k for k in keyed if k.endswith("::from")]
+        if len(from_keys) != 2 or any("#" in k for k in from_keys):
+            raise SystemExit(f"hygiene-fn-diff --self-test: From::from keys: {from_keys}")
+        if not any("From<Foo>" in k for k in from_keys) or not any(
+            "From<Baz>" in k for k in from_keys
+        ):
+            raise SystemExit(f"hygiene-fn-diff --self-test: From headers: {from_keys}")
+        for needle, suffix in (
+            ("impl Trait for &T", "::refer"),
+            ("impl Trait for [u8; 16]", "::arr"),
+            ("impl Trait for (A, B)", "::tup"),
+            ("impl Trait for Box<T>", "::boxed"),
+            ("impl foo::Bar for baz::Qux", "::path_m"),
+        ):
+            if not any(needle in k and k.endswith(suffix) for k in keyed):
+                raise SystemExit(
+                    f"hygiene-fn-diff --self-test: header {needle}: {sorted(keyed)}"
+                )
+        if not any("where" in k and k.endswith("::bound") for k in keyed):
+            raise SystemExit(f"hygiene-fn-diff --self-test: where-clause header: {sorted(keyed)}")
+        if "demo\tinner::nest" not in keyed:
+            raise SystemExit(f"hygiene-fn-diff --self-test: inline mod key missing: {sorted(keyed)}")
+        if any("#" in k for k in keyed):
+            raise SystemExit(f"hygiene-fn-diff --self-test: fixture collision: {sorted(keyed)}")
+        n += 1
+
+        _write_crate(old, "examples/diffsend.rs", "fn main() {}\n")
+        ex = extract(old, ["examples"])
+        if "examples\tdiffsend::main" not in ex:
+            raise SystemExit(f"hygiene-fn-diff --self-test: --roots examples: {sorted(ex)}")
+        n += 1
+    live = extract(ROOT)
+    suffixed = [k for k in live if "#" in k]
+    if suffixed:
+        raise SystemExit(
+            "hygiene-fn-diff --self-test: live tree has line-suffixed keys: "
+            + ", ".join(suffixed[:8])
+        )
+    n += 1
     return n
 
 
@@ -1278,6 +1406,12 @@ def main(argv: list[str] | None = None) -> int:
         help="per-split new-only line excused from --split concat (repeatable)",
     )
     ap.add_argument("--git-dir", type=pathlib.Path, default=ROOT)
+    ap.add_argument(
+        "--roots",
+        action="append",
+        default=[],
+        help="tree roots to scan (default: crates; add examples/ fuzz/ for S3.6)",
+    )
     ns = ap.parse_args(argv)
     from contextlib import redirect_stdout
 
@@ -1286,11 +1420,26 @@ def main(argv: list[str] | None = None) -> int:
     moves = load_keyed_id_map(ns.moves, "moves")
     accept = load_accept(ns.accept)
     splits = load_splits(ns.split, ns.split_line)
+    if ns.roots:
+        roots: list[str] | None = []
+        for r in ["crates", *ns.roots]:
+            if r not in roots:
+                roots.append(r)
+    else:
+        roots = None
     with tempfile.TemporaryDirectory() as tmp:
         tmp_p = pathlib.Path(tmp)
         old_root = materialize(ns.old, tmp_p / "old", ns.git_dir)
         new_root = materialize(ns.new, tmp_p / "new", ns.git_dir)
-        report = compare_trees(old_root, new_root, moves, accept, splits, ns.glue)
+        report = compare_trees(
+            old_root,
+            new_root,
+            moves,
+            accept,
+            splits,
+            ns.glue,
+            roots=roots,
+        )
     sys.stdout.write(render(report))
     try:
         evaluate(report)

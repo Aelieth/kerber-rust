@@ -21,13 +21,14 @@ this project uses semantic versioning once a crate is published.
   pushes and the PR under test; dependabot runs are dropped. Cargo
   dependabot `open-pull-requests-limit` is 0 through W3.
 - **tool.** `hygiene-fn-diff.py` compares product `fn` bodies between
-  two trees (`crate<TAB>module::path::[Type::]name`). A body edit, a
+  two trees (`crate<TAB>module::path::[impl-header::]name`). A body edit, a
   dropped fn, a reordered `--split`, or an unused `--accept` is red;
   a pure move and `pub` ↔ `pub(crate)` are green. `--self-test` prints
-  `self-test ok (27 cases)`; ci-policy requires that count. Literal
+  `self-test ok (30 cases)`; ci-policy requires that count. Literal
   contents (e_text, char, a `--split` phase) are compared. `--glue`
   is line-anchored and new-only. Attribute blocks are compared;
-  doc-only `///` edits do not fail.
+  doc-only `///` edits do not fail. Keys include inline `mod` nesting
+  and the full `impl` header; `--roots` adds `examples/` and `fuzz/`.
 
 ### W3-S2-R3 compare-tool robustness
 
