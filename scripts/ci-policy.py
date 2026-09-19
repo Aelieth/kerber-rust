@@ -1755,19 +1755,30 @@ def _normalize_crate(name: str | None) -> str | None:
     return _CRATE_ALIASES.get(name, name)
 
 
-def _src_index() -> tuple[dict[str, dict[str, pathlib.Path]], dict[str, list[str]]]:
-    """`crates/<crate>/src/**/*.rs` keyed by crate then basename."""
+def _src_index(
+    crates: pathlib.Path | None = None,
+) -> tuple[dict[str, dict[str, pathlib.Path]], dict[str, list[str]]]:
+    """`crates/<crate>/src/**/*.rs` keyed by crate then basename.
+
+    A `src/**` file its parent declares `#[cfg(test)] mod` is test scope
+    (`kadm5/tests/policy.rs`): never a rust-site anchor, and no collision
+    with the product file of the same basename (`kadm5/policy.rs`).
+    """
     by_crate: dict[str, dict[str, pathlib.Path]] = {}
     by_base: dict[str, list[str]] = {}
-    crates = ROOT / "crates"
+    crates = ROOT / "crates" if crates is None else crates
     if not crates.is_dir():
         return by_crate, by_base
+    inv = _hygiene_inventory()
     for crate_dir in sorted(crates.iterdir()):
         src = crate_dir / "src"
         if not crate_dir.is_dir() or not src.is_dir():
             continue
         crate = crate_dir.name
+        src_test = {crate_dir / rel for rel in inv.cfg_test_files_in_pkg(crate_dir)}
         for p in src.rglob("*.rs"):
+            if p in src_test:
+                continue
             files = by_crate.setdefault(crate, {})
             prev = files.get(p.name)
             if prev is not None and prev != p:
@@ -4470,6 +4481,27 @@ jobs:
     max_span = _item_span(ROOT / "crates/krb5-kdc/src/listen.rs", "MAX_TCP_REQUEST")
     if max_span is None:
         raise AssertionError("MAX_TCP_REQUEST const must resolve")
+    # a `#[cfg(test)] mod` child that shares a basename with a product file
+    # (`kadm5/tests/policy.rs` next to `kadm5/policy.rs`): the index keeps the
+    # product file only; without the cfg(test) the twin is a duplicate
+    fake_crates = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    try:
+        a = fake_crates / "x" / "src" / "a"
+        (a / "tests").mkdir(parents=True)
+        (fake_crates / "x" / "src" / "lib.rs").write_text("mod a;\n")
+        (fake_crates / "x" / "src" / "a.rs").write_text("mod policy;\n#[cfg(test)]\nmod tests;\n")
+        (a / "policy.rs").write_text("pub(super) fn policy_mask_err() {}\n")
+        (a / "tests" / "mod.rs").write_text("mod policy;\n")
+        (a / "tests" / "policy.rs").write_text("#[test]\nfn t() {}\n")
+        by_crate, by_base = _src_index(fake_crates)
+        if by_crate["x"].get("policy.rs") != a / "policy.rs" or by_base.get("policy.rs") != ["x"]:
+            raise AssertionError("src index must keep the product policy.rs and skip its cfg(test) twin")
+        if "mod.rs" in by_crate["x"]:
+            raise AssertionError("src index must skip a cfg(test) tests/mod.rs")
+        (fake_crates / "x" / "src" / "a.rs").write_text("mod policy;\nmod tests;\n")
+        _must_die(_src_index, fake_crates)
+    finally:
+        subprocess.run(["rm", "-rf", str(fake_crates)], check=False)
     not_ci = Workflow(
         pathlib.Path("not-ci.yml"),
         "name: x\non:\n  push:\njobs:\n  test:\n    timeout-minutes: 1\n    steps:\n      - run: echo hi\n",
