@@ -11,6 +11,8 @@ this project uses semantic versioning once a crate is published.
 - **tool.** `hygiene-fn-diff.py` treats a lifetime before `(` as a
   type, not a list opener: `&'a (T,)` → `&'a (T)` is `changed`.
   Self-test 56 cases.
+- **tests.** The 25 in-src store tests move to `store/tests.rs`; the
+  module path stays `store::tests`.
 
 ### W3-S3.1 kadm5 by MIT source family
 
