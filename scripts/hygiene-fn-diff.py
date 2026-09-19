@@ -6,9 +6,12 @@ Product-code sibling of hygiene-body-diff.py. Extracts every non-test
 `crate<TAB>module::path::[Type::]name`), links old → new by the key and
 a keyed `--moves` map (`old_key = new_key`, RHS-as-LHS rejected,
 many-to-one needs `merged:`), compares bodies after
-whitespace/comment normalisation, and classifies each pair
+a comparison normaliser that keeps string, byte-string, raw-string
+and char literal contents (whitespace and comments are still
+normalised outside literals), and classifies each pair
 `identical` / `vis-only` (only `pub` ↔ `pub(crate)` on the signature)
-/ `changed`. Reports `added` and `removed`.
+/ `changed`. Reports `added` and `removed`. A key collision never
+drops a body.
 
 Fails on any `changed`, `added` or `removed` not in `--accept` (keyed,
 blob-pinned, unused entry red). `--split old_key = new_a + new_b + …`
@@ -223,12 +226,150 @@ def signature_of(src: str) -> str:
     return src if i < 0 else src[:i]
 
 
-def norm(src: str) -> str:
-    return re.sub(r"\s+", " ", strip_noncode(src)).strip()
+def _ident_prev(src: str, i: int) -> bool:
+    if i <= 0:
+        return False
+    return src[i - 1].isalnum() or src[i - 1] == "_"
+
+
+def _scan_quoted(src: str, i: int) -> int:
+    """Index past a `"…"` / `b"…"` starting at the opening quote."""
+    n = len(src)
+    j = i + 1
+    while j < n:
+        if src[j] == "\\":
+            j += 2
+            continue
+        if src[j] == '"':
+            return j + 1
+        j += 1
+    return n
+
+
+def _scan_raw(src: str, i: int) -> int | None:
+    """Index past `r"…"`, `r#"…"#`, `br"…"` starting at `r` (or `b` of `br`)."""
+    n = len(src)
+    j = i
+    if src[j] == "b":
+        j += 1
+        if j >= n or src[j] != "r":
+            return None
+    if j >= n or src[j] != "r":
+        return None
+    if _ident_prev(src, i):
+        return None
+    j += 1
+    hashes = 0
+    while j < n and src[j] == "#":
+        hashes += 1
+        j += 1
+    if j >= n or src[j] != '"':
+        return None
+    close = '"' + "#" * hashes
+    k = src.find(close, j + 1)
+    return n if k < 0 else k + len(close)
+
+
+def _scan_char(src: str, i: int) -> int | None:
+    """Index past `'x'` / `b'x'` / `'\\n'`; None for a lifetime `'a`."""
+    n = len(src)
+    j = i
+    if src[j] == "b":
+        j += 1
+        if j >= n or src[j] != "'":
+            return None
+        if _ident_prev(src, i):
+            return None
+    elif src[j] != "'":
+        return None
+    nxt = src[j + 1] if j + 1 < n else ""
+    if nxt == "\\":
+        k = src.find("'", j + 2)
+        if 0 < k <= j + 12:
+            return k + 1
+        return None
+    if j + 2 < n and src[j + 2] == "'":
+        return j + 3
+    return None
+
+
+def compare_norm(src: str) -> str:
+    """Collapse whitespace and comments; keep literal contents.
+
+    Separate from the brace scanner's `strip_noncode`, which blanks
+    string and char bodies so an e_text edit would compare equal.
+    """
+    out: list[str] = []
+    pending_space = False
+    i, n = 0, len(src)
+
+    def emit_space() -> None:
+        nonlocal pending_space
+        pending_space = True
+
+    def emit(text: str) -> None:
+        nonlocal pending_space
+        if pending_space and out:
+            out.append(" ")
+        pending_space = False
+        out.append(text)
+
+    while i < n:
+        c = src[i]
+        nxt = src[i + 1] if i + 1 < n else ""
+        if c == "/" and nxt == "/":
+            j = src.find("\n", i)
+            i = n if j < 0 else j
+            emit_space()
+            continue
+        if c == "/" and nxt == "*":
+            depth, j = 1, i + 2
+            while j < n and depth:
+                if src.startswith("/*", j):
+                    depth += 1
+                    j += 2
+                elif src.startswith("*/", j):
+                    depth -= 1
+                    j += 2
+                else:
+                    j += 1
+            i = j
+            emit_space()
+            continue
+        raw_at = i if c == "r" else (i if c == "b" and nxt == "r" else None)
+        if raw_at is not None:
+            end = _scan_raw(src, raw_at)
+            if end is not None:
+                emit(src[raw_at:end])
+                i = end
+                continue
+        if c == "b" and nxt == '"':
+            end = _scan_quoted(src, i + 1)
+            emit(src[i:end])
+            i = end
+            continue
+        if c == '"':
+            end = _scan_quoted(src, i)
+            emit(src[i:end])
+            i = end
+            continue
+        if c in "'b":
+            end = _scan_char(src, i)
+            if end is not None:
+                emit(src[i:end])
+                i = end
+                continue
+        if c.isspace():
+            emit_space()
+            i += 1
+            continue
+        emit(c)
+        i += 1
+    return "".join(out).strip()
 
 
 def blob_hash(src: str) -> str:
-    return hashlib.sha256(norm(src).encode("utf-8")).hexdigest()
+    return hashlib.sha256(compare_norm(src).encode("utf-8")).hexdigest()
 
 
 def vis_fold(sig: str) -> str:
@@ -236,12 +377,12 @@ def vis_fold(sig: str) -> str:
 
 
 def classify(old_src: str, new_src: str) -> str:
-    if norm(old_src) == norm(new_src):
+    if compare_norm(old_src) == compare_norm(new_src):
         return "identical"
-    if norm(inner_body(old_src)) == norm(inner_body(new_src)) and vis_fold(
-        norm(signature_of(old_src))
-    ) == vis_fold(norm(signature_of(new_src))):
-        if norm(signature_of(old_src)) != norm(signature_of(new_src)):
+    if compare_norm(inner_body(old_src)) == compare_norm(inner_body(new_src)) and vis_fold(
+        compare_norm(signature_of(old_src))
+    ) == vis_fold(compare_norm(signature_of(new_src))):
+        if compare_norm(signature_of(old_src)) != compare_norm(signature_of(new_src)):
             return "vis-only"
     return "changed"
 
@@ -312,10 +453,8 @@ def extract(root: pathlib.Path) -> dict[str, dict[str, str]]:
             key = fn_key(crate, module, ty, name)
             src = "\n".join(raw_lines[start - 1 : end])
             if key in found:
-                # Inherent + trait methods can share Type::name; keep the
-                # first body and skip a later identical one.
-                if norm(found[key]["src"]) == norm(src):
-                    continue
+                # Never drop a colliding body. Disambiguate with file:line
+                # when two items still share a key.
                 key = f"{key}#{rel}:{start}"
             found[key] = {"src": src, "file": rel, "name": name}
     return found
@@ -356,7 +495,7 @@ def compare_trees(
         old_body = apply_glue(inner_body(old[old_key]["src"]), glue)
         concat = "".join(inner_body(new[k]["src"]) for k in new_keys)
         concat = apply_glue(concat, glue)
-        if norm(old_body) == norm(concat):
+        if compare_norm(old_body) == compare_norm(concat):
             split_ok.append(old_key)
             used_old.add(old_key)
             used_new.update(new_keys)
@@ -495,6 +634,49 @@ def _self_test() -> int:
         _must_red(red, "body edit")
         n += 1
 
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            'fn say() { err("KDC_ERR_NONE"); }\n',
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            'fn say() { err("KDC_ERR_GENERIC"); }\n',
+        )
+        etext = compare_trees(old, new, {}, {}, {}, [])
+        if etext["changed"] != 1:
+            raise SystemExit("hygiene-fn-diff --self-test: e_text literal must be changed")
+        _must_red(etext, "e_text literal")
+        n += 1
+
+        _write_crate(old, "crates/demo/src/lib.rs", "fn ch() { let _ = 'a'; }\n")
+        _write_crate(new, "crates/demo/src/lib.rs", "fn ch() { let _ = 'b'; }\n")
+        ch = compare_trees(old, new, {}, {}, {}, [])
+        if ch["changed"] != 1:
+            raise SystemExit("hygiene-fn-diff --self-test: char literal must be changed")
+        _must_red(ch, "char literal")
+        n += 1
+
+        _write_crate(old, "crates/demo/src/lib.rs", 'fn whole() { a("x"); b(); }\n')
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            'fn phase_a() { a("y"); }\nfn phase_b() { b(); }\n',
+        )
+        lit_split = compare_trees(
+            old, new, {}, {}, {"demo\twhole": ["demo\tphase_a", "demo\tphase_b"]}, []
+        )
+        if not lit_split["split_fail"]:
+            raise SystemExit("hygiene-fn-diff --self-test: literal change in --split must fail")
+        _must_red(lit_split, "literal change inside --split")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "pub fn ready(x: i32) -> i32 { x + 1 }\n",
+        )
         _write_crate(new, "crates/demo/src/lib.rs", "")
         dropped = compare_trees(old, new, {}, {}, {}, [])
         if dropped["removed"] != ["demo\tready"]:
