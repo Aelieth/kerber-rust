@@ -114,8 +114,16 @@ def materialize(spec: str, dest: pathlib.Path, git_cwd: pathlib.Path) -> pathlib
     return dest
 
 
+def _require_map_file(path: pathlib.Path | None, flag: str) -> None:
+    if path is None:
+        return
+    if not path.is_file():
+        raise SystemExit(f"{flag} file not found: {path}")
+
+
 def load_keyed_id_map(path: pathlib.Path | None, kind: str) -> dict[str, str]:
     """`old_key = [merged:]new_key`; keys are crate<TAB>path."""
+    _require_map_file(path, f"--{kind}")
     if path is not None and path.is_file():
         seen_lhs: set[str] = set()
         in_stamp = True
@@ -159,6 +167,7 @@ def load_keyed_id_map(path: pathlib.Path | None, kind: str) -> dict[str, str]:
 
 def load_accept(path: pathlib.Path | None) -> dict[str, dict[str, str]]:
     """Keyed `old = new | sha256:old | sha256:new | reason`."""
+    _require_map_file(path, "--accept")
     if path is None or not path.is_file():
         return {}
     out: dict[str, dict[str, str]] = {}
@@ -189,8 +198,9 @@ def load_accept(path: pathlib.Path | None) -> dict[str, dict[str, str]]:
 
 def load_splits(
     path: pathlib.Path | None, extra: list[str]
-) -> dict[str, list[str]]:
-    """`old_key = new_a + new_b + …`."""
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """`old_key = new_a + new_b + …` plus optional `glue: LINE` rows."""
+    _require_map_file(path, "--split")
     rows: list[str] = []
     if path is not None and path.is_file():
         in_stamp = True
@@ -204,7 +214,14 @@ def load_splits(
             rows.append(line)
     rows.extend(extra)
     out: dict[str, list[str]] = {}
+    file_glue: dict[str, list[str]] = {}
+    last_old = ""
     for line in rows:
+        if line.startswith("glue:"):
+            if not last_old:
+                raise SystemExit("glue: with no preceding --split line")
+            file_glue.setdefault(last_old, []).append(line[5:].strip())
+            continue
         m = SPLIT_LINE_RE.match(line)
         if not m:
             raise SystemExit(f"bad --split line: {line!r}")
@@ -219,11 +236,43 @@ def load_splits(
         if len(parts) != len(set(parts)):
             raise SystemExit(f"--split duplicate part: {line!r}")
         out[old] = parts
+        last_old = old
     lhs = set(out)
     for old, parts in out.items():
         for p in parts:
-            if p in lhs:
+            if p in lhs and p != old:
                 raise SystemExit(f"--split RHS is also a LHS: {p}")
+    return out, file_glue
+
+
+def parse_glue_args(items: list[str]) -> dict[str, list[str]] | list[str]:
+    """`--glue KEY=LINE` is per-split; unkeyed `--glue LINE` stays global."""
+    keyed: dict[str, list[str]] = {}
+    plain: list[str] = []
+    for g in items:
+        if "\t" in g and "=" in g:
+            left, right = g.split("=", 1)
+            if "\t" in left.strip():
+                keyed.setdefault(left.strip(), []).append(right)
+                continue
+        plain.append(g)
+    if keyed and plain:
+        raise SystemExit("unkeyed --glue cannot mix with --glue KEY=LINE")
+    return keyed if keyed else plain
+
+
+def merge_glue(
+    file_glue: dict[str, list[str]],
+    cli_glue: dict[str, list[str]] | list[str],
+) -> dict[str, list[str]] | list[str]:
+    if not file_glue:
+        return cli_glue
+    if isinstance(cli_glue, list) and cli_glue:
+        raise SystemExit("unkeyed --glue cannot mix with glue: in --split")
+    out = {k: list(v) for k, v in file_glue.items()}
+    if isinstance(cli_glue, dict):
+        for k, lines in cli_glue.items():
+            out.setdefault(k, []).extend(lines)
     return out
 
 
@@ -1335,6 +1384,74 @@ def _self_test() -> int:
         else:
             raise SystemExit("hygiene-fn-diff --self-test: --split RHS-as-LHS must fail")
 
+        natural_map, _g = load_splits(None, ["demo\twhole = demo\twhole + demo\ttail"])
+        if natural_map != {"demo\twhole": ["demo\twhole", "demo\ttail"]}:
+            raise SystemExit("hygiene-fn-diff --self-test: old = old + tail must parse")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn whole() {\n    a();\n    b();\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn whole() {\n    a();\n    tail();\n}\nfn tail() {\n    b();\n}\n",
+        )
+        natural = compare_trees(
+            old,
+            new,
+            {},
+            {},
+            {"demo\twhole": ["demo\twhole", "demo\ttail"]},
+            ["tail();"],
+        )
+        evaluate(natural)
+        if natural["split_ok"] != ["demo\twhole"]:
+            raise SystemExit("hygiene-fn-diff --self-test: old = old + tail must split-ok")
+        n += 1
+
+        splitpath = pathlib.Path(tmp) / "splits.txt"
+        splitpath.write_text(
+            "demo\tone = demo\ta + demo\tb\n"
+            "glue: b();\n"
+            "demo\ttwo = demo\tc + demo\td\n"
+            "glue: d();\n",
+            encoding="utf-8",
+        )
+        smap, sglue = load_splits(splitpath, [])
+        if sglue != {"demo\tone": ["b();"], "demo\ttwo": ["d();"]}:
+            raise SystemExit(f"hygiene-fn-diff --self-test: per-split glue map: {sglue}")
+        n += 1
+
+        try:
+            load_keyed_id_map(pathlib.Path(tmp) / "missing-moves.txt", "moves")
+        except SystemExit as exc:
+            if "not found" not in str(exc):
+                raise SystemExit(f"hygiene-fn-diff --self-test: missing --moves: {exc}")
+            n += 1
+        else:
+            raise SystemExit("hygiene-fn-diff --self-test: missing --moves must fail")
+
+        try:
+            load_accept(pathlib.Path(tmp) / "missing-accept.txt")
+        except SystemExit as exc:
+            if "not found" not in str(exc):
+                raise SystemExit(f"hygiene-fn-diff --self-test: missing --accept: {exc}")
+            n += 1
+        else:
+            raise SystemExit("hygiene-fn-diff --self-test: missing --accept must fail")
+
+        try:
+            load_splits(pathlib.Path(tmp) / "missing-split.txt", [])
+        except SystemExit as exc:
+            if "not found" not in str(exc):
+                raise SystemExit(f"hygiene-fn-diff --self-test: missing --split: {exc}")
+            n += 1
+        else:
+            raise SystemExit("hygiene-fn-diff --self-test: missing --split must fail")
+
         _write_crate(
             old,
             "crates/demo/src/lib.rs",
@@ -1410,14 +1527,13 @@ def _self_test() -> int:
         gone_src = "pub fn gone() { 1 }\n"
         _write_crate(old, "crates/demo/src/lib.rs", gone_src)
         _write_crate(new, "crates/demo/src/lib.rs", "")
-        gone_acc = {
-            "demo\tgone": {
-                "new": "-",
-                "old_hash": blob_hash(gone_src),
-                "new_hash": blob_hash(""),
-                "reason": "removed helper",
-            }
-        }
+        accpath = pathlib.Path(tmp) / "accept-removed.txt"
+        accpath.write_text(
+            f"demo\tgone = demo\tgone | sha256:{blob_hash(gone_src)} | "
+            f"sha256:{blob_hash('')} | removed helper\n",
+            encoding="utf-8",
+        )
+        gone_acc = load_accept(accpath)
         gone = compare_trees(old, new, {}, gone_acc, {}, [])
         evaluate(gone)
         if gone["removed"]:
@@ -1621,7 +1737,7 @@ def main(argv: list[str] | None = None) -> int:
         "--glue",
         action="append",
         default=[],
-        help="per-split new-only line excused from --split concat (repeatable)",
+        help="new-only line excused from --split concat; KEY=LINE is per-split",
     )
     ap.add_argument("--git-dir", type=pathlib.Path, default=ROOT)
     ap.add_argument(
@@ -1637,7 +1753,8 @@ def main(argv: list[str] | None = None) -> int:
         _self_test()
     moves = load_keyed_id_map(ns.moves, "moves")
     accept = load_accept(ns.accept)
-    splits = load_splits(ns.split, ns.split_line)
+    splits, file_glue = load_splits(ns.split, ns.split_line)
+    glue = merge_glue(file_glue, parse_glue_args(ns.glue))
     if ns.roots:
         roots: list[str] | None = []
         for r in ["crates", *ns.roots]:
@@ -1655,7 +1772,7 @@ def main(argv: list[str] | None = None) -> int:
             moves,
             accept,
             splits,
-            ns.glue,
+            glue,
             roots=roots,
         )
     sys.stdout.write(render(report))

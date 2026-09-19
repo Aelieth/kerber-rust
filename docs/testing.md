@@ -74,7 +74,14 @@ excuses one occurrence; unused glue is
 red). `--roots` adds `examples/` and `fuzz/` to the default `crates/`
 scan. A body
 edit, a dropped item, a reordered `--split`, or an unused `--accept`
-is red; a pure move and a vis-only widening are green. Job walls live in
+is red; a pure move and a vis-only widening are green. `--accept` is
+one line per pair: `old_key = new_key | sha256:<old> | sha256:<new> |
+reason` (keys are `crate<TAB>path`). A removal pins the old key as
+both sides and the empty-blob hash on the new side; an addition pins
+the new key as both sides and the empty-blob hash on the old side.
+`--glue KEY=LINE` (and `glue: LINE` under a `--split` map entry) is
+per-split; `old = old + tail` is the natural phase shape. A missing
+`--moves` / `--accept` / `--split` file is an error. Job walls live in
 `ci-budget.toml` (see Tier contract below). `python3 scripts/ci-status.py --check-budget` compares a
 completed SHA against that file.
 
