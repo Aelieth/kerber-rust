@@ -29,6 +29,9 @@ this project uses semantic versioning once a crate is published.
   is line-anchored and new-only. Attribute blocks are compared;
   doc-only `///` edits do not fail. Keys include inline `mod` nesting
   and the full `impl` header; `--roots` adds `examples/` and `fuzz/`.
+- **docs.** `docs/testing.md` keeps `--dead` on the `hygiene-diff.py`
+  paragraph and describes the fn-diff literal normaliser and
+  line-anchored `--glue`.
 
 ### W3-S2-R3 compare-tool robustness
 

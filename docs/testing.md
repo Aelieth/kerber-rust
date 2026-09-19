@@ -36,7 +36,9 @@ informational. A swath that renames or de-duplicates tests passes its
 map (`--renames`, `--duplicates`). `--duplicates` and `--renames` are
 keyed `old_binary<TAB>old_name` to `new_binary<TAB>new_name`; a RHS
 that is also a LHS is rejected, and many-to-one needs `merged:` on the
-RHS.
+RHS. One that deletes a `MIT_*`/`RUST_*` variable that was never a cell
+lists it in `--dead` with the reason (`section` and `flow` tags cannot
+be waived).
 `python3 scripts/hygiene-body-diff.py --old SHA --new SHA --renames
 --duplicates [--accept map]` links test fns through those maps,
 normalises whitespace/comments/helper names, and fails an assertion-line
@@ -53,17 +55,24 @@ or string literals. `--self-test` on the compare tools prints
 `self-test ok (N cases)`. There is no request-shape column (no
 canonical built-request form).
 `python3 scripts/hygiene-fn-diff.py --old SHA --new SHA [--moves]
-[--accept] [--split] [--glue]` is the product-fn sibling: every
-non-test `fn` is keyed `crate<TAB>module::path::[Type::]name`, bodies
-are compared after whitespace/comment normalisation, and a pair is
-`identical`, `vis-only` (`pub` ↔ `pub(crate)` on the signature), or
-`changed`. `--moves` is keyed like the hygiene-diff maps. `--split
+[--accept] [--split] [--glue] [--roots]` is the product-fn sibling:
+every non-test `fn` (and `const` / `static` / `enum` / `struct` /
+`trait` / `type` / `macro_rules` items) is keyed
+`crate<TAB>module::path::[impl-header::]name`, with inline `mod`
+nesting in the path. Bodies are compared after a normaliser that
+keeps string, byte-string, raw-string and char literal contents
+(whitespace and comments are still normalised outside literals). A
+pair is `identical`, `vis-only` (private → `pub(super)` /
+`pub(crate)` or `pub(crate)` ↔ `pub(super)` with a byte-identical
+rest; any change to or from bare `pub` stays `changed`), `doc-only`,
+or `changed`. `--moves` is keyed like the hygiene-diff maps. `--split
 old = a + b + …` checks that the concatenated new bodies equal the
-old body modulo `--glue` lines. A body edit, a dropped fn, a
-reordered `--split`, or an unused `--accept` is red; a pure move and
-a vis-only change are green. One that deletes a `MIT_*`/`RUST_*`
-variable that was never a cell lists it in `--dead` with the reason
-(`section` and `flow` tags cannot be waived). Job walls live in
+old body modulo per-split line-anchored `--glue` lines (whole lines
+present in the new bodies and absent from the old; unused glue is
+red). `--roots` adds `examples/` and `fuzz/` to the default `crates/`
+scan. A body
+edit, a dropped item, a reordered `--split`, or an unused `--accept`
+is red; a pure move and a vis-only widening are green. Job walls live in
 `ci-budget.toml` (see Tier contract below). `python3 scripts/ci-status.py --check-budget` compares a
 completed SHA against that file.
 

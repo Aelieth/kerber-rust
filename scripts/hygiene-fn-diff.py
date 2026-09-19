@@ -9,7 +9,8 @@ many-to-one needs `merged:`), compares bodies after
 a comparison normaliser that keeps string, byte-string, raw-string
 and char literal contents (whitespace and comments are still
 normalised outside literals), and classifies each pair
-`identical` / `vis-only` (only `pub` ↔ `pub(crate)` on the signature)
+`identical` / `vis-only` (private → `pub(crate)` / `pub(super)`, or
+those two restricted forms, with a byte-identical rest)
 / `doc-only` / `changed`. The compared blob includes the attribute
 block above the fn. Reports `added` and `removed`. A key collision
 never drops a body.
@@ -979,6 +980,37 @@ def _self_test() -> int:
         _must_red(lit_split, "literal change inside --split")
         n += 1
 
+        same = "pub fn ready(x: i32) -> i32 { x + 1 }\n"
+        _write_crate(old, "crates/demo/src/lib.rs", same)
+        _write_crate(new, "crates/demo/src/lib.rs", same)
+        unused = {
+            "demo\tother": {
+                "new": "demo\tother",
+                "old_hash": "a" * 64,
+                "new_hash": "b" * 64,
+                "reason": "unused",
+            },
+        }
+        unused_rep = compare_trees(old, new, {}, unused, {}, [])
+        if unused_rep["changed"] != 0 or unused_rep["removed"] or unused_rep["added"]:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: unused-accept fixture must be otherwise green"
+            )
+        if unused_rep["unused_accept"] != ["demo\tother"]:
+            raise SystemExit(
+                f"hygiene-fn-diff --self-test: unused --accept: {unused_rep['unused_accept']}"
+            )
+        try:
+            evaluate(unused_rep)
+        except FnDiffError as exc:
+            if "--accept entry unused" not in str(exc):
+                raise SystemExit(
+                    f"hygiene-fn-diff --self-test: unused-accept must be the red reason: {exc}"
+                )
+        else:
+            raise SystemExit("hygiene-fn-diff --self-test: unused accept must fail")
+        n += 1
+
         _write_crate(
             old,
             "crates/demo/src/lib.rs",
@@ -1025,28 +1057,6 @@ def _self_test() -> int:
             "crates/demo/src/lib.rs",
             "pub fn ready(x: i32) -> i32 { x + 1 }\n",
         )
-        _write_crate(
-            new,
-            "crates/demo/src/lib.rs",
-            "pub fn ready(x: i32) -> i32 { x + 2 }\n",
-        )
-        unused = {
-            "demo\tready": {
-                "new": "demo\tready",
-                "old_hash": "0" * 64,
-                "new_hash": "1" * 64,
-                "reason": "wrong",
-            },
-            "demo\tother": {
-                "new": "demo\tother",
-                "old_hash": "a" * 64,
-                "new_hash": "b" * 64,
-                "reason": "unused",
-            },
-        }
-        _must_red(compare_trees(old, new, {}, unused, {}, []), "unused accept")
-        n += 1
-
         _write_crate(
             new,
             "crates/demo/src/moved.rs",

@@ -21,6 +21,7 @@ import importlib.util
 import os
 import pathlib
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -2935,11 +2936,25 @@ def _gutted_self_test_must_not_count(
     except SyntaxError:
         return
     with tempfile.TemporaryDirectory() as tmp:
-        probe = pathlib.Path(tmp) / path.name
-        probe.write_text(gutted, encoding="utf-8")
+        probe_root = pathlib.Path(tmp)
+        dest = probe_root / "scripts" / path.name
+        dest.parent.mkdir(parents=True)
+        dest.write_text(gutted, encoding="utf-8")
+        # Sibling imports resolve ROOT as parents[1] of scripts/*.py.
+        # Copy them so a gutted file can start; a missing sibling made
+        # the probe vacuous (import crash, no N, treated as green).
+        for sib in (
+            SCRIPTS / "hygiene-diff.py",
+            SCRIPTS / "lib" / "hygiene_inventory.py",
+        ):
+            if sib.resolve() == path.resolve():
+                continue
+            target = probe_root / "scripts" / sib.relative_to(SCRIPTS)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(sib, target)
         proc = subprocess.run(
-            [sys.executable, str(probe), "--self-test"],
-            cwd=tmp,
+            [sys.executable, str(dest), "--self-test"],
+            cwd=probe_root,
             capture_output=True,
             text=True,
             check=False,
@@ -3026,6 +3041,15 @@ def check_hygiene_fn_diff_self_test(text: str | None = None) -> None:
         _gutted_self_test_must_not_count(
             path, text, "hygiene-fn-diff.py", HYGIENE_FN_DIFF_MIN_CASES
         )
+        testing = (ROOT / "docs" / "testing.md").read_text(encoding="utf-8")
+        dead_at = testing.find("`--dead`")
+        diff_at = testing.find("hygiene-diff.py")
+        fn_at = testing.find("hygiene-fn-diff.py")
+        if dead_at < 0 or not (diff_at < dead_at < fn_at):
+            _die("docs/testing.md must describe --dead on the hygiene-diff paragraph")
+        for needle in ("byte-string", "line-anchored", "impl-header"):
+            if needle not in testing:
+                _die(f"docs/testing.md must describe fn-diff {needle}")
     elif _self_test_n_from_text(text) is None or (
         _self_test_n_from_text(text) or 0
     ) < HYGIENE_FN_DIFF_MIN_CASES:
@@ -3045,6 +3069,8 @@ def check_hygiene_fn_diff_self_test(text: str | None = None) -> None:
         _die("hygiene-fn-diff.py must self-test --split")
     if "pub(crate)" not in text:
         _die("hygiene-fn-diff.py must self-test a vis-only change")
+    if "unused-accept fixture must be otherwise green" not in text:
+        _die("hygiene-fn-diff.py must isolate unused --accept as its own case")
 
 
 def check_hygiene_inventory_cfg_test() -> None:
@@ -5118,6 +5144,7 @@ jobs:
     )
     check_hygiene_fn_diff_self_test(
         "def _self_test():\n    x + 2 phase_b pub(crate)\n"
+        "    # unused-accept fixture must be otherwise green\n"
         "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
         "        print('hygiene-fn-diff: self-test ok (30 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
