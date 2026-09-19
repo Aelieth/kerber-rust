@@ -102,6 +102,7 @@ if [ "$rc" -eq 0 ]; then
     docker exec "$NAME" klist | grep -q 'user@KERBER.TEST'
     echo "==== KDC PKINIT KDF ===="
     docker exec "$NAME" grep -E 'rfc8636|kdf|pkinit' /tmp/kdc.log || true
+    require_log "$NAME" /tmp/kdc.log 'rfc8636 sha256 kdf' "rfc8636 sha256 kdf in /tmp/kdc.log"
     docker exec "$NAME" grep -q 'rfc8636 sha256 kdf' /tmp/kdc.log
     echo "==== negative: MIT kinit with SAN≠cname ===="
     docker exec "$NAME" grep -q 'BEGIN CERTIFICATE' /tmp/pkinit/other.pem
@@ -225,6 +226,7 @@ EOF"
         log "pkinit.gate" "error" ',"error":"password kvno after require_auth pkinit missing KDC policy rejects request"'
         exit 1
     }
+    require_log "$NAME" /tmp/kdc.log 'HIGHER_AUTHENTICATION_REQUIRED' "HIGHER_AUTHENTICATION_REQUIRED in /tmp/kdc.log"
     docker exec "$NAME" grep -q 'HIGHER_AUTHENTICATION_REQUIRED' /tmp/kdc.log || {
         docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
         log "pkinit.gate" "error" ',"error":"rust KDC log missing HIGHER_AUTHENTICATION_REQUIRED"'
@@ -266,6 +268,7 @@ EOF"
         log "pkinit.gate" "error" ',"error":"kvno after PKINIT TGT +requires_hwauth host did not fail"'
         exit 1
     }
+    require_log "$NAME" /tmp/kdc.log 'NO HW PREAUTH' "NO HW PREAUTH in /tmp/kdc.log"
     docker exec "$NAME" grep -q 'NO HW PREAUTH' /tmp/kdc.log || {
         docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
         log "pkinit.gate" "error" ',"error":"rust KDC log missing NO HW PREAUTH"'
@@ -321,6 +324,7 @@ EOF"
         log "pkinit.gate" "error" ',"error":"kvno after kinit -n missing KDC policy rejects request"'
         exit 1
     }
+    require_log "$NAME" /tmp/kdc.log 'ANONYMOUS NOT ALLOWED' "ANONYMOUS NOT ALLOWED in /tmp/kdc.log"
     docker exec "$NAME" grep -q 'ANONYMOUS NOT ALLOWED' /tmp/kdc.log || {
         docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
         log "pkinit.gate" "error" ',"error":"rust KDC log missing ANONYMOUS NOT ALLOWED"'
@@ -375,6 +379,7 @@ if "pkinit_require_freshness" not in t:
         log "pkinit.gate" "error" ',"error":"klist after require_freshness kinit missing user@KERBER.TEST"'
         exit 1
     }
+    require_log "$NAME" /tmp/kdc.log 'freshness token received' "freshness token received in /tmp/kdc.log"
     docker exec "$NAME" grep -q 'freshness token received' /tmp/kdc.log || {
         docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
         log "pkinit.gate" "error" ',"error":"rust KDC log missing freshness token received"'
@@ -395,6 +400,7 @@ if "pkinit_require_freshness" not in t:
         log "pkinit.gate" "error" ',"error":"disable_freshness missing Preauthentication failed"'
         exit 1
     }
+    require_log "$NAME" /tmp/kdc.log 'no freshness token, rejecting' "no freshness token, rejecting in /tmp/kdc.log"
     docker exec "$NAME" grep -q 'no freshness token, rejecting' /tmp/kdc.log || {
         docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true
         log "pkinit.gate" "error" ',"error":"rust KDC log missing no freshness token, rejecting"'

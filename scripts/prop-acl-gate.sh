@@ -115,6 +115,7 @@ echo "==== unauthorized MIT kprop (ACL unset) ===="
 UNSET="$(docker exec -e KRB5_CONFIG=/tmp/prop-krb5.conf \
     "$NAME" kprop -f /tmp/dump -s /tmp/host.keytab -P 754 -d localhost 2>&1 || true)"
 echo "$UNSET"
+require_log "$NAME" /tmp/kpropd.log 'Rejected connection from unauthorized principal' "unauthorized reject in /tmp/kpropd.log"
 UNSET_LOG="$(docker exec "$NAME" cat /tmp/kpropd.log 2>/dev/null || true)"
 echo "$UNSET_LOG"
 if echo "$UNSET" | grep -q 'SUCCEEDED'; then
@@ -156,6 +157,7 @@ echo "==== unauthorized MIT kprop (empty allowlist) ===="
 BAD="$(docker exec -e KRB5_CONFIG=/tmp/prop-krb5.conf \
     "$NAME" kprop -f /tmp/dump -s /tmp/host.keytab -P 754 -d localhost 2>&1 || true)"
 echo "$BAD"
+require_log "$NAME" /tmp/kpropd.log 'Rejected connection from unauthorized principal' "unauthorized reject in /tmp/kpropd.log"
 KPD="$(docker exec "$NAME" cat /tmp/kpropd.log 2>/dev/null || true)"
 echo "$KPD"
 if echo "$BAD" | grep -q 'SUCCEEDED'; then

@@ -98,6 +98,7 @@ if echo "$SPAKE91" | grep -F 'e_text=SPAKE challenge'; then
     echo "SPAKE 91 e_text was prose SPAKE challenge" >&2
     exit 1
 fi
+require_log "$NAME" /tmp/kdc.log '"code":91,"e_text":"PREAUTH_FAILED"' 'SPAKE 91 PREAUTH_FAILED in /tmp/kdc.log'
 KDCLOG="$(docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true)"
 echo "$KDCLOG" | grep -F '"code":91,"e_text":"PREAUTH_FAILED"'
 log "spake.gate" "ok" ',"mode":"mit-kinit","pa_type":151,"group":2,"principal":"user@KERBER.TEST","e_text":"PREAUTH_FAILED"'

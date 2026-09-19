@@ -102,6 +102,7 @@ fi
 KLIST2="$(docker exec "$NAME" klist -c /tmp/krb5cc_fast)"
 echo "$KLIST2"
 echo "$KLIST2" | grep -q 'host/testhost.kerber.test'
+require_log "$NAME" /tmp/kdc.log 'fast::KrbFastResponse' "fast::KrbFastResponse in /tmp/kdc.log"
 KDCLOG="$(docker exec "$NAME" cat /tmp/kdc.log)"
 echo "$KDCLOG" | tail -40
 FASTN="$(echo "$KDCLOG" | grep -c 'fast::KrbFastResponse' || true)"
@@ -261,6 +262,7 @@ echo "$MITTGS" | grep -F 'kvno: Server host/testhost.kerber.test@KERBER.TEST not
 MITTRACE="$(docker exec "$MITNAME" cat /tmp/mit-tgs-forge.trace)"
 echo "$MITTRACE"
 echo "$MITTRACE" | grep -F 'Encoding request body and padata into FAST request'
+require_log "$MITNAME" /tmp/mit-kdc.log 'PROCESS_TGS' "PROCESS_TGS in /tmp/mit-kdc.log"
 MITTGSLOG="$(docker exec "$MITNAME" sh -c "tail -n +$((n_tgs + 1)) /tmp/mit-kdc.log")"
 echo "$MITTGSLOG"
 echo "$MITTGSLOG" | grep -q 'PROCESS_TGS'
@@ -281,6 +283,7 @@ if [ "$MITF_RC" -eq 0 ]; then
     exit 1
 fi
 echo "$MITF" | grep -q "The ticket isn't for us"
+require_log "$MITNAME" /tmp/mit-kdc.log 'FIND_FAST:' "FIND_FAST in /tmp/mit-kdc.log"
 MITASLOG="$(docker exec "$MITNAME" sh -c "tail -n +$((n + 1)) /tmp/mit-kdc.log")"
 echo "$MITASLOG"
 echo "$MITASLOG" | grep -qE 'FIND_FAST: .*while handling ap-request armor'

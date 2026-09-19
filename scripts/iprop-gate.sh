@@ -217,6 +217,7 @@ if echo "$IPROP_LOG" | grep -qiE 'Program not registered|PROG_UNAVAIL'; then
     exit 1
 fi
 echo "==== Rust kadmind rpc_flavor vs MIT kpropd ===="
+require_log "$NAME" /tmp/kadmind.log '"rpc_flavor":"RPCSEC_GSS"' 'RPCSEC_GSS in /tmp/kadmind.log'
 KADMLOG="$(docker exec "$NAME" cat /tmp/kadmind.log 2>/dev/null || true)"
 echo "$KADMLOG"
 echo "$KADMLOG" | grep -F '"prog":100423' | grep -F '"rpc_flavor":"RPCSEC_GSS"' || {
@@ -340,6 +341,7 @@ done
 }
 
 echo "==== persisted ulog after restart ===="
+require_log "$NAME" /tmp/principal.ulog extra "extra in /tmp/principal.ulog"
 ULOG="$(docker exec "$NAME" cat /tmp/principal.ulog 2>/dev/null || true)"
 echo "$ULOG"
 echo "$ULOG" | grep -q extra
@@ -354,6 +356,7 @@ for _ in $(seq 1 40); do
     sleep 1
 done
 echo "==== kpropd-iprop.log (delta) ===="
+require_log "$NAME" /tmp/kpropd-iprop.log 'Got incremental updates|Incremental updates:' "incremental updates in /tmp/kpropd-iprop.log"
 DELTA_LOG="$(docker exec "$NAME" cat /tmp/kpropd-iprop.log 2>/dev/null || true)"
 echo "$DELTA_LOG"
 echo "$DELTA_LOG" | grep -qiE 'Got incremental updates|Incremental updates:'

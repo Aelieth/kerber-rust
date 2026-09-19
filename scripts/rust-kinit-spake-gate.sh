@@ -101,6 +101,7 @@ KLISTC="$(docker exec "$NAME" klist -C -c /tmp/krb5cc_spake 2>/dev/null || true)
 echo "$KLISTC"
 echo "$KLISTC" | grep -F 'config: fast_avail(krbtgt/KERBER.TEST@KERBER.TEST) = yes'
 echo "$KLISTC" | grep -F 'config: pa_type(krbtgt/KERBER.TEST@KERBER.TEST) = 151'
+require_log "$NAME" /tmp/mit-kdc.trace 'SPAKE response received|SPAKE derived K' "SPAKE TRACE in /tmp/mit-kdc.trace"
 TRACE="$(docker exec "$NAME" cat /tmp/mit-kdc.trace 2>/dev/null || true)"
 if ! echo "$TRACE" | grep -Eq 'SPAKE response received|SPAKE derived K'; then
     echo "$TRACE" >&2

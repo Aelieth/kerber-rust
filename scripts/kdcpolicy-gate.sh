@@ -183,6 +183,7 @@ echo "==== rust AS fail is LOCAL_POLICY ===="
 FAIL_AS="$(kinit_try 'printf "fail-secret\n" | kinit fail@KERBER.TEST')"
 echo "$FAIL_AS"
 echo "$FAIL_AS" | grep -q 'KDC policy rejects request'
+require_log "$NAME" /tmp/kdc.log 'LOCAL_POLICY' "LOCAL_POLICY in /tmp/kdc.log"
 docker exec "$NAME" grep -q 'LOCAL_POLICY' /tmp/kdc.log
 echo "RUST_as_fail" # RUST_as_fail
 

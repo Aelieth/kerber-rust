@@ -116,6 +116,7 @@ prod_kprop_replica || {
     docker exec "$REPLICA" cat /tmp/kpropd.log >&2 || true
     die "kprop/replica KDC failed"
 }
+require_log "$REPLICA" /tmp/kpropd.log 'kprop ok' "kprop ok in /tmp/kpropd.log"
 docker exec "$REPLICA" grep -q 'kprop ok' /tmp/kpropd.log \
     || die "kpropd log missing kprop ok"
 docker exec "$REPLICA" test -f /tmp/replica.db || die "replica db missing after kprop"

@@ -97,6 +97,7 @@ if echo "$KLISTC" | grep -q 'config: pa_type('; then
     echo "pa_type recorded without a selected preauth type" >&2
     exit 1
 fi
+require_log "$NAME" /tmp/mit-kdc.trace 'Decrypted AP-REQ' "Decrypted AP-REQ in /tmp/mit-kdc.trace"
 TRACE="$(docker exec "$NAME" cat /tmp/mit-kdc.trace 2>/dev/null || true)"
 if ! echo "$TRACE" | grep -Fq 'Decrypted AP-REQ'; then
     echo "$TRACE" >&2
@@ -128,6 +129,7 @@ assert_no_error_log "$OUT2"
 KLIST2="$(docker exec "$NAME" klist -c /tmp/krb5cc_fast_np 2>/dev/null || true)"
 echo "$KLIST2"
 echo "$KLIST2" | grep -q 'nopreauth@KERBER.TEST'
+require_log "$NAME" /tmp/mit-kdc.trace 'Decrypted AP-REQ' "Decrypted AP-REQ in /tmp/mit-kdc.trace"
 TRACE2="$(docker exec "$NAME" cat /tmp/mit-kdc.trace 2>/dev/null || true)"
 if ! echo "$TRACE2" | grep -Fq 'Decrypted AP-REQ'; then
     echo "$TRACE2" >&2

@@ -231,6 +231,7 @@ if [ "$ok" != 1 ]; then
 fi
 docker exec -e KRB5CCNAME=/tmp/krb5cc_harness -e KRB5_CONFIG=/tmp/direct-krb5.conf \
     "$NAME" /tmp/gss-mit-client testhost.kerber.test host hello-from-mit-gss 127.0.0.1 4444
+require_log "$NAME" /tmp/gss-accept.log 'gss-accept unwrap ok' "gss-accept unwrap ok in /tmp/gss-accept.log"
 ACCEPT="$(docker exec "$NAME" cat /tmp/gss-accept.log)"
 echo "$ACCEPT"
 echo "$ACCEPT" | grep -q 'gss-accept unwrap ok'
@@ -1061,6 +1062,8 @@ MIT_KVNO="$(z13_mit_case /tmp/cc_z13_kvno kvno | tail -1)"
 echo "MIT z13 nyv=$MIT_NYV kvno=$MIT_KVNO"
 [ "$MIT_NYV" = refused ] || die "Z1.3 MIT acceptor accepted a NYV ticket"
 [ "$MIT_KVNO" = refused ] || die "Z1.3 MIT acceptor accepted a mislabelled-kvno ticket"
+require_log "$NAME" /tmp/gss-z13-mit-nyv.log 'ap-rep=yes' "ap-rep=yes in /tmp/gss-z13-mit-nyv.log"
+require_log "$NAME" /tmp/gss-z13-mit-kvno.log 'accept_sec_context:' "accept_sec_context: in /tmp/gss-z13-mit-kvno.log"
 MIT_NYV_LOG="$(docker exec "$NAME" cat /tmp/gss-z13-mit-nyv.log)"
 MIT_KVNO_LOG="$(docker exec "$NAME" cat /tmp/gss-z13-mit-kvno.log)"
 echo "$MIT_NYV_LOG"

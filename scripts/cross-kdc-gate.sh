@@ -318,8 +318,10 @@ echo "$MIT_REQ" | grep -q 'KDC policy rejects request' \
     || die "MIT kvno after require_auth missing KDC policy rejects request: $MIT_REQ"
 echo "$RUST_REQ" | grep -q 'KDC policy rejects request' \
     || die "Rust kvno after require_auth missing KDC policy rejects request: $RUST_REQ"
+require_log "$NAME" /tmp/mit-kdc.log 'HIGHER_AUTHENTICATION_REQUIRED' "HIGHER_AUTHENTICATION_REQUIRED in /tmp/mit-kdc.log"
 docker exec "$NAME" grep -q 'HIGHER_AUTHENTICATION_REQUIRED' /tmp/mit-kdc.log \
     || die "MIT KDC log missing HIGHER_AUTHENTICATION_REQUIRED after require_auth kvno"
+require_log "$NAME" /tmp/rust-kdc.log 'HIGHER_AUTHENTICATION_REQUIRED' "HIGHER_AUTHENTICATION_REQUIRED in /tmp/rust-kdc.log"
 docker exec "$NAME" grep -q 'HIGHER_AUTHENTICATION_REQUIRED' /tmp/rust-kdc.log \
     || die "Rust KDC log missing HIGHER_AUTHENTICATION_REQUIRED after require_auth kvno"
 docker exec "$NAME" kadmin.local -q 'delstr host/testhost.kerber.test require_auth'
@@ -388,8 +390,10 @@ echo "$MIT_AS" | grep -q 'KDC policy rejects request' \
     || die "MIT password kinit after krbtgt require_auth missing KDC policy rejects request: $MIT_AS"
 echo "$RUST_AS" | grep -q 'KDC policy rejects request' \
     || die "Rust password kinit after krbtgt require_auth missing KDC policy rejects request: $RUST_AS"
+require_log "$NAME" /tmp/mit-kdc.log 'HIGHER_AUTHENTICATION_REQUIRED' "HIGHER_AUTHENTICATION_REQUIRED in /tmp/mit-kdc.log"
 docker exec "$NAME" grep -q 'HIGHER_AUTHENTICATION_REQUIRED' /tmp/mit-kdc.log \
     || die "MIT KDC log missing HIGHER_AUTHENTICATION_REQUIRED after krbtgt require_auth"
+require_log "$NAME" /tmp/rust-kdc.log 'HIGHER_AUTHENTICATION_REQUIRED' "HIGHER_AUTHENTICATION_REQUIRED in /tmp/rust-kdc.log"
 docker exec "$NAME" grep -q 'HIGHER_AUTHENTICATION_REQUIRED' /tmp/rust-kdc.log \
     || die "Rust KDC log missing HIGHER_AUTHENTICATION_REQUIRED after krbtgt require_auth"
 docker exec "$NAME" kadmin.local -q 'delstr krbtgt/KERBER.TEST require_auth'
@@ -523,6 +527,7 @@ MIT_PW_KV="$(kvno_via mit)"
 echo "mit_password_require_auth_spake=$MIT_PW_KV"
 echo "$MIT_PW_KV" | grep -q 'KDC policy rejects request' \
     || die "MIT password kvno after require_auth spake missing KDC policy rejects request: $MIT_PW_KV"
+require_log "$NAME" /tmp/mit-kdc.log 'HIGHER_AUTHENTICATION_REQUIRED' "HIGHER_AUTHENTICATION_REQUIRED in /tmp/mit-kdc.log"
 docker exec "$NAME" grep -q 'HIGHER_AUTHENTICATION_REQUIRED' /tmp/mit-kdc.log \
     || die "MIT KDC log missing HIGHER_AUTHENTICATION_REQUIRED after password kvno require_auth spake"
 kinit_via rust
@@ -530,6 +535,7 @@ RUST_PW_KV="$(kvno_via rust)"
 echo "rust_password_require_auth_spake=$RUST_PW_KV"
 echo "$RUST_PW_KV" | grep -q 'KDC policy rejects request' \
     || die "Rust password kvno after require_auth spake missing KDC policy rejects request: $RUST_PW_KV"
+require_log "$NAME" /tmp/rust-kdc.log 'HIGHER_AUTHENTICATION_REQUIRED' "HIGHER_AUTHENTICATION_REQUIRED in /tmp/rust-kdc.log"
 docker exec "$NAME" grep -q 'HIGHER_AUTHENTICATION_REQUIRED' /tmp/rust-kdc.log \
     || die "Rust KDC log missing HIGHER_AUTHENTICATION_REQUIRED after password kvno require_auth spake"
 

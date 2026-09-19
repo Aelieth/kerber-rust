@@ -64,6 +64,7 @@ docker exec -e KRB5CCNAME=/tmp/krb5cc_harness -e GSS_DUMP_TOKEN=/tmp/gss-apreq "
     /tmp/gss-mit-client testhost.kerber.test host "$MSG" 127.0.0.1 4444
 
 echo "==== gss-accept log ===="
+require_log "$NAME" /tmp/gss-accept.log 'gss-accept unwrap ok' "gss-accept unwrap ok in /tmp/gss-accept.log"
 ACCEPT="$(docker exec "$NAME" cat /tmp/gss-accept.log 2>/dev/null || true)"
 echo "$ACCEPT"
 echo "$ACCEPT" | grep -q 'gss-accept unwrap ok'
@@ -112,6 +113,7 @@ done
 }
 docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
     /tmp/gss-mit-client testhost.kerber.test host "$MSG" 127.0.0.1 4444 deleg
+require_log "$NAME" /tmp/gss-accept-deleg.log 'gss-accept unwrap ok' "gss-accept unwrap ok in /tmp/gss-accept-deleg.log"
 DELEG_LOG="$(docker exec "$NAME" cat /tmp/gss-accept-deleg.log 2>/dev/null || true)"
 echo "$DELEG_LOG"
 echo "$DELEG_LOG" | grep -q 'gss-accept unwrap ok'
@@ -158,6 +160,7 @@ if ! docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
     log "gss.gate" "error" ',"error":"rust gss-init plain failed"'
     exit 1
 fi
+require_log "$NAME" /tmp/gss-mit-server-plain.log 'mit-gss unwrap ok hello-from-rust-gss' "mit-gss unwrap ok in /tmp/gss-mit-server-plain.log"
 PLAIN_ACC="$(docker exec "$NAME" cat /tmp/gss-mit-server-plain.log 2>/dev/null || true)"
 echo "$PLAIN_ACC"
 echo "$PLAIN_ACC" | grep -q 'mit-gss unwrap ok hello-from-rust-gss'
@@ -190,6 +193,7 @@ if ! docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
     log "gss.gate" "error" ',"error":"rust gss-init failed"'
     exit 1
 fi
+require_log "$NAME" /tmp/gss-mit-server.log 'mit-gss unwrap ok hello-from-rust-gss' "mit-gss unwrap ok in /tmp/gss-mit-server.log"
 MIT_ACC="$(docker exec "$NAME" cat /tmp/gss-mit-server.log 2>/dev/null || true)"
 echo "$MIT_ACC"
 echo "$MIT_ACC" | grep -q 'mit-gss unwrap ok hello-from-rust-gss'
@@ -220,6 +224,7 @@ done
 }
 docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
     /tmp/gss-mit-client testhost.kerber.test host "$MSG" 127.0.0.1 4444 spnego
+require_log "$NAME" /tmp/gss-accept-spnego.log 'gss-accept unwrap ok' "gss-accept unwrap ok in /tmp/gss-accept-spnego.log"
 SPNEGO_LOG="$(docker exec "$NAME" cat /tmp/gss-accept-spnego.log 2>/dev/null || true)"
 echo "$SPNEGO_LOG"
 echo "$SPNEGO_LOG" | grep -q 'gss-accept unwrap ok'
@@ -246,6 +251,7 @@ done
 }
 docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
     /tmp/gss-mit-client testhost.kerber.test host "$MSG" 127.0.0.1 4444 iov
+require_log "$NAME" /tmp/gss-accept-iov.log 'gss-accept unwrap ok' "gss-accept unwrap ok in /tmp/gss-accept-iov.log"
 IOV_LOG="$(docker exec "$NAME" cat /tmp/gss-accept-iov.log 2>/dev/null || true)"
 echo "$IOV_LOG"
 echo "$IOV_LOG" | grep -q 'gss-accept unwrap ok'
@@ -277,6 +283,7 @@ done
 }
 docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
     /tmp/gss-mit-client testhost.kerber.test host "$MSG" 127.0.0.1 4444 sign
+require_log "$NAME" /tmp/gss-accept-sign.log 'gss-accept unwrap ok' "gss-accept unwrap ok in /tmp/gss-accept-sign.log"
 SIGN_LOG="$(docker exec "$NAME" cat /tmp/gss-accept-sign.log 2>/dev/null || true)"
 echo "$SIGN_LOG"
 echo "$SIGN_LOG" | grep -q 'gss-accept unwrap ok'
@@ -388,6 +395,7 @@ done
 MIT_GSS_CLIENT=/tmp/gss-mit-client
 docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
     "$MIT_GSS_CLIENT" testhost.kerber.test host "$MSG" 127.0.0.1 4444 dce
+require_log "$NAME" /tmp/gss-accept-dce.log 'gss-accept dce ok' "gss-accept dce ok in /tmp/gss-accept-dce.log"
 DCE_LOG="$(docker exec "$NAME" cat /tmp/gss-accept-dce.log 2>/dev/null || true)"
 echo "$DCE_LOG"
 echo "$DCE_LOG" | grep -q 'gss-accept dce ok'
@@ -418,6 +426,7 @@ done
 MIT_GSS_CLIENT=/tmp/gss-mit-client
 docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
     "$MIT_GSS_CLIENT" testhost.kerber.test host "$MSG" 127.0.0.1 4450 dce
+require_log "$NAME" /tmp/gss-mit-server-dce.log "mit-gss unwrap ok $MSG" "mit-gss unwrap ok in /tmp/gss-mit-server-dce.log"
 MIT_DCE="$(docker exec "$NAME" cat /tmp/gss-mit-server-dce.log 2>/dev/null || true)"
 echo "$MIT_DCE"
 echo "$MIT_DCE" | grep -q "mit-gss unwrap ok $MSG"
@@ -532,6 +541,7 @@ RUST_GSS_INIT=/tmp/krb5-gss-init
 docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
     "$RUST_GSS_INIT" --ccache /tmp/krb5cc_harness --host testhost.kerber.test \
     --ip 127.0.0.1 --port 4444 --no-checksum --accept-only
+require_log "$NAME" /tmp/gss-accept-nc.log 'gss-accept ap-rep=none' "gss-accept ap-rep=none in /tmp/gss-accept-nc.log"
 RUST_NC="$(docker exec "$NAME" cat /tmp/gss-accept-nc.log 2>/dev/null || true)"
 echo "$RUST_NC"
 echo "$RUST_NC" | grep -q 'gss-accept ap-rep=none' || {
@@ -556,6 +566,7 @@ RUST_GSS_INIT=/tmp/krb5-gss-init
 docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
     "$RUST_GSS_INIT" --ccache /tmp/krb5cc_harness --host testhost.kerber.test \
     --ip 127.0.0.1 --port 4452 --no-checksum --accept-only
+require_log "$NAME" /tmp/gss-mit-nc.log 'mit-gss ap-rep=none' "mit-gss ap-rep=none in /tmp/gss-mit-nc.log"
 MIT_NC="$(docker exec "$NAME" cat /tmp/gss-mit-nc.log 2>/dev/null || true)"
 echo "$MIT_NC"
 echo "$MIT_NC" | grep -q 'mit-gss ap-rep=none' || {
@@ -576,6 +587,7 @@ gss_listen /tmp/gss-accept-cb.log "gss-accept cb"
 MIT_GSS_CLIENT=/tmp/gss-mit-client
 docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
     "$MIT_GSS_CLIENT" testhost.kerber.test host "$MSG" 127.0.0.1 4444
+require_log "$NAME" /tmp/gss-accept-cb.log 'gss-accept unwrap ok' "gss-accept unwrap ok in /tmp/gss-accept-cb.log"
 RUST_CB="$(docker exec "$NAME" cat /tmp/gss-accept-cb.log 2>/dev/null || true)"
 echo "$RUST_CB"
 echo "$RUST_CB" | grep -q 'gss-accept unwrap ok' || {
@@ -599,6 +611,7 @@ RUST_GSS_INIT=/tmp/krb5-gss-init
 docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
     "$RUST_GSS_INIT" --ccache /tmp/krb5cc_harness --host testhost.kerber.test \
     --ip 127.0.0.1 --port 4453
+require_log "$NAME" /tmp/gss-mit-cb.log 'mit-gss unwrap ok hello-from-rust-gss' "mit-gss unwrap ok in /tmp/gss-mit-cb.log"
 MIT_CB="$(docker exec "$NAME" cat /tmp/gss-mit-cb.log 2>/dev/null || true)"
 echo "$MIT_CB"
 echo "$MIT_CB" | grep -q 'mit-gss unwrap ok hello-from-rust-gss' || {
@@ -618,6 +631,7 @@ gss_listen /tmp/gss-accept-cbm.log "gss-accept cb mismatch"
 MIT_GSS_CLIENT=/tmp/gss-mit-client
 docker exec -e KRB5CCNAME=/tmp/krb5cc_harness -e GSS_CHANNEL_BINDINGS=tls-a "$NAME" \
     "$MIT_GSS_CLIENT" testhost.kerber.test host "$MSG" 127.0.0.1 4444 || true
+require_log "$NAME" /tmp/gss-accept-cbm.log 'gss channel bindings' "gss channel bindings in /tmp/gss-accept-cbm.log"
 RUST_CBM="$(docker exec "$NAME" cat /tmp/gss-accept-cbm.log 2>/dev/null || true)"
 echo "$RUST_CBM"
 echo "$RUST_CBM" | grep -q 'gss channel bindings' || {

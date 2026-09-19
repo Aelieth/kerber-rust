@@ -147,6 +147,7 @@ assert_no_error_log "$OUT"
 KLIST="$(docker exec "$NAME" klist -c /tmp/krb5cc_pkinit 2>/dev/null || true)"
 echo "$KLIST"
 echo "$KLIST" | grep -q 'user@KERBER.TEST'
+require_log "$NAME" /tmp/mit-kdc.trace 'PKINIT|pkinit|PA-PK-AS|padata type 16' "PKINIT evidence in /tmp/mit-kdc.trace"
 TRACE="$(docker exec "$NAME" cat /tmp/mit-kdc.trace 2>/dev/null || true)"
 if ! echo "$TRACE$OUT" | grep -Eqi 'PKINIT|pa[_ ]?type[[:space:]]*16|padata type 16|PA-PK-AS|client.pkinit'; then
     log "pkinit.client.gate" "error" ',"error":"kinit succeeded without PKINIT evidence"'
@@ -247,6 +248,7 @@ echo "$MPWKV" | grep -q 'KDC policy rejects request' || {
     log "pkinit.client.gate" "error" ',"error":"MIT password kvno after require_auth pkinit missing KDC policy rejects request"'
     exit 1
 }
+require_log "$NAME" /tmp/mit-kdc.log 'HIGHER_AUTHENTICATION_REQUIRED' "HIGHER_AUTHENTICATION_REQUIRED in /tmp/mit-kdc.log"
 docker exec "$NAME" grep -q 'HIGHER_AUTHENTICATION_REQUIRED' /tmp/mit-kdc.log || {
     docker exec "$NAME" cat /tmp/mit-kdc.log 2>/dev/null || true
     log "pkinit.client.gate" "error" ',"error":"MIT KDC log missing HIGHER_AUTHENTICATION_REQUIRED"'
@@ -285,6 +287,7 @@ echo "$MHWKV" | grep -qiE 'Generic error|KDC policy rejects request|NO HW PREAUT
     log "pkinit.client.gate" "error" ',"error":"MIT kvno after PKINIT TGT +requires_hwauth host did not fail"'
     exit 1
 }
+require_log "$NAME" /tmp/mit-kdc.log 'NO HW PREAUTH' "NO HW PREAUTH in /tmp/mit-kdc.log"
 docker exec "$NAME" grep -q 'NO HW PREAUTH' /tmp/mit-kdc.log || {
     docker exec "$NAME" cat /tmp/mit-kdc.log 2>/dev/null || true
     log "pkinit.client.gate" "error" ',"error":"MIT KDC log missing NO HW PREAUTH"'
@@ -400,6 +403,7 @@ echo "$ANONKV" | grep -q 'KDC policy rejects request' || {
     log "pkinit.client.gate" "error" ',"error":"kvno after rust kinit -n missing KDC policy rejects request"'
     exit 1
 }
+require_log "$NAME" /tmp/mit-kdc-anon.log 'ANONYMOUS NOT ALLOWED' "ANONYMOUS NOT ALLOWED in /tmp/mit-kdc-anon.log"
 docker exec "$NAME" grep -q 'ANONYMOUS NOT ALLOWED' /tmp/mit-kdc-anon.log || {
     docker exec "$NAME" cat /tmp/mit-kdc-anon.log 2>/dev/null || true
     log "pkinit.client.gate" "error" ',"error":"MIT KDC log missing ANONYMOUS NOT ALLOWED"'
@@ -427,6 +431,7 @@ echo "$FRKL" | grep -q 'user@KERBER.TEST' || {
     log "pkinit.client.gate" "error" ',"error":"klist after rust kinit require_freshness missing user@KERBER.TEST"'
     exit 1
 }
+require_log "$NAME" /tmp/mit-kdc-anon.log 'freshness token received' "freshness token received in /tmp/mit-kdc-anon.log"
 docker exec "$NAME" grep -q 'freshness token received' /tmp/mit-kdc-anon.log || {
     docker exec "$NAME" cat /tmp/mit-kdc-anon.log 2>/dev/null || true
     log "pkinit.client.gate" "error" ',"error":"MIT KDC log missing freshness token received"'

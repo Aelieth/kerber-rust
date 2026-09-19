@@ -345,6 +345,7 @@ echo "$NOPA" | grep -qiE 'Generic error|KDC policy rejects request|NO PREAUTH' |
     log "renew.gate" "error" ',"error":"rust kvno against +requires_preauth host did not fail"'
     exit 1
 }
+require_log "$NAME" /tmp/kdc.log 'NO PREAUTH' "NO PREAUTH in /tmp/kdc.log"
 docker exec "$NAME" grep -q 'NO PREAUTH' /tmp/kdc.log || {
     docker exec "$NAME" cat /tmp/kdc.log >&2 || true
     log "renew.gate" "error" ',"error":"rust KDC log missing NO PREAUTH"'
