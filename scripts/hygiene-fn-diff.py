@@ -77,6 +77,12 @@ IMPL_RE = re.compile(
     r"(?:(?:!)?[A-Za-z_][A-Za-z0-9_:]*(?:<[^;{]*>)?\s+for\s+)?"
     r"(?P<ty>[A-Za-z_][A-Za-z0-9_]*)"
 )
+NON_FN_RE = re.compile(
+    r"^\s*(?:pub(?:\([^)]*\))?\s+)?"
+    r"(?:(?P<kind>const|static)\s+(?:mut\s+)?(?!fn\b)(?P<csname>[A-Za-z_][A-Za-z0-9_]*)"
+    r"|(?P<kind2>enum|struct|trait|type)\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
+    r"|macro_rules!\s+(?P<macro>[A-Za-z_][A-Za-z0-9_]*))"
+)
 TEST_ATTR_RE = re.compile(r"#\[\s*(?:tokio::test|test)\b")
 ACCEPT_LINE_RE = re.compile(
     r"^(?P<old>.+?)\s*=\s*(?P<new>.+?)\s*\|\s*"
@@ -470,8 +476,65 @@ def _has_test_attr(raw_lines: list[str], decl_line: int) -> bool:
     return False
 
 
+def scan_non_fn(code: str) -> list[tuple[int, int, str, str]]:
+    """(start, end, kind, name) for const/static/enum/struct/trait/type/macro_rules; 1-based."""
+    lines = code.split("\n")
+
+    def find_term(li: int, ci: int) -> tuple[int, bool]:
+        depth_paren = depth_brack = 0
+        while li < len(lines):
+            s = lines[li]
+            while ci < len(s):
+                ch = s[ci]
+                if ch == "(":
+                    depth_paren += 1
+                elif ch == ")":
+                    depth_paren -= 1
+                elif ch == "[":
+                    depth_brack += 1
+                elif ch == "]":
+                    depth_brack -= 1
+                elif ch == "{" and depth_paren <= 0 and depth_brack <= 0:
+                    return li, True
+                elif ch == ";" and depth_paren <= 0 and depth_brack <= 0:
+                    return li, False
+                ci += 1
+            li += 1
+            ci = 0
+        return len(lines) - 1, False
+
+    def find_close(li: int, ci: int) -> int:
+        depth = 0
+        while li < len(lines):
+            s = lines[li]
+            while ci < len(s):
+                if s[ci] == "{":
+                    depth += 1
+                elif s[ci] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return li
+                ci += 1
+            li += 1
+            ci = 0
+        return len(lines) - 1
+
+    items: list[tuple[int, int, str, str]] = []
+    for li, s in enumerate(lines):
+        m = NON_FN_RE.match(s)
+        if not m:
+            continue
+        kind = m.group("kind") or m.group("kind2") or "macro_rules"
+        name = m.group("csname") or m.group("name") or m.group("macro")
+        end_li, braced = find_term(li, m.end())
+        if braced:
+            end_li = find_close(end_li, lines[end_li].find("{"))
+        items.append((li + 1, end_li + 1, kind, name))
+    return items
+
+
 def extract(root: pathlib.Path) -> dict[str, dict[str, str]]:
-    """key → {src, file, name}."""
+    """key → {src, file, name, kind}."""
     found: dict[str, dict[str, str]] = {}
     crates = root / "crates"
     if not crates.is_dir():
@@ -508,7 +571,21 @@ def extract(root: pathlib.Path) -> dict[str, dict[str, str]]:
                 # Never drop a colliding body. Disambiguate with file:line
                 # when two items still share a key.
                 key = f"{key}#{rel}:{start}"
-            found[key] = {"src": src, "file": rel, "name": name}
+            found[key] = {"src": src, "file": rel, "name": name, "kind": "fn"}
+        fn_spans = [(a, b) for a, b, _, _ in fns]
+        for start, end, kind, name in scan_non_fn(code):
+            if any(a <= start <= b for a, b in test_ranges):
+                continue
+            if any(a < start < b for a, b in fn_spans):
+                continue
+            ty = _impl_type_at(code_lines, start)
+            prefix = f"{ty}::{kind}" if ty else kind
+            key = fn_key(crate, module, prefix, name)
+            prelude = _attr_doc_start(raw_lines, start)
+            src = "\n".join(raw_lines[prelude:end])
+            if key in found:
+                key = f"{key}#{rel}:{start}"
+            found[key] = {"src": src, "file": rel, "name": name, "kind": kind}
     return found
 
 
@@ -633,6 +710,14 @@ def compare_trees(
             unaccepted.append((okey, nkey))
 
     unused_accept = sorted(k for k in accept if k not in used_accept)
+
+    def kind_counts(items: dict[str, dict[str, str]]) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for rec in items.values():
+            k = rec.get("kind", "fn")
+            counts[k] = counts.get(k, 0) + 1
+        return counts
+
     return {
         "pairs": len(pairs),
         "identical": identical,
@@ -652,6 +737,8 @@ def compare_trees(
         "missing_rhs": missing_rhs,
         "old": len(old),
         "new": len(new),
+        "old_kinds": kind_counts(old),
+        "new_kinds": kind_counts(new),
     }
 
 
@@ -668,6 +755,10 @@ def render(report: dict[str, object]) -> str:
         f"split-ok {len(report['split_ok'])}",  # type: ignore[arg-type]
         f"old {report['old']}",
         f"new {report['new']}",
+        "old-kinds "
+        + " ".join(f"{k}={v}" for k, v in sorted(report["old_kinds"].items())),  # type: ignore[union-attr]
+        "new-kinds "
+        + " ".join(f"{k}={v}" for k, v in sorted(report["new_kinds"].items())),  # type: ignore[union-attr]
     ]
     for o, n, reason in report["accepted"]:  # type: ignore[misc]
         lines.append(f"accepted {o} -> {n}: {reason}")
@@ -679,9 +770,9 @@ def evaluate(report: dict[str, object]) -> None:
     for o, n in report["unaccepted"]:  # type: ignore[misc]
         errs.append(f"changed not in --accept: {o} -> {n}")
     for k in report["removed"]:  # type: ignore[misc]
-        errs.append(f"removed fn: {k}")
+        errs.append(f"removed item: {k}")
     for k in report["added"]:  # type: ignore[misc]
-        errs.append(f"added fn: {k}")
+        errs.append(f"added item: {k}")
     for k in report["split_fail"]:  # type: ignore[misc]
         errs.append(f"--split body mismatch: {k}")
     for k in report["missing_split"]:  # type: ignore[misc]
@@ -944,6 +1035,46 @@ def _self_test() -> int:
         evaluate(docs)
         if docs["doc_only"] != 1 or docs["changed"] != 0:
             raise SystemExit("hygiene-fn-diff --self-test: /// change must be doc-only")
+        n += 1
+
+        _write_crate(old, "crates/demo/src/lib.rs", "const MAX: i32 = 1;\n")
+        _write_crate(new, "crates/demo/src/lib.rs", "const MAX: i32 = 2;\n")
+        cst = compare_trees(old, new, {}, {}, {}, [])
+        if cst["changed"] != 1 or cst["old_kinds"].get("const") != 1:
+            raise SystemExit("hygiene-fn-diff --self-test: const value must be changed")
+        _must_red(cst, "changed const value")
+        n += 1
+
+        _write_crate(old, "crates/demo/src/lib.rs", "enum E { A = 1, B = 2 }\n")
+        _write_crate(new, "crates/demo/src/lib.rs", "enum E { A = 2, B = 1 }\n")
+        disc = compare_trees(old, new, {}, {}, {}, [])
+        if disc["changed"] != 1:
+            raise SystemExit("hygiene-fn-diff --self-test: swapped discriminants must be changed")
+        _must_red(disc, "swapped discriminants")
+        n += 1
+
+        _write_crate(old, "crates/demo/src/lib.rs", "struct S { a: i32, b: u8 }\n")
+        _write_crate(new, "crates/demo/src/lib.rs", "struct S { b: u8, a: i32 }\n")
+        fields = compare_trees(old, new, {}, {}, {}, [])
+        if fields["changed"] != 1:
+            raise SystemExit("hygiene-fn-diff --self-test: reordered struct fields must be changed")
+        _must_red(fields, "reordered struct fields")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "macro_rules! m { ($x:tt) => { $x } }\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "macro_rules! m { ($x:tt) => { ($x) } }\n",
+        )
+        mac = compare_trees(old, new, {}, {}, {}, [])
+        if mac["changed"] != 1:
+            raise SystemExit("hygiene-fn-diff --self-test: changed macro body must be changed")
+        _must_red(mac, "changed macro body")
         n += 1
     return n
 
