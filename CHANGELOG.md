@@ -24,8 +24,9 @@ this project uses semantic versioning once a crate is published.
   two trees (`crate<TAB>module::path::[Type::]name`). A body edit, a
   dropped fn, a reordered `--split`, or an unused `--accept` is red;
   a pure move and `pub` ↔ `pub(crate)` are green. `--self-test` prints
-  `self-test ok (10 cases)`; ci-policy requires that count. Literal
-  contents (e_text, char, a `--split` phase) are compared.
+  `self-test ok (14 cases)`; ci-policy requires that count. Literal
+  contents (e_text, char, a `--split` phase) are compared. `--glue`
+  is line-anchored and new-only.
 
 ### W3-S2-R3 compare-tool robustness
 

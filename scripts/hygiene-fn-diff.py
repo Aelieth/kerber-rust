@@ -16,7 +16,8 @@ drops a body.
 Fails on any `changed`, `added` or `removed` not in `--accept` (keyed,
 blob-pinned, unused entry red). `--split old_key = new_a + new_b + …`
 checks that the concatenated new bodies equal the old body modulo
-declared `--glue` lines (phase calls and `let` re-bindings).
+per-split `--glue` lines (whole lines present in the new bodies and
+absent from the old; unused glue is red).
 
 Usage:
   python3 scripts/hygiene-fn-diff.py --old SHA --new SHA \\
@@ -192,7 +193,16 @@ def load_splits(
             raise SystemExit(f"--split keys must be crate<TAB>path: {line!r}")
         if old in out:
             raise SystemExit(f"--split duplicate LHS: {old}")
+        if len(parts) < 2:
+            raise SystemExit(f"--split rejects a single-element RHS: {line!r}")
+        if len(parts) != len(set(parts)):
+            raise SystemExit(f"--split duplicate part: {line!r}")
         out[old] = parts
+    lhs = set(out)
+    for old, parts in out.items():
+        for p in parts:
+            if p in lhs:
+                raise SystemExit(f"--split RHS is also a LHS: {p}")
     return out
 
 
@@ -460,11 +470,38 @@ def extract(root: pathlib.Path) -> dict[str, dict[str, str]]:
     return found
 
 
-def apply_glue(text: str, glue: list[str]) -> str:
-    out = text
-    for line in glue:
-        out = out.replace(line, "")
-    return out
+def _line_set(text: str) -> set[str]:
+    return {ln.strip() for ln in text.splitlines() if ln.strip()}
+
+
+def strip_glue_lines(text: str, glue: list[str]) -> str:
+    """Drop whole lines whose stripped text is a glue entry."""
+    want = {g.strip() for g in glue if g.strip()}
+    return "\n".join(ln for ln in text.splitlines() if ln.strip() not in want)
+
+
+def glue_problems(old_body: str, new_body: str, glue: list[str]) -> tuple[list[str], list[str]]:
+    """Glue may only excuse lines present in new and absent from old."""
+    old_ls, new_ls = _line_set(old_body), _line_set(new_body)
+    unused: list[str] = []
+    illegal: list[str] = []
+    for g in glue:
+        gs = g.strip()
+        if not gs:
+            continue
+        if gs in old_ls:
+            illegal.append(g)
+        if gs not in new_ls:
+            unused.append(g)
+    return unused, illegal
+
+
+def _glue_for_split(
+    glue: dict[str, list[str]] | list[str], old_key: str
+) -> list[str]:
+    if isinstance(glue, list):
+        return glue
+    return glue.get(old_key, [])
 
 
 def compare_trees(
@@ -473,7 +510,7 @@ def compare_trees(
     moves: dict[str, str],
     accept: dict[str, dict[str, str]],
     splits: dict[str, list[str]],
-    glue: list[str],
+    glue: dict[str, list[str]] | list[str],
 ) -> dict[str, object]:
     old = extract(old_root)
     new = extract(new_root)
@@ -483,6 +520,8 @@ def compare_trees(
     split_ok: list[str] = []
     split_fail: list[str] = []
     missing_split: list[str] = []
+    unused_glue: list[str] = []
+    illegal_glue: list[str] = []
 
     for old_key, new_keys in splits.items():
         if old_key not in old:
@@ -492,10 +531,18 @@ def compare_trees(
         if missing:
             missing_split.extend(f"{old_key} -> {k}" for k in missing)
             continue
-        old_body = apply_glue(inner_body(old[old_key]["src"]), glue)
-        concat = "".join(inner_body(new[k]["src"]) for k in new_keys)
-        concat = apply_glue(concat, glue)
-        if compare_norm(old_body) == compare_norm(concat):
+        g_lines = _glue_for_split(glue, old_key)
+        old_body = inner_body(old[old_key]["src"])
+        concat = "\n".join(inner_body(new[k]["src"]) for k in new_keys)
+        unused, illegal = glue_problems(old_body, concat, g_lines)
+        unused_glue.extend(f"{old_key}: {g}" for g in unused)
+        illegal_glue.extend(f"{old_key}: {g}" for g in illegal)
+        stripped = strip_glue_lines(concat, g_lines)
+        if (
+            compare_norm(old_body) == compare_norm(stripped)
+            and not unused
+            and not illegal
+        ):
             split_ok.append(old_key)
             used_old.add(old_key)
             used_new.update(new_keys)
@@ -556,6 +603,8 @@ def compare_trees(
         "split_fail": split_fail,
         "missing_split": missing_split,
         "unused_accept": unused_accept,
+        "unused_glue": unused_glue,
+        "illegal_glue": illegal_glue,
         "missing_rhs": missing_rhs,
         "old": len(old),
         "new": len(new),
@@ -594,6 +643,10 @@ def evaluate(report: dict[str, object]) -> None:
         errs.append(f"--split key missing: {k}")
     for k in report["unused_accept"]:  # type: ignore[misc]
         errs.append(f"--accept entry unused: {k}")
+    for k in report.get("unused_glue", []):  # type: ignore[misc]
+        errs.append(f"--glue unused: {k}")
+    for k in report.get("illegal_glue", []):  # type: ignore[misc]
+        errs.append(f"--glue present in old body: {k}")
     for k in report["missing_rhs"]:  # type: ignore[misc]
         errs.append(f"--accept RHS missing in new tree: {k}")
     if errs:
@@ -687,12 +740,12 @@ def _self_test() -> int:
         _write_crate(
             old,
             "crates/demo/src/lib.rs",
-            "fn whole() { a(); b(); }\n",
+            "fn whole() {\n    a();\n    b();\n}\n",
         )
         _write_crate(
             new,
             "crates/demo/src/lib.rs",
-            "fn phase_a() { a(); phase_b(); }\nfn phase_b() { b(); }\n",
+            "fn phase_a() {\n    a();\n    phase_b();\n}\nfn phase_b() {\n    b();\n}\n",
         )
         split_map = {"demo\twhole": ["demo\tphase_a", "demo\tphase_b"]}
         glue = ["phase_b();"]
@@ -705,7 +758,7 @@ def _self_test() -> int:
         _write_crate(
             new,
             "crates/demo/src/lib.rs",
-            "fn phase_a() { b(); phase_b(); }\nfn phase_b() { a(); }\n",
+            "fn phase_a() {\n    b();\n    phase_b();\n}\nfn phase_b() {\n    a();\n}\n",
         )
         reordered = compare_trees(old, new, {}, {}, split_map, glue)
         if not reordered["split_fail"]:
@@ -763,6 +816,58 @@ def _self_test() -> int:
         if vis["vis_only"] != 1 or vis["changed"] != 0:
             raise SystemExit("hygiene-fn-diff --self-test: pub ↔ pub(crate) must be vis-only")
         n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn whole() {\n    a();\n    b();\n    c();\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn phase_a() {\n    a();\n}\nfn phase_b() {\n    b();\n}\n",
+        )
+        dropped_glue = compare_trees(
+            old,
+            new,
+            {},
+            {},
+            {"demo\twhole": ["demo\tphase_a", "demo\tphase_b"]},
+            ["c();"],
+        )
+        if not dropped_glue["split_fail"] and not dropped_glue["unused_glue"]:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: dropped statement named in glue must fail"
+            )
+        _must_red(dropped_glue, "dropped statement named in glue")
+        n += 1
+
+        try:
+            load_splits(None, ["demo\twhole = demo\tphase_a"])
+        except SystemExit:
+            n += 1
+        else:
+            raise SystemExit("hygiene-fn-diff --self-test: single-element --split must fail")
+
+        try:
+            load_splits(None, ["demo\twhole = demo\tphase_a + demo\tphase_a"])
+        except SystemExit:
+            n += 1
+        else:
+            raise SystemExit("hygiene-fn-diff --self-test: duplicate --split part must fail")
+
+        try:
+            load_splits(
+                None,
+                [
+                    "demo\twhole = demo\tmid + demo\tphase_b",
+                    "demo\tmid = demo\ta + demo\tb",
+                ],
+            )
+        except SystemExit:
+            n += 1
+        else:
+            raise SystemExit("hygiene-fn-diff --self-test: --split RHS-as-LHS must fail")
     return n
 
 
@@ -790,7 +895,7 @@ def main(argv: list[str] | None = None) -> int:
         "--glue",
         action="append",
         default=[],
-        help="line stripped from --split bodies (phase call / let re-bind)",
+        help="per-split new-only line excused from --split concat (repeatable)",
     )
     ap.add_argument("--git-dir", type=pathlib.Path, default=ROOT)
     ns = ap.parse_args(argv)
