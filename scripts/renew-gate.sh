@@ -428,6 +428,13 @@ echo "$MNOPA" | grep -qiE 'Generic error|KDC policy rejects request|NO PREAUTH' 
     log "renew.gate" "error" ',"error":"MIT kvno against +requires_preauth host did not fail"'
     exit 1
 }
+_renew_mit_no_preauth() {
+    local mitlog
+    mitlog="$(docker exec "$MITNAME" sh -c 'cat /var/log/krb5kdc.log /tmp/krb5kdc.log 2>/dev/null; true')"
+    mitlog="$mitlog$(docker logs "$MITNAME" 2>&1)"
+    echo "$mitlog$MNOPA" | grep -q 'NO PREAUTH'
+}
+retry_until 200 "NO PREAUTH in MIT KDC log+kvno" _renew_mit_no_preauth
 MITLOG="$(docker exec "$MITNAME" sh -c 'cat /var/log/krb5kdc.log /tmp/krb5kdc.log 2>/dev/null; true')"
 MITLOG="$MITLOG$(docker logs "$MITNAME" 2>&1)"
 echo "$MITLOG$MNOPA" | grep -q 'NO PREAUTH' || {

@@ -117,6 +117,8 @@ if [ "$rc" -eq 0 ]; then
         log "pkinit.gate" "error" ',"error":"SAN mismatch accepted"'
         exit 1
     fi
+    retry_until 200 "pkinit client san in /tmp/kdc.log" \
+        docker exec "$NAME" grep -q 'pkinit client san' /tmp/kdc.log
     KDCLOG="$(docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true)"
     if ! echo "$KDCLOG" | grep -q 'pkinit client san'; then
         echo "$KDCLOG" >&2

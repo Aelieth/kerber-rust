@@ -2765,6 +2765,7 @@ GATE_COMMON_NEEDLES = (
     "require_listen",
     "require_log",
     "require_port_in",
+    "retry_until",
     "wait_udp_in",
     "wait_tcp_bound_in",
     "wait_gone_in",

@@ -37,7 +37,8 @@ this project uses semantic versioning once a crate is published.
 ### W3-S3-0R residues
 
 - **scripts.** Every shape-(b) server-written log or trace is waited
-  with `require_log` before the existing read. `die` and `unavailable`
+  with `require_log` or `retry_until` (the assertion command itself)
+  before the existing read. `die` and `unavailable`
   print a `::error file=…,line=…::` annotation on Actions. `ci-status.py`
   also matches `head_branch` when `pull_requests` is empty.
 

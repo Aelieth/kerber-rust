@@ -285,7 +285,12 @@ acl_case() {
     if [ "$expect" = deny ]; then
         ACL_DENIED_SO_FAR=$((ACL_DENIED_SO_FAR + 1))
     fi
-    [ "$mit_log" = "$ACL_DENIED_SO_FAR" ] && [ "$rust_log" = "$ACL_DENIED_SO_FAR" ]
+    _acl_rejected_counts() {
+        mit_log="$(docker exec "$NAME" grep -ac "Rejected connection from unauthorized principal host/${HN}@KERBER.TEST" /tmp/kpropd-mit.log || true)"
+        rust_log="$(docker exec "$NAME" grep -ac "Rejected connection from unauthorized principal host/${HN}@KERBER.TEST" /tmp/kpropd.log || true)"
+        [ "$mit_log" = "$ACL_DENIED_SO_FAR" ] && [ "$rust_log" = "$ACL_DENIED_SO_FAR" ]
+    }
+    retry_until 200 "acl-$name rejected_lines=$ACL_DENIED_SO_FAR" _acl_rejected_counts
 }
 # The MIT KDC issues the host/${HN} ticket with the strongest key of the
 # service: aes256-cts-hmac-sha384-192 (kpropd -d prints `etype ==`).
@@ -306,6 +311,8 @@ acl_case etype-two "host/${HN}@KERBER.TEST aes128-cts aes256-sha2\\n" deny
 acl_case etype-crlf "host/${HN}@KERBER.TEST aes256-sha2\\r\\n" deny
 acl_case name-crlf "host/${HN}@KERBER.TEST\\r\\n" allow
 acl_case no-final-newline "host/other@KERBER.TEST nosuch\\nhost/${HN}@KERBER.TEST" allow
+retry_until 200 "MIT kpropd etype line" \
+    docker exec "$NAME" grep -aqF "authenticated client: host/${HN}@KERBER.TEST (etype == aes256-cts-hmac-sha384-192)" /tmp/kpropd-mit.log
 MIT_ETYPE="$(docker exec "$NAME" grep -a 'authenticated client' /tmp/kpropd-mit.log | head -1 || true)"
 echo "$MIT_ETYPE"
 echo "$MIT_ETYPE" | grep -F "authenticated client: host/${HN}@KERBER.TEST (etype == aes256-cts-hmac-sha384-192)"

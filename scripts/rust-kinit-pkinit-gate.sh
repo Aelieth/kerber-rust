@@ -147,7 +147,11 @@ assert_no_error_log "$OUT"
 KLIST="$(docker exec "$NAME" klist -c /tmp/krb5cc_pkinit 2>/dev/null || true)"
 echo "$KLIST"
 echo "$KLIST" | grep -q 'user@KERBER.TEST'
-require_log "$NAME" /tmp/mit-kdc.trace 'PKINIT|pkinit|PA-PK-AS|padata type 16' "PKINIT evidence in /tmp/mit-kdc.trace"
+_pkinit_evidence() {
+    echo "$(docker exec "$NAME" cat /tmp/mit-kdc.trace 2>/dev/null || true)$OUT" \
+        | grep -Eqi 'PKINIT|pa[_ ]?type[[:space:]]*16|padata type 16|PA-PK-AS|client.pkinit'
+}
+retry_until 200 "PKINIT evidence in TRACE+OUT" _pkinit_evidence
 TRACE="$(docker exec "$NAME" cat /tmp/mit-kdc.trace 2>/dev/null || true)"
 if ! echo "$TRACE$OUT" | grep -Eqi 'PKINIT|pa[_ ]?type[[:space:]]*16|padata type 16|PA-PK-AS|client.pkinit'; then
     log "pkinit.client.gate" "error" ',"error":"kinit succeeded without PKINIT evidence"'

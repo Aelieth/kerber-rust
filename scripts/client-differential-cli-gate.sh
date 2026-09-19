@@ -1062,8 +1062,17 @@ MIT_KVNO="$(z13_mit_case /tmp/cc_z13_kvno kvno | tail -1)"
 echo "MIT z13 nyv=$MIT_NYV kvno=$MIT_KVNO"
 [ "$MIT_NYV" = refused ] || die "Z1.3 MIT acceptor accepted a NYV ticket"
 [ "$MIT_KVNO" = refused ] || die "Z1.3 MIT acceptor accepted a mislabelled-kvno ticket"
-require_log "$NAME" /tmp/gss-z13-mit-nyv.log 'ap-rep=yes' "ap-rep=yes in /tmp/gss-z13-mit-nyv.log"
-require_log "$NAME" /tmp/gss-z13-mit-kvno.log 'accept_sec_context:' "accept_sec_context: in /tmp/gss-z13-mit-kvno.log"
+_z13_mit_nyv_log() {
+    docker exec "$NAME" grep -q 'ap-rep=yes' /tmp/gss-z13-mit-nyv.log \
+        && docker exec "$NAME" grep -q 'accept_sec_context:' /tmp/gss-z13-mit-nyv.log \
+        && docker exec "$NAME" grep -q 'mech: Ticket not yet valid' /tmp/gss-z13-mit-nyv.log
+}
+_z13_mit_kvno_log() {
+    docker exec "$NAME" grep -q 'accept_sec_context:' /tmp/gss-z13-mit-kvno.log \
+        && docker exec "$NAME" grep -q 'mech: Cannot find key for host/testhost.kerber.test@KERBER.TEST kvno 99 in keytab' /tmp/gss-z13-mit-kvno.log
+}
+retry_until 200 "Z1.3 MIT NYV log assertions" _z13_mit_nyv_log
+retry_until 200 "Z1.3 MIT kvno log assertions" _z13_mit_kvno_log
 MIT_NYV_LOG="$(docker exec "$NAME" cat /tmp/gss-z13-mit-nyv.log)"
 MIT_KVNO_LOG="$(docker exec "$NAME" cat /tmp/gss-z13-mit-kvno.log)"
 echo "$MIT_NYV_LOG"

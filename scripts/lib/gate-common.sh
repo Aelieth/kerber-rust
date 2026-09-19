@@ -2,6 +2,7 @@
 # shellcheck shell=bash
 # Provides: log, die, unavailable, register_cleanup, wait_port, wait_listen,
 # wait_gone, wait_log, require_listen, require_log, require_port_in,
+# retry_until,
 # wait_port_in, wait_udp_in, wait_tcp_bound_in, wait_gone_in, wait_pid_gone, need_image,
 # need_bins, shell_container, kdc_start, kdc_restart, mit_kdc_restart,
 # stock_mit_kdc. One EXIT trap writes gate_wall_s= and runs registered
@@ -183,6 +184,19 @@ require_port_in() {
     if wait_port_in "$ctn" "$port" "$n"; then
         return 0
     fi
+    die "$what never appeared"
+}
+
+# Wait ≡ assertion: retry the assertion command itself. Default 20 s.
+retry_until() {
+    local n=$1 what=$2
+    shift 2
+    for _ in $(seq 1 "$n"); do
+        if "$@"; then
+            return 0
+        fi
+        sleep 0.1
+    done
     die "$what never appeared"
 }
 
