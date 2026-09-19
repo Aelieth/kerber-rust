@@ -68,13 +68,14 @@ chmod +x "$TMP/scripts/die-probe.sh" "$TMP/scripts/unavail-probe.sh"
 run_die() {
     (
         cd "$TMP" || exit 1
-        export KERBER_ROOT="$ROOT" KERBER_NO_IMAGE=1 KERBER_SCRATCH="$TMP/scratch"
         if [ -n "${1-}" ]; then
-            export GITHUB_ACTIONS="$1"
+            KERBER_ROOT="$ROOT" KERBER_NO_IMAGE=1 KERBER_SCRATCH="$TMP/scratch" \
+                GITHUB_ACTIONS="$1" bash ./scripts/die-probe.sh 2>&1
         else
-            unset GITHUB_ACTIONS
+            env -u GITHUB_ACTIONS \
+                KERBER_ROOT="$ROOT" KERBER_NO_IMAGE=1 KERBER_SCRATCH="$TMP/scratch" \
+                bash ./scripts/die-probe.sh 2>&1
         fi
-        bash ./scripts/die-probe.sh 2>&1
     ) || true
 }
 OUT="$(run_die 1)"
@@ -235,16 +236,19 @@ run_stock() {
     : >"$mark"
     (
         cd "$TMP" || exit 1
-        export KERBER_ROOT="$ROOT" KERBER_NO_IMAGE=1 KERBER_SCRATCH="$TMP/scratch"
-        export KERBER_LIVE=1 KERBER_MIT_NAME=fake-mit KERBER_STOCK_LIVE_N=1
-        export KERBER_STOCK_MARK="$mark" GITHUB_ACTIONS=1
-        export PATH="$TMP/fakebin:$PATH"
         if [ -n "$running" ]; then
-            export KERBER_STOCK_RUNNING="$running"
+            PATH="$TMP/fakebin:$PATH" KERBER_ROOT="$ROOT" KERBER_NO_IMAGE=1 \
+                KERBER_SCRATCH="$TMP/scratch" KERBER_LIVE=1 KERBER_MIT_NAME=fake-mit \
+                KERBER_STOCK_LIVE_N=1 KERBER_STOCK_MARK="$mark" GITHUB_ACTIONS=1 \
+                KERBER_STOCK_RUNNING="$running" \
+                bash ./scripts/stock-probe.sh 2>&1
         else
-            unset KERBER_STOCK_RUNNING
+            env -u KERBER_STOCK_RUNNING \
+                PATH="$TMP/fakebin:$PATH" KERBER_ROOT="$ROOT" KERBER_NO_IMAGE=1 \
+                KERBER_SCRATCH="$TMP/scratch" KERBER_LIVE=1 KERBER_MIT_NAME=fake-mit \
+                KERBER_STOCK_LIVE_N=1 KERBER_STOCK_MARK="$mark" GITHUB_ACTIONS=1 \
+                bash ./scripts/stock-probe.sh 2>&1
         fi
-        bash ./scripts/stock-probe.sh 2>&1
     ) || true
 }
 MARK="$TMP/stock.mark"
