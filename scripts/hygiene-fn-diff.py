@@ -89,6 +89,7 @@ ACCEPT_LINE_RE = re.compile(
 )
 SPLIT_LINE_RE = re.compile(r"^(?P<old>.+?)\s*=\s*(?P<rhs>.+)$")
 VIS_RE = re.compile(r"\bpub(?:\([^)]*\))?\s+")
+RESTRICTED_VIS_RE = re.compile(r"\bpub\([^)]*\)\s+")
 
 
 class FnDiffError(Exception):
@@ -423,6 +424,11 @@ def vis_kind_and_rest(sig: str) -> tuple[str, str]:
     return kind, sig[: m.start()] + sig[m.end() :]
 
 
+def strip_restricted_vis(src: str) -> str:
+    """Drop `pub(crate)` / `pub(super)` / `pub(in …)` tokens. Bare `pub` stays."""
+    return RESTRICTED_VIS_RE.sub("", src)
+
+
 def _strip_doc_lines(src: str) -> str:
     kept: list[str] = []
     for ln in src.splitlines():
@@ -438,16 +444,8 @@ def classify(old_src: str, new_src: str) -> str:
         return "identical"
     if compare_norm(_strip_doc_lines(old_src)) == compare_norm(_strip_doc_lines(new_src)):
         return "doc-only"
-    if compare_norm(inner_body(old_src)) == compare_norm(inner_body(new_src)):
-        ko, ro = vis_kind_and_rest(compare_norm(signature_of(_strip_doc_lines(old_src))))
-        kn, rn = vis_kind_and_rest(compare_norm(signature_of(_strip_doc_lines(new_src))))
-        if ro == rn and ko != kn and {ko, kn} <= {"private", "restricted"}:
-            return "vis-only"
-        if ro == rn and ko == kn == "restricted":
-            if compare_norm(signature_of(_strip_doc_lines(old_src))) != compare_norm(
-                signature_of(_strip_doc_lines(new_src))
-            ):
-                return "vis-only"
+    if compare_norm(strip_restricted_vis(old_src)) == compare_norm(strip_restricted_vis(new_src)):
+        return "vis-only"
     return "changed"
 
 
@@ -838,7 +836,9 @@ def compare_trees(
         "pairs": len(pairs),
         "identical": identical,
         "vis_only": len(vis_only),
+        "vis_only_items": vis_only,
         "doc_only": len(doc_only),
+        "doc_only_items": doc_only,
         "changed": len(changed),
         "accepted": accepted,
         "unaccepted": unaccepted,
@@ -877,6 +877,10 @@ def render(report: dict[str, object]) -> str:
         "new-kinds "
         + " ".join(f"{k}={v}" for k, v in sorted(report["new_kinds"].items())),  # type: ignore[union-attr]
     ]
+    for o, n in report["vis_only_items"]:  # type: ignore[misc]
+        lines.append(f"vis-only {o} -> {n}")
+    for o, n in report["doc_only_items"]:  # type: ignore[misc]
+        lines.append(f"doc-only {o} -> {n}")
     for o, n, reason in report["accepted"]:  # type: ignore[misc]
         lines.append(f"accepted {o} -> {n}: {reason}")
     return "\n".join(lines) + "\n"
@@ -1109,6 +1113,48 @@ def _self_test() -> int:
             raise SystemExit(
                 f"hygiene-fn-diff --self-test: 6-fn pub(super) split must be vis-only: {kadm}"
             )
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "const A: i32 = 1;\nconst B: i32 = 2;\nstruct S { a: i32 }\n"
+            + "\n".join(f"fn {n}() {{}}\n" for n in names),
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "pub(super) const A: i32 = 1;\npub(super) const B: i32 = 2;\n"
+            "struct S { pub(super) a: i32 }\n"
+            + "\n".join(f"pub(super) fn {n}() {{}}\n" for n in names),
+        )
+        kadm_full = compare_trees(old, new, {}, {}, {}, [])
+        evaluate(kadm_full)
+        if kadm_full["vis_only"] != 9 or kadm_full["changed"] != 0:
+            raise SystemExit(
+                f"hygiene-fn-diff --self-test: kadm5 consts+field must be vis-only: {kadm_full}"
+            )
+        named = render(kadm_full)
+        if named.count("vis-only ") < 10:
+            raise SystemExit("hygiene-fn-diff --self-test: render must name each vis-only item")
+        if "vis-only demo\tconst::A -> demo\tconst::A" not in named:
+            raise SystemExit("hygiene-fn-diff --self-test: render must name the widened const")
+        n += 1
+
+        _write_crate(old, "crates/demo/src/lib.rs", "const A: i32 = 1;\n")
+        _write_crate(new, "crates/demo/src/lib.rs", "pub(crate) const A: i32 = 1;\n")
+        cst = compare_trees(old, new, {}, {}, {}, [])
+        evaluate(cst)
+        if cst["vis_only"] != 1 or cst["changed"] != 0:
+            raise SystemExit("hygiene-fn-diff --self-test: const vis widening must be vis-only")
+        n += 1
+
+        _write_crate(old, "crates/demo/src/lib.rs", "struct S { a: i32 }\n")
+        _write_crate(new, "crates/demo/src/lib.rs", "struct S { pub a: i32 }\n")
+        fld_pub = compare_trees(old, new, {}, {}, {}, [])
+        if fld_pub["changed"] != 1:
+            raise SystemExit("hygiene-fn-diff --self-test: field → pub must be changed")
+        _must_red(fld_pub, "struct field → pub")
         n += 1
 
         _write_crate(

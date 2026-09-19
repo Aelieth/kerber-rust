@@ -63,7 +63,8 @@ nesting in the path. Bodies are compared after a normaliser that
 keeps string, byte-string, raw-string and char literal contents
 (whitespace and comments are still normalised outside literals). A
 pair is `identical`, `vis-only` (private → `pub(super)` /
-`pub(crate)` or `pub(crate)` ↔ `pub(super)` with a byte-identical
+`pub(crate)` or `pub(crate)` ↔ `pub(super)` on the item or a field,
+including brace-less `const` / `static` / `type`, with a vis-stripped
 rest; any change to or from bare `pub` stays `changed`), `doc-only`,
 or `changed`. `--moves` is keyed like the hygiene-diff maps. `--split
 old = a + b + …` checks that the concatenated new bodies equal the
