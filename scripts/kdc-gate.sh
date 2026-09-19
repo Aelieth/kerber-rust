@@ -237,6 +237,7 @@ if ! docker exec "$NAME" kvno host/testhost.kerber.test; then
 fi
 require_log "$NAME" /tmp/mit-issue.log 'ISSUE' "ISSUE in /tmp/mit-issue.log"
 require_log "$NAME" /tmp/mit-issue.log 'krbtgt/KERBER.TEST' "krbtgt/KERBER.TEST in /tmp/mit-issue.log"
+require_log "$NAME" /tmp/mit-issue.log 'host/testhost.kerber.test' "host/testhost.kerber.test in /tmp/mit-issue.log"
 MITLOG="$(docker exec "$NAME" cat /tmp/mit-issue.log 2>/dev/null || true)"
 echo "$MITLOG"
 echo "$MITLOG" | grep -q 'ISSUE' # MIT_issue_as
@@ -248,6 +249,52 @@ echo "$MITLOG" | grep -F 'tkt='
 echo "$MITLOG" | grep -F 'ses='
 
 echo "==== audit field names both legs ===="
+# /tmp/au.log is rewritten by the live MIT audit plugin after rm -f.
+# Wait until the rows both python reads need exist (AS/TGS finish + TGS seed).
+_au_ready=0
+for _ in $(seq 1 80); do
+    if docker exec -i "$NAME" python3 - <<'PY'
+import json, sys
+try:
+    text = open("/tmp/au.log").read()
+except OSError:
+    sys.exit(1)
+rows = []
+for line in text.splitlines():
+    line = line.strip()
+    if not line or line == "state is NULL":
+        continue
+    try:
+        rows.append(json.loads(line))
+    except json.JSONDecodeError:
+        continue
+def finish(name):
+    return any(
+        r.get("event_name") == name
+        and r.get("event_success") in (True, 1)
+        and r.get("tkt_out_id")
+        for r in rows
+    )
+def tgs_seed():
+    return any(
+        r.get("event_name") == "TGS_REQ"
+        and r.get("event_success") in (True, 1)
+        and not r.get("tkt_out_id")
+        and r.get("stage") == 1
+        for r in rows
+    )
+sys.exit(0 if finish("AS_REQ") and finish("TGS_REQ") and tgs_seed() else 1)
+PY
+    then
+        _au_ready=1
+        break
+    fi
+    sleep 0.1
+done
+if [ "$_au_ready" != 1 ]; then
+    docker exec "$NAME" cat /tmp/au.log >&2 || true
+    die "expected rows in /tmp/au.log never appeared"
+fi
 docker exec -i "$NAME" python3 - <<'PY'
 import json, re, sys
 def rows(path):
