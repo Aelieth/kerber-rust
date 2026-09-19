@@ -28,23 +28,43 @@ log() {
         "$1" "$CORRELATION_ID" "$COMPONENT" "${2:-}" "${3:-}"
 }
 
-# Error-path annotation for GitHub Actions. Call from die / unavailable
-# only (not the green path). The caller passes its file and line so a
-# 6-second red step is not a bare "Process completed with exit code 1".
-_gate_annotate_at() {
+# Actions annotation for die (::error) and unavailable (::notice).
+# Names the first frame outside scripts/lib/ so a require_* failure
+# points at the gate line, not gate-common.sh.
+_gate_annotate() {
+    local level=$1 msg=$2
+    local i src rel line
+    src="${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}"
+    line="${BASH_LINENO[0]:-0}"
+    for ((i = 1; i < ${#BASH_SOURCE[@]}; i++)); do
+        src="${BASH_SOURCE[$i]}"
+        rel="${src#"$PWD"/}"
+        rel="${rel#./}"
+        case "$rel" in
+            scripts/lib/*) continue ;;
+        esac
+        case "$src" in
+            */scripts/lib/*) continue ;;
+        esac
+        line="${BASH_LINENO[$((i - 1))]:-0}"
+        break
+    done
     [ -n "${GITHUB_ACTIONS:-}" ] || return 0
-    local src="$1" line="$2" msg="$3"
     src=${src#"$PWD"/}
     src=${src#./}
     local title=
     case "${src##*/}" in
         probe-gate.sh|*-probe.sh) title=',title=fixture' ;;
     esac
-    printf '::error file=%s,line=%s%s::%s: %s\n' "$src" "$line" "$title" "${src##*/}" "$msg"
+    if [ "$level" = notice ]; then
+        printf '::notice file=%s,line=%s%s::%s: %s\n' "$src" "$line" "$title" "${src##*/}" "$msg"
+    else
+        printf '::error file=%s,line=%s%s::%s: %s\n' "$src" "$line" "$title" "${src##*/}" "$msg"
+    fi
 }
 
 die() {
-    _gate_annotate_at "${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}" "${BASH_LINENO[0]:-0}" "$1"
+    _gate_annotate error "$1"
     log "${COMPONENT}.gate" "error" ",\"error\":\"$1\""
     echo "$1" >&2
     exit 1
@@ -62,7 +82,7 @@ refuse_golden_capture_dir() {
 }
 
 unavailable() {
-    _gate_annotate_at "${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}" "${BASH_LINENO[0]:-0}" "$1"
+    _gate_annotate notice "$1"
     {
         echo "date=$(date -Iseconds)"
         echo "$1"

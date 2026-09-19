@@ -3096,7 +3096,9 @@ def check_gate_common_sourced(
     if "pkill -f -- '-proxy.py'" in (common_text or "") and "kill_proxy_py_in" not in common_text:
         _die("gate-common.sh must pin kill_proxy_py_in, not only pkill")
     if "GITHUB_ACTIONS" not in common_text or "::error file=" not in common_text:
-        _die("die/unavailable must print ::error file=… when GITHUB_ACTIONS is set")
+        _die("die must print ::error file=… when GITHUB_ACTIONS is set")
+    if "::notice file=" not in common_text:
+        _die("unavailable must print ::notice file=… when GITHUB_ACTIONS is set")
     if gate_texts is None:
         items = {
             p.name: p.read_text(encoding="utf-8")
@@ -5096,9 +5098,14 @@ jobs:
         'samba_kdc_respawn_in "$NAME" || die "Samba KDC did not rebind :88 after worker kill"\n',
         'samba_kdc_respawn_in "$NAME_A" || die x\n',
     )
-    common_ok = "\n".join(GATE_COMMON_NEEDLES) + "\nGITHUB_ACTIONS\n::error file=\n"
+    common_ok = "\n".join(GATE_COMMON_NEEDLES) + "\nGITHUB_ACTIONS\n::error file=\n::notice file=\n"
     gate_ok = "scripts/lib/gate-common.sh\nneed_bins krb5-kdc\n"
     _must_die(check_gate_common_sourced, "\n".join(GATE_COMMON_NEEDLES) + "\n", {"ok-gate.sh": gate_ok})
+    _must_die(
+        check_gate_common_sourced,
+        "\n".join(GATE_COMMON_NEEDLES) + "\nGITHUB_ACTIONS\n::error file=\n",
+        {"ok-gate.sh": gate_ok},
+    )
     check_log_arity(
         'log() {\n    if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then\n'
         '        echo "log: expected 2-3 args, got $#" >&2\n        return 1\n    fi\n}\n'

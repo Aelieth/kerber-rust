@@ -95,8 +95,10 @@ for the listener (or a log line) through `require_listen` /
 hard cap of at least 20 s (10 s for a port-free wait), then `die`
 naming what never appeared. `require_listen` does not treat
 `bind failed` as fatal while a `krb5-kdc` process is still alive
-(the `:88 || :8888` fallback start). `die` and `unavailable` print the same `::error file=…,line=…::`
-form when `GITHUB_ACTIONS` is set (error path only). Deliberate
+(the `:88 || :8888` fallback start). `die` prints `::error file=…,line=…::`
+and `unavailable` prints `::notice file=…,line=…::` when `GITHUB_ACTIONS`
+is set (error path only); the file:line is the first frame outside
+`scripts/lib/`. Deliberate
 failures under `set +e`, `||`, `!` and `if` conditions are not
 annotated by the ERR trap.
 `scripts/gate-err-trap-selftest.sh` (the `test` job) keeps the trap honest. Check CI after every push;

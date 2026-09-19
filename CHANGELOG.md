@@ -48,6 +48,8 @@ this project uses semantic versioning once a crate is published.
   `_in_poll_loop` (lookback 30). `kdc-gate.sh`'s `/tmp/au.log` wait is
   `retry_until` (20 s). The tagged `# proto:` sleep in `mit_kdc_restart`
   is in the ratchet sum again (22.50 s).
+- **scripts.** `unavailable` annotates `::notice`; `die` keeps `::error`.
+  Both name the first frame outside `scripts/lib/`.
 
 ### W3-S2-R3 compare-tool robustness
 
