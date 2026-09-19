@@ -92,4 +92,74 @@ OUT="$(
 )"
 echo "$OUT"
 echo "$OUT" | grep -qF '::error file=scripts/unavail-probe.sh,line=6,title=fixture::unavail-probe.sh: forced unavailable'
+
+# require_listen must not die on bind failed while krb5-kdc is still
+# alive (the :88 || :8888 fallback). A stub docker logs bind failed for
+# two polls, then listening 127.0.0.1:8888, and pidof krb5-kdc succeeds.
+mkdir -p "$TMP/fakebin"
+printf '0\n' >"$TMP/rl-poll"
+cat >"$TMP/fakebin/docker" <<'FAKE'
+#!/usr/bin/env bash
+# Minimal docker exec stub for require_listen.
+shift
+shift
+pollf="${KERBER_RL_POLL:?}"
+n="$(cat "$pollf")"
+case "${1:-}" in
+    grep)
+        pat="${3:-}"
+        case "$pat" in
+            '^listening '*)
+                n=$((n + 1))
+                echo "$n" >"$pollf"
+                [ "$n" -ge 3 ]
+                ;;
+            'bind failed')
+                [ "$n" -lt 3 ]
+                ;;
+            privilege*|*'bind failed'*)
+                exit 1
+                ;;
+            *)
+                exit 1
+                ;;
+        esac
+        ;;
+    sh)
+        # pidof krb5-kdc — process still alive during the fallback.
+        exit 0
+        ;;
+    cat)
+        echo 'bind failed: 127.0.0.1:88'
+        echo 'listening 127.0.0.1:8888'
+        exit 0
+        ;;
+    *)
+        exit 1
+        ;;
+esac
+FAKE
+chmod +x "$TMP/fakebin/docker"
+cat >"$TMP/scripts/listen-probe.sh" <<'PROBE'
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$KERBER_ROOT"
+. "$KERBER_ROOT/scripts/lib/provenance.sh" >/dev/null
+. "$KERBER_ROOT/scripts/lib/gate-common.sh"
+require_listen fake /tmp/kdc.log "rust KDC listening in /tmp/kdc.log" 20
+echo "require_listen fallback ok"
+PROBE
+chmod +x "$TMP/scripts/listen-probe.sh"
+OUT="$(
+    cd "$TMP" && KERBER_ROOT="$ROOT" KERBER_NO_IMAGE=1 \
+        KERBER_SCRATCH="$TMP/scratch" KERBER_RL_POLL="$TMP/rl-poll" \
+        PATH="$TMP/fakebin:$PATH" \
+        bash ./scripts/listen-probe.sh 2>&1
+)"
+echo "$OUT"
+echo "$OUT" | grep -qF 'require_listen fallback ok'
+if echo "$OUT" | grep -q 'never appeared'; then
+    echo "require_listen died on bind failed while krb5-kdc was alive" >&2
+    exit 1
+fi
 echo "gate-err-trap-selftest: ok"

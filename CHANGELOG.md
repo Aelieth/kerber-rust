@@ -9,9 +9,11 @@ this project uses semantic versioning once a crate is published.
 ### W3-S3-0 pre-flight
 
 - **scripts.** Gate KDC starts wait for the listener (or a log line)
-  with a hard cap and die naming what never appeared
-  (`require_listen` / `require_log` / `require_port_in` in
-  `gate-common.sh`). `kdc-gate.sh` and
+  with a hard cap of at least 20 s (10 s for a port-free wait) and die
+  naming what never appeared (`require_listen` / `require_log` /
+  `require_port_in` in `gate-common.sh`). `require_listen` keeps
+  polling after `bind failed` while `krb5-kdc` is still alive
+  (`:88 || :8888`). `kdc-gate.sh` and
   `client-differential-flows-gate.sh` no longer assert a log after one
   read or a fixed `sleep 0.25`. Expected strings and cells are
   unchanged.

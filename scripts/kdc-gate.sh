@@ -181,7 +181,7 @@ for comm in /proc/[0-9]*/comm; do
     fi
 done
 '
-wait_gone_in "$NAME" 88 40 || die "rust kdc still bound :88"
+wait_gone_in "$NAME" 88 100 || die "rust kdc still bound :88"
 docker exec -i "$NAME" python3 - <<'PY'
 from pathlib import Path
 p = Path("/etc/krb5.conf")
@@ -220,7 +220,7 @@ rm -f /tmp/au.log /tmp/mit-issue.log
 docker exec -d \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
     "$NAME" sh -c 'cd /tmp && krb5kdc -n >/tmp/mit-kdc-stdout.log 2>&1'
-if ! wait_port_in "$NAME" 88 80; then
+if ! wait_port_in "$NAME" 88 200; then
     docker exec "$NAME" cat /tmp/mit-kdc-stdout.log >&2 || true
     die "MIT krb5kdc listening on :88 never appeared"
 fi

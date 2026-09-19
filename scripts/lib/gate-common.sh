@@ -88,7 +88,7 @@ _gate_common_exit() {
 trap '_gate_common_exit' EXIT
 
 wait_port() {
-    local host="${1:-127.0.0.1}" port="${2:-88}" n="${3:-80}"
+    local host="${1:-127.0.0.1}" port="${2:-88}" n="${3:-200}"
     for _ in $(seq 1 "$n"); do
         if python3 - "$host" "$port" <<'PY' 2>/dev/null
 import socket, sys
@@ -109,7 +109,7 @@ PY
 }
 
 wait_listen() {
-    local ctn=$1 logfile=$2 n="${3:-80}"
+    local ctn=$1 logfile=$2 n="${3:-200}"
     for _ in $(seq 1 "$n"); do
         if docker exec "$ctn" grep -q '^listening ' "$logfile" 2>/dev/null; then
             return 0
@@ -121,7 +121,7 @@ wait_listen() {
 }
 
 wait_gone() {
-    local host="${1:-127.0.0.1}" port="${2:-88}" n="${3:-80}"
+    local host="${1:-127.0.0.1}" port="${2:-88}" n="${3:-100}"
     for _ in $(seq 1 "$n"); do
         if ! wait_port "$host" "$port" 1; then
             return 0
@@ -132,7 +132,7 @@ wait_gone() {
 }
 
 wait_log() {
-    local ctn=$1 logfile=$2 pattern=$3 n="${4:-80}"
+    local ctn=$1 logfile=$2 pattern=$3 n="${4:-200}"
     for _ in $(seq 1 "$n"); do
         if docker exec "$ctn" grep -qE "$pattern" "$logfile" 2>/dev/null; then
             return 0
@@ -143,17 +143,24 @@ wait_log() {
 }
 
 # Bounded readiness. Hard-cap the poll, then die naming what never appeared.
-# Crash markers on a rust KDC log abort early (bind/privilege/not-found).
+# Privilege/not-found/glibc abort early. bind failed does not: the
+# `:88 || :8888` fallback start logs it while krb5-kdc is still alive.
 require_listen() {
-    local ctn=$1 logfile=$2 what=$3 n="${4:-80}"
+    local ctn=$1 logfile=$2 what=$3 n="${4:-200}"
     for _ in $(seq 1 "$n"); do
         if docker exec "$ctn" grep -q '^listening ' "$logfile" 2>/dev/null; then
             return 0
         fi
-        if docker exec "$ctn" grep -qiE 'bind failed|privilege drop:|not found|glibc' "$logfile" 2>/dev/null; then
+        if docker exec "$ctn" grep -qiE 'privilege drop:|not found|glibc' "$logfile" 2>/dev/null; then
             if ! docker exec "$ctn" grep -q '^listening ' "$logfile" 2>/dev/null; then
                 docker exec "$ctn" cat "$logfile" >&2 || true
                 die "$what never appeared (kdc start failed)"
+            fi
+        fi
+        if docker exec "$ctn" grep -qi 'bind failed' "$logfile" 2>/dev/null; then
+            if docker exec "$ctn" sh -c "pidof krb5-kdc >/dev/null" 2>/dev/null; then
+                sleep 0.1
+                continue
             fi
         fi
         sleep 0.1
@@ -163,7 +170,7 @@ require_listen() {
 }
 
 require_log() {
-    local ctn=$1 logfile=$2 pattern=$3 what=$4 n="${5:-80}"
+    local ctn=$1 logfile=$2 pattern=$3 what=$4 n="${5:-200}"
     if wait_log "$ctn" "$logfile" "$pattern" "$n"; then
         return 0
     fi
@@ -172,7 +179,7 @@ require_log() {
 }
 
 require_port_in() {
-    local ctn=$1 port=$2 what=$3 n="${4:-80}"
+    local ctn=$1 port=$2 what=$3 n="${4:-200}"
     if wait_port_in "$ctn" "$port" "$n"; then
         return 0
     fi
@@ -182,7 +189,7 @@ require_port_in() {
 # In-container TCP connect. Group-B shell containers do not publish KDC ports
 # to the host, so wait_port (host-side) cannot see them.
 wait_port_in() {
-    local ctn="${1:-$NAME}" port="${2:-88}" n="${3:-80}"
+    local ctn="${1:-$NAME}" port="${2:-88}" n="${3:-200}"
     for _ in $(seq 1 "$n"); do
         if docker exec "$ctn" python3 -c "import socket; socket.create_connection(('127.0.0.1', int('$port')), 0.2)" 2>/dev/null; then
             return 0
@@ -283,7 +290,7 @@ for name in os.listdir("/proc"):
 wait_gone_in() {
     # Port is gone when UDP bind succeeds (no leftover UDP proxy) AND TCP
     # connect fails. A TCP-only probe cannot see kdc-error-proxy.py.
-    local ctn="${1:-$NAME}" port="${2:-88}" n="${3:-80}"
+    local ctn="${1:-$NAME}" port="${2:-88}" n="${3:-100}"
     for _ in $(seq 1 "$n"); do
         if wait_bound_free_in "$ctn" "$port" udp && ! wait_port_in "$ctn" "$port" 1; then
             return 0
