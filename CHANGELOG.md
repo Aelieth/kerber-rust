@@ -26,7 +26,9 @@ this project uses semantic versioning once a crate is published.
   trailing comma) is `vis-only`; a `(T,)` tuple keeps its comma.
   Self-test 47 cases. `ci-policy.py` skips `#[cfg(test)]` children
   of `src/**` when indexing ledger anchor files, so
-  `kadm5/tests/policy.rs` does not collide with `kadm5/policy.rs`.
+  `kadm5/tests/policy.rs` does not collide with `kadm5/policy.rs`;
+  `hygiene_inventory.py` skips only a package's own `target/`, so the
+  classification holds for a package that lives under one.
 
 ### W3-S3-0 pre-flight
 

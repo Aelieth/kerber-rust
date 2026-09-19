@@ -577,7 +577,9 @@ def cfg_test_files_in_pkg(pdir: pathlib.Path) -> set[str]:
     """Package-relative paths of `src/**` files whose parent is `#[cfg(test)] mod`."""
     rels: set[str] = set()
     for path in sorted(pdir.rglob("*.rs")):
-        if "/target/" in f"/{path.as_posix()}/":
+        # a build dir inside the package, not a `target` above it (a checkout
+        # or fixture under `target/ci-policy/` is still a package)
+        if "target" in path.relative_to(pdir).parts:
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
         pending = False
@@ -625,7 +627,19 @@ def self_test_cfg_test() -> int:
             raise SystemExit("one-line #[cfg(test)] mod x; must classify as src-test")
         if _scope("src/oneline.rs", 1, [], rels) != "src-test":
             raise SystemExit("one-line #[cfg(test)] mod x; scope must be src-test")
-    return 1
+        # only the package's own build dir is skipped; a package that lives
+        # under a `target/` ancestor (a fixture in `target/ci-policy/`) is scanned
+        (root / "target" / "debug").mkdir(parents=True)
+        (root / "target" / "debug" / "built.rs").write_text("#[cfg(test)] mod gen;\n", encoding="utf-8")
+        under = root / "target" / "pkg" / "src"
+        under.mkdir(parents=True)
+        (under / "lib.rs").write_text("#[cfg(test)]\nmod t;\n", encoding="utf-8")
+        (under / "t.rs").write_text("fn helper() {}\n", encoding="utf-8")
+        if "target/debug/built.rs" in cfg_test_files_in_pkg(root) or "target/debug/gen.rs" in cfg_test_files_in_pkg(root):
+            raise SystemExit("a package's own target/ is not scanned for cfg(test) mods")
+        if cfg_test_files_in_pkg(root / "target" / "pkg") != {"src/t.rs"}:
+            raise SystemExit("a package under a target/ ancestor must still classify its cfg(test) mods")
+    return 2
 
 
 def _scope(
