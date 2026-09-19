@@ -24,7 +24,10 @@ this project uses semantic versioning once a crate is published.
   `store/password.rs`.
 - **docs.** The parity ledger's `store.rs` anchors and the
   `security.md` / `plugins.md` cites name the module files; colliding
-  `principal.rs` / `policy.rs` admin sites are `krb5-admin/…`.
+  `principal.rs` / `policy.rs` admin sites are `krb5-admin/…`. The
+  `Principal::first_current_key` rustdoc link is
+  `crate::Policy::first_current_key` so rustdoc resolves it after the
+  split.
 
 ### W3-S3.1 kadm5 by MIT source family
 

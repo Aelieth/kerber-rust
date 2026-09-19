@@ -280,8 +280,8 @@ impl Principal {
 
     /// The first stored key of the highest kvno, *unfiltered*: MIT
     /// `current_kvno(tgt)` / `tgt->key_data[0]`. KDC key selection goes
-    /// through [`Policy::first_current_key`], which skips non-permitted
-    /// enctypes the way `krb5_dbe_find_enctype` does.
+    /// through [`crate::Policy::first_current_key`], which skips
+    /// non-permitted enctypes the way `krb5_dbe_find_enctype` does.
     #[must_use]
     pub fn first_current_key(&self) -> Option<&KeyEntry> {
         let kvno = self.keys.iter().map(|k| k.kvno).max()?;
