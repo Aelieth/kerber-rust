@@ -17,7 +17,7 @@ const MODP_RS: &str = include_str!("../src/modp.rs");
 const PKINIT_CLIENT_RS: &str = include_str!("../../krb5-protocol/src/as_ex.rs");
 const ENCRYPTION_KEY_RS: &str = include_str!("../../krb5-types/src/lib.rs");
 const AUTHPACK_RS: &str = include_str!("../../krb5-types/src/pkinit.rs");
-const STORE_RS: &str = include_str!("../../krb5-kdc/src/store.rs");
+const STORE_RS: &str = include_str!("../../krb5-kdc/src/store/password.rs");
 const OPS_RS: &str = include_str!("../src/ops.rs");
 
 fn hex(s: &str) -> Vec<u8> {

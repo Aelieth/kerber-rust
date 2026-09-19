@@ -1,0 +1,60 @@
+//! KDB principal attribute bits (`kdb.h` `KRB5_KDB_*`) and the dump
+//! `KDB_V1_BASE_LENGTH`. Values only; the mask checks live with the
+//! principal and policy writers.
+
+/// MIT `KRB5_KDB_DISALLOW_POSTDATED`.
+pub const KDB_DISALLOW_POSTDATED: u32 = 0x0000_0001;
+
+/// MIT `KRB5_KDB_DISALLOW_FORWARDABLE`.
+pub const KDB_DISALLOW_FORWARDABLE: u32 = 0x0000_0002;
+
+/// MIT `KRB5_KDB_DISALLOW_TGT_BASED`.
+pub const KDB_DISALLOW_TGT_BASED: u32 = 0x0000_0004;
+
+/// MIT `KRB5_KDB_DISALLOW_RENEWABLE`.
+pub const KDB_DISALLOW_RENEWABLE: u32 = 0x0000_0008;
+
+/// MIT `KRB5_KDB_DISALLOW_PROXIABLE`.
+pub const KDB_DISALLOW_PROXIABLE: u32 = 0x0000_0010;
+
+/// MIT `KRB5_KDB_DISALLOW_DUP_SKEY`.
+pub const KDB_DISALLOW_DUP_SKEY: u32 = 0x0000_0020;
+
+/// MIT `KRB5_KDB_DISALLOW_ALL_TIX`.
+pub const KDB_DISALLOW_ALL_TIX: u32 = 0x0000_0040;
+
+/// MIT `KRB5_KDB_REQUIRES_PRE_AUTH`. Captured `getprinc` + dump field is **128**, not `0x8`.
+pub const KDB_REQUIRES_PRE_AUTH: u32 = 0x0000_0080;
+
+/// MIT `KRB5_KDB_REQUIRES_HW_AUTH`.
+pub const KDB_REQUIRES_HW_AUTH: u32 = 0x0000_0100;
+
+/// MIT `KRB5_KDB_REQUIRES_PWCHANGE` (`+needchange`).
+pub const KDB_REQUIRES_PWCHANGE: u32 = 0x0000_0200;
+
+/// MIT `KRB5_KDB_DISALLOW_SVR`.
+pub const KDB_DISALLOW_SVR: u32 = 0x0000_1000;
+
+/// MIT `KRB5_KDB_PWCHANGE_SERVICE` — expired keys may still AS to this server.
+pub const KDB_PWCHANGE_SERVICE: u32 = 0x0000_2000;
+
+/// MIT `KRB5_KDB_SUPPORT_DESMD5`.
+pub const KDB_SUPPORT_DESMD5: u32 = 0x0000_4000;
+
+/// MIT `KRB5_KDB_NEW_PRINC`.
+pub const KDB_NEW_PRINC: u32 = 0x0000_8000;
+
+/// MIT `KRB5_KDB_OK_AS_DELEGATE`.
+pub const KDB_OK_AS_DELEGATE: u32 = 0x0010_0000;
+
+/// MIT `KRB5_KDB_OK_TO_AUTH_AS_DELEGATE` (S4U2Self may stay forwardable).
+pub const KDB_OK_TO_AUTH_AS_DELEGATE: u32 = 0x0020_0000;
+
+/// MIT `KRB5_KDB_NO_AUTH_DATA_REQUIRED`.
+pub const KDB_NO_AUTH_DATA_REQUIRED: u32 = 0x0040_0000;
+
+/// MIT `KRB5_KDB_LOCKDOWN_KEYS`.
+pub const KDB_LOCKDOWN_KEYS: u32 = 0x0080_0000;
+
+/// MIT `KRB5_KDB_V1_BASE_LENGTH` (dump `len` field).
+pub const KDB_V1_BASE_LENGTH: u32 = 38;

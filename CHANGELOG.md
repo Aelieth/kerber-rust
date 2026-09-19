@@ -13,6 +13,18 @@ this project uses semantic versioning once a crate is published.
   Self-test 56 cases.
 - **tests.** The 25 in-src store tests move to `store/tests.rs`; the
   module path stays `store::tests`.
+- **krb5-kdc.** `store.rs` is split into
+  `store/{flags,principal,policy,password,keys,alias,transit,iprop_ulog,history,rid}.rs`,
+  each headed by the MIT file or function family it mirrors; the root
+  keeps `PrincipalStore`, `kadm5_mask`, the cfg(test) fault flags, and
+  the crate's re-exports. Every item moved whole (`hygiene-fn-diff`: 0
+  changed); sibling-only names are `pub(super)`, nothing became `pub`.
+  No wire, text or store behaviour changed.
+- **tests.** `zeroize_ct.rs` pins the password-history `ct_eq` in
+  `store/password.rs`.
+- **docs.** The parity ledger's `store.rs` anchors and the
+  `security.md` / `plugins.md` cites name the module files; colliding
+  `principal.rs` / `policy.rs` admin sites are `krb5-admin/…`.
 
 ### W3-S3.1 kadm5 by MIT source family
 
