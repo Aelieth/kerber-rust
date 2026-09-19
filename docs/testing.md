@@ -45,8 +45,8 @@ normalises whitespace/comments/helper names in code spans only, and
 fails an assertion-line change that is not in `--accept` or a dropped
 test that is not in `--duplicates`. String, byte-string, raw-string
 and char literals pass through whole (interior newlines and
-indentation included; the span splitter is shared with
-`hygiene-fn-diff.py`). A literal change on an assertion line is an
+indentation included, a zero-length interior line kept; the span
+splitter is shared with `hygiene-fn-diff.py`). A literal change on an assertion line is an
 assertion change (red unless `--accept`ed); on any other line it is a
 `differ` (green, listed). `--accept` is keyed nextest `binary<TAB>name`
 (one entry covers exactly one pair) and pins the old and new

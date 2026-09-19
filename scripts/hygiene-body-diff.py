@@ -487,8 +487,15 @@ def norm_body(body: str) -> list[str]:
     while i <= n:
         if i == n or combined[i] == "\n":
             line = combined[start:i]
-            lit = any(mask[start:i]) if i > start else False
-            if line.strip() or (lit and start < i):
+            # A zero-length interior line is start == i; its literal-ness
+            # is the newline's own span, not the empty slice.
+            if i < n and combined[i] == "\n":
+                lit = mask[i]
+            elif i > start:
+                lit = any(mask[start:i])
+            else:
+                lit = False
+            if line.strip() or lit:
                 lines.append(line)
             start = i + 1
         i += 1
@@ -1281,6 +1288,21 @@ def _self_test() -> int:
             raise SystemExit(
                 "hygiene-body-diff --self-test: a code-only rewrap must be identical or helper-only"
             )
+        n += 1
+        src_o.joinpath("t.rs").write_text(
+            '#[test]\nfn sample() {\n    assert_eq!(s, r"a\n\nb");\n}\n',
+            encoding="utf-8",
+        )
+        src_n.joinpath("t.rs").write_text(
+            '#[test]\nfn sample() {\n    assert_eq!(s, r"a\nb");\n}\n',
+            encoding="utf-8",
+        )
+        blank = compare_trees(old, new, {}, {}, [], {})
+        if blank["assertion_changes"] != 1:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: a zero-length interior line of an asserted literal must be an assertion change"
+            )
+        _must_red(blank, "zero-length interior literal line")
         n += 1
     return n
 

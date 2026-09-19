@@ -6,6 +6,12 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S3.3 issue.rs phase split
+
+- **tool.** `hygiene-body-diff.py` keeps a zero-length interior line
+  of a string literal (the newline's own span, not the empty slice).
+  Self-test 24 cases.
+
 ### W3-S3.2-R residues
 
 - **tool.** `hygiene-body-diff.py` keeps string, byte-string,

@@ -2852,7 +2852,7 @@ def check_autotests_registered(root: pathlib.Path | None = None) -> None:
 
 _SELF_TEST_OK_RE = re.compile(r"self-test ok \((\d+) cases\)")
 HYGIENE_DIFF_MIN_CASES = 30
-HYGIENE_BODY_DIFF_MIN_CASES = 23
+HYGIENE_BODY_DIFF_MIN_CASES = 24
 HYGIENE_FN_DIFF_MIN_CASES = 56
 HYGIENE_INVENTORY_MIN_CASES = 2
 _REFUSE_CALL_RE = re.compile(r"^\s*refuse_golden_capture_dir\s+\S", re.M)
@@ -3048,6 +3048,10 @@ def check_hygiene_body_diff_self_test(text: str | None = None) -> None:
         _die("hygiene-body-diff.py must self-test a helper rename")
     if '"a  b"' not in text:
         _die("hygiene-body-diff.py must self-test whitespace inside an asserted string")
+    if 'r"a\\n\\nb"' not in text:
+        _die(
+            "hygiene-body-diff.py must self-test a zero-length interior line of an asserted literal"
+        )
 
 
 def check_hygiene_fn_diff_self_test(text: str | None = None) -> None:
@@ -5187,9 +5191,9 @@ jobs:
         "    return _compare()\n",
     )
     check_hygiene_body_diff_self_test(
-        'def _self_test():\n    assert_eq!(1, 2) vs user_as helper "a  b"\n'
+        'def _self_test():\n    assert_eq!(1, 2) vs user_as helper "a  b" r"a\\n\\nb"\n'
         "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-body-diff: self-test ok (23 cases)')\n"
+        "        print('hygiene-body-diff: self-test ok (24 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
     )
     _must_die(check_hygiene_body_diff_self_test, "def main():\n    return 0\n")
@@ -5202,10 +5206,10 @@ jobs:
     _must_die(
         check_hygiene_body_diff_self_test,
         "def _self_test():\n"
-        '    """assert_eq!(1, 2) vs user_as helper "a  b" """\n'
+        '    """assert_eq!(1, 2) vs user_as helper "a  b" r"a\\n\\nb" """\n'
         "    return None\n"
         "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-body-diff: self-test ok (23 cases)')\n"
+        "        print('hygiene-body-diff: self-test ok (24 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n",
     )
     check_hygiene_fn_diff_self_test(
