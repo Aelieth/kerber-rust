@@ -118,6 +118,22 @@ def materialize(spec: str, dest: pathlib.Path, git_cwd: pathlib.Path) -> pathlib
 
 def load_keyed_id_map(path: pathlib.Path | None, kind: str) -> dict[str, str]:
     """`old_key = [merged:]new_key`; keys are crate<TAB>path."""
+    if path is not None and path.is_file():
+        seen_lhs: set[str] = set()
+        in_stamp = True
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if in_stamp and _HD._STAMP_LINE_RE.match(line):
+                continue
+            in_stamp = False
+            if "=" not in line:
+                continue
+            left = line.split("=", 1)[0].strip()
+            if left in seen_lhs:
+                raise SystemExit(f"{kind} duplicate LHS: {left}")
+            seen_lhs.add(left)
     raw = load_map(path, "=")
     mapping: dict[str, str] = {}
     for left, right in raw.items():
@@ -646,6 +662,11 @@ def compare_trees(
     new = extract(new_root)
     used_old: set[str] = set()
     used_new: set[str] = set()
+    used_moves: set[str] = set()
+    move_hits: dict[str, int] = {}
+    for v in moves.values():
+        move_hits[v] = move_hits.get(v, 0) + 1
+    merged_targets = {v for v, n in move_hits.items() if n > 1}
     pairs: list[tuple[str, str, str]] = []
     split_ok: list[str] = []
     split_fail: list[str] = []
@@ -683,7 +704,9 @@ def compare_trees(
         if okey in used_old:
             continue
         nkey = moves.get(okey, okey)
-        if nkey not in new or nkey in used_new:
+        if okey in moves:
+            used_moves.add(okey)
+        if nkey not in new or (nkey in used_new and nkey not in merged_targets):
             continue
         kind = classify(ofn["src"], new[nkey]["src"])
         pairs.append((okey, nkey, kind))
@@ -692,14 +715,42 @@ def compare_trees(
 
     removed = sorted(k for k in old if k not in used_old)
     added = sorted(k for k in new if k not in used_new)
+    accepted: list[tuple[str, str, str]] = []
+    used_accept: set[str] = set()
+    empty_h = blob_hash("")
+    still_removed: list[str] = []
+    still_added: list[str] = []
+    for k in removed:
+        entry = accept.get(k)
+        if entry is None:
+            still_removed.append(k)
+            continue
+        used_accept.add(k)
+        if entry["old_hash"] == blob_hash(old[k]["src"]) and (
+            entry["new"] in {k, "-"} or entry["new_hash"] == empty_h
+        ):
+            accepted.append((k, entry["new"], entry["reason"]))
+        else:
+            still_removed.append(k)
+    for k in added:
+        entry = accept.get(k)
+        if entry is None:
+            still_added.append(k)
+            continue
+        used_accept.add(k)
+        if entry["new"] == k and entry["new_hash"] == blob_hash(new[k]["src"]):
+            accepted.append((k, k, entry["reason"]))
+        else:
+            still_added.append(k)
+    removed = still_removed
+    added = still_added
+    unused_moves = sorted(k for k in moves if k not in used_moves)
     identical = sum(1 for _o, _n, k in pairs if k == "identical")
     vis_only = [(o, n) for o, n, k in pairs if k == "vis-only"]
     doc_only = [(o, n) for o, n, k in pairs if k == "doc-only"]
     changed = [(o, n) for o, n, k in pairs if k == "changed"]
 
-    accepted: list[tuple[str, str, str]] = []
     unaccepted: list[tuple[str, str]] = []
-    used_accept: set[str] = set()
     missing_rhs: list[str] = []
     for okey, nkey in changed:
         entry = accept.get(okey)
@@ -743,6 +794,7 @@ def compare_trees(
         "split_fail": split_fail,
         "missing_split": missing_split,
         "unused_accept": unused_accept,
+        "unused_moves": unused_moves,
         "unused_glue": unused_glue,
         "illegal_glue": illegal_glue,
         "missing_rhs": missing_rhs,
@@ -790,6 +842,8 @@ def evaluate(report: dict[str, object]) -> None:
         errs.append(f"--split key missing: {k}")
     for k in report["unused_accept"]:  # type: ignore[misc]
         errs.append(f"--accept entry unused: {k}")
+    for k in report.get("unused_moves", []):  # type: ignore[misc]
+        errs.append(f"--moves entry unused: {k}")
     for k in report.get("unused_glue", []):  # type: ignore[misc]
         errs.append(f"--glue unused: {k}")
     for k in report.get("illegal_glue", []):  # type: ignore[misc]
@@ -1116,6 +1170,83 @@ def _self_test() -> int:
         if mac["changed"] != 1:
             raise SystemExit("hygiene-fn-diff --self-test: changed macro body must be changed")
         _must_red(mac, "changed macro body")
+        n += 1
+
+        gone_src = "pub fn gone() { 1 }\n"
+        _write_crate(old, "crates/demo/src/lib.rs", gone_src)
+        _write_crate(new, "crates/demo/src/lib.rs", "")
+        gone_acc = {
+            "demo\tgone": {
+                "new": "-",
+                "old_hash": blob_hash(gone_src),
+                "new_hash": blob_hash(""),
+                "reason": "removed helper",
+            }
+        }
+        gone = compare_trees(old, new, {}, gone_acc, {}, [])
+        evaluate(gone)
+        if gone["removed"]:
+            raise SystemExit("hygiene-fn-diff --self-test: accepted removed item must be green")
+        n += 1
+
+        extra_src = "pub fn extra() { 1 }\n"
+        _write_crate(old, "crates/demo/src/lib.rs", "")
+        _write_crate(new, "crates/demo/src/lib.rs", extra_src)
+        extra_acc = {
+            "demo\textra": {
+                "new": "demo\textra",
+                "old_hash": blob_hash(""),
+                "new_hash": blob_hash(extra_src),
+                "reason": "added helper",
+            }
+        }
+        extra = compare_trees(old, new, {}, extra_acc, {}, [])
+        evaluate(extra)
+        if extra["added"]:
+            raise SystemExit("hygiene-fn-diff --self-test: accepted added item must be green")
+        n += 1
+
+        _write_crate(old, "crates/demo/src/lib.rs", "pub fn ready(x: i32) -> i32 { x + 1 }\n")
+        _write_crate(new, "crates/demo/src/lib.rs", "pub fn ready(x: i32) -> i32 { x + 1 }\n")
+        unused_mv = compare_trees(
+            old, new, {"demo\tother": "demo\tready"}, {}, {}, []
+        )
+        _must_red(unused_mv, "unused --moves entry")
+        n += 1
+
+        mvpath = pathlib.Path(tmp) / "dup-moves.txt"
+        mvpath.write_text("demo\ta = demo\tb\ndemo\ta = demo\tc\n", encoding="utf-8")
+        try:
+            load_keyed_id_map(mvpath, "moves")
+        except SystemExit:
+            n += 1
+        else:
+            raise SystemExit("hygiene-fn-diff --self-test: duplicate --moves LHS must fail")
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn a() { x(); }\nfn b() { x(); }\n",
+        )
+        _write_crate(new, "crates/demo/src/lib.rs", "fn c() { x(); }\n")
+        merged = compare_trees(
+            old,
+            new,
+            {"demo\ta": "demo\tc", "demo\tb": "demo\tc"},
+            {},
+            {},
+            [],
+        )
+        if merged["pairs"] != 2 or merged["removed"] or merged["added"]:
+            raise SystemExit("hygiene-fn-diff --self-test: merged: compare must keep both olds")
+        merpath = pathlib.Path(tmp) / "merged-moves.txt"
+        merpath.write_text(
+            "demo\ta = merged:demo\tc\ndemo\tb = merged:demo\tc\n",
+            encoding="utf-8",
+        )
+        loaded = load_keyed_id_map(merpath, "moves")
+        if loaded != {"demo\ta": "demo\tc", "demo\tb": "demo\tc"}:
+            raise SystemExit("hygiene-fn-diff --self-test: merged: parser must keep both LHS")
         n += 1
     return n
 
