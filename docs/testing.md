@@ -69,7 +69,8 @@ rest; any change to or from bare `pub` stays `changed`), `doc-only`,
 or `changed`. `--moves` is keyed like the hygiene-diff maps. `--split
 old = a + b + …` checks that the concatenated new bodies equal the
 old body modulo per-split line-anchored `--glue` lines (whole lines
-present in the new bodies and absent from the old; unused glue is
+present in the new bodies and absent from the old; each listed line
+excuses one occurrence; unused glue is
 red). `--roots` adds `examples/` and `fuzz/` to the default `crates/`
 scan. A body
 edit, a dropped item, a reordered `--split`, or an unused `--accept`

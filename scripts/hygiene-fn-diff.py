@@ -667,29 +667,49 @@ def extract(
     return found
 
 
-def _line_set(text: str) -> set[str]:
-    return {ln.strip() for ln in text.splitlines() if ln.strip()}
+def _line_counts(text: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for ln in text.splitlines():
+        s = ln.strip()
+        if not s:
+            continue
+        counts[s] = counts.get(s, 0) + 1
+    return counts
 
 
 def strip_glue_lines(text: str, glue: list[str]) -> str:
-    """Drop whole lines whose stripped text is a glue entry."""
-    want = {g.strip() for g in glue if g.strip()}
-    return "\n".join(ln for ln in text.splitlines() if ln.strip() not in want)
+    """Drop one matching line per listed glue occurrence."""
+    remain: dict[str, int] = {}
+    for g in glue:
+        gs = g.strip()
+        if gs:
+            remain[gs] = remain.get(gs, 0) + 1
+    out: list[str] = []
+    for ln in text.splitlines():
+        s = ln.strip()
+        if remain.get(s, 0) > 0:
+            remain[s] -= 1
+            continue
+        out.append(ln)
+    return "\n".join(out)
 
 
 def glue_problems(old_body: str, new_body: str, glue: list[str]) -> tuple[list[str], list[str]]:
-    """Glue may only excuse lines present in new and absent from old."""
-    old_ls, new_ls = _line_set(old_body), _line_set(new_body)
+    """Each glue line excuses one new-only occurrence; extras are unused."""
+    old_c, new_c = _line_counts(old_body), _line_counts(new_body)
+    listed: dict[str, int] = {}
     unused: list[str] = []
     illegal: list[str] = []
     for g in glue:
         gs = g.strip()
         if not gs:
             continue
-        if gs in old_ls:
-            illegal.append(g)
-        if gs not in new_ls:
-            unused.append(g)
+        listed[gs] = listed.get(gs, 0) + 1
+    for gs, n in listed.items():
+        if old_c.get(gs, 0):
+            illegal.append(gs)
+        if new_c.get(gs, 0) < n:
+            unused.append(gs)
     return unused, illegal
 
 
@@ -1180,6 +1200,32 @@ def _self_test() -> int:
                 "hygiene-fn-diff --self-test: dropped statement named in glue must fail"
             )
         _must_red(dropped_glue, "dropped statement named in glue")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn whole() {\n    a();\n    b();\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn phase_a() {\n    a();\n    phase_b();\n    phase_b();\n}\n"
+            "fn phase_b() {\n    b();\n}\n",
+        )
+        dup_glue = compare_trees(
+            old,
+            new,
+            {},
+            {},
+            {"demo\twhole": ["demo\tphase_a", "demo\tphase_b"]},
+            ["phase_b();"],
+        )
+        if not dup_glue["split_fail"]:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: duplicated glue call must fail"
+            )
+        _must_red(dup_glue, "duplicated tail-phase call")
         n += 1
 
         try:
