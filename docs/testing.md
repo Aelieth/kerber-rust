@@ -51,7 +51,17 @@ keeps helper-call arguments (smash the callee name only). `--subst` /
 helper list (`user_as()`, `temp_dir()`, …), never constants, numerics,
 or string literals. `--self-test` on the compare tools prints
 `self-test ok (N cases)`. There is no request-shape column (no
-canonical built-request form). One that deletes a `MIT_*`/`RUST_*`
+canonical built-request form).
+`python3 scripts/hygiene-fn-diff.py --old SHA --new SHA [--moves]
+[--accept] [--split] [--glue]` is the product-fn sibling: every
+non-test `fn` is keyed `crate<TAB>module::path::[Type::]name`, bodies
+are compared after whitespace/comment normalisation, and a pair is
+`identical`, `vis-only` (`pub` ↔ `pub(crate)` on the signature), or
+`changed`. `--moves` is keyed like the hygiene-diff maps. `--split
+old = a + b + …` checks that the concatenated new bodies equal the
+old body modulo `--glue` lines. A body edit, a dropped fn, a
+reordered `--split`, or an unused `--accept` is red; a pure move and
+a vis-only change are green. One that deletes a `MIT_*`/`RUST_*`
 variable that was never a cell lists it in `--dead` with the reason
 (`section` and `flow` tags cannot be waived). Job walls live in
 `ci-budget.toml` (see Tier contract below). `python3 scripts/ci-status.py --check-budget` compares a

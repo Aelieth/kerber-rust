@@ -2828,6 +2828,7 @@ def check_autotests_registered(root: pathlib.Path | None = None) -> None:
 _SELF_TEST_OK_RE = re.compile(r"self-test ok \((\d+) cases\)")
 HYGIENE_DIFF_MIN_CASES = 30
 HYGIENE_BODY_DIFF_MIN_CASES = 18
+HYGIENE_FN_DIFF_MIN_CASES = 7
 HYGIENE_INVENTORY_MIN_CASES = 1
 _REFUSE_CALL_RE = re.compile(r"^\s*refuse_golden_capture_dir\s+\S", re.M)
 _REQUIRED_REFUSE_CALLERS = (
@@ -2998,6 +2999,38 @@ def check_hygiene_body_diff_self_test(text: str | None = None) -> None:
         _die("hygiene-body-diff.py must self-test an assertion change (assert_eq!(1, 2))")
     if "user_as" not in text:
         _die("hygiene-body-diff.py must self-test a helper rename")
+
+
+def check_hygiene_fn_diff_self_test(text: str | None = None) -> None:
+    """hygiene-fn-diff.py --self-test is executed; a gutted `_self_test` is red."""
+    path = SCRIPTS / "hygiene-fn-diff.py"
+    if text is None:
+        if not path.is_file():
+            _die("missing scripts/hygiene-fn-diff.py")
+        text = path.read_text(encoding="utf-8")
+        _run_script_self_test(path, "hygiene-fn-diff.py", HYGIENE_FN_DIFF_MIN_CASES)
+        _gutted_self_test_must_not_count(
+            path, text, "hygiene-fn-diff.py", HYGIENE_FN_DIFF_MIN_CASES
+        )
+    elif _self_test_n_from_text(text) is None or (
+        _self_test_n_from_text(text) or 0
+    ) < HYGIENE_FN_DIFF_MIN_CASES:
+        _die(
+            "hygiene-fn-diff.py must print self-test ok (N cases) with "
+            f"N>={HYGIENE_FN_DIFF_MIN_CASES}"
+        )
+    if _self_test_fn_is_gutted(text):
+        _die("hygiene-fn-diff.py _self_test must not be gutted to return None")
+    if "def _self_test" not in text:
+        _die("hygiene-fn-diff.py must define _self_test")
+    if text.count("_self_test()") < 2:
+        _die("hygiene-fn-diff.py must run _self_test on normal compare runs")
+    if "x + 2" not in text:
+        _die("hygiene-fn-diff.py must self-test a body edit")
+    if "phase_b" not in text:
+        _die("hygiene-fn-diff.py must self-test --split")
+    if "pub(crate)" not in text:
+        _die("hygiene-fn-diff.py must self-test a vis-only change")
 
 
 def check_hygiene_inventory_cfg_test() -> None:
@@ -5066,6 +5099,28 @@ jobs:
         "        print('hygiene-body-diff: self-test ok (18 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n",
     )
+    check_hygiene_fn_diff_self_test(
+        "def _self_test():\n    x + 2 phase_b pub(crate)\n"
+        "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
+        "        print('hygiene-fn-diff: self-test ok (7 cases)')\n"
+        "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
+    )
+    _must_die(check_hygiene_fn_diff_self_test, "def main():\n    return 0\n")
+    _must_die(
+        check_hygiene_fn_diff_self_test,
+        "def _self_test():\n    x + 2 phase_b pub(crate)\n"
+        "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
+        "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n",
+    )
+    _must_die(
+        check_hygiene_fn_diff_self_test,
+        "def _self_test():\n"
+        '    """x + 2 phase_b pub(crate)"""\n'
+        "    return None\n"
+        "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
+        "        print('hygiene-fn-diff: self-test ok (7 cases)')\n"
+        "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n",
+    )
     with tempfile.TemporaryDirectory() as tmp:
         demo = pathlib.Path(tmp) / "crates" / "demo"
         (demo / "tests" / "common").mkdir(parents=True)
@@ -5587,6 +5642,7 @@ def main() -> None:
     check_log_arity()
     check_hygiene_diff_self_test()
     check_hygiene_body_diff_self_test()
+    check_hygiene_fn_diff_self_test()
     check_hygiene_inventory_cfg_test()
     check_autotests_registered()
     check_kcm_stop_before_run()

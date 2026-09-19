@@ -18,6 +18,11 @@ this project uses semantic versioning once a crate is published.
 - **scripts.** `ci-status.py` listings and `--check-budget` keep `main`
   pushes and the PR under test; dependabot runs are dropped. Cargo
   dependabot `open-pull-requests-limit` is 0 through W3.
+- **tool.** `hygiene-fn-diff.py` compares product `fn` bodies between
+  two trees (`crate<TAB>module::path::[Type::]name`). A body edit, a
+  dropped fn, a reordered `--split`, or an unused `--accept` is red;
+  a pure move and `pub` ↔ `pub(crate)` are green. `--self-test` prints
+  `self-test ok (7 cases)`; ci-policy requires that count.
 
 ### W3-S2-R3 compare-tool robustness
 
