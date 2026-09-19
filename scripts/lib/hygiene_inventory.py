@@ -181,6 +181,13 @@ def inventory_gates(root: pathlib.Path) -> tuple[list[str], list[str], list[str]
         mit_boots = len(re.findall(r"docker\s+run\b(?![^\n]*--entrypoint\s+sleep)", text))
         rust_boots = len(re.findall(r"--test-realm|/tmp/krb5-kdc", text))
         boots.append(f"{path.name}\tmit_run_sites={mit_boots}\trust_kdc_sites={rust_boots}")
+    lib = scripts / "lib"
+    if lib.is_dir():
+        for path in sorted(lib.glob("*.sh")):
+            rel = f"scripts/lib/{path.name}"
+            sleeps.extend(
+                sleep_sites(path.read_text(encoding="utf-8", errors="replace"), rel)
+            )
     cells.sort()
     return cells, sleeps, builds, boots
 
@@ -1009,7 +1016,7 @@ def write_index(out: pathlib.Path, quality: bool, counts: dict[str, object], q: 
         "| `tests.count` | number of tests |",
         "| `gates.txt` | cell tags (section/echo/flow/workflow) |",
         "| `gate-asserts.txt` | `die` / `grep -q` / `diff <(` counts per gate |",
-        "| `sleeps.txt` | gate sleep sites |",
+        "| `sleeps.txt` | gate and lib sleep sites |",
         "| `cargo-build-gates.txt` | gates that run cargo build |",
         "| `boots.txt` | static docker-run / rust-kdc sites |",
         "| `diffsend.txt` | diffsend case names |",
