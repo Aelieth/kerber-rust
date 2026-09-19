@@ -65,8 +65,10 @@ keeps string, byte-string, raw-string and char literal contents
 pair is `identical`, `vis-only` (private → `pub(super)` /
 `pub(crate)` or `pub(crate)` ↔ `pub(super)` on the item or a field,
 including brace-less `const` / `static` / `type`, with a vis-stripped
-rest; any change to or from bare `pub` stays `changed`), `doc-only`,
-or `changed`. `--moves` is keyed like the hygiene-diff maps. `--split
+rest — a signature rustfmt re-wrapped because the widening crossed the
+width limit still counts, a `(T,)` tuple keeps its comma; any change to
+or from bare `pub` stays `changed`), `doc-only`, or `changed`. A `//!`
+module header is never the first item's doc. `--moves` is keyed like the hygiene-diff maps. `--split
 old = a + b + …` checks that the concatenated new bodies equal the
 old body modulo per-split line-anchored `--glue` lines (whole lines
 present in the new bodies and absent from the old; each listed line

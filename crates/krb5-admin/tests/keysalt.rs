@@ -336,7 +336,7 @@ fn chpass3_outside_allowed_keysalts_is_bad_keysalts() {
 
 #[test]
 fn ks_tuple_filters_mit_weak_only() {
-    let src = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/kadm5.rs"));
+    let src = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/kadm5/xdr.rs"));
     assert!(
         src.contains("is_mit_weak()"),
         "allow_weak_crypto × ks_tuple: etypes.c ETYPE_WEAK only"

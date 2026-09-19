@@ -265,7 +265,7 @@ fn create_fail_auth_count_mask_is_bad_mask() {
         GSS_INTEGRITY,
     );
     let name = format!("r9create@{TEST_REALM}");
-    // Layout matches kadm5.rs create_rec; mask = PRINCIPAL|FAIL_AUTH_COUNT.
+    // Layout matches kadm5/tests/mod.rs create_rec; mask = PRINCIPAL|FAIL_AUTH_COUNT.
     let mut w = Vec::new();
     push_u32(&mut w, API_V2);
     push_nullstring(&mut w, &name);
