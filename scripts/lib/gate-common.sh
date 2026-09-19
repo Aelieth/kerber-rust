@@ -58,9 +58,9 @@ _gate_annotate() {
     esac
     if [ "$level" = notice ]; then
         printf '::notice file=%s,line=%s%s::%s: %s\n' "$src" "$line" "$title" "${src##*/}" "$msg"
-    else
-        printf '::error file=%s,line=%s%s::%s: %s\n' "$src" "$line" "$title" "${src##*/}" "$msg"
+        return 0
     fi
+    printf '::error file=%s,line=%s%s::%s: %s\n' "$src" "$line" "$title" "${src##*/}" "$msg"
 }
 
 die() {
@@ -596,9 +596,7 @@ _stock_mit_warn_dead() {
     local n=$1
     log "stock.mit" "warn" ",\"container\":\"$n\",\"warning\":\"dead shared container; starting a replacement\""
     echo "stock_mit_kdc: dead shared container $n; starting a replacement" >&2
-    if [ -n "${GITHUB_ACTIONS:-}" ]; then
-        printf '::warning::dead shared MIT container %s; starting a replacement\n' "$n"
-    fi
+    [ -z "${GITHUB_ACTIONS:-}" ] || printf '::warning::dead shared MIT container %s; starting a replacement\n' "$n"
 }
 
 stock_mit_kdc() {
