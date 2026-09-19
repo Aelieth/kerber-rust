@@ -2380,6 +2380,18 @@ def check_ci_status_save() -> None:
         _die("keep_listing_run must keep the PR under test")
     if mod.keep_listing_run(pr_run, pr=54):
         _die("keep_listing_run must drop another PR")
+    pr_empty = {
+        "event": "pull_request",
+        "head_branch": "w3-hygiene-s3-0",
+        "actor": {"login": "Aelieth"},
+        "pull_requests": [],
+    }
+    if not mod.keep_listing_run(pr_empty, pr=60, pr_head="w3-hygiene-s3-0"):
+        _die("keep_listing_run must match head_branch when pull_requests is empty")
+    if mod.keep_listing_run(pr_empty, pr=60, pr_head="other-branch"):
+        _die("keep_listing_run must not match a different head_branch")
+    if mod.keep_listing_run(pr_empty, pr=60):
+        _die("keep_listing_run must not keep empty pull_requests without pr_head")
 
 
 def check_makefile_matches_ci(mf: str | None = None, ci_text: str | None = None) -> None:

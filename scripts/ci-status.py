@@ -22,8 +22,10 @@ the last N completed runs. `--check-budget` compares each job's median of the
 last N completed runs (and the median wall) to `ci-budget.toml`; single-run
 breaches are info; fail when the median breaches or ≥ 3 of 5 runs breach
 (W2-Y4; a run cannot measure itself). Listings and `--check-budget` keep
-`main` pushes and the PR under test (`--pr` or `GITHUB_REF`); dependabot
-runs are dropped. `--save` / `--sha` still match that commit.
+`main` pushes and the PR under test (`--pr` or `GITHUB_REF`); a run
+whose `pull_requests` list is empty still matches on `head_branch`
+(`--pr-head` or `GITHUB_HEAD_REF`). Dependabot runs are dropped.
+`--save` / `--sha` still match that commit.
 """
 from __future__ import annotations
 
@@ -252,11 +254,22 @@ def pr_under_test(explicit: int | None = None) -> int | None:
     return int(m.group(1)) if m else None
 
 
-def keep_listing_run(run: dict, pr: int | None = None) -> bool:
+def pr_head_under_test(explicit: str | None = None) -> str | None:
+    """`--pr-head`, else `GITHUB_HEAD_REF`."""
+    if explicit:
+        return explicit
+    head = os.environ.get("GITHUB_HEAD_REF") or ""
+    return head or None
+
+
+def keep_listing_run(
+    run: dict, pr: int | None = None, pr_head: str | None = None
+) -> bool:
     """Listings and --check-budget keep main pushes and the PR under test.
 
     Dependabot rebases (PRs 46–53) fail on every main move and must not
-    sit in the nightly median-of-5 window.
+    sit in the nightly median-of-5 window. GitHub sometimes returns an
+    empty `pull_requests` list; those runs still match on `head_branch`.
     """
     actor = ((run.get("actor") or {}).get("login") or "").lower()
     head = run.get("head_branch") or ""
@@ -268,9 +281,12 @@ def keep_listing_run(run: dict, pr: int | None = None) -> bool:
     if pr is None:
         return False
     if event in ("pull_request", "pull_request_target"):
-        for item in run.get("pull_requests") or []:
+        items = run.get("pull_requests") or []
+        for item in items:
             if item.get("number") == pr:
                 return True
+        if not items and pr_head and head == pr_head:
+            return True
     return False
 
 
@@ -280,6 +296,7 @@ def fetch_runs(
     sha: str | None,
     n: int,
     pr: int | None = None,
+    pr_head: str | None = None,
     filter_ci: bool = True,
 ) -> list[dict]:
     """Runs of one workflow, newest first.
@@ -287,7 +304,8 @@ def fetch_runs(
     Uses `/actions/workflows/<file>/runs` (not the global run list filtered
     by the default branch) so `--workflow peers` and PR-head SHAs are visible.
     Listings and budget checks drop dependabot and keep only `main` pushes
-    plus the PR under test. An explicit `--sha` is unfiltered (save-by-SHA).
+    plus the PR under test (by `pull_requests` number, or `head_branch`
+    when that list is empty). An explicit `--sha` is unfiltered (save-by-SHA).
     """
     wf = workflow_file(workflow)
     per_page = max(n * 10, 30)
@@ -317,7 +335,7 @@ def fetch_runs(
                     if path_name == want or r.get("name") == workflow:
                         selected.append(r)
     if filter_ci:
-        selected = [r for r in selected if keep_listing_run(r, pr)]
+        selected = [r for r in selected if keep_listing_run(r, pr, pr_head)]
     return selected[:n]
 
 
@@ -380,9 +398,11 @@ def save_run(repo: str, workflow: str, sha: str, out_dir: str, retries: int = 10
     return 2
 
 
-def budget_report(repo: str, workflow: str, n: int, pr: int | None = None) -> int:
+def budget_report(
+    repo: str, workflow: str, n: int, pr: int | None = None, pr_head: str | None = None
+) -> int:
     """Print per-job median duration_s over the last N completed runs."""
-    selected = fetch_runs(repo, workflow, None, n, pr=pr)
+    selected = fetch_runs(repo, workflow, None, n, pr=pr, pr_head=pr_head)
     if not selected:
         print("ci-status: no matching runs", file=sys.stderr)
         return 2
@@ -501,7 +521,12 @@ def budget_median_verdict(
 
 
 def check_budget(
-    repo: str, workflow: str, sha: str | None, n: int, pr: int | None = None
+    repo: str,
+    workflow: str,
+    sha: str | None,
+    n: int,
+    pr: int | None = None,
+    pr_head: str | None = None,
 ) -> int:
     """Compare completed runs against ci-budget.toml.
 
@@ -515,7 +540,7 @@ def check_budget(
         print("ci-status: missing ci-budget.toml", file=sys.stderr)
         return 2
     try:
-        selected = fetch_runs(repo, workflow, sha, n, pr=pr)
+        selected = fetch_runs(repo, workflow, sha, n, pr=pr, pr_head=pr_head)
     except urllib.error.URLError as e:
         print(f"ci-status: {e}", file=sys.stderr)
         return 2
@@ -597,19 +622,29 @@ def main() -> int:
         default=None,
         help="include this pull request's runs (default: GITHUB_REF refs/pull/N)",
     )
+    ap.add_argument(
+        "--pr-head",
+        default=None,
+        help="PR head branch when pull_requests is empty (default: GITHUB_HEAD_REF)",
+    )
     args = ap.parse_args()
     if not args.repo:
         print("ci-status: cannot determine the repository; pass --repo", file=sys.stderr)
         return 2
     pr = pr_under_test(args.pr)
+    pr_head = pr_head_under_test(args.pr_head)
     if args.save:
         return save_run(args.repo, args.workflow, args.save, args.out)
     if args.budget_report:
-        return budget_report(args.repo, args.workflow, args.runs, pr=pr)
+        return budget_report(args.repo, args.workflow, args.runs, pr=pr, pr_head=pr_head)
     if args.check_budget:
-        return check_budget(args.repo, args.workflow, args.sha, args.runs, pr=pr)
+        return check_budget(
+            args.repo, args.workflow, args.sha, args.runs, pr=pr, pr_head=pr_head
+        )
     try:
-        selected = fetch_runs(args.repo, args.workflow, args.sha, args.runs, pr=pr)
+        selected = fetch_runs(
+            args.repo, args.workflow, args.sha, args.runs, pr=pr, pr_head=pr_head
+        )
     except urllib.error.URLError as e:
         print(f"ci-status: {e}", file=sys.stderr)
         return 2
