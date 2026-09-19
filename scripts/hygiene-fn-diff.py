@@ -488,12 +488,47 @@ def _strip_doc_lines(src: str) -> str:
     return "\n".join(kept)
 
 
+def _sig_rewrap_norm(src: str) -> str:
+    """Undo a rustfmt rewrap of the signature (the text before the body).
+
+    Widening a fn to `pub(super)` can push its one-line signature past the
+    width limit; rustfmt then breaks the parameter (or generic) list one per
+    line and adds a trailing comma. Whitespace around punctuation and that
+    comma go; the comma is dropped only when the matching `(` / `<` follows
+    a word (the fn name or a type), so a `(T,)` tuple type keeps its comma.
+    """
+    head, brace, body = src.partition("{")
+    if not brace or not re.search(r"\bfn\s", head):
+        return src
+    parts = head.split('"')
+    for k in range(0, len(parts), 2):
+        parts[k] = re.sub(r"\s*([^\w\s])\s*", r"\1", parts[k])
+    head = '"'.join(parts)
+    out: list[str] = []
+    stack: list[bool] = []
+    for i, c in enumerate(head):
+        if c in "(<":
+            prev = head[i - 1] if i else ""
+            stack.append(prev.isalnum() or prev == "_")
+        elif c in ")>":
+            if c == ">" and out and out[-1] == "-":
+                out.append(c)
+                continue
+            drop = stack.pop() if stack else False
+            if drop and out and out[-1] == ",":
+                out.pop()
+        out.append(c)
+    return "".join(out) + brace + body
+
+
 def classify(old_src: str, new_src: str) -> str:
     if compare_norm(old_src) == compare_norm(new_src):
         return "identical"
     if compare_norm(_strip_doc_lines(old_src)) == compare_norm(_strip_doc_lines(new_src)):
         return "doc-only"
-    if compare_norm(strip_restricted_vis(old_src)) == compare_norm(strip_restricted_vis(new_src)):
+    old_vis = _sig_rewrap_norm(strip_restricted_vis(old_src))
+    new_vis = _sig_rewrap_norm(strip_restricted_vis(new_src))
+    if compare_norm(old_vis) == compare_norm(new_vis):
         return "vis-only"
     return "changed"
 
@@ -555,7 +590,11 @@ def _inline_mod_at(lines: list[str], line_1: int) -> str:
 
 
 def _attr_doc_start(raw_lines: list[str], decl_line: int) -> int:
-    """0-based index of the attribute / doc block above a 1-based fn line."""
+    """0-based index of the attribute / doc block above a 1-based fn line.
+
+    Inner docs and attributes (`//!`, `#![…]`) belong to the enclosing module,
+    not to the first item under them.
+    """
     idx = decl_line - 2
     start = decl_line - 1
     while idx >= 0:
@@ -563,7 +602,9 @@ def _attr_doc_start(raw_lines: list[str], decl_line: int) -> int:
         if not s:
             idx -= 1
             continue
-        if s.startswith("///") or s.startswith("//!") or s.startswith("#["):
+        if s.startswith("//!") or s.startswith("#!["):
+            break
+        if s.startswith("///") or s.startswith("#["):
             start = idx
             idx -= 1
             continue
@@ -1296,6 +1337,66 @@ def _self_test() -> int:
         evaluate(cst)
         if cst["vis_only"] != 1 or cst["changed"] != 0:
             raise SystemExit("hygiene-fn-diff --self-test: const vis widening must be vis-only")
+        n += 1
+
+        # the widening pushes the signature past the width limit: rustfmt
+        # breaks the parameter list one per line with a trailing comma
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn wide(store: &Store, acl: &Acl, actor: &str, proc: u32) -> Vec<u8> {\n    v(proc)\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "pub(super) fn wide(\n    store: &Store,\n    acl: &Acl,\n    actor: &str,\n"
+            "    proc: u32,\n) -> Vec<u8> {\n    v(proc)\n}\n",
+        )
+        rewrap = compare_trees(old, new, {}, {}, {}, [])
+        evaluate(rewrap)
+        if rewrap["vis_only"] != 1 or rewrap["changed"] != 0:
+            raise SystemExit(
+                f"hygiene-fn-diff --self-test: rustfmt signature rewrap must be vis-only: {rewrap}"
+            )
+        n += 1
+
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "pub(super) fn wide(\n    store: &Store,\n    actor: &str,\n    acl: &Acl,\n"
+            "    proc: u32,\n) -> Vec<u8> {\n    v(proc)\n}\n",
+        )
+        reordered = compare_trees(old, new, {}, {}, {}, [])
+        if reordered["changed"] != 1:
+            raise SystemExit("hygiene-fn-diff --self-test: a reordered parameter under a rewrap is changed")
+        _must_red(reordered, "parameter reorder under a rewrap")
+        n += 1
+
+        _write_crate(old, "crates/demo/src/lib.rs", "fn one(a: (u32,)) -> u32 {\n    a.0\n}\n")
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "pub(super) fn one(a: (u32)) -> u32 {\n    a.0\n}\n",
+        )
+        tuple1 = compare_trees(old, new, {}, {}, {}, [])
+        if tuple1["changed"] != 1:
+            raise SystemExit("hygiene-fn-diff --self-test: `(T,)` → `(T)` in a signature is changed")
+        _must_red(tuple1, "1-tuple comma")
+        n += 1
+
+        # the module header above the first item is the module's, not the item's
+        _write_crate(old, "crates/demo/src/lib.rs", "//! Old header.\n\nconst A: i32 = 1;\n")
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "//! New header, two lines\n//! long.\n\npub(super) const A: i32 = 1;\n",
+        )
+        hdr = compare_trees(old, new, {}, {}, {}, [])
+        evaluate(hdr)
+        if hdr["vis_only"] != 1 or hdr["changed"] != 0:
+            raise SystemExit(
+                f"hygiene-fn-diff --self-test: a `//!` header is not the first item's doc: {hdr}"
+            )
         n += 1
 
         _write_crate(old, "crates/demo/src/lib.rs", "struct S { a: i32 }\n")
