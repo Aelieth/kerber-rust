@@ -91,7 +91,7 @@ ACCEPT_LINE_RE = re.compile(
     r"(?P<reason>.+)$"
 )
 SPLIT_LINE_RE = re.compile(r"^(?P<old>.+?)\s*=\s*(?P<rhs>.+)$")
-VIS_FOLD_RE = re.compile(r"\bpub\(crate\)")
+VIS_RE = re.compile(r"\bpub(?:\([^)]*\))?\s+")
 
 
 class FnDiffError(Exception):
@@ -394,8 +394,16 @@ def blob_hash(src: str) -> str:
     return hashlib.sha256(compare_norm(src).encode("utf-8")).hexdigest()
 
 
-def vis_fold(sig: str) -> str:
-    return VIS_FOLD_RE.sub("pub", sig)
+def vis_kind_and_rest(sig: str) -> tuple[str, str]:
+    """Split a signature into vis kind and the rest (byte-identical check)."""
+    m = VIS_RE.search(sig)
+    if not m:
+        return "private", sig
+    token = m.group(0)
+    kind = "pub" if token.startswith("pub ") or token == "pub" else "restricted"
+    if token.startswith("pub("):
+        kind = "restricted"
+    return kind, sig[: m.start()] + sig[m.end() :]
 
 
 def _strip_doc_lines(src: str) -> str:
@@ -413,13 +421,16 @@ def classify(old_src: str, new_src: str) -> str:
         return "identical"
     if compare_norm(_strip_doc_lines(old_src)) == compare_norm(_strip_doc_lines(new_src)):
         return "doc-only"
-    if compare_norm(inner_body(old_src)) == compare_norm(inner_body(new_src)) and vis_fold(
-        compare_norm(signature_of(_strip_doc_lines(old_src)))
-    ) == vis_fold(compare_norm(signature_of(_strip_doc_lines(new_src)))):
-        if compare_norm(signature_of(_strip_doc_lines(old_src))) != compare_norm(
-            signature_of(_strip_doc_lines(new_src))
-        ):
+    if compare_norm(inner_body(old_src)) == compare_norm(inner_body(new_src)):
+        ko, ro = vis_kind_and_rest(compare_norm(signature_of(_strip_doc_lines(old_src))))
+        kn, rn = vis_kind_and_rest(compare_norm(signature_of(_strip_doc_lines(new_src))))
+        if ro == rn and ko != kn and {ko, kn} <= {"private", "restricted"}:
             return "vis-only"
+        if ro == rn and ko == kn == "restricted":
+            if compare_norm(signature_of(_strip_doc_lines(old_src))) != compare_norm(
+                signature_of(_strip_doc_lines(new_src))
+            ):
+                return "vis-only"
     return "changed"
 
 
@@ -942,6 +953,11 @@ def _self_test() -> int:
         n += 1
 
         _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn ready(x: i32) -> i32 { x + 1 }\n",
+        )
+        _write_crate(
             new,
             "crates/demo/src/lib.rs",
             "pub(crate) fn ready(x: i32) -> i32 { x + 1 }\n",
@@ -950,7 +966,32 @@ def _self_test() -> int:
         vis = compare_trees(old, new, {}, {}, {}, [])
         evaluate(vis)
         if vis["vis_only"] != 1 or vis["changed"] != 0:
-            raise SystemExit("hygiene-fn-diff --self-test: pub ↔ pub(crate) must be vis-only")
+            raise SystemExit("hygiene-fn-diff --self-test: private → pub(crate) must be vis-only")
+        n += 1
+
+        _write_crate(old, "crates/demo/src/lib.rs", "pub fn ready(x: i32) -> i32 { x + 1 }\n")
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "pub(crate) fn ready(x: i32) -> i32 { x + 1 }\n",
+        )
+        pub_to_crate = compare_trees(old, new, {}, {}, {}, [])
+        if pub_to_crate["changed"] != 1:
+            raise SystemExit("hygiene-fn-diff --self-test: pub → pub(crate) must be changed")
+        _must_red(pub_to_crate, "pub → pub(crate)")
+        n += 1
+
+        names = ["codes", "xdr", "rpc", "auth", "iprop", "dispatch"]
+        old_kadm = "\n".join(f"fn {n}() {{}}\n" for n in names)
+        new_kadm = "\n".join(f"pub(super) fn {n}() {{}}\n" for n in names)
+        _write_crate(old, "crates/demo/src/lib.rs", old_kadm)
+        _write_crate(new, "crates/demo/src/lib.rs", new_kadm)
+        kadm = compare_trees(old, new, {}, {}, {}, [])
+        evaluate(kadm)
+        if kadm["vis_only"] != 6 or kadm["changed"] != 0:
+            raise SystemExit(
+                f"hygiene-fn-diff --self-test: 6-fn pub(super) split must be vis-only: {kadm}"
+            )
         n += 1
 
         _write_crate(
