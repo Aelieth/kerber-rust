@@ -25,7 +25,7 @@ this project uses semantic versioning once a crate is published.
   dropped fn, a reordered `--split`, or an unused `--accept` is red;
   a pure move and a private → `pub(crate)` / `pub(super)` widening
   are green; a change to or from bare `pub` is red. `--self-test` prints
-  `self-test ok (37 cases)`; ci-policy requires that count. Literal
+  `self-test ok (43 cases)`; ci-policy requires that count. Literal
   contents (e_text, char, a `--split` phase) are compared. `--glue`
   is line-anchored and new-only. Attribute blocks are compared;
   doc-only `///` edits do not fail. Keys include inline `mod` nesting
@@ -57,7 +57,9 @@ this project uses semantic versioning once a crate is published.
   widened to `pub(super)` / `pub(crate)`. `render` names each
   `vis-only` and `doc-only` item. Each `--glue` line excuses one
   occurrence. `mod` and `impl-header` blobs include their attributes.
-  `--self-test` is 37 cases.
+  `--self-test` is 43 cases. `--glue KEY=LINE` and `glue:` in the
+  `--split` map are per-split; `old = old + tail` is accepted; a
+  missing map file is an error.
 
 ### W3-S2-R3 compare-tool robustness
 
