@@ -403,6 +403,38 @@ fn issue_as_from(
         .map_err(|e| wrap_as_fast(store, fast.as_ref(), e, body))
 }
 
+/// MIT `lookup_client` carried state. Data only.
+struct AsLookup {
+    client: Principal,
+    cname: PrincipalName,
+    sname: PrincipalName,
+    server: Principal,
+    session_etype: EncryptionType,
+    work_padata: Option<Vec<PaData>>,
+    req_cname: PrincipalName,
+    ckey: KeyEntry,
+}
+
+/// MIT `finish_preauth` carried state. Data only.
+struct AsPreauth {
+    client: Principal,
+    cname: PrincipalName,
+    sname: PrincipalName,
+    server: Principal,
+    session_etype: EncryptionType,
+    work_padata: Option<Vec<PaData>>,
+    ckey: KeyEntry,
+    extra_padata: Vec<PaData>,
+    as_rep_key: ProtocolKey,
+    etype: EncryptionType,
+    skip_timestamp: bool,
+    hw_preauth: bool,
+    reply_key_replaced: bool,
+    auth_indicators: Vec<String>,
+    anonymous_as: bool,
+}
+
+#[rustfmt::skip]
 fn issue_as_body(
     store: &dyn PrincipalRead,
     req: &AsReq,
@@ -410,6 +442,22 @@ fn issue_as_body(
     body: &KdcReqBody,
     fast: Option<&FastOk>,
 ) -> Result<IssuedAs, Error> {
+    let lookup = lookup_client(store, req, body, fast)?;
+    let pre = finish_preauth(store, req, raw, body, fast, lookup)?;
+    finish_process_as_req(store, req, raw, body, fast, pre)
+}
+
+/// MIT `lookup_client` (`do_as_req.c:134-151`) plus the AS server lookup,
+/// `validate_as_request` (`kdc_util.c:716`), and `select_client_key`
+/// (`do_as_req.c:103`).
+#[allow(unused_mut)]
+#[rustfmt::skip]
+fn lookup_client(
+    store: &dyn PrincipalRead,
+    req: &AsReq,
+    body: &KdcReqBody,
+    fast: Option<&FastOk>,
+) -> Result<AsLookup, Error> {
     if let Some(f) = fast {
         check_fast_options(&f.fast_options)?;
     }
@@ -463,6 +511,23 @@ fn issue_as_body(
         }
         return Err(proto(err::ETYPE_NOSUPP, status::CANT_FIND_CLIENT_KEY));
     };
+    let ckey = ckey.clone();
+    Ok(AsLookup { client, cname, sname, server, session_etype, work_padata, req_cname, ckey })
+}
+
+/// MIT `finish_preauth` (`do_as_req.c:434-466`): run padata and enforce
+/// required preauth before the ticket is issued.
+#[rustfmt::skip]
+fn finish_preauth(
+    store: &dyn PrincipalRead,
+    req: &AsReq,
+    raw: Option<&[u8]>,
+    body: &KdcReqBody,
+    fast: Option<&FastOk>,
+    lookup: AsLookup,
+) -> Result<AsPreauth, Error> {
+    let AsLookup { client, mut cname, sname, server, session_etype, work_padata, req_cname, ckey: ckey_owned } = lookup;
+    let ckey = &ckey_owned;
     let etype = ckey.etype;
     let encoded_body;
     let body_der: &[u8] = if let Some(slice) = raw.and_then(kdc_req_body_der) {
@@ -634,6 +699,22 @@ fn issue_as_body(
             detail: None,
         });
     }
+    Ok(AsPreauth { client, cname, sname, server, session_etype, work_padata, ckey: ckey_owned, extra_padata, as_rep_key, etype, skip_timestamp, hw_preauth, reply_key_replaced, auth_indicators, anonymous_as })
+}
+
+/// MIT `finish_process_as_req` (`do_as_req.c:194-329`): mint the TGT and
+/// encode the AS-REP.
+#[rustfmt::skip]
+fn finish_process_as_req(
+    store: &dyn PrincipalRead,
+    req: &AsReq,
+    raw: Option<&[u8]>,
+    body: &KdcReqBody,
+    fast: Option<&FastOk>,
+    pre: AsPreauth,
+) -> Result<IssuedAs, Error> {
+    let AsPreauth { client, cname, sname, server, session_etype, work_padata, ckey: ckey_owned, mut extra_padata, as_rep_key, etype, skip_timestamp, hw_preauth, reply_key_replaced, auth_indicators, anonymous_as } = pre;
+    let ckey = &ckey_owned;
     let skey = store
         .policy()
         .first_current_key(&server)
@@ -1022,6 +1103,92 @@ fn find_authdata(
     Ok(false)
 }
 
+/// MIT `gather_tgs_req_info` (`do_tgs_req.c:592`) carried state. Data only.
+struct TgsGather<'a> {
+    tgs_padata: Option<&'a [PaData]>,
+    ap: krb5_types::ApReq,
+    enc_tkt: EncTicketPart,
+    tgt_session: ProtocolKey,
+    authenticator: krb5_types::Authenticator,
+    header_realm: String,
+    renew: bool,
+    validate: bool,
+    sname: PrincipalName,
+    req_realm: String,
+    header_pac: Option<Vec<u8>>,
+    server: Principal,
+}
+
+/// MIT `check_tgs_req` (`do_tgs_req.c:857`) carried state. Data only.
+struct TgsChecked<'a> {
+    tgs_padata: Option<&'a [PaData]>,
+    ap: krb5_types::ApReq,
+    enc_tkt: EncTicketPart,
+    tgt_session: ProtocolKey,
+    authenticator: krb5_types::Authenticator,
+    renew: bool,
+    validate: bool,
+    sname: PrincipalName,
+    server: Principal,
+    auth_indicators: Vec<String>,
+    s4u2self: bool,
+    s4u_local: Option<Principal>,
+    s4u_referral: bool,
+    session_etype: EncryptionType,
+    set_transited_flag: bool,
+    stkt: Option<SecondTicket>,
+    subject_authtime: KerberosTime,
+    s4u2proxy: bool,
+    is_crossrealm: bool,
+    is_referral: bool,
+    s4u_subject: Option<(PrincipalName, String)>,
+    s4u_x509: Option<krb5_types::s4u::PaS4uX509User>,
+    evidence_logon: Option<Vec<u8>>,
+    subject_pac: Option<Vec<u8>>,
+    ticket_cname: PrincipalName,
+    ticket_crealm: String,
+    tkt_key: ProtocolKey,
+    tkt_kvno: u32,
+    tkt_etype: EncryptionType,
+    transited: TransitedEncoding,
+}
+
+/// MIT `compute_ticket_times` (`do_tgs_req.c:812`) carried state. Data only.
+struct TgsTimes<'a> {
+    tgs_padata: Option<&'a [PaData]>,
+    ap: krb5_types::ApReq,
+    enc_tkt: EncTicketPart,
+    tgt_session: ProtocolKey,
+    authenticator: krb5_types::Authenticator,
+    renew: bool,
+    validate: bool,
+    sname: PrincipalName,
+    server: Principal,
+    auth_indicators: Vec<String>,
+    s4u2self: bool,
+    stkt: Option<SecondTicket>,
+    s4u2proxy: bool,
+    is_crossrealm: bool,
+    is_referral: bool,
+    s4u_subject: Option<(PrincipalName, String)>,
+    s4u_x509: Option<krb5_types::s4u::PaS4uX509User>,
+    evidence_logon: Option<Vec<u8>>,
+    subject_pac: Option<Vec<u8>>,
+    ticket_cname: PrincipalName,
+    ticket_crealm: String,
+    tkt_key: ProtocolKey,
+    tkt_kvno: u32,
+    tkt_etype: EncryptionType,
+    transited: TransitedEncoding,
+    session: ProtocolKey,
+    authtime: KerberosTime,
+    starttime: KerberosTime,
+    end: KerberosTime,
+    flags: TicketFlags,
+    ticket_renew_till: Option<KerberosTime>,
+}
+
+#[rustfmt::skip]
 fn issue_tgs_body(
     store: &dyn PrincipalRead,
     req: &TgsReq,
@@ -1030,6 +1197,22 @@ fn issue_tgs_body(
     tgs_fast: Option<&FastOk>,
     header: HeaderTgt,
 ) -> Result<IssuedTgs, Error> {
+    let g = gather_tgs_req_info(store, req, body, tgs_fast, header)?;
+    let c = check_tgs_req(store, req, body, g)?;
+    let t = compute_ticket_times(store, body, c)?;
+    tgs_issue_ticket(store, req, raw, body, tgs_fast, t)
+}
+
+/// MIT `gather_tgs_req_info` (`do_tgs_req.c:592`).
+#[allow(unused_mut)]
+#[rustfmt::skip]
+fn gather_tgs_req_info<'a>(
+    store: &dyn PrincipalRead,
+    req: &'a TgsReq,
+    body: &KdcReqBody,
+    tgs_fast: Option<&'a FastOk>,
+    header: HeaderTgt,
+) -> Result<TgsGather<'a>, Error> {
     if let Some(f) = tgs_fast {
         check_fast_options(&f.fast_options)?;
     }
@@ -1087,6 +1270,18 @@ fn issue_tgs_body(
         store.fetch_krbtgt()?.as_ref(),
     )?;
     let mut server = search_sprinc(store, &sname, req_realm.as_str(), body)?;
+    Ok(TgsGather { tgs_padata, ap, enc_tkt, tgt_session, authenticator, header_realm, renew, validate, sname, req_realm, header_pac, server })
+}
+
+/// MIT `check_tgs_req` (`do_tgs_req.c:857`).
+#[rustfmt::skip]
+fn check_tgs_req<'a>(
+    store: &dyn PrincipalRead,
+    req: &TgsReq,
+    body: &KdcReqBody,
+    g: TgsGather<'a>,
+) -> Result<TgsChecked<'a>, Error> {
+    let TgsGather { tgs_padata, ap, enc_tkt, tgt_session, authenticator, header_realm, renew, validate, sname, req_realm, header_pac, mut server } = g;
     check_tgs_constraints_skeleton(
         body,
         &ap.ticket.sname,
@@ -1311,6 +1506,17 @@ fn issue_tgs_body(
     if !(inherited_t || set_transited_flag) && store.policy().reject_bad_transit {
         return Err(proto(err::POLICY, status::BAD_TRANSIT));
     }
+    Ok(TgsChecked { tgs_padata, ap, enc_tkt, tgt_session, authenticator, renew, validate, sname, server, auth_indicators, s4u2self, s4u_local, s4u_referral, session_etype, set_transited_flag, stkt, subject_authtime, s4u2proxy, is_crossrealm, is_referral, s4u_subject, s4u_x509, evidence_logon, subject_pac, ticket_cname, ticket_crealm, tkt_key, tkt_kvno, tkt_etype, transited })
+}
+
+/// MIT `compute_ticket_times` (`do_tgs_req.c:812`).
+#[rustfmt::skip]
+fn compute_ticket_times<'a>(
+    store: &dyn PrincipalRead,
+    body: &KdcReqBody,
+    c: TgsChecked<'a>,
+) -> Result<TgsTimes<'a>, Error> {
+    let TgsChecked { tgs_padata, ap, enc_tkt, tgt_session, authenticator, renew, validate, sname, server, auth_indicators, s4u2self, s4u_local, s4u_referral, session_etype, set_transited_flag, stkt, subject_authtime, s4u2proxy, is_crossrealm, is_referral, s4u_subject, s4u_x509, evidence_logon, subject_pac, ticket_cname, ticket_crealm, tkt_key, tkt_kvno, tkt_etype, transited } = c;
     let session = random_key(session_etype)?;
     let now = KerberosTime::now();
     let subject_cname = stkt.as_ref().map_or(&enc_tkt.cname, |s| &s.part.cname);
@@ -1441,6 +1647,20 @@ fn issue_tgs_body(
     }
     let tgs_adj = current_policy().check_tgs(store, &server.name, &auth_indicators)?;
     apply_policy_times(&now, &mut end, &mut ticket_renew_till, &tgs_adj);
+    Ok(TgsTimes { tgs_padata, ap, enc_tkt, tgt_session, authenticator, renew, validate, sname, server, auth_indicators, s4u2self, stkt, s4u2proxy, is_crossrealm, is_referral, s4u_subject, s4u_x509, evidence_logon, subject_pac, ticket_cname, ticket_crealm, tkt_key, tkt_kvno, tkt_etype, transited, session, authtime, starttime, end, flags, ticket_renew_till })
+}
+
+/// MIT `tgs_issue_ticket` (`do_tgs_req.c:956`).
+#[rustfmt::skip]
+fn tgs_issue_ticket(
+    store: &dyn PrincipalRead,
+    req: &TgsReq,
+    raw: Option<&[u8]>,
+    body: &KdcReqBody,
+    tgs_fast: Option<&FastOk>,
+    t: TgsTimes<'_>,
+) -> Result<IssuedTgs, Error> {
+    let TgsTimes { tgs_padata, ap, enc_tkt, tgt_session, authenticator, renew, validate, sname, server, auth_indicators, s4u2self, stkt, s4u2proxy, is_crossrealm, is_referral, s4u_subject, s4u_x509, evidence_logon, mut subject_pac, ticket_cname, ticket_crealm, tkt_key, tkt_kvno, tkt_etype, transited, session, authtime, starttime, end, flags, ticket_renew_till } = t;
     let krbtgt_p = store
         .fetch_krbtgt()?
         .ok_or_else(|| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
