@@ -537,8 +537,9 @@ def _sig_rewrap_norm(src: str) -> str:
     rustfmt breaks a long parameter or generic list one entry per line and
     adds a trailing comma. Whitespace around punctuation goes; the comma is
     dropped only when the matching `(` / `<` follows an identifier that is
-    not a keyword (the fn name, a type, `Fn`), so `(T,)`, `&mut (T,)` and
-    `*const (T,)` keep theirs. String and char literals pass through whole.
+    not a keyword and not a lifetime (the fn name, a type, `Fn`), so
+    `(T,)`, `&mut (T,)`, `*const (T,)` and `&'a (T,)` keep theirs. String
+    and char literals pass through whole.
     """
     head, brace, body = src.partition("{")
     if not brace or not re.search(r"\bfn\s", head):
@@ -556,7 +557,10 @@ def _sig_rewrap_norm(src: str) -> str:
                 while j and (text[j - 1].isalnum() or text[j - 1] == "_"):
                     j -= 1
                 word = text[j:i]
-                stack.append(bool(word) and word not in _NOT_LIST_OPENER)
+                lifetime = j > 0 and text[j - 1] == "'"
+                stack.append(
+                    bool(word) and not lifetime and word not in _NOT_LIST_OPENER
+                )
             elif c in ")>":
                 if c == ">" and out and out[-1] == "-":
                     out.append(c)
@@ -1586,6 +1590,23 @@ def _self_test() -> int:
                 )
             _must_red(ptr_tuple, f"{prefix.strip()} 1-tuple comma")
             n += 1
+
+        # a lifetime before `(` is a type, not a list opener
+        _write_crate(
+            old, "crates/demo/src/lib.rs", "fn one(a: &'a (u32,)) -> u32 {\n    a.0\n}\n"
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "pub(super) fn one(a: &'a (u32)) -> u32 {\n    a.0\n}\n",
+        )
+        life_tuple = compare_trees(old, new, {}, {}, {}, [])
+        if life_tuple["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: `&'a (T,)` → `&'a (T)` must be changed"
+            )
+        _must_red(life_tuple, "lifetime 1-tuple comma")
+        n += 1
 
         # a `,)` inside a string literal in the head is content, not a rewrap
         _write_crate(

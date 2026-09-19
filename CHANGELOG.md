@@ -6,6 +6,12 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S3.2 store by MIT source family
+
+- **tool.** `hygiene-fn-diff.py` treats a lifetime before `(` as a
+  type, not a list opener: `&'a (T,)` → `&'a (T)` is `changed`.
+  Self-test 56 cases.
+
 ### W3-S3.1 kadm5 by MIT source family
 
 - **krb5-admin.** `kadm5.rs` (4,233 lines) is split into
