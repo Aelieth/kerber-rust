@@ -11,6 +11,11 @@ this project uses semantic versioning once a crate is published.
 - **tool.** `hygiene-body-diff.py` keeps a zero-length interior line
   of a string literal (the newline's own span, not the empty slice).
   Self-test 24 cases.
+- **kdc.** `issue_as_body` and `issue_tgs_body` become MIT-phase
+  orchestrators (`lookup_client` / `finish_preauth` /
+  `finish_process_as_req`; `gather_tgs_req_info` / `check_tgs_req` /
+  `compute_ticket_times` / `tgs_issue_ticket`). Each new fn's doc
+  cites its MIT line. Carried state is data-only. File split is 3b.
 
 ### W3-S3.2-R residues
 
