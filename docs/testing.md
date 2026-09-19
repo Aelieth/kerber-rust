@@ -59,16 +59,27 @@ canonical built-request form).
 every non-test `fn` (and `const` / `static` / `enum` / `struct` /
 `trait` / `type` / `macro_rules` items) is keyed
 `crate<TAB>module::path::[impl-header::]name`, with inline `mod`
-nesting in the path. Bodies are compared after a normaliser that
-keeps string, byte-string, raw-string and char literal contents
-(whitespace and comments are still normalised outside literals). A
-pair is `identical`, `vis-only` (private → `pub(super)` /
-`pub(crate)` or `pub(crate)` ↔ `pub(super)` on the item or a field,
-including brace-less `const` / `static` / `type`, with a vis-stripped
-rest — a signature rustfmt re-wrapped because the widening crossed the
-width limit still counts, a `(T,)` tuple keeps its comma; any change to
-or from bare `pub` stays `changed`), `doc-only`, or `changed`. A `//!`
-module header is never the first item's doc. `--moves` is keyed like the hygiene-diff maps. `--split
+nesting in the path; a file's (or inline mod's) `#![…]` inner
+attributes are one more item, `module::path::inner-attrs`, so a
+dropped `#![forbid]` or an added `#![allow]` is `changed` / `added` /
+`removed`, while a `//!` module header belongs to no item and is not
+compared. Bodies are compared after a normaliser that keeps string,
+byte-string, raw-string and char literal contents (whitespace and
+comments are still normalised outside literals). A pair is
+`identical`, `vis-only` (private → `pub(super)` / `pub(crate)` or
+`pub(crate)` ↔ `pub(super)` on the item or a field, including
+brace-less `const` / `static` / `type`, with a vis-stripped rest; any
+change to or from bare `pub` stays `changed`), `fmt-only`, `doc-only`,
+or `changed`. Before the vis-stripped compare the text ahead of the
+body is re-flowed: whitespace around punctuation goes, and a trailing
+comma is dropped only when its `(` / `<` follows an identifier that is
+not a keyword — `wide(a, b,)` and `f<T, U,>` lose it, `(T,)`,
+`&mut (T,)` and `*const (T,)` keep it, and string / char literals in
+attributes pass through whole. That runs on every pair, not only on
+one that crossed the width limit; a pair equal after it with the same
+visibility is `fmt-only` (green, named in the render), so `vis-only N`
+is the number of pairs whose visibility differs. `--moves` is keyed
+like the hygiene-diff maps. `--split
 old = a + b + …` checks that the concatenated new bodies equal the
 old body modulo per-split line-anchored `--glue` lines (whole lines
 present in the new bodies and absent from the old; each listed line

@@ -21,10 +21,13 @@ this project uses semantic versioning once a crate is published.
 - **docs.** The parity ledger's `kadm5.rs` anchors (45 rows) and two
   `security.md` cites name the module files.
 - **tool.** `hygiene-fn-diff.py` no longer attaches a `//!` module
-  header to the first item under it, and a private → `pub(super)`
-  widening whose signature rustfmt re-wraps (one parameter per line,
-  trailing comma) is `vis-only`; a `(T,)` tuple keeps its comma.
-  Self-test 47 cases. `ci-policy.py` skips `#[cfg(test)]` children
+  header to the first item under it; a file's `#![…]` inner
+  attributes are its own compared `inner-attrs` item. A private →
+  `pub(super)` widening whose signature rustfmt re-wraps (one
+  parameter per line, trailing comma) is `vis-only`; the same rewrap
+  with no visibility change is `fmt-only`; a `(T,)`, `&mut (T,)` or
+  `*const (T,)` tuple keeps its comma and string literals in the head
+  pass through whole. Self-test 55 cases. `ci-policy.py` skips `#[cfg(test)]` children
   of `src/**` when indexing ledger anchor files, so
   `kadm5/tests/policy.rs` does not collide with `kadm5/policy.rs`;
   `hygiene_inventory.py` skips only a package's own `target/`, so the

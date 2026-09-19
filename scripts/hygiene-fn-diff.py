@@ -10,10 +10,12 @@ a comparison normaliser that keeps string, byte-string, raw-string
 and char literal contents (whitespace and comments are still
 normalised outside literals), and classifies each pair
 `identical` / `vis-only` (private → `pub(crate)` / `pub(super)`, or
-those two restricted forms, with a byte-identical rest)
-/ `doc-only` / `changed`. The compared blob includes the attribute
-block above the fn. Reports `added` and `removed`. A key collision
-never drops a body.
+those two restricted forms, with a rest equal modulo a rustfmt
+signature rewrap) / `fmt-only` (that rewrap alone) / `doc-only` /
+`changed`. The compared blob includes the attribute block above the
+fn; a file's `#![…]` inner attributes are the `inner-attrs` item of
+its module. Reports `added` and `removed`. A key collision never
+drops a body.
 
 Fails on any `changed`, `added` or `removed` not in `--accept` (keyed,
 blob-pinned, unused entry red). `--split old_key = new_a + new_b + …`
@@ -488,37 +490,86 @@ def _strip_doc_lines(src: str) -> str:
     return "\n".join(kept)
 
 
+# A word that can precede `(` / `<` without opening a parameter, generic or
+# call-like list: the comma after `&mut (T,)` or `*const (T,)` is a type.
+_NOT_LIST_OPENER = frozenset(
+    "mut const dyn impl in as for where ref move unsafe extern return".split()
+)
+
+
+def _literal_spans(src: str) -> list[tuple[bool, str]]:
+    """Split into (is_code, text) runs; literal runs are whole string / char tokens."""
+    out: list[tuple[bool, str]] = []
+    code: list[str] = []
+
+    def flush() -> None:
+        if code:
+            out.append((True, "".join(code)))
+            code.clear()
+
+    i, n = 0, len(src)
+    while i < n:
+        c = src[i]
+        nxt = src[i + 1] if i + 1 < n else ""
+        end: int | None = None
+        if c == "r" or (c == "b" and nxt == "r"):
+            end = _scan_raw(src, i)
+        if end is None and c == "b" and nxt == '"':
+            end = _scan_quoted(src, i + 1)
+        if end is None and c == '"':
+            end = _scan_quoted(src, i)
+        if end is None and c in "'b":
+            end = _scan_char(src, i)
+        if end is not None:
+            flush()
+            out.append((False, src[i:end]))
+            i = end
+            continue
+        code.append(c)
+        i += 1
+    flush()
+    return out
+
+
 def _sig_rewrap_norm(src: str) -> str:
     """Undo a rustfmt rewrap of the signature (the text before the body).
 
-    Widening a fn to `pub(super)` can push its one-line signature past the
-    width limit; rustfmt then breaks the parameter (or generic) list one per
-    line and adds a trailing comma. Whitespace around punctuation and that
-    comma go; the comma is dropped only when the matching `(` / `<` follows
-    a word (the fn name or a type), so a `(T,)` tuple type keeps its comma.
+    rustfmt breaks a long parameter or generic list one entry per line and
+    adds a trailing comma. Whitespace around punctuation goes; the comma is
+    dropped only when the matching `(` / `<` follows an identifier that is
+    not a keyword (the fn name, a type, `Fn`), so `(T,)`, `&mut (T,)` and
+    `*const (T,)` keep theirs. String and char literals pass through whole.
     """
     head, brace, body = src.partition("{")
     if not brace or not re.search(r"\bfn\s", head):
         return src
-    parts = head.split('"')
-    for k in range(0, len(parts), 2):
-        parts[k] = re.sub(r"\s*([^\w\s])\s*", r"\1", parts[k])
-    head = '"'.join(parts)
     out: list[str] = []
     stack: list[bool] = []
-    for i, c in enumerate(head):
-        if c in "(<":
-            prev = head[i - 1] if i else ""
-            stack.append(prev.isalnum() or prev == "_")
-        elif c in ")>":
-            if c == ">" and out and out[-1] == "-":
-                out.append(c)
-                continue
-            drop = stack.pop() if stack else False
-            if drop and out and out[-1] == ",":
-                out.pop()
-        out.append(c)
+    for is_code, text in _literal_spans(head):
+        if not is_code:
+            out.append(text)
+            continue
+        text = re.sub(r"\s*([^\w\s])\s*", r"\1", text)
+        for i, c in enumerate(text):
+            if c in "(<":
+                j = i
+                while j and (text[j - 1].isalnum() or text[j - 1] == "_"):
+                    j -= 1
+                word = text[j:i]
+                stack.append(bool(word) and word not in _NOT_LIST_OPENER)
+            elif c in ")>":
+                if c == ">" and out and out[-1] == "-":
+                    out.append(c)
+                    continue
+                drop = stack.pop() if stack else False
+                if drop and out and out[-1] == ",":
+                    out.pop()
+            out.append(c)
     return "".join(out) + brace + body
+
+
+def _restricted_vis_tokens(src: str) -> list[str]:
+    return [re.sub(r"\s+", "", t) for t in RESTRICTED_VIS_RE.findall(src)]
 
 
 def classify(old_src: str, new_src: str) -> str:
@@ -529,7 +580,9 @@ def classify(old_src: str, new_src: str) -> str:
     old_vis = _sig_rewrap_norm(strip_restricted_vis(old_src))
     new_vis = _sig_rewrap_norm(strip_restricted_vis(new_src))
     if compare_norm(old_vis) == compare_norm(new_vis):
-        return "vis-only"
+        if _restricted_vis_tokens(old_src) != _restricted_vis_tokens(new_src):
+            return "vis-only"
+        return "fmt-only"
     return "changed"
 
 
@@ -593,7 +646,8 @@ def _attr_doc_start(raw_lines: list[str], decl_line: int) -> int:
     """0-based index of the attribute / doc block above a 1-based fn line.
 
     Inner docs and attributes (`//!`, `#![…]`) belong to the enclosing module,
-    not to the first item under them.
+    not to the first item under them (the `#![…]` lines are its
+    `inner-attrs` item, see `scan_inner_attrs`).
     """
     idx = decl_line - 2
     start = decl_line - 1
@@ -668,6 +722,36 @@ def scan_mod_impl_headers(code: str) -> list[tuple[int, int, str, str]]:
             end = _header_end(lines, i)
             header = _impl_header_at(lines, end) or _norm_header(line.split("{", 1)[0])
             out.append((i, end, "impl-header", header))
+    return out
+
+
+_INNER_ATTR_RE = re.compile(r"^\s*#!\[")
+INNER_ATTRS = "inner-attrs"
+
+
+def scan_inner_attrs(code: str) -> list[tuple[int, int]]:
+    """1-based (start, end) of each `#![…]` inner attribute; `//!` docs are not items."""
+    lines = code.split("\n")
+    out: list[tuple[int, int]] = []
+    for i, line in enumerate(lines):
+        if not _INNER_ATTR_RE.match(line):
+            continue
+        depth = 0
+        li, ci = i, line.find("#![") + 2
+        while li < len(lines):
+            s = lines[li]
+            while ci < len(s):
+                if s[ci] == "[":
+                    depth += 1
+                elif s[ci] == "]":
+                    depth -= 1
+                    if depth == 0:
+                        out.append((i + 1, li + 1))
+                        li = len(lines)
+                        break
+                ci += 1
+            li += 1
+            ci = 0
     return out
 
 
@@ -834,6 +918,27 @@ def extract(
             if key in found:
                 key = f"{key}#{rel}:{start}"
             found[key] = {"src": src, "file": rel, "name": name, "kind": kind}
+        # The file's (or an inline mod's) `#![…]` lines are one item, so a
+        # lint or `forbid` that is added, dropped or edited is a compared blob.
+        attrs_by_mod: dict[str, tuple[int, list[str]]] = {}
+        for start, end in scan_inner_attrs(code):
+            if any(a <= start <= b for a, b in test_ranges):
+                continue
+            inline = _inline_mod_at(code_lines, start)
+            full_mod = "::".join(p for p in (module, inline) if p)
+            attrs_by_mod.setdefault(full_mod, (start, []))[1].append(
+                "\n".join(raw_lines[start - 1 : end])
+            )
+        for full_mod, (start, attrs) in attrs_by_mod.items():
+            key = fn_key(crate, full_mod, None, INNER_ATTRS)
+            if key in found:
+                key = f"{key}#{rel}:{start}"
+            found[key] = {
+                "src": "\n".join(attrs),
+                "file": rel,
+                "name": INNER_ATTRS,
+                "kind": INNER_ATTRS,
+            }
     return found
 
 
@@ -989,6 +1094,7 @@ def compare_trees(
     unused_moves = sorted(k for k in moves if k not in used_moves)
     identical = sum(1 for _o, _n, k in pairs if k == "identical")
     vis_only = [(o, n) for o, n, k in pairs if k == "vis-only"]
+    fmt_only = [(o, n) for o, n, k in pairs if k == "fmt-only"]
     doc_only = [(o, n) for o, n, k in pairs if k == "doc-only"]
     changed = [(o, n) for o, n, k in pairs if k == "changed"]
 
@@ -1027,6 +1133,8 @@ def compare_trees(
         "identical": identical,
         "vis_only": len(vis_only),
         "vis_only_items": vis_only,
+        "fmt_only": len(fmt_only),
+        "fmt_only_items": fmt_only,
         "doc_only": len(doc_only),
         "doc_only_items": doc_only,
         "changed": len(changed),
@@ -1054,6 +1162,7 @@ def render(report: dict[str, object]) -> str:
         f"pairs {report['pairs']}",
         f"identical {report['identical']}",
         f"vis-only {report['vis_only']}",
+        f"fmt-only {report['fmt_only']}",
         f"doc-only {report['doc_only']}",
         f"changed {report['changed']}",
         f"accepted {len(report['accepted'])}",  # type: ignore[arg-type]
@@ -1069,6 +1178,8 @@ def render(report: dict[str, object]) -> str:
     ]
     for o, n in report["vis_only_items"]:  # type: ignore[misc]
         lines.append(f"vis-only {o} -> {n}")
+    for o, n in report["fmt_only_items"]:  # type: ignore[misc]
+        lines.append(f"fmt-only {o} -> {n}")
     for o, n in report["doc_only_items"]:  # type: ignore[misc]
         lines.append(f"doc-only {o} -> {n}")
     for o, n, reason in report["accepted"]:  # type: ignore[misc]
@@ -1397,6 +1508,122 @@ def _self_test() -> int:
             raise SystemExit(
                 f"hygiene-fn-diff --self-test: a `//!` header is not the first item's doc: {hdr}"
             )
+        n += 1
+
+        # the file's `#![…]` lines are their own item: kept out of the first
+        # item's blob, yet compared
+        lints = "#![forbid(unsafe_code)]\n#![deny(clippy::unwrap_used, clippy::panic)]\n"
+        _write_crate(old, "crates/demo/src/lib.rs", f"//! Old.\n\n{lints}\nconst A: i32 = 1;\n")
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            f"//! New header.\n\n{lints}\npub(super) const A: i32 = 1;\n",
+        )
+        inner_same = compare_trees(old, new, {}, {}, {}, [])
+        evaluate(inner_same)
+        if (
+            inner_same["vis_only"] != 1
+            or inner_same["identical"] != 1
+            or inner_same["new_kinds"].get(INNER_ATTRS) != 1  # type: ignore[union-attr]
+        ):
+            raise SystemExit(
+                f"hygiene-fn-diff --self-test: unchanged `#![…]` must be one identical item: {inner_same}"
+            )
+        n += 1
+
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "//! Old.\n\n#![deny(clippy::unwrap_used, clippy::panic)]\n\nconst A: i32 = 1;\n",
+        )
+        dropped_forbid = compare_trees(old, new, {}, {}, {}, [])
+        if dropped_forbid["changed"] != 1 or dropped_forbid["unaccepted"] != [
+            ("demo\tinner-attrs", "demo\tinner-attrs")
+        ]:
+            raise SystemExit(
+                f"hygiene-fn-diff --self-test: a dropped `#![forbid]` must be changed: {dropped_forbid}"
+            )
+        _must_red(dropped_forbid, "dropped #![forbid(unsafe_code)]")
+        n += 1
+
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "//! Old.\n\n#![forbid(unsafe_code)]\n#![warn(clippy::unwrap_used, clippy::panic)]\n\n"
+            "const A: i32 = 1;\n",
+        )
+        deny_to_warn = compare_trees(old, new, {}, {}, {}, [])
+        if deny_to_warn["changed"] != 1:
+            raise SystemExit("hygiene-fn-diff --self-test: `#![deny]` → `#![warn]` must be changed")
+        _must_red(deny_to_warn, "#![deny] → #![warn]")
+        n += 1
+
+        _write_crate(old, "crates/demo/src/lib.rs", "fn f() {}\n")
+        _write_crate(new, "crates/demo/src/lib.rs", "#![allow(dead_code)]\nfn f() {}\n")
+        added_allow = compare_trees(old, new, {}, {}, {}, [])
+        if added_allow["added"] != ["demo\tinner-attrs"]:
+            raise SystemExit(
+                f"hygiene-fn-diff --self-test: an added `#![allow]` must be an added item: {added_allow}"
+            )
+        _must_red(added_allow, "added #![allow(dead_code)]")
+        n += 1
+
+        # `mut` / `const` before `(` open a type, not a parameter list: the
+        # 1-tuple comma is kept and its loss is a type change
+        for prefix in ("&mut ", "*const "):
+            _write_crate(
+                old, "crates/demo/src/lib.rs", f"fn one(a: {prefix}(u32,)) -> u32 {{\n    a.0\n}}\n"
+            )
+            _write_crate(
+                new,
+                "crates/demo/src/lib.rs",
+                f"pub(super) fn one(a: {prefix}(u32)) -> u32 {{\n    a.0\n}}\n",
+            )
+            ptr_tuple = compare_trees(old, new, {}, {}, {}, [])
+            if ptr_tuple["changed"] != 1:
+                raise SystemExit(
+                    f"hygiene-fn-diff --self-test: `{prefix}(T,)` → `{prefix}(T)` must be changed"
+                )
+            _must_red(ptr_tuple, f"{prefix.strip()} 1-tuple comma")
+            n += 1
+
+        # a `,)` inside a string literal in the head is content, not a rewrap
+        _write_crate(
+            old, "crates/demo/src/lib.rs", '#[doc = "see foo(a,)"]\nfn d() -> u32 {\n    1\n}\n'
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            '#[doc = "see foo(a)"]\npub(super) fn d() -> u32 {\n    1\n}\n',
+        )
+        doc_lit = compare_trees(old, new, {}, {}, {}, [])
+        if doc_lit["changed"] != 1 or doc_lit["vis_only"] != 0:
+            raise SystemExit(
+                f"hygiene-fn-diff --self-test: a `,)` edit inside `#[doc = …]` is never vis-only: {doc_lit}"
+            )
+        _must_red(doc_lit, "comma edit inside a doc literal")
+        n += 1
+
+        # a rewrap with no visibility change is fmt-only, not vis-only
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "pub fn wide(store: &Store, acl: &Acl, actor: &str, proc: u32) -> Vec<u8> {\n    v(proc)\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "pub fn wide(\n    store: &Store,\n    acl: &Acl,\n    actor: &str,\n"
+            "    proc: u32,\n) -> Vec<u8> {\n    v(proc)\n}\n",
+        )
+        fmt_only = compare_trees(old, new, {}, {}, {}, [])
+        evaluate(fmt_only)
+        if fmt_only["vis_only"] != 0 or fmt_only["fmt_only"] != 1 or fmt_only["changed"] != 0:
+            raise SystemExit(
+                f"hygiene-fn-diff --self-test: a comma-only rewrap is fmt-only, not vis-only: {fmt_only}"
+            )
+        if "fmt-only demo\twide -> demo\twide" not in render(fmt_only):
+            raise SystemExit("hygiene-fn-diff --self-test: render must name the fmt-only item")
         n += 1
 
         _write_crate(old, "crates/demo/src/lib.rs", "struct S { a: i32 }\n")
