@@ -39,7 +39,7 @@ krb5-gss = { path = "crates/krb5-gss" }
 krb5-admin = { path = "crates/krb5-admin" }
 krb5-testkit = { path = "crates/krb5-testkit" }
 aes = "0.8"
-camellia = "0.1"
+camellia = "0.2"
 chrono = { version = "0.4", default-features = false, features = ["alloc", "clock", "std"] }
 cmac = "0.7"
 des = "0.8"
