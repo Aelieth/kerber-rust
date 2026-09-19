@@ -13,6 +13,9 @@ this project uses semantic versioning once a crate is published.
   with `hygiene-fn-diff.py`). A whitespace edit inside an asserted
   literal is an assertion change; anywhere else it is a `differ`.
   Self-test 23 cases.
+- **tests.** The four `store/tests.rs` kdc.conf raw-string interiors
+  that the tests-out mover de-indented are restored to their
+  `w3-base` bytes.
 
 ### W3-S3.2 store by MIT source family
 

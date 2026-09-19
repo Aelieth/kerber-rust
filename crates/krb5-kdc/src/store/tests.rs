@@ -225,22 +225,22 @@ fn apply_kdc_conf_sets_ticket_policy() {
     let conf = krb5_config::KdcConf::parse(
         r"
 [libdefaults]
-allow_weak_crypto = yes
-spake_preauth_groups = P-256
+    allow_weak_crypto = yes
+    spake_preauth_groups = P-256
 
 [realms]
-KERBER.TEST = {
-    max_life = 1h 30m
-    max_renewable_life = 2d 0h 0m 0s
-    requires_preauth = no
-    restrict_anonymous_to_tgt = true
-    pkinit_require_freshness = true
-    encrypted_challenge_indicator = encrypted_challenge
-    pkinit_indicator = pkinit
-    spake_preauth_indicator = spake
-    host_based_services = host
-    no_host_referral = imap
-}
+    KERBER.TEST = {
+        max_life = 1h 30m
+        max_renewable_life = 2d 0h 0m 0s
+        requires_preauth = no
+        restrict_anonymous_to_tgt = true
+        pkinit_require_freshness = true
+        encrypted_challenge_indicator = encrypted_challenge
+        pkinit_indicator = pkinit
+        spake_preauth_indicator = spake
+        host_based_services = host
+        no_host_referral = imap
+    }
 ",
     )
     .unwrap();
@@ -272,12 +272,12 @@ KERBER.TEST = {
     let rc4 = krb5_config::KdcConf::parse(
         r"
 [libdefaults]
-allow_rc4 = true
-permitted_enctypes = aes256-cts arcfour-hmac
+    allow_rc4 = true
+    permitted_enctypes = aes256-cts arcfour-hmac
 [realms]
-KERBER.TEST = {
-    supported_enctypes = aes256-cts:normal rc4-hmac:normal
-}
+    KERBER.TEST = {
+        supported_enctypes = aes256-cts:normal rc4-hmac:normal
+    }
 ",
     )
     .unwrap();
@@ -438,9 +438,9 @@ fn apply_kdc_conf_domain_sid() {
     let conf = krb5_config::KdcConf::parse(
         r"
 [realms]
-KERBER.TEST = {
-    domain_sid = S-1-5-21-891046300-1937985867-1481223175
-}
+    KERBER.TEST = {
+        domain_sid = S-1-5-21-891046300-1937985867-1481223175
+    }
 ",
     )
     .unwrap();
@@ -457,9 +457,9 @@ fn apply_kdc_conf_rejects_bad_domain_sid() {
     let conf = krb5_config::KdcConf::parse(
         r"
 [realms]
-KERBER.TEST = {
-    domain_sid = not-a-sid
-}
+    KERBER.TEST = {
+        domain_sid = not-a-sid
+    }
 ",
     )
     .unwrap();
