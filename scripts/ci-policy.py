@@ -3164,7 +3164,8 @@ def check_stock_boots_per_job(ci_text: str | None = None) -> None:
 
 
 def _in_poll_loop(lines: list[str], idx: int) -> bool:
-    for j in range(idx, max(-1, idx - 30), -1):
+    # A G2 au.log wait is a 30+ line python heredoc inside `for $(seq)`.
+    for j in range(idx, max(-1, idx - 80), -1):
         if re.search(r"for\s+\S+\s+in\s+\$\(seq", lines[j]):
             return True
         if re.search(r"^\s*while\b", lines[j]):
@@ -4634,6 +4635,8 @@ jobs:
     )
     ok_sleep = "sleep 2 # proto: ticket age\n"
     check_sleep_ratchet({"renew-gate.sh": ok_sleep}, unit_sleep_count=5)
+    long_poll = "for _ in $(seq 1 80); do\n" + ("echo x\n" * 40) + "sleep 0.1\ndone\n"
+    check_sleep_ratchet({"kdc-gate.sh": long_poll}, unit_sleep_count=5)
     _must_die(
         check_sleep_ratchet,
         {"pad-gate.sh": "sleep 3\n"},
