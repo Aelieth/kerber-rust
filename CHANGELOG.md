@@ -14,16 +14,17 @@ this project uses semantic versioning once a crate is published.
   `require_port_in` in `gate-common.sh`). `require_listen` keeps
   polling after `bind failed` while `krb5-kdc` is still alive
   (`:88 || :8888`). `kdc-gate.sh` and
-  `client-differential-flows-gate.sh` no longer assert a log after one
-  read or a fixed `sleep 0.25`. Expected strings and cells are
-  unchanged.
+  `client-differential-flows-gate.sh` wait with those helpers before
+  the single read; no assertion was removed. Expected strings and
+  cells are unchanged.
 - **scripts.** `ci-status.py` listings and `--check-budget` keep `main`
   pushes and the PR under test; dependabot runs are dropped. Cargo
   dependabot `open-pull-requests-limit` is 0 through W3.
 - **tool.** `hygiene-fn-diff.py` compares product `fn` bodies between
   two trees (`crate<TAB>module::path::[impl-header::]name`). A body edit, a
   dropped fn, a reordered `--split`, or an unused `--accept` is red;
-  a pure move and `pub` ↔ `pub(crate)` are green. `--self-test` prints
+  a pure move and a private → `pub(crate)` / `pub(super)` widening
+  are green; a change to or from bare `pub` is red. `--self-test` prints
   `self-test ok (30 cases)`; ci-policy requires that count. Literal
   contents (e_text, char, a `--split` phase) are compared. `--glue`
   is line-anchored and new-only. Attribute blocks are compared;
@@ -32,6 +33,13 @@ this project uses semantic versioning once a crate is published.
 - **docs.** `docs/testing.md` keeps `--dead` on the `hygiene-diff.py`
   paragraph and describes the fn-diff literal normaliser and
   line-anchored `--glue`.
+
+### W3-S3-0R residues
+
+- **scripts.** Every shape-(b) server-written log or trace is waited
+  with `require_log` before the existing read. `die` and `unavailable`
+  print a `::error file=…,line=…::` annotation on Actions. `ci-status.py`
+  also matches `head_branch` when `pull_requests` is empty.
 
 ### W3-S2-R3 compare-tool robustness
 
