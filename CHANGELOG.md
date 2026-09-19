@@ -6,6 +6,14 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S3.2-R residues
+
+- **tool.** `hygiene-body-diff.py` keeps string, byte-string,
+  raw-string and char literals whole (the span splitter is shared
+  with `hygiene-fn-diff.py`). A whitespace edit inside an asserted
+  literal is an assertion change; anywhere else it is a `differ`.
+  Self-test 23 cases.
+
 ### W3-S3.2 store by MIT source family
 
 - **tool.** `hygiene-fn-diff.py` treats a lifetime before `(` as a

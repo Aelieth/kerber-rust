@@ -41,19 +41,24 @@ lists it in `--dead` with the reason (`section` and `flow` tags cannot
 be waived).
 `python3 scripts/hygiene-body-diff.py --old SHA --new SHA --renames
 --duplicates [--accept map]` links test fns through those maps,
-normalises whitespace/comments/helper names, and fails an assertion-line
-change that is not in `--accept` or a dropped test that is not in
-`--duplicates`. `--accept` is keyed nextest `binary<TAB>name` (one entry covers
-exactly one pair) and pins the old and new assertion-blob `sha256:`
-hashes; the RHS must exist in the new tree, and an unused entry or a
-blob mismatch is red. Same-file helpers are smashed only when the name
-exists on both sides; a rename compares the helper bodies. The blob
-keeps helper-call arguments (smash the callee name only). `--subst` /
-`--subst-file` rewrite only call positions of names in the declared
-helper list (`user_as()`, `temp_dir()`, …), never constants, numerics,
-or string literals. `--self-test` on the compare tools prints
-`self-test ok (N cases)`. There is no request-shape column (no
-canonical built-request form).
+normalises whitespace/comments/helper names in code spans only, and
+fails an assertion-line change that is not in `--accept` or a dropped
+test that is not in `--duplicates`. String, byte-string, raw-string
+and char literals pass through whole (interior newlines and
+indentation included; the span splitter is shared with
+`hygiene-fn-diff.py`). A literal change on an assertion line is an
+assertion change (red unless `--accept`ed); on any other line it is a
+`differ` (green, listed). `--accept` is keyed nextest `binary<TAB>name`
+(one entry covers exactly one pair) and pins the old and new
+assertion-blob `sha256:` hashes; the RHS must exist in the new tree,
+and an unused entry or a blob mismatch is red. Same-file helpers are
+smashed only when the name exists on both sides; a rename compares the
+helper bodies. The blob keeps helper-call arguments (smash the callee
+name only). `--subst` / `--subst-file` rewrite only call positions of
+names in the declared helper list (`user_as()`, `temp_dir()`, …),
+never constants, numerics, or string literals. `--self-test` on the
+compare tools prints `self-test ok (N cases)`. There is no
+request-shape column (no canonical built-request form).
 `python3 scripts/hygiene-fn-diff.py --old SHA --new SHA [--moves]
 [--accept] [--split] [--glue] [--roots]` is the product-fn sibling:
 every non-test `fn` (and `const` / `static` / `enum` / `struct` /

@@ -3,7 +3,9 @@
 
 Links old → new by `--renames` / `--duplicates` (the same maps
 `hygiene-diff.py` uses), normalises whitespace, comments, crate-path
-prefixes, and a helper-substitution table, then reports:
+prefixes, and a helper-substitution table (code spans only; string,
+byte-string, raw-string and char literals pass through whole, using
+`hygiene-fn-diff.py`'s `_literal_spans`), then reports:
 
   pairs, identical, helper-only, differing, assertion-line changes,
   dropped, added
@@ -63,6 +65,22 @@ load_duplicates_map = _HD.load_duplicates_map
 load_renames_map = _HD.load_renames_map
 load_map = _HD.load_map
 strip_merged = _HD.strip_merged
+
+
+def _hygiene_fn_diff():
+    import importlib.util
+
+    path = ROOT / "scripts" / "hygiene-fn-diff.py"
+    spec = importlib.util.spec_from_file_location("hygiene_fn_diff", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit("cannot load scripts/hygiene-fn-diff.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_FN = _hygiene_fn_diff()
+_literal_spans = _FN._literal_spans
 
 HELPERS = (
     "issue_tgt",
@@ -423,45 +441,77 @@ def load_accept(path: pathlib.Path | None) -> dict[str, dict[str, str]]:
     return out
 
 
+def _collapse_code_horizontal(text: str) -> str:
+    """Collapse horizontal whitespace in a code span; keep newlines."""
+    text = PATHPFX.sub("", text)
+    parts: list[str] = []
+    for line in text.splitlines(keepends=True):
+        nl = line.endswith("\n")
+        core = line[:-1] if nl else line
+        core = re.sub(r"[ \t]+", " ", core).strip()
+        parts.append(core + ("\n" if nl else ""))
+    return "".join(parts)
+
+
+def _spans_norm(src: str) -> str:
+    """Collapse whitespace in code spans; pass literals through verbatim."""
+    out: list[str] = []
+    for is_code, span in _literal_spans(src):
+        out.append(_collapse_code_horizontal(span) if is_code else span)
+    return "".join(out)
+
+
 def norm_line(line: str) -> str:
-    return re.sub(r"\s+", " ", PATHPFX.sub("", line)).strip()
+    """Normalise one line; literals keep interior whitespace."""
+    return _spans_norm(line).strip()
 
 
 def norm_body(body: str) -> list[str]:
-    lines = [norm_line(x) for x in strip_comments(body).splitlines()]
-    return [x for x in lines if x]
+    """Line list of a test body. Literal interiors keep newlines and indent.
+
+    Empty lines that sit inside a string / raw-string / byte-string /
+    char literal are kept (an asserted raw-string interior blank line
+    is a change). Empty code lines are dropped.
+    """
+    pieces: list[tuple[bool, str]] = []
+    for is_code, span in _literal_spans(strip_comments(body)):
+        pieces.append((is_code, _collapse_code_horizontal(span) if is_code else span))
+    combined = "".join(p[1] for p in pieces)
+    mask: list[bool] = []
+    for is_code, span in pieces:
+        mask.extend([not is_code] * len(span))
+    lines: list[str] = []
+    start = 0
+    n = len(combined)
+    i = 0
+    while i <= n:
+        if i == n or combined[i] == "\n":
+            line = combined[start:i]
+            lit = any(mask[start:i]) if i > start else False
+            if line.strip() or (lit and start < i):
+                lines.append(line)
+            start = i + 1
+        i += 1
+    return lines
 
 
 def _rewrite_helper_calls(line: str, old: str, new: str) -> str:
     """Replace `old(` / `old!(` outside string literals. Never rewrite constants."""
     pat = re.compile(rf"\b{re.escape(old)}\s*(?=[(!])")
     out: list[str] = []
-    i, n = 0, len(line)
-    in_str = False
-    while i < n:
-        c = line[i]
-        if in_str:
-            out.append(c)
-            if c == "\\" and i + 1 < n:
-                out.append(line[i + 1])
-                i += 2
+    for is_code, text in _literal_spans(line):
+        if not is_code:
+            out.append(text)
+            continue
+        i, n = 0, len(text)
+        while i < n:
+            m = pat.match(text, i)
+            if m and not (i > 0 and text[i - 1] == "."):
+                out.append(new)
+                i = m.end()
                 continue
-            if c == '"':
-                in_str = False
+            out.append(text[i])
             i += 1
-            continue
-        if c == '"':
-            in_str = True
-            out.append(c)
-            i += 1
-            continue
-        m = pat.match(line, i)
-        if m and not (i > 0 and line[i - 1] == "."):
-            out.append(new)
-            i = m.end()
-            continue
-        out.append(c)
-        i += 1
     return "".join(out)
 
 
@@ -499,13 +549,42 @@ def smash_helpers(lines: list[str], extra: list[str] | tuple[str, ...] = ()) -> 
     return out
 
 
-def flatten_code(lines: list[str]) -> str:
-    text = re.sub(r"\s+", " ", " ".join(lines))
+def _flatten_code_span(text: str) -> str:
+    text = re.sub(r"\s+", " ", text)
     text = re.sub(r"\(\s+", "(", text)
     text = re.sub(r"\s+\)", ")", text)
     text = re.sub(r",\s*\)", ")", text)
     text = re.sub(r"\s+,", ",", text)
     return re.sub(r",\s*", ", ", text)
+
+
+def flatten_code(lines: list[str]) -> str:
+    """Join lines and collapse whitespace in code spans only."""
+    out: list[str] = []
+    for is_code, span in _literal_spans("\n".join(lines)):
+        out.append(_flatten_code_span(span) if is_code else span)
+    return "".join(out)
+
+
+def _match_paren(src: str, open_idx: int) -> int:
+    """Index past the `)` matching `src[open_idx] == '('`, skipping literals."""
+    depth = 0
+    pos = 0
+    for is_code, text in _literal_spans(src):
+        for i, c in enumerate(text):
+            here = pos + i
+            if here < open_idx:
+                continue
+            if not is_code:
+                continue
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth == 0:
+                    return here + 1
+        pos += len(text)
+    return len(src)
 
 
 def _name_called(lines: list[str], name: str) -> bool:
@@ -764,33 +843,16 @@ def compare_trees(
             continue
         differ.append((o, n, ol, nl))
         def assert_blob(lines: list[str]) -> str:
-            text = re.sub(r"\s+", " ", " ".join(lines))
+            text = flatten_code(lines)
             blobs: list[str] = []
             for m in ASSERT_RE.finditer(text):
                 i = m.start()
-                # take the macro and its top-level (...)
                 j = text.find("(", m.end() - 1)
                 if j < 0:
                     blobs.append(text[i : m.end()])
                     continue
-                depth = 0
-                k = j
-                while k < len(text):
-                    if text[k] == "(":
-                        depth += 1
-                    elif text[k] == ")":
-                        depth -= 1
-                        if depth == 0:
-                            k += 1
-                            break
-                    k += 1
-                blob = re.sub(r"\s+", " ", text[i:k])
-                blob = re.sub(r"\(\s+", "(", blob)
-                blob = re.sub(r"\s+\)", ")", blob)
-                blob = re.sub(r",\s*\)", ")", blob)
-                blob = re.sub(r"\s+,", ",", blob)
-                blob = re.sub(r",\s*", ", ", blob)
-                blobs.append(blob.strip())
+                k = _match_paren(text, j)
+                blobs.append(text[i:k].strip())
             return " | ".join(blobs)
 
         if special_attrs(o) != special_attrs(n):
@@ -842,6 +904,16 @@ def compare_trees(
         "attr_changes": attr_changes,
         "unused_accept": unused_accept,
         "missing_accept_rhs": missing_rhs,
+        "differ_items": [
+            {
+                "file": o["file"],
+                "leaf": o["leaf"],
+                "new_file": n["file"],
+                "new_leaf": n["leaf"],
+                "assertion": any(o is a[0] and n is a[1] for a in assert_changes),
+            }
+            for o, n, _ol, _nl in differ
+        ],
     }
     return report
 
@@ -862,6 +934,9 @@ def render(report: dict[str, object]) -> str:
     ]
     for o, n, reason in report["accepted"]:  # type: ignore[misc]
         lines.append(f"accepted {o['leaf']} -> {n['leaf']}: {reason}")
+    for item in report.get("differ_items") or []:
+        kind = "assertion" if item["assertion"] else "body"
+        lines.append(f"differ {kind} {item['file']} {item['leaf']}")
     return "\n".join(lines) + "\n"
 
 
@@ -1125,6 +1200,87 @@ def _self_test() -> int:
                 "hygiene-body-diff --self-test: one accept entry must cover exactly one pair"
             )
         _must_red(covered, "one accept entry covering two (crate, leaf) pairs")
+        n += 1
+        src_o.joinpath("u.rs").unlink()
+        src_n.joinpath("u.rs").unlink()
+        src_o.joinpath("t.rs").write_text(
+            '#[test]\nfn sample() {\n    assert_eq!(s, "a  b");\n}\n',
+            encoding="utf-8",
+        )
+        src_n.joinpath("t.rs").write_text(
+            '#[test]\nfn sample() {\n    assert_eq!(s, "a b");\n}\n',
+            encoding="utf-8",
+        )
+        spaced = compare_trees(old, new, {}, {}, [], {})
+        if spaced["assertion_changes"] != 1:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: whitespace inside an asserted string must be an assertion change"
+            )
+        _must_red(spaced, "whitespace inside asserted string")
+        n += 1
+        src_o.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert_eq!(s, r\"\n    indented\n\");\n}\n",
+            encoding="utf-8",
+        )
+        src_n.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert_eq!(s, r\"\nindented\n\");\n}\n",
+            encoding="utf-8",
+        )
+        raw = compare_trees(old, new, {}, {}, [], {})
+        if raw["assertion_changes"] != 1:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: whitespace inside an asserted raw-string interior must be an assertion change"
+            )
+        _must_red(raw, "whitespace inside asserted raw-string interior")
+        n += 1
+        src_o.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert_eq!(c, ' ');\n}\n",
+            encoding="utf-8",
+        )
+        src_n.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert_eq!(c, '\\t');\n}\n",
+            encoding="utf-8",
+        )
+        ch = compare_trees(old, new, {}, {}, [], {})
+        if ch["assertion_changes"] != 1:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: char literal space vs tab must be an assertion change"
+            )
+        _must_red(ch, "char literal space vs tab")
+        n += 1
+        src_o.joinpath("t.rs").write_text(
+            '#[test]\nfn sample() {\n    let x = 1;\n    assert_eq!(s, "a  b");\n}\n',
+            encoding="utf-8",
+        )
+        src_n.joinpath("t.rs").write_text(
+            '#[test]\nfn sample() {\nlet x = 1;\nassert_eq!(s, "a  b");\n}\n',
+            encoding="utf-8",
+        )
+        deindented = compare_trees(old, new, {}, {}, [], {})
+        evaluate(deindented)
+        if deindented["identical"] != 1 or deindented["assertion_changes"] != 0:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: a de-indented test body whose literals are untouched must be identical"
+            )
+        n += 1
+        src_o.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    let v = foo(1, 2);\n    assert_eq!(1, 1);\n}\n",
+            encoding="utf-8",
+        )
+        src_n.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    let v = foo(\n        1,\n        2,\n    );\n    assert_eq!(1, 1);\n}\n",
+            encoding="utf-8",
+        )
+        rewrap = compare_trees(old, new, {}, {}, [], {})
+        evaluate(rewrap)
+        if rewrap["assertion_changes"] != 0:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: a code-only rewrap must pass"
+            )
+        if rewrap["identical"] != 1 and rewrap["helper_only"] != 1:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: a code-only rewrap must be identical or helper-only"
+            )
         n += 1
     return n
 

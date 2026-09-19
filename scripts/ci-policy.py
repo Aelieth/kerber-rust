@@ -2852,7 +2852,7 @@ def check_autotests_registered(root: pathlib.Path | None = None) -> None:
 
 _SELF_TEST_OK_RE = re.compile(r"self-test ok \((\d+) cases\)")
 HYGIENE_DIFF_MIN_CASES = 30
-HYGIENE_BODY_DIFF_MIN_CASES = 18
+HYGIENE_BODY_DIFF_MIN_CASES = 23
 HYGIENE_FN_DIFF_MIN_CASES = 56
 HYGIENE_INVENTORY_MIN_CASES = 2
 _REFUSE_CALL_RE = re.compile(r"^\s*refuse_golden_capture_dir\s+\S", re.M)
@@ -3021,6 +3021,14 @@ def check_hygiene_body_diff_self_test(text: str | None = None) -> None:
         _gutted_self_test_must_not_count(
             path, text, "hygiene-body-diff.py", HYGIENE_BODY_DIFF_MIN_CASES
         )
+        testing = (ROOT / "docs" / "testing.md").read_text(encoding="utf-8")
+        body_at = testing.find("hygiene-body-diff.py")
+        fn_at = testing.find("hygiene-fn-diff.py")
+        chunk = testing[body_at:fn_at] if body_at >= 0 and fn_at > body_at else ""
+        if "literal" not in chunk:
+            _die(
+                "docs/testing.md must say hygiene-body-diff keeps string literals whole"
+            )
     elif _self_test_n_from_text(text) is None or (
         _self_test_n_from_text(text) or 0
     ) < HYGIENE_BODY_DIFF_MIN_CASES:
@@ -3038,6 +3046,8 @@ def check_hygiene_body_diff_self_test(text: str | None = None) -> None:
         _die("hygiene-body-diff.py must self-test an assertion change (assert_eq!(1, 2))")
     if "user_as" not in text:
         _die("hygiene-body-diff.py must self-test a helper rename")
+    if '"a  b"' not in text:
+        _die("hygiene-body-diff.py must self-test whitespace inside an asserted string")
 
 
 def check_hygiene_fn_diff_self_test(text: str | None = None) -> None:
@@ -5177,9 +5187,9 @@ jobs:
         "    return _compare()\n",
     )
     check_hygiene_body_diff_self_test(
-        "def _self_test():\n    assert_eq!(1, 2) vs user_as helper\n"
+        'def _self_test():\n    assert_eq!(1, 2) vs user_as helper "a  b"\n'
         "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-body-diff: self-test ok (18 cases)')\n"
+        "        print('hygiene-body-diff: self-test ok (23 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
     )
     _must_die(check_hygiene_body_diff_self_test, "def main():\n    return 0\n")
@@ -5192,10 +5202,10 @@ jobs:
     _must_die(
         check_hygiene_body_diff_self_test,
         "def _self_test():\n"
-        '    """assert_eq!(1, 2) vs user_as helper"""\n'
+        '    """assert_eq!(1, 2) vs user_as helper "a  b" """\n'
         "    return None\n"
         "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-body-diff: self-test ok (18 cases)')\n"
+        "        print('hygiene-body-diff: self-test ok (23 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n",
     )
     check_hygiene_fn_diff_self_test(
