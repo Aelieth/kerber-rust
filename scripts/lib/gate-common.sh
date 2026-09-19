@@ -129,8 +129,7 @@ wait_log() {
 # Crash markers on a rust KDC log abort early (bind/privilege/not-found).
 require_listen() {
     local ctn=$1 logfile=$2 what=$3 n="${4:-80}"
-    local i
-    for i in $(seq 1 "$n"); do
+    for _ in $(seq 1 "$n"); do
         if docker exec "$ctn" grep -q '^listening ' "$logfile" 2>/dev/null; then
             return 0
         fi
