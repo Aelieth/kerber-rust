@@ -1,5 +1,5 @@
-//! Per-realm NT RIDs and the domain SID (`kdb5.c` well-known
-//! `RID_ADMINISTRATOR` / `RID_KRBTGT`, allocated `RID_FIRST_USER`+).
+//! Per-realm NT domain SID and PAC RIDs (MS-ADTS well-known
+//! Administrator 500 / krbtgt 502; MIT has no RID concept).
 
 use krb5_types::PrincipalName;
 use krb5_types::pac::{PacIdentity, RpcSid};

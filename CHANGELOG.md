@@ -16,6 +16,10 @@ this project uses semantic versioning once a crate is published.
 - **tests.** The four `store/tests.rs` kdc.conf raw-string interiors
   that the tests-out mover de-indented are restored to their
   `w3-base` bytes.
+- **docs.** `store/rid.rs` drops the invented `kdb5.c` `RID_*`
+  attribution (MS-ADTS / MS-PAC; MIT has no RID concept). The
+  `store.rs` header names `store/tests.rs`. Ledger `:345`
+  `alias_target`, `:401` `store/tests.rs`, `:429` closing backtick.
 
 ### W3-S3.2 store by MIT source family
 

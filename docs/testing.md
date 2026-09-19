@@ -81,10 +81,10 @@ comma is dropped only when its `(` / `<` follows an identifier that is
 not a keyword and not a lifetime — `wide(a, b,)` and `f<T, U,>` lose
 it, `(T,)`, `&mut (T,)`, `*const (T,)` and `&'a (T,)` keep it, and
 string / char literals in attributes pass through whole. That runs on
-every pair, not only on
-one that crossed the width limit; a pair equal after it with the same
-visibility is `fmt-only` (green, named in the render), so `vis-only N`
-is the number of pairs whose visibility differs. `--moves` is keyed
+every pair, not only on one that crossed the width limit; a pair
+equal after it with the same visibility is `fmt-only` (green, named
+in the render), so `vis-only N` is the number of pairs whose
+visibility differs. `--moves` is keyed
 like the hygiene-diff maps. `--split
 old = a + b + …` checks that the concatenated new bodies equal the
 old body modulo per-split line-anchored `--glue` lines (whole lines

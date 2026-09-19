@@ -2,8 +2,8 @@
 //!
 //! One module per MIT source family: `flags` (`KRB5_KDB_*`), `principal`,
 //! `policy`, `password` (quality, chpass, history compare), `keys`,
-//! `alias`, `transit`, `iprop_ulog`, `history`, `rid`. In-src tests stay
-//! under `tests/`.
+//! `alias`, `transit`, `iprop_ulog`, `history`, `rid`. In-src tests live
+//! in `store/tests.rs`.
 
 mod alias;
 mod flags;
