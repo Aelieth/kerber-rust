@@ -16,6 +16,8 @@ this project uses semantic versioning once a crate is published.
   `finish_process_as_req`; `gather_tgs_req_info` / `check_tgs_req` /
   `compute_ticket_times` / `tgs_issue_ticket`). Each new fn's doc
   cites its MIT line. Carried state is data-only. File split is 3b.
+  Ledger rust-sites that named the old bodies follow the phase that
+  now holds the status word.
 
 ### W3-S3.2-R residues
 
